@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0B1B2B">
+  <title>Nexus Ads · Central de tráfego</title>
+  <meta name="description" content="Painel de tráfego pago da Nexus: anúncios do Meta e do Google, conversas no WhatsApp e pacientes da clínica, num lugar só.">
+
+  <link rel="preconnect" href="https://api.fontshare.com" crossorigin>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="painel.css?v=1">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='26' fill='%230B1B2B'/><text x='50' y='69' font-size='58' font-family='Arial Black,sans-serif' font-weight='900' fill='%23CF9540' text-anchor='middle'>N</text></svg>">
+</head>
+<body>
+  <a class="skip" href="#main">Pular para o conteúdo</a>
+
+  <!-- ===================== ABRINDO ===================== -->
+  <div class="boot" id="boot">
+    <span class="boot-mark" aria-hidden="true">N</span>
+    <p class="boot-msg" id="boot-msg" role="status" aria-live="polite">Abrindo o painel…</p>
+    <div class="boot-acoes" id="boot-acoes" hidden>
+      <button class="pill pill-bronze" id="boot-tentar" type="button">Tentar de novo</button>
+      <button class="pill pill-ghost-dark" id="boot-sair" type="button">Sair</button>
+    </div>
+  </div>
+
+  <!-- ===================== ENTRAR / CRIAR CONTA ===================== -->
+  <main class="auth" id="tela-auth" tabindex="-1" hidden>
+    <section class="auth-art" aria-hidden="true">
+      <canvas class="hero-aurora" id="auth-aurora"></canvas>
+      <div class="auth-art-in">
+        <p class="auth-marca"><span class="sb-k">N</span> Nexus Ads</p>
+        <p class="auth-frase">Do anúncio<br>à cadeira do<br><em>consultório.</em></p>
+        <p class="auth-sub">Meta e Google, conversas no WhatsApp e pacientes da clínica — num painel só, conferido de hora em hora.</p>
+      </div>
+    </section>
+
+    <section class="auth-box">
+      <p class="auth-marca auth-marca-m" aria-hidden="true"><span class="sb-k">N</span> Nexus Ads</p>
+
+      <form class="auth-form" id="form-entrar" novalidate>
+        <h1>Entrar</h1>
+        <p class="auth-lead">Use o e-mail e a senha da sua conta.</p>
+        <label class="campo"><span>E-mail</span>
+          <input type="email" id="en-email" autocomplete="username" inputmode="email" required>
+        </label>
+        <label class="campo"><span>Senha</span>
+          <input type="password" id="en-senha" autocomplete="current-password" required>
+        </label>
+        <button class="pill pill-bronze pill-lg" id="btn-entrar" type="submit">Entrar</button>
+        <p class="auth-links">
+          <button class="link-b" id="ir-criar" type="button">Criar conta</button>
+          <button class="link-b" id="ir-primeiro" type="button">Primeiro acesso (tenho um código)</button>
+        </p>
+      </form>
+
+      <form class="auth-form" id="form-criar" novalidate hidden>
+        <h1 id="criar-h">Criar conta</h1>
+        <p class="auth-lead" id="criar-sub">Depois de criada, a Nexus libera o seu acesso.</p>
+        <label class="campo"><span>Seu nome</span>
+          <input type="text" id="cr-nome" autocomplete="name" required>
+        </label>
+        <label class="campo"><span>E-mail</span>
+          <input type="email" id="cr-email" autocomplete="username" inputmode="email" required>
+        </label>
+        <label class="campo"><span>Senha</span>
+          <input type="password" id="cr-senha" autocomplete="new-password" minlength="8" required aria-describedby="cr-senha-dica">
+          <small id="cr-senha-dica">Pelo menos 8 caracteres.</small>
+        </label>
+        <div id="cr-codigo-box" hidden>
+          <label class="campo"><span>Código de ativação</span>
+            <input type="text" id="cr-codigo" autocomplete="one-time-code" spellcheck="false" aria-describedby="cr-codigo-dica">
+            <small id="cr-codigo-dica">Só na primeira conta, a da Nexus.</small>
+          </label>
+        </div>
+        <button class="pill pill-bronze pill-lg" id="btn-criar" type="submit">Criar conta</button>
+        <p class="auth-links">
+          <button class="link-b" id="ir-entrar" type="button">Já tenho conta — entrar</button>
+        </p>
+      </form>
+
+      <div class="auth-form" id="auth-pendente" hidden>
+        <span class="pend-ic" aria-hidden="true">⏳</span>
+        <h1 id="pend-h" tabindex="-1">Aguardando aprovação</h1>
+        <p class="auth-lead">A sua conta existe, mas o acesso ainda não foi liberado. A Nexus aprova e liga você à clínica certa — depois disso é só entrar com o mesmo e-mail e senha.</p>
+        <button class="pill pill-ink pill-lg" id="pend-voltar" type="button">Voltar para entrar</button>
+      </div>
+
+      <p class="auth-erro" id="auth-erro" role="alert"></p>
+      <p class="auth-demo"><a href="?demo">Ver a demonstração →</a></p>
+    </section>
+  </main>
+
+  <!-- ===================== PAINEL ===================== -->
+  <div class="app" id="app" hidden>
+    <!-- menu lateral (desktop) -->
+    <aside class="side" aria-label="Menu do painel">
+      <div class="side-brand">
+        <span class="sb-k" aria-hidden="true">N</span>
+        <div>
+          <strong>Nexus Ads</strong>
+          <span>central de tráfego</span>
+        </div>
+      </div>
+
+      <div class="side-cli">
+        <p class="side-cli-l" id="side-cli-l">Cliente</p>
+        <label class="sel-cli" id="sel-cliente-box" hidden>
+          <span class="sr-only">Escolher cliente</span>
+          <select id="sel-cliente"></select>
+        </label>
+        <p class="side-cli-nome" id="side-cliente-nome"></p>
+      </div>
+
+      <nav class="side-nav" aria-label="Seções do painel">
+        <button class="nav-b" data-aba="geral" type="button" aria-current="page">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 4v4h6V4z"/></svg>
+          Visão geral
+        </button>
+        <button class="nav-b" data-aba="campanhas" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
+          Campanhas
+        </button>
+        <button class="nav-b" data-aba="pacientes" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.4 3.4 0 0 1 0 6.4M18.5 14.8c1.7.8 2.8 2.5 3.2 5.2"/></svg>
+          Pacientes
+        </button>
+        <button class="nav-b" data-aba="radar" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6.4-6.4"/></svg>
+          Radar
+          <span class="badge" data-badge hidden>0</span>
+        </button>
+        <button class="nav-b" data-aba="relatorios" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.6a8.5 8.5 0 0 1-12.4 7.6L3.5 20.5l1.3-4.4A8.5 8.5 0 1 1 20.5 11.6z"/><path d="M8.5 10.5h7M8.5 13.5h4.5"/></svg>
+          Relatórios
+        </button>
+        <button class="nav-b" data-aba="ajustes" type="button" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>
+          Ajustes
+          <span class="badge" data-badge-aj hidden>0</span>
+        </button>
+      </nav>
+
+      <div class="side-foot">
+        <span class="demo-chip" id="side-demo" hidden><i></i> Demonstração</span>
+        <div class="side-user" id="side-user" hidden>
+          <p><b id="side-nome"></b><span id="side-papel"></span></p>
+          <button class="pill pill-ghost-dark" id="btn-sair" type="button">Sair</button>
+        </div>
+        <p class="side-assina">Gestão de tráfego<br><b>Nexus · Taubaté</b></p>
+      </div>
+    </aside>
+
+    <!-- conteúdo -->
+    <main class="main" id="main" tabindex="-1">
+      <p class="ribbon" id="ribbon" role="note" hidden>
+        <b>Demonstração</b> — números ilustrativos, gerados para mostrar como o painel funciona. Nenhum dado real de paciente.
+      </p>
+
+      <header class="top">
+        <div class="top-title">
+          <div class="top-brand">
+            <span class="sb-k" aria-hidden="true">N</span>
+            <span class="top-cli" id="top-cliente"></span>
+            <label class="sel-cli sel-cli-m" id="sel-cliente-m-box" hidden>
+              <span class="sr-only">Escolher cliente</span>
+              <select id="sel-cliente-m"></select>
+            </label>
+            <button class="pill pill-ghost pill-sm" id="btn-sair-m" type="button" hidden>Sair</button>
+          </div>
+          <p class="eyebrow" id="top-eyebrow">Anúncios → WhatsApp → consultório</p>
+          <h1 id="top-h1">Visão geral</h1>
+          <p class="top-sync" id="top-sync"></p>
+        </div>
+        <div class="top-tools">
+          <div class="filters" id="filters">
+            <div class="seg" id="seg-periodo" role="radiogroup" aria-label="Período">
+              <span class="seg-ind" aria-hidden="true"></span>
+              <button type="button" role="radio" data-v="7" aria-checked="false">7 dias</button>
+              <button type="button" role="radio" data-v="30" aria-checked="true">30 dias</button>
+              <button type="button" role="radio" data-v="60" aria-checked="false">60 dias</button>
+            </div>
+            <div class="seg" id="seg-plat" role="radiogroup" aria-label="Plataforma">
+              <span class="seg-ind" aria-hidden="true"></span>
+              <button type="button" role="radio" data-v="" aria-checked="true">Tudo</button>
+              <button type="button" role="radio" data-v="meta" aria-checked="false">Meta</button>
+              <button type="button" role="radio" data-v="google" aria-checked="false">Google</button>
+            </div>
+          </div>
+          <button class="pill pill-bronze" id="btn-tour" type="button" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+            Tour de 1 minuto
+          </button>
+        </div>
+      </header>
+
+      <!-- carregando / erro / sem cliente -->
+      <div class="estado-app" id="estado-app" hidden></div>
+
+      <!-- ---------- VISÃO GERAL ---------- -->
+      <section class="view" id="view-geral" aria-labelledby="top-h1">
+        <div id="vazio-geral" hidden></div>
+        <div id="corpo-geral">
+          <article class="card card-hero" data-tour="hero">
+            <canvas class="hero-aurora" id="hero-aurora" aria-hidden="true"></canvas>
+            <div class="hero-in">
+              <p class="eyebrow" id="hero-periodo">Últimos 30 dias</p>
+              <p class="hero-frase" id="hero-frase"></p>
+            </div>
+            <div class="hero-side" id="hero-side"></div>
+          </article>
+
+          <div class="kpis" id="kpis"></div>
+
+          <article class="card">
+            <header class="card-h">
+              <div>
+                <h2>Investimento e conversas por dia</h2>
+                <p class="sub">Barras: quanto foi investido. Linha: conversas no WhatsApp (média de 7 dias).</p>
+              </div>
+              <p class="legend">
+                <span><i class="lg lg-meta"></i> Meta</span>
+                <span><i class="lg lg-google"></i> Google</span>
+                <span><i class="lg lg-line"></i> Conversas</span>
+              </p>
+            </header>
+            <div class="chart" id="chart-dia"></div>
+          </article>
+
+          <div class="grid g-2">
+            <article class="card" data-tour="funil">
+              <header class="card-h">
+                <div>
+                  <h2>Funil do paciente</h2>
+                  <p class="sub">Do anúncio até a cadeira do consultório.</p>
+                </div>
+              </header>
+              <div class="funil" id="funil"></div>
+            </article>
+            <article class="card">
+              <header class="card-h">
+                <div>
+                  <h2>Mês a mês</h2>
+                  <p class="sub">Pacientes novos vindos dos anúncios.</p>
+                </div>
+              </header>
+              <div class="mam" id="mes-a-mes"></div>
+            </article>
+          </div>
+
+          <div class="grid g-2">
+            <article class="card">
+              <header class="card-h">
+                <div>
+                  <h2>Leitura do período</h2>
+                  <p class="sub">O que os números estão dizendo.</p>
+                </div>
+              </header>
+              <ul class="leitura" id="leitura"></ul>
+            </article>
+            <article class="card">
+              <header class="card-h">
+                <div>
+                  <h2>Ritmo do mês</h2>
+                  <p class="sub" id="ritmo-sub"></p>
+                </div>
+              </header>
+              <div id="ritmo"></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- CAMPANHAS ---------- -->
+      <section class="view" id="view-campanhas" aria-labelledby="top-h1" hidden>
+        <div id="vazio-campanhas" hidden></div>
+        <div id="corpo-campanhas">
+          <article class="card">
+            <header class="card-h">
+              <div>
+                <h2>Campanhas</h2>
+                <p class="sub">Clique no título de uma coluna para ordenar. A bolinha compara o custo por conversa com a meta.</p>
+              </div>
+            </header>
+            <div class="tbl-wrap" id="tbl-campanhas"></div>
+          </article>
+          <article class="card">
+            <header class="card-h">
+              <div>
+                <h2>Criativos</h2>
+                <p class="sub">Frequência acima de 3 = as mesmas pessoas vendo o mesmo anúncio. Hora de trocar.</p>
+              </div>
+            </header>
+            <div class="tbl-wrap" id="tbl-criativos"></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ---------- PACIENTES ---------- -->
+      <section class="view" id="view-pacientes" aria-labelledby="top-h1" hidden>
+        <article class="card" data-tour="kanban">
+          <header class="card-h">
+            <div>
+              <h2>Cada conversa vira um cartão</h2>
+              <p class="sub" id="kanban-sub">Toque num cartão para mudar a etapa do paciente.</p>
+            </div>
+            <div class="k-tools">
+              <label class="busca">
+                <span class="sr-only">Buscar paciente por nome ou telefone</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+                <input type="search" id="k-busca" placeholder="Buscar paciente" autocomplete="off">
+              </label>
+              <button class="pill pill-ink" id="btn-novo-lead" type="button" aria-haspopup="dialog">+ Paciente</button>
+            </div>
+          </header>
+          <div class="kanban" id="kanban"></div>
+        </article>
+
+        <div class="grid g-2 g-2-wide">
+          <article class="card">
+            <header class="card-h">
+              <div>
+                <h2>Anúncio × consultório</h2>
+                <p class="sub">A plataforma conta conversas. O consultório conta pacientes. As duas colunas juntas mostram o que dá resultado.</p>
+              </div>
+            </header>
+            <div class="tbl-wrap" id="tbl-origem"></div>
+          </article>
+          <article class="card">
+            <header class="card-h">
+              <div>
+                <h2>Tratamentos fechados</h2>
+                <p class="sub" id="donut-sub">Estimativa pelo valor de cada tratamento.</p>
+              </div>
+            </header>
+            <div class="donut-wrap" id="donut"></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ---------- RADAR ---------- -->
+      <section class="view" id="view-radar" aria-labelledby="top-h1" hidden>
+        <div class="grid g-radar">
+          <article class="card card-scope" data-tour="radar">
+            <header class="card-h">
+              <div>
+                <h2>Varredura</h2>
+                <p class="sub" id="scope-sub">Confere as regras de hora em hora, sobre dias fechados.</p>
+              </div>
+            </header>
+            <div class="scope" id="scope" aria-hidden="true">
+              <span class="sweep"></span>
+            </div>
+            <button class="pill pill-ink" id="btn-varrer" type="button">Varrer agora</button>
+            <p class="scope-status" id="scope-status" role="status"></p>
+          </article>
+          <article class="card">
+            <header class="card-h">
+              <div>
+                <h2>Alertas</h2>
+                <p class="sub">Últimos 14 dias. “Ativo” = a condição continua acontecendo.</p>
+              </div>
+            </header>
+            <ul class="alerts" id="alerts"></ul>
+          </article>
+        </div>
+
+        <div class="grid g-2">
+          <article class="card">
+            <header class="card-h">
+              <div>
+                <h2>Regras</h2>
+                <p class="sub">Os pisos de gasto e de impressões evitam alarme falso em campanha pequena.</p>
+              </div>
+            </header>
+            <ul class="rules" id="rules"></ul>
+            <p class="nota-sm" id="rules-nota"></p>
+            <div class="metas" id="metas-demo" hidden>
+              <label class="meta">
+                <span>Custo por conversa — meta <b id="out-cpa"></b></span>
+                <input type="range" id="in-cpa" min="8" max="30" step="0.5">
+              </label>
+              <label class="meta">
+                <span>Orçamento de anúncios do mês <b id="out-orc"></b></span>
+                <input type="range" id="in-orc" min="600" max="4000" step="50">
+              </label>
+            </div>
+            <div class="metas" id="metas-real" hidden></div>
+          </article>
+          <article class="card">
+            <header class="card-h">
+              <div>
+                <h2>Como o aviso chega</h2>
+                <p class="sub">No WhatsApp do gestor, na hora em que a regra dispara.</p>
+              </div>
+            </header>
+            <div class="wa-inline" id="wa-alerta"></div>
+          </article>
+        </div>
+
+        <article class="card">
+          <header class="card-h">
+            <div>
+              <h2>Avisos enviados</h2>
+              <p class="sub">Registro do servidor: cada alerta novo vai uma vez por dia para o WhatsApp do gestor.</p>
+            </div>
+          </header>
+          <ul class="alerts alerts-log" id="avisos-log"></ul>
+        </article>
+      </section>
+
+      <!-- ---------- RELATÓRIOS ---------- -->
+      <section class="view" id="view-relatorios" aria-labelledby="top-h1" hidden>
+        <div class="phones">
+          <article class="phone-col">
+            <header class="phone-head">
+              <h2>Relatório diário</h2>
+              <p class="sub">Todo dia às 8h, no WhatsApp do gestor.</p>
+              <div class="phone-tools">
+                <label class="sel"><span class="sr-only">Dia do relatório</span><select id="sel-dia"></select></label>
+                <button class="pill pill-ghost" type="button" data-copiar="diario">Copiar texto</button>
+              </div>
+              <p class="rel-st" id="st-diario"></p>
+            </header>
+            <div class="phone">
+              <div class="ph-screen">
+                <div class="ph-top"><span class="ph-av">N</span><div><b>Nexus · Tráfego</b><small>relatório automático</small></div></div>
+                <div class="ph-body" id="ph-diario"></div>
+              </div>
+            </div>
+          </article>
+
+          <article class="phone-col" data-tour="relatorio">
+            <header class="phone-head">
+              <h2>Resumo do mês</h2>
+              <p class="sub">Todo dia 1º, no WhatsApp da clínica — sem tecniquês.</p>
+              <div class="phone-tools">
+                <label class="sel"><span class="sr-only">Mês do resumo</span><select id="sel-mes"></select></label>
+                <button class="pill pill-ghost" type="button" data-copiar="mensal">Copiar texto</button>
+              </div>
+              <p class="rel-st" id="st-mensal"></p>
+            </header>
+            <div class="phone">
+              <div class="ph-screen">
+                <div class="ph-top"><span class="ph-av ph-av-c" id="ph-av-cli">C</span><div><b id="ph-nome-cli">Resultados</b><small>resumo mensal</small></div></div>
+                <div class="ph-body" id="ph-mensal"></div>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <article class="card">
+          <header class="card-h">
+            <div>
+              <h2>Relatórios enviados</h2>
+              <p class="sub">Os últimos textos que saíram do servidor. Toque em “Ver” para abrir no celular acima.</p>
+            </div>
+          </header>
+          <ul class="rel-lista" id="rel-lista"></ul>
+        </article>
+        <p class="nota" id="rel-nota"></p>
+      </section>
+
+      <!-- ---------- AJUSTES (só gestor) ---------- -->
+      <section class="view" id="view-ajustes" aria-labelledby="top-h1" hidden>
+        <div class="grid g-2 g-aj">
+          <article class="card">
+            <header class="card-h">
+              <div>
+                <h2 id="aj-cliente-h">Cliente</h2>
+                <p class="sub">Metas, valor de cada tratamento e quem recebe o WhatsApp.</p>
+              </div>
+              <button class="pill pill-ghost" id="btn-novo-cliente" type="button">+ Novo cliente</button>
+            </header>
+            <form class="aj-form" id="form-cliente" novalidate></form>
+          </article>
+
+          <article class="card">
+            <header class="card-h">
+              <div>
+                <h2>Integrações</h2>
+                <p class="sub">As credenciais ficam só no servidor: aqui aparece apenas “✓ preenchido”. Campo em branco mantém o que já estava.</p>
+              </div>
+            </header>
+            <div class="integs" id="aj-integracoes"></div>
+          </article>
+        </div>
+
+        <article class="card">
+          <header class="card-h">
+            <div>
+              <h2>Fazer agora</h2>
+              <p class="sub">O servidor já faz isso sozinho (de hora em hora e às 8h). Use quando não quiser esperar.</p>
+            </div>
+          </header>
+          <div class="acoes">
+            <button class="pill pill-ink" type="button" id="btn-exec-ciclo" data-exec="ciclo">Atualizar dados agora</button>
+            <button class="pill pill-bronze" type="button" id="btn-exec-diario" data-exec="diario">Gerar relatório agora</button>
+            <button class="pill pill-ghost" type="button" id="btn-exec-mensal" data-exec="mensal">Gerar resumo do mês</button>
+          </div>
+          <p class="nota-sm">Os relatórios gerados aqui são enviados de novo no WhatsApp dos destinos.</p>
+          <p class="aj-st" id="exec-status" role="status"></p>
+        </article>
+
+        <article class="card">
+          <header class="card-h">
+            <div>
+              <h2>Contas de acesso</h2>
+              <p class="sub">Quem criou conta aparece aqui. Libere o acesso e escolha quais clientes cada pessoa vê.</p>
+            </div>
+          </header>
+          <ul class="contas" id="aj-contas"></ul>
+        </article>
+
+        <article class="card">
+          <header class="card-h">
+            <div>
+              <h2>Configuração da Nexus</h2>
+              <p class="sub">Vale para todos os clientes: o WhatsApp que envia os avisos, a IA que escreve a leitura e o webhook.</p>
+            </div>
+          </header>
+          <div class="webhook" id="aj-webhook">
+            <h3>Webhook do WhatsApp</h3>
+            <p class="sub">Cole estes dois valores no app da Meta (WhatsApp → Configuração → Webhook) e assine o campo <b>messages</b>.</p>
+            <div class="copia">
+              <span class="copia-l">URL de retorno</span>
+              <code id="cfg-webhook">—</code>
+              <button class="pill pill-ghost pill-sm" type="button" data-copiar-el="cfg-webhook">Copiar</button>
+            </div>
+            <div class="copia">
+              <span class="copia-l">Token de verificação</span>
+              <code id="cfg-verify">—</code>
+              <button class="pill pill-ghost pill-sm" type="button" data-copiar-el="cfg-verify">Copiar</button>
+            </div>
+          </div>
+          <form class="aj-form" id="form-config" novalidate></form>
+          <div class="execs" id="aj-execucoes"></div>
+        </article>
+      </section>
+
+      <footer class="foot">
+        <p id="foot-txt">Painel operado por <b>Nexus</b> · Taubaté — SP</p>
+        <a id="foot-link" href="?demo">Ver a demonstração</a>
+      </footer>
+    </main>
+
+    <!-- tab bar (celular) -->
+    <nav class="tabbar" aria-label="Seções do painel">
+      <button type="button" data-aba="geral" aria-current="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 4v4h6V4z"/></svg>Geral
+      </button>
+      <button type="button" data-aba="campanhas">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>Campanhas
+      </button>
+      <button type="button" data-aba="pacientes">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.4 3.4 0 0 1 0 6.4M18.5 14.8c1.7.8 2.8 2.5 3.2 5.2"/></svg>Pacientes
+      </button>
+      <button type="button" data-aba="radar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6.4-6.4"/></svg>Radar
+        <span class="badge" data-badge hidden>0</span>
+      </button>
+      <button type="button" data-aba="relatorios">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.6a8.5 8.5 0 0 1-12.4 7.6L3.5 20.5l1.3-4.4A8.5 8.5 0 1 1 20.5 11.6z"/><path d="M8.5 10.5h7M8.5 13.5h4.5"/></svg>Relatórios
+      </button>
+      <button type="button" data-aba="ajustes" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>Ajustes
+        <span class="badge" data-badge-aj hidden>0</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- ===================== GAVETA DO PACIENTE ===================== -->
+  <div class="gaveta-fundo" id="gaveta-fundo" hidden></div>
+  <div class="gaveta" id="gaveta" role="dialog" aria-modal="true" aria-labelledby="gv-titulo" hidden>
+    <form class="gv-form" id="form-lead" novalidate>
+      <header class="gv-h">
+        <div>
+          <p class="eyebrow" id="gv-eyebrow">Paciente</p>
+          <h2 id="gv-titulo">Paciente</h2>
+        </div>
+        <button class="gv-x" id="gv-fechar" type="button" aria-label="Fechar">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+
+      <div class="gv-corpo">
+        <p class="gv-aviso" id="gv-demo" hidden>Demonstração: pode mexer à vontade — nada é salvo.</p>
+        <p class="gv-origem" id="gv-origem-info" hidden></p>
+
+        <fieldset class="etapas" id="lf-etapas">
+          <legend>Em que pé está</legend>
+          <div class="etapas-op" id="lf-etapas-op"></div>
+        </fieldset>
+
+        <div class="gv-box" id="lf-box-consulta" hidden>
+          <label class="campo"><span id="lf-consulta-l">Data da consulta</span>
+            <input type="date" id="lf-consulta">
+          </label>
+        </div>
+        <div class="gv-box" id="lf-box-valor" hidden>
+          <label class="campo"><span>Valor do tratamento fechado (R$)</span>
+            <input type="number" id="lf-valor" min="0" step="10" inputmode="decimal" aria-describedby="lf-valor-dica">
+            <small id="lf-valor-dica"></small>
+          </label>
+        </div>
+
+        <div class="form-2">
+          <label class="campo"><span>Nome</span>
+            <input type="text" id="lf-nome" autocomplete="off">
+          </label>
+          <label class="campo"><span>Telefone (WhatsApp)</span>
+            <input type="tel" id="lf-tel" autocomplete="off" inputmode="tel">
+          </label>
+        </div>
+        <label class="campo"><span>Tratamento de interesse</span>
+          <select id="lf-servico"></select>
+        </label>
+        <div id="lf-box-origem">
+          <label class="campo"><span>Como chegou até a clínica</span>
+            <select id="lf-origem"></select>
+          </label>
+        </div>
+        <label class="campo"><span>Observação</span>
+          <textarea id="lf-obs" rows="3"></textarea>
+        </label>
+        <p class="gv-erro" id="gv-erro" role="alert"></p>
+      </div>
+
+      <footer class="gv-pe">
+        <button class="pill pill-ghost" id="gv-cancelar" type="button">Cancelar</button>
+        <button class="pill pill-bronze" id="gv-salvar" type="submit">Salvar</button>
+      </footer>
+    </form>
+  </div>
+
+  <!-- ===================== TOUR ===================== -->
+  <div class="tour-card" id="tour" role="dialog" aria-labelledby="tour-step" aria-describedby="tour-text" hidden>
+    <span class="tour-step" id="tour-step"></span>
+    <p id="tour-text" aria-live="polite"></p>
+    <div class="tour-btns">
+      <button class="pill pill-ghost" id="tour-sair" type="button">Sair</button>
+      <button class="pill pill-bronze" id="tour-next" type="button">Próximo →</button>
+    </div>
+  </div>
+
+  <div class="tip" id="tip" role="tooltip" hidden></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="painel.js?v=1"></script>
+</body>
+</html>

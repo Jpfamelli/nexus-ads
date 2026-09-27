@@ -1,0 +1,14 @@
+const N = await import('../web/nucleo.js');
+const { gerarDemo } = await import('../web/demo.js');
+const ds = gerarDemo({ nome: 'Kamiguchi Odontologia' });
+const M = N.montar(ds);
+const de = M.R - 29, t = M.consolidar(M.linhasDe(de, M.R)), c = M.crmTot(de, M.R);
+console.log('30 dias:', { conversas: c.conversas, agendadas: c.agendadas, pacientes: c.fecharam, receita: c.receita, cpa: +t.cpa.toFixed(2), gasto: +t.gasto.toFixed(0) });
+console.log('retorno total:', (c.receita / (t.gasto + 997)).toFixed(1) + 'x');
+console.log('meses:', M.mesesDados().filter(m => m.ate - m.de >= 9 || m.ate === M.R).map(m => M.crmTot(m.de, m.ate).fecharam).join('/'));
+console.log('radar agora:', M.avaliar(M.R, true).map(a => a.regra.id + ':' + a.chave.split('|')[1]).join(', '));
+console.log('episodios:', M.historico().map(e => `${e.a.regra.id}${e.ate === M.R ? '(ativo)' : ''}`).join(' '));
+const rd = M.relDiario(M.R); console.log('\n--- diario (inicio) ---\n' + rd.split('\n').slice(0, 8).join('\n'));
+const mes = M.mesesDados().filter(m => m.completo).pop(); const rm = M.relMensal(mes);
+console.log('\n--- mensal ---\n' + rm);
+console.log('\nplural 1:', N.plural(1, 'paciente', 'pacientes'), '| contextoIA ok:', Object.keys(M.contextoIA(M.R)).length, 'chaves');
