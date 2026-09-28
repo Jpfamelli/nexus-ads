@@ -10,11 +10,14 @@
    ============================================================ */
 import { brl, brl0, int, esc, fin, MESES, MES3 } from "./nucleo.js";
 
-/** PURO: os números da folha de um mês (iguais aos do relMensal). */
+/** PURO: os números da folha de um mês (iguais aos do relMensal). O "Cada R$ 1 investido virou"
+    usa a MESMA base do herói e do curta — tratamentos ÷ (anúncios + gestão do mês) —, porque é a
+    frase que o dentista leva; o "só anúncio" (a do resumo do WhatsApp) fica como linha de apoio. */
 export function dadosFolha(M, m) {
   const t = M.consolidar(M.linhasDe(m.de, m.ate)), c = M.crmTot(m.de, m.ate);
+  const fee = (M.CFG && M.CFG.fee) || 0, custo = t.gasto + fee;
   return {
-    t, c, roas: t.gasto ? c.receita / t.gasto : null,
+    t, c, roas: t.gasto ? c.receita / t.gasto : null, fee, custo, retorno: custo ? c.receita / custo : null,
     serv: Object.entries(c.serv).sort((a, b) => b[1].v - a[1].v).map(([nome, s]) => ({ nome, n: s.n, v: s.v })),
   };
 }
@@ -35,6 +38,8 @@ function grafMeses(meses) {
         <text class="fl-m" x="${cx.toFixed(1)}" y="${H - 10}" text-anchor="middle">${MES3[x.mes]}${x.completo ? "" : " (parcial)"}</text>`;
     }).join("")}</svg>`;
 }
+/* "O que fechou" em tons da cor da clínica (100 → 25%), não na paleta padrão do painel */
+const TOM_SERV = [100, 75, 55, 40, 25];
 function grafServ(serv, total) {
   if (!serv.length) return `<p class="fl-vazio">Nenhum tratamento fechado no mês.</p>`;
   const lin = serv.slice(0, 5), W = 300, L = 26, mx = Math.max(...lin.map(s => s.v), 1);
@@ -42,14 +47,14 @@ function grafServ(serv, total) {
     ${lin.map((s, k) => {
       const y = k * L + 4, w = Math.max(4, s.v / mx * 110);
       return `<text class="fl-sn" x="0" y="${y + 13}">${esc(s.nome)}</text>
-        <rect x="118" y="${y + 3}" width="${w.toFixed(1)}" height="12" rx="3" fill="${ctx.corServ(s.nome, k)}"/>
+        <rect x="118" y="${y + 3}" width="${w.toFixed(1)}" height="12" rx="3" style="fill: color-mix(in oklab, var(--marca) ${TOM_SERV[k] || 25}%, #FBF8F2)"/>
         <text class="fl-sv" x="${W}" y="${y + 13}" text-anchor="end">${brl0(s.v)} · ${s.n}</text>`;
     }).join("")}</svg>
     <p class="fl-mini">${total ? `${Math.round(lin[0].v / total * 100)}% do mês veio de ${esc(lin[0].nome.toLowerCase())}.` : ""}</p>`;
 }
 
 function montar() {
-  const M = ctx.M, d = dadosFolha(M, m), { t, c, roas } = d;
+  const M = ctx.M, d = dadosFolha(M, m), { t, c, roas, retorno, fee } = d;
   const mesNome = MESES[m.mes], hoje = new Date();
   const cp = ctx.campeao;
   const frase = c.fecharam
@@ -66,8 +71,8 @@ function montar() {
     <ol class="fl-trilha bloco">${etapas.map(([v, l], k) => `<li${k === etapas.length - 1 ? ` class="fim"` : ""}><b>${int(v)}</b><span>${l}</span></li>`).join("")}</ol>
     <div class="fl-blocos">
       <div class="bloco"><span class="fl-rot">Investido em anúncios</span><b>${brl0(t.gasto)}</b><small>${int(t.conversoes)} conversas · ${brl(t.cpa)} cada</small></div>
-      <div class="bloco"><span class="fl-rot">Tratamentos fechados (estimativa)</span><b>${brl0(c.receita)}</b><small>${int(c.fecharam)} ${c.fecharam === 1 ? "paciente novo" : "pacientes novos"}</small></div>
-      <div class="bloco fl-ret"><span class="fl-rot">Retorno</span><b>${fin(roas) && c.receita ? `Cada R$ 1 em anúncio virou ${brl(roas)}` : "Ainda sem tratamento fechado"}</b><small>tratamentos ÷ investimento em anúncios</small></div>
+      <div class="bloco"><span class="fl-rot">Tratamentos (estimativa)</span><b>${brl0(c.receita)}</b><small>${int(c.fecharam)} ${c.fecharam === 1 ? "paciente novo" : "pacientes novos"}</small></div>
+      <div class="bloco fl-ret"><span class="fl-rot">Retorno</span><b>${fin(retorno) && c.receita ? `Cada R$ 1 investido virou ${brl(retorno)}` : "Ainda sem tratamento fechado"}</b><small>${fee ? "tratamentos ÷ (anúncios + gestão)" : "tratamentos ÷ investimento em anúncios"}${fee && fin(roas) && c.receita ? ` · só anúncio: ${brl(roas)}` : ""}</small></div>
     </div>
     <div class="fl-duo">
       <section class="bloco"><h2 class="fl-h">Pacientes novos por mês</h2>${grafMeses(ctx.meses)}</section>

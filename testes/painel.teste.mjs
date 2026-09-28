@@ -524,7 +524,8 @@ await teste("conexão com Meta/Google: nome próprio, estado (erro/atrasado/agua
   // topo: pílula viva (30 s, parada com a aba oculta), faixa em todas as abas, "Abrir Ajustes" só para o gestor
   for (const id of ["sync-pill", "sync-pop", "faixa-integ"]) assert.ok(idsHtml.has(id), id);
   assert.match(JS, /setInterval\(\(\) => \{ if \(!document\.hidden\) renderIntegracao\(\); \}, 30000\)/);
-  assert.match(JS, /gestor\(\) \? `<button class="pill pill-ink pill-sm" type="button" data-ir="ajustes">Abrir Ajustes<\/button>`/);
+  assert.match(JS, /\(!gestor\(\) \? `<p class="fi-nota">A Nexus já foi avisada e está resolvendo\.<\/p>`/, "a clínica lê que a Nexus já sabe");
+  assert.match(JS, /: `<button class="pill pill-ink pill-sm" type="button" data-ir="ajustes">Abrir Ajustes<\/button>`\);/, "o gestor ganha o atalho");
   assert.match(JS, /const SIMULAR_INTEG = DEMO && Q\.get\("simular"\) === "integracao";/, "?simular só vale na demo");
 });
 
@@ -704,6 +705,212 @@ await teste("gaveta: cartão do anúncio de origem e fita de 4 fotogramas; marco
   assert.match(JS, /const chaveVistos = \(\) => `nx-fechados-\$\{S\.clienteId\}`;/);
   assert.match(JS, /if \(S\.demo \|\| gestor\(\) \|\| !S\.clienteId \|\| !M\) \{ box\.hidden = true; return; \}/);
   assert.match(JS, /try \{ const s = localStorage\.getItem\(chaveVistos\(\)\); vistos = s \? JSON\.parse\(s\) : null; \} catch \{ box\.hidden = true; return; \}/);
+});
+
+/* ============================================================
+   (f) acabamento do pacote de recursos (o que a conferência na tela achou)
+   ============================================================ */
+console.log("\n(f) acabamento do pacote de recursos");
+
+await teste("logo da clínica: plaquinha na ALTURA de cada selo (flex, depois dos tamanhos), nunca no tamanho natural da imagem", () => {
+  const semCom = REC_CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+  const i = semCom.search(/^\.selo-av\.com-logo \{/m);
+  assert.ok(i > 0, "regra do logo");
+  const regra = semCom.slice(i, semCom.indexOf("}", i));
+  // grid + height:100% no <img> deixa a linha crescer até a altura natural (320×160 estourando o selo): tem de ser flex
+  assert.match(regra, /display: inline-flex;/);
+  assert.match(regra, /width: auto;/);
+  assert.match(semCom, /\.selo-av\.com-logo img \{[^}]*height: 100%;[^}]*max-width: [\d.]+em;[^}]*object-fit: contain;/);
+  // nenhuma regra que dá tamanho a um selo (.cc-top, .rc-top, .top-brand, .feed-av, .fl-av…) vem DEPOIS da do logo
+  const tamanhos = [...semCom.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .filter(m => /selo-av|feed-av|fl-av|ct-av-g/.test(m[1]) && !/com-logo/.test(m[1]) && /(^|;)\s*width:/.test(m[2]))
+    .map(m => ({ sel: m[1].trim(), pos: m.index }));
+  assert.ok(tamanhos.length >= 5, "os selos têm tamanho");
+  const depois = tamanhos.filter(t => t.pos > i && !/@media/.test(semCom.slice(i, t.pos)));
+  assert.deepEqual(depois.map(t => t.sel), [], "tamanho de selo depois da regra do logo");
+  assert.match(semCom, /\.mk-faixa \{ flex-wrap: wrap; \}/, "a prévia da faixa quebra linha em vez de vazar do cartão");
+});
+
+await teste("linha do tempo do envio: dentro de .rel-lista/.alerts não herda a grade, o fio nem a entrada dos itens de fora", () => {
+  // a causa: regras de descendente do painel.css que também pegam o <li> da linha do tempo
+  assert.match(CSS, /\.rel-lista li \{ display: grid;/);
+  assert.match(CSS, /\.alerts li \{ display: grid;/);
+  assert.match(REC_CSS, /ol\.env-tempo > li \{ display: block; margin: 0; padding: 1\.05rem 0 0; border: 0; border-radius: 0; background: none; animation: none; \}/);
+  assert.match(JS, /<ol class="env-tempo">/, "a linha do tempo é um <ol>");
+});
+
+await teste("folha do mês: nunca sai de mês sem números de anúncio (nem para cliente sem anúncio); o botão some junto", () => {
+  const fonte = JS.match(/function mesTemNumeros\(m\) \{[\s\S]*?\n\}/);
+  assert.ok(fonte, "mesTemNumeros no painel.js");
+  // cliente real com números só em setembro: agosto é mês "completo" dentro da janela, mas vazio
+  const metricas = [];
+  for (let k = 1; k <= 12; k++) metricas.push({ p: "google", d: N.isoDe(new Date(2026, 8, 27 - k, 12)), n: "anuncio", c: "g9", cn: "Pesquisa · implante", a: "a9", an: "Anúncio implante", imp: 400, alc: 0, freq: 0, cli: 30, g: 21.37, conv: 1.5 });
+  const MM = N.montar(N.datasetDeLinhas({ metricas, leads: [], cliente: { id: "c", slug: "c", nome: "Mini", ativo: true, cfg: {} }, hoje: HOJE, dias: 130 }));
+  const tem = runInNewContext(`(${fonte[0]})`, { M: MM });
+  const agoMini = MM.mesesDados().find(m => m.mes === 7);
+  assert.ok(agoMini && agoMini.completo, "agosto aparece como mês completo");
+  assert.equal(tem(agoMini), false, "agosto vazio não vira folha de zeros");
+  const temDemo = runInNewContext(`(${fonte[0]})`, { M: MD });
+  assert.equal(temDemo(MD.mesesDados().find(m => m.mes === 7 && m.completo)), true, "agosto da demo tem números");
+  // o caminho: sem anúncio → nota; mês vazio → nota; o botão da aba Relatórios segue a mesma regra
+  assert.match(JS, /if \(semAnuncios\(\)\) return toast\("Ainda não há números de anúncio para a folha do mês\.", "nota"\);/);
+  assert.match(JS, /if \(!mesTemNumeros\(m\)\) return toast\(/);
+  assert.match(JS, /: meses\.filter\(mesTemNumeros\)\.pop\(\);/, "sem mês pedido: o último mês fechado COM números");
+  assert.match(JS, /\$\("#btn-folha"\)\.hidden = !mesSel \|\| semAnuncios\(\) \|\| !mesTemNumeros\(mesSel\);/);
+});
+
+await teste("faixa de conexão caída: em Ajustes não oferece 'Abrir Ajustes' (aponta para Integrações)", () => {
+  const i = JS.indexOf("function renderIntegracao()"), trecho = JS.slice(i, JS.indexOf("function renderSyncPop()"));
+  assert.match(trecho, /: S\.aba === "ajustes" \? `<p class="fi-nota">Refaça a conexão no bloco Integrações, aqui em Ajustes\.<\/p>`/);
+  assert.ok(trecho.indexOf("!gestor()") < trecho.indexOf('S.aba === "ajustes"'), "a clínica nunca vê o caminho de Ajustes");
+  // render() redesenha a faixa a cada troca de aba
+  assert.match(JS, /numeros\(view\);\s*cenas\(view\);\s*posicionarSegs\(\);\s*renderIntegracao\(\);/);
+});
+
+await teste("pílula de sincronização: 'próxima leitura' conta a partir da ÚLTIMA leitura (ciclo de hora em hora), não da hora cheia", () => {
+  const { proximaLeitura } = runInNewContext(`${trechoPuro};({ proximaLeitura })`,
+    { horaSP: () => "", quandoSP: () => "", Date, Math, JSON, String, Number });
+  const agora = Date.parse("2026-09-27T21:51:00-03:00"), min = n => agora - n * 6e4;
+  assert.equal(proximaLeitura(min(12), agora), "em ~48 min", "leu às 21:39 → próxima ~22:39");
+  assert.equal(proximaLeitura(min(0), agora), "em ~60 min");
+  assert.equal(proximaLeitura(min(59.5), agora), "em ~1 min");
+  assert.equal(proximaLeitura(min(75), agora), "em instantes", "passou da hora: o ciclo já deve estar rodando");
+  assert.equal(proximaLeitura(null, agora), "em até 1 h", "sem nenhuma leitura ainda");
+  const pop = JS.slice(JS.indexOf("function renderSyncPop()"), JS.indexOf("function abrirSyncPop("));
+  assert.match(pop, /Próxima leitura \$\{proximaLeitura\(e\.ultimo\)\} · de hora em hora/);
+  assert.ok(!/getMinutes\(\)/.test(pop), "nada de '60 − minuto atual' (o ciclo não roda na hora cheia)");
+  // na demo, o cartão da Varredura mostra a MESMA última leitura que o popover (não uma hora cheia inventada)
+  assert.match(JS, /: S\.demo \? `Última varredura: <b>\$\{u \? esc\(quandoSP\(u\)\.replace\(" às ", ", "\)\) : `hoje, \$\{horaCheia\(\)\}`\}<\/b> · \$\{qtd\}\.`/);
+});
+
+await teste("radar: o chip 'exemplo' não gruda no tique do aviso; na ficha, 'Faltou' nunca vira 'Fa…'", () => {
+  assert.match(JS, /<span class="al-env">aviso \$\{envLinha\(statusEnvio\(s\)\)\}<\/span> \$\{chipExemplo\(s\)\}/);
+  const semCom = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(semCom, /\.lead \.chip-bad \{ flex: none;/, "a marca da falta não encolhe; quem encolhe é o chip da campanha");
+  assert.match(semCom, /\.lead \.chip \{ flex: 0 1 auto; min-width: 0; \}/, "o chip da campanha continua encolhendo com reticências");
+});
+
+/* ============================================================
+   (g) correções da revisão (rodada 1): topo, celular do herói,
+       Clash, kanban, retorno, curta, radar, gaveta, paleta, URL
+   ============================================================ */
+console.log("\n(g) correções da revisão");
+const P2 = runInNewContext(`${trechoPuro};({ eixoTopo, PAROU_DE, MOTIVOS_PAROU })`, { horaSP: () => "", quandoSP: () => "", Date, Math, JSON, String, Number });
+const semComentarios = s => s.replace(/\/\*[\s\S]*?\*\//g, "");
+
+await teste("topo que gruda (desktop): top negativo, só a faixa de baixo (~64 px) fica; nada muda de altura no fluxo", () => {
+  const c = semComentarios(CSS);
+  assert.match(c, /\.top \{\s*top: calc\(-1 \* var\(--cima, 0px\)\);/);
+  assert.match(c, /\.top\.stuck \.top-linha, \.top\.stuck \.top-sync-row \{ opacity: 0; \}/);
+  assert.match(c, /\.top\.stuck \.top-mini \{ opacity: 1; transform: none; \}/);
+  assert.ok(idsHtml.has("top-mini"), "título curto da faixa");
+  assert.match(JS, /function medirTopo\(\) \{[\s\S]*?tools\.offsetTop - 10[\s\S]*?--faixa/);
+  assert.match(JS, /\$\("#top-mini"\)\.textContent = ABAS\[aba\]\[0\];/);
+  // a pílula da demo diz só "Demonstração" (a data já está ao lado)
+  assert.match(JS, /if \(demoCalma\) \{ nivel = "demo"; txt = "Demonstração"; \}/);
+  assert.match(HTML, /aria-label="Tour de 1 minuto"/);
+});
+
+await teste("celular do herói: só notificações INTEIRAS (vão fixo de 8 px) e a prévia do relatório com números, sem emoji", () => {
+  assert.match(JS, /function caberNotifs\(bloq, doRO\) \{[\s\S]*?n\.offsetTop \+ n\.offsetHeight > h - 12/);
+  assert.match(JS, /caberNotifs\(\$\("#hero-fone \.bloq"\)\);/);
+  assert.match(semComentarios(CSS), /\.bloq \{[^}]*gap: 8px;/);
+  assert.ok(!/\.notif \{[^}]*margin-top/.test(semComentarios(CSS)), "sem margem entre notificações");
+  assert.match(JS, /`Ontem: \$\{plural\(ontem\.conversoes, "conversa", "conversas"\)\}/);
+});
+
+await teste("Clash: todo texto nela tem word-spacing (o espaço dela é estreito) e o tracking nunca passa de −.02em", () => {
+  for (const [nome, src] of [["painel.css", CSS], ["recursos.css", REC_CSS]]) {
+    for (const m of semComentarios(src).matchAll(/([^{}]+)\{([^{}]*font-family:\s*var\(--fd\)[^{}]*)\}/g)) {
+      assert.match(m[2], /word-spacing: var\(--ws-d(-g)?\)/, `${nome}: ${m[1].trim()}`);
+      for (const ls of m[2].matchAll(/letter-spacing:\s*(-?[\d.]+)em/g)) assert.ok(+ls[1] >= -.02, `${nome}: ${m[1].trim()} ${ls[1]}em`);
+    }
+  }
+  assert.match(CSS, /--ws-d: \.\d+em;/);
+});
+
+await teste("gráfico diário: topo do eixo ~8% acima da maior barra, em degraus de valor inteiro", () => {
+  assert.equal(P2.eixoTopo(55), 60, "barras até R$ 55 → eixo de R$ 60 (não R$ 80)");
+  for (let v = 10; v <= 800; v += .5) {
+    const t = P2.eixoTopo(v);
+    assert.ok(t >= v * 1.08 - 1e-9 && t <= v * 1.4, `v=${v} → ${t}`);
+    assert.ok(Number.isInteger(Math.round(t / 4 * 1e9) / 1e9), `degrau inteiro: ${t / 4}`);
+  }
+  assert.match(JS, /const maxG = eixoTopo\(/);
+  // dupla exposição por cima das barras e da linha
+  assert.ok(JS.indexOf('s += `<path class="lin${cls}"') < JS.indexOf('if (ptsA.length > 1) s += `<path class="ant${cls}"'));
+});
+
+await teste("kanban: campanha em linha própria (nome inteiro no title); 'Faltou' e o valor na linha do nome; cabeçalhos com 2 linhas", () => {
+  assert.match(JS, /<span class="l-nome"><strong>\$\{esc\(L\.nome\)\}<\/strong>\$\{etq\}\$\{val\}<\/span>/);
+  assert.match(JS, /<span class="chips">\$\{origem\}<\/span><\/button>`;/);
+  assert.match(JS, /class="chip chip-camp" title="\$\{esc\(camp \? camp\.nome : ""\)\}"/);
+  const c = semComentarios(CSS);
+  assert.match(c, /\.lead \.chips \{ grid-column: 1 \/ -1;/);
+  assert.match(c, /\.kcol-h \{[^}]*min-height: 2\.6em;/);
+});
+
+await teste("'Não seguiu': só os motivos que cabem na coluna de origem (nunca 'Faltou' para quem nunca agendou)", () => {
+  assert.deepEqual([...P2.PAROU_DE.nova], ["perdida"]);
+  assert.deepEqual([...P2.PAROU_DE.agendada], ["faltou", "perdida"]);
+  assert.deepEqual([...P2.PAROU_DE.orcamento], ["nao_fechou"]);
+  assert.match(JS, /const motivos = PAROU_DE\[colunaDe\(L\)\] \|\| Object\.keys\(MOTIVOS_PAROU\);/);
+});
+
+await teste("retorno: a folha usa a MESMA base do herói (anúncios + gestão), com o 'só anúncio' de apoio; Campanhas diz 'Retorno do anúncio'", async () => {
+  const fl = await import("../web/folha.js");
+  const ago = MD.mesesDados().find(m => m.mes === 7 && m.completo), d = fl.dadosFolha(MD, ago);
+  assert.equal(d.fee, MD.CFG.fee);
+  assert.ok(Math.abs(d.retorno - d.c.receita / (d.t.gasto + MD.CFG.fee)) < 1e-9, "tratamentos ÷ (anúncios + gestão do mês)");
+  const FL = ler("folha.js");
+  assert.match(FL, /Cada R\$ 1 investido virou \$\{brl\(retorno\)\}/);
+  assert.match(FL, /só anúncio: \$\{brl\(roas\)\}/);
+  assert.match(FL, /Tratamentos \(estimativa\)/, "rótulo de uma linha só");
+  assert.match(JS, /\["roas", "Retorno do anúncio", "/);
+});
+
+await teste("curta: o número de cada cena é o MESMO da tarja de progresso (02 … 07); post sem play genérico e com o texto do criativo", () => {
+  const CT = ler("curta.js");
+  ["O anúncio", "A conversa", "A agenda", "A cadeira", "A conta", "Para o próximo mês"].forEach((t, k) => assert.ok(CT.includes(`rotulo(${k + 2}, "${t}")`), t));
+  assert.ok(!/<span>06<\/span>/.test(CT) && !/feed-play/.test(CT));
+  assert.match(CT, /<p class="feed-leg"><b>\$\{esc\(ctx\.nome\)\}<\/b> \$\{esc\(g\.texto\)\}<\/p>/);
+  assert.match(REC_CSS, /\.feed-tag \{[^}]*font-size: max\(11px, \.8em\);[^}]*background: #111B21;/);
+  assert.match(REC_CSS, /\.cn-conversa \.wl-i:nth-child\(n\+5\) \{ display: none; \}/);
+});
+
+await teste("radar: a conta de alertas soma a conexão caída; a clínica lê regras leigas e a tradução do CTR; parado no celular", () => {
+  assert.match(JS, /const nAtivos = atuais\.length \+ conexoesCaidas\(\);/);
+  assert.match(JS, /atualizarBadge\(nAtivos\);/);
+  assert.match(JS, /const condR = leigo \? `<span title="\$\{esc\(cond\)\}">\$\{esc\(condLeiga\(r\)\)\}<\/span>` : cond;/);
+  const fonte = JS.match(/function traducaoCTR\(msg, tag = "span"\) \{[\s\S]*?\n\}/);
+  assert.ok(fonte, "traducaoCTR");
+  const tr = g => runInNewContext(`(${fonte[0]})`, { gestor: () => g, fin: Number.isFinite, parseFloat, String });
+  assert.match(tr(false)("O criativo X está com CTR de 0,83% — pouca gente clicando (limite 0,90%).", "p"), /menos de 1 tocou/);
+  assert.match(tr(false)("CTR de 2,40% hoje"), /2 tocaram/);
+  assert.equal(tr(true)("CTR de 0,83%"), "", "o gestor lê o técnico");
+  assert.match(CINE_SRC, /const VIVO = \(\) => ANIM && !MOVEL;[\s\S]*if \(!VIVO\(\) \|\| !st\.visivel \|\| document\.hidden\) return;/);
+});
+
+await teste("gaveta e foco: Esc no documento, diálogo focável, 'Pular' inerte com diálogo aberto; paleta devolve o foco antes da ação", () => {
+  assert.match(HTML, /id="gaveta" role="dialog" aria-modal="true" aria-labelledby="gv-titulo" tabindex="-1"/);
+  assert.match(JS, /if \(e\.key !== "Escape" \|\| e\.defaultPrevented \|\| \$\("#gaveta"\)\.hidden\) return;/);
+  assert.match(JS, /new MutationObserver\(\(\) => \{ skip\.inert = \$\("#app"\)\.inert; \}\)/);
+  assert.match(JS, /\|\| invisivel\(v\)\) v = gv\.lead/);
+  assert.match(ler("paleta.js"), /gravarRec\(it\.chave\);[\s\S]{0,160}fechar\(true\);\s*try \{ it\.fazer\(\); \}/);
+});
+
+await teste("URL e relatórios: ?aba= sai da URL depois de aplicado; relatório que não saiu não mostra hora inventada", () => {
+  assert.match(JS, /if \(Q\.has\("aba"\)\) \{\s*Q\.delete\("aba"\);[\s\S]{0,300}history\.replaceState\(null, "", location\.pathname/);
+  assert.match(JS, /txt = rel\.texto; hora = rel\.enviado_em \? horaSP\(rel\.enviado_em\) : ""; nao = s;/);
+});
+
+await teste("Campanhas no celular viram cartões; criativos sem coluna vazia; Radar em duas colunas sem vão", () => {
+  const c = semComentarios(CSS);
+  assert.match(c, /#tbl-campanhas td\[data-l\]::before \{ content: attr\(data-l\);/);
+  assert.match(c, /#tbl-criativos th:not\(:first-child\), #tbl-criativos td:not\(:first-child\) \{ width: 1%; \}/);
+  assert.match(c, /\.g-radar \{ grid-template-columns: minmax\(0, \.8fr\) minmax\(0, 1\.2fr\); align-items: start; \}/);
+  const radar = HTML.slice(HTML.indexOf('id="view-radar"'), HTML.indexOf('id="view-relatorios"'));
+  assert.ok(radar.indexOf('class="rad-col rad-esq"') < radar.indexOf("card-scope") && radar.indexOf("card-scope") < radar.indexOf("card-aviso") && radar.indexOf("card-aviso") < radar.indexOf('class="rad-col rad-dir"'));
 });
 
 console.log(`\n${ok} ok · ${falhas} falha${falhas === 1 ? "" : "s"}`);

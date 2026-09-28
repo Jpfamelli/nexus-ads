@@ -324,6 +324,8 @@ export function corte() {
    ============================================================ */
 const COR_SEV = { critico: [240, 106, 78], alerta: [226, 176, 102], info: [143, 179, 211] };
 export function radar(scope) {
+  // no celular o radar fica parado (quadro com os pontos acesos, como no movimento reduzido): nada de rAF contínuo
+  const VIVO = () => ANIM && !MOVEL;
   const cv = document.createElement("canvas");
   cv.setAttribute("aria-hidden", "true");
   scope.appendChild(cv);
@@ -356,8 +358,8 @@ export function radar(scope) {
     ctx.beginPath(); ctx.moveTo(c, c); ctx.lineTo(c + Math.cos(st.ang) * R, c + Math.sin(st.ang) * R); ctx.stroke();
     for (const b of st.blips) {
       const x = c + Math.cos(b.ang) * R * b.rad, y = c + Math.sin(b.ang) * R * b.rad;
-      const dt = ANIM ? (now - (b.passou || -1e9)) / 1000 : 0;
-      const luz = ANIM ? Math.max(.32, Math.exp(-dt / 1.4)) : 1;
+      const dt = VIVO() ? (now - (b.passou || -1e9)) / 1000 : 0;
+      const luz = VIVO() ? Math.max(.32, Math.exp(-dt / 1.4)) : 1;
       const [r, g, bb] = COR_SEV[b.sev] || COR_SEV.alerta;
       const real = st.realce === b.chave;
       const rr = (real ? 7.5 : 5) + luz * 1.5;
@@ -366,7 +368,7 @@ export function radar(scope) {
       ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(x, y, rr * 3, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = `rgba(${r},${g},${bb},${(.35 + .65 * luz).toFixed(3)})`;
       ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.fill();
-      if (b.sev === "critico" && ANIM) {
+      if (b.sev === "critico" && VIVO()) {
         const f = ((now / 1000) % 1.5) / 1.5;
         ctx.strokeStyle = `rgba(${r},${g},${bb},${(.6 * (1 - f)).toFixed(3)})`; ctx.lineWidth = 1.2;
         ctx.beginPath(); ctx.arc(x, y, rr + f * 14, 0, Math.PI * 2); ctx.stroke();
@@ -377,7 +379,7 @@ export function radar(scope) {
   };
   const laco = now => {
     st.raf = 0;
-    if (!ANIM || !st.visivel || document.hidden) return;
+    if (!VIVO() || !st.visivel || document.hidden) return;
     const dt = st.ult ? Math.min(.05, (now - st.ult) / 1000) : 0;
     st.ult = now;
     // "Varrer agora": 1 → 6 → 1 com inércia, em 1,4 s
@@ -394,7 +396,7 @@ export function radar(scope) {
     desenhar(now);
     st.raf = requestAnimationFrame(laco);
   };
-  const tocarR = () => { if (!st.raf && ANIM && st.visivel && !document.hidden) { st.ult = 0; st.raf = requestAnimationFrame(laco); } };
+  const tocarR = () => { if (!st.raf && VIVO() && st.visivel && !document.hidden) { st.ult = 0; st.raf = requestAnimationFrame(laco); } };
   const io = "IntersectionObserver" in window ? new IntersectionObserver(en => {
     st.visivel = en[en.length - 1].isIntersecting;
     if (st.visivel) tocarR(); else if (st.raf) { cancelAnimationFrame(st.raf); st.raf = 0; }

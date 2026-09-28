@@ -18,8 +18,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=satoshi@400,500,700&display=swap" rel="stylesheet" media="print" data-reserva>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" data-reserva>
-  <link rel="stylesheet" href="painel.css?v=3">
-  <link rel="stylesheet" href="recursos.css?v=1">
+  <link rel="stylesheet" href="painel.css?v=5">
+  <link rel="stylesheet" href="recursos.css?v=3">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'><rect width='96' height='96' rx='22' fill='%230B1B2B'/><polygon points='27,26 34,33 34,70 27,70' fill='%23F5E9D6'/><polygon points='62,26 69,26 69,63 62,70' fill='%23F5E9D6'/><polygon points='27,26 34,26 69,70 62,70' fill='%23CF9540'/><polygon points='62,26 69,26 34,70 27,70' fill='%23F5E9D6' fill-opacity='.82'/></svg>">
 </head>
 <body>
@@ -38,7 +38,7 @@
       <symbol id="ic-cal" viewBox="0 0 24 24"><path d="M4.5 6.5h15v13h-15zM4.5 10.5h15M8.5 4v4M15.5 4v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
       <!-- sinal cortado (conexão com Meta/Google parada) e claquete (marco no gráfico) -->
       <symbol id="ic-sinal" viewBox="0 0 24 24"><path d="M4 19v-2M9 19v-5M14 19v-8M19 19V6M3.5 4.5l17 15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
-      <symbol id="ic-claq" viewBox="0 0 24 24"><path d="M4 10h16v9.5H4zM4 10l1.2-4.6 15.4 4M8.6 6.4l2 4M13.4 7.6l2 3.9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/></symbol>      <linearGradient id="spk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CF9540" stop-opacity=".22"/><stop offset="1" stop-color="#CF9540" stop-opacity="0"/></linearGradient>
+      <symbol id="ic-claq" viewBox="0 0 24 24"><rect x="3.5" y="10.2" width="17" height="10" rx="1.6" fill="#0D1117" stroke="currentColor" stroke-width="1.5"/><path d="M3.5 13.4h17" stroke="currentColor" stroke-width="1.1" opacity=".55"/><g transform="rotate(-16 3.8 9.6)"><rect x="3.5" y="5.6" width="17" height="4" rx="1" fill="#0D1117" stroke="currentColor" stroke-width="1.4"/><path d="M6.6 9.6l2.6-4M10.8 9.6l2.6-4M15 9.6l2.6-4" stroke="currentColor" stroke-width="1.8"/></g></symbol>      <linearGradient id="spk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CF9540" stop-opacity=".22"/><stop offset="1" stop-color="#CF9540" stop-opacity="0"/></linearGradient>
       <linearGradient id="gArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F5E9D6" stop-opacity=".16"/><stop offset="1" stop-color="#F5E9D6" stop-opacity="0"/></linearGradient>
       <linearGradient id="gFeixe" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CF9540" stop-opacity="0"/><stop offset=".5" stop-color="#CF9540" stop-opacity=".22"/><stop offset="1" stop-color="#CF9540" stop-opacity="0"/></linearGradient>
     </defs>
@@ -262,15 +262,16 @@
               <button type="button" role="radio" data-v="google" aria-checked="false">Google</button>
             </div>
           </div>
-          <button class="pill pill-ghost" id="btn-tour" type="button" hidden>
+          <button class="pill pill-ghost" id="btn-tour" type="button" aria-label="Tour de 1 minuto" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
-            Tour de 1 minuto
+            <span>Tour<span class="tour-mais"> de 1 minuto</span></span>
           </button>
           <button class="pill pill-bronze btn-apresentar" id="btn-apresentar" type="button" aria-keyshortcuts="P" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
             Apresentar
           </button>
         </div>
+        <p class="top-mini" id="top-mini" aria-hidden="true">Visão geral</p>
       </header>
       <div class="folha-fundo" id="filtros-fundo" hidden></div>
       <div class="faixa-integ" id="faixa-integ" role="status" hidden></div>
@@ -371,7 +372,7 @@
             <header class="card-h">
               <div>
                 <h2>Campanhas</h2>
-                <p class="sub">Clique no título de uma coluna para ordenar. A bolinha compara o custo por conversa com a meta.</p>
+                <p class="sub"><span class="so-largo">Clique no título de uma coluna para ordenar. </span>A bolinha compara o custo por conversa com a meta.</p>
               </div>
             </header>
             <div class="tbl-wrap" id="tbl-campanhas"></div>
@@ -432,70 +433,73 @@
 
       <!-- ---------- RADAR ---------- -->
       <section class="view" id="view-radar" aria-labelledby="top-h1" hidden>
+        <!-- desktop: [Varredura + Como o aviso chega] | [Alertas + Regras]; no celular a ordem é
+             Varredura, Alertas, Regras, aviso (as colunas viram display: contents + order) -->
         <div class="grid g-radar">
-          <article class="card card-scope" data-tour="radar" data-cena>
-            <header class="card-h">
-              <div>
-                <h2>Varredura</h2>
-                <p class="sub" id="scope-sub">Confere as regras de hora em hora, sobre dias fechados.</p>
+          <div class="rad-col rad-esq">
+            <article class="card card-scope" data-tour="radar" data-cena>
+              <header class="card-h">
+                <div>
+                  <h2>Varredura</h2>
+                  <p class="sub" id="scope-sub">Confere as regras de hora em hora, sobre dias fechados.</p>
+                </div>
+              </header>
+              <div class="scope" id="scope" aria-hidden="true">
+                <span class="sweep"></span>
               </div>
-            </header>
-            <div class="scope" id="scope" aria-hidden="true">
-              <span class="sweep"></span>
-            </div>
-            <button class="pill pill-ink" id="btn-varrer" type="button">Varrer agora</button>
-            <p class="scope-status" id="scope-status" role="status"></p>
-            <p class="scope-leg" aria-hidden="true"><span><i class="l-critico"></i>crítico</span><span><i class="l-alerta"></i>alerta</span><span><i class="l-info"></i>informativo</span></p>
-          </article>
-          <article class="card" data-cena>
-            <header class="card-h">
-              <div>
-                <h2>Alertas</h2>
-                <p class="sub">Últimos 14 dias. “Ativo” = a condição continua acontecendo.</p>
-              </div>
-            </header>
-            <ul class="alerts" id="alerts"></ul>
-          </article>
-        </div>
-
-        <div class="grid g-2 g-radar-2">
-          <article class="card" data-cena>
-            <header class="card-h">
-              <div>
-                <h2>Regras</h2>
-                <p class="sub">Os pisos de gasto e de impressões evitam alarme falso em campanha pequena.</p>
-              </div>
-            </header>
-            <ul class="rules" id="rules"></ul>
-            <p class="nota-sm" id="rules-nota"></p>
-            <div class="metas" id="metas-demo" hidden>
-              <label class="meta">
-                <span>Custo por conversa — meta <b id="out-cpa"></b></span>
-                <input type="range" id="in-cpa" min="8" max="30" step="0.5">
-              </label>
-              <label class="meta">
-                <span>Orçamento de anúncios do mês <b id="out-orc"></b></span>
-                <input type="range" id="in-orc" min="600" max="4000" step="50">
-              </label>
-            </div>
-            <div class="metas" id="metas-real" hidden></div>
-          </article>
-          <article class="card card-aviso" data-cena>
-            <header class="card-h">
-              <div>
-                <h2>Como o aviso chega</h2>
-                <p class="sub">No WhatsApp do gestor, na hora em que a regra dispara.</p>
-              </div>
-            </header>
-            <div class="fone fone-reto fone-aviso" data-tilt="6" data-foco>
-              <div class="fone-tela">
-                <div class="ph-screen">
-                  <div class="ph-top"><span class="ph-av"><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b>Nexus · Radar</b><small>aviso automático</small></div></div>
-                  <div class="ph-body wa-inline" id="wa-alerta"></div>
+              <p class="scope-leg" aria-hidden="true"><span><i class="l-critico"></i>crítico</span><span><i class="l-alerta"></i>alerta</span><span><i class="l-info"></i>informativo</span></p>
+              <button class="pill pill-ink" id="btn-varrer" type="button">Varrer agora</button>
+              <p class="scope-status" id="scope-status" role="status"></p>
+            </article>
+            <article class="card card-aviso" data-cena>
+              <header class="card-h">
+                <div>
+                  <h2>Como o aviso chega</h2>
+                  <p class="sub">No WhatsApp do gestor, na hora em que a regra dispara.</p>
+                </div>
+              </header>
+              <div class="fone fone-reto fone-aviso" data-tilt="6" data-foco>
+                <div class="fone-tela">
+                  <div class="ph-screen">
+                    <div class="ph-top"><span class="ph-av"><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b>Nexus · Radar</b><small>aviso automático</small></div></div>
+                    <div class="ph-body wa-inline" id="wa-alerta"></div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </article>
+            </article>
+          </div>
+          <div class="rad-col rad-dir">
+            <article class="card" data-cena>
+              <header class="card-h">
+                <div>
+                  <h2>Alertas</h2>
+                  <p class="sub">Últimos 14 dias. “Ativo” = a condição continua acontecendo.</p>
+                </div>
+              </header>
+              <ul class="alerts" id="alerts"></ul>
+            </article>
+            <article class="card" data-cena>
+              <header class="card-h">
+                <div>
+                  <h2>Regras</h2>
+                  <p class="sub">Os pisos de gasto e de impressões evitam alarme falso em campanha pequena.</p>
+                </div>
+              </header>
+              <ul class="rules" id="rules"></ul>
+              <p class="nota-sm" id="rules-nota"></p>
+              <div class="metas" id="metas-demo" hidden>
+                <label class="meta">
+                  <span>Custo por conversa — meta <b id="out-cpa"></b></span>
+                  <input type="range" id="in-cpa" min="8" max="30" step="0.5">
+                </label>
+                <label class="meta">
+                  <span>Orçamento de anúncios do mês <b id="out-orc"></b></span>
+                  <input type="range" id="in-orc" min="600" max="4000" step="50">
+                </label>
+              </div>
+              <div class="metas" id="metas-real" hidden></div>
+            </article>
+          </div>
         </div>
 
         <article class="card" data-cena>
@@ -691,7 +695,7 @@
 
   <!-- ===================== GAVETA DO PACIENTE ===================== -->
   <div class="gaveta-fundo" id="gaveta-fundo" hidden></div>
-  <div class="gaveta" id="gaveta" role="dialog" aria-modal="true" aria-labelledby="gv-titulo" hidden>
+  <div class="gaveta" id="gaveta" role="dialog" aria-modal="true" aria-labelledby="gv-titulo" tabindex="-1" hidden>
     <form class="gv-form" id="form-lead" novalidate>
       <header class="gv-h" id="gv-alca">
         <span class="gv-puxador" aria-hidden="true"></span>
@@ -782,6 +786,6 @@
     <div class="folha-mesa" id="folha-mesa"><article class="folha" id="folha" hidden></article></div>
   </div>
 
-  <script type="module" src="painel.js?v=3"></script>
+  <script type="module" src="painel.js?v=5"></script>
 </body>
 </html>

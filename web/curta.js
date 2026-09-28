@@ -96,10 +96,10 @@ function cenaAnuncio() {
   if (meta) {
     tela = `<div class="feed" aria-hidden="true">
         <div class="feed-top"><span class="selo-av feed-av" data-av></span><div><b>${esc(ctx.nome)}</b><small>Patrocinado</small></div><span class="feed-mais">···</span></div>
-        <div class="feed-midia">${/v[ií]deo|reels/.test(g.tipo) ? `<span class="feed-play"></span>` : ""}<p class="feed-gancho">${esc(g.texto)}</p>${g.tipo ? `<span class="feed-tag">${esc(g.tipo)}</span>` : ""}</div>
+        <div class="feed-midia"><span class="feed-luz"></span><span class="selo-av feed-logo" data-av></span><p class="feed-gancho">${esc(g.texto)}</p>${g.tipo ? `<span class="feed-tag">${esc(g.tipo)}</span>` : ""}${/v[ií]deo|reels/.test(g.tipo) ? `<span class="feed-prog"><i></i></span>` : ""}</div>
         <div class="feed-cta"><span>Enviar mensagem</span><svg><use href="#ic-wa"/></svg></div>
         <div class="feed-acoes"><i class="fa-cor"></i><i class="fa-bal"></i><i class="fa-env"></i></div>
-        <p class="feed-leg"><b>${esc(ctx.nome)}</b> ${esc(cp ? cp.camp.nome : "")}</p>
+        <p class="feed-leg"><b>${esc(ctx.nome)}</b> ${esc(g.texto)}</p>
       </div>`;
   } else {
     const busca = cp.camp.nome.split(/\s+·\s+/).pop();
@@ -112,7 +112,7 @@ function cenaAnuncio() {
   }
   return {
     cls: "cn-anuncio",
-    txt: `${rotulo(1, "O anúncio")}
+    txt: `${rotulo(2, "O anúncio")}
       <p class="ct-grande">${num(D.impressoes, "int")}</p><p class="ct-sob">vezes na tela</p>
       <p class="ct-linha">${num(D.cliques, "int", "ct-n2")} tocaram para saber mais</p>
       ${cp ? `<p class="ct-nota">O que mais trouxe pacientes: <b>${esc(cp.camp.nome)}</b> · ${nomePlat(cp.camp.plat)}</p>` : ""}`,
@@ -126,15 +126,18 @@ function cenaConversa() {
   const linhas = lista.map((L, n) => {
     const k = L.cri && M.CRI[L.cri], cp = M.CAMP[L.camp], via = (k && k.curto) || (cp && cp.curto) || "anúncio";
     const ini = ctx.nomeCurto(L.nome).split(/\s+/).map(p => p[0] || "").join("").slice(0, 2).toUpperCase();
-    // demo: tratamento + quando · modo real: só "Chamou pelo anúncio «…»" (nunca frase de paciente)
-    const prev = ctx.demo ? `${esc(L.servico)} · via «${esc(via)}»` : `Chamou pelo anúncio «${esc(via)}»`;
+    // demo: tratamento e, embaixo, o anúncio · modo real: só "Chamou pelo anúncio «…»" (nunca frase de paciente)
+    // (como no WhatsApp: nome + hora na 1ª linha, a prévia na largura toda embaixo)
+    const prev = ctx.demo ? esc(L.servico) : `Chamou pelo anúncio «${esc(via)}»`;
+    const via2 = ctx.demo ? `<span class="wl-p wl-via">via «${esc(via)}»</span>` : "";
     return `<li class="wl-i" style="--n:${n}"><span class="wl-av" style="--c:${ctx.AVC[ctx.hash(L.nome) % ctx.AVC.length]}">${esc(ini)}</span>
-      <span class="wl-q">${nomeP(L)}<span class="wl-p">${prev}</span></span><span class="wl-h">${quandoAtras(L.i)}${n < 2 ? `<i class="wl-nl">1</i>` : ""}</span></li>`;
+      <span class="wl-q"><span class="wl-l1">${nomeP(L)}<span class="wl-h">${quandoAtras(L.i)}</span></span>
+        <span class="wl-l2"><span class="wl-p">${prev}</span>${n < 2 ? `<i class="wl-nl">1</i>` : ""}</span>${via2}</span></li>`;
   }).join("");
   const tela = `<div class="wa-lista"><div class="wl-top"><b>Conversas</b><small>WhatsApp da clínica${ctx.demo ? " · exemplo" : ""}</small></div><ul>${linhas}</ul></div>`;
   return {
     cls: "cn-conversa",
-    txt: `${rotulo(2, "A conversa")}
+    txt: `${rotulo(3, "A conversa")}
       <p class="ct-grande">${num(D.conversas, "int")}</p><p class="ct-sob">${D.conversas === 1 ? "conversa" : "conversas"} no WhatsApp</p>
       <p class="ct-linha">cada conversa custou ${num(D.cpa, "brl", "ct-n2")}</p>`,
     obj: ctx.foneHtml(tela, "fone-ct fone-wa", 6),
@@ -152,7 +155,7 @@ function cenaAgenda() {
   }).join("");
   return {
     cls: "cn-agenda",
-    txt: `${rotulo(3, "A agenda")}
+    txt: `${rotulo(4, "A agenda")}
       <p class="ct-grande">${num(D.agendadas, "int")}</p><p class="ct-sob">marcaram avaliação</p>
       <p class="ct-linha">${num(D.vieram, "int", "ct-n2")} vieram até a clínica</p>`,
     obj: `<div class="cartoes" aria-hidden="true">${html}</div>`,
@@ -164,7 +167,7 @@ function cenaCadeira() {
   const linhas = D.serv.slice(0, 6).map((s, n) => `<li style="--n:${n}"><span>${esc(s.nome)}</span><i>×${s.n}</i><b>${brl0(s.v)}</b></li>`).join("");
   return {
     cls: "cn-cadeira",
-    txt: `${rotulo(4, "A cadeira")}
+    txt: `${rotulo(5, "A cadeira")}
       <p class="ct-grande">${num(D.fecharam, "int")}</p><p class="ct-sob">${D.fecharam === 1 ? "paciente novo" : "pacientes novos"}</p>
       <p class="ct-linha">${num(D.receita, "brl0", "ct-n2")} em tratamentos</p>`,
     obj: `<div class="recibo" aria-hidden="true" style="--linhas:${Math.min(6, D.serv.length)}">
@@ -183,7 +186,7 @@ function cenaConta() {
   const cada = fin(D.retorno) ? brl(D.retorno) : "—";
   return {
     cls: "cn-conta",
-    txt: `${rotulo(5, "A conta")}
+    txt: `${rotulo(6, "A conta")}
       <p class="ct-frase">Cada R$ 1 ${D.comGestao ? "investido" : "em anúncio"} virou <b class="ct-varre">${cada}</b></p>
       <div class="barras">
         <div class="br"><span class="br-l">${D.comGestao ? "Investido · anúncios + gestão" : "Investido em anúncios"}</span>${num(D.custo, "brl0", "br-v")}<span class="br-b"><i style="--w:${w(D.custo)}%"></i></span></div>
@@ -199,7 +202,7 @@ function cenaCreditos() {
   const passos = (ctx.proximos || []).slice(0, 3);
   return {
     cls: `cn-creditos${ctx.demo ? " com-sim" : ""}`,
-    txt: `<p class="ct-rot"><span>06</span>Para o próximo mês</p>
+    txt: `${rotulo(7, "Para o próximo mês")}
       ${passos.length ? `<ol class="ct-passos">${passos.map((p, n) => `<li style="--n:${n}">${esc(p)}</li>`).join("")}</ol>` : ""}
       <p class="ct-assina"><svg class="nx-mono" aria-hidden="true"><use href="#nx-mono"/></svg><span>Preparado pela <b>Nexus</b><small>gestão de tráfego · Taubaté-SP</small></span></p>
       <div class="ct-acoes"><button class="pill pill-bronze" type="button" data-ct="folha">Folha do mês</button><button class="pill pill-ghost" type="button" data-ct="sair">Voltar ao painel</button></div>`,

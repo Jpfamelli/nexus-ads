@@ -115,7 +115,8 @@ function executar(n) {
   const it = opcoes[n];
   if (!it) return;
   gravarRec(it.chave);
-  fechar(false);
+  // o foco volta para quem abriu ANTES da ação: a que move o foco (gaveta) leva esse ponto como "volta"
+  fechar(true);
   try { it.fazer(); } catch (e) { console.error(e); }
 }
 
@@ -134,6 +135,6 @@ export function abrir(c) {
 export function fechar(devolver) {
   if (!el || el.hidden) return;
   el.hidden = true;
-  if (devolver && volta && document.contains(volta)) volta.focus();
+  if (devolver && volta && volta !== document.body && document.contains(volta)) volta.focus({ preventScroll: true });
 }
 export const aberta = () => !!el && !el.hidden;

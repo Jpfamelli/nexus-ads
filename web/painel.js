@@ -75,14 +75,14 @@ document.documentElement.classList.add("fontes-espera");
 /* efeitos em módulos à parte: se não carregarem, o painel continua igual (só parado) */
 let FX = null, CINE = null;
 const FX_P = import("./efeitos.js?v=2").catch(() => null);
-const CINE_P = import("./cinema.js?v=3").then(m => { m.ligar({ anim: ANIM, semente: DEMO ? 1 : 3 }); return m; }).catch(() => null);
+const CINE_P = import("./cinema.js?v=4").then(m => { m.ligar({ anim: ANIM, semente: DEMO ? 1 : 3 }); return m; }).catch(() => null);
 CINE_P.then(m => { CINE = m; if (m && S.aba === "radar" && M) renderRadar(); });
 /* recursos em módulos (import() dinâmico com catch): só baixam quando alguém pede */
 const MODS = {};
 const MOD_SRC = {
-  curta: () => import("./curta.js?v=1"),
-  folha: () => import("./folha.js?v=1"),
-  paleta: () => import("./paleta.js?v=1"),
+  curta: () => import("./curta.js?v=2"),
+  folha: () => import("./folha.js?v=2"),
+  paleta: () => import("./paleta.js?v=2"),
   arrastar: () => import("./arrastar.js?v=1"),
   marca: () => import("./marca.js?v=1"),
 };
@@ -181,6 +181,13 @@ function estadoIntegracao(integs = [], alertas = [], agora = Date.now()) {
   const syncs = canais.map(c => c.sync).filter(Boolean);
   return { nivel, canais, erros: canais.filter(c => c.estado === "erro"), ultimo: syncs.length ? Math.max(...syncs) : null };
 }
+/** Quando vem a próxima leitura: o ciclo roda de hora em hora, então ~1 h depois da ÚLTIMA leitura
+    (e não na "hora cheia", que erraria por até 59 min conforme o minuto em que o ciclo roda). */
+function proximaLeitura(ultimo, agora = Date.now()) {
+  if (!ultimo) return "em até 1 h";
+  const falta = Math.ceil((ultimo + 36e5 - agora) / 6e4);
+  return falta >= 1 && falta <= 60 ? `em ~${falta} min` : "em instantes";
+}
 
 /** Simulador da demo: as MESMAS taxas do período, resultado em faixa de ±20% (estimativa, nunca promessa). */
 function simular(tx, inv, ticket) {
@@ -216,6 +223,20 @@ const LEIGO_LINHA = {
   ritmo: "No ritmo de agora, o mês passa do orçamento.",
   integracao: "O painel parou de receber os números dessa plataforma.",
 };
+/** Topo do eixo do gráfico diário: ~8% acima da maior barra, em 4 degraus de valor inteiro
+    (R$ 15/30/45/60, nunca R$ 6/13/19) — sem o terço de altura morta de um eixo só em 1/2/2,5/5
+    (barras até R$ 55 num eixo de R$ 80). */
+const eixoTopo = (v, n = 4) => {
+  if (!(v > 0)) return n;
+  const bruto = v * 1.08 / n, p = Math.pow(10, Math.floor(Math.log10(bruto))), r = bruto / p;
+  // degraus que dão rótulo inteiro (R$ 16/32/48/64, R$ 35/70/105…), apertados o bastante para sobrar pouco no topo
+  const degraus = p >= 10 ? [1, 1.2, 1.5, 1.6, 1.8, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 10] : [1, 2, 3, 4, 5, 6, 7, 8, 10];
+  return degraus.find(x => x >= r - 1e-9) * p * n;
+};
+/** "Não seguiu" tem três motivos, mas só os que cabem na etapa de onde a ficha saiu: quem nunca
+    agendou não "faltou" (isso inventaria uma consulta), e quem avaliou não "deixou de agendar". */
+const MOTIVOS_PAROU = { faltou: "Faltou à consulta", nao_fechou: "Avaliou e não fechou", perdida: "Não agendou" };
+const PAROU_DE = { nova: ["perdida"], agendada: ["faltou", "perdida"], orcamento: ["nao_fechou"], fechou: ["nao_fechou"] };
 /* ==== PURO: fim ==== */
 
 /* ============================================================
@@ -312,12 +333,6 @@ function traco(p) {
   }
   return d;
 }
-/** Teto do eixo = 4 degraus "redondos" (1, 2, 2,5, 5 × 10ⁿ): rótulos R$ 10/20/30, nunca R$ 6/13/19. */
-const niceMax = v => {
-  if (v <= 0) return 4;
-  const bruto = v / 4, p = Math.pow(10, Math.floor(Math.log10(bruto))), n = bruto / p;
-  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p * 4;
-};
 /** Sparkline com dupla exposição: o período anterior tracejado por baixo, na MESMA escala.
     `atual` e `anterior` têm o mesmo tamanho; `de` é o índice do 1º dia (para o ponto do dia). */
 function spark(atual, anterior = [], de = 0) {
@@ -391,6 +406,21 @@ function telaBloqueada(hora, data, notifs) {
   return `<div class="bloq"><p class="bloq-hora">${esc(hora)}</p><p class="bloq-data">${esc(data)}</p>${notifs.map((n, i) =>
     `<div class="notif${n.nx ? " notif-nx" : ""}" style="--n:${i}"><span class="notif-ic ${n.nx ? "nx" : "wa"}">${n.nx ? `<svg class="nx-mono"><use href="#nx-mono"/></svg>` : `<svg><use href="#ic-wa"/></svg>`}</span>` +
     `<div><b>${esc(n.titulo)}</b><span>${esc(n.texto)}</span><small>${esc(n.quando)}</small></div></div>`).join("")}</div>`;
+}
+/** Só as notificações que cabem INTEIRAS na tela (com 12 px de respiro no pé): nunca um cartão
+    cortado ao meio. Mede pelo layout (offsetTop, sem as transformações da entrada) e repete
+    quando a tela muda de tamanho (celular 220 px ↔ desktop 250 px, aba que aparece). */
+const roNotif = "ResizeObserver" in window ? new ResizeObserver(es => es.forEach(e => caberNotifs(e.target, true))) : null;
+function caberNotifs(bloq, doRO) {
+  if (!bloq) return;
+  if (!doRO && roNotif) roNotif.observe(bloq);
+  if (!doRO && document.fonts && document.fonts.status === "loading") document.fonts.ready.then(() => caberNotifs(bloq, true));
+  const h = bloq.clientHeight;
+  if (!h) return;
+  const ns = [...bloq.querySelectorAll(".notif")];
+  ns.forEach(n => { n.hidden = false; });
+  let corta = false;
+  for (const n of ns) { if (corta || n.offsetTop + n.offsetHeight > h - 12) { corta = true; n.hidden = true; } }
 }
 
 /* ---------- estados vazios, avisos ---------- */
@@ -540,12 +570,19 @@ function renderGeral() {
   const recentes = M.LEADS.filter(L => L.plat && L.i <= M.R && (!S.plat || L.plat === S.plat))
     .sort((a, b) => (b.i - a.i) || String(b.id).localeCompare(String(a.id), "pt-BR", { numeric: true })).slice(0, 3);
   const quando = i => { const d = M.R - i; return d <= 0 ? "ontem" : d === 1 ? "anteontem" : `há ${d + 1} dias`; };
-  const notifs = [{ nx: true, titulo: "Nexus · Tráfego", texto: semMarcas(M.relDiario(M.R).split("\n")[0]), quando: "08:00" }]
+  // a prévia da notificação conta o dia (a 1ª linha com números do relatório das 8h), sem emoji
+  // (o relatório é da conta inteira, como o do WhatsApp: não segue o filtro de plataforma)
+  const ontem = M.consolidar(M.linhasDe(M.R, M.R));
+  const previaRel = ontem.gasto > 0
+    ? `Ontem: ${plural(ontem.conversoes, "conversa", "conversas")}${fin(ontem.cpa) ? ` · ${brl(ontem.cpa)} cada` : ""} · meta ${brl(CFG.cpaAlvo)}`
+    : "Ontem: nenhum anúncio no ar";
+  const notifs = [{ nx: true, titulo: "Nexus · Tráfego", texto: previaRel, quando: "08:00" }]
     .concat(recentes.map(L => {
       const k = L.cri && M.CRI[L.cri], cp = M.CAMP[L.camp];
       return { titulo: `${nomeCurto(L.nome)} · via anúncio`, texto: `Chamou pelo anúncio «${(k && k.curto) || (cp && cp.curto) || "anúncio"}»`, quando: quando(L.i) };
     }));
   $("#hero-fone").innerHTML = foneHtml(telaBloqueada("08:00", dataLonga(hoje), notifs), "fone-hero", 6);
+  caberNotifs($("#hero-fone .bloq"));
 
   // régua de instrumentos: 6 células, número + período anterior tracejado por baixo
   const meta = CFG.cpaAlvo;
@@ -614,7 +651,7 @@ function desenharChart(modo) {
   const { de, ate, deA, ateA } = janela(), serie = serieDia(de, ate, S.plat), ant = serieDia(deA, ateA, S.plat);
   const W = Math.max(300, Math.round(el.clientWidth)), H = W < 560 ? 230 : 280;
   const P = { l: W < 560 ? 50 : 60, r: 30, t: 14, b: 30 }, iw = W - P.l - P.r, ih = H - P.t - P.b;
-  const maxG = niceMax(Math.max(1, ...serie.map(d => d.meta + d.google)));
+  const maxG = eixoTopo(Math.max(1, ...serie.map(d => d.meta + d.google)));
   const maxC = Math.max(4, Math.ceil(Math.max(...serie.map(d => d.convMedia), ...ant.filter(Boolean).map(d => d.convMedia)) * 1.1 / 4) * 4);
   const bw = iw / serie.length, base = P.t + ih;
   const y = v => base - v / maxG * ih, yc = v => base - v / maxC * ih;
@@ -642,15 +679,16 @@ function desenharChart(modo) {
     const i = iDeIso(mk.d), n = i - de;
     if (n < 0 || n >= serie.length) continue;
     const x = (P.l + n * bw + bw / 2).toFixed(1);
-    s += `<g class="marco${mk.exemplo ? " exemplo" : ""}" data-i="${i}"><line x1="${x}" x2="${x}" y1="${P.t + 16}" y2="${base}"/><use href="#ic-claq" x="${(+x - 8).toFixed(1)}" y="${P.t - 4}" width="16" height="16"/></g>`;
+    s += `<g class="marco${mk.exemplo ? " exemplo" : ""}" data-i="${i}"><line x1="${x}" x2="${x}" y1="${P.t + 15}" y2="${base}"/><use href="#ic-claq" x="${(+x - 10).toFixed(1)}" y="${P.t - 7}" width="20" height="20"/></g>`;
   }
   const pts = serie.map((d, n) => [P.l + n * bw + bw / 2, yc(d.convMedia)]);
   const dl = traco(pts);
   const ptsA = ant.map((d, n) => (d ? [P.l + n * bw + bw / 2, yc(d.convMedia)] : null)).filter(Boolean);
   const cls = troca ? " troca" : "";
-  if (ptsA.length > 1) s += `<path class="ant${cls}" d="${traco(ptsA)}"/>`;
   s += `<path class="area${cls}" d="${dl} L${pts[pts.length - 1][0].toFixed(1)} ${base} L${pts[0][0].toFixed(1)} ${base} Z"/>`;
   s += `<path class="lin${cls}" pathLength="1" d="${dl}"/>`;
+  // dupla exposição: o período anterior POR CIMA das barras e da linha (creme tracejado), para ser visto
+  if (ptsA.length > 1) s += `<path class="ant${cls}" d="${traco(ptsA)}"/>`;
   const passo = Math.ceil(serie.length / (W < 560 ? 4 : 7));
   serie.forEach((d, n) => { if (n % passo === 0) s += `<text x="${(P.l + n * bw + bw / 2).toFixed(1)}" y="${H - 9}" text-anchor="middle">${M.ddmm(d.i)}</text>`; });
   s += `<circle class="ponto" r="4.5" cx="-20" cy="-20"/></svg>`;
@@ -882,7 +920,7 @@ function renderLeitura(t, ta, c) {
     }
   }
   $("#leitura").innerHTML = out.slice(0, 5).map((x, n) => `<li class="${x.k}" style="--i:${n}"><span class="lt-n" aria-hidden="true">${p2(n + 1)}</span>` +
-    `<p class="lt-t">${x.k === "aten" ? `<span class="lt-tag">atenção</span>` : ""}${x.h}</p></li>`).join("")
+    `<p class="lt-t">${x.k === "aten" ? `<span class="lt-aten">Atenção —</span> ` : ""}${x.h}</p></li>`).join("")
     || `<li><span class="lt-n" aria-hidden="true">01</span><p class="lt-t">Sem dados suficientes no período.</p></li>`;
 }
 
@@ -908,12 +946,15 @@ function renderRitmo() {
    ============================================================ */
 const COLS_CAMP = [
   ["nome", "Campanha"], ["gasto", "Investido"], ["conv", "Conversas"], ["cpa", "Custo/conversa"], ["ctr", "CTR"],
-  ["ag", "Agendadas"], ["fe", "Pacientes"], ["rec", "Tratamentos"], ["roas", "Retorno"],
+  ["ag", "Agendadas"], ["fe", "Pacientes"], ["rec", "Tratamentos"],
+  // só anúncio (sem a gestão): o "Cada R$ 1 virou" do herói, do curta e da folha soma a gestão
+  ["roas", "Retorno do anúncio", "Tratamentos ÷ investimento em anúncios desta campanha (sem a gestão da Nexus). O “Cada R$ 1 investido virou” da Visão geral inclui a gestão."],
 ];
 const VAL_CAMP = {
   nome: r => r.c.nome, gasto: r => r.t.gasto, conv: r => r.t.conversoes, cpa: r => r.t.cpa, ctr: r => r.t.ctr,
   ag: r => r.k.agendadas, fe: r => r.k.fecharam, rec: r => r.k.receita, roas: r => r.roas,
 };
+const ROT_CEL = { gasto: "Investido", conv: "Conversas", cpa: "Custo por conversa", fe: "Pacientes novos" };
 const pontoCpa = cpa => !fin(cpa) ? "dot-bad" : cpa <= M.CFG.cpaAlvo ? "dot-ok" : cpa <= M.CFG.cpaAlvo * 1.35 ? "dot-warn" : "dot-bad";
 
 function renderCampanhas() {
@@ -930,17 +971,19 @@ function renderCampanhas() {
   });
   const T = M.consolidar(rows.flatMap(r => M.linhasDe(de, M.R, { camp: r.c.id })));
   const K = rows.reduce((a, r) => ({ ag: a.ag + r.k.agendadas, fe: a.fe + r.k.fecharam, rec: a.rec + r.k.receita }), { ag: 0, fe: 0, rec: 0 });
-  const th = COLS_CAMP.map(([k, l]) => `<th scope="col"><button type="button" data-sort="${k}"${k === key ? ` aria-sort="${dir < 0 ? "descending" : "ascending"}"` : ""}>${l}</button></th>`).join("");
+  // no celular (≤ 700 px) cada linha vira um cartão: nome + 4 números em 2×2 (data-l é o rótulo de cada um)
+  const td = (k, v) => `<td class="c-${k}"${ROT_CEL[k] ? ` data-l="${ROT_CEL[k]}"` : ""}>${v}</td>`;
+  const th = COLS_CAMP.map(([k, l, tt]) => `<th scope="col"${tt ? ` title="${esc(tt)}"` : ""}><button type="button" data-sort="${k}"${k === key ? ` aria-sort="${dir < 0 ? "descending" : "ascending"}"` : ""}>${l}</button></th>`).join("");
   $("#tbl-campanhas").innerHTML = rows.length ? `<table>
     <caption class="sr-only">Campanhas nos últimos ${S.dias} dias</caption>
     <thead><tr>${th}</tr></thead>
     <tbody>${rows.map((r, n) => `<tr style="--i:${n}" data-camp="${esc(r.c.id)}">
       <td><div class="nm"><span class="dot ${pontoCpa(r.t.cpa)}" title="custo por conversa vs. meta"></span><div class="nm-t"><span>${esc(r.c.nome)}</span><small><span class="chip chip-${classePlat(r.c.plat)}">${nomePlat(r.c.plat)}</span></small></div></div></td>
-      <td>${brl0(r.t.gasto)}</td><td>${int(r.t.conversoes)}</td><td>${brl(r.t.cpa)}</td><td>${pc(r.t.ctr, 2)}</td>
-      <td>${r.k.agendadas}</td><td>${r.k.fecharam}</td><td>${brl0(r.k.receita)}</td><td>${fin(r.roas) ? dec(r.roas, 1) + "x" : "—"}</td>
+      ${td("gasto", brl0(r.t.gasto))}${td("conv", int(r.t.conversoes))}${td("cpa", brl(r.t.cpa))}${td("ctr", pc(r.t.ctr, 2))}
+      ${td("ag", r.k.agendadas)}${td("fe", r.k.fecharam)}${td("rec", brl0(r.k.receita))}${td("roas", fin(r.roas) ? dec(r.roas, 1) + "x" : "—")}
     </tr>`).join("")}</tbody>
-    <tfoot><tr><td>Total</td><td>${brl0(T.gasto)}</td><td>${int(T.conversoes)}</td><td>${brl(T.cpa)}</td><td>${pc(T.ctr, 2)}</td>
-      <td>${K.ag}</td><td>${K.fe}</td><td>${brl0(K.rec)}</td><td>${T.gasto ? dec(K.rec / T.gasto, 1) + "x" : "—"}</td></tr></tfoot>
+    <tfoot><tr><td>Total</td>${td("gasto", brl0(T.gasto))}${td("conv", int(T.conversoes))}${td("cpa", brl(T.cpa))}${td("ctr", pc(T.ctr, 2))}
+      ${td("ag", K.ag)}${td("fe", K.fe)}${td("rec", brl0(K.rec))}${td("roas", T.gasto ? dec(K.rec / T.gasto, 1) + "x" : "—")}</tr></tfoot>
   </table>` : `<p class="vazio">Nenhuma campanha com investimento nos últimos ${S.dias} dias${S.plat ? " no " + nomePlat(S.plat) : ""}.</p>`;
 
   // a situação vem do radar (janela recente), não da média do período — senão a
@@ -950,7 +993,7 @@ function renderCampanhas() {
     .filter(x => x.t.gasto > 0).sort((a, b) => b.t.gasto - a.t.gasto);
   $("#tbl-criativos").innerHTML = cris.length ? `<table>
     <caption class="sr-only">Criativos nos últimos ${S.dias} dias</caption>
-    <thead><tr><th scope="col">Criativo</th><th scope="col">Investido</th><th scope="col">Impressões</th><th scope="col">CTR</th><th scope="col">Frequência</th><th scope="col">Conversas</th><th scope="col">Custo/conversa</th><th scope="col">Situação agora</th></tr></thead>
+    <thead><tr><th scope="col">Criativo</th><th scope="col">Investido</th><th scope="col">Impressões</th><th scope="col">CTR</th><th scope="col" title="Frequência: quantas vezes, em média, a mesma pessoa viu o anúncio">Freq.</th><th scope="col">Conversas</th><th scope="col">Custo/conversa</th><th scope="col">Situação agora</th></tr></thead>
     <tbody>${cris.map(({ k, t }, n) => {
       const s = sitDe(k.id), a4 = s.find(a => a.regra.id === "r4"), a3 = s.find(a => a.regra.id === "r3");
       const sit = (a4 ? `<span class="chip chip-bad" title="frequência nos últimos ${a4.regra.janela} dias">fadiga · ${dec(a4.valor, 1)} em ${a4.regra.janela}d</span> ` : "")
@@ -1008,16 +1051,18 @@ function cardLead(L, col, n) {
   const e = M.etapa(L);
   const ini = String(L.nome).split(/\s+/).map(p => p[0] || "").join("").slice(0, 2).toUpperCase() || "?";
   const q = quandoLead(L, e), camp = M.CAMP[L.camp];
-  // uma ficha estreita não comporta 2 chips: a plataforma vira um ponto de cor (com texto para leitor de tela)
+  // a campanha ganha uma linha só dela, na largura inteira da ficha (nome inteiro no title); a plataforma
+  // vira um ponto de cor (com texto para leitor de tela). "Faltou" e o valor sobem para a linha do nome.
   const origem = L.plat
-    ? `<span class="chip chip-camp"><i class="pt pt-${classePlat(L.plat)}" aria-hidden="true"></i><span class="sr-only">${nomePlat(L.plat)}: </span>${esc(camp ? camp.curto : "")}</span>`
+    ? `<span class="chip chip-camp" title="${esc(camp ? camp.nome : "")}"><i class="pt pt-${classePlat(L.plat)}" aria-hidden="true"></i><span class="sr-only">${nomePlat(L.plat)}: </span>${esc(camp ? camp.curto : "")}</span>`
     : `<span class="chip chip-neutro">${esc(camp ? camp.curto : "Sem anúncio")}</span>`;
   // em "Não seguiu" a etapa já está escrita na linha de baixo (faltou / não agendou / não fechou): só marca a falta
   const etq = col === "parou" && e === "faltou" ? `<span class="chip chip-bad">${NOME_ETAPA[e]}</span>` : "";
+  const val = e === "fechou" ? `<span class="val">${brl0(M.valorLead(L))}</span>` : "";
   return `<button type="button" class="lead${S.destacar.has(String(L.id)) ? " destaque" : ""}" data-lead="${esc(String(L.id))}" data-col="${col}" style="--i:${n}" aria-haspopup="dialog" aria-describedby="k-dica">
     <span class="av" style="--c:${AVC[hash(L.nome) % AVC.length]}" aria-hidden="true">${esc(ini)}</span>
-    <span><strong>${esc(L.nome)}</strong><span class="lp${q.atraso ? " atrasada" : ""}">${esc(L.servico)} · ${esc(q.txt)}</span>
-      <span class="chips">${etq}${origem}${e === "fechou" ? `<span class="val">${brl0(M.valorLead(L))}</span>` : ""}</span></span></button>`;
+    <span class="l-txt"><span class="l-nome"><strong>${esc(L.nome)}</strong>${etq}${val}</span><span class="lp${q.atraso ? " atrasada" : ""}">${esc(L.servico)} · ${esc(q.txt)}</span></span>
+    <span class="chips">${origem}</span></button>`;
 }
 
 function renderKanban() {
@@ -1206,7 +1251,9 @@ function fecharGaveta(semFoco) {
   document.body.style.overflow = "";
   if (!semFoco) {
     let v = gv.volta;
-    if (!v || v === document.body || !document.contains(v)) v = gv.lead ? $(`[data-lead="${CSS.escape(String(gv.lead.id))}"]`) : $("#btn-novo-lead");
+    // quem abriu pode ter sumido (ex.: o campo da paleta Ctrl+K, já fechada): cai na ficha ou em "Novo paciente"
+    const invisivel = el => (el.checkVisibility ? !el.checkVisibility() : el.offsetParent === null);
+    if (!v || v === document.body || !document.contains(v) || invisivel(v)) v = gv.lead ? $(`[data-lead="${CSS.escape(String(gv.lead.id))}"]`) : $("#btn-novo-lead");
     if (v) v.focus();
   }
   gv.lead = null;
@@ -1272,12 +1319,13 @@ function soltarNaColuna(L, col, o = {}) {
   if (col === "parou") return menuParou(L, o.x, o.y);
   return moverLead(L, col);
 }
-/** "Não seguiu" tem três motivos: um mini-menu pergunta qual. */
+/** "Não seguiu": um mini-menu pergunta o motivo — só os que cabem na coluna de origem (PAROU_DE). */
 function menuParou(L, x, y) {
   return new Promise(res => {
     const m = $("#menu-parou"), volta = document.activeElement;
+    const motivos = PAROU_DE[colunaDe(L)] || Object.keys(MOTIVOS_PAROU);
     m.innerHTML = `<p class="mp-t">${esc(nomeCurto(L.nome))} não seguiu porque…</p>` +
-      [["faltou", "Faltou à consulta"], ["nao_fechou", "Avaliou e não fechou"], ["perdida", "Não agendou"]]
+      motivos.map(v => [v, MOTIVOS_PAROU[v]])
         .map(([v, l]) => `<button type="button" role="menuitem" data-mp="${v}">${l}</button>`).join("") +
       `<button type="button" role="menuitem" class="mp-x" data-mp="">Cancelar</button>`;
     const w = 240, h = 210;
@@ -1402,6 +1450,25 @@ async function salvarLead(ev) {
    ============================================================ */
 const OPS = { ">": "acima de", "<": "abaixo de", ">=": "a partir de", "<=": "até" };
 const ROT_MET = { cpa: "Custo por conversa", ctr: "CTR", freq: "Frequência", conversoes: "Conversas" };
+/** A condição de cada regra em linguagem de consultório (a clínica e a demo); o gestor lê a técnica. */
+function condLeiga(r) {
+  const lim = r.limite(), janela = `olhando ${r.janela} dias`, meta = r.plat ? " · anúncios do Instagram e Facebook" : "";
+  if (r.metrica === "cpa") return `Avisa quando cada conversa passa de ${brl(lim)} (${janela}, por campanha)`;
+  if (r.metrica === "conversoes") return `Avisa quando um anúncio gasta mais de ${brl0(r.minGasto || 0)} em ${r.janela} dias sem nenhuma conversa`;
+  if (r.metrica === "ctr") return `Avisa quando menos de ${Math.max(1, Math.round(lim))} em cada 100 que viram tocaram no anúncio (${janela}${r.minImpr ? `, a partir de ${r.minImpr} vezes na tela` : ""}${meta})`;
+  if (r.metrica === "freq") return `Avisa quando a mesma pessoa já viu o anúncio mais de ${dec(lim, 0)} vezes (${janela}${meta})`;
+  return `${ROT_MET[r.metrica] || r.metrica} ${OPS[r.op]} ${M.FMT_MET[r.metrica](lim)}`;
+}
+/** Depois de "CTR de 0,83%" (texto do núcleo), a clínica lê a conta: "(de cada 100 que viram, menos de 1 tocou)". */
+function traducaoCTR(msg, tag = "span") {
+  if (gestor()) return "";
+  const m = /CTR de (\d+(?:,\d+)?)%/.exec(String(msg || ""));
+  if (!m) return "";
+  const v = parseFloat(m[1].replace(",", "."));
+  if (!fin(v)) return "";
+  const t = `(de cada 100 que viram, ${v < 1 ? "menos de 1 tocou" : `${Math.round(v)} ${Math.round(v) === 1 ? "tocou" : "tocaram"}`})`;
+  return tag === "p" ? `<p class="al-trad">${t}</p>` : ` <span class="al-trad">${t}</span>`;
+}
 const SEV_NOME = { critico: "crítico", alerta: "alerta", info: "informativo" };
 let radarCtl = null, radarChega = false;   // varredura em canvas (cinema.js), se houver
 const horaCheia = () => `${p2(new Date().getHours())}:00`;
@@ -1461,7 +1528,8 @@ function renderIntegracao() {
   const e = estadoInteg();
   const demoCalma = S.demo && !SIMULAR_INTEG;
   let nivel = e.nivel, txt = "";
-  if (demoCalma) { nivel = "demo"; txt = `Demonstração · dados de ${M ? M.ddmm(M.R) : "—"}`; }
+  // a data já está ao lado ("Números até ontem, DD/MM"): a pílula da demo diz só o que é
+  if (demoCalma) { nivel = "demo"; txt = "Demonstração"; }
   else if (nivel === "erro") {
     const nomes = e.erros.map(x => nomePlat(x.canal));
     txt = `${nomes.join(" e ")} ${nomes.length > 1 ? "desconectados" : "desconectado"}`;
@@ -1475,24 +1543,27 @@ function renderIntegracao() {
   const erros = S.demo && !SIMULAR_INTEG ? [] : e.erros;
   faixa.hidden = !temApp || !erros.length;
   if (erros.length) {
-    const partes = erros.map(x => `A conexão com o ${nomePlat(x.canal)} caiu: os números do ${nomePlat(x.canal)} estão parados desde ${x.sync ? ddmmHora(new Date(x.sync).toISOString()) : "a última leitura"}.`);
-    faixa.innerHTML = `<svg class="fi-ic" aria-hidden="true"><use href="#ic-sinal"/></svg><p>${partes.map(esc).join(" ")}</p>` +
-      (gestor() ? `<button class="pill pill-ink pill-sm" type="button" data-ir="ajustes">Abrir Ajustes</button>` : `<p class="fi-nota">A Nexus já foi avisada e está resolvendo.</p>`);
+    faixa.innerHTML = `<svg class="fi-ic" aria-hidden="true"><use href="#ic-sinal"/></svg><p>${esc(textoQueda(erros))}</p>` +
+      (!gestor() ? `<p class="fi-nota">A Nexus já foi avisada e está resolvendo.</p>`
+        : S.aba === "ajustes" ? `<p class="fi-nota">Refaça a conexão no bloco Integrações, aqui em Ajustes.</p>`
+        : `<button class="pill pill-ink pill-sm" type="button" data-ir="ajustes">Abrir Ajustes</button>`);
   }
   if ($("#sync-pop").hidden === false) renderSyncPop();
   // "há X min" anda sozinho (a cada 30 s; parado com a aba oculta)
   clearInterval(syncT);
   if (temApp && nivel === "ok") syncT = setInterval(() => { if (!document.hidden) renderIntegracao(); }, 30000);
 }
+const textoQueda = erros => erros.map(x => `A conexão com o ${nomePlat(x.canal)} caiu: os números do ${nomePlat(x.canal)} estão parados desde ${x.sync ? ddmmHora(new Date(x.sync).toISOString()) : "a última leitura"}.`).join(" ");
 function renderSyncPop() {
   const e = estadoInteg(), pop = $("#sync-pop");
+  // o popover pode cobrir a faixa de conexão caída: repete o recado dela no topo (nada importante some)
+  const queda = !(S.demo && !SIMULAR_INTEG) && e.erros.length ? `<p class="spp-queda">${esc(textoQueda(e.erros))}</p>` : "";
   const ESTADO = { ok: "lendo normalmente", atrasado: "leitura atrasada", aguardando: "esperando a 1ª leitura", erro: "desconectado" };
-  const prox = 60 - new Date().getMinutes();
   const linhas = e.canais.map(c => `<li class="spp-${c.estado}"><b>${nomePlat(c.canal)}</b><span>${c.sync ? `lida às ${FMT_HORA.format(new Date(c.sync))} (${quandoSP(new Date(c.sync).toISOString()).replace(/ às .*/, "")})` : "ainda não leu"} · ${ESTADO[c.estado]}</span></li>`).join("");
   const radarQ = S.varridoEm ? `hoje às ${S.varridoEm}` : e.ultimo ? quandoSP(new Date(e.ultimo).toISOString()) : "—";
-  pop.innerHTML = `<p class="spp-h">${S.demo ? "Leitura dos anúncios (exemplo)" : "Leitura dos anúncios"}</p>` +
+  pop.innerHTML = `<p class="spp-h">${S.demo ? "Leitura dos anúncios (exemplo)" : "Leitura dos anúncios"}</p>` + queda +
     (linhas ? `<ul>${linhas}</ul>` : `<p class="spp-v">Nenhuma plataforma conectada.</p>`) +
-    `<p class="spp-v">Próxima leitura em ~${prox} min · de hora em hora</p><p class="spp-v">Última varredura do radar: ${esc(radarQ)}</p>`;
+    `<p class="spp-v">Próxima leitura ${proximaLeitura(e.ultimo)} · de hora em hora</p><p class="spp-v">Última varredura do radar: ${esc(radarQ)}</p>`;
 }
 function abrirSyncPop(on) {
   const pop = $("#sync-pop"), b = $("#sync-pill");
@@ -1557,11 +1628,12 @@ function renderRadar() {
     }
     radarCtl.atualizar(atuais.map((a, n) => ({ chave: a.chave, sev: a.sev, ang: (n * 137.5 + 40) * Math.PI / 180, rad: { critico: .34, alerta: .54, info: .74 }[a.sev] })));
   }
-  const qtd = `${atuais.length} ${atuais.length === 1 ? "alerta ativo" : "alertas ativos"}`;
+  const nAtivos = atuais.length + conexoesCaidas();
+  const qtd = `${nAtivos} ${nAtivos === 1 ? "alerta ativo" : "alertas ativos"}`;
   const u = ultimoSync();
   $("#scope-status").innerHTML = vazio && !S.demo ? "Sem números de anúncio ainda: o radar começa a vigiar assim que a primeira leitura chegar."
     : S.varridoEm ? `Conferido às <b>${S.varridoEm}</b> · ${qtd}.`
-    : S.demo ? `Última varredura: <b>hoje, ${horaCheia()}</b> · ${qtd}.`
+    : S.demo ? `Última varredura: <b>${u ? esc(quandoSP(u).replace(" às ", ", ")) : `hoje, ${horaCheia()}`}</b> · ${qtd}.`
     : u ? `Última leitura dos anúncios: <b>${quandoSP(u)}</b> · ${qtd}.` : `${qtd}.`;
   $("#btn-varrer").textContent = S.demo ? "Varrer agora" : "Conferir agora";
 
@@ -1581,10 +1653,10 @@ function renderRadar() {
     const desde = ativo ? (e.desde === M.R ? "desde ontem · continua" : `desde ${M.dMes(e.desde)} · continua`)
       : e.desde === e.ate ? `em ${M.dMes(e.desde)}` : `de ${M.dMes(e.desde)} a ${M.dMes(e.ate)}`;
     const s = srv.get(a.chave);
-    const env = s && (s.enviado_em || s.entregue_em) ? ` · <span class="al-env">aviso ${envLinha(statusEnvio(s))}</span>${chipExemplo(s)}` : "";
+    const env = s && (s.enviado_em || s.entregue_em) ? ` · <span class="al-env">aviso ${envLinha(statusEnvio(s))}</span> ${chipExemplo(s)}` : "";
     return `<li style="--i:${n + integs.length}"${ativo ? ` data-chave="${esc(a.chave)}"` : ""}><span class="sev sev-${a.sev}" role="img" aria-label="${SEV_NOME[a.sev]}">${M.ICONE[a.sev]}</span>
       <div><p class="al-t">${rotT(id)} <span class="chip ${ativo ? (a.sev === "critico" ? "chip-bad" : "chip-warn") : "chip-ok"}">${ativo ? "ativo" : "resolvido"}</span></p>
-      ${!gestor() && LEIGO_LINHA[id] ? `<p class="al-leigo">${esc(LEIGO_LINHA[id])}</p>` : ""}<p class="al-m">${esc(a.msg)}</p><p class="al-d">${desde}${env}</p></div></li>`;
+      ${!gestor() && LEIGO_LINHA[id] ? `<p class="al-leigo">${esc(LEIGO_LINHA[id])}</p>` : ""}<p class="al-m">${esc(a.msg)}</p>${traducaoCTR(a.msg, "p")}<p class="al-d">${desde}${env}</p></div></li>`;
   }).join("");
   $("#alerts").innerHTML = htmlInteg + htmlHist || `<li class="vazio">Nenhum alerta nos últimos 14 dias.</li>`;
 
@@ -1593,8 +1665,11 @@ function renderRadar() {
     const f = M.FMT_MET[r.metrica];
     const cond = `${ROT_MET[r.metrica]} ${OPS[r.op]} ${f(r.limite())} · ${r.janela} dias · por ${r.nivel === "campanha" ? "campanha" : "criativo"}${r.plat ? " (Meta)" : ""}` +
       (r.minGasto ? ` · gasto mínimo ${brl0(r.minGasto)}` : "") + (r.minImpr ? ` · mín. ${r.minImpr} impressões` : "");
-    return `<li><div><p class="rl-t">${esc(r.nome)} <span class="chip ${r.sev === "critico" ? "chip-bad" : r.sev === "alerta" ? "chip-warn" : "chip-meta"}">${SEV_NOME[r.sev]}</span></p><p class="rl-c">${cond}</p></div>
-      <button class="sw" type="button" role="switch" aria-checked="${r.ativa}" aria-label="Regra ${esc(r.nome)}" data-regra="${r.id}"${pode ? "" : ` aria-disabled="true" title="Só a equipe da Nexus liga ou desliga regras"`}></button></li>`;
+    const leigo = !gestor() && LEIGO[r.id];
+    const nomeR = leigo ? `<span title="${esc(r.nome)}">${esc(LEIGO[r.id][1])}</span>` : esc(r.nome);
+    const condR = leigo ? `<span title="${esc(cond)}">${esc(condLeiga(r))}</span>` : cond;
+    return `<li><div><p class="rl-t">${nomeR} <span class="chip ${r.sev === "critico" ? "chip-bad" : r.sev === "alerta" ? "chip-warn" : "chip-meta"}">${SEV_NOME[r.sev]}</span></p><p class="rl-c">${condR}</p></div>
+      <button class="sw" type="button" role="switch" aria-checked="${r.ativa}" aria-label="Regra ${esc(!gestor() && LEIGO[r.id] ? LEIGO[r.id][1] : r.nome)}" data-regra="${r.id}"${pode ? "" : ` aria-disabled="true" title="Só a equipe da Nexus liga ou desliga regras"`}></button></li>`;
   }).join("");
   $("#rules-nota").textContent = S.demo ? "Na demonstração, ligar e desligar regras e mexer nas metas não salva nada — é só para ver o efeito."
     : gestor() ? "Ligar ou desligar uma regra vale na hora para este cliente." : "Só a equipe da Nexus liga ou desliga regras.";
@@ -1619,14 +1694,16 @@ function renderRadar() {
       const sev = SEV_OK.has(a.severidade) ? a.severidade : "alerta";
       const ic = a.regra === "integracao" ? `<svg><use href="#ic-sinal"/></svg>` : M.ICONE[sev];
       const nome = a.regra === "integracao" ? nomeRegraSrv(a) : LEIGO[a.regra] ? rot(a.regra) : nomeRegraSrv(a, M.REGRAS);
-      return itemEnvio({ titulo: esc(nome), sub: esc(a.mensagem || ""), x: a, tipo: "alerta",
+      return itemEnvio({ titulo: esc(nome), sub: esc(a.mensagem || "") + traducaoCTR(a.mensagem, "span"), x: a, tipo: "alerta",
         antes: `<span class="sev sev-${sev}${a.regra === "integracao" ? " sev-ic" : ""}" role="img" aria-label="${SEV_NOME[sev]}">${ic}</span>` });
     }).join("");
-  atualizarBadge(atuais.length);
+  atualizarBadge(nAtivos);
 }
 
+/** Conexões com Meta/Google caídas agora (a regra "integracao" só o servidor conhece): contam como alerta ativo. */
+const conexoesCaidas = () => (S.demo && !SIMULAR_INTEG ? 0 : estadoInteg().erros.length);
 function atualizarBadge(n) {
-  if (n == null) n = M && !semAnuncios() ? M.avaliar(M.R, true).length : 0;
+  if (n == null) n = (M && !semAnuncios() ? M.avaliar(M.R, true).length : 0) + (M ? conexoesCaidas() : 0);
   $$("[data-badge]").forEach(b => {
     const antes = b.textContent;
     b.textContent = n; b.hidden = !n;
@@ -1680,7 +1757,10 @@ function digitar(el, txt, dia, hora, st) {
   el._texto = txt;
   const fim = () => {
     // o tique sai do statusEnvio (✓ enviado · ✓✓ entregue · ! não saiu) — nunca azul
-    el.innerHTML = `<span class="ph-day">${esc(dia)}</span><div class="bubble${REDUCE ? "" : " chega"}">${waHtml(txt)}<span class="hr">${esc(hora)}${st ? ` ${tiqueHtml(st)}<span class="sr-only">${esc(st.rotulo)}</span>` : ""}</span></div>`;
+    // sem hora de envio (não saiu / ainda não saiu), o balão não inventa "08:00": escreve o estado no lugar da hora
+    const hr = !hora ? `${st ? `${esc(st.rotulo)} ${tiqueHtml(st)}` : ""}`
+      : `${esc(hora)}${st ? ` ${tiqueHtml(st)}<span class="sr-only">${esc(st.rotulo)}</span>` : ""}`;
+    el.innerHTML = `<span class="ph-day">${esc(dia)}</span><div class="bubble${REDUCE ? "" : " chega"}">${waHtml(txt)}<span class="hr">${hr}</span></div>`;
     el.scrollTop = 0;
   };
   if (REDUCE) return fim();
@@ -1693,7 +1773,7 @@ function mostrarRel(tipo, rel, previa, dia, horaPadrao, dBloq) {
   let txt, hora = horaPadrao, nao = null;
   if (rel && rel.texto) {
     const s = statusEnvio(rel);
-    txt = rel.texto; hora = rel.enviado_em ? horaSP(rel.enviado_em) : horaPadrao; nao = s;
+    txt = rel.texto; hora = rel.enviado_em ? horaSP(rel.enviado_em) : ""; nao = s;
     const cls = { entregue: "chip-ok", enviado: "chip-neutro", erro: "chip-bad", pendente: "chip-warn" }[s.k];
     st.innerHTML = `${chipExemplo(rel)}<span class="chip ${cls}">${esc(s.rotulo)} ${tiqueHtml(s)}</span>` +
       (s.erro ? ` <span class="rel-erro">${esc(s.erro)}</span>` : "") + (rel.leitura_ia ? ` <span class="chip chip-ia">leitura por IA</span>` : "");
@@ -1708,7 +1788,9 @@ function mostrarRel(tipo, rel, previa, dia, horaPadrao, dBloq) {
     st.innerHTML = S.demo ? "" : `<span class="chip chip-neutro">prévia</span> calculada agora com os números do painel`;
   }
   const col = el.closest(".phone-col");
-  if (FX && ANIM && col && !col.classList.contains("em-cena")) {
+  // relatório que não saiu não "chega" na tela bloqueada: vai direto para o balão com o "!"
+  const naoSaiu = !!nao && (nao.k === "erro" || nao.k === "pendente");
+  if (FX && ANIM && col && !col.classList.contains("em-cena") && !naoSaiu) {
     // 1ª vez: o relatório chega na tela bloqueada e destrava quando o celular entra em quadro
     clearTimeout(el._t);
     el._texto = txt; el.innerHTML = "";
@@ -1750,7 +1832,8 @@ function renderRelatorios() {
   // o celular do Resumo é da clínica: logo/cor dela no avatar e o nome inteiro
   avatarMarca($("#ph-av-cli"), nomeCliente());
   $("#ph-nome-cli").textContent = nomeCliente();
-  $("#btn-folha").hidden = !$("#sel-mes").value;
+  const mesSel = M.mesesDados().find(x => isoI(x.de) === $("#sel-mes").value);
+  $("#btn-folha").hidden = !mesSel || semAnuncios() || !mesTemNumeros(mesSel);
 
   const isoD = sd.value, iD = iDeIso(isoD);
   mostrarRel("diario", srv.get(`diario|${isoD}`), iD >= 0 && iD <= M.R ? () => M.relDiario(iD) : null,
@@ -2246,12 +2329,19 @@ function linkReuniao() {
 }
 
 /* ---------- a folha do mês (folha.js) ---------- */
+/** A folha só sai de mês fechado COM números de anúncio: mês vazio viraria uma folha de zeros na mesa do dentista. */
+function mesTemNumeros(m) {
+  const t = M.consolidar(M.linhasDe(m.de, m.ate));
+  return t.impressoes > 0 || t.gasto > 0 || M.crmTot(m.de, m.ate).conversas > 0;
+}
 async function abrirFolhaMes(iso) {
   if (!M) return;
+  if (semAnuncios()) return toast("Ainda não há números de anúncio para a folha do mês.", "nota");
   const meses = M.mesesDados().filter(m => m.completo);
   const pedido = iso ? String(iso).slice(0, 7) : null;
-  const m = pedido ? meses.find(x => isoI(x.de).slice(0, 7) === pedido) : meses[meses.length - 1];
-  if (!m) return toast(pedido ? "Esse mês ainda não está completo: a folha sai de mês fechado." : "Ainda não há um mês completo para a folha.", "nota");
+  const m = pedido ? meses.find(x => isoI(x.de).slice(0, 7) === pedido) : meses.filter(mesTemNumeros).pop();
+  if (!m) return toast(pedido ? "Esse mês ainda não está completo: a folha sai de mês fechado." : "Ainda não há um mês fechado com números de anúncio para a folha.", "nota");
+  if (!mesTemNumeros(m)) return toast(`${MESES[m.mes].charAt(0).toUpperCase() + MESES[m.mes].slice(1)} não tem números de anúncio: a folha sairia em branco.`, "nota");
   const f = await modulo("folha");
   if (!f) return toast("Não deu para montar a folha agora. Tente de novo.", "erro");
   const lista = M.mesesDados().filter(x => x.de <= m.de && (x.ate - x.de >= 9 || x.completo)).slice(-4);
@@ -2477,6 +2567,32 @@ function aplicarVisibilidade() {
   $(".top-tools").hidden = $("#filters").hidden && $("#btn-tour").hidden && $("#btn-apresentar").hidden;
   $("#btn-filtros-m").hidden = $("#filters").hidden;
   if ($(".top-tools").hidden) abrirFolha(false);
+  medirTopo();
+}
+
+/* ---------- topo que gruda (desktop) ----------
+   Gruda com top NEGATIVO (--cima): a linha de cima (selo, eyebrow, leitura) sai de quadro sozinha
+   e fica só a faixa de baixo — título curto (20 px) + filtros, Tour e Apresentar, ~64 px. Nada muda
+   de altura no fluxo: o conteúdo não pula. */
+const TOPO_LARGO = matchMedia("(min-width: 901px)");
+function medirTopo() {
+  const top = $(".top");
+  if (!top) return;
+  if (!TOPO_LARGO.matches) { top.style.removeProperty("--cima"); top.style.removeProperty("--faixa"); return; }
+  const tools = $("#top-tools"), h = top.offsetHeight;
+  if (!h) return;
+  const ini = !tools.hidden && tools.offsetHeight ? tools.offsetTop - 10 : h - 60;
+  const cima = Math.max(0, Math.round(Math.min(ini, h - 56)));
+  top.style.setProperty("--cima", cima + "px");
+  top.style.setProperty("--faixa", (h - cima) + "px");
+}
+function grudou() {
+  const top = $(".top");
+  const cima = TOPO_LARGO.matches ? parseFloat(top.style.getPropertyValue("--cima")) || 0 : 0;
+  const on = scrollY > 8 && (!TOPO_LARGO.matches || top.getBoundingClientRect().top <= -cima + 1);
+  if (on === top.classList.contains("stuck")) return;
+  top.classList.toggle("stuck", on);
+  if (on && !$("#sync-pop").hidden) abrirSyncPop(false);
 }
 
 function render() {
@@ -2500,6 +2616,7 @@ function setAba(aba, o = {}) {
     S.aba = aba;
     $$("[data-aba]").forEach(b => { if (b.dataset.aba === aba) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
     $("#top-h1").textContent = ABAS[aba][0];
+    $("#top-mini").textContent = ABAS[aba][0];
     $("#top-eyebrow").textContent = ABAS[aba][1];
     document.title = `${ABAS[aba][0]} · ${nomeCliente()} · Nexus Ads${S.demo ? " (demonstração)" : ""}`;
     if (!o.semRolar) scrollTo({ top: 0, behavior: "instant" });
@@ -2603,7 +2720,8 @@ let tourI = -1, tourEl = null;
     acima do cartão do tour e da tab bar (celular). */
 function tourRolar(el) {
   const topo = $(".top"), card = $("#tour");
-  const sobe = topo && getComputedStyle(topo).position === "sticky" ? topo.getBoundingClientRect().height : 0;
+  // grudado, o topo só mostra a faixa de baixo (--faixa, ~64 px): é isso que cobre o conteúdo
+  const sobe = topo && getComputedStyle(topo).position === "sticky" ? (parseFloat(topo.style.getPropertyValue("--faixa")) || topo.getBoundingClientRect().height) : 0;
   const desce = card.hidden ? innerHeight : card.getBoundingClientRect().top;
   const livre = Math.max(120, desce - sobe - 24);
   const r = el.getBoundingClientRect();
@@ -2891,6 +3009,12 @@ function abrirAbaInicial() {
   // ?aba= tem precedência sobre o #hash (captura headless por linha de comando não leva #fragmento)
   const pedido = Q.get("aba") || location.hash.slice(1);
   setAba(ABAS[pedido] ? pedido : "geral", { semRolar: true });
+  // o ?aba= só vale na abertura: sai da URL (fica o #aba), senão o F5 voltaria sempre para ela
+  if (Q.has("aba")) {
+    Q.delete("aba");
+    const resto = location.search.slice(1).split("&").filter(p => p && !/^aba(=|$)/.test(p)).join("&");
+    try { history.replaceState(null, "", location.pathname + (resto ? "?" + resto : "") + location.hash); } catch { /* file:// */ }
+  }
 }
 
 /* ============================================================
@@ -3013,6 +3137,12 @@ function ligarEventos() {
   $("#gv-cancelar").addEventListener("click", () => fecharGaveta());
   $("#gaveta-fundo").addEventListener("click", () => fecharGaveta());
   $("#gaveta").addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); fecharGaveta(); } });
+  // Esc fecha a gaveta mesmo com o foco fora dela (clique no título, que não é focável; link "Pular" etc.)
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Escape" || e.defaultPrevented || $("#gaveta").hidden) return;
+    if (e.target && e.target.closest && e.target.closest(".paleta, #menu-parou, #palco-curta, #folha-modal")) return;
+    fecharGaveta();
+  });
   // arrastar a gaveta para a direita (> 80 px ou > .5 px/ms) fecha; senão volta com mola
   arrastavel($("#gaveta"), { eixo: "x", var: "--gx", alca: "#gv-alca", ativo: () => !$("#gaveta").hidden, fechar: () => fecharGaveta() });
 
@@ -3201,7 +3331,10 @@ function ligarEventos() {
 
   /* ---------- topo, gráfico, herói ---------- */
   const top = $(".top");
-  addEventListener("scroll", () => top.classList.toggle("stuck", scrollY > 8), { passive: true });
+  addEventListener("scroll", grudou, { passive: true });
+  if ("ResizeObserver" in window) new ResizeObserver(() => { medirTopo(); grudou(); }).observe(top);
+  else addEventListener("resize", medirTopo);
+  TOPO_LARGO.addEventListener("change", () => { medirTopo(); grudou(); });
   const chartEl = $("#chart-dia");
   if ("ResizeObserver" in window) {
     let rzc;
@@ -3266,6 +3399,10 @@ function pedidosDaUrl() {
 
 async function iniciar() {
   ligarEventos();
+  // com um diálogo aberto (gaveta, curta, folha) o #app fica inerte; o link "Pular para o conteúdo" mora fora
+  // dele e acompanha — senão o Tab sai do diálogo por ele e o Esc deixa de fechar
+  const skip = $(".skip");
+  if (skip && "MutationObserver" in window) new MutationObserver(() => { skip.inert = $("#app").inert; }).observe($("#app"), { attributes: true, attributeFilter: ["inert"] });
   api.aoSessaoInvalida(sessaoExpirou);
   if (S.demo && CLINICA_Q) bootMsg(`Abrindo o painel da ${CLINICA_Q}…`);
   // a câmera precisa estar pronta antes do 1º quadro (senão o conteúdo piscaria); teto de 900 ms.

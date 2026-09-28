@@ -65,6 +65,10 @@ por " · ", sem apagar `enviado_em` (enviado = a API aceitou; entregue = chegou 
   "waGestor": ["5512999998888"], "waCliente": ["5512997552370"] }
 ```
 `waGestor` recebe alertas + relatório diário. `waCliente` recebe o resumo mensal (e `waGestor` recebe cópia).
+Chaves só do painel (gravadas pelo gestor em Ajustes, via `nx_cliente_salvar`, que mescla):
+`corMarca` (`"#RRGGBB"`), `logoUrl` (`data:image/(png|jpeg|webp);base64,…` ≤ 60 KB ou `https://…`;
+nunca SVG) e `marcos` (`[{ "d": "AAAA-MM-DD", "t": "até 60 letras" }]`, no máximo 40, sempre
+enviado inteiro). O servidor não lê nenhuma delas.
 
 **Credenciais em `nx_integracoes.cred`** (mesmos nomes do indycar-ads):
 - Meta: `meta_access_token`, `meta_ad_account_id` (com ou sem `act_`), `conta_nome`
@@ -308,8 +312,8 @@ Arquivos: `index.html`, `painel.css`, `painel.js` (UI), `dados.js` (cliente RPC)
   `nx_lead_salvar` → recarregar dados.
 - Radar (real): mostra `M.historico()` calculado no navegador + o registro de `alertas` do
   servidor ("enviado no WhatsApp às HH:MM"; com `entregue_em`, "entregue às HH:MM").
-  Alerta com `regra` que o núcleo não conhece (`integracao`) aparece no registro com nome
-  próprio ("Conexão parada") e leva o gestor a Ajustes → Integrações.
+  Alerta com `regra` que o núcleo não conhece (`integracao`) aparece NO TOPO da lista com nome
+  próprio ("Conexão com Meta" / "Conexão com Google") e leva o gestor a Ajustes → Integrações.
   Regras: switch grava `cfg.regrasOff` (gestor).
 - Relatórios (real): últimos relatórios do servidor (`relatorios` de nx_dados) + prévia
   calculada no navegador para o dia/mês escolhido.
@@ -349,7 +353,14 @@ rolam como odômetro do valor anterior (`data-k`) e as barras interpolam (FLIP).
   topo do celular, avatar da Nexus nos celulares e favicon. Vinheta de abertura (≤ 1,2 s,
   1× por sessão, `sessionStorage nx-vinheta`, pula com clique/tecla).
 - URL: `?aba=<geral|campanhas|pacientes|radar|relatorios|ajustes>` tem precedência sobre o
-  `#hash` (capturas headless); `?noanim` = quadro final estático e determinístico.
+  `#hash` (capturas headless) e sai da URL depois de aplicado (fica o `#aba`: o F5 volta para a
+  aba em que a pessoa estava); `?noanim` = quadro final estático e determinístico.
+- Topo (desktop): duas linhas — [selo · eyebrow ··· leitura] e [título ··· filtros · Tour ·
+  Apresentar], na mesma posição em todas as abas. Ao rolar, gruda com `top` negativo (`--cima`,
+  medido no `painel.js`): fica só a faixa de baixo (~64 px) com o título em 20 px. Só opacity e
+  transform (o conteúdo não pula). Na demo a pílula diz só "Demonstração" (a data já está ao lado).
+- Clash: todo texto nela leva `word-spacing: var(--ws-d)` (o espaço dela, e o NBSP de "R$ 1.314",
+  é estreito) e o tracking nunca passa de −.02em.
 - Degradação: `efeitos.js` e `cinema.js` entram por `import()` dinâmico com `catch`; sem eles
   o painel funciona igual (sem `.cena-on`, nada fica escondido). Efeitos de mouse (luz do
   cursor, cantos de autofoco, luz-chave, tilt só no herói ≤ 2° e nos celulares ≤ 6°, botões
@@ -357,5 +368,47 @@ rolam como odômetro do valor anterior (`data-k`) e as barras interpolam (FLIP).
   movem com o mouse.
 - Linguagem de consultório onde o dentista lê ("Cada R$ 1 investido virou R$ 5,41", "de cada
   100 que viram, 2 tocaram"); o gestor continua vendo CTR/ROAS. O retorno é o MESMO de sempre
-  (tratamentos ÷ (anúncios + gestão)), só reescrito. Nos objetos, só primeiro nome + inicial;
+  (tratamentos ÷ (anúncios + gestão)), só reescrito — no herói, no curta e na folha. O "só
+  anúncio" aparece como apoio (folha: "só anúncio: R$ X"; Campanhas: coluna "Retorno do anúncio").
+  No Radar, a clínica lê os nomes e as condições das regras em linguagem leiga (o técnico fica no
+  `title`) e, depois de "CTR de 0,83%", a conta "(de cada 100 que viram, menos de 1 tocou)". Nos objetos, só primeiro nome + inicial;
   notificação de lead real diz "Chamou pelo anúncio «…»" (nunca texto de mensagem inventado).
+
+### 6.2 Recursos da reunião (curta, folha, marca, celebração)
+
+Módulos por `import()` dinâmico com `catch` (versão `?v=` no caminho): `curta.js` (modo
+apresentação), `folha.js` (folha A4), `marca.js` (logo → webp ≤ 60 KB e cores sugeridas),
+`paleta.js` (Ctrl/⌘+K), `arrastar.js` (kanban). CSS próprio em `recursos.css`. Sem eles o
+painel segue de pé. Todos os números saem das mesmas funções de `M` (herói = régua = curta =
+folha); a folha repete os números do resumo mensal do WhatsApp (investido, tratamentos,
+pacientes, vezes na tela), mas o "Cada R$ 1 investido virou" dela soma a gestão do mês, como o
+herói e o curta (o "só anúncio" do resumo fica como linha de apoio).
+
+- **Envios** (`statusEnvio`): `!` não enviado/não entregue · `✓` enviado (entrega ainda não
+  confirmada) · `✓✓` entregue às HH:MM (`entregue_em`). Nunca azul. Relatórios, avisos do
+  Radar e o celular de prévia usam a mesma régua; o item expandido mostra a linha do tempo.
+  Relatório que não saiu não ganha hora no balão (escreve "não enviado !") nem "chega" na tela
+  bloqueada.
+- **Conexão** (`estadoIntegracao`): pílula no topo (ok "Atualizado há X min" · âmbar "Leitura
+  atrasada" > 2 h · tijolo "<canal> desconectado" com `status` começando por `erro` ou aviso
+  `integracao` das últimas 24 h sem leitura boa depois). Faixa `role=status` em todas as abas;
+  células da régua do canal parado com "leitura parada em DD/MM". "Próxima leitura" = última
+  leitura + 1 h (o ciclo é de hora em hora). O popover repete o recado da faixa (ele pode
+  cobri-la) e a conexão caída conta como alerta ativo no status do Radar e no badge do menu.
+- **URL**: `?clinica=<nome ≤ 40>` e `?cor=RRGGBB` (só na demo: `gerarDemo({nome})` + marca;
+  números iguais) · `?apresentar` (cartão "Começar ▶") e `?cena=1–7` · `?folha=AAAA-MM` (só mês
+  fechado com números de anúncio) · `?simular=integracao` (só na demo; ignorado no modo real).
+  Teclas fora de campos de texto: `P` apresenta, `1/2/3` = 7/30/60 dias, Ctrl/⌘+K busca.
+- **Marca da clínica** (`aplicarMarca`): `--marca`, `--marca-txt` (preto ou branco pelo
+  contraste ≥ 4,5:1), `--marca-suave`, `--marca-escura`. Só nos objetos (selo do topo, celular
+  do Resumo, post/cartões/recibo do curta, faixa da folha); nunca em menu, CTA da Nexus ou
+  status. Nome sempre por `textContent`; logo só por `img.src` validado.
+- **Kanban**: "Não seguiu" só oferece os motivos da coluna de origem (Nova conversa → "Não
+  agendou"; Agendada → "Faltou" ou "Não agendou"; Orçamento/Fechou → "Avaliou e não fechou"):
+  nunca inventa uma consulta.
+- **Demo**: relatórios e avisos de EXEMPLO (chip "exemplo") gerados no `painel.js`; arrastar
+  e celebrar só na memória (recarregar volta a 106 / 44 / 13 / R$ 13.550); simulador "E na sua
+  clínica?" só existe na demo (faixa ±20%, "não é promessa").
+- **Armazenamento local** (conveniência, sempre em `try/catch`): `nx-recentes` (paleta),
+  `nx-fechados-<cliente>` ("Desde a sua última visita", só conta de clínica), `sessionStorage
+  nx-vinheta` (abertura 1× por sessão). O que precisa durar vai no `cfg`.

@@ -34,11 +34,7 @@
   background: var(--marca); color: var(--marca-txt); font-family: var(--fb); font-weight: 800; font-size: var(--fs-13); line-height: 1;
 }
 .selo-av img { width: 100%; height: 100%; object-fit: contain; padding: 3px; display: block; }
-/* logo de verdade costuma ser largo (até 2:1): vira uma plaquinha branca na altura do selo, não um círculo */
-.selo-av.com-logo { width: auto; padding: 3px 6px; border-radius: 7px; background: #FFFFFF; }
-.selo-av.com-logo img { width: auto; height: 100%; max-width: none; padding: 0; }
-.ct-av-g.com-logo { padding: 9px 14px; border-radius: 16px; }
-.fl-av.com-logo { padding: 1.2mm 2mm; border-radius: 2mm; }
+/* com logo: plaquinha branca na altura do selo (regras no fim do arquivo, "LOGO DA CLÍNICA") */
 .selo-nome { font-weight: 700; font-size: var(--fs-14); color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .top-brand .selo-av { width: 28px; height: 28px; }
 .top-brand .sb-k { display: none; }
@@ -84,6 +80,10 @@
 .sync-pop li span { color: var(--papel-soft); }
 .spp-v { color: var(--papel-soft); }
 .spp-v + .spp-v { margin-top: .2rem; }
+/* o recado da faixa de conexão caída, repetido aqui (o popover pode cobrir a faixa) */
+.spp-queda { margin-top: .5rem; padding: .55rem .7rem; border-radius: 10px; background: rgba(192, 71, 47, .12); color: #7A2513; font-weight: 600; }
+/* celular da demo: o chip "Demonstração" do topo já diz; a pílula calma não repete */
+@media (max-width: 700px) { .sync-pill.sp-demo { display: none; } }
 
 .faixa-integ {
   display: flex; align-items: center; gap: .7rem 1rem; flex-wrap: wrap; margin-top: .7rem; padding: .8rem 1rem;
@@ -135,6 +135,8 @@
 .env-tempo { list-style: none; position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; padding: .8rem 0 .5rem; }
 .env-tempo::before { content: ""; position: absolute; left: 4px; right: 30%; top: calc(.8rem + 4px); height: 1px; background: var(--hair-2); }
 .env-tempo li { position: relative; padding-top: 1.05rem; font-size: var(--fs-13); min-width: 0; }
+/* a linha do tempo mora DENTRO de um <li> de .rel-lista/.alerts: não herda a grade, o fio nem a entrada deles */
+ol.env-tempo > li { display: block; margin: 0; padding: 1.05rem 0 0; border: 0; border-radius: 0; background: none; animation: none; }
 .env-tempo li::before { content: ""; position: absolute; left: 0; top: 0; width: 9px; height: 9px; border-radius: 50%; background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--fg-mute); }
 .env-tempo li.et-ok::before { background: var(--bronze-hi); box-shadow: 0 0 8px rgba(207, 149, 64, .6); }
 .env-tempo li.et-erro::before { background: var(--ruim); box-shadow: none; }
@@ -150,6 +152,8 @@
 .chip-conexao { background: rgba(240, 138, 116, .13); color: var(--ruim); }
 .sev-ic svg { width: 18px; height: 18px; color: var(--ruim); }
 .al-leigo { font-size: var(--fs-14); color: var(--fg); margin-top: .15rem; }
+/* a conta por trás do número técnico (CTR), para quem não é gestor */
+.al-trad { font-size: var(--fs-13); color: var(--bronze-luz); margin-top: .1rem; }
 .alerts li.al-integ { background: rgba(192, 71, 47, .08); box-shadow: inset 2px 0 0 var(--ruim); }
 .alerts li.al-integ .link-b { margin-top: .4rem; }
 
@@ -182,7 +186,7 @@
   background: linear-gradient(115deg, rgba(207, 149, 64, .18), rgba(16, 24, 33, .95) 58%); border-color: rgba(207, 149, 64, .4);
 }
 .desde-q { min-width: 0; }
-.desde h2 { font-family: var(--fd); font-weight: 600; font-size: var(--fs-25); letter-spacing: -.015em; line-height: 1.15; margin-top: .25rem; }
+.desde h2 { font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-25); letter-spacing: -.015em; line-height: 1.15; margin-top: .25rem; }
 .desde h2 b { color: var(--bronze-luz); font-weight: 600; }
 .desde-l { list-style: none; display: flex; flex-wrap: wrap; gap: .35rem 1.1rem; margin-top: .5rem; font-size: var(--fs-14); }
 .desde-l b { color: var(--fg); }
@@ -194,13 +198,13 @@
 .sim-ctl { display: grid; gap: 1.4rem; }
 .sim-r { display: grid; gap: .55rem; }
 .sim-l { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; font-size: var(--fs-14); color: var(--fg-soft); }
-.sim-l output { font-family: var(--fd); font-weight: 600; font-size: var(--fs-20); color: var(--fg); letter-spacing: -.01em; white-space: nowrap; }
+.sim-l output { font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-20); color: var(--fg); letter-spacing: -.01em; white-space: nowrap; }
 .sim-r input { width: 100%; accent-color: var(--bronze-hi); min-height: 28px; }
 .sim-res { display: grid; grid-template-columns: minmax(0, 1fr); gap: .5rem; }
 .sim-res-i { display: flex; justify-content: space-between; align-items: baseline; gap: .4rem 1rem; flex-wrap: wrap; padding: .8rem 1rem; border-radius: var(--r-sm); background: rgba(245, 233, 214, .04); box-shadow: inset 0 0 0 1px var(--hair); min-width: 0; }
 .sim-res dt { font-family: var(--fm); font-size: var(--fs-11); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-mute); line-height: 1.35; }
 .sim-res dd { font-size: var(--fs-14); color: var(--fg-soft); line-height: 1.3; text-align: right; }
-.sim-res dd b { font-family: var(--fd); font-weight: 600; font-size: var(--fs-25); color: var(--fg); letter-spacing: -.02em; white-space: nowrap; }
+.sim-res dd b { font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-25); color: var(--fg); letter-spacing: -.02em; white-space: nowrap; }
 .sim-res-i:nth-child(2) dd b { color: var(--bronze-luz); }
 .sim-nota { grid-column: 1 / -1; font-family: var(--fz); font-style: italic; font-size: var(--fs-17); line-height: 1.45; color: var(--creme); }
 
@@ -289,7 +293,7 @@ html.arrastando-ficha, html.arrastando-ficha * { cursor: grabbing !important; us
 }
 .celebra.on::after { animation: varre var(--t-dados) var(--e-out) both; }
 @keyframes varre { to { transform: translateX(120%); } }
-.cb-t { font-family: var(--fd); font-weight: 600; font-size: var(--fs-31); line-height: 1.02; letter-spacing: -.02em; color: var(--bronze-luz); }
+.cb-t { font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-31); line-height: 1.02; letter-spacing: -.02em; color: var(--bronze-luz); }
 .cb-l { margin-top: .35rem; font-size: var(--fs-15); color: var(--fg); }
 .cb-l b { font-weight: 800; }
 .cb-s { margin-top: .5rem; font-family: var(--fm); font-size: var(--fs-12); letter-spacing: .05em; color: var(--fg-soft); }
@@ -364,7 +368,7 @@ tr.realce td { background: rgba(207, 149, 64, .12); transition: background-color
 .mk-faixa { grid-column: 1 / -1; display: flex; align-items: center; gap: .7rem; padding: .9rem 1rem; border-radius: 12px; background: var(--pm); color: var(--pm-txt); }
 .mk-faixa .selo-av { background: var(--pm-txt); color: var(--pm); }
 .mk-faixa b { font-weight: 800; }
-.mk-faixa span:last-child { margin-left: auto; font-family: var(--fd); font-weight: 600; font-size: var(--fs-20); }
+.mk-faixa span:last-child { margin-left: auto; font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-20); }
 .mk-aviso { font-size: var(--fs-13); color: var(--aten); }
 .mk-aviso:empty { display: none; }
 
@@ -438,17 +442,17 @@ html.apresentando #app, html.apresentando .tour-card { visibility: hidden; }
 .ct-rot { display: flex; align-items: center; gap: .75rem; font-family: var(--fm); font-size: var(--fs-12); letter-spacing: .16em; text-transform: uppercase; color: var(--bronze-luz); }
 .ct-rot > span { padding-right: .75rem; border-right: 1px solid var(--hair-2); color: var(--fg-mute); }
 .ct-apresenta svg { width: 28px; height: 28px; border-radius: 7px; }
-.ct-grande { margin-top: 1.2rem; font-family: var(--fd); font-weight: 600; font-size: clamp(4.5rem, 11vw, 10.5rem); line-height: .9; letter-spacing: -.04em; color: var(--fg); }
+.ct-grande { margin-top: 1.2rem; font-family: var(--fd); word-spacing: var(--ws-d-g); font-weight: 600; font-size: clamp(4.5rem, 11vw, 10.5rem); line-height: .9; letter-spacing: -.02em; color: var(--fg); }
 .ct-grande .ct-n { font-weight: 600; }
-.ct-sob { margin-top: .5rem; font-family: var(--fd); font-weight: 500; font-size: clamp(1.35rem, 2.4vw, 2.2rem); letter-spacing: -.01em; color: var(--fg-soft); }
+.ct-sob { margin-top: .5rem; font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 500; font-size: clamp(1.35rem, 2.4vw, 2.2rem); letter-spacing: -.01em; color: var(--fg-soft); }
 .ct-linha { margin-top: 1.5rem; font-size: clamp(1.1rem, 1.5vw, 1.4rem); color: var(--fg-soft); }
-.ct-linha .ct-n2 { font-family: var(--fd); font-weight: 600; font-size: 1.55em; letter-spacing: -.02em; color: var(--bronze-luz); }
+.ct-linha .ct-n2 { font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: 1.55em; letter-spacing: -.02em; color: var(--bronze-luz); }
 .ct-nota { margin-top: 1.2rem; max-width: 46ch; font-size: var(--fs-14); color: var(--fg-mute); }
 .ct-nota b { color: var(--fg-soft); font-weight: 600; }
 .ct-marca { display: flex; align-items: center; gap: 1.1rem; margin-top: 2rem; }
 .ct-av-g { width: clamp(56px, 6vw, 84px); height: clamp(56px, 6vw, 84px); font-size: clamp(1.4rem, 2.4vw, 2.1rem); box-shadow: 0 0 0 1px rgba(245, 233, 214, .2), 0 16px 40px -16px rgba(0, 0, 0, .9); }
-.ct-nome { font-family: var(--fd); font-weight: 600; font-size: clamp(2rem, 4.2vw, 3.8rem); line-height: 1; letter-spacing: -.02em; }
-.ct-h { margin-top: 2.2rem; font-family: var(--fd); font-weight: 600; font-size: clamp(3.4rem, 8.6vw, 8.4rem); line-height: .9; letter-spacing: -.04em; color: var(--fg); }
+.ct-nome { font-family: var(--fd); word-spacing: var(--ws-d-g); font-weight: 600; font-size: clamp(2rem, 4.2vw, 3.8rem); line-height: 1; letter-spacing: -.02em; }
+.ct-h { margin-top: 2.2rem; font-family: var(--fd); word-spacing: var(--ws-d-g); font-weight: 600; font-size: clamp(3.4rem, 8.6vw, 8.4rem); line-height: .9; letter-spacing: -.02em; color: var(--fg); }
 .ct-periodo { margin-top: 1.6rem; font-family: var(--fm); font-size: var(--fs-13); letter-spacing: .1em; text-transform: uppercase; color: var(--fg-soft); }
 .cn-abertura .ct-txt { max-width: 70rem; }
 
@@ -465,27 +469,32 @@ html.apresentando #app, html.apresentando .tour-card { visibility: hidden; }
 
 /* 2 · O ANÚNCIO — post patrocinado (ou busca do Google) no celular */
 .fone-ct { --fw: clamp(210px, 20vw, 280px); --rot-y: -12deg; --rot-x: 4deg; }
-.feed { height: 100%; display: flex; flex-direction: column; background: #FFFFFF; color: #111111; padding-top: calc(var(--fw) * .15); font-size: max(10.5px, calc(var(--fw) * .047)); line-height: 1.3; }
+.feed { height: 100%; display: flex; flex-direction: column; background: #FFFFFF; color: #111111; padding-top: calc(var(--fw) * .15); font-size: max(11px, calc(var(--fw) * .047)); line-height: 1.3; }
 .feed-top { display: flex; align-items: center; gap: .55em; padding: .55em .8em; }
 .feed-av { width: 2.4em; height: 2.4em; font-size: 1em; }
 .feed-top b { display: block; font-weight: 700; font-size: 1em; }
-.feed-top small { display: block; font-size: .85em; color: #5A6663; }
+.feed-top small { display: block; font-size: max(11px, .85em); color: #4F5B58; }
 .feed-mais { margin-left: auto; color: #333333; letter-spacing: .1em; }
 .feed-midia {
   position: relative; aspect-ratio: 4 / 5; display: flex; align-items: flex-end; padding: 1em; overflow: hidden;
   background: radial-gradient(120% 90% at 18% 8%, color-mix(in oklab, var(--marca) 55%, #FFFFFF), var(--marca) 55%, var(--marca-escura));
   color: var(--marca-txt);
 }
-.feed-gancho { position: relative; font-family: var(--fb); font-weight: 900; font-size: 1.85em; line-height: 1.02; letter-spacing: -.025em; }
-.feed-tag { position: absolute; left: .8em; top: .8em; padding: .2em .6em; border-radius: 999px; font-weight: 700; font-size: .78em; background: rgba(0, 0, 0, .3); color: #FFFFFF; }
-.feed-play { position: absolute; left: 50%; top: 40%; width: 3.2em; height: 3.2em; margin: -1.6em 0 0 -1.6em; border-radius: 50%; background: rgba(255, 255, 255, .32); box-shadow: 0 0 0 1px rgba(255, 255, 255, .4); }
-.feed-play::after { content: ""; position: absolute; left: 1.25em; top: .95em; border-left: 1.05em solid #FFFFFF; border-top: .65em solid transparent; border-bottom: .65em solid transparent; }
+/* o quadro do post: o gancho em tipo grande sobre a cor da clínica, com luz de janela e grão de
+   papel (textura, não um degradê liso), o logo no canto e, se for vídeo, a barrinha de progresso */
+.feed-midia::before { content: ""; position: absolute; inset: 0; background-image: var(--papel-ruido); background-size: 180px; opacity: .55; mix-blend-mode: soft-light; pointer-events: none; }
+.feed-luz { position: absolute; right: -30%; top: -25%; width: 95%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgba(255, 244, 222, .55), rgba(255, 244, 222, 0) 65%); filter: blur(6px); pointer-events: none; }
+.feed-logo { position: absolute; right: .8em; top: .8em; width: 2.2em; height: 2.2em; font-size: .9em; box-shadow: 0 0 0 2px rgba(255, 255, 255, .85); }
+.feed-gancho { position: relative; font-family: var(--fb); font-weight: 900; font-size: 2.05em; line-height: 1; letter-spacing: -.02em; text-wrap: balance; text-shadow: 0 1px 12px rgba(0, 0, 0, .12); }
+.feed-tag { position: absolute; left: .8em; top: .8em; padding: .25em .7em; border-radius: 999px; font-weight: 700; font-size: max(11px, .8em); line-height: 1.2; background: #111B21; color: #FFFFFF; }
+.feed-prog { position: absolute; left: 1em; right: 1em; bottom: .55em; height: 3px; border-radius: 3px; background: rgba(255, 255, 255, .35); overflow: hidden; }
+.feed-prog i { display: block; width: 38%; height: 100%; background: #FFFFFF; }
 .feed-cta { display: flex; justify-content: space-between; align-items: center; padding: .75em .9em; background: var(--marca); color: var(--marca-txt); font-weight: 700; }
 .feed-cta svg { width: 1.3em; height: 1.3em; fill: currentColor; }
 .feed-acoes { display: flex; gap: .9em; padding: .7em .9em .3em; }
 .feed-acoes i { width: 1.35em; height: 1.35em; border-radius: 50%; box-shadow: inset 0 0 0 1.6px #111111; }
 .feed-acoes .fa-env { border-radius: 2px; transform: rotate(45deg) scale(.8); }
-.feed-leg { padding: 0 .9em; font-size: .92em; color: #333333; }
+.feed-leg { padding: 0 .9em; font-size: max(11px, .92em); color: #333333; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .entra .feed-cta { animation: ctaPulsa var(--t-brilho) var(--e-out) 1 both; animation-delay: calc(var(--t-dados) * 2); }
 @keyframes ctaPulsa { 30% { box-shadow: inset 0 0 0 999px rgba(255, 255, 255, .25); } }
 .busca-g { height: 100%; background: #FFFFFF; color: #202124; padding: calc(var(--fw) * .17) .8em 0; font-size: max(10.5px, calc(var(--fw) * .046)); }
@@ -509,14 +518,17 @@ html.apresentando #app, html.apresentando .tour-card { visibility: hidden; }
 .wl-top b { display: block; font-size: 1.55em; font-weight: 800; letter-spacing: -.01em; }
 .wl-top small { color: #667781; font-size: .88em; }
 .wa-lista ul { list-style: none; }
-.wl-i { display: grid; grid-template-columns: 2.9em minmax(0, 1fr) auto; gap: .7em; align-items: center; padding: .62em 1em; border-bottom: 1px solid #F0F2F5; }
+.wl-i { display: grid; grid-template-columns: 2.9em minmax(0, 1fr); gap: .7em; align-items: center; padding: .62em 1em; border-bottom: 1px solid #F0F2F5; }
 .wl-av { width: 2.9em; height: 2.9em; border-radius: 50%; display: grid; place-items: center; background: var(--c); color: #FFFFFF; font-weight: 700; font-size: .92em; }
 .wl-q { min-width: 0; }
-.wl-q b { display: block; font-weight: 700; }
-.wl-p { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #667781; font-size: .92em; }
-.wl-h { display: flex; flex-direction: column; align-items: flex-end; gap: .3em; font-size: .8em; color: #667781; white-space: nowrap; }
-.wl-i:nth-child(-n+2) .wl-h { color: #1DAA61; }
-.wl-nl { min-width: 1.6em; height: 1.6em; padding: 0 .4em; border-radius: 999px; display: grid; place-items: center; background: #25D366; color: #FFFFFF; font-style: normal; font-weight: 700; }
+.wl-l1, .wl-l2 { display: flex; align-items: baseline; gap: .5em; min-width: 0; }
+.wl-l2 { align-items: center; }
+.wl-q b { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 700; }
+.wl-p { display: block; flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #5B6B74; font-size: max(11px, .92em); }
+.wl-via { font-size: max(11px, .86em); }
+.wl-h { flex: none; font-size: max(11px, .8em); color: #5B6B74; white-space: nowrap; }
+.wl-i:nth-child(-n+2) .wl-h { color: #0A7A43; font-weight: 700; }
+.wl-nl { flex: none; min-width: 1.7em; height: 1.7em; padding: 0 .4em; border-radius: 999px; display: grid; place-items: center; background: #1DAA61; color: #FFFFFF; font-style: normal; font-weight: 700; font-size: max(11px, .8em); }
 .entra .wl-i { animation: linhaChega var(--t-move) var(--mola) both; animation-delay: calc(var(--n) * var(--t-ct-item) + var(--t-foco)); }
 @keyframes linhaChega { from { opacity: 0; transform: translateY(-18px); } }
 
@@ -557,14 +569,14 @@ html.apresentando #app, html.apresentando .tour-card { visibility: hidden; }
 .rc-l li b { font-family: var(--fm); font-weight: 500; font-size: var(--fs-14); }
 .rc-tot { display: flex; justify-content: space-between; align-items: baseline; margin-top: .8rem; padding-top: .6rem; border-top: 1.5px solid var(--papel-txt); }
 .rc-tot span { font-family: var(--fm); font-size: var(--fs-12); letter-spacing: .12em; text-transform: uppercase; }
-.rc-tot b { font-family: var(--fd); font-weight: 600; font-size: 1.75rem; letter-spacing: -.02em; }
+.rc-tot b { font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: 1.75rem; letter-spacing: -.02em; }
 .rc-nota { margin-top: .3rem; font-size: var(--fs-12); color: var(--papel-soft); }
 .entra .rc-l li, .entra .rc-tot, .entra .rc-nota { animation: imprime var(--t-ui) var(--e-out) both; animation-delay: calc(var(--n) * var(--t-ct-linha) + var(--t-dados)); }
 @keyframes imprime { from { opacity: 0; clip-path: inset(0 0 100% 0); } to { opacity: 1; clip-path: inset(0 0 0 0); } }
 
 /* 6 · A CONTA — duas barras e a frase que o dentista leva para casa */
 .cn-conta .ct-txt { max-width: 64rem; }
-.ct-frase { margin-top: 1.3rem; font-family: var(--fd); font-weight: 600; font-size: clamp(2.6rem, 6.4vw, 6.2rem); line-height: .96; letter-spacing: -.035em; color: var(--fg); }
+.ct-frase { margin-top: 1.3rem; font-family: var(--fd); word-spacing: var(--ws-d-g); font-weight: 600; font-size: clamp(2.6rem, 6.4vw, 6.2rem); line-height: .96; letter-spacing: -.02em; color: var(--fg); }
 .ct-varre { position: relative; display: inline-block; color: var(--bronze-luz); }
 .ct-varre::after {
   content: ""; position: absolute; inset: -.05em -.2em; pointer-events: none; mix-blend-mode: screen; opacity: 0;
@@ -575,7 +587,7 @@ html.apresentando #app, html.apresentando .tour-card { visibility: hidden; }
 .barras { display: grid; gap: 1.3rem; max-width: 58rem; margin-top: 2.4rem; }
 .br { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .45rem 1rem; align-items: baseline; }
 .br-l { font-family: var(--fm); font-size: var(--fs-12); letter-spacing: .12em; text-transform: uppercase; color: var(--fg-soft); }
-.br-v { font-family: var(--fd); font-weight: 600; font-size: clamp(1.4rem, 2.2vw, 2rem); letter-spacing: -.02em; color: var(--fg); }
+.br-v { font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: clamp(1.4rem, 2.2vw, 2rem); letter-spacing: -.02em; color: var(--fg); }
 .br-b { grid-column: 1 / -1; position: relative; height: 18px; border-radius: 999px; overflow: hidden; background: rgba(245, 233, 214, .08); }
 .br-b i { position: absolute; inset: 0 auto 0 0; width: var(--w); border-radius: inherit; transform-origin: 0 50%; background: linear-gradient(90deg, #24496A, #5B93C2); }
 .br-volta .br-v { color: var(--bronze-luz); }
@@ -592,12 +604,12 @@ html.apresentando #app, html.apresentando .tour-card { visibility: hidden; }
 .ct-assina { display: flex; align-items: center; gap: 1rem; margin-top: 2.2rem; }
 .ct-assina svg { width: 46px; height: 46px; flex: none; }
 .ct-assina span { font-size: 1.05rem; color: var(--fg-soft); }
-.ct-assina b { font-family: var(--fd); font-weight: 600; font-size: 1.6rem; color: var(--fg); }
+.ct-assina b { font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: 1.6rem; color: var(--fg); }
 .ct-assina small { display: block; margin-top: .15rem; font-family: var(--fm); font-size: var(--fs-11); letter-spacing: .12em; text-transform: uppercase; color: var(--fg-mute); }
 .ct-acoes { display: flex; gap: .8rem; flex-wrap: wrap; margin-top: 1.8rem; }
 .ct-acoes .pill { min-height: 46px; padding-inline: 1.3rem; font-size: var(--fs-15); }
 .ct-sim { width: 100%; padding: 1.35rem 1.4rem; border-radius: var(--r-lg); background: var(--surface); box-shadow: 0 30px 60px -36px rgba(0, 0, 0, .9), inset 0 0 0 1px var(--hair); }
-.ct-sim::before { content: "E na sua clínica?"; display: block; margin-bottom: 1rem; font-family: var(--fd); font-weight: 600; font-size: var(--fs-25); letter-spacing: -.015em; color: var(--fg); }
+.ct-sim::before { content: "E na sua clínica?"; display: block; margin-bottom: 1rem; font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-25); letter-spacing: -.015em; color: var(--fg); }
 .ct-sim .sim, .ct-sim .sim-res { grid-template-columns: minmax(0, 1fr); }
 .ct-sim .sim-res { gap: .5rem; }
 .ct-sim .sim-res-i { padding: .7rem .9rem; }
@@ -644,20 +656,21 @@ html:active-view-transition-type(voltar)::view-transition-new(ct-cena) { animati
 .fl-av.com-logo { background: #FFFFFF; }
 .fl-cli b { display: block; font-size: 12pt; font-weight: 800; line-height: 1.2; }
 .fl-cli small { display: block; font-family: var(--fm); font-size: 9pt; letter-spacing: .06em; opacity: .85; }
-.fl-t { font-family: var(--fd); font-weight: 600; font-size: 22pt; line-height: 1.05; letter-spacing: -.02em; }
+.fl-t { font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: 22pt; line-height: 1.05; letter-spacing: -.02em; }
 .fl-resumo { font-size: 12pt; line-height: 1.45; max-width: 170mm; }
 .fl-resumo b { font-weight: 800; }
 .fl-trilha { list-style: none; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .fl-trilha li { padding: 2.5mm 2mm 0 0; border-top: .6mm solid rgba(22, 33, 44, .22); }
 .fl-trilha li.fim { border-top-color: var(--marca); }
-.fl-trilha b { display: block; font-family: var(--fd); font-weight: 600; font-size: 16pt; letter-spacing: -.01em; line-height: 1.1; }
+.fl-trilha b { display: block; font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: 16pt; letter-spacing: -.01em; line-height: 1.1; }
 .fl-trilha span { display: block; font-size: 9pt; line-height: 1.25; color: var(--papel-soft); }
 .fl-blocos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4mm; }
 .fl-blocos .bloco { display: flex; flex-direction: column; gap: 1.5mm; padding: 4mm; border-radius: 3mm; box-shadow: inset 0 0 0 .3mm rgba(22, 33, 44, .2); }
-.fl-rot { font-family: var(--fm); font-size: 9pt; letter-spacing: .04em; color: var(--papel-soft); line-height: 1.25; }
-.fl-blocos b { font-family: var(--fd); font-weight: 600; font-size: 20pt; line-height: 1.05; letter-spacing: -.015em; }
+.fl-rot { font-family: var(--fm); font-size: 9pt; letter-spacing: .04em; color: var(--papel-soft); line-height: 1.25; min-height: 2.5em; }
+.fl-blocos b { font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: 20pt; line-height: 1.05; letter-spacing: -.015em; }
 .fl-blocos small { font-size: 9pt; color: var(--papel-soft); }
-.fl-ret { background: var(--marca-suave); box-shadow: none !important; }
+/* fundo do Retorno: a cor da clínica bem clara sobre o papel da folha (nada de cinza turvo) */
+.fl-ret { background: color-mix(in oklab, var(--marca) 9%, #FBF8F2); box-shadow: inset 0 0 0 .3mm color-mix(in oklab, var(--marca) 30%, #FBF8F2) !important; }
 .fl-ret b { font-size: 15pt; line-height: 1.12; }
 .fl-duo { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6mm; }
 .fl-h { margin-bottom: 2mm; padding-bottom: 1.5mm; border-bottom: .3mm solid rgba(22, 33, 44, .18); font-size: 10.5pt; font-weight: 800; }
@@ -682,8 +695,25 @@ html:active-view-transition-type(voltar)::view-transition-new(ct-cena) { animati
 .fl-meta { max-width: 82mm; text-align: right; }
 .fl-agua {
   position: absolute; left: 50%; top: 52%; transform: translate(-50%, -50%) rotate(-32deg); pointer-events: none; white-space: nowrap;
-  font-family: var(--fd); font-weight: 600; font-size: 25pt; letter-spacing: .04em; color: rgba(176, 118, 31, .14);
+  font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: 25pt; letter-spacing: .04em; color: rgba(176, 118, 31, .14);
 }
+
+/* ============================================================
+   LOGO DA CLÍNICA (objeto) — vale para todo .selo-av com logo
+   Logo de verdade costuma ser largo (2:1, 4:1): vira uma plaquinha
+   branca NA ALTURA de cada selo (topo, curta, cartões, recibo, folha),
+   nunca o tamanho natural da imagem. Fica depois dos tamanhos de cada
+   objeto para a largura seguir o logo; flex (não grid) para a altura
+   em % da imagem valer contra a altura do selo.
+   ============================================================ */
+.selo-av.com-logo { display: inline-flex; align-items: center; justify-content: center; width: auto; padding: 3px 6px; border-radius: 7px; background: #FFFFFF; }
+.selo-av.com-logo img { flex: none; width: auto; height: 100%; max-width: 12em; padding: 0; object-fit: contain; }
+.cc-top .selo-av.com-logo, .bg-site .selo-av.com-logo { padding: 2px 4px; border-radius: 4px; }
+.ct-av-g.com-logo { padding: 9px 14px; border-radius: 16px; }
+.ct-av-g.com-logo img { max-width: 5.5em; }
+.fl-av.com-logo { padding: 1.2mm 2mm; border-radius: 2mm; }
+.mk-faixa { flex-wrap: wrap; }
+.mk-faixa > * { min-width: 0; }
 
 @page { size: A4 portrait; margin: 12mm; }
 @media print {
@@ -732,6 +762,9 @@ html:active-view-transition-type(voltar)::view-transition-new(ct-cena) { animati
   .barras { margin-top: 1.6rem; }
   .ct-obj { align-self: start; }
   .fone-ct { --fw: 182px; --rot-y: -8deg; --rot-x: 2deg; }
+  .cn-conversa .ct-obj { align-self: stretch; overflow: hidden; -webkit-mask-image: linear-gradient(#000 82%, transparent); mask-image: linear-gradient(#000 82%, transparent); }
+  .cn-conversa .fone-ct { --fw: min(300px, calc(100vw - 4rem)); --rot-y: 0deg; --rot-x: 0deg; margin-inline: auto; }
+  .cn-conversa .wl-i:nth-child(n+5) { display: none; }
   .cartoes { width: min(100%, 330px); aspect-ratio: 5 / 5.3; }
   .cc { width: 47%; padding: .5rem .6rem .55rem; border-top-width: 4px; }
   .cc-top { font-size: var(--fs-11); }
