@@ -50,9 +50,11 @@ Testes SQL (`supabase/testes/0*.sql`) rodam no banco real **dentro de transaçã
 
 ## Regras de mudança
 - Git: trabalhe na branch `codex/orbita` (ou `claude/...`), commits pequenos com mensagem clara. Merge na `main` só com tudo verde.
-- Banco: só por arquivo novo em `supabase/migrations/` e sempre ADITIVO e idempotente (if not exists / create or replace).
-  Nada de drop, nada de apagar/alterar dados de produção, nada de mexer em `nx_config`. Sem acesso ao Supabase
-  (conector/CLI com token do João)? Deixe a migração pronta e testada e peça na ponte para quem tem acesso aplicar.
+- Banco (Claude e Codex têm acesso ao Supabase): SÓ o projeto `dtjznipitihnwmcgpzqh` (nexus-ads) — os outros projetos
+  da conta (IndyCar etc.) são de outros clientes: não leia nem mexa. Mudança só por arquivo novo em `supabase/migrations/`,
+  sempre ADITIVA e idempotente (if not exists / create or replace); rode antes numa transação com ROLLBACK; aplique com
+  o mesmo nome do arquivo. Nada de drop, nada de apagar/alterar dados de produção, nada de mexer em `nx_config`,
+  nada de criar conta/sessão real fora de teste. A trava da ponte vale também para o banco e para publicar funções.
 - Funções: `node scripts/montar-funcoes.mjs` e publicar a pasta `supabase/dist/<funcao>` com `verify_jwt = false`.
   **Mexeu em `web/nucleo.js`? Republique nx-ciclo, nx-relatorio e nx-whatsapp.** Não edite `web/demo.js` sem necessidade.
 - Front: HTML/CSS/JS puro, módulos ES, sem build. `[hidden]{display:none!important}`, grids com `minmax(0,1fr)`,
