@@ -4,24 +4,57 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="robots" content="noindex, nofollow">
-  <meta name="theme-color" content="#0B1B2B">
+  <meta name="theme-color" content="#07090C">
+  <meta name="color-scheme" content="dark">
   <title>Nexus Ads · Central de tráfego</title>
   <meta name="description" content="Painel de tráfego pago da Nexus: anúncios do Meta e do Google, conversas no WhatsApp e pacientes da clínica, num lugar só.">
 
+  <!-- fontes da marca servidas daqui mesmo (web/fonts). Os links externos são RESERVA: ficam em media=print (não bloqueiam
+       nem baixam nada) e o painel.js só os liga se as fontes locais falharem -->
+  <link rel="preload" href="fonts/satoshi-variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/clash-display-variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preconnect" href="https://api.fontshare.com" crossorigin>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="painel.css?v=1">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='26' fill='%230B1B2B'/><text x='50' y='69' font-size='58' font-family='Arial Black,sans-serif' font-weight='900' fill='%23CF9540' text-anchor='middle'>N</text></svg>">
+  <link href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=satoshi@400,500,700&display=swap" rel="stylesheet" media="print" data-reserva>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" data-reserva>
+  <link rel="stylesheet" href="painel.css?v=3">
+  <link rel="stylesheet" href="recursos.css?v=1">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'><rect width='96' height='96' rx='22' fill='%230B1B2B'/><polygon points='27,26 34,33 34,70 27,70' fill='%23F5E9D6'/><polygon points='62,26 69,26 69,63 62,70' fill='%23F5E9D6'/><polygon points='27,26 34,26 69,70 62,70' fill='%23CF9540'/><polygon points='62,26 69,26 34,70 27,70' fill='%23F5E9D6' fill-opacity='.82'/></svg>">
 </head>
 <body>
+  <!-- monograma N×X (diagonal bronze compartilhada) e gradientes dos gráficos -->
+  <svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="nx-mono" viewBox="0 0 96 96">
+        <rect width="96" height="96" rx="22" fill="#0B1B2B"/>
+        <rect x="1" y="1" width="94" height="94" rx="21" fill="none" stroke="#B0761F" stroke-opacity=".45"/>
+        <polygon points="27,26 34,33 34,70 27,70" fill="#F5E9D6"/>
+        <polygon points="62,26 69,26 69,63 62,70" fill="#F5E9D6"/>
+        <polygon points="27,26 34,26 69,70 62,70" fill="#CF9540"/>
+        <polygon points="62,26 69,26 34,70 27,70" fill="#F5E9D6" fill-opacity=".82"/>
+      </symbol>
+      <symbol id="ic-wa" viewBox="0 0 24 24"><path d="M12 2.2a9.8 9.8 0 0 0-8.4 14.9L2.3 21.8l4.8-1.3A9.8 9.8 0 1 0 12 2.2z"/></symbol>
+      <symbol id="ic-cal" viewBox="0 0 24 24"><path d="M4.5 6.5h15v13h-15zM4.5 10.5h15M8.5 4v4M15.5 4v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <!-- sinal cortado (conexão com Meta/Google parada) e claquete (marco no gráfico) -->
+      <symbol id="ic-sinal" viewBox="0 0 24 24"><path d="M4 19v-2M9 19v-5M14 19v-8M19 19V6M3.5 4.5l17 15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="ic-claq" viewBox="0 0 24 24"><path d="M4 10h16v9.5H4zM4 10l1.2-4.6 15.4 4M8.6 6.4l2 4M13.4 7.6l2 3.9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/></symbol>      <linearGradient id="spk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CF9540" stop-opacity=".22"/><stop offset="1" stop-color="#CF9540" stop-opacity="0"/></linearGradient>
+      <linearGradient id="gArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F5E9D6" stop-opacity=".16"/><stop offset="1" stop-color="#F5E9D6" stop-opacity="0"/></linearGradient>
+      <linearGradient id="gFeixe" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CF9540" stop-opacity="0"/><stop offset=".5" stop-color="#CF9540" stop-opacity=".22"/><stop offset="1" stop-color="#CF9540" stop-opacity="0"/></linearGradient>
+    </defs>
+  </svg>
+
   <a class="skip" href="#main">Pular para o conteúdo</a>
 
   <!-- ===================== ABRINDO ===================== -->
   <div class="boot" id="boot">
-    <span class="boot-mark" aria-hidden="true">N</span>
+    <svg class="boot-mark" viewBox="0 0 96 96" aria-hidden="true">
+      <rect class="bm-caixa" x="1" y="1" width="94" height="94" rx="21" pathLength="1"/>
+      <polygon class="bm-t" points="27,26 34,33 34,70 27,70" pathLength="1"/>
+      <polygon class="bm-t" points="62,26 69,26 69,63 62,70" pathLength="1"/>
+      <polygon class="bm-t bm-x" points="62,26 69,26 34,70 27,70" pathLength="1"/>
+      <polygon class="bm-t bm-d" points="27,26 34,26 69,70 62,70" pathLength="1"/>
+    </svg>
     <p class="boot-msg" id="boot-msg" role="status" aria-live="polite">Abrindo o painel…</p>
     <div class="boot-acoes" id="boot-acoes" hidden>
       <button class="pill pill-bronze" id="boot-tentar" type="button">Tentar de novo</button>
@@ -32,67 +65,84 @@
   <!-- ===================== ENTRAR / CRIAR CONTA ===================== -->
   <main class="auth" id="tela-auth" tabindex="-1" hidden>
     <section class="auth-art" aria-hidden="true">
-      <canvas class="hero-aurora" id="auth-aurora"></canvas>
       <div class="auth-art-in">
-        <p class="auth-marca"><span class="sb-k">N</span> Nexus Ads</p>
-        <p class="auth-frase">Do anúncio<br>à cadeira do<br><em>consultório.</em></p>
+        <p class="auth-marca"><svg class="nx-mono"><use href="#nx-mono"/></svg> Nexus Ads</p>
+        <p class="auth-frase"><span class="w" style="--w:0">Do</span> <span class="w" style="--w:1">anúncio</span><br><span class="w" style="--w:2">à</span> <span class="w" style="--w:3">cadeira</span> <span class="w" style="--w:4">do</span><br><em class="w" style="--w:5">consultório.</em></p>
         <p class="auth-sub">Meta e Google, conversas no WhatsApp e pacientes da clínica — num painel só, conferido de hora em hora.</p>
       </div>
+      <figure class="auth-cena">
+        <div class="fone fone-login" data-tilt="6">
+          <div class="fone-tela">
+            <div class="wa">
+              <div class="wa-top"><span class="wa-av">A</span><div><b>Ana · via anúncio</b><small>online</small></div></div>
+              <div class="wa-corpo">
+                <div class="wa-anuncio"><span class="wa-anuncio-img"></span><div><small>Anúncio</small><b>Aparelho invisível</b><span>Avaliação sem compromisso</span></div></div>
+                <p class="wa-msg wa-in lg-1">Oi! Vi o anúncio, queria saber do aparelho invisível<span class="wa-h">14:02</span></p>
+                <p class="wa-digita lg-2"><i></i><i></i><i></i></p>
+                <p class="wa-msg wa-out lg-3">Oi, Ana! Temos avaliação quinta às 15h. Pode ser?<span class="wa-h">14:03</span></p>
+                <p class="wa-msg wa-in lg-4">Pode sim!<span class="wa-h">14:03</span></p>
+                <p class="wa-agendado lg-5"><svg><use href="#ic-cal"/></svg>Avaliação agendada · qui 15:00</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <figcaption class="auth-exemplo">exemplo</figcaption>
+      </figure>
     </section>
 
     <section class="auth-box">
-      <p class="auth-marca auth-marca-m" aria-hidden="true"><span class="sb-k">N</span> Nexus Ads</p>
-
-      <form class="auth-form" id="form-entrar" novalidate>
-        <h1>Entrar</h1>
-        <p class="auth-lead">Use o e-mail e a senha da sua conta.</p>
-        <label class="campo"><span>E-mail</span>
-          <input type="email" id="en-email" autocomplete="username" inputmode="email" required>
-        </label>
-        <label class="campo"><span>Senha</span>
-          <input type="password" id="en-senha" autocomplete="current-password" required>
-        </label>
-        <button class="pill pill-bronze pill-lg" id="btn-entrar" type="submit">Entrar</button>
-        <p class="auth-links">
-          <button class="link-b" id="ir-criar" type="button">Criar conta</button>
-          <button class="link-b" id="ir-primeiro" type="button">Primeiro acesso (tenho um código)</button>
-        </p>
-      </form>
-
-      <form class="auth-form" id="form-criar" novalidate hidden>
-        <h1 id="criar-h">Criar conta</h1>
-        <p class="auth-lead" id="criar-sub">Depois de criada, a Nexus libera o seu acesso.</p>
-        <label class="campo"><span>Seu nome</span>
-          <input type="text" id="cr-nome" autocomplete="name" required>
-        </label>
-        <label class="campo"><span>E-mail</span>
-          <input type="email" id="cr-email" autocomplete="username" inputmode="email" required>
-        </label>
-        <label class="campo"><span>Senha</span>
-          <input type="password" id="cr-senha" autocomplete="new-password" minlength="8" required aria-describedby="cr-senha-dica">
-          <small id="cr-senha-dica">Pelo menos 8 caracteres.</small>
-        </label>
-        <div id="cr-codigo-box" hidden>
-          <label class="campo"><span>Código de ativação</span>
-            <input type="text" id="cr-codigo" autocomplete="one-time-code" spellcheck="false" aria-describedby="cr-codigo-dica">
-            <small id="cr-codigo-dica">Só na primeira conta, a da Nexus.</small>
+      <div class="auth-papel">
+        <form class="auth-form" id="form-entrar" novalidate>
+          <h1>Entrar</h1>
+          <p class="auth-lead">Use o e-mail e a senha da sua conta.</p>
+          <label class="campo"><span>E-mail</span>
+            <input type="email" id="en-email" autocomplete="username" inputmode="email" required>
           </label>
+          <label class="campo"><span>Senha</span>
+            <input type="password" id="en-senha" autocomplete="current-password" required>
+          </label>
+          <button class="pill pill-bronze pill-lg" id="btn-entrar" type="submit">Entrar <span class="seta" aria-hidden="true">→</span></button>
+          <p class="auth-links">
+            <button class="link-b" id="ir-criar" type="button">Criar conta</button>
+            <button class="link-b" id="ir-primeiro" type="button">Primeiro acesso (tenho um código)</button>
+          </p>
+        </form>
+
+        <form class="auth-form" id="form-criar" novalidate hidden>
+          <h1 id="criar-h">Criar conta</h1>
+          <p class="auth-lead" id="criar-sub">Depois de criada, a Nexus libera o seu acesso.</p>
+          <label class="campo"><span>Seu nome</span>
+            <input type="text" id="cr-nome" autocomplete="name" required>
+          </label>
+          <label class="campo"><span>E-mail</span>
+            <input type="email" id="cr-email" autocomplete="username" inputmode="email" required>
+          </label>
+          <label class="campo"><span>Senha</span>
+            <input type="password" id="cr-senha" autocomplete="new-password" minlength="8" required aria-describedby="cr-senha-dica">
+            <small id="cr-senha-dica">Pelo menos 8 caracteres.</small>
+          </label>
+          <div id="cr-codigo-box" hidden>
+            <label class="campo"><span>Código de ativação</span>
+              <input type="text" id="cr-codigo" autocomplete="one-time-code" spellcheck="false" aria-describedby="cr-codigo-dica">
+              <small id="cr-codigo-dica">Só na primeira conta, a da Nexus.</small>
+            </label>
+          </div>
+          <button class="pill pill-bronze pill-lg" id="btn-criar" type="submit">Criar conta <span class="seta" aria-hidden="true">→</span></button>
+          <p class="auth-links">
+            <button class="link-b" id="ir-entrar" type="button">Já tenho conta — entrar</button>
+          </p>
+        </form>
+
+        <div class="auth-form" id="auth-pendente" hidden>
+          <svg class="fio-vazio" viewBox="0 0 64 24" aria-hidden="true"><path d="M6 12H58"/><circle cx="6" cy="12" r="3"/><circle cx="32" cy="12" r="3"/><circle cx="58" cy="12" r="3"/><circle class="conta-luz" cx="6" cy="12" r="3.2"/></svg>
+          <h1 id="pend-h" tabindex="-1">Aguardando aprovação</h1>
+          <p class="auth-lead">A sua conta existe, mas o acesso ainda não foi liberado. A Nexus aprova e liga você à clínica certa — depois disso é só entrar com o mesmo e-mail e senha.</p>
+          <button class="pill pill-ink pill-lg" id="pend-voltar" type="button">Voltar para entrar</button>
         </div>
-        <button class="pill pill-bronze pill-lg" id="btn-criar" type="submit">Criar conta</button>
-        <p class="auth-links">
-          <button class="link-b" id="ir-entrar" type="button">Já tenho conta — entrar</button>
-        </p>
-      </form>
 
-      <div class="auth-form" id="auth-pendente" hidden>
-        <span class="pend-ic" aria-hidden="true">⏳</span>
-        <h1 id="pend-h" tabindex="-1">Aguardando aprovação</h1>
-        <p class="auth-lead">A sua conta existe, mas o acesso ainda não foi liberado. A Nexus aprova e liga você à clínica certa — depois disso é só entrar com o mesmo e-mail e senha.</p>
-        <button class="pill pill-ink pill-lg" id="pend-voltar" type="button">Voltar para entrar</button>
+        <p class="auth-erro" id="auth-erro" role="alert"></p>
       </div>
-
-      <p class="auth-erro" id="auth-erro" role="alert"></p>
-      <p class="auth-demo"><a href="?demo">Ver a demonstração →</a></p>
+      <p class="auth-demo"><a class="pill pill-ghost-dark" href="?demo"><span aria-hidden="true">▶</span> Assistir à demonstração</a></p>
     </section>
   </main>
 
@@ -101,7 +151,7 @@
     <!-- menu lateral (desktop) -->
     <aside class="side" aria-label="Menu do painel">
       <div class="side-brand">
-        <span class="sb-k" aria-hidden="true">N</span>
+        <span class="sb-k" aria-hidden="true"><svg class="nx-mono"><use href="#nx-mono"/></svg></span>
         <div>
           <strong>Nexus Ads</strong>
           <span>central de tráfego</span>
@@ -117,7 +167,9 @@
         <p class="side-cli-nome" id="side-cliente-nome"></p>
       </div>
 
-      <nav class="side-nav" aria-label="Seções do painel">
+      <nav class="side-nav" id="side-nav" aria-label="Seções do painel">
+        <span class="nav-ind" aria-hidden="true"></span>
+        <span class="nav-fantasma" aria-hidden="true"></span>
         <button class="nav-b" data-aba="geral" type="button" aria-current="page">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 4v4h6V4z"/></svg>
           Visão geral
@@ -152,20 +204,23 @@
           <p><b id="side-nome"></b><span id="side-papel"></span></p>
           <button class="pill pill-ghost-dark" id="btn-sair" type="button">Sair</button>
         </div>
-        <p class="side-assina">Gestão de tráfego<br><b>Nexus · Taubaté</b></p>
+        <p class="side-assina">Preparado pela<br><b>Nexus · Taubaté</b></p>
       </div>
     </aside>
 
     <!-- conteúdo -->
     <main class="main" id="main" tabindex="-1">
       <p class="ribbon" id="ribbon" role="note" hidden>
-        <b>Demonstração</b> — números ilustrativos, gerados para mostrar como o painel funciona. Nenhum dado real de paciente.
+        <button class="ribbon-chip" id="ribbon-chip" type="button" aria-expanded="false" aria-controls="ribbon-txt"><i aria-hidden="true"></i>Demonstração</button>
+        <span class="ribbon-txt" id="ribbon-txt"><b>Demonstração</b> — números ilustrativos, gerados para mostrar como o painel funciona. Nenhum dado real de paciente.</span>
+        <button class="ribbon-link" id="btn-link-reuniao" type="button" hidden>Copiar link da reunião</button>
       </p>
 
       <header class="top">
         <div class="top-title">
           <div class="top-brand">
-            <span class="sb-k" aria-hidden="true">N</span>
+            <span class="sb-k" aria-hidden="true"><svg class="nx-mono"><use href="#nx-mono"/></svg></span>
+            <span class="selo-av" id="top-av" aria-hidden="true"></span>
             <span class="top-cli" id="top-cliente"></span>
             <label class="sel-cli sel-cli-m" id="sel-cliente-m-box" hidden>
               <span class="sr-only">Escolher cliente</span>
@@ -173,11 +228,26 @@
             </label>
             <button class="pill pill-ghost pill-sm" id="btn-sair-m" type="button" hidden>Sair</button>
           </div>
-          <p class="eyebrow" id="top-eyebrow">Anúncios → WhatsApp → consultório</p>
+          <div class="top-linha">
+            <p class="selo" id="selo" hidden><span class="selo-av" id="selo-av" aria-hidden="true"></span><span class="selo-nome" id="selo-nome"></span></p>
+            <p class="eyebrow" id="top-eyebrow">Anúncios → WhatsApp → consultório</p>
+          </div>
           <h1 id="top-h1">Visão geral</h1>
-          <p class="top-sync" id="top-sync"></p>
+          <div class="top-sync-row">
+            <p class="top-sync" id="top-sync"></p>
+            <div class="sync-box">
+              <button class="sync-pill" id="sync-pill" type="button" aria-expanded="false" aria-controls="sync-pop" hidden><i class="sync-pt" aria-hidden="true"></i><span id="sync-txt"></span></button>
+              <div class="sync-pop" id="sync-pop" role="group" aria-label="Leitura dos anúncios" hidden></div>
+            </div>
+          </div>
+          <button class="pill pill-ghost filtros-m" id="btn-filtros-m" type="button" aria-controls="top-tools" aria-expanded="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>
+            <span id="filtros-m-txt">30 dias · Tudo</span>
+          </button>
         </div>
-        <div class="top-tools">
+        <div class="top-tools" id="top-tools">
+          <span class="folha-alca" aria-hidden="true"></span>
+          <p class="top-tools-h">Período e plataforma</p>
           <div class="filters" id="filters">
             <div class="seg" id="seg-periodo" role="radiogroup" aria-label="Período">
               <span class="seg-ind" aria-hidden="true"></span>
@@ -192,12 +262,18 @@
               <button type="button" role="radio" data-v="google" aria-checked="false">Google</button>
             </div>
           </div>
-          <button class="pill pill-bronze" id="btn-tour" type="button" hidden>
+          <button class="pill pill-ghost" id="btn-tour" type="button" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
             Tour de 1 minuto
           </button>
+          <button class="pill pill-bronze btn-apresentar" id="btn-apresentar" type="button" aria-keyshortcuts="P" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+            Apresentar
+          </button>
         </div>
       </header>
+      <div class="folha-fundo" id="filtros-fundo" hidden></div>
+      <div class="faixa-integ" id="faixa-integ" role="status" hidden></div>
 
       <!-- carregando / erro / sem cliente -->
       <div class="estado-app" id="estado-app" hidden></div>
@@ -206,34 +282,43 @@
       <section class="view" id="view-geral" aria-labelledby="top-h1">
         <div id="vazio-geral" hidden></div>
         <div id="corpo-geral">
-          <article class="card card-hero" data-tour="hero">
-            <canvas class="hero-aurora" id="hero-aurora" aria-hidden="true"></canvas>
+          <aside class="card desde" id="desde-visita" hidden></aside>
+          <article class="card card-hero" data-tour="hero" data-cena data-foco data-tilt="2">
             <div class="hero-in">
               <p class="eyebrow" id="hero-periodo">Últimos 30 dias</p>
               <p class="hero-frase" id="hero-frase"></p>
+              <div class="trilha" id="trilha"></div>
+              <div class="hero-conta" id="hero-conta"></div>
             </div>
-            <div class="hero-side" id="hero-side"></div>
+            <div class="hero-fone" id="hero-fone"></div>
           </article>
 
-          <div class="kpis" id="kpis"></div>
+          <article class="card regua" data-cena data-foco aria-label="Instrumentos do período">
+            <div class="regua-in" id="kpis"></div>
+          </article>
 
-          <article class="card">
+          <article class="card card-dia" data-cena data-foco>
             <header class="card-h">
-              <div>
+              <div class="card-h-txt">
                 <h2>Investimento e conversas por dia</h2>
-                <p class="sub">Barras: quanto foi investido. Linha: conversas no WhatsApp (média de 7 dias).</p>
+                <p class="sub chart-leg" id="chart-leg">Barras: quanto foi investido. Linha: conversas no WhatsApp (média de 7 dias).</p>
+                <p class="sr-only" id="chart-vivo" aria-live="polite"></p>
               </div>
-              <p class="legend">
-                <span><i class="lg lg-meta"></i> Meta</span>
-                <span><i class="lg lg-google"></i> Google</span>
-                <span><i class="lg lg-line"></i> Conversas</span>
-              </p>
+              <div class="chart-ctl">
+                <p class="legend">
+                  <span><i class="lg lg-meta"></i> Meta</span>
+                  <span><i class="lg lg-google"></i> Google</span>
+                  <span><i class="lg lg-line"></i> Conversas</span>
+                </p>
+                <button class="chip-tg" id="btn-comparar" type="button" aria-pressed="true"><i class="lg lg-ant"></i>comparar com o período anterior</button>
+              </div>
             </header>
-            <div class="chart" id="chart-dia"></div>
+            <div class="chart" id="chart-dia" tabindex="0" role="group" aria-label="Gráfico diário. Use as setas para ler cada dia; Home e End vão às pontas."></div>
+            <form class="marco-form" id="marco-form" novalidate hidden></form>
           </article>
 
-          <div class="grid g-2">
-            <article class="card" data-tour="funil">
+          <div class="grid g-d">
+            <article class="card card-funil" data-tour="funil" data-cena>
               <header class="card-h">
                 <div>
                   <h2>Funil do paciente</h2>
@@ -242,37 +327,39 @@
               </header>
               <div class="funil" id="funil"></div>
             </article>
-            <article class="card">
-              <header class="card-h">
-                <div>
-                  <h2>Mês a mês</h2>
-                  <p class="sub">Pacientes novos vindos dos anúncios.</p>
-                </div>
-              </header>
-              <div class="mam" id="mes-a-mes"></div>
-            </article>
+            <div class="col-d">
+              <article class="card card-mam" data-cena>
+                <header class="card-h">
+                  <div>
+                    <h2 id="mam-titulo">Mês a mês</h2>
+                    <p class="sub" id="mam-sub">Pacientes novos vindos dos anúncios.</p>
+                  </div>
+                </header>
+                <div class="mam" id="mes-a-mes"></div>
+              </article>
+              <article class="card card-ritmo" data-cena>
+                <header class="card-h">
+                  <div>
+                    <h2 id="ritmo-h">Ritmo do mês</h2>
+                    <p class="sub" id="ritmo-sub"></p>
+                  </div>
+                </header>
+                <div id="ritmo"></div>
+              </article>
+            </div>
           </div>
 
-          <div class="grid g-2">
-            <article class="card">
-              <header class="card-h">
-                <div>
-                  <h2>Leitura do período</h2>
-                  <p class="sub">O que os números estão dizendo.</p>
-                </div>
-              </header>
-              <ul class="leitura" id="leitura"></ul>
-            </article>
-            <article class="card">
-              <header class="card-h">
-                <div>
-                  <h2>Ritmo do mês</h2>
-                  <p class="sub" id="ritmo-sub"></p>
-                </div>
-              </header>
-              <div id="ritmo"></div>
-            </article>
-          </div>
+          <article class="card card-leitura" data-cena>
+            <header class="card-h">
+              <div>
+                <h2>Leitura do período</h2>
+                <p class="sub">O que os números estão dizendo.</p>
+              </div>
+            </header>
+            <ol class="leitura" id="leitura"></ol>
+          </article>
+
+          <article class="card card-sim" id="card-sim" data-cena hidden></article>
         </div>
       </section>
 
@@ -280,7 +367,7 @@
       <section class="view" id="view-campanhas" aria-labelledby="top-h1" hidden>
         <div id="vazio-campanhas" hidden></div>
         <div id="corpo-campanhas">
-          <article class="card">
+          <article class="card" data-cena>
             <header class="card-h">
               <div>
                 <h2>Campanhas</h2>
@@ -289,7 +376,7 @@
             </header>
             <div class="tbl-wrap" id="tbl-campanhas"></div>
           </article>
-          <article class="card">
+          <article class="card" data-cena>
             <header class="card-h">
               <div>
                 <h2>Criativos</h2>
@@ -303,7 +390,7 @@
 
       <!-- ---------- PACIENTES ---------- -->
       <section class="view" id="view-pacientes" aria-labelledby="top-h1" hidden>
-        <article class="card" data-tour="kanban">
+        <article class="card card-kanban" data-tour="kanban" data-cena>
           <header class="card-h">
             <div>
               <h2>Cada conversa vira um cartão</h2>
@@ -318,35 +405,35 @@
               <button class="pill pill-ink" id="btn-novo-lead" type="button" aria-haspopup="dialog">+ Paciente</button>
             </div>
           </header>
+          <p class="sr-only" id="k-dica">Enter abre a ficha. Espaço pega a ficha; as setas escolhem a coluna e Espaço solta. Esc cancela.</p>
+          <p class="sr-only" id="k-vivo" aria-live="assertive"></p>
           <div class="kanban" id="kanban"></div>
         </article>
 
-        <div class="grid g-2 g-2-wide">
-          <article class="card">
-            <header class="card-h">
-              <div>
-                <h2>Anúncio × consultório</h2>
-                <p class="sub">A plataforma conta conversas. O consultório conta pacientes. As duas colunas juntas mostram o que dá resultado.</p>
-              </div>
-            </header>
-            <div class="tbl-wrap" id="tbl-origem"></div>
-          </article>
-          <article class="card">
-            <header class="card-h">
-              <div>
-                <h2>Tratamentos fechados</h2>
-                <p class="sub" id="donut-sub">Estimativa pelo valor de cada tratamento.</p>
-              </div>
-            </header>
-            <div class="donut-wrap" id="donut"></div>
-          </article>
-        </div>
+        <article class="card" data-cena>
+          <header class="card-h">
+            <div>
+              <h2>Anúncio × consultório</h2>
+              <p class="sub">A plataforma conta conversas. O consultório conta pacientes. As duas colunas juntas mostram o que dá resultado.</p>
+            </div>
+          </header>
+          <div class="tbl-wrap" id="tbl-origem"></div>
+        </article>
+        <article class="card card-donut" data-cena>
+          <header class="card-h">
+            <div>
+              <h2>Tratamentos fechados</h2>
+              <p class="sub" id="donut-sub">Estimativa pelo valor de cada tratamento.</p>
+            </div>
+          </header>
+          <div class="donut-wrap" id="donut"></div>
+        </article>
       </section>
 
       <!-- ---------- RADAR ---------- -->
       <section class="view" id="view-radar" aria-labelledby="top-h1" hidden>
         <div class="grid g-radar">
-          <article class="card card-scope" data-tour="radar">
+          <article class="card card-scope" data-tour="radar" data-cena>
             <header class="card-h">
               <div>
                 <h2>Varredura</h2>
@@ -358,8 +445,9 @@
             </div>
             <button class="pill pill-ink" id="btn-varrer" type="button">Varrer agora</button>
             <p class="scope-status" id="scope-status" role="status"></p>
+            <p class="scope-leg" aria-hidden="true"><span><i class="l-critico"></i>crítico</span><span><i class="l-alerta"></i>alerta</span><span><i class="l-info"></i>informativo</span></p>
           </article>
-          <article class="card">
+          <article class="card" data-cena>
             <header class="card-h">
               <div>
                 <h2>Alertas</h2>
@@ -370,8 +458,8 @@
           </article>
         </div>
 
-        <div class="grid g-2">
-          <article class="card">
+        <div class="grid g-2 g-radar-2">
+          <article class="card" data-cena>
             <header class="card-h">
               <div>
                 <h2>Regras</h2>
@@ -392,18 +480,25 @@
             </div>
             <div class="metas" id="metas-real" hidden></div>
           </article>
-          <article class="card">
+          <article class="card card-aviso" data-cena>
             <header class="card-h">
               <div>
                 <h2>Como o aviso chega</h2>
                 <p class="sub">No WhatsApp do gestor, na hora em que a regra dispara.</p>
               </div>
             </header>
-            <div class="wa-inline" id="wa-alerta"></div>
+            <div class="fone fone-reto fone-aviso" data-tilt="6" data-foco>
+              <div class="fone-tela">
+                <div class="ph-screen">
+                  <div class="ph-top"><span class="ph-av"><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b>Nexus · Radar</b><small>aviso automático</small></div></div>
+                  <div class="ph-body wa-inline" id="wa-alerta"></div>
+                </div>
+              </div>
+            </div>
           </article>
         </div>
 
-        <article class="card">
+        <article class="card" data-cena>
           <header class="card-h">
             <div>
               <h2>Avisos enviados</h2>
@@ -417,7 +512,7 @@
       <!-- ---------- RELATÓRIOS ---------- -->
       <section class="view" id="view-relatorios" aria-labelledby="top-h1" hidden>
         <div class="phones">
-          <article class="phone-col">
+          <article class="phone-col" data-cena>
             <header class="phone-head">
               <h2>Relatório diário</h2>
               <p class="sub">Todo dia às 8h, no WhatsApp do gestor.</p>
@@ -427,34 +522,41 @@
               </div>
               <p class="rel-st" id="st-diario"></p>
             </header>
-            <div class="phone">
-              <div class="ph-screen">
-                <div class="ph-top"><span class="ph-av">N</span><div><b>Nexus · Tráfego</b><small>relatório automático</small></div></div>
-                <div class="ph-body" id="ph-diario"></div>
+            <div class="fone fone-reto fone-chat" data-tilt="6" data-foco>
+              <div class="fone-tela">
+                <div class="ph-screen">
+                  <div class="ph-top"><span class="ph-av"><svg class="nx-mono"><use href="#nx-mono"/></svg></span><div><b>Nexus · Tráfego</b><small>relatório automático</small></div></div>
+                  <div class="ph-body" id="ph-diario"></div>
+                </div>
+                <div class="fone-bloq" id="bloq-diario" aria-hidden="true" hidden></div>
               </div>
             </div>
           </article>
 
-          <article class="phone-col" data-tour="relatorio">
+          <article class="phone-col" data-tour="relatorio" data-cena>
             <header class="phone-head">
               <h2>Resumo do mês</h2>
               <p class="sub">Todo dia 1º, no WhatsApp da clínica — sem tecniquês.</p>
               <div class="phone-tools">
                 <label class="sel"><span class="sr-only">Mês do resumo</span><select id="sel-mes"></select></label>
                 <button class="pill pill-ghost" type="button" data-copiar="mensal">Copiar texto</button>
+                <button class="pill pill-bronze" type="button" id="btn-folha">Folha do mês</button>
               </div>
               <p class="rel-st" id="st-mensal"></p>
             </header>
-            <div class="phone">
-              <div class="ph-screen">
-                <div class="ph-top"><span class="ph-av ph-av-c" id="ph-av-cli">C</span><div><b id="ph-nome-cli">Resultados</b><small>resumo mensal</small></div></div>
-                <div class="ph-body" id="ph-mensal"></div>
+            <div class="fone fone-reto fone-chat" data-tilt="6" data-foco>
+              <div class="fone-tela">
+                <div class="ph-screen">
+                  <div class="ph-top"><span class="ph-av ph-av-c" id="ph-av-cli">C</span><div><b id="ph-nome-cli">Resultados</b><small>resumo mensal</small></div></div>
+                  <div class="ph-body" id="ph-mensal"></div>
+                </div>
+                <div class="fone-bloq" id="bloq-mensal" aria-hidden="true" hidden></div>
               </div>
             </div>
           </article>
         </div>
 
-        <article class="card">
+        <article class="card" data-cena>
           <header class="card-h">
             <div>
               <h2>Relatórios enviados</h2>
@@ -480,6 +582,17 @@
             <form class="aj-form" id="form-cliente" novalidate></form>
           </article>
 
+          <div class="col-d">
+          <article class="card card-marca" id="aj-marca-card">
+            <header class="card-h">
+              <div>
+                <h2>Marca da clínica</h2>
+                <p class="sub">Logo e cor da clínica nos objetos do painel: selo do topo, celular do resumo, apresentação e folha do mês. A Nexus continua assinando.</p>
+              </div>
+            </header>
+            <form class="aj-form" id="form-marca" novalidate></form>
+          </article>
+
           <article class="card">
             <header class="card-h">
               <div>
@@ -489,6 +602,7 @@
             </header>
             <div class="integs" id="aj-integracoes"></div>
           </article>
+          </div>
         </div>
 
         <article class="card">
@@ -550,25 +664,26 @@
     </main>
 
     <!-- tab bar (celular) -->
-    <nav class="tabbar" aria-label="Seções do painel">
+    <nav class="tabbar" id="tabbar" aria-label="Seções do painel">
+      <span class="tab-ind" aria-hidden="true"></span>
       <button type="button" data-aba="geral" aria-current="page">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 4v4h6V4z"/></svg>Geral
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 4v4h6V4z"/></svg><span>Geral</span>
       </button>
       <button type="button" data-aba="campanhas">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>Campanhas
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span>Campanhas</span>
       </button>
       <button type="button" data-aba="pacientes">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.4 3.4 0 0 1 0 6.4M18.5 14.8c1.7.8 2.8 2.5 3.2 5.2"/></svg>Pacientes
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.8a3.4 3.4 0 0 1 0 6.4M18.5 14.8c1.7.8 2.8 2.5 3.2 5.2"/></svg><span>Pacientes</span>
       </button>
       <button type="button" data-aba="radar">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6.4-6.4"/></svg>Radar
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6.4-6.4"/></svg><span>Radar</span>
         <span class="badge" data-badge hidden>0</span>
       </button>
       <button type="button" data-aba="relatorios">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.6a8.5 8.5 0 0 1-12.4 7.6L3.5 20.5l1.3-4.4A8.5 8.5 0 1 1 20.5 11.6z"/><path d="M8.5 10.5h7M8.5 13.5h4.5"/></svg>Relatórios
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.6a8.5 8.5 0 0 1-12.4 7.6L3.5 20.5l1.3-4.4A8.5 8.5 0 1 1 20.5 11.6z"/><path d="M8.5 10.5h7M8.5 13.5h4.5"/></svg><span>Relatórios</span>
       </button>
       <button type="button" data-aba="ajustes" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg>Ajustes
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2.2"/><circle cx="10" cy="17" r="2.2"/></svg><span>Ajustes</span>
         <span class="badge" data-badge-aj hidden>0</span>
       </button>
     </nav>
@@ -578,7 +693,8 @@
   <div class="gaveta-fundo" id="gaveta-fundo" hidden></div>
   <div class="gaveta" id="gaveta" role="dialog" aria-modal="true" aria-labelledby="gv-titulo" hidden>
     <form class="gv-form" id="form-lead" novalidate>
-      <header class="gv-h">
+      <header class="gv-h" id="gv-alca">
+        <span class="gv-puxador" aria-hidden="true"></span>
         <div>
           <p class="eyebrow" id="gv-eyebrow">Paciente</p>
           <h2 id="gv-titulo">Paciente</h2>
@@ -590,7 +706,8 @@
 
       <div class="gv-corpo">
         <p class="gv-aviso" id="gv-demo" hidden>Demonstração: pode mexer à vontade — nada é salvo.</p>
-        <p class="gv-origem" id="gv-origem-info" hidden></p>
+        <div class="gv-origem" id="gv-origem-info" hidden></div>
+        <ol class="fita" id="gv-fita" aria-label="Jornada do paciente"></ol>
 
         <fieldset class="etapas" id="lf-etapas">
           <legend>Em que pé está</legend>
@@ -648,9 +765,23 @@
     </div>
   </div>
 
-  <div class="tip" id="tip" role="tooltip" hidden></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="celebra" id="celebra" role="status" aria-live="polite" hidden></div>
+  <div class="menu-parou" id="menu-parou" role="menu" aria-label="Por que não seguiu" hidden></div>
 
-  <script type="module" src="painel.js?v=1"></script>
+  <!-- ===================== O CURTA (modo apresentação · curta.js) ===================== -->
+  <div class="palco-curta" id="palco-curta" role="dialog" aria-modal="true" aria-roledescription="apresentação" aria-label="Apresentação dos resultados" hidden></div>
+
+  <!-- ===================== FOLHA DO MÊS (A4 · folha.js) ===================== -->
+  <div class="folha-modal" id="folha-modal" role="dialog" aria-modal="true" aria-label="Folha do mês" hidden>
+    <div class="folha-barra">
+      <p class="folha-barra-t" id="folha-barra-t">Folha do mês</p>
+      <button class="pill pill-bronze" id="folha-imprimir" type="button">Imprimir ou salvar PDF</button>
+      <button class="pill pill-ghost" id="folha-fechar" type="button">Fechar</button>
+    </div>
+    <div class="folha-mesa" id="folha-mesa"><article class="folha" id="folha" hidden></article></div>
+  </div>
+
+  <script type="module" src="painel.js?v=3"></script>
 </body>
 </html>

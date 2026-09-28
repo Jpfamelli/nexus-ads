@@ -3,7 +3,7 @@
    Peças usadas pelos três handlers: resposta JSON, relógio,
    autenticação do cron, leitura do banco no formato do nx_dados.
    ============================================================ */
-import { datasetDeLinhas, montar } from "./nucleo.js";
+import { datasetDeLinhas, montar, encurtar, MESES } from "./nucleo.js";
 
 export class ErroHttp extends Error {
   constructor(status, mensagem) { super(mensagem); this.status = status; }
@@ -37,11 +37,19 @@ export function iguaisSeguro(a, b) {
 }
 
 /** Mensagem de erro segura para gravar no banco: sem token e curta.
-    O fetch do Deno põe a URL inteira no erro de rede — e a URL do Meta leva access_token. */
+    O fetch do Deno põe a URL inteira no erro de rede — e a URL do Meta leva access_token.
+    O Meta também devolve o token SOLTO no texto ("Malformed access token EAA…"), e esse texto
+    vai para nx_integracoes.status e para o aviso de integração — que a conta da clínica enxerga. */
 export function limparErro(msg) {
   return String(msg ?? "erro desconhecido")
     .replace(/(access_token=)[^&\s)"']+/gi, "$1***")
     .replace(/(Bearer\s+)[\w.~+/=-]+/gi, "$1***")
+    .replace(/((?:client_secret|refresh_token|developer[-_]token|appsecret_proof)["']?\s*[=:]\s*["']?)[^&\s)"',]+/gi, "$1***")
+    .replace(/\bEAA[A-Za-z0-9]{16,}/g, "EAA***")          // token do Meta
+    .replace(/\bya29\.[\w.-]+/g, "ya29.***")              // access token do Google
+    .replace(/(^|[^\w/])1\/\/[\w-]{16,}/g, (_, antes) => `${antes}1//***`)   // refresh token do Google
+    .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "eyJ***")     // JWT (chave service_role antiga)
+    .replace(/\bsb_secret_[\w-]+/g, "sb_secret_***")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 300);
@@ -151,6 +159,63 @@ export function erroDeEnvio(destinos, envio) {
   if (msgs.length === 1 && falhas.length === envio.length) return msgs[0];
   return falhas.map(e => `${e.destino}: ${e.erro}`).join("; ");
 }
+
+/** Nome curto do cliente, igual ao M.NOME do núcleo (cfg.nomeCurto ou o nome encurtado). */
+export const nomeCurto = c => (c?.cfg && c.cfg.nomeCurto) || encurtar(c?.nome || "Cliente", 22) || c?.nome || "Cliente";
+
+/** Título curto dos avisos (vai no template quando a janela de 24h está fechada).
+    Ficam aqui porque o webhook precisa refazer o MESMO título ao reenviar como template. */
+export const tituloRadar = (nome, n) => `Radar ${nome}: ${n} ${n === 1 ? "alerta novo" : "alertas novos"}`;
+export function tituloRelatorio(tipo, nome, referencia) {
+  const [, m, d] = String(referencia).slice(0, 10).split("-");
+  return tipo === "mensal" ? `Resultados de ${MESES[Number(m) - 1]} · ${nome}` : `Relatório diário ${nome} ${d}/${m}`;
+}
+
+/** Modelo sem números (só nome e cfg): dá o texto do aviso quando o radar em si falhou. */
+export const modeloVazio = (cliente, hoje) => montar(datasetDeLinhas({
+  metricas: [], leads: [], hoje, dias: 7,
+  cliente: { id: cliente.id, slug: cliente.slug, nome: cliente.nome, cfg: cliente.cfg || {} },
+}));
+
+/**
+ * Trava no banco (nx_travas). Cron e botão "Atualizar agora" ao mesmo tempo não podem
+ * processar o mesmo cliente duas vezes (alerta e relatório sairiam em dobro).
+ * A trava tem prazo: se a função for cortada sem chegar no finally, ela vence sozinha.
+ * @returns {Promise<{pulado: true} | {pulado: false, valor: any}>}
+ */
+export async function comTrava(db, nome, segundos, fn) {
+  const dono = crypto.randomUUID();
+  const pegou = await db.rpc("nx_trava_pegar", { p_nome: nome, p_segundos: segundos, p_dono: dono });
+  if (pegou !== true) return { pulado: true };
+  try {
+    return { pulado: false, valor: await fn() };
+  } finally {
+    try { await db.rpc("nx_trava_soltar", { p_nome: nome, p_dono: dono }); }
+    catch (e) { console.error(`trava ${nome}:`, limparErro(e?.message || e)); }   // vence sozinha no prazo
+  }
+}
+
+export const EM_EXECUCAO = "já em execução";
+
+/**
+ * Trava POR CLIENTE ('nx-ciclo:<id>', 'nx-relatorio:<tipo>:<id>'). O que não pode acontecer
+ * em dobro (alerta, relatório) é sempre de UM cliente; com uma trava geral, o botão de uma
+ * clínica apertado às 8h fazia o cron pular TODAS as outras — e o relatório do dia só roda uma vez.
+ * Assim: cron e botão no mesmo cliente → um processa, o outro pula só aquele cliente.
+ * Erro ao pegar a trava vira erro só deste cliente (aparece em nx_execucoes).
+ * @param {object} base campos do resumo deste cliente ({cliente: slug, …})
+ */
+export async function comTravaDoCliente(db, nome, segundos, base, fn) {
+  try {
+    const r = await comTrava(db, nome, segundos, fn);
+    return r.pulado ? { ...base, ok: true, pulado: EM_EXECUCAO } : r.valor;
+  } catch (e) {
+    return { ...base, ok: false, erro: limparErro(e?.message || e) };
+  }
+}
+
+/** Nenhum cliente processado (todos já estavam com outra execução): não é execução de verdade. */
+export const todosPulados = resumo => resumo.length > 0 && resumo.every(x => x.pulado === EM_EXECUCAO);
 
 /** @param ms duração medida no relógio real (o `inicio` pode vir do relógio injetado nos testes) */
 export async function registrarExecucao(db, { tarefa, inicio, ms, ok, resumo }) {

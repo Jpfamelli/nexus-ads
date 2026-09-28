@@ -43,7 +43,9 @@ Na prática, ele faz quatro coisas por você:
   conversas das campanhas. Você não precisa exportar planilha.
 - **Vigia as campanhas (o "radar").** Se uma campanha começa a pagar caro demais
   por conversa, gasta sem trazer ninguém, ou se um criativo cansa o público, você
-  recebe um aviso no seu WhatsApp.
+  recebe um aviso no seu WhatsApp. Ele também avisa se a conexão com o Meta ou o
+  Google de alguma clínica parar (token vencido, permissão retirada…), para os
+  números nunca ficarem velhos sem você saber.
 - **Manda relatórios.** Todo dia às 8h você recebe o resumo de ontem. No dia 1º
   de cada mês, a clínica recebe o resumo do mês anterior, escrito para quem não é
   do marketing ("cada R$ 1 em anúncio virou R$ X em tratamentos").
@@ -412,6 +414,45 @@ Para testar:
 3. Em **Ajustes**, clique em **Gerar relatório agora**. O relatório deve chegar no
    seu WhatsApp em até um minuto.
 
+### 6.5. Saber se o aviso chegou mesmo (confirmação de entrega)
+
+Quando o Nexus Ads manda um alerta ou um relatório, a Meta responde "recebi" na
+hora. Isso **não** quer dizer que a mensagem chegou no celular. Com a janela de 24
+horas fechada, por exemplo, a Meta aceita a mensagem e só alguns segundos depois
+avisa que não conseguiu entregar. Sem ouvir esse segundo aviso, o sistema acharia
+que deu tudo certo.
+
+Para o Nexus Ads ouvir esses avisos, o **mesmo webhook** da seção 7.3 precisa valer
+também para o **número da Nexus** (o que manda os alertas), e não só para o da
+clínica:
+
+1. Faça a seção **7.3** (URL de retorno, token de verificação e o campo
+   **messages**) e a **7.4** (App secret). Faça isso mesmo que o número da clínica
+   ainda não esteja conectado: é o mesmo webhook para os dois números.
+2. O webhook do app vale para os números das contas do WhatsApp ligadas ao app. O
+   número de teste e os números adicionados pela tela **Configuração da API** do app
+   já ficam ligados. Se o número da Nexus estiver numa conta do WhatsApp diferente
+   (por exemplo, trazida de outro Gerenciador de Negócios) e nada for confirmado,
+   peça ao Claude para conferir se o app está inscrito nessa conta.
+3. Teste: em **Ajustes**, clique em **Gerar relatório agora**. Em até um minuto o
+   relatório chega no seu WhatsApp e, na aba **Relatórios**, aparece como
+   **entregue**.
+
+O que o sistema faz com cada aviso da Meta:
+
+- **Entregue ou lido**: marca o alerta ou o relatório como entregue, com a hora.
+- **Janela de 24 horas fechada**: manda sozinho, **uma única vez**, o modelo
+  `nexus_relatorio` (título e link do painel) para aquele número, e anota "fora da
+  janela de 24h — reenviado como template". Se nem o modelo for entregue, ele não
+  tenta de novo, para não ficar repetindo mensagem, e só anota o motivo. Isso
+  depende do modelo estar configurado (6.3 e 6.4).
+- **Outro problema** (número sem WhatsApp, pessoa que bloqueou a Nexus, pagamento
+  pendente na conta do WhatsApp…): anota o motivo em português, por exemplo
+  "WhatsApp não entregou (código 131026): … o número não pôde receber".
+
+Sem esta parte ligada, tudo continua funcionando como antes: os avisos saem, só não
+há confirmação de entrega nem o reenvio automático pelo modelo.
+
 ---
 
 ## 7. WhatsApp da clínica: para capturar as conversas
@@ -453,6 +494,11 @@ os anúncios).
 3. Cole a URL de retorno no campo **URL de callback** e o token no campo **Token de
    verificação**. Clique em **Verificar e salvar**.
 4. Em **Campos do webhook**, clique em **Gerenciar** e assine o campo **messages**.
+
+Esse mesmo webhook faz duas coisas: traz as conversas do número da clínica (que
+viram pacientes) e os avisos de entrega do número da Nexus (seção 6.5). O sistema
+separa sozinho um do outro pelo ID de cada número. Se a mesma pessoa mandar várias
+mensagens de uma vez, ela vira um cartão só.
 
 ### 7.4. App secret (a prova de que a mensagem veio mesmo da Meta)
 
@@ -534,7 +580,14 @@ Tudo no horário de Brasília. "Ontem" é sempre o último dia completo.
 | **De hora em hora** | Busca os últimos 7 dias do Meta e do Google (o Meta corrige dias passados) e roda o radar. | Alertas novos vão para o **WhatsApp do gestor**. O mesmo alerta não se repete em menos de 24h. |
 | **Todo dia às 8h** | Relatório de ontem: investido, conversas, custo por conversa, melhor e pior campanha, ritmo do mês, o que aconteceu no consultório e a leitura do dia. | **WhatsApp do gestor**. |
 | **Dia 1º de cada mês às 9h** | Resumo do mês anterior, em linguagem simples para o dono da clínica. | **WhatsApp da clínica**, com cópia para o gestor. |
+| **Quando uma conexão para** | Se a busca no Meta ou no Google de uma clínica falhar (token vencido, permissão retirada, developer token ainda não aprovado…), o radar manda o aviso **"A conexão com o Meta da clínica X parou"**, com o que fazer. Falha passageira (instabilidade da Meta ou do Google) só vira aviso se durar mais de 3 horas. | **WhatsApp do gestor**, no máximo uma vez a cada 24h por conexão. Quando volta a funcionar, não chega mensagem nenhuma. |
 | **A qualquer hora** | Você pode forçar com **Atualizar dados agora**, **Gerar relatório agora** e **Gerar resumo do mês**, em Ajustes. O relatório gerado pelo botão é enviado de novo aos destinos. | — |
+
+Uma clínica de cada vez: se você clicar num desses botões bem na hora em que a tarefa
+automática está cuidando daquela mesma clínica, o clique é ignorado para ela (a tarefa
+que já está rodando traz os números). É isso que impede alerta e relatório de chegarem
+duplicados. As outras clínicas não são afetadas: o seu clique nunca faz a tarefa
+automática pular ninguém. Se precisar, espere um ou dois minutos e clique de novo.
 
 O relatório automático só sai quando houve investimento em anúncios no período
 (nos últimos 7 dias, para o diário; no mês, para o resumo). Clínica sem anúncio
@@ -562,6 +615,14 @@ O painel sempre mostra os dados mais recentes que já foram buscados.
 
 O status de cada integração aparece em **Ajustes**, como "ok — N linhas" ou
 "erro — mensagem". A mensagem de erro costuma dizer o que houve.
+
+**Chegou no WhatsApp "A conexão com o Meta (ou o Google) da clínica X parou".**
+O Nexus Ads tentou buscar os números dessa clínica e não conseguiu. A própria
+mensagem diz o motivo em palavras simples e o que fazer; os casos mais comuns estão
+logo abaixo. Enquanto isso, o painel mostra os números até a última busca que deu
+certo, e o aviso se repete no máximo uma vez por dia. Depois de corrigir em
+**Ajustes → Integrações**, clique em **Atualizar dados agora** para conferir. Quando
+volta a funcionar, não chega mensagem nenhuma: o status volta para "ok".
 
 **Meta: "Error validating access token", "token expirado" ou código 190.**
 O token venceu ou foi invalidado. Isso acontece com token de usuário comum (vence em
@@ -593,7 +654,13 @@ do Google** (seção 5.5).
 **WhatsApp: a mensagem não chega e aparece "re-engagement" ou código 131047.**
 A janela de 24 horas está fechada e o modelo `nexus_relatorio` não está configurado ou
 ainda não foi aprovado (seção 6.3). Enquanto isso, mande um "oi" para o número da
-Nexus: a janela abre por 24 horas.
+Nexus: a janela abre por 24 horas. Com o modelo aprovado e a confirmação de entrega
+ligada (6.5), o sistema reenvia sozinho pelo modelo e anota "reenviado como template".
+
+**O alerta ou o relatório aparece como enviado, mas nunca como entregue.**
+O sistema não está ouvindo os avisos de entrega da Meta. Confira a seção 6.5: o campo
+**messages** assinado no webhook e o **App secret** preenchido. Se aparecer "WhatsApp
+não entregou (código …)", o motivo vem escrito logo depois.
 
 **WhatsApp: "Recipient phone number not in allowed list" ou código 131030.**
 Você está usando o número de teste e o destino não está entre os 5 números
@@ -630,9 +697,11 @@ https://supabase.com/dashboard, abra o projeto `nexus-ads` e clique em **Restore
   sem uma sessão válida.
 - **Agendamento automático**: busca e radar de hora em hora, relatório diário às 8h e
   resumo mensal no dia 1º às 9h.
-- **Funções no servidor**: a que busca os números e roda o radar, a que monta e envia
-  os relatórios (com a leitura da IA quando houver chave) e a que recebe as mensagens
-  do WhatsApp da clínica.
+- **Funções no servidor**: a que busca os números e roda o radar (e avisa quando uma
+  conexão com o Meta ou o Google para), a que monta e envia os relatórios (com a
+  leitura da IA quando houver chave) e a que recebe as mensagens do WhatsApp da
+  clínica e os avisos de entrega do número da Nexus. Cada tarefa roda uma vez por
+  vez, e a mesma pessoa escrevendo várias vezes ao mesmo tempo vira um cartão só.
 - **O painel** em https://jpfamelli.github.io/nexus-ads/, com as abas Visão geral,
   Campanhas, Pacientes, Radar, Relatórios e Ajustes, e o modo demonstração (`?demo`).
 - **Um único cálculo** para painel, radar e relatórios: os números do painel e os do
@@ -683,7 +752,8 @@ aprovação de outra pessoa. Por isso ninguém pode fazer por você:
 8. Decidir, junto com a clínica, se o número dela entra na API, e confirmar a
    coexistência com o aplicativo antes (seção 7).
 9. Copiar o app secret, a URL de retorno e o token de verificação para o webhook e deixar o app "Ao vivo"
-   (7.3 a 7.5).
+   (7.3 a 7.5). O webhook vale também para o número da Nexus: é ele que confirma que
+   os avisos chegaram (6.5).
 10. Criar a chave da IA e colocar um cartão na Anthropic, se quiser a leitura por IA
     (seção 8).
 11. Colocar um cartão na conta do WhatsApp, se for usar número próprio e modelos fora

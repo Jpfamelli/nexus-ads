@@ -4,15 +4,18 @@
    nx_relatorios → WhatsApp. A IA nunca impede o relatório.
    ============================================================ */
 import { criarDb } from "./db.js";
-import { enviarParaTodos, normalizarTelefone } from "./whatsapp.js";
+import { enviarParaTodos, normalizarTelefone, idsDoEnvio } from "./whatsapp.js";
 import { hojeSP, MESES } from "./nucleo.js";
 import {
   ErroHttp, json, agoraDe, somaDias, limparErro, lerCorpo, autenticarCron, listarClientes,
   carregarModelo, emLotes, erroDeEnvio, registrarExecucao, listaDestinos, comPrazo, PRAZO_REDE_MS,
+  tituloRelatorio, comTravaDoCliente, todosPulados, EM_EXECUCAO,
 } from "./comum.js";
 
 const JANELA = 130;         // a mesma do painel (nx_dados p_dias padrão): os números batem
 const CLIENTES_JUNTOS = 3;
+// trava por tipo e cliente ('nx-relatorio:diario:<id>'); vence sozinha se a função for cortada (150 s)
+export const TRAVA_S = 170;
 // A Edge Function corta a requisição em 150 s. O SDK sozinho pode levar 2 × 60 s por
 // cliente: sem um teto para a execução toda, IA lenta impediria o envio dos lotes seguintes.
 const PRAZO_IA_MS = 90_000;
@@ -80,14 +83,15 @@ async function gerar(db, cfg, cliente, ctx) {
   }
 
   const texto = ctx.tipo === "diario" ? M.relDiario(M.R, leitura) : M.relMensal(mes, leitura);
-  const titulo = ctx.tipo === "diario" ? `Relatório diário ${M.NOME} ${M.ddmm(M.R)}` : `Resultados de ${MESES[mes.mes]} · ${M.NOME}`;
+  const titulo = tituloRelatorio(ctx.tipo, M.NOME, ref);
   const envio = destinos.length ? await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo }) : [];
   const erro = [erroIA, erroDeEnvio(destinos, envio)].filter(Boolean).join(" · ") || null;
   const enviado = envio.some(e => e.ok);
 
   const linha = { cliente_id: cliente.id, tipo: ctx.tipo, referencia: ref, texto, leitura_ia: leitura, destinos, erro };
-  // envio que falhou não apaga o horário de um envio anterior que deu certo
-  if (enviado) linha.enviado_em = ctx.agora.toISOString();
+  // envio que falhou não apaga o horário (nem os wamids e a entrega) de um envio anterior que deu certo;
+  // envio novo troca os wamids e zera entregue_em até o webhook confirmar a entrega deste
+  if (enviado) Object.assign(linha, { enviado_em: ctx.agora.toISOString(), entregue_em: null, ...idsDoEnvio(envio) });
   await db.upsert("nx_relatorios", linha, "cliente_id,tipo,referencia");
 
   return { ...base, ok: !erro, enviado, ia: leitura ? "ok" : ctx.ia ? "falhou" : "sem chave", envio, ...(erro ? { erro } : {}) };
@@ -112,16 +116,19 @@ export async function tratar(req, env, deps = {}) {
     const tipo = corpo.tipo ?? "diario";
     if (tipo !== "diario" && tipo !== "mensal") throw new ErroHttp(400, "tipo deve ser diario ou mensal");
     const clientes = await listarClientes(db, corpo.cliente);
+
     const ctx = {
       tipo, forcar: corpo.forcar === true, hoje: hojeSP(agora), agora, fetch: rede,
       ia: cfg.anthropic_api_key ? (deps.ia || iaPadrao) : null,
       prazoIA: t0 + (deps.prazoIA ?? PRAZO_IA_MS),
     };
-
+    // trava por tipo E cliente: o botão de uma clínica às 8h não faz o cron do dia pular as outras
     const resumo = await emLotes(clientes, CLIENTES_JUNTOS, c =>
-      gerar(db, cfg, c, ctx).catch(e => ({ cliente: c.slug, tipo, ok: false, erro: limparErro(e?.message || e) })));
+      comTravaDoCliente(db, `nx-relatorio:${tipo}:${c.id}`, TRAVA_S, { cliente: c.slug, tipo }, () =>
+        gerar(db, cfg, c, ctx).catch(e => ({ cliente: c.slug, tipo, ok: false, erro: limparErro(e?.message || e) }))));
+    if (todosPulados(resumo)) return json({ ok: true, tipo, pulado: EM_EXECUCAO });
 
-    const ok = resumo.every(r => r.ok);
+    const ok = resumo.every(x => x.ok);
     await registrarExecucao(db, { tarefa: "nx-relatorio", inicio: agora, ms: Date.now() - t0, ok, resumo: { tipo, forcar: ctx.forcar, clientes: resumo } });
     return json({ ok, tipo, clientes: resumo });
   } catch (e) {

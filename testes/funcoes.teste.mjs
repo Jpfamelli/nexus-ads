@@ -12,10 +12,12 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { tratar as ciclo } from "../supabase/functions/_compartilhado/ciclo.js";
+import { tratar as ciclo, explicarErroIntegracao } from "../supabase/functions/_compartilhado/ciclo.js";
 import { tratar as relatorio } from "../supabase/functions/_compartilhado/relatorio.js";
-import { tratar as webhook, variantesTelefone } from "../supabase/functions/_compartilhado/webhook.js";
-import { enviarParaTodos, normalizarTelefone } from "../supabase/functions/_compartilhado/whatsapp.js";
+import { tratar as webhook, variantesTelefone, textoFalha } from "../supabase/functions/_compartilhado/webhook.js";
+import { enviarParaTodos, normalizarTelefone, idsDoEnvio } from "../supabase/functions/_compartilhado/whatsapp.js";
+import { comTrava, limparErro } from "../supabase/functions/_compartilhado/comum.js";
+import { criarDb } from "../supabase/functions/_compartilhado/db.js";
 
 const RAIZ = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SUPA = "https://fake.supabase.co";
@@ -38,15 +40,22 @@ const COLUNAS = {
   nx_integracoes: "id cliente_id canal ativo cred ultimo_sync status",
   nx_metricas_dia: "cliente_id plataforma nivel data campanha_ext anuncio_ext campanha_nome anuncio_nome impressoes alcance frequencia cliques gasto conversoes valor_conversao atualizado_em",
   nx_leads: "id cliente_id telefone nome origem plataforma campanha_ext anuncio_ext ctwa_clid servico etapa data_conversa data_agenda data_consulta valor obs criado_em atualizado_em",
-  nx_alertas: "id cliente_id chave regra severidade mensagem acao valor referencia criado_em enviado_em erro_envio",
-  nx_relatorios: "id cliente_id tipo referencia texto leitura_ia destinos enviado_em erro",
+  nx_alertas: "id cliente_id chave regra severidade mensagem acao valor referencia criado_em enviado_em erro_envio wa_ids wa_ids_template entregue_em",
+  nx_relatorios: "id cliente_id tipo referencia texto leitura_ia destinos enviado_em erro wa_ids wa_ids_template entregue_em",
   nx_execucoes: "id tarefa inicio fim ok resumo",
+  nx_travas: "nome ate dono",
 };
 for (const k in COLUNAS) COLUNAS[k] = new Set(COLUNAS[k].split(" "));
 const UNICAS = {
   nx_metricas_dia: ["cliente_id", "plataforma", "nivel", "data", "campanha_ext", "anuncio_ext"],
   nx_relatorios: ["cliente_id", "tipo", "referencia"],
   nx_integracoes: ["cliente_id", "canal"],
+  nx_travas: ["nome"],
+};
+// `default` do esquema (20260927_melhorias.sql): vale no INSERT de linha nova sem a coluna
+const PADROES = {
+  nx_alertas: { wa_ids: [], wa_ids_template: [] },
+  nx_relatorios: { wa_ids: [], wa_ids_template: [] },
 };
 const CHECKS = {
   nx_metricas_dia: { plataforma: ["meta", "google"], nivel: ["campanha", "anuncio"] },
@@ -55,14 +64,54 @@ const CHECKS = {
   nx_alertas: { severidade: ["critico", "alerta", "info"] },
   nx_relatorios: { tipo: ["diario", "mensal"] },
 };
-const NAO_NULOS = { nx_metricas_dia: UNICAS.nx_metricas_dia, nx_leads: ["cliente_id", "telefone"], nx_alertas: ["cliente_id", "chave"] };
+const NAO_NULOS = {
+  nx_metricas_dia: UNICAS.nx_metricas_dia, nx_leads: ["cliente_id", "telefone"],
+  nx_alertas: ["cliente_id", "chave", "wa_ids", "wa_ids_template"], nx_relatorios: ["wa_ids", "wa_ids_template"], nx_travas: ["nome", "ate"],
+};
 const RESERVADOS = new Set(["select", "order", "limit", "offset", "on_conflict", "or"]);
+
+/** Literal de array do Postgres ({a,"b.c"}) → lista. */
+function arrayPg(lit) {
+  const s = String(lit).trim();
+  if (!s.startsWith("{") || !s.endsWith("}")) throw new Error(`malformed array literal: ${s}`);
+  const corpo = s.slice(1, -1);
+  if (!corpo) return [];
+  const out = [];
+  let cur = "", aspas = false, escape = false;
+  for (const ch of corpo) {
+    if (escape) { cur += ch; escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (ch === '"') { aspas = !aspas; continue; }
+    if (ch === "," && !aspas) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/** Filtro or=(a.eq.1,b.cs.{"x,y"}) em partes — vírgula dentro de {} ou "" não separa (igual ao PostgREST). */
+function partes(expr) {
+  const s = expr.replace(/^\(|\)$/g, "");
+  const out = [];
+  let cur = "", chaves = 0, aspas = false;
+  for (const ch of s) {
+    if (ch === '"') aspas = !aspas;
+    else if (!aspas && ch === "{") chaves++;
+    else if (!aspas && ch === "}") chaves--;
+    if (ch === "," && !aspas && chaves === 0) { out.push(cur); cur = ""; } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
 
 function criarBanco(inicial, relogio) {
   const t = structuredClone(inicial);
+  // linhas semeadas pelo teste também ganham os defaults (como as antigas ganharam na migração)
+  for (const [n, pad] of Object.entries(PADROES)) for (const r of t[n] || []) for (const [c, v] of Object.entries(pad)) if (r[c] == null) r[c] = structuredClone(v);
   let seq = 1000;
   const tab = n => (t[n] ||= []);
-  const erro = (status, message) => new Response(JSON.stringify({ code: "PGRST", message }), { status, headers: { "content-type": "application/json" } });
+  const erro = (status, message, code = "PGRST") => new Response(JSON.stringify({ code, message }), { status, headers: { "content-type": "application/json" } });
+  const ok = dados => new Response(JSON.stringify(dados), { status: 200, headers: { "content-type": "application/json" } });
 
   function casa(row, col, expr) {
     const i = expr.indexOf(".");
@@ -77,10 +126,10 @@ function criarBanco(inicial, relogio) {
       case "gt": return a != null && cmp() > 0;
       case "lte": return a != null && cmp() <= 0;
       case "lt": return a != null && cmp() < 0;
+      case "cs": return Array.isArray(a) && arrayPg(val).every(x => a.includes(x));   // @> (contém)
       default: throw new Error(`operador não suportado no banco falso: ${op}`);
     }
   }
-  const partes = expr => expr.replace(/^\(|\)$/g, "").split(",");
   function colunasFiltro(nome, sp) {
     const cols = [...sp.keys()].filter(k => !RESERVADOS.has(k));
     if (sp.get("or")) cols.push(...partes(sp.get("or")).map(p => p.split(".")[0]));
@@ -102,11 +151,107 @@ function criarBanco(inicial, relogio) {
     return null;
   }
 
+  /* ---------- RPCs (mesma semântica de supabase/migrations/20260927_melhorias.sql) ---------- */
+  const agoraMs = () => relogio().getTime();
+
+  // pg_advisory_xact_lock: uma fila por chave; solta no fim da "transação"
+  const filasXact = new Map();
+  async function travaXact(chave, fn) {
+    const antes = filasXact.get(chave) || Promise.resolve();
+    let soltar;
+    const minha = antes.then(() => new Promise(r => { soltar = r; }));
+    filasXact.set(chave, minha);
+    await antes;
+    try { return await fn(); }
+    finally { soltar(); if (filasXact.get(chave) === minha) filasXact.delete(chave); }
+  }
+  const pausa = () => new Promise(r => setImmediate(r));   // a transação leva tempo: sem trava, dois webhooks se cruzariam aqui
+
+  const RPCS = {
+    nx_trava_pegar: { args: ["p_nome", "p_segundos", "p_dono"], fn({ p_nome, p_segundos, p_dono }) {
+      if (!String(p_nome ?? "").trim()) throw new Error("trava_sem_nome");
+      const agora = agoraMs();
+      t.nx_travas = tab("nx_travas").filter(r => Date.parse(r.ate) >= agora - 86400e3);   // faxina
+      const ate = new Date(agora + Math.max(1, Math.min(p_segundos ?? 60, 2592000)) * 1000).toISOString();
+      const ex = tab("nx_travas").find(r => r.nome === p_nome);
+      if (!ex) { tab("nx_travas").push({ nome: p_nome, ate, dono: p_dono ?? null }); return true; }
+      if (Date.parse(ex.ate) < agora) { Object.assign(ex, { ate, dono: p_dono ?? null }); return true; }
+      return false;
+    } },
+    nx_trava_soltar: { args: ["p_nome", "p_dono"], fn({ p_nome, p_dono }) {
+      const antes = tab("nx_travas").length;
+      t.nx_travas = tab("nx_travas").filter(r => !(r.nome === p_nome && (r.dono ?? null) === (p_dono ?? null)));
+      return t.nx_travas.length < antes;
+    } },
+    nx_lead_webhook: { args: ["p_cliente", "p_telefone", "p_variantes", "p_nome", "p_atr", "p_hoje"], opcionais: ["p_dias"],
+      async fn({ p_cliente, p_telefone, p_variantes, p_nome, p_atr, p_hoje, p_dias = 30 }) {
+        const tel = String(p_telefone ?? "").replace(/\D/g, "");
+        if (!p_cliente || !p_hoje) throw new Error("parametros_invalidos");
+        if (!tel) throw new Error("telefone_invalido");
+        const vars = [...new Set([...(p_variantes || []), tel].filter(Boolean))];
+        const atr = p_atr || {}, anuncio = atr.anuncio_ext || null, plat = atr.plataforma || null;
+        const d = new Date(`${p_hoje}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - (p_dias ?? 30));
+        const desde = d.toISOString().slice(0, 10);
+        return travaXact(`${p_cliente}:${[...vars].sort()[0]}`, async () => {
+          const lead = tab("nx_leads")
+            .filter(l => l.cliente_id === p_cliente && vars.includes(l.telefone) && String(l.data_conversa) >= desde)
+            .sort((a, b) => (String(b.data_conversa).localeCompare(String(a.data_conversa))) || (b.id - a.id))[0];
+          await pausa();
+          if (lead) {
+            if (!anuncio || lead.anuncio_ext) return "existente";
+            Object.assign(lead, {
+              anuncio_ext: anuncio, ctwa_clid: atr.ctwa_clid || null,
+              campanha_ext: atr.campanha_ext || lead.campanha_ext,
+              plataforma: plat || lead.plataforma,
+              origem: plat ? (atr.origem || lead.origem) : lead.origem,
+              atualizado_em: relogio().toISOString(),
+            });
+            return "atribuido";
+          }
+          tab("nx_leads").push({
+            id: ++seq, cliente_id: p_cliente, telefone: tel, nome: String(p_nome ?? "").trim() || null,
+            origem: atr.origem || "whatsapp", plataforma: plat, campanha_ext: atr.campanha_ext || null, anuncio_ext: anuncio,
+            ctwa_clid: atr.ctwa_clid || null, servico: null, etapa: "nova", data_conversa: p_hoje, data_agenda: null, data_consulta: null,
+            valor: null, obs: null, criado_em: relogio().toISOString(), atualizado_em: relogio().toISOString(),
+          });
+          return "criado";
+        });
+      } },
+    nx_wa_anotar: { args: ["p_tabela", "p_ids"], opcionais: ["p_entregue_em", "p_wa_id_template", "p_erro"],
+      fn({ p_tabela, p_ids, p_entregue_em = null, p_wa_id_template = null, p_erro = null }) {
+        const col = { nx_alertas: "erro_envio", nx_relatorios: "erro" }[p_tabela];
+        if (!col) throw new Error("tabela_invalida");
+        const tpl = String(p_wa_id_template ?? "").trim() || null, nota = String(p_erro ?? "").trim() || null;
+        const linhas = tab(p_tabela).filter(r => (p_ids || []).map(Number).includes(Number(r.id)));
+        for (const r of linhas) {
+          r.entregue_em = r.entregue_em ?? p_entregue_em;
+          if (tpl && !r.wa_ids_template.includes(tpl)) r.wa_ids_template = [...r.wa_ids_template, tpl];
+          if (nota && !String(r[col] ?? "").includes(nota)) r[col] = [r[col], nota].filter(Boolean).join(" · ").slice(0, 1000);
+        }
+        return linhas.length;
+      } },
+  };
+
+  async function rpc(nome, req) {
+    const def = RPCS[nome];
+    const corpo = req.method === "POST" ? JSON.parse((await req.text()) || "{}") : null;
+    const chaves = corpo ? Object.keys(corpo) : [];
+    // PostgREST acha a função pelos NOMES dos parâmetros: faltando ou sobrando, é 404
+    if (!def || def.args.some(a => !chaves.includes(a)) || chaves.some(k => !def.args.includes(k) && !(def.opcionais || []).includes(k))) {
+      return erro(404, `Could not find the function public.${nome}(${chaves.join(", ")}) in the schema cache`, "PGRST202");
+    }
+    try { return ok(await def.fn(structuredClone(corpo))); }
+    catch (e) { return erro(400, e.message, "P0001"); }
+  }
+
   async function responder(req) {
+    // ida e volta ao banco é rede (macrotarefa): sem isso, duas requisições "paralelas" nunca se cruzam aqui
+    await new Promise(r => setImmediate(r));
     if (!req.headers.get("apikey")) return erro(401, "sem apikey");
     if (req.headers.get("authorization") !== `Bearer ${ENV.chave}`) return erro(401, "sem Authorization");
     const u = new URL(req.url), sp = u.searchParams;
     const nome = u.pathname.replace(/^\/rest\/v1\//, "");
+    if (nome.startsWith("rpc/")) return rpc(nome.slice(4), req);
     if (!COLUNAS[nome]) return erro(404, `relation ${nome} does not exist`);
     const ruins = colunasFiltro(nome, sp);
     if (ruins.length) return erro(400, `column ${nome}.${ruins[0]} does not exist`);
@@ -140,16 +285,18 @@ function criarBanco(inicial, relogio) {
       for (const obj of lista) {
         const ruim = validar(nome, obj);
         if (ruim) return erro(400, ruim);
-        for (const c of NAO_NULOS[nome] || []) if (obj[c] == null) return erro(400, `null value in column "${c}" of ${nome}`);
+        const ex = chaves ? tab(nome).find(r => chaves.every(c => String(r[c]) === String(obj[c]))) : null;
+        // NOT NULL: coluna enviada vale; ausente fica com o valor da linha (upsert) ou o default (insert)
+        const base = ex && merge ? ex : (PADROES[nome] || {});
+        for (const c of NAO_NULOS[nome] || []) if ((c in obj ? obj[c] : base[c]) == null) return erro(400, `null value in column "${c}" of ${nome}`);
         if (chaves) {
           const k = chaves.map(c => String(obj[c])).join("|");
           if (merge && vistos.has(k)) return erro(500, "ON CONFLICT DO UPDATE command cannot affect row a second time");
           vistos.add(k);
-          const ex = tab(nome).find(r => chaves.every(c => String(r[c]) === String(obj[c])));
           if (ex && merge) { Object.assign(ex, obj); out.push(ex); continue; }
           if (ex) return erro(409, `duplicate key value violates unique constraint on ${nome}`);
         }
-        const novo = { ...obj };
+        const novo = { ...structuredClone(PADROES[nome] || {}), ...obj };
         if (COLUNAS[nome].has("id") && novo.id == null) novo.id = ++seq;
         if (COLUNAS[nome].has("criado_em") && novo.criado_em == null) novo.criado_em = relogio().toISOString();
         for (const c of COLUNAS[nome]) if (!(c in novo)) novo[c] = null;
@@ -163,6 +310,7 @@ function criarBanco(inicial, relogio) {
       const dados = JSON.parse(await req.text());
       const ruim = validar(nome, dados);
       if (ruim) return erro(400, ruim);
+      for (const c of NAO_NULOS[nome] || []) if (c in dados && dados[c] == null) return erro(400, `null value in column "${c}" of ${nome}`);
       const rows = filtrar(nome, sp);
       for (const r of rows) Object.assign(r, dados);
       return prefer.includes("return=representation")
@@ -247,17 +395,20 @@ async function fakeGoogle(req, u, estado) {
 
 async function fakeWhatsApp(req, u, estado) {
   const corpo = JSON.parse(await req.text());
-  estado.wa.push({ phoneId: u.pathname.split("/")[2], ...corpo });
+  const n = ++estado.nWa;   // contador próprio: wamid não se repete mesmo que o teste zere estado.wa
+  const msg = { phoneId: u.pathname.split("/")[2], ...corpo };
+  estado.wa.push(msg);
   if (estado.quebrados.has(corpo.to)) return jsonResp({ error: { message: "(#100) Invalid parameter", code: 100 } }, 400);
   if (corpo.type === "text" && estado.janelaFechada.has(corpo.to)) {
     return jsonResp({ error: { message: "(#131047) Re-engagement message", code: 131047,
       error_data: { details: "Message failed to send because more than 24 hours have passed since the customer last replied to this number." } } }, 400);
   }
-  return jsonResp({ messaging_product: "whatsapp", contacts: [{ input: corpo.to, wa_id: corpo.to }], messages: [{ id: `wamid.${estado.wa.length}` }] });
+  msg.id = `wamid.${n}`;
+  return jsonResp({ messaging_product: "whatsapp", contacts: [{ input: corpo.to, wa_id: corpo.to }], messages: [{ id: msg.id }] });
 }
 
 function cenario({ config = {}, tabelas = {} } = {}) {
-  const estado = { agora: new Date(AGORA), log: [], meta: [], google: [], wa: [], janelaFechada: new Set(), quebrados: new Set() };
+  const estado = { agora: new Date(AGORA), log: [], meta: [], google: [], wa: [], nWa: 0, janelaFechada: new Set(), quebrados: new Set() };
   const banco = criarBanco({
     nx_config: [{ id: 1, cron_token: "cron-secreto", codigo_gestor: "x", funcoes_url: `${FN}`, painel_url: "https://jpfamelli.github.io/nexus-ads/",
                   wa_access_token: "wa-token", wa_phone_number_id: "900900", wa_template: "nexus_aviso", wa_verify_token: "verifica-123",
@@ -275,7 +426,7 @@ function cenario({ config = {}, tabelas = {} } = {}) {
       { id: 3, cliente_id: CLI_B, canal: "meta", ativo: true, cred: { meta_access_token: "EAAtokenB", meta_ad_account_id: "555" }, ultimo_sync: null, status: null },
       { id: 4, cliente_id: CLI_C, canal: "meta", ativo: true, cred: { meta_access_token: "EAAtokenC", meta_ad_account_id: "777" }, ultimo_sync: null, status: null },
     ],
-    nx_metricas_dia: [], nx_leads: [], nx_alertas: [], nx_relatorios: [], nx_execucoes: [],
+    nx_metricas_dia: [], nx_leads: [], nx_alertas: [], nx_relatorios: [], nx_execucoes: [], nx_travas: [],
     ...tabelas,
   }, () => estado.agora);
 
@@ -745,10 +896,12 @@ test("WhatsApp: erro de janela de 24h cai no template; destino quebrado não imp
   s.estado.quebrados.add("5512933334444");
   const r = await enviarParaTodos(cfg, ["12911112222", "12933334444", GESTOR_B, "5512911112222"], "texto longo\ncom quebra", { fetch: s.fetch, titulo: "Radar Kamiguchi:\n2 alertas" });
   assert.equal(r.length, 3, "destino repetido (com e sem 55) sai uma vez só");
-  assert.deepEqual(r[0], { destino: "5512911112222", ok: true, via: "template" });
+  // id = wamid devolvido pela API (o webhook confirma a entrega por ele)
+  assert.deepEqual(r[0], { destino: "5512911112222", ok: true, via: "template", id: "wamid.2" });
   assert.equal(r[1].ok, false);
   assert.match(r[1].erro, /código 100/);
-  assert.deepEqual(r[2], { destino: GESTOR_B, ok: true, via: "texto" });
+  assert.deepEqual(r[2], { destino: GESTOR_B, ok: true, via: "texto", id: "wamid.4" });
+  assert.deepEqual(idsDoEnvio(r), { wa_ids: ["wamid.4"], wa_ids_template: ["wamid.2"] });
 
   const tpl = s.estado.wa.find(m => m.type === "template");
   assert.equal(tpl.to, "5512911112222");
@@ -769,6 +922,534 @@ test("WhatsApp: erro de janela de 24h cai no template; destino quebrado não imp
   s.estado.wa.length = 0;
   await enviarParaTodos(cfg, [GESTOR_B], "x".repeat(5000), { fetch: s.fetch });
   assert.equal(s.estado.wa[0].text.body.length, 4096);
+});
+
+/* ------------------------------------------------------------
+   Melhorias de 27/09 (supabase/migrations/20260927_melhorias.sql)
+   A) entrega do WhatsApp · B) lead duplicado · C) execução sobreposta · D) integração quebrada
+   ------------------------------------------------------------ */
+const NEXUS = "900900";   // nx_config.wa_phone_number_id do cenário
+const seg = d => String(Math.floor(d.getTime() / 1000));
+const recibo = (id, status, quando = AGORA, extra = {}) => ({ id, status, timestamp: seg(quando), recipient_id: GESTOR_B, ...extra });
+const recibos = (statuses, pid = NEXUS) => postWebhook(mensagem({ pid, statuses }));
+const ERRO_JANELA = {
+  code: 131047, title: "Re-engagement message", message: "Re-engagement message",
+  error_data: { details: "Message failed to send because more than 24 hours have passed since the customer last replied to this number." },
+};
+const NAO_RECEBE = { code: 131026, title: "Message undeliverable", message: "Message undeliverable" };
+const TPL_JANELA = "fora da janela de 24h — reenviado como template";
+
+test("A entrega: nx-ciclo e nx-relatorio gravam o wamid de cada envio (texto → wa_ids, template → wa_ids_template)", async () => {
+  const s = cenario();
+  s.banco.tab("nx_clientes").find(c => c.id === CLI_B).cfg.waGestor = [GESTOR_B, "12911112222"];
+  s.estado.janelaFechada.add("5512911112222");   // este cai no template já no envio (erro síncrono)
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps());
+  const texto = s.estado.wa.find(m => m.type === "text" && m.id);
+  const tpl = s.estado.wa.find(m => m.type === "template");
+  assert.equal(texto.to, GESTOR_B);
+  assert.equal(tpl.to, "5512911112222");
+  const al = s.banco.tab("nx_alertas");
+  assert.equal(al.length, 2);
+  for (const a of al) {
+    assert.deepEqual(a.wa_ids, [texto.id]);
+    assert.deepEqual(a.wa_ids_template, [tpl.id]);
+    assert.equal(a.entregue_em, null, "entregue só quando o webhook confirmar");
+    assert.equal(a.enviado_em, AGORA.toISOString());
+  }
+
+  s.estado.wa.length = 0;
+  await relatorio(pedirCron("nx-relatorio", { tipo: "diario", cliente: CLI_B }), ENV, s.deps());
+  const rel = () => s.banco.tab("nx_relatorios")[0];
+  const t1 = s.estado.wa.find(m => m.type === "text" && m.id), p1 = s.estado.wa.find(m => m.type === "template");
+  assert.deepEqual(rel().wa_ids, [t1.id]);
+  assert.deepEqual(rel().wa_ids_template, [p1.id]);
+  assert.equal(rel().entregue_em, null);
+
+  // reenvio forçado: troca os wamids e zera a entrega até o webhook confirmar a nova
+  rel().entregue_em = "2026-09-27T11:00:03.000Z";
+  s.estado.wa.length = 0;
+  s.estado.agora = new Date(AGORA.getTime() + HORA);
+  await relatorio(pedirCron("nx-relatorio", { tipo: "diario", cliente: CLI_B, forcar: true }), ENV, s.deps());
+  const t2 = s.estado.wa.find(m => m.type === "text" && m.id);
+  assert.notEqual(t2.id, t1.id);
+  assert.deepEqual(rel().wa_ids, [t2.id]);
+  assert.equal(rel().entregue_em, null);
+
+  // envio que falha em todos os destinos não apaga os wamids nem o horário do envio anterior
+  s.estado.quebrados.add(GESTOR_B);
+  s.estado.quebrados.add("5512911112222");
+  s.estado.agora = new Date(AGORA.getTime() + 2 * HORA);
+  await relatorio(pedirCron("nx-relatorio", { tipo: "diario", cliente: CLI_B, forcar: true }), ENV, s.deps());
+  assert.deepEqual(rel().wa_ids, [t2.id]);
+  assert.equal(rel().enviado_em, new Date(AGORA.getTime() + HORA).toISOString());
+  assert.match(rel().erro, /código 100/);
+});
+
+test("A entrega: delivered/read do número da Nexus grava entregue_em uma vez; recibo de clínica e 'sent' são ignorados", async () => {
+  const s = cenario();
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps());
+  await relatorio(pedirCron("nx-relatorio", { tipo: "diario", cliente: CLI_B }), ENV, s.deps());
+  assert.equal(s.estado.wa.length, 2);
+  const [idAlerta, idRel] = s.estado.wa.map(m => m.id);
+  const t = new Date(AGORA.getTime() + 5e3);
+  const al = () => s.banco.tab("nx_alertas"), rel = () => s.banco.tab("nx_relatorios")[0];
+
+  // o mesmo wamid num recibo do número da CLÍNICA: continua ignorado
+  let r = await lerJson(await webhook(recibos([recibo(idAlerta, "delivered", t)], "222"), ENV, s.deps()));
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.recibos, undefined);
+  r = await lerJson(await webhook(recibos([recibo(idAlerta, "sent", t)]), ENV, s.deps()));
+  assert.deepEqual(r.corpo.recibos, { ignorado: 1 }, "'sent' não é entrega");
+  assert.ok(al().every(a => a.entregue_em === null));
+
+  r = await lerJson(await webhook(recibos([recibo(idAlerta, "delivered", t), recibo(idRel, "read", t)]), ENV, s.deps()));
+  assert.deepEqual(r.corpo.recibos, { entregue: 2 });
+  assert.ok(al().every(a => a.entregue_em === t.toISOString()), "todos os alertas daquele texto");
+  assert.equal(rel().entregue_em, t.toISOString(), "read sem delivered antes também vale");
+
+  // o 'read' que chega depois não muda a hora da entrega
+  await webhook(recibos([recibo(idAlerta, "read", new Date(t.getTime() + 60e3))]), ENV, s.deps());
+  assert.ok(al().every(a => a.entregue_em === t.toISOString()));
+  assert.equal(s.estado.wa.length, 2, "recibo de entrega nunca manda mensagem");
+});
+
+test("A entrega: failed 131047 → reenvia como template UMA vez; recibo repetido (até ao mesmo tempo) e falha do template não reenviam", async () => {
+  const s = cenario();
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps());
+  const idTexto = s.estado.wa[0].id;
+  s.estado.wa.length = 0;
+  const falha = () => recibos([recibo(idTexto, "failed", AGORA, { errors: [ERRO_JANELA] })]);
+
+  // a Meta às vezes entrega o mesmo recibo duas vezes — aqui, ao mesmo tempo
+  const [r1, r2] = await Promise.all([webhook(falha(), ENV, s.deps()), webhook(falha(), ENV, s.deps())]);
+  assert.deepEqual([r1.status, r2.status], [200, 200]);
+  const res = [await r1.json(), await r2.json()].map(c => Object.keys(c.recibos).join()).sort();
+  assert.deepEqual(res, ["reenviado", "repetido"]);
+  assert.equal(s.estado.wa.length, 1, "um template só");
+  const tpl = s.estado.wa[0];
+  assert.equal(tpl.type, "template");
+  assert.equal(tpl.to, GESTOR_B);
+  assert.equal(tpl.phoneId, NEXUS, "sai pelo número da Nexus");
+  assert.deepEqual(tpl.template.components[0].parameters.map(p => p.text),
+    ["Radar Kamiguchi: 2 alertas novos", "https://jpfamelli.github.io/nexus-ads/"], "o mesmo título do envio original");
+  for (const a of s.banco.tab("nx_alertas")) {
+    assert.deepEqual(a.wa_ids_template, [tpl.id]);
+    assert.equal(a.erro_envio, TPL_JANELA);
+    assert.equal(a.entregue_em, null);
+  }
+
+  // o mesmo recibo de novo, bem depois: nada
+  const r3 = await lerJson(await webhook(falha(), ENV, s.deps()));
+  assert.deepEqual(r3.corpo.recibos, { repetido: 1 });
+  assert.equal(s.estado.wa.length, 1);
+
+  // o TEMPLATE também falha (até por janela): nunca é reenviado — é isso que impede laço
+  const r4 = await lerJson(await webhook(recibos([recibo(tpl.id, "failed", AGORA, { errors: [ERRO_JANELA] })]), ENV, s.deps()));
+  assert.deepEqual(r4.corpo.recibos, { falha: 1 });
+  assert.equal(s.estado.wa.length, 1);
+  assert.ok(s.banco.tab("nx_alertas").every(a => a.erro_envio ===
+    `${TPL_JANELA} · WhatsApp não entregou (código 131047): Re-engagement message — nem o modelo foi aceito`));
+  assert.ok(s.banco.tab("nx_alertas").every(a => a.wa_ids_template.length === 1));
+});
+
+test("A entrega: relatório reenviado com o mesmo título; template entregue grava entregue_em; outros códigos e falta de template só viram erro legível", async () => {
+  const s = cenario();
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps());
+  s.estado.wa.length = 0;
+  await relatorio(pedirCron("nx-relatorio", { tipo: "diario", cliente: CLI_B }), ENV, s.deps());
+  const idTexto = s.estado.wa[0].id;
+  const rel = () => s.banco.tab("nx_relatorios")[0];
+
+  await webhook(recibos([recibo(idTexto, "failed", AGORA, { errors: [ERRO_JANELA] })]), ENV, s.deps());
+  assert.equal(s.estado.wa.length, 2);
+  const tpl = s.estado.wa[1];
+  assert.equal(tpl.template.components[0].parameters[0].text, "Relatório diário Kamiguchi 26/09");
+  assert.deepEqual(rel().wa_ids_template, [tpl.id]);
+  assert.equal(rel().erro, TPL_JANELA);
+  assert.equal(rel().enviado_em, AGORA.toISOString(), "o envio original continua registrado");
+
+  const t = new Date(AGORA.getTime() + 9e3);
+  await webhook(recibos([recibo(tpl.id, "delivered", t)]), ENV, s.deps());
+  assert.equal(rel().entregue_em, t.toISOString(), "a entrega do template também conta");
+
+  // outro código no texto (número sem WhatsApp): não reenvia, só explica
+  const s2 = cenario();
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s2.deps());
+  await webhook(recibos([recibo(s2.estado.wa[0].id, "failed", AGORA, { errors: [NAO_RECEBE] })]), ENV, s2.deps());
+  assert.equal(s2.estado.wa.length, 1);
+  assert.ok(s2.banco.tab("nx_alertas").every(a => a.erro_envio ===
+    "WhatsApp não entregou (código 131026): Message undeliverable — o número não pôde receber (sem WhatsApp, bloqueou a Nexus ou aplicativo muito antigo)"));
+
+  // janela fechada sem template configurado: registra o motivo e não tenta nada
+  const s3 = cenario({ config: { wa_template: null } });
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s3.deps());
+  const r = await lerJson(await webhook(recibos([recibo(s3.estado.wa[0].id, "failed", AGORA, { errors: [ERRO_JANELA] })]), ENV, s3.deps()));
+  assert.deepEqual(r.corpo.recibos, { falha: 1 });
+  assert.equal(s3.estado.wa.length, 1);
+  assert.ok(s3.banco.tab("nx_alertas").every(a => a.erro_envio ===
+    "WhatsApp não entregou (código 131047): Re-engagement message — fora da janela de 24h e sem modelo (wa_template) configurado"));
+
+  assert.equal(textoFalha({}), "WhatsApp não entregou (código ?): falhou");
+  assert.equal(textoFalha({ code: 131049, title: "This message was not delivered to maintain healthy ecosystem engagement." }),
+    "WhatsApp não entregou (código 131049): This message was not delivered to maintain healthy ecosystem engagement. — a Meta segurou a mensagem para não cansar quem recebe");
+});
+
+test("A entrega: recibo que chega antes do wamid ser gravado espera e confere de novo; item com erro não derruba o lote; sem assinatura 401", async () => {
+  const s = cenario();
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps());
+  const id = s.estado.wa[0].id;
+  const al = s.banco.tab("nx_alertas");
+  const guardados = al.map(a => a.wa_ids);
+  for (const a of al) a.wa_ids = [];   // o nx-ciclo ainda não chegou a gravar
+  const esperas = [];
+  const esperar = async ms => { esperas.push(ms); al.forEach((a, i) => { a.wa_ids = guardados[i]; }); };
+  const t = new Date(AGORA.getTime() + 2e3);
+  let r = await lerJson(await webhook(recibos([recibo(id, "delivered", t)]), ENV, s.deps({ esperar })));
+  assert.deepEqual(esperas, [4000]);
+  assert.deepEqual(r.corpo.recibos, { entregue: 1 });
+  assert.ok(al.every(a => a.entregue_em === t.toISOString()));
+
+  // recibo antigo de um envio que o sistema não conhece: não espera à toa
+  esperas.length = 0;
+  r = await lerJson(await webhook(recibos([recibo("wamid.desconhecido", "delivered", new Date(AGORA.getTime() - 2 * HORA))]), ENV, s.deps({ esperar })));
+  assert.deepEqual(esperas, []);
+  assert.deepEqual(r.corpo.recibos, { sem_registro: 1 });
+
+  // um recibo que quebra (banco falhando só para ele) não impede os outros do lote
+  const s2 = cenario();
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s2.deps());
+  const fetch = (url, init) => (String(url).includes("quebra") ? Promise.reject(new TypeError("fetch failed")) : s2.fetch(url, init));
+  r = await lerJson(await webhook(recibos([recibo("wamid.quebra", "delivered", t), recibo(s2.estado.wa[0].id, "delivered", t)]), ENV,
+    { fetch, agora: () => s2.estado.agora, esperar: async () => {} }));
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.erros, 1);
+  assert.match(r.corpo.erro, /fetch failed/);
+  assert.deepEqual(r.corpo.recibos, { entregue: 1 });
+  assert.ok(s2.banco.tab("nx_alertas").every(a => a.entregue_em === t.toISOString()));
+
+  // assinatura continua obrigatória para recibos
+  const s3 = cenario();
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s3.deps());
+  const semAss = await webhook(postWebhook(mensagem({ pid: NEXUS, statuses: [recibo(s3.estado.wa[0].id, "failed", AGORA, { errors: [ERRO_JANELA] })] }), null), ENV, s3.deps());
+  assert.equal(semAss.status, 401);
+  assert.equal(s3.estado.wa.length, 1);
+  assert.ok(s3.banco.tab("nx_alertas").every(a => a.erro_envio === null && a.wa_ids_template.length === 0));
+});
+
+test("B lead: webhooks paralelos para o mesmo número novo viram UM lead (também com e sem o nono dígito)", async () => {
+  const s = cenario();
+  const par = await Promise.all([1, 2].map(() => webhook(postWebhook(mensagem({ from: "5512988887777", referral: REFERRAL })), ENV, s.deps())));
+  const cont = await Promise.all(par.map(r => r.json()));
+  assert.deepEqual(cont.map(c => c.criado).sort(), [0, 1]);
+  assert.deepEqual(cont.map(c => c.existente).sort(), [0, 1]);
+  const leads = s.banco.tab("nx_leads").filter(l => l.telefone === "5512988887777");
+  assert.equal(leads.length, 1);
+  assert.equal(leads[0].anuncio_ext, "A1");
+  assert.equal(leads[0].origem, "anuncio");
+
+  // o mesmo celular chegando com e sem o 9, ao mesmo tempo (a trava é pela forma canônica do número)
+  await Promise.all([
+    webhook(postWebhook(mensagem({ from: "5512966665555", nome: "Rita" })), ENV, s.deps()),
+    webhook(postWebhook(mensagem({ from: "551266665555", nome: "Rita" })), ENV, s.deps()),
+  ]);
+  assert.equal(s.banco.tab("nx_leads").filter(l => variantesTelefone("5512966665555").includes(l.telefone)).length, 1);
+
+  // cinco webhooks paralelos de um terceiro número: continua um lead só
+  await Promise.all([1, 2, 3, 4, 5].map(() => webhook(postWebhook(mensagem({ from: "5512944443333" })), ENV, s.deps())));
+  assert.equal(s.banco.tab("nx_leads").filter(l => l.telefone === "5512944443333").length, 1);
+});
+
+test("B lead: uma mensagem com erro não derruba as outras do lote (200, erro contado)", async () => {
+  const s = cenario();
+  const fetch = (url, init) => (String(url).includes("/rpc/nx_lead_webhook") && String(init?.body).includes("5512900000099")
+    ? Promise.resolve(jsonResp({ code: "40P01", message: "deadlock detected" }, 500))
+    : s.fetch(url, init));
+  const payload = mensagem({ from: "5512900000099", nome: "Quebra" });
+  const v = payload.entry[0].changes[0].value;
+  v.contacts.push({ profile: { name: "Outra" }, wa_id: "5512988887777" });
+  v.messages.push({ from: "5512988887777", id: "wamid.m2", timestamp: "1790506800", type: "text", text: { body: "oi" } });
+  const r = await lerJson(await webhook(postWebhook(payload), ENV, { fetch, agora: () => s.estado.agora }));
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.criado, 1);
+  assert.equal(r.corpo.erros, 1);
+  assert.match(r.corpo.erro, /deadlock detected/);
+  assert.deepEqual(s.banco.tab("nx_leads").map(l => [l.telefone, l.nome]), [["5512988887777", "Outra"]]);
+});
+
+test("C trava: nx-ciclo com o cliente travado responde pulado sem processar nem registrar; trava vencida é retomada e solta no fim", async () => {
+  const ocupada = { nome: `nx-ciclo:${CLI_B}`, ate: new Date(AGORA.getTime() + 60e3).toISOString(), dono: "outra-execucao" };
+  const s = cenario({ tabelas: { nx_travas: [ocupada] } });
+  const r = await lerJson(await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps()));
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.corpo, { ok: true, pulado: "já em execução" });
+  assert.equal(s.estado.meta.length + s.estado.google.length + s.estado.wa.length, 0, "nada processado");
+  assert.equal(s.banco.tab("nx_execucoes").length, 0, "nem registrado");
+  assert.equal(s.banco.tab("nx_alertas").length, 0);
+  assert.deepEqual(s.banco.tab("nx_travas"), [ocupada], "a trava da outra execução continua lá");
+
+  // a outra execução foi cortada sem soltar: a trava vence sozinha
+  s.estado.agora = new Date(AGORA.getTime() + 61e3);
+  const r2 = await lerJson(await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps()));
+  assert.equal(r2.corpo.pulado, undefined);
+  assert.equal(r2.corpo.clientes[0].pulado, undefined);
+  assert.equal(s.banco.tab("nx_execucoes").length, 1);
+  assert.deepEqual(s.banco.tab("nx_travas"), [], "solta no fim");
+});
+
+test("C trava: botão de UMA clínica rodando não faz o cron pular as outras (ciclo e relatório do dia)", async () => {
+  // o gestor clicou "Atualizar agora" da Kamiguchi e a execução dele ainda está no ar quando o cron das :07 dispara
+  const botao = { nome: `nx-ciclo:${CLI_B}`, ate: new Date(AGORA.getTime() + 60e3).toISOString(), dono: "botao" };
+  const s = cenario({ tabelas: { nx_travas: [botao] } });
+  const { corpo } = await lerJson(await ciclo(pedirCron("nx-ciclo"), ENV, s.deps()));
+  assert.equal(corpo.pulado, undefined, "o cron roda");
+  const porCliente = Object.fromEntries(corpo.clientes.map(c => [c.cliente, c]));
+  assert.equal(porCliente.kamiguchi.pulado, "já em execução", "só a clínica que o botão está processando fica de fora");
+  assert.equal(porCliente.kamiguchi.ok, true);
+  assert.ok(porCliente["clinica-a"].sync, "a outra clínica é sincronizada");
+  assert.ok(s.estado.google.length > 0);
+  assert.ok(!s.estado.meta.some(u => u.includes("act_555")), "a Kamiguchi não é buscada em dobro");
+  const [ex] = s.banco.tab("nx_execucoes");
+  assert.deepEqual(ex.resumo.clientes.map(c => [c.cliente, c.pulado ?? null]).sort(), [["clinica-a", null], ["kamiguchi", "já em execução"]]);
+  assert.deepEqual(s.banco.tab("nx_travas"), [botao], "a trava do botão não é mexida");
+
+  // relatório do dia: o cron roda UMA vez por dia; o botão de uma clínica às 8h não pode tirar o relatório das outras
+  const s2 = cenario();
+  await ciclo(pedirCron("nx-ciclo"), ENV, s2.deps());   // métricas das duas clínicas
+  s2.estado.wa.length = 0;
+  s2.banco.tab("nx_travas").push({ nome: `nx-relatorio:diario:${CLI_B}`, ate: new Date(AGORA.getTime() + 60e3).toISOString(), dono: "botao" });
+  const r = await lerJson(await relatorio(pedirCron("nx-relatorio", { tipo: "diario" }), ENV, s2.deps()));
+  assert.equal(r.corpo.pulado, undefined);
+  assert.deepEqual(s2.banco.tab("nx_relatorios").map(x => x.cliente_id), [CLI_A], "a Clínica Alfa recebe o relatório do dia");
+  assert.deepEqual(s2.estado.wa.map(m => m.to), ["5512911112222"]);
+  assert.equal(r.corpo.clientes.find(c => c.cliente === "kamiguchi").pulado, "já em execução");
+});
+
+test("C trava: cron e botão ao mesmo tempo → cada clínica é processada uma vez só (alerta sai uma vez só)", async () => {
+  const s = cenario();
+  const par = await Promise.all([ciclo(pedirCron("nx-ciclo"), ENV, s.deps()), ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps())]);
+  const corpos = await Promise.all(par.map(r => r.json()));
+  // quem processou alguém registra; quem só pulou não registra nada
+  assert.equal(s.banco.tab("nx_execucoes").length, corpos.filter(c => !c.pulado).length);
+  assert.ok(s.banco.tab("nx_execucoes").every(e => e.resumo.clientes.some(c => !c.pulado)), "nenhuma execução só de pulados");
+  const kami = corpos.flatMap(c => c.clientes || []).filter(c => c.cliente === "kamiguchi");
+  assert.equal(kami.filter(c => !c.pulado).length, 1, "a Kamiguchi foi processada uma vez");
+  assert.equal(s.estado.meta.filter(u => u.includes("act_555") && u.includes("level=campaign")).length, 1);
+  assert.equal(s.banco.tab("nx_alertas").filter(a => a.cliente_id === CLI_B).length, 2, "2 alertas, não 4");
+  assert.equal(s.estado.wa.filter(m => m.to === GESTOR_B).length, 1, "um WhatsApp, não dois");
+  assert.deepEqual(s.banco.tab("nx_travas"), []);
+});
+
+test("C trava: nx-relatorio trava por tipo e cliente; erro no meio solta a trava do mesmo jeito", async () => {
+  const s = cenario({ tabelas: { nx_travas: [{ nome: `nx-relatorio:diario:${CLI_B}`, ate: new Date(AGORA.getTime() + 60e3).toISOString(), dono: "x" }] } });
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps());
+  s.estado.wa.length = 0;
+  const execAntes = s.banco.tab("nx_execucoes").length;
+  const r = await lerJson(await relatorio(pedirCron("nx-relatorio", { tipo: "diario", cliente: CLI_B, forcar: true }), ENV, s.deps()));
+  assert.deepEqual(r.corpo, { ok: true, tipo: "diario", pulado: "já em execução" });
+  assert.equal(s.estado.wa.length, 0);
+  assert.equal(s.banco.tab("nx_relatorios").length, 0);
+  assert.equal(s.banco.tab("nx_execucoes").length, execAntes);
+
+  // o mensal tem trava própria
+  const m = await lerJson(await relatorio(pedirCron("nx-relatorio", { tipo: "mensal", cliente: CLI_B }), ENV, s.deps()));
+  assert.equal(m.corpo.pulado, undefined);
+  assert.equal(s.banco.tab("nx_execucoes").length, execAntes + 1);
+  assert.deepEqual(s.banco.tab("nx_travas").map(t => t.nome), [`nx-relatorio:diario:${CLI_B}`]);
+
+  // banco sem a função da trava (deploy antes da migração): erro do cliente registrado, sem processar
+  const s3 = cenario();
+  const semTrava = (url, init) => (String(url).includes("/rpc/nx_trava_pegar")
+    ? Promise.resolve(jsonResp({ code: "PGRST202", message: "Could not find the function public.nx_trava_pegar" }, 404))
+    : s3.fetch(url, init));
+  const q = await lerJson(await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, { fetch: semTrava, agora: () => s3.estado.agora }));
+  assert.equal(q.corpo.ok, false);
+  assert.match(q.corpo.clientes[0].erro, /nx_trava_pegar/);
+  assert.equal(s3.estado.meta.length, 0, "sem trava não processa (evita alerta em dobro)");
+  assert.equal(s3.banco.tab("nx_execucoes")[0].ok, false, "e o erro aparece nas execuções do painel");
+
+  // exceção dentro da execução: a trava é solta (finally)
+  const db = criarDb(ENV, s.fetch);
+  await assert.rejects(comTrava(db, "teste", 170, async () => { throw new Error("quebrou no meio"); }), /quebrou no meio/);
+  assert.ok(!s.banco.tab("nx_travas").some(t => t.nome === "teste"));
+  assert.deepEqual(await comTrava(db, "teste", 170, async () => 42), { pulado: false, valor: 42 }, "e pode ser pega de novo");
+});
+
+test("D integração: token vencido → 1 alerta 'integracao' e 1 WhatsApp em 24 rodadas (não 24); volta a avisar só depois de 24h", async () => {
+  const s = cenario();   // cliente A: Meta com token inválido (código 190); Google ok
+  const integ = () => s.banco.tab("nx_alertas").filter(a => a.regra === "integracao");
+  const avisos = () => s.estado.wa.filter(m => m.text?.body.includes("A conexão com o Meta"));
+  for (let h = 0; h < 24; h++) {
+    s.estado.agora = new Date(AGORA.getTime() + h * HORA);
+    await ciclo(pedirCron("nx-ciclo", { cliente: CLI_A }), ENV, s.deps());
+  }
+  assert.equal(integ().length, 1);
+  const [al] = integ();
+  assert.equal(al.chave, "integracao|meta");
+  assert.equal(al.severidade, "critico");
+  assert.equal(al.mensagem, "A conexão com o Meta da Clínica Alfa parou: o token de acesso venceu ou foi desativado. Abra Ajustes → Integrações.");
+  assert.match(al.acao, /token novo/);
+  assert.equal(al.valor, null);
+  assert.equal(al.enviado_em, AGORA.toISOString());
+  assert.equal(avisos().length, 1);
+  assert.equal(avisos()[0].to, "5512911112222");
+  assert.match(avisos()[0].text.body, /Clínica Alfa · Radar de tráfego\* — 1 item crítico/);
+  assert.deepEqual(al.wa_ids, [avisos()[0].id], "o aviso de integração também é acompanhado pelo webhook");
+  assert.match(s.banco.tab("nx_integracoes").find(i => i.id === 2).status, /^ok/, "o Google do mesmo cliente segue");
+
+  s.estado.agora = new Date(AGORA.getTime() + 25 * HORA);
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_A }), ENV, s.deps());
+  assert.equal(integ().length, 2, "passadas 24h, lembra de novo");
+  assert.equal(avisos().length, 2);
+
+  // voltou a funcionar: nada é enviado sobre a integração
+  s.banco.tab("nx_integracoes").find(i => i.id === 1).cred.meta_ad_account_id = "555";
+  s.estado.agora = new Date(AGORA.getTime() + 50 * HORA);
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_A }), ENV, s.deps());
+  assert.equal(integ().length, 2);
+  assert.equal(avisos().length, 2);
+});
+
+test("D integração: instabilidade só avisa depois de 3 h sem atualizar; radar quebrado não engole o aviso", async () => {
+  const s = cenario();
+  s.banco.tab("nx_integracoes").find(i => i.id === 3).ultimo_sync = new Date(AGORA.getTime() - HORA).toISOString();
+  const fetch = (url, init = {}) => (new URL(url).pathname.includes("act_555")
+    ? new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(init.signal.reason)))
+    : s.fetch(url, init));
+  const deps = { fetch, agora: () => s.estado.agora, prazoRede: 30 };
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, deps);
+  assert.equal(s.banco.tab("nx_alertas").length, 0, "1 h sem atualizar pode ser só instabilidade");
+  assert.equal(s.estado.wa.length, 0);
+
+  s.estado.agora = new Date(AGORA.getTime() + 2 * HORA);   // 3 h desde o último sync bom
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, deps);
+  const al = s.banco.tab("nx_alertas").filter(a => a.regra === "integracao");
+  assert.equal(al.length, 1);
+  assert.equal(al[0].mensagem, "A conexão com o Meta da Kamiguchi parou: o Meta não está respondendo (sem atualizar há mais de 3 h). Abra Ajustes → Integrações.");
+  assert.match(al[0].acao, /^Nada a fazer agora/);
+  assert.equal(s.estado.wa.length, 1);
+  assert.equal(s.estado.wa[0].to, GESTOR_B);
+
+  // radar quebrado (leitura de leads falhando) ainda manda o aviso de integração
+  const s2 = cenario();
+  const fetch2 = (url, init) => (new URL(url).pathname === "/rest/v1/nx_leads" ? Promise.resolve(jsonResp({ message: "canceling statement due to statement timeout" }, 500)) : s2.fetch(url, init));
+  const { corpo } = await lerJson(await ciclo(pedirCron("nx-ciclo", { cliente: CLI_A }), ENV, { fetch: fetch2, agora: () => s2.estado.agora }));
+  assert.equal(corpo.clientes[0].ok, false);
+  assert.match(corpo.clientes[0].erro_radar, /statement timeout/);
+  assert.deepEqual(s2.banco.tab("nx_alertas").map(a => a.chave), ["integracao|meta"]);
+  assert.equal(s2.estado.wa.length, 1);
+  assert.match(s2.estado.wa[0].text.body, /Clínica Alfa · Radar de tráfego\* — 1 item crítico/);
+  assert.match(s2.estado.wa[0].text.body, /A conexão com o Meta da Clínica Alfa parou/);
+});
+
+test("D integração: erro técnico vira explicação curta para leigo (sem token no texto)", () => {
+  const e = (canal, msg) => explicarErroIntegracao(canal, msg);
+  assert.equal(e("meta", "Meta API 400: Error validating access token: Session has expired on Friday, 25-Sep-26 (código 190)").curto,
+    "o token de acesso venceu ou foi desativado");
+  assert.equal(e("meta", "Meta API 403: (#200) Ad account owner has NOT grant ads_management or ads_read permission (código 200)").curto,
+    "o token não tem permissão para ler esta conta de anúncios");
+  assert.deepEqual(e("meta", "Meta API 400: (#17) User request limit reached (código 17)").passageiro, true);
+  assert.deepEqual(e("meta", "error sending request for url (https://graph.facebook.com/v23.0/act_1/insights)"),
+    { curto: "o Meta não está respondendo", acao: "Nada a fazer agora: o sistema tenta de novo a cada hora e avisa se continuar.", passageiro: true });
+  assert.equal(e("google", "Google Ads 403: The developer token is only approved for use with test accounts. To access non-test accounts, apply for Basic or Standard access.").curto,
+    "o developer token do Google ainda não foi aprovado para contas reais");
+  assert.equal(e("google", "OAuth Google 400: Token has been expired or revoked.").curto, "a autorização do Google venceu ou foi revogada");
+  assert.equal(e("google", "Google Ads 403: User doesn't have permission to access customer. Note: If you're accessing a client customer, the manager's customer id must be set in the 'login-customer-id' header.").curto,
+    "o usuário do Google não tem acesso a esta conta");
+  assert.equal(e("google", "Google Ads 400: Invalid customer ID '1234567890'.").curto, "a conta do Google Ads não foi encontrada");
+  assert.equal(e("google", "Google Ads: nenhuma versão da API respondeu (v23: 404, v22: 404)").curto, "o Google desligou a versão da API em uso");
+  const cru = e("meta", "Meta API 400: algo inesperado em https://graph.facebook.com/x?access_token=EAAsegredo123 (código 999)");
+  assert.equal(cru.passageiro, false);
+  assert.ok(!cru.curto.includes("EAAsegredo123"), "token nunca vai para o alerta");
+  assert.match(cru.acao, /Ajustes → Integrações/);
+});
+
+test("D integração: token SOLTO no erro do Meta ('Malformed access token EAA…') não vai para status, alerta nem execuções", async () => {
+  const TOKEN = "EAAGm0PX4ZCpsBAKZCZBZAqR7tLw9xY2zVb8nM3kJ5hG6fD1sA";
+  const s = cenario();
+  s.banco.tab("nx_integracoes").find(i => i.id === 3).cred.meta_access_token = TOKEN;
+  const fetch = (url, init) => (new URL(url).pathname.includes("act_555")
+    ? Promise.resolve(jsonResp({ error: { message: `Malformed access token ${TOKEN}`, type: "OAuthException", code: 190 } }, 400))
+    : s.fetch(url, init));
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, { fetch, agora: () => s.estado.agora });
+  const tudo = JSON.stringify({ integ: s.banco.tab("nx_integracoes"), alertas: s.banco.tab("nx_alertas"), exec: s.banco.tab("nx_execucoes"), wa: s.estado.wa });
+  const semCred = tudo.replace(JSON.stringify(s.banco.tab("nx_integracoes").find(i => i.id === 3).cred), "");
+  assert.ok(!semCred.includes(TOKEN.slice(3, 20)), "o token só existe dentro de cred");
+  assert.match(s.banco.tab("nx_integracoes").find(i => i.id === 3).status, /^erro — Meta API 400: Malformed access token EAA\*\*\* \(código 190\)$/);
+  assert.equal(s.banco.tab("nx_alertas").find(a => a.regra === "integracao").mensagem,
+    "A conexão com o Meta da Kamiguchi parou: o token de acesso venceu ou foi desativado. Abra Ajustes → Integrações.");
+
+  // o mesmo para os outros formatos de credencial que um erro pode ecoar
+  const vazados = [
+    "OAuth Google 400: refresh_token=1//0gAbCdEfGhIjKlMnOpQrStUvWxYz invalid",
+    "token 1//0gAbCdEfGhIjKlMnOpQrStUvWxYz revogado",
+    "token ya29.a0AfB_byC1d2E3f4G5h6 expirou",
+    "Google Ads 400: client_secret: GOCSPX-abc123def456 errado",
+    "Authorization eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.c2VncmVkbw falhou",
+    "chave sb_secret_AbCdEf123456 recusada",
+  ];
+  for (const v of vazados) {
+    const limpo = limparErro(v);
+    for (const seg of ["0gAbCdEfGhIjKl", "a0AfB_byC1d2", "GOCSPX-abc123", "eyJyb2xlIjoic2VydmljZV9yb2xlIn0", "AbCdEf123456"]) {
+      assert.ok(!limpo.includes(seg), `${v} → ${limpo}`);
+    }
+  }
+  assert.equal(limparErro("Meta API 400: (#100) Invalid parameter (código 100)"), "Meta API 400: (#100) Invalid parameter (código 100)", "texto comum fica igual");
+
+  // o token do WhatsApp da NEXUS colado errado: a Meta devolve ele inteiro, e nx_relatorios.erro a clínica enxerga
+  const TOKEN_WA = "EAAQx7NexusSystemUserToken0123456789abcdefXYZ";
+  const s2 = cenario({ config: { wa_access_token: TOKEN_WA } });
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s2.deps());
+  s2.banco.tab("nx_alertas").length = 0;
+  const waQuebrado = (url, init) => (new URL(url).pathname.endsWith("/messages")
+    ? Promise.resolve(jsonResp({ error: { message: `Malformed access token ${TOKEN_WA}`, type: "OAuthException", code: 190 } }, 401))
+    : s2.fetch(url, init));
+  s2.estado.agora = new Date(AGORA.getTime() + 25 * HORA);
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, { fetch: waQuebrado, agora: () => s2.estado.agora });
+  await relatorio(pedirCron("nx-relatorio", { tipo: "diario", cliente: CLI_B }), ENV, { fetch: waQuebrado, agora: () => s2.estado.agora });
+  assert.match(s2.banco.tab("nx_relatorios")[0].erro, /^WhatsApp 401: Malformed access token EAA\*\*\* \(código 190\)$/, "o motivo continua legível");
+  assert.ok(s2.banco.tab("nx_alertas").length > 0 && s2.banco.tab("nx_alertas").every(a => /EAA\*\*\*/.test(a.erro_envio)));
+  const gravado = JSON.stringify({ a: s2.banco.tab("nx_alertas"), r: s2.banco.tab("nx_relatorios"), e: s2.banco.tab("nx_execucoes") });
+  assert.ok(!gravado.includes(TOKEN_WA.slice(3, 25)), "sem o token da Nexus");
+});
+
+test("migração 20260927: idempotente, RLS e funções novas só para a service_role; banco falso com as mesmas colunas", () => {
+  const sql = readFileSync(join(RAIZ, "supabase/migrations/20260927_melhorias.sql"), "utf8");
+  const s = sql.replace(/--.*$/gm, "");
+  // pode rodar duas vezes sem erro e sem apagar nada
+  assert.ok(!/create\s+table\s+(?!if not exists)/i.test(s), "create table sem if not exists");
+  assert.ok(!/create\s+(unique\s+)?index\s+(?!if not exists)/i.test(s), "create index sem if not exists");
+  assert.ok(!/add\s+column\s+(?!if not exists)/i.test(s), "add column sem if not exists");
+  assert.ok(!/create\s+function/i.test(s), "função sem or replace");
+  assert.ok(!/\b(drop|truncate)\b/i.test(s), "nada é apagado");
+
+  const funcoes = [...s.matchAll(/create or replace function public\.(\w+)\(([\s\S]*?)\)\s*returns[\s\S]*?\$(\w*)\$([\s\S]*?)\$\3\$/gi)]
+    .map(m => ({ nome: m[1], args: m[2], cab: m[0].slice(0, m[0].indexOf("$")) }));
+  assert.deepEqual(funcoes.map(f => f.nome).sort(), ["nx_dados", "nx_lead_webhook", "nx_trava_pegar", "nx_trava_soltar", "nx_wa_anotar"]);
+  for (const f of funcoes.filter(x => x.nome !== "nx_dados")) {
+    const tipos = f.args.split(",").map(a => a.trim().split(/\s+/)[1]).join(", ");
+    assert.ok(s.includes(`revoke all on function public.${f.nome}(${tipos}) from public, anon, authenticated;`), `${f.nome}: falta o revoke`);
+    assert.ok(s.includes(`grant execute on function public.${f.nome}(${tipos}) to service_role;`), `${f.nome}: falta o grant à service_role`);
+    assert.match(f.cab, /security definer/, `${f.nome}: security definer`);
+    assert.match(f.cab, /set search_path = ''/, `${f.nome}: search_path fixo`);
+  }
+  assert.match(s, /alter table public\.nx_travas enable row level security;/);
+  assert.match(s, /revoke all on table public\.nx_travas from public, anon, authenticated;/);
+  assert.match(s, /pg_advisory_xact_lock\(hashtextextended\(p_cliente::text \|\| ':' \|\|/);
+  assert.match(s, /on conflict \(nome\) do update[\s\S]*?where t\.ate < now\(\)/);
+  for (const t of ["nx_alertas", "nx_relatorios"]) for (const c of ["wa_ids", "wa_ids_template"]) {
+    assert.match(s, new RegExp(`create index if not exists \\w+ on public\\.${t} using gin \\(${c}\\)`), `${t}.${c} sem índice GIN`);
+  }
+
+  // o PostgREST falso não pode ficar atrás da migração
+  for (const m of s.matchAll(/alter table public\.(\w+)([^;]*);/g)) {
+    for (const c of m[2].matchAll(/add column if not exists (\w+)/g)) assert.ok(COLUNAS[m[1]].has(c[1]), `banco falso sem ${m[1]}.${c[1]}`);
+  }
+  const travas = s.match(/create table if not exists public\.nx_travas \(([\s\S]*?)\);/)[1];
+  assert.deepEqual(travas.split(",").map(l => l.trim().split(/\s+/)[0]), [...COLUNAS.nx_travas]);
+
+  // nx_dados: só ganhou entregue_em (o resto é a definição que está no banco)
+  assert.match(s, /select regra, chave, severidade, mensagem, acao, referencia, criado_em, enviado_em, entregue_em\s+from public\.nx_alertas/);
+  assert.match(s, /select tipo, referencia, texto, leitura_ia, enviado_em, erro, entregue_em\s+from public\.nx_relatorios/);
 });
 
 /* ------------------------------------------------------------

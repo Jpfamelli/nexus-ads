@@ -29,6 +29,9 @@ Painel (GitHub Pages) ──(RPCs com token de sessão)──► tudo acima, por
 
 Todas as tabelas: RLS ligado, **sem política**, sem privilégio para anon/authenticated.
 O painel só fala por RPC; as Edge Functions usam `service_role` (bypass de RLS).
+As colunas/tabela em **negrito** e as RPCs internas de §2 vêm de
+`supabase/migrations/20260927_melhorias.sql` (idempotente; aplicar de uma vez, ANTES do
+deploy das funções).
 
 | tabela | colunas principais |
 |---|---|
@@ -37,10 +40,20 @@ O painel só fala por RPC; as Edge Functions usam `service_role` (bypass de RLS)
 | `nx_integracoes` | id, cliente_id, canal ('meta'\|'google'), ativo, cred jsonb, ultimo_sync, status · unique(cliente_id, canal) |
 | `nx_metricas_dia` | PK (cliente_id, plataforma, nivel, data, campanha_ext, anuncio_ext) · nivel 'campanha'\|'anuncio' · anuncio_ext = '' no nível campanha · campanha_nome, anuncio_nome, impressoes, alcance, frequencia, cliques, gasto numeric(12,2), conversoes numeric, valor_conversao, atualizado_em |
 | `nx_leads` | id bigint, cliente_id, telefone (só dígitos), nome, origem ('anuncio'\|'whatsapp'\|'indicacao'\|'organico'\|'manual'\|'site'), plataforma ('meta'\|'google'\|null), campanha_ext, anuncio_ext, ctwa_clid, servico, etapa, data_conversa, data_agenda, data_consulta, valor, obs, criado_em, atualizado_em |
-| `nx_alertas` | id, cliente_id, chave, regra, severidade ('critico'\|'alerta'\|'info'), mensagem, acao, valor, referencia date, criado_em, enviado_em, erro_envio |
-| `nx_relatorios` | id, cliente_id, tipo ('diario'\|'mensal'), referencia date, texto, leitura_ia, destinos text[], enviado_em, erro · unique(cliente_id, tipo, referencia) |
+| `nx_alertas` | id, cliente_id, chave, regra, severidade ('critico'\|'alerta'\|'info'), mensagem, acao, valor, referencia date, criado_em, enviado_em, erro_envio, **wa_ids** text[], **wa_ids_template** text[], **entregue_em** |
+| `nx_relatorios` | id, cliente_id, tipo ('diario'\|'mensal'), referencia date, texto, leitura_ia, destinos text[], enviado_em, erro, **wa_ids** text[], **wa_ids_template** text[], **entregue_em** · unique(cliente_id, tipo, referencia) |
 | `nx_execucoes` | id, tarefa, inicio, fim, ok, resumo jsonb |
+| `nx_travas` | nome text PK, ate timestamptz, dono text — trava com prazo, sempre POR CLIENTE (`nx-ciclo:<cliente_id>`, `nx-relatorio:<tipo>:<cliente_id>`) ou por recibo (`wa-reenvio:<wamid>`) |
 | `nx_contas` / `nx_sessoes` / `nx_acessos` | login próprio (bcrypt), sessão = hash sha256 do token, 30 dias |
+
+**Entrega do WhatsApp** (migração `supabase/migrations/20260927_melhorias.sql`):
+`wa_ids` = wamid de cada TEXTO que a Cloud API aceitou (um por destino); `wa_ids_template` =
+wamid de cada envio por TEMPLATE (fallback síncrono ou reenvio do webhook) — **template nunca
+é reenviado**; `entregue_em` = primeiro recibo `delivered`/`read` de qualquer um desses
+wamids (nulo = ainda sem confirmação). Índices GIN em `wa_ids` e `wa_ids_template`
+(o webhook acha o envio com `or=(wa_ids.cs.{"<wamid>"},wa_ids_template.cs.{"<wamid>"})`).
+Recibo `failed` acrescenta o motivo em `erro_envio` (alerta) / `erro` (relatório), separado
+por " · ", sem apagar `enviado_em` (enviado = a API aceitou; entregue = chegou no celular).
 
 **Etapas do paciente** (`nx_leads.etapa`): `nova` → `agendada` → `orcamento` (veio, avaliou, orçamento em aberto) → `fechou` | `nao_fechou`; ou `faltou`; ou `perdida`.
 
@@ -79,7 +92,17 @@ Códigos: `sessao_invalida`, `conta_pendente`, `credenciais_invalidas`, `codigo_
 | `nx_conta_definir` (gestor) | p_token, p_conta, p_aprovado, p_papel, p_clientes uuid[] | lista atualizada |
 | `nx_config_ver` (gestor) | p_token | {webhook_url, wa_verify_token, painel_url, modelo_ia, wa_template, wa_phone_number_id, google_api_versao, tem_wa_token, tem_app_secret, tem_ia, ultimas_execucoes[]} |
 | `nx_config_salvar` (gestor) | p_token, p_cfg jsonb (wa_access_token, wa_phone_number_id, wa_template, meta_app_secret, anthropic_api_key, modelo_ia, painel_url, google_api_versao) | igual a nx_config_ver. Segredo vazio = mantém |
-| `nx_executar` (gestor) | p_token, p_tarefa ('nx-ciclo'\|'nx-relatorio'), p_corpo jsonb (ex.: {"cliente":"<uuid>"} ou {"tipo":"diario","cliente":"…","forcar":true}) | {ok, pedido} — dispara a função agora (assíncrono) |
+| `nx_executar` (gestor) | p_token, p_tarefa ('nx-ciclo'\|'nx-relatorio'), p_corpo jsonb (ex.: {"cliente":"<uuid>"} ou {"tipo":"diario","cliente":"…","forcar":true}) | {ok, pedido} — dispara a função agora (assíncrono). Se o cron já estiver processando ESTE cliente na mesma função, o pedido é ignorado só para ele (ver `nx_travas`) |
+
+**RPCs internas — só `service_role`** (revogadas de public/anon/authenticated; `security definer`,
+`search_path = ''`). O painel NÃO as chama.
+
+| RPC | parâmetros | retorno |
+|---|---|---|
+| `nx_lead_webhook` | p_cliente uuid, p_telefone text, p_variantes text[], p_nome text, p_atr jsonb {origem, plataforma, anuncio_ext, campanha_ext, ctwa_clid} \| null, p_hoje date, p_dias int = 30 | `'existente'` \| `'atribuido'` \| `'criado'`. Procura → decide → grava numa transação, com `pg_advisory_xact_lock(hashtextextended(p_cliente \|\| ':' \|\| <menor variante do número>, 0))`: webhooks paralelos da mesma pessoa (com ou sem 55/9) viram UM lead. Mesma regra de §5 nx-whatsapp |
+| `nx_trava_pegar` | p_nome, p_segundos, p_dono | boolean — `insert … on conflict (nome) do update … where ate < now()`: true só para quem pegou (livre ou vencida). Faz faxina das vencidas há mais de 1 dia |
+| `nx_trava_soltar` | p_nome, p_dono | boolean — apaga só se o dono bate (quem perdeu a trava por prazo não solta a do outro) |
+| `nx_wa_anotar` | p_tabela ('nx_alertas'\|'nx_relatorios'), p_ids bigint[], p_entregue_em?, p_wa_id_template?, p_erro? | nº de linhas. Anotação atômica do webhook: `entregue_em` só se nulo; template acrescentado sem repetir; erro acrescentado com " · " sem repetir (máx. 1000) |
 
 ## 3. Formato de `nx_dados` (e das linhas que as funções montam)
 
@@ -90,10 +113,16 @@ Códigos: `sessao_invalida`, `conta_pendente`, `credenciais_invalidas`, `codigo_
                 "a":"<anuncio_ext>","an":"<nome>","imp":0,"alc":0,"freq":0,"cli":0,"g":0,"conv":0}],
   "leads": [ linhas de nx_leads (id, nome, telefone, origem, plataforma, campanha_ext, anuncio_ext,
              servico, etapa, data_conversa, data_agenda, data_consulta, valor, obs) ],
-  "alertas": [{regra, chave, severidade, mensagem, acao, referencia, criado_em, enviado_em}],
-  "relatorios": [{tipo, referencia, texto, leitura_ia, enviado_em, erro}],
+  "alertas": [{regra, chave, severidade, mensagem, acao, referencia, criado_em, enviado_em, entregue_em}],
+  "relatorios": [{tipo, referencia, texto, leitura_ia, enviado_em, erro, entregue_em}],
   "integracoes": [{canal, ativo, ultimo_sync, status}] }
 ```
+- `entregue_em` (desde 20260927): nulo = sem confirmação de entrega ainda (ou o webhook do
+  número da Nexus não está assinado). `enviado_em` preenchido + `entregue_em` nulo + `erro`
+  começando com "WhatsApp não entregou" = a API aceitou, mas não chegou.
+- `alertas[].regra` pode ser um id que o núcleo NÃO conhece: `'integracao'` (conexão com
+  Meta/Google parada — gerado só no servidor, ver §5 nx-ciclo). O painel deve tratar id
+  desconhecido sem quebrar.
 As Edge Functions, ao ler o banco com service_role, **devem montar exatamente esse
 formato de `metricas`/`leads`** e chamar `datasetDeLinhas(...)` do núcleo.
 
@@ -122,6 +151,8 @@ const M = montar(ds);
 - Regras do radar: r1 custo por conversa (> cpaAlvo×1,35, 14 dias, campanha), r2 sem conversa
   (3 dias, gasto ≥ 22, crítico), r3 CTR < 0,9% (3 dias, criativo Meta), r4 frequência > 3
   (7 dias, criativo Meta) + ritmo do orçamento. `cfg.regrasOff` desliga por id.
+  O servidor acrescenta a regra `integracao` (conexão parada), que não existe no núcleo nem
+  em `cfg.regrasOff`: só aparece em `nx_alertas` / `nx_dados.alertas`.
 
 ## 5. Edge Functions (Deno) — todas com `verify_jwt: false` e autenticação própria
 
@@ -130,8 +161,19 @@ seus arquivos (entrypoint `index.ts` + `nucleo.js` + módulos compartilhados cop
 Variáveis já injetadas pelo Supabase: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
 Acesso ao banco: PostgREST com `apikey` + `Authorization: Bearer <service_role>`.
 
+**Ordem de publicação:** a migração `20260927_melhorias.sql` vai ANTES do deploy das funções
+(as funções novas chamam `nx_trava_pegar`, `nx_lead_webhook` e `nx_wa_anotar`; as funções
+antigas continuam funcionando com a migração aplicada).
+
 ### nx-ciclo — POST, header `x-nx-cron` = `nx_config.cron_token` (senão 401)
-Corpo opcional `{ "cliente": "<uuid>" }` (só esse cliente). Para cada cliente ativo:
+Corpo opcional `{ "cliente": "<uuid>" }` (só esse cliente). Um cliente por vez: trava
+`nx-ciclo:<cliente_id>` (170 s) em `nx_travas`, pega antes de processar cada cliente e solta
+num `finally` (vence sozinha se a função for cortada). Cliente que outra execução já está
+processando entra no resumo como `{ cliente, ok: true, pulado: "já em execução" }` e os outros
+seguem — o botão de uma clínica NUNCA faz o cron pular as demais. Se TODOS os clientes pedidos
+estavam travados → `{ ok: true, pulado: "já em execução" }` sem registrar em `nx_execucoes`.
+Falha ao pegar a trava (ex.: função da migração ausente) = erro daquele cliente, sem processar.
+Para cada cliente ativo:
 1. **Sync**: para cada `nx_integracoes` ativa, janela dos últimos 7 dias (a atribuição do Meta
    muda dias passados), níveis `campanha` e `anuncio`, upsert em `nx_metricas_dia`
    (`on_conflict=cliente_id,plataforma,nivel,data,campanha_ext,anuncio_ext`,
@@ -146,10 +188,25 @@ Corpo opcional `{ "cliente": "<uuid>" }` (só esse cliente). Para cada cliente a
 2. **Radar**: ler 45 dias de métricas + leads do cliente → `montar(datasetDeLinhas(...))` →
    `M.avaliar(M.R, true)`. Para cada alerta: se NÃO existe `nx_alertas` com a mesma `chave`
    criado nas últimas 24h → inserir (referencia = ontem). Os NOVOS vão num único texto
-   `M.textoAlerta(novos)` para `cfg.waGestor`; marcar `enviado_em`/`erro_envio`.
+   `M.textoAlerta(novos)` para `cfg.waGestor`; marcar `enviado_em`/`erro_envio` e os wamids
+   (`wa_ids`/`wa_ids_template`) numa escrita só, depois de todos os envios.
+   - **Regra `integracao`** (aviso de conexão quebrada): cada integração cujo sync falhou vira
+     um candidato `{regra: 'integracao', chave: 'integracao|<canal>', severidade: 'critico',
+     valor: null, mensagem: "A conexão com o <Meta|Google> da <nome curto> parou: <erro curto>.
+     Abra Ajustes → Integrações.", acao: <o que fazer>}` e segue o MESMO caminho do radar
+     (deduplicação de 24h por chave, mesmo texto, mesmo WhatsApp). O erro técnico é traduzido
+     por `explicarErroIntegracao(canal, erro)` (token vencido, sem permissão, developer token
+     não aprovado, conta não encontrada…; nunca leva token). Erro passageiro (rede, 5xx, limite
+     de consultas) só avisa se `ultimo_sync` tiver mais de 3 h (ou nunca sincronizou), com
+     "(sem atualizar há mais de 3 h)". Voltou a funcionar → nada é enviado. Se o radar em si
+     falhar, o aviso de integração sai assim mesmo.
 3. Registrar `nx_execucoes` (tarefa 'nx-ciclo', ok, resumo por cliente) e responder JSON.
 
 ### nx-relatorio — POST, mesmo header; corpo `{ tipo: "diario"|"mensal", cliente?, forcar? }`
+- Trava por tipo E cliente (`nx-relatorio:diario:<cliente_id>` / `nx-relatorio:mensal:<cliente_id>`,
+  170 s), mesma regra do nx-ciclo: cliente travado → `pulado: "já em execução"` no resumo e os
+  outros seguem (o relatório do dia roda uma vez só: um clique às 8h não tira o das outras
+  clínicas); todos travados → `{ ok: true, tipo, pulado: "já em execução" }` sem registrar.
 - Diário: referência = ontem (`M.R`). Se já existe `nx_relatorios(cliente,'diario',ref)` com
   `enviado_em` e não `forcar` → pular. Texto = `M.relDiario(M.R, leituraIA)`. Destinos: `cfg.waGestor`.
 - Mensal: último mês COMPLETO de `M.mesesDados()`; referência = 1º dia desse mês. Texto =
@@ -166,25 +223,45 @@ Corpo opcional `{ "cliente": "<uuid>" }` (só esse cliente). Para cada cliente a
   Checar `stop_reason === "refusal"` antes de ler o texto; juntar os blocos `type === "text"`.
   Erro (Anthropic.APIError / rede) → leitura por regras + registrar em `nx_relatorios.erro`.
   **Nunca** deixar a IA impedir o relatório.
-- Gravar/atualizar `nx_relatorios` (upsert em cliente,tipo,referencia) e enviar.
+- Enviar e gravar/atualizar `nx_relatorios` (upsert em cliente,tipo,referencia). Envio com
+  ao menos um destino certo → grava `enviado_em`, os wamids novos e `entregue_em = null`
+  (o webhook confirma de novo). Envio que falhou em todos os destinos não apaga horário,
+  wamids nem entrega de um envio anterior que deu certo.
 
 ### nx-whatsapp — webhook da WhatsApp Cloud API
 - GET (verificação): se `hub.mode=subscribe` e `hub.verify_token === nx_config.wa_verify_token`
   → 200 com `hub.challenge` em texto; senão 403.
 - POST: validar `X-Hub-Signature-256` = `sha256=` + HMAC-SHA256(meta_app_secret, corpo CRU)
   com comparação em tempo constante; sem `meta_app_secret` configurado ou assinatura errada → 401.
-  Para cada `entry[].changes[].value` com `messages`: `metadata.phone_number_id` → cliente
-  (`nx_clientes.wa_phone_number_id`); nome em `contacts[].profile.name`; para cada mensagem
-  (`from` = telefone):
-  - se já existe lead do mesmo cliente+telefone com `data_conversa` nos últimos 30 dias:
-    se a mensagem tem `referral` e o lead não tem `anuncio_ext` → completar a atribuição; senão nada.
+  Um webhook, dois tipos de número (`value.metadata.phone_number_id`):
+- **Número da CLÍNICA** (`nx_clientes.wa_phone_number_id`), `value.messages` → leads.
+  Nome em `contacts[].profile.name`; para cada mensagem (`from` = telefone), tudo dentro da
+  RPC `nx_lead_webhook` (uma transação, trava por cliente + telefone):
+  - se já existe lead do mesmo cliente+telefone (variantes com/sem 55 e 9) com `data_conversa`
+    nos últimos 30 dias: se a mensagem tem `referral` e o lead não tem `anuncio_ext` →
+    completar a atribuição; senão nada.
   - senão criar lead: `origem` = 'anuncio' se `referral.source_type === "ad"`, senão 'whatsapp';
     `plataforma` = 'meta' se veio de anúncio; `anuncio_ext` = `referral.source_id`;
     `ctwa_clid` = `referral.ctwa_clid`; `campanha_ext` = buscar em `nx_metricas_dia` (nivel
-    anuncio, mesmo cliente, anuncio_ext = source_id) se houver; `data_conversa` = hoje (SP);
-    `etapa` = 'nova'.
-  - Ignorar `statuses` (recibos). Responder 200 rápido sempre que a assinatura for válida
-    (mesmo que o número não seja de nenhum cliente).
+    anuncio, mesmo cliente, anuncio_ext = source_id; feito no JS antes da RPC) se houver;
+    `data_conversa` = hoje (SP); `etapa` = 'nova'.
+  - `statuses` de número de clínica continuam ignorados.
+- **Número da NEXUS** (`nx_config.wa_phone_number_id`), `value.statuses` → recibos dos avisos.
+  Para cada recibo, acha o alerta/relatório pelo wamid (`wa_ids` OU `wa_ids_template`):
+  - `sent`: ignorado. `delivered`/`read` → `entregue_em` (só se nulo; hora do `timestamp`).
+  - `failed` → "WhatsApp não entregou (código X): <título>" (+ dica em português para os
+    códigos comuns) em `erro_envio`/`erro`.
+  - `failed` com código 131047 (ou "re-engagement") + `wa_template` configurado + o wamid que
+    falhou é de TEXTO (não está em `wa_ids_template`) → reenvia como template para o
+    `recipient_id`, com o MESMO título curto do envio original, acrescenta o wamid novo em
+    `wa_ids_template` e registra "fora da janela de 24h — reenviado como template". Uma vez
+    só: trava `wa-reenvio:<wamid>` (7 dias) barra o recibo repetido/simultâneo, e template
+    nunca é reenviado (sem laço).
+  - Recibo recente de wamid ainda não gravado (a Meta pode avisar antes de o nx-ciclo /
+    nx-relatorio gravar) → espera 4 s e confere de novo, uma vez.
+- Assinatura obrigatória em tudo. Assinatura válida → sempre 200 (mesmo com número
+  desconhecido ou erro); um item com erro não derruba os outros do lote (resposta traz
+  `erros` e o primeiro `erro`). O reenvio por template usa prazo de rede de 10 s.
 
 ### Envio de WhatsApp (módulo compartilhado)
 Cloud API com `nx_config.wa_access_token` + `wa_phone_number_id` (número da NEXUS, não da clínica):
@@ -193,7 +270,12 @@ Número: só dígitos, prefixar `55` se tiver ≤ 11 dígitos. Se falhar por jan
 (erro 131047 / "re-engagement") e `nx_config.wa_template` estiver definido → reenviar como
 template (`language: pt_BR`, parâmetros do corpo: [título curto, link do painel]).
 Sem WhatsApp configurado → não é erro fatal: registrar "whatsapp não configurado".
-Um destino quebrado não impede os outros.
+Um destino quebrado não impede os outros. `enviarParaTodos` devolve
+`[{destino, ok: true, via: 'texto'|'template', id: <wamid>} | {destino, ok: false, erro}]`;
+`idsDoEnvio(envio)` → `{wa_ids, wa_ids_template}` no formato do banco. `enviarTemplate(cfg,
+destino, titulo)` é o mesmo template usado pelo webhook no reenvio.
+A resposta 200 do envio NÃO garante entrega: fora da janela a Cloud API costuma aceitar e
+só depois mandar o recibo `failed` 131047 no webhook do número da Nexus (ver nx-whatsapp).
 
 ## 6. Painel — `web/` (HTML/CSS/JS puro, ESM, sem build)
 
@@ -225,9 +307,55 @@ Arquivos: `index.html`, `painel.css`, `painel.js` (UI), `dados.js` (cliente RPC)
   observação. Botão "+ Paciente" cria lead manual (indicação, orgânico…). Salvar →
   `nx_lead_salvar` → recarregar dados.
 - Radar (real): mostra `M.historico()` calculado no navegador + o registro de `alertas` do
-  servidor ("enviado no WhatsApp às HH:MM"). Regras: switch grava `cfg.regrasOff` (gestor).
+  servidor ("enviado no WhatsApp às HH:MM"; com `entregue_em`, "entregue às HH:MM").
+  Alerta com `regra` que o núcleo não conhece (`integracao`) aparece no registro com nome
+  próprio ("Conexão parada") e leva o gestor a Ajustes → Integrações.
+  Regras: switch grava `cfg.regrasOff` (gestor).
 - Relatórios (real): últimos relatórios do servidor (`relatorios` de nx_dados) + prévia
   calculada no navegador para o dia/mês escolhido.
 - Estado vazio honesto: cliente sem integração/sem dados → cartão explicando o próximo passo
   (gestor: "Conecte o Meta/Google em Ajustes"; clínica: "Os números aparecem aqui assim que
   os anúncios começarem a rodar").
+
+### 6.1 Plano-sequência noturno (visual v2)
+
+Três camadas, três leis. **Palco** (`web/cinema.js`): um fundo escuro único `#07090C` atrás
+de tudo, login incluído — bokeh quente em canvas a 0,34× (semente: painel 1, login 3, curta 5),
+2 vazamentos de luz, grão, vinheta e respiração de ±4 px. Só ele se move sem parar; pausa com a
+aba oculta, é estático no celular (≤ 700 px ou toque) e vira 1 quadro fixo com `?noanim` ou
+`prefers-reduced-motion`. **Objetos**: herói de vidro fumê (`--vidro`, único com
+`backdrop-filter`, junto de topbar/tabbar/gaveta), cartões de dados opacos (`--surface` a 94%),
+papel creme (`--papel #F3E9D8` / `--papel-txt #16212C`) nas fichas do kanban, telas de
+WhatsApp, cartão do login e tour; celulares de verdade (`.fone`, `--fw` = largura). **Câmera**
+(`web/efeitos.js`): uma lente só — tokens no `:root` do `painel.css` (`--e-out`, `--e-io`,
+`--e-gaveta`, `--mola`, `--mola-suave`, `--t-micro 120ms`, `--t-ui 220ms`, `--t-move 620ms`,
+`--t-dados 900ms`, `--escada 40ms`…); nenhuma curva nem duração solta fora do `:root`, nunca
+ease-in. Blocos `[data-cena]` entram em quadro uma vez (puxada de foco); depois os números
+rolam como odômetro do valor anterior (`data-k`) e as barras interpolam (FLIP).
+
+- **Fontes locais** em `web/fonts/` com nomes próprios na frente da pilha: `"Nx Clash"`
+  (200–700), `"Nx Satoshi"` (300–900), `"Nx Plex"` (500), `"Nx Zodiak"` (itálico, só na
+  narração da Leitura e nas legendas do curta). Preload de Clash e Satoshi. Os `<link>` da
+  Fontshare/Google continuam no HTML como **reserva** (`media="print" data-reserva`): não
+  bloqueiam nem baixam nada; o `painel.js` só os liga se as locais falharem. O conteúdo espera
+  as fontes (teto de 1,2 s) sobre o palco já aceso — nunca sai em Segoe.
+- Escala: Clash só a partir de 20 px (títulos, números grandes); h2 dos cartões em Satoshi 700
+  17 px; rótulos em Plex 11 px (nunca menos); botões Satoshi 600 14–15 px, só a inicial
+  maiúscula; rótulos da tabbar ≥ 10 px.
+- Status no escuro: ok `#7FD1A5`, ruim `#F08A74`, atenção `#E5B35C`, Meta `#6FA3CF`,
+  Google `#CF9540`. Número grande em `--fg` ou `--bronze-luz #E2B066` (≥ 7:1). Foco: anel
+  `#CF9540` de 2 px, offset 3 px. Tiques de WhatsApp nunca em azul (azul = "lido").
+- Monograma N×X (diagonal bronze compartilhada) como `<symbol id="nx-mono">` inline: menu,
+  topo do celular, avatar da Nexus nos celulares e favicon. Vinheta de abertura (≤ 1,2 s,
+  1× por sessão, `sessionStorage nx-vinheta`, pula com clique/tecla).
+- URL: `?aba=<geral|campanhas|pacientes|radar|relatorios|ajustes>` tem precedência sobre o
+  `#hash` (capturas headless); `?noanim` = quadro final estático e determinístico.
+- Degradação: `efeitos.js` e `cinema.js` entram por `import()` dinâmico com `catch`; sem eles
+  o painel funciona igual (sem `.cena-on`, nada fica escondido). Efeitos de mouse (luz do
+  cursor, cantos de autofoco, luz-chave, tilt só no herói ≤ 2° e nos celulares ≤ 6°, botões
+  magnéticos) só com `pointer:fine`. Números, tabelas, régua, kanban e formulários nunca se
+  movem com o mouse.
+- Linguagem de consultório onde o dentista lê ("Cada R$ 1 investido virou R$ 5,41", "de cada
+  100 que viram, 2 tocaram"); o gestor continua vendo CTR/ROAS. O retorno é o MESMO de sempre
+  (tratamentos ÷ (anúncios + gestão)), só reescrito. Nos objetos, só primeiro nome + inicial;
+  notificação de lead real diz "Chamou pelo anúncio «…»" (nunca texto de mensagem inventado).

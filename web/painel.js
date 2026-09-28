@@ -4,6 +4,33 @@
    Toda conta passa por M = montar(dataset). O dataset vem do banco
    (nx_dados → datasetDeLinhas) ou do gerador fictício (?demo →
    gerarDemo). O painel não sabe — nem precisa saber — de onde veio.
+
+   SISTEMA DE MOVIMENTO (plano-sequência noturno) — como usar
+   · ANIM: falso com ?noanim ou prefers-reduced-motion → tudo nasce no
+     quadro final, estático e determinístico. Sempre consulte ANIM.
+   · FX = ./efeitos.js (a câmera) e CINE = ./cinema.js (o palco), ambos por
+     import() dinâmico com catch: podem ser null e o painel segue de pé.
+   · Bloco que entra em quadro: <article class="card" data-cena>. Na 1ª vez
+     que aparece ganha .em-cena + .entrando; animação interna = ".entrando X"
+     no CSS (nunca ".em-cena X", senão repete a cada filtro).
+   · Número que rola: <b data-n="106" data-f="int" data-k="chave-unica">106</b>
+     (texto já final). numeros(raiz) roda o odômetro do valor anterior
+     (guardado por data-k) até o novo; ao entrar em cena, parte de 0.
+   · Gráfico: path com pathLength="1" → FX.caneta(path) ao entrar em cena.
+     Redesenho com mudança de altura: FX.fotografar antes + FX.flip depois.
+   · Tokens: painel.css :root (--e-out, --mola, --t-dados…); em JS, FX.MOV.
+   · Camadas: PALCO (cinema.js, só ele respira) · OBJETOS (cartões, papel,
+     celulares) · CÂMERA (efeitos.js). Tilt só no herói e nos celulares.
+
+   PACOTE DE RECURSOS (mesma lente, mesmas camadas)
+   · Módulos por import() com catch, carregados só quando pedidos:
+     curta.js (modo apresentação, tecla P), folha.js (A4 do mês),
+     paleta.js (Ctrl/⌘+K), arrastar.js (fichas do kanban), marca.js
+     (logo/cor em Ajustes). Sem eles, o painel de hoje segue de pé.
+   · Mesmo número em todo lugar: herói, régua, curta e folha saem de
+     numerosPeriodo() / M.* — nada de fórmula nova.
+   · Bloco PURO (entre as marcas "PURO") é testado no Node: statusEnvio,
+     contraste da marca, estado da integração, simulador, linguagem leiga.
    ============================================================ */
 import {
   datasetDeLinhas, montar, hojeSP, meioDia, isoDe, fin, brl, brl0, int, pc, dec, esc, waHtml, fmtN,
@@ -23,9 +50,46 @@ const DEMO = Q.has("demo");
 const NOANIM = Q.has("noanim");
 if (NOANIM) document.documentElement.classList.add("noanim");
 const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches || NOANIM;
+const ANIM = !REDUCE;          // a flag única do movimento
 const FINE = matchMedia("(pointer: fine)").matches;
 const DIAS_JANELA = 130;
 const NOME_DEMO = "Clínica Demonstração";
+// demo com a cara da clínica da reunião: ?clinica= (só texto, até 40 letras) e ?cor= (hex de 6 dígitos)
+const CLINICA_Q = DEMO ? String(Q.get("clinica") || "").replace(/[\u0000-\u001f]/g, "").replace(/\s+/g, " ").trim().slice(0, 40) : "";
+const COR_Q = DEMO && /^[0-9a-f]{6}$/i.test(Q.get("cor") || "") ? "#" + Q.get("cor").toUpperCase() : "";
+
+/* primeiro quadro já na fonte da marca: o palco acende, o conteúdo espera as fontes (teto 1,2 s) */
+document.documentElement.classList.add("fontes-espera");
+{
+  const pronto = () => { document.documentElement.classList.remove("fontes-espera"); document.documentElement.classList.add("fontes-ok"); };
+  const teto = new Promise(r => setTimeout(r, 1200));
+  const fontes = document.fonts && document.fonts.ready
+    ? Promise.all(["600 1em 'Nx Clash'", "500 1em 'Nx Satoshi'", "700 1em 'Nx Satoshi'", "500 1em 'Nx Plex'"].map(f => document.fonts.load(f).catch(() => null))).then(() => document.fonts.ready)
+    : Promise.resolve();
+  // reserva: se as fontes locais não carregarem, liga os <link> da Fontshare/Google (media=print até lá: nada é baixado à toa)
+  const reserva = () => {
+    try { if (document.fonts && !document.fonts.check("600 1em 'Nx Clash'") && !document.fonts.check("500 1em 'Nx Satoshi'")) document.querySelectorAll("link[data-reserva]").forEach(l => { l.media = "all"; }); } catch { /* sem FontFaceSet */ }
+  };
+  Promise.race([fontes, teto]).then(() => { pronto(); reserva(); }, pronto);
+}
+/* efeitos em módulos à parte: se não carregarem, o painel continua igual (só parado) */
+let FX = null, CINE = null;
+const FX_P = import("./efeitos.js?v=2").catch(() => null);
+const CINE_P = import("./cinema.js?v=3").then(m => { m.ligar({ anim: ANIM, semente: DEMO ? 1 : 3 }); return m; }).catch(() => null);
+CINE_P.then(m => { CINE = m; if (m && S.aba === "radar" && M) renderRadar(); });
+/* recursos em módulos (import() dinâmico com catch): só baixam quando alguém pede */
+const MODS = {};
+const MOD_SRC = {
+  curta: () => import("./curta.js?v=1"),
+  folha: () => import("./folha.js?v=1"),
+  paleta: () => import("./paleta.js?v=1"),
+  arrastar: () => import("./arrastar.js?v=1"),
+  marca: () => import("./marca.js?v=1"),
+};
+function modulo(nome) {
+  if (!MODS[nome]) MODS[nome] = MOD_SRC[nome]().catch(e => { console.warn(`[nexus] ${nome}.js não carregou`, e); delete MODS[nome]; return null; });
+  return MODS[nome];
+}
 
 const p2 = n => String(n).padStart(2, "0");
 const hash = s => { let h = 2166136261; for (const c of String(s)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; };
@@ -59,6 +123,100 @@ function quandoSP(iso) {
   return `${rot} às ${FMT_HORA.format(d)}`;
 }
 const dataIso = iso => { const [a, m, d] = String(iso || "").slice(0, 10).split("-"); return d ? `${d}/${m}/${a}` : "—"; };
+const ddmmHora = iso => { const d = quando(iso); return d ? `${FMT_DDMM.format(d)} ${FMT_HORA.format(d)}` : "—"; };
+
+/* ==== PURO: início — testes/painel.teste.mjs roda este trecho no Node (só usa horaSP/quandoSP) ==== */
+/** Status de um envio de WhatsApp (relatório ou aviso), honesto como o próprio WhatsApp:
+    ✓ = a API aceitou (enviado) · ✓✓ = chegou no celular (entregue) · "!" = não saiu.
+    Nunca azul: no WhatsApp azul é "lido", e o servidor não sabe disso. */
+function statusEnvio(x) {
+  if (!x) return null;
+  const erro = String(x.erro || x.erro_envio || "");
+  const naoChegou = /não entregou/i.test(erro);
+  if (x.entregue_em) return { k: "entregue", tique: "✓✓", rotulo: `entregue às ${horaSP(x.entregue_em)}`, hora: horaSP(x.entregue_em), quando: quandoSP(x.entregue_em) };
+  if (x.enviado_em && !naoChegou) return { k: "enviado", tique: "✓", rotulo: `enviado às ${horaSP(x.enviado_em)} · entrega ainda não confirmada`, hora: horaSP(x.enviado_em), quando: quandoSP(x.enviado_em) };
+  if (erro) return { k: "erro", tique: "!", rotulo: naoChegou ? "não entregue" : "não enviado", hora: x.enviado_em ? horaSP(x.enviado_em) : null, erro: erro.slice(0, 160) };
+  return { k: "pendente", tique: "◷", rotulo: "gerado, ainda não enviado", hora: null };
+}
+
+/* marca da clínica: contraste pela luminância relativa (WCAG) */
+const hexValido = s => /^#[0-9a-f]{6}$/i.test(String(s || ""));
+function luminancia(hex) {
+  const n = parseInt(String(hex).slice(1), 16);
+  return [n >> 16 & 255, n >> 8 & 255, n & 255]
+    .map(v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; })
+    .reduce((s, v, i) => s + v * [.2126, .7152, .0722][i], 0);
+}
+const contraste = (a, b) => { const x = luminancia(a), y = luminancia(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+/** Texto sobre a cor da clínica: o preto da Nexus ou branco — o que tiver mais contraste (≥ 4,5:1 quando der). */
+const corTexto = hex => (contraste(hex, "#05080C") >= contraste(hex, "#FFFFFF") ? "#05080C" : "#FFFFFF");
+/** Logo só entra por img.src, e só PNG/JPEG/WebP em base64 ou https (nunca SVG). */
+const logoValido = u => typeof u === "string" && u.length <= 120000
+  && (/^data:image\/(png|jpeg|webp);base64,[a-z0-9+/]+=*$/i.test(u) || /^https:\/\/[^\s"'<>()\\]+$/i.test(u));
+
+/* conexão com Meta/Google (regra "integracao", que só o servidor conhece) */
+function canalDe(a) {
+  const s = `${(a && a.chave) || ""} ${(a && a.mensagem) || ""}`.toLowerCase();
+  return /\|meta\b|\bmeta\b/.test(s) ? "meta" : /\|google\b|\bgoogle\b/.test(s) ? "google" : null;
+}
+function nomeRegraSrv(a, regras = []) {
+  if (a.regra === "integracao") { const c = canalDe(a); return c ? `Conexão com ${c === "meta" ? "Meta" : "Google"}` : "Conexão com os anúncios"; }
+  const r = regras.find(x => x.id === a.regra);
+  return r ? r.nome : a.regra === "ritmo" ? "Ritmo do orçamento" : "Aviso do radar";
+}
+/** Estado das leituras: erro (status "erro…" ou aviso de conexão das últimas 24 h sem leitura boa depois),
+    atrasado (última leitura há mais de 2 h), aguardando (nunca leu) ou ok. */
+function estadoIntegracao(integs = [], alertas = [], agora = Date.now()) {
+  const H = 36e5, ORD_E = { erro: 3, atrasado: 2, aguardando: 1, ok: 0 };
+  const canais = (integs || []).filter(i => i && i.ativo).map(i => {
+    const sync = i.ultimo_sync ? Date.parse(i.ultimo_sync) : NaN;
+    const al = (alertas || []).filter(a => a && a.regra === "integracao" && canalDe(a) === i.canal && agora - Date.parse(a.criado_em) <= 24 * H)
+      .sort((x, y) => String(y.criado_em).localeCompare(String(x.criado_em)))[0] || null;
+    const statusErro = /^erro/i.test(i.status || "");
+    const alAtivo = !!al && (statusErro || !(Number.isFinite(sync) && sync > Date.parse(al.criado_em)));
+    const estado = statusErro || alAtivo ? "erro" : !Number.isFinite(sync) ? "aguardando" : agora - sync > 2 * H ? "atrasado" : "ok";
+    return { canal: i.canal, estado, sync: Number.isFinite(sync) ? sync : null, status: i.status || "", alerta: alAtivo ? al : null };
+  });
+  const nivel = canais.reduce((n, c) => (ORD_E[c.estado] > ORD_E[n] ? c.estado : n), canais.length ? "ok" : "nenhuma");
+  const syncs = canais.map(c => c.sync).filter(Boolean);
+  return { nivel, canais, erros: canais.filter(c => c.estado === "erro"), ultimo: syncs.length ? Math.max(...syncs) : null };
+}
+
+/** Simulador da demo: as MESMAS taxas do período, resultado em faixa de ±20% (estimativa, nunca promessa). */
+function simular(tx, inv, ticket) {
+  const conv = tx.cpa > 0 ? inv / tx.cpa : 0, pac = conv * tx.ag * tx.veio * tx.fe;
+  const fx = v => [Math.max(0, Math.floor(v * .8)), Math.max(0, Math.ceil(v * 1.2))];
+  const fxR = v => [Math.max(0, Math.floor(v * .8 / 100) * 100), Math.max(0, Math.ceil(v * 1.2 / 100) * 100)];
+  return { conversas: fx(conv), pacientes: fx(pac), tratamentos: fxR(pac * ticket) };
+}
+
+/** Linguagem de consultório: [termo do gestor, versão leiga]. rot(chave) escolhe pelo papel. */
+const LEIGO = {
+  "hero.retorno": ["Retorno total", "O que voltou"],
+  "hero.retornoPlat": ["Retorno sobre anúncios", "O que voltou"],
+  "funil.exibido": ["Anúncio exibido", "Anúncio na tela"],
+  "funil.cliques": ["Cliques", "Tocaram"],
+  "meta.acima": ["acima da meta", "melhor que o normal"],
+  "meta.na": ["na meta", "dentro do normal"],
+  "meta.abaixo": ["abaixo da meta", "abaixo do normal"],
+  "ritmo.titulo": ["Ritmo do mês", "Orçamento do mês"],
+  "impressoes": ["impressões", "vezes na tela"],
+  r1: ["Custo por conversa alto", "Conversa ficando cara"],
+  r2: ["Campanha sem conversa", "Anúncio sem nenhuma conversa"],
+  r3: ["Criativo com CTR baixo", "Anúncio que pouca gente toca"],
+  r4: ["Fadiga de criativo", "Anúncio cansado (visto demais)"],
+  ritmo: ["Ritmo do orçamento", "Orçamento do mês"],
+};
+/** Uma linha leiga por regra, acima da mensagem do núcleo (que não muda). */
+const LEIGO_LINHA = {
+  r1: "Cada conversa está saindo mais cara do que o combinado.",
+  r2: "O anúncio gastou e ninguém chamou no WhatsApp.",
+  r3: "Muita gente vê o anúncio, quase ninguém toca.",
+  r4: "As mesmas pessoas já viram este anúncio muitas vezes.",
+  ritmo: "No ritmo de agora, o mês passa do orçamento.",
+  integracao: "O painel parou de receber os números dessa plataforma.",
+};
+/* ==== PURO: fim ==== */
 
 /* ============================================================
    1. ESTADO
@@ -67,32 +225,69 @@ const novoAj = () => ({ carregado: false, integ: null, contas: null, config: nul
 const S = {
   aba: "geral", dias: 30, plat: "", sort: { key: "gasto", dir: -1 }, varridoEm: null,
   demo: DEMO, token: null, conta: null, clientes: [], clienteId: null, dados: null, estado: null,
-  busca: "", kVer: {}, pedirCodigo: false, aj: novoAj(),
+  busca: "", kVer: {}, pedirCodigo: false, aj: novoAj(), comparar: true,
+  nomeDemo: CLINICA_Q || NOME_DEMO, destacar: new Set(), marcoFixo: null,
 };
 let DS = null, M = null;
 const gestor = () => !S.demo && !!S.conta && S.conta.papel === "gestor";
+/** Termo do gestor × versão leiga (clínica e demo). rotT: o gestor vê o técnico com o leigo no title. */
+const rot = k => { const e = LEIGO[k]; return !e ? k : gestor() ? e[0] : e[1]; };
+const rotT = k => { const e = LEIGO[k]; return !e ? esc(k) : gestor() ? `<span title="${esc(e[1])}">${esc(e[0])}</span>` : esc(e[1]); };
 const clienteAtual = () => S.clientes.find(c => c.id === S.clienteId) || null;
 // plataforma vem do banco e a clínica pode gravar texto livre nela: nunca vai crua para um atributo
 const classePlat = p => (p === "meta" || p === "google" ? p : "neutro");
-const nomeCliente = () => S.demo ? NOME_DEMO : (clienteAtual() || {}).nome || (DS && DS.nome) || "Nexus Ads";
+const nomeCliente = () => S.demo ? S.nomeDemo : (clienteAtual() || {}).nome || (DS && DS.nome) || "Nexus Ads";
 const semAnuncios = () => !M || !M.LINHAS.length;
 const isoI = i => isoDe(M.dataDe(i));
 const iDeIso = iso => M.R + Math.round((meioDia(String(iso).slice(0, 10)) - meioDia(isoI(M.R))) / 864e5);
 function montarDe(ds) { DS = ds; M = montar(ds); }
 
-const SERV_COR = { "Aparelho invisível": "#2B5A80", "Implante": "#B0761F", "Clareamento": "#C0472F", "Clínica geral": "#6F8FA8", "Limpeza": "#CDBB9B", "Canal / urgência": "#7A5114" };
-const COR_EXTRA = ["#3C76A3", "#8E6A3A", "#4E6B5E", "#A0584A", "#5B5F8A", "#9A8F80"];
+/* ---------- marca da clínica: só nos OBJETOS (selo, celular do resumo, curta, folha) ---------- */
+const MARCA = { cor: null, logo: null };
+function aplicarMarca({ cor, logo } = {}) {
+  const st = document.documentElement.style;
+  MARCA.cor = hexValido(cor) ? String(cor).toUpperCase() : null;
+  MARCA.logo = logoValido(logo) ? logo : null;
+  if (MARCA.cor) { st.setProperty("--marca", MARCA.cor); st.setProperty("--marca-txt", corTexto(MARCA.cor)); }
+  else { st.removeProperty("--marca"); st.removeProperty("--marca-txt"); }
+  renderSelo();
+}
+/** Avatar da clínica: o logo (sempre por img.src, nunca por string) ou a inicial sobre a cor da clínica. */
+function avatarMarca(el, nome, marca = MARCA) {
+  if (!el) return;
+  const logo = marca && logoValido(marca.logo) ? marca.logo : null;
+  el.textContent = "";
+  el.classList.toggle("com-logo", !!logo);
+  if (logo) {
+    const img = document.createElement("img");
+    img.alt = ""; img.decoding = "async"; img.src = logo;
+    el.appendChild(img);
+  } else el.textContent = (String(nome || "C").trim().charAt(0) || "C").toUpperCase();
+}
+function renderSelo() {
+  const selo = $("#selo");
+  if (!selo) return;
+  const nome = nomeCliente();
+  selo.hidden = !(S.demo || clienteAtual());
+  $("#selo-nome").textContent = nome;
+  avatarMarca($("#selo-av"), nome);
+  avatarMarca($("#top-av"), nome);
+}
+
+// cores dos objetos no palco escuro (claras o bastante para ler sobre --surface)
+const SERV_COR = { "Aparelho invisível": "#6FA3CF", "Implante": "#CF9540", "Clareamento": "#E0876F", "Clínica geral": "#A9C3D6", "Limpeza": "#CDBB9B", "Canal / urgência": "#B98A4C" };
+const COR_EXTRA = ["#8FB7DA", "#D9A457", "#8DBFA6", "#D49A8C", "#A6A9D6", "#C4B8A6"];
 const corServ = (nome, n) => SERV_COR[nome] || COR_EXTRA[n % COR_EXTRA.length];
-const AVC = ["#2B5A80", "#3C76A3", "#7A5114", "#B0761F", "#4E6B5E", "#A0584A", "#132A40"];
+const AVC = ["#2B5A80", "#2F5F86", "#7A5114", "#8A4B2E", "#4E6B5E", "#A0584A", "#132A40"];   // branco por cima ≥ 4,5:1
 
 const ETAPAS = [
   ["nova", "Nova conversa", "#9FB4C7"],
-  ["agendada", "Agendada", "#2B5A80"],
-  ["orcamento", "Avaliou · orçamento", "#B0761F"],
-  ["fechou", "Fechou", "#2F7D5B"],
-  ["nao_fechou", "Não fechou", "#9A8F80"],
-  ["faltou", "Faltou", "#C0472F"],
-  ["perdida", "Não agendou", "#6F7C86"],
+  ["agendada", "Agendada", "#6FA3CF"],
+  ["orcamento", "Avaliou · orçamento", "#CF9540"],
+  ["fechou", "Fechou", "#7FD1A5"],
+  ["nao_fechou", "Não fechou", "#9D9486"],
+  ["faltou", "Faltou", "#F08A74"],
+  ["perdida", "Não agendou", "#7E8A94"],
 ];
 const NOME_ETAPA = Object.fromEntries(ETAPAS.map(([k, l]) => [k, l]));
 const COM_DATA = new Set(["agendada", "orcamento", "fechou", "nao_fechou", "faltou"]);
@@ -123,65 +318,141 @@ const niceMax = v => {
   const bruto = v / 4, p = Math.pow(10, Math.floor(Math.log10(bruto))), n = bruto / p;
   return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p * 4;
 };
-function spark(vals) {
-  const v = vals.map(x => (fin(x) ? x : 0)), w = 300, h = 36;
-  const mx = Math.max(...v), mn = Math.min(...v), sp = mx - mn || 1;
-  const pts = v.map((y, i) => [i / Math.max(1, v.length - 1) * w, h - 3 - (y - mn) / sp * (h - 9)]);
-  const d = traco(pts);
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path class="a" d="${d} L${w} ${h} L0 ${h} Z"/><path class="l" pathLength="1" d="${d}"/></svg>`;
+/** Sparkline com dupla exposição: o período anterior tracejado por baixo, na MESMA escala.
+    `atual` e `anterior` têm o mesmo tamanho; `de` é o índice do 1º dia (para o ponto do dia). */
+function spark(atual, anterior = [], de = 0) {
+  const w = 300, h = 36;
+  const lim = v => v.map(x => (fin(x) ? x : null));
+  const a = lim(atual), b = lim(anterior);
+  const todos = [...a, ...b].filter(x => x != null);
+  const mx = todos.length ? Math.max(...todos) : 1, mn = todos.length ? Math.min(...todos) : 0, sp = mx - mn || 1;
+  const pts = v => v.map((y, i) => [i / Math.max(1, v.length - 1) * w, h - 3 - ((y ?? mn) - mn) / sp * (h - 9)]);
+  const pa = pts(a), d = traco(pa);
+  const dAnt = b.some(x => x != null) ? traco(pts(b)) : "";
+  const ys = pa.map(p => p[1].toFixed(1)).join(",");
+  return `<span class="spark-box" data-de="${de}" data-ys="${ys}" aria-hidden="true"><svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">` +
+    (dAnt ? `<path class="ant" d="${dAnt}"/>` : "") +
+    `<path class="a" d="${d} L${w} ${h} L0 ${h} Z"/><path class="l" pathLength="1" d="${d}"/></svg><i class="spk-dot"></i></span>`;
 }
-function contar(root) {
-  const els = $$("[data-n]", root).filter(e => fin(+e.dataset.n));
-  if (!els.length) return;
-  const fim = () => els.forEach(e => { e.textContent = fmtN(+e.dataset.n, e.dataset.f); });
-  if (REDUCE) return fim();
-  const t0 = performance.now(), D = 950;
-  const tick = now => {
-    const p = Math.min(1, (now - t0) / D), k = 1 - Math.pow(1 - p, 3);
-    els.forEach(e => { e.textContent = fmtN(+e.dataset.n * k, e.dataset.f); });
-    if (p < 1) requestAnimationFrame(tick); else fim();
-  };
-  requestAnimationFrame(tick);
-  setTimeout(fim, D + 400);   // rede de segurança se o rAF estiver congelado (aba em segundo plano)
+
+/* ---------- números que rolam (odômetro do efeitos.js) ---------- */
+const ULT = new Map();   // data-k → último valor mostrado
+function numeros(raiz) {
+  for (const el of $$("[data-n]", raiz)) {
+    const para = +el.dataset.n;
+    if (!fin(para)) continue;
+    const k = el.dataset.k, f = el.dataset.f;
+    const antes = k && ULT.has(k) ? ULT.get(k) : null;
+    if (k) ULT.set(k, para);
+    if (!FX || !ANIM) continue;
+    const bloco = el.closest("[data-cena]");
+    if (FX.assentado(bloco)) {
+      if (antes != null && antes !== para) FX.odometro(el, fmtN(antes, f), fmtN(para, f));
+    } else el.dataset.de = antes ?? 0;   // rola quando o bloco entrar em quadro
+  }
+}
+function numerosEntrando(bloco) {
+  if (!FX) return;
+  for (const el of $$("[data-n]", bloco)) {
+    if (el.dataset.de == null) continue;
+    const de = +el.dataset.de, para = +el.dataset.n, f = el.dataset.f;
+    delete el.dataset.de;
+    if (fin(para) && de !== para) FX.odometro(el, fmtN(de, f), fmtN(para, f));
+  }
+}
+/** Liga as cenas da aba: cada [data-cena] entra em quadro uma vez (com FX); sem FX, tudo já pronto. */
+function cenas(view) {
+  if (FX) FX.cenas(view, aoEntrar);
+  else $$("[data-cena]", view).forEach(b => b.classList.add("em-cena"));
+}
+function aoEntrar(bloco) {
+  numerosEntrando(bloco);
+  if (bloco.querySelector("#chart-dia")) canetaDiario();
+  if (bloco.classList.contains("phone-col")) destravarFone(bloco);
+}
+
+/* ---------- nomes e datas para os objetos ---------- */
+const SEMANA_LONGA = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"];
+/** Só primeiro nome + inicial (nada de telefone nem sobrenome nos objetos). */
+function nomeCurto(nome) {
+  const p = String(nome || "").trim().split(/\s+/).filter(Boolean);
+  if (!p.length || /^sem nome$/i.test(String(nome).trim())) return "Paciente";
+  if (p.length === 1) return p[0];
+  const ult = p[p.length - 1].replace(/\.$/, "");
+  return `${p[0]} ${ult.charAt(0).toUpperCase()}.`;
+}
+const semMarcas = s => String(s || "").replace(/[*_]/g, "");
+const dataLonga = d => `${SEMANA_LONGA[d.getDay()]}, ${d.getDate()} de ${MESES[d.getMonth()]}`;
+
+/** O celular de verdade (moldura metálica, ilha, reflexo). `tela` é HTML já escapado. */
+const foneHtml = (tela, cls = "", tilt = 6) =>
+  `<div class="fone ${cls}" data-tilt="${tilt}" data-foco aria-hidden="true"><div class="fone-tela">${tela}</div></div>`;
+function telaBloqueada(hora, data, notifs) {
+  return `<div class="bloq"><p class="bloq-hora">${esc(hora)}</p><p class="bloq-data">${esc(data)}</p>${notifs.map((n, i) =>
+    `<div class="notif${n.nx ? " notif-nx" : ""}" style="--n:${i}"><span class="notif-ic ${n.nx ? "nx" : "wa"}">${n.nx ? `<svg class="nx-mono"><use href="#nx-mono"/></svg>` : `<svg><use href="#ic-wa"/></svg>`}</span>` +
+    `<div><b>${esc(n.titulo)}</b><span>${esc(n.texto)}</span><small>${esc(n.quando)}</small></div></div>`).join("")}</div>`;
 }
 
 /* ---------- estados vazios, avisos ---------- */
-function cartaoVazio({ ic = "·", titulo, texto, botoes = "", erro = false }) {
-  return `<div class="vazio-card${erro ? " erro" : ""}"><span class="vazio-ic" aria-hidden="true">${ic}</span>` +
+const FIO_VAZIO = `<svg class="fio-vazio" viewBox="0 0 64 24" aria-hidden="true"><path d="M6 12H58"/><circle cx="6" cy="12" r="3"/><circle cx="32" cy="12" r="3"/><circle cx="58" cy="12" r="3"/><circle class="conta-luz" cx="6" cy="12" r="3.2"/></svg>`;
+function cartaoVazio({ titulo, texto, botoes = "", erro = false }) {
+  // sem emoji em destaque: um fio com a conta de luz esperando no 1º nó; o "!" só para erro
+  return `<div class="vazio-card${erro ? " erro" : ""}"><span class="vazio-ic" aria-hidden="true">${erro ? `<span class="erro-ic">!</span>` : FIO_VAZIO}</span>` +
     `<div><h2>${titulo}</h2><p>${texto}</p>${botoes ? `<div class="acoes">${botoes}</div>` : ""}</div></div>`;
 }
 const carregandoHtml = msg => `<p class="carregando"><i aria-hidden="true"></i>${esc(msg)}</p>`;
+/** Esqueleto com a geometria real (herói, régua, gráfico com 30 tocos). */
+function esqueletoHtml(msg) {
+  const tocos = Array.from({ length: 30 }, (_, i) => `<i class="sk-bloco" style="height:${30 + ((i * 37) % 55)}%"></i>`).join("");
+  return `<div class="esqueleto-in" role="status" aria-live="polite"><span class="sr-only">${esc(msg)}</span>
+    <div class="card card-hero sk sk-hero" aria-hidden="true"><div class="sk-l"><i class="sk-bloco sk-linha" style="width:30%;height:1rem"></i>
+      <i class="sk-bloco sk-linha"></i><i class="sk-bloco sk-linha" style="width:80%"></i><div class="sk-trilha"><i class="sk-bloco"></i><i class="sk-bloco"></i><i class="sk-bloco"></i></div></div>
+      <i class="sk-bloco sk-fone"></i></div>
+    <div class="card regua sk" aria-hidden="true" style="padding:1.1rem"><div class="sk-regua">${"<i class=\"sk-bloco\"></i>".repeat(6)}</div></div>
+    <div class="card sk" aria-hidden="true"><div class="sk-chart">${tocos}</div></div></div>`;
+}
 
 function htmlSemAnuncios() {
   const ligadas = ((S.dados && S.dados.integracoes) || []).filter(i => i.ativo);
   const btnAj = gestor() ? `<button class="pill pill-ink" type="button" data-ir="ajustes">Abrir Ajustes</button>` : "";
-  if (S.demo) return cartaoVazio({ ic: "·", titulo: "Sem números no período", texto: "Escolha outro período." });
+  if (S.demo) return cartaoVazio({ titulo: "Sem números no período", texto: "Escolha outro período." });
   if (ligadas.length) {
     const comErro = ligadas.find(i => /^erro/i.test(i.status || ""));
     if (comErro) return cartaoVazio({
-      ic: "!", erro: true, titulo: `A leitura do ${nomePlat(comErro.canal)} deu erro`,
+      erro: true, titulo: `A leitura do ${nomePlat(comErro.canal)} deu erro`,
       texto: `${esc(comErro.status)}. ${gestor() ? "Confira as credenciais em Ajustes." : "A Nexus já foi avisada e está vendo isso."}`, botoes: btnAj,
     });
     const nomes = ligadas.map(i => nomePlat(i.canal)).join(" e ");
     return cartaoVazio({
-      ic: "⏳", titulo: `${nomes} ${ligadas.length > 1 ? "conectados" : "conectado"} — esperando a primeira leitura`,
+      titulo: `${nomes} ${ligadas.length > 1 ? "conectados" : "conectado"} — esperando a primeira leitura`,
       texto: "O servidor lê os anúncios de hora em hora. Os números aparecem aqui sozinhos, sem precisar fazer nada.", botoes: btnAj,
     });
   }
   return gestor()
-    ? cartaoVazio({ ic: "🔌", titulo: "Nenhum anúncio conectado ainda", texto: "Conecte o Meta e/ou o Google deste cliente em Ajustes. A primeira leitura chega em até 1 hora.",
+    ? cartaoVazio({ titulo: "Nenhum anúncio conectado ainda", texto: "Conecte o Meta e/ou o Google deste cliente em Ajustes. A primeira leitura chega em até 1 hora.",
         botoes: `<button class="pill pill-ink" type="button" data-ir="ajustes">Conectar em Ajustes</button>` })
-    : cartaoVazio({ ic: "📣", titulo: "Os anúncios ainda não começaram", texto: "Os números aparecem aqui assim que os anúncios começarem a rodar. Enquanto isso, a aba Pacientes já funciona: dá para registrar cada paciente que chegar.",
+    : cartaoVazio({ titulo: "Os anúncios ainda não começaram", texto: "Os números aparecem aqui assim que os anúncios começarem a rodar. Enquanto isso, a aba Pacientes já funciona: dá para registrar cada paciente que chegar.",
         botoes: `<button class="pill pill-ink" type="button" data-ir="pacientes">Ir para Pacientes</button>` });
 }
 
-function toast(msg, tipo = "ok") {
+/** Aviso rápido. tipo: ok · erro · nota (neutro). acao = { rotulo, fn } vira um botão (ex.: "Desfazer", 5 s). */
+function toast(msg, tipo = "ok", acao = null) {
   const t = $("#toast");
   clearTimeout(t._t); clearTimeout(t._t2);
-  t.className = "toast" + (tipo === "erro" ? " erro" : "");
-  t.textContent = msg;
+  t.className = "toast" + (tipo === "erro" ? " erro" : tipo === "nota" ? " nota" : "") + (acao ? " com-acao" : "");
+  t.textContent = "";
+  const m = document.createElement("span");
+  m.textContent = msg;
+  t.appendChild(m);
+  const some = () => { t.classList.remove("on"); t._t2 = setTimeout(() => { t.textContent = ""; t.classList.remove("com-acao"); }, 400); };
+  if (acao) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "toast-acao"; b.textContent = acao.rotulo;
+    b.addEventListener("click", () => { clearTimeout(t._t); some(); acao.fn(); }, { once: true });
+    t.appendChild(b);
+  }
   requestAnimationFrame(() => t.classList.add("on"));
-  t._t = setTimeout(() => { t.classList.remove("on"); t._t2 = setTimeout(() => { t.textContent = ""; }, 400); }, tipo === "erro" ? 6000 : 3600);
+  t._t = setTimeout(some, acao ? 5000 : tipo === "erro" ? 6000 : 3600);
 }
 function ocupado(btn, on) {
   if (!btn) return;
@@ -214,55 +485,92 @@ async function copiar(txt, btn) {
 const janela = () => { const de = M.R - S.dias + 1; return { de, ate: M.R, deA: de - S.dias, ateA: de - 1 }; };
 const campanhas = () => Object.values(M.CAMP).filter(c => c.plat && (!S.plat || c.plat === S.plat));
 
-function renderGeral() {
-  const vazio = semAnuncios();
-  $("#vazio-geral").hidden = !vazio;
-  $("#corpo-geral").hidden = vazio;
-  if (vazio) { $("#vazio-geral").innerHTML = htmlSemAnuncios(); return; }
-
+/** Os números do período ativo — a ÚNICA conta do herói, da régua, do curta e do simulador.
+    retorno = tratamentos ÷ (anúncios + gestão); com uma plataforma só, ÷ anúncios. */
+function numerosPeriodo() {
   const { de, ate, deA, ateA } = janela(), f = { plat: S.plat };
   const t = M.consolidar(M.linhasDe(de, ate, f)), ta = M.consolidar(M.linhasDe(deA, ateA, f));
   const c = M.crmTot(de, ate, f), ca = M.crmTot(deA, ateA, f);
   const roas = t.gasto ? c.receita / t.gasto : null;
+  const fee = S.plat ? 0 : (M.CFG.fee || 0) * S.dias / 30;
+  const custoTotal = t.gasto + fee;
+  const retorno = S.plat ? roas : (custoTotal ? c.receita / custoTotal : null);
+  return { de, ate, deA, ateA, f, t, ta, c, ca, roas, fee, custoTotal, retorno, dias: S.dias, plat: S.plat };
+}
+
+function renderGeral() {
+  const vazio = semAnuncios();
+  $("#vazio-geral").hidden = !vazio;
+  $("#corpo-geral").hidden = vazio;
+  if (vazio) { $("#vazio-geral").innerHTML = htmlSemAnuncios(); renderSimulador(); return; }
+
+  const { de, t, ta, c, ca, roas, retorno } = numerosPeriodo();
   const CFG = M.CFG;
+  renderDesdeVisita();
 
   // herói — a frase que a doutora lê em 3 segundos
   $("#hero-periodo").textContent = `Últimos ${S.dias} dias${S.plat ? " · só " + nomePlat(S.plat) : ""}`;
   $("#hero-frase").innerHTML =
-    `Os anúncios trouxeram <b data-n="${c.conversas}" data-f="int">${int(c.conversas)}</b> ${c.conversas === 1 ? "conversa" : "conversas"} no WhatsApp, ` +
-    `<b data-n="${c.agendadas}" data-f="int">${int(c.agendadas)}</b> ${c.agendadas === 1 ? "avaliação agendada" : "avaliações agendadas"} e ` +
-    `<b data-n="${c.fecharam}" data-f="int">${int(c.fecharam)}</b> <em>${c.fecharam === 1 ? "paciente novo" : "pacientes novos"}</em>.`;
+    `Os anúncios trouxeram <b>${int(c.conversas)}</b> ${c.conversas === 1 ? "conversa" : "conversas"} no WhatsApp, ` +
+    `<b>${int(c.agendadas)}</b> ${c.agendadas === 1 ? "avaliação agendada" : "avaliações agendadas"} e ` +
+    `<b>${int(c.fecharam)}</b> <em>${c.fecharam === 1 ? "paciente novo" : "pacientes novos"}</em>.`;
 
-  const meta = CFG.cpaAlvo, cpa = t.cpa, dentro = fin(cpa) && cpa <= meta;
-  const dif = fin(cpa) ? Math.abs(cpa - meta) / meta * 100 : null;
-  const custoTotal = t.gasto + (S.plat ? 0 : (CFG.fee || 0) * S.dias / 30);
-  const retorno = S.plat ? roas : (custoTotal ? c.receita / custoTotal : null);
-  $("#hero-side").innerHTML = `
-    <p class="hs-l">Custo por conversa</p>
-    <p class="hs-big"><span ${fin(cpa) ? `data-n="${cpa}" data-f="brl"` : ""}>${brl(cpa)}</span><small>meta ${brl(meta)}</small></p>
-    <div class="meter" style="--w:${fin(cpa) ? Math.min(cpa / (meta * 2), 1) * 100 : 0}%;--m:50%"><i></i><b title="meta"></b></div>
-    <p class="hs-note">${!fin(cpa) ? "Sem conversas no período." : dentro
-      ? `Dentro da meta — <strong>${pc(dif, 0)} abaixo</strong> do limite.`
-      : `<strong>${pc(dif, 0)} acima</strong> da meta — o radar já está de olho.`}</p>
-    <div class="hs-roi">
-      <div><span class="hs-l">Tratamentos fechados</span><b data-n="${c.receita}" data-f="brl0">${brl0(c.receita)}</b></div>
-      <div><span class="hs-l">${S.plat ? "Retorno sobre anúncios" : "Retorno total"}</span><b ${fin(retorno) ? `data-n="${retorno}" data-f="x"` : ""}>${fin(retorno) ? dec(retorno, 1) + "x" : "—"}</b></div>
-    </div>
-    <p class="hs-note" style="font-size:.74rem">${S.plat ? "Tratamentos ÷ investimento em anúncios." : "Tratamentos ÷ (anúncios + gestão). Estimativa pelo valor de cada tratamento."}</p>`;
+  // a trilha 106 → 44 → 13, ligada por um fio de bronze
+  const passo = (v, k, rot, taxa) => `<div class="tr-passo">${taxa == null ? `<span class="tr-no" aria-hidden="true"></span>` : `<span class="tr-taxa" title="de uma etapa para a outra">${pc(taxa, 0)}</span>`}` +
+    `<b class="tr-n" data-n="${v}" data-f="int" data-k="${k}">${int(v)}</b><span class="tr-l">${rot}</span></div>`;
+  const tx1 = razao(c.agendadas, c.conversas), tx2 = razao(c.fecharam, c.agendadas);
+  $("#trilha").innerHTML =
+    `<svg class="fio" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path class="fio-h" pathLength="1" d="M0 50H100"/><path class="fio-v" pathLength="1" d="M50 0V100"/></svg>` +
+    `<span class="fio-conta" aria-hidden="true"></span>` +
+    passo(c.conversas, "h-conv", c.conversas === 1 ? "conversa no WhatsApp" : "conversas no WhatsApp", null) +
+    passo(c.agendadas, "h-ag", c.agendadas === 1 ? "avaliação agendada" : "avaliações agendadas", fin(tx1) ? tx1 : 0) +
+    passo(c.fecharam, "h-fe", c.fecharam === 1 ? "paciente novo" : "pacientes novos", fin(tx2) ? tx2 : 0);
 
-  // KPIs com variação contra o período anterior de mesmo tamanho
-  const sd = M.porDia(S.plat), idx = Array.from({ length: S.dias }, (_, n) => de + n);
+  // a conta em linguagem de consultório (o MESMO retorno de sempre, só reescrito)
+  $("#hero-conta").innerHTML = `
+    <div class="hc"><span class="hc-l">No consultório</span>
+      <p class="hc-f"><b data-n="${c.receita}" data-f="brl0" data-k="h-rec">${brl0(c.receita)}</b> em tratamentos</p>
+      <small>estimativa pelo valor de cada tratamento</small></div>
+    <div class="hc hc-x"><span class="hc-l">${rotT(S.plat ? "hero.retornoPlat" : "hero.retorno")}${gestor() && fin(retorno) ? ` · ${dec(retorno, 1)}x` : ""}</span>
+      <p class="hc-f">${fin(retorno) ? `Cada R$ 1 ${S.plat ? "em anúncio" : "investido"} virou <b>${brl(retorno)}</b>` : "Sem investimento no período"}</p>
+      <small>${S.plat ? "tratamentos ÷ investimento em anúncios" : "tratamentos ÷ (anúncios + gestão)"}</small></div>`;
+
+  // o celular de verdade: tela bloqueada recebendo as conversas vindas de anúncio
+  const hoje = M.dataDe(M.R + 1);
+  const recentes = M.LEADS.filter(L => L.plat && L.i <= M.R && (!S.plat || L.plat === S.plat))
+    .sort((a, b) => (b.i - a.i) || String(b.id).localeCompare(String(a.id), "pt-BR", { numeric: true })).slice(0, 3);
+  const quando = i => { const d = M.R - i; return d <= 0 ? "ontem" : d === 1 ? "anteontem" : `há ${d + 1} dias`; };
+  const notifs = [{ nx: true, titulo: "Nexus · Tráfego", texto: semMarcas(M.relDiario(M.R).split("\n")[0]), quando: "08:00" }]
+    .concat(recentes.map(L => {
+      const k = L.cri && M.CRI[L.cri], cp = M.CAMP[L.camp];
+      return { titulo: `${nomeCurto(L.nome)} · via anúncio`, texto: `Chamou pelo anúncio «${(k && k.curto) || (cp && cp.curto) || "anúncio"}»`, quando: quando(L.i) };
+    }));
+  $("#hero-fone").innerHTML = foneHtml(telaBloqueada("08:00", dataLonga(hoje), notifs), "fone-hero", 6);
+
+  // régua de instrumentos: 6 células, número + período anterior tracejado por baixo
+  const meta = CFG.cpaAlvo;
+  const sd = M.porDia(S.plat), idx = Array.from({ length: S.dias }, (_, n) => de + n), idxA = idx.map(i => i - S.dias);
+  const par = fn => [idx.map(fn), idxA.map(i => (i < 0 ? null : fn(i)))];
+  const m7 = arr => i => (i < 0 ? null : M.media7(arr, i));
+  const acum = lista => lista.reduce((acc, i) => (acc.push(i < 0 ? null : (acc[acc.length - 1] || 0) + sd.rec[i]), acc), []);
+  const cpa7 = i => { if (i < 0) return null; const g = M.soma7(sd.meta, i) + M.soma7(sd.google, i), n = M.soma7(sd.conv, i); return n ? g / n : null; };
+  const dif = fin(t.cpa) ? Math.abs(t.cpa - meta) / meta * 100 : null;
   const K = [
-    { l: "Investido em anúncios", v: t.gasto, a: ta.gasto, f: "brl0", s: "neutro", sp: idx.map(i => sd.meta[i] + sd.google[i]) },
-    { l: "Conversas no WhatsApp", v: c.conversas, a: ca.conversas, f: "int", s: "cima", sp: idx.map(i => M.media7(sd.conv, i)) },
-    { l: "Custo por conversa", v: t.cpa, a: ta.cpa, f: "brl", s: "baixo",
-      extra: fin(t.cpa) ? (t.cpa <= meta ? `dentro da meta de ${brl(meta)}` : `acima da meta de ${brl(meta)}`) : `meta ${brl(meta)}`,
-      sp: idx.map(i => { const g = M.soma7(sd.meta, i) + M.soma7(sd.google, i), n = M.soma7(sd.conv, i); return n ? g / n : null; }) },
-    { l: "Avaliações agendadas", v: c.agendadas, a: ca.agendadas, f: "int", s: "cima", sp: idx.map(i => M.media7(sd.ag, i)) },
-    { l: "Pacientes novos", v: c.fecharam, a: ca.fecharam, f: "int", s: "cima", sp: idx.map(i => M.media7(sd.fe, i)) },
-    { l: "Tratamentos fechados", v: c.receita, a: ca.receita, f: "brl0", s: "cima",
-      extra: fin(roas) ? `${dec(roas, 1)}x o investido em anúncios` : "", sp: idx.reduce((acc, i) => (acc.push((acc[acc.length - 1] || 0) + sd.rec[i]), acc), []) },
+    { k: "k-inv", l: "Investido em anúncios", v: t.gasto, a: ta.gasto, f: "brl0", s: "neutro", sp: par(i => sd.meta[i] + sd.google[i]) },
+    { k: "k-cpa", l: "Custo por conversa", v: t.cpa, a: ta.cpa, f: "brl", s: "baixo", medidor: true,
+      extra: !fin(t.cpa) ? `meta ${brl(meta)}` : t.cpa <= meta ? `meta ${brl(meta)} · ${pc(dif, 0)} abaixo` : `meta ${brl(meta)} · ${pc(dif, 0)} acima`,
+      sp: par(cpa7) },
+    { k: "k-conv", l: "Conversas no WhatsApp", v: c.conversas, a: ca.conversas, f: "int", s: "cima", sp: par(m7(sd.conv)) },
+    { k: "k-ag", l: "Avaliações agendadas", v: c.agendadas, a: ca.agendadas, f: "int", s: "cima", sp: par(m7(sd.ag)) },
+    { k: "k-fe", l: "Pacientes novos", v: c.fecharam, a: ca.fecharam, f: "int", s: "cima", sp: par(m7(sd.fe)) },
+    { k: "k-rec", l: "Tratamentos fechados", v: c.receita, a: ca.receita, f: "brl0", s: "cima",
+      // a clínica lê a conta do herói (com a gestão); o "x" só anúncios fica para o gestor
+      extra: !gestor() ? "estimativa pelo valor de cada tratamento" : fin(roas) ? `${dec(roas, 1)}x o investido em anúncios` : "", sp: [acum(idx), acum(idxA)] },
   ];
+  // conexão parada: as células que dependem da leitura dos anúncios avisam de que dia é o número
+  const parada = estadoInteg().erros.filter(e => !S.plat || e.canal === S.plat);
+  const notaParada = parada.map(e => `${nomePlat(e.canal)}: leitura parada${e.sync ? ` em ${FMT_DDMM.format(new Date(e.sync))}` : ""}`).join(" · ");
+  const DE_ANUNCIO = new Set(["k-inv", "k-cpa", "k-conv"]);
   const chipVar = k => {
     const v = variacao(k.v, k.a);
     if (v == null) return `<span class="var var-neutro">sem base</span>`;
@@ -273,106 +581,193 @@ function renderGeral() {
   $("#kpis").innerHTML = K.map(k => `
     <div class="kpi">
       <span class="kpi-l">${k.l}</span>
-      <span class="kpi-v" ${fin(k.v) ? `data-n="${k.v}" data-f="${k.f}"` : ""}>${fmtN(k.v, k.f)}</span>
+      <span class="kpi-v"><span ${fin(k.v) ? `data-n="${k.v}" data-f="${k.f}" data-k="${k.k}"` : ""}>${fmtN(k.v, k.f)}</span></span>
       <span class="kpi-row">${chipVar(k)}<span class="kpi-ctx">vs. ${S.dias} dias antes</span></span>
+      ${k.medidor ? `<div class="meter" style="--w:${fin(t.cpa) ? Math.min(t.cpa / (meta * 2), 1) * 100 : 0}%;--m:50%" aria-hidden="true"><i></i><b title="meta"></b></div>` : ""}
       ${k.extra ? `<span class="kpi-extra">${k.extra}</span>` : ""}
-      ${spark(k.sp)}
+      ${notaParada && DE_ANUNCIO.has(k.k) ? `<span class="kpi-parada"><svg aria-hidden="true"><use href="#ic-sinal"/></svg>${esc(notaParada)}</span>` : ""}
+      ${spark(k.sp[0], S.comparar ? k.sp[1] : [], de)}
     </div>`).join("");
 
-  desenharChart(true);
+  desenharChart("troca");
   renderFunil(t, c);
   renderMeses();
   renderLeitura(t, ta, c);
   renderRitmo();
+  renderSimulador();
 }
 
 function serieDia(de, ate, plat) {
   const sd = M.porDia(plat), out = [];
-  for (let i = de; i <= ate; i++) out.push({ i, meta: sd.meta[i], google: sd.google[i], conv: sd.conv[i], convMedia: M.media7(sd.conv, i) });
+  for (let i = de; i <= ate; i++) out.push(i < 0 ? null : { i, meta: sd.meta[i], google: sd.google[i], conv: sd.conv[i], convMedia: M.media7(sd.conv, i) });
   return out;
 }
 
-function desenharChart(animar) {
+/** modo: "troca" (filtro mudou: barras interpolam, linha faz crossfade) · null (redesenho puro, ex.: resize). */
+function desenharChart(modo) {
   const el = $("#chart-dia");
   if (!M || semAnuncios()) return;
   // sem largura ainda (primeiro paint, aba oculta): o ResizeObserver redesenha quando houver
   if (!el.clientWidth) { el._pendente = true; return; }
   el._pendente = false;
   el._w = el.clientWidth;
-  const { de, ate } = janela(), serie = serieDia(de, ate, S.plat);
+  const { de, ate, deA, ateA } = janela(), serie = serieDia(de, ate, S.plat), ant = serieDia(deA, ateA, S.plat);
   const W = Math.max(300, Math.round(el.clientWidth)), H = W < 560 ? 230 : 280;
-  const P = { l: W < 560 ? 46 : 56, r: 28, t: 14, b: 30 }, iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const P = { l: W < 560 ? 50 : 60, r: 30, t: 14, b: 30 }, iw = W - P.l - P.r, ih = H - P.t - P.b;
   const maxG = niceMax(Math.max(1, ...serie.map(d => d.meta + d.google)));
-  const maxC = Math.max(4, Math.ceil(Math.max(...serie.map(d => d.convMedia)) * 1.1 / 4) * 4);
+  const maxC = Math.max(4, Math.ceil(Math.max(...serie.map(d => d.convMedia), ...ant.filter(Boolean).map(d => d.convMedia)) * 1.1 / 4) * 4);
   const bw = iw / serie.length, base = P.t + ih;
   const y = v => base - v / maxG * ih, yc = v => base - v / maxC * ih;
+  const bloco = el.closest("[data-cena]");
+  const troca = modo === "troca" && FX && ANIM && FX.assentado(bloco) && el.querySelector("svg");
+  const foto = troca ? FX.fotografar(el, ".bars rect", "data-id") : null;
 
   let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Investimento diário por plataforma e conversas no WhatsApp nos últimos ${S.dias} dias">`;
   for (let k = 0; k <= 4; k++) {
     const yy = y(maxG * k / 4);
     s += `<line class="gl" x1="${P.l}" x2="${W - P.r}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}"/>`;
-    s += `<text x="${P.l - 8}" y="${(yy + 3).toFixed(1)}" text-anchor="end">${brl0(maxG * k / 4)}</text>`;
-    s += `<text x="${W - P.r + 7}" y="${(yy + 3).toFixed(1)}">${maxC * k / 4}</text>`;
+    s += `<text x="${P.l - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end">${brl0(maxG * k / 4)}</text>`;
+    s += `<text x="${W - P.r + 8}" y="${(yy + 4).toFixed(1)}">${maxC * k / 4}</text>`;
   }
+  s += `<rect class="feixe" x="${P.l}" y="${P.t}" width="28" height="${ih}"/>`;
   s += `<g class="bars">`;
   serie.forEach((d, n) => {
-    const x = P.l + n * bw + bw * .17, w = Math.max(1.5, bw * .66), rx = Math.min(3, w / 2), dl = Math.round(n / serie.length * 650);
-    if (d.meta > 0) s += `<rect class="bm" x="${x.toFixed(1)}" y="${y(d.meta).toFixed(1)}" width="${w.toFixed(1)}" height="${(base - y(d.meta)).toFixed(1)}" rx="${rx}" style="--d:${dl}ms"/>`;
-    if (d.google > 0) s += `<rect class="bg" x="${x.toFixed(1)}" y="${y(d.meta + d.google).toFixed(1)}" width="${w.toFixed(1)}" height="${(y(d.meta) - y(d.meta + d.google)).toFixed(1)}" rx="${rx}" style="--d:${dl + 60}ms"/>`;
+    const x = P.l + n * bw + bw * .17, w = Math.max(1.5, bw * .66), rx = Math.min(3, w / 2);
+    if (d.meta > 0) s += `<rect class="bm" data-i="${d.i}" data-id="m${d.i}" x="${x.toFixed(1)}" y="${y(d.meta).toFixed(1)}" width="${w.toFixed(1)}" height="${(base - y(d.meta)).toFixed(1)}" rx="${rx}" style="--k:${n}"/>`;
+    if (d.google > 0) s += `<rect class="bg" data-i="${d.i}" data-id="g${d.i}" x="${x.toFixed(1)}" y="${y(d.meta + d.google).toFixed(1)}" width="${w.toFixed(1)}" height="${(y(d.meta) - y(d.meta + d.google)).toFixed(1)}" rx="${rx}" style="--k:${n}"/>`;
   });
   s += `</g>`;
+  // marcos (claquetes): linha tracejada creme no dia + a claquete no topo
+  for (const mk of marcosAtuais()) {
+    const i = iDeIso(mk.d), n = i - de;
+    if (n < 0 || n >= serie.length) continue;
+    const x = (P.l + n * bw + bw / 2).toFixed(1);
+    s += `<g class="marco${mk.exemplo ? " exemplo" : ""}" data-i="${i}"><line x1="${x}" x2="${x}" y1="${P.t + 16}" y2="${base}"/><use href="#ic-claq" x="${(+x - 8).toFixed(1)}" y="${P.t - 4}" width="16" height="16"/></g>`;
+  }
   const pts = serie.map((d, n) => [P.l + n * bw + bw / 2, yc(d.convMedia)]);
   const dl = traco(pts);
-  s += `<path class="area" d="${dl} L${pts[pts.length - 1][0].toFixed(1)} ${base} L${pts[0][0].toFixed(1)} ${base} Z"/>`;
-  s += `<path class="lin" pathLength="1" d="${dl}"/>`;
+  const ptsA = ant.map((d, n) => (d ? [P.l + n * bw + bw / 2, yc(d.convMedia)] : null)).filter(Boolean);
+  const cls = troca ? " troca" : "";
+  if (ptsA.length > 1) s += `<path class="ant${cls}" d="${traco(ptsA)}"/>`;
+  s += `<path class="area${cls}" d="${dl} L${pts[pts.length - 1][0].toFixed(1)} ${base} L${pts[0][0].toFixed(1)} ${base} Z"/>`;
+  s += `<path class="lin${cls}" pathLength="1" d="${dl}"/>`;
   const passo = Math.ceil(serie.length / (W < 560 ? 4 : 7));
   serie.forEach((d, n) => { if (n % passo === 0) s += `<text x="${(P.l + n * bw + bw / 2).toFixed(1)}" y="${H - 9}" text-anchor="middle">${M.ddmm(d.i)}</text>`; });
-  s += `<line class="cross" x1="0" x2="0" y1="${P.t}" y2="${base}"/><circle class="cross-dot" r="4.5" cx="0" cy="0"/></svg>`;
-  if (el._esconder) el._esconder();   // redesenho não pode herdar a mira/tooltip do dia antigo
+  s += `<circle class="ponto" r="4.5" cx="-20" cy="-20"/></svg>`;
+  if (el._esconder) el._esconder();   // redesenho não pode herdar a leitura do dia antigo
   el.innerHTML = s;
-  el._d = { serie, P, bw, W, yc };
-  if (animar && !REDUCE) {
-    el.classList.remove("anim"); void el.offsetWidth; el.classList.add("anim");
-    clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("anim"), 2600);
-  }
+  el.classList.toggle("sem-ant", !S.comparar);
+  el._d = { serie, ant, P, bw, W, yc };
+  if (foto) FX.flip(el, ".bars rect", foto, "data-id");
+  if (el._canetaPendente) { el._canetaPendente = false; canetaDiario(); }
+}
+/** A caneta de luz desenha a linha de conversas quando o gráfico entra em quadro. */
+function canetaDiario() {
+  const el = $("#chart-dia"), p = el.querySelector(".lin");
+  if (!p) { el._canetaPendente = true; return; }
+  if (FX) FX.caneta(p, { atraso: FX.MOV.tUi });
 }
 
 function ligarChart() {
-  const el = $("#chart-dia"), tip = $("#tip");
-  const esconder = () => { el.classList.remove("hover"); tip.hidden = true; };
-  const mostrar = e => {
+  const el = $("#chart-dia"), leg = $("#chart-leg"), vivo = $("#chart-vivo");
+  const padrao = leg.innerHTML;
+  let n = -1, raf = 0, alvoX = 0, xAtual = null, tVivo = 0, fixo = false;   // fixo: o gestor clicou num dia para marcar
+  const feixe = () => el.querySelector(".feixe");
+  const passo = () => {
+    raf = 0;
+    const f = feixe();
+    if (!f || xAtual == null) return;
+    xAtual += (alvoX - xAtual) * .25;
+    f.setAttribute("x", xAtual.toFixed(1));
+    if (Math.abs(alvoX - xAtual) > .3) raf = requestAnimationFrame(passo);
+  };
+  const esconder = () => {
+    if (n < 0 && !el.classList.contains("foco")) return;
+    n = -1; xAtual = null;
+    el.classList.remove("foco");
+    leg.innerHTML = padrao;
+    $$(".bars rect.ativo", el).forEach(r => r.classList.remove("ativo"));
+    document.dispatchEvent(new CustomEvent("nx:dia", { detail: { i: null } }));
+  };
+  const mostrarDia = k => {
     const d = el._d, svg = el.querySelector("svg");
     if (!d || !svg || !M) return;
-    const r = svg.getBoundingClientRect(), k = r.width / d.W;
-    const n = Math.floor(((e.clientX - r.left) / k - d.P.l) / d.bw);
-    if (n < 0 || n >= d.serie.length) return esconder();
-    const p = d.serie[n], cx = d.P.l + n * d.bw + d.bw / 2, cy = d.yc(p.convMedia);
-    const cross = svg.querySelector(".cross"), dot = svg.querySelector(".cross-dot");
-    cross.setAttribute("x1", cx); cross.setAttribute("x2", cx);
-    dot.setAttribute("cx", cx); dot.setAttribute("cy", cy);
-    el.classList.add("hover");
-    const dt = M.dataDe(p.i);
-    tip.innerHTML = `<b>${SEMANA[dt.getDay()]} · ${M.ddmm(p.i)}</b>` +
-      `<span>Meta <i>${brl(p.meta)}</i></span><span>Google <i>${brl(p.google)}</i></span>` +
-      `<span>Conversas <i>${int(p.conv)}</i></span>`;   // Google manda conversão fracionada (1.5)
-    tip.hidden = false;
-    tip.style.left = Math.min(innerWidth - 100, Math.max(100, r.left + cx * k)) + "px";
-    // o tooltip abre PARA CIMA: garante altura real + folga, senão a data some no topo
-    tip.style.top = Math.max(tip.offsetHeight + 22, r.top + d.P.t * k) + "px";
+    k = Math.max(0, Math.min(d.serie.length - 1, k));
+    n = k;
+    const p = d.serie[k], cx = d.P.l + k * d.bw + d.bw / 2, cy = d.yc(p.convMedia);
+    alvoX = cx - 14;
+    const f = feixe();
+    if (!ANIM || xAtual == null) { xAtual = alvoX; f.setAttribute("x", xAtual.toFixed(1)); }
+    else if (!raf) raf = requestAnimationFrame(passo);
+    const pt = svg.querySelector(".ponto");
+    pt.setAttribute("cx", cx.toFixed(1)); pt.setAttribute("cy", cy.toFixed(1));
+    $$(".bars rect", svg).forEach(r => r.classList.toggle("ativo", +r.dataset.i === p.i));
+    el.classList.add("foco");
+    const dt = M.dataDe(p.i), g = p.meta + p.google, cpc = p.conv ? g / p.conv : null, a = d.ant[k];
+    // legenda fixa no cabeçalho: o título do cartão nunca some (Google manda conversão fracionada: plural/int)
+    leg.innerHTML = `<b>${SEMANA[dt.getDay()]} · ${M.ddmm(p.i)}</b> — Meta <span class="v">${brl(p.meta)}</span> · Google <span class="v">${brl(p.google)}</span> · ` +
+      `<span class="v">${plural(p.conv, "conversa", "conversas")}</span>${fin(cpc) ? ` · <span class="v">${brl(cpc)}</span> por conversa` : ""}` +
+      `${a ? ` · antes: <span class="v">${int(a.conv)}</span>` : ""}`;
+    const mk = marcoDoDia(p.i);
+    if (mk) leg.innerHTML += ` · <span class="marco-leg"><svg aria-hidden="true"><use href="#ic-claq"/></svg>Marco${mk.exemplo ? " (exemplo)" : ""}: ${esc(mk.t)}</span>`;
+    clearTimeout(tVivo);
+    tVivo = setTimeout(() => { vivo.textContent = leg.textContent; }, 350);
+    document.dispatchEvent(new CustomEvent("nx:dia", { detail: { i: p.i } }));
   };
-  el._esconder = esconder;
-  el.addEventListener("pointermove", mostrar);
-  el.addEventListener("pointerdown", mostrar);
-  el.addEventListener("pointerleave", e => { if (e.pointerType !== "touch") esconder(); });
-  document.addEventListener("pointerdown", e => { if (!el.contains(e.target)) esconder(); });
-  addEventListener("scroll", esconder, { passive: true });
+  const indice = e => {
+    const d = el._d, svg = el.querySelector("svg");
+    if (!d || !svg) return -1;
+    const r = svg.getBoundingClientRect(), k = r.width / d.W;
+    return Math.floor(((e.clientX - r.left) / k - d.P.l) / d.bw);
+  };
+  const peloPonteiro = e => {
+    const d = el._d, svg = el.querySelector("svg");
+    if (!d || !svg || (fixo && e.type === "pointermove")) return;
+    const r = svg.getBoundingClientRect(), k = r.width / d.W;
+    const i = Math.floor(((e.clientX - r.left) / k - d.P.l) / d.bw);
+    if (i < 0 || i >= d.serie.length) return esconder();
+    mostrarDia(i);
+  };
+  const fixar = k => { const d = el._d; if (!d || !gestor() || k < 0 || k >= d.serie.length) return; fixo = true; mostrarDia(k); abrirMarco(d.serie[k].i); };
+  el._esconder = () => { fixo = false; esconder(); };
+  el._soltar = () => { fixo = false; esconder(); };
+  el.addEventListener("pointermove", peloPonteiro);
+  el.addEventListener("pointerdown", e => { if (fixo) return; peloPonteiro(e); });
+  // gestor: clicar num dia fixa a mira e abre o "Marcar dd/mm" embaixo do gráfico
+  el.addEventListener("click", e => { if (gestor()) fixar(indice(e)); });
+  el.addEventListener("pointerleave", e => { if (e.pointerType !== "touch" && !fixo) esconder(); });
+  document.addEventListener("pointerdown", e => {
+    if (el.contains(e.target) || $("#marco-form").contains(e.target)) return;
+    if (fixo) fecharMarco(false); else esconder();
+  });
+  // teclado: o gráfico vira um "scrubber" (←/→ troca o dia, Home/End vão às pontas, Esc sai)
+  el.addEventListener("keydown", e => {
+    const d = el._d;
+    if (!d) return;
+    const ult = d.serie.length - 1;
+    const mapa = { ArrowRight: n < 0 ? 0 : n + 1, ArrowLeft: n < 0 ? ult : n - 1, Home: 0, End: ult };
+    if (e.key === "Escape") { if (fixo) fecharMarco(true); else esconder(); return; }
+    if (e.key === "Enter" && n >= 0 && gestor()) { e.preventDefault(); fixar(n); return; }
+    if (!(e.key in mapa)) return;
+    e.preventDefault();
+    if (fixo) { fixo = false; $("#marco-form").hidden = true; S.marcoFixo = null; }
+    mostrarDia(mapa[e.key]);
+  });
+  el.addEventListener("blur", () => { if (!fixo) esconder(); });
 }
 
 function renderFunil(t, c) {
+  const leigo = !gestor();
+  const cadaCem = (r, quem, fez) => {
+    if (!fin(r)) return "";
+    return r >= 1 ? `de cada 100 que ${quem}, ${Math.round(r)} ${fez}` : `de cada 1.000 que ${quem}, ${Math.round(r * 10)} ${fez}`;
+  };
+  const rConv = razao(c.conversas, t.cliques);
   const E = [
-    { l: "Anúncio exibido", s: "vezes na tela", v: t.impressoes },
-    { l: "Cliques", s: "no anúncio", v: t.cliques, r: t.ctr, rl: "CTR (Meta e Google juntos)" },
-    { l: "Conversas", s: "no WhatsApp", v: c.conversas, r: razao(c.conversas, t.cliques), rl: "dos cliques" },
+    { l: rot("funil.exibido"), s: "vezes na tela", v: t.impressoes },
+    { l: rot("funil.cliques"), s: "no anúncio", v: t.cliques, r: t.ctr, rl: leigo ? cadaCem(t.ctr, "viram", "tocaram") : "CTR (Meta e Google juntos)", solto: leigo },
+    { l: "Conversas", s: "no WhatsApp", v: c.conversas, r: rConv, solto: leigo,
+      rl: leigo ? (fin(rConv) && rConv >= 1 ? `${Math.round(rConv)} de cada 100 que tocaram chamaram` : cadaCem(rConv, "tocaram", "chamaram")) : "dos cliques" },
     { l: "Agendaram", s: "avaliação", v: c.agendadas, r: razao(c.agendadas, c.conversas), rl: "das conversas", faixa: [30, 50] },
     { l: "Compareceram", s: "à consulta", v: c.compareceram, r: razao(c.compareceram, c.agendadas), rl: "dos agendados", faixa: [60, 80] },
     { l: "Fecharam", s: "tratamento", v: c.fecharam, r: razao(c.fecharam, c.compareceram), rl: "de quem veio", faixa: [30, 50] },
@@ -383,31 +778,61 @@ function renderFunil(t, c) {
     const r = fin(e.r) ? Math.min(e.r, 100) : null;
     let st = "";
     if (e.faixa && r != null) {
-      const fx = `${e.faixa[0]}–${e.faixa[1]}%`;
-      st = r > e.faixa[1] ? `<span class="st st-ok">acima da meta (${fx})</span>`
-        : r >= e.faixa[0] ? `<span class="st st-ok">na meta (${fx})</span>`
-        : `<span class="st st-warn">abaixo da meta (${fx})</span>`;
+      // a clínica lê "dentro do normal"; o gestor vê a meta com a faixa (e o leigo no title)
+      const fx = leigo ? "" : ` (${e.faixa[0]}–${e.faixa[1]}%)`;
+      st = r > e.faixa[1] ? `<span class="st st-ok">${rotT("meta.acima")}${fx}</span>`
+        : r >= e.faixa[0] ? `<span class="st st-ok">${rotT("meta.na")}${fx}</span>`
+        : `<span class="st st-warn">${rotT("meta.abaixo")}${fx}</span>`;
     }
+    const taxa = r == null ? "" : e.solto ? e.rl : `${pc(r, r < 10 ? 1 : 0)} ${e.rl}`;
     return `<div class="fun-row">
         <span class="fun-l">${e.l}<small>${e.s}</small></span>
-        <div class="fun-bar"><div class="fun-fill${fora ? " out" : ""}" style="--w:${w.toFixed(1)}%;--i:${n}"><span>${int(e.v)}</span></div></div>
-        ${r != null ? `<p class="fun-rate">${pc(r, r < 10 ? 1 : 0)} ${e.rl} ${st}</p>` : ""}
+        <div class="fun-bar"><div class="fun-fill${fora ? " out" : ""}" style="--w:${w.toFixed(1)}%;--i:${n}"><span data-n="${e.v}" data-f="int" data-k="fun-${n}">${int(e.v)}</span></div></div>
+        ${r != null ? `<p class="fun-rate">${taxa} ${st}</p>` : ""}
       </div>`;
   }).join("");
 }
 
 function renderMeses() {
-  const lista = M.mesesDados().filter(m => m.ate - m.de >= 9 || m.ate === M.R).slice(-5);
-  const dados = lista.map(m => ({
-    m, t: M.consolidar(M.linhasDe(m.de, m.ate, { plat: S.plat })), c: M.crmTot(m.de, m.ate, { plat: S.plat }), parcial: !m.completo,
-  }));
-  const mx = Math.max(1, ...dados.map(d => d.c.fecharam));
-  $("#mes-a-mes").innerHTML = dados.map((d, n) => `
-    <div class="mam-col${d.parcial ? " parcial" : ""}">
-      <div class="mam-bar-box"><div class="mam-bar" style="--h:${Math.max(6, d.c.fecharam / mx * 86)}%;--i:${n}"><b>${d.c.fecharam}</b></div></div>
-      <span class="mam-m">${MES3[d.m.mes]}${d.parcial ? " · parcial" : ""}</span>
-      <span class="mam-s">${plural(d.t.conversoes, "conversa", "conversas")}<br>${brl(d.t.cpa)} cada</span>
-    </div>`).join("");
+  const todos = M.mesesDados(), fp = { plat: S.plat };
+  const lista = todos.filter(m => m.ate - m.de >= 9 || m.ate === M.R).slice(-5);
+  const rit = M.ritmoMes(M.R);
+  const dados = lista.map(m => {
+    const c = M.crmTot(m.de, m.ate, fp), atual = m.ate === M.R && !m.completo;
+    // projeção do mês corrente (calculada aqui, no painel): fecharam ÷ dias passados × dias do mês
+    const proj = atual && rit.pass > 0 ? Math.round(c.fecharam / rit.pass * rit.diasMes) : null;
+    return { m, t: M.consolidar(M.linhasDe(m.de, m.ate, fp)), c, parcial: !m.completo, atual, proj: proj != null && proj > c.fecharam ? proj : null };
+  });
+  const el = $("#mes-a-mes");
+  if (!dados.length) { el.innerHTML = `<p class="vazio">Ainda não há meses para comparar.</p>`; return; }
+  const v0 = dados[0].c.fecharam, ult = dados[dados.length - 1], vN = ult.c.fecharam;
+  const pn = v => (v === 1 ? "paciente novo" : "pacientes novos");
+  const parc = ult.parcial ? ` <span class="mam-parc">(${MES3[ult.m.mes]}. parcial)</span>` : "";
+  $("#mam-titulo").innerHTML = dados.length < 2 ? `${vN} ${pn(vN)} em ${MESES[ult.m.mes]}${parc}`
+    : v0 === vN ? `${vN} ${pn(vN)} por mês, estável${parc}`
+    : `De ${v0} para ${vN} ${pn(vN)} por mês${parc}`;
+  const acum = todos.reduce((s, m) => s + M.crmTot(m.de, m.ate, fp).fecharam, 0);
+  $("#mam-sub").textContent = `${plural(acum, "paciente novo", "pacientes novos")} vindos dos anúncios desde ${MESES[todos[0].mes]}.`;
+
+  const bloco = el.closest("[data-cena]");
+  const troca = FX && ANIM && FX.assentado(bloco) && el.querySelector(".mam-bar");
+  const foto = troca ? FX.fotografar(el, ".mam-bar", "data-m") : null;
+  const mx = Math.max(1, ...dados.map(d => Math.max(d.c.fecharam, d.proj || 0)));
+  const n = dados.length, pct = v => Math.max(4, v / mx * 100);
+  const tend = dados.map((d, k) => `${k ? "L" : "M"}${((k + .5) / n * 100).toFixed(2)} ${(150 - pct(d.c.fecharam) * 1.5).toFixed(1)}`).join(" ");
+  el.innerHTML = `<div class="mam-area">
+      ${n > 1 ? `<svg class="mam-tend" viewBox="0 0 100 150" preserveAspectRatio="none" aria-hidden="true"><path d="${tend}"/></svg>` : ""}
+      ${dados.map((d, k) => {
+        const h = pct(d.c.fecharam), hp = d.proj ? pct(d.proj) : null, dentro = hp && hp - h < 20 && h > 22;
+        return `<div class="mam-col${d.parcial ? " parcial" : ""}" style="--i:${k}"><div class="mam-bar-box" style="--h:${h.toFixed(1)}%${hp ? `;--hp:${hp.toFixed(1)}%` : ""}">
+          ${hp ? `<span class="mam-fantasma" aria-hidden="true"></span><span class="mam-proj">projeção ${d.proj}</span>` : ""}
+          <div class="mam-bar" data-m="${d.m.ano}-${d.m.mes}"></div>
+          <b class="mam-n${dentro ? " dentro" : ""}">${d.c.fecharam}</b></div></div>`;
+      }).join("")}
+    </div>
+    <div class="mam-rot">${dados.map(d => `<div><span class="mam-m">${MES3[d.m.mes]}${d.parcial ? " · parcial" : ""}</span>
+      <span class="mam-s">${plural(d.t.conversoes, "conversa", "conversas")} · ${brl(d.t.cpa)} cada</span></div>`).join("")}</div>`;
+  if (foto) FX.flip(el, ".mam-bar", foto, "data-m");
 }
 
 function linhasCamp() {
@@ -431,18 +856,20 @@ function renderLeitura(t, ta, c) {
     const v = variacao(t.cpa, ta.cpa);
     const vt = v == null ? "" : ` (${v <= 0 ? "caiu" : "subiu"} ${pc(Math.abs(v), 0)} em relação aos ${S.dias} dias anteriores)`;
     out.push(t.cpa <= meta
-      ? { k: "bom", i: "✓", h: `Custo por conversa de <b>${brl(t.cpa)}</b>, dentro da meta de ${brl(meta)}${vt}.` }
-      : { k: "aten", i: "!", h: `Custo por conversa em <b>${brl(t.cpa)}</b>, acima da meta de ${brl(meta)}${vt}.` });
+      ? { k: "bom", h: `Cada conversa no WhatsApp custou <b>${brl(t.cpa)}</b>, dentro da meta de ${brl(meta)}${vt}.` }
+      : { k: "aten", h: `Cada conversa no WhatsApp custou <b>${brl(t.cpa)}</b>, acima da meta de ${brl(meta)}${vt}.` });
   }
   // campanha com alerta ativo não pode ser elogiada nem receber verba
   const comAlerta = new Set(M.avaliar(M.R).filter(a => a.regra.nivel === "campanha").map(a => a.chave.split("|")[1]));
   const rows = linhasCamp().filter(r => r.t.gasto >= 40);
   const efic = rows.filter(r => r.k.fecharam > 0 && !comAlerta.has(r.c.id)).sort((a, b) => a.cpp - b.cpp)[0];
-  if (efic) out.push({ k: "bom", i: "★", h: `<b>${esc(efic.c.nome)}</b> é a campanha mais eficiente: cada paciente novo custou ${brl0(efic.cpp)} em anúncio.` });
+  if (efic) out.push({ k: "bom", h: `<b>${esc(efic.c.nome)}</b> é a campanha mais eficiente: cada paciente novo custou ${brl0(efic.cpp)} em anúncio.` });
   const serv = Object.entries(c.serv).sort((a, b) => b[1].v - a[1].v)[0];
-  if (serv && c.receita) out.push({ k: "bom", i: "+", h: `<b>${esc(serv[0])}</b> trouxe ${pc(serv[1].v / c.receita * 100, 0)} do valor em tratamentos fechados (${serv[1].n} de ${c.fecharam} ${c.fecharam === 1 ? "paciente" : "pacientes"}).` });
+  if (serv && c.receita) out.push({ k: "bom", h: `<b>${esc(serv[0])}</b> trouxe ${pc(serv[1].v / c.receita * 100, 0)} do valor em tratamentos fechados (${serv[1].n} de ${c.fecharam} ${c.fecharam === 1 ? "paciente" : "pacientes"}).` });
   const al = M.avaliar(M.R, true)[0];
-  if (al) out.push({ k: "aten", i: "!", h: `Radar: ${esc(al.msg)}` });
+  // a clínica lê o nome leigo da regra; a mensagem do núcleo só vai quando não tem tecniquês
+  if (al) out.push({ k: "aten", h: gestor() ? `Radar: ${esc(al.msg)}`
+    : `Radar · <b>${esc(rot(al.regra.id))}</b>: ${/\b(CTR|ROAS|CPA|CPM|impress)/i.test(al.msg) ? esc(LEIGO_LINHA[al.regra.id] || "") : esc(al.msg)}` });
   // Meta × Google: a conversa do Google costuma custar mais, mas chega mais decidida.
   if (!S.plat) {
     const { de } = janela();
@@ -451,16 +878,18 @@ function renderLeitura(t, ta, c) {
       const tm = razao(pm.agendadas, pm.conversas), tg = razao(pg.agendadas, pg.conversas);
       const cm = M.consolidar(M.linhasDe(de, M.R, { plat: "meta" })).cpa, cg = M.consolidar(M.linhasDe(de, M.R, { plat: "google" })).cpa;
       const [a, b, ta2, tb, ca2, cb] = tg >= tm ? ["Google", "Instagram/Facebook", tg, tm, cg, cm] : ["Instagram/Facebook", "Google", tm, tg, cm, cg];
-      out.push({ k: "acao", i: "→", h: `No <b>${a}</b>, ${pc(ta2, 0)} das conversas viram avaliação (contra ${pc(tb, 0)} no ${b}). ${ca2 > cb ? `A conversa custa mais (${brl(ca2)} × ${brl(cb)}), mas chega mais decidida.` : "E ainda sai mais barata."}` });
+      out.push({ k: "acao", h: `No <b>${a}</b>, de cada 100 conversas ${Math.round(ta2)} viram avaliação (contra ${Math.round(tb)} no ${b}). ${ca2 > cb ? `A conversa custa mais (${brl(ca2)} × ${brl(cb)}), mas chega mais decidida.` : "E ainda sai mais barata."}` });
     }
   }
-  $("#leitura").innerHTML = out.slice(0, 5).map(x => `<li class="${x.k}"><i aria-hidden="true">${x.i}</i><span>${x.h}</span></li>`).join("")
-    || `<li><i aria-hidden="true">·</i><span>Sem dados suficientes no período.</span></li>`;
+  $("#leitura").innerHTML = out.slice(0, 5).map((x, n) => `<li class="${x.k}" style="--i:${n}"><span class="lt-n" aria-hidden="true">${p2(n + 1)}</span>` +
+    `<p class="lt-t">${x.k === "aten" ? `<span class="lt-tag">atenção</span>` : ""}${x.h}</p></li>`).join("")
+    || `<li><span class="lt-n" aria-hidden="true">01</span><p class="lt-t">Sem dados suficientes no período.</p></li>`;
 }
 
 function renderRitmo() {
   const m = M.ritmoMes(M.R), orc = M.CFG.orcamento, escala = Math.max(orc, m.proj, 1) * 1.08;
   $("#ritmo-sub").textContent = `${MESES[m.mes]} · dia ${m.pass} de ${m.diasMes} · todas as plataformas`;
+  $("#ritmo-h").innerHTML = rotT("ritmo.titulo");
   const w = m.gasto / escala * 100, wp = m.proj / escala * 100, mo = orc / escala * 100;
   const acima = m.proj > orc * 1.02, noLimite = !acima && m.proj >= orc * .98;
   const msg = m.restam === 0 ? `Mês fechado em ${brl0(m.gasto)}.`
@@ -468,7 +897,7 @@ function renderRitmo() {
     : noLimite ? `No limite: o mês deve fechar em ${brl0(m.proj)}, praticamente no orçamento.`
     : `Dentro do orçamento: o mês deve fechar em ${brl0(m.proj)} (sobram ${brl0(orc - m.proj)}).`;
   $("#ritmo").innerHTML = `
-    <div class="ritmo-num"><strong data-n="${m.gasto}" data-f="brl0">${brl0(m.gasto)}</strong><span>investidos de ${brl0(orc)}</span></div>
+    <div class="ritmo-num"><strong data-n="${m.gasto}" data-f="brl0" data-k="rit">${brl0(m.gasto)}</strong><span>investidos de ${brl0(orc)}</span></div>
     <div class="pbar" style="--w:${w.toFixed(1)}%;--w0:${w.toFixed(1)}%;--w1:${Math.max(0, wp - w).toFixed(1)}%;--m:${mo.toFixed(1)}%"><i></i><u></u><b title="orçamento"></b></div>
     <div class="ritmo-leg"><span>gasto até ontem</span><span>projeção ${brl0(m.proj)}</span><span>▮ orçamento</span></div>
     <p class="ritmo-msg${acima ? " aten" : ""}">${msg}</p>`;
@@ -505,7 +934,7 @@ function renderCampanhas() {
   $("#tbl-campanhas").innerHTML = rows.length ? `<table>
     <caption class="sr-only">Campanhas nos últimos ${S.dias} dias</caption>
     <thead><tr>${th}</tr></thead>
-    <tbody>${rows.map((r, n) => `<tr style="--i:${n}">
+    <tbody>${rows.map((r, n) => `<tr style="--i:${n}" data-camp="${esc(r.c.id)}">
       <td><div class="nm"><span class="dot ${pontoCpa(r.t.cpa)}" title="custo por conversa vs. meta"></span><div class="nm-t"><span>${esc(r.c.nome)}</span><small><span class="chip chip-${classePlat(r.c.plat)}">${nomePlat(r.c.plat)}</span></small></div></div></td>
       <td>${brl0(r.t.gasto)}</td><td>${int(r.t.conversoes)}</td><td>${brl(r.t.cpa)}</td><td>${pc(r.t.ctr, 2)}</td>
       <td>${r.k.agendadas}</td><td>${r.k.fecharam}</td><td>${brl0(r.k.receita)}</td><td>${fin(r.roas) ? dec(r.roas, 1) + "x" : "—"}</td>
@@ -533,7 +962,7 @@ function renderCampanhas() {
       const camp = M.CAMP[k.camp];
       return `<tr style="--i:${n}">
         <td><div class="nm-t"><span>${esc(k.nome)}</span><small>${esc(camp ? camp.curto : "")} · <span class="chip chip-${classePlat(k.plat)}">${nomePlat(k.plat)}</span></small></div></td>
-        <td>${brl0(t.gasto)}</td><td>${int(t.impressoes)}</td><td>${pc(t.ctr, 2)}</td><td>${fq}</td><td>${int(t.conversoes)}</td><td>${brl(t.cpa)}</td><td>${sit}</td>
+        <td>${brl0(t.gasto)}</td><td>${int(t.impressoes)}</td><td>${pc(t.ctr, 2)}</td><td>${fq}</td><td>${int(t.conversoes)}</td><td>${brl(t.cpa)}</td><td class="sit"><span class="sit-chips">${sit}</span></td>
       </tr>`;
     }).join("")}</tbody>
   </table>` : `<p class="vazio">Nenhum criativo com investimento no período.</p>`;
@@ -544,10 +973,10 @@ function renderCampanhas() {
    ============================================================ */
 const COLS_K = [
   ["nova", "Nova conversa", "#9FB4C7"],
-  ["agendada", "Avaliação agendada", "#2B5A80"],
-  ["orcamento", "Avaliou · orçamento", "#B0761F"],
-  ["fechou", "Fechou (30 dias)", "#2F7D5B"],
-  ["parou", "Não seguiu (30 dias)", "#9A8F80"],
+  ["agendada", "Avaliação agendada", "#6FA3CF"],
+  ["orcamento", "Avaliou · orçamento", "#CF9540"],
+  ["fechou", "Fechou (30 dias)", "#7FD1A5"],
+  ["parou", "Não seguiu (30 dias)", "#9D9486"],
 ];
 const K_MAX = 8, K_PASSO = 24;
 const refParou = L => L.iConsulta ?? L.iAgenda ?? L.i;
@@ -579,11 +1008,13 @@ function cardLead(L, col, n) {
   const e = M.etapa(L);
   const ini = String(L.nome).split(/\s+/).map(p => p[0] || "").join("").slice(0, 2).toUpperCase() || "?";
   const q = quandoLead(L, e), camp = M.CAMP[L.camp];
+  // uma ficha estreita não comporta 2 chips: a plataforma vira um ponto de cor (com texto para leitor de tela)
   const origem = L.plat
-    ? `<span class="chip chip-${classePlat(L.plat)}">${nomePlat(L.plat)}</span><span class="chip chip-neutro">${esc(camp ? camp.curto : "")}</span>`
+    ? `<span class="chip chip-camp"><i class="pt pt-${classePlat(L.plat)}" aria-hidden="true"></i><span class="sr-only">${nomePlat(L.plat)}: </span>${esc(camp ? camp.curto : "")}</span>`
     : `<span class="chip chip-neutro">${esc(camp ? camp.curto : "Sem anúncio")}</span>`;
-  const etq = col === "parou" ? `<span class="chip ${e === "faltou" ? "chip-bad" : "chip-neutro"}">${NOME_ETAPA[e] || e}</span>` : "";
-  return `<button type="button" class="lead" data-lead="${esc(String(L.id))}" style="--i:${n}" aria-haspopup="dialog">
+  // em "Não seguiu" a etapa já está escrita na linha de baixo (faltou / não agendou / não fechou): só marca a falta
+  const etq = col === "parou" && e === "faltou" ? `<span class="chip chip-bad">${NOME_ETAPA[e]}</span>` : "";
+  return `<button type="button" class="lead${S.destacar.has(String(L.id)) ? " destaque" : ""}" data-lead="${esc(String(L.id))}" data-col="${col}" style="--i:${n}" aria-haspopup="dialog" aria-describedby="k-dica">
     <span class="av" style="--c:${AVC[hash(L.nome) % AVC.length]}" aria-hidden="true">${esc(ini)}</span>
     <span><strong>${esc(L.nome)}</strong><span class="lp${q.atraso ? " atrasada" : ""}">${esc(L.servico)} · ${esc(q.txt)}</span>
       <span class="chips">${etq}${origem}${e === "fechou" ? `<span class="val">${brl0(M.valorLead(L))}</span>` : ""}</span></span></button>`;
@@ -607,7 +1038,7 @@ function renderKanban() {
   let n = 0;
   $("#kanban").innerHTML = COLS_K.map(([k, l, cor]) => {
     const tot = g[k].length, ver = Math.min(tot, S.kVer[k] || K_MAX), resto = tot - ver;
-    return `<section class="kcol" aria-label="${l}: ${tot} ${tot === 1 ? "paciente" : "pacientes"}">
+    return `<section class="kcol" data-col="${k}" aria-label="${l}: ${tot} ${tot === 1 ? "paciente" : "pacientes"}">
       <header class="kcol-h"><span><i class="kd" style="background:${cor}"></i>${l}</span><b>${tot}</b></header>
       ${g[k].slice(0, ver).map(L => cardLead(L, k, n++)).join("")}
       ${resto > 0 ? `<button type="button" class="kmore" data-kmais="${k}">Mostrar mais ${Math.min(resto, K_PASSO)} de ${resto}</button>` : ""}
@@ -618,6 +1049,7 @@ function renderKanban() {
 
 function renderPacientes() {
   renderKanban();
+  ligarArrasto();
 
   // anúncio × consultório (+ quem chegou sem anúncio, para o dono ver o todo)
   const { de } = janela(), rows = linhasCamp().sort((a, b) => b.k.receita - a.k.receita);
@@ -648,8 +1080,8 @@ function renderPacientes() {
     acc += p; return d;
   }).join("");
   $("#donut").innerHTML = `
-    <div class="donut"><svg viewBox="0 0 42 42" aria-hidden="true"><circle cx="21" cy="21" r="15.915" stroke="var(--paper-2)"/>${arcs}</svg>
-      <div class="ctr"><b data-n="${c.receita}" data-f="brl0">${brl0(c.receita)}</b><small>${c.fecharam} ${c.fecharam === 1 ? "paciente" : "pacientes"}</small></div></div>
+    <div class="donut"><svg viewBox="0 0 42 42" aria-hidden="true"><circle cx="21" cy="21" r="15.915" stroke="rgba(245,233,214,.08)"/>${arcs}</svg>
+      <div class="ctr"><b data-n="${c.receita}" data-f="brl0" data-k="donut">${brl0(c.receita)}</b><small>${c.fecharam} ${c.fecharam === 1 ? "paciente" : "pacientes"}</small></div></div>
     <ul class="dleg">${segs.map(s => `<li><i style="background:${s.cor}"></i>${esc(s.nome)} <span>${s.n} · ${brl0(s.v)}</span></li>`).join("")}</ul>`;
 }
 
@@ -666,6 +1098,8 @@ function opcoesOrigem() {
 
 function gvAtualizar() {
   const e = gvEtapa();
+  const ind = $("#lf-etapas-op .etapa-ind");
+  if (ind) ind.style.setProperty("--k", Math.max(0, ETAPAS.findIndex(x => x[0] === e)));
   $("#lf-box-consulta").hidden = !COM_DATA.has(e);
   $("#lf-consulta-l").textContent = e === "agendada" ? "Quando é a consulta?" : e === "faltou" ? "Dia da consulta que faltou" : "Dia da consulta";
   $("#lf-box-valor").hidden = e !== "fechou";
@@ -676,25 +1110,47 @@ function gvAtualizar() {
   v.dataset.sug = sug ? String(sug) : "";
 }
 
-function abrirGaveta(L) {
+/** Fita da jornada: 4 fotogramas (chamou → agendou → consulta → fechou), só com os campos que existem. */
+function fitaHtml(L) {
+  if (!L) return "";
+  const e = M.etapa(L), R = M.R;
+  const dia = i => (i == null ? null : `${SEMANA[M.dataDe(i).getDay()]} · ${M.ddmm(i)}`);
+  const entre = (a, b, txt) => (a != null && b != null && b >= a ? (b - a === 0 ? `no mesmo dia` : `${plural(b - a, "dia", "dias")} ${txt}`) : "");
+  const fechou = e === "fechou";
+  const quadros = [
+    { t: "Chamou", q: dia(L.i), on: true, v: L.plat ? `via ${nomePlat(L.plat)}` : "sem anúncio" },
+    { t: "Agendou", q: dia(L.iAgenda), on: L.iAgenda != null && e !== "nova" && e !== "perdida", d: entre(L.i, L.iAgenda, "até agendar") },
+    { t: "Consulta", q: dia(L.iConsulta), on: L.iConsulta != null && ETAPAS_VEIO.has(e), marcado: L.iConsulta != null && e === "agendada",
+      falta: e === "faltou", d: entre(L.iAgenda, L.iConsulta, "até a consulta") },
+    { t: "Fechou", q: fechou ? brl0(M.valorLead(L)) : null, on: fechou, v: fechou ? L.servico : "" },
+  ];
+  return quadros.map((f, n) => `<li class="ft${f.on ? " on" : ""}${f.marcado && !f.on ? " marcado" : ""}${f.falta ? " falta" : ""}" style="--i:${n}">
+      <span class="ft-t">${f.t}</span><b class="ft-q">${f.falta ? "faltou" : f.q && (f.on || f.marcado) ? esc(f.q) : "—"}</b>
+      ${f.v && f.on ? `<span class="ft-v">${esc(f.v)}</span>` : ""}${f.d && (f.on || f.marcado) ? `<span class="ft-d">${esc(f.d)}</span>` : ""}</li>`).join("");
+}
+const ETAPAS_VEIO = new Set(["orcamento", "fechou", "nao_fechou"]);
+
+function abrirGaveta(L, o = {}) {
   if (!M) return;
   tourFim();
   gv.lead = L || null;
-  gv.volta = document.activeElement;
+  gv.volta = o.volta || document.activeElement;
+  gv.antes = L ? M.etapa(L) : null;
   const b = (L && L.bruto) || {};
-  const e = L ? M.etapa(L) : "nova";
+  const e = o.etapa || (L ? M.etapa(L) : "nova");
   $("#gv-titulo").textContent = L ? L.nome : "Novo paciente";
   $("#gv-eyebrow").textContent = L ? `Conversa de ${M.dataBR(L.i)}` : "Cadastro manual";
   $("#gv-demo").hidden = !S.demo;
-  $("#gv-erro").textContent = "";
+  $("#gv-erro").textContent = ""; $("#gv-erro").classList.remove("nota");
+  $("#gv-fita").innerHTML = fitaHtml(L);
+  $("#gv-fita").hidden = !L;
 
-  // quem veio de anúncio identificado pelo WhatsApp não muda de origem na mão
+  // quem veio de anúncio identificado pelo WhatsApp não muda de origem na mão: vira o cartão de referência do anúncio
   const travado = !!(L && L.plat && (S.demo || b.anuncio_ext));
   if (travado) {
     const k = L.cri && M.CRI[L.cri], c = M.CAMP[L.camp];
-    $("#gv-origem-info").innerHTML = k
-      ? `Veio do anúncio <b>${esc(k.nome)}</b>, da campanha <b>${esc(c ? c.nome : "—")}</b> (${nomePlat(L.plat)}).`
-      : `Veio de um anúncio da campanha <b>${esc(c ? c.nome : "—")}</b> (${nomePlat(L.plat)}).`;
+    $("#gv-origem-info").innerHTML = `<span class="ref-mini ref-${classePlat(L.plat)}" aria-hidden="true"><svg><use href="#ic-wa"/></svg></span>
+      <span class="ref-q"><small>Anúncio · ${nomePlat(L.plat)}</small><b>${esc(k ? k.nome : "anúncio da campanha")}</b><span>${esc(c ? c.nome : "—")}</span></span>`;
   } else {
     $("#lf-origem").innerHTML = opcoesOrigem();
     const v = L && L.plat && M.CAMP[L.camp] ? "camp:" + L.camp : (b.origem && b.origem !== "anuncio" ? b.origem : (L && L.origem && L.origem !== "anuncio" ? L.origem : L ? "whatsapp" : "indicacao"));
@@ -717,35 +1173,164 @@ function abrirGaveta(L) {
   const v = $("#lf-valor");
   v.value = !L ? "" : S.demo ? (L.fechou ? M.valorLead(L) : "") : (b.valor != null ? b.valor : "");
   v.dataset.sug = "";
+  // chegou a "agendada" pelo arrasto sem data: a consulta que já estava marcada no passado não serve
+  if (o.etapa === "agendada" && $("#lf-consulta").value && iDeIso($("#lf-consulta").value) <= M.R) $("#lf-consulta").value = "";
   $$('input[name="lf-etapa"]').forEach(r => { r.checked = r.value === e; });
   gvAtualizar();
 
+  const g = $("#gaveta");
+  clearTimeout(g._tFecha); g._fechando = false;
+  g.classList.remove("sai", "volta", "arrastando"); g.style.removeProperty("--gx");
+  $("#gaveta-fundo").classList.remove("sai");
   $("#gaveta-fundo").hidden = false;
-  $("#gaveta").hidden = false;
+  g.hidden = false;
   $("#app").inert = true;
   document.body.style.overflow = "hidden";
-  const foco = L ? $('input[name="lf-etapa"]:checked') : $("#lf-nome");
+  // veio de um arrasto até "Agendada"/"Fechou": a etapa já vem marcada e o campo que falta ganha o foco
+  const foco = o.etapa === "fechou" ? $("#lf-valor") : o.etapa === "agendada" ? $("#lf-consulta")
+    : L ? $('input[name="lf-etapa"]:checked') : $("#lf-nome");
   if (foco) foco.focus();
 }
 
 function fecharGaveta(semFoco) {
-  if ($("#gaveta").hidden) return;
-  $("#gaveta").hidden = true;
-  $("#gaveta-fundo").hidden = true;
+  const g = $("#gaveta"), fundo = $("#gaveta-fundo");
+  if (g.hidden || g._fechando) return;
+  const fim = () => {
+    g._fechando = false; g.hidden = true; fundo.hidden = true;
+    g.classList.remove("sai", "volta", "arrastando"); g.style.removeProperty("--gx"); fundo.classList.remove("sai");
+  };
+  // sai em 160 ms (e-io); sessão expirada e trocas internas fecham na hora
+  if (ANIM && !semFoco) { g._fechando = true; g.classList.add("sai"); fundo.classList.add("sai"); g._tFecha = setTimeout(fim, 200); }
+  else fim();
   $("#app").inert = false;
   document.body.style.overflow = "";
   if (!semFoco) {
     let v = gv.volta;
-    if (!v || !document.contains(v)) v = gv.lead ? $(`[data-lead="${CSS.escape(String(gv.lead.id))}"]`) : $("#btn-novo-lead");
+    if (!v || v === document.body || !document.contains(v)) v = gv.lead ? $(`[data-lead="${CSS.escape(String(gv.lead.id))}"]`) : $("#btn-novo-lead");
     if (v) v.focus();
   }
   gv.lead = null;
 }
 
+/* ---------- mover um paciente de etapa (gaveta, arrasto, teclado) ---------- */
+const fotoLead = L => ({ etapa: M.etapa(L), etapaReal: L.etapaReal, iAgenda: L.iAgenda, iConsulta: L.iConsulta,
+  compareceu: L.compareceu, fechou: L.fechou, valor: L.valor, servico: L.servico, nome: L.nome, obs: L.obs });
+const restaurarLead = (L, f) => { const { etapa, ...resto } = f; Object.assign(L, resto); };
+/** Demo: a ficha muda SÓ na memória desta tela (recarregar volta aos números da demo). */
+function aplicarEtapaMem(L, etapa, { consulta, valor } = {}) {
+  const R = M.R, passado = i => (i != null && i <= R ? i : null);
+  const iC = consulta ? iDeIso(consulta) : null;
+  L.etapaReal = etapa;
+  if (etapa === "nova" || etapa === "perdida") { L.iAgenda = null; L.iConsulta = null; L.compareceu = false; L.fechou = false; }
+  else if (etapa === "agendada") { L.iAgenda = passado(L.iAgenda) ?? R; L.iConsulta = iC != null && iC > R ? iC : R + 1; L.compareceu = false; L.fechou = false; }
+  else {
+    // o que já aconteceu conta no último dia fechado (ontem): é o que o herói e a régua enxergam
+    L.iConsulta = iC != null ? Math.min(iC, R) : passado(L.iConsulta) ?? R;
+    L.iAgenda = passado(L.iAgenda) ?? L.iConsulta;
+    L.compareceu = etapa !== "faltou";
+    L.fechou = etapa === "fechou";
+  }
+  if (etapa === "fechou") L.valor = valor !== "" && valor != null && fin(+valor) ? +valor : null;
+}
+function depoisDeMover(L, antes) {
+  M = montar(DS);
+  const agora = M.etapa(L);
+  if (S.aba !== "ajustes") render(false);
+  atualizarBadge();
+  if (agora === "fechou" && antes.etapa !== "fechou") celebrar(L);
+}
+/** Arrasto/teclado para uma coluna que não pede dado novo: grava na hora (nx_lead_salvar) com "Desfazer" por 5 s. */
+async function moverLead(L, etapa) {
+  const antes = fotoLead(L), rotEt = NOME_ETAPA[etapa];
+  if (S.demo) {
+    aplicarEtapaMem(L, etapa);
+    depoisDeMover(L, antes);
+    toast(`Movido: ${nomeCurto(L.nome)} → ${rotEt} · só nesta tela`, "nota", { rotulo: "Desfazer", fn: () => { const f = fotoLead(L); restaurarLead(L, antes); depoisDeMover(L, f); } });
+    return true;
+  }
+  const b = L.bruto || {}, hoje = hojeDados(), p = { id: L.id, etapa };
+  if (etapa === "nova" || etapa === "perdida") { if (b.data_agenda || b.data_consulta) { p.data_agenda = ""; p.data_consulta = ""; } }
+  else if (COM_DATA.has(etapa)) p.data_consulta = b.data_consulta || hoje;
+  const volta = { id: L.id, etapa: b.etapa || antes.etapa, data_agenda: b.data_agenda || "", data_consulta: b.data_consulta || "" };
+  try { await api.leadSalvar(S.token, S.clienteId, p); }
+  catch (err) { if (err.codigo !== "sessao_invalida") toast(api.mensagemErro(err), "erro"); return false; }
+  toast(`Movido: ${nomeCurto(L.nome)} → ${rotEt}`, "ok", { rotulo: "Desfazer", fn: async () => {
+    try { await api.leadSalvar(S.token, S.clienteId, volta); toast("Desfeito ✓"); await carregarDados({ entrada: false }); }
+    catch (err) { if (err.codigo !== "sessao_invalida") toast(api.mensagemErro(err), "erro"); }
+  } });
+  await carregarDados({ entrada: false });
+  return true;
+}
+/** Solta uma ficha numa coluna do kanban (arrastar.js): agenda/fecha pela gaveta, "não seguiu" pelo mini-menu. */
+function soltarNaColuna(L, col, o = {}) {
+  if (!L || !M) return Promise.resolve(false);
+  if (col === colunaDe(L)) return Promise.resolve(false);
+  if (col === "agendada" || col === "fechou") {
+    abrirGaveta(L, { etapa: col, volta: $(`#kanban [data-lead="${CSS.escape(String(L.id))}"]`) });
+    return Promise.resolve(false);
+  }
+  if (col === "parou") return menuParou(L, o.x, o.y);
+  return moverLead(L, col);
+}
+/** "Não seguiu" tem três motivos: um mini-menu pergunta qual. */
+function menuParou(L, x, y) {
+  return new Promise(res => {
+    const m = $("#menu-parou"), volta = document.activeElement;
+    m.innerHTML = `<p class="mp-t">${esc(nomeCurto(L.nome))} não seguiu porque…</p>` +
+      [["faltou", "Faltou à consulta"], ["nao_fechou", "Avaliou e não fechou"], ["perdida", "Não agendou"]]
+        .map(([v, l]) => `<button type="button" role="menuitem" data-mp="${v}">${l}</button>`).join("") +
+      `<button type="button" role="menuitem" class="mp-x" data-mp="">Cancelar</button>`;
+    const w = 240, h = 210;
+    m.style.left = Math.max(12, Math.min(innerWidth - w - 12, (x ?? innerWidth / 2) - w / 2)) + "px";
+    m.style.top = Math.max(12, Math.min(innerHeight - h - 12, (y ?? innerHeight / 2) - 20)) + "px";
+    m.hidden = false;
+    const itens = $$("[data-mp]", m);
+    itens[0].focus();
+    const fim = async v => {
+      m.hidden = true;
+      m.removeEventListener("click", clique); m.removeEventListener("keydown", tecla); document.removeEventListener("pointerdown", fora, true);
+      if (volta && document.contains(volta)) volta.focus();
+      res(v ? await moverLead(L, v) : false);
+    };
+    const clique = e => { const b = e.target.closest("[data-mp]"); if (b) fim(b.dataset.mp); };
+    const tecla = e => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); fim(""); }
+      const k = itens.indexOf(document.activeElement), d = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+      if (d) { e.preventDefault(); itens[(k + d + itens.length) % itens.length].focus(); }
+    };
+    const fora = e => { if (!m.contains(e.target)) fim(""); };
+    m.addEventListener("click", clique); m.addEventListener("keydown", tecla);
+    setTimeout(() => document.addEventListener("pointerdown", fora, true), 0);
+  });
+}
+
+/* ---------- o momento "Fechou": luz bronze curta, uma vez por evento (≤ 1,4 s) ---------- */
+function celebrar(L) {
+  if (!L || !M) return;
+  const v = M.valorLead(L), d = M.dataDe(M.R), ini = Math.max(0, M.R - (d.getDate() - 1));
+  const soma = M.crmTot(ini, M.R).receita, mes = MESES[d.getMonth()];
+  const el = $("#celebra");
+  el.innerHTML = `<p class="cb-t">Paciente novo!</p><p class="cb-l">${esc(nomeCurto(L.nome))} fechou ${esc(L.servico)} · <b>${brl0(v)}</b></p>` +
+    `<p class="cb-s">${mes.charAt(0).toUpperCase() + mes.slice(1)} agora soma <b>${brl0(soma)}</b></p>`;
+  clearTimeout(el._t);
+  el.hidden = false;
+  el.classList.remove("on"); void el.offsetWidth; el.classList.add("on");
+  el._t = setTimeout(() => { el.classList.remove("on"); el._t = setTimeout(() => { el.hidden = true; }, 400); }, 3400);
+  const card = $(`#kanban [data-lead="${CSS.escape(String(L.id))}"]`);
+  if (card) { card.classList.remove("brilha"); void card.offsetWidth; card.classList.add("brilha"); setTimeout(() => card.classList.remove("brilha"), 1600); }
+  if (ANIM && CINE && CINE.faiscas) CINE.faiscas((card && card.offsetParent ? card : el).getBoundingClientRect());
+  try { if (navigator.vibrate && matchMedia("(pointer: coarse)").matches) navigator.vibrate(12); } catch { /* sem vibração */ }
+}
+
 async function salvarLead(ev) {
   ev.preventDefault();
-  const erro = msg => { $("#gv-erro").textContent = msg; };
-  if (S.demo) return erro("Demonstração: nada foi salvo. No painel da clínica, este botão grava na hora.");
+  // tom "nota" = aviso neutro (demo), nunca vermelho; com a gaveta já fechada, vira aviso rápido
+  const erro = (msg, o = {}) => {
+    const g = $("#gaveta");
+    if (g.hidden || g._fechando) return toast(msg, o.tom === "nota" ? "nota" : "erro");
+    $("#gv-erro").textContent = msg;
+    $("#gv-erro").classList.toggle("nota", o.tom === "nota");
+  };
   const L = gv.lead, b = (L && L.bruto) || {}, e = gvEtapa(), hoje = hojeDados();
   const nome = $("#lf-nome").value.trim(), tel = soDigitos($("#lf-tel").value);
   if (!L && !nome && !tel) { $("#lf-nome").focus(); return erro("Informe pelo menos o nome ou o telefone."); }
@@ -784,13 +1369,24 @@ async function salvarLead(ev) {
     }
   }
 
-  const btn = $("#gv-salvar");
+  // demo: a ficha muda só nesta tela e a celebração acontece ANTES da guarda (que continua: nada é gravado)
+  if (S.demo && L) {
+    const antes = fotoLead(L);
+    aplicarEtapaMem(L, e, { consulta: p.data_consulta, valor: p.valor });
+    Object.assign(L, { servico: p.servico, obs: p.obs }, p.nome ? { nome: p.nome } : {});
+    depoisDeMover(L, antes);
+    fecharGaveta();   // o foco volta para a ficha já redesenhada na coluna nova
+  }
+  if (S.demo) return erro("Demonstração: nada foi salvo — a ficha mudou só nesta tela. No painel da clínica, este botão grava na hora.", { tom: "nota" });
+
+  const btn = $("#gv-salvar"), antes = L ? M.etapa(L) : null;
   ocupado(btn, true);
   try {
     await api.leadSalvar(S.token, S.clienteId, p);
     fecharGaveta();
     toast(L ? "Paciente atualizado ✓" : "Paciente cadastrado ✓");
     await carregarDados({ entrada: false });
+    if (L && e === "fechou" && antes !== "fechou") celebrar(M.LEADS.find(x => String(x.id) === String(L.id)) || L);
     // o kanban foi redesenhado: o cartão que tinha o foco não existe mais
     if (document.activeElement === document.body || !document.activeElement) {
       const volta = L && $(`[data-lead="${CSS.escape(String(L.id))}"]`);
@@ -807,6 +1403,7 @@ async function salvarLead(ev) {
 const OPS = { ">": "acima de", "<": "abaixo de", ">=": "a partir de", "<=": "até" };
 const ROT_MET = { cpa: "Custo por conversa", ctr: "CTR", freq: "Frequência", conversoes: "Conversas" };
 const SEV_NOME = { critico: "crítico", alerta: "alerta", info: "informativo" };
+let radarCtl = null, radarChega = false;   // varredura em canvas (cinema.js), se houver
 const horaCheia = () => `${p2(new Date().getHours())}:00`;
 const ultimoSync = () => ((S.dados && S.dados.integracoes) || []).map(i => i.ultimo_sync).filter(Boolean).sort().pop() || null;
 
@@ -817,6 +1414,126 @@ function alertasServidor() {
     if (!e || String(a.criado_em) > String(e.criado_em)) m.set(a.chave, a);
   }
   return m;
+}
+
+/* ---------- envios de WhatsApp: a mesma régua em todo lugar (statusEnvio) ---------- */
+const tiqueHtml = s => (s ? `<i class="tq tq-${s.k}" aria-hidden="true">${s.tique}</i>` : "");
+const envLinha = s => (s ? `<span class="env env-${s.k}">${esc(s.rotulo)} ${tiqueHtml(s)}</span>` : "");
+const chipExemplo = x => (x && x.exemplo ? `<span class="chip chip-exemplo">exemplo</span>` : "");
+/** Linha do tempo de um envio: gerado/registrado → enviado → entregue (só o que o servidor sabe). */
+function linhaTempo(x, tipo) {
+  const s = statusEnvio(x);
+  const p0 = x.criado_em ? { l: tipo === "alerta" ? "registrado" : "gerado", q: quandoSP(x.criado_em), c: "ok" }
+    : x.referencia ? { l: "referente a", q: dataIso(x.referencia), c: "ok" } : null;
+  const passos = [p0,
+    { l: "enviado", q: x.enviado_em ? quandoSP(x.enviado_em) : s.k === "erro" ? "não saiu" : "ainda não", c: x.enviado_em ? "ok" : s.k === "erro" ? "erro" : "falta" },
+    { l: "entregue", q: x.entregue_em ? quandoSP(x.entregue_em) : s.k === "erro" && x.enviado_em ? "não chegou" : "sem confirmação ainda",
+      c: x.entregue_em ? "ok" : s.k === "erro" && x.enviado_em ? "erro" : "falta" },
+  ].filter(Boolean);
+  return `<ol class="env-tempo">${passos.map(p => `<li class="et-${p.c}"><b>${p.l}</b><span>${esc(p.q)}</span></li>`).join("")}</ol>` +
+    (s.erro ? `<p class="env-motivo">${esc(s.erro)}</p>` : "");
+}
+let envN = 0;
+/** Item de lista com um envio: título + status (✓/✓✓/!) que abre a linha do tempo. */
+function itemEnvio({ titulo, sub = "", x, tipo, antes = "", depois = "", cls = "" }) {
+  const id = `env-${++envN}`, s = statusEnvio(x);
+  return `<li class="env-item ${cls}">${antes}<div class="env-q">
+      <button class="env-alt" type="button" aria-expanded="false" aria-controls="${id}">
+        <span class="env-t">${titulo}</span>${sub ? `<span class="env-sub">${sub}</span>` : ""}
+        <span class="env-s">${chipExemplo(x)}${envLinha(s)}<svg class="env-seta" viewBox="0 0 12 8" aria-hidden="true"><path d="M1 1l5 5 5-5"/></svg></span>
+      </button>
+      <div class="env-abre" id="${id}"><div>${linhaTempo(x, tipo)}</div></div>
+    </div>${depois}</li>`;
+}
+
+/* ---------- conexão com Meta/Google: pílula no topo, faixa em todas as abas ---------- */
+const estadoInteg = () => estadoIntegracao((S.dados && S.dados.integracoes) || [], (S.dados && S.dados.alertas) || []);
+const SIMULAR_INTEG = DEMO && Q.get("simular") === "integracao";
+let syncT = 0;
+function minutosAtras(ms) {
+  const m = Math.max(0, Math.round((Date.now() - ms) / 6e4));
+  return m < 1 ? "agora há pouco" : m < 60 ? `há ${m} min` : m < 120 ? "há 1 h" : m < 48 * 60 ? `há ${Math.floor(m / 60)} h` : `há ${Math.floor(m / 1440)} dias`;
+}
+function renderIntegracao() {
+  const pill = $("#sync-pill"), faixa = $("#faixa-integ");
+  if (!pill) return;
+  const temApp = !!M && !S.estado;
+  const e = estadoInteg();
+  const demoCalma = S.demo && !SIMULAR_INTEG;
+  let nivel = e.nivel, txt = "";
+  if (demoCalma) { nivel = "demo"; txt = `Demonstração · dados de ${M ? M.ddmm(M.R) : "—"}`; }
+  else if (nivel === "erro") {
+    const nomes = e.erros.map(x => nomePlat(x.canal));
+    txt = `${nomes.join(" e ")} ${nomes.length > 1 ? "desconectados" : "desconectado"}`;
+  } else if (nivel === "atrasado") txt = "Leitura atrasada";
+  else if (nivel === "aguardando") txt = "Aguardando a 1ª leitura";
+  else if (nivel === "ok") txt = `Atualizado ${minutosAtras(e.ultimo)}`;
+  pill.hidden = !temApp || nivel === "nenhuma";
+  pill.className = `sync-pill sp-${nivel}`;
+  $("#sync-txt").textContent = txt;
+  // faixa de conexão caída: aparece em todas as abas, com o próximo passo
+  const erros = S.demo && !SIMULAR_INTEG ? [] : e.erros;
+  faixa.hidden = !temApp || !erros.length;
+  if (erros.length) {
+    const partes = erros.map(x => `A conexão com o ${nomePlat(x.canal)} caiu: os números do ${nomePlat(x.canal)} estão parados desde ${x.sync ? ddmmHora(new Date(x.sync).toISOString()) : "a última leitura"}.`);
+    faixa.innerHTML = `<svg class="fi-ic" aria-hidden="true"><use href="#ic-sinal"/></svg><p>${partes.map(esc).join(" ")}</p>` +
+      (gestor() ? `<button class="pill pill-ink pill-sm" type="button" data-ir="ajustes">Abrir Ajustes</button>` : `<p class="fi-nota">A Nexus já foi avisada e está resolvendo.</p>`);
+  }
+  if ($("#sync-pop").hidden === false) renderSyncPop();
+  // "há X min" anda sozinho (a cada 30 s; parado com a aba oculta)
+  clearInterval(syncT);
+  if (temApp && nivel === "ok") syncT = setInterval(() => { if (!document.hidden) renderIntegracao(); }, 30000);
+}
+function renderSyncPop() {
+  const e = estadoInteg(), pop = $("#sync-pop");
+  const ESTADO = { ok: "lendo normalmente", atrasado: "leitura atrasada", aguardando: "esperando a 1ª leitura", erro: "desconectado" };
+  const prox = 60 - new Date().getMinutes();
+  const linhas = e.canais.map(c => `<li class="spp-${c.estado}"><b>${nomePlat(c.canal)}</b><span>${c.sync ? `lida às ${FMT_HORA.format(new Date(c.sync))} (${quandoSP(new Date(c.sync).toISOString()).replace(/ às .*/, "")})` : "ainda não leu"} · ${ESTADO[c.estado]}</span></li>`).join("");
+  const radarQ = S.varridoEm ? `hoje às ${S.varridoEm}` : e.ultimo ? quandoSP(new Date(e.ultimo).toISOString()) : "—";
+  pop.innerHTML = `<p class="spp-h">${S.demo ? "Leitura dos anúncios (exemplo)" : "Leitura dos anúncios"}</p>` +
+    (linhas ? `<ul>${linhas}</ul>` : `<p class="spp-v">Nenhuma plataforma conectada.</p>`) +
+    `<p class="spp-v">Próxima leitura em ~${prox} min · de hora em hora</p><p class="spp-v">Última varredura do radar: ${esc(radarQ)}</p>`;
+}
+function abrirSyncPop(on) {
+  const pop = $("#sync-pop"), b = $("#sync-pill");
+  if (on) renderSyncPop();
+  pop.hidden = !on;
+  b.setAttribute("aria-expanded", String(on));
+  if (!on && pop.contains(document.activeElement)) b.focus();
+}
+
+/** Demo: relatórios e avisos de EXEMPLO (rótulo "exemplo"), com estados de entrega variados.
+    O modo real nunca passa por aqui: lá só aparece o que o servidor registrou. */
+function exemploDemo() {
+  const hora = (i, hms) => `${isoI(i)}T${hms}-03:00`;
+  const seg = s => `08:0${Math.floor(s / 60)}:${p2(s % 60)}`;
+  const relatorios = [];
+  for (let k = 0; k < 6; k++) {
+    const i = M.R - k, env = 12 + k * 7, ent = env + 9 + (k * 13) % 40;
+    relatorios.push({ tipo: "diario", referencia: isoI(i), texto: M.relDiario(i), leitura_ia: null, erro: null, exemplo: true,
+      enviado_em: hora(i + 1, seg(env)), entregue_em: k === 3 ? null : hora(i + 1, seg(ent)) });   // 1 sem confirmação
+  }
+  const mes = M.mesesDados().filter(m => m.completo).pop();
+  if (mes) relatorios.push({ tipo: "mensal", referencia: isoI(mes.de), texto: M.relMensal(mes), leitura_ia: null, erro: null, exemplo: true,
+    enviado_em: hora(mes.ate + 1, "09:00:04"), entregue_em: hora(mes.ate + 1, "09:00:31") });
+  const alertas = M.avaliar(M.R, true).map((a, n) => ({
+    regra: a.regra.id, chave: a.chave, severidade: a.sev, mensagem: a.msg, acao: a.acao, referencia: isoI(M.R), exemplo: true,
+    criado_em: hora(M.R + 1, `07:0${n}:00`), enviado_em: hora(M.R + 1, `07:0${n}:03`), entregue_em: n === 1 ? null : hora(M.R + 1, `07:0${n}:1${n}`),
+  }));
+  const agora = Date.now();
+  const integracoes = [
+    { canal: "meta", ativo: true, ultimo_sync: new Date(agora - 12 * 6e4).toISOString(), status: "ok — 120 linhas" },
+    { canal: "google", ativo: true, ultimo_sync: new Date(agora - 12 * 6e4).toISOString(), status: "ok — 36 linhas" },
+  ];
+  // ?demo&simular=integracao: o token do Meta "expirou" ontem à noite (só na demo)
+  if (SIMULAR_INTEG) {
+    integracoes[0].status = "erro — token de acesso expirado";
+    integracoes[0].ultimo_sync = hora(M.R, "22:00:00");
+    alertas.unshift({ regra: "integracao", chave: "integracao|meta", severidade: "critico", mensagem: "Token do Meta expirou",
+      acao: "Gerar um token novo no Meta e colar em Ajustes → Integrações.", referencia: isoI(M.R), exemplo: true,
+      criado_em: new Date(agora - 40 * 6e4).toISOString(), enviado_em: new Date(agora - 40 * 6e4 + 3000).toISOString(), entregue_em: new Date(agora - 40 * 6e4 + 9000).toISOString() });
+  }
+  return { hoje: hojeSP(), relatorios, alertas, integracoes, exemplo: true };
 }
 
 function renderRadar() {
@@ -833,6 +1550,13 @@ function renderRadar() {
     b.style.animationDelay = n * .45 + "s";
     scope.appendChild(b);
   });
+  if (CINE && CINE.radar) {
+    if (!radarCtl) {
+      radarCtl = CINE.radar(scope);
+      radarCtl.aoApontar(chave => $$("#alerts li[data-chave]").forEach(li => li.classList.toggle("realce", li.dataset.chave === chave)));
+    }
+    radarCtl.atualizar(atuais.map((a, n) => ({ chave: a.chave, sev: a.sev, ang: (n * 137.5 + 40) * Math.PI / 180, rad: { critico: .34, alerta: .54, info: .74 }[a.sev] })));
+  }
   const qtd = `${atuais.length} ${atuais.length === 1 ? "alerta ativo" : "alertas ativos"}`;
   const u = ultimoSync();
   $("#scope-status").innerHTML = vazio && !S.demo ? "Sem números de anúncio ainda: o radar começa a vigiar assim que a primeira leitura chegar."
@@ -841,16 +1565,28 @@ function renderRadar() {
     : u ? `Última leitura dos anúncios: <b>${quandoSP(u)}</b> · ${qtd}.` : `${qtd}.`;
   $("#btn-varrer").textContent = S.demo ? "Varrer agora" : "Conferir agora";
 
-  $("#alerts").innerHTML = hist.length ? hist.slice(0, 8).map((e, n) => {
-    const ativo = e.ate === M.R, a = e.a;
+  // conexão parada (regra "integracao", só o servidor conhece): sempre NO TOPO, com o sinal cortado
+  const est = estadoInteg();
+  const integs = [...srv.values()].filter(a => a.regra === "integracao").sort((x, y) => String(y.criado_em).localeCompare(String(x.criado_em)));
+  const htmlInteg = integs.map((a, n) => {
+    const c = canalDe(a), ativo = est.erros.some(x => x.canal === c);
+    const env = a.enviado_em || a.entregue_em ? ` · <span class="al-env">${envLinha(statusEnvio(a))}</span>` : "";
+    return `<li class="al-integ" style="--i:${n}"><span class="sev sev-critico sev-ic" role="img" aria-label="conexão parada"><svg><use href="#ic-sinal"/></svg></span>
+      <div><p class="al-t">${esc(nomeRegraSrv(a))} <span class="chip chip-conexao">conexão</span> <span class="chip ${ativo ? "chip-bad" : "chip-ok"}">${ativo ? "ativo" : "resolvido"}</span>${chipExemplo(a)}</p>
+      ${!gestor() ? `<p class="al-leigo">${esc(LEIGO_LINHA.integracao)}</p>` : ""}<p class="al-m">${esc(a.mensagem || "")}</p>
+      <p class="al-d">${quandoSP(a.criado_em)}${env}</p>${ativo && gestor() ? `<button class="link-b" type="button" data-ir="ajustes">Resolver em Ajustes → Integrações</button>` : ""}</div></li>`;
+  }).join("");
+  const htmlHist = hist.slice(0, 8).map((e, n) => {
+    const ativo = e.ate === M.R, a = e.a, id = a.regra.id;
     const desde = ativo ? (e.desde === M.R ? "desde ontem · continua" : `desde ${M.dMes(e.desde)} · continua`)
       : e.desde === e.ate ? `em ${M.dMes(e.desde)}` : `de ${M.dMes(e.desde)} a ${M.dMes(e.ate)}`;
     const s = srv.get(a.chave);
-    const env = s && s.enviado_em ? ` · <span class="al-env">aviso enviado no WhatsApp ${quandoSP(s.enviado_em)}</span>` : "";
-    return `<li style="--i:${n}"><span class="sev sev-${a.sev}" role="img" aria-label="${SEV_NOME[a.sev]}">${M.ICONE[a.sev]}</span>
-      <div><p class="al-t">${esc(a.regra.nome)} <span class="chip ${ativo ? (a.sev === "critico" ? "chip-bad" : "chip-warn") : "chip-ok"}">${ativo ? "ativo" : "resolvido"}</span></p>
-      <p class="al-m">${esc(a.msg)}</p><p class="al-d">${desde}${env}</p></div></li>`;
-  }).join("") : `<li class="vazio">Nenhum alerta nos últimos 14 dias.</li>`;
+    const env = s && (s.enviado_em || s.entregue_em) ? ` · <span class="al-env">aviso ${envLinha(statusEnvio(s))}</span>${chipExemplo(s)}` : "";
+    return `<li style="--i:${n + integs.length}"${ativo ? ` data-chave="${esc(a.chave)}"` : ""}><span class="sev sev-${a.sev}" role="img" aria-label="${SEV_NOME[a.sev]}">${M.ICONE[a.sev]}</span>
+      <div><p class="al-t">${rotT(id)} <span class="chip ${ativo ? (a.sev === "critico" ? "chip-bad" : "chip-warn") : "chip-ok"}">${ativo ? "ativo" : "resolvido"}</span></p>
+      ${!gestor() && LEIGO_LINHA[id] ? `<p class="al-leigo">${esc(LEIGO_LINHA[id])}</p>` : ""}<p class="al-m">${esc(a.msg)}</p><p class="al-d">${desde}${env}</p></div></li>`;
+  }).join("");
+  $("#alerts").innerHTML = htmlInteg + htmlHist || `<li class="vazio">Nenhum alerta nos últimos 14 dias.</li>`;
 
   const pode = S.demo || gestor();
   $("#rules").innerHTML = M.REGRAS.map(r => {
@@ -873,22 +1609,31 @@ function renderRadar() {
       `<p class="metas-l"><span>Orçamento de anúncios do mês</span><b>${brl0(M.CFG.orcamento)}</b></p>` +
       (gestor() ? `<button class="link-b" type="button" data-ir="ajustes">Alterar metas em Ajustes</button>` : "");
   }
-  $("#wa-alerta").innerHTML = `<div class="bubble">${waHtml(M.textoAlerta(atuais))}<span class="hr">${horaCheia()}</span></div>`;
+  $("#wa-alerta").innerHTML = `<span class="ph-day">hoje</span><div class="bubble${radarChega && ANIM ? " chega" : ""}">${waHtml(M.textoAlerta(atuais))}<span class="hr">${horaCheia()}</span></div>`;
 
+  // registro do servidor (na demo, os avisos de exemplo): nome próprio para cada regra e o tique honesto
   const log = ((S.dados && S.dados.alertas) || []).slice().sort((a, b) => String(b.criado_em).localeCompare(String(a.criado_em))).slice(0, 10);
-  const nomeRegra = id => (M.REGRAS.find(r => r.id === id) || { nome: id === "ritmo" ? "Ritmo do orçamento" : "Alerta" }).nome;
-  $("#avisos-log").innerHTML = S.demo
-    ? `<li class="vazio">Na demonstração nada é enviado. No painel real, aqui fica o registro de cada aviso que saiu no WhatsApp.</li>`
-    : !log.length ? `<li class="vazio">Nenhum aviso enviado ainda.</li>`
-    : log.map((a, n) => `<li style="--i:${n}"><span class="sev sev-${esc(a.severidade)}" role="img" aria-label="${SEV_NOME[a.severidade] || "alerta"}">${M.ICONE[a.severidade] || "•"}</span>
-        <div><p class="al-t">${esc(nomeRegra(a.regra))}</p><p class="al-m">${esc(a.mensagem)}</p>
-        <p class="al-d">${a.enviado_em ? `<span class="al-env">enviado no WhatsApp ${quandoSP(a.enviado_em)}</span>` : `registrado ${quandoSP(a.criado_em)} · ainda não enviado`}</p></div></li>`).join("");
+  const SEV_OK = new Set(["critico", "alerta", "info"]);
+  $("#avisos-log").innerHTML = !log.length ? `<li class="vazio">Nenhum aviso enviado ainda.</li>`
+    : log.map(a => {
+      const sev = SEV_OK.has(a.severidade) ? a.severidade : "alerta";
+      const ic = a.regra === "integracao" ? `<svg><use href="#ic-sinal"/></svg>` : M.ICONE[sev];
+      const nome = a.regra === "integracao" ? nomeRegraSrv(a) : LEIGO[a.regra] ? rot(a.regra) : nomeRegraSrv(a, M.REGRAS);
+      return itemEnvio({ titulo: esc(nome), sub: esc(a.mensagem || ""), x: a, tipo: "alerta",
+        antes: `<span class="sev sev-${sev}${a.regra === "integracao" ? " sev-ic" : ""}" role="img" aria-label="${SEV_NOME[sev]}">${ic}</span>` });
+    }).join("");
   atualizarBadge(atuais.length);
 }
 
 function atualizarBadge(n) {
   if (n == null) n = M && !semAnuncios() ? M.avaliar(M.R, true).length : 0;
-  $$("[data-badge]").forEach(b => { b.textContent = n; b.hidden = !n; });
+  $$("[data-badge]").forEach(b => {
+    const antes = b.textContent;
+    b.textContent = n; b.hidden = !n;
+    // pulsa UMA vez quando o número muda (nunca em loop)
+    if (ANIM && n && b._visto && antes !== String(n)) { b.classList.remove("pulsa"); void b.offsetWidth; b.classList.add("pulsa"); }
+    b._visto = true;
+  });
 }
 
 async function alternarRegra(id) {
@@ -930,11 +1675,12 @@ function relServidor() {
   return m;
 }
 
-function digitar(el, txt, dia, hora, naoEnviado) {
+function digitar(el, txt, dia, hora, st) {
   clearTimeout(el._t);
   el._texto = txt;
   const fim = () => {
-    el.innerHTML = `<span class="ph-day">${esc(dia)}</span><div class="bubble">${waHtml(txt)}<span class="hr${naoEnviado ? " nao" : ""}">${esc(hora)}</span></div>`;
+    // o tique sai do statusEnvio (✓ enviado · ✓✓ entregue · ! não saiu) — nunca azul
+    el.innerHTML = `<span class="ph-day">${esc(dia)}</span><div class="bubble${REDUCE ? "" : " chega"}">${waHtml(txt)}<span class="hr">${esc(hora)}${st ? ` ${tiqueHtml(st)}<span class="sr-only">${esc(st.rotulo)}</span>` : ""}</span></div>`;
     el.scrollTop = 0;
   };
   if (REDUCE) return fim();
@@ -942,22 +1688,50 @@ function digitar(el, txt, dia, hora, naoEnviado) {
   el._t = setTimeout(fim, 850);
 }
 
-function mostrarRel(tipo, rel, previa, dia, horaPadrao) {
-  const el = $("#ph-" + tipo), st = $("#st-" + tipo);
+function mostrarRel(tipo, rel, previa, dia, horaPadrao, dBloq) {
+  const el = $("#ph-" + tipo), st = $("#st-" + tipo), bloq = $("#bloq-" + tipo);
+  let txt, hora = horaPadrao, nao = null;
   if (rel && rel.texto) {
-    digitar(el, rel.texto, dia, rel.enviado_em ? horaSP(rel.enviado_em) : horaPadrao, !rel.enviado_em);
-    st.innerHTML = (rel.enviado_em ? `<span class="chip chip-ok">enviado ${quandoSP(rel.enviado_em)}</span>`
-      : rel.erro ? `<span class="chip chip-bad">não enviado</span> ${esc(String(rel.erro).slice(0, 140))}`
-      : `<span class="chip chip-warn">gerado, ainda não enviado</span>`) + (rel.leitura_ia ? ` <span class="chip chip-ia">leitura por IA</span>` : "");
+    const s = statusEnvio(rel);
+    txt = rel.texto; hora = rel.enviado_em ? horaSP(rel.enviado_em) : horaPadrao; nao = s;
+    const cls = { entregue: "chip-ok", enviado: "chip-neutro", erro: "chip-bad", pendente: "chip-warn" }[s.k];
+    st.innerHTML = `${chipExemplo(rel)}<span class="chip ${cls}">${esc(s.rotulo)} ${tiqueHtml(s)}</span>` +
+      (s.erro ? ` <span class="rel-erro">${esc(s.erro)}</span>` : "") + (rel.leitura_ia ? ` <span class="chip chip-ia">leitura por IA</span>` : "");
   } else if (semAnuncios() || !previa) {
     clearTimeout(el._t);
-    el._texto = "";
+    el._texto = ""; el._espera = null;
     el.innerHTML = `<p class="vazio">Ainda não há números de anúncio para montar este relatório.</p>`;
-    st.innerHTML = "";
+    st.innerHTML = ""; bloq.hidden = true;
+    return;
   } else {
-    digitar(el, previa(), dia, horaPadrao, false);
+    txt = previa();
     st.innerHTML = S.demo ? "" : `<span class="chip chip-neutro">prévia</span> calculada agora com os números do painel`;
   }
+  const col = el.closest(".phone-col");
+  if (FX && ANIM && col && !col.classList.contains("em-cena")) {
+    // 1ª vez: o relatório chega na tela bloqueada e destrava quando o celular entra em quadro
+    clearTimeout(el._t);
+    el._texto = txt; el.innerHTML = "";
+    const titulo = tipo === "diario" ? "Nexus · Tráfego" : `${M.NOME} · Resultados`;
+    bloq.innerHTML = telaBloqueada(horaPadrao, dBloq ? dataLonga(dBloq) : "", [{ nx: true, titulo, texto: semMarcas(String(txt).split("\n")[0]), quando: "agora" }]);
+    bloq.classList.remove("destrava"); bloq.hidden = false;
+    el._espera = () => digitar(el, txt, dia, hora, nao);
+  } else {
+    bloq.hidden = true; el._espera = null;
+    digitar(el, txt, dia, hora, nao);
+  }
+}
+/** A tela bloqueada sobe (500 ms) e entra o "digitando…" + o balão. */
+function destravarFone(col) {
+  const el = $(".ph-body", col), bloq = $(".fone-bloq", col);
+  if (!el || !bloq || !el._espera) return;
+  const seguir = el._espera;
+  el._espera = null;
+  setTimeout(() => {
+    bloq.classList.add("destrava");
+    setTimeout(() => { bloq.hidden = true; bloq.classList.remove("destrava"); }, 560);
+    seguir();
+  }, 900);
 }
 
 function montarSeletoresRel() {
@@ -973,12 +1747,14 @@ function montarSeletoresRel() {
 function renderRelatorios() {
   if (relDe !== M) montarSeletoresRel();
   const sd = $("#sel-dia"), sm = $("#sel-mes"), srv = relServidor();
-  $("#ph-av-cli").textContent = (M.NOME || "C").trim().charAt(0).toUpperCase();
-  $("#ph-nome-cli").textContent = `${M.NOME} · Resultados`;
+  // o celular do Resumo é da clínica: logo/cor dela no avatar e o nome inteiro
+  avatarMarca($("#ph-av-cli"), nomeCliente());
+  $("#ph-nome-cli").textContent = nomeCliente();
+  $("#btn-folha").hidden = !$("#sel-mes").value;
 
   const isoD = sd.value, iD = iDeIso(isoD);
   mostrarRel("diario", srv.get(`diario|${isoD}`), iD >= 0 && iD <= M.R ? () => M.relDiario(iD) : null,
-    iD === M.R ? "hoje" : M.dMes(iD + 1), "08:00");
+    iD === M.R ? "hoje" : M.dMes(iD + 1), "08:00", M.dataDe(iD + 1));
 
   const isoM = sm.value;
   if (!isoM) {
@@ -986,23 +1762,22 @@ function renderRelatorios() {
     clearTimeout(el._t); el._texto = "";
     el.innerHTML = `<p class="vazio">Ainda não há um mês completo.</p>`;
     $("#st-mensal").innerHTML = "";
+    $("#bloq-mensal").hidden = true;
   } else {
     const m = M.mesesDados().find(x => isoI(x.de) === isoM), mes = +isoM.slice(5, 7);
-    mostrarRel("mensal", srv.get(`mensal|${isoM}`), m ? () => M.relMensal(m) : null, `1º de ${MESES[mes % 12]}`, "09:00");
+    mostrarRel("mensal", srv.get(`mensal|${isoM}`), m ? () => M.relMensal(m) : null, `1º de ${MESES[mes % 12]}`, "09:00", m ? M.dataDe(m.ate + 1) : null);
   }
 
   const lista = ((S.dados && S.dados.relatorios) || []).slice()
     .sort((a, b) => String(b.referencia).localeCompare(String(a.referencia)) || (a.tipo === "mensal" ? -1 : 1)).slice(0, 12);
-  $("#rel-lista").innerHTML = S.demo
-    ? `<li class="vazio">Na demonstração nada é enviado. No painel real, aqui aparecem os últimos relatórios que saíram no WhatsApp.</li>`
-    : !lista.length ? `<li class="vazio">Nenhum relatório enviado ainda. O primeiro diário sai às 8h do dia seguinte à primeira leitura dos anúncios.</li>`
+  $("#rel-lista").innerHTML = !lista.length
+    ? `<li class="vazio">Nenhum relatório enviado ainda. O primeiro diário sai às 8h do dia seguinte à primeira leitura dos anúncios.</li>`
     : lista.map(r => {
       const ref = String(r.referencia).slice(0, 10);
       const tit = r.tipo === "mensal" ? `Resumo de ${MESES[+ref.slice(5, 7) - 1]} de ${ref.slice(0, 4)}` : `Diário de ${dataIso(ref)}`;
-      const st = r.enviado_em ? `<span class="chip chip-ok">enviado</span> ${quandoSP(r.enviado_em)}`
-        : r.erro ? `<span class="chip chip-bad">não enviado</span> ${esc(String(r.erro).slice(0, 80))}` : `<span class="chip chip-warn">não enviado</span>`;
-      return `<li><div class="rl-q"><b>${esc(tit)}</b><span>${st}${r.leitura_ia ? ` <span class="chip chip-ia">IA</span>` : ""}</span></div>
-        <button class="pill pill-ghost pill-sm" type="button" data-ver-rel="${esc(r.tipo)}|${esc(ref)}" aria-label="Ver ${esc(tit)}">Ver</button></li>`;
+      return itemEnvio({ titulo: `${esc(tit)}${r.leitura_ia ? ` <span class="chip chip-ia">IA</span>` : ""}`, x: r, tipo: "relatorio",
+        cls: r.tipo === "mensal" ? "env-mensal" : "",
+        depois: `<button class="pill pill-ghost pill-sm" type="button" data-ver-rel="${esc(r.tipo)}|${esc(ref)}" aria-label="Ver ${esc(tit)} no celular">Ver</button>` });
     }).join("");
   $("#rel-nota").textContent = S.demo
     ? "No sistema real, a “leitura do dia” é escrita por IA a partir dos números. Aqui ela sai de regras fixas, só para demonstrar o formato."
@@ -1042,9 +1817,97 @@ function renderAjustes() {
   if (!gestor()) return;
   if (!S.aj.carregado) carregarAjustes();
   renderFormCliente();
+  renderFormMarca();
   renderIntegracoes();
   renderContas();
   renderConfig();
+}
+
+/* ---------- marca da clínica (logo + cor) → cfg.corMarca / cfg.logoUrl ---------- */
+function renderFormMarca() {
+  const f = $("#form-marca"), c = clienteAtual();
+  if (!c || S.aj.novoCliente) { f.innerHTML = `<p class="vazio">Salve o cliente primeiro; depois escolha o logo e a cor.</p>`; return; }
+  const cfg = c.cfg || {}, cor = hexValido(cfg.corMarca) ? String(cfg.corMarca).toUpperCase() : "#B0761F";
+  S.aj.marca = { cor, logo: logoValido(cfg.logoUrl) ? cfg.logoUrl : null, sugestoes: [] };
+  f.innerHTML = `
+    <div class="mk-logo">
+      <div class="mk-logo-v" id="mk-logo-v" aria-hidden="true"></div>
+      <div class="mk-logo-q">
+        <div class="acoes"><label class="pill pill-ghost mk-file">Escolher logo<input type="file" id="mk-arquivo" accept="image/png,image/jpeg,image/webp"></label>
+          <button class="link-b" type="button" id="mk-tirar">Tirar o logo</button></div>
+        <small>PNG, JPG ou WebP (SVG não). O painel reduz para no máximo 320 × 160 e 60 KB.</small>
+      </div>
+    </div>
+    <fieldset class="mk-cores"><legend>Cor da clínica</legend>
+      <div class="mk-sug" id="mk-sug"></div>
+      <div class="mk-cor-l">
+        <label class="mk-picker"><span class="sr-only">Escolher a cor</span><input type="color" id="mk-cor" value="${cor.toLowerCase()}"></label>
+        <label class="campo mk-hex"><span class="sr-only">Cor em hexadecimal</span><input type="text" id="mk-hex" value="${cor}" maxlength="7" spellcheck="false" autocomplete="off" inputmode="text"></label>
+      </div>
+    </fieldset>
+    <div class="mk-prev" id="mk-prev" aria-label="Prévia"></div>
+    <p class="mk-aviso" id="mk-aviso"></p>
+    <div class="aj-pe"><button class="pill pill-bronze" type="submit" id="mk-salvar">Salvar marca</button></div>
+    <p class="aj-st" id="mk-status" role="status"></p>`;
+  previaMarca();
+}
+function previaMarca() {
+  const mk = S.aj.marca, prev = $("#mk-prev");
+  if (!mk || !prev) return;
+  const nome = (clienteAtual() || {}).nome || "Clínica", txt = corTexto(mk.cor), ct = contraste(mk.cor, txt);
+  prev.style.setProperty("--pm", mk.cor);
+  prev.style.setProperty("--pm-txt", txt);
+  const selo = `<span class="selo"><span class="selo-av" data-mk-av></span><span class="selo-nome">${esc(nome)}</span></span>`;
+  prev.innerHTML = `<div class="mk-fundo mk-escuro">${selo}<small>no painel</small></div><div class="mk-fundo mk-claro">${selo}<small>no papel</small></div>
+    <div class="mk-faixa"><span class="selo-av" data-mk-av></span><b>${esc(nome)}</b><span>Resultados do mês</span></div>`;
+  $$("[data-mk-av]", prev).forEach(el => avatarMarca(el, nome, mk));
+  avatarMarca($("#mk-logo-v"), nome, mk);
+  $("#mk-tirar").hidden = !mk.logo;
+  $("#mk-sug").innerHTML = mk.sugestoes.length
+    ? `<span class="mk-sug-l">Cores do logo</span>` + mk.sugestoes.map(c => `<button type="button" class="mk-amostra" data-sug="${c}" style="--c:${c}" aria-label="Usar a cor ${c}" aria-pressed="${c === mk.cor}"></button>`).join("")
+    : `<span class="mk-sug-l">Suba o logo para ver as cores dele</span>`;
+  $("#mk-aviso").textContent = ct < 4.5 ? "Contraste baixo mesmo com preto ou branco: prefira uma cor mais escura ou mais clara."
+    : txt === "#05080C" ? "Contraste baixo com letra branca: o texto sobre esta cor vai em preto." : "";
+}
+function corMarcaNova(c) {
+  if (!hexValido(c) || !S.aj.marca) return;
+  S.aj.marca.cor = c.toUpperCase();
+  $("#mk-cor").value = c.toLowerCase();
+  if (document.activeElement !== $("#mk-hex")) $("#mk-hex").value = c.toUpperCase();
+  previaMarca();
+}
+async function logoEscolhido(input) {
+  const arq = input.files && input.files[0], st = $("#mk-status");
+  if (!arq) return;
+  if (!/^image\/(png|jpeg|webp)$/.test(arq.type)) { avisoForm(st, "Use PNG, JPG ou WebP (SVG não entra).", true); input.value = ""; return; }
+  const m = await modulo("marca");
+  if (!m) return avisoForm(st, "Não deu para ler a imagem agora. Tente de novo.", true);
+  avisoForm(st, "Preparando o logo…", false);
+  try {
+    const r = await m.processarLogo(arq);
+    if (!logoValido(r.url)) throw new Error("formato");
+    S.aj.marca.logo = r.url;
+    S.aj.marca.sugestoes = r.cores;
+    if (r.cores[0] && (!S.aj.marca.cor || S.aj.marca.cor === "#B0761F")) S.aj.marca.cor = r.cores[0];
+    corMarcaNova(S.aj.marca.cor);
+    avisoForm(st, `Logo pronto (${Math.round(r.url.length / 1024)} KB). Confira a prévia e salve.`, false);
+  } catch (err) {
+    avisoForm(st, err && err.message === "grande" ? "Esse logo ficou grande demais mesmo reduzido. Tente um arquivo mais simples." : "Não deu para ler essa imagem.", true);
+  }
+  input.value = "";
+}
+async function salvarMarca(ev) {
+  ev.preventDefault();
+  const mk = S.aj.marca, st = $("#mk-status"), btn = $("#mk-salvar");
+  if (!mk) return;
+  ocupado(btn, true);
+  try {
+    await salvarCfgCliente({ corMarca: mk.cor, logoUrl: mk.logo || "" });
+    aplicarMarca({ cor: mk.cor, logo: mk.logo });
+    avisoForm(st, "Marca salva ✓ — já vale no painel, na apresentação e na folha do mês.", false);
+  } catch (err) {
+    if (err.codigo !== "sessao_invalida") avisoForm(st, api.mensagemErro(err), true);
+  } finally { ocupado(btn, false); }
 }
 
 let ajN = 0;
@@ -1332,70 +2195,257 @@ async function salvarConfig(ev) {
 }
 
 /* ============================================================
-   9. AURORA — cores da marca dançando no fundo escuro
+   8½. RECURSOS — curta, folha, simulador, marcos, "desde a última visita"
    ============================================================ */
-// mistura em RGB, não em matiz: entre azul e bronze o caminho pelo matiz passa pelo verde
-const PAL = [[60, 118, 163], [207, 149, 64], [34, 64, 96], [176, 118, 31], [120, 150, 180]];
-function cor(u) {
-  const n = PAL.length, i = Math.floor(((u % n) + n) % n), f = ((u % 1) + 1) % 1, a = PAL[i], b = PAL[(i + 1) % n];
-  const t = f * f * (3 - 2 * f);
-  return a.map((v, k) => Math.round(v + (b[k] - v) * t));
+/** "Para o próximo mês": os MESMOS textos do resumo mensal (sem emoji, sem tópico). */
+function proximosPassos(mes) {
+  const L = M.relMensal(mes).split("\n"), i = L.findIndex(l => /Para o próximo mês/.test(l));
+  if (i < 0) return [];
+  const out = [];
+  for (let k = i + 1; k < L.length && L[k].trim(); k++) out.push(semMarcas(L[k]).replace(/^[•\-\s]+/, "").trim());
+  return out.filter(Boolean).slice(0, 3);
 }
-class Aurora {
-  constructor(cv, semente = 11) {
-    this.cv = cv; this.ctx = cv.getContext("2d"); this.t = 4; this.on = false; this.vis = true;
-    this.mx = .5; this.my = .5; this.tx = .5; this.ty = .5;
-    const r = mulberry32(semente);
-    this.blobs = Array.from({ length: 6 }, () => ({ px: r() * 6.3, py: r() * 6.3, sx: .06 + r() * .1, sy: .05 + r() * .09, rr: .5 + r() * .45, u: r() * 4, us: .025 + r() * .035, a: .16 + r() * .14 }));
-    this.loop = this.loop.bind(this);
-    if (FINE && !REDUCE) cv.parentElement.addEventListener("pointermove", e => {
-      const b = cv.getBoundingClientRect();
-      this.tx = (e.clientX - b.left) / b.width; this.ty = (e.clientY - b.top) / b.height;
+/** O anúncio campeão: a campanha com mais pacientes que fecharam (crmTot) e o criativo dela com mais conversas. */
+function campeao(de, ate, f = {}) {
+  const top = Object.values(M.CAMP).filter(c => c.plat && (!f.plat || c.plat === f.plat))
+    .map(c => ({ c, k: M.crmTot(de, ate, { camp: c.id }) })).filter(x => x.k.conversas || x.k.fecharam)
+    .sort((a, b) => (b.k.fecharam - a.k.fecharam) || (b.k.receita - a.k.receita) || (b.k.conversas - a.k.conversas))[0];
+  if (!top) return null;
+  const cri = Object.values(M.CRI).filter(k => k.camp === top.c.id)
+    .map(k => ({ k, t: M.consolidar(M.linhasDe(de, ate, { cri: k.id })) })).sort((a, b) => b.t.conversoes - a.t.conversoes)[0];
+  return { camp: top.c, k: top.k, cri: cri ? cri.k : null };
+}
+const mesDoPeriodo = () => { const d = M.dataDe(M.R); return { de: janela().de, ate: M.R, mes: d.getMonth(), ano: d.getFullYear() }; };
+
+/* ---------- o curta (curta.js) ---------- */
+function ctxCurta() {
+  const P = numerosPeriodo();
+  return {
+    M, P, nome: nomeCliente(), marca: { ...MARCA }, demo: S.demo, gestor: gestor(), anim: ANIM, fino: FINE, FX, CINE,
+    campeao: campeao(P.de, P.ate, P.f), proximos: proximosPassos(mesDoPeriodo()),
+    nomeCurto, foneHtml, avatarMarca, simuladorHtml, ligarSimulador, corServ, AVC, hash,
+    voltar: () => $("#btn-apresentar"),
+    aoFolha: () => abrirFolhaMes(),
+    aoSair: () => { if (CINE) CINE.semente(1); },
+  };
+}
+async function apresentar(o = {}) {
+  if (!M || semAnuncios()) return toast("Ainda não há números de anúncio para apresentar.", "nota");
+  const m = await modulo("curta");
+  if (!m) return toast("Não deu para abrir a apresentação agora. Tente de novo.", "erro");
+  if (CINE) CINE.semente(5);
+  m.abrir(ctxCurta(), o);
+}
+/** Link da reunião: a demo já abre com o nome e a cor da clínica (o logo não vai no link). */
+function linkReuniao() {
+  const q = ["demo"];
+  if (CLINICA_Q) q.push("clinica=" + encodeURIComponent(CLINICA_Q));
+  if (MARCA.cor) q.push("cor=" + MARCA.cor.slice(1));
+  q.push("apresentar");
+  return `${location.origin}${location.pathname}?${q.join("&")}`;
+}
+
+/* ---------- a folha do mês (folha.js) ---------- */
+async function abrirFolhaMes(iso) {
+  if (!M) return;
+  const meses = M.mesesDados().filter(m => m.completo);
+  const pedido = iso ? String(iso).slice(0, 7) : null;
+  const m = pedido ? meses.find(x => isoI(x.de).slice(0, 7) === pedido) : meses[meses.length - 1];
+  if (!m) return toast(pedido ? "Esse mês ainda não está completo: a folha sai de mês fechado." : "Ainda não há um mês completo para a folha.", "nota");
+  const f = await modulo("folha");
+  if (!f) return toast("Não deu para montar a folha agora. Tente de novo.", "erro");
+  const lista = M.mesesDados().filter(x => x.de <= m.de && (x.ate - x.de >= 9 || x.completo)).slice(-4);
+  f.abrir({
+    M, m, nome: nomeCliente(), marca: { ...MARCA }, demo: S.demo, avatarMarca, corServ,
+    meses: lista.map(x => ({ ...x, fecharam: M.crmTot(x.de, x.ate).fecharam })),
+    proximos: proximosPassos(m), campeao: campeao(m.de, m.ate), volta: document.activeElement,
+  });
+}
+
+/* ---------- "E na sua clínica?" (só na demo) ---------- */
+function taxasDemo() {
+  const { t, c } = numerosPeriodo();
+  return { cpa: t.cpa || 0, ag: c.conversas ? c.agendadas / c.conversas : 0, veio: c.agendadas ? c.compareceram / c.agendadas : 0,
+    fe: c.compareceram ? c.fecharam / c.compareceram : 0, ticket: c.fecharam ? c.receita / c.fecharam : 0, mensal: t.gasto * 30 / S.dias };
+}
+const SIM = { inv: null, tk: null };
+function simuladorHtml(curto = false) {
+  const tx = taxasDemo();
+  const inv = SIM.inv ?? Math.min(6000, Math.max(800, Math.round(tx.mensal / 100) * 100));
+  const tk = SIM.tk ?? Math.max(300, Math.round(tx.ticket / 10) * 10);
+  const res = (k, rot) => `<div class="sim-res-i"><dt>${rot}</dt><dd>entre <b data-sim="${k}0">—</b> e <b data-sim="${k}1">—</b></dd></div>`;
+  return `${curto ? "" : `<header class="card-h"><div><p class="eyebrow">só na demonstração</p><h2>E na sua clínica?</h2>
+      <p class="sub">Mexa no investimento e no valor médio do tratamento. A conta usa as taxas deste período da demonstração.</p></div></header>`}
+    <div class="sim">
+      <div class="sim-ctl">
+        <label class="sim-r"><span class="sim-l">Investimento em anúncios por mês <output class="sim-inv-o"></output></span>
+          <input class="sim-inv" type="range" min="800" max="6000" step="100" value="${inv}"></label>
+        <label class="sim-r"><span class="sim-l">Valor médio do tratamento <output class="sim-tk-o"></output></span>
+          <input class="sim-tk" type="range" min="300" max="6000" step="10" value="${tk}"></label>
+      </div>
+      <dl class="sim-res">${res("c", "conversas no WhatsApp por mês")}${res("p", "pacientes novos por mês")}${res("r", "em tratamentos por mês")}</dl>
+      <p class="sim-nota">Estimativa com as taxas desta demonstração. Não é promessa: cada clínica tem o seu ritmo.</p>
+    </div>`;
+}
+function ligarSimulador(box) {
+  const tx = taxasDemo(), inv = $(".sim-inv", box), tk = $(".sim-tk", box);
+  if (!inv || !tk) return;
+  const por = (k, v, f) => {
+    const el = $(`[data-sim="${k}"]`, box), novo = fmtN(v, f), antes = el.dataset.v;
+    el.dataset.v = novo;
+    if (FX && ANIM && antes && antes !== novo) FX.odometro(el, antes, novo, { dur: FX.MOV.tInterp }); else el.textContent = novo;
+  };
+  const atualizar = () => {
+    SIM.inv = +inv.value; SIM.tk = +tk.value;
+    const r = simular(tx, SIM.inv, SIM.tk);
+    $(".sim-inv-o", box).textContent = brl0(SIM.inv);
+    $(".sim-tk-o", box).textContent = brl0(SIM.tk);
+    por("c0", r.conversas[0], "int"); por("c1", r.conversas[1], "int");
+    por("p0", r.pacientes[0], "int"); por("p1", r.pacientes[1], "int");
+    por("r0", r.tratamentos[0], "brl0"); por("r1", r.tratamentos[1], "brl0");
+  };
+  inv.addEventListener("input", atualizar);
+  tk.addEventListener("input", atualizar);
+  atualizar();
+}
+function renderSimulador() {
+  const box = $("#card-sim");
+  if (!box) return;
+  if (!S.demo || !M || semAnuncios()) { box.hidden = true; box.innerHTML = ""; return; }
+  box.innerHTML = simuladorHtml();
+  box.hidden = false;
+  ligarSimulador(box);
+}
+
+/* ---------- marcos no gráfico (claquetes) ---------- */
+const MARCOS_DEMO = [{ atras: 9, t: "Verba +20% no aparelho invisível" }, { atras: 21, t: "Troca de criativo · prova social" }];
+function marcosAtuais() {
+  if (!M) return [];
+  if (S.demo) return MARCOS_DEMO.map(m => ({ d: isoI(M.R - m.atras), t: m.t, exemplo: true }));
+  const c = clienteAtual(), l = (c && c.cfg && Array.isArray(c.cfg.marcos)) ? c.cfg.marcos : Array.isArray(M.CFG.marcos) ? M.CFG.marcos : [];
+  return l.filter(m => m && /^\d{4}-\d{2}-\d{2}$/.test(m.d) && typeof m.t === "string" && m.t.trim()).slice(-40);
+}
+const marcoDoDia = i => marcosAtuais().find(m => iDeIso(m.d) === i) || null;
+function abrirMarco(i) {
+  const f = $("#marco-form");
+  if (!gestor() || i == null) { f.hidden = true; return; }
+  const m = marcoDoDia(i);
+  S.marcoFixo = i;
+  f.innerHTML = `<svg class="mf-ic" aria-hidden="true"><use href="#ic-claq"/></svg>
+    <label class="campo"><span>Marcar ${SEMANA[M.dataDe(i).getDay()]} · ${M.ddmm(i)}</span>
+      <input type="text" id="marco-txt" maxlength="60" autocomplete="off" placeholder="ex.: Troca de criativo" value="${esc(m ? m.t : "")}"></label>
+    <div class="acoes"><button class="pill pill-bronze pill-sm" type="submit">Salvar marco</button>
+      ${m ? `<button class="pill pill-ghost pill-sm" type="button" data-marco="remover">Remover</button>` : ""}
+      <button class="link-b" type="button" data-marco="cancelar">Cancelar</button></div>`;
+  f.hidden = false;
+  $("#marco-txt").focus({ preventScroll: true });
+}
+function fecharMarco(focar) {
+  const f = $("#marco-form");
+  if (f.hidden) return;
+  f.hidden = true; f.innerHTML = ""; S.marcoFixo = null;
+  const ch = $("#chart-dia");
+  if (ch._soltar) ch._soltar();
+  if (focar) ch.focus({ preventScroll: true });
+}
+async function salvarMarco(remover) {
+  const i = S.marcoFixo;
+  if (i == null || !gestor()) return;
+  const d = isoI(i), t = remover ? "" : ($("#marco-txt").value || "").trim().slice(0, 60);
+  const lista = marcosAtuais().filter(m => m.d !== d).map(({ d: dd, t: tt }) => ({ d: dd, t: tt }));
+  if (t) lista.push({ d, t });
+  lista.sort((a, b) => a.d.localeCompare(b.d));
+  try {
+    await salvarCfgCliente({ marcos: lista.slice(-40) });
+    toast(remover ? "Marco removido ✓" : t ? "Marco salvo ✓" : "Marco removido ✓");
+    fecharMarco(true);
+    desenharChart(null);
+  } catch (err) { if (err.codigo !== "sessao_invalida") toast(api.mensagemErro(err), "erro"); }
+}
+
+/* ---------- "Desde a sua última visita" (conta de clínica, modo real) ---------- */
+const chaveVistos = () => `nx-fechados-${S.clienteId}`;
+function renderDesdeVisita() {
+  const box = $("#desde-visita");
+  if (!box) return;
+  if (S.demo || gestor() || !S.clienteId || !M) { box.hidden = true; return; }
+  const fechados = M.LEADS.filter(L => M.etapa(L) === "fechou"), ids = fechados.map(L => String(L.id));
+  let vistos;
+  try { const s = localStorage.getItem(chaveVistos()); vistos = s ? JSON.parse(s) : null; } catch { box.hidden = true; return; }
+  // 1ª visita: só guarda quem já fechou; o cartão aparece a partir da próxima
+  if (!Array.isArray(vistos)) { gravarLocal(chaveVistos(), JSON.stringify(ids)); box.hidden = true; return; }
+  const ja = new Set(vistos.map(String)), novos = fechados.filter(L => !ja.has(String(L.id)));
+  if (!novos.length) { box.hidden = true; return; }
+  const total = novos.reduce((s, L) => s + M.valorLead(L), 0);
+  box.innerHTML = `<div class="desde-q"><p class="eyebrow">Desde a sua última visita</p>
+      <h2 id="desde-h"><b>${plural(novos.length, "paciente novo", "pacientes novos")}</b> · ${brl0(total)}</h2>
+      <ul class="desde-l">${novos.slice(0, 5).map(L => `<li><b>${esc(nomeCurto(L.nome))}</b><span>${esc(L.servico)} · ${brl0(M.valorLead(L))}</span></li>`).join("")}${novos.length > 5 ? `<li><span>e mais ${novos.length - 5}</span></li>` : ""}</ul></div>
+    <div class="acoes"><button class="pill pill-bronze" type="button" data-desde="ver">Ver no quadro</button><button class="pill pill-ghost" type="button" data-desde="ok">Ok</button></div>`;
+  box.setAttribute("aria-labelledby", "desde-h");
+  box._ids = ids; box._novos = novos.map(L => String(L.id));
+  box.hidden = false;
+}
+function desdeAcao(acao) {
+  const box = $("#desde-visita");
+  gravarLocal(chaveVistos(), JSON.stringify(box._ids || []));
+  box.hidden = true;
+  if (acao === "ver") {
+    S.destacar = new Set(box._novos || []);
+    setAba("pacientes", { corte: true });
+    setTimeout(() => { const c = $("#kanban .lead.destaque"); if (c) { c.scrollIntoView({ block: "center", behavior: REDUCE ? "auto" : "smooth" }); c.focus({ preventScroll: true }); } }, 120);
+    setTimeout(() => { S.destacar = new Set(); $$("#kanban .lead.destaque").forEach(c => c.classList.remove("destaque")); }, 9000);
+  } else { const h = $(".card-hero"); if (h) h.setAttribute("tabindex", "-1"), h.focus({ preventScroll: true }); }
+}
+
+/* ---------- paleta (paleta.js) e arrasto das fichas (arrastar.js) ---------- */
+const modalAberto = () => !$("#gaveta").hidden || !$("#palco-curta").hidden || !$("#folha-modal").hidden || !!document.querySelector(".paleta:not([hidden])");
+async function abrirPaleta() {
+  const m = await modulo("paleta");
+  if (!m) return;
+  m.abrir({
+    abas: Object.entries(ABAS).filter(([k]) => k !== "ajustes" || gestor()).map(([k, v]) => ({ k, nome: v[0] })),
+    leads: M ? M.LEADS.filter(L => colunaDe(L) || M.etapa(L) === "nova").sort((a, b) => b.i - a.i).map(L => ({ id: String(L.id), nome: nomeCurto(L.nome), sub: `${L.servico} · ${NOME_ETAPA[M.etapa(L)] || ""}` })) : [],
+    campanhas: M ? Object.values(M.CAMP).filter(c => c.plat).map(c => ({ id: c.id, nome: c.nome, sub: nomePlat(c.plat) })) : [],
+    acoes: [
+      ...[7, 30, 60].map(d => ({ k: `d${d}`, nome: `${d} dias`, sub: "período", fn: () => $(`#seg-periodo [data-v="${d}"]`).click() })),
+      ...[["", "Tudo"], ["meta", "Meta"], ["google", "Google"]].map(([v, n]) => ({ k: `p${v}`, nome: n, sub: "plataforma", fn: () => $(`#seg-plat [data-v="${v}"]`).click() })),
+      { k: "apresentar", nome: "Apresentar", sub: "modo reunião · P", fn: () => apresentar({ gesto: true }) },
+      { k: "folha", nome: "Folha do mês", sub: "A4 para imprimir", fn: () => abrirFolhaMes() },
+      ...(S.demo ? [{ k: "tour", nome: "Tour de 1 minuto", sub: "demonstração", fn: () => tourIr(0) }] : []),
+      { k: "varrer", nome: "Varrer agora", sub: "radar", fn: () => { setAba("radar", { corte: true }); setTimeout(() => $("#btn-varrer").click(), 60); } },
+      { k: "novo", nome: "Novo paciente", sub: "cadastro manual", fn: () => { setAba("pacientes"); abrirGaveta(null); } },
+      ...(gestor() && S.clientes.length > 1 ? [{ k: "cliente", nome: "Trocar cliente", sub: "gestor", fn: () => { const s = $("#sel-cliente").offsetParent ? $("#sel-cliente") : $("#sel-cliente-m"); s.focus(); } }] : []),
+      ...(!S.demo ? [{ k: "sair", nome: "Sair", sub: "encerrar a sessão", fn: sair }] : []),
+    ],
+    irAba: k => setAba(k, { corte: true }),
+    abrirLead: id => { const L = M.LEADS.find(x => String(x.id) === id); if (L) { if (S.aba !== "pacientes") setAba("pacientes"); abrirGaveta(L); } },
+    abrirCampanha: id => {
+      setAba("campanhas", { corte: true });
+      setTimeout(() => { const tr = $(`#tbl-campanhas tr[data-camp="${CSS.escape(id)}"]`); if (tr) { tr.classList.add("realce"); tr.scrollIntoView({ block: "center", behavior: REDUCE ? "auto" : "smooth" }); setTimeout(() => tr.classList.remove("realce"), 2400); } }, 80);
+    },
+    semAcento, anim: ANIM,
+  });
+}
+let arrastoOk = false;
+function ligarArrasto() {
+  if (arrastoOk) return;
+  arrastoOk = true;
+  modulo("arrastar").then(m => {
+    if (!m) { arrastoOk = false; return; }
+    m.ligar($("#kanban"), {
+      fino: FINE, anim: ANIM, FX,
+      colunas: COLS_K.map(c => c[0]),
+      nomeColuna: k => ((COLS_K.find(c => c[0] === k) || [])[1] || k).replace(/\s*\(.*\)$/, ""),
+      lead: id => (M ? M.LEADS.find(x => String(x.id) === String(id)) : null),
+      nome: L => nomeCurto(L.nome),
+      soltar: (L, col, o) => soltarNaColuna(L, col, o),
+      anunciar: msg => { const v = $("#k-vivo"); v.textContent = ""; setTimeout(() => { v.textContent = msg; }, 30); },
     });
-  }
-  medir() {
-    const w = this.cv.clientWidth, h = this.cv.clientHeight;
-    if (!w || !h) return false;
-    if (w !== this.w || h !== this.h) {
-      const d = Math.min(devicePixelRatio || 1, 2);
-      this.w = w; this.h = h; this.cv.width = w * d; this.cv.height = h * d;
-      this.ctx.setTransform(d, 0, 0, d, 0, 0);
-    }
-    return true;
-  }
-  desenhar() {
-    if (!this.medir()) return;
-    const { ctx, w, h } = this;
-    this.mx += (this.tx - this.mx) * .05; this.my += (this.ty - this.my) * .05;
-    ctx.clearRect(0, 0, w, h);
-    ctx.globalCompositeOperation = "lighter";
-    for (const b of this.blobs) {
-      const x = w * (.5 + .46 * Math.sin(this.t * b.sx + b.px)) + (this.mx - .5) * 90;
-      const y = h * (.5 + .46 * Math.cos(this.t * b.sy + b.py)) + (this.my - .5) * 60;
-      const [r, gg, bb] = cor(b.u + this.t * b.us), rad = Math.max(w, h) * b.rr * .55;
-      const g = ctx.createRadialGradient(x, y, 0, x, y, rad);
-      g.addColorStop(0, `rgba(${r},${gg},${bb},${b.a})`);
-      g.addColorStop(1, `rgba(${r},${gg},${bb},0)`);
-      ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
-    }
-    ctx.globalCompositeOperation = "source-over";
-  }
-  ligar(on) {
-    const deve = on && this.vis;
-    if (REDUCE) { if (on) this.desenhar(); return; }
-    if (deve && !this.on) { this.on = true; requestAnimationFrame(this.loop); }
-    if (!deve) this.on = false;
-  }
-  loop() {
-    if (!this.on) return;
-    if (!document.hidden) { this.t += .016; this.desenhar(); }
-    requestAnimationFrame(this.loop);
-  }
+  });
 }
-let aurora = null, auroraAuth = null;
 
 /* ============================================================
-   10. ABAS, FILTROS, TOUR
+   9. ABAS, FILTROS, TOUR (e a câmera na troca de aba)
    ============================================================ */
 const ABAS = {
   geral: ["Visão geral", "Anúncios → WhatsApp → consultório", renderGeral],
@@ -1410,8 +2460,9 @@ const COM_FILTRO = ["geral", "campanhas", "pacientes"];
 function estadoApp(tipo, o = {}) {
   S.estado = tipo || null;
   const el = $("#estado-app");
-  el.innerHTML = !tipo ? "" : tipo === "carregando" ? carregandoHtml(o.msg || "Carregando os números…") : cartaoVazio(o);
+  el.innerHTML = !tipo ? "" : tipo === "carregando" ? esqueletoHtml(o.msg || "Carregando os números…") : cartaoVazio(o);
   aplicarVisibilidade();
+  renderIntegracao();
 }
 
 function aplicarVisibilidade() {
@@ -1421,37 +2472,93 @@ function aplicarVisibilidade() {
   $("#estado-app").hidden = !S.estado || S.aba === "ajustes";
   $("#filters").hidden = !COM_FILTRO.includes(S.aba) || !dadosOk || (S.aba !== "pacientes" && semAnuncios());
   $("#btn-tour").hidden = !S.demo || !dadosOk;
+  $("#btn-apresentar").hidden = !dadosOk || S.aba === "ajustes" || semAnuncios();
   // sem filtro nem tour, a caixa vazia ainda ocupava o espaçamento do cabeçalho
-  $(".top-tools").hidden = $("#filters").hidden && $("#btn-tour").hidden;
+  $(".top-tools").hidden = $("#filters").hidden && $("#btn-tour").hidden && $("#btn-apresentar").hidden;
+  $("#btn-filtros-m").hidden = $("#filters").hidden;
+  if ($(".top-tools").hidden) abrirFolha(false);
 }
 
-function render(entrada) {
+function render() {
   aplicarVisibilidade();
   if (S.aba !== "ajustes" && (S.estado || !M)) return;
   const view = $("#view-" + S.aba);
   ABAS[S.aba][2]();
-  $$(".card, .kpi, .phone-col", view).forEach((el, n) => el.style.setProperty("--i", n));
-  if (entrada && !REDUCE) {
-    view.classList.remove("enter"); void view.offsetWidth; view.classList.add("enter");
-    // tira a classe depois: conteúdo nunca fica refém de animação congelada
-    clearTimeout(view._t); view._t = setTimeout(() => view.classList.remove("enter"), 2400);
-  }
-  contar(view);
+  // câmera: números rolam do valor anterior; cada bloco entra em quadro uma vez (depois só transforma)
+  numeros(view);
+  cenas(view);
   posicionarSegs();
+  renderIntegracao();
 }
 
+let vtAtual = null;
 function setAba(aba, o = {}) {
   if (!ABAS[aba] || (aba === "ajustes" && !gestor())) aba = "geral";
   if (!o.doTour) tourFim();
-  S.aba = aba;
-  $$("[data-aba]").forEach(b => { if (b.dataset.aba === aba) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
-  $("#top-h1").textContent = ABAS[aba][0];
-  $("#top-eyebrow").textContent = ABAS[aba][1];
-  document.title = `${ABAS[aba][0]} · ${nomeCliente()} · Nexus Ads${S.demo ? " (demonstração)" : ""}`;
-  if (!o.semRolar) scrollTo(0, 0);
-  render(true);
-  if (aurora) aurora.ligar(aba === "geral");
-  try { history.replaceState(null, "", "#" + aba); } catch { /* file:// */ }
+  const cortar = o.corte && ANIM && aba !== S.aba;
+  const trocar = () => {
+    S.aba = aba;
+    $$("[data-aba]").forEach(b => { if (b.dataset.aba === aba) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
+    $("#top-h1").textContent = ABAS[aba][0];
+    $("#top-eyebrow").textContent = ABAS[aba][1];
+    document.title = `${ABAS[aba][0]} · ${nomeCliente()} · Nexus Ads${S.demo ? " (demonstração)" : ""}`;
+    if (!o.semRolar) scrollTo({ top: 0, behavior: "instant" });
+    render(true);
+    moverIndicadores();
+    if (cortar) {
+      const h = $("#top-h1");
+      h.classList.remove("revela"); void h.offsetWidth; h.classList.add("revela");
+      if (CINE) CINE.corte();
+    }
+    try { history.replaceState(null, "", "#" + aba); } catch { /* file:// */ }
+  };
+  // corte de cinema: o foco sai, uma faixa de luz cruza e o foco volta (View Transitions, com recuo por classes)
+  if (cortar && document.startViewTransition) {
+    try { if (vtAtual) vtAtual.skipTransition(); } catch { /* já terminou */ }
+    try {
+      vtAtual = document.startViewTransition(trocar);
+      vtAtual.ready.catch(() => {}); vtAtual.updateCallbackDone.catch(() => {});
+      vtAtual.finished.catch(() => {}).then(() => { vtAtual = null; });
+      return;
+    } catch { vtAtual = null; }
+  }
+  trocar();
+  if (cortar) {
+    const v = $("#view-" + aba);
+    v.classList.remove("foca"); void v.offsetWidth; v.classList.add("foca");
+    clearTimeout(v._tFoca); v._tFoca = setTimeout(() => v.classList.remove("foca"), 800);
+  }
+}
+
+/** Indicadores únicos que deslizam: pílula do menu lateral e da tab bar. */
+function moverIndicadores() {
+  const nav = $("#side-nav"), ind = nav && $(".nav-ind", nav), on = nav && $('.nav-b[aria-current="page"]', nav);
+  if (ind && on && on.offsetHeight) {
+    ind.style.setProperty("--y", on.offsetTop + "px");
+    ind.style.height = on.offsetHeight + "px";
+    if (!ind.classList.contains("pronto")) requestAnimationFrame(() => requestAnimationFrame(() => ind.classList.add("pronto")));
+  }
+  const tb = $("#tabbar"), ti = tb && $(".tab-ind", tb), ta = tb && $('button[aria-current="page"]', tb);
+  if (ti && ta && ta.offsetWidth) {
+    ti.style.setProperty("--tx", ta.offsetLeft + "px");
+    ti.style.setProperty("--tw", ta.offsetWidth + "px");
+    if (!ti.classList.contains("pronto")) requestAnimationFrame(() => requestAnimationFrame(() => ti.classList.add("pronto")));
+  }
+}
+
+/* ---------- folha de filtros (celular) ---------- */
+const textoFiltros = () => { const t = $("#filtros-m-txt"); if (t) t.textContent = `${S.dias} dias · ${S.plat ? nomePlat(S.plat) : "Tudo"}`; };
+function abrirFolha(on) {
+  const tools = $("#top-tools"), bf = $("#btn-filtros-m"), ff = $("#filtros-fundo");
+  if (!tools || (!on && !tools.classList.contains("aberta"))) return;
+  tools.classList.toggle("aberta", on);
+  $(".top").classList.toggle("folha-aberta", on);   // tira a folha do contexto do cabeçalho (fica acima da tab bar)
+  tools.classList.remove("arrastando");
+  tools.style.removeProperty("--fy");
+  ff.hidden = !on; ff.classList.toggle("on", on);
+  bf.setAttribute("aria-expanded", String(on));
+  if (on) { posicionarSegs(); const r = $('#seg-periodo [aria-checked="true"]'); if (r) r.focus({ preventScroll: true }); }
+  else if (tools.contains(document.activeElement)) bf.focus({ preventScroll: true });
 }
 
 function ligarSeg(seg, aoMudar) {
@@ -1459,7 +2566,10 @@ function ligarSeg(seg, aoMudar) {
   const pos = () => {
     const on = btns.find(b => b.getAttribute("aria-checked") === "true");
     if (!on || !on.offsetWidth) return;
-    ind.style.left = on.offsetLeft + "px"; ind.style.width = on.offsetWidth + "px";
+    // pílula que desliza com mola (clip-path mantém as pontas redondas; nada de animar largura)
+    ind.style.setProperty("--sx", (on.offsetLeft - 3) + "px");
+    ind.style.setProperty("--sw", on.offsetWidth + "px");
+    if (!ind.classList.contains("pronto")) requestAnimationFrame(() => requestAnimationFrame(() => ind.classList.add("pronto")));
   };
   const sel = b => {
     btns.forEach(x => { const s = x === b; x.setAttribute("aria-checked", String(s)); x.tabIndex = s ? 0 : -1; });
@@ -1541,8 +2651,10 @@ function mostrarTela(t) {
   $("#tela-auth").hidden = t !== "auth";
   $("#app").hidden = t !== "app";
   $(".skip").setAttribute("href", t === "auth" ? "#tela-auth" : "#main");
-  if (auroraAuth) auroraAuth.ligar(t === "auth");
-  if (aurora && t !== "app") aurora.ligar(false);
+  $("#tela-auth").classList.toggle("auth-anim", ANIM);
+  // o palco troca de cenário: login (semente 3) × painel (semente 1)
+  CINE_P.then(m => { if (m) m.semente(t === "auth" ? 3 : 1); });
+  if (t === "app") requestAnimationFrame(moverIndicadores);
 }
 function bootMsg(msg, comAcoes = false) {
   $("#boot-msg").textContent = msg;
@@ -1642,7 +2754,7 @@ function preencherSeletor() {
     if (S.clienteId) $(sel).value = S.clienteId;
     $(box).hidden = !mostra;
   }
-  const nome = S.demo ? NOME_DEMO : (clienteAtual() || {}).nome || (gestor() ? "Nenhum cliente ainda" : "Nenhuma clínica ligada");
+  const nome = S.demo ? S.nomeDemo : (clienteAtual() || {}).nome || (gestor() ? "Nenhum cliente ainda" : "Nenhuma clínica ligada");
   $("#side-cliente-nome").textContent = nome;
   $("#side-cliente-nome").hidden = mostra;
   $("#top-cliente").textContent = nome;
@@ -1662,29 +2774,39 @@ function prepararApp() {
   }
   $("#side-cli-l").textContent = g ? "Cliente" : "Clínica";
   $("#foot-txt").innerHTML = S.demo
-    ? `<b>${NOME_DEMO}</b> · painel de demonstração operado por <b>Nexus</b>`
+    ? `<b>${esc(S.nomeDemo)}</b> · painel de demonstração operado por <b>Nexus</b>`
     : `Painel operado por <b>Nexus</b> · Taubaté — SP`;
   $("#foot-link").textContent = S.demo ? "Entrar no painel →" : "Ver a demonstração";
   $("#foot-link").setAttribute("href", S.demo ? location.pathname : "?demo");
-  $("#kanban-sub").textContent = S.demo
+  $("#kanban-sub").textContent = (S.demo
     ? "Situação de agora. Os nomes são fictícios — toque num cartão para ver a gaveta do paciente."
-    : "Situação de agora. Toque num cartão para mudar a etapa do paciente.";
+    : "Situação de agora. Toque num cartão para mudar a etapa do paciente.") + (FINE ? " Arraste a ficha para outra coluna." : "");
+  // demo com o nome da clínica da reunião: a faixa continua dizendo que é demonstração (e não some)
+  if (S.demo && CLINICA_Q) {
+    const rt = $("#ribbon-txt");
+    rt.textContent = "";
+    const b = document.createElement("b");
+    b.textContent = `Demonstração para ${CLINICA_Q}`;
+    rt.append(b, " — números ilustrativos, gerados para mostrar como o painel funciona. Nenhum dado real de paciente.");
+  }
+  $("#btn-link-reuniao").hidden = !S.demo;
+  if (!S.demo) { const sim = $("#card-sim"); if (sim) sim.remove(); }   // o simulador só existe na demo
   preencherSeletor();
+  renderSelo();
 }
 
 function atualizarTopo() {
-  if (!M) { $("#top-sync").textContent = ""; return; }
-  const ate = `Números até ontem, ${M.ddmm(M.R)}`;
-  if (S.demo) { $("#top-sync").textContent = `${ate} · demonstração`; return; }
-  const u = ultimoSync();
-  $("#top-sync").textContent = u ? `${ate} · anúncios lidos ${quandoSP(u)}` : ate;
+  if (!M) { $("#top-sync").textContent = ""; renderIntegracao(); return; }
+  // a hora da leitura mora na pílula ao lado (viva: "Atualizado há 12 min", "Meta desconectado"…)
+  $("#top-sync").textContent = `Números até ontem, ${M.ddmm(M.R)}`;
+  renderIntegracao();
 }
 
 function semCliente() {
   estadoApp("sem-cliente", gestor()
-    ? { ic: "＋", titulo: "Cadastre o primeiro cliente", texto: "Comece pelo cliente: nome, metas e valor de cada tratamento. Depois conecte o Meta e o Google e o painel se enche sozinho.",
+    ? { titulo: "Cadastre o primeiro cliente", texto: "Comece pelo cliente: nome, metas e valor de cada tratamento. Depois conecte o Meta e o Google e o painel se enche sozinho.",
         botoes: `<button class="pill pill-bronze" type="button" data-acao="novo-cliente">Cadastrar cliente</button>` }
-    : { ic: "🔗", titulo: "Sua conta ainda não está ligada a uma clínica", texto: "A Nexus precisa marcar qual clínica você acompanha. Assim que isso acontecer, é só abrir o painel de novo.",
+    : { titulo: "Sua conta ainda não está ligada a uma clínica", texto: "A Nexus precisa marcar qual clínica você acompanha. Assim que isso acontecer, é só abrir o painel de novo.",
         botoes: `<button class="pill pill-ink" type="button" data-acao="recarregar-sessao">Já liberaram — abrir de novo</button>` });
 }
 
@@ -1724,6 +2846,9 @@ async function carregarDados(o = {}) {
     const c = clienteAtual();
     if (c && r.cliente) { c.cfg = r.cliente.cfg || c.cfg; c.nome = r.cliente.nome || c.nome; }
     montarDe(datasetDeLinhas({ metricas: r.metricas || [], leads: r.leads || [], cliente: r.cliente || c || {}, hoje: r.hoje || hojeSP(), dias: DIAS_JANELA }));
+    // marca da clínica (logo e cor gravados pelo gestor em Ajustes) nos objetos do painel
+    const cfgC = (r.cliente && r.cliente.cfg) || (c && c.cfg) || {};
+    aplicarMarca({ cor: cfgC.corMarca, logo: cfgC.logoUrl });
     relDe = null;
     estadoApp(null);
     atualizarTopo();
@@ -1731,10 +2856,12 @@ async function carregarDados(o = {}) {
     // Ajustes não depende dos números: redesenhar apagaria o que está sendo digitado
     if (S.aba !== "ajustes") render(primeira || o.entrada);
     atualizarBadge();
+    // link direto: ?folha=AAAA-MM abre a folha; ?apresentar abre o curta (só na 1ª carga)
+    if (primeira && o.entrada) pedidosDaUrl();
   } catch (e) {
     if (n !== cargaN || e.codigo === "sessao_invalida") return;
     if (primeira) {
-      estadoApp("erro", { ic: "!", erro: true, titulo: e.codigo === "sem_acesso" ? "Sem acesso a esta clínica" : "Não deu para carregar os números",
+      estadoApp("erro", { erro: true, titulo: e.codigo === "sem_acesso" ? "Sem acesso a esta clínica" : "Não deu para carregar os números",
         texto: esc(api.mensagemErro(e)), botoes: `<button class="pill pill-ink" type="button" data-acao="recarregar">Tentar de novo</button>` });
     } else toast(api.mensagemErro(e), "erro");
   } finally {
@@ -1748,10 +2875,11 @@ function trocarCliente(id) {
   gravarLocal("nx-cliente", id);
   preencherSeletor();
   DS = null; M = null; S.dados = null; relDe = null;
-  S.kVer = {}; S.busca = ""; $("#k-busca").value = ""; S.varridoEm = null;
+  S.kVer = {}; S.busca = ""; $("#k-busca").value = ""; S.varridoEm = null; ULT.clear();
   clearTimeout(S.aj.tRecarga);
   S.aj.carregado = false; S.aj.novoCliente = false;
-  tourFim(); fecharGaveta(true);
+  tourFim(); fecharGaveta(true); fecharMarco(false);
+  aplicarMarca({});
   estadoApp("carregando");
   atualizarTopo();
   atualizarBadge(0);
@@ -1760,20 +2888,15 @@ function trocarCliente(id) {
 }
 
 function abrirAbaInicial() {
-  const h = location.hash.slice(1);
-  setAba(ABAS[h] ? h : "geral", { semRolar: true });
+  // ?aba= tem precedência sobre o #hash (captura headless por linha de comando não leva #fragmento)
+  const pedido = Q.get("aba") || location.hash.slice(1);
+  setAba(ABAS[pedido] ? pedido : "geral", { semRolar: true });
 }
 
 /* ============================================================
    12. INÍCIO
    ============================================================ */
 function ligarEventos() {
-  // gradientes compartilhados pelos gráficos
-  document.body.insertAdjacentHTML("afterbegin", `<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
-    <linearGradient id="spk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2B5A80" stop-opacity=".2"/><stop offset="1" stop-color="#2B5A80" stop-opacity="0"/></linearGradient>
-    <linearGradient id="gArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#C0472F" stop-opacity=".16"/><stop offset="1" stop-color="#C0472F" stop-opacity="0"/></linearGradient>
-  </defs></svg>`);
-
   /* ---------- entrar / criar conta ---------- */
   $("#form-entrar").addEventListener("submit", entrar);
   $("#form-criar").addEventListener("submit", criarConta);
@@ -1787,15 +2910,54 @@ function ligarEventos() {
   $("#btn-sair-m").addEventListener("click", sair);
 
   /* ---------- navegação ---------- */
-  $$("[data-aba]").forEach(b => b.addEventListener("click", () => setAba(b.dataset.aba)));
-  ligarSeg($("#seg-periodo"), v => { S.dias = +v; render(true); });
-  ligarSeg($("#seg-plat"), v => { S.plat = v; S.kVer = {}; render(true); });
+  $$("[data-aba]").forEach(b => b.addEventListener("click", () => setAba(b.dataset.aba, { corte: true })));
+  ligarSeg($("#seg-periodo"), v => { S.dias = +v; textoFiltros(); render(false); });
+  ligarSeg($("#seg-plat"), v => { S.plat = v; S.kVer = {}; textoFiltros(); render(false); });
+  // menu: fantasma que segue o ponteiro (180 ms) atrás do indicador único
+  const nav = $("#side-nav"), fant = $(".nav-fantasma", nav);
+  nav.addEventListener("pointerover", e => {
+    const b = e.target.closest(".nav-b");
+    if (!b || !FINE || !ANIM) return;
+    fant.style.setProperty("--y", b.offsetTop + "px"); fant.style.height = b.offsetHeight + "px"; fant.classList.add("on");
+  });
+  nav.addEventListener("pointerleave", () => fant.classList.remove("on"));
+  // celular: faixa da demo vira chip; filtros numa folha inferior
+  $("#ribbon-chip").addEventListener("click", () => {
+    const r = $("#ribbon"), on = !r.classList.contains("aberto");
+    r.classList.toggle("aberto", on); $("#ribbon-chip").setAttribute("aria-expanded", String(on));
+  });
+  document.addEventListener("pointerdown", e => {
+    const r = $("#ribbon");
+    if (r.classList.contains("aberto") && !r.contains(e.target)) { r.classList.remove("aberto"); $("#ribbon-chip").setAttribute("aria-expanded", "false"); }
+  });
+  $("#btn-filtros-m").addEventListener("click", () => abrirFolha(!$("#top-tools").classList.contains("aberta")));
+  $("#filtros-fundo").addEventListener("click", () => abrirFolha(false));
+  $("#top-tools").addEventListener("keydown", e => { if (e.key === "Escape" && $("#top-tools").classList.contains("aberta")) { e.stopPropagation(); abrirFolha(false); } });
+  arrastavel($("#top-tools"), { eixo: "y", var: "--fy", alca: ".folha-alca, .top-tools-h", ativo: () => $("#top-tools").classList.contains("aberta"), fechar: () => abrirFolha(false) });
+  $("#btn-comparar").addEventListener("click", () => {
+    S.comparar = !S.comparar;
+    $("#btn-comparar").setAttribute("aria-pressed", String(S.comparar));
+    if (S.aba === "geral" && M) render(false);
+  });
+  // o dia lido no gráfico ganha um ponto nas 6 sparklines da régua (os números da régua não mudam)
+  document.addEventListener("nx:dia", e => {
+    const i = e.detail ? e.detail.i : null;
+    $$("#kpis .spark-box").forEach(s => {
+      const de = +s.dataset.de, ys = (s.dataset.ys || "").split(","), n = ys.length, k = i == null ? -1 : i - de;
+      if (k < 0 || k >= n) { s.classList.remove("com-dia"); return; }
+      s.style.setProperty("--x", (k / Math.max(1, n - 1) * 100).toFixed(2) + "%");
+      s.style.setProperty("--y", (+ys[k] / 36 * 38).toFixed(1) + "px");
+      s.classList.add("com-dia");
+    });
+  });
   $("#sel-cliente").addEventListener("change", e => trocarCliente(e.target.value));
   $("#sel-cliente-m").addEventListener("change", e => trocarCliente(e.target.value));
   // botões dos estados vazios e atalhos entre abas
   $("#main").addEventListener("click", e => {
     const ir = e.target.closest("[data-ir]");
-    if (ir) return setAba(ir.dataset.ir);
+    if (ir) return setAba(ir.dataset.ir, { corte: true });
+    const ds = e.target.closest("[data-desde]");
+    if (ds) return desdeAcao(ds.dataset.desde);
     const ac = e.target.closest("[data-acao]");
     if (!ac) return;
     if (ac.dataset.acao === "recarregar") { M = null; carregarDados({ entrada: true }); }
@@ -1841,8 +3003,9 @@ function ligarEventos() {
   $("#btn-novo-lead").addEventListener("click", () => abrirGaveta(null));
 
   /* ---------- gaveta ---------- */
-  $("#lf-etapas-op").innerHTML = ETAPAS.map(([v, l, c]) =>
-    `<label class="etapa-op"><input type="radio" name="lf-etapa" value="${v}"><span><i style="--c:${c}"></i>${l}</span></label>`).join("");
+  // etapas: contas num fio; os radios continuam por baixo (setas do teclado, leitor de tela)
+  $("#lf-etapas-op").innerHTML = `<span class="etapa-ind" aria-hidden="true"></span>` + ETAPAS.map(([v, l, c]) =>
+    `<label class="etapa-op"><input type="radio" name="lf-etapa" value="${v}"><span class="bead" style="--c:${c}" aria-hidden="true"></span><span class="rot">${l}</span></label>`).join("");
   $("#lf-etapas-op").addEventListener("change", gvAtualizar);
   $("#lf-servico").addEventListener("change", gvAtualizar);
   $("#form-lead").addEventListener("submit", salvarLead);
@@ -1850,8 +3013,12 @@ function ligarEventos() {
   $("#gv-cancelar").addEventListener("click", () => fecharGaveta());
   $("#gaveta-fundo").addEventListener("click", () => fecharGaveta());
   $("#gaveta").addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); fecharGaveta(); } });
+  // arrastar a gaveta para a direita (> 80 px ou > .5 px/ms) fecha; senão volta com mola
+  arrastavel($("#gaveta"), { eixo: "x", var: "--gx", alca: "#gv-alca", ativo: () => !$("#gaveta").hidden, fechar: () => fecharGaveta() });
 
   /* ---------- radar ---------- */
+  $("#alerts").addEventListener("pointerover", e => { const li = e.target.closest("li[data-chave]"); if (radarCtl) radarCtl.realcar(li ? li.dataset.chave : null); });
+  $("#alerts").addEventListener("pointerleave", () => { if (radarCtl) radarCtl.realcar(null); });
   $("#rules").addEventListener("click", e => {
     const b = e.target.closest("[data-regra]");
     if (!b) return;
@@ -1878,6 +3045,12 @@ function ligarEventos() {
     const scope = $("#scope"), btn = $("#btn-varrer");
     btn.disabled = true;
     scope.classList.add("scanning");
+    if (radarCtl) radarCtl.varrer();
+    if (ANIM) {
+      const wa = $("#wa-alerta");
+      wa.insertAdjacentHTML("beforeend", `<div class="typing" role="img" aria-label="digitando"><i></i><i></i><i></i></div>`);
+      wa.scrollTop = wa.scrollHeight;
+    }
     $("#scope-status").textContent = `Varrendo ${plural(campanhasTodas(), "campanha", "campanhas")} e ${plural(Object.values(M.CRI).filter(k => k.plat).length, "criativo", "criativos")}…`;
     const t0 = Date.now();
     if (!S.demo) await carregarDados({ entrada: false });
@@ -1886,7 +3059,9 @@ function ligarEventos() {
       const d = new Date();
       S.varridoEm = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
       btn.disabled = false;
+      radarChega = true;
       if (S.aba === "radar" && M) renderRadar();
+      radarChega = false;
     }, Math.max(0, (REDUCE ? 0 : 1500) - (Date.now() - t0)));
   });
 
@@ -1901,9 +3076,19 @@ function ligarEventos() {
     const b = e.target.closest("[data-ver-rel]");
     if (b) verRelatorio(b.dataset.verRel);
   });
+  // cada envio abre a linha do tempo (gerado → enviado → entregue)
+  const alternarEnv = e => {
+    const b = e.target.closest(".env-alt");
+    if (!b) return;
+    const on = b.getAttribute("aria-expanded") !== "true";
+    b.setAttribute("aria-expanded", String(on));
+    b.closest(".env-item").classList.toggle("aberto", on);
+  };
+  $("#rel-lista").addEventListener("click", alternarEnv);
+  $("#avisos-log").addEventListener("click", alternarEnv);
 
   /* ---------- ajustes ---------- */
-  $("#btn-novo-cliente").addEventListener("click", () => { S.aj.novoCliente = true; renderFormCliente(); renderIntegracoes(); $("#cl-nome").focus(); });
+  $("#btn-novo-cliente").addEventListener("click", () => { S.aj.novoCliente = true; renderFormCliente(); renderFormMarca(); renderIntegracoes(); $("#cl-nome").focus(); });
   const fc = $("#form-cliente");
   fc.addEventListener("submit", salvarCliente);
   fc.addEventListener("click", e => {
@@ -1923,7 +3108,7 @@ function ligarEventos() {
       if (ult) ult.focus();
       return;
     }
-    if (t.closest("#cl-cancelar")) { S.aj.novoCliente = false; renderFormCliente(); renderIntegracoes(); $("#btn-novo-cliente").focus(); }
+    if (t.closest("#cl-cancelar")) { S.aj.novoCliente = false; renderFormCliente(); renderFormMarca(); renderIntegracoes(); $("#btn-novo-cliente").focus(); }
   });
   fc.addEventListener("input", e => {
     // identificador acompanha o nome enquanto ninguém mexeu nele
@@ -1932,6 +3117,18 @@ function ligarEventos() {
       if (s && (!s.value || s.dataset.auto === "1")) { s.value = slugDe(e.target.value); s.dataset.auto = "1"; }
     }
     if (e.target.id === "cl-slug") e.target.dataset.auto = "";
+  });
+  const fm = $("#form-marca");
+  fm.addEventListener("submit", salvarMarca);
+  fm.addEventListener("change", e => { if (e.target.id === "mk-arquivo") logoEscolhido(e.target); });
+  fm.addEventListener("input", e => {
+    if (e.target.id === "mk-cor") corMarcaNova(e.target.value);
+    if (e.target.id === "mk-hex") { const v = e.target.value.trim(), h = v.startsWith("#") ? v : "#" + v; if (hexValido(h)) corMarcaNova(h); }
+  });
+  fm.addEventListener("click", e => {
+    const s = e.target.closest("[data-sug]");
+    if (s) return corMarcaNova(s.dataset.sug);
+    if (e.target.closest("#mk-tirar") && S.aj.marca) { S.aj.marca.logo = null; previaMarca(); $("#mk-arquivo").focus(); }
   });
   const ig = $("#aj-integracoes");
   ig.addEventListener("submit", e => { e.preventDefault(); salvarIntegracao(e.target); });
@@ -1959,8 +3156,37 @@ function ligarEventos() {
     if (t && t !== "—") copiar(t, b);
   }));
 
+  /* ---------- recursos: apresentar, folha do mês, conexão, marcos, atalhos ---------- */
+  $("#btn-apresentar").addEventListener("click", () => { abrirFolha(false); apresentar({ gesto: true }); });
+  $("#btn-folha").addEventListener("click", () => abrirFolhaMes($("#sel-mes").value));
+  $("#btn-link-reuniao").addEventListener("click", e => copiar(linkReuniao(), e.currentTarget));
+  $("#sync-pill").addEventListener("click", () => abrirSyncPop($("#sync-pop").hidden));
+  $(".sync-box").addEventListener("keydown", e => { if (e.key === "Escape" && !$("#sync-pop").hidden) { e.stopPropagation(); abrirSyncPop(false); } });
+  document.addEventListener("pointerdown", e => { if (!$("#sync-pop").hidden && !e.target.closest(".sync-box")) abrirSyncPop(false); });
+  $("#marco-form").addEventListener("submit", e => { e.preventDefault(); salvarMarco(false); });
+  $("#marco-form").addEventListener("click", e => {
+    const b = e.target.closest("[data-marco]");
+    if (!b) return;
+    if (b.dataset.marco === "remover") salvarMarco(true); else fecharMarco(true);
+  });
+  // atalhos: Ctrl/⌘+K abre a busca; P apresenta; 1/2/3 = 7/30/60 dias — nunca dentro de um campo de texto
+  addEventListener("keydown", e => {
+    const t = e.target, emCampo = !!(t && t.closest && t.closest("input, select, textarea, [contenteditable]"));
+    const k = e.key, app = !$("#app").hidden && !!M && !S.estado;
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (k === "k" || k === "K")) {
+      if (!app || modalAberto()) return;
+      e.preventDefault(); abrirPaleta(); return;
+    }
+    if (emCampo || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || !app || modalAberto()) return;
+    if (k === "p" || k === "P") { e.preventDefault(); tourFim(); apresentar({ gesto: true }); }
+    else if (k === "1" || k === "2" || k === "3") {
+      const b = $(`#seg-periodo [data-v="${{ 1: 7, 2: 30, 3: 60 }[k]}"]`);
+      if (b && !$("#filters").hidden) { e.preventDefault(); b.click(); }
+    }
+  });
+
   /* ---------- tour ---------- */
-  $("#btn-tour").addEventListener("click", () => tourIr(0));
+  $("#btn-tour").addEventListener("click", () => { abrirFolha(false); tourIr(0); });
   $("#tour-next").addEventListener("click", () => tourIr(tourI + 1));
   $("#tour-sair").addEventListener("click", tourFim);
   addEventListener("keydown", e => {
@@ -1973,7 +3199,7 @@ function ligarEventos() {
     if (e.key === "ArrowLeft" && tourI > 0) tourIr(tourI - 1);
   });
 
-  /* ---------- topo, gráfico, aurora ---------- */
+  /* ---------- topo, gráfico, herói ---------- */
   const top = $(".top");
   addEventListener("scroll", () => top.classList.toggle("stuck", scrollY > 8), { passive: true });
   const chartEl = $("#chart-dia");
@@ -1983,29 +3209,86 @@ function ligarEventos() {
       const w = chartEl.clientWidth;
       if (!w || S.aba !== "geral" || !M || (w === chartEl._w && !chartEl._pendente)) return;
       clearTimeout(rzc);
-      rzc = setTimeout(() => desenharChart(chartEl._pendente), 120);
+      rzc = setTimeout(() => desenharChart(null), 120);
     }).observe(chartEl);
   }
   let rz;
-  addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(posicionarSegs, 180); });
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(posicionarSegs);
+  addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { posicionarSegs(); moverIndicadores(); }, 180); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { posicionarSegs(); moverIndicadores(); });
+  // a conta de luz do fio só corre com o herói em quadro
+  if ("IntersectionObserver" in window) new IntersectionObserver(en => $(".card-hero").classList.toggle("em-quadro", en[en.length - 1].isIntersecting)).observe($(".card-hero"));
+}
 
-  aurora = new Aurora($("#hero-aurora"));
-  new IntersectionObserver(en => { aurora.vis = en[0].isIntersecting; aurora.ligar(S.aba === "geral" && !$("#app").hidden); }).observe($(".card-hero"));
-  auroraAuth = new Aurora($("#auth-aurora"), 29);
+/** Arrastar para fechar (gaveta → direita, folha de filtros → baixo): passou de 80 px ou
+    de .5 px/ms, fecha; senão volta com mola. O teclado nunca depende disto (Esc fecha). */
+function arrastavel(el, o) {
+  const alca = o.alca ? $$(o.alca, el) : [el];
+  let a = null;
+  const pos = e => (o.eixo === "x" ? e.clientX : e.clientY);
+  alca.forEach(h => {
+    h.addEventListener("pointerdown", e => {
+      if (!o.ativo() || e.button > 0 || e.target.closest("button:not(.folha-alca), input, select, textarea, a")) return;
+      a = { p0: pos(e), p: pos(e), t: performance.now(), v: 0 };
+      try { h.setPointerCapture(e.pointerId); } catch { /* ok */ }
+      el.classList.add("arrastando"); el.classList.remove("volta");
+    });
+    h.addEventListener("pointermove", e => {
+      if (!a) return;
+      const agora = performance.now(), d = Math.max(0, pos(e) - a.p0);
+      a.v = (pos(e) - a.p) / Math.max(1, agora - a.t); a.p = pos(e); a.t = agora;
+      el.style.setProperty(o.var, d + "px");
+    });
+    const soltar = () => {
+      if (!a) return;
+      const d = Math.max(0, a.p - a.p0), v = a.v;
+      a = null;
+      el.classList.remove("arrastando");
+      if (d > 80 || v > .5) o.fechar();
+      else { el.classList.add("volta"); el.style.setProperty(o.var, "0px"); }
+    };
+    h.addEventListener("pointerup", soltar);
+    h.addEventListener("pointercancel", soltar);
+  });
 }
 const campanhasTodas = () => Object.values(M.CAMP).filter(c => c.plat).length;
 
-function iniciar() {
+let pedidosFeitos = false;
+function pedidosDaUrl() {
+  if (pedidosFeitos) return;
+  pedidosFeitos = true;
+  if (Q.get("folha")) abrirFolhaMes(Q.get("folha"));
+  else if (Q.has("apresentar")) {
+    const n = parseInt(Q.get("cena"), 10);
+    // ?cena=N abre direto na cena; sem ela, o cartão-título "Começar ▶" (a tela cheia precisa de um gesto)
+    apresentar({ cena: Number.isFinite(n) ? n : 1, titulo: !Q.has("cena"), gesto: false });
+  }
+}
+
+async function iniciar() {
   ligarEventos();
   api.aoSessaoInvalida(sessaoExpirou);
+  if (S.demo && CLINICA_Q) bootMsg(`Abrindo o painel da ${CLINICA_Q}…`);
+  // a câmera precisa estar pronta antes do 1º quadro (senão o conteúdo piscaria); teto de 900 ms.
+  // A folha pedida pela URL não espera (imprimir/PDF logo na abertura).
+  const ate = (p, ms) => Promise.race([p, new Promise(r => setTimeout(() => r(null), ms))]);
+  const soFolha = !!Q.get("folha");
+  const fx = await ate(FX_P, soFolha ? 40 : 900);
+  if (fx) { fx.ligar({ anim: ANIM }); FX = fx; }
+  if (!CINE) CINE = await ate(CINE_P, soFolha ? 20 : 300);
+  // vinheta (1ª abertura da sessão): as entradas em cena esperam o monograma sair; os dados, não
+  const vin = CINE && !soFolha && !Q.has("apresentar") ? CINE.vinheta() : null;
+  if (vin && FX) FX.segurar(vin);
   if (S.demo) {
-    montarDe(gerarDemo({ nome: NOME_DEMO }));
+    // gerarDemo recebe SÓ o nome (nunca cfg): os números da demo não mudam com a clínica
+    montarDe(gerarDemo({ nome: S.nomeDemo }));
+    S.dados = exemploDemo();
+    aplicarMarca({ cor: COR_Q });
     prepararApp();
     mostrarTela("app");
     atualizarTopo();
     abrirAbaInicial();
     atualizarBadge();
+    pedidosDaUrl();
     return;
   }
   S.token = api.lerToken();
