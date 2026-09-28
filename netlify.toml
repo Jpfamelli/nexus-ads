@@ -1,0 +1,42 @@
+# ============================================================
+# ÓRBITA (SaaS da Nexus) — hospedagem no Netlify (ESPEC D10, §3.9, §9 passo 6)
+# Publica a pasta web/ sem build. Em TODOS os hosts do site (o principal e
+# os domínios das revendas/clientes) a raiz e o /index.html vão para /app/:
+# o painel clássico, com a marca Nexus, só é servido pelo GitHub Pages.
+# Cabeçalhos de segurança do app novo (/app/*): nenhum script inline, só
+# o próprio site e o Supabase do projeto.
+# ============================================================
+[build]
+  publish = "web"
+  command = ""
+
+[[redirects]]
+  from = "/"
+  to = "/app/"
+  status = 302
+  force = true
+
+[[redirects]]
+  from = "/index.html"
+  to = "/app/"
+  status = 302
+  force = true
+
+[[headers]]
+  for = "/app/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https://dtjznipitihnwmcgpzqh.supabase.co; connect-src 'self' https://dtjznipitihnwmcgpzqh.supabase.co; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Content-Type-Options = "nosniff"
+    Permissions-Policy = "camera=(), geolocation=()"
+
+# o app muda de versão pelo ?v= do index.html; o próprio index.html não fica em cache
+[[headers]]
+  for = "/app/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/app/"
+  [headers.values]
+    Cache-Control = "no-cache"

@@ -114,6 +114,14 @@ export const metricaCurta = r => ({
   cli: +r.cliques || 0, g: +r.gasto || 0, conv: +r.conversoes || 0,
 });
 
+/** Filtro de funis do Ads (ESPEC §4.11) — o MESMO do nx_dados: negócio sem funil ou num funil
+    com conta_no_ads. Sem isso, um negócio do pós-venda entraria no radar e nos relatórios de
+    WhatsApp e os números deixariam de bater com o painel. */
+export function filtroFunisAds(idsFunis) {
+  const ids = (idsFunis || []).filter(Boolean);
+  return ids.length ? `or(funil_id.is.null,funil_id.in.(${ids.join(",")}))` : "funil_id.is.null";
+}
+
 /** Mesmo dataset que o painel monta a partir do nx_dados. */
 export async function carregarModelo(db, cliente, hoje, dias) {
   const de = somaDias(hoje, -dias);
@@ -122,11 +130,16 @@ export async function carregarModelo(db, cliente, hoje, dias) {
       cliente_id: `eq.${cliente.id}`, data: `gte.${de}`, select: COLS_METRICAS,
       order: "data.asc,plataforma.asc,nivel.asc,campanha_ext.asc,anuncio_ext.asc",
     }),
-    // lead que conversou antes da janela mas agendou/veio dentro dela ainda conta no funil
-    db.select("nx_leads", {
-      cliente_id: `eq.${cliente.id}`, select: COLS_LEADS, order: "id.asc",
-      or: `(data_conversa.gte.${de},data_agenda.gte.${de},data_consulta.gte.${de})`,
-    }),
+    (async () => {
+      const funis = await db.select("nx_funis", {
+        cliente_id: `eq.${cliente.id}`, conta_no_ads: "is.true", select: "id", order: "id.asc",
+      });
+      // lead que conversou antes da janela mas agendou/veio dentro dela ainda conta no funil
+      return db.select("nx_leads", {
+        cliente_id: `eq.${cliente.id}`, select: COLS_LEADS, order: "id.asc",
+        and: `(or(data_conversa.gte.${de},data_agenda.gte.${de},data_consulta.gte.${de}),${filtroFunisAds(funis.map(f => f.id))})`,
+      });
+    })(),
   ]);
   const ds = datasetDeLinhas({
     metricas: metricas.map(metricaCurta), leads,
@@ -224,5 +237,106 @@ export async function registrarExecucao(db, { tarefa, inicio, ms, ok, resumo }) 
     await db.insert("nx_execucoes", { tarefa, inicio: inicio.toISOString(), fim: fim.toISOString(), ok, resumo }, { retornar: false });
   } catch (e) {
     console.error(`nx_execucoes (${tarefa}):`, limparErro(e.message));
+  }
+}
+
+/* ============================================================
+   Painel do SaaS → Edge Functions (nx-enviar, nx-midia, nx-ia) — ESPEC §6.1
+   Token vai no CORPO (não há cookie); toda resposta leva CORS aberto.
+   Ordem fixa: autenticar → conferir TODOS os ids pelas internas → só então rede.
+   ============================================================ */
+export const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "content-type, apikey, x-client-info",
+  "Access-Control-Max-Age": "86400",
+};
+
+export const respostaPainel = (dados, status = 200) => new Response(JSON.stringify(dados), {
+  status, headers: { "content-type": "application/json; charset=utf-8", ...CORS },
+});
+
+/** OPTIONS (preflight do navegador). */
+export const preflight = () => new Response(null, { status: 204, headers: CORS });
+
+/** Erro com código do Apêndice B e o status HTTP que o front trata igual RPC. */
+export class ErroApi extends Error {
+  constructor(codigo, status = 400, detalhe) { super(codigo); this.codigo = codigo; this.status = status; this.detalhe = detalhe; }
+}
+
+/** {ok:false, erro:<código>, detalhe?} */
+export function respostaErro(codigo, status = 400, detalhe) {
+  return respostaPainel({ ok: false, erro: codigo, ...(detalhe ? { detalhe: limparErro(detalhe).slice(0, 200) } : {}) }, status);
+}
+
+const ACESSO = new Set(["sem_acesso", "sem_permissao", "conta_suspensa", "teste_expirado", "modulo_desligado", "so_plataforma"]);
+const SESSAO = new Set(["sessao_invalida", "conta_pendente"]);
+
+/** HTTP do código: sessão 401 · acesso 403 · *_nao_encontrad[oa] 404 · resto (dados) 400. */
+export function statusDoCodigo(codigo) {
+  if (SESSAO.has(codigo)) return 401;
+  if (ACESSO.has(codigo)) return 403;
+  if (/_nao_encontrad[oa]$/.test(codigo)) return 404;
+  return 400;
+}
+
+/** Código do Apêndice B dentro do erro do db.js ("banco 400 em rpc/x: conversa_nao_encontrada"). */
+export function codigoBanco(e) {
+  const m = String(e?.message ?? "").match(/:\s*([a-z][a-z0-9_]{2,60})\s*$/);
+  return m && e?.status >= 400 && e?.status < 500 ? m[1] : null;
+}
+
+/** Erro do banco → ErroApi (código conhecido) ou o próprio erro (falha técnica = 500). */
+export function erroApiDoBanco(e) {
+  if (e instanceof ErroApi) return e;
+  const c = codigoBanco(e);
+  return c ? new ErroApi(c, statusDoCodigo(c)) : e;
+}
+
+/** Interna do banco chamada por handler de painel: erro com código vira ErroApi. */
+export async function interna(db, nome, params) {
+  try { return await db.rpc(nome, params); }
+  catch (e) { throw erroApiDoBanco(e); }
+}
+
+// só a forma canônica (minúscula, como o banco devolve): "ABC…" também seria o mesmo cliente para o
+// nx_fn_ctx (cast uuid), mas viraria OUTRA pasta no Storage (<ABC…>/out/…) — fora do "ver", do
+// "apagar" e da faxina de mídia quando o contato/cliente é excluído
+const UUID_CLIENTE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * nx_fn_ctx(token, cliente, papel mínimo) → ctx (JSON do nx_ctx_t) que as internas recebem como p_ctx.
+ * Nunca recalcula papel aqui: vale o que o nx_ctx decidiu para ESTE cliente.
+ */
+export async function autenticarPainel(db, corpo, papelMin = "atendente") {
+  const token = typeof corpo?.token === "string" ? corpo.token.trim() : "";
+  if (!token || token.length > 400) throw new ErroApi("sessao_invalida", 401);
+  const cliente = String(corpo?.cliente ?? "");
+  if (!UUID_CLIENTE.test(cliente)) throw new ErroApi("cliente_nao_encontrado", 404);
+  const ctx = await interna(db, "nx_fn_ctx", { p_token: token, p_cliente: cliente, p_min: papelMin });
+  if (!ctx || typeof ctx !== "object" || !ctx.conta_id) throw new ErroApi("sessao_invalida", 401);
+  return ctx;
+}
+
+/** Corpo do painel: JSON pequeno (o painel nunca manda arquivo por aqui). */
+export async function lerCorpoPainel(req, max = 64_000) {
+  const txt = await req.text();
+  if (txt.length > max) throw new ErroApi("dados_invalidos", 413);
+  try { const c = JSON.parse(txt || "{}"); if (c && typeof c === "object" && !Array.isArray(c)) return c; } catch { /* abaixo */ }
+  throw new ErroApi("dados_invalidos", 400);
+}
+
+/** Envolve um handler de painel: OPTIONS, método, erros → {ok:false, erro}. */
+export async function tratarPainel(req, fn) {
+  if (req.method === "OPTIONS") return preflight();
+  if (req.method !== "POST") return respostaErro("metodo_invalido", 405);
+  try {
+    return await fn();
+  } catch (e) {
+    const x = erroApiDoBanco(e);
+    if (x instanceof ErroApi) return respostaErro(x.codigo, x.status, x.detalhe);
+    const msg = limparErro(e?.message || e);
+    console.error("painel:", msg);
+    return respostaErro("erro_interno", 500, msg);
   }
 }

@@ -1,6 +1,5 @@
-// nx-whatsapp — webhook da WhatsApp Cloud API. Deploy a partir de supabase/dist/nx-whatsapp (scripts/montar-funcoes.mjs).
-// Mídia recebida e mensagem "fora do horário" saem em segundo plano (EdgeRuntime.waitUntil): a Meta recebe o 200 logo.
-import { tratar } from "./webhook.js";
+// nx-midia — upload assinado, URL assinada de leitura e remoção no bucket privado nx-midia. Deploy a partir de supabase/dist/nx-midia (scripts/montar-funcoes.mjs), verify_jwt: false.
+import { tratar } from "./midia.js";
 
 const env = { url: Deno.env.get("SUPABASE_URL"), chave: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") };
 // deno-lint-ignore no-explicit-any

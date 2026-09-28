@@ -1,8 +1,9 @@
 /* ============================================================
    NEXUS ADS — ia.js
    Único módulo que importa o SDK da Anthropic. Só é carregado por
-   import dinâmico no relatorio.js, quando há chave configurada —
-   por isso os outros módulos rodam no Node (testes) sem o SDK.
+   import dinâmico no relatorio.js e no index.ts da nx-ia, quando há
+   chave configurada — por isso os outros módulos rodam no Node
+   (testes) sem o SDK.
    ============================================================ */
 import Anthropic from "npm:@anthropic-ai/sdk";
 
@@ -69,4 +70,52 @@ export async function leituraIA({ chave, modelo, tipo = "diario", contexto }) {
   const texto = (resp.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
   if (!texto) throw new Error(`a IA não devolveu texto (stop_reason: ${resp.stop_reason})`);
   return texto;
+}
+
+/**
+ * Pergunta curta para o assistente das Conversas (nx-ia): sugerir resposta / resumir.
+ * Humano sempre revisa: quem chama nunca envia o texto sozinho.
+ * @param {object} o
+ * @param {string} o.chave     nx_config.anthropic_api_key
+ * @param {string} [o.modelo]  nx_config.modelo_ia (padrão claude-opus-5)
+ * @param {string} o.sistema   instruções (a conversa real vai no user, entre delimitadores)
+ * @param {string} o.usuario   a conversa
+ * @param {number} [o.maxTokens]
+ * @param {"low"|"medium"|"high"} [o.esforco]
+ * @returns {Promise<{texto: string, modelo: string, tokens_in: number|null, tokens_out: number|null}>}
+ *          lança erro em falha da API ou recusa (quem chama traduz para ia_indisponivel)
+ */
+export async function perguntarClaude({ chave, modelo, sistema, usuario, maxTokens = 4000, esforco = "low" }) {
+  const model = modelo || "claude-opus-5";
+  // o atendente está esperando: uma retentativa curta no máximo
+  const client = new Anthropic({ apiKey: chave, timeout: 45_000, maxRetries: 1 });
+  const pedido = {
+    model,
+    max_tokens: maxTokens,
+    system: sistema,
+    messages: [{ role: "user", content: usuario }],
+  };
+  if (!SEM_EFFORT.test(model)) pedido.output_config = { effort: esforco };
+
+  let resp;
+  try {
+    resp = COM_RESERVA.has(model)
+      ? await client.beta.messages.create({ ...pedido, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" })
+      : await client.messages.create(pedido);
+  } catch (e) {
+    if (e instanceof Anthropic.APIError) throw new Error(`Anthropic ${e.status ?? "sem resposta"}: ${e.message}`);
+    throw e;
+  }
+  if (resp.stop_reason === "refusal") {
+    const cat = resp.stop_details?.category;
+    throw new Error(`a IA recusou o pedido${cat ? ` (${cat})` : ""}`);
+  }
+  const texto = (resp.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+  if (!texto) throw new Error(`a IA não devolveu texto (stop_reason: ${resp.stop_reason})`);
+  return {
+    texto,
+    modelo: resp.model || model,
+    tokens_in: Number.isFinite(resp.usage?.input_tokens) ? resp.usage.input_tokens : null,
+    tokens_out: Number.isFinite(resp.usage?.output_tokens) ? resp.usage.output_tokens : null,
+  };
 }

@@ -1,0 +1,12 @@
+{
+  "name": "Órbita",
+  "short_name": "Órbita",
+  "description": "Anúncio, conversa e venda na mesma órbita.",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#07090C",
+  "theme_color": "#07090C",
+  "icons": []
+}

@@ -1,0 +1,10 @@
+// nx-ia — sugerir resposta / resumir conversa (Claude). A IA nunca envia: o texto volta para o atendente revisar.
+// Deploy a partir de supabase/dist/nx-ia (scripts/montar-funcoes.mjs), verify_jwt: false.
+// O SDK da Anthropic só é carregado (ia.js) quando há chave e a conversa já foi conferida.
+import { tratar } from "./ia_conversas.js";
+
+const env = { url: Deno.env.get("SUPABASE_URL"), chave: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") };
+// deno-lint-ignore no-explicit-any
+const emSegundoPlano = (p: Promise<unknown>) => (globalThis as any).EdgeRuntime?.waitUntil(p) ?? p;
+
+Deno.serve((req) => tratar(req, env, { emSegundoPlano, ia: () => import("./ia.js") }));
