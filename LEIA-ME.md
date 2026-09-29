@@ -6,7 +6,7 @@ como consulta. Onde aparece um nome entre parênteses, como `(meta_access_token)
 é o nome técnico do campo; ele ajuda se você precisar pedir ajuda ao Claude.
 
 **Endereço do painel:** https://jpfamelli.github.io/nexus-ads/
-**Demonstração sem login:** https://jpfamelli.github.io/nexus-ads/?demo
+**Modo de apresentação do painel clássico:** `?demo` usa dados fictícios locais, sem gravar no banco. O link não fica exposto na página pública; compartilhe-o diretamente quando for apresentar.
 
 ---
 
@@ -690,7 +690,7 @@ https://supabase.com/dashboard, abra o projeto `nexus-ads` e clique em **Restore
 
 ---
 
-## 13. O que o Claude já deixou pronto
+## 13. Estado do Nexus Ads e do Órbita
 
 - **Banco de dados** no Supabase (projeto `nexus-ads`), com todas as tabelas, o login
   próprio (gestor e clínica, com aprovação) e as regras de segurança: nenhum dado sai
@@ -702,36 +702,28 @@ https://supabase.com/dashboard, abra o projeto `nexus-ads` e clique em **Restore
   leitura da IA quando houver chave) e a que recebe as mensagens do WhatsApp da
   clínica e os avisos de entrega do número da Nexus. Cada tarefa roda uma vez por
   vez, e a mesma pessoa escrevendo várias vezes ao mesmo tempo vira um cartão só.
-- **O painel** em https://jpfamelli.github.io/nexus-ads/, com as abas Visão geral,
-  Campanhas, Pacientes, Radar, Relatórios e Ajustes, e o modo demonstração (`?demo`).
+- **O painel clássico** em https://jpfamelli.github.io/nexus-ads/, com as abas Visão geral,
+  Campanhas, Pacientes, Radar, Relatórios e Ajustes. O modo `?demo` gera dados locais de apresentação;
+  não representa um cadastro ativo da clínica.
 - **Um único cálculo** para painel, radar e relatórios: os números do painel e os do
   WhatsApp sempre batem.
 - **O script do refresh token do Google** (`scripts/google-refresh-token.mjs`).
-- **Dados de demonstração** (`supabase/seed-demo.sql`): um cliente fictício chamado
-  "Clínica Demonstração" (`demo-clinica`), com 4 meses de campanhas e pacientes, para
-  mostrar o painel funcionando antes de conectar uma clínica real. Os números são
-  inventados e batem com o modo `?demo`. Veja abaixo como ele se comporta.
+- **Fixture de desenvolvimento** (`supabase/seed-demo.sql`): contém dados inventados para
+  testes antigos. Não rode esse arquivo no banco de produção. O registro público
+  `demo-clinica` foi removido; os testes do modo `?demo` usam gerador local.
+- **Órbita** (`web/app/`): app multiempresa em construção, com white-label, CRM, inbox do
+  WhatsApp oficial, gestão de anúncios e automações. Os módulos só serão liberados após o
+  aceite E2E e a publicação; confira `web/app/prontos.js` e o estado F8 antes de oferecer acesso.
 - **Este guia.**
 
-### Sobre o cliente de demonstração
+### Modo de apresentação e dados fictícios
 
-- **Como colocar ou renovar.** No Supabase, abra o projeto `nexus-ads` →
-  **SQL Editor** → **New query**, cole o conteúdo inteiro de `supabase/seed-demo.sql`
-  e clique em **Run**. No fim aparecem as contagens (1035, 685 e 358). Pode rodar de
-  novo quando quiser: ele apaga e recria só os números, pacientes, alertas e
-  relatórios desse cliente. As contas com acesso a ele continuam.
-- **As datas acompanham o dia em que você roda.** O último dia com números é sempre
-  "ontem" daquele dia. Depois disso os dados ficam parados: a cada dia o painel tem um
-  dia a mais sem números no fim. Para mostrar a alguém, rode o arquivo de novo antes.
-- **Ele entra ativo, como uma clínica de verdade.** Por isso o servidor também roda o
-  radar e o relatório diário dele. Como ele não tem **WhatsApp do gestor**, nada é
-  enviado; na lista de execuções em Ajustes o relatório dele aparece com
-  "nenhum número de destino cadastrado" (e, se houver chave da IA, gasta uma leitura
-  por dia). Isso para sozinho uma semana depois da última vez que você rodou o
-  arquivo, quando os números dele ficam sem investimento recente.
-- **Para tirar de circulação**, desative o cliente (`ativo`). Se o painel não tiver
-  essa opção, peça ao Claude. Apagar de vez também é pelo Claude, porque os dados
-  ligados a ele precisam sair junto.
+- **`?demo`** usa `web/demo.js`: números fictícios gerados no navegador, sem sessão e sem gravação.
+  Serve para uma apresentação privada do painel clássico.
+- **`supabase/seed-demo.sql`** recria um cliente fictício e contém comandos de remoção limitados
+  a esse slug. Use somente em um projeto de teste isolado; não execute em produção.
+- A tela pública não oferece mais os links para abrir a demonstração. Se for apresentar, envie
+  o endereço do modo demo diretamente ao interessado.
 
 ## 14. O que só você pode fazer
 
@@ -779,4 +771,54 @@ aprovação de outra pessoa. Por isso ninguém pode fazer por você:
 | ID do número de WhatsApp da clínica | App da Meta → WhatsApp → Configuração da API, número da clínica (7.2) |
 | URL de retorno e token de verificação do webhook | Mostrados no próprio Nexus Ads, em Ajustes → Configuração da Nexus → Webhook do WhatsApp (7.3) |
 | App secret | App da Meta → Configurações do app → Básico → Chave secreta do app (7.4) |
+
+---
+
+## 16. Órbita: operação da plataforma SaaS
+
+O Órbita reúne empresas, usuários, WhatsApp, CRM e anúncios sob uma marca configurável. A
+versão do app só deve ser apresentada como ativa depois da publicação e da verificação real;
+consulte `web/app/prontos.js` e `docs/orbita/estado/F8.md` antes de convidar uma clínica.
+
+### Preparar uma empresa
+
+1. Entre com uma conta de gestor da plataforma e crie a empresa em **Admin → Clientes**.
+   Escolha vertical, plano, módulos e período de teste. A plataforma cria o modelo inicial
+   de funis, etapas, etiquetas, respostas rápidas e departamentos.
+2. Gere o convite do administrador da empresa e envie o link ao responsável. Cada pessoa
+   entra com seu próprio e-mail e senha; convites não elevam contas existentes a gestor.
+3. Em **Configurações → Usuários**, convide a recepção e atribua o papel adequado. Use
+   atendente para responder conversas, supervisor para gerir a fila e leitura para acesso
+   somente de consulta.
+4. Ajuste nome, logo e cores em **Admin → Marca** (ou no tema da empresa, conforme o plano).
+   Confira o contraste na prévia. O domínio próprio exige configurar o CNAME e ativar o alias
+   no provedor de hospedagem.
+
+### Conectar WhatsApp e anúncios
+
+1. Em **Configurações → Números**, cadastre um número da WhatsApp Cloud API oficial, WABA,
+   departamento e token permanente. Teste o canal; ele só fica ativo depois de o app estar
+   inscrito na WABA. Tokens ficam no cofre do servidor e não devem ser enviados por chat ou
+   gravados em planilhas.
+2. Para a primeira ativação, escolha com a empresa entre um número novo, migrar o número
+   atual (que deixa de funcionar no app WhatsApp) ou esperar a disponibilidade de coexistência
+   por parceiro aprovado. Não prometa coexistência antes da confirmação da Meta.
+3. Configure o webhook assinado, os modelos aprovados e a forma de pagamento da WABA. A
+   janela de atendimento, opt-out e consentimento de marketing são aplicados pelo servidor.
+4. Em **Anúncios → Integrações**, conecte Meta Ads e Google Ads e valide a conta de anúncios.
+   As conversas vindas de anúncios de clique para WhatsApp mantêm campanha e criativo; quando
+   a oportunidade fecha, registre o valor no CRM para calcular retorno com vendas reais.
+5. Em **CRM**, mova cada oportunidade pelo funil e registre agendamento, comparecimento,
+   resultado e valor. Use um funil fora de Ads para pós-venda, para não contar o mesmo cliente
+   duas vezes no retorno dos anúncios.
+
+### Revisar antes de vender ou liberar acesso
+
+- Confirme que o módulo está listado em `web/app/prontos.js`, que as funções da versão atual
+  estão publicadas e que os testes E2E da empresa passaram.
+- Não prometa automações, relatórios ou configurações que ainda estejam fora da lista de
+  módulos liberados. A IA sugere texto para revisão humana; não atende pacientes sozinha.
+- A verba de anúncios é paga pela clínica diretamente às plataformas. O gestor precisa
+  acompanhar orçamento, leads, agendamentos, comparecimentos, vendas e custo por paciente,
+  além dos indicadores técnicos do Ads.
 | Chave da IA | console.anthropic.com → API Keys (seção 8) |

@@ -1,8 +1,8 @@
 # NEXUS ADS — contrato de construção
 
-Documento-fonte para quem constrói qualquer parte do sistema. Tudo que está aqui
-**já existe e foi testado** (banco, RPCs, agendamento, núcleo, gerador demo). Não
-mude nomes, assinaturas ou formatos daqui sem atualizar este arquivo.
+Documento-fonte para quem constrói qualquer parte do sistema. As seções 0–6 descrevem
+o Nexus Ads clássico. A seção 7 resume o SaaS Órbita; consulte também a especificação e
+o estado de entrega antes de tratar qualquer módulo novo como publicado.
 
 ## 0. Visão geral
 
@@ -412,3 +412,58 @@ herói e o curta (o "só anúncio" do resumo fica como linha de apoio).
 - **Armazenamento local** (conveniência, sempre em `try/catch`): `nx-recentes` (paleta),
   `nx-fechados-<cliente>` ("Desde a sua última visita", só conta de clínica), `sessionStorage
   nx-vinheta` (abertura 1× por sessão). O que precisa durar vai no `cfg`.
+
+## 7. SaaS Órbita
+
+O app em `web/app/` é a camada multiempresa da plataforma. O Nexus Ads clássico permanece
+em `web/`; os dois usam o mesmo projeto Supabase e o mesmo núcleo de métricas de anúncios.
+O app não é liberado por existir código: `web/app/prontos.js` é a lista de módulos aceitos,
+e `docs/orbita/estado/` registra os resultados de cada frente.
+
+### 7.1 Empresas e permissões
+
+- Uma organização (`nx_orgs`) pertence à Nexus ou a uma revenda. Ela reúne contas, clientes,
+  planos e configuração de marca. Cada cliente (`nx_clientes`) tem a própria equipe, módulos,
+  canais, funis e dados.
+- Sessões próprias usam token aleatório no navegador; no banco é armazenado somente o hash.
+  `nx_ctx` valida sessão, organização, cliente, papel, estado da conta e acesso ao módulo.
+- Papéis efetivos: gestor de plataforma/revenda, admin, supervisor, atendente e leitura.
+  Limites de planos são aplicados no servidor, inclusive os totais da organização de revenda.
+- RLS está habilitada nas tabelas. O navegador não recebe acesso direto a tabelas: usa RPCs
+  explicitamente concedidas a `anon`/`authenticated`; funções internas ficam restritas a
+  `service_role`. Tokens de Meta, Google, WhatsApp e IA nunca voltam nas respostas do painel.
+
+### 7.2 CRM e WhatsApp
+
+- `nx_contatos` guarda a ficha do contato; `nx_leads` guarda cada oportunidade. A mesma
+  oportunidade alimenta o CRM e o cálculo de retorno de anúncios. Funis fora de Ads são
+  excluídos desse cálculo. Ganhos podem iniciar um negócio separado de pós-venda.
+- `nx_cv_*` atende conversas, mensagens, canais, departamentos, responsáveis, notas, modelos
+  e recibos. A integração padrão é a WhatsApp Cloud API oficial. Webhooks autenticados criam
+  ou localizam contato e oportunidade; CTWA preserva campanha, anúncio e `ctwa_clid`.
+- Mídia fica em bucket privado, com URLs temporárias. O servidor aplica a janela de 24 horas,
+  consentimento de marketing e opt-out. Sugestões de IA voltam como rascunho para revisão
+  humana; a IA não envia mensagens sozinha.
+
+### 7.3 Anúncios, automações e marca
+
+- O módulo Ads usa `nx_dados` e `web/nucleo.js`, o mesmo cálculo do painel clássico. O funil
+  de Ads filtra CRM, radar, campanhas e relatórios da mesma forma.
+- `nx_eventos`, automações e filas executam gatilhos em lotes curtos, com deduplicação,
+  limite de profundidade e respeito aos horários e opt-out.
+- A marca da organização define nome, logo, favicon, cores e domínio. As cores são derivadas
+  de tokens CSS com contraste verificado. A personalização de domínio requer ativação no host.
+
+### 7.4 Publicação e estado de liberação
+
+- O app é servido a partir de `web/app/` no host do SaaS. A raiz do Netlify redireciona para
+  `/app/`; GitHub Pages continua servindo o painel clássico.
+- Edge Functions são montadas em diretórios planos com `node scripts/montar-funcoes.mjs` e
+  publicadas a partir de `supabase/dist/<nome>/`, com `verify_jwt: false` e autenticação
+  própria em cada handler.
+- `MODULOS_PRONTOS` e `CONFIG_PRONTAS` só recebem módulos depois dos aceites definidos em
+  `docs/orbita/ESPEC.md` e verificados no ambiente real. Até lá, os caminhos não liberados
+  ficam fora do menu de clientes.
+- Para o status exato, confira `docs/orbita/estado/F1.md`…`F8.md` e o `ESTADO.md` de entrega.
+  O runner local é `node testes/rodar-tudo.mjs`; ele executa serialmente a suíte Node, não
+  substitui os smokes SQL nem os E2E no Supabase/host.
