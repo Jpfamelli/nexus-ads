@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 01:44 (America/Sao_Paulo)
+Atualizado: 2026-09-29 02:52 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -46,6 +46,14 @@ O Dashboard autenticado no projeto `dtjznipitihnwmcgpzqh` respondeu a consultas 
 O Dashboard segue autenticado no projeto `dtjznipitihnwmcgpzqh`. Consultas somente leitura confirmaram 35 migrations no total e 32 registros nas versões `20260928%`/`20260929%`, com registros de CRM, conversas, plataforma, automações e funções. A lista de Edge Functions mostra apenas `nx-ciclo`, `nx-relatorio` e `nx-whatsapp`; as funções novas do Órbita ainda não foram publicadas. `demo-clinica` e `teste-e2e` estão ausentes. Nenhuma escrita, exclusão, leitura de `nx_config` ou uso de credenciais ocorreu.
 
 O Codex não recebeu ferramenta Supabase MCP e o CLI segue sem autenticação. Os smokes `04_crm.sql`, `04_crm_b.sql` e `09_isolamento.sql` continuam sem execução real; a contagem de migrations não substitui esse aceite. Netlify permanece sem site vinculado. Não houve deploy. A suíte local e a montagem de funções passaram na verificação anterior (11/11); `deno` não está instalado nesta sessão. O projeto continua não publicado e não pronto para clientes.
+
+## Retomada 2026-09-29 02:48
+
+Revisão da documentação da F4: os registros “verde” descrevem execuções históricas; o arquivo `04_crm.sql` recebeu 12 asserções S2 depois delas. Os smokes completos atuais `04_crm.sql` e `04_crm_b.sql` ainda precisam ser repetidos no banco. Atualizei esse esclarecimento em F4 e F8; não houve mudança de código, banco ou publicação. A última suíte Node continua 11/11.
+
+## Retomada 2026-09-29 02:52
+
+Repeti `node testes/rodar-tudo.mjs`: 11/11 suítes passaram. Nesta sessão não há comandos `supabase`, `netlify` ou `deno`, nem MCPs de Supabase/Netlify. Os smokes no Postgres, deploy, E2E e URL do app continuam bloqueados; não houve alteração no banco ou publicação.
 
 O checkpoint de 00:31 registrava a árvore limpa; esta retomada acrescentou as correções locais descritas acima. Nenhuma validação de produção foi declarada concluída. A chave enviada no chat foi tratada como exposta e não foi usada; é necessário revogá-la. Não é preciso criar outro token para o fluxo pelo Dashboard.
 
