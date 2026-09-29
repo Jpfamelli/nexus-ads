@@ -93,4 +93,4 @@ Criado o site Netlify `orbita-nexus-ads` e realizado deploy de preview, sem cone
 
 ## Retomada 2026-09-29 08:49
 
-Auditei os 42 assets locais referenciados pelo preview Netlify (HTML, JavaScript, CSS, manifest, imagens e fontes): todos responderam com HTTP 2xx/3xx, sem arquivos ausentes. A tela continua aguardando a autenticação manual de João; E2E-A/B e validação autenticada/mobile ainda dependem dessa sessão. Nenhum dado ou configuração de produção foi alterado.
+Auditei os 42 assets locais referenciados pelo preview Netlify (HTML, JavaScript, CSS, manifest, imagens e fontes): todos responderam com HTTP 2xx/3xx, sem arquivos ausentes. `node testes/rodar-tudo.mjs` passou em 11/11 arquivos e `git diff --check` passou. A tela continua aguardando a autenticação manual de João; E2E-A/B e validação autenticada/mobile ainda dependem dessa sessão. Nenhum dado ou configuração de produção foi alterado.
