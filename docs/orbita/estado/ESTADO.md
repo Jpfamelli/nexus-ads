@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 02:52 (America/Sao_Paulo)
+Atualizado: 2026-09-29 03:21 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -54,6 +54,10 @@ Revisão da documentação da F4: os registros “verde” descrevem execuções
 ## Retomada 2026-09-29 02:52
 
 Repeti `node testes/rodar-tudo.mjs`: 11/11 suítes passaram. Nesta sessão não há comandos `supabase`, `netlify` ou `deno`, nem MCPs de Supabase/Netlify. Os smokes no Postgres, deploy, E2E e URL do app continuam bloqueados; não houve alteração no banco ou publicação.
+
+## Retomada 2026-09-29 03:21
+
+Montei novamente as seis pastas de Edge Functions; `npx --yes deno check` passou nos seis entrypoints e `node testes/rodar-tudo.mjs` passou 11/11. Supabase/Netlify continuam sem CLI ou MCP disponível; não houve SQL real, deploy ou publicação.
 
 O checkpoint de 00:31 registrava a árvore limpa; esta retomada acrescentou as correções locais descritas acima. Nenhuma validação de produção foi declarada concluída. A chave enviada no chat foi tratada como exposta e não foi usada; é necessário revogá-la. Não é preciso criar outro token para o fluxo pelo Dashboard.
 
