@@ -2838,7 +2838,7 @@ todos. **Global (F8, na ordem; tudo com dados de teste que são apagados no fim)
 | 9 | Cobrança automática (Asaas, split, carteira) | manual no MVP |
 | 10 | Supabase Pro | contratar antes do primeiro cliente pagante |
 | 11 | Política de cancelamento/reembolso e contrato de operador de dados (LGPD) | redigir antes de vender |
-| 12 | Preço para a Kamiguchi: plataforma sozinha (Profissional R$ 597 + implantação R$ 990) ou junto do combo site + marketing + tráfego já proposto (R$ 997/mês de lançamento, normal R$ 1.297 + R$ 1.500 de setup, 6 meses — `PROPOSTA.md` da memória `kamiguchi-odontologia`) | a mensagem (Apêndice D) apresenta as duas opções com esses valores; o João confere antes de enviar |
+| 12 | Oferta da Kamiguchi: pacote integrado de site, acompanhamento de marketing, gestão de Google Ads e Meta Ads e acesso ao Órbita para CRM e conversas. Preço regular: R$ 1.838/mês + R$ 1.599 de criação/implantação. Lançamento: R$ 1.597/mês + R$ 1.189 de criação/implantação. Verba de mídia paga diretamente às plataformas e fica à parte. | usar estes valores no Apêndice D; não reutilizar a precificação anterior do combo nem somar uma assinatura separada do Órbita |
 | 13 | Modelo de mensagem de lembrete (categoria Utilidade) na WABA da clínica | texto sugerido em T12; a aprovação é da Meta, feita pelo João/cliente |
 
 ---
@@ -2962,9 +2962,11 @@ Nunca embute segredo no arquivo (só por argumento).
 ## Apêndice D — Mensagem para a Dra. Rafaella (base do `MENSAGEM-DOUTORA.md`, F8, §9 passo 11)
 
 Fatos de apoio (memória `kamiguchi-odontologia`): Kamiguchi Odontologia, Taubaté (Ed. Square Offices &
-Mall); WhatsApp atual da clínica (12) 99755-2370; proposta já apresentada = combo site + marketing +
-gestão de tráfego por R$ 997/mês de lançamento (normal R$ 1.297 + R$ 1.500 de setup), permanência de 6
-meses, verba de anúncio à parte. Custos da Meta: marketing ≈ R$ 0,32 por mensagem entregue; utilidade
+Mall); WhatsApp atual da clínica (12) 99755-2370; pacote integrado de site, acompanhamento de marketing,
+gestão de Google Ads e Meta Ads e acesso ao Órbita (CRM e conversas). Preço regular: R$ 1.838/mês +
+R$ 1.599 de criação/implantação. Condição promocional de lançamento: R$ 1.597/mês + R$ 1.189 de
+criação/implantação. A verba dos anúncios é paga à parte diretamente à Meta/Google. Não foi definida
+permanência mínima; não incluir prazo de 6 meses sem nova instrução do João. Custos da Meta: marketing ≈ R$ 0,32 por mensagem entregue; utilidade
 e, a partir de 01/10/2026, respostas de atendimento ≈ R$ 0,035; receber é grátis; conversa aberta por
 anúncio de clique para o WhatsApp tem 72 h grátis (https://aspa.chat/blog/mudancas-whatsapp-api-outubro-2026 ;
 https://360dialog.com/blog/whatsapp-service-message-charging-october-2026/ ;
@@ -2974,9 +2976,9 @@ A franquia de 1.000 mensagens grátis por mês NÃO foi confirmada na página da
 Regras de preenchimento: `{LINK}` = `saas_url` real (ou o domínio do produto), testado no E2E-A;
 `{DATA_REUNIAO}` padrão "quinta-feira, 01/10"; blocos entre `[se …]` só entram se a condição valer
 (`prontos.js`); nada de emoji; mensagens curtas (o João pode mandar em 3 partes, separadas por `---`).
-O arquivo começa com a linha para o João (fora da mensagem): "Conferir antes de enviar: preços (opção B
-soma o combo e a plataforma, sem desconto — ajuste se quiser dar condição de primeira cliente) e a data
-da reunião."
+O arquivo começa com a linha para o João (fora da mensagem): "Antes de enviar, inserir o link real e a
+data da reunião. Confirmar no `prontos.js` quais módulos já passaram pelo aceite; não anunciar como
+ativo recurso ainda bloqueado. Os valores abaixo são os preços confirmados pelo João."
 
 ```
 Dra. Rafaella, bom dia! Aqui é o João, da Nexus.
@@ -3015,11 +3017,12 @@ tornando a Nexus parceira), e isso depende de aprovação da Meta, sem data gara
 preferir C, começamos pelo A e migramos quando for possível.
 
 *Investimento*
-Opção 1 - Só a plataforma: R$ 597 por mês + implantação única de R$ 990 (configuração do número, do
-funil e das respostas, e treinamento presencial da equipe aqui em Taubaté).
-Opção 2 - Plataforma + combo site, marketing e gestão dos anúncios: R$ 997 por mês do combo
-(lançamento, 6 meses) + R$ 597 por mês da plataforma, com a mesma implantação.
-A verba dos anúncios continua à parte, paga direto à Meta/Google.
+O pacote reúne criação do site, acompanhamento de marketing, gestão de campanhas no Google Ads e Meta
+Ads e acesso ao Órbita para CRM e conversas.
+Condição promocional de lançamento: R$ 1.597 por mês + R$ 1.189 de criação/implantação única.
+Preço regular: R$ 1.838 por mês + R$ 1.599 de criação/implantação única.
+A verba dos anúncios fica à parte e é paga diretamente à Meta/Google. Não foi acordada permanência
+mínima para esta condição.
 
 *Custo das mensagens (pago direto à Meta, não à Nexus)*
 Pela API oficial, a Meta cobra por mensagem enviada, no cartão da própria conta da clínica:
@@ -3035,7 +3038,7 @@ tratamento de dados junto do contrato (LGPD). Recomendamos não mandar prontuár
 WhatsApp.
 
 *Próximos passos*
-1. A senhora me diz qual caminho do número (A, B ou C) e qual opção de investimento.
+1. A senhora me diz qual caminho do número (A, B ou C) e se deseja aproveitar a condição de lançamento.
 2. Implantação presencial na clínica: {DATA_REUNIAO}, no horário que for melhor.
 3. Nos 14 dias de teste, acompanho a equipe de perto e ajusto o que for preciso.
 

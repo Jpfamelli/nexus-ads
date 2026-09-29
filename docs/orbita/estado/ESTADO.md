@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-28 23:40 (America/Sao_Paulo)
+Atualizado: 2026-09-29 00:23 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -23,11 +23,11 @@ O código das frentes está no branch para revisão. **O SaaS ainda não está p
 
 ## Verificações locais
 
-`node testes/rodar-tudo.mjs` passou em 11/11 suítes. Contagens: painel 70; app 46; CRM 34; conversas 33; relatórios 38; funções 39; scripts 12; funções de conversas 46; automações 24; isolamento estrutural 2; núcleo aprovado.
+`node testes/rodar-tudo.mjs` passou em 11/11 suítes. Contagens: painel 70; app 46; CRM 34; conversas 33; relatórios 38; funções 39; scripts 12; funções de conversas 46; automações 24; isolamento estrutural 3; núcleo aprovado.
 
-Nesta retomada, `node testes/app.teste.mjs` passou 46/46, `node testes/crm.teste.mjs` 34/34 e `node testes/painel.teste.mjs` 70/70. O diff clássico contra `main` contém apenas os dois links públicos de demonstração ocultos. O preview local abriu a tela de login e foi conferido visualmente; sem backend autenticado, não cobre telas internas. A captura foi em desktop: o viewport de 390 px e o console não foram verificados nesta sessão.
+Nesta retomada, Chrome headless abriu o login em 375×812 e 390×844. Nos dois tamanhos `documentElement.scrollWidth` e `body.scrollWidth` bateram com a largura do viewport; o formulário apareceu e não houve erros de console. Isso valida somente o shell de login: sem backend autenticado, as telas e fluxos internos continuam sem verificação mobile. A suíte Node mais recente segue em 11/11; os testes de app, CRM e painel passaram 46/46, 34/34 e 70/70.
 
-O smoke `supabase/testes/09_isolamento.sql` foi ampliado localmente: agora prepara a org Nexus e uma revenda B, contas admin/atendente, entidades de teste, varredura de RPCs concedidas a `anon` derivada de `pg_proc` e comparação de hash antes/depois das linhas de B. Erros SQL estruturais (classe 42) não passam como negação segura, com exceção de `42501`. O teste Node verifica a presença estrutural desses contratos. **O SQL ainda não foi executado nem validado pelo parser PostgreSQL**, então o aceite de isolamento segue pendente. `04_crm.sql` e `04_crm_b.sql` também aguardam execução autenticada em transação com `ROLLBACK`.
+O smoke `supabase/testes/09_isolamento.sql` agora prepara a org Nexus e uma revenda B, contas admin/atendente, entidades de teste, varredura de RPCs concedidas a `anon` derivada de `pg_proc` e comparação de hash antes/depois das linhas de B. A sonda reconhece que `nx_sair` é idempotente e aceita somente a resposta pública exata `[{"ok":true}]` sem sessão; qualquer outro conteúdo ainda reprova. As 14 migrations e os 10 smokes SQL (`01` a `09`, incluindo os dois CRM) passaram numa instância efêmera PGlite. Esse ensaio usou stubs para pgcrypto/unaccent, Vault, Storage e pg_cron, e omitiu índices que dependem do pg_trgm; é uma checagem local de sintaxe e comportamento, não substitui a execução em PostgreSQL/Supabase. O aceite real de `04_crm.sql`, `04_crm_b.sql` e `09_isolamento.sql` continua pendente.
 
 ## Bloqueios e próximo passo
 

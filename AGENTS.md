@@ -25,7 +25,7 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
 - Branch `codex/orbita` enviada ao GitHub; PR #1 está aberto em rascunho. Migrações `supabase/migrations/20260928a…h` constam como aplicadas no handoff, mas não foram revalidadas nesta retomada.
 - Construídas localmente: F1 banco, F2 funções (nx-enviar, nx-midia, nx-ia, webhook ampliado), F3 login/white-label/admin (`web/app/`),
   F4 CRM, F5 Conversas, F6 Anúncios/Relatórios, F7 Automações. A revisão da F4 segue aberta até repetir os smokes no banco.
-- F8: runner serial 11/11 verde; smoke `09_isolamento.sql` ampliado, ainda sem execução/parser PostgreSQL. Órbita ainda não publicado nem pronto para clientes; seis funções novas, SQL autenticado, E2E e Netlify pendentes. `web/app/prontos.js` mantém os módulos bloqueados.
+- F8: runner serial 11/11 verde; migrations e 10 smokes SQL passaram numa simulação PGlite em memória com extensões/serviços stubados, mas ainda aguardam execução no PostgreSQL/Supabase real. Órbita ainda não publicado nem pronto para clientes; seis funções novas, SQL autenticado, E2E e Netlify pendentes. `web/app/prontos.js` mantém os módulos bloqueados.
 - **Falta (em ordem):**
   1. Repetir `04_crm.sql` e `04_crm_b.sql` via Supabase autenticado em transação `ROLLBACK`; fechar F4 somente com resultado verde.
   2. Executar `09_isolamento.sql` no PostgreSQL, corrigir o que surgir e confirmar isolamento.

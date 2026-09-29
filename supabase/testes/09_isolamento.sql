@@ -448,7 +448,9 @@ begin
       perform pg_temp.ok(position(privado in coalesce(v_result::text, '')) = 0,
         'RPC ' || r.proname || ' não revela texto de B no pass ' || v_pass || coalesce(': ' || v_erro, ''));
       if v_pass = 3 and v_erro is null and v_result not in ('[]'::jsonb, 'null'::jsonb, '{}'::jsonb)
-         and v_result::text !~ '"(sessao_invalida|conta_pendente|sem_acesso|sem_permissao|so_gestor|convite_invalido|codigo_invalido|chave_invalida)"' then
+         and v_result::text !~ '"(sessao_invalida|conta_pendente|sem_acesso|sem_permissao|so_gestor|convite_invalido|codigo_invalido|chave_invalida)"'
+         -- `nx_sair` é logout idempotente: sem sessão, sua única resposta pública é [{"ok":true}].
+         and not (r.proname = 'nx_sair' and v_result = '[{"ok":true}]'::jsonb) then
         raise exception 'FALHOU: RPC anon sem sessão devolveu conteúdo: %', r.proname;
       end if;
     end loop;
@@ -457,8 +459,8 @@ begin
   v_hash_depois := pg_temp.hash_tenant_b(cli_b, org_b);
   perform pg_temp.ok(v_hash_depois = v_hash_antes, 'nenhuma linha da revenda B mudou após sondas catalogadas');
 
-  -- Marca pública e verificação de convite são as únicas respostas sem sessão permitidas;
-  -- elas não podem conter identificadores ou dados privados do tenant.
+  -- Marca pública e verificação de convite respondem sem sessão por desenho;
+  -- elas não podem conter identificadores ou dados privados do tenant. nx_sair só retorna ok=true.
   v_j := public.nx_marca_publica('host-f8-inexistente-' || sufixo || '.invalid', null)::jsonb;
   perform pg_temp.ok(position(cli_b::text in v_j::text) = 0 and position(privado in v_j::text) = 0,
     'nx_marca_publica devolve somente configuração pública');

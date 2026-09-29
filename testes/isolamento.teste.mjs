@@ -29,3 +29,11 @@ test("09_isolamento deriva RPCs com IDs do catálogo e verifica alterações/vaz
   assert.match(sql, /sem_acesso/i, "verifica o token A contra o tenant B");
   assert.match(sql, /F8_B_PRIVATE/i, "detecta se uma resposta revela dados privados de B");
 });
+
+test("09_isolamento só permite o retorno idempotente fixo de nx_sair sem sessão", () => {
+  assert.match(
+    sql,
+    /r\.proname\s*=\s*'nx_sair'\s+and\s+v_result\s*=\s*'\[\{\"ok\":true\}\]'\s*::jsonb/i,
+    "logout sem sessão só pode devolver [{\"ok\":true}]",
+  );
+});
