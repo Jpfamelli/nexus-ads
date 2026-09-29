@@ -1,12 +1,12 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 09:42 (America/Sao_Paulo)
+Atualizado: 2026-09-29 10:01 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
 ## Situação
 
-O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas. Nesta retomada, João autorizou recuperação da própria conta gestora: há um único link temporário válido, e o formulário de nova senha está aberto; a senha ainda precisa ser criada por João. Nenhuma alteração foi feita em `nx_config` ou nos dados de clientes.
+O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas. João informou que salvou a senha da conta gestora; a interface não mostrou confirmação e o preview está agora na tela de login, aguardando autenticação manual. Nenhuma alteração foi feita em `nx_config` ou nos dados de clientes.
 
 ## Frentes
 
@@ -19,7 +19,7 @@ O código das frentes está no branch para revisão. As seis Edge Functions est�
 | F5 — conversas | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Webhook/API real e E2E pendentes |
 | F6 — anúncios e relatórios | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Integrações e E2E reais pendentes |
 | F7 — automações | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Execução real e E2E pendentes |
-| F8 — entrega | Runner serial e 10 smokes SQL reais aprovados; recuperação autorizada aberta para o gestor | Funções e preview implantados; senha do gestor, E2E autenticado, validação mobile e produção pendentes |
+| F8 — entrega | Runner serial 11/11 e 10 smokes SQL reais aprovados | Funções e preview implantados; login manual, E2E autenticado, validação mobile e produção pendentes |
 
 ## Verificações locais
 
@@ -102,3 +102,7 @@ Auditei os 42 assets locais referenciados pelo preview Netlify (HTML, JavaScript
 ## Retomada 2026-09-29 09:02
 
 Corrigi em F8.md uma afirmação histórica desatualizada sobre `09_isolamento.sql`: o arquivo atual já passou no Supabase em transação revertida, conforme o marco das 08:20. Consultei o PR #1: continua aberto em rascunho e o GitHub não reporta checks configurados para o branch. O bloqueio funcional continua sendo o login manual no preview.
+
+## Retomada 2026-09-29 10:01
+
+João informou que salvou a senha. Ao conferir a página, o preview ainda mostrava o formulário de criação de senha, sem confirmação de sucesso; naveguei para `#/login` e deixei a autenticação com João para preservar a senha. A suíte `node testes/rodar-tudo.mjs` passou em 11/11 arquivos. O próximo passo é João entrar no preview e responder `entrei`; então sigo com tenant de teste, E2E-A/B e validação mobile autenticada. Nenhum dado de cliente, `nx_config` ou ambiente de produção foi alterado.
