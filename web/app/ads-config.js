@@ -80,6 +80,37 @@ document.getElementById("form-contato").addEventListener("submit", async (e) => 
 </script>`;
 }
 
+/** Instruções para ligar um fluxo CodeWords ao endpoint público de entrada de leads do Órbita.
+    A chave identifica um cliente; o endpoint não sincroniza o histórico da caixa de conversas. */
+export function instrucoesCodeWords({ url, apikey, chave }) {
+  const j = v => JSON.stringify(String(v ?? ""));
+  return [
+    "Crie no CodeWords um fluxo chamado ‘Novo lead qualificado → Órbita’.",
+    "Use um gatilho de lead qualificado ou de cadastro concluído. Não envie em cada mensagem do WhatsApp: cada POST cria uma nova oportunidade no CRM.",
+    "Antes de ativar, inspecione um evento de exemplo e mapeie os campos reais do gatilho para nome, telefone, e-mail, mensagem e serviço. Se não houver telefone nem e-mail, não envie.",
+    "Quando o lead estiver qualificado, faça uma chamada HTTP POST com este destino e formato:",
+    `URL: ${url}`,
+    "Headers:",
+    `  apikey: ${apikey}`,
+    "  Content-Type: application/json",
+    "Body JSON (troque os textos entre < > pelos campos do evento; não deixe placeholders no fluxo ativo):",
+    "{",
+    `  \"p_chave\": ${j(chave)},`,
+    "  \"p_dados\": {",
+    "    \"nome\": \"<nome do contato>\",",
+    "    \"telefone\": \"<telefone com DDI e DDD>\",",
+    "    \"email\": \"<e-mail, se disponível>\",",
+    "    \"mensagem\": \"<resumo ou primeira mensagem, até 2000 caracteres>\",",
+    "    \"servico\": \"<serviço de interesse, se disponível>\",",
+    "    \"utm_source\": \"codewords-whatsapp\",",
+    "    \"utm_campaign\": \"<nome do fluxo ou campanha>\"",
+    "  }",
+    "}",
+    "Faça um teste com um contato fictício e confirme no CRM antes de ativar o fluxo.",
+    "Limite conhecido: o lead entra no funil como origem ‘Site’, com codewords-whatsapp registrado na observação; esta integração não importa nem sincroniza mensagens na caixa Conversas do Órbita.",
+  ].join("\n");
+}
+
 async function secaoFormulario(ctx, alvo) {
   const { ui, api } = ctx;
   const h = ui.h;
@@ -135,6 +166,23 @@ async function secaoFormulario(ctx, alvo) {
       h("div", { class: "campo" }, h("label", { for: idK }, "Chave"), inpK),
       h("div", { class: "linha cfga-exec" }, copiarK, trocar));
     alvo.append(cartaoChave);
+
+    // CodeWords → CRM: usa a mesma entrada protegida do formulário, sem armazenar uma chave do CodeWords.
+    const promptCodeWords = instrucoesCodeWords({ url, apikey: D.CHAVE_PUBLICA, chave });
+    const preCodeWords = h("pre", { class: "cfgf-codigo", tabindex: "0", "aria-label": "Instruções para configurar o CodeWords" },
+      h("code", {}, promptCodeWords));
+    const copiarCodeWords = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("copiar"), " Copiar instruções para o CodeWords");
+    copiarCodeWords.addEventListener("click", () => ui.copiar(promptCodeWords, { aviso: "Instruções copiadas. Cole no CodeWords e revise o mapeamento antes de ativar." }));
+    alvo.append(h("section", { class: "cartao pilha", "aria-labelledby": "cfgf-cw" },
+      h("h3", { id: "cfgf-cw", class: "titulo-sec" }, "Conectar com CodeWords"),
+      h("p", { class: "sub" }, "Quando uma automação do CodeWords qualificar um novo contato, ela pode cadastrar esse lead no CRM do Órbita. Para este fluxo de entrada, você não precisa criar uma API key do CodeWords."),
+      h("ol", { class: "cfgf-passos" },
+        h("li", {}, "Copie as instruções abaixo e cole na conversa do Cody dentro do CodeWords."),
+        h("li", {}, "Peça para ele conferir os campos do gatilho com um evento de teste e só então ativar."),
+        h("li", {}, "O contato, a oportunidade e a mensagem/resumo aparecem no CRM; confira o resultado com um lead fictício.")),
+      preCodeWords,
+      h("div", { class: "linha" }, copiarCodeWords),
+      h("p", { class: "campo-ajuda" }, "A chave de entrada é secreta e por cliente. Não publique estas instruções em um site ou repositório. Se vazar, gere outra chave nesta tela. O envio cria uma oportunidade por chamada; não configure o gatilho para disparar em cada mensagem.")));
 
     // instalação
     const codigo = codigoExemplo({ url, apikey: D.CHAVE_PUBLICA, chave });

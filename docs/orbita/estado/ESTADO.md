@@ -134,3 +134,11 @@ A tentativa manual de entrar no preview mostrou “E-mail ou senha não conferem
 ## Retomada 2026-09-29 10:18
 
 João pediu para reiniciar a recuperação. Substituí o link ainda ativo por um novo, temporário, e confirmei no Supabase que há exatamente um link válido para a conta gestora existente; uma consulta separada confirmou que o RLS da tabela continua habilitado. O formulário de nova senha está aberto no preview; João deve definir e salvar a própria senha. A conta gestora aprovada já existe, então não criei outra conta nem alterei o código de ativação ou `nx_config`. Não houve alteração de dados de cliente nem de produção. F8 aguarda a confirmação visual do salvamento e login para continuar o E2E autenticado.
+
+## Conector CodeWords — preparo local
+
+Adicionei em Configurações → Formulário do site um cartão para conectar um workflow do CodeWords ao CRM: instruções copiáveis, endpoint e formato do POST. Ele usa `nx_lead_entrada`, a chave de entrada do cliente e a chave pública já existente. O lead chega como origem “Site” e guarda `utm_source=codewords-whatsapp` na observação. A automação deve enviar somente uma vez por novo lead qualificado; não deve disparar em cada mensagem. Esta primeira ligação não importa conversas e não requer API key do CodeWords. A direção inversa — Órbita chamando workflow no runtime CodeWords — e a sincronização da caixa de mensagens ainda não estão implementadas.
+
+O código está somente na branch `codex/orbita`; o preview ainda não foi atualizado. `F8` continua bloqueada pelos aceites E2E-A/B, validação autenticada/mobile e limpeza do tenant de teste. Nenhuma credencial CodeWords foi fornecida ou guardada.
+
+Verificação desta alteração: `node testes/relatorios.teste.mjs` 39/39, `node testes/rodar-tudo.mjs` 11/11 e `git diff --check` aprovados.

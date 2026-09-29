@@ -1653,6 +1653,8 @@ percentis só sobre as conversas do período (nunca sobre a tabela inteira). Tes
 o volume do §5.1 em < 2 s cada relatório.
 | `nx_lead_entrada` | **anon** | `p_chave text, p_dados jsonb {nome, telefone?, email?, mensagem?, servico?, utm_source?, utm_campaign?}` | `{ok:true}`. Cria/acha contato (telefone → e-mail), cria negócio no funil padrão (`origem='site'`), `mensagem` vira nota, UTMs vão para `obs`, notifica admins. Máx. 30 por hora por cliente (`limite_taxa`). Chave errada → `{ok:true}` sem gravar (não revela). P1 |
 
+**CodeWords → Órbita (setup inicial em `#/config/formulario`):** reutiliza `nx_lead_entrada` para enviar ao CRM um lead já qualificado por uma automação do CodeWords. O payload marca `utm_source=codewords-whatsapp`; por contrato desse endpoint, a oportunidade continua com origem `site` e o identificador vai para a observação. O fluxo deve enviar uma vez por novo lead, nunca em cada mensagem, pois cada chamada cria outra oportunidade. Não sincroniza histórico de conversa nem permite responder pelo CodeWords dentro da caixa Conversas. Nesse sentido de envio (CodeWords → Órbita) não é necessária uma chave da API do CodeWords; uma chave `cwk-` só entra se o Órbita for chamar workflows publicados no runtime do CodeWords, direção que ainda não está implementada.
+
 ### 5.7 Automações (arquivo h — frente F7) · módulo `automacoes`
 
 **Gatilhos de banco que geram `nx_eventos`** (só gravam se existir automação ativa daquele gatilho no

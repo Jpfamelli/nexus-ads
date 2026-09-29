@@ -507,6 +507,22 @@ await teste("formulário do site: código de exemplo manda p_chave/p_dados certo
   assert.doesNotThrow(() => new Function(js), "o <script> do exemplo compila");
 });
 
+await teste("CodeWords: instruções usam a entrada por cliente e avisam que não sincronizam a caixa de conversas", async () => {
+  const A = await import("../web/app/ads-config.js");
+  const url = "https://x.supabase.co/rest/v1/rpc/nx_lead_entrada", chave = "cd".repeat(24);
+  const texto = A.instrucoesCodeWords({ url, apikey: "sb_publishable_teste", chave });
+  assert.ok(texto.includes(`URL: ${url}`));
+  assert.ok(texto.includes(`"p_chave": "${chave}"`));
+  assert.ok(texto.includes("apikey: sb_publishable_teste"));
+  for (const campo of ["nome", "telefone", "email", "mensagem", "servico", "utm_source", "utm_campaign"]) {
+    assert.ok(texto.includes(`"${campo}"`), `campo ${campo}`);
+  }
+  assert.match(texto, /não envie em cada mensagem/i);
+  assert.match(texto, /sincroniza mensagens na caixa Conversas/i);
+  assert.match(texto, /origem ‘Site’/);
+  assert.doesNotMatch(texto, /Authorization|Bearer/);
+});
+
 await teste("Ajustes de anúncios: valor em reais do jeito brasileiro ('2.000' é dois mil, nunca R$ 2)", async () => {
   const A = await import("../web/app/ads-config.js");
   const casos = [["2.000", 2000], ["1.500,00", 1500], ["R$ 1.234.567,89", 1234567.89], ["15,5", 15.5], ["15.5", 15.5], ["997", 997],
