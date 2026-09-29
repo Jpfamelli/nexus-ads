@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 01:06 (America/Sao_Paulo)
+Atualizado: 2026-09-29 01:22 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -35,7 +35,9 @@ O smoke `supabase/testes/09_isolamento.sql` agora prepara a org Nexus e uma reve
 
 Bloqueios atuais: o CLI Supabase está disponível por `npx`, mas a checagem somente de leitura de funções no projeto autorizado retornou `AccessTokenRequired`; o login ainda não está disponível no shell. O CLI Netlify está autenticado, porém falta vincular o site. Sem essas etapas, não é possível confirmar os testes SQL, publicar as seis funções, validar o host ou executar os E2E reais. `gh pr checks 1` não reportou verificações automáticas.
 
-O checkpoint de 00:31 registrava a árvore limpa; esta retomada acrescentou as correções locais descritas acima. Nenhuma validação de produção foi declarada concluída. A chave que o usuário enviou no chat foi tratada como exposta e não foi usada; é necessário revogá-la e inserir um token substituto em prompt oculto local.
+O painel web do Supabase está autenticado no projeto correto e o Editor SQL abriu. Nenhuma consulta foi rodada. A política do navegador bloqueou abrir os arquivos SQL locais como página; sem um conector Supabase MCP, não consegui executar os smokes pelo Dashboard nesta sessão. Os smokes podem ser executados pelo João no Dashboard ou por um conector habilitado. Nenhum token foi usado; revogar os tokens que ficaram visíveis durante a tentativa.
+
+O checkpoint de 00:31 registrava a árvore limpa; esta retomada acrescentou as correções locais descritas acima. Nenhuma validação de produção foi declarada concluída. A chave enviada no chat foi tratada como exposta e não foi usada; é necessário revogá-la. Não é preciso criar outro token para o fluxo pelo Dashboard.
 
 Quando as conexões estiverem disponíveis:
 
