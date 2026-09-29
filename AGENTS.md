@@ -22,16 +22,15 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
 ## Órbita — onde está (28/09/2026, ~80%)
 - Fonte da verdade: `docs/orbita/ESPEC.md` (leia a §0 Regras de ouro e a §8 Frentes/contratos; §9 = entrega).
   Estado de cada frente: `docs/orbita/estado/F1.md` … `F7.md` (campo `proximo`). Pedidos entre frentes: `docs/orbita/PEDIDOS.md`.
-- Commit local `57e0385` (ainda NÃO está no GitHub). Migrações `supabase/migrations/20260928a…h` **já estão aplicadas no banco real**.
-- Construídas: F1 banco, F2 funções (nx-enviar, nx-midia, nx-ia, webhook ampliado), F3 login/white-label/admin (`web/app/`),
-  F4 CRM, F5 Conversas, F6 Anúncios/Relatórios, F7 Automações. Revisões aprovadas: F1, F2, F3, F5, F6, F7.
+- Branch `codex/orbita` enviada ao GitHub; PR #1 está aberto em rascunho. Migrações `supabase/migrations/20260928a…h` constam como aplicadas no handoff, mas não foram revalidadas nesta retomada.
+- Construídas localmente: F1 banco, F2 funções (nx-enviar, nx-midia, nx-ia, webhook ampliado), F3 login/white-label/admin (`web/app/`),
+  F4 CRM, F5 Conversas, F6 Anúncios/Relatórios, F7 Automações. A revisão da F4 segue aberta até repetir os smokes no banco.
+- F8: runner serial 11/11 verde; smoke `09_isolamento.sql` ampliado, ainda sem execução/parser PostgreSQL. Órbita ainda não publicado nem pronto para clientes; seis funções novas, SQL autenticado, E2E e Netlify pendentes. `web/app/prontos.js` mantém os módulos bloqueados.
 - **Falta (em ordem):**
-  1. Revisão adversarial da F4 (CRM): contrato §5.3, isolamento entre empresas, trava do Ads, importação em lotes, tempo < 2 s.
-  2. F8 — entrega (ESPEC §8/§9): conferir a ordem das migrações; gerar e rodar `supabase/testes/09_isolamento.sql`;
-     criar `testes/rodar-tudo.mjs`; E2E dos aceites; `web/app/prontos.js` só com módulos aprovados; publicar as funções
-     novas e a `nx-whatsapp` nova; Netlify (`netlify.toml` já existe; publish = `web`, `/` → `/app/`); push; docs
-     (`CONTRATO.md` §7 e `LEIA-ME.md` com o passo a passo do João).
-  3. Verificação final (fluxos principais, isolamento, 390 px, console sem erros, painel clássico intacto).
+  1. Repetir `04_crm.sql` e `04_crm_b.sql` via Supabase autenticado em transação `ROLLBACK`; fechar F4 somente com resultado verde.
+  2. Executar `09_isolamento.sql` no PostgreSQL, corrigir o que surgir e confirmar isolamento.
+  3. Publicar seis Edge Functions e concluir E2E-A/B em tenant de teste; confirmar Netlify e validar `/` → `/app/`.
+  4. Verificação final: fluxos, isolamento, 390 px, console e painel clássico; só então liberar módulos, atualizar URLs e considerar publicação.
 
 ## Testes (todos têm de passar antes de commit)
 ```

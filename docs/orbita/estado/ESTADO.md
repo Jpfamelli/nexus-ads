@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-28 23:22 (America/Sao_Paulo)
+Atualizado: 2026-09-28 23:35 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -24,6 +24,8 @@ O código das frentes está no branch para revisão. **O SaaS ainda não está p
 ## Verificações locais
 
 `node testes/rodar-tudo.mjs` passou em 11/11 suítes. Contagens: painel 70; app 46; CRM 34; conversas 33; relatórios 38; funções 39; scripts 12; funções de conversas 46; automações 24; isolamento estrutural 2; núcleo aprovado.
+
+Nesta retomada, `node testes/app.teste.mjs` passou 46/46 e `node testes/crm.teste.mjs` 34/34. O preview local abriu a tela de login e foi conferido visualmente; sem backend autenticado, não cobre telas internas. A captura foi em desktop: o viewport de 390 px e o console não foram verificados nesta sessão.
 
 O smoke `supabase/testes/09_isolamento.sql` foi ampliado localmente: agora prepara a org Nexus e uma revenda B, contas admin/atendente, entidades de teste, varredura de RPCs concedidas a `anon` derivada de `pg_proc` e comparação de hash antes/depois das linhas de B. Erros SQL estruturais (classe 42) não passam como negação segura, com exceção de `42501`. O teste Node verifica a presença estrutural desses contratos. **O SQL ainda não foi executado nem validado pelo parser PostgreSQL**, então o aceite de isolamento segue pendente. `04_crm.sql` e `04_crm_b.sql` também aguardam execução autenticada em transação com `ROLLBACK`.
 
