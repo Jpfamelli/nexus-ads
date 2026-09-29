@@ -1,12 +1,12 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 10:01 (America/Sao_Paulo)
+Atualizado: 2026-09-29 10:04 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
 ## Situação
 
-O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas. João informou que salvou a senha da conta gestora; a interface não mostrou confirmação e o preview está agora na tela de login, aguardando autenticação manual. Nenhuma alteração foi feita em `nx_config` ou nos dados de clientes.
+O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas. João informou que salvou a senha da conta gestora, mas a tentativa de login no preview retornou “E-mail ou senha não conferem”; não há sessão autenticada. Nenhuma alteração foi feita em `nx_config` ou nos dados de clientes.
 
 ## Frentes
 
@@ -106,3 +106,7 @@ Corrigi em F8.md uma afirmação histórica desatualizada sobre `09_isolamento.s
 ## Retomada 2026-09-29 10:01
 
 João informou que salvou a senha. Ao conferir a página, o preview ainda mostrava o formulário de criação de senha, sem confirmação de sucesso; naveguei para `#/login` e deixei a autenticação com João para preservar a senha. A suíte `node testes/rodar-tudo.mjs` passou em 11/11 arquivos. O próximo passo é João entrar no preview e responder `entrei`; então sigo com tenant de teste, E2E-A/B e validação mobile autenticada. Nenhum dado de cliente, `nx_config` ou ambiente de produção foi alterado.
+
+## Retomada 2026-09-29 10:04
+
+A tentativa manual de entrar no preview mostrou “E-mail ou senha não conferem”. A sessão continua sem autenticação e o E2E permanece bloqueado. A suíte `node testes/rodar-tudo.mjs` passou em 11/11 arquivos. Aguardo João confirmar se viu a mensagem de sucesso após salvar a senha para decidir o próximo passo de recuperação. Nenhuma credencial foi lida ou alterada pelo agente; sem mudanças em `nx_config`, clientes ou produção.
