@@ -42,6 +42,12 @@ export function criarComposer(A) {
   /* ---------------- estado da conversa */
   function conv() { return A.ver && A.ver.conversa; }
   function contato() { return (A.ver && A.ver.contato) || (conv() && conv().contato) || {}; }
+  function provedorCanal() {
+    const c = conv();
+    if (c?.canal?.provedor) return c.canal.provedor;
+    return (A.base?.canais || []).find(k => k.id === c?.canal_id)?.provedor || "meta";
+  }
+  function usaCodeWords() { return provedorCanal() === "codewords"; }
   function situacao() {
     const c = conv();
     if (!c) return "sem";
@@ -49,7 +55,7 @@ export function criarComposer(A) {
     if (c.status === "resolvida") return "resolvida";
     if (!c.canal_id) return "sem_canal";
     if (!L.janela(c).aberta) return "janela";
-    if (c.canal && c.canal.tem_token === false) return "sem_token";
+    if (!usaCodeWords() && c.canal && c.canal.tem_token === false) return "sem_token";
     return "ok";
   }
   function podeTexto() { return modoNota ? A.podeEscrever && !!conv() : situacao() === "ok"; }
@@ -77,11 +83,16 @@ export function criarComposer(A) {
         h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => A.acoes.novaConversa({ contato: contato() }) } }, "Nova conversa"));
     } else if (s === "janela" && !modoNota) {
       trava.hidden = false;
-      const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, A.icone("modelo"), "Modelos");
-      b.addEventListener("click", () => abrirModelos());
-      trava.append(ui.icone("relogio"), h("p", null, c && c.ultima_entrada_em
-        ? "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado para retomar a conversa."
-        : "O cliente ainda não mandou mensagem por este número. Para começar, envie um modelo aprovado."), b);
+      if (usaCodeWords()) {
+        trava.append(ui.icone("relogio"), h("p", null,
+          "A janela de 24 h do WhatsApp fechou. Neste canal CodeWords, aguarde uma nova mensagem do contato; modelos da Meta não estão disponíveis."));
+      } else {
+        const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, A.icone("modelo"), "Modelos");
+        b.addEventListener("click", () => abrirModelos());
+        trava.append(ui.icone("relogio"), h("p", null, c && c.ultima_entrada_em
+          ? "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado para retomar a conversa."
+          : "O cliente ainda não mandou mensagem por este número. Para começar, envie um modelo aprovado."), b);
+      }
     } else if (s === "sem_token" && !modoNota) {
       trava.hidden = false;
       trava.append(ui.icone("alerta"), h("p", null, "Este número ainda não tem o token da Meta. Configure em Números de WhatsApp."),
@@ -97,9 +108,11 @@ export function criarComposer(A) {
     btEnviar.setAttribute("aria-label", modoNota ? "Salvar nota" : "Enviar");
     btEnviar.title = modoNota ? "Salvar nota" : "Enviar";
     ui.limpar(btEnviar); btEnviar.appendChild(ui.icone(modoNota ? "check" : "enviar"));
-    btClipe.disabled = modoNota || s !== "ok";
+    btClipe.hidden = usaCodeWords();
+    btModelos.hidden = usaCodeWords();
+    btClipe.disabled = usaCodeWords() || modoNota || s !== "ok";
     btIA.disabled = modoNota || s !== "ok";
-    btModelos.disabled = modoNota || !(s === "ok" || s === "janela");
+    btModelos.disabled = usaCodeWords() || modoNota || !(s === "ok" || s === "janela");
     btNota.disabled = !A.podeEscrever;
     btNota.setAttribute("aria-pressed", String(modoNota));
     btIA.hidden = !(A.base && A.base.ia);
@@ -247,7 +260,7 @@ export function criarComposer(A) {
   }
 
   /* ---------------- anexos */
-  function aceitaAnexo() { return !modoNota && situacao() === "ok"; }
+  function aceitaAnexo() { return !usaCodeWords() && !modoNota && situacao() === "ok"; }
   btClipe.addEventListener("click", () => { arquivo.value = ""; arquivo.click(); });
   arquivo.addEventListener("change", () => { const f = arquivo.files && arquivo.files[0]; if (f) anexar(f); });
   ta.addEventListener("paste", ev => {
@@ -261,7 +274,8 @@ export function criarComposer(A) {
 
   async function anexar(f) {
     if (!aceitaAnexo()) {
-      ui.toast(situacao() === "janela" ? "Fora da janela de 24 h só vale modelo aprovado." : "Não dá para anexar agora.", { tipo: "info" });
+      ui.toast(usaCodeWords() ? "Este canal CodeWords envia apenas texto por enquanto."
+        : situacao() === "janela" ? "Fora da janela de 24 h só vale modelo aprovado." : "Não dá para anexar agora.", { tipo: "info" });
       return;
     }
     const v = L.validarArquivo(f);
@@ -291,6 +305,7 @@ export function criarComposer(A) {
 
   /* ---------------- modelos (templates aprovados) */
   async function abrirModelos() {
+    if (usaCodeWords()) { ui.toast("Modelos da Meta não estão disponíveis neste canal CodeWords.", { tipo: "info" }); return; }
     const c = conv();
     if (!c) return;
     if (!c.canal_id) { ui.toast("Este atendimento não tem mais número para enviar.", { tipo: "erro" }); return; }
@@ -386,7 +401,7 @@ export function criarComposer(A) {
   btMaisM.addEventListener("click", () => {
     const s = situacao();
     ui.menu(btMaisM, [
-      { rotulo: "Modelos aprovados", icone: "camadas", fn: () => abrirModelos(), desabilitado: !(s === "ok" || s === "janela") },
+      !usaCodeWords() ? { rotulo: "Modelos aprovados", icone: "camadas", fn: () => abrirModelos(), desabilitado: !(s === "ok" || s === "janela") } : null,
       { rotulo: modoNota ? "Voltar para mensagem" : "Nota interna", icone: "nota", fn: () => alternarNota() },
       A.base && A.base.ia ? { rotulo: "Sugerir com IA", icone: "ia", fn: () => sugerir(), desabilitado: s !== "ok" } : null,
     ].filter(Boolean));

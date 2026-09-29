@@ -22,12 +22,14 @@ async function montarNumeros(ctx, alvo) {
   const lista = h("div", { class: "cfg-canais" });
   const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Conectar número");
   novo.addEventListener("click", () => assistente(null));
+  const novoCodeWords = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("chat"), "Conectar com CodeWords");
+  novoCodeWords.addEventListener("click", () => assistenteCodeWords(null));
   ui.limpar(alvo);
   alvo.append(
     h("header", { class: "cab-pag" },
       h("div", null, h("p", { class: "rotulo" }, "Atendimento"), h("h1", { class: "titulo-pag" }, "Números de WhatsApp"),
-        h("p", { class: "sub" }, "API oficial do WhatsApp (Cloud API). Cada número recebe as conversas na central e cria contato e negócio sozinho.")),
-      novo),
+        h("p", { class: "sub" }, "Conecte pela API oficial da Meta ou pelo CodeWords. As conversas, respostas e confirmações aparecem nesta central.")),
+      h("div", { class: "linha" }, novo, novoCodeWords)),
     lista);
 
   async function carregar() {
@@ -54,6 +56,42 @@ async function montarNumeros(ctx, alvo) {
     }
     for (const c of canais) {
       const [rot, cor] = STATUS_CANAL[c.status] || [c.status, "neutra"];
+      if (c.provedor === "codewords") {
+        const [rotCW, corCW] = c.status === "ativo" ? ["API validada", "ok"]
+          : c.status === "erro" ? ["Falha na API", "ruim"] : ["Não testado", "aten"];
+        const testarCW = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Testar workflow");
+        testarCW.addEventListener("click", async () => {
+          try {
+            const r = await ui.carregando(testarCW, ctx.api.fn("nx-enviar", { acao: "testar_codewords", canal: c.id }));
+            ui.toast(r?.ok ? "CodeWords conectado. O workflow respondeu ao teste." : `Teste CodeWords: ${r?.erro || "falhou"}`, { tipo: r?.ok ? "ok" : "erro" });
+          } catch (e) { ui.toast(erroFuncao(e), { tipo: "erro" }); }
+          carregar();
+        });
+        const editarCW = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Configurar");
+        editarCW.addEventListener("click", () => assistenteCodeWords(c));
+        const copiarHook = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("copiar"), "Copiar URL de eventos");
+        copiarHook.addEventListener("click", () => ui.copiar(c.webhook?.url || "", { aviso: "URL do webhook CodeWords copiada. Trate-a como segredo." }));
+        const excluirCW = h("button", { type: "button", class: "bt-icone", "aria-label": `Mais opções de ${c.nome}` }, ui.icone("opcoes"));
+        excluirCW.addEventListener("click", () => ui.menu(excluirCW, [
+          { rotulo: "Reconfigurar CodeWords", icone: "editar", fn: () => assistenteCodeWords(c) },
+          "-",
+          { rotulo: "Excluir número", icone: "lixeira", perigo: true, fn: () => excluir(c) },
+        ]));
+        lista.appendChild(h("article", { class: "cartao cfg-canal" },
+          h("div", null,
+            h("h3", { class: "titulo-sec" }, c.nome, ui.pilula(rotCW, corCW), ui.pilula("CodeWords", "info")),
+            h("div", { class: "cfg-canal-kv" },
+              h("span", null, "Número ", h("b", null, c.numero_exibicao || "—")),
+              h("span", null, "Workflow ", h("b", { class: "mono" }, c.codewords_service_id || "—")),
+              h("span", null, "Departamento ", h("b", null, depNome(c.departamento_id)))),
+            h("div", { class: "cfg-checks" },
+              c.tem_codewords_api_key ? ui.pilula("API key guardada no servidor", "ok", { icone: "cadeado" }) : ui.pilula("API key ausente", "ruim"),
+              c.webhook?.url ? ui.pilula("URL de eventos pronta", "info", { icone: "link" }) : ui.pilula("URL de eventos pendente", "aten")),
+            h("p", { class: "sub" }, "A validação confere o acesso ao workflow. Depois, teste uma mensagem real de entrada, uma resposta e os recibos para confirmar o número e o webhook."),
+            c.ultimo_erro ? h("div", { class: "aviso aviso-ruim cfg-erro" }, ui.icone("alerta"), h("p", null, c.ultimo_erro)) : null),
+          h("div", { class: "cfg-canal-acoes" }, testarCW, copiarHook, editarCW, excluirCW)));
+        continue;
+      }
       const ok = (v, sim, nao, nulo) => ui.pilula(v === true ? sim : v === false ? nao : nulo, v === true ? "ok" : v === false ? "ruim" : "neutra",
         { icone: v === true ? "check" : v === false ? "alerta" : "relogio" });
       const bTestar = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Testar conexão");
@@ -123,6 +161,111 @@ async function montarNumeros(ctx, alvo) {
       ui.toast("Número excluído.", { tipo: "ok" });
       carregar();
     } catch (e) { ui.toast(ui.mensagemErro(e), { tipo: "erro" }); }
+  }
+
+  function instrucoesBridgeCodeWords({ webhook, serviceId }) {
+    return [
+      "PROMPT PARA COLAR NO CODY DO CODEWORDS",
+      "Crie e publique um workflow WhatsApp conectado ao número informado na tela do Órbita. Use o service ID que já cadastrei. Ele precisa aceitar chamadas pela API Runtime e receber o webhook de eventos abaixo.",
+      "",
+      "A) Quando a API Runtime chamar o workflow, ela enviará o JSON diretamente na raiz (sem envolver em { inputs: ... }). Para event=orbita.health_check, retorne { ok: true } sem enviar mensagem.",
+      "B) Para event=orbita.send_message, envie o texto pelo número WhatsApp conectado usando to e text. Use client_ref como chave de idempotência durável: registre a referência antes do envio; se ela já existir, não envie novamente e devolva o mesmo message_id. Isso também vale quando uma chamada anterior terminou sem confirmação. Responda JSON com ok=true e message_id contendo o ID estável devolvido pelo provedor:",
+      JSON.stringify({ event: "orbita.send_message", to: "5511999999999", text: "Olá!", client_ref: "orbita:identificador-unico", conversation_id: "123" }, null, 2),
+      JSON.stringify({ ok: true, message_id: "ID_ESTAVEL_DO_PROVEDOR" }, null, 2),
+      "C) Configure o gatilho de nova mensagem recebida. Para cada mensagem, envie um POST para a URL de eventos do Órbita com:",
+      JSON.stringify({ event: "message", direction: "in", message_id: "ID_UNICO_DA_MENSAGEM", phone: "5511999999999", name: "Nome do contato", text: "Mensagem recebida", timestamp: "2026-09-29T12:00:00Z", referral: { source_type: "ad", source_id: "ID_DO_ANUNCIO", ctwa_clid: "CLID_SE_DISPONIVEL" } }, null, 2),
+      "",
+      "D) Depois que uma resposta automática do workflow for realmente enviada, espelhe-a na caixa com event=message, direction=out e message_id, phone, name e text. Use o mesmo message_id nos recibos. Não espelhe uma mensagem enviada pela tela do Órbita como uma segunda mensagem.",
+      "E) Quando houver atualização de entrega, envie event=status com o mesmo message_id e status sent, delivered, read ou failed. Em failed, inclua error.",
+      "F) Use números em formato internacional, com DDI e somente dígitos. Mensagens recebidas com origem de anúncio podem incluir referral.source_type=ad, source_id e ctwa_clid.",
+      "",
+      `Service ID: ${serviceId}`,
+      `URL de eventos (segredo; mantenha dentro do CodeWords): ${webhook}`,
+      "",
+      "O botão de teste confirma que o workflow respondeu à API; ele não manda mensagem e não valida sozinho o número do WhatsApp. Depois, faça um teste real de entrada e saída. O Órbita envia texto por esse canal; anexos e modelos da Meta não estão disponíveis. Use uma API key reutilizável cwk- (cwotk- é de uso único) e nunca coloque a chave em código público ou no navegador.",
+    ].join("\n");
+  }
+
+  async function assistenteCodeWords(canal) {
+    let passo = 1, atual = canal, webhook = canal?.webhook?.url || "", modalApi = null;
+    let form = null;
+    const corpo = h("div", { class: "pilha" });
+    const conteudo = h("div", { class: "pilha" });
+    corpo.appendChild(conteudo);
+    function desenhar() {
+      const prim = modalApi?.el.querySelector(".modal-rod [data-tipo=primario]");
+      const neutro = modalApi?.el.querySelector(".modal-rod [data-tipo=neutro]");
+      if (prim) prim.textContent = passo === 1 ? "Salvar e configurar CodeWords" : "Concluir";
+      if (neutro) neutro.textContent = passo === 2 ? "Voltar" : "Fechar";
+      ui.limpar(conteudo);
+      if (passo === 1) {
+        form = h("form", { class: "pilha", novalidate: true },
+          h("p", { class: "sub" }, "A chave reutilizável cwk- é enviada somente ao servidor e guardada no Vault. Chaves cwotk- são de uso único e não servem para uma integração contínua."),
+          h("div", { class: "grade-2" },
+            ui.campo({ rotulo: "Nome do canal", nome: "nome", valor: atual?.nome || "WhatsApp via CodeWords", max: 40, obrigatorio: true }),
+            ui.campo({ rotulo: "Número conectado", nome: "numero_exibicao", valor: atual?.numero_exibicao || "", max: 30, placeholder: "+55 12 99999-9999", obrigatorio: true })),
+          ui.campo({ rotulo: "Service ID do workflow", nome: "codewords_service_id", valor: atual?.codewords_service_id || "", max: 120, autocomplete: "off", obrigatorio: true,
+            ajuda: "O workflow deve atender orbita.send_message e orbita.health_check." }),
+          ui.campo({ rotulo: "API key do CodeWords", nome: "codewords_api_key", tipo: "senha", autocomplete: "new-password",
+            placeholder: atual?.tem_codewords_api_key ? "✓ guardada no servidor — em branco mantém" : "cwk-…",
+            ajuda: "Chave reutilizável do plano pago. Nunca aparece novamente depois de salvar." }),
+          (base?.departamentos || []).length ? ui.campo({ rotulo: "Conversas novas caem em", nome: "departamento_id", tipo: "select",
+            valor: atual?.departamento_id || (base.departamentos.find(d => d.padrao) || base.departamentos[0]).id,
+            opcoes: base.departamentos.map(d => ({ valor: d.id, rotulo: d.nome })) }) : null);
+        conteudo.append(form);
+      } else {
+        const instrucoes = instrucoesBridgeCodeWords({ webhook, serviceId: atual.codewords_service_id });
+        const pre = h("pre", { class: "cfg-codigo", tabindex: "0", "aria-label": "Configuração do workflow CodeWords" }, h("code", {}, instrucoes));
+        const copiar = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("copiar"), "Copiar configuração");
+        copiar.addEventListener("click", () => ui.copiar(instrucoes, { aviso: "Configuração copiada. Cole no CodeWords e confira o mapeamento." }));
+        const url = h("input", { class: "mono cfg-mono", readonly: true, value: webhook, spellcheck: false });
+        url.addEventListener("focus", () => url.select());
+        conteudo.append(h("h3", { class: "titulo-sec" }, "Próximo passo: ligar o workflow"),
+          h("p", { class: "sub" }, "Cole a configuração no CodeWords. Ela define os eventos recebidos, respostas do agente, recibos e o formato esperado pela API do Órbita."),
+          h("div", { class: "campo" }, h("label", null, "URL de eventos do canal (trate como segredo)"), h("div", { class: "cfg-copia" }, url,
+            h("button", { type: "button", class: "bt bt-sec", on: { click: () => ui.copiar(webhook, { aviso: "URL copiada. Mantenha-a privada." }) } }, ui.icone("copiar"), "Copiar"))),
+          pre, h("div", { class: "linha" }, copiar),
+          h("div", { class: "aviso aviso-aten" }, ui.icone("info"), h("p", null,
+            "A integração já salva o segredo no servidor. Teste com uma conversa fictícia antes de conectar o número principal; o botão Testar workflow valida orbita.health_check.")));
+      }
+    }
+    await ui.modal({
+      titulo: canal ? `CodeWords · ${canal.nome}` : "Conectar WhatsApp com CodeWords", corpo, largura: "g", fecharFora: false,
+      aoAbrir: api => { modalApi = api; desenhar(); },
+      acoes: [
+        { rotulo: "Fechar", tipo: "neutro", fn: () => {
+          if (passo === 2) { passo = 1; desenhar(); return false; }
+          return null;
+        } },
+        { rotulo: "Salvar e configurar CodeWords", tipo: "primario", fn: async () => {
+          if (passo === 2) return true;
+          const d = ui.lerForm(form); ui.marcarErro(form, null);
+          if (!d.nome) { ui.marcarErro(form, "nome", "Informe o nome do canal."); return false; }
+          if (!/^\+?[0-9 ()-]{8,30}$/.test(String(d.numero_exibicao || ""))) { ui.marcarErro(form, "numero_exibicao", "Informe o número com DDI e DDD."); return false; }
+          if (!/^[A-Za-z0-9_-]{1,120}$/.test(String(d.codewords_service_id || ""))) { ui.marcarErro(form, "codewords_service_id", "Confira o Service ID."); return false; }
+          if (!atual?.id && !d.codewords_api_key) { ui.marcarErro(form, "codewords_api_key", "Cole a API key do plano pago."); return false; }
+          if (d.codewords_api_key && (!String(d.codewords_api_key).startsWith("cwk-") || /\s/.test(d.codewords_api_key))) {
+            ui.marcarErro(form, "codewords_api_key", "Use uma chave reutilizável cwk-. Chaves cwotk- são de uso único."); return false;
+          }
+          const payload = { nome: d.nome, numero_exibicao: d.numero_exibicao, codewords_service_id: d.codewords_service_id,
+            departamento_id: d.departamento_id || null };
+          if (atual?.id) payload.id = atual.id;
+          if (d.codewords_api_key) payload.codewords_api_key = d.codewords_api_key;
+          try {
+            const r = await ctx.api.rpcC("nx_codewords_canal_salvar", { p_canal: payload });
+            atual = { ...(r.canal || {}), webhook: { url: r.webhook_url } }; webhook = r.webhook_url;
+            passo = 2; carregar(); desenhar(); return false;
+          } catch (e) {
+            const hint = e?.hint;
+            if (e?.codigo === "dados_invalidos" && hint && form.querySelector(`[data-campo="${hint}"]`)) {
+              ui.marcarErro(form, hint, "Confira este campo."); return false;
+            }
+            throw e;
+          }
+        } },
+      ],
+    });
+    carregar();
   }
 
   /* ---------------- assistente em 5 passos */

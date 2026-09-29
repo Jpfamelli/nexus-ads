@@ -274,7 +274,7 @@ await teste("fn: POST /functions/v1/<fn> com {token, cliente, ...corpo}; erro {o
   const e = await api.fn("nx-enviar", {}).catch(x => x);
   assert.equal(e.codigo, "conversa_nao_encontrada"); assert.equal(e.status, 404);
   const e2 = await api.fn("nx-enviar", {}).catch(x => x);
-  assert.equal(A.mensagemErro(e2), "O WhatsApp não aceitou a mensagem: token vencido ou revogado.");
+  assert.equal(A.mensagemErro(e2), "O canal não aceitou a mensagem: token vencido ou revogado.");
 });
 await teste("(revisão, pedido da F5) o Error leva o corpo inteiro em .resposta (ex.: a mensagem gravada como falhou)", async () => {
   const msg = { id: 77, status: "falhou" };

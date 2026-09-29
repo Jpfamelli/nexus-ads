@@ -71,7 +71,10 @@ export const MENSAGENS = {
   ja_existe_aberta: "Já existe um atendimento aberto com esse contato.",
   fora_da_janela: "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado.",
   canal_sem_token: "Este número ainda não tem o token da Meta. Configure em Números de WhatsApp.",
-  envio_falhou: "O WhatsApp não aceitou a mensagem.",
+  codewords_sem_credencial: "Este canal está sem a API key reutilizável ou o Service ID. Configure CodeWords em Números de WhatsApp.",
+  codewords_tipo_nao_suportado: "Este canal CodeWords envia somente mensagens de texto. Para anexos e modelos, use um canal Meta.",
+  use_testar_codewords: "Para verificar este canal, use o botão Testar workflow em Números de WhatsApp.",
+  envio_falhou: "O canal não aceitou a mensagem.",
   template_invalido: "Esse modelo não está aprovado ou faltam parâmetros.",
   midia_grande: "Arquivo grande demais (até 16 MB; fotos até 5 MB).",
   midia_tipo: "Tipo de arquivo não aceito pelo WhatsApp.",
@@ -129,7 +132,7 @@ export function mensagemErro(e) {
       break;
     case "envio_falhou": {
       const d = e && (e.detalhe_texto || (typeof e.detalhe === "string" ? e.detalhe : ""));
-      if (d) return `O WhatsApp não aceitou a mensagem: ${String(d).slice(0, 160)}.`;
+      if (d) return `O canal não aceitou a mensagem: ${String(d).slice(0, 160)}.`;
       break;
     }
     case "automacao_invalida":

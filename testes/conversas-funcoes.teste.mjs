@@ -162,7 +162,8 @@ function rpcsSaaS(api) {
       const k = canal(p_canal);
       if (!k || k.cliente_id !== p_cliente) throw e("canal_nao_encontrado");
       return { canal_id: k.id, cliente_id: k.cliente_id, nome: k.nome, phone_number_id: k.phone_number_id, waba_id: k.waba_id,
-               token: k.token ?? null, app_secret: k.app_secret ?? null };
+               provedor: k.provedor || "meta", codewords_service_id: k.codewords_service_id ?? null,
+               codewords_api_key: k.codewords_api_key ?? null, token: k.token ?? null, app_secret: k.app_secret ?? null };
     } },
     nx_canal_verificado: { args: ["p_canal", "p_cliente", "p_ok", "p_numero", "p_qualidade", "p_inscrito", "p_erro"],
       fn({ p_canal, p_cliente, p_ok, p_numero, p_qualidade, p_inscrito, p_erro }) {
@@ -494,7 +495,7 @@ async function fakeStorage(req, u, estado) {
 }
 
 function cenario({ config = {}, extra = {} } = {}) {
-  const estado = { agora: new Date(AGORA), log: [], graph: [], enviadas: [], storage: [], arquivos: new Map(), nWa: 0,
+  const estado = { agora: new Date(AGORA), log: [], graph: [], enviadas: [], codewords: [], codewordsHandler: null, storage: [], arquivos: new Map(), nWa: 0,
                    janelaFechada: new Set(), inscritos: new Set(["WABA-A"]), segundoPlano: [], ia: [] };
   const recente = new Date(AGORA.getTime() - HORA).toISOString(), velho = new Date(AGORA.getTime() - 30 * HORA).toISOString();
   const banco = criarBanco({
@@ -576,6 +577,12 @@ function cenario({ config = {}, extra = {} } = {}) {
     if (u.origin === SUPA && u.pathname.startsWith("/rest/v1/")) return banco.responder(req);
     if (u.origin === SUPA && u.pathname.startsWith("/storage/v1/")) return fakeStorage(req, u, estado);
     if (u.host === "graph.facebook.com") return fakeGraph(req, u, estado);
+    if (u.host === "runtime.codewords.ai") {
+      const payload = await req.json();
+      estado.codewords.push(payload);
+      if (estado.codewordsHandler) return estado.codewordsHandler(payload, req);
+      return jsonResp({ ok: true, message_id: "cw-test-1", status: "sent" });
+    }
     if (u.host === "lookaside.fbsbx.com") {
       if (!TOKENS_BONS.has((req.headers.get("authorization") || "").replace(/^Bearer\s+/, ""))) return new Response("proibido", { status: 401 });
       return new Response(new Uint8Array([1, 2, 3, 4, 5]), { status: 200, headers: { "content-type": "image/jpeg" } });
@@ -924,6 +931,54 @@ test("nx-enviar texto: envia pelo canal DA conversa para o wa_id, grava a saída
   assert.equal((await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "   " }), ENV, s.deps()))).corpo.erro, "dados_invalidos");
   assert.equal((await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "x".repeat(4097) }), ENV, s.deps()))).corpo.erro, "dados_invalidos");
   assert.equal(s.estado.graph.length, n);
+});
+
+test("nx-enviar CodeWords: timeout ambíguo não grava falha e a repetição conserva client_ref", async () => {
+  const s = cenario();
+  const k = s.tab("nx_canais").find(x => x.id === K_A1);
+  Object.assign(k, { provedor: "codewords", codewords_service_id: "workflow-demo", codewords_api_key: "cwk-falsa" });
+  const aceitos = new Map();
+  let enviosReais = 0;
+  s.estado.codewordsHandler = payload => {
+    if (aceitos.has(payload.client_ref)) return jsonResp({ ok: true, message_id: aceitos.get(payload.client_ref), status: "sent" });
+    const id = `cw-provider-${aceitos.size + 1}`;
+    aceitos.set(payload.client_ref, id);
+    enviosReais++;
+    // O workflow enviou e guardou a referência, mas a primeira resposta se perdeu.
+    return jsonResp({ error: "resposta perdida" }, 503);
+  };
+  const fazerPedido = () => painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá", client_ref: "orbita:retry-1" });
+  const primeira = await ler(await enviar(fazerPedido(), ENV, s.deps()));
+  assert.equal(primeira.status, 502);
+  assert.equal(primeira.corpo.ambigua, true);
+  assert.equal(s.rpcs("nx_cv_saida").length, 0, "não persiste uma falha sem saber se houve envio");
+
+  s.estado.codewordsHandler = payload => {
+    if (aceitos.has(payload.client_ref)) return jsonResp({ ok: true, message_id: aceitos.get(payload.client_ref), status: "sent" });
+    enviosReais++;
+    return jsonResp({ error: "referência ausente" }, 400);
+  };
+  const segunda = await ler(await enviar(fazerPedido(), ENV, s.deps()));
+  assert.equal(segunda.status, 200);
+  assert.equal(s.tab("nx_mensagens").find(m => m.direcao === "out" && m.corpo === "Olá").wamid, `cw:${K_A1}:out:cw-provider-1`);
+  assert.equal(s.estado.codewords.length, 2);
+  assert.deepEqual(s.estado.codewords.map(x => x.client_ref), ["orbita:retry-1", "orbita:retry-1"]);
+  assert.equal(enviosReais, 1, "o workflow idempotente só envia uma vez");
+  assert.equal(s.rpcs("nx_cv_saida").length, 1);
+});
+
+test("nx-enviar CodeWords: status entregue/lido do Runtime API é salvo sem esperar o webhook", async () => {
+  const s = cenario();
+  const k = s.tab("nx_canais").find(x => x.id === K_A1);
+  Object.assign(k, { provedor: "codewords", codewords_service_id: "workflow-demo", codewords_api_key: "cwk-falsa" });
+  const status = ["delivered", "read"];
+  s.estado.codewordsHandler = () => jsonResp({ ok: true, message_id: `sync-${status.shift()}`, status: status.length ? "delivered" : "read" });
+  const a = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Recebida" }), ENV, s.deps()));
+  const b = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Lida" }), ENV, s.deps()));
+  assert.equal(a.status, 200);
+  assert.equal(b.status, 200);
+  assert.deepEqual(s.rpcs("nx_cv_saida").map(x => x.params.p_msg.status), ["entregue", "lida"]);
+  assert.deepEqual(s.tab("nx_mensagens").filter(m => m.direcao === "out" && m.conversa_id === 601).slice(-2).map(m => m.status), ["entregue", "lida"]);
 });
 
 test("nx-enviar texto fora da janela → fora_da_janela SEM chamar a Graph; resolvida → conversa_resolvida", async () => {
@@ -1448,9 +1503,9 @@ test("contrato: o banco falso usa os MESMOS parâmetros (e defaults) das interna
 /* ============================================================
    Montagem e simulador
    ============================================================ */
-test("montar-funcoes: as 6 pastas planas, com o handler certo e importáveis", async () => {
+test("montar-funcoes: as 7 pastas planas, com o handler certo e importáveis", async () => {
   const saida = execFileSync(process.execPath, [join(RAIZ, "scripts", "montar-funcoes.mjs")], { encoding: "utf8" });
-  const handler = { "nx-ciclo": "ciclo.js", "nx-relatorio": "relatorio.js", "nx-whatsapp": "webhook.js", "nx-enviar": "enviar.js", "nx-midia": "midia.js", "nx-ia": "ia_conversas.js" };
+  const handler = { "nx-ciclo": "ciclo.js", "nx-relatorio": "relatorio.js", "nx-whatsapp": "webhook.js", "nx-enviar": "enviar.js", "nx-midia": "midia.js", "nx-ia": "ia_conversas.js", "nx-codewords": "codewords.js" };
   const nucleo = readFileSync(join(RAIZ, "web", "nucleo.js"));
   for (const [fn, arq] of Object.entries(handler)) {
     const pasta = join(RAIZ, "supabase", "dist", fn);
@@ -1470,6 +1525,7 @@ test("montar-funcoes: as 6 pastas planas, com o handler certo e importáveis", a
     assert.match(readFileSync(join(RAIZ, "supabase/functions", fn, "index.ts"), "utf8"), /EdgeRuntime\?\.waitUntil/);
   }
   assert.match(readFileSync(join(RAIZ, "supabase/functions/nx-ia/index.ts"), "utf8"), /ia: \(\) => import\("\.\/ia\.js"\)/);
+  assert.match(readFileSync(join(RAIZ, "supabase/functions/nx-codewords/index.ts"), "utf8"), /from "\.\/codewords\.js"/);
   for (const fn of Object.keys(handler)) {
     const idx = readFileSync(join(RAIZ, "supabase/functions", fn, "index.ts"), "utf8");
     assert.match(idx, /function envObrigatorio\(nome: string\): string/ , `${fn}: valida variáveis obrigatórias no início`);

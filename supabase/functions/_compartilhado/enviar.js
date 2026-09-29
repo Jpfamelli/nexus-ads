@@ -18,14 +18,16 @@ import {
   inscreverApp, listarTemplates, textoFalhaCanal, aplicarParametros, enviarParaTodos,
 } from "./whatsapp.js";
 import { criarStorage, pathDoCliente, tipoAceito, arquivosDaPasta } from "./midia.js";
+import { enviarTextoCodeWords, testarCodeWords } from "./codewords.js";
 
 const PAPEL = {
   texto: "atendente", midia: "atendente", template: "atendente", reenviar: "atendente", lido: "leitura",
-  testar_canal: "admin", inscrever_app: "admin", sincronizar_templates: "admin",
+  testar_canal: "admin", inscrever_app: "admin", sincronizar_templates: "admin", testar_codewords: "admin",
 };
 const TIPO_MSG = { image: "imagem", video: "video", audio: "audio", document: "documento" };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRAZO_GRAPH_MS = 20_000;
+const PRAZO_CODEWORDS_MS = 110_000;
 const FILA_MAX_ITENS = 100;
 const FILA_MAX_MS = 110_000;
 
@@ -53,8 +55,22 @@ const contextoConversa = (db, ctx, cliente, conversa) =>
 async function credencial(db, canal, cliente, { exigirToken = true } = {}) {
   if (!canal) throw new ErroApi("canal_nao_encontrado", 404);
   const cred = await interna(db, "nx_canal_credencial", { p_canal: idCanal(canal), p_cliente: cliente });
-  if (exigirToken && !cred?.token) throw new ErroApi("canal_sem_token", 400);
+  if (exigirToken && (cred?.provedor === "codewords" ? !cred?.codewords_api_key || !cred?.codewords_service_id : !cred?.token)) {
+    throw new ErroApi(cred?.provedor === "codewords" ? "codewords_sem_credencial" : "canal_sem_token", 400);
+  }
   return cred;
+}
+
+async function enviarTextoPeloCanal(cred, para, texto, options = {}) {
+  if (cred?.provedor === "codewords") {
+    return enviarTextoCodeWords(cred, para, texto, {
+      fetch: options.fetch,
+      clientRef: options.clientRef,
+      conversationId: options.conversationId,
+      timeoutMs: options.timeoutMs ?? PRAZO_CODEWORDS_MS,
+    });
+  }
+  return enviarTextoCanal(cred, para, texto, options);
 }
 
 /** Envio pela conversa: resolvida e janela fechada barram ANTES da Graph. */
@@ -77,10 +93,28 @@ async function citacaoValida(db, cliente, contatoId, wamid) {
 /** Grava a saída (enviada ou falhou) e monta a resposta do painel. */
 async function gravarSaida(db, ctx, cliente, conversa, msg, r) {
   const erro = r.ok ? null : textoFalhaCanal(r.erro);
-  const mensagem = await interna(db, "nx_cv_saida", {
-    p_conta: ctx.conta_id, p_cliente: cliente, p_conversa: conversa,
-    p_msg: { origem: "painel", ...msg, wamid: r.wamid || null, status: r.ok ? "enviada" : "falhou", erro },
-  });
+  if (r.ambigua) return respostaPainel({
+    ok: false, erro: "envio_falhou", ambigua: true,
+    detalhe: "Confirmação pendente. A mensagem pode ter sido enviada; uma nova tentativa reutilizará a mesma referência.",
+  }, 502);
+  let mensagem;
+  try {
+    mensagem = await interna(db, "nx_cv_saida", {
+      p_conta: ctx.conta_id, p_cliente: cliente, p_conversa: conversa,
+      p_msg: {
+        origem: "painel", ...msg, wamid: r.wamid || null,
+        status: r.ok ? ({ delivered: "entregue", read: "lida" }[r.status] || "enviada") : "falhou", erro,
+      },
+    });
+  } catch (e) {
+    // O canal externo pode ter aceitado a mensagem antes de o banco falhar.
+    // Preserva o client_ref no navegador para uma repetição idempotente.
+    if (r.provedor === "codewords" && r.ok) return respostaPainel({
+      ok: false, erro: "envio_falhou", ambigua: true,
+      detalhe: "O CodeWords confirmou o envio, mas o Órbita não salvou a confirmação. Uma nova tentativa reutilizará a mesma referência.",
+    }, 502);
+    throw e;
+  }
   return r.ok
     ? respostaPainel({ ok: true, mensagem })
     : respostaPainel({ ok: false, erro: "envio_falhou", detalhe: erro, mensagem });
@@ -97,7 +131,13 @@ async function acaoTexto(db, ctx, corpo, deps, { conversa, texto, respondeA, ass
   const citacao = await citacaoValida(db, cliente, cx.contato?.id, respondeA ?? corpo.responde_a);
   const nome = primeiroNome(cx.atendente_nome);
   const final = (assinar && cx.cfg_cv?.assinatura && nome ? `*${nome}:*\n${bruto}` : bruto).slice(0, 4096);
-  const r = await enviarTextoCanal(cred, destino(cx), final, { respondeA: citacao, fetch: deps.rede });
+  const r = await enviarTextoPeloCanal(cred, destino(cx), final, {
+    respondeA: citacao,
+    fetch: cred.provedor === "codewords" ? (deps.fetch || deps.rede) : deps.rede,
+    timeoutMs: PRAZO_CODEWORDS_MS,
+    conversationId: cx.conversa.id,
+    clientRef: corpo.client_ref,
+  });
   return gravarSaida(db, ctx, cliente, cx.conversa.id, { tipo: "texto", corpo: final, responde_a_wamid: citacao }, r);
 }
 
@@ -111,6 +151,7 @@ async function acaoMidia(db, ctx, corpo, deps, env) {
   if (!tipo) throw new ErroApi("midia_tipo", 400);
   exigirConversaAberta(cx);
   const cred = await credencial(db, cx.canal_id, cliente);
+  if (cred.provedor === "codewords") throw new ErroApi("codewords_tipo_nao_suportado", 400, "mídia");
   const st = criarStorage(env, deps.fetch);
   const ass = await st.assinar([path], 3600);
   const link = ass.ok ? ass.urls[path] : null;
@@ -142,6 +183,7 @@ async function acaoTemplate(db, ctx, corpo, deps) {
     throw new ErroApi("template_invalido", 400, "o contato pediu para não receber mensagens de marketing");
   }
   const cred = await credencial(db, cx.canal_id, cliente);
+  if (cred.provedor === "codewords") throw new ErroApi("codewords_tipo_nao_suportado", 400, "modelo");
   const r = await enviarTemplateCanal(cred, destino(cx), { nome: tpl.nome, idioma: tpl.idioma, corpo: tpl.corpo, parametros }, { fetch: deps.rede });
   return gravarSaida(db, ctx, cliente, cx.conversa.id, {
     tipo: "template", corpo: aplicarParametros(tpl.corpo, parametros).slice(0, 4096),
@@ -158,6 +200,7 @@ async function acaoLido(db, ctx, corpo, deps) {
   }
   try {
     const cred = await credencial(db, cx.canal_id, cliente, { exigirToken: false });
+    if (cred?.provedor === "codewords") return respostaPainel({ ok: true, enviado: false });
     if (!cred?.token) return respostaPainel({ ok: true, enviado: false });
     const r = await marcarLido(cred, cx.ultimo_wamid_in, { fetch: deps.rede });
     return respostaPainel({ ok: true, enviado: !!r.ok });
@@ -169,6 +212,7 @@ async function acaoLido(db, ctx, corpo, deps) {
 /** (1) número responde? (2) app inscrito na WABA? → nx_canal_verificado (ativo só com os dois). */
 async function testarCanal(db, cliente, canal, deps) {
   const cred = await credencial(db, canal, cliente, { exigirToken: false });
+  if (cred.provedor === "codewords") throw new ErroApi("use_testar_codewords", 400);
   if (!cred?.token) {
     await interna(db, "nx_canal_verificado", { p_canal: canal, p_cliente: cliente, p_ok: false, p_numero: null, p_qualidade: null, p_inscrito: null, p_erro: "número sem token" });
     throw new ErroApi("canal_sem_token", 400);
@@ -197,9 +241,21 @@ async function acaoTestarCanal(db, ctx, corpo, deps) {
   return respostaPainel(t);
 }
 
+async function acaoTestarCodeWords(db, ctx, corpo, deps) {
+  const cliente = String(corpo.cliente), canal = idCanal(corpo.canal);
+  const cred = await credencial(db, canal, cliente, { exigirToken: false });
+  if (cred.provedor !== "codewords") throw new ErroApi("canal_nao_encontrado", 404);
+  const r = await testarCodeWords(cred, { fetch: deps.fetch || deps.rede });
+  const status = await interna(db, "nx_codewords_canal_verificado", {
+    p_canal: canal, p_cliente: cliente, p_ok: !!r.ok, p_erro: r.ok ? null : String(r.erro || "workflow não respondeu"),
+  });
+  return respostaPainel({ ...r, status: status?.status || (r.ok ? "ativo" : "erro") });
+}
+
 async function acaoInscreverApp(db, ctx, corpo, deps) {
   const cliente = String(corpo.cliente), canal = idCanal(corpo.canal);
   const cred = await credencial(db, canal, cliente);
+  if (cred.provedor === "codewords") throw new ErroApi("canal_nao_encontrado", 404);
   if (!cred.waba_id) throw new ErroApi("dados_invalidos", 400, "waba_id");
   const r = await inscreverApp(cred, { fetch: deps.rede });
   if (!r.ok) {
@@ -216,6 +272,7 @@ async function acaoInscreverApp(db, ctx, corpo, deps) {
 async function acaoSincronizar(db, ctx, corpo, deps) {
   const cliente = String(corpo.cliente), canal = idCanal(corpo.canal);
   const cred = await credencial(db, canal, cliente);
+  if (cred.provedor === "codewords") throw new ErroApi("canal_nao_encontrado", 404);
   if (!cred.waba_id) throw new ErroApi("dados_invalidos", 400, "waba_id");
   const r = await listarTemplates(cred, { fetch: deps.rede });
   if (!r.ok) return respostaPainel({ ok: false, erro: "envio_falhou", detalhe: textoFalhaCanal(r.erro) });
@@ -266,9 +323,19 @@ async function enviarItem(db, item, creds, rede) {
       creds.set(chave, await db.rpc("nx_canal_credencial", { p_canal: item.canal_id, p_cliente: item.cliente_id }).catch(() => null));
     }
     const cred = creds.get(chave);
-    if (!cred?.token) { await concluir("falhou", "número sem token"); return "falhou"; }
+    if (cred?.provedor === "codewords" && item.tipo !== "texto") {
+      await concluir("falhou", "CodeWords: fila aceita somente mensagens de texto neste momento"); return "falhou";
+    }
+    if (cred?.provedor === "codewords" ? (!cred?.codewords_api_key || !cred?.codewords_service_id) : !cred?.token) {
+      await concluir("falhou", cred?.provedor === "codewords" ? "integração CodeWords sem credencial" : "número sem token"); return "falhou";
+    }
     const r = item.tipo === "texto"
-      ? await enviarTextoCanal(cred, para, corpoMsg, { fetch: rede })
+      ? await enviarTextoPeloCanal(cred, para, corpoMsg, {
+        fetch: cred.provedor === "codewords" ? (creds.fetchCodeWords || rede) : rede,
+        timeoutMs: PRAZO_CODEWORDS_MS,
+        conversationId: item.conversa_id,
+        clientRef: cred.provedor === "codewords" ? `orbita:fila:${item.id}` : undefined,
+      })
       : await enviarTemplateCanal(cred, para, envio, { fetch: rede });
     const erro = r.ok ? null : textoFalhaCanal(r.erro);
     const msg = await db.rpc("nx_cv_saida", {
@@ -294,9 +361,12 @@ async function enviarItem(db, item, creds, rede) {
  * locked: webhook e cron nunca mandam o mesmo item duas vezes.
  */
 export async function enviarFila(db, { ids } = {}, ctx = {}) {
-  const rede = ctx.rede || comPrazo(ctx.fetch || globalThis.fetch, PRAZO_GRAPH_MS);
+  const fetchCru = ctx.fetch || globalThis.fetch;
+  const rede = ctx.rede || comPrazo(fetchCru, PRAZO_GRAPH_MS);
+  const redeCodeWords = ctx.redeCodeWords || comPrazo(fetchCru, PRAZO_CODEWORDS_MS);
   const res = { total: 0, enviado: 0, pulado: 0, falhou: 0 };
   const creds = new Map();
+  creds.fetchCodeWords = redeCodeWords;
   const inicio = Date.now();
   const lista = Array.isArray(ids) ? ids.map(Number).filter(n => Number.isSafeInteger(n) && n > 0).slice(0, 100) : null;
   if (lista && !lista.length) return res;
@@ -413,6 +483,7 @@ export async function tratar(req, env, deps = {}) {
       case "template": return acaoTemplate(db, ctx, corpo, d);
       case "lido": return acaoLido(db, ctx, corpo, d);
       case "testar_canal": return acaoTestarCanal(db, ctx, corpo, d);
+      case "testar_codewords": return acaoTestarCodeWords(db, ctx, corpo, d);
       case "inscrever_app": return acaoInscreverApp(db, ctx, corpo, d);
       case "sincronizar_templates": return acaoSincronizar(db, ctx, corpo, d);
       case "reenviar": return acaoReenviar(db, ctx, corpo, d);

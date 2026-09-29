@@ -711,6 +711,10 @@ async function enviar(o) {
   const L = A.L;
   const conv = A.ver && A.ver.conversa;
   if (!conv) return;
+  if (o.tipo === "texto" && !o.clientRef) {
+    const id = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    o = { ...o, clientRef: `orbita:${id}` };
+  }
   const eu = { id: A.eu.id, nome: A.eu.nome };
   let tmp;
   if (o.tipo === "texto") {
@@ -737,7 +741,8 @@ async function enviarPedido(tmp, o) {
   try {
     let r;
     if (o.tipo === "texto") {
-      r = await A.api.fn("nx-enviar", { acao: "texto", conversa: convId, texto: o.texto, responde_a: o.respondeA && o.respondeA.wamid ? o.respondeA.wamid : undefined });
+      r = await A.api.fn("nx-enviar", { acao: "texto", conversa: convId, texto: o.texto, client_ref: o.clientRef,
+        responde_a: o.respondeA && o.respondeA.wamid ? o.respondeA.wamid : undefined });
     } else if (o.tipo === "midia") {
       const s = await A.api.fn("nx-midia", { acao: "subir", nome: o.arquivo.name, mime: o.validacao.mime, tamanho: o.arquivo.size });
       if (!s || !s.path || !/^https:\/\//.test(String(s.upload_url || ""))) throw Object.assign(new Error("envio_falhou"), { codigo: "envio_falhou", detalhe_texto: "o servidor não liberou o envio do arquivo" });
@@ -774,7 +779,8 @@ async function enviarPedido(tmp, o) {
       await delta();
       if (!A || A.selId !== convId) return;
       if (!A.msgs.some(m => Number(m.id) > antesId && m.direcao === "out" && m.status === "falhou")) {
-        A.msgs = L.mesclarDelta(A.msgs, [{ ...tmp, status: "falhou", erro: A.ui.mensagemErro(e), falhaLocal: true }]);
+        A.msgs = L.mesclarDelta(A.msgs, [{ ...tmp, status: "falhou", erro: e?.resposta?.detalhe || A.ui.mensagemErro(e),
+          ambigua: e?.resposta?.ambigua === true, falhaLocal: true }]);
       }
     } else {
       const dica = L.dicaErroEnvio(codigo) || A.ui.mensagemErro(e);

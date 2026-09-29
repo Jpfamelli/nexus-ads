@@ -441,6 +441,11 @@ e `docs/orbita/estado/` registra os resultados de cada frente.
 - `nx_cv_*` atende conversas, mensagens, canais, departamentos, responsáveis, notas, modelos
   e recibos. A integração padrão é a WhatsApp Cloud API oficial. Webhooks autenticados criam
   ou localizam contato e oportunidade; CTWA preserva campanha, anúncio e `ctwa_clid`.
+- Organizações com plano CodeWords que inclua API podem conectar um workflow como canal: a
+  chave reutilizável `cwk-` fica no Vault, o Órbita envia texto pelo Runtime API e recebe mensagens,
+  ecos de saída e recibos pela URL secreta do canal. Recibos anteriores ao eco ficam numa fila
+  transacional por até sete dias e são aplicados quando a mensagem outbound é gravada. Os eventos usam o mesmo CRM e inbox. O MVP
+  não envia mídia nem modelos Meta; `cwotk-` de uso único não serve para essa conexão contínua.
 - Mídia fica em bucket privado, com URLs temporárias. O servidor aplica a janela de 24 horas,
   consentimento de marketing e opt-out. Sugestões de IA voltam como rascunho para revisão
   humana; a IA não envia mensagens sozinha.

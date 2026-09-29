@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 11:12 (America/Sao_Paulo)
+Atualizado: 2026-09-29 13:51 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -13,17 +13,31 @@ O código das frentes está no branch para revisão. As seis Edge Functions est�
 | Frente | Código/revisão | Estado de publicação |
 |---|---|---|
 | F1 — banco | Migrações `20260928a…h` aplicadas conforme o handoff e o `AGENTS.md` | Não revalidado nesta retomada |
-| F2 — funções | Handlers e testes locais preparados para seis funções; 11/11 suítes e seis `deno check` verdes | Deploy confirmado: `nx-ciclo`, `nx-relatorio`, `nx-whatsapp` v3; `nx-enviar`, `nx-midia`, `nx-ia` v1; todas ACTIVE, `verify_jwt=false` |
+| F2 — funções | Sete handlers na montagem local; runner 12/12 e `deno check` nos sete artefatos planos aprovados | Seis funções anteriores continuam ACTIVE; `nx-codewords` e `nx-enviar` atualizado ainda não publicados |
 | F3 — acesso e white-label | Implementação local existente; módulos dependem do aceite geral | Preview Netlify criado; `/` e `/index.html` redirecionam para `/app/`; sem deploy de produção |
 | F4 — CRM | Implementação, revisão e testes aprovados | `04_crm.sql` e `04_crm_b.sql` passaram no Supabase com `ROLLBACK` |
-| F5 — conversas | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Webhook/API real e E2E pendentes |
+| F5 — conversas | Adaptador CodeWords local; 9 testes dedicados, harness de envio idempotente; SQL smoke 10 ampliado para permissões/Vault | Migração e deploy CodeWords pendentes; smoke 10 novo não executado em PostgreSQL; nenhum fluxo real com número foi validado |
 | F6 — anúncios e relatórios | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Integrações e E2E reais pendentes |
 | F7 — automações | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Execução real e E2E pendentes |
-| F8 — entrega | Runner serial 11/11 e 10 smokes SQL reais aprovados | Funções e preview implantados; conta administrativa de teste autenticada; CRM e lista de conversas verificados no suporte; webhook assinado, Ads/paridade, E2E completo, mobile autenticado, limpeza e produção pendentes |
+| F8 — entrega | Runner serial 12/12; dez smokes SQL reais históricos aprovados | Funções anteriores e preview implantados; CodeWords segue local. E2E-A/B, webhook/recibos reais, Ads/paridade, mobile autenticado, limpeza e produção pendentes |
+
+## Retomada CodeWords — 2026-09-29 13:42
+
+O smoke `supabase/testes/10_codewords.sql` agora cobre a configuração do canal dentro de rollback: só admin configura, a chave de teste é gravada no Vault sem aparecer na resposta, a URL do webhook é emitida e booleano inválido é rejeitado. É uma chave sintética, sem chamada ao Runtime.
+
+`node testes/rodar-tudo.mjs` passou 12/12; `conversas-funcoes` 48/48 e `codewords` 9/9. A montagem gerou as sete pastas flat; `deno check` foi executado nos sete entrypoints. A alteração nova do smoke SQL ainda não teve dry run no PostgreSQL. Migration e `nx-codewords`/`nx-enviar` não foram aplicados/publicados. Sem mudanças remotas.
+
+F8 continua aberta: falta executar E2E-A/B em tenant e canal de teste, validar entrada/saída/recibos reais, paridade Ads, mobile autenticado e isolamento, limpar fixtures e receber os aceites antes de publicar produção. `prontos.js` e `main` seguem bloqueados.
+
+## QA local — 2026-09-29 13:51
+
+`node testes/rodar-tudo.mjs` passou em 12/12 arquivos. `deno check` passou nos sete entrypoints de `supabase/dist`; `git diff --check` passou, com avisos de normalização de fim de linha apenas. A suíte valida o adaptador e a montagem local. O smoke SQL `10_codewords.sql` ainda não foi executado em PostgreSQL, portanto a migration CodeWords não está aprovada nem aplicada.
+
+Nenhum acesso ou alteração remota nesta rodada. Permanecem pendentes os deploys de `nx-codewords` e `nx-enviar` atualizado, a configuração e a troca real no workflow/número de teste, E2E-A/B, paridade Ads, mobile autenticado, isolamento/limpeza e produção. `web/app/prontos.js` e `main` continuam bloqueados.
 
 ## Verificações locais
 
-Nesta retomada, `node testes/rodar-tudo.mjs` passou em 11/11 suítes; `npx --yes deno check` passou nos seis entrypoints e o deploy de cada função foi confirmado no Supabase. Chamadas sem sessão aos seis endpoints foram recusadas (401 nos handlers de painel, 403 no challenge inválido do webhook). Contagens históricas da suíte: painel 70; app 46; CRM 34; conversas 33; relatórios 38; funções 39; scripts 12; funções de conversas 46; automações 24; isolamento estrutural 3; núcleo aprovado.
+Nesta retomada, `node testes/rodar-tudo.mjs` passou em 12/12 arquivos, incluindo sete casos novos do adaptador CodeWords. `npx --yes deno check supabase/dist/nx-codewords/index.ts` e `git diff --check` passaram. Isso valida somente o contrato local com `fetch` falso; não prova webhook ou envio real.
 
 Nesta retomada, Chrome headless abriu o login em 375×812 e 390×844. Nos dois tamanhos `documentElement.scrollWidth` e `body.scrollWidth` bateram com a largura do viewport; o formulário apareceu e não houve erros de console. Isso valida somente o shell de login: sem backend autenticado, as telas e fluxos internos continuam sem verificação mobile. A suíte Node mais recente segue em 11/11; os testes de app, CRM e painel passaram 46/46, 34/34 e 70/70.
 
@@ -150,3 +164,33 @@ No Chrome, a sessão aberta é `Conta E2E Órbita` com papel `ADMINISTRADOR`; a 
 ## Preview de navegação solicitado por João — 2026-09-29 12:05
 
 João pediu liberar as abas no preview e confirmou o escopo de Início, Conversas, CRM e Ads. Criei um overlay temporário fora da árvore Git e publiquei o deploy Netlify de rascunho `6abbd2ff7054e92bd9532b7b`: https://6abbd2ff7054e92bd9532b7b--orbita-nexus-ads.netlify.app. O arquivo servido `app/prontos.js` respondeu HTTP 200 com essas quatro chaves; `CONFIG_PRONTAS` continua em Perfil. A origem `web/app/prontos.js`, a `main` e a produção seguem fechadas. A nova URL exige login de novo; a tela Entrar carregou, mas não fiz login nem li senha. Não houve alteração de banco ou dados. Esse preview de avaliação não conclui F8: ainda faltam E2E-A/B autenticados, mobile autenticado e limpeza.
+
+## CodeWords como canal de conversas — preparação local — 2026-09-29 12:38
+
+João confirmou que o plano pago CodeWords cobre entrada de mensagens, envio pelo workflow e recibos. Preparei o adaptador bidirecional para a central do Órbita, separado do fluxo anterior de lead qualificado em `#/config/formulario`.
+
+O código local acrescenta `supabase/migrations/20260929a_codewords.sql`, `supabase/functions/nx-codewords/` e `supabase/functions/_compartilhado/codewords.js`; atualiza `nx-enviar`, o compositor de Conversas, Números de WhatsApp, textos de erro e o montador de funções. No painel, um admin cadastra Service ID, telefone, departamento e chave reutilizável `cwk-`; o backend guarda a chave no Vault e cria uma URL secreta por canal. O workflow envia mensagens/eventos e os recibos à timeline do mesmo CRM; respostas digitadas na caixa são encaminhadas ao Runtime API. O canal inicial envia só texto, dentro da janela de 24 h, e não usa modelos da Meta ou mídia.
+
+A migração está **local e não aplicada**; `nx-codewords` e `nx-enviar` não foram republicadas; preview não atualizado. Nenhum teste/build ou chamada a CodeWords foi executado nesta etapa. F8 segue em andamento e os módulos continuam sujeitos aos aceites E2E-A/B, testes mobile autenticados, isolamento, limpeza e publicação.
+
+## Validação local do adaptador CodeWords — 2026-09-29 12:55
+
+Adicionei sete testes com chamadas falsas para entrada, saída via Runtime API, recibos `delivered`, captura de referral/anúncio, variações de telefone, validação do evento de saúde, rejeição de payload grande e redação da API key nos erros. O teste de montagem agora inclui `nx-codewords`, e o runner F8 passou a incluir a nova suíte. Corrigi também uma expectativa antiga de mensagem para refletir o texto neutro por provedor.
+
+Verificações: `node testes/rodar-tudo.mjs` 12/12; `npx --yes deno check supabase/dist/nx-codewords/index.ts`; `git diff --check`. A checagem do `index.ts` no diretório-fonte, fora do dist plano, não resolve o import local esperado; o artefato de deploy plano passou.
+
+A migração `20260929a_codewords.sql` permanece sem aplicação, a função e a atualização de `nx-enviar` sem deploy, e o preview não foi atualizado. Não consultei nem usei a API key do João e não alterei banco, `nx_config`, número ou dados de cliente. F8 ainda exige fluxo real de entrada, resposta e recibos em número de teste, E2E-A/B, mobile autenticado, isolamento, limpeza e aceite antes de produção.
+
+## Retomada 2026-09-29 13:08
+
+Corrigi a retentativa de saída CodeWords para preservar uma referência estável por mensagem. O navegador cria `client_ref` no envio e guarda o mesmo valor no pedido otimista; nx-enviar o repassa ao Runtime API. Timeout, 408/425/429, 5xx e resposta 2xx sem `message_id` ficam como confirmação pendente, sem gravar uma falha que ofereça uma segunda tentativa sem correlação. Falha explícita do provedor continua registrada. Se CodeWords aceitar a mensagem e a gravação no banco falhar, o painel também recebe estado ambíguo para repetir com a mesma referência. A fila usa o ID persistente do item como referência. O assistente do canal orienta o workflow a persistir e deduplicar `client_ref`.
+
+O teste da Edge Function simula envio aceito com resposta 503, seguido da repetição com o mesmo ID: uma só mensagem enviada e uma linha final persistida. `node testes/rodar-tudo.mjs` passou em 12/12 arquivos (incluindo 47 casos do teste de Edge Functions e oito do adaptador); montagem das sete funções, `npx --yes deno check` dos sete entrypoints e `git diff --check` passaram.
+
+Esse aceite é local, com rede falsa. A migration `20260929a_codewords.sql` não foi aplicada; `nx-codewords` e `nx-enviar` atualizado não foram publicados; não consultei nem usei a chave CodeWords e não alterei banco, `nx_config`, canais ou produção. F8 segue aberta até integração real em número de teste, E2E-A/B, mobile autenticado, isolamento, limpeza e publicação aprovada.
+
+## Revisão local CodeWords — 2026-09-29 13:32 -03
+
+A revisão encontrou uma corrida de ordenação: o serviço pode notificar `delivered/read/failed` antes do eco outbound. Antes, esse recibo era ignorado enquanto a linha não existia. Corrigi localmente com tabela pendente por canal/ID (TTL de sete dias), RPC `nx_codewords_status` e advisory lock compartilhado com `nx_codewords_saida`. O eco aplica o estado pendente usando `nx_wa_status`; a fila mantém estados monotônicos. `rotacionar_webhook` valida boolean e respostas síncronas `delivered/read` deixam o status correto.
+
+Adicionei caso Node para status antes do eco e `supabase/testes/10_codewords.sql` para confirmar a fila real em transação revertida quando houver sessão de banco. `node testes/rodar-tudo.mjs` passou 12/12 arquivos (`conversas-funcoes` 48/48; CodeWords 9/9); montagem das sete funções e `deno check` dos sete artefatos passaram. A migration permanece local; sem dry run, deploy nem chamada real ao CodeWords nesta etapa. F8 continua bloqueada por E2E-A/B em canal real de teste, validação mobile autenticada, isolamento/limpeza e publicação aprovada.

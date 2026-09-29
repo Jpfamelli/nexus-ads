@@ -345,10 +345,13 @@ export function criarChat(A) {
         on: { click: () => A.composer.responder(m) } }, A.icone("responder")));
     }
     if (m.status === "falhou") {
-      const erro = m.erro || "O WhatsApp não aceitou a mensagem.";
-      const falha = h("div", { class: "cv-falha", role: "alert" }, h("span", null, h("b", null, "! Não enviada: "), erro));
+      const erro = m.ambigua
+        ? "Confirmação pendente. A mensagem pode ter sido enviada; ao repetir, o Órbita reutiliza a mesma referência."
+        : m.erro || "O canal não aceitou a mensagem.";
+      const falha = h("div", { class: "cv-falha", role: "alert" }, h("span", null,
+        h("b", null, m.ambigua ? "! Status incerto: " : "! Não enviada: "), erro));
       if (m.falhaLocal && m.pedido) {
-        falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarLocal(m) } }, "Tentar de novo"),
+        falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarLocal(m) } }, m.ambigua ? "Repetir com a mesma referência" : "Tentar de novo"),
           h("button", { type: "button", class: "bt bt-fant", on: { click: () => A.acoes.descartarLocal(m) } }, "Descartar"));
       } else if (A.podeEscrever && m.tipo === "texto" && m.corpo) {
         falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.enviar({ tipo: "texto", texto: m.corpo }) } }, "Tentar de novo"));

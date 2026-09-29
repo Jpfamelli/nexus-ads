@@ -361,6 +361,9 @@
 .cfg-webhook { display: flex; flex-direction: column; gap: .7rem; }
 .cfg-copia { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; align-items: end; }
 .cfg-copia input { font-family: var(--f-mono); font-size: var(--fs-13); }
+.cfg-mono { width: 100%; min-width: 0; }
+.cfg-codigo { display: block; max-height: min(48vh, 34rem); overflow: auto; margin: 0; padding: 1rem; border: 1px solid var(--c-borda); border-radius: 16px; background: var(--c-fundo); color: var(--c-texto); font: var(--fs-12)/1.55 var(--f-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.cfg-codigo code { font: inherit; }
 .cfg-resultado { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; min-height: 2rem; }
 .cfg-vars { display: flex; gap: .35rem; flex-wrap: wrap; }
 .cfg-vars button { min-height: 30px; padding: .15rem .7rem; border-radius: 999px; border: 1px dashed var(--c-borda-2); font-family: var(--f-mono); font-size: var(--fs-12); color: var(--c-texto-2); }
