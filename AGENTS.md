@@ -15,7 +15,7 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
   — publicado a cada push na `main` que mexa em `web/**` (Action `.github/workflows/pages.yml`).
   **Push na main publica.** Só faça merge/push na main quando os testes e o E2E passarem.
 - Supabase `dtjznipitihnwmcgpzqh`: seis funções ativas após deploy F8 de 29/09 — `nx-ciclo`, `nx-relatorio` e `nx-whatsapp` v3; `nx-enviar`, `nx-midia` e `nx-ia` v1; todas com `verify_jwt=false` e autenticação própria do handler. Cron continua de hora em hora (nx-ciclo :07), relatório diário 8h e mensal dia 1º.
-- Netlify: site `orbita-nexus-ads` criado; o deploy atual é somente um preview de branch em https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. Os redirecionamentos para `/app/` foram verificados. Ainda não existe deploy de produção nem domínio confirmado.
+- Netlify: site `orbita-nexus-ads` criado; o preview original continua em https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. A pedido do João, em 29/09 foi criado um segundo deploy de rascunho com overlay temporário de navegação em https://6abbd2ff7054e92bd9532b7b--orbita-nexus-ads.netlify.app. Ele expõe Início, Conversas, CRM e Ads no preview; a conta precisa entrar novamente nesse hostname. A origem `web/app/prontos.js` e a `main` continuam bloqueadas. Ainda não existe deploy de produção nem domínio confirmado.
 - Cliente real: `kamiguchi` (Kamiguchi Odontologia). O cliente de demonstração foi apagado de propósito;
   o modo `?demo` do painel continua como ferramenta de venda.
 

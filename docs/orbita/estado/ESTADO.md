@@ -146,3 +146,7 @@ Verificação da alteração CodeWords: `node testes/relatorios.teste.mjs` 39/39
 ## Acesso do tenant de teste no preview — 2026-09-29
 
 No Chrome, a sessão aberta é `Conta E2E Órbita` com papel `ADMINISTRADOR`; a navegação mostra Configurações e, dentro dela, apenas Perfil. Isso é consequência do bloqueio intencional em `web/app/prontos.js` (`MODULOS_PRONTOS=[]`, `CONFIG_PRONTAS=["perfil"]`). A opção `?dev=1` exige `conta.super`, então não habilita os módulos para essa conta. O suporte da Nexus vê o CRM em outra sessão, sem compartilhar acesso com esse usuário. O link `#/crm` não contorna as permissões. Não houve alteração de permissões, banco, preview ou produção. F8 permanece pendente dos aceites E2E-A/B e mobile autenticado; depois deles, liberar os módulos aceitos conforme ESPEC §8–9.
+
+## Preview de navegação solicitado por João — 2026-09-29 12:05
+
+João pediu liberar as abas no preview e confirmou o escopo de Início, Conversas, CRM e Ads. Criei um overlay temporário fora da árvore Git e publiquei o deploy Netlify de rascunho `6abbd2ff7054e92bd9532b7b`: https://6abbd2ff7054e92bd9532b7b--orbita-nexus-ads.netlify.app. O arquivo servido `app/prontos.js` respondeu HTTP 200 com essas quatro chaves; `CONFIG_PRONTAS` continua em Perfil. A origem `web/app/prontos.js`, a `main` e a produção seguem fechadas. A nova URL exige login de novo; a tela Entrar carregou, mas não fiz login nem li senha. Não houve alteração de banco ou dados. Esse preview de avaliação não conclui F8: ainda faltam E2E-A/B autenticados, mobile autenticado e limpeza.
