@@ -1,12 +1,12 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 09:02 (America/Sao_Paulo)
+Atualizado: 2026-09-29 09:42 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
 ## Situação
 
-O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas; não houve alteração persistente de dados nem de `nx_config` nesta retomada.
+O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas. Nesta retomada, João autorizou recuperação da própria conta gestora: há um único link temporário válido, e o formulário de nova senha está aberto; a senha ainda precisa ser criada por João. Nenhuma alteração foi feita em `nx_config` ou nos dados de clientes.
 
 ## Frentes
 
@@ -19,7 +19,7 @@ O código das frentes está no branch para revisão. As seis Edge Functions est�
 | F5 — conversas | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Webhook/API real e E2E pendentes |
 | F6 — anúncios e relatórios | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Integrações e E2E reais pendentes |
 | F7 — automações | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Execução real e E2E pendentes |
-| F8 — entrega | Runner serial e 10 smokes SQL reais aprovados; documentação e gating no branch | Funções e preview implantados; E2E autenticado, validação mobile e produção pendentes |
+| F8 — entrega | Runner serial e 10 smokes SQL reais aprovados; recuperação autorizada aberta para o gestor | Funções e preview implantados; senha do gestor, E2E autenticado, validação mobile e produção pendentes |
 
 ## Verificações locais
 
@@ -33,7 +33,11 @@ O smoke `supabase/testes/09_isolamento.sql` prepara a org Nexus e uma revenda B,
 
 ## Bloqueios e próximo passo
 
-Bloqueios atuais: não há tenant `teste-e2e`; o app de preview aguarda login pela conta gestora existente (a sessão ativa no painel clássico tem outra origem e não é compartilhada). O preview Netlify está disponível, mas não é deploy de produção. E2E-A/B e validação mobile autenticada permanecem pendentes. `prontos.js` continua bloqueando os módulos, a `main` não foi publicada e o PR #1 permanece draft.
+Bloqueios atuais: João precisa salvar a senha nova no formulário já aberto; depois criaremos o tenant `teste-e2e` e faremos E2E-A/B e validação mobile autenticada. O preview Netlify está disponível, mas não é deploy de produção. `prontos.js` continua bloqueando os módulos, a `main` não foi publicada e o PR #1 permanece draft.
+
+## Retomada 2026-09-29 09:42
+
+João autorizou expressamente a recuperação de acesso da própria conta gestora. Confirmei no projeto Supabase autorizado que a conta está aprovada, RLS está habilitado e havia zero links válidos antes da operação. A tentativa anterior sem resultado acessível foi consumida; o banco agora tem exatamente um link de recuperação válido por 24 horas. O formulário de nova senha está aberto no preview Netlify. João ainda precisa preencher e salvar a senha; o agente não leu nem definiu senha. `nx_config`, clientes e leads não foram alterados. A suíte Node passou 11/11 e `git diff --check` passou. E2E, produção e liberação de módulos seguem pendentes.
 
 Na retomada das 01:22, o painel web do Supabase abriu o projeto correto, mas ainda não havia consulta. A política do navegador bloqueou abrir os arquivos SQL locais como página; sem um conector Supabase MCP, os smokes integrais continuavam pendentes. A retomada das 01:37 confirmou acesso de leitura pelo Dashboard, conforme registrado abaixo. Nenhum token foi usado; revogar os tokens que ficaram visíveis durante a tentativa.
 
