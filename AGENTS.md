@@ -27,7 +27,7 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
   F4 CRM, F5 Conversas, F6 Anúncios/Relatórios, F7 Automações. Em 29/09, os 10 smokes SQL (`01`–`09`, incluindo `04_crm_b`) passaram no SQL Editor autenticado do projeto autorizado, com `ROLLBACK`; marcadores finais e algumas exclusões de fixtures foram adaptados apenas no texto temporário por causa da tradução automática. Os arquivos SQL do repositório não foram alterados.
 - F8: runner serial 11/11 verde e smokes SQL reais aprovados. As seis funções foram publicadas e verificadas no projeto correto; o preview Netlify responde e redireciona para `/app/`. Órbita ainda não está pronto para clientes: E2E-A/B autenticados, produção Netlify e verificação mobile autenticada permanecem pendentes. `web/app/prontos.js` mantém os módulos bloqueados.
 - **Falta (em ordem):**
-  1. Criar/usar conta gestora pela interface e concluir E2E-A/B num tenant de teste dedicado, incluindo isolamento, integração/webhook e limpeza das fixtures.
+  1. Usar a conta gestora existente para entrar no preview e concluir E2E-A/B num tenant de teste dedicado, incluindo isolamento, integração/webhook e limpeza das fixtures.
   2. Validar os fluxos autenticados em 375×812 e 390×844, console e painel clássico; só liberar os módulos aceitos em `web/app/prontos.js`.
   3. Depois dos aceites, publicar em produção no Netlify, validar `/` e `/index.html` → `/app/` e definir a URL do app pelo caminho administrativo autorizado.
 

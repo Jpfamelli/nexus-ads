@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 08:38 (America/Sao_Paulo)
+Atualizado: 2026-09-29 08:44 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -33,7 +33,7 @@ O smoke `supabase/testes/09_isolamento.sql` prepara a org Nexus e uma revenda B,
 
 ## Bloqueios e próximo passo
 
-Bloqueios atuais: não há tenant `teste-e2e` nem conta gestora criada para o aceite autenticado. O preview Netlify está disponível, mas não é deploy de produção. E2E-A/B e validação mobile autenticada permanecem pendentes. `prontos.js` continua bloqueando os módulos, a `main` não foi publicada e o PR #1 permanece draft.
+Bloqueios atuais: não há tenant `teste-e2e`; o app de preview aguarda login pela conta gestora existente (a sessão ativa no painel clássico tem outra origem e não é compartilhada). O preview Netlify está disponível, mas não é deploy de produção. E2E-A/B e validação mobile autenticada permanecem pendentes. `prontos.js` continua bloqueando os módulos, a `main` não foi publicada e o PR #1 permanece draft.
 
 Na retomada das 01:22, o painel web do Supabase abriu o projeto correto, mas ainda não havia consulta. A política do navegador bloqueou abrir os arquivos SQL locais como página; sem um conector Supabase MCP, os smokes integrais continuavam pendentes. A retomada das 01:37 confirmou acesso de leitura pelo Dashboard, conforme registrado abaixo. Nenhum token foi usado; revogar os tokens que ficaram visíveis durante a tentativa.
 
@@ -89,4 +89,4 @@ Concluído o login oficial autorizado do Supabase CLI. As seis funções foram i
 
 Criado o site Netlify `orbita-nexus-ads` e realizado deploy de preview, sem conectar ou alterar outros sites. URL: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. Verificação remota: `/` e `/index.html` devolvem 302 para `/app/`; `/app/` responde 200 com CSP. O site ainda não recebeu deploy de produção.
 
-`node scripts/montar-funcoes.mjs`, `node testes/rodar-tudo.mjs` (11/11), `npx --yes deno check` (6/6) e `git diff --check` passaram. Não houve escrita no banco, alteração em `nx_config`, exclusão de dados nem publicação na `main`. F8 continua aberta: falta criar/usar conta gestora e tenant de teste, executar E2E-A/B e validar telas autenticadas/mobile; só depois liberar módulos e publicar produção.
+`node scripts/montar-funcoes.mjs`, `node testes/rodar-tudo.mjs` (11/11), `npx --yes deno check` (6/6) e `git diff --check` passaram. Não houve escrita no banco, alteração em `nx_config`, exclusão de dados nem publicação na `main`. F8 continua aberta: falta João entrar no preview com a conta gestora existente; depois disso, criar o tenant de teste, executar E2E-A/B e validar telas autenticadas/mobile. Só após os aceites liberar módulos e publicar produção.
