@@ -1,12 +1,12 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 10:04 (America/Sao_Paulo)
+Atualizado: 2026-09-29 10:18 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
 ## Situação
 
-O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas. João informou que salvou a senha da conta gestora, mas a tentativa de login no preview retornou “E-mail ou senha não conferem”; não há sessão autenticada. Nenhuma alteração foi feita em `nx_config` ou nos dados de clientes.
+O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas. A pedido do João, substituí o link de recuperação que ainda estava ativo; há exatamente um link temporário válido e o formulário novo está aberto. João precisa salvar a senha e autenticar manualmente. A conta gestora já existe; RLS está habilitado na tabela do link; não criei outra conta nem alterei `nx_config`/código de ativação ou dados de clientes.
 
 ## Frentes
 
@@ -110,3 +110,7 @@ João informou que salvou a senha. Ao conferir a página, o preview ainda mostra
 ## Retomada 2026-09-29 10:04
 
 A tentativa manual de entrar no preview mostrou “E-mail ou senha não conferem”. A sessão continua sem autenticação e o E2E permanece bloqueado. A suíte `node testes/rodar-tudo.mjs` passou em 11/11 arquivos. Aguardo João confirmar se viu a mensagem de sucesso após salvar a senha para decidir o próximo passo de recuperação. Nenhuma credencial foi lida ou alterada pelo agente; sem mudanças em `nx_config`, clientes ou produção.
+
+## Retomada 2026-09-29 10:18
+
+João pediu para reiniciar a recuperação. Substituí o link ainda ativo por um novo, temporário, e confirmei no Supabase que há exatamente um link válido para a conta gestora existente; uma consulta separada confirmou que o RLS da tabela continua habilitado. O formulário de nova senha está aberto no preview; João deve definir e salvar a própria senha. A conta gestora aprovada já existe, então não criei outra conta nem alterei o código de ativação ou `nx_config`. Não houve alteração de dados de cliente nem de produção. F8 aguarda a confirmação visual do salvamento e login para continuar o E2E autenticado.
