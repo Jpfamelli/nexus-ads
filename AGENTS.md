@@ -14,8 +14,8 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
 - Painel clássico do Nexus Ads: `web/` (exceto `web/app/`), no GitHub Pages https://jpfamelli.github.io/nexus-ads/
   — publicado a cada push na `main` que mexa em `web/**` (Action `.github/workflows/pages.yml`).
   **Push na main publica.** Só faça merge/push na main quando os testes e o E2E passarem.
-- Supabase `dtjznipitihnwmcgpzqh`: funções publicadas `nx-ciclo`, `nx-relatorio`, `nx-whatsapp` (versão 2, anterior ao Órbita);
-  cron de hora em hora (nx-ciclo :07), relatório diário 8h e mensal dia 1º.
+- Supabase `dtjznipitihnwmcgpzqh`: seis funções ativas após deploy F8 de 29/09 — `nx-ciclo`, `nx-relatorio` e `nx-whatsapp` v3; `nx-enviar`, `nx-midia` e `nx-ia` v1; todas com `verify_jwt=false` e autenticação própria do handler. Cron continua de hora em hora (nx-ciclo :07), relatório diário 8h e mensal dia 1º.
+- Netlify: site `orbita-nexus-ads` criado; o deploy atual é somente um preview de branch em https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. Os redirecionamentos para `/app/` foram verificados. Ainda não existe deploy de produção nem domínio confirmado.
 - Cliente real: `kamiguchi` (Kamiguchi Odontologia). O cliente de demonstração foi apagado de propósito;
   o modo `?demo` do painel continua como ferramenta de venda.
 
@@ -25,11 +25,11 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
 - Branch `codex/orbita` enviada ao GitHub; PR #1 está aberto em rascunho. Migrações `supabase/migrations/20260928a…h` constam como aplicadas no handoff, mas não foram revalidadas nesta retomada.
 - Construídas localmente: F1 banco, F2 funções (nx-enviar, nx-midia, nx-ia, webhook ampliado), F3 login/white-label/admin (`web/app/`),
   F4 CRM, F5 Conversas, F6 Anúncios/Relatórios, F7 Automações. Em 29/09, os 10 smokes SQL (`01`–`09`, incluindo `04_crm_b`) passaram no SQL Editor autenticado do projeto autorizado, com `ROLLBACK`; marcadores finais e algumas exclusões de fixtures foram adaptados apenas no texto temporário por causa da tradução automática. Os arquivos SQL do repositório não foram alterados.
-- F8: runner serial 11/11 verde e smokes SQL reais aprovados. Órbita ainda não está publicado nem pronto para clientes: seis funções novas, E2E-A/B autenticados, site/URL Netlify e verificação mobile autenticada permanecem pendentes. `web/app/prontos.js` mantém os módulos bloqueados.
+- F8: runner serial 11/11 verde e smokes SQL reais aprovados. As seis funções foram publicadas e verificadas no projeto correto; o preview Netlify responde e redireciona para `/app/`. Órbita ainda não está pronto para clientes: E2E-A/B autenticados, produção Netlify e verificação mobile autenticada permanecem pendentes. `web/app/prontos.js` mantém os módulos bloqueados.
 - **Falta (em ordem):**
-  1. Publicar as seis Edge Functions a partir de `supabase/dist/<função>` e executar E2E-A/B num tenant de teste dedicado.
-  2. Vincular/configurar o site Netlify e verificar `/` e `/index.html` → `/app/`.
-  3. Validar fluxos autenticados, isolamento, telas a 390 px, console e painel clássico; só então liberar módulos e considerar publicação.
+  1. Criar/usar conta gestora pela interface e concluir E2E-A/B num tenant de teste dedicado, incluindo isolamento, integração/webhook e limpeza das fixtures.
+  2. Validar os fluxos autenticados em 375×812 e 390×844, console e painel clássico; só liberar os módulos aceitos em `web/app/prontos.js`.
+  3. Depois dos aceites, publicar em produção no Netlify, validar `/` e `/index.html` → `/app/` e definir a URL do app pelo caminho administrativo autorizado.
 
 ## Testes (todos têm de passar antes de commit)
 ```

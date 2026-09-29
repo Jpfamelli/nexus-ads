@@ -1,29 +1,29 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 08:20 (America/Sao_Paulo)
+Atualizado: 2026-09-29 08:38 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
 ## Situação
 
-O código das frentes está no branch para revisão. **O SaaS ainda não está publicado nem pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas; não houve alteração persistente de dados nem de `nx_config` nesta retomada.
+O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas; não houve alteração persistente de dados nem de `nx_config` nesta retomada.
 
 ## Frentes
 
 | Frente | Código/revisão | Estado de publicação |
 |---|---|---|
 | F1 — banco | Migrações `20260928a…h` aplicadas conforme o handoff e o `AGENTS.md` | Não revalidado nesta retomada |
-| F2 — funções | Handlers e testes locais preparados para seis funções | Deploy do Órbita pendente; em produção permanecem as três funções v2 anteriores |
-| F3 — acesso e white-label | Implementação local existente; módulos dependem do aceite geral | Sem URL Netlify confirmada |
+| F2 — funções | Handlers e testes locais preparados para seis funções; 11/11 suítes e seis `deno check` verdes | Deploy confirmado: `nx-ciclo`, `nx-relatorio`, `nx-whatsapp` v3; `nx-enviar`, `nx-midia`, `nx-ia` v1; todas ACTIVE, `verify_jwt=false` |
+| F3 — acesso e white-label | Implementação local existente; módulos dependem do aceite geral | Preview Netlify criado; `/` e `/index.html` redirecionam para `/app/`; sem deploy de produção |
 | F4 — CRM | Implementação, revisão e testes aprovados | `04_crm.sql` e `04_crm_b.sql` passaram no Supabase com `ROLLBACK` |
 | F5 — conversas | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Webhook/API real e E2E pendentes |
 | F6 — anúncios e relatórios | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Integrações e E2E reais pendentes |
 | F7 — automações | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Execução real e E2E pendentes |
-| F8 — entrega | Runner serial e 10 smokes SQL reais aprovados; documentação e gating no branch | Deploy das funções, Netlify e E2E pendentes |
+| F8 — entrega | Runner serial e 10 smokes SQL reais aprovados; documentação e gating no branch | Funções e preview implantados; E2E autenticado, validação mobile e produção pendentes |
 
 ## Verificações locais
 
-`node testes/rodar-tudo.mjs` passou em 11/11 suítes. Contagens: painel 70; app 46; CRM 34; conversas 33; relatórios 38; funções 39; scripts 12; funções de conversas 46; automações 24; isolamento estrutural 3; núcleo aprovado.
+Nesta retomada, `node testes/rodar-tudo.mjs` passou em 11/11 suítes; `npx --yes deno check` passou nos seis entrypoints e o deploy de cada função foi confirmado no Supabase. Chamadas sem sessão aos seis endpoints foram recusadas (401 nos handlers de painel, 403 no challenge inválido do webhook). Contagens históricas da suíte: painel 70; app 46; CRM 34; conversas 33; relatórios 38; funções 39; scripts 12; funções de conversas 46; automações 24; isolamento estrutural 3; núcleo aprovado.
 
 Nesta retomada, Chrome headless abriu o login em 375×812 e 390×844. Nos dois tamanhos `documentElement.scrollWidth` e `body.scrollWidth` bateram com a largura do viewport; o formulário apareceu e não houve erros de console. Isso valida somente o shell de login: sem backend autenticado, as telas e fluxos internos continuam sem verificação mobile. A suíte Node mais recente segue em 11/11; os testes de app, CRM e painel passaram 46/46, 34/34 e 70/70.
 
@@ -33,7 +33,7 @@ O smoke `supabase/testes/09_isolamento.sql` prepara a org Nexus e uma revenda B,
 
 ## Bloqueios e próximo passo
 
-Bloqueios atuais: CLI/MCP Supabase ou Netlify não estão disponíveis para publicar as seis funções ou vincular o host; não existe tenant `teste-e2e` dedicado nem URL Netlify confirmada. Assim, E2E-A/B e validação mobile autenticada permanecem pendentes. `prontos.js` continua bloqueando os módulos, a `main` não foi publicada e o PR #1 permanece draft.
+Bloqueios atuais: não há tenant `teste-e2e` nem conta gestora criada para o aceite autenticado. O preview Netlify está disponível, mas não é deploy de produção. E2E-A/B e validação mobile autenticada permanecem pendentes. `prontos.js` continua bloqueando os módulos, a `main` não foi publicada e o PR #1 permanece draft.
 
 Na retomada das 01:22, o painel web do Supabase abriu o projeto correto, mas ainda não havia consulta. A política do navegador bloqueou abrir os arquivos SQL locais como página; sem um conector Supabase MCP, os smokes integrais continuavam pendentes. A retomada das 01:37 confirmou acesso de leitura pelo Dashboard, conforme registrado abaixo. Nenhum token foi usado; revogar os tokens que ficaram visíveis durante a tentativa.
 
@@ -82,3 +82,11 @@ Sem ferramentas Supabase/Netlify autenticadas nesta sessão, permanecem pendente
 Os 10 smokes SQL (`01` a `09`, incluindo `04_crm_b`) passaram no SQL Editor autenticado do projeto `dtjznipitihnwmcgpzqh`. Cada execução terminou em `ROLLBACK`; marcadores de sucesso e algumas exclusões exclusivas de fixtures foram adaptados semanticamente apenas no texto temporário enviado ao editor para contornar a tradução automática, sem modificar os arquivos fonte. Resultados conferidos na interface. A revisão F4 foi fechada.
 
 `node testes/rodar-tudo.mjs` passou 11/11 suítes. Ainda faltam publicar as seis Edge Functions, criar um tenant de teste isolado, concluir E2E-A/B, vincular/configurar Netlify e validar telas autenticadas a 390 px e o console. Não houve deploy, alteração persistente no banco, edição de `nx_config` ou publicação na `main`; os módulos seguem bloqueados em `web/app/prontos.js`.
+
+## Retomada 2026-09-29 08:38
+
+Concluído o login oficial autorizado do Supabase CLI. As seis funções foram implantadas no projeto `dtjznipitihnwmcgpzqh` a partir das pastas planas geradas em `supabase/dist`, todas com `verify_jwt=false`: `nx-ciclo`, `nx-relatorio` e `nx-whatsapp` estão na v3; `nx-enviar`, `nx-midia` e `nx-ia` na v1. A lista remota confirma as seis `ACTIVE`; chamadas anônimas foram recusadas pelos handlers (401) e challenge inválido do webhook (403).
+
+Criado o site Netlify `orbita-nexus-ads` e realizado deploy de preview, sem conectar ou alterar outros sites. URL: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. Verificação remota: `/` e `/index.html` devolvem 302 para `/app/`; `/app/` responde 200 com CSP. O site ainda não recebeu deploy de produção.
+
+`node scripts/montar-funcoes.mjs`, `node testes/rodar-tudo.mjs` (11/11), `npx --yes deno check` (6/6) e `git diff --check` passaram. Não houve escrita no banco, alteração em `nx_config`, exclusão de dados nem publicação na `main`. F8 continua aberta: falta criar/usar conta gestora e tenant de teste, executar E2E-A/B e validar telas autenticadas/mobile; só depois liberar módulos e publicar produção.
