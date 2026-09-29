@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 01:22 (America/Sao_Paulo)
+Atualizado: 2026-09-29 01:44 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -35,7 +35,17 @@ O smoke `supabase/testes/09_isolamento.sql` agora prepara a org Nexus e uma reve
 
 Bloqueios atuais: o CLI Supabase está disponível por `npx`, mas a checagem somente de leitura de funções no projeto autorizado retornou `AccessTokenRequired`; o login ainda não está disponível no shell. O CLI Netlify está autenticado, porém falta vincular o site. Sem essas etapas, não é possível confirmar os testes SQL, publicar as seis funções, validar o host ou executar os E2E reais. `gh pr checks 1` não reportou verificações automáticas.
 
-O painel web do Supabase está autenticado no projeto correto e o Editor SQL abriu. Nenhuma consulta foi rodada. A política do navegador bloqueou abrir os arquivos SQL locais como página; sem um conector Supabase MCP, não consegui executar os smokes pelo Dashboard nesta sessão. Os smokes podem ser executados pelo João no Dashboard ou por um conector habilitado. Nenhum token foi usado; revogar os tokens que ficaram visíveis durante a tentativa.
+Na retomada das 01:22, o painel web do Supabase abriu o projeto correto, mas ainda não havia consulta. A política do navegador bloqueou abrir os arquivos SQL locais como página; sem um conector Supabase MCP, os smokes integrais continuavam pendentes. A retomada das 01:37 confirmou acesso de leitura pelo Dashboard, conforme registrado abaixo. Nenhum token foi usado; revogar os tokens que ficaram visíveis durante a tentativa.
+
+## Retomada 2026-09-29 01:37
+
+O Dashboard autenticado no projeto `dtjznipitihnwmcgpzqh` respondeu a consultas somente leitura: banco `postgres`, 35 migrations registradas e tabelas `nx_leads`, `nx_funis`, `nx_conversas` e `nx_canais` presentes. `demo-clinica` e `teste-e2e` não existem. Nenhuma escrita, exclusão, alteração em `nx_config` ou uso de credenciais ocorreu. O MCP ainda não aparece no catálogo deste chat; a validação integral de F4/F8 continua pendente.
+
+## Retomada 2026-09-29 01:44
+
+O Dashboard segue autenticado no projeto `dtjznipitihnwmcgpzqh`. Consultas somente leitura confirmaram 35 migrations no total e 32 registros nas versões `20260928%`/`20260929%`, com registros de CRM, conversas, plataforma, automações e funções. A lista de Edge Functions mostra apenas `nx-ciclo`, `nx-relatorio` e `nx-whatsapp`; as funções novas do Órbita ainda não foram publicadas. `demo-clinica` e `teste-e2e` estão ausentes. Nenhuma escrita, exclusão, leitura de `nx_config` ou uso de credenciais ocorreu.
+
+O Codex não recebeu ferramenta Supabase MCP e o CLI segue sem autenticação. Os smokes `04_crm.sql`, `04_crm_b.sql` e `09_isolamento.sql` continuam sem execução real; a contagem de migrations não substitui esse aceite. Netlify permanece sem site vinculado. Não houve deploy. A suíte local e a montagem de funções passaram na verificação anterior (11/11); `deno` não está instalado nesta sessão. O projeto continua não publicado e não pronto para clientes.
 
 O checkpoint de 00:31 registrava a árvore limpa; esta retomada acrescentou as correções locais descritas acima. Nenhuma validação de produção foi declarada concluída. A chave enviada no chat foi tratada como exposta e não foi usada; é necessário revogá-la. Não é preciso criar outro token para o fluxo pelo Dashboard.
 
