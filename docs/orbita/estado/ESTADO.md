@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 08:44 (America/Sao_Paulo)
+Atualizado: 2026-09-29 08:49 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -90,3 +90,7 @@ Concluído o login oficial autorizado do Supabase CLI. As seis funções foram i
 Criado o site Netlify `orbita-nexus-ads` e realizado deploy de preview, sem conectar ou alterar outros sites. URL: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. Verificação remota: `/` e `/index.html` devolvem 302 para `/app/`; `/app/` responde 200 com CSP. O site ainda não recebeu deploy de produção.
 
 `node scripts/montar-funcoes.mjs`, `node testes/rodar-tudo.mjs` (11/11), `npx --yes deno check` (6/6) e `git diff --check` passaram. Não houve escrita no banco, alteração em `nx_config`, exclusão de dados nem publicação na `main`. F8 continua aberta: falta João entrar no preview com a conta gestora existente; depois disso, criar o tenant de teste, executar E2E-A/B e validar telas autenticadas/mobile. Só após os aceites liberar módulos e publicar produção.
+
+## Retomada 2026-09-29 08:49
+
+Auditei os 42 assets locais referenciados pelo preview Netlify (HTML, JavaScript, CSS, manifest, imagens e fontes): todos responderam com HTTP 2xx/3xx, sem arquivos ausentes. A tela continua aguardando a autenticação manual de João; E2E-A/B e validação autenticada/mobile ainda dependem dessa sessão. Nenhum dado ou configuração de produção foi alterado.
