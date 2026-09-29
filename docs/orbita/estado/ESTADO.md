@@ -141,4 +141,8 @@ Adicionei em Configurações → Formulário do site um cartão para conectar um
 
 O código está somente na branch `codex/orbita`; o preview ainda não foi atualizado. `F8` continua bloqueada pelos aceites E2E-A/B, validação autenticada/mobile e limpeza do tenant de teste. Nenhuma credencial CodeWords foi fornecida ou guardada.
 
-Verificação desta alteração: `node testes/relatorios.teste.mjs` 39/39, `node testes/rodar-tudo.mjs` 11/11 e `git diff --check` aprovados.
+Verificação da alteração CodeWords: `node testes/relatorios.teste.mjs` 39/39, `node testes/rodar-tudo.mjs` 11/11 e `git diff --check` aprovados.
+
+## Acesso do tenant de teste no preview — 2026-09-29
+
+No Chrome, a sessão aberta é `Conta E2E Órbita` com papel `ADMINISTRADOR`; a navegação mostra Configurações e, dentro dela, apenas Perfil. Isso é consequência do bloqueio intencional em `web/app/prontos.js` (`MODULOS_PRONTOS=[]`, `CONFIG_PRONTAS=["perfil"]`). A opção `?dev=1` exige `conta.super`, então não habilita os módulos para essa conta. O suporte da Nexus vê o CRM em outra sessão, sem compartilhar acesso com esse usuário. O link `#/crm` não contorna as permissões. Não houve alteração de permissões, banco, preview ou produção. F8 permanece pendente dos aceites E2E-A/B e mobile autenticado; depois deles, liberar os módulos aceitos conforme ESPEC §8–9.
