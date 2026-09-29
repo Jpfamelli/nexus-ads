@@ -1,12 +1,12 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 10:18 (America/Sao_Paulo)
+Atualizado: 2026-09-29 10:59 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
 ## Situação
 
-O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas. A pedido do João, substituí o link de recuperação que ainda estava ativo; há exatamente um link temporário válido e o formulário novo está aberto. João precisa salvar a senha e autenticar manualmente. A conta gestora já existe; RLS está habilitado na tabela do link; não criei outra conta nem alterei `nx_config`/código de ativação ou dados de clientes.
+O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas. João autenticou a conta gestora no preview; o tenant isolado `teste-e2e` foi criado e a conta administrativa sintética entrou no tenant. A tentativa de acessar `#/admin/clientes` por essa conta foi negada. E2E-A/B, webhook, paridade Ads, mobile autenticado, limpeza e produção seguem pendentes. Não alterei `nx_config`, dados da Kamiguchi ou produção.
 
 ## Frentes
 
@@ -19,7 +19,7 @@ O código das frentes está no branch para revisão. As seis Edge Functions est�
 | F5 — conversas | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Webhook/API real e E2E pendentes |
 | F6 — anúncios e relatórios | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Integrações e E2E reais pendentes |
 | F7 — automações | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Execução real e E2E pendentes |
-| F8 — entrega | Runner serial 11/11 e 10 smokes SQL reais aprovados | Funções e preview implantados; login manual, E2E autenticado, validação mobile e produção pendentes |
+| F8 — entrega | Runner serial 11/11 e 10 smokes SQL reais aprovados | Funções e preview implantados; sessão autenticada e tenant E2E prontos; E2E-A/B, mobile e produção pendentes |
 
 ## Verificações locais
 
@@ -33,7 +33,21 @@ O smoke `supabase/testes/09_isolamento.sql` prepara a org Nexus e uma revenda B,
 
 ## Bloqueios e próximo passo
 
-Bloqueios atuais: João precisa salvar a senha nova no formulário já aberto; depois criaremos o tenant `teste-e2e` e faremos E2E-A/B e validação mobile autenticada. O preview Netlify está disponível, mas não é deploy de produção. `prontos.js` continua bloqueando os módulos, a `main` não foi publicada e o PR #1 permanece draft.
+Bloqueios atuais: executar E2E-A/B no tenant `teste-e2e`, testar telas autenticadas a 375×812 e 390×844 e revisar console/isolamento. A conta sintética entrou no tenant; o teste de rota global de clientes foi negado como esperado. O preview Netlify ainda não é produção. `prontos.js` continua bloqueando os módulos, a `main` não foi publicada e o PR #1 permanece draft.
+
+## Retomada 2026-09-29 10:25
+
+João autenticou a conta gestora existente no preview Netlify. Pelo painel de plataforma, criei o tenant descartável `teste-e2e` (clínica odontológica, plano Profissional, teste até 13/10/2026); a tela inicial carregou e o CRM mostrou os dois funis padrão e as sete etapas de Pacientes. `?dev=1` foi usado apenas no preview para abrir módulos em construção; `web/app/prontos.js` continua bloqueando a liberação pública. Um convite de administrador foi gerado para o tenant, mas não foi compartilhado nem usado; João autorizou criar/remover a conta sintética e definirá a senha no navegador no passo do convite. O E2E-A/B segue pendente. Sem alterações em `nx_config`, dados da Kamiguchi ou produção.
+
+## Retomada 2026-09-29 10:47
+
+No tenant `teste-e2e`, criei um contato e uma oportunidade sintéticos, marquei o negócio como fechado e confirmei que sua origem permanece “Cadastro manual”. A tela Anúncios ainda não tem campanhas nem métricas, portanto não foi possível aceitar a paridade Ads/CRM. O canal de WhatsApp usa apenas valores falsos; a chamada de conexão retornou 190, como esperado para o token inválido. A conta isolada foi convidada e o formulário de criação de acesso está aberto numa aba Chrome separada; João digitará a senha diretamente ali. `node testes/rodar-tudo.mjs` passou 11/11. E2E do webhook/conversa/recibos, isolamento da conta, telas autenticadas em mobile e limpeza continuam pendentes. Sem uso de credenciais reais ou alterações em `nx_config`, Kamiguchi ou produção.
+
+## Retomada 2026-09-29 10:59
+
+João concluiu o convite da conta sintética. A sessão autenticada mostra “Conta E2E Órbita”, papel Administrador e o tenant de teste; a rota global `#/admin/clientes` foi negada com “Você não tem acesso a esta área”. A rota `#/crm` mostrou “Esta área chega em breve”, mantendo os módulos fechados em `prontos.js`. O painel de suporte segue no tenant `teste-e2e`. Não consultei URL de webhook, token ou app secret. Permanecem pendentes os testes assinados de conversa/recibo, paridade Ads (não há métricas no tenant), mobile autenticado, limpeza, publicação de produção e aceites E2E-A/B.
+
+O teste anônimo somente de leitura `GET /rest/v1/nx_contatos?select=id&limit=1`, sem sessão e usando a chave pública do app, respondeu HTTP 401. Nenhuma chave ou resposta de erro foi impressa.
 
 ## Retomada 2026-09-29 09:42
 
