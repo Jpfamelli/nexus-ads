@@ -17,6 +17,7 @@ const comandos = [
   ["--test", "testes/scripts.teste.mjs"],
   ["--test", "testes/conversas-funcoes.teste.mjs"],
   ["--test", "testes/automacoes.teste.mjs"],
+  ["--test", "testes/isolamento.teste.mjs"],
 ];
 
 const env = { ...process.env, ORBITA_COMPLETO: "1" };

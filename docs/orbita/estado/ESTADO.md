@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-28 22:31 (America/Sao_Paulo)
+Atualizado: 2026-09-28 23:22 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -23,9 +23,9 @@ O código das frentes está no branch para revisão. **O SaaS ainda não está p
 
 ## Verificações locais
 
-`node testes/rodar-tudo.mjs` passou em 10/10 suítes. Contagens desta execução: painel 70; app 46; CRM 34; conversas 33; relatórios 38; funções 39; scripts 12; funções de conversas 46; automações 24; núcleo aprovado.
+`node testes/rodar-tudo.mjs` passou em 11/11 suítes. Contagens: painel 70; app 46; CRM 34; conversas 33; relatórios 38; funções 39; scripts 12; funções de conversas 46; automações 24; isolamento estrutural 2; núcleo aprovado.
 
-O smoke `supabase/testes/09_isolamento.sql` foi criado, mas **não foi executado**. A revisão local também encontrou que sua cobertura atual não satisfaz a §8.4: testa contas de clínica dentro da mesma org, IDs de contato/negócio e oito RPCs escolhidas manualmente; faltam os casos de revenda A↔B, atendente, todas as entidades e sondas de RPCs derivadas de `pg_proc`, com hash das linhas de B antes/depois. Os smokes `04_crm.sql` e `04_crm_b.sql` também aguardam execução autenticada em transação com `ROLLBACK`.
+O smoke `supabase/testes/09_isolamento.sql` foi ampliado localmente: agora prepara a org Nexus e uma revenda B, contas admin/atendente, entidades de teste, varredura de RPCs concedidas a `anon` derivada de `pg_proc` e comparação de hash antes/depois das linhas de B. Erros SQL estruturais (classe 42) não passam como negação segura, com exceção de `42501`. O teste Node verifica a presença estrutural desses contratos. **O SQL ainda não foi executado nem validado pelo parser PostgreSQL**, então o aceite de isolamento segue pendente. `04_crm.sql` e `04_crm_b.sql` também aguardam execução autenticada em transação com `ROLLBACK`.
 
 ## Bloqueios e próximo passo
 
@@ -33,7 +33,7 @@ Nesta sessão, os conectores Supabase e Netlify não estavam autenticados (`USER
 
 Quando as conexões estiverem disponíveis:
 
-1. Completar `09_isolamento.sql` para cobrir a §8.4; então rodar `04_crm.sql`, `04_crm_b.sql` e `09_isolamento.sql` em transações de teste e fechar F4 apenas com resultado verde.
+1. Disponibilizar Supabase, executar `04_crm.sql`, `04_crm_b.sql` e `09_isolamento.sql` em transações de teste, corrigir falhas reais e fechar F4/isolamento apenas com resultado verde.
 2. Montar as pastas com `node scripts/montar-funcoes.mjs`; publicar somente `supabase/dist/<função>` com `verify_jwt=false`.
 3. Fazer o E2E-A/B em tenant de teste, verificar isolamento, CRM, WhatsApp, Ads, automações, layout a 390 px e console.
 4. Validar Netlify (`/` e `/index.html` → `/app/`) e só então habilitar módulos aceitos em `prontos.js`.
