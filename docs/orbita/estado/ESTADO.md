@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 08:15 (America/Sao_Paulo)
+Atualizado: 2026-09-29 08:20 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -29,7 +29,7 @@ Nesta retomada, Chrome headless abriu o login em 375×812 e 390×844. Nos dois t
 
 Nesta retomada, os seis entrypoints das Edge Functions passaram por `deno check` após validarem explicitamente as duas variáveis Supabase obrigatórias; os handlers também tipam `emSegundoPlano`. `node scripts/montar-funcoes.mjs` gerou as seis pastas planas; `node testes/rodar-tudo.mjs` passou 11/11 e `git diff --check` passou.
 
-O smoke `supabase/testes/09_isolamento.sql` agora prepara a org Nexus e uma revenda B, contas admin/atendente, entidades de teste, varredura de RPCs concedidas a `anon` derivada de `pg_proc` e comparação de hash antes/depois das linhas de B. A sonda reconhece que `nx_sair` é idempotente e aceita somente a resposta pública exata `[{"ok":true}]` sem sessão; qualquer outro conteúdo ainda reprova. As 14 migrations e os 10 smokes SQL (`01` a `09`, incluindo os dois CRM) passaram numa instância efêmera PGlite. Esse ensaio usou stubs para pgcrypto/unaccent, Vault, Storage e pg_cron, e omitiu índices que dependem do pg_trgm; é uma checagem local de sintaxe e comportamento, não substitui a execução em PostgreSQL/Supabase. O aceite real de `04_crm.sql`, `04_crm_b.sql` e `09_isolamento.sql` continua pendente.
+O smoke `supabase/testes/09_isolamento.sql` prepara a org Nexus e uma revenda B, contas admin/atendente, entidades de teste, varredura de RPCs concedidas a `anon` derivada de `pg_proc` e comparação de hash antes/depois das linhas de B. A sonda reconhece que `nx_sair` é idempotente e aceita somente a resposta pública exata `[{"ok":true}]` sem sessão; qualquer outro conteúdo reprova. As 14 migrations e os 10 smokes SQL passaram numa instância efêmera PGlite com stubs/índices omitidos; além disso, nesta retomada os 10 smokes passaram no Supabase real, em transações revertidas. O teste de interface E2E continua pendente.
 
 ## Bloqueios e próximo passo
 
@@ -77,7 +77,7 @@ Repeti `node testes/rodar-tudo.mjs`: 11/11 suítes passaram. `node scripts/monta
 
 Sem ferramentas Supabase/Netlify autenticadas nesta sessão, permanecem pendentes os smokes em PostgreSQL real, publicação das seis funções, configuração da URL no host e E2E. Nenhum banco, credencial ou serviço externo foi alterado; `prontos.js` continua bloqueando módulos sem aceite.
 
-## Retomada 2026-09-29 08:15
+## Retomada 2026-09-29 08:20
 
 Os 10 smokes SQL (`01` a `09`, incluindo `04_crm_b`) passaram no SQL Editor autenticado do projeto `dtjznipitihnwmcgpzqh`. Cada execução terminou em `ROLLBACK`; marcadores de sucesso e algumas exclusões exclusivas de fixtures foram adaptados semanticamente apenas no texto temporário enviado ao editor para contornar a tradução automática, sem modificar os arquivos fonte. Resultados conferidos na interface. A revisão F4 foi fechada.
 
