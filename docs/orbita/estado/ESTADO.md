@@ -1,12 +1,12 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 06:22 (America/Sao_Paulo)
+Atualizado: 2026-09-29 08:15 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
 ## Situação
 
-O código das frentes está no branch para revisão. **O SaaS ainda não está publicado nem pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Não houve alteração de dados de produção nem de `nx_config` nesta retomada.
+O código das frentes está no branch para revisão. **O SaaS ainda não está publicado nem pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas; não houve alteração persistente de dados nem de `nx_config` nesta retomada.
 
 ## Frentes
 
@@ -15,11 +15,11 @@ O código das frentes está no branch para revisão. **O SaaS ainda não está p
 | F1 — banco | Migrações `20260928a…h` aplicadas conforme o handoff e o `AGENTS.md` | Não revalidado nesta retomada |
 | F2 — funções | Handlers e testes locais preparados para seis funções | Deploy do Órbita pendente; em produção permanecem as três funções v2 anteriores |
 | F3 — acesso e white-label | Implementação local existente; módulos dependem do aceite geral | Sem URL Netlify confirmada |
-| F4 — CRM | Implementação local e testes Node aprovados; revisão adversarial continua aberta | `04_crm.sql` e `04_crm_b.sql` precisam passar no Supabase |
+| F4 — CRM | Implementação, revisão e testes aprovados | `04_crm.sql` e `04_crm_b.sql` passaram no Supabase com `ROLLBACK` |
 | F5 — conversas | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Webhook/API real e E2E pendentes |
 | F6 — anúncios e relatórios | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Integrações e E2E reais pendentes |
 | F7 — automações | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Execução real e E2E pendentes |
-| F8 — entrega | Runner serial, smoke SQL de isolamento, documentação e gating no branch | SQL, deploy, Netlify e E2E pendentes |
+| F8 — entrega | Runner serial e 10 smokes SQL reais aprovados; documentação e gating no branch | Deploy das funções, Netlify e E2E pendentes |
 
 ## Verificações locais
 
@@ -33,7 +33,7 @@ O smoke `supabase/testes/09_isolamento.sql` agora prepara a org Nexus e uma reve
 
 ## Bloqueios e próximo passo
 
-Bloqueios atuais: o CLI Supabase está disponível por `npx`, mas a checagem somente de leitura de funções no projeto autorizado retornou `AccessTokenRequired`; o login ainda não está disponível no shell. O CLI Netlify está autenticado, porém falta vincular o site. Sem essas etapas, não é possível confirmar os testes SQL, publicar as seis funções, validar o host ou executar os E2E reais. `gh pr checks 1` não reportou verificações automáticas.
+Bloqueios atuais: CLI/MCP Supabase ou Netlify não estão disponíveis para publicar as seis funções ou vincular o host; não existe tenant `teste-e2e` dedicado nem URL Netlify confirmada. Assim, E2E-A/B e validação mobile autenticada permanecem pendentes. `prontos.js` continua bloqueando os módulos, a `main` não foi publicada e o PR #1 permanece draft.
 
 Na retomada das 01:22, o painel web do Supabase abriu o projeto correto, mas ainda não havia consulta. A política do navegador bloqueou abrir os arquivos SQL locais como página; sem um conector Supabase MCP, os smokes integrais continuavam pendentes. A retomada das 01:37 confirmou acesso de leitura pelo Dashboard, conforme registrado abaixo. Nenhum token foi usado; revogar os tokens que ficaram visíveis durante a tentativa.
 
@@ -76,3 +76,9 @@ Não enviar segredos para arquivos, logs, Git ou mensagens. Não alterar `nx_con
 Repeti `node testes/rodar-tudo.mjs`: 11/11 suítes passaram. `node scripts/montar-funcoes.mjs` regenerou as seis pastas planas e `npx --yes deno check` passou nos seis entrypoints de `supabase/dist`, a estrutura de deploy definida pelo contrato.
 
 Sem ferramentas Supabase/Netlify autenticadas nesta sessão, permanecem pendentes os smokes em PostgreSQL real, publicação das seis funções, configuração da URL no host e E2E. Nenhum banco, credencial ou serviço externo foi alterado; `prontos.js` continua bloqueando módulos sem aceite.
+
+## Retomada 2026-09-29 08:15
+
+Os 10 smokes SQL (`01` a `09`, incluindo `04_crm_b`) passaram no SQL Editor autenticado do projeto `dtjznipitihnwmcgpzqh`. Cada execução terminou em `ROLLBACK`; marcadores de sucesso e algumas exclusões exclusivas de fixtures foram adaptados semanticamente apenas no texto temporário enviado ao editor para contornar a tradução automática, sem modificar os arquivos fonte. Resultados conferidos na interface. A revisão F4 foi fechada.
+
+`node testes/rodar-tudo.mjs` passou 11/11 suítes. Ainda faltam publicar as seis Edge Functions, criar um tenant de teste isolado, concluir E2E-A/B, vincular/configurar Netlify e validar telas autenticadas a 390 px e o console. Não houve deploy, alteração persistente no banco, edição de `nx_config` ou publicação na `main`; os módulos seguem bloqueados em `web/app/prontos.js`.
