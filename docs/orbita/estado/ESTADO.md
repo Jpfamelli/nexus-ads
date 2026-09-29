@@ -1,7 +1,7 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-28 22:01 (America/Sao_Paulo)  
-Branch: `codex/orbita`  
+Atualizado: 2026-09-28 22:01 (America/Sao_Paulo)
+Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
 ## Situação
