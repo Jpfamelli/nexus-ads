@@ -1,6 +1,6 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 10:59 (America/Sao_Paulo)
+Atualizado: 2026-09-29 11:12 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
@@ -19,7 +19,7 @@ O código das frentes está no branch para revisão. As seis Edge Functions est�
 | F5 — conversas | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Webhook/API real e E2E pendentes |
 | F6 — anúncios e relatórios | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Integrações e E2E reais pendentes |
 | F7 — automações | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Execução real e E2E pendentes |
-| F8 — entrega | Runner serial 11/11 e 10 smokes SQL reais aprovados | Funções e preview implantados; sessão autenticada e tenant E2E prontos; E2E-A/B, mobile e produção pendentes |
+| F8 — entrega | Runner serial 11/11 e 10 smokes SQL reais aprovados | Funções e preview implantados; conta administrativa de teste autenticada; CRM e lista de conversas verificados no suporte; webhook assinado, Ads/paridade, E2E completo, mobile autenticado, limpeza e produção pendentes |
 
 ## Verificações locais
 
@@ -33,7 +33,7 @@ O smoke `supabase/testes/09_isolamento.sql` prepara a org Nexus e uma revenda B,
 
 ## Bloqueios e próximo passo
 
-Bloqueios atuais: executar E2E-A/B no tenant `teste-e2e`, testar telas autenticadas a 375×812 e 390×844 e revisar console/isolamento. A conta sintética entrou no tenant; o teste de rota global de clientes foi negado como esperado. O preview Netlify ainda não é produção. `prontos.js` continua bloqueando os módulos, a `main` não foi publicada e o PR #1 permanece draft.
+Bloqueios atuais: executar E2E-A/B no tenant `teste-e2e`, incluindo webhook assinado, recibos, origem e métricas de anúncio; testar telas autenticadas a 375×812 e 390×844 e revisar console/isolamento; depois limpar o tenant e só então publicar produção. A conta administrativa sintética autenticou no tenant e não acessa a rota global de clientes. O preview Netlify ainda não é produção. `prontos.js` continua bloqueando os módulos, a `main` não foi publicada e o PR #1 permanece draft.
 
 ## Retomada 2026-09-29 10:25
 
@@ -116,6 +116,12 @@ Auditei os 42 assets locais referenciados pelo preview Netlify (HTML, JavaScript
 ## Retomada 2026-09-29 09:02
 
 Corrigi em F8.md uma afirmação histórica desatualizada sobre `09_isolamento.sql`: o arquivo atual já passou no Supabase em transação revertida, conforme o marco das 08:20. Consultei o PR #1: continua aberto em rascunho e o GitHub não reporta checks configurados para o branch. O bloqueio funcional continua sendo o login manual no preview.
+
+## Retomada 2026-09-29 11:12
+
+João confirmou a criação da conta administrativa descartável. A sessão mostrou o tenant de teste; a conta já havia sido impedida de abrir a administração global e continua sem ver módulos ainda não aceitos. No suporte do gestor, o CRM e a lista de Conversas abriram no preview; o CRM mostra apenas a oportunidade sintética fechada e Conversas está vazia. O canal WhatsApp de teste permanece pendente, com token falso.
+
+Rodei novamente `node testes/rodar-tudo.mjs` (11/11), gerei as seis pastas com `node scripts/montar-funcoes.mjs`, validei os seis entrypoints com `npx --yes deno check` (código 0) e confirmei `git diff --check`. Nenhum dado foi gravado neste ciclo. `web/app/prontos.js` segue com módulos vazios. E2E-A/B, assinatura de webhook e recibos, métricas e paridade Ads, testes autenticados a 375×812/390×844 com console, limpeza e produção continuam pendentes; por isso não liberei módulos nem publiquei na `main` ou no Netlify de produção.
 
 ## Retomada 2026-09-29 10:01
 
