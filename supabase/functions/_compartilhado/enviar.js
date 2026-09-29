@@ -387,7 +387,7 @@ async function modoCron(req, env, deps, f) {
 /**
  * @param {Request} req
  * @param {{url: string, chave: string}} env
- * @param {{fetch?: Function, agora?: Date|Function, prazoRede?: number}} [deps]
+ * @param {{fetch?: Function, agora?: Date|Function, prazoRede?: number, emSegundoPlano?: (p: Promise<unknown>) => void}} [deps]
  */
 export async function tratar(req, env, deps = {}) {
   const f = deps.fetch || globalThis.fetch;

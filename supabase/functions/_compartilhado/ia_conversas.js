@@ -61,7 +61,7 @@ export function montarPrompt(acao, cx, delim) {
 }
 
 /**
- * @param {{fetch?: Function, ia?: () => Promise<{perguntarClaude: Function}>}} [deps]
+ * @param {{fetch?: Function, ia?: () => Promise<{perguntarClaude: Function}>, emSegundoPlano?: (p: Promise<unknown>) => void}} [deps]
  *        deps.ia carrega o ia.js (import dinâmico no index.ts); ausente → ia_indisponivel.
  */
 export async function tratar(req, env, deps = {}) {

@@ -141,7 +141,7 @@ export async function arquivosDaPasta(st, pasta, max = 1000) {
    ------------------------------------------------------------ */
 const PAPEL = { subir: "atendente", subir_direto: "atendente", ver: "leitura", apagar: "admin" };
 
-/** @param {{fetch?: Function, agora?: Date|Function}} [deps] */
+/** @param {{fetch?: Function, agora?: Date|Function, emSegundoPlano?: (p: Promise<unknown>) => void}} [deps] */
 export async function tratar(req, env, deps = {}) {
   const f = deps.fetch || globalThis.fetch;
   return tratarPainel(req, async () => {

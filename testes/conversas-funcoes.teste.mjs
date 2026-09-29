@@ -1470,6 +1470,12 @@ test("montar-funcoes: as 6 pastas planas, com o handler certo e importáveis", a
     assert.match(readFileSync(join(RAIZ, "supabase/functions", fn, "index.ts"), "utf8"), /EdgeRuntime\?\.waitUntil/);
   }
   assert.match(readFileSync(join(RAIZ, "supabase/functions/nx-ia/index.ts"), "utf8"), /ia: \(\) => import\("\.\/ia\.js"\)/);
+  for (const fn of Object.keys(handler)) {
+    const idx = readFileSync(join(RAIZ, "supabase/functions", fn, "index.ts"), "utf8");
+    assert.match(idx, /function envObrigatorio\(nome: string\): string/ , `${fn}: valida variáveis obrigatórias no início`);
+    assert.match(idx, /envObrigatorio\("SUPABASE_URL"\)/, `${fn}: URL validada`);
+    assert.match(idx, /envObrigatorio\("SUPABASE_SERVICE_ROLE_KEY"\)/, `${fn}: service role validada`);
+  }
 });
 
 test("simular-webhook: corpo do Apêndice C assinado; aceito pela nx-whatsapp; --pid de outro número → canal_divergente", async () => {

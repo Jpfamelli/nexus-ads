@@ -3,7 +3,13 @@
 // O SDK da Anthropic só é carregado (ia.js) quando há chave e a conversa já foi conferida.
 import { tratar } from "./ia_conversas.js";
 
-const env = { url: Deno.env.get("SUPABASE_URL"), chave: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") };
+function envObrigatorio(nome: string): string {
+  const valor = Deno.env.get(nome);
+  if (valor) return valor;
+  throw new Error(`Variável de ambiente obrigatória ausente: ${nome}`);
+}
+
+const env = { url: envObrigatorio("SUPABASE_URL"), chave: envObrigatorio("SUPABASE_SERVICE_ROLE_KEY") };
 // deno-lint-ignore no-explicit-any
 const emSegundoPlano = (p: Promise<unknown>) => (globalThis as any).EdgeRuntime?.waitUntil(p) ?? p;
 
