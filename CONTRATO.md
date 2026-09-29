@@ -464,6 +464,6 @@ e `docs/orbita/estado/` registra os resultados de cada frente.
 - `MODULOS_PRONTOS` e `CONFIG_PRONTAS` só recebem módulos depois dos aceites definidos em
   `docs/orbita/ESPEC.md` e verificados no ambiente real. Até lá, os caminhos não liberados
   ficam fora do menu de clientes.
-- Para o status exato, confira `docs/orbita/estado/F1.md`…`F8.md` e o `ESTADO.md` de entrega.
+- Para o status exato, confira `docs/orbita/estado/ESTADO.md` e os detalhes de cada frente em `docs/orbita/estado/F1.md`…`F8.md`.
   O runner local é `node testes/rodar-tudo.mjs`; ele executa serialmente a suíte Node, não
   substitui os smokes SQL nem os E2E no Supabase/host.

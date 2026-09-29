@@ -34,7 +34,7 @@ node --test testes/funcoes.teste.mjs      # Edge Functions (PostgREST, Meta, Goo
 node testes/painel.teste.mjs              # painel
 ```
 
-O estado de cada frente, os aceites que faltam e o que está publicado ficam em
-`docs/orbita/estado/`. Não declare
+O estado geral, os aceites que faltam e o que está publicado ficam em
+`docs/orbita/estado/ESTADO.md`; cada frente tem detalhes em `docs/orbita/estado/`. Não declare
 um módulo do app como disponível enquanto ele não estiver em `web/app/prontos.js` e não
 passar pelo aceite real correspondente.
