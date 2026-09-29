@@ -35,6 +35,6 @@ node testes/painel.teste.mjs              # painel
 ```
 
 O estado de cada frente, os aceites que faltam e o que está publicado ficam em
-`docs/orbita/estado/` e no arquivo de acompanhamento F8 fora do repositório. Não declare
+`docs/orbita/estado/`. Não declare
 um módulo do app como disponível enquanto ele não estiver em `web/app/prontos.js` e não
 passar pelo aceite real correspondente.
