@@ -211,3 +211,8 @@ A migração aditiva `20260929c_cards_origem.sql` foi ensaiada com o smoke 11 em
 ## Atualização do PR e preview — 2026-09-29 23:58
 
 O commit `40b4f7b` foi enviado a `origin/codex/orbita`; PR #1 segue aberto como rascunho e sem verificações de CI reportadas. O preview único `6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app/app/` responde 200 com CSP, mas o preview-overlay `6abbd2ff7054e92bd9532b7b` ainda serve uma configuração anterior com Início/Conversas/CRM/Ads; a raiz `orbita-nexus-ads.netlify.app` responde 404. Não encontrei ferramenta ou autenticação Netlify disponível nesta sessão para criar um novo deploy. Nenhum deploy de produção foi feito.
+## Retomada 2026-09-30 00:06 — Netlify e próximo aceite
+
+O repositório está limpo na branch `codex/orbita`, commit `14b5a32`; PR #1 permanece aberto como draft e sem status checks reportados. A sessão autenticada do Netlify confirmou que `orbita-nexus-ads` ainda não está conectado a um repositório e não tem deploy de produção; os dois previews existentes são anteriores e não recebem os commits atuais. Para gerar um Deploy Preview do PR, é necessário vincular `Jpfamelli/nexus-ads`, o que concede ao Netlify acesso ao repositório. Nenhuma conexão ou publicação foi feita enquanto essa permissão não é confirmada.
+
+F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA responsivo descritos em F8) estão verdes. O tenant `teste-e2e` ainda precisa de canal CodeWords e métricas Meta/Google isoladas para concluir o teste de ida e volta, recibos e paridade de Ads; continuam pendentes o E2E autenticado, validação mobile autenticada e limpeza. `web/app/prontos.js` permanece bloqueado e a `main`/produção não foram alteradas.
