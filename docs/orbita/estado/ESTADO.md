@@ -222,4 +222,10 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 - Revisei o mock local no CRM em desktop e no chat em tela estreita. O CRM agora tem cabeçalho de funil e cartões com mais hierarquia; o chat prioriza nome/telefone e separa as ações no celular.
 - O shell ganhou uma aurora lenta, pontos orbitais, feedback de navegação e foco visível; a marca branca continua a controlar as cores e movimento reduzido desativa os efeitos.
 - Assets do shell versionados como `20260930a`. `node testes/rodar-tudo.mjs`: **14/14**; `git diff --check`: aprovado.
-- Código ainda local na branch `codex/orbita`; Netlify não conectado ao repositório nesta etapa. Não houve deploy, alteração em dados/configuração do Supabase, nem publicação na `main`. F8 segue incompleta pelos gates E2E-A/B, canal CodeWords de teste, métricas Ads isoladas, QA mobile autenticado e limpeza de fixtures.
+- O commit `e80158c` (`feat(ui): elevar a experiência visual do Órbita`) foi enviado a `origin/codex/orbita` e está no PR #1, ainda draft. Netlify não conectado ao repositório nesta etapa. Não houve deploy, alteração em dados/configuração do Supabase, nem publicação na `main`. F8 segue incompleta pelos gates E2E-A/B, canal CodeWords de teste, métricas Ads isoladas, QA mobile autenticado e limpeza de fixtures.
+
+## Proteção para Deploy Preview — 2026-09-30 00:35 -03
+
+- `netlify.toml` ignora builds da branch `main` antes do aceite F8; Deploy Previews da branch do PR continuam elegíveis. O comando exato de ignore passou no Bash para `main` (retorna 0/ignora) e `codex/orbita` (retorna 1/continua). A regra cobre builds contínuos, não deploys manuais ou build hooks.
+- O site `orbita-nexus-ads` ainda não está conectado ao repositório. O vínculo aguarda confirmação de ação no momento da conexão, pois concede acesso persistente ao repo.
+- Nenhum deploy remoto nem escrita em Supabase foi feito. F8 segue aberta para E2E-A/B, canal CodeWords de teste, métricas Ads isoladas, QA mobile autenticado e limpeza de fixtures.

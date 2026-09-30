@@ -9,6 +9,8 @@
 [build]
   publish = "web"
   command = ""
+  # Evita publicação na branch de produção antes do aceite F8; Deploy Previews seguem ativos.
+  ignore = "if [ \"$BRANCH\" = \"main\" ]; then exit 0; else exit 1; fi"
 
 [[redirects]]
   from = "/"
