@@ -40,7 +40,7 @@ const PRETO = "#000000";
 
 const FIXOS = {
   escuro: { ok: "#7FD1A5", ruim: "#F08A74", aten: "#E5B35C", info: "#8FB8DD", meta: "#6FA3CF", google: "#CF9540" },
-  claro: { ok: "#1E7A4C", ruim: "#B3261E", aten: "#8A5A00", info: "#2B5A80", meta: "#2B5A80", google: "#8A5A00" },
+  claro: { ok: "#1A6E44", ruim: "#B3261E", aten: "#8A5A00", info: "#2B5A80", meta: "#2B5A80", google: "#8A5A00" },
 };
 
 const RE_HEX = /^#[0-9a-f]{6}$/i;

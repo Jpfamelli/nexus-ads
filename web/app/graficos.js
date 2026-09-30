@@ -394,7 +394,7 @@ export function barras(alvo, o) {
     lista.append(li);
   });
   if (!reduzido()) lista.classList.add("g-anim");
-  alvo.append(lista, o.series.length > 1 ? legenda(o.series) : null);
+  alvo.append(...[lista, o.series.length > 1 ? legenda(o.series) : null].filter(Boolean));
   return { destruir() {} };
 }
 

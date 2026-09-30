@@ -129,7 +129,7 @@ export function criarChat(A) {
         h("span", { class: "cvc-sub" },
           ct.telefone ? h("span", null, ui.telBR(ct.telefone)) : null,
           h("i", { class: "cvc-via-sep" }, "·"), h("span", { class: "cvc-via" }, canal),
-          h("i", null, "·"), h("span", { class: "mono" }, conv.protocolo || ""))));
+          h("i", { class: "cvc-proto-sep" }, "·"), h("span", { class: "mono" }, conv.protocolo || ""))));
 
     const selos = faixa;
     ui.limpar(faixa);

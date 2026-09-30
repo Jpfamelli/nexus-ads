@@ -39,6 +39,11 @@
 .cvl-abas { display: flex; gap: .35rem; padding: 0 1rem .7rem; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; scroll-padding-inline: 1rem; border-bottom: 1px solid var(--c-borda);
   -webkit-mask-image: linear-gradient(to right, black calc(100% - 2.2rem), transparent); mask-image: linear-gradient(to right, black calc(100% - 2.2rem), transparent); }
 .cvl-abas::-webkit-scrollbar { display: none; }
+/* desktop: com mouse não há como rolar a faixa na horizontal, e "Todas abertas / Pendentes / Resolvidas" ficavam escondidas além da borda
+   da coluna de 320 px; aqui as abas quebram em duas linhas (no celular continua a faixa rolável com a máscara de esmaecer) */
+@media (min-width: 761px) {
+  .cvl-abas { flex-wrap: wrap; overflow-x: visible; row-gap: .35rem; -webkit-mask-image: none; mask-image: none; }
+}
 .cvl-aba {
   flex: none; scroll-snap-align: start; display: inline-flex; align-items: center; gap: .4rem; min-height: 34px; padding: .3rem .8rem;
   border-radius: 999px; border: 1px solid var(--c-borda-2); color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 600; white-space: nowrap;
@@ -46,8 +51,8 @@
 }
 .cvl-aba:hover { color: var(--c-texto); border-color: var(--c-texto-3); }
 .cvl-aba[aria-selected="true"] { background: var(--c-texto); color: var(--c-fundo); border-color: var(--c-texto); }
-.cvl-aba .n { font-family: var(--f-mono); font-size: var(--fs-11); font-weight: 500; opacity: .75; }
-.cvl-aba[aria-selected="true"] .n { opacity: 1; }
+.cvl-aba .n { font-family: var(--f-mono); font-size: var(--fs-11); font-weight: 500; color: var(--c-texto-2); } /* antes opacity .75 → 3,5:1 */
+.cvl-aba[aria-selected="true"] .n { opacity: 1; color: inherit; }
 .cvl-aba .n[data-alerta="1"] { color: var(--c-prim-luz); opacity: 1; }
 .cvl-aba[aria-selected="true"] .n[data-alerta="1"] { color: var(--c-fundo); }
 @media (max-width: 760px), (pointer: coarse) {
@@ -131,6 +136,9 @@
 .cvc-sub { display: flex; gap: .45rem; align-items: center; min-width: 0; font-size: var(--fs-13); color: var(--c-texto-2); white-space: nowrap; overflow: hidden; }
 .cvc-sub .mono { font-size: var(--fs-11); color: var(--c-texto-3); letter-spacing: .04em; }
 .cvc-sub i { font-style: normal; color: var(--c-texto-3); }
+/* subtítulo em flex: só o nome do número encolhe (com reticências); telefone e protocolo não são cortados no meio */
+.cvc-sub > * { flex: none; }
+.cvc-sub .cvc-via { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .cvc-selos { display: flex; gap: .35rem; align-items: center; flex-wrap: wrap; padding: .45rem 1rem; background: color-mix(in srgb, var(--c-sup) 72%, transparent); border-bottom: 1px solid var(--c-borda); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); position: relative; z-index: 1; }
 .cvc-selos:empty { display: none; }
 .cvc-selos .pilula { min-height: 24px; font-size: var(--fs-12); }
@@ -200,7 +208,7 @@
 /* nota interna (amarela) */
 .cv-msg[data-tipo="nota"] { max-width: min(86%, 44rem); }
 .cv-msg[data-tipo="nota"] .cv-bolha { background: var(--c-nota); color: var(--c-nota-txt); border: 1px solid color-mix(in srgb, var(--c-aten) 45%, transparent); border-left: 4px solid var(--c-aten); border-radius: 12px; }
-.cv-nota-rot { display: flex; align-items: center; gap: .35rem; margin-bottom: .2rem; font-family: var(--f-mono); font-size: var(--fs-11); letter-spacing: .08em; text-transform: uppercase; color: var(--c-aten); }
+.cv-nota-rot { display: flex; align-items: center; gap: .35rem; margin-bottom: .2rem; font-family: var(--f-mono); font-size: var(--fs-11); letter-spacing: .08em; text-transform: uppercase; color: color-mix(in srgb, var(--c-aten) 82%, var(--c-texto)); }
 .cv-nota-rot .ic { width: 13px; height: 13px; }
 
 /* mensagem do sistema */
@@ -319,7 +327,7 @@
 .cvt-neg-l1 .mono { font-size: var(--fs-13); color: var(--c-texto); white-space: nowrap; }
 .cvt-neg-l2 { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; min-width: 0; }
 .cvt-neg[data-ligado="1"] { border-color: color-mix(in srgb, var(--c-prim) 55%, transparent); }
-.cvt-ligado { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--c-prim-luz); }
+.cvt-ligado { font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: color-mix(in srgb, var(--c-prim-luz) 78%, var(--c-texto)); }
 .cvt-tar { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .1rem .6rem; align-items: start; padding: .45rem 0; }
 .cvt-tar + .cvt-tar { border-top: 1px solid var(--c-borda); }
 .cvt-tar input { width: 18px; height: 18px; margin-top: .15rem; accent-color: var(--c-prim); }
@@ -632,13 +640,20 @@
   .cvc-acoes { grid-area: acoes; justify-content: flex-end; flex-wrap: wrap; gap: .2rem; padding-left: 38px; }
   .cvc-acoes > .bt:not(.bt-icone) { min-height: 40px; padding: .35rem .8rem; }
   .cvc-acoes .bt-icone { width: 40px; height: 40px; }
+  /* a faixa de ações tem linha própria: o botão volta a mostrar "Resolver" em vez de ficar só com o ✓ esticado */
+  .cvc-acoes .rot-longo { display: inline; }
   .cvc-selos { border-bottom-color: color-mix(in srgb, var(--c-borda) 75%, transparent); }
   .cvx { padding-bottom: calc(.6rem + env(safe-area-inset-bottom)); }
+  /* compositor no celular: campo de texto na largura toda; ferramentas e enviar numa linha embaixo (antes o campo ficava com ~120 px) */
+  .cvx-linha { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "campo campo" "ferr enviar"; gap: .3rem .4rem; align-items: center; }
+  .cvx-campo { grid-area: campo; }
+  .cvx-ferr { grid-area: ferr; min-width: 0; }
+  .cvx-enviar { grid-area: enviar; }
 }
 @media (max-width: 390px) {
   .cvc-acoes { padding-left: 0; justify-content: space-between; }
   .cvc-acoes > .bt:not(.bt-icone) { flex: 1; }
-  .cvc-sub .mono { display: none; }
+  .cvc-sub .mono, .cvc-sub .cvc-proto-sep { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .cvc-quem:hover { transform: none; }

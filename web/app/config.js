@@ -954,7 +954,8 @@ async function secaoPlano(ctx, alvo) {
       h("div", { class: "linha" }, (r.modulos || []).map(m => ui.pilula(ROT_MOD[m] || m, "neutra"))),
       wa ? h("a", { class: "bt bt-sec", href: ui.linkWhatsApp(`Olá! Quero falar sobre o plano da ${ctx.cliente.nome}.`, wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Falar com o suporte") : null));
   const usos = h("div", { class: "adm-uso" }, USO_ROT.map(([k, rot]) => ui.barraUso(rot, r.uso ? r.uso[k] : 0, r.limites ? r.limites[k] : null)));
-  alvo.append(cab,
+  // Element.append() transforma null em texto: só entram os blocos que existem
+  alvo.append(...[cab,
     cheios.length || perto.length ? h("div", { class: ["aviso", cheios.length ? "aviso-ruim" : "aviso-aten"] }, ui.icone("alerta"), h("p", null,
       [cheios.length ? `No limite do plano: ${lista(cheios)}.` : null, perto.length ? `Perto do limite: ${lista(perto)}.` : null, "Para aumentar, fale com o suporte."].filter(Boolean).join(" "))) : null,
     h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Uso do plano"),
@@ -965,5 +966,5 @@ async function secaoPlano(ctx, alvo) {
       h("div", { class: "adm-uso" },
         ui.barraUso("Clientes", r.org.uso.empresas, r.org.limites ? r.org.limites.empresas : null),
         ui.barraUso("Usuários", r.org.uso.usuarios, r.org.limites ? r.org.limites.usuarios : null),
-        ui.barraUso("Números de WhatsApp", r.org.uso.canais, r.org.limites ? r.org.limites.canais : null))) : null);
+        ui.barraUso("Números de WhatsApp", r.org.uso.canais, r.org.limites ? r.org.limites.canais : null))) : null].filter(Boolean));
 }

@@ -767,9 +767,9 @@ async function telaDominios(ctx, corpo) {
   const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Domínio");
   novo.setAttribute("aria-label", "Novo domínio");
   const lista = h("div", { class: "dom-grade" }, ui.esqueleto("cartoes", 2));
-  corpo.append(
+  corpo.append(...[
     superConta ? h("div", { class: "aviso" }, ui.icone("info"), h("p", null, "Para ativar: no Netlify, em Domain management → Add a domain alias, adicione o endereço; espere o certificado HTTPS sair e só então clique em Marcar ativo.")) : null,
-    h("div", { class: "adm-filtros" }, filtro, h("span", { class: "marca-espaco" }), novo), lista);
+    h("div", { class: "adm-filtros" }, filtro, h("span", { class: "marca-espaco" }), novo), lista].filter(Boolean));
   let dados = [], cfg = null;
   async function carregar() {
     ui.limpar(lista); lista.append(ui.esqueleto("cartoes", 2));

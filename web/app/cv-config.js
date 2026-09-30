@@ -219,7 +219,7 @@ async function montarNumeros(ctx, alvo) {
     const campos = h("div", { class: "grade-2 cfg-cw-grid" },
       ui.campo({ rotulo: "Nome do canal", nome: "nome", valor: atual?.nome || "WhatsApp via CodeWords", max: 40, obrigatorio: true }),
       ui.campo({ rotulo: "Número do WhatsApp", nome: "numero_exibicao", tipo: "tel", valor: atual?.numero_exibicao || cw.numero || "", max: 30, placeholder: "+55 12 99999-9999", obrigatorio: true }));
-    form.append(h("p", { class: "sub" }, "Conecte o aparelho do WhatsApp e receba as conversas nesta caixa. A chave fica protegida no servidor."),
+    form.append(...[h("p", { class: "sub" }, "Conecte o aparelho do WhatsApp e receba as conversas nesta caixa. A chave fica protegida no servidor."),
       campos, chaveSalva, h("div", { class: "linha cfg-cw-key-row" }, trocarChave), chaveWrap,
       ui.campo({ rotulo: "Service ID do fluxo de IA", nome: "codewords_service_id", valor: cw.service_id || "", max: 120, autocomplete: "off",
         ajuda: "Opcional para conectar. Necessário somente para encaminhar as mensagens ao agente do CodeWords." }),
@@ -233,7 +233,7 @@ async function montarNumeros(ctx, alvo) {
           ajuda: "Quando desligada, o fluxo não responde automaticamente por este número. Só vale quando o destino estiver ligado ao fluxo de IA." }),
         ui.campo({ rotulo: "A IA volta automaticamente após", nome: "ia_volta_horas", tipo: "select", valor: String(cw.ia_volta_horas ?? 6),
           opcoes: [{ valor: "1", rotulo: "1 hora" }, { valor: "2", rotulo: "2 horas" }, { valor: "4", rotulo: "4 horas" }, { valor: "6", rotulo: "6 horas" }, { valor: "8", rotulo: "8 horas" }, { valor: "12", rotulo: "12 horas" }, { valor: "24", rotulo: "24 horas" }, { valor: "48", rotulo: "48 horas" }, { valor: "72", rotulo: "72 horas" }, { valor: "168", rotulo: "7 dias" }, { valor: "0", rotulo: "Somente quando a equipe devolver" }] }),
-        h("p", { class: "sub" }, "Esse prazo começa quando alguém da equipe assume uma conversa.")));
+        h("p", { class: "sub" }, "Esse prazo começa quando alguém da equipe assume uma conversa."))].filter(Boolean));
     const operacoes = h("section", { class: "cfg-cw-ops pilha", hidden: !atual?.id },
       h("div", { class: "cfg-cw-ops-head" }, h("h3", { class: "titulo-sec" }, "Conectar e validar"),
         h("p", { class: "sub" }, "Confira o estado do aparelho antes de encaminhar mensagens.")));
@@ -461,8 +461,8 @@ async function montarNumeros(ctx, alvo) {
           ui.limpar(res);
           try {
             const r = await ui.carregando(bT, ctx.api.fn("nx-enviar", { acao: "testar_canal", canal: atual.id }));
-            res.append(ui.pilula(`Número ${r && r.numero ? r.numero : ""} ✓`, "ok"), ui.pilula(r && r.app_inscrito ? "App inscrito ✓" : "App inscrito ✗", r && r.app_inscrito ? "ok" : "ruim"),
-              r && r.qualidade ? ui.pilula(`Qualidade ${r.qualidade}`, "neutra") : null);
+            res.append(...[ui.pilula(`Número ${r && r.numero ? r.numero : ""} ✓`, "ok"), ui.pilula(r && r.app_inscrito ? "App inscrito ✓" : "App inscrito ✗", r && r.app_inscrito ? "ok" : "ruim"),
+              r && r.qualidade ? ui.pilula(`Qualidade ${r.qualidade}`, "neutra") : null].filter(Boolean));
           } catch (e) { res.appendChild(h("p", { class: "sub" }, erroFuncao(e))); }
         });
         bS.addEventListener("click", async () => {

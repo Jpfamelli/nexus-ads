@@ -35,7 +35,9 @@
 .crm-chip .ic { width: 13px; height: 13px; }
 .crm-chips-limpar { font-size: var(--fs-13); }
 
-.crm-filtros { display: flex; flex-direction: column; gap: .9rem; width: min(360px, calc(100vw - 32px)); }
+/* o painel .flut limita a largura a 320 px e tem 0,7 rem de respiro: o conteúdo de 343 px (360 - margens) ficava cortado no celular */
+.flut-crm { max-width: min(384px, calc(100vw - 16px)); }
+.crm-filtros { display: flex; flex-direction: column; gap: .9rem; width: min(360px, calc(100vw - 42px)); }
 .crm-filtros .rotulo { margin-bottom: .2rem; }
 .crm-filtros-grupo { display: flex; flex-direction: column; gap: .45rem; }
 .crm-filtros-linha { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .5rem; }
@@ -181,9 +183,11 @@
 .ng-titulo {
   width: 100%; min-width: 0; padding: .2rem .4rem; margin-left: -.4rem; border-radius: 10px; border: 1px solid transparent; background: none;
   font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-25); letter-spacing: -.015em; line-height: 1.15; color: var(--c-texto);
+  text-overflow: ellipsis; /* título comprido termina com "…" em vez de ser cortado seco na borda */
 }
 .ng-titulo:hover { border-color: var(--c-borda); }
 .ng-titulo:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 0; border-color: var(--c-prim); background: var(--c-fundo); }
+@media (max-width: 760px) { .ng-titulo { font-size: var(--fs-20); min-height: 40px; } }
 .ng-linha1 { display: flex; align-items: center; gap: .5rem 1rem; flex-wrap: wrap; min-width: 0; }
 .ng-valor { display: flex; align-items: baseline; gap: .5rem; min-width: 0; }
 .ng-valor b { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-31); letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; }
@@ -221,8 +225,9 @@
 .ng-kv { display: grid; grid-template-columns: minmax(0, 9.5rem) minmax(0, 1fr); gap: .45rem 1rem; align-items: start; }
 .ng-kv > dt { color: var(--c-texto-3); font-size: var(--fs-13); padding-top: .55rem; }
 .ng-kv > dd { min-width: 0; font-size: var(--fs-14); }
-.ng-contato { display: flex; align-items: center; gap: .8rem; min-width: 0; }
-.ng-contato > div { flex: 1; min-width: 0; }
+.ng-contato { display: flex; align-items: center; gap: .5rem .8rem; flex-wrap: wrap; min-width: 0; }
+.ng-contato > div { flex: 1 1 9rem; min-width: 0; }
+.ng-contato > .linha { flex: 0 1 auto; flex-wrap: wrap; } /* sem espaço ao lado do nome, "Abrir conversa" e "Ficha" descem para a linha de baixo */
 .ng-contato b { display: block; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ng-contato small { display: block; color: var(--c-texto-2); font-size: var(--fs-13); }
 .ed { width: 100%; min-width: 0; min-height: 38px; padding: .4rem .65rem; border-radius: 10px; border: 1px solid transparent; background: transparent; color: var(--c-texto); font-size: var(--fs-14); transition: border-color var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out); }
@@ -491,7 +496,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 }
 @media (max-width: 760px) {
   .crm-cab-acoes { width: 100%; }
-  .crm-cab-acoes .bt-prim { flex: 1; }
+  .crm-cab-acoes .bt-prim { flex: 1 1 auto; } /* basis pelo conteúdo: quebra de linha em vez de cortar o texto do botão */
   .crm-fita .busca { flex-basis: 100%; max-width: none; }
   .crm-totais { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .crm-tot-prev { grid-column: 1 / -1; }
@@ -507,7 +512,10 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .ng-valor b { font-size: var(--fs-25); }
   .fx-rfm { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .fx-acoes { width: 100%; }
-  .fx-acoes .bt { flex: 1; }
+  .fx-acoes .bt { flex: 1 1 auto; } /* idem: os botões quebram em duas linhas em vez de cortar "Abrir conversa" */
+  .fx-acoes .bt-prim { flex-basis: 100%; }
+  .fx-acoes .bt-icone { flex: none; } /* o ⋮ fica ao lado de Oportunidade/Tarefa, não sozinho numa terceira linha */
+  .fx-acoes .bt:not(.bt-icone) { padding-inline: .8rem; } /* Oportunidade + Tarefa + ⋮ cabem em 375 px numa linha só */
   .crm-form-2 { grid-template-columns: minmax(0, 1fr); }
   .imp-mapa-l { grid-template-columns: minmax(0, 1fr); gap: .35rem; }
   .imp-mapa-seta { display: none; }

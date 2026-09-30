@@ -209,6 +209,8 @@ html[data-esquema="claro"] .palco .grao { mix-blend-mode: multiply; opacity: .05
 .bt-icone[aria-pressed="true"], .bt-icone[aria-expanded="true"] { background: var(--c-sup-2); color: var(--c-texto); }
 a.link, .link { color: var(--c-prim-luz); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; }
 .link:hover { color: var(--c-texto); }
+button.link { min-height: 32px; padding-block: .35rem; }
+@media (pointer: coarse) { button.link { min-height: 44px; display: inline-flex; align-items: center; } }
 @media (pointer: coarse) { .bt { min-height: 44px; } .bt-p { min-height: 36px; } .bt-icone { width: 44px; height: 44px; } }
 
 /* ============================================================
@@ -318,8 +320,8 @@ html[data-esquema="claro"] input[type="date"]::-webkit-calendar-picker-indicator
 .pilula-ruim { background: var(--c-ruim-suave); color: var(--c-ruim); }
 .pilula-aten { background: var(--c-aten-suave); color: var(--c-aten); }
 .pilula-info { background: var(--c-info-suave); color: var(--c-info); }
-.pilula-prim { background: var(--c-prim-suave); color: var(--c-prim-luz); }
-.pilula-sec { background: var(--c-sec-suave); color: var(--c-sec-luz); }
+.pilula-prim { background: var(--c-prim-suave); color: color-mix(in srgb, var(--c-prim-luz) 78%, var(--c-texto)); } /* ≥ 4,5:1 sobre o fundo suave (a cor de link sozinha dava 4,44:1) */
+.pilula-sec { background: var(--c-sec-suave); color: color-mix(in srgb, var(--c-sec-luz) 78%, var(--c-texto)); }
 .pilula-meta { background: var(--c-sec-suave); color: var(--c-meta); }
 .pilula-google { background: var(--c-aten-suave); color: var(--c-google); }
 .pilula-cor { background: color-mix(in srgb, var(--cor) 18%, var(--c-fundo)); color: color-mix(in srgb, var(--cor) 58%, var(--c-texto)); }
@@ -334,7 +336,7 @@ html[data-esquema="claro"] input[type="date"]::-webkit-calendar-picker-indicator
 .etiq-x .ic { width: 12px; height: 12px; }
 .avatar {
   position: relative; display: inline-grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 50%; overflow: hidden;
-  background: color-mix(in srgb, var(--cor, var(--c-prim)) 26%, var(--c-fundo)); color: color-mix(in srgb, var(--cor, var(--c-prim)) 55%, var(--c-texto));
+  background: color-mix(in srgb, var(--cor, var(--c-prim)) 26%, var(--c-fundo)); color: color-mix(in srgb, var(--cor, var(--c-prim)) 38%, var(--c-texto));
   font-family: var(--f-corpo); font-weight: 700; font-size: var(--fs-12); letter-spacing: .02em;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cor, var(--c-prim)) 38%, transparent);
 }
@@ -619,7 +621,7 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 .empresa-bt .avatar { width: 30px; height: 30px; }
 .empresa-bt .emp-txt { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; }
 .empresa-bt b { font-size: var(--fs-14); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.empresa-bt small { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--c-texto-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empresa-bt small { font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--c-texto-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empresa-bt > .ic { width: 15px; height: 15px; color: var(--c-texto-3); }
 .empresa-fixa { cursor: default; }
 .empresa-lista { display: flex; flex-direction: column; gap: .15rem; max-height: 360px; overflow: auto; margin-top: .4rem; }
@@ -671,6 +673,13 @@ html.menu-recolhido .lat-conta { justify-content: center; }
   .nav-b .badge-ponto { display: block; }
   .lat-conta { justify-content: center; }
 }
+@media (max-width: 480px) {
+  /* a barra do topo tem marca + empresa + 5 ícones: o texto da empresa ficava com ~30 px ("Ó" / "A.."); fica só o avatar,
+     e o nome continua disponível para leitor de tela e no rótulo de cada tela */
+  .empresa-bt .emp-txt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .empresa-bt { padding-right: .3rem; gap: .3rem; }
+  .empresa-bt:has(> .ic) { padding-right: .55rem; }
+}
 @media (max-width: 760px) {
   :root { --pad: 16px; --topo: 56px; }
   .lateral { display: none; }
@@ -696,7 +705,7 @@ html.menu-recolhido .lat-conta { justify-content: center; }
   .gaveta-x { display: none; }
   .modal { width: calc(100vw - 24px); max-height: 92dvh; }
   .modal-rod { justify-content: stretch; }
-  .modal-rod .bt { flex: 1; }
+  .modal-rod .bt { flex: 1 1 auto; } /* texto comprido ("Salvar configuração") deixa de ser cortado */
   .vazio { grid-template-columns: minmax(0, 1fr); }
   /* tabela → cartões */
   .tabela-env { border: 0; background: transparent; overflow: visible; }

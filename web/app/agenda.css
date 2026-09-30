@@ -24,7 +24,7 @@
   background: radial-gradient(100% 140% at 0% 0%, var(--c-brilho-1), transparent 66%), var(--c-sup);
 }
 .agenda-resumo-data { min-width: 0; display: grid; gap: .25rem; }
-.agenda-resumo-data b { font-family: var(--f-titulo); font-size: var(--fs-18); font-weight: 600; text-transform: capitalize; }
+.agenda-resumo-data b { font-family: var(--f-titulo); font-size: var(--fs-18); font-weight: 600; }
 .agenda-resumo-data small { color: var(--c-texto-3); font-size: var(--fs-12); }
 .agenda-resumo-num { display: grid; justify-items: end; gap: .1rem; white-space: nowrap; }
 .agenda-resumo-num b { font-family: var(--f-dado); color: var(--c-prim-luz); font-size: var(--fs-20); font-weight: 600; }
@@ -36,7 +36,7 @@
   display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: baseline; gap: .4rem .7rem;
   padding: .8rem .95rem; border-bottom: 1px solid var(--c-borda); background: var(--c-sup-2);
 }
-.agenda-dia-nome { min-width: 0; color: var(--c-texto); font-size: var(--fs-14); font-weight: 650; text-transform: capitalize; }
+.agenda-dia-nome { min-width: 0; color: var(--c-texto); font-size: var(--fs-14); font-weight: 650; }
 .agenda-dia-data { color: var(--c-texto-3); font: 500 var(--fs-12) var(--f-dado); }
 .agenda-dia-total { display: grid; place-items: center; min-width: 1.7rem; height: 1.7rem; padding: 0 .35rem; border-radius: 999px; background: var(--c-prim-suave); color: var(--c-prim-luz); font: 600 var(--fs-12) var(--f-dado); }
 .agenda-dia-lista { display: grid; gap: .55rem; padding: .65rem; }
@@ -46,7 +46,7 @@
   padding: .75rem; border: 1px solid var(--c-borda); border-radius: var(--r-m);
   background: color-mix(in srgb, var(--c-sup-2) 72%, transparent);
 }
-.agenda-hora { display: flex; flex-direction: column; align-items: flex-start; gap: .18rem; padding-top: .08rem; color: var(--c-prim-luz); font: 600 var(--fs-14) var(--f-dado); }
+.agenda-hora { display: flex; flex-direction: column; align-items: flex-start; gap: .18rem; padding-top: .08rem; color: color-mix(in srgb, var(--c-prim-luz) 86%, var(--c-texto)); font: 600 var(--fs-14) var(--f-dado); }
 .agenda-hora span { color: var(--c-texto-3); font-size: var(--fs-11); font-weight: 450; }
 .agenda-consulta-info { min-width: 0; display: flex; flex-direction: column; gap: .22rem; }
 .agenda-nome { overflow-wrap: anywhere; font-size: var(--fs-14); }

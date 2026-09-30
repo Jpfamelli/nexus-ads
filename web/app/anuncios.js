@@ -532,12 +532,12 @@ export async function montar(ctx) {
         else bolha.append(document.createTextNode(tk.v));
       }
       bolha.append(h("span", { class: "ads-bolha-hora" }, st ? (st.hora || st.rotulo) : "prévia", st ? h("i", { class: `ads-tique ads-env-${st.k}`, "aria-hidden": "true" }, ` ${st.tique}`) : null));
-      tela.append(
+      tela.append(...[
         h("div", { class: "ads-fone-topo" }, h("span", { class: "ads-fone-av", "aria-hidden": "true" }, ui.icone("whatsapp")),
           h("span", {}, h("b", {}, it.tipo === "mensal" ? "Resumo do mês" : "Relatório diário"), h("small", {}, it.previa ? "prévia calculada agora com os números do painel" : st ? st.rotulo : ""))),
         h("div", { class: "ads-fone-corpo" }, bolha),
         st && st.erro ? h("p", { class: "ads-rel-erro" }, st.erro) : null,
-        it.ia ? h("p", { class: "rel-nota" }, "Leitura do dia escrita por IA a partir dos números.") : null);
+        it.ia ? h("p", { class: "rel-nota" }, "Leitura do dia escrita por IA a partir dos números.") : null].filter(Boolean));
     };
     for (const it of itens) {
       const b = h("button", { type: "button", class: "ads-rel-item", "aria-pressed": "false" },

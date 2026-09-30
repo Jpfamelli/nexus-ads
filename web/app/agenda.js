@@ -16,10 +16,11 @@ function diaISO(iso, delta = 0) {
 }
 
 function nomeDia(iso, longo = false) {
-  return new Intl.DateTimeFormat("pt-BR", {
+  const t = new Intl.DateTimeFormat("pt-BR", {
     weekday: longo ? "long" : "short", day: "2-digit", month: "short",
     timeZone: "America/Sao_Paulo",
   }).format(new Date(`${iso}T12:00:00-03:00`));
+  return t.charAt(0).toUpperCase() + t.slice(1); // só a 1ª letra ("Qui., 01 de out."); o CSS capitalize gerava "De Out."
 }
 
 function origemDo(item) {
@@ -58,8 +59,8 @@ export async function montar(ctx) {
 
   function montarCabecalho() {
     ui.limpar(cabecalho);
-    const anterior = h("button", { type: "button", class: "bt bt-icone", "aria-label": "Período anterior", on: { click: () => mover(-1) } }, ui.icone("seta-esq"));
-    const proximo = h("button", { type: "button", class: "bt bt-icone", "aria-label": "Próximo período", on: { click: () => mover(1) } }, ui.icone("seta-dir"));
+    const anterior = h("button", { type: "button", class: "bt-icone", "aria-label": "Período anterior", on: { click: () => mover(-1) } }, ui.icone("seta-esq"));
+    const proximo = h("button", { type: "button", class: "bt-icone", "aria-label": "Próximo período", on: { click: () => mover(1) } }, ui.icone("seta-dir"));
     const hoje = h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { data = ui.hojeSP(); carregar(); } } }, "Hoje");
     const seletor = h("input", { class: "agenda-data", type: "date", value: data, "aria-label": "Escolher data" });
     seletor.addEventListener("change", () => { if (seletor.value) { data = seletor.value; carregar(); } });

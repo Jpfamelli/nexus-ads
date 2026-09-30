@@ -450,12 +450,12 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
     const blocoNotas = T.blocoNotas(k, { notas: d.notas || [], contato_id: c.id });
     const blocoTempo = T.blocoTempo(k, d.tempo || []);
 
-    el.append(
+    el.append(...[
       !gaveta ? h("a", { class: "bt bt-fant bt-p fx-voltar", href: "#/contatos" }, ui.icone("seta-esq"), k.v.contatos) : null,
       h("div", { class: "fx" }, cab,
         h("div", { class: "fx-grade" },
           h("div", { class: "fx-col" }, blocoDados, blocoCampos, blocoConsent),
-          h("div", { class: "fx-col" }, blocoRfm, blocoNeg, blocoConv, blocoTar, blocoNotas, blocoTempo))));
+          h("div", { class: "fx-col" }, blocoRfm, blocoNeg, blocoConv, blocoTar, blocoNotas, blocoTempo)))].filter(Boolean));
 
     async function registrarOptin() {
       const nome = `opt-${Date.now()}`;

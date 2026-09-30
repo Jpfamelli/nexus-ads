@@ -17,7 +17,7 @@ function listaFaixas(h, ui, dia, faixas, habilitado) {
   function adicionar([de = "08:00", ate = "18:00"] = []) {
     const inicio = h("input", { type: "time", value: de, step: 300, "aria-label": `${dia}: início do horário` });
     const fim = h("input", { type: "time", value: ate, step: 300, "aria-label": `${dia}: fim do horário` });
-    const remover = h("button", { type: "button", class: "bt bt-icone agc-remover", "aria-label": `Remover faixa de ${dia}`, on: { click: () => linha.remove() } }, ui.icone("fechar"));
+    const remover = h("button", { type: "button", class: "bt-icone agc-remover", "aria-label": `Remover faixa de ${dia}`, on: { click: () => linha.remove() } }, ui.icone("fechar"));
     const linha = h("div", { class: "agc-faixa" }, inicio, h("span", null, "até"), fim, remover);
     caixa.appendChild(linha);
   }
@@ -31,7 +31,7 @@ function linhaIntervalo(h, ui, de = "12:00", ate = "13:00", rotulo = "Intervalo"
   const inicio = h("input", { type: "time", value: de, step: 300, "aria-label": `${rotulo}: início` });
   const fim = h("input", { type: "time", value: ate, step: 300, "aria-label": `${rotulo}: fim` });
   const linha = h("div", { class: "agc-faixa" }, inicio, h("span", null, "até"), fim,
-    h("button", { type: "button", class: "bt bt-icone agc-remover", "aria-label": `Remover ${rotulo.toLowerCase()}`, on: { click: () => linha.remove() } }, ui.icone("fechar")));
+    h("button", { type: "button", class: "bt-icone agc-remover", "aria-label": `Remover ${rotulo.toLowerCase()}`, on: { click: () => linha.remove() } }, ui.icone("fechar")));
   return linha;
 }
 
@@ -79,7 +79,7 @@ async function secaoAgenda(ctx, alvo) {
     const servico = h("input", { type: "text", value: nome, maxlength: 60, placeholder: "Nome do serviço", "aria-label": "Nome do serviço" });
     const tempo = h("input", { type: "number", min: 5, max: 480, step: 5, value: String(minutos), "aria-label": `Duração em minutos para ${nome || "o serviço"}` });
     const linha = h("div", { class: "agc-duracao" }, servico, h("label", null, "min", tempo),
-      h("button", { type: "button", class: "bt bt-icone agc-remover", "aria-label": `Remover duração de ${nome || "serviço"}`, on: { click: () => linha.remove() } }, ui.icone("fechar")));
+      h("button", { type: "button", class: "bt-icone agc-remover", "aria-label": `Remover duração de ${nome || "serviço"}`, on: { click: () => linha.remove() } }, ui.icone("fechar")));
     duracoes.appendChild(linha);
   }
   for (const [nome, minutos] of Object.entries(cfg.duracoes || {})) adicionarDuracao(nome, minutos);

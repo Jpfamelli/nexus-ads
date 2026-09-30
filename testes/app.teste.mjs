@@ -84,6 +84,19 @@ await teste("derivarTema: texto ≥ 7:1 sobre o fundo, sec-luz ≥ 4,5:1, status
     for (const [k, v] of Object.entries(vars)) if (k !== "--esquema") assert.match(v, /^(#[0-9A-F]{6}|rgba\(\d+, \d+, \d+, [\d.]+\))$/, `${k} = ${v}`);
   }
 });
+await teste("tema claro padrão: pílulas de status (texto sobre o próprio fundo suave) chegam a 4,5:1", () => {
+  // QA mobile autenticado 30/09: ok sobre ok-suave dava 4,12:1 e a pílula primária 4,44:1
+  const { vars } = T.derivarTema(T.PADRAO.cores);
+  for (const k of ["ok", "ruim", "aten", "info"]) {
+    const c = T.contraste(vars[`--c-${k}`], vars[`--c-${k}-suave`]);
+    assert.ok(c >= 4.5, `--c-${k} sobre --c-${k}-suave = ${c.toFixed(2)}`);
+  }
+  for (const [nome, luz, suave] of [["primária", "--c-prim-luz", "--c-prim-suave"], ["secundária", "--c-sec-luz", "--c-sec-suave"]]) {
+    const texto = T.misturar(vars[luz], vars["--c-texto"], 0.22);   // o mesmo color-mix(… 78%, var(--c-texto)) do app.css
+    const c = T.contraste(texto, vars[suave]);
+    assert.ok(c >= 4.5, `pílula ${nome}: ${c.toFixed(2)}`);
+  }
+});
 await teste("derivarTema: padrão claro, preferência visual preserva a marca e fundo claro/escuro é coerente", () => {
   assert.equal(T.derivarTema(T.PADRAO.cores).vars["--esquema"], "claro");
   const padrao = T.derivarTema(T.PADRAO.cores);
@@ -830,6 +843,48 @@ await teste("sem on*= inline e sem eval nos .js do app", () => {
     assert.doesNotMatch(t, /setAttribute\(\s*["']on[a-z]+["']/i, `${f}: setAttribute('on…')`);
     assert.doesNotMatch(t, /\beval\(|new Function\(/, `${f}: eval`);
   }
+});
+await teste("Element.append/prepend nunca recebe argumento que pode ser null (escreveria a palavra \"null\" na tela)", () => {
+  // QA mobile autenticado 30/09: "Plano e uso" e outras telas mostravam "null" solto. Em h() o null é ignorado; no DOM nativo não.
+  const suspeitos = [];
+  for (const f of js) {
+    const t = readFileSync(join(APP, f), "utf8");
+    const re = /\.(append|prepend)\(/g;
+    let m;
+    while ((m = re.exec(t))) {
+      let i = m.index + m[0].length, prof = 1, cur = "", asp = null, esc = false;
+      const args = [];
+      for (; i < t.length && prof > 0; i++) {
+        const c = t[i];
+        if (asp) { cur += c; if (esc) esc = false; else if (c === "\\") esc = true; else if (c === asp) asp = null; continue; }
+        if (c === '"' || c === "'" || c === "`") { asp = c; cur += c; continue; }
+        if (c === "(" || c === "[" || c === "{") prof++;
+        if (c === ")" || c === "]" || c === "}") { prof--; if (prof === 0) break; }
+        if (c === "," && prof === 1) { args.push(cur.trim()); cur = ""; continue; }
+        cur += c;
+      }
+      args.push(cur.trim());
+      for (const a of args) {
+        const linha = a.replace(/\s+/g, " ");
+        if (!a.startsWith("...") && /\?.*:\s*(null|undefined)$/.test(linha)) {
+          suspeitos.push(`${f}:${t.slice(0, m.index).split("\n").length} ${m[1]}(… ${linha.slice(0, 70)} …)`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(suspeitos, [], "use .append(...[a, b].filter(Boolean))");
+});
+await teste("CSS mobile: botões em linhas que quebram não usam flex:1 (basis 0 cortava o texto); compositor, cabeçalho do chat e filtros do CRM", () => {
+  const crm = ler("crm.css"), app = ler("app.css"), cv = ler("conversas.css");
+  assert.doesNotMatch(crm, /\.crm-cab-acoes \.bt-prim \{ flex: 1; \}/);
+  assert.doesNotMatch(crm, /\.fx-acoes \.bt \{ flex: 1; \}/);
+  assert.doesNotMatch(app, /\.modal-rod \.bt \{ flex: 1; \}/);
+  assert.match(cv, /\.cvx-linha \{ display: grid;[^}]*grid-template-areas: "campo campo" "ferr enviar"/, "compositor em duas linhas no celular");
+  assert.match(cv, /\.cvc-acoes \.rot-longo \{ display: inline; \}/, "botão Resolver com rótulo no celular");
+  assert.match(cv, /\.cvc-sub \.cvc-via \{[^}]*text-overflow: ellipsis/, "nome do número com reticências");
+  assert.match(crm, /\.crm-filtros \{[^}]*width: min\(360px, calc\(100vw - 42px\)\)/, "painel de filtros cabe no popover de 320 px");
+  assert.doesNotMatch(ler("agenda.css"), /text-transform: capitalize/, "datas da agenda: só a 1ª letra maiúscula");
+  for (const f of ["agenda.js", "agenda-config.js"]) assert.doesNotMatch(ler(f), /class: "bt bt-icone/, `${f}: bt + bt-icone espremia o ícone para 7 px`);
 });
 await teste("netlify.toml: publish web, / e /index.html → /app/ (302 forçado), CSP do §3.9", () => {
   const t = readFileSync(join(RAIZ, "netlify.toml"), "utf8");

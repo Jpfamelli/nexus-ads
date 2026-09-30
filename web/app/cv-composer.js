@@ -119,8 +119,8 @@ export function criarComposer(A) {
       }
     } else if (s === "sem_token" && !modoNota) {
       trava.hidden = false;
-      trava.append(ui.icone("alerta"), h("p", null, "Este número ainda não tem o token da Meta. Configure em Números de WhatsApp."),
-        A.acoes.pode("admin") ? h("a", { class: "bt bt-sec bt-p", href: "#/config/numeros" }, "Números de WhatsApp") : null);
+      trava.append(...[ui.icone("alerta"), h("p", null, "Este número ainda não tem o token da Meta. Configure em Números de WhatsApp."),
+        A.acoes.pode("admin") ? h("a", { class: "bt bt-sec bt-p", href: "#/config/numeros" }, "Números de WhatsApp") : null].filter(Boolean));
     }
     const ok = podeTexto();
     ta.disabled = !ok;
