@@ -1,10 +1,14 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-30 09:36 (America/Sao_Paulo)
+Atualizado: 2026-09-30 20:15 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
-## Atualização atual — 2026-09-30 09:36 -03
+## Atualização atual — 2026-09-30 20:15 -03
+
+Correções pós-E2E commitadas (sem push): 413 imediato com corpo cancelado nas Edge Functions (`99003de`), logo largo no menu (`e11770b`), CSP também em `<meta>` para o GitHub Pages (`97460df`), publicação das funções por **GitHub Actions** com tag `funcoes-*` (`cf1a2a5`, guia em `docs/orbita/DEPLOY-FUNCOES.md`) e os E2E-A/B registrados (`dd12be4`). Suíte 15/15, `deno check` 7/7. No ar continuam nx-whatsapp v5, nx-enviar v3, nx-codewords v2, nx-ciclo v4, nx-relatorio v4, nx-ia v2 e nx-midia v2: a correção @lid e o 413 só vão ao ar na primeira publicação pela Actions, que depende do segredo `SUPABASE_ACCESS_TOKEN` no repositório. Sobra `nx_midia_lixo` 21 (órfã do E2E-B) apagada; `nx_execucoes` 95 fica como histórico. Detalhes em `F8.md`.
+
+## Atualização anterior — 2026-09-30 09:36 -03
 
 O branch `codex/orbita` contém três rodadas de UX: tema claro padrão com modos claro/escuro/marca persistentes; gravação de áudio e anexos com indicação honesta dos limites de CodeWords; diagnóstico Meta/Google com atualização de estado e balões ajustados ao conteúdo. A verificação mais recente passou em 14/14 arquivos da suíte serial Node. O código segue para revisão no PR #1; não houve deploy, alteração de Supabase ou mudança em `main`. F8 continua aberta e os módulos permanecem bloqueados.
 
@@ -17,13 +21,13 @@ O branch `codex/orbita` contém as frentes em revisão e o commit `40b4f7b` já 
 | Frente | Código/revisão | Estado de publicação |
 |---|---|---|
 | F1 — banco | Migrações base, SaaS, CodeWords, agenda/rastreio e cards de origem aplicadas | Smokes 05, 09, 10 e 11 em `ROLLBACK`; sem alteração de dados da clínica |
-| F2 — funções | Sete handlers compilados localmente; `deno check` 7/7 | `nx-whatsapp` v4, `nx-relatorio` v3, `nx-ciclo` v3, `nx-enviar` v2, `nx-midia` v1, `nx-ia` v1, `nx-codewords` v1 — todas `ACTIVE`, `verify_jwt=false` |
+| F2 — funções | Sete handlers; `deno check` 7/7; publicação por GitHub Actions (tag `funcoes-*`) | `nx-whatsapp` v5, `nx-relatorio` v4, `nx-ciclo` v4, `nx-enviar` v3, `nx-midia` v2, `nx-ia` v2, `nx-codewords` v2 — todas `ACTIVE`, `verify_jwt=false` (30/09 ~20h); @lid e 413 ainda não publicados |
 | F3 — acesso e white-label | Implementação local existente; módulos públicos seguem fechados | Preview Netlify responde; sem publicação em produção |
 | F4 — CRM | Implementação, revisão e testes aprovados; origem de anúncio exibida nos cards | Smoke SQL com `ROLLBACK`; E2E autenticado do tenant segue parcial |
 | F5 — conversas | Adaptador CodeWords, webhook, fila e recibos cobertos por testes locais; migração e funções publicadas | Nenhum canal CodeWords real está configurado no tenant de teste; envio e recibos reais pendentes |
 | F6 — anúncios e relatórios | Implementação local e testes Node aprovados | Tenant de teste sem métricas; integrações reais e paridade CRM/Ads pendentes |
 | F7 — automações | Implementação local e testes Node aprovados | Aceite autenticado de runtime permanece pendente |
-| F8 — entrega | Runner serial 14/14, `deno check` 7/7, smoke local da agenda fictícia 1/1 | E2E-A/B real, CodeWords, paridade Ads, mobile autenticado e limpeza do tenant pendentes; `prontos.js` permanece fechado e sem deploy de produção |
+| F8 — entrega | Runner serial 15/15, `deno check` 7/7, smoke local da agenda fictícia 1/1; E2E-A (Meta) 26/27 e E2E-B 256/256 com os dois defeitos corrigidos no repositório | E2E-A/B real, CodeWords, paridade Ads, mobile autenticado e limpeza do tenant pendentes; `prontos.js` permanece fechado e sem deploy de produção |
 
 ## Retomada CodeWords — 2026-09-29 13:42
 

@@ -14,7 +14,14 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
 - Painel clássico do Nexus Ads: `web/` (exceto `web/app/`), no GitHub Pages https://jpfamelli.github.io/nexus-ads/
   — publicado a cada push na `main` que mexa em `web/**` (Action `.github/workflows/pages.yml`).
   **Push na main publica.** Só faça merge/push na main quando os testes e o E2E passarem.
-- Supabase `dtjznipitihnwmcgpzqh`: seis funções ativas após deploy F8 de 29/09 — `nx-ciclo`, `nx-relatorio` e `nx-whatsapp` v3; `nx-enviar`, `nx-midia` e `nx-ia` v1; todas com `verify_jwt=false` e autenticação própria do handler. Cron continua de hora em hora (nx-ciclo :07), relatório diário 8h e mensal dia 1º.
+- Supabase `dtjznipitihnwmcgpzqh`: sete funções ACTIVE (conferido por `list_edge_functions` em 30/09 ~20h) — `nx-whatsapp` v5,
+  `nx-enviar` v3, `nx-codewords` v2, `nx-ciclo` v4, `nx-relatorio` v4, `nx-ia` v2, `nx-midia` v2; todas com `verify_jwt=false` e
+  autenticação própria do handler. **No ar ainda NÃO estão** a correção @lid (`a1fc214`) nem o 413 do corpo grande (`99003de`):
+  vão na primeira publicação pela Actions. Cron continua de hora em hora (nx-ciclo :07), relatório diário 8h e mensal dia 1º.
+- **Publicação das funções = GitHub Actions** (`.github/workflows/funcoes-supabase.yml`), disparada SÓ por tag `funcoes-*`
+  (`git tag funcoes-AAAAMMDD-N && git push origin <tag>`), com a lista em `supabase/deploy-lista.txt` e o segredo
+  `SUPABASE_ACCESS_TOKEN` do repositório. O CLI do Supabase não roda neste Windows e não se contorna isso.
+  Guia, acompanhamento e plano de volta: `docs/orbita/DEPLOY-FUNCOES.md`.
 - Netlify: site `orbita-nexus-ads` criado; o preview original continua em https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. A pedido do João, em 29/09 foi criado um segundo deploy de rascunho com overlay temporário de navegação em https://6abbd2ff7054e92bd9532b7b--orbita-nexus-ads.netlify.app. Ele expõe Início, Conversas, CRM e Ads no preview; a conta precisa entrar novamente nesse hostname. A origem `web/app/prontos.js` e a `main` continuam bloqueadas. Ainda não existe deploy de produção nem domínio confirmado.
 - Cliente real: `kamiguchi` (Kamiguchi Odontologia). O cliente de demonstração foi apagado de propósito;
   o modo `?demo` do painel continua como ferramenta de venda.
@@ -57,8 +64,11 @@ Testes SQL (`supabase/testes/0*.sql`, `10_codewords.sql`, `11_agenda_rastreio.sq
   sempre ADITIVA e idempotente (if not exists / create or replace); rode antes numa transação com ROLLBACK; aplique com
   o mesmo nome do arquivo. Nada de drop, nada de apagar/alterar dados de produção, nada de mexer em `nx_config`,
   nada de criar conta/sessão real fora de teste. A trava da ponte vale também para o banco e para publicar funções.
-- Funções: `node scripts/montar-funcoes.mjs` e publicar a pasta `supabase/dist/<funcao>` com `verify_jwt = false`.
+- Funções: `node scripts/montar-funcoes.mjs` gera `supabase/dist/<funcao>`; quem publica é o workflow
+  `funcoes-supabase.yml` (tag `funcoes-*`, `verify_jwt = false`), com as funções listadas em `supabase/deploy-lista.txt`.
   **Mexeu em `web/nucleo.js`? Republique nx-ciclo, nx-relatorio e nx-whatsapp.** Não edite `web/demo.js` sem necessidade.
+- Corpo de requisição nas funções: sempre por `lerCorpoLimitado`/`lerCorpoPainel`/`lerCorpo` (comum.js); resposta que não
+  lê o corpo o cancela (`soltandoCorpo`). Responder sem ler nem cancelar pendura a Edge Function (~160 s, 503).
 - Front: HTML/CSS/JS puro, módulos ES, sem build. `[hidden]{display:none!important}`, grids com `minmax(0,1fr)`,
   sem rolagem horizontal em 390 px, tudo com tokens de cor do white-label.
 - Segredos: NUNCA em arquivo, commit, log ou resposta (tokens Meta/Google/WhatsApp, chave da Anthropic, service_role,
