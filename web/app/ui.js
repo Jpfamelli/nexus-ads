@@ -173,6 +173,80 @@ export function anunciar(texto) {
 /* ============================================================
    Diálogos
    ============================================================ */
+/* ------------------------------------------------------------
+   Camadas (modal) × botão Voltar do navegador.
+   Abrir um modal empurra UMA entrada no histórico (mesma URL); o Voltar desfaz essa entrada e FECHA o
+   modal, sem trocar a rota por baixo. Fechar por botão, Esc ou salvar desfaz a entrada sozinho.
+   O history.back() é assíncrono: quem navega logo depois de fechar um modal espera por aposVolta().
+   Sem history/window (testes em Node) tudo vira no-op.
+   ------------------------------------------------------------ */
+export function criarCamadas(amb = {}) {
+  const hist = amb.history !== undefined ? amb.history : (typeof history !== "undefined" ? history : null);
+  const ouvir = amb.addEventListener || (typeof addEventListener === "function" ? addEventListener : null);
+  const agendar = amb.setTimeout || (typeof setTimeout === "function" ? setTimeout : null);
+  const cancelar = amb.clearTimeout || (typeof clearTimeout === "function" ? clearTimeout : null);
+  const pilha = [];
+  let voltando = 0, prazo = null, esperando = [];
+  const marcaDe = st => (st && typeof st === "object" && typeof st.nxCamada === "string" ? st.nxCamada : null);
+
+  function despertar() {
+    voltando = 0;
+    if (prazo != null && cancelar) cancelar(prazo);
+    prazo = null;
+    const fila = esperando; esperando = [];
+    for (const f of fila) try { f(); } catch (e) { console.error(e); }
+  }
+  function desfazerEntrada() {
+    voltando++;
+    if (prazo == null && agendar) prazo = agendar(despertar, 600);   // se o popstate nunca vier, ninguém fica esperando
+    try { hist.back(); } catch { despertar(); }
+  }
+  const aposVolta = f => { if (voltando > 0) esperando.push(f); else f(); };
+
+  function empurrar(c) {
+    if (c.fechada || !hist) return;
+    try {
+      const st = hist.state && typeof hist.state === "object" ? hist.state : {};
+      hist.pushState({ ...st, nxCamada: c.marca }, "");
+      c.empurrou = true;
+    } catch { /* sem histórico: o Voltar segue o comportamento antigo */ }
+  }
+  function liberar(c) {
+    if (c.fechada) return;
+    c.fechada = true;
+    const i = pilha.indexOf(c); if (i >= 0) pilha.splice(i, 1);
+    if (c.porVoltar) return;   // o próprio Voltar já desfez a entrada
+    aposVolta(() => { if (c.empurrou && hist && marcaDe(hist.state) === c.marca) desfazerEntrada(); });
+  }
+  /** Registra uma camada aberta; fechar() é chamado quando o usuário aperta Voltar. Devolve {liberar}. */
+  function abrir(fechar) {
+    const c = { marca: novoId("camada"), fechar, empurrou: false, fechada: false, porVoltar: false };
+    pilha.push(c);
+    aposVolta(() => empurrar(c));
+    return { liberar: () => liberar(c) };
+  }
+  /** Uma navegação com camada aberta REAPROVEITA a entrada dela (replaceState): o Voltar não precisa de dois toques. */
+  function consumirEntrada() {
+    if (!hist) return false;
+    const m = marcaDe(hist.state);
+    const c = m && pilha.find(x => x.marca === m && x.empurrou);
+    if (!c) return false;
+    c.empurrou = false;
+    return true;
+  }
+  function aoPop(ev) {
+    if (voltando > 0) { voltando--; if (voltando === 0) despertar(); return; }   // foi o nosso history.back()
+    const atual = marcaDe(ev && ev.state !== undefined ? ev.state : hist && hist.state);
+    while (pilha.length && pilha[pilha.length - 1].marca !== atual) {
+      const c = pilha.pop(); c.porVoltar = true;
+      try { c.fechar(); } catch (e) { console.error(e); }
+    }
+  }
+  if (ouvir) ouvir("popstate", aoPop);
+  return { abrir, aposVolta, consumirEntrada, voltaPendente: () => voltando > 0, abertas: () => pilha.length, _aoPop: aoPop };
+}
+export const camadas = criarCamadas();
+
 function focarPrimeiro(raiz) {
   const alvo = raiz.querySelector("[autofocus], input:not([type=hidden]):not(:disabled), select:not(:disabled), textarea:not(:disabled)")
     || raiz.querySelector("button:not(:disabled), [href], [tabindex]:not([tabindex='-1'])");
@@ -188,12 +262,13 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
     const erro = h("p", { class: "modal-erro", role: "alert", hidden: true });
     const corpoEl = h("div", { class: "modal-corpo" }, descricao ? h("p", { class: "sub" }, descricao) : null, corpo, erro);
     const lista = acoes && acoes.length ? acoes : [{ rotulo: "Fechar", tipo: "neutro", valor: null }];
-    let feito = false;
+    let feito = false, camada = null;
     const dlg = h("dialog", { class: ["modal", `modal-${largura}`], "aria-labelledby": idT });
     const api = {
       el: dlg, corpo: corpoEl,
       fechar(v = null) {
         if (feito) return; feito = true;
+        if (camada) camada.liberar();
         dlg.classList.add("saindo");
         setTimeout(() => { try { dlg.close(); } catch { /* ok */ } dlg.remove(); if (anterior && anterior.focus && anterior.isConnected) try { anterior.focus({ preventScroll: true }); } catch { /* ok */ } }, 160);
         resolve(v);
@@ -231,6 +306,7 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
     dlg.addEventListener("submit", ev => { ev.preventDefault(); if (primario && !primario.disabled) primario.click(); });
     document.body.appendChild(dlg);
     dlg.showModal();
+    camada = camadas.abrir(() => api.fechar(null));   // botão Voltar do navegador fecha o modal
     focarPrimeiro(corpoEl.querySelector("input,select,textarea") ? corpoEl : dlg.querySelector(".modal-rod"));
     if (aoAbrir) try { aoAbrir(api); } catch (e) { console.error(e); }
   });

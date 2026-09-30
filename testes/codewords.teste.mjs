@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import {
   tratar, lerPayload, idEstavel, formaDoPayload, enviarTextoCodeWords, traduzirErroCW, avaliarAparelho,
   classificarDestino, itemDoAparelho, montarContexto, rotuloHorario, textoHorario, dataIso, variantesTelefone,
-  CW_BASE, tipoDaMidia, rotuloMidia, extrairCodigoRastreio,
+  CW_BASE, tipoDaMidia, rotuloMidia, extrairCodigoRastreio, ehJidLid, mensagensDoAparelho,
 } from "../supabase/functions/_compartilhado/codewords.js";
 import { montarInstrucoes, montarReceita, ACOES_AGENTE, EXEMPLOS_AGENTE } from "../supabase/functions/_compartilhado/codewords_prompt.js";
 import { documento as documentoPrompt } from "../scripts/gerar-prompt-codewords.mjs";
@@ -495,6 +495,123 @@ test("agente mensagem: payload desconhecido → 422, guarda SÓ os nomes dos cam
   assert.ok(!JSON.stringify(s.chamadas).includes("123.456"), "valor nunca vai ao banco");
 });
 
+/* ============================================================
+   @lid: id interno do WhatsApp (15 dígitos que parecem telefone) NUNCA vira telefone/contato/negócio
+   ============================================================ */
+const LID = "178190287962245";
+
+test("@lid: parser — sem número real é 'lid' (sem telefone); com número em campo alternativo usa o real; telefone e grupo seguem iguais", () => {
+  // sem número real: não vira telefone
+  for (const p of [
+    { acao: "mensagem", direcao: "entrada", telefone: `${LID}@lid`, texto: "oi" },
+    { payload: { chat_id: `${LID}@lid`, from: `${LID}@lid`, body: "oi" } },
+    { key: { remoteJid: `${LID}:12@lid`, id: "A1" }, message: { conversation: "oi" } },
+    { phone: `${LID}@hosted.lid`, text: "oi" },
+    { chat_id: `${LID}@lid`, sender: `${LID}@lid`, text: "oi" },
+  ]) {
+    const r = lerPayload(p);
+    assert.equal(r.lid, true, JSON.stringify(p)); assert.equal(r.telefone, "", JSON.stringify(p)); assert.equal(r.grupo, false);
+  }
+  // com número real em outro campo (sender_pn, senderPn, remoteJidAlt, participant_pn, phone_number, jid_alt…)
+  const alternativos = [
+    { telefone: `${LID}@lid`, sender_pn: `${TEL}@s.whatsapp.net`, texto: "oi" },
+    { chat_id: `${LID}@lid`, senderPn: `${TEL}:7@s.whatsapp.net`, body: "oi" },
+    { key: { remoteJid: `${LID}@lid`, remoteJidAlt: `${TEL}@s.whatsapp.net`, fromMe: false, id: "A2" }, message: { conversation: "oi" } },
+    { payload: { chat_id: `${LID}@lid`, from: `${LID}@lid`, participant_pn: "+55 (12) 98888-7777", body: "oi" } },
+    { jid: `${LID}@lid`, phone_number: TEL, text: "oi" },
+    { from: `${LID}@lid`, jid_alt: `${TEL}@s.whatsapp.net`, text: "oi" },
+    { Info: { Chat: "x" }, from: `${LID}@lid`, SenderAlt: `${TEL}@s.whatsapp.net`, text: "oi" },
+  ];
+  for (const p of alternativos) {
+    const r = lerPayload(p);
+    assert.equal(r.lid, false, JSON.stringify(p)); assert.equal(r.telefone, TEL, JSON.stringify(p)); assert.equal(r.tipo, "mensagem");
+  }
+  // o alternativo também precisa ser um número: outro @lid, grupo ou o número do próprio aparelho não servem
+  for (const alt of [`${LID}@lid`, "120363040000000000@g.us", NUM_A, "abc", "123"]) {
+    const r = lerPayload({ telefone: `${LID}@lid`, sender_pn: alt, texto: "oi" }, { numeroCanal: NUM_A });
+    assert.equal(r.telefone, "", String(alt)); assert.equal(r.lid, true, String(alt));
+  }
+  // telefone normal e grupo continuam funcionando
+  const normal = lerPayload({ telefone: TEL, texto: "oi" });
+  assert.equal(normal.telefone, TEL); assert.equal(normal.lid, false); assert.equal(normal.tipo, "mensagem");
+  const comLidSoltoMasTelefoneExplicito = lerPayload({ telefone: TEL, from: `${LID}@lid`, texto: "oi" });
+  assert.equal(comLidSoltoMasTelefoneExplicito.telefone, TEL, "o campo explícito vale mais que o @lid");
+  assert.equal(lerPayload({ phone: "120363040000000000@g.us", text: "oi" }).grupo, true);
+  assert.equal(lerPayload({ phone: `${LID}@lid in 120363040000000000@g.us`, text: "x" }).grupo, true, "@lid dentro de grupo continua grupo");
+  // saída (from_me) do celular para um chat @lid: o "from" é o número do próprio aparelho, mas o destinatário continua sem número
+  const eco = lerPayload({ payload: { chat_id: `${LID}@lid`, from: `${NUM_A.slice(1)}@s.whatsapp.net`, from_me: true, body: "x" } }, { numeroCanal: NUM_A });
+  assert.equal(eco.lid, true); assert.equal(eco.telefone, "");
+  assert.equal(ehJidLid(`${LID}@lid`), true); assert.equal(ehJidLid(`${LID}:3@lid`), true); assert.equal(ehJidLid(`${TEL}@s.whatsapp.net`), false);
+  assert.equal(ehJidLid(TEL), false); assert.equal(ehJidLid(Number(LID)), false); assert.equal(ehJidLid(null), false);
+});
+
+test("@lid: API do agente IGNORA sem número real (lid_sem_numero, nada gravado) e guarda só a FORMA do payload", async () => {
+  const s = cenario();
+  const r = await ler(await agente(s, { acao: "mensagem", direcao: "entrada", telefone: `${LID}@lid`, texto: "mensagem de um @lid", message_id: "LID-1", nome: "Fulano" }));
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.corpo, { ok: true, conversa_id: null, registrada: false, responder: false, motivo: "lid_sem_numero", ignorado: "jid_lid_sem_numero" });
+  for (const nome of ["nx_wa_entrada", "nx_lead_webhook", "nx_codewords_decidir", "nx_codewords_saida", "nx_rastreio_atribuir"]) {
+    assert.equal(s.rpcsDe(nome).length, 0, `${nome} não pode ser chamada para @lid`);
+  }
+  const forma = s.rpcsDe("nx_codewords_forma");
+  assert.equal(forma.length, 1);
+  assert.deepEqual(forma[0].corpo, { p_canal: K_A, p_forma: ["acao", "direcao", "telefone", "texto", "message_id", "nome"] });
+  const tudo = JSON.stringify(s.chamadas.filter(c => c.nome !== "nx_codewords_canal"));
+  assert.ok(!tudo.includes(LID) && !tudo.includes("mensagem de um @lid") && !tudo.includes("Fulano"), "nenhum valor do payload vai ao banco");
+  // o mesmo vale para o payload cru do aparelho (sem acao) e para a SAÍDA (eco do celular/IA para um chat @lid)
+  const s2 = cenario();
+  const cru = await ler(await agente(s2, { event: "message", payload: { id: "3EB0L1", chat_id: `${LID}@lid`, from: `${LID}@lid`, from_me: false, pushname: "Fulano", body: "oi" } }));
+  assert.equal(cru.corpo.motivo, "lid_sem_numero"); assert.equal(cru.corpo.registrada, false); assert.equal(cru.corpo.responder, false);
+  const saida = await ler(await agente(s2, { acao: "mensagem", direcao: "saida", autor: "ia", telefone: `${LID}@lid`, texto: "resposta", message_id: "3EB0L2" }));
+  assert.equal(saida.corpo.motivo, "lid_sem_numero"); assert.equal(saida.corpo.registrada, false);
+  assert.equal(s2.rpcsDe("nx_codewords_saida").length, 0, "saída para @lid não cria conversa nem mensagem");
+  assert.equal(s2.rpcsDe("nx_wa_entrada").length, 0);
+  // falha ao guardar a forma não derruba a resposta
+  const s3 = cenario({ rpc: { nx_codewords_forma: () => { throw new Error("boom"); } } });
+  const f3 = await ler(await agente(s3, { acao: "mensagem", telefone: `${LID}@lid`, texto: "oi" }));
+  assert.equal(f3.status, 200); assert.equal(f3.corpo.motivo, "lid_sem_numero");
+});
+
+test("@lid: com o número real em outro campo a mensagem é registrada com o NÚMERO REAL (contato, lead, saída)", async () => {
+  const s = cenario();
+  const r = await ler(await agente(s, { acao: "mensagem", direcao: "entrada", telefone: `${LID}@lid`, sender_pn: `${TEL}@s.whatsapp.net`,
+    texto: "oi, quero marcar", message_id: "LID-2", nome: "Paula" }));
+  assert.equal(r.corpo.registrada, true); assert.equal(r.corpo.responder, true);
+  const m = s.rpcsDe("nx_wa_entrada")[0].corpo.p_msg;
+  assert.equal(m.wa_id, TEL); assert.ok(!JSON.stringify(s.chamadas).includes(LID), "o id @lid nunca vai ao banco");
+  assert.equal(s.rpcsDe("nx_lead_webhook")[0].corpo.p_telefone, TEL);
+  const sa = await ler(await agente(s, { key: { remoteJid: `${LID}@lid`, remoteJidAlt: `${TEL}@s.whatsapp.net`, fromMe: true, id: "3EB0L3" },
+    message: { conversation: "respondi pelo celular" } }));
+  assert.equal(sa.corpo.registrada, true);
+  assert.equal(s.rpcsDe("nx_codewords_saida")[0].corpo.p_msg.telefone, TEL);
+  assert.ok(!JSON.stringify(s.chamadas).includes(LID));
+});
+
+test("@lid: nas outras ações do agente e nos envios, @lid não é telefone (400 dados_invalidos / nada sai)", async () => {
+  const s = cenario();
+  for (const corpo of [
+    { acao: "contexto", telefone: `${LID}@lid` }, { acao: "nota", telefone: `${LID}@lid`, texto: "x" },
+    { acao: "humano", telefone: `${LID}@lid` }, { acao: "etapa", telefone: `${LID}@lid`, etapa: "orcamento" },
+    { acao: "horarios", telefone: `${LID}@lid` }, { acao: "agendar", telefone: `${LID}@lid`, inicio: "2026-10-01T12:00:00Z" },
+  ]) {
+    const r = await ler(await agente(s, corpo));
+    assert.equal(r.status, 400, corpo.acao); assert.deepEqual(r.corpo, { ok: false, erro: "dados_invalidos", campo: "telefone" }, corpo.acao);
+  }
+  assert.equal(s.chamadas.filter(c => c.nome !== "nx_codewords_canal").length, 0, "nenhuma interna foi chamada");
+  // envio: nada sai para um jid @lid
+  const e = cenario();
+  const env = await enviarTextoCodeWords(e.cred, `${LID}@lid`, "Olá", { fetch: e.fetch });
+  assert.equal(env.ok, false); assert.equal(env.tipo, "dados"); assert.match(env.erro.title, /sem número de telefone/);
+  assert.equal(e.cwChamadas.length, 0, "nada foi ao CodeWords");
+  const pt = await ler(await painel(e, { acao: "enviar_teste", canal: K_A, para: `${LID}@lid` }));
+  assert.equal(pt.status, 400); assert.equal(e.cwChamadas.length, 0);
+  // ao aparelho também não se pergunta por um chat @lid
+  const aparelho = cenario();
+  assert.deepEqual(Object.keys(await mensagensDoAparelho(aparelho.cred, `${LID}@lid`, { fetch: aparelho.fetch })), ["erro", "invalido"]);
+  assert.equal((await mensagensDoAparelho(aparelho.cred, "123", { fetch: aparelho.fetch })).invalido, true);
+  assert.equal(aparelho.cwChamadas.length, 0);
+});
+
 test("agente: contexto, etapa, origem, humano, nota e status chamam a interna do canal com os campos validados", async () => {
   const s = cenario();
   const ctx = await ler(await agente(s, { acao: "contexto", telefone: `+${TEL}` }));
@@ -781,6 +898,26 @@ test("sincronização: envelope inesperado é ERRO (não 'chat vazio') e acende 
   assert.equal(itemDoAparelho({ id: "x", content: "oi", timestamp: "lixo" }), null, "data inválida não entra (gravaria 1970)");
 });
 
+test("sincronização: conversa com telefone @lid/impossível é PULADA (sem consultar o aparelho, sem contar falha)", async () => {
+  const s = cenario({ rpc: { nx_codewords_sync_alvos: () => [
+    { canal_id: K_A, cliente_id: CLI_A, conversa_id: 610, telefone: `${LID}@lid` },
+    { canal_id: K_A, cliente_id: CLI_A, conversa_id: 611, telefone: "123" },
+    { canal_id: K_A, cliente_id: CLI_A, conversa_id: 612, telefone: "" },
+  ] } });
+  const r = await ler(await tratar(cronReq({ sincronizar: true }), ENV, { fetch: s.fetch }));
+  assert.equal(r.corpo.ok, true); assert.equal(r.corpo.sincronizacao.conversas, 0); assert.equal(r.corpo.sincronizacao.falhas, 0);
+  assert.equal(s.cwChamadas.filter(x => x.caminho.startsWith("/proxy/chat/")).length, 0, "nenhum /proxy/chat/ para jid inventado");
+  assert.equal(s.rpcsDe("nx_codewords_sync_gravar").length, 0);
+  // uma conversa boa ao lado de uma @lid segue sendo sincronizada
+  const s2 = cenario({ rpc: { nx_codewords_sync_alvos: () => [
+    { canal_id: K_A, cliente_id: CLI_A, conversa_id: 610, telefone: `${LID}@lid` },
+    { canal_id: K_A, cliente_id: CLI_A, conversa_id: 601, telefone: TEL },
+  ] }, cw: { mensagens: () => resp({ results: { data: [{ id: "S-1", content: "oi", is_from_me: false, timestamp: new Date(Date.now() - 60e3).toISOString() }] } }) } });
+  const r2 = await ler(await tratar(cronReq({ sincronizar: true }), ENV, { fetch: s2.fetch }));
+  assert.equal(r2.corpo.sincronizacao.conversas, 1); assert.equal(r2.corpo.sincronizacao.entradas, 1);
+  assert.equal(s2.cwChamadas.filter(x => x.caminho.startsWith("/proxy/chat/")).length, 1);
+});
+
 /* ============================================================
    Contratos: SQL × função × prompt
    ============================================================ */
@@ -1040,6 +1177,12 @@ test("contexto da IA: origem do site e do anúncio aparecem; gclid, fbclid e ids
 
 /* ---------------- prompt do CodeWords ---------------- */
 const ACOES_DA_API = ["mensagem", "contexto", "horarios", "agendar", "remarcar", "cancelar", "etapa", "origem", "humano", "nota", "status"];
+
+test("prompt: ensina o fluxo a NÃO usar @lid como telefone e lista o motivo lid_sem_numero", () => {
+  const r = montarReceita({ url: "{{URL_DO_ORBITA}}" });
+  assert.match(r, /jid terminado em @lid/); assert.match(r, /sender_pn, remoteJidAlt, participant_pn/);
+  assert.match(r, /motivo lid_sem_numero/); assert.match(r, /eco, saida, lid_sem_numero\)/);
+});
 
 test("prompt: traz TODAS as ações da API do agente, com o JSON exato, e nenhum segredo", async () => {
   const rec = montarReceita({ url: URL_A, empresa: "Clínica Alfa", assistente: "Sofia", numero: NUM_A });

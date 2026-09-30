@@ -416,6 +416,14 @@ function opcoesAcesso() {
 function navegar(hash, { substituir = false } = {}) {
   const h = String(hash || "#/");
   const alvo = h.startsWith("#") ? h : "#" + (h.startsWith("/") ? h : "/" + h);
+  // um modal acabou de fechar: o history.back() dele ainda está no ar; navega só depois que o histórico assentar
+  if (E.ui && E.ui.camadas && E.ui.camadas.voltaPendente()) { E.ui.camadas.aposVolta(() => navegar(hash, { substituir })); return; }
+  // navegar com modal aberto reaproveita a entrada do modal no histórico (senão o Voltar precisaria de dois toques)
+  if (!substituir && location.hash !== alvo && E.ui && E.ui.camadas && E.ui.camadas.consumirEntrada()) {
+    history.replaceState(null, "", location.pathname + location.search + alvo);
+    aoMudarRota(false);
+    return;
+  }
   if (substituir) {
     history.replaceState(history.state, "", location.pathname + location.search + alvo);
     aoMudarRota(false);

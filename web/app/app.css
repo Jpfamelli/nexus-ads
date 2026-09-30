@@ -710,7 +710,7 @@ html.menu-recolhido .lat-conta { justify-content: center; }
   /* tabela → cartões */
   .tabela-env { border: 0; background: transparent; overflow: visible; }
   .tabela, .tabela tbody, .tabela tr, .tabela td { display: block; width: 100%; }
-  .tabela thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .tabela thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); visibility: hidden; } /* cartões: o cabeçalho some da tela E do foco (os botões de ordenação não podem receber Tab escondidos) */
   .tabela tbody { display: flex; flex-direction: column; gap: .6rem; }
   .tabela tbody tr { border-radius: var(--r); border: 1px solid var(--c-borda); background: var(--c-sup); padding: .5rem .2rem; }
   .tabela td { display: grid; grid-template-columns: minmax(0, 7.5rem) minmax(0, 1fr); gap: .8rem; align-items: center; border: 0; padding: .4rem .9rem; text-align: left !important; }

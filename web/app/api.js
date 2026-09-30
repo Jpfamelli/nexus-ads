@@ -74,6 +74,13 @@ export const MENSAGENS = {
   fora_da_janela: "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado.",
   canal_sem_token: "Este número ainda não tem o token da Meta. Configure em Números de WhatsApp.",
   codewords_sem_credencial: "Este canal está sem a chave de API reutilizável. Configure CodeWords em Números de WhatsApp.",
+  codewords_sem_aparelho: "Este número ainda não foi pareado no CodeWords, então nada pode ser enviado. Faça o pareamento em Configurações › Números de WhatsApp.",
+  codewords_falhou: "O CodeWords não concluiu o pedido. Tente de novo em instantes.",
+  aparelho_nao_encontrado: "Este número ainda não foi pareado no CodeWords. Use «Parear» em Configurações › Números de WhatsApp e digite o código no celular.",
+  numero_diferente: "O aparelho pareado não é o número deste canal. Nada foi enviado; refaça o pareamento em Configurações › Números de WhatsApp.",
+  aparelho_desconectado: "O WhatsApp deste número está desconectado do CodeWords. Termine o pareamento no celular e tente de novo.",
+  metodo_invalido: "O servidor não aceitou esse pedido. Atualize a página e tente de novo.",
+  erro_interno: "O servidor falhou ao concluir o pedido. Tente de novo em instantes; se continuar, fale com o suporte.",
   codewords_tipo_nao_suportado: "Este canal CodeWords envia somente mensagens de texto. Para anexos e modelos, use um canal Meta.",
   use_testar_codewords: "Confira o estado do aparelho em Configurações → Números de WhatsApp.",
   envio_falhou: "O canal não aceitou a mensagem.",
@@ -135,6 +142,11 @@ export function mensagemErro(e) {
     case "envio_falhou": {
       const d = e && (e.detalhe_texto || (typeof e.detalhe === "string" ? e.detalhe : ""));
       if (d) return `O canal não aceitou a mensagem: ${String(d).slice(0, 160)}.`;
+      break;
+    }
+    case "codewords_falhou": {   // o servidor já devolve o motivo em português (não repete o código)
+      const d = e && (e.detalhe_texto || (typeof e.detalhe === "string" ? e.detalhe : ""));
+      if (d) return String(d).slice(0, 240);
       break;
     }
     case "automacao_invalida":

@@ -345,6 +345,29 @@ await teste("erro do PostgREST → Error com .codigo e .hint; mensagemErro do Ap
     assert.ok(A.MENSAGENS[c], `texto para ${c}`);
   }
 });
+await teste("mensagemErro: TODO código de erro do painel devolvido por nx-enviar/nx-codewords/nx-midia/nx-ia tem texto em português (varredura do backend)", () => {
+  const dir = join(RAIZ, "supabase/functions/_compartilhado");
+  const so_agente = new Set(["payload_desconhecido", "acao_desconhecida", "agenda_indisponivel", "canal_invalido", "corpo_grande", "json_invalido", "falha_temporaria"]);   // só a API do fluxo de IA (não tem tela)
+  const codigos = new Set();
+  for (const f of ["enviar.js", "codewords.js", "midia.js", "ia_conversas.js", "comum.js"]) {
+    const t = readFileSync(join(dir, f), "utf8");
+    for (const m of t.matchAll(/(?:ErroApi|respostaErro)\(\s*"([a-z][a-z0-9_]{2,60})"/g)) codigos.add(m[1]);
+    for (const m of t.matchAll(/\berro:\s*"([a-z][a-z0-9_]{2,60})"/g)) codigos.add(m[1]);
+  }
+  for (const c of so_agente) codigos.delete(c);
+  codigos.delete("limite_taxa");
+  assert.ok(codigos.size > 20, `varredura achou códigos (${codigos.size})`);
+  assert.ok(codigos.has("codewords_sem_aparelho") && codigos.has("aparelho_desconectado") && codigos.has("erro_interno"), "a varredura enxerga os códigos novos");
+  const sem = [...codigos].filter(c => !A.MENSAGENS[c] && !/_nao_encontrad[oa]$/.test(c));
+  assert.deepEqual(sem, [], "códigos do backend sem mensagem em MENSAGENS");
+  for (const c of ["codewords_sem_aparelho", "aparelho_nao_encontrado", "numero_diferente", "aparelho_desconectado", "metodo_invalido", "erro_interno"]) {
+    assert.doesNotMatch(A.mensagemErro({ codigo: c }), /Não deu certo agora/, c);
+  }
+  assert.match(A.mensagemErro({ codigo: "codewords_sem_aparelho" }), /pareado no CodeWords/);
+  // codewords_falhou mostra o motivo que o servidor já escreveu em português, sem o código técnico
+  assert.equal(A.mensagemErro({ codigo: "codewords_falhou", detalhe_texto: "O CodeWords recusou a chave (cwk-) deste número." }), "O CodeWords recusou a chave (cwk-) deste número.");
+  assert.equal(A.mensagemErro({ codigo: "codewords_falhou" }), "O CodeWords não concluiu o pedido. Tente de novo em instantes.");
+});
 await teste("sessao_invalida chama o callback do shell", async () => {
   let chamou = 0;
   const f = fetchFalso([{ status: 401, corpo: { code: "28000", message: "sessao_invalida" } }]);
@@ -885,6 +908,95 @@ await teste("CSS mobile: botões em linhas que quebram não usam flex:1 (basis 0
   assert.match(crm, /\.crm-filtros \{[^}]*width: min\(360px, calc\(100vw - 42px\)\)/, "painel de filtros cabe no popover de 320 px");
   assert.doesNotMatch(ler("agenda.css"), /text-transform: capitalize/, "datas da agenda: só a 1ª letra maiúscula");
   for (const f of ["agenda.js", "agenda-config.js"]) assert.doesNotMatch(ler(f), /class: "bt bt-icone/, `${f}: bt + bt-icone espremia o ícone para 7 px`);
+});
+/** Histórico do navegador em memória: pushState, back() ASSÍNCRONO (como no navegador) e popstate. */
+function historicoFalso() {
+  const entradas = [{ state: null }]; let i = 0; const ouvintes = []; let backs = 0;
+  const emitir = () => { for (const f of ouvintes) f({ state: entradas[i].state }); };
+  const h = {
+    get state() { return entradas[i].state; },
+    get length() { return entradas.length; },
+    pushState(st) { entradas.splice(i + 1); entradas.push({ state: st }); i++; },
+    replaceState(st) { entradas[i].state = st; },
+    back() { backs++; setTimeout(() => { if (i > 0) { i--; emitir(); } }, 0); },
+  };
+  return { h, ouvir: (ev, f) => { if (ev === "popstate") ouvintes.push(f); }, indice: () => i, backs: () => backs,
+    usuarioVolta() { if (i > 0) { i--; emitir(); } }, entradas };
+}
+const tick = () => new Promise(r => setTimeout(r, 15));
+
+await teste("modal × botão Voltar: abrir empurra UMA entrada; Voltar fecha o modal sem trocar a rota; fechar por botão desfaz a entrada", async () => {
+  const f = historicoFalso();
+  const C = U.criarCamadas({ history: f.h, addEventListener: f.ouvir });
+  let fechou = 0;
+  const cam = C.abrir(() => { fechou++; cam.liberar(); });
+  assert.equal(f.entradas.length, 2, "uma entrada nova"); assert.match(f.h.state.nxCamada, /^camada-/); assert.equal(C.abertas(), 1);
+  // Voltar do navegador: fecha o modal, a entrada já foi desfeita (nada de history.back() extra)
+  f.usuarioVolta();
+  assert.equal(fechou, 1); assert.equal(C.abertas(), 0); assert.equal(f.backs(), 0, "o Voltar do usuário não chama back() de novo"); assert.equal(f.h.state, null);
+  // fechar por botão/Esc: a entrada é desfeita por history.back() (assíncrono) e quem navega logo depois espera
+  const c2 = C.abrir(() => {});
+  assert.equal(f.entradas.length, 2); // a antiga foi cortada pelo pushState
+  c2.liberar();
+  assert.equal(f.backs(), 1); assert.equal(C.voltaPendente(), true);
+  let navegou = false; C.aposVolta(() => { navegou = true; });
+  assert.equal(navegou, false, "a navegação espera o history.back() assentar");
+  await tick();
+  assert.equal(navegou, true); assert.equal(C.voltaPendente(), false); assert.equal(f.indice(), 0); assert.equal(f.h.state, null);
+  assert.equal(C.aposVolta(() => { navegou = "agora"; }), undefined); assert.equal(navegou, "agora", "sem volta pendente roda na hora");
+});
+await teste("modal × Voltar: fechar um modal e abrir outro no mesmo instante não deixa entrada sobrando nem fecha o novo", async () => {
+  const f = historicoFalso();
+  const C = U.criarCamadas({ history: f.h, addEventListener: f.ouvir });
+  let fechouB = 0;
+  const a = C.abrir(() => {});
+  a.liberar();
+  const b = C.abrir(() => { fechouB++; b.liberar(); });   // mesmo tick: o history.back() do A ainda está no ar
+  assert.equal(f.entradas.length, 2, "o push do B espera o back() do A");
+  await tick();
+  assert.equal(f.indice(), 1, "depois de assentar: exatamente uma entrada (a do B)"); assert.equal(f.entradas.length, 2);
+  assert.match(f.h.state.nxCamada, /^camada-/); assert.equal(fechouB, 0, "o back() do A não fecha o B");
+  f.usuarioVolta(); assert.equal(fechouB, 1); assert.equal(f.indice(), 0);
+  // dois modais empilhados: Voltar fecha só o de cima; fechar os dois no mesmo instante desfaz as duas entradas
+  const c1 = C.abrir(() => { c1.liberar(); }), c2 = C.abrir(() => { c2.liberar(); });
+  assert.equal(f.entradas.length, 3); assert.equal(C.abertas(), 2);
+  f.usuarioVolta(); assert.equal(C.abertas(), 1, "só o de cima fechou"); assert.equal(f.indice(), 1);
+  const c3 = C.abrir(() => {});
+  c3.liberar(); c1.liberar();   // mesmo tick
+  await tick(); await tick();
+  assert.equal(f.indice(), 0, "todas as entradas de modal foram desfeitas"); assert.equal(f.h.state, null); assert.equal(C.abertas(), 0);
+});
+await teste("modal × Voltar: navegar com modal aberto reaproveita a entrada do modal (Voltar não precisa de 2 toques); sem histórico vira no-op", async () => {
+  const f = historicoFalso();
+  const C = U.criarCamadas({ history: f.h, addEventListener: f.ouvir });
+  const cam = C.abrir(() => {});
+  assert.equal(C.consumirEntrada(), true, "a entrada atual é a do modal"); assert.equal(C.consumirEntrada(), false, "só uma navegação reaproveita a entrada");
+  f.h.replaceState(null);   // o que o navegar() faz em seguida
+  cam.liberar(); assert.equal(f.backs(), 0, "a entrada já foi reaproveitada: nada de back()");
+  assert.equal(C.consumirEntrada(), false, "sem modal aberto a navegação empurra normalmente");
+  // se o popstate nunca chegar, ninguém fica esperando para sempre
+  const timers = []; const g = historicoFalso(); g.h.back = () => {};
+  const D = U.criarCamadas({ history: g.h, addEventListener: g.ouvir, setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout: () => {} });
+  D.abrir(() => {}).liberar(); let rodou = false; D.aposVolta(() => { rodou = true; });
+  assert.equal(rodou, false); timers[0](); assert.equal(rodou, true); assert.equal(D.voltaPendente(), false);
+  // sem history (testes em Node / navegador sem API): nada quebra
+  const N = U.criarCamadas({ history: null, addEventListener: null });
+  const x = N.abrir(() => {}); x.liberar(); assert.equal(N.consumirEntrada(), false); assert.equal(N.voltaPendente(), false);
+  assert.ok(U.camadas && typeof U.camadas.abrir === "function", "ui.camadas é o singleton que o app.js usa");
+});
+await teste("modal: a camada nasce/morre com o modal(), e o navegar() do app espera o histórico assentar e reaproveita a entrada do modal", () => {
+  const ui = ler("ui.js"), app = ler("app.js");
+  assert.match(ui, /camada = camadas\.abrir\(\(\) => api\.fechar\(null\)\)/, "modal() abre a camada (Voltar fecha o modal)");
+  assert.match(ui, /if \(camada\) camada\.liberar\(\);/, "fechar() libera a camada");
+  assert.match(app, /camadas\.voltaPendente\(\)\) \{ E\.ui\.camadas\.aposVolta\(\(\) => navegar\(hash, \{ substituir \}\)\); return; \}/);
+  assert.match(app, /camadas\.consumirEntrada\(\)\) \{\s*history\.replaceState\(null,/);
+});
+await teste("CSS mobile: cabeçalho das tabelas-cartão sai do foco (visibility) e o rodapé do modal nunca sobrepõe o corpo que rola", () => {
+  const css = ler("app.css");
+  assert.match(css, /\.tabela thead \{[^}]*clip: rect\(0 0 0 0\);[^}]*visibility: hidden;/, "botões de ordenação escondidos não recebem Tab");
+  assert.match(css, /\.modal-corpo \{[^}]*overflow-y: auto;[^}]*min-height: 0;/, "o corpo do modal rola sozinho");
+  const rod = /\.modal-rod \{([^}]*)\}/.exec(css)[1];
+  assert.doesNotMatch(rod, /position:\s*(sticky|fixed|absolute)/, "rodapé do modal fica fora do corpo que rola: um campo no fim do corpo nunca fica atrás do botão primário");
 });
 await teste("netlify.toml: publish web, / e /index.html → /app/ (302 forçado), CSP do §3.9", () => {
   const t = readFileSync(join(RAIZ, "netlify.toml"), "utf8");

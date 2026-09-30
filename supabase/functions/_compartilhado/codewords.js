@@ -33,7 +33,7 @@ export const ID_OK = /^[A-Za-z0-9._:=+/@-]{1,160}$/;
 export const PRAZOS = { conexoes: 15_000, parear: 90_000, inscrever: 60_000, enviar: 60_000, mensagens: 20_000 };
 const CONFERENCIA_MS = 10 * 60_000;          // número do aparelho conferido vale 10 min
 const ESTADO_CONECTADO = /^(logged_in|connected)$/i;   // exato: "disconnected" contém "connected"
-const MOTIVOS = new Set(["pausada", "ia_desligada", "grupo", "duplicada", "bloqueado", "optout", "limite", "eco", "saida"]);
+const MOTIVOS = new Set(["pausada", "ia_desligada", "grupo", "duplicada", "bloqueado", "optout", "limite", "eco", "saida", "lid_sem_numero"]);
 const RESULTADOS_LEAD = new Set(["criado", "atribuido", "existente"]);
 const FUSO = "America/Sao_Paulo";
 
@@ -177,6 +177,30 @@ export function formaDoPayload(c, prefixo = "", out = [], nivel = 0) {
 }
 
 const GRUPO_TXT = /@g\.us|@broadcast|@newsletter|status@/i;
+/* @lid = "identificador local" do WhatsApp (15 dígitos que PARECEM um telefone, mas não são): nunca vira telefone.
+   Só serve se o payload trouxer o número real num campo alternativo (sender_pn, remoteJidAlt, participant_pn…). */
+const LID_TXT = /@(?:hosted\.)?lid$/i;
+/** O valor é um jid @lid? (aceita ":dispositivo" e o formato "X@lid in Y@…" do GOWA) */
+export function ehJidLid(v) {
+  if (typeof v !== "string") return false;
+  const s = v.trim();
+  return !!s && s.split(/\s+in\s+/i).some(p => LID_TXT.test(p.trim()));
+}
+/** Campos onde o WhatsApp entrega o NÚMERO REAL quando o chat vem como @lid (comparados sem caixa, "_" e "-"). */
+const CHAVES_NUMERO_REAL = new Set(["senderpn", "senderalt", "remotejidalt", "participantpn", "participantalt", "recipientalt",
+  "phonenumber", "jidalt", "chatpn", "frompn", "userpn", "pn", "senderphone", "chatphone", "numeroreal", "telefonereal"]);
+const normChave = k => String(k).toLowerCase().replace(/[_-]/g, "");
+/** Número real (8–15 dígitos, não-@lid, não-grupo, diferente do número do aparelho) em algum campo alternativo. */
+function numeroRealDoLid(cs, proprio) {
+  for (const o of cs) for (const k of Object.keys(o)) {
+    if (!CHAVES_NUMERO_REAL.has(normChave(k))) continue;
+    const v = o[k];
+    if ((typeof v !== "string" && typeof v !== "number") || ehJidLid(String(v)) || GRUPO_TXT.test(String(v))) continue;
+    const d = digitosDoJid(v);
+    if (d.length >= 8 && d.length <= 15 && d !== proprio) return d;
+  }
+  return "";
+}
 /** Número do interlocutor num jid ("5512…:12@s.whatsapp.net", "X@s.whatsapp.net in Y@…"). */
 function digitosDoJid(v) {
   const s = String(v ?? "").trim();
@@ -187,7 +211,7 @@ function digitosDoJid(v) {
 
 /**
  * Payload do fluxo/aparelho → mensagem normalizada.
- * @returns {{tipo:'mensagem'|'status'|'vazio', grupo:boolean, telefone:string, nome:string|null, texto:string,
+ * @returns {{tipo:'mensagem'|'status'|'vazio', grupo:boolean, lid:boolean, telefone:string, nome:string|null, texto:string,
  *   midia:{tipo:string, nome:string|null, cru:string}|null, messageId:string|null, direcao:'entrada'|'saida',
  *   autor:'ia'|'celular'|null, em:string|null, referral:object|null, status:object|null}}
  */
@@ -216,16 +240,25 @@ export function lerPayload(c, { numeroCanal = "", agora = Date.now() } = {}) {
 
   // interlocutor: primeiro o campo explícito do contrato; depois o chat; por último o remetente
   const candidatos = [];
+  let viuLid = false;
   for (const grupoChaves of [["telefone", "phone", "numero", "tel", "wa_id"], ["chat_id", "chatId", "remote_jid", "remoteJid", "jid"],
     ["from", "sender", "sender_id", "senderId", "author"]]) {
     for (const k of grupoChaves) for (const o of cs) {
       const v = o[k];
+      if (ehJidLid(v)) { viuLid = true; continue; }   // @lid nunca entra como telefone
       if (typeof v === "string" || typeof v === "number") { const d = digitosDoJid(v); if (d) candidatos.push(d); }
     }
   }
-  let telefone = candidatos.find(d => d.length >= 8 && d.length <= 15 && d !== proprio)
-    || candidatos.find(d => d.length >= 8 && d.length <= 15) || "";
-  if (!telefone && candidatos.some(d => d.length > 15)) grupo = true;
+  const validos = candidatos.filter(d => d.length >= 8 && d.length <= 15);
+  let telefone = validos.find(d => d !== proprio) || "";
+  let lid = false;
+  if (!telefone && viuLid) {
+    // o chat é um @lid e nenhum campo traz outro número: só serve o número real de um campo alternativo
+    telefone = numeroRealDoLid(cs, proprio);
+    lid = !telefone;
+  }
+  if (!telefone && !lid) telefone = validos[0] || "";   // só o próprio número: segue para o filtro de eco
+  if (!telefone && !lid && candidatos.some(d => d.length > 15)) grupo = true;
 
   // direção e autor
   const dirTxt = String(achar(cs, ["direcao", "direction"]) ?? "").toLowerCase();
@@ -293,7 +326,7 @@ export function lerPayload(c, { numeroCanal = "", agora = Date.now() } = {}) {
   if (referral && !Object.keys(referral).length) referral = null;
 
   const vazio = !telefone || (!texto && !midia);
-  return { tipo: vazio ? "vazio" : "mensagem", grupo, telefone, nome, texto, midia, messageId, direcao, autor, em, referral, status: null };
+  return { tipo: vazio ? "vazio" : "mensagem", grupo, lid, telefone, nome, texto, midia, messageId, direcao, autor, em, referral, status: null };
 }
 
 /** Id estável quando o fluxo não manda message_id (a repetição do mesmo evento não duplica). */
@@ -451,6 +484,7 @@ export async function enviarTextoCodeWords(cred, destino, texto, o = {}) {
   if (!cred?.codewords_phone_id) return falha("sem_aparelho", "Este número ainda não foi pareado no CodeWords. Use «Parear» em Configurações › Números.");
   const tel = soDigitos(destino);
   const msg = String(texto ?? "").trim();
+  if (ehJidLid(destino)) return falha("dados", "Este contato veio do WhatsApp sem número de telefone (id interno @lid): não dá para responder por aqui.");
   if (tel.length < 8 || tel.length > 15 || !msg || msg.length > 4096) return falha("dados", "Telefone ou texto inválido para o CodeWords.");
   if (o.db && o.conferir !== false) {
     const c = await conferirNumero(o.db, cred, o);
@@ -476,7 +510,9 @@ export async function enviarTextoCodeWords(cred, destino, texto, o = {}) {
 /** Mensagens de uma conversa no aparelho. Envelope diferente de {results:{data:[]}} é ERRO. */
 export async function mensagensDoAparelho(cred, telefone, o = {}) {
   if (!cred?.codewords_phone_id) return { erro: "aparelho não pareado" };
-  const jid = `${soDigitos(telefone)}@s.whatsapp.net`;
+  const digitos = soDigitos(telefone);
+  if (ehJidLid(telefone) || digitos.length < 8 || digitos.length > 15) return { erro: "telefone inválido para consultar o aparelho", invalido: true };
+  const jid = `${digitos}@s.whatsapp.net`;
   const r = await chamarCW(cred, `/proxy/chat/${encodeURIComponent(jid)}/messages?phone_id=${encodeURIComponent(cred.codewords_phone_id)}&limit=30`,
     { ms: PRAZOS.mensagens, fetch: o.fetch });
   if (!r.ok) return { erro: traduzirErroCW(r).texto };
@@ -563,6 +599,7 @@ class ErroAgente extends Error {
   constructor(codigo, status = 400, extra = {}) { super(codigo); this.codigo = codigo; this.status = status; this.extra = extra; }
 }
 const exigirTel = v => {
+  if (ehJidLid(v)) throw new ErroAgente("dados_invalidos", 400, { campo: "telefone" });   // @lid não é telefone
   const t = soDigitos(v);
   if (t.length < 8 || t.length > 15) throw new ErroAgente("dados_invalidos", 400, { campo: "telefone" });
   return t;
@@ -606,6 +643,11 @@ async function acaoMensagem(db, canal, corpo, deps) {
     return { ok: true, registrada: false, responder: false, motivo: "saida", recibos: res.length };
   }
   if (p.grupo) return saidaResp(null, false, "grupo");
+  if (p.lid) {
+    // remetente @lid sem número real: não vira contato/conversa/negócio e a IA não responde; guarda só a FORMA do payload
+    await db.rpc("nx_codewords_forma", { p_canal: canal.canal_id, p_forma: formaDoPayload(corpo) }).catch(() => null);
+    return saidaResp(null, false, "lid_sem_numero", { ignorado: "jid_lid_sem_numero" });
+  }
   if (p.tipo === "vazio") {
     await db.rpc("nx_codewords_forma", { p_canal: canal.canal_id, p_forma: formaDoPayload(corpo) }).catch(() => null);
     throw new ErroAgente("payload_desconhecido", 422, {
@@ -877,6 +919,7 @@ async function painelInscrever(db, cred, rota, o) {
 }
 
 async function painelEnviarTeste(db, cred, corpo, o) {
+  if (ehJidLid(corpo.para)) throw new ErroApi("dados_invalidos", 400, "para");
   const para = corpo.para == null || corpo.para === "" ? soDigitos(cred.codewords_numero) : soDigitos(corpo.para);
   if (para.length < 8 || para.length > 15) throw new ErroApi("dados_invalidos", 400, "para");
   const hora = rotuloAgora(new Date().toISOString());
@@ -918,6 +961,8 @@ export async function sincronizar(db, o = {}) {
     let tentadas = 0, falhas = 0, ultimoErro = null;
     await emLotes(g.conversas, 4, async cv => {
       if (Date.now() - inicio > orcamento) return;
+      const tel = soDigitos(cv.telefone);
+      if (ehJidLid(cv.telefone) || tel.length < 8 || tel.length > 15) return;   // @lid/telefone impossível: não há chat para consultar
       tentadas++;
       const m = await mensagensDoAparelho(cred, cv.telefone, o);
       if (m.erro) { falhas++; ultimoErro = m.erro; return; }
