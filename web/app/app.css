@@ -788,6 +788,74 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 .uso-barra.alta i { background: var(--c-aten); }
 
 /* ============================================================
+   ÓRBITA · assinatura visual 2026-09-30
+   Luz orbital lenta no palco, navegação mais tátil e hierarquia
+   consistente. Todos os efeitos usam os tokens white-label.
+   ============================================================ */
+.palco .brilho-a {
+  animation: orbitaBrilhoA 32s cubic-bezier(.45, 0, .55, 1) infinite alternate;
+  transform-origin: 38% 42%;
+  will-change: transform, opacity;
+}
+.palco .brilho-b {
+  animation: orbitaBrilhoB 39s cubic-bezier(.45, 0, .55, 1) infinite alternate;
+  transform-origin: 65% 62%;
+  will-change: transform, opacity;
+}
+@keyframes orbitaBrilhoA {
+  0% { transform: translate3d(0, 0, 0) scale(.94); opacity: .72; }
+  100% { transform: translate3d(5vw, 4vh, 0) scale(1.12); opacity: 1; }
+}
+@keyframes orbitaBrilhoB {
+  0% { transform: translate3d(0, 0, 0) scale(1.08); opacity: .65; }
+  100% { transform: translate3d(-4vw, -5vh, 0) scale(.92); opacity: .95; }
+}
+.lateral {
+  isolation: isolate;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--c-sup) 86%, transparent), color-mix(in srgb, var(--c-fundo) 64%, transparent));
+  box-shadow: 18px 0 48px -42px var(--c-sombra);
+}
+.lateral::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: -8rem;
+  left: -9rem;
+  width: 24rem;
+  height: 24rem;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--c-brilho-1), transparent 68%);
+  pointer-events: none;
+}
+.nav-b { transition: color var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out), transform var(--t-ui) var(--e-out); }
+.nav-b:hover { transform: translateX(2px); }
+.nav-b[aria-current="page"] {
+  background: linear-gradient(100deg, color-mix(in srgb, var(--c-prim) 13%, var(--c-sup-2)), var(--c-sup-2) 72%);
+  border-color: color-mix(in srgb, var(--c-prim) 20%, var(--c-borda));
+}
+.topo { box-shadow: 0 10px 30px -26px var(--c-sombra); }
+.topo-empresa, .topo-dir { min-width: 0; }
+.vista { background: radial-gradient(ellipse at 96% 0%, color-mix(in srgb, var(--c-brilho-1) 58%, transparent), transparent 34rem); }
+.cartao { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.bt { transition: transform var(--t-micro) var(--e-out), background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out), box-shadow var(--t-ui) var(--e-out), color var(--t-ui) var(--e-out); }
+.bt:hover:not(:disabled) { box-shadow: 0 9px 22px -16px var(--c-sombra); }
+.bt-icone { transition: transform var(--t-micro) var(--e-out), background-color var(--t-ui) var(--e-out), color var(--t-ui) var(--e-out); }
+.bt-icone:hover:not(:disabled) { transform: translateY(-1px); }
+.bt:focus-visible, .bt-icone:focus-visible, .nav-b:focus-visible, .barra-b:focus-visible {
+  outline: 2px solid var(--c-foco);
+  outline-offset: 3px;
+}
+@media (max-width: 760px) {
+  .vista { background: radial-gradient(ellipse at 100% 0%, color-mix(in srgb, var(--c-brilho-1) 42%, transparent), transparent 22rem); }
+  .topo { gap: .45rem; padding-inline: max(12px, env(safe-area-inset-left)); }
+  .topo-dir { gap: .1rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .palco .brilho-a, .palco .brilho-b { animation: none; will-change: auto; }
+  .nav-b:hover, .bt-icone:hover:not(:disabled) { transform: none; }
+}
+
+/* ============================================================
    T15 — ADMIN
    ============================================================ */
 .adm-filtros { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
@@ -990,3 +1058,46 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 .notif-vazio .ic { width: 22px; height: 22px; color: var(--c-texto-3); flex: none; }
 .notif-vazio b { color: var(--c-texto); }
 .sino .badge { pointer-events: none; }
+
+/* Aurora e pontos orbitais: atmosfera viva sem canvas nem carga contínua alta. */
+.palco::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: -34vmax;
+  background:
+    conic-gradient(from 155deg at 50% 48%, transparent 0 25%, color-mix(in srgb, var(--c-prim) 15%, transparent) 31%, transparent 43%, color-mix(in srgb, var(--c-sec) 13%, transparent) 53%, transparent 66%),
+    radial-gradient(ellipse at 48% 14%, var(--c-brilho-1), transparent 46%);
+  filter: blur(74px);
+  opacity: .7;
+  transform-origin: 50% 50%;
+  animation: orbitaAurora 48s cubic-bezier(.45, 0, .55, 1) infinite alternate;
+  will-change: transform, opacity;
+}
+.palco::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background-image:
+    radial-gradient(1px 1px at 9% 18%, color-mix(in srgb, var(--c-texto) 62%, transparent) 99%, transparent),
+    radial-gradient(1.2px 1.2px at 21% 74%, color-mix(in srgb, var(--c-prim-luz) 72%, transparent) 99%, transparent),
+    radial-gradient(1px 1px at 39% 33%, color-mix(in srgb, var(--c-texto) 58%, transparent) 99%, transparent),
+    radial-gradient(1.4px 1.4px at 63% 16%, color-mix(in srgb, var(--c-sec-luz) 68%, transparent) 99%, transparent),
+    radial-gradient(1px 1px at 78% 61%, color-mix(in srgb, var(--c-texto) 60%, transparent) 99%, transparent),
+    radial-gradient(1.2px 1.2px at 91% 38%, color-mix(in srgb, var(--c-prim-luz) 64%, transparent) 99%, transparent);
+  opacity: .45;
+  animation: orbitaPontos 16s ease-in-out infinite alternate;
+  will-change: transform, opacity;
+}
+@keyframes orbitaAurora {
+  0% { transform: translate3d(-1.5%, -1%, 0) rotate(-5deg) scale(.96); opacity: .42; }
+  100% { transform: translate3d(1.5%, 1%, 0) rotate(5deg) scale(1.06); opacity: .82; }
+}
+@keyframes orbitaPontos {
+  0% { transform: translate3d(0, 0, 0); opacity: .25; }
+  100% { transform: translate3d(0, -8px, 0); opacity: .62; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .palco::before, .palco::after { animation: none; transform: none; will-change: auto; }
+}

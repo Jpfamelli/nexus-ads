@@ -577,3 +577,54 @@
   .cv-falha .bt, .cvt-sec-cab .bt, .cfg-cw-card-actions > .bt, .cfg-cw-ops-actions > .bt,
   .cvc-acoes .cvc-ia-acao, .cv-alterna button, .cfg-vars button { min-height: 44px; }
 }
+
+/* ============================================================
+   ÓRBITA · foco no atendimento
+   ============================================================ */
+.cv-col-chat { background: color-mix(in srgb, var(--c-sup) 76%, transparent); }
+.cvc-msgs {
+  background-color: var(--c-fundo);
+  background-image:
+    radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--c-prim) 7%, transparent), transparent 58%),
+    radial-gradient(circle, color-mix(in srgb, var(--c-texto) 4%, transparent) .7px, transparent .9px);
+  background-size: 100% 100%, 28px 28px;
+}
+.cvc-cab { box-shadow: 0 10px 28px -26px var(--c-sombra); }
+.cvc-quem { transition: background-color var(--t-ui) var(--e-out), transform var(--t-micro) var(--e-out); }
+.cvc-quem:hover { transform: translateY(-1px); }
+.cvc-acoes > .bt:not(.bt-icone) { box-shadow: inset 0 1px 0 var(--c-luz-borda), 0 8px 20px -18px var(--c-sombra); }
+.cv-bolha { box-shadow: 0 12px 30px -24px var(--c-sombra), inset 0 1px 0 var(--c-luz-borda); }
+.cv-msg[data-dir="out"] .cv-bolha { box-shadow: 0 10px 28px -22px var(--c-prim), inset 0 1px 0 var(--c-luz-borda); }
+.cvx { border-top: 1px solid color-mix(in srgb, var(--c-borda-2) 70%, transparent); background: color-mix(in srgb, var(--c-sup) 92%, transparent); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+
+@media (max-width: 760px) {
+  .cvc-cab {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+    grid-template-areas: "voltar contato" "acoes acoes";
+    gap: .15rem .35rem;
+    min-height: 0;
+    padding: .35rem .65rem .45rem;
+  }
+  .cvc-voltar { grid-area: voltar; display: inline-grid; place-items: center; width: 38px; height: 42px; margin: 0; }
+  .cvc-quem { grid-area: contato; min-height: 48px; padding: .15rem .35rem; gap: .55rem; }
+  .cvc-quem .avatar { width: 38px; height: 38px; }
+  .cvc-quem-txt { flex: 1; }
+  .cvc-nome { font-size: var(--fs-17); }
+  .cvc-sub { overflow: visible; }
+  .cvc-sub .cvc-via, .cvc-sub .cvc-via-sep { display: inline; }
+  .cvc-sub .mono { overflow: hidden; text-overflow: ellipsis; }
+  .cvc-acoes { grid-area: acoes; justify-content: flex-end; flex-wrap: wrap; gap: .2rem; padding-left: 38px; }
+  .cvc-acoes > .bt:not(.bt-icone) { min-height: 40px; padding: .35rem .8rem; }
+  .cvc-acoes .bt-icone { width: 40px; height: 40px; }
+  .cvc-selos { border-bottom-color: color-mix(in srgb, var(--c-borda) 75%, transparent); }
+  .cvx { padding-bottom: calc(.6rem + env(safe-area-inset-bottom)); }
+}
+@media (max-width: 390px) {
+  .cvc-acoes { padding-left: 0; justify-content: space-between; }
+  .cvc-acoes > .bt:not(.bt-icone) { flex: 1; }
+  .cvc-sub .mono { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cvc-quem:hover { transform: none; }
+}
