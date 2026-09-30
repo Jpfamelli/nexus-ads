@@ -249,3 +249,7 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 - Verificação: Node 14/14 arquivos; teste de app 49 verificações; montagem e `deno check` 7/7; `git diff --check` aprovado (somente avisos LF/CRLF).
 - Integrações CodeWords/Meta/Google/IA reais não foram chamadas nem configuradas nesta rodada. A migration de memória está local, `nx_config` e dados remotos não foram alterados, `prontos.js` permanece fechado.
 - F8 continua aberta para os E2E reais em tenant/canais de teste, QA mobile autenticado, isolamento e limpeza. Netlify/preview hospedado e publicação de produção não foram atualizados; PR #1 permanece draft. Não foi feita mudança em `main`.
+
+## Commit da rodada — 2026-09-30 02:02 -03
+
+`6055700` (`feat(orbita): separar CRM, Ads e atendimento`) enviado para `origin/codex/orbita`. PR #1 continua aberto como draft, cabeça confirmada pelo GitHub; nenhuma mudança em `main`.
