@@ -76,8 +76,9 @@ Testes: `testes/app.teste.mjs` ganhou 3 testes (contraste das pílulas; proibiç
 - Estado "Anúncios sem métricas": visto uma vez (1440); nas demais passagens o agente E2E tinha métricas no tenant. A tela com métricas e alertas foi validada nas três larguras.
 - Telas de gestor/super (Marca e tema, Domínio próprio, integrações Meta/Google, Admin, revendas) em si: a conta é admin de cliente. Só a negação foi testada. Papéis menores (atendente, leitura) não foram testados.
 - Envio real de texto, modelo, áudio ou arquivo; microfone; importação de CSV; arrastar cartões com gesto de toque real; teclado virtual; iOS Safari e Firefox. Foi só Chrome headless com emulação de celular, não aparelho real.
-- Com um modal aberto, o botão Voltar do navegador muda a rota por baixo e o modal continua aberto (comportamento anterior, não alterado).
-- Nas tabelas que viram cartões no celular, os botões de ordenação do cabeçalho ficam ocultos mas continuam focáveis pelo teclado.
+- ~~Com um modal aberto, o botão Voltar do navegador muda a rota por baixo e o modal continua aberto.~~ **Corrigido em a1fc214** (30/09): `ui.camadas` empurra uma entrada de histórico por modal; Voltar fecha o modal e mantém a rota; fechar por botão/Esc desfaz a entrada; `navegar()` espera o `history.back()` e reaproveita a entrada do modal. Provado no Chrome (dev-falso, 375 px): Voltar fecha, Fechar + Voltar vai para a rota anterior em 1 toque, Ctrl+K → resultado termina na rota nova sem entrada sobrando. Gaveta (CRM é dirigida pela rota) não foi alterada.
+- ~~Nas tabelas que viram cartões no celular, os botões de ordenação do cabeçalho ficam ocultos mas continuam focáveis pelo teclado.~~ **Corrigido em a1fc214**: `.tabela thead` ganhou `visibility: hidden` no layout de cartões (Usuários, 375 px: 0 foco no cabeçalho em 60 Tab; forçando `visible` eram 9).
+- O "select de departamento coberto pelo botão primário" (Configurações › Números, cartão CodeWords, 375 px) **não é sobreposição real**: o select está abaixo da área visível do corpo do modal (que rola), e a checagem geométrica (`elementFromPoint`) cai no botão do rodapé. Conferido: rodapé fora do corpo que rola (sem `position: sticky/fixed`), todos os controles ficam livres depois de rolados até eles. Sem mudança de layout; teste de regressão garante a estrutura.
 
 ### Limpeza
 
