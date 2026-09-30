@@ -58,6 +58,7 @@ export function criarLista(A) {
 
   const avisoCanal = h("div", { class: "cvl-aviso", hidden: true });
   const infoBusca = h("div", { class: "cvl-busca-info", hidden: true });
+  const filtrosEl = h("div", { class: "cvl-filtros-ativos", role: "group", hidden: true, "aria-label": "Filtros aplicados" });
   const lista = h("div", { class: "cvl-lista", id: "cvl-lista", role: "tabpanel" });
   const maisBox = h("div", { class: "cvl-mais", hidden: true });
   const btMais = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Carregar mais");
@@ -67,12 +68,49 @@ export function criarLista(A) {
   const el = h("div", { class: "cvl" },
     h("header", { class: "cvl-cab" }, titulo, btNova),
     h("div", { class: "cvl-busca" }, h("label", { class: "busca" }, ui.icone("busca"), busca), btFiltro, btAvisos),
-    abasEl, avisoCanal, infoBusca, lista);
+    infoBusca, filtrosEl, abasEl, avisoCanal, lista);
 
   /* ---------------- filtros (popover) */
   function filtrosAtivos() {
     const f = A.filtro || {};
     return !!(f.departamento_id || f.canal_id || f.atendente || (f.etiquetas && f.etiquetas.length) || f.nao_lidas);
+  }
+  function desenharFiltrosAtivos() {
+    const f = A.filtro || {};
+    const deps = (A.base && A.base.departamentos) || [];
+    const canais = (A.base && A.base.canais) || [];
+    const pessoas = (A.base && A.base.usuarios) || [];
+    const etqs = (A.base && A.base.etiquetas) || [];
+    const rotulo = (lista, id, fallback) => lista.find(x => x.id === id)?.nome || fallback;
+    const ativos = [];
+    if (f.departamento_id) ativos.push({ chave: "departamento_id", rotulo: `Depto.: ${rotulo(deps, f.departamento_id, "selecionado")}` });
+    if (f.canal_id) ativos.push({ chave: "canal_id", rotulo: `Número: ${rotulo(canais, f.canal_id, "selecionado")}` });
+    if (f.atendente) {
+      const nome = f.atendente === "eu" ? "Comigo" : f.atendente === "sem" ? "Sem dono" : rotulo(pessoas, f.atendente, "selecionado");
+      ativos.push({ chave: "atendente", rotulo: `Atendente: ${nome}` });
+    }
+    for (const id of f.etiquetas || []) ativos.push({ chave: "etiquetas", id, rotulo: `Etiqueta: ${rotulo(etqs, id, "selecionada")}` });
+    if (f.nao_lidas) ativos.push({ chave: "nao_lidas", rotulo: "Só não lidas" });
+
+    ui.limpar(filtrosEl);
+    filtrosEl.hidden = ativos.length === 0;
+    for (const item of ativos) {
+      const b = h("button", { type: "button", class: "cvl-filtro-chip", "aria-label": `Remover filtro ${item.rotulo}` }, h("span", null, item.rotulo), h("b", { "aria-hidden": "true" }, "×"));
+      b.addEventListener("click", () => {
+        const novo = { ...f };
+        if (item.chave === "etiquetas") {
+          novo.etiquetas = (f.etiquetas || []).filter(id => id !== item.id);
+          if (!novo.etiquetas.length) delete novo.etiquetas;
+        } else delete novo[item.chave];
+        A.acoes.mudarLista({ filtro: novo });
+      });
+      filtrosEl.appendChild(b);
+    }
+    if (ativos.length > 1) {
+      const limpar = h("button", { type: "button", class: "bt bt-fant bt-p cvl-filtros-limpar" }, "Limpar filtros");
+      limpar.addEventListener("click", () => A.acoes.mudarLista({ filtro: {} }));
+      filtrosEl.appendChild(limpar);
+    }
   }
   function abrirFiltros() {
     const f = { ...(A.filtro || {}) };
@@ -261,6 +299,7 @@ export function criarLista(A) {
     { const p = A.acoes.lerAvisos(); btAvisos.dataset.ligado = p.som || p.tela ? "1" : "0";
       btAvisos.setAttribute("aria-label", `Avisos de mensagem nova (${p.som ? "som ligado" : "som desligado"}${p.tela ? ", área de trabalho ligada" : ""})`); }
     btFiltro.setAttribute("aria-label", filtrosAtivos() ? "Filtros (ativos)" : "Filtros");
+    desenharFiltrosAtivos();
     // sem número conectado
     const semCanal = A.base && !(A.base.canais || []).length;
     avisoCanal.hidden = !semCanal;

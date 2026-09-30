@@ -14,6 +14,16 @@ let _externas = null;      // cache das seções das outras frentes (por versão
 let _versaoExt = null;
 let _limpeza = [];
 
+/** Valida o contrato da RPC antes de a tela tratar uma resposta inválida como lista vazia. */
+export function validarListaDominios(valor) {
+  if (!Array.isArray(valor) || valor.some(d => !d || typeof d !== "object" || typeof d.host !== "string" || !["pendente", "ativo"].includes(d.status))) {
+    const erro = new Error("O servidor devolveu uma lista de domínios inválida. Tente atualizar a tela.");
+    erro.codigo = "resposta_invalida";
+    throw erro;
+  }
+  return valor;
+}
+
 export function desmontar() { for (const f of _limpeza) try { f(); } catch { /* ok */ } _limpeza = []; }
 
 async function secoesExternas(ctx) {
@@ -828,7 +838,7 @@ async function secaoDominio(ctx, alvo) {
     const host = String(d.host || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) return ui.marcarErro(form, "host", "Use algo como crm.suaempresa.com.br.");
     try {
-      lista = await ui.carregando(form.querySelector("[type=submit]"), api.rpc("nx_dominio_salvar", { p_host: host, p_cliente: d.cliente || null }));
+      lista = validarListaDominios(await ui.carregando(form.querySelector("[type=submit]"), api.rpc("nx_dominio_salvar", { p_host: host, p_cliente: d.cliente || null })));
       form.reset();
       ui.toast("Domínio cadastrado. Agora crie o registro CNAME no seu provedor.", { tipo: "ok" });
       desenhar();
@@ -845,7 +855,7 @@ async function secaoDominio(ctx, alvo) {
         texto: "Com um domínio próprio, a tela de entrada, os convites e os links de senha saem com o seu endereço e a sua marca." }));
       return;
     }
-    for (const d of lista) caixa.append(cartaoDominio(ctx, d, { aoRemover: async () => { lista = await api.rpc("nx_dominios_listar"); desenhar(); } }));
+    for (const d of lista) caixa.append(cartaoDominio(ctx, d, { aoRemover: async () => { lista = validarListaDominios(await api.rpc("nx_dominios_listar")); desenhar(); } }));
   }
   alvo.append(
     h("div", { class: "cartao" },
@@ -854,7 +864,7 @@ async function secaoDominio(ctx, alvo) {
       form),
     caixa);
   caixa.append(ui.esqueleto("lista", 2));
-  try { lista = await api.rpc("nx_dominios_listar"); desenhar(); }
+  try { lista = validarListaDominios(await api.rpc("nx_dominios_listar")); desenhar(); }
   catch (e) { ui.limpar(caixa); caixa.append(ui.erroCartao(e, () => secaoDominio(ctx, (ui.limpar(alvo), alvo)))); }
 }
 

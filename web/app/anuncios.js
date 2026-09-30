@@ -245,7 +245,7 @@ export async function montar(ctx) {
         extra: !Number.isFinite(t.cpa) ? `meta ${N.brl(meta)}` : `meta ${N.brl(meta)} · ${N.pc(dif, 0)} ${t.cpa <= meta ? "abaixo" : "acima"}` },
       { l: "Conversas contadas pela plataforma", v: t.conversoes, a: ta.conversoes, f: N.int, s: "cima", extra: "o que o Meta/Google registrou" },
       { l: "Receita fechada", v: c.receita, a: ca.receita, f: N.brl0, s: "cima",
-        extra: eGestor(ctx) && Number.isFinite(P.roas) ? `${N.dec(P.roas, 1)}x o investido em anúncios` : "estimativa pelo valor de cada fechamento" },
+        extra: eGestor(ctx) && Number.isFinite(P.roas) ? `${N.dec(P.roas, 1)}x o investido em anúncios` : "valor informado nos negócios ganhos do CRM" },
     ];
     const regua = h("div", { class: "rel-kpis rel-kpis-4" });
     kpis.forEach((k, n) => {
@@ -545,7 +545,7 @@ export async function montar(ctx) {
       ul.append(h("li", {}, b));
     }
     corpo.append(h("div", { class: "ads-rel-grade" },
-      h("div", { class: "rel-cartao rel-entra" }, h("h2", { class: "rel-h2" }, "Enviados no WhatsApp"), ul,
+      h("div", { class: "rel-cartao rel-entra" }, h("h2", { class: "rel-h2" }, "Relatórios e prévias"), ul,
         h("p", { class: "rel-nota" }, "✓ a API aceitou · ✓✓ chegou no celular · ! não saiu. Quando o relatório de um dia ainda não foi enviado, aparece a prévia calculada agora.")),
       h("div", { class: "rel-cartao ads-fone-cartao rel-entra" }, tela)));
     mostrar();

@@ -130,12 +130,12 @@ function ajustarAltura() {
   const chatCheio = celular && A.painel === "chat";
   const barra = document.querySelector(".barra");
   const hBarra = celular && !chatCheio && barra ? barra.getBoundingClientRect().height : 0;
-  const h = Math.max(420, Math.floor(alturaTela - Math.max(0, topo) - hBarra));
+  const h = Math.max(0, Math.floor(alturaTela - Math.max(0, topo) - hBarra));
   A.raiz.style.setProperty("--cv-altura", `${h}px`);
 }
 
 function observarLayout() {
-  const onResize = () => { ajustarAltura(); posicionarLateral(); };
+  const onResize = () => { mostrarPainel(A.painel); ajustarAltura(); posicionarLateral(); };
   addEventListener("resize", onResize);
   const vv = window.visualViewport;
   if (vv) vv.addEventListener("resize", onResize);

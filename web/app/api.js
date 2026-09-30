@@ -11,6 +11,7 @@
    ============================================================ */
 
 export const MENSAGENS = {
+  resposta_invalida: "O servidor devolveu dados em formato inesperado. Atualize a tela e tente de novo.",
   // do painel clássico (web/dados.js), com a marca no lugar de "Nexus"
   sessao_invalida: "Sua sessão expirou. Entre de novo.",
   conta_pendente: "Sua conta ainda está aguardando aprovação.",

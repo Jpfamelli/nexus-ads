@@ -131,13 +131,26 @@ const baseConversas = { eu: { id: ID.eu, nome: "Dra. Helena", papel: "admin", de
   departamentos, respostas, etiquetas, usuarios, templates, cfg: { recibo_leitura: true, assinatura: false },
   ia: { ligada: true, cota: { usadas: 42, limite: 300 } }, config: { departamentos, ia: configuracaoIA } };
 const horarioDefault = { 0: [], 1: [["08:00", "18:00"]], 2: [["08:00", "18:00"]], 3: [["08:00", "18:00"]], 4: [["08:00", "18:00"]], 5: [["08:00", "18:00"]], 6: [["08:00", "12:00"]] };
-const relVendas = () => ({ funis: funis.map(f => ({ id: f.id, nome: f.nome })), funil_ref: { id: ID.funil, nome: "Pacientes" },
-  kpis: { criados: 36, ganhos: 9, receita: 28400, conversao_pct: 33.3, ticket_medio: 3155, ciclo_medio_dias: 12, abertos: 18, valor_aberto: 67400, previsao_ponderada: 26200, perdidos: 4, valor_perdido: 9800 },
-  kpis_anterior: { criados: 29, ganhos: 7, receita: 20300, conversao_pct: 28, ticket_medio: 2900, ciclo_medio_dias: 16 },
+const relVendas = () => {
+  const receitasGanhos = [3150, 3200, 2800, 3600, 2900, 3150, 3000, 3100, 3500];
+  let ganho = 0;
+  const serie = Array.from({ length: 14 }, (_, i) => {
+    const d = somaDia(hoje, i - 13);
+    const criados = 1 + i % 4 + (i % 5 === 0 ? 1 : 0);
+    const ganhos = (i % 3 === 0 ? 1 : 0) + ([2, 5, 8, 11].includes(i) ? 1 : 0);
+    const receita = Array.from({ length: ganhos }, () => receitasGanhos[ganho++]).reduce((s, v) => s + v, 0);
+    return { d, criados, ganhos, receita };
+  });
+  return { funis: funis.map(f => ({ id: f.id, nome: f.nome })), funil_ref: { id: ID.funil, nome: "Pacientes" },
+  kpis: { criados: 36, ganhos: 9, receita: 28400, conversao_pct: 69.2, ticket_medio: 3155.56, ciclo_medio_dias: 12, abertos: 18, valor_aberto: 67400, previsao_ponderada: 26200, perdidos: 4, valor_perdido: 9800 },
+  kpis_anterior: { criados: 29, ganhos: 7, receita: 20300, conversao_pct: 28, ticket_medio: 2900, ciclo_medio_dias: 16, perdidos: 18 },
   funil: nomesEtapas.map((e, i) => ({ nome: e.nome, cor: e.cor, tipo: e.tipo, qtd_atual: [8, 5, 4, 1, 9, 2, 2][i], valor_atual: [0, 0, 0, 0, 28400, 9800, 0][i], passaram: [36, 21, 14, 6, 9, 4, 2][i], avancaram: [21, 14, 9, 2, 0, 0, 0][i], conversao_proxima_pct: [58, 67, 64, 33, null, null, null][i] })),
-  serie: Array.from({ length: 14 }, (_, i) => { const d = somaDia(hoje, i - 13); return { d, criados: 1 + i % 4, ganhos: i % 3 === 0 ? 1 : 0, receita: i % 3 === 0 ? 3150 : 0 }; }),
-  por_origem: [{ origem: "anuncio", plataforma: "google", nome: "Google Ads", criados: 16, ganhos: 5, receita: 16200 }, { origem: "whatsapp", nome: "WhatsApp", criados: 12, ganhos: 2, receita: 6300 }, { origem: "indicacao", nome: "Indicação", criados: 8, ganhos: 2, receita: 5900 }],
-  motivos_perda: [{ nome: "Preço", qtd: 3, valor: 7400 }, { nome: "Sem retorno", qtd: 1, valor: 2400 }], por_dono: [{ nome: "Dra. Helena", criados: 22, ganhos: 6, receita: 19200, ticket_medio: 3200, abertos: 11 }, { nome: "Ana Paula", criados: 14, ganhos: 3, receita: 9200, ticket_medio: 3066, abertos: 7 }], parados: [] });
+  serie,
+  por_origem: [{ origem: "anuncio", plataforma: "google", nome: "Google Ads", criados: 16, ganhos: 5, perdidos: 2, receita: 16200, conversao_pct: 71.4 }, { origem: "whatsapp", nome: "WhatsApp", criados: 12, ganhos: 2, perdidos: 1, receita: 6300, conversao_pct: 66.7 }, { origem: "indicacao", nome: "Indicação", criados: 8, ganhos: 2, perdidos: 1, receita: 5900, conversao_pct: 66.7 }],
+  motivos_perda: [{ nome: "Preço", qtd: 3, valor: 7400 }, { nome: "Sem retorno", qtd: 1, valor: 2400 }],
+  por_dono: [{ nome: "Dra. Helena", criados: 22, ganhos: 6, receita: 19200, ticket_medio: 3200, abertos: 11 }, { nome: "Ana Paula", criados: 14, ganhos: 3, receita: 9200, ticket_medio: 3066.67, abertos: 7 }],
+  parados: [] };
+};
 const relAtendimento = () => ({ kpis: { novas: 64, resolvidas: 58, msgs_in: 192, msgs_out: 247, tpr_mediana_min: 8, tpr_media_min: 12, resolucao_mediana_h: 3.2, abertas_agora: 5, aguardando_agora: 2, sem_resposta: 3 },
   kpis_anterior: { novas: 53, resolvidas: 47, msgs_in: 160, msgs_out: 205, tpr_mediana_min: 11, tpr_media_min: 15, resolucao_mediana_h: 4.1, sem_resposta: 6 },
   departamentos: departamentos.map(d => ({ id: d.id, nome: d.nome })),
@@ -259,10 +272,51 @@ function rpc(nome, p = {}) {
     case "nx_cv_base": return baseConversas;
     case "nx_canais_listar": return canais;
     case "nx_cv_listar": {
-      const aba = p.p_filtro?.aba || "abertas";
-      const visible = conversas.filter(c => c.status !== "resolvida" && (aba === "sem_dono" ? !c.atribuida_a : aba === "minhas" ? c.atribuida_a === ID.eu : aba === "pendentes" ? c.status === "pendente" : true));
-      return { itens: visible.map(dataConv), tem_mais: false, aba, busca: false,
-        contagens: { minhas: 1, sem_dono: 1, aguardando: 2, abertas: 2, pendentes: 1, nao_lidas: 3 } };
+      const f = p.p_filtro || {}, aba = f.aba || "abertas", q = String(f.busca || "").trim();
+      const visiveis = conversas.filter(c => !c.oculta);
+      const porAba = c => {
+        if (aba === "ocultas") return !!c.oculta;
+        if (q.length >= 2) return true; // busca real percorre todas as abas, exceto Ocultas
+        switch (aba) {
+          case "minhas": return ["aberta", "pendente"].includes(c.status) && c.atribuida_a === ID.eu;
+          case "sem_dono": return ["aberta", "pendente"].includes(c.status) && !c.atribuida_a;
+          case "aguardando": return c.status === "aberta" && !!c.aguardando;
+          case "abertas": return c.status === "aberta";
+          case "pendentes": return c.status === "pendente";
+          case "resolvidas": return c.status === "resolvida";
+          default: return false;
+        }
+      };
+      const correspondeBusca = c => {
+        if (q.length < 2 || aba === "ocultas") return true;
+        const ct = contatos.find(x => x.id === c.contato_id);
+        const normalizar = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
+        const qn = normalizar(q), dig = q.replace(/\D/g, "");
+        return normalizar(ct?.nome).includes(qn) || normalizar(c.protocolo).includes(qn)
+          || (dig.length >= 4 && String(ct?.telefone || "").replace(/\D/g, "").includes(dig));
+      };
+      const filtradas = visiveis.filter(c => porAba(c)
+        && (!f.departamento_id || f.departamento_id === ID.dep)
+        && (!f.canal_id || c.canal_id === f.canal_id)
+        && (!f.atendente || (f.atendente === "eu" ? c.atribuida_a === ID.eu : f.atendente === "sem" ? !c.atribuida_a : c.atribuida_a === f.atendente))
+        && (!Array.isArray(f.etiquetas) || !f.etiquetas.length || f.etiquetas.some(id => (contatos.find(x => x.id === c.contato_id)?.etiquetas || []).includes(id)))
+        && (!f.nao_lidas || c.nao_lidas > 0)
+        && correspondeBusca(c));
+      const ordenar = (a, b) => aba === "aguardando" && q.length < 2
+        ? b.minutos - a.minutos
+        : a.minutos - b.minutos;
+      filtradas.sort(ordenar);
+      const limite = Math.min(100, Math.max(1, Number(p.p_limite) || 50));
+      const itens = filtradas.slice(0, limite).map(dataConv);
+      const contagens = {
+        minhas: visiveis.filter(c => ["aberta", "pendente"].includes(c.status) && c.atribuida_a === ID.eu).length,
+        sem_dono: visiveis.filter(c => ["aberta", "pendente"].includes(c.status) && !c.atribuida_a).length,
+        aguardando: visiveis.filter(c => c.status === "aberta" && c.aguardando).length,
+        abertas: visiveis.filter(c => c.status === "aberta").length,
+        pendentes: visiveis.filter(c => c.status === "pendente").length,
+        nao_lidas: visiveis.filter(c => c.nao_lidas > 0).length,
+      };
+      return { itens, tem_mais: filtradas.length > limite, aba, busca: q.length >= 2, contagens };
     }
     case "nx_cv_ver": { const c = conversas.find(x => String(x.id) === String(p.p_id)) || conversas[0], ct = contatos.find(x => x.id === c.contato_id);
       return { conversa: dataConv(c), contato: { ...ct }, anuncio: ct.plataforma ? { plataforma: ct.plataforma, campanha_nome: ct.campanha_nome, anuncio_nome: "Vídeo de apresentação" } : null,
@@ -343,7 +397,7 @@ const servidor = http.createServer(async (req, res) => {
       arquivo = Buffer.from('export const MODULOS_PRONTOS = ["inicio","conversas","crm","empresas","tarefas","ads","automacoes","relatorios","admin"];\nexport const CONFIG_PRONTAS = ["perfil","usuarios","marca","dominio","plano","numeros","respostas","atendimento","ia","departamentos","funis","campos","etiquetas","motivos","anuncios","formulario","agenda","rastreio"];\n');
     }
     if (caminho === "/app/index.html" && url.searchParams.get("dev-falso") === "1") {
-      const boot = `<script>(function(){if(location.hostname!=="127.0.0.1"&&location.hostname!=="localhost")return;var aviso=document.createElement("aside");aviso.textContent="DEMO LOCAL · dados fictícios; mensagens e integrações não são reais.";aviso.setAttribute("role","status");aviso.style.cssText="position:fixed;left:50%;bottom:12px;transform:translateX(-50%);z-index:2147483647;max-width:calc(100vw - 24px);padding:8px 12px;border:1px solid rgba(255,255,255,.25);border-radius:999px;background:#B0761F;color:#05080C;font:600 12px/1.3 system-ui,sans-serif;text-align:center;box-shadow:0 8px 24px rgba(0,0,0,.3);pointer-events:none";document.body.appendChild(aviso);var q=new URLSearchParams(location.search);try{if(q.has("login")){localStorage.removeItem("nx-token");location.hash="#/login";}else{localStorage.setItem("nx-token","demo-local-session");}sessionStorage.setItem("nx-app-dev","1");}catch(e){}var original=window.fetch.bind(window);window.fetch=function(input,init){var u;try{u=new URL(typeof input==="string"?input:input.url,location.href);}catch(e){return original(input,init);}if(u.hostname==="dtjznipitihnwmcgpzqh.supabase.co"){u=new URL("/__dev_falso"+u.pathname+u.search,location.origin);return original(u,init);}return original(input,init);};})();</script>`;
+      const boot = `<script>(function(){if(location.hostname!=="127.0.0.1"&&location.hostname!=="localhost")return;var q=new URLSearchParams(location.search);try{if(q.has("login")){localStorage.removeItem("nx-token");location.hash="#/login";}else{localStorage.setItem("nx-token","demo-local-session");}sessionStorage.setItem("nx-app-dev","1");}catch(e){}var original=window.fetch.bind(window);window.fetch=function(input,init){var u;try{u=new URL(typeof input==="string"?input:input.url,location.href);}catch(e){return original(input,init);}if(u.hostname==="dtjznipitihnwmcgpzqh.supabase.co"){u=new URL("/__dev_falso"+u.pathname+u.search,location.origin);return original(u,init);}return original(input,init);};})();</script>`;
       arquivo = Buffer.from(arquivo.toString("utf8").replace("<body>", `<body>\n${boot}`));
     }
     res.writeHead(200, { "content-type": MIME[extname(alvo).toLowerCase()] || "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "same-origin" });

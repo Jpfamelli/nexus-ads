@@ -640,6 +640,7 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 .faixa p { flex: 1 1 16rem; min-width: 0; }
 .faixa b { font-weight: 700; }
 .faixa-suporte { background: var(--c-aten-suave); } .faixa-suporte .ic { color: var(--c-aten); }
+.faixa-demo-local { background: var(--c-aten-suave); }
 .faixa-bloqueio { background: var(--c-ruim-suave); } .faixa-bloqueio .ic { color: var(--c-ruim); }
 .faixa .bt { min-height: 30px; padding: .2rem .8rem; font-size: var(--fs-13); }
 

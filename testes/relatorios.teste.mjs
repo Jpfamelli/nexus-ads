@@ -202,6 +202,10 @@ await teste("relatórios enviados: ordem por referência (mensal antes do diári
   assert.deepEqual(l.map(x => x.chave), ["diario|2026-09-26", "diario|2026-09-25", "mensal|2026-09-01", "diario|2026-09-01"]);
   assert.equal(l[2].titulo, "Resumo de setembro de 2026"); assert.ok(l[2].ia);
   assert.equal(l[0].titulo, "Diário de 26/09/2026"); assert.equal(l[0].envio.k, "erro");
+  assert.deepEqual(L.listaRelatorios([null, {}, { tipo: "mensal", referencia: "não é data" }, { tipo: "outro", referencia: "2026-09-01" }]), [],
+    "respostas incompletas não viram 'undefined' no painel e não quebram a lista");
+  assert.deepEqual(L.listaRelatorios([{ tipo: "diario", referencia: "2026-02-31", texto: "inválida" }]), [], "datas impossíveis não viram títulos incorretos");
+  assert.doesNotThrow(() => L.listaRelatorios({ erro: "resposta inesperada" }), "formato de RPC inesperado não quebra a tela");
 });
 
 await teste("texto do WhatsApp vira tokens (nunca HTML): *negrito*, _itálico_, quebra e '<script>' como texto", () => {
@@ -224,6 +228,15 @@ await teste("cliente sem anúncios: nada quebra e nada é inventado", () => {
   const R = L.montarRadar(M0, {});
   assert.deepEqual([R.ativos, R.episodios.length, R.registro.length], [0, 0, 0]);
   assert.equal(L.estadoIntegracao([], []).nivel, "nenhuma");
+});
+
+await teste("interface de Ads explica a origem do retorno e distingue relatórios enviados de prévias", () => {
+  const src = ler("web/app/anuncios.js");
+  assert.match(src, /"Retorno total"/);
+  assert.match(src, /receita ÷ \(anúncios \+ gestão\)/);
+  assert.match(src, /valor informado nos negócios ganhos do CRM/);
+  assert.match(src, /"Relatórios e prévias"/);
+  assert.match(src, /ainda não enviado · prévia/);
 });
 
 /* ============================================================

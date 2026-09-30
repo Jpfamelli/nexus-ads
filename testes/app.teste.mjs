@@ -40,9 +40,19 @@ const V = await imp("vocab.js");
 const A = await imp("api.js");
 const P = await imp("pulso.js");
 const U = await imp("ui.js");
+const CFG = await imp("config.js");
 
 /* ============================================================ (a) TEMA */
 console.log("\n(a) tema.js");
+
+await teste("Admin: a RPC de domínios precisa devolver array com host/status válidos", () => {
+  assert.deepEqual(CFG.validarListaDominios([]), []);
+  const linhas = [{ host: "crm.exemplo.com.br", status: "pendente" }, { host: "app.exemplo.com.br", status: "ativo" }];
+  assert.deepEqual(CFG.validarListaDominios(linhas), linhas);
+  for (const invalido of [null, {}, [{ host: "crm.exemplo.com.br" }], [null], [{ host: 7, status: "ativo" }], [{ host: "a.com", status: "removido" }]]) {
+    assert.throws(() => CFG.validarListaDominios(invalido), e => e.codigo === "resposta_invalida" && /lista de domínios inválida/.test(e.message));
+  }
+});
 // gerador determinístico (mulberry32) para as 30 marcas "aleatórias"
 function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 const sorte = rng(20260928);
@@ -309,11 +319,12 @@ await teste("erro do PostgREST → Error com .codigo e .hint; mensagemErro do Ap
   assert.equal(A.mensagemErro({ codigo: "motivo_obrigatorio", hint: "texto" }), "Escolha o motivo da perda e escreva a justificativa.");
   assert.equal(A.mensagemErro({ codigo: "marca_invalida", hint: "cores.primaria" }), "Confira o campo cor primária da marca.");
   assert.equal(A.mensagemErro({ codigo: "credenciais_invalidas" }), "E-mail ou senha não conferem.");
+  assert.equal(A.mensagemErro({ codigo: "resposta_invalida" }), "O servidor devolveu dados em formato inesperado. Atualize a tela e tente de novo.");
   assert.match(A.mensagemErro({ codigo: "codigo_que_nao_existe" }), /^Não deu certo agora \(codigo_que_nao_existe\)/);
   for (const c of ["sem_permissao", "conta_suspensa", "teste_expirado", "modulo_desligado", "tempo_esgotado", "periodo_grande", "funcao_invalida",
     "so_plataforma", "link_invalido", "ultimo_admin", "nao_pode_alterar_a_si", "slug_em_uso", "dominio_em_uso", "numero_em_uso", "atalho_em_uso",
     "dominio_invalido", "telefone_em_uso", "dados_invalidos", "contato_nao_encontrado", "valor_obrigatorio", "conversa_resolvida", "ja_existe_aberta",
-    "fora_da_janela", "canal_sem_token", "template_invalido", "midia_grande", "midia_tipo", "ia_indisponivel", "ia_cota", "muitos_pedidos", "limite_taxa"]) {
+    "fora_da_janela", "canal_sem_token", "template_invalido", "midia_grande", "midia_tipo", "ia_indisponivel", "ia_cota", "muitos_pedidos", "limite_taxa", "resposta_invalida"]) {
     assert.ok(A.MENSAGENS[c], `texto para ${c}`);
   }
 });

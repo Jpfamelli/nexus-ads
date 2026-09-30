@@ -1112,6 +1112,10 @@ function desenharFaixas() {
   const { ui } = E;
   const alvo = $("faixas");
   ui.limpar(alvo);
+  if ((location.hostname === "127.0.0.1" || location.hostname === "localhost") && new URLSearchParams(location.search).get("dev-falso") === "1") {
+    alvo.appendChild(ui.h("div", { class: "faixa faixa-demo-local", role: "status" }, ui.icone("info"),
+      ui.h("p", null, "DEMO LOCAL · dados fictícios; mensagens e integrações não são reais.")));
+  }
   const cli = E.cliente;
   if (!cli || !E.sessao) return;
   const suporteWa = E.marca && E.marca.suporte_wa;

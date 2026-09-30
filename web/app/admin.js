@@ -773,7 +773,11 @@ async function telaDominios(ctx, corpo) {
   let dados = [], cfg = null;
   async function carregar() {
     ui.limpar(lista); lista.append(ui.esqueleto("cartoes", 2));
-    try { [dados, cfg] = await Promise.all([api.rpc("nx_dominios_listar"), cfg || modConfig(ctx)]); }
+    try {
+      const [resposta, modulo] = await Promise.all([api.rpc("nx_dominios_listar"), cfg || modConfig(ctx)]);
+      cfg = modulo;
+      dados = cfg.validarListaDominios(resposta);
+    }
     catch (e) { ui.limpar(lista); lista.append(ui.erroCartao(e, carregar)); return; }
     desenhar();
   }
@@ -788,7 +792,7 @@ async function telaDominios(ctx, corpo) {
     for (const d of itens) lista.append(cfg.cartaoDominio(ctx, d, {
       mostrarOrg: superConta,
       aoRemover: carregar,
-      aoStatus: superConta ? async ativo => { dados = await api.rpc("nx_dominio_status", { p_host: d.host, p_ativo: ativo }); ui.toast(ativo ? `${d.host} ativo.` : `${d.host} voltou a pendente.`, { tipo: "ok" }); desenhar(); } : null,
+      aoStatus: superConta ? async ativo => { dados = cfg.validarListaDominios(await api.rpc("nx_dominio_status", { p_host: d.host, p_ativo: ativo })); ui.toast(ativo ? `${d.host} ativo.` : `${d.host} voltou a pendente.`, { tipo: "ok" }); desenhar(); } : null,
     }));
   }
   filtro.addEventListener("change", desenhar);
@@ -810,7 +814,10 @@ async function telaDominios(ctx, corpo) {
         }
       } },
     ] });
-    if (Array.isArray(r)) { dados = r; desenhar(); ui.toast("Domínio cadastrado como pendente.", { tipo: "ok" }); }
+    if (r !== null && r !== undefined) {
+      try { dados = cfg.validarListaDominios(r); desenhar(); ui.toast("Domínio cadastrado como pendente.", { tipo: "ok" }); }
+      catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); await carregar(); }
+    }
   });
   await carregar();
 }
@@ -827,13 +834,19 @@ function cartaoDominiosCliente(ctx, cli) {
   const form = h("form", { class: "dom-add", novalidate: true }, host, bt);
   async function carregar() {
     try {
-      const todos = await api.rpc("nx_dominios_listar");
+      const modulo = await modConfig(ctx);
+      const todos = modulo.validarListaDominios(await api.rpc("nx_dominios_listar"));
       const meus = todos.filter(d => d.cliente && d.cliente.id === cli.id);
       ui.limpar(lista);
       if (!meus.length) lista.append(h("p", { class: "fraco" }, "Sem domínio próprio. Os links usam o endereço da agência."));
       for (const d of meus) lista.append(h("div", { class: "dom-linha" }, ui.icone("globo"), h("span", { class: "mono" }, d.host),
         ui.pilula(d.status === "ativo" ? "Ativo" : "Pendente", d.status === "ativo" ? "ok" : "aten")));
-    } catch (e) { ui.limpar(lista); lista.append(h("p", { class: "fraco" }, api.mensagemErro(e))); }
+    } catch (e) {
+      ui.limpar(lista);
+      const tentar = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Tentar novamente");
+      tentar.addEventListener("click", carregar);
+      lista.append(h("p", { class: "fraco", role: "alert" }, api.mensagemErro(e)), tentar);
+    }
   }
   form.addEventListener("submit", async ev => {
     ev.preventDefault();

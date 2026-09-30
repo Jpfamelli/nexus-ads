@@ -41,7 +41,38 @@ test("agenda local fictícia: marca, bloqueia conflito e desmarca sem rede exter
   };
   try {
     const pagina = await fetch(`${base}/app/?dev-falso=1`).then(r => r.text());
-    assert.match(pagina, /DEMO LOCAL · dados fictícios; mensagens e integrações não são reais\./, "a interface deixa claro que não é uma conta conectada");
+    const app = await fetch(`${base}/app/app.js`).then(r => r.text());
+    assert.match(app, /DEMO LOCAL · dados fictícios; mensagens e integrações não são reais\./, "a interface deixa claro que não é uma conta conectada");
+    assert.match(app, /faixa-demo-local/, "o aviso usa a faixa de sistema, sem cobrir o campo de mensagem");
+    assert.doesNotMatch(pagina, /position:fixed;left:50%;bottom:12px/, "o servidor local não injeta mais uma tarja fixa por cima da interface");
+
+    const rel = await rpc("nx_rel_vendas", {});
+    assert.equal(rel.serie.reduce((s, x) => s + x.criados, 0), rel.kpis.criados, "a série diária soma os mesmos negócios criados do KPI");
+    assert.equal(rel.serie.reduce((s, x) => s + x.ganhos, 0), rel.kpis.ganhos, "a série diária soma os mesmos ganhos do KPI");
+    assert.equal(rel.serie.reduce((s, x) => s + x.receita, 0), rel.kpis.receita, "a receita diária soma o total de vendas do KPI");
+    assert.equal(rel.kpis.conversao_pct, Math.round(rel.kpis.ganhos * 1000 / (rel.kpis.ganhos + rel.kpis.perdidos)) / 10, "conversão segue ganhos ÷ (ganhos + perdidos)");
+    assert.equal(rel.por_origem.reduce((s, x) => s + x.criados, 0), rel.kpis.criados, "origens somam o total de criados");
+    assert.equal(rel.por_origem.reduce((s, x) => s + x.ganhos, 0), rel.kpis.ganhos, "origens somam o total de ganhos");
+    assert.equal(rel.por_origem.reduce((s, x) => s + x.receita, 0), rel.kpis.receita, "origens somam o total de receita");
+
+    const lista = filtro => rpc("nx_cv_listar", { p_filtro: filtro, p_limite: 50 });
+    const abertas = await lista({ aba: "abertas" });
+    assert.deepEqual(abertas.itens.map(x => x.id), [901, 902], "Abertas lista apenas o status aberta, em atividade recente primeiro");
+    assert.equal(abertas.contagens.abertas, 2, "o contador de Abertas usa o mesmo estado que a aba");
+    assert.equal(abertas.contagens.aguardando, 2, "as duas conversas aguardando também estão abertas");
+    assert.deepEqual((await lista({ aba: "pendentes" })).itens.map(x => x.id), [903], "Pendentes é uma fila separada de Abertas");
+    assert.deepEqual((await lista({ aba: "sem_dono" })).itens.map(x => x.id), [902], "Sem dono exige conversa aberta/pendente sem responsável");
+    assert.deepEqual((await lista({ aba: "minhas" })).itens.map(x => x.id), [901], "Minhas restringe ao atendente atual");
+    assert.deepEqual((await lista({ aba: "aguardando" })).itens.map(x => x.id), [902, 901], "Aguardando ordena a entrada mais antiga primeiro");
+    assert.deepEqual((await lista({ aba: "abertas", canal_id: "wa1" })).itens.map(x => x.id), [902], "o filtro de número restringe a lista");
+    assert.deepEqual((await lista({ aba: "abertas", atendente: "eu" })).itens.map(x => x.id), [901], "o filtro de atendente funciona");
+    assert.deepEqual((await lista({ aba: "abertas", atendente: "sem" })).itens.map(x => x.id), [902], "o filtro Sem dono funciona");
+    assert.deepEqual((await lista({ aba: "abertas", departamento_id: "d1", etiquetas: ["e1"], nao_lidas: true })).itens.map(x => x.id), [901], "departamento, etiqueta e não lidas podem ser combinados");
+    const busca = await lista({ aba: "minhas", busca: "Bianca" });
+    assert.deepEqual(busca.itens.map(x => x.id), [903], "busca por nome procura em todas as abas abertas ao solicitante");
+    assert.equal(busca.busca, true);
+    const filtro = await lista({ aba: "abertas", canal_id: "wa1" });
+    assert.equal(filtro.contagens.abertas, abertas.contagens.abertas, "contagens de navegação ignoram filtros secundários, como a RPC real");
 
     const hoje = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
     const livres = await rpc("nx_agenda_livres", { p_a_partir: hoje, p_dias: 14, p_servico: "Clareamento", p_negocio: 803 });

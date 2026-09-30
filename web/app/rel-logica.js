@@ -288,8 +288,15 @@ export function montarRadar(M, dados = {}, agora = Date.now()) {
 
 /* ---------- relatórios enviados ---------- */
 export function listaRelatorios(relatorios = [], n = 12) {
-  return (relatorios || []).slice()
-    .sort((a, b) => String(b.referencia).localeCompare(String(a.referencia)) || (a.tipo === "mensal" ? -1 : 1))
+  const validos = Array.isArray(relatorios) ? relatorios.filter(r => {
+    if (!r || typeof r !== "object" || !["diario", "mensal"].includes(r.tipo)) return false;
+    const ref = typeof r.referencia === "string" ? r.referencia.slice(0, 10) : "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ref) || !Number.isFinite(Date.parse(`${ref}T12:00:00Z`)) || new Date(`${ref}T12:00:00Z`).toISOString().slice(0, 10) !== ref) return false;
+    const mes = Number(ref.slice(5, 7));
+    return mes >= 1 && mes <= 12;
+  }) : [];
+  return validos.slice()
+    .sort((a, b) => String(b.referencia).localeCompare(String(a.referencia)) || Number(b.tipo === "mensal") - Number(a.tipo === "mensal"))
     .slice(0, n)
     .map(r => {
       const ref = String(r.referencia).slice(0, 10);

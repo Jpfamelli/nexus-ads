@@ -1096,7 +1096,7 @@ async function montarIA(ctx, alvo) {
     cTom.addEventListener("change", () => { sujo.hidden = false; atualizarPrevia(); });
     const previa = h("pre", { class: "cfg-codigo cfg-ia-previa", tabindex: "0", "aria-label": "Prévia das instruções do assistente" });
     const blocoPrevia = h("section", { class: "cartao cfg-ia-preview" },
-      h("div", { class: "cfg-ia-preview-head" }, h("div", null, h("p", { class: "rotulo" }, "PRÉVIA"), h("h2", { class: "titulo-sec" }, "Como o assistente vai responder")),
+      h("div", { class: "cfg-ia-preview-head" }, h("div", null, h("p", { class: "rotulo" }, "PRÉVIA"), h("h2", { class: "titulo-sec" }, "Prévia das instruções")),
         ui.pilula("Atualiza enquanto você digita", "neutra")),
       h("p", { class: "sub" }, "A prévia reúne suas informações e as regras principais. Salve e depois copie o prompt em Configurações → Números para atualizar o agente no CodeWords."), previa);
     f.append(cTom, blocoPrevia,

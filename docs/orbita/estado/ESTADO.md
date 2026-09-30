@@ -271,3 +271,11 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 - O snapshot comercial é validado no servidor, em centavos, pela migration aditiva `20260930b_pacotes_comerciais.sql`; edição de especificações não altera o preço previamente combinado. Migration e smoke SQL estão na branch e não foram aplicados ao banco.
 - Verificação: `node testes/rodar-tudo.mjs` passou em 14/14 arquivos antes do ajuste final da notificação; depois do ajuste, `node --check web/app/admin.js` e `node testes/app.teste.mjs` passaram. `git diff --check` passou, com avisos normais LF/CRLF.
 - Não houve escrita no Supabase, alteração de `nx_config`, deploy Netlify, alteração em `main` ou liberação de `web/app/prontos.js`. F8 continua aberta pelos gates registrados em `F8.md`.
+
+## Correções dos prompts anexados — 2026-09-30 10:58 -03
+
+- Corrigida a validação da lista de domínios no Admin; resposta inválida gera erro recuperável em vez de falhar em `.filter`.
+- Métricas da fixture de vendas reconciliadas: 36 criados, 9 ganhos, 4 perdidos e R$ 28.400 na série e nos KPIs. Prévia/envio e origem do valor do CRM ficam explícitos.
+- Inbox da demo aplica critérios e filtros das filas, mostra chips ativos removíveis, e mantém a faixa fictícia fora do compositor. O chat responde a resize em janelas baixas.
+- Verificação: `node testes/rodar-tudo.mjs` — **14/14 arquivos passaram**; 53 checks de app, 35 de Atendimento e 40 de relatórios. QA local em 360, 390, 768, 879×513, 1024 e 1440 px; botão Enviar visível e sem sobreposição.
+- Detalhes: `docs/orbita/rodadas-melhoria-20260930-prompts.md`. Sem APIs reais, mensagens, gravações no Supabase/`nx_config`, liberação de `prontos.js` ou publicação de produção. O push atualiza somente o PR; eventual Deploy Preview depende da integração automática do Netlify. F8 segue em andamento.

@@ -386,6 +386,27 @@ await teste("CSS: sem hex fora de :root, sem 1fr solto, foco visível e reduced-
   assert.ok(!/\b\d+(\.\d+)?m?s\s+(ease|linear|cubic)/.test(s), "duração solta fora dos tokens");
 });
 
+await teste("Filtros da inbox ativos ficam visíveis, cada um pode ser removido e há limpeza em lote", () => {
+  const s = ler("cv-lista.js");
+  assert.match(s, /class: "cvl-filtros-ativos"/);
+  assert.match(s, /"aria-label": `Remover filtro \$\{item\.rotulo\}`/);
+  assert.match(s, /mudarLista\(\{ filtro: novo \}\)/);
+  assert.match(s, /"Limpar filtros"/);
+  for (const chave of ["departamento_id", "canal_id", "atendente", "etiquetas", "nao_lidas"]) assert.ok(s.includes(chave), `filtro ${chave}`);
+});
+
+await teste("janela baixa: a central usa a altura disponível sem cortar Enviar", () => {
+  const js = ler("conversas.js"), css = ler("conversas.css");
+  assert.match(js, /const onResize = \(\) => \{\s*mostrarPainel\(A\.painel\);/,
+    "ao mudar o tamanho da janela, o estado de chat em tela cheia acompanha o breakpoint");
+  assert.match(js, /Math\.max\(0,\s*Math\.floor\(alturaTela\s*-\s*Math\.max\(0,\s*topo\)/,
+    "a altura do chat usa o espaço real abaixo do cabeçalho e das faixas");
+  assert.match(css, /@media\s*\(max-height:\s*600px\)\s*\{\s*\.cv\s*\{\s*min-height:\s*0/,
+    "em janelas baixas, a altura mínima não empurra o compositor para fora da tela");
+  assert.match(css, /\.cvx-enviar\s*\{[^}]*height:\s*44px/,
+    "o botão Enviar mantém alvo acionável de 44 px");
+});
+
 await teste("seções de configuração com os ids fixos do §7.2", async () => {
   const s = ler("cv-config.js");
   for (const id of ["numeros", "respostas", "departamentos", "atendimento", "ia"]) assert.ok(new RegExp(`id:\\s*"${id}"`).test(s), `seção ${id}`);
