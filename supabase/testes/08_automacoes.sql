@@ -49,7 +49,7 @@ declare
   a_orc uuid; a_self uuid; a_p uuid; a_q uuid; a_err uuid; a_ok uuid; a_sr uuid; a_hor uuid; a_lote uuid;
   a_lemb uuid; a_mkt uuid; a_te uuid; a_tv uuid; a_preco uuid; a_b uuid; a_rasc uuid;
   ct1 bigint; ct2 bigint; ct3 bigint; ct4 bigint; ct5 bigint; l1 bigint; l2 bigint; l3 bigint; l4 bigint; l5 bigint;
-  cv1 bigint; cv2 bigint; cv3 bigint; cvo bigint; tf1 bigint; fl1 bigint; fl2 bigint;
+  cv1 bigint; cv2 bigint; cv3 bigint; cvo bigint; tf1 bigint; fl1 bigint; fl2 bigint; fl3 bigint;
   v_local timestamp; v_ini text; v_fim text; v_hor jsonb; v_esperado timestamptz;
   hoje date := (now() at time zone 'America/Sao_Paulo')::date;
   -- revisão (justiça entre clientes, alerta só da agência, data_agenda)
@@ -447,10 +447,17 @@ begin
   update public.nx_envios_fila set status = 'enviando', tentativas = 1 where id = fl1;
   update public.nx_envios_fila set status = 'enviando', tentativas = 3 where id = fl2;
   perform pg_temp.ok((select pego_em is not null from public.nx_envios_fila where id = fl1), 'pego_em carimbado ao virar enviando');
+  insert into public.nx_envios_fila (cliente_id, conversa_id, contato_id, canal_id, tipo, texto, origem) values (cA, cv1, ct1, can, 'texto', 'c', 'automacao') returning id into fl3;
+  update public.nx_envios_fila set status = 'enviando', tentativas = 1 where id = fl3;
   update public.nx_envios_fila set pego_em = now() - interval '11 minutes' where id in (fl1, fl2);
+  update public.nx_envios_fila set pego_em = now() - interval '2 minutes' where id = fl3;
   perform public.nx_fila_chamar();
-  perform pg_temp.ok((select status = 'pendente' and pego_em is null from public.nx_envios_fila where id = fl1), 'envio travado volta para a fila');
-  perform pg_temp.ok((select status = 'falhou' and erro like '%3 tentativas%' from public.nx_envios_fila where id = fl2), 'depois de 3 tentativas: falhou');
+  -- 20260930d: um POST interrompido pode ter sido aceito pelo provedor; não reenviar às cegas.
+  perform pg_temp.ok((select status = 'falhou' and pego_em is null and processado_em is not null and erro like '%STATUS INCERTO%'
+                        from public.nx_envios_fila where id = fl1), 'envio interrompido vira status incerto (falhou) e NÃO volta para a fila');
+  perform pg_temp.ok((select status = 'falhou' and pego_em is null and erro like '%STATUS INCERTO%' from public.nx_envios_fila where id = fl2),
+                     'com 3 tentativas também vira status incerto, sem reenvio automático');
+  perform pg_temp.ok((select status = 'enviando' and pego_em is not null from public.nx_envios_fila where id = fl3), 'envio em andamento há 2 min não é tocado');
 
   -- ---------------------------------------------------------- faxina
   insert into public.nx_eventos (cliente_id, tipo, criado_em, processado_em) values (cA, 'negocio_criado', now() - interval '9 days', now() - interval '8 days');
