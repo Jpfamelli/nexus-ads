@@ -1,6 +1,6 @@
 /* ============================================================
    ÓRBITA — app.css · frente F3 · ESPEC §7.4–7.5
-   Palco noturno do Nexus Ads, com TODA cor vinda de tokens:
+   Palco claro ou noturno do Órbita, com TODA cor vinda de tokens:
    os valores abaixo em :root são só o tema padrão (Órbita/Nexus);
    o tema.js recalcula tudo a partir das 3 cores da marca e grava
    no <html>. Nenhum hex fora deste :root (verificado por teste).
@@ -17,47 +17,47 @@
 
 :root {
   /* ---- tema padrão (sobrescrito pelo tema.js) ---- */
-  --c-fundo: #07090C;
-  --c-texto: #F2EEE8;
-  --c-texto-2: #B0AEAA;
-  --c-texto-3: #8B8987;
-  --c-sup: #131417;
-  --c-sup-2: #1C1E20;
-  --c-sup-3: #28292B;
-  --c-borda: #232426;
-  --c-borda-2: #363738;
+  --c-fundo: #FAFAF8;
+  --c-texto: #141A21;
+  --c-texto-2: #54595D;
+  --c-texto-3: #797D80;
+  --c-sup: #EFEFED;
+  --c-sup-2: #E5E6E5;
+  --c-sup-3: #DADBDA;
+  --c-borda: #DEDFDE;
+  --c-borda-2: #CCCDCD;
   --c-prim: #B0761F;
-  --c-prim-hi: #B9863A;
+  --c-prim-hi: #9B681B;
   --c-prim-txt: #0B1B2B;
-  --c-prim-luz: #B0761F;
-  --c-prim-suave: #221A0F;
+  --c-prim-luz: #8D5F19;
+  --c-prim-suave: #EEE5D5;
   --c-sec: #6FA3CF;
-  --c-sec-luz: #6FA3CF;
-  --c-sec-suave: #161F27;
-  --c-foco: #B0761F;
-  --c-ok: #7FD1A5;
-  --c-ruim: #F08A74;
-  --c-aten: #E5B35C;
-  --c-info: #8FB8DD;
-  --c-ok-txt: #0B1B2B;
-  --c-ruim-txt: #0B1B2B;
-  --c-ok-suave: #1A2924;
-  --c-ruim-suave: #2C1E1D;
-  --c-aten-suave: #2B2419;
-  --c-info-suave: #1D252D;
-  --c-nota: #2F281A;
-  --c-nota-txt: #F2EEE8;
-  --c-meta: #6FA3CF;
-  --c-google: #CF9540;
-  --c-bolha-in: #1C1E20;
-  --c-bolha-out: #221A0F;
-  --c-brilho-1: rgba(176, 118, 31, .18);
-  --c-brilho-2: rgba(111, 163, 207, .12);
-  --c-vidro: rgba(7, 9, 12, .72);
-  --c-vidro-forte: rgba(7, 9, 12, .9);
-  --c-veu: rgba(0, 0, 0, .6);
-  --c-sombra: rgba(0, 0, 0, .55);
-  --c-tinta: rgba(242, 238, 232, .05);
+  --c-sec-luz: #3671A2;
+  --c-sec-suave: #E7EEF2;
+  --c-foco: #8D5F19;
+  --c-ok: #1E7A4C;
+  --c-ruim: #B3261E;
+  --c-aten: #8A5A00;
+  --c-info: #2B5A80;
+  --c-ok-txt: #FFFFFF;
+  --c-ruim-txt: #FFFFFF;
+  --c-ok-suave: #D7E6DC;
+  --c-ruim-suave: #EFD8D5;
+  --c-aten-suave: #E8E0D0;
+  --c-info-suave: #D9E0E5;
+  --c-nota: #E6DDCB;
+  --c-nota-txt: #141A21;
+  --c-meta: #2B5A80;
+  --c-google: #8A5A00;
+  --c-bolha-in: #E5E6E5;
+  --c-bolha-out: #EEE5D5;
+  --c-brilho-1: rgba(176, 118, 31, .08);
+  --c-brilho-2: rgba(111, 163, 207, .08);
+  --c-vidro: rgba(250, 250, 248, .78);
+  --c-vidro-forte: rgba(250, 250, 248, .9);
+  --c-veu: rgba(20, 26, 33, .38);
+  --c-sombra: rgba(20, 26, 33, .16);
+  --c-tinta: rgba(20, 26, 33, .04);
   --c-sel: rgba(176, 118, 31, .32);
   --pal-0: #6FA3CF; --pal-1: #8FB8DD; --pal-2: #E5B35C; --pal-3: #C9BFAF; --pal-4: #7FD1A5; --pal-5: #F08A74;
   --pal-6: #9D9486; --pal-7: #B0761F; --pal-8: #CF9540; --pal-9: #A98BD6; --pal-10: #5FB3A8; --pal-11: #D67FA3;
@@ -91,9 +91,10 @@
   --escada: 40ms;
   --t-brilho: 1400ms;
   --t-giro: .8s;
+  --t-pulso: 1100ms;
 }
 @media (prefers-reduced-motion: reduce) {
-  :root { --t-micro: 0s; --t-ui: 0s; --t-sai: 0s; --t-gaveta: 0s; --t-move: 0s; --t-dados: 0s; --escada: 0s; --t-brilho: 0s; }
+  :root { --t-micro: 0s; --t-ui: 0s; --t-sai: 0s; --t-gaveta: 0s; --t-move: 0s; --t-dados: 0s; --escada: 0s; --t-brilho: 0s; --t-pulso: 0s; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }
 
@@ -102,7 +103,7 @@
    ============================================================ */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
-html { -webkit-text-size-adjust: 100%; background: var(--c-fundo); color: var(--c-texto); color-scheme: dark; scroll-padding-top: calc(var(--topo) + 1rem); }
+html { -webkit-text-size-adjust: 100%; background: var(--c-fundo); color: var(--c-texto); color-scheme: light; scroll-padding-top: calc(var(--topo) + 1rem); }
 html[data-esquema="claro"] { color-scheme: light; }
 body {
   font-family: var(--f-corpo); font-size: var(--fs-15); line-height: 1.5; color: var(--c-texto); background: var(--c-fundo);
@@ -144,7 +145,7 @@ table { border-collapse: collapse; }
 @keyframes gira { to { transform: rotate(360deg); } }
 
 /* ============================================================
-   PALCO NOTURNO — dois brilhos estáticos + grão a 4%
+   FUNDO — brilhos suaves e grão leve, ajustados pelos tokens do tema
    ============================================================ */
 .palco { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
 .palco i { position: absolute; display: block; }

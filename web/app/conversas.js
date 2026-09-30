@@ -107,6 +107,7 @@ export async function montar(ctx) {
 export function desmontar() {
   if (!A) return;
   A.destruido = true;
+  if (A.composer && typeof A.composer.desmontar === "function") A.composer.desmontar();
   for (const t of A.timers) clearInterval(t);
   for (const f of A.limpar) try { f(); } catch { /* ok */ }
   for (const u of A.blobs) try { URL.revokeObjectURL(u); } catch { /* ok */ }

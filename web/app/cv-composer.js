@@ -22,19 +22,25 @@ export function criarComposer(A) {
   const campo = h("div", { class: "cvx-campo" }, rotNota, ta);
   const arquivo = h("input", { type: "file", hidden: true, accept: "image/jpeg,image/png,image/webp,video/mp4,video/3gpp,audio/aac,audio/mp4,audio/mpeg,audio/amr,audio/ogg,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain" });
   const btClipe = h("button", { type: "button", class: "bt-icone", "aria-label": "Anexar arquivo", title: "Anexar (foto, vídeo, áudio, documento até 16 MB)" }, ui.icone("clipe"));
+  const btAudio = h("button", { type: "button", class: "bt-icone cvx-audio", "aria-label": "Gravar áudio", title: "Gravar áudio para enviar" }, ui.icone("microfone"));
   const btModelos = h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Enviar modelo aprovado", title: "Modelos aprovados" }, A.icone("modelo"));
   const btNota = h("button", { type: "button", class: "bt-icone", "aria-label": "Nota interna", title: "Nota interna (a equipe vê, o cliente não)", "aria-pressed": "false" }, ui.icone("nota"));
   const btIA = h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Sugerir resposta com IA", title: "Sugerir com IA" }, ui.icone("ia"));
   const btMaisM = h("button", { type: "button", class: "bt-icone so-estreito", "aria-label": "Mais opções", title: "Mais" }, ui.icone("mais"));
   const btEnviar = h("button", { type: "button", class: "bt bt-prim cvx-enviar", "aria-label": "Enviar" }, ui.icone("enviar"));
-  const ferr = h("div", { class: "cvx-ferr" }, btClipe, btModelos, btNota, btIA, btMaisM);
+  const ferr = h("div", { class: "cvx-ferr" }, btClipe, btAudio, btModelos, btNota, btIA, btMaisM);
   const linha = h("div", { class: "cvx-linha" }, ferr, campo, btEnviar);
+  const capInfo = h("p", { class: "cvx-cap-info", role: "status", "aria-live": "polite", hidden: true });
+  const tempoGravacao = h("span", { class: "cvx-rec-tempo", role: "timer", "aria-live": "off" }, "00:00");
+  const btCancelarGravacao = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Cancelar");
+  const painelGravacao = h("div", { class: "cvx-gravacao", role: "status", "aria-live": "polite", hidden: true },
+    h("span", { class: "cvx-rec-ponto", "aria-hidden": "true" }), h("span", {}, "Gravando"), tempoGravacao, btCancelarGravacao);
   const resp = h("div", { class: "cvx-resp", hidden: true });
   const trava = h("div", { class: "cvx-trava", hidden: true });
   const iaTrab = h("div", { class: "cvx-ia-trab", hidden: true, role: "status" }, "Escrevendo…");
   const dica = h("p", { class: "cvx-dica" }, h("kbd", null, "Enter"), " envia · ", h("kbd", null, "Shift"), "+", h("kbd", null, "Enter"), " quebra linha · ", h("kbd", null, "/"), " respostas rápidas");
   const rr = h("div", { class: "cvx-rr", role: "listbox", "aria-label": "Respostas rápidas", hidden: true, id: "cvx-rr" });
-  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, resp, iaTrab, trava, linha, dica, arquivo);
+  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, resp, iaTrab, trava, capInfo, painelGravacao, linha, dica, arquivo);
 
   ta.setAttribute("aria-controls", "cvx-rr");
   ta.setAttribute("aria-autocomplete", "list");
@@ -59,6 +65,24 @@ export function criarComposer(A) {
     return "ok";
   }
   function podeTexto() { return modoNota ? A.podeEscrever && !!conv() : situacao() === "ok"; }
+  function formatoGravacao() {
+    const MR = globalThis.MediaRecorder;
+    if (!MR || typeof MR.isTypeSupported !== "function") return null;
+    return ["audio/ogg;codecs=opus", "audio/mp4"].find(tipo => {
+      try { return MR.isTypeSupported(tipo); } catch { return false; }
+    }) || null;
+  }
+  let gravacao = null;
+  function pararGravacao(cancelar = false) {
+    const atual = gravacao;
+    if (!atual) return;
+    atual.cancelar = cancelar;
+    if (atual.rec.state !== "inactive") atual.rec.stop();
+  }
+  function tempoGravacaoTexto(segundos) {
+    const s = Math.max(0, Math.floor(segundos));
+    return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  }
 
   function atualizar() {
     const s = situacao();
@@ -108,9 +132,27 @@ export function criarComposer(A) {
     btEnviar.setAttribute("aria-label", modoNota ? "Salvar nota" : "Enviar");
     btEnviar.title = modoNota ? "Salvar nota" : "Enviar";
     ui.limpar(btEnviar); btEnviar.appendChild(ui.icone(modoNota ? "check" : "enviar"));
-    btClipe.hidden = usaCodeWords();
+    const codeWords = usaCodeWords();
+    const formatoAudio = formatoGravacao();
+    btClipe.hidden = false;
     btModelos.hidden = usaCodeWords();
-    btClipe.disabled = usaCodeWords() || modoNota || s !== "ok";
+    btClipe.disabled = codeWords || modoNota || s !== "ok";
+    btClipe.title = codeWords ? "Este canal CodeWords envia texto; use um canal WhatsApp Cloud API para enviar mídia."
+      : "Anexar foto, vídeo, áudio ou documento (até 16 MB)";
+    btAudio.hidden = false;
+    const gravando = !!gravacao;
+    btAudio.disabled = !gravando && (codeWords || modoNota || s !== "ok" || !formatoAudio || !globalThis.isSecureContext);
+    btAudio.title = gravando ? "Parar e revisar o áudio"
+      : codeWords ? "O canal CodeWords não envia mídia nesta integração."
+      : !formatoAudio || !globalThis.isSecureContext ? "Gravação indisponível neste navegador; você ainda pode anexar um áudio salvo."
+      : "Gravar áudio para enviar (até 1 minuto)";
+    btAudio.setAttribute("aria-label", btAudio.title);
+    btAudio.setAttribute("aria-pressed", String(gravando));
+    ui.limpar(btAudio); btAudio.appendChild(ui.icone(gravando ? "parar" : "microfone"));
+    capInfo.hidden = !codeWords && (!!formatoAudio && globalThis.isSecureContext);
+    capInfo.textContent = codeWords
+      ? "Este número CodeWords envia texto. Para anexar documentos e áudios, selecione um canal WhatsApp Cloud API."
+      : "Este navegador não grava áudio em formato aceito. Você ainda pode anexar um áudio MP3, OGG, AAC ou M4A.";
     btIA.disabled = modoNota || s !== "ok";
     btModelos.disabled = usaCodeWords() || modoNota || !(s === "ok" || s === "janela");
     btNota.disabled = !A.podeEscrever;
@@ -121,6 +163,7 @@ export function criarComposer(A) {
   }
 
   function definirConversa() {
+    if (gravacao) pararGravacao(true);
     modoNota = false;
     respondendo = null;
     fecharRR();
@@ -263,6 +306,61 @@ export function criarComposer(A) {
   function aceitaAnexo() { return !usaCodeWords() && !modoNota && situacao() === "ok"; }
   btClipe.addEventListener("click", () => { arquivo.value = ""; arquivo.click(); });
   arquivo.addEventListener("change", () => { const f = arquivo.files && arquivo.files[0]; if (f) anexar(f); });
+  btAudio.addEventListener("click", () => gravacao ? pararGravacao(false) : iniciarGravacao());
+  btCancelarGravacao.addEventListener("click", () => pararGravacao(true));
+
+  async function iniciarGravacao() {
+    if (!aceitaAnexo()) { atualizar(); return; }
+    const mimePreferido = formatoGravacao();
+    if (!mimePreferido || !globalThis.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      ui.toast("A gravação não está disponível aqui. Anexe um áudio salvo em MP3, OGG, AAC ou M4A.", { tipo: "info" });
+      return;
+    }
+    let fluxo;
+    try {
+      fluxo = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      if (!el.isConnected || !aceitaAnexo()) { fluxo.getTracks().forEach(t => t.stop()); return; }
+      const rec = new MediaRecorder(fluxo, { mimeType: mimePreferido });
+      const atual = { rec, fluxo, partes: [], cancelar: false, timer: null, inicio: Date.now() };
+      gravacao = atual;
+      rec.addEventListener("dataavailable", ev => { if (ev.data && ev.data.size) atual.partes.push(ev.data); });
+      rec.addEventListener("error", () => ui.toast("A gravação foi interrompida. Tente novamente ou anexe um áudio salvo.", { tipo: "erro" }), { once: true });
+      rec.addEventListener("stop", async () => {
+        clearInterval(atual.timer);
+        atual.fluxo.getTracks().forEach(t => t.stop());
+        if (gravacao === atual) gravacao = null;
+        painelGravacao.hidden = true;
+        atualizar();
+        if (atual.cancelar) { ui.anunciar("Gravação cancelada."); return; }
+        const mime = String(rec.mimeType || mimePreferido).split(";")[0].toLowerCase();
+        const blob = new Blob(atual.partes, { type: mime });
+        if (!blob.size) { ui.toast("O áudio ficou vazio. Grave novamente.", { tipo: "info" }); return; }
+        const ext = mime === "audio/mp4" ? "m4a" : "ogg";
+        const arquivoAudio = new File([blob], `audio-orbita-${Date.now()}.${ext}`, { type: mime });
+        await anexar(arquivoAudio);
+      }, { once: true });
+      rec.start(500);
+      painelGravacao.hidden = false;
+      tempoGravacao.textContent = "00:00";
+      atualizar();
+      btCancelarGravacao.focus();
+      atual.timer = setInterval(() => {
+        const segundos = Math.floor((Date.now() - atual.inicio) / 1000);
+        tempoGravacao.textContent = tempoGravacaoTexto(segundos);
+        if (segundos >= 60) {
+          pararGravacao(false);
+          ui.toast("Limite de 1 minuto atingido. Revise o áudio antes de enviar.", { tipo: "info" });
+        }
+      }, 500);
+    } catch {
+      if (fluxo) fluxo.getTracks().forEach(t => t.stop());
+      gravacao = null;
+      painelGravacao.hidden = true;
+      atualizar();
+      ui.toast("Não foi possível acessar o microfone. Libere a permissão do navegador e tente de novo.", { tipo: "erro" });
+    }
+  }
+
   ta.addEventListener("paste", ev => {
     const itens = ev.clipboardData && ev.clipboardData.items ? [...ev.clipboardData.items] : [];
     const img = itens.find(i => i.kind === "file" && /^image\//.test(i.type));
@@ -410,6 +508,7 @@ export function criarComposer(A) {
   return {
     el, atualizar, definirConversa, responder, anexar, aceitaAnexo, abrirModelos,
     lerRascunho() { return ta.value; },
+    desmontar() { if (gravacao) pararGravacao(true); },
     focar() { if (!ta.disabled) ta.focus(); },
   };
 }

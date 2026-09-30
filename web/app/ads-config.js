@@ -243,6 +243,7 @@ async function secaoAnuncios(ctx, alvo) {
   const cliente = (dados && dados.cliente) || { id: ctx.cliente.id, slug: ctx.cliente.slug, nome: ctx.cliente.nome, cfg: {} };
   let cfg = cliente.cfg || {};
   integ = Array.isArray(integ) ? integ : [];
+  const refsStatus = new Map();
 
   alvo.append(
     h("header", { class: "pilha" }, h("h2", { class: "titulo-sec" }, "Anúncios"),
@@ -250,21 +251,57 @@ async function secaoAnuncios(ctx, alvo) {
 
   /* ---------- integrações ---------- */
   const caixaInteg = h("div", { class: "cfga-integ" });
+  const statusLeitura = h("p", { class: "sub cfga-leitura-status", role: "status", "aria-live": "polite" });
+  const btStatus = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("relogio"), " Atualizar situação");
   alvo.append(h("section", { class: "cartao pilha", "aria-labelledby": "cfga-i" },
     h("h3", { id: "cfga-i", class: "titulo-sec" }, "Integrações"),
     h("p", { class: "sub" }, "Cole as credenciais de cada plataforma. O que você digitar nunca volta para a tela: campo em branco mantém o valor salvo."),
-    caixaInteg));
-  const pintarInteg = () => { ui.limpar(caixaInteg); for (const canal of Object.keys(CANAIS)) caixaInteg.append(formCanal(canal)); };
+    h("div", { class: "linha cfga-status-acoes" }, btStatus, statusLeitura), caixaInteg));
+  function pintarStatusIntegracoes() {
+    for (const canal of Object.keys(CANAIS)) {
+      const ref = refsStatus.get(canal);
+      if (!ref) continue;
+      const st = integ.find(i => i.canal === canal) || {};
+      const erro = /^erro/i.test(st.status || ""), ok = /^ok/i.test(st.status || "");
+      ref.status.textContent = !st.canal ? "Ainda não configurada."
+        : st.ultimo_sync ? `Última leitura ${quandoSP(st.ultimo_sync)}${st.status ? ` · ${st.status}` : ""}`
+        : (st.status || "Ainda não leu os anúncios.");
+      ref.status.classList.toggle("cfga-st-ruim", erro);
+      ref.status.classList.toggle("cfga-st-ok", ok);
+      ref.dica.textContent = !st.canal ? "Salve as credenciais para ligar esta plataforma."
+        : !st.ativo ? "Integração pausada. Ligue a chave e salve para retomar as leituras."
+        : erro ? "A última leitura falhou. Revise permissões, validade do acesso e IDs da conta; depois teste novamente."
+        : ok ? "A última leitura foi concluída sem erro."
+        : "Salve os dados e use “Testar conexão e sincronizar” para fazer a primeira leitura.";
+    }
+  }
+  const pintarInteg = () => {
+    refsStatus.clear(); ui.limpar(caixaInteg);
+    for (const canal of Object.keys(CANAIS)) caixaInteg.append(formCanal(canal));
+    pintarStatusIntegracoes();
+  };
+  btStatus.addEventListener("click", async () => {
+    try {
+      const nova = await ui.carregando(btStatus, api.rpcC("nx_integracoes_status", {}));
+      integ = Array.isArray(nova) ? nova : [];
+      pintarStatusIntegracoes();
+      const hh = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date());
+      statusLeitura.textContent = `Situação consultada às ${hh}. Os campos ainda não salvos foram preservados.`;
+    } catch (e) { statusLeitura.textContent = api.mensagemErro(e); }
+  });
 
   function formCanal(canal) {
     const d = CANAIS[canal], st = integ.find(i => i.canal === canal) || {}, pre = new Set(st.preenchidos || []);
     const erro = /^erro/i.test(st.status || ""), ok = /^ok/i.test(st.status || "");
-    const status = !st.canal ? "Ainda não configurada."
+    const statusTxt = !st.canal ? "Ainda não configurada."
       : st.ultimo_sync ? `Última leitura ${quandoSP(st.ultimo_sync)}${st.status ? ` · ${st.status}` : ""}` : (st.status || "Ainda não leu os anúncios.");
+    const statusEl = h("p", { class: ["cfga-st", erro && "cfga-st-ruim", ok && "cfga-st-ok"], role: "status" }, statusTxt);
+    const dicaEl = h("small", { class: "campo-ajuda cfga-st-dica" });
+    refsStatus.set(canal, { status: statusEl, dica: dicaEl });
     const form = h("form", { class: "cfga-canal pilha", novalidate: true, dataset: { canal } },
       h("div", { class: "linha cfga-canal-cab" }, h("h4", { class: "cfga-canal-t" }, d.nome),
         ui.campo({ tipo: "interruptor", nome: "_ativo", rotulo: "Ligada", valor: !!st.ativo })),
-      h("p", { class: ["cfga-st", erro && "cfga-st-ruim", ok && "cfga-st-ok"], role: "status" }, status),
+      statusEl, dicaEl,
       h("div", { class: "form-grade" }, d.campos.map(([k, rot, secreto, ph]) => ui.campo({
         nome: k, rotulo: pre.has(k) ? `${rot} · ✓ preenchido` : rot, tipo: secreto ? "senha" : "texto",
         placeholder: pre.has(k) ? "em branco = mantém o atual" : (ph || ""), autocomplete: secreto ? "new-password" : "off",
@@ -359,7 +396,7 @@ async function secaoAnuncios(ctx, alvo) {
 
   /* ---------- atualizar agora ---------- */
   const st = h("p", { class: "sub", role: "status" });
-  const bCiclo = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("raio"), " Atualizar dados agora");
+  const bCiclo = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("raio"), " Testar conexão e sincronizar");
   const bDia = h("button", { type: "button", class: "bt bt-fant" }, "Enviar o relatório do dia");
   const bMes = h("button", { type: "button", class: "bt bt-fant" }, "Enviar o resumo do mês");
   const executar = async (tipo, btn) => {
@@ -375,7 +412,7 @@ async function secaoAnuncios(ctx, alvo) {
       await ui.carregando(btn, api.rpc("nx_executar", { p_tarefa: tarefa, p_corpo: corpo }));
       const hh = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date());
       st.textContent = tipo === "ciclo"
-        ? `Pedido enviado às ${hh}. Os números novos aparecem em 1 ou 2 minutos — depois use "Atualizar" no Anúncios.`
+        ? `Leitura solicitada às ${hh}. Meta e Google serão consultados em segundo plano; use “Atualizar situação” para conferir o resultado.`
         : `Pedido enviado às ${hh}. O ${tipo === "mensal" ? "resumo do mês" : "relatório do dia"} chega no WhatsApp em instantes.`;
     } catch (e) { st.textContent = api.mensagemErro(e); }
   };
@@ -384,7 +421,7 @@ async function secaoAnuncios(ctx, alvo) {
   bMes.addEventListener("click", () => executar("mensal", bMes));
   alvo.append(h("section", { class: "cartao pilha", "aria-labelledby": "cfga-x" },
     h("h3", { id: "cfga-x", class: "titulo-sec" }, "Atualizar agora"),
-    h("p", { class: "sub" }, "O sistema lê os anúncios de hora em hora e manda o relatório do dia às 8h. Use estes botões só quando precisar antes disso."),
+    h("p", { class: "sub" }, "O sistema lê os anúncios de hora em hora e manda o relatório do dia às 8h. Use o teste acima para conferir a conexão; estes botões antecipam relatórios."),
     h("div", { class: "linha cfga-exec" }, bCiclo, bDia, bMes), st,
     h("a", { class: "rel-link", href: "#/anuncios" }, "Abrir o Anúncios")));
 }

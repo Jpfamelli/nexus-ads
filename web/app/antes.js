@@ -12,8 +12,15 @@
   "use strict";
   var raiz = document.documentElement;
   function ler(k) { try { var s = window.localStorage.getItem(k); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
+  function esquema() { try { return window.localStorage.getItem("nx-app-esquema") || "claro"; } catch (e) { return "claro"; } }
+  var preferido = esquema();
+  if (preferido === "claro" || preferido === "escuro") {
+    raiz.setAttribute("data-esquema", preferido);
+    raiz.style.colorScheme = preferido === "claro" ? "light" : "dark";
+  }
   function aplicar(vars) {
     if (!vars || typeof vars !== "object") return;
+    if (preferido !== "marca" && vars["--esquema"] !== preferido) return;
     for (var k in vars) {
       if (!Object.prototype.hasOwnProperty.call(vars, k)) continue;
       if (k.indexOf("--") !== 0 || k === "--esquema") continue;

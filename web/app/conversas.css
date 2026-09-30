@@ -148,7 +148,7 @@
 .cv-atend::before, .cv-atend::after { content: ""; flex: 1; height: 1px; background: var(--c-borda-2); }
 .cv-atend b { font-weight: 500; color: var(--c-texto-2); }
 
-.cv-msg { display: flex; flex-direction: column; align-items: flex-start; margin-top: .55rem; max-width: min(78%, 40rem); position: relative; }
+.cv-msg { display: flex; flex-direction: column; align-items: flex-start; width: fit-content; min-width: 0; margin-top: .55rem; max-width: min(78%, 40rem); position: relative; }
 .cv-msg[data-junta="1"] { margin-top: .15rem; }
 .cv-msg[data-dir="out"] { margin-left: auto; align-items: flex-end; }
 .cv-msg[data-destaque="1"] .cv-bolha { box-shadow: 0 0 0 2px var(--c-prim-luz); }
@@ -249,6 +249,12 @@
 .cvx-rot-nota .ic { width: 13px; height: 13px; }
 .cvx-ferr { display: flex; align-items: flex-end; gap: .1rem; }
 .cvx-ferr .bt-icone[aria-pressed="true"] { background: var(--c-aten-suave); color: var(--c-aten); }
+.cvx-audio[aria-pressed="true"] { background: var(--c-ruim-suave); color: var(--c-ruim); }
+.cvx-cap-info { margin: 0 0 .45rem; padding: .45rem .65rem; border-radius: 10px; background: var(--c-info-suave); color: var(--c-info); font-size: var(--fs-13); line-height: 1.4; }
+.cvx-gravacao { display: flex; align-items: center; gap: .55rem; width: fit-content; max-width: 100%; margin: 0 0 .45rem; padding: .35rem .45rem .35rem .7rem; border: 1px solid color-mix(in srgb, var(--c-ruim) 28%, var(--c-borda)); border-radius: 999px; background: var(--c-ruim-suave); color: var(--c-texto); font-size: var(--fs-13); }
+.cvx-rec-ponto { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--c-ruim); animation: cvx-pulso var(--t-pulso) var(--e-io) infinite; }
+.cvx-rec-tempo { min-width: 2.7rem; font: 500 var(--fs-12)/1 var(--f-mono); font-variant-numeric: tabular-nums; }
+@keyframes cvx-pulso { 50% { opacity: .35; transform: scale(.82); } }
 .cvx-enviar { width: 44px; height: 44px; flex: none; border-radius: 50%; padding: 0; }
 .cvx-enviar .ic { width: 19px; height: 19px; }
 .cvx[data-modo="nota"] .cvx-enviar { background: var(--c-aten); color: var(--c-fundo); }
@@ -611,7 +617,7 @@
   .cvc-quem .avatar { width: 38px; height: 38px; }
   .cvc-quem-txt { flex: 1; }
   .cvc-nome { font-size: var(--fs-17); }
-  .cvc-sub { overflow: visible; }
+  .cvc-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .cvc-sub .cvc-via, .cvc-sub .cvc-via-sep { display: inline; }
   .cvc-sub .mono { overflow: hidden; text-overflow: ellipsis; }
   .cvc-acoes { grid-area: acoes; justify-content: flex-end; flex-wrap: wrap; gap: .2rem; padding-left: 38px; }
@@ -627,4 +633,5 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .cvc-quem:hover { transform: none; }
+  .cvx-rec-ponto { animation: none; }
 }

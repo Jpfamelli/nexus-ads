@@ -18,6 +18,7 @@ const LS = {
   apagar(k) { try { localStorage.removeItem(k); } catch { /* ok */ } },
 };
 const CHAVE_CLIENTE = "nx-app-cliente";
+const CHAVE_ESQUEMA = "nx-app-esquema";
 const PRONTOS_PADRAO = { MODULOS_PRONTOS: [], CONFIG_PRONTAS: ["perfil"] };
 const ROTAS_PUBLICAS = new Set(["login", "convite", "senha"]);
 
@@ -141,8 +142,47 @@ async function carregarMarcaPublica({ pintar = true } = {}) {
 
 /** Cache da marca da tela de entrada (antes.js pinta com ele antes do primeiro quadro). */
 function guardarMarcaPublica(m) {
-  const t = E.M.tema.derivarTema(m.cores);
+  const t = E.M.tema.derivarTema(E.M.tema.coresNoEsquema(m.cores, esquemaPreferido()));
   LS.gravar("nx-app-marca", { host: location.host, org: E.marcaPublica ? E.marcaPublica.org.slug : null, vars: t.vars, produto: m.produto, favicon: m.favicon });
+}
+
+function esquemaPreferido() {
+  const t = E.M.tema;
+  const salvo = LS.lerTxt(CHAVE_ESQUEMA);
+  return t && t.ESQUEMAS && Object.hasOwn(t.ESQUEMAS, salvo) ? salvo : "claro";
+}
+
+function atualizarBotaoTema() {
+  const b = $("bt-tema");
+  if (!b || !E.M.tema) return;
+  const modo = esquemaPreferido();
+  const nomes = { claro: "claro", escuro: "escuro", marca: "da marca" };
+  const rotulo = `Aparência ${nomes[modo]}. Escolher tema`;
+  b.setAttribute("aria-label", rotulo);
+  b.title = rotulo;
+  const use = b.querySelector("use");
+  if (use) use.setAttribute("href", `#i-${modo === "escuro" ? "lua" : modo === "marca" ? "pincel" : "sol"}`);
+}
+
+function abrirMenuTema(ancora) {
+  if (!E.ui || !E.M.tema) return;
+  const modo = esquemaPreferido();
+  const opcoes = [["claro", "Tema claro", "sol"], ["escuro", "Tema escuro", "lua"], ["marca", "Tema da empresa", "pincel"]];
+  E.ui.menu(ancora, opcoes.map(([id, rotulo, icone]) => ({
+    rotulo: modo === id ? `${rotulo} · atual` : rotulo,
+    icone: modo === id ? "check" : icone,
+    fn: () => definirEsquema(id),
+  })));
+}
+
+function definirEsquema(modo) {
+  if (!E.M.tema || !Object.hasOwn(E.M.tema.ESQUEMAS, modo)) return;
+  LS.gravar(CHAVE_ESQUEMA, modo);
+  const m = E.marca || E.M.tema.marcaEfetiva(marcaOrgSessao(), {}, {});
+  pintarMarca(m, { guardar: true });
+  atualizarBotaoTema();
+  const nome = { claro: "claro", escuro: "escuro", marca: "da empresa" }[modo];
+  E.ui && E.ui.toast(`Tema ${nome} aplicado neste navegador.`, { tipo: "ok" });
 }
 
 /** A sessão leve vem sem as imagens da marca da org. Se a marca pública do endereço é de OUTRA org
@@ -177,9 +217,10 @@ async function recarregarMarca() {
 }
 
 /** Aplica a marca efetiva (cores → tokens, produto, favicon, logos). */
-function pintarMarca(m, { guardar = false, cacheCliente = null } = {}) {
+function pintarMarca(m, { guardar = false, cacheCliente = null, respeitarEsquema = true } = {}) {
   const { tema } = E.M;
-  const t = tema.derivarTema(m.cores);
+  const cores = tema.coresNoEsquema(m.cores, respeitarEsquema ? esquemaPreferido() : "marca");
+  const t = tema.derivarTema(cores);
   tema.aplicarTema(t.vars);
   E.produto = m.produto;
   E.marca = m;
@@ -188,6 +229,7 @@ function pintarMarca(m, { guardar = false, cacheCliente = null } = {}) {
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute("content", t.vars["--c-fundo"]);
   pintarLogoShell();
+  atualizarBotaoTema();
   atualizarTitulo();
   if (guardar) LS.gravar("nx-app-marca", { host: location.host, org: E.marcaPublica ? E.marcaPublica.org.slug : null, vars: t.vars, produto: m.produto, favicon: m.favicon });
   if (cacheCliente) LS.gravar(`nx-app-tema-${cacheCliente.id}`, { ...cacheCliente.dados, vars: t.vars });
@@ -629,7 +671,7 @@ async function montarPublico(r, seq) {
     marca: E.marca, marcaPublica: E.marcaPublica,
     sessao: E.sessao,
     navegar,
-    pintarMarcaOrg(marcaOrg) { pintarMarca(E.M.tema.marcaEfetiva(marcaOrg || {}, {})); },
+    pintarMarcaOrg(marcaOrg) { pintarMarca(E.M.tema.marcaEfetiva(marcaOrg || {}, {}), { respeitarEsquema: false }); },
     restaurarMarca() { pintarMarca(E.M.tema.marcaEfetiva(E.marcaPublica ? E.marcaPublica.marca : {}, {})); },
     titulo: definirTitulo,
     /** depois de entrar/aceitar convite: guarda o token e abre o app. */
@@ -827,6 +869,10 @@ function desenharFerramentasTopo(dir) {
     btProdutos.addEventListener("click", () => abrirSeletorProduto(btProdutos));
     dir.appendChild(btProdutos);
   }
+  const btTema = ui.h("button", { type: "button", class: "bt-icone bt-tema", id: "bt-tema", "aria-haspopup": "menu" }, ui.icone("sol"));
+  btTema.addEventListener("click", () => abrirMenuTema(btTema));
+  dir.appendChild(btTema);
+  atualizarBotaoTema();
   if (!E.cliente) return;
   if (buscaDisponivel()) {
     const bt = ui.h("button", { type: "button", class: "topo-busca", id: "bt-busca", "aria-label": `Buscar (${teclaMod()}+K)`, "aria-keyshortcuts": "Control+K Meta+K" },

@@ -577,6 +577,9 @@ a.ini-numero:active { transform: scale(.98); }
 .cfga-st { margin: 0; font-size: .8125rem; color: var(--c-texto-3); overflow-wrap: anywhere; }
 .cfga-st-ok { color: var(--c-ok); }
 .cfga-st-ruim { color: var(--c-ruim); }
+.cfga-st-dica { display: block; line-height: 1.45; }
+.cfga-status-acoes { align-items: center; flex-wrap: wrap; }
+.cfga-leitura-status { min-height: 1.3em; margin: 0; }
 .cfga-tk { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 8rem) auto; gap: .5rem; align-items: center; }
 .cfga-tk input { min-height: 44px; padding: .5rem .8rem; border-radius: 12px; border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto); font: 500 .9375rem/1.2 var(--f-corpo); min-width: 0; }
 .cfga-tk input:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 1px; }

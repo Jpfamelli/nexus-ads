@@ -1,8 +1,12 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 23:58 (America/Sao_Paulo)
+Atualizado: 2026-09-30 09:36 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
+
+## Atualização atual — 2026-09-30 09:36 -03
+
+O branch `codex/orbita` contém três rodadas de UX: tema claro padrão com modos claro/escuro/marca persistentes; gravação de áudio e anexos com indicação honesta dos limites de CodeWords; diagnóstico Meta/Google com atualização de estado e balões ajustados ao conteúdo. A verificação mais recente passou em 14/14 arquivos da suíte serial Node. O código segue para revisão no PR #1; não houve deploy, alteração de Supabase ou mudança em `main`. F8 continua aberta e os módulos permanecem bloqueados.
 
 ## Situação
 
@@ -253,3 +257,10 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 ## Commit da rodada — 2026-09-30 02:02 -03
 
 `6055700` (`feat(orbita): separar CRM, Ads e atendimento`) enviado para `origin/codex/orbita`. PR #1 continua aberto como draft, cabeça confirmada pelo GitHub; nenhuma mudança em `main`.
+
+## Rodadas de melhoria — tema, atendimento e integrações — 2026-09-30 09:36 -03
+
+- Registro detalhado: `docs/orbita/rodadas-melhoria-20260930-claro-audio-conectividade.md`.
+- Verificação após a alteração final: `node testes/rodar-tudo.mjs` passou em **14/14 arquivos**; `node testes/app.teste.mjs` passou em 50 verificações; `node testes/conversas.teste.mjs` passou em 33; `git diff --check` aprovado (avisos de LF/CRLF do Windows).
+- Os botões de mídia e gravação não enviam nada em CodeWords; o canal atual é textual. O fluxo Cloud API mantém suporte a mídia existente. Não houve acesso à câmera/microfone, serviço de anúncio, credenciais ou integração externa real.
+- `web/app/prontos.js`, `main`, dados do Supabase e `nx_config` não mudaram. Não houve deploy Netlify. F8 continua aberta para E2E-A/B, métricas/canal de teste, QA mobile autenticado, isolamento e limpeza.

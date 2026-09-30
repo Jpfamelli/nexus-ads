@@ -9,8 +9,16 @@ export const PRODUTO_PADRAO = "Órbita";
 
 export const PADRAO = Object.freeze({
   produto: PRODUTO_PADRAO,
-  cores: Object.freeze({ primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" }),
+  cores: Object.freeze({ primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#FAFAF8" }),
 });
+
+/** Preferência visual do usuário. `marca` respeita o fundo configurado pela empresa. */
+export const ESQUEMAS = Object.freeze({ claro: "claro", escuro: "escuro", marca: "marca" });
+export const FUNDOS_ESQUEMA = Object.freeze({ claro: "#FAFAF8", escuro: "#07090C" });
+export function coresNoEsquema(cores = {}, esquema = "claro") {
+  const modo = Object.hasOwn(ESQUEMAS, esquema) ? esquema : "claro";
+  return { ...PADRAO.cores, ...(cores || {}), ...(modo === "marca" ? {} : { fundo: FUNDOS_ESQUEMA[modo] }) };
+}
 
 /** 12 cores para etapas, etiquetas e departamentos (Apêndice A + 5). */
 export const PALETA = Object.freeze([

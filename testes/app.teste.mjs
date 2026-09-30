@@ -16,6 +16,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { runInNewContext } from "node:vm";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -69,9 +70,15 @@ await teste("derivarTema: texto ≥ 7:1 sobre o fundo, sec-luz ≥ 4,5:1, status
     for (const [k, v] of Object.entries(vars)) if (k !== "--esquema") assert.match(v, /^(#[0-9A-F]{6}|rgba\(\d+, \d+, \d+, [\d.]+\))$/, `${k} = ${v}`);
   }
 });
-await teste("derivarTema: esquema escuro/claro pela luminância do fundo; cor ruim gera aviso", () => {
-  assert.equal(T.derivarTema(T.PADRAO.cores).vars["--esquema"], "escuro");
-  assert.deepEqual(T.derivarTema(T.PADRAO.cores).avisos, []);
+await teste("derivarTema: padrão claro, preferência visual preserva a marca e fundo claro/escuro é coerente", () => {
+  assert.equal(T.derivarTema(T.PADRAO.cores).vars["--esquema"], "claro");
+  const padrao = T.derivarTema(T.PADRAO.cores);
+  assert.ok(padrao.avisos.some(a => a.campo === "primaria"), "o bronze preserva a marca e usa tom acessível em links");
+  assert.ok(T.contraste(padrao.vars["--c-prim-luz"], padrao.vars["--c-fundo"]) >= 4.5);
+  assert.deepEqual(T.coresNoEsquema({ primaria: "#123456", secundaria: "#654321", fundo: "#121212" }, "claro"),
+    { primaria: "#123456", secundaria: "#654321", fundo: T.FUNDOS_ESQUEMA.claro });
+  assert.equal(T.coresNoEsquema({ fundo: "#121212" }, "escuro").fundo, T.FUNDOS_ESQUEMA.escuro);
+  assert.equal(T.coresNoEsquema({ fundo: "#F4F1EA" }, "marca").fundo, "#F4F1EA");
   const claro = T.derivarTema({ primaria: "#FFFF00", secundaria: "#6FA3CF", fundo: "#FFFFFF" });
   assert.equal(claro.vars["--esquema"], "claro");
   assert.ok(claro.avisos.some(a => a.campo === "primaria"), "aviso da primária amarela");
@@ -79,6 +86,30 @@ await teste("derivarTema: esquema escuro/claro pela luminância do fundo; cor ru
   const inval = T.derivarTema({ primaria: "vermelho", secundaria: "#6FA3CF", fundo: "#07090C" });
   assert.equal(inval.vars["--c-prim"], T.PADRAO.cores.primaria);
   assert.ok(inval.avisos.some(a => a.campo === "primaria"));
+});
+await teste("antes.js aplica a preferência salva antes da primeira pintura e ignora cache incompatível", () => {
+  function inicializar(pref, vars) {
+    const estilos = {};
+    const raiz = {
+      style: { colorScheme: "", setProperty: (k, v) => { estilos[k] = v; } },
+      dataset: {}, setAttribute(k, v) { this.dataset[k.replace(/^data-/, "")] = v; },
+      classList: { add() {} },
+    };
+    const itens = new Map([["nx-app-esquema", pref]]);
+    if (vars) itens.set("nx-app-marca", JSON.stringify({ host: "local", vars }));
+    const storage = { getItem: k => itens.get(k) || null };
+    const sandbox = { document: { documentElement: raiz, title: "Órbita", getElementById: () => null },
+      window: { localStorage: storage }, localStorage: storage, location: { host: "local", search: "", hash: "#/crm" }, URLSearchParams };
+    runInNewContext(ler("antes.js"), sandbox);
+    return { esquema: raiz.dataset.esquema, colorScheme: raiz.style.colorScheme, estilos };
+  }
+  const escuro = inicializar("escuro", { "--esquema": "claro", "--c-fundo": "#FAFAF8" });
+  assert.equal(escuro.esquema, "escuro");
+  assert.equal(escuro.colorScheme, "dark");
+  assert.equal(escuro.estilos["--c-fundo"], undefined, "cache claro não substitui a preferência escura");
+  const claro = inicializar("claro", { "--esquema": "claro", "--c-fundo": "#FAFAF8" });
+  assert.equal(claro.esquema, "claro");
+  assert.equal(claro.estilos["--c-fundo"], "#FAFAF8", "cache correspondente evita flash");
 });
 await teste("PALETA: 12 cores #RRGGBB, as 7 do Apêndice A + 5", () => {
   assert.equal(T.PALETA.length, 12);
