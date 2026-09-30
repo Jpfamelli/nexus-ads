@@ -1050,6 +1050,46 @@ await teste("menu lateral: logo LARGO não fica por cima do nome do produto — 
   assert.match(css, /@media \(max-width: 1100px\) \{[^@]*\.lat-logo\.largo, \.lat-logo img\.largo \{ width: 36px; max-width: 36px; \}/);
   assert.match(css, /\.sr-only \{ position: absolute !important;/);
 });
+await teste("CSP sem cabeçalho (GitHub Pages): <meta> no <head> do app e das entradas = política do netlify.toml (menos frame-ancestors/report-uri/sandbox), antes de qualquer script", () => {
+  const toml = readFileSync(join(RAIZ, "netlify.toml"), "utf8");
+  const politica = caminho => {
+    const bloco = toml.split("[[headers]]").find(b => b.includes(`for = "${caminho}"`));
+    assert.ok(bloco, `netlify.toml sem [[headers]] para ${caminho}`);
+    const m = /Content-Security-Policy = "([^"]+)"/.exec(bloco);
+    assert.ok(m, `netlify.toml: ${caminho} sem Content-Security-Policy`);
+    return m[1];
+  };
+  const diretivas = p => p.split(";").map(d => d.trim().replace(/\s+/g, " ")).filter(Boolean);
+  // diretivas que o navegador IGNORA em <meta> (só valem em cabeçalho)
+  const SO_CABECALHO = new Set(["frame-ancestors", "report-uri", "sandbox"]);
+  for (const [arquivo, caminho] of [["app/index.html", "/app/*"], ["crm/index.html", "/crm/*"], ["ads/index.html", "/ads/*"], ["atendimento/index.html", "/atendimento/*"]]) {
+    const html = readFileSync(join(RAIZ, "web", arquivo), "utf8");
+    const metas = [...html.matchAll(/<meta http-equiv="Content-Security-Policy" content="([^"]*)">/gi)];
+    assert.equal(metas.length, 1, `${arquivo}: exatamente uma <meta> de CSP`);
+    const esperado = diretivas(politica(caminho)).filter(d => !SO_CABECALHO.has(d.split(" ")[0]));
+    assert.deepEqual(diretivas(metas[0][1]), esperado, `${arquivo}: a mesma política do netlify.toml (${caminho})`);
+    assert.doesNotMatch(metas[0][1], /frame-ancestors|report-uri|sandbox/);
+    assert.ok(diretivas(metas[0][1]).includes("script-src 'self'"), `${arquivo}: script-src só 'self'`);
+    assert.doesNotMatch(metas[0][1], /script-src[^;]*'unsafe-(inline|eval)'/);
+    // dentro do <head> e antes de qualquer script/link/style (a meta não protege o que vem antes dela)
+    const head = /<head>([\s\S]*?)<\/head>/i.exec(html);
+    assert.ok(head && head[1].includes(metas[0][0]), `${arquivo}: <meta> dentro do <head>`);
+    const pos = html.indexOf(metas[0][0]);
+    for (const tag of ["<script", "<link", "<style"]) {
+      const i = html.indexOf(tag);
+      if (i >= 0) assert.ok(pos < i, `${arquivo}: a <meta> de CSP vem antes do primeiro ${tag}`);
+    }
+    // e a política não quebra nada: todo script é arquivo do próprio site
+    for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+      assert.match(m[1], /\ssrc="(?!https?:|\/\/)[^"]+"/, `${arquivo}: script externo do próprio site`);
+      assert.equal(m[2].trim(), "", `${arquivo}: sem script inline`);
+    }
+  }
+  // o servidor fictício local injeta o boot como ARQUIVO (a CSP da <meta> bloquearia um <script> inline)
+  const dev = readFileSync(join(RAIZ, "scripts", "dev-falso.mjs"), "utf8");
+  assert.match(dev, /const boot = `<script src="\/__dev_falso\/boot\.js"><\/script>`;/);
+  assert.doesNotMatch(dev, /<script>\(function/);
+});
 await teste("netlify.toml: publish web, / e /index.html → /app/ (302 forçado), CSP do §3.9", () => {
   const t = readFileSync(join(RAIZ, "netlify.toml"), "utf8");
   assert.match(t, /publish\s*=\s*"web"/);

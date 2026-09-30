@@ -370,10 +370,18 @@ function fn(nome, p = {}) {
   return { ok: true, simulado: true };
 }
 
+// Boot do modo fictício: ARQUIVO (não inline) — o index.html traz a mesma CSP do Netlify em <meta>
+// (script-src 'self'), então um <script> inline injetado seria bloqueado.
+const BOOT = `(function(){if(location.hostname!=="127.0.0.1"&&location.hostname!=="localhost")return;var q=new URLSearchParams(location.search);try{if(q.has("login")){localStorage.removeItem("nx-token");location.hash="#/login";}else{localStorage.setItem("nx-token","demo-local-session");}sessionStorage.setItem("nx-app-dev","1");}catch(e){}var original=window.fetch.bind(window);window.fetch=function(input,init){var u;try{u=new URL(typeof input==="string"?input:input.url,location.href);}catch(e){return original(input,init);}if(u.hostname==="dtjznipitihnwmcgpzqh.supabase.co"){u=new URL("/__dev_falso"+u.pathname+u.search,location.origin);return original(u,init);}return original(input,init);};})();`;
+
 const servidor = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${HOST}:${PORT}`);
   const json = (status, body) => { res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" }); res.end(JSON.stringify(body)); };
   if (req.method === "OPTIONS") { res.writeHead(204, { "cache-control": "no-store" }); return res.end(); }
+  if (url.pathname === "/__dev_falso/boot.js") {
+    res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+    return res.end(BOOT);
+  }
   if (url.pathname.startsWith("/__dev_falso/rest/v1/rpc/")) {
     const name = url.pathname.split("/").at(-1);
     let raw = ""; for await (const chunk of req) raw += chunk;
@@ -397,7 +405,7 @@ const servidor = http.createServer(async (req, res) => {
       arquivo = Buffer.from('export const MODULOS_PRONTOS = ["inicio","conversas","crm","empresas","tarefas","ads","automacoes","relatorios","admin"];\nexport const CONFIG_PRONTAS = ["perfil","usuarios","marca","dominio","plano","numeros","respostas","atendimento","ia","departamentos","funis","campos","etiquetas","motivos","anuncios","formulario","agenda","rastreio"];\n');
     }
     if (caminho === "/app/index.html" && url.searchParams.get("dev-falso") === "1") {
-      const boot = `<script>(function(){if(location.hostname!=="127.0.0.1"&&location.hostname!=="localhost")return;var q=new URLSearchParams(location.search);try{if(q.has("login")){localStorage.removeItem("nx-token");location.hash="#/login";}else{localStorage.setItem("nx-token","demo-local-session");}sessionStorage.setItem("nx-app-dev","1");}catch(e){}var original=window.fetch.bind(window);window.fetch=function(input,init){var u;try{u=new URL(typeof input==="string"?input:input.url,location.href);}catch(e){return original(input,init);}if(u.hostname==="dtjznipitihnwmcgpzqh.supabase.co"){u=new URL("/__dev_falso"+u.pathname+u.search,location.origin);return original(u,init);}return original(input,init);};})();</script>`;
+      const boot = `<script src="/__dev_falso/boot.js"></script>`;
       arquivo = Buffer.from(arquivo.toString("utf8").replace("<body>", `<body>\n${boot}`));
     }
     res.writeHead(200, { "content-type": MIME[extname(alvo).toLowerCase()] || "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "same-origin" });

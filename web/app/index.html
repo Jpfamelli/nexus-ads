@@ -2,6 +2,8 @@
 <html lang="pt-BR" data-esquema="claro">
 <head>
   <meta charset="UTF-8">
+  <!-- a MESMA CSP do netlify.toml (/app/*), também no GitHub Pages, que não manda cabeçalhos; frame-ancestors só vale em cabeçalho -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https://dtjznipitihnwmcgpzqh.supabase.co; connect-src 'self' https://dtjznipitihnwmcgpzqh.supabase.co; font-src 'self'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="robots" content="noindex, nofollow">
   <meta name="color-scheme" content="light dark">
