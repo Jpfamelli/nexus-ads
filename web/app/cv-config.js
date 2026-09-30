@@ -1019,6 +1019,7 @@ const IA_TEXTOS = [
   ["horarios", "Horários de atendimento", "Dias e horários de funcionamento e disponibilidade da equipe."],
   ["regras", "Regras de atendimento", "Ex.: confirmar nome e serviço; nunca marcar sem confirmar o horário."],
   ["proibido", "O que nunca dizer", "Ex.: diagnóstico por mensagem, promessa de resultado ou preço fechado sem avaliação."],
+  ["memoria_aprovada", "Memória operacional aprovada", "Registre somente aprendizados confirmados pela equipe: respostas frequentes, preferências de atendimento e procedimentos internos. Não inclua dados pessoais ou de saúde."],
 ];
 
 const IA_CAMPOS_EXTRA = [
@@ -1036,7 +1037,7 @@ async function montarIA(ctx, alvo) {
   alvo.append(
     h("header", { class: "cab-pag" },
       h("div", null, h("p", { class: "rotulo" }, "Atendimento"), h("h1", { class: "titulo-pag" }, "Assistente de IA"),
-        h("p", { class: "sub" }, "Defina a personalidade e as informações usadas pelo agente do CodeWords. A equipe pode assumir qualquer conversa e devolver o atendimento à IA."))),
+        h("p", { class: "sub" }, "Defina a personalidade e as informações usadas pelo agente do CodeWords. A equipe pode revisar aprendizados e assumir qualquer conversa. As alterações só valem no fluxo após atualizar o prompt do CodeWords."))),
     caixa);
 
   async function carregar() {
@@ -1078,7 +1079,8 @@ async function montarIA(ctx, alvo) {
       f.appendChild(c);
     }
     for (const [k, rot, ph] of IA_TEXTOS) {
-      const c = ui.campo({ rotulo: rot, nome: k, tipo: "textarea", linhas: k === "sobre" || k === "servicos" ? 4 : 3, max: L.IA_MAX, valor: cfg[k] || "", placeholder: ph });
+      const c = ui.campo({ rotulo: rot, nome: k, tipo: "textarea", linhas: k === "sobre" || k === "servicos" || k === "memoria_aprovada" ? 4 : 3,
+        max: k === "memoria_aprovada" ? 3000 : L.IA_MAX, valor: cfg[k] || "", placeholder: ph });
       tas[k] = c.querySelector("textarea");
       tas[k].addEventListener("input", () => { contar(); atualizarPrevia(); });
       f.appendChild(c);
@@ -1114,6 +1116,7 @@ async function montarIA(ctx, alvo) {
         d.endereco ? `Endereço:\n${d.endereco}` : "",
         d.regras ? `Regras de atendimento:\n${d.regras}` : "",
         d.proibido ? `Nunca faça ou diga:\n${d.proibido}` : "",
+        d.memoria_aprovada ? `Memória operacional aprovada pela equipe (contexto revisado, não é treinamento automático):\n${d.memoria_aprovada}` : "",
         "Regras de segurança: não invente preços, horários ou políticas. Quando faltar uma informação, diga que vai confirmar com a equipe. Não faça diagnóstico nem prometa resultados. Se a pessoa pedir ajuda humana, encaminhe para a equipe.",
       ].filter(Boolean);
       previa.textContent = partes.join("\n\n");

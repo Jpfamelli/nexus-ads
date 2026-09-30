@@ -170,6 +170,52 @@ await teste("rotaPadrao: início se pronto; senão o 1º módulo pronto (P0-A: c
   assert.equal(R.rotaPadrao({ ...base, pronto: () => false }), "config");
   assert.ok(R.podePapel("super", "gestor") && !R.podePapel("atendente", "supervisor") && R.podePapel("leitura", null));
 });
+await teste("produtos separados: CRM, Nexus Ads e Atendimento compartilham o shell sem furar os gates", () => {
+  assert.deepEqual(Object.keys(R.PRODUTOS), ["crm", "ads", "atendimento"]);
+  for (const id of ["crm", "ads", "atendimento"]) assert.equal(R.produtoDe(`?produto=${id}`), id);
+  assert.equal(R.produtoDe("?produto=admin"), null, "query inválida não cria app nem concede acesso");
+  assert.equal(R.produtoInicial("crm"), "crm");
+  assert.equal(R.produtoInicial("ads"), "anuncios");
+  assert.equal(R.produtoInicial("atendimento"), "conversas");
+  assert.equal(R.urlProduto("crm"), "/crm/");
+  assert.equal(R.urlProduto("ads"), "/ads/");
+  assert.equal(R.urlProduto("atendimento"), "/atendimento/");
+  const fixos = [{ id: "config", fixo: true }, { id: "admin", fixo: true }];
+  assert.deepEqual(R.itensDoProduto("crm", [{ id: "crm" }, { id: "conversas" }, ...fixos]).map(x => x.id), ["crm", "config", "admin"]);
+  assert.deepEqual(R.itensDoProduto("ads", [{ id: "anuncios" }, { id: "crm" }, ...fixos]).map(x => x.id), ["anuncios", "config", "admin"]);
+  assert.deepEqual(R.itensDoProduto("atendimento", [{ id: "conversas" }, { id: "crm" }, ...fixos]).map(x => x.id), ["conversas", "config", "admin"]);
+  assert.equal(R.itensDoProduto(null, [{ id: "crm" }, { id: "conversas" }]).length, 2);
+  assert.equal(R.rotaNoProduto("crm", "contatos"), true, "contatos é uma rota interna do CRM");
+  assert.equal(R.rotaNoProduto("crm", "conversas"), false, "URL direta não atravessa para Atendimento");
+  assert.equal(R.rotaNoProduto("ads", "crm"), false, "URL direta não atravessa para CRM");
+  assert.equal(R.rotaNoProduto("atendimento", "conversas"), true);
+  assert.equal(R.rotaNoProduto("atendimento", "config"), true, "configuração da empresa continua comum");
+  assert.equal(R.rotaNoProduto("atendimento", "login"), true, "rotas públicas continuam disponíveis");
+  assert.equal(R.rotaNoProduto("atendimento", "admin"), true, "Admin continua sujeito ao seu próprio gate de papel");
+  assert.equal(R.rotaNoProduto(null, "automacoes"), true, "Órbita completo não ganha filtro de produto");
+  assert.equal(R.produtoDaRota("crm"), "crm");
+  assert.equal(R.produtoDaRota("contatos"), "crm", "contatos também abre no espaço CRM");
+  assert.equal(R.produtoDaRota("conversas"), "atendimento");
+  assert.equal(R.produtoDaRota("anuncios"), "ads");
+  assert.equal(R.produtoDaRota("agenda"), "crm", "rota compartilhada usa CRM como destino padrão");
+  assert.equal(R.produtoDaRota("config"), null, "rotas comuns não provocam troca de produto");
+  assert.equal(R.produtoDaRota("inexistente"), null);
+  const prontoTudo = { pronto: () => true, temModulo: () => true, pode: () => true, gestorConta: false, temCliente: true };
+  assert.equal(R.rotaPadrao({ ...prontoTudo, produto: "crm" }), "crm");
+  assert.equal(R.rotaPadrao({ ...prontoTudo, produto: "ads" }), "anuncios");
+  assert.equal(R.rotaPadrao({ ...prontoTudo, produto: "atendimento" }), "conversas");
+});
+await teste("primeira conta: código de ativação e trava transacional antes de virar gestor aprovado", () => {
+  const sql = readFileSync(join(RAIZ, "supabase/migrations/20260926_base_exportada.sql"), "utf8");
+  const inicio = sql.indexOf("CREATE OR REPLACE FUNCTION public.nx_criar_conta(");
+  const fim = sql.indexOf("$function$;", inicio);
+  assert.ok(inicio >= 0 && fim > inicio, "RPC de cadastro inicial existe");
+  const fn = sql.slice(inicio, fim);
+  assert.match(fn, /pg_advisory_xact_lock\(hashtext\('nx_criar_conta'\)\)/, "duas primeiras contas não passam juntas");
+  assert.match(fn, /select not exists \(select 1 from public\.nx_contas\) into v_primeira/i);
+  assert.match(fn, /if v_primeira then[\s\S]*?codigo_gestor[\s\S]*?p_codigo[\s\S]*?codigo_invalido/i);
+  assert.match(fn, /case when v_primeira then 'gestor' else 'clinica' end, v_primeira/i);
+});
 
 /* ============================================================ (c) VOCAB */
 console.log("\n(c) vocab.js");
@@ -521,6 +567,40 @@ await teste("index.html: nenhum <script> inline nem atributo on*= (CSP §3.9); u
   for (const ic of "inicio chat funil contato empresa tarefa anuncio raio grafico engrenagem sino busca mais fechar clipe enviar nota usuario sair check checks relogio alerta lixeira editar filtro seta-esq seta-dir ia etiqueta telefone whatsapp arrastar olho copiar".split(" ")) {
     assert.match(html, new RegExp(`<symbol id="i-${ic}"`), `ícone i-${ic}`);
   }
+});
+await teste("apps independentes: atalhos CRM/Ads/Atendimento, query de produto e manifestos instaláveis separados", () => {
+  for (const [id, rota, manifesto] of [
+    ["crm", "crm", "manifest-crm.webmanifest"], ["ads", "anuncios", "manifest-ads.webmanifest"],
+    ["atendimento", "conversas", "manifest-atendimento.webmanifest"],
+  ]) {
+    const html = readFileSync(join(RAIZ, "web", id, "index.html"), "utf8");
+    assert.match(html, new RegExp(`data-produto="${id}"`));
+    assert.match(html, /<script src="\/workspace\.js\?v=[^"]+"><\/script>/);
+    for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+      assert.match(m[1], /\ssrc=/, `${id}: script deve ser externo`);
+      assert.equal(m[2].trim(), "", `${id}: sem script inline`);
+    }
+    assert.match(html, new RegExp(`/app/\\?produto=${id}#/${rota}`));
+    const m = JSON.parse(readFileSync(join(APP, manifesto), "utf8"));
+    assert.equal(m.start_url, `/app/?produto=${id}#/${rota}`);
+    assert.equal(m.scope, "/app/");
+    assert.equal(m.icons.length, 1);
+    assert.equal(new URL(m.icons[0].src, `https://orbita.local/app/${manifesto}`).pathname, "/app/orbita-icon.svg");
+  }
+  const jsWorkspace = readFileSync(join(RAIZ, "web", "workspace.js"), "utf8");
+  assert.match(jsWorkspace, /location\.replace\(url\)/);
+  assert.match(jsWorkspace, /\["org", "dev", "dev-falso"\]/);
+  assert.match(jsWorkspace, /origem\.hash\.startsWith\("#\/"\) \? origem\.hash : `#\/\$\{atual\.rota\}`/, "entrada de produto preserva deep link interno validado pelo shell");
+  const shell = ler("app.js");
+  assert.match(shell, /rotaNoProduto\(E\.workspace, r\.modulo\)/, "shell identifica navegação fora do produto atual");
+  assert.match(shell, /produtoDaRota\(r\.modulo\)[\s\S]*?urlWorkspace\(destino, rotas\.montarHash\(r\.modulo, r\.partes, r\.query\)\)/, "rotas cruzadas preservam o destino e alternam para o produto correspondente");
+  assert.match(shell, /E\.workspace === null \|\| E\.workspace === "crm"/, "busca global só existe no Órbita completo ou no CRM");
+  assert.match(shell, /document\.title = E\.workspace \? rotas\.PRODUTOS\[E\.workspace\]\.titulo/, "cada atalho tem título próprio");
+  assert.match(shell, /const nomeApp = E\.workspace \? E\.M\?\.rotas\?\.PRODUTOS\?\.\[E\.workspace\]\?\.nome : "";/, "título mantém o produto mesmo quando muda a rota interna");
+  const seletor = shell.match(/function abrirSeletorProduto\(ancora\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(seletor, /const rotas = E\.M\.rotas;/, "seletor usa o módulo de rotas carregado no contexto");
+  assert.match(seletor, /Object\.entries\(rotas\.PRODUTOS\)/, "seletor lista os três produtos configurados");
+  assert.match(readFileSync(join(RAIZ, "netlify.toml"), "utf8"), /for = "\/workspace\.js"[\s\S]*?Content-Security-Policy/);
 });
 
 function semRaiz(texto) {

@@ -241,3 +241,11 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 - Após a autenticação manual do João, instalei o GitHub App do Netlify com acesso somente a `Jpfamelli/nexus-ads` e selecionei esse repo no projeto `orbita-nexus-ads`.
 - O fluxo chegou à configuração final, que implantaria `main` pelo botão “Deploy nexus-ads”. Como `origin/main` ainda não tem o `netlify.toml` de proteção (a regra existe somente em `codex/orbita`) e F8 não foi aceita, parei antes de iniciar o deploy.
 - O vínculo ainda não foi concluído; nenhum deploy novo, mudança na `main` ou escrita no Supabase. F8 continua pendente pelos E2E-A/B, canal CodeWords de teste, métricas Ads isoladas, mobile autenticado e limpeza de fixtures.
+
+## Entrega local das três rodadas — 2026-09-30 01:57 -03
+
+- Branch `codex/orbita`; melhoria cross-app, aliases, manifestos PWA, ajuste tipográfico/visual, contexto de IA por vertical e memória operacional aprovada estão no working tree e detalhados em `docs/orbita/rodadas-melhoria-20260930.md`.
+- Deep links testados no preview local: Atendimento → oportunidade CRM 801 (com origem/campanha) → conversa 901. Demo sinalizada como fictícia em `http://127.0.0.1:4174/app/?dev-falso=1&dev=1#/inicio`.
+- Verificação: Node 14/14 arquivos; teste de app 49 verificações; montagem e `deno check` 7/7; `git diff --check` aprovado (somente avisos LF/CRLF).
+- Integrações CodeWords/Meta/Google/IA reais não foram chamadas nem configuradas nesta rodada. A migration de memória está local, `nx_config` e dados remotos não foram alterados, `prontos.js` permanece fechado.
+- F8 continua aberta para os E2E reais em tenant/canais de teste, QA mobile autenticado, isolamento e limpeza. Netlify/preview hospedado e publicação de produção não foram atualizados; PR #1 permanece draft. Não foi feita mudança em `main`.

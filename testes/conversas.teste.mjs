@@ -329,8 +329,8 @@ await teste("P0-B horarioAberto = nx_horario_aberto no fuso de SP (fim exclusivo
   assert.equal(L.horarioAberto(null, "2026-09-27T03:00:00-03:00"), true, "24 h");
 });
 
-await teste("P0-B contarIA soma os 5 textos aparados (teto 15.000)", () => {
-  assert.equal(L.contarIA({ sobre: "  abc ", servicos: "12345", tom: "formal", extra: "zzzz" }), 8);
+await teste("P0-B contarIA soma os 6 textos aparados, incluindo memória aprovada (teto 15.000)", () => {
+  assert.equal(L.contarIA({ sobre: "  abc ", servicos: "12345", memoria_aprovada: " xy ", tom: "formal", extra: "zzzz" }), 10);
   assert.equal(L.contarIA(null), 0);
   assert.equal(L.IA_MAX, 15000);
 });

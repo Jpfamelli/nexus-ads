@@ -1,0 +1,13 @@
+{
+  "id": "/app/?produto=atendimento",
+  "name": "Órbita Atendimento",
+  "short_name": "Atendimento",
+  "description": "Conversas, encaminhamento humano e agenda em uma caixa compartilhada.",
+  "lang": "pt-BR",
+  "start_url": "/app/?produto=atendimento#/conversas",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#07090C",
+  "theme_color": "#07090C",
+  "icons": [{ "src": "orbita-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

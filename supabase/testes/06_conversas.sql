@@ -559,6 +559,13 @@ begin
   perform pg_temp.ok(j ->> 'sobre' = 'Clínica de teste.' and j ->> 'regras' = 'Nunca dar preço fechado.' and j ->> 'tom' = 'formal', 'ia mescla (não apaga o que não veio)');
   perform pg_temp.ok((select cfg -> 'ia' ->> 'regras' from public.nx_clientes where id = cA) = 'Nunca dar preço fechado.'
                      and (public.nx_cv_base('tok-f5-adm', cA) -> 'config' -> 'ia' ->> 'sobre') = 'Clínica de teste.', 'cfg.ia gravado e lido pela base');
+  j := public.nx_ia_config_salvar('tok-f5-adm', cA, '{"memoria_aprovada":"Convênio Alfa: confirmar cobertura com a recepção."}');
+  perform pg_temp.ok(j ->> 'memoria_aprovada' = 'Convênio Alfa: confirmar cobertura com a recepção.'
+                     and j ->> 'regras' = 'Nunca dar preço fechado.'
+                     and (public.nx_cv_base('tok-f5-adm', cA) -> 'config' -> 'ia' ->> 'memoria_aprovada') = 'Convênio Alfa: confirmar cobertura com a recepção.',
+                     'memória aprovada mescla, persiste e volta à configuração');
+  perform pg_temp.ok(pg_temp.erro(format('select public.nx_ia_config_salvar(%L,%L,%L)', 'tok-f5-adm', cA,
+    jsonb_build_object('memoria_aprovada', repeat('x', 3001)))) = 'dados_invalidos|memoria_aprovada', 'memória com mais de 3.000 caracteres recusada');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_ia_config_salvar(%L,%L,%L)', 'tok-f5-adm', cA, '{"tom":"bravo"}')) = 'dados_invalidos|tom', 'tom inválido');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_ia_config_salvar(%L,%L,%L)', 'tok-f5-adm', cA, jsonb_build_object('servicos', repeat('x', 14990)))) = 'dados_invalidos|tamanho', 'soma > 15.000 → tamanho');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_ia_config_salvar(%L,%L,%L)', 'tok-f5-sup', cA, '{"sobre":"x"}')) = 'sem_permissao', 'supervisor não mexe na IA');

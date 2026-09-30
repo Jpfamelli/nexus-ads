@@ -524,10 +524,12 @@ export function montarContexto(d = {}) {
   const ia = OBJ(d.empresa?.ia) ? d.empresa.ia : {};
   const empresa = {
     nome: txt(d.empresa?.nome),
+    vertical: /^(odonto|oficina|loja|generico)$/.test(txt(d.empresa?.vertical)) ? txt(d.empresa.vertical) : "generico",
     assistente: { nome: txt(ia.assistente_nome) || "Assistente", tom: ia.tom === "formal" ? "formal" : "proximo" },
     sobre: txt(ia.sobre), servicos: txt(ia.servicos),
     horarios: txt(ia.horarios) || textoHorario(d.empresa?.horario_departamento),
     endereco: txt(ia.endereco), regras: txt(ia.regras), proibido: txt(ia.proibido), boas_vindas: txt(ia.boas_vindas),
+    memoria_aprovada: txt(ia.memoria_aprovada).slice(0, 3000),
   };
   const contato = { nome: txt(d.contato?.nome) || null, telefone: soDigitos(d.contato?.telefone), primeira_vez: !!d.contato?.primeira_vez };
   const n = OBJ(d.negocio) ? d.negocio : null;

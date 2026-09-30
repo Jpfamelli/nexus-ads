@@ -526,7 +526,7 @@ export function horarioAberto(h, quando = new Date()) {
 }
 
 /* ------------------------------------------------------------ assistente de IA */
-export const IA_CAMPOS = Object.freeze(["sobre", "servicos", "horarios", "regras", "proibido"]);
+export const IA_CAMPOS = Object.freeze(["sobre", "servicos", "horarios", "regras", "proibido", "memoria_aprovada"]);
 export const IA_MAX = 15000;
 /** Soma dos textos (mesma conta do nx_ia_config_salvar, com os textos aparados). */
 export function contarIA(cfg) {

@@ -46,6 +46,53 @@ export const MENU = Object.freeze([
   { id: "admin", rota: "admin/clientes", rotulo: "Admin", icone: "usuario", fixo: true },
 ]);
 
+/** Áreas com entrada própria e sessão compartilhada. A filtragem é só navegação;
+    autorização, plano e módulos continuam sendo verificados em acessoRota(). */
+export const PRODUTOS = Object.freeze({
+  crm: Object.freeze({ nome: "CRM", resumo: "Contatos, oportunidades e vendas.", titulo: "Órbita CRM", rota: "crm", manifesto: "manifest-crm.webmanifest", itens: Object.freeze(["crm", "agenda", "empresas", "tarefas"]) }),
+  ads: Object.freeze({ nome: "Nexus Ads", resumo: "Campanhas, origem dos leads e retorno.", titulo: "Nexus Ads · Órbita", rota: "anuncios", manifesto: "manifest-ads.webmanifest", itens: Object.freeze(["inicio", "anuncios", "relatorios"]) }),
+  atendimento: Object.freeze({ nome: "Atendimento", resumo: "Conversas, equipe e agenda.", titulo: "Órbita Atendimento", rota: "conversas", manifesto: "manifest-atendimento.webmanifest", itens: Object.freeze(["inicio", "conversas", "agenda"]) }),
+});
+
+/** Produto solicitado na query string. Somente os três ids conhecidos são aceitos. */
+export function produtoDe(busca = "") {
+  const q = new URLSearchParams(String(busca).replace(/^\?/, ""));
+  const id = q.get("produto");
+  return Object.hasOwn(PRODUTOS, id) ? id : null;
+}
+
+export function produtoInicial(id) { return PRODUTOS[id]?.rota || null; }
+export function urlProduto(id) { return Object.hasOwn(PRODUTOS, id) ? `/${id}/` : null; }
+export function manifestoProduto(id) { return PRODUTOS[id]?.manifesto || "manifest.webmanifest"; }
+
+/** Uma entrada de produto também é uma fronteira de navegação visual. As rotas
+    públicas e as áreas administrativas comuns mantêm os próprios gates de acesso. */
+export function rotaNoProduto(id, modulo) {
+  if (!id) return true;
+  const produto = PRODUTOS[id];
+  if (!produto || !modulo) return false;
+  if (ROTAS[modulo]?.publica || modulo === "config" || modulo === "admin") return true;
+  if (produto.itens.includes(modulo)) return true;
+  return id === "crm" && modulo === "contatos";
+}
+
+/** Produto padrão para abrir um deep link quando ele veio de outro espaço. */
+export function produtoDaRota(modulo) {
+  if (modulo === "contatos") return "crm";
+  for (const [id, produto] of Object.entries(PRODUTOS)) {
+    if (produto.itens.includes(modulo)) return id;
+  }
+  return null;
+}
+
+/** Mantém as áreas de conta e filtra o restante da lista já autorizada pelo shell. */
+export function itensDoProduto(id, disponiveis = []) {
+  const regra = PRODUTOS[id];
+  if (!regra) return disponiveis.slice();
+  const permitidos = new Set(regra.itens);
+  return disponiveis.filter(it => it.fixo || permitidos.has(it.id));
+}
+
 /** Barra inferior do celular: até 4 itens + "Mais". */
 export const BARRA = Object.freeze(["inicio", "conversas", "crm", "agenda"]);
 
@@ -105,7 +152,9 @@ export function acessoRota(modulo, { pronto, temModulo, pode, gestorConta, temCl
 /** Rota padrão depois do login: inicio se pronto; senão o 1º módulo pronto e permitido; senão admin (gestor) ou config. */
 export function rotaPadrao(opcoes) {
   const ordem = ["inicio", "conversas", "crm", "contatos", "tarefas", "anuncios", "relatorios", "automacoes"];
-  if (opcoes.temCliente) for (const m of ordem) if (acessoRota(m, opcoes) === "ok") return m;
+  const produto = PRODUTOS[opcoes.produto];
+  const preferida = produto ? [produto.rota, ...produto.itens.flatMap(id => id === "crm" ? ["crm", "contatos"] : [id])].filter((id, i, a) => a.indexOf(id) === i) : ordem;
+  if (opcoes.temCliente) for (const m of preferida) if (acessoRota(m, opcoes) === "ok") return m;
   if (opcoes.gestorConta) return "admin";
   return "config";
 }

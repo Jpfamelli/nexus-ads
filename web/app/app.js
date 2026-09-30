@@ -34,6 +34,7 @@ const E = {
   badges: {},
   titulo: "",
   produto: "Órbita",
+  workspace: null,       // CRM, Nexus Ads ou Atendimento; filtro visual sobre as mesmas permissões
   faviconPadrao: null,
   ultimaRota: null,
   montando: 0,
@@ -64,6 +65,11 @@ async function iniciar() {
     const [dados, api, ui, tema, vocab, rotas, pulso] = await Promise.all([
       import(`../dados.js?v=${encodeURIComponent(VERSAO)}`), arq("api.js"), arq("ui.js"), arq("tema.js"), arq("vocab.js"), arq("rotas.js"), arq("pulso.js")]);
     E.M = { dados, api, ui, tema, vocab, rotas, pulso };
+    E.workspace = rotas.produtoDe(location.search);
+    document.documentElement.dataset.produto = E.workspace || "orbita";
+    document.title = E.workspace ? rotas.PRODUTOS[E.workspace].titulo : "Órbita · Nexus";
+    const manifesto = $("manifest");
+    if (manifesto) manifesto.setAttribute("href", E.workspace ? rotas.manifestoProduto(E.workspace) : "manifest.webmanifest");
   } catch (e) {
     console.error(e);
     bootMsg("Não foi possível abrir o sistema. Confira a internet e tente de novo.", true);
@@ -358,6 +364,7 @@ function opcoesAcesso() {
     pode: min => E.M.rotas.podePapel(papel, min),
     gestorConta: !!(E.sessao && E.sessao.conta && E.sessao.conta.papel === "gestor"),
     temCliente: !!E.cliente,
+    produto: E.workspace,
   };
 }
 
@@ -420,6 +427,18 @@ async function aoMudarRota(doUsuario) {
       await escolherCliente(alvo.id, { remontar: false });
       return aoMudarRota(doUsuario);
     }
+  }
+
+  // Links profundos entre produtos mantêm o destino e atravessam para o espaço certo.
+  // Acesso por papel, plano e prontos.js continua sendo validado separadamente.
+  if (E.workspace && r.modulo && !rotas.rotaNoProduto(E.workspace, r.modulo)) {
+    const destino = rotas.produtoDaRota(r.modulo);
+    if (destino && destino !== E.workspace) {
+      const href = urlWorkspace(destino, rotas.montarHash(r.modulo, r.partes, r.query));
+      if (href) return location.assign(href);
+    }
+    const padrao = rotas.rotaPadrao(opcoesAcesso());
+    return navegar(padrao === "relatorios" ? "#/relatorios/vendas" : padrao === "admin" ? "#/admin/clientes" : `#/${padrao}`, { substituir: true });
   }
 
   mostrarApp();
@@ -667,7 +686,7 @@ function itensVisiveis() {
     const emConstrucao = devLigado() && !E.prontos.MODULOS_PRONTOS.includes(rotas.ROTAS[it.id].pronto);
     if (acesso === "ok") itens.push({ ...it, rotulo: it.rotulo.replace(/\{(\w+)\}/g, (_, k) => v[k] || k), emConstrucao });
   }
-  return itens;
+  return rotas.itensDoProduto(E.workspace, itens);
 }
 
 function desenharShell() {
@@ -802,6 +821,12 @@ function desenharConta() {
 /** Busca global (Ctrl/⌘+K) e sino — só com uma empresa ativa. */
 function desenharFerramentasTopo(dir) {
   const { ui } = E;
+  if (E.sessao) {
+    const btProdutos = ui.h("button", { type: "button", class: "topo-produtos", "aria-haspopup": "dialog",
+      "aria-label": "Trocar entre CRM, Nexus Ads e Atendimento" }, ui.icone("camadas"), ui.h("span", null, E.M.rotas.PRODUTOS[E.workspace]?.nome || "Produtos"));
+    btProdutos.addEventListener("click", () => abrirSeletorProduto(btProdutos));
+    dir.appendChild(btProdutos);
+  }
   if (!E.cliente) return;
   if (buscaDisponivel()) {
     const bt = ui.h("button", { type: "button", class: "topo-busca", id: "bt-busca", "aria-label": `Buscar (${teclaMod()}+K)`, "aria-keyshortcuts": "Control+K Meta+K" },
@@ -816,6 +841,40 @@ function desenharFerramentasTopo(dir) {
   atualizarSinoUI();
 }
 
+function urlWorkspace(id, rotaOverride = null) {
+  const base = E.M.rotas.urlProduto(id);
+  if (!base) return null;
+  const q = new URLSearchParams();
+  for (const k of ["org", "dev", "dev-falso"]) {
+    const v = new URLSearchParams(location.search).get(k);
+    if (v) q.set(k, v);
+  }
+  q.set("produto", id);
+  const rota = rotaOverride || E.M.rotas.montarHash(E.M.rotas.produtoInicial(id));
+  return `${base}?${q.toString()}${rota}`;
+}
+
+function abrirSeletorProduto(ancora) {
+  const { ui } = E;
+  const rotas = E.M.rotas;
+  const grade = ui.h("div", { class: "produto-grade" }, Object.entries(rotas.PRODUTOS).map(([id, item]) => {
+    const atual = id === E.workspace;
+    const b = ui.h("button", { type: "button", class: "produto-op", "aria-current": atual ? "page" : null },
+      ui.h("span", { class: "produto-op-icone" }, ui.icone(id === "crm" ? "funil" : id === "ads" ? "anuncio" : "chat")),
+      ui.h("span", { class: "produto-op-corpo" }, ui.h("b", null, item.nome), ui.h("small", null, item.resumo)),
+      atual ? ui.h("span", { class: "produto-op-atual" }, "Aberto") : ui.icone("seta-dir"));
+    b.addEventListener("click", () => { const href = urlWorkspace(id); if (href) location.assign(href); });
+    return b;
+  }));
+  ui.modal({ titulo: "Seus produtos", corpo: ui.h("div", { class: "pilha-p" }, grade,
+    ui.h("p", { class: "produto-nota" }, "Os três produtos usam a mesma conta, empresa e histórico. Plano e permissões da empresa continuam valendo em cada área.")),
+    acoes: [{ rotulo: "Fechar", tipo: "neutro" }], aoAbrir: modal => {
+      const atual = modal.el?.querySelector?.('.produto-op[aria-current="page"]');
+      const primeiro = atual || modal.el?.querySelector?.(".produto-op");
+      if (primeiro) primeiro.focus();
+    } });
+}
+
 function teclaMod() {
   const p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
   return /mac|iphone|ipad/i.test(p) ? "⌘" : "Ctrl";
@@ -826,7 +885,7 @@ function teclaMod() {
    ============================================================ */
 function buscaDisponivel() {
   const c = E.cliente;
-  return !!c && c.modulos.includes("crm") && pronto("crm") && !E.buscaFora;
+  return (E.workspace === null || E.workspace === "crm") && !!c && c.modulos.includes("crm") && pronto("crm") && !E.buscaFora;
 }
 
 function normTxt(s) { return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
@@ -848,7 +907,7 @@ function abrirBusca() {
   const { ui } = E;
   if (!buscaDisponivel() || _buscaAberta) return;
   const v = E.M.vocab.vocab(E.cliente.vertical);
-  const conversasOk = E.cliente.modulos.includes("conversas") && pronto("conversas");
+  const conversasOk = !E.workspace && E.cliente.modulos.includes("conversas") && pronto("conversas");
   const idLista = "busca-res";
   const campo = ui.h("input", { type: "search", class: "busca-campo", placeholder: `Buscar ${v.contatos.toLowerCase()}, ${v.negocios.toLowerCase()}${conversasOk ? " e conversas" : ""}`,
     "aria-label": "O que você procura", role: "combobox", "aria-expanded": "true", "aria-controls": idLista, "aria-autocomplete": "list", autocomplete: "off", spellcheck: "false" });
@@ -1039,7 +1098,10 @@ function desenharFaixas() {
 function definirTitulo(texto) { E.titulo = texto || ""; atualizarTitulo(); }
 function atualizarTitulo() {
   const n = E.badges.conversas || 0;
-  document.title = `${n > 0 ? `(${n > 99 ? "99+" : n}) ` : ""}${E.titulo ? `${E.titulo} · ` : ""}${E.produto || "Órbita"}`;
+  const nomeApp = E.workspace ? E.M?.rotas?.PRODUTOS?.[E.workspace]?.nome : "";
+  const marca = E.produto || "Órbita";
+  const contextoProduto = nomeApp ? `${nomeApp} · ${marca}` : marca;
+  document.title = `${n > 0 ? `(${n > 99 ? "99+" : n}) ` : ""}${E.titulo ? `${E.titulo} · ` : ""}${contextoProduto}`;
 }
 function definirBadge(modulo, n) {
   const antes = E.badges[modulo] || 0;
