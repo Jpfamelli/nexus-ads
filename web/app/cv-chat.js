@@ -152,7 +152,7 @@ export function criarChat(A) {
       } else if (ia?.disponivel === false) {
         rotuloIA = "IA indisponível"; corIA = "aten"; dicaIA = ia.erro || "Confira a configuração do canal CodeWords.";
       } else if (ia) {
-        else if (ia.pausada) {
+        if (ia.pausada) {
           const autor = ia.pausada_por === "celular" ? "mensagem pelo celular" : `${ia.pausada_por_nome || "você"} assumiu`;
           let hora = "";
           if (!ia.so_manual && ia.pausada_ate) {

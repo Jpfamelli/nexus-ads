@@ -202,7 +202,7 @@ export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro
 
 /* ============================================================ gaveta do negócio */
 export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
-  const { ui, h } = k;
+  const { ui, h, L } = k;
   let fechada = false;
   const g = ui.gaveta({ titulo: k.v.negocio, largura: "g", aoFechar: () => { fechada = true; if (aoFechar) aoFechar(); } });
   const corpo = g.corpo;
@@ -367,13 +367,24 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       } else {
         el.appendChild(h("p", { class: "aviso" }, ui.icone("info"), h("span", null, `Sem ${k.v.min("contato")} ligado (o cadastro foi removido). Os números do negócio continuam no retorno do anúncio.`)));
       }
-      /* anúncio */
-      if (n.plataforma) {
-        const an = d.anuncio || {};
-        el.appendChild(h("div", { class: ["ng-anuncio", n.plataforma === "google" && "google"] }, ui.icone("anuncio"),
-          h("span", null, "Veio do anúncio ", h("b", null, `«${an.anuncio_nome || n.anuncio_ext || "sem nome"}»`),
-            an.campanha_nome || n.campanha_ext ? [" · campanha ", h("b", null, `«${an.campanha_nome || n.campanha_ext}»`)] : null,
-            ` · ${n.plataforma === "google" ? "Google Ads" : "Meta"}`)));
+      /* origem da oportunidade e campanha */
+      const rastreio = n.rastreio && typeof n.rastreio === "object" ? n.rastreio : {};
+      const an = d.anuncio || {};
+      const campanha = an.campanha_nome || n.campanha_nome || n.campanha_ext || rastreio.utm_campaign;
+      const anuncio = an.anuncio_nome || n.anuncio_nome || n.anuncio_ext;
+      const plataforma = n.plataforma === "google" ? "Google Ads" : n.plataforma === "meta" ? "Meta Ads" : null;
+      const origem = n.origem ? (L.ROTULO_ORIGEM[n.origem] || n.origem) : null;
+      const tagsUtm = [rastreio.utm_source, rastreio.utm_medium].filter(Boolean).join(" · ");
+      if (plataforma || origem || campanha || anuncio || tagsUtm) {
+        const detalhesOrigem = h("div", { class: "ng-origem-detalhes" },
+          h("b", null, plataforma || origem || "Origem do contato"),
+          campanha || anuncio ? h("span", null,
+            anuncio ? ["Anúncio ", h("b", null, `«${anuncio}»`)] : null,
+            campanha ? [anuncio ? " · campanha " : "Campanha ", h("b", null, `«${campanha}»`)] : null) : null,
+          origem && plataforma ? h("small", null, `Origem do cadastro: ${origem}`) : null,
+          tagsUtm ? h("small", null, `Parâmetros do site: ${tagsUtm}`) : null,
+          rastreio.pagina ? h("small", null, `Página: ${rastreio.pagina}`) : null);
+        el.appendChild(h("div", { class: ["ng-anuncio", n.plataforma === "google" && "google"] }, ui.icone("anuncio"), detalhesOrigem));
       }
       /* dados */
       const dl = h("dl", { class: "ng-kv" });

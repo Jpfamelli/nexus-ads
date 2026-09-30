@@ -2,13 +2,14 @@
    ÓRBITA — config.js · frente F3 · ESPEC T14 (§7.7), §2.8
    Hub #/config e #/config/<secao>. Seções da F3: perfil, usuarios
    (P0-A); marca, dominio, plano (P0-B). As outras frentes entram por secoesConfig de
-   crm-config.js (F4), cv-config.js (F5) e ads-config.js (F6),
+   crm-config.js (F4), cv-config.js (F5), ads-config.js (F6),
+   agenda-config.js e rastreio-config.js (F8),
    carregados por import() com ?v= e catch. Só aparece o que está
    em CONFIG_PRONTAS (ou ?dev=1 do super).
    ============================================================ */
 
 const GRUPOS = ["Você", "Equipe", "Atendimento", "CRM", "Anúncios", "Marca", "Plano"];
-const EXTERNOS = ["crm-config.js", "cv-config.js", "ads-config.js"];
+const EXTERNOS = ["crm-config.js", "cv-config.js", "ads-config.js", "agenda-config.js", "rastreio-config.js"];
 let _externas = null;      // cache das seções das outras frentes (por versão)
 let _versaoExt = null;
 let _limpeza = [];

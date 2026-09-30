@@ -96,6 +96,11 @@
 .kb-col-n { font-family: var(--f-mono); font-size: var(--fs-11); color: var(--c-texto-3); padding: .1rem .45rem; border-radius: 999px; background: var(--c-sup-2); }
 .kb-col-mais { width: 30px; height: 30px; margin-right: -.3rem; }
 .kb-col-mais .ic { width: 16px; height: 16px; }
+.kb-mais { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding-inline: .65rem; }
+.kb-antigos .link { display: inline-flex; align-items: center; min-height: 44px; padding-inline: .2rem; }
+@media (max-width: 760px), (pointer: coarse) {
+  .bt-icone.kb-col-mais { width: 44px; height: 44px; }
+}
 .kb-col-l2 { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; font-size: var(--fs-13); color: var(--c-texto-2); }
 .kb-col-soma { font-weight: 700; color: var(--c-texto); font-variant-numeric: tabular-nums; }
 .kb-col-tipo { font-family: var(--f-mono); font-size: var(--fs-11); letter-spacing: .08em; text-transform: uppercase; color: var(--c-texto-3); }
@@ -125,6 +130,7 @@
 .kc-s { margin-top: -.3rem; font-size: var(--fs-12); color: var(--c-texto-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kc-selos { display: flex; flex-wrap: wrap; gap: .3rem; }
 .kc-selos .pilula { min-height: 22px; font-size: 11.5px; padding: .08rem .5rem; }
+.kc-selos .pilula { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .kc-etiqs { display: flex; flex-wrap: wrap; gap: .3rem; min-width: 0; }
 .kc-etiqs .etiq { min-height: 22px; font-size: 11.5px; padding: .08rem .5rem .08rem .4rem; max-width: 140px; }
 .kc-mais-etq { font-family: var(--f-mono); font-size: var(--fs-11); color: var(--c-texto-3); align-self: center; }
@@ -232,6 +238,8 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .ng-anuncio .ic { color: var(--c-meta); margin-top: .1rem; }
 .ng-anuncio.google .ic { color: var(--c-google); }
 .ng-anuncio b { font-weight: 700; }
+.ng-origem-detalhes { min-width: 0; display: grid; gap: .2rem; overflow-wrap: anywhere; }
+.ng-origem-detalhes small { color: var(--c-texto-3); font-size: var(--fs-12); }
 .ng-outros { display: flex; flex-direction: column; gap: .4rem; }
 .ng-mini {
   --cor: var(--c-texto-3);
@@ -512,6 +520,9 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
     grid-template-areas: "alca cor nome nome rem" "alca . tipo marco ." "alca . num sla ."; }
   .fe-etapas.sem-marco .fe-etapa { grid-template-areas: "alca cor nome nome rem" "alca . tipo tipo ." "alca . num sla ."; }
   .crm-cfg-item > span { flex-basis: calc(100% - 3rem); }
+}
+@media (max-width: 760px), (pointer: coarse) {
+  .crm-seg button, .tf-acoes .bt-icone, .nota-meta .bt-icone, .crm-cfg-item .bt-icone, .fe-rem, .fe-alca { min-width: 44px; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .kc, .kc-fantasma, .kb-zona, .crm-chip, .kb-zonas { transition: none !important; animation: none !important; }

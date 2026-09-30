@@ -1,25 +1,25 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 13:51 (America/Sao_Paulo)
+Atualizado: 2026-09-29 23:54 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
 ## Situação
 
-O código das frentes está no branch para revisão. As seis Edge Functions estão ativas no Supabase e há um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. Os 10 smokes SQL reais passaram em transações revertidas. João autenticou a conta gestora no preview; o tenant isolado `teste-e2e` foi criado e a conta administrativa sintética entrou no tenant. A tentativa de acessar `#/admin/clientes` por essa conta foi negada. E2E-A/B, webhook, paridade Ads, mobile autenticado, limpeza e produção seguem pendentes. Não alterei `nx_config`, dados da Kamiguchi ou produção.
+O branch `codex/orbita` contém as frentes em revisão; as alterações locais desta retomada ainda precisam ser registradas e enviadas ao PR. As sete Edge Functions estão `ACTIVE` no Supabase e existe um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. As migrações CodeWords, agenda/rastreio e origem CRM/agenda estão aplicadas; os smokes SQL 05, 09, 10 e 11 passaram em transações revertidas segundo o registro da retomada anterior. O tenant isolado `teste-e2e` existe, mas a leitura atual encontrou apenas um canal Meta pendente, zero linhas de métricas e nenhum canal CodeWords. E2E-A/B real, webhook/envio/recibos CodeWords, paridade Ads, mobile autenticado, limpeza e publicação de produção seguem pendentes. Nesta retomada não li segredos nem alterei `nx_config`, dados da Kamiguchi ou produção.
 
 ## Frentes
 
 | Frente | Código/revisão | Estado de publicação |
 |---|---|---|
-| F1 — banco | Migrações `20260928a…h` aplicadas conforme o handoff e o `AGENTS.md` | Não revalidado nesta retomada |
-| F2 — funções | Sete handlers na montagem local; runner 12/12 e `deno check` nos sete artefatos planos aprovados | Seis funções anteriores continuam ACTIVE; `nx-codewords` e `nx-enviar` atualizado ainda não publicados |
-| F3 — acesso e white-label | Implementação local existente; módulos dependem do aceite geral | Preview Netlify criado; `/` e `/index.html` redirecionam para `/app/`; sem deploy de produção |
-| F4 — CRM | Implementação, revisão e testes aprovados | `04_crm.sql` e `04_crm_b.sql` passaram no Supabase com `ROLLBACK` |
-| F5 — conversas | Adaptador CodeWords local; 9 testes dedicados, harness de envio idempotente; SQL smoke 10 ampliado para permissões/Vault | Migração e deploy CodeWords pendentes; smoke 10 novo não executado em PostgreSQL; nenhum fluxo real com número foi validado |
-| F6 — anúncios e relatórios | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Integrações e E2E reais pendentes |
-| F7 — automações | Implementação local e testes Node aprovados; revisão anterior aprovada conforme o handoff | Execução real e E2E pendentes |
-| F8 — entrega | Runner serial 12/12; dez smokes SQL reais históricos aprovados | Funções anteriores e preview implantados; CodeWords segue local. E2E-A/B, webhook/recibos reais, Ads/paridade, mobile autenticado, limpeza e produção pendentes |
+| F1 — banco | Migrações base, SaaS, CodeWords, agenda/rastreio e cards de origem aplicadas | Smokes 05, 09, 10 e 11 em `ROLLBACK`; sem alteração de dados da clínica |
+| F2 — funções | Sete handlers compilados localmente; `deno check` 7/7 | `nx-whatsapp` v4, `nx-relatorio` v3, `nx-ciclo` v3, `nx-enviar` v2, `nx-midia` v1, `nx-ia` v1, `nx-codewords` v1 — todas `ACTIVE`, `verify_jwt=false` |
+| F3 — acesso e white-label | Implementação local existente; módulos públicos seguem fechados | Preview Netlify responde; sem publicação em produção |
+| F4 — CRM | Implementação, revisão e testes aprovados; origem de anúncio exibida nos cards | Smoke SQL com `ROLLBACK`; E2E autenticado do tenant segue parcial |
+| F5 — conversas | Adaptador CodeWords, webhook, fila e recibos cobertos por testes locais; migração e funções publicadas | Nenhum canal CodeWords real está configurado no tenant de teste; envio e recibos reais pendentes |
+| F6 — anúncios e relatórios | Implementação local e testes Node aprovados | Tenant de teste sem métricas; integrações reais e paridade CRM/Ads pendentes |
+| F7 — automações | Implementação local e testes Node aprovados | Aceite autenticado de runtime permanece pendente |
+| F8 — entrega | Runner serial 14/14, `deno check` 7/7, smoke local da agenda fictícia 1/1 | E2E-A/B real, CodeWords, paridade Ads, mobile autenticado e limpeza do tenant pendentes; `prontos.js` permanece fechado e sem deploy de produção |
 
 ## Retomada CodeWords — 2026-09-29 13:42
 
@@ -194,3 +194,16 @@ Esse aceite é local, com rede falsa. A migration `20260929a_codewords.sql` não
 A revisão encontrou uma corrida de ordenação: o serviço pode notificar `delivered/read/failed` antes do eco outbound. Antes, esse recibo era ignorado enquanto a linha não existia. Corrigi localmente com tabela pendente por canal/ID (TTL de sete dias), RPC `nx_codewords_status` e advisory lock compartilhado com `nx_codewords_saida`. O eco aplica o estado pendente usando `nx_wa_status`; a fila mantém estados monotônicos. `rotacionar_webhook` valida boolean e respostas síncronas `delivered/read` deixam o status correto.
 
 Adicionei caso Node para status antes do eco e `supabase/testes/10_codewords.sql` para confirmar a fila real em transação revertida quando houver sessão de banco. `node testes/rodar-tudo.mjs` passou 12/12 arquivos (`conversas-funcoes` 48/48; CodeWords 9/9); montagem das sete funções e `deno check` dos sete artefatos passaram. A migration permanece local; sem dry run, deploy nem chamada real ao CodeWords nesta etapa. F8 continua bloqueada por E2E-A/B em canal real de teste, validação mobile autenticada, isolamento/limpeza e publicação aprovada.
+
+## Marco 2026-09-29 23:29 -03 — migração 29c
+
+A migração aditiva `20260929c_cards_origem.sql` foi ensaiada com o smoke 11 em transação revertida, aplicada ao Supabase `dtjznipitihnwmcgpzqh` (versão `20260930022742`) e validada novamente com o smoke 11 em rollback (`SMOKE_11_APPLIED_OK`). CRM e agenda recebem nomes de campanha/anúncio e UTMs permitidas sem IDs de clique; assinaturas e grants permaneceram iguais. Nenhum dado de clínica ou `nx_config` foi alterado. F8 continua aberta para E2E, QA mobile, isolamento, limpeza e decisão dos gates de publicação.
+
+## Retomada Codex — QA e estado remoto — 2026-09-29 23:54
+
+- `node testes/rodar-tudo.mjs`: **14/14 arquivos passaram**. A primeira rodada revelou versões de cache divergentes em `web/app/index.html`; padronizei `antes.js`, `app.css` e `app.js` em `20260929d` e a suíte passou novamente.
+- `node scripts/montar-funcoes.mjs` gerou as sete pastas planas. `npx --yes deno check` passou nos sete entrypoints. O teste da agenda fictícia passou 1/1; `git diff --check` passou, com avisos de normalização LF/CRLF do Windows.
+- QA de interface local realizado em Início, Conversas, CRM, Agenda, Configurações/Números e Administração/Clientes, em 375×812, 390×812 e 1440×900: sem overflow horizontal e sem erro de console. A marcação, conflito e desmarcação de consulta foram exercitados apenas contra o servidor local fictício, sem rede externa. Telefones e identidade da clínica foram removidos desse mock.
+- Leitura remota, sem segredos: migrações `20260929a_codewords`, `20260929b_agenda_rastreio` e `20260929c_cards_origem` constam aplicadas; as sete Edge Functions estão ACTIVE nas versões registradas no quadro acima. O tenant `teste-e2e` existe, mas só tem um canal Meta pendente, zero linhas de métricas e nenhum canal CodeWords.
+- Nada nesta rodada foi escrito no banco ou publicado. `prontos.js` mantém todos os módulos bloqueados; o branch `codex/orbita` segue separado da `main`.
+- F8 continua sem aceite E2E-A/B: faltam credencial/canal CodeWords de teste para ida e volta com recibos, métricas Meta/Google isoladas para validar atribuição e paridade, teste mobile autenticado e limpeza do tenant após os testes. Não usei dados de produção para tentar cobrir essas faltas.

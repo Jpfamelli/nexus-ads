@@ -234,8 +234,18 @@ export async function montarKanban(k, el, rota) {
     const dono = k.usuario(c.dono_id);
     const etqs = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean);
     const selos = [];
-    if (c.anuncio) selos.push(ui.pilula(c.plataforma === "google" ? "Google" : "Anúncio", c.plataforma === "google" ? "google" : "meta", { icone: "anuncio" }));
-    if (c.consulta_em && e.tipo === "aberto") selos.push(ui.pilula(`${ui.dataCurtaBR ? ui.dataCurtaBR(c.consulta_em) : ui.dataBR(c.consulta_em)} ${ui.horaBR(c.consulta_em)}`, "info", { icone: "relogio", title: "Consulta/visita marcada" }));
+    if (c.plataforma) {
+      const plataforma = c.plataforma === "google" ? "Google Ads" : c.plataforma === "meta" ? "Meta Ads" : "Anúncio";
+      selos.push(ui.pilula(plataforma, c.plataforma === "google" ? "google" : "meta", { icone: "anuncio" }));
+    }
+    const rastreio = c.rastreio && typeof c.rastreio === "object" ? c.rastreio : {};
+    const campanha = c.campanha_nome || c.campanha || c.campanha_ext || rastreio.utm_campaign;
+    if (campanha) selos.push(ui.pilula(`Campanha · ${campanha}`, "neutra", { title: String(campanha) }));
+    const anuncioNome = c.anuncio_nome || c.anuncio_ext || rastreio.utm_content;
+    if (anuncioNome) selos.push(ui.pilula(`Anúncio · ${anuncioNome}`, "neutra", { title: String(anuncioNome) }));
+    const origem = c.origem && c.origem !== "anuncio" ? (L.ROTULO_ORIGEM[c.origem] || c.origem) : null;
+    if (origem) selos.push(ui.pilula(origem, "neutra", { title: `Origem: ${origem}` }));
+    if (c.consulta_em) selos.push(ui.pilula(`${ui.dataCurtaBR ? ui.dataCurtaBR(c.consulta_em) : ui.dataBR(c.consulta_em)} ${ui.horaBR(c.consulta_em)}`, "info", { icone: "relogio", title: "Consulta/visita marcada" }));
     if (c.tarefa) {
       const txt = c.tarefa.atrasada ? "Tarefa atrasada" : c.tarefa.vence_em ? `Tarefa ${ui.relativo(c.tarefa.vence_em)}` : "Tarefa";
       selos.push(h("span", { class: ["kc-tarefa", c.tarefa.atrasada && "atrasada"] }, ui.icone("tarefa"), txt));

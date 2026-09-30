@@ -12,6 +12,7 @@ export const ROTAS = Object.freeze({
   inicio:     { arquivo: "inicio.js", papel: "leitura", pronto: "inicio" },
   conversas:  { arquivo: "conversas.js", papel: "leitura", plano: "conversas", pronto: "conversas" },
   crm:        { arquivo: "crm.js", papel: "leitura", plano: "crm", pronto: "crm" },
+  agenda:     { arquivo: "agenda.js", papel: "leitura", plano: "crm", pronto: "crm" },
   contatos:   { arquivo: "crm.js", papel: "leitura", plano: "crm", pronto: "crm" },
   empresas:   { arquivo: "crm.js", papel: "leitura", plano: "crm", pronto: "empresas" },
   tarefas:    { arquivo: "crm.js", papel: "leitura", plano: "crm", pronto: "tarefas" },
@@ -24,7 +25,7 @@ export const ROTAS = Object.freeze({
 
 /** Módulo lógico (ctx.carregar) → arquivo de entrada. */
 export const ARQUIVOS = Object.freeze({
-  inicio: "inicio.js", conversas: "conversas.js", crm: "crm.js", anuncios: "anuncios.js", ads: "anuncios.js",
+  inicio: "inicio.js", conversas: "conversas.js", crm: "crm.js", agenda: "agenda.js", anuncios: "anuncios.js", ads: "anuncios.js",
   automacoes: "automacoes.js", relatorios: "relatorios.js", config: "config.js", admin: "admin.js", login: "login.js",
 });
 
@@ -35,6 +36,7 @@ export const MENU = Object.freeze([
   { id: "inicio", rota: "inicio", rotulo: "Início", icone: "inicio" },
   { id: "conversas", rota: "conversas", rotulo: "Conversas", icone: "chat" },
   { id: "crm", rota: "crm", rotulo: "{crm}", icone: "funil" },
+  { id: "agenda", rota: "agenda", rotulo: "Agenda", icone: "calendario" },
   { id: "empresas", rota: "empresas", rotulo: "Empresas", icone: "empresa" },
   { id: "tarefas", rota: "tarefas", rotulo: "Tarefas", icone: "tarefa" },
   { id: "anuncios", rota: "anuncios", rotulo: "Anúncios", icone: "anuncio" },
@@ -45,7 +47,7 @@ export const MENU = Object.freeze([
 ]);
 
 /** Barra inferior do celular: até 4 itens + "Mais". */
-export const BARRA = Object.freeze(["inicio", "conversas", "crm", "tarefas"]);
+export const BARRA = Object.freeze(["inicio", "conversas", "crm", "agenda"]);
 
 export const PAPEIS = Object.freeze(["leitura", "atendente", "supervisor", "admin", "gestor", "super"]);
 export function rank(p) { const i = PAPEIS.indexOf(p); return i < 0 ? -1 : i; }

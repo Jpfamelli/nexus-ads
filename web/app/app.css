@@ -764,6 +764,12 @@ html.menu-recolhido .lat-conta { justify-content: center; }
   .cfg-sec > .cfg-voltar { display: inline-flex; align-self: flex-start; }
   .cfg-nav-item { min-height: 48px; background: var(--c-sup); border: 1px solid var(--c-borda); border-radius: var(--r-p); }
 }
+@media (max-width: 760px), (pointer: coarse) {
+  .bt-p, .aba { min-height: 44px; }
+  .th-ord { min-height: 44px; padding-inline: .2rem; }
+  .cfg-sec > .cfg-voltar { min-height: 44px; padding-inline: .5rem; }
+  .topo-marca { display: grid; place-items: center; width: 44px; height: 44px; }
+}
 .usuarios-cab { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
 .papel-sel { min-height: 36px; max-width: 9.75rem; font-size: var(--fs-13); padding-left: .8rem; padding-right: 2.1rem; text-overflow: ellipsis; }
 .lista-convites { display: flex; flex-direction: column; gap: .5rem; }

@@ -48,7 +48,7 @@ declare
   v_qua date; v_dom date; v_sab date; v_ts timestamptz;
   t1 text := '5512988880011'; t2 text := '5512988880012'; t3 text := '5512988880013'; t4 text := '5512988880014';
   t5 text := '5512988880015'; tB1 text := '5512977770021';
-  n1 bigint; n2 bigint; n3 bigint; n4 bigint; n5 bigint; nB bigint; n int; l public.nx_leads;
+  n1 bigint; n2 bigint; n3 bigint; n4 bigint; n5 bigint; nB bigint; n int; l public.nx_leads; jb_card jsonb;
   bq bigint; bq2 bigint;
   chave text; c1 text; c2 text; c3 text; c4 text; c5 text; c6 text; c7 text; c8 text;
   tg text := '5512966660031'; tg2 text := '5512966660032'; tm text := '5512966660033'; tf text := '5512966660034';
@@ -344,6 +344,22 @@ begin
   perform pg_temp.ok(jb -> 'negocio' ->> 'campanha_nome' = 'Implante Taubaté' and jb -> 'negocio' ->> 'anuncio_nome' = 'Video Sorriso'
     and (jb -> 'negocio' ->> 'gclid')::boolean and jb -> 'negocio' -> 'rastreio' ->> 'utm_source' = 'google'
     and not (jb::text like '%Cj0KCQ%'), 'contexto da IA mostra a origem (e não vaza o gclid)');
+  update public.nx_leads set consulta_em = ((v_qua + 20)::timestamp + time '10:00') at time zone 'America/Sao_Paulo',
+    data_consulta = v_qua + 20 where id = l.id;
+  j := public.nx_negocios_kanban(tA, cA, l.funil_id);
+  select i into jb_card from jsonb_array_elements((j::jsonb) -> 'colunas') col
+    cross join lateral jsonb_array_elements(col -> 'itens') i where (i ->> 'id')::bigint = l.id;
+  perform pg_temp.ok(jb_card ->> 'campanha_ext' = 'GC-1' and jb_card ->> 'anuncio_ext' = 'AD-77'
+    and jb_card ->> 'campanha_nome' = 'Implante Taubaté' and jb_card ->> 'anuncio_nome' = 'Video Sorriso'
+    and jb_card -> 'rastreio' ->> 'utm_source' = 'google'
+    and not (jb_card -> 'rastreio' ?| array['codigo','gclid','gbraid','wbraid','fbclid']), 'card CRM: ids e nomes de campanha/anúncio, UTMs permitidas sem códigos de clique');
+  j := public.nx_agenda_dia(tA, cA, v_qua + 20, 1);
+  select c::jsonb into jb_card from json_array_elements(j -> 'consultas') c where (c ->> 'negocio_id')::bigint = l.id;
+  perform pg_temp.ok(jb_card ->> 'origem' = 'anuncio' and jb_card ->> 'plataforma' = 'google'
+    and jb_card ->> 'campanha_ext' = 'GC-1' and jb_card ->> 'anuncio_ext' = 'AD-77'
+    and jb_card ->> 'campanha_nome' = 'Implante Taubaté' and jb_card ->> 'anuncio_nome' = 'Video Sorriso'
+    and jb_card -> 'rastreio' ->> 'utm_campaign' = 'Implante Taubaté'
+    and not (jb_card -> 'rastreio' ?| array['codigo','gclid','gbraid','wbraid','fbclid']), 'agenda semanal/dia: origem, campanha, anúncio e UTMs seguras');
   r := public.nx_rastreio_atribuir(kA, tg, lower(c1));
   perform pg_temp.ok((r ->> 'aplicado')::boolean, 'mesmo telefone repetindo o código (minúsculo) é idempotente');
   perform public.nx_lead_webhook(cA, tg2, array[tg2], 'Outro Telefone', null, v_hoje, 30);

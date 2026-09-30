@@ -50,6 +50,9 @@
 .cvl-aba[aria-selected="true"] .n { opacity: 1; }
 .cvl-aba .n[data-alerta="1"] { color: var(--c-prim-luz); opacity: 1; }
 .cvl-aba[aria-selected="true"] .n[data-alerta="1"] { color: var(--c-fundo); }
+@media (max-width: 760px), (pointer: coarse) {
+  .cvl-aba { min-height: 44px; }
+}
 
 .cvl-aviso { margin: .7rem 1rem 0; }
 .cvl-busca-info { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .55rem 1rem; font-size: var(--fs-13); color: var(--c-texto-2); border-bottom: 1px solid var(--c-borda); }
@@ -569,4 +572,8 @@
   .cfg-cw-pair { padding: .75rem; }
   .cfg-ia-preview-head { align-items: flex-start; }
   .cvc-acoes .cvc-ia-acao { max-width: 8.4rem; min-height: 36px; padding: .3rem .55rem; font-size: var(--fs-12); }
+}
+@media (max-width: 760px), (pointer: coarse) {
+  .cv-falha .bt, .cvt-sec-cab .bt, .cfg-cw-card-actions > .bt, .cfg-cw-ops-actions > .bt,
+  .cvc-acoes .cvc-ia-acao, .cv-alterna button, .cfg-vars button { min-height: 44px; }
 }

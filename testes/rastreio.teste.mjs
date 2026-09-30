@@ -257,3 +257,23 @@ test("segurança do script: sem innerHTML, eval, document.write, cookies nem car
   assert.match(codigo, /sb_publishable_/);
   assert.ok(codigo.includes("credentials: \"omit\""), "fetch sem credenciais");
 });
+
+test("migração 29c amplia CRM e agenda sem mudar assinaturas, respostas antigas ou escopo de acesso", () => {
+  const sql = readFileSync(join(RAIZ, "supabase/migrations/20260929c_cards_origem.sql"), "utf8");
+  assert.match(sql, /nx_crm_cards\(p_cliente uuid, p_ids bigint\[\], v public\.nx_ctx_t\)/);
+  assert.match(sql, /nx_agenda_dia\(p_token text, p_cliente uuid, p_data date default null, p_dias int default 1\)/);
+  for (const campo of ["campanha_ext", "anuncio_ext", "campanha_nome", "anuncio_nome", "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"]) {
+    assert.ok(sql.includes(`'${campo}'`), `campo novo ausente: ${campo}`);
+  }
+  for (const campoExistente of ["nao_lidas", "tarefa", "estagio_em", "fechado_em", "consulta_em", "bloqueios", "config", "consultas", "fuso"]) {
+    assert.ok(sql.includes(`'${campoExistente}'`), `resposta antiga removida: ${campoExistente}`);
+  }
+  assert.match(sql, /revoke all on function public\.nx_crm_cards\(uuid, bigint\[\], public\.nx_ctx_t\) from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function public\.nx_crm_cards\(uuid, bigint\[\], public\.nx_ctx_t\) to service_role/i);
+  assert.match(sql, /revoke all on function public\.nx_agenda_dia\(text, uuid, date, integer\) from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function public\.nx_agenda_dia\(text, uuid, date, integer\) to anon, authenticated, service_role/i);
+  assert.match(sql, /set search_path = ''/g);
+  assert.match(sql, /jsonb_strip_nulls\(jsonb_build_object/);
+  assert.doesNotMatch(sql, /'gclid'|'fbclid'|'gbraid'|'wbraid'/i, "IDs individuais de clique não entram no JSON de CRM/agenda");
+  assert.doesNotMatch(sql, /\b(drop|delete\s+from|truncate)\b/i, "migração apenas aditiva");
+});

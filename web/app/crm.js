@@ -110,9 +110,17 @@ export async function abrirContato(ctx, id, opts = {}) {
   return N.abrirContato(k, id, opts);
 }
 
+function fecharGavetaAtual() {
+  const gaveta = telaAtual && telaAtual.gaveta;
+  if (!gaveta) return;
+  telaAtual.gaveta = null;
+  try { gaveta.fechar(); } catch (e) { console.error(e); }
+}
+
 /* ============================================================ montagem */
 export function desmontar() {
   montagem++;
+  fecharGavetaAtual();
   if (telaAtual && typeof telaAtual.desmontar === "function") { try { telaAtual.desmontar(); } catch (e) { console.error(e); } }
   telaAtual = null;
 }
@@ -139,6 +147,7 @@ export async function montar(ctx) {
   // mesma tela ainda na vista (ex.: #/crm/negocio/42 sobre o quadro já aberto): só abre a gaveta
   const reaproveita = telaAtual && telaAtual.chave === chave && telaAtual.el && telaAtual.el.isConnected && ctx.alvo.contains(telaAtual.el);
   if (!reaproveita) {
+    fecharGavetaAtual();
     if (telaAtual && typeof telaAtual.desmontar === "function") { try { telaAtual.desmontar(); } catch (e) { console.error(e); } }
     telaAtual = null;
     ui.limpar(ctx.alvo);
@@ -180,15 +189,20 @@ export async function montar(ctx) {
     if (tipo === "kanban" && partes[0] === "negocio" && /^\d+$/.test(partes[1] || "")) {
       const N = await k.mod("negocio");
       if (minha !== montagem) return;
-      N.abrirNegocio(k, Number(partes[1]), {
+      fecharGavetaAtual();
+      const idNegocio = Number(partes[1]);
+      const gaveta = await N.abrirNegocio(k, idNegocio, {
         aoMudar: c => telaAtual && telaAtual.aoMudarNegocio && telaAtual.aoMudarNegocio(c),
         aoFechar: () => {
           // volta o endereço para o quadro sem remontar a tela
           const q = r.query && r.query.funil ? `?funil=${encodeURIComponent(r.query.funil)}` : "";
-          if (/^#\/crm\/negocio\//.test(location.hash)) history.replaceState(history.state, "", `${location.pathname}${location.search}#/crm${q}`);
+          const prefixo = `#/crm/negocio/${idNegocio}`;
+          if (location.hash === prefixo || location.hash.startsWith(prefixo + "?")) history.replaceState(history.state, "", `${location.pathname}${location.search}#/crm${q}`);
         },
       });
-    }
+      if (minha !== montagem) { gaveta && gaveta.fechar(); return; }
+      if (telaAtual) telaAtual.gaveta = gaveta;
+    } else fecharGavetaAtual();
   } catch (e) {
     console.error("crm: montar falhou", e);
     if (minha !== montagem) return;
