@@ -153,7 +153,26 @@ export async function processarCanal(db, canal, v, ctx, cont) {
     if (!msg) continue;
     try {
       const r = await db.rpc("nx_wa_entrada", { p_canal: canal.canal_id, p_msg: msg });
-      if (r?.duplicada) { cont.duplicadas++; continue; }
+      if (r?.duplicada) {
+        cont.duplicadas++;
+        // A mensagem pode ter sido gravada antes de a RPC do lead falhar. No retry da Meta,
+        // usa os dados canônicos já persistidos e a RPC do lead (idempotente) para reparar isso.
+        if (r.mensagem_id && r.contato_id) {
+          const [contato] = await db.select("nx_contatos", {
+            id: `eq.${r.contato_id}`, cliente_id: `eq.${canal.cliente_id}`, select: "id,wa_id,nome,bloqueado", limit: 1,
+          });
+          if (!contato) throw Object.assign(new Error("mensagem repetida sem contato persistido"), { banco: true });
+          if (!contato.bloqueado) {
+            const [original] = await db.select("nx_mensagens", {
+              id: `eq.${r.mensagem_id}`, cliente_id: `eq.${canal.cliente_id}`, select: "referral", limit: 1,
+            });
+            if (!original) throw Object.assign(new Error("mensagem repetida sem registro persistido"), { banco: true });
+            await ctx.registrarLead(canal.cliente_id, { ...msg, wa_id: contato.wa_id || msg.wa_id,
+              nome: contato.nome || msg.nome, referral: original.referral || null });
+          }
+        }
+        continue;
+      }
       // reação (👍 numa mensagem) não é conversa: só marca o emoji — não cria/toca negócio
       // (uma reação 30 dias depois viraria "conversa nova" no funil do Ads), nem mídia, nem fila
       if (msg.reacao || r?.reacao) { cont.reacoes = (cont.reacoes || 0) + 1; continue; }

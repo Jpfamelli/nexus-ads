@@ -946,14 +946,23 @@ test("A entrega: recibo que chega antes do wamid ser gravado espera e confere de
   // um recibo que quebra (banco falhando só para ele) não impede os outros do lote
   const s2 = cenario();
   await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s2.deps());
-  const fetch = (url, init) => (String(url).includes("quebra") ? Promise.reject(new TypeError("fetch failed")) : s2.fetch(url, init));
+  let falhaRecibo = true;
+  const fetch = (url, init) => (String(url).includes("quebra") && falhaRecibo
+    ? (falhaRecibo = false, Promise.reject(new TypeError("fetch failed")))
+    : s2.fetch(url, init));
   r = await lerJson(await webhook(recibos([recibo("wamid.quebra", "delivered", t), recibo(s2.estado.wa[0].id, "delivered", t)]), ENV,
     { fetch, agora: () => s2.estado.agora, esperar: async () => {} }));
-  assert.equal(r.status, 200);
+  assert.equal(r.status, 503, "falha temporária de persistência pede reentrega à Meta");
+  assert.equal(r.corpo.retry, true);
   assert.equal(r.corpo.erros, 1);
   assert.match(r.corpo.erro, /fetch failed/);
   assert.deepEqual(r.corpo.recibos, { entregue: 1 });
   assert.ok(s2.banco.tab("nx_alertas").every(a => a.entregue_em === t.toISOString()));
+  r = await lerJson(await webhook(recibos([recibo("wamid.quebra", "delivered", t), recibo(s2.estado.wa[0].id, "delivered", t)]), ENV,
+    { fetch, agora: () => s2.estado.agora, esperar: async () => {} }));
+  assert.equal(r.status, 200, "reentrega conclui depois da indisponibilidade transitória");
+  assert.deepEqual(r.corpo.recibos, { sem_registro: 1, entregue: 1 });
+  assert.ok(s2.banco.tab("nx_alertas").every(a => a.entregue_em === t.toISOString()), "o recibo conhecido é idempotente");
 
   // assinatura continua obrigatória para recibos
   const s3 = cenario();
@@ -987,21 +996,40 @@ test("B lead: webhooks paralelos para o mesmo número novo viram UM lead (també
   assert.equal(s.banco.tab("nx_leads").filter(l => l.telefone === "5512944443333").length, 1);
 });
 
-test("B lead: uma mensagem com erro não derruba as outras do lote (200, erro contado)", async () => {
+test("B lead: erro transitório pede reentrega sem derrubar as outras mensagens nem duplicar leads", async () => {
   const s = cenario();
-  const fetch = (url, init) => (String(url).includes("/rpc/nx_lead_webhook") && String(init?.body).includes("5512900000099")
-    ? Promise.resolve(jsonResp({ code: "40P01", message: "deadlock detected" }, 500))
+  let falharUmaVez = true;
+  const fetch = (url, init) => (String(url).includes("/rpc/nx_lead_webhook") && String(init?.body).includes("5512900000099") && falharUmaVez
+    ? (falharUmaVez = false, Promise.resolve(jsonResp({ code: "40P01", message: "deadlock detected" }, 500)))
     : s.fetch(url, init));
   const payload = mensagem({ from: "5512900000099", nome: "Quebra" });
   const v = payload.entry[0].changes[0].value;
   v.contacts.push({ profile: { name: "Outra" }, wa_id: "5512988887777" });
   v.messages.push({ from: "5512988887777", id: "wamid.m2", timestamp: "1790506800", type: "text", text: { body: "oi" } });
   const r = await lerJson(await webhook(postWebhook(payload), ENV, { fetch, agora: () => s.estado.agora }));
-  assert.equal(r.status, 200);
+  assert.equal(r.status, 503);
+  assert.equal(r.corpo.retry, true);
   assert.equal(r.corpo.criado, 1);
   assert.equal(r.corpo.erros, 1);
   assert.match(r.corpo.erro, /deadlock detected/);
   assert.deepEqual(s.banco.tab("nx_leads").map(l => [l.telefone, l.nome]), [["5512988887777", "Outra"]]);
+  const repetida = await lerJson(await webhook(postWebhook(payload), ENV, { fetch, agora: () => s.estado.agora }));
+  assert.equal(repetida.status, 200);
+  assert.equal(repetida.corpo.criado, 1, "a reentrega completa o lead que falhou");
+  assert.equal(repetida.corpo.existente, 1, "o lead já persistido permanece idempotente");
+  assert.deepEqual(s.banco.tab("nx_leads").map(l => l.telefone).sort(), ["5512900000099", "5512988887777"]);
+});
+
+test("B lead: erro permanente 4xx não pede reentrega repetida da Meta", async () => {
+  const s = cenario();
+  const fetch = (url, init) => String(url).includes("/rpc/nx_lead_webhook")
+    ? Promise.resolve(jsonResp({ code: "22023", message: "dados_invalidos" }, 400)) : s.fetch(url, init);
+  const r = await lerJson(await webhook(postWebhook(mensagem({ from: "5512900000098" })), ENV,
+    { fetch, agora: () => s.estado.agora }));
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.retry, false);
+  assert.equal(r.corpo.erros, 1);
+  assert.equal(s.banco.tab("nx_leads").length, 0);
 });
 
 test("C trava: nx-ciclo com o cliente travado responde pulado sem processar nem registrar; trava vencida é retomada e solta no fim", async () => {

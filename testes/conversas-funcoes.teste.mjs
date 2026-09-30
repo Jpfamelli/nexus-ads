@@ -55,6 +55,7 @@ const NEXUS_PID = "900900";
 const COLUNAS = {
   nx_config: "id cron_token codigo_gestor funcoes_url painel_url wa_access_token wa_phone_number_id wa_template wa_verify_token meta_app_secret anthropic_api_key modelo_ia google_api_versao",
   nx_clientes: "id slug nome ativo cfg wa_phone_number_id criado_em modulos vertical",
+  nx_contatos: "id cliente_id nome telefone wa_id bloqueado origem plataforma campanha_ext anuncio_ext ctwa_clid",
   nx_metricas_dia: "cliente_id plataforma nivel data campanha_ext anuncio_ext campanha_nome anuncio_nome impressoes alcance frequencia cliques gasto conversoes valor_conversao atualizado_em",
   nx_leads: "id cliente_id telefone nome origem plataforma campanha_ext anuncio_ext ctwa_clid servico etapa data_conversa data_agenda data_consulta valor obs criado_em atualizado_em funil_id contato_id",
   nx_funis: "id cliente_id nome ordem padrao conta_no_ads ativo criado_em",
@@ -189,7 +190,8 @@ function rpcsSaaS(api) {
       const base = { nova_conversa: false, duplicada: false, bloqueado: false, optout: false, midia_pendente: false, fila_id: null };
       if (p_msg.wamid && !p_msg.reacao) {
         const ex = tab("nx_mensagens").find(m => m.wamid === p_msg.wamid);
-        if (ex) return { ...base, duplicada: true, mensagem_id: ex.cliente_id === cli ? ex.id : null };
+        if (ex) return { ...base, duplicada: true, mensagem_id: ex.cliente_id === cli ? ex.id : null,
+          conversa_id: ex.cliente_id === cli ? ex.conversa_id : null, contato_id: ex.cliente_id === cli ? ex.contato_id : null };
       }
       const ref = p_msg.referral && typeof p_msg.referral === "object" ? p_msg.referral : null;
       const ad = ref?.source_type === "ad";
@@ -384,12 +386,34 @@ function rpcsSaaS(api) {
     } },
     nx_ia_cota: { args: ["p_cliente"], opcionais: ["p_conta"], fn({ p_cliente, p_conta = null }) {
       const uso = tab("nx_ia_uso").filter(u => u.cliente_id === p_cliente);
-      return { usadas: uso.filter(u => u.ok).length, limite: cliente(p_cliente)?.limite_ia ?? null,
+      return { usadas: uso.length, limite: cliente(p_cliente)?.limite_ia ?? null,
                conta_minuto: p_conta ? uso.filter(u => u.conta_id === p_conta && relogio().getTime() - Date.parse(u.criado_em) < 60e3).length : 0 };
     } },
     nx_ia_registrar: { args: ["p_cliente", "p_conta", "p_acao", "p_modelo", "p_in", "p_out", "p_ok"], fn(p) {
       tab("nx_ia_uso").push({ cliente_id: p.p_cliente, conta_id: p.p_conta, acao: p.p_acao, modelo: p.p_modelo, tokens_in: p.p_in, tokens_out: p.p_out, ok: p.p_ok, criado_em: iso() });
       return null;
+    } },
+
+    nx_ia_reservar: { args: ["p_cliente", "p_conta", "p_acao"], fn(p) {
+      const uso = tab("nx_ia_uso").filter(x => x.cliente_id === p.p_cliente);
+      const ativos = tab("nx_ia_reservas").filter(x => x.cliente_id === p.p_cliente && Date.parse(x.expira_em) > relogio().getTime());
+      const limite = cliente(p.p_cliente)?.limite_ia ?? null;
+      if (limite != null && uso.length + ativos.length >= limite) return { ok: false, erro: "ia_cota" };
+      const porMinuto = uso.filter(x => x.conta_id === p.p_conta && relogio().getTime() - Date.parse(x.criado_em) < 60e3).length
+        + ativos.filter(x => x.conta_id === p.p_conta && relogio().getTime() - Date.parse(x.criado_em) < 60e3).length;
+      if (porMinuto >= 20) return { ok: false, erro: "muitos_pedidos" };
+      const id = `reserva-${tab("nx_ia_reservas").length + 1}`;
+      tab("nx_ia_reservas").push({ id, cliente_id: p.p_cliente, conta_id: p.p_conta, acao: p.p_acao,
+        criado_em: iso(), expira_em: new Date(relogio().getTime() + 5 * 60e3).toISOString() });
+      return { ok: true, reserva_id: id };
+    } },
+    nx_ia_registrar_reserva: { args: ["p_reserva", "p_modelo", "p_in", "p_out", "p_ok"], fn(p) {
+      const idx = tab("nx_ia_reservas").findIndex(x => x.id === p.p_reserva);
+      if (idx < 0) return { ok: tab("nx_ia_uso").some(x => x.reserva_id === p.p_reserva) };
+      const [r] = tab("nx_ia_reservas").splice(idx, 1);
+      tab("nx_ia_uso").push({ reserva_id: r.id, cliente_id: r.cliente_id, conta_id: r.conta_id, acao: r.acao,
+        modelo: p.p_modelo, tokens_in: p.p_in, tokens_out: p.p_out, ok: p.p_ok, criado_em: iso() });
+      return { ok: true };
     } },
 
     nx_midia_lixo_pegar: { args: [], opcionais: ["p_limite"], fn: () => tab("nx_midia_lixo").filter(l => !l.apagado_em && !l.erro).map(l => ({ id: l.id, cliente_id: l.cliente_id, path: l.path })) },
@@ -586,7 +610,7 @@ function cenario({ config = {}, extra = {} } = {}) {
       { id: "tpl-pend", cliente_id: CLI_A, canal_id: K_A1, nome: "pendente", idioma: "pt_BR", categoria: "UTILITY", status: "PENDING", corpo: "x", num_parametros: 0 },
       { id: "tpl-b", cliente_id: CLI_B, canal_id: K_B, nome: "b", idioma: "pt_BR", categoria: "UTILITY", status: "APPROVED", corpo: "b", num_parametros: 0 },
     ],
-    nx_envios_fila: [], nx_ia_uso: [], nx_midia_lixo: [], nx_leads: [], nx_metricas_dia: [], nx_funis: [],
+    nx_envios_fila: [], nx_ia_uso: [], nx_ia_reservas: [], nx_midia_lixo: [], nx_leads: [], nx_metricas_dia: [], nx_funis: [],
     nx_alertas: [], nx_relatorios: [], nx_travas: [],
     ...extra,
   }, () => estado.agora, { esquema: ESQUEMA, rpcs: rpcsSaaS, chave: ENV.chave, seq: 5000 });
@@ -1150,6 +1174,26 @@ test("nx-enviar: erro 190 da Graph → mensagem 'falhou' com a dica; resposta en
     "WhatsApp não aceitou (código 131047): Re-engagement message — mais de 24 h desde a última mensagem do cliente — use um modelo aprovado");
 });
 
+test("nx-enviar Meta: timeout ou 5xx após POST mantém status incerto e bloqueia o reenvio perigoso", async () => {
+  for (const falha of [
+    () => { throw new Error("socket timeout"); },
+    () => jsonResp({ error: "gateway" }, 503),
+    () => new Response("<html>gateway</html>", { status: 502 }),
+  ]) {
+    const s = cenario();
+    const fetch = (entrada, init) => new URL(entrada).host === "graph.facebook.com" ? falha(entrada, init) : s.fetch(entrada, init);
+    const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá" }), ENV,
+      s.deps({ fetch })));
+    assert.equal(r.status, 200);
+    assert.equal(r.corpo.ok, true);
+    assert.equal(r.corpo.ambigua, true);
+    assert.equal(r.corpo.mensagem.status, "pendente");
+    assert.match(r.corpo.mensagem.erro, /status incerto/i);
+    assert.equal(r.corpo.mensagem.wamid ?? null, null, "não inventa um id de recibo da Meta");
+    assert.equal(s.tab("nx_mensagens").filter(m => m.corpo === "Olá" && m.status === "falhou").length, 0);
+  }
+});
+
 test("nx-enviar template: parâmetros no corpo da Graph; corpo gravado com os parâmetros; contagem errada → template_invalido", async () => {
   const s = cenario();
   // conversa 602 está SEM janela: modelo vale mesmo assim ("Nova conversa")
@@ -1535,6 +1579,65 @@ test("nx-ia: recusa ou erro da API → ia_indisponivel (registra ok:false); cota
   assert.equal((await ler(await nxIa(painel("nx-ia", { acao: "sugerir", conversa: 601 }, "tok-le-a"), ENV, s.deps({ ia: recusa })))).corpo.erro, "sem_permissao");
 });
 
+test("nx-ia: falha após iniciar o provedor também consome a cota mensal", async () => {
+  const s = cenario({ config: { anthropic_api_key: "sk-ant-teste" } });
+  s.tab("nx_clientes").find(c => c.id === CLI_A).limite_ia = 1;
+  s.tab("nx_ia_uso").push({ cliente_id: CLI_A, conta_id: ADM_A, acao: "sugerir", ok: false,
+    criado_em: new Date(AGORA.getTime() - 2 * HORA).toISOString() });
+  let chamadas = 0;
+  const ia = async () => ({ perguntarClaude: async () => { chamadas++; return { texto: "ok" }; } });
+  const r = await ler(await nxIa(painel("nx-ia", { acao: "sugerir", conversa: 601 }), ENV, s.deps({ ia })));
+  assert.equal(r.corpo.erro, "ia_cota");
+  assert.equal(chamadas, 0, "cota bloqueia antes da chamada faturável");
+});
+
+test("nx-ia: reserva atômica impede estouro mensal em chamadas simultâneas", async () => {
+  const s = cenario({ config: { anthropic_api_key: "sk-ant-teste" } });
+  s.tab("nx_clientes").find(c => c.id === CLI_A).limite_ia = 1;
+  let soltar, notificar;
+  const trava = new Promise(r => { soltar = r; });
+  const decidido = new Promise(r => { notificar = r; });
+  let chamadas = 0, negadas = 0;
+  const confirmar = () => { if (chamadas + negadas >= 8) notificar(); };
+  const ia = async () => ({ perguntarClaude: async () => { chamadas++; confirmar(); await trava; return { texto: "ok", tokens_in: 3, tokens_out: 1 }; } });
+  const pedidos = Array.from({ length: 8 }, () => nxIa(painel("nx-ia", { acao: "sugerir", conversa: 601 }), ENV, s.deps({ ia }))
+    .then(async r => { const lido = await ler(r); if (lido.corpo.erro === "ia_cota") { negadas++; confirmar(); } return lido; }));
+  const concluiuDecisao = await Promise.race([decidido.then(() => true), new Promise(r => setTimeout(() => r(false), 3000))]);
+  const reservasAntesDaResposta = s.tab("nx_ia_reservas").length;
+  soltar();
+  const respostas = await Promise.all(pedidos);
+  assert.equal(concluiuDecisao, true, `as requisições não chegaram a uma decisão; Anthropic=${chamadas}, recusas=${negadas}`);
+  assert.equal(chamadas, 1, "só uma chamada chega ao provedor com uma unidade mensal restante");
+  assert.equal(reservasAntesDaResposta, 1, "a reserva fica visível antes da resposta do provedor");
+  assert.equal(respostas.filter(r => r.corpo.ok).length, 1);
+  assert.equal(respostas.filter(r => r.corpo.erro === "ia_cota").length, 7);
+  assert.equal(s.tab("nx_ia_uso").filter(x => x.ok).length, 1);
+  assert.equal(s.tab("nx_ia_reservas").length, 0);
+});
+
+test("nx-ia: reserva atômica limita a 20 chamadas concorrentes por atendente por minuto", async () => {
+  const s = cenario({ config: { anthropic_api_key: "sk-ant-teste" } });
+  let soltar;
+  const trava = new Promise(r => { soltar = r; });
+  let chamadas = 0, finalizadas = 0, notificar;
+  const decidido = new Promise(r => { notificar = r; });
+  const confirmarDecisao = () => { if (chamadas + finalizadas >= 25) notificar(); };
+  const ia = async () => ({ perguntarClaude: async () => {
+    chamadas++; confirmarDecisao(); await trava; return { texto: "ok", tokens_in: 1, tokens_out: 1 };
+  } });
+  const pedidos = Array.from({ length: 25 }, () => nxIa(painel("nx-ia", { acao: "sugerir", conversa: 601 }), ENV, s.deps({ ia }))
+    .then(async r => { const lido = await ler(r); finalizadas++; confirmarDecisao(); return lido; }));
+  const terminou = await Promise.race([decidido.then(() => true), new Promise(r => setTimeout(() => r(false), 3000))]);
+  assert.equal(terminou, true, `as requisições não chegaram a uma decisão; Anthropic=${chamadas}, respostas=${finalizadas}`);
+  assert.equal(chamadas, 20, "só 20 pedidos chegam ao provedor em um minuto");
+  assert.equal(finalizadas, 5, "os 5 pedidos acima do limite terminam antes da resposta do provedor");
+  soltar();
+  const respostas = await Promise.all(pedidos);
+  assert.equal(respostas.filter(r => r.corpo.ok).length, 20);
+  assert.equal(respostas.filter(r => r.corpo.erro === "muitos_pedidos").length, 5);
+  assert.equal(s.tab("nx_ia_uso").length, 20);
+});
+
 test("ia.js perguntarClaude: opus-5 com fallback e effort low, recusa lança, usage devolvido", async () => {
   const src = readFileSync(join(RAIZ, "supabase/functions/_compartilhado/ia.js"), "utf8");
   const SDK = `export default class Anthropic {
@@ -1611,11 +1714,88 @@ test("igualdade painel × relatório: carregarModelo (filtro de funis) e o nx_da
   assert.deepEqual(a.itens[1].itens.map(x => `${x.col}.${x.expr}`), ["funil_id.is.null", `funil_id.in.(${FUNIL_ADS})`]);
 });
 
+test("webhook assinado: falha de persistência pede retry; lead perdido é recomposto na reentrega idempotente", async () => {
+  const s = cenario();
+  const p = valor("111", { contacts: contato("5512944443333"), messages: [texto("5512944443333", "Quero informações")] });
+  let falharLead = true;
+  const fetch = (entrada, init) => {
+    const u = new URL(entrada);
+    if (u.pathname.endsWith("/rpc/nx_lead_webhook") && falharLead) {
+      falharLead = false;
+      return Promise.resolve(jsonResp({ message: "banco indisponível" }, 503));
+    }
+    return s.fetch(entrada, init);
+  };
+  const primeira = await ler(await webhook(postWebhook(p), ENV, s.deps({ fetch })));
+  assert.equal(primeira.status, 503, "Meta recebe sinal de retry quando o lead não foi gravado");
+  assert.equal(s.tab("nx_mensagens").filter(m => m.corpo === "Quero informações").length, 1);
+  assert.equal(s.tab("nx_leads").length, 0);
+  const segunda = await ler(await webhook(postWebhook(p), ENV, s.deps({ fetch })));
+  assert.equal(segunda.status, 200);
+  assert.equal(segunda.corpo.duplicadas, 1);
+  assert.equal(s.tab("nx_leads").length, 1, "a repetição idempotente completa o lead que falhou");
+});
+
+test("webhook assinado: falha em nx_wa_entrada devolve retry em vez de confirmar sucesso", async () => {
+  const s = cenario();
+  const p = valor("111", { contacts: contato("5512933332222"), messages: [texto("5512933332222", "Olá")] });
+  const fetch = (entrada, init) => new URL(entrada).pathname.endsWith("/rpc/nx_wa_entrada")
+    ? Promise.resolve(jsonResp({ message: "banco indisponível" }, 503)) : s.fetch(entrada, init);
+  const r = await ler(await webhook(postWebhook(p), ENV, s.deps({ fetch })));
+  assert.equal(r.status, 503);
+  assert.equal(s.tab("nx_mensagens").length, 5, "a mensagem que não gravou não aparece no histórico");
+});
+
 test("codigoBanco: lê o código do Apêndice B no erro do db.js; falha técnica não vira código", () => {
   const e = Object.assign(new Error("banco 400 em rpc/nx_cv_contexto_envio: conversa_nao_encontrada"), { status: 400 });
   assert.equal(codigoBanco(e), "conversa_nao_encontrada");
   assert.equal(codigoBanco(Object.assign(new Error("banco 500 em rpc/x: internal"), { status: 500 })), null);
   assert.equal(codigoBanco(new Error("fetch failed")), null);
+});
+
+test("PostgREST pendente é abortado em prazo limitado, com marcador técnico para retry do webhook", async () => {
+  const db = criarDb(ENV, () => new Promise(() => {}), { prazoMs: 12 });
+  const e = await Promise.race([db.rpc("nx_wa_entrada", {}).catch(x => x), new Promise(r => setTimeout(() => r(null), 60))]);
+  assert.ok(e, "a chamada do banco precisa encerrar");
+  assert.equal(e.codigo, "tempo_esgotado");
+  assert.equal(e.banco, true);
+});
+
+test("PostgREST diferencia falha permanente 4xx de indisponibilidade transitória", async () => {
+  const permanente = criarDb(ENV, async () => jsonResp({ message: "dados_invalidos" }, 400));
+  const e4 = await permanente.rpc("nx_wa_entrada", {}).catch(x => x);
+  assert.equal(e4.status, 400);
+  assert.equal(e4.banco, false, "400 não causa retry automático do webhook");
+  for (const status of [408, 425, 429, 503]) {
+    const transitoria = criarDb(ENV, async () => jsonResp({ message: "indisponível" }, status));
+    const e = await transitoria.rpc("nx_wa_entrada", {}).catch(x => x);
+    assert.equal(e.status, status);
+    assert.equal(e.banco, true, `${status} permite retry limitado pelo provedor`);
+  }
+});
+
+test("webhook rejeita corpo acima de 2 MiB antes de consultar o banco", async () => {
+  const s = cenario();
+  const body = new Uint8Array(2 * 1024 * 1024 + 1);
+  const req = new Request(`${FN}/nx-whatsapp`, { method: "POST", body,
+    headers: { "content-type": "application/json" } });
+  const r = await webhook(req, ENV, s.deps());
+  assert.equal(r.status, 413);
+  assert.equal(s.banco.api.chamadas.length, 0, "o limite roda antes da configuração e da assinatura");
+});
+
+test("webhook: RPC de resolução de canal permanente não cria retry storm; indisponibilidade pede retry", async () => {
+  for (const [status, retry] of [[400, false], [503, true]]) {
+    const s = cenario();
+    const fetch = (url, init) => String(url).includes("/rpc/nx_wa_canal")
+      ? Promise.resolve(jsonResp({ message: "falha na resolução do canal" }, status)) : s.fetch(url, init);
+    const req = new Request(`${FN}/nx-whatsapp?c=abcdef12`, { method: "POST", body: "{}",
+      headers: { "content-type": "application/json" } });
+    const r = await webhook(req, ENV, s.deps({ fetch }));
+    const corpo = await r.json();
+    assert.equal(r.status, retry ? 503 : 200);
+    assert.equal(corpo.retry, retry);
+  }
 });
 
 /* ============================================================

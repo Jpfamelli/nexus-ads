@@ -31,8 +31,39 @@ const TRAVA_REENVIO_S = 7 * 86400;
 // o webhook precisa responder rápido à Meta: o reenvio por template não espera os 30 s do sync
 const PRAZO_ENVIO_MS = 10_000;
 const PRAZO_MIDIA_MS = 60_000;
+const MAX_CORPO_WEBHOOK = 2 * 1024 * 1024;
 // wamid é base64 com prefixo: nada de aspas, chaves, vírgulas ou barra invertida
 const WAMID_OK = /^[\w.:=+/-]{1,256}$/;
+
+/** Limita também corpos sem Content-Length confiável antes de alocar a carga inteira. */
+async function lerCorpoLimitado(req, limite = MAX_CORPO_WEBHOOK) {
+  const informado = Number(req.headers.get("content-length"));
+  if (Number.isFinite(informado) && informado > limite) {
+    const e = new Error("corpo do webhook excede o limite"); e.status = 413; throw e;
+  }
+  const leitor = req.body?.getReader?.();
+  if (!leitor) {
+    const bytes = new Uint8Array(await req.arrayBuffer());
+    if (bytes.byteLength > limite) { const e = new Error("corpo do webhook excede o limite"); e.status = 413; throw e; }
+    return bytes;
+  }
+  const partes = [];
+  let total = 0;
+  while (true) {
+    const { value, done } = await leitor.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limite) {
+      await leitor.cancel().catch(() => {});
+      const e = new Error("corpo do webhook excede o limite"); e.status = 413; throw e;
+    }
+    partes.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let deslocamento = 0;
+  for (const parte of partes) { bytes.set(parte, deslocamento); deslocamento += parte.byteLength; }
+  return bytes;
+}
 
 async function hmacHex(segredo, bytes) {
   const enc = new TextEncoder();
@@ -94,7 +125,11 @@ async function registrarMensagem(db, clienteId, telefone, nome, referral, hoje) 
     p_cliente: clienteId, p_telefone: telefone, p_variantes: variantesTelefone(telefone),
     p_nome: nome || null, p_atr: atr, p_hoje: hoje, p_dias: DIAS_MESMA_CONVERSA,
   });
-  if (!RESULTADOS_LEAD.has(r)) throw new Error(`nx_lead_webhook devolveu ${JSON.stringify(r)}`);
+  if (!RESULTADOS_LEAD.has(r)) {
+    const e = new Error(`nx_lead_webhook devolveu ${JSON.stringify(r)}`);
+    e.banco = true;
+    throw e;
+  }
   return r;
 }
 
@@ -356,7 +391,9 @@ export async function tratar(req, env, deps = {}) {
     }
     if (req.method !== "POST") return texto("método não permitido", 405);
 
-    const cru = new Uint8Array(await req.arrayBuffer());
+    let cru;
+    try { cru = await lerCorpoLimitado(req); }
+    catch (e) { return texto(e?.status === 413 ? "corpo grande demais" : "corpo inválido", e?.status || 400); }
     const url = await canalDaUrl(db, u);
     if (url.tem && !url.canal) return texto("canal desconhecido", 401);
     const cfg = await lerConfig(db);
@@ -365,7 +402,7 @@ export async function tratar(req, env, deps = {}) {
       return texto("assinatura inválida", 401);
     }
 
-    // Assinatura válida → sempre 200: erro aqui não pode virar uma fila de reenvios da Meta.
+    // Assinatura válida: falha de persistência pede retry da Meta; as RPCs envolvidas são idempotentes.
     let corpo;
     try { corpo = JSON.parse(new TextDecoder().decode(cru)); } catch { return json({ ok: true, ignorado: "corpo não é JSON" }); }
     const agora = agoraDe(deps);
@@ -377,7 +414,12 @@ export async function tratar(req, env, deps = {}) {
       // mídia recebida (até 16 MB) baixa em segundo plano: prazo maior que o do envio
       redeMidia: comPrazo(f, deps.prazoMidia ?? PRAZO_MIDIA_MS),
       esperar: deps.esperar || (ms => new Promise(r => setTimeout(r, ms))),
-      falhou: e => { const m = limparErro(e?.message || e); erros.push(m); console.error("nx-whatsapp:", m); },
+      persistenciaFalhou: false,
+      falhou: e => {
+        const m = limparErro(e?.message || e); erros.push(m);
+        if (e?.banco) ctx.persistenciaFalhou = true;
+        console.error("nx-whatsapp:", m);
+      },
       canalUrl: url.canal,
       assinadoGlobal: !url.tem,
     };
@@ -388,13 +430,17 @@ export async function tratar(req, env, deps = {}) {
     try {
       const cont = await processar(db, cfg, corpo, ctx);
       if (pendentes.length) await Promise.allSettled(pendentes);
-      return json({ ok: true, ...cont, ...(erros.length ? { erros: erros.length, erro: erros[0] } : {}) });
+      const status = ctx.persistenciaFalhou ? 503 : 200;
+      return json({ ok: status === 200, retry: status !== 200, ...cont, ...(erros.length ? { erros: erros.length, erro: erros[0] } : {}) }, status);
     } catch (e) {
       ctx.falhou(e);
       if (pendentes.length) await Promise.allSettled(pendentes);
-      return json({ ok: true, erros: erros.length, erro: erros[0] });
+      const retry = ctx.persistenciaFalhou;
+      return json({ ok: !retry, retry, erros: erros.length, erro: erros[0] }, retry ? 503 : 200);
     }
   } catch (e) {
-    return json({ ok: false, erro: limparErro(e?.message || e) }, 500);
+    const permanente = Number(e?.status) >= 400 && Number(e?.status) < 500 && e?.banco === false;
+    const status = e?.banco === true ? 503 : permanente ? 200 : 500;
+    return json({ ok: permanente, retry: status === 503, erro: limparErro(e?.message || e) }, status);
   }
 }

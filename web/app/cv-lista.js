@@ -45,6 +45,7 @@ export function criarLista(A) {
       abasEl.appendChild(b);
     }
     abasEl.addEventListener("keydown", ev => {
+      if (A.busca) return;
       const arr = [...botoesAba.values()].map(x => x.b);
       const i = arr.indexOf(document.activeElement);
       if (i < 0) return;
@@ -284,10 +285,32 @@ export function criarLista(A) {
 
   function renderCabecalho() {
     const cont = A.contagens || {};
+    const abaAtiva = botoesAba.get(A.aba)?.b;
+    if (A.busca) {
+      abasEl.setAttribute("role", "group");
+      abasEl.setAttribute("aria-label", "Filtrar conversas por situação");
+      lista.removeAttribute("role");
+      lista.removeAttribute("aria-labelledby");
+    } else {
+      abasEl.setAttribute("role", "tablist");
+      abasEl.setAttribute("aria-label", "Situação das conversas");
+      lista.setAttribute("role", "tabpanel");
+      if (abaAtiva) lista.setAttribute("aria-labelledby", abaAtiva.id);
+      else lista.removeAttribute("aria-labelledby");
+    }
     for (const [id, { b, n }] of botoesAba) {
       const on = id === A.aba && !A.busca;
-      b.setAttribute("aria-selected", String(on));
-      b.tabIndex = on || (!!A.busca && id === A.aba) ? 0 : -1;
+      if (A.busca) {
+        b.removeAttribute("role");
+        b.removeAttribute("aria-selected");
+        b.removeAttribute("aria-controls");
+        b.tabIndex = 0;
+      } else {
+        b.setAttribute("role", "tab");
+        b.setAttribute("aria-controls", "cvl-lista");
+        b.setAttribute("aria-selected", String(on));
+        b.tabIndex = on ? 0 : -1;
+      }
       const v = id === "resolvidas" || id === "ocultas" ? null : cont[id];
       n.textContent = v === undefined || v === null ? "" : (v > 999 ? "999+" : String(v));
       n.hidden = v === undefined || v === null;

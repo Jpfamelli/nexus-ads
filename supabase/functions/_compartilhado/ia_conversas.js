@@ -12,8 +12,6 @@ import {
   autenticarPainel, interna,
 } from "./comum.js";
 
-const MAX_POR_MINUTO = 20;
-
 /** 16 hex aleatórios por chamada: a conversa real fica entre essas marcas (é DADO, não instrução). */
 export function novoDelimitador() {
   const b = new Uint8Array(8);
@@ -83,24 +81,32 @@ export async function tratar(req, env, deps = {}) {
     const cfg = await lerConfig(db);
     if (!cfg?.anthropic_api_key) return respostaErro("ia_indisponivel", 200, "sem_chave");
 
-    // 2. cota do mês (plano) e ritmo da conta
-    const cota = await interna(db, "nx_ia_cota", { p_cliente: cliente, p_conta: ctx.conta_id });
-    if (cota?.limite != null && Number(cota.usadas) >= Number(cota.limite)) return respostaErro("ia_cota", 200);
-    if (Number(cota?.conta_minuto) >= MAX_POR_MINUTO) return respostaErro("muitos_pedidos", 200);
     if (!(cx?.mensagens || []).length) return respostaErro("ia_indisponivel", 200, "conversa_vazia");
+
+    // Carregar o SDK antes da reserva evita ocupar cota quando a dependência não foi empacotada.
+    let mod = null;
+    try { mod = deps.ia ? await deps.ia() : null; } catch (e) { console.error("ia.js:", limparErro(e?.message || e)); }
+    if (!mod?.perguntarClaude) return respostaErro("ia_indisponivel", 200, "sem_sdk");
+
+    // A reserva é serializada no banco. Uma consulta seguida de chamada ao provedor deixaria
+    // duas requisições simultâneas ultrapassarem o teto mensal ou os 20 pedidos/minuto.
+    const reserva = await interna(db, "nx_ia_reservar", { p_cliente: cliente, p_conta: ctx.conta_id, p_acao: acao });
+    if (!reserva?.ok || !reserva.reserva_id) return respostaErro(reserva?.erro || "ia_indisponivel", 200);
 
     // 3. prompt
     const { sistema, usuario } = montarPrompt(acao, cx, novoDelimitador());
     const modelo = cfg.modelo_ia || "claude-opus-5";
-    const registrar = (ok, r) => db.rpc("nx_ia_registrar", {
-      p_cliente: cliente, p_conta: ctx.conta_id, p_acao: acao, p_modelo: r?.modelo || modelo,
-      p_in: r?.tokens_in ?? null, p_out: r?.tokens_out ?? null, p_ok: ok,
-    }).catch(e => console.error("nx_ia_registrar:", limparErro(e?.message || e)));
+    const registrar = async (ok, r) => {
+      try {
+        const salvo = await interna(db, "nx_ia_registrar_reserva", {
+          p_reserva: reserva.reserva_id, p_modelo: r?.modelo || modelo,
+          p_in: r?.tokens_in ?? null, p_out: r?.tokens_out ?? null, p_ok: ok,
+        });
+        if (!salvo?.ok) console.error("nx_ia_registrar_reserva: reserva não foi finalizada");
+      } catch (e) { console.error("nx_ia_registrar_reserva:", limparErro(e?.message || e)); }
+    };
 
     // 4. Anthropic (só pelo ia.js)
-    let mod = null;
-    try { mod = deps.ia ? await deps.ia() : null; } catch (e) { console.error("ia.js:", limparErro(e?.message || e)); }
-    if (!mod?.perguntarClaude) return respostaErro("ia_indisponivel", 200, "sem_sdk");
     let r;
     try {
       r = await mod.perguntarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, usuario, maxTokens: 4000, esforco: "low" });

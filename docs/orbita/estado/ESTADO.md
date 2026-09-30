@@ -279,3 +279,11 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 - Inbox da demo aplica critérios e filtros das filas, mostra chips ativos removíveis, e mantém a faixa fictícia fora do compositor. O chat responde a resize em janelas baixas.
 - Verificação: `node testes/rodar-tudo.mjs` — **14/14 arquivos passaram**; 53 checks de app, 35 de Atendimento e 40 de relatórios. QA local em 360, 390, 768, 879×513, 1024 e 1440 px; botão Enviar visível e sem sobreposição.
 - Detalhes: `docs/orbita/rodadas-melhoria-20260930-prompts.md`. Sem APIs reais, mensagens, gravações no Supabase/`nx_config`, liberação de `prontos.js` ou publicação de produção. O push atualiza somente o PR; eventual Deploy Preview depende da integração automática do Netlify. F8 segue em andamento.
+
+## Segurança, estabilidade e conectividade — 2026-09-30 12:12 -03
+
+- Revisores independentes nas frentes segurança, estabilidade/conectividade e UX/a11y; os principais ajustes locais estão em `docs/orbita/rodada-seguranca-estabilidade-20260930.md`.
+- Suíte serial: 14/14; montagem Edge Functions: 7; `deno check`: 7/7. Quatro URLs locais (hub, CRM, Ads, Atendimento) responderam HTTP 200.
+- Nada foi publicado nem gravado em Supabase; preview Netlify público está defasado (`20260928a`). Migrations 30c/30d locais aguardam smoke SQL com rollback.
+- F8 segue em andamento. Risco conhecido: recuperação durável da mídia ainda ausente, além dos gates reais autenticados documentados no `F8.md`.
+- O navegador alerta para conferir mutações após timeout, mas não há reconciliação genérica por chave de idempotência; risco descrito no estado F3/F8.

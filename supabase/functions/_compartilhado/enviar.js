@@ -79,8 +79,11 @@ function enviarTextoPeloCanal(cred, para, texto, options = {}) {
 }
 
 /** Erro de envio legível: o CodeWords já vem em português claro; a Graph passa pelas dicas. */
-const textoFalha = r => (r.ok ? null : r.provedor === "codewords" ? String(r.erro?.title || "O CodeWords não aceitou a mensagem.").slice(0, 500)
-  : textoFalhaCanal(r.erro));
+const textoFalha = r => {
+  if (r.ok) return null;
+  const base = r.provedor === "codewords" ? String(r.erro?.title || "O CodeWords não aceitou a mensagem.").slice(0, 500) : textoFalhaCanal(r.erro);
+  return r.ambigua ? `STATUS INCERTO: ${base}`.slice(0, 500) : base;
+};
 
 /** Id provisório do envio ambíguo: a sincronização troca pelo id do aparelho (gêmea: mesmo texto, ±5 min). */
 const wamidProvisorio = canal => `cw:${canal}:orbita-p-${crypto.randomUUID().replace(/-/g, "")}`;
@@ -108,7 +111,7 @@ async function citacaoValida(db, cliente, contatoId, wamid) {
  */
 async function gravarSaida(db, ctx, cliente, conversa, msg, r, canal) {
   const erro = textoFalha(r);
-  const duvida = !r.ok && r.ambigua && r.provedor === "codewords";
+  const duvida = !r.ok && r.ambigua;
   const pausarIA = async () => {
     if (r.provedor === "codewords" && (r.ok || duvida)) {
       try { await interna(db, "nx_cv_ia_pausa_auto", { p_cliente: cliente, p_conversa: conversa, p_por: "painel", p_conta: ctx.conta_id }); }
@@ -128,12 +131,12 @@ async function gravarSaida(db, ctx, cliente, conversa, msg, r, canal) {
   } catch (e) {
     // O aparelho pode ter enviado antes de o banco falhar: um 500 aqui faria o atendente clicar de novo e o
     // cliente receber a mensagem duas vezes. A sincronização traz a mensagem de volta pelo aparelho.
-    if (r.provedor === "codewords" && (r.ok || duvida)) {
+    if (r.ok || duvida) {
       console.error("nx-enviar gravar saída:", limparErro(e?.message || e));
       await pausarIA();
       return respostaPainel({
         ok: false, erro: "envio_falhou", ambigua: true,
-        detalhe: "A mensagem pode ter saído, mas o Órbita não conseguiu salvá-la. Confira no celular antes de mandar de novo: ela aparece na conversa em até 2 minutos.",
+        detalhe: "A mensagem pode ter saído, mas o Órbita não conseguiu salvá-la. Confira no WhatsApp antes de mandar de novo.",
       }, 502);
     }
     throw e;
@@ -361,14 +364,14 @@ async function enviarItem(db, item, creds, rede, prazo = {}) {
       ? await enviarTextoPeloCanal(cred, para, corpoMsg, { fetch: rede, fetchCru: creds.fetchCru, db })
       : await enviarTemplateCanal(cred, para, envio, { fetch: rede });
     const erro = textoFalha(r);
-    const duvida = !r.ok && r.ambigua && cw;
+    const duvida = !r.ok && r.ambigua;
     const msg = await db.rpc("nx_cv_saida", {
       p_conta: item.origem === "agendada" ? (item.criado_por ?? null) : null,
       p_cliente: item.cliente_id, p_conversa: item.conversa_id,
       p_msg: {
         tipo: item.tipo === "texto" ? "texto" : "template", corpo: corpoMsg, origem: item.origem,
         ...(envio ? { template: { id: item.modelo.id, nome: envio.nome, idioma: envio.idioma, categoria: item.modelo.categoria, parametros: envio.parametros } } : {}),
-        wamid: r.wamid || (duvida ? wamidProvisorio(item.canal_id) : null),
+        wamid: r.wamid || (duvida && cw ? wamidProvisorio(item.canal_id) : null),
         status: r.ok ? "enviada" : duvida ? "pendente" : "falhou", erro,
       },
     }).catch(() => null);

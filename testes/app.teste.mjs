@@ -75,6 +75,10 @@ await teste("derivarTema: texto ≥ 7:1 sobre o fundo, sec-luz ≥ 4,5:1, status
   for (const m of marcas) {
     const { vars } = T.derivarTema(m);
     assert.ok(T.contraste(vars["--c-texto"], vars["--c-fundo"]) >= 7, `texto ${JSON.stringify(m)}`);
+    for (const fundo of ["--c-fundo", "--c-sup", "--c-sup-2", "--c-sup-3"]) {
+      assert.ok(T.contraste(vars["--c-texto-3"], vars[fundo]) >= 4.5,
+        `texto auxiliar ${vars["--c-texto-3"]} sobre ${fundo}=${vars[fundo]} (${JSON.stringify(m)})`);
+    }
     assert.ok(T.contraste(vars["--c-sec-luz"], vars["--c-fundo"]) >= 4.5, `sec-luz ${JSON.stringify(m)}`);
     assert.ok(T.contraste(vars["--c-ruim-txt"], vars["--c-ruim"]) >= 4.5, "ruim-txt");
     for (const [k, v] of Object.entries(vars)) if (k !== "--esquema") assert.match(v, /^(#[0-9A-F]{6}|rgba\(\d+, \d+, \d+, [\d.]+\))$/, `${k} = ${v}`);
@@ -319,7 +323,7 @@ await teste("erro do PostgREST → Error com .codigo e .hint; mensagemErro do Ap
   assert.equal(A.mensagemErro({ codigo: "motivo_obrigatorio", hint: "texto" }), "Escolha o motivo da perda e escreva a justificativa.");
   assert.equal(A.mensagemErro({ codigo: "marca_invalida", hint: "cores.primaria" }), "Confira o campo cor primária da marca.");
   assert.equal(A.mensagemErro({ codigo: "credenciais_invalidas" }), "E-mail ou senha não conferem.");
-  assert.equal(A.mensagemErro({ codigo: "resposta_invalida" }), "O servidor devolveu dados em formato inesperado. Atualize a tela e tente de novo.");
+  assert.equal(A.mensagemErro({ codigo: "resposta_invalida" }), "O servidor respondeu em formato inesperado. Atualize os dados; se tentou salvar ou enviar, confira o resultado antes de repetir.");
   assert.match(A.mensagemErro({ codigo: "codigo_que_nao_existe" }), /^Não deu certo agora \(codigo_que_nao_existe\)/);
   for (const c of ["sem_permissao", "conta_suspensa", "teste_expirado", "modulo_desligado", "tempo_esgotado", "periodo_grande", "funcao_invalida",
     "so_plataforma", "link_invalido", "ultimo_admin", "nao_pode_alterar_a_si", "slug_em_uso", "dominio_em_uso", "numero_em_uso", "atalho_em_uso",
@@ -343,6 +347,21 @@ await teste("57014 (statement timeout) → tempo_esgotado; rede fora → sem_con
   assert.equal(A.mensagemErro(e1), "Operação grande demais; tente um período menor ou menos itens de uma vez.");
   const e2 = await api.rpc("nx_app_sessao").catch(x => x);
   assert.equal(e2.codigo, "sem_conexao");
+  assert.equal(A.mensagemErro(e2), "A comunicação foi interrompida. Atualize os dados; se tentou salvar ou enviar, confira o resultado antes de repetir.");
+  assert.equal(A.mensagemErro({ codigo: "tempo_rede" }), "O servidor demorou a responder. Atualize os dados; se tentou salvar ou enviar, confira o resultado antes de repetir.");
+});
+await teste("API encerra fetch pendente no prazo, aborta o transporte e devolve erro recuperável", async () => {
+  let sinal;
+  const api = A.criarApi({ url: URLS, chave: "pub", fetch: (_url, init) => { sinal = init.signal; return new Promise(() => {}); }, prazoMs: 12 });
+  const e = await Promise.race([api.rpc("nx_pulso").catch(x => x), new Promise(r => setTimeout(() => r(null), 40))]);
+  assert.ok(e, "a chamada deve terminar em prazo limitado");
+  assert.equal(e.codigo, "tempo_rede");
+  assert.equal(sinal.aborted, true);
+});
+await teste("API inclui a leitura do corpo da resposta no prazo de rede", async () => {
+  const api = A.criarApi({ url: URLS, chave: "pub", fetch: () => Promise.resolve({ ok: true, text: () => new Promise(() => {}) }), prazoMs: 10 });
+  const e = await Promise.race([api.rpc("nx_pulso").catch(x => x), new Promise(r => setTimeout(() => r(null), 50))]);
+  assert.equal(e?.codigo, "tempo_rede");
 });
 await teste("{ok:false, erro} (nx_convite_aceitar com HTTP 200) → Error", async () => {
   const f = fetchFalso([{ status: 200, corpo: { ok: false, erro: "credenciais_invalidas" } }, { status: 200, corpo: { ok: true, token: "x" } }]);
@@ -441,6 +460,17 @@ await teste("erro de rede espera dobrando; sessao_invalida para o pulso", async 
   await rel.andar(20000);
   assert.equal(rel.proximo(), null);
   assert.equal(p.estado.rodando, false);
+});
+await teste("timeout do fetch libera o pulso e agenda nova tentativa com backoff", async () => {
+  const rel = relogio();
+  const api = A.criarApi({ url: URLS, chave: "pub", fetch: () => new Promise(() => {}), prazoMs: 8 });
+  const p = P.criarPulso({ ler: () => api.rpc("nx_pulso"), agendar: rel.agendar, cancelar: rel.cancelar,
+    doc: { visibilityState: "visible", addEventListener() {} }, nav: { onLine: true }, janela: { addEventListener() {} } });
+  p.iniciar();
+  await Promise.race([rel.andar(0), new Promise(r => setTimeout(r, 40))]);
+  assert.equal(p.estado.falhas, 1);
+  assert.equal(rel.proximo(), 10000, "a primeira falha aplica o primeiro intervalo de backoff");
+  p.parar();
 });
 
 /* ============================================================ (f) UI puras */
@@ -671,6 +701,46 @@ await teste("apps independentes: atalhos CRM/Ads/Atendimento, query de produto e
   assert.match(seletor, /const rotas = E\.M\.rotas;/, "seletor usa o módulo de rotas carregado no contexto");
   assert.match(seletor, /Object\.entries\(rotas\.PRODUTOS\)/, "seletor lista os três produtos configurados");
   assert.match(readFileSync(join(RAIZ, "netlify.toml"), "utf8"), /for = "\/workspace\.js"[\s\S]*?Content-Security-Policy/);
+});
+await teste("acessibilidade: painel de inbox ligado à aba atual, orientação móvel e prévia Ads sem live announcement extenso", () => {
+  const lista = ler("cv-lista.js"), kanban = ler("crm-kanban.js"), ads = ler("anuncios.js");
+  assert.match(lista, /lista\.setAttribute\("aria-labelledby", abaAtiva\.id\)/);
+  assert.match(lista, /if \(A\.busca\)\s*\{[\s\S]*?abasEl\.setAttribute\("role", "group"\)/);
+  assert.match(lista, /abasEl\.setAttribute\("aria-label", "Filtrar conversas por situação"\)/);
+  assert.match(lista, /b\.removeAttribute\("aria-selected"\)/);
+  assert.match(kanban, /Abra um cartão e escolha ‘Mover para…’/);
+  assert.match(kanban, /\(pointer: coarse\)/, "tablet/touch também recebe instrução sem arrastar");
+  assert.match(ads, /class: "sr-only", role: "status", "aria-live": "polite"/);
+  assert.doesNotMatch(ads, /class: "ads-fone", "aria-live"/);
+  const envio = ler("conversas.js");
+  assert.match(envio, /e\?\.resposta\?\.ambigua === true/);
+  assert.match(envio, /Number\(e\?\.status\) === 504/);
+  assert.doesNotMatch(envio, /\/\^http_5\/|status\)\s*>=\s*500/, "erro interno 5xx explícito não fica preso como envio ambíguo");
+});
+await teste("migration da cota IA: reserva atômica protegida e limitada ao service_role", () => {
+  const sql = readFileSync(join(RAIZ, "supabase/migrations/20260930c_ia_reservas_atomicas.sql"), "utf8");
+  assert.match(sql, /create table if not exists public\.nx_ia_reservas/);
+  assert.match(sql, /enable row level security/);
+  assert.match(sql, /revoke all on table public\.nx_ia_reservas from public, anon, authenticated/);
+  assert.match(sql, /pg_advisory_xact_lock/);
+  assert.match(sql, /p_acao is null or p_acao not in/);
+  const usoMes = sql.match(/when 'ia_mes' then([\s\S]*?)when 'empresas' then/i)?.[1] || "";
+  assert.ok(usoMes, "nx_uso substituída para contar todas as tentativas de IA no mês");
+  assert.doesNotMatch(usoMes, /u\.ok/i);
+  assert.match(sql, /on conflict \(reserva_id\) where reserva_id is not null do nothing/);
+  assert.match(sql, /grant execute on function public\.nx_ia_reservar\(uuid, uuid, text\) to service_role/);
+  assert.match(sql, /grant execute on function public\.nx_ia_registrar_reserva\(uuid, text, int, int, boolean\) to service_role/);
+  assert.match(readFileSync(join(RAIZ, "supabase/functions/_compartilhado/ia_conversas.js"), "utf8"), /nx_ia_reservar[\s\S]*nx_ia_registrar_reserva/);
+});
+await teste("fila: envio interrompido vira status incerto e nunca é reenviado automaticamente", () => {
+  const sql = readFileSync(join(RAIZ, "supabase/migrations/20260930d_fila_status_incerto.sql"), "utf8");
+  const fn = sql.match(/create or replace function public\.nx_fila_chamar\(\)[\s\S]*?end \$\$;/i)?.[0] || "";
+  assert.ok(fn, "função da fila substituída aditivamente");
+  assert.match(fn, /status = 'falhou'/i);
+  assert.match(fn, /STATUS INCERTO/i);
+  assert.match(fn, /where f\.status = 'enviando'/i);
+  assert.doesNotMatch(fn, /case when f\.tentativas >= 3 then 'falhou' else 'pendente'/i);
+  assert.match(fn, /nx_disparar\('nx-enviar'/i, "a chamada normal da fila continua ativa");
 });
 
 function semRaiz(texto) {

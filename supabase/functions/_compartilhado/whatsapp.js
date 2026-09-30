@@ -167,6 +167,7 @@ export function textoFalhaCanal(e) {
 }
 
 async function pedirGraph(f, cred, metodo, caminho, corpo) {
+  const envio = metodo === "POST" && corpo?.to != null;
   let r;
   try {
     r = await f(`${GRAPH}/${caminho}`, {
@@ -176,11 +177,19 @@ async function pedirGraph(f, cred, metodo, caminho, corpo) {
     });
   } catch (e) {
     const m = limparErro(e?.message || e);
-    return { ok: false, status: 0, dados: null, erro: { code: "rede", title: m, message: m } };
+    return { ok: false, status: 0, dados: null, ambigua: envio, erro: { code: "rede", title: m, message: m } };
   }
-  const dados = await r.json().catch(() => ({}));
+  let dados;
+  try { dados = await r.json(); }
+  catch (e) {
+    const m = limparErro(e?.message || "resposta inválida da Meta");
+    return { ok: false, status: r.status, dados: null,
+      ambigua: envio && (r.ok || r.status === 408 || r.status === 425 || r.status >= 500),
+      erro: { code: "resposta_invalida", title: m, message: m } };
+  }
   const ok = r.ok && !dados?.error;
-  return { ok, status: r.status, dados, erro: ok ? null : erroGraph(dados, r.status) };
+  const ambigua = envio && (r.status === 408 || r.status === 425 || r.status >= 500);
+  return { ok, status: r.status, dados, ambigua, erro: ok ? null : erroGraph(dados, r.status) };
 }
 
 /** POST /{phone_number_id}/messages. @returns {ok, wamid, erro, dados} */
@@ -190,7 +199,8 @@ export async function enviarGraph(cred, corpo, { fetch: f = globalThis.fetch } =
   }
   const r = await pedirGraph(f, cred, "POST", `${encodeURIComponent(cred.phone_number_id)}/messages`,
     { messaging_product: "whatsapp", recipient_type: "individual", ...corpo });
-  return { ok: r.ok, wamid: r.ok ? (r.dados?.messages?.[0]?.id ?? null) : null, erro: r.erro, dados: r.dados };
+  return { ok: r.ok, wamid: r.ok ? (r.dados?.messages?.[0]?.id ?? null) : null, ambigua: r.ambigua === true,
+    erro: r.erro, dados: r.dados };
 }
 
 const contexto = respondeA => (respondeA ? { context: { message_id: String(respondeA) } } : {});

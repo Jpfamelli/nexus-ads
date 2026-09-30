@@ -514,10 +514,14 @@ export async function montar(ctx) {
     }
     if (!S.rel || !itens.some(i => i.chave === S.rel)) S.rel = itens[0].chave;
     const ul = h("ul", { class: "ads-rel-lista", role: "list" });
-    const tela = h("div", { class: "ads-fone", "aria-live": "polite" });
+    const tela = h("div", { class: "ads-fone" });
+    const statusLeitor = h("p", { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
     const mostrar = () => {
       for (const b of ul.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.chave === S.rel));
       const it = itens.find(i => i.chave === S.rel);
+      const st = it.previa ? null : it.envio;
+      statusLeitor.textContent = it.previa ? `${it.titulo}. Prévia ainda não enviada.`
+        : `${it.titulo}. ${st?.rotulo || "Status de envio indisponível"}${st?.hora ? ` às ${st.hora}` : ""}.`;
       ui.limpar(tela);
       const texto = it.previa ? it.texto() : it.r.texto || "";
       const bolha = h("div", { class: "ads-bolha" });
@@ -527,7 +531,6 @@ export async function montar(ctx) {
         else if (tk.t === "i") bolha.append(h("em", {}, tk.v));
         else bolha.append(document.createTextNode(tk.v));
       }
-      const st = it.previa ? null : it.envio;
       bolha.append(h("span", { class: "ads-bolha-hora" }, st ? (st.hora || st.rotulo) : "prévia", st ? h("i", { class: `ads-tique ads-env-${st.k}`, "aria-hidden": "true" }, ` ${st.tique}`) : null));
       tela.append(
         h("div", { class: "ads-fone-topo" }, h("span", { class: "ads-fone-av", "aria-hidden": "true" }, ui.icone("whatsapp")),
@@ -547,7 +550,7 @@ export async function montar(ctx) {
     corpo.append(h("div", { class: "ads-rel-grade" },
       h("div", { class: "rel-cartao rel-entra" }, h("h2", { class: "rel-h2" }, "Relatórios e prévias"), ul,
         h("p", { class: "rel-nota" }, "✓ a API aceitou · ✓✓ chegou no celular · ! não saiu. Quando o relatório de um dia ainda não foi enviado, aparece a prévia calculada agora.")),
-      h("div", { class: "rel-cartao ads-fone-cartao rel-entra" }, tela)));
+      h("div", { class: "rel-cartao ads-fone-cartao rel-entra" }, tela, statusLeitor)));
     mostrar();
   }
 

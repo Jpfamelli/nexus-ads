@@ -190,7 +190,9 @@ export async function montarKanban(k, el, rota) {
     c.soma.textContent = Number(valorSoma) ? ui.brl(valorSoma, { centavos: false }) : "R$ 0";
     ui.limpar(c.lista);
     for (const it of col.itens) c.lista.appendChild(criarCartao(it, e));
-    if (!col.itens.length) c.lista.appendChild(h("div", { class: "kb-vazia" }, podeMover ? "Arraste um cartão para cá" : "Nada nesta etapa"));
+    if (!col.itens.length) c.lista.appendChild(h("div", { class: "kb-vazia" }, podeMover
+      ? (matchMedia("(max-width: 760px), (pointer: coarse)").matches ? "Abra um cartão e escolha ‘Mover para…’" : "Arraste um cartão para cá")
+      : "Nada nesta etapa"));
     ui.limpar(c.extra);
     const faltam = (col.total || 0) - col.itens.length;
     if (faltam > 0) {

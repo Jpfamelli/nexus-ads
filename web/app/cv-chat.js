@@ -377,10 +377,10 @@ export function criarChat(A) {
       box.appendChild(h("button", { type: "button", class: "bt-icone cv-responder", "aria-label": "Responder a esta mensagem", title: "Responder",
         on: { click: () => A.composer.responder(m) } }, A.icone("responder")));
     }
-    const ambigua = m.ambigua === true;
+    const ambigua = m.ambigua === true || (m.status === "pendente" && /^status incerto:/i.test(String(m.erro || "")));
     if (m.status === "falhou" || (m.status === "pendente" && ambigua)) {
       const erro = ambigua
-        ? "Pode ter saído — confira no celular antes de reenviar."
+        ? "Pode ter saído — confira no WhatsApp antes de reenviar."
         : m.erro || "O canal não aceitou a mensagem.";
       const falha = h("div", { class: "cv-falha", role: "alert" }, h("span", null,
         h("b", null, ambigua ? "Status incerto: " : "Não enviada: "), erro));

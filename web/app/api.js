@@ -11,7 +11,7 @@
    ============================================================ */
 
 export const MENSAGENS = {
-  resposta_invalida: "O servidor devolveu dados em formato inesperado. Atualize a tela e tente de novo.",
+  resposta_invalida: "O servidor respondeu em formato inesperado. Atualize os dados; se tentou salvar ou enviar, confira o resultado antes de repetir.",
   // do painel clássico (web/dados.js), com a marca no lugar de "Nexus"
   sessao_invalida: "Sua sessão expirou. Entre de novo.",
   conta_pendente: "Sua conta ainda está aguardando aprovação.",
@@ -27,7 +27,8 @@ export const MENSAGENS = {
   cliente_nao_encontrado: "Esta empresa não foi encontrada.",
   nao_pode_rebaixar_a_si: "Você não pode tirar o seu próprio acesso de gestor.",
   papel_invalido: "Tipo de acesso inválido.",
-  sem_conexao: "Sem conexão com o servidor. Confira a internet e tente de novo.",
+  sem_conexao: "A comunicação foi interrompida. Atualize os dados; se tentou salvar ou enviar, confira o resultado antes de repetir.",
+  tempo_rede: "O servidor demorou a responder. Atualize os dados; se tentou salvar ou enviar, confira o resultado antes de repetir.",
   // Apêndice B
   sem_permissao: "Seu acesso não permite fazer isso. Fale com o administrador.",
   conta_suspensa: "O acesso desta empresa está suspenso. Fale com o suporte.",
@@ -170,6 +171,28 @@ function lerCorpo(txt) {
 export function criarApi(o) {
   const f = o.fetch || ((...a) => globalThis.fetch(...a));
   const base = String(o.url || "").replace(/\/+$/, "");
+  const normalizarPrazo = (v, padrao) => Number.isFinite(Number(v)) && Number(v) > 0 ? Math.min(120_000, Number(v)) : padrao;
+  const prazoRpc = normalizarPrazo(o.prazoMs ?? o.prazoRpcMs, 20_000);
+  const prazoFn = normalizarPrazo(o.prazoMs ?? o.prazoFnMs, 75_000);
+
+  async function buscarComPrazo(url, init, ms) {
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    let timer, expirou = false;
+    const rede = (async () => {
+      const r = await f(url, { ...init, ...(controller ? { signal: controller.signal } : {}) });
+      return { r, txt: await r.text() };
+    })();
+    const limite = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        expirou = true;
+        controller?.abort();
+        reject(erroApi("tempo_rede"));
+      }, ms);
+    });
+    try {
+      return await Promise.race([rede.catch(e => { if (expirou) throw erroApi("tempo_rede"); throw e; }), limite]);
+    } finally { clearTimeout(timer); }
+  }
 
   function avisarSessao(e) {
     if (e.codigo === "sessao_invalida" && typeof o.aoSessaoInvalida === "function") {
@@ -177,18 +200,18 @@ export function criarApi(o) {
     }
   }
 
-  async function post(url, corpo) {
-    let r;
+  async function post(url, corpo, prazo = prazoRpc) {
+    let r, txt;
     try {
-      r = await f(url, {
+      ({ r, txt } = await buscarComPrazo(url, {
         method: "POST",
         headers: { apikey: o.chave, "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify(corpo ?? {}),
-      });
+      }, prazo));
     } catch (causa) {
+      if (causa?.codigo === "tempo_rede") throw causa;
       throw erroApi("sem_conexao", { causa });
     }
-    const txt = await r.text();
     const dados = lerCorpo(txt);
     const obj = dados && typeof dados === "object" && !Array.isArray(dados) ? dados : null;
     if (!r.ok) {
@@ -234,7 +257,7 @@ export function criarApi(o) {
     /** Edge Function: POST /functions/v1/<funcao> com {token, cliente, ...corpo}. */
     fn(funcao, corpo = {}) {
       if (!/^nx-[a-z0-9-]+$/.test(funcao)) return Promise.reject(erroApi("funcao_invalida"));
-      return post(`${base}/functions/v1/${funcao}`, { token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo });
+      return post(`${base}/functions/v1/${funcao}`, { token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }, prazoFn);
     },
     mensagemErro,
   };

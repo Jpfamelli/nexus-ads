@@ -148,6 +148,8 @@ export function derivarTema(cores = {}) {
       : "O fundo ficou escuro demais para o texto escuro; usamos um tom mais claro." });
     fundo = f;
   }
+  // Derive superfícies só depois da guarda: o fundo pode ter sido corrigido acima.
+  const superficies = [.05, .09, .14].map(t => misturar(fundo, texto, t));
   const esq = escuro ? "escuro" : "claro";
   const fx = FIXOS[esq];
 
@@ -168,10 +170,11 @@ export function derivarTema(cores = {}) {
     "--c-fundo": fundo,
     "--c-texto": texto,
     "--c-texto-2": misturar(fundo, texto, .72),
-    "--c-texto-3": misturar(fundo, texto, .56),
-    "--c-sup": misturar(fundo, texto, .05),
-    "--c-sup-2": misturar(fundo, texto, .09),
-    "--c-sup-3": misturar(fundo, texto, .14),
+    // Rótulos menores também precisam de 4,5:1; 56% falha em vários fundos claros.
+    "--c-texto-3": ajustarContraste(misturar(fundo, texto, .56), superficies[2], 4.5).cor,
+    "--c-sup": superficies[0],
+    "--c-sup-2": superficies[1],
+    "--c-sup-3": superficies[2],
     "--c-borda": misturar(fundo, texto, .12),
     "--c-borda-2": misturar(fundo, texto, .20),
     "--c-prim": prim,

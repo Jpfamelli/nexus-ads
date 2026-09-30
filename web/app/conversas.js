@@ -817,28 +817,30 @@ async function enviarPedido(tmp, o) {
   } catch (e) {
     if (!A || A.selId !== convId) return;
     const codigo = e && e.codigo;
-    const canalCodeWords = A.ver?.conversa?.canal?.provedor === "codewords";
-    const ambiguaCodeWords = canalCodeWords && (e?.resposta?.ambigua === true || codigo === "sem_conexao" || codigo === "tempo_esgotado" || /^http_5/.test(String(codigo || "")));
+    // Só a resposta marcada pelo servidor ou um timeout de transporte deixa incerto se o
+    // aparelho recebeu. Um 5xx interno sem essa marca não deve bloquear a recuperação.
+    const envioAmbiguo = e?.resposta?.ambigua === true || ["sem_conexao", "tempo_rede"].includes(codigo)
+      || Number(e?.status) === 504;
     // a Graph recusou e o servidor gravou a mensagem como "falhou" (com o motivo): o api.js anexa o corpo
     // inteiro em e.resposta ({ok:false, erro, detalhe, mensagem}) — mostra a do servidor sem outra chamada
     const salva = (e && e.resposta && e.resposta.mensagem) || (e && e.detalhe && typeof e.detalhe === "object" && e.detalhe.mensagem) || null;
     if (codigo === "envio_falhou" && salva && salva.id) {
-      A.msgs = L.mesclarDelta(A.msgs.filter(m => m.id !== tmp.id), [ambiguaCodeWords ? { ...salva, ambigua: true } : salva]);
+      A.msgs = L.mesclarDelta(A.msgs.filter(m => m.id !== tmp.id), [envioAmbiguo ? { ...salva, ambigua: true } : salva]);
       A.ultimoId = L.ultimoId(A.msgs, A.ultimoId);
-    } else if (codigo === "envio_falhou" || ambiguaCodeWords) {
+    } else if (codigo === "envio_falhou" || envioAmbiguo) {
       // o servidor pode ter gravado a saída como "falhou": o delta traz; se não trouxer, fica a bolha local com "!"
       const antesId = L.ultimoId(A.msgs) || 0;
       A.msgs = A.msgs.filter(m => m.id !== tmp.id);
       await delta();
       if (!A || A.selId !== convId) return;
       const encontrada = A.msgs.find(m => Number(m.id) > antesId && m.direcao === "out" &&
-        (m.status === "falhou" || (ambiguaCodeWords && m.status === "pendente")));
-      if (encontrada && ambiguaCodeWords) {
+        (m.status === "falhou" || (envioAmbiguo && m.status === "pendente")));
+      if (encontrada && envioAmbiguo) {
         A.msgs = A.msgs.map(m => m.id === encontrada.id ? { ...m, ambigua: true } : m);
       } else if (!encontrada) {
-        A.msgs = L.mesclarDelta(A.msgs, [{ ...tmp, status: ambiguaCodeWords ? "pendente" : "falhou",
-          erro: ambiguaCodeWords ? "Pode ter saído — confira no celular antes de reenviar." : e?.resposta?.detalhe || A.ui.mensagemErro(e),
-          ambigua: ambiguaCodeWords || e?.resposta?.ambigua === true, falhaLocal: !ambiguaCodeWords }]);
+        A.msgs = L.mesclarDelta(A.msgs, [{ ...tmp, status: envioAmbiguo ? "pendente" : "falhou",
+          erro: envioAmbiguo ? "Pode ter saído — confira no WhatsApp antes de reenviar." : e?.resposta?.detalhe || A.ui.mensagemErro(e),
+          ambigua: envioAmbiguo, falhaLocal: !envioAmbiguo }]);
       }
     } else {
       const dica = L.dicaErroEnvio(codigo) || A.ui.mensagemErro(e);
