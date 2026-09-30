@@ -235,3 +235,9 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 - João confirmou conectar o Netlify `orbita-nexus-ads` ao repo `Jpfamelli/nexus-ads`. O site está autenticado no Chrome, mas o GitHub não tem sessão ativa e abriu a tela de login.
 - Não inseri credenciais nem alterei a configuração do projeto. A aba GitHub ficou aberta para autenticação manual; após João entrar, continuar o vínculo e verificar o Deploy Preview. Produção segue protegida pela regra da `main`.
 - A suíte Node 14/14 passou antes do fluxo. Nenhum deploy remoto ou escrita no Supabase foi feito; F8 permanece aberta pelos gates documentados.
+
+## Netlify GitHub App instalado — 2026-09-30 01:07 -03
+
+- Após a autenticação manual do João, instalei o GitHub App do Netlify com acesso somente a `Jpfamelli/nexus-ads` e selecionei esse repo no projeto `orbita-nexus-ads`.
+- O fluxo chegou à configuração final, que implantaria `main` pelo botão “Deploy nexus-ads”. Como `origin/main` ainda não tem o `netlify.toml` de proteção (a regra existe somente em `codex/orbita`) e F8 não foi aceita, parei antes de iniciar o deploy.
+- O vínculo ainda não foi concluído; nenhum deploy novo, mudança na `main` ou escrita no Supabase. F8 continua pendente pelos E2E-A/B, canal CodeWords de teste, métricas Ads isoladas, mobile autenticado e limpeza de fixtures.
