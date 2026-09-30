@@ -143,13 +143,43 @@ export function criarChat(A) {
     selos.appendChild(ui.pilula(conv.atribuida ? `Com ${conv.atribuida.nome}` : "Sem dono", conv.atribuida ? "neutra" : "aten", { icone: "usuario" }));
     if (conv.departamento) selos.appendChild(ui.pilula(conv.departamento.nome, conv.departamento.cor || "neutra"));
 
+    const codeWords = conv.canal?.provedor === "codewords";
+    const ia = codeWords ? A.iaEstado : null;
+    if (codeWords) {
+      let rotuloIA = "Verificando IA…", corIA = "neutra", dicaIA = "";
+      if (ia && !ia.ia_ligada) {
+        rotuloIA = "IA desligada no canal"; corIA = "neutra";
+      } else if (ia?.disponivel === false) {
+        rotuloIA = "IA indisponível"; corIA = "aten"; dicaIA = ia.erro || "Confira a configuração do canal CodeWords.";
+      } else if (ia) {
+        else if (ia.pausada) {
+          const autor = ia.pausada_por === "celular" ? "mensagem pelo celular" : `${ia.pausada_por_nome || "você"} assumiu`;
+          let hora = "";
+          if (!ia.so_manual && ia.pausada_ate) {
+            try { hora = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date(ia.pausada_ate)); } catch { /* estado continua legível */ }
+          }
+          rotuloIA = ia.so_manual ? `IA pausada — retorno manual` : `IA pausada até ${hora || "em breve"} — ${autor}`;
+          corIA = "aten";
+        } else { rotuloIA = "IA atendendo"; corIA = "ok"; dicaIA = ia.respondendo ? "O CodeWords está respondendo a esta conversa." : "O agente do CodeWords pode responder automaticamente."; }
+      }
+      selos.appendChild(ui.pilula(rotuloIA, corIA, { icone: "ia", title: dicaIA }));
+    }
+
     const acoes = h("div", { class: "cvc-acoes" });
     const pode = A.podeEscrever;
     const minha = conv.atribuida_a && conv.atribuida_a === eu;
     if (pode && conv.status !== "resolvida" && !minha) {
-      const b = h("button", { type: "button", class: "bt bt-sec bt-p so-largo" }, ui.icone("usuario"), "Assumir");
+      const b = h("button", { type: "button", class: "bt bt-sec bt-p so-largo" }, ui.icone("usuario"), codeWords ? "Atribuir a mim" : "Assumir");
       b.addEventListener("click", () => A.acoes.assumir(b));
       acoes.appendChild(b);
+    }
+    if (pode && codeWords && conv.status !== "resolvida" && ia?.disponivel && ia.ia_ligada) {
+      const devolver = !!ia.pausada;
+      const bIA = h("button", { type: "button", class: devolver ? "bt bt-sec bt-p cvc-ia-acao" : "bt bt-prim bt-p cvc-ia-acao" },
+        ui.icone(devolver ? "ia" : "usuario"), devolver ? "Devolver para a IA" : "Assumir");
+      bIA.title = devolver ? "Retomar as respostas automáticas nesta conversa" : "Pausar a IA e assumir esta conversa";
+      bIA.addEventListener("click", () => devolver ? A.acoes.devolverIA(bIA) : A.acoes.assumirIA(bIA));
+      acoes.appendChild(bIA);
     }
     if (pode) acoes.appendChild(h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Transferir", title: "Transferir",
       on: { click: () => A.acoes.transferir() } }, A.icone("transferir")));
@@ -297,6 +327,9 @@ export function criarChat(A) {
 
   function quemEnviou(m) {
     if (m.direcao !== "out" || m.tipo === "nota") return null;
+    const cw = A.ver?.conversa?.canal?.provedor === "codewords";
+    if (cw && m.origem === "ia") return `${A.base?.config?.ia?.assistente_nome || "Assistente"} · IA`;
+    if (cw && !m.origem && !m.enviado_por) return "Pelo celular";
     if (m.origem === "automacao") return "Automação";
     if (m.origem === "fora_horario") return "Mensagem automática (fora do horário)";
     if (m.origem === "agendada") return "Mensagem agendada";
@@ -344,14 +377,17 @@ export function criarChat(A) {
       box.appendChild(h("button", { type: "button", class: "bt-icone cv-responder", "aria-label": "Responder a esta mensagem", title: "Responder",
         on: { click: () => A.composer.responder(m) } }, A.icone("responder")));
     }
-    if (m.status === "falhou") {
-      const erro = m.ambigua
-        ? "Confirmação pendente. A mensagem pode ter sido enviada; ao repetir, o Órbita reutiliza a mesma referência."
+    const ambigua = m.ambigua === true;
+    if (m.status === "falhou" || (m.status === "pendente" && ambigua)) {
+      const erro = ambigua
+        ? "Pode ter saído — confira no celular antes de reenviar."
         : m.erro || "O canal não aceitou a mensagem.";
       const falha = h("div", { class: "cv-falha", role: "alert" }, h("span", null,
-        h("b", null, m.ambigua ? "! Status incerto: " : "! Não enviada: "), erro));
-      if (m.falhaLocal && m.pedido) {
-        falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarLocal(m) } }, m.ambigua ? "Repetir com a mesma referência" : "Tentar de novo"),
+        h("b", null, ambigua ? "Status incerto: " : "Não enviada: "), erro));
+      if (ambigua) {
+        falha.classList.add("cv-falha-ambigua");
+      } else if (m.falhaLocal && m.pedido) {
+        falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarLocal(m) } }, "Tentar de novo"),
           h("button", { type: "button", class: "bt bt-fant", on: { click: () => A.acoes.descartarLocal(m) } }, "Descartar"));
       } else if (A.podeEscrever && m.tipo === "texto" && m.corpo) {
         falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.enviar({ tipo: "texto", texto: m.corpo }) } }, "Tentar de novo"));
@@ -365,7 +401,7 @@ export function criarChat(A) {
     const m = ln.msg;
     const md = m.midia || {};
     const urlOk = md.path ? A.acoes.estadoMidia(md.path) : "";
-    return [m.atualizado_em, m.status, m.erro, m.reacao, ln.junta, md.estado, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
+    return [m.atualizado_em, m.status, m.erro, m.ambigua, m.origem, m.reacao, ln.junta, md.estado, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
       m.responde_a && m.responde_a.id, m.enviado_por && m.enviado_por.nome].join("|");
   }
 

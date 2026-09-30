@@ -22,7 +22,7 @@ async function montarNumeros(ctx, alvo) {
   const lista = h("div", { class: "cfg-canais" });
   const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Conectar número");
   novo.addEventListener("click", () => assistente(null));
-  const novoCodeWords = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("chat"), "Conectar com CodeWords");
+  const novoCodeWords = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("chat"), "Adicionar WhatsApp pelo CodeWords");
   novoCodeWords.addEventListener("click", () => assistenteCodeWords(null));
   ui.limpar(alvo);
   alvo.append(
@@ -57,39 +57,7 @@ async function montarNumeros(ctx, alvo) {
     for (const c of canais) {
       const [rot, cor] = STATUS_CANAL[c.status] || [c.status, "neutra"];
       if (c.provedor === "codewords") {
-        const [rotCW, corCW] = c.status === "ativo" ? ["API validada", "ok"]
-          : c.status === "erro" ? ["Falha na API", "ruim"] : ["Não testado", "aten"];
-        const testarCW = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Testar workflow");
-        testarCW.addEventListener("click", async () => {
-          try {
-            const r = await ui.carregando(testarCW, ctx.api.fn("nx-enviar", { acao: "testar_codewords", canal: c.id }));
-            ui.toast(r?.ok ? "CodeWords conectado. O workflow respondeu ao teste." : `Teste CodeWords: ${r?.erro || "falhou"}`, { tipo: r?.ok ? "ok" : "erro" });
-          } catch (e) { ui.toast(erroFuncao(e), { tipo: "erro" }); }
-          carregar();
-        });
-        const editarCW = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Configurar");
-        editarCW.addEventListener("click", () => assistenteCodeWords(c));
-        const copiarHook = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("copiar"), "Copiar URL de eventos");
-        copiarHook.addEventListener("click", () => ui.copiar(c.webhook?.url || "", { aviso: "URL do webhook CodeWords copiada. Trate-a como segredo." }));
-        const excluirCW = h("button", { type: "button", class: "bt-icone", "aria-label": `Mais opções de ${c.nome}` }, ui.icone("opcoes"));
-        excluirCW.addEventListener("click", () => ui.menu(excluirCW, [
-          { rotulo: "Reconfigurar CodeWords", icone: "editar", fn: () => assistenteCodeWords(c) },
-          "-",
-          { rotulo: "Excluir número", icone: "lixeira", perigo: true, fn: () => excluir(c) },
-        ]));
-        lista.appendChild(h("article", { class: "cartao cfg-canal" },
-          h("div", null,
-            h("h3", { class: "titulo-sec" }, c.nome, ui.pilula(rotCW, corCW), ui.pilula("CodeWords", "info")),
-            h("div", { class: "cfg-canal-kv" },
-              h("span", null, "Número ", h("b", null, c.numero_exibicao || "—")),
-              h("span", null, "Workflow ", h("b", { class: "mono" }, c.codewords_service_id || "—")),
-              h("span", null, "Departamento ", h("b", null, depNome(c.departamento_id)))),
-            h("div", { class: "cfg-checks" },
-              c.tem_codewords_api_key ? ui.pilula("API key guardada no servidor", "ok", { icone: "cadeado" }) : ui.pilula("API key ausente", "ruim"),
-              c.webhook?.url ? ui.pilula("URL de eventos pronta", "info", { icone: "link" }) : ui.pilula("URL de eventos pendente", "aten")),
-            h("p", { class: "sub" }, "A validação confere o acesso ao workflow. Depois, teste uma mensagem real de entrada, uma resposta e os recibos para confirmar o número e o webhook."),
-            c.ultimo_erro ? h("div", { class: "aviso aviso-ruim cfg-erro" }, ui.icone("alerta"), h("p", null, c.ultimo_erro)) : null),
-          h("div", { class: "cfg-canal-acoes" }, testarCW, copiarHook, editarCW, excluirCW)));
+        lista.appendChild(cartaoCodeWords(c));
         continue;
       }
       const ok = (v, sim, nao, nulo) => ui.pilula(v === true ? sim : v === false ? nao : nulo, v === true ? "ok" : v === false ? "ruim" : "neutra",
@@ -163,109 +131,248 @@ async function montarNumeros(ctx, alvo) {
     } catch (e) { ui.toast(ui.mensagemErro(e), { tipo: "erro" }); }
   }
 
-  function instrucoesBridgeCodeWords({ webhook, serviceId }) {
-    return [
-      "PROMPT PARA COLAR NO CODY DO CODEWORDS",
-      "Crie e publique um workflow WhatsApp conectado ao número informado na tela do Órbita. Use o service ID que já cadastrei. Ele precisa aceitar chamadas pela API Runtime e receber o webhook de eventos abaixo.",
-      "",
-      "A) Quando a API Runtime chamar o workflow, ela enviará o JSON diretamente na raiz (sem envolver em { inputs: ... }). Para event=orbita.health_check, retorne { ok: true } sem enviar mensagem.",
-      "B) Para event=orbita.send_message, envie o texto pelo número WhatsApp conectado usando to e text. Use client_ref como chave de idempotência durável: registre a referência antes do envio; se ela já existir, não envie novamente e devolva o mesmo message_id. Isso também vale quando uma chamada anterior terminou sem confirmação. Responda JSON com ok=true e message_id contendo o ID estável devolvido pelo provedor:",
-      JSON.stringify({ event: "orbita.send_message", to: "5511999999999", text: "Olá!", client_ref: "orbita:identificador-unico", conversation_id: "123" }, null, 2),
-      JSON.stringify({ ok: true, message_id: "ID_ESTAVEL_DO_PROVEDOR" }, null, 2),
-      "C) Configure o gatilho de nova mensagem recebida. Para cada mensagem, envie um POST para a URL de eventos do Órbita com:",
-      JSON.stringify({ event: "message", direction: "in", message_id: "ID_UNICO_DA_MENSAGEM", phone: "5511999999999", name: "Nome do contato", text: "Mensagem recebida", timestamp: "2026-09-29T12:00:00Z", referral: { source_type: "ad", source_id: "ID_DO_ANUNCIO", ctwa_clid: "CLID_SE_DISPONIVEL" } }, null, 2),
-      "",
-      "D) Depois que uma resposta automática do workflow for realmente enviada, espelhe-a na caixa com event=message, direction=out e message_id, phone, name e text. Use o mesmo message_id nos recibos. Não espelhe uma mensagem enviada pela tela do Órbita como uma segunda mensagem.",
-      "E) Quando houver atualização de entrega, envie event=status com o mesmo message_id e status sent, delivered, read ou failed. Em failed, inclua error.",
-      "F) Use números em formato internacional, com DDI e somente dígitos. Mensagens recebidas com origem de anúncio podem incluir referral.source_type=ad, source_id e ctwa_clid.",
-      "",
-      `Service ID: ${serviceId}`,
-      `URL de eventos (segredo; mantenha dentro do CodeWords): ${webhook}`,
-      "",
-      "O botão de teste confirma que o workflow respondeu à API; ele não manda mensagem e não valida sozinho o número do WhatsApp. Depois, faça um teste real de entrada e saída. O Órbita envia texto por esse canal; anexos e modelos da Meta não estão disponíveis. Use uma API key reutilizável cwk- (cwotk- é de uso único) e nunca coloque a chave em código público ou no navegador.",
-    ].join("\n");
+  const estadosCodeWords = new Map();
+
+  function estadoVisualCodeWords(c) {
+    const s = estadosCodeWords.get(c.id), cw = c.codewords || {};
+    if (s) {
+      if (s.inscrito_certo) return ["Conectado", "ok"];
+      if (!s.pareado || s.conectado === false) return ["Desconectado", "ruim"];
+      if (s.pareado && s.conectado && (s.numero_confere !== true || s.rota_atual !== s.rota_esperada)) return ["Conectado mas sem receber", "aten"];
+    }
+    if (cw.conectado === false && cw.phone_id) return ["Desconectado", "ruim"];
+    if (cw.conectado === true) {
+      if (cw.numero_conferido === false) return ["Conectado mas sem receber", "aten"];
+      if (cw.numero_conferido === true) {
+        const rotaOk = cw.rota === "direta"
+          ? String(cw.inscricao || "").includes("URL deste canal")
+          : !!cw.service_id && String(cw.inscricao || "").startsWith(cw.service_id);
+        return rotaOk ? ["Conectado", "ok"] : ["Conectado mas sem receber", "aten"];
+      }
+    }
+    return ["Não sei", "neutra"];
+  }
+
+  async function consultarEstadoCodeWords(c, botao) {
+    try {
+      const r = await ui.carregando(botao, ctx.api.fn("nx-codewords", { acao: "estado", canal: c.id }));
+      estadosCodeWords.set(c.id, r || {});
+      if (r?.ok && r.inscrito_certo) ui.toast("WhatsApp conectado e recebendo pelo destino configurado.", { tipo: "ok" });
+      else ui.toast(r?.motivo || r?.detalhe || "Situação atualizada. Confira o estado do número.", { tipo: r?.ok ? "info" : "erro" });
+      await carregar();
+    } catch (e) { ui.toast(erroFuncao(e), { tipo: "erro" }); }
+  }
+
+  function cartaoCodeWords(c) {
+    const cw = c.codewords || {};
+    const [rotulo, cor] = estadoVisualCodeWords(c);
+    const atualizar = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Atualizar");
+    atualizar.addEventListener("click", () => consultarEstadoCodeWords(c, atualizar));
+    const conectar = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("whatsapp"), "Conectar WhatsApp");
+    conectar.addEventListener("click", () => assistenteCodeWords(c));
+    const configurar = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Configurar");
+    configurar.addEventListener("click", () => assistenteCodeWords(c));
+    const mais = h("button", { type: "button", class: "bt-icone", "aria-label": `Mais opções de ${c.nome}` }, ui.icone("opcoes"));
+    mais.addEventListener("click", () => ui.menu(mais, [
+      { rotulo: "Configurar CodeWords", icone: "editar", fn: () => assistenteCodeWords(c) }, "-",
+      { rotulo: "Excluir número", icone: "lixeira", perigo: true, fn: () => excluir(c) },
+    ]));
+    const ultimo = estadosCodeWords.get(c.id);
+    const resumoRota = cw.rota === "direta"
+      ? ui.pilula("Recebimento direto no Órbita", "info")
+      : cw.ia_ligada && rotulo === "Conectado" ? ui.pilula("IA 24h ativa", "ok", { icone: "ia" })
+        : cw.ia_ligada ? ui.pilula("IA ainda não validada", "aten", { icone: "ia" }) : ui.pilula("IA desligada", "neutra", { icone: "ia" });
+    const explicacao = ultimo?.motivo || (cw.sync?.erro ? `Última sincronização: ${cw.sync.erro}` :
+      rotulo === "Não sei" ? "Atualize para conferir se o aparelho está pareado e recebendo mensagens." :
+      rotulo === "Conectado mas sem receber" ? "O aparelho está ligado, mas o destino das mensagens precisa ser corrigido." :
+      rotulo === "Desconectado" ? "Pareie ou reconecte este número pelo WhatsApp no celular." : "O aparelho e o destino foram conferidos.");
+    return h("article", { class: "cartao cfg-canal cfg-cw-card" },
+      h("div", { class: "cfg-cw-main" },
+        h("div", { class: "cfg-cw-titulo" }, h("h3", { class: "titulo-sec" }, c.nome), ui.pilula(rotulo, cor, { icone: cor === "ok" ? "check" : cor === "ruim" ? "alerta" : "relogio" }), ui.pilula("CodeWords", "info")),
+        h("div", { class: "cfg-canal-kv" },
+          h("span", null, "Número ", h("b", null, c.numero_exibicao || cw.numero || "—")),
+          h("span", null, "Fluxo de IA ", h("b", { class: "mono" }, cw.service_id || "Ainda não configurado")),
+          h("span", null, "Departamento ", h("b", null, depNome(c.departamento_id)))),
+        h("div", { class: "cfg-checks" },
+          cw.tem_api_key ? ui.pilula("Chave salva", "ok", { icone: "cadeado" }) : ui.pilula("Chave ausente", "ruim"),
+          resumoRota,
+          cw.sync?.em ? ui.pilula(`Sincronizado ${ui.relativo(cw.sync.em)}`, cw.sync.erro ? "aten" : "neutra") : null),
+        h("p", { class: "sub cfg-cw-status-text", role: "status" }, explicacao),
+        c.ultimo_erro ? h("div", { class: "aviso aviso-aten cfg-erro" }, ui.icone("info"), h("p", null, c.ultimo_erro)) : null),
+      h("div", { class: "cfg-canal-acoes cfg-cw-card-actions" }, atualizar, conectar, configurar, mais));
   }
 
   async function assistenteCodeWords(canal) {
-    let passo = 1, atual = canal, webhook = canal?.webhook?.url || "", modalApi = null;
-    let form = null;
-    const corpo = h("div", { class: "pilha" });
-    const conteudo = h("div", { class: "pilha" });
-    corpo.appendChild(conteudo);
-    function desenhar() {
-      const prim = modalApi?.el.querySelector(".modal-rod [data-tipo=primario]");
-      const neutro = modalApi?.el.querySelector(".modal-rod [data-tipo=neutro]");
-      if (prim) prim.textContent = passo === 1 ? "Salvar e configurar CodeWords" : "Concluir";
-      if (neutro) neutro.textContent = passo === 2 ? "Voltar" : "Fechar";
-      ui.limpar(conteudo);
-      if (passo === 1) {
-        form = h("form", { class: "pilha", novalidate: true },
-          h("p", { class: "sub" }, "A chave reutilizável cwk- é enviada somente ao servidor e guardada no Vault. Chaves cwotk- são de uso único e não servem para uma integração contínua."),
-          h("div", { class: "grade-2" },
-            ui.campo({ rotulo: "Nome do canal", nome: "nome", valor: atual?.nome || "WhatsApp via CodeWords", max: 40, obrigatorio: true }),
-            ui.campo({ rotulo: "Número conectado", nome: "numero_exibicao", valor: atual?.numero_exibicao || "", max: 30, placeholder: "+55 12 99999-9999", obrigatorio: true })),
-          ui.campo({ rotulo: "Service ID do workflow", nome: "codewords_service_id", valor: atual?.codewords_service_id || "", max: 120, autocomplete: "off", obrigatorio: true,
-            ajuda: "O workflow deve atender orbita.send_message e orbita.health_check." }),
-          ui.campo({ rotulo: "API key do CodeWords", nome: "codewords_api_key", tipo: "senha", autocomplete: "new-password",
-            placeholder: atual?.tem_codewords_api_key ? "✓ guardada no servidor — em branco mantém" : "cwk-…",
-            ajuda: "Chave reutilizável do plano pago. Nunca aparece novamente depois de salvar." }),
-          (base?.departamentos || []).length ? ui.campo({ rotulo: "Conversas novas caem em", nome: "departamento_id", tipo: "select",
-            valor: atual?.departamento_id || (base.departamentos.find(d => d.padrao) || base.departamentos[0]).id,
-            opcoes: base.departamentos.map(d => ({ valor: d.id, rotulo: d.nome })) }) : null);
-        conteudo.append(form);
-      } else {
-        const instrucoes = instrucoesBridgeCodeWords({ webhook, serviceId: atual.codewords_service_id });
-        const pre = h("pre", { class: "cfg-codigo", tabindex: "0", "aria-label": "Configuração do workflow CodeWords" }, h("code", {}, instrucoes));
-        const copiar = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("copiar"), "Copiar configuração");
-        copiar.addEventListener("click", () => ui.copiar(instrucoes, { aviso: "Configuração copiada. Cole no CodeWords e confira o mapeamento." }));
-        const url = h("input", { class: "mono cfg-mono", readonly: true, value: webhook, spellcheck: false });
-        url.addEventListener("focus", () => url.select());
-        conteudo.append(h("h3", { class: "titulo-sec" }, "Próximo passo: ligar o workflow"),
-          h("p", { class: "sub" }, "Cole a configuração no CodeWords. Ela define os eventos recebidos, respostas do agente, recibos e o formato esperado pela API do Órbita."),
-          h("div", { class: "campo" }, h("label", null, "URL de eventos do canal (trate como segredo)"), h("div", { class: "cfg-copia" }, url,
-            h("button", { type: "button", class: "bt bt-sec", on: { click: () => ui.copiar(webhook, { aviso: "URL copiada. Mantenha-a privada." }) } }, ui.icone("copiar"), "Copiar"))),
-          pre, h("div", { class: "linha" }, copiar),
-          h("div", { class: "aviso aviso-aten" }, ui.icone("info"), h("p", null,
-            "A integração já salva o segredo no servidor. Teste com uma conversa fictícia antes de conectar o número principal; o botão Testar workflow valida orbita.health_check.")));
+    let atual = canal ? { ...canal, codewords: { ...(canal.codewords || {}) } } : null;
+    const cw = atual?.codewords || {};
+    const corpo = h("div", { class: "pilha cfg-cw-config" });
+    const form = h("form", { class: "pilha", novalidate: true });
+    const chaveWrap = ui.campo({ rotulo: "Chave da API CodeWords", nome: "codewords_api_key", tipo: "senha", autocomplete: "new-password",
+      placeholder: "cwk-…", ajuda: "Chave reutilizável do plano pago. Ela é enviada ao servidor e nunca volta para esta tela." });
+    const chave = chaveWrap.querySelector('input[name="codewords_api_key"]');
+    const chaveSalva = h("div", { class: "cfg-cw-key-state" },
+      atual?.codewords?.tem_api_key ? ui.pilula("Chave salva com segurança", "ok", { icone: "cadeado" }) : ui.pilula("Adicione sua chave para começar", "aten"));
+    const trocarChave = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Trocar chave");
+    if (atual?.codewords?.tem_api_key) chaveWrap.hidden = true;
+    trocarChave.hidden = !atual?.codewords?.tem_api_key;
+    trocarChave.addEventListener("click", () => { chaveWrap.hidden = false; trocarChave.hidden = true; chave.focus(); });
+    const campos = h("div", { class: "grade-2 cfg-cw-grid" },
+      ui.campo({ rotulo: "Nome do canal", nome: "nome", valor: atual?.nome || "WhatsApp via CodeWords", max: 40, obrigatorio: true }),
+      ui.campo({ rotulo: "Número do WhatsApp", nome: "numero_exibicao", tipo: "tel", valor: atual?.numero_exibicao || cw.numero || "", max: 30, placeholder: "+55 12 99999-9999", obrigatorio: true }));
+    form.append(h("p", { class: "sub" }, "Conecte o aparelho do WhatsApp e receba as conversas nesta caixa. A chave fica protegida no servidor."),
+      campos, chaveSalva, h("div", { class: "linha cfg-cw-key-row" }, trocarChave), chaveWrap,
+      ui.campo({ rotulo: "Service ID do fluxo de IA", nome: "codewords_service_id", valor: cw.service_id || "", max: 120, autocomplete: "off",
+        ajuda: "Opcional para conectar. Necessário somente para encaminhar as mensagens ao agente do CodeWords." }),
+      (base?.departamentos || []).length ? ui.campo({ rotulo: "Conversas novas caem em", nome: "departamento_id", tipo: "select",
+        valor: atual?.departamento_id || (base.departamentos.find(d => d.padrao) || base.departamentos[0]).id,
+        opcoes: base.departamentos.map(d => ({ valor: d.id, rotulo: d.nome })) }) : null,
+      h("section", { class: "cartao cfg-cw-ia" },
+        h("div", { class: "cfg-cw-ia-head" }, ui.icone("ia"), h("div", null, h("h3", { class: "titulo-sec" }, "IA no WhatsApp"), h("p", { class: "sub" }, "O CodeWords responde pelo celular conectado; a equipe pode assumir uma conversa a qualquer momento."))),
+        ui.campo({ rotulo: "IA atendendo 24h", nome: "ia_ligada", tipo: "interruptor",
+          valor: cw.rota === "direta" ? false : (cw.ia_ligada ?? atual?.ia_ligada ?? true),
+          ajuda: "Quando desligada, o fluxo não responde automaticamente por este número. Só vale quando o destino estiver ligado ao fluxo de IA." }),
+        ui.campo({ rotulo: "A IA volta automaticamente após", nome: "ia_volta_horas", tipo: "select", valor: String(cw.ia_volta_horas ?? 6),
+          opcoes: [{ valor: "1", rotulo: "1 hora" }, { valor: "2", rotulo: "2 horas" }, { valor: "4", rotulo: "4 horas" }, { valor: "6", rotulo: "6 horas" }, { valor: "8", rotulo: "8 horas" }, { valor: "12", rotulo: "12 horas" }, { valor: "24", rotulo: "24 horas" }, { valor: "48", rotulo: "48 horas" }, { valor: "72", rotulo: "72 horas" }, { valor: "168", rotulo: "7 dias" }, { valor: "0", rotulo: "Somente quando a equipe devolver" }] }),
+        h("p", { class: "sub" }, "Esse prazo começa quando alguém da equipe assume uma conversa.")));
+    const operacoes = h("section", { class: "cfg-cw-ops pilha", hidden: !atual?.id },
+      h("div", { class: "cfg-cw-ops-head" }, h("h3", { class: "titulo-sec" }, "Conectar e validar"),
+        h("p", { class: "sub" }, "Confira o estado do aparelho antes de encaminhar mensagens.")));
+    const statusAtual = h("div", { class: "cfg-cw-resultado", role: "status", "aria-live": "polite" });
+    const codigoPareamento = h("section", { class: "cfg-cw-pair", hidden: true });
+    const receitaBox = h("section", { class: "cfg-cw-receita", hidden: true });
+    const bEstado = h("button", { type: "button", class: "bt bt-sec" }, "Atualizar situação");
+    const bParear = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("whatsapp"), "Conectar WhatsApp");
+    const bFluxo = h("button", { type: "button", class: "bt bt-sec" }, "Ligar o número na IA");
+    const bDireto = h("button", { type: "button", class: "bt bt-sec" }, "Receber direto no Órbita, sem IA");
+    const bTeste = h("button", { type: "button", class: "bt bt-sec" }, "Enviar mensagem de teste");
+    const bPrompt = h("button", { type: "button", class: "bt bt-fant" }, ui.icone("copiar"), "Copiar prompt para o CodeWords");
+    const gradeAcoes = h("div", { class: "cfg-cw-ops-actions" }, bEstado, bParear, bFluxo, bDireto, bTeste, bPrompt);
+    operacoes.append(gradeAcoes, statusAtual, codigoPareamento, receitaBox);
+    corpo.append(form, operacoes);
+
+    async function salvarConfiguracao({ silencioso = false } = {}) {
+      const d = ui.lerForm(form); ui.marcarErro(form, null);
+      if (!d.nome) { ui.marcarErro(form, "nome", "Informe o nome do canal."); return false; }
+      if (!/^\+?[0-9 ()-]{8,30}$/.test(String(d.numero_exibicao || ""))) { ui.marcarErro(form, "numero_exibicao", "Informe o número com DDI e DDD."); return false; }
+      const apiKey = String(d.codewords_api_key || "").trim();
+      if (!atual?.id && !apiKey) { ui.marcarErro(form, "codewords_api_key", "Cole a chave reutilizável do plano pago."); return false; }
+      if (apiKey && (apiKey.length < 20 || !apiKey.startsWith("cwk-") || /\s/.test(apiKey))) {
+        ui.marcarErro(form, "codewords_api_key", "Use uma chave reutilizável cwk- com pelo menos 20 caracteres."); return false;
+      }
+      const payload = { nome: d.nome, numero_exibicao: d.numero_exibicao,
+        departamento_id: d.departamento_id || null, ia_ligada: !!d.ia_ligada, ia_volta_horas: Number(d.ia_volta_horas ?? 6) };
+      if (atual?.id) payload.id = atual.id;
+      if (d.codewords_service_id) payload.codewords_service_id = d.codewords_service_id;
+      if (apiKey) payload.codewords_api_key = apiKey;
+      try {
+        const r = await ctx.api.rpcC("nx_codewords_canal_salvar", { p_canal: payload });
+        const id = r?.canal?.id || r?.canal?.canal_id || atual?.id;
+        chave.value = "";
+        const listaNova = await ctx.api.rpcC("nx_canais_listar");
+        canais = Array.isArray(listaNova) ? listaNova : listaNova?.canais || canais;
+        atual = canais.find(x => x.id === id) || { ...(atual || {}), id, nome: d.nome,
+          numero_exibicao: d.numero_exibicao, departamento_id: d.departamento_id || null,
+          codewords: { ...(atual?.codewords || {}), tem_api_key: !!apiKey || !!atual?.codewords?.tem_api_key,
+            service_id: d.codewords_service_id || atual?.codewords?.service_id || null, ia_ligada: !!d.ia_ligada,
+            ia_volta_horas: Number(d.ia_volta_horas ?? 6) } };
+        if (apiKey) { chaveSalva.replaceChildren(ui.pilula("Chave salva com segurança", "ok", { icone: "cadeado" })); chaveWrap.hidden = true; trocarChave.hidden = false; }
+        operacoes.hidden = false;
+        ui.limpar(codigoPareamento); codigoPareamento.hidden = true;
+        ui.limpar(receitaBox); receitaBox.hidden = true;
+        carregar();
+        if (!silencioso) ui.toast("Número e preferências salvos.", { tipo: "ok" });
+        return true;
+      } catch (e) {
+        const hint = e?.hint;
+        if (e?.codigo === "dados_invalidos" && hint && form.querySelector(`[data-campo="${hint}"]`)) {
+          ui.marcarErro(form, hint, "Confira este campo."); return false;
+        }
+        ui.toast(ui.mensagemErro(e), { tipo: "erro" });
+        return false;
       }
     }
+
+    async function guardarAntesDaAcao() {
+      if (!await salvarConfiguracao({ silencioso: true })) return false;
+      return true;
+    }
+    async function acaoCodeWords(acao, payload = {}) {
+      if (!atual?.id) { ui.toast("Salve o número antes de continuar.", { tipo: "info" }); return null; }
+      try {
+        const r = await ctx.api.fn("nx-codewords", { acao, canal: atual.id, ...payload });
+        if (!r?.ok) throw Object.assign(new Error(r?.detalhe || r?.erro || "A ação não foi concluída."), { detalhe_texto: r?.detalhe || r?.erro });
+        return r;
+      } catch (e) { ui.toast(erroFuncao(e), { tipo: "erro" }); return null; }
+    }
+    bEstado.addEventListener("click", async () => {
+      const r = await acaoCodeWords("estado"); if (!r) return;
+      estadosCodeWords.set(atual.id, r);
+      statusAtual.textContent = r.inscrito_certo ? "Conectado e recebendo mensagens." : r.motivo || "Situação consultada.";
+      carregar();
+    });
+    bParear.addEventListener("click", async () => {
+      if (!await guardarAntesDaAcao()) return;
+      const r = await acaoCodeWords("parear"); if (!r) return;
+      const copiarCodigo = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("copiar"), "Copiar código");
+      copiarCodigo.addEventListener("click", () => ui.copiar(r.codigo, { aviso: "Código copiado. Digite-o no WhatsApp do número cadastrado." }));
+      ui.limpar(codigoPareamento); codigoPareamento.hidden = false;
+      codigoPareamento.append(h("p", { class: "rotulo" }, "Pareamento do WhatsApp"),
+        h("p", { class: "cfg-cw-code", "aria-label": `Código de pareamento ${r.codigo}` }, r.codigo),
+        h("p", { class: "sub" }, r.instrucoes || "No WhatsApp do celular, abra Aparelhos conectados, escolha Conectar aparelho e depois Conectar com número de telefone."), copiarCodigo,
+        h("p", { class: "sub" }, "Depois de concluir no celular, volte aqui e toque em «Atualizar situação»."));
+    });
+    bFluxo.addEventListener("click", async () => {
+      const service = form.querySelector('[name="codewords_service_id"]')?.value.trim();
+      if (!service) { ui.toast("Informe e salve o Service ID do fluxo de IA primeiro.", { tipo: "info" }); form.querySelector('[name="codewords_service_id"]')?.focus(); return; }
+      const confirmado = await ui.confirmar({ titulo: "Ligar o número na IA?", rotulo: "Ligar na IA",
+        texto: "O CodeWords encaminhará as mensagens deste WhatsApp ao fluxo de IA. Confirme que o aparelho pareado mostra o mesmo número e que o fluxo está publicado." });
+      if (!confirmado) return;
+      form.querySelector('[name="ia_ligada"]').checked = true;
+      if (!await guardarAntesDaAcao()) return;
+      const r = await acaoCodeWords("ligar_fluxo"); if (!r) return;
+      estadosCodeWords.set(atual.id, { ...r, inscrito_certo: true, pareado: true, conectado: true, numero_confere: true, rota_atual: "fluxo", rota_esperada: "fluxo" });
+      statusAtual.textContent = "Número ligado ao fluxo de IA. Toque em Atualizar situação para confirmar a conexão no aparelho.";
+      ui.toast("Fluxo de IA conectado. Confirme o estado do aparelho.", { tipo: "ok" }); carregar();
+    });
+    bDireto.addEventListener("click", async () => {
+      const confirmado = await ui.confirmar({ titulo: "Receber mensagens direto no Órbita?", rotulo: "Receber no Órbita",
+        texto: "O aparelho deixará de encaminhar mensagens ao fluxo externo de IA e passará a enviá-las diretamente para a caixa Conversas do Órbita." });
+      if (!confirmado) return;
+      form.querySelector('[name="ia_ligada"]').checked = false;
+      if (!await guardarAntesDaAcao()) return;
+      const r = await acaoCodeWords("receber_aqui"); if (!r) return;
+      estadosCodeWords.set(atual.id, { ...r, inscrito_certo: true, pareado: true, conectado: true, numero_confere: true, rota_atual: "direta", rota_esperada: "direta" });
+      statusAtual.textContent = "O aparelho agora envia mensagens diretamente para o Órbita.";
+      ui.toast("Recebimento direto ativado.", { tipo: "ok" }); carregar();
+    });
+    bTeste.addEventListener("click", async () => {
+      const confirmado = await ui.confirmar({ titulo: "Enviar uma mensagem de teste?", rotulo: "Enviar teste",
+        texto: `Será enviada uma mensagem real pelo CodeWords para o número conectado (${atual?.numero_exibicao || cw.numero || "este canal"}).` });
+      if (!confirmado || !await guardarAntesDaAcao()) return;
+      const r = await acaoCodeWords("enviar_teste"); if (!r) return;
+      ui.toast("O CodeWords aceitou o teste. Confira o WhatsApp do número conectado.", { tipo: "ok" });
+    });
+    bPrompt.addEventListener("click", async () => {
+      if (!await guardarAntesDaAcao()) return;
+      const r = await acaoCodeWords("receita"); if (!r) return;
+      const pre = h("pre", { class: "cfg-codigo cfg-cw-prompt", tabindex: "0", "aria-label": "Prompt de configuração do CodeWords" }, h("code", {}, r.prompt || ""));
+      const copiar = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("copiar"), "Copiar prompt para o CodeWords");
+      copiar.addEventListener("click", () => ui.copiar(r.prompt || "", { aviso: "Prompt copiado. Cole no CodeWords e mantenha a URL secreta privada." }));
+      ui.limpar(receitaBox); receitaBox.hidden = false;
+      receitaBox.append(h("div", { class: "aviso aviso-aten" }, ui.icone("cadeado"), h("p", null, "O prompt contém a URL secreta deste canal. Cole somente no CodeWords e não compartilhe o texto.")), pre, copiar);
+    });
+
     await ui.modal({
-      titulo: canal ? `CodeWords · ${canal.nome}` : "Conectar WhatsApp com CodeWords", corpo, largura: "g", fecharFora: false,
-      aoAbrir: api => { modalApi = api; desenhar(); },
+      titulo: atual ? `WhatsApp CodeWords · ${atual.nome}` : "Adicionar WhatsApp pelo CodeWords",
+      corpo, largura: "g", fecharFora: false,
       acoes: [
-        { rotulo: "Fechar", tipo: "neutro", fn: () => {
-          if (passo === 2) { passo = 1; desenhar(); return false; }
-          return null;
-        } },
-        { rotulo: "Salvar e configurar CodeWords", tipo: "primario", fn: async () => {
-          if (passo === 2) return true;
-          const d = ui.lerForm(form); ui.marcarErro(form, null);
-          if (!d.nome) { ui.marcarErro(form, "nome", "Informe o nome do canal."); return false; }
-          if (!/^\+?[0-9 ()-]{8,30}$/.test(String(d.numero_exibicao || ""))) { ui.marcarErro(form, "numero_exibicao", "Informe o número com DDI e DDD."); return false; }
-          if (!/^[A-Za-z0-9_-]{1,120}$/.test(String(d.codewords_service_id || ""))) { ui.marcarErro(form, "codewords_service_id", "Confira o Service ID."); return false; }
-          if (!atual?.id && !d.codewords_api_key) { ui.marcarErro(form, "codewords_api_key", "Cole a API key do plano pago."); return false; }
-          if (d.codewords_api_key && (!String(d.codewords_api_key).startsWith("cwk-") || /\s/.test(d.codewords_api_key))) {
-            ui.marcarErro(form, "codewords_api_key", "Use uma chave reutilizável cwk-. Chaves cwotk- são de uso único."); return false;
-          }
-          const payload = { nome: d.nome, numero_exibicao: d.numero_exibicao, codewords_service_id: d.codewords_service_id,
-            departamento_id: d.departamento_id || null };
-          if (atual?.id) payload.id = atual.id;
-          if (d.codewords_api_key) payload.codewords_api_key = d.codewords_api_key;
-          try {
-            const r = await ctx.api.rpcC("nx_codewords_canal_salvar", { p_canal: payload });
-            atual = { ...(r.canal || {}), webhook: { url: r.webhook_url } }; webhook = r.webhook_url;
-            passo = 2; carregar(); desenhar(); return false;
-          } catch (e) {
-            const hint = e?.hint;
-            if (e?.codigo === "dados_invalidos" && hint && form.querySelector(`[data-campo="${hint}"]`)) {
-              ui.marcarErro(form, hint, "Confira este campo."); return false;
-            }
-            throw e;
-          }
+        { rotulo: "Fechar", tipo: "neutro" },
+        { rotulo: "Salvar configuração", tipo: "primario", fn: async () => {
+          const ok = await salvarConfiguracao();
+          return ok ? false : false;
         } },
       ],
     });
-    carregar();
   }
 
   /* ---------------- assistente em 5 passos */
@@ -907,11 +1014,17 @@ async function montarAtendimento(ctx, alvo) {
 
 /* ============================================================ ASSISTENTE DE IA (P0-B) */
 const IA_TEXTOS = [
-  ["sobre", "Sobre a empresa", "Quem somos, diferenciais, público, como gostamos de falar com o cliente."],
-  ["servicos", "Serviços e preços", "Procedimentos ou produtos, faixas de preço que podem ser ditas, formas de pagamento, convênios."],
-  ["horarios", "Horários e endereço", "Dias e horários, endereço, estacionamento, como chegar."],
-  ["regras", "Regras de atendimento", "Ex.: sempre oferecer a avaliação; confirmar o nome; nunca marcar sem confirmar o horário."],
-  ["proibido", "O que nunca dizer", "Ex.: preço fechado sem avaliação, diagnóstico por mensagem, promessa de resultado."],
+  ["sobre", "Sobre a empresa", "Quem somos, diferenciais e para quem atendemos."],
+  ["servicos", "Serviços e informações", "O que oferecemos, faixas de preço que podem ser informadas, pagamentos e convênios."],
+  ["horarios", "Horários de atendimento", "Dias e horários de funcionamento e disponibilidade da equipe."],
+  ["regras", "Regras de atendimento", "Ex.: confirmar nome e serviço; nunca marcar sem confirmar o horário."],
+  ["proibido", "O que nunca dizer", "Ex.: diagnóstico por mensagem, promessa de resultado ou preço fechado sem avaliação."],
+];
+
+const IA_CAMPOS_EXTRA = [
+  ["assistente_nome", "Nome do assistente", "Como o agente se apresenta no WhatsApp."],
+  ["endereco", "Endereço", "Endereço, referência, estacionamento e como chegar."],
+  ["boas_vindas", "Mensagem de boas-vindas", "Primeira mensagem que o agente deve usar ao iniciar o atendimento."],
 ];
 
 async function montarIA(ctx, alvo) {
@@ -923,7 +1036,7 @@ async function montarIA(ctx, alvo) {
   alvo.append(
     h("header", { class: "cab-pag" },
       h("div", null, h("p", { class: "rotulo" }, "Atendimento"), h("h1", { class: "titulo-pag" }, "Assistente de IA"),
-        h("p", { class: "sub" }, "O botão «Sugerir com IA» do chat usa estas informações para escrever uma resposta. O atendente revisa e decide — a IA nunca envia sozinha."))),
+        h("p", { class: "sub" }, "Defina a personalidade e as informações usadas pelo agente do CodeWords. A equipe pode assumir qualquer conversa e devolver o atendimento à IA."))),
     caixa);
 
   async function carregar() {
@@ -943,10 +1056,12 @@ async function montarIA(ctx, alvo) {
     }
     const cota = ia.cota || {};
     caixa.appendChild(ia.ligada
-      ? h("section", { class: "cartao cfg-ia-status" }, h("div", { class: "linha" }, ui.pilula("IA ligada", "ok", { icone: "ia" })),
-          ui.barraUso("Sugestões usadas este mês", cota.usadas || 0, cota.limite ?? null))
+      ? h("section", { class: "cartao cfg-ia-status" },
+          h("div", { class: "linha" }, ui.pilula("Sugestões do Órbita disponíveis", "ok", { icone: "ia" })),
+          ui.barraUso("Sugestões da equipe usadas neste mês", cota.usadas || 0, cota.limite ?? null),
+          h("p", { class: "sub" }, "Este limite é das sugestões feitas no chat do Órbita. O agente CodeWords e sua ativação são configurados em cada número de WhatsApp."))
       : h("div", { class: "aviso aviso-aten" }, ui.icone("ia"),
-          h("p", null, h("b", null, "A IA ainda não está ligada nesta plataforma. "), "O que você escrever aqui fica guardado e passa a valer assim que ela for ligada.")));
+          h("p", null, h("b", null, "Sugestões de IA do Órbita indisponíveis. "), "Estas informações ainda podem ser preparadas para o agente CodeWords; a ativação depende do canal.")));
 
     const f = h("form", { class: "pilha cartao cfg-ia", novalidate: true });
     const cont = h("div", { class: "cfg-ia-cont", "aria-live": "polite" });
@@ -954,10 +1069,18 @@ async function montarIA(ctx, alvo) {
     const salvar = h("button", { type: "submit", class: "bt bt-prim" }, "Salvar assistente");
     const sujo = h("span", { class: "sub", hidden: true }, "Alterações não salvas");
     const tas = {};
+    for (const [k, rot, ph] of IA_CAMPOS_EXTRA) {
+      const c = ui.campo({ rotulo: rot, nome: k, tipo: k === "assistente_nome" ? "texto" : "textarea",
+        linhas: k === "boas_vindas" ? 3 : 2, max: k === "assistente_nome" ? 40 : k === "endereco" ? 300 : 500,
+        valor: cfg[k] || "", placeholder: ph });
+      const ctl = c.querySelector(`[name="${k}"]`);
+      ctl.addEventListener("input", () => { sujo.hidden = false; atualizarPrevia(); });
+      f.appendChild(c);
+    }
     for (const [k, rot, ph] of IA_TEXTOS) {
       const c = ui.campo({ rotulo: rot, nome: k, tipo: "textarea", linhas: k === "sobre" || k === "servicos" ? 4 : 3, max: L.IA_MAX, valor: cfg[k] || "", placeholder: ph });
       tas[k] = c.querySelector("textarea");
-      tas[k].addEventListener("input", contar);
+      tas[k].addEventListener("input", () => { contar(); atualizarPrevia(); });
       f.appendChild(c);
     }
     const opTom = (valor, titulo, texto) => {
@@ -968,8 +1091,33 @@ async function montarIA(ctx, alvo) {
     };
     const cTom = h("fieldset", { class: "campo", dataset: { campo: "tom" } }, h("legend", null, "Tom das respostas"),
       h("div", { class: "cfg-opcoes" }, opTom("proximo", "Próximo", "«Oi, Maria! Tudo bem?» — leve, com você."), opTom("formal", "Formal", "«Olá, Sra. Maria.» — sóbrio, com senhor/senhora.")));
-    cTom.addEventListener("change", () => { sujo.hidden = false; });
-    f.append(cTom, h("div", { class: "cfg-ia-rod" }, h("div", { class: "cfg-ia-medidor" }, cont, barra), h("div", { class: "linha" }, sujo, salvar)));
+    cTom.addEventListener("change", () => { sujo.hidden = false; atualizarPrevia(); });
+    const previa = h("pre", { class: "cfg-codigo cfg-ia-previa", tabindex: "0", "aria-label": "Prévia das instruções do assistente" });
+    const blocoPrevia = h("section", { class: "cartao cfg-ia-preview" },
+      h("div", { class: "cfg-ia-preview-head" }, h("div", null, h("p", { class: "rotulo" }, "PRÉVIA"), h("h2", { class: "titulo-sec" }, "Como o assistente vai responder")),
+        ui.pilula("Atualiza enquanto você digita", "neutra")),
+      h("p", { class: "sub" }, "A prévia reúne suas informações e as regras principais. Salve e depois copie o prompt em Configurações → Números para atualizar o agente no CodeWords."), previa);
+    f.append(cTom, blocoPrevia,
+      h("div", { class: "cfg-ia-rod" }, h("div", { class: "cfg-ia-medidor" }, cont, barra), h("div", { class: "linha" }, sujo, salvar)));
+
+    function atualizarPrevia() {
+      const d = ui.lerForm(f);
+      const empresa = String(ctx.cliente?.nome || ctx.cliente?.razao_social || "sua empresa").trim();
+      const nome = d.assistente_nome || "Assistente";
+      const partes = [
+        `Você é ${nome}, assistente de atendimento de ${empresa}.`,
+        `Tom de voz: ${d.tom === "formal" ? "formal, respeitoso e objetivo" : "próximo, acolhedor e claro"}.`,
+        d.boas_vindas ? `Boas-vindas: ${d.boas_vindas}` : "Cumprimente a pessoa com naturalidade e pergunte como pode ajudar.",
+        d.sobre ? `Sobre a empresa:\n${d.sobre}` : "",
+        d.servicos ? `Serviços e informações:\n${d.servicos}` : "",
+        d.horarios ? `Horários:\n${d.horarios}` : "",
+        d.endereco ? `Endereço:\n${d.endereco}` : "",
+        d.regras ? `Regras de atendimento:\n${d.regras}` : "",
+        d.proibido ? `Nunca faça ou diga:\n${d.proibido}` : "",
+        "Regras de segurança: não invente preços, horários ou políticas. Quando faltar uma informação, diga que vai confirmar com a equipe. Não faça diagnóstico nem prometa resultados. Se a pessoa pedir ajuda humana, encaminhe para a equipe.",
+      ].filter(Boolean);
+      previa.textContent = partes.join("\n\n");
+    }
 
     function contar() {
       const obj = {}; for (const k in tas) obj[k] = tas[k].value;
@@ -991,7 +1139,8 @@ async function montarIA(ctx, alvo) {
       ev.preventDefault();
       if (contar() > L.IA_MAX) { ui.toast("Passou de 15.000 caracteres. Resuma algum texto.", { tipo: "erro" }); return; }
       const d = ui.lerForm(f);
-      const payload = { tom: d.tom === "formal" ? "formal" : "proximo" };
+      const payload = { tom: d.tom === "formal" ? "formal" : "proximo",
+        assistente_nome: d.assistente_nome || "", endereco: d.endereco || "", boas_vindas: d.boas_vindas || "" };
       for (const [k] of IA_TEXTOS) payload[k] = d[k] || "";
       try {
         await ui.carregando(salvar, ctx.api.rpcC("nx_ia_config_salvar", { p_ia: payload }));
@@ -1002,6 +1151,7 @@ async function montarIA(ctx, alvo) {
         else ui.toast(ui.mensagemErro(e), { tipo: "erro" });
       }
     });
+    atualizarPrevia();
     caixa.appendChild(f);
   }
 

@@ -50,6 +50,7 @@ export async function montar(ctx) {
     aba: lerPreferencia("aba", "minhas"), filtro: {}, busca: "",
     itens: [], contagens: {}, temMais: false, carregandoLista: false,
     selId: null, ver: null, msgs: [], conversasContato: [], agora: null, ultimoId: null, temMaisAntes: false,
+    iaEstado: null, iaEstadoEm: 0, iaEstadoPendente: false,
     carregandoAntes: false, rascunhos: new Map(), midia: new Map(), pedidosMidia: new Set(), blobs: new Set(),
     painel: "lista", timers: [], limpar: [], seqConversa: 0, seqLista: 0, destruido: false, acoes,
     buscaMsgs: null, seqMsgs: 0,
@@ -386,6 +387,7 @@ async function selecionar(id) {
   if (!trocou && A.ver) { A.chat.focarMensagens(); return; }
   const seq = ++A.seqConversa;
   A.ver = null; A.msgs = []; A.conversasContato = []; A.ultimoId = null; A.agora = null; A.temMaisAntes = false;
+  A.iaEstado = null; A.iaEstadoEm = 0; A.iaEstadoPendente = false;
   A.chat.mostrarCarregando();
   A.lateral.render();
   try {
@@ -406,6 +408,7 @@ async function selecionar(id) {
     A.composer.definirConversa();
     A.lateral.render();
     marcarLida();
+    if (ver.conversa?.canal?.provedor === "codewords") carregarEstadoIA(id, seq);
   } catch (e) {
     if (!A || seq !== A.seqConversa) return;
     A.chat.mostrarErro(e, () => selecionar(id));
@@ -454,10 +457,34 @@ async function recarregarVer() {
     A.chat.renderCabecalho();
     A.composer.atualizar();
     A.lateral.render();
+    if (ver.conversa?.canal?.provedor === "codewords" && Date.now() - A.iaEstadoEm > 15000 && !A.iaEstadoPendente) {
+      carregarEstadoIA(id, A.seqConversa);
+    } else if (ver.conversa?.canal?.provedor !== "codewords" && A.iaEstado) {
+      A.iaEstado = null; A.iaEstadoEm = 0; A.chat.renderCabecalho();
+    }
   } catch (e) {
     if (e && e.codigo === "conversa_nao_encontrada" && A && A.selId === id) {
       A.ui.toast("Esta conversa saiu do seu alcance (transferida ou removida).", { tipo: "info" });
       A.ctx.navegar("#/conversas");
+    }
+  }
+}
+
+async function carregarEstadoIA(id = A?.selId, seq = A?.seqConversa) {
+  if (!A || !id || A.selId !== id || A.iaEstadoPendente || A.ver?.conversa?.canal?.provedor !== "codewords") return;
+  A.iaEstadoPendente = true;
+  try {
+    const r = await A.api.rpcC("nx_cv_ia_estado", { p_conversa: id });
+    if (!A || A.selId !== id || A.seqConversa !== seq) return;
+    A.iaEstado = r || { disponivel: false };
+  } catch (e) {
+    if (!A || A.selId !== id || A.seqConversa !== seq) return;
+    A.iaEstado = { disponivel: false, erro: A.ui.mensagemErro(e) };
+  } finally {
+    if (A && A.selId === id && A.seqConversa === seq) {
+      A.iaEstadoEm = Date.now();
+      A.iaEstadoPendente = false;
+      A.chat.renderCabecalho();
     }
   }
 }
@@ -625,6 +652,29 @@ const acoes = {
     const r = await executar(A.api.rpcC("nx_cv_atribuir", { p_conversa: A.selId, p_conta: A.eu.id }), { botao, ok: "Conversa com você." });
     if (r) { trocarConversa(r); delta(); recarregarVer(); }
   },
+  async assumirIA(botao) {
+    if (!A?.selId || A.ver?.conversa?.canal?.provedor !== "codewords") return;
+    const r = await executar(A.api.rpcC("nx_cv_ia_pausar", { p_conversa: A.selId, p_horas: null }), { botao });
+    if (r && A) {
+      A.iaEstado = r; A.iaEstadoEm = Date.now(); A.chat.renderCabecalho();
+      let atribuida = true;
+      if (A.eu?.id && A.ver?.conversa?.atribuida_a !== A.eu.id) {
+        const dono = await executar(A.api.rpcC("nx_cv_atribuir", { p_conversa: A.selId, p_conta: A.eu.id }));
+        if (dono) trocarConversa(dono); else atribuida = false;
+      }
+      delta(); carregarLista({});
+      A.ui.toast(atribuida ? "Você assumiu a conversa. A IA volta conforme o prazo configurado." : "A IA foi pausada; não foi possível atribuir a conversa a você.", { tipo: atribuida ? "ok" : "info" });
+    }
+  },
+  async devolverIA(botao) {
+    if (!A?.selId || A.ver?.conversa?.canal?.provedor !== "codewords") return;
+    const r = await executar(A.api.rpcC("nx_cv_ia_devolver", { p_conversa: A.selId }), { botao });
+    if (r && A) {
+      A.iaEstado = r; A.iaEstadoEm = Date.now(); A.chat.renderCabecalho();
+      A.ui.toast("Atendimento devolvido para a IA.", { tipo: "ok" });
+    }
+  },
+  atualizarIA: () => carregarEstadoIA(),
   async transferir() {
     const ui = A.ui;
     const conv = A.ver.conversa;
@@ -753,7 +803,7 @@ async function enviarPedido(tmp, o) {
       r = await A.api.fn("nx-enviar", { acao: "template", conversa: convId, template_id: o.template.id, parametros: o.parametros || [] });
     }
     if (!A || A.selId !== convId) return;
-    const msg = r && r.mensagem;
+    const msg = r && r.mensagem ? { ...r.mensagem, ...(r.ambigua === true ? { ambigua: true } : {}) } : null;
     A.msgs = A.msgs.filter(m => m.id !== tmp.id);
     if (msg && msg.id) {
       if (tmp.midia && tmp.midia.local_url && msg.midia && msg.midia.path) A.midia.set(msg.midia.path, { url: null, local: tmp.midia.local_url, em: Date.now() });
@@ -766,21 +816,28 @@ async function enviarPedido(tmp, o) {
   } catch (e) {
     if (!A || A.selId !== convId) return;
     const codigo = e && e.codigo;
+    const canalCodeWords = A.ver?.conversa?.canal?.provedor === "codewords";
+    const ambiguaCodeWords = canalCodeWords && (e?.resposta?.ambigua === true || codigo === "sem_conexao" || codigo === "tempo_esgotado" || /^http_5/.test(String(codigo || "")));
     // a Graph recusou e o servidor gravou a mensagem como "falhou" (com o motivo): o api.js anexa o corpo
     // inteiro em e.resposta ({ok:false, erro, detalhe, mensagem}) — mostra a do servidor sem outra chamada
     const salva = (e && e.resposta && e.resposta.mensagem) || (e && e.detalhe && typeof e.detalhe === "object" && e.detalhe.mensagem) || null;
     if (codigo === "envio_falhou" && salva && salva.id) {
-      A.msgs = L.mesclarDelta(A.msgs.filter(m => m.id !== tmp.id), [salva]);
+      A.msgs = L.mesclarDelta(A.msgs.filter(m => m.id !== tmp.id), [ambiguaCodeWords ? { ...salva, ambigua: true } : salva]);
       A.ultimoId = L.ultimoId(A.msgs, A.ultimoId);
-    } else if (codigo === "envio_falhou") {
+    } else if (codigo === "envio_falhou" || ambiguaCodeWords) {
       // o servidor pode ter gravado a saída como "falhou": o delta traz; se não trouxer, fica a bolha local com "!"
       const antesId = L.ultimoId(A.msgs) || 0;
       A.msgs = A.msgs.filter(m => m.id !== tmp.id);
       await delta();
       if (!A || A.selId !== convId) return;
-      if (!A.msgs.some(m => Number(m.id) > antesId && m.direcao === "out" && m.status === "falhou")) {
-        A.msgs = L.mesclarDelta(A.msgs, [{ ...tmp, status: "falhou", erro: e?.resposta?.detalhe || A.ui.mensagemErro(e),
-          ambigua: e?.resposta?.ambigua === true, falhaLocal: true }]);
+      const encontrada = A.msgs.find(m => Number(m.id) > antesId && m.direcao === "out" &&
+        (m.status === "falhou" || (ambiguaCodeWords && m.status === "pendente")));
+      if (encontrada && ambiguaCodeWords) {
+        A.msgs = A.msgs.map(m => m.id === encontrada.id ? { ...m, ambigua: true } : m);
+      } else if (!encontrada) {
+        A.msgs = L.mesclarDelta(A.msgs, [{ ...tmp, status: ambiguaCodeWords ? "pendente" : "falhou",
+          erro: ambiguaCodeWords ? "Pode ter saído — confira no celular antes de reenviar." : e?.resposta?.detalhe || A.ui.mensagemErro(e),
+          ambigua: ambiguaCodeWords || e?.resposta?.ambigua === true, falhaLocal: !ambiguaCodeWords }]);
       }
     } else {
       const dica = L.dicaErroEnvio(codigo) || A.ui.mensagemErro(e);

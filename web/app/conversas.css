@@ -521,3 +521,52 @@
 .cvt-resumo p.cvt-vazio { color: var(--c-texto-3); }
 .cvt-resumo small { display: block; margin-top: .45rem; font-family: var(--f-mono); font-size: var(--fs-11); color: var(--c-texto-3); letter-spacing: .02em; }
 .cvl-avisos[data-ligado="0"] .ic { opacity: .55; }
+
+/* CodeWords: pareamento, estado do aparelho e handoff com a equipe */
+.cfg-cw-card { grid-template-columns: minmax(0, 1fr) auto; }
+.cfg-cw-main, .cfg-cw-config, .cfg-cw-ops { min-width: 0; }
+.cfg-cw-titulo { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
+.cfg-cw-titulo .titulo-sec { margin: 0; }
+.cfg-cw-status-text { margin-top: .65rem; max-width: 62ch; }
+.cfg-cw-card-actions { align-items: center; }
+.cfg-cw-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cfg-cw-key-state { display: flex; align-items: center; min-height: 1.8rem; }
+.cfg-cw-key-row { justify-content: flex-start; }
+.cfg-cw-ia { display: grid; gap: .65rem; min-width: 0; padding: .9rem; background: var(--c-sup-2); }
+.cfg-cw-ia-head { display: flex; align-items: flex-start; gap: .65rem; }
+.cfg-cw-ia-head > .ic { flex: none; width: 20px; height: 20px; color: var(--c-prim-luz); }
+.cfg-cw-ia-head h3 { margin: 0; }
+.cfg-cw-ia-head p { margin-top: .2rem; }
+.cfg-cw-ops { padding-top: .9rem; border-top: 1px solid var(--c-borda); }
+.cfg-cw-ops-head h3 { margin: 0; }
+.cfg-cw-ops-head p { margin-top: .2rem; }
+.cfg-cw-ops-actions { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
+.cfg-cw-resultado { color: var(--c-texto-2); font-size: var(--fs-13); }
+.cfg-cw-code { width: fit-content; max-width: 100%; margin: .25rem 0; padding: .55rem 1rem; border: 1px solid var(--c-borda-2); border-radius: 14px; background: var(--c-fundo); color: var(--c-prim-luz); font: 700 clamp(1.8rem, 7vw, 2.8rem)/1 var(--f-mono); letter-spacing: .2em; overflow-wrap: anywhere; }
+.cfg-cw-pair { min-width: 0; padding: 1rem; border: 1px solid var(--c-borda); border-radius: 16px; background: var(--c-sup-2); }
+.cfg-cw-pair .sub { max-width: 65ch; }
+.cfg-cw-receita { display: grid; gap: .65rem; min-width: 0; }
+.cfg-cw-prompt { max-height: min(44vh, 32rem); }
+.cfg-ia-preview { max-width: 52rem; min-width: 0; }
+.cfg-ia-preview-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+.cfg-ia-preview-head h2 { margin: 0; }
+.cfg-ia-previa { max-height: min(42vh, 30rem); }
+.cvc-ia-acao { white-space: nowrap; }
+.cv-falha-ambigua { color: var(--c-texto); padding: .55rem .7rem; border: 1px solid color-mix(in srgb, var(--c-aten) 45%, transparent); border-radius: 12px; background: var(--c-aten-suave); }
+
+@media (max-width: 760px) {
+  .cfg-cw-card { grid-template-columns: minmax(0, 1fr); }
+  .cfg-cw-card-actions { justify-content: flex-start; }
+  .cfg-cw-grid { grid-template-columns: minmax(0, 1fr); }
+  .cfg-cw-ops-actions > .bt { flex: 1 1 12rem; white-space: normal; }
+  .cfg-ia-rod { position: static; }
+  .cfg-ia-rod > .linha { justify-content: flex-end; }
+  .cvc-acoes .cvc-ia-acao { display: inline-flex; max-width: 10.5rem; white-space: normal; line-height: 1.1; }
+}
+
+@media (max-width: 390px) {
+  .cfg-cw-card-actions > .bt { min-height: 38px; padding-inline: .7rem; }
+  .cfg-cw-pair { padding: .75rem; }
+  .cfg-ia-preview-head { align-items: flex-start; }
+  .cvc-acoes .cvc-ia-acao { max-width: 8.4rem; min-height: 36px; padding: .3rem .55rem; font-size: var(--fs-12); }
+}
