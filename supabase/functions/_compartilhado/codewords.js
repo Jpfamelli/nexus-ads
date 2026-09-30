@@ -496,6 +496,16 @@ export function itemDoAparelho(m, agora = Date.now()) {
 }
 
 /* ============================================================
+   Rastreio do site → WhatsApp: o site (web/rastreio.js) põe "[ref K7Q2P]" no texto da mensagem
+   ============================================================ */
+const RE_RASTREIO = /(?:^|[^A-Za-z0-9])ref[\s:#.-]{0,3}([A-HJKMNP-Z2-9]{5})(?![A-Za-z0-9])/i;
+/** Código de rastreio do texto da mensagem ("[ref K7Q2P]") → "K7Q2P" (maiúsculo) ou null. */
+export function extrairCodigoRastreio(texto) {
+  const m = RE_RASTREIO.exec(String(texto ?? "").slice(0, 4096));
+  return m ? m[1].toUpperCase() : null;
+}
+
+/* ============================================================
    Contexto da IA (dados do banco → formato da API do agente)
    ============================================================ */
 const txt = v => String(v ?? "").trim();
@@ -523,7 +533,13 @@ export function montarContexto(d = {}) {
     etapa: txt(n.etapa) || null,
     consulta: n.consulta_em ? { inicio: dataIso(n.consulta_em, Infinity), rotulo: rotuloHorario(n.consulta_em) } : null,
     servico: txt(n.servico) || null,
-    origem: { plataforma: n.plataforma || null, campanha: txt(n.campanha_nome || n.campanha_ext) || null, anuncio: txt(n.anuncio_nome || n.anuncio_ext) || null },
+    origem: {
+      tipo: txt(n.origem) || null, plataforma: n.plataforma || null,
+      campanha: txt(n.campanha_nome || n.campanha_ext) || null, anuncio: txt(n.anuncio_nome || n.anuncio_ext) || null,
+      // rastreio do site (utm/página): sem gclid, fbclid nem qualquer identificador de clique
+      rastreio: OBJ(n.rastreio) ? Object.fromEntries(["utm_source", "utm_medium", "utm_campaign", "pagina"]
+        .map(k => [k, txt(n.rastreio[k]).slice(0, 200)]).filter(([, v]) => v)) : null,
+    },
   } : null;
   const historico = (Array.isArray(d.historico) ? d.historico : []).slice(-20).map(h => ({
     de: h.dir === "in" ? "cliente" : h.origem === "ia" ? "ia" : "equipe", texto: textoHistorico(h).slice(0, 1500), em: dataIso(h.em, Infinity),
@@ -617,14 +633,20 @@ async function acaoMensagem(db, canal, corpo, deps) {
   if (r?.bloqueado) return { ok: true, conversa_id: conversa, registrada: !!r?.mensagem_id, responder: false, motivo: "bloqueado" };
   try { await registrarLead(db, canal.cliente_id, p.telefone, p.nome, p.referral); }
   catch (e) { console.error("nx-codewords lead:", erroSeguro(e?.message || e)); }   // a conversa já está gravada
+  // código do site na mensagem → origem/campanha/gclid do negócio (não derruba o atendimento se falhar)
+  const codigo = extrairCodigoRastreio(p.texto);
+  if (codigo) {
+    try { await db.rpc("nx_rastreio_atribuir", { p_canal: canal.canal_id, p_telefone: p.telefone, p_codigo: codigo }); }
+    catch (e) { console.error("nx-codewords rastreio:", erroSeguro(e?.message || e)); }
+  }
   if (r?.optout) return { ok: true, conversa_id: conversa, registrada: true, responder: false, motivo: "optout" };
   const d = await db.rpc("nx_codewords_decidir", { p_canal: canal.canal_id, p_conversa: conversa, p_fila: r?.fila_id ?? null });
   if (!d?.responder) return { ok: true, conversa_id: conversa, registrada: true, responder: false, motivo: MOTIVOS.has(d?.motivo) ? d.motivo : "pausada" };
   return { ok: true, conversa_id: conversa, registrada: true, responder: true, contexto: montarContexto(d.dados) };
 }
 
-/* Agenda: da próxima etapa (nx_agenda_livres_ia / nx_agenda_marcar_ia / nx_agenda_desmarcar_ia).
-   Enquanto as funções não existem, o PostgREST devolve 404 → {ok:false, erro:"agenda_indisponivel"}. */
+/* Agenda (20260929b_agenda_rastreio.sql): nx_agenda_livres_ia / nx_agenda_marcar_ia / nx_agenda_desmarcar_ia.
+   Banco sem a migração: o PostgREST devolve 404 → {ok:false, erro:"agenda_indisponivel"}. */
 const funcaoAusente = e => e?.status === 404 && /Could not find the function|PGRST202|schema cache/i.test(String(e?.message ?? ""));
 async function agenda(db, nome, params) {
   try { return await db.rpc(nome, params); }
@@ -647,6 +669,8 @@ const comRotulos = r => {
   if (Array.isArray(r.horarios)) out.horarios = r.horarios.slice(0, 12).map(h => ({ inicio: h.inicio, rotulo: h.rotulo || rotuloHorario(h.inicio) }));
   if (Array.isArray(r.sugestoes)) out.sugestoes = r.sugestoes.slice(0, 12).map(h => ({ inicio: h.inicio, rotulo: h.rotulo || rotuloHorario(h.inicio) }));
   if (OBJ(r.consulta)) out.consulta = { ...r.consulta, rotulo: r.consulta.rotulo || rotuloHorario(r.consulta.inicio) };
+  if (OBJ(r.cancelada)) out.cancelada = { ...r.cancelada, rotulo: r.cancelada.rotulo || rotuloHorario(r.cancelada.inicio) };
+  if (OBJ(r.anterior)) out.anterior = { ...r.anterior, rotulo: r.anterior.rotulo || rotuloHorario(r.anterior.inicio) };
   if (Array.isArray(out.horarios)) out.fuso = FUSO;
   return out;
 };

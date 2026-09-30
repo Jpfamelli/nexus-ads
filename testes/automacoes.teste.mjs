@@ -233,7 +233,39 @@ test("modelosDaVertical: lembrete em destaque para odonto/oficina, pós-venda pa
   assert.equal(L.modelosDaVertical("odonto")[0].id, "lembrete_consulta");
   assert.equal(L.modelosDaVertical("oficina")[0].id, "lembrete_consulta");
   assert.equal(L.modelosDaVertical("loja")[0].id, "pos_venda");
-  assert.equal(L.modelosDaVertical("generico").length, 5);
+  assert.equal(L.modelosDaVertical("generico").length, 7);
+});
+
+test("modelos de texto do CodeWords: lembrete 24 h e confirmação ao agendar — desligados, texto livre, sem modelo da Meta nem janela", () => {
+  const v = L.modelosDaVertical("odonto").map(m => m.id);
+  assert.deepEqual(v.slice(0, 3), ["lembrete_consulta", "lembrete_consulta_texto", "confirmacao_agendamento"]);
+  const lem = L.aplicarModelo("lembrete_consulta_texto", BASE);
+  assert.equal(lem.ativo, false, "nasce desligado");
+  assert.equal(lem.gatilho, "antes_da_data");
+  assert.deepEqual(lem.config, { campo: "consulta", horas: 24 });
+  assert.equal(lem.acoes.length, 1);
+  assert.equal(lem.acoes[0].tipo, "enviar_mensagem", "texto livre (sem enviar_template)");
+  assert.equal(lem.acoes[0].template_id, undefined);
+  assert.match(lem.acoes[0].texto, /{primeiro_nome}.*{data_consulta}.*{hora_consulta}/);
+  assert.equal(L.faltaModelo(lem), false, "não exige modelo aprovado");
+  assert.equal(L.validar(Object.assign({}, lem, { ativo: true }), { base: BASE }).ok, true, "pronto para ligar sem modelo da Meta");
+  const conf = L.aplicarModelo("confirmacao_agendamento", BASE);
+  assert.equal(conf.ativo, false);
+  assert.equal(conf.nome, "Confirmação ao agendar");
+  assert.equal(conf.gatilho, "negocio_estagio");
+  const padrao = BASE.funis.find(f => f.padrao) || BASE.funis[0];
+  const agendada = padrao.estagios.find(e => e.marco === "agendada");
+  assert.equal(conf.config.estagio_id, agendada && agendada.id, "a etapa Agendada do funil padrão");
+  assert.equal(conf.acoes[0].tipo, "enviar_mensagem");
+  assert.ok(agendada, "o funil padrão de teste tem a etapa Agendada");
+  assert.equal(L.validar(Object.assign({}, conf, { ativo: true }), { base: BASE }).ok, true, "pronta para ligar");
+  // vocabulário da vertical: oficina fala em visita
+  const of = L.aplicarModelo("lembrete_consulta_texto", BASE, VOCAB_OFICINA);
+  assert.match(of.acoes[0].texto, /sua visita amanhã/);
+  assert.equal(of.nome, "Lembrete 24 h antes da visita (texto)");
+  assert.doesNotMatch(L.aplicarModelo("confirmacao_agendamento", BASE, VOCAB_OFICINA).acoes[0].texto, /consulta/);
+  // o catálogo original não é alterado
+  assert.match(L.MODELOS.find(m => m.id === "lembrete_consulta_texto").auto.acoes[0].texto, /consulta/);
 });
 
 test("limpar: só chaves conhecidas, números como número, sem opcionais vazios", () => {

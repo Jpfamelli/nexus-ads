@@ -43,8 +43,11 @@ node --test testes/funcoes.teste.mjs
 node --test testes/scripts.teste.mjs
 node --test testes/conversas-funcoes.teste.mjs
 node --test testes/automacoes.teste.mjs
+node --test testes/codewords.teste.mjs
+node --test testes/rastreio.teste.mjs
+node --test testes/isolamento.teste.mjs
 ```
-Testes SQL (`supabase/testes/0*.sql`) rodam no banco real **dentro de transação que termina em ROLLBACK**.
+Testes SQL (`supabase/testes/0*.sql`, `10_codewords.sql`, `11_agenda_rastreio.sql`) rodam no banco real **dentro de transação que termina em ROLLBACK**.
 
 ## Regras de mudança
 - Git: trabalhe na branch `codex/orbita` (ou `claude/...`), commits pequenos com mensagem clara. Merge na `main` só com tudo verde.

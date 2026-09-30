@@ -14,9 +14,10 @@ import { fileURLToPath } from "node:url";
 import {
   tratar, lerPayload, idEstavel, formaDoPayload, enviarTextoCodeWords, traduzirErroCW, avaliarAparelho,
   classificarDestino, itemDoAparelho, montarContexto, rotuloHorario, textoHorario, dataIso, variantesTelefone,
-  CW_BASE, tipoDaMidia, rotuloMidia,
+  CW_BASE, tipoDaMidia, rotuloMidia, extrairCodigoRastreio,
 } from "../supabase/functions/_compartilhado/codewords.js";
-import { montarInstrucoes, montarReceita, ACOES_AGENTE } from "../supabase/functions/_compartilhado/codewords_prompt.js";
+import { montarInstrucoes, montarReceita, ACOES_AGENTE, EXEMPLOS_AGENTE } from "../supabase/functions/_compartilhado/codewords_prompt.js";
+import { documento as documentoPrompt } from "../scripts/gerar-prompt-codewords.mjs";
 
 const RAIZ = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SUPA = "https://fake.supabase.co";
@@ -53,6 +54,11 @@ const ASSINATURAS = {
   nx_codewords_sync_alvos: ["p_limite"],
   nx_codewords_sync_gravar: ["p_canal", "p_conversa", "p_itens"],
   nx_canal_credencial: ["p_canal", "p_cliente"],
+  // 20260929b_agenda_rastreio.sql
+  nx_agenda_livres_ia: ["p_canal", "p_telefone", "p_servico", "p_a_partir", "p_dias"],
+  nx_agenda_marcar_ia: ["p_canal", "p_telefone", "p_inicio", "p_servico", "p_nome", "p_observacao", "p_remarcar"],
+  nx_agenda_desmarcar_ia: ["p_canal", "p_telefone", "p_motivo"],
+  nx_rastreio_atribuir: ["p_canal", "p_telefone", "p_codigo"],
   nx_fn_ctx: ["p_token", "p_cliente", "p_min"],
   nx_exigir_modulo: ["p_cliente", "p_modulo"],
 };
@@ -103,6 +109,7 @@ function cenario({ rpc = {}, cw = {}, credB = false } = {}) {
     nx_codewords_nota: () => ({ ok: true, nota_id: 1, negocio_id: 901 }),
     nx_codewords_etapa: ({ p_etapa }) => (["orcamento", "perdida"].includes(p_etapa) ? { ok: true, negocio_id: 901, etapa: "Orçamento", mudou: true } : { ok: false, erro: "etapa_invalida" }),
     nx_codewords_origem: () => ({ ok: true, aplicado: true, origem: "organico", negocio_id: 901 }),
+    nx_rastreio_atribuir: () => ({ ok: true, aplicado: false, motivo: "codigo_desconhecido" }),
     nx_codewords_situacao: ({ p_dados }) => ({ id: K_A, status: p_dados.conectado && p_dados.numero_conferido ? "ativo" : "pendente", codewords: p_dados }),
     nx_codewords_sync_alvos: () => [{ canal_id: K_A, cliente_id: CLI_A, conversa_id: 601, telefone: TEL }],
     nx_codewords_sync_gravar: ({ p_itens }) => ({ ja_tinha: 0, adotadas: 0, entradas: p_itens.filter(i => !i.de_mim).length,
@@ -304,7 +311,8 @@ test("agente mensagem (entrada): grava por nx_wa_entrada no canal DO SEGREDO, cr
   assert.equal(c.empresa.horarios, "seg a sex 08:00–18:00; sáb 08:00–12:00; dom fechado", "sem texto de horários → horário do departamento");
   assert.deepEqual(c.contato, { nome: "Paula Teste", telefone: TEL, primeira_vez: true });
   assert.deepEqual(c.negocio, { etapa: "Nova conversa", consulta: { inicio: "2026-10-01T12:00:00Z", rotulo: "qui 01/10 às 09:00" }, servico: "Implante",
-    origem: { plataforma: "meta", campanha: "Campanha Implante", anuncio: "AD1" } });
+    origem: { tipo: null, plataforma: "meta", campanha: "Campanha Implante", anuncio: "AD1", rastreio: null } });
+  assert.match(c.instrucoes, /Veio de anúncio \(meta · campanha Campanha Implante · anúncio AD1\)/);
   assert.deepEqual(c.historico.map(h => [h.de, h.texto]), [["cliente", "Oi, quero marcar"], ["ia", "Olá! Sou a Sofia."], ["equipe", "Aqui é a Ana"], ["cliente", "🖼 Foto: raio-x.jpg"]]);
   assert.match(c.instrucoes, /Você é Sofia, do atendimento de Clínica Alfa/);
   assert.match(c.instrucoes, /Nunca invente preço, diagnóstico/);
@@ -664,7 +672,8 @@ test("contrato: as internas chamadas existem na migração com os MESMOS parâme
   const sql = readFileSync(join(RAIZ, "supabase/migrations/20260929a_codewords.sql"), "utf8");
   const f = readFileSync(join(RAIZ, "supabase/migrations/20260928f_funcoes.sql"), "utf8");
   const todas = sql + f + readFileSync(join(RAIZ, "supabase/migrations/20260927_melhorias.sql"), "utf8")
-    + readFileSync(join(RAIZ, "supabase/migrations/20260928a_saas_base.sql"), "utf8");
+    + readFileSync(join(RAIZ, "supabase/migrations/20260928a_saas_base.sql"), "utf8")
+    + readFileSync(join(RAIZ, "supabase/migrations/20260929b_agenda_rastreio.sql"), "utf8");
   for (const [nome, args] of Object.entries(ASSINATURAS)) {
     const m = [...todas.matchAll(new RegExp(`create or replace function public\\.${nome}\\(([\\s\\S]*?)\\)\\s*returns`, "g"))].at(-1);
     assert.ok(m, `${nome} existe`);
@@ -691,4 +700,217 @@ test("prompt: instruções e receita trazem as regras de segurança e o contrato
   assert.match(rec, /Nunca repita o envio sozinho/);
   assert.ok(!/apikey:/.test(rec), "sem chave pública quando não veio");
   assert.match(montarReceita({ url: URL_A, apikey: "sb_publishable_x" }), /apikey: sb_publishable_x/);
+});
+
+/* ============================================================
+   Etapa b2 — agenda da IA, rastreio de campanha e prompt do CodeWords
+   (as regras de banco estão em supabase/testes/11_agenda_rastreio.sql)
+   ============================================================ */
+const ISO = s => new Date(s).toISOString();
+const RPCS_AGENDA = {
+  nx_agenda_livres_ia: ({ p_a_partir }) => ({ ok: true, fuso: "America/Sao_Paulo", duracao_min: 30,
+    horarios: [{ inicio: "2026-10-01T11:00:00Z", rotulo: "qui 01/10 às 08:00" }, { inicio: "2026-10-01T12:00:00Z" }], a_partir: p_a_partir }),
+  nx_agenda_marcar_ia: ({ p_remarcar, p_inicio }) => ({ ok: true, negocio_id: 901, mudou: true, remarcada: p_remarcar,
+    consulta: { inicio: ISO(p_inicio).replace(/\.\d{3}Z$/, "Z"), servico: "Avaliação", duracao_min: 30 },
+    anterior: p_remarcar ? { inicio: "2026-10-01T12:00:00Z" } : undefined }),
+  nx_agenda_desmarcar_ia: () => ({ ok: true, negocio_id: 901, cancelada: { inicio: "2026-10-01T12:00:00Z", servico: "Avaliação" }, voltou_para_nova: true }),
+};
+
+test("agente agenda (contrato): horarios, agendar, remarcar e cancelar chamam as RPCs da agenda com os parâmetros certos e rotulam em São Paulo", async () => {
+  const s = cenario({ rpc: RPCS_AGENDA });
+  const h = await ler(await agente(s, { acao: "horarios", telefone: `+${TEL}`, servico: "Limpeza", a_partir: "2026-10-01", dias: 3, canal: K_B, cliente: CLI_B }));
+  assert.equal(h.status, 200);
+  assert.deepEqual(s.rpcsDe("nx_agenda_livres_ia")[0].corpo, { p_canal: K_A, p_telefone: TEL, p_servico: "Limpeza", p_a_partir: "2026-10-01", p_dias: 3 },
+    "canal do segredo (canal/cliente do corpo são ignorados)");
+  assert.equal(h.corpo.fuso, "America/Sao_Paulo");
+  assert.deepEqual(h.corpo.horarios, [{ inicio: "2026-10-01T11:00:00Z", rotulo: "qui 01/10 às 08:00" }, { inicio: "2026-10-01T12:00:00Z", rotulo: "qui 01/10 às 09:00" }]);
+  const sem = await ler(await agente(s, { acao: "horarios" }));   // sem telefone e sem filtros: só o canal
+  assert.deepEqual(s.rpcsDe("nx_agenda_livres_ia")[1].corpo, { p_canal: K_A, p_telefone: null, p_servico: null, p_a_partir: null, p_dias: 7 });
+  assert.equal(sem.corpo.ok, true);
+
+  const a = await ler(await agente(s, { acao: "agendar", telefone: TEL, inicio: "2026-10-01T09:00:00-03:00", servico: "Avaliação", nome: "Paula", observacao: "primeira consulta" }));
+  assert.deepEqual(s.rpcsDe("nx_agenda_marcar_ia")[0].corpo, { p_canal: K_A, p_telefone: TEL, p_inicio: "2026-10-01T12:00:00.000Z", p_servico: "Avaliação",
+    p_nome: "Paula", p_observacao: "primeira consulta", p_remarcar: false });
+  assert.deepEqual(a.corpo.consulta, { inicio: "2026-10-01T12:00:00Z", servico: "Avaliação", duracao_min: 30, rotulo: "qui 01/10 às 09:00" });
+  assert.equal(a.corpo.negocio_id, 901);
+
+  const r = await ler(await agente(s, { acao: "remarcar", telefone: TEL, inicio: "2026-10-02T16:00:00Z" }));
+  assert.equal(s.rpcsDe("nx_agenda_marcar_ia")[1].corpo.p_remarcar, true);
+  assert.equal(r.corpo.consulta.rotulo, "sex 02/10 às 13:00"); assert.equal(r.corpo.anterior.rotulo, "qui 01/10 às 09:00");
+
+  const c = await ler(await agente(s, { acao: "cancelar", telefone: TEL, motivo: "desistiu" }));
+  assert.deepEqual(s.rpcsDe("nx_agenda_desmarcar_ia")[0].corpo, { p_canal: K_A, p_telefone: TEL, p_motivo: "desistiu" });
+  assert.equal(c.corpo.cancelada.rotulo, "qui 01/10 às 09:00"); assert.equal(c.corpo.ok, true);
+});
+
+test("agente agenda: erros do banco viram o contrato (horario_ocupado com sugestões, dados_invalidos 400, canal 404) e a entrada é validada antes", async () => {
+  const s = cenario({ rpc: {
+    nx_agenda_marcar_ia: ({ p_inicio }) => (p_inicio.startsWith("2026-10-03")
+      ? { ok: false, erro: "fora_do_horario", sugestoes: [{ inicio: "2026-10-05T11:00:00Z" }] }
+      : { ok: false, erro: "horario_ocupado", sugestoes: [{ inicio: "2026-10-01T13:00:00Z" }, { inicio: "2026-10-01T14:00:00Z", rotulo: "qui 01/10 às 11:00" }] }),
+    nx_agenda_desmarcar_ia: () => ({ ok: false, erro: "consulta_nao_encontrada" }),
+    nx_agenda_livres_ia: () => { throw Object.assign(new Error("dados_invalidos"), { pg: true, status: 400 }); },
+  } });
+  const o = await ler(await agente(s, { acao: "agendar", telefone: TEL, inicio: "2026-10-01T12:00:00Z" }));
+  assert.equal(o.status, 200, "erro de negócio é ok:false com HTTP 200");
+  assert.deepEqual(o.corpo, { ok: false, erro: "horario_ocupado",
+    sugestoes: [{ inicio: "2026-10-01T13:00:00Z", rotulo: "qui 01/10 às 10:00" }, { inicio: "2026-10-01T14:00:00Z", rotulo: "qui 01/10 às 11:00" }] });
+  const f = await ler(await agente(s, { acao: "agendar", telefone: TEL, inicio: "2026-10-03T12:00:00Z" }));
+  assert.equal(f.corpo.erro, "fora_do_horario"); assert.equal(f.corpo.sugestoes[0].rotulo, "seg 05/10 às 08:00");
+  assert.deepEqual((await ler(await agente(s, { acao: "cancelar", telefone: TEL }))).corpo, { ok: false, erro: "consulta_nao_encontrada" });
+  const d = await ler(await agente(s, { acao: "horarios", telefone: TEL }));
+  assert.equal(d.status, 400); assert.equal(d.corpo.erro, "dados_invalidos");
+  const antes = s.chamadas.length;
+  for (const corpo of [{ acao: "agendar", telefone: TEL }, { acao: "agendar", telefone: TEL, inicio: "2026-10-01 09:00" },
+    { acao: "agendar", telefone: TEL, inicio: "2026-13-45T09:00:00Z" }, { acao: "agendar", telefone: "12", inicio: "2026-10-01T12:00:00Z" },
+    { acao: "remarcar", inicio: "2026-10-01T12:00:00Z" }, { acao: "cancelar", telefone: "abc" }]) {
+    const x = await ler(await agente(s, corpo));
+    assert.equal(x.status, 400, JSON.stringify(corpo)); assert.equal(x.corpo.erro, "dados_invalidos");
+  }
+  assert.equal(s.chamadas.slice(antes).filter(c => c.nome.startsWith("nx_agenda")).length, 0, "entrada inválida nem chega ao banco");
+  const s2 = cenario({ rpc: { nx_agenda_desmarcar_ia: () => { throw Object.assign(new Error("canal_nao_encontrado"), { pg: true, status: 404 }); } } });
+  assert.equal((await agente(s2, { acao: "cancelar", telefone: TEL })).status, 404);
+});
+
+test("rastreio: código [ref K7Q2P] do texto (sem confundir com palavras), maiúsculo, sem I/L/O/0/1", () => {
+  assert.equal(extrairCodigoRastreio("Olá! Vim pelo site. [ref K7Q2P]"), "K7Q2P");
+  assert.equal(extrairCodigoRastreio("oi (ref: k7q2p)"), "K7Q2P");
+  assert.equal(extrairCodigoRastreio("REF#K7Q2P quero agendar"), "K7Q2P");
+  assert.equal(extrairCodigoRastreio("ref k7q2p9"), null, "seis caracteres não é código");
+  assert.equal(extrairCodigoRastreio("preferência K7Q2P"), null, "precisa da palavra ref isolada");
+  assert.equal(extrairCodigoRastreio("ref MARIA"), null, "I não existe no alfabeto do código");
+  assert.equal(extrairCodigoRastreio("ref 12345"), null, "0 e 1 não existem");
+  assert.equal(extrairCodigoRastreio("quero marcar consulta"), null);
+  assert.equal(extrairCodigoRastreio(null), null); assert.equal(extrairCodigoRastreio({}), null);
+});
+
+test("agente mensagem (entrada): código do site na 1ª mensagem vira atribuição (depois do lead), texto guardado com o código; falha não derruba", async () => {
+  const s = cenario({ rpc: { nx_rastreio_atribuir: () => ({ ok: true, aplicado: true, negocio_id: 901, origem: "anuncio", plataforma: "google", campanha_ext: "GC-1" }) } });
+  const r = await ler(await agente(s, { acao: "mensagem", telefone: TEL, texto: "Olá! Vim pelo site. [ref K7Q2P]", nome: "Paula", message_id: "3EB0R1" }));
+  assert.equal(r.corpo.responder, true);
+  assert.deepEqual(s.chamadas.map(c => c.nome).filter(n => ["nx_wa_entrada", "nx_lead_webhook", "nx_rastreio_atribuir", "nx_codewords_decidir"].includes(n)),
+    ["nx_wa_entrada", "nx_lead_webhook", "nx_rastreio_atribuir", "nx_codewords_decidir"], "atribui depois de criar o lead e antes de decidir");
+  assert.deepEqual(s.rpcsDe("nx_rastreio_atribuir")[0].corpo, { p_canal: K_A, p_telefone: TEL, p_codigo: "K7Q2P" }, "canal do segredo");
+  assert.match(s.rpcsDe("nx_wa_entrada")[0].corpo.p_msg.corpo, /\[ref K7Q2P\]/, "o atendente vê o código na mensagem");
+  // sem código: nenhuma chamada
+  const s2 = cenario();
+  await agente(s2, { acao: "mensagem", telefone: TEL, texto: "Quero agendar", message_id: "3EB0R2" });
+  assert.equal(s2.rpcsDe("nx_rastreio_atribuir").length, 0);
+  // saída e grupo não atribuem
+  await agente(s2, { acao: "mensagem", direcao: "saida", autor: "celular", telefone: TEL, texto: "ref K7Q2P", message_id: "3EB0R3" });
+  await agente(s2, { acao: "mensagem", telefone: "120363025@g.us", texto: "ref K7Q2P" });
+  assert.equal(s2.rpcsDe("nx_rastreio_atribuir").length, 0);
+  // falha do rastreio não derruba o atendimento (e não vaza erro)
+  const s3 = cenario({ rpc: { nx_rastreio_atribuir: () => { throw new Error(`boom ${CHAVE}`); } } });
+  const f = await ler(await agente(s3, { acao: "mensagem", telefone: TEL, texto: "oi [ref K7Q2P]", message_id: "3EB0R4" }));
+  assert.equal(f.status, 200); assert.equal(f.corpo.responder, true);
+  assert.ok(!JSON.stringify(f.corpo).includes(CHAVE));
+});
+
+test("agente mensagem: referral de anúncio Meta (Baileys externalAdReply) vira atribuição do lead com a campanha de nx_metricas_dia", async () => {
+  const s = cenario();
+  await agente(s, { key: { remoteJid: `${TEL}@s.whatsapp.net`, fromMe: false, id: "BAE5AD1" }, pushName: "Paula",
+    message: { extendedTextMessage: { text: "Vi o anúncio", contextInfo: { externalAdReply: { sourceType: "ad", sourceId: "AD-9", ctwaClid: "CL9" } } } } });
+  assert.deepEqual(s.rpcsDe("nx_lead_webhook")[0].corpo.p_atr, { origem: "anuncio", plataforma: "meta", anuncio_ext: "AD-9", campanha_ext: "CAMP-7", ctwa_clid: "CL9" });
+  const w = await ler(await agente(cenario(), { acao: "mensagem", telefone: TEL, texto: "oi", message_id: "3EB0W", referral: { source_type: "ad", source_id: "AD-1", ctwa_clid: "C1" } }));
+  assert.equal(w.corpo.responder, true);
+});
+
+test("contexto da IA: origem do site e do anúncio aparecem; gclid, fbclid e ids de clique NUNCA vão para o modelo", () => {
+  const semAnuncio = { plataforma: null, campanha_ext: null, anuncio_ext: null, campanha_nome: null, anuncio_nome: null };
+  const site = montarContexto({ ...DADOS, negocio: { ...DADOS.negocio, ...semAnuncio,
+    origem: "site", gclid: true, rastreio: { utm_source: "newsletter", utm_campaign: "outubro-rosa", pagina: "https://site.com/implante", gclid: "G-SECRETO", fbclid: "F-SECRETO" } } });
+  assert.deepEqual(site.negocio.origem, { tipo: "site", plataforma: null, campanha: null, anuncio: null,
+    rastreio: { utm_source: "newsletter", utm_campaign: "outubro-rosa", pagina: "https://site.com/implante" } });
+  assert.match(site.instrucoes, /- Veio do site \(campanha outubro-rosa · página https:\/\/site\.com\/implante\)/);
+  assert.ok(!JSON.stringify(site).includes("SECRETO"), "identificadores de clique não entram no contexto");
+  const g = montarContexto({ ...DADOS, negocio: { ...DADOS.negocio, plataforma: "google", origem: "anuncio", campanha_nome: "Implante Taubaté", anuncio_nome: "Video Sorriso" } });
+  assert.match(g.instrucoes, /- Veio de anúncio \(google · campanha Implante Taubaté · anúncio Video Sorriso\)/);
+  const ind = montarContexto({ ...DADOS, negocio: { ...DADOS.negocio, ...semAnuncio, origem: "indicacao" } });
+  assert.match(ind.instrucoes, /- Veio por indicação/);
+  for (const c of [site, g, ind]) assert.match(c.instrucoes, /código de rastreio, como \[ref K7Q2P\]: é um controle interno[\s\S]*Ignore-o/, "a IA é instruída a ignorar o código");
+});
+
+/* ---------------- prompt do CodeWords ---------------- */
+const ACOES_DA_API = ["mensagem", "contexto", "horarios", "agendar", "remarcar", "cancelar", "etapa", "origem", "humano", "nota", "status"];
+
+test("prompt: traz TODAS as ações da API do agente, com o JSON exato, e nenhum segredo", async () => {
+  const rec = montarReceita({ url: URL_A, empresa: "Clínica Alfa", assistente: "Sofia", numero: NUM_A });
+  for (const a of ACOES_DA_API) assert.ok(rec.includes(`"acao":"${a}"`), `receita traz a ação ${a}`);
+  // toda linha JSON da receita é EXATAMENTE um dos exemplos (fonte única) e todo exemplo aparece
+  const linhas = rec.split("\n").filter(l => l.startsWith('{"acao"'));
+  const exemplos = Object.values(EXEMPLOS_AGENTE).map(o => JSON.stringify(o));
+  for (const l of linhas) assert.ok(exemplos.includes(l), `linha JSON fora dos exemplos: ${l}`);
+  for (const e of exemplos) assert.ok(linhas.includes(e), `exemplo ausente da receita: ${e}`);
+  // cada exemplo é aceito pelo handler REAL: nada de dados_invalidos, acao_desconhecida ou payload_desconhecido
+  for (const [nome, ex] of Object.entries(EXEMPLOS_AGENTE)) {
+    const s = cenario({ rpc: RPCS_AGENDA });
+    const r = await ler(await agente(s, ex));
+    assert.equal(r.status, 200, `${nome} → ${JSON.stringify(r.corpo)}`);
+    assert.equal(typeof r.corpo.ok, "boolean", nome);
+  }
+  // o fluxo descrito na receita
+  for (const trecho of ["ligado 24 horas", "/webhook", "@g.us", "@broadcast", "Se responder:false, NÃO responda", "contexto.instrucoes", "contexto.historico",
+    "POST /proxy/send/message?phone_id=", "form-urlencoded", "phone (telefone do cliente", "message (o texto)", '"autor":"ia"', 'autor "celular"',
+    "de 2 a 4 segundos", "no máximo 2 mensagens", "Nunca repita o envio sozinho", "Nada de preço inventado", "Service ID", "from_me / is_from_me",
+    "tente de novo até 3 vezes", "NÃO responda o cliente, não invente resposta", "ack/receipt/status", "message_id", "duplicada"]) {
+    assert.ok(rec.includes(trecho), `receita: ${trecho}`);
+  }
+  assert.ok(rec.includes(`POST ${URL_A}`) && rec.split(URL_A).length === 2, "a URL do canal aparece uma vez, no item 1");
+  // sem segredos
+  assert.ok(!/cwk-[A-Za-z0-9_-]{6,}/.test(rec) && !/cwotk-/.test(rec), "nenhuma chave do CodeWords");
+  assert.ok(!/eyJ[A-Za-z0-9_-]{10,}/.test(rec) && !/service_role|sb_secret|sk-ant|Bearer /i.test(rec), "nenhum token");
+  assert.ok(!/[0-9a-f]{64}/.test(rec.replace(URL_A, "")), "nenhum segredo hex fora da URL do canal");
+  assert.ok(!rec.includes(CHAVE));
+});
+
+test("prompt: docs/orbita/CODEWORDS-PROMPT.md é o MESMO texto, com {{URL_DO_ORBITA}}, e está em dia", () => {
+  const doc = readFileSync(join(RAIZ, "docs/orbita/CODEWORDS-PROMPT.md"), "utf8").replace(/\r\n/g, "\n");
+  const prompt = montarReceita({ url: "{{URL_DO_ORBITA}}" });
+  assert.ok(doc.includes(prompt), "o arquivo contém o texto atual do prompt (rode node scripts/gerar-prompt-codewords.mjs)");
+  assert.ok(doc.includes("POST {{URL_DO_ORBITA}}"));
+  assert.ok(!/https?:\/\/[^\s]*nx-codewords/.test(doc) && !/[0-9a-f]{64}/.test(doc) && !/cwk-[A-Za-z0-9_-]{6,}/.test(doc), "documento sem URL real nem segredo");
+  assert.equal(documentoPrompt().replace(/\r\n/g, "\n"), doc, "arquivo idêntico ao gerado");
+});
+
+test("prompt: instruções da IA (contexto.instrucoes) trazem agenda, segurança e o código de rastreio", () => {
+  const inst = montarContexto(DADOS).instrucoes;
+  assert.match(inst, /marca a consulta SÓ depois de o cliente escolher um horário da lista/);
+  assert.match(inst, /Se responder horario_ocupado, ofereça as sugestoes/);
+  assert.match(inst, /o sistema não troca a origem de quem veio de anúncio/);
+  assert.match(inst, /não o repita, não o comente/);
+  assert.match(inst, /Nunca invente preço/);
+  for (const [acao] of ACOES_AGENTE) assert.ok(inst.includes(`acao:"${acao}"`), acao);
+});
+
+test("migração 20260929b: aditiva e idempotente, toda função protegida, painel com nx_ctx, grants explícitos, sem segredo", () => {
+  const sql = readFileSync(join(RAIZ, "supabase/migrations/20260929b_agenda_rastreio.sql"), "utf8");
+  const limpo = sql.replace(/--.*$/gm, "");
+  assert.ok(!/\b(drop\s+(table|function|column|schema|policy|trigger)|truncate)\b/i.test(limpo), "nada é apagado");
+  assert.ok(!/nx_config/.test(limpo), "não mexe em nx_config");
+  assert.ok(!/create\s+table\s+(?!if not exists)/i.test(limpo) && !/create\s+function/i.test(limpo), "só create table if not exists e create or replace function");
+  assert.ok(!/delete\s+from\s+public\.(?!nx_rastreio\b|nx_agenda_bloqueios\b)/i.test(limpo), "só apaga rastreio expirado e bloqueios da própria agenda");
+  const blocos = limpo.split(/^create or replace function /m).slice(1);
+  assert.ok(blocos.length >= 30, `funções: ${blocos.length}`);
+  const semProtecao = blocos.filter(b => !/set search_path = ''/.test(b.split("as $$")[0])).map(b => /^public\.(\w+)/.exec(b)[1]);
+  assert.deepEqual(semProtecao, [], "toda função com set search_path = ''");
+  const painel = ["nx_agenda_config_ver", "nx_agenda_config_salvar", "nx_agenda_bloqueio_salvar", "nx_agenda_bloqueio_excluir", "nx_agenda_dia",
+    "nx_agenda_livres", "nx_agenda_marcar", "nx_agenda_desmarcar"];
+  for (const n of painel) {
+    const b = blocos.find(x => x.startsWith(`public.${n}(`));
+    assert.ok(b, n);
+    assert.match(b.split("as $$")[0], /security definer/, `${n}: security definer`);
+    assert.match(b, /\(p_token text, p_cliente uuid/, `${n}: token + cliente`);
+    assert.match(b, /public\.nx_ctx\(p_token, p_cliente, '(leitura|atendente|admin)'\)/, `${n}: autorização por nx_ctx`);
+    assert.match(b, /nx_exigir_modulo\(p_cliente, 'crm'\)/, `${n}: módulo CRM`);
+  }
+  assert.match(limpo, /revoke all on function %s from public, anon, authenticated/);
+  assert.match(limpo, /'nx_rastreio_registrar'\) then\s+execute format\('grant execute on function %s to anon, authenticated, service_role'/);
+  for (const t of ["nx_agenda_config", "nx_agenda_bloqueios", "nx_rastreio"]) {
+    assert.match(limpo, new RegExp(`alter table public\\.${t} enable row level security`), `${t}: RLS`);
+    assert.match(limpo, new RegExp(`revoke all on table public\\.${t} from public, anon, authenticated`), `${t}: fechada para anon`);
+  }
+  assert.match(limpo, /pg_advisory_xact_lock\(hashtextextended\('nx_agenda:'/, "trava por cliente contra corrida de horário");
+  assert.match(limpo, /raise exception 'limite_taxa'/, "limite de taxa no registro público");
+  assert.ok(!/cwk-[A-Za-z0-9_-]{8,}/.test(sql) && !/eyJ[A-Za-z0-9_-]{10,}/.test(sql), "nenhum segredo");
 });

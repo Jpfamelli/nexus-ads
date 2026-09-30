@@ -174,7 +174,7 @@ export const ACOES = Object.freeze([
     ] },
   { id: "enviar_mensagem", icone: "enviar", mensagem: true, rotulo: () => "Enviar mensagem",
     campos: [{ nome: "texto", tipo: "texto_longo", rotulo: "Mensagem", obrigatorio: true, max: 4096, variaveis: true,
-      ajuda: "Só sai dentro da janela de 24 h desde a última mensagem do cliente. Fora dela, use um modelo aprovado." }] },
+      ajuda: "No WhatsApp oficial (Meta), só sai dentro da janela de 24 h desde a última mensagem do cliente; fora dela, use um modelo aprovado. No WhatsApp por aparelho (CodeWords), o texto livre sai a qualquer hora." }] },
   { id: "enviar_template", icone: "whatsapp", mensagem: true, rotulo: () => "Enviar modelo aprovado",
     campos: [
       { nome: "template_id", tipo: "template", rotulo: "Modelo (aprovado na Meta)", obrigatorio: true },
@@ -728,6 +728,21 @@ export const MODELOS = Object.freeze([
     auto: { nome: "Lembrete 24 h antes da consulta", gatilho: "antes_da_data", config: { campo: "consulta", horas: 24 }, condicoes: [],
       acoes: [{ tipo: "enviar_template", template_nome: "confirmacao_consulta", parametros: ["{primeiro_nome}", "{data_consulta}", "{hora_consulta}"] }],
       respeitar_horario: false } },
+  // WhatsApp por aparelho (CodeWords): texto livre, sem modelo da Meta e sem janela de 24 h. Nascem DESLIGADOS (aplicarModelo força ativo=false).
+  { id: "lembrete_consulta_texto", icone: "relogio", destaque: ["odonto", "oficina"],
+    titulo: vv => `Lembrete 24 h antes da ${palavraConsulta(vv.vertical)} → mensagem de texto (WhatsApp por aparelho)`,
+    texto: vv => `Manda uma mensagem de texto 24 h antes da ${palavraConsulta(vv.vertical)} marcada, pelo WhatsApp conectado por aparelho (CodeWords). Não precisa de modelo da Meta nem da janela de 24 h.`,
+    aviso: "No WhatsApp oficial (Meta) esta mensagem só sai se o cliente escreveu nas últimas 24 h; nesse caso use o modelo de confirmação aprovado.",
+    auto: { nome: "Lembrete 24 h antes da consulta (texto)", gatilho: "antes_da_data", config: { campo: "consulta", horas: 24 }, condicoes: [],
+      acoes: [{ tipo: "enviar_mensagem", texto: "Olá, {primeiro_nome}! Passando para lembrar da sua consulta amanhã, {data_consulta}, às {hora_consulta}. Responda SIM para confirmar ou nos avise se precisar remarcar." }],
+      respeitar_horario: false } },
+  { id: "confirmacao_agendamento", icone: "check", destaque: ["odonto", "oficina"],
+    titulo: vv => `${vv.v.negocio} agendad${vv.art("negocio")} → confirmação por mensagem de texto`,
+    texto: vv => `Assim que ${vv.art("negocio")} ${vv.min("negocio")} entra em «Agendada» (pela IA ou pela equipe), o cliente recebe a confirmação do dia e da hora, pelo WhatsApp por aparelho (CodeWords).`,
+    aviso: "No WhatsApp oficial (Meta) a mensagem só sai se o cliente escreveu nas últimas 24 h.",
+    auto: { nome: "Confirmação ao agendar", gatilho: "negocio_estagio", config: { estagio_marco: "agendada" }, condicoes: [],
+      acoes: [{ tipo: "enviar_mensagem", texto: "Olá, {primeiro_nome}! Sua consulta está confirmada para {data_consulta}, às {hora_consulta}. Se precisar remarcar, é só responder aqui." }],
+      respeitar_horario: false } },
   { id: "sem_resposta", icone: "sino", destaque: [],
     titulo: () => "Sem resposta há 15 min → avisar o responsável",
     texto: () => "Ninguém respondeu o cliente em 15 minutos (contando só no horário de atendimento)? O responsável recebe um aviso no sino.",
@@ -788,6 +803,11 @@ export function aplicarModelo(modelo, base, vocab) {
   a.ativo = false;
   a.modelo = m.id;
   if (m.id === "lembrete_consulta") a.nome = `Lembrete 24 h antes da ${palavraConsulta(vv.vertical)}`;
+  if (m.id === "lembrete_consulta_texto" || m.id === "confirmacao_agendamento") {
+    const w = palavraConsulta(vv.vertical);
+    a.acoes[0].texto = a.acoes[0].texto.replace(/consulta/g, w);
+    a.nome = m.id === "lembrete_consulta_texto" ? `Lembrete 24 h antes da ${w} (texto)` : `Confirmação ao agendar`;
+  }
   if (m.id === "orcamento") {
     const o = orcamentoDaVertical(vv.vertical);
     a.nome = o.nome;
