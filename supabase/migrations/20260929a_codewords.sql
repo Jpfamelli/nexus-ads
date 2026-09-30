@@ -658,7 +658,7 @@ begin
   if jsonb_typeof(p_forma) is distinct from 'array' then return; end if;
   select coalesce(jsonb_agg(x), '[]'::jsonb) into v from (
     select left(e, 80) as x from jsonb_array_elements_text(p_forma) e
-     where e ~ '^[A-Za-z0-9_.\[\]-]{1,80}$' limit 60) s;
+     where e ~ '^[A-Za-z0-9_.\[\]-]{1,80}$' and e !~ '[0-9]{6,}' limit 60) s;   -- telefone/id como chave de mapa não é "forma"
   update public.nx_canais set codewords_forma = v, codewords_forma_em = now()
    where id = p_canal and provedor = 'codewords';
 end $$;

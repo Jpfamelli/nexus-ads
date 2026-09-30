@@ -50,6 +50,8 @@ export function limparErro(msg) {
     .replace(/(^|[^\w/])1\/\/[\w-]{16,}/g, (_, antes) => `${antes}1//***`)   // refresh token do Google
     .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "eyJ***")     // JWT (chave service_role antiga)
     .replace(/\bsb_secret_[\w-]+/g, "sb_secret_***")
+    .replace(/\bcw(?:k|otk)-[A-Za-z0-9_-]{4,}/g, "cwk-***")   // chave do CodeWords
+    .replace(/([?&]ch=)[0-9a-f]{8,}/gi, "$1***")              // segredo da URL do canal CodeWords
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 300);

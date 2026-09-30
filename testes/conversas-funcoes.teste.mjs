@@ -1090,6 +1090,36 @@ test("nx-enviar CodeWords (aparelho, fila): envio ambíguo NUNCA volta para a fi
   assert.equal(s.rpcs("nx_cv_saida")[0].params.p_msg.status, "pendente");
 });
 
+test("nx-enviar CodeWords (aparelho): o aparelho aceitou e o BANCO falhou ao gravar → 502 ambíguo (não 500), sem reenvio, IA pausada", async () => {
+  const s = cenario();
+  canalAparelho(s);
+  const falhaNoBanco = (entrada, init) => {
+    const req = new Request(entrada, init);
+    if (new URL(req.url).pathname.endsWith("/rpc/nx_cv_saida")) return Promise.resolve(jsonResp({ code: "XX000", message: "banco indisponível" }, 500));
+    return s.fetch(entrada, init);
+  };
+  const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá" }), ENV, s.deps({ fetch: falhaNoBanco })));
+  assert.equal(r.status, 502);
+  assert.equal(r.corpo.ok, false);
+  assert.equal(r.corpo.erro, "envio_falhou");
+  assert.equal(r.corpo.ambigua, true, "o painel avisa que pode ter saído (não oferece 'erro interno' para clicar de novo)");
+  assert.match(r.corpo.detalhe, /pode ter saído/);
+  assert.equal(envioProxy(s).length, 1);
+  assert.equal(s.rpcs("nx_cv_ia_pausa_auto").length, 1, "atendente respondeu: a IA não responde por cima");
+});
+
+test("nx-enviar CodeWords (aparelho): HTTP 408/425 do gateway é AMBÍGUO como o 5xx (pendente, nunca 'falhou')", async () => {
+  for (const status of [408, 425]) {
+    const s = cenario();
+    canalAparelho(s);
+    s.estado.codewordsHandler = () => jsonResp({ error: "gateway" }, status);
+    const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá" }), ENV, s.deps()));
+    assert.equal(r.corpo.ambigua, true, `HTTP ${status}`);
+    assert.equal(s.rpcs("nx_cv_saida")[0].params.p_msg.status, "pendente");
+    assert.equal(envioProxy(s).length, 1);
+  }
+});
+
 test("nx-enviar: o modo workflow/Runtime API (client_ref, service_id) foi removido do envio — só o aparelho", () => {
   const sem = f => readFileSync(join(RAIZ, "supabase/functions/_compartilhado", f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   for (const f of ["enviar.js", "codewords.js"]) assert.ok(!/client_?ref|\/run\/\$\{|clientRef/i.test(sem(f)), `${f} sem envio por workflow`);

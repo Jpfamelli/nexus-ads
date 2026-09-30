@@ -131,7 +131,7 @@ const NAO_MIDIA = new Set(["", "text", "texto", "chat", "conversation", "extende
 export function tipoDaMidia(t) {
   const k = String(t ?? "").trim().toLowerCase();
   if (NAO_MIDIA.has(k)) return null;
-  return TIPO_MIDIA[k] || "desconhecido";
+  return Object.hasOwn(TIPO_MIDIA, k) ? TIPO_MIDIA[k] : "desconhecido";   // "constructor" e "__proto__" não são tipos
 }
 /** Rótulo legível da mídia ("🖼 Foto: nota.pdf"); nome gerado pelo WhatsApp não diz nada. */
 export function rotuloMidia(tipo, nome, cru) {
@@ -166,6 +166,8 @@ export function formaDoPayload(c, prefixo = "", out = [], nivel = 0) {
   for (const k of Object.keys(c)) {
     if (out.length >= 60) break;
     if (!/^[A-Za-z0-9_-]{1,40}$/.test(k)) continue;
+    // chave de mapa que é um telefone, jid ou id (dado pessoal na FORMA do payload): fica de fora
+    if (/\d{6,}/.test(k) || /^[A-Za-z0-9]{24,}$/.test(k)) continue;
     const nome = prefixo ? `${prefixo}.${k}` : k;
     out.push(nome);
     const v = Array.isArray(c[k]) ? c[k][0] : c[k];
@@ -252,7 +254,7 @@ export function lerPayload(c, { numeroCanal = "", agora = Date.now() } = {}) {
   let objM = null;
   if (!tipoM) {
     const t = String(achar(cs, ["type"]) ?? "").toLowerCase();
-    if (TIPO_MIDIA[t]) tipoM = TIPO_MIDIA[t];            // "type" só vale quando é um tipo de mídia conhecido
+    if (Object.hasOwn(TIPO_MIDIA, t)) tipoM = TIPO_MIDIA[t];            // "type" só vale quando é um tipo de mídia conhecido
   }
   if (!tipoM) {
     for (const k of ["image", "imageMessage", "video", "videoMessage", "audio", "audioMessage", "ptt", "voice", "document",
@@ -343,7 +345,7 @@ export function traduzirErroCW(r) {
     return { tipo: "nao_encontrado", ambigua: false,
       texto: "O CodeWords não achou o aparelho deste número. Refaça o pareamento em Configurações › Números." };
   }
-  if (r?.status >= 500) {
+  if (r?.status === 408 || r?.status === 425 || r?.status >= 500) {   // 408/425: o gateway desistiu de esperar, o envio pode ter seguido
     return { tipo: "instavel", ambigua: true,
       texto: `O CodeWords falhou (HTTP ${r.status}). A mensagem pode ter saído: confira no celular antes de mandar de novo.` };
   }
@@ -656,6 +658,12 @@ async function agenda(db, nome, params) {
   }
 }
 const DATA_OK = /^\d{4}-\d{2}-\d{2}$/;
+/** AAAA-MM-DD que existe no calendário (2026-02-31 ou 2026-13-01 derrubariam o banco com erro 500 e o fluxo tentaria de novo). */
+const dataValida = s => {
+  if (!DATA_OK.test(s)) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+};
 function inicioIso(v) {
   const s = String(v ?? "");
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.test(s) || Number.isNaN(Date.parse(s))) {
@@ -688,7 +696,7 @@ async function despacharAgente(db, canal, corpo, deps) {
     }
     case "horarios": {
       const aPartir = corpo.a_partir == null || corpo.a_partir === "" ? null : String(corpo.a_partir);
-      if (aPartir && !DATA_OK.test(aPartir)) throw new ErroAgente("dados_invalidos", 400, { campo: "a_partir" });
+      if (aPartir && !dataValida(aPartir)) throw new ErroAgente("dados_invalidos", 400, { campo: "a_partir" });
       const dias = corpo.dias == null ? 7 : Number(corpo.dias);
       if (!Number.isInteger(dias) || dias < 1 || dias > 14) throw new ErroAgente("dados_invalidos", 400, { campo: "dias" });
       return comRotulos(await agenda(db, "nx_agenda_livres_ia", {
