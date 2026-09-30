@@ -998,6 +998,58 @@ await teste("CSS mobile: cabeçalho das tabelas-cartão sai do foco (visibility)
   const rod = /\.modal-rod \{([^}]*)\}/.exec(css)[1];
   assert.doesNotMatch(rod, /position:\s*(sticky|fixed|absolute)/, "rodapé do modal fica fora do corpo que rola: um campo no fim do corpo nunca fica atrás do botão primário");
 });
+await teste("menu lateral: logo LARGO não fica por cima do nome do produto — o nome vira sr-only (como na entrada) e volta ao trocar de logo", () => {
+  const app = ler("app.js"), css = ler("app.css");
+  const fonte = /function pintarLogoShell\(\) \{[\s\S]*?\r?\n\}\r?\n/.exec(app);
+  assert.ok(fonte, "pintarLogoShell existe no app.js");
+  class Classes { constructor() { this.s = new Set(); } add(c) { this.s.add(c); } remove(c) { this.s.delete(c); } contains(c) { return this.s.has(c); } }
+  const el = id => ({ id, classList: new Classes(), filhos: [], textContent: "", attrs: {}, setAttribute(k, v) { this.attrs[k] = v; },
+    appendChild(f) { this.filhos.push(f); f.isConnected = true; } });
+  const dom = Object.fromEntries(["lat-logo", "topo-marca", "lat-produto", "lat-home"].map(id => [id, el(id)]));
+  const ui = {
+    limpar(a) { for (const f of a.filhos) f.isConnected = false; a.filhos = []; },
+    h(tag, attrs) { return { tag, attrs, classList: new Classes(), isConnected: false, ouvintes: {}, addEventListener(ev, fn) { this.ouvintes[ev] = fn; } }; },
+  };
+  const E = { ui, cliente: null, marca: { produto: "Revenda Teste", logo: "data:image/png;base64,TGFyZ28=" } };
+  const ctx = { E, $: id => dom[id] || null, document: { documentElement: { dataset: { esquema: "escuro" } } } };
+  runInNewContext(`${fonte[0]}\nthis.pintar = pintarLogoShell;`, ctx);
+  const carregar = (alvo, w, h) => { const img = dom[alvo].filhos[0]; img.naturalWidth = w; img.naturalHeight = h; img.ouvintes.load(); return img; };
+  const produto = dom["lat-produto"];
+
+  ctx.pintar();
+  assert.equal(produto.textContent, "Revenda Teste");
+  assert.equal(produto.classList.contains("sr-only"), false, "antes de a imagem carregar o nome aparece");
+  // o logo do topo (celular) não mexe no nome do menu
+  carregar("topo-marca", 300, 60);
+  assert.equal(produto.classList.contains("sr-only"), false);
+  const largo = carregar("lat-logo", 300, 60);   // 5:1
+  assert.ok(largo.classList.contains("largo") && dom["lat-logo"].classList.contains("largo"), "imagem e caixa marcadas como largas");
+  assert.equal(produto.classList.contains("sr-only"), true, "logo largo: o nome sai da vista (sem sobrepor)");
+  assert.equal(produto.textContent, "Revenda Teste", "…e continua no DOM para leitor de tela");
+  assert.equal(dom["lat-home"].attrs["aria-label"], "Revenda Teste — início");
+
+  // troca para um logo quadrado: o nome volta na hora; o load atrasado do logo antigo não reaplica nada
+  E.marca = { produto: "Clínica Teste", logo: "data:image/png;base64,UXVhZHJhZG8=" };
+  ctx.pintar();
+  assert.equal(produto.classList.contains("sr-only"), false);
+  assert.equal(dom["lat-logo"].classList.contains("largo"), false);
+  largo.ouvintes.load();
+  assert.equal(produto.classList.contains("sr-only"), false, "imagem de uma pintura anterior é ignorada");
+  const quadrado = carregar("lat-logo", 64, 64);
+  assert.equal(quadrado.classList.contains("largo"), false);
+  assert.equal(produto.classList.contains("sr-only"), false, "logo quadrado: logo + nome lado a lado");
+  // sem logo (símbolo do Órbita): nome visível
+  E.marca = { produto: "Órbita" };
+  ctx.pintar();
+  assert.equal(dom["lat-logo"].filhos[0].tag, "svg");
+  assert.equal(produto.classList.contains("sr-only"), false);
+
+  // CSS: a caixa cresce com o logo largo (sem vazar sobre o nome) e encolhe no menu só de ícones
+  assert.match(css, /\.lat-logo\.largo \{ width: auto; max-width: 150px; \}/);
+  assert.match(css, /html\.menu-recolhido \.lat-logo\.largo, html\.menu-recolhido \.lat-logo img\.largo \{ width: 36px; max-width: 36px; \}/);
+  assert.match(css, /@media \(max-width: 1100px\) \{[^@]*\.lat-logo\.largo, \.lat-logo img\.largo \{ width: 36px; max-width: 36px; \}/);
+  assert.match(css, /\.sr-only \{ position: absolute !important;/);
+});
 await teste("netlify.toml: publish web, / e /index.html → /app/ (302 forçado), CSP do §3.9", () => {
   const t = readFileSync(join(RAIZ, "netlify.toml"), "utf8");
   assert.match(t, /publish\s*=\s*"web"/);

@@ -256,19 +256,30 @@ function pintarLogoShell() {
   const m = E.marca;
   const escuro = document.documentElement.dataset.esquema !== "claro";
   const logo = (E.cliente && (escuro ? m.logo_cliente : (m.logo_cliente_claro || m.logo_cliente))) || (escuro ? m.logo : (m.logo_claro || m.logo));
+  const p = $("lat-produto");
+  // repintura (troca de empresa/tema): volta ao estado sem logo largo até a imagem nova carregar
+  if (p) p.classList.remove("sr-only");
   for (const id of ["lat-logo", "topo-marca"]) {
     const alvo = $(id);
     if (!alvo) continue;
     ui.limpar(alvo);
+    alvo.classList.remove("largo");
     if (logo) {
       const img = ui.h("img", { src: logo, alt: "" });
-      img.addEventListener("load", () => { if (img.naturalWidth > img.naturalHeight * 1.6) img.classList.add("largo"); });
+      img.addEventListener("load", () => {
+        // imagem de uma pintura anterior (já trocada) não mexe em nada
+        if (!img.isConnected || !(img.naturalWidth > img.naturalHeight * 1.6)) return;
+        img.classList.add("largo");
+        alvo.classList.add("largo");
+        // logo largo (já traz o nome escrito): o nome do produto sai da vista e fica só para
+        // leitor de tela — como na entrada (login.js); senão a imagem cobre o nome no menu
+        if (id === "lat-logo" && p) p.classList.add("sr-only");
+      });
       alvo.appendChild(img);
     } else {
       alvo.appendChild(ui.h("svg", { viewBox: "0 0 48 48", "aria-hidden": "true" }, ui.h("use", { href: "#marca-orbita" })));
     }
   }
-  const p = $("lat-produto");
   if (p) p.textContent = m.produto;
   const home = $("lat-home");
   if (home) home.setAttribute("aria-label", `${m.produto} — início`);

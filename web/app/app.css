@@ -526,7 +526,11 @@ dialog { color: var(--c-texto); }
 .lat-home { display: flex; align-items: center; gap: .7rem; min-width: 0; text-decoration: none; border-radius: 12px; }
 .lat-logo { display: grid; place-items: center; width: 36px; height: 36px; flex: none; }
 .lat-logo svg, .lat-logo img { width: 36px; height: 36px; object-fit: contain; }
+/* logo largo: a caixa cresce com a imagem e o nome do produto vira .sr-only (app.js) — nada por cima */
+.lat-logo.largo { width: auto; max-width: 150px; }
 .lat-logo img.largo { width: auto; max-width: 150px; height: 32px; }
+/* só ícones (menu recolhido): o logo largo encolhe para a caixa de 36 px, sem vazar do trilho */
+html.menu-recolhido .lat-logo.largo, html.menu-recolhido .lat-logo img.largo { width: 36px; max-width: 36px; }
 .lat-produto { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-20); letter-spacing: -.01em; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lat-recolher .ic { transition: transform var(--t-ui) var(--e-out); }
 .lat-nav { display: flex; flex-direction: column; gap: .15rem; }
@@ -667,6 +671,7 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 @media (max-width: 1100px) {
   :root { --lat: var(--lat-rec); }
   .lat-produto, .nav-txt, .nav-b .badge, .nav-selo, .nav-grupo, .lat-conta > span:last-child, .lat-recolher { display: none; }
+  .lat-logo.largo, .lat-logo img.largo { width: 36px; max-width: 36px; }
   .lat-marca { justify-content: center; padding: 0; }
   .nav-b { justify-content: center; padding: .5rem; }
   .nav-b .ic { width: 21px; height: 21px; }
