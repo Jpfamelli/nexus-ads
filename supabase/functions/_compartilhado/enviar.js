@@ -7,6 +7,10 @@
    Graph API / Storage. Toda saída é gravada por nx_cv_saida (também a que
    falhou, com o motivo: o atendente vê o "!" e a dica).
    Modo CRON (header x-nx-cron): {fila:true} | {ids:[…]} | {alerta:{cliente,texto}}.
+   Canal CodeWords (modelo "aparelho", codewords.js): só TEXTO, pelo proxy do
+   aparelho (form-urlencoded, 60 s), sem janela de 24 h nem modelo da Meta;
+   timeout/5xx é ambíguo: grava 'pendente' com id provisório (a sincronização
+   adota a gêmea) e NUNCA reenvia sozinho. Atendente respondeu → pausa a IA.
    ============================================================ */
 import { criarDb } from "./db.js";
 import {
@@ -18,7 +22,7 @@ import {
   inscreverApp, listarTemplates, textoFalhaCanal, aplicarParametros, enviarParaTodos,
 } from "./whatsapp.js";
 import { criarStorage, pathDoCliente, tipoAceito, arquivosDaPasta } from "./midia.js";
-import { enviarTextoCodeWords, testarCodeWords } from "./codewords.js";
+import { enviarTextoCodeWords, estadoCanalCodeWords } from "./codewords.js";
 
 const PAPEL = {
   texto: "atendente", midia: "atendente", template: "atendente", reenviar: "atendente", lido: "leitura",
@@ -27,7 +31,9 @@ const PAPEL = {
 const TIPO_MSG = { image: "imagem", video: "video", audio: "audio", document: "documento" };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRAZO_GRAPH_MS = 20_000;
-const PRAZO_CODEWORDS_MS = 110_000;
+// fila: uma Edge Function morre em 150 s; envio que não cabe no que sobra volta para a fila sem sair
+const FILA_LIMITE_MS = 140_000;
+const RESERVA_ENVIO_MS = { codewords: 62_000, meta: 22_000 };
 const FILA_MAX_ITENS = 100;
 const FILA_MAX_MS = 110_000;
 
@@ -55,23 +61,29 @@ const contextoConversa = (db, ctx, cliente, conversa) =>
 async function credencial(db, canal, cliente, { exigirToken = true } = {}) {
   if (!canal) throw new ErroApi("canal_nao_encontrado", 404);
   const cred = await interna(db, "nx_canal_credencial", { p_canal: idCanal(canal), p_cliente: cliente });
-  if (exigirToken && (cred?.provedor === "codewords" ? !cred?.codewords_api_key || !cred?.codewords_service_id : !cred?.token)) {
-    throw new ErroApi(cred?.provedor === "codewords" ? "codewords_sem_credencial" : "canal_sem_token", 400);
+  if (exigirToken && cred?.provedor === "codewords") {
+    if (!cred?.codewords_api_key) throw new ErroApi("codewords_sem_credencial", 400);
+    if (!cred?.codewords_phone_id) throw new ErroApi("codewords_sem_aparelho", 400);
+  } else if (exigirToken && !cred?.token) {
+    throw new ErroApi("canal_sem_token", 400);
   }
   return cred;
 }
 
-async function enviarTextoPeloCanal(cred, para, texto, options = {}) {
-  if (cred?.provedor === "codewords") {
-    return enviarTextoCodeWords(cred, para, texto, {
-      fetch: options.fetch,
-      clientRef: options.clientRef,
-      conversationId: options.conversationId,
-      timeoutMs: options.timeoutMs ?? PRAZO_CODEWORDS_MS,
-    });
-  }
+const ehCodeWords = cred => cred?.provedor === "codewords";
+
+/** Texto: Meta pela Graph; CodeWords pelo proxy do aparelho (confere o número do aparelho antes). */
+function enviarTextoPeloCanal(cred, para, texto, options = {}) {
+  if (ehCodeWords(cred)) return enviarTextoCodeWords(cred, para, texto, { fetch: options.fetchCru, db: options.db });
   return enviarTextoCanal(cred, para, texto, options);
 }
+
+/** Erro de envio legível: o CodeWords já vem em português claro; a Graph passa pelas dicas. */
+const textoFalha = r => (r.ok ? null : r.provedor === "codewords" ? String(r.erro?.title || "O CodeWords não aceitou a mensagem.").slice(0, 500)
+  : textoFalhaCanal(r.erro));
+
+/** Id provisório do envio ambíguo: a sincronização troca pelo id do aparelho (gêmea: mesmo texto, ±5 min). */
+const wamidProvisorio = canal => `cw:${canal}:orbita-p-${crypto.randomUUID().replace(/-/g, "")}`;
 
 /** Envio pela conversa: resolvida e janela fechada barram ANTES da Graph. */
 function exigirConversaAberta(cx, { exigeJanela = true } = {}) {
@@ -90,31 +102,26 @@ async function citacaoValida(db, cliente, contatoId, wamid) {
   return m ? w : null;
 }
 
-/** Grava a saída (enviada ou falhou) e monta a resposta do painel. */
-async function gravarSaida(db, ctx, cliente, conversa, msg, r) {
-  const erro = r.ok ? null : textoFalhaCanal(r.erro);
-  if (r.ambigua) return respostaPainel({
-    ok: false, erro: "envio_falhou", ambigua: true,
-    detalhe: "Confirmação pendente. A mensagem pode ter sido enviada; uma nova tentativa reutilizará a mesma referência.",
-  }, 502);
-  let mensagem;
-  try {
-    mensagem = await interna(db, "nx_cv_saida", {
-      p_conta: ctx.conta_id, p_cliente: cliente, p_conversa: conversa,
-      p_msg: {
-        origem: "painel", ...msg, wamid: r.wamid || null,
-        status: r.ok ? ({ delivered: "entregue", read: "lida" }[r.status] || "enviada") : "falhou", erro,
-      },
-    });
-  } catch (e) {
-    // O canal externo pode ter aceitado a mensagem antes de o banco falhar.
-    // Preserva o client_ref no navegador para uma repetição idempotente.
-    if (r.provedor === "codewords" && r.ok) return respostaPainel({
-      ok: false, erro: "envio_falhou", ambigua: true,
-      detalhe: "O CodeWords confirmou o envio, mas o Órbita não salvou a confirmação. Uma nova tentativa reutilizará a mesma referência.",
-    }, 502);
-    throw e;
+/**
+ * Grava a saída (enviada, falhou ou — CodeWords ambíguo — pendente) e monta a resposta do painel.
+ * CodeWords: resposta de atendente pausa a IA da conversa (também quando o envio ficou em dúvida).
+ */
+async function gravarSaida(db, ctx, cliente, conversa, msg, r, canal) {
+  const erro = textoFalha(r);
+  const duvida = !r.ok && r.ambigua && r.provedor === "codewords";
+  const mensagem = await interna(db, "nx_cv_saida", {
+    p_conta: ctx.conta_id, p_cliente: cliente, p_conversa: conversa,
+    p_msg: {
+      origem: "painel", ...msg,
+      wamid: r.wamid || (duvida ? wamidProvisorio(canal) : null),
+      status: r.ok ? "enviada" : duvida ? "pendente" : "falhou", erro,
+    },
+  });
+  if (r.provedor === "codewords" && (r.ok || duvida)) {
+    try { await interna(db, "nx_cv_ia_pausa_auto", { p_cliente: cliente, p_conversa: conversa, p_por: "painel", p_conta: ctx.conta_id }); }
+    catch (e) { console.error("nx-enviar pausa da IA:", limparErro(e?.message || e)); }   // a mensagem já saiu
   }
+  if (duvida) return respostaPainel({ ok: true, mensagem, ambigua: true, aviso: erro });
   return r.ok
     ? respostaPainel({ ok: true, mensagem })
     : respostaPainel({ ok: false, erro: "envio_falhou", detalhe: erro, mensagem });
@@ -126,19 +133,16 @@ async function acaoTexto(db, ctx, corpo, deps, { conversa, texto, respondeA, ass
   const cx = await contextoConversa(db, ctx, cliente, conversa ?? corpo.conversa);
   const bruto = String(texto ?? corpo.texto ?? "").trim();
   if (!bruto || bruto.length > 4096) throw new ErroApi("dados_invalidos", 400, "texto");
-  exigirConversaAberta(cx);
+  // o aparelho do CodeWords não tem janela de 24 h (é um WhatsApp comum)
+  exigirConversaAberta(cx, { exigeJanela: cx.canal?.provedor !== "codewords" });
   const cred = await credencial(db, cx.canal_id, cliente);
-  const citacao = await citacaoValida(db, cliente, cx.contato?.id, respondeA ?? corpo.responde_a);
+  const cw = ehCodeWords(cred);
+  // citação (resposta a uma mensagem) só existe na Graph
+  const citacao = cw ? null : await citacaoValida(db, cliente, cx.contato?.id, respondeA ?? corpo.responde_a);
   const nome = primeiroNome(cx.atendente_nome);
   const final = (assinar && cx.cfg_cv?.assinatura && nome ? `*${nome}:*\n${bruto}` : bruto).slice(0, 4096);
-  const r = await enviarTextoPeloCanal(cred, destino(cx), final, {
-    respondeA: citacao,
-    fetch: cred.provedor === "codewords" ? (deps.fetch || deps.rede) : deps.rede,
-    timeoutMs: PRAZO_CODEWORDS_MS,
-    conversationId: cx.conversa.id,
-    clientRef: corpo.client_ref,
-  });
-  return gravarSaida(db, ctx, cliente, cx.conversa.id, { tipo: "texto", corpo: final, responde_a_wamid: citacao }, r);
+  const r = await enviarTextoPeloCanal(cred, destino(cx), final, { respondeA: citacao, fetch: deps.rede, fetchCru: deps.fetch, db });
+  return gravarSaida(db, ctx, cliente, cx.conversa.id, { tipo: "texto", corpo: final, responde_a_wamid: citacao }, r, cx.canal_id);
 }
 
 async function acaoMidia(db, ctx, corpo, deps, env) {
@@ -212,7 +216,7 @@ async function acaoLido(db, ctx, corpo, deps) {
 /** (1) número responde? (2) app inscrito na WABA? → nx_canal_verificado (ativo só com os dois). */
 async function testarCanal(db, cliente, canal, deps) {
   const cred = await credencial(db, canal, cliente, { exigirToken: false });
-  if (cred.provedor === "codewords") throw new ErroApi("use_testar_codewords", 400);
+  if (ehCodeWords(cred)) throw new ErroApi("use_testar_codewords", 400);
   if (!cred?.token) {
     await interna(db, "nx_canal_verificado", { p_canal: canal, p_cliente: cliente, p_ok: false, p_numero: null, p_qualidade: null, p_inscrito: null, p_erro: "número sem token" });
     throw new ErroApi("canal_sem_token", 400);
@@ -241,15 +245,15 @@ async function acaoTestarCanal(db, ctx, corpo, deps) {
   return respostaPainel(t);
 }
 
+/** Compatibilidade da tela antiga: "testar" um canal CodeWords = conferir o aparelho (GET /connections). */
 async function acaoTestarCodeWords(db, ctx, corpo, deps) {
   const cliente = String(corpo.cliente), canal = idCanal(corpo.canal);
   const cred = await credencial(db, canal, cliente, { exigirToken: false });
-  if (cred.provedor !== "codewords") throw new ErroApi("canal_nao_encontrado", 404);
-  const r = await testarCodeWords(cred, { fetch: deps.fetch || deps.rede });
-  const status = await interna(db, "nx_codewords_canal_verificado", {
-    p_canal: canal, p_cliente: cliente, p_ok: !!r.ok, p_erro: r.ok ? null : String(r.erro || "workflow não respondeu"),
-  });
-  return respostaPainel({ ...r, status: status?.status || (r.ok ? "ativo" : "erro") });
+  if (!ehCodeWords(cred)) throw new ErroApi("canal_nao_encontrado", 404);
+  if (!cred.codewords_api_key) throw new ErroApi("codewords_sem_credencial", 400);
+  const r = await estadoCanalCodeWords(db, cred, { fetch: deps.fetch });
+  const ok = !!(r.ok && r.inscrito_certo);
+  return respostaPainel({ ...r, ok, status: r.canal?.status || (ok ? "ativo" : "erro"), ...(ok ? {} : { erro: r.motivo || "o aparelho não está pronto" }) });
 }
 
 async function acaoInscreverApp(db, ctx, corpo, deps) {
@@ -293,7 +297,7 @@ async function acaoReenviar(db, ctx, corpo, deps) {
    ------------------------------------------------------------ */
 
 /** Um item da fila: pula/falha com motivo ou envia e grava por nx_cv_saida. Nunca lança. */
-async function enviarItem(db, item, creds, rede) {
+async function enviarItem(db, item, creds, rede, prazo = {}) {
   const concluir = (status, erro, msgId) => db.rpc("nx_fila_concluir", {
     p_id: item.id, p_status: status, p_erro: erro ? limparErro(erro).slice(0, 500) : null, p_mensagem: msgId ?? null,
   });
@@ -303,8 +307,15 @@ async function enviarItem(db, item, creds, rede) {
     const para = item.contato?.wa_id || item.contato?.telefone;
     if (!para) { await concluir("falhou", "contato sem telefone"); return "falhou"; }
     let corpoMsg, envio;
+    const chave = `${item.cliente_id}:${item.canal_id}`;
+    if (!creds.has(chave)) {
+      creds.set(chave, await db.rpc("nx_canal_credencial", { p_canal: item.canal_id, p_cliente: item.cliente_id }).catch(() => null));
+    }
+    const cred = creds.get(chave);
+    const cw = ehCodeWords(cred);
     if (item.tipo === "texto") {
-      if (!item.janela_aberta) { await concluir("pulado", "fora da janela de 24 h"); return "pulado"; }
+      // o aparelho do CodeWords não tem janela de 24 h
+      if (!cw && !item.janela_aberta) { await concluir("pulado", "fora da janela de 24 h"); return "pulado"; }
       corpoMsg = String(item.texto ?? "").trim().slice(0, 4096);
       if (!corpoMsg) { await concluir("falhou", "texto vazio"); return "falhou"; }
     } else {
@@ -318,36 +329,33 @@ async function enviarItem(db, item, creds, rede) {
       corpoMsg = aplicarParametros(modelo.corpo, parametros).slice(0, 4096);
       envio = { nome: modelo.nome, idioma: modelo.idioma, corpo: modelo.corpo, parametros };
     }
-    const chave = `${item.cliente_id}:${item.canal_id}`;
-    if (!creds.has(chave)) {
-      creds.set(chave, await db.rpc("nx_canal_credencial", { p_canal: item.canal_id, p_cliente: item.cliente_id }).catch(() => null));
+    if (cw && item.tipo !== "texto") {
+      await concluir("falhou", "este número (CodeWords) só envia texto: modelos da Meta não existem nele"); return "falhou";
     }
-    const cred = creds.get(chave);
-    if (cred?.provedor === "codewords" && item.tipo !== "texto") {
-      await concluir("falhou", "CodeWords: fila aceita somente mensagens de texto neste momento"); return "falhou";
+    if (cw ? (!cred?.codewords_api_key || !cred?.codewords_phone_id) : !cred?.token) {
+      await concluir("falhou", cw ? "número CodeWords sem chave ou sem aparelho pareado" : "número sem token"); return "falhou";
     }
-    if (cred?.provedor === "codewords" ? (!cred?.codewords_api_key || !cred?.codewords_service_id) : !cred?.token) {
-      await concluir("falhou", cred?.provedor === "codewords" ? "integração CodeWords sem credencial" : "número sem token"); return "falhou";
+    // não começa um envio que não cabe no tempo da função: volta para a fila SEM ter saído
+    if (prazo.fim && Date.now() + (cw ? RESERVA_ENVIO_MS.codewords : RESERVA_ENVIO_MS.meta) > prazo.fim) {
+      await concluir("pendente", null); return "adiado";
     }
     const r = item.tipo === "texto"
-      ? await enviarTextoPeloCanal(cred, para, corpoMsg, {
-        fetch: cred.provedor === "codewords" ? (creds.fetchCodeWords || rede) : rede,
-        timeoutMs: PRAZO_CODEWORDS_MS,
-        conversationId: item.conversa_id,
-        clientRef: cred.provedor === "codewords" ? `orbita:fila:${item.id}` : undefined,
-      })
+      ? await enviarTextoPeloCanal(cred, para, corpoMsg, { fetch: rede, fetchCru: creds.fetchCru, db })
       : await enviarTemplateCanal(cred, para, envio, { fetch: rede });
-    const erro = r.ok ? null : textoFalhaCanal(r.erro);
+    const erro = textoFalha(r);
+    const duvida = !r.ok && r.ambigua && cw;
     const msg = await db.rpc("nx_cv_saida", {
       p_conta: item.origem === "agendada" ? (item.criado_por ?? null) : null,
       p_cliente: item.cliente_id, p_conversa: item.conversa_id,
       p_msg: {
         tipo: item.tipo === "texto" ? "texto" : "template", corpo: corpoMsg, origem: item.origem,
         ...(envio ? { template: { id: item.modelo.id, nome: envio.nome, idioma: envio.idioma, categoria: item.modelo.categoria, parametros: envio.parametros } } : {}),
-        wamid: r.wamid || null, status: r.ok ? "enviada" : "falhou", erro,
+        wamid: r.wamid || (duvida ? wamidProvisorio(item.canal_id) : null),
+        status: r.ok ? "enviada" : duvida ? "pendente" : "falhou", erro,
       },
     }).catch(() => null);
-    await concluir(r.ok ? "enviado" : "falhou", erro, msg?.id);
+    // envio em dúvida (timeout/5xx do CodeWords) NUNCA volta para a fila: pode ter saído
+    await concluir(r.ok ? "enviado" : "falhou", duvida ? `${erro} (não reenviado automaticamente)` : erro, msg?.id);
     return r.ok ? "enviado" : "falhou";
   } catch (e) {
     try { await concluir("falhou", e?.message || e); } catch { /* o item volta pela faxina da fila (F7) */ }
@@ -363,11 +371,11 @@ async function enviarItem(db, item, creds, rede) {
 export async function enviarFila(db, { ids } = {}, ctx = {}) {
   const fetchCru = ctx.fetch || globalThis.fetch;
   const rede = ctx.rede || comPrazo(fetchCru, PRAZO_GRAPH_MS);
-  const redeCodeWords = ctx.redeCodeWords || comPrazo(fetchCru, PRAZO_CODEWORDS_MS);
   const res = { total: 0, enviado: 0, pulado: 0, falhou: 0 };
   const creds = new Map();
-  creds.fetchCodeWords = redeCodeWords;
+  creds.fetchCru = fetchCru;   // o CodeWords usa o próprio prazo (60 s)
   const inicio = Date.now();
+  const prazo = { fim: inicio + (ctx.limiteMs ?? FILA_LIMITE_MS) };
   const lista = Array.isArray(ids) ? ids.map(Number).filter(n => Number.isSafeInteger(n) && n > 0).slice(0, 100) : null;
   if (lista && !lista.length) return res;
   for (;;) {
@@ -375,7 +383,12 @@ export async function enviarFila(db, { ids } = {}, ctx = {}) {
       ? await db.rpc("nx_fila_pegar", { p_limite: lista.length, p_ids: lista })
       : await db.rpc("nx_fila_pegar", { p_limite: 20 });
     if (!Array.isArray(lote) || !lote.length) break;
-    for (const item of lote) { res[await enviarItem(db, item, creds, rede)]++; res.total++; }
+    for (const item of lote) {
+      const r = await enviarItem(db, item, creds, rede, prazo);
+      if (r === "adiado") { res.adiado = (res.adiado || 0) + 1; continue; }
+      res[r]++; res.total++;
+    }
+    if (res.adiado) break;
     if (lista || res.total >= FILA_MAX_ITENS || Date.now() - inicio > FILA_MAX_MS) break;
   }
   return res;

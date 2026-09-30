@@ -21,6 +21,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { criarBanco, erroPg, jsonResp, arvore } from "./apoio/postgrest-falso.mjs";
 import { tratar as webhook } from "../supabase/functions/_compartilhado/webhook.js";
 import { tratar as enviar, enviarFila } from "../supabase/functions/_compartilhado/enviar.js";
+import { tratarAgente } from "../supabase/functions/_compartilhado/codewords.js";
 import { tratar as midia, tipoAceito, pathDoCliente } from "../supabase/functions/_compartilhado/midia.js";
 import { tratar as nxIa, montarPrompt } from "../supabase/functions/_compartilhado/ia_conversas.js";
 import { normalizarMensagem, TEXTO_NAO_SUPORTADA } from "../supabase/functions/_compartilhado/conversas.js";
@@ -163,6 +164,8 @@ function rpcsSaaS(api) {
       if (!k || k.cliente_id !== p_cliente) throw e("canal_nao_encontrado");
       return { canal_id: k.id, cliente_id: k.cliente_id, nome: k.nome, phone_number_id: k.phone_number_id, waba_id: k.waba_id,
                provedor: k.provedor || "meta", codewords_service_id: k.codewords_service_id ?? null,
+               codewords_phone_id: k.codewords_phone_id ?? null, codewords_numero: k.codewords_numero ?? null,
+               codewords_numero_conferido: k.codewords_numero_conferido ?? null, codewords_conferido_em: k.codewords_conferido_em ?? null,
                codewords_api_key: k.codewords_api_key ?? null, token: k.token ?? null, app_secret: k.app_secret ?? null };
     } },
     nx_canal_verificado: { args: ["p_canal", "p_cliente", "p_ok", "p_numero", "p_qualidade", "p_inscrito", "p_erro"],
@@ -284,6 +287,24 @@ function rpcsSaaS(api) {
       if (p_conta && status !== "falhou") { cv.aguardando = false; cv.primeira_resposta_em ??= iso(); }
       return msgJson(m);
     } },
+    nx_cv_ia_pausa_auto: { args: ["p_cliente", "p_conversa", "p_por", "p_conta"], fn({ p_cliente, p_conversa }) {
+      const cv = conversa(p_conversa);
+      if (!cv || cv.cliente_id !== p_cliente) throw e("conversa_nao_encontrada");
+      cv.ia_pausada = true;
+      return { ok: true };
+    } },
+    nx_codewords_canal: { args: ["p_chave"], fn: ({ p_chave }) => {
+      const k = tab("nx_canais").find(x => x.provedor === "codewords" && x.segredo_teste === p_chave);
+      return k ? { canal_id: k.id, cliente_id: k.cliente_id, numero: k.codewords_numero, rota: "fluxo", ia_ligada: true, excedido: false } : null;
+    } },
+    // recibo do aparelho: acha a saída pelo id do provedor (wamid cw:<canal>:<id>) e só avança (enviada → entregue → lida)
+    nx_codewords_status: { args: ["p_canal", "p_id", "p_status", "p_erro"], fn({ p_canal, p_id, p_status }) {
+      const m = tab("nx_mensagens").find(x => x.wamid === `cw:${p_canal}:${p_id}`);
+      if (!m) return { ok: true, pendente: true };
+      const ordem = ["pendente", "enviada", "entregue", "lida"], novo = { sent: "enviada", delivered: "entregue", read: "lida" }[p_status];
+      if (novo && ordem.indexOf(novo) > ordem.indexOf(m.status)) m.status = novo;
+      return { ok: true, pendente: false };
+    } },
     nx_cv_contexto_envio: { args: ["p_ctx", "p_cliente", "p_conversa"], fn({ p_ctx, p_cliente, p_conversa }) {
       if (!visivel(p_ctx, p_cliente, p_conversa)) throw e("conversa_nao_encontrada");
       exigirModulo(p_cliente, "conversas");
@@ -292,7 +313,7 @@ function rpcsSaaS(api) {
       return {
         conversa: { id: cv.id, status: cv.status, canal_id: cv.canal_id, contato_id: cv.contato_id, protocolo: cv.protocolo, ultima_entrada_em: cv.ultima_entrada_em },
         contato: { id: ct.id, wa_id: ct.wa_id, telefone: ct.telefone, nome: ct.nome, optin_marketing: ct.optin_marketing, bloqueado: ct.bloqueado },
-        canal_id: cv.canal_id, canal: k ? { id: k.id, nome: k.nome, status: k.status, tem_token: !!k.token } : null,
+        canal_id: cv.canal_id, canal: k ? { id: k.id, nome: k.nome, status: k.status, tem_token: !!k.token, provedor: k.provedor || "meta" } : null,
         janela_aberta: janela(cv), ultimo_wamid_in: ultimoIn?.wamid ?? null,
         cfg_cv: { recibo_leitura: true, assinatura: false, ...(cliente(p_cliente).cfg?.cv || {}) },
         atendente_nome: conta(p_ctx.conta_id)?.nome, empresa: cliente(p_cliente).nome,
@@ -578,10 +599,17 @@ function cenario({ config = {}, extra = {} } = {}) {
     if (u.origin === SUPA && u.pathname.startsWith("/storage/v1/")) return fakeStorage(req, u, estado);
     if (u.host === "graph.facebook.com") return fakeGraph(req, u, estado);
     if (u.host === "runtime.codewords.ai") {
-      const payload = await req.json();
-      estado.codewords.push(payload);
-      if (estado.codewordsHandler) return estado.codewordsHandler(payload, req);
-      return jsonResp({ ok: true, message_id: "cw-test-1", status: "sent" });
+      // device manager (aparelho): GET /connections e POST /proxy/send/message (form-urlencoded, chave crua)
+      const texto = await req.text();
+      const tipo = req.headers.get("content-type");
+      const chamada = { metodo: req.method, caminho: u.pathname.replace("/run/whatsapp_device_manager", ""), phone_id: u.searchParams.get("phone_id"),
+                        auth: req.headers.get("authorization"), tipo, form: tipo?.includes("x-www-form-urlencoded") ? Object.fromEntries(new URLSearchParams(texto)) : null };
+      estado.codewords.push(chamada);
+      if (chamada.caminho === "/connections") {
+        return jsonResp([{ phone_id: "dev-a1", phone_number: "+5512900001111", status: "logged_in", service_path: "svc_ia/webhook" }]);
+      }
+      if (estado.codewordsHandler) return estado.codewordsHandler(chamada, req);
+      return jsonResp({ code: "SUCCESS", message: "Message sent", results: { message_id: "3EB0DEFAULT", status: "sent" } });
     }
     if (u.host === "lookaside.fbsbx.com") {
       if (!TOKENS_BONS.has((req.headers.get("authorization") || "").replace(/^Bearer\s+/, ""))) return new Response("proibido", { status: 401 });
@@ -933,52 +961,139 @@ test("nx-enviar texto: envia pelo canal DA conversa para o wa_id, grava a saída
   assert.equal(s.estado.graph.length, n);
 });
 
-test("nx-enviar CodeWords: timeout ambíguo não grava falha e a repetição conserva client_ref", async () => {
-  const s = cenario();
+/** Canal K_A1 vira um aparelho CodeWords pareado (modo padrão de envio: proxy do device manager). */
+const SEG_CW = "c".repeat(64);
+function canalAparelho(s) {
   const k = s.tab("nx_canais").find(x => x.id === K_A1);
-  Object.assign(k, { provedor: "codewords", codewords_service_id: "workflow-demo", codewords_api_key: "cwk-falsa" });
-  const aceitos = new Map();
-  let enviosReais = 0;
-  s.estado.codewordsHandler = payload => {
-    if (aceitos.has(payload.client_ref)) return jsonResp({ ok: true, message_id: aceitos.get(payload.client_ref), status: "sent" });
-    const id = `cw-provider-${aceitos.size + 1}`;
-    aceitos.set(payload.client_ref, id);
-    enviosReais++;
-    // O workflow enviou e guardou a referência, mas a primeira resposta se perdeu.
-    return jsonResp({ error: "resposta perdida" }, 503);
-  };
-  const fazerPedido = () => painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá", client_ref: "orbita:retry-1" });
-  const primeira = await ler(await enviar(fazerPedido(), ENV, s.deps()));
-  assert.equal(primeira.status, 502);
-  assert.equal(primeira.corpo.ambigua, true);
-  assert.equal(s.rpcs("nx_cv_saida").length, 0, "não persiste uma falha sem saber se houve envio");
+  Object.assign(k, { provedor: "codewords", codewords_api_key: "cwk-falsa-1234", codewords_phone_id: "dev-a1", codewords_numero: "+5512900001111",
+                     codewords_numero_conferido: true, codewords_conferido_em: s.estado.agora.toISOString(), segredo_teste: SEG_CW });
+  return k;
+}
+const envioProxy = s => s.estado.codewords.filter(x => x.caminho === "/proxy/send/message");
 
-  s.estado.codewordsHandler = payload => {
-    if (aceitos.has(payload.client_ref)) return jsonResp({ ok: true, message_id: aceitos.get(payload.client_ref), status: "sent" });
-    enviosReais++;
-    return jsonResp({ error: "referência ausente" }, 400);
-  };
-  const segunda = await ler(await enviar(fazerPedido(), ENV, s.deps()));
-  assert.equal(segunda.status, 200);
-  assert.equal(s.tab("nx_mensagens").find(m => m.direcao === "out" && m.corpo === "Olá").wamid, `cw:${K_A1}:out:cw-provider-1`);
-  assert.equal(s.estado.codewords.length, 2);
-  assert.deepEqual(s.estado.codewords.map(x => x.client_ref), ["orbita:retry-1", "orbita:retry-1"]);
-  assert.equal(enviosReais, 1, "o workflow idempotente só envia uma vez");
-  assert.equal(s.rpcs("nx_cv_saida").length, 1);
+test("nx-enviar CodeWords (aparelho): sucesso pelo proxy — form-urlencoded, chave crua, phone_id, sem janela de 24 h; a IA pausa", async () => {
+  const s = cenario();
+  canalAparelho(s);
+  const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 602, texto: "Olá pelo aparelho" }), ENV, s.deps()));   // 602: SEM janela da Meta
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.ok, true);
+  assert.equal(envioProxy(s).length, 1);
+  const [x] = envioProxy(s);
+  assert.equal(x.auth, "cwk-falsa-1234", "chave crua, sem Bearer");
+  assert.equal(x.tipo, "application/x-www-form-urlencoded");
+  assert.equal(x.phone_id, "dev-a1");
+  assert.equal(x.form.message, "Olá pelo aparelho");
+  assert.match(x.form.phone, /^55\d{10,11}$/);
+  assert.equal(s.estado.graph.length, 0, "nada vai para a Graph");
+  assert.equal(r.corpo.mensagem.status, "enviada");
+  assert.equal(s.rpcs("nx_cv_saida")[0].params.p_msg.wamid, `cw:${K_A1}:3EB0DEFAULT`);
+  assert.equal(s.tab("nx_mensagens").filter(m => m.wamid === `cw:${K_A1}:3EB0DEFAULT`).length, 1);
+  assert.equal(s.rpcs("nx_cv_ia_pausa_auto").length, 1, "resposta de atendente pausa a IA");
 });
 
-test("nx-enviar CodeWords: status entregue/lido do Runtime API é salvo sem esperar o webhook", async () => {
+test("nx-enviar CodeWords (aparelho): HTTP 200 com skip/error/failed é FALHA gravada com o motivo, não sucesso", async () => {
   const s = cenario();
-  const k = s.tab("nx_canais").find(x => x.id === K_A1);
-  Object.assign(k, { provedor: "codewords", codewords_service_id: "workflow-demo", codewords_api_key: "cwk-falsa" });
-  const status = ["delivered", "read"];
-  s.estado.codewordsHandler = () => jsonResp({ ok: true, message_id: `sync-${status.shift()}`, status: status.length ? "delivered" : "read" });
+  canalAparelho(s);
+  s.estado.codewordsHandler = () => jsonResp({ status: "skip", message: "Own message or empty" });
+  const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá" }), ENV, s.deps()));
+  assert.equal(r.corpo.ok, false);
+  assert.equal(r.corpo.erro, "envio_falhou");
+  assert.equal(r.corpo.mensagem.status, "falhou");
+  assert.match(r.corpo.mensagem.erro, /own message or empty/i);
+  assert.equal(envioProxy(s).length, 1);
+  assert.equal(s.rpcs("nx_cv_ia_pausa_auto").length, 0, "falha certa não pausa a IA");
+});
+
+test("nx-enviar CodeWords (aparelho): timeout/5xx é AMBÍGUO — nunca reenvia sozinho, nunca grava 'falhou'; fica pendente com id provisório", async () => {
+  for (const resposta of [() => jsonResp({ error: "resposta perdida" }, 503), () => { throw new Error("timeout"); }]) {
+    const s = cenario();
+    canalAparelho(s);
+    s.estado.codewordsHandler = resposta;
+    const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá" }), ENV, s.deps()));
+    assert.equal(r.corpo.ambigua, true);
+    assert.match(r.corpo.aviso, /pode ter saído/);
+    assert.equal(envioProxy(s).length, 1, "uma tentativa só: sem reenvio automático");
+    const saidas = s.rpcs("nx_cv_saida");
+    assert.equal(saidas.length, 1);
+    assert.equal(saidas[0].params.p_msg.status, "pendente", "em dúvida: pendente, NUNCA falhou");
+    assert.match(saidas[0].params.p_msg.wamid, new RegExp(`^cw:${K_A1}:orbita-p-[0-9a-f]{32}$`), "id provisório: a sincronização adota a gêmea");
+    assert.equal(s.tab("nx_mensagens").filter(m => m.direcao === "out" && m.corpo === "Olá" && m.status === "falhou").length, 0);
+    assert.equal(s.rpcs("nx_cv_ia_pausa_auto").length, 1, "pode ter saído: a IA não responde por cima");
+  }
+});
+
+test("nx-enviar CodeWords (aparelho): número do aparelho diferente do canal → nada sai (falha certa, sem pendente)", async () => {
+  const s = cenario();
+  const k = canalAparelho(s);
+  Object.assign(k, { codewords_numero: "+5512999990000", codewords_numero_conferido: null, codewords_conferido_em: null });
+  const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá" }), ENV, s.deps()));
+  assert.equal(r.corpo.ok, false);
+  assert.equal(r.corpo.mensagem.status, "falhou");
+  assert.match(r.corpo.mensagem.erro, /não é o número deste canal/);
+  assert.equal(envioProxy(s).length, 0);
+});
+
+test("nx-enviar CodeWords (aparelho): sem chave ou sem aparelho pareado → 400 antes de qualquer chamada", async () => {
+  const s = cenario();
+  const k = canalAparelho(s);
+  k.codewords_phone_id = null;
+  let r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá" }), ENV, s.deps()));
+  assert.equal(r.status, 400); assert.equal(r.corpo.erro, "codewords_sem_aparelho");
+  k.codewords_phone_id = "dev-a1"; k.codewords_api_key = null;
+  r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá" }), ENV, s.deps()));
+  assert.equal(r.status, 400); assert.equal(r.corpo.erro, "codewords_sem_credencial");
+  assert.equal(s.estado.codewords.length, 0);
+});
+
+test("nx-enviar CodeWords (aparelho): entregue/lida chegam por recibo do aparelho (nx-codewords status) e casam com a saída pelo id; a resposta do envio não finge entrega", async () => {
+  const s = cenario();
+  canalAparelho(s);
+  const ids = ["3EB0RECIBO1", "3EB0RECIBO2"];
+  // mesmo que o proxy diga "delivered" no corpo do 200, a saída nasce 'enviada': entrega e leitura só por recibo do aparelho
+  s.estado.codewordsHandler = () => jsonResp({ code: "SUCCESS", results: { message_id: ids.shift(), status: "delivered" } });
   const a = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Recebida" }), ENV, s.deps()));
   const b = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Lida" }), ENV, s.deps()));
-  assert.equal(a.status, 200);
-  assert.equal(b.status, 200);
-  assert.deepEqual(s.rpcs("nx_cv_saida").map(x => x.params.p_msg.status), ["entregue", "lida"]);
-  assert.deepEqual(s.tab("nx_mensagens").filter(m => m.direcao === "out" && m.conversa_id === 601).slice(-2).map(m => m.status), ["entregue", "lida"]);
+  assert.deepEqual([a.status, b.status], [200, 200]);
+  assert.deepEqual(s.rpcs("nx_cv_saida").map(x => x.params.p_msg.status), ["enviada", "enviada"]);
+  const recibo = (message_id, status) => tratarAgente(new Request(`${FN}/nx-codewords?ch=${SEG_CW}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acao: "status", message_id, status }) }), ENV, s.deps());
+  assert.equal((await ler(await recibo("3EB0RECIBO1", "delivered"))).corpo.ok, true);
+  assert.equal((await ler(await recibo("3EB0RECIBO2", "read"))).corpo.ok, true);
+  assert.equal((await ler(await recibo("3EB0RECIBO1", "sent"))).corpo.ok, true);   // atrasado: não regride
+  const saidas = s.tab("nx_mensagens").filter(m => m.direcao === "out" && m.conversa_id === 601).slice(-2);
+  assert.deepEqual(saidas.map(m => m.status), ["entregue", "lida"]);
+});
+
+test("nx-enviar CodeWords (aparelho, fila): envio ambíguo NUNCA volta para a fila; grava pendente e conclui o item sem reenviar", async () => {
+  const s = cenario();
+  canalAparelho(s);
+  s.estado.codewordsHandler = () => jsonResp({ error: "x" }, 502);
+  const item = {
+    id: 9001, cliente_id: CLI_A, canal_id: K_A1, conversa_id: 601, tipo: "texto", texto: "Lembrete", origem: "automacao", janela_aberta: false,
+    conversa: { id: 601 }, contato: { wa_id: "5512988887777", telefone: "5512988887777", bloqueado: false },
+  };
+  const concluidos = [];
+  const db = criarDb(ENV, s.fetch);
+  const rpc = db.rpc.bind(db);
+  let pegou = false;
+  db.rpc = async (nome, p) => {
+    if (nome === "nx_fila_pegar") { if (pegou) return []; pegou = true; return [item]; }
+    if (nome === "nx_fila_concluir") { concluidos.push(p); return null; }
+    return rpc(nome, p);
+  };
+  const res = await enviarFila(db, { ids: [9001] }, { fetch: s.fetch });
+  assert.equal(envioProxy(s).length, 1, "não tenta de novo");
+  assert.equal(res.falhou, 1);
+  assert.equal(concluidos.length, 1);
+  assert.notEqual(concluidos[0].p_status, "pendente", "o item não volta para a fila (reenviaria)");
+  assert.match(concluidos[0].p_erro, /não reenviado automaticamente/);
+  assert.equal(s.rpcs("nx_cv_saida")[0].params.p_msg.status, "pendente");
+});
+
+test("nx-enviar: o modo workflow/Runtime API (client_ref, service_id) foi removido do envio — só o aparelho", () => {
+  const sem = f => readFileSync(join(RAIZ, "supabase/functions/_compartilhado", f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  for (const f of ["enviar.js", "codewords.js"]) assert.ok(!/client_?ref|\/run\/\$\{|clientRef/i.test(sem(f)), `${f} sem envio por workflow`);
+  assert.ok(!/codewords_service_id/.test(sem("enviar.js")), "nx-enviar não escolhe caminho por service_id");
 });
 
 test("nx-enviar texto fora da janela → fora_da_janela SEM chamar a Graph; resolvida → conversa_resolvida", async () => {
