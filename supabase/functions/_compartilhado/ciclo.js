@@ -13,7 +13,7 @@ import { hojeSP, nomePlat } from "./nucleo.js";
 import {
   ErroHttp, json, agoraDe, somaDias, limparErro, lerCorpo, autenticarCron, listarClientes,
   carregarModelo, emLotes, erroDeEnvio, registrarExecucao, listaDestinos, comPrazo, PRAZO_REDE_MS,
-  nomeCurto, tituloRadar, modeloVazio, comTravaDoCliente, todosPulados, EM_EXECUCAO,
+  nomeCurto, tituloRadar, modeloVazio, comTravaDoCliente, todosPulados, EM_EXECUCAO, soltandoCorpo,
 } from "./comum.js";
 
 const CONFLITO_METRICAS = "cliente_id,plataforma,nivel,data,campanha_ext,anuncio_ext";
@@ -223,7 +223,12 @@ async function processarCliente(db, cfg, cliente, ctx) {
  * @param {{url: string, chave: string}} env
  * @param {{fetch?: Function, agora?: Date|Function, prazoRede?: number}} [deps]
  */
-export async function tratar(req, env, deps = {}) {
+export function tratar(req, env, deps = {}) {
+  // 405/401 respondem sem ler: o corpo é cancelado antes da resposta (senão o runtime espera o envio)
+  return soltandoCorpo(req, () => tratarCiclo(req, env, deps));
+}
+
+async function tratarCiclo(req, env, deps) {
   if (req.method !== "POST") return json({ erro: "use POST" }, 405);
   if (!req.headers.get("x-nx-cron")) return json({ erro: "não autorizado" }, 401);
   const t0 = Date.now();

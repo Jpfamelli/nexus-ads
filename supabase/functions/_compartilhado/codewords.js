@@ -23,6 +23,7 @@ import { criarDb } from "./db.js";
 import {
   json, limparErro, comPrazo, soDigitos, ErroApi, ErroHttp, respostaPainel, tratarPainel,
   lerCorpoPainel, autenticarPainel, interna, autenticarCron, emLotes,
+  lerCorpo, lerCorpoLimitado, soltarCorpo, soltandoCorpo, CorpoGrande, tamanhoDeclarado,
 } from "./comum.js";
 import { hojeSP } from "./nucleo.js";
 import { montarInstrucoes, montarReceita } from "./codewords_prompt.js";
@@ -792,18 +793,32 @@ const codigoDoBanco = e => {
   return m && e?.status >= 400 && e?.status < 500 ? m[1] : null;
 };
 
-export async function tratarAgente(req, env, deps = {}) {
+export function tratarAgente(req, env, deps = {}) {
+  // 405/401/429 respondem sem ler: o corpo é cancelado antes da resposta (senão o runtime espera o envio)
+  return soltandoCorpo(req, () => tratarAgenteCorpo(req, env, deps));
+}
+
+async function tratarAgenteCorpo(req, env, deps) {
   if (req.method !== "POST") return respostaAgente({ ok: false, erro: "metodo_invalido" }, 405);
   const chave = new URL(req.url).searchParams.get("ch") || "";
   if (!/^[0-9a-f]{64}$/.test(chave)) return respostaAgente({ ok: false, erro: "canal_invalido" }, 401);
-  if (Number(req.headers.get("content-length") || 0) > MAX_CORPO) return respostaAgente({ ok: false, erro: "corpo_grande" }, 413);
+  // Content-Length acima de 64 KiB: 413 na hora, sem banco e sem ler (corpo cancelado)
+  if ((tamanhoDeclarado(req) ?? 0) > MAX_CORPO) {
+    soltarCorpo(req);
+    return respostaAgente({ ok: false, erro: "corpo_grande" }, 413);
+  }
   const db = criarDb(env, deps.fetch || globalThis.fetch);
   try {
     const canal = await db.rpc("nx_codewords_canal", { p_chave: chave });
     if (!canal?.canal_id) return respostaAgente({ ok: false, erro: "canal_invalido" }, 401);
     if (canal.excedido) return respostaAgente({ ok: false, erro: "limite_taxa" }, 429, { "retry-after": "60" });
-    const bytes = new Uint8Array(await req.arrayBuffer());
-    if (bytes.length > MAX_CORPO) return respostaAgente({ ok: false, erro: "corpo_grande" }, 413);
+    // sem Content-Length (ou mentindo): lê contando; no 1º byte além de 64 KiB cancela e 413
+    let bytes;
+    try { bytes = await lerCorpoLimitado(req, MAX_CORPO); }
+    catch (e) {
+      if (e instanceof CorpoGrande) return respostaAgente({ ok: false, erro: "corpo_grande" }, 413);
+      throw e;   // leitura interrompida: falha técnica (o fluxo pode tentar de novo)
+    }
     let corpo;
     try { corpo = JSON.parse(new TextDecoder().decode(bytes)); }
     catch { return respostaAgente({ ok: false, erro: "json_invalido" }, 400); }
@@ -992,8 +1007,7 @@ export async function sincronizar(db, o = {}) {
 async function modoCron(req, env, deps, f) {
   const db = criarDb(env, f);
   await autenticarCron(req, db);   // 401 sem o cron_token
-  let corpo = {};
-  try { corpo = await req.json(); } catch { corpo = {}; }
+  const corpo = await lerCorpo(req);   // teto de 64 KiB (413); ilegível → {}
   const chaves = OBJ(corpo) ? Object.keys(corpo) : [];
   if (chaves.length !== 1 || corpo.sincronizar !== true) return json({ ok: false, erro: "dados_invalidos" }, 400);
   return json({ ok: true, sincronizacao: await sincronizar(db, { fetch: f, orcamentoMs: deps.orcamentoMs }) });
@@ -1004,7 +1018,12 @@ async function modoCron(req, env, deps, f) {
  * @param {{url: string, chave: string}} env
  * @param {{fetch?: Function, emSegundoPlano?: Function, orcamentoMs?: number}} [deps]
  */
-export async function tratar(req, env, deps = {}) {
+export function tratar(req, env, deps = {}) {
+  // corpo não lido (cron recusado, URL ruim) é cancelado antes da resposta
+  return soltandoCorpo(req, () => tratarCodeWords(req, env, deps));
+}
+
+async function tratarCodeWords(req, env, deps) {
   const f = deps.fetch || globalThis.fetch;
   let u;
   try { u = new URL(req.url); } catch { return json({ ok: false, erro: "dados_invalidos" }, 400); }

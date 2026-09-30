@@ -9,7 +9,7 @@ import { hojeSP, MESES } from "./nucleo.js";
 import {
   ErroHttp, json, agoraDe, somaDias, limparErro, lerCorpo, autenticarCron, listarClientes,
   carregarModelo, emLotes, erroDeEnvio, registrarExecucao, listaDestinos, comPrazo, PRAZO_REDE_MS,
-  tituloRelatorio, comTravaDoCliente, todosPulados, EM_EXECUCAO,
+  tituloRelatorio, comTravaDoCliente, todosPulados, EM_EXECUCAO, soltandoCorpo,
 } from "./comum.js";
 
 const JANELA = 130;         // a mesma do painel (nx_dados p_dias padrão): os números batem
@@ -102,7 +102,12 @@ async function gerar(db, cfg, cliente, ctx) {
  * @param {{fetch?: Function, agora?: Date|Function, ia?: Function, prazoIA?: number, prazoRede?: number}} [deps]
  *   ia({chave, modelo, tipo, contexto}) → texto; padrão: ./ia.js (SDK oficial)
  */
-export async function tratar(req, env, deps = {}) {
+export function tratar(req, env, deps = {}) {
+  // 405/401 respondem sem ler: o corpo é cancelado antes da resposta (senão o runtime espera o envio)
+  return soltandoCorpo(req, () => tratarRelatorio(req, env, deps));
+}
+
+async function tratarRelatorio(req, env, deps) {
   if (req.method !== "POST") return json({ erro: "use POST" }, 405);
   if (!req.headers.get("x-nx-cron")) return json({ erro: "não autorizado" }, 401);
   const t0 = Date.now();

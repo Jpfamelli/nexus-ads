@@ -42,6 +42,7 @@ node testes/relatorios.teste.mjs
 node --test testes/funcoes.teste.mjs
 node --test testes/scripts.teste.mjs
 node --test testes/conversas-funcoes.teste.mjs
+node --test testes/corpo-limite.teste.mjs
 node --test testes/automacoes.teste.mjs
 node --test testes/codewords.teste.mjs
 node --test testes/rastreio.teste.mjs

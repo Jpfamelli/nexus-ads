@@ -15,7 +15,7 @@
 import { criarDb } from "./db.js";
 import {
   lerCorpo, autenticarCron, limparErro, comPrazo, ErroHttp, json,
-  ErroApi, respostaPainel, tratarPainel, lerCorpoPainel, autenticarPainel, interna,
+  ErroApi, respostaPainel, tratarPainel, lerCorpoPainel, autenticarPainel, interna, soltandoCorpo,
 } from "./comum.js";
 import {
   enviarTextoCanal, enviarMidiaCanal, enviarTemplateCanal, marcarLido, infoNumero, appsInscritos,
@@ -493,7 +493,12 @@ async function modoCron(req, env, deps, f) {
  * @param {{url: string, chave: string}} env
  * @param {{fetch?: Function, agora?: Date|Function, prazoRede?: number, emSegundoPlano?: (p: Promise<unknown>) => void}} [deps]
  */
-export async function tratar(req, env, deps = {}) {
+export function tratar(req, env, deps = {}) {
+  // 405/401 respondem sem ler: o corpo é cancelado antes da resposta (senão o runtime espera o envio)
+  return soltandoCorpo(req, () => tratarEnviar(req, env, deps));
+}
+
+async function tratarEnviar(req, env, deps) {
   const f = deps.fetch || globalThis.fetch;
   if (req.method === "POST" && req.headers.get("x-nx-cron") != null) {
     try { return await modoCron(req, env, deps, f); }

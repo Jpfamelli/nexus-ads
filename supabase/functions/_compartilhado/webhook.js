@@ -16,7 +16,7 @@ import { enviarTemplate, foraDaJanela } from "./whatsapp.js";
 import { processarCanal } from "./conversas.js";
 import {
   json, agoraDe, soDigitos, iguaisSeguro, limparErro, lerConfig, comPrazo,
-  nomeCurto, tituloRadar, tituloRelatorio,
+  nomeCurto, tituloRadar, tituloRelatorio, lerCorpoLimitado, soltandoCorpo, CorpoGrande,
 } from "./comum.js";
 
 const DIAS_MESMA_CONVERSA = 30;
@@ -31,39 +31,10 @@ const TRAVA_REENVIO_S = 7 * 86400;
 // o webhook precisa responder rápido à Meta: o reenvio por template não espera os 30 s do sync
 const PRAZO_ENVIO_MS = 10_000;
 const PRAZO_MIDIA_MS = 60_000;
-const MAX_CORPO_WEBHOOK = 2 * 1024 * 1024;
+// 2 MiB exatos passam; 1 byte a mais → 413 na hora (lerCorpoLimitado cancela o corpo)
+export const MAX_CORPO_WEBHOOK = 2 * 1024 * 1024;
 // wamid é base64 com prefixo: nada de aspas, chaves, vírgulas ou barra invertida
 const WAMID_OK = /^[\w.:=+/-]{1,256}$/;
-
-/** Limita também corpos sem Content-Length confiável antes de alocar a carga inteira. */
-async function lerCorpoLimitado(req, limite = MAX_CORPO_WEBHOOK) {
-  const informado = Number(req.headers.get("content-length"));
-  if (Number.isFinite(informado) && informado > limite) {
-    const e = new Error("corpo do webhook excede o limite"); e.status = 413; throw e;
-  }
-  const leitor = req.body?.getReader?.();
-  if (!leitor) {
-    const bytes = new Uint8Array(await req.arrayBuffer());
-    if (bytes.byteLength > limite) { const e = new Error("corpo do webhook excede o limite"); e.status = 413; throw e; }
-    return bytes;
-  }
-  const partes = [];
-  let total = 0;
-  while (true) {
-    const { value, done } = await leitor.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > limite) {
-      await leitor.cancel().catch(() => {});
-      const e = new Error("corpo do webhook excede o limite"); e.status = 413; throw e;
-    }
-    partes.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let deslocamento = 0;
-  for (const parte of partes) { bytes.set(parte, deslocamento); deslocamento += parte.byteLength; }
-  return bytes;
-}
 
 async function hmacHex(segredo, bytes) {
   const enc = new TextEncoder();
@@ -375,7 +346,12 @@ async function canalDaUrl(db, u) {
  *          emSegundoPlano?: (p: Promise<any>) => void}} [deps]
  *        emSegundoPlano: EdgeRuntime.waitUntil no index.ts; sem ele, a mídia e a fila rodam antes da resposta.
  */
-export async function tratar(req, env, deps = {}) {
+export function tratar(req, env, deps = {}) {
+  // o corpo que não foi lido (GET/PUT, falha antes da leitura) é cancelado antes da resposta
+  return soltandoCorpo(req, () => tratarWebhook(req, env, deps));
+}
+
+async function tratarWebhook(req, env, deps) {
   const f = deps.fetch || globalThis.fetch;
   try {
     const db = criarDb(env, f);
@@ -391,9 +367,11 @@ export async function tratar(req, env, deps = {}) {
     }
     if (req.method !== "POST") return texto("método não permitido", 405);
 
+    // corpo com teto ANTES de tudo (banco, assinatura): acima de 2 MiB → 413 na hora, corpo cancelado;
+    // a assinatura só é conferida sobre o corpo inteiro dentro do limite
     let cru;
-    try { cru = await lerCorpoLimitado(req); }
-    catch (e) { return texto(e?.status === 413 ? "corpo grande demais" : "corpo inválido", e?.status || 400); }
+    try { cru = await lerCorpoLimitado(req, MAX_CORPO_WEBHOOK); }
+    catch (e) { return e instanceof CorpoGrande ? texto("corpo grande demais", 413) : texto("corpo inválido", 400); }
     const url = await canalDaUrl(db, u);
     if (url.tem && !url.canal) return texto("canal desconhecido", 401);
     const cfg = await lerConfig(db);

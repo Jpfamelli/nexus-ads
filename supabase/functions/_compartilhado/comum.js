@@ -74,8 +74,76 @@ export function comPrazo(f, ms = PRAZO_REDE_MS) {
   };
 }
 
-export async function lerCorpo(req) {
-  try { const c = await req.json(); return c && typeof c === "object" ? c : {}; } catch { return {}; }
+/* ------------------------------------------------------------
+   Corpo da requisição com teto (E2E-meta, bug 1)
+   Responder SEM ler nem soltar o corpo deixa o runtime esperando o cliente terminar de
+   enviar: o nx-whatsapp "devolvia" 413 para 2 MiB + 1, mas a resposta nunca saía e o
+   gateway dava 503 depois de ~160 s (um worker preso por POST, sem autenticação).
+   Regra: quem não vai ler o corpo inteiro o CANCELA antes de responder.
+   ------------------------------------------------------------ */
+export class CorpoGrande extends Error {
+  constructor(limite) { super(`corpo acima de ${limite} bytes`); this.name = "CorpoGrande"; this.status = 413; this.limite = limite; }
+}
+
+/** Cancela o corpo que não vai ser lido (ou o leitor que parou no meio). Não espera o
+    cancelamento terminar: ele nunca pode segurar a resposta. Corpo já lido/travado: nada a fazer. */
+export function soltarCorpo(req, leitor = null) {
+  try {
+    const alvo = leitor || (req?.body && !req.body.locked ? req.body : null);
+    const p = alvo?.cancel?.();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch { /* nada a soltar */ }
+}
+
+/** Content-Length declarado (inteiro ≥ 0) ou null (ausente/ilegível: vale a contagem). */
+export function tamanhoDeclarado(req) {
+  const v = req.headers.get("content-length");
+  if (v == null || !/^\s*\d+\s*$/.test(v)) return null;
+  return Number(v);
+}
+
+/**
+ * Corpo CRU com teto em bytes. Content-Length acima do teto → CorpoGrande NA HORA, sem ler
+ * nada e com o corpo cancelado. Sem Content-Length (ou com um que mente), lê contando e, no
+ * primeiro pedaço além do teto, cancela o leitor e lança CorpoGrande. Exatamente no teto passa.
+ */
+export async function lerCorpoLimitado(req, limite) {
+  const declarado = tamanhoDeclarado(req);
+  if (declarado != null && declarado > limite) { soltarCorpo(req); throw new CorpoGrande(limite); }
+  if (!req.body) return new Uint8Array(0);
+  const leitor = req.body.getReader();
+  const partes = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await leitor.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limite) { soltarCorpo(req, leitor); throw new CorpoGrande(limite); }
+    partes.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let pos = 0;
+  for (const p of partes) { bytes.set(p, pos); pos += p.byteLength; }
+  return bytes;
+}
+
+/** Roda o handler e, na saída, cancela o corpo que ninguém leu (405/401/429 antes da leitura). */
+export async function soltandoCorpo(req, fn) {
+  try { return await fn(); }
+  finally { soltarCorpo(req); }
+}
+
+export const MAX_CORPO_CRON = 64 * 1024;
+
+/** Corpo JSON do cron (pequeno: {cliente}, {tipo}, {ids:[≤100]}). Acima do teto → 413; ilegível → {}. */
+export async function lerCorpo(req, limite = MAX_CORPO_CRON) {
+  let bytes;
+  try { bytes = await lerCorpoLimitado(req, limite); }
+  catch (e) {
+    if (e instanceof CorpoGrande) throw new ErroHttp(413, "corpo grande demais");
+    return {};
+  }
+  try { const c = JSON.parse(new TextDecoder().decode(bytes)); return c && typeof c === "object" ? c : {}; } catch { return {}; }
 }
 
 export async function lerConfig(db) {
@@ -320,25 +388,31 @@ export async function autenticarPainel(db, corpo, papelMin = "atendente") {
   return ctx;
 }
 
-/** Corpo do painel: JSON pequeno (o painel nunca manda arquivo por aqui). */
+/** Corpo do painel: JSON pequeno (o painel nunca manda arquivo por aqui). Teto em BYTES
+    (lerCorpoLimitado): acima dele, 413 na hora, sem ler o resto. */
 export async function lerCorpoPainel(req, max = 64_000) {
-  const txt = await req.text();
-  if (txt.length > max) throw new ErroApi("dados_invalidos", 413);
+  let bytes;
+  try { bytes = await lerCorpoLimitado(req, max); }
+  catch (e) { if (e instanceof CorpoGrande) throw new ErroApi("dados_invalidos", 413); throw e; }
+  const txt = new TextDecoder().decode(bytes);
   try { const c = JSON.parse(txt || "{}"); if (c && typeof c === "object" && !Array.isArray(c)) return c; } catch { /* abaixo */ }
   throw new ErroApi("dados_invalidos", 400);
 }
 
-/** Envolve um handler de painel: OPTIONS, método, erros → {ok:false, erro}. */
+/** Envolve um handler de painel: OPTIONS, método, erros → {ok:false, erro}. O corpo que
+    não foi lido (OPTIONS, 405, falha antes da leitura) é cancelado antes da resposta. */
 export async function tratarPainel(req, fn) {
-  if (req.method === "OPTIONS") return preflight();
-  if (req.method !== "POST") return respostaErro("metodo_invalido", 405);
-  try {
-    return await fn();
-  } catch (e) {
-    const x = erroApiDoBanco(e);
-    if (x instanceof ErroApi) return respostaErro(x.codigo, x.status, x.detalhe);
-    const msg = limparErro(e?.message || e);
-    console.error("painel:", msg);
-    return respostaErro("erro_interno", 500, msg);
-  }
+  return soltandoCorpo(req, async () => {
+    if (req.method === "OPTIONS") return preflight();
+    if (req.method !== "POST") return respostaErro("metodo_invalido", 405);
+    try {
+      return await fn();
+    } catch (e) {
+      const x = erroApiDoBanco(e);
+      if (x instanceof ErroApi) return respostaErro(x.codigo, x.status, x.detalhe);
+      const msg = limparErro(e?.message || e);
+      console.error("painel:", msg);
+      return respostaErro("erro_interno", 500, msg);
+    }
+  });
 }
