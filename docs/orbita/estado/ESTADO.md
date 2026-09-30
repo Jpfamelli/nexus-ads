@@ -229,3 +229,9 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 - `netlify.toml` ignora builds da branch `main` antes do aceite F8; Deploy Previews da branch do PR continuam elegíveis. O comando exato de ignore passou no Bash para `main` (retorna 0/ignora) e `codex/orbita` (retorna 1/continua). A regra cobre builds contínuos, não deploys manuais ou build hooks.
 - O site `orbita-nexus-ads` ainda não está conectado ao repositório. O vínculo aguarda confirmação de ação no momento da conexão, pois concede acesso persistente ao repo.
 - Nenhum deploy remoto nem escrita em Supabase foi feito. F8 segue aberta para E2E-A/B, canal CodeWords de teste, métricas Ads isoladas, QA mobile autenticado e limpeza de fixtures.
+
+## Vínculo Netlify — autenticação pendente — 2026-09-30 00:43 -03
+
+- João confirmou conectar o Netlify `orbita-nexus-ads` ao repo `Jpfamelli/nexus-ads`. O site está autenticado no Chrome, mas o GitHub não tem sessão ativa e abriu a tela de login.
+- Não inseri credenciais nem alterei a configuração do projeto. A aba GitHub ficou aberta para autenticação manual; após João entrar, continuar o vínculo e verificar o Deploy Preview. Produção segue protegida pela regra da `main`.
+- A suíte Node 14/14 passou antes do fluxo. Nenhum deploy remoto ou escrita no Supabase foi feito; F8 permanece aberta pelos gates documentados.
