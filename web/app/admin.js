@@ -26,6 +26,48 @@ const VERTICAIS = [
   { valor: "loja", rotulo: "Loja" }, { valor: "generico", rotulo: "Outro negócio" },
 ];
 
+/** Pacotes comerciais Nexus. O plano de acesso ao Órbita continua sendo uma decisão técnica separada. */
+export const PACOTES_COMERCIAIS = Object.freeze([
+  Object.freeze({ id: "essencial", nome: "PLANO ESSENCIAL", mensalCentavos: 129478, integracaoCentavos: 88945,
+    acesso: "essencial", itens: Object.freeze(["Site profissional", "5 a 10 posts por mês", "1 diária de gravação por mês", "Edição de vídeo", "Sistema de atendimento"]) }),
+  Object.freeze({ id: "profissional", nome: "PLANO PROFISSIONAL", mensalCentavos: 187253, integracaoCentavos: 119289,
+    acesso: "profissional", itens: Object.freeze(["Tudo do Essencial", "IA no atendimento", "10 a 15 posts por mês", "Sistema de atendimento e CRM", "Gestão de tráfego pago"]) }),
+  Object.freeze({ id: "ultra", nome: "PLANO ULTRA", mensalCentavos: 228734, integracaoCentavos: 134457,
+    acesso: "completo", itens: Object.freeze(["Tudo do Profissional", "15 a 20 posts por mês", "Edição completa de conteúdos", "CRM e IA no atendimento", "Sistema de atendimento", "Gestão de tráfego pago e sistema de gestão", "Mais 1 sistema completo à sua escolha"]) }),
+]);
+
+/** O formulário aceita qualquer segmento; só os modelos já existentes são reconhecidos automaticamente. */
+export function verticalPorSegmento(segmento) {
+  const s = String(segmento || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (/odont|dentist|dent[aá]ria/.test(s)) return "odonto";
+  if (/oficina|mecanic|autopeca|automot/.test(s)) return "oficina";
+  if (/\bloja\b|varejo|comercio|e-commerce/.test(s)) return "loja";
+  return "generico";
+}
+
+function campoPacoteComercial(ui, selecionado = null, { obrigatorio = false, comercial = null } = {}) {
+  const h = ui.h;
+  const radios = PACOTES_COMERCIAIS.map(p => {
+    const salvo = comercial && comercial.pacote === p.id ? comercial : null;
+    const mensal = Number.isInteger(salvo && salvo.mensal_centavos) ? salvo.mensal_centavos : p.mensalCentavos;
+    const integracao = Number.isInteger(salvo && salvo.integracao_centavos) ? salvo.integracao_centavos : p.integracaoCentavos;
+    const radio = h("input", { type: "radio", name: "pacote_comercial", value: p.id, checked: selecionado === p.id, required: !!obrigatorio });
+    return h("label", { class: "oferta-card" }, radio,
+      h("span", { class: "oferta-conteudo" },
+        h("span", { class: "oferta-cab" }, h("b", null, p.nome), h("span", { class: "oferta-preco" }, `${ui.brl(mensal / 100)}/mês`)),
+        h("span", { class: "oferta-integracao" }, `${ui.brl(integracao / 100)} de integração · valor único`),
+        h("span", { class: "oferta-inclusoes-tit" }, "Inclui"),
+        h("span", { class: "oferta-inclusoes" }, p.itens.map(item => h("span", null, item)))));
+  });
+  const erro = h("small", { class: "campo-erro", hidden: true });
+  return h("fieldset", { class: "campo campo-ofertas", dataset: { campo: "pacote_comercial" } },
+    h("legend", null, "Plano comercial", obrigatorio ? h("span", { class: "obrig", "aria-hidden": "true" }, " *") : null),
+    h("div", { class: "ofertas-grade", role: "radiogroup", "aria-label": "Escolha um plano comercial" }, radios),
+    h("small", { class: "campo-ajuda" }, "O pacote registra o escopo contratado. O acesso aos recursos do Órbita segue a configuração técnica da empresa."), erro);
+}
+
+function rotuloPacote(id) { return PACOTES_COMERCIAIS.find(p => p.id === id)?.nome || "Sem pacote comercial"; }
+
 let _planos = null;
 let _orgs = null;
 let _limpeza = [];
@@ -178,29 +220,31 @@ async function criarCliente(ctx) {
   const padraoOrg = minhaOrg && minhaOrg.limites && minhaOrg.limites.plano_padrao;
   const planoPadrao = superConta ? "interno"
     : (ps.some(p => p.id === padraoOrg) ? padraoOrg : ps.some(p => p.id === "essencial") ? "essencial" : (ps[0] && ps[0].id));
-  const rotPlano = p => `${p.nome}${p.preco_mensal != null ? ` — ${ui.brl(p.preco_mensal, { centavos: false })}/mês` : ""}`;
-
   const form = h("form", { class: "pilha", novalidate: true },
     h("div", { class: "form-grade" },
       ui.campo({ rotulo: "Nome do cliente", nome: "nome", obrigatorio: true, max: 80, placeholder: "Ex.: Clínica Sorriso", autocomplete: "off" }),
       ui.campo({ rotulo: "Endereço (slug)", nome: "slug", obrigatorio: true, max: 40, ajuda: "Letras minúsculas, números e hífen.", autocomplete: "off" }),
-      ui.campo({ rotulo: "Tipo de negócio", nome: "vertical", tipo: "select", valor: "odonto", opcoes: VERTICAIS, ajuda: "Define o funil, as etiquetas e as respostas que entram prontos." }),
-      ui.campo({ rotulo: "Plano", nome: "plano", tipo: "select", valor: planoPadrao, opcoes: ps.map(p => ({ valor: p.id, rotulo: rotPlano(p) })) }),
+      ui.campo({ rotulo: "Segmento do cliente", nome: "segmento", max: 120, placeholder: "Escreva livremente, por exemplo: clínica odontológica, loja de roupas, consultoria…",
+        ajuda: "Sem opções predefinidas. Clínicas odontológicas, oficinas e lojas reconhecidas recebem o modelo correspondente; os demais usam o modelo genérico." }),
       ui.campo({ rotulo: "Situação", nome: "status", tipo: "select", valor: "teste", opcoes: STATUS.slice(0, 2) }),
       ui.campo({ rotulo: "Dias de teste", nome: "dias", tipo: "numero", valor: 14, min: 1, max: 90 }),
-      superConta && os.length ? ui.campo({ rotulo: "Org (plataforma ou revenda)", nome: "org_id", tipo: "select", valor: orgPadrao, opcoes: os.map(o => ({ valor: o.id, rotulo: `${o.nome}${o.tipo === "plataforma" ? " (plataforma)" : ""}` })) }) : null));
+      superConta && os.length ? ui.campo({ rotulo: "Revenda / plataforma", nome: "org_id", tipo: "select", valor: orgPadrao, opcoes: os.map(o => ({ valor: o.id, rotulo: `${o.nome}${o.tipo === "plataforma" ? " (plataforma)" : ""}` })) }) : null),
+    campoPacoteComercial(ui, "essencial", { obrigatorio: true }),
+    ui.campo({ rotulo: "Especificações do cliente", nome: "especificacoes", tipo: "textarea", max: 5000, linhas: 4,
+      placeholder: "Escreva necessidades, objetivos, entregas combinadas e observações…", ajuda: "Campo livre, sem modelos ou respostas predefinidas." }));
   const nome = form.querySelector("input[name=nome]"), slug = form.querySelector("input[name=slug]");
   let slugMexido = false;
   nome.addEventListener("input", () => { if (!slugMexido) slug.value = sugerirSlug(nome.value); });
   slug.addEventListener("input", () => { slugMexido = true; });
   const selStatus = form.querySelector("select[name=status]");
   const campoDias = form.querySelector("[data-campo=dias]");
+  let pacoteCriado = "essencial";
   const ajustarDias = () => { campoDias.hidden = selStatus.value !== "teste"; };
   selStatus.addEventListener("change", ajustarDias); ajustarDias();
 
   const r = await ui.modal({
     titulo: "Novo cliente", corpo: form, largura: "g",
-    descricao: "O funil, as etiquetas, as respostas rápidas, os motivos de perda e os departamentos do tipo de negócio entram prontos.",
+    descricao: "Registre o segmento e as necessidades com suas próprias palavras e escolha uma das três ofertas comerciais.",
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro" },
       { rotulo: "Criar cliente", tipo: "primario", fn: async () => {
@@ -208,21 +252,30 @@ async function criarCliente(ctx) {
         const d = ui.lerForm(form);
         if (!d.nome || d.nome.length < 2) { ui.marcarErro(form, "nome", "Informe o nome."); return false; }
         if (!/^[a-z0-9-]{2,40}$/.test(d.slug || "")) { ui.marcarErro(form, "slug", "Use de 2 a 40 letras minúsculas, números ou hífen."); return false; }
+        const oferta = PACOTES_COMERCIAIS.find(p => p.id === d.pacote_comercial);
+        if (!oferta) { ui.marcarErro(form, "pacote_comercial", "Escolha um dos três planos comerciais."); return false; }
+        pacoteCriado = oferta.id;
+        const planoAcesso = superConta ? planoPadrao : oferta.acesso;
+        if (!ps.some(p => p.id === planoAcesso && (superConta || p.ativo !== false))) {
+          ui.marcarErro(form, "pacote_comercial", "O plano de acesso correspondente não está disponível para esta revenda. Fale com a plataforma."); return false;
+        }
         const dias = Math.max(1, Math.min(90, Number(d.dias) || 14));
         const teste = d.status === "teste" ? isoMais(ui.hojeSP(), dias) : null;
-        const p = { nome: d.nome, slug: d.slug, vertical: d.vertical, plano: d.plano, status: d.status, teste_ate: teste };
+        const p = { nome: d.nome, slug: d.slug, vertical: verticalPorSegmento(d.segmento), plano: planoAcesso, status: d.status, teste_ate: teste,
+          comercial: { pacote: oferta.id, segmento: d.segmento || "", especificacoes: d.especificacoes || "" } };
         if (superConta && d.org_id) p.org_id = d.org_id;
         try {
           return await api.rpc("nx_cliente_admin_salvar", { p_cliente: p });
         } catch (e) {
           if (e.codigo === "slug_em_uso") { ui.marcarErro(form, "slug", "Esse endereço já está em uso."); return false; }
+          if (e.codigo === "dados_invalidos" && e.hint === "comercial") { ui.marcarErro(form, "especificacoes", "Revise as especificações informadas."); return false; }
           throw e;
         }
       } },
     ],
   });
   if (r && r.id) {
-    ui.toast(`Cliente criado com o modelo de ${(VERTICAIS.find(v => v.valor === r.vertical) || {}).rotulo || r.vertical}.`, { tipo: "ok" });
+    ui.toast(`Cliente criado com ${rotuloPacote(r.comercial?.pacote || pacoteCriado)}.`, { tipo: "ok" });
     try { await ctx.shell.recarregarSessao(); } catch { /* o seletor atualiza na próxima entrada */ }
     ctx.navegar(`#/admin/clientes/${r.id}`);
   }
@@ -282,17 +335,26 @@ async function telaCliente(ctx, corpo, id) {
     } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
   });
 
-  // ---- formulário: plano, situação, teste, módulos, limites extras
+  // ---- formulário: acesso ao Órbita, pacote comercial, segmento e especificações
   const planoAtual = () => ps.find(p => p.id === form.querySelector("select[name=plano]").value) || ps.find(p => p.id === cli.plano) || { modulos: [], limites: {} };
   const opcoesPlano = ps.some(p => p.id === cli.plano) ? ps : [{ id: cli.plano, nome: cli.plano, modulos: cli.modulos, limites: {} }, ...ps];
+  const comercial = cli.comercial || {};
+  const segmentoInicial = comercial.segmento || (VERTICAIS.find(v => v.valor === cli.vertical) || {}).rotulo || "";
+  const segmento = ui.campo({ rotulo: "Segmento do cliente", nome: "segmento", valor: segmentoInicial, max: 120,
+    placeholder: "Escreva livremente o ramo de atividade…",
+    ajuda: "Sem opções predefinidas. Clínicas odontológicas, oficinas e lojas reconhecidas recebem o modelo correspondente; os demais usam o genérico." });
+  const especificacoes = ui.campo({ rotulo: "Especificações do cliente", nome: "especificacoes", tipo: "textarea", valor: comercial.especificacoes || "", max: 5000, linhas: 4,
+    placeholder: "Necessidades, objetivos, entregas combinadas e observações…", ajuda: "Texto livre. Até 5.000 caracteres." });
+  segmento.classList.add("inteiro"); especificacoes.classList.add("inteiro");
   const form = h("form", { class: "pilha", novalidate: true },
     h("div", { class: "form-grade" },
       ui.campo({ rotulo: "Nome", nome: "nome", valor: cli.nome, obrigatorio: true, max: 80 }),
       ui.campo({ rotulo: "Endereço (slug)", nome: "slug", valor: cli.slug, obrigatorio: true, max: 40 }),
-      ui.campo({ rotulo: "Plano", nome: "plano", tipo: "select", valor: cli.plano, opcoes: opcoesPlano.map(p => ({ valor: p.id, rotulo: `${p.nome}${p.preco_mensal != null ? ` — ${ui.brl(p.preco_mensal, { centavos: false })}/mês` : ""}` })) }),
+      ui.campo({ rotulo: "Plano de acesso ao Órbita", nome: "plano", tipo: "select", valor: cli.plano, opcoes: opcoesPlano.map(p => ({ valor: p.id, rotulo: `${p.nome}${p.preco_mensal != null ? ` — ${ui.brl(p.preco_mensal, { centavos: false })}/mês` : ""}` })) }),
       ui.campo({ rotulo: "Situação", nome: "status", tipo: "select", valor: cli.status, opcoes: STATUS }),
       ui.campo({ rotulo: "Fim do teste", nome: "teste_ate", tipo: "data", valor: cli.teste_ate || "" }),
-      ui.campo({ rotulo: "Tipo de negócio", nome: "vertical", tipo: "select", valor: cli.vertical, opcoes: VERTICAIS, ajuda: "Muda o vocabulário das telas. O funil já criado continua." })),
+      segmento, especificacoes),
+    campoPacoteComercial(ui, comercial.pacote || null, { comercial }),
     h("div", { class: "campo-modulos" }),
     superConta ? h("fieldset", { class: "campo" }, h("legend", null, "Limites extras (só a plataforma)"),
       h("p", { class: "campo-ajuda" }, "Em branco = o limite do plano."),
@@ -328,8 +390,10 @@ async function telaCliente(ctx, corpo, id) {
     const d = ui.lerForm(form);
     if (!d.nome || d.nome.length < 2) return ui.marcarErro(form, "nome", "Informe o nome.");
     if (!/^[a-z0-9-]{2,40}$/.test(d.slug || "")) return ui.marcarErro(form, "slug", "Use de 2 a 40 letras minúsculas, números ou hífen.");
-    const p = { id: cli.id, nome: d.nome, slug: d.slug, plano: d.plano, status: d.status, vertical: d.vertical,
-      teste_ate: d.status === "teste" ? (d.teste_ate || null) : cli.teste_ate, modulos: d.modulos || [] };
+    const p = { id: cli.id, nome: d.nome, slug: d.slug, plano: d.plano, status: d.status,
+      vertical: d.segmento ? verticalPorSegmento(d.segmento) : cli.vertical,
+      teste_ate: d.status === "teste" ? (d.teste_ate || null) : cli.teste_ate, modulos: d.modulos || [],
+      comercial: { pacote: d.pacote_comercial || null, segmento: d.segmento || "", especificacoes: d.especificacoes || "" } };
     if (superConta) {
       const lim = {};
       for (const k of CHAVES_LIMITE) { const v = d[`lim_${k.chave}`]; if (v !== null && v !== undefined && v !== "" && Number.isFinite(v)) lim[k.chave] = Math.max(0, Math.floor(v)); }
@@ -348,6 +412,7 @@ async function telaCliente(ctx, corpo, id) {
       ctx.navegar(`#/admin/clientes/${cli.id}`, { substituir: true });
     } catch (e) {
       if (e.codigo === "slug_em_uso") return ui.marcarErro(form, "slug", "Esse endereço já está em uso.");
+      if (e.codigo === "dados_invalidos" && e.hint === "comercial") return ui.marcarErro(form, "especificacoes", "Revise as especificações informadas.");
       ui.toast(api.mensagemErro(e), { tipo: "erro" });
     }
   });
@@ -372,6 +437,7 @@ async function telaCliente(ctx, corpo, id) {
         h("div", { class: "cel-nome" }, ui.avatar(cli.nome, cli.id), h("div", null,
           h("h1", { class: "titulo-sec" }, cli.nome),
           h("div", { class: "linha" }, ui.pilula(st.rotulo, st.cor), ui.pilula(nomePlano(cli.plano), cli.plano === "interno" ? "sec" : "prim"),
+            cli.comercial && cli.comercial.pacote ? ui.pilula(rotuloPacote(cli.comercial.pacote), "info") : null,
             h("span", { class: "fraco" }, `${cli.org ? cli.org.nome : ""} · desde ${ui.dataBR(cli.criado_em)}`)))),
         h("div", { class: "linha" }, btConvite, btEntrar))),
     h("div", { class: "adm-det" },

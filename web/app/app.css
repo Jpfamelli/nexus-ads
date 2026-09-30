@@ -902,6 +902,27 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 @media (max-width: 1000px) { .adm-det { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 760px) { .adm-kv { grid-template-columns: minmax(0, 1fr); gap: .15rem; } .adm-kv dd { margin-bottom: .5rem; } }
 
+/* Ofertas comerciais no cadastro: três pacotes claros, preços sem arredondamento e seleção acessível. */
+.campo-ofertas { min-width: 0; border: 0; padding: 0; }
+.campo-ofertas > legend { margin-bottom: .55rem; font-size: var(--fs-14); font-weight: 700; color: var(--c-texto); }
+.ofertas-grade { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; align-items: stretch; }
+.oferta-card { position: relative; display: flex; min-width: 0; cursor: pointer; }
+.oferta-card > input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.oferta-conteudo { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: .55rem; padding: .9rem; border: 1px solid var(--c-borda-2); border-radius: 16px; background: var(--c-sup); transition: border-color var(--t-ui) var(--e-out), box-shadow var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out); }
+.oferta-card:hover .oferta-conteudo { border-color: var(--c-prim-luz); }
+.oferta-card > input:checked + .oferta-conteudo { border-color: var(--c-prim); background: var(--c-prim-suave); box-shadow: inset 0 0 0 1px var(--c-prim); }
+.oferta-card > input:focus-visible + .oferta-conteudo { outline: 2px solid var(--c-foco); outline-offset: 3px; }
+.oferta-cab { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
+.oferta-cab b { font-size: var(--fs-13); letter-spacing: .035em; }
+.oferta-preco { color: var(--c-texto); font-family: var(--f-titulo); font-weight: 700; font-size: clamp(1.15rem, 2vw, 1.45rem); line-height: 1.2; overflow-wrap: anywhere; }
+.oferta-integracao { color: var(--c-texto-2); font-size: var(--fs-12); font-weight: 600; }
+.oferta-inclusoes-tit { margin-top: .2rem; color: var(--c-texto-3); font: 600 var(--fs-11) var(--f-mono); text-transform: uppercase; letter-spacing: .07em; }
+.oferta-inclusoes { display: flex; flex-direction: column; gap: .38rem; color: var(--c-texto-2); font-size: var(--fs-12); line-height: 1.35; }
+.oferta-inclusoes > span { display: flex; align-items: flex-start; gap: .35rem; min-width: 0; overflow-wrap: anywhere; }
+.oferta-inclusoes > span::before { content: "✓"; flex: none; color: var(--c-ok); font-weight: 800; }
+.campo-ofertas > .campo-ajuda { display: block; margin-top: .55rem; }
+@media (max-width: 760px) { .ofertas-grade { grid-template-columns: minmax(0, 1fr); } .oferta-conteudo { padding: .85rem 1rem; } }
+
 /* ============================================================
    MARCA — editor e pré-visualização ao vivo (P0-B)
    ============================================================ */

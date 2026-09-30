@@ -141,7 +141,7 @@ negócios locais do interior de SP e para agências que querem revender com a pr
 5. **Suporte local e implantação presencial** em Taubaté e região (fraqueza documentada dos
    concorrentes, ver reclamações acima e https://datacrazy.io/).
 
-### 1.3 Planos (proposta de preço — decisão do João)
+### 1.3 Planos técnicos do SaaS (`nx_planos`)
 
 | Plano | Preço/mês | Usuários | Números WhatsApp | Funis | Automações | Contatos | Sugestões de IA/mês | Módulos |
 |---|---|---|---|---|---|---|---|---|
@@ -162,6 +162,26 @@ negócios locais do interior de SP e para agências que querem revender com a pr
   (https://www.helenacrm.com/white-label-agencias-de-marketing); Whaticket SaaS R$ 799–1.499 + R$ 2.500
   de setup (https://whaticket-saas.com/); FunnelOps R$ 0–997 por conexões (https://funnelops.com.br/).
 - Limites são dados (tabela `nx_planos`), não código: mudar preço/limite não exige deploy.
+
+### 1.4 Pacotes comerciais Nexus (oferta definida pelo João em 30/09/2026)
+
+Estes pacotes incluem serviços de marketing e implantação, portanto são distintos dos limites e módulos
+técnicos em `nx_planos`. O cadastro Admin apresenta exatamente estas três opções, guarda o pacote e um
+snapshot do valor mensal/integração em centavos, além do segmento e das especificações livres. O preço
+comercial não altera o nível de acesso técnico ao Órbita automaticamente para a conta Nexus; para uma
+revenda, o nível técnico inicial é mapeado para Essencial, Profissional ou Completo, respectivamente.
+Mudanças de especificações preservam os valores previamente registrados.
+
+| Pacote comercial | Mensal | Integração única | Entregas registradas |
+|---|---:|---:|---|
+| PLANO ESSENCIAL | R$ 1.294,78 | R$ 889,45 | Site profissional; 5–10 posts/mês; 1 diária de gravação/mês; edição de vídeo; sistema de atendimento |
+| PLANO PROFISSIONAL | R$ 1.872,53 | R$ 1.192,89 | Tudo do Essencial; IA no atendimento; 10–15 posts/mês; atendimento e CRM; gestão de tráfego pago |
+| PLANO ULTRA | R$ 2.287,34 | R$ 1.344,57 | Tudo do Profissional; 15–20 posts/mês; edição completa de conteúdos; CRM; IA no atendimento; sistema de atendimento; gestão de tráfego e sistema de gestão; mais 1 sistema completo à escolha |
+
+O ramo de atividade e as especificações são campos livres. O Órbita continua aceitando somente os quatro
+modelos técnicos existentes (odonto, oficina, loja, genérico); a interface reconhece por texto os três
+modelos específicos quando encontra termos inequívocos e usa genérico nos demais casos. Não implica
+que serviços externos de marketing ou uma integração estejam automaticamente executados/ativos.
 
 ---
 
@@ -2415,8 +2435,9 @@ texto "A Nexus ativa o domínio em até 1 dia útil". Plano e uso (F3): plano, s
 barras uso/limite de cada chave, armazenamento, "Falar com o suporte" (WhatsApp).
 
 **T15 Admin** (`admin.js`, F3, P0) — **Clientes**: tabela (nome, org, plano, status, fim do teste, uso de
-usuários/números/contatos, criado em), busca e filtro de status; "+ Cliente" (nome, slug sugerido,
-vertical, plano, status, dias de teste, org — super); **Cliente** (detalhe): editar plano/status/teste/
+usuários/números/contatos, criado em), busca e filtro de status; "+ Cliente" (nome, slug sugerido, segmento
+livre, especificações livres, uma de três ofertas comerciais, status, dias de teste, org — super); **Cliente**
+(detalhe): editar pacote comercial/segmento/especificações, plano técnico de acesso/status/teste/
 módulos (só os do plano, para gestor) / limites extras (só super; JSON guiado: um campo por chave),
 usuários com acesso, "Gerar convite do administrador" (link com `link_base`), "Entrar" (troca a
 empresa ativa e mostra a faixa de suporte), domínios do cliente. O seletor de plano do gestor de
@@ -2861,7 +2882,7 @@ todos. **Global (F8, na ordem; tudo com dados de teste que são apagados no fim)
 | # | Decisão | Padrão adotado esta noite |
 |---|---|---|
 | 1 | Nome do produto ("Órbita") e busca no INPI | usar "Órbita" como nome de trabalho; trocar é só mudar `PRODUTO_PADRAO` e a marca da org `nexus` |
-| 2 | Preços e limites dos planos e da revenda | tabela §1.3 (são dados em `nx_planos`, mudam sem deploy) |
+| 2 | Preços e limites dos planos técnicos e da revenda | tabela §1.3 (são dados em `nx_planos`, mudam sem deploy) |
 | 3 | Número da Kamiguchi: migrar o atual para a API (perde o app do celular), usar número novo, ou virar Tech Provider/usar BSP com Coexistência | nenhum número real conectado até ele escolher |
 | 4 | Commit local do visual v2 do painel ("em revisão") | publicar em commit separado se os testes antigos passarem |
 | 5 | "Tirar o perfil de demonstração": só dados + links públicos, ou também o código `?demo` (ferramenta de reunião) | apagar dados e esconder links; código fica |
@@ -2873,6 +2894,7 @@ todos. **Global (F8, na ordem; tudo com dados de teste que são apagados no fim)
 | 11 | Política de cancelamento/reembolso e contrato de operador de dados (LGPD) | redigir antes de vender |
 | 12 | Oferta da Kamiguchi: pacote integrado de site, acompanhamento de marketing, gestão de Google Ads e Meta Ads e acesso ao Órbita para CRM e conversas. Preço regular: R$ 1.838/mês + R$ 1.599 de criação/implantação. Lançamento: R$ 1.597/mês + R$ 1.189 de criação/implantação. Verba de mídia paga diretamente às plataformas e fica à parte. | usar estes valores no Apêndice D; não reutilizar a precificação anterior do combo nem somar uma assinatura separada do Órbita |
 | 13 | Modelo de mensagem de lembrete (categoria Utilidade) na WABA da clínica | texto sugerido em T12; a aprovação é da Meta, feita pelo João/cliente |
+| 14 | Preços dos pacotes comerciais de marketing + site + sistemas | tabela §1.4; o Admin registra oferta e snapshot por cliente, sem alterar limites técnicos do SaaS |
 
 ---
 

@@ -473,6 +473,34 @@ await teste("admin.sugerirSlug", async () => {
   assert.equal(Ad.sugerirSlug("  Ótica São João  "), "otica-sao-joao");
   assert.ok(Ad.sugerirSlug("x".repeat(60)).length <= 40);
 });
+await teste("admin: três ofertas comerciais exatas e segmento livre sem quebrar o modelo técnico", async () => {
+  const Ad = await imp("admin.js");
+  assert.deepEqual(Ad.PACOTES_COMERCIAIS.map(p => [p.id, p.nome, p.mensalCentavos, p.integracaoCentavos]), [
+    ["essencial", "PLANO ESSENCIAL", 129478, 88945],
+    ["profissional", "PLANO PROFISSIONAL", 187253, 119289],
+    ["ultra", "PLANO ULTRA", 228734, 134457],
+  ]);
+  assert.ok(Ad.PACOTES_COMERCIAIS[0].itens.includes("1 diária de gravação por mês"));
+  assert.ok(Ad.PACOTES_COMERCIAIS[1].itens.includes("IA no atendimento"));
+  assert.ok(Ad.PACOTES_COMERCIAIS[2].itens.includes("Mais 1 sistema completo à sua escolha"));
+  assert.equal(Ad.verticalPorSegmento("Clínica odontológica Kamiguchi"), "odonto");
+  assert.equal(Ad.verticalPorSegmento("Oficina de mecânica"), "oficina");
+  assert.equal(Ad.verticalPorSegmento("Consultoria contábil"), "generico");
+  const src = ler("admin.js");
+  assert.ok(/nome: "segmento"/.test(src) && /nome: "especificacoes"/.test(src), "campos livres presentes no cadastro/edição");
+  assert.ok(/comercial: \{ pacote: oferta\.id, segmento: d\.segmento/.test(src), "cadastro envia oferta e especificações à RPC" );
+  assert.ok(src.includes("Plano de acesso ao Órbita"), "acesso técnico é diferenciado da oferta comercial");
+});
+
+await teste("migração dos pacotes: aditiva, valores fixos no servidor e retorno comercial limitado ao Admin", () => {
+  const sql = readFileSync(join(RAIZ, "supabase/migrations/20260930b_pacotes_comerciais.sql"), "utf8");
+  assert.match(sql, /add column if not exists comercial jsonb/i);
+  assert.match(sql, /check \(jsonb_typeof\(comercial\) = 'object'/i);
+  for (const n of [129478, 88945, 187253, 119289, 228734, 134457]) assert.ok(sql.includes(String(n)), `valor ${n} deve ser escolhido no servidor`);
+  assert.match(sql, /public\.nx_cliente_admin_salvar\(text,jsonb\)\s+from public, anon, authenticated/i);
+  assert.match(sql, /grant execute on function public\.nx_cliente_admin_salvar\(text,jsonb\) to anon, authenticated, service_role/i);
+  assert.match(sql, /nx_cliente_admin_item\(uuid\)\s+from public, anon, authenticated/i);
+});
 
 /* ---- P0-B: editor de marca, domínio, plano (partes testáveis sem DOM) ---- */
 await teste("P0-B: FUNDOS do editor (8 cores válidas, escuras viram palco e claras tema claro, sempre com texto ≥ 7:1)", () => {

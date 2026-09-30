@@ -264,3 +264,10 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 - Verificação após a alteração final: `node testes/rodar-tudo.mjs` passou em **14/14 arquivos**; `node testes/app.teste.mjs` passou em 50 verificações; `node testes/conversas.teste.mjs` passou em 33; `git diff --check` aprovado (avisos de LF/CRLF do Windows).
 - Os botões de mídia e gravação não enviam nada em CodeWords; o canal atual é textual. O fluxo Cloud API mantém suporte a mídia existente. Não houve acesso à câmera/microfone, serviço de anúncio, credenciais ou integração externa real.
 - `web/app/prontos.js`, `main`, dados do Supabase e `nx_config` não mudaram. Não houve deploy Netlify. F8 continua aberta para E2E-A/B, métricas/canal de teste, QA mobile autenticado, isolamento e limpeza.
+
+## Cadastro de clientes e pacotes comerciais — 2026-09-30
+
+- No Admin, “Novo cliente” agora recebe segmento e especificações por texto livre e oferece exatamente Essencial, Profissional e Ultra com os preços/entregas definidos pelo João. A edição permite atualizar os mesmos campos; o cadastro separa pacote de marketing do nível técnico de acesso ao Órbita.
+- O snapshot comercial é validado no servidor, em centavos, pela migration aditiva `20260930b_pacotes_comerciais.sql`; edição de especificações não altera o preço previamente combinado. Migration e smoke SQL estão na branch e não foram aplicados ao banco.
+- Verificação: `node testes/rodar-tudo.mjs` passou em 14/14 arquivos antes do ajuste final da notificação; depois do ajuste, `node --check web/app/admin.js` e `node testes/app.teste.mjs` passaram. `git diff --check` passou, com avisos normais LF/CRLF.
+- Não houve escrita no Supabase, alteração de `nx_config`, deploy Netlify, alteração em `main` ou liberação de `web/app/prontos.js`. F8 continua aberta pelos gates registrados em `F8.md`.

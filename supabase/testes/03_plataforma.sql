@@ -270,6 +270,40 @@ begin
                      and (select modulos from public.nx_clientes where id = (j ->> 'id')::uuid) = (select modulos from public.nx_planos where id = 'profissional')
                      and (j ->> 'teste_ate')::date = (now() at time zone 'America/Sao_Paulo')::date + 14,
                      'cliente da revenda sem plano → plano_padrao, módulos do plano e 14 dias de teste'); casos := casos + 1;
+  j := public.nx_cliente_admin_salvar('tok-f3-gr', json_build_object('id', j ->> 'id', 'comercial', jsonb_build_object(
+    'pacote', 'essencial', 'segmento', 'Consultoria contábil', 'especificacoes', 'Atendimento e site.'))::jsonb);
+  perform pg_temp.ok((j -> 'comercial' ->> 'mensal_centavos')::int = 129478
+                     and (j -> 'comercial' ->> 'integracao_centavos')::int = 88945,
+                     'pacote Essencial guarda R$ 1.294,78 e integração R$ 889,45'); casos := casos + 1;
+  j := public.nx_cliente_admin_salvar('tok-f3-gr', json_build_object('id', j ->> 'id', 'comercial', jsonb_build_object(
+    'pacote', 'profissional', 'segmento', 'Consultoria contábil', 'especificacoes', 'Captação regional; reunião semanal.',
+    'mensal_centavos', 1, 'integracao_centavos', 1))::jsonb);
+  perform pg_temp.ok((j -> 'comercial' ->> 'pacote') = 'profissional'
+                     and (j -> 'comercial' ->> 'mensal_centavos')::int = 187253
+                     and (j -> 'comercial' ->> 'integracao_centavos')::int = 119289
+                     and (j -> 'comercial' ->> 'segmento') = 'Consultoria contábil'
+                     and (j -> 'comercial' ->> 'especificacoes') = 'Captação regional; reunião semanal.',
+                     'pacote Profissional guarda valores oficiais em centavos e texto livre; ignora preços forjados'); casos := casos + 1;
+  j := public.nx_cliente_admin_salvar('tok-f3-gr', json_build_object('id', j ->> 'id', 'comercial', jsonb_build_object(
+    'pacote', 'ultra', 'segmento', 'Ateliê artesanal', 'especificacoes', 'Catálogo próprio e implantação em fases.'))::jsonb);
+  perform pg_temp.ok((j -> 'comercial' ->> 'mensal_centavos')::int = 228734
+                     and (j -> 'comercial' ->> 'integracao_centavos')::int = 134457
+                     and (public.nx_clientes_admin('tok-f3-gr', jsonb_build_object('id', j ->> 'id')::jsonb) -> 0 -> 'comercial' ->> 'pacote') = 'ultra',
+                     'pacote Ultra mantém o snapshot no detalhe e na listagem do Admin'); casos := casos + 1;
+  j := public.nx_cliente_admin_salvar('tok-f3-gr', json_build_object('id', j ->> 'id', 'comercial', jsonb_build_object(
+    'pacote', 'ultra', 'segmento', 'Ateliê artesanal', 'especificacoes', 'Complemento de escopo.'))::jsonb);
+  perform pg_temp.ok((j -> 'comercial' ->> 'mensal_centavos')::int = 228734
+                     and (j -> 'comercial' ->> 'integracao_centavos')::int = 134457
+                     and (j -> 'comercial' ->> 'especificacoes') = 'Complemento de escopo.',
+                     'editar especificações preserva o preço comercial já registrado'); casos := casos + 1;
+  r := pg_temp.erro(format('select public.nx_cliente_admin_salvar(%L, %L::jsonb)', 'tok-f3-gr', json_build_object(
+    'id', j ->> 'id', 'comercial', jsonb_build_object('pacote', 'inventado', 'segmento', '', 'especificacoes', ''))));
+  perform pg_temp.ok(r = 'dados_invalidos|comercial'
+                     and (select comercial ->> 'pacote' = 'ultra' from public.nx_clientes where id = (j ->> 'id')::uuid),
+                     'pacote fora das três ofertas é recusado sem sobrescrever o cadastro'); casos := casos + 1;
+  r := pg_temp.erro(format('select public.nx_cliente_admin_salvar(%L, %L::jsonb)', 'tok-f3-gr', json_build_object(
+    'id', j ->> 'id', 'comercial', jsonb_build_object('pacote', 'ultra', 'segmento', '', 'especificacoes', repeat('x', 5001)))));
+  perform pg_temp.ok(r = 'dados_invalidos|comercial', 'especificações acima de 5.000 caracteres recusadas no servidor'); casos := casos + 1;
   perform pg_temp.ok(exists (select 1 from public.nx_funis f where f.cliente_id = (j ->> 'id')::uuid), 'criar aplica o modelo da vertical'); casos := casos + 1;
   j := public.nx_cliente_admin_salvar('tok-f3-gr', json_build_object('id', j ->> 'id', 'plano', 'essencial', 'status', 'ativo')::jsonb);
   perform pg_temp.ok((j ->> 'plano') = 'essencial' and (select modulos from public.nx_clientes where id = (j ->> 'id')::uuid) = (select modulos from public.nx_planos where id = 'essencial'), 'trocar de plano sem módulos → módulos do plano novo'); casos := casos + 1;
