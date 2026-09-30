@@ -1,0 +1,122 @@
+# Publica Edge Functions do Órbita no Supabase (projeto dtjznipitihnwmcgpzqh), sem CLI na máquina local.
+# Dispara SÓ com push de tag funcoes-* e roda o workflow e o código DO COMMIT DA TAG:
+#   git tag funcoes-AAAAMMDD-N && git push origin funcoes-AAAAMMDD-N
+# O que publica: supabase/deploy-lista.txt (uma função por linha). Guia e plano de volta:
+# docs/orbita/DEPLOY-FUNCOES.md. Segredo: SUPABASE_ACCESS_TOKEN (Settings → Secrets → Actions).
+name: Funções no Supabase
+
+on:
+  push:
+    tags: ["funcoes-*"]
+
+permissions:
+  contents: read
+
+# um deploy por vez; o seguinte espera (nunca cancela um deploy no meio)
+concurrency:
+  group: funcoes-supabase
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PROJETO: dtjznipitihnwmcgpzqh
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Segredo SUPABASE_ACCESS_TOKEN presente
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          if [ -z "${SUPABASE_ACCESS_TOKEN}" ]; then
+            echo "::error::segredo SUPABASE_ACCESS_TOKEN ausente ou vazio no repositório (nada foi publicado)"
+            exit 1
+          fi
+          echo "segredo presente (valor não é impresso); tag: ${TAG}"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Portão — suíte completa (node testes/rodar-tudo.mjs)
+        run: node testes/rodar-tudo.mjs
+
+      - name: Montar supabase/dist
+        run: node scripts/montar-funcoes.mjs
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.118.0
+
+      - name: Validar supabase/deploy-lista.txt
+        run: |
+          set -euo pipefail
+          export LC_ALL=C   # [a-z] só ASCII
+          lista="${RUNNER_TEMP}/deploy-lista.validada"
+          : > "${lista}"
+          while IFS= read -r linha || [ -n "${linha}" ]; do
+            fn="$(printf '%s' "${linha}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            case "${fn}" in ''|'#'*) continue ;; esac
+            if ! printf '%s\n' "${fn}" | grep -Eq '^nx-[a-z]+$'; then
+              echo "::error::nome inválido na lista: '${fn}' (esperado ^nx-[a-z]+\$)"; exit 1
+            fi
+            if [ ! -f "supabase/dist/${fn}/index.ts" ]; then
+              echo "::error::supabase/dist/${fn}/index.ts não existe (função fora do montar-funcoes?)"; exit 1
+            fi
+            if grep -qx -- "${fn}" "${lista}"; then
+              echo "::error::função repetida na lista: ${fn}"; exit 1
+            fi
+            printf '%s\n' "${fn}" >> "${lista}"
+          done < supabase/deploy-lista.txt
+          if [ ! -s "${lista}" ]; then echo "::error::supabase/deploy-lista.txt não tem nenhuma função"; exit 1; fi
+          echo "vai publicar:"; cat "${lista}"
+
+      - name: Publicar (verify_jwt=false, bundle no servidor)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          area="$(mktemp -d)"
+          mkdir -p "${area}/supabase/functions"
+          while IFS= read -r fn; do
+            echo "::group::${fn}"
+            cp -R "supabase/dist/${fn}" "${area}/supabase/functions/${fn}"
+            ( cd "${area}" && supabase functions deploy "${fn}" --use-api --no-verify-jwt --project-ref "${PROJETO}" )
+            echo "::endgroup::"
+          done < "${RUNNER_TEMP}/deploy-lista.validada"
+          rm -rf "${area}"
+
+      - name: Versões no ar
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase functions list --project-ref "${PROJETO}"
+
+      - name: Sondas sem segredo (401/403/413 esperados)
+        run: |
+          set -uo pipefail
+          base="https://${PROJETO}.supabase.co/functions/v1"
+          falhas=0
+          confere() {   # confere <esperado> <descrição> <código obtido>
+            if [ "$3" = "$1" ]; then echo "ok   $2 → $3"; else echo "::error::$2 → $3 (esperado $1)"; falhas=$((falhas + 1)); fi
+          }
+          publicada() { grep -qx -- "$1" "${RUNNER_TEMP}/deploy-lista.validada"; }
+          if publicada nx-whatsapp; then
+            confere 401 "nx-whatsapp POST sem assinatura" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H 'content-type: application/json' --data '{}' "${base}/nx-whatsapp" || true)"
+            confere 403 "nx-whatsapp GET com verify token inválido" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "${base}/nx-whatsapp?hub.mode=subscribe&hub.verify_token=sonda-invalida&hub.challenge=1" || true)"
+            # bug 1 do E2E-meta: 2 MiB + 1 tem de dar 413 na hora (antes pendurava ~160 s e o gateway dava 503)
+            confere 413 "nx-whatsapp corpo de 2 MiB + 1 (Content-Length)" "$(head -c 2097153 /dev/zero | curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H 'content-type: application/json' --data-binary @- "${base}/nx-whatsapp" || true)"
+            confere 413 "nx-whatsapp corpo de 2,4 MB em pedaços (chunked)" "$(head -c 2400000 /dev/zero | curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H 'content-type: application/json' -H 'Transfer-Encoding: chunked' --data-binary @- "${base}/nx-whatsapp" || true)"
+          fi
+          if publicada nx-codewords; then
+            confere 401 "nx-codewords ?ch= curto" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST --data '{}' "${base}/nx-codewords?ch=abc" || true)"
+            confere 405 "nx-codewords GET" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "${base}/nx-codewords?ch=abc" || true)"
+          fi
+          if publicada nx-enviar; then
+            confere 401 "nx-enviar ação válida sem sessão" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H 'content-type: application/json' --data '{"acao":"texto","token":"sonda-invalida","cliente":"00000000-0000-4000-8000-000000000000"}' "${base}/nx-enviar" || true)"
+          fi
+          if [ "${falhas}" -gt 0 ]; then echo "::error::${falhas} sonda(s) falharam — ver docs/orbita/DEPLOY-FUNCOES.md (plano de volta)"; exit 1; fi
