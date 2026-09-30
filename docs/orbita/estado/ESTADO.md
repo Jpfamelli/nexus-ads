@@ -1,12 +1,12 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-29 23:54 (America/Sao_Paulo)
+Atualizado: 2026-09-29 23:58 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
 ## Situação
 
-O branch `codex/orbita` contém as frentes em revisão; as alterações locais desta retomada ainda precisam ser registradas e enviadas ao PR. As sete Edge Functions estão `ACTIVE` no Supabase e existe um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. As migrações CodeWords, agenda/rastreio e origem CRM/agenda estão aplicadas; os smokes SQL 05, 09, 10 e 11 passaram em transações revertidas segundo o registro da retomada anterior. O tenant isolado `teste-e2e` existe, mas a leitura atual encontrou apenas um canal Meta pendente, zero linhas de métricas e nenhum canal CodeWords. E2E-A/B real, webhook/envio/recibos CodeWords, paridade Ads, mobile autenticado, limpeza e publicação de produção seguem pendentes. Nesta retomada não li segredos nem alterei `nx_config`, dados da Kamiguchi ou produção.
+O branch `codex/orbita` contém as frentes em revisão e o commit `40b4f7b` já foi enviado ao PR #1 (rascunho). As sete Edge Functions estão `ACTIVE` no Supabase e existe um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. As migrações CodeWords, agenda/rastreio e origem CRM/agenda estão aplicadas; os smokes SQL 05, 09, 10 e 11 passaram em transações revertidas segundo o registro da retomada anterior. O tenant isolado `teste-e2e` existe, mas a leitura atual encontrou apenas um canal Meta pendente, zero linhas de métricas e nenhum canal CodeWords. E2E-A/B real, webhook/envio/recibos CodeWords, paridade Ads, mobile autenticado, limpeza e publicação de produção seguem pendentes. Nesta retomada não li segredos nem alterei `nx_config`, dados da Kamiguchi ou produção.
 
 ## Frentes
 
@@ -207,3 +207,7 @@ A migração aditiva `20260929c_cards_origem.sql` foi ensaiada com o smoke 11 em
 - Leitura remota, sem segredos: migrações `20260929a_codewords`, `20260929b_agenda_rastreio` e `20260929c_cards_origem` constam aplicadas; as sete Edge Functions estão ACTIVE nas versões registradas no quadro acima. O tenant `teste-e2e` existe, mas só tem um canal Meta pendente, zero linhas de métricas e nenhum canal CodeWords.
 - Nada nesta rodada foi escrito no banco ou publicado. `prontos.js` mantém todos os módulos bloqueados; o branch `codex/orbita` segue separado da `main`.
 - F8 continua sem aceite E2E-A/B: faltam credencial/canal CodeWords de teste para ida e volta com recibos, métricas Meta/Google isoladas para validar atribuição e paridade, teste mobile autenticado e limpeza do tenant após os testes. Não usei dados de produção para tentar cobrir essas faltas.
+
+## Atualização do PR e preview — 2026-09-29 23:58
+
+O commit `40b4f7b` foi enviado a `origin/codex/orbita`; PR #1 segue aberto como rascunho e sem verificações de CI reportadas. O preview único `6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app/app/` responde 200 com CSP, mas o preview-overlay `6abbd2ff7054e92bd9532b7b` ainda serve uma configuração anterior com Início/Conversas/CRM/Ads; a raiz `orbita-nexus-ads.netlify.app` responde 404. Não encontrei ferramenta ou autenticação Netlify disponível nesta sessão para criar um novo deploy. Nenhum deploy de produção foi feito.
