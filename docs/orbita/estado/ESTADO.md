@@ -287,3 +287,9 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 - Nada foi publicado nem gravado em Supabase; preview Netlify público está defasado (`20260928a`). Migrations 30c/30d locais aguardam smoke SQL com rollback.
 - F8 segue em andamento. Risco conhecido: recuperação durável da mídia ainda ausente, além dos gates reais autenticados documentados no `F8.md`.
 - O navegador alerta para conferir mutações após timeout, mas não há reconciliação genérica por chave de idempotência; risco descrito no estado F3/F8.
+
+## Migrações 30a–30e aplicadas e funções republicadas — 2026-09-30 17:10 -03
+
+- Aplicadas no Supabase (ensaiadas antes em ROLLBACK): memória operacional da IA (30a) e sua leitura na tela (30e), pacotes comerciais (30b), reservas atômicas de cota da IA (30c) e fila com STATUS INCERTO (30d). Smokes 03, 05, 06, 08, 09, 10 e 11 verdes depois de aplicado. A cota da IA agora conta toda tentativa.
+- Sete Edge Functions republicadas: nx-ciclo v4, nx-relatorio v4, nx-whatsapp v5, nx-enviar v3, nx-midia v2, nx-ia v2, nx-codewords v2. Autenticação conferida; ciclo das 20:07 UTC devolveu 200/ok para kamiguchi. Detalhes e plano de volta em F8.md.
+- Não houve Netlify, merge na main, alteração de prontos.js ou mudança em dados de produção. F8 segue em andamento pelos gates de E2E e mobile.

@@ -371,7 +371,7 @@ begin
   perform public.nx_ia_registrar(cA, k_adm, 'sugerir', 'claude-opus-5', 100, 50, true);
   perform public.nx_ia_registrar(cA, k_adm, 'sugerir', 'claude-opus-5', null, null, false);
   r := public.nx_ia_cota(cA, k_adm);
-  perform pg_temp.ok((r ->> 'usadas')::int = 1 and (r ->> 'conta_minuto')::int = 2, 'cota conta só as ok; ritmo conta todas');
+  perform pg_temp.ok((r ->> 'usadas')::int = 2 and (r ->> 'conta_minuto')::int = 2, 'cota conta toda tentativa (ok ou não), como o ritmo (20260930c)');
   update public.nx_clientes set plano = 'essencial' where id = cA;
   perform pg_temp.ok((public.nx_ia_cota(cA) ->> 'limite')::int = 300, 'limite ia_mes do plano');
 

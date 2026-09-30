@@ -587,7 +587,7 @@ Regras que completam a matriz (valem no servidor):
 ### 3.5 Limites do plano (chaves de `limites`)
 
 `usuarios` (acessos + convites pendentes), `canais`, `funis` (ativos), `automacoes` (todas),
-`contatos`, `ia_mes` (chamadas de IA ok no mês corrente, fuso SP). Valor ausente ou `null` = ilimitado.
+`contatos`, `ia_mes` (chamadas de IA no mês corrente, ok ou não, fuso SP; desde a 20260930c a cota é por tentativa e reservada de forma atômica por `nx_ia_reservar`/`nx_ia_registrar_reserva`). Valor ausente ou `null` = ilimitado.
 Limite efetivo do cliente = `nx_clientes.limites` se tiver a chave, senão `nx_planos.limites`.
 
 Revenda (`nx_orgs.limites`, só o super edita): `empresas` (clientes da org), `usuarios` e `canais`
@@ -1759,7 +1759,10 @@ com backlog de 100 eventos roda → as 5 mensagens aparecem (nenhuma perdida por
 
 **`nx_fila_chamar() → void`** (interna; pg_cron a cada minuto): se existe `nx_envios_fila` pendente com
 `enviar_em <= now()` OU `nx_midia_lixo` pendente → `nx_disparar('nx-enviar', '{"fila":true}')`. Também
-recoloca como `pendente` itens `enviando` há mais de 10 min (até 3 tentativas; depois `falhou`).
+marca como `falhou` (erro "STATUS INCERTO: o processo foi interrompido durante o envio…") os itens `enviando`
+há mais de 10 min (migração 20260930d). Um POST interrompido pode ter sido aceito pelo provedor; por isso o item
+NUNCA volta a `pendente` nem é reenviado sozinho: a equipe confere a conversa e reenvia se for o caso.
+(Até a 20260930c/d valia "volta a `pendente` até 3 tentativas"; essa regra foi trocada.)
 
 | RPC de painel | papel | parâmetros | retorno |
 |---|---|---|---|
