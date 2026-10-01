@@ -711,9 +711,10 @@ https://supabase.com/dashboard, abra o projeto `nexus-ads` e clique em **Restore
 - **Fixture de desenvolvimento** (`supabase/seed-demo.sql`): contém dados inventados para
   testes antigos. Não rode esse arquivo no banco de produção. O registro público
   `demo-clinica` foi removido; os testes do modo `?demo` usam gerador local.
-- **Órbita** (`web/app/`): app multiempresa em construção, com white-label, CRM, inbox do
-  WhatsApp oficial, gestão de anúncios e automações. Os módulos só serão liberados após o
-  aceite E2E e a publicação; confira `web/app/prontos.js` e o estado F8 antes de oferecer acesso.
+- **Órbita** (`web/app/`): app multiempresa, com white-label, CRM, inbox do
+  WhatsApp oficial, gestão de anúncios e automações. No aceite F8 (01/10/2026) o dono liberou
+  todos os módulos em `web/app/prontos.js`; eles só chegam aos clientes com o merge na `main` e a
+  publicação no Netlify. Confira `web/app/prontos.js` e o estado F8 antes de oferecer acesso.
 - **Este guia.**
 
 ### Modo de apresentação e dados fictícios

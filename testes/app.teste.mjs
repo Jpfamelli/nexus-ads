@@ -228,6 +228,28 @@ await teste("rotaPadrao: início se pronto; senão o 1º módulo pronto (P0-A: c
   assert.equal(R.rotaPadrao({ ...base, pronto: () => false }), "config");
   assert.ok(R.podePapel("super", "gestor") && !R.podePapel("atendente", "supervisor") && R.podePapel("leitura", null));
 });
+const PRONTOS = await imp("prontos.js");
+await teste("prontos.js (aceite F8): com a lista REAL todas as rotas abrem; o portão segue fechando o que não está na lista (lista injetada)", () => {
+  const abre = lista => ({ pronto: k => lista.includes(k), temModulo: () => true, pode: () => true, gestorConta: true, temCliente: true });
+  const real = abre(PRONTOS.MODULOS_PRONTOS);
+  for (const m of Object.keys(R.ROTAS)) assert.equal(R.acessoRota(m, real), "ok", `${m} abre com a lista do prontos.js`);
+  assert.equal(R.rotaPadrao(real), "inicio", "com tudo pronto o app abre no Início");
+  // o portão em si, com lista INJETADA (independe do que o arquivo liberou): fora da lista = 'em_breve'
+  const parcial = abre(["conversas", "crm"]);
+  assert.equal(R.acessoRota("conversas", parcial), "ok");
+  assert.equal(R.acessoRota("contatos", parcial), "ok", "contatos e agenda usam a chave crm");
+  assert.equal(R.acessoRota("agenda", parcial), "ok");
+  for (const m of ["inicio", "empresas", "tarefas", "anuncios", "automacoes", "relatorios"]) assert.equal(R.acessoRota(m, parcial), "em_breve", `${m} fora da lista`);
+  assert.equal(R.acessoRota("config", abre([])), "ok", "config e admin não dependem de MODULOS_PRONTOS");
+  // cada chave é necessária: tirar só ela da lista REAL fecha exatamente as rotas dela
+  const chaves = new Set(Object.values(R.ROTAS).map(r => r.pronto).filter(Boolean));
+  for (const k of chaves) {
+    const sem = abre(PRONTOS.MODULOS_PRONTOS.filter(x => x !== k));
+    const dela = Object.entries(R.ROTAS).filter(([, r]) => r.pronto === k).map(([m]) => m);
+    assert.ok(dela.length, `a chave ${k} tem rota`);
+    for (const m of Object.keys(R.ROTAS)) assert.equal(R.acessoRota(m, sem), dela.includes(m) ? "em_breve" : "ok", `${m} sem a chave ${k}`);
+  }
+});
 await teste("produtos separados: CRM, Nexus Ads e Atendimento compartilham o shell sem furar os gates", () => {
   assert.deepEqual(Object.keys(R.PRODUTOS), ["crm", "ads", "atendimento"]);
   for (const id of ["crm", "ads", "atendimento"]) assert.equal(R.produtoDe(`?produto=${id}`), id);
@@ -688,6 +710,28 @@ await teste("todo .js de web/app passa em node --check", () => {
     catch (e) { assert.fail(`${f}: ${String(e.stderr || e.message).split("\n").slice(0, 4).join(" ")}`); }
   }
 });
+await teste("prontos.js: MODULOS_PRONTOS e CONFIG_PRONTAS = exatamente o que o código tem (nada esquecido, nada que não exista, sem repetição)", () => {
+  const { MODULOS_PRONTOS, CONFIG_PRONTAS } = PRONTOS;
+  assert.equal(new Set(MODULOS_PRONTOS).size, MODULOS_PRONTOS.length, "MODULOS_PRONTOS sem repetição");
+  assert.equal(new Set(CONFIG_PRONTAS).size, CONFIG_PRONTAS.length, "CONFIG_PRONTAS sem repetição");
+  // módulos: chave `pronto` de cada rota + qualquer ctx.pronto("...") chamado no código (ex.: admin_revendas)
+  const modulos = new Set(Object.values(R.ROTAS).map(r => r.pronto).filter(Boolean));
+  for (const f of js) for (const m of ler(f).matchAll(/\bpronto\(\s*["']([a-z_]+)["']\s*\)/g)) modulos.add(m[1]);
+  assert.deepEqual([...MODULOS_PRONTOS].sort(), [...modulos].sort(), "MODULOS_PRONTOS × chaves usadas no código");
+  // configuração: toda seção `{ id: "...", titulo: ...` do hub e dos *-config.js
+  const secoes = new Set();
+  for (const f of ["config.js", ...js.filter(x => x.endsWith("-config.js"))]) {
+    for (const m of ler(f).matchAll(/^\s*\{\s*id:\s*"([a-z_]+)",\s*titulo:/gm)) secoes.add(m[1]);
+  }
+  assert.ok(secoes.size >= 18, `seções de configuração encontradas: ${[...secoes].join(", ")}`);
+  assert.deepEqual([...CONFIG_PRONTAS].sort(), [...secoes].sort(), "CONFIG_PRONTAS × seções do hub de configurações");
+});
+await teste("app.js: se o prontos.js não carregar, o padrão continua FECHADO (nenhum módulo, só perfil)", () => {
+  const app = ler("app.js");
+  assert.match(app, /const PRONTOS_PADRAO = \{ MODULOS_PRONTOS: \[\], CONFIG_PRONTAS: \["perfil"\] \};/);
+  assert.match(app, /catch \{ E\.prontos = PRONTOS_PADRAO; \}/);
+  assert.match(app, /Array\.isArray\(p\.MODULOS_PRONTOS\) \? p\.MODULOS_PRONTOS : \[\]/, "lista inválida não abre nada");
+});
 await teste("index.html: nenhum <script> inline nem atributo on*= (CSP §3.9); um só ?v=", () => {
   const html = ler("index.html");
   for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
@@ -1111,6 +1155,9 @@ await teste("CSP sem cabeçalho (GitHub Pages): <meta> no <head> do app e das en
 await teste("netlify.toml: publish web, / e /index.html → /app/ (302 forçado), CSP do §3.9", () => {
   const t = readFileSync(join(RAIZ, "netlify.toml"), "utf8");
   assert.match(t, /publish\s*=\s*"web"/);
+  // aceite F8 (01/10/2026): nenhuma regra [build].ignore pula o build da main; a main publica
+  assert.doesNotMatch(t.replace(/^\s*#.*$/gm, ""), /^\s*ignore\s*=/m, "sem a regra ignore do build da main");
+  assert.doesNotMatch(t.replace(/^\s*#.*$/gm, ""), /\$BRANCH/, "nenhum filtro por branch no build");
   assert.match(t, /from = "\/"\s*\n\s*to = "\/app\/"\s*\n\s*status = 302\s*\n\s*force = true/);
   assert.match(t, /from = "\/index\.html"\s*\n\s*to = "\/app\/"\s*\n\s*status = 302\s*\n\s*force = true/);
   assert.match(t, /Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co; connect-src 'self' https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"/);

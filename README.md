@@ -5,7 +5,7 @@ conversas do WhatsApp; Órbita é a experiência white-label para clínicas, neg
 e agências.
 
 - **Painel clássico:** https://jpfamelli.github.io/nexus-ads/ (modo de apresentação interno: `?demo`; sem link público na página)
-- **App Órbita:** `web/app/` (módulos ficam bloqueados em `prontos.js` até passarem no aceite E2E)
+- **App Órbita:** `web/app/` (`prontos.js` controla o que aparece; todos os módulos foram liberados no aceite F8 de 01/10/2026 e entram em produção com o merge na `main`)
 - **Como usar e configurar (para o João):** [LEIA-ME.md](LEIA-ME.md)
 - **Como o sistema é construído (banco, RPCs, formatos, regras):** [CONTRATO.md](CONTRATO.md)
 

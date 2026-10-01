@@ -38,7 +38,8 @@ git tag funcoes-AAAAMMDD-N
 git push origin funcoes-AAAAMMDD-N
 ```
 
-Ex.: `git tag funcoes-20261001-1 && git push origin funcoes-20261001-1`. Só tag `funcoes-*` dispara (não há
+Ex.: `git tag funcoes-20261002-1 && git push origin funcoes-20261002-1` (a `funcoes-20261001-1` já foi usada na
+primeira publicação real; cada tag é única). Só tag `funcoes-*` dispara (não há
 gatilho de `pull_request`, `pull_request_target`, `workflow_run` nem push de branch). O GitHub roda o workflow
 **do commit da tag**: o código publicado é sempre o daquele commit. Empurrar a tag envia ao GitHub o commit dela
 (e os anteriores), mesmo que a branch ainda não tenha sido empurrada. Push na `main` continua publicando só o
@@ -85,13 +86,32 @@ gh run view <id-da-execução> --log-failed
 A sonda de 413 fica no log do passo de sondas (`ok … → 413 0.4s`) e, quando falha, também nas anotações do run
 (`gh run view <id-da-execução>`, aviso amarelo com o código e o tempo). Com aviso, registrar em
 `docs/orbita/estado/E2E-meta.md` (bug 1) e `F8.md` como pendência; o bug 1 só é dado como corrigido quando essa sonda
-passar em produção.
+passar em produção (**passou na primeira publicação real, em 01/10/2026: ver "Primeiro deploy real" abaixo**).
 
 Depois de verde, conferir pelo MCP do Supabase (ou Dashboard → Edge Functions): as funções da lista `ACTIVE`,
-`verify_jwt=false` e versão +1. A primeira publicação pela Actions deve levar a **nx-codewords v3, nx-enviar v4 e
+`verify_jwt=false` e versão +1. A primeira publicação pela Actions levou a **nx-codewords v3, nx-enviar v4 e
 nx-whatsapp v6** (no ar em 30/09: v2, v3 e v5). Se nx-whatsapp, nx-ciclo ou nx-relatorio foram publicadas, conferir o
 próximo ciclo em `net._http_response` (HTTP 200, `ok:true`, `kamiguchi ok:true`) e os logs da função sem erro.
 Registrar o resultado em `docs/orbita/estado/F8.md`.
+
+## Primeiro deploy real pela Actions (01/10/2026)
+
+O fluxo documentado acima rodou de verdade pela primeira vez e deu certo:
+
+| Item | Resultado |
+|---|---|
+| Tag / run | `funcoes-20261001-1` · run `36811688641` · 01/10/2026 03:42 UTC (00:42 em São Paulo) |
+| Lista publicada | `nx-codewords`, `nx-enviar`, `nx-whatsapp` (`supabase/deploy-lista.txt`) |
+| Versões que entraram | nx-codewords **v3**, nx-enviar **v4**, nx-whatsapp **v6** (correção `@lid` e 413 por drenagem) |
+| Sondas de autenticação (fatais) | 401 / 403 / 405 ok |
+| Sonda de 413 (bug 1 do E2E-meta) | 2 MiB + 1 com Content-Length → **413 em 0,19 s**; 2,4 MB em pedaços → **413 em 0,31 s** (antes ~160 s e 503): **corrigido em produção** |
+
+Versões no ar depois dessa publicação: nx-codewords v3, nx-enviar v4, nx-whatsapp v6, nx-ciclo v4, nx-relatorio v4,
+nx-ia v2, nx-midia v2. **As quatro últimas NÃO foram republicadas**: carregam a drenagem do corpo só no repositório e
+vão ao ar numa publicação de rotina futura (acrescentar ao `supabase/deploy-lista.txt` e usar uma tag nova). Não
+publicar nx-ciclo/nx-relatorio no dia 1º às 12:00 UTC, quando roda o relatório mensal; fora disso, conferir o ciclo
+das :07 e o relatório das 8h depois. A prova em produção da correção `@lid` (roteiro em `estado/F8.md`) é separada e
+continua por fazer; o resultado do ciclo :07 da kamiguchi após esta publicação não está registrado neste arquivo.
 
 ## Plano de volta
 
@@ -113,8 +133,8 @@ dispara nada. Para voltar:
 2. ajustar `supabase/deploy-lista.txt` para as funções afetadas;
 3. `git tag funcoes-AAAAMMDD-N-volta && git push origin funcoes-AAAAMMDD-N-volta` e acompanhar como acima.
 
-Referências do que estava no ar antes da primeira publicação pela Actions: nx-whatsapp v5, nx-enviar v3 e
-nx-codewords v2 = dist de `49de8d8`; nx-ciclo v4, nx-relatorio v4, nx-ia v2 e nx-midia v2 = dist de `49de8d8`
+Referências do que estava no ar antes da primeira publicação pela Actions (01/10/2026; ela é o "depois", a volta
+republica estas): nx-whatsapp v5, nx-enviar v3 e nx-codewords v2 = dist de `49de8d8`; nx-ciclo v4, nx-relatorio v4, nx-ia v2 e nx-midia v2 = dist de `49de8d8`
 (a correção @lid `a1fc214` e o 413 por drenagem `31404a4`, que substituiu `99003de`, vieram depois). Funções SQL
 antigas: nas migrações `20260928*`, `20260929a` e `20260930*`.
 

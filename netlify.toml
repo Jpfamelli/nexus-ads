@@ -9,8 +9,8 @@
 [build]
   publish = "web"
   command = ""
-  # Evita publicação na branch de produção antes do aceite F8; Deploy Previews seguem ativos.
-  ignore = "if [ \"$BRANCH\" = \"main\" ]; then exit 0; else exit 1; fi"
+  # Aceite F8 (01/10/2026): o dono autorizou a produção; a branch main publica normalmente.
+  # (A antiga regra "ignore", que pulava o build da main até o aceite, foi retirada.)
 
 [[redirects]]
   from = "/"

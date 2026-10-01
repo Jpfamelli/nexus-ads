@@ -1,10 +1,19 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-30 21:30 (America/Sao_Paulo)
+Atualizado: 2026-10-01 01:05 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
-## Atualização atual — 2026-09-30 20:15 -03
+## Atualização atual — 2026-10-01 01:05 -03 (aceite F8: liberar tudo)
+
+- **Primeiro deploy real pela GitHub Actions** (run `36811688641`, tag `funcoes-20261001-1`, 01/10 03:42 UTC): nx-codewords **v3**, nx-enviar **v4**, nx-whatsapp **v6** (correção @lid + 413 por drenagem). Sondas em produção: 401/403/405 ok; 2 MiB + 1 → **413 em 0,19 s** e 2,4 MB em pedaços → **413 em 0,31 s**: o bug 1 do E2E-meta está **corrigido em produção** (antes ~160 s e 503). A prova em produção do @lid (roteiro em `F8.md`) ainda não foi feita.
+- **Versões no ar:** nx-codewords v3, nx-enviar v4, nx-whatsapp v6, nx-ciclo v4, nx-relatorio v4, nx-ia v2, nx-midia v2. As quatro últimas **não foram republicadas**: a drenagem do corpo está só no repositório; publicação de rotina futura, nunca no dia 1º às 12:00 UTC (relatório mensal).
+- **Aceite do dono:** LIBERAR TUDO (CRM + Ads + Atendimento + pacotes), com merge na `main` e produção no Netlify autorizados. Limpeza do §8.5-17 = **limpeza fina (b12)**: mantém o tenant `teste-e2e` e a Conta E2E para futuros E2E.
+- **No repositório (commit desta atualização):** `web/app/prontos.js` libera os 9 módulos (`inicio`, `conversas`, `crm`, `empresas`, `tarefas`, `ads`, `automacoes`, `relatorios`, `admin_revendas`) e as 18 seções de configuração; `app.teste.mjs` passou a conferir as duas listas contra o código (rotas, `pronto("...")` e seções `*-config.js`), a provar que com a lista real todas as rotas abrem, a manter o portão com lista injetada e o padrão fechado se o arquivo não carregar. `netlify.toml` sem a regra `ignore` que pulava o build da `main` (teste atualizado). Cache do app `20261001a`.
+- **Validação:** `node testes/rodar-tudo.mjs` **15/15**; `node --check` em todos os `web/app/*.js`; `git diff --check` limpo (só avisos de fim de linha).
+- **Ainda não feito (próximas etapas, fora deste commit):** push, merge na `main`, deploy de produção no Netlify e conferência do site publicado. Até o merge, a produção continua como estava; o painel clássico no Pages só muda com push na `main`.
+
+## Atualização anterior — 2026-09-30 20:15 -03
 
 Correções pós-E2E commitadas (sem push): 413 nas Edge Functions por drenagem e descarte do corpo (`31404a4`, correção candidata que substitui `99003de`; só vale como corrigida quando a sonda de produção passar), plano de volta com a sonda de 413 só como aviso (`5b03f41`), actions do deploy fixadas por SHA (`5818937`), logo largo no menu (`e11770b`), CSP também em `<meta>` para o GitHub Pages (`97460df`), publicação das funções por **GitHub Actions** com tag `funcoes-*` (`cf1a2a5`, guia em `docs/orbita/DEPLOY-FUNCOES.md`) e os E2E-A/B registrados (`dd12be4`). Suíte 15/15, `deno check` 7/7. No ar continuam nx-whatsapp v5, nx-enviar v3, nx-codewords v2, nx-ciclo v4, nx-relatorio v4, nx-ia v2 e nx-midia v2: a correção @lid e o 413 só vão ao ar na primeira publicação pela Actions, que depende do segredo `SUPABASE_ACCESS_TOKEN` no repositório. Sobra `nx_midia_lixo` 21 (órfã do E2E-B) apagada; `nx_execucoes` 95 fica como histórico. Detalhes em `F8.md`.
 
@@ -12,7 +21,7 @@ Correções pós-E2E commitadas (sem push): 413 nas Edge Functions por drenagem 
 
 O branch `codex/orbita` contém três rodadas de UX: tema claro padrão com modos claro/escuro/marca persistentes; gravação de áudio e anexos com indicação honesta dos limites de CodeWords; diagnóstico Meta/Google com atualização de estado e balões ajustados ao conteúdo. A verificação mais recente passou em 14/14 arquivos da suíte serial Node. O código segue para revisão no PR #1; não houve deploy, alteração de Supabase ou mudança em `main`. F8 continua aberta e os módulos permanecem bloqueados.
 
-## Situação
+## Situação (texto de 30/09, histórico; o estado de 01/10 está na atualização atual acima)
 
 O branch `codex/orbita` contém as frentes em revisão e o commit `40b4f7b` já foi enviado ao PR #1 (rascunho). As sete Edge Functions estão `ACTIVE` no Supabase e existe um preview público no Netlify: https://6abba26f4e8e3c05d376d3c8--orbita-nexus-ads.netlify.app. **O SaaS ainda não está pronto para uso por clientes.** `web/app/prontos.js` mantém os módulos bloqueados até os aceites E2E. As migrações CodeWords, agenda/rastreio e origem CRM/agenda estão aplicadas; os smokes SQL 05, 09, 10 e 11 passaram em transações revertidas segundo o registro da retomada anterior. O tenant isolado `teste-e2e` existe, mas a leitura atual encontrou apenas um canal Meta pendente, zero linhas de métricas e nenhum canal CodeWords. E2E-A/B real, webhook/envio/recibos CodeWords, paridade Ads, mobile autenticado, limpeza e publicação de produção seguem pendentes. Nesta retomada não li segredos nem alterei `nx_config`, dados da Kamiguchi ou produção.
 
@@ -21,13 +30,13 @@ O branch `codex/orbita` contém as frentes em revisão e o commit `40b4f7b` já 
 | Frente | Código/revisão | Estado de publicação |
 |---|---|---|
 | F1 — banco | Migrações base, SaaS, CodeWords, agenda/rastreio e cards de origem aplicadas | Smokes 05, 09, 10 e 11 em `ROLLBACK`; sem alteração de dados da clínica |
-| F2 — funções | Sete handlers; `deno check` 7/7; publicação por GitHub Actions (tag `funcoes-*`) | `nx-whatsapp` v5, `nx-relatorio` v4, `nx-ciclo` v4, `nx-enviar` v3, `nx-midia` v2, `nx-ia` v2, `nx-codewords` v2 — todas `ACTIVE`, `verify_jwt=false` (30/09 ~20h); @lid e 413 ainda não publicados |
-| F3 — acesso e white-label | Implementação local existente; módulos públicos seguem fechados | Preview Netlify responde; sem publicação em produção |
+| F2 — funções | Sete handlers; `deno check` 7/7; publicação por GitHub Actions (tag `funcoes-*`) | `nx-codewords` v3, `nx-enviar` v4, `nx-whatsapp` v6 (Actions, 01/10 03:42 UTC; @lid e 413 no ar, bug 1 corrigido em produção); `nx-ciclo` v4, `nx-relatorio` v4, `nx-ia` v2, `nx-midia` v2 sem republicar (drenagem só no repositório) — todas `ACTIVE`, `verify_jwt=false` |
+| F3 — acesso e white-label | Implementação local existente; `prontos.js` libera todos os módulos e telas (01/10) | Preview Netlify responde; produção só depois do merge na `main` |
 | F4 — CRM | Implementação, revisão e testes aprovados; origem de anúncio exibida nos cards | Smoke SQL com `ROLLBACK`; E2E autenticado do tenant segue parcial |
 | F5 — conversas | Adaptador CodeWords, webhook, fila e recibos cobertos por testes locais; migração e funções publicadas | Nenhum canal CodeWords real está configurado no tenant de teste; envio e recibos reais pendentes |
 | F6 — anúncios e relatórios | Implementação local e testes Node aprovados | Tenant de teste sem métricas; integrações reais e paridade CRM/Ads pendentes |
 | F7 — automações | Implementação local e testes Node aprovados | Aceite autenticado de runtime permanece pendente |
-| F8 — entrega | Runner serial 15/15, `deno check` 7/7, smoke local da agenda fictícia 1/1; E2E-A (Meta) 26/27 e E2E-B 256/256 com os dois defeitos corrigidos no repositório | E2E-A/B real, CodeWords, paridade Ads, mobile autenticado e limpeza do tenant pendentes; `prontos.js` permanece fechado e sem deploy de produção |
+| F8 — entrega | Runner serial 15/15, `deno check` 7/7, smoke local da agenda fictícia 1/1; E2E-A (Meta) 26/27 e E2E-B 256/256 com os dois defeitos corrigidos no repositório | Aceite do dono em 01/10 (liberar tudo; limpeza fina b12 mantém `teste-e2e` e a Conta E2E); `prontos.js` liberado e `netlify.toml` sem a regra `ignore` no repositório; faltam push, merge na `main`, deploy de produção e conferência do site no ar |
 
 ## Retomada CodeWords — 2026-09-29 13:42
 
