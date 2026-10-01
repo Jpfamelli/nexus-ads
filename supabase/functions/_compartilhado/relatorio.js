@@ -103,8 +103,8 @@ async function gerar(db, cfg, cliente, ctx) {
  *   ia({chave, modelo, tipo, contexto}) → texto; padrão: ./ia.js (SDK oficial)
  */
 export function tratar(req, env, deps = {}) {
-  // 405/401 respondem sem ler: o corpo é cancelado antes da resposta (senão o runtime espera o envio)
-  return soltandoCorpo(req, () => tratarRelatorio(req, env, deps));
+  // 405/401 respondem sem ler: o corpo é drenado antes da resposta (senão o runtime espera o envio)
+  return soltandoCorpo(req, () => tratarRelatorio(req, env, deps), deps.drenagem);
 }
 
 async function tratarRelatorio(req, env, deps) {
@@ -116,8 +116,9 @@ async function tratarRelatorio(req, env, deps) {
   const agora = agoraDe(deps);
   try {
     const db = criarDb(env, f);
+    // corpo antes do banco: teto de 64 KiB (resto drenado, 413 sem tocar no banco)
+    const corpo = await lerCorpo(req, undefined, deps.drenagem);
     const cfg = await autenticarCron(req, db);
-    const corpo = await lerCorpo(req);
     const tipo = corpo.tipo ?? "diario";
     if (tipo !== "diario" && tipo !== "mensal") throw new ErroHttp(400, "tipo deve ser diario ou mensal");
     const clientes = await listarClientes(db, corpo.cliente);

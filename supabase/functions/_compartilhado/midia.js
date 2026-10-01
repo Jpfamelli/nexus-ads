@@ -141,11 +141,12 @@ export async function arquivosDaPasta(st, pasta, max = 1000) {
    ------------------------------------------------------------ */
 const PAPEL = { subir: "atendente", subir_direto: "atendente", ver: "leitura", apagar: "admin" };
 
-/** @param {{fetch?: Function, agora?: Date|Function, emSegundoPlano?: (p: Promise<unknown>) => void}} [deps] */
+/** @param {{fetch?: Function, agora?: Date|Function, emSegundoPlano?: (p: Promise<unknown>) => void,
+ *           drenagem?: {prazoMs?: number, teto?: number}}} [deps] */
 export async function tratar(req, env, deps = {}) {
   const f = deps.fetch || globalThis.fetch;
   return tratarPainel(req, async () => {
-    const corpo = await lerCorpoPainel(req, 8 * MB);
+    const corpo = await lerCorpoPainel(req, 8 * MB, deps.drenagem);
     const acao = String(corpo.acao ?? "");
     // só as chaves próprias ("constructor", "__proto__"… não são ações)
     if (!Object.hasOwn(PAPEL, acao)) throw new ErroApi("dados_invalidos", 400, "acao");
@@ -196,5 +197,5 @@ export async function tratar(req, env, deps = {}) {
     const r = await st.apagar(paths);
     if (!r.ok) throw new ErroApi("erro_interno", 502, `Storage: ${r.erro}`);
     return respostaPainel({ ok: true });
-  });
+  }, deps.drenagem);
 }

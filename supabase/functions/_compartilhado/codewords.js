@@ -23,7 +23,7 @@ import { criarDb } from "./db.js";
 import {
   json, limparErro, comPrazo, soDigitos, ErroApi, ErroHttp, respostaPainel, tratarPainel,
   lerCorpoPainel, autenticarPainel, interna, autenticarCron, emLotes,
-  lerCorpo, lerCorpoLimitado, soltarCorpo, soltandoCorpo, CorpoGrande, tamanhoDeclarado,
+  lerCorpo, lerCorpoLimitado, soltandoCorpo, CorpoGrande,
 } from "./comum.js";
 import { hojeSP } from "./nucleo.js";
 import { montarInstrucoes, montarReceita } from "./codewords_prompt.js";
@@ -794,31 +794,27 @@ const codigoDoBanco = e => {
 };
 
 export function tratarAgente(req, env, deps = {}) {
-  // 405/401/429 respondem sem ler: o corpo é cancelado antes da resposta (senão o runtime espera o envio)
-  return soltandoCorpo(req, () => tratarAgenteCorpo(req, env, deps));
+  // 405/401 respondem sem ler: o corpo é drenado antes da resposta (senão o runtime espera o envio)
+  return soltandoCorpo(req, () => tratarAgenteCorpo(req, env, deps), deps.drenagem);
 }
 
 async function tratarAgenteCorpo(req, env, deps) {
   if (req.method !== "POST") return respostaAgente({ ok: false, erro: "metodo_invalido" }, 405);
   const chave = new URL(req.url).searchParams.get("ch") || "";
   if (!/^[0-9a-f]{64}$/.test(chave)) return respostaAgente({ ok: false, erro: "canal_invalido" }, 401);
-  // Content-Length acima de 64 KiB: 413 na hora, sem banco e sem ler (corpo cancelado)
-  if ((tamanhoDeclarado(req) ?? 0) > MAX_CORPO) {
-    soltarCorpo(req);
-    return respostaAgente({ ok: false, erro: "corpo_grande" }, 413);
-  }
   const db = criarDb(env, deps.fetch || globalThis.fetch);
   try {
-    const canal = await db.rpc("nx_codewords_canal", { p_chave: chave });
-    if (!canal?.canal_id) return respostaAgente({ ok: false, erro: "canal_invalido" }, 401);
-    if (canal.excedido) return respostaAgente({ ok: false, erro: "limite_taxa" }, 429, { "retry-after": "60" });
-    // sem Content-Length (ou mentindo): lê contando; no 1º byte além de 64 KiB cancela e 413
+    // corpo com teto ANTES do banco: acima de 64 KiB (Content-Length ou contagem) o resto é
+    // drenado e descartado e sai 413 sem tocar no banco; a interpretação só vem depois do canal
     let bytes;
-    try { bytes = await lerCorpoLimitado(req, MAX_CORPO); }
+    try { bytes = await lerCorpoLimitado(req, MAX_CORPO, deps.drenagem); }
     catch (e) {
       if (e instanceof CorpoGrande) return respostaAgente({ ok: false, erro: "corpo_grande" }, 413);
       throw e;   // leitura interrompida: falha técnica (o fluxo pode tentar de novo)
     }
+    const canal = await db.rpc("nx_codewords_canal", { p_chave: chave });
+    if (!canal?.canal_id) return respostaAgente({ ok: false, erro: "canal_invalido" }, 401);
+    if (canal.excedido) return respostaAgente({ ok: false, erro: "limite_taxa" }, 429, { "retry-after": "60" });
     let corpo;
     try { corpo = JSON.parse(new TextDecoder().decode(bytes)); }
     catch { return respostaAgente({ ok: false, erro: "json_invalido" }, 400); }
@@ -1006,8 +1002,9 @@ export async function sincronizar(db, o = {}) {
    ============================================================ */
 async function modoCron(req, env, deps, f) {
   const db = criarDb(env, f);
+  // corpo antes do banco: teto de 64 KiB (resto drenado, 413 sem tocar no banco); ilegível → {}
+  const corpo = await lerCorpo(req, undefined, deps.drenagem);
   await autenticarCron(req, db);   // 401 sem o cron_token
-  const corpo = await lerCorpo(req);   // teto de 64 KiB (413); ilegível → {}
   const chaves = OBJ(corpo) ? Object.keys(corpo) : [];
   if (chaves.length !== 1 || corpo.sincronizar !== true) return json({ ok: false, erro: "dados_invalidos" }, 400);
   return json({ ok: true, sincronizacao: await sincronizar(db, { fetch: f, orcamentoMs: deps.orcamentoMs }) });
@@ -1016,11 +1013,11 @@ async function modoCron(req, env, deps, f) {
 /**
  * @param {Request} req
  * @param {{url: string, chave: string}} env
- * @param {{fetch?: Function, emSegundoPlano?: Function, orcamentoMs?: number}} [deps]
+ * @param {{fetch?: Function, emSegundoPlano?: Function, orcamentoMs?: number, drenagem?: {prazoMs?: number, teto?: number}}} [deps]
  */
 export function tratar(req, env, deps = {}) {
-  // corpo não lido (cron recusado, URL ruim) é cancelado antes da resposta
-  return soltandoCorpo(req, () => tratarCodeWords(req, env, deps));
+  // corpo não lido (URL ruim, método errado) é drenado antes da resposta
+  return soltandoCorpo(req, () => tratarCodeWords(req, env, deps), deps.drenagem);
 }
 
 async function tratarCodeWords(req, env, deps) {
@@ -1037,7 +1034,7 @@ async function tratarCodeWords(req, env, deps) {
     }
   }
   return tratarPainel(req, async () => {
-    const corpo = await lerCorpoPainel(req);
+    const corpo = await lerCorpoPainel(req, undefined, deps.drenagem);
     const acao = String(corpo.acao ?? "");
     if (!ACOES_PAINEL.has(acao)) throw new ErroApi("dados_invalidos", 400, "acao");
     const db = criarDb(env, f);
@@ -1055,5 +1052,5 @@ async function tratarCodeWords(req, env, deps) {
       case "receita": return respostaPainel(await painelReceita(db, cred, cliente, req));
     }
     throw new ErroApi("dados_invalidos", 400, "acao");
-  });
+  }, deps.drenagem);
 }

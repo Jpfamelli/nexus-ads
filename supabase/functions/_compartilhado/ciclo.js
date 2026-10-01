@@ -224,8 +224,8 @@ async function processarCliente(db, cfg, cliente, ctx) {
  * @param {{fetch?: Function, agora?: Date|Function, prazoRede?: number}} [deps]
  */
 export function tratar(req, env, deps = {}) {
-  // 405/401 respondem sem ler: o corpo é cancelado antes da resposta (senão o runtime espera o envio)
-  return soltandoCorpo(req, () => tratarCiclo(req, env, deps));
+  // 405/401 respondem sem ler: o corpo é drenado antes da resposta (senão o runtime espera o envio)
+  return soltandoCorpo(req, () => tratarCiclo(req, env, deps), deps.drenagem);
 }
 
 async function tratarCiclo(req, env, deps) {
@@ -237,8 +237,9 @@ async function tratarCiclo(req, env, deps) {
   const agora = agoraDe(deps);
   try {
     const db = criarDb(env, f);
+    // corpo antes do banco: teto de 64 KiB (resto drenado, 413 sem tocar no banco)
+    const corpo = await lerCorpo(req, undefined, deps.drenagem);
     const cfg = await autenticarCron(req, db);
-    const corpo = await lerCorpo(req);
     const clientes = await listarClientes(db, corpo.cliente);
 
     const ctx = { hoje: hojeSP(agora), agora, fetch: rede, google: criarGoogle({ fetch: rede, versao: cfg.google_api_versao || null }) };

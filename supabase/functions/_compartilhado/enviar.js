@@ -456,8 +456,9 @@ const CHAVES_CRON = new Set(["fila", "alerta", "ids"]);
 
 async function modoCron(req, env, deps, f) {
   const db = criarDb(env, f);
+  // corpo antes do banco: teto de 64 KiB (resto drenado, 413 sem tocar no banco); ilegível → {}
+  const corpo = await lerCorpo(req, undefined, deps.drenagem);
   const cfg = await autenticarCron(req, db);   // 401 sem o cron_token
-  const corpo = await lerCorpo(req);
   const chaves = Object.keys(corpo);
   // só o nx_disparar chama este modo; qualquer chave desconhecida é recusada (nunca repassa nada)
   if (!chaves.length || chaves.some(k => !CHAVES_CRON.has(k))) return json({ ok: false, erro: "dados_invalidos" }, 400);
@@ -491,11 +492,12 @@ async function modoCron(req, env, deps, f) {
 /**
  * @param {Request} req
  * @param {{url: string, chave: string}} env
- * @param {{fetch?: Function, agora?: Date|Function, prazoRede?: number, emSegundoPlano?: (p: Promise<unknown>) => void}} [deps]
+ * @param {{fetch?: Function, agora?: Date|Function, prazoRede?: number, emSegundoPlano?: (p: Promise<unknown>) => void,
+ *          drenagem?: {prazoMs?: number, teto?: number}}} [deps]
  */
 export function tratar(req, env, deps = {}) {
-  // 405/401 respondem sem ler: o corpo é cancelado antes da resposta (senão o runtime espera o envio)
-  return soltandoCorpo(req, () => tratarEnviar(req, env, deps));
+  // 405 responde sem ler: o corpo é drenado antes da resposta (senão o runtime espera o envio)
+  return soltandoCorpo(req, () => tratarEnviar(req, env, deps), deps.drenagem);
 }
 
 async function tratarEnviar(req, env, deps) {
@@ -508,7 +510,7 @@ async function tratarEnviar(req, env, deps) {
     }
   }
   return tratarPainel(req, async () => {
-    const corpo = await lerCorpoPainel(req);
+    const corpo = await lerCorpoPainel(req, undefined, deps.drenagem);
     const acao = String(corpo.acao ?? "");
     // só as chaves próprias ("constructor", "__proto__"… não são ações)
     if (!Object.hasOwn(PAPEL, acao)) throw new ErroApi("dados_invalidos", 400, "acao");
@@ -528,5 +530,5 @@ async function tratarEnviar(req, env, deps) {
       case "reenviar": return acaoReenviar(db, ctx, corpo, d);
     }
     throw new ErroApi("dados_invalidos", 400, "acao");
-  });
+  }, deps.drenagem);
 }

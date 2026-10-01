@@ -16,7 +16,8 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
   **Push na main publica.** Só faça merge/push na main quando os testes e o E2E passarem.
 - Supabase `dtjznipitihnwmcgpzqh`: sete funções ACTIVE (conferido por `list_edge_functions` em 30/09 ~20h) — `nx-whatsapp` v5,
   `nx-enviar` v3, `nx-codewords` v2, `nx-ciclo` v4, `nx-relatorio` v4, `nx-ia` v2, `nx-midia` v2; todas com `verify_jwt=false` e
-  autenticação própria do handler. **No ar ainda NÃO estão** a correção @lid (`a1fc214`) nem o 413 do corpo grande (`99003de`):
+  autenticação própria do handler. **No ar ainda NÃO estão** a correção @lid (`a1fc214`) nem o 413 do corpo grande (correção
+  candidata por drenagem, que substitui `99003de`; só vale como corrigido quando a sonda de produção passar):
   vão na primeira publicação pela Actions. Cron continua de hora em hora (nx-ciclo :07), relatório diário 8h e mensal dia 1º.
 - **Publicação das funções = GitHub Actions** (`.github/workflows/funcoes-supabase.yml`), disparada SÓ por tag `funcoes-*`
   (`git tag funcoes-AAAAMMDD-N && git push origin <tag>`), com a lista em `supabase/deploy-lista.txt` e o segredo
@@ -67,8 +68,10 @@ Testes SQL (`supabase/testes/0*.sql`, `10_codewords.sql`, `11_agenda_rastreio.sq
 - Funções: `node scripts/montar-funcoes.mjs` gera `supabase/dist/<funcao>`; quem publica é o workflow
   `funcoes-supabase.yml` (tag `funcoes-*`, `verify_jwt = false`), com as funções listadas em `supabase/deploy-lista.txt`.
   **Mexeu em `web/nucleo.js`? Republique nx-ciclo, nx-relatorio e nx-whatsapp.** Não edite `web/demo.js` sem necessidade.
-- Corpo de requisição nas funções: sempre por `lerCorpoLimitado`/`lerCorpoPainel`/`lerCorpo` (comum.js); resposta que não
-  lê o corpo o cancela (`soltandoCorpo`). Responder sem ler nem cancelar pendura a Edge Function (~160 s, 503).
+- Corpo de requisição nas funções: sempre por `lerCorpoLimitado`/`lerCorpoPainel`/`lerCorpo` (comum.js), antes de tocar no
+  banco; acima do teto o resto é DRENADO e descartado (`drenarCorpo`: prazo 10 s, teto absoluto 16 MiB) e só então sai o 413;
+  resposta que não lê o corpo também o drena (`soltandoCorpo`). No Edge Runtime, responder antes de consumir o corpo — com
+  ou sem cancelar o leitor — pendura a função (~160 s, 503); cancelar é só o último recurso (prazo/teto estourados).
 - Front: HTML/CSS/JS puro, módulos ES, sem build. `[hidden]{display:none!important}`, grids com `minmax(0,1fr)`,
   sem rolagem horizontal em 390 px, tudo com tokens de cor do white-label.
 - Segredos: NUNCA em arquivo, commit, log ou resposta (tokens Meta/Google/WhatsApp, chave da Anthropic, service_role,

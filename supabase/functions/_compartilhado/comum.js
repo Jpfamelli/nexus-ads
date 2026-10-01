@@ -76,17 +76,29 @@ export function comPrazo(f, ms = PRAZO_REDE_MS) {
 
 /* ------------------------------------------------------------
    Corpo da requisição com teto (E2E-meta, bug 1)
-   Responder SEM ler nem soltar o corpo deixa o runtime esperando o cliente terminar de
-   enviar: o nx-whatsapp "devolvia" 413 para 2 MiB + 1, mas a resposta nunca saía e o
-   gateway dava 503 depois de ~160 s (um worker preso por POST, sem autenticação).
-   Regra: quem não vai ler o corpo inteiro o CANCELA antes de responder.
+   No Edge Runtime do Supabase, responder ANTES de consumir o corpo — com ou sem cancelar o
+   leitor — pendura a requisição: o nx-whatsapp "devolvia" 413 para 2 MiB + 1, a resposta
+   nunca saía e o gateway dava 503 depois de ~160 s (um worker preso por POST, sem
+   autenticação). LER o corpo inteiro funcionou (2.097.152 B → 401 em 0,6 s).
+   Regra: acima do teto, DRENAR E DESCARTAR — continuar lendo até o fim só contando bytes
+   (nada acumulado), com prazo curto e teto absoluto — e só então responder 413. Estourou o
+   prazo ou o teto absoluto: aí sim cancela o leitor e responde (melhor esforço).
+   Content-Length declarado acima do teto absoluto: 413 já, sem drenar (melhor esforço).
+   Quem responde sem ler o corpo (405/401/429) drena do mesmo jeito (soltandoCorpo).
    ------------------------------------------------------------ */
 export class CorpoGrande extends Error {
   constructor(limite) { super(`corpo acima de ${limite} bytes`); this.name = "CorpoGrande"; this.status = 413; this.limite = limite; }
 }
 
+/** Prazo da drenagem (desde o começo dela, valendo também para um read() parado). */
+export const PRAZO_DRENAR_MS = 10_000;
+/** Teto absoluto do corpo inteiro que ainda vale drenar (os tetos de leitura vão até 8 MB). */
+export const TETO_DRENAR = 16 * 1024 * 1024;
+
 /** Cancela o corpo que não vai ser lido (ou o leitor que parou no meio). Não espera o
-    cancelamento terminar: ele nunca pode segurar a resposta. Corpo já lido/travado: nada a fazer. */
+    cancelamento terminar: ele nunca pode segurar a resposta. Corpo já lido/travado: nada a fazer.
+    É o último recurso (prazo/teto da drenagem estourados): no Edge Runtime, cancelar sozinho
+    não basta para a resposta sair. */
 export function soltarCorpo(req, leitor = null) {
   try {
     const alvo = leitor || (req?.body && !req.body.locked ? req.body : null);
@@ -102,23 +114,70 @@ export function tamanhoDeclarado(req) {
   return Number(v);
 }
 
+const PRAZO = Symbol("prazo");
+
 /**
- * Corpo CRU com teto em bytes. Content-Length acima do teto → CorpoGrande NA HORA, sem ler
- * nada e com o corpo cancelado. Sem Content-Length (ou com um que mente), lê contando e, no
- * primeiro pedaço além do teto, cancela o leitor e lança CorpoGrande. Exatamente no teto passa.
+ * Lê o resto do corpo e JOGA FORA (só conta bytes), até o fim, para o runtime liberar a
+ * resposta. Para no prazo (`prazoMs`, contado do começo da drenagem) ou quando o corpo
+ * inteiro passa do teto absoluto (`teto`, contando os `ja` bytes que quem chamou já leu):
+ * nesses casos cancela o leitor. Content-Length acima do teto absoluto: cancela sem ler.
+ * Sem corpo ou corpo já lido/travado por outro leitor: nada a fazer. Nunca lança.
+ * @param {Request} req
+ * @param {{leitor?: ReadableStreamDefaultReader, ja?: number, prazoMs?: number, teto?: number}} [o]
+ * @returns {Promise<{fim: boolean, bytes: number, motivo?: "prazo"|"teto"|"erro"}>}
+ *          fim = o corpo foi lido até o fim; bytes = quanto foi descartado aqui
  */
-export async function lerCorpoLimitado(req, limite) {
+export async function drenarCorpo(req, { leitor = null, ja = 0, prazoMs = PRAZO_DRENAR_MS, teto = TETO_DRENAR } = {}) {
+  if (!leitor) {
+    const corpo = req?.body;
+    if (!corpo || corpo.locked) return { fim: true, bytes: 0 };
+    const declarado = tamanhoDeclarado(req);
+    if (declarado != null && declarado > teto) { soltarCorpo(req); return { fim: false, bytes: 0, motivo: "teto" }; }
+    try { leitor = corpo.getReader(); } catch { soltarCorpo(req); return { fim: false, bytes: 0, motivo: "erro" }; }
+  }
+  let total = ja;
+  let relogio;
+  const estourou = new Promise(r => { relogio = setTimeout(() => r(PRAZO), prazoMs); });
+  try {
+    for (;;) {
+      const r = await Promise.race([leitor.read(), estourou]);
+      if (r === PRAZO) { soltarCorpo(req, leitor); return { fim: false, bytes: total - ja, motivo: "prazo" }; }
+      if (r.done) return { fim: true, bytes: total - ja };
+      total += r.value?.byteLength ?? 0;
+      if (total > teto) { soltarCorpo(req, leitor); return { fim: false, bytes: total - ja, motivo: "teto" }; }
+    }
+  } catch {
+    soltarCorpo(req, leitor);
+    return { fim: false, bytes: total - ja, motivo: "erro" };
+  } finally {
+    clearTimeout(relogio);
+  }
+}
+
+/**
+ * Corpo CRU com teto em bytes (exatamente no teto passa). Acima dele — pelo Content-Length
+ * ou pela contagem, sem Content-Length ou com um que mente — o que já foi lido é largado, o
+ * resto é DRENADO (drenarCorpo: prazo e teto absoluto) e só então lança CorpoGrande.
+ * Nada além do teto fica em memória. A leitura dentro do teto não tem prazo próprio
+ * (upload legítimo lento, ex.: mídia de 8 MB pelo celular).
+ * @param {{prazoMs?: number, teto?: number}} [drenagem] só os testes mudam
+ */
+export async function lerCorpoLimitado(req, limite, drenagem = {}) {
   const declarado = tamanhoDeclarado(req);
-  if (declarado != null && declarado > limite) { soltarCorpo(req); throw new CorpoGrande(limite); }
+  if (declarado != null && declarado > limite) { await drenarCorpo(req, drenagem); throw new CorpoGrande(limite); }
   if (!req.body) return new Uint8Array(0);
   const leitor = req.body.getReader();
-  const partes = [];
+  let partes = [];
   let total = 0;
   for (;;) {
     const { value, done } = await leitor.read();
     if (done) break;
     total += value.byteLength;
-    if (total > limite) { soltarCorpo(req, leitor); throw new CorpoGrande(limite); }
+    if (total > limite) {
+      partes = null;   // nada acima do teto fica em memória
+      await drenarCorpo(req, { ...drenagem, leitor, ja: total });
+      throw new CorpoGrande(limite);
+    }
     partes.push(value);
   }
   const bytes = new Uint8Array(total);
@@ -127,18 +186,19 @@ export async function lerCorpoLimitado(req, limite) {
   return bytes;
 }
 
-/** Roda o handler e, na saída, cancela o corpo que ninguém leu (405/401/429 antes da leitura). */
-export async function soltandoCorpo(req, fn) {
+/** Roda o handler e, antes de a resposta sair, DRENA o corpo que ninguém leu (405/401/429 antes
+    da leitura) com o mesmo prazo e teto absoluto. Corpo já lido ou drenado: nada a fazer. */
+export async function soltandoCorpo(req, fn, drenagem = {}) {
   try { return await fn(); }
-  finally { soltarCorpo(req); }
+  finally { await drenarCorpo(req, drenagem); }
 }
 
 export const MAX_CORPO_CRON = 64 * 1024;
 
 /** Corpo JSON do cron (pequeno: {cliente}, {tipo}, {ids:[≤100]}). Acima do teto → 413; ilegível → {}. */
-export async function lerCorpo(req, limite = MAX_CORPO_CRON) {
+export async function lerCorpo(req, limite = MAX_CORPO_CRON, drenagem = {}) {
   let bytes;
-  try { bytes = await lerCorpoLimitado(req, limite); }
+  try { bytes = await lerCorpoLimitado(req, limite, drenagem); }
   catch (e) {
     if (e instanceof CorpoGrande) throw new ErroHttp(413, "corpo grande demais");
     return {};
@@ -389,10 +449,10 @@ export async function autenticarPainel(db, corpo, papelMin = "atendente") {
 }
 
 /** Corpo do painel: JSON pequeno (o painel nunca manda arquivo por aqui). Teto em BYTES
-    (lerCorpoLimitado): acima dele, 413 na hora, sem ler o resto. */
-export async function lerCorpoPainel(req, max = 64_000) {
+    (lerCorpoLimitado): acima dele, o resto é drenado e descartado e sai 413, antes do banco. */
+export async function lerCorpoPainel(req, max = 64_000, drenagem = {}) {
   let bytes;
-  try { bytes = await lerCorpoLimitado(req, max); }
+  try { bytes = await lerCorpoLimitado(req, max, drenagem); }
   catch (e) { if (e instanceof CorpoGrande) throw new ErroApi("dados_invalidos", 413); throw e; }
   const txt = new TextDecoder().decode(bytes);
   try { const c = JSON.parse(txt || "{}"); if (c && typeof c === "object" && !Array.isArray(c)) return c; } catch { /* abaixo */ }
@@ -400,8 +460,8 @@ export async function lerCorpoPainel(req, max = 64_000) {
 }
 
 /** Envolve um handler de painel: OPTIONS, método, erros → {ok:false, erro}. O corpo que
-    não foi lido (OPTIONS, 405, falha antes da leitura) é cancelado antes da resposta. */
-export async function tratarPainel(req, fn) {
+    não foi lido (OPTIONS, 405, falha antes da leitura) é drenado antes da resposta. */
+export async function tratarPainel(req, fn, drenagem = {}) {
   return soltandoCorpo(req, async () => {
     if (req.method === "OPTIONS") return preflight();
     if (req.method !== "POST") return respostaErro("metodo_invalido", 405);
@@ -414,5 +474,5 @@ export async function tratarPainel(req, fn) {
       console.error("painel:", msg);
       return respostaErro("erro_interno", 500, msg);
     }
-  });
+  }, drenagem);
 }

@@ -61,11 +61,12 @@ export function montarPrompt(acao, cx, delim) {
 /**
  * @param {{fetch?: Function, ia?: () => Promise<{perguntarClaude: Function}>, emSegundoPlano?: (p: Promise<unknown>) => void}} [deps]
  *        deps.ia carrega o ia.js (import dinâmico no index.ts); ausente → ia_indisponivel.
+ *        deps.drenagem: prazo/teto absoluto do descarte do corpo (comum.js; só os testes mudam).
  */
 export async function tratar(req, env, deps = {}) {
   const f = deps.fetch || globalThis.fetch;
   return tratarPainel(req, async () => {
-    const corpo = await lerCorpoPainel(req);
+    const corpo = await lerCorpoPainel(req, undefined, deps.drenagem);
     const acao = String(corpo.acao ?? "");
     if (acao !== "sugerir" && acao !== "resumir") throw new ErroApi("dados_invalidos", 400, "acao");
     const db = criarDb(env, f);
@@ -117,5 +118,5 @@ export async function tratar(req, env, deps = {}) {
     await registrar(true, r);
     // 5. nunca envia: o front põe o texto no campo
     return respostaPainel({ ok: true, texto: String(r.texto).slice(0, 4096), acao });
-  });
+  }, deps.drenagem);
 }

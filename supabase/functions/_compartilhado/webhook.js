@@ -31,7 +31,7 @@ const TRAVA_REENVIO_S = 7 * 86400;
 // o webhook precisa responder rápido à Meta: o reenvio por template não espera os 30 s do sync
 const PRAZO_ENVIO_MS = 10_000;
 const PRAZO_MIDIA_MS = 60_000;
-// 2 MiB exatos passam; 1 byte a mais → 413 na hora (lerCorpoLimitado cancela o corpo)
+// 2 MiB exatos passam; 1 byte a mais → o resto é drenado e descartado e sai 413 (lerCorpoLimitado)
 export const MAX_CORPO_WEBHOOK = 2 * 1024 * 1024;
 // wamid é base64 com prefixo: nada de aspas, chaves, vírgulas ou barra invertida
 const WAMID_OK = /^[\w.:=+/-]{1,256}$/;
@@ -343,12 +343,13 @@ async function canalDaUrl(db, u) {
  * Sem ?c=: app da Nexus (segredo e verify token globais), como antes. Com ?c=<chave>: URL de UM
  * número de cliente (verify token do canal; segredo = app secret do canal ?? o global).
  * @param {{fetch?: Function, agora?: Date|Function, prazoRede?: number, esperar?: (ms: number) => Promise<void>,
- *          emSegundoPlano?: (p: Promise<any>) => void}} [deps]
+ *          emSegundoPlano?: (p: Promise<any>) => void, drenagem?: {prazoMs?: number, teto?: number}}} [deps]
  *        emSegundoPlano: EdgeRuntime.waitUntil no index.ts; sem ele, a mídia e a fila rodam antes da resposta.
+ *        drenagem: prazo/teto absoluto do descarte do corpo (comum.js; só os testes mudam).
  */
 export function tratar(req, env, deps = {}) {
-  // o corpo que não foi lido (GET/PUT, falha antes da leitura) é cancelado antes da resposta
-  return soltandoCorpo(req, () => tratarWebhook(req, env, deps));
+  // o corpo que não foi lido (GET/PUT, falha antes da leitura) é drenado antes da resposta
+  return soltandoCorpo(req, () => tratarWebhook(req, env, deps), deps.drenagem);
 }
 
 async function tratarWebhook(req, env, deps) {
@@ -367,10 +368,10 @@ async function tratarWebhook(req, env, deps) {
     }
     if (req.method !== "POST") return texto("método não permitido", 405);
 
-    // corpo com teto ANTES de tudo (banco, assinatura): acima de 2 MiB → 413 na hora, corpo cancelado;
-    // a assinatura só é conferida sobre o corpo inteiro dentro do limite
+    // corpo com teto ANTES de tudo (banco, assinatura): acima de 2 MiB o resto é drenado e
+    // descartado e sai 413; a assinatura só é conferida sobre o corpo cru inteiro dentro do limite
     let cru;
-    try { cru = await lerCorpoLimitado(req, MAX_CORPO_WEBHOOK); }
+    try { cru = await lerCorpoLimitado(req, MAX_CORPO_WEBHOOK, deps.drenagem); }
     catch (e) { return e instanceof CorpoGrande ? texto("corpo grande demais", 413) : texto("corpo inválido", 400); }
     const url = await canalDaUrl(db, u);
     if (url.tem && !url.canal) return texto("canal desconhecido", 401);
