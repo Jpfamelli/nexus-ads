@@ -214,6 +214,9 @@ export async function montar(ctx) {
   let vivo = true;
   let eixoAtual = null;
   let nomesDonos = null;
+  // a lógica pura do CRM (chave de idempotência, erro ambíguo): carregada sob demanda, com o mesmo ?v= do shell
+  let logicaP = null;
+  const logica = () => logicaP || (logicaP = import(`./crm-logica.js?v=${encodeURIComponent(ctx.versao)}`));
 
   const cabecalho = h("header", { class: "agenda-cab" });
   const conteudo = h("div", { class: "agenda-conteudo", "aria-live": "polite" });
@@ -536,9 +539,11 @@ export async function montar(ctx) {
     const servicoEl = ui.campo({ rotulo: "Serviço", nome: "servico", valor: selecionado && selecionado.servico || "", max: 80, placeholder: "Ex.: avaliação, limpeza" });
     const btHorarios = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Ver horários livres");
     const slots = h("div", { class: "agenda-slots", role: "status", "aria-live": "polite" });
+    const statusEl = h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true });
+    let reqAtual = null, reqConteudo = "";      // M25: uma chave por intenção; erro ambíguo repete com a MESMA chave (nunca marca duas vezes)
     const formulario = h("div", { class: "agenda-form" },
       selecionado ? null : h("section", { class: "agenda-busca" }, busca, btBuscar, lista),
-      escolhido, h("div", { class: "agenda-form-grade" }, dataEl, servicoEl), btHorarios, slots);
+      escolhido, h("div", { class: "agenda-form-grade" }, dataEl, servicoEl), btHorarios, slots, statusEl);
 
     function pintarEscolhido() {
       escolhido.textContent = selecionado
@@ -558,19 +563,22 @@ export async function montar(ctx) {
           const slot = radio && horarios[Number(radio.value)];
           if (!slot) { m.erro("Busque e selecione um horário livre."); return false; }
           try {
-            const r = erroResposta(await api.rpcC("nx_agenda_marcar", {
-              p_negocio: selecionado.id, p_inicio: slot.inicio,
-              p_servico: servicoEl.querySelector("input").value.trim() || null,
-            }));
-            return r;
+            const Lg = await logica();
+            const params = { p_negocio: selecionado.id, p_inicio: slot.inicio, p_servico: servicoEl.querySelector("input").value.trim() || null };
+            const conteudo = JSON.stringify(params);
+            if (conteudo !== reqConteudo) { reqAtual = Lg.novaReq(); reqConteudo = conteudo; }
+            const { resultado } = await Lg.escreverComReq(api, "nx_agenda_marcar", params, { req: reqAtual, aoStatus: t => { statusEl.textContent = t; statusEl.hidden = false; } });
+            statusEl.hidden = true;
+            return erroResposta(resultado);
           } catch (e) {
+            statusEl.hidden = true;
             const codigo = e && e.codigo;
-            const texto = codigo === "horario_ocupado" ? "Esse horário acabou de ser ocupado. Busque os horários livres novamente."
+            const texto = e && e.ambigua ? "Não foi possível confirmar se foi salvo. Toque em «Confirmar consulta» de novo: é seguro, não marca duas vezes."
+              : codigo === "horario_ocupado" ? "Esse horário acabou de ser ocupado. Busque os horários livres novamente."
               : codigo === "ja_agendada" ? "Este negócio já tem uma consulta futura. Atualize a agenda antes de tentar novamente."
                 : api.mensagemErro(e);
             m.erro(texto);
-            horarios = [];
-            ui.limpar(slots);
+            if (!(e && e.ambigua)) { horarios = []; ui.limpar(slots); }   // recusa: busca de novo; dúvida de conexão: o horário escolhido continua valendo para o «Salvar de novo»
             return false;
           }
         } },

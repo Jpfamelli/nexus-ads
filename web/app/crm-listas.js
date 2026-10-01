@@ -252,7 +252,10 @@ export async function formContato(k, { nome = "", telefone = "" } = {}) {
       ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", autocomplete: "off" }),
       ui.campo({ rotulo: "Origem", nome: "origem", tipo: "select", valor: "manual", opcoes: Object.entries(L.ROTULO_ORIGEM).filter(([v]) => v !== "importacao").map(([valor, rotulo]) => ({ valor, rotulo })) }),
       ui.campo({ rotulo: "Cidade", nome: "cidade", max: 80 })),
-    ...campos.map(c => N.campoPersonalizado(k, c, null)));
+    ...campos.map(c => N.campoPersonalizado(k, c, null)),
+    h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true }));
+  const status = form.querySelector(".crm-status");
+  let reqAtual = null, reqConteudo = "";   // M25: uma chave por intenção; erro ambíguo repete com a MESMA chave
   return ui.modal({
     titulo: k.v.novo("contato"), corpo: form,
     acoes: [
@@ -265,8 +268,16 @@ export async function formContato(k, { nome = "", telefone = "" } = {}) {
         const { valores, erros } = N.lerCamposPersonalizados(k, form, campos);
         if (erros.length) { ui.marcarErro(form, erros[0].nome, erros[0].texto); return false; }
         const p = { nome: d.nome || null, telefone: d.telefone || null, email: d.email || null, origem: d.origem, cidade: d.cidade || null, ...(campos.length ? { campos: valores } : {}) };
-        try { return await k.api.rpcC("nx_contato_salvar", { p_contato: p }); }
+        try {
+          const conteudo = JSON.stringify(p);
+          if (conteudo !== reqConteudo) { reqAtual = k.novaReq(); reqConteudo = conteudo; }
+          const { resultado } = await k.escrever("nx_contato_salvar", { p_contato: p }, { req: reqAtual, aoStatus: txt => { status.textContent = txt; status.hidden = false; } });
+          status.hidden = true;
+          return resultado;
+        }
         catch (e) {
+          status.hidden = true;
+          if (e && e.ambigua) { api.erro("Não foi possível confirmar se foi salvo. Toque em «Cadastrar» de novo: é seguro, não duplica."); return false; }
           if (e && e.codigo === "telefone_em_uso" && /^\d+$/.test(String(e.hint || ""))) {
             api.erro(`${k.erro(e)} Abrindo o cadastro existente…`);
             setTimeout(() => { api.fechar(null); k.ctx.navegar(`#/contatos/${e.hint}`); }, 900);
@@ -378,11 +389,25 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
       ...N.linhaEd(k, { rotulo: "Origem", desabilitado: !pode || !!c.plataforma,
         controle: h("select", null, Object.entries(L.ROTULO_ORIGEM).map(([v, t]) => h("option", { value: v, selected: v === c.origem }, t))),
         ler: x => x.value, salvar: v => salvar({ origem: v }) }));
-    const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas: c.etiquetas || [], rotulo: "Etiquetas",
-      podeCriar: pode ? nome => k.criarEtiqueta(nome) : false,
-      aoMudar: async ids => { try { await salvar({ etiquetas: ids }); } catch (e) { k.toastErro(e); } } });
-    if (!pode) for (const b of etq.querySelectorAll("button")) b.disabled = true;
-    dl.append(h("dt", null, "Etiquetas"), h("dd", null, etq));
+    const ddEtq = h("dd", null);
+    const montarEtq = marcadas => {
+      const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas, rotulo: "Etiquetas",
+        podeCriar: pode ? nome => k.criarEtiqueta(nome) : false, aoMudar: ids => etiquetar(ids) });
+      if (!pode) for (const b of etq.querySelectorAll("button")) b.disabled = true;
+      ui.limpar(ddEtq); ddEtq.appendChild(etq);
+    };
+    // M25: etiquetar grava na hora e oferece «Desfazer»
+    async function etiquetar(ids) {
+      const antes = (c.etiquetas || []).slice();
+      const nomeDe = id => (k.etiqueta(id) || {}).nome || "etiqueta";
+      const mais = ids.filter(i => !antes.includes(i)), menos = antes.filter(i => !ids.includes(i));
+      const texto = mais.length ? `Etiqueta «${nomeDe(mais[0])}» adicionada` : menos.length ? `Etiqueta «${nomeDe(menos[0])}» removida` : "Etiquetas atualizadas";
+      try { await salvar({ etiquetas: ids }); }
+      catch (e) { k.toastErro(e); montarEtq(antes); return; }
+      ui.acaoComDesfazer({ texto, reverter: async () => { await salvar({ etiquetas: antes }); montarEtq(antes); } });
+    }
+    montarEtq(c.etiquetas || []);
+    dl.append(h("dt", null, "Etiquetas"), ddEtq);
     const obs = h("textarea", { rows: 3, maxlength: 5000, placeholder: "Observações gerais" }, c.obs || "");
     dl.append(...N.linhaEd(k, { rotulo: "Observação", desabilitado: !pode, controle: obs, ler: x => x.value.trim() || null, salvar: v => salvar({ obs: v }) }));
     const blocoDados = h("section", { class: "ng-bloco", "aria-label": "Dados" }, h("div", { class: "ng-bloco-cab" }, h("h3", null, "Dados")), dl);

@@ -251,13 +251,26 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       return r;
     }
     async function mover(e) {
+      // o que era antes: o «Desfazer» devolve a etapa (e, se for o caso, o valor final, o motivo da perda ou a data da consulta)
+      const antes = { estagio: k.estagio(n.estagio_id), ordem: n.ordem ?? null, valor: n.valor, valor_previsto: n.valor_previsto, consulta_em: n.consulta_em ?? null,
+        motivo_perda_id: n.motivo_perda_id, motivo_perda_txt: n.motivo_perda_txt };
       try {
-        const card = await moverComPerguntas(k, n, e);
-        if (!card) return;
+        const extra = await prepararMovimento(k, n, e);
+        if (extra === null) return;
+        const card = await moverNegocio(k, n, e, { extra });
         avisar(card);
-        ui.toast(e.tipo === "ganho" ? `${k.v.ganhar}! Registrado.` : e.tipo === "perdido" ? "Registrado como perdido." : `Movido para «${e.nome}».`, { tipo: "ok" });
         ui.anunciar(`Movido para ${e.nome}.`);
         await carregar();
+        const quando = e.tipo === "ganho" ? `${k.v.ganhar}! Registrado.` : e.tipo === "perdido" ? "Registrado como perdido." : `Movido para «${e.nome}».`;
+        const aviso = e.tipo !== "aberto" || (antes.estagio && antes.estagio.tipo !== "aberto") ? " Mensagens automáticas já enviadas não voltam." : "";
+        if (antes.estagio) ui.acaoComDesfazer({ texto: quando + aviso, reverter: async () => {
+          const extraVolta = antes.estagio.tipo === "ganho" ? { valor: antes.valor ?? antes.valor_previsto ?? 0 }
+            : antes.estagio.tipo === "perdido" ? { ...(antes.motivo_perda_id ? { motivo_perda_id: antes.motivo_perda_id } : {}), ...(antes.motivo_perda_txt ? { motivo_perda_txt: antes.motivo_perda_txt } : {}) } : {};
+          const volta = await moverNegocio(k, { id: n.id }, antes.estagio, { ordem: antes.ordem, extra: extraVolta });
+          if (extra && extra.consulta_em && antes.consulta_em !== extra.consulta_em) await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: n.id, consulta_em: antes.consulta_em } });
+          avisar(volta);
+          if (!fechada) await carregar();
+        } });
       } catch (err) { k.toastErro(err); }
     }
 
@@ -441,11 +454,25 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
         ui.pilula(`${pont.score} de 100`, pont.faixa === "alta" ? "ok" : pont.faixa === "media" ? "aten" : "neutra", { icone: "ia" }),
         pont.motivo ? h("span", { class: "ng-pontuacao-motivo" }, pont.motivo) : null,
         pont.em ? h("small", { class: "ng-pontuacao-em" }, `Atribuída em ${pont.em.replace("T", " às ")}`) : null));
-      const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas: n.etiquetas || [], rotulo: "Etiquetas do negócio",
-        podeCriar: podeEditar ? nome => k.criarEtiqueta(nome) : false,
-        aoMudar: async ids => { try { await salvar({ etiquetas: ids }); } catch (e) { k.toastErro(e); } } });
-      if (!podeEditar) for (const b of etq.querySelectorAll("button")) b.disabled = true;
-      dl.append(h("dt", null, "Etiquetas"), h("dd", null, etq));
+      const ddEtq = h("dd", null);
+      const montarEtq = marcadas => {
+        const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas, rotulo: "Etiquetas do negócio",
+          podeCriar: podeEditar ? nome => k.criarEtiqueta(nome) : false, aoMudar: ids => etiquetar(ids) });
+        if (!podeEditar) for (const b of etq.querySelectorAll("button")) b.disabled = true;
+        ui.limpar(ddEtq); ddEtq.appendChild(etq);
+      };
+      // M25: etiquetar grava na hora e oferece «Desfazer» (volta ao conjunto anterior)
+      async function etiquetar(ids) {
+        const antes = (n.etiquetas || []).slice();
+        const nomeDe = id => (k.etiqueta(id) || {}).nome || "etiqueta";
+        const mais = ids.filter(i => !antes.includes(i)), menos = antes.filter(i => !ids.includes(i));
+        const texto = mais.length ? `Etiqueta «${nomeDe(mais[0])}» adicionada` : menos.length ? `Etiqueta «${nomeDe(menos[0])}» removida` : "Etiquetas atualizadas";
+        try { await salvar({ etiquetas: ids }); }
+        catch (e) { k.toastErro(e); montarEtq(antes); return; }
+        ui.acaoComDesfazer({ texto, reverter: async () => { await salvar({ etiquetas: antes }); montarEtq(antes); } });
+      }
+      montarEtq(n.etiquetas || []);
+      dl.append(h("dt", null, "Etiquetas"), ddEtq);
       el.appendChild(h("section", { class: "ng-bloco", "aria-label": "Dados" }, h("div", { class: "ng-bloco-cab" }, h("h3", null, "Dados")), dl));
 
       /* campos personalizados do funil */
@@ -550,12 +577,18 @@ export async function iniciarPosVenda(k, n, contato, { aoCriar } = {}) {
     h("p", { class: "sub" }, `Cria ${k.v.art("negocio") === "a" ? "uma nova" : "um novo"} ${k.v.min("negocio")} para ${contato.nome || "este contato"}. ${k.v.art("negocio") === "a" ? "A" : "O"} atual continua ${k.v.ganhar.toLowerCase()} no funil de anúncios — a receita do anúncio não muda.`),
     ui.campo({ rotulo: "Funil", nome: "funil_id", tipo: "select", valor: funis[0].id, opcoes: funis.map(f => ({ valor: f.id, rotulo: f.nome })) }),
     ui.campo({ rotulo: "Título", nome: "titulo", valor: `Pós-venda — ${contato.nome || k.L.tituloCard(n)}`.slice(0, 120), max: 120 }));
+  let reqAtual = null, reqConteudo = "";   // M25: uma chave por intenção
   const r = await ui.modal({ titulo: "Iniciar pós-venda", corpo: form, acoes: [
     { rotulo: "Cancelar", tipo: "neutro", valor: null },
     { rotulo: "Criar", tipo: "primario", fn: async api => {
       const d = ui.lerForm(form);
-      try { return await k.api.rpcC("nx_negocio_salvar", { p_negocio: { contato_id: contato.id, funil_id: d.funil_id, titulo: d.titulo || null, origem: "manual" } }); }
-      catch (e) { api.erro(k.erro(e)); return false; }
+      try {
+        const p = { contato_id: contato.id, funil_id: d.funil_id, titulo: d.titulo || null, origem: "manual" };
+        const conteudo = JSON.stringify(p);
+        if (conteudo !== reqConteudo) { reqAtual = k.novaReq(); reqConteudo = conteudo; }
+        return (await k.escrever("nx_negocio_salvar", { p_negocio: p }, { req: reqAtual })).resultado;
+      }
+      catch (e) { api.erro(e && e.ambigua ? "Não foi possível confirmar se foi salvo. Toque em «Criar» de novo: é seguro, não duplica." : k.erro(e)); return false; }
     } }] });
   if (!r) return;
   ui.toast(`Pós-venda criado em «${(k.funil(r.funil_id) || {}).nome || "pós-venda"}».`, { tipo: "ok", desfazer: null });
@@ -659,13 +692,16 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
   let etiquetas = [];
   const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas: [], podeCriar: nome => k.criarEtiqueta(nome), aoMudar: ids => { etiquetas = ids; } });
   const erro = h("p", { class: "modal-erro", role: "alert", hidden: true });
+  // M25: uma chave por intenção. Erro ambíguo (prazo estourado depois de o servidor aplicar) repete com a MESMA chave; mudou o conteúdo, chave nova.
+  const status = h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true });
+  let reqAtual = null, reqConteudo = "";
 
   form.append(zonaContato,
     ui.campo({ rotulo: "Título (opcional)", nome: "titulo", max: 120, placeholder: `Ex.: ${servicos[0] || "Implante superior"}` }),
     h("div", { class: "crm-form-2" }, selFunil, selEtapa, inServico, inValor,
       ui.campo({ rotulo: `Data e hora da ${nomeCompromisso(k)}`, nome: "consulta_em", tipo: "datahora" }), dono),
     h("div", { class: "pilha-p" }, h("span", { class: "campo-rot" }, "Etiquetas"), etq),
-    erro,
+    status, erro,
     h("div", { class: "linha linha-fim" },
       h("button", { type: "button", class: "bt bt-sec", on: { click: () => g.fechar() } }, "Cancelar"),
       h("button", { type: "submit", class: "bt bt-prim" }, ui.icone("check"), `Criar ${k.v.min("negocio")}`)));
@@ -685,14 +721,20 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
       if (d.c_telefone && !L.normalizarTelefone(d.c_telefone)) { ui.marcarErro(form, "c_telefone", "Telefone inválido. Use DDD + número."); return; }
       p.contato = { nome: d.c_nome || null, telefone: d.c_telefone || null, email: d.c_email || null };
     } else { erro.textContent = `Escolha ${k.v.art("contato") === "a" ? "a" : "o"} ${k.v.min("contato")} ou cadastre ${k.v.art("contato") === "a" ? "uma nova" : "um novo"}.`; erro.hidden = false; return; }
+    const conteudo = JSON.stringify(p);
+    if (conteudo !== reqConteudo) { reqAtual = k.novaReq(); reqConteudo = conteudo; }
     try {
-      const n = await ui.carregando(form.querySelector("[type=submit]"), k.api.rpcC("nx_negocio_salvar", { p_negocio: p }));
+      const { resultado: n } = await ui.carregando(form.querySelector("[type=submit]"),
+        k.escrever("nx_negocio_salvar", { p_negocio: p }, { req: reqAtual, aoStatus: t => { status.textContent = t; status.hidden = false; } }));
+      status.hidden = true;
       ui.toast(`${k.v.negocio} criad${k.v.art("negocio")}.`, { tipo: "ok" });
       if (aoCriar) try { aoCriar(n); } catch (e2) { console.error(e2); }
       g.fechar();
       setTimeout(() => abrirNegocio(k, n.id, { aoMudar: aoCriar ? c => aoCriar({ ...c, atualizado: true }) : null }), 260);
     } catch (e) {
-      if (e && e.codigo === "telefone_invalido") ui.marcarErro(form, "c_telefone", k.erro(e));
+      status.hidden = true;
+      if (e && e.ambigua) { erro.textContent = "Não foi possível confirmar se foi salvo. Toque em «Criar» de novo: é seguro, não duplica."; erro.hidden = false; }
+      else if (e && e.codigo === "telefone_invalido") ui.marcarErro(form, "c_telefone", k.erro(e));
       else { erro.textContent = k.erro(e); erro.hidden = false; }
     }
   });

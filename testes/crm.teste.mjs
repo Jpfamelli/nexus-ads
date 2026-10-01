@@ -211,6 +211,71 @@ await teste("destino do arrasto: posição na coluna pelo meio dos cartões, col
   assert.equal(L.resumoDoFunil({}, "o"), "0 abertos");
 });
 
+await teste("escrita segura (M25): chave p_req, erro ambíguo e repetição com a MESMA chave (nunca duplica)", async () => {
+  // chave: uuid v4 (com e sem crypto.randomUUID)
+  const RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  assert.match(L.novaReq(), RE);
+  assert.match(L.novaReq(null), RE);
+  assert.match(L.novaReq({ getRandomValues: a => a.fill(7) }), RE);
+  assert.notEqual(L.novaReq(), L.novaReq());
+  // quais erros deixam dúvida
+  for (const c of ["tempo_rede", "tempo_esgotado", "sem_conexao", "resposta_invalida", "servico_indisponivel", "http_502", "http_503", "http_504"]) assert.ok(L.erroAmbiguo({ codigo: c }), c);
+  assert.ok(L.erroAmbiguo({ codigo: "xyz", status: 503 }));
+  for (const c of ["horario_ocupado", "dados_invalidos", "http_500", "http_429", "sem_permissao", "negocio_nao_encontrado"]) assert.ok(!L.erroAmbiguo({ codigo: c }), c);
+  assert.ok(!L.erroAmbiguo(null));
+  // servidor FALSO: aplica e guarda por p_req (como a migração 20261002c)
+  const mk = (falhas = []) => {
+    const guardado = new Map(), criados = [], chamadas = [];
+    return { criados, chamadas, api: { async rpcC(nome, p) {
+      chamadas.push({ nome, p_req: p.p_req });
+      const f = falhas.shift();
+      if (f && f.antes) throw Object.assign(new Error(f.antes), { codigo: f.antes });
+      let r;
+      if (guardado.has(p.p_req)) r = guardado.get(p.p_req);
+      else { r = { id: criados.length + 1, titulo: p.p_negocio.titulo }; criados.push(r); guardado.set(p.p_req, r); }
+      if (f && f.depois) throw Object.assign(new Error(f.depois), { codigo: f.depois });     // aplicou, mas a resposta se perdeu
+      return r;
+    } } };
+  };
+  const sem = async () => {};
+  // 1) sem falha: uma chamada, uma criação, com p_req
+  let s = mk();
+  let r = await L.escreverComReq(s.api, "nx_negocio_salvar", { p_negocio: { titulo: "A" } }, { dormir: sem });
+  assert.deepEqual([s.criados.length, s.chamadas.length, r.repetiu], [1, 1, false]);
+  assert.match(s.chamadas[0].p_req, RE);
+  // 2) PRAZO ESTOURADO DEPOIS de o servidor aplicar: repete com a mesma chave e continua sendo 1 registro
+  s = mk([{ depois: "tempo_rede" }]);
+  const status = [];
+  r = await L.escreverComReq(s.api, "nx_negocio_salvar", { p_negocio: { titulo: "B" } }, { dormir: sem, aoStatus: t => status.push(t) });
+  assert.equal(s.criados.length, 1, "1 registro, não 2");
+  assert.equal(s.chamadas.length, 2);
+  assert.equal(s.chamadas[0].p_req, s.chamadas[1].p_req, "a repetição leva a MESMA chave");
+  assert.deepEqual([r.repetiu, r.resultado.id], [true, 1]);
+  assert.deepEqual(status, ["Conferindo se foi salvo…"]);
+  // 3) caiu ANTES de chegar: a repetição aplica agora (1 registro)
+  s = mk([{ antes: "sem_conexao" }, { antes: "sem_conexao" }]);
+  r = await L.escreverComReq(s.api, "nx_negocio_salvar", { p_negocio: { titulo: "C" } }, { dormir: sem });
+  assert.deepEqual([s.criados.length, s.chamadas.length], [1, 3]);
+  // 4) sem sucesso depois das tentativas: erro marcado como ambíguo e com a chave para «Salvar de novo»
+  s = mk([{ antes: "sem_conexao" }, { antes: "sem_conexao" }, { antes: "sem_conexao" }]);
+  await assert.rejects(() => L.escreverComReq(s.api, "nx_negocio_salvar", { p_negocio: { titulo: "D" } }, { dormir: sem }), e => e.ambigua === true && RE.test(e.req) && e.codigo === "sem_conexao");
+  // …e o «Salvar de novo» com a MESMA chave grava uma vez só (mesmo que o 1º já tivesse gravado)
+  s = mk([{ depois: "sem_conexao" }, { antes: "sem_conexao" }, { antes: "sem_conexao" }, null]);
+  let chave = null;
+  await assert.rejects(() => L.escreverComReq(s.api, "nx_negocio_salvar", { p_negocio: { titulo: "E" } }, { dormir: sem }), e => { chave = e.req; return e.ambigua; });
+  assert.equal(s.criados.length, 1, "o 1º pedido tinha sido gravado");
+  r = await L.escreverComReq(s.api, "nx_negocio_salvar", { p_negocio: { titulo: "E" } }, { req: chave, dormir: sem });
+  assert.equal(s.criados.length, 1, "salvar de novo com a mesma chave NÃO duplica");
+  assert.equal(r.resultado.id, 1);
+  // 5) recusa do servidor não repete e leva a chave
+  s = mk([{ antes: "dados_invalidos" }]);
+  await assert.rejects(() => L.escreverComReq(s.api, "nx_negocio_salvar", { p_negocio: { titulo: "F" } }, { dormir: sem }), e => e.codigo === "dados_invalidos" && !e.ambigua && RE.test(e.req));
+  assert.equal(s.chamadas.length, 1);
+  // 6) mover entre tipos de etapa fica adiado pelos 7 s do Desfazer (automações)
+  assert.ok(L.movimentoAdiado("aberto", "ganho") && L.movimentoAdiado("aberto", "perdido") && L.movimentoAdiado("ganho", "aberto") && L.movimentoAdiado("perdido", "ganho"));
+  assert.ok(!L.movimentoAdiado("aberto", "aberto") && !L.movimentoAdiado(null, "ganho"));
+});
+
 await teste("filtrar local: busca sem acento, telefone, dono, etiquetas alguma/todas/nenhuma, origem, valor", () => {
   const cards = [
     { id: 1, titulo: "Implante", nome: "João da Silva", telefone: "5512998303030", dono_id: "u1", etiquetas: ["e1"], origem: "anuncio", valor_previsto: 3500 },

@@ -51,3 +51,33 @@ Arquivos que esta frente edita: `web/app/crm.js`, `crm-*.js`, `agenda.js`, `agen
   (duas no mesmo horário, três, cadeia, grupos independentes, bloco dentro de bloco), cor do procedimento, consultas/bloqueios do dia, hora do clique;
   e o estático de `agenda.css` (só tokens, hachura, altura = duração × hora, celular sem Dia/Semana). `agenda.js`/`agenda-config.js` entram nos estáticos do CRM.
 - Adiado de propósito para o M27: reescrever o modal «Marcar consulta» (hoje só recebe o dia e o horário do clique) e o desfazer.
+
+## M25 · Desfazer e «foi salvo ou não?» no CRM e na Agenda — FEITO (migração só no repositório)
+
+- **Migração `supabase/migrations/20261002c_crm_idempotencia_lote.sql` (NÃO aplicada):** tabela `nx_requisicoes` (RLS fechada) + ajudantes `nx_req_usar`/`nx_req_guardar`
+  (service_role) + versões com `p_req uuid` de `nx_negocio_salvar`, `nx_contato_salvar`, `nx_tarefa_salvar` (só a CRIAÇÃO guarda a chave) e `nx_agenda_marcar`
+  (só guarda `{ok:true}`). Chave por cliente, 24 h, advisory lock contra corrida; autentica (`nx_ctx`) antes de olhar o resultado guardado; erro não é guardado.
+  Aditiva e sem `drop`: são sobrecargas NOVAS com o MESMO nome (a de 3/7 argumentos continua como está; o `p_req` não tem default para as duas assinaturas não
+  colidirem no PostgREST — em `nx_agenda_marcar` ele vem antes dos argumentos com default, exigência do Postgres). **Smoke `supabase/testes/14_crm_idempotencia_lote.sql`**
+  (begin … rollback; passa no Postgres local `node supabase/testes/rodar-local.mjs 14`): 2 chamadas com a mesma chave = 1 registro (negócio, contato sem telefone, tarefa), editar não guarda
+  chave, chave de outro cliente não vaza, token de B não repete a chave de A, chave vencida (25 h) executa de novo, a mesma chave em outra operação = `dados_invalidos|req`,
+  recusa/erro não ficam guardados, «marca → desmarca → repete a chave» devolve o resultado guardado e NÃO marca de novo, RLS e grants. Todos os smokes locais continuam verdes (o 02 falha por depender do banco real, como antes; o 09 varre as RPCs novas).
+- **Cliente:** `L.novaReq`, `L.erroAmbiguo` (prazo, conexão, resposta ilegível, 502/503/504, `tempo_esgotado`), `L.escreverComReq(api, nome, params, {req, aoStatus})`: em erro ambíguo repete até 2× com a
+  MESMA chave («Conferindo se foi salvo…»), sem sucesso lança `.ambigua` com `.req`. Usado em Nova oportunidade, Novo paciente, Nova tarefa, Iniciar pós-venda e Marcar consulta:
+  o modal NÃO fecha, diz «Não foi possível confirmar se foi salvo. Toque em … de novo: é seguro, não duplica.» e o novo clique usa a mesma chave (mudou o conteúdo, chave nova).
+  O `p_req` vai explícito nos parâmetros (`rpcC(nome, {…, p_req})`); **não** uso `{req:true}` do api.js da frente B para o «Salvar de novo» ter a mesma chave.
+- **Kanban:** mover entre etapas ABERTAS grava na hora e o aviso «Desfazer» (ou Ctrl/⌘+Z) move de volta (devolve também a data da consulta se a etapa a mudou). Mover para/de GANHO ou PERDIDO
+  (risco 10 do plano: dispara automações) fica **adiado pelos 7 s do aviso**: o cartão aparece no destino com borda tracejada («confirmando»), Desfazer antes disso = nada foi ao servidor;
+  passados os 7 s, ao sair da tela, ao esconder a aba/aparelho ou ao fechar a página (best effort) o movimento vai. Erro ambíguo: consulta `nx_negocio_ver` ANTES de reverter — se o servidor já
+  está na etapa nova o cartão fica; se está na antiga o cartão volta com mensagem clara; sem resposta fica «confirmando» e confere quando a internet voltar (`orbita:online`).
+  O pulso não recarrega o quadro com movimentos pendentes e uma recarga reaplica os pendentes (a tela não «pula»).
+- **Gaveta do negócio:** Ganhou/Perdeu/etapa da fita gravam e oferecem Desfazer (aviso: «Mensagens automáticas já enviadas não voltam.» em ganho/perdido); etiquetas do negócio e do contato
+  oferecem Desfazer; **excluir tarefa e nota** deixam de pedir confirmação: somem na hora e a exclusão real só vai depois dos 7 s (Desfazer traz de volta); concluir tarefa usa `ui.acaoComDesfazer`.
+  `ui.confirmar` ficou só no irreversível (excluir negócio/contato com «digitar excluir», excluir empresa, configurações).
+- Limitação conhecida: o Desfazer de mover entre etapas abertas move de volta, mas uma automação por etapa que já tenha disparado (ex.: mensagem imediata) não é «desenviada».
+- Verificado (puppeteer + dev-falso da frente B com `simular/falha`): aberto→aberto + Desfazer (2 chamadas `nx_negocio_mover`); ganho adiado (0 chamadas antes dos 7 s, 1 depois; Desfazer = 0 chamadas);
+  504 depois de aplicar = cartão fica; 504 sem aplicar = cartão volta com mensagem; criar oportunidade com 504 depois de aplicar = 2 pedidos com a MESMA chave e +1 negócio; marcar consulta idem = 1 consulta;
+  excluir tarefa (0 envios até os 7 s; Desfazer volta; sem Desfazer envia 1); etiquetar + Desfazer; Ganhou na gaveta + Desfazer.
+- Testes: `crm.teste.mjs` — `escreverComReq` com servidor falso (aplica e perde a resposta → repete com a mesma chave → 1 registro; caiu antes → aplica na repetição; sem sucesso → `.ambigua` + chave e o «Salvar de novo» não duplica; recusa não repete),
+  `erroAmbiguo`, `movimentoAdiado`.
+- Pedido para a frente B: `api.rpcC` deve repassar `p_req` explícito sem sobrescrever (hoje repassa); o dev-falso de B já tem a idempotência por `p_req` (usada nos testes de C).

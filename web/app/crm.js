@@ -81,6 +81,9 @@ async function kitDe(ctx) {
     },
     /** valor em reais formatado */
     brl: (v, o) => ui.brl(v, o),
+    /** M25: escrita com chave de idempotência — em erro ambíguo (prazo, conexão) repete com a MESMA chave e nunca duplica. → {resultado, req} */
+    escrever: (nome, params, o) => Lg.escreverComReq(ctx.api, nome, params, o),
+    novaReq: () => Lg.novaReq(),
   };
   return k;
 }

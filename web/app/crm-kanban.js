@@ -44,6 +44,7 @@ export async function montarKanban(k, el, rota) {
     teclado: null,
     ultimaRecarga: 0,
     vivo: true,
+    pend: new Map(),      // M25: movimentos que ainda não chegaram ao servidor (adiados pelos 7 s do Desfazer) ou à espera de confirmação
   };
   delete S.filtro.fechados_dias;
   const podeMover = k.pode("atendente");
@@ -142,6 +143,7 @@ export async function montarKanban(k, el, rota) {
       if (minha !== S.seq || !S.vivo) return;
       S.dados = d;
       S.ultimaRecarga = Date.now();
+      reaplicarPendentes();
       desenharQuadro();
     } catch (e) {
       if (minha !== S.seq || !S.vivo) return;
@@ -335,8 +337,8 @@ export async function montarKanban(k, el, rota) {
       selos.push(h("span", { class: ["kc-tarefa", c.tarefa.atrasada && "atrasada"] }, ui.icone("tarefa"), txt));
     }
     const rotulo = `${titulo}${valor != null ? `, ${ui.brl(valor)}` : ""}${pont ? `, pontuação ${pont.score} de 100` : ""}${dono ? `, responsável ${dono.nome}` : ""}${c.nao_lidas ? `, ${c.nao_lidas} mensagens não lidas` : ""}`;
-    const art = h("article", { class: "kc", role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
-      "aria-label": rotulo, "aria-describedby": instr.id, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
+    const art = h("article", { class: ["kc", S.pend.has(c.id) && "confirmando salvando"], role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
+      "aria-label": rotulo, "aria-describedby": instr.id, "aria-busy": S.pend.has(c.id) ? "true" : null, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
       h("span", { class: "kc-t" }, titulo),
       sub ? h("span", { class: "kc-s" }, sub) : null,
       selos.length ? h("div", { class: "kc-selos" }, selos) : null,
@@ -415,39 +417,133 @@ export async function montarKanban(k, el, rota) {
     try { extra = await N.prepararMovimento(k, card, destino); }
     catch (e) { extra = null; k.toastErro(e); }
     if (extra === null) { preencherColuna(origemCol.estagio_id); if (destCol !== origemCol) preencherColuna(estagioId); focarCartao(id); ui.anunciar("Movimento cancelado."); return; }
-    // otimista
-    const antes = S.dados.colunas;
+    // otimista: a tela já mostra o cartão no destino
     const patch = { status: destino.tipo, ...(extra.valor != null ? { valor: extra.valor } : {}), ...(extra.consulta_em ? { consulta_em: extra.consulta_em } : {}) };
     S.dados.colunas = L.moverLocal(S.dados.colunas, id, estagioId, pos, ordem, patch);
     preencherColuna(origemCol.estagio_id); if (destCol !== origemCol) preencherColuna(estagioId);
     desenharTotais();
-    const elCard = quadro.querySelector(`.kc[data-id="${id}"]`);
-    if (elCard) { elCard.classList.add("salvando"); elCard.setAttribute("aria-busy", "true"); }
     focarCartao(id);
-    try {
-      const novoCard = await N.moverNegocio(k, card, destino, { ordem, extra });
-      const col = colunaDe(estagioId);
-      const i = col.itens.findIndex(x => x.id === id);
-      if (i >= 0) col.itens[i] = { ...col.itens[i], ...novoCard };
-      // o servidor devolve o valor real: corrige a soma da coluna
-      if (destino.tipo === "ganho" && novoCard.valor != null && patch.valor == null) col.soma_valor = (Number(col.soma_valor) || 0) + Number(novoCard.valor) - Number(card.valor || 0);
-      preencherColuna(estagioId);
-      desenharTotais();
-      const ok = quadro.querySelector(`.kc[data-id="${id}"]`);
-      if (ok) ok.classList.add("chegou");
-      focarCartao(id);
-      if (destino.tipo === "ganho") ui.toast(`${k.v.ganhar}! ${novoCard.valor != null ? ui.brl(novoCard.valor) + " registrados." : ""}`, { tipo: "ok" });
-      else if (destino.tipo === "perdido") ui.toast(`Registrado como «${destino.nome}».`, { tipo: "info" });
-      ui.anunciar(`${L.tituloCard(card)} movido para ${destino.nome}.`);
-    } catch (e) {
-      S.dados.colunas = antes;
-      preencherColuna(origemCol.estagio_id); if (destCol !== origemCol) preencherColuna(estagioId);
-      desenharTotais();
-      focarCartao(id);
-      k.toastErro(e);
-      ui.anunciar(`Não foi possível mover: ${k.erro(e)}`);
+    const tipoOrigem = (k.estagio(origemCol.estagio_id) || {}).tipo;
+    const mov = { id, card, destino, estagioId, pos, ordem, extra, patch, origemEstagioId: origemCol.estagio_id, origemPos: posOrig,
+      origemPatch: { status: card.status, valor: card.valor, consulta_em: card.consulta_em }, origem: { ordem: card.ordem ?? null, consulta_em: card.consulta_em ?? null },
+      pendente: false, efetivado: false, promessa: null };
+    const titulo = L.tituloCard(card);
+    if (L.movimentoAdiado(tipoOrigem, destino.tipo)) {
+      // ganho/perdido (e reabrir) disparam automações (mensagens, tarefas): só vai ao servidor DEPOIS dos 7 s do «Desfazer». Desfazer antes disso = nada aconteceu.
+      mov.pendente = true;
+      S.pend.set(id, mov);
+      marcarConfirmando(id, true);
+      const valorTxt = patch.valor != null || card.valor_previsto != null ? ` · ${ui.brl(patch.valor ?? card.valor_previsto)}` : "";
+      const texto = destino.tipo === "ganho" ? `${k.v.ganhar}! «${titulo}»${valorTxt}`
+        : destino.tipo === "perdido" ? `«${titulo}» registrad${k.v.art("negocio")} como «${destino.nome}»` : `«${titulo}» reaberto em «${destino.nome}»`;
+      ui.anunciar(`${titulo}: ${destino.nome}. Dá para desfazer por 7 segundos.`);
+      const res = await ui.acaoComDesfazer({ texto, reverter: () => desfazerMovimento(mov) });
+      if (res.estado === "desfeita") return;
+      await efetivar(mov);       // «mantida» (o aviso acabou) ou a tela saiu: agora vai ao servidor
+      return;
+    }
+    // mesma natureza (aberto → aberto): grava já; o «Desfazer» move de volta
+    const ok = await efetivar(mov);
+    if (!ok || origemCol === destCol) return;       // só reordenar dentro da etapa não pede «Desfazer»
+    ui.acaoComDesfazer({ texto: `«${titulo}» movido para ${destino.nome}`, reverter: () => desfazerMovimento(mov) });
+  }
+
+  function marcarConfirmando(id, sim) {
+    const el = quadro.querySelector(`.kc[data-id="${id}"]`);
+    if (!el) return;
+    el.classList.toggle("confirmando", sim);
+    el.classList.toggle("salvando", sim);
+    if (sim) el.setAttribute("aria-busy", "true"); else el.removeAttribute("aria-busy");
+  }
+
+  /** O pedido pode ter sido gravado mesmo com o erro (prazo, conexão): pergunta ao servidor em que etapa o cartão está. → estagio_id | null (não deu para saber). */
+  async function consultarEtapa(id) {
+    try { const d = await k.api.rpcC("nx_negocio_ver", { p_id: id }); return d && d.negocio ? d.negocio.estagio_id : null; }
+    catch { return null; }
+  }
+
+  /** Grava o movimento no servidor. → true se ficou gravado. Erro ambíguo: confere no servidor ANTES de reverter o cartão. */
+  function efetivar(mov) {
+    if (mov.promessa) return mov.promessa;
+    mov.efetivado = true;
+    mov.promessa = (async () => {
+      marcarConfirmando(mov.id, true);
+      const chegou = novoCard => {
+        S.pend.delete(mov.id);
+        const col = colunaDe(mov.estagioId);
+        const i = col ? col.itens.findIndex(x => x.id === mov.id) : -1;
+        if (i >= 0) col.itens[i] = { ...col.itens[i], ...novoCard };
+        // o servidor devolve o valor real: corrige a soma da coluna
+        if (col && mov.destino.tipo === "ganho" && novoCard.valor != null && mov.patch.valor == null) col.soma_valor = (Number(col.soma_valor) || 0) + Number(novoCard.valor) - Number(mov.card.valor || 0);
+        if (col) preencherColuna(mov.estagioId);
+        desenharTotais();
+        const el = quadro.querySelector(`.kc[data-id="${mov.id}"]`);
+        if (el) { el.classList.add("chegou"); el.classList.add("assenta"); }
+        marcarConfirmando(mov.id, false);
+        ui.anunciar(`${L.tituloCard(mov.card)} movido para ${mov.destino.nome}.`);
+        return true;
+      };
+      try {
+        return chegou(await N.moverNegocio(k, mov.card, mov.destino, { ordem: mov.ordem, extra: mov.extra }));
+      } catch (e) {
+        if (L.erroAmbiguo(e)) {
+          const real = await consultarEtapa(mov.id);
+          if (real === mov.destino.id) return chegou({});     // o servidor já tinha aplicado: o cartão fica onde está
+          if (real === null) {                                 // sem resposta: mostra o que se sabe e confere quando a internet voltar
+            ui.toast("Não deu para confirmar a mudança de etapa. Vamos conferir com o servidor quando a conexão voltar.", { tipo: "info", ms: 6000 });
+            const conferir = () => { S.pend.delete(mov.id); if (S.vivo) carregar({ silencioso: true }); };
+            if (typeof addEventListener === "function") addEventListener("orbita:online", conferir, { once: true });
+            return false;
+          }
+          // o servidor está em OUTRA etapa: não foi aplicado → volta o cartão
+        }
+        S.pend.delete(mov.id);
+        reverterNaTela(mov);
+        // erro de prazo/conexão com o servidor ainda na etapa antiga: a mudança NÃO foi feita (a mensagem padrão de «tempo esgotado» fala de relatórios)
+        const msg = L.erroAmbiguo(e) ? "O servidor não confirmou a mudança de etapa e o cartão voltou para onde estava. Tente de novo." : k.erro(e);
+        ui.toast(msg, { tipo: "erro" });
+        ui.anunciar(`Não foi possível mover: ${msg}`);
+        return false;
+      }
+    })();
+    return mov.promessa;
+  }
+
+  /** Volta o cartão para onde estava, só na tela (sem mexer nos outros cartões que também estejam esperando). */
+  function reverterNaTela(mov) {
+    S.dados.colunas = L.moverLocal(S.dados.colunas, mov.id, mov.origemEstagioId, mov.origemPos, mov.origem.ordem, mov.origemPatch);
+    preencherColuna(mov.origemEstagioId); if (mov.estagioId !== mov.origemEstagioId) preencherColuna(mov.estagioId);
+    desenharTotais();
+    focarCartao(mov.id);
+  }
+
+  /** «Desfazer» (botão do aviso ou Ctrl/⌘+Z). Ainda não foi ao servidor → só a tela; já foi → move de volta (e devolve a data da consulta, se esta mudou). */
+  async function desfazerMovimento(mov) {
+    if (!mov.efetivado) { S.pend.delete(mov.id); reverterNaTela(mov); ui.anunciar("Movimento desfeito."); return; }
+    const volta = k.estagio(mov.origemEstagioId);
+    if (!volta) throw new Error("estagio_invalido");
+    const atual = cardDe(mov.id) || mov.card;
+    await N.moverNegocio(k, atual, volta, { ordem: mov.origem.ordem, extra: {} });
+    if (mov.extra && mov.extra.consulta_em && mov.origem.consulta_em !== mov.extra.consulta_em) {
+      await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: mov.id, consulta_em: mov.origem.consulta_em || null } });
+    }
+    if (S.vivo) await carregar({ silencioso: true });
+    ui.anunciar("Movimento desfeito.");
+  }
+
+  /** Depois de recarregar o quadro do servidor, os cartões que ainda não chegaram ao servidor voltam para o destino (a tela não pode «pular»). */
+  function reaplicarPendentes() {
+    for (const mov of S.pend.values()) {
+      if (!S.dados.colunas.some(c => c.itens.some(x => x.id === mov.id))) continue;
+      S.dados.colunas = L.moverLocal(S.dados.colunas, mov.id, mov.estagioId, mov.pos, mov.ordem, mov.patch);
     }
   }
+
+  /** A tela vai sair (outra rota, aparelho bloqueado): o que está esperando o fim do aviso vai ao servidor agora. */
+  function efetivarPendentes() { for (const mov of S.pend.values()) if (!mov.efetivado) efetivar(mov); }
+  const aoEsconder = () => { if (document.hidden) efetivarPendentes(); };
+  document.addEventListener("visibilitychange", aoEsconder);
+  addEventListener("pagehide", efetivarPendentes);
 
   function focarCartao(id) {
     const c = quadro.querySelector(`.kc[data-id="${id}"]`);
@@ -883,7 +979,7 @@ export async function montarKanban(k, el, rota) {
 
   /* ============================================================ tempo real */
   const cancelarPulso = ctx.pulso && ctx.pulso.assinar ? ctx.pulso.assinar(() => {
-    if (!S.vivo || S.arrasto || S.teclado || document.hidden) return;
+    if (!S.vivo || S.arrasto || S.teclado || document.hidden || S.pend.size) return;
     if (Date.now() - S.ultimaRecarga < PULSO_MIN_MS) return;
     if (document.querySelector("dialog[open]")) return;
     carregar({ silencioso: true });
@@ -895,6 +991,9 @@ export async function montarKanban(k, el, rota) {
     desmontar() {
       S.vivo = false; S.seq++;
       if (S.arrasto) cancelarPonteiro();
+      efetivarPendentes();
+      document.removeEventListener("visibilitychange", aoEsconder);
+      removeEventListener("pagehide", efetivarPendentes);
       document.removeEventListener("keydown", aoTeclaGlobal);
       if (cancelarPulso) cancelarPulso();
     },

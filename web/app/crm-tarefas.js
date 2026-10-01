@@ -43,8 +43,11 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
       h("div", { class: "campo inteiro" },
         h("label", null, "Responsável"),
         ui.seletorPessoa({ usuarios: k.base.usuarios, valor: t.dono ? t.dono.id : (tarefa ? null : k.eu()), rotulo: "Responsável", vazio: "Sem responsável" }))),
-    ui.campo({ rotulo: "Detalhes (opcional)", nome: "descricao", tipo: "textarea", valor: t.descricao || "", max: 5000, linhas: 3 }));
+    ui.campo({ rotulo: "Detalhes (opcional)", nome: "descricao", tipo: "textarea", valor: t.descricao || "", max: 5000, linhas: 3 }),
+    h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true }));
   form.querySelector(".campo.inteiro select").name = "dono_id";
+  const status = form.querySelector(".crm-status");
+  let reqAtual = null, reqConteudo = "";   // M25: uma chave por intenção; erro ambíguo repete com a MESMA chave
   return ui.modal({
     titulo: tarefa ? "Editar tarefa" : "Nova tarefa", corpo: form,
     acoes: [
@@ -56,8 +59,18 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
         const p = { titulo: d.titulo, tipo: d.tipo, vence_em: d.vence_em || null, dono_id: d.dono_id || null, descricao: d.descricao || null };
         if (tarefa) p.id = tarefa.id;
         else { if (contato_id) p.contato_id = contato_id; if (negocio_id) p.negocio_id = negocio_id; }
-        try { return await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: p }); }
-        catch (e) { api.erro(k.erro(e)); return false; }
+        try {
+          if (tarefa) return await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: p });
+          const conteudo = JSON.stringify(p);
+          if (conteudo !== reqConteudo) { reqAtual = k.novaReq(); reqConteudo = conteudo; }
+          const { resultado } = await k.escrever("nx_tarefa_salvar", { p_tarefa: p }, { req: reqAtual, aoStatus: txt => { status.textContent = txt; status.hidden = false; } });
+          status.hidden = true;
+          return resultado;
+        } catch (e) {
+          status.hidden = true;
+          api.erro(e && e.ambigua ? "Não foi possível confirmar se foi salvo. Toque em «Criar tarefa» de novo: é seguro, não duplica." : k.erro(e));
+          return false;
+        }
       } },
     ],
   });
@@ -88,12 +101,14 @@ function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
         const nova = await formTarefa(k, t);
         if (nova) { ui.toast("Tarefa salva.", { tipo: "ok", ms: 1800 }); aoMudar && aoMudar({ tipo: "salva", tarefa: nova }); }
       } } }, ui.icone("editar")),
-      h("button", { type: "button", class: "bt-icone", "aria-label": `Excluir a tarefa ${t.titulo}`, on: { click: async ev => {
-        if (!(await ui.confirmar({ titulo: "Excluir tarefa?", texto: `«${t.titulo}» será apagada.`, perigo: true }))) return;
-        try {
-          await ui.carregando(ev.currentTarget, k.api.rpcC("nx_tarefa_excluir", { p_id: t.id }));
-          aoMudar && aoMudar({ tipo: "excluida", tarefa: t });
-        } catch (e) { k.toastErro(e); }
+      h("button", { type: "button", class: "bt-icone", "aria-label": `Excluir a tarefa ${t.titulo}`, on: { click: () => {
+        // M25: sem «tem certeza?». A tarefa some na hora e a exclusão de verdade só vai ao servidor depois dos 7 s do «Desfazer»
+        aoMudar && aoMudar({ tipo: "excluida", tarefa: t });
+        ui.acaoComDesfazer({ texto: `Tarefa «${t.titulo}» excluída`, reverter: () => { aoMudar && aoMudar({ tipo: "salva", tarefa: t }); } }).then(async res => {
+          if (res.estado !== "mantida") return;
+          try { await k.api.rpcC("nx_tarefa_excluir", { p_id: t.id }); }
+          catch (e) { k.toastErro(e); aoMudar && aoMudar({ tipo: "salva", tarefa: t }); }
+        });
       } } }, ui.icone("lixeira"))) : h("span"));
   check.addEventListener("change", async () => {
     const quer = check.checked;
@@ -101,11 +116,11 @@ function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
     try {
       const nova = await k.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: quer });
       ui.anunciar(quer ? "Tarefa concluída." : "Tarefa reaberta.");
-      if (quer) ui.toast("Tarefa concluída.", { tipo: "ok", ms: 3500, desfazer: async () => {
-        try { const r = await k.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: false }); aoMudar && aoMudar({ tipo: "salva", tarefa: r }); }
-        catch (e) { k.toastErro(e); }
-      } });
       aoMudar && aoMudar({ tipo: "salva", tarefa: nova });
+      if (quer) ui.acaoComDesfazer({ texto: "Tarefa concluída", reverter: async () => {
+        const r = await k.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: false });
+        aoMudar && aoMudar({ tipo: "salva", tarefa: r });
+      } });
     } catch (e) {
       check.checked = !quer; el.classList.toggle("feita", !quer);
       k.toastErro(e);
@@ -176,9 +191,14 @@ function itemNota(k, n, { aoMudar }) {
           } }] });
         if (r) aoMudar({ tipo: "salva", nota: r });
       } } }, ui.icone("editar")) : null,
-      pode ? h("button", { type: "button", class: "bt-icone", "aria-label": "Excluir nota", on: { click: async () => {
-        if (!(await ui.confirmar({ titulo: "Excluir nota?", texto: "A nota some da linha do tempo.", perigo: true }))) return;
-        try { await k.api.rpcC("nx_nota_excluir", { p_id: n.id }); aoMudar({ tipo: "excluida", nota: n }); } catch (e) { k.toastErro(e); }
+      pode ? h("button", { type: "button", class: "bt-icone", "aria-label": "Excluir nota", on: { click: () => {
+        // M25: some na hora; a exclusão de verdade só depois dos 7 s do «Desfazer»
+        aoMudar({ tipo: "excluida", nota: n });
+        ui.acaoComDesfazer({ texto: "Nota excluída", reverter: () => { aoMudar({ tipo: "salva", nota: n }); } }).then(async res => {
+          if (res.estado !== "mantida") return;
+          try { await k.api.rpcC("nx_nota_excluir", { p_id: n.id }); }
+          catch (e) { k.toastErro(e); aoMudar({ tipo: "salva", nota: n }); }
+        });
       } } }, ui.icone("lixeira")) : null));
   return el;
 }
@@ -297,7 +317,10 @@ export async function montarTarefas(k, el, rota) {
       ui.limpar(corpo);
       if (!r.itens.length) { corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], icone: "tarefa" })); return; }
       const lista = h("div", { class: "at-lista" });
-      for (const t of r.itens) lista.appendChild(itemTarefa(k, t, { mostrarVinculo: true, aoMudar: () => carregar() }));
+      for (const t of r.itens) {
+        const item = itemTarefa(k, t, { mostrarVinculo: true, aoMudar: ev => { if (ev && ev.tipo === "excluida") item.remove(); else carregar(); } });
+        lista.appendChild(item);
+      }
       corpo.appendChild(lista);
       // o servidor devolve no máximo 200: sem isso a lista parecia completa
       if (r.tem_mais) corpo.appendChild(h("p", { class: "sub" }, `Mostrando as ${r.itens.length} primeiras. Conclua algumas${podeTodas && dono === "todos" ? " ou veja só as suas" : ""} para ver as outras.`));

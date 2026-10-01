@@ -135,6 +135,9 @@
 .kc:focus-within .kc-mover { display: inline-grid; }
 @media (pointer: coarse), (max-width: 760px) { .kc-mover { display: inline-grid; } }
 .kc.salvando { opacity: .65; }
+/* M25: o cartão que ainda não chegou ao servidor (7 s do «Desfazer») ou espera a confirmação fica com a borda tracejada */
+.kc.confirmando { border-style: dashed; border-color: var(--c-prim); }
+.crm-status { color: var(--c-texto-2); font-size: var(--fs-13); }
 .kc.salvando::after { content: ""; position: absolute; right: .6rem; top: .6rem; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--c-prim-luz); border-right-color: transparent; animation: gira var(--t-giro) linear infinite; }
 .kc.chegou { animation: kcChega var(--t-move) var(--e-out) both; }
 @keyframes kcChega { 0% { box-shadow: 0 0 0 0 var(--c-prim-suave); } 30% { box-shadow: 0 0 0 5px var(--c-prim-suave); } 100% { box-shadow: 0 10px 22px -18px var(--c-sombra); } }

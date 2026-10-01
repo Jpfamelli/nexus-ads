@@ -431,6 +431,66 @@ export function alvoDoPonto(alvos, x, y) {
   return a ? a.id : null;
 }
 
+/* ------------------------------------------------------------ escrita segura (M25) */
+/** Chave de idempotência (uuid v4) de UMA intenção: o mesmo p_req repetido nunca grava duas vezes no servidor (24 h). */
+export function novaReq(c = globalThis.crypto) {
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  const b = c && typeof c.getRandomValues === "function" ? c.getRandomValues(new Uint8Array(16)) : Uint8Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/**
+ * O erro deixa dúvida se o servidor JÁ aplicou? Prazo estourado, conexão que caiu no meio, resposta ilegível e 502/503/504 (o pedido pode ter chegado
+ * e sido gravado). Recusa do servidor (código do CRM, 4xx, 500 do banco) NÃO é ambígua: nada foi gravado.
+ */
+export function erroAmbiguo(e) {
+  const c = String((e && (e.codigo || e.message)) || "");
+  if (/^(tempo_rede|tempo_esgotado|sem_conexao|resposta_invalida|servico_indisponivel)$/.test(c)) return true;   // tempo_esgotado também vem de 504 do gateway (pode ter aplicado)
+  if (/^http_50[234]$/.test(c)) return true;
+  const st = Number(e && e.status);
+  return Number.isFinite(st) && st >= 502 && st <= 504;
+}
+
+/** Espera `ms` ou até a internet voltar (o que vier primeiro). */
+export function esperarOuOnline(ms) {
+  return new Promise(resolve => {
+    let t = null;
+    const fim = () => { clearTimeout(t); if (typeof removeEventListener === "function") removeEventListener("online", fim); resolve(); };
+    t = setTimeout(fim, ms);
+    if (typeof addEventListener === "function") addEventListener("online", fim);
+  });
+}
+
+/**
+ * escreverComReq(api, nome, params, {req, aoStatus, esperas, dormir}) → {resultado, req, repetiu}.
+ * Chama a RPC com `p_req`. Em erro AMBÍGUO repete com a MESMA chave (depois de 1,5 s e de 4 s): se o servidor já tinha aplicado, devolve o resultado
+ * guardado; se não, aplica agora — nunca duplica. Sem sucesso depois das tentativas lança o erro com `.ambigua = true` e `.req` (para «Salvar de novo»).
+ * Qualquer outro erro sobe na hora, com `.req`.
+ */
+export async function escreverComReq(api, nome, params, { req, aoStatus, esperas = [1500, 4000], dormir = esperarOuOnline } = {}) {
+  const chave = req || novaReq();
+  let ultimo = null;
+  for (let i = 0; i <= esperas.length; i++) {
+    try {
+      const resultado = await api.rpcC(nome, { ...params, p_req: chave });
+      return { resultado, req: chave, repetiu: i > 0 };
+    } catch (e) {
+      ultimo = e;
+      if (!erroAmbiguo(e)) { try { e.req = chave; } catch { /* erro congelado */ } throw e; }
+      if (i < esperas.length) { if (aoStatus) aoStatus("Conferindo se foi salvo…"); await dormir(esperas[i]); }
+    }
+  }
+  try { ultimo.ambigua = true; ultimo.req = chave; } catch { /* erro congelado */ }
+  throw ultimo;
+}
+
+/** Mover entre etapas de TIPO diferente (aberto ↔ ganho/perdido) dispara automações (mensagens, tarefas): essas só se efetivam depois dos 7 s do «Desfazer». */
+export function movimentoAdiado(tipoOrigem, tipoDestino) {
+  return !!tipoOrigem && !!tipoDestino && tipoOrigem !== tipoDestino;
+}
+
 /** Texto curto dos totais no celular: «3 abertas · R$ 12.950 · previsão R$ 4.735». artigo = "a" | "o". */
 export function resumoDoFunil({ abertos = 0, soma = "", previsao: prev = "" } = {}, artigo = "o") {
   const n = Number(abertos) || 0;
