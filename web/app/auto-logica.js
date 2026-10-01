@@ -1115,6 +1115,13 @@ export function resumoExecucoes(item) {
 /* ------------------------------------------------------------------ formato da IA (nx-ia → automacao_montar) */
 
 /**
+ * Quanto o navegador espera o nx-ia montar uma automação. Precisa ficar ENTRE o prazo que o servidor dá à Anthropic
+ * (TIMEOUT_MONTAR_MS = 110 s em ia_automacoes.js) e o teto de ~150 s da Edge Function; se fosse menor que o do servidor, a
+ * tela desistiria enquanto a IA ainda trabalha — a cota seria gasta e a resposta, perdida (o teste confere os dois números).
+ */
+export const PRAZO_MONTAR_IA_MS = 130_000;
+
+/**
  * A IA/servidor devolve {nome, gatilho:{tipo, campos}, condicoes:[], acoes:[{tipo, campos}]}; o editor e as RPCs
  * usam {nome, gatilho:"id", config:{}, condicoes, acoes:[{tipo, ...campos}]}. Aceita também o formato do editor.
  * Devolve {auto, avisos:[…]} — `auto` sempre abre no editor (nasce DESLIGADA); `avisos` lista o que a pessoa precisa conferir.
@@ -1333,7 +1340,9 @@ export function erroDaIA(e, mensagemPadrao) {
     texto: "A IA está desligada nesta plataforma. Avise a equipe da Nexus para ativar; enquanto isso use as receitas prontas ou crie a automação do zero." };
   if (cod === "muitos_pedidos" || cod === "limite_taxa") return { tipo: "pedidos", titulo: "Muitos pedidos seguidos",
     texto: "Espere cerca de um minuto e tente de novo." };
-  if (cod === "sem_conexao" || cod === "tempo_rede" || cod === "tempo_esgotado") return { tipo: "rede", titulo: "A conexão falhou",
+  if (cod === "tempo_rede" || cod === "tempo_esgotado") return { tipo: "rede", titulo: "A IA demorou mais do que o esperado",
+    texto: "Nada foi salvo. Espere alguns segundos e tente de novo; se o pedido for grande, divida em duas automações menores." };
+  if (cod === "sem_conexao") return { tipo: "rede", titulo: "A conexão falhou",
     texto: "Não deu para falar com o servidor. Confira a internet e tente de novo; nada foi salvo." };
   if (cod === "ia_indisponivel" || cod === "ia_resposta_invalida" || cod === "ia_invalida") return { tipo: "indisponivel", titulo: "A IA não conseguiu montar agora",
     texto: doServidor || (cod === "ia_indisponivel" ? "Ela não respondeu desta vez. Tente de novo em instantes, ou escreva o pedido com outras palavras."

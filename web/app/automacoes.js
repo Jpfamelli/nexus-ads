@@ -235,11 +235,13 @@ function cartaoIA(ctx, dados, noLimite) {
     const descricao = area.value.trim();
     pedindo = true;
     ui.limpar(estado);
-    estado.appendChild(h("p", { class: "au-ia-carregando" }, h("span", { class: "au-giro", "aria-hidden": "true" }),
-      "A IA está montando a automação… isso leva alguns segundos."));
+    const txtCarregando = h("span", null, "A IA está montando a automação… isso leva alguns segundos.");
+    estado.appendChild(h("p", { class: "au-ia-carregando", role: "status" }, h("span", { class: "au-giro", "aria-hidden": "true" }), txtCarregando));
+    // pedidos grandes demoram (o navegador espera até L.PRAZO_MONTAR_IA_MS): diz que ainda está trabalhando, para não clicarem de novo
+    const lento = setTimeout(() => { txtCarregando.textContent = "Ainda montando… pedidos maiores levam até 2 minutos. Não feche esta tela nem clique de novo."; }, 20_000);
     area.disabled = true;
     try {
-      const r = await ui.carregando(btCriar, ctx.api.fn("nx-ia", { acao: "automacao_montar", descricao }));
+      const r = await ui.carregando(btCriar, ctx.api.fn("nx-ia", { acao: "automacao_montar", descricao }, { prazoMs: L.PRAZO_MONTAR_IA_MS }));
       if (!r || !r.automacao || typeof r.automacao !== "object") throw Object.assign(new Error("ia_resposta_invalida"), { codigo: "ia_resposta_invalida" });
       const conv = L.deFormatoIA(r.automacao, dados.base);
       const avisos = [...(Array.isArray(r.avisos) ? r.avisos : []).map(String), ...conv.avisos].filter(Boolean).slice(0, 12);
@@ -256,6 +258,7 @@ function cartaoIA(ctx, dados, noLimite) {
             ? h("div", { class: "linha" }, h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => ctx.navegar("#/automacoes/nova") } }, ui.icone("mais"), "Criar do zero"))
             : null)));
     } finally {
+      clearTimeout(lento);
       pedindo = false;
       area.disabled = desligada;
       pintarBotao();

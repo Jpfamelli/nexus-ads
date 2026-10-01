@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve, join } from "node:path";
 
 import { tratar } from "../supabase/functions/_compartilhado/ia_conversas.js";
@@ -142,6 +142,17 @@ const automacaoIA = (o = {}) => ({
   ...o,
 });
 
+/* ================================================================== prazos coerentes (servidor < navegador < teto) */
+test("prazos: o navegador espera mais que o servidor dá à Anthropic, e menos que o teto da Edge Function", async () => {
+  const L = await import(pathToFileURL(join(RAIZ, "web", "app", "auto-logica.js")).href);
+  const A = await import(pathToFileURL(join(RAIZ, "web", "app", "api.js")).href);
+  assert.ok(IA.TIMEOUT_MONTAR_MS + 10_000 <= L.PRAZO_MONTAR_IA_MS, "folga para o banco e a rede depois da resposta da IA");
+  assert.ok(L.PRAZO_MONTAR_IA_MS <= A.TETO_PRAZO_FN_MS, "a tela não espera além do que a função pode durar");
+  assert.ok(L.PRAZO_MONTAR_IA_MS > 75_000, "mais que o prazo padrão das Edge Functions no navegador (75 s)");
+  assert.match(readFileSync(join(RAIZ, "web", "app", "automacoes.js"), "utf8"), /automacao_montar", descricao \}, \{ prazoMs: L\.PRAZO_MONTAR_IA_MS \}/,
+    "a tela que cria com IA passa o prazo maior");
+});
+
 /* ================================================================== automacao_montar */
 
 test("montar: descrição → automação do editor, validada, com explicação e avisos; cota «automacao»; nada é salvo", async () => {
@@ -186,7 +197,8 @@ test("montar: o pedido à Anthropic — modelo, esforço, schema do catálogo e 
   assert.equal(p.modelo, "claude-opus-5-5", "o modelo é o de nx_config (padrão do código: claude-opus-5-5)");
   assert.equal(p.esforco, "medium");
   assert.equal(p.maxTokens, 12000, "folga para o raciocínio + o JSON");
-  assert.equal(p.timeoutMs, 110_000);
+  assert.equal(p.timeoutMs, IA.TIMEOUT_MONTAR_MS);
+  assert.equal(IA.TIMEOUT_MONTAR_MS, 110_000);
   assert.equal(p.retentativas, 0, "o tempo total (110 s) cabe na Edge Function: sem retentativa");
   assert.ok(!("tool_choice" in p) && !("prefill" in p) && !("thinking" in p), "nada de tool_choice forçado, prefill ou thinking desligado");
   // o schema é de saída estruturada: tudo obrigatório, objetos fechados, anyOf só nas variantes

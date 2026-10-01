@@ -467,6 +467,28 @@ await teste("fn: POST /functions/v1/<fn> com {token, cliente, ...corpo}; erro {o
   const e2 = await api.fn("nx-enviar", {}).catch(x => x);
   assert.equal(A.mensagemErro(e2), "O canal não aceitou a mensagem: token vencido ou revogado.");
 });
+await teste("fn: opcoes.prazoMs amplia a espera só daquela chamada (até o teto); o prazo fixo de criarApi vence", async () => {
+  const vistos = [];
+  const original = globalThis.setTimeout;
+  globalThis.setTimeout = (cb, ms, ...r) => { vistos.push(ms); return original(cb, ms, ...r); };
+  try {
+    const f = fetchFalso(() => ({ status: 200, corpo: { ok: true } }));
+    const api = A.criarApi({ url: URLS, chave: "pub", token: () => "t", cliente: () => "c", fetch: f });
+    await api.fn("nx-ia", { acao: "x" });                              // padrão: 75 s
+    await api.fn("nx-ia", { acao: "x" }, { prazoMs: 130_000 });        // a IA que monta a automação
+    await api.fn("nx-ia", { acao: "x" }, { prazoMs: 9_999_999 });      // nunca passa do teto das Edge Functions
+    await api.fn("nx-ia", { acao: "x" }, { prazoMs: 1_000 });          // opção menor que o padrão não encurta nada
+    await api.fn("nx-ia", { acao: "x" }, { prazoMs: "abc" });
+    await api.rpc("nx_pulso", {});                                     // RPC continua com 20 s
+    assert.deepEqual(vistos, [75_000, 130_000, A.TETO_PRAZO_FN_MS, 75_000, 75_000, 20_000]);
+    assert.ok(A.TETO_PRAZO_FN_MS < 150_000, "abaixo do teto de ~150 s da Edge Function");
+    assert.equal(f.chamadas[1].corpo.prazoMs, undefined, "a opção não vai no corpo da requisição");
+    vistos.length = 0;
+    const fixo = A.criarApi({ url: URLS, chave: "pub", fetch: f, prazoMs: 9_000 });
+    await fixo.fn("nx-ia", {}, { prazoMs: 130_000 });
+    assert.deepEqual(vistos, [9_000]);
+  } finally { globalThis.setTimeout = original; }
+});
 await teste("(revisão, pedido da F5) o Error leva o corpo inteiro em .resposta (ex.: a mensagem gravada como falhou)", async () => {
   const msg = { id: 77, status: "falhou" };
   const f = fetchFalso([{ status: 502, corpo: { ok: false, erro: "envio_falhou", detalhe: "x", mensagem: msg } },

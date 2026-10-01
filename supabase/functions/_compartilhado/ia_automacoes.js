@@ -30,6 +30,9 @@ import {
 
 export const LIMITE_DESCRICAO = 1500;
 export const MODELO_PADRAO = "claude-opus-5-5";
+/** Quanto o servidor espera a Anthropic ao montar uma automação. O navegador espera MAIS (web/app/auto-logica.js PRAZO_MONTAR_IA_MS = 130 s)
+ *  e a Edge Function corta em ~150 s: servidor < navegador < teto (um teste confere). */
+export const TIMEOUT_MONTAR_MS = 110_000;
 const MAX_DECISOES = 10;               // pedidos por chamada da nx-ia
 const SIMULTANEAS = 3;                 // chamadas à Anthropic ao mesmo tempo
 const PRAZO_LOTE_MS = 40_000;          // depois disso, o que não começou volta para a fila (a Edge Function tem teto de ~150 s)
@@ -619,7 +622,7 @@ export async function montarAutomacao(corpo, env, deps = {}) {
   const delim = novoDelimitador(), delimOpcoes = novoDelimitador();
   const { sistema, usuario } = montarPromptAutomacao({ descricao, empresa: info?.empresa, vertical: info?.vertical, base }, delim, delimOpcoes);
   let r;
-  const perguntar = schema => mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, usuario, schema, maxTokens: 12000, esforco: "medium", timeoutMs: 110_000, retentativas: 0 });
+  const perguntar = schema => mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, usuario, schema, maxTokens: 12000, esforco: "medium", timeoutMs: TIMEOUT_MONTAR_MS, retentativas: 0 });
   try {
     try {
       r = await perguntar(montarSchema(base));

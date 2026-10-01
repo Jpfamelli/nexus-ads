@@ -932,6 +932,9 @@ test("erroDaIA: cota, chave, IA desligada, pedidos, rede e formato inválido →
   assert.equal(L.erroDaIA({ codigo: "muitos_pedidos" }).tipo, "pedidos");
   assert.equal(L.erroDaIA({ codigo: "sem_conexao" }).tipo, "rede");
   assert.equal(L.erroDaIA({ codigo: "tempo_rede" }).tipo, "rede");
+  assert.match(L.erroDaIA({ codigo: "tempo_rede" }).texto, /Nada foi salvo.*divida em duas/, "a espera esgotou: orienta sem culpar a internet");
+  assert.equal(L.erroDaIA({ codigo: "sem_conexao" }).titulo, "A conexão falhou");
+  assert.equal(L.PRAZO_MONTAR_IA_MS, 130_000);
   assert.equal(L.erroDaIA({ codigo: "ia_resposta_invalida" }).tipo, "indisponivel");
   assert.match(L.erroDaIA({ codigo: "automacao_invalida", hint: "ação 2: escolha a etapa" }).texto, /ação 2: escolha a etapa/);
   // o nx-ia manda o motivo em .detalhe e uma mensagem pronta em português em .resposta.mensagem

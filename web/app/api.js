@@ -196,6 +196,9 @@ function lerCorpo(txt) {
   try { return JSON.parse(txt); } catch { return txt; }
 }
 
+/** Maior espera aceita por uma Edge Function (o teto delas no Supabase é de ~150 s). */
+export const TETO_PRAZO_FN_MS = 145_000;
+
 /**
  * Cria o cliente.
  * @param {object} o
@@ -211,6 +214,13 @@ export function criarApi(o) {
   const normalizarPrazo = (v, padrao) => Number.isFinite(Number(v)) && Number(v) > 0 ? Math.min(120_000, Number(v)) : padrao;
   const prazoRpc = normalizarPrazo(o.prazoMs ?? o.prazoRpcMs, 20_000);
   const prazoFn = normalizarPrazo(o.prazoMs ?? o.prazoFnMs, 75_000);
+
+  const prazoGeralFixo = o.prazoMs != null || o.prazoFnMs != null;
+  const prazoDaChamada = opcoes => {
+    const extra = Number(opcoes && opcoes.prazoMs);
+    if (prazoGeralFixo || !Number.isFinite(extra) || extra <= prazoFn) return prazoFn;
+    return Math.min(TETO_PRAZO_FN_MS, extra);
+  };
 
   async function buscarComPrazo(url, init, ms) {
     const controller = typeof AbortController === "function" ? new AbortController() : null;
@@ -291,10 +301,14 @@ export function criarApi(o) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
       return post(`${base}/rest/v1/rpc/${nome}`, params);
     },
-    /** Edge Function: POST /functions/v1/<funcao> com {token, cliente, ...corpo}. */
-    fn(funcao, corpo = {}) {
+    /**
+     * Edge Function: POST /functions/v1/<funcao> com {token, cliente, ...corpo}.
+     * `opcoes.prazoMs`: espera maior só para esta chamada (ex.: a IA que monta uma automação demora mais que os 75 s padrão),
+     * no máximo TETO_PRAZO_FN_MS. Um prazo geral fixado em criarApi (testes) continua valendo por cima.
+     */
+    fn(funcao, corpo = {}, opcoes = {}) {
       if (!/^nx-[a-z0-9-]+$/.test(funcao)) return Promise.reject(erroApi("funcao_invalida"));
-      return post(`${base}/functions/v1/${funcao}`, { token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }, prazoFn);
+      return post(`${base}/functions/v1/${funcao}`, { token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }, prazoDaChamada(opcoes));
     },
     mensagemErro,
   };
