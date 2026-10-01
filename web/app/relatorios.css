@@ -175,7 +175,8 @@
 .ads-passo-l { font-size: .875rem; color: var(--c-texto-2); font-weight: 500; }
 .ads-taxa { align-self: flex-start; font: 500 .6875rem/1.4 var(--f-mono); color: var(--c-texto-3); padding: .1rem .5rem; border-radius: 999px; background: var(--c-sup-2); }
 .ads-taxa-0 { visibility: hidden; }
-.ads-taxa { min-height: 1.35rem; display: inline-flex; align-items: center; }
+.ads-taxa { min-height: 1.35rem; display: inline-flex; align-items: center; white-space: nowrap; }
+@media (max-width: 760px) { .ads-taxa { padding-inline: .35rem; letter-spacing: -.02em; } }
 .ads-passo .rel-var { align-self: flex-start; }
 
 .ads-grade { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
@@ -514,9 +515,10 @@ a.ini-m-trecho:hover, a.ini-m-trecho:focus-visible { text-decoration-color: curr
 .ini-em-dia .vazio { max-width: 34rem; }
 /* o que não pede ação fica recolhido */
 .ini-mais { border-radius: 18px; border: 1px solid var(--c-borda); background: var(--c-sup); }
-.ini-mais > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .8rem; padding: .9rem 1.25rem; min-height: 44px; cursor: pointer; list-style: none; }
+.ini-mais > summary { display: flex; flex-wrap: nowrap; align-items: baseline; gap: .15rem .8rem; padding: .9rem 1.25rem; min-height: 44px; cursor: pointer; list-style: none; }
 .ini-mais > summary::-webkit-details-marker { display: none; }
-.ini-mais > summary::after { content: "▾"; margin-left: auto; color: var(--c-texto-3); transition: transform var(--t-ui) var(--e-out); }
+.ini-mais > summary .rel-nota { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ini-mais > summary::after { content: "▾"; flex: none; margin-left: auto; color: var(--c-texto-3); transition: transform var(--t-ui) var(--e-out); }
 .ini-mais[open] > summary::after { transform: rotate(180deg); }
 .ini-mais-t { font-weight: 600; font-size: var(--fs-corpo); }
 .ini-mais > .ini-grade { padding: 0 1rem 1rem; }
@@ -719,7 +721,7 @@ a.ini-numero:active { transform: scale(.98); }
   /* período e plataforma (ou funil/departamento) num chip só: «Últimos 30 dias · Tudo ▾» */
   .rel-filtros-lg { display: none; }
   .rel-filtros { gap: .3rem .6rem; flex-wrap: nowrap; }
-  .rel-resumo { display: inline-flex; align-items: center; gap: .4rem; min-width: 0; max-width: 100%; min-height: 44px; padding: .4rem .6rem .4rem .95rem; border-radius: 999px;
+  .rel-resumo { display: inline-flex; align-items: center; gap: .4rem; flex: none; min-width: 0; max-width: 100%; min-height: 44px; padding: .4rem .6rem .4rem .95rem; border-radius: 999px;
     border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto); font: 600 .875rem/1.2 var(--f-corpo); cursor: pointer; }
   .rel-resumo .ic { width: 16px; height: 16px; flex: none; color: var(--c-texto-3); }
   .rel-resumo-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

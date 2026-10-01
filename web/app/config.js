@@ -101,8 +101,10 @@ export async function montar(ctx) {
         const id = String(a.getAttribute("href") || "").replace("#/config/", "");
         const n = pend[id];
         if (!n) continue;
+        // só o título da seção, lido ANTES de pôr o selo: senão o leitor de tela ouve o número duas vezes («Números3, 3 passos»)
+        const nome = (a.querySelector("span:not(.nav-selo)") || a).textContent.trim();
         a.appendChild(h("span", { class: "nav-selo cfg-pend", title: `${n} ${n === 1 ? "passo pendente" : "passos pendentes"} no checklist` }, String(n)));
-        a.setAttribute("aria-label", `${a.textContent.trim()}, ${n} ${n === 1 ? "passo pendente" : "passos pendentes"}`);
+        a.setAttribute("aria-label", `${nome}, ${n} ${n === 1 ? "passo pendente" : "passos pendentes"}`);
       }
     }).catch(() => { /* sem o checklist o menu fica como estava */ });
   }
@@ -976,7 +978,7 @@ async function secaoPlano(ctx, alvo) {
   catch (e) { ui.limpar(alvo); alvo.append(ui.erroCartao(e, () => { ui.limpar(alvo); secaoPlano(ctx, alvo); })); return; }
   ui.limpar(alvo);
   const p = r.plano || {};
-  const [stTxt, stCor] = ROT_STATUS[r.status] || [r.status, "neutra"];
+  const [stTxt, stCor] = ROT_STATUS[r.status] || [r.status || "—", "neutra"];
   const wa = ctx.shell.marcaEfetiva() && ctx.shell.marcaEfetiva().suporte_wa;
   const hoje = ui.hojeSP();
   const fracao = k => (r.limites && r.limites[k] != null ? (r.limites[k] > 0 ? (r.uso[k] || 0) / r.limites[k] : 1) : 0);

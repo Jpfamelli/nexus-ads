@@ -496,6 +496,9 @@ test("validar: passos novos (mover_funil, etiquetas, campo, nota, notificar depa
   assert.equal(m({ tipo: "etiqueta_remover" }), "ação 2: escolha a etiqueta");
   assert.equal(m({ tipo: "etiqueta_remover", etiqueta_id: U(99) }, { base: BASE }), "ação 2: a etiqueta escolhida não existe mais");
   assert.equal(ok({ tipo: "etiqueta_adicionar", etiqueta_id: U(31) }, { base: BASE }), true);
+  // só pelo nome não vale aqui: o banco (nx_auto_normalizar) exige a etiqueta escolhida em «Pôr etiqueta»; criar pelo nome é só do «etiquetar»
+  assert.equal(m({ tipo: "etiqueta_adicionar", etiqueta_nome: "Orçamento" }, { base: BASE }), "ação 2: escolha a etiqueta");
+  assert.equal(L.limpar(auto({ acoes: [{ tipo: "etiqueta_adicionar", etiqueta_nome: "Orçamento" }] })).acoes[0].etiqueta_nome, undefined);
   // campo_atualizar
   assert.equal(m({ tipo: "campo_atualizar", valor: "x" }), "ação 2: escolha o campo");
   assert.equal(m({ tipo: "campo_atualizar", campo: "convenio", valor: " " }, { base: BASE }), "ação 2: escreva o valor");
@@ -1049,6 +1052,92 @@ test("CSS das automações: sem hex, [hidden] forte, minmax(0,1fr), regras mobil
   assert.match(css, /\.au-esc \{ grid-template-columns: minmax\(0, 1fr\); \}/, "cartões da IA em 1 coluna");
   // nenhum texto de classe usada pelo editor ficou sem estilo (as que mais importam)
   const ed = lerApp("auto-editor.js") + lerApp("automacoes.js");
-  for (const cls of ["au-passo", "au-passo-quando", "au-paleta", "au-tile", "au-sim", "au-sim-alvo", "au-ia", "au-ia-res", "au-ia-ped", "au-chip", "au-ex-filtro", "au-item-erro", "au-mini-tempo", "au-modelo-selos"])
+  for (const cls of ["au-passo", "au-passo-quando", "au-paleta", "au-tile", "au-sim", "au-sim-alvo", "au-ia", "au-ia-res", "au-ia-ped", "au-chip", "au-ex-filtro", "au-item-erro", "au-mini-tempo", "au-modelo-selos", "au-ex-acoes"])
     assert.ok(ed.includes(cls) && css.includes("." + cls), `classe ${cls} usada e estilizada`);
+});
+
+/* ------------------------------------------------------------------ rascunho do editor (revisão R119) */
+
+test("rascunho: chave por empresa + conta + automação; guardar e ler devolve a automação como estava na tela", () => {
+  assert.equal(L.chaveRascunho("cli-1", "conta-9", U(7)), `nx-au-rasc:cli-1:conta-9:${U(7)}`);
+  assert.equal(L.chaveRascunho("cli-1", "conta-9"), "nx-au-rasc:cli-1:conta-9:nova", "sem id = a automação ainda não salva");
+  assert.notEqual(L.chaveRascunho("cli-1", "conta-9", "nova"), L.chaveRascunho("cli-2", "conta-9", "nova"), "outra empresa não lê");
+  assert.notEqual(L.chaveRascunho("cli-1", "conta-9", "nova"), L.chaveRascunho("cli-1", "conta-8", "nova"), "outra pessoa não lê");
+  // o que está na tela pode estar incompleto (passo sem título, condição sem valor): volta igual, sem «limpar»
+  const naTela = { nome: "Lembrete", gatilho: "antes_da_data", config: { campo: "consulta", horas: 24 }, condicoes: [{ campo: "origem", op: "igual", valor: "" }],
+    acoes: [{ tipo: "criar_tarefa", titulo: "" }, { tipo: "esperar", minutos: 60 }], respeitar_horario: true, ativo: false };
+  const txt = L.empacotarRascunho(naTela, null, 1_700_000_000_000);
+  const r = L.lerRascunho(txt);
+  assert.deepEqual(r.auto, naTela);
+  assert.equal(r.em, 1_700_000_000_000);
+  assert.deepEqual([r.explicacao, r.avisos], ["", []]);
+  r.auto.acoes.push({ tipo: "parar" });
+  assert.equal(L.lerRascunho(txt).auto.acoes.length, 2, "cada leitura devolve uma cópia");
+  // a montagem da IA leva a explicação e os avisos junto
+  const ia = L.lerRascunho(L.empacotarRascunho(naTela, { explicacao: "Montei um lembrete.", avisos: ["Confira o horário", 7] }));
+  assert.equal(ia.explicacao, "Montei um lembrete."); assert.deepEqual(ia.avisos, ["Confira o horário", "7"]);
+});
+
+test("rascunho: texto vazio, corrompido ou de um gatilho que não existe mais não é oferecido", () => {
+  for (const ruim of [null, undefined, "", "{", "null", "[]", "42", JSON.stringify({ auto: null }), JSON.stringify({ auto: [] }),
+    JSON.stringify({ auto: { gatilho: "gatilho_que_sumiu", acoes: [] } }),
+    JSON.stringify({ auto: { gatilho: "tarefa_vencida", acoes: "x" } }),
+    JSON.stringify({ auto: { gatilho: "tarefa_vencida", acoes: [null] } }),
+    JSON.stringify({ auto: { gatilho: "tarefa_vencida", acoes: [{ titulo: "sem tipo" }] } }),
+    JSON.stringify({ auto: { gatilho: "tarefa_vencida", condicoes: {}, acoes: [] } }),
+    JSON.stringify({ auto: { gatilho: "tarefa_vencida", config: [], acoes: [] } })])
+    assert.equal(L.lerRascunho(ruim), null, `deveria recusar: ${String(ruim).slice(0, 60)}`);
+  assert.ok(L.lerRascunho(JSON.stringify({ auto: { gatilho: "tarefa_vencida" } })), "sem listas ainda é um rascunho válido (o editor completa)");
+});
+
+test("editor: edição pendente segura a atualização automática, o link do topo pergunta como o «Cancelar» e o rascunho é guardado a cada mudança", () => {
+  const ed = lerApp("auto-editor.js"), tela = lerApp("automacoes.js");
+  // uma régua só para «tem coisa sem salvar»
+  assert.match(ed, /const temPendencia = \(\) => podeEditar && \(salvoJson !== null \? sujo\(\) : !!\(auto\.nome \|\| auto\.acoes\.length\)\);/);
+  assert.match(ed, /if \(typeof ctx\.naoAtualizar === "function" && amb\.aoSair\) amb\.aoSair\(ctx\.naoAtualizar\(temPendencia\)\);/, "registra no shell e cancela ao sair da tela");
+  // «Cancelar» e «‹ Automações» saem pelo mesmo caminho, com a mesma pergunta
+  assert.match(ed, /async function sair\(\) \{[\s\S]*?titulo: "Sair sem salvar\?"[\s\S]*?titulo: "Descartar esta automação\?"[\s\S]*?apagarRascunho\(\);[\s\S]*?ctx\.navegar\("#\/automacoes"\);\s*\}/);
+  assert.match(ed, /btCancelar\.addEventListener\("click", sair\);/);
+  assert.match(ed, /linkVoltar\.addEventListener\("click", ev => \{\s*if \(ev\.defaultPrevented \|\| ev\.button !== 0 \|\| ev\.metaKey \|\| ev\.ctrlKey \|\| ev\.shiftKey \|\| ev\.altKey\) return;\s*ev\.preventDefault\(\);\s*sair\(\);/,
+    "clique simples pergunta; Ctrl/⌘+clique segue abrindo outra aba");
+  assert.doesNotMatch(ed, /h\("a", \{ class: "au-voltar", href: "#\/automacoes" \}, ui\.icone\("seta-esq"\), "Automações"\),\s*h\("div", \{ class: "au-ed-linha" \}/, "o link puro, sem guarda, saiu");
+  // rascunho: grava em toda mudança, some ao salvar e ao descartar, e é oferecido ao abrir
+  assert.match(ed, /pintarValidacao\(\);\s*guardarRascunho\(\);\s*\}/, "mudou() guarda o rascunho");
+  assert.match(ed, /if \(temPendencia\(\)\) \{ rasc\.guardar\(idRasc, auto\); gravouRascunho = true; \}/);
+  assert.match(ed, /salvoJson = JSON\.stringify\(L\.limpar\(salvo\)\);\s*if \(rasc\) rasc\.apagar\(idRasc\);/, "salvou: o rascunho some");
+  assert.match(ed, /const idRasc = item \? item\.id : "nova";/);
+  assert.match(ed, /"Recuperar rascunho"/); assert.match(ed, /"Descartar rascunho"/);
+  assert.match(ed, /JSON\.stringify\(L\.limpar\(guardado\.auto\)\) !== JSON\.stringify\(L\.limpar\(auto\)\)/, "só oferece quando o rascunho difere do que está na tela");
+  // o armazenamento fica no módulo da tela, por empresa + conta, sempre em try/catch
+  assert.match(tela, /const chave = id => L\.chaveRascunho\(cli, conta, id\);/);
+  assert.match(tela, /ler\(id\) \{ try \{ return L\.lerRascunho\(sessionStorage\.getItem\(chave\(id\)\)\); \} catch \{ return null; \} \}/);
+  assert.match(tela, /guardar\(id, auto, extra\) \{ try \{ sessionStorage\.setItem\(chave\(id\), L\.empacotarRascunho\(auto, extra\)\); return true; \} catch \{ return false; \} \}/);
+  assert.match(tela, /apagar\(id\) \{ try \{ sessionStorage\.removeItem\(chave\(id\)\); \} catch/);
+  assert.doesNotMatch(ed + tela, /localStorage/, "rascunho de automação vive só na aba (sessionStorage)");
+});
+
+test("Criar com IA: a montagem fica guardada na aba e volta em #/automacoes/nova?ia=1 depois de recarregar; some ao salvar ou descartar", () => {
+  const tela = lerApp("automacoes.js");
+  assert.match(tela, /rascunhoIA = m;\s*rascunhosDe\(ctx\)\.guardar\("ia", m\.auto, \{ explicacao: m\.explicacao, avisos: m\.avisos \}\);[^\n]*\s*ctx\.navegar\("#\/automacoes\/nova\?ia=1"\);/);
+  assert.match(tela, /if \(!rascunhoIA\) \{ const g = rascunhos\.ler\("ia"\); if \(g\) rascunhoIA = \{ auto: g\.auto, explicacao: g\.explicacao, avisos: g\.avisos \}; \}/);
+  assert.match(tela, /limparRascunho: \(\) => \{ rascunhoIA = null; rascunhos\.apagar\("ia"\); \}/);
+  assert.doesNotMatch(tela, /a página foi recarregada/, "recarregar não perde mais a montagem");
+});
+
+test("editor: trocar o funil no gatilho refaz a lista de etapas; «criar etiqueta ao salvar» só no passo «etiquetar»", () => {
+  const ed = lerApp("auto-editor.js");
+  assert.match(ed, /if \(f\.tipo === "funil" && \(\(L\.GATILHO\[auto\.gatilho\] \|\| \{\}\)\.campos \|\| \[\]\)\.some\(c => c\.filtraPor === f\.nome\)\) \{\s*pintarQuando\(\);/, "funil com etapa dependente: sempre redesenha");
+  assert.ok(L.GATILHO.agendado.campos.some(c => c.filtraPor === "funil_id"), "o gatilho «Todo dia, num horário» é o caso");
+  assert.match(ed, /const criaPeloNome = ac\.tipo === "etiquetar" && !v && !!ac\.etiqueta_nome;/);
+});
+
+test("execuções: «Cancelar» na linha em espera e «Cancelar todas as esperas» chamam nx_automacao_cancelar_espera depois de confirmar", () => {
+  const ed = lerApp("auto-editor.js");
+  assert.match(ed, /podeEditar && contagem\.espera > 0 \? h\("button", \{ type: "button", class: "bt bt-sec bt-p" \}, ui\.icone\("parar"\), "Cancelar todas as esperas"\)/, "só quem edita e só com espera");
+  assert.match(ed, /podeEditar && sit === "espera" && x\.chave \? h\("button"/, "o botão da linha só nas que estão em espera");
+  assert.match(ed, /async function cancelarEspera\(x, botao\) \{\s*const ok = await ui\.confirmar\([\s\S]*?if \(!ok\) return;[\s\S]*?ctx\.api\.rpcC\("nx_automacao_cancelar_espera", \{ p_id: item\.id, p_chave: x \? x\.chave : null \}\)/, "confirma antes; p_chave nulo = todas");
+  // a RPC existe no banco com esses parâmetros e devolve quantas cancelou
+  const sql = readFileSync(resolve(RAIZ, "supabase/migrations/20261001a_automacoes_ia.sql"), "utf8");
+  assert.match(sql, /create or replace function public\.nx_automacao_cancelar_espera\(p_token text, p_cliente uuid, p_id uuid, p_chave text default null\)/);
+  assert.match(sql, /return json_build_object\('ok', true, 'canceladas', v_n\);/);
 });

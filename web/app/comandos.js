@@ -120,9 +120,13 @@ export function criarComandos() {
  * empresas, instalar, suporte, temCliente). A ação só aparece se o shell também souber executá-la (fazer[id]).
  * `rotaOk(m)` = a tela existe NESTE produto e a pessoa pode abri-la (rotas.acessoRota): «Nova conversa» some no CRM, «Marcar consulta» some em Anúncios.
  */
+/** O compromisso da agenda na vertical: oficina marca «visita», loja marca «entrega», os demais «consulta» (a mesma palavra das Automações e do Início). */
+const palavraAgenda = vertical => (vertical === "oficina" ? "visita" : vertical === "loja" ? "entrega" : "consulta");
+
 export const CATALOGO = Object.freeze([
   { id: "nova-oportunidade", rotulo: a => a.vocab.novo("negocio"), palavras: "nova oportunidade negocio venda orcamento lead criar adicionar", icone: "funil", quando: a => a.rotaOk("crm") && a.pode("atendente") },
-  { id: "marcar-consulta", rotulo: () => "Marcar consulta", palavras: "agenda agendar consulta horario marcar atendimento visita", icone: "calendario", quando: a => a.rotaOk("agenda") && a.pode("atendente") },
+  // `naTela` = o id do comando que a Agenda registra para a mesma ação: com ela aberta, a genérica não repete mesmo que os rótulos difiram
+  { id: "marcar-consulta", rotulo: a => `Marcar ${palavraAgenda(a && a.vocab && a.vocab.vertical)}`, palavras: "agenda agendar consulta horario marcar atendimento visita entrega", icone: "calendario", naTela: "agenda.marcar", quando: a => a.rotaOk("agenda") && a.pode("atendente") },
   { id: "nova-conversa", rotulo: () => "Nova conversa", palavras: "conversa mensagem whatsapp iniciar contato enviar", icone: "chat", quando: a => a.rotaOk("conversas") && a.pode("atendente") },
   { id: "nova-tarefa", rotulo: () => "Nova tarefa", palavras: "tarefa lembrete afazer pendencia criar", icone: "tarefa", quando: a => a.rotaOk("tarefas") && a.pode("atendente") },
   { id: "alternar-tema", rotulo: () => "Alternar tema", palavras: "tema claro escuro aparencia modo noturno dark", icone: "pincel", quando: () => true },
@@ -138,13 +142,14 @@ export const CATALOGO = Object.freeze([
 /** As ações do shell que valem agora para esta pessoa, neste produto. `fazer` = { [id]: () => void }. */
 export function acoesPadrao(a, fazer = {}) {
   return CATALOGO.filter(c => typeof fazer[c.id] === "function" && c.quando(a))
-    .map(c => ({ id: c.id, rotulo: c.rotulo(a), palavras: c.palavras, icone: c.icone, atalho: c.atalho || "", fazer: fazer[c.id], origem: "shell" }));
+    .map(c => ({ id: c.id, rotulo: c.rotulo(a), palavras: c.palavras, icone: c.icone, atalho: c.atalho || "", fazer: fazer[c.id], origem: "shell", naTela: c.naTela || "" }));
 }
 
 /** A tela aberta manda nos comandos de mesmo nome (ex.: a Agenda registra «Marcar consulta»): a ação genérica do shell não repete. */
 export function juntarAcoes(padrao, daTela) {
   const vistos = new Set(daTela.map(c => normalizar(c.rotulo)));
-  return { daTela, geral: padrao.filter(c => !vistos.has(normalizar(c.rotulo))) };
+  const ids = new Set(daTela.map(c => c.id));
+  return { daTela, geral: padrao.filter(c => !vistos.has(normalizar(c.rotulo)) && !(c.naTela && ids.has(c.naTela))) };
 }
 
 /** `rotaOk` do ambiente: a tela existe neste produto E a pessoa pode abri-la. */

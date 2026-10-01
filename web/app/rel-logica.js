@@ -519,6 +519,15 @@ export function contarMoeda(ui, G, el, valor, { centavos = true, animar = true }
    ============================================================ */
 const plural = (n, um, varios) => (Number(n) === 1 ? um : varios);
 
+/**
+ * O nome do compromisso da agenda na vertical: oficina marca «visita», loja marca «entrega», os demais «consulta»
+ * (a mesma palavra das Automações — auto-catalogo.palavraConsulta; o teste trava as duas iguais). Devolve {um, varios}.
+ */
+export function palavraAgenda(vertical) {
+  const um = vertical === "oficina" ? "visita" : vertical === "loja" ? "entrega" : "consulta";
+  return { um, varios: `${um}s` };
+}
+
 /** Quantas consultas existem hoje na resposta de nx_agenda_dia (null quando não há dado de agenda). */
 export function consultasHoje(agenda, hoje) {
   if (!agenda || !Array.isArray(agenda.consultas)) return null;
@@ -529,14 +538,15 @@ export function consultasHoje(agenda, hoje) {
 /**
  * manchete(d, {agenda, voc, links}) → {frases, texto, pendencia, urgente, contexto}
  *  - `d` é a resposta de nx_inicio; `agenda` a de nx_agenda_dia (opcional: sem ela a frase não fala de consulta);
- *  - `voc` = {contato, contatos, negocio, negocios, feminino} em minúsculas (vocabulário da vertical);
+ *  - `voc` = {contato, contatos, negocio, negocios, feminino, consulta, consultas} em minúsculas (vocabulário da vertical;
+ *    consulta/consultas = o nome do compromisso da agenda: consulta, visita ou entrega — ver palavraAgenda);
  *  - `links` = {conversas, tarefas, agenda, crm} (hash ou null — sem permissão o trecho vira texto);
  *  - cada frase é uma lista de nós: {t:"txt", v} ou {t:"link", href, tom?, partes:[{t:"n"|"moeda"|"narr"|"txt", v}]}.
  *  "n" = número (acento), "moeda" = valor em R$ (acento, formato editorial), "narr" = o verbo de ação (Zodiak itálica).
  *  Exemplo: "2 clientes esperam resposta há 15 min. Hoje tem 1 consulta e R$ 5.200 em orçamentos abertos."
  */
 export function manchete(d, { agenda = null, voc = {}, links = {} } = {}) {
-  const V = { contato: "cliente", contatos: "clientes", negocio: "negócio", negocios: "negócios", feminino: false, ...voc };
+  const V = { contato: "cliente", contatos: "clientes", negocio: "negócio", negocios: "negócios", feminino: false, consulta: "consulta", consultas: "consultas", ...voc };
   const c = (d && d.conversas) || {}, t = (d && d.tarefas) || {}, n = (d && d.negocios) || {};
   const ag = Math.max(0, Math.floor(+c.aguardando) || 0);
   const atr = Math.max(0, Math.floor(+t.atrasadas) || 0);
@@ -567,7 +577,7 @@ export function manchete(d, { agenda = null, voc = {}, links = {} } = {}) {
   const adj = (m, q) => (V.feminino ? m.replace(/o$/, "a") : m) + (Number(q) === 1 ? "" : "s");
   const ctx = [];
   if (nCons !== null && nCons > 0) {
-    ctx.push([{ t: "txt", v: "Hoje tem " }, link(links.agenda, [{ t: "n", v: String(nCons) }, { t: "txt", v: ` ${plural(nCons, "consulta", "consultas")}` }])]);
+    ctx.push([{ t: "txt", v: "Hoje tem " }, link(links.agenda, [{ t: "n", v: String(nCons) }, { t: "txt", v: ` ${plural(nCons, V.consulta, V.consultas)}` }])]);
   }
   if (abertos > 0 && valor > 0) {
     ctx.push([link(links.crm, [{ t: "moeda", v: valor }]),
@@ -624,20 +634,40 @@ export function numerosMudaram(antes, depois) {
 /* ============================================================
    8. CHECKLIST "DEIXE O ÓRBITA PRONTO" (M32) — nx_onboarding_estado vira progresso, próximos passos e selos do menu
    ============================================================ */
-/** Os 11 itens, na ordem recomendada (o servidor devolve a mesma ordem; aqui ficam o texto, a ajuda e a seção que o item abre). */
+/**
+ * Os 11 itens, na ordem recomendada (o servidor devolve a mesma ordem; aqui ficam o texto, a ajuda e a seção que o item abre).
+ * `modulo` e `papel` são os filtros da seção nas Configurações (os mesmos dos *-config.js; o teste trava os dois lados):
+ * item cuja seção a pessoa não abre não é cobrado. `opcional` aqui é o padrão; quando o servidor manda `opcional`, vale o dele.
+ */
 export const ONBOARDING_ITENS = Object.freeze([
-  { id: "chave_codewords", rotulo: "Chave do WhatsApp salva", secao: "numeros", assistente: true, ajuda: "A chave do CodeWords (ou o token da Meta) guardada com segurança." },
-  { id: "aparelho_pareado", rotulo: "Aparelho pareado", secao: "numeros", assistente: true, ajuda: "O WhatsApp do celular ligado ao Órbita." },
-  { id: "recebimento", rotulo: "Recebimento conferido", secao: "numeros", assistente: true, ajuda: "Confirmamos que as mensagens chegam por este número." },
-  { id: "ia_ou_direto", rotulo: "IA validada ou receber direto", secao: "numeros", assistente: true, ajuda: "Escolha quem responde primeiro: a IA ou a equipe." },
-  { id: "mensagem_teste", rotulo: "Mensagem de teste enviada", secao: "numeros", assistente: true, ajuda: "Uma mensagem real saindo pelo número." },
-  { id: "departamento_horario", rotulo: "Departamento com horário", secao: "departamentos", ajuda: "Fora do horário o cliente recebe a mensagem automática." },
-  { id: "agenda_faixas", rotulo: "Faixas da agenda", secao: "agenda", ajuda: "Os horários em que a agenda aceita consultas." },
-  { id: "script_site", rotulo: "Script do site com contato recebido", secao: "rastreio", ajuda: "Para saber de onde vem cada contato do site." },
-  { id: "colega_convidado", rotulo: "Colega convidado", secao: "usuarios", ajuda: "Quem atende junto com você." },
-  { id: "funil_ajustado", rotulo: "Funil ajustado", secao: "funis", ajuda: "As etapas que a sua equipe realmente usa." },
-  { id: "anuncios_ligados", rotulo: "Anúncios ligados", secao: "anuncios", opcional: true, ajuda: "Opcional: ligue o Meta e o Google para ver o retorno." },
+  { id: "chave_codewords", rotulo: "Chave do WhatsApp salva", secao: "numeros", modulo: "conversas", papel: "admin", assistente: true, ajuda: "A chave do CodeWords (ou o token da Meta) guardada com segurança." },
+  { id: "aparelho_pareado", rotulo: "Aparelho pareado", secao: "numeros", modulo: "conversas", papel: "admin", assistente: true, ajuda: "O WhatsApp do celular ligado ao Órbita." },
+  { id: "recebimento", rotulo: "Recebimento conferido", secao: "numeros", modulo: "conversas", papel: "admin", assistente: true, ajuda: "Confirmamos que as mensagens chegam por este número." },
+  { id: "ia_ou_direto", rotulo: "IA validada ou receber direto", secao: "numeros", modulo: "conversas", papel: "admin", assistente: true, ajuda: "Escolha quem responde primeiro: a IA ou a equipe." },
+  { id: "mensagem_teste", rotulo: "Mensagem de teste enviada", secao: "numeros", modulo: "conversas", papel: "admin", assistente: true, ajuda: "Uma mensagem real saindo pelo número." },
+  { id: "departamento_horario", rotulo: "Departamento com horário", secao: "departamentos", modulo: "conversas", papel: "admin", ajuda: "Fora do horário o cliente recebe a mensagem automática." },
+  { id: "agenda_faixas", rotulo: "Faixas da agenda", secao: "agenda", modulo: "crm", papel: "admin", ajuda: "Os horários em que a agenda aceita consultas." },
+  { id: "script_site", rotulo: "Script do site com contato recebido", secao: "rastreio", modulo: "crm", papel: "admin", opcional: true, ajuda: "Opcional: só para quem tem site. Mostra de onde vem cada contato." },
+  { id: "colega_convidado", rotulo: "Colega convidado", secao: "usuarios", modulo: null, papel: "admin", ajuda: "Quem atende junto com você." },
+  { id: "funil_ajustado", rotulo: "Funil ajustado", secao: "funis", modulo: "crm", papel: "admin", ajuda: "As etapas que a sua equipe realmente usa." },
+  { id: "anuncios_ligados", rotulo: "Anúncios ligados", secao: "anuncios", modulo: "ads", papel: "gestor", opcional: true, ajuda: "Opcional: ligue o Meta e o Google para ver o retorno." },
 ]);
+
+/**
+ * filtroSecoesOnboarding({temModulo, pode, configPronta}) → item => a pessoa consegue abrir a seção deste item?
+ * É a régua do config.js (seção pronta, módulo do plano e papel mínimo); cada função é opcional (sem ela, aquele filtro não barra).
+ */
+export function filtroSecoesOnboarding({ temModulo = null, pode = null, configPronta = null } = {}) {
+  return item => {
+    const b = ONBOARDING_ITENS.find(x => x.id === (item && item.id)) || item || {};
+    try {
+      if (typeof configPronta === "function" && b.secao && !configPronta(b.secao)) return false;
+      if (b.modulo && typeof temModulo === "function" && !temModulo(b.modulo)) return false;
+      if (b.papel && typeof pode === "function" && !pode(b.papel)) return false;
+    } catch { return false; }
+    return true;
+  };
+}
 
 /**
  * Para onde o "Fazer agora" leva. Passos 1-5 abrem o assistente do número (o do canal que pede ação, quando o servidor diz qual);
@@ -651,24 +681,27 @@ export function rotaOnboarding(item) {
 }
 
 /**
- * resumoOnboarding(estado, {pulados, dispensadoAte, agora, admin}) → null (não mostrar) ou
+ * resumoOnboarding(estado, {pulados, dispensadoAte, agora, admin, podeSecao}) → null (não mostrar) ou
  *   {itens, total, feitos, obrigatorios, obrigFeitos, pct, completo, proximo, pendentes}
  * - só admin vê; some a 100 % (dos obrigatórios); "Dispensar por 7 dias" esconde até a data; "Já está bom" (pulados) conta como feito neste aparelho;
- * - `itens` mantém a ordem recomendada e traz o rótulo/ajuda/rota local mesmo se o servidor mandar só ids.
+ * - `itens` mantém a ordem recomendada e traz o rótulo/ajuda/rota local mesmo se o servidor mandar só ids;
+ * - `podeSecao` (filtroSecoesOnboarding): item cuja seção a pessoa não abre sai ANTES da conta — não vira link morto nem trava o progresso;
+ * - obrigatórios, total e porcentagem saem dos itens recebidos (nenhum número fixo): o que o servidor marca como opcional não conta.
  */
-export function resumoOnboarding(estado, { pulados = [], dispensadoAte = 0, agora = Date.now(), admin = true } = {}) {
+export function resumoOnboarding(estado, { pulados = [], dispensadoAte = 0, agora = Date.now(), admin = true, podeSecao = null } = {}) {
   if (!admin || !estado || !Array.isArray(estado.itens) || !estado.itens.length) return null;
   const jaPulado = new Set(pulados || []);
   const porId = new Map(estado.itens.map(i => [i.id, i]));
-  const itens = ONBOARDING_ITENS.filter(b => porId.has(b.id)).map(b => {
+  const itens = ONBOARDING_ITENS.filter(b => porId.has(b.id) && (typeof podeSecao !== "function" || podeSecao(b))).map(b => {
     const s = porId.get(b.id);
     const feitoServidor = !!s.feito, pulado = !feitoServidor && jaPulado.has(b.id);
-    return { id: b.id, rotulo: b.rotulo, ajuda: b.ajuda, opcional: !!(b.opcional || s.opcional), feito: feitoServidor || pulado, pulado,
+    return { id: b.id, rotulo: b.rotulo, ajuda: b.ajuda, opcional: typeof s.opcional === "boolean" ? s.opcional : !!b.opcional, feito: feitoServidor || pulado, pulado,
       secao: b.secao, rota: rotaOnboarding({ id: b.id, canal_id: s.canal_id }), ultimo_em: s.ultimo_em || null };
   });
   const obrig = itens.filter(i => !i.opcional);
+  if (!obrig.length) return null;                 // nada que esta pessoa possa (e precise) fazer: sem cartão
   const obrigFeitos = obrig.filter(i => i.feito).length;
-  const completo = obrig.length > 0 && obrigFeitos === obrig.length;
+  const completo = obrigFeitos === obrig.length;
   const pendentes = itens.filter(i => !i.feito);
   const resumo = { itens, total: itens.length, feitos: itens.filter(i => i.feito).length, obrigatorios: obrig.length, obrigFeitos,
     pct: obrig.length ? Math.round(obrigFeitos * 100 / obrig.length) : 0, completo, pendentes, proximo: pendentes.find(i => !i.opcional) || pendentes[0] || null };
@@ -678,8 +711,8 @@ export function resumoOnboarding(estado, { pulados = [], dispensadoAte = 0, agor
 }
 
 /** Passos pendentes (obrigatórios, não pulados) por seção das Configurações — o ponto "nav-selo" do menu: {numeros: 3, departamentos: 1, …}. */
-export function pendenciasConfig(estado, { pulados = [] } = {}) {
-  const r = resumoOnboarding(estado, { pulados, dispensadoAte: 0, admin: true });
+export function pendenciasConfig(estado, { pulados = [], podeSecao = null } = {}) {
+  const r = resumoOnboarding(estado, { pulados, dispensadoAte: 0, admin: true, podeSecao });
   const out = {};
   if (!r) return out;
   for (const i of r.pendentes) if (!i.opcional) out[i.secao] = (out[i.secao] || 0) + 1;

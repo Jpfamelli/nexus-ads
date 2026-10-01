@@ -45,13 +45,14 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   const exemplo = L.exemploVariaveis({ empresa: ctx.cliente ? ctx.cliente.nome : "", atendente: ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.nome : "Ana" });
   // blocos que já "contam" para a validação ao vivo (um rascunho pronto — receita, IA, automação salva — mostra tudo desde o início)
   const tocado = new Set(origem === "branco" ? [] : ["nome", "quando", "se", "entao"]);
+  const frescos = new Set();   // passos recém-adicionados, ainda sem a pessoa ter tido chance de preencher
 
   ctx.titulo(item ? item.nome : "Nova automação");
 
   // ------------------------------------------------ cabeçalho
   const nomeId = novoId("nome");
   const inpNome = h("input", { id: nomeId, class: "au-nome-inp", type: "text", maxlength: 80, value: auto.nome || "",
-    placeholder: "Dê um nome (ex.: Lembrete da consulta)", disabled: !podeEditar, autocomplete: "off" });
+    placeholder: "Nome da automação", disabled: !podeEditar, autocomplete: "off" });
   inpNome.addEventListener("input", () => { auto.nome = inpNome.value; mudou("nome"); });
   const swAtivo = interruptor({ ligado: !!auto.ativo, rotulo: "Ligada", mostrarTexto: true, desabilitado: !podeEditar,
     aoMudar: v => { auto.ativo = v; mudou(); } });
@@ -59,7 +60,24 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   const btCancelar = h("button", { type: "button", class: "bt bt-sec" }, podeEditar ? "Cancelar" : "Voltar");
   const btTestar = podeEditar ? h("button", { type: "button", class: "bt bt-sec", title: "Veja o que aconteceria agora, sem enviar nada" }, ui.icone("olho"), "Testar") : null;
   const btDuplicar = podeEditar && item ? h("button", { type: "button", class: "bt bt-fant", title: "Cria uma cópia desligada" }, ui.icone("copiar"), "Duplicar") : null;
-  btCancelar.addEventListener("click", async () => {
+  /** Há edição que ainda não foi salva (a mesma régua do «Cancelar», da atualização automática e do rascunho). */
+  const temPendencia = () => podeEditar && (salvoJson !== null ? sujo() : !!(auto.nome || auto.acoes.length));
+
+  // ------------------------------------------------ rascunho: o que não foi salvo fica guardado na aba (recarregar, Voltar, menu e paleta não perdem)
+  const rasc = podeEditar && amb.rascunhos ? amb.rascunhos : null;
+  const idRasc = item ? item.id : "nova";
+  let oferta = null;                 // o aviso «Recuperar rascunho», enquanto a pessoa não escolheu
+  let gravouRascunho = false;        // esta tela já escreveu por cima do rascunho guardado
+  function guardarRascunho() {
+    if (!rasc) return;
+    if (temPendencia()) { rasc.guardar(idRasc, auto); gravouRascunho = true; }
+    else if (!oferta) rasc.apagar(idRasc);          // voltou ao que estava salvo: nada a recuperar (um rascunho ainda oferecido não é apagado)
+  }
+  /** Ao salvar ou descartar: o rascunho some. Um rascunho antigo ainda oferecido (e não tocado) continua guardado. */
+  function apagarRascunho() { if (rasc && (gravouRascunho || !oferta)) rasc.apagar(idRasc); }
+
+  /** Sair do editor («Cancelar» e o link «‹ Automações»): pergunta antes de perder o que não foi salvo. */
+  async function sair() {
     if (podeEditar && salvoJson !== null && sujo()) {
       const ok = await ui.confirmar({ titulo: "Sair sem salvar?", texto: "As mudanças desta automação serão perdidas.", rotulo: "Sair sem salvar", perigo: true });
       if (!ok) return;
@@ -67,21 +85,65 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       const ok = await ui.confirmar({ titulo: "Descartar esta automação?", texto: "Ela ainda não foi salva.", rotulo: "Descartar", perigo: true });
       if (!ok) return;
     }
+    apagarRascunho();
     if (amb.limparRascunho) amb.limparRascunho();
     ctx.navegar("#/automacoes");
-  });
+  }
+  btCancelar.addEventListener("click", sair);
   if (btDuplicar) btDuplicar.addEventListener("click", () => amb.duplicar(ctx, auto));
+  // o link do topo sai pelo mesmo caminho do «Cancelar» (Ctrl/⌘+clique e botão do meio continuam abrindo outra aba)
+  const linkVoltar = h("a", { class: "au-voltar", href: "#/automacoes" }, ui.icone("seta-esq"), "Automações");
+  linkVoltar.addEventListener("click", ev => {
+    if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    ev.preventDefault();
+    sair();
+  });
+  // a atualização automática do app não recarrega a página com edição pendente
+  if (typeof ctx.naoAtualizar === "function" && amb.aoSair) amb.aoSair(ctx.naoAtualizar(temPendencia));
 
   const rotuloOrigem = item ? "Automação" : origem === "ia" ? "Nova automação · montada pela IA" : modelo ? "Nova automação · a partir de uma receita" : "Nova automação";
   raiz.appendChild(h("header", { class: "au-ed-cab" },
     // título da página para leitor de tela (o nome visível é um campo editável, não um cabeçalho)
     h("h1", { class: "sr-only" }, item ? `Automação: ${item.nome}` : "Nova automação"),
-    h("a", { class: "au-voltar", href: "#/automacoes" }, ui.icone("seta-esq"), "Automações"),
+    linkVoltar,
     h("div", { class: "au-ed-linha" },
       h("div", { class: "au-ed-nome" }, h("label", { class: "rotulo", for: nomeId }, rotuloOrigem), inpNome),
       h("div", { class: "linha au-ed-acoes" }, swAtivo, btTestar, btDuplicar, btCancelar, btSalvar))));
   if (!podeEditar) raiz.appendChild(h("p", { class: "aviso au-aviso-papel" }, ui.icone("cadeado"),
     h("span", null, "Somente leitura: administradores editam automações.")));
+
+  // ------------------------------------------------ «Recuperar rascunho»: há edição desta automação que ficou sem salvar nesta aba
+  const guardado = rasc ? rasc.ler(idRasc) : null;
+  if (guardado && JSON.stringify(L.limpar(guardado.auto)) !== JSON.stringify(L.limpar(auto))) {
+    const quandoTxt = guardado.em ? ` (${ui.relativo(new Date(guardado.em).toISOString())})` : "";
+    const nomeTxt = !item && guardado.auto.nome ? `: «${String(guardado.auto.nome).slice(0, 80)}»` : "";
+    const btRecuperar = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("reabrir"), "Recuperar rascunho");
+    const btDescartar = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Descartar rascunho");
+    const fecharOferta = () => {
+      const tinhaFoco = oferta && oferta.contains(document.activeElement);
+      if (oferta) oferta.remove();
+      oferta = null;
+      if (tinhaFoco) inpNome.focus({ preventScroll: true });     // o foco não pode cair no <body>
+    };
+    btRecuperar.addEventListener("click", () => {
+      auto = copia(guardado.auto);
+      if (item) auto.id = item.id; else delete auto.id;
+      auto.condicoes = auto.condicoes || []; auto.acoes = auto.acoes || []; auto.config = auto.config || {};
+      inpNome.value = auto.nome || "";
+      swAtivo.definir(!!auto.ativo);
+      ["nome", "quando", "se", "entao"].forEach(x => tocado.add(x));
+      fecharOferta();
+      pintarQuando(); pintarSe(); pintarEntao();
+      mudou();                                                    // prévia, validação e o rascunho (agora é o que está na tela)
+      ui.toast("Rascunho recuperado. Confira e salve.", { tipo: "ok" });
+    });
+    btDescartar.addEventListener("click", () => { fecharOferta(); if (!gravouRascunho) rasc.apagar(idRasc); });
+    oferta = h("div", { class: "aviso aviso-aten au-rasc", role: "status" }, ui.icone("relogio"),
+      h("div", { class: "pilha-p" },
+        h("p", null, item ? `Há mudanças desta automação que ficaram sem salvar${quandoTxt}.` : `Você deixou uma automação sem salvar${nomeTxt}${quandoTxt}.`),
+        h("div", { class: "linha" }, btRecuperar, btDescartar)));
+    raiz.appendChild(oferta);
+  } else if (guardado && salvoJson !== null) rasc.apagar(idRasc);   // igual ao que está salvo: não é mais rascunho
 
   // ------------------------------------------------ aviso de "montada pela IA"
   if (rascunho) {
@@ -160,7 +222,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const sel = seletor({ rotulo: "Gatilho", valor: auto.gatilho, opcoes: grupos, desabilitado: !podeEditar, classe: "au-sel-gat",
       ajuda: g && g.descricao ? g.descricao : null,
       aoMudar: v => { Object.assign(auto, L.trocarGatilho(auto, v)); pintarQuando(); mudou("quando"); } });
-    const campos = h("div", { class: "au-campos" }, (g ? g.campos : []).map(f => campoConfig(f)));
+    const campos = h("div", { class: "au-campos" }, (g ? g.campos : []).map(f => { const el = campoConfig(f); if (el) el.dataset.cfg = f.nome; return el; }));
     const dica = L.dicaGatilho(auto.gatilho, vv);
     blocoQuando.append(
       noFluxo("raio"),
@@ -186,10 +248,16 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         return seletor({ rotulo: f.rotulo, valor: v, opcoes: op, vazio: vazioTxt, desabilitado: !podeEditar, obrigatorio: f.obrigatorio,
           ajuda: !op.length ? semOpcoes(f.tipo) : null,
           aoMudar: x => {
-            set(x || null);
-            // etapa que não pertence ao funil escolhido sai
+            // etapa que não pertence ao funil escolhido sai (antes de avisar a mudança: a prévia e o rascunho já saem certos)
             if (f.tipo === "funil" && auto.config.estagio_id && x && !(((base.funis || []).find(fn => fn.id === x) || {}).estagios || []).some(e => e.id === auto.config.estagio_id)) {
-              delete auto.config.estagio_id; pintarQuando();
+              delete auto.config.estagio_id;
+            }
+            set(x || null);
+            // a lista de etapas («Só nesta etapa») é a do funil escolhido: refaz sempre que o funil muda, mesmo sem etapa marcada
+            if (f.tipo === "funil" && ((L.GATILHO[auto.gatilho] || {}).campos || []).some(c => c.filtraPor === f.nome)) {
+              pintarQuando();
+              const s = blocoQuando.querySelector(`[data-cfg="${f.nome}"] select`);
+              if (s) s.focus({ preventScroll: true });       // o seletor foi redesenhado: o teclado continua nele
             }
           } });
       }
@@ -355,11 +423,14 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   }
 
   function adicionar(tipo) {
-    auto.acoes.push(L.novaAcao(tipo));
+    const ac = L.novaAcao(tipo);
+    frescos.add(ac);   // não nasce em vermelho: o «Falta…» só aparece quando a pessoa sai do passo ou tenta salvar/testar
+    auto.acoes.push(ac);
     paletaAberta = false;
     pintarEntao(); mudou("entao");
     const cards = blocoEntao.querySelectorAll(".au-passo");
     const ult = cards[cards.length - 1];
+    if (ult) ult.addEventListener("focusout", ev => { if (ult.contains(ev.relatedTarget)) return; if (frescos.delete(ac)) pintarValidacao(); });
     if (ult) { ult.scrollIntoView({ block: "nearest", behavior: ui.comportamentoRolagem() }); const f = ult.querySelector("input,select,textarea,.au-chip"); if (f) f.focus({ preventScroll: true }); }
   }
 
@@ -464,8 +535,10 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           } });
       case "etiqueta": {
         const op = opcoesBase(dados, "etiqueta");
-        if (!v && ac.etiqueta_nome) op.unshift({ valor: "__nova", rotulo: `Criar a etiqueta «${ac.etiqueta_nome}» ao salvar` });
-        return seletor({ rotulo: f.rotulo, valor: v || (ac.etiqueta_nome ? "__nova" : ""), opcoes: op, vazio: "Escolha a etiqueta…", desabilitado: dis,
+        // «criar ao salvar» só existe no passo «etiquetar» (o banco cria pelo nome); em «Pôr etiqueta» é preciso escolher uma que já existe
+        const criaPeloNome = ac.tipo === "etiquetar" && !v && !!ac.etiqueta_nome;
+        if (criaPeloNome) op.unshift({ valor: "__nova", rotulo: `Criar a etiqueta «${ac.etiqueta_nome}» ao salvar` });
+        return seletor({ rotulo: f.rotulo, valor: v || (criaPeloNome ? "__nova" : ""), opcoes: op, vazio: "Escolha a etiqueta…", desabilitado: dis,
           obrigatorio: true, ajuda: !op.length ? semOpcoes("etiqueta") : null,
           aoMudar: x => { if (x === "__nova") { delete ac.etiqueta_id; } else { delete ac.etiqueta_nome; set(x || null); } mudou("entao"); } });
       }
@@ -618,7 +691,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
 
   /** Mostra os problemas onde eles estão (bloco, condição, passo) — só nas partes que a pessoa já mexeu. */
   function pintarValidacao() {
-    const ps = L.problemas(auto, { base, ligar: !!auto.ativo });
+    const ps = L.problemas(auto, { base, ligar: !!auto.ativo })
+      .filter(p => !(p.onde === "entao" && p.indice != null && frescos.has(auto.acoes[p.indice])));
     for (const [onde, bloco] of [["quando", blocoQuando], ["se", blocoSe], ["entao", blocoEntao]]) {
       const e = bloco.querySelector(".au-bloco-erro");
       if (!e) continue;
@@ -647,9 +721,11 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     atualizarPrevia();
     if (opcoes && opcoes.tempo) atualizarTempos();
     pintarValidacao();
+    guardarRascunho();
   }
 
   function mostrarErro(r) {
+    frescos.clear();
     tocado.add(r.onde === "nome" ? "nome" : r.onde);
     pintarValidacao();
     const onde = r.onde === "nome" ? null : { quando: blocoQuando, se: blocoSe, entao: blocoEntao }[r.onde];
@@ -683,6 +759,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const p = (async () => {
       const salvo = await ctx.api.rpcC("nx_automacao_salvar", { p_auto: L.limpar(auto) });
       salvoJson = JSON.stringify(L.limpar(salvo));
+      if (rasc) rasc.apagar(idRasc);            // salvo: o rascunho (inclusive um antigo ainda oferecido) perde o sentido
       if (amb.limparRascunho) amb.limparRascunho();
       ui.toast(salvo.ativo ? `«${salvo.nome}» salva e ligada.` : `«${salvo.nome}» salva (desligada).`, { tipo: "ok" });
       ctx.navegar("#/automacoes");
@@ -819,9 +896,12 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           execFiltro = k; filtro.querySelectorAll(".au-chip").forEach(c => c.setAttribute("aria-checked", String(c === b))); desenhar(); } });
         filtro.appendChild(b);
       }
+      // quem edita pode impedir o que ainda ia sair (antes a única saída era desligar a automação inteira)
+      const btCancelarTodas = podeEditar && contagem.espera > 0 ? h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("parar"), "Cancelar todas as esperas") : null;
+      if (btCancelarTodas) btCancelarTodas.addEventListener("click", () => cancelarEspera(null, btCancelarTodas));
       painelExec.appendChild(h("div", { class: "au-ex-cab" },
         h("p", { class: "sub" }, `As últimas ${Math.min(arr.length, execLimite)} execuções. Erro numa automação não atrapalha as outras.`),
-        btAtualizar));
+        h("div", { class: "linha" }, btCancelarTodas, btAtualizar)));
       P.setas(filtro);
       painelExec.appendChild(filtro);
       painelExec.appendChild(corpoLista);
@@ -839,6 +919,22 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     }
   }
 
+  /** Cancela a espera de um registro (x) ou todas as desta automação (x = null): os passos que ainda iam rodar não saem mais. */
+  async function cancelarEspera(x, botao) {
+    const ok = await ui.confirmar(x
+      ? { titulo: "Cancelar esta espera?", rotulo: "Sim, cancelar a espera", perigo: true,
+        texto: "Os passos que ainda iam rodar para este registro (mensagem, tarefa, aviso) não saem mais. O que já foi feito continua, e a automação segue ligada para os próximos." }
+      : { titulo: "Cancelar todas as esperas?", rotulo: "Sim, cancelar as esperas", perigo: true,
+        texto: "Ninguém que está em espera nesta automação recebe os passos que faltavam (mensagem, tarefa, aviso). O que já foi feito continua, e a automação segue ligada para os próximos." });
+    if (!ok) return;
+    try {
+      const r = await ui.carregando(botao, ctx.api.rpcC("nx_automacao_cancelar_espera", { p_id: item.id, p_chave: x ? x.chave : null }));
+      const n = Number(r && r.canceladas) || 0;
+      ui.toast(n === 0 ? "Não havia espera para cancelar: ela pode ter acabado de rodar." : n === 1 ? "1 espera cancelada." : `${n} esperas canceladas.`, { tipo: n ? "ok" : "info" });
+      pintarExecucoes({ foco: "atualizar" });
+    } catch (e) { ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e)), { tipo: "erro" }); }
+  }
+
   function linhaExecucao(x) {
     const sit = L.situacaoExecucao(x);
     const detalhe = L.detalheLegivel(x.detalhe, c => ctx.api.mensagemErro({ codigo: c })) || (sit === "ok" ? "Feito." : sit === "espera" ? "Esperando para continuar." : sit === "pulado" ? "Pulada." : "Erro.");
@@ -847,6 +943,9 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const rotuloSit = sit === "ok" ? "Deu certo: " : sit === "espera" ? "Em espera: " : sit === "pulado" ? "Pulada ou parada: " : "Erro: ";
     const estadoTxt = L.estadoExecucaoTexto(x);
     const retoma = sit === "espera" && x.continua_em ? ` · continua ${ui.dataHoraBR(x.continua_em)}` : "";
+    const abrir = x.link && /^#\//.test(String(x.link)) ? h("a", { class: "bt bt-fant bt-p au-ex-abrir", href: x.link }, "Abrir", ui.icone("seta-dir")) : null;
+    const btParar = podeEditar && sit === "espera" && x.chave ? h("button", { type: "button", class: "bt bt-sec bt-p", "aria-label": "Cancelar esta espera" }, "Cancelar") : null;
+    if (btParar) btParar.addEventListener("click", () => cancelarEspera(x, btParar));
     return h("li", { class: ["au-ex", sit === "erro" && "au-ex-erro", sit === "pulado" && "au-ex-pulado", sit === "espera" && "au-ex-espera"] },
       h("span", { class: "au-ex-ic", "aria-hidden": "true" }, ui.icone(icone)),
       h("div", { class: "au-ex-txt" },
@@ -854,7 +953,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         estadoTxt ? h("p", { class: "au-ex-estado" }, `${estadoTxt}${retoma}`) : null,
         h("p", { class: "au-ex-det" }, h("span", { class: "sr-only" }, rotuloSit), detalhe),
         h("p", { class: "au-ex-quando mono", title: ui.dataHoraBR(x.criado_em) }, `${ui.dataHoraBR(x.criado_em)} · ${ui.relativo(x.criado_em)}`)),
-      x.link && /^#\//.test(String(x.link)) ? h("a", { class: "bt bt-fant bt-p au-ex-abrir", href: x.link }, "Abrir", ui.icone("seta-dir")) : null);
+      abrir || btParar ? h("div", { class: "au-ex-acoes" }, btParar, abrir) : null);
   }
 
   function mostrarAba(id) {

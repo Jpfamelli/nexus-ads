@@ -13,6 +13,7 @@ const INTERVALO_PULSO = 30000;
 let L = null, G = null;
 let montagem = 0, cancelarPulso = null, cancelarOcupado = null, tPulso = 0, ultimaCarga = 0, ultimoJson = "";
 let ultimoDado = null, maisAberto = false, ultimoOnb = null, ultimaAgenda = null;
+let donoDados = "";        // «empresa|conta» a quem pertencem os últimos dados guardados acima (a aba não recarrega ao trocar de empresa)
 
 export function desmontar() {
   montagem++;
@@ -39,6 +40,9 @@ export async function montar(ctx) {
     } catch (e) { ui.limpar(raiz); raiz.append(ui.erroCartao(e, () => montar(ctx))); return; }
   }
   if (minha !== montagem) return;
+  // outra empresa (ou outra conta): o último checklist e os últimos números eram da anterior e não podem aparecer nesta
+  const dono = `${ctx.cliente.id}|${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`;
+  if (donoDados !== dono) { ultimoOnb = null; ultimoDado = null; ultimaAgenda = null; ultimoJson = ""; maisAberto = false; donoDados = dono; }
   const h = G.criarH(ui);
   const V = ctx.vocab || {};
   const vmin = (k, p) => (typeof V.min === "function" ? V.min(k) : (V[k] || p).toLowerCase());
@@ -59,6 +63,11 @@ export async function montar(ctx) {
   const chaveOnb = `nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`;
   const lerOnb = () => { try { const p = JSON.parse(localStorage.getItem(chaveOnb) || "{}"); return { pulados: Array.isArray(p.pulados) ? p.pulados : [], dispensadoAte: Number(p.dispensadoAte) || 0 }; } catch { return { pulados: [], dispensadoAte: 0 }; } };
   const gravarOnb = p => { try { localStorage.setItem(chaveOnb, JSON.stringify(p)); } catch { /* sem storage */ } };
+  // o checklist só cobra o que esta pessoa consegue abrir nas Configurações (a mesma régua do config.js: seção pronta, módulo do plano e papel)
+  const podeSecao = L.filtroSecoesOnboarding({ temModulo: ctx.temModulo, pode: ctx.pode, configPronta: ctx.configPronta });
+  const resumoOnb = onb => { const local = lerOnb(); return L.resumoOnboarding(onb, { pulados: local.pulados, dispensadoAte: local.dispensadoAte, admin, podeSecao }); };
+  // a palavra da agenda na vertical (consulta / visita / entrega), a mesma das Automações
+  const palavra = L.palavraAgenda(V.vertical || (ctx.cliente && ctx.cliente.vertical));
 
   // cabeçalho: saudação pequena em cima, manchete no degrau display, hora da leitura + Atualizar
   const quando = h("p", { class: "rel-nota", "aria-live": "polite" });
@@ -79,10 +88,12 @@ export async function montar(ctx) {
     catch { return null; }          // a agenda é um complemento: sem ela a frase só não fala de consulta
   }
 
-  async function buscarOnboarding() {
+  async function buscarOnboarding(reler = true) {
     if (!admin) return null;
+    // no pulso: checklist completo ou dispensado não tem cartão a mostrar, então a consulta não é refeita (volta ao abrir a tela ou em «Atualizar»)
+    if (!reler && ultimoOnb && resumoOnb(ultimoOnb) === null) return ultimoOnb;
     try { return await ctx.api.rpcC("nx_onboarding_estado", {}); }
-    catch { return ultimoOnb; }          // sem o checklist a tela segue (a RPC é um complemento: vale o último estado conhecido)
+    catch { return ultimoOnb; }          // sem o checklist a tela segue (a RPC é um complemento: vale o último estado conhecido, desta empresa)
   }
 
   async function carregar({ forcar = false, primeira = false } = {}) {
@@ -91,7 +102,7 @@ export async function montar(ctx) {
     try {
       // 1ª abertura: pinta o último dado guardado (se o shell tiver cache) e confere na rede em seguida
       const aoCache = dados => { if (minha === montagem && !desenhou && dados && typeof dados === "object") { desenhou = true; desenhar(dados, null, false); } };
-      const [d, agenda, onb] = await Promise.all([ctx.api.rpcC("nx_inicio", {}, { cache: true, aoCache }), buscarAgenda(), buscarOnboarding()]);
+      const [d, agenda, onb] = await Promise.all([ctx.api.rpcC("nx_inicio", {}, { cache: true, aoCache }), buscarAgenda(), buscarOnboarding(forcar || primeira)]);
       ultimoOnb = onb; ultimaAgenda = agenda;
       if (minha !== montagem) return;
       ultimaCarga = Date.now();
@@ -149,13 +160,12 @@ export async function montar(ctx) {
     const links = { conversas: podeConversas ? "#/conversas?aba=aguardando" : null, tarefas: podeTarefas ? "#/tarefas?aba=atrasadas" : null,
       agenda: podeAgenda ? "#/agenda" : null, crm: podeCrm ? "#/crm" : null };
     const m = L.manchete(d, { agenda, links, voc: { contato: vmin("contato", "cliente"), contatos: vmin("contatos", "clientes"),
-      negocio: vmin("negocio", "negócio"), negocios: vmin("negocios", "negócios"), feminino: fem } });
+      negocio: vmin("negocio", "negócio"), negocios: vmin("negocios", "negócios"), feminino: fem, consulta: palavra.um, consultas: palavra.varios } });
     pintarManchete(m);
     titulo.dataset.tam = m.texto.length > 70 ? "longa" : "curta";     // frase curta ganha o degrau display; a longa cabe em 2-3 linhas no degrau h1
     ui.limpar(corpo);
 
-    const local = lerOnb();
-    const onbRes = L.resumoOnboarding(onb, { pulados: local.pulados, dispensadoAte: local.dispensadoAte, admin });
+    const onbRes = resumoOnb(onb);
     if (L.inicioVazio(d)) {
       // cliente zerado: a órbita com os satélites que acendem conforme os passos ficam prontos (M09 + M32)
       const feito = ids => !!(onb && Array.isArray(onb.itens) && ids.every(id => (onb.itens.find(i => i.id === id) || {}).feito));
@@ -163,7 +173,7 @@ export async function montar(ctx) {
         texto: admin ? "Três passos e o Órbita já recebe e responde pelo WhatsApp." : "Peça ao administrador da sua empresa para concluir a configuração.",
         passos: [{ rotulo: "Conectar o WhatsApp", feito: feito(["chave_codewords", "aparelho_pareado", "recebimento"]) }, { rotulo: "Convidar a equipe", feito: feito(["colega_convidado"]) },
           { rotulo: "Ajustar o funil", feito: feito(["funil_ajustado"]) }],
-        acao: admin ? { rotulo: "Conectar o WhatsApp", fn: () => ctx.navegar("#/config/numeros?assistente=novo") } : null })));
+        acao: admin && podeSecao({ id: "chave_codewords" }) ? { rotulo: "Conectar o WhatsApp", fn: () => ctx.navegar("#/config/numeros?assistente=novo") } : null })));
       if (onbRes) corpo.append(cartaoChecklist(onbRes));
       trocar();
       return;
@@ -240,7 +250,7 @@ export async function montar(ctx) {
             podeTarefas ? h("a", { class: "rel-link", href: "#/tarefas" }, "Ver todas") : null),
           h("div", { class: "ini-numeros ini-numeros-2" },
             numT(t.hoje, "para hoje", "#/tarefas?aba=hoje", "t-hj", "ini-n", "tarefas.hoje"),
-            numT(t.atrasadas, "atrasadas", "#/tarefas?aba=atrasadas", "t-at", `ini-n${+t.atrasadas ? " ini-n-ruim" : ""}`, "tarefas.atrasadas")),
+            numT(t.atrasadas, +t.atrasadas === 1 ? "atrasada" : "atrasadas", "#/tarefas?aba=atrasadas", "t-at", `ini-n${+t.atrasadas ? " ini-n-ruim" : ""}`, "tarefas.atrasadas")),
           h("p", { class: "rel-olho ini-sub" }, "Próximas"), lista);
       },
 

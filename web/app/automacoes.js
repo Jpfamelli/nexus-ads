@@ -14,7 +14,7 @@ let PE = null;             // auto-pecas.js
 let ED = null;             // auto-editor.js
 let montagem = 0;          // descarta respostas de montagens antigas
 let cancelarPulso = null;
-let rascunhoIA = null;     // {auto, explicacao, avisos} — a montagem da IA que o editor abre (só na memória)
+let rascunhoIA = null;     // {auto, explicacao, avisos} — a montagem da IA que o editor abre (a cópia da aba fica em rascunhosDe(ctx), chave «ia»)
 let textoIA = "";          // o que a pessoa já digitou na caixa «Criar com IA» (sobrevive a voltar da lista)
 let donoIA = "";           // «cliente|conta» a quem pertencem textoIA e rascunhoIA: outro cliente ou outra pessoa nunca os vê
 
@@ -33,6 +33,22 @@ async function modulos(ctx, editor) {
   if (!PE) PE = await import(`./auto-pecas.js?v=${v}`);
   if (editor && !ED) ED = await import(`./auto-editor.js?v=${v}`);
   return { L, P: PE.pecas(ctx.ui, L), ED };
+}
+
+/**
+ * Rascunhos guardados na aba (sessionStorage), por empresa + conta + automação: o que ainda não foi salvo sobrevive a recarregar a página,
+ * ao Voltar, ao menu e à paleta. «nova» = a automação ainda sem id; «ia» = a montagem da IA (não gasta a cota de novo). Some ao fechar a aba.
+ * Tudo em try/catch: sem storage (janela anônima cheia, bloqueio) o editor funciona igual, só sem a rede de proteção.
+ */
+function rascunhosDe(ctx) {
+  const cli = ctx.cliente ? ctx.cliente.id : "-";
+  const conta = ctx.sessao && ctx.sessao.conta ? (ctx.sessao.conta.id || ctx.sessao.conta.email || "-") : "-";
+  const chave = id => L.chaveRascunho(cli, conta, id);
+  return {
+    ler(id) { try { return L.lerRascunho(sessionStorage.getItem(chave(id))); } catch { return null; } },
+    guardar(id, auto, extra) { try { sessionStorage.setItem(chave(id), L.empacotarRascunho(auto, extra)); return true; } catch { return false; } },
+    apagar(id) { try { sessionStorage.removeItem(chave(id)); } catch { /* sem storage */ } },
+  };
 }
 
 let limpezas = [];         // o que a tela montada precisa desfazer ao sair (ex.: a altura do cabeçalho fixo no scroll-padding)
@@ -71,11 +87,13 @@ export async function montar(ctx) {
   ui.limpar(raiz);
   dados.itens = dados.itens || [];
   dados.base = dados.base || {};
+  const rascunhos = rascunhosDe(ctx);
   const amb = {
     L, P: pecas.P,
     rascunho: null,
+    rascunhos,
     duplicar: (c, a) => duplicar(c, a, dados.base),
-    limparRascunho: () => { rascunhoIA = null; },
+    limparRascunho: () => { rascunhoIA = null; rascunhos.apagar("ia"); },
     aoSair: f => { limpezas.push(f); },
     testarAoAbrir: false,
   };
@@ -83,8 +101,10 @@ export async function montar(ctx) {
   if (parte === "nova") {
     if (!dados.pode_editar) return semEditar(ctx, raiz);
     if (ctx.rota.query && ctx.rota.query.ia === "1") {
+      // a memória se perde ao recarregar a página (ou ao sair do módulo): a montagem volta do que ficou guardado na aba
+      if (!rascunhoIA) { const g = rascunhos.ler("ia"); if (g) rascunhoIA = { auto: g.auto, explicacao: g.explicacao, avisos: g.avisos }; }
       if (rascunhoIA) amb.rascunho = rascunhoIA;
-      else ui.toast("A montagem da IA não foi guardada (a página foi recarregada). Descreva de novo na caixa «Criar com IA».", { tipo: "info" });
+      else ui.toast("Não encontramos mais a montagem da IA nesta aba. Descreva de novo na caixa «Criar com IA».", { tipo: "info" });
     }
     return ED.telaEditor(ctx, raiz, dados, null, amb);
   }
@@ -292,7 +312,11 @@ function resultadoIA(ctx, dados, m, tentarOutra) {
   const frase = L.descrever(m.auto, dados.base, ctx.vocab);
   const problema = L.validar(m.auto, { base: dados.base, ligar: false });
   const abrir = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("seta-dir"), "Conferir e ajustar no editor");
-  abrir.addEventListener("click", () => { rascunhoIA = m; ctx.navegar("#/automacoes/nova?ia=1"); });
+  abrir.addEventListener("click", () => {
+    rascunhoIA = m;
+    rascunhosDe(ctx).guardar("ia", m.auto, { explicacao: m.explicacao, avisos: m.avisos });   // recarregar a página não gasta a cota de IA de novo
+    ctx.navegar("#/automacoes/nova?ia=1");
+  });
   const outra = h("button", { type: "button", class: "bt bt-fant" }, "Pedir de outro jeito");
   outra.addEventListener("click", tentarOutra);
   return h("div", { class: "au-ia-res", role: "status" },

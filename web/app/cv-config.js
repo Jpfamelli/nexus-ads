@@ -98,7 +98,20 @@ async function montarNumeros(ctx, alvo) {
   function erroFuncao(e) {
     const c = e && e.codigo;
     if (c === "http_404" || c === "sem_conexao" || /^http_5/.test(String(c))) return "A função de WhatsApp não respondeu agora. Tente de novo em alguns minutos.";
+    // aqui o servidor diz qual número/aparelho está errado: essa frase ajuda mais que a genérica
+    if ((c === "numero_diferente" || c === "aparelho_nao_encontrado") && e.detalhe_texto) return String(e.detalhe_texto).slice(0, 300);
     return ui.mensagemErro(e);
+  }
+
+  /** O teste confirmado no assistente («Sim, chegou») conta no checklist do Início neste aparelho — a mesma chave local do «Já está bom».
+      O servidor só enxerga mensagens de conversas; o teste vai direto ao próprio número e não entra lá. */
+  function marcarTesteNoChecklist() {
+    try {
+      const chave = `nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`;
+      const p = JSON.parse(localStorage.getItem(chave) || "{}") || {};
+      p.pulados = [...new Set([...(Array.isArray(p.pulados) ? p.pulados : []), "mensagem_teste"])];
+      localStorage.setItem(chave, JSON.stringify(p));
+    } catch { /* sem storage: o item segue pendente até a primeira mensagem de verdade */ }
   }
 
   async function testar(c, botao) {
@@ -219,7 +232,12 @@ async function montarNumeros(ctx, alvo) {
       opcoes: base.departamentos.map(d => ({ valor: d.id, rotulo: d.nome })) }) : null;
     const campoService = ui.campo({ rotulo: "Service ID do fluxo de IA", nome: "codewords_service_id", valor: cw.service_id || "", max: 120, autocomplete: "off",
       ajuda: "O identificador do fluxo do agente no CodeWords. Necessário para a IA atender." });
-    const campoIA = ui.campo({ rotulo: "IA atendendo 24h", nome: "ia_ligada", tipo: "interruptor",
+    const inpService = campoService.querySelector('input[name="codewords_service_id"]');
+    // aparece depois de copiar o prompt: diz o que colar aqui na volta do CodeWords
+    const dicaService = h("p", { class: "sub", role: "status", hidden: true }, "Prompt copiado. Quando o CodeWords terminar de publicar o fluxo, cole aqui o Service ID que ele mostrar.");
+    const dicaFluxoId = `cfg-cw-fluxo-${Math.random().toString(36).slice(2, 7)}`;
+    const dicaFluxo = h("p", { class: "sub", id: dicaFluxoId }, "Para ligar, cole antes o Service ID no campo do item 2.");
+    const campoIA =ui.campo({ rotulo: "IA atendendo 24h", nome: "ia_ligada", tipo: "interruptor",
       valor: cw.rota === "direta" ? false : (cw.ia_ligada ?? atual?.ia_ligada ?? true),
       ajuda: "Quando desligada, o fluxo não responde automaticamente por este número." });
     const campoVolta = ui.campo({ rotulo: "A IA volta automaticamente após", nome: "ia_volta_horas", tipo: "select", valor: String(cw.ia_volta_horas ?? 6),
@@ -274,9 +292,9 @@ async function montarNumeros(ctx, alvo) {
           h("p", { class: "sub" }, h("strong", null, "1. "), "Copie o prompt, cole no CodeWords e peça para publicar o fluxo."),
           h("div", { class: "linha" }, bPrompt), receitaBox,
           h("p", { class: "sub" }, h("strong", null, "2. "), "Cole abaixo o Service ID que o CodeWords mostrar quando terminar."),
-          campoService, campoIA, campoVolta, h("p", { class: "sub" }, "Esse prazo começa quando alguém da equipe assume uma conversa."),
+          dicaService, campoService, campoIA, campoVolta, h("p", { class: "sub" }, "Esse prazo começa quando alguém da equipe assume uma conversa."),
           h("p", { class: "sub" }, h("strong", null, "3. "), "Ligue o número na IA. É o Órbita que faz essa ligação: no CodeWords não precisa mexer em nada."),
-          h("div", { class: "linha cfg-cw-ops-actions" }, bFluxo, bPrefs)),
+          h("div", { class: "linha cfg-cw-ops-actions" }, bFluxo, bPrefs), dicaFluxo),
         h("section", { class: "cartao cfg-cw-direto" },
           h("div", { class: "cfg-cw-ia-head" }, ui.icone("usuario"), h("div", null, h("h4", { class: "titulo-sec" }, "A equipe atende"),
             h("p", { class: "sub" }, "As mensagens chegam direto na caixa Conversas do Órbita, sem IA no meio."))),
@@ -351,15 +369,45 @@ async function montarNumeros(ctx, alvo) {
       return r;
     }
 
+    /* ---- erro que diz o campo: o servidor chama o número de «numero»; a tela, de «numero_exibicao» */
+    const CAMPO_DO_HINT = { numero: "numero_exibicao", departamento: "departamento_id", service_id: "codewords_service_id", api_key: "codewords_api_key" };
+    const TEXTO_DO_CAMPO = {
+      nome: "Informe o nome do canal (até 40 letras).",
+      numero_exibicao: "Informe o número com DDI e DDD, ex.: +55 12 99999-9999",
+      codewords_service_id: "Cole só o identificador do fluxo, sem a URL.",
+      codewords_api_key: "Use uma chave reutilizável cwk- com pelo menos 20 caracteres.",
+      departamento_id: "Escolha um departamento da lista.",
+    };
+    /** Marca o erro no campo e, se ele estiver num passo recolhido, abre o passo antes (senão o aviso fica escondido). Devolve false se o campo não existe na tela. */
+    function erroNoCampo(nome, texto) {
+      const el = form.querySelector(`[data-campo="${nome}"]`);
+      if (!el) return false;
+      const li = el.closest(".cfg-step");
+      const x = li ? passosEl.get(li.dataset.passo) : null;
+      if (x && x.corpoEl.hidden) { expandido = li.dataset.passo; desenharPassos(); }
+      if (nome === "codewords_api_key" && chaveWrap.hidden) { chaveWrap.hidden = false; trocarChave.hidden = true; }
+      ui.marcarErro(form, nome, texto || TEXTO_DO_CAMPO[nome] || "Confira este campo.");
+      return true;
+    }
+    /** Erro do servidor que aponta um campo (hint): mostra no campo certo. Devolve true se tratou. */
+    function erroDoServidorNoCampo(e) {
+      const hint = e?.hint ? String(e.hint) : "";
+      const nome = CAMPO_DO_HINT[hint] || hint;
+      if (!nome || !/^[a-z_]+$/.test(nome)) return false;
+      if (e?.codigo === "dados_invalidos") return erroNoCampo(nome);
+      if (e?.codigo === "numero_em_uso") return erroNoCampo(nome, "Esse número já está conectado em outro canal ou em outra empresa.");
+      return false;
+    }
+
     async function salvarConfiguracao({ silencioso = false } = {}) {
       const d = ui.lerForm(form); ui.marcarErro(form, null);
-      if (!d.nome) { ui.marcarErro(form, "nome", "Informe o nome do canal."); return false; }
-      if (!/^\+?[0-9 ()-]{8,30}$/.test(String(d.numero_exibicao || ""))) { ui.marcarErro(form, "numero_exibicao", "Informe o número com DDI e DDD."); return false; }
+      if (!d.nome) { erroNoCampo("nome", "Informe o nome do canal."); return false; }
+      if (!/^\+?[0-9 ()-]{8,30}$/.test(String(d.numero_exibicao || ""))) { erroNoCampo("numero_exibicao"); return false; }
       const apiKey = String(d.codewords_api_key || "").trim();
-      if (!atual?.id && !apiKey) { ui.marcarErro(form, "codewords_api_key", "Cole a chave reutilizável do plano pago."); return false; }
-      if (apiKey && (apiKey.length < 20 || !apiKey.startsWith("cwk-") || /\s/.test(apiKey))) {
-        ui.marcarErro(form, "codewords_api_key", "Use uma chave reutilizável cwk- com pelo menos 20 caracteres."); return false;
-      }
+      if (!atual?.id && !apiKey) { erroNoCampo("codewords_api_key", "Cole a chave reutilizável do plano pago."); return false; }
+      if (apiKey && (apiKey.length < 20 || !apiKey.startsWith("cwk-") || /\s/.test(apiKey))) { erroNoCampo("codewords_api_key"); return false; }
+      // a mesma regra do servidor: quem cola a URL do fluxo no lugar do identificador fica sabendo aqui
+      if (d.codewords_service_id && !/^[A-Za-z0-9_-]{1,120}$/.test(String(d.codewords_service_id))) { erroNoCampo("codewords_service_id"); return false; }
       const payload = { nome: d.nome, numero_exibicao: d.numero_exibicao,
         departamento_id: d.departamento_id || null, ia_ligada: !!d.ia_ligada, ia_volta_horas: Number(d.ia_volta_horas ?? 6) };
       if (atual?.id) payload.id = atual.id;
@@ -379,17 +427,14 @@ async function montarNumeros(ctx, alvo) {
             ia_volta_horas: Number(d.ia_volta_horas ?? 6) } };
         if (apiKey) { chaveSalva.replaceChildren(ui.pilula("Chave salva com segurança", "ok", { icone: "cadeado" })); chaveWrap.hidden = true; trocarChave.hidden = false; }
         ui.limpar(codigoPareamento); codigoPareamento.hidden = true;
-        ui.limpar(receitaBox); receitaBox.hidden = true;
+        ui.limpar(receitaBox); receitaBox.hidden = true; dicaService.hidden = true;
         if (expandido === "chave") expandido = null;
         desenharPassos();
         carregar();
         if (!silencioso) ui.toast("Número e preferências salvos.", { tipo: "ok" });
         return true;
       } catch (e) {
-        const hint = e?.hint;
-        if (e?.codigo === "dados_invalidos" && hint && form.querySelector(`[data-campo="${hint}"]`)) {
-          ui.marcarErro(form, hint, "Confira este campo."); return false;
-        }
+        if (erroDoServidorNoCampo(e)) return false;
         ui.toast(ui.mensagemErro(e), { tipo: "erro" });
         return false;
       }
@@ -405,7 +450,11 @@ async function montarNumeros(ctx, alvo) {
         const r = await ctx.api.fn("nx-codewords", { acao, canal: atual.id, ...payload });
         if (!r?.ok) throw Object.assign(new Error(r?.detalhe || r?.erro || "A ação não foi concluída."), { detalhe_texto: r?.detalhe || r?.erro });
         return r;
-      } catch (e) { if (!silencioso) ui.toast(erroFuncao(e), { tipo: "erro" }); return null; }
+      } catch (e) {
+        // falta um dado da tela (ex.: Service ID para ligar na IA): o aviso vai no campo, não num toast genérico
+        if (!silencioso && !erroDoServidorNoCampo(e)) ui.toast(erroFuncao(e), { tipo: "erro" });
+        return null;
+      }
     }
 
     bSalvar.addEventListener("click", async () => { await ui.carregando(bSalvar, salvarConfiguracao()); });
@@ -466,16 +515,48 @@ async function montarNumeros(ctx, alvo) {
       ui.limpar(resultadoTeste);
       const chegou = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("check"), "Sim, chegou");
       const naoChegou = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Ainda não chegou");
-      chegou.addEventListener("click", () => { testeChegou = true; ui.limpar(resultadoTeste); desenharPassos(); ui.toast("Tudo pronto: o número está recebendo e enviando.", { tipo: "ok" }); });
+      chegou.addEventListener("click", () => { testeChegou = true; marcarTesteNoChecklist(); ui.limpar(resultadoTeste); desenharPassos(); ui.toast("Tudo pronto: o número está recebendo e enviando.", { tipo: "ok" }); });
       naoChegou.addEventListener("click", () => { ui.limpar(resultadoTeste); resultadoTeste.append(h("p", { class: "sub" }, "Confira se o celular do número está com internet e o WhatsApp aberto, depois envie de novo. Se continuar, volte ao passo 3 e toque em «Conferir agora».")); });
       resultadoTeste.append(ui.pilula("Enviada ✓", "ok"), h("span", { class: "sub" }, "Chegou no WhatsApp do número conectado?"), chegou, naoChegou);
       desenharPassos();
       ui.toast("O CodeWords aceitou o teste. Confira o WhatsApp do número conectado.", { tipo: "ok" });
     });
-    bPrompt.addEventListener("click", async () => {
-      if (!await guardarAntesDaAcao()) return;
-      const r = await acaoCodeWords("receita"); if (!r) return;
-      const texto = r.prompt || "";
+    // «Ligar o número na IA» só acende com o Service ID preenchido (antes o clique sem ID só soltava um aviso)
+    const ajustarFluxo = () => {
+      const falta = !inpService.value.trim();
+      bFluxo.disabled = falta;
+      bFluxo.title = falta ? "Cole antes o Service ID que o CodeWords mostrar." : "";
+      if (falta) bFluxo.setAttribute("aria-describedby", dicaFluxoId); else bFluxo.removeAttribute("aria-describedby");
+      dicaFluxo.hidden = !falta;
+    };
+    inpService.addEventListener("input", ajustarFluxo);
+    ajustarFluxo();
+
+    bPrompt.addEventListener("click", () => {
+      if (bPrompt.disabled) return;
+      // salva e busca o prompt DENTRO do clique: a cópia recebe a promessa do texto ainda no gesto (Safari/iPhone recusam copiar depois de esperar)
+      const receita = (async () => {
+        if (!await guardarAntesDaAcao()) return null;
+        const r = await acaoCodeWords("receita");
+        return r ? String(r.prompt || "") : null;
+      })();
+      const textoPronto = receita.then(t => { if (!t) throw new Error("sem_prompt"); return t; });
+      textoPronto.catch(() => { /* sem prompt: o aviso do erro já saiu */ });
+      const copiando = typeof ui.copiarDepois === "function"
+        ? ui.copiarDepois(textoPronto, { aviso: null })
+        : textoPronto.then(t => ui.copiar(t, { aviso: null }));
+      // o botão fica travado (aria-busy) até terminar: sem clique duplo, sem dois salvamentos
+      ui.carregando(bPrompt, (async () => {
+        dicaService.hidden = true;
+        const texto = await receita;
+        const ok = await Promise.resolve(copiando).then(v => v === true, () => false);
+        if (texto) mostrarPrompt(texto, ok);
+        else if (texto === "") ui.toast("O prompt veio vazio. Tente de novo em instantes.", { tipo: "erro" });
+      })()).catch(e => console.error("copiar prompt", e));
+    });
+
+    /** A caixa do prompt (fica à mão para copiar de novo) com o resultado da 1ª cópia, que já aconteceu no clique. */
+    function mostrarPrompt(texto, copiou) {
       const pre = h("pre", { class: "cfg-codigo cfg-cw-prompt", tabindex: "0", "aria-label": "Prompt de configuração do CodeWords" }, h("code", {}, texto));
       // deixa o texto inteiro selecionado: se o navegador bloquear a área de transferência, basta Ctrl+C (ou «Copiar» no menu do celular)
       const selecionarTudo = () => {
@@ -485,29 +566,33 @@ async function montarNumeros(ctx, alvo) {
         } catch { /* sem seleção: o texto continua visível para copiar à mão */ }
       };
       const estado = h("p", { class: "sub", role: "status" });
-      const copiarAgora = async () => {
-        const ok = await ui.copiar(texto, { aviso: null });
+      const rotuloCopiar = h("span", null, "Copiar prompt");
+      const copiar = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("copiar"), rotuloCopiar);
+      /** Mostra o que aconteceu com a cópia; o botão só vira «Copiar de novo» quando alguma cópia deu certo. */
+      const mostrarResultado = ok => {
         if (ok) {
+          rotuloCopiar.textContent = "Copiar de novo";
           estado.textContent = "Prompt copiado. Agora é só colar no CodeWords.";
+          dicaService.hidden = false;
           ui.toast("Prompt copiado. Cole no CodeWords e mantenha a URL secreta privada.", { tipo: "ok" });
+          // a volta do CodeWords é por aqui: o foco já espera no campo do Service ID (rolagem mínima, a caixa do prompt segue à vista)
+          try { inpService.focus({ preventScroll: true }); campoService.scrollIntoView({ block: "nearest", behavior: ui.comportamentoRolagem() }); } catch { /* navegador antigo */ }
         } else {
+          try { receitaBox.scrollIntoView({ block: "nearest", behavior: ui.comportamentoRolagem() }); } catch { /* navegador antigo */ }
           selecionarTudo();
-          estado.textContent = "O navegador não deixou copiar sozinho. O texto já está selecionado: aperte Ctrl+C (no celular, toque em «Copiar»).";
-          ui.toast("Não deu para copiar sozinho. O texto está selecionado: aperte Ctrl+C.", { tipo: "erro" });
+          estado.textContent = "O navegador não deixou copiar sozinho. Toque em «Copiar prompt» aqui embaixo; se não funcionar, o texto já está selecionado: aperte Ctrl+C.";
+          ui.toast("Não deu para copiar sozinho. Toque em «Copiar prompt».", { tipo: "erro" });
         }
-        return ok;
       };
-      const copiar = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("copiar"), "Copiar de novo");
-      copiar.addEventListener("click", copiarAgora);
+      // aqui o texto já está na memória: a cópia sai direto no toque, em qualquer navegador
+      copiar.addEventListener("click", async () => mostrarResultado(await ui.copiar(texto, { aviso: null })));
       const selecionar = h("button", { type: "button", class: "bt bt-sec" }, "Selecionar tudo");
       selecionar.addEventListener("click", selecionarTudo);
       ui.limpar(receitaBox); receitaBox.hidden = false;
       receitaBox.append(h("div", { class: "aviso aviso-aten" }, ui.icone("cadeado"), h("p", null, "O prompt contém a URL secreta deste canal. Cole somente no CodeWords e não compartilhe o texto.")),
         estado, h("div", { class: "linha" }, copiar, selecionar), pre);
-      // um clique só: copia na hora e mostra a caixa (antes o 1º botão só revelava a caixa e parecia que «não copiava»)
-      await copiarAgora();
-      try { receitaBox.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch { /* navegador antigo */ }
-    });
+      mostrarResultado(copiou);
+    }
 
     desenharPassos();
     // número já salvo: confere o aparelho ao abrir (os passos recolhem sozinhos o que já está pronto)
@@ -671,8 +756,10 @@ async function montarNumeros(ctx, alvo) {
   await carregar();
   // M32: o checklist do Início manda para cá com #/config/numeros?assistente=<id do número|novo>: abre o assistente certo e limpa o endereço
   const pedido = ctx.rota && ctx.rota.query && ctx.rota.query.assistente;
-  if (pedido && ctx.pode("admin")) {
-    ctx.navegar("#/config/numeros", { substituir: true });
+  // só enquanto esta lista ainda é a da tela (a pessoa pode ter saído durante a leitura dos números)
+  if (pedido && ctx.pode("admin") && lista.isConnected && /^#\/config\/numeros\?/.test(location.hash)) {
+    // limpa o endereço SEM navegar: ctx.navegar remontaria a seção e o assistente ficaria preso à lista antiga, que nunca mais se atualiza na tela
+    try { history.replaceState(history.state, "", location.pathname + location.search + "#/config/numeros"); } catch { /* o endereço fica com o pedido; o assistente abre igual */ }
     // "novo" (o servidor não apontou um número): o 1º número CodeWords que ainda tem passo a fazer; sem nenhum número, o assistente de um novo
     const c = pedido !== "novo" ? canais.find(x => x.id === pedido)
       : canais.find(x => x.provedor === "codewords" && L.passosCodeWords({ canal: x, estado: estadosCodeWords.get(x.id) }).atual < 6) || canais.find(x => x.provedor !== "codewords" && x.status !== "ativo") || null;

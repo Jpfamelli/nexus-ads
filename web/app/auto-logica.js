@@ -423,9 +423,9 @@ function validarAcao(ac, n, ix, ligar, total) {
       if (!["contato", "conversa"].includes(ac.alvo)) return `${p}: escolha onde pôr a etiqueta`;
       return null;
     case "etiqueta_adicionar": case "etiqueta_remover":
-      if (vazio(ac.etiqueta_id) && !(ac.tipo === "etiqueta_adicionar" && !vazio(ac.etiqueta_nome))) return `${p}: escolha a etiqueta`;
-      if (!vazio(ac.etiqueta_id) && !idOk(ix, "etiquetas", ac.etiqueta_id)) return `${p}: a etiqueta escolhida não existe mais`;
-      if (vazio(ac.etiqueta_id) && texto(ac.etiqueta_nome).trim().length > 40) return `${p}: o nome da etiqueta pode ter até 40 caracteres`;
+      // etiqueta só pelo nome (criada ao salvar) é aceita pelo banco apenas no «etiquetar»: aqui o nx_auto_normalizar exige a etiqueta escolhida
+      if (vazio(ac.etiqueta_id)) return `${p}: escolha a etiqueta`;
+      if (!idOk(ix, "etiquetas", ac.etiqueta_id)) return `${p}: a etiqueta escolhida não existe mais`;
       return null;
     case "campo_atualizar": {
       if (!/^[a-z][a-z0-9_]{1,39}$/.test(texto(ac.campo))) return `${p}: escolha o campo`;
@@ -578,7 +578,7 @@ export function limpar(auto) {
         if (f.quando && Object.entries(f.quando).some(([k, val]) => valorCampo(ac, k) !== val)) continue;
         if (!vazio(v)) x[nome] = typeof v === "string" ? v.trim() : v;
       }
-      if ((ac.tipo === "etiquetar" || ac.tipo === "etiqueta_adicionar") && vazio(ac.etiqueta_id) && !vazio(ac.etiqueta_nome)) x.etiqueta_nome = texto(ac.etiqueta_nome).trim();
+      if (ac.tipo === "etiquetar" && vazio(ac.etiqueta_id) && !vazio(ac.etiqueta_nome)) x.etiqueta_nome = texto(ac.etiqueta_nome).trim();
       if (ac.tipo === "enviar_template" && vazio(ac.template_id) && !vazio(ac.template_nome)) x.template_nome = texto(ac.template_nome).trim();
     }
     out.acoes.push(x);
@@ -1070,6 +1070,30 @@ export function aplicarModelo(modelo, base, vocab) {
     }
   }
   return a;
+}
+
+/* ---------- rascunho do editor: o que ainda não foi salvo fica guardado na aba (sessionStorage) ---------- */
+/** Chave do rascunho: por empresa + conta + automação («nova» = a que ainda não foi salva; «ia» = a montagem da IA). */
+export function chaveRascunho(clienteId, contaId, id) {
+  return `nx-au-rasc:${clienteId || "-"}:${contaId || "-"}:${id || "nova"}`;
+}
+/** O texto que vai para o sessionStorage: a automação como está na tela + a hora (+ a explicação e os avisos da IA, quando há). */
+export function empacotarRascunho(auto, extra = null, agora = Date.now()) {
+  const x = extra || {};
+  return JSON.stringify({ v: 1, em: agora, auto, explicacao: typeof x.explicacao === "string" ? x.explicacao : "", avisos: Array.isArray(x.avisos) ? x.avisos.map(String) : [] });
+}
+/** Lê um rascunho guardado → {auto, em, explicacao, avisos} ou null quando o texto não serve (vazio, corrompido, de um gatilho que não existe mais). */
+export function lerRascunho(textoGuardado) {
+  if (typeof textoGuardado !== "string" || !textoGuardado) return null;
+  let p = null;
+  try { p = JSON.parse(textoGuardado); } catch { return null; }
+  const a = p && p.auto;
+  const objeto = v => !!v && typeof v === "object" && !Array.isArray(v);
+  if (!objeto(p) || !objeto(a) || !GATILHO[a.gatilho]) return null;
+  const lista = v => v === undefined || (Array.isArray(v) && v.every(objeto));
+  if (!lista(a.condicoes) || !lista(a.acoes) || (a.config !== undefined && !objeto(a.config))) return null;
+  if ((a.acoes || []).some(ac => typeof ac.tipo !== "string")) return null;
+  return { auto: copia(a), em: Number(p.em) || 0, explicacao: typeof p.explicacao === "string" ? p.explicacao : "", avisos: Array.isArray(p.avisos) ? p.avisos.map(String) : [] };
 }
 
 /** Automação nova em branco para o gatilho. */

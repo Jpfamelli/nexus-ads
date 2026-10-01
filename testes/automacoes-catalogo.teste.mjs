@@ -1,8 +1,8 @@
 /* ÓRBITA — catálogo compartilhado das automações (painel ⇄ servidor).
    Rodar: node --test testes/automacoes-catalogo.teste.mjs
    O catálogo (web/app/auto-catalogo.js) é a fonte única de gatilhos, ações, campos e limites:
-   o painel desenha o editor a partir dele, a nx-ia (automacao_montar) valida contra ele e a migração
-   20261001a (nx_auto_normalizar) tem de aceitar exatamente o mesmo conjunto. Aqui:
+   o painel desenha o editor a partir dele, a nx-ia (automacao_montar) valida contra ele e o banco
+   (nx_auto_normalizar, na ÚLTIMA migração que o redefine) tem de aceitar exatamente o mesmo conjunto. Aqui:
    1. a cópia que vai para supabase/dist/<função> é BYTE A BYTE a do painel (hash);
    2. a ponte do layout de desenvolvimento enxerga o mesmo módulo;
    3. todo gatilho e toda ação tem rótulo e campos válidos;
@@ -23,7 +23,26 @@ const sha = b => createHash("sha256").update(b).digest("hex");
 
 const CAT = await import("../web/app/auto-catalogo.js");
 const PONTE = await import("../supabase/functions/_compartilhado/auto-catalogo.js");
-const SQL = readFileSync(join(RAIZ, "supabase", "migrations", "20261001a_automacoes_ia.sql"), "utf8");
+const SQL = readFileSync(join(RAIZ, "supabase", "migrations", "20261001a_automacoes_ia.sql"), "utf8");   // constraint, permissões e tarefas da IA
+const L = await import("../web/app/auto-logica.js");
+
+/* O que vale no banco é a ÚLTIMA definição de cada função: uma migração nova que a redefina passa a ser a conferida aqui
+   (ler um arquivo fixo deixava o teste verde olhando para uma versão que o banco já não usa). */
+const MIGRACOES = join(RAIZ, "supabase", "migrations");
+function corpoFuncao(nome) {
+  const marca = `create or replace function public.${nome}(`;
+  for (const arquivo of readdirSync(MIGRACOES).filter(a => a.endsWith(".sql")).sort().reverse()) {
+    const sql = readFileSync(join(MIGRACOES, arquivo), "utf8");
+    const i = sql.lastIndexOf(marca);
+    if (i < 0) continue;
+    const fim = sql.indexOf("\nend $$;", i);
+    assert.ok(fim > i, `${arquivo}: não achei o fim de ${nome}`);
+    return { arquivo, sql: sql.slice(i, fim) };
+  }
+  assert.fail(`nenhuma migração define ${nome}`);
+}
+const NORMALIZAR = corpoFuncao("nx_auto_normalizar");
+const PASSOS = corpoFuncao("nx_auto_passos");
 
 test("montar-funcoes: o catálogo de cada função é a cópia byte a byte do painel", () => {
   const r = spawnSync(process.execPath, [join(RAIZ, "scripts", "montar-funcoes.mjs")], { cwd: RAIZ, encoding: "utf8" });
@@ -144,20 +163,20 @@ const mesmos = (a, b, msg) => assert.deepEqual([...new Set(a)].sort(), [...new S
 test("SQL: a constraint e o nx_auto_normalizar aceitam exatamente os gatilhos do catálogo", () => {
   const catalogo = CAT.GATILHOS.map(g => g.id);
   mesmos(listaSql(SQL, "check (gatilho in ("), catalogo, "constraint nx_automacoes_gatilho_check2");
-  mesmos(listaSql(SQL, "v_gat not in ("), catalogo, "gatilhos do nx_auto_normalizar");
+  mesmos(listaSql(NORMALIZAR.sql, "v_gat not in ("), catalogo, `gatilhos do nx_auto_normalizar (${NORMALIZAR.arquivo})`);
   assert.ok(SQL.includes("p.proname in (") && SQL.includes("'nx_auto_simular'"), "permissões declaradas");
 });
 
 test("SQL: o nx_auto_normalizar aceita exatamente as ações do catálogo", () => {
   const catalogo = CAT.ACOES.map(a => a.id);
-  mesmos(listaSql(SQL, "(x ->> 'tipo', '') not in ("), catalogo, "ações do nx_auto_normalizar");
+  mesmos(listaSql(NORMALIZAR.sql, "(x ->> 'tipo', '') not in ("), catalogo, `ações do nx_auto_normalizar (${NORMALIZAR.arquivo})`);
   // o executor tem um ramo para cada uma (nx_auto_passos)
-  const passos = SQL.slice(SQL.indexOf("function public.nx_auto_passos"), SQL.indexOf("function public.nx_auto_acoes"));
+  const passos = PASSOS.sql;
   for (const id of catalogo) assert.ok(new RegExp(`when [^\\n]*'${id}'`).test(passos), `nx_auto_passos sem ramo para «${id}»`);
 });
 
 test("SQL: todo campo do catálogo é lido pelo normalizador (nome exato)", () => {
-  const norm = SQL.slice(SQL.indexOf("function public.nx_auto_normalizar"), SQL.indexOf("-- 4. Gatilhos de banco novos"));
+  const norm = NORMALIZAR.sql;
   for (const item of [...CAT.GATILHOS, ...CAT.ACOES]) {
     for (const c of item.campos) {
       assert.ok(norm.includes(`'${c.nome}'`) || norm.includes(`->> '${c.nome}'`), `${item.id}.${c.nome}: o nx_auto_normalizar não lê esse campo`);
@@ -166,8 +185,8 @@ test("SQL: todo campo do catálogo é lido pelo normalizador (nome exato)", () =
 });
 
 test("SQL: os limites do catálogo são os do banco", () => {
-  const norm = SQL.slice(SQL.indexOf("function public.nx_auto_normalizar"), SQL.indexOf("-- 4. Gatilhos de banco novos"));
-  const passos = SQL.slice(SQL.indexOf("function public.nx_auto_passos"), SQL.indexOf("function public.nx_auto_acoes"));
+  const norm = NORMALIZAR.sql;
+  const passos = PASSOS.sql;
   for (const k of ["sem_resposta", "tempo_no_estagio", "antes_da_data", "apos_data", "prazo_tarefa", "esperar"]) {
     const [min, max] = CAT.LIMITES[k];
     assert.ok(new RegExp(`between ${min} and ${max}\\b`).test(norm), `faixa ${k}: ${min}..${max} não está no normalizador`);
@@ -185,7 +204,34 @@ test("SQL: os limites do catálogo são os do banco", () => {
 });
 
 test("SQL: a ordem do 'atribuir' (dono/modo) e as tarefas da IA batem com o catálogo", () => {
-  assert.ok(/'rodizio', 'conta', 'departamento'/.test(SQL), "dono: rodizio | conta | departamento");
+  assert.ok(/'rodizio', 'conta', 'departamento'/.test(NORMALIZAR.sql), "dono: rodizio | conta | departamento");
   assert.deepEqual(CAT.ACAO.atribuir.campos.find(c => c.nome === "dono").legado, "modo", "o catálogo avisa que «modo» é o nome antigo");
   for (const t of CAT.TAREFAS_IA.map(x => x[0])) assert.ok(SQL.includes(`'${t}'`), `tarefa da IA ${t} no SQL`);
+});
+
+test("SQL: o teste lê a última migração que redefine o normalizador e o executor (não um arquivo fixo)", () => {
+  const ultima = nome => readdirSync(MIGRACOES).filter(a => a.endsWith(".sql")).sort()
+    .filter(a => readFileSync(join(MIGRACOES, a), "utf8").includes(`create or replace function public.${nome}(`)).pop();
+  assert.equal(NORMALIZAR.arquivo, ultima("nx_auto_normalizar"));
+  assert.equal(PASSOS.arquivo, ultima("nx_auto_passos"));
+  assert.ok(NORMALIZAR.arquivo >= "20261001b_correcoes.sql", `o normalizador em vigor é o de 20261001b ou de uma migração mais nova (lido: ${NORMALIZAR.arquivo})`);
+  assert.ok(NORMALIZAR.sql.startsWith("create or replace function public.nx_auto_normalizar("));
+  assert.ok(!NORMALIZAR.sql.includes("create or replace function public.nx_auto_passos("), "o corpo lido é só o do normalizador");
+});
+
+test("SQL × editor: etiqueta só pelo nome vale em «etiquetar»; «Pôr etiqueta» e «Tirar etiqueta» exigem a etiqueta escolhida, dos dois lados", () => {
+  const norm = NORMALIZAR.sql;
+  const ramo = (de, ate) => { const i = norm.indexOf(de); assert.ok(i >= 0, `ramo ${de}`); const j = norm.indexOf(ate, i + de.length); return norm.slice(i, j < 0 ? undefined : j); };
+  const etiquetar = ramo("when 'etiquetar' then", "when 'etiqueta_adicionar', 'etiqueta_remover' then");
+  const adicionar = ramo("when 'etiqueta_adicionar', 'etiqueta_remover' then", "when 'campo_atualizar' then");
+  assert.ok(etiquetar.includes("etiqueta_nome"), "o banco cria a etiqueta pelo nome no «etiquetar»");
+  assert.ok(!adicionar.includes("etiqueta_nome"), "o banco NÃO aceita etiqueta_nome em etiqueta_adicionar/etiqueta_remover");
+  assert.ok(adicionar.includes("x ->> 'etiqueta_id'), '') = '' then perform public.nx_auto_falha(p || ': escolha a etiqueta')"), "sem etiqueta_id o banco responde «escolha a etiqueta»");
+  // o editor recusa o mesmo caso (antes dizia «Pronta» e o servidor devolvia «escolha a etiqueta»)
+  const auto = ac => ({ nome: "T", gatilho: "tarefa_vencida", config: {}, condicoes: [], acoes: [ac] });
+  assert.equal(L.validar(auto({ tipo: "etiqueta_adicionar", etiqueta_nome: "Orçamento" })).motivo, "ação 1: escolha a etiqueta");
+  assert.equal(L.validar(auto({ tipo: "etiqueta_remover", etiqueta_nome: "Orçamento" })).motivo, "ação 1: escolha a etiqueta");
+  assert.equal(L.validar(auto({ tipo: "etiquetar", etiqueta_nome: "Orçamento", alvo: "contato" })).ok, true);
+  assert.equal(L.limpar(auto({ tipo: "etiqueta_adicionar", etiqueta_nome: "Orçamento" })).acoes[0].etiqueta_nome, undefined, "o nome não vai para o servidor");
+  assert.equal(L.limpar(auto({ tipo: "etiquetar", etiqueta_nome: "Orçamento", alvo: "contato" })).acoes[0].etiqueta_nome, "Orçamento");
 });

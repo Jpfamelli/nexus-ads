@@ -125,7 +125,7 @@
 .au-nome-inp {
   width: 100%; min-width: 0; padding: .2rem 0 .35rem; border: 0; border-bottom: 1.5px solid var(--c-borda-2); border-radius: 0;
   background: transparent; color: var(--c-texto);
-  font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: clamp(1.4rem, 2.4vw, 2rem); letter-spacing: -.02em; line-height: 1.15;
+  font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: clamp(1.125rem, 1.7vw, 1.6rem); letter-spacing: -.02em; line-height: 1.15;
   transition: border-color var(--t-ui) var(--e-out);
 }
 .au-nome-inp { text-overflow: ellipsis; }
@@ -324,6 +324,8 @@
 .au-ex-erro { border-color: color-mix(in srgb, var(--c-ruim) 38%, var(--c-borda)); }
 .au-ex-erro .au-ex-ic { background: var(--c-ruim-suave); color: var(--c-ruim); }
 .au-ex-txt { min-width: 0; }
+/* «Cancelar» (espera) e «Abrir» lado a lado, na 3ª coluna da linha */
+.au-ex-acoes { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; justify-content: flex-end; }
 .au-ex-det { font-size: var(--fs-14); line-height: 1.45; overflow-wrap: anywhere; }
 .au-ex-quando { margin-top: .15rem; font-size: var(--fs-11); color: var(--c-texto-3); }
 
@@ -367,6 +369,7 @@
   .au-sis-selo { grid-column: 2; justify-self: start; }
   .au-ex { grid-template-columns: auto minmax(0, 1fr); }
   .au-ex-abrir { grid-column: 2; justify-self: start; }
+  .au-ex-acoes { grid-column: 2; justify-content: flex-start; }
   .au-item { padding-right: .3rem; }
 }
 /* alvos de toque ≥ 44 px no celular e em telas de toque */
