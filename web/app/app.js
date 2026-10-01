@@ -36,6 +36,8 @@ const E = {
   pulso: null,
   atual: null,           // { arquivo, mod, chave }
   assinaturas: new Set(),
+  naoAtualizar: new Set(), // funções de módulos com trabalho pendente: enquanto alguma devolver true, a atualização automática espera
+  pwa: null,
   badges: {},
   titulo: "",
   produto: "Órbita",
@@ -132,6 +134,37 @@ async function iniciar() {
   });
   montarEsqueletoShell();
   await aoMudarRota(false);
+  iniciarPwa();
+}
+
+/* ============================================================
+   PWA (M12): service worker, versão nova sem aba quebrada — depois do boot, nada disto atrasa a primeira pintura
+   ============================================================ */
+const CSS_DAS_TELAS = ["conversas.css", "crm.css", "agenda.css", "relatorios.css", "automacoes.css"];
+const urlArq = nome => new URL(`./${nome}?v=${encodeURIComponent(VERSAO)}`, import.meta.url).href;
+
+/** O que o service worker deve ter guardado mesmo que a tela ainda não tenha sido aberta: as telas de rotas.ARQUIVOS e os CSS delas. */
+function urlsPrecache() {
+  const telas = new Set(Object.values(E.M.rotas.ARQUIVOS));
+  return [...MODULOS_BASE, "prontos.js", "shell.css", "pwa.js", ...telas, ...CSS_DAS_TELAS].map(urlArq);
+}
+
+/** import() que falhou por arquivo que não existe mais naquela URL (a versão mudou por baixo da aba). */
+function ehFalhaDeImport(e) { return /dynamically imported module|importing a module script|module script failed|error loading dynamically/i.test(String((e && e.message) || "")); }
+
+/** Trabalho que uma atualização automática não pode interromper (o módulo ativo registra por ctx.naoAtualizar). */
+function ocupadoParaAtualizar() {
+  for (const f of E.naoAtualizar) { try { if (f()) return true; } catch { /* ignora */ } }
+  return false;
+}
+
+function iniciarPwa() {
+  setTimeout(async () => {
+    try {
+      const pwa = await arq("pwa.js");
+      E.pwa = pwa.iniciar({ versao: VERSAO, ui: E.ui, alvo: $("faixas-sistema"), produto: () => E.produto || "Órbita", ocupado: ocupadoParaAtualizar, urlsPrecache });
+    } catch (e) { console.warn("pwa indisponível", e && e.message); }
+  }, 0);
 }
 
 /* ============================================================
@@ -588,6 +621,13 @@ function construirCtx(r, alvo) {
       },
     },
     carregar,
+    /** fn() → true enquanto este módulo tem trabalho que uma atualização automática não pode interromper (rascunho enviando, fila de saída…). Devolve cancelar(). */
+    naoAtualizar(fn) {
+      E.naoAtualizar.add(fn);
+      const cancelar = () => { E.naoAtualizar.delete(fn); };
+      E.assinaturas.add(cancelar);
+      return () => { cancelar(); E.assinaturas.delete(cancelar); };
+    },
     titulo: definirTitulo,
     badge: definirBadge,
     // extras do shell (usados pelas telas da F3: config, admin)
@@ -665,6 +705,7 @@ async function montarNoShell(r, seq, doUsuario) {
       mod = await arq(def.arquivo);
     } catch (e) {
       console.error(`falha ao carregar ${def.arquivo}`, e);
+      if (E.pwa && navigator.onLine !== false) E.pwa.falhaDeImport();   // arquivo que a versão nova trocou: a faixa de versão avisa
       if (seq !== E.montando) return;
       ui.limpar(vista);
       vista.appendChild(ui.h("div", { class: "area-bloqueada" }, ui.vazio({
@@ -686,6 +727,7 @@ async function montarNoShell(r, seq, doUsuario) {
     await mod.montar(ctx);
   } catch (e) {
     console.error(`montar ${def.arquivo} falhou`, e);
+    if (E.pwa && ehFalhaDeImport(e) && navigator.onLine !== false) E.pwa.falhaDeImport();
     if (seq !== E.montando) return;
     ui.limpar(vista);
     vista.appendChild(ui.erroCartao(e, () => aoMudarRota(false)));

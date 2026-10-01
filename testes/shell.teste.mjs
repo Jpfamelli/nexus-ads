@@ -9,7 +9,7 @@
    Node puro, sem dependências; nada de rede. Rodar com ORBITA_COMPLETO=1 não muda nada aqui.
    ============================================================ */
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
@@ -18,6 +18,7 @@ const AQUI = dirname(fileURLToPath(import.meta.url));
 const RAIZ = join(AQUI, "..");
 const APP = join(RAIZ, "web", "app");
 const ler = f => readFileSync(join(APP, f), "utf8");
+const readdirSyncApp = () => readdirSync(APP);
 const imp = f => import(pathToFileURL(join(APP, f)).href);
 
 let ok = 0, falhas = 0;
@@ -117,6 +118,366 @@ await teste("index.html: o antes.js fica por último no <head> (os preloads saem
   assert.ok(iScript > 0, "antes.js no head");
   assert.ok(head.lastIndexOf("<link") < iScript, "nenhum <link> depois do antes.js");
   assert.ok(head.indexOf("Content-Security-Policy") < head.indexOf("<link"), "CSP antes de qualquer <link>");
+});
+
+/* ============================================================ M12 */
+secao("M12 · service worker, versão e cabeçalhos");
+
+const SW_TXT = ler("sw.js");
+const TOML = readFileSync(join(RAIZ, "netlify.toml"), "utf8");
+
+await teste("versao.json bate com o ?v= do index.html (o integrador sobe os dois juntos)", () => {
+  const v = versaoDe(HTML);
+  const j = JSON.parse(ler("versao.json"));
+  assert.equal(j.versao, v, "versao.json × ?v= do index.html");
+  assert.equal(j.sw, true, 'versao.json traz "sw": true (false desliga o service worker — chave de emergência)');
+  const vs = [...HTML.matchAll(/\?v=([A-Za-z0-9._-]+)/g)].map(m => m[1]);
+  assert.equal(new Set(vs).size, 1, "um só ?v= no index.html");
+});
+
+await teste("todo import() e todo carregarCss levam ?v= (cada arquivo tem UM endereço por versão)", () => {
+  const arquivos = readdirSyncApp().filter(f => f.endsWith(".js") && f !== "sw.js");
+  for (const f of arquivos) {
+    const t = ler(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    for (const m of t.matchAll(/\bimport\(\s*(`[^`]*`|[^)]*)/g)) assert.match(m[1].trim(), /^`[^`]*\?v=\$\{[^`]*`$/, `${f}: import(${m[1].trim()}) sem ?v=`);
+  }
+  const carregarCss = /export function carregarCss\(nome\) \{[\s\S]*?\n\}\n/.exec(ler("ui.js"))[0];
+  assert.match(carregarCss, /\?v=\$\{encodeURIComponent\(VERSAO\)\}/, "carregarCss põe o ?v= do ui.js");
+});
+
+await teste("sw.js: nunca cita *.supabase.co e só intercepta o MESMO site (o resto passa direto)", () => {
+  assert.doesNotMatch(SW_TXT, /supabase\.co/i);
+  assert.match(SW_TXT, /if \(!mesmoSite\(url\)\) return;/);
+  assert.match(SW_TXT, /if \(req\.method !== "GET"\) return;/);
+  assert.doesNotMatch(SW_TXT, /skipWaiting\(\)(?![^\n]*pular)/.source ? /^$/ : /^$/, "");   // sem skipWaiting solto: a checagem comportamental está abaixo
+  assert.doesNotMatch(SW_TXT.replace(/\/\*[\s\S]*?\*\//g, ""), /addEventListener\("install"[\s\S]{0,400}skipWaiting/, "o install não pula a espera sozinho");
+});
+
+/** Roda o sw.js num mundo de mentira: caches em memória, fetch programável, relógio curto. */
+function criarMundoSW({ versao = "V1", site = "http://site.test", escopo = "/app/", resposta } = {}) {
+  const armazem = new Map();
+  const cachesFalso = {
+    async open(n) {
+      if (!armazem.has(n)) armazem.set(n, new Map());
+      const m = armazem.get(n);
+      return { async match(u) { const r = m.get(String(u)); return r ? r.clone() : undefined; }, async put(u, r) { m.set(String(u), r.clone ? r.clone() : r); }, async keys() { return [...m.keys()]; } };
+    },
+    async keys() { return [...armazem.keys()]; },
+    async delete(n) { return armazem.delete(n); },
+  };
+  const chamadas = [];
+  const fetchFalso = async (req) => {
+    const url = typeof req === "string" ? req : req.url;
+    chamadas.push(url);
+    const r = await (resposta ? resposta(url, req) : new Response("ok:" + url, { status: 200, headers: { "content-type": "text/plain" } }));
+    return r;
+  };
+  const ouvintes = {};
+  const state = { pulou: false, claim: false };
+  const self_ = {
+    location: { href: `${site}${escopo}sw.js?v=${versao}`, origin: site },
+    registration: { scope: `${site}${escopo}` },
+    clients: { claim: async () => { state.claim = true; } },
+    skipWaiting() { state.pulou = true; },
+    addEventListener: (t, fn) => { ouvintes[t] = fn; },
+  };
+  const relogioCurto = (fn, ms) => setTimeout(fn, Math.min(ms, 15));
+  runInNewContext(SW_TXT, { self: self_, caches: cachesFalso, fetch: fetchFalso, Request, Response, URL, URLSearchParams, Promise, setTimeout: relogioCurto, clearTimeout, console });
+  const evento = extra => { const pend = []; return { ...extra, respondWith(p) { this.resposta = p; }, waitUntil(p) { pend.push(p); }, async fim() { await Promise.all(pend); } }; };
+  const req = (url, extra = {}) => ({ method: "GET", url: `${site}${url}`, mode: "cors", headers: new Headers(), ...extra });
+  return { armazem, cachesFalso, chamadas, ouvintes, state, evento, req, site, escopo };
+}
+
+await teste("sw.js: cross-origin, POST, ambiente fictício e versao.json passam direto (nenhum respondWith)", async () => {
+  const m = criarMundoSW();
+  const casos = [
+    m.req("", { url: "https://dtjznipitihnwmcgpzqh.supabase.co/rest/v1/rpc/nx_pulso" }),
+    m.req("/app/app.js?v=V1", { method: "POST" }),
+    m.req("/__dev_falso/boot.js"),
+    m.req("/app/versao.json"),
+    m.req("/app/versao.json?t=1"),
+    m.req("/app/sw.js?v=V1"),
+    m.req("/app/manifest.webmanifest"),
+    m.req("/app/api.js"),                                   // sem ?v=: não é arquivo versionado
+    m.req("/app/", { mode: "navigate", url: "https://outro.test/app/" }),
+  ];
+  for (const r of casos) { const ev = m.evento({ request: r }); m.ouvintes.fetch(ev); assert.equal(ev.resposta, undefined, `interceptou ${r.method} ${r.url}`); }
+  assert.equal(m.chamadas.length, 0, "nenhuma chamada de rede feita pelo sw");
+  const fora = m.evento({ request: m.req("/outro-site/", { mode: "navigate" }) }); m.ouvintes.fetch(fora);
+  assert.equal(fora.resposta, undefined, "navegação fora de /app/ não é do escopo");
+});
+
+await teste("sw.js: arquivo com ?v= e /fonts/ = cache primeiro, chave = URL completa (outra versão é outro arquivo)", async () => {
+  const m = criarMundoSW();
+  const pega = async url => { const ev = m.evento({ request: m.req(url) }); m.ouvintes.fetch(ev); const r = await ev.resposta; await ev.fim(); return r.text(); };
+  assert.equal(await pega("/app/ui.js?v=V1"), `ok:${m.site}/app/ui.js?v=V1`);
+  assert.equal(m.chamadas.length, 1);
+  assert.equal(await pega("/app/ui.js?v=V1"), `ok:${m.site}/app/ui.js?v=V1`);
+  assert.equal(m.chamadas.length, 1, "segunda vez vem do cache");
+  await pega("/app/ui.js?v=V0");
+  assert.equal(m.chamadas.length, 2, "outro ?v= = outra URL = vai à rede");
+  await pega("/fonts/satoshi-variable.woff2"); await pega("/fonts/satoshi-variable.woff2");
+  assert.equal(m.chamadas.length, 3, "fonte também fica guardada");
+  assert.deepEqual([...m.armazem.keys()], ["orbita-shell-V1"], "o cache tem o nome da versão do ?v= do sw");
+});
+
+await teste("sw.js: navegação com rede primeiro (prazo de 3 s) e cai no index.html guardado quando offline ou lenta", async () => {
+  let modo = "ok";
+  const m = criarMundoSW({ resposta: (url) => {
+    if (modo === "offline") throw new TypeError("Failed to fetch");
+    if (modo === "lenta") return new Promise(() => {});
+    return new Response("<html>v1</html>", { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+  } });
+  const navega = async (q = "") => { const ev = m.evento({ request: m.req(`/app/${q}`, { mode: "navigate" }) }); m.ouvintes.fetch(ev); const r = await ev.resposta; const t = await r.text(); return { status: r.status, t }; };
+  assert.deepEqual(await navega("?produto=crm"), { status: 200, t: "<html>v1</html>" });
+  modo = "offline";
+  assert.deepEqual(await navega("?produto=ads&org=x"), { status: 200, t: "<html>v1</html>" }, "offline: o index guardado serve QUALQUER query");
+  modo = "lenta";
+  assert.deepEqual(await navega(), { status: 200, t: "<html>v1</html>" }, "rede travada: depois do prazo entrega o guardado");
+  const vazio = criarMundoSW({ resposta: () => { throw new TypeError("Failed to fetch"); } });
+  const ev = vazio.evento({ request: vazio.req("/app/", { mode: "navigate" }) }); vazio.ouvintes.fetch(ev);
+  assert.equal((await ev.resposta).status, 503, "sem rede e sem nada guardado: página mínima de 'sem conexão', nunca o dinossauro");
+  const erro404 = criarMundoSW({ resposta: () => new Response("nao", { status: 404, headers: { "content-type": "text/html" } }) });
+  const e2 = erro404.evento({ request: erro404.req("/app/", { mode: "navigate" }) }); erro404.ouvintes.fetch(e2); await e2.resposta; await e2.fim();
+  assert.equal(await erro404.cachesFalso.open("orbita-shell-V1").then(c => c.match(`${erro404.site}/app/index.html`)), undefined, "erro nunca vira o 'shell offline'");
+});
+
+await teste("sw.js: install guarda os arquivos que o index.html do ar lista (essenciais obrigatórios, o resto no que der)", async () => {
+  const html = `<link rel="stylesheet" href="app.css?v=V1"><link rel="stylesheet" href="shell.css?v=V1"><link rel="modulepreload" href="../dados.js?v=V1">
+    <link rel="preload" href="../fonts/a.woff2"><link rel="icon" href="data:image/svg+xml,%3Csvg%3E"><script src="https://cdn.exemplo.test/x.js"></script><script type="module" src="app.js?v=V1"></script>`;
+  let quebrar = null;
+  const m = criarMundoSW({ resposta: (url) => {
+    if (quebrar && url.includes(quebrar)) return new Response("x", { status: 404 });
+    if (url.endsWith("/app/index.html")) return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+    return new Response("ok", { status: 200 });
+  } });
+  let ev = m.evento({}); m.ouvintes.install(ev); await ev.fim();
+  const chaves = await (await m.cachesFalso.open("orbita-shell-V1")).keys();
+  for (const e of ["/app/index.html", "/app/app.css?v=V1", "/app/shell.css?v=V1", "/dados.js?v=V1", "/fonts/a.woff2", "/app/app.js?v=V1"]) assert.ok(chaves.includes(`${m.site}${e}`), `faltou guardar ${e}`);
+  assert.ok(!chaves.some(k => /cdn\.exemplo|^data:/.test(k)), "outro domínio e data: ficam de fora");
+  quebrar = "fonts/a.woff2";
+  const m2 = criarMundoSW({ resposta: (url) => url.includes("a.woff2") ? new Response("x", { status: 404 }) : url.endsWith("/app/index.html") ? new Response(html, { status: 200, headers: { "content-type": "text/html" } }) : new Response("ok") });
+  ev = m2.evento({}); m2.ouvintes.install(ev); await ev.fim();
+  const m3 = criarMundoSW({ resposta: (url) => url.includes("app.js?") ? new Response("x", { status: 500 }) : url.endsWith("/app/index.html") ? new Response(html, { status: 200, headers: { "content-type": "text/html" } }) : new Response("ok") });
+  ev = m3.evento({}); m3.ouvintes.install(ev);
+  await assert.rejects(ev.fim(), /shell_incompleto/, "sem o app.js a instalação falha (tenta de novo depois) em vez de guardar um shell quebrado");
+});
+
+await teste("sw.js: activate apaga só caches de versões antigas do próprio prefixo e assume as abas; skipWaiting só pela mensagem", async () => {
+  const m = criarMundoSW({ versao: "V2" });
+  await m.cachesFalso.open("orbita-shell-V1"); await m.cachesFalso.open("orbita-shell-V2"); await m.cachesFalso.open("outro-app-cache");
+  const ev = m.evento({}); m.ouvintes.activate(ev); await ev.fim();
+  assert.deepEqual([...m.armazem.keys()].sort(), ["orbita-shell-V2", "outro-app-cache"]);
+  assert.equal(m.state.claim, true);
+  assert.equal(m.state.pulou, false, "nada de skipWaiting sozinho");
+  m.ouvintes.message(m.evento({ data: { tipo: "qualquer" } }));
+  assert.equal(m.state.pulou, false);
+  m.ouvintes.message(m.evento({ data: { tipo: "pular" } }));
+  assert.equal(m.state.pulou, true, "só com a mensagem pular");
+});
+
+await teste("sw.js: mensagem precache guarda só arquivo versionado do mesmo site (nada de outro domínio, nada sem ?v=)", async () => {
+  const m = criarMundoSW();
+  const ev = m.evento({ data: { tipo: "precache", urls: [`${m.site}/app/crm.js?v=V1`, `${m.site}/app/agenda.css?v=V1`, `${m.site}/fonts/x.woff2`,
+    "https://dtjznipitihnwmcgpzqh.supabase.co/rest/v1/x?v=1", `${m.site}/app/api.js`, `${m.site}/app/versao.json?v=V1`, "javascript:alert(1)", 42, null] } });
+  m.ouvintes.message(ev); await ev.fim();
+  const chaves = await (await m.cachesFalso.open("orbita-shell-V1")).keys();
+  assert.deepEqual(chaves.sort(), [`${m.site}/app/agenda.css?v=V1`, `${m.site}/app/crm.js?v=V1`, `${m.site}/fonts/x.woff2`].sort());
+  assert.ok(!m.chamadas.some(u => /supabase|versao\.json/.test(u)), "não buscou o que não devia");
+});
+
+await teste("chave de emergência: o texto documentado no sw.js é código válido e desregistra, apaga caches e recarrega as abas", async () => {
+  const bloco = /1\. Troque o conteúdo[\s\S]*?\n((?:\s{8}[^\n]*\n)+)/.exec(SW_TXT);
+  assert.ok(bloco, "o cabeçalho traz o texto da chave de emergência");
+  const codigo = bloco[1].split("\n").map(l => l.replace(/^ {8}/, "")).join("\n");
+  const estado = { pulou: false, apagados: [], desregistrou: false, navegou: [] };
+  const ouv = {};
+  runInNewContext(codigo, { self: { skipWaiting() { estado.pulou = true; }, addEventListener: (t, f) => { ouv[t] = f; }, registration: { unregister: async () => { estado.desregistrou = true; } },
+    clients: { matchAll: async () => [{ url: "http://x/app/", navigate: u => estado.navegou.push(u) }] } }, caches: { keys: async () => ["a", "b"], delete: async n => { estado.apagados.push(n); } } });
+  ouv.install(); assert.equal(estado.pulou, true);
+  let pend; ouv.activate({ waitUntil: p => { pend = p; } }); await pend;
+  assert.deepEqual(estado.apagados, ["a", "b"]); assert.equal(estado.desregistrou, true); assert.deepEqual(estado.navegou, ["http://x/app/"]);
+});
+
+await teste("netlify.toml: sw.js e versao.json sem cache; /app/*.js e *.css imutáveis; fontes 30 dias; manifesto com o tipo certo (e sw.js declarado DEPOIS do *.js)", () => {
+  const blocos = TOML.split("[[headers]]").slice(1).map(b => ({ para: (/for = "([^"]+)"/.exec(b) || [])[1], b }));
+  const de = p => blocos.find(x => x.para === p);
+  assert.match(de("/app/*.js").b, /Cache-Control = "public, max-age=31536000, immutable"/);
+  assert.match(de("/app/*.css").b, /Cache-Control = "public, max-age=31536000, immutable"/);
+  assert.match(de("/app/sw.js").b, /Cache-Control = "no-cache"/);
+  assert.match(de("/app/versao.json").b, /Cache-Control = "no-cache"/);
+  assert.match(de("/fonts/*").b, /Cache-Control = "public, max-age=2592000"/);
+  assert.match(de("/app/*.webmanifest").b, /Content-Type = "application\/manifest\+json"/);
+  assert.ok(blocos.findIndex(x => x.para === "/app/sw.js") > blocos.findIndex(x => x.para === "/app/*.js"), "sw.js depois de /app/*.js (o mais específico por último)");
+  assert.match(de("/app/index.html").b, /Cache-Control = "no-cache"/, "o index.html continua sem cache");
+});
+
+const PWA = await imp("pwa.js");
+
+await teste("pwa.decidirVersao: versão diferente = nova; igual ou lixo = nada; sw:false = desligar", () => {
+  assert.deepEqual(PWA.decidirVersao("A", { versao: "B", sw: true }), { acao: "nova", versao: "B" });
+  assert.deepEqual(PWA.decidirVersao("A", { versao: "A" }), { acao: "nada" });
+  for (const lixo of [null, undefined, "x", [], {}, { versao: 5 }, { versao: "a b" }, { versao: "<script>" }, { versao: "" }]) assert.deepEqual(PWA.decidirVersao("A", lixo), { acao: "nada" }, JSON.stringify(lixo));
+  assert.deepEqual(PWA.decidirVersao("A", { versao: "A", sw: false }), { acao: "desligar" });
+  assert.deepEqual(PWA.decidirVersao("A", { sw: false }), { acao: "desligar" });
+  assert.equal(PWA.versaoDaUrl("http://x/app/sw.js?v=20261001c"), "20261001c");
+  assert.equal(PWA.versaoDaUrl("http://x/app/sw.js"), null);
+});
+
+await teste("pwa.swPermitido: https e localhost sim; http em outro host não; dev-falso só com ?sw=1; ?sw=0 desliga", () => {
+  const nav = { serviceWorker: {} };
+  const p = (protocolo, hostname, search = "") => PWA.swPermitido({ nav, loc: { protocol: protocolo, hostname, search } });
+  assert.equal(p("https:", "orbita-nexus-ads.netlify.app"), true);
+  assert.equal(p("http:", "localhost"), true);
+  assert.equal(p("http:", "127.0.0.1"), true);
+  assert.equal(p("http:", "orbita.exemplo.com"), false);
+  assert.equal(p("https:", "orbita.exemplo.com", "?sw=0"), false);
+  assert.equal(p("http:", "127.0.0.1", "?dev-falso=1&dev=1"), false, "ambiente fictício: arquivo editado não pode ficar escondido");
+  assert.equal(p("http:", "127.0.0.1", "?dev-falso=1&sw=1"), true);
+  assert.equal(PWA.swPermitido({ nav: {}, loc: { protocol: "https:", hostname: "x", search: "" } }), false, "navegador sem service worker");
+});
+
+await teste("pwa.criarVersao: avisa uma vez; aplica sozinha só ociosa há 2 min, sem modal/rascunho/fila e sem recarga recente", async () => {
+  let t = 1_000_000, ocupado = false, recarga = null, aplicou = 0, desligou = 0, remoto = { versao: "B" };
+  const avisos = [];
+  const v = PWA.criarVersao({ versao: "A", agora: () => t, buscar: async () => { if (remoto === "erro") throw new Error("rede"); return remoto; },
+    ocupado: () => ocupado, recarregou: () => recarga, aoPronta: i => avisos.push(i), aoAplicar: async () => { aplicou++; }, aoDesligar: async () => { desligou++; } });
+  remoto = "erro"; await v.verificar(); assert.equal(v.pronta, null, "falha de rede nunca vira aviso");
+  remoto = { versao: "A" }; await v.verificar(); assert.equal(v.pronta, null);
+  remoto = { versao: "B" }; await v.verificar(); await v.verificar();
+  assert.equal(avisos.length, 1, "avisa uma vez só"); assert.deepEqual(v.pronta, { motivo: "versao", versao: "B" });
+  assert.equal(v.podeAplicarSozinha(), false, "acabou de interagir (agora == criação)");
+  t += 119_000; assert.equal(v.podeAplicarSozinha(), false, "menos de 2 min");
+  t += 2_000; ocupado = true; assert.equal(v.podeAplicarSozinha(), false, "modal aberto, rascunho ou fila segura");
+  ocupado = false; recarga = t - 30_000; assert.equal(v.podeAplicarSozinha(), false, "recarregou há pouco: não entra em laço");
+  recarga = t - 90_000; v.interagiu(); assert.equal(v.podeAplicarSozinha(), false, "interação zera o relógio");
+  t += 121_000; assert.equal(v.podeAplicarSozinha(), true);
+  await v.tique(); assert.equal(aplicou, 1);
+  await v.tique(); assert.equal(aplicou, 1, "não aplica duas vezes");
+  remoto = { versao: "A", sw: false }; await v.verificar(); assert.equal(desligou, 1);
+});
+
+/** Mini DOM para a faixa e o iniciar() do pwa.js. */
+function criarAmbientePWA({ controller = true, protocolo = "http:", hostname = "localhost", search = "" } = {}) {
+  const el = (tag, attrs, ...filhos) => { const o = { tag, attrs: attrs || {}, filhos: filhos.flat(), ouvintes: {}, addEventListener(e, f) { this.ouvintes[e] = f; }, appendChild(f) { this.filhos.push(f); return f; }, clique() { return this.ouvintes.click && this.ouvintes.click(); } }; return o; };
+  const texto = n => (typeof n === "string" ? n : (n.filhos || []).map(texto).join(""));
+  const ui = { h: el, icone: n => el("svg", { icone: n }), anunciar: () => {} };
+  const alvo = el("div");
+  const eventos = { sw: {}, doc: {}, jan: {} };
+  const postadas = [];
+  const reg = { waiting: null, installing: null, active: { postMessage: m => postadas.push(m) }, ouvintes: {}, addEventListener(e, f) { this.ouvintes[e] = f; } };
+  const swFalso = { controller: controller ? { postMessage: m => postadas.push(m) } : null, registrado: null, ready: Promise.resolve(), ouvintes: {},
+    register: async (url, opc) => { swFalso.registrado = { url, opc }; return reg; }, addEventListener(e, f) { swFalso.ouvintes[e] = f; }, getRegistrations: async () => [{ unregister: async () => { swFalso.desregistrou = true; } }] };
+  const recargas = [];
+  const loc = { href: "http://localhost/app/", protocol: protocolo, hostname, search, reload: () => recargas.push(1) };
+  const store = new Map();
+  const doc = { visibilityState: "visible", querySelector: () => null, addEventListener: (e, f) => { eventos.doc[e] = f; }, removeEventListener() {} };
+  const jan = { addEventListener: (e, f) => { eventos.jan[e] = f; }, removeEventListener() {}, performance: { getEntriesByType: () => [{ name: "http://localhost/app/ui.js?v=VT" }] } };
+  return { ui, alvo, nav: { serviceWorker: swFalso }, sw: swFalso, reg, doc, jan, loc, recargas, postadas, eventos, texto,
+    storage: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) } };
+}
+const espera = ms => new Promise(r => setTimeout(r, ms));
+
+await teste("pwa.iniciar: registra sw.js?v=<versão> com escopo ./ e sem cache, manda o precache e ignora o claim da primeira instalação", async () => {
+  const a = criarAmbientePWA({ controller: false });
+  const p = PWA.iniciar({ versao: "VT", ui: a.ui, alvo: a.alvo, produto: () => "Órbita", nav: a.nav, doc: a.doc, janela: a.jan, loc: a.loc, storage: a.storage, urlsPrecache: () => ["http://localhost/app/crm.js?v=VT"],
+    fetchFn: async () => ({ ok: true, json: async () => ({ versao: "VT" }) }) });
+  await espera(10);
+  assert.deepEqual(a.sw.registrado, { url: "sw.js?v=VT", opc: { scope: "./", updateViaCache: "none" } });
+  const pre = a.postadas.find(m => m.tipo === "precache");
+  assert.ok(pre && pre.urls.includes("http://localhost/app/crm.js?v=VT") && pre.urls.includes("http://localhost/app/ui.js?v=VT"), "telas + o que a página já carregou");
+  a.sw.ouvintes.controllerchange();                         // o clients.claim da primeira instalação
+  assert.equal(a.alvo.filhos.length, 0, "primeira instalação não é versão nova");
+  assert.equal(a.recargas.length, 0);
+  p.destruir();
+});
+
+await teste("pwa.iniciar: versão nova → faixa «Nova versão do Órbita pronta · Atualizar»; Atualizar recarrega (anti-laço guardado)", async () => {
+  const a = criarAmbientePWA({ controller: true });
+  let remoto = { versao: "VT" };
+  const p = PWA.iniciar({ versao: "VT", ui: a.ui, alvo: a.alvo, produto: () => "Órbita", nav: a.nav, doc: a.doc, janela: a.jan, loc: a.loc, storage: a.storage, fetchFn: async () => ({ ok: true, json: async () => remoto }) });
+  await espera(10);
+  await p.verificar(); assert.equal(a.alvo.filhos.length, 0);
+  remoto = { versao: "VN" };
+  await p.verificar(); await p.verificar();
+  assert.equal(a.alvo.filhos.length, 1, "uma faixa só");
+  const faixa = a.alvo.filhos[0];
+  assert.match(a.texto(faixa), /Nova versão do Órbita pronta\./);
+  const botao = faixa.filhos.find(f => f.tag === "button"); assert.equal(a.texto(botao), "Atualizar");
+  botao.clique(); await espera(5);
+  assert.equal(a.recargas.length, 1, "sem worker em espera: recarrega direto");
+  assert.ok(a.storage.getItem("nx-versao-recarga"), "guarda a hora da recarga (anti-laço)");
+  p.destruir();
+});
+
+await teste("pwa.iniciar: worker em espera da MESMA versão da página só ativa (sem faixa); de outra versão avisa; «Atualizar» manda pular e recarrega no controllerchange", async () => {
+  const a = criarAmbientePWA({ controller: true });
+  const p = PWA.iniciar({ versao: "VT", ui: a.ui, alvo: a.alvo, produto: () => "Órbita", nav: a.nav, doc: a.doc, janela: a.jan, loc: a.loc, storage: a.storage, fetchFn: async () => ({ ok: true, json: async () => ({ versao: "VT" }) }) });
+  await espera(10);
+  const msgsMesma = [];
+  a.reg.ouvintes.updatefound();                              // sem installing: nada
+  a.reg.installing = { scriptURL: "http://localhost/app/sw.js?v=VT", state: "installing", postMessage: m => msgsMesma.push(m), ouvintes: {}, addEventListener(e, f) { this.ouvintes[e] = f; } };
+  a.reg.ouvintes.updatefound(); a.reg.installing.state = "installed"; a.reg.installing.ouvintes.statechange();
+  assert.deepEqual(msgsMesma, [{ tipo: "pular" }], "mesma versão: pede o skipWaiting sozinho");
+  a.sw.ouvintes.controllerchange();                          // o controlador troca por causa disso
+  assert.equal(a.alvo.filhos.length, 0, "sem faixa");
+  assert.equal(a.recargas.length, 0, "sem recarga: a página já roda a versão nova");
+  const msgsOutra = [];
+  a.reg.waiting = { scriptURL: "http://localhost/app/sw.js?v=OUTRA", postMessage: m => msgsOutra.push(m) };
+  a.reg.installing = { scriptURL: "http://localhost/app/sw.js?v=OUTRA", state: "installing", postMessage() {}, ouvintes: {}, addEventListener(e, f) { this.ouvintes[e] = f; } };
+  a.reg.ouvintes.updatefound(); a.reg.installing.state = "installed"; a.reg.installing.ouvintes.statechange();
+  assert.equal(a.alvo.filhos.length, 1, "versão diferente da página: avisa");
+  a.alvo.filhos[0].filhos.find(f => f.tag === "button").clique(); await espera(5);
+  assert.deepEqual(msgsOutra, [{ tipo: "pular" }]);
+  a.sw.ouvintes.controllerchange();
+  assert.equal(a.recargas.length, 1, "quem clicou recarrega quando o controlador novo assume");
+  p.destruir();
+});
+
+await teste("pwa.iniciar: outra aba trocou o worker (controllerchange que não foi minha) → faixa, sem recarga atropelando quem está digitando", async () => {
+  const a = criarAmbientePWA({ controller: true });
+  const p = PWA.iniciar({ versao: "VT", ui: a.ui, alvo: a.alvo, produto: () => "Órbita", nav: a.nav, doc: a.doc, janela: a.jan, loc: a.loc, storage: a.storage, fetchFn: async () => ({ ok: true, json: async () => ({ versao: "VT" }) }) });
+  await espera(10);
+  a.sw.ouvintes.controllerchange();
+  assert.equal(a.alvo.filhos.length, 1); assert.equal(a.recargas.length, 0);
+  p.destruir();
+});
+
+await teste("pwa.iniciar: versao.json com \"sw\": false desregistra o service worker, apaga os caches e recarrega UMA vez por aba", async () => {
+  const a = criarAmbientePWA({ controller: true });
+  const apagados = [];
+  const cachesAntes = globalThis.caches;
+  globalThis.caches = { keys: async () => ["orbita-shell-V1", "outro"], delete: async n => { apagados.push(n); } };
+  try {
+    const p = PWA.iniciar({ versao: "VT", ui: a.ui, alvo: a.alvo, nav: a.nav, doc: a.doc, janela: a.jan, loc: a.loc, storage: a.storage, fetchFn: async () => ({ ok: true, json: async () => ({ versao: "VT", sw: false }) }) });
+    await espera(10);
+    await p.verificar(); await p.verificar();
+    assert.equal(a.sw.desregistrou, true);
+    assert.deepEqual(apagados, ["orbita-shell-V1"], "só os caches do próprio prefixo");
+    assert.equal(a.recargas.length, 1, "uma vez só");
+    p.destruir();
+  } finally { if (cachesAntes === undefined) delete globalThis.caches; else globalThis.caches = cachesAntes; }
+});
+
+await teste("pwa.iniciar: falha de import() vira a mesma faixa; ambiente fictício não registra o service worker sem ?sw=1", async () => {
+  const a = criarAmbientePWA({ controller: true });
+  const p = PWA.iniciar({ versao: "VT", ui: a.ui, alvo: a.alvo, nav: a.nav, doc: a.doc, janela: a.jan, loc: a.loc, storage: a.storage, fetchFn: async () => ({ ok: true, json: async () => ({ versao: "VT" }) }) });
+  p.falhaDeImport(); p.falhaDeImport();
+  assert.equal(a.alvo.filhos.length, 1);
+  p.destruir();
+  const d = criarAmbientePWA({ hostname: "127.0.0.1", search: "?dev-falso=1&dev=1" });
+  const q = PWA.iniciar({ versao: "VT", ui: d.ui, alvo: d.alvo, nav: d.nav, doc: d.doc, janela: d.jan, loc: d.loc, storage: d.storage, fetchFn: async () => ({ ok: true, json: async () => ({ versao: "VT" }) }) });
+  await espera(10);
+  assert.equal(d.sw.registrado, null);
+  q.destruir();
+});
+
+await teste("app.js: pwa.js entra DEPOIS do boot (não está nos preloads) e ctx.naoAtualizar segura a atualização automática", () => {
+  assert.doesNotMatch(HTML, /pwa\.js/, "o pwa.js não é preload: não pesa na abertura");
+  const iniciar = /async function iniciar\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
+  assert.ok(iniciar.indexOf("await aoMudarRota(false)") < iniciar.indexOf("iniciarPwa()"), "registro do sw depois do boot");
+  assert.match(APP_JS, /naoAtualizar\(fn\) \{/);
+  assert.match(APP_JS, /E\.pwa\.falhaDeImport\(\)/);
 });
 
 /* ============================================================ fim */

@@ -8,7 +8,8 @@ Testes da frente: `node testes/shell.teste.mjs` (registrado em `testes/rodar-tud
 | Item | Estado | Commit |
 |---|---|---|
 | dev-falso para C e D (onboarding, p_req, client_ref, nao_lidas) | feito | ver `git log --grep "Órbita (B)"` |
-| M11 abertura em paralelo | feito (Início 1,8 s; Conversas e CRM melhoram ~0,7 s, o resto é cadeia interna das telas) | |
+| M11 abertura em paralelo | feito (Início 1,8 s; Conversas e CRM melhoram ~0,7 s, o resto é cadeia interna das telas) | ver `git log --grep "M11"` |
+| M12 service worker + versão | feito (falta só o `curl -I` em produção, depois da publicação) | ver `git log --grep "M12"` |
 
 ## M11 · Abrir em ~1,5 s em vez de ~3,5 s
 
@@ -38,6 +39,36 @@ Testes da frente: `node testes/shell.teste.mjs` (registrado em `testes/rodar-tud
 - Início: sessão → `rel-logica/graficos/relatorios.css` → `nx_inicio` (D, M31). Com a rede de produção (HTTP/2 + brotli) o ganho de (a)-(c) é maior que no dev-falso (HTTP/1.1, 6 conexões).
 
 **Como verificar**: `PUPPETEER_CORE=<pasta> node scripts/medir-abertura.mjs` (e `--raiz <cópia do HEAD anterior>` para comparar); `node testes/shell.teste.mjs` (7 testes de M11).
+
+## M12 · Service worker com cache seguro do shell e versão nova sem aba quebrada
+
+**Feito**
+- `web/app/sw.js` (escopo `/app/`): navegação com rede primeiro e prazo de 3 s, cai no `index.html` guardado (qualquer query); arquivo com `?v=` e `/fonts/*` = cache primeiro com a URL completa
+  como chave; **nunca** intercepta outro domínio, outro método que não GET, `/__dev_falso/`, `versao.json`, `sw.js` nem arquivo sem `?v=`. Cache `orbita-shell-<v>` (a versão vem de `sw.js?v=`);
+  `activate` apaga só as versões antigas do próprio prefixo e assume as abas; `skipWaiting` só pela mensagem `{tipo:"pular"}`. A instalação lê os arquivos do shell do próprio `index.html` do ar
+  (nenhuma lista para esquecer); sem `app.js`, `app.css` ou `shell.css` a instalação falha e tenta de novo (nunca guarda um shell quebrado).
+- `web/app/pwa.js` (carregado DEPOIS do boot, não é preload): registra `sw.js?v=<versão>` (`scope: "./"`, `updateViaCache: "none"`) só em https ou localhost (no dev-falso só com `?sw=1`; `?sw=0` desliga),
+  manda ao worker as telas e os CSS ainda não abertos + tudo que a página já carregou (`precache`), confere `versao.json` ao voltar à aba, ao reconectar e a cada 10 min.
+  Versão diferente → faixa `Nova versão do Órbita pronta · Atualizar` (em `#faixas-sistema`, empurra o conteúdo); aplicada sozinha depois de 2 min ocioso, SEM `dialog` aberto e sem trabalho pendente
+  (`ctx.naoAtualizar(fn)`: o módulo devolve true enquanto tem rascunho/fila; o rascunho do M17 entra aqui) e com trava anti-laço (não recarrega por versão duas vezes em 60 s).
+  Falha de `import()` de módulo vira a mesma faixa. Como a versão entra na URL do worker, quem instala o worker novo é a página nova (que já roda a versão nova e pede o `skipWaiting` sozinha, sem faixa);
+  as outras abas veem o `controllerchange` e mostram a faixa.
+- `web/app/versao.json` (`{"versao": "<v>", "sw": true}`), `web/app/shell.css` (novo, estilos do shell; só tokens), `#faixas-sistema` no `index.html`.
+- `netlify.toml`: `/app/*.js` e `/app/*.css` com `max-age=31536000, immutable`; `/app/sw.js` e `/app/versao.json` `no-cache` (declarados DEPOIS do `*.js`: o específico por último); `/fonts/*` 30 dias; `.webmanifest` com `application/manifest+json`.
+- `scripts/bump-versao.mjs <nova>`: o bump único do integrador (index.html, entradas e versao.json juntos).
+
+**Chave de emergência (documentada também no cabeçalho do `sw.js`)**
+1. Substituir `web/app/sw.js` por um arquivo que se desregistra (texto no cabeçalho do próprio `sw.js`; os testes executam esse texto) e publicar — o navegador confere o `sw.js` a cada abertura.
+2. Antes disso, se as páginas ainda abrem: `versao.json` com `"sw": false` desregistra o worker, apaga os caches `orbita-*` e recarrega uma vez por aba.
+Depois de resolver: voltar ao `sw.js` normal, `"sw": true` e subir o `?v=`.
+
+**Como verificar**
+- `node testes/shell.teste.mjs` (21 testes de M12: comportamento do sw.js num mundo de mentira, pwa.js, versao.json × index.html, cabeçalhos do netlify.toml).
+- No dev-falso com `?sw=1` (Chrome): o worker instala e guarda ~36 arquivos; recarregar offline mostra o shell em vez do dinossauro; `/__dev_falso/simular/versao?v=X` + voltar à aba mostra a faixa.
+  (Dado de negócio offline depende de M14/M16 — por ora o boot offline mostra a tela de erro de abertura.)
+- Depois da publicação: `curl -I https://<site>/app/sw.js` (`no-cache`), `/app/app.js?v=…` (`immutable`), `/fonts/satoshi-variable.woff2` (30 dias), `/app/manifest.webmanifest` (`application/manifest+json`).
+  Atenção: se o Netlify somar em vez de substituir o `Cache-Control` quando duas regras casam (`/app/*.js` e `/app/sw.js`), o `sw.js` não é afetado na prática (`updateViaCache: "none"` e a checagem do navegador ignoram o cache HTTP), mas confira.
+- Nota de QA: o Cache Storage do Chrome no Windows falha ("Entry already exists") com perfil em caminho longo (como o do scratchpad). Os testes de navegador da frente B usam `--user-data-dir` curto (`C:/Temp/ob/<perfil>`).
 
 ## Pendências para outras frentes
 - (preenchido ao longo do trabalho)

@@ -1,0 +1,13 @@
+/* ============================================================
+   ÓRBITA — shell.css · frente B (plano de 01/10/2026)
+   Estilos do que é do shell e não de uma tela: faixas do sistema (versão nova, conexão), selo de dados guardados,
+   janela de sessão expirada, paleta de comandos, folhas de atalhos e ajuda, instalar o app. Só tokens do app.css
+   (nenhuma cor literal, nenhum 1fr solto, nenhum tamanho de fonte fora dos tokens).
+   ============================================================ */
+/* escala: tokens */
+
+/* ---- faixas do sistema: ficam entre o topo e a tela, empurram o conteúdo (nunca cobrem) ---- */
+.faixas-sistema:empty { display: none; }
+.faixas-sistema { position: relative; z-index: 2; }
+.faixa-versao { background: var(--c-prim-suave); }
+.faixa-versao .ic { color: var(--c-prim-luz); }
