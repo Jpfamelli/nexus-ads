@@ -1371,19 +1371,24 @@ await teste("T08: pílulas de status e texto secundário legíveis em fundos de 
     const v = T.derivarTema(m).vars;
     for (const k of ["ok", "ruim", "aten", "info"]) assert.ok(T.contraste(v[`--c-${k}`], v[`--c-${k}-suave`]) >= 4.5 - 1e-9, `pílula ${k} ${JSON.stringify(m)}`);
     assert.ok(T.contraste(v["--c-texto-2"], v["--c-sup-3"]) >= 4.5 - 1e-9, `texto-2 ${JSON.stringify(m)}`);
-    assert.ok(T.contraste(v["--c-meta"], v["--c-sec-suave"]) >= 4.5 - 1e-9, `meta ${JSON.stringify(m)}`);
-    assert.ok(T.contraste(v["--c-google"], v["--c-aten-suave"]) >= 4.5 - 1e-9, `google ${JSON.stringify(m)}`);
+    assert.ok(T.contraste(v["--c-meta"], v["--c-meta-suave"]) >= 4.5 - 1e-9, `meta ${JSON.stringify(m)}`);   // M04: Meta e Google têm fundo suave próprio (antes: o da secundária e o do aviso)
+    assert.ok(T.contraste(v["--c-google"], v["--c-google-suave"]) >= 4.5 - 1e-9, `google ${JSON.stringify(m)}`);
     for (const [luz, suave] of [["--c-prim-luz", "--c-prim-suave"], ["--c-sec-luz", "--c-sec-suave"]])
       assert.ok(T.contraste(T.misturar(v[luz], v["--c-texto"], 0.22), v[suave]) >= 4.5 - 1e-9, `pílula ${luz} ${JSON.stringify(m)}`);
     assert.ok(T.contraste(v["--c-prim-luz"], v["--c-fundo"]) >= 4.5 - 1e-9 && T.contraste(v["--c-sec-luz"], v["--c-fundo"]) >= 4.5 - 1e-9);
   }
   // os fundos que já passavam NÃO mudam de cor (o #FAFAF8 era o fundo claro padrão até o M01; hoje é só um fundo de marca)
   const antigo = T.derivarTema({ ...T.PADRAO.cores, fundo: "#FAFAF8" }).vars;
-  assert.deepEqual([antigo["--c-ok"], antigo["--c-aten"], antigo["--c-prim-luz"], antigo["--c-texto-2"]], ["#1A6E44", "#8A5A00", "#8D5F19", "#54595D"]);
+  assert.deepEqual([antigo["--c-ok"], antigo["--c-prim-luz"], antigo["--c-texto-2"]], ["#1A6E44", "#8D5F19", "#54595D"]);
+  // …exceto o âmbar de atenção: o bronze da marca (36°) estava a 3° dele; o M04 gira o ESTADO (nunca a marca) para ≥ 30° de distância
+  assert.notEqual(antigo["--c-aten"], "#8A5A00");
+  assert.ok(T.distMatiz(T.matiz(antigo["--c-aten"]), T.matiz("#B0761F")) >= 30, "atenção a ≥ 30° do bronze");
+  const semConflito = T.derivarTema({ primaria: "#7B3FA2", secundaria: "#6FA3CF", fundo: "#FAFAF8" }).vars;
+  assert.deepEqual([semConflito["--c-ok"], semConflito["--c-aten"]], ["#1A6E44", "#8A5A00"], "sem conflito de matiz as cores de estado são as de sempre");
   // o novo padrão (M01: papel #F3F0E9) tem a mesma primária e só ajusta o que o papel mais escuro exige
   const padrao = T.derivarTema(T.PADRAO.cores).vars;
   assert.equal(padrao["--c-fundo"], "#F3F0E9"); assert.equal(padrao["--c-prim-luz"], "#8D5F19");
-  assert.deepEqual([padrao["--c-ok"], padrao["--c-aten"], padrao["--c-texto-2"]], ["#165E3A", "#764D00", "#525659"], "o papel pede verde, âmbar e texto-2 um pouco mais escuros");
+  assert.deepEqual([padrao["--c-ok"], padrao["--c-aten"], padrao["--c-texto-2"]], ["#165E3A", "#546100", "#525659"], "o papel pede verde e texto-2 um pouco mais escuros; a atenção gira para longe do bronze");
   assert.equal(T.garantirContraste("#1A6E44", ["#FFFFFF"]), "#1A6E44", "já passa: devolve a mesma cor");
 });
 await teste("T08: logo estreito/alto demais ganha aviso na prévia (avisoProporcaoLogo); largo e quadrado não", () => {
@@ -1622,16 +1627,22 @@ await teste("derivarTema: --c-sev-* (gravidade) e --c-prod-* (acento do produto)
     }
   }
 });
-await teste("tema escuro (M01): as variáveis que já existiam saem IGUAIS às de antes (hash do conjunto, 4 marcas escuras)", () => {
-  // Golden gerado com o derivarTema anterior ao contrato (sem --c-poco, --c-sev-* e --c-prod-*): o escuro não pode mudar de cor.
-  const NOVAS = k => k === "--c-poco" || k.startsWith("--c-sev-") || k.startsWith("--c-prod-");
-  const ouro = { padrao: "crbj7x", vermelha: "1a72b8", azul: "5uy1mz", verde: "afn58s" };
+await teste("tema escuro (M01/M04): tudo que não é cor de estado sai IGUAL ao de antes (hash do conjunto, 4 marcas escuras); marca sem conflito de matiz mantém as cores de estado de sempre", () => {
+  // Golden gerado com o derivarTema anterior ao contrato. Fora do conjunto ficam só as cores de estado (ok, ruim, aten, info, meta, google, nota, sev-*, prod-*)
+  // e o poço: o M04 gira essas cores quando a marca cai a menos de 30° delas e dá tom próprio a Meta e Google. O resto do escuro não pode mudar.
+  const ESTADO = k => /^--c-(ok|ruim|aten|info|meta|google|nota|sev-|prod-|poco)/.test(k);
+  const ouro = { padrao: "ffrom8", vermelha: "kyq0od", azul: "y8mwxh", verde: "m6elem" };
   for (const [nome, m] of Object.entries(ESCURO_4)) {
     const { vars, escuro } = T.derivarTema(m);
     assert.equal(escuro, true, nome);
-    const antigas = Object.fromEntries(Object.entries(vars).filter(([k]) => !NOVAS(k)));
-    assert.equal(T.hashCurto(antigas), ouro[nome], `${nome}: o escuro mudou`);
+    const resto = Object.fromEntries(Object.entries(vars).filter(([k]) => !ESTADO(k)));
+    assert.equal(T.hashCurto(resto), ouro[nome], `${nome}: o escuro mudou`);
   }
+  const roxa = T.derivarTema({ primaria: "#7B3FA2", secundaria: "#9E9E9E", fundo: "#0E1116" });
+  assert.equal(roxa.avisos.filter(a => a.campo === "estados").length, 0, "sem conflito: sem aviso");
+  const v = roxa.vars;
+  assert.deepEqual(["ok", "ruim", "aten", "info"].map(k => v[`--c-${k}`]), ["#7FD1A5", "#F08A74", "#E5B35C", "#8FB8DD"]);
+  assert.deepEqual(["ok", "ruim", "aten", "info"].map(k => v[`--c-${k}-suave`]), ["#20302D", "#322425", "#302B21", "#232C36"]);
 });
 await teste("tema escuro: o poço fica abaixo do fundo e o cartão acima (escada que clareia)", () => {
   for (const m of Object.values(ESCURO_4)) {
@@ -2397,6 +2408,94 @@ await teste("ui.numMoeda: 'R$' e centavos a 60 % (.num-moeda), centavos opcionai
     assert.equal(achar(a, ".nm-rs").textContent, "R$"); assert.equal(achar(a, ".nm-cent").textContent, ",50");
     assert.equal(U.numMoeda(1234.5, { centavos: false }).textContent, "R$1.234"); assert.equal(U.numMoeda(1234.5, { centavos: false }).querySelector(".nm-cent"), null);
     assert.equal(U.numMoeda(null).textContent, "—"); assert.equal(U.numMoeda(-5).textContent, "R$−5,00");
+  } finally { d.fim(); }
+});
+
+/* ---------- M04: cor com intenção ---------- */
+const BASE_ESTADOS = { ruim: "#B3261E", ok: "#1A6E44", aten: "#8A5A00", info: "#2B5A80", meta: "#2C3396", google: "#0B645E" };
+const BASE_ESTADOS_ESCURO = { ruim: "#F08A74", ok: "#7FD1A5", aten: "#E5B35C", info: "#8FB8DD", meta: "#9298F2", google: "#6ECFC8" };
+await teste("M04: a marca nunca é girada — gira o ESTADO; sem matiz (cinza) ou longe, nada muda; o estado vai para o tom livre mais próximo", () => {
+  const sem = T.girarEstados(BASE_ESTADOS, { prim: "#7B3FA2", sec: "#9E9E9E" });
+  assert.deepEqual(sem.giradas, []); assert.deepEqual(sem.cores, BASE_ESTADOS);
+  assert.deepEqual(T.girarEstados(BASE_ESTADOS, { prim: "#777777", sec: "#808080" }).giradas, [], "marca cinza não tem matiz para confundir");
+  const verm = T.girarEstados(BASE_ESTADOS, { prim: "#C62828", sec: "#E57373" });
+  assert.deepEqual(verm.giradas, ["ruim"], "só o erro estava perto do vermelho");
+  const dr = T.distMatiz(T.matiz(verm.cores.ruim), T.matiz("#C62828")); assert.ok(dr >= 30, `erro a ${dr.toFixed(1)}° do vermelho`);
+  assert.ok(T.distMatiz(T.matiz(verm.cores.ruim), T.matiz(BASE_ESTADOS.aten)) >= 22, "o erro não vira laranja em cima do aviso");
+  const verde = T.girarEstados(BASE_ESTADOS, { prim: "#1E8E3E", sec: "#81C995" });
+  assert.deepEqual(verde.giradas, ["ok"]);
+  assert.ok(T.distMatiz(T.matiz(verde.cores.ok), T.matiz("#1E8E3E")) >= 30);
+  assert.ok(T.distMatiz(T.matiz(verde.cores.ok), T.matiz(BASE_ESTADOS.info)) >= 22, "sucesso não vira ciano ao lado do azul de informação");
+  const azul = T.girarEstados(BASE_ESTADOS, { prim: "#1A56DB", sec: "#7AA7F7" });
+  assert.deepEqual([...azul.giradas].sort(), ["info", "meta"]);
+  const bronze = T.girarEstados(BASE_ESTADOS, { prim: "#B0761F", sec: "#6FA3CF" });
+  assert.deepEqual(bronze.giradas, ["aten"], "o bronze (36°) engolia o âmbar (39°); a secundária azul não gira a informação");
+  assert.notEqual(bronze.cores.aten, BASE_ESTADOS.aten);
+  assert.equal(T.matiz("#808080"), null); assert.equal(T.matiz("#FFFFFF"), null); assert.equal(T.matiz("#000000"), null);
+  assert.equal(T.distMatiz(350, 10), 20); assert.equal(T.distMatiz(0, 180), 180);
+});
+await teste("M04: marcas vermelha, verde, azul e padrão (claro e escuro) e 34 aleatórias: primária a ≥ 30° de CADA estado, secundária a ≥ 30° de sucesso/erro/atenção, contraste ≥ 4,5:1 sobre fundo, cartão, poço e o suave; a marca não muda", () => {
+  const todas = [...Object.values(CLARO_4), ...Object.values(ESCURO_4), ...marcas];
+  let giradas = 0;
+  for (const m of todas) {
+    const { vars, avisos } = T.derivarTema(m);
+    const hp = T.matiz(m.primaria), hs = T.matiz(m.secundaria);
+    assert.equal(vars["--c-prim"], T.normalizarHex(m.primaria), "a marca não é girada");
+    for (const k of ["ok", "ruim", "aten", "info", "meta", "google"]) {
+      const cor = vars[`--c-${k}`], h = T.matiz(cor);
+      if (h !== null) {
+        if (hp !== null) assert.ok(T.distMatiz(h, hp) >= T.MARGEM_MATIZ - 1e-9, `${k} ${cor} (${h.toFixed(1)}°) a ${T.distMatiz(h, hp).toFixed(1)}° da primária ${m.primaria} (${hp.toFixed(1)}°)`);
+        if (hs !== null && ["ok", "ruim", "aten"].includes(k)) assert.ok(T.distMatiz(h, hs) >= T.MARGEM_MATIZ - 1e-9, `${k} ${cor} a ${T.distMatiz(h, hs).toFixed(1)}° da secundária ${m.secundaria}`);
+      }
+      for (const fundo of ["--c-fundo", "--c-sup", "--c-poco", `--c-${k}-suave`]) {
+        assert.ok(T.contraste(cor, vars[fundo]) >= 4.5 - 1e-9, `${k} ${cor} sobre ${fundo} ${vars[fundo]} = ${T.contraste(cor, vars[fundo]).toFixed(2)} (${JSON.stringify(m)})`);
+      }
+    }
+    const aviso = avisos.find(a => a.campo === "estados");
+    const gir = T.girarEstados(vars["--esquema"] === "claro" ? BASE_ESTADOS : BASE_ESTADOS_ESCURO, { prim: T.normalizarHex(m.primaria), sec: T.normalizarHex(m.secundaria) }).giradas;
+    assert.equal(!!aviso, gir.length > 0, "o aviso aparece exatamente quando um estado girou");
+    if (aviso) { giradas++; assert.match(aviso.texto, /giramos o tom delas/); }
+  }
+  assert.ok(giradas >= 8, `pelo menos as marcas de conflito giraram (${giradas})`);
+  for (const [nome, m] of Object.entries({ vermelha: CLARO_4.vermelha, verde: CLARO_4.verde, azul: CLARO_4.azul, padrao: CLARO_4.padrao })) {
+    assert.ok(T.derivarTema(m).avisos.some(a => a.campo === "estados"), `${nome}: registra o giro em avisos`);
+  }
+});
+await teste("M04: Meta e Google têm tom próprio (nunca o hex de aten/info) e fundo suave próprio", () => {
+  for (const m of [...Object.values(CLARO_4), ...Object.values(ESCURO_4), ...marcas]) {
+    const { vars } = T.derivarTema(m);
+    assert.notEqual(vars["--c-google"], vars["--c-aten"], `google = aten em ${JSON.stringify(m)}`);
+    assert.notEqual(vars["--c-meta"], vars["--c-info"], `meta = info em ${JSON.stringify(m)}`);
+    assert.notEqual(vars["--c-google-suave"], vars["--c-aten-suave"]); assert.notEqual(vars["--c-meta-suave"], vars["--c-sec-suave"]);
+  }
+  const { vars } = T.derivarTema(T.coresNoEsquema(T.PADRAO.cores, "claro"));
+  assert.ok(T.distMatiz(T.matiz(vars["--c-google"]), T.matiz(vars["--c-aten"])) >= 60, "Google longe do aviso (no claro tinham o mesmo hex)");
+  assert.match(CSS_APP, /\.pilula-meta \{ background: var\(--c-meta-suave\); color: var\(--c-meta\); \}/);
+  assert.match(CSS_APP, /\.pilula-google \{ background: var\(--c-google-suave\); color: var\(--c-google\); \}/);
+});
+await teste("M04: pílulas de estado ganham glifo por CSS (✓ ▲ ✕ i); ação destrutiva é contorno + ícone; 'Seus produtos' em 1 coluna de cartões de 72 px; acento do produto na navegação", () => {
+  for (const [cls, glifo] of [["ok", "✓"], ["aten", "▲"], ["ruim", "✕"], ["info", "i"]]) {
+    assert.match(CSS_APP, new RegExp(`\\.pilula-${cls}:not\\(:has\\(\\.ic\\)\\)::before \\{[^}]*content: "${glifo}"`), `glifo de ${cls}`);
+  }
+  const regra = sel => { const m = CSS_APP.match(new RegExp(`(?:^|\\n)${sel.replace(/[.\[\]"=]/g, "\\$&")} \\{([^}]*)\\}`)); assert.ok(m, `regra ${sel}`); return m[1]; };
+  for (const sel of [".bt-perigo", ".bt-contorno-perigo"]) {
+    const r = regra(sel);
+    assert.match(r, /background: transparent/); assert.match(r, /border-color: var\(--c-ruim\)/); assert.match(r, /color: var\(--c-ruim\)/);
+    assert.doesNotMatch(r, /var\(--c-prim/, "nunca a cor da marca");
+  }
+  assert.match(regra(".produto-grade"), /grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(CSS_APP.match(/(?:^|\n)\.produto-op \{([^}]*)\}/)[1], /min-height: 72px/);
+  assert.doesNotMatch(CSS_APP, /\.produto-grade \{[^}]*repeat\(3/);
+  assert.match(CSS_APP, /\.nav-b\[aria-current="page"\] \.ic \{ color: var\(--c-prod\); \}/); assert.match(CSS_APP, /\.barra-b\[aria-current="page"\] \.ic \{ color: var\(--c-prod\); \}/);
+  assert.match(CSS_APP, /\.produto-op\[data-produto="ads"\], \.produto-grade > \.produto-op:nth-child\(2\) \{ --c-prod-op: var\(--c-prod-ads\); \}/, "cada opção com o seu acento");
+  // confirmar({perigo}) leva a lixeira; modal aceita `icone` na ação
+  const d = comDom();
+  try {
+    U.confirmar({ titulo: "Excluir?", perigo: true });
+    const dlgs = d.doc.querySelectorAll("dialog.modal"); const dlg = dlgs[dlgs.length - 1];
+    const perigo = achar(dlg, ".modal-rod .bt-perigo");
+    assert.ok(perigo.querySelector("svg"), "botão destrutivo com ícone"); assert.equal(perigo.textContent, "Excluir");
+    d.ev(dlg, "cancel");
   } finally { d.fim(); }
 });
 

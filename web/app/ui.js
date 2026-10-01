@@ -345,7 +345,8 @@ function criarFaixaDescartar(aoDescartar, aoContinuar) {
   return { el, continuar };
 }
 
-/** modal({titulo, corpo, acoes:[{rotulo, tipo, fn, valor}], largura:'p'|'m'|'g', aoAbrir, protegerTexto = true}) → Promise<valor>.
+/** modal({titulo, corpo, acoes:[{rotulo, tipo, fn, valor, icone?}], largura:'p'|'m'|'g', aoAbrir, protegerTexto = true}) → Promise<valor>.
+    tipo "perigo" é CONTORNO (nunca preenchido, M04) e deve levar `icone` (confirmar() já põe a lixeira).
     fn(api) pode ser async; devolver false mantém aberto; erro lançado aparece dentro do modal. Esc/fechar → null.
     protegerTexto: Esc, clique fora e Voltar com texto digitado pedem confirmação (X e botões do rodapé fecham direto). */
 export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora = true, descricao, protegerTexto = true } = {}) {
@@ -392,7 +393,7 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
     });
     const botoes = lista.map(a => {
       const b = h("button", { type: "button", class: ["bt", a.tipo === "primario" ? "bt-prim" : a.tipo === "perigo" ? "bt-perigo" : "bt-sec"],
-        dataset: { tipo: a.tipo || "neutro" }, disabled: !!a.desabilitado }, a.rotulo);
+        dataset: { tipo: a.tipo || "neutro" }, disabled: !!a.desabilitado }, a.icone ? icone(a.icone) : null, a.rotulo);
       b.addEventListener("click", async () => {
         api.erro("");
         if (!a.fn) { api.fechar(a.valor !== undefined ? a.valor : a.tipo === "neutro" ? null : true); return; }
@@ -439,7 +440,7 @@ export async function confirmar({ titulo = "Confirmar", texto = "", perigo = fal
     titulo, corpo, largura: "p", protegerTexto: false,
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: false },
-      { rotulo: rotulo || (perigo ? "Excluir" : "Confirmar"), tipo: perigo ? "perigo" : "primario",
+      { rotulo: rotulo || (perigo ? "Excluir" : "Confirmar"), tipo: perigo ? "perigo" : "primario", icone: perigo ? "lixeira" : undefined,
         fn: api => {
           if (!digitar) return true;
           const v = campoDig.querySelector("input").value.trim().toLowerCase();
