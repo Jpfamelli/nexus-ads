@@ -226,3 +226,114 @@ export function iniciar(o) {
   }
   return api;
 }
+
+/* ============================================================
+   M13 — instalável com a marca do cliente e com o produto certo
+   O app.js monta o manifesto DEPOIS de resolver a marca (nome do produto da org, cores do esquema, ícones do logo) e o põe num blob:
+   (CSP manifest-src 'self' blob:). Se qualquer passo falhar, o <link rel="manifest"> estático segue valendo. No iPhone o ícone vem do
+   apple-touch-icon (o iOS ignora o manifesto), então ele e as metas apple-mobile-web-app-* também acompanham a marca.
+   ============================================================ */
+
+/** O objeto do manifesto (puro). URLs ABSOLUTAS: um manifesto em blob: não resolve caminho relativo. */
+export function construirManifesto({ nome, base, workspace = null, rota = null, fundo, icones = [], lang = "pt-BR" }) {
+  const escopo = new URL("./", base).href;
+  const inicio = workspace ? `${escopo}?produto=${workspace}${rota ? `#/${rota}` : ""}` : escopo;
+  return {
+    id: workspace ? `${escopo}?produto=${workspace}` : escopo,
+    name: nome.name, short_name: nome.short_name, description: nome.description, lang,
+    start_url: inicio, scope: escopo, display: "standalone",
+    background_color: fundo, theme_color: fundo,
+    icons: icones,
+  };
+}
+
+/** Ícones estáticos (PNG empacotados) em URL absoluta: valem quando o cliente não tem logo próprio ou a rasterização falha. */
+export function iconesPadrao(base) {
+  const u = n => new URL(`icones/${n}`, base).href;
+  return [
+    { src: u("icon-192.png"), sizes: "192x192", type: "image/png", purpose: "any" },
+    { src: u("icon-512.png"), sizes: "512x512", type: "image/png", purpose: "any" },
+    { src: u("icon-maskable-512.png"), sizes: "512x512", type: "image/png", purpose: "maskable" },
+  ];
+}
+
+/**
+ * Logo/favicon da marca → ícones PNG em data: URL (192 e 512 qualquer, 512 maskable com a zona segura, 180 para o iOS).
+ * Lança erro se a imagem não decodificar ou o canvas ficar contaminado (https de outro site sem CORS): o chamador volta aos estáticos.
+ */
+export async function rasterizarIcones({ origem, fundo, doc = globalThis.document, ImagemCtor = globalThis.Image }) {
+  if (!origem) return null;
+  const img = new ImagemCtor();
+  if (/^https?:/i.test(origem)) img.crossOrigin = "anonymous";
+  img.decoding = "async";
+  img.src = origem;
+  await img.decode();
+  const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  if (!w || !h) throw new Error("imagem_vazia");
+  const desenhar = (tam, { cheio = false, escala = 0.82 } = {}) => {
+    const c = doc.createElement("canvas");
+    c.width = c.height = tam;
+    const g = c.getContext("2d");
+    if (cheio) { g.fillStyle = fundo; g.fillRect(0, 0, tam, tam); }
+    const lado = tam * escala, r = Math.min(lado / w, lado / h);
+    g.drawImage(img, (tam - w * r) / 2, (tam - h * r) / 2, w * r, h * r);
+    return c.toDataURL("image/png");
+  };
+  return {
+    any192: desenhar(192, { escala: 0.86 }), any512: desenhar(512, { escala: 0.86 }),
+    maskable512: desenhar(512, { cheio: true, escala: 0.6 }),     // dentro da zona segura (o Android recorta em círculo)
+    apple180: desenhar(180, { cheio: true, escala: 0.72 }),
+  };
+}
+export function iconesDeRaster(r) {
+  return [
+    { src: r.any192, sizes: "192x192", type: "image/png", purpose: "any" },
+    { src: r.any512, sizes: "512x512", type: "image/png", purpose: "any" },
+    { src: r.maskable512, sizes: "512x512", type: "image/png", purpose: "maskable" },
+  ];
+}
+
+/** Põe o manifesto no <link rel="manifest"> como blob: (revoga o anterior). Devolve true se aplicou. */
+export function aplicarManifesto({ doc = globalThis.document, manifesto, estado, URLCtor = globalThis.URL, BlobCtor = globalThis.Blob }) {
+  const link = doc.getElementById("manifest");
+  if (!link || typeof URLCtor.createObjectURL !== "function") return false;
+  let url;
+  try { url = URLCtor.createObjectURL(new BlobCtor([JSON.stringify(manifesto)], { type: "application/manifest+json" })); } catch { return false; }
+  const anterior = estado.blob;
+  if (!estado.original) estado.original = link.getAttribute("href");
+  link.setAttribute("href", url);
+  estado.blob = url;
+  if (anterior) try { URLCtor.revokeObjectURL(anterior); } catch { /* ok */ }
+  return true;
+}
+/** Falhou algum passo: volta ao manifesto estático (o do produto aberto). */
+export function voltarAoEstatico({ doc = globalThis.document, estado, URLCtor = globalThis.URL }) {
+  const link = doc.getElementById("manifest");
+  if (link && estado.original) link.setAttribute("href", estado.original);
+  if (estado.blob) { try { URLCtor.revokeObjectURL(estado.blob); } catch { /* ok */ } estado.blob = null; }
+}
+
+/** apple-touch-icon e metas apple-mobile-web-app-* (iPhone/iPad): ícone 180, título e barra de status conforme o esquema. */
+export function atualizarMetasApple({ doc = globalThis.document, titulo, icone = null, escuro = false }) {
+  const meta = (nome, valor) => { const m = doc.querySelector(`meta[name="${nome}"]`); if (m) m.setAttribute("content", valor); };
+  meta("apple-mobile-web-app-title", String(titulo || "Órbita").slice(0, 30));
+  meta("apple-mobile-web-app-status-bar-style", escuro ? "black-translucent" : "default");
+  const link = doc.getElementById("apple-icone");
+  if (link && icone) link.setAttribute("href", icone);
+}
+
+/* ---------- instalar o app (menu da conta e folha «Mais») ---------- */
+export function emStandalone({ janela = globalThis.window, nav = globalThis.navigator } = {}) {
+  try { return !!(janela && janela.matchMedia && janela.matchMedia("(display-mode: standalone)").matches) || (nav && nav.standalone === true); } catch { return false; }
+}
+export function ehIOS({ ua = "", plataforma = "", toques = 0 } = {}) {
+  return /iphone|ipad|ipod/i.test(ua) || (plataforma === "MacIntel" && toques > 1);   // iPad com Safari "desktop"
+}
+/** Como instalar neste navegador: "evento" (Chrome/Edge/Android: beforeinstallprompt), "ios" (passo a passo) ou null (já instalado ou sem suporte). */
+export function modoDeInstalacao({ evento = null, janela = globalThis.window, nav = globalThis.navigator } = {}) {
+  if (emStandalone({ janela, nav })) return null;
+  if (evento && typeof evento.prompt === "function") return "evento";
+  if (ehIOS({ ua: (nav && nav.userAgent) || "", plataforma: (nav && nav.platform) || "", toques: (nav && nav.maxTouchPoints) || 0 })) return "ios";
+  return null;
+}
+export const PASSOS_IOS = Object.freeze(["Toque no botão Compartilhar (o quadrado com a seta para cima).", "Escolha «Adicionar à Tela de Início».", "Confirme em «Adicionar»: o app aparece na tela do aparelho."]);

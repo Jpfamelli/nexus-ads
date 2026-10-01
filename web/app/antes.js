@@ -13,6 +13,11 @@
   var raiz = document.documentElement;
   function ler(k) { try { var s = window.localStorage.getItem(k); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
   function esquema() { try { return window.localStorage.getItem("nx-app-esquema") || "claro"; } catch (e) { return "claro"; } }
+  // M13: o produto aberto (?produto=crm|ads|atendimento) marca o <html> antes da primeira pintura: o acento do produto não pisca
+  try {
+    var produtoAberto = new URLSearchParams(location.search).get("produto");
+    if (produtoAberto === "crm" || produtoAberto === "ads" || produtoAberto === "atendimento") raiz.setAttribute("data-produto", produtoAberto);
+  } catch (e) { /* sem query: o app.js põe depois */ }
   var preferido = esquema();
   if (preferido === "claro" || preferido === "escuro") {
     raiz.setAttribute("data-esquema", preferido);

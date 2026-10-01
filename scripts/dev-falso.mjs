@@ -3,6 +3,7 @@
 // Não lê credenciais, não chama serviços externos e nunca altera prontos.js.
 import http from "node:http";
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -165,11 +166,16 @@ const demoAds = (() => {
 function sessao(token = "") {
   const outra = String(token).includes("outra");
   return { conta: { id: outra ? ID.ana : ID.eu, nome: outra ? "Ana Paula" : "Dra. Helena", email: "demo@example.test", papel: "gestor", super: true, telefone: null },
-    org: { id: ID.org, nome: "Nexus", slug: "nexus", marca: { produto: "Órbita", cores: { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" } }, img_hash: "dev-falso" },
+    org: { id: ID.org, nome: "Nexus", slug: "nexus", marca: { produto: (dev.marca && dev.marca.produto) || "Órbita", cores: { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" } }, img_hash: dev.marca ? `dev-${Object.keys(dev.marca).join("")}` : "dev-falso" },
     super: true, link_base_padrao: null, modulos_plano: {}, clientes: [{ id: ID.cliente, slug: "sorriso-vivo", nome: "Clínica Sorriso Vivo", plano: "completo", status: "teste", vertical: dev.vertical || "odonto", papel: "admin", proprio: true,
       modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"], teste_ate: somaDia(hoje, 14), tem_tema: false, cfg: {} }] };
 }
 const marcaPublica = { org: { id: ID.org, nome: "Nexus", slug: "nexus" }, marca: { produto: "Órbita", cores: { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" }, login_titulo: "Seu atendimento em movimento", login_texto: "Entre para acompanhar conversas, pacientes e campanhas.", suporte_wa: "5500000000000" } };
+/** Marca da org, com as sobreposições de simular/marca (nome do produto e logo): o manifesto instalável nasce delas. */
+function marcaAtual() {
+  if (!dev.marca) return marcaPublica;
+  return { ...marcaPublica, marca: { ...marcaPublica.marca, ...dev.marca } };
+}
 const baseCrm = { funis, campos: [{ id: "cf1", entidade: "contato", chave: "convenio", rotulo: "Convênio", tipo: "texto", ativo: true }], etiquetas,
   motivos: [{ id: "m1", nome: "Preço", exige_texto: false }, { id: "m2", nome: "Sem retorno", exige_texto: false }], usuarios, ticket: 2600,
   eu: { id: ID.eu, nome: "Dra. Helena", papel: "admin" } };
@@ -398,7 +404,7 @@ function enviarTexto(p) {
 
 function rpc(nome, p = {}) {
   switch (nome) {
-    case "nx_marca_publica": return marcaPublica;
+    case "nx_marca_publica": return marcaAtual();
     case "nx_entrar": { const token = `demo-local-${dev.proximaContaOutra ? "outra" : "token"}-${++dev.seqToken}`; dev.tokens.add(token); return { token }; }
     case "nx_sair": dev.tokens.clear(); return { ok: true };
     case "nx_app_sessao": return sessao(p.p_token);
@@ -674,6 +680,12 @@ function simular(acao, q) {
     case "mensagem": return { ok: true, mensagem: simularEntrada(q.get("conversa") || 901, q.get("texto")) };
     case "onboarding": onboardingDefinir(q.get("modo") || "parcial"); return { ok: true, estado: onboardingEstado() };
     case "versao": dev.versao = q.get("v") || null; return { ok: true, versao: dev.versao };
+    case "marca": {
+      if (!q.get("produto") && q.get("logo") !== "1") { dev.marca = null; return { ok: true, marca: null }; }
+      const logo = q.get("logo") === "1" ? `data:image/png;base64,${readFileSync(resolve(ROOT, "app/icones/icon-192.png")).toString("base64")}` : undefined;
+      dev.marca = { ...(q.get("produto") ? { produto: q.get("produto") } : {}), ...(logo ? { logo, logo_claro: logo, favicon: logo } : {}) };
+      return { ok: true, marca: Object.keys(dev.marca) };
+    }
     case "vertical": dev.vertical = ["odonto", "oficina", "loja", "generico"].includes(q.get("v")) ? q.get("v") : null; return { ok: true, vertical: dev.vertical };
     case "zerar": dev.chamadas = {}; dev.falhas = []; dev.enviosExternos = 0; dev.reqs.clear(); dev.refs.clear(); return { ok: true };
     default: return { ok: false, erro: "acao_desconhecida" };

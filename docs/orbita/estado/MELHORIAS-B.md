@@ -16,6 +16,7 @@ Testes da frente: `node testes/shell.teste.mjs` (registrado em `testes/rodar-tud
 | M16 telas que abrem com o último dado (cache.js) | feito | ver `git log --grep "M16"` |
 | M21 ícones que dizem a coisa certa | feito | ver `git log --grep "M21"` |
 | M22 acessibilidade de fluxo | feito (shell sem violações no axe; 5 achados de C e D nas pendências) | ver `git log --grep "M22"` |
+| M13 instalável com a marca e o produto certo | feito (ícones PNG, manifesto dinâmico em blob:, `manifest-src 'self' blob:`, Instalar o app; falta testar num celular de verdade) | ver `git log --grep "M13"` |
 
 ## M11 · Abrir em ~1,5 s em vez de ~3,5 s
 
@@ -193,6 +194,24 @@ Relatórios a 390 `scrollable-region-focusable` (`.rel-tabela-rolagem` sem `tabi
 
 **Como verificar**: `node testes/shell.teste.mjs` (4 testes de M22) e `node scripts/auditar-a11y.mjs`.
 
+## M13 · Instalável de verdade, com a marca do cliente e o produto certo
+
+**O que existia**: o manifesto do `/app/` tinha só um ícone SVG (o Chrome reprova `icons` sem PNG 192/512), nenhum `apple-touch-icon`, e o app instalado vinha sempre com o nome "Órbita" e a cor escura, mesmo para uma org com marca própria.
+
+**O que mudou** (arquivos de B: `web/app/{pwa.js,app.js,antes.js,index.html,login.js,rotas.js,shell.css,manifest.webmanifest,icones/*}`, `netlify.toml`, `scripts/{gerar-icones.mjs,dev-falso.mjs}`):
+
+- Ícones PNG empacotados em `web/app/icones/` (192, 512, 512 maskable com zona segura, `apple-touch-icon` 180), gerados por `node scripts/gerar-icones.mjs` (sem dependência: PNG escrito à mão). `manifest.webmanifest` os lista; `index.html` ganhou `apple-touch-icon` e as metas `mobile-web-app-capable`/`apple-mobile-web-app-*`.
+- Manifesto dinâmico: depois de resolver a marca, o `app.js` monta o manifesto (`pwa.construirManifesto`) com o nome do produto da org + a área aberta (`rotas.nomeDoApp`: "Conecta Atendimento", "Órbita CRM", "Nexus Ads · Órbita"), `start_url`/`id` do produto (`?produto=` + rota inicial), `theme_color`/`background_color` = fundo do esquema atual (a splash abre clara com o app claro) e os ícones rasterizados do logo do cliente em canvas (`pwa.rasterizarIcones`). Vai para o `<link rel="manifest">` como `blob:` (revoga o anterior). Qualquer falha (logo sem CORS, canvas contaminado, `createObjectURL`) volta ao manifesto estático do produto e aos PNG empacotados. Várias pinturas seguidas viram uma montagem só (350 ms; montagem antiga não sobrescreve a nova).
+- CSP: `manifest-src 'self' blob:` na `<meta>` do `index.html` e no cabeçalho `/app/*` do `netlify.toml` (mesmo texto nos dois). As entradas `/crm/`, `/ads/`, `/atendimento/` seguem sem a diretiva (só redirecionam, não têm manifesto).
+- `antes.js` põe `data-produto` no `<html>` antes da primeira pintura (acento do produto não pisca). O login mostra o produto aberto (ícone + nome + frase). A pílula do topo usa o ícone do produto (o CRM acompanha a vertical da empresa).
+- "Instalar o app": evento `beforeinstallprompt` guardado cedo (e o aviso automático do Chrome escondido); item no menu da conta e na folha "Mais"; no iPhone/iPad (sem evento) abre um passo a passo; some quando já está em modo standalone.
+- Marca pública que chega DEPOIS da sessão guardada (boot pelo cache, M16) repinta o shell e refaz o manifesto.
+- dev-falso: `/__dev_falso/simular/marca?produto=Conecta&logo=1` (e sem parâmetros para zerar) para ver o manifesto white-label.
+
+**Verificação**: `testes/shell.teste.mjs` (84 verdes, 9 deles do M13). No Chrome real (puppeteer-core): `Page.getInstallabilityErrors` = `[]` em `/app/`, `/crm/`, `/ads/` e `/atendimento/`; manifesto lido pelo CDP (`Page.getAppManifest`) com nome/curto/start/cores/ícones corretos, inclusive white-label com logo; `apple-touch-icon` com o logo após a repintura tardia; 0 violações de CSP; "Instalar o app" chama `prompt()`; login do Nexus Ads mostra "Conecta Anúncios · Campanhas, origem dos leads e retorno.".
+
+**Não coberto**: instalar de fato num Android/iPhone (só o navegador desktop foi usado; o passo a passo do iOS é texto e não foi visto num Safari real) e a rasterização de logo `https:` de outro domínio sem CORS (cai nos PNG empacotados, é o esperado).
+
 ## Pendências para outras frentes
 
 - **C e D (M14):** o navegador guarda a falha de `import()` por URL. Se um módulo seu importa dependências com `import()` direto e a rede cair no meio, o cartão de erro precisa de recarga (o shell já faz isso quando a mensagem é de import). Para tentar de novo SEM recarregar, repetir com `&r=<n>` depois do `?v=` (a regra de `?v=` dos testes aceita).
@@ -207,3 +226,5 @@ Relatórios a 390 `scrollable-region-focusable` (`.rel-tabela-rolagem` sem `tabi
 - **D (M22/M40):** axe (`node scripts/auditar-a11y.mjs`) nas telas: Conversas — `aria-allowed-attr` crítico: o `textarea` do compositor (`cv-composer.js`) tem `aria-expanded="false"` (atributo que `textarea` não aceita; use `role="combobox"` com `aria-controls`/`aria-expanded` ou tire o atributo). Relatórios a 390 px — `scrollable-region-focusable` sério: `.rel-tabela-rolagem` precisa de `tabindex="0"` (e `role="region"` + `aria-label`).
 - **C (M22/M30):** axe no CRM — `aria-required-children` crítico: as colunas vazias do kanban (`.kb-lista[role=list]`) não têm `listitem`; tire o `role="list"` quando a coluna estiver vazia (ou ponha um item oculto com o texto do vazio).
 - **C e D (M22):** o shell já mostra «Ir para a lista de conversas / a conversa / o campo de mensagem» e «Ir para o quadro» pelos `aria-label` que as telas têm (um teste confere); se mudarem esses rótulos, registrem os seus com `ctx.atalhosDeRegiao([{rotulo, alvo}])`. Cada tela precisa de UM `<h1>`: o shell move o foco para ele depois de navegar e anuncia «<título>, carregado».
+- A (testes/app.teste.mjs, ~linha 1213): o teste do netlify.toml compara o cabeçalho `/app/*` com a CSP antiga exata e falha. A CSP nova (M13) é: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https://dtjznipitihnwmcgpzqh.supabase.co; connect-src 'self' https://dtjznipitihnwmcgpzqh.supabase.co; font-src 'self'; manifest-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'` (só ganhou `manifest-src 'self' blob:` depois de `font-src 'self';`). O mesmo texto está na `<meta>` do index.html (sem frame-ancestors).
+- A (manifestos de produto): `manifest-crm/ads/atendimento.webmanifest` ficaram com o ícone SVG único (o teste de A exige `icons.length === 1`). Eles já são instaláveis (installabilityErrors = [] verificado); quando o `/app/` abre, o manifesto dinâmico em blob: os substitui por um com PNG e a marca do cliente. Se A quiser PNG também nos estáticos, é só acrescentar `icones/*.png` e relaxar o teste.

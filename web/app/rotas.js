@@ -54,6 +54,23 @@ export const PRODUTOS = Object.freeze({
   atendimento: Object.freeze({ nome: "Atendimento", resumo: "Conversas, equipe, agenda e automações.", titulo: "Órbita Atendimento", rota: "conversas", manifesto: "manifest-atendimento.webmanifest", itens: Object.freeze(["inicio", "conversas", "agenda", "automacoes"]) }),
 });
 
+/** Nome do app para o manifesto, o login e a pílula do topo: o produto da org (white-label) + a área aberta. Org padrão ("Órbita") usa os títulos fixos. */
+export function nomeDoApp({ produto = "Órbita", workspace = null } = {}) {
+  const p = String(produto || "Órbita").trim().slice(0, 40) || "Órbita";
+  const w = workspace && PRODUTOS[workspace];
+  const padrao = p === "Órbita";
+  if (!w) return { name: p, short_name: p.slice(0, 12), description: "Anúncio, conversa e venda na mesma órbita." };
+  const sufixo = { crm: "CRM", ads: "Anúncios", atendimento: "Atendimento" }[workspace] || w.nome;
+  const curto = { crm: "CRM", ads: "Ads", atendimento: "Atend." }[workspace] || w.nome;
+  return {
+    name: padrao ? w.titulo : `${p} ${sufixo}`,
+    short_name: padrao ? (workspace === "atendimento" ? "Atendimento" : curto) : `${p} ${curto}`.slice(0, 12),
+    description: w.resumo,
+  };
+}
+/** Ícone do sprite de cada produto (o CRM acompanha a vertical da empresa: dente, chave, sacola ou funil). */
+export function iconeDoProduto(workspace, iconeCrm = "funil") { return workspace === "crm" ? iconeCrm : workspace === "ads" ? "anuncio" : workspace === "atendimento" ? "chat" : "camadas"; }
+
 /** Produto solicitado na query string. Somente os três ids conhecidos são aceitos. */
 export function produtoDe(busca = "") {
   const q = new URLSearchParams(String(busca).replace(/^\?/, ""));

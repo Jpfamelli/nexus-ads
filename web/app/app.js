@@ -56,6 +56,8 @@ const E = {
   naoAtualizar: new Set(), // funções de módulos com trabalho pendente: enquanto alguma devolver true, a atualização automática espera
   pwa: null,
   regioes: null,           // M22: atalhos «Ir para…» registrados pelo módulo ativo (ctx.atalhosDeRegiao); null = valem os padrões da rota
+  instalarEvento: null,    // M13: o beforeinstallprompt guardado (o botão «Instalar o app» usa)
+  pwaMod: null,            // M13: o módulo pwa.js depois de carregado
   bootTentar: null,        // o que o botão da tela de abertura faz agora (pular a espera do laço, refazer a etapa…)
   badges: {},
   titulo: "",
@@ -346,6 +348,57 @@ function montarIndicadoresRede() {
 }
 
 /* ============================================================
+   INSTALÁVEL COM A MARCA (M13): manifesto dinâmico em blob:, apple-touch-icon e «Instalar o app»
+   ============================================================ */
+const manifestoEstado = { blob: null, original: null, seq: 0 };
+let manifestoTimer = null;
+function agendarManifesto() {
+  clearTimeout(manifestoTimer);
+  manifestoTimer = setTimeout(atualizarManifestoApp, 350);   // várias pinturas seguidas (marca, tema da empresa) viram uma montagem só
+}
+async function atualizarManifestoApp() {
+  const P = E.pwaMod;
+  if (!P || !E.marca) return;
+  const seq = ++manifestoEstado.seq;
+  try {
+    const base = new URL("./", location.href).href;
+    const nome = E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace });
+    const fundo = getComputedStyle(document.documentElement).getPropertyValue("--c-fundo").trim() || E.M.tema.FUNDOS_ESQUEMA.escuro;
+    const m = E.marca;
+    let raster = null;
+    try { raster = await P.rasterizarIcones({ origem: m.logo_cliente || m.favicon || m.logo || null, fundo }); }
+    catch (e) { raster = null; console.warn("ícones da marca indisponíveis; ficam os empacotados", e && e.message); }   // sem logo próprio ou imagem sem CORS
+    if (seq !== manifestoEstado.seq) return;
+    const manifesto = P.construirManifesto({ nome, base, workspace: E.workspace, rota: E.workspace ? E.M.rotas.produtoInicial(E.workspace) : null, fundo,
+      icones: raster ? P.iconesDeRaster(raster) : P.iconesPadrao(base) });
+    if (!P.aplicarManifesto({ manifesto, estado: manifestoEstado })) throw new Error("manifesto_nao_aplicado");
+    P.atualizarMetasApple({ titulo: nome.short_name, icone: raster ? raster.apple180 : null, escuro: document.documentElement.dataset.esquema !== "claro" });
+  } catch (e) {
+    console.warn("manifesto dinâmico indisponível; fica o estático", e && e.message);
+    P.voltarAoEstatico({ estado: manifestoEstado });
+  }
+}
+
+/** Como instalar neste aparelho: "evento" (botão nativo), "ios" (passo a passo) ou null (já instalado ou sem suporte). */
+function modoInstalacao() { return E.pwaMod ? E.pwaMod.modoDeInstalacao({ evento: E.instalarEvento }) : null; }
+async function instalarApp() {
+  const { ui } = E;
+  const modo = modoInstalacao();
+  if (modo === "evento") {
+    const ev = E.instalarEvento;
+    E.instalarEvento = null;                       // o evento só vale uma vez
+    try { await ev.prompt(); const r = await ev.userChoice; if (r && r.outcome === "accepted") ui.toast("App instalado. Procure o ícone na tela do aparelho.", { tipo: "ok" }); }
+    catch { /* a pessoa fechou */ }
+    return;
+  }
+  if (modo === "ios") {
+    ui.modal({ titulo: "Instalar no iPhone ou iPad", largura: "p", protegerTexto: false,
+      corpo: ui.h("div", { class: "pilha-p" }, ui.h("p", null, "O iPhone instala pelo menu do Safari:"), ui.h("ol", { class: "instalar-passos" }, E.pwaMod.PASSOS_IOS.map(t => ui.h("li", null, t)))),
+      acoes: [{ rotulo: "Entendi", tipo: "primario" }] });
+  }
+}
+
+/* ============================================================
    PWA (M12): service worker, versão nova sem aba quebrada — depois do boot, nada disto atrasa a primeira pintura
    ============================================================ */
 const CSS_DAS_TELAS = ["conversas.css", "crm.css", "agenda.css", "relatorios.css", "automacoes.css"];
@@ -371,7 +424,9 @@ function iniciarPwa() {
   setTimeout(async () => {
     try {
       const pwa = await arq("pwa.js");
+      E.pwaMod = pwa;
       E.pwa = pwa.iniciar({ versao: VERSAO, ui: E.ui, alvo: $("faixas-sistema"), produto: () => E.produto || "Órbita", ocupado: ocupadoParaAtualizar, urlsPrecache });
+      agendarManifesto();
     } catch (e) { console.warn("pwa indisponível", e && e.message); }
   }, 0);
 }
@@ -390,15 +445,20 @@ function orgDaUrl() {
 
 async function carregarMarcaPublica({ pintar = true } = {}) {
   const { tema } = E.M;
+  let mudou = false;
   try {
     const r = await E.api.publica("nx_marca_publica", { p_host: location.hostname, p_org: orgDaUrl() });
-    if (r && r.marca) E.marcaPublica = r;
+    if (r && r.marca) { mudou = !E.marcaPublica || tema.hashCurto(r.marca) !== tema.hashCurto(E.marcaPublica.marca); E.marcaPublica = r; }
   } catch (e) {
     console.warn("marca pública indisponível", e && e.codigo);
   }
   const m = tema.marcaEfetiva(E.marcaPublica ? E.marcaPublica.marca : {}, {});
   if (pintar) pintarMarca(m, { guardar: true });
-  else guardarMarcaPublica(m);
+  else {
+    guardarMarcaPublica(m);
+    // boot pelo cache (M16): a sessão já pintou o shell e a marca pública (logo, nome) chegou depois: repinta e refaz o manifesto
+    if (E.sessao && mudou) aplicarMarcaCliente().catch(() => { /* a próxima pintura corrige */ });
+  }
 }
 
 /** Cache da marca da tela de entrada (antes.js pinta com ele antes do primeiro quadro). */
@@ -493,6 +553,7 @@ function pintarMarca(m, { guardar = false, cacheCliente = null, respeitarEsquema
   atualizarBotaoTema();
   atualizarTitulo();
   if (guardar) LS.gravar("nx-app-marca", { host: location.host, org: E.marcaPublica ? E.marcaPublica.org.slug : null, vars: t.vars, produto: m.produto, favicon: m.favicon });
+  agendarManifesto();
   if (cacheCliente) LS.gravar(`nx-app-tema-${cacheCliente.id}`, { ...cacheCliente.dados, vars: t.vars });
   return t;
 }
@@ -1173,6 +1234,8 @@ async function montarPublico(r, seq) {
   const ctx = {
     alvo, versao: VERSAO, rota: r, api: E.api, ui, tema: E.M.tema,
     marca: E.marca, marcaPublica: E.marcaPublica,
+    produtoAberto: E.workspace ? { id: E.workspace, titulo: E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace }).name, resumo: E.M.rotas.PRODUTOS[E.workspace].resumo,
+      icone: E.M.rotas.iconeDoProduto(E.workspace) } : null,
     sessao: E.sessao,
     navegar,
     pintarMarcaOrg(marcaOrg) { pintarMarca(E.M.tema.marcaEfetiva(marcaOrg || {}, {}), { respeitarEsquema: false }); },
@@ -1282,6 +1345,11 @@ function abrirFolhaMais(itens) {
     a.addEventListener("click", () => api && api.fechar(null));
     return a;
   }));
+  if (modoInstalacao()) {
+    const bt = ui.h("button", { type: "button" }, ui.icone("baixar"), "Instalar o app");
+    bt.addEventListener("click", () => { if (api) api.fechar(null); instalarApp(); });
+    grade.appendChild(bt);
+  }
   ui.modal({ titulo: "Mais", corpo: grade, acoes: [{ rotulo: "Fechar", tipo: "neutro" }], aoAbrir: a => { api = a; } });
 }
 
@@ -1350,9 +1418,10 @@ function desenharConta() {
   const abrirMenuConta = ancora => ui.menu(ancora, [
     { rotulo: "Perfil e senha", icone: "usuario", fn: () => navegar("#/config/perfil") },
     { rotulo: "Configurações", icone: "engrenagem", fn: () => navegar("#/config") },
+    modoInstalacao() ? { rotulo: "Instalar o app", icone: "baixar", fn: () => instalarApp() } : null,
     "-",
     { rotulo: "Sair", icone: "sair", fn: () => sair() },
-  ]);
+  ].filter(Boolean));
   const btPe = ui.h("button", { type: "button", class: "lat-conta", "aria-label": `Conta de ${c.nome}` },
     ui.avatar(c.nome, c.id), ui.h("span", null, ui.h("b", null, c.nome), ui.h("small", null, papelTxt)));
   btPe.addEventListener("click", () => abrirMenuConta(btPe));
@@ -1368,8 +1437,10 @@ function desenharConta() {
 function desenharFerramentasTopo(dir) {
   const { ui } = E;
   if (E.sessao) {
-    const btProdutos = ui.h("button", { type: "button", class: "topo-produtos", "aria-haspopup": "dialog",
-      "aria-label": "Trocar entre CRM, Nexus Ads e Atendimento" }, ui.icone("camadas"), ui.h("span", null, E.M.rotas.PRODUTOS[E.workspace]?.nome || "Produtos"));
+    const prodAberto = E.workspace ? E.M.rotas.PRODUTOS[E.workspace] : null;
+    const btProdutos = ui.h("button", { type: "button", class: "topo-produtos", "aria-haspopup": "dialog", title: prodAberto ? prodAberto.resumo : "Trocar entre CRM, Nexus Ads e Atendimento",
+      "aria-label": prodAberto ? `${E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace }).name}: ${prodAberto.resumo} Trocar de produto` : "Trocar entre CRM, Nexus Ads e Atendimento" },
+      ui.icone(E.M.rotas.iconeDoProduto(E.workspace, E.cliente ? E.M.vocab.vocab(E.cliente.vertical).icone_crm : "funil")), ui.h("span", null, prodAberto?.nome || "Produtos"));
     btProdutos.addEventListener("click", () => abrirSeletorProduto(btProdutos));
     dir.appendChild(btProdutos);
   }
@@ -1704,5 +1775,9 @@ function atualizarSino(n) {
   }
   if (E.sinoAberto && E.notif !== antes) E.sinoAberto.recarregar();
 }
+
+// M13: o Chrome/Edge/Android avisam que o app é instalável; guardamos o evento para o botão «Instalar o app» e escondemos o aviso automático
+addEventListener("beforeinstallprompt", ev => { ev.preventDefault(); E.instalarEvento = ev; });
+addEventListener("appinstalled", () => { E.instalarEvento = null; });
 
 iniciar();

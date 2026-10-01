@@ -48,3 +48,11 @@ h1[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
   .rede-ponto { border: 2px solid CanvasText; background: Highlight; forced-color-adjust: none; }
   .faixa-rede .bt, .faixa-versao .bt { border: 1px solid ButtonText; }
 }
+
+/* ---- produto aberto no login e passo a passo de instalação (M13) ---- */
+.entrar-produto { display: flex; align-items: flex-start; gap: .55rem; margin: 0 0 1rem; color: var(--c-texto-2); font-size: var(--fs-peq); line-height: 1.4; }
+.entrar-produto .ic { flex: none; width: 20px; height: 20px; margin-top: .05rem; color: var(--c-prod, var(--c-prim)); }
+.entrar-produto b { color: var(--c-texto); font-weight: 700; }
+.instalar-passos { margin: 0; padding-left: 1.2rem; display: grid; gap: .5rem; color: var(--c-texto); }
+.folha-mais button { display: flex; flex-direction: column; align-items: center; gap: .4rem; padding: 1rem .4rem; border-radius: var(--r); background: var(--c-sup-2); border: 1px solid var(--c-borda); font-size: var(--fs-13); font-weight: 600; text-align: center; color: inherit; cursor: pointer; }
+.folha-mais button .ic { width: 22px; height: 22px; color: var(--c-prim-luz); }

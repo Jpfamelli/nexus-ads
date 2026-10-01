@@ -86,7 +86,9 @@ function telaEntrar(ctx) {
     }
   });
 
+  const prod = ctx.produtoAberto;
   const cartao = h("section", { class: "entrar-cartao", "aria-labelledby": "t-entrar" },
+    prod ? h("p", { class: "entrar-produto" }, ui.icone(prod.icone), h("span", null, h("b", null, prod.titulo), " · ", prod.resumo)) : null,
     h("h1", { id: "t-entrar" }, "Entrar"),
     h("p", { class: "sub" }, m.login_texto || "Entre com o e-mail e a senha que você recebeu."),
     form,

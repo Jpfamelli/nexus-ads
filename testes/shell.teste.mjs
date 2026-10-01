@@ -81,7 +81,7 @@ function rodarAntes({ hash = "", search = "", token = null, src = "http://x/app/
   };
   const sandbox = { document, window: { localStorage: storage }, localStorage: storage, location: { host: "local", search, hash, href: "http://x/app/" }, URLSearchParams, URL };
   runInNewContext(ler("antes.js"), sandbox);
-  return { preloads: filhos.map(f => `${f.rel}:${f.href}`), classe: attrs.classe };
+  return { preloads: filhos.map(f => `${f.rel}:${f.href}`), classe: attrs.classe, attrs };
 }
 
 await teste("antes.js: injeta o modulepreload da tela do endereço (8 telas + login), com o ?v= do próprio script", () => {
@@ -1274,6 +1274,144 @@ await teste("app.js (M22): ctx.atalhosDeRegiao, alvo resolvido na hora do clique
   assert.match(f, /setTimeout\(\(\) => \{[\s\S]*?focarVista\(\)/, "sem <h1> em 3 s cai para o <main>");
   assert.match(APP_JS, /observarRegioes\(\);/); assert.match(APP_JS, /E\.regioes = null;\s*if \(E\.rascunhos\)/, "desmontar limpa os atalhos do módulo");
   assert.match(APP_JS, /document\.querySelector\("\.pular"\)/, "o «Pular para o conteúdo» continua sendo o .pular (teste T09 da frente A)");
+});
+
+/* ============================================================ M13 */
+secao("M13 · instalável com a marca do cliente e com o produto certo");
+
+/** largura × altura de um PNG (cabeçalho IHDR). */
+function dimensoesPng(arquivo) {
+  const b = readFileSync(join(APP, "icones", arquivo));
+  assert.equal(b.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", `${arquivo} é PNG`);
+  return [b.readUInt32BE(16), b.readUInt32BE(20)];
+}
+
+await teste("ícones empacotados: PNG 192, 512, 512 maskable e apple-touch 180; manifesto do /app/ os lista (o Chrome reprovava com icons: [])", () => {
+  assert.deepEqual(dimensoesPng("icon-192.png"), [192, 192]); assert.deepEqual(dimensoesPng("icon-512.png"), [512, 512]);
+  assert.deepEqual(dimensoesPng("icon-maskable-512.png"), [512, 512]); assert.deepEqual(dimensoesPng("apple-touch-icon.png"), [180, 180]);
+  const m = JSON.parse(ler("manifest.webmanifest"));
+  assert.ok(m.icons.length >= 3, "ícones no manifesto do /app/");
+  const por = (tam, fim) => m.icons.find(i => i.sizes === tam && i.purpose === fim);
+  assert.ok(por("192x192", "any") && por("512x512", "any") && por("512x512", "maskable"), "192 e 512 (qualquer) e 512 maskable");
+  for (const i of m.icons) if (i.type === "image/png") assert.ok(existsSync(join(APP, i.src)), `${i.src} existe`);
+  assert.equal(m.scope, "/app/"); assert.equal(m.start_url, "/app/");
+  assert.match(HTML, /<link rel="apple-touch-icon" id="apple-icone" href="icones\/apple-touch-icon\.png">/);
+  for (const n of ["mobile-web-app-capable", "apple-mobile-web-app-capable", "apple-mobile-web-app-title", "apple-mobile-web-app-status-bar-style"]) assert.match(HTML, new RegExp(`<meta name="${n}"`), n);
+});
+
+await teste("CSP: manifest-src 'self' blob: no index.html (<meta>) e no netlify.toml (/app/*) — o mesmo texto nas duas pontas; as entradas não mudam", () => {
+  const meta = /<meta http-equiv="Content-Security-Policy" content="([^"]*)">/.exec(HTML)[1];
+  const bloco = TOML.split("[[headers]]").find(b => b.includes('for = "/app/*"'));
+  const cab = /Content-Security-Policy = "([^"]+)"/.exec(bloco)[1];
+  assert.match(meta, /font-src 'self'; manifest-src 'self' blob:; base-uri 'self'/);
+  assert.match(cab, /font-src 'self'; manifest-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'/);
+  assert.equal(cab.replace(" frame-ancestors 'none';", ""), meta, "meta e cabeçalho = mesma política (menos frame-ancestors, que só vale em cabeçalho)");
+  assert.doesNotMatch(meta, /script-src[^;]*blob:/, "blob: só para manifesto, nunca para script");
+  for (const e of ["/crm/*", "/ads/*", "/atendimento/*"]) assert.doesNotMatch(TOML.split("[[headers]]").find(b => b.includes(`for = "${e}"`)), /manifest-src/, `${e}: entrada só redireciona, sem manifesto`);
+});
+
+await teste("rotas.nomeDoApp: org padrão usa os títulos de sempre; white-label troca «Órbita» pelo produto da org; nome curto cabe no ícone", () => {
+  const n = (produto, workspace) => ROTAS_MOD.nomeDoApp({ produto, workspace });
+  assert.deepEqual([n("Órbita", "crm").name, n("Órbita", "ads").name, n("Órbita", "atendimento").name], ["Órbita CRM", "Nexus Ads · Órbita", "Órbita Atendimento"]);
+  assert.deepEqual([n("Órbita", "crm").short_name, n("Órbita", "ads").short_name, n("Órbita", "atendimento").short_name], ["CRM", "Ads", "Atendimento"]);
+  assert.deepEqual([n("Conecta", "crm").name, n("Conecta", "ads").name, n("Conecta", "atendimento").name], ["Conecta CRM", "Conecta Anúncios", "Conecta Atendimento"]);
+  assert.equal(n("Conecta", "ads").short_name, "Conecta Ads"); assert.equal(n("Conecta", "crm").short_name, "Conecta CRM");
+  for (const x of [n("Clínica Sorriso Vivo Odontologia", "atendimento"), n("Órbita", "atendimento"), n("X", "crm")]) assert.ok(x.short_name.length <= 12, x.short_name);
+  assert.equal(n("Conecta", null).name, "Conecta"); assert.equal(n("", null).name, "Órbita"); assert.equal(n(undefined, "inexistente").name, "Órbita");
+  assert.equal(n("Conecta", "crm").description, "Contatos, oportunidades, vendas e automações.");
+  assert.deepEqual(["crm", "ads", "atendimento", null].map(w => ROTAS_MOD.iconeDoProduto(w, "dente")), ["dente", "anuncio", "chat", "camadas"]);
+  for (const ic of ["dente", "anuncio", "chat", "camadas", "funil"]) assert.ok(sprite.has(ic), `i-${ic} no sprite`);
+});
+
+await teste("pwa.construirManifesto: URLs absolutas (manifesto em blob: não resolve caminho relativo), escopo /app/, início do produto, cor do esquema na splash", () => {
+  const base = "https://crm.conecta.com.br/app/";
+  const m = PWA.construirManifesto({ nome: ROTAS_MOD.nomeDoApp({ produto: "Conecta", workspace: "atendimento" }), base, workspace: "atendimento", rota: "conversas", fundo: "#FAFAF8", icones: PWA.iconesPadrao(base) });
+  assert.equal(m.name, "Conecta Atendimento"); assert.equal(m.start_url, "https://crm.conecta.com.br/app/?produto=atendimento#/conversas");
+  assert.equal(m.scope, "https://crm.conecta.com.br/app/"); assert.equal(m.id, "https://crm.conecta.com.br/app/?produto=atendimento");
+  assert.equal(m.display, "standalone"); assert.equal(m.theme_color, "#FAFAF8"); assert.equal(m.background_color, "#FAFAF8", "a splash abre na cor do esquema, não preta com o app claro");
+  for (const i of m.icons) assert.match(i.src, /^https:\/\/crm\.conecta\.com\.br\/app\/icones\//);
+  assert.deepEqual(m.icons.map(i => i.purpose), ["any", "any", "maskable"]);
+  const sem = PWA.construirManifesto({ nome: ROTAS_MOD.nomeDoApp({ produto: "Órbita" }), base, fundo: "#07090C", icones: [] });
+  assert.equal(sem.start_url, base); assert.equal(sem.id, base); assert.deepEqual(sem.icons, []);
+});
+
+await teste("pwa.rasterizarIcones: logo → 4 PNGs (192, 512, maskable com zona segura, 180 do iOS); sem logo = null; canvas contaminado ou imagem que não carrega = erro (volta aos ícones empacotados)", async () => {
+  const desenhos = [];
+  const canvases = [];
+  const doc = { createElement: () => { const c = { width: 0, height: 0, getContext: () => ({ set fillStyle(v) { c.fundo = v; }, fillRect() { c.cheio = true; }, drawImage: (img, x, y, w, h) => desenhos.push({ tam: c.width, x, y, w, h }) }), toDataURL: () => `data:image/png;base64,T${c.width}${c.cheio ? "C" : ""}` }; canvases.push(c); return c; } };
+  class Img { constructor() { this.naturalWidth = 400; this.naturalHeight = 100; } async decode() { if (/ruim/.test(this.src)) throw new Error("decode"); } }
+  const r = await PWA.rasterizarIcones({ origem: "data:image/png;base64,AAAA", fundo: "#FAFAF8", doc, ImagemCtor: Img });
+  assert.deepEqual(Object.keys(r), ["any192", "any512", "maskable512", "apple180"]);
+  assert.equal(r.maskable512, "data:image/png;base64,T512C"); assert.equal(r.any512, "data:image/png;base64,T512"); assert.equal(r.apple180, "data:image/png;base64,T180C");
+  const d = tam => desenhos.find(x => x.tam === tam);
+  assert.ok(Math.abs(d(512).w - 512 * 0.86) < 1 && d(512).h < d(512).w, "logo largo cabe sem distorcer");
+  const mask = desenhos.filter(x => x.tam === 512).map(x => x.w);
+  assert.ok(Math.min(...mask) <= 512 * 0.6 + 1, "a versão maskable fica dentro da zona segura (60 %)");
+  assert.equal(await PWA.rasterizarIcones({ origem: null, fundo: "#FAFAF8", doc, ImagemCtor: Img }), null);
+  await assert.rejects(PWA.rasterizarIcones({ origem: "https://ruim.exemplo.test/logo.png", fundo: "#FAFAF8", doc, ImagemCtor: Img }), /decode/);
+  const contaminado = { createElement: () => ({ width: 0, height: 0, getContext: () => ({ fillRect() {}, drawImage() {} }), toDataURL: () => { throw new Error("SecurityError"); } }) };
+  await assert.rejects(PWA.rasterizarIcones({ origem: "https://x.test/l.png", fundo: "#FAFAF8", doc: contaminado, ImagemCtor: Img }), /SecurityError/);
+  const m = PWA.iconesDeRaster(r);
+  assert.deepEqual(m.map(i => i.sizes + "/" + i.purpose), ["192x192/any", "512x512/any", "512x512/maskable"]);
+});
+
+await teste("pwa.aplicarManifesto: põe o blob: no <link rel=manifest>, revoga o anterior e volta ao estático se algo falhar; metas apple acompanham a marca", () => {
+  const atributos = { href: "manifest-crm.webmanifest" };
+  const link = { getAttribute: k => atributos[k], setAttribute: (k, v) => { atributos[k] = v; } };
+  const doc = { getElementById: id => (id === "manifest" ? link : id === "apple-icone" ? { setAttribute: (k, v) => { doc.apple = v; } } : null), querySelector: sel => { const n = /name="([^"]+)"/.exec(sel)[1]; return { setAttribute: (k, v) => { doc.metas[n] = v; } }; }, metas: {} };
+  const revogados = []; let n = 0;
+  const URLFalso = { createObjectURL: () => `blob:http://x/${++n}`, revokeObjectURL: u => revogados.push(u) };
+  class BlobFalso { constructor(p, o) { this.p = p; this.o = o; } }
+  const estado = { blob: null, original: null };
+  assert.equal(PWA.aplicarManifesto({ doc, manifesto: { name: "a" }, estado, URLCtor: URLFalso, BlobCtor: BlobFalso }), true);
+  assert.equal(atributos.href, "blob:http://x/1"); assert.equal(estado.original, "manifest-crm.webmanifest");
+  PWA.aplicarManifesto({ doc, manifesto: { name: "b" }, estado, URLCtor: URLFalso, BlobCtor: BlobFalso });
+  assert.deepEqual(revogados, ["blob:http://x/1"], "o blob antigo é revogado"); assert.equal(estado.original, "manifest-crm.webmanifest", "o original não é sobrescrito");
+  PWA.voltarAoEstatico({ doc, estado, URLCtor: URLFalso });
+  assert.equal(atributos.href, "manifest-crm.webmanifest"); assert.deepEqual(revogados, ["blob:http://x/1", "blob:http://x/2"]); assert.equal(estado.blob, null);
+  assert.equal(PWA.aplicarManifesto({ doc: { getElementById: () => null }, manifesto: {}, estado: {}, URLCtor: URLFalso }), false, "sem <link> não faz nada");
+  assert.equal(PWA.aplicarManifesto({ doc, manifesto: {}, estado: {}, URLCtor: { createObjectURL() { throw new Error("x"); } }, BlobCtor: BlobFalso }), false, "createObjectURL falhou: devolve false e o app.js volta ao estático");
+  PWA.atualizarMetasApple({ doc, titulo: "Conecta Atendimento, nome muito comprido que passa de trinta", icone: "data:image/png;base64,Z", escuro: true });
+  assert.equal(doc.metas["apple-mobile-web-app-title"].length, 30); assert.equal(doc.metas["apple-mobile-web-app-status-bar-style"], "black-translucent"); assert.equal(doc.apple, "data:image/png;base64,Z");
+});
+
+await teste("pwa.modoDeInstalacao: evento nativo (Chrome/Edge/Android), passo a passo no iPhone/iPad, nada se já instalado ou sem suporte", () => {
+  const nav = (ua, extra = {}) => ({ userAgent: ua, platform: "", maxTouchPoints: 0, ...extra });
+  const jan = standalone => ({ matchMedia: q => ({ matches: standalone && /standalone/.test(q) }) });
+  const ev = { prompt() {} };
+  const chrome = nav("Mozilla/5.0 (Windows NT 10.0) Chrome/130.0 Safari/537.36");
+  assert.equal(PWA.modoDeInstalacao({ evento: ev, janela: jan(false), nav: chrome }), "evento");
+  assert.equal(PWA.modoDeInstalacao({ evento: null, janela: jan(false), nav: chrome }), null, "sem evento nem iOS não há o que oferecer");
+  assert.equal(PWA.modoDeInstalacao({ evento: ev, janela: jan(true), nav: chrome }), null, "já aberto como app: o item some");
+  assert.equal(PWA.modoDeInstalacao({ evento: null, janela: jan(false), nav: nav("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1") }), "ios");
+  assert.equal(PWA.modoDeInstalacao({ evento: null, janela: jan(false), nav: nav("Mozilla/5.0 (Macintosh) Safari/605", { platform: "MacIntel", maxTouchPoints: 5 }) }), "ios", "iPad com Safari 'desktop'");
+  assert.equal(PWA.modoDeInstalacao({ evento: null, janela: jan(false), nav: nav("Mozilla/5.0 (Macintosh) Safari/605", { platform: "MacIntel", maxTouchPoints: 0 }) }), null, "Mac de verdade");
+  assert.equal(PWA.modoDeInstalacao({ evento: null, janela: jan(false), nav: nav("Mozilla/5.0 (iPhone) Safari", { standalone: true }) }), null, "iOS já na tela de início (navigator.standalone)");
+  assert.equal(PWA.PASSOS_IOS.length, 3); assert.match(PWA.PASSOS_IOS[1], /Adicionar à Tela de Início/);
+});
+
+await teste("antes.js põe data-produto no <html> antes da primeira pintura (crm, ads, atendimento); outro valor é ignorado", () => {
+  for (const [search, esperado] of [["?produto=crm", "crm"], ["?produto=ads&org=x", "ads"], ["?dev=1&produto=atendimento", "atendimento"], ["?produto=outro", undefined], ["", undefined], ["?produto=<script>", undefined]])
+    assert.equal(rodarAntes({ search, token: "t" }).attrs["data-produto"], esperado, search);
+});
+
+await teste("app.js/login.js (M13): evento de instalação guardado cedo, «Instalar o app» no menu da conta e na folha Mais, manifesto dinâmico com volta ao estático, marca tardia repinta, login e pílula mostram o produto", () => {
+  const tem = (txt, trecho, porque) => assert.ok(txt.includes(trecho), `${porque || "falta"}: ${trecho}`);
+  tem(APP_JS, 'addEventListener("beforeinstallprompt", ev => { ev.preventDefault(); E.instalarEvento = ev; });', "evento guardado cedo");
+  tem(APP_JS, 'addEventListener("appinstalled", () => { E.instalarEvento = null; });', "evento some depois de instalar");
+  tem(APP_JS, 'modoInstalacao() ? { rotulo: "Instalar o app", icone: "baixar", fn: () => instalarApp() } : null,', "menu da conta");
+  tem(APP_JS, 'ui.h("button", { type: "button" }, ui.icone("baixar"), "Instalar o app")', "folha «Mais»");
+  tem(APP_JS, "P.voltarAoEstatico({ estado: manifestoEstado });", "falha em qualquer passo: volta ao manifesto estático");
+  tem(APP_JS, "if (seq !== manifestoEstado.seq) return;", "montagem antiga não sobrescreve a nova");
+  tem(APP_JS, "setTimeout(atualizarManifestoApp, 350)", "pinturas seguidas viram uma montagem só");
+  tem(APP_JS, "E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace })", "nome do app = produto da org + área");
+  tem(APP_JS, 'getPropertyValue("--c-fundo").trim() || E.M.tema.FUNDOS_ESQUEMA.escuro', "a cor da splash é a do esquema, sem hex no código");
+  tem(APP_JS, "if (E.sessao && mudou) aplicarMarcaCliente()", "marca pública que chega depois da sessão guardada repinta");
+  tem(APP_JS, "produtoAberto: E.workspace ? { id: E.workspace, titulo: E.M.rotas.nomeDoApp(", "login recebe o produto aberto");
+  tem(ler("login.js"), 'h("p", { class: "entrar-produto" }, ui.icone(prod.icone)', "cabeçalho do produto no login");
+  tem(APP_JS, 'E.M.rotas.iconeDoProduto(E.workspace, E.cliente ? E.M.vocab.vocab(E.cliente.vertical).icone_crm : "funil")', "a pílula do topo usa o ícone do produto");
+  tem(ler("shell.css"), ".entrar-produto {", "estilo do cabeçalho do produto");
+  assert.doesNotMatch(APP_JS.slice(APP_JS.indexOf("INSTALÁVEL COM A MARCA"), APP_JS.indexOf("function modoInstalacao")), /#[0-9a-fA-F]{6}\b/, "sem cor hex no trecho do manifesto (regra A: hex só em :root/tema.js)");
 });
 
 /* ============================================================ fim */
