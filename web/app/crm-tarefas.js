@@ -47,6 +47,8 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
     h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true }));
   form.querySelector(".campo.inteiro select").name = "dono_id";
   const status = form.querySelector(".crm-status");
+  // M30: tarefa NOVA guarda título e detalhes enquanto a pessoa digita (volta com «Rascunho restaurado · descartar» se a tela recarregar)
+  const rascunhos = tarefa ? [] : ["titulo", "descricao"].map(n => k.rascunho(form.querySelector(`[name=${n}]`), `tarefa:nova:${negocio_id ? `negocio:${negocio_id}` : contato_id ? `contato:${contato_id}` : "avulsa"}:${n}`));
   let reqAtual = null, reqConteudo = "";   // M25: uma chave por intenção; erro ambíguo repete com a MESMA chave
   return ui.modal({
     titulo: tarefa ? "Editar tarefa" : "Nova tarefa", corpo: form,
@@ -65,6 +67,7 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
           if (conteudo !== reqConteudo) { reqAtual = k.novaReq(); reqConteudo = conteudo; }
           const { resultado } = await k.escrever("nx_tarefa_salvar", { p_tarefa: p }, { req: reqAtual, aoStatus: txt => { status.textContent = txt; status.hidden = false; } });
           status.hidden = true;
+          for (const rc of rascunhos) rc.apagar();      // o servidor confirmou: o rascunho some
           return resultado;
         } catch (e) {
           status.hidden = true;
@@ -259,7 +262,7 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
     desenhar();
     aoMudar && aoMudar(lista);
   }
-  let nova = null;
+  let nova = null, rascunhoNota = null;
   if (k.pode("atendente")) {
     const ta = h("textarea", { "aria-label": "Nova nota", placeholder: "Escreva uma nota… (Ctrl+Enter salva)", maxlength: 5000, rows: 3 });
     const bt = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("nota"), "Salvar nota");
@@ -269,6 +272,7 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
       try {
         const n = await ui.carregando(bt, k.api.rpcC("nx_nota_salvar", { p_nota: { texto: t, ...(negocio_id ? { negocio_id } : {}), ...(contato_id ? { contato_id } : {}) } }));
         ta.value = "";
+        if (rascunhoNota) rascunhoNota.apagar();      // o servidor confirmou
         mudou({ tipo: "salva", nota: n });
         ui.anunciar("Nota salva.");
       } catch (e) { k.toastErro(e); }
@@ -276,6 +280,7 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
     bt.addEventListener("click", salvar);
     ta.addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); salvar(); } });
     nova = h("div", { class: "nota-nova" }, ta, h("div", { class: "linha linha-fim" }, bt));
+    rascunhoNota = k.rascunho(ta, negocio_id ? `negocio:${negocio_id}:nota` : contato_id ? `contato:${contato_id}:nota` : "nota");   // M30: a nota digitada sobrevive a recarga/queda de sessão
   }
   desenhar();
   const el = h("section", { class: "ng-bloco", "aria-label": "Notas" },
@@ -324,11 +329,10 @@ export async function montarTarefas(k, el, rota) {
   let dono = podeTodas ? lerLocal("nx-app-tarefas-dono", "eu") : "eu";
   let seq = 0;
 
-  const abasEl = ui.abas({ itens: ABAS_T9, ativo: aba, rotulo: "Situação das tarefas", aoMudar: id => { aba = id; gravar("nx-app-tarefas-aba", id); carregar(); } });
-  const seg = h("div", { class: "crm-seg", role: "group", "aria-label": "De quem" },
-    ...["eu", "todos"].map(x => h("button", { type: "button", "aria-pressed": String(dono === x), dataset: { v: x },
-      on: { click: ev => { dono = x; gravar("nx-app-tarefas-dono", x); for (const b of seg.children) b.setAttribute("aria-pressed", String(b.dataset.v === x)); carregar(); } } },
-      x === "eu" ? "Minhas" : "Todas")));
+  const abasEl = ui.segmentado({ opcoes: ABAS_T9.map(a => ({ valor: a.id, rotulo: a.rotulo })), valor: aba, rotulo: "Situação das tarefas",
+    aoMudar: id => { aba = id; gravar("nx-app-tarefas-aba", id); carregar(); } });
+  const seg = ui.segmentado({ opcoes: [{ valor: "eu", rotulo: "Minhas" }, { valor: "todos", rotulo: "Todas" }], valor: dono, tipo: "filtro", rotulo: "De quem",
+    aoMudar: x => { dono = x; gravar("nx-app-tarefas-dono", x); carregar(); } });
   seg.hidden = !podeTodas;
   const corpo = h("div", { class: "pilha" });
   const novaTarefa = async () => {
@@ -336,11 +340,8 @@ export async function montarTarefas(k, el, rota) {
     if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); carregar(true); }
   };
   el.append(
-    h("header", { class: "crm-cab" },
-      h("div", null, h("p", { class: "rotulo" }, ctx.cliente.nome), h("h1", { class: "titulo-pag" }, "Tarefas")),
-      h("div", { class: "crm-cab-acoes" },
-        k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novaTarefa } }, ui.icone("mais"), "Tarefa") : null)),
-    h("div", { class: "tfp-fita" }, abasEl.el, seg),
+    ui.cabecalho({ titulo: "Tarefas", acoes: k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novaTarefa } }, ui.icone("mais"), "Tarefa") : null }),
+    h("div", { class: "tfp-fita" }, abasEl, seg),
     corpo);
   // M28: no celular «+ Tarefa» sai do cabeçalho e vira o botão flutuante
   if (k.pode("atendente")) el.appendChild(h("button", { type: "button", class: "crm-fab", "aria-label": "Nova tarefa", title: "Nova tarefa", on: { click: novaTarefa } },

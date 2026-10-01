@@ -1225,7 +1225,8 @@ await teste("vocab.js: o CRM ganha ícone por vertical (odonto dente, oficina ch
   assert.deepEqual(VOC.ICONE_CRM, { odonto: "dente", oficina: "chave", loja: "sacola", generico: "funil" });
   for (const [vert, ic] of Object.entries(VOC.ICONE_CRM)) { assert.equal(VOC.vocab(vert).icone_crm, ic, vert); assert.ok(sprite.has(ic), `i-${ic} no sprite`); }
   assert.equal(VOC.vocab("xpto").icone_crm, "funil", "vertical desconhecida = genérico");
-  assert.match(APP_JS, /icone: it\.id === "crm" \? v\.icone_crm : it\.icone/, "app.js troca só o ícone do CRM");
+  assert.ok(ler("rotas.js").includes('icone: it.id === "crm" ? (vocab.icone_crm || it.icone) : it.icone'), "rotas.itensDoMenu (menu e paleta) troca só o ícone do CRM");
+  assert.ok(APP_JS.includes("E.M.rotas.itensDoMenu({ op: opcoesAcesso()"), "app.js monta o menu por rotas.itensDoMenu");
   for (const it of ROTAS_MOD.MENU) assert.ok(sprite.has(it.icone), `menu: i-${it.icone} no sprite`);
 });
 
@@ -1412,6 +1413,240 @@ await teste("app.js/login.js (M13): evento de instalação guardado cedo, «Inst
   tem(APP_JS, 'E.M.rotas.iconeDoProduto(E.workspace, E.cliente ? E.M.vocab.vocab(E.cliente.vertical).icone_crm : "funil")', "a pílula do topo usa o ícone do produto");
   tem(ler("shell.css"), ".entrar-produto {", "estilo do cabeçalho do produto");
   assert.doesNotMatch(APP_JS.slice(APP_JS.indexOf("INSTALÁVEL COM A MARCA"), APP_JS.indexOf("function modoInstalacao")), /#[0-9a-fA-F]{6}\b/, "sem cor hex no trecho do manifesto (regra A: hex só em :root/tema.js)");
+});
+
+/* ============================================================ M18 */
+secao("M18 · paleta de comandos Ctrl/⌘+K, atalhos e Ajuda");
+
+const CMD = await imp("comandos.js");
+const PALETA_JS = ler("paleta.js");
+const COMANDOS_JS = ler("comandos.js");
+
+await teste("comandos.normalizar/pontuar/filtrar: sem acento e sem caixa, todas as palavras, começo do rótulo vence, empate = ordem de origem", () => {
+  assert.equal(CMD.normalizar("  Ação  de  AÇÃO  "), "acao de acao");
+  assert.equal(CMD.pontuar("", "qualquer"), 1);
+  assert.equal(CMD.pontuar("nova oport", "Nova oportunidade") > CMD.pontuar("oport", "Nova oportunidade"), true, "começo do rótulo vale mais que o meio");
+  assert.ok(CMD.pontuar("consulta marcar", "Marcar consulta") > 0 && CMD.pontuar("marcar consulta", "Marcar consulta") > CMD.pontuar("consulta marcar", "Marcar consulta"), "rótulo igual vence");
+  assert.equal(CMD.pontuar("xyz", "Nova oportunidade", "venda lead"), 0);
+  assert.ok(CMD.pontuar("venda", "Nova oportunidade", "venda lead") > 0, "palavras extras também casam");
+  const itens = [{ rotulo: "Agenda", palavras: "calendario" }, { rotulo: "Nova tarefa", palavras: "lembrete" }, { rotulo: "Marcar consulta", palavras: "agenda horario" }, { rotulo: "Alternar tema", palavras: "aparencia" }];
+  assert.deepEqual(CMD.filtrar(itens, "AGENDA").map(x => x.rotulo), ["Agenda", "Marcar consulta"], "rótulo começando pelo termo antes do que só casa por palavra extra");
+  assert.deepEqual(CMD.filtrar(itens, "aparência").map(x => x.rotulo), ["Alternar tema"], "acento no termo");
+  assert.deepEqual(CMD.filtrar(itens, "").map(x => x.rotulo), itens.map(x => x.rotulo), "sem termo: tudo, na ordem de origem");
+  assert.equal(CMD.filtrar(itens, "a", { limite: 2 }).length, 2);
+});
+
+await teste("comandos.interpretar: «>» só ações, «#» protocolo, o resto tudo; espaços sobrando não atrapalham", () => {
+  assert.deepEqual(CMD.interpretar("> nova"), { modo: "acoes", termo: "nova" });
+  assert.deepEqual(CMD.interpretar("  >tema "), { modo: "acoes", termo: "tema" });
+  assert.deepEqual(CMD.interpretar("#2026-14"), { modo: "protocolo", termo: "2026-14" });
+  assert.deepEqual(CMD.interpretar(" mariana "), { modo: "tudo", termo: "mariana" });
+  assert.deepEqual(CMD.interpretar(""), { modo: "tudo", termo: "" });
+  assert.deepEqual(CMD.interpretar(">"), { modo: "acoes", termo: "" });
+  assert.deepEqual(CMD.interpretar(null), { modo: "tudo", termo: "" });
+});
+
+await teste("comandos.partesDeRealce: marca o trecho achado sem acento, por palavra; texto que muda de tamanho ao normalizar não é marcado", () => {
+  const j = ps => ps.map(p => (p.marca ? `[${p.texto}]` : p.texto)).join("");
+  assert.equal(j(CMD.partesDeRealce("Mariana Costa", "mari")), "[Mari]ana Costa");
+  assert.equal(j(CMD.partesDeRealce("João da Conceição", "conceicao")), "João da [Conceição]", "termo sem acento marca a palavra com acento");
+  assert.equal(j(CMD.partesDeRealce("Ana Maria Souza", "maria sou")), "Ana [Maria] [Sou]za");
+  assert.equal(j(CMD.partesDeRealce("Nada a ver", "zzz")), "Nada a ver");
+  assert.equal(j(CMD.partesDeRealce("Ana 😀 Maria", "maria")), "Ana 😀 [Maria]", "emoji antes do trecho não desloca o destaque");
+  assert.equal(j(CMD.partesDeRealce("Ânima", "anima")), "[Ânima]");
+  assert.equal(j(CMD.partesDeRealce("abc", "")), "abc");
+  assert.deepEqual(CMD.partesDeRealce("<b>x</b>", "x").map(p => p.texto).join(""), "<b>x</b>", "o texto sai intacto (quem desenha usa nós de texto)");
+});
+
+await teste("comandos.criarComandos (ctx.comandos.registrar): registra, devolve cancelar, mesmo id substitui, inválido não lança, aguardar espera a tela registrar", async () => {
+  const reg = CMD.criarComandos();
+  const f = () => {};
+  const cancelar = reg.registrar({ id: "agenda.marcar", rotulo: "Marcar consulta", palavras: "agenda", fazer: f });
+  assert.equal(reg.listar().length, 1); assert.equal(reg.obter("agenda.marcar").rotulo, "Marcar consulta");
+  assert.equal(reg.obter("agenda.marcar").origem, "tela");
+  const c2 = reg.registrar({ id: "agenda.marcar", rotulo: "Marcar consulta (nova)", fazer: f });
+  assert.equal(reg.listar().length, 1, "mesmo id substitui"); assert.equal(reg.obter("agenda.marcar").rotulo, "Marcar consulta (nova)");
+  cancelar();   // o cancelar do registro ANTIGO não derruba o novo
+  assert.equal(reg.listar().length, 1, "cancelar de um registro substituído não apaga o novo");
+  c2(); assert.equal(reg.listar().length, 0);
+  for (const ruim of [null, {}, { rotulo: "x" }, { rotulo: " ", fazer: f }, { fazer: f }]) assert.equal(typeof reg.registrar(ruim), "function", "comando inválido devolve um cancelar vazio e não lança");
+  assert.equal(reg.listar().length, 0);
+  reg.registrar({ id: "conv.atalhos", rotulo: "Atalhos", atalho: "?", fazer: f });
+  assert.equal(reg.temAtalho("?"), true); assert.equal(reg.temAtalho("Alt+X"), false);
+  const esperando = reg.aguardar("conversas.nova", 200);
+  reg.registrar({ id: "conversas.nova", rotulo: "Nova conversa", fazer: f });
+  assert.equal((await esperando).id, "conversas.nova", "aguardar resolve quando a tela registra");
+  assert.equal(await reg.aguardar("nao.existe", 20), null, "e devolve null no fim do prazo");
+  assert.equal((await reg.aguardar("conversas.nova", 20)).id, "conversas.nova", "já registrado: resolve na hora");
+  assert.equal(reg.registrar({ id: "x", rotulo: "X", icone: "<script>", fazer: f }) && reg.obter("x").icone, "raio", "ícone fora do padrão cai no padrão (vai para um <use href>)");
+  let avisos = 0; const off = reg.aoMudar(() => avisos++); reg.registrar({ id: "y", rotulo: "Y", fazer: f }); off(); reg.registrar({ id: "z", rotulo: "Z", fazer: f });
+  assert.equal(avisos, 1);
+});
+
+/** Ambiente da paleta como o app.js monta, com as regras de verdade (rotas.acessoRota). */
+function ambiente({ papel = "admin", workspace = null, modulos = ["crm", "conversas", "relatorios", "ads", "automacoes"], prontos = ["inicio", "conversas", "crm", "empresas", "tarefas", "ads", "automacoes", "relatorios"], empresas = 1, instalar = false, suporte = false, gestorConta = false } = {}) {
+  const op = { pronto: k => prontos.includes(k), temModulo: m => modulos.includes(m), pode: min => ROTAS_MOD.podePapel(papel, min), gestorConta, temCliente: true, produto: workspace };
+  return { op, a: { workspace, vocab: VOC.vocab("odonto"), rotaOk: CMD.criarRotaOk({ rotas: ROTAS_MOD, op, workspace }), pode: min => ROTAS_MOD.podePapel(papel, min), empresas, instalar, suporte, temCliente: true }, prontos, modulos };
+}
+const FAZER_TODAS = Object.fromEntries(CMD.CATALOGO.map(c => [c.id, () => {}]));
+const idsDe = amb => CMD.acoesPadrao(amb.a, FAZER_TODAS).map(x => x.id);
+
+await teste("ações do catálogo filtradas por papel e produto (aceite do M18)", () => {
+  const todas = idsDe(ambiente({ papel: "admin" }));
+  for (const id of ["nova-oportunidade", "marcar-consulta", "nova-conversa", "nova-tarefa", "alternar-tema", "abrir-produto", "atalhos", "primeiros-passos", "sair"]) assert.ok(todas.includes(id), `admin no Órbita completo: ${id}`);
+  assert.ok(!todas.includes("trocar-empresa") && !todas.includes("instalar") && !todas.includes("suporte"), "sem várias empresas, sem evento de instalação e sem número de suporte essas somem");
+  // CRM: sem conversas nem Primeiros passos (o Início é do Atendimento/Anúncios)
+  const crm = idsDe(ambiente({ workspace: "crm" }));
+  assert.ok(crm.includes("nova-oportunidade") && crm.includes("marcar-consulta") && crm.includes("nova-tarefa"));
+  assert.ok(!crm.includes("nova-conversa") && !crm.includes("primeiros-passos"), "no CRM não há Conversas nem Início");
+  // Atendimento: conversas e agenda, não oportunidade nem tarefa
+  const at = idsDe(ambiente({ workspace: "atendimento" }));
+  assert.ok(at.includes("nova-conversa") && at.includes("marcar-consulta") && at.includes("primeiros-passos"));
+  assert.ok(!at.includes("nova-oportunidade") && !at.includes("nova-tarefa"), "no Atendimento não há CRM (oportunidade, tarefa)");
+  // Anúncios: só o que vale em qualquer lugar
+  const ads = idsDe(ambiente({ workspace: "ads" }));
+  assert.deepEqual(ads.filter(i => !["alternar-tema", "abrir-produto", "atalhos", "sair", "primeiros-passos"].includes(i)), [], "em Anúncios nenhuma ação de CRM/Conversas/Agenda");
+  // papel: leitura não cria nada; atendente cria mas não vê Primeiros passos (é do admin)
+  const leitura = idsDe(ambiente({ papel: "leitura" }));
+  assert.deepEqual(leitura.filter(i => i.startsWith("nova-") || i === "marcar-consulta" || i === "primeiros-passos"), [], "papel leitura: sem ações de criar");
+  const atendente = idsDe(ambiente({ papel: "atendente" }));
+  assert.ok(atendente.includes("nova-oportunidade") && atendente.includes("nova-conversa") && !atendente.includes("primeiros-passos"));
+  // plano e prontos: sem o módulo ou com a tela em obra, a ação some junto com a tela
+  const semCrm = idsDe(ambiente({ modulos: ["conversas"] }));
+  assert.ok(!semCrm.includes("nova-oportunidade") && !semCrm.includes("marcar-consulta") && !semCrm.includes("nova-tarefa") && semCrm.includes("nova-conversa"), "plano sem CRM");
+  const semConversas = idsDe(ambiente({ prontos: ["inicio", "crm", "empresas", "tarefas"] }));
+  assert.ok(!semConversas.includes("nova-conversa") && semConversas.includes("nova-oportunidade"), "Conversas ainda não pronta");
+  // situações do aparelho e da conta
+  const extra = idsDe(ambiente({ empresas: 3, instalar: true, suporte: true }));
+  assert.ok(extra.includes("trocar-empresa") && extra.includes("instalar") && extra.includes("suporte"));
+  // só vira ação se o shell sabe executar
+  assert.deepEqual(CMD.acoesPadrao(ambiente().a, { sair: () => {} }).map(x => x.id), ["sair"]);
+  // rótulo da oportunidade segue a vertical
+  assert.equal(CMD.acoesPadrao(ambiente().a, FAZER_TODAS).find(x => x.id === "nova-oportunidade").rotulo, VOC.vocab("odonto").novo("negocio"));
+  assert.equal(CMD.acoesPadrao({ ...ambiente().a, vocab: VOC.vocab("loja") }, FAZER_TODAS).find(x => x.id === "nova-oportunidade").rotulo, VOC.vocab("loja").novo("negocio"));
+});
+
+await teste("juntarAcoes: a ação da tela aberta manda; a genérica de mesmo nome não repete (Agenda registra «Marcar consulta», o shell também tem)", () => {
+  const padrao = CMD.acoesPadrao(ambiente().a, FAZER_TODAS);
+  const daTela = [{ id: "agenda.marcar", rotulo: "Marcar consulta", palavras: "", atalho: "", icone: "calendario", fazer() {}, origem: "tela" }, { id: "conversas.atender", rotulo: "Atender o próximo", fazer() {}, origem: "tela" }];
+  const j = CMD.juntarAcoes(padrao, daTela);
+  assert.equal(j.daTela.length, 2); assert.ok(!j.geral.some(c => c.id === "marcar-consulta"), "a genérica sai");
+  assert.ok(j.geral.some(c => c.id === "nova-oportunidade"), "as outras ficam");
+  assert.equal(CMD.juntarAcoes(padrao, []).geral.length, padrao.length);
+});
+
+await teste("rotas.itensDoMenu (o «Ir para» e o menu do shell): papel, plano, prontos e produto — a mesma lista para os dois", () => {
+  const op = (o = {}) => ({ pronto: k => ["inicio", "conversas", "crm", "empresas", "tarefas", "ads", "automacoes", "relatorios"].includes(k), temModulo: () => true, pode: min => ROTAS_MOD.podePapel("admin", min), gestorConta: false, temCliente: true, ...o });
+  const ids = (o, ws, extra = {}) => ROTAS_MOD.itensDoMenu({ op: op(o), vocab: VOC.vocab("odonto"), workspace: ws, prontos: ["inicio", "conversas", "crm"], ...extra }).map(i => i.id);
+  assert.deepEqual(ids({}, "crm"), ["crm", "agenda", "empresas", "tarefas", "automacoes", "config"]);
+  assert.deepEqual(ids({}, "atendimento"), ["inicio", "conversas", "agenda", "automacoes", "config"]);
+  assert.deepEqual(ids({}, "ads"), ["inicio", "anuncios", "relatorios", "config"]);
+  assert.ok(ids({ pode: min => ROTAS_MOD.podePapel("leitura", min) }, "ads").indexOf("anuncios") < 0, "Anúncios exige admin");
+  assert.ok(!ids({ pode: min => ROTAS_MOD.podePapel("atendente", min) }, "atendimento").includes("automacoes"), "Automações exige supervisor");
+  assert.ok(!ids({ temModulo: m => m !== "conversas" }, "atendimento").includes("conversas"), "plano sem Conversas");
+  assert.ok(!ids({ pronto: k => k !== "agenda" && k !== "crm" }, "atendimento").includes("agenda"), "tela ainda não pronta (prontos.js)");
+  assert.ok(ids({ gestorConta: true }, null).includes("admin") && !ids({}, null).includes("admin"), "Admin só para a conta gestora");
+  const crm = ROTAS_MOD.itensDoMenu({ op: op(), vocab: VOC.vocab("odonto"), workspace: "crm" }).find(i => i.id === "crm");
+  assert.equal(crm.rotulo, VOC.vocab("odonto").crm); assert.equal(crm.icone, VOC.vocab("odonto").icone_crm, "rótulo e ícone do CRM seguem a vertical");
+  assert.ok(ROTAS_MOD.itensDoMenu({ op: op(), vocab: {}, workspace: "crm" }).find(i => i.id === "crm").icone, "vocabulário vazio não quebra");
+  assert.equal(ROTAS_MOD.itensDoMenu({ op: op(), vocab: VOC.vocab("odonto"), workspace: "ads", dev: true, prontos: ["inicio"] }).find(i => i.id === "anuncios").emConstrucao, true, "dev marca «obra»");
+  const d = CMD.destinos(ROTAS_MOD.itensDoMenu({ op: op(), vocab: VOC.vocab("odonto"), workspace: "atendimento" }));
+  assert.deepEqual(d.find(x => x.id === "conversas"), { id: "conversas", rotulo: "Conversas", hash: "#/conversas", icone: "chat", palavras: CMD.PALAVRAS_DESTINO.conversas, emConstrucao: false });
+  assert.deepEqual(CMD.filtrar(d, "whatsapp").map(x => x.id), ["conversas"], "«whatsapp» leva a Conversas pelas palavras extras");
+  assert.equal(ROTAS_MOD.itensDoMenu({ op: op(), vocab: VOC.vocab("odonto"), workspace: "relatorios_nao_existe" }).length > 5, true, "produto desconhecido não filtra (como antes)");
+  assert.equal(d.find(x => x.id === "config").hash, "#/config");
+  assert.equal(CMD.destinos(ROTAS_MOD.itensDoMenu({ op: op(), vocab: VOC.vocab("odonto"), workspace: "ads" })).find(x => x.id === "relatorios").hash, "#/relatorios/vendas");
+});
+
+await teste("Recentes: 5 por empresa, o mais novo primeiro, sem repetir, só endereços internos, nunca lança erro", () => {
+  const mem = new Map();
+  const arm = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => { mem.set(k, v); }, removeItem: k => { mem.delete(k); } };
+  const chave = CMD.chaveRecentes("conta1", "cli1");
+  assert.equal(chave, "nx-rec:conta1:cli1"); assert.ok(chave.startsWith(CMD.PREFIXO_RECENTES));
+  const r = CMD.criarRecentes({ armazenamento: arm, chave });
+  assert.deepEqual(r.ler(), []);
+  for (let i = 1; i <= 7; i++) r.registrar({ hash: `#/contatos/${i}`, titulo: `Pessoa ${i}`, sub: "Contato", tipo: "contato" });
+  assert.equal(r.ler().length, 5, "5 no máximo"); assert.equal(r.ler()[0].titulo, "Pessoa 7"); assert.equal(r.ler()[4].titulo, "Pessoa 3");
+  r.registrar({ hash: "#/contatos/4", titulo: "Pessoa 4 (renomeada)", sub: "Contato", tipo: "contato" });
+  assert.deepEqual(r.ler().map(x => x.hash).slice(0, 2), ["#/contatos/4", "#/contatos/7"], "reabrir sobe para o topo sem duplicar"); assert.equal(r.ler().length, 5);
+  assert.equal(r.ler()[0].titulo, "Pessoa 4 (renomeada)", "o título novo vale");
+  const antes = arm.getItem(chave);
+  r.registrar({ hash: "#/contatos/4", titulo: "Pessoa 4 (renomeada)", sub: "Contato", tipo: "contato" });
+  assert.equal(arm.getItem(chave), antes, "mesmo item no topo: nem regrava");
+  for (const ruim of [null, {}, { hash: "https://x.test", titulo: "a" }, { hash: "#/x", titulo: "  " }, { hash: "javascript:alert(1)", titulo: "a" }, { hash: "#/" + "a".repeat(300), titulo: "a" }]) r.registrar(ruim);
+  assert.equal(r.ler().length, 5, "itens inválidos não entram");
+  assert.equal(CMD.criarRecentes({ armazenamento: { getItem: () => "{lixo", setItem() {}, removeItem() {} }, chave }).ler().length, 0, "JSON quebrado = lista vazia");
+  const quebrado = CMD.criarRecentes({ armazenamento: { getItem() { throw new Error("bloqueado"); }, setItem() { throw new Error("cheio"); }, removeItem() { throw new Error("x"); } }, chave });
+  assert.deepEqual(quebrado.ler(), []); quebrado.registrar({ hash: "#/contatos/1", titulo: "a" }); quebrado.limpar();   // não lança
+  assert.equal(CMD.criarRecentes({ armazenamento: arm, chave: CMD.chaveRecentes("conta1", "cli2") }).ler().length, 0, "outra empresa, outra lista");
+  assert.equal(r.registrar({ hash: "#/contatos/9", titulo: "x".repeat(200), tipo: "inventado" })[0].titulo.length, 80, "título limitado a 80");
+  assert.equal(r.ler()[0].tipo, "contato", "tipo desconhecido vira contato");
+  r.limpar(); assert.deepEqual(r.ler(), []);
+});
+
+await teste("recenteDaRota: contato, oportunidade e conversa abertos viram Recentes quando a tela diz o nome; título genérico e rotas de lista não", () => {
+  const rec = (modulo, partes, titulo) => CMD.recenteDaRota({ modulo, partes, query: {} }, titulo);
+  assert.deepEqual(rec("contatos", ["501"], "Mariana Costa"), { hash: "#/contatos/501", titulo: "Mariana Costa", sub: "Contato", tipo: "contato" });
+  assert.deepEqual(rec("crm", ["negocio", "801"], "Aparelho invisível"), { hash: "#/crm/negocio/801", titulo: "Aparelho invisível", sub: "Oportunidade", tipo: "negocio" });
+  assert.deepEqual(rec("conversas", ["901"], "Mariana Costa"), { hash: "#/conversas/901", titulo: "Mariana Costa", sub: "Conversa", tipo: "conversa" });
+  assert.equal(rec("conversas", ["901"], "Conversas"), null, "«Conversas» é o título da tela, não de uma pessoa");
+  assert.equal(rec("contatos", ["501"], "Pacientes"), null);
+  assert.equal(rec("conversas", [], "Mariana"), null, "sem id: é a lista");
+  assert.equal(rec("crm", [], "Pacientes"), null); assert.equal(rec("agenda", ["1"], "Agenda"), null);
+  assert.equal(rec("contatos", ["../../x"], "Fulano"), null, "id fora do padrão");
+  assert.equal(rec("crm", ["negocio", "8 01"], "x"), null);
+  assert.equal(CMD.recenteDaRota(null, "x"), null); assert.equal(CMD.recenteDaRota({ modulo: "contatos", partes: ["1"] }, ""), null);
+});
+
+await teste("paleta.js e comandos.js: sem innerHTML, sem hex, sem import estático, sem dado cru no DOM; combobox + listbox + grupos + opções; teclado completo", () => {
+  for (const [nome, js] of [["paleta.js", PALETA_JS], ["comandos.js", COMANDOS_JS]]) {
+    assert.doesNotMatch(js, /innerHTML|insertAdjacentHTML|outerHTML|document\.write/, `${nome}: nada de HTML montado com dado`);
+    assert.doesNotMatch(js, /#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b(?![0-9a-zA-Z])/, `${nome}: cor só por token`);
+    assert.doesNotMatch(js, /^\s*import\s/m, `${nome}: sem import estático`);
+    assert.doesNotMatch(js, /\bon[a-z]+\s*=\s*["']/, `${nome}: sem on*= em HTML`);
+  }
+  for (const trecho of ['role: "combobox"', '"aria-expanded": "true"', '"aria-controls": idLista', '"aria-autocomplete": "list"', 'role: "listbox"', 'role: "group"', '"aria-labelledby": idT', 'role: "option"', '"aria-selected"', '"aria-activedescendant"', 'role: "status"']) assert.ok(PALETA_JS.includes(trecho), `paleta.js: ${trecho}`);
+  for (const tecla of ["ArrowDown", "ArrowUp", "Enter", "Escape"]) assert.ok(PALETA_JS.includes(`ev.key === "${tecla}"`), `paleta.js: ${tecla}`);
+  assert.match(PALETA_JS, /marcar\(sel \+ 1\)/); assert.match(PALETA_JS, /marcar\(sel - 1\)/);
+  assert.match(PALETA_JS, /\(i \+ itens\.length\) % itens\.length/, "as setas dão a volta");
+  assert.ok(PALETA_JS.includes("C.partesDeRealce("), "destaque por nós de texto (<mark>), não por HTML");
+  assert.ok(PALETA_JS.includes('"Recentes"') && PALETA_JS.includes('"Nesta tela"') && PALETA_JS.includes('"Ir para"') && PALETA_JS.includes('"Ações"'), "os quatro grupos");
+});
+
+await teste("app.js (M18): a paleta abre em todo produto, módulo carregado sob demanda com ?v=, ctx.comandos, «?», recentes, tema e Ajuda no menu da conta, pílula de teste", () => {
+  const tem = (txt, trecho, porque) => assert.ok(txt.includes(trecho), `${porque || "falta"}: ${trecho}`);
+  // sem a trava antiga de produto: Ctrl/⌘+K abre com sessão em /crm/, /ads/ e /atendimento/
+  tem(APP_JS, 'ui.atalho("mod+k", ev => {\n    if (!E.sessao || $("app").hidden) return;', "Ctrl/⌘+K sem trava de produto");
+  assert.doesNotMatch(APP_JS, /buscaDisponivel|abrirBusca\(/, "a busca antiga saiu");
+  tem(APP_JS, 'E.workspace === null || E.workspace === "crm"', "contatos e negócios só no completo e no CRM (teste de A)");
+  tem(APP_JS, 'E.workspace === null || E.workspace === "atendimento") && c.modulos.includes("conversas")', "Atendimento busca conversas");
+  tem(APP_JS, 'E.paleta.mod = await arq("paleta.js")', "paleta.js sob demanda pelo mesmo arq() (?v=)");
+  tem(APP_JS, '"prontos.js", "shell.css", "pwa.js", "paleta.js"', "paleta.js no precache do service worker");
+  assert.match(APP_JS, /const MODULOS_BASE = \[[^\]]*"comandos\.js"[^\]]*\]/, "o registro de comandos nasce no boot (a tela monta antes de alguém abrir a paleta)");
+  assert.match(APP_JS, /E\.comandos = comandos\.criarComandos\(\)/);
+  tem(APP_JS, "comandos: {\n      registrar(cmd) {\n        const cancelar = E.comandos.registrar(cmd);\n        E.assinaturas.add(cancelar);", "ctx.comandos.registrar some sozinho ao trocar de tela");
+  tem(APP_JS, 'ui.atalho("?", ev => {', "folha de atalhos");
+  tem(APP_JS, 'E.comandos.temAtalho("?") || document.querySelector("dialog[open]")', "«?» fica com a tela que o registra (Conversas) e não abre sobre outra janela");
+  tem(APP_JS, "function definirTitulo(texto) { E.titulo = texto || \"\"; atualizarTitulo(); lembrarRecente(texto); }", "Recentes pelo título da tela de detalhe");
+  tem(APP_JS, "const pref = E.M.comandos ? E.M.comandos.PREFIXO_RECENTES", "Recentes (nomes de pessoas) saem no logout/queda de sessão");
+  tem(APP_JS, '{ rotulo: "Aparência", icone:', "tema no menu da conta"); tem(APP_JS, '{ rotulo: "Ajuda", icone: "ajuda", fn: () => abrirMenuAjuda(ancora) }', "Ajuda no menu da conta");
+  tem(APP_JS, '"Primeiros passos"', "Ajuda: Primeiros passos"); tem(APP_JS, '"Atalhos de teclado"', "Ajuda: Atalhos"); tem(APP_JS, '"Falar com o suporte"', "Ajuda: suporte");
+  tem(APP_JS, "Preciso de ajuda no ${app}${tela}${emp}", "o texto do suporte leva produto, tela e empresa");
+  tem(APP_JS, "E.ui.linkWhatsApp(", "link pelo helper (número só com dígitos)");
+  tem(APP_JS, 'class: "pilula-teste"', "pílula de teste"); tem(APP_JS, "Ocultar por 24 h", "dispensável por 24 h");
+  assert.doesNotMatch(APP_JS.slice(APP_JS.indexOf("function desenharFaixas")), /Teste grátis até/, "o teste em andamento não é mais faixa de linha inteira");
+  tem(APP_JS, 'aria-label": `Buscar e comandos (${teclaMod()}+K)`', "botão do topo");
+  assert.match(ler("shell.css"), /\.bt-tema \{ display: none; \}/, "tema sai do topo do celular");
+  assert.match(ler("shell.css"), /\.topo\.topo-emp-troca \.topo-marca, \.topo\.topo-pilula-on \.topo-marca \{ display: none; \}/);
+  assert.match(HTML, /<symbol id="i-ajuda"/); assert.match(HTML, /<link rel="modulepreload" href="comandos\.js\?v=/);
+  // paleta.js nunca é importado de forma estática nem sem ?v=
+  assert.doesNotMatch(APP_JS, /import\(["']\.\/paleta\.js/, "só pelo arq()");
+});
+
+await teste("sw.js e ícones: o precache inclui o que a paleta usa; i-ajuda existe e o catálogo só usa ícones do sprite", () => {
+  for (const c of CMD.CATALOGO) assert.ok(sprite.has(c.icone), `ícone ${c.icone} (${c.id}) no sprite`);
+  for (const t of Object.values(CMD.TIPOS_RECENTE)) assert.ok(sprite.has(t.icone), `ícone ${t.icone}`);
+  for (const [id, ic] of Object.entries({ inicio: "inicio", conversas: "chat", agenda: "calendario" })) assert.ok(sprite.has(ic), `${id}: ${ic}`);
 });
 
 /* ============================================================ fim */

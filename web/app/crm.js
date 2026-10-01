@@ -32,25 +32,42 @@ async function logica(ctx) {
   return L;
 }
 
-/** Base do CRM (funis, etapas, campos, etiquetas, motivos, usuários, ticket) — em memória por empresa. */
+/**
+ * Base do CRM (funis, etapas, campos, etiquetas, motivos, usuários, ticket) — em memória por empresa.
+ * M30: a PRIMEIRA leitura da sessão usa o último dado guardado no aparelho (rpcC com cache) e já devolve; quando a rede responde, a mesma base é
+ * atualizada no lugar (Object.assign: quem já guarda `k.base` passa a ver o dado novo). Recarga forçada (depois de criar etiqueta/funil) vai direto à rede.
+ */
 async function obterBase(ctx, { forcar = false } = {}) {
   const id = ctx.cliente && ctx.cliente.id;
   if (!id) throw Object.assign(new Error("cliente_nao_encontrado"), { codigo: "cliente_nao_encontrado" });
   const c = cacheBase.get(id);
   if (!forcar && c && c.base && Date.now() - c.em < BASE_VALIDADE_MS) return c.base;
   if (!forcar && c && c.promessa) return c.promessa;
-  const promessa = ctx.api.rpcC("nx_crm_base").then(base => {
-    cacheBase.set(id, { base, em: Date.now(), promessa: null });
-    return base;
-  }).catch(e => { cacheBase.delete(id); throw e; });
+  const promessa = new Promise((resolve, reject) => {
+    let servida = null;
+    const fim = base => {
+      if (servida) {                                               // a tela já recebeu o dado guardado: atualiza o MESMO objeto
+        for (const k of Object.keys(servida)) if (!(k in base)) delete servida[k];
+        Object.assign(servida, base);
+        base = servida;
+      }
+      cacheBase.set(id, { base, em: Date.now(), promessa: null });
+      resolve(base);
+    };
+    ctx.api.rpcC("nx_crm_base", {}, forcar ? {} : { cache: true, aoCache: dados => {
+      if (servida || !dados || typeof dados !== "object") return;
+      servida = dados;
+      cacheBase.set(id, { base: dados, em: Date.now() - BASE_VALIDADE_MS + 15000, promessa });   // vale por 15 s: a rede atualiza em seguida
+      resolve(dados);
+    } }).then(fim, e => { if (servida) return; cacheBase.delete(id); reject(e); });
+  });
   cacheBase.set(id, { base: c && c.base, em: c ? c.em : 0, promessa });
   return promessa;
 }
 
 /** Kit compartilhado pelos arquivos do CRM. */
 async function kitDe(ctx) {
-  const Lg = await logica(ctx);
-  const base = await obterBase(ctx);
+  const [Lg, base] = await Promise.all([logica(ctx), obterBase(ctx)]);
   const ui = ctx.ui;
   const k = {
     ctx, ui, api: ctx.api, L: Lg, v: ctx.vocab, base,
@@ -84,6 +101,12 @@ async function kitDe(ctx) {
     /** M25: escrita com chave de idempotência — em erro ambíguo (prazo, conexão) repete com a MESMA chave e nunca duplica. → {resultado, req} */
     escrever: (nome, params, o) => Lg.escreverComReq(ctx.api, nome, params, o),
     novaReq: () => Lg.novaReq(),
+    /** M30: guarda o que a pessoa digita neste campo (ctx.rascunho do shell: por conta + empresa, 7 dias) e devolve o controle {apagar()}.
+        Chame `.apagar()` só depois que o servidor confirmar. Sem o recurso do shell vira no-op. */
+    rascunho: (campo, chave, opcoes) => {
+      try { if (ctx.rascunho && typeof ctx.rascunho.ligar === "function") return ctx.rascunho.ligar(campo, chave, opcoes); } catch { /* sem rascunho a tela funciona igual */ }
+      return { restaurado: false, apagar() {}, desligar() {}, salvarAgora() {} };
+    },
   };
   return k;
 }
@@ -120,9 +143,45 @@ function fecharGavetaAtual() {
   try { gaveta.fechar(); } catch (e) { console.error(e); }
 }
 
+/* ============================================================ esqueleto */
+/** Forma da tela enquanto carrega (a troca não desloca nada): cabeçalho, e no Kanban também os 3 totais, ou a lista de linhas. Só classes do ui.esqueleto (A). */
+function esqueletoDe(ctx, tipo) {
+  const { ui } = ctx;
+  if (tipo === "kanban") {
+    const sk = ui.esqueleto("kanban", { n: 5, cabecalho: { sub: false, acao: true } });
+    const kpis = ui.esqueleto("cartoes", { n: 3 }).querySelector(".sk-cartoes"), cols = sk.querySelector(".sk-kanban");
+    if (kpis && cols) sk.insertBefore(kpis, cols);
+    return sk;
+  }
+  if (tipo === "contatos" || tipo === "empresas") return ui.esqueleto("lista", { n: 8, cabecalho: { sub: true, acao: true } });
+  if (tipo === "tarefas") return ui.esqueleto("lista", { n: 5, cabecalho: { sub: false, acao: true } });
+  if (tipo === "ficha" || tipo === "empresa") return ui.esqueleto("cartoes", 4);
+  return ui.esqueleto("tabela", 6);
+}
+
+/* ============================================================ paleta de comandos (Ctrl/⌘+K, frente B) */
+let comandosAtivos = [];
+function limparComandos() { for (const f of comandosAtivos) { try { f(); } catch { /* ok */ } } comandosAtivos = []; }
+/** Enquanto o CRM está aberto, a paleta oferece «Nova oportunidade», «Nova tarefa» e «Novo paciente». Sem a paleta (shell antigo) não faz nada. */
+function registrarComandos(ctx, k) {
+  limparComandos();
+  if (!ctx.comandos || typeof ctx.comandos.registrar !== "function" || !k.pode("atendente")) return;
+  const reg = c => { try { const d = ctx.comandos.registrar(c); if (typeof d === "function") comandosAtivos.push(d); } catch { /* sem paleta */ } };
+  reg({ id: "crm.novo-negocio", rotulo: k.v.novo("negocio"), palavras: "oportunidade negócio lead cartão criar novo", fazer: () => novoNegocio(ctx, {}) });
+  reg({ id: "crm.nova-tarefa", rotulo: "Nova tarefa", palavras: "tarefa lembrete ligar retorno criar", fazer: async () => {
+    try { const kk = await kitDe(ctx); const T = await kk.mod("tarefas"); const t = await T.formTarefa(kk, null, {}); if (t) ctx.ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); }
+    catch (e) { console.error(e); ctx.ui.toast("Não foi possível abrir a tarefa.", { tipo: "erro" }); }
+  } });
+  reg({ id: "crm.novo-contato", rotulo: k.v.novo("contato"), palavras: "paciente contato cliente cadastrar criar novo", fazer: async () => {
+    try { const kk = await kitDe(ctx); const M = await kk.mod("listas"); const c = await M.formContato(kk); if (c) ctx.navegar(`#/contatos/${c.id}`); }
+    catch (e) { console.error(e); ctx.ui.toast("Não foi possível abrir o cadastro.", { tipo: "erro" }); }
+  } });
+}
+
 /* ============================================================ montagem */
 export function desmontar() {
   montagem++;
+  limparComandos();
   fecharGavetaAtual();
   if (telaAtual && typeof telaAtual.desmontar === "function") { try { telaAtual.desmontar(); } catch (e) { console.error(e); } }
   telaAtual = null;
@@ -154,12 +213,14 @@ export async function montar(ctx) {
     if (telaAtual && typeof telaAtual.desmontar === "function") { try { telaAtual.desmontar(); } catch (e) { console.error(e); } }
     telaAtual = null;
     ui.limpar(ctx.alvo);
-    ctx.alvo.appendChild(ui.esqueleto(tipo === "kanban" ? "kanban" : tipo === "ficha" ? "cartoes" : "tabela", 6));
+    ctx.alvo.appendChild(esqueletoDe(ctx, tipo));
   }
 
+  const arquivoDaTela = { kanban: "kanban", contatos: "listas", ficha: "listas", empresas: "listas", empresa: "listas", tarefas: "tarefas", importar: "importar" }[tipo];
   let k;
   try {
-    k = await kitDe(ctx);
+    // M30: lógica, base, o arquivo da tela (e, no Kanban, a gaveta do negócio) chegam juntos em vez de em fila
+    [k] = await Promise.all([kitDe(ctx), reaproveita ? null : carregarArq(ctx, arquivoDaTela), !reaproveita && tipo === "kanban" ? carregarArq(ctx, "negocio") : null]);
   } catch (e) {
     if (minha !== montagem) return;
     ui.limpar(ctx.alvo);
@@ -170,9 +231,7 @@ export async function montar(ctx) {
 
   try {
     if (!reaproveita) {
-      const arquivo = { kanban: "kanban", contatos: "listas", ficha: "listas", empresas: "listas", empresa: "listas",
-        tarefas: "tarefas", importar: "importar" }[tipo];
-      const M = await k.mod(arquivo);
+      const M = await k.mod(arquivoDaTela);
       if (minha !== montagem) return;
       const el = ui.h("div", { class: "crm", dataset: { tela: tipo } });
       let tela;
@@ -188,6 +247,7 @@ export async function montar(ctx) {
       ctx.alvo.appendChild(el);
       telaAtual = { tipo, chave, el, ...(tela || {}) };
     }
+    registrarComandos(ctx, k);
     // deep link da gaveta: #/crm/negocio/<id>
     if (tipo === "kanban" && partes[0] === "negocio" && /^\d+$/.test(partes[1] || "")) {
       const N = await k.mod("negocio");

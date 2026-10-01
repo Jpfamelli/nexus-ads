@@ -110,6 +110,23 @@ export function itensDoProduto(id, disponiveis = []) {
   return disponiveis.filter(it => it.fixo || permitidos.has(it.id));
 }
 
+/**
+ * Itens do menu que ESTA pessoa vê neste produto: papel, plano, prontos.js e produto aberto (o menu lateral, a barra de baixo e o «Ir para» da
+ * paleta Ctrl/⌘+K leem a mesma lista). `op` é o que o shell dá a acessoRota (pronto, temModulo, pode, gestorConta, temCliente, produto);
+ * `prontos` = MODULOS_PRONTOS; `dev` marca como «obra» o que ainda não está pronto (só superadmin com ?dev=1).
+ */
+export function itensDoMenu({ op, vocab = {}, workspace = null, prontos = [], dev = false } = {}) {
+  const itens = [];
+  for (const it of MENU) {
+    if (it.id === "admin") { if (op.gestorConta) itens.push({ ...it, rotulo: "Admin" }); continue; }
+    if (it.id === "config") { itens.push(it); continue; }
+    const acesso = acessoRota(it.id, op);
+    const emConstrucao = !!dev && !prontos.includes(ROTAS[it.id].pronto);
+    if (acesso === "ok") itens.push({ ...it, rotulo: it.rotulo.replace(/\{(\w+)\}/g, (_, k) => vocab[k] || k), icone: it.id === "crm" ? (vocab.icone_crm || it.icone) : it.icone, emConstrucao });
+  }
+  return itensDoProduto(workspace, itens);
+}
+
 /** Tipo de esqueleto (ui.esqueleto) com a forma de cada tela enquanto o módulo e os dados chegam. */
 const ESQUELETO_DA_ROTA = Object.freeze({
   inicio: "inicio", conversas: "chat", crm: "kanban", contatos: "lista", empresas: "lista", tarefas: "lista", agenda: "agenda",

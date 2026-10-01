@@ -30,7 +30,7 @@ export async function montarContatos(k, el, rota) {
   if (rota.query && rota.query.busca) S.filtro.busca = rota.query.busca;
   const gravar = () => { try { localStorage.setItem(chaveLocal, JSON.stringify({ filtro: S.filtro, ordem: S.ordem })); } catch { /* ok */ } };
 
-  const sub = h("p", { class: "sub" });
+  const sub = h("span");      // a contagem «12 pacientes» entra no subtítulo do ui.cabecalho
   const busca = h("input", { type: "search", placeholder: pequena() ? `Buscar ${k.v.min("contatos")}` : "Buscar por nome, telefone, e-mail ou documento", "aria-label": `Buscar ${k.v.min("contatos")}`, value: S.filtro.busca || "" });
   const aoBuscar = ui.debounce(() => { const q = busca.value.trim(); if (q) S.filtro.busca = q; else delete S.filtro.busca; S.pagina = 1; gravar(); carregar(); }, 320);
   busca.addEventListener("input", aoBuscar);
@@ -50,14 +50,14 @@ export async function montarContatos(k, el, rota) {
     { rotulo: "Importar planilha", icone: "camadas", fn: () => ctx.navegar("#/contatos/importar") }]));
   const fab = k.pode("atendente") ? h("button", { type: "button", class: "crm-fab", "aria-label": k.v.novo("contato"), title: k.v.novo("contato"), on: { click: novoContato } },
     ui.icone("mais"), h("span", { class: "crm-fab-txt" }, k.v.novo("contato"))) : null;
-  const acoes = h("div", { class: "crm-cab-acoes" },
+  const acoes = [
     maisBt,
     k.pode("admin") ? h("button", { type: "button", class: "bt bt-sec", title: "Baixa uma planilha (CSV) com os filtros atuais",
       on: { click: ev => exportar(ev.currentTarget) } }, ui.icone("seta-baixo"), "Exportar") : null,
     k.pode("supervisor") ? h("a", { class: "bt bt-sec", href: "#/contatos/importar" }, ui.icone("camadas"), "Importar") : null,
-    k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novoContato } }, ui.icone("mais"), k.v.novo("contato")) : null);
+    k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novoContato } }, ui.icone("mais"), k.v.novo("contato")) : null];
   el.append(
-    h("header", { class: "crm-cab" }, h("div", null, h("p", { class: "rotulo" }, ctx.cliente.nome), h("h1", { class: "titulo-pag" }, k.v.contatos), sub), acoes),
+    ui.cabecalho({ titulo: k.v.contatos, sub, acoes }),
     h("div", { class: "pilha-p crm-fixa" }, h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btF, selOrdem), chips),
     corpo, pag);
   if (fab) el.appendChild(fab);
@@ -315,7 +315,7 @@ export function listaCompacta(k, { aoMudar }) {
     el: raiz,
     atualizar(itens) {
       ui.limpar(raiz);
-      if (!itens.length) { raiz.appendChild(h("p", { class: "ct-vazio" }, "Nada encontrado com esses filtros.")); return; }
+      if (!itens.length) { raiz.appendChild(ui.vazio({ tipo: "sem_resultado", titulo: "Nada encontrado com esses filtros." })); return; }
       raiz.appendChild(h("ul", { class: "ct-lista", role: "list", "aria-label": k.v.contatos }, itens.map(linha)));
     },
   };
@@ -614,12 +614,11 @@ export async function montarEmpresas(k, el) {
   const pag = h("nav", { class: "ct-pag", "aria-label": "Páginas" });
   busca.addEventListener("input", ui.debounce(() => { S.busca = busca.value.trim(); S.pagina = 1; carregar(); }, 300));
   el.append(
-    h("header", { class: "crm-cab" }, h("div", null, h("p", { class: "rotulo" }, ctx.cliente.nome), h("h1", { class: "titulo-pag" }, "Empresas"),
-      h("p", { class: "sub" }, "Convênios, frotas, parceiros — as organizações por trás dos seus contatos.")),
-      h("div", { class: "crm-cab-acoes" }, k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: async () => {
+    ui.cabecalho({ titulo: "Empresas", sub: "Convênios, frotas, parceiros — as organizações por trás dos seus contatos.",
+      acoes: k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: async () => {
         const e = await formEmpresa(k, null);
         if (e) ctx.navegar(`#/empresas/${e.id}`);
-      } } }, ui.icone("mais"), "Empresa") : null)),
+      } } }, ui.icone("mais"), "Empresa") : null }),
     h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca)), corpo, pag);
   const tab = ui.tabela({ rotulo: "Empresas", colunas: [
     { chave: "nome", rotulo: "Nome", principal: true, render: e => h("div", { class: "cel-nome" }, ui.avatar(e.nome, e.id), h("div", null, h("b", null, e.nome), h("small", null, e.documento || ""))) },

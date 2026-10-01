@@ -6,12 +6,8 @@
    acento = agora. Celular: faixa de dias + o dia com régua de horas.
    Só tokens do app.css (nenhum hex aqui).
    ============================================================ */
-.agenda-cab {
-  display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem 1.5rem;
-  flex-wrap: wrap; margin: .4rem 0 .9rem;
-}
-.agenda-cab-titulo { min-width: 0; }
-.agenda-cab-titulo .rotulo { margin-bottom: .35rem; }
+/* escala: tokens */   /* marcador (M30): tamanho de letra só por token --fs-*, em ou %; caixa-alta só em .selo-caps (travado em app.teste.mjs e crm.teste.mjs) */
+.agenda-cab { margin: .4rem 0 .9rem; }   /* o resto vem do ui.cabecalho (.cab); aqui só a folga e os controles de data */
 .agenda-cab-controles, .agenda-periodo, .agenda-acoes { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .agenda-acoes { justify-content: flex-end; }
 .agenda-data {
@@ -19,8 +15,6 @@
   border-radius: 999px; background: var(--c-sup); color: var(--c-texto); font: inherit;
 }
 .agenda-data:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; }
-.agenda-abas { display: flex; gap: .25rem; padding: .22rem; border: 1px solid var(--c-borda); border-radius: 999px; background: var(--c-sup); }
-.agenda-abas .bt { min-height: 36px; }
 .agenda-conteudo { min-width: 0; display: grid; gap: .8rem; }
 
 /* ---------------- resumo do período (uma linha) ---------------- */
@@ -211,9 +205,9 @@
 @media (max-width: 760px) {
   /* título e «Marcar consulta» na mesma linha; navegação de datas na de baixo (a tela é do dia, não do cabeçalho) */
   .agenda-cab { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .5rem .8rem; margin: .1rem 0 .6rem; }
-  .agenda-cab-titulo .rotulo { display: none; }
-  .agenda-cab-controles, .agenda-acoes { display: contents; }
-  .agenda-cab-titulo { grid-column: 1; grid-row: 1; }
+  .agenda-cab .cab-acoes, .agenda-cab-controles, .agenda-acoes { display: contents; }
+  .agenda-cab .cab-txt { grid-column: 1; grid-row: 1; }
+  .agenda-cab .cab-titulo { font-size: var(--fs-20); }
   .agenda-acoes .agenda-marcar { grid-column: 2; grid-row: 1; }
   .agenda-periodo { grid-column: 1 / -1; grid-row: 2; flex-wrap: nowrap; }
   .agenda-data { flex: 1; width: auto; min-width: 120px; }
@@ -239,7 +233,7 @@
   .ag-dia-cab { padding-inline: .4rem; gap: .25rem; }
 }
 @media (max-width: 760px), (pointer: coarse) {
-  .agenda-abas .bt, .agc-remover { min-height: 44px; }
+  .agc-remover { min-height: 44px; }
   .agc-remover { width: 44px; }
   .ag-faixa-d { min-height: 64px; }
   .ag-dia-mais { width: 40px; height: 40px; }

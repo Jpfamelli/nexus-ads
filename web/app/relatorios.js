@@ -61,9 +61,10 @@ export async function montar(ctx) {
   const periodo = () => (P.preset === "per" && P.de && P.ate ? { de: P.de, ate: P.ate } : L.periodoPreset(P.preset === "per" ? 30 : P.preset));
 
   // ---------- topo: título, abas, filtros
-  const nav = h("nav", { class: "rel-abas", "aria-label": "Relatórios" },
-    ABAS.map(a => h("a", { href: a.hash, class: "rel-aba", "aria-current": a.id === aba ? "page" : null }, a.rotulo)));
-  const btnAtualizar = h("button", { type: "button", class: "rel-btn rel-btn-sec" }, "Atualizar");
+  const nav = ui.segmentado({ tipo: "abas", rotulo: "Relatórios", valor: aba, classe: "rel-abas-seg",
+    opcoes: ABAS.map(a => ({ valor: a.id, rotulo: a.rotulo })),
+    aoMudar: v => { const a = ABAS.find(x => x.id === v); if (a) ctx.navegar(a.hash); } });
+  const btnAtualizar = h("button", { type: "button", class: "rel-btn rel-btn-sec rel-btn-ic", title: "Atualizar os números" }, ui.icone("reabrir"), h("span", { class: "rel-rot" }, "Atualizar"));
   raiz.append(h("header", { class: "rel-topo" },
     h("div", { class: "rel-topo-t" }, h("p", { class: "rel-olho" }, `Relatórios · ${ctx.cliente.nome}`),
       h("h1", { id: "relat-h", class: "rel-h1" }, aba === "vendas" ? "Vendas" : "Atendimento")),
@@ -80,7 +81,11 @@ export async function montar(ctx) {
     h("label", { class: "relat-per-c" }, h("span", { class: "rel-nota" }, "Até"), ateIn), aplicar, erroPer);
   const selWrap = h("label", { class: "relat-sel" });
   const legenda = h("p", { class: "rel-nota rel-ate", "aria-live": "polite" });
-  filtros.append(seg, selWrap, personal, legenda);
+  let filtroExtra = null;       // {lista, atual, rotulo, todos, aoMudar} do funil (Vendas) ou do departamento (Atendimento): alimenta o chip e a folha
+  const chipTxt = h("span", { class: "rel-resumo-t" }, "");
+  const chipResumo = h("button", { type: "button", class: "rel-resumo", "aria-haspopup": "dialog", title: "Período e filtros" }, chipTxt, ui.icone("seta-baixo"));
+  chipResumo.addEventListener("click", () => abrirFolha());
+  filtros.append(chipResumo, h("div", { class: "rel-filtros-lg" }, seg, selWrap, personal), legenda);
   raiz.append(filtros);
   const corpo = h("div", { class: "rel-corpo", "aria-busy": "true" });
   raiz.append(corpo);
@@ -113,8 +118,51 @@ export async function montar(ctx) {
   });
   btnAtualizar.addEventListener("click", () => carregar());
   pintarSeg();
+  pintarChip();
+
+  function pintarChip() {
+    const nome = filtroExtra && filtroExtra.atual ? ((filtroExtra.lista || []).find(x => x.id === filtroExtra.atual) || {}).nome || "" : "";
+    chipTxt.textContent = L.textoChipRelatorios({ preset: P.preset, de: P.de, ate: P.ate, aba, nome });
+  }
+  /** O chip-resumo «Últimos 30 dias · Todos os funis ▾» abre esta folha: período (com datas) e funil/departamento, aplicados de uma vez. */
+  async function abrirFolha() {
+    let preset = P.preset, de = P.de || deIn.value || "", ate = P.ate || ateIn.value || "", extra = filtroExtra ? filtroExtra.atual : "";
+    const campoSeg = (rotulo, el) => h("div", { class: "campo" }, h("p", { class: "rotulo" }, rotulo), el);
+    const dataIn = (rotulo, valor, aoMudar) => { const i = h("input", { type: "date", class: "relat-data", "aria-label": rotulo, value: valor }); i.addEventListener("change", () => aoMudar(i.value)); return h("label", { class: "relat-per-c" }, h("span", { class: "rel-nota" }, rotulo), i); };
+    const personal2 = h("div", { class: "relat-per" }, dataIn("De", de, v => { de = v; }), dataIn("Até", ate, v => { ate = v; }));
+    personal2.hidden = preset !== "per";
+    const segPer = ui.segmentado({ tipo: "filtro", rotulo: "Período", valor: preset, opcoes: [[7, "7 dias"], [30, "30 dias"], [90, "90 dias"], ["per", "Outro"]].map(([v, t]) => ({ valor: v, rotulo: t })),
+      aoMudar: v => {
+        preset = v; personal2.hidden = v !== "per";
+        if (v === "per" && (!de || !ate)) { const pp = L.periodoPreset(30); de = pp.de; ate = pp.ate; for (const [i, val] of [...personal2.querySelectorAll("input")].map((x, k) => [x, k ? ate : de])) i.value = val; }
+      } });
+    let sel = null;
+    if (filtroExtra && filtroExtra.lista && filtroExtra.lista.length) {
+      sel = h("select", { class: "sel relat-select", "aria-label": filtroExtra.rotulo },
+        h("option", { value: "" }, filtroExtra.todos), filtroExtra.lista.map(x => h("option", { value: x.id, selected: x.id === extra }, x.nome)));
+      sel.addEventListener("change", () => { extra = sel.value; });
+    }
+    const r = await ui.modal({ titulo: "Período e filtros", largura: "p", protegerTexto: false,
+      corpo: h("div", { class: "pilha" }, campoSeg("Período", segPer), personal2, sel ? campoSeg(filtroExtra.rotulo, sel) : null),
+      acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Aplicar", tipo: "primario", fn: api => {
+        if (preset === "per") {
+          const v = L.validarPeriodo(de, ate);
+          if (!v.ok) { api.erro(v.texto); return false; }
+        }
+        return true;
+      } }] });
+    if (r !== true) return;
+    const mudouExtra = filtroExtra && extra !== filtroExtra.atual;
+    P.preset = preset;
+    if (preset === "per") { P.de = de; P.ate = ate; deIn.value = de; ateIn.value = ate; }
+    if (mudouExtra) { if (aba === "vendas") P.funil = extra; else P.dep = extra; }
+    salvar(); pintarSeg(); pintarChip(); carregar();
+    setTimeout(() => chipResumo.focus(), 220);      // depois de a folha devolver o foco (o botão que a abriu é o mesmo)
+  }
 
   function montarSelect(lista, atual, rotulo, todos, aoMudar) {
+    filtroExtra = lista && lista.length ? { lista, atual, rotulo, todos, aoMudar } : null;
+    pintarChip();
     const tinhaFoco = selWrap.contains(document.activeElement);   // trocou o funil pelo teclado: o foco fica no seletor novo
     ui.limpar(selWrap);
     if (!lista || !lista.length) { selWrap.hidden = true; return; }

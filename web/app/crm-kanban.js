@@ -1,6 +1,6 @@
 /* ============================================================
    ÓRBITA — crm-kanban.js · frente F4 · T5 CRM — Kanban
-   - topo: funil, busca (sem acento; dígitos = telefone), filtros com
+   - topo (M30): ui.cabecalho (sem a empresa em cima), funis em ui.segmentado, busca (sem acento; dígitos = telefone), filtros com
      chips removíveis, totais (abertos, soma, previsão ponderada) e a
      distribuição por etapa; "+ Novo"
    - colunas com cor, contagem, soma, "+"; "Ver mais" de 30 em 30;
@@ -51,8 +51,9 @@ export async function montarKanban(k, el, rota) {
   ctx.titulo(k.v.crm);
 
   /* ============================================================ estrutura */
-  // troca de funil: abas (até 5 funis) ou select (mais que isso)
+  // troca de funil (M30): ui.segmentado com até 5 funis; no celular (e com mais de 5) um seletor no cabeçalho
   const selFunil = h("div", { class: "crm-funis" });
+  const selFunilM = h("div", { class: "crm-funil-m" });
   function trocarFunil(id) {
     if (S.funil && S.funil.id === id) return;
     S.funil = k.funil(id);
@@ -61,9 +62,9 @@ export async function montarKanban(k, el, rota) {
     carregar();
   }
   function desenharSelFunil() {
-    ui.limpar(selFunil);
+    ui.limpar(selFunil); ui.limpar(selFunilM);
     const lista = funis();
-    selFunil.hidden = lista.length < 2;
+    selFunil.hidden = selFunilM.hidden = lista.length < 2;
     if (lista.length < 2) return;
     const select = classe => {
       const s = h("select", { class: ["sel", "crm-funil-sel", classe], "aria-label": "Funil" }, lista.map(f => h("option", { value: f.id, selected: S.funil && f.id === S.funil.id }, f.nome)));
@@ -71,12 +72,12 @@ export async function montarKanban(k, el, rota) {
       return s;
     };
     if (lista.length <= 5) {
-      const ab = ui.abas({ itens: lista.map(f => ({ id: f.id, rotulo: f.nome, icone: f.conta_no_ads ? "anuncio" : null })),
-        ativo: S.funil && S.funil.id, rotulo: "Funis", aoMudar: trocarFunil });
-      // no celular as abas dão lugar a um seletor (cabe na linha do título); o CSS mostra um dos dois
-      selFunil.append(ab.el, select("crm-funil-sel-m"));
+      selFunil.appendChild(ui.segmentado({ opcoes: lista.map(f => ({ valor: f.id, rotulo: f.nome, icone: f.conta_no_ads ? "anuncio" : null })),
+        valor: S.funil && S.funil.id, rotulo: "Funis", aoMudar: trocarFunil }));
+      selFunilM.appendChild(select("crm-funil-sel-m"));        // o CSS mostra um dos dois: abas no desktop, seletor no celular
     } else {
-      selFunil.appendChild(select());
+      selFunil.hidden = true;
+      selFunilM.appendChild(select("crm-funil-sel-todos"));
     }
   }
 
@@ -119,9 +120,8 @@ export async function montarKanban(k, el, rota) {
   const fab = podeMover ? h("button", { type: "button", class: "crm-fab", "aria-label": k.v.novo("negocio"), title: k.v.novo("negocio"), on: { click: () => novo({}) } },
     ui.icone("mais"), h("span", { class: "crm-fab-txt" }, k.v.novo("negocio"))) : null;
   el.append(...[
-    h("header", { class: "crm-cab" },
-      h("div", null, h("p", { class: "rotulo" }, ctx.cliente.nome), h("div", { class: "crm-titulo" }, h("h1", { class: "titulo-pag" }, k.v.crm), selFunil)),
-      h("div", { class: "crm-cab-acoes" }, btNovo)),
+    ui.cabecalho({ titulo: k.v.crm, acoes: [btNovo, selFunilM] }),
+    selFunil,
     h("div", { class: "pilha-p" }, h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btFiltros), chips),
     fitaEtapas, resumoLinha, totais, areaVazia, corpoQuadro, instr, fab].filter(Boolean));
   desenharSelFunil();
@@ -138,15 +138,25 @@ export async function montarKanban(k, el, rota) {
     if (!S.funil) { mostrarSemFunil(); return; }
     if (!silencioso || !S.dados) { ui.limpar(quadro); quadro.appendChild(ui.esqueleto("kanban", Math.min(6, S.funil.estagios.length || 4))); }
     desenharChips();
+    let doCache = false;
     try {
-      const d = await k.api.rpcC("nx_negocios_kanban", { p_funil: S.funil.id, p_filtro: filtroServidor(), p_por_coluna: 30 });
+      const d = await k.api.rpcC("nx_negocios_kanban", { p_funil: S.funil.id, p_filtro: filtroServidor(), p_por_coluna: 30 }, { cache: true, aoCache: dc => {
+        // M16/M30: a 1ª pintura é o último quadro guardado (só quando ainda não há nada na tela); a rede chega logo depois
+        if (minha !== S.seq || !S.vivo || S.dados || !dc || !Array.isArray(dc.colunas)) return;
+        S.dados = dc; doCache = true;
+        desenharQuadro();
+        if (S.pronta) S.pronta();       // a tela já pode entrar: o quadro guardado está pintado
+      } });
       if (minha !== S.seq || !S.vivo) return;
+      const igual = doCache && JSON.stringify(S.dados) === JSON.stringify(d);     // nada mudou desde o guardado: não refaz o quadro
       S.dados = d;
       S.ultimaRecarga = Date.now();
+      if (igual) return;
       reaplicarPendentes();
       desenharQuadro();
     } catch (e) {
       if (minha !== S.seq || !S.vivo) return;
+      if (e && e.comCache) return;      // a rede falhou depois de pintar o último quadro: a tela fica com o que mostra (o selo do shell avisa)
       if (e && e.codigo === "funil_invalido") { await k.recarregarBase(); S.funil = k.funilPadrao(); desenharSelFunil(); if (S.funil) return carregar(); }
       ui.limpar(quadro);
       quadro.appendChild(ui.erroCartao(e, () => carregar()));
@@ -270,9 +280,9 @@ export async function montarKanban(k, el, rota) {
     c.soma.textContent = Number(valorSoma) ? ui.brl(valorSoma, { centavos: false }) : "R$ 0";
     ui.limpar(c.lista);
     for (const it of col.itens) c.lista.appendChild(criarCartao(it, e));
-    if (!col.itens.length) c.lista.appendChild(h("div", { class: "kb-vazia" }, podeMover
+    if (!col.itens.length) c.lista.appendChild(h("div", { class: "kb-vazia" }, ui.vazio({ tipo: "sem_resultado", titulo: podeMover
       ? (matchMedia("(pointer: coarse)").matches ? "Segure um cartão e arraste até aqui" : "Arraste um cartão para cá")
-      : "Nada nesta etapa"));
+      : "Nada nesta etapa" })));
     ui.limpar(c.extra);
     const faltam = (col.total || 0) - col.itens.length;
     if (faltam > 0) {
@@ -423,6 +433,7 @@ export async function montarKanban(k, el, rota) {
     preencherColuna(origemCol.estagio_id); if (destCol !== origemCol) preencherColuna(estagioId);
     desenharTotais();
     focarCartao(id);
+    assentar(id);
     const tipoOrigem = (k.estagio(origemCol.estagio_id) || {}).tipo;
     const mov = { id, card, destino, estagioId, pos, ordem, extra, patch, origemEstagioId: origemCol.estagio_id, origemPos: posOrig,
       origemPatch: { status: card.status, valor: card.valor, consulta_em: card.consulta_em }, origem: { ordem: card.ordem ?? null, consulta_em: card.consulta_em ?? null },
@@ -446,6 +457,16 @@ export async function montarKanban(k, el, rota) {
     const ok = await efetivar(mov);
     if (!ok || origemCol === destCol) return;       // só reordenar dentro da etapa não pede «Desfazer»
     ui.acaoComDesfazer({ texto: `«${titulo}» movido para ${destino.nome}`, reverter: () => desfazerMovimento(mov) });
+  }
+
+  /** O cartão solto «assenta» no lugar (M10: .assenta = escala 1,015 → 1; sem movimento reduzido o CSS zera a animação). */
+  function assentar(id) {
+    const el = quadro.querySelector(`.kc[data-id="${id}"]`);
+    if (!el) return;
+    el.classList.remove("assenta");
+    void el.offsetWidth;
+    el.classList.add("assenta");
+    el.addEventListener("animationend", () => el.classList.remove("assenta"), { once: true });
   }
 
   function marcarConfirmando(id, sim) {
@@ -985,7 +1006,10 @@ export async function montarKanban(k, el, rota) {
     carregar({ silencioso: true });
   }) : null;
 
-  await carregar();
+  // M30: a tela entra assim que há o que mostrar — o último quadro guardado (aoCache) ou a resposta da rede, o que vier primeiro
+  const pronta = new Promise(res => { S.pronta = res; });
+  carregar().finally(() => S.pronta());
+  await pronta;
   return {
     aoMudarNegocio: () => carregar({ silencioso: true }),
     desmontar() {

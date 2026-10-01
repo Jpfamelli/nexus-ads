@@ -5,18 +5,16 @@
    --cor (validada no JS). Nenhum hex aqui. Movimento com os tokens
    do painel; some tudo com prefers-reduced-motion.
    ============================================================ */
+/* escala: tokens */   /* marcador (M30): tamanho de letra só por token --fs-*, em ou %; nada de px/rem solto fora do :root; caixa-alta só em .selo-caps (travado em app.teste.mjs e crm.teste.mjs) */
 [hidden] { display: none !important; }
 
 .crm { display: flex; flex-direction: column; gap: 1.1rem; min-width: 0; }
 /* a entrada (.vista > * { animation: aparece … both }) deixava transform: matrix(identidade) no fim, e isso prende o position: fixed dos filhos
    (botão flutuante do celular) à própria tela: com `backwards` o transform some quando a animação acaba */
 .vista > .crm { animation-fill-mode: backwards; }
-.crm-cab { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem 1.5rem; flex-wrap: wrap; }
-.crm-cab > div:first-child { min-width: 0; }
-.crm-cab .rotulo { margin-bottom: .4rem; }
-.crm-cab-acoes { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
-.crm-titulo { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; min-width: 0; }
-.crm-titulo .titulo-pag { min-width: 0; }
+/* cabeçalho (M30): vem do ui.cabecalho (.cab), plano e sem a empresa em cima; aqui só a folga e o que o CRM acrescenta */
+.crm > .cab { margin: .2rem 0 0; }
+.crm-funis, .crm-funil-m { min-width: 0; }
 .crm-funil-sel { max-width: min(320px, 100%); }
 
 /* ---------------- barra de busca e filtros ---------------- */
@@ -108,9 +106,11 @@
 }
 .kb-col-l2 { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; font-size: var(--fs-13); color: var(--c-texto-2); }
 .kb-col-soma { font-weight: 700; color: var(--c-texto); font-variant-numeric: tabular-nums; }
-.kb-col-tipo { font-family: var(--f-mono); font-size: var(--fs-11); letter-spacing: .08em; text-transform: uppercase; color: var(--c-texto-3); }
+.kb-col-tipo { font-weight: 600; font-size: var(--fs-12); color: var(--c-texto-2); }
 .kb-lista { display: flex; flex-direction: column; gap: .55rem; padding: .7rem .6rem .8rem; overflow-y: auto; min-height: 90px; flex: 1; scrollbar-width: thin; scrollbar-color: var(--c-borda-2) transparent; }
-.kb-vazia { display: grid; place-items: center; min-height: 80px; padding: .8rem; border: 1px dashed var(--c-borda-2); border-radius: var(--r-p); color: var(--c-texto-3); font-size: var(--fs-13); text-align: center; }
+.kb-vazia { display: grid; place-items: center; padding: .2rem; text-align: center; }
+.kb-vazia .vazio { padding: .5rem .4rem; border: 0; justify-content: center; }
+.kb-vazia .vazio-linha { font-size: var(--fs-13); color: var(--c-texto-2); }
 .kb-mais { align-self: center; margin-top: .2rem; }
 .kb-antigos { display: flex; align-items: center; justify-content: center; gap: .4rem; padding: .1rem .6rem .7rem; font-size: var(--fs-12); color: var(--c-texto-3); text-align: center; }
 
@@ -382,7 +382,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .ct-pag { display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; font-size: var(--fs-13); color: var(--c-texto-2); }
 .ct-pag .linha { gap: .4rem; }
 .ct-etqs { display: flex; flex-wrap: wrap; gap: .25rem; }
-.ct-etqs .etiq { min-height: 22px; font-size: 11.5px; padding: .06rem .5rem .06rem .4rem; }
+.ct-etqs .etiq { min-height: 22px; font-size: var(--fs-12); padding: .06rem .5rem .06rem .4rem; }
 .ct-nneg { display: inline-grid; place-items: center; min-width: 26px; height: 24px; padding: 0 .4rem; border-radius: 999px; background: var(--c-sup-2); font-family: var(--f-mono); font-size: var(--fs-12); }
 .ct-nneg.tem { background: var(--c-prim-suave); color: var(--c-prim-luz); }
 
@@ -422,7 +422,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .fx-cab { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; padding: 1.2rem 1.3rem; border-radius: var(--r-g); background: var(--c-sup); border: 1px solid var(--c-borda); box-shadow: inset 0 1px 0 var(--c-luz-borda); }
 .fx-cab .avatar { width: 56px; height: 56px; font-size: var(--fs-17); }
 .fx-id { flex: 1 1 16rem; min-width: 0; display: flex; flex-direction: column; gap: .25rem; }
-.fx-id h1 { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: clamp(1.5rem, 2.4vw, 2rem); letter-spacing: -.02em; line-height: 1.1; overflow-wrap: anywhere; }
+.fx-id h1 { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-h1); letter-spacing: -.02em; line-height: 1.1; overflow-wrap: anywhere; }
 .fx-id p { display: flex; flex-wrap: wrap; gap: .3rem .9rem; color: var(--c-texto-2); font-size: var(--fs-14); }
 .fx-id p span { display: inline-flex; align-items: center; gap: .3rem; }
 .fx-id p .ic { width: 14px; height: 14px; color: var(--c-texto-3); }
@@ -445,7 +445,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 /* ---------------- tarefas (T9) ---------------- */
 .tfp-fita { display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; }
 .tfp-grupo { display: flex; flex-direction: column; gap: .45rem; }
-.tfp-grupo h3 { font-family: var(--f-mono); font-weight: 500; font-size: var(--fs-11); letter-spacing: .12em; text-transform: uppercase; color: var(--c-texto-3); margin-top: .4rem; }
+.tfp-grupo h3 { font-weight: 600; font-size: var(--fs-peq); color: var(--c-texto-2); margin-top: .4rem; }
 
 /* ---------------- importar (T10) ---------------- */
 .imp-passos { display: flex; gap: .4rem; flex-wrap: wrap; counter-reset: passo; }
@@ -485,7 +485,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .imp-res span { color: var(--c-texto-2); font-size: var(--fs-13); }
 .imp-corpo { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
 .imp-tit { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-20); outline: none; }
-.imp-sub { font-family: var(--f-mono); font-weight: 500; font-size: var(--fs-11); letter-spacing: .12em; text-transform: uppercase; color: var(--c-texto-3); margin-top: .4rem; }
+.imp-sub { font-weight: 600; font-size: var(--fs-peq); color: var(--c-texto-2); margin-top: .4rem; }
 .imp-solta { cursor: pointer; }
 .imp-solta b { font-size: var(--fs-17); }
 .imp-solta:focus-within, .imp-solta:hover { border-color: var(--c-prim); }
@@ -572,7 +572,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .fe-etapa input, .fe-etapa select { width: 100%; min-width: 0; min-height: 38px; padding: .35rem .6rem; border-radius: 10px; border: 1px solid var(--c-borda-2); background: var(--c-fundo); color: var(--c-texto); font-size: var(--fs-13); }
 .fe-cab { display: grid; grid-template-columns: 28px 26px minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, .75fr) minmax(0, .7fr) 36px; gap: .5rem; padding: 0 .55rem 0 calc(.55rem + 3px); }
 .fe-cab.sem-marco { grid-template-columns: 28px 26px minmax(0, 1.9fr) minmax(0, 1fr) minmax(0, .75fr) minmax(0, .7fr) 36px; }
-.fe-cab span { font-family: var(--f-mono); font-size: var(--fs-11); letter-spacing: .08em; text-transform: uppercase; color: var(--c-texto-3); }
+.fe-cab span { font-weight: 600; font-size: var(--fs-12); color: var(--c-texto-2); }
 
 /* ---------------- celular ---------------- */
 @media (max-width: 1100px) {
@@ -583,12 +583,11 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 @media (max-width: 760px) {
   /* M28: Pacientes e Tarefas — cabeçalho numa linha, busca fixa ao rolar, lista compacta, «Novo» flutuante (Exportar/Importar viram o ⋮) */
   .crm[data-tela="contatos"], .crm[data-tela="tarefas"] { gap: .6rem; padding-bottom: 5.2rem; }
-  .crm[data-tela="contatos"] .crm-cab, .crm[data-tela="tarefas"] .crm-cab { padding: .55rem .9rem; border-radius: var(--r); align-items: center; flex-wrap: nowrap; }
-  .crm[data-tela="contatos"] .crm-cab > div:first-child, .crm[data-tela="tarefas"] .crm-cab > div:first-child { flex: 1; }
-  .crm[data-tela="contatos"] .crm-cab .rotulo, .crm[data-tela="tarefas"] .crm-cab .rotulo { display: none; }
-  .crm[data-tela="contatos"] .titulo-pag, .crm[data-tela="tarefas"] .titulo-pag { font-size: var(--fs-20); }
-  .crm[data-tela="contatos"] .crm-cab-acoes { width: auto; flex: none; }
-  .crm[data-tela="contatos"] .crm-cab-acoes .bt, .crm[data-tela="tarefas"] .crm-cab-acoes { display: none; }
+  .crm[data-tela="kanban"] > .cab, .crm[data-tela="contatos"] > .cab, .crm[data-tela="tarefas"] > .cab { margin: 0; flex-wrap: nowrap; align-items: center; gap: .6rem; }
+  .crm[data-tela="kanban"] > .cab .cab-txt, .crm[data-tela="contatos"] > .cab .cab-txt, .crm[data-tela="tarefas"] > .cab .cab-txt { flex: 1 1 0; }
+  .crm[data-tela="kanban"] > .cab .cab-titulo, .crm[data-tela="contatos"] > .cab .cab-titulo, .crm[data-tela="tarefas"] > .cab .cab-titulo { font-size: var(--fs-20); }
+  .crm[data-tela="contatos"] > .cab .cab-sub { margin-top: .1rem; font-size: var(--fs-13); }
+  .crm[data-tela="kanban"] .cab-acoes .bt, .crm[data-tela="contatos"] .cab-acoes .bt, .crm[data-tela="tarefas"] .cab-acoes .bt { display: none; }   /* o «Novo» é o botão flutuante */
   .crm-cab-mais { display: inline-flex; }
   .tf-acoes .bt-icone:not(.tf-mais) { display: none; }   /* lápis + lixeira lado a lado viram um ⋮ só */
   .tf-acoes .tf-mais { display: inline-grid; }
@@ -602,8 +601,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .crm[data-tela="contatos"] .crm-filtro-txt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .crm[data-tela="contatos"] .tabela-env { display: none; }
   .ct-lista-env { display: block; }
-  .crm-cab-acoes { width: 100%; }
-  .crm-cab-acoes .bt-prim { flex: 1 1 auto; } /* basis pelo conteúdo: quebra de linha em vez de cortar o texto do botão */
+  .crm > .cab .cab-acoes .bt-prim { flex: 1 1 auto; } /* basis pelo conteúdo: quebra de linha em vez de cortar o texto do botão */
   .crm-fita .busca { flex-basis: 100%; max-width: none; }
   .crm-totais { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .crm-tot-prev { grid-column: 1 / -1; }
@@ -617,12 +615,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .kb-zona { flex: 1 1 0; min-width: 0; min-height: 56px; justify-content: center; padding: .5rem .8rem; }
   /* M23: o primeiro cartão tem de aparecer na primeira tela — cabeçalho compacto, busca + filtros numa linha, fita fixa, totais numa linha */
   .crm[data-tela="kanban"] { gap: .6rem; }
-  .crm[data-tela="kanban"] .crm-cab { padding: .55rem .9rem; border-radius: var(--r); align-items: center; flex-wrap: nowrap; }
-  .crm[data-tela="kanban"] .crm-cab > div:first-child { flex: 1; }
-  .crm[data-tela="kanban"] .crm-cab .rotulo, .crm[data-tela="kanban"] .crm-cab-acoes { display: none; }
-  .crm[data-tela="kanban"] .crm-titulo { flex-wrap: nowrap; justify-content: space-between; gap: .6rem; }
-  .crm[data-tela="kanban"] .titulo-pag { font-size: var(--fs-20); }
-  .crm[data-tela="kanban"] .crm-funis .abas { display: none; }
+  .crm[data-tela="kanban"] .crm-funis { display: none; }   /* no celular as abas dão lugar ao seletor do cabeçalho */
   .crm-funil-sel-m { display: block; flex: 0 1 auto; min-width: 9.5rem; max-width: 62%; min-height: 40px; }
   .crm[data-tela="kanban"] .crm-fita { flex-wrap: nowrap; gap: .5rem; }
   .crm[data-tela="kanban"] .crm-fita .busca { flex: 1 1 auto; min-width: 0; max-width: none; }
@@ -698,18 +691,6 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
    ÓRBITA · CRM como mesa de operação
    ============================================================ */
 .crm { gap: clamp(1rem, 2vw, 1.4rem); }
-.crm-cab {
-  position: relative;
-  align-items: center;
-  padding: clamp(1rem, 2.2vw, 1.45rem);
-  border: 1px solid var(--c-borda);
-  border-radius: var(--r-g);
-  background: radial-gradient(95% 150% at 0% 0%, var(--c-prim-suave), transparent 68%), var(--c-sup);
-  box-shadow: inset 0 1px 0 var(--c-luz-borda), 0 20px 42px -34px var(--c-sombra);
-}
-.crm-cab .rotulo { letter-spacing: .14em; }
-.crm-titulo .titulo-pag { letter-spacing: -.035em; }
-.crm-cab-acoes .bt { box-shadow: inset 0 1px 0 var(--c-luz-borda), 0 10px 22px -20px var(--c-sombra); }
 .crm-totais { border-radius: var(--r-g); box-shadow: 0 18px 38px -32px var(--c-sombra); }
 .crm-tot { padding: clamp(.85rem, 1.6vw, 1.2rem); }
 .kb { scrollbar-color: color-mix(in srgb, var(--c-prim) 48%, var(--c-borda-2)) transparent; }
@@ -725,8 +706,6 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .kc.pego { transform: translateY(-2px) scale(1.01); }
 .crm-fita .busca input { box-shadow: inset 0 1px 0 var(--c-luz-borda); }
 @media (max-width: 760px) {
-  .crm-cab { align-items: flex-start; padding: 1rem; }
-  .crm-cab-acoes { gap: .4rem; }
   .crm-totais { border-radius: 18px; }
   .kb { padding-bottom: 1.25rem; }
 }

@@ -528,7 +528,10 @@ export async function montar(ctx) {
   let eixoAtual = null;
   let nomesDonos = null;
 
-  const cabecalho = h("header", { class: "agenda-cab" });
+  // M30: ui.cabecalho (sem a empresa em cima); os controles de data e as ações entram no lugar das ações do cabeçalho
+  const controles = h("div", { class: "agenda-cab-controles" });
+  const cabecalho = ui.cabecalho({ titulo: "Agenda", acoes: controles });
+  cabecalho.classList.add("agenda-cab");
   const conteudo = h("div", { class: "agenda-conteudo", "aria-live": "polite" });
   ui.limpar(ctx.alvo);
   ctx.alvo.append(cabecalho, conteudo);
@@ -541,25 +544,18 @@ export async function montar(ctx) {
   const passoDeNavegacao = () => (modo === "dia" && !movel ? 1 : 7);
 
   function montarCabecalho() {
-    ui.limpar(cabecalho);
+    ui.limpar(controles);
     const anterior = h("button", { type: "button", class: "bt-icone", "aria-label": passoDeNavegacao() === 1 ? "Dia anterior" : "Semana anterior", on: { click: () => mover(-1) } }, ui.icone("seta-esq"));
     const proximo = h("button", { type: "button", class: "bt-icone", "aria-label": passoDeNavegacao() === 1 ? "Próximo dia" : "Próxima semana", on: { click: () => mover(1) } }, ui.icone("seta-dir"));
     const hoje = h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { data = ui.hojeSP(); carregar(); } } }, "Hoje");
     const seletor = h("input", { class: "agenda-data", type: "date", value: data, "aria-label": "Escolher data" });
     seletor.addEventListener("change", () => { if (seletor.value) { data = seletor.value; carregar(); } });
     const periodo = h("div", { class: "agenda-periodo" }, anterior, seletor, proximo, hoje);
-    const alternador = h("div", { class: "agenda-abas", role: "group", "aria-label": "Visualização da agenda" },
-      ...[["dia", "Dia"], ["semana", "Semana"]].map(([id, rotulo]) => h("button", {
-        type: "button", class: ["bt", modo === id ? "bt-prim" : "bt-fant", "bt-p"],
-        "aria-pressed": String(modo === id), on: { click: () => { modo = id; carregar(); } },
-      }, rotulo)));
+    const alternador = ui.segmentado({ opcoes: [{ valor: "dia", rotulo: "Dia" }, { valor: "semana", rotulo: "Semana" }], valor: modo, rotulo: "Visualização da agenda", classe: "agenda-abas",
+      aoMudar: id => { modo = id; carregar(); } });
     const acoes = h("div", { class: "agenda-acoes" }, alternador,
       ctx.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim agenda-marcar", on: { click: () => abrirAgendamento(null, { dia: movel || modo === "dia" ? data : null }) } }, ui.icone("mais"), "Marcar consulta") : null);
-    cabecalho.append(
-      h("div", { class: "agenda-cab-titulo" },
-        h("p", { class: "rotulo" }, ctx.cliente && ctx.cliente.nome || ""),
-        h("h1", { class: "titulo-pag" }, "Agenda")),
-      h("div", { class: "agenda-cab-controles" }, periodo, acoes));
+    controles.append(periodo, acoes);
   }
 
   function mover(delta) {
@@ -578,13 +574,21 @@ export async function montar(ctx) {
       conteudo.appendChild(ui.esqueleto("agenda", { cabecalho: false }));
     }
     try {
-      const r = await api.rpcC("nx_agenda_dia", { p_data: iv.de, p_dias: iv.dias });
+      let doCache = false;
+      const r = await api.rpcC("nx_agenda_dia", { p_data: iv.de, p_dias: iv.dias }, { cache: true, aoCache: dc => {
+        // M16/M30: a 1ª pintura é a última agenda guardada para este período; a rede atualiza em seguida
+        if (!vivo || minha !== sequencia || atual || !dc || typeof dc !== "object") return;
+        atual = dc; chaveAtual = chave; doCache = true;
+        desenhar();
+      } });
       if (!vivo || minha !== sequencia) return;
+      const igual = doCache && JSON.stringify(atual) === JSON.stringify(r);     // nada mudou desde o guardado: não refaz a grade
       atual = r || { consultas: [], bloqueios: [] };
       chaveAtual = chave;
-      desenhar();
+      if (!igual) desenhar();
     } catch (e) {
       if (!vivo || minha !== sequencia) return;
+      if (e && e.comCache) return;      // a rede falhou depois de pintar a última agenda: fica o que está na tela
       atual = null; chaveAtual = "";
       ui.limpar(conteudo);
       conteudo.appendChild(ui.erroCartao(e, () => carregar({ forcar: true })));

@@ -855,7 +855,7 @@ await teste("M28: deslizar e botão chamam a MESMA ação — contatos (Tarefa/O
   const chamadas = [], gestos = [], menus = [], desfazeres = [];
   const ui = {
     icone: n => ({ tag: "ic", attrs: { n }, filhos: [] }), avatar: () => h("span"), pilula: t => h("span", { class: "pilula" }, t), etiqueta: e => h("span", { class: "etiq" }, e.nome),
-    telBR: t => String(t), limpar: el => { el.filhos = []; return el; }, anunciar() {}, toast() {}, horaBR: () => "09:00", dataCurtaBR: () => "02/10", relativo: () => "ontem", hojeSP: () => "2026-10-01",
+    vazio: o => h("div", { class: "vazio" }, o.titulo), telBR: t => String(t), limpar: el => { el.filhos = []; return el; }, anunciar() {}, toast() {}, horaBR: () => "09:00", dataCurtaBR: () => "02/10", relativo: () => "ontem", hojeSP: () => "2026-10-01",
     deslizar: (el, o) => { gestos.push({ el, o }); return () => {}; },
     menu: (ancora, itens) => { menus.push({ ancora, itens }); return { fechar() {} }; },
     acaoComDesfazer: async o => { desfazeres.push(o); return { estado: "mantida" }; },
@@ -903,7 +903,7 @@ await teste("M28: deslizar e botão chamam a MESMA ação — contatos (Tarefa/O
   achar(li2, x => /Mais ações para/.test(x.attrs["aria-label"] || "")).ouvintes.click();
   assert.deepEqual(menus.at(-1).itens.map(i => i.rotulo), ["Abrir ficha"]);
   limpa(); l2.atualizar([]);
-  assert.match(String(achar(l2.el, x => classe(x) === "ct-vazio").filhos[0]), /Nada encontrado/);
+  assert.match(String(achar(l2.el, x => classe(x) === "vazio").filhos[0]), /Nada encontrado/, "lista vazia: ui.vazio sem_resultado");
 
   /* ---- tarefas ---- */
   const t = { id: 71, titulo: "Confirmar avaliação", tipo: "ligacao", vence_em: "2099-01-10T15:00:00Z", concluida_em: null, contato: { id: 501, nome: "Mariana Costa" } };

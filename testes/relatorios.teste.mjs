@@ -862,5 +862,149 @@ await teste("M32: Início (cartão só para admin, estado por RPC de leitura, «
   assert.match(css, /\.ini-onb-barra i \{[^}]*background: var\(--c-prod\)/, "barra no acento do produto, por token");
 });
 
+/* ============================================================ M39 — painéis no celular: manchete na 1ª tela e Radar com gravidade */
+console.log("\n(i) M39 — Anúncios/Relatórios no celular e Radar com gravidade");
+
+const conexao = (ativo, extra = {}) => ({ nome: "Conexão com Meta", ativo, a: { mensagem: "caiu", criado_em: "2026-10-01T10:00:00Z" }, ...extra });
+const episodio = (sev, ativo, nome = `${sev}-${ativo ? "ativo" : "resolvido"}`) => ({ sev, ativo, nome, msg: "m", acao: "a", desde: "ontem" });
+
+await teste("M39: ordenarRadar — o crítico ativo sempre no topo, depois alerta e informativo; os resolvidos vêm depois dos ativos; em empate vale a ordem recebida", () => {
+  const R = {
+    conexoes: [conexao(false)],
+    episodios: [episodio("info", true, "i1"), episodio("alerta", true, "a1"), episodio("critico", false, "c-res"), episodio("critico", true, "c1"), episodio("alerta", true, "a2"), episodio("info", false, "i-res")],
+  };
+  const ordem = L.ordenarRadar(R).map(x => `${x.sev}:${x.ativo ? "ativo" : "resolvido"}:${x.ref.nome}`);
+  assert.deepEqual(ordem, [
+    "critico:ativo:c1",                       // o crítico ativo é o 1º, mesmo vindo no meio do histórico
+    "alerta:ativo:a1", "alerta:ativo:a2",     // empate: a ordem do montarRadar
+    "info:ativo:i1",
+    "critico:resolvido:Conexão com Meta", "critico:resolvido:c-res",    // resolvidos por último: conexão antes do histórico, ambos críticos
+    "info:resolvido:i-res"]);
+  assert.equal(L.ordenarRadar(R)[0].tipo, "episodio");
+  // uma conexão caída (ativa) é sempre crítica e vence qualquer episódio ativo; entre críticos ativos a conexão vem antes (ordem recebida)
+  const R2 = { conexoes: [conexao(true)], episodios: [episodio("critico", true, "c1"), episodio("alerta", true, "a1")] };
+  assert.deepEqual(L.ordenarRadar(R2).map(x => x.tipo + ":" + x.sev), ["conexao:critico", "episodio:critico", "episodio:alerta"]);
+  // gravidade desconhecida vira «alerta» (nunca some, nunca exagera); entrada vazia ou nula não quebra
+  assert.equal(L.nivelSev("grave?"), "alerta"); assert.equal(L.nivelSev("critico"), "critico"); assert.equal(L.nivelSev(undefined), "alerta");
+  assert.deepEqual(L.ordenarRadar({ conexoes: [], episodios: [episodio("???", true)] }).map(x => x.sev), ["alerta"]);
+  assert.deepEqual(L.ordenarRadar(null), []); assert.deepEqual(L.ordenarRadar({}), []);
+  // não muda o que recebeu
+  const antes = JSON.stringify(R); L.ordenarRadar(R); assert.equal(JSON.stringify(R), antes);
+  // as três gravidades têm rótulo escrito e ícone (nunca só cor)
+  for (const s of ["critico", "alerta", "info"]) { assert.ok(L.SEV_ROTULO[s]); assert.ok(L.SEV_ICONE[s]); assert.equal(typeof L.SEV_ORDEM[s], "number"); }
+  assert.equal(new Set(Object.values(L.SEV_ICONE)).size, 3, "um ícone por gravidade");
+});
+
+await teste("M39: textoChipAnuncios e textoChipRelatorios — «Últimos 30 dias · Tudo», «02/09 a 01/10 · Funil X», «Todos os departamentos»", () => {
+  assert.equal(L.textoChipAnuncios(30, ""), "Últimos 30 dias · Tudo");
+  assert.equal(L.textoChipAnuncios(7, "meta"), "Últimos 7 dias · Meta");
+  assert.equal(L.textoChipAnuncios(60, "google"), "Últimos 60 dias · Google");
+  assert.equal(L.textoChipAnuncios(undefined, ""), "Últimos 30 dias · Tudo");
+  assert.equal(L.textoChipRelatorios({ preset: 30 }), "Últimos 30 dias · Todos os funis");
+  assert.equal(L.textoChipRelatorios({ preset: 90, aba: "atendimento" }), "Últimos 90 dias · Todos os departamentos");
+  assert.equal(L.textoChipRelatorios({ preset: "per", de: "2026-09-02", ate: "2026-10-01", nome: "Funil Consultas" }), "02/09 a 01/10 · Funil Consultas");
+  assert.equal(L.textoChipRelatorios({ preset: "per", de: null, ate: null }), "Últimos 30 dias · Todos os funis", "personalizado sem datas cai no padrão");
+  assert.equal(L.textoChipRelatorios({ preset: 15 }), "Últimos 30 dias · Todos os funis", "preset desconhecido não inventa");
+});
+
+await teste("M39: Anúncios e Relatórios — abas por ui.segmentado, chip-resumo que abre a folha, «Atualizado» em texto pequeno com botão-ícone; os controles largos continuam para telas grandes", () => {
+  const ads = ler("web/app/anuncios.js"), rel = ler("web/app/relatorios.js"), css = ler("web/app/relatorios.css");
+  for (const [nome, src] of [["anuncios", ads], ["relatorios", rel]]) {
+    assert.match(src, /ui\.segmentado\(\{ tipo: "abas"/, `${nome}: abas por ui.segmentado`);
+    assert.match(src, /class: "rel-resumo", "aria-haspopup": "dialog"/, `${nome}: chip-resumo`);
+    assert.match(src, /class: "rel-filtros-lg"/, `${nome}: segmentos largos preservados`);
+    assert.match(src, /ui\.modal\(\{ titulo: "Período e (plataforma|filtros)"[^]*?protegerTexto: false/, `${nome}: a folha`);
+    assert.match(src, /rel-btn rel-btn-sec rel-btn-ic/, `${nome}: Atualizar também como botão-ícone`);
+    assert.match(src, /ui\.icone\("reabrir"\), h\("span", \{ class: "rel-rot" \}, "Atualizar"\)/, `${nome}: o nome acessível continua «Atualizar»`);
+    assert.doesNotMatch(src, /innerHTML/);
+  }
+  assert.match(ads, /L\.textoChipAnuncios\(S\.dias, S\.plat\)/); assert.match(rel, /L\.textoChipRelatorios\(\{ preset: P\.preset, de: P\.de, ate: P\.ate, aba, nome \}\)/);
+  assert.match(ads, /rel-so-largo[^]*?Ajustes de anúncios/, "os atalhos do gestor ficam para telas largas…");
+  assert.match(ads, /Mais ações[^]*?rotulo: "Ajustes de anúncios", icone: "engrenagem"/, "…e no ⋮ do celular");
+  assert.match(rel, /const v = L\.validarPeriodo\(de, ate\);\s*if \(!v\.ok\) \{ api\.erro\(v\.texto\); return false; \}/, "a folha valida o período antes de aplicar");
+  assert.match(ads, /abaRadar|L\.ordenarRadar\(R\)\.forEach/, "o Radar usa a ordenação por gravidade");
+  // CSS: o celular mostra o chip e esconde os segmentos; as regras que a frente A trava seguem no arquivo
+  assert.match(css, /\.rel-resumo, \.rel-so-movel \{ display: none; \}/);
+  assert.match(css, /@media \(max-width: 760px\) \{\s*\.rel \{ gap: \.4rem; \}[^]*?\.rel-filtros-lg \{ display: none; \}[^]*?\.rel-resumo \{ display: inline-flex;/);
+  assert.match(css, /\.ads-heroi \.rel-olho \{ display: none; \}/, "o herói não repete o chip");
+  assert.match(css, /\.ads-tabela td\.num::before \{[^}]*white-space: normal/); assert.match(css, /\.cfgf-codigo \{[^}]*white-space: pre-wrap/);
+  assert.match(css, /@media \(max-width: 400px\) \{\s*\.rel-aba \{ padding-inline: \.5rem;/, "a trava da frente A (abas em 375 px) continua");
+});
+
+await teste("M39: Radar — cada alerta com barra lateral de 3 px, ícone e rótulo da gravidade por token --c-sev-*, o crítico ativo no topo e o rótulo nunca só cor", () => {
+  const ads = ler("web/app/anuncios.js"), css = ler("web/app/relatorios.css");
+  assert.match(ads, /L\.ordenarRadar\(R\)\.forEach\(\(it, n\) => lista\.append\(it\.tipo === "conexao" \? alertaConexao\(it, n\) : alertaEpisodio\(it, n\)\)\)/);
+  assert.match(ads, /dataset: \{ sev \}/, "o <li> leva data-sev");
+  assert.match(ads, /h\("span", \{ class: "ads-sev-marca" \}, ui\.icone\(L\.SEV_ICONE\[sev\]\), h\("span", \{ class: "ads-sev-rot" \}, L\.SEV_ROTULO\[sev\]\)\)/, "ícone + rótulo escrito");
+  assert.match(css, /\.ads-al\[data-sev="critico"\] \{ --sev: var\(--c-sev-crit\); \}/);
+  assert.match(css, /\.ads-al\[data-sev="alerta"\] \{ --sev: var\(--c-sev-aten\); \}/);
+  assert.match(css, /\.ads-al\[data-sev="info"\] \{ --sev: var\(--c-sev-info\); \}/);
+  assert.match(css, /\.ads-alertas \.ads-al \{[^}]*border-left: 3px solid var\(--sev/, "barra lateral de 3 px");
+  assert.match(css, /\.ads-sev-marca \{[^}]*color: var\(--sev/);
+  assert.match(css, /\.ads-alertas \.ads-al\.resolvido \{ opacity: 1;/, "resolvido não perde contraste por opacidade");
+  const bloco = css.slice(css.indexOf("M39 — painéis no celular"));
+  assert.doesNotMatch(bloco, /#[0-9a-fA-F]{3,8}\b/, "nenhuma cor escrita no bloco novo: só token");
+  // os tokens de gravidade existem no app (e o tema recalcula para as 4 marcas)
+  const app = readFileSync(join(WEB, "app", "app.css"), "utf8");
+  assert.match(app, /--c-sev-info: #[0-9A-Fa-f]{6}; --c-sev-aten: #[0-9A-Fa-f]{6}; --c-sev-crit: #[0-9A-Fa-f]{6};/);
+});
+
+await teste("M39 (navegador): a manchete de Anúncios fica em y ≤ 300 a 390×844 (descontadas as faixas do sistema) e o alerta crítico abre o Radar — roda com ORBITA_QA_NAVEGADOR=1", async () => {
+  if (process.env.ORBITA_QA_NAVEGADOR !== "1") { console.log("      (pulado: defina ORBITA_QA_NAVEGADOR=1 para abrir o Chrome)"); return; }
+  const { createRequire } = await import("node:module");
+  const { spawn } = await import("node:child_process");
+  const req = createRequire(join(process.env.ORBITA_PUPPETEER || RAIZ, "x.js"));
+  const puppeteer = req("puppeteer-core");
+  const chrome = process.env.ORBITA_CHROME || ["C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/google-chrome", "/usr/bin/chromium"].find(existsSync);
+  assert.ok(chrome, "Chrome não encontrado (ORBITA_CHROME)");
+  const porta = 4800 + Math.floor(Math.random() * 90);
+  const srv = spawn(process.execPath, [join(RAIZ, "scripts", "dev-falso.mjs")], { env: { ...process.env, ORBITA_DEV_FALSO_PORT: String(porta) }, stdio: "ignore", windowsHide: true });
+  try {
+    await new Promise(r => setTimeout(r, 1800));
+    const base = `http://127.0.0.1:${porta}`;
+    const browser = await puppeteer.launch({ executablePath: chrome, headless: "new", args: ["--no-sandbox", "--disable-gpu"] });
+    try {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+      const erros = []; page.on("pageerror", e => erros.push(String(e.message || e)));
+      // uma conexão caída (alerta crítico ativo) junto dos alertas de atenção que o dev-falso já traz
+      await page.setRequestInterception(true);
+      let critico = false;
+      page.on("request", async r => {
+        if (!critico || !r.url().includes("rpc/nx_dados")) return r.continue();
+        try {
+          const j = await (await fetch(`${base}/__dev_falso/rest/v1/rpc/nx_dados`, { method: "POST", headers: { "content-type": "application/json" }, body: r.postData() || "{}" })).json();
+          j.integracoes = (j.integracoes || []).map(i => (i.canal === "meta" ? { ...i, status: "erro: token expirado" } : i));
+          j.alertas = [...(j.alertas || []), { regra: "integracao", chave: "integracao|meta", mensagem: "A conexão com o Meta caiu: o token expirou.", criado_em: new Date().toISOString(), severidade: "critico" }];
+          r.respond({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(j) });
+        } catch { r.continue(); }
+      });
+      await page.goto(`${base}/app/?dev-falso=1&dev=1#/inicio`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => { const b = document.getElementById("boot"); return !b || b.hidden; }, { timeout: 25000 });
+      await new Promise(r => setTimeout(r, 1500));
+      await page.evaluate(() => { location.hash = "#/anuncios"; });
+      await page.waitForSelector(".ads-frase", { timeout: 15000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 1800));
+      const m = await page.evaluate(() => {
+        const faixas = [...document.querySelectorAll(".faixa")].reduce((s, f) => s + f.getBoundingClientRect().height, 0);
+        const fr = document.querySelector(".ads-frase");
+        return { topo: fr ? fr.getBoundingClientRect().top + scrollY : null, faixas, chip: !!document.querySelector(".rel-resumo") && document.querySelector(".rel-resumo").getClientRects().length > 0,
+          abasEmUmaLinha: (() => { const t = [...document.querySelectorAll(".rel-abas-seg .seg-op")].map(b => Math.round(b.getBoundingClientRect().top)); return new Set(t).size === 1 && t.length === 4; })(),
+          sobra: document.documentElement.scrollWidth > innerWidth };
+      });
+      assert.ok(m.topo !== null, "a manchete existe");
+      assert.ok(m.topo - m.faixas <= 300, `a manchete ficou em y=${Math.round(m.topo)} (faixas ${Math.round(m.faixas)} px)`);
+      assert.equal(m.chip, true, "chip-resumo visível no celular"); assert.equal(m.abasEmUmaLinha, true, "4 abas numa linha só"); assert.equal(m.sobra, false, "sem rolagem horizontal");
+      critico = true;
+      await page.evaluate(() => { location.hash = "#/anuncios/radar"; });
+      await new Promise(r => setTimeout(r, 3500));
+      const ordem = await page.evaluate(() => [...document.querySelectorAll(".ads-alertas > li")].filter(li => !li.classList.contains("resolvido")).map(li => li.dataset.sev));
+      assert.ok(ordem.length >= 2, "há mais de um alerta ativo"); assert.equal(ordem[0], "critico", "o crítico ativo está no topo");
+      assert.deepEqual(ordem, ordem.slice().sort((a, b) => ({ critico: 0, alerta: 1, info: 2 })[a] - ({ critico: 0, alerta: 1, info: 2 })[b]), "ativos do mais grave para o menos");
+      assert.deepEqual(erros, []);
+    } finally { await browser.close(); }
+  } finally { srv.kill(); }
+});
+
 console.log(`\n${ok} ok · ${falhas} falha(s)`);
 if (falhas) process.exit(1);

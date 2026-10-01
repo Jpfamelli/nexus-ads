@@ -39,7 +39,7 @@ const PRONTOS_PADRAO = { MODULOS_PRONTOS: [], CONFIG_PRONTAS: ["perfil"] };
 const ROTAS_PUBLICAS = new Set(["login", "convite", "senha"]);
 
 /** Os módulos que o boot carrega juntos. Cada um tem um <link rel="modulepreload"> no index.html com o MESMO ?v= (testes/shell.teste.mjs confere). */
-const MODULOS_BASE = ["api.js", "ui.js", "tema.js", "vocab.js", "rotas.js", "pulso.js", "rede.js", "rascunho.js", "cache.js"];
+const MODULOS_BASE = ["api.js", "ui.js", "tema.js", "vocab.js", "rotas.js", "pulso.js", "rede.js", "rascunho.js", "cache.js", "comandos.js"];
 
 const E = {
   M: {},                 // módulos base: dados, api, ui, tema, vocab, rotas, pulso
@@ -58,6 +58,8 @@ const E = {
   regioes: null,           // M22: atalhos «Ir para…» registrados pelo módulo ativo (ctx.atalhosDeRegiao); null = valem os padrões da rota
   instalarEvento: null,    // M13: o beforeinstallprompt guardado (o botão «Instalar o app» usa)
   pwaMod: null,            // M13: o módulo pwa.js depois de carregado
+  comandos: null,          // M18: registro de comandos das telas (comandos.js); a paleta e a folha «?» leem dele
+  paleta: { mod: null, janela: null },   // M18: o módulo paleta.js (sob demanda) e a janela aberta
   bootTentar: null,        // o que o botão da tela de abertura faz agora (pular a espera do laço, refazer a etapa…)
   badges: {},
   titulo: "",
@@ -136,8 +138,9 @@ async function iniciar() {
         await esperarAbertura(ESPERAS_ABERTURA[Math.min(i, ESPERAS_ABERTURA.length - 1)] / 1000, navigator.onLine === false ? "Sem conexão." : "Não consegui abrir o sistema.");
       }
     }
-    const [dados, api, ui, tema, vocab, rotas, pulso, rede, rascunho, cache] = carregados;
-    E.M = { dados, api, ui, tema, vocab, rotas, pulso, rede, rascunho, cache };
+    const [dados, api, ui, tema, vocab, rotas, pulso, rede, rascunho, cache, comandos] = carregados;
+    E.M = { dados, api, ui, tema, vocab, rotas, pulso, rede, rascunho, cache, comandos };
+    E.comandos = comandos.criarComandos();      // M18: o que as telas oferecem à paleta (ctx.comandos.registrar)
     E.workspace = rotas.produtoDe(location.search);
     document.documentElement.dataset.produto = E.workspace || "orbita";
     document.title = E.workspace ? rotas.PRODUTOS[E.workspace].titulo : "Órbita · Nexus";
@@ -214,9 +217,15 @@ async function iniciar() {
     scrollTo({ top: 0 });
   });
   ui.atalho("mod+k", ev => {
-    if (!E.sessao || !buscaDisponivel() || $("app").hidden) return;
+    if (!E.sessao || $("app").hidden) return;
     ev.preventDefault();
-    abrirBusca();
+    abrirPaleta();
+  });
+  // «?» fora de campo: folha de atalhos (a tela que registra o próprio «?», como Conversas, fica com ele; janela aberta também)
+  ui.atalho("?", ev => {
+    if (!E.sessao || $("app").hidden || E.comandos.temAtalho("?") || document.querySelector("dialog[open]")) return;
+    ev.preventDefault();
+    abrirAtalhos();
   });
   montarEsqueletoShell();
   observarRegioes();
@@ -407,7 +416,7 @@ const urlArq = nome => new URL(`./${nome}?v=${encodeURIComponent(VERSAO)}`, impo
 /** O que o service worker deve ter guardado mesmo que a tela ainda não tenha sido aberta: as telas de rotas.ARQUIVOS e os CSS delas. */
 function urlsPrecache() {
   const telas = new Set(Object.values(E.M.rotas.ARQUIVOS));
-  return [...MODULOS_BASE, "prontos.js", "shell.css", "pwa.js", ...telas, ...CSS_DAS_TELAS].map(urlArq);
+  return [...MODULOS_BASE, "prontos.js", "shell.css", "pwa.js", "paleta.js", ...telas, ...CSS_DAS_TELAS].map(urlArq);
 }
 
 /** import() que falhou por arquivo que não existe mais naquela URL (a versão mudou por baixo da aba). */
@@ -428,6 +437,8 @@ function iniciarPwa() {
       E.pwa = pwa.iniciar({ versao: VERSAO, ui: E.ui, alvo: $("faixas-sistema"), produto: () => E.produto || "Órbita", ocupado: ocupadoParaAtualizar, urlsPrecache });
       agendarManifesto();
     } catch (e) { console.warn("pwa indisponível", e && e.message); }
+    // M18: a paleta abre sem esperar a rede na primeira vez que alguém aperta Ctrl/⌘+K
+    try { if (!E.paleta.mod) E.paleta.mod = await arq("paleta.js"); } catch { /* abre sob demanda */ }
   }, 0);
 }
 
@@ -642,6 +653,11 @@ let loginPendente = null;
 /** nx_sair, queda de sessão e troca de conta: nenhuma resposta guardada fica no aparelho (privacidade). */
 function limparDadosDoAparelho() {
   if (E.cache) E.cache.limpar().catch(() => {});
+  // M18: os «Recentes» da paleta têm nomes de pessoas: saem com a sessão
+  try {
+    const pref = E.M.comandos ? E.M.comandos.PREFIXO_RECENTES : "nx-rec:";
+    for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.startsWith(pref)) localStorage.removeItem(k); }
+  } catch { /* sem armazenamento: nada a apagar */ }
   LS.apagar(CHAVE_CONTA);
   E.sessaoGuardada = null;
 }
@@ -1025,6 +1041,14 @@ function construirCtx(r, alvo) {
       E.assinaturas.add(cancelar);
       return () => { cancelar(); E.assinaturas.delete(cancelar); };
     },
+    /** Comandos desta tela na paleta Ctrl/⌘+K (M18): registrar({ id, rotulo, palavras?, atalho?, icone?, fazer }) → cancelar(). Somem sozinhos ao sair da tela. */
+    comandos: {
+      registrar(cmd) {
+        const cancelar = E.comandos.registrar(cmd);
+        E.assinaturas.add(cancelar);
+        return () => { cancelar(); E.assinaturas.delete(cancelar); };
+      },
+    },
     titulo: definirTitulo,
     badge: definirBadge,
     // extras do shell (usados pelas telas da F3: config, admin)
@@ -1283,19 +1307,10 @@ function montarEsqueletoShell() {
   bt.setAttribute("aria-pressed", String(document.documentElement.classList.contains("menu-recolhido")));
 }
 
+/** Os itens que esta pessoa vê neste produto (papel, plano, prontos): o menu lateral, a barra de baixo e o «Ir para» da paleta leem a mesma lista. */
 function itensVisiveis() {
-  const { rotas, vocab } = E.M;
-  const op = opcoesAcesso();
-  const v = vocab.vocab(E.cliente ? E.cliente.vertical : "generico");
-  const itens = [];
-  for (const it of rotas.MENU) {
-    if (it.id === "admin") { if (op.gestorConta) itens.push({ ...it, rotulo: "Admin" }); continue; }
-    if (it.id === "config") { itens.push(it); continue; }
-    const acesso = rotas.acessoRota(it.id, op);
-    const emConstrucao = devLigado() && !E.prontos.MODULOS_PRONTOS.includes(rotas.ROTAS[it.id].pronto);
-    if (acesso === "ok") itens.push({ ...it, rotulo: it.rotulo.replace(/\{(\w+)\}/g, (_, k) => v[k] || k), icone: it.id === "crm" ? v.icone_crm : it.icone, emConstrucao });
-  }
-  return rotas.itensDoProduto(E.workspace, itens);
+  const v = E.M.vocab.vocab(E.cliente ? E.cliente.vertical : "generico");
+  return E.M.rotas.itensDoMenu({ op: opcoesAcesso(), vocab: v, workspace: E.workspace, prontos: E.prontos.MODULOS_PRONTOS, dev: devLigado() });
 }
 
 function desenharShell() {
@@ -1360,10 +1375,43 @@ function marcarMenu(modulo) {
   }
 }
 
+/* ---- período de teste (M18): uma pílula de 28 px junto à empresa, não uma faixa de linha inteira; dispensável por 24 h ---- */
+const CHAVE_TESTE_OCULTO = "nx-teste-oculto";
+const DIA_MS = 24 * 3600 * 1000;
+function testeOculto(cli) { const t = Number(LS.lerTxt(`${CHAVE_TESTE_OCULTO}:${cli.id}`)); return t > 0 && Date.now() - t < DIA_MS; }
+function diasDeTeste(cli) {
+  const d = Math.round((Date.parse(`${cli.teste_ate}T12:00:00Z`) - Date.parse(`${E.ui.hojeSP()}T12:00:00Z`)) / DIA_MS);
+  return Number.isFinite(d) ? d : null;
+}
+function pilulaDeTeste(cli) {
+  const { ui } = E;
+  if (!(cli.status === "teste" && cli.teste_ate && cli.teste_ate >= ui.hojeSP()) || testeOculto(cli)) return null;
+  const dias = diasDeTeste(cli);
+  const bt = ui.h("button", { type: "button", class: "pilula-teste", "aria-haspopup": "dialog", dataset: { urgente: dias !== null && dias <= 3 ? "1" : "0" },
+    title: `Teste grátis até ${ui.dataCurtaBR(cli.teste_ate)}` }, ui.icone("relogio"), ui.h("span", null, `Teste até ${ui.dataCurtaBR(cli.teste_ate)}`));
+  bt.addEventListener("click", () => abrirAvisoTeste(bt, cli, dias));
+  return bt;
+}
+function abrirAvisoTeste(ancora, cli, dias) {
+  const { ui } = E;
+  const wa = E.marca && E.marca.suporte_wa;
+  let f = null;
+  const ocultar = ui.h("button", { type: "button", class: "bt bt-fant bt-p" }, "Ocultar por 24 h");
+  ocultar.addEventListener("click", () => { LS.gravar(`${CHAVE_TESTE_OCULTO}:${cli.id}`, String(Date.now())); if (f) f.fechar(); desenharEmpresa(); });
+  const falar = wa ? ui.h("a", { class: "bt bt-sec bt-p", href: ui.linkWhatsApp(`Olá! Quero continuar usando o sistema na ${cli.nome}.`, wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Falar com o suporte") : null;
+  f = ui.flutuante(ancora, ui.h("div", { class: "pilha-p" },
+    ui.h("p", { class: "rotulo" }, "Período de teste"),
+    ui.h("p", null, "Teste grátis até ", ui.h("b", null, ui.dataCurtaBR(cli.teste_ate)), dias === null ? "." : dias <= 0 ? " (termina hoje)." : ` (${dias} dia${dias === 1 ? "" : "s"}).`),
+    ui.h("p", { class: "fraco" }, "Depois dessa data você só consegue consultar. Fale com o suporte para continuar."),
+    ui.h("div", { class: "linha" }, falar, ocultar)), { largura: 300 });
+  if (f && f.el) f.el.setAttribute("aria-label", "Período de teste");   // o painel é role="dialog": precisa de nome
+
 function desenharEmpresa() {
   const { ui } = E;
   const alvo = $("topo-empresa");
   ui.limpar(alvo);
+  const topo = $("topo");
+  if (topo) topo.classList.remove("topo-emp-troca", "topo-pilula-on");   // o CSS do celular esconde a marca quando a empresa troca ou há pílula (topo com ≤ 5 controles)
   if (!E.sessao) return;
   const lista = E.sessao.clientes;
   const cli = E.cliente;
@@ -1375,12 +1423,15 @@ function desenharEmpresa() {
   const conteudo = [ui.avatar(cli.nome, cli.id, E.marca && E.marca.logo_cliente), ui.h("span", { class: "emp-txt" }, ui.h("b", null, cli.nome), ui.h("small", null, sub))];
   if (lista.length <= 1) {
     alvo.appendChild(ui.h("div", { class: "empresa-bt empresa-fixa" }, conteudo));
-    return;
+  } else {
+    const bt = ui.h("button", { type: "button", class: "empresa-bt", "aria-haspopup": "dialog", "aria-expanded": "false", "aria-label": `Empresa ativa: ${cli.nome}. Trocar de empresa` },
+      conteudo, ui.icone("seta-baixo"));
+    bt.addEventListener("click", () => abrirSeletorEmpresa(bt));
+    alvo.appendChild(bt);
+    if (topo) topo.classList.add("topo-emp-troca");
   }
-  const bt = ui.h("button", { type: "button", class: "empresa-bt", "aria-haspopup": "dialog", "aria-expanded": "false", "aria-label": `Empresa ativa: ${cli.nome}. Trocar de empresa` },
-    conteudo, ui.icone("seta-baixo"));
-  bt.addEventListener("click", () => abrirSeletorEmpresa(bt));
-  alvo.appendChild(bt);
+  const pilula = pilulaDeTeste(cli);
+  if (pilula) { alvo.appendChild(pilula); if (topo) topo.classList.add("topo-pilula-on"); }
 }
 
 function abrirSeletorEmpresa(ancora) {
@@ -1418,6 +1469,8 @@ function desenharConta() {
   const abrirMenuConta = ancora => ui.menu(ancora, [
     { rotulo: "Perfil e senha", icone: "usuario", fn: () => navegar("#/config/perfil") },
     { rotulo: "Configurações", icone: "engrenagem", fn: () => navegar("#/config") },
+    { rotulo: "Aparência", icone: { claro: "sol", escuro: "lua", marca: "pincel" }[esquemaPreferido()] || "sol", fn: () => abrirMenuTema(ancora) },
+    { rotulo: "Ajuda", icone: "ajuda", fn: () => abrirMenuAjuda(ancora) },
     modoInstalacao() ? { rotulo: "Instalar o app", icone: "baixar", fn: () => instalarApp() } : null,
     "-",
     { rotulo: "Sair", icone: "sair", fn: () => sair() },
@@ -1433,7 +1486,7 @@ function desenharConta() {
   dir.appendChild(btTopo);
 }
 
-/** Busca global (Ctrl/⌘+K) e sino — só com uma empresa ativa. */
+/** Produtos, tema (no celular o tema vai para o menu da conta), paleta Ctrl/⌘+K e sino (este só com uma empresa ativa). */
 function desenharFerramentasTopo(dir) {
   const { ui } = E;
   if (E.sessao) {
@@ -1448,13 +1501,13 @@ function desenharFerramentasTopo(dir) {
   btTema.addEventListener("click", () => abrirMenuTema(btTema));
   dir.appendChild(btTema);
   atualizarBotaoTema();
-  if (!E.cliente) return;
-  if (buscaDisponivel()) {
-    const bt = ui.h("button", { type: "button", class: "topo-busca", id: "bt-busca", "aria-label": `Buscar (${teclaMod()}+K)`, "aria-keyshortcuts": "Control+K Meta+K" },
+  if (E.sessao) {
+    const bt = ui.h("button", { type: "button", class: "topo-busca", id: "bt-busca", "aria-label": `Buscar e comandos (${teclaMod()}+K)`, "aria-keyshortcuts": "Control+K Meta+K" },
       ui.icone("busca"), ui.h("span", { class: "rot" }, "Buscar"), ui.h("kbd", null, `${teclaMod()} K`));
-    bt.addEventListener("click", () => abrirBusca());
+    bt.addEventListener("click", () => abrirPaleta());
     dir.appendChild(bt);
   }
+  if (!E.cliente) return;
   const sino = ui.h("button", { type: "button", class: "bt-icone sino", id: "bt-sino", "aria-haspopup": "dialog", "aria-expanded": "false" },
     ui.icone("sino"), ui.h("span", { class: "badge", id: "sino-n", hidden: true }), ui.h("span", { class: "rede-ponto", id: "rede-ponto", hidden: true, "aria-hidden": "true" }));
   sino.addEventListener("click", () => abrirSino(sino));
@@ -1503,116 +1556,184 @@ function teclaMod() {
 }
 
 /* ============================================================
-   BUSCA GLOBAL (Ctrl/⌘+K) — nx_buscar (F4): contatos, negócios, conversas
+   PALETA DE COMANDOS (M18) — Ctrl/⌘+K nos três produtos: Recentes, Ir para, ações do shell e da tela aberta, depois os dados (nx_buscar).
+   A janela vive em paleta.js (sob demanda); o que ela sabe (catálogo, filtro, recentes, registro de comandos) em comandos.js (puro).
    ============================================================ */
-function buscaDisponivel() {
+
+/** Contatos e negócios (CRM) só existem no Órbita completo ou no CRM; Atendimento busca só conversas; Anúncios não busca dados. */
+function gruposDeDados() {
   const c = E.cliente;
-  return (E.workspace === null || E.workspace === "crm") && !!c && c.modulos.includes("crm") && pronto("crm") && !E.buscaFora;
+  if (!c || E.buscaFora || !c.modulos.includes("crm") || !pronto("crm")) return [];
+  const g = [];
+  if (E.workspace === null || E.workspace === "crm") g.push("contatos", "negocios");
+  if ((E.workspace === null || E.workspace === "atendimento") && c.modulos.includes("conversas") && pronto("conversas")) g.push("conversas");
+  return g;
 }
 
-function normTxt(s) { return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
-/** Texto com o trecho buscado em <mark> — sem innerHTML (nós de texto). */
-function realce(texto, q) {
-  const { ui } = E;
-  const s = String(texto || "");
-  const n = [...s].map(ch => normTxt(ch));
-  if (!q || n.some(x => x.length !== 1)) return [s];
-  const i = n.join("").indexOf(normTxt(q));
-  if (i < 0) return [s];
-  const chars = [...s];
-  const t = normTxt(q).length;
-  return [chars.slice(0, i).join(""), ui.h("mark", null, chars.slice(i, i + t).join("")), chars.slice(i + t).join("")];
+/** O que a paleta pode oferecer AGORA a esta pessoa neste produto (papel, plano, prontos, produto, o que o aparelho sabe fazer). */
+function ambienteComandos() {
+  const { rotas, vocab, comandos } = E.M;
+  const cli = E.cliente;
+  return {
+    workspace: E.workspace, vocab: vocab.vocab(cli ? cli.vertical : "generico"),
+    rotaOk: comandos.criarRotaOk({ rotas, op: opcoesAcesso(), workspace: E.workspace }),
+    pode: min => rotas.podePapel(papelAtual(), min),
+    empresas: E.sessao ? E.sessao.clientes.length : 0,
+    instalar: !!modoInstalacao(), suporte: !!(E.marca && E.marca.suporte_wa), temCliente: !!cli,
+  };
 }
 
-let _buscaAberta = null;
-function abrirBusca() {
-  const { ui } = E;
-  if (!buscaDisponivel() || _buscaAberta) return;
-  const v = E.M.vocab.vocab(E.cliente.vertical);
-  const conversasOk = !E.workspace && E.cliente.modulos.includes("conversas") && pronto("conversas");
-  const idLista = "busca-res";
-  const campo = ui.h("input", { type: "search", class: "busca-campo", placeholder: `Buscar ${v.contatos.toLowerCase()}, ${v.negocios.toLowerCase()}${conversasOk ? " e conversas" : ""}`,
-    "aria-label": "O que você procura", role: "combobox", "aria-expanded": "true", "aria-controls": idLista, "aria-autocomplete": "list", autocomplete: "off", spellcheck: "false" });
-  const res = ui.h("div", { class: "busca-res", id: idLista, role: "listbox", "aria-label": "Resultados" });
-  const status = ui.h("p", { class: "sr-only", role: "status", "aria-live": "polite" });
-  const dica = ui.h("p", { class: "busca-dica" }, ui.h("kbd", null, "↑"), ui.h("kbd", null, "↓"), " navegar  ", ui.h("kbd", null, "Enter"), " abrir  ", ui.h("kbd", null, "Esc"), " fechar");
-  let itens = [], sel = -1, seq = 0, api = null;
+/** Contexto para as ações do shell que abrem janelas de um módulo (nova oportunidade, marcar consulta), de qualquer tela. */
+function ctxDaAcao() { return construirCtx(E.ultimaRota || { modulo: null, partes: [], query: {} }, $("vista")); }
+const ancoraTopo = seletor => document.querySelector(seletor) || $("topo");
+const naTela = hash => location.hash === hash || location.hash.startsWith(hash + "/") || location.hash.startsWith(hash + "?");
 
-  function marcar(i) {
-    sel = itens.length ? (i + itens.length) % itens.length : -1;
-    itens.forEach((it, j) => it.el.setAttribute("aria-selected", String(j === sel)));
-    if (sel >= 0) { campo.setAttribute("aria-activedescendant", itens[sel].el.id); itens[sel].el.scrollIntoView({ block: "nearest" }); }
-    else campo.removeAttribute("aria-activedescendant");
-  }
-  function abrir(it) { if (api) api.fechar(null); navegar(it.hash); }
-  function vazioTxt(t) { ui.limpar(res); itens = []; sel = -1; res.appendChild(ui.h("p", { class: "busca-vazio" }, t)); status.textContent = t; }
-  function desenhar(r, q) {
-    ui.limpar(res); itens = []; sel = -1;
-    const grupos = [
-      { chave: "contatos", titulo: v.contatos, icone: "contato", hash: x => `#/contatos/${encodeURIComponent(x.id)}`,
-        l1: x => x.nome || ui.telBR(x.telefone), l2: x => x.telefone ? ui.telBR(x.telefone) : "" },
-      { chave: "negocios", titulo: v.negocios, icone: "funil", hash: x => `#/crm/negocio/${encodeURIComponent(x.id)}`,
-        l1: x => x.titulo || x.contato_nome || v.negocio, l2: x => [x.contato_nome, x.estagio_nome].filter(Boolean).join(" · ") },
-      ...(conversasOk ? [{ chave: "conversas", titulo: "Conversas", icone: "chat", hash: x => `#/conversas/${encodeURIComponent(x.id)}`,
-        l1: x => x.contato_nome || "Conversa", l2: x => [x.protocolo ? `Protocolo ${x.protocolo}` : null, x.status === "resolvida" ? "resolvida" : x.status === "aberta" ? "aberta" : x.status].filter(Boolean).join(" · ") }] : []),
-    ];
-    for (const g of grupos) {
-      const lista = Array.isArray(r && r[g.chave]) ? r[g.chave] : [];
-      if (!lista.length) continue;
-      res.appendChild(ui.h("p", { class: "rotulo busca-grupo", role: "presentation" }, g.titulo));
-      for (const x of lista) {
-        const it = { hash: g.hash(x) };
-        const el = ui.h("button", { type: "button", class: "busca-item", role: "option", id: `busca-op-${itens.length}`, tabindex: "-1", "aria-selected": "false" },
-          ui.h("span", { class: "busca-ic" }, ui.icone(g.icone)),
-          ui.h("span", null, ui.h("b", null, realce(g.l1(x), q)), g.l2(x) ? ui.h("small", null, realce(g.l2(x), q)) : null));
-        const idx = itens.length;
-        el.addEventListener("click", () => abrir(it));
-        el.addEventListener("mousemove", () => { if (sel !== idx) marcar(idx); });
-        it.el = el;
-        itens.push(it);
-        res.appendChild(el);
-      }
-    }
-    if (!itens.length) return vazioTxt(`Nada encontrado para “${q}”.`);
-    marcar(0);
-    status.textContent = `${itens.length} resultado${itens.length === 1 ? "" : "s"}.`;
-  }
-  const buscar = ui.debounce(async () => {
-    const q = campo.value.trim();
-    const n = ++seq;
-    if (q.length < 2) return vazioTxt("Digite pelo menos 2 letras: nome, telefone (só números) ou protocolo.");
-    res.setAttribute("aria-busy", "true");
-    try {
-      const r = await E.api.rpcC("nx_buscar", { p_q: q });
-      if (n !== seq) return;
-      desenhar(r, q);
-    } catch (e) {
-      if (n !== seq) return;
-      if (e && (e.status === 404 || /could not find the function/i.test(String(e.codigo)))) {
-        E.buscaFora = true;
-        const b = $("bt-busca"); if (b) b.remove();
-        return vazioTxt("A busca chega em breve.");
-      }
-      vazioTxt(E.api.mensagemErro(e));
-    } finally { if (n === seq) res.removeAttribute("aria-busy"); }
-  }, 180);
-  campo.addEventListener("input", buscar);
-  campo.addEventListener("keydown", ev => {
-    if (ev.key === "ArrowDown") { ev.preventDefault(); marcar(sel + 1); }
-    else if (ev.key === "ArrowUp") { ev.preventDefault(); marcar(sel - 1); }
-    else if (ev.key === "Enter") { ev.preventDefault(); if (itens[sel]) abrir(itens[sel]); }
-  });
-  vazioTxt("Digite pelo menos 2 letras: nome, telefone (só números) ou protocolo.");
-  _buscaAberta = ui.modal({
-    titulo: "Buscar", largura: "m",
-    corpo: ui.h("div", { class: "pilha-p" }, ui.h("label", { class: "busca-grande" }, ui.icone("busca"), campo), res, status, dica),
-    aoAbrir: a => {
-      api = a;
-      a.el.classList.add("busca-g");
-      const rod = a.el.querySelector(".modal-rod"); if (rod) rod.hidden = true;
-      setTimeout(() => campo.focus(), 0);
+/** Vai para a tela e executa o comando que ela registra ao abrir (ex.: «Nova conversa» em Conversas). Sem o comando (sem permissão), só chega à tela. */
+async function irEFazer(hash, comandoId) {
+  if (!naTela(hash)) navegar(hash);
+  const cmd = await E.comandos.aguardar(comandoId, 6000);
+  if (cmd) cmd.fazer();
+}
+/** Vai para a tela e aperta o botão dela quando aparecer (a tela ainda não registra o comando). */
+function irEClicar(hash, seletor, ms = 6000) {
+  if (!naTela(hash)) navegar(hash);
+  const ate = Date.now() + ms;
+  const tentar = () => {
+    const el = $("vista") && $("vista").querySelector(seletor);
+    if (el && !el.disabled) { el.click(); return; }
+    if (Date.now() < ate) setTimeout(tentar, 120);
+  };
+  tentar();
+}
+
+function falarComSuporte() {
+  const wa = E.marca && E.marca.suporte_wa;
+  if (!wa) return;
+  const app = E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace }).name;
+  const tela = E.titulo ? ` na tela «${E.titulo}»` : "";
+  const emp = E.cliente ? ` (empresa ${E.cliente.nome})` : "";
+  window.open(E.ui.linkWhatsApp(`Olá! Preciso de ajuda no ${app}${tela}${emp}.`, wa), "_blank", "noopener,noreferrer");
+}
+
+/** Como o shell executa cada ação do catálogo (comandos.CATALOGO); a paleta só mostra as que valem para a pessoa. */
+function acoesDoShell() {
+  return {
+    "nova-oportunidade": () => ctxDaAcao().novoNegocio(),
+    "marcar-consulta": async () => {
+      try { const m = await carregar("agenda"); await m.marcarConsulta(ctxDaAcao()); }
+      catch (e) { console.error(e); E.ui.toast("A agenda não está disponível agora.", { tipo: "erro" }); }
     },
-  }).finally(() => { _buscaAberta = null; buscar.cancelar(); seq++; });
+    "nova-conversa": () => irEFazer("#/conversas", "conversas.nova"),
+    "nova-tarefa": () => irEClicar("#/tarefas", 'button[aria-label="Nova tarefa"]'),
+    "alternar-tema": () => definirEsquema(esquemaPreferido() === "escuro" ? "claro" : "escuro"),
+    "trocar-empresa": () => abrirSeletorEmpresa(ancoraTopo("#topo-empresa button")),
+    "abrir-produto": () => abrirSeletorProduto(ancoraTopo(".topo-produtos")),
+    "instalar": () => instalarApp(),
+    "atalhos": () => abrirAtalhos(),
+    "primeiros-passos": () => navegar("#/inicio"),
+    "suporte": () => falarComSuporte(),
+    "sair": () => sair(),
+  };
+}
+
+function destinosDaPaleta() {
+  const v = E.M.vocab.vocab(E.cliente ? E.cliente.vertical : "generico");
+  return E.M.comandos.destinos(E.M.rotas.itensDoMenu({ op: opcoesAcesso(), vocab: v, workspace: E.workspace, prontos: E.prontos.MODULOS_PRONTOS, dev: devLigado() }));
+}
+
+/** Os últimos abertos desta empresa neste aparelho (localStorage; some no logout). null sem sessão ou sem armazenamento. */
+function recentesDaEmpresa() {
+  if (!E.sessao || !E.cliente || !E.M.comandos) return null;
+  try { return E.M.comandos.criarRecentes({ armazenamento: localStorage, chave: E.M.comandos.chaveRecentes(E.sessao.conta.id, E.cliente.id) }); } catch { return null; }
+}
+/** A tela de detalhe aberta (contato, oportunidade, conversa) entra em «Recentes» quando diz o nome da pessoa (ctx.titulo). */
+function lembrarRecente(titulo) {
+  try {
+    const it = E.M.comandos && E.M.comandos.recenteDaRota(E.ultimaRota, titulo);
+    const r = it && recentesDaEmpresa();
+    if (r) r.registrar(it);
+  } catch { /* recentes nunca atrapalham a tela */ }
+}
+
+/** nx_buscar → grupos já com título, ícone e destino (por produto: gruposDeDados). «#» só conversas. */
+async function buscarNaPaleta(q, modo) {
+  const v = E.M.vocab.vocab(E.cliente.vertical);
+  const { ui } = E;
+  const gs = gruposDeDados().filter(k => modo !== "protocolo" || k === "conversas");
+  if (!gs.length) return { grupos: [] };
+  let r;
+  try { r = await E.api.rpcC("nx_buscar", { p_q: q }); }
+  catch (e) {
+    if (e && (e.status === 404 || /could not find the function/i.test(String(e.codigo)))) { E.buscaFora = true; return { grupos: [], aviso: "A busca de dados chega em breve." }; }
+    throw e;
+  }
+  const def = {
+    contatos: { titulo: v.contatos, icone: "contato", tipo: "contato", hash: x => `#/contatos/${encodeURIComponent(x.id)}`, l1: x => x.nome || ui.telBR(x.telefone), l2: x => (x.telefone ? ui.telBR(x.telefone) : "") },
+    negocios: { titulo: v.negocios, icone: "funil", tipo: "negocio", hash: x => `#/crm/negocio/${encodeURIComponent(x.id)}`, l1: x => x.titulo || x.contato_nome || v.negocio,
+      l2: x => [x.contato_nome, x.estagio_nome].filter(Boolean).join(" · ") },
+    conversas: { titulo: "Conversas", icone: "chat", tipo: "conversa", hash: x => `#/conversas/${encodeURIComponent(x.id)}`, l1: x => x.contato_nome || "Conversa",
+      l2: x => [x.protocolo ? `Protocolo ${x.protocolo}` : null, x.status === "resolvida" ? "resolvida" : x.status === "aberta" ? "aberta" : x.status].filter(Boolean).join(" · ") },
+  };
+  return { grupos: gs.map(k => ({ titulo: def[k].titulo, icone: def[k].icone, itens: (Array.isArray(r && r[k]) ? r[k] : []).map(x => ({ l1: def[k].l1(x), l2: def[k].l2(x), hash: def[k].hash(x), tipo: def[k].tipo })) })) };
+}
+
+/** Monta o que a paleta recebe a cada abertura (papel, plano e produto podem ter mudado desde a última). */
+function ambientePaleta(inicial) {
+  const C = E.M.comandos;
+  const a = ambienteComandos();
+  const { daTela, geral } = C.juntarAcoes(C.acoesPadrao(a, acoesDoShell()), E.comandos.listar());
+  const gs = gruposDeDados();
+  const v = a.vocab;
+  const rec = recentesDaEmpresa();
+  const que = gs.includes("contatos") ? `${v.contatos.toLowerCase()}, ${v.negocios.toLowerCase()}${gs.includes("conversas") ? " e conversas" : ""}` : gs.includes("conversas") ? "conversas" : "";
+  return {
+    ui: E.ui, C, destinos: destinosDaPaleta(), acoes: geral, daTela, inicial,
+    placeholder: que ? `Buscar ${que} ou digitar um comando` : "Ir para uma tela ou executar um comando",
+    recentes: () => (rec ? rec.ler() : []),
+    buscarDados: gs.length ? buscarNaPaleta : null,
+    navegar, mensagemErro: E.api.mensagemErro,
+    aoEscolher: it => { if (rec && it.hash && it.tipo) rec.registrar({ hash: it.hash, titulo: it.titulo, sub: it.sub, tipo: it.tipo }); },
+  };
+}
+
+let paletaAbrindo = false;
+/** Ctrl/⌘+K, o botão «Buscar» do topo e o prefixo «>»: abre a paleta; apertar de novo fecha. */
+async function abrirPaleta(inicial = "") {
+  if (!E.sessao || !$("app") || $("app").hidden) return;
+  if (E.paleta.janela) { E.paleta.janela.fechar(); return; }
+  if (paletaAbrindo) return;
+  paletaAbrindo = true;
+  try {
+    if (!E.paleta.mod) E.paleta.mod = await arq("paleta.js");
+    if (E.paleta.janela || !E.sessao) return;
+    const j = E.paleta.mod.abrir(ambientePaleta(inicial));
+    E.paleta.janela = j;
+    j.fim.finally(() => { if (E.paleta.janela === j) E.paleta.janela = null; });
+  } catch (e) {
+    console.error("paleta indisponível", e);
+    E.ui.toast("Não consegui abrir a busca agora. Tente de novo.", { tipo: "erro" });
+  } finally { paletaAbrindo = false; }
+}
+
+/** Folha de atalhos («?» fora de campo, menu Ajuda e ação «Atalhos de teclado»): os do shell e os que a tela aberta registrou. */
+async function abrirAtalhos() {
+  try {
+    if (!E.paleta.mod) E.paleta.mod = await arq("paleta.js");
+    E.paleta.mod.abrirAtalhos({ ui: E.ui, C: E.M.comandos, tecla: teclaMod(), daTela: E.comandos.listar() });
+  } catch (e) {
+    console.error("atalhos indisponíveis", e);
+    E.ui.toast("Não consegui abrir os atalhos agora.", { tipo: "erro" });
+  }
+}
+
+/** Menu «Ajuda» da conta: Primeiros passos (só admin, onde o Início existe), Atalhos e Falar com o suporte. */
+function abrirMenuAjuda(ancora) {
+  const a = ambienteComandos();
+  E.ui.menu(ancora, [
+    a.rotaOk("inicio") && a.pode("admin") ? { rotulo: "Primeiros passos", icone: "check", fn: () => navegar("#/inicio") } : null,
+    { rotulo: "Atalhos de teclado", icone: "ajuda", fn: () => abrirAtalhos() },
+    E.marca && E.marca.suporte_wa ? { rotulo: "Falar com o suporte", icone: "whatsapp", fn: () => falarComSuporte() } : null,
+  ].filter(Boolean));
 }
 
 /* ============================================================
@@ -1708,10 +1829,8 @@ function desenharFaixas() {
       ui.h("p", null, "Você está no ambiente de ", ui.h("b", null, cli.nome), ` como suporte da ${E.sessao.org ? E.sessao.org.nome : "plataforma"}.`), sair));
   }
   const hoje = E.ui.hojeSP();
-  if (cli.status === "teste" && cli.teste_ate && cli.teste_ate >= hoje) {
-    alvo.appendChild(ui.h("div", { class: "faixa", role: "status" }, ui.icone("relogio"),
-      ui.h("p", null, "Teste grátis até ", ui.h("b", null, ui.dataCurtaBR(cli.teste_ate)), "."), btWa(`Olá! Quero continuar usando o sistema na ${cli.nome}.`)));
-  } else if (cli.status === "teste" && cli.teste_ate && cli.teste_ate < hoje) {
+  // teste em andamento: pílula junto à empresa (pilulaDeTeste); só o que BLOQUEIA continua sendo faixa
+  if (cli.status === "teste" && cli.teste_ate && cli.teste_ate < hoje) {
     alvo.appendChild(ui.h("div", { class: "faixa faixa-bloqueio", role: "status" }, ui.icone("cadeado"),
       ui.h("p", null, equipe ? "O teste deste cliente terminou. Só a equipe consegue alterar dados." : "O período de teste terminou. Você pode consultar, mas não alterar nada. Para continuar, fale com o suporte."),
       equipe ? null : btWa(`Olá! O teste da ${cli.nome} terminou e quero continuar.`)));
@@ -1725,7 +1844,7 @@ function desenharFaixas() {
 /* ============================================================
    TÍTULO, CONTADORES, NÃO LIDAS, SINO
    ============================================================ */
-function definirTitulo(texto) { E.titulo = texto || ""; atualizarTitulo(); }
+function definirTitulo(texto) { E.titulo = texto || ""; atualizarTitulo(); lembrarRecente(texto); }
 function atualizarTitulo() {
   const n = E.badges.conversas || 0;
   const nomeApp = E.workspace ? E.M?.rotas?.PRODUTOS?.[E.workspace]?.nome : "";

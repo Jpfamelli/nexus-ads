@@ -672,3 +672,60 @@ a.ini-numero:active { transform: scale(.98); }
 @media (prefers-reduced-motion: reduce) {
   .rel *, .rel *::before, .rel *::after { animation: none !important; transition: none !important; }
 }
+
+/* ============================================================
+   M39 — painéis no celular: a manchete na primeira tela e um Radar com gravidade
+   (chip-resumo dos filtros, abas em uma linha, «Atualizado há 27 min» em texto pequeno, barra de 3 px por gravidade)
+   ============================================================ */
+.rel-filtros-lg { display: contents; }
+.rel-resumo, .rel-so-movel { display: none; }
+.rel-btn-ic .ic { display: none; width: 18px; height: 18px; flex: none; }
+.rel-abas-seg { align-self: flex-start; }
+
+/* Radar: cada alerta é um cartão com barra lateral de 3 px na cor da gravidade, ícone e rótulo escrito (nunca só cor) */
+.ads-al[data-sev="critico"] { --sev: var(--c-sev-crit); }
+.ads-al[data-sev="alerta"] { --sev: var(--c-sev-aten); }
+.ads-al[data-sev="info"] { --sev: var(--c-sev-info); }
+.ads-alertas { gap: .6rem; }
+.ads-alertas .ads-al { display: block; padding: .8rem .9rem; border: 1px solid var(--c-borda); border-left: 3px solid var(--sev, var(--c-sev-aten)); border-radius: var(--r-p); background: var(--c-sup); }
+.ads-alertas .ads-al:first-child { border-top: 1px solid var(--c-borda); }
+.ads-alertas .ads-al.resolvido { opacity: 1; background: transparent; border-left-color: color-mix(in srgb, var(--sev, var(--c-sev-aten)) 45%, var(--c-borda)); }
+.ads-al-topo { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; margin: 0; }
+.ads-sev-marca { display: inline-flex; align-items: center; gap: .35rem; color: var(--sev, var(--c-sev-aten)); font-family: var(--f-mono); font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; line-height: 1; }
+.ads-sev-marca .ic { width: 16px; height: 16px; flex: none; }
+
+@media (max-width: 760px) {
+  .rel { gap: .4rem; }
+  .rel-topo { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .15rem .6rem; }
+  .rel-topo-t .rel-olho { display: none; }               /* o nome da empresa já está no topo do app */
+  .rel-h1 { margin: 0; }
+  .rel-topo-acoes { flex-wrap: nowrap; justify-content: flex-end; gap: .4rem; min-width: 0; }
+  .rel-so-largo { display: none !important; }
+  .rel-so-movel { display: inline-flex; }
+  .rel-btn-ic { width: 44px; padding: 0; flex: none; }
+  .rel-btn-ic .ic { display: block; }
+  .rel-rot { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* «Atualizado há 27 min»: texto pequeno com o ponto de estado, sem a moldura de pílula */
+  .ads-pilula { min-height: 0; padding: 0; border: 0; background: none; font-size: .75rem; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ads-p-erro { border: 0; }
+  /* abas em uma linha só, na largura da tela */
+  .rel-abas-seg { align-self: stretch; display: flex; }
+  .rel-abas-seg { padding: 2px; }
+  .rel-abas-seg .seg-ind { top: 2px; bottom: 2px; }
+  .rel-abas-seg .seg-op { flex: 1 1 auto; justify-content: center; padding-inline: .45rem; gap: .3rem; min-width: 0; }
+  /* período e plataforma (ou funil/departamento) num chip só: «Últimos 30 dias · Tudo ▾» */
+  .rel-filtros-lg { display: none; }
+  .rel-filtros { gap: .3rem .6rem; flex-wrap: nowrap; }
+  .rel-resumo { display: inline-flex; align-items: center; gap: .4rem; min-width: 0; max-width: 100%; min-height: 44px; padding: .4rem .6rem .4rem .95rem; border-radius: 999px;
+    border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto); font: 600 .875rem/1.2 var(--f-corpo); cursor: pointer; }
+  .rel-resumo .ic { width: 16px; height: 16px; flex: none; color: var(--c-texto-3); }
+  .rel-resumo-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rel-filtros > .rel-ate { margin-left: auto; flex: 0 1 auto; min-width: 0; font-size: .75rem; text-align: right; }
+  .relat-filtros > .rel-ate { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }   /* a legenda continua anunciada, só não ocupa a tela */
+  /* a manchete sobe: o rótulo do herói repete o chip, e o cartão perde folga */
+  .ads-heroi { padding: .7rem 1rem 1rem; gap: .8rem; }
+  .ads-heroi .rel-olho { display: none; }
+  .ads-heroi .ads-frase { margin-top: 0; }
+  /* Radar */
+  .ads-alertas .ads-al { padding: .7rem .8rem; }
+}

@@ -93,6 +93,7 @@ const dev = {
   chamadas: {}, enviosExternos: 0, falhas: [], verificarToken: false,
   tokens: new Set(["demo-local-session", "demo-local-token"]), seqToken: 0,
   reqs: new Map(), refs: new Map(), pulsoV: 1, seqMsg: 100000, seqNegocio: 900, seqContato: 600, seqTarefa: 100,
+  empresas: 1, teste: null,    // simular/clientes?n=2 e simular/teste?dias=2|nenhum&status=ativo
 };
 const bater = () => { dev.pulsoV += 1; };
 // mensagens ganham id estável (a mesma regra de antes: conversa × 10 + posição); as novas continuam a contar de 100000
@@ -167,8 +168,10 @@ function sessao(token = "") {
   const outra = String(token).includes("outra");
   return { conta: { id: outra ? ID.ana : ID.eu, nome: outra ? "Ana Paula" : "Dra. Helena", email: "demo@example.test", papel: "gestor", super: true, telefone: null },
     org: { id: ID.org, nome: "Nexus", slug: "nexus", marca: { produto: (dev.marca && dev.marca.produto) || "Órbita", cores: { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" } }, img_hash: dev.marca ? `dev-${Object.keys(dev.marca).join("")}` : "dev-falso" },
-    super: true, link_base_padrao: null, modulos_plano: {}, clientes: [{ id: ID.cliente, slug: "sorriso-vivo", nome: "Clínica Sorriso Vivo", plano: "completo", status: "teste", vertical: dev.vertical || "odonto", papel: "admin", proprio: true,
-      modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"], teste_ate: somaDia(hoje, 14), tem_tema: false, cfg: {} }] };
+    super: true, link_base_padrao: null, modulos_plano: {}, clientes: [{ id: ID.cliente, slug: "sorriso-vivo", nome: "Clínica Sorriso Vivo", plano: "completo", status: dev.teste ? dev.teste.status : "teste", vertical: dev.vertical || "odonto", papel: "admin", proprio: true,
+      modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"], teste_ate: dev.teste ? (dev.teste.dias === null ? null : somaDia(hoje, dev.teste.dias)) : somaDia(hoje, 14), tem_tema: false, cfg: {} },
+      ...(dev.empresas > 1 ? [{ id: "00000000-0000-4000-8000-0000000000c2", slug: "oficina-central", nome: "Oficina Central", plano: "completo", status: "ativo", vertical: "oficina", papel: "admin", proprio: false,
+        modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"], teste_ate: null, tem_tema: false, cfg: {} }] : [])] };
 }
 const marcaPublica = { org: { id: ID.org, nome: "Nexus", slug: "nexus" }, marca: { produto: "Órbita", cores: { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" }, login_titulo: "Seu atendimento em movimento", login_texto: "Entre para acompanhar conversas, pacientes e campanhas.", suporte_wa: "5500000000000" } };
 /** Marca da org, com as sobreposições de simular/marca (nome do produto e logo): o manifesto instalável nasce delas. */
@@ -426,6 +429,19 @@ function rpc(nome, p = {}) {
     case "nx_negocios_kanban": return colunaFunil(p.p_funil);
     case "nx_negocios_coluna": return { itens: [] };
     case "nx_negocio_ver": return crmNegocio(p.p_id);
+    case "nx_buscar": {
+      const norm = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      const q = norm(String(p.p_q || "").trim());
+      if (q.length < 2) return { contatos: [], negocios: [], conversas: [] };
+      const ct = id => contatos.find(c => c.id === id) || {};
+      return {
+        contatos: contatos.filter(c => norm(c.nome).includes(q) || soDigitos(c.telefone).includes(soDigitos(q) || "x")).slice(0, 8).map(c => ({ id: c.id, nome: c.nome, telefone: c.telefone })),
+        negocios: negocios.filter(n => norm(n.titulo).includes(q) || norm(ct(n.contato_id).nome).includes(q)).slice(0, 8)
+          .map(n => ({ id: n.id, titulo: n.titulo, contato_nome: ct(n.contato_id).nome || null, estagio_nome: (funis[0].estagios.find(e => e.id === n.estagio_id) || {}).nome || null, status: "aberto" })),
+        conversas: conversas.filter(c => norm(c.protocolo).includes(q) || norm(ct(c.contato_id).nome).includes(q)).slice(0, 8)
+          .map(c => ({ id: c.id, contato_nome: ct(c.contato_id).nome || null, protocolo: c.protocolo, status: c.status })),
+      };
+    }
     case "nx_contatos_listar": {
       const busca = String((p.p_filtro && p.p_filtro.busca) || "").trim();
       const dig = soDigitos(busca), norm = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -686,6 +702,8 @@ function simular(acao, q) {
       dev.marca = { ...(q.get("produto") ? { produto: q.get("produto") } : {}), ...(logo ? { logo, logo_claro: logo, favicon: logo } : {}) };
       return { ok: true, marca: Object.keys(dev.marca) };
     }
+    case "clientes": dev.empresas = Math.max(1, Math.min(2, Number(q.get("n")) || 1)); return { ok: true, empresas: dev.empresas };
+    case "teste": dev.teste = q.get("status") || q.get("dias") ? { status: q.get("status") || "teste", dias: q.get("dias") === "nenhum" ? null : Number(q.get("dias") ?? 14) } : null; return { ok: true, teste: dev.teste };
     case "vertical": dev.vertical = ["odonto", "oficina", "loja", "generico"].includes(q.get("v")) ? q.get("v") : null; return { ok: true, vertical: dev.vertical };
     case "zerar": dev.chamadas = {}; dev.falhas = []; dev.enviosExternos = 0; dev.reqs.clear(); dev.refs.clear(); return { ok: true };
     default: return { ok: false, erro: "acao_desconhecida" };

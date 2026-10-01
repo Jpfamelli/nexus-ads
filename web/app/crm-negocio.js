@@ -756,6 +756,9 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
     h("div", { class: "linha linha-fim" },
       h("button", { type: "button", class: "bt bt-sec", on: { click: () => g.fechar() } }, "Cancelar"),
       h("button", { type: "submit", class: "bt bt-prim" }, ui.icone("check"), `Criar ${k.v.min("negocio")}`)));
+  // M30: título e procedimento digitados sobrevivem a uma recarga/queda de sessão («Rascunho restaurado · descartar»); só somem quando o servidor confirmar
+  const chaveRasc = `negocio:novo:${dados.contato_id ? `contato:${dados.contato_id}` : dados.conversa_id ? `conversa:${dados.conversa_id}` : "avulso"}`;
+  const rascunhos = ["titulo", "servico"].map(n => k.rascunho(form.querySelector(`[name=${n}]`), `${chaveRasc}:${n}`));
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     erro.hidden = true;
@@ -778,6 +781,7 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
       const { resultado: n } = await ui.carregando(form.querySelector("[type=submit]"),
         k.escrever("nx_negocio_salvar", { p_negocio: p }, { req: reqAtual, aoStatus: t => { status.textContent = t; status.hidden = false; } }));
       status.hidden = true;
+      for (const rc of rascunhos) rc.apagar();
       ui.toast(`${k.v.negocio} criad${k.v.art("negocio")}.`, { tipo: "ok" });
       if (aoCriar) try { aoCriar(n); } catch (e2) { console.error(e2); }
       g.fechar();

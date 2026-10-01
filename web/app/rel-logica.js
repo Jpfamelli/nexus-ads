@@ -688,3 +688,41 @@ export function pendenciasConfig(estado, { pulados = [] } = {}) {
 
 /** "Dispensar por 7 dias": o instante até quando o cartão fica escondido neste aparelho. */
 export function dispensarOnboardingAte(agora = Date.now(), dias = 7) { return agora + dias * 86400000; }
+
+/* ============================================================ 9. M39 — painéis no celular: chip-resumo dos filtros e Radar com gravidade */
+/** Gravidade do Radar: a ordem (0 = mais grave), o rótulo escrito (nunca só cor) e o ícone da sprite. A gravidade já vem do alerta; sem RPC nova. */
+export const SEV_ORDEM = Object.freeze({ critico: 0, alerta: 1, info: 2 });
+export const SEV_ROTULO = Object.freeze({ critico: "Crítico", alerta: "Atenção", info: "Informativo" });
+export const SEV_ICONE = Object.freeze({ critico: "alerta", alerta: "sino", info: "info" });
+/** Gravidade desconhecida vira "alerta" (o meio-termo): nunca esconde nem exagera. */
+export const nivelSev = sev => (Object.prototype.hasOwnProperty.call(SEV_ORDEM, sev) ? sev : "alerta");
+
+/**
+ * ordenarRadar(R) → lista única do Radar, da mais grave para a menos: ativos primeiro (por gravidade; conexão caída é sempre crítica),
+ * depois os já resolvidos; em empate vale a ordem em que o `montarRadar` entregou (conexões antes, depois o histórico mais recente).
+ * Cada item: {tipo: "conexao"|"episodio", sev, ativo, ref} — `ref` é o objeto original de R.conexoes / R.episodios.
+ */
+export function ordenarRadar(R) {
+  const itens = [
+    ...((R && R.conexoes) || []).map(ref => ({ tipo: "conexao", sev: "critico", ativo: !!ref.ativo, ref })),
+    ...((R && R.episodios) || []).map(ref => ({ tipo: "episodio", sev: nivelSev(ref.sev), ativo: !!ref.ativo, ref })),
+  ];
+  return itens.map((x, i) => ({ x, i }))
+    .sort((a, b) => (Number(b.x.ativo) - Number(a.x.ativo)) || (SEV_ORDEM[a.x.sev] - SEV_ORDEM[b.x.sev]) || (a.i - b.i))
+    .map(o => o.x);
+}
+
+/** O chip-resumo de Anúncios: "Últimos 30 dias · Tudo" (ou Meta / Google). */
+export function textoChipAnuncios(dias, plat) {
+  return `Últimos ${Number(dias) || 30} dias · ${plat ? nomePlat(plat) : "Tudo"}`;
+}
+
+/**
+ * O chip-resumo de Relatórios: "Últimos 30 dias · Todos os funis" · "01/09 a 30/09 · Funil Consultas" · "Últimos 7 dias · Todos os departamentos".
+ * preset: 7 | 30 | 90 | "per" (com de/ate ISO); aba: "vendas" (funil) | "atendimento" (departamento); `nome` é o do funil/departamento escolhido ('' = todos).
+ */
+export function textoChipRelatorios({ preset = 30, de = null, ate = null, aba = "vendas", nome = "" } = {}) {
+  const curto = iso => { const [, m, d] = String(iso || "").slice(0, 10).split("-"); return d ? `${d}/${m}` : "—"; };
+  const per = preset === "per" && de && ate ? `${curto(de)} a ${curto(ate)}` : `Últimos ${[7, 30, 90].includes(Number(preset)) ? Number(preset) : 30} dias`;
+  return `${per} · ${nome || (aba === "atendimento" ? "Todos os departamentos" : "Todos os funis")}`;
+}
