@@ -417,6 +417,7 @@ html[data-esquema="claro"] input[type="date"]::-webkit-calendar-picker-indicator
   padding: clamp(1.2rem, 3vw, 2rem); border-radius: var(--r); border: 1px dashed var(--c-borda-2); background: var(--c-sup);
   animation: aparece var(--t-ui) var(--e-out) both;
 }
+.vazio-sem-ic { grid-template-columns: minmax(0, 1fr); }
 .vazio-ic { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; color: var(--c-prim-luz); box-shadow: inset 0 0 0 1.5px var(--c-prim-luz); background: var(--c-prim-suave); }
 .vazio-erro .vazio-ic { color: var(--c-ruim); box-shadow: inset 0 0 0 1.5px var(--c-ruim); background: var(--c-ruim-suave); }
 .vazio h2 { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-20); letter-spacing: -.01em; line-height: 1.2; }

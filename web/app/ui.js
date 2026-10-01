@@ -629,8 +629,9 @@ function orbitaSvg({ total = 3, feitos = 0, selo = false } = {}) {
     tipo "primeiro_uso": órbita com um satélite por passo (aceso se feito) + lista de passos + 1 ação;
     tipo "em_dia": selo ✓ na órbita + a frase (titulo) em .narr;
     tipo "sem_resultado": 1 linha + ação ("Limpar filtros" por padrão).
-    Sem `tipo` mantém o vazio genérico de antes (ícone + título + texto). passos: ["texto" | {rotulo, feito}]. */
-export function vazio({ tipo, titulo, texto, acao, icone: ic = "mais", acoes, passos } = {}) {
+    Sem `tipo` é o vazio genérico (título + texto + ação); só leva o círculo de ícone se `icone` for dado (o "+" que todo vazio sem ícone herdava saiu, M09).
+    passos: ["texto" | {rotulo, feito}]. */
+export function vazio({ tipo, titulo, texto, acao, icone: ic, acoes, passos } = {}) {
   const lista = [...(acao ? [acao] : []), ...(acoes || [])];
   const botao = (a, i, extra) => h("button", { type: "button", class: ["bt", i === 0 ? "bt-prim" : "bt-sec", extra], on: { click: a.fn } },
     a.icone ? icone(a.icone) : null, a.rotulo || (tipo === "sem_resultado" ? "Limpar filtros" : "Continuar"));
@@ -658,8 +659,8 @@ export function vazio({ tipo, titulo, texto, acao, icone: ic = "mais", acoes, pa
         lista.length ? h("div", { class: "linha vazio-acoes" }, lista.map((a, i) => botao(a, i))) : null));
   }
   const botoes = lista.map((a, i) => botao(a, i));
-  return h("div", { class: "vazio" },
-    h("div", { class: "vazio-ic", "aria-hidden": "true" }, icone(ic)),
+  return h("div", { class: ["vazio", !ic && "vazio-sem-ic"] },
+    ic ? h("div", { class: "vazio-ic", "aria-hidden": "true" }, icone(ic)) : null,
     h("div", { class: "vazio-txt" },
       titulo ? h("h2", null, titulo) : null,
       texto ? h("p", null, texto) : null,

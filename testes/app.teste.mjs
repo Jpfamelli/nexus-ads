@@ -2383,8 +2383,16 @@ await teste("ui.vazio por tipo (M09): primeiro_uso (órbita + passos + ação), 
     assert.equal(U.vazio({ tipo: "sem_resultado" }).querySelector("button"), null, "sem ação: só a linha");
     const l = U.vazio({ titulo: "Sem pacientes", texto: "Crie o primeiro.", icone: "contato", acao: { rotulo: "Novo", fn() {} } });
     assert.ok(l.querySelector(".vazio-ic")); assert.equal(achar(l, "h2").textContent, "Sem pacientes"); assert.equal(achar(l, "button").textContent, "Novo");
+    // M09: o "+" que todo vazio sem ícone herdava saiu — sem `icone`, nada de círculo nem de svg; com `icone`, igual a antes
+    const g = U.vazio({ titulo: "Sem tarefas", texto: "Quando houver uma, aparece aqui.", acao: { rotulo: "Nova tarefa", fn() {} } });
+    assert.equal(g.querySelector(".vazio-ic"), null, "sem ícone padrão"); assert.equal(g.querySelectorAll("svg").length, 0); assert.ok(g.classList.contains("vazio-sem-ic"));
+    assert.equal(achar(g, "h2").textContent, "Sem tarefas"); assert.equal(achar(g, "button").textContent, "Nova tarefa");
+    assert.ok(!l.classList.contains("vazio-sem-ic"), "com ícone: o círculo continua");
+    assert.match(CSS_APP, /\.vazio-sem-ic \{ grid-template-columns: minmax\(0, 1fr\); \}/);
     const fonte = ler("ui.js"); const corpoVazio = fonte.slice(fonte.indexOf("function orbitaSvg"), fonte.indexOf("export function esqueleto"));
     assert.doesNotMatch(corpoVazio, /innerHTML/, "vazio e órbita sem innerHTML");
+    assert.doesNotMatch(corpoVazio, /icone: ic = "mais"/, "ícone padrão '+' removido");
+    assert.match(corpoVazio, /orbitaSvg/); assert.match(corpoVazio, /createElementNS|h\("svg"/, "a órbita é montada por createElementNS (h() faz isso para as tags svg)");
   } finally { d.fim(); }
 });
 

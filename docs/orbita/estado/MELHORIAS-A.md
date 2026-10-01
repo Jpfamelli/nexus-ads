@@ -48,7 +48,7 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
 | M06 esqueletos/erro | **feito** (CLS das telas depende de C/D) | ver "Etapa 2 · M06" abaixo | medir CLS ≤ 0,02 depois de M30/M31/M40 |
 | M07 desfazer | **feito** (uso em M25/M35) | ver "Etapa 2 · M07" abaixo | uso nas telas (C: M25, D: M35) |
 | M08 formulários | **feito** (uso nas telas é de C/D) | ver "Etapa 2 · M08" abaixo | uso de validar/máscaras nos formulários (C/D/B) |
-| M09 vazios | parcial | 3 tipos com SVG por `createElementNS` | tirar o ícone "+" padrão do vazio sem `tipo` (compatibilidade por ora), usos |
+| M09 vazios | **feito** (usos nas telas são de C/D) | ver "Etapa 2 · M09" abaixo | trocar os vazios das telas pelos 3 tipos (C/D) |
 | M10 movimento | parcial | `.entra`, `.assenta`, `.destaque`, `G.destacar` | tirar sweep do botão e hover-lift, palco animado só em Login/Início (precisa de classe no `<body>` posta pelo shell, B), sonda CDP |
 
 ## Pendências para outras frentes
@@ -125,3 +125,10 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
   - Emulação de toque (390×844, `pointer: coarse`): ao abrir o modal e a gaveta o `document.activeElement` é o próprio diálogo (o teclado não sobe).
 - **Como verificar:** `node testes/app.teste.mjs` ("ui.modal (M08)", "ui.gaveta (M08)", "ui.campo({validar}) (M08)", "máscaras com cursor estável (14 casos)"). A conferência real é um script de QA fora do repositório.
 - **Para as outras frentes (uso):** (B) `login.js`: `ui.campo({tipo:"email", validar:"email"})` e `ui.validarForm(form)` antes de enviar; senha nova com `validar:"senha"`. (C) `crm-negocio.js`/`crm-listas.js`: telefone com `validar:"telefone"` e valor com `validar:"moeda"`; modais de busca/filtro que tenham campo com `name` e não sejam "dado digitado" passam `protegerTexto: false` (ou `data-sem-protecao`). (D) `config.js`/`cv-config.js`: os campos de telefone e e-mail idem. `ui.campo({tipo:"tel"})` SEM `validar` continua sem máscara de propósito (não muda o que já existia). O botão Voltar com a GAVETA aberta (o CRM a dirige pela rota) não é interceptado: C pode consultar `gaveta.estaSujo()` antes de navegar.
+
+### M09 · vazios com personalidade e a próxima ação — FEITO (usos nas telas: C e D)
+
+- Os 3 tipos já existiam (`primeiro_uso`: órbita em SVG com um satélite por passo, aceso se feito, lista de passos e 1 ação; `em_dia`: selo ✓ na órbita + a frase em `.narr` (Zodiak); `sem_resultado`: 1 linha + "Limpar filtros"), todos montados por `h()` (createElementNS para as tags svg), sem `innerHTML`, e aceitam a ação seguinte (`acao`/`acoes`: Conectar número, Convidar, Criar funil). Conferido a 1440 (claro e escuro) e 390.
+- **Novo:** o ícone "+" que TODO vazio sem `icone` herdava saiu: o vazio genérico (sem `tipo`) só ganha o círculo de ícone se `icone` for passado; sem ele vira título + texto + ação em coluna única (`.vazio-sem-ic`). Os ~59 usos de `ui.vazio` nos módulos que não passam ícone mudam sozinhos.
+- **Como verificar:** `node testes/app.teste.mjs` ("ui.vazio por tipo (M09)": 3 tipos, sem `innerHTML`, sem svg/círculo no genérico sem ícone, ícone padrão removido do código).
+- **Para as outras frentes:** (C) Agenda: um só "Sem consultas ou bloqueios." para a semana vazia (hoje repete em 4 cartões), Kanban "Arraste um cartão para cá" vira linha discreta; vazio do funil novo = `primeiro_uso` com "Criar funil". (D) Início sem pendência = `em_dia` (já feito em `inicio.js`), sem número/conversa = `primeiro_uso` com os passos do checklist (M32), listas filtradas sem resultado = `sem_resultado` com `acao` que limpa os filtros.
