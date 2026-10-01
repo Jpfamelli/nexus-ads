@@ -832,3 +832,40 @@ Os JSONs deste dossiê foram conferidos mecanicamente contra as regras das migra
 - Memórias: `kamiguchi-odontologia.md`, `kamiguchi-ads.md`, `indycar-atendimento.md`; persona de referência em `C:\Users\USER\.claude\backups\indycar-atendimento\server.js` (constante `PERSONA`, somente leitura).
 - Órbita (`nexus-ads`): `docs/orbita/CODEWORDS-PROMPT.md`, `PLANO-NOITE-20261001.md`, `ESPEC.md`, `estado/F8.md`, `E2E.md`; `web/app/auto-catalogo.js`, `auto-logica.js`, `tema.js`, `cv-config.js`, `ads-config.js`, `rastreio-config.js`, `web/rastreio.js`; migrações `20260928b`, `20260928c`, `20260928c_plataforma_b`, `20260928e`, `20260928h`, `20260929a`, `20260929b`, `20260930a`, `20260930b`, `20261001a`; funções `codewords.js` e `codewords_prompt.js`.
 - Painel separado: `C:\Users\USER\.claude\backups\kamiguchi-ads` (`CONTRATO.md`, `LEIA-ME.md`).
+
+## Aplicado em 01/10/2026
+
+**Situação: parcial. O banco do cliente `kamiguchi` NÃO foi alterado** (nenhuma linha gravada, nenhuma conta, sessão ou automação criada). A configuração foi **validada pelo servidor em ensaio** e o **código do rastreio do site está pronto e testado**, mas ainda não publicado. O que travou: gravar pelas RPCs exige uma sessão de admin do cliente, e criar a conta temporária de configuração (com acesso admin e sessão) num banco de produção não é uma ação que o assistente possa executar por conta própria, mesmo a pedido: quem a cria é o João. Com isso, a chave pública de rastreio (que só nasce pela RPC `nx_entrada_chave`, com sessão admin) também não existe ainda.
+
+### O que foi conferido (somente leitura)
+
+- **Linha de base do `kamiguchi`** (contagem; o md5 de cada tabela foi repetido ao fim da sessão e **ficou idêntico**, provando que nada mudou): `nx_auditoria` 11, `nx_departamentos` 2, `nx_estagios` 12, `nx_etiquetas` 9, `nx_funis` 2, `nx_motivos_perda` 6, `nx_pulsos` 1, `nx_respostas` 8; as demais tabelas com `cliente_id` têm 0 linhas (inclusive `nx_acessos`, `nx_agenda_config`, `nx_agenda_bloqueios`, `nx_automacoes`, `nx_rastreio`, `nx_canais`, `nx_leads`, `nx_conversas`). As linhas das outras tabelas inteiras (`nx_contas` 2, `nx_sessoes` 3, `teste-e2e`) também ficaram iguais.
+- **Dois achados que mudam a aplicação:**
+  1. O cliente **já tem tema salvo** (tema escuro, não o petróleo do site): `{"cores":{"fundo":"#07090C","primaria":"#C9BFAF","secundaria":"#E5B35C"}}`, gravado duas vezes em 29/09 (auditoria `tema`). `nx_tema_salvar` **substitui** o tema inteiro; aplicar a seção 2.4 troca esse valor. Se for preciso voltar, é só salvar o JSON acima. Confirme com o João antes de aplicar, porque a regra do cliente é só acrescentar.
+  2. `entrada_chave` do cliente é **nula**: a chave do rastreio ainda precisa ser gerada (`nx_entrada_chave` com `p_gerar: true`, papel admin, ou o botão em Config › Anúncios › Site e anúncios).
+- **Ensaio no servidor** (leitura apenas, sem gravar): as **10** automações do capítulo 5 (as 9 a criar, com a «Faltou» só na variante B, mais o extra 5.10) passaram em `nx_auto_normalizar` com os ids de etapa resolvidos e `ativo: false`; tema, `horario`, `intervalos`, as 6 `duracoes` (chaves em minúsculas) e as 5 datas de bloqueio passaram nos validadores da agenda e da marca (dias da semana conferidos: 12/10 seg, 02/11 seg, 20/11 sex, 25/12 sex, 01/01 sex); a persona soma **7.876 / 15.000** e respeita os limites de campo. **Nenhum ajuste de JSON foi necessário.** A «possível urgência» (5.10) não deve ser criada agora (o dossiê manda deixar para a segunda semana).
+- **Ids das etapas do funil padrão «Pacientes»** (usados no lugar de `@etapa:`): `nova` e6fb9af1-9c97-4654-b732-fc51948d5946 · `agendada` 4ec36817-6d86-402d-b920-2de66dfd3997 · `orcamento` fbc91a96-73d2-4071-b41a-c0e59bc9edb6 · `faltou` 09a8ff5c-46d1-4865-8dae-05d6bff8ddb4 (funil `7fc5d436-a7fe-4810-a356-c057583af390`). Funis, módulos (`crm`, `conversas`, `relatorios`, `ads`, `automacoes`, `marca`) e `vertical = odonto` conferem.
+- **Sem logo** no tema: continua não havendo arquivo (PNG, JPEG ou WebP) para enviar; o tema do dossiê leva só as cores.
+
+### Rastreio no site (código pronto, não publicado)
+
+No projeto do site (`C:\Users\USER\.claude\backups\kamiguchi-odontologia`), sem commit e sem deploy:
+
+- `js/orbita-rastreio.js` é cópia exata de `web/rastreio.js`.
+- `script.js`: o envio do wizard monta a URL com o código **de forma síncrona** (`OrbitaRastreio.reescrever`), com o código pedido assim que a pessoa mexe no wizard; e os CTAs `[data-agendar]` com href `wa.me` marcam o clique como tratado na captura (sem isso, o rastreio faria o clique seguir para o WhatsApp junto com o dialog; provado em teste). Sem o script, sem chave, com o Órbita fora, lento ou com o sinal de privacidade do navegador ligado, tudo segue como antes, sem código.
+- `index.html`: `styles.css?v=14` e `script.js?v=14`. **Falta só** colar a tag com a chave depois de `script.js` e publicar: `<script src="js/orbita-rastreio.js?v=1" data-chave="CHAVE_DE_48_CARACTERES" data-url="https://dtjznipitihnwmcgpzqh.supabase.co/rest/v1/rpc/nx_rastreio_registrar" defer></script>`.
+- Teste com puppeteer-core e Chrome (390 e 1440 px, Órbita simulado, nenhuma linha real criada): 55/55 verificações, entre elas página sem erro de console, a mensagem do wizard terminando em `[site · …] [ref K7Q2P]`, o link «abrir de novo» do painel pós-envio com o código, clique em link `wa.me` comum com o código, e o link original quando o Órbita está fora ou lento. Cuidado com o efeito visível: a recepção passa a ver `[ref XXXXX]` no fim da primeira mensagem de quem vem pelo site, e a IA já é instruída a ignorá-lo.
+- **Atenção ao repositório do site:** a árvore de trabalho tem cerca de 4.850 linhas de redesenho (`index.html`, `script.js`, `styles.css`) que **nunca foram commitadas**, e a produção do Netlify é idêntica a ela (md5 igual). Um `git add` nesses arquivos publicaria o redesenho inteiro no GitHub e no GitHub Pages (hoje com uma versão bem mais antiga). O commit e o push ficaram para o João decidir.
+
+### Como terminar (nesta ordem)
+
+Os arquivos citados abaixo (`01-criar-conta-temporaria.sql`, `99-limpar-conta-temporaria.sql`, `aplicar.mjs`, `ligar-rastreio.mjs`, `bundle.json`, `teste-site.mjs`) estão no bloco de rascunho desta sessão, em `C:\Users\USER\AppData\Local\Temp\claude\C--Users-USER--claude-backups\c135363f-5726-4aeb-a359-88ed350ef0f0\scratchpad\kamiguchi\`; nada disso foi para o repositório (o token nunca vai para ele).
+
+1. O João executa `01-criar-conta-temporaria.sql` no SQL Editor (cria a conta «Configuração Órbita (temporária)» em `@kamiguchi.invalid`, sem senha utilizável, acesso admin só ao `kamiguchi`, sem receber conversas, e uma sessão de 2 h; o token fica só no arquivo `token.txt` do assistente, no bloco de rascunho da sessão).
+2. Roda-se `aplicar.mjs` (lê o estado e confere; com `--aplicar` grava tema, persona sem `memoria_aprovada`, agenda + 5 bloqueios, 9 automações **desligadas** e gera a chave de rastreio, lendo tudo de volta). Só acrescenta: automação de mesmo nome é pulada.
+3. Cola-se a chave no site (`ligar-rastreio.mjs`), sobe-se o site no Netlify e confere-se HTTP 200 e o script servido.
+4. O João executa `99-limpar-conta-temporaria.sql` (remove sessão, acesso e conta; a auditoria fica).
+
+### O que depende do João
+
+Conta de admin para a Dra. Rafaella e a recepção (convite, passo 2 da seção 7); chave do CodeWords, pareamento e prompt/Service ID (seções 6 e 7); chave da Anthropic (só ele, no `nx_config`); credenciais de Meta e Google; arquivo de logo; confirmar horários, serviços e valores marcados «A confirmar» (Apêndice B); decidir sobre o tema que já existe; autorizar a conta temporária; decidir o commit e o push do redesenho do site; e ligar as automações, uma de cada vez, na ordem da seção 5.11.
