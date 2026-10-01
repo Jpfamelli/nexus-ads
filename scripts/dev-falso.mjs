@@ -9,6 +9,8 @@ import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gerarDemo } from "../web/demo.js";
 import * as N from "../web/nucleo.js";
+// só as regras de tipo/tamanho/caminho da mídia (funções puras): o fictício valida igual ao nx-midia de verdade
+import { tipoAceito, caminhoMidia, pathDoCliente, mimeBase } from "../supabase/functions/_compartilhado/midia.js";
 
 const ROOT = resolve(fileURLToPath(new URL("../web/", import.meta.url)));
 const HOST = "127.0.0.1";
@@ -92,7 +94,7 @@ const bloqueios = [{ id: "b1", inicio: hora(somaDia(hoje, 2), "12", "00"), fim: 
 const dev = {
   chamadas: {}, enviosExternos: 0, falhas: [], verificarToken: false,
   tokens: new Set(["demo-local-session", "demo-local-token"]), seqToken: 0,
-  reqs: new Map(), refs: new Map(), pulsoV: 1, seqMsg: 100000, seqNegocio: 900, seqContato: 600, seqTarefa: 100,
+  reqs: new Map(), refs: new Map(), arquivos: new Map(), pulsoV: 1, seqMsg: 100000, seqNegocio: 900, seqContato: 600, seqTarefa: 100,
   empresas: 1, teste: null,    // simular/clientes?n=2 e simular/teste?dias=2|nenhum&status=ativo
 };
 const bater = () => { dev.pulsoV += 1; };
@@ -140,12 +142,13 @@ function onboardingEstado() {
 }
 const marcarOnb = (...ids) => { for (const id of ids) onb.feitos.add(id); };
 
+const RESUMO_MIDIA = { imagem: "Foto", audio: "Áudio", video: "Vídeo", documento: "Documento" };   // mídia sem legenda na lista (como o banco)
 const dataConv = c => {
   const ct = contatos.find(x => x.id === c.contato_id), canal = canais.find(x => x.id === c.canal_id);
   const when = new Date(Date.now() - c.minutos * 60000).toISOString();
   return { id: c.id, contato: { id: ct.id, nome: ct.nome, telefone: ct.telefone, optin_marketing: true, bloqueado: false }, canal_id: c.canal_id, departamento_id: ID.dep,
     atribuida_a: c.atribuida_a, atribuida_nome: c.atribuida_nome, status: c.status, aguardando: c.aguardando, nao_lidas: c.nao_lidas,
-    ultima_msg_em: when, ultima_msg_resumo: c.mensagens.at(-1).corpo, ultima_msg_dir: c.mensagens.at(-1).direcao, ultima_entrada_em: when,
+    ultima_msg_em: when, ultima_msg_resumo: c.mensagens.at(-1).corpo ?? RESUMO_MIDIA[c.mensagens.at(-1).tipo], ultima_msg_dir: c.mensagens.at(-1).direcao, ultima_entrada_em: when,
     janela_ate: new Date(Date.now() + (24 * 60 - c.minutos) * 60000).toISOString(), etiquetas: ct.etiquetas, protocolo: c.protocolo, oculta: false,
     negocio: negocios.filter(n => n.contato_id === ct.id).map(n => ({ id: n.id, titulo: n.titulo, status: "aberto", estagio_nome: nomesEtapas.find(e => e.id === n.estagio_id)?.nome, estagio_cor: "#6FA3CF" }))[0] || null,
     canal: canal ? { id: canal.id, nome: canal.nome, numero_exibicao: canal.numero_exibicao, status: canal.status, provedor: canal.provedor, tem_token: true } : null,
@@ -378,8 +381,9 @@ const conversaPorId = id => conversas.find(x => String(x.id) === String(id));
 const usuarioPorId = id => usuarios.find(x => x.id === id);
 function mensagemDe(c, m) {
   const em = new Date(m.criada).toISOString();
-  return { id: m.id, conversa_id: c.id, direcao: m.direcao, tipo: m.nota ? "nota" : "texto", corpo: m.corpo, status: m.direcao === "in" ? "recebida" : "enviada", criado_em: em, atualizado_em: em,
-    origem: m.direcao === "out" ? "painel" : null, enviado_por: m.direcao === "out" ? { id: ID.eu, nome: "Dra. Helena" } : null, referral: null, ...(m.client_ref ? { client_ref: m.client_ref } : {}) };
+  return { id: m.id, conversa_id: c.id, direcao: m.direcao, tipo: m.nota ? "nota" : m.tipo || "texto", corpo: m.corpo, status: m.direcao === "in" ? "recebida" : "enviada", criado_em: em, atualizado_em: em,
+    origem: m.direcao === "out" ? "painel" : null, enviado_por: m.direcao === "out" ? { id: ID.eu, nome: "Dra. Helena" } : null, referral: null, ...(m.midia ? { midia: m.midia } : {}),
+    ...(m.client_ref ? { client_ref: m.client_ref } : {}) };
 }
 /** Mensagem de ENTRADA fictícia (o cliente escreve): o pulso muda, a conversa sobe na lista e ganha uma não lida. */
 function simularEntrada(conversaId, texto) {
@@ -399,6 +403,44 @@ function enviarTexto(p) {
   if (ref && dev.refs.has(ref)) return { ok: true, mensagem: dev.refs.get(ref), repetida: true };
   dev.enviosExternos += 1;
   const m = { id: ++dev.seqMsg, direcao: "out", corpo: String(p.texto || ""), minutos: 0, criada: Date.now(), ...(p.client_ref ? { client_ref: String(p.client_ref) } : {}) };
+  c.mensagens.push(m);
+  c.minutos = 0; c.aguardando = false;
+  bater();
+  const msg = mensagemDe(c, m);
+  if (ref) dev.refs.set(ref, msg);
+  return { ok: true, mensagem: msg };
+}
+/* Mídia fictícia (foto, áudio, vídeo, documento), em qualquer canal da demo: o nx-midia "subir" valida tipo e tamanho como o
+   de verdade e devolve um endereço de upload que só existe aqui (host .invalid: o boot.js troca pelo servidor local; sem ele,
+   nada sai do computador); o PUT só conta os bytes (nada é guardado em disco) e o nx-enviar "midia" grava a saída com a mídia. */
+const HOST_UPLOAD = "dev-falso.invalid";
+const ROTA_UPLOAD = "/__dev_falso/storage/v1/object/upload/sign/nx-midia/";
+const TIPO_MSG_MIDIA = { image: "imagem", audio: "audio", video: "video", document: "documento" };
+function subirMidia(p) {
+  const tipo = tipoAceito(p.mime);
+  if (!tipo) return { ok: false, erro: "midia_tipo" };
+  const tamanho = Number(p.tamanho);
+  if (!Number.isFinite(tamanho) || tamanho <= 0) return { ok: false, erro: "dados_invalidos" };
+  if (tamanho > tipo.max) return { ok: false, erro: "midia_grande" };
+  const path = caminhoMidia(ID.cliente, "out", new Date(), tipo.ext);
+  return { ok: true, path, upload_url: `https://${HOST_UPLOAD}/storage/v1/object/upload/sign/nx-midia/${path}?token=dev-falso` };
+}
+/** nx-enviar (midia): mesma idempotência por client_ref do texto; a mensagem volta «enviada» com midia {path, mime, nome, tamanho, estado}. */
+function enviarMidia(p) {
+  const c = conversaPorId(p.conversa);
+  if (!c) return { ok: false, erro: "conversa_nao_encontrada" };
+  const path = String(p.path ?? "");
+  if (!pathDoCliente(path, ID.cliente, "out")) return { ok: false, erro: "midia_nao_encontrada" };
+  const tipo = tipoAceito(p.mime);
+  if (!tipo) return { ok: false, erro: "midia_tipo" };
+  const ref = p.client_ref ? `${c.id}:${p.client_ref}` : null;
+  if (ref && dev.refs.has(ref)) return { ok: true, mensagem: dev.refs.get(ref), repetida: true };
+  dev.enviosExternos += 1;
+  const tamanho = Number(p.tamanho) > 0 ? Number(p.tamanho) : dev.arquivos.get(path)?.tamanho || null;
+  const legenda = String(p.legenda ?? "").trim().slice(0, 1024) || null;
+  const m = { id: ++dev.seqMsg, direcao: "out", tipo: TIPO_MSG_MIDIA[tipo.grupo], corpo: tipo.grupo === "audio" ? null : legenda, minutos: 0, criada: Date.now(),
+    midia: { path, mime: mimeBase(p.mime), nome: String(p.nome ?? "").trim().slice(0, 200) || null, ...(tamanho ? { tamanho } : {}), estado: "ok" },
+    ...(p.client_ref ? { client_ref: String(p.client_ref) } : {}) };
   c.mensagens.push(m);
   c.minutos = 0; c.aguardando = false;
   bater();
@@ -550,9 +592,10 @@ function rpc(nome, p = {}) {
         negocios: negocios.filter(n => n.contato_id === ct.id), atendimentos: [{ id: c.id, protocolo: c.protocolo, status: c.status, aberta_em: isoAgora(), canal_id: c.canal_id, atribuida_nome: c.atribuida_nome }], tarefas: [] }; }
     case "nx_cv_mensagens": { const c = conversas.find(x => String(x.id) === String(p.p_conversa)) || conversas[0], when = i => new Date(Date.now() - i * 60000).toISOString();
       const itens = c.mensagens.map((m, i) => { const em = m.criada ? new Date(m.criada).toISOString() : when(m.minutos);
-        return { id: m.id, conversa_id: c.id, direcao: m.direcao, tipo: m.nota ? "nota" : "texto", wamid: `wamid.demo.${c.id}.${i}`, corpo: m.corpo,
+        return { id: m.id, conversa_id: c.id, direcao: m.direcao, tipo: m.nota ? "nota" : m.tipo || "texto", wamid: `wamid.demo.${c.id}.${i}`, corpo: m.corpo,
           status: m.direcao === "in" ? "recebida" : "entregue", criado_em: em, atualizado_em: em, origem: m.direcao === "out" ? "painel" : null,
-          enviado_por: m.direcao === "out" ? { id: ID.eu, nome: "Dra. Helena" } : null, referral: null, ...(m.client_ref ? { client_ref: m.client_ref } : {}) }; });
+          enviado_por: m.direcao === "out" ? { id: ID.eu, nome: "Dra. Helena" } : null, referral: null, ...(m.midia ? { midia: m.midia } : {}),
+          ...(m.client_ref ? { client_ref: m.client_ref } : {}) }; });
       return { itens, tem_mais: false, conversas: [{ id: c.id, protocolo: c.protocolo, aberta_em: when(c.minutos + 40), status: c.status, canal_id: c.canal_id }], agora: isoAgora(), ultimo_id: itens.at(-1)?.id || null }; }
     case "nx_cv_ia_estado": {
       const pausada = String(p.p_conversa) === "903";
@@ -630,8 +673,8 @@ function fn(nome, p = {}) {
   if (nome === "nx-codewords" && /teste/i.test(String(p.acao || ""))) marcarOnb("mensagem_teste");
   if (nome === "nx-codewords" && p.acao === "receita") return { ok: true, url: "https://exemplo.invalid/functions/v1/nx-codewords?ch=DEMO", cabecalhos: {}, prompt: "PROMPT DE DEMONSTRAÇÃO (ambiente fictício local)\n\nVocê é a assistente da clínica. Converse, veja horários e agende.\nURL: https://exemplo.invalid/functions/v1/nx-codewords?ch=DEMO\n" + "Linha de exemplo do prompt.\n".repeat(30) };
   if (nome === "nx-codewords") return { ok: true, inscrito_certo: true, conectado: true, numero_confere: true, rota: "fluxo", service_id: "cw-demo-fluxo", motivo: "Ambiente fictício local — nenhuma chamada saiu do computador." };
-  if (nome === "nx-enviar") return p.acao === "texto" ? enviarTexto(p) : { ok: true, app_inscrito: true, total: 1, numero: "+55 00 00000-0001" };
-  if (nome === "nx-midia") return { ok: true, url: null };
+  if (nome === "nx-enviar") return p.acao === "texto" ? enviarTexto(p) : p.acao === "midia" ? enviarMidia(p) : { ok: true, app_inscrito: true, total: 1, numero: "+55 00 00000-0001" };
+  if (nome === "nx-midia") return p.acao === "subir" ? subirMidia(p) : { ok: true, url: null };
   if (nome === "nx-ia" && p.acao === "automacao_montar") {
     if (/cota/i.test(String(p.descricao || ""))) return { ok: false, erro: "ia_cota" };
     if (/chave/i.test(String(p.descricao || ""))) return { ok: false, erro: "ia_indisponivel", detalhe: "sem_chave" };
@@ -648,7 +691,8 @@ function fn(nome, p = {}) {
 
 // Boot do modo fictício: ARQUIVO (não inline) — o index.html traz a mesma CSP do Netlify em <meta>
 // (script-src 'self'), então um <script> inline injetado seria bloqueado.
-const BOOT = `(function(){if(location.hostname!=="127.0.0.1"&&location.hostname!=="localhost")return;var q=new URLSearchParams(location.search);try{if(q.has("login")){localStorage.removeItem("nx-token");location.hash="#/login";}else if(!localStorage.getItem("nx-token")){localStorage.setItem("nx-token","demo-local-session");}sessionStorage.setItem("nx-app-dev","1");}catch(e){}var original=window.fetch.bind(window);window.fetch=function(input,init){var u;try{u=new URL(typeof input==="string"?input:input.url,location.href);}catch(e){return original(input,init);}if(u.hostname==="dtjznipitihnwmcgpzqh.supabase.co"){u=new URL("/__dev_falso"+u.pathname+u.search,location.origin);return original(u,init);}return original(input,init);};})();`;
+// Além do fetch, troca o destino do XMLHttpRequest (o upload de mídia usa XHR, pela barra de progresso): nada vai ao Supabase.
+const BOOT = `(function(){if(location.hostname!=="127.0.0.1"&&location.hostname!=="localhost")return;var q=new URLSearchParams(location.search);try{if(q.has("login")){localStorage.removeItem("nx-token");location.hash="#/login";}else if(!localStorage.getItem("nx-token")){localStorage.setItem("nx-token","demo-local-session");}sessionStorage.setItem("nx-app-dev","1");}catch(e){}var falso=function(h){return h==="dtjznipitihnwmcgpzqh.supabase.co"||h==="${HOST_UPLOAD}";};var original=window.fetch.bind(window);window.fetch=function(input,init){var u;try{u=new URL(typeof input==="string"?input:input.url,location.href);}catch(e){return original(input,init);}if(falso(u.hostname)){u=new URL("/__dev_falso"+u.pathname+u.search,location.origin);return original(u,init);}return original(input,init);};var abrir=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(){var a=Array.prototype.slice.call(arguments);try{var x=new URL(String(a[1]),location.href);if(falso(x.hostname))a[1]=new URL("/__dev_falso"+x.pathname+x.search,location.origin).href;}catch(e){}return abrir.apply(this,a);};})();`;
 
 const dormir = ms => new Promise(r => setTimeout(r, ms));
 const ROTAS_SEM_SESSAO = new Set(["nx_marca_publica", "nx_entrar", "nx_convite_ver", "nx_convite_aceitar", "nx_senha_redefinir"]);
@@ -714,12 +758,12 @@ function simular(acao, q) {
     case "clientes": dev.empresas = Math.max(1, Math.min(2, Number(q.get("n")) || 1)); return { ok: true, empresas: dev.empresas };
     case "teste": dev.teste = q.get("status") || q.get("dias") ? { status: q.get("status") || "teste", dias: q.get("dias") === "nenhum" ? null : Number(q.get("dias") ?? 14) } : null; return { ok: true, teste: dev.teste };
     case "vertical": dev.vertical = ["odonto", "oficina", "loja", "generico"].includes(q.get("v")) ? q.get("v") : null; return { ok: true, vertical: dev.vertical };
-    case "zerar": dev.chamadas = {}; dev.falhas = []; dev.enviosExternos = 0; dev.reqs.clear(); dev.refs.clear(); return { ok: true };
+    case "zerar": dev.chamadas = {}; dev.falhas = []; dev.enviosExternos = 0; dev.reqs.clear(); dev.refs.clear(); dev.arquivos.clear(); return { ok: true };
     default: return { ok: false, erro: "acao_desconhecida" };
   }
 }
 const estadoDev = () => ({ chamadas: dev.chamadas, enviosExternos: dev.enviosExternos, pulsoV: dev.pulsoV, falhas: dev.falhas.length, tokensValidos: dev.tokens.size,
-  verificarToken: dev.verificarToken, onboarding: onboardingEstado(), versao: dev.versao || null,
+  verificarToken: dev.verificarToken, onboarding: onboardingEstado(), versao: dev.versao || null, uploads: dev.arquivos.size,
   mensagens: conversas.map(c => ({ id: c.id, status: c.status, nao_lidas: c.nao_lidas, total: c.mensagens.length })), tarefas: tarefas.length, negocios: negocios.length, contatos: contatos.length });
 
 const servidor = http.createServer(async (req, res) => {
@@ -732,6 +776,15 @@ const servidor = http.createServer(async (req, res) => {
   if (url.pathname === "/__dev_falso/boot.js") {
     res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
     return res.end(BOOT);
+  }
+  if (req.method === "PUT" && url.pathname.startsWith(ROTA_UPLOAD)) {
+    // upload fictício da mídia: conta os bytes e descarta (nada vai para o disco); só aceita o caminho que o "subir" devolveu
+    let path = ""; try { path = decodeURIComponent(url.pathname.slice(ROTA_UPLOAD.length)); } catch { /* fica inválido */ }
+    let tamanho = 0; for await (const parte of req) tamanho += parte.length;
+    if (!pathDoCliente(path, ID.cliente, "out")) return json(400, { message: "caminho_invalido" });
+    if (!tamanho || tamanho > 16 * 1024 * 1024) return json(tamanho ? 413 : 400, { message: tamanho ? "arquivo_grande" : "arquivo_vazio" });
+    dev.arquivos.set(path, { tamanho, mime: String(req.headers["content-type"] || "") });
+    return json(200, { Key: `nx-midia/${path}` });
   }
   if (url.pathname.startsWith("/__dev_falso/rest/v1/rpc/")) {
     const name = url.pathname.split("/").at(-1);

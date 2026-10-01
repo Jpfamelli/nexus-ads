@@ -13,7 +13,7 @@ import {
 export const BUCKET = "nx-midia";
 const MB = 1024 * 1024;
 
-// tipos aceitos pelo WhatsApp (Cloud API) e o teto de cada grupo
+// tipos aceitos pelo WhatsApp (Cloud API) e o teto de cada grupo (+ WAV, só no canal CodeWords: ver abaixo)
 const IMAGENS = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
 const AV = { "video/mp4": "mp4", "video/3gpp": "3gp", "audio/aac": "aac", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/amr": "amr", "audio/ogg": "ogg" };
 const DOCS = {
@@ -24,11 +24,24 @@ const DOCS = {
   "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
 };
 const EXT_EXTRA = { "image/gif": "gif", "video/quicktime": "mov", "audio/opus": "opus", "application/zip": "zip" };
+// WAV não é do WhatsApp oficial: só o aparelho do CodeWords envia (o áudio gravado na tela vira WAV 16 kHz mono e
+// chega como mensagem de voz). A Graph da Meta recusa: quem envia confere soAparelho() antes.
+const WAV = "audio/wav";
+
+/** Mime sem parâmetros, em minúsculas e com o apelido resolvido (audio/x-wav → audio/wav). */
+export function mimeBase(mime) {
+  const m = String(mime ?? "").split(";")[0].trim().toLowerCase();
+  return m === "audio/x-wav" ? WAV : m;
+}
+
+/** Tipo que SÓ o aparelho do CodeWords envia (a Graph da Meta não aceita)? */
+export const soAparelho = mime => mimeBase(mime) === WAV;
 
 /** Tipo aceito para ENVIO? → {ext, max, grupo} ou null. */
 export function tipoAceito(mime) {
-  const m = String(mime ?? "").split(";")[0].trim().toLowerCase();
+  const m = mimeBase(mime);
   if (IMAGENS[m]) return { ext: IMAGENS[m], max: 5 * MB, grupo: "image" };
+  if (m === WAV) return { ext: "wav", max: 16 * MB, grupo: "audio" };
   if (AV[m]) return { ext: AV[m], max: 16 * MB, grupo: m.startsWith("video/") ? "video" : "audio" };
   if (DOCS[m]) return { ext: DOCS[m], max: 16 * MB, grupo: "document" };
   if (/^application\/vnd\.openxmlformats-officedocument\.[\w.-]+$/.test(m)) return { ext: "bin", max: 16 * MB, grupo: "document" };
@@ -37,15 +50,15 @@ export function tipoAceito(mime) {
 
 /** Extensão para gravar (recebida pode ter qualquer tipo): mime conhecido → ext; senão a do nome; senão bin. */
 export function extensaoDe(mime, nome) {
-  const m = String(mime ?? "").split(";")[0].trim().toLowerCase();
-  const conhecido = IMAGENS[m] || AV[m] || DOCS[m] || EXT_EXTRA[m];
+  const m = mimeBase(mime);
+  const conhecido = IMAGENS[m] || AV[m] || DOCS[m] || EXT_EXTRA[m] || (m === WAV ? "wav" : null);
   if (conhecido) return conhecido;
   const doNome = String(nome ?? "").match(/\.([a-z0-9]{1,8})$/i);
   return doNome ? doNome[1].toLowerCase() : "bin";
 }
 
-/** Tipo da Graph (image|video|audio|document) de um mime já aceito. */
-export const tipoGraph = mime => tipoAceito(mime)?.grupo || "document";
+/** Tipo da Graph (image|video|audio|document) de um mime já aceito; null = a Graph não envia (WAV é só do aparelho). */
+export const tipoGraph = mime => (soAparelho(mime) ? null : tipoAceito(mime)?.grupo || "document");
 
 /** <cliente>/<in|out>/<AAAA-MM>/<uuid>.<ext> (mês em São Paulo). */
 export function caminhoMidia(cliente, sentido, quando, ext) {

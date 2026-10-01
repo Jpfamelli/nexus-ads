@@ -81,7 +81,7 @@ export const MENSAGENS = {
   aparelho_desconectado: "O WhatsApp deste número está desconectado do CodeWords. Termine o pareamento no celular e tente de novo.",
   metodo_invalido: "O servidor não aceitou esse pedido. Atualize a página e tente de novo.",
   erro_interno: "O servidor falhou ao concluir o pedido. Tente de novo em instantes; se continuar, fale com o suporte.",
-  codewords_tipo_nao_suportado: "Este canal CodeWords envia somente mensagens de texto. Para anexos e modelos, use um canal Meta.",
+  codewords_tipo_nao_suportado: "Este número, conectado pelo CodeWords, não envia esse tipo de mensagem. Modelos aprovados só existem em número da Meta.",
   use_testar_codewords: "Confira o estado do aparelho em Configurações → Números de WhatsApp.",
   envio_falhou: "O canal não aceitou a mensagem.",
   template_invalido: "Esse modelo não está aprovado ou faltam parâmetros.",

@@ -515,10 +515,11 @@ await teste("M34: o cabeçalho usa um primário por estado, uma linha no celular
   assert.match(lista, /class: "cvl-dot cvl-dot-etapa"/, "etapa vira ponto de cor");
   assert.doesNotMatch(lista, /cv-etapa cvl-etapa/, "nenhuma pílula de etapa na lista (era cortada com reticências)");
   assert.match(css, /\.cvl-dot \{[^}]*background: var\(--cor/, "ponto de cor pelo token --cor");
-  // o aviso do canal CodeWords deixou de ocupar a conversa: só aparece ao tocar no clipe ou no ⓘ
+  // o aviso (navegador que não grava áudio) não ocupa a conversa: só aparece ao tocar no ⓘ; o clipe vale nos dois canais
   assert.match(comp, /const btInfo = h\("button"[^;]*"aria-expanded": "false"/, "botão ⓘ ao lado do clipe");
   assert.match(comp, /capInfo\.hidden = !temAviso \|\| !infoAberta/, "faixa escondida até a pessoa pedir");
-  assert.match(comp, /if \(btClipe\.getAttribute\("aria-disabled"\) === "true"\) \{ if \(usaCodeWords\(\)\) mostrarInfoCanal\(true\)/, "tocar no clipe do CodeWords explica o motivo");
+  assert.match(comp, /const temAviso = !gravavel;/, "o ⓘ só existe quando o navegador não grava (o CodeWords deixou de ser «só texto»)");
+  assert.match(comp, /btClipe\.setAttribute\("aria-disabled", String\(modoNota \|\| s !== "ok"\)\)/, "o clipe não fica bloqueado por ser CodeWords");
 });
 
 /* ============================================================ M37 — fotos do celular sem rejeição */
@@ -581,7 +582,7 @@ await teste("M37: o compositor otimiza antes de validar, mostra o ganho e oferec
   assert.match(comp, /createImageBitmap\(f, \{ imageOrientation: "from-image" \}\)/, "EXIF corrigido");
   assert.match(comp, /L\.planoFoto\(/);
   assert.match(comp, /L\.FOTO_QUALIDADES\[t\]/);
-  assert.match(comp, /otim = await otimizarFoto\(f\);[\s\S]{0,900}L\.validarArquivo\(escolhidoInicial\)/, "otimiza ANTES de validar o limite de 5 MB");
+  assert.match(comp, /otim = await otimizarFoto\(f\);[\s\S]{0,900}L\.validarArquivo\(escolhidoInicial, \{ provedor: provedorCanal\(\) \}\)/, "otimiza ANTES de validar o limite de 5 MB (e valida pelo canal da conversa)");
   assert.match(comp, /L\.resumoOtimizacao\(f\.size, otim\.arquivo\.size\)/, "resumo 'de X para Y'");
   assert.match(comp, /Enviar a original/, "opção de enviar o original");
   assert.match(conv, /new XMLHttpRequest\(\)/);
@@ -903,8 +904,12 @@ async function montarCompositor() {
   const botao = rotulo => achar(comp.el, x => x.tagName === "BUTTON" && x.attrs["aria-label"] === rotulo);
   const verDe = id => ({ contato: { nome: `Cliente ${id}` },
     conversa: { id, status: "aberta", canal_id: "k1", canal: { provedor: "meta", tem_token: true }, janela_ate: new Date(Date.now() + 3600000).toISOString() } });
+  // número do CodeWords: sem token da Meta e com a "janela" fechada pela conta da Meta (o cliente nunca escreveu) — nada disso pode travar
+  const verCodeWords = id => ({ contato: { nome: `Cliente ${id}` },
+    conversa: { id, status: "aberta", canal_id: "k2", canal: { provedor: "codewords" }, janela_ate: null, ultima_entrada_em: null } });
   return {
     A, comp, ta, toasts, enviados, modais, botao,
+    abrirCodeWords(id) { comp.guardar(); A.selId = id; A.ver = verCodeWords(id); comp.definirConversa(); },
     /** como o conversas.js faz: guarda o texto do campo, troca a seleção e (carregar = true) a conversa nova termina de abrir */
     selecionar(id, { carregar = true } = {}) { comp.guardar(); A.selId = id; A.ver = null; if (carregar) { A.ver = verDe(id); comp.definirConversa(); } },
     carregar(id) { A.ver = verDe(id); comp.definirConversa(); },
@@ -1037,6 +1042,305 @@ await teste("R119 rascunho.js: depois de parar()/apagarTudo() (Sair), desligar()
   const ctl2 = rasc.ligar(campo, "conversa:5");
   ctl2.salvarAgora();
   assert.equal(guardado.size, 1);
+});
+
+/* ============================================================ mídia pelo número do CodeWords (áudio, foto e arquivo) */
+console.log("\n(e2) CodeWords — áudio, foto e arquivo pelo aparelho");
+
+await teste("CodeWords áudio: wavDePcm monta o cabeçalho RIFF de 44 bytes (PCM 16 bits, mono, 16 kHz, little-endian), byte a byte", () => {
+  const pcm = new Float32Array([0, 1, -1, 0.5, -0.5, 2, -3, NaN]);
+  const w = L.wavDePcm(pcm, 16000);
+  assert.ok(w instanceof Uint8Array, "devolve bytes prontos para virar arquivo");
+  assert.equal(w.length, 44 + pcm.length * 2, "44 de cabeçalho + 2 bytes por amostra");
+  assert.deepEqual([...w.slice(0, 44)], [
+    0x52, 0x49, 0x46, 0x46,       // "RIFF"
+    52, 0, 0, 0,                  // tamanho do resto do arquivo: 36 + 16 bytes de dados
+    0x57, 0x41, 0x56, 0x45,       // "WAVE"
+    0x66, 0x6d, 0x74, 0x20,       // "fmt "
+    16, 0, 0, 0,                  // o bloco fmt tem 16 bytes
+    1, 0,                         // PCM sem compressão
+    1, 0,                         // mono
+    0x80, 0x3e, 0, 0,             // 16000 Hz
+    0x00, 0x7d, 0, 0,             // 32000 bytes por segundo
+    2, 0,                         // 2 bytes por amostra
+    16, 0,                        // 16 bits
+    0x64, 0x61, 0x74, 0x61,       // "data"
+    16, 0, 0, 0,                  // 8 amostras × 2 bytes
+  ]);
+  const dv = new DataView(w.buffer, w.byteOffset, w.byteLength);
+  const amostras = Array.from({ length: pcm.length }, (_, i) => dv.getInt16(44 + i * 2, true));
+  assert.deepEqual(amostras, [0, 32767, -32768, 16384, -16384, 32767, -32768, 0], "corta em [-1, 1] (2 e -3 não dão a volta) e o que não é número vira silêncio");
+});
+
+await teste("CodeWords áudio: wavDePcm — 1 s a 16 kHz mono dá 32.044 bytes; vazio é só o cabeçalho; a taxa informada vai para o cabeçalho", () => {
+  assert.equal(L.WAV_TAXA, 16000);
+  const um = L.wavDePcm(new Float32Array(16000));
+  assert.equal(um.length, 44 + 32000);
+  const dv = new DataView(um.buffer);
+  assert.equal(dv.getUint32(4, true), 36 + 32000);
+  assert.equal(dv.getUint16(22, true), 1, "mono");
+  assert.equal(dv.getUint32(24, true), 16000, "sem taxa informada = 16 kHz");
+  assert.equal(dv.getUint32(28, true), 32000);
+  assert.equal(dv.getUint32(40, true), 32000);
+  const vazio = L.wavDePcm(new Float32Array(0));
+  assert.equal(vazio.length, 44);
+  assert.equal(new DataView(vazio.buffer).getUint32(4, true), 36);
+  assert.equal(new DataView(vazio.buffer).getUint32(40, true), 0);
+  assert.equal(L.wavDePcm(null).length, 44, "sem amostras não quebra");
+  const oito = new DataView(L.wavDePcm([0.25, -0.25], 8000).buffer);          // vetor comum também serve
+  assert.equal(oito.getUint32(24, true), 8000); assert.equal(oito.getUint32(28, true), 16000);
+  assert.equal(oito.getInt16(44, true), 8192); assert.equal(oito.getInt16(46, true), -8192);
+  assert.equal(new DataView(L.wavDePcm([0], 0).buffer).getUint32(24, true), 16000, "taxa inválida cai em 16 kHz");
+});
+
+await teste("CodeWords anexos: WAV passa só em número do CodeWords; na Meta é recusado com o motivo marcado; o resto das regras é igual nos dois canais", () => {
+  const MB = 1024 * 1024, cw = { provedor: "codewords" };
+  assert.equal(L.MIME_WAV, "audio/wav");
+  assert.deepEqual(L.validarArquivo({ name: "voz.wav", type: "audio/wav", size: 500000 }, cw), { ok: true, mime: "audio/wav", tipo: "audio", limite: 16 * MB });
+  assert.deepEqual(L.validarArquivo({ name: "voz.wav", type: "audio/wav", size: 500000 }, { provedor: "meta" }),
+    { ok: false, erro: "midia_tipo", mime: "audio/wav", tipo: null, limite: 16 * MB, wav: true });
+  assert.equal(L.validarArquivo({ name: "voz.wav", type: "audio/wav", size: 500000 }).wav, true, "sem canal informado vale a regra da Meta");
+  assert.equal(L.validarArquivo({ name: "voz.wav", type: "audio/wav", size: 500000 }).ok, false);
+  // o mesmo WAV com os outros nomes que os navegadores usam, e só pela extensão
+  for (const type of ["audio/x-wav", "audio/wave", "audio/vnd.wave", "AUDIO/WAV; codecs=1"]) {
+    assert.equal(L.validarArquivo({ name: "voz.wav", type, size: 1000 }, cw).mime, "audio/wav", type);
+    assert.equal(L.validarArquivo({ name: "voz.wav", type, size: 1000 }, cw).ok, true, type);
+  }
+  assert.equal(L.validarArquivo({ name: "GRAVACAO.WAV", type: "", size: 1000 }, cw).tipo, "audio", "arquivo sem type: vale a extensão .wav");
+  assert.equal(L.validarArquivo({ name: "gravacao.wav", type: "", size: 1000 }, { provedor: "meta" }).wav, true);
+  assert.equal(L.validarArquivo({ name: "voz.wav", type: "audio/wav", size: 17 * MB }, cw).erro, "midia_grande", "até 16 MB");
+  const vazio = L.validarArquivo({ name: "voz.wav", type: "audio/wav", size: 0 }, cw);
+  assert.equal(vazio.ok, false); assert.equal(vazio.wav, undefined, "WAV vazio no CodeWords não ganha o aviso «este número não aceita WAV»");
+  // nada mais muda por ser CodeWords
+  assert.equal(L.validarArquivo({ name: "a.jpg", type: "image/jpeg", size: 6 * MB }, cw).erro, "midia_grande", "foto continua em 5 MB");
+  assert.equal(L.validarArquivo({ name: "v.mp4", type: "video/mp4", size: 15 * MB }, cw).tipo, "video");
+  assert.equal(L.validarArquivo({ name: "x.ogg", type: "audio/ogg", size: 1000 }, cw).tipo, "audio");
+  assert.equal(L.validarArquivo({ name: "r.pdf", type: "application/pdf", size: 1000 }, cw).tipo, "documento");
+  assert.equal(L.validarArquivo({ name: "a.webm", type: "audio/webm", size: 1000 }, cw).erro, "midia_tipo");
+  assert.equal(L.validarArquivo({ name: "a.webm", type: "audio/webm", size: 1000 }, cw).wav, undefined);
+  assert.equal(L.validarArquivo({ name: "z.zip", type: "application/zip", size: 1000 }, cw).erro, "midia_tipo");
+});
+
+const acharClasse = (raiz, classe) => achar(raiz, x => String(x.attrs && x.attrs.class || "").split(" ").includes(classe));
+
+await teste("CodeWords composer: clipe e arrastar liberados (sem janela de 24 h e sem token da Meta); modelos continuam fora; .wav entra aqui e é recusado na Meta com texto claro", async () => {
+  const t = await montarCompositor();
+  t.abrirCodeWords(77);
+  assert.equal(t.comp.aceitaAnexo(), true, "anexo liberado mesmo com a janela «fechada» pela conta da Meta e sem token");
+  assert.equal(t.botao("Anexar arquivo").attrs["aria-disabled"], "false");
+  assert.equal(t.ta.disabled, false);
+  assert.equal(acharClasse(t.comp.el, "cvx-trava").hidden, true, "nenhuma faixa de janela/token");
+  // modelos são da Meta: botão escondido, desligado, e a função recusa
+  const btModelos = t.botao("Enviar modelo aprovado");
+  assert.equal(btModelos.hidden, true); assert.equal(btModelos.disabled, true);
+  await t.comp.abrirModelos();
+  assert.equal(t.modais.length, 0, "o seletor de modelos não abre");
+  assert.match(t.toasts.join("\n"), /Modelos da Meta não estão disponíveis neste canal CodeWords/);
+  // um .wav do disco segue como áudio, sem legenda
+  const wav = new File([new Uint8Array(2000)], "recado.wav", { type: "audio/x-wav" });
+  await t.comp.anexar(wav);
+  assert.equal(t.modais.length, 1); assert.equal(t.modais[0].titulo, "Enviar arquivo para Cliente 77");
+  assert.equal(t.enviados.length, 1);
+  assert.equal(t.enviados[0].tipo, "midia"); assert.equal(t.enviados[0].conversa, 77);
+  assert.equal(t.enviados[0].validacao.mime, "audio/wav"); assert.equal(t.enviados[0].validacao.tipo, "audio");
+  assert.equal(t.enviados[0].legenda, "", "áudio vai sem legenda");
+  // foto e documento também
+  await t.comp.anexar(new File([new Uint8Array(900)], "foto.jpg", { type: "image/jpeg" }));
+  await t.comp.anexar({ name: "orcamento.pdf", type: "application/pdf", size: 120000 });
+  assert.deepEqual(t.enviados.slice(1).map(e => e.validacao.tipo), ["imagem", "documento"]);
+  // na Meta o mesmo .wav não passa, e o aviso diz o porquê
+  const m = await montarCompositor();
+  m.selecionar(78);
+  assert.equal(m.botao("Enviar modelo aprovado").hidden, false, "na Meta os modelos continuam à vista");
+  await m.comp.anexar(wav);
+  assert.deepEqual(m.enviados, []); assert.equal(m.modais.length, 0);
+  assert.match(m.toasts.join("\n"), /Este número não aceita WAV: use MP3, OGG, AAC ou M4A/);
+  // nota interna continua sem anexo, em qualquer canal
+  t.comp.alternarNota(true);
+  assert.equal(t.comp.aceitaAnexo(), false);
+});
+
+await teste("CodeWords composer: vídeo avisa que chega como arquivo (só neste canal) e a mídia nunca sai como resposta citada", async () => {
+  const video = () => new File([new Uint8Array(4000)], "passeio.mp4", { type: "video/mp4" });
+  const pdf = { name: "orcamento.pdf", type: "application/pdf", size: 120000 };
+  const citada = { id: 5, direcao: "in", tipo: "texto", corpo: "qual o valor?", wamid: "w-5" };
+  const t = await montarCompositor();
+  t.abrirCodeWords(81);
+  await t.comp.anexar(video());
+  assert.ok(acharClasse(t.modais[0].corpo, "cv-aviso-canal"), "linha «Neste número o vídeo chega como arquivo para baixar.» no modal");
+  assert.equal(t.enviados[0].validacao.tipo, "video");
+  await t.comp.anexar(pdf);
+  assert.equal(acharClasse(t.modais[1].corpo, "cv-aviso-canal"), null, "documento não leva o aviso");
+  assert.match(ler("cv-composer.js"), /codeWords && v\.tipo === "video" \? h\("p", \{ class: "sub cv-aviso-canal" \}, "Neste número o vídeo chega como arquivo para baixar\."\)/);
+  // respondendo a uma mensagem + arquivo: a faixa «Respondendo…» sai e nada de citação segue
+  const faixa = acharClasse(t.comp.el, "cvx-resp");
+  t.comp.responder(citada);
+  assert.equal(faixa.hidden, false);
+  await t.comp.anexar(pdf);
+  assert.equal(faixa.hidden, true, "o arquivo não aparece como resposta citada");
+  assert.equal(t.enviados.length, 3);
+  for (const e of t.enviados) { assert.equal(e.respondeA, undefined); assert.equal("responde_a" in e, false); }
+  // cancelar o modal não desfaz a resposta que a pessoa estava escrevendo
+  t.comp.responder(citada); t.aoModal(async () => false);
+  await t.comp.anexar(pdf);
+  assert.equal(faixa.hidden, false); assert.equal(t.enviados.length, 3);
+  // Meta: sem aviso de vídeo, e o comportamento de antes (a faixa fica) não muda
+  const m = await montarCompositor();
+  m.selecionar(82);
+  await m.comp.anexar(video());
+  assert.equal(acharClasse(m.modais[0].corpo, "cv-aviso-canal"), null);
+  m.comp.responder(citada);
+  await m.comp.anexar(pdf);
+  assert.equal(acharClasse(m.comp.el, "cvx-resp").hidden, false);
+  // e o pedido ao servidor nunca leva responde_a em mídia (com o tamanho, como combinado com o nx-enviar)
+  const chamada = /A\.api\.fn\("nx-enviar", \{ acao: "midia",[^}]*\}\)/.exec(ler("conversas.js"));
+  assert.ok(chamada, "chamada de mídia do nx-enviar");
+  assert.equal(chamada[0], 'A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: o.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined, tamanho: o.arquivo.size })');
+  assert.doesNotMatch(chamada[0], /responde_a/);
+});
+
+/** Navegador de mentira para a gravação: MediaRecorder que só grava WebM (nem ogg nem mp4), microfone, AudioContext e OfflineAudioContext. */
+async function comGravadorFalso(fn) {
+  const antes = { MR: globalThis.MediaRecorder, AC: globalThis.AudioContext, OAC: globalThis.OfflineAudioContext, seguro: globalThis.isSecureContext,
+    nav: Object.getOwnPropertyDescriptor(globalThis, "navigator") };
+  const reg = { gravadores: [], contextos: 0, fechados: 0, offline: [], faixasParadas: 0, decodificar: async () => ({ duration: 0.5 }) };
+  globalThis.MediaRecorder = class {
+    static isTypeSupported() { return false; }
+    constructor(fluxo, opcoes) { this.opcoes = opcoes; this.state = "inactive"; this.mimeType = "audio/webm;codecs=opus"; this.ouvintes = {}; reg.gravadores.push(this); }
+    addEventListener(tipo, f) { (this.ouvintes[tipo] ||= []).push(f); }
+    start() { this.state = "recording"; }
+    stop() {
+      this.state = "inactive";
+      for (const f of this.ouvintes.dataavailable || []) f({ data: new Blob([new Uint8Array(640)], { type: "audio/webm" }) });
+      this.fim = Promise.all((this.ouvintes.stop || []).map(f => f()));
+    }
+  };
+  globalThis.AudioContext = class {
+    constructor() { reg.contextos++; }
+    decodeAudioData(buf) { return reg.decodificar(buf); }
+    close() { reg.fechados++; return Promise.resolve(); }
+  };
+  globalThis.OfflineAudioContext = class {
+    constructor(canais, quadros, taxa) { this.quadros = quadros; this.destination = {}; reg.offline.push({ canais, quadros, taxa }); }
+    createBufferSource() { return { connect() {}, start() {} }; }
+    startRendering() { return Promise.resolve({ getChannelData: () => new Float32Array(this.quadros).fill(0.25) }); }
+  };
+  globalThis.isSecureContext = true;
+  Object.defineProperty(globalThis, "navigator", { configurable: true, writable: true,
+    value: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop() { reg.faixasParadas++; } }] }) } } });
+  try { return await fn(reg); }
+  finally {
+    for (const g of reg.gravadores) if (g.state !== "inactive") g.stop();        // nenhum cronômetro de gravação fica vivo depois do teste
+    globalThis.MediaRecorder = antes.MR; globalThis.AudioContext = antes.AC; globalThis.OfflineAudioContext = antes.OAC; globalThis.isSecureContext = antes.seguro;
+    if (antes.nav) Object.defineProperty(globalThis, "navigator", antes.nav); else delete globalThis.navigator;
+  }
+}
+const tique = () => new Promise(r => setTimeout(r, 5));
+
+await teste("CodeWords gravação: grava no formato padrão do navegador (mesmo sem ogg/mp4) e anexa WAV 16 kHz mono «audio-orbita-<hora>.wav»; na Meta o mesmo navegador segue sem gravar", async () => {
+  await comGravadorFalso(async reg => {
+    const t = await montarCompositor();
+    t.abrirCodeWords(91);
+    const btAudio = acharClasse(t.comp.el, "cvx-audio");
+    assert.equal(btAudio.disabled, false, "no CodeWords o microfone vale mesmo onde o navegador não grava ogg nem mp4");
+    assert.equal(btAudio.attrs["aria-label"], "Gravar áudio para enviar (até 1 minuto)");
+    assert.equal(acharClasse(t.comp.el, "cvx-info").hidden, true, "sem aviso de «não dá para gravar»");
+    btAudio.dispatchEvent({ type: "click" }); await tique();
+    assert.equal(reg.gravadores.length, 1);
+    assert.equal(reg.gravadores[0].opcoes, undefined, "sem exigir mimeType: o formato padrão do navegador");
+    assert.equal(reg.gravadores[0].state, "recording");
+    assert.equal(btAudio.attrs["aria-pressed"], "true");
+    btAudio.dispatchEvent({ type: "click" });               // parar
+    await reg.gravadores[0].fim; await tique();
+    assert.equal(t.enviados.length, 1);
+    const e = t.enviados[0];
+    assert.equal(e.tipo, "midia"); assert.equal(e.conversa, 91); assert.equal(e.legenda, "");
+    assert.match(e.arquivo.name, /^audio-orbita-\d{13}\.wav$/);
+    assert.equal(e.arquivo.type, "audio/wav");
+    assert.deepEqual({ mime: e.validacao.mime, tipo: e.validacao.tipo, ok: e.validacao.ok }, { mime: "audio/wav", tipo: "audio", ok: true });
+    assert.deepEqual(reg.offline, [{ canais: 1, quadros: 8000, taxa: 16000 }], "reamostrado em 16 kHz, um canal (0,5 s = 8.000 quadros)");
+    const bytes = new Uint8Array(await e.arquivo.arrayBuffer());
+    assert.equal(bytes.length, 44 + 8000 * 2);
+    assert.equal(String.fromCharCode(...bytes.slice(0, 4)), "RIFF"); assert.equal(String.fromCharCode(...bytes.slice(8, 12)), "WAVE");
+    const dv = new DataView(bytes.buffer);
+    assert.equal(dv.getUint16(22, true), 1); assert.equal(dv.getUint32(24, true), 16000); assert.equal(dv.getInt16(44, true), 8192);
+    assert.equal(reg.contextos, 1); assert.equal(reg.fechados, 1, "o AudioContext é fechado");
+    assert.equal(reg.faixasParadas, 1, "o microfone é solto");
+    assert.equal(t.modais[0].titulo, "Enviar arquivo para Cliente 91", "a pessoa revisa o áudio antes de mandar");
+    // Meta, mesmo navegador: sem ogg/mp4 não há gravação (como sempre foi) e o ⓘ explica
+    const m = await montarCompositor();
+    m.selecionar(92);
+    assert.equal(acharClasse(m.comp.el, "cvx-audio").disabled, true);
+    assert.equal(acharClasse(m.comp.el, "cvx-info").hidden, false);
+    acharClasse(m.comp.el, "cvx-audio").dispatchEvent({ type: "click" }); await tique();
+    assert.equal(reg.gravadores.length, 1, "nenhum gravador novo na Meta");
+    assert.match(m.toasts.join("\n"), /A gravação não está disponível aqui\. Anexe um áudio salvo em MP3, OGG, AAC ou M4A\./);
+  });
+});
+
+await teste("CodeWords gravação: se a conversão para WAV falhar, avisa e oferece anexar um áudio salvo (nada sai, o AudioContext fecha); trocar de conversa no meio não manda o áudio para outro cliente", async () => {
+  await comGravadorFalso(async reg => {
+    const t = await montarCompositor();
+    t.abrirCodeWords(95);
+    const btAudio = acharClasse(t.comp.el, "cvx-audio");
+    reg.decodificar = async () => { throw new Error("EncodingError"); };
+    btAudio.dispatchEvent({ type: "click" }); await tique();
+    btAudio.dispatchEvent({ type: "click" });
+    await reg.gravadores[0].fim; await tique();
+    assert.deepEqual(t.enviados, []); assert.equal(t.modais.length, 0);
+    assert.match(t.toasts.join("\n"), /Não foi possível preparar o áudio gravado neste navegador, e ele não foi enviado\. Toque no clipe para anexar um áudio salvo/);
+    assert.equal(reg.fechados, reg.contextos, "fecha o AudioContext mesmo com erro");
+    assert.equal(btAudio.disabled, false, "dá para gravar de novo");
+    // a conversão demora e a pessoa abre outra conversa: o áudio da 95 não vai para a 96
+    let soltar; reg.decodificar = () => new Promise(ok => { soltar = ok; });
+    btAudio.dispatchEvent({ type: "click" }); await tique();
+    btAudio.dispatchEvent({ type: "click" }); await tique();
+    t.abrirCodeWords(96);
+    soltar({ duration: 1 });
+    await reg.gravadores[1].fim; await tique();
+    assert.deepEqual(t.enviados, []);
+    assert.match(t.toasts.join("\n"), /Você trocou de conversa enquanto o áudio era preparado: nada foi enviado/);
+    // trocar de conversa DURANTE a gravação cancela (como já era)
+    acharClasse(t.comp.el, "cvx-audio").dispatchEvent({ type: "click" }); await tique();
+    assert.equal(reg.gravadores[2].state, "recording");
+    t.abrirCodeWords(97);
+    await reg.gravadores[2].fim; await tique();
+    assert.equal(reg.gravadores[2].state, "inactive"); assert.deepEqual(t.enviados, []);
+  });
+});
+
+await teste("CodeWords tela: nenhum texto diz mais que o canal é «só texto»; arrastar/colar usam a mesma regra do clipe; a bolha de mídia mostra «Pode ter saído» quando o servidor responde ambigua", () => {
+  const comp = ler("cv-composer.js"), chat = ler("cv-chat.js"), conv = ler("conversas.js"), apiJs = ler("api.js"), logica = ler("cv-logica.js");
+  assert.match(comp, /function aceitaAnexo\(\) \{ return !modoNota && situacao\(\) === "ok"; \}/, "anexo não depende mais do provedor");
+  for (const s of [comp, chat, conv, apiJs]) {
+    assert.doesNotMatch(s, /CodeWords envia (apenas |somente )?(mensagens de )?texto|não envia mídia|use um canal (WhatsApp Cloud API|Meta)|selecione um canal WhatsApp Cloud API/i);
+  }
+  // modelos seguem bloqueados no CodeWords: botão, função e menu «+» do celular
+  assert.match(comp, /btModelos\.hidden = codeWords;/);
+  assert.match(comp, /btModelos\.disabled = codeWords \|\| modoNota \|\| !\(s === "ok" \|\| s === "janela"\);/);
+  assert.match(comp, /async function abrirModelos\(\) \{\s*if \(usaCodeWords\(\)\) \{ ui\.toast\("Modelos da Meta não estão disponíveis neste canal CodeWords\."/);
+  assert.match(comp, /!usaCodeWords\(\) \? \{ rotulo: "Modelos aprovados"/);
+  // gravação: na Meta exige ogg/mp4; no CodeWords basta gravador + decodificador, e o WAV sai da função pura
+  assert.match(comp, /function podeGravar\(\) \{ return !!globalThis\.isSecureContext && \(usaCodeWords\(\) \? gravaWav\(\) : !!formatoGravacao\(\)\); \}/);
+  assert.match(comp, /const rec = emWav \? new MediaRecorder\(fluxo\) : new MediaRecorder\(fluxo, \{ mimeType: mimePreferido \}\);/);
+  assert.match(comp, /new OAC\(1, Math\.max\(1, Math\.round\(audio\.duration \* L\.WAV_TAXA\)\), L\.WAV_TAXA\)/, "OfflineAudioContext mono a 16 kHz");
+  assert.match(comp, /L\.wavDePcm\(pronto\.getChannelData\(0\), L\.WAV_TAXA\)/);
+  assert.match(comp, /\} finally \{ try \{ await ctx\.close\(\); \} catch \{/, "AudioContext sempre fechado");
+  assert.match(comp, /audio\/ogg,audio\/wav,application\/pdf/, "o seletor de arquivo oferece .wav");
+  assert.match(logica, /if \(provedor !== "codewords"\) return \{ ok: false, erro: "midia_tipo", mime, tipo: null, limite, wav: true \};/);
+  // arrastar para o chat e colar imagem passam pelo mesmo aceitaAnexo()/anexar()
+  assert.match(chat, /corpo\.addEventListener\("dragenter", ev => \{ if \(!temArquivo\(ev\) \|\| !A\.composer\.aceitaAnexo\(\)\) return;/);
+  assert.match(chat, /if \(f\) A\.composer\.anexar\(f\);/);
+  assert.match(comp, /ta\.addEventListener\("paste"[\s\S]{0,420}if \(f\) anexar\(new File\(/);
+  // resposta ambígua (timeout/5xx do aparelho): a mensagem gravada entra marcada e a bolha avisa, sem reenviar sozinha
+  assert.match(conv, /const msg = r && r\.mensagem \? \{ \.\.\.r\.mensagem, \.\.\.\(r\.ambigua === true \? \{ ambigua: true \} : \{\}\) \} : null;\s*A\.msgs = A\.msgs\.filter\(m => m\.id !== tmp\.id\);/);
+  assert.match(conv, /if \(tmp\.midia && tmp\.midia\.local_url && msg\.midia && msg\.midia\.path\) A\.midia\.set\(msg\.midia\.path, \{ url: null, local: tmp\.midia\.local_url/, "a prévia local segue na bolha gravada");
+  assert.match(chat, /const ambigua = m\.ambigua === true \|\| \(m\.status === "pendente" && \/\^status incerto:\/i\.test\(String\(m\.erro \|\| ""\)\)\);/);
+  assert.match(chat, /"Pode ter saído — confira no WhatsApp antes de reenviar\."/);
+  assert.match(chat, /if \(\["imagem", "video", "audio", "documento", "sticker"\]\.includes\(m\.tipo\)\) bolha\.appendChild\(blocoMidia\(m\)\);/);
+  // falha do aparelho: o servidor devolve a saída gravada como «falhou» e a tela mostra o motivo dele
+  assert.match(conv, /if \(codigo === "envio_falhou" && salva && salva\.id\) \{/);
+  assert.doesNotMatch(apiJs, /codewords_tipo_nao_suportado: "[^"]*somente mensagens de texto/);
 });
 
 /* ============================================================ M33 — assistente passo a passo do número (CodeWords e Meta) */

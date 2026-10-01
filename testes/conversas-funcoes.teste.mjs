@@ -22,7 +22,7 @@ import { criarBanco, erroPg, jsonResp, arvore } from "./apoio/postgrest-falso.mj
 import { tratar as webhook } from "../supabase/functions/_compartilhado/webhook.js";
 import { tratar as enviar, enviarFila } from "../supabase/functions/_compartilhado/enviar.js";
 import { tratarAgente } from "../supabase/functions/_compartilhado/codewords.js";
-import { tratar as midia, tipoAceito, pathDoCliente } from "../supabase/functions/_compartilhado/midia.js";
+import { tratar as midia, tipoAceito, pathDoCliente, soAparelho, tipoGraph, extensaoDe } from "../supabase/functions/_compartilhado/midia.js";
 import { tratar as nxIa, montarPrompt } from "../supabase/functions/_compartilhado/ia_conversas.js";
 import { normalizarMensagem, TEXTO_NAO_SUPORTADA } from "../supabase/functions/_compartilhado/conversas.js";
 import { carregarModelo, filtroFunisAds, codigoBanco, CORS } from "../supabase/functions/_compartilhado/comum.js";
@@ -552,8 +552,15 @@ async function fakeGraph(req, u, estado) {
 async function fakeStorage(req, u, estado) {
   const caminho = u.pathname.replace(/^\/storage\/v1\//, "");
   estado.storage.push(`${req.method} ${caminho}`);
-  if (!req.headers.get("apikey")) return jsonResp({ message: "sem apikey" }, 401);
   let m;
+  // download pela URL assinada (o token vai na URL: sem apikey) — é o que o nx-enviar baixa para mandar pelo aparelho
+  if (req.method === "GET" && (m = caminho.match(/^object\/sign\/nx-midia\/(.+)$/))) {
+    const arq = estado.arquivos.get(decodeURIComponent(m[1]));
+    if (!arq || !/^ler-\d+$/.test(u.searchParams.get("token") || "")) return jsonResp({ message: "Object not found" }, 400);
+    if (estado.downloadHandler) return estado.downloadHandler(arq, req);
+    return new Response(arq.bytes, { status: 200, headers: { "content-type": arq.mime || "application/octet-stream", "content-length": String(arq.bytes.length) } });
+  }
+  if (!req.headers.get("apikey")) return jsonResp({ message: "sem apikey" }, 401);
   if (req.method === "POST" && (m = caminho.match(/^object\/upload\/sign\/nx-midia\/(.+)$/))) {
     return jsonResp({ url: `/object/upload/sign/nx-midia/${m[1]}?token=up-${m[1].length}` });
   }
@@ -587,7 +594,7 @@ async function fakeStorage(req, u, estado) {
 }
 
 function cenario({ config = {}, extra = {} } = {}) {
-  const estado = { agora: new Date(AGORA), log: [], graph: [], enviadas: [], codewords: [], codewordsHandler: null, storage: [], arquivos: new Map(), nWa: 0,
+  const estado = { agora: new Date(AGORA), log: [], graph: [], enviadas: [], codewords: [], codewordsHandler: null, downloadHandler: null, storage: [], arquivos: new Map(), nWa: 0,
                    janelaFechada: new Set(), inscritos: new Set(["WABA-A"]), segundoPlano: [], ia: [] };
   const recente = new Date(AGORA.getTime() - HORA).toISOString(), velho = new Date(AGORA.getTime() - 30 * HORA).toISOString();
   const banco = criarBanco({
@@ -670,11 +677,20 @@ function cenario({ config = {}, extra = {} } = {}) {
     if (u.origin === SUPA && u.pathname.startsWith("/storage/v1/")) return fakeStorage(req, u, estado);
     if (u.host === "graph.facebook.com") return fakeGraph(req, u, estado);
     if (u.host === "runtime.codewords.ai") {
-      // device manager (aparelho): GET /connections e POST /proxy/send/message (form-urlencoded, chave crua)
-      const texto = await req.text();
+      // device manager (aparelho): GET /connections, POST /proxy/send/message (form-urlencoded, chave crua) e
+      // POST /proxy/send/{image|audio|file} (multipart: campos de texto + o arquivo)
       const tipo = req.headers.get("content-type");
+      let texto = "", multipart = null;
+      if (tipo?.startsWith("multipart/form-data")) {
+        multipart = { campos: {}, arquivo: null };
+        for (const [k, v] of await req.formData()) {
+          if (typeof v === "string") multipart.campos[k] = v;
+          else multipart.arquivo = { campo: k, nome: v.name, mime: v.type, bytes: new Uint8Array(await v.arrayBuffer()) };
+        }
+      } else texto = await req.text();
       const chamada = { metodo: req.method, caminho: u.pathname.replace("/run/whatsapp_device_manager", ""), phone_id: u.searchParams.get("phone_id"),
-                        auth: req.headers.get("authorization"), tipo, form: tipo?.includes("x-www-form-urlencoded") ? Object.fromEntries(new URLSearchParams(texto)) : null };
+                        auth: req.headers.get("authorization"), tipo, form: tipo?.includes("x-www-form-urlencoded") ? Object.fromEntries(new URLSearchParams(texto)) : null,
+                        multipart };
       estado.codewords.push(chamada);
       if (chamada.caminho === "/connections") {
         return jsonResp([{ phone_id: "dev-a1", phone_number: "+5512900001111", status: "logged_in", service_path: "svc_ia/webhook" }]);
@@ -1189,6 +1205,252 @@ test("nx-enviar CodeWords (aparelho): HTTP 408/425 do gateway é AMBÍGUO como o
     assert.equal(s.rpcs("nx_cv_saida")[0].params.p_msg.status, "pendente");
     assert.equal(envioProxy(s).length, 1);
   }
+});
+
+/* ------------------------------------------------------------ mídia pelo aparelho (foto, áudio, vídeo, documento) */
+const envioMidiaProxy = s => s.estado.codewords.filter(x => /^\/proxy\/send\/(image|audio|file)$/.test(x.caminho));
+const PDF = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55]);   // "%PDF-1.7"
+/** Põe o arquivo no bucket falso (pasta out/ do cliente A) e devolve o path. */
+function arquivoOut(s, ext, mime, bytes = PDF) {
+  const path = `${CLI_A}/out/2026-09/${crypto.randomUUID()}.${ext}`;
+  s.estado.arquivos.set(path, { bytes, mime });
+  return path;
+}
+const midiaCW = (s, corpo, deps) => enviar(painel("nx-enviar", { acao: "midia", ...corpo }), ENV, s.deps(deps)).then(ler);
+
+test("nx-enviar mídia CodeWords: baixa do Storage e manda os BYTES pelo proxy certo (send/image, send/audio, send/file); grava a saída enviada com a mídia; a IA pausa", async () => {
+  const casos = [
+    ["jpg", "image/jpeg", "foto.jpg", "Olha a foto", "/proxy/send/image", "image", "imagem", "Olha a foto"],
+    ["wav", "audio/wav", "audio-orbita-1790000000000.wav", "legenda ignorada", "/proxy/send/audio", "audio", "audio", null],
+    ["ogg", "audio/ogg; codecs=opus", "voz.ogg", undefined, "/proxy/send/audio", "audio", "audio", null],
+    ["mp4", "video/mp4", "video.mp4", "Segue o vídeo", "/proxy/send/file", "file", "video", "Segue o vídeo"],
+    ["pdf", "application/pdf", "orcamento.pdf", "Seu orçamento", "/proxy/send/file", "file", "documento", "Seu orçamento"],
+  ];
+  for (const [ext, mime, nome, legenda, caminho, campo, tipoMsg, corpoMsg] of casos) {
+    const s = cenario();
+    canalAparelho(s);
+    const path = arquivoOut(s, ext, mime.split(";")[0]);
+    const nGraph = s.estado.graph.length;
+    const r = await midiaCW(s, { conversa: 601, path, mime, nome, legenda, tamanho: PDF.length });
+    assert.equal(r.status, 200, ext); assert.equal(r.corpo.ok, true, ext);
+    // baixou pela URL assinada (sem apikey) antes de falar com o aparelho
+    const iBaixar = s.estado.log.indexOf(`GET fake.supabase.co/storage/v1/object/sign/nx-midia/${path}`);
+    const iProxy = s.estado.log.findIndex(l => l.includes("/proxy/send/"));
+    assert.ok(iBaixar >= 0 && iBaixar < iProxy, "baixa do Storage antes do proxy");
+    assert.equal(envioMidiaProxy(s).length, 1, "uma chamada ao proxy");
+    const [x] = envioMidiaProxy(s);
+    assert.equal(x.caminho, caminho, ext); assert.equal(x.metodo, "POST"); assert.equal(x.phone_id, "dev-a1");
+    assert.equal(x.auth, "cwk-falsa-1234", "chave crua, sem Bearer");
+    assert.match(x.tipo, /^multipart\/form-data; boundary=/);
+    assert.deepEqual(x.multipart.campos, corpoMsg ? { phone: "5512988887777", caption: corpoMsg } : { phone: "5512988887777" }, `${ext}: áudio sem legenda`);
+    assert.equal(x.multipart.arquivo.campo, campo, ext);
+    assert.equal(x.multipart.arquivo.nome, nome); assert.equal(x.multipart.arquivo.mime, mime.split(";")[0]);
+    assert.deepEqual([...x.multipart.arquivo.bytes], [...PDF], "os bytes do Storage chegam inteiros ao aparelho");
+    assert.equal(s.estado.graph.length, nGraph, "nada vai para a Graph");
+    // saída gravada
+    const [saida] = s.rpcs("nx_cv_saida");
+    assert.equal(saida.params.p_msg.status, "enviada"); assert.equal(saida.params.p_msg.wamid, `cw:${K_A1}:3EB0DEFAULT`);
+    assert.equal(saida.params.p_msg.tipo, tipoMsg); assert.equal(saida.params.p_msg.corpo, corpoMsg);
+    assert.equal(saida.params.p_msg.responde_a_wamid, null);
+    assert.deepEqual(saida.params.p_msg.midia, { path, mime: mime.split(";")[0], nome, tamanho: PDF.length, estado: "ok" });
+    assert.equal(r.corpo.mensagem.status, "enviada"); assert.equal(r.corpo.mensagem.tipo, tipoMsg);
+    assert.equal(r.corpo.mensagem.midia.path, path);
+    assert.equal(s.rpcs("nx_cv_ia_pausa_auto").length, 1, "resposta de atendente pausa a IA");
+  }
+});
+
+test("nx-enviar mídia CodeWords: SEM janela de 24 h e sem citação (responde_a é ignorado); conversa resolvida continua barrada", async () => {
+  const s = cenario();
+  canalAparelho(s);
+  const path = arquivoOut(s, "pdf", "application/pdf");
+  // 602: a última mensagem do cliente tem mais de 24 h (num canal Meta daria fora_da_janela)
+  const r = await midiaCW(s, { conversa: 602, path, mime: "application/pdf", nome: "orcamento.pdf", responde_a: "wamid.IN-701" });
+  assert.equal(r.status, 200); assert.equal(r.corpo.ok, true);
+  assert.equal(envioMidiaProxy(s).length, 1);
+  assert.deepEqual(Object.keys(envioMidiaProxy(s)[0].multipart.campos), ["phone"], "nada de citação no multipart");
+  assert.equal(s.rpcs("nx_cv_saida")[0].params.p_msg.responde_a_wamid, null);
+  assert.equal(s.estado.log.some(l => l.endsWith("/rest/v1/nx_mensagens")), false, "nem consulta a mensagem citada");
+  // resolvida: barrada antes do Storage e do aparelho
+  s.tab("nx_conversas").find(c => c.id === 602).status = "resolvida";
+  const st = s.estado.storage.length;
+  const res = await midiaCW(s, { conversa: 602, path, mime: "application/pdf" });
+  assert.equal(res.status, 400); assert.equal(res.corpo.erro, "conversa_resolvida");
+  assert.equal(s.estado.storage.length, st); assert.equal(envioMidiaProxy(s).length, 1);
+});
+
+test("nx-enviar mídia CodeWords: recusa do aparelho (HTTP 200 com erro, 401, 404) → envio_falhou com o motivo em português e a saída gravada 'falhou' (com a mídia)", async () => {
+  const casos = [
+    [() => jsonResp({ status: "skip", message: "Own message or empty" }), /own message or empty/i],
+    [() => jsonResp({ code: "error", message: "file too big" }), /não entregou: file too big/],
+    [() => jsonResp({ message: "Unauthorized" }, 401), /recusou a chave/],
+    [() => jsonResp({ message: "No connection found" }, 404), /não achou o aparelho/],
+  ];
+  for (const [resposta, re] of casos) {
+    const s = cenario();
+    canalAparelho(s);
+    s.estado.codewordsHandler = resposta;
+    const path = arquivoOut(s, "jpg", "image/jpeg");
+    const r = await midiaCW(s, { conversa: 601, path, mime: "image/jpeg", nome: "foto.jpg", legenda: "Olha" });
+    assert.equal(r.status, 200);
+    assert.equal(r.corpo.ok, false); assert.equal(r.corpo.erro, "envio_falhou");
+    assert.match(r.corpo.detalhe, re);
+    assert.equal(r.corpo.mensagem.status, "falhou"); assert.match(r.corpo.mensagem.erro, re);
+    assert.equal(r.corpo.mensagem.tipo, "imagem"); assert.equal(r.corpo.mensagem.midia.path, path);
+    assert.equal(s.rpcs("nx_cv_saida")[0].params.p_msg.wamid, null, "falha certa não ganha id");
+    assert.equal(envioMidiaProxy(s).length, 1, "uma tentativa só");
+    assert.equal(s.rpcs("nx_cv_ia_pausa_auto").length, 0, "falha certa não pausa a IA");
+    assert.ok(!JSON.stringify(r.corpo).includes("cwk-falsa"), "a chave nunca volta");
+  }
+});
+
+test("nx-enviar mídia CodeWords: timeout/5xx/408 é AMBÍGUO — ok:true + ambigua + aviso, saída 'pendente' com id provisório, NUNCA reenvia sozinho", async () => {
+  for (const resposta of [() => jsonResp({ error: "resposta perdida" }, 503), () => jsonResp({ error: "gateway" }, 408), () => { throw new Error("timeout"); },
+    () => new Response("<html>ok</html>", { status: 200 })]) {
+    const s = cenario();
+    canalAparelho(s);
+    s.estado.codewordsHandler = resposta;
+    const path = arquivoOut(s, "wav", "audio/wav");
+    const r = await midiaCW(s, { conversa: 601, path, mime: "audio/wav", nome: "audio-orbita-1.wav" });
+    assert.equal(r.status, 200); assert.equal(r.corpo.ok, true); assert.equal(r.corpo.ambigua, true);
+    assert.match(r.corpo.aviso, /pode ter saído/);
+    assert.equal(envioMidiaProxy(s).length, 1, "uma tentativa só: sem reenvio automático");
+    const saidas = s.rpcs("nx_cv_saida");
+    assert.equal(saidas.length, 1);
+    assert.equal(saidas[0].params.p_msg.status, "pendente", "em dúvida: pendente, NUNCA falhou");
+    assert.match(saidas[0].params.p_msg.wamid, new RegExp(`^cw:${K_A1}:orbita-p-[0-9a-f]{32}$`), "id provisório, como no texto");
+    assert.equal(saidas[0].params.p_msg.tipo, "audio"); assert.equal(saidas[0].params.p_msg.midia.path, path);
+    assert.equal(r.corpo.mensagem.status, "pendente");
+    assert.equal(s.rpcs("nx_cv_ia_pausa_auto").length, 1, "pode ter saído: a IA não responde por cima");
+  }
+});
+
+test("nx-enviar mídia CodeWords: número do aparelho diferente do canal → nada sai (falha certa gravada); sem aparelho/chave → 400 antes do Storage", async () => {
+  let s = cenario();
+  let k = canalAparelho(s);
+  Object.assign(k, { codewords_numero: "+5512999990000", codewords_numero_conferido: null, codewords_conferido_em: null });
+  const path = arquivoOut(s, "pdf", "application/pdf");
+  let r = await midiaCW(s, { conversa: 601, path, mime: "application/pdf", nome: "a.pdf" });
+  assert.equal(r.corpo.ok, false); assert.equal(r.corpo.erro, "envio_falhou");
+  assert.equal(r.corpo.mensagem.status, "falhou"); assert.match(r.corpo.mensagem.erro, /não é o número deste canal/);
+  assert.equal(envioMidiaProxy(s).length, 0);
+  s = cenario();
+  k = canalAparelho(s);
+  k.codewords_phone_id = null;
+  const p2 = arquivoOut(s, "pdf", "application/pdf");
+  r = await midiaCW(s, { conversa: 601, path: p2, mime: "application/pdf" });
+  assert.equal(r.status, 400); assert.equal(r.corpo.erro, "codewords_sem_aparelho");
+  k.codewords_phone_id = "dev-a1"; k.codewords_api_key = null;
+  r = await midiaCW(s, { conversa: 601, path: p2, mime: "application/pdf" });
+  assert.equal(r.status, 400); assert.equal(r.corpo.erro, "codewords_sem_credencial");
+  assert.equal(s.estado.codewords.length, 0); assert.equal(s.estado.storage.length, 0, "nada assinado nem baixado");
+});
+
+test("nx-enviar mídia CodeWords: arquivo que não baixa, vazio ou acima de 16 MB para ANTES do aparelho e solta a reserva do client_ref — o mesmo ref envia depois", async () => {
+  const s = cenario();
+  canalAparelho(s);
+  const path = `${CLI_A}/out/2026-09/11111111-2222-4333-8444-555555555557.pdf`;
+  const pedir = () => midiaCW(s, { conversa: 601, path, mime: "application/pdf", nome: "orcamento.pdf", client_ref: REF1 });
+  const semReserva = () => assert.equal(s.tab("nx_envio_refs").length, 0, "nada saiu: reserva solta");
+  // 1. ainda não está no Storage (não assina)
+  let r = await pedir();
+  assert.equal(r.status, 404); assert.equal(r.corpo.erro, "midia_nao_encontrada"); semReserva();
+  // 2. assinou, mas o download falha (Storage fora do ar / rede)
+  s.estado.arquivos.set(path, { bytes: PDF, mime: "application/pdf" });
+  for (const falha of [() => jsonResp({ message: "indisponível" }, 503), () => { throw new Error("socket hang up"); }]) {
+    s.estado.downloadHandler = falha;
+    r = await pedir();
+    assert.equal(r.status, 404); assert.equal(r.corpo.erro, "midia_nao_encontrada"); semReserva();
+  }
+  // 3. arquivo vazio (o upload não terminou)
+  s.estado.downloadHandler = () => new Response(new Uint8Array(0), { status: 200 });
+  r = await pedir();
+  assert.equal(r.status, 404); assert.equal(r.corpo.erro, "midia_nao_encontrada"); semReserva();
+  // 4. acima de 16 MB: pelo Content-Length declarado e pelo tamanho real (resposta sem Content-Length)
+  s.estado.downloadHandler = () => new Response(new Uint8Array(8), { status: 200, headers: { "content-length": String(16 * 1024 * 1024 + 1) } });
+  r = await pedir();
+  assert.equal(r.status, 400); assert.equal(r.corpo.erro, "midia_grande"); semReserva();
+  s.estado.downloadHandler = () => new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(16 * 1024 * 1024 + 1)); c.close(); } }), { status: 200 });
+  r = await pedir();
+  assert.equal(r.status, 400); assert.equal(r.corpo.erro, "midia_grande"); semReserva();
+  assert.equal(s.estado.codewords.filter(x => x.caminho.startsWith("/proxy/")).length, 0, "o aparelho nunca foi chamado");
+  assert.equal(s.rpcs("nx_cv_saida").length, 0, "nenhuma saída gravada");
+  assert.equal(s.rpcs("nx_cv_ref_liberar").length, 6, "cada recusa soltou a reserva");
+  // 5. resolvido o problema, o MESMO client_ref envia (uma vez só)
+  s.estado.downloadHandler = null;
+  r = await pedir();
+  assert.equal(r.status, 200); assert.equal(r.corpo.ok, true); assert.equal(r.corpo.repetida, undefined);
+  assert.equal(envioMidiaProxy(s).length, 1);
+  const de_novo = await pedir();
+  assert.equal(de_novo.corpo.repetida, true); assert.equal(de_novo.corpo.mensagem.id, r.corpo.mensagem.id);
+  assert.equal(envioMidiaProxy(s).length, 1, "a repetição não manda o arquivo outra vez");
+});
+
+test("nx-enviar mídia CodeWords: dois pedidos simultâneos com o mesmo client_ref → um arquivo só; saída em dúvida repete como ambígua, sem 2ª ordem ao aparelho", async () => {
+  const s = cenario();
+  canalAparelho(s);
+  const path = arquivoOut(s, "jpg", "image/jpeg");
+  const pedir = ref => midiaCW(s, { conversa: 601, path, mime: "image/jpeg", nome: "foto.jpg", client_ref: ref });
+  const [a, b] = await Promise.all([pedir(REF1), pedir(REF1)]);
+  assert.deepEqual([a.status, b.status].sort(), [200, 409], "simultâneos: um envia, o outro espera");
+  assert.equal(envioMidiaProxy(s).length, 1, "o cliente recebe UMA foto");
+  s.estado.codewordsHandler = () => jsonResp({ error: "gateway" }, 504);
+  const c = await pedir(REF2);
+  assert.equal(c.corpo.ambigua, true);
+  const d = await pedir(REF2);
+  assert.equal(d.corpo.ok, true); assert.equal(d.corpo.ambigua, true); assert.equal(d.corpo.repetida, true);
+  assert.equal(d.corpo.mensagem.id, c.corpo.mensagem.id);
+  assert.equal(envioMidiaProxy(s).length, 2, "o aparelho não recebeu uma 2ª ordem para o mesmo ref");
+});
+
+test("nx-enviar mídia: áudio WAV só existe no canal CodeWords — em canal Meta é midia_tipo ANTES de reservar, assinar ou enviar; o resto do canal Meta segue igual", async () => {
+  const s = cenario();
+  const wav = arquivoOut(s, "wav", "audio/wav");
+  for (const mime of ["audio/wav", "audio/x-wav", "AUDIO/WAV; codecs=1"]) {
+    const r = await midiaCW(s, { conversa: 601, path: wav, mime, nome: "audio-orbita-1.wav", client_ref: REF1 });
+    assert.equal(r.status, 400, mime); assert.equal(r.corpo.erro, "midia_tipo", mime);
+  }
+  assert.equal(s.rpcs("nx_cv_ref_reservar").length, 0, "recusado antes da reserva");
+  assert.equal(s.estado.storage.length, 0, "nada assinado nem baixado");
+  assert.equal(s.estado.graph.length, 0, "o WAV nunca chega à Graph");
+  assert.equal(s.rpcs("nx_cv_saida").length, 0);
+  // o nx-midia aceita subir WAV (o canal só é conhecido na hora de enviar); apelido audio/x-wav → .wav
+  for (const mime of ["audio/wav", "audio/x-wav"]) {
+    const up = await ler(await midia(painel("nx-midia", { acao: "subir", nome: "audio-orbita-1.wav", mime, tamanho: 32000 }), ENV, s.deps()));
+    assert.equal(up.corpo.ok, true, mime);
+    assert.match(up.corpo.path, new RegExp(`^${CLI_A}/out/2026-09/[0-9a-f-]{36}\\.wav$`), mime);
+  }
+  assert.equal((await ler(await midia(painel("nx-midia", { acao: "subir", mime: "audio/wav", tamanho: 17 * 1024 * 1024 }), ENV, s.deps()))).corpo.erro, "midia_grande", "WAV até 16 MB");
+  assert.deepEqual(tipoAceito("audio/wav"), { ext: "wav", max: 16 * 1024 * 1024, grupo: "audio" });
+  assert.deepEqual(tipoAceito("audio/x-wav"), tipoAceito("audio/wav"));
+  assert.equal(soAparelho("audio/x-wav; rate=16000"), true); assert.equal(soAparelho("audio/ogg"), false);
+  assert.equal(tipoGraph("audio/wav"), null, "a Graph não tem tipo para WAV");
+  assert.equal(tipoGraph("audio/ogg"), "audio"); assert.equal(tipoGraph("application/pdf"), "document");
+  assert.equal(extensaoDe("audio/x-wav"), "wav");
+  // canal Meta com os tipos de sempre: link assinado para a Graph, janela de 24 h exigida, nada baixado, nada no aparelho
+  const pdf = arquivoOut(s, "pdf", "application/pdf");
+  const ok = await midiaCW(s, { conversa: 601, path: pdf, mime: "application/pdf", nome: "orcamento.pdf", legenda: "Seu orçamento" });
+  assert.equal(ok.corpo.ok, true);
+  assert.equal(graphMsgs(s)[0].document.link, `${SUPA}/storage/v1/object/sign/nx-midia/${pdf}?token=ler-3600`);
+  assert.equal(s.estado.storage.some(l => l.startsWith("GET ")), false, "canal Meta não baixa o arquivo: manda o link");
+  assert.equal(s.estado.codewords.length, 0);
+  assert.equal(s.rpcs("nx_cv_saida")[0].params.p_msg.wamid, "wamid.OUT-1");
+  const fora = await midiaCW(s, { conversa: 602, path: pdf, mime: "application/pdf" });
+  assert.equal(fora.status, 400); assert.equal(fora.corpo.erro, "fora_da_janela", "a janela de 24 h continua valendo no canal Meta");
+});
+
+test("nx-enviar CodeWords: modelo da Meta continua recusado no aparelho (codewords_tipo_nao_suportado) e a fila automática continua só texto", async () => {
+  const s = cenario();
+  canalAparelho(s);
+  const TPL = "7e7e7e7e-0000-4000-8000-000000000001";
+  s.tab("nx_templates").find(t => t.id === "tpl-conf").id = TPL;
+  const r = await ler(await enviar(painel("nx-enviar", { acao: "template", conversa: 601, template_id: TPL, parametros: ["João", "amanhã às 14h"], client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(r.status, 400); assert.equal(r.corpo.erro, "codewords_tipo_nao_suportado");
+  assert.equal(s.tab("nx_envio_refs").length, 0, "recusado antes do canal: reserva solta");
+  assert.equal(s.estado.codewords.filter(x => x.caminho.startsWith("/proxy/")).length, 0);
+  const fonte = readFileSync(join(RAIZ, "supabase/functions/_compartilhado/enviar.js"), "utf8");
+  const fila = fonte.slice(fonte.indexOf("async function enviarItem"), fonte.indexOf("export async function pegarLote"));
+  assert.ok(!/enviarMidiaCodeWords|enviarMidiaCanal/.test(fila), "a fila (automações) não envia mídia");
+  assert.match(fila, /só envia texto/);
 });
 
 test("nx-enviar: o modo workflow/Runtime API (service_id, /run/) foi removido do envio — só o aparelho; client_ref é a IDEMPOTÊNCIA do painel (M36), não um workflow", () => {

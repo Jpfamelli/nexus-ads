@@ -1138,7 +1138,8 @@ async function enviarPedido(tmp, o) {
         o.path = s.path;
       }
       definirProgresso(tmp, 100, "entregando", convId);
-      r = await A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: o.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined });
+      // sem responde_a: mídia nunca vai como citação (e o aparelho do CodeWords nem tem citação)
+      r = await A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: o.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined, tamanho: o.arquivo.size });
     } else {
       r = await A.api.fn("nx-enviar", { acao: "template", conversa: convId, template_id: o.template.id, parametros: o.parametros || [] });
     }

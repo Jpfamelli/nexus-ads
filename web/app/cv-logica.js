@@ -371,9 +371,12 @@ const MB = 1024 * 1024;
 const TIPOS_IMAGEM = new Set(["image/jpeg", "image/png", "image/webp"]);
 const TIPOS_16 = new Set(["video/mp4", "video/3gpp", "audio/aac", "audio/mp4", "audio/mpeg", "audio/amr", "audio/ogg",
   "application/pdf", "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint", "text/plain"]);
+/** WAV: só o número conectado pelo CodeWords aceita (a Meta recusa). É também o formato em que a tela entrega o áudio gravado nesse canal. */
+export const MIME_WAV = "audio/wav";
+const APELIDOS_WAV = new Set(["audio/x-wav", "audio/wave", "audio/vnd.wave", "audio/x-pn-wav"]);   // o mesmo WAV, como cada navegador/sistema o chama
 const EXT_MIME = Object.freeze({
   jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", heic: "image/heic", heif: "image/heif", mp4: "video/mp4", "3gp": "video/3gpp",
-  aac: "audio/aac", m4a: "audio/mp4", mp3: "audio/mpeg", amr: "audio/amr", ogg: "audio/ogg", opus: "audio/ogg",
+  aac: "audio/aac", m4a: "audio/mp4", mp3: "audio/mpeg", amr: "audio/amr", ogg: "audio/ogg", opus: "audio/ogg", wav: MIME_WAV,
   pdf: "application/pdf", doc: "application/msword", xls: "application/vnd.ms-excel", ppt: "application/vnd.ms-powerpoint",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -383,17 +386,25 @@ const EXT_MIME = Object.freeze({
 /** Tipo que o navegador informou, ou deduzido da extensão (arquivo sem type). */
 export function mimeDe(arquivo) {
   const t = String(arquivo && arquivo.type || "").toLowerCase().split(";")[0].trim();
-  if (t) return t;
+  if (t) return APELIDOS_WAV.has(t) ? MIME_WAV : t;
   const ext = String(arquivo && arquivo.name || "").toLowerCase().split(".").pop();
   return EXT_MIME[ext] || "";
 }
 
-/** validarArquivo({name,type,size}) → {ok, erro?, mime, tipo:'imagem'|'video'|'audio'|'documento', limite} */
-export function validarArquivo(arquivo) {
+/**
+ * validarArquivo({name,type,size}, {provedor}) → {ok, erro?, mime, tipo:'imagem'|'video'|'audio'|'documento', limite, wav?}
+ * `provedor` é o do canal da conversa ("meta" se não vier). O WAV só passa em número do CodeWords; na Meta volta midia_tipo com
+ * wav:true, para a tela dizer o motivo certo em vez do aviso genérico.
+ */
+export function validarArquivo(arquivo, { provedor = "meta" } = {}) {
   const mime = mimeDe(arquivo);
   const size = Number(arquivo && arquivo.size) || 0;
   let tipo = null, limite = 16 * MB;
   if (TIPOS_IMAGEM.has(mime)) { tipo = "imagem"; limite = 5 * MB; }
+  else if (mime === MIME_WAV) {
+    if (provedor !== "codewords") return { ok: false, erro: "midia_tipo", mime, tipo: null, limite, wav: true };
+    tipo = "audio";
+  }
   else if (mime.startsWith("video/") && TIPOS_16.has(mime)) tipo = "video";
   else if (mime.startsWith("audio/") && TIPOS_16.has(mime)) tipo = "audio";
   else if (TIPOS_16.has(mime) || mime.startsWith("application/vnd.openxmlformats-officedocument.")) tipo = "documento";
@@ -401,6 +412,36 @@ export function validarArquivo(arquivo) {
   if (size <= 0) return { ok: false, erro: "midia_tipo", mime, tipo, limite };
   if (size > limite) return { ok: false, erro: "midia_grande", mime, tipo, limite };
   return { ok: true, mime, tipo, limite };
+}
+
+/* ------------------------------------------------------------ áudio gravado em número do CodeWords: PCM → WAV */
+export const WAV_TAXA = 16000;
+/**
+ * wavDePcm(amostras, taxa) → Uint8Array com um WAV PCM de 16 bits, mono, little-endian: cabeçalho RIFF de 44 bytes + as amostras.
+ * `amostras` é o canal único já reamostrado (Float32Array em [-1, 1]; o que passar disso é cortado e o que não for número vira silêncio).
+ * WAV 16 kHz mono é o formato que o aparelho do CodeWords entrega como mensagem de voz, qualquer que seja o formato que o navegador grava.
+ */
+export function wavDePcm(amostras, taxa = WAV_TAXA) {
+  const pcm = amostras && typeof amostras.length === "number" ? amostras : [];
+  const hz = Math.round(Number(taxa)) > 0 ? Math.round(Number(taxa)) : WAV_TAXA;
+  const n = pcm.length;
+  const v = new DataView(new ArrayBuffer(44 + n * 2));
+  const escrever = (pos, txt) => { for (let i = 0; i < txt.length; i++) v.setUint8(pos + i, txt.charCodeAt(i)); };
+  escrever(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); escrever(8, "WAVE");
+  escrever(12, "fmt "); v.setUint32(16, 16, true);       // o bloco "fmt " tem 16 bytes
+  v.setUint16(20, 1, true);                                // 1 = PCM sem compressão
+  v.setUint16(22, 1, true);                                // mono
+  v.setUint32(24, hz, true);
+  v.setUint32(28, hz * 2, true);                           // bytes por segundo: taxa × 2 bytes × 1 canal
+  v.setUint16(32, 2, true);                                // bytes por amostra
+  v.setUint16(34, 16, true);                               // bits por amostra
+  escrever(36, "data"); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const x = Number(pcm[i]);
+    const a = Number.isFinite(x) ? Math.max(-1, Math.min(1, x)) : 0;
+    v.setInt16(44 + i * 2, Math.round(a < 0 ? a * 0x8000 : a * 0x7fff), true);
+  }
+  return new Uint8Array(v.buffer);
 }
 
 /** 1536 → "1,5 KB" */

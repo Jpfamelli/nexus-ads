@@ -17,6 +17,11 @@
    GET /connections · POST /connections {phone_number, service_path?} (90 s) ·
    PUT /connections/{phone_id}/subscribe {service_path} · POST /proxy/send/message?
    phone_id= (form-urlencoded phone+message, 60 s) · GET /proxy/chat/{jid}/messages.
+   Mídia (multipart/form-data, 75 s; o mesmo contrato já usado em produção na IndyCar):
+   POST /proxy/send/image (phone, caption?, image) · /proxy/send/audio (phone, audio —
+   SEM caption; WAV 16 kHz mono chega como mensagem de voz) · /proxy/send/file (phone,
+   caption?, file — documento e vídeo; vídeo chega como arquivo). O Content-Type do
+   multipart é do fetch (boundary): nunca definido à mão.
    HTTP 200 NÃO é entrega; timeout/5xx é AMBÍGUO (nunca reenviar sozinho).
    ============================================================ */
 import { criarDb } from "./db.js";
@@ -27,11 +32,14 @@ import {
 } from "./comum.js";
 import { hojeSP } from "./nucleo.js";
 import { montarInstrucoes, montarReceita } from "./codewords_prompt.js";
+import { extensaoDe, mimeBase } from "./midia.js";
 
 export const CW_BASE = "https://runtime.codewords.ai/run/whatsapp_device_manager";
 export const MAX_CORPO = 64 * 1024;
 export const ID_OK = /^[A-Za-z0-9._:=+/@-]{1,160}$/;
-export const PRAZOS = { conexoes: 15_000, parear: 90_000, inscrever: 60_000, enviar: 60_000, mensagens: 20_000 };
+// enviarMidia: a tela espera 100 s; conferência do aparelho (15 s) + download do arquivo + envio têm de caber nisso
+export const PRAZOS = { conexoes: 15_000, parear: 90_000, inscrever: 60_000, enviar: 60_000, enviarMidia: 75_000, mensagens: 20_000 };
+export const MAX_MIDIA = 16 * 1024 * 1024;   // teto do WhatsApp (e do bucket nx-midia)
 const CONFERENCIA_MS = 10 * 60_000;          // número do aparelho conferido vale 10 min
 const ESTADO_CONECTADO = /^(logged_in|connected)$/i;   // exato: "disconnected" contém "connected"
 const MOTIVOS = new Set(["pausada", "ia_desligada", "grupo", "duplicada", "bloqueado", "optout", "limite", "eco", "saida", "lid_sem_numero"]);
@@ -343,11 +351,12 @@ export async function idEstavel(canalId, p, agora = Date.now()) {
    ============================================================ */
 
 /** Chamada ao device manager. Nunca lança: {ok, status, dados, texto, rede}. */
-async function chamarCW(cred, caminho, { metodo = "GET", corpo, form, ms = PRAZOS.conexoes, fetch } = {}) {
+async function chamarCW(cred, caminho, { metodo = "GET", corpo, form, multipart, ms = PRAZOS.conexoes, fetch } = {}) {
   const f = comPrazo(fetch || globalThis.fetch, ms);
   const headers = { Authorization: String(cred?.codewords_api_key ?? "") };   // chave crua, sem "Bearer"
   let body;
-  if (form) { headers["Content-Type"] = "application/x-www-form-urlencoded"; body = new URLSearchParams(form).toString(); }
+  if (multipart) body = multipart;   // FormData: o fetch escreve o Content-Type com o boundary (definido à mão, o proxy não acha o arquivo)
+  else if (form) { headers["Content-Type"] = "application/x-www-form-urlencoded"; body = new URLSearchParams(form).toString(); }
   else if (corpo !== undefined) { headers["Content-Type"] = "application/json"; body = JSON.stringify(corpo); }
   let r;
   try { r = await f(`${CW_BASE}${caminho}`, { method: metodo, headers, body }); }
@@ -474,38 +483,97 @@ export async function conferirNumero(db, cred, o = {}) {
 const textoNumeroDiferente = (cred, a) =>
   `O aparelho pareado é o +${a.numero_aparelho}, não o número deste canal (${cred.codewords_numero}). Nada sai até refazer o pareamento em Configurações › Números.`;
 
+/* Envio pelo aparelho (texto e mídia): as mesmas barreiras antes e a mesma leitura da resposta depois. */
+const falhaEnvio = (tipo, t, ambigua = false) => ({ ok: false, provedor: "codewords", tipo, ambigua, erro: { title: t } });
+
+/** Canal sem chave/aparelho ou destino @lid → falha (nada sai); senão null. */
+function barreiraDoCanal(cred, destino) {
+  if (!cred?.codewords_api_key) return falhaEnvio("sem_chave", "Este número está sem a chave do CodeWords. Configure em Configurações › Números.");
+  if (!cred?.codewords_phone_id) return falhaEnvio("sem_aparelho", "Este número ainda não foi pareado no CodeWords. Use «Parear» em Configurações › Números.");
+  if (ehJidLid(destino)) return falhaEnvio("dados", "Este contato veio do WhatsApp sem número de telefone (id interno @lid): não dá para responder por aqui.");
+  return null;
+}
+
+/** Aparelho pareado é outro número (conferido pelo banco, cache de 10 min) → falha (nada sai); senão null. */
+async function barreiraDoNumero(cred, o) {
+  if (!o.db || o.conferir === false) return null;
+  const c = await conferirNumero(o.db, cred, o);
+  return c === false
+    ? falhaEnvio("numero_diferente", `O aparelho pareado não é o número deste canal (${cred.codewords_numero}). Nada foi enviado: refaça o pareamento em Configurações › Números.`)
+    : null;
+}
+
+/** Resposta do proxy → resultado do envio. Sucesso só com code SUCCESS/message_id; timeout/5xx/corpo ilegível = ambígua. */
+function lerEnvio(cred, r) {
+  if (!r.ok) { const t = traduzirErroCW(r); return falhaEnvio(t.tipo, t.texto, t.ambigua); }
+  const d = r.dados;
+  if (!OBJ(d)) return falhaEnvio("formato", "O CodeWords respondeu sem confirmação legível. A mensagem pode ter saído: confira no celular antes de mandar de novo.", true);
+  const recusa = falhaNoCorpo(d);
+  if (recusa) return falhaEnvio("recusado", recusa);
+  const id = String(d.message_id ?? d.results?.message_id ?? d.data?.message_id ?? d.results?.id ?? "").trim();
+  const sucesso = /^success$/i.test(String(d.code ?? d.status ?? "")) || !!id;
+  if (!sucesso) return falhaEnvio("sem_confirmacao", "O CodeWords não confirmou o envio (sem SUCCESS nem message_id). A mensagem pode ter saído: confira no celular antes de mandar de novo.", true);
+  const providerId = ID_OK.test(id) ? id : `orbita-p-${crypto.randomUUID().replace(/-/g, "")}`;
+  return { ok: true, provedor: "codewords", providerId, wamid: `cw:${cred.canal_id}:${providerId}`, provisorio: !ID_OK.test(id) };
+}
+
 /**
  * Envia TEXTO pelo aparelho (proxy do device manager, form-urlencoded, 60 s).
  * Nunca lança. Sucesso só com code SUCCESS/message_id; timeout/5xx = ambígua (NUNCA reenviar sozinho).
  * @returns {{ok:true, provedor:'codewords', providerId, wamid, provisorio?}|{ok:false, provedor, tipo, ambigua, erro:{title}}}
  */
 export async function enviarTextoCodeWords(cred, destino, texto, o = {}) {
-  const falha = (tipo, t, ambigua = false) => ({ ok: false, provedor: "codewords", tipo, ambigua, erro: { title: t } });
-  if (!cred?.codewords_api_key) return falha("sem_chave", "Este número está sem a chave do CodeWords. Configure em Configurações › Números.");
-  if (!cred?.codewords_phone_id) return falha("sem_aparelho", "Este número ainda não foi pareado no CodeWords. Use «Parear» em Configurações › Números.");
+  const barrado = barreiraDoCanal(cred, destino);
+  if (barrado) return barrado;
   const tel = soDigitos(destino);
   const msg = String(texto ?? "").trim();
-  if (ehJidLid(destino)) return falha("dados", "Este contato veio do WhatsApp sem número de telefone (id interno @lid): não dá para responder por aqui.");
-  if (tel.length < 8 || tel.length > 15 || !msg || msg.length > 4096) return falha("dados", "Telefone ou texto inválido para o CodeWords.");
-  if (o.db && o.conferir !== false) {
-    const c = await conferirNumero(o.db, cred, o);
-    if (c === false) {
-      return falha("numero_diferente", `O aparelho pareado não é o número deste canal (${cred.codewords_numero}). Nada foi enviado: refaça o pareamento em Configurações › Números.`);
-    }
-  }
+  if (tel.length < 8 || tel.length > 15 || !msg || msg.length > 4096) return falhaEnvio("dados", "Telefone ou texto inválido para o CodeWords.");
+  const outroNumero = await barreiraDoNumero(cred, o);
+  if (outroNumero) return outroNumero;
   const r = await chamarCW(cred, `/proxy/send/message?phone_id=${encodeURIComponent(cred.codewords_phone_id)}`, {
     metodo: "POST", form: { phone: tel, message: msg }, ms: o.timeoutMs ?? PRAZOS.enviar, fetch: o.fetch,
   });
-  if (!r.ok) { const t = traduzirErroCW(r); return falha(t.tipo, t.texto, t.ambigua); }
-  const d = r.dados;
-  if (!OBJ(d)) return falha("formato", "O CodeWords respondeu sem confirmação legível. A mensagem pode ter saído: confira no celular antes de mandar de novo.", true);
-  const recusa = falhaNoCorpo(d);
-  if (recusa) return falha("recusado", recusa);
-  const id = String(d.message_id ?? d.results?.message_id ?? d.data?.message_id ?? d.results?.id ?? "").trim();
-  const sucesso = /^success$/i.test(String(d.code ?? d.status ?? "")) || !!id;
-  if (!sucesso) return falha("sem_confirmacao", "O CodeWords não confirmou o envio (sem SUCCESS nem message_id). A mensagem pode ter saído: confira no celular antes de mandar de novo.", true);
-  const providerId = ID_OK.test(id) ? id : `orbita-p-${crypto.randomUUID().replace(/-/g, "")}`;
-  return { ok: true, provedor: "codewords", providerId, wamid: `cw:${cred.canal_id}:${providerId}`, provisorio: !ID_OK.test(id) };
+  return lerEnvio(cred, r);
+}
+
+// rota e campo do arquivo no proxy por tipo: foto → send/image; áudio → send/audio; documento e vídeo → send/file
+// (vídeo não foi testado no proxy como vídeo: vai como arquivo)
+const ROTA_MIDIA = { image: "image", audio: "audio", video: "file", document: "file" };
+
+/** Nome do arquivo para o multipart: sem barras, caracteres de controle ou reservados; vazio → "arquivo.<ext do mime>". */
+export function nomeDoArquivo(nome, mime) {
+  const limpo = String(nome ?? "").replace(/[\u0000-\u001f\u007f]/g, "").replace(/[\\/:*?"<>|]/g, "_").trim().replace(/^\.+/, "").slice(0, 150);
+  return limpo || `arquivo.${extensaoDe(mime)}`;
+}
+
+/**
+ * Envia MÍDIA pelo aparelho (proxy do device manager, multipart/form-data, 75 s): foto, áudio, vídeo ou documento.
+ * Nunca lança; mesmas barreiras e mesma leitura da resposta do texto (timeout/5xx = ambígua, NUNCA reenviar sozinho).
+ * @param {{grupo:'image'|'audio'|'video'|'document', bytes:Uint8Array|ArrayBuffer|Blob, mime?:string, nome?:string, legenda?:string}} midia
+ * @returns {{ok:true, provedor:'codewords', providerId, wamid, provisorio?}|{ok:false, provedor, tipo, ambigua, erro:{title}}}
+ */
+export async function enviarMidiaCodeWords(cred, destino, midia, o = {}) {
+  const barrado = barreiraDoCanal(cred, destino);
+  if (barrado) return barrado;
+  const tel = soDigitos(destino);
+  const campo = Object.hasOwn(ROTA_MIDIA, String(midia?.grupo)) ? ROTA_MIDIA[midia.grupo] : null;
+  if (tel.length < 8 || tel.length > 15 || !campo) return falhaEnvio("dados", "Telefone ou tipo de arquivo inválido para o CodeWords.");
+  const bytes = midia.bytes;
+  const tamanho = bytes instanceof Blob ? bytes.size : bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes) ? bytes.byteLength : 0;
+  if (!tamanho) return falhaEnvio("dados", "O arquivo está vazio ou não pôde ser lido. Nada foi enviado: anexe de novo.");
+  if (tamanho > MAX_MIDIA) return falhaEnvio("dados", "O arquivo passa de 16 MB, o limite do WhatsApp. Nada foi enviado.");
+  const outroNumero = await barreiraDoNumero(cred, o);
+  if (outroNumero) return outroNumero;
+  const mime = mimeBase(midia.mime) || "application/octet-stream";
+  const legenda = String(midia.legenda ?? "").trim().slice(0, 1024);
+  const fd = new FormData();
+  fd.append("phone", tel);
+  if (legenda && campo !== "audio") fd.append("caption", legenda);   // o proxy de áudio não aceita legenda
+  fd.append(campo, new Blob([bytes], { type: mime }), nomeDoArquivo(midia.nome, mime));
+  const r = await chamarCW(cred, `/proxy/send/${campo}?phone_id=${encodeURIComponent(cred.codewords_phone_id)}`, {
+    metodo: "POST", multipart: fd, ms: o.timeoutMs ?? PRAZOS.enviarMidia, fetch: o.fetch,
+  });
+  return lerEnvio(cred, r);
 }
 
 /** Mensagens de uma conversa no aparelho. Envelope diferente de {results:{data:[]}} é ERRO. */

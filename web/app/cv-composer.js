@@ -7,6 +7,9 @@
    nunca vai ao WhatsApp); "Sugerir com IA" (põe o texto no campo,
    nunca envia); responder citando. Janela de 24 h fechada trava o
    texto e oferece modelo; resolvida pede "Reabrir".
+   Número do CodeWords (aparelho): anexa e grava como na Meta, sem
+   janela de 24 h, sem modelos e sem citação; o áudio gravado vira
+   WAV 16 kHz mono antes de subir e o vídeo chega como arquivo.
    ============================================================ */
 
 export function criarComposer(A) {
@@ -20,7 +23,7 @@ export function criarComposer(A) {
   const ta = h("textarea", { rows: 1, placeholder: "Mensagem  ·  / para respostas rápidas", "aria-label": "Mensagem", maxlength: 4096 });
   const rotNota = h("div", { class: "cvx-rot-nota" }, ui.icone("nota"), "Nota interna — só a equipe vê");
   const campo = h("div", { class: "cvx-campo" }, rotNota, ta);
-  const arquivo = h("input", { type: "file", hidden: true, accept: "image/jpeg,image/png,image/webp,video/mp4,video/3gpp,audio/aac,audio/mp4,audio/mpeg,audio/amr,audio/ogg,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain" });
+  const arquivo = h("input", { type: "file", hidden: true, accept: "image/jpeg,image/png,image/webp,video/mp4,video/3gpp,audio/aac,audio/mp4,audio/mpeg,audio/amr,audio/ogg,audio/wav,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain" });
   const btClipe = h("button", { type: "button", class: "bt-icone", "aria-label": "Anexar arquivo", title: "Anexar (foto, vídeo, áudio, documento até 16 MB)" }, ui.icone("clipe"));
   const btAudio = h("button", { type: "button", class: "bt-icone cvx-audio", "aria-label": "Gravar áudio", title: "Gravar áudio para enviar" }, ui.icone("microfone"));
   const btModelos = h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Enviar modelo aprovado", title: "Modelos aprovados" }, A.icone("modelo"));
@@ -28,11 +31,11 @@ export function criarComposer(A) {
   const btIA = h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Sugerir resposta com IA", title: "Sugerir com IA" }, ui.icone("ia"));
   const btMaisM = h("button", { type: "button", class: "bt-icone so-estreito", "aria-label": "Mais opções", title: "Mais" }, ui.icone("mais"));
   const btEnviar = h("button", { type: "button", class: "bt bt-prim cvx-enviar", "aria-label": "Enviar" }, ui.icone("enviar"));
-  const btInfo = h("button", { type: "button", class: "bt-icone cvx-info", "aria-label": "Por que não dá para anexar?", "aria-expanded": "false", title: "Por que não dá para anexar?", hidden: true }, ui.icone("info"));
+  const btInfo = h("button", { type: "button", class: "bt-icone cvx-info", "aria-label": "Por que não dá para gravar áudio?", "aria-expanded": "false", title: "Por que não dá para gravar áudio?", hidden: true }, ui.icone("info"));
   const ferr = h("div", { class: "cvx-ferr" }, btClipe, btInfo, btAudio, btModelos, btNota, btIA, btMaisM);
   const linha = h("div", { class: "cvx-linha" }, ferr, campo, btEnviar);
   const capInfo = h("p", { class: "cvx-cap-info", id: "cvx-cap-info", role: "status", "aria-live": "polite", hidden: true });
-  let infoAberta = false, infoTimer = null;   // o aviso do canal só aparece quando a pessoa toca no clipe ou no ⓘ (não ocupa a conversa o tempo todo)
+  let infoAberta = false, infoTimer = null;   // o aviso (navegador que não grava áudio) só aparece quando a pessoa toca no ⓘ (não ocupa a conversa o tempo todo)
   const tempoGravacao = h("span", { class: "cvx-rec-tempo", role: "timer", "aria-live": "off" }, "00:00");
   const btCancelarGravacao = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Cancelar");
   const painelGravacao = h("div", { class: "cvx-gravacao", role: "status", "aria-live": "polite", hidden: true },
@@ -78,6 +81,13 @@ export function criarComposer(A) {
       try { return MR.isTypeSupported(tipo); } catch { return false; }
     }) || null;
   }
+  /** CodeWords: a gravação sai no formato que o navegador tiver e a tela converte para WAV (paraWav) — basta existir gravador e decodificador. */
+  function gravaWav() {
+    return typeof globalThis.MediaRecorder === "function" && !!(globalThis.AudioContext || globalThis.webkitAudioContext)
+      && !!(globalThis.OfflineAudioContext || globalThis.webkitOfflineAudioContext);
+  }
+  /** Dá para gravar neste navegador, para o canal da conversa? Na Meta só com ogg/opus ou m4a prontos; no CodeWords, qualquer formato (vira WAV). */
+  function podeGravar() { return !!globalThis.isSecureContext && (usaCodeWords() ? gravaWav() : !!formatoGravacao()); }
   let gravacao = null;
   function pararGravacao(cancelar = false) {
     const atual = gravacao;
@@ -135,33 +145,31 @@ export function criarComposer(A) {
     btEnviar.title = modoNota ? "Salvar nota" : "Enviar";
     ui.limpar(btEnviar); btEnviar.appendChild(ui.icone(modoNota ? "check" : "enviar"));
     const codeWords = usaCodeWords();
-    const formatoAudio = formatoGravacao();
+    const gravavel = podeGravar();
     btClipe.hidden = false;
-    btModelos.hidden = usaCodeWords();
-    btClipe.setAttribute("aria-disabled", String(codeWords || modoNota || s !== "ok"));   // não é "disabled": o toque precisa explicar o motivo
-    btClipe.title = codeWords ? "Este canal CodeWords envia texto; use um canal WhatsApp Cloud API para enviar mídia."
-      : "Anexar foto, vídeo, áudio ou documento (até 16 MB)";
+    btModelos.hidden = codeWords;                    // modelo aprovado é coisa da Meta
+    btClipe.setAttribute("aria-disabled", String(modoNota || s !== "ok"));   // anexo vale nos dois canais (Meta e CodeWords)
+    btClipe.title = "Anexar foto, vídeo, áudio ou documento (até 16 MB)";
     btAudio.hidden = false;
     const gravando = !!gravacao;
-    btAudio.disabled = !gravando && (codeWords || modoNota || s !== "ok" || !formatoAudio || !globalThis.isSecureContext);
+    btAudio.disabled = !gravando && (modoNota || s !== "ok" || !gravavel);
     btAudio.title = gravando ? "Parar e revisar o áudio"
-      : codeWords ? "O canal CodeWords não envia mídia nesta integração."
-      : !formatoAudio || !globalThis.isSecureContext ? "Gravação indisponível neste navegador; você ainda pode anexar um áudio salvo."
+      : !gravavel ? "Gravação indisponível neste navegador; você ainda pode anexar um áudio salvo."
       : "Gravar áudio para enviar (até 1 minuto)";
     btAudio.setAttribute("aria-label", btAudio.title);
     btAudio.setAttribute("aria-pressed", String(gravando));
     ui.limpar(btAudio); btAudio.appendChild(ui.icone(gravando ? "parar" : "microfone"));
-    const temAviso = codeWords || !formatoAudio || !globalThis.isSecureContext;
+    const temAviso = !gravavel;
     btInfo.hidden = !temAviso;
     btInfo.setAttribute("aria-controls", "cvx-cap-info");
     if (!temAviso) infoAberta = false;
     capInfo.hidden = !temAviso || !infoAberta;
     btInfo.setAttribute("aria-expanded", String(temAviso && infoAberta));
     capInfo.textContent = codeWords
-      ? "Este número CodeWords envia texto. Para anexar documentos e áudios, selecione um canal WhatsApp Cloud API."
+      ? "Este navegador não grava áudio. Você ainda pode anexar um áudio salvo (MP3, OGG, AAC, M4A ou WAV)."
       : "Este navegador não grava áudio em formato aceito. Você ainda pode anexar um áudio MP3, OGG, AAC ou M4A.";
     btIA.disabled = modoNota || s !== "ok";
-    btModelos.disabled = usaCodeWords() || modoNota || !(s === "ok" || s === "janela");
+    btModelos.disabled = codeWords || modoNota || !(s === "ok" || s === "janela");
     btNota.disabled = !A.podeEscrever;
     btNota.setAttribute("aria-pressed", String(modoNota));
     btIA.hidden = !(A.base && A.base.ia);
@@ -349,7 +357,8 @@ export function criarComposer(A) {
   }
 
   /* ---------------- anexos */
-  function aceitaAnexo() { return !usaCodeWords() && !modoNota && situacao() === "ok"; }
+  /** Anexo e gravação valem nos dois canais (Meta e CodeWords). No CodeWords a situação nunca é "janela" nem "sem_token" (ver situacao()). */
+  function aceitaAnexo() { return !modoNota && situacao() === "ok"; }
   function mostrarInfoCanal(abrir = !infoAberta) {
     clearTimeout(infoTimer);
     infoAberta = abrir;
@@ -358,25 +367,49 @@ export function criarComposer(A) {
   }
   btInfo.addEventListener("click", () => mostrarInfoCanal());
   btClipe.addEventListener("click", () => {
-    if (btClipe.getAttribute("aria-disabled") === "true") { if (usaCodeWords()) mostrarInfoCanal(true); return; }
+    if (btClipe.getAttribute("aria-disabled") === "true") return;
     arquivo.value = ""; arquivo.click();
   });
   arquivo.addEventListener("change", () => { const f = arquivo.files && arquivo.files[0]; if (f) anexar(f); });
   btAudio.addEventListener("click", () => gravacao ? pararGravacao(false) : iniciarGravacao());
   btCancelarGravacao.addEventListener("click", () => pararGravacao(true));
 
+  /** Áudio gravado (no formato que o navegador tiver) → WAV 16 kHz mono 16 bits, que o aparelho do CodeWords entrega como mensagem de voz. */
+  async function paraWav(blob) {
+    const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
+    const OAC = globalThis.OfflineAudioContext || globalThis.webkitOfflineAudioContext;
+    const ctx = new AC();
+    let audio;
+    try {
+      const bruto = await blob.arrayBuffer();
+      // Safari antigo só tem a forma com callbacks; os demais devolvem a promessa
+      audio = await new Promise((ok, no) => { const p = ctx.decodeAudioData(bruto, ok, no); if (p && typeof p.then === "function") p.then(ok, no); });
+    } finally { try { await ctx.close(); } catch { /* ok */ } }      // contexto aberto segura o dispositivo de áudio: fecha mesmo se a decodificação falhar
+    if (!audio || !(audio.duration > 0)) throw new Error("audio_vazio");
+    const off = new OAC(1, Math.max(1, Math.round(audio.duration * L.WAV_TAXA)), L.WAV_TAXA);   // 1 canal a 16 kHz: reamostra e junta estéreo em mono
+    const fonte = off.createBufferSource();
+    fonte.buffer = audio;
+    fonte.connect(off.destination);
+    fonte.start();
+    const pronto = await off.startRendering();
+    return new Blob([L.wavDePcm(pronto.getChannelData(0), L.WAV_TAXA)], { type: L.MIME_WAV });
+  }
+
   async function iniciarGravacao() {
     if (!aceitaAnexo()) { atualizar(); return; }
-    const mimePreferido = formatoGravacao();
-    if (!mimePreferido || !globalThis.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-      ui.toast("A gravação não está disponível aqui. Anexe um áudio salvo em MP3, OGG, AAC ou M4A.", { tipo: "info" });
+    const emWav = usaCodeWords();                    // CodeWords: grava no formato padrão do navegador e converte para WAV ao parar
+    const mimePreferido = emWav ? null : formatoGravacao();
+    if (!podeGravar() || !navigator.mediaDevices?.getUserMedia) {
+      ui.toast(emWav ? "A gravação não está disponível aqui. Anexe um áudio salvo em MP3, OGG, AAC, M4A ou WAV."
+        : "A gravação não está disponível aqui. Anexe um áudio salvo em MP3, OGG, AAC ou M4A.", { tipo: "info" });
       return;
     }
     let fluxo;
     try {
       fluxo = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (!el.isConnected || !aceitaAnexo()) { fluxo.getTracks().forEach(t => t.stop()); return; }
-      const rec = new MediaRecorder(fluxo, { mimeType: mimePreferido });
+      const idGravacao = conv() ? conv().id : null;  // o áudio é para ESTA conversa (a conversão para WAV leva um instante)
+      const rec = emWav ? new MediaRecorder(fluxo) : new MediaRecorder(fluxo, { mimeType: mimePreferido });
       const atual = { rec, fluxo, partes: [], cancelar: false, timer: null, inicio: Date.now() };
       gravacao = atual;
       rec.addEventListener("dataavailable", ev => { if (ev.data && ev.data.size) atual.partes.push(ev.data); });
@@ -388,9 +421,22 @@ export function criarComposer(A) {
         painelGravacao.hidden = true;
         atualizar();
         if (atual.cancelar) { ui.anunciar("Gravação cancelada."); return; }
-        const mime = String(rec.mimeType || mimePreferido).split(";")[0].toLowerCase();
+        const mime = String(rec.mimeType || mimePreferido || "").split(";")[0].toLowerCase();
         const blob = new Blob(atual.partes, { type: mime });
         if (!blob.size) { ui.toast("O áudio ficou vazio. Grave novamente.", { tipo: "info" }); return; }
+        if (emWav) {
+          let wav = null;
+          audioStatus.hidden = false;
+          try { wav = await paraWav(blob); } catch { wav = null; } finally { audioStatus.hidden = true; }
+          if (!wav) {      // a gravação não some calada: diz o que houve e por onde seguir
+            ui.toast("Não foi possível preparar o áudio gravado neste navegador, e ele não foi enviado. Toque no clipe para anexar um áudio salvo (MP3, OGG, AAC, M4A ou WAV).", { tipo: "erro", ms: 10000 });
+            return;
+          }
+          // a conversa mudou enquanto o áudio era convertido: ele não segue para outro cliente
+          if (!mesmaConversa(idGravacao)) { ui.toast("Você trocou de conversa enquanto o áudio era preparado: nada foi enviado. Grave de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
+          await anexar(new File([wav], `audio-orbita-${Date.now()}.wav`, { type: L.MIME_WAV }));
+          return;
+        }
         const ext = mime === "audio/mp4" ? "m4a" : "ogg";
         const arquivoAudio = new File([blob], `audio-orbita-${Date.now()}.${ext}`, { type: mime });
         await anexar(arquivoAudio);
@@ -429,6 +475,8 @@ export function criarComposer(A) {
   /* ---------------- fotos: otimiza no aparelho antes de validar (M37) */
   const otimStatus = h("p", { class: "cvx-otim", role: "status", "aria-live": "polite", hidden: true }, "Otimizando a foto…");
   el.insertBefore(otimStatus, linha);
+  const audioStatus = h("p", { class: "cvx-otim", role: "status", "aria-live": "polite", hidden: true }, "Preparando o áudio…");   // CodeWords: gravação virando WAV
+  el.insertBefore(audioStatus, linha);
 
   /** Decodifica a foto (EXIF corrigido), reduz o lado maior para 1600 px e recodifica em JPEG 0,82 (cai para 0,72 e 0,62 se passar do alvo).
       Devolve {arquivo, original, otimizada}; lança "foto_ilegivel" quando o navegador não decodifica (ex.: HEIC fora do Safari). */
@@ -478,10 +526,10 @@ export function criarComposer(A) {
   async function anexar(f) {
     const idInicio = conv() ? conv().id : null;      // o arquivo foi escolhido para ESTA conversa
     if (!aceitaAnexo()) {
-      ui.toast(usaCodeWords() ? "Este canal CodeWords envia apenas texto por enquanto."
-        : situacao() === "janela" ? "Fora da janela de 24 h só vale modelo aprovado." : "Não dá para anexar agora.", { tipo: "info" });
+      ui.toast(situacao() === "janela" ? "Fora da janela de 24 h só vale modelo aprovado." : "Não dá para anexar agora.", { tipo: "info" });
       return;
     }
+    const codeWords = usaCodeWords();                // o canal é o da conversa: não muda enquanto ela for a aberta
     // foto de câmera tem 3 a 8 MB: reduz no aparelho ANTES de olhar o limite de 5 MB (e a pessoa vê o ganho no resumo)
     let otim = null;
     if (L.ehFoto(f)) {
@@ -499,10 +547,11 @@ export function criarComposer(A) {
       if (!aceitaAnexo()) return;
     }
     const escolhidoInicial = otim ? otim.arquivo : f;
-    const v = L.validarArquivo(escolhidoInicial);
+    const v = L.validarArquivo(escolhidoInicial, { provedor: provedorCanal() });   // WAV só vale em número do CodeWords
     if (!v.ok) {
       ui.toast(v.erro === "midia_grande"
         ? `Arquivo grande demais: ${L.tamanhoLegivel(escolhidoInicial.size)} (limite ${v.tipo === "imagem" ? "5 MB para fotos" : "16 MB"}).`
+        : v.wav ? "Este número não aceita WAV: use MP3, OGG, AAC ou M4A."
         : "Tipo de arquivo não aceito pelo WhatsApp. Use foto (JPG, PNG, WEBP), vídeo MP4, áudio (MP3, OGG, AAC), PDF ou Office.", { tipo: "erro" });
       return;
     }
@@ -521,7 +570,9 @@ export function criarComposer(A) {
     if (chkOriginal) chkOriginal.addEventListener("change", () => {
       info.textContent = chkOriginal.checked ? `Vai a foto original (${L.tamanhoLegivel(f.size)}).` : resumo;
     });
-    const corpo = h("div", { class: "pilha" }, h("div", { class: "cv-anexo-previa" }, previa), info,
+    // o aparelho do CodeWords não manda vídeo como vídeo: ele vai pelo envio de arquivo, e a pessoa fica sabendo antes de mandar
+    const avisoVideo = codeWords && v.tipo === "video" ? h("p", { class: "sub cv-aviso-canal" }, "Neste número o vídeo chega como arquivo para baixar.") : null;
+    const corpo = h("div", { class: "pilha" }, h("div", { class: "cv-anexo-previa" }, previa), info, avisoVideo,
       chkOriginal ? h("label", { class: "chip-check cv-original", for: "cvx-original" }, chkOriginal, `Enviar a original (${L.tamanhoLegivel(f.size)})`) : null,
       h("div", { class: "campo" }, h("label", { for: "cvx-legenda" }, "Legenda"), leg));
     const ok = await ui.modal({ titulo: `Enviar arquivo para ${nomeDestino()}`, corpo, largura: "m", aoAbrir: () => setTimeout(() => { if (!leg.disabled) leg.focus(); }, 40),
@@ -532,6 +583,8 @@ export function criarComposer(A) {
     if (!mesmaConversa(idInicio)) { ui.toast("A conversa aberta mudou antes do envio: o arquivo não foi enviado. Anexe de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
     const usaOriginal = !!(chkOriginal && chkOriginal.checked);
     const arquivoFinal = usaOriginal ? f : escolhidoInicial;
+    // o aparelho do CodeWords não cita mensagem: a faixa «Respondendo…» sai para o arquivo não parecer uma resposta citada
+    if (codeWords && respondendo) { respondendo = null; desenharResposta(); }
     await A.acoes.enviar({ tipo: "midia", conversa: idInicio, arquivo: arquivoFinal, validacao: usaOriginal ? vOriginal : v, legenda: v.tipo === "audio" ? "" : leg.value.trim() });
   }
 
