@@ -413,6 +413,14 @@ await teste("seções de configuração com os ids fixos do §7.2", async () => 
   assert.ok(/export const secoesConfig/.test(s));
 });
 
+await teste("canal CodeWords: «Abrir Automações» pergunta antes de descartar o que não foi salvo (e depois de salvar não pergunta)", () => {
+  const s = ler("cv-config.js");
+  assert.match(s, /const formAlterado = \(\) => formInicial !== null && JSON\.stringify\(ui\.lerForm\(form\)\) !== formInicial/);
+  assert.match(s, /if \(formAlterado\(\) && !await ui\.confirmar\(\{ titulo: "Sair sem salvar\?"[\s\S]{0,200}perigo: true \}\)\) return;\s*if \(modalApi\) modalApi\.fechar\(null\);\s*ctx\.navegar\("#\/automacoes"\)/,
+    "a confirmação vem ANTES de fechar o modal e navegar");
+  assert.match(s, /formInicial = JSON\.stringify\(ui\.lerForm\(form\)\);\s*\/\/ salvo: nada mais a perder/, "salvar zera a alteração pendente");
+});
+
 await teste("conversas.js exporta montar/desmontar", () => {
   const s = ler("conversas.js");
   assert.ok(/export async function montar\(ctx\)/.test(s));

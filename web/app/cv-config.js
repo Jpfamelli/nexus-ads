@@ -204,7 +204,9 @@ async function montarNumeros(ctx, alvo) {
 
   async function assistenteCodeWords(canal) {
     let atual = canal ? { ...canal, codewords: { ...(canal.codewords || {}) } } : null;
-    let modalApi = null;   // o link «Abrir Automações» fecha o modal antes de navegar
+    let modalApi = null;   // o link «Abrir Automações» fecha o modal antes de navegar (e pergunta antes, se há algo sem salvar)
+    let formInicial = null;   // o que o formulário tinha ao abrir (ou ao salvar): serve para saber se há alteração perdível
+    const formAlterado = () => formInicial !== null && JSON.stringify(ui.lerForm(form)) !== formInicial;
     const cw = atual?.codewords || {};
     const corpo = h("div", { class: "pilha cfg-cw-config" });
     const form = h("form", { class: "pilha", novalidate: true });
@@ -232,7 +234,13 @@ async function montarNumeros(ctx, alvo) {
           h("p", { class: "sub" }, "O CodeWords conversa, agenda, anota como o cliente conheceu a empresa e chama a equipe pelo celular conectado; a equipe pode assumir uma conversa a qualquer momento."),
           h("p", { class: "sub" }, "Mover de etapa, notas, resumo da conversa e follow-ups são as Automações do Órbita (a IA do Claude decide e as mensagens saem por este mesmo número). As receitas de IA nascem desligadas: ligue-as em Automações para valerem. ",
             ctx.temModulo("automacoes") && ctx.pronto("automacoes") && ctx.pode("supervisor")
-              ? h("a", { class: "rel-link", href: "#/automacoes", on: { click: ev => { ev.preventDefault(); if (modalApi) modalApi.fechar(null); ctx.navegar("#/automacoes"); } } }, "Abrir Automações")
+              ? h("a", { class: "rel-link", href: "#/automacoes", on: { click: async ev => {
+                ev.preventDefault();
+                if (formAlterado() && !await ui.confirmar({ titulo: "Sair sem salvar?", texto: "As alterações deste número ainda não foram salvas e vão se perder. Salve antes, se quiser mantê-las.",
+                  rotulo: "Sair sem salvar", perigo: true })) return;
+                if (modalApi) modalApi.fechar(null);
+                ctx.navegar("#/automacoes");
+              } } }, "Abrir Automações")
               : null))),
         ui.campo({ rotulo: "IA atendendo 24h", nome: "ia_ligada", tipo: "interruptor",
           valor: cw.rota === "direta" ? false : (cw.ia_ligada ?? atual?.ia_ligada ?? true),
@@ -240,6 +248,7 @@ async function montarNumeros(ctx, alvo) {
         ui.campo({ rotulo: "A IA volta automaticamente após", nome: "ia_volta_horas", tipo: "select", valor: String(cw.ia_volta_horas ?? 6),
           opcoes: [{ valor: "1", rotulo: "1 hora" }, { valor: "2", rotulo: "2 horas" }, { valor: "4", rotulo: "4 horas" }, { valor: "6", rotulo: "6 horas" }, { valor: "8", rotulo: "8 horas" }, { valor: "12", rotulo: "12 horas" }, { valor: "24", rotulo: "24 horas" }, { valor: "48", rotulo: "48 horas" }, { valor: "72", rotulo: "72 horas" }, { valor: "168", rotulo: "7 dias" }, { valor: "0", rotulo: "Somente quando a equipe devolver" }] }),
         h("p", { class: "sub" }, "Esse prazo começa quando alguém da equipe assume uma conversa."))].filter(Boolean));
+    formInicial = JSON.stringify(ui.lerForm(form));
     const operacoes = h("section", { class: "cfg-cw-ops pilha", hidden: !atual?.id },
       h("div", { class: "cfg-cw-ops-head" }, h("h3", { class: "titulo-sec" }, "Conectar e validar"),
         h("p", { class: "sub" }, "Confira o estado do aparelho antes de encaminhar mensagens.")));
@@ -274,6 +283,7 @@ async function montarNumeros(ctx, alvo) {
         const r = await ctx.api.rpcC("nx_codewords_canal_salvar", { p_canal: payload });
         const id = r?.canal?.id || r?.canal?.canal_id || atual?.id;
         chave.value = "";
+        formInicial = JSON.stringify(ui.lerForm(form));   // salvo: nada mais a perder
         const listaNova = await ctx.api.rpcC("nx_canais_listar");
         canais = Array.isArray(listaNova) ? listaNova : listaNova?.canais || canais;
         atual = canais.find(x => x.id === id) || { ...(atual || {}), id, nome: d.nome,
