@@ -1,6 +1,6 @@
 # Melhorias de 01/10/2026 — Frente D (Conversas, Início, Anúncios/Relatórios, Automações, Configurações)
 
-Plano: `docs/orbita/MELHORIAS-20261001.md` (seção "Frente D"). O follow-up R119 foi publicado pelo PR #2. O adendo R122 da mídia CodeWords está na branch `codex/midia-codewords`; não acrescenta migração e a versão do app permanece `20261001e` até o passo de release.
+Plano: `docs/orbita/MELHORIAS-20261001.md` (seção "Frente D"). O follow-up R119 foi publicado pelo PR #2. O adendo R122 da mídia CodeWords está na branch `codex/midia-codewords`, no PR #3; não acrescenta migração. O backend foi publicado pela tag `funcoes-20261001-5`; o front está em `20261001f` e aguarda os gates do PR e do Netlify.
 
 Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://127.0.0.1:4740/app/?dev-falso=1&dev=1#/conversas/901` (ou `#/inicio`, `#/anuncios`, `#/relatorios`, `#/config`).
 

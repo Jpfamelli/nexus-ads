@@ -142,3 +142,11 @@ antigas: nas migrações `20260928*`, `20260929a` e `20260930*`.
 Se o próprio workflow não puder rodar (Actions fora do ar, segredo revogado), a publicação fica parada até alguém
 com o CLI funcionando seguir os mesmos passos 4–9 à mão. Não usar o deploy por MCP para estas funções
 (130–230 KB de fontes por função).
+
+## R122 — mídia CodeWords (01/10/2026)
+
+Tag `funcoes-20261001-5`, commit `0583e2f`: workflow completo verde, suíte 19/19, montagem das sete funções e
+sondas de autenticação. As sete ficaram `ACTIVE`, `verify_jwt=false`: nx-whatsapp v9, nx-relatorio v6,
+nx-ciclo v6, nx-enviar v8, nx-midia v5, nx-ia v6 e nx-codewords v7. Sondas: WhatsApp 401/403, CodeWords
+401/405 e nx-enviar 401; os dois testes de corpo 413 responderam em 0,186 s e 0,157 s. A tela do app
+continua na versão `20261001e` até a etapa seguinte de publicação do front.
