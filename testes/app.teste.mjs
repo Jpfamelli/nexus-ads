@@ -2650,5 +2650,60 @@ await teste("M05: ui.deslizar com movimento reduzido não anda com o dedo, só m
   assert.match(CSS_APP, /\.deslizavel\[data-armado="1"\] \{ box-shadow: inset 0 0 0 2px color-mix\(in srgb, var\(--c-prod\) 55%, transparent\); \}/);
 });
 
+/* ---------- M06: carregar, falhar e voltar ---------- */
+await teste("M06: esqueleto — cabeçalho com a geometria do ui.cabecalho (sem rótulo por padrão; {rotulo, sub, acao} ligam e desligam), base visível sobre papel e cartão e faixa clara que varre", () => {
+  const d = comDom();
+  try {
+    const a = U.esqueleto("inicio");
+    assert.ok(a.querySelector(".sk-cab") && a.querySelector(".sk-titulo") && a.querySelector(".sk-sub-l .sk-sub") && a.querySelector(".sk-acao"));
+    assert.equal(a.querySelector(".sk-rotulo-l"), null, "a tela nova não tem eyebrow: o esqueleto também não");
+    const b = U.esqueleto("lista", { cabecalho: { rotulo: true, sub: false, acao: false } });
+    assert.ok(b.querySelector(".sk-rotulo-l .sk-rotulo")); assert.equal(b.querySelector(".sk-sub-l"), null); assert.equal(b.querySelector(".sk-acao"), null);
+    assert.equal(U.esqueleto("kanban").querySelector(".sk-cab"), null, "miolo continua sem cabeçalho");
+    assert.equal(U.esqueleto("tabela", { n: 2, cabecalho: false }).querySelector(".sk-cab"), null);
+  } finally { d.fim(); }
+  assert.match(CSS_APP, /\.sk-rotulo-l \{[^}]*height: calc\(var\(--fs-peq\) \* 1\.35\); margin-bottom: \.3rem;/);
+  assert.match(CSS_APP, /\.sk-titulo \{ height: calc\(var\(--fs-h1\) \* 1\.1\);/);
+  assert.match(CSS_APP, /\.sk-sub-l \{[^}]*height: calc\(var\(--fs-corpo\) \* 1\.5\); margin-top: \.45rem;/);
+  // a cor: o bloco se vê sobre o papel E sobre o cartão (≥ 1,2:1) e a faixa de brilho se distingue do bloco, nas 4 marcas claras; no escuro vale a escada de sempre
+  const BRANCO_ = "#FFFFFF";
+  for (const [nome, m] of Object.entries(CLARO_4)) {
+    const { vars } = T.derivarTema(m);
+    const base = T.misturar(vars["--c-fundo"], vars["--c-texto"], 0.11), luz = T.misturar(vars["--c-sup"], BRANCO_, 0.4);
+    assert.ok(T.contraste(base, vars["--c-fundo"]) >= 1.2, `${nome}: bloco sobre o papel ${T.contraste(base, vars["--c-fundo"]).toFixed(2)}`);
+    assert.ok(T.contraste(base, vars["--c-sup"]) >= 1.2, `${nome}: bloco sobre o cartão ${T.contraste(base, vars["--c-sup"]).toFixed(2)}`);
+    assert.ok(T.contraste(luz, base) >= 1.1, `${nome}: a faixa clara se distingue do bloco`);
+  }
+  assert.match(CSS_APP, /--c-sk-base: color-mix\(in srgb, var\(--c-texto\) 11%, var\(--c-fundo\)\); --c-sk-luz: color-mix\(in srgb, var\(--c-sup\) 60%, white\);/);
+  assert.match(CSS_APP, /html\[data-esquema="escuro"\] \{ --c-sk-base: var\(--c-sup-2\); --c-sk-luz: var\(--c-sup-3\);/);
+  assert.match(CSS_APP, /\.sk::after \{[^}]*animation: skVarre 1\.4s linear infinite/);
+  assert.match(CSS_APP, /\.sk-card \{[^}]*background: var\(--c-poco\)/);
+  // a ação do cabeçalho do esqueleto cai para a linha de baixo no celular, como a do .cab real (medido no Chrome: 69,3 px em 1440, 63,6 em 768 e 117,3 em 390, iguais ao ui.cabecalho)
+  assert.match(CSS_APP, /\.sk-cab \{[^}]*flex-wrap: wrap;/); assert.match(CSS_APP, /\.sk-cab-txt \{ flex: 1 1 18rem;/);
+  assert.match(CSS_APP, /@media \(pointer: coarse\) \{ \.sk-acao \{ height: 44px; \} \}/);
+  assert.doesNotMatch(CSS_APP, /\.sk-acao \{ display: none; \}/, "a ação do esqueleto não some no celular");
+});
+await teste("M06: erro de carregamento nunca mostra código técnico nem URL (http_503, servico_indisponivel, import(), Failed to fetch) e o cartão se refaz ao voltar a rede", async () => {
+  for (const cod of ["http_500", "http_502", "http_503", "http_504", "http_429", "http_408", "servico_indisponivel", "sem_conexao", "tempo_esgotado"]) {
+    const t = U.mensagemErro({ codigo: cod });
+    assert.doesNotMatch(t, /http|_|import|fetch|\.js|https?:/i, `${cod} → ${t}`);
+    assert.match(t, /[a-zà-ú]{4,} [a-zà-ú]{2,}/i, "frase em português");
+  }
+  assert.equal(U.mensagemErro({ codigo: "sem_acesso" }), "sem_acesso", "código de produto sem tradução passa (o shell liga o tradutor)");
+  assert.equal(U.fraseDeErro("http_418"), "http_418", "só 5xx, 408 e 429 viram frase");
+  const d = comDom();
+  try {
+    let n = 0;
+    const c = U.erroCartao({ codigo: "http_503" }, () => { n++; });
+    d.doc.body.appendChild(c);
+    assert.doesNotMatch(c.textContent, /http|import|https?:/i); assert.match(c.textContent, /tentamos de novo sozinhos/i, "5xx é transitório: promete tentar de novo");
+    d.disparar("orbita:online"); assert.equal(n, 1);
+    for (const msg of ["Failed to fetch dynamically imported module: https://orbita.app/app/crm.js?v=1", "TypeError: Failed to fetch", "Load failed"]) {
+      const e = U.erroCartao(new TypeError(msg), () => {}); d.doc.body.appendChild(e);
+      assert.doesNotMatch(e.textContent, /https?:|import|fetch|\.js|module/i, e.textContent);
+    }
+  } finally { d.fim(); }
+});
+
 console.log(`\n${ok} ok · ${falhas} falha(s)${avisos ? ` · ${avisos} aviso(s)` : ""}\n`);
 process.exit(falhas ? 1 : 0);

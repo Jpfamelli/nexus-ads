@@ -58,7 +58,8 @@
   --c-sev-info: #2B5A80; --c-sev-aten: #546100; --c-sev-crit: #A2221B;
   --c-prod-crm: #6B4713; --c-prod-ads: #2C5B84; --c-prod-atend: #4E524A;
   --c-prod: var(--c-prod-crm);
-  --c-sk-base: var(--c-sup-2); --c-sk-luz: var(--c-sup);   /* esqueleto: base e faixa de brilho */
+  /* esqueleto (M06): bloco visível sobre o papel E sobre o cartão (≥ 1,2:1) e faixa clara que varre (cartão + 40 % de branco) */
+  --c-sk-base: color-mix(in srgb, var(--c-texto) 11%, var(--c-fundo)); --c-sk-luz: color-mix(in srgb, var(--c-sup) 60%, white);
   --c-pop: var(--c-sup); --c-hover: var(--c-sup-2);   /* o que flutua (menu, popover, aviso) e o realce de item sob o mouse; o escuro sobe um degrau (abaixo) */
   --c-bolha-in: #DFDDD7;
   --c-bolha-out: #E8DCC9;
@@ -425,7 +426,7 @@ html[data-esquema="claro"] input[type="date"]::-webkit-calendar-picker-indicator
 /* esqueleto (M06): bloco com faixa clara que varre (1,4 s); com movimento reduzido só pulsa a opacidade */
 .sk { position: relative; display: block; overflow: hidden; border-radius: 8px; background: var(--c-sk-base); }
 .sk::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(100deg, transparent 20%, var(--c-sk-luz) 50%, transparent 80%); animation: skVarre 1.4s linear infinite; }
-html[data-esquema="escuro"] { --c-sk-luz: var(--c-sup-3); --c-pop: var(--c-sup-2); --c-hover: var(--c-sup-3); }
+html[data-esquema="escuro"] { --c-sk-base: var(--c-sup-2); --c-sk-luz: var(--c-sup-3); --c-pop: var(--c-sup-2); --c-hover: var(--c-sup-3); }
 @keyframes skVarre { to { transform: translateX(100%); } }
 @keyframes skPulso { from { opacity: .55; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
@@ -447,7 +448,7 @@ html[data-esquema="escuro"] { --c-sk-luz: var(--c-sup-3); --c-pop: var(--c-sup-2
 .sk-th .sk { height: 9px; width: 50%; }
 .sk-kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(240px, 280px); gap: 1rem; overflow: hidden; }
 .sk-col { display: flex; flex-direction: column; gap: .6rem; padding: .9rem; border-radius: var(--r); background: var(--c-sup); border: 1px solid var(--c-borda); }
-.sk-card { padding: .9rem; border-radius: var(--r-p); background: var(--c-sup-2); }
+.sk-card { padding: .9rem; border-radius: var(--r-p); background: var(--c-poco); }
 .giro { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--c-prim-luz); border-right-color: transparent; animation: gira var(--t-giro) linear infinite; display: inline-block; }
 
 /* ============================================================
@@ -1277,12 +1278,16 @@ html[data-produto="atendimento"] { --c-prod: var(--c-prod-atend); }
 .deslizavel[data-armado="1"] { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--c-prod) 55%, transparent); }   /* passou do limiar: "solte para acionar" (o único aviso quando o movimento é reduzido) */
 
 /* ---- esqueletos com a forma de cada tela (ui.esqueleto) ---- */
-.sk-cab { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; margin: .4rem 0 1.4rem; }
-.sk-cab-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .55rem; }
-.sk-rotulo { height: var(--fs-peq); width: 6rem; }
+.sk-cab { display: flex; justify-content: space-between; align-items: flex-end; gap: .8rem 1.5rem; flex-wrap: wrap; min-width: 0; margin: .4rem 0 1.4rem; }   /* igual ao .cab: no celular a ação cai para a linha de baixo nos dois */
+/* mesma geometria do ui.cabecalho (rótulo 13 px × 1,35 + .3rem, título = h1 × 1,1, subtítulo = corpo × 1,5 + .45rem): a troca não desloca nada */
+.sk-cab-txt { flex: 1 1 18rem; min-width: 0; display: flex; flex-direction: column; }
+.sk-rotulo-l { display: flex; align-items: center; height: calc(var(--fs-peq) * 1.35); margin-bottom: .3rem; }
+.sk-rotulo { height: .65rem; width: 6rem; }
 .sk-titulo { height: calc(var(--fs-h1) * 1.1); width: min(60%, 22rem); }
-.sk-sub { height: .9rem; width: min(80%, 30rem); }
+.sk-sub-l { display: flex; align-items: center; height: calc(var(--fs-corpo) * 1.5); margin-top: .45rem; }
+.sk-sub { height: .8rem; width: min(80%, 30rem); }
 .sk-acao { width: 7.5rem; height: 40px; border-radius: 999px; flex: none; }
+@media (pointer: coarse) { .sk-acao { height: 44px; } }   /* o botão real tem 44 px no toque */
 .sk-pilha { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
 .sk-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); gap: 1rem; }
 .sk-grande { min-height: 14rem; }
@@ -1307,7 +1312,6 @@ html[data-produto="atendimento"] { --c-prod: var(--c-prod-atend); }
   .sk-chat { grid-template-columns: minmax(0, 1fr); }
   .sk-chat-painel { display: none; }
   .sk-agenda-grade { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sk-acao { display: none; }
 }
 
 /* ---- vazios por tipo (ui.vazio) ---- */

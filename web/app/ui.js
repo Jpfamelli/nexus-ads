@@ -49,10 +49,20 @@ export function configurar({ mensagemErro } = {}) { if (typeof mensagemErro === 
 
 const RE_ERRO_IMPORT = /dynamically imported module|importing a module script|module script failed|error loading dynamically/i;
 const RE_ERRO_REDE = /failed to fetch|networkerror|load failed|network request failed|fetch failed|err_internet|err_network/i;
+const FRASES_CODIGO = {
+  sem_conexao: "Sem conexão com o servidor. Confira a internet e tente de novo.",
+  tempo_esgotado: "O servidor demorou para responder. Tente de novo.",
+  servico_indisponivel: "O serviço está indisponível agora. Tentamos de novo sozinhos; se continuar, tente em alguns minutos.",
+  http_408: "O servidor demorou para responder. Tente de novo.",
+  http_429: "Muitas tentativas seguidas. Aguarde um instante e tente de novo.",
+  http_5xx: "O servidor está com problema agora. Tente de novo em instantes.",
+};
 /** Tira jargão e endereço de mensagens que vêm do navegador ("Failed to fetch dynamically imported module: https://…"):
     erro de transporte e de import() viram frase em português, sem URL. Texto que já é frase de produto passa intacto. */
 export function fraseDeErro(texto, { bruto = false } = {}) {
   const t = String(texto ?? "");
+  const porCodigo = FRASES_CODIGO[t.trim()] || (/^http_5\d\d$/.test(t.trim()) ? FRASES_CODIGO.http_5xx : null);
+  if (porCodigo) return porCodigo;                    // rede de segurança: código técnico nunca chega à tela (o api.js do shell também traduz)
   if (RE_ERRO_IMPORT.test(t)) return "Não foi possível abrir esta tela agora. Confira a internet e tente de novo.";
   if (RE_ERRO_REDE.test(t)) return "Sem conexão com o servidor. Confira a internet e tente de novo.";
   if (bruto && /https?:\/\//i.test(t)) return "Não deu certo agora. Tente de novo.";
@@ -659,14 +669,20 @@ export function vazio({ tipo, titulo, texto, acao, icone: ic = "mais", acoes, pa
 /** esqueleto(tipo, opcoes) → Node com a forma da tela (as mesmas classes de grade do conteúdo; a troca não desloca).
     tipo: "inicio" | "chat" | "lista" | "kanban" | "ads" | "tabela" | "agenda" | "cartoes" (legado).
     opcoes: número (= {n}) ou {n, cabecalho}. `cabecalho` (título + subtítulo + ação) vem ligado nas telas inteiras
-    (inicio, chat, ads, agenda) e desligado em lista/kanban/tabela/cartoes, que são só o miolo. */
+    (inicio, chat, ads, agenda) e desligado em lista/kanban/tabela/cartoes, que são só o miolo. `cabecalho` também aceita
+    {rotulo = false, sub = true, acao = true} para espelhar o ui.cabecalho da tela (sem o rótulo de cima, que a tela nova não tem). */
 export function esqueleto(tipo = "lista", opcoes = {}) {
   const o = typeof opcoes === "number" ? { n: opcoes } : (opcoes || {});
   const n = o.n ?? (tipo === "inicio" ? 4 : tipo === "ads" ? 8 : 6);
   const telaInteira = tipo === "inicio" || tipo === "chat" || tipo === "ads" || tipo === "agenda";
-  const comCab = o.cabecalho ?? telaInteira;
+  const comCab = !!(o.cabecalho ?? telaInteira);
+  const cabOpc = { rotulo: false, sub: true, acao: true, ...(o.cabecalho && typeof o.cabecalho === "object" ? o.cabecalho : {}) };
   const b = cls => h("span", { class: ["sk", cls] });
-  const cab = () => h("div", { class: "sk-cab" }, h("div", { class: "sk-cab-txt" }, b("sk-rotulo"), b("sk-titulo"), b("sk-sub")), b("sk-acao"));
+  const cab = () => h("div", { class: "sk-cab" },
+    h("div", { class: "sk-cab-txt" },
+      cabOpc.rotulo ? h("div", { class: "sk-rotulo-l" }, b("sk-rotulo")) : null, b("sk-titulo"),
+      cabOpc.sub ? h("div", { class: "sk-sub-l" }, b("sk-sub")) : null),
+    cabOpc.acao ? b("sk-acao") : null);
   const cartaoKpi = () => h("div", { class: "sk-cartao" }, b("sk-l1"), b("sk-num"), b("sk-l2"));
   const itensLista = k => Array.from({ length: k }, () => h("div", { class: "sk-item" }, h("span", { class: "sk sk-av" }), h("div", { class: "sk-txt" }, b("sk-l1"), b("sk-l2"))));
   let corpo;
