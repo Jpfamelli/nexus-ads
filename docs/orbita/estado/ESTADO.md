@@ -1,12 +1,12 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-09-30 20:15 (America/Sao_Paulo)
+Atualizado: 2026-09-30 21:30 (America/Sao_Paulo)
 Branch: `codex/orbita`
 PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
 
 ## Atualização atual — 2026-09-30 20:15 -03
 
-Correções pós-E2E commitadas (sem push): 413 imediato com corpo cancelado nas Edge Functions (`99003de`), logo largo no menu (`e11770b`), CSP também em `<meta>` para o GitHub Pages (`97460df`), publicação das funções por **GitHub Actions** com tag `funcoes-*` (`cf1a2a5`, guia em `docs/orbita/DEPLOY-FUNCOES.md`) e os E2E-A/B registrados (`dd12be4`). Suíte 15/15, `deno check` 7/7. No ar continuam nx-whatsapp v5, nx-enviar v3, nx-codewords v2, nx-ciclo v4, nx-relatorio v4, nx-ia v2 e nx-midia v2: a correção @lid e o 413 só vão ao ar na primeira publicação pela Actions, que depende do segredo `SUPABASE_ACCESS_TOKEN` no repositório. Sobra `nx_midia_lixo` 21 (órfã do E2E-B) apagada; `nx_execucoes` 95 fica como histórico. Detalhes em `F8.md`.
+Correções pós-E2E commitadas (sem push): 413 nas Edge Functions por drenagem e descarte do corpo (`31404a4`, correção candidata que substitui `99003de`; só vale como corrigida quando a sonda de produção passar), plano de volta com a sonda de 413 só como aviso (`5b03f41`), actions do deploy fixadas por SHA (`5818937`), logo largo no menu (`e11770b`), CSP também em `<meta>` para o GitHub Pages (`97460df`), publicação das funções por **GitHub Actions** com tag `funcoes-*` (`cf1a2a5`, guia em `docs/orbita/DEPLOY-FUNCOES.md`) e os E2E-A/B registrados (`dd12be4`). Suíte 15/15, `deno check` 7/7. No ar continuam nx-whatsapp v5, nx-enviar v3, nx-codewords v2, nx-ciclo v4, nx-relatorio v4, nx-ia v2 e nx-midia v2: a correção @lid e o 413 só vão ao ar na primeira publicação pela Actions, que depende do segredo `SUPABASE_ACCESS_TOKEN` no repositório. Sobra `nx_midia_lixo` 21 (órfã do E2E-B) apagada; `nx_execucoes` 95 fica como histórico. Detalhes em `F8.md`.
 
 ## Atualização anterior — 2026-09-30 09:36 -03
 
