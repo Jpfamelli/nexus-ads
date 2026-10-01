@@ -49,7 +49,7 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
 | M07 desfazer | **feito** (uso em M25/M35) | ver "Etapa 2 · M07" abaixo | uso nas telas (C: M25, D: M35) |
 | M08 formulários | **feito** (uso nas telas é de C/D) | ver "Etapa 2 · M08" abaixo | uso de validar/máscaras nos formulários (C/D/B) |
 | M09 vazios | **feito** (usos nas telas são de C/D) | ver "Etapa 2 · M09" abaixo | trocar os vazios das telas pelos 3 tipos (C/D) |
-| M10 movimento | parcial | `.entra`, `.assenta`, `.destaque`, `G.destacar` | tirar sweep do botão e hover-lift, palco animado só em Login/Início (precisa de classe no `<body>` posta pelo shell, B), sonda CDP |
+| M10 movimento | **feito** | ver "Etapa 2 · M10" abaixo | — |
 
 ## Pendências para outras frentes
 
@@ -132,3 +132,11 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
 - **Novo:** o ícone "+" que TODO vazio sem `icone` herdava saiu: o vazio genérico (sem `tipo`) só ganha o círculo de ícone se `icone` for passado; sem ele vira título + texto + ação em coluna única (`.vazio-sem-ic`). Os ~59 usos de `ui.vazio` nos módulos que não passam ícone mudam sozinhos.
 - **Como verificar:** `node testes/app.teste.mjs` ("ui.vazio por tipo (M09)": 3 tipos, sem `innerHTML`, sem svg/círculo no genérico sem ícone, ícone padrão removido do código).
 - **Para as outras frentes:** (C) Agenda: um só "Sem consultas ou bloqueios." para a semana vazia (hoje repete em 4 cartões), Kanban "Arraste um cartão para cá" vira linha discreta; vazio do funil novo = `primeiro_uso` com "Criar funil". (D) Início sem pendência = `em_dia` (já feito em `inicio.js`), sem número/conversa = `primeiro_uso` com os passos do checklist (M32), listas filtradas sem resultado = `sem_resultado` com `acao` que limpa os filtros.
+
+### M10 · movimento com propósito — FEITO
+
+- **Saiu o enfeite:** o brilho que varria o botão primário (`.bt-prim::before`) e o hover-lift (ícones, item de menu, botão "Produtos", sombra que subia no `.bt`). Fica o aperto (`.bt:active { scale(.97) }`, resposta ao toque), `.entra`, `.assenta` e `G.destacar` (o número que mudou acende 600 ms).
+- **Palco parado por padrão.** Os 4 `infinite` do palco (brilhos A/B, aurora com `blur(74px)`, pontos) só rodam com `body.palco-vivo`. O `ui.js` liga essa classe sozinho (`ligarPalco`/`sincronizarPalco`): Login (`#publico` à vista) e Início (hash vazio, `#/` ou `#/inicio`); atualiza no `hashchange` e quando `#publico`/`#app` trocam `hidden`. A aba oculta ganha `html.aba-oculta` (`pausarEmSegundoPlano`) e o palco pausa; movimento reduzido mantém tudo parado. (Uma 1ª versão com `body:has(.publico:not([hidden]))` foi descartada: no celular emulado invalidava o estilo do documento a cada mudança de DOM.) Os únicos `infinite` restantes são de carregamento (esqueleto, giro, respiração da tela de abertura) e a órbita do Login — travado por teste.
+- **Sonda CDP (puppeteer, 6 s parado no chat, 3 rodadas, desktop 1440×900):** TaskDuration 0,160–0,167 s ANTES (HEAD do M09, com aurora) → 0,078–0,098 s DEPOIS (≤ 0,26 s com folga; recalc de estilo 0,03 → 0,013 s); `document.getAnimations()` com iteração infinita: 4 antes, 0 depois no chat/CRM e 4 no Início. No celular emulado (CPU 4×, 6 rodadas) os dois lados ficam em 0,07–0,23 s e a medida é dominada pelo ruído do pulso de 3 s do dev-falso (sem GPU no headless): não dá para afirmar ganho ali, só que não piorou.
+- **Como verificar:** `node testes/app.teste.mjs` ("M10: sem o brilho…", "M10: nenhuma animação infinita…", "M10: sincronizarPalco…").
+- **Para as outras frentes:** (B) nada a fazer para o palco (o `ui.js` cuida); se quiser outro critério de "palco vivo", é só pôr/tirar `body.palco-vivo` — a CSS não depende de mais nada. (C/D) não usar `transform` em `:hover` nem animação infinita nova; resposta ao dado = `G.destacar(el)` e `.entra`/`.assenta`.

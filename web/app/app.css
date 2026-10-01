@@ -202,11 +202,6 @@ html[data-esquema="claro"] .palco .grao { mix-blend-mode: multiply; opacity: .05
 .bt:disabled { opacity: .5; }
 .bt-prim { background: var(--c-prim); color: var(--c-prim-txt); }
 .bt-prim:hover:not(:disabled) { background: var(--c-prim-hi); }
-.bt-prim::before {
-  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background: linear-gradient(100deg, transparent 30%, var(--c-reflexo) 50%, transparent 70%); transform: translateX(-120%);
-}
-.bt-prim:hover:not(:disabled)::before { transform: translateX(120%); transition: transform var(--t-move) var(--e-out); }
 .bt-sec { background: var(--c-tinta); border-color: var(--c-borda-2); color: var(--c-texto); }
 .bt-sec:hover:not(:disabled) { border-color: var(--c-prim-luz); color: var(--c-prim-luz); }
 .bt-fant { color: var(--c-texto-2); padding-inline: .8rem; }
@@ -623,9 +618,9 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 .topo-produtos {
   display: inline-flex; align-items: center; justify-content: center; gap: .45rem; min-height: 40px; max-width: 190px;
   padding: .35rem .8rem; border: 1px solid var(--c-borda-2); border-radius: 999px; background: var(--c-tinta);
-  color: var(--c-texto); font-size: var(--fs-13); font-weight: 700; white-space: nowrap; transition: border-color var(--t-ui), background-color var(--t-ui), transform var(--t-ui);
+  color: var(--c-texto); font-size: var(--fs-13); font-weight: 700; white-space: nowrap; transition: border-color var(--t-ui), background-color var(--t-ui);
 }
-.topo-produtos:hover { border-color: var(--c-prim-luz); background: var(--c-prim-suave); transform: translateY(-1px); }
+.topo-produtos:hover { border-color: var(--c-prim-luz); background: var(--c-prim-suave); }
 .topo-produtos .ic { color: var(--c-prod); }
 /* "Seus produtos" (M04): UMA coluna de cartões de 72 px (em modal de 560 px, três colunas cortavam "Atendimento") e cada produto com o seu acento */
 .produto-grade { display: grid; grid-template-columns: minmax(0, 1fr); gap: .6rem; }
@@ -873,16 +868,13 @@ html.menu-recolhido .lat-conta { justify-content: center; }
    Luz orbital lenta no palco, navegação mais tátil e hierarquia
    consistente. Todos os efeitos usam os tokens white-label.
    ============================================================ */
-.palco .brilho-a {
-  animation: orbitaBrilhoA 32s cubic-bezier(.45, 0, .55, 1) infinite alternate;
-  transform-origin: 38% 42%;
-  will-change: transform, opacity;
-}
-.palco .brilho-b {
-  animation: orbitaBrilhoB 39s cubic-bezier(.45, 0, .55, 1) infinite alternate;
-  transform-origin: 65% 62%;
-  will-change: transform, opacity;
-}
+/* Palco (M10): PARADO por padrão — a inbox fica aberta o dia todo e a aurora com blur(74px) animada custava +36 % de CPU no chat (+46 % no celular).
+   Só se move com body.palco-vivo (o ui.js a liga sozinho no Login e no Início, ver sincronizarPalco) e pausa quando a aba fica oculta (html.aba-oculta). */
+.palco .brilho-a { transform-origin: 38% 42%; }
+.palco .brilho-b { transform-origin: 65% 62%; }
+body.palco-vivo .palco .brilho-a { animation: orbitaBrilhoA 32s cubic-bezier(.45, 0, .55, 1) infinite alternate; will-change: transform, opacity; }
+body.palco-vivo .palco .brilho-b { animation: orbitaBrilhoB 39s cubic-bezier(.45, 0, .55, 1) infinite alternate; will-change: transform, opacity; }
+
 @keyframes orbitaBrilhoA {
   0% { transform: translate3d(0, 0, 0) scale(.94); opacity: .72; }
   100% { transform: translate3d(5vw, 4vh, 0) scale(1.12); opacity: 1; }
@@ -908,8 +900,7 @@ html.menu-recolhido .lat-conta { justify-content: center; }
   background: radial-gradient(circle, var(--c-brilho-1), transparent 68%);
   pointer-events: none;
 }
-.nav-b { transition: color var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out), transform var(--t-ui) var(--e-out); }
-.nav-b:hover { transform: translateX(2px); }
+.nav-b { transition: color var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out); }
 .nav-b[aria-current="page"] {
   background: linear-gradient(100deg, color-mix(in srgb, var(--c-prim) 13%, var(--c-sup-2)), var(--c-sup-2) 72%);
   border-color: color-mix(in srgb, var(--c-prim) 20%, var(--c-borda));
@@ -917,10 +908,7 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 .topo { box-shadow: 0 10px 30px -26px var(--c-sombra); }
 .topo-empresa, .topo-dir { min-width: 0; }
 .vista { background: radial-gradient(ellipse at 96% 0%, color-mix(in srgb, var(--c-brilho-1) 58%, transparent), transparent 34rem); }
-.bt { transition: transform var(--t-micro) var(--e-out), background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out), box-shadow var(--t-ui) var(--e-out), color var(--t-ui) var(--e-out); }
-.bt:hover:not(:disabled) { box-shadow: 0 9px 22px -16px var(--c-sombra); }
-.bt-icone { transition: transform var(--t-micro) var(--e-out), background-color var(--t-ui) var(--e-out), color var(--t-ui) var(--e-out); }
-.bt-icone:hover:not(:disabled) { transform: translateY(-1px); }
+.bt { transition: transform var(--t-micro) var(--e-out), background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out), color var(--t-ui) var(--e-out); }   /* só o aperto (:active) mexe no botão; nada sobe no hover */
 .bt:focus-visible, .bt-icone:focus-visible, .nav-b:focus-visible, .barra-b:focus-visible {
   outline: 2px solid var(--c-foco);
   outline-offset: 3px;
@@ -929,10 +917,6 @@ html.menu-recolhido .lat-conta { justify-content: center; }
   .vista { background: radial-gradient(ellipse at 100% 0%, color-mix(in srgb, var(--c-brilho-1) 42%, transparent), transparent 22rem); }
   .topo { gap: .45rem; padding-inline: max(12px, env(safe-area-inset-left)); }
   .topo-dir { gap: .1rem; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .palco .brilho-a, .palco .brilho-b { animation: none; will-change: auto; }
-  .nav-b:hover, .bt-icone:hover:not(:disabled) { transform: none; }
 }
 
 /* ============================================================
@@ -1172,8 +1156,6 @@ html.menu-recolhido .lat-conta { justify-content: center; }
   filter: blur(74px);
   opacity: .7;
   transform-origin: 50% 50%;
-  animation: orbitaAurora 48s cubic-bezier(.45, 0, .55, 1) infinite alternate;
-  will-change: transform, opacity;
 }
 .palco::after {
   content: "";
@@ -1188,9 +1170,10 @@ html.menu-recolhido .lat-conta { justify-content: center; }
     radial-gradient(1px 1px at 78% 61%, color-mix(in srgb, var(--c-texto) 60%, transparent) 99%, transparent),
     radial-gradient(1.2px 1.2px at 91% 38%, color-mix(in srgb, var(--c-prim-luz) 64%, transparent) 99%, transparent);
   opacity: .45;
-  animation: orbitaPontos 16s ease-in-out infinite alternate;
-  will-change: transform, opacity;
 }
+body.palco-vivo .palco::before { animation: orbitaAurora 48s cubic-bezier(.45, 0, .55, 1) infinite alternate; will-change: transform, opacity; }
+body.palco-vivo .palco::after { animation: orbitaPontos 16s ease-in-out infinite alternate; will-change: transform, opacity; }
+html.aba-oculta .palco i, html.aba-oculta .palco::before, html.aba-oculta .palco::after { animation-play-state: paused; }
 @keyframes orbitaAurora {
   0% { transform: translate3d(-1.5%, -1%, 0) rotate(-5deg) scale(.96); opacity: .42; }
   100% { transform: translate3d(1.5%, 1%, 0) rotate(5deg) scale(1.06); opacity: .82; }
@@ -1200,7 +1183,7 @@ html.menu-recolhido .lat-conta { justify-content: center; }
   100% { transform: translate3d(0, -8px, 0); opacity: .62; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .palco::before, .palco::after { animation: none; transform: none; will-change: auto; }
+  body .palco i, body .palco::before, body .palco::after { animation: none; transform: none; will-change: auto; }
 }
 
 @media (forced-colors: active) {

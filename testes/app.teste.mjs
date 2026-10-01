@@ -839,8 +839,10 @@ await teste("acessibilidade: painel de inbox ligado à aba atual, orientação m
   assert.match(lista, /if \(A\.busca\)\s*\{[\s\S]*?abasEl\.setAttribute\("role", "group"\)/);
   assert.match(lista, /abasEl\.setAttribute\("aria-label", "Filtrar conversas por situação"\)/);
   assert.match(lista, /b\.removeAttribute\("aria-selected"\)/);
-  assert.match(kanban, /Abra um cartão e escolha ‘Mover para…’/);
-  assert.match(kanban, /\(pointer: coarse\)/, "tablet/touch também recebe instrução sem arrastar");
+  // M23 (frente C): no toque o cartão agora ARRASTA (segurar e arrastar) e a folha «Mover para…» continua como alternativa para leitor de tela e teclado
+  assert.match(kanban, /\(pointer: coarse\)/, "tablet/touch recebe a instrução certa na coluna vazia");
+  assert.match(kanban, /Segure um cartão e arraste até aqui/);
+  assert.match(kanban, /class: "bt-icone kc-mover"[^\n]*Mover «\$\{titulo\}» para outra etapa/, "botão acessível «Mover para…» em cada cartão");
   assert.match(ads, /class: "sr-only", role: "status", "aria-live": "polite"/);
   assert.doesNotMatch(ads, /class: "ads-fone", "aria-live"/);
   const envio = ler("conversas.js");
@@ -1773,7 +1775,7 @@ function criarDom() {
       this.classList = {
         add: (...c) => { const s = new Set(cls()); c.forEach(x => s.add(x)); el.attrs.set("class", [...s].join(" ")); },
         remove: (...c) => { const s = new Set(cls()); c.forEach(x => s.delete(x)); el.attrs.set("class", [...s].join(" ")); },
-        contains: c => cls().includes(c), toggle: c => { const t = !cls().includes(c); t ? this.classList.add(c) : this.classList.remove(c); return t; },
+        contains: c => cls().includes(c), toggle: (c, forca) => { const t = forca === undefined ? !cls().includes(c) : !!forca; t ? this.classList.add(c) : this.classList.remove(c); return t; },
       };
     }
     setAttribute(k, v) { this.attrs.set(k, String(v)); } getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; }
@@ -2755,6 +2757,67 @@ await teste("M07: acaoComDesfazer({firmar}) — a escrita real só roda se o toa
     assert.equal(log.filter(x => x.startsWith("servidor")).length, antes + 3, "fechar os toasts depois não firma de novo");
   } finally { d.fim(); }
   assert.match(ler("ui.js"), /async function manterItem\(item\)/); assert.match(ler("ui.js"), /addEventListener\("pagehide", aoSair\)/);
+});
+
+/* ---------- M10: movimento com propósito ---------- */
+await teste("M10: sem o brilho que varre o botão primário e sem hover-lift (ícones, menu, botão Produtos, sombra do botão); o aperto (:active) continua", () => {
+  assert.doesNotMatch(CSS_APP, /\.bt-prim::before/); assert.doesNotMatch(CSS_APP, /translateX\(-120%\)|translateX\(120%\)/, "sem sweep");
+  const semComentarios = CSS_APP.replace(/\/\*[\s\S]*?\*\//g, "");
+  const hover = [...semComentarios.matchAll(/([^{}]*:hover[^{}]*)\{([^}]*)\}/g)].filter(m => /transform:\s*translate/.test(m[2])).map(m => m[1].trim().split("\n").pop().trim());
+  assert.deepEqual(hover, [], `hover-lift: ${hover.join(" | ")}`);
+  assert.doesNotMatch(semComentarios, /\.bt:hover:not\(:disabled\) \{ box-shadow/, "sem sombra que sobe no hover do botão");
+  assert.match(CSS_APP, /\.bt:active:not\(:disabled\) \{ transform: scale\(\.97\); \}/, "o aperto do botão (resposta ao toque) fica");
+  assert.match(CSS_APP, /@keyframes assenta \{ from \{ transform: scale\(1\.015\); \} to \{ transform: none; \} \}/); assert.match(CSS_APP, /\.assenta \{ animation: assenta var\(--t-ui\) var\(--e-out\) both; \}/);
+});
+await teste("M10: nenhuma animação infinita fora do Login/Início e dos indicadores de carregamento; o palco fica parado por padrão e só se move com body.palco-vivo", () => {
+  const cod = CSS_APP.replace(/\/\*[\s\S]*?\*\//g, "");
+  const regras = [...cod.matchAll(/([^{}]+)\{([^{}]*animation:[^{}]*infinite[^{}]*)\}/g)].map(m => ({ sel: m[1].trim().split("\n").pop().trim(), nome: (/animation:\s*([\w-]+)/.exec(m[2]) || [])[1] }));
+  // carregamento (esqueleto, giro, boot) e a órbita do Login são os únicos "infinite" fora do palco
+  const CARREGANDO = new Set(["skVarre", "skPulso", "gira", "orbita-respira"]);
+  const PALCO = new Set(["orbitaBrilhoA", "orbitaBrilhoB", "orbitaAurora", "orbitaPontos"]);
+  const vistos = { palco: 0, carregando: 0, login: 0 };
+  for (const { sel, nome } of regras) {
+    if (CARREGANDO.has(nome)) { vistos.carregando++; continue; }
+    if (nome === "percorre") { assert.match(sel, /\.entrar-orbita/, `percorre só na órbita do Login: ${sel}`); vistos.login++; continue; }
+    if (PALCO.has(nome)) { assert.match(sel, /^body\.palco-vivo /, `o palco só anda com body.palco-vivo: ${sel}`); vistos.palco++; continue; }
+    assert.fail(`animação infinita fora da lista: ${sel} → ${nome}`);
+  }
+  assert.equal(vistos.palco, 4, "brilho A, brilho B, aurora e pontos"); assert.ok(vistos.carregando >= 4 && vistos.login >= 1, JSON.stringify(vistos));
+  // parado por padrão: as regras-base do palco não têm animation
+  for (const sel of [".palco .brilho-a", ".palco .brilho-b", ".palco::before", ".palco::after"]) {
+    const m = cod.match(new RegExp(`(?:^|\\n)${sel.replace(/[.:]/g, "\\$&")} \\{([^}]*)\\}`));
+    assert.ok(m, sel); assert.doesNotMatch(m[1], /animation:/, `${sel} parado por padrão`); assert.doesNotMatch(m[1], /will-change: transform/, `${sel}: sem camada promovida enquanto parado`);
+  }
+  assert.doesNotMatch(cod, /body:has\(/, "nada de body:has (invalidava o estilo do documento a cada mudança no celular)");
+  assert.match(CSS_APP, /@media \(prefers-reduced-motion: reduce\) \{\s*body \.palco i, body \.palco::before, body \.palco::after \{ animation: none;/, "movimento reduzido: palco parado mesmo com palco-vivo");
+  assert.match(CSS_APP, /html\.aba-oculta \.palco i, html\.aba-oculta \.palco::before, html\.aba-oculta \.palco::after \{ animation-play-state: paused; \}/, "aba oculta: palco pausado");
+});
+await teste("M10: sincronizarPalco liga body.palco-vivo só no Login (#publico à vista) e no Início; ligarPalco acompanha o hashchange; a aba oculta ganha html.aba-oculta", () => {
+  const d = comDom();
+  try {
+    const publico = U.h("div", { id: "publico", hidden: true }); d.doc.body.appendChild(publico);
+    const vivo = hash => U.sincronizarPalco(d.doc, { hash });
+    for (const [h, esperado] of [["", true], ["#", true], ["#/", true], ["#/inicio", true], ["#/inicio?x=1", true], ["#/inicio/sub", true],
+      ["#/conversas", false], ["#/crm", false], ["#/crm/negocio/1", false], ["#/iniciox", false], ["#/config/usuarios", false], ["#/anuncios", false]]) {
+      assert.equal(vivo(h), esperado, `rota ${JSON.stringify(h)}`); assert.equal(d.doc.body.classList.contains("palco-vivo"), esperado);
+    }
+    publico.hidden = false; assert.equal(vivo("#/conversas"), true, "Login à vista: vivo em qualquer hash"); publico.hidden = true; assert.equal(vivo("#/conversas"), false);
+    assert.equal(U.sincronizarPalco(null), false, "sem document: não quebra");
+    // ligarPalco: hashchange da janela
+    const loc = { hash: "#/crm" }, ouvintes = {}; const janela = { location: loc, addEventListener: (t, f) => { ouvintes[t] = f; }, removeEventListener: (t) => { delete ouvintes[t]; } };
+    const desligar = U.ligarPalco(d.doc, janela);
+    assert.equal(d.doc.body.classList.contains("palco-vivo"), false);
+    loc.hash = "#/inicio"; ouvintes.hashchange(); assert.equal(d.doc.body.classList.contains("palco-vivo"), true);
+    loc.hash = "#/conversas"; ouvintes.hashchange(); assert.equal(d.doc.body.classList.contains("palco-vivo"), false);
+    desligar(); assert.equal(ouvintes.hashchange, undefined);
+    // aba oculta
+    const fim = U.pausarEmSegundoPlano(d.doc);
+    assert.equal(d.doc.documentElement.classList.contains("aba-oculta"), false);
+    d.doc.hidden = true; d.doc.dispatchEvent(new d.Evento("visibilitychange")); assert.equal(d.doc.documentElement.classList.contains("aba-oculta"), true);
+    d.doc.hidden = false; d.doc.dispatchEvent(new d.Evento("visibilitychange")); assert.equal(d.doc.documentElement.classList.contains("aba-oculta"), false);
+    fim(); d.doc.hidden = true; d.doc.dispatchEvent(new d.Evento("visibilitychange")); assert.equal(d.doc.documentElement.classList.contains("aba-oculta"), false, "desligado");
+    assert.equal(typeof U.pausarEmSegundoPlano(null), "function", "sem document: devolve um desligar vazio");
+  } finally { d.fim(); }
 });
 
 console.log(`\n${ok} ok · ${falhas} falha(s)${avisos ? ` · ${avisos} aviso(s)` : ""}\n`);

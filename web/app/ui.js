@@ -1507,6 +1507,43 @@ export function barraUso(rotulo, uso, limite, { detalhe } = {}) {
 /* ============================================================
    Contratos da linguagem visual (frente A, plano de 01/10/2026)
    ============================================================ */
+/** pausarEmSegundoPlano(doc) → desligar(). Põe a classe html.aba-oculta enquanto a aba está oculta (o app.css pausa o palco animado ali).
+    Roda sozinha ao carregar o ui.js no navegador. */
+export function pausarEmSegundoPlano(doc = typeof document !== "undefined" ? document : null) {
+  if (!doc || typeof doc.addEventListener !== "function" || !doc.documentElement) return () => {};
+  const marcar = () => { try { doc.documentElement.classList.toggle("aba-oculta", !!doc.hidden); } catch { /* sem classList */ } };
+  doc.addEventListener("visibilitychange", marcar);
+  marcar();
+  return () => doc.removeEventListener("visibilitychange", marcar);
+}
+pausarEmSegundoPlano();
+
+/** sincronizarPalco(doc, loc) → body.palco-vivo ligada só quando a tela pública (#publico) está à vista ou a rota é o Início (hash vazio, "#/" ou "#/inicio").
+    Nas outras telas o palco fica parado (M10). Roda ao carregar, a cada hashchange e quando #publico/#app trocam o atributo hidden. */
+const RE_ROTA_INICIO = /^(#\/?|#\/inicio([/?].*)?)?$/;
+export function sincronizarPalco(doc = typeof document !== "undefined" ? document : null, loc = typeof location !== "undefined" ? location : null) {
+  if (!doc || !doc.body || !doc.body.classList) return false;
+  const pub = typeof doc.getElementById === "function" ? doc.getElementById("publico") : null;
+  const vivo = (!!pub && !pub.hidden) || RE_ROTA_INICIO.test((loc && loc.hash) || "");
+  doc.body.classList.toggle("palco-vivo", vivo);
+  return vivo;
+}
+export function ligarPalco(doc = typeof document !== "undefined" ? document : null, janela = typeof window !== "undefined" ? window : null) {
+  if (!doc || !janela || typeof janela.addEventListener !== "function") return () => {};
+  const sync = () => sincronizarPalco(doc, janela.location);
+  janela.addEventListener("hashchange", sync);
+  let mo = null;
+  try {
+    if (typeof MutationObserver === "function" && typeof doc.getElementById === "function") {
+      mo = new MutationObserver(sync);
+      for (const id of ["publico", "app"]) { const el = doc.getElementById(id); if (el) mo.observe(el, { attributes: true, attributeFilter: ["hidden"] }); }
+    }
+  } catch { /* sem MutationObserver: só o hashchange */ }
+  sync();
+  return () => { janela.removeEventListener("hashchange", sync); if (mo) mo.disconnect(); };
+}
+ligarPalco();
+
 function movimentoReduzido() {
   try { return typeof matchMedia === "function" && !!matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; }
 }
