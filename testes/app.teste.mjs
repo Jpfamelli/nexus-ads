@@ -1248,7 +1248,9 @@ await teste("T03: a pontuação do lead (campos.score, score_motivo, score_em) a
   for (const ruim of [null, {}, { campos: {} }, { campos: { score: "abc" } }, { campos: { score: 101 } }, { campos: { score: -1 } }, { campos: { score: "" } }, "x"])
     assert.equal(CRMLOG.pontuacao(ruim), null, JSON.stringify(ruim));
   const cartao = ler("crm-kanban.js"), gaveta = ler("crm-negocio.js");
-  assert.match(cartao, /L\.pontuacao\(c\)/); assert.match(cartao, /`Lead \$\{pont\.score\}`/);
+  assert.match(cartao, /L\.pontuacao\(c\)/);
+  // a nota aparece no cartão (selo "Lead N" até o M23; ponto/selo `kc-score` com a nota e o motivo no title desde o M24 da frente C): o que vale é a nota do lead estar lá
+  assert.match(cartao, /`Lead \$\{pont\.score\}`|"kc-score", pont\.faixa\][^\n]*String\(pont\.score\)/);
   assert.match(gaveta, /k\.L\.pontuacao\(n\)/); assert.match(gaveta, /"Pontuação do lead"/);
 });
 await teste("T03: «Valor previsto» com texto que não é número não apaga o valor (dinheiroInvalido + validar da linha editável)", () => {
