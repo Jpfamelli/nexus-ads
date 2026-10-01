@@ -33,7 +33,7 @@ begin
 end $f$;
 
 -- o cron de produção (a cada 15 s) pode estar com a trava do motor: tenta de novo
-create or replace function pg_temp.lote(p_max int default 25) returns json language plpgsql as $f$
+create or replace function pg_temp.lote(p_max int default 100) returns json language plpgsql as $f$
 declare j json;
 begin
   for i in 1 .. 40 loop
@@ -133,7 +133,7 @@ begin
     a1 := (j ->> 'id')::uuid;
     insert into public.nx_mensagens (cliente_id, conversa_id, contato_id, canal_id, direcao, tipo, corpo, status)
     values (cA, cv1, ct1, kCW, 'in', 'texto', 'quanto custa o implante?', 'recebida');
-    perform pg_temp.lote(25);
+    perform pg_temp.lote(100);
     perform pg_temp.ok((select execucoes from public.nx_automacoes where id = a1) = 1, 'motor: mensagem_recebida SEM palavras executou (' || (select execucoes from public.nx_automacoes where id = a1) || ')');
     update public.nx_automacoes set ativo = false where id = a1;
   exception when others then perform pg_temp.falha('config_ok: ' || sqlerrm); end;
@@ -202,7 +202,7 @@ begin
     a7 := (j ->> 'id')::uuid;
     cv2 := public.nx_auto_abrir_conversa(cA, ct5, kCW, null, 'T13');
     perform public.nx_cv_status(tA, cA, cv2, 'resolvida');
-    perform pg_temp.lote(25);
+    perform pg_temp.lote(100);
     perform pg_temp.ok((select count(*) from public.nx_conversas where cliente_id = cA and contato_id = ct5) = 1,
       'conversa_resolvida + mensagem: NENHUM atendimento novo (' || (select count(*) from public.nx_conversas where cliente_id = cA and contato_id = ct5) || ' conversas)');
     perform pg_temp.ok(exists (select 1 from public.nx_envios_fila f where f.automacao_id = a7 and f.conversa_id = cv2 and f.texto like 'Como foi seu atendimento, Eva?'),
@@ -215,7 +215,7 @@ begin
     a8 := (j ->> 'id')::uuid;
     cv3 := public.nx_auto_abrir_conversa(cA, ct4, kCW, null, 'T13');
     perform public.nx_cv_status(tA, cA, cv3, 'resolvida');
-    perform pg_temp.lote(25);
+    perform pg_temp.lote(100);
     perform pg_temp.ok((select count(*) from public.nx_conversas where cliente_id = cA and contato_id = ct4) = 1
                    and not exists (select 1 from public.nx_envios_fila f where f.automacao_id = a8),
                    'follow-up atrasado de conversa_nova NÃO reabre a conversa resolvida');
@@ -274,7 +274,7 @@ begin
     cv4 := public.nx_auto_abrir_conversa(cA, ct3, kCW, l6, 'T13');
     insert into public.nx_mensagens (cliente_id, conversa_id, contato_id, canal_id, direcao, tipo, corpo, status, criado_em)
     values (cA, cv4, ct3, kCW, 'in', 'texto', 'ok, obrigada', 'recebida', now() + interval '2 seconds');
-    perform pg_temp.lote(25);
+    perform pg_temp.lote(100);
     perform pg_temp.ok(exists (select 1 from public.nx_auto_execucoes x where x.automacao_id = a3 and x.estado = 'cancelada' and x.detalhe like 'Iara Nove:%o cliente respondeu%'),
       'resposta ENTRE o gatilho e a sequência cancela a espera (' || coalesce((select string_agg(estado, ',') from public.nx_auto_execucoes where automacao_id = a3), '-') || ')');
     update public.nx_automacoes set ativo = false where id = a3;
