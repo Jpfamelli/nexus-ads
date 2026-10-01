@@ -56,7 +56,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     aoMudar: v => { auto.ativo = v; mudou(); } });
   const btSalvar = podeEditar ? h("button", { type: "button", class: "bt bt-prim" }, ui.icone("check"), item ? "Salvar" : "Criar automação") : null;
   const btCancelar = h("button", { type: "button", class: "bt bt-sec" }, podeEditar ? "Cancelar" : "Voltar");
-  const btTestar = h("button", { type: "button", class: "bt bt-sec", title: "Veja o que aconteceria agora, sem enviar nada" }, ui.icone("olho"), "Testar");
+  const btTestar = podeEditar ? h("button", { type: "button", class: "bt bt-sec", title: "Veja o que aconteceria agora, sem enviar nada" }, ui.icone("olho"), "Testar") : null;
   const btDuplicar = podeEditar && item ? h("button", { type: "button", class: "bt bt-fant", title: "Cria uma cópia desligada" }, ui.icone("copiar"), "Duplicar") : null;
   btCancelar.addEventListener("click", async () => {
     if (podeEditar && salvoJson !== null && sujo()) {
@@ -126,11 +126,11 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   }));
   const areaSim = h("div", { class: "au-sim", "aria-live": "polite" });
   const btTestarLado = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("olho"), "Testar agora");
-  const cartaoTeste = h("div", { class: "cartao au-teste", id: novoId("teste") },
+  const cartaoTeste = podeEditar ? h("div", { class: "cartao au-teste", id: novoId("teste") },
     h("p", { class: "rotulo" }, "Testar sem risco"),
     h("p", { class: "sub" }, "Veja o que aconteceria agora com o que está na tela. Nada é enviado nem salvo."),
     h("div", { class: "linha" }, btTestarLado),
-    areaSim);
+    areaSim) : null;
   const lado = h("aside", { class: "au-lado", "aria-label": "Resumo da automação" },
     h("div", { class: "cartao au-previa" },
       h("p", { class: "rotulo" }, "Em uma frase"), frase, estado, avisos),
@@ -745,7 +745,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         h("span", null, p.frase)))));
   }
 
-  btTestar.addEventListener("click", () => testar(btTestarLado));
+  if (btTestar) btTestar.addEventListener("click", () => testar(btTestarLado));
   btTestarLado.addEventListener("click", () => testar(btTestarLado));
 
   // ------------------------------------------------ execuções
@@ -830,5 +830,5 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   if (salvoJson === null && item) salvoJson = JSON.stringify(L.limpar(auto));
   if (item && q.aba === "execucoes") mostrarAba("execucoes");
   if (!item && podeEditar && origem === "branco") setTimeout(() => { if (!auto.nome) inpNome.focus({ preventScroll: true }); }, 60);
-  if (amb.testarAoAbrir || q.testar === "1") setTimeout(() => testar(btTestarLado), 120);
+  if (podeEditar && (amb.testarAoAbrir || q.testar === "1")) setTimeout(() => testar(btTestarLado), 120);
 }

@@ -369,7 +369,7 @@ function itemLista(ctx, dados, it, metas, P) {
   const btMais = h("button", { type: "button", class: "bt-icone au-item-mais", "aria-label": `Opções de ${it.nome}`, "aria-haspopup": "menu" }, ui.icone("opcoes"));
   btMais.addEventListener("click", () => ui.menu(btMais, [
     { rotulo: podeEditar ? "Editar" : "Ver", icone: "editar", fn: () => ctx.navegar(`#/automacoes/${it.id}`) },
-    { rotulo: "Testar (sem enviar nada)", icone: "olho", fn: () => ctx.navegar(`#/automacoes/${it.id}?testar=1`) },
+    podeEditar ? { rotulo: "Testar (sem enviar nada)", icone: "olho", fn: () => ctx.navegar(`#/automacoes/${it.id}?testar=1`) } : null,
     { rotulo: "Ver execuções", icone: "relogio", fn: () => ctx.navegar(`#/automacoes/${it.id}?aba=execucoes`) },
     podeEditar ? { rotulo: "Duplicar", icone: "copiar", fn: () => duplicar(ctx, it, dados.base) } : null,
     podeEditar ? { rotulo: "Excluir", icone: "lixeira", perigo: true, fn: () => excluir(ctx, it, () => montar(ctx)) } : null,
