@@ -755,9 +755,9 @@ await teste("todos os arquivos do §7.1 existem (F3 obrigatório; outras frentes
     aviso(`ainda não existem (outras frentes): ${faltando.join(", ")}`);
   }
 });
-await teste("todo .js de web/app passa em node --check", () => {
+await teste("todo .js de web/app passa no parser ES module (inclui app.js do shell)", () => {
   for (const f of js) {
-    try { execFileSync(process.execPath, ["--check", join(APP, f)], { stdio: "pipe" }); }
+    try { execFileSync(process.execPath, ["--check", "--input-type=module"], { input: ler(f), stdio: "pipe" }); }
     catch (e) { assert.fail(`${f}: ${String(e.stderr || e.message).split("\n").slice(0, 4).join(" ")}`); }
   }
 });
@@ -1214,7 +1214,8 @@ await teste("netlify.toml: publish web, / e /index.html → /app/ (302 forçado)
   assert.doesNotMatch(t.replace(/^\s*#.*$/gm, ""), /\$BRANCH/, "nenhum filtro por branch no build");
   assert.match(t, /from = "\/"\s*\n\s*to = "\/app\/"\s*\n\s*status = 302\s*\n\s*force = true/);
   assert.match(t, /from = "\/index\.html"\s*\n\s*to = "\/app\/"\s*\n\s*status = 302\s*\n\s*force = true/);
-  assert.match(t, /Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co; connect-src 'self' https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"/);
+  // manifest-src blob: é necessário ao manifesto white-label criado como Blob em M13; nenhuma outra origem foi ampliada.
+  assert.match(t, /Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co; connect-src 'self' https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co; font-src 'self'; manifest-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"/);
   for (const k of ["Referrer-Policy", "X-Content-Type-Options", "Permissions-Policy"]) assert.match(t, new RegExp(k));
 });
 
@@ -2820,6 +2821,23 @@ await teste("M10: sincronizarPalco liga body.palco-vivo só no Login (#publico �
     fim(); d.doc.hidden = true; d.doc.dispatchEvent(new d.Evento("visibilitychange")); assert.equal(d.doc.documentElement.classList.contains("aba-oculta"), false, "desligado");
     assert.equal(typeof U.pausarEmSegundoPlano(null), "function", "sem document: devolve um desligar vazio");
   } finally { d.fim(); }
+});
+
+await teste("A11Y: listas do kanban têm apenas filhos listitem, incluindo estado vazio e ação Ver mais", () => {
+  const crm = ler("crm-kanban.js");
+  assert.match(crm, /class: "kb-lista", role: "list"/);
+  assert.match(crm, /class: "kb-vazia", role: "listitem"/);
+  assert.match(crm, /class: "kb-mais-item", role: "listitem"/);
+  assert.match(crm, /role: "listitem", tabindex: "0"/);
+});
+
+await teste("M36/M40: o contexto expõe leitura de rascunhos ao módulo Conversas, com o escopo conta + empresa", () => {
+  const app = ler("app.js"), rascunho = ler("rascunho.js"), cv = ler("conversas.js");
+  assert.match(app, /existe: chave => E\.rascunhos\.existe\(chave\)/);
+  assert.match(app, /texto: chave => E\.rascunhos\.texto\(chave\)/);
+  assert.match(rascunho, /existe\(chave\) \{ const d = ler\(chaveDe\(chave\)\)/);
+  assert.match(rascunho, /texto\(chave\) \{ const d = ler\(chaveDe\(chave\)\)/);
+  assert.match(cv, /const r = A\.ctx\.rascunho;[\s\S]*?r\.texto\(`conversa:\$\{id\}`\)/);
 });
 
 console.log(`\n${ok} ok · ${falhas} falha(s)${avisos ? ` · ${avisos} aviso(s)` : ""}\n`);

@@ -53,14 +53,32 @@ try {
     for (let i = 0; i < RODADAS; i++) {
       const page = await navegador.newPage();
       await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
-      // quem usa o app todo dia já tem a sessão guardada: o antes.js só sabe qual tela pré-carregar se ela existir ANTES do primeiro quadro
-      await page.evaluateOnNewDocument(() => { try { if (!localStorage.getItem("nx-token")) localStorage.setItem("nx-token", "demo-local-session"); } catch { /* sem armazenamento */ } });
+      // O boot do dev-falso é instalado antes do primeiro script sem uma requisição extra bloqueante.
+      // Isso mantém o custo de rede do app/RPCs e evita contar o próprio harness (ausente em produção).
+      await page.evaluateOnNewDocument(() => {
+        if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") return;
+        try {
+          if (!localStorage.getItem("nx-token")) localStorage.setItem("nx-token", "demo-local-session");
+          sessionStorage.setItem("nx-app-dev", "1");
+        } catch { /* armazenamento indisponível */ }
+        const original = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          let u;
+          try { u = new URL(typeof input === "string" ? input : input.url, location.href); }
+          catch { return original(input, init); }
+          if (u.hostname === "dtjznipitihnwmcgpzqh.supabase.co") {
+            u = new URL("/__dev_falso" + u.pathname + u.search, location.origin);
+            return original(u, init);
+          }
+          return original(input, init);
+        };
+      });
       const cdp = await page.createCDPSession();
       await cdp.send("Network.enable");
       await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
       await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 150, downloadThroughput: 4 * 1024 * 1024 / 8, uploadThroughput: 1024 * 1024 / 8 });
       const t0 = Date.now();
-      await page.goto(`${base}/app/?dev-falso=1&dev=1${rota}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${base}/app/?dev-falso=1&dev=1&boot=0${rota}`, { waitUntil: "domcontentloaded" });
       const ok = await page.waitForFunction(() => { const v = document.getElementById("vista"); return v && v.innerText.length > 60 && !v.querySelector(".esqueleto,.sk"); }, { timeout: 30000 }).then(() => true, () => false);
       tempos.push(ok ? Date.now() - t0 : Infinity);
       await page.close();

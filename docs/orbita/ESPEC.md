@@ -627,7 +627,7 @@ O menu esconde o que está desligado. `crm` e `conversas` são sempre ligados ju
 ```
 Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
   img-src 'self' data: blob: https:; media-src 'self' blob: https://dtjznipitihnwmcgpzqh.supabase.co;
-  connect-src 'self' https://dtjznipitihnwmcgpzqh.supabase.co; font-src 'self';
+  connect-src 'self' https://dtjznipitihnwmcgpzqh.supabase.co; font-src 'self'; manifest-src 'self' blob:;
   frame-ancestors 'none'; base-uri 'self'; form-action 'self'
 Referrer-Policy: strict-origin-when-cross-origin
 X-Content-Type-Options: nosniff

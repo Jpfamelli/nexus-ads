@@ -257,7 +257,7 @@ export function textoPilula(e, agora = Date.now()) {
   if (e.nivel === "ok") return `Atualizado ${minutosAtras(e.ultimo, agora)}`;
   return "";
 }
-export const textoQueda = erros => erros.map(x => `A conexão com o ${nomePlat(x.canal)} caiu: os números do ${nomePlat(x.canal)} estão parados desde ${x.sync ? `${ddmmSP(x.sync)} ${horaSP(x.sync)}` : "a última leitura"}.`).join(" ");
+export const textoQueda = erros => erros.map(x => `${nomePlat(x.canal)} desconectado · dados até ${x.sync ? `${ddmmSP(x.sync)} ${horaSP(x.sync)}` : "aguardando primeira leitura"}.`).join(" ");
 
 /* ---------- radar: episódios (núcleo) + registro do servidor ---------- */
 export const SEV_NOME = { critico: "crítico", alerta: "alerta", info: "informativo" };

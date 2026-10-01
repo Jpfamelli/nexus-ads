@@ -883,6 +883,24 @@ await teste("M35: anúncio da lista — conversa nova (a aberta não), texto «N
   assert.equal(L.esperaAnuncio(1_000_000, 1_020_000), 0);
 });
 
+await teste("M40: base e primeira página da central iniciam juntas; falha da base desmonta a lista pendente", () => {
+  const cv = ler("conversas.js");
+  const listaInicial = cv.indexOf("const listaInicial = carregarLista({ reset: true });");
+  const base = cv.indexOf("await carregarBase();", listaInicial);
+  const listaAguardar = cv.indexOf("await listaInicial;", base);
+  const rota = cv.indexOf("await aplicarRota(ctx.rota);", listaAguardar);
+  assert.ok(listaInicial >= 0 && base > listaInicial && listaAguardar > base && rota > listaAguardar);
+  assert.match(cv.slice(base, listaAguardar), /catch \(e\) \{\s*desmontar\(\);[\s\S]*ui\.erroCartao\(e, \(\) => montar\(ctx\)\)/);
+});
+
+await teste("M22: respostas rápidas do compositor anunciam opções sem aria-expanded inválido no textarea", () => {
+  const comp = ler("cv-composer.js");
+  assert.doesNotMatch(comp, /ta\.setAttribute\("aria-expanded"/);
+  assert.match(comp, /role: "status", "aria-live": "polite", "aria-atomic": "true"/);
+  assert.match(comp, /rrStatus\.textContent = rrItens\.length/);
+  assert.match(comp, /Resposta rápida aplicada\./);
+});
+
 await teste("M35: a tela liga o teclado (um ouvinte que sai ao desmontar, sem se meter em modal), o botão «Atender o próximo» e a paleta (só se o shell oferecer o registro)", () => {
   const cv = ler("conversas.js"), lista = ler("cv-lista.js"), chat = ler("cv-chat.js"), comp = ler("cv-composer.js"), css = ler("conversas.css");
   assert.match(cv, /document\.addEventListener\("keydown", aoTeclaCentral\);\s*A\.limpar\.push\(\(\) => document\.removeEventListener\("keydown", aoTeclaCentral\)\)/);

@@ -1,7 +1,7 @@
 # Melhorias de 01/10/2026 — Frente C (CRM e Agenda)
 
-Plano: `docs/orbita/MELHORIAS-20261001.md` (itens M23–M30). Branch `claude/automacoes-ia`. Nada de push, merge, Netlify nem banco:
-a migração `supabase/migrations/20261002c_crm_idempotencia_lote.sql` (quando existir) só está no repositório, NÃO aplicada.
+Plano: `docs/orbita/MELHORIAS-20261001.md` (itens M23–M30). Follow-up R119 na branch `codex/orbita-r119`; essas melhorias ainda não foram publicadas.
+A migração `supabase/migrations/20261002c_crm_idempotencia_lote.sql` está no repositório e passou nos smokes locais, mas não foi confirmada/aplicada no Supabase nesta retomada.
 Arquivos que esta frente edita: `web/app/crm.js`, `crm-*.js`, `agenda.js`, `agenda-config.js`, `crm.css`, `agenda.css`, `testes/crm.teste.mjs` e esta nota.
 
 ## Como verificar (comum)
@@ -90,7 +90,7 @@ Arquivos que esta frente edita: `web/app/crm.js`, `crm-*.js`, `agenda.js`, `agen
   Atalhos «Primeiro livre» e «Amanhã de manhã», «Ver a partir de» (outra data) e «Serviço» (muda a duração) recarregam os horários; setas movem chips e pílulas (radios).
 - Confirmar → aviso **«Marcada para qui 02/10 às 10:00 · Desfazer»** (desmarca; se era remarcação, volta ao horário anterior); «Desmarcar» (pede o motivo) também ganha Desfazer (marca de volta o mesmo horário).
   A escrita usa a chave `p_req` do M25 (erro ambíguo repete com a mesma chave e não marca duas vezes).
-- Botão **«Marcar consulta»/«Remarcar consulta»** na gaveta do negócio aberto (`crm-negocio.js`); ação «Marcar consulta» registrada na paleta (`ctx.comandos.registrar`, só se o registro existir — é da frente B/M18).
+- Botão **«Marcar consulta»/«Remarcar consulta»** na gaveta do negócio aberto (`crm-negocio.js`); ação «Marcar consulta» registrada no registro de comandos do shell (M18).
   O CSS da agenda também carrega quando a janela abre pelo CRM.
 - Verificado (puppeteer + dev-falso): do negócio aberto à consulta marcada em **2 toques** (gaveta → «Marcar consulta» → «Confirmar consulta»): `nx_agenda_marcar` com `p_req`, aviso com Desfazer, Desfazer chama `nx_agenda_desmarcar`
   e a consulta some; busca digitando «Camila» = 1 pedido (debounce), resultado → horários → «Amanhã de manhã» seleciona amanhã antes do meio-dia; Esc com texto digitado mostra a faixa «Descartar o que você digitou?» (M08 da frente A); 390 px sem corte.
@@ -131,3 +131,10 @@ Arquivos que esta frente edita: `web/app/crm.js`, `crm-*.js`, `agenda.js`, `agen
   lápis/lixeira como antes, lista/⋮/botão flutuante escondidos; sem rolagem horizontal; tema escuro conferido; 0 erros de console.
 - Testes (`crm.teste.mjs`, seção (a3)): `hrefTel`, `acoesDoContato`/`acoesDaTarefa` (todo lado do gesto existe no ⋮/botão), `adiarParaAmanha` (virada de dia, atrasada, sem prazo, já à frente), o teste de gesto = botão com DOM falso e o estático.
 - Limite conhecido (risco 11): o deslizar foi provado só com toque emulado; falta aparelho real (Android e iPhone), principalmente o conflito com o gesto de «voltar» do navegador na borda da tela.
+
+## M30 · CRM e Agenda no sistema visual — FEITO
+
+- CRM e Agenda adotam a escala de tokens, `ui.cabecalho`, esqueletos com a geometria da tela, segmentados, estados vazios e rascunhos nos formulários. A primeira leitura do CRM pode usar o cache local; Agenda mantém o aviso quando mostra cache após falha de rede.
+- A base e os módulos do CRM carregam em paralelo; ações do CRM/Agenda registram-se na paleta Ctrl/⌘+K do shell. Os contratos estão cobertos em `testes/crm.teste.mjs`.
+- Validação R119: CRM do runner completo passou (52 casos); `node testes/rodar-tudo.mjs` passou 19/19 arquivos. Axe foi executado em seis telas, desktop e celular: 12/12 combinações sem violações.
+- A migração `20261002c_crm_idempotencia_lote.sql` e seu smoke continuam locais; os smokes PGlite não substituem aplicação/aceite no Supabase.

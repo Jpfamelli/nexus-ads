@@ -44,7 +44,8 @@ export function criarComposer(A) {
   const iaTrab = h("div", { class: "cvx-ia-trab", hidden: true, role: "status" }, "Escrevendo…");
   const dica = h("p", { class: "cvx-dica" }, h("kbd", null, "Enter"), " envia · ", h("kbd", null, "Shift"), "+", h("kbd", null, "Enter"), " quebra linha · ", h("kbd", null, "/"), " respostas rápidas");
   const rr = h("div", { class: "cvx-rr", role: "listbox", "aria-label": "Respostas rápidas", hidden: true, id: "cvx-rr" });
-  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, resp, iaTrab, trava, capInfo, painelGravacao, seloRasc, linha, dica, arquivo);
+  const rrStatus = h("span", { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
+  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, rrStatus, resp, iaTrab, trava, capInfo, painelGravacao, seloRasc, linha, dica, arquivo);
 
   ta.setAttribute("aria-controls", "cvx-rr");
   ta.setAttribute("aria-autocomplete", "list");
@@ -248,7 +249,9 @@ export function criarComposer(A) {
   function desenharRR(termo) {
     ui.limpar(rr);
     rr.hidden = false;
-    ta.setAttribute("aria-expanded", "true");
+    rrStatus.textContent = rrItens.length
+      ? `${rrItens.length} respostas rápidas disponíveis. Use as setas e Enter para escolher, ou Escape para fechar.`
+      : (termo ? "Nenhuma resposta rápida encontrada." : "Nenhuma resposta rápida cadastrada.");
     rr.appendChild(h("div", { class: "cvx-rr-cab" }, h("span", { class: "rotulo" }, "Respostas rápidas"), h("span", { class: "rotulo" }, "↑↓ Enter · Esc")));
     if (!rrItens.length) {
       rr.appendChild(h("p", { class: "cvx-rr-vazio" }, termo ? `Nenhuma resposta com «${termo}».` : "Nenhuma resposta cadastrada. ",
@@ -269,7 +272,7 @@ export function criarComposer(A) {
   function fecharRR() {
     rrAberto = false; rrItens = [];
     rr.hidden = true; ui.limpar(rr);
-    ta.setAttribute("aria-expanded", "false");
+    rrStatus.textContent = "Respostas rápidas fechadas.";
     ta.removeAttribute("aria-activedescendant");
   }
   function escolherRR(i) {
@@ -277,6 +280,7 @@ export function criarComposer(A) {
     if (!r) return;
     ta.value = L.aplicarVariaveis(r.corpo, varsAtuais());
     fecharRR();
+    rrStatus.textContent = "Resposta rápida aplicada.";
     autoAltura();
     ta.focus();
     const pos = ta.value.search(/\{[^}]+\}/);    // cai no primeiro {campo a preencher}

@@ -199,6 +199,7 @@
 
 /* campanhas */
 .rel-tabela-rolagem { overflow-x: auto; margin: 0 -.25rem; padding: 0 .25rem; }
+.rel-tabela-rolagem:focus-visible { outline: 2px solid var(--c-prim); outline-offset: 2px; border-radius: var(--r-p); }
 .rel-tabela { width: 100%; border-collapse: collapse; font-size: .875rem; font-variant-numeric: tabular-nums; }
 .rel-tabela th, .rel-tabela td { padding: .65rem .6rem; text-align: left; border-bottom: 1px solid var(--c-borda); vertical-align: middle; }
 .rel-tabela thead th { font: 500 .6875rem/1.3 var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--c-texto-3); white-space: nowrap; }
@@ -696,6 +697,8 @@ a.ini-numero:active { transform: scale(.98); }
 
 @media (max-width: 760px) {
   .rel { gap: .4rem; }
+  .rel-faixa { gap: .15rem .5rem; padding: .25rem .65rem; border-radius: 12px; }
+  .rel-faixa p { flex-basis: 100%; font-size: .75rem; line-height: 1.1; }
   .rel-topo { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .15rem .6rem; }
   .rel-topo-t .rel-olho { display: none; }               /* o nome da empresa já está no topo do app */
   .rel-h1 { margin: 0; }

@@ -82,11 +82,14 @@ export async function montar(ctx) {
   ajustarAltura();
   observarLayout();
 
+  // M40: base da central e primeira página da fila não dependem uma da outra; começa a leitura da lista enquanto chega a configuração.
+  const listaInicial = carregarLista({ reset: true });
   try {
     await carregarBase();
   } catch (e) {
+    desmontar();
     ui.limpar(ctx.alvo);
-    ctx.alvo.appendChild(ui.erroCartao(e, () => { desmontar(); montar(A ? A.ctx : ctx); }));
+    ctx.alvo.appendChild(ui.erroCartao(e, () => montar(ctx)));
     return;
   }
   ui.limpar(colLista); colLista.appendChild(A.lista.el);
@@ -109,7 +112,7 @@ export async function montar(ctx) {
   A.timers.push(setInterval(() => { if (!document.hidden) { A.lista.render(); A.chat.renderCabecalho(); A.composer.atualizar(); } }, 60000));
   A.timers.push(setInterval(() => { if (Date.now() - (A.baseEm || 0) > 5 * 60000) carregarBase().catch(() => {}); }, 60000));
 
-  await carregarLista({ reset: true });
+  await listaInicial;
   await aplicarRota(ctx.rota);
 }
 

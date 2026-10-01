@@ -1,6 +1,6 @@
 # Frente B — Shell, conectividade e PWA (plano de 01/10/2026)
 
-Plano: `docs/orbita/MELHORIAS-20261001.md` (frente B). Branch: `claude/automacoes-ia`. Nada foi publicado, mesclado ou aplicado no banco.
+Plano: `docs/orbita/MELHORIAS-20261001.md` (frente B). Follow-up R119 na branch `codex/orbita-r119`; nada desta branch foi publicado, mesclado ou aplicado no banco.
 Testes da frente: `node testes/shell.teste.mjs` (registrado em `testes/rodar-tudo.mjs`) e `node --test testes/dev-falso.teste.mjs`.
 
 ## Situação
@@ -8,14 +8,15 @@ Testes da frente: `node testes/shell.teste.mjs` (registrado em `testes/rodar-tud
 | Item | Estado | Commit |
 |---|---|---|
 | dev-falso para C e D (onboarding, p_req, client_ref, nao_lidas) | feito | ver `git log --grep "Órbita (B)"` |
-| M11 abertura em paralelo | feito (Início 1,8 s; Conversas e CRM melhoram ~0,7 s, o resto é cadeia interna das telas) | ver `git log --grep "M11"` |
+| M11 abertura em paralelo | feito; mediana dev-falso a 390×844: Início 1.518 ms, Conversas 1.699 ms, CRM 1.393 ms (5 rodadas, 150 ms RTT, 4 Mbps, sem cache) | ver `git log --grep "M11"` e `scripts/medir-abertura.mjs` |
 | M12 service worker + versão | feito (falta só o `curl -I` em produção, depois da publicação) | ver `git log --grep "M12"` |
 | M14 estado de conexão | feito | ver `git log --grep "M14"` |
 | M15 leituras que insistem, escritas que não duplicam, boot | feito | ver `git log --grep "M15"` |
 | M17 sessão que não derruba o trabalho + rascunhos | feito (migração só no repositório; smoke 16 rodado no PGlite local) | ver `git log --grep "M17"` |
 | M16 telas que abrem com o último dado (cache.js) | feito | ver `git log --grep "M16"` |
 | M21 ícones que dizem a coisa certa | feito | ver `git log --grep "M21"` |
-| M22 acessibilidade de fluxo | feito (shell sem violações no axe; 5 achados de C e D nas pendências) | ver `git log --grep "M22"` |
+| M22 acessibilidade de fluxo | feito; R119 axe em 6 telas × desktop/celular: 12/12 sem violações | ver o registro R119 em `MELHORIAS-B/C/D.md` |
+| M18 paleta, ações, recentes e ajuda | feito; shell registra ações e os três produtos usam Ctrl/⌘+K | ver `git log --grep "M18"` e `testes/shell.teste.mjs` |
 | M13 instalável com a marca e o produto certo | feito (ícones PNG, manifesto dinâmico em blob:, `manifest-src 'self' blob:`, Instalar o app; falta testar num celular de verdade) | ver `git log --grep "M13"` |
 
 ## M11 · Abrir em ~1,5 s em vez de ~3,5 s
@@ -189,8 +190,7 @@ Capturas conferidas no Chrome (menu lateral a 1440 e barra inferior a 390, nas 4
 
 **Verificado no Chrome (dev-falso)**: abertura limpa em `#/conversas/901`, do topo da página: Tab 1 «Ir para a lista de conversas» → Tab 2 «Ir para a conversa» → Tab 3 «Ir para o campo de mensagem» (+ Enter = foco no `textarea` «Mensagem»;
 **3 Tabs**, meta ≤ 3) → Tab 4 «Pular para o conteúdo». Início → Pacientes pelo menu com o teclado: foco em `H1 «Pacientes»`, anúncio «Pacientes, carregado», atalhos trocam para «Ir para o quadro».
-**axe nas 6 telas × 2 larguras: o shell (topo, menu, faixas, atalhos) não tem nenhuma violação.** Restam 5 achados de telas de outras frentes (viram pendências abaixo): Conversas `aria-allowed-attr` (textarea com `aria-expanded`), CRM `aria-required-children` (colunas vazias do kanban com `role="list"` sem `listitem`),
-Relatórios a 390 `scrollable-region-focusable` (`.rel-tabela-rolagem` sem `tabindex="0"`).
+**Snapshot pré-R119 (histórico):** o shell não tinha violações, mas restavam achados em Conversas, CRM e Relatórios. A auditoria foi repetida após as correções R119 e agora passa em 6 telas × 2 larguras: 12/12, sem violações em nenhum nível; detalhes e regressões em `MELHORIAS-C.md` e `MELHORIAS-D.md`.
 
 **Como verificar**: `node testes/shell.teste.mjs` (4 testes de M22) e `node scripts/auditar-a11y.mjs`.
 
@@ -217,14 +217,13 @@ Relatórios a 390 `scrollable-region-focusable` (`.rel-tabela-rolagem` sem `tabi
 - **C e D (M14):** o navegador guarda a falha de `import()` por URL. Se um módulo seu importa dependências com `import()` direto e a rede cair no meio, o cartão de erro precisa de recarga (o shell já faz isso quando a mensagem é de import). Para tentar de novo SEM recarregar, repetir com `&r=<n>` depois do `?v=` (a regra de `?v=` dos testes aceita).
 - **C e D (M14):** use `ctx.rede.aoVoltar(fn)` para reler dados que ficaram na tela quando a conexão volta (o shell só refaz sozinho os cartões de erro).
 - **C (M25) e D (M36):** escrita idempotente = `ctx.api.rpcC("nx_...", params, { req: true })` (o `api.js` manda `p_req` e repete com o mesmo uuid em transporte/408/429/50x); para o «Salvar de novo» depois de erro ambíguo, passe `{ req: erro.req }`. Só use `req` em função que aceite `p_req` (a migração de C); `p_req` num RPC que não o conhece dá 404 do PostgREST.
-- **C (M30), D (M36/M40):** ligar `ctx.rascunho.ligar(campo, "<tipo>:<id>[:parte]")` nas notas, no modal de nova oportunidade/tarefa e no compositor/notas internas do chat, e chamar `ctx.rascunho.apagar(chave)` SÓ quando o servidor confirmar o envio. Para o selo ficar no lugar certo, passar `{ seloEm: elemento }`. Campo de segredo: `data-segredo` (ou `type=password`).
+- **C e D (M30/M36/M40), integrado em R119:** `ctx.rascunho` oferece `ligar/apagar/existe/texto`; CRM salva rascunhos dos formulários suportados e Conversas persiste texto/notas por conversa. O apagamento continua condicionado à confirmação de envio. A fila IndexedDB e sua política de saída no logout ficam documentadas como limitação em `MELHORIAS-D.md`.
 - **D (M36):** a janela de sessão expirada espera as LEITURAS e repete com o token novo; escritas falham na hora (o erro tem `codigo: "sessao_invalida"`): mostre «não enviada · tentar de novo» em vez de descartar o texto.
 - **Integração/publicação:** aplicar `supabase/migrations/20261002b_sessao_pulso_push.sql` só com o ok do dono (ensaio em begin … rollback pelo MCP com `supabase/testes/16_sessao_pulso_push.sql` antes); ela vem ANTES de 20261002c/d na ordem de nome.
 - **C e D (M16):** quem usa `{cache: true, aoCache}` precisa tratar `e.comCache` (rede falhou DEPOIS de pintar do cache): mantenha a tela e mostre só um aviso (a mensagem do erro já é "Sem internet. Mostrando o que já tinha."), não troque por cartão de erro. A frente D já faz isso no Início; confira CRM (kanban, `nx_crm_base`, agenda) e a 1ª página de `nx_cv_listar`. Só estas RPCs ficam no aparelho (`CACHEAVEIS` em `web/app/cache.js`): se uma tela precisar de outra, peça a inclusão a B (não vale pôr nome com config/admin/mensagens/usuários).
 - **A (M21):** `app.css` `.ic` está com `stroke-width: 1.7` e 18 px; o plano pede 1,6 e 22 px na barra inferior (`.barra-b .ic`). Os símbolos novos funcionam nos dois.
 - **C e D (M21):** `i-meta` e `i-google` estão no sprite (use `ui.icone("meta")`/`ui.icone("google")` nos selos de origem). Qualquer ícone novo precisa de um `<symbol id="i-…">` em `web/app/index.html` (arquivo de B): o teste `todo ícone usado no código existe no sprite` falha se faltar.
-- **D (M22/M40):** axe (`node scripts/auditar-a11y.mjs`) nas telas: Conversas — `aria-allowed-attr` crítico: o `textarea` do compositor (`cv-composer.js`) tem `aria-expanded="false"` (atributo que `textarea` não aceita; use `role="combobox"` com `aria-controls`/`aria-expanded` ou tire o atributo). Relatórios a 390 px — `scrollable-region-focusable` sério: `.rel-tabela-rolagem` precisa de `tabindex="0"` (e `role="region"` + `aria-label`).
-- **C (M22/M30):** axe no CRM — `aria-required-children` crítico: as colunas vazias do kanban (`.kb-lista[role=list]`) não têm `listitem`; tire o `role="list"` quando a coluna estiver vazia (ou ponha um item oculto com o texto do vazio).
+- **D (M22/M40), resolvido em R119:** removido `aria-expanded` inválido do textarea; adicionadas regiões nomeadas e focalizáveis às tabelas roláveis; listas de Kanban agora mantêm filhos `listitem` inclusive nos estados vazios e na ação «Ver mais». Axe reexecutado em 6 telas × 2 viewports: 12/12, zero violações em todos os níveis.
 - **C e D (M22):** o shell já mostra «Ir para a lista de conversas / a conversa / o campo de mensagem» e «Ir para o quadro» pelos `aria-label` que as telas têm (um teste confere); se mudarem esses rótulos, registrem os seus com `ctx.atalhosDeRegiao([{rotulo, alvo}])`. Cada tela precisa de UM `<h1>`: o shell move o foco para ele depois de navegar e anuncia «<título>, carregado».
 - A (testes/app.teste.mjs, ~linha 1213): o teste do netlify.toml compara o cabeçalho `/app/*` com a CSP antiga exata e falha. A CSP nova (M13) é: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https://dtjznipitihnwmcgpzqh.supabase.co; connect-src 'self' https://dtjznipitihnwmcgpzqh.supabase.co; font-src 'self'; manifest-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'` (só ganhou `manifest-src 'self' blob:` depois de `font-src 'self';`). O mesmo texto está na `<meta>` do index.html (sem frame-ancestors).
 - A (manifestos de produto): `manifest-crm/ads/atendimento.webmanifest` ficaram com o ícone SVG único (o teste de A exige `icons.length === 1`). Eles já são instaláveis (installabilityErrors = [] verificado); quando o `/app/` abre, o manifesto dinâmico em blob: os substitui por um com PNG e a marca do cliente. Se A quiser PNG também nos estáticos, é só acrescentar `icones/*.png` e relaxar o teste.

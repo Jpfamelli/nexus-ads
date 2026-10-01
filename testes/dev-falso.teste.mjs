@@ -41,10 +41,13 @@ test("agenda local fictícia: marca, bloqueia conflito e desmarca sem rede exter
   };
   try {
     const pagina = await fetch(`${base}/app/?dev-falso=1`).then(r => r.text());
+    const paginaMedicao = await fetch(`${base}/app/?dev-falso=1&boot=0`).then(r => r.text());
     const app = await fetch(`${base}/app/app.js`).then(r => r.text());
     assert.match(app, /DEMO LOCAL · dados fictícios; mensagens e integrações não são reais\./, "a interface deixa claro que não é uma conta conectada");
     assert.match(app, /faixa-demo-local/, "o aviso usa a faixa de sistema, sem cobrir o campo de mensagem");
     assert.doesNotMatch(pagina, /position:fixed;left:50%;bottom:12px/, "o servidor local não injeta mais uma tarja fixa por cima da interface");
+    assert.match(pagina, /<script src="\/__dev_falso\/boot\.js"><\/script>/, "o modo fictício normal instala o interceptador de forma compatível com CSP");
+    assert.doesNotMatch(paginaMedicao, /__dev_falso\/boot\.js/, "o medidor não adiciona uma busca bloqueante que não existe em produção");
 
     const rel = await rpc("nx_rel_vendas", {});
     assert.equal(rel.serie.reduce((s, x) => s + x.criados, 0), rel.kpis.criados, "a série diária soma os mesmos negócios criados do KPI");
@@ -123,6 +126,17 @@ test("nx_onboarding_estado: 11 itens (10 obrigatórios + anúncios opcional), ma
   const completo = (await sim("onboarding", "?modo=completo")).estado;
   assert.equal(completo.completo, true);
   assert.equal(completo.feitos, completo.total);
+}));
+
+test("marca fictícia: produto e cores hex válidas podem ser trocados para QA white-label; entrada inválida é ignorada", () => comServidor(async ({ rpc, sim }) => {
+  await sim("marca", "?produto=Cl%C3%ADnica%20A&primaria=%230E6B7A&secundaria=%23A8D5BA&fundo=%23F7F9FA&cor=%23nope");
+  let marca = (await rpc("nx_marca_publica", { p_host: "", p_org: "nexus" })).corpo.marca;
+  assert.equal(marca.produto, "Clínica A");
+  assert.deepEqual(marca.cores, { primaria: "#0E6B7A", secundaria: "#A8D5BA", fundo: "#F7F9FA" });
+  await sim("marca", "?produto=Cl%C3%ADnica%20B&primaria=red&secundaria=%23FFF");
+  marca = (await rpc("nx_marca_publica", { p_host: "", p_org: "nexus" })).corpo.marca;
+  assert.equal(marca.produto, "Clínica B");
+  assert.deepEqual(marca.cores, { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" }, "cores inválidas nunca chegam à tela");
 }));
 
 test("p_req: a mesma intenção repetida não cria outra linha (negócio, contato, tarefa)", () => comServidor(async ({ rpc, estado }) => {

@@ -1,9 +1,7 @@
 # Melhorias de 01/10/2026 — Frente D (Conversas, Início, Anúncios/Relatórios, Automações, Configurações)
 
-Plano: `docs/orbita/MELHORIAS-20261001.md` (seção "Frente D"). Arquivos da frente: `conversas.js`, `cv-*.js`, `conversas.css`, `inicio.js`, `rel-logica.js`, `relatorios.js`, `relatorios.css`,
-`anuncios.js`, `ads-config.js`, `automacoes.js`, `auto-*.js`, `automacoes.css`, `config.js`, `rastreio-config.js`, `admin.js`, `testes/conversas*.teste.mjs`, `testes/relatorios.teste.mjs`,
-`testes/automacoes*.teste.mjs`, `supabase/functions/_compartilhado/enviar.js`, migração `supabase/migrations/20261002d_conversas_client_ref_onboarding.sql` (NÃO aplicada) e este arquivo.
-Nada foi publicado, aplicado no banco, enviado ou mesclado; o `?v=` do `index.html` e o `versao.json` não foram tocados.
+Plano: `docs/orbita/MELHORIAS-20261001.md` (seção "Frente D"). Este follow-up R119 está na branch `codex/orbita-r119` e não foi publicado.
+A migração `supabase/migrations/20261002d_conversas_client_ref_onboarding.sql` não foi confirmada/aplicada no Supabase nesta retomada. Integração local: bump único para `20261001d` em `/app/`, os três atalhos de produto e `versao.json`; não publicado.
 
 Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://127.0.0.1:4740/app/?dev-falso=1&dev=1#/conversas/901` (ou `#/inicio`, `#/anuncios`, `#/relatorios`, `#/config`).
 
@@ -17,10 +15,23 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
 | M31 | feito | Início com manchete editorial (frase em links, número no acento, verbo em Zodiak), blocos só com ação em ordem de urgência, "Mais detalhes" recolhido, "Tudo em dia.", esqueleto até o dado e destaque do número que muda |
 | M32 | feito | Cartão "Deixe o Órbita pronto" no Início (admin): progresso, 11 itens na ordem, "Fazer agora" abre a seção exata (1-5: o assistente), "Já está bom", "Dispensar por 7 dias", some a 100 %; ponto de pendência no menu das Configurações; RPC de leitura nx_onboarding_estado na migração 20261002d |
 | M33 | feito | Assistente do número CodeWords em 5 passos (um primário por vez, feitos recolhidos com ✓/Refazer, consulta do aparelho a cada ~5 s nos passos 2-3, "Não sei" virou "Aguardando confirmação"); número da Meta com os mesmos marcos; seção com ui.cabecalho nível 2 |
-| M35 | feito | Central por teclado: "Atender o próximo" (botão no vazio e no cabeçalho da lista, Alt+Shift+P), Alt+↓/↑, Alt+Shift+A/R/N/T, Esc no campo volta à lista, j/k, /, ?; Resolver com Desfazer e a preferência "Ao resolver, abrir a próxima"; lista anuncia a conversa nova (aria-live, 1 a cada 10 s); ações na paleta quando `ctx.comandos` existir |
+| M35 | feito | Central por teclado: "Atender o próximo" (botão no vazio e no cabeçalho da lista, Alt+Shift+P), Alt+↓/↑, Alt+Shift+A/R/N/T, Esc no campo volta à lista, j/k, /, ?; Resolver com Desfazer e a preferência "Ao resolver, abrir a próxima"; lista anuncia a conversa nova (aria-live, 1 a cada 10 s); ações ligadas à paleta do shell |
 | M36 | feito (texto) | Rascunho persistente por conversa (e nota), "Rascunho:" na lista, fila de saída em IndexedDB com envio idempotente por client_ref (servidor + migração 20261002d), "Na fila" com Cancelar/Enviar agora; mídia segue como era |
-| M39 | — | — |
-| M40 | — | — |
+| M39 | feito | Filtros resumidos em uma folha no celular; Radar prioriza alertas ativos e ordena por gravidade com rótulo e ícone além da cor |
+| M40 | feito com limite explícito | Escala visual, cabeçalhos/segmentados, estados vazios/esqueletos, preloads, cache de lista e ações da paleta integrados; mover avisos para o motor global depende do M19, fora deste follow-up |
+
+## M39 · Painéis no celular e Radar com gravidade — FEITO
+
+- Anúncios e Relatórios resumem período/plataforma/funil/departamento em um chip que abre uma folha de filtros; no celular isso recolhe várias linhas de controles. As abas usam o segmentado comum, e «Atualizar» fica compacto.
+- Radar mostra rótulo, ícone e faixa de gravidade; alertas ativos vêm antes dos resolvidos, e os críticos antes dos avisos/informativos. Conexão caída aparece como crítica.
+- Verificação R119: teste de ordenação nos relatórios; navegador a 390×844; axe sem violações nos seis fluxos desktop/celular.
+
+## M40 · Integração visual e carregamento das telas D — FEITO COM LIMITE DOCUMENTADO
+
+- Conversas inicia a primeira página da lista em paralelo com a leitura da base; erro da base desmonta o módulo antes de oferecer nova tentativa. Anúncios/Relatórios usam cabeçalho/abas/filtros do sistema visual; tabelas roláveis têm região nomeada e foco por teclado.
+- Shell expõe `ctx.rascunho.existe/texto` além de `ligar/apagar`; a lista de Conversas pode mostrar rascunhos persistidos por conta e empresa. Teste estático M36/M40 cobre o contrato.
+- A11y: removido `aria-expanded` inválido do textarea; listas vazias/«Ver mais» do CRM têm semântica de lista; regiões de tabela são focáveis. Auditoria Axe em seis telas × dois viewports = 12 combinações, zero violações.
+- Limite deliberado: mover `avisarNovidades` para um motor de avisos no shell exige M19, que não faz parte do conjunto de melhorias fechado agora. A fila local de saída ainda pode conter texto não enviado até vencer o TTL; não se afirma que o IndexedDB é apagado no logout.
 
 ## M34 — feito
 
@@ -98,7 +109,7 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
 - **Atender o próximo** (botão primário no painel vazio e botão largo no cabeçalho da lista, só com fila e para quem pode escrever; o mesmo por Alt+Shift+P): lê `nx_cv_listar({aba: "aguardando"})`, escolhe a que espera há mais tempo (a de colega fica de fora), abre, assume (ou pausa a IA) e deixa o cursor no campo. Sem fila: "Ninguém espera resposta agora."
 - **Resolver com Desfazer**: botão do cabeçalho, ✓, menu ⋮ e Alt+Shift+R passam por `ui.acaoComDesfazer` ("Resolvida · Mariana" + Desfazer, 7 s, Ctrl/⌘+Z fora de campo); Desfazer devolve o estado anterior (aberta ou pendente). A preferência "Ao resolver, abrir a próxima" (por navegador, **desligada até a pessoa ligar**; fica no ⋮ e na folha de atalhos) abre a seguinte da lista com o cursor no campo, ou volta ao painel da fila quando não há; Desfazer volta para a resolvida se a pessoa ainda está na seguinte.
 - **Leitor de tela**: a lista tem `role="status" aria-live="polite"`; a cada pulso as conversas com mensagem nova do cliente (a aberta e à vista não) viram "Nova mensagem de Mariana, aguardando há 3 min" (ou "2 conversas com mensagem nova, a primeira de …"), no máximo 1 a cada 10 s (o texto que chega antes espera a vez).
-- **Paleta (M18)**: se existir `ctx.comandos.registrar`, registra "Atender o próximo", "Nova conversa", "Assumir/Resolver/Nota interna/Transferir a conversa aberta" (com o acorde exibido) e "Atalhos da central de conversas"; sai sozinho ao desmontar. Hoje o shell ainda não tem o registro (nada é registrado, sem erro).
+- **Paleta (M18):** o shell agora tem `ctx.comandos.registrar`; ações de Conversas e Agenda ficam disponíveis enquanto seus módulos estão montados e são removidas ao desmontar.
 - **Verificado no dev-falso** (puppeteer + Chrome, 1440×900; também 390 e 1024 só para o cabeçalho): atender → resolver (avança) → resolver (fila zerada) → o cliente volta a escrever (anúncio) → atender → resolver → Esc + Ctrl+Z reabre, tudo sem mouse e sem erro de console. Sonda no teste (`ORBITA_QA_NAVEGADOR=1`).
 - **Não provado**: o comportamento com leitor de tela de verdade (só o texto da região viva), o teclado ABNT2 físico e o Mac (a regra pura cobre AltGr e o código da tecla).
 - **Verificar**: `node testes/conversas.teste.mjs` (68 ok; `ORBITA_QA_NAVEGADOR=1` roda o fluxo de 3 conversas no Chrome).
@@ -107,7 +118,7 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
 
 - (A) nenhuma até aqui.
 - (B) `scripts/dev-falso.mjs` — respostas fictícias novas que a frente D vai precisar: `nx_onboarding_estado` (M32), `client_ref` repetido no `nx-enviar` devolvendo a mesma mensagem (M36). Sem elas a frente D usa interceptação de requisição nas próprias provas (puppeteer), sem tocar no arquivo.
-- (B) `ctx.rascunho`, `ctx.rede`, `ctx.naoAtualizar` e `orbita:online` já existem (usados em M36). Ainda faltam para a frente D: `ctx.comandos.registrar` (M18, paleta e ações Nova conversa/Atender o próximo) e o motor de avisos (M19, para tirar `avisarNovidades` de `conversas.js` no M40).
-- (B) `ctx.rascunho` só expõe `ligar` e `apagar`: pedir também `existe(chave)` e `texto(chave)` (o `rascunho.js` já tem os dois) para a lista mostrar "Rascunho:" de conversas cujo rascunho veio do armazenamento e não da sessão (hoje só aparece o da conversa aberta ou digitado nesta sessão).
-- (B) logout/troca de conta: apagar também o IndexedDB `orbita-fila` (`indexedDB.deleteDatabase("orbita-fila")`) junto com `rascunhos.apagarTudo()`; hoje a fila só descarta os itens de outra conta quando Conversas é aberta de novo.
-- (Integração) ordem de publicação: aplicar a migração `20261002d` no banco ANTES de publicar `nx-enviar` (tag `funcoes-*`); o contrário também é seguro (a função tolera a migração ausente), mas sem idempotência.
+- **Concluído em R119:** `ctx.comandos.registrar` está integrado; `ctx.rascunho` expõe `existe` e `texto`, e a lista lê o rascunho persistido por conta/empresa.
+- **M19 continua fora deste fechamento:** o motor global de avisos (incluindo pulso compartilhado entre abas) não foi implementado; `avisarNovidades` segue no módulo Conversas.
+- **Privacidade local pendente:** o IndexedDB `orbita-fila` mantém itens não enviados até entregar, descartar por TTL/escopo ou limpeza da fila. O logout apaga rascunhos, mas não promete apagar uma mensagem da fila; esclarecer/implementar política de descarte antes de uso em aparelho compartilhado.
+- **Integração bloqueada:** aplicar migração `20261002d` no banco antes de publicar `nx-enviar`; as migrações `20261002b/c` também aguardam execução aprovada. Não publicar a partir desta branch sem reconectar Supabase e passar os gates remotos.

@@ -280,7 +280,7 @@ export async function montarKanban(k, el, rota) {
     c.soma.textContent = Number(valorSoma) ? ui.brl(valorSoma, { centavos: false }) : "R$ 0";
     ui.limpar(c.lista);
     for (const it of col.itens) c.lista.appendChild(criarCartao(it, e));
-    if (!col.itens.length) c.lista.appendChild(h("div", { class: "kb-vazia" }, ui.vazio({ tipo: "sem_resultado", titulo: podeMover
+    if (!col.itens.length) c.lista.appendChild(h("div", { class: "kb-vazia", role: "listitem" }, ui.vazio({ tipo: "sem_resultado", titulo: podeMover
       ? (matchMedia("(pointer: coarse)").matches ? "Segure um cartão e arraste até aqui" : "Arraste um cartão para cá")
       : "Nada nesta etapa" })));
     ui.limpar(c.extra);
@@ -288,7 +288,7 @@ export async function montarKanban(k, el, rota) {
     if (faltam > 0) {
       const b = h("button", { type: "button", class: "bt bt-fant bt-p kb-mais" }, `Ver mais (${ui.num(faltam)})`);
       b.addEventListener("click", () => verMais(estagioId, b));
-      c.lista.appendChild(b);
+      c.lista.appendChild(h("div", { class: "kb-mais-item", role: "listitem" }, b));
     }
     if (e.tipo !== "aberto") {
       c.extra.appendChild(h("div", { class: "kb-antigos" },

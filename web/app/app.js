@@ -1015,6 +1015,8 @@ function construirCtx(r, alvo) {
     rascunho: {
       ligar: (campo, chave, opcoes) => E.rascunhos.ligar(campo, chave, opcoes),
       apagar: chave => E.rascunhos.apagar(chave),
+      existe: chave => E.rascunhos.existe(chave),
+      texto: chave => E.rascunhos.texto(chave),
     },
     /** Atalhos de teclado «Ir para…» desta tela (M22): [{rotulo, alvo: Element | seletor | () => Element}]. Aparecem ao receber o foco (Tab),
         antes do «Pular para o conteúdo». Sem chamar isto, valem as regiões padrão da rota (rotas.REGIOES_DA_ROTA). Devolve cancelar(). */
@@ -1405,6 +1407,7 @@ function abrirAvisoTeste(ancora, cli, dias) {
     ui.h("p", { class: "fraco" }, "Depois dessa data você só consegue consultar. Fale com o suporte para continuar."),
     ui.h("div", { class: "linha" }, falar, ocultar)), { largura: 300 });
   if (f && f.el) f.el.setAttribute("aria-label", "Período de teste");   // o painel é role="dialog": precisa de nome
+}
 
 function desenharEmpresa() {
   const { ui } = E;

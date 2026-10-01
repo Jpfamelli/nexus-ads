@@ -149,7 +149,7 @@ export async function montar(ctx) {
       if (e.erros.length) {
         faixa.append(h("p", {}, L.textoQueda(e.erros)),
           eGestor(ctx) ? h("a", { class: "rel-btn rel-btn-prim", href: "#/config/anuncios" }, "Refazer a conexão")
-            : h("p", { class: "rel-nota" }, "A equipe de gestão já foi avisada e está resolvendo."));
+            : h("p", { class: "rel-nota" }, "Nossa equipe já foi avisada."));
       }
     };
     pintarPilula();
@@ -407,7 +407,7 @@ export async function montar(ctx) {
           td("ag", N.int(outras.ag), "Agendados"), td("fe", N.int(outras.fe), "Fechados"), td("rec", N.brl0(outras.rec), "Receita"), td("roas", "—", "Retorno")) : null);
       cartao.append(h("div", { class: "rel-cartao-topo" }, h("h2", { class: "rel-h2" }, `Campanhas nos últimos ${S.dias} dias`),
         h("p", { class: "rel-nota" }, "Toque numa campanha para ver os criativos. Agendados, fechados e receita vêm do CRM, pela data de cada evento.")),
-        h("div", { class: "rel-tabela-rolagem" }, h("table", { class: "rel-tabela ads-tabela" },
+        h("div", { class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": `Campanhas nos últimos ${S.dias} dias` }, h("table", { class: "rel-tabela ads-tabela" },
           h("caption", { class: "sr-only" }, `Campanhas nos últimos ${S.dias} dias`), thead, tbody, tfoot)));
     };
     desenharTabela();

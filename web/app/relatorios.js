@@ -248,7 +248,7 @@ export async function montar(ctx) {
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
   function tabelaSimples({ colunas, linhas, legenda: leg }) {
-    return h("div", { class: "rel-tabela-rolagem" }, h("table", { class: "rel-tabela relat-tabela" },
+    return h("div", { class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": leg }, h("table", { class: "rel-tabela relat-tabela" },
       h("caption", { class: "sr-only" }, leg),
       h("thead", {}, h("tr", {}, colunas.map((c, j) => h("th", { scope: "col", class: j ? "num" : "" }, c)))),
       h("tbody", {}, linhas.map((l, i) => h("tr", { style: `--i:${i}` }, l.map((v, j) => j ? h("td", { class: "num", dataset: { l: colunas[j] } }, v) : h("th", { scope: "row" }, v)))))));

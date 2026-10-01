@@ -173,6 +173,7 @@ await teste("radar: episódios do núcleo + registro do servidor com ✓/✓✓/
   assert.equal(R.registro[1].envio.k, "erro"); assert.equal(R.registro[1].envio.tique, "!");
   assert.deepEqual(L.estadoIntegracao(integracoes, alertas, agora), puroPainel.estadoIntegracao(integracoes, alertas, agora));
   assert.equal(L.textoPilula(L.estadoIntegracao(integracoes, alertas, agora)), "Meta desconectado");
+  assert.equal(L.textoQueda(L.estadoIntegracao(integracoes, alertas, agora).erros), "Meta desconectado · dados até 27/09 05:00.");
 });
 
 await teste("statusEnvio, canalDe, nomeRegraSrv e eixoTopo = os do painel", () => {
@@ -969,7 +970,8 @@ await teste("M39 (navegador): a manchete de Anúncios fica em y ≤ 300 a 390×8
       const erros = []; page.on("pageerror", e => erros.push(String(e.message || e)));
       // uma conexão caída (alerta crítico ativo) junto dos alertas de atenção que o dev-falso já traz
       await page.setRequestInterception(true);
-      let critico = false;
+      // Injeta na primeira leitura de dados dos Anúncios; ao trocar para Radar a tela reaproveita essa resposta.
+      const critico = true;
       page.on("request", async r => {
         if (!critico || !r.url().includes("rpc/nx_dados")) return r.continue();
         try {
@@ -995,7 +997,6 @@ await teste("M39 (navegador): a manchete de Anúncios fica em y ≤ 300 a 390×8
       assert.ok(m.topo !== null, "a manchete existe");
       assert.ok(m.topo - m.faixas <= 300, `a manchete ficou em y=${Math.round(m.topo)} (faixas ${Math.round(m.faixas)} px)`);
       assert.equal(m.chip, true, "chip-resumo visível no celular"); assert.equal(m.abasEmUmaLinha, true, "4 abas numa linha só"); assert.equal(m.sobra, false, "sem rolagem horizontal");
-      critico = true;
       await page.evaluate(() => { location.hash = "#/anuncios/radar"; });
       await new Promise(r => setTimeout(r, 3500));
       const ordem = await page.evaluate(() => [...document.querySelectorAll(".ads-alertas > li")].filter(li => !li.classList.contains("resolvido")).map(li => li.dataset.sev));
@@ -1004,6 +1005,13 @@ await teste("M39 (navegador): a manchete de Anúncios fica em y ≤ 300 a 390×8
       assert.deepEqual(erros, []);
     } finally { await browser.close(); }
   } finally { srv.kill(); }
+});
+
+await teste("A11Y: tabelas com rolagem horizontal têm região nomeada, foco de teclado visível", () => {
+  const rel = ler("web/app/relatorios.js"), ads = ler("web/app/anuncios.js"), css = ler("web/app/relatorios.css");
+  assert.match(rel, /class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": leg/);
+  assert.match(ads, /class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": `Campanhas nos últimos/);
+  assert.match(css, /\.rel-tabela-rolagem:focus-visible \{[^}]*outline: 2px solid var\(--c-prim\)/);
 });
 
 console.log(`\n${ok} ok · ${falhas} falha(s)`);

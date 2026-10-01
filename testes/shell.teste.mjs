@@ -90,11 +90,16 @@ await teste("antes.js: injeta o modulepreload da tela do endereço (8 telas + lo
     ["#/agenda", "agenda.js"], ["#/anuncios", "anuncios.js"], ["#/automacoes", "automacoes.js"], ["#/relatorios/vendas", "relatorios.js"], ["#/config/numeros", "config.js"],
     ["#/crm?c=clinica", "crm.js"],
   ];
-  for (const [hash, arq] of casos) assert.deepEqual(rodarAntes({ hash, token: "t" }).preloads, [`modulepreload:${arq}?v=VTESTE`], hash);
-  assert.deepEqual(rodarAntes({ hash: "", token: "t" }).preloads, ["modulepreload:inicio.js?v=VTESTE"], "sem rota: Início");
+  const extras = {
+    "inicio.js": ["modulepreload:rel-logica.js?v=VTESTE", "modulepreload:graficos.js?v=VTESTE", "preload:relatorios.css?v=VTESTE"],
+    "conversas.js": ["modulepreload:cv-logica.js?v=VTESTE", "modulepreload:cv-lista.js?v=VTESTE", "modulepreload:cv-chat.js?v=VTESTE", "modulepreload:cv-composer.js?v=VTESTE", "modulepreload:cv-lateral.js?v=VTESTE", "preload:conversas.css?v=VTESTE"],
+    "crm.js": ["modulepreload:crm-logica.js?v=VTESTE", "modulepreload:crm-kanban.js?v=VTESTE", "modulepreload:crm-negocio.js?v=VTESTE", "preload:crm.css?v=VTESTE"],
+  };
+  for (const [hash, arq] of casos) assert.deepEqual(rodarAntes({ hash, token: "t" }).preloads, [`modulepreload:${arq}?v=VTESTE`, ...(extras[arq] || [])], hash);
+  assert.deepEqual(rodarAntes({ hash: "", token: "t" }).preloads, ["modulepreload:inicio.js?v=VTESTE", ...extras["inicio.js"]], "sem rota: Início");
   assert.deepEqual(rodarAntes({ hash: "", search: "?produto=ads", token: "t" }).preloads, ["modulepreload:anuncios.js?v=VTESTE"], "entrada do Nexus Ads");
-  assert.deepEqual(rodarAntes({ hash: "", search: "?produto=atendimento", token: "t" }).preloads, ["modulepreload:conversas.js?v=VTESTE"]);
-  assert.deepEqual(rodarAntes({ hash: "", search: "?produto=crm", token: "t" }).preloads, ["modulepreload:crm.js?v=VTESTE"]);
+  assert.deepEqual(rodarAntes({ hash: "", search: "?produto=atendimento", token: "t" }).preloads, ["modulepreload:conversas.js?v=VTESTE", ...extras["conversas.js"]]);
+  assert.deepEqual(rodarAntes({ hash: "", search: "?produto=crm", token: "t" }).preloads, ["modulepreload:crm.js?v=VTESTE", ...extras["crm.js"]]);
 });
 
 await teste("antes.js: sem sessão guardada (ou rota pública) pré-carrega só o login; rota desconhecida não pré-carrega nada", () => {

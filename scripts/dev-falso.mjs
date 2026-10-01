@@ -697,9 +697,13 @@ function simular(acao, q) {
     case "onboarding": onboardingDefinir(q.get("modo") || "parcial"); return { ok: true, estado: onboardingEstado() };
     case "versao": dev.versao = q.get("v") || null; return { ok: true, versao: dev.versao };
     case "marca": {
-      if (!q.get("produto") && q.get("logo") !== "1") { dev.marca = null; return { ok: true, marca: null }; }
+      if (!q.get("produto") && q.get("logo") !== "1" && !["primaria", "secundaria", "fundo"].some(k => q.has(k))) { dev.marca = null; return { ok: true, marca: null }; }
       const logo = q.get("logo") === "1" ? `data:image/png;base64,${readFileSync(resolve(ROOT, "app/icones/icon-192.png")).toString("base64")}` : undefined;
-      dev.marca = { ...(q.get("produto") ? { produto: q.get("produto") } : {}), ...(logo ? { logo, logo_claro: logo, favicon: logo } : {}) };
+      const cores = Object.fromEntries(["primaria", "secundaria", "fundo"].flatMap(k => {
+        const v = q.get(k);
+        return v && /^#[0-9a-f]{6}$/i.test(v) ? [[k, v.toUpperCase()]] : [];
+      }));
+      dev.marca = { ...(q.get("produto") ? { produto: q.get("produto") } : {}), ...(Object.keys(cores).length ? { cores } : {}), ...(logo ? { logo, logo_claro: logo, favicon: logo } : {}) };
       return { ok: true, marca: Object.keys(dev.marca) };
     }
     case "clientes": dev.empresas = Math.max(1, Math.min(2, Number(q.get("n")) || 1)); return { ok: true, empresas: dev.empresas };
@@ -746,7 +750,7 @@ const servidor = http.createServer(async (req, res) => {
     if (decoded === "/app/prontos.js" && /dev-falso=1/.test(req.headers.referer || "")) {
       arquivo = Buffer.from('export const MODULOS_PRONTOS = ["inicio","conversas","crm","empresas","tarefas","ads","automacoes","relatorios","admin"];\nexport const CONFIG_PRONTAS = ["perfil","usuarios","marca","dominio","plano","numeros","respostas","atendimento","ia","departamentos","funis","campos","etiquetas","motivos","anuncios","formulario","agenda","rastreio"];\n');
     }
-    if (caminho === "/app/index.html" && url.searchParams.get("dev-falso") === "1") {
+    if (caminho === "/app/index.html" && url.searchParams.get("dev-falso") === "1" && url.searchParams.get("boot") !== "0") {
       const boot = `<script src="/__dev_falso/boot.js"></script>`;
       // no fim do <head> (depois do antes.js): o pedido sai junto com os outros em vez de esperar o <body> — como na produção, sem um salto a mais
       arquivo = Buffer.from(arquivo.toString("utf8").replace("</head>", `${boot}\n</head>`));

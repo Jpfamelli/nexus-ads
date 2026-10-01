@@ -109,6 +109,7 @@
 .kb-col-tipo { font-weight: 600; font-size: var(--fs-12); color: var(--c-texto-2); }
 .kb-lista { display: flex; flex-direction: column; gap: .55rem; padding: .7rem .6rem .8rem; overflow-y: auto; min-height: 90px; flex: 1; scrollbar-width: thin; scrollbar-color: var(--c-borda-2) transparent; }
 .kb-vazia { display: grid; place-items: center; padding: .2rem; text-align: center; }
+.kb-mais-item { display: flex; justify-content: center; }
 .kb-vazia .vazio { padding: .5rem .4rem; border: 0; justify-content: center; }
 .kb-vazia .vazio-linha { font-size: var(--fs-13); color: var(--c-texto-2); }
 .kb-mais { align-self: center; margin-top: .2rem; }
