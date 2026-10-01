@@ -140,7 +140,7 @@ export const GATILHOS = Object.freeze([
   { id: "apos_data", grupo: "Agenda", icone: "relogio",
     rotulo: vv => `Depois da ${palavraConsulta(vv.vertical)} marcada`,
     descricao: "Algumas horas depois de uma data marcada (faltou, pós-atendimento).",
-    dica: vv => `Conta a partir da data e hora da ${palavraConsulta(vv.vertical)}. Combine com uma condição de etapa para tratar quem faltou separado de quem veio.`,
+    dica: vv => `Conta a partir da data e hora da ${palavraConsulta(vv.vertical)}. Na data da ${palavraConsulta(vv.vertical)} vale qualquer negócio (aberto, ganho ou perdido): quem fechou na ${palavraConsulta(vv.vertical)} também recebe. Combine com uma condição de etapa para tratar quem faltou separado de quem veio.`,
     campos: [
       { nome: "campo", tipo: "campo_data", rotulo: "Data", obrigatorio: true, padrao: "consulta" },
       { nome: "horas", tipo: "numero", rotulo: "Quantas horas depois", min: 1, max: 720, obrigatorio: true, padrao: 2, sufixo: "h" },

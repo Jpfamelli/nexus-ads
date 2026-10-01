@@ -471,6 +471,96 @@ begin
                      'admin cancela a espera: ' || j::text);
   update public.nx_automacoes set ativo = false where id = a_seq2;
 
+  -- ---------------------------------------------------------- a sequência confere o negócio ao voltar
+  declare
+    a_c1 uuid; a_c2 uuid; a_c3 uuid; a_c4 uuid; cx1 bigint; cx2 bigint; cx3 bigint; cx4 bigint; cx5 bigint; cx6 bigint;
+    lx1 bigint; lx2 bigint; lx3 bigint; lx4 bigint; lx5 bigint; lx6 bigint;
+  begin
+    -- negocio_criado (gatilho sem etapa): quem fechou enquanto esperava não recebe o resto; quem segue aberto recebe
+    j := public.nx_automacao_salvar('tok-12-adm', cA, jsonb_build_object('nome', 'Confere o status', 'gatilho', 'negocio_criado', 'ativo', true,
+      'config', jsonb_build_object('funil_id', f_p1),
+      'acoes', '[{"tipo":"esperar","minutos":60,"cancelar_se_cliente_responder":false},{"tipo":"criar_tarefa","titulo":"Depois da espera {primeiro_nome}","dono":"responsavel"}]'::jsonb));
+    a_c1 := (j ->> 'id')::uuid;
+    perform pg_temp.lote(200);
+    insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Gil Fechou', '12992228021') returning id into cx1;
+    insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Hana Segue', '12992228022') returning id into cx2;
+    insert into public.nx_leads (cliente_id, contato_id, funil_id, estagio_id, dono_id, origem) values (cA, cx1, f_p1, sp1, k_at, 'whatsapp') returning id into lx1;
+    insert into public.nx_leads (cliente_id, contato_id, funil_id, estagio_id, dono_id, origem) values (cA, cx2, f_p1, sp1, k_at, 'whatsapp') returning id into lx2;
+    perform pg_temp.lote(25);
+    perform pg_temp.ok((select count(*) from public.nx_auto_sequencias where automacao_id = a_c1 and status = 'esperando' and contato_id in (cx1, cx2)) = 2, 'confere o status: duas esperando');
+    update public.nx_leads set estagio_id = sp_ganho, valor = 1 where id = lx1;                     -- Gil fechou por telefone
+    update public.nx_auto_sequencias set continuar_em = now() - interval '1 minute' where automacao_id = a_c1;
+    perform pg_temp.lote(25);
+    perform pg_temp.ok(exists (select 1 from public.nx_tarefas where automacao_id = a_c1 and titulo = 'Depois da espera Hana')
+                   and not exists (select 1 from public.nx_tarefas where automacao_id = a_c1 and titulo = 'Depois da espera Gil'),
+                       'quem fechou durante a espera não recebe o resto; quem segue aberto recebe');
+    perform pg_temp.ok((select s.status = 'cancelada' and s.motivo = 'o negócio foi ganho' and x.estado = 'cancelada' and x.detalhe like '%cancelada: o negócio foi ganho'
+                          from public.nx_auto_sequencias s join public.nx_auto_execucoes x on x.automacao_id = s.automacao_id and x.chave = s.chave
+                         where s.automacao_id = a_c1 and s.contato_id = cx1), 'cancelada com o motivo legível na sequência e na execução');
+    perform pg_temp.ok((select status = 'concluida' from public.nx_auto_sequencias where automacao_id = a_c1 and contato_id = cx2), 'a outra sequência concluiu');
+    update public.nx_automacoes set ativo = false where id = a_c1;
+
+    -- negocio_estagio: sair da etapa do gatilho cancela
+    j := public.nx_automacao_salvar('tok-12-adm', cA, jsonb_build_object('nome', 'Confere a etapa', 'gatilho', 'negocio_estagio', 'ativo', true,
+      'config', jsonb_build_object('estagio_id', s_orc),
+      'acoes', '[{"tipo":"esperar","minutos":60,"cancelar_se_cliente_responder":false},{"tipo":"criar_tarefa","titulo":"Etapa conferida {primeiro_nome}","dono":"responsavel"}]'::jsonb));
+    a_c2 := (j ->> 'id')::uuid;
+    perform pg_temp.lote(200);
+    insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Ivo Mudou', '12992228023') returning id into cx3;
+    insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Jana Fica', '12992228024') returning id into cx4;
+    insert into public.nx_leads (cliente_id, contato_id, funil_id, estagio_id, dono_id, origem) values (cA, cx3, f_pac, s_nova, k_at, 'whatsapp') returning id into lx3;
+    insert into public.nx_leads (cliente_id, contato_id, funil_id, estagio_id, dono_id, origem) values (cA, cx4, f_pac, s_nova, k_at, 'whatsapp') returning id into lx4;
+    update public.nx_leads set estagio_id = s_orc where id in (lx3, lx4);
+    perform pg_temp.lote(25);
+    perform pg_temp.ok((select count(*) from public.nx_auto_sequencias where automacao_id = a_c2 and status = 'esperando' and estagio_ref = s_orc and contato_id in (cx3, cx4)) = 2,
+                       'confere a etapa: duas esperando, com a etapa de referência guardada');
+    update public.nx_leads set estagio_id = s_agend where id = lx3;                                  -- Ivo foi movido para outra etapa
+    update public.nx_auto_sequencias set continuar_em = now() - interval '1 minute' where automacao_id = a_c2;
+    perform pg_temp.lote(25);
+    perform pg_temp.ok(exists (select 1 from public.nx_tarefas where automacao_id = a_c2 and titulo = 'Etapa conferida Jana')
+                   and not exists (select 1 from public.nx_tarefas where automacao_id = a_c2 and titulo = 'Etapa conferida Ivo')
+                   and (select motivo = 'o negócio mudou de etapa' from public.nx_auto_sequencias where automacao_id = a_c2 and contato_id = cx3),
+                       'quem saiu da etapa do gatilho durante a espera não recebe o resto');
+    update public.nx_automacoes set ativo = false where id = a_c2;
+
+    -- a própria automação move o negócio e espera: a etapa de referência é a de DEPOIS do movimento (não cancela a si mesma)
+    j := public.nx_automacao_salvar('tok-12-adm', cA, jsonb_build_object('nome', 'Move e espera', 'gatilho', 'negocio_estagio', 'ativo', true,
+      'config', jsonb_build_object('estagio_id', s_orc),
+      'acoes', jsonb_build_array(jsonb_build_object('tipo', 'mover_estagio', 'estagio_id', s_agend),
+                                 jsonb_build_object('tipo', 'esperar', 'minutos', 60, 'cancelar_se_cliente_responder', false),
+                                 jsonb_build_object('tipo', 'criar_tarefa', 'titulo', 'Depois de mover {primeiro_nome}', 'dono', 'responsavel'))));
+    a_c3 := (j ->> 'id')::uuid;
+    perform pg_temp.lote(200);
+    insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Lia Move', '12992228025') returning id into cx5;
+    insert into public.nx_leads (cliente_id, contato_id, funil_id, estagio_id, dono_id, origem) values (cA, cx5, f_pac, s_nova, k_at, 'whatsapp') returning id into lx5;
+    update public.nx_leads set estagio_id = s_orc where id = lx5;
+    perform pg_temp.lote(25);
+    perform pg_temp.ok((select s.status = 'esperando' and s.estagio_ref = s_agend from public.nx_auto_sequencias s where s.automacao_id = a_c3 and s.contato_id = cx5)
+                   and (select estagio_id = s_agend from public.nx_leads where id = lx5), 'a automação moveu o negócio e a referência é a etapa nova');
+    update public.nx_auto_sequencias set continuar_em = now() - interval '1 minute' where automacao_id = a_c3;
+    perform pg_temp.lote(25);
+    perform pg_temp.ok(exists (select 1 from public.nx_tarefas where automacao_id = a_c3 and titulo = 'Depois de mover Lia' and negocio_id = lx5),
+                       'a sequência que moveu o negócio sozinha continua depois da espera');
+    update public.nx_automacoes set ativo = false where id = a_c3;
+
+    -- apos_data (data da consulta): vale para QUALQUER status — quem fechou na consulta também recebe o pós-atendimento
+    j := public.nx_automacao_salvar('tok-12-adm', cA, jsonb_build_object('nome', 'Pós-consulta 12', 'gatilho', 'apos_data', 'ativo', true,
+      'config', jsonb_build_object('campo', 'consulta', 'horas', 2, 'funil_id', f_p1),
+      'acoes', '[{"tipo":"criar_tarefa","titulo":"Avaliação {primeiro_nome}","dono":"responsavel"}]'::jsonb));
+    a_c4 := (j ->> 'id')::uuid;
+    insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Nina Fechou', '12992228026') returning id into cx6;
+    insert into public.nx_leads (cliente_id, contato_id, funil_id, estagio_id, dono_id, origem, consulta_em) values (cA, cx6, f_p1, sp1, k_at, 'whatsapp', now() - interval '3 hours') returning id into lx6;
+    update public.nx_leads set estagio_id = sp_ganho, valor = 1 where id = lx6;
+    perform pg_temp.ok((select status = 'ganho' from public.nx_leads where id = lx6), 'o negócio da Nina fechou na consulta');
+    perform pg_temp.lote(25);
+    perform pg_temp.ok(exists (select 1 from public.nx_tarefas where automacao_id = a_c4 and titulo = 'Avaliação Nina' and negocio_id = lx6),
+                       'apos_data: quem fechou na consulta (ganho) também recebe o pós-atendimento');
+    perform pg_temp.ok(exists (select 1 from public.nx_auto_simular_alvos(cA, 'apos_data', jsonb_build_object('campo', 'consulta', 'horas', 2, 'funil_id', f_p1), null, 20) z
+                                where (z ->> 'negocio_id')::bigint = lx6),
+                       'o «testar» também mostra quem já fechou como exemplo de apos_data');
+    update public.nx_automacoes set ativo = false where id = a_c4;
+  end;
+
   -- ---------------------------------------------------------- parar encerra a sequência deste alvo
   j := public.nx_automacao_salvar('tok-12-adm', cA, jsonb_build_object('nome', 'Para no meio', 'gatilho', 'negocio_estagio', 'ativo', true,
     'config', jsonb_build_object('estagio_id', sp2),
@@ -803,6 +893,8 @@ begin
   perform pg_temp.ok((select status = 'aplicado' and modelo = 'claude-teste' and tokens_in = 900 and tokens_out = 45 and concluido_em is not null and resultado ->> 'motivo' = 'quer marcar avaliação'
                         from public.nx_auto_ia_pedidos where id = ped), 'pedido aplicado com modelo e tokens');
   perform pg_temp.ok((select status = 'esperando' and continuar_em <= now() and pedido_id is null from public.nx_auto_sequencias where automacao_id = a_ia), 'sequência liberada');
+  -- «esperando» aqui é só a fila da próxima rodada: uma mensagem do cliente nesses segundos NÃO cancela o resto
+  perform pg_temp.ok((select not cancelar_se_responder from public.nx_auto_sequencias where automacao_id = a_ia), 'depois da IA a sequência não é cancelável pela resposta do cliente');
   j := pg_temp.lote(25);
   perform pg_temp.ok(exists (select 1 from public.nx_tarefas where automacao_id = a_ia and negocio_id = l2
                               and titulo = 'Depois da IA em ' || (select nome from public.nx_estagios where id = s_agend)),
@@ -888,6 +980,19 @@ begin
   r2 := public.nx_auto_ia_resolver(ped, '{"score":10,"motivo":"x"}'::jsonb);
   perform pg_temp.ok(r2::jsonb ->> 'erro' = 'pedido_encerrado' or (r2 ->> 'cancelado')::boolean, 'resposta tardia de automação desligada não é aplicada: ' || r2::text);
   perform pg_temp.ok((select (campos ->> 'score')::int = 87 from public.nx_leads where id = l2), 'a pontuação anterior continua');
+
+  -- cancelar a espera pela tela inclui quem aguarda a IA (o «em espera» da lista soma os dois) e o pedido dela não gasta cota
+  update public.nx_automacoes set ativo = true where id = a_ia2;
+  ped := pg_temp.pedido(a_ia2, cA, l2, ct3, 'pontuar_lead');
+  update public.nx_auto_ia_pedidos set status = 'pendente', pego_em = null where id = ped;
+  perform pg_temp.ok((select (x ->> 'em_espera')::int >= 1 from (select public.nx_auto_item(a) x from public.nx_automacoes a where a.id = a_ia2) q), 'quem aguarda a IA conta em «em espera»');
+  j := public.nx_automacao_cancelar_espera('tok-12-adm', cA, a_ia2, null);
+  perform pg_temp.ok((j ->> 'canceladas')::int >= 1
+                 and (select status = 'cancelado' and detalhe = 'cancelada pela equipe' from public.nx_auto_ia_pedidos where id = ped)
+                 and (select status = 'cancelada' and motivo = 'cancelada pela equipe' from public.nx_auto_sequencias where pedido_id = ped)
+                 and (select (x ->> 'em_espera')::int = 0 from (select public.nx_auto_item(a) x from public.nx_automacoes a where a.id = a_ia2) q),
+                     'cancelar a espera cancela quem aguarda a IA e o pedido dela: ' || j::text);
+  update public.nx_automacoes set ativo = false where id = a_ia2;
 
   -- ---------------------------------------------------------- chamada da IA pelo motor
   update public.nx_automacoes set ativo = true where id = a_ia2;

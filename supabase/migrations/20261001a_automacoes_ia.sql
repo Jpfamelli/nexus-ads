@@ -96,10 +96,12 @@ create table if not exists public.nx_auto_sequencias (
       check (status in ('esperando', 'aguardando_ia', 'concluida', 'cancelada', 'erro')),
   motivo text check (char_length(motivo) <= 300),
   profundidade int not null default 0,
+  estagio_ref uuid,                                       -- etapa do negócio quando a sequência parou (negocio_estagio / tempo_no_estagio: sair dela cancela)
   criado_em timestamptz not null default now(),
   atualizado_em timestamptz not null default now(),
   unique (automacao_id, chave)
 );
+alter table public.nx_auto_sequencias add column if not exists estagio_ref uuid;
 create index if not exists nx_auto_seq_vencidas on public.nx_auto_sequencias(continuar_em, id) where status = 'esperando';
 create index if not exists nx_auto_seq_contato on public.nx_auto_sequencias(cliente_id, contato_id) where status = 'esperando';
 create index if not exists nx_auto_seq_pedido on public.nx_auto_sequencias(pedido_id) where pedido_id is not null;
@@ -954,19 +956,21 @@ begin
          order by s.alvo
          limit p_lim;
     else
+      -- a data da consulta vale para QUALQUER status: na clínica quem fecha na consulta vai para «fechou» (ganho) e quem
+      -- não fecha para «não fechou» (perdido), e os dois devem receber o pós-atendimento (a condição de etapa separa quem faltou)
       return query
         select 'ap:' || s.id || ':' || floor(extract(epoch from s.alvo))::bigint,
                jsonb_build_object('negocio_id', s.id, 'contato_id', s.contato_id)
           from (select l.id, l.contato_id, l.consulta_em as alvo
                   from public.nx_leads l
-                 where l.cliente_id = p_auto.cliente_id and l.status = 'aberto' and l.consulta_em is not null
+                 where l.cliente_id = p_auto.cliente_id and l.consulta_em is not null
                    and l.consulta_em <= now() - make_interval(hours => v_h)
                    and l.consulta_em > now() - make_interval(hours => v_h) - interval '48 hours'
                    and (v_funil is null or l.funil_id = v_funil)
                 union all
                 select l.id, l.contato_id, ((l.data_consulta + time '09:00') at time zone 'America/Sao_Paulo')
                   from public.nx_leads l
-                 where l.cliente_id = p_auto.cliente_id and l.status = 'aberto' and l.consulta_em is null
+                 where l.cliente_id = p_auto.cliente_id and l.consulta_em is null
                    and l.data_consulta between v_hoje - (v_h / 24 + 4) and v_hoje
                    and (v_funil is null or l.funil_id = v_funil)) s
          where s.alvo + make_interval(hours => v_h) <= now()
@@ -1062,11 +1066,14 @@ begin
        order by k.id desc
        limit p_lim;
   else
-    v_status := case p_gat when 'negocio_ganho' then 'ganho' when 'negocio_perdido' then 'perdido' else 'aberto' end;
+    -- apos_data com a data da consulta olha qualquer status (o motor também); os demais, o status do próprio gatilho
+    v_status := case when p_gat = 'negocio_ganho' then 'ganho' when p_gat = 'negocio_perdido' then 'perdido'
+                     when p_gat = 'apos_data' and c ->> 'campo' is distinct from 'previsao_fechamento' then null
+                     else 'aberto' end;
     return query
       select jsonb_build_object('negocio_id', l.id, 'contato_id', l.contato_id, 'funil_id', l.funil_id, 'estagio_para', l.estagio_id)
         from public.nx_leads l
-       where l.cliente_id = p_cliente and l.status = v_status
+       where l.cliente_id = p_cliente and (v_status is null or l.status = v_status)
          and (v_funil is null or l.funil_id = v_funil)
          and (v_est is null or l.estagio_id = v_est)
          and (p_gat not in ('antes_da_data', 'apos_data')
@@ -1695,6 +1702,19 @@ end $$;
 -- 6. Rodar uma automação para UM alvo (com sequências) e continuar quem estava esperando
 -- ------------------------------------------------------------
 
+-- etapa atual do negócio do alvo (null sem negócio). A sequência guarda a etapa de quando PAROU: se outra pessoa
+-- mover o negócio enquanto ela espera, as automações de etapa (negocio_estagio / tempo_no_estagio) não falam mais com ele.
+create or replace function public.nx_auto_estagio_do_alvo(p_cliente uuid, p_alvo jsonb)
+returns uuid
+language sql stable
+security definer
+set search_path = ''
+as $$
+  select l.estagio_id from public.nx_leads l
+   where l.id = case when (p_alvo ->> 'negocio_id') ~ '^[0-9]{1,18}$' then (p_alvo ->> 'negocio_id')::bigint end
+     and l.cliente_id = p_cliente;
+$$;
+
 -- roda UMA automação para UM alvo, com dedupe pela chave. Devolve ok | erro | pulou | repetido | pendente.
 -- p_tempo = gatilho de tempo: condição que não vale também grava a chave (senão o mesmo alvo
 -- voltaria em toda rodada e tomaria a vez dos outros).
@@ -1745,12 +1765,12 @@ begin
     on conflict (automacao_id, chave) do nothing;
     if v_estado in ('esperando', 'aguardando_ia') then
       insert into public.nx_auto_sequencias (automacao_id, cliente_id, chave, contato_id, alvo, acoes, passo, continuar_em,
-                                             cancelar_se_responder, pedido_id, status, profundidade)
+                                             cancelar_se_responder, pedido_id, status, profundidade, estagio_ref)
       values (p_auto.id, p_auto.cliente_id, p_chave, nullif(v_alvo ->> 'contato_id', '')::bigint, v_alvo, p_auto.acoes,
               coalesce(v_prox, v_total),
               case when v_estado = 'esperando' then now() + make_interval(mins => (v_r ->> 'esperar_min')::int) end,
               coalesce((v_r ->> 'cancelar_se_responder')::boolean, true), (v_r ->> 'pedido')::bigint,
-              v_estado, coalesce(p_prof, 0))
+              v_estado, coalesce(p_prof, 0), public.nx_auto_estagio_do_alvo(p_auto.cliente_id, v_alvo))
       on conflict (automacao_id, chave) do nothing;
     end if;
     update public.nx_automacoes set execucoes = execucoes + 1, ultima_execucao_em = now() where id = p_auto.id;
@@ -1787,6 +1807,7 @@ as $$
 declare
   a public.nx_automacoes; v_alvo jsonb; v_r jsonb; v_det text; v_prox int; v_total int; v_estado text; v_erro text;
   v_msg text; v_hint text; v_detalhe text;
+  v_neg bigint; v_nstatus text; v_nest uuid; v_motivo text;
 begin
   select * into a from public.nx_automacoes x where x.id = p_seq.automacao_id;
   if a.id is null or not a.ativo then
@@ -1796,6 +1817,35 @@ begin
            detalhe = left(coalesce(x.detalhe, '') || ' · cancelada: a automação foi desligada', 1000)
      where x.automacao_id = p_seq.automacao_id and x.chave = p_seq.chave;
     return 'cancelada';
+  end if;
+  -- o negócio mudou enquanto a sequência esperava? Quem fechou por telefone não pode receber «ficou alguma dúvida sobre o
+  -- orçamento?». Nas automações de etapa (negocio_estagio / tempo_no_estagio) vale a ETAPA de quando a sequência parou
+  -- (estagio_ref): ganhar ou perder é mudar de etapa, e a própria sequência pode mover o negócio sem se cancelar. Nas de
+  -- negócio aberto sem etapa (negocio_criado, antes_da_data, agendado) vale o status. Automações de ganho/perdido, de
+  -- conversa, de tarefa e de «depois da data» não passam por aqui.
+  v_neg := case when (p_seq.alvo ->> 'negocio_id') ~ '^[0-9]{1,18}$' then (p_seq.alvo ->> 'negocio_id')::bigint end;
+  if v_neg is not null and a.gatilho in ('negocio_criado', 'negocio_estagio', 'tempo_no_estagio', 'antes_da_data', 'agendado') then
+    select l.status, l.estagio_id into v_nstatus, v_nest from public.nx_leads l
+     where l.id = v_neg and l.cliente_id = p_seq.cliente_id;
+    if not found then
+      v_motivo := 'o negócio não existe mais';
+    elsif a.gatilho in ('negocio_estagio', 'tempo_no_estagio') then
+      if p_seq.estagio_ref is not null and v_nest is distinct from p_seq.estagio_ref then
+        v_motivo := 'o negócio mudou de etapa';
+      end if;
+    elsif v_nstatus = 'ganho' then
+      v_motivo := 'o negócio foi ganho';
+    elsif v_nstatus = 'perdido' then
+      v_motivo := 'o negócio foi perdido';
+    end if;
+    if v_motivo is not null then
+      update public.nx_auto_sequencias set status = 'cancelada', motivo = v_motivo, pedido_id = null, atualizado_em = now()
+       where id = p_seq.id;
+      update public.nx_auto_execucoes x set estado = 'cancelada', atualizado_em = now(),
+             detalhe = left(coalesce(x.detalhe, '') || ' · cancelada: ' || v_motivo, 1000)
+       where x.automacao_id = p_seq.automacao_id and x.chave = p_seq.chave;
+      return 'cancelada';
+    end if;
   end if;
   begin
     perform set_config('nx.automacao', a.id::text, true);
@@ -1819,6 +1869,7 @@ begin
       continuar_em = case when v_estado = 'esperando' then now() + make_interval(mins => (v_r ->> 'esperar_min')::int) end,
       cancelar_se_responder = case when v_estado = 'esperando' then coalesce((v_r ->> 'cancelar_se_responder')::boolean, true)
                                    else cancelar_se_responder end,
+      estagio_ref = case when v_estado = 'esperando' then public.nx_auto_estagio_do_alvo(p_seq.cliente_id, v_alvo) else estagio_ref end,
       pedido_id = (v_r ->> 'pedido')::bigint,
       motivo = case when v_estado = 'parada' then 'a sequência foi encerrada pelo passo «parar»' else null end
      where id = p_seq.id;
@@ -1863,8 +1914,13 @@ begin
   if s.id is null then return; end if;
   if p_ok then
     v_fim := s.passo >= jsonb_array_length(s.acoes);
+    -- «esperando» aqui é só a fila para a próxima rodada (continuar_em = agora), NÃO uma espera pelo cliente: a resposta que
+    -- chegar nesses segundos não cancela o resto (cancelar_se_responder = false); quem espera o cliente é o passo «esperar».
+    -- A etapa de referência é a de agora: a decisão da IA (classificar_etapa) acabou de mover o negócio.
     update public.nx_auto_sequencias set status = case when v_fim then 'concluida' else 'esperando' end,
-           continuar_em = case when v_fim then null else now() end, pedido_id = null, atualizado_em = now()
+           continuar_em = case when v_fim then null else now() end, pedido_id = null, atualizado_em = now(),
+           cancelar_se_responder = false,
+           estagio_ref = public.nx_auto_estagio_do_alvo(s.cliente_id, s.alvo)
      where id = s.id;
     update public.nx_auto_execucoes x set estado = case when v_fim then 'concluida' else 'esperando' end,
            passo = s.passo, atualizado_em = now(),
@@ -2508,11 +2564,16 @@ begin
   if not exists (select 1 from public.nx_automacoes a where a.id = p_id and a.cliente_id = p_cliente) then
     raise exception 'automacao_nao_encontrada' using errcode = '22023';
   end if;
+  -- inclui quem aguarda a IA (o «em espera» da tela soma os dois): o pedido de IA dela também é cancelado e não gasta cota
   with c as (
     update public.nx_auto_sequencias s set status = 'cancelada', motivo = 'cancelada pela equipe', atualizado_em = now()
-     where s.automacao_id = p_id and s.cliente_id = p_cliente and s.status = 'esperando'
+     where s.automacao_id = p_id and s.cliente_id = p_cliente and s.status in ('esperando', 'aguardando_ia')
        and (p_chave is null or s.chave = p_chave)
-    returning s.automacao_id, s.chave)
+    returning s.automacao_id, s.chave, s.pedido_id),
+  p as (
+    update public.nx_auto_ia_pedidos q set status = 'cancelado', pego_em = null, concluido_em = now(), detalhe = 'cancelada pela equipe'
+     where q.id in (select c.pedido_id from c where c.pedido_id is not null) and q.status in ('pendente', 'processando')
+    returning q.id)
   update public.nx_auto_execucoes x set estado = 'cancelada', atualizado_em = now(),
          detalhe = left(coalesce(x.detalhe, '') || ' · cancelada pela equipe', 1000)
     from c where x.automacao_id = c.automacao_id and x.chave = c.chave;
@@ -2642,7 +2703,7 @@ begin
          'nx_auto_dur', 'nx_auto_mover', 'nx_auto_proximo', 'nx_auto_base', 'nx_auto_ia_ligada',
          'nx_tg_auto_conversa_res', 'nx_tg_auto_seq_resposta', 'nx_tg_auto_desligada',
          'nx_auto_normalizar', 'nx_auto_erro_texto', 'nx_auto_config_ok', 'nx_auto_alvos_tempo', 'nx_auto_simular_alvos',
-         'nx_auto_passos', 'nx_auto_acoes', 'nx_auto_rodar', 'nx_auto_continuar',
+         'nx_auto_passos', 'nx_auto_acoes', 'nx_auto_estagio_do_alvo', 'nx_auto_rodar', 'nx_auto_continuar',
          'nx_auto_ia_encerrar', 'nx_auto_ia_contexto', 'nx_auto_ia_pegar', 'nx_auto_ia_falhar', 'nx_auto_ia_resolver',
          'nx_auto_ia_chamar', 'nx_auto_lote', 'nx_auto_faxina', 'nx_ia_reservar', 'nx_disparar',
          'nx_auto_item', 'nx_automacoes_listar', 'nx_automacao_execucoes', 'nx_automacao_cancelar_espera',
