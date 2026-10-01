@@ -289,7 +289,8 @@ function rpcsSaaS(api) {
       if (p_conta && status !== "falhou") { cv.aguardando = false; cv.primeira_resposta_em ??= iso(); }
       return msgJson(m);
     } },
-    // M36 (20261002d): o mesmo client_ref devolve a saída já gravada; marcar só vale uma vez e só em saída ('out')
+    // M36 (20261002d): o mesmo client_ref devolve a saída já gravada; marcar só vale uma vez e só em saída ('out').
+    // As regras de verdade (SQL) são provadas em supabase/testes/15_conversas_client_ref_onboarding.sql.
     nx_cv_ref_ver: { args: ["p_cliente", "p_conversa", "p_ref"], fn({ p_cliente, p_conversa, p_ref }) {
       if (!/^[A-Za-z0-9:_.-]{8,80}$/.test(String(p_ref ?? ""))) throw e("dados_invalidos", { hint: "client_ref" });
       const m = tab("nx_mensagens").find(x => x.cliente_id === p_cliente && x.client_ref === p_ref);
@@ -300,9 +301,39 @@ function rpcsSaaS(api) {
     nx_cv_ref_marcar: { args: ["p_cliente", "p_mensagem", "p_ref"], fn({ p_cliente, p_mensagem, p_ref }) {
       if (!/^[A-Za-z0-9:_.-]{8,80}$/.test(String(p_ref ?? ""))) throw e("dados_invalidos", { hint: "client_ref" });
       const m = tab("nx_mensagens").find(x => x.id === p_mensagem && x.cliente_id === p_cliente && x.direcao === "out");
+      // a reserva passa a apontar a saída (mesma conversa), mesmo quando a mensagem não pôde levar o ref
+      const res = tab("nx_envio_refs").find(x => x.cliente_id === p_cliente && x.client_ref === p_ref && x.mensagem_id == null);
+      if (res && m && m.conversa_id === res.conversa_id) res.mensagem_id = m.id;
       if (!m || m.client_ref) return false;
       if (tab("nx_mensagens").some(x => x.cliente_id === p_cliente && x.client_ref === p_ref)) return false;   // índice único parcial
       m.client_ref = p_ref;
+      return true;
+    } },
+    // reserva ANTES do envio (nx_envio_refs): novo | gravada (+ mensagem) | em_andamento (< 150 s) | antiga
+    nx_cv_ref_reservar: { args: ["p_cliente", "p_conversa", "p_ref"], fn({ p_cliente, p_conversa, p_ref }) {
+      if (!/^[A-Za-z0-9:_.-]{8,80}$/.test(String(p_ref ?? ""))) throw e("dados_invalidos", { hint: "client_ref" });
+      const m = tab("nx_mensagens").find(x => x.cliente_id === p_cliente && x.client_ref === p_ref);
+      if (m) {
+        if (m.conversa_id !== Number(p_conversa)) throw e("dados_invalidos", { hint: "client_ref" });
+        return { estado: "gravada", mensagem: msgJson(m) };
+      }
+      const res = tab("nx_envio_refs").find(x => x.cliente_id === p_cliente && x.client_ref === p_ref);
+      if (!res) {
+        tab("nx_envio_refs").push({ cliente_id: p_cliente, client_ref: p_ref, conversa_id: Number(p_conversa), mensagem_id: null, criado_em: iso() });
+        return { estado: "novo" };
+      }
+      if (res.conversa_id !== Number(p_conversa)) throw e("dados_invalidos", { hint: "client_ref" });
+      if (res.mensagem_id != null) {
+        const g = tab("nx_mensagens").find(x => x.id === res.mensagem_id && x.cliente_id === p_cliente);
+        return g ? { estado: "gravada", mensagem: msgJson(g) } : { estado: "antiga" };
+      }
+      return relogio().getTime() - Date.parse(res.criado_em) < 150e3 ? { estado: "em_andamento" } : { estado: "antiga" };
+    } },
+    nx_cv_ref_liberar: { args: ["p_cliente", "p_ref"], fn({ p_cliente, p_ref }) {
+      if (!/^[A-Za-z0-9:_.-]{8,80}$/.test(String(p_ref ?? ""))) throw e("dados_invalidos", { hint: "client_ref" });
+      const lista = tab("nx_envio_refs"), i = lista.findIndex(x => x.cliente_id === p_cliente && x.client_ref === p_ref && x.mensagem_id == null);
+      if (i < 0) return false;
+      lista.splice(i, 1);
       return true;
     } },
     nx_cv_ia_pausa_auto: { args: ["p_cliente", "p_conversa", "p_por", "p_conta"], fn({ p_cliente, p_conversa }) {
@@ -1165,7 +1196,8 @@ test("nx-enviar: o modo workflow/Runtime API (service_id, /run/) foi removido do
   for (const f of ["enviar.js", "codewords.js"]) assert.ok(!/\/run\/\$\{/.test(sem(f)), `${f} sem envio por workflow`);
   assert.ok(!/clientRef/.test(sem("codewords.js")) && !/client_ref/.test(sem("codewords.js")), "o aparelho do CodeWords não sabe de client_ref");
   assert.ok(!/codewords_service_id/.test(sem("enviar.js")), "nx-enviar não escolhe caminho por service_id");
-  assert.match(sem("enviar.js"), /nx_cv_ref_ver/, "o envio consulta o client_ref ANTES de falar com a Meta/CodeWords");
+  assert.match(sem("enviar.js"), /nx_cv_ref_reservar/, "o envio RESERVA o client_ref ANTES de falar com a Meta/CodeWords");
+  assert.match(sem("enviar.js"), /nx_cv_ref_ver/, "sem a reserva no banco, sobra a conferência antiga");
 });
 
 /* ============================================================ M36 — envio idempotente por client_ref */
@@ -1192,8 +1224,11 @@ test("M36 nx-enviar: outro client_ref é outra intenção; sem client_ref tudo s
   await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "quatro" }), ENV, s.deps());
   assert.equal(graphMsgs(s).length, 4);
   assert.equal(s.rpcs("nx_cv_saida").length, 4);
-  assert.equal(s.rpcs("nx_cv_ref_ver").length, 2, "só consulta quando há client_ref");
+  assert.equal(s.rpcs("nx_cv_ref_reservar").length, 2, "só reserva quando há client_ref");
+  assert.equal(s.rpcs("nx_cv_ref_ver").length, 0, "com a reserva no banco, a conferência antiga não é usada");
   assert.equal(s.rpcs("nx_cv_ref_marcar").length, 2);
+  assert.equal(s.rpcs("nx_cv_ref_liberar").length, 0, "envio que foi ao canal não solta a reserva");
+  assert.deepEqual(s.tab("nx_envio_refs").map(x => x.mensagem_id != null), [true, true], "cada reserva aponta a sua saída");
 });
 
 test("M36 nx-enviar: client_ref malformado → 400 dados_invalidos (client_ref) sem falar com a Graph; ref de OUTRA conversa também", async () => {
@@ -1246,16 +1281,182 @@ test("M36 nx-enviar: repetir depois de a conversa ser RESOLVIDA devolve a saída
   assert.equal(b.corpo.ok, true); assert.equal(b.corpo.repetida, true); assert.equal(b.corpo.mensagem.id, a.corpo.mensagem.id);
 });
 
-test("M36 nx-enviar: sem a migração 20261002d (nx_cv_ref_ver inexistente → 404) o envio segue como sempre, sem travar o chat", async () => {
+/** fetch que responde 404 (função inexistente no PostgREST) para as internas cujo nome casa com `re`; anota em `tentadas` o que foi pedido. */
+const semFuncoes = (s, re, tentadas = []) => (entrada, init) => {
+  const req = new Request(entrada, init);
+  const nome = new URL(req.url).pathname.split("/rpc/")[1];
+  if (nome && re.test(nome)) {
+    tentadas.push(nome);
+    return Promise.resolve(jsonResp({ code: "PGRST202", message: `Could not find the function public.${nome}(p_cliente, p_ref) in the schema cache` }, 404));
+  }
+  return s.fetch(entrada, init);
+};
+
+test("M36 nx-enviar: sem a migração 20261002d (nenhuma nx_cv_ref_* existe → 404) o envio segue como sempre, sem travar o chat", async () => {
   const s = cenario();
-  const semFuncao = (entrada, init) => {
-    const req = new Request(entrada, init);
-    if (new URL(req.url).pathname.endsWith("/rpc/nx_cv_ref_ver")) return Promise.resolve(jsonResp({ code: "PGRST202", message: "Could not find the function public.nx_cv_ref_ver(p_cliente, p_conversa, p_ref) in the schema cache" }, 404));
-    return s.fetch(entrada, init);
-  };
-  const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "oi", client_ref: REF1 }), ENV, s.deps({ fetch: semFuncao })));
+  const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "oi", client_ref: REF1 }), ENV, s.deps({ fetch: semFuncoes(s, /^nx_cv_ref_/) })));
   assert.equal(r.corpo.ok, true);
   assert.equal(graphMsgs(s).length, 1);
+  assert.equal(s.rpcs("nx_cv_saida").length, 1);
+});
+
+test("M36 nx-enviar: banco com nx_cv_ref_ver mas SEM nx_cv_ref_reservar → vale a conferência antiga (a repetição devolve a gravada) e nada é liberado", async () => {
+  const s = cenario(), tentadas = [];
+  const deps = s.deps({ fetch: semFuncoes(s, /^nx_cv_ref_(reservar|liberar)$/, tentadas) });
+  const a = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "oi", client_ref: REF1 }), ENV, deps));
+  const b = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "oi", client_ref: REF1 }), ENV, deps));
+  assert.equal(a.corpo.ok, true); assert.equal(b.corpo.repetida, true); assert.equal(b.corpo.mensagem.id, a.corpo.mensagem.id);
+  assert.equal(graphMsgs(s).length, 1);
+  assert.equal(s.rpcs("nx_cv_ref_ver").length, 2);
+  // erro antes do canal sem ser dono de reserva: não tenta liberar
+  const c = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 602, texto: "oi", client_ref: REF2 }), ENV, deps));
+  assert.equal(c.corpo.erro, "fora_da_janela");
+  assert.deepEqual(tentadas, ["nx_cv_ref_reservar", "nx_cv_ref_reservar", "nx_cv_ref_reservar"], "tenta a reserva a cada pedido e nunca chama o liberar");
+});
+
+test("M36 reserva: o ref é reservado DEPOIS de conferir o pedido e ANTES de falar com o canal; a saída gravada fecha a reserva", async () => {
+  const s = cenario();
+  const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Custa R$ 500.", client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(r.corpo.ok, true);
+  const pos = trecho => s.estado.log.findIndex(l => l.includes(trecho));
+  assert.ok(pos("/rpc/nx_cv_contexto_envio") >= 0 && pos("/rpc/nx_cv_contexto_envio") < pos("/rpc/nx_cv_ref_reservar"), "primeiro confere a conversa");
+  assert.ok(pos("/rpc/nx_cv_ref_reservar") < pos("graph.facebook.com"), "reserva antes da Graph");
+  assert.ok(pos("graph.facebook.com") < pos("/rpc/nx_cv_ref_marcar"), "marca depois de gravar a saída");
+  assert.deepEqual(s.rpcs("nx_cv_ref_reservar")[0].params, { p_cliente: CLI_A, p_conversa: 601, p_ref: REF1 });
+  assert.deepEqual(s.tab("nx_envio_refs").map(x => [x.client_ref, x.conversa_id, x.mensagem_id]), [[REF1, 601, r.corpo.mensagem.id]]);
+  // texto inválido ou ref malformado param ANTES da reserva
+  await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "   ", client_ref: REF2 }), ENV, s.deps());
+  await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "oi", client_ref: "curto" }), ENV, s.deps());
+  assert.equal(s.rpcs("nx_cv_ref_reservar").length, 1);
+});
+
+test("M36 reserva: dois pedidos SIMULTÂNEOS com o mesmo client_ref → um envia, o outro recebe 409 envio_em_andamento; o cliente recebe UMA mensagem", async () => {
+  for (const aparelho of [false, true]) {
+    const s = cenario();
+    if (aparelho) canalAparelho(s);
+    const pedido = () => enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Pode vir às 15h", client_ref: REF1 }), ENV, s.deps());
+    const [a, b] = await Promise.all([pedido(), pedido()].map(async x => ler(await x)));
+    const enviou = [a, b].filter(x => x.status === 200), esperando = [a, b].filter(x => x.status === 409);
+    assert.equal(enviou.length, 1, "só um pedido envia");
+    assert.equal(esperando.length, 1, "o outro espera");
+    assert.deepEqual(esperando[0].corpo, { ok: false, erro: "envio_em_andamento" });
+    assert.equal(aparelho ? envioProxy(s).length : graphMsgs(s).length, 1, "uma só mensagem para o cliente");
+    assert.equal(s.rpcs("nx_cv_saida").length, 1, "uma só saída gravada");
+    assert.equal(s.rpcs("nx_cv_ref_liberar").length, 0);
+    // depois que o primeiro terminou, a nova tentativa do painel recebe a mensagem gravada
+    const c = await ler(await pedido());
+    assert.equal(c.corpo.ok, true); assert.equal(c.corpo.repetida, true); assert.equal(c.corpo.mensagem.id, enviou[0].corpo.mensagem.id);
+    assert.equal(aparelho ? envioProxy(s).length : graphMsgs(s).length, 1);
+  }
+});
+
+test("M36 reserva: saiu pelo canal mas o banco não gravou → a reserva FICA; repetir dá 409 (em andamento) e, passados 150 s, 502 ambígua — nunca reenvia", async () => {
+  const s = cenario();
+  canalAparelho(s);
+  const falhaNoBanco = (entrada, init) => {
+    const req = new Request(entrada, init);
+    if (new URL(req.url).pathname.endsWith("/rpc/nx_cv_saida")) return Promise.resolve(jsonResp({ code: "XX000", message: "banco indisponível" }, 500));
+    return s.fetch(entrada, init);
+  };
+  const pedido = deps => enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá", client_ref: REF1 }), ENV, deps);
+  const a = await ler(await pedido(s.deps({ fetch: falhaNoBanco })));
+  assert.equal(a.status, 502); assert.equal(a.corpo.ambigua, true);
+  assert.equal(s.rpcs("nx_cv_ref_liberar").length, 0, "pode ter saído: a reserva não é solta");
+  assert.deepEqual(s.tab("nx_envio_refs").map(x => x.mensagem_id), [null]);
+  const b = await ler(await pedido(s.deps()));
+  assert.equal(b.status, 409); assert.equal(b.corpo.erro, "envio_em_andamento");
+  s.estado.agora = new Date(s.estado.agora.getTime() + 149e3);
+  assert.equal((await pedido(s.deps())).status, 409, "149 s: ainda dentro do tempo de vida da função");
+  s.estado.agora = new Date(s.estado.agora.getTime() + 2e3);
+  const c = await ler(await pedido(s.deps()));
+  assert.equal(c.status, 502);
+  assert.equal(c.corpo.ok, false); assert.equal(c.corpo.erro, "envio_falhou"); assert.equal(c.corpo.ambigua, true);
+  assert.match(c.corpo.detalhe, /pode ter saído/);
+  assert.equal(c.corpo.mensagem, undefined, "não há saída gravada para devolver");
+  const d = await ler(await pedido(s.deps()));
+  assert.equal(d.status, 502, "continua ambígua: nunca vira envio novo");
+  assert.equal(envioProxy(s).length, 1, "o aparelho recebeu UMA ordem de envio");
+  assert.equal(s.tab("nx_mensagens").filter(m => m.corpo === "Olá").length, 0);
+});
+
+test("M36 reserva: erro ANTES de falar com o canal solta a reserva — o mesmo client_ref envia depois que o problema é resolvido", async () => {
+  // janela fechada (Meta)
+  let s = cenario();
+  let r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 602, texto: "oi", client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(r.status, 400); assert.equal(r.corpo.erro, "fora_da_janela");
+  assert.deepEqual(s.rpcs("nx_cv_ref_liberar").map(x => x.params), [{ p_cliente: CLI_A, p_ref: REF1 }]);
+  assert.equal(s.tab("nx_envio_refs").length, 0, "nada saiu: a reserva foi solta");
+  assert.equal(s.estado.graph.length, 0);
+  s.tab("nx_conversas").find(c => c.id === 602).ultima_entrada_em = s.estado.agora.toISOString();   // o cliente escreveu: a janela abriu
+  r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 602, texto: "oi", client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(r.corpo.ok, true); assert.equal(r.corpo.repetida, undefined, "é o primeiro envio de verdade");
+  assert.equal(graphMsgs(s).length, 1);
+
+  // conversa resolvida
+  s = cenario();
+  r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 604, texto: "oi", client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(r.corpo.erro, "conversa_resolvida");
+  assert.equal(s.rpcs("nx_cv_ref_liberar").length, 1);
+  assert.equal(s.tab("nx_envio_refs").length, 0);
+
+  // número CodeWords sem aparelho pareado (credencial ausente)
+  s = cenario();
+  const k = canalAparelho(s);
+  k.codewords_phone_id = null;
+  r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá", client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(r.status, 400); assert.equal(r.corpo.erro, "codewords_sem_aparelho");
+  assert.equal(s.tab("nx_envio_refs").length, 0);
+  assert.equal(s.estado.codewords.length, 0);
+  k.codewords_phone_id = "dev-a1";
+  r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá", client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(r.corpo.ok, true);
+  assert.equal(envioProxy(s).length, 1);
+});
+
+test("M36 reserva: falha ao soltar a reserva não esconde o erro original; estado desconhecido do banco NÃO envia", async () => {
+  const s = cenario();
+  const liberarFalha = (entrada, init) => {
+    const req = new Request(entrada, init);
+    if (new URL(req.url).pathname.endsWith("/rpc/nx_cv_ref_liberar")) return Promise.resolve(jsonResp({ code: "XX000", message: "banco indisponível" }, 500));
+    return s.fetch(entrada, init);
+  };
+  let r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 602, texto: "oi", client_ref: REF1 }), ENV, s.deps({ fetch: liberarFalha })));
+  assert.equal(r.status, 400); assert.equal(r.corpo.erro, "fora_da_janela");
+  const estadoEstranho = (entrada, init) => {
+    const req = new Request(entrada, init);
+    if (new URL(req.url).pathname.endsWith("/rpc/nx_cv_ref_reservar")) return Promise.resolve(jsonResp({ estado: "outro" }));
+    return s.fetch(entrada, init);
+  };
+  r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "oi", client_ref: REF2 }), ENV, s.deps({ fetch: estadoEstranho })));
+  assert.equal(r.status, 500);
+  assert.equal(s.estado.graph.length, 0, "sem saber o estado da reserva, nada sai");
+});
+
+test("M36 reserva em MODELO e MÍDIA: o mesmo client_ref não sai duas vezes; pedido recusado antes do canal solta a reserva", async () => {
+  const s = cenario();
+  const TPL = "7e7e7e7e-0000-4000-8000-000000000001";
+  s.tab("nx_templates").find(t => t.id === "tpl-conf").id = TPL;
+  const modelo = parametros => enviar(painel("nx-enviar", { acao: "template", conversa: 602, template_id: TPL, parametros, client_ref: REF1 }), ENV, s.deps());
+  const ruim = await ler(await modelo(["só um"]));
+  assert.equal(ruim.corpo.erro, "template_invalido");
+  assert.equal(s.tab("nx_envio_refs").length, 0, "recusado antes da Graph: reserva solta");
+  const a = await ler(await modelo(["João", "amanhã às 14h"]));
+  const b = await ler(await modelo(["João", "amanhã às 14h"]));
+  assert.equal(a.corpo.ok, true); assert.equal(b.corpo.repetida, true); assert.equal(b.corpo.mensagem.id, a.corpo.mensagem.id);
+  assert.equal(graphMsgs(s).length, 1, "um modelo só (modelo é pago)");
+
+  const path = `${CLI_A}/out/2026-09/11111111-2222-4333-8444-555555555555.pdf`;
+  const midiaReq = () => enviar(painel("nx-enviar", { acao: "midia", conversa: 601, path, mime: "application/pdf", nome: "orcamento.pdf", client_ref: REF2 }), ENV, s.deps());
+  const semArquivo = await ler(await midiaReq());   // o arquivo ainda não está no Storage
+  assert.equal(semArquivo.corpo.erro, "midia_nao_encontrada");
+  assert.equal(s.tab("nx_envio_refs").filter(x => x.client_ref === REF2).length, 0, "nada saiu: reserva solta");
+  s.estado.arquivos.set(path, { bytes: new Uint8Array([1]), mime: "application/pdf" });
+  const [m1, m2] = await Promise.all([midiaReq(), midiaReq()].map(async x => ler(await x)));
+  assert.deepEqual([m1.status, m2.status].sort(), [200, 409], "simultâneos: um envia, o outro espera");
+  assert.equal(graphMsgs(s).filter(g => g.type === "document").length, 1, "um arquivo só");
+  const m3 = await ler(await midiaReq());
+  assert.equal(m3.corpo.repetida, true);
+  assert.equal(graphMsgs(s).filter(g => g.type === "document").length, 1);
 });
 
 test("nx-enviar texto fora da janela → fora_da_janela SEM chamar a Graph; resolvida → conversa_resolvida", async () => {

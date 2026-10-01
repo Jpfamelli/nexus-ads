@@ -108,33 +108,35 @@ const conversas = [
 for (const c of conversas) c.mensagens.forEach((m, i) => { m.id = c.id * 10 + i; m.criada = Date.now() - m.minutos * 60000; });
 const tarefas = [{ id: 71, tipo: "ligacao", titulo: "Confirmar avaliação", vence_em: isoAgora(), concluida: false, contato_id: 501, negocio_id: 801, dono: { id: ID.eu, nome: "Dra. Helena" } }];
 
-/* onboarding (nx_onboarding_estado, plano M32): 11 itens na ordem recomendada. O formato é o combinado com a frente D;
-   se o contrato real da migração 20261002d for outro, quem muda é este bloco (e só ele). */
+/* onboarding (nx_onboarding_estado, plano M32): os 11 itens na ordem recomendada, no MESMO formato da migração 20261002d:
+   {total: 11, feitos, obrigatorios: 9, obrigatorios_feitos, pct, completo, itens: [{id, rotulo, feito, opcional}]}.
+   Script do site e anúncios são opcionais (não contam para o 100 %). Nada de campo que o banco real não devolve
+   (a rota de cada passo e o "dispensar por 7 dias" são da tela, não do servidor). */
 const ONB_ITENS = [
-  { id: "chave_codewords", rotulo: "Chave do CodeWords salva", rota: "#/config/numeros" },
-  { id: "aparelho_pareado", rotulo: "Aparelho pareado", rota: "#/config/numeros" },
-  { id: "recebimento", rotulo: "Recebimento conferido", rota: "#/config/numeros" },
-  { id: "ia_ou_direto", rotulo: "IA validada ou receber direto", rota: "#/config/numeros" },
-  { id: "mensagem_teste", rotulo: "Mensagem de teste enviada", rota: "#/config/numeros" },
-  { id: "departamento_horario", rotulo: "Departamento com horário", rota: "#/config/departamentos" },
-  { id: "agenda_faixas", rotulo: "Faixas da agenda", rota: "#/config/agenda" },
-  { id: "script_site", rotulo: "Script do site com contato recebido", rota: "#/config/rastreio" },
-  { id: "colega_convidado", rotulo: "Colega convidado", rota: "#/config/usuarios" },
-  { id: "funil_ajustado", rotulo: "Funil ajustado", rota: "#/config/funis" },
-  { id: "anuncios_ligados", rotulo: "Anúncios ligados", rota: "#/config/anuncios", opcional: true },
+  { id: "chave_codewords", rotulo: "Chave do WhatsApp salva" },
+  { id: "aparelho_pareado", rotulo: "Aparelho pareado" },
+  { id: "recebimento", rotulo: "Recebimento conferido" },
+  { id: "ia_ou_direto", rotulo: "IA validada ou receber direto" },
+  { id: "mensagem_teste", rotulo: "Mensagem de teste enviada" },
+  { id: "departamento_horario", rotulo: "Departamento com horário" },
+  { id: "agenda_faixas", rotulo: "Faixas da agenda" },
+  { id: "script_site", rotulo: "Script do site com contato recebido", opcional: true },
+  { id: "colega_convidado", rotulo: "Colega convidado" },
+  { id: "funil_ajustado", rotulo: "Funil ajustado" },
+  { id: "anuncios_ligados", rotulo: "Anúncios ligados", opcional: true },
 ];
 const ONB_PRONTO = ["chave_codewords", "aparelho_pareado", "recebimento", "ia_ou_direto", "departamento_horario", "agenda_faixas", "colega_convidado", "funil_ajustado"];
-const onb = { feitos: new Set(ONB_PRONTO), dispensado_ate: null };
+const onb = { feitos: new Set(ONB_PRONTO) };
 function onboardingDefinir(modo) {
   onb.feitos = new Set(modo === "novo" ? [] : modo === "completo" ? ONB_ITENS.map(i => i.id) : ONB_PRONTO);
-  onb.dispensado_ate = null;
   bater();
 }
 function onboardingEstado() {
   const itens = ONB_ITENS.map(i => ({ ...i, feito: onb.feitos.has(i.id), opcional: !!i.opcional }));
   const obrig = itens.filter(i => !i.opcional);
-  const feitos = obrig.filter(i => i.feito).length;
-  return { total: obrig.length, feitos, pct: Math.round(feitos * 100 / obrig.length), itens, dispensado_ate: onb.dispensado_ate, completo: feitos === obrig.length };
+  const obrigFeitos = obrig.filter(i => i.feito).length;
+  return { total: itens.length, feitos: itens.filter(i => i.feito).length, obrigatorios: obrig.length, obrigatorios_feitos: obrigFeitos,
+    pct: Math.round(obrigFeitos * 100 / obrig.length), completo: obrigFeitos === obrig.length, itens };
 }
 const marcarOnb = (...ids) => { for (const id of ids) onb.feitos.add(id); };
 
@@ -418,7 +420,6 @@ function rpc(nome, p = {}) {
       return { v: dev.pulsoV, notif: 2, agora: isoAgora(), nao_lidas: vis.filter(c => c.nao_lidas > 0).length, ultima_entrada_id: entradas.length ? Math.max(...entradas) : null };
     }
     case "nx_onboarding_estado": return onboardingEstado();
-    case "nx_onboarding_dispensar": { onb.dispensado_ate = somaDia(hoje, Number(p.p_dias) || 7); return onboardingEstado(); }
     case "nx_notificacoes_listar": return { itens: [], nao_lidas: 0 };
     case "nx_inicio": return { hoje, agora: isoAgora(), conversas: { aguardando: 2, sem_dono: 1, minhas: 1, abertas: 3, espera_mais_antiga_min: 15 },
       leads: { hoje: 4, hoje_anuncio: 2, semana: 23, semana_anuncio: 14 },
@@ -651,7 +652,9 @@ const BOOT = `(function(){if(location.hostname!=="127.0.0.1"&&location.hostname!
 
 const dormir = ms => new Promise(r => setTimeout(r, ms));
 const ROTAS_SEM_SESSAO = new Set(["nx_marca_publica", "nx_entrar", "nx_convite_ver", "nx_convite_aceitar", "nx_senha_redefinir"]);
-/** Falha programada para a próxima chamada de uma RPC/função (ou de qualquer uma, com rpc=*). */
+/** Falha programada para a próxima chamada de uma RPC/função (ou de qualquer uma, com rpc=*).
+    Ex.: simular/falha?rpc=nx-enviar&status=409&codigo=envio_em_andamento&vezes=2 → o nx-enviar responde duas vezes
+    409 {ok:false, erro:"envio_em_andamento"} sem enviar (outro pedido com o mesmo client_ref ainda está enviando). */
 function proximaFalha(nome) {
   const i = dev.falhas.findIndex(f => (f.rpc === "*" || f.rpc === nome) && f.restam > 0);
   if (i < 0) return null;
@@ -674,7 +677,8 @@ async function atender(tipo, nome, corpo, json, res) {
     const cab = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
     if (f.retryAfter) cab["retry-after"] = String(f.retryAfter);
     res.writeHead(f.status, cab);
-    const c = f.codigo ? { message: f.codigo } : CORPO_FALHA[f.status] || null;
+    // Edge Function responde {ok:false, erro}; RPC responde {message} (PostgREST)
+    const c = f.codigo ? (tipo === "fn" ? { ok: false, erro: f.codigo } : { message: f.codigo }) : CORPO_FALHA[f.status] || null;
     return res.end(c ? JSON.stringify(c) : "");
   }
   try { return json(200, executar()); }

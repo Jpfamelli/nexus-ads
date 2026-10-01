@@ -112,20 +112,26 @@ async function comServidor(corpo) {
   try { await corpo({ base, rpc, fnx, sim, estado }); } finally { child.kill(); }
 }
 
-test("nx_onboarding_estado: 11 itens (10 obrigatórios + anúncios opcional), marcam sozinhos e o tenant novo começa em 0", () => comServidor(async ({ rpc, sim }) => {
+test("nx_onboarding_estado: mesmo formato do banco (11 itens, 9 obrigatórios; site e anúncios opcionais), marcam sozinhos e o tenant novo começa em 0", () => comServidor(async ({ rpc, sim }) => {
   const e = (await rpc("nx_onboarding_estado", {})).corpo;
   assert.equal(e.itens.length, 11);
-  assert.equal(e.itens.filter(i => i.opcional).length, 1);
-  assert.equal(e.total, 10);
+  assert.deepEqual(e.itens.filter(i => i.opcional).map(i => i.id), ["script_site", "anuncios_ligados"]);
+  assert.equal(e.total, 11);
+  assert.equal(e.obrigatorios, 9);
   assert.ok(e.feitos > 0 && e.feitos < e.total, "estado parcial por padrão");
+  assert.equal(e.obrigatorios_feitos, 8); assert.equal(e.pct, 89); assert.equal(e.completo, false);
+  // só o que a migração 20261002d devolve: nada de rota nem de "dispensado até" (isso é da tela)
+  assert.deepEqual(Object.keys(e).sort(), ["completo", "feitos", "itens", "obrigatorios", "obrigatorios_feitos", "pct", "total"]);
+  assert.ok(e.itens.every(i => !("rota" in i)));
   const novo = (await sim("onboarding", "?modo=novo")).estado;
-  assert.equal(novo.feitos, 0);
+  assert.equal(novo.feitos, 0); assert.equal(novo.pct, 0);
   assert.equal(novo.itens.find(i => i.id === "chave_codewords").feito, false);
   await rpc("nx_codewords_canal_salvar", { p_canal: { id: "cw1" } });
   assert.equal((await rpc("nx_onboarding_estado", {})).corpo.itens.find(i => i.id === "chave_codewords").feito, true, "salvar a chave marca o passo 1 sem recarregar");
   const completo = (await sim("onboarding", "?modo=completo")).estado;
   assert.equal(completo.completo, true);
   assert.equal(completo.feitos, completo.total);
+  assert.equal(completo.obrigatorios_feitos, 9); assert.equal(completo.pct, 100);
 }));
 
 test("marca fictícia: produto e cores hex válidas podem ser trocados para QA white-label; entrada inválida é ignorada", () => comServidor(async ({ rpc, sim }) => {
@@ -175,6 +181,21 @@ test("client_ref: o mesmo client_ref duas vezes = 1 mensagem e 1 envio externo; 
   assert.equal(lista.filter(m => m.client_ref === ref).length, 1);
   await fnx("nx-enviar", { acao: "texto", conversa: 902, texto: "Outra", client_ref: "aaaaaaaa-0000-4000-8000-000000000002" });
   assert.equal((await estado()).enviosExternos, antes.enviosExternos + 2);
+}));
+
+test("client_ref em andamento: o nx-enviar pode responder 409 envio_em_andamento N vezes (sem enviar) e depois enviar normalmente", () => comServidor(async ({ fnx, sim, estado }) => {
+  const antes = await estado();
+  const ref = "aaaaaaaa-0000-4000-8000-000000000003";
+  await sim("falha", "?rpc=nx-enviar&status=409&codigo=envio_em_andamento&vezes=2");
+  for (let i = 0; i < 2; i++) {
+    const r = await fnx("nx-enviar", { acao: "texto", conversa: 902, texto: "Olá!", client_ref: ref });
+    assert.equal(r.status, 409);
+    assert.deepEqual(r.corpo, { ok: false, erro: "envio_em_andamento" }, "mesmo corpo da função real");
+  }
+  assert.equal((await estado()).enviosExternos, antes.enviosExternos, "enquanto está em andamento nada sai");
+  const ok = await fnx("nx-enviar", { acao: "texto", conversa: 902, texto: "Olá!", client_ref: ref });
+  assert.equal(ok.status, 200); assert.equal(ok.corpo.ok, true);
+  assert.equal((await estado()).enviosExternos, antes.enviosExternos + 1);
 }));
 
 test("nx_pulso: devolve nao_lidas e o maior id de entrada; mensagem simulada muda v e a contagem", () => comServidor(async ({ rpc, sim }) => {

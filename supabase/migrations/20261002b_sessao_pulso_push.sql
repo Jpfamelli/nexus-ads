@@ -2,8 +2,8 @@
 -- ÓRBITA — 20261002b_sessao_pulso_push.sql · frente B · plano de melhorias de 01/10/2026
 -- ADITIVA e idempotente (create or replace / if not exists); nada de drop, nada em nx_config, nenhum dado de produção alterado.
 --   Parte 1 (M17): nx_app_sessao renova a sessão de quem usa o app (30 dias de INATIVIDADE, não 30 dias fixos desde o login).
---   Parte 2 (M19): nx_pulso devolve nao_lidas e o maior id de mensagem de entrada visível (aditivo: as chaves v/notif/agora seguem iguais).
---   Parte 3 (M20): notificação push (tabela fechada, RPCs de assinar/cancelar) — só se a onda 3 chegar a ser feita.
+--   SÓ a Parte 1 está neste arquivo. Apesar do nome do arquivo, o pulso com não lidas (M19) e a notificação push (M20) NÃO foram
+--   feitos: nx_pulso continua o de 20260928a (chaves v, notif, agora — sem nao_lidas) e não existe tabela nem RPC de push.
 -- Smoke: supabase/testes/16_sessao_pulso_push.sql (begin … rollback). NÃO aplicada pela frente: a publicação aplica, com o ok do dono.
 -- ============================================================
 

@@ -1,6 +1,7 @@
 -- ============================================================
--- ÓRBITA — supabase/testes/16_sessao_pulso_push.sql · frente B · plano de 01/10/2026 (M17, M19, M20)
--- Smoke de 20261002b_sessao_pulso_push.sql:
+-- ÓRBITA — supabase/testes/16_sessao_pulso_push.sql · frente B · plano de 01/10/2026 (M17)
+-- Smoke de 20261002b_sessao_pulso_push.sql. Só o M17 existe na migração: o pulso com não lidas (M19) e o push (M20) não foram
+-- feitos, apesar do nome do arquivo, e por isso não há caso deles aqui.
 --   M17  nx_app_sessao renova a sessão quando faltam < 20 dias (para now() + 30 dias); não renova com 20 dias ou mais, não renova duas vezes
 --        seguidas, não renova sessão vencida nem token inválido (sessao_invalida) e não mexe na sessão de outra conta;
 --        sessão ociosa (ninguém chama) vence em 30 dias do mesmo jeito.
