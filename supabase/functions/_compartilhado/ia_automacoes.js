@@ -560,6 +560,8 @@ export function validarAutomacao(auto, base) {
       default: break;
     }
   }
+  // mesma regra do editor e do banco (nx_auto_normalizar): só «esperar»/«parar» não fazem nada
+  if (acoes.every(x => ACAO[x?.tipo]?.sequencia)) return falha("acrescente pelo menos um passo que faça algo, além de esperar ou parar", "entao");
   return { ok: true };
 }
 
@@ -720,7 +722,8 @@ export function montarPromptDecisao({ tarefa, instrucao, contexto }, delim) {
     return Number.isNaN(d.getTime()) ? "--:--" : new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(d);
   };
   const linhas = (Array.isArray(cx.mensagens) ? cx.mensagens : []).map(m => {
-    const quem = m.dir === "in" ? "cliente" : cortar(m.quem, 30) || "equipe";
+    // o primeiro nome de quem da equipe respondeu também é texto de terceiro: sem a marca e numa linha só
+    const quem = m.dir === "in" ? "cliente" : cortar(semMarca(m.quem, delim).replace(/[\r\n]+/g, " "), 30) || "equipe";
     return `[${quem} ${hora(m.em)}] ${semMarca(m.texto, delim)}`;
   });
   const neg = cx.negocio ? semMarca(JSON.stringify(cx.negocio), delim) : "sem negócio";

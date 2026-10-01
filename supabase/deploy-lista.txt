@@ -1,3 +1,12 @@
+# Funções publicadas pela tag funcoes-* (uma por linha; ver docs/orbita/DEPLOY-FUNCOES.md).
+# Rodada de 01/10/2026 (correções do backend): todas as 7 carregam o comum.js novo (JSON sem NUL, 400 do banco) e as de
+# drenagem de corpo que ainda só estavam no repositório (nx-ciclo, nx-relatorio, nx-midia).
+# NÃO publicar nx-ciclo/nx-relatorio no dia 1º às 12:00 UTC (relatório mensal); depois, conferir o ciclo das :07 e o relatório das 8h.
+# Aplicar a migração 20261001b ANTES da tag (a nx-enviar nova manda o cabeçalho x-fila-lote e chama nx_fila_devolver_lote).
 nx-ia
 nx-codewords
 nx-enviar
+nx-whatsapp
+nx-ciclo
+nx-relatorio
+nx-midia

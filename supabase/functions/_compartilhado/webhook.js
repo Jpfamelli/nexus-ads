@@ -16,7 +16,7 @@ import { enviarTemplate, foraDaJanela } from "./whatsapp.js";
 import { processarCanal } from "./conversas.js";
 import {
   json, agoraDe, soDigitos, iguaisSeguro, limparErro, lerConfig, comPrazo,
-  nomeCurto, tituloRadar, tituloRelatorio, lerCorpoLimitado, soltandoCorpo, CorpoGrande,
+  nomeCurto, tituloRadar, tituloRelatorio, lerCorpoLimitado, soltandoCorpo, CorpoGrande, semNul,
 } from "./comum.js";
 
 const DIAS_MESMA_CONVERSA = 30;
@@ -383,7 +383,7 @@ async function tratarWebhook(req, env, deps) {
 
     // Assinatura válida: falha de persistência pede retry da Meta; as RPCs envolvidas são idempotentes.
     let corpo;
-    try { corpo = JSON.parse(new TextDecoder().decode(cru)); } catch { return json({ ok: true, ignorado: "corpo não é JSON" }); }
+    try { corpo = JSON.parse(new TextDecoder().decode(cru), semNul); } catch { return json({ ok: true, ignorado: "corpo não é JSON" }); }
     const agora = agoraDe(deps);
     const erros = [];
     const pendentes = [];

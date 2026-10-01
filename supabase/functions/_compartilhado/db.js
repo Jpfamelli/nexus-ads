@@ -15,14 +15,14 @@ export function criarDb({ url, chave } = {}, f = globalThis.fetch, { prazoMs = P
   // Chave nova (sb_secret_…) não é JWT: o gateway recusa se vier no Authorization.
   if (!String(chave).startsWith("sb_")) cab.Authorization = `Bearer ${chave}`;
 
-  async function pedir(metodo, caminho, { params, corpo, prefer } = {}) {
+  async function pedir(metodo, caminho, { params, corpo, prefer, headers } = {}) {
     const qs = params && Object.keys(params).length ? `?${new URLSearchParams(params)}` : "";
     const controller = typeof AbortController === "function" ? new AbortController() : null;
     let timer, expirou = false;
     const rede = (async () => {
       const r = await f(`${base}/${caminho}${qs}`, {
         method: metodo,
-        headers: prefer ? { ...cab, Prefer: prefer } : cab,
+        headers: prefer || headers ? { ...cab, ...(prefer ? { Prefer: prefer } : {}), ...(headers || {}) } : cab,
         body: corpo === undefined ? undefined : JSON.stringify(corpo),
         ...(controller ? { signal: controller.signal } : {}),
       });
@@ -99,7 +99,8 @@ export function criarDb({ url, chave } = {}, f = globalThis.fetch, { prazoMs = P
     return Array.isArray(d) ? d : [];
   }
 
-  const rpc = (nome, params = {}) => pedir("POST", `rpc/${nome}`, { corpo: params });
+  /** opcoes.headers: cabeçalhos extras (o PostgREST os entrega à função em request.headers, ex.: x-fila-lote). */
+  const rpc = (nome, params = {}, opcoes = {}) => pedir("POST", `rpc/${nome}`, { corpo: params, headers: opcoes?.headers });
 
   return { select, insert, upsert, update, rpc };
 }

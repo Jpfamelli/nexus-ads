@@ -364,7 +364,18 @@ async function enviarItem(db, item, creds, rede, prazo = {}) {
       await concluir("falhou", "este número (CodeWords) só envia texto: modelos da Meta não existem nele"); return "falhou";
     }
     if (cw ? (!cred?.codewords_api_key || !cred?.codewords_phone_id) : !cred?.token) {
-      await concluir("falhou", cw ? "número CodeWords sem chave ou sem aparelho pareado" : "número sem token"); return "falhou";
+      const motivo = cw ? "número CodeWords sem chave ou sem aparelho pareado" : "número sem token";
+      // a falha também aparece na conversa (mensagem «falhou» com o motivo): antes só o item da fila mudava de status
+      // e o atendente não via nada
+      const msg = await db.rpc("nx_cv_saida", {
+        p_conta: item.origem === "agendada" ? (item.criado_por ?? null) : null,
+        p_cliente: item.cliente_id, p_conversa: item.conversa_id,
+        p_msg: {
+          tipo: item.tipo === "texto" ? "texto" : "template", corpo: corpoMsg, origem: item.origem, status: "falhou", erro: motivo,
+          ...(envio ? { template: { id: item.modelo.id, nome: envio.nome, idioma: envio.idioma, categoria: item.modelo.categoria, parametros: envio.parametros } } : {}),
+        },
+      }).catch(() => null);
+      await concluir("falhou", motivo, msg?.id); return "falhou";
     }
     // não começa um envio que não cabe no tempo da função: volta para a fila SEM ter saído
     if (prazo.fim && Date.now() + (cw ? RESERVA_ENVIO_MS.codewords : RESERVA_ENVIO_MS.meta) > prazo.fim) {
@@ -394,6 +405,30 @@ async function enviarItem(db, item, creds, rede, prazo = {}) {
   }
 }
 
+/** nx_fila_pegar com um lote no cabeçalho x-fila-lote (o PostgREST o entrega à função em request.headers).
+    Se a chamada FALHAR (prazo no cliente, rede), o banco pode já ter marcado os itens como 'enviando' sem que este
+    processo os tenha recebido: nenhum foi enviado, então o lote é DEVOLVIDO à fila (nx_fila_devolver_lote) — antes eles
+    ficavam órfãos e, 10 min depois, viravam «STATUS INCERTO» sem nunca terem saído. Se o banco ainda estava
+    gravando quando a devolução rodou, repete uma vez depois de uma pausa. Nunca lança por causa da devolução. */
+export async function pegarLote(db, lista, ctx = {}) {
+  const lote = globalThis.crypto.randomUUID();
+  const params = lista ? { p_limite: lista.length, p_ids: lista } : { p_limite: 20 };
+  try {
+    return await db.rpc("nx_fila_pegar", params, { headers: { "x-fila-lote": lote } });
+  } catch (e) {
+    const devolver = () => db.rpc("nx_fila_devolver_lote", { p_lote: lote }).catch(() => null);
+    try {
+      const n = Number(await devolver()) || 0;
+      if (!n) {
+        const pausa = ctx.esperaDevolverMs ?? 4000;
+        if (pausa > 0) await new Promise(r => setTimeout(r, pausa));
+        await devolver();
+      }
+    } catch { /* a faxina da fila trata o que sobrar */ }
+    throw e;
+  }
+}
+
 /**
  * Esvazia a fila: com ids (webhook, item que acabou de criar) só esses; sem ids (cron) em
  * lotes de 20 até esvaziar, 100 itens ou 110 s. nx_fila_pegar marca 'enviando' com skip
@@ -410,9 +445,7 @@ export async function enviarFila(db, { ids } = {}, ctx = {}) {
   const lista = Array.isArray(ids) ? ids.map(Number).filter(n => Number.isSafeInteger(n) && n > 0).slice(0, 100) : null;
   if (lista && !lista.length) return res;
   for (;;) {
-    const lote = lista
-      ? await db.rpc("nx_fila_pegar", { p_limite: lista.length, p_ids: lista })
-      : await db.rpc("nx_fila_pegar", { p_limite: 20 });
+    const lote = await pegarLote(db, lista, ctx);
     if (!Array.isArray(lote) || !lote.length) break;
     for (const item of lote) {
       const r = await enviarItem(db, item, creds, rede, prazo);

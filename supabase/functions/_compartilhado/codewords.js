@@ -23,7 +23,7 @@ import { criarDb } from "./db.js";
 import {
   json, limparErro, comPrazo, soDigitos, ErroApi, ErroHttp, respostaPainel, tratarPainel,
   lerCorpoPainel, autenticarPainel, interna, autenticarCron, emLotes,
-  lerCorpo, lerCorpoLimitado, soltandoCorpo, CorpoGrande,
+  lerCorpo, lerCorpoLimitado, soltandoCorpo, CorpoGrande, semNul,
 } from "./comum.js";
 import { hojeSP } from "./nucleo.js";
 import { montarInstrucoes, montarReceita } from "./codewords_prompt.js";
@@ -816,7 +816,7 @@ async function tratarAgenteCorpo(req, env, deps) {
     if (!canal?.canal_id) return respostaAgente({ ok: false, erro: "canal_invalido" }, 401);
     if (canal.excedido) return respostaAgente({ ok: false, erro: "limite_taxa" }, 429, { "retry-after": "60" });
     let corpo;
-    try { corpo = JSON.parse(new TextDecoder().decode(bytes)); }
+    try { corpo = JSON.parse(new TextDecoder().decode(bytes), semNul); }
     catch { return respostaAgente({ ok: false, erro: "json_invalido" }, 400); }
     if (!OBJ(corpo)) return respostaAgente({ ok: false, erro: "dados_invalidos" }, 400);
     const r = await despacharAgente(db, canal, corpo, deps);
