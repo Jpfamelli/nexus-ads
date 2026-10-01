@@ -296,12 +296,16 @@ test("workflow de funções: só tag funcoes-*, contents: read, um por vez, port
   const linhasExpr = semComentario.split("\n").filter(l => l.includes("${{"));
   for (const l of linhasExpr) assert.match(l, /^\s+(SUPABASE_ACCESS_TOKEN|TAG): \$\{\{ (secrets\.SUPABASE_ACCESS_TOKEN|github\.ref_name) \}\}$/, `expressão fora de env: ${l.trim()}`);
   // ordem: segredo → checkout → node → portão → montar → CLI fixado → lista → deploy
-  const ordem = ["SUPABASE_ACCESS_TOKEN presente", "actions/checkout@v4", "actions/setup-node@v4", "node testes/rodar-tudo.mjs",
-    "node scripts/montar-funcoes.mjs", "supabase/setup-cli@v1", "Validar supabase/deploy-lista.txt", "supabase functions deploy"];
+  const ordem = ["SUPABASE_ACCESS_TOKEN presente", "actions/checkout@", "actions/setup-node@", "node testes/rodar-tudo.mjs",
+    "node scripts/montar-funcoes.mjs", "supabase/setup-cli@", "Validar supabase/deploy-lista.txt", "supabase functions deploy"];
   const pos = ordem.map(t => semComentario.indexOf(t));
   assert.ok(pos.every(p => p >= 0), `passos: ${ordem.filter((_, i) => pos[i] < 0).join(", ")}`);
   assert.deepEqual([...pos].sort((a, b) => a - b), pos, "passos na ordem");
-  assert.match(semComentario, /version: 2\.\d+\.\d+\n/, "CLI com versão fixa");
+  // toda action fixada pelo SHA completo do commit (40 hex), com a versão no comentário; nada de @v4/@main
+  const usos = [...semComentario.matchAll(/^\s*(?:-\s+)?uses:\s*(.+)$/gm)].map(m => m[1].trim());
+  assert.deepEqual(usos.map(u => u.split("@")[0]), ["actions/checkout", "actions/setup-node", "supabase/setup-cli"]);
+  for (const u of usos) assert.match(u, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$/, `action sem SHA de 40 hex + versão: ${u}`);
+  assert.match(semComentario, /\n {10}version: 2\.118\.0\n/, "CLI do Supabase fixado em 2.118.0");
   assert.match(semComentario, /if \[ -z "\$\{SUPABASE_ACCESS_TOKEN\}" \]; then/, "falha cedo com o segredo vazio");
   assert.doesNotMatch(semComentario, /echo[^\n]*SUPABASE_ACCESS_TOKEN\}/, "o segredo nunca é impresso");
   assert.match(semComentario, /grep -Eq '\^nx-\[a-z\]\+\$'/, "nome validado com ^nx-[a-z]+$");

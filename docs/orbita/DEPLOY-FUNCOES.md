@@ -49,11 +49,18 @@ espera a primeira terminar.
 
 ## Passos do workflow
 
+As três actions de terceiros ficam fixadas pelo SHA completo do commit da versão, com a versão num comentário
+(`actions/checkout` v4.4.0 `11d5960a…`, `actions/setup-node` v4.4.0 `49933ea5…`, `supabase/setup-cli` v1.7.3
+`1dedf2c6…`): uma tag movida no repositório delas não muda o que roda aqui. Para atualizar, pegar o SHA com
+`gh api repos/<dono>/<repo>/git/ref/tags/<versão>` (se o objeto for `tag`, resolver até o commit com
+`gh api repos/<dono>/<repo>/git/tags/<sha>`); `testes/scripts.teste.mjs` recusa `uses:` sem SHA de 40 hex.
+
 1. confere que `SUPABASE_ACCESS_TOKEN` não está vazio (sem imprimir);
 2. checkout do commit da tag (`persist-credentials: false`), Node 24;
 3. **portão:** `node testes/rodar-tudo.mjs` — qualquer suíte vermelha para tudo;
 4. `node scripts/montar-funcoes.mjs` (gera `supabase/dist/<fn>` planos);
-5. Supabase CLI fixado em **2.118.0** (`supabase/setup-cli@v1`, a mesma versão que publicou as versões de 29–30/09);
+5. Supabase CLI fixado em **2.118.0** (a mesma versão que publicou as versões de 29–30/09), instalado por
+   `supabase/setup-cli` v1.7.3;
 6. valida `supabase/deploy-lista.txt`;
 7. para cada função: copia `supabase/dist/<fn>` para `supabase/functions/<fn>` numa pasta temporária e roda
    `supabase functions deploy <fn> --use-api --no-verify-jwt --project-ref dtjznipitihnwmcgpzqh`
