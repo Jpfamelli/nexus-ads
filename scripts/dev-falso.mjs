@@ -627,6 +627,7 @@ function rpc(nome, p = {}) {
 
 function fn(nome, p = {}) {
   if (nome === "nx-codewords" && /teste/i.test(String(p.acao || ""))) marcarOnb("mensagem_teste");
+  if (nome === "nx-codewords" && p.acao === "receita") return { ok: true, url: "https://exemplo.invalid/functions/v1/nx-codewords?ch=DEMO", cabecalhos: {}, prompt: "PROMPT DE DEMONSTRAÇÃO (ambiente fictício local)\n\nVocê é a assistente da clínica. Converse, veja horários e agende.\nURL: https://exemplo.invalid/functions/v1/nx-codewords?ch=DEMO\n" + "Linha de exemplo do prompt.\n".repeat(30) };
   if (nome === "nx-codewords") return { ok: true, inscrito_certo: true, conectado: true, numero_confere: true, rota: "fluxo", service_id: "cw-demo-fluxo", motivo: "Ambiente fictício local — nenhuma chamada saiu do computador." };
   if (nome === "nx-enviar") return p.acao === "texto" ? enviarTexto(p) : { ok: true, app_inscrito: true, total: 1, numero: "+55 00 00000-0001" };
   if (nome === "nx-midia") return { ok: true, url: null };

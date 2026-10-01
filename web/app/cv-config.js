@@ -240,7 +240,7 @@ async function montarNumeros(ctx, alvo) {
     const bJaPareei = h("button", { type: "button", class: "bt bt-fant" }, "Já digitei o código");
     const bConferir = h("button", { type: "button", class: "bt bt-prim" }, "Conferir agora");
     const bFluxo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("ia"), "Ligar o número na IA");
-    const bPrompt = h("button", { type: "button", class: "bt bt-fant" }, ui.icone("copiar"), "Copiar o prompt do agente");
+    const bPrompt = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("copiar"), "Copiar prompt para o CodeWords");
     const bPrefs = h("button", { type: "button", class: "bt bt-fant" }, "Só salvar as preferências");
     const bDireto = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("usuario"), "Receber direto no Órbita");
     const bTeste = h("button", { type: "button", class: "bt bt-prim" }, "Enviar mensagem de teste");
@@ -270,8 +270,13 @@ async function montarNumeros(ctx, alvo) {
           h("div", { class: "cfg-cw-ia-head" }, ui.icone("ia"), h("div", null, h("h4", { class: "titulo-sec" }, "A IA atende primeiro"),
             h("p", { class: "sub" }, "O CodeWords conversa, agenda e chama a equipe quando precisa; a equipe pode assumir qualquer conversa a qualquer momento."),
             h("p", { class: "sub" }, "Mover de etapa, notas e follow-ups são as Automações do Órbita. As receitas de IA nascem desligadas: ligue-as em Automações. ", linkAutomacoes))),
+          // a ordem de quem configura: 1º leva o prompt ao CodeWords, 2º traz de lá o Service ID, 3º liga o número
+          h("p", { class: "sub" }, h("strong", null, "1. "), "Copie o prompt, cole no CodeWords e peça para publicar o fluxo."),
+          h("div", { class: "linha" }, bPrompt), receitaBox,
+          h("p", { class: "sub" }, h("strong", null, "2. "), "Cole abaixo o Service ID que o CodeWords mostrar quando terminar."),
           campoService, campoIA, campoVolta, h("p", { class: "sub" }, "Esse prazo começa quando alguém da equipe assume uma conversa."),
-          h("div", { class: "linha cfg-cw-ops-actions" }, bFluxo, bPrompt, bPrefs), receitaBox),
+          h("p", { class: "sub" }, h("strong", null, "3. "), "Ligue o número na IA. É o Órbita que faz essa ligação: no CodeWords não precisa mexer em nada."),
+          h("div", { class: "linha cfg-cw-ops-actions" }, bFluxo, bPrefs)),
         h("section", { class: "cartao cfg-cw-direto" },
           h("div", { class: "cfg-cw-ia-head" }, ui.icone("usuario"), h("div", null, h("h4", { class: "titulo-sec" }, "A equipe atende"),
             h("p", { class: "sub" }, "As mensagens chegam direto na caixa Conversas do Órbita, sem IA no meio."))),
@@ -470,11 +475,38 @@ async function montarNumeros(ctx, alvo) {
     bPrompt.addEventListener("click", async () => {
       if (!await guardarAntesDaAcao()) return;
       const r = await acaoCodeWords("receita"); if (!r) return;
-      const pre = h("pre", { class: "cfg-codigo cfg-cw-prompt", tabindex: "0", "aria-label": "Prompt de configuração do CodeWords" }, h("code", {}, r.prompt || ""));
-      const copiar = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("copiar"), "Copiar prompt para o CodeWords");
-      copiar.addEventListener("click", () => ui.copiar(r.prompt || "", { aviso: "Prompt copiado. Cole no CodeWords e mantenha a URL secreta privada." }));
+      const texto = r.prompt || "";
+      const pre = h("pre", { class: "cfg-codigo cfg-cw-prompt", tabindex: "0", "aria-label": "Prompt de configuração do CodeWords" }, h("code", {}, texto));
+      // deixa o texto inteiro selecionado: se o navegador bloquear a área de transferência, basta Ctrl+C (ou «Copiar» no menu do celular)
+      const selecionarTudo = () => {
+        try {
+          const faixa = document.createRange(); faixa.selectNodeContents(pre);
+          const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(faixa); pre.focus({ preventScroll: true });
+        } catch { /* sem seleção: o texto continua visível para copiar à mão */ }
+      };
+      const estado = h("p", { class: "sub", role: "status" });
+      const copiarAgora = async () => {
+        const ok = await ui.copiar(texto, { aviso: null });
+        if (ok) {
+          estado.textContent = "Prompt copiado. Agora é só colar no CodeWords.";
+          ui.toast("Prompt copiado. Cole no CodeWords e mantenha a URL secreta privada.", { tipo: "ok" });
+        } else {
+          selecionarTudo();
+          estado.textContent = "O navegador não deixou copiar sozinho. O texto já está selecionado: aperte Ctrl+C (no celular, toque em «Copiar»).";
+          ui.toast("Não deu para copiar sozinho. O texto está selecionado: aperte Ctrl+C.", { tipo: "erro" });
+        }
+        return ok;
+      };
+      const copiar = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("copiar"), "Copiar de novo");
+      copiar.addEventListener("click", copiarAgora);
+      const selecionar = h("button", { type: "button", class: "bt bt-sec" }, "Selecionar tudo");
+      selecionar.addEventListener("click", selecionarTudo);
       ui.limpar(receitaBox); receitaBox.hidden = false;
-      receitaBox.append(h("div", { class: "aviso aviso-aten" }, ui.icone("cadeado"), h("p", null, "O prompt contém a URL secreta deste canal. Cole somente no CodeWords e não compartilhe o texto.")), pre, copiar);
+      receitaBox.append(h("div", { class: "aviso aviso-aten" }, ui.icone("cadeado"), h("p", null, "O prompt contém a URL secreta deste canal. Cole somente no CodeWords e não compartilhe o texto.")),
+        estado, h("div", { class: "linha" }, copiar, selecionar), pre);
+      // um clique só: copia na hora e mostra a caixa (antes o 1º botão só revelava a caixa e parecia que «não copiava»)
+      await copiarAgora();
+      try { receitaBox.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch { /* navegador antigo */ }
     });
 
     desenharPassos();
