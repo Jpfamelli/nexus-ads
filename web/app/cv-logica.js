@@ -654,6 +654,9 @@ export function progressoEnvio(enviados, total) {
 /* ------------------------------------------------------------ fila de saída e rascunho (M36) */
 export const FILA_BACKOFF_MS = Object.freeze([20000, 40000, 80000, 160000, 300000]);   // 20 s, dobrando até 5 min
 export const FILA_TTL_MS = 7 * 24 * 3600 * 1000;                                       // item que ninguém reenviou em 7 dias some
+export const FILA_ESPERA_REENVIO_MS = 90000;       // depois de um pedido sair, o MESMO item só é retransmitido 90 s depois (o primeiro ainda pode estar a caminho)
+export const FILA_AUTO_MAX_MS = 15 * 60000;        // mensagem parada há mais de 15 min não sai sozinha: a pessoa decide
+export const FILA_EM_ANDAMENTO_MS = 20000;         // o servidor disse "envio em andamento" (409): pergunta de novo em ~20 s
 
 /** client_ref de uma intenção de envio ("orbita:<uuid>"): o MESMO valor em toda repetição da mesma mensagem. */
 export function novoClientRef(uuid) {
@@ -676,6 +679,8 @@ const SO_SESSAO = /^(sessao_invalida|sessao_expirada)$/;
  *   {tipo:"rede", subtipo:"sem_conexao"}  nunca chegou ao servidor → "Na fila · envia quando a internet voltar";
  *   {tipo:"rede", subtipo:"em_voo"}       prazo estourado com a requisição em voo → "Status incerto" e repete com o MESMO client_ref;
  *   {tipo:"rede", subtipo:"servidor"}     503/429/5xx do servidor → repete com backoff;
+ *   {tipo:"rede", subtipo:"em_andamento"} 409 envio_em_andamento: outro pedido com o MESMO client_ref ainda está sendo enviado → não é falha,
+ *                                         só pergunta de novo em ~20 s (sem motivo na tela);
  *   {tipo:"sessao"}                       sessão caída → espera o login (o rascunho/fila ficam);
  *   {tipo:"definitiva", codigo, motivo}   fora_da_janela, conversa_resolvida, dados_invalidos… → "Não enviada" com o motivo (não repete sozinho).
  */
@@ -684,6 +689,7 @@ export function classificarFalhaEnvio(e) {
   const status = Number(e && e.status);
   const salva = !!(e && e.resposta && e.resposta.mensagem && e.resposta.mensagem.id);
   if (SO_SESSAO.test(cod) || status === 401) return { tipo: "sessao", codigo: cod || "sessao_invalida", motivo: "Sua sessão expirou. Entre de novo: a mensagem continua guardada." };
+  if (cod === "envio_em_andamento") return { tipo: "rede", subtipo: "em_andamento", codigo: cod, motivo: null };
   if (e && e.resposta && e.resposta.ambigua === true) return { tipo: "definitiva", codigo: "ambigua", motivo: "Pode ter saído — confira no WhatsApp antes de reenviar.", ambigua: true, salva };
   if (REDE_SEM_CONEXAO.test(cod)) return { tipo: "rede", subtipo: "sem_conexao", codigo: cod, motivo: "Sem internet: a mensagem espera na fila." };
   if (REDE_EM_VOO.test(cod) || status === 504) return { tipo: "rede", subtipo: "em_voo", codigo: cod || "http_504", motivo: "O servidor não respondeu a tempo: tentando de novo sem enviar em dobro." };
@@ -691,17 +697,82 @@ export function classificarFalhaEnvio(e) {
   return { tipo: "definitiva", codigo: cod || "envio_falhou", motivo: dicaErroEnvio(cod) || "", salva };
 }
 
-/** Itens da fila prontos para sair agora (estado fila/incerto e proxima_em vencida), na ordem em que a pessoa mandou. */
-export function filaDevidos(itens, agora = Date.now()) {
-  return (itens || []).filter(x => x && (x.estado === "fila" || x.estado === "incerto") && !(Number(x.proxima_em) > agora))
+/**
+ * O que acontece com um item da fila depois de uma falha de envio em que o servidor NÃO gravou a mensagem. `c` é o classificarFalhaEnvio.
+ * Devolve {fim, campos}: `campos` são os que mudam no item; `fim` = true quando ele não sai mais sozinho (a pessoa decide).
+ *   409 em andamento → "andamento": não conta como tentativa, não mostra motivo, pergunta de novo em ~20 s (enviada_em zera: o servidor respondeu
+ *                      que ESTE pedido não enviou nada, e a reserva do client_ref é que impede o dobro);
+ *   sessão caída     → volta à fila e tenta 15 s depois (o servidor recusou antes de enviar: enviada_em zera);
+ *   rede             → "fila" (ou "incerto", se o prazo estourou com o pedido a caminho) com o backoff; os 90 s desde enviada_em continuam valendo;
+ *   pode ter saído   → "ambigua": fica com o aviso e nunca é reenviada sozinha;
+ *   definitiva       → "falhou" com o motivo.
+ */
+export function aposFalhaFila(item, c, { agora = Date.now(), jitter = 0, textoErro = "" } = {}) {
+  const tent = Number(item && item.tentativas) || 0;
+  if (c && c.tipo === "rede" && c.subtipo === "em_andamento") {
+    return { fim: false, campos: { estado: "andamento", motivo: null, enviada_em: 0, proxima_em: agora + FILA_EM_ANDAMENTO_MS } };
+  }
+  if (c && c.tipo === "sessao") return { fim: false, campos: { estado: "fila", motivo: c.motivo, enviada_em: 0, tentativas: tent + 1, proxima_em: agora + 15000 } };
+  if (c && c.tipo === "rede") {
+    return { fim: false, campos: { estado: c.subtipo === "em_voo" ? "incerto" : "fila", motivo: c.motivo, tentativas: tent + 1, proxima_em: proximaTentativaFila(tent, agora, jitter) } };
+  }
+  if (c && c.ambigua) return { fim: true, campos: { estado: "ambigua", motivo: c.motivo || "Pode ter saído — confira no WhatsApp antes de reenviar." } };
+  return { fim: true, campos: { estado: "falhou", motivo: (c && c.motivo) || textoErro || "A mensagem não foi enviada." } };
+}
+
+/** Estados em que a fila manda o item sozinha. "falhou" e "ambigua" (pode ter saído) esperam a pessoa; "enviando" já está a caminho. */
+const SAI_SOZINHO = new Set(["fila", "incerto", "andamento"]);
+
+/** Quanto falta (ms) para o item poder ser retransmitido (0 = já pode): depois de um pedido sair (enviada_em), nunca antes de 90 s —
+    o primeiro pedido ainda pode estar a caminho do WhatsApp, e repetir antes disso é o que faz a mensagem chegar em dobro. */
+export function esperaReenvioFila(item, agora = Date.now()) {
+  const em = Number(item && item.enviada_em) || 0;
+  return em ? Math.max(0, em + FILA_ESPERA_REENVIO_MS - agora) : 0;
+}
+
+/** Quando o item sai de novo (ms): o maior entre o backoff e os 90 s desde o último pedido. */
+export function proximaSaidaFila(item) {
+  const em = Number(item && item.enviada_em) || 0;
+  return Math.max(Number(item && item.proxima_em) || 0, em ? em + FILA_ESPERA_REENVIO_MS : 0);
+}
+
+/** Itens da fila prontos para sair agora, na ordem em que a pessoa mandou. `forcar` (a internet voltou) ignora o backoff,
+    mas NUNCA os 90 s desde o último pedido do mesmo item. */
+export function filaDevidos(itens, agora = Date.now(), { forcar = false } = {}) {
+  return (itens || []).filter(x => x && SAI_SOZINHO.has(x.estado) && (forcar || !(Number(x.proxima_em) > agora)) && esperaReenvioFila(x, agora) === 0)
     .sort((a, b) => (Number(a.criada_em) || 0) - (Number(b.criada_em) || 0));
 }
-/** Item guardado há mais de 7 dias, ou de outra conta/empresa: sai na limpeza. */
-export function filaDescartavel(item, { conta, cliente, agora = Date.now() } = {}) {
-  if (!item || !item.id) return true;
-  if (conta && item.conta !== conta) return true;
-  if (cliente && item.cliente !== cliente) return true;
-  return agora - (Number(item.criada_em) || 0) > FILA_TTL_MS;
+
+/** Item que ainda sairia sozinho mas está parado há mais de 15 min: não sai mais sem a pessoa pedir (nada de mensagem de sexta chegando na segunda). */
+export function filaParada(item, agora = Date.now()) {
+  return !!item && SAI_SOZINHO.has(item.estado) && agora - (Number(item.criada_em) || 0) > FILA_AUTO_MAX_MS;
+}
+
+/** "Ficou na fila desde hoje às 14:02" · "…ontem às 18:02" · "…sex. às 18:02" · "…25/09 às 18:02". */
+export function motivoFilaParada(criadaEm, agora = new Date()) {
+  const t = Number(criadaEm);
+  if (!Number.isFinite(t) || t <= 0) return "Ficou na fila sem ser enviada";
+  const dif = Math.round((Date.parse(diaSP(agora)) - Date.parse(diaSP(t))) / 86400000);
+  const dia = dif <= 0 ? "hoje" : dif === 1 ? "ontem" : dif < 7 ? _fmtSem.format(new Date(t)) : _fmtCurta.format(new Date(t));
+  return `Ficou na fila desde ${dia} às ${_fmtHora.format(new Date(t))}`;
+}
+
+/** O que fazer com um item guardado ao abrir a fila: "usar" (desta conta e desta empresa), "apagar" (desta conta e empresa, parado há mais
+    de 7 dias) ou "pular" (de outra conta ou empresa: fica onde está, é de quem o escreveu — nunca se apaga o que é de outro escopo). */
+export function filaDestino(item, { conta, cliente, agora = Date.now() } = {}) {
+  if (!item || !item.id) return "pular";
+  if (item.conta !== conta || item.cliente !== cliente) return "pular";
+  return agora - (Number(item.criada_em) || 0) > FILA_TTL_MS ? "apagar" : "usar";
+}
+
+/** Texto da bolha que espera na fila: o motivo real (internet, servidor ocupado, sessão) e a hora da próxima tentativa, quando há. */
+export function textoFila({ estado, motivo, proxima } = {}, agora = Date.now()) {
+  const hora = Number(proxima) > agora ? ` · nova tentativa às ${horaMsg(Number(proxima))}` : "";
+  if (estado === "incerto") return `Sem resposta do servidor · tentando de novo (nada sai em dobro)${hora}`;
+  const m = String(motivo || "").trim();
+  if (!m || /^sem internet/i.test(m)) return "Na fila · envia quando a internet voltar";
+  if (/sessão/i.test(m)) return m;
+  return `Na fila · ${m.replace(/:\s*tentando de novo\.?$/i, "").replace(/\.$/, "")}${hora}`;
 }
 
 /** "Rascunho:" da lista: uma linha só, no máximo 80 caracteres. */

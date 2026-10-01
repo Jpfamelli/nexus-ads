@@ -117,8 +117,9 @@ export function criarRascunhos(o = {}) {
       if (!campoPermitido(campo) || !chave) return inerte;
       const k = chaveDe(chave);
       let timer = null, selo = null, nosso = false, restaurado = false;
+      let parado = false;       // depois de parar() (logout) nada mais é gravado: o desligar() da tela que desmonta em seguida não pode ressuscitar o rascunho
       const valor = () => (campo.isContentEditable && campo.value === undefined ? String(campo.textContent || "") : String(campo.value ?? ""));
-      const salvarAgora = () => { if (timer) { cancelar(timer); timer = null; } gravar(k, valor()); };
+      const salvarAgora = () => { if (timer) { cancelar(timer); timer = null; } if (parado) return; gravar(k, valor()); };
       const tirarSelo = () => { if (selo && selo.parentNode) selo.parentNode.removeChild(selo); selo = null; };
       const aoDigitar = () => {
         if (nosso) return;                                    // o evento que NÓS disparamos ao restaurar não é digitação
@@ -148,8 +149,8 @@ export function criarRascunhos(o = {}) {
         /** O servidor confirmou o envio: some o rascunho e o selo. */
         apagar() { if (timer) { cancelar(timer); timer = null; } apagarChave(k); tirarSelo(); },
         desligar() { salvarAgora(); campo.removeEventListener && campo.removeEventListener("input", aoDigitar); tirarSelo(); ativos.delete(ctl); },
-        /** Para de guardar SEM gravar (logout, troca de conta): um flush depois não pode ressuscitar o que foi apagado. */
-        parar() { if (timer) { cancelar(timer); timer = null; } campo.removeEventListener && campo.removeEventListener("input", aoDigitar); tirarSelo(); ativos.delete(ctl); },
+        /** Para de guardar SEM gravar (logout, troca de conta): um flush depois (salvarAgora, desligar) não pode ressuscitar o que foi apagado. */
+        parar() { parado = true; if (timer) { cancelar(timer); timer = null; } campo.removeEventListener && campo.removeEventListener("input", aoDigitar); tirarSelo(); ativos.delete(ctl); },
       };
       ativos.add(ctl);
       return ctl;

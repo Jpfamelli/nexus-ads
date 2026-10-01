@@ -278,6 +278,12 @@
 .cvx-rasc-selo .rascunho-selo { margin: 0 0 .4rem; padding: .3rem .65rem; border-radius: 10px; background: var(--c-poco); color: var(--c-texto-2); font-size: var(--fs-13); }
 .cvx-rasc-selo .rascunho-selo .link { color: var(--c-prim-luz); }
 .cvl-rascunho em { font-style: italic; color: var(--c-ruim); font-weight: 600; }
+/* marcas discretas na linha da lista: "!" = mensagem não enviada; relógio = esperando na fila; lápis = há rascunho (quando a linha mostra a mensagem nova do cliente) */
+.cvl-fila { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--c-aten); font-family: var(--f-mono); font-size: var(--fs-11); font-weight: 700; line-height: 1; }
+.cvl-fila .ic { width: 14px; height: 14px; }
+.cvl-fila-falhou { background: var(--c-ruim-suave); color: var(--c-ruim); box-shadow: inset 0 0 0 1px var(--c-ruim); }
+.cvl-selo-rasc { display: inline-grid; place-items: center; color: var(--c-ruim); }
+.cvl-selo-rasc .ic { width: 13px; height: 13px; }
 .cv-fila { display: flex; flex-wrap: nowrap; white-space: nowrap; align-items: center; justify-content: flex-end; gap: .2rem .6rem; margin-top: .3rem; font-size: var(--fs-13); color: var(--c-texto-2); }
 @media (max-width: 760px) { .cv-fila { flex-wrap: wrap; white-space: normal; max-width: 100%; } }
 .cv-fila-t { display: inline-flex; align-items: center; gap: .35rem; }

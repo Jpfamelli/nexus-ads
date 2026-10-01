@@ -190,7 +190,7 @@ export function criarLista(A) {
   function etiquetaDe(id) { return ((A.base && A.base.etiquetas) || []).find(e => e.id === id); }
 
   function assinatura(c, sel, minuto) {
-    return JSON.stringify([A.acoes.rascunhoDe(c.id), c.contato && c.contato.nome, c.contato && c.contato.telefone, c.ultima_msg_em, c.ultima_msg_resumo, c.ultima_msg_dir,
+    return JSON.stringify([A.acoes.rascunhoDe(c.id), A.acoes.filaResumo(c.id), c.contato && c.contato.nome, c.contato && c.contato.telefone, c.ultima_msg_em, c.ultima_msg_resumo, c.ultima_msg_dir,
       c.nao_lidas, c.status, c.atribuida_a, c.atribuida_nome, c.aguardando, c.ultima_entrada_em, c.etiquetas, c.negocio, sel, minuto, A.aba, !!A.busca,
       (A.base && A.base.etiquetas || []).length]);
   }
@@ -200,7 +200,15 @@ export function criarLista(A) {
     const nl = Number(c.nao_lidas) || 0;
     const resumo = c.ultima_msg_resumo ? String(c.ultima_msg_resumo) : (c.status === "aberta" && !c.ultima_msg_dir ? "Conversa iniciada — sem mensagens ainda" : "");
     const rascunho = L.textoRascunhoLista(A.acoes.rascunhoDe(c.id));       // M36: o que foi digitado e não enviado aparece na linha, em itálico
+    // com mensagem nova do cliente, a linha mostra a mensagem DELE (é o que precisa ser lido) e o rascunho vira um selo pequeno
+    const rascunhoNaLinha = !!rascunho && !nl;
     const meta = [];
+    // fila de saída: mensagem desta conversa que não saiu ("!") ou que ainda espera na fila (relógio) — visível sem abrir a conversa
+    const fila = A.acoes.filaResumo(c.id);
+    const filaTxt = fila === "falhou" ? "Mensagem não enviada" : fila === "pendente" ? "Mensagem na fila de envio" : "";
+    if (fila === "falhou") meta.push(h("span", { class: "cvl-fila cvl-fila-falhou", title: `${filaTxt}: abra para ver o motivo` }, "!"));
+    else if (fila === "pendente") meta.push(h("span", { class: "cvl-fila", title: filaTxt }, ui.icone("relogio")));
+    if (rascunho && !rascunhoNaLinha) meta.push(h("span", { class: "cvl-selo-rasc", title: `Rascunho: ${rascunho}` }, ui.icone("editar")));
     // etapa e etiquetas viram pontos de cor (o nome fica no tooltip e no rótulo do item): nenhum selo é cortado com reticências
     if (c.negocio && c.negocio.estagio_nome) {
       const cor = ui.corOk(c.negocio.estagio_cor);
@@ -223,7 +231,9 @@ export function criarLista(A) {
       meta.push(av);
     }
     const rotuloA11y = [nome, c.negocio && c.negocio.estagio_nome ? `etapa ${c.negocio.estagio_nome}` : null, etqs.length ? `etiquetas ${etqs.map(e => e.nome).join(", ")}` : null, nl ? `${nl} não ${nl === 1 ? "lida" : "lidas"}` : null,
-      rascunho ? `Rascunho: ${rascunho}` : resumo ? `${c.ultima_msg_dir === "out" ? "Você: " : ""}${resumo}` : null, L.horaLista(c.ultima_msg_em),
+      filaTxt || null,
+      rascunhoNaLinha ? `Rascunho: ${rascunho}` : resumo ? `${c.ultima_msg_dir === "out" ? "Você: " : ""}${resumo}` : null,
+      rascunho && !rascunhoNaLinha ? "tem rascunho" : null, L.horaLista(c.ultima_msg_em),
       c.aguardando && c.status === "aberta" ? `esperando há ${L.tempoEspera(c.ultima_entrada_em)}` : null,
       c.atribuida_nome ? `com ${c.atribuida_nome}` : "sem dono"].filter(Boolean).join(", ");
     const a = h("a", { class: "cvl-item", href: `#/conversas/${c.id}`, "aria-current": sel ? "true" : null, "aria-label": rotuloA11y,
@@ -231,7 +241,7 @@ export function criarLista(A) {
       ui.avatar(nome, c.contato && c.contato.id),
       h("span", { class: "cvl-nome" }, nome),
       h("span", { class: "cvl-hora" }, L.horaLista(c.ultima_msg_em)),
-      rascunho ? h("span", { class: "cvl-resumo cvl-rascunho" }, h("em", null, "Rascunho: "), rascunho)
+      rascunhoNaLinha ? h("span", { class: "cvl-resumo cvl-rascunho" }, h("em", null, "Rascunho: "), rascunho)
         : h("span", { class: "cvl-resumo" }, c.ultima_msg_dir === "out" && resumo ? h("b", null, "Você: ") : null, resumo),
       nl ? h("span", { class: "cvl-badge", "aria-hidden": "true" }, nl > 99 ? "99+" : String(nl)) : h("span", { "aria-hidden": "true" }),
       meta.length ? h("span", { class: "cvl-meta", "aria-hidden": "true" }, meta) : null);
@@ -295,6 +305,9 @@ export function criarLista(A) {
     }
     ultimoVazio = null;
     const minuto = Math.floor(Date.now() / 60000);
+    // j/k: a linha com o foco pode ser recriada neste desenho (vira o minuto, chega mensagem); o foco volta para a MESMA conversa no fim
+    const focada = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".cvl-item") : null;
+    const idFocado = focada && lista.contains(focada) ? focada.dataset.id : null;
     const vivos = new Set();
     const ordem = [];
     for (const c of A.itens) {
@@ -317,6 +330,10 @@ export function criarLista(A) {
     if (!A.temMais) maisBox.remove(); else lista.appendChild(maisBox);
     renderBlocoMsgs();
     if (blocoMsgs.hidden) blocoMsgs.remove(); else lista.appendChild(blocoMsgs);
+    if (idFocado && !(document.activeElement && lista.contains(document.activeElement))) {
+      const volta = [...lista.querySelectorAll(".cvl-item")].find(x => x.dataset.id === idFocado);
+      if (volta) try { volta.focus({ preventScroll: true }); } catch { volta.focus(); }
+    }
     if (reset) lista.scrollTop = 0;
   }
 

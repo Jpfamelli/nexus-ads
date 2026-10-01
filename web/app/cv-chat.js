@@ -422,9 +422,9 @@ export function criarChat(A) {
     }
     // M36: a fila de saída — "Na fila", "tentando de novo" (prazo estourado: o servidor não deixa sair em dobro) e a falha definitiva logo abaixo
     if (m.local && (m.filaEstado === "fila" || m.filaEstado === "incerto")) {
+      // o texto diz o motivo REAL (internet, servidor ocupado, sessão) e a hora da próxima tentativa: a pessoa não procura problema no próprio wifi
       const fila = h("div", { class: "cv-fila", role: "status" },
-        h("span", { class: "cv-fila-t" }, ui.icone("relogio"), m.filaEstado === "incerto"
-          ? "Sem resposta do servidor · tentando de novo (nada sai em dobro)" : m.erro && /sessão/i.test(m.erro) ? m.erro : "Na fila · envia quando a internet voltar"));
+        h("span", { class: "cv-fila-t" }, ui.icone("relogio"), L.textoFila({ estado: m.filaEstado, motivo: m.erro, proxima: m.filaProxima })));
       if (m.filaEstado === "fila" && A.podeEscrever) {
         fila.append(h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.enviarAgora(m) } }, "Enviar agora"),
           h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.cancelarFila(m) } }, "Cancelar"));
@@ -440,11 +440,17 @@ export function criarChat(A) {
         h("b", null, ambigua ? "Status incerto: " : "Não enviada: "), erro));
       if (ambigua) {
         falha.classList.add("cv-falha-ambigua");
+        // item da fila em dúvida (o servidor não tem a mensagem gravada): nunca sai sozinho; depois de conferir no WhatsApp, a pessoa decide
+        if (m.local && m.ref && m.filaEstado === "ambigua" && A.podeEscrever) {
+          falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarLocal(m) } }, "Enviar de novo"),
+            h("button", { type: "button", class: "bt bt-fant", on: { click: () => A.acoes.descartarLocal(m) } }, "Descartar"));
+        }
       } else if (m.falhaLocal && m.pedido) {
         falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarLocal(m) } }, "Tentar de novo"),
           h("button", { type: "button", class: "bt bt-fant", on: { click: () => A.acoes.descartarLocal(m) } }, "Descartar"));
-      } else if (A.podeEscrever && m.tipo === "texto" && m.corpo) {
-        falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.enviar({ tipo: "texto", texto: m.corpo }) } }, "Tentar de novo"));
+      } else if (A.podeEscrever && m.tipo === "texto" && m.corpo && !A.acoes.foiReenviada(m)) {
+        // falha gravada pelo servidor: pede o reenvio da PRÓPRIA mensagem (o texto gravado já tem a assinatura; como texto novo ela sairia em dobro)
+        falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarGravada(m) } }, "Tentar de novo"));
       }
       box.appendChild(falha);
     }
@@ -455,7 +461,7 @@ export function criarChat(A) {
     const m = ln.msg;
     const md = m.midia || {};
     const urlOk = md.path ? A.acoes.estadoMidia(md.path) : "";
-    return [m.atualizado_em, m.status, m.erro, m.ambigua, m.filaEstado, m.origem, m.reacao, ln.junta, md.estado, md.progresso, md.fase, m.local && A.acoes.podeCancelarEnvio(m) ? 1 : 0, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
+    return [m.atualizado_em, m.status, m.erro, m.ambigua, m.filaEstado, m.filaProxima, !m.local && m.status === "falhou" && A.acoes.foiReenviada(m) ? 1 : 0, m.origem, m.reacao, ln.junta, md.estado, md.progresso, md.fase, m.local && A.acoes.podeCancelarEnvio(m) ? 1 : 0, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
       m.responde_a && m.responde_a.id, m.enviado_por && m.enviado_por.nome].join("|");
   }
 

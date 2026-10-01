@@ -40,6 +40,7 @@ export function criarComposer(A) {
   const resp = h("div", { class: "cvx-resp", hidden: true });
   const seloRasc = h("div", { class: "cvx-rasc-selo" });       // "Rascunho restaurado · descartar" (o ctx.rascunho põe o selo aqui)
   let rasc = null;                                               // rascunho do campo ligado a esta conversa (ctx.rascunho.ligar)
+  let idDoCampo = null;                                          // de QUAL conversa é o texto que está no campo (A.selId muda antes de a conversa nova carregar)
   const trava = h("div", { class: "cvx-trava", hidden: true });
   const iaTrab = h("div", { class: "cvx-ia-trab", hidden: true, role: "status" }, "Escrevendo…");
   const dica = h("p", { class: "cvx-dica" }, h("kbd", null, "Enter"), " envia · ", h("kbd", null, "Shift"), "+", h("kbd", null, "Enter"), " quebra linha · ", h("kbd", null, "/"), " respostas rápidas");
@@ -169,12 +170,14 @@ export function criarComposer(A) {
   }
 
   /** M36: o que se digita fica guardado no aparelho (por conversa, e a nota à parte) e volta depois de recarregar, da sessão cair ou da aba ser descartada. */
+  /** Desliga o rascunho da conversa do campo. O desligar GRAVA o texto do campo na chave dela: só pode rodar com o texto dela ainda no campo. */
+  function desligarRascunho() { if (rasc) { try { rasc.desligar(); } catch { /* ok */ } rasc = null; } }
   function ligarRascunho() {
-    if (rasc) { try { rasc.desligar(); } catch { /* ok */ } rasc = null; }
+    desligarRascunho();
     ui.limpar(seloRasc);
     const r = A.ctx && A.ctx.rascunho;
-    if (!r || !A.selId || typeof r.ligar !== "function") return;
-    rasc = r.ligar(ta, `conversa:${A.selId}${modoNota ? ":nota" : ""}`, { seloEm: seloRasc });
+    if (!r || !idDoCampo || typeof r.ligar !== "function") return;
+    rasc = r.ligar(ta, `conversa:${idDoCampo}${modoNota ? ":nota" : ""}`, { seloEm: seloRasc });
     if (rasc && rasc.restaurado) { autoAltura(); A.acoes.rascunhoMudou(); }
   }
   /** Apaga o rascunho guardado — só depois de o servidor/fila terem a mensagem (e se a pessoa já não digitou outra coisa). */
@@ -182,11 +185,14 @@ export function criarComposer(A) {
 
   function definirConversa() {
     if (gravacao) pararGravacao(true);
+    // o rascunho da conversa ANTERIOR sai antes de o campo mudar: desligado depois, ele gravaria o texto da conversa nova na chave da antiga
+    desligarRascunho();
     modoNota = false;
     respondendo = null;
     fecharRR();
     desenharResposta();
-    ta.value = (A.selId && A.rascunhos.get(A.selId)) || "";
+    idDoCampo = A.selId || null;
+    ta.value = (idDoCampo && A.rascunhos.get(idDoCampo)) || "";
     ligarRascunho();
     atualizar();
     el.hidden = false;
@@ -208,6 +214,10 @@ export function criarComposer(A) {
       rasc = null;
       ligarRascunho();
       if (rasc && ta.value.trim()) rasc.salvarAgora();
+    }
+    if (modoNota !== antes && idDoCampo) {       // o rascunho da sessão segue a mesma regra: texto de nota nunca fica guardado como mensagem para o cliente
+      if (modoNota) A.rascunhos.delete(idDoCampo); else A.rascunhos.set(idDoCampo, ta.value);
+      A.acoes.rascunhoMudou();
     }
     if (modoNota) { respondendo = null; desenharResposta(); fecharRR(); }
     atualizar();
@@ -291,7 +301,7 @@ export function criarComposer(A) {
 
   ta.addEventListener("input", () => {
     autoAltura();
-    if (!modoNota && A.selId) { A.rascunhos.set(A.selId, ta.value); A.acoes.rascunhoMudou(); }
+    if (!modoNota && idDoCampo) { A.rascunhos.set(idDoCampo, ta.value); A.acoes.rascunhoMudou(); }
     if (modoNota) return;
     const t = L.termoBarra(ta.value);
     if (t !== null) abrirRR(t); else if (rrAberto) fecharRR();
@@ -314,6 +324,8 @@ export function criarComposer(A) {
   async function enviarDoCampo() {
     const texto = ta.value.trim();
     if (!texto || !podeTexto()) return;
+    // o texto do campo é de uma conversa só: enquanto a aberta não for ela (troca em andamento), Enter não manda nada para ninguém
+    if (!idDoCampo || idDoCampo !== A.selId || !conv() || conv().id !== idDoCampo) return;
     if (texto.length > 4096) { ui.toast("A mensagem passou de 4.096 caracteres. Divida em duas.", { tipo: "erro" }); return; }
     if (modoNota) {
       btEnviar.disabled = true;
@@ -329,7 +341,7 @@ export function criarComposer(A) {
     const citada = respondendo;
     ta.value = ""; autoAltura();
     respondendo = null; desenharResposta();
-    A.rascunhos.delete(A.selId);
+    A.rascunhos.delete(idDoCampo);
     A.acoes.rascunhoMudou();
     ta.focus();
     const r = await A.acoes.enviar({ tipo: "texto", texto, respondeA: citada });
@@ -458,7 +470,13 @@ export function criarComposer(A) {
     }
   }
 
+  /** Nome de quem vai receber (título dos modais de envio: a última conferência antes de mandar foto ou modelo). */
+  function nomeDestino() { return A.acoes.nomeContato(contato()) || "este contato"; }
+  /** A conversa aberta ainda é a `id`? Anexo e modelo esperam (otimizar a foto, o modal): nesse meio tempo a pessoa pode ter aberto outra. */
+  function mesmaConversa(id) { return !!id && A.selId === id && !!conv() && conv().id === id; }
+
   async function anexar(f) {
+    const idInicio = conv() ? conv().id : null;      // o arquivo foi escolhido para ESTA conversa
     if (!aceitaAnexo()) {
       ui.toast(usaCodeWords() ? "Este canal CodeWords envia apenas texto por enquanto."
         : situacao() === "janela" ? "Fora da janela de 24 h só vale modelo aprovado." : "Não dá para anexar agora.", { tipo: "info" });
@@ -476,7 +494,9 @@ export function criarComposer(A) {
           return;
         }
       } finally { otimStatus.hidden = true; }
-      if (!aceitaAnexo()) return;      // a conversa mudou enquanto a foto era reduzida
+      // a conversa mudou enquanto a foto era reduzida: o arquivo não segue para outro cliente
+      if (!mesmaConversa(idInicio)) { ui.toast("Você trocou de conversa enquanto a foto era preparada: nada foi enviado. Anexe de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
+      if (!aceitaAnexo()) return;
     }
     const escolhidoInicial = otim ? otim.arquivo : f;
     const v = L.validarArquivo(escolhidoInicial);
@@ -504,13 +524,15 @@ export function criarComposer(A) {
     const corpo = h("div", { class: "pilha" }, h("div", { class: "cv-anexo-previa" }, previa), info,
       chkOriginal ? h("label", { class: "chip-check cv-original", for: "cvx-original" }, chkOriginal, `Enviar a original (${L.tamanhoLegivel(f.size)})`) : null,
       h("div", { class: "campo" }, h("label", { for: "cvx-legenda" }, "Legenda"), leg));
-    const ok = await ui.modal({ titulo: "Enviar arquivo", corpo, largura: "m", aoAbrir: () => setTimeout(() => { if (!leg.disabled) leg.focus(); }, 40),
+    const ok = await ui.modal({ titulo: `Enviar arquivo para ${nomeDestino()}`, corpo, largura: "m", aoAbrir: () => setTimeout(() => { if (!leg.disabled) leg.focus(); }, 40),
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Enviar", tipo: "primario", valor: true }] });
     if (url) URL.revokeObjectURL(url);
     if (!ok) return;
+    // a conversa mudou com o modal aberto (mensagem nova abriu outra, atalho de teclado): o arquivo não vai para quem não era o destino
+    if (!mesmaConversa(idInicio)) { ui.toast("A conversa aberta mudou antes do envio: o arquivo não foi enviado. Anexe de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
     const usaOriginal = !!(chkOriginal && chkOriginal.checked);
     const arquivoFinal = usaOriginal ? f : escolhidoInicial;
-    await A.acoes.enviar({ tipo: "midia", arquivo: arquivoFinal, validacao: usaOriginal ? vOriginal : v, legenda: v.tipo === "audio" ? "" : leg.value.trim() });
+    await A.acoes.enviar({ tipo: "midia", conversa: idInicio, arquivo: arquivoFinal, validacao: usaOriginal ? vOriginal : v, legenda: v.tipo === "audio" ? "" : leg.value.trim() });
   }
 
   /* ---------------- modelos (templates aprovados) */
@@ -519,6 +541,7 @@ export function criarComposer(A) {
     const c = conv();
     if (!c) return;
     if (!c.canal_id) { ui.toast("Este atendimento não tem mais número para enviar.", { tipo: "erro" }); return; }
+    const idInicio = c.id;                            // o modelo é para ESTA conversa
     const ct = contato();
     const todos = ((A.base && A.base.templates) || []).filter(t => t.canal_id === c.canal_id && String(t.status || "").toUpperCase() !== "DELETED");
     const lista = h("div", { class: "cv-modelos", role: "listbox", "aria-label": "Modelos" });
@@ -566,13 +589,14 @@ export function criarComposer(A) {
     const corpo = h("div", { class: "pilha" },
       h("p", { class: "sub" }, "Modelos aprovados pela Meta abrem ou retomam a conversa fora da janela de 24 h. A Meta cobra por modelo entregue."),
       lista, params, previa);
-    await ui.modal({ titulo: "Enviar modelo", corpo, largura: "m",
+    await ui.modal({ titulo: `Enviar modelo para ${nomeDestino()}`, corpo, largura: "m",
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Enviar modelo", tipo: "primario", fn: api => {
+        if (!mesmaConversa(idInicio)) { api.erro("A conversa aberta mudou. Feche e escolha o modelo de novo na conversa certa."); return false; }
         if (!escolhido) { api.erro("Escolha um modelo."); return false; }
         const vals = campos.map(x => x.value.trim());
         const falta = vals.findIndex(v => !v);
         if (falta >= 0) { api.erro(`Preencha o parâmetro {{${falta + 1}}}.`); campos[falta].focus(); return false; }
-        A.acoes.enviar({ tipo: "template", template: escolhido, parametros: vals });
+        A.acoes.enviar({ tipo: "template", conversa: idInicio, template: escolhido, parametros: vals });
         return true;
       } }] });
   }
@@ -588,15 +612,32 @@ export function criarComposer(A) {
     if (cota && cota.limite != null && Number(cota.usadas) >= Number(cota.limite)) { ui.toast("A cota de IA do mês acabou.", { tipo: "info" }); return; }
     iaTrab.hidden = false;
     btIA.disabled = true;
+    const idPedido = idDoCampo;                       // a sugestão é para ESTA conversa
     try {
       const r = await A.acoes.sugerirIA();
       const texto = r && typeof r.texto === "string" ? r.texto.trim() : "";
       if (!texto) throw Object.assign(new Error("ia_indisponivel"), { codigo: "ia_indisponivel" });
-      ta.value = texto;
-      autoAltura();
-      ta.focus();
-      ta.select();
-      ui.anunciar("Sugestão da IA no campo. Revise antes de enviar.");
+      // a IA pode levar dezenas de segundos: se a pessoa já está em outra conversa, a sugestão não entra no campo (seria texto de um cliente indo para outro)
+      if (!idPedido || idDoCampo !== idPedido || A.selId !== idPedido) {
+        ui.toast("A sugestão da IA chegou depois que você trocou de conversa e não foi usada. Peça de novo na conversa certa.", { tipo: "info", ms: 8000 });
+        return;
+      }
+      if (ta.value.trim()) {
+        // o campo já tem texto da pessoa: a sugestão entra ABAIXO (e só ela fica selecionada), nunca por cima do que foi digitado
+        const base = `${ta.value.replace(/\s+$/, "")}\n\n`;
+        ta.value = (base + texto).slice(0, 4096);
+        autoAltura();
+        ta.focus();
+        ta.setSelectionRange(Math.min(base.length, ta.value.length), ta.value.length);
+        ui.anunciar("Sugestão da IA acrescentada abaixo do que você já tinha escrito. Revise antes de enviar.");
+      } else {
+        ta.value = texto;
+        autoAltura();
+        ta.focus();
+        ta.select();
+        ui.anunciar("Sugestão da IA no campo. Revise antes de enviar.");
+      }
+      if (!modoNota) { A.rascunhos.set(idDoCampo, ta.value); A.acoes.rascunhoMudou(); }
     } catch (e) {
       const c = e && e.codigo;
       ui.toast(c === "ia_cota" ? "A cota de IA do mês acabou." : c === "muitos_pedidos" ? "Muitos pedidos seguidos; espere um minuto." : "A IA não está disponível agora.", { tipo: c === "ia_cota" || c === "muitos_pedidos" ? "info" : "erro" });
@@ -622,7 +663,10 @@ export function criarComposer(A) {
     /** Alt+Shift+N: liga/desliga a nota interna (true/false força; sem argumento alterna). Devolve se o campo está em nota. */
     alternarNota(forcar) { if (el.hidden || !A.podeEscrever) return false; alternarNota(forcar); return modoNota; },
     get emNota() { return modoNota; },
-    lerRascunho() { return ta.value; },
+    /** Guarda o texto do campo como rascunho (da sessão) da conversa a que ele PERTENCE — não da que está selecionada agora — e nunca o de uma nota interna. */
+    guardar() { if (idDoCampo && !modoNota) A.rascunhos.set(idDoCampo, ta.value); },
+    /** O texto do campo, se ele é da conversa `id` e não é nota interna (para o "Rascunho:" da lista); senão "". */
+    textoDe(id) { return idDoCampo === id && !modoNota ? ta.value : ""; },
     /** "Cancelar" na fila: o texto volta ao campo (se já houver algo, vai embaixo). */
     devolverTexto(texto) {
       const t = String(texto || "");
@@ -632,7 +676,7 @@ export function criarComposer(A) {
       autoAltura(); ta.focus();
       ta.dispatchEvent(new Event("input", { bubbles: true }));
     },
-    desmontar() { if (gravacao) pararGravacao(true); if (rasc) { try { rasc.desligar(); } catch { /* ok */ } rasc = null; } },
+    desmontar() { if (gravacao) pararGravacao(true); desligarRascunho(); },
     focar() { if (!ta.disabled) ta.focus(); },
   };
 }
