@@ -1278,43 +1278,23 @@ export function seletorCor({ valor = null, paleta, aoMudar, rotulo = "Cor" } = {
 }
 
 /**
- * abas({itens:[{id, rotulo, n, painel}], ativo, aoMudar(id), rotulo}) → {el, ativar(id), contar(id, n)} (setas ←→, roving tabindex)
- * `painel` (elemento, opcional): vira role=tabpanel, ligado à aba por aria-controls/aria-labelledby (padrão ARIA de abas).
- * O contador vem separado do rótulo por um espaço («Execuções 3», não «Execuções3» no leitor de tela).
+ * abas({itens:[{id, rotulo, n, painel, icone}], ativo, aoMudar(id), rotulo, classe}) → {el, ativar(id), contar(id, n), ativo}
+ * É o segmentado "abas" (M05: um segmentado só, com indicador que desliza) com a API de antes: aoMudar também no clique do item já ativo,
+ * setas ←→ Home End (roving tabindex), `painel` (elemento) vira role=tabpanel ligado à aba por aria-controls/aria-labelledby,
+ * contador separado do rótulo por um espaço («Execuções 3», não «Execuções3» no leitor de tela).
+ * As classes antigas (.abas na faixa, .aba em cada item, .abas-n no contador) continuam no DOM como gancho dos CSS dos módulos.
  */
 export function abas({ itens = [], ativo, aoMudar, rotulo = "Seções", classe = "" } = {}) {
-  let atual = ativo ?? (itens[0] && itens[0].id);
-  const bts = new Map();
-  const lista = h("div", { class: ["abas", classe], role: "tablist", "aria-label": rotulo });
-  for (const it of itens) {
-    const n = h("span", { class: "abas-n", hidden: it.n === undefined || it.n === null }, it.n ?? "");
-    const b = h("button", { type: "button", role: "tab", class: "aba", id: novoId("aba"), dataset: { id: it.id } }, it.icone ? icone(it.icone) : null, h("span", null, it.rotulo), " ", n);
-    if (it.painel) {
-      if (!it.painel.id) it.painel.id = novoId("painel");
-      b.setAttribute("aria-controls", it.painel.id);
-      it.painel.setAttribute("role", "tabpanel");
-      it.painel.setAttribute("aria-labelledby", b.id);
-    }
-    b.addEventListener("click", () => { ativar(it.id); if (aoMudar) aoMudar(it.id); });
-    bts.set(it.id, { b, n });
-    lista.appendChild(b);
-  }
-  lista.addEventListener("keydown", ev => {
-    const arr = [...bts.values()].map(x => x.b); const i = arr.indexOf(document.activeElement);
-    if (i < 0) return;
-    let j = null;
-    if (ev.key === "ArrowRight") j = (i + 1) % arr.length; else if (ev.key === "ArrowLeft") j = (i - 1 + arr.length) % arr.length;
-    else if (ev.key === "Home") j = 0; else if (ev.key === "End") j = arr.length - 1;
-    if (j !== null) { ev.preventDefault(); arr[j].focus(); arr[j].click(); }
+  const seg = segmentado({
+    opcoes: itens.map(it => ({ valor: it.id, rotulo: it.rotulo, contador: it.n, icone: it.icone, painel: it.painel })),
+    valor: ativo ?? (itens[0] && itens[0].id), tipo: "abas", rotulo, repetir: true, classe: ["abas", classe].filter(Boolean).join(" "),
+    aoMudar: aoMudar ? v => aoMudar(v) : undefined,
   });
-  function ativar(id) {
-    atual = id;
-    for (const [k, { b }] of bts) { const on = k === id; b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1; }
-  }
-  ativar(atual);
+  for (const b of seg.querySelectorAll(".seg-op")) b.classList.add("aba");
+  for (const n of seg.querySelectorAll(".seg-n")) n.classList.add("abas-n");
   return {
-    el: lista, ativar, get ativo() { return atual; },
-    contar(id, n) { const x = bts.get(id); if (!x) return; x.n.textContent = n ?? ""; x.n.hidden = n === null || n === undefined || n === ""; },
+    el: seg, ativar: v => seg.ativar(v), get ativo() { return seg.valor; },
+    contar: (id, n) => seg.contar(id, n),
   };
 }
 
@@ -1532,19 +1512,28 @@ export function cabecalho({ rotulo, titulo, sub, acoes, nivel = 1 } = {}) {
 /** segmentado({opcoes:[{valor, rotulo, contador?}], valor, tipo: "abas"|"filtro", aoMudar(valor), rotulo}) → elemento (role=tablist).
     "abas" navegam (pílula neutra); "filtro" muda dados (--c-prim-suave + texto escuro, nunca cheio). O indicador desliza (translateX/width,
     --t-ui; sem animação com movimento reduzido). Setas/Home/End movem e ativam; Enter/Espaço ativam o item em foco; roving tabindex.
+    Opção: {valor, rotulo, contador?, icone?, painel?}; `painel` (elemento) vira role=tabpanel ligado à aba por aria-controls/aria-labelledby.
+    Extras de configuração: `repetir` (chama aoMudar também ao tocar no item já ativo) e `classe` (classes extras no elemento).
     Extras no elemento: .ativar(valor) (sem chamar aoMudar), .contar(valor, n), .valor, .reposicionar(). */
-export function segmentado({ opcoes = [], valor, tipo = "abas", aoMudar, rotulo = "Opções" } = {}) {
+export function segmentado({ opcoes = [], valor, tipo = "abas", aoMudar, rotulo = "Opções", repetir = false, classe = "" } = {}) {
   const t = tipo === "filtro" ? "filtro" : "abas";
   const itens = opcoes.filter(Boolean);
   let atual = itens.some(o => o.valor === valor) ? valor : (itens[0] ? itens[0].valor : null);
   const ind = h("span", { class: "seg-ind", "aria-hidden": "true" });
-  const el = h("div", { class: ["seg", `seg-${t}`], role: "tablist", "aria-label": rotulo }, ind);
+  const el = h("div", { class: ["seg", `seg-${t}`, classe], role: "tablist", "aria-label": rotulo }, ind);
   const mapa = new Map();
-  for (const o of itens) {
-    const n = h("span", { class: "seg-n dado", hidden: o.contador === undefined || o.contador === null }, o.contador ?? "");
-    const b = h("button", { type: "button", role: "tab", class: "seg-op", id: novoId("seg"), dataset: { valor: String(o.valor) } }, h("span", { class: "seg-rot" }, o.rotulo), " ", n);
-    b.addEventListener("click", () => escolher(o.valor, true));
-    mapa.set(o.valor, { b, n });
+  for (const it of itens) {
+    const n = h("span", { class: "seg-n dado", hidden: it.contador === undefined || it.contador === null }, it.contador ?? "");
+    const b = h("button", { type: "button", role: "tab", class: "seg-op", id: novoId("seg"), dataset: { valor: String(it.valor) } },
+      it.icone ? icone(it.icone) : null, h("span", { class: "seg-rot" }, it.rotulo), " ", n);
+    if (it.painel) {
+      if (!it.painel.id) it.painel.setAttribute("id", novoId("painel"));
+      b.setAttribute("aria-controls", it.painel.id);
+      it.painel.setAttribute("role", "tabpanel");
+      it.painel.setAttribute("aria-labelledby", b.id);
+    }
+    b.addEventListener("click", () => escolher(it.valor, true));
+    mapa.set(it.valor, { b, n });
     el.appendChild(b);
   }
   function posicionar() {
@@ -1570,7 +1559,7 @@ export function segmentado({ opcoes = [], valor, tipo = "abas", aoMudar, rotulo 
     if (usuario) {
       const b = mapa.get(v).b;
       try { b.scrollIntoView({ block: "nearest", inline: "nearest", behavior: comportamentoRolagem() }); } catch { /* ok */ }
-      if (mudou && aoMudar) aoMudar(v);
+      if ((mudou || repetir) && aoMudar) aoMudar(v);
     }
   }
   el.addEventListener("keydown", ev => {
@@ -1633,7 +1622,8 @@ export function toqueLongo(el, fn, { ms = 350, mouse = false } = {}) {
 
 /** deslizar(el, {esquerda?, direita?, limiar = 72}) → desligar(). Arrastar o dedo na horizontal: `esquerda` roda ao soltar depois de
     deslizar PARA a esquerda (≥ limiar px), `direita` para a direita. Cada lado é fn(ev) ou {fn, rotulo}. O elemento acompanha o dedo com resistência
-    e volta ao lugar. Só assume o gesto se ele começar mais horizontal que vertical (a rolagem vertical segue livre: touch-action pan-y).
+    e volta ao lugar; passou do limiar, ganha data-armado="1" (borda de acento: "solte para acionar"); com prefers-reduced-motion
+    não anda, só mostra esse aviso. Só assume o gesto se ele começar mais horizontal que vertical (a rolagem vertical segue livre: touch-action pan-y).
     Sempre ofereça também um botão equivalente visível. Mouse não desliza. */
 export function deslizar(el, { esquerda, direita, limiar = 72 } = {}) {
   const acao = a => (typeof a === "function" ? a : a && typeof a.fn === "function" ? a.fn : null);
@@ -1641,8 +1631,10 @@ export function deslizar(el, { esquerda, direita, limiar = 72 } = {}) {
   let ativo = false, travado = false, x0 = 0, y0 = 0, dx = 0, id = null, moveu = false;
   const resistir = d => { const a = Math.abs(d), s = d < 0 ? -1 : 1; return s * (a <= limiar ? a : limiar + (a - limiar) * 0.3); };
   const aplicar = d => {
-    el.style.setProperty("transform", d ? `translateX(${d}px)` : "");
+    // movimento reduzido: o elemento não anda com o dedo; só ganha o aviso de "armado" (borda de acento) ao passar do limiar
+    el.style.setProperty("transform", d && !movimentoReduzido() ? `translateX(${d}px)` : "");
     el.dataset.deslizando = d < 0 ? "esquerda" : d > 0 ? "direita" : "";
+    if (Math.abs(d) >= limiar) el.dataset.armado = "1"; else delete el.dataset.armado;
     el.style.setProperty("--dx", `${d}px`);
   };
   const baixo = ev => {

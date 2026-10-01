@@ -2574,5 +2574,81 @@ await teste("M03: piso de 12 px em qualquer texto e de 13 px quando o ponteiro �
   assert.ok(emPequenos.every(s => /::before$|::after$/.test(s)), `font-size relativo < 1em fora de glifo: ${emPequenos.filter(s => !/::before$|::after$/.test(s)).join(" | ")}`);
 });
 
+/* ---------- M05: um segmentado só, com indicador que desliza, e os gestos de toque ---------- */
+await teste("M05: ui.abas é o segmentado 'abas' com a API de antes (re-clique chama aoMudar, setas ativam, contador com espaço, painel ARIA, ícone, ganchos .abas/.aba/.abas-n)", () => {
+  const d = comDom();
+  try {
+    const painelA = U.h("div"), painelB = U.h("div");
+    const mudou = [];
+    const ab = U.abas({ itens: [{ id: "regra", rotulo: "Regra", icone: "raio", painel: painelA }, { id: "exec", rotulo: "Execuções", n: 3, painel: painelB }, { id: "x", rotulo: "Outra" }],
+      ativo: "regra", rotulo: "O que editar", aoMudar: v => mudou.push(v), classe: "au-abas" });
+    d.doc.body.appendChild(ab.el);
+    const el = ab.el;
+    assert.ok(el.classList.contains("seg") && el.classList.contains("seg-abas") && el.classList.contains("abas") && el.classList.contains("au-abas"), "classes: segmentado + gancho legado + classe do módulo");
+    assert.equal(el.getAttribute("role"), "tablist"); assert.equal(el.getAttribute("aria-label"), "O que editar");
+    const tabs = el.querySelectorAll("[role=tab]");
+    assert.equal(tabs.length, 3); assert.ok(tabs.every(t => t.classList.contains("seg-op") && t.classList.contains("aba")), "cada item: .seg-op e .aba");
+    assert.equal(tabs.filter(t => t.getAttribute("aria-selected") === "true").length, 1); assert.equal(ab.ativo, "regra");
+    assert.deepEqual(tabs.map(t => t.tabIndex), [0, -1, -1], "roving tabindex");
+    assert.ok(tabs[0].querySelector("svg"), "ícone antes do rótulo"); assert.equal(tabs[1].querySelector(".seg-n").classList.contains("abas-n"), true);
+    assert.match(tabs[1].textContent, /Execuções 3/, "espaço entre o rótulo e o contador (leitor de tela)");
+    assert.equal(tabs[0].querySelector(".seg-n").hidden, true);
+    // painéis: role=tabpanel, ligados nos dois sentidos
+    assert.equal(painelA.getAttribute("role"), "tabpanel"); assert.equal(tabs[0].getAttribute("aria-controls"), painelA.id); assert.equal(painelA.getAttribute("aria-labelledby"), tabs[0].id);
+    assert.equal(tabs[1].getAttribute("aria-controls"), painelB.id); assert.equal(tabs[2].getAttribute("aria-controls"), null, "sem painel: sem aria-controls");
+    // a API de antes: clique, re-clique, setas, ativar (sem aoMudar), contar
+    tabs[1].click(); assert.deepEqual(mudou, ["exec"]); assert.equal(ab.ativo, "exec");
+    tabs[1].click(); assert.deepEqual(mudou, ["exec", "exec"], "re-clique no item ativo chama aoMudar (como a ui.abas sempre fez)");
+    tabs[1].focus(); d.ev(tabs[1], "keydown", { key: "ArrowRight" }); assert.equal(ab.ativo, "x"); assert.equal(mudou.at(-1), "x"); assert.equal(d.doc.activeElement, tabs[2]);
+    d.ev(tabs[2], "keydown", { key: "ArrowRight" }); assert.equal(ab.ativo, "regra", "dá a volta");
+    const n = mudou.length; ab.ativar("exec"); assert.equal(ab.ativo, "exec"); assert.equal(mudou.length, n, "ativar() não chama aoMudar");
+    ab.contar("exec", 7); assert.equal(tabs[1].querySelector(".seg-n").textContent, "7"); ab.contar("exec", null); assert.equal(tabs[1].querySelector(".seg-n").hidden, true);
+    assert.equal(tabs.filter(t => t.getAttribute("aria-selected") === "true").length, 1, "aria-selected único");
+    // sem itens e sem aoMudar não quebram
+    assert.equal(U.abas({}).el.querySelectorAll("[role=tab]").length, 0); const sem = U.abas({ itens: [{ id: "a", rotulo: "A" }] }); sem.el.querySelector("[role=tab]").click();
+    // segmentado puro: tocar no item ativo NÃO chama aoMudar (só `repetir` faz isso)
+    const calls = []; const s = U.segmentado({ opcoes: [{ valor: 1, rotulo: "A" }, { valor: 2, rotulo: "B" }], valor: 1, aoMudar: v => calls.push(v) });
+    s.querySelectorAll("[role=tab]")[0].click(); assert.deepEqual(calls, []);
+    const r = U.segmentado({ opcoes: [{ valor: 1, rotulo: "A" }], valor: 1, aoMudar: v => calls.push(v), repetir: true, classe: "minha" });
+    r.querySelectorAll("[role=tab]")[0].click(); assert.deepEqual(calls, [1]); assert.ok(r.classList.contains("minha"));
+  } finally { d.fim(); }
+  // CSS: as abas antigas não têm mais estilo próprio (valem as do segmentado); só os ganchos de largura e de alto contraste
+  assert.doesNotMatch(CSS_APP, /\n\.abas \{/); assert.doesNotMatch(CSS_APP, /\n\.aba \{/); assert.doesNotMatch(CSS_APP, /\n\.abas-n \{/);
+  assert.match(CSS_APP, /\.seg-op \.ic \{ width: 15px; height: 15px; \}/);
+});
+await teste("M05: ui.deslizar com movimento reduzido não anda com o dedo, só marca 'armado' ao passar do limiar; com movimento normal anda e marca; solta e cancela limpam", async () => {
+  const gesto = (d, el, passos, id = 1) => {
+    d.ev(el, "pointerdown", { pointerType: "touch", pointerId: id, clientX: 200, clientY: 100, button: 0 });
+    for (const [x, y] of passos) d.ev(el, "pointermove", { pointerType: "touch", pointerId: id, clientX: x, clientY: y });
+  };
+  const r = comDom({ reduzido: true });
+  try {
+    const el = U.h("div", null, "linha"); r.doc.body.appendChild(el); const log = [];
+    U.deslizar(el, { esquerda: () => log.push("E"), limiar: 60 });
+    gesto(r, el, [[170, 101], [150, 101]]);
+    assert.equal(el.style.getPropertyValue("transform"), "", "reduzido: o elemento não anda");
+    assert.equal(el.dataset.armado, undefined, "−50 px: ainda não passou do limiar");
+    r.ev(el, "pointermove", { pointerType: "touch", pointerId: 1, clientX: 120, clientY: 101 });
+    assert.equal(el.dataset.armado, "1"); assert.equal(el.style.getPropertyValue("transform"), ""); assert.equal(el.dataset.deslizando, "esquerda");
+    r.ev(el, "pointerup", { pointerType: "touch", pointerId: 1, clientX: 120, clientY: 101 });
+    assert.deepEqual(log, ["E"], "mesmo sem andar, soltar depois do limiar aciona"); assert.equal(el.dataset.armado, undefined, "soltou: limpa");
+    gesto(r, el, [[140, 100], [100, 100]], 2); r.ev(el, "pointercancel", { pointerType: "touch", pointerId: 2 });
+    assert.deepEqual(log, ["E"], "cancelado não aciona"); assert.equal(el.dataset.armado, undefined);
+  } finally { r.fim(); }
+  const n = comDom();
+  try {
+    const el = U.h("div", null, "linha"); n.doc.body.appendChild(el); const log = [];
+    const fim = U.deslizar(el, { direita: () => log.push("D"), limiar: 60 });
+    gesto(n, el, [[230, 101]], 3);
+    assert.equal(el.style.getPropertyValue("transform"), "translateX(30px)"); assert.equal(el.dataset.armado, undefined);
+    n.ev(el, "pointermove", { pointerType: "touch", pointerId: 3, clientX: 260, clientY: 101 });
+    assert.equal(el.style.getPropertyValue("transform"), "translateX(60px)"); assert.equal(el.dataset.armado, "1", "no limiar: armado");
+    n.ev(el, "pointerup", { pointerType: "touch", pointerId: 3, clientX: 260, clientY: 101 });
+    assert.deepEqual(log, ["D"]); assert.equal(el.style.getPropertyValue("transform"), ""); assert.equal(el.dataset.armado, undefined);
+    fim();
+  } finally { n.fim(); }
+  assert.match(CSS_APP, /\.deslizavel\[data-armado="1"\] \{ box-shadow: inset 0 0 0 2px color-mix\(in srgb, var\(--c-prod\) 55%, transparent\); \}/);
+});
+
 console.log(`\n${ok} ok · ${falhas} falha(s)${avisos ? ` · ${avisos} aviso(s)` : ""}\n`);
 process.exit(falhas ? 1 : 0);

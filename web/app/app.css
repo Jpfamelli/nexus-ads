@@ -376,19 +376,8 @@ html[data-esquema="claro"] input[type="date"]::-webkit-calendar-picker-indicator
 .sel-etiq { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
 
 /* ============================================================
-   ABAS
+   ABAS — são o segmentado "abas" (ver "segmentado" no fim deste arquivo); aqui ficam só os ganchos de largura e de alto contraste
    ============================================================ */
-.abas { display: flex; gap: .25rem; padding: 4px; border-radius: 999px; background: var(--c-sup); border: 1px solid var(--c-borda); overflow-x: auto; scrollbar-width: none; max-width: 100%; }
-.abas::-webkit-scrollbar { display: none; }
-.aba {
-  display: inline-flex; align-items: center; gap: .45rem; min-height: 36px; padding: .35rem .95rem; border-radius: 999px; white-space: nowrap;
-  color: var(--c-texto-2); font-weight: 600; font-size: var(--fs-13); transition: color var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out);
-}
-.aba .ic { width: 15px; height: 15px; }
-.aba:hover { color: var(--c-texto); }
-.aba[aria-selected="true"] { background: var(--c-sup-3); color: var(--c-texto); box-shadow: inset 0 1px 0 var(--c-luz-borda); }
-.abas-n { font-family: var(--f-mono); font-size: var(--fs-11); color: var(--c-texto-3); }
-.aba[aria-selected="true"] .abas-n { color: var(--c-prim-luz); }
 /* 375 px: faixas de 4 abas (Tarefas: Hoje, Atrasadas, Próximas, Concluídas) cabem inteiras; faixas maiores continuam rolando */
 @media (max-width: 400px) { .aba { padding-inline: .7rem; } }
 
@@ -1268,6 +1257,7 @@ html[data-produto="atendimento"] { --c-prod: var(--c-prod-atend); }
 .seg-pronto .seg-ind { opacity: 1; }
 .seg-anima .seg-ind { transition: transform var(--t-ui) var(--e-out), width var(--t-ui) var(--e-out); }
 .seg-op { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: .45rem; min-height: 34px; padding: .3rem .95rem; border-radius: 999px; white-space: nowrap; color: var(--c-texto-2); font-weight: 600; font-size: var(--fs-peq); transition: color var(--t-ui) var(--e-out); }
+.seg-op .ic { width: 15px; height: 15px; }
 .seg-op:hover { color: var(--c-texto); }
 .seg-op[aria-selected="true"] { color: var(--c-texto); }
 .seg-op:focus-visible { outline-offset: -2px; }
@@ -1284,6 +1274,7 @@ html[data-produto="atendimento"] { --c-prod: var(--c-prod-atend); }
 .toque-longo { -webkit-touch-callout: none; }
 .deslizavel { touch-action: pan-y; will-change: transform; }
 .deslizavel.desliza-volta { transition: transform var(--t-ui) var(--e-out); }
+.deslizavel[data-armado="1"] { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--c-prod) 55%, transparent); }   /* passou do limiar: "solte para acionar" (o único aviso quando o movimento é reduzido) */
 
 /* ---- esqueletos com a forma de cada tela (ui.esqueleto) ---- */
 .sk-cab { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; margin: .4rem 0 1.4rem; }
