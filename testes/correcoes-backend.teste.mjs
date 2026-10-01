@@ -210,7 +210,7 @@ test("smoke 13 existe, cobre as correções e termina em rollback; os smokes 08/
 
 test("publicação: a lista tem as 7 funções (as que carregam correção e as de drenagem só no repositório) e não há segredo no repositório novo", () => {
   const lista = ler("supabase/deploy-lista.txt").split("\n").map(s => s.trim()).filter(s => s && !s.startsWith("#"));
-  for (const fn of ["nx-ia", "nx-codewords", "nx-enviar", "nx-whatsapp", "nx-midia"]) assert.ok(lista.includes(fn), fn + " na lista"); // TEMPORÁRIO funcoes-20261001-3 (sem nx-ciclo/nx-relatorio); volta às 7 no commit seguinte
+  for (const fn of ["nx-ciclo", "nx-relatorio", "nx-ia", "nx-codewords", "nx-enviar", "nx-whatsapp", "nx-midia"]) assert.ok(lista.includes(fn), fn + " na lista");
   assert.equal(new Set(lista).size, lista.length, "sem repetição");
   for (const arq of ["supabase/migrations/20261001b_correcoes.sql", "supabase/testes/13_correcoes.sql"]) {
     assert.doesNotMatch(ler(arq), /sk-ant-[A-Za-z0-9_-]{8,}|eyJ[\w-]{20,}\.[\w-]{10,}\.[\w-]{10,}|EAA[A-Za-z0-9]{20,}/, arq + " sem segredo");
