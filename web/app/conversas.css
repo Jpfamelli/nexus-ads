@@ -589,6 +589,27 @@
 .cfg-cw-ops-head p { margin-top: .2rem; }
 .cfg-cw-ops-actions { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
 .cfg-cw-resultado { color: var(--c-texto-2); font-size: var(--fs-13); }
+/* M33 — assistente do número: um passo por vez, feitos recolhidos com ✓ */
+.cfg-cw-topo { display: flex; align-items: center; justify-content: space-between; gap: .6rem; flex-wrap: wrap; }
+.cfg-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .6rem; }
+.cfg-step { border: 1px solid var(--c-borda); border-radius: 16px; background: var(--c-sup); overflow: hidden; }
+.cfg-step[data-estado="atual"] { border-color: color-mix(in srgb, var(--c-prim) 55%, transparent); background: var(--c-sup); box-shadow: 0 10px 28px -24px var(--c-sombra); }
+.cfg-step[data-estado="futuro"] { background: var(--c-poco); }
+.cfg-step-cab { display: flex; align-items: center; gap: .8rem; padding: .75rem 1rem; }
+.cfg-step-n { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; border: 1.5px solid var(--c-borda-2); font: 600 var(--fs-13)/1 var(--f-corpo); color: var(--c-texto-2); }
+.cfg-step[data-estado="atual"] .cfg-step-n { background: var(--c-prim); border-color: var(--c-prim); color: var(--c-prim-txt); }
+.cfg-step[data-estado="feito"] .cfg-step-n { background: var(--c-ok); border-color: var(--c-ok); color: var(--c-fundo); }
+.cfg-step-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
+.cfg-step-h { margin: 0; font: 600 var(--fs-corpo)/1.3 var(--f-corpo); }
+.cfg-step-st { font-size: var(--fs-13); color: var(--c-texto-2); }
+.cfg-step[data-estado="futuro"] .cfg-step-h, .cfg-step[data-estado="futuro"] .cfg-step-st { color: var(--c-texto-3); }
+.cfg-step-corpo { padding: .2rem 1rem 1rem 3.4rem; }
+.cfg-step-corpo[hidden] { display: none; }
+.cfg-ajuda summary { cursor: pointer; font-size: var(--fs-13); color: var(--c-texto-2); min-height: 28px; }
+.cfg-ajuda[open] summary { color: var(--c-texto); }
+.cfg-cw-escolha { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; align-items: start; }
+.cfg-cw-direto { display: grid; gap: .8rem; min-width: 0; padding: .9rem; background: var(--c-sup-2); }
+@media (max-width: 760px) { .cfg-cw-escolha { grid-template-columns: minmax(0, 1fr); } .cfg-step-corpo { padding-left: 1rem; } }
 .cfg-cw-code { width: fit-content; max-width: 100%; margin: .25rem 0; padding: .55rem 1rem; border: 1px solid var(--c-borda-2); border-radius: 14px; background: var(--c-fundo); color: var(--c-prim-luz); font: 700 clamp(1.8rem, 7vw, 2.8rem)/1 var(--f-mono); letter-spacing: .2em; overflow-wrap: anywhere; }
 .cfg-cw-pair { min-width: 0; padding: 1rem; border: 1px solid var(--c-borda); border-radius: 16px; background: var(--c-sup-2); }
 .cfg-cw-pair .sub { max-width: 65ch; }

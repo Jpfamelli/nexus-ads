@@ -710,3 +710,75 @@ export function textoRascunhoLista(texto, max = 80) {
   if (!t) return "";
   return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
 }
+
+/* ------------------------------------------------------------ assistente do número CodeWords (M33): passo atual a partir do estado do servidor */
+export const PASSOS_CODEWORDS = Object.freeze([
+  { id: "chave", rotulo: "Chave salva" },
+  { id: "parear", rotulo: "Parear o aparelho" },
+  { id: "conferir", rotulo: "Conferir o recebimento" },
+  { id: "destino", rotulo: "Quem atende primeiro" },
+  { id: "teste", rotulo: "Mensagem de teste" },
+]);
+
+/**
+ * Situação do canal CodeWords: [rótulo, tom] — "Conectado" · "Desconectado" · "Conectado mas sem receber" · "Aguardando confirmação"
+ * (antes "Não sei"). `estado` é a resposta viva de nx-codewords/estado (quando já foi consultada nesta tela); senão vale o que o banco guardou.
+ */
+export function situacaoCodeWords(canal, estado = null) {
+  const cw = (canal && canal.codewords) || {};
+  const s = estado || null;
+  if (s) {
+    if (s.inscrito_certo) return ["Conectado", "ok"];
+    if (!s.pareado || s.conectado === false) return ["Desconectado", "ruim"];
+    if (s.pareado && s.conectado && (s.numero_confere !== true || s.rota_atual !== s.rota_esperada)) return ["Conectado mas sem receber", "aten"];
+  }
+  if (cw.conectado === false && cw.phone_id) return ["Desconectado", "ruim"];
+  if (cw.conectado === true) {
+    if (cw.numero_conferido === false) return ["Conectado mas sem receber", "aten"];
+    if (cw.numero_conferido === true) {
+      const rotaOk = cw.rota === "direta"
+        ? String(cw.inscricao || "").includes("URL deste canal")
+        : !!cw.service_id && String(cw.inscricao || "").startsWith(cw.service_id);
+      return rotaOk ? ["Conectado", "ok"] : ["Conectado mas sem receber", "aten"];
+    }
+  }
+  return ["Aguardando confirmação", "neutra"];
+}
+
+/**
+ * passosCodeWords({canal, estado, testeEnviado, testeChegou, aguardandoCodigo}) → {passos, atual}
+ *  passos[i] = {id, rotulo, feito, estado: "feito"|"atual"|"futuro", texto}; atual = 1..5 (o 1º passo não feito) ou 6 (tudo pronto).
+ *  Um passo só vale se os anteriores valem: sem chave não há aparelho; sem aparelho não há recebimento a conferir, etc.
+ */
+export function passosCodeWords({ canal = null, estado = null, testeEnviado = false, testeChegou = false, aguardandoCodigo = false } = {}) {
+  const cw = (canal && canal.codewords) || {};
+  const [sit] = situacaoCodeWords(canal, estado);
+  const temCanal = !!(canal && canal.id);
+  const f1 = temCanal && !!cw.tem_api_key;
+  const tudoOk = !!(estado && estado.inscrito_certo === true);      // o servidor já confirmou aparelho, número e destino
+  const f2 = f1 && (tudoOk || (estado && estado.pareado !== undefined ? !!estado.pareado && estado.conectado !== false : cw.conectado === true));
+  const f3 = f2 && (tudoOk || (estado && estado.numero_confere !== undefined ? estado.numero_confere === true : cw.numero_conferido === true));
+  const f4 = f3 && sit === "Conectado";
+  const f5 = f4 && !!testeChegou;
+  const feitos = [f1, f2, f3, f4, f5];
+  const atual = feitos.indexOf(false) === -1 ? 6 : feitos.indexOf(false) + 1;
+  const rotaTxt = cw.rota === "direta" ? "Recebendo direto na caixa Conversas" : cw.service_id ? "A IA atende primeiro" : "";
+  const textos = [
+    f1 ? "Chave guardada com segurança" : "Cole a chave do CodeWords para começar",
+    f2 ? "Aparelho pareado" : aguardandoCodigo ? "Aguardando você ler o código no celular…" : "Gere o código e digite no WhatsApp do celular",
+    f3 ? "O número do aparelho confere" : f2 ? (sit === "Aguardando confirmação" ? "Aguardando confirmação do aparelho…" : "Conferindo se as mensagens chegam ao Órbita…") : "Depois de parear",
+    f4 ? rotaTxt || "Destino das mensagens configurado" : f3 ? "Escolha quem responde primeiro" : "Depois de conferir o número",
+    f5 ? "Mensagem de teste entregue" : testeEnviado ? "Enviada — confirme se chegou no WhatsApp" : f4 ? "Mande uma mensagem de teste para o número conectado" : "Por último",
+  ];
+  return { atual, passos: PASSOS_CODEWORDS.map((p, i) => ({ ...p, feito: feitos[i], estado: feitos[i] ? "feito" : atual === i + 1 ? "atual" : "futuro", texto: textos[i] })) };
+}
+
+/** Marcos de um número da Meta (os mesmos 3 do CodeWords: chave, recebimento, destino): token · app inscrito · modelos sincronizados. */
+export function marcosMeta(canal, modelos = 0) {
+  const c = canal || {};
+  return [
+    { id: "token", rotulo: "Token salvo", feito: c.tem_token === true },
+    { id: "inscrito", rotulo: "App inscrito", feito: c.app_inscrito === true },
+    { id: "modelos", rotulo: Number(modelos) > 0 ? `${modelos} ${Number(modelos) === 1 ? "modelo sincronizado" : "modelos sincronizados"}` : "Modelos sincronizados", feito: Number(modelos) > 0 },
+  ];
+}

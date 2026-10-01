@@ -691,5 +691,87 @@ await teste("M36: o texto vai pela fila (IndexedDB antes do servidor, client_ref
   assert.match(chat, /novo\.classList\.add\("entra"\)/, "mensagem nova entra com .entra (M10)");
 });
 
+/* ============================================================ M33 — assistente passo a passo do número (CodeWords e Meta) */
+console.log("\n(f) M33 — assistente do número");
+
+await teste("M33: passosCodeWords — o passo atual é o 1º que o servidor ainda não confirmou (5 estados do canal)", () => {
+  const cw = (o = {}) => ({ id: "k1", nome: "Recepção", codewords: { tem_api_key: true, conectado: true, numero_conferido: true, rota: "fluxo", service_id: "svc-1", inscricao: "svc-1", ia_ligada: true, ...o } });
+  // 1) canal que ainda não existe → passo 1
+  let r = L.passosCodeWords({ canal: null });
+  assert.equal(r.atual, 1); assert.deepEqual(r.passos.map(p => p.estado), ["atual", "futuro", "futuro", "futuro", "futuro"]);
+  assert.equal(r.passos.length, 5); assert.deepEqual(r.passos.map(p => p.id), ["chave", "parear", "conferir", "destino", "teste"]);
+  // 2) chave salva, aparelho não pareado → passo 2
+  r = L.passosCodeWords({ canal: cw({ conectado: false, numero_conferido: null }) });
+  assert.equal(r.atual, 2); assert.equal(r.passos[0].feito, true); assert.equal(r.passos[1].estado, "atual");
+  assert.match(r.passos[1].texto, /Gere o código/);
+  assert.match(L.passosCodeWords({ canal: cw({ conectado: false }), aguardandoCodigo: true }).passos[1].texto, /Aguardando você ler o código no celular/);
+  // 3) pareado, número ainda não conferido → passo 3 ("Aguardando confirmação", nunca "Não sei")
+  r = L.passosCodeWords({ canal: cw({ numero_conferido: null }) });
+  assert.equal(r.atual, 3); assert.match(r.passos[2].texto, /Aguardando confirmação/);
+  // 4) conferido mas o destino ainda não aponta para o Órbita → passo 4
+  r = L.passosCodeWords({ canal: cw({ inscricao: null, service_id: null }) });
+  assert.equal(r.atual, 4); assert.match(r.passos[3].texto, /Escolha quem responde primeiro/);
+  // 5) tudo configurado → só falta a mensagem de teste (passo 5); com o teste entregue → 6 (tudo pronto)
+  r = L.passosCodeWords({ canal: cw() });
+  assert.equal(r.atual, 5); assert.equal(r.passos[3].feito, true); assert.match(r.passos[3].texto, /A IA atende primeiro/);
+  assert.match(L.passosCodeWords({ canal: cw(), testeEnviado: true }).passos[4].texto, /confirme se chegou/);
+  r = L.passosCodeWords({ canal: cw(), testeEnviado: true, testeChegou: true });
+  assert.equal(r.atual, 6); assert.ok(r.passos.every(p => p.feito));
+  // receber direto também fecha o passo 4
+  r = L.passosCodeWords({ canal: cw({ rota: "direta", service_id: null, inscricao: "URL deste canal" }) });
+  assert.equal(r.atual, 5); assert.match(r.passos[3].texto, /direto na caixa Conversas/);
+});
+
+await teste("M33: o estado vivo do aparelho (nx-codewords/estado) manda mais que o que o banco guardou; um passo só vale se os anteriores valem", () => {
+  const sem = { id: "k1", codewords: { tem_api_key: false } };
+  assert.equal(L.passosCodeWords({ canal: sem }).atual, 1, "sem chave não há aparelho");
+  assert.equal(L.passosCodeWords({ canal: sem, estado: { pareado: true, conectado: true, numero_confere: true, inscrito_certo: true } }).atual, 1, "mesmo com o estado verde, sem chave volta ao passo 1");
+  const salvo = { id: "k1", codewords: { tem_api_key: true, conectado: false } };
+  assert.equal(L.passosCodeWords({ canal: salvo }).atual, 2);
+  assert.equal(L.passosCodeWords({ canal: salvo, estado: { pareado: true, conectado: true, numero_confere: false } }).atual, 3, "pareou: segue para conferir");
+  assert.equal(L.passosCodeWords({ canal: salvo, estado: { pareado: true, conectado: true, numero_confere: true, rota_atual: "a", rota_esperada: "b" } }).atual, 4);
+  assert.equal(L.passosCodeWords({ canal: salvo, estado: { inscrito_certo: true } }).atual, 5, "inscrito_certo sozinho já confirma aparelho, número e destino");
+  assert.equal(L.passosCodeWords({ canal: salvo, estado: { pareado: false, conectado: false } }).atual, 2, "desconectou de novo: volta ao passo 2");
+});
+
+await teste("M33: situacaoCodeWords — «Não sei» virou «Aguardando confirmação»; Conectado, Desconectado e Conectado mas sem receber continuam", () => {
+  assert.deepEqual(L.situacaoCodeWords({ codewords: {} }), ["Aguardando confirmação", "neutra"]);
+  assert.deepEqual(L.situacaoCodeWords(null), ["Aguardando confirmação", "neutra"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: {} }, { inscrito_certo: true }), ["Conectado", "ok"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: {} }, { pareado: false }), ["Desconectado", "ruim"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: {} }, { pareado: true, conectado: true, numero_confere: false }), ["Conectado mas sem receber", "aten"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: { conectado: false, phone_id: "x" } }), ["Desconectado", "ruim"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: { conectado: true, numero_conferido: true, rota: "direta", inscricao: "Chega pela URL deste canal" } }), ["Conectado", "ok"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: { conectado: true, numero_conferido: true, rota: "fluxo", service_id: "s1", inscricao: "s1:ativo" } }), ["Conectado", "ok"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: { conectado: true, numero_conferido: true, rota: "fluxo", service_id: "s1", inscricao: "outro" } }), ["Conectado mas sem receber", "aten"]);
+  assert.doesNotMatch(JSON.stringify([L.situacaoCodeWords(null)]), /Não sei/);
+});
+
+await teste("M33: marcosMeta — os mesmos 3 marcos para o número da Meta (token, app inscrito, modelos sincronizados)", () => {
+  assert.deepEqual(L.marcosMeta({ tem_token: true, app_inscrito: true }, 3).map(m => [m.id, m.feito]), [["token", true], ["inscrito", true], ["modelos", true]]);
+  assert.equal(L.marcosMeta({ tem_token: true, app_inscrito: true }, 3)[2].rotulo, "3 modelos sincronizados");
+  assert.equal(L.marcosMeta({ tem_token: true, app_inscrito: true }, 1)[2].rotulo, "1 modelo sincronizado");
+  assert.deepEqual(L.marcosMeta({ tem_token: false, app_inscrito: null }, 0).map(m => m.feito), [false, false, false]);
+  assert.deepEqual(L.marcosMeta(null).map(m => m.feito), [false, false, false]);
+});
+
+await teste("M33: o assistente do CodeWords tem UM primário por passo, desenha uma vez e consulta o aparelho a cada ~5 s só nos passos 2 e 3; a seção usa ui.cabecalho nível 2", () => {
+  const s = ler("cv-config.js");
+  const bloco = s.slice(s.indexOf("async function assistenteCodeWords(canal)"), s.indexOf("/* ---------------- assistente em 5 passos */"));
+  assert.match(bloco, /L\.PASSOS_CODEWORDS\.forEach\(\(p, i\) =>/, "o esqueleto dos 5 passos nasce uma vez");
+  assert.match(bloco, /L\.passosCodeWords\(\{ canal: atual, estado: estadoVivo, testeEnviado, testeChegou, aguardandoCodigo \}\)/);
+  assert.match(bloco, /\(passoAtual === 2 && aguardandoCodigo\) \|\| passoAtual === 3/, "só os passos 2 e 3 consultam sozinhos");
+  assert.match(bloco, /\}, 5000\);/, "a cada ~5 s");
+  assert.match(bloco, /5 \* 60000/, "e para depois de 5 minutos");
+  assert.match(bloco, /acoes: \[\{ rotulo: "Fechar", tipo: "neutro" \}\]/, "o rodapé só fecha: sem «Salvar configuração» competindo com o passo");
+  assert.equal((bloco.match(/class: "bt bt-prim"/g) || []).length, 6, "salvar, gerar código, conferir, ligar na IA, enviar teste e o «copiar prompt» que só nasce depois de pedir o prompt: um por passo");
+  assert.match(bloco, /pararPolling\(\);\s*\}\s*$/, "fechar o modal para a consulta");
+  assert.match(s, /ui\.cabecalho\(\{ rotulo: "Atendimento", titulo: "Números de WhatsApp", nivel: 2/, "fim do H1 duplicado na seção");
+  assert.doesNotMatch(s.slice(s.indexOf("async function montarNumeros"), s.indexOf("/* ============================================================ RESPOSTAS RÁPIDAS */")), /h\("h1"/, "Números de WhatsApp não cria H1");
+  assert.match(s, /tipo: "primeiro_uso", titulo: "Nenhum número conectado\."/, "primeiro uso com os passos acendendo");
+  assert.match(s, /L\.marcosMeta\(c,/, "Meta com os mesmos marcos");
+  assert.doesNotMatch(s, /"Não sei"/);
+});
+
 console.log(`\n${ok} ok · ${falhas} falha(s)`);
 if (falhas) process.exit(1);
