@@ -280,6 +280,19 @@ await teste("produtos separados: CRM, Nexus Ads e Atendimento compartilham o she
   assert.equal(R.produtoDaRota("agenda"), "crm", "rota compartilhada usa CRM como destino padrão");
   assert.equal(R.produtoDaRota("config"), null, "rotas comuns não provocam troca de produto");
   assert.equal(R.produtoDaRota("inexistente"), null);
+  // Automações aparece no menu do CRM e do Atendimento (não no Nexus Ads), e o deep link não atravessa produtos
+  assert.deepEqual(R.itensDoProduto("crm", [{ id: "crm" }, { id: "automacoes" }, { id: "anuncios" }, ...fixos]).map(x => x.id), ["crm", "automacoes", "config", "admin"]);
+  assert.deepEqual(R.itensDoProduto("atendimento", [{ id: "conversas" }, { id: "automacoes" }, { id: "anuncios" }, ...fixos]).map(x => x.id), ["conversas", "automacoes", "config", "admin"]);
+  assert.deepEqual(R.itensDoProduto("ads", [{ id: "anuncios" }, { id: "automacoes" }, ...fixos]).map(x => x.id), ["anuncios", "config", "admin"]);
+  assert.equal(R.rotaNoProduto("crm", "automacoes"), true);
+  assert.equal(R.rotaNoProduto("atendimento", "automacoes"), true);
+  assert.equal(R.rotaNoProduto("ads", "automacoes"), false);
+  assert.equal(R.produtoDaRota("automacoes"), "crm", "rota compartilhada com o Atendimento: CRM é o destino padrão");
+  assert.equal(R.acessoRota("automacoes", { pronto: () => true, temModulo: m => m === "automacoes", pode: p => p === "supervisor" || p === "leitura", gestorConta: false, temCliente: true }), "ok");
+  assert.equal(R.acessoRota("automacoes", { pronto: () => true, temModulo: () => true, pode: p => p === "leitura", gestorConta: false, temCliente: true }), "sem_acesso", "atendente não vê Automações (precisa ser supervisor)");
+  assert.equal(R.rotaPadrao({ produto: "atendimento", temCliente: true, pronto: m => m === "automacoes", temModulo: () => true, pode: () => true, gestorConta: false }), "automacoes", "só Automações liberada no Atendimento: abre nela");
+  assert.match(R.PRODUTOS.crm.resumo, /automações/);
+  assert.match(R.PRODUTOS.atendimento.resumo, /automações/);
   const prontoTudo = { pronto: () => true, temModulo: () => true, pode: () => true, gestorConta: false, temCliente: true };
   assert.equal(R.rotaPadrao({ ...prontoTudo, produto: "crm" }), "crm");
   assert.equal(R.rotaPadrao({ ...prontoTudo, produto: "ads" }), "anuncios");
@@ -366,6 +379,19 @@ await teste("erro do PostgREST → Error com .codigo e .hint; mensagemErro do Ap
     "fora_da_janela", "canal_sem_token", "template_invalido", "midia_grande", "midia_tipo", "ia_indisponivel", "ia_cota", "muitos_pedidos", "limite_taxa", "resposta_invalida"]) {
     assert.ok(A.MENSAGENS[c], `texto para ${c}`);
   }
+});
+await teste("mensagemErro: erros da IA e das automações novas têm texto com orientação (ia_cota, sem_chave, automacao_invalida, campo_invalido, etapa_invalida…)", () => {
+  for (const c of ["ia_cota", "sem_chave", "ia_desligada", "ia_resposta_invalida", "ia_invalida", "descricao_invalida", "descricao_curta", "descricao_longa", "automacao_invalida", "campo_invalido",
+    "etapa_invalida", "etiqueta_invalida", "pessoa_invalida", "departamento_invalido", "gatilho_invalido", "acao_invalida", "condicao_invalida", "tempo_invalido", "passo_invalido",
+    "simulacao_indisponivel", "automacao_nao_encontrada", "muitos_pedidos", "ia_indisponivel"]) assert.ok(A.MENSAGENS[c] && A.MENSAGENS[c].length > 15, `texto para ${c}`);
+  assert.match(A.mensagemErro({ codigo: "ia_cota" }), /próximo mês/);
+  assert.match(A.mensagemErro({ codigo: "sem_chave" }), /chave da Anthropic/);
+  // o nx-ia manda {ok:false, erro:"ia_indisponivel", detalhe:"sem_chave"}: o texto diz o que falta, e não só "indisponível"
+  assert.match(A.mensagemErro({ codigo: "ia_indisponivel", detalhe_texto: "sem_chave", detalhe: "sem_chave" }), /chave da Anthropic/);
+  assert.match(A.mensagemErro({ codigo: "ia_indisponivel", detalhe_texto: "conversa_vazia" }), /não há mensagens|Ainda não há mensagens/i);
+  assert.equal(A.mensagemErro({ codigo: "ia_indisponivel" }), "A IA não está disponível agora.");
+  assert.equal(A.mensagemErro({ codigo: "automacao_invalida", hint: "ação 2: escolha a etapa" }), "A automação tem um problema: ação 2: escolha a etapa.");
+  for (const c of Object.keys(A.MENSAGENS)) assert.ok(!/undefined|null|{}/.test(A.MENSAGENS[c]), c);
 });
 await teste("mensagemErro: TODO código de erro do painel devolvido por nx-enviar/nx-codewords/nx-midia/nx-ia tem texto em português (varredura do backend)", () => {
   const dir = join(RAIZ, "supabase/functions/_compartilhado");
@@ -688,7 +714,7 @@ const ARQ_OUTRAS = {
   F4: ["crm.js", "crm-kanban.js", "crm-listas.js", "crm-negocio.js", "crm-tarefas.js", "crm-importar.js", "crm-config.js", "crm-logica.js", "crm.css"],
   F5: ["conversas.js", "cv-lista.js", "cv-chat.js", "cv-composer.js", "cv-lateral.js", "cv-config.js", "cv-logica.js", "conversas.css"],
   F6: ["inicio.js", "anuncios.js", "relatorios.js", "graficos.js", "ads-config.js", "rel-logica.js", "relatorios.css"],
-  F7: ["automacoes.js", "auto-logica.js", "automacoes.css"],
+  F7: ["automacoes.js", "auto-logica.js", "auto-catalogo.js", "auto-pecas.js", "auto-editor.js", "automacoes.css"],
   F8: ["prontos.js"],
 };
 const arquivosApp = readdirSync(APP);

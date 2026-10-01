@@ -88,7 +88,25 @@ export const MENSAGENS = {
   midia_grande: "Arquivo grande demais (até 16 MB; fotos até 5 MB).",
   midia_tipo: "Tipo de arquivo não aceito pelo WhatsApp.",
   ia_indisponivel: "A IA não está disponível agora.",
-  ia_cota: "A cota de IA do mês acabou.",
+  ia_cota: "A cota de IA do mês acabou. Ela volta no começo do próximo mês; para usar mais agora, fale com o suporte.",
+  sem_chave: "A IA ainda não foi ligada nesta plataforma: falta a chave da Anthropic. Peça ao administrador da plataforma para configurar.",
+  ia_desligada: "A IA está desligada para esta empresa. Quem administra pode ligar em Configurações › Assistente de IA.",
+  ia_resposta_invalida: "A IA respondeu de um jeito que não deu para usar. Tente descrever com outras palavras.",
+  ia_invalida: "A IA respondeu de um jeito que não deu para usar. Tente descrever com outras palavras.",
+  descricao_invalida: "Descreva o que você quer automatizar (de 12 a 800 caracteres).",
+  descricao_curta: "Conte um pouco mais: descreva quando acontece e o que deve ser feito.",
+  descricao_longa: "O pedido ficou longo demais. Resuma em até 800 caracteres.",
+  campo_invalido: "Um dos campos escolhidos não existe mais ou não vale aqui. Confira o campo marcado.",
+  etapa_invalida: "Essa etapa não é válida para este funil. Escolha outra.",
+  etiqueta_invalida: "Essa etiqueta não existe mais. Escolha outra.",
+  pessoa_invalida: "Essa pessoa não está mais na equipe. Escolha outra.",
+  departamento_invalido: "Esse departamento não existe mais. Escolha outro.",
+  gatilho_invalido: "Esse gatilho não é válido. Escolha outro em «Quando».",
+  acao_invalida: "Um dos passos não é válido. Confira o passo marcado.",
+  condicao_invalida: "Uma das condições não é válida. Confira a condição marcada.",
+  tempo_invalido: "O tempo informado não vale. Use de 1 minuto a 30 dias.",
+  passo_invalido: "Um dos passos não é válido. Confira o passo marcado.",
+  simulacao_indisponivel: "O teste não está disponível agora. Você ainda pode salvar a automação desligada e conferir depois.",
   muitos_pedidos: "Muitos pedidos seguidos; espere um minuto.",
   automacao_invalida: "A automação tem um problema.",
   limite_taxa: "Muitos envios em pouco tempo. Tente mais tarde.",
@@ -152,6 +170,13 @@ export function mensagemErro(e) {
     case "automacao_invalida":
       if (hint) return `A automação tem um problema: ${hint}.`;
       break;
+    case "ia_indisponivel": {   // o nx-ia manda o motivo em .detalhe: sem_chave, sem_sdk, conversa_vazia
+      const d = e && (e.detalhe_texto || (typeof e.detalhe === "string" ? e.detalhe : "") || hint);
+      if (d === "sem_chave") return MENSAGENS.sem_chave;
+      if (d === "sem_sdk") return "A IA está em manutenção neste momento. Tente de novo mais tarde.";
+      if (d === "conversa_vazia") return "Ainda não há mensagens nesta conversa para a IA ler.";
+      break;
+    }
     default: break;
   }
   if (!MENSAGENS[c] && /_nao_encontrad[oa]$/.test(String(c || ""))) return "Não encontramos esse registro — ele pode ter sido removido.";

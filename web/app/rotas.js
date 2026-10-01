@@ -49,9 +49,9 @@ export const MENU = Object.freeze([
 /** Áreas com entrada própria e sessão compartilhada. A filtragem é só navegação;
     autorização, plano e módulos continuam sendo verificados em acessoRota(). */
 export const PRODUTOS = Object.freeze({
-  crm: Object.freeze({ nome: "CRM", resumo: "Contatos, oportunidades e vendas.", titulo: "Órbita CRM", rota: "crm", manifesto: "manifest-crm.webmanifest", itens: Object.freeze(["crm", "agenda", "empresas", "tarefas"]) }),
+  crm: Object.freeze({ nome: "CRM", resumo: "Contatos, oportunidades, vendas e automações.", titulo: "Órbita CRM", rota: "crm", manifesto: "manifest-crm.webmanifest", itens: Object.freeze(["crm", "agenda", "empresas", "tarefas", "automacoes"]) }),
   ads: Object.freeze({ nome: "Nexus Ads", resumo: "Campanhas, origem dos leads e retorno.", titulo: "Nexus Ads · Órbita", rota: "anuncios", manifesto: "manifest-ads.webmanifest", itens: Object.freeze(["inicio", "anuncios", "relatorios"]) }),
-  atendimento: Object.freeze({ nome: "Atendimento", resumo: "Conversas, equipe e agenda.", titulo: "Órbita Atendimento", rota: "conversas", manifesto: "manifest-atendimento.webmanifest", itens: Object.freeze(["inicio", "conversas", "agenda"]) }),
+  atendimento: Object.freeze({ nome: "Atendimento", resumo: "Conversas, equipe, agenda e automações.", titulo: "Órbita Atendimento", rota: "conversas", manifesto: "manifest-atendimento.webmanifest", itens: Object.freeze(["inicio", "conversas", "agenda", "automacoes"]) }),
 });
 
 /** Produto solicitado na query string. Somente os três ids conhecidos são aceitos. */
