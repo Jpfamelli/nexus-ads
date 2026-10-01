@@ -301,6 +301,8 @@ export function criarComposer(A) {
       if (ev.key === "Escape") { ev.preventDefault(); fecharRR(); return; }
     }
     if (ev.key === "Escape" && respondendo) { ev.preventDefault(); respondendo = null; desenharResposta(); return; }
+    // M35: Esc no campo devolve o foco à lista (o rascunho já está guardado); j/k, / e ? passam a valer fora do campo
+    if (ev.key === "Escape" && !ev.isComposing) { ev.preventDefault(); A.acoes.focarLista(); return; }
     if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && !matchMedia("(pointer: coarse)").matches) { ev.preventDefault(); enviarDoCampo(); }
   });
   btEnviar.addEventListener("click", () => enviarDoCampo());
@@ -613,6 +615,9 @@ export function criarComposer(A) {
 
   return {
     el, atualizar, definirConversa, responder, anexar, aceitaAnexo, abrirModelos,
+    /** Alt+Shift+N: liga/desliga a nota interna (true/false força; sem argumento alterna). Devolve se o campo está em nota. */
+    alternarNota(forcar) { if (el.hidden || !A.podeEscrever) return false; alternarNota(forcar); return modoNota; },
+    get emNota() { return modoNota; },
     lerRascunho() { return ta.value; },
     /** "Cancelar" na fila: o texto volta ao campo (se já houver algo, vai embaixo). */
     devolverTexto(texto) {

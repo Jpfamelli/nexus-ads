@@ -782,3 +782,92 @@ export function marcosMeta(canal, modelos = 0) {
     { id: "modelos", rotulo: Number(modelos) > 0 ? `${modelos} ${Number(modelos) === 1 ? "modelo sincronizado" : "modelos sincronizados"}` : "Modelos sincronizados", feito: Number(modelos) > 0 },
   ];
 }
+
+/* ============================================================ M35 — central de conversas por teclado */
+/** Os acordes da central. Dentro de campo só valem os com Alt (+Shift): Alt+Shift+letra evita o AltGr do ABNT2 (que chega como Ctrl+Alt). */
+export const ACORDES = Object.freeze([
+  { id: "atender", teclas: "Alt+Shift+P", rotulo: "Atender o próximo (a que espera há mais tempo)", grupo: "Atender", dentroDeCampo: true },
+  { id: "proxima", teclas: "Alt+↓", rotulo: "Próxima conversa", grupo: "Atender", dentroDeCampo: true },
+  { id: "anterior", teclas: "Alt+↑", rotulo: "Conversa anterior", grupo: "Atender", dentroDeCampo: true },
+  { id: "assumir", teclas: "Alt+Shift+A", rotulo: "Assumir a conversa", grupo: "Atender", dentroDeCampo: true },
+  { id: "resolver", teclas: "Alt+Shift+R", rotulo: "Resolver (com Desfazer)", grupo: "Atender", dentroDeCampo: true },
+  { id: "nota", teclas: "Alt+Shift+N", rotulo: "Nota interna", grupo: "Atender", dentroDeCampo: true },
+  { id: "transferir", teclas: "Alt+Shift+T", rotulo: "Transferir", grupo: "Atender", dentroDeCampo: true },
+  { id: "foco_lista", teclas: "Esc", rotulo: "No campo de mensagem: voltar o foco à lista", grupo: "Na lista", dentroDeCampo: true },
+  { id: "mover_baixo", teclas: "J", rotulo: "Descer na lista (Enter abre)", grupo: "Na lista", dentroDeCampo: false },
+  { id: "mover_cima", teclas: "K", rotulo: "Subir na lista", grupo: "Na lista", dentroDeCampo: false },
+  { id: "buscar", teclas: "/", rotulo: "Buscar conversas", grupo: "Na lista", dentroDeCampo: false },
+  { id: "ajuda", teclas: "?", rotulo: "Mostrar esta folha", grupo: "Na lista", dentroDeCampo: false },
+]);
+export const ANUNCIO_INTERVALO_MS = 10000;
+
+/**
+ * Que comando um keydown pede (ou null). Só olha o evento: `emCampo` diz se o foco está num campo de texto.
+ *   Alt+↓ / Alt+↑ → proxima / anterior · Alt+Shift+A/R/N/T/P → assumir / resolver / nota / transferir / atender.
+ *   Sem modificador e FORA de campo: j / k / / / ? . Ctrl ou Meta junto (AltGr do ABNT2 chega como Ctrl+Alt) nunca dispara.
+ */
+export function acordeDoEvento(ev, { emCampo = false } = {}) {
+  if (!ev || ev.isComposing || ev.ctrlKey || ev.metaKey) return null;
+  try { if (typeof ev.getModifierState === "function" && ev.getModifierState("AltGraph")) return null; } catch { /* ok */ }
+  const k = String(ev.key || ""), cod = String(ev.code || "");
+  if (ev.altKey) {
+    if (!ev.shiftKey) return k === "ArrowDown" ? "proxima" : k === "ArrowUp" ? "anterior" : null;
+    const letra = /^Key[A-Z]$/.test(cod) ? cod.slice(3).toLowerCase() : k.toLowerCase();     // no Mac Alt+letra muda o caractere: o código físico vale mais
+    return { a: "assumir", r: "resolver", n: "nota", t: "transferir", p: "atender" }[letra] || null;
+  }
+  if (emCampo) return null;
+  if (k === "j") return "mover_baixo";
+  if (k === "k") return "mover_cima";
+  if (k === "/") return "buscar";
+  if (k === "?") return "ajuda";
+  return null;
+}
+
+/** Id da conversa seguinte (dir > 0) ou anterior (dir < 0) na lista; sem conversa aberta, a primeira (ou a última). null no fim da lista. */
+export function proximaConversa(itens, selId, dir) {
+  const lista = (itens || []).filter(c => c && !c.oculta);
+  if (!lista.length) return null;
+  const i = lista.findIndex(c => c.id === selId);
+  if (i < 0) return (dir > 0 ? lista[0] : lista[lista.length - 1]).id;
+  const j = i + (dir > 0 ? 1 : -1);
+  return j >= 0 && j < lista.length ? lista[j].id : null;
+}
+
+/** A conversa que espera resposta há mais tempo e que a pessoa pode atender: aberta, aguardando, sem dono ou dela. */
+export function proximaParaAtender(itens, eu) {
+  const t = c => { const n = ms(c.ultima_entrada_em); return Number.isFinite(n) ? n : Infinity; };
+  const cand = (itens || []).filter(c => c && c.status === "aberta" && c.aguardando && !c.oculta && (!c.atribuida_a || c.atribuida_a === eu));
+  cand.sort((a, b) => (t(a) === t(b) ? 0 : t(a) < t(b) ? -1 : 1) || Number(a.id) - Number(b.id));
+  return cand[0] || null;
+}
+
+/** Para onde ir depois de resolver `id`: a seguinte na lista (ou, no fim dela, a anterior), sem as já resolvidas (salvo na aba Resolvidas). */
+export function proximaAposResolver(itens, id, { aba } = {}) {
+  const lista = (itens || []).filter(c => c && !c.oculta);
+  const i = lista.findIndex(c => c.id === id);
+  const serve = c => c.id !== id && (aba === "resolvidas" || c.status !== "resolvida");
+  return lista.slice(i + 1).find(serve) || lista.slice(0, Math.max(i, 0)).reverse().find(serve) || null;
+}
+
+/** Conversas em que chegou mensagem do cliente desde a lista anterior (a aberta fica de fora: quem a lê já viu). */
+export function novasEntradas(antes, depois, { ignorar = null } = {}) {
+  const mapa = new Map((antes || []).map(x => [x.id, x]));
+  return (depois || []).filter(c => c.ultima_msg_dir === "in" && !c.oculta && c.id !== ignorar
+    && (Number(c.nao_lidas) || 0) > (Number((mapa.get(c.id) || {}).nao_lidas) || 0));
+}
+
+/** "Nova mensagem de Mariana, aguardando há 3 min" (uma) ou "2 conversas com mensagem nova, a primeira de Mariana" (várias). */
+export function textoNovaMensagem(lista, agora = new Date()) {
+  const quem = c => (c.contato && c.contato.nome && String(c.contato.nome).trim()) || "um contato";
+  if (!lista || !lista.length) return "";
+  if (lista.length > 1) return `${lista.length} conversas com mensagem nova, a primeira de ${quem(lista[0])}`;
+  const c = lista[0];
+  const espera = c.status === "aberta" && c.aguardando && c.ultima_entrada_em ? tempoEspera(c.ultima_entrada_em, agora) : "";
+  return espera && espera !== "agora" ? `Nova mensagem de ${quem(c)}, aguardando há ${espera}` : `Nova mensagem de ${quem(c)}`;
+}
+
+/** Quanto falta (ms) para a lista poder anunciar de novo: 0 = já pode. No máximo 1 anúncio a cada 10 s. */
+export function esperaAnuncio(ultimoEm, agora = Date.now(), intervalo = ANUNCIO_INTERVALO_MS) {
+  if (!ultimoEm) return 0;
+  return Math.max(0, intervalo - (agora - ultimoEm));
+}

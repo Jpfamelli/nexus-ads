@@ -694,3 +694,18 @@
   .cvc-quem:hover { transform: none; }
   .cvx-rec-ponto { animation: none; }
 }
+
+/* ============================================================ M35 — central por teclado */
+.cvl-cab { flex-wrap: wrap; }
+.cvl-atender { flex: 1 1 100%; justify-content: center; gap: .45rem; }
+.cvl-atender-n { display: inline-grid; place-items: center; min-width: 1.35rem; height: 1.35rem; padding: 0 .35rem; border-radius: 999px; background: var(--c-prim); color: var(--c-prim-txt); font-size: var(--fs-11); font-weight: 700; line-height: 1; }
+.cvc-atender { min-height: 44px; padding-inline: 1.4rem; }
+/* o foco do teclado (j/k, Esc no campo) precisa aparecer na lista: anel por dentro, para a rolagem do painel não cortar */
+.cvl-item:focus-visible { outline: 2px solid var(--c-prim); outline-offset: -2px; background: var(--c-tinta); }
+/* folha de atalhos (?) */
+.cv-teclas-grupo + .cv-teclas-grupo { margin-top: .4rem; }
+.cv-teclas-lista { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .45rem 1rem; align-items: center; margin: 0; }
+.cv-teclas-lista dt { margin: 0; }
+.cv-teclas-lista dd { margin: 0; color: var(--c-texto-2); }
+.cv-teclas-k { display: inline-flex; align-items: center; gap: .2rem; color: var(--c-texto-3); }
+.cv-teclas kbd { font-family: var(--f-mono); font-size: var(--fs-12); min-width: 1.5rem; text-align: center; padding: .1rem .4rem; border-radius: 6px; background: var(--c-sup-2); border: 1px solid var(--c-borda-2); color: var(--c-texto); }

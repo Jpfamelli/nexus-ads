@@ -19,6 +19,29 @@ export function criarLista(A) {
     ? h("button", { type: "button", class: "bt bt-prim bt-p", title: "Nova conversa", "aria-label": "Nova conversa", on: { click: () => A.acoes.novaConversa() } }, ui.icone("mais"), "Nova")
     : null;
 
+  /* M35: «Atender o próximo» — abre e assume a que espera há mais tempo; só aparece com fila e para quem pode escrever */
+  const nAtender = h("b", { class: "cvl-atender-n", "aria-hidden": "true" }, "");
+  const btAtender = A.podeEscrever
+    ? h("button", { type: "button", class: "bt bt-sec bt-p cvl-atender", hidden: true, title: "Abre e assume a conversa que espera resposta há mais tempo (Alt+Shift+P)" },
+      ui.icone("seta-dir"), h("span", null, "Atender o próximo"), nAtender)
+    : null;
+  if (btAtender) btAtender.addEventListener("click", () => A.acoes.atenderProximo(btAtender));
+  /* M35: a lista anuncia a conversa nova a leitor de tela («Nova mensagem de Mariana, aguardando há 3 min»), no máximo 1 a cada 10 s */
+  const leitor = h("div", { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
+  let ultimoAnuncio = 0, textoPendente = null, tAnuncio = null, ultimoTexto = "";
+  function dizer(texto) {
+    ultimoAnuncio = Date.now();
+    leitor.textContent = "";
+    setTimeout(() => { ultimoTexto = ultimoTexto === texto ? `${texto}\u200b` : texto; leitor.textContent = ultimoTexto; }, 30);   // esvaziar e repor: o leitor repete até o mesmo texto
+  }
+  function anunciar(texto) {
+    if (!texto) return;
+    const falta = L.esperaAnuncio(ultimoAnuncio, Date.now());
+    if (falta <= 0) { dizer(texto); return; }
+    textoPendente = texto;                                // dentro dos 10 s: o texto mais novo espera a vez
+    if (!tAnuncio) tAnuncio = setTimeout(() => { tAnuncio = null; const t = textoPendente; textoPendente = null; if (t && leitor.isConnected) dizer(t); }, falta);
+  }
+
   /* ---------------- busca e filtros */
   const busca = h("input", { type: "search", placeholder: "Nome, telefone, protocolo", "aria-label": "Buscar conversas", autocomplete: "off", value: A.busca || "" });
   const aoBuscar = ui.debounce(() => A.acoes.mudarLista({ busca: busca.value }), 320);
@@ -75,7 +98,8 @@ export function criarLista(A) {
   maisBox.appendChild(btMais);
 
   const el = h("div", { class: "cvl" },
-    h("header", { class: "cvl-cab" }, titulo, btNova),
+    h("header", { class: "cvl-cab" }, titulo, btNova, btAtender),
+    leitor,
     h("div", { class: "cvl-busca" }, h("label", { class: "busca" }, ui.icone("busca"), busca), btFiltro, btAvisos),
     infoBusca, filtrosEl, abasEl, avisoCanal, lista);
 
@@ -340,6 +364,7 @@ export function criarLista(A) {
     const ag = Number(cont.aguardando) || 0, nl = Number(cont.nao_lidas) || 0;
     sub.textContent = extra && !A.busca ? `${extra.rotulo}${contadoresAba.get(extra.id) ? ` · ${contadoresAba.get(extra.id)}` : ""}`
       : ag ? `${ag} esperando resposta` : nl ? `${nl} com mensagens novas` : "Tudo respondido";
+    if (btAtender) { btAtender.hidden = !(ag > 0); nAtender.textContent = ag > 99 ? "99+" : String(ag); btAtender.setAttribute("aria-label", `Atender o próximo (${ag} esperando)`); }
     ponto.hidden = !filtrosAtivos();
     { const p = A.acoes.lerAvisos(); btAvisos.dataset.ligado = p.som || p.tela ? "1" : "0";
       btAvisos.setAttribute("aria-label", `Avisos de mensagem nova (${p.som ? "som ligado" : "som desligado"}${p.tela ? ", área de trabalho ligada" : ""})`); }
@@ -374,6 +399,27 @@ export function criarLista(A) {
     el,
     render,
     mostrarCarregando() { cache.clear(); ui.limpar(lista); lista.appendChild(ui.esqueleto("lista", 8)); renderCabecalho(); },
-    focarBusca() { busca.focus(); },
+    focarBusca() { busca.focus(); busca.select(); },
+    anunciar,
+    /** Rola a lista até a conversa aberta (Alt+↓/↑ abrem vizinhas que podem estar fora da tela). */
+    mostrarSelecionada() { const x = lista.querySelector('.cvl-item[aria-current="true"]'); if (x && x.getClientRects().length) x.scrollIntoView({ block: "nearest" }); },
+    /** Devolve o foco do teclado à lista: a conversa aberta ou, sem ela, a primeira. false se a lista está escondida (celular com o chat aberto) ou vazia. */
+    focarItem() {
+      const alvo = lista.querySelector('.cvl-item[aria-current="true"]') || lista.querySelector(".cvl-item");
+      if (!alvo || !alvo.getClientRects().length) return false;
+      try { alvo.focus({ preventScroll: false }); } catch { alvo.focus(); }
+      return document.activeElement === alvo;
+    },
+    /** j / k: move o foco entre as conversas (Enter abre). Sem foco numa conversa, parte da aberta ou da primeira. */
+    moverFoco(dir) {
+      const itens = [...lista.querySelectorAll(".cvl-item")].filter(x => x.getClientRects().length);
+      if (!itens.length) return false;
+      const atual = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".cvl-item") : null;
+      let i = atual ? itens.indexOf(atual) : itens.findIndex(x => x.getAttribute("aria-current") === "true");
+      if (i < 0) i = dir > 0 ? -1 : itens.length;
+      const j = Math.min(itens.length - 1, Math.max(0, i + (dir > 0 ? 1 : -1)));
+      itens[j].focus();
+      return true;
+    },
   };
 }

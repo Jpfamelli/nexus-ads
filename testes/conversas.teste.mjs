@@ -773,5 +773,236 @@ await teste("M33: o assistente do CodeWords tem UM primário por passo, desenha 
   assert.doesNotMatch(s, /"Não sei"/);
 });
 
+/* ============================================================ M35 — central de conversas por teclado */
+console.log("\n(g) M35 — teclado da central");
+
+const EV = (o = {}) => ({ key: "", code: "", altKey: false, shiftKey: false, ctrlKey: false, metaKey: false, isComposing: false, getModifierState: () => false, ...o });
+const C = (id, o = {}) => ({ id, status: "aberta", aguardando: false, atribuida_a: null, oculta: false, nao_lidas: 0, ultima_msg_dir: "out", contato: { nome: `Contato ${id}` }, ...o });
+
+await teste("M35: acordeDoEvento — Alt+↓/↑ e Alt+Shift+A/R/N/T/P funcionam dentro do campo; j k / ? só fora dele", () => {
+  const a = (o, emCampo = false) => L.acordeDoEvento(EV(o), { emCampo });
+  for (const emCampo of [false, true]) {
+    assert.equal(a({ key: "ArrowDown", altKey: true }, emCampo), "proxima");
+    assert.equal(a({ key: "ArrowUp", altKey: true }, emCampo), "anterior");
+    assert.equal(a({ key: "A", code: "KeyA", altKey: true, shiftKey: true }, emCampo), "assumir");
+    assert.equal(a({ key: "R", code: "KeyR", altKey: true, shiftKey: true }, emCampo), "resolver");
+    assert.equal(a({ key: "N", code: "KeyN", altKey: true, shiftKey: true }, emCampo), "nota");
+    assert.equal(a({ key: "T", code: "KeyT", altKey: true, shiftKey: true }, emCampo), "transferir");
+    assert.equal(a({ key: "P", code: "KeyP", altKey: true, shiftKey: true }, emCampo), "atender");
+  }
+  // no Mac Alt+letra muda o caractere (key vira «®»): o código físico manda
+  assert.equal(a({ key: "®", code: "KeyR", altKey: true, shiftKey: true }), "resolver");
+  // letras soltas: só fora de campo
+  assert.equal(a({ key: "j" }), "mover_baixo"); assert.equal(a({ key: "k" }), "mover_cima");
+  assert.equal(a({ key: "/" }), "buscar"); assert.equal(a({ key: "?", shiftKey: true }), "ajuda");
+  for (const key of ["j", "k", "/", "?"]) assert.equal(a({ key }, true), null, `«${key}» dentro do campo é texto`);
+  // nada de letra solta com Alt sem Shift, nem Alt+Shift com outra tecla
+  assert.equal(a({ key: "a", code: "KeyA", altKey: true }), null);
+  assert.equal(a({ key: "x", code: "KeyX", altKey: true, shiftKey: true }), null);
+  assert.equal(a({ key: "ArrowDown", altKey: true, shiftKey: true }), null);
+});
+
+await teste("M35: o AltGr do teclado ABNT2 (Ctrl+Alt) e Ctrl/⌘ nunca disparam um acorde; composição de IME também não", () => {
+  assert.equal(L.acordeDoEvento(EV({ key: "ArrowDown", altKey: true, ctrlKey: true })), null, "AltGr no Windows chega como Ctrl+Alt");
+  assert.equal(L.acordeDoEvento(EV({ key: "R", code: "KeyR", altKey: true, shiftKey: true, ctrlKey: true })), null);
+  assert.equal(L.acordeDoEvento(EV({ key: "R", code: "KeyR", altKey: true, shiftKey: true, metaKey: true })), null);
+  assert.equal(L.acordeDoEvento(EV({ key: "R", code: "KeyR", altKey: true, shiftKey: true, getModifierState: m => m === "AltGraph" })), null);
+  assert.equal(L.acordeDoEvento(EV({ key: "j", ctrlKey: true })), null);
+  assert.equal(L.acordeDoEvento(EV({ key: "ArrowDown", altKey: true, isComposing: true })), null);
+  assert.equal(L.acordeDoEvento(null), null);
+  // todo acorde da folha que usa Alt leva Shift quando é letra (a regra do risco 12 do plano)
+  for (const a of L.ACORDES.filter(x => /^Alt\+/.test(x.teclas) && /[A-Z]$/.test(x.teclas))) assert.match(a.teclas, /^Alt\+Shift\+[A-Z]$/, `${a.id}: Alt+Shift+letra`);
+  assert.deepEqual(["proxima", "anterior", "assumir", "resolver", "nota", "transferir"].map(id => L.ACORDES.find(a => a.id === id).teclas),
+    ["Alt+↓", "Alt+↑", "Alt+Shift+A", "Alt+Shift+R", "Alt+Shift+N", "Alt+Shift+T"], "os acordes do plano");
+});
+
+await teste("M35: proximaConversa — vizinha na lista, sem a oculta, null nas pontas; sem conversa aberta parte da 1ª (ou da última)", () => {
+  const itens = [C(1), C(2, { oculta: true }), C(3), C(4)];
+  assert.equal(L.proximaConversa(itens, 1, 1), 3);
+  assert.equal(L.proximaConversa(itens, 3, 1), 4);
+  assert.equal(L.proximaConversa(itens, 4, 1), null);
+  assert.equal(L.proximaConversa(itens, 3, -1), 1);
+  assert.equal(L.proximaConversa(itens, 1, -1), null);
+  assert.equal(L.proximaConversa(itens, null, 1), 1);
+  assert.equal(L.proximaConversa(itens, null, -1), 4);
+  assert.equal(L.proximaConversa(itens, 999, 1), 1, "a aberta saiu da lista");
+  assert.equal(L.proximaConversa([], null, 1), null);
+});
+
+await teste("M35: proximaParaAtender — a que espera há mais tempo, só aberta, aguardando e sem dono ou minha (nunca a de colega, a oculta ou a resolvida)", () => {
+  const h = min => new Date(Date.UTC(2026, 9, 1, 12, 0, 0) - min * 60000).toISOString();
+  const itens = [
+    C(1, { aguardando: true, ultima_entrada_em: h(5) }),
+    C(2, { aguardando: true, ultima_entrada_em: h(40), atribuida_a: "ana" }),           // da colega: fica de fora
+    C(3, { aguardando: true, ultima_entrada_em: h(20), atribuida_a: "eu" }),            // minha
+    C(4, { aguardando: true, ultima_entrada_em: h(90), oculta: true }),
+    C(5, { aguardando: true, ultima_entrada_em: h(60), status: "resolvida" }),
+    C(6, { aguardando: false, ultima_entrada_em: h(80) }),
+    C(7, { aguardando: true, ultima_entrada_em: h(20) }),                               // empate com a 3: o menor id
+  ];
+  assert.equal(L.proximaParaAtender(itens, "eu").id, 3);
+  assert.equal(L.proximaParaAtender(itens.slice(3, 6), "eu"), null, "ninguém espera");
+  assert.equal(L.proximaParaAtender([], "eu"), null);
+  assert.equal(L.proximaParaAtender([C(9, { aguardando: true })], "eu").id, 9, "sem hora de entrada ainda conta (vai para o fim)");
+  assert.equal(L.proximaParaAtender([C(8, { aguardando: true }), C(9, { aguardando: true, ultima_entrada_em: h(1) })], "eu").id, 9);
+});
+
+await teste("M35: proximaAposResolver — a seguinte (ou, no fim, a anterior), sem as já resolvidas, e na aba Resolvidas elas contam", () => {
+  const itens = [C(1), C(2), C(3, { status: "resolvida" }), C(4)];
+  assert.equal(L.proximaAposResolver(itens, 1).id, 2);
+  assert.equal(L.proximaAposResolver(itens, 2).id, 4, "pula a resolvida");
+  assert.equal(L.proximaAposResolver(itens, 4).id, 2, "no fim da lista volta para a anterior que ainda serve");
+  assert.equal(L.proximaAposResolver([C(1)], 1), null, "fila zerada");
+  assert.equal(L.proximaAposResolver(itens, 2, { aba: "resolvidas" }).id, 3);
+  assert.equal(L.proximaAposResolver([C(1), C(2, { oculta: true })], 1), null);
+  assert.equal(L.proximaAposResolver(itens, 99).id, 1, "a resolvida já saiu da lista: parte do começo");
+});
+
+await teste("M35: anúncio da lista — conversa nova (a aberta não), texto «Nova mensagem de Mariana, aguardando há 3 min», vários e 1 a cada 10 s", () => {
+  const agora = new Date("2026-10-01T12:00:00Z");
+  const antes = [C(1, { nao_lidas: 1, ultima_msg_dir: "in" }), C(2)];
+  const depois = [
+    C(1, { nao_lidas: 2, ultima_msg_dir: "in", aguardando: true, ultima_entrada_em: "2026-10-01T11:57:00Z", contato: { nome: "Mariana" } }),
+    C(2, { nao_lidas: 1, ultima_msg_dir: "out" }),                                       // saída: não anuncia
+    C(3, { nao_lidas: 1, ultima_msg_dir: "in", contato: { nome: "Rafael" } }),           // conversa nova
+  ];
+  const novas = L.novasEntradas(antes, depois);
+  assert.deepEqual(novas.map(c => c.id), [1, 3]);
+  assert.deepEqual(L.novasEntradas(antes, depois, { ignorar: 1 }).map(c => c.id), [3], "a conversa aberta e à vista fica de fora");
+  assert.equal(L.textoNovaMensagem([novas[0]], agora), "Nova mensagem de Mariana, aguardando há 3 min");
+  assert.equal(L.textoNovaMensagem([novas[1]], agora), "Nova mensagem de Rafael");
+  assert.equal(L.textoNovaMensagem(novas, agora), "2 conversas com mensagem nova, a primeira de Mariana");
+  assert.equal(L.textoNovaMensagem([], agora), "");
+  assert.equal(L.textoNovaMensagem([C(5, { contato: {}, ultima_msg_dir: "in" })], agora), "Nova mensagem de um contato");
+  assert.deepEqual(L.novasEntradas(depois, depois), [], "nada novo: nada a anunciar");
+  // no máximo 1 anúncio a cada 10 s
+  assert.equal(L.ANUNCIO_INTERVALO_MS, 10000);
+  assert.equal(L.esperaAnuncio(0, 1_000_000), 0);
+  assert.equal(L.esperaAnuncio(1_000_000, 1_004_000), 6000);
+  assert.equal(L.esperaAnuncio(1_000_000, 1_010_000), 0);
+  assert.equal(L.esperaAnuncio(1_000_000, 1_020_000), 0);
+});
+
+await teste("M35: a tela liga o teclado (um ouvinte que sai ao desmontar, sem se meter em modal), o botão «Atender o próximo» e a paleta (só se o shell oferecer o registro)", () => {
+  const cv = ler("conversas.js"), lista = ler("cv-lista.js"), chat = ler("cv-chat.js"), comp = ler("cv-composer.js"), css = ler("conversas.css");
+  assert.match(cv, /document\.addEventListener\("keydown", aoTeclaCentral\);\s*A\.limpar\.push\(\(\) => document\.removeEventListener\("keydown", aoTeclaCentral\)\)/);
+  assert.match(cv, /if \(!A \|\| ev\.defaultPrevented\) return;\s*if \(document\.querySelector\("dialog\[open\]"\)\) return;/, "com modal aberto o teclado é do modal; quem já tratou a tecla (a paleta do shell) vence");
+  assert.match(cv, /A\.L\.acordeDoEvento\(ev, \{ emCampo: emCampoDeTexto\(ev\.target\) \}\)/);
+  for (const id of ["proxima", "anterior", "atender", "assumir", "resolver", "nota", "transferir", "mover_baixo", "mover_cima", "buscar", "ajuda", "foco_lista"]) assert.match(cv, new RegExp(`case "${id}":`), `comando ${id}`);
+  // a paleta: só com ctx.comandos.registrar; ações do plano (Nova conversa, Atender o próximo) e atalhos exibidos
+  assert.match(cv, /if \(!reg \|\| typeof reg\.registrar !== "function"\) return;/);
+  assert.match(cv, /def\("atender", "Atender o próximo"/); assert.match(cv, /def\("nova", "Nova conversa"/);
+  assert.match(cv, /"Alt\+Shift\+R"/);
+  // Atender o próximo: a fila «aguardando», a regra pura, abre, e assume (a IA do CodeWords pausa pelo mesmo caminho do botão)
+  assert.match(cv, /rpcC\("nx_cv_listar", \{ p_filtro: \{ aba: "aguardando" \}/);
+  assert.match(cv, /A\.L\.proximaParaAtender\(\(r && r\.itens\) \|\| \[\], A\.eu && A\.eu\.id\)/);
+  assert.match(cv, /est\.primaria === "assumir_ia"\) await acoes\.assumirIA\(\);\s*else if \(est\.primaria === "assumir"\) await acoes\.assumir\(\);/);
+  assert.match(lista, /class: "bt bt-sec bt-p cvl-atender", hidden: true/, "no cabeçalho da lista, só quando há fila");
+  assert.match(lista, /btAtender\.hidden = !\(ag > 0\)/);
+  assert.match(chat, /cvc-atender[\s\S]{0,200}A\.acoes\.atenderProximo\(ev\.currentTarget\)/, "e no painel vazio");
+  // Esc no campo devolve o foco à lista; Alt+Shift+N alterna a nota do próprio compositor
+  assert.match(comp, /ev\.key === "Escape" && !ev\.isComposing\) \{ ev\.preventDefault\(\); A\.acoes\.focarLista\(\); return; \}/);
+  assert.match(comp, /alternarNota\(forcar\) \{ if \(el\.hidden \|\| !A\.podeEscrever\) return false; alternarNota\(forcar\); return modoNota; \}/);
+  assert.match(css, /\.cvl-item:focus-visible \{ outline: 2px solid var\(--c-prim\)/, "o foco do j/k aparece na lista");
+});
+
+await teste("M35: Resolver tem Desfazer (ui.acaoComDesfazer «Resolvida · nome»), devolve o estado anterior, abre a próxima só se a preferência estiver ligada e Desfazer volta para a resolvida", () => {
+  const cv = ler("conversas.js"), chat = ler("cv-chat.js");
+  const f = cv.slice(cv.indexOf("async function resolverComDesfazer"), cv.indexOf("/** Devolve o foco à lista (Esc no campo)"));
+  assert.match(f, /A\.ui\.acaoComDesfazer\(\{\s*texto: `Resolvida · \$\{nome\}`/);
+  assert.match(f, /const antes = conv\.status;/); assert.match(f, /p_status: antes \}/, "Desfazer devolve aberta ou pendente, como estava");
+  assert.match(f, /p_status: "resolvida"/);
+  assert.match(f, /const proxima = A\.avancar \? A\.L\.proximaAposResolver\(A\.itens, id, \{ aba: A\.aba \}\) : null;/, "sem a preferência a conversa fica aberta, como sempre foi");
+  assert.match(f, /if \(proxima\) \{ A\.focoAoAbrir = "composer"; A\.ctx\.navegar\(`#\/conversas\/\$\{proxima\.id\}`\); \}\s*else \{ A\.focoAoAbrir = "lista"; A\.ctx\.navegar\("#\/conversas"\); \}/, "sem próxima, volta ao painel da fila");
+  assert.match(f, /if \(avancou && aindaNaProxima\) \{ A\.focoAoAbrir = "composer"; abrir\(id\); \}/, "Desfazer reabre a resolvida se a próxima abriu sozinha e a pessoa ainda está nela");
+  assert.match(f, /if \(A\.resolvendo\.has\(id\)\) return;/, "Alt+Shift+R duas vezes não resolve duas vezes");
+  assert.match(f, /conv\.status === "resolvida"\) \{ aviso\("Esta conversa já está resolvida\."\)/);
+  // todo caminho de «Resolver» (botão, ✓, menu ⋮ e acorde) passa por ela; só pendente/aberta ficam no status direto
+  assert.equal((chat.match(/A\.acoes\.resolver\(/g) || []).length, 3);
+  assert.doesNotMatch(chat, /status\("resolvida"/);
+  assert.match(cv, /async status\(novo, botao\) \{\s*if \(novo === "resolvida"\) return resolverComDesfazer\(botao\);/);
+  // preferência por navegador, desligada até a pessoa ligar; mora no menu ⋮ e na folha de atalhos
+  assert.match(cv, /avancar: lerPreferencia\("avancar", "0"\) === "1"/);
+  assert.match(cv, /definirAvancar\(sim\) \{\s*A\.avancar = !!sim; gravarPreferencia\("avancar", sim \? "1" : "0"\);/);
+  assert.match(chat, /Ao resolver, abrir a próxima: ligado/); assert.match(cv, /rotulo: "Ao resolver, abrir a próxima conversa"/);
+  assert.match(chat, /rotulo: "Atalhos de teclado"/);
+});
+
+await teste("M35: o leitor de tela ouve a lista (role=status aria-live=polite), com texto na vez se vier dentro dos 10 s, e as conversas novas passam por ele a cada pulso", () => {
+  const cv = ler("conversas.js"), lista = ler("cv-lista.js");
+  assert.match(lista, /class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true"/);
+  assert.match(lista, /L\.esperaAnuncio\(ultimoAnuncio, Date\.now\(\)\)/);
+  assert.match(lista, /textoPendente = texto;/);
+  assert.match(cv, /const novas = A\.L\.novasEntradas\(A\.itens, r\.itens \|\| \[\], \{ ignorar: A\.selId && !document\.hidden \? A\.selId : null \}\);\s*if \(novas\.length\) A\.lista\.anunciar\(A\.L\.textoNovaMensagem\(novas\)\);/);
+  assert.match(cv, /if \(!reset && !mais\) \{\s*avisarNovidades/, "só nos pulsos, nunca na 1ª página nem em «carregar mais»");
+});
+
+await teste("M35 (navegador): 3 conversas resolvidas sem mouse no dev-falso (atender, nota, resolver que avança, fila zerada, anúncio, Desfazer) — roda com ORBITA_QA_NAVEGADOR=1", async () => {
+  if (process.env.ORBITA_QA_NAVEGADOR !== "1") { console.log("      (pulado: defina ORBITA_QA_NAVEGADOR=1 para abrir o Chrome)"); return; }
+  const { createRequire } = await import("node:module");
+  const { spawn } = await import("node:child_process");
+  const RAIZ = join(AQUI, "..");
+  const req = createRequire(join(process.env.ORBITA_PUPPETEER || RAIZ, "x.js"));
+  const puppeteer = req("puppeteer-core");
+  const chrome = process.env.ORBITA_CHROME || ["C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/google-chrome", "/usr/bin/chromium"].find(existsSync);
+  assert.ok(chrome, "Chrome não encontrado (ORBITA_CHROME)");
+  const porta = 4800 + Math.floor(Math.random() * 90);
+  const srv = spawn(process.execPath, [join(RAIZ, "scripts", "dev-falso.mjs")], { env: { ...process.env, ORBITA_DEV_FALSO_PORT: String(porta) }, stdio: "ignore", windowsHide: true });
+  try {
+    await new Promise(r => setTimeout(r, 1800));
+    const base = `http://127.0.0.1:${porta}`;
+    const status = async () => Object.fromEntries((await (await fetch(`${base}/__dev_falso/estado`)).json()).mensagens.map(c => [c.id, c.status]));
+    const dorme = ms => new Promise(r => setTimeout(r, ms));
+    const browser = await puppeteer.launch({ executablePath: chrome, headless: "new", args: ["--no-sandbox", "--disable-gpu"] });
+    try {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      const erros = []; page.on("pageerror", e => erros.push(String(e.message || e)));
+      await page.goto(`${base}/app/?dev-falso=1&dev=1#/inicio`, { waitUntil: "domcontentloaded" });
+      await page.evaluate(() => { try { localStorage.setItem("nx-cv-aba", "aguardando"); localStorage.setItem("nx-cv-avancar", "1"); } catch { /* ok */ } });
+      await page.evaluate(() => { location.hash = "#/conversas"; });
+      await dorme(3500);
+      const acorde = async (mods, key) => { for (const m of mods) await page.keyboard.down(m); await page.keyboard.press(key); for (const m of mods.slice().reverse()) await page.keyboard.up(m); };
+      const foco = () => page.evaluate(() => document.activeElement && document.activeElement.tagName);
+      const hash = () => page.evaluate(() => location.hash);
+      // 1) Atender o próximo: abre a que espera há mais tempo (902) e assume
+      await page.evaluate(() => document.body.focus());
+      await acorde(["Alt", "Shift"], "KeyP"); await dorme(2500);
+      assert.equal(await hash(), "#/conversas/902"); assert.equal(await foco(), "TEXTAREA", "o cursor já está no campo");
+      // nota interna liga e desliga pelo acorde, com o cursor no campo
+      await acorde(["Alt", "Shift"], "KeyN"); await dorme(250);
+      assert.equal(await page.evaluate(() => document.querySelector(".cvx").dataset.modo), "nota");
+      await acorde(["Alt", "Shift"], "KeyN"); await dorme(250);
+      assert.equal(await page.evaluate(() => document.querySelector(".cvx").dataset.modo), "texto");
+      // Esc devolve o foco à lista; ? abre a folha (fora de campo) e Esc a fecha
+      await page.keyboard.press("Escape"); await dorme(250);
+      assert.equal(await page.evaluate(() => document.activeElement.classList.contains("cvl-item")), true, "Esc no campo leva o foco à lista");
+      await page.keyboard.down("Shift"); await page.keyboard.press("Slash"); await page.keyboard.up("Shift"); await dorme(500);
+      assert.equal(await page.evaluate(() => !!document.querySelector("dialog[open] .cv-teclas")), true, "? abre a folha de atalhos");
+      await page.keyboard.press("Escape"); await dorme(300);
+      // 2) Resolver (avança para a próxima da lista, 901) e 3) resolver de novo (fila zerada: volta ao painel)
+      await page.evaluate(() => { const t = document.querySelector(".cvx textarea"); t && t.focus(); });
+      await acorde(["Alt", "Shift"], "KeyR"); await dorme(2500);
+      assert.equal((await status())[902], "resolvida"); assert.equal(await hash(), "#/conversas/901", "a próxima abriu sozinha");
+      assert.match(await page.evaluate(() => document.body.innerText), /Resolvida · Rafael Mendes/);
+      await acorde(["Alt", "Shift"], "KeyR"); await dorme(2500);
+      assert.equal((await status())[901], "resolvida"); assert.equal(await hash(), "#/conversas", "sem próxima, volta ao painel da fila");
+      // 4) o cliente volta a escrever: a lista anuncia a conversa nova; atender + resolver pelo teclado; Desfazer (Ctrl+Z) reabre
+      await fetch(`${base}/__dev_falso/simular/mensagem?conversa=902&texto=${encodeURIComponent("Voltei! Podem me ajudar?")}`);
+      await dorme(4500);
+      assert.match(await page.evaluate(() => (document.querySelector(".cvl [role=status].sr-only") || {}).textContent || ""), /Nova mensagem de Rafael Mendes/);
+      await page.evaluate(() => document.body.focus());
+      await acorde(["Alt", "Shift"], "KeyP"); await dorme(2500);
+      await acorde(["Alt", "Shift"], "KeyR"); await dorme(2000);
+      assert.equal((await status())[902], "resolvida");
+      await page.keyboard.press("Escape"); await dorme(200);
+      await acorde(["Control"], "KeyZ"); await dorme(2000);
+      assert.equal((await status())[902], "aberta", "Desfazer reabre a resolvida");
+      assert.equal(await hash(), "#/conversas/902", "e volta para ela");
+      assert.deepEqual(erros, []);
+    } finally { await browser.close(); }
+  } finally { srv.kill(); }
+});
+
 console.log(`\n${ok} ok · ${falhas} falha(s)`);
 if (falhas) process.exit(1);

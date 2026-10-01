@@ -86,7 +86,12 @@ export function criarChat(A) {
       : "Escolha uma conversa à esquerda ou comece uma nova.";
     const num = (id, rot, v, alerta) => h("button", { type: "button", class: "cvc-num", dataset: { alerta: alerta ? "1" : "0" },
       on: { click: () => A.acoes.mudarLista({ aba: id, busca: "" }) } }, h("b", null, String(v ?? 0)), h("span", null, rot));
-    vazio.appendChild(h("div", { class: "cvc-vazio-in" }, orbita(), tit, h("p", null, txt),
+    // M35: quem tem fila ganha o botão que abre e assume a que espera há mais tempo (também por Alt+Shift+P)
+    const atender = !semCanal && A.podeEscrever && ag > 0
+      ? h("button", { type: "button", class: "bt bt-prim cvc-atender", title: "Abre e assume a conversa que espera resposta há mais tempo (Alt+Shift+P)",
+        on: { click: ev => A.acoes.atenderProximo(ev.currentTarget) } }, ui.icone("seta-dir"), "Atender o próximo")
+      : null;
+    vazio.appendChild(h("div", { class: "cvc-vazio-in" }, orbita(), tit, h("p", null, txt), atender,
       semCanal ? (A.acoes.pode("admin") ? h("a", { class: "bt bt-prim", href: "#/config/numeros" }, "Conectar número") : null)
         : h("div", { class: "cvc-numeros" },
           num("aguardando", "Aguardando", c.aguardando, ag > 0),
@@ -190,7 +195,7 @@ export function criarChat(A) {
       acoes.appendChild(b);
     } else if (est.primaria === "resolver") {
       const b = h("button", { type: "button", class: "bt bt-p bt-resolver", "aria-label": "Resolver atendimento" }, ui.icone("check"), h("span", { class: "rot-longo" }, "Resolver"));
-      b.addEventListener("click", () => A.acoes.status("resolvida", b));
+      b.addEventListener("click", () => A.acoes.resolver(b));
       acoes.appendChild(b);
     } else if (est.primaria === "reabrir") {
       const b = h("button", { type: "button", class: "bt bt-sec bt-p" }, A.icone("reabrir"), "Reabrir");
@@ -201,7 +206,7 @@ export function criarChat(A) {
       on: { click: () => A.acoes.transferir() } }, A.icone("transferir")));
     if (est.resolverIcone) {
       const b = h("button", { type: "button", class: "bt-icone so-largo cvc-resolver-ic", "aria-label": "Resolver atendimento", title: "Resolver" }, ui.icone("check"));
-      b.addEventListener("click", () => A.acoes.status("resolvida", b));
+      b.addEventListener("click", () => A.acoes.resolver(b));
       acoes.appendChild(b);
     }
     if (A.raiz && A.raiz.dataset.lateral === "gaveta") {
@@ -211,7 +216,7 @@ export function criarChat(A) {
     const mais = h("button", { type: "button", class: "bt-icone cvc-mais", "aria-label": "Mais ações", title: "Mais ações" }, ui.icone("opcoes"));
     mais.addEventListener("click", () => {
       const itens = [];
-      if (pode && conv.status !== "resolvida" && est.primaria !== "resolver") itens.push({ rotulo: "Resolver atendimento", icone: "check", fn: () => A.acoes.status("resolvida") });
+      if (pode && conv.status !== "resolvida" && est.primaria !== "resolver") itens.push({ rotulo: "Resolver atendimento", icone: "check", fn: () => A.acoes.resolver() });
       if (pode && conv.status !== "resolvida" && !minha && est.primaria === "assumir_ia") itens.push({ rotulo: "Atribuir a mim (sem pausar a IA)", icone: "usuario", fn: () => A.acoes.assumir() });
       if (pode && est.devolverIA) itens.push({ rotulo: "Devolver para a IA", icone: "ia", fn: () => A.acoes.devolverIA() });
       if (pode) itens.push({ rotulo: "Transferir…", icone: "seta-dir", fn: () => A.acoes.transferir() });
@@ -226,6 +231,9 @@ export function criarChat(A) {
       if (ct.telefone) itens.push({ rotulo: "Copiar telefone", icone: "copiar", fn: () => ui.copiar(ct.telefone, { aviso: "Telefone copiado." }) });
       itens.push({ rotulo: "Abrir ficha", icone: "contato", fn: () => A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }) });
       if (A.raiz && A.raiz.dataset.lateral === "gaveta") itens.push({ rotulo: "Detalhes e negócios", icone: "info", fn: () => A.acoes.abrirDetalhes() });
+      if (pode) itens.push({ rotulo: A.acoes.avancarAoResolver() ? "Ao resolver, abrir a próxima: ligado" : "Ao resolver, abrir a próxima: desligado",
+        icone: A.acoes.avancarAoResolver() ? "check" : "seta-dir", fn: () => A.acoes.definirAvancar(!A.acoes.avancarAoResolver()) });
+      itens.push({ rotulo: "Atalhos de teclado", icone: "info", fn: () => A.acoes.abrirAjudaTeclado() });
       if (A.acoes.pode("supervisor")) {
         itens.push("-");
         itens.push(conv.oculta
@@ -236,6 +244,15 @@ export function criarChat(A) {
     });
     acoes.appendChild(mais);
     cab.append(voltar, quem, acoes);
+  }
+
+  /** O mesmo estado que decide o botão principal do cabeçalho (assumir / assumir IA / resolver / reabrir): o teclado usa a mesma regra. */
+  function estadoAcoes() {
+    const conv = A.ver && A.ver.conversa;
+    if (!conv) return null;
+    const prov = (conv.canal && conv.canal.provedor) || ((A.base && A.base.canais) || []).find(k => k.id === conv.canal_id)?.provedor || "meta";
+    const codeWords = prov === "codewords";
+    return L.estadoCabecalho({ conv, eu: A.eu && A.eu.id, pode: A.podeEscrever, codeWords, ia: codeWords ? A.iaEstado : null });
   }
 
   function abrirEtiquetas() {
@@ -523,7 +540,7 @@ export function criarChat(A) {
 
   return {
     el, mostrarVazio, mostrarCarregando, mostrarErro, renderCabecalho, renderMensagens, renderTudo, renderTopo, destacar,
-    noFim, rolarFim,
+    noFim, rolarFim, estadoAcoes,
     focarMensagens() { try { msgs.focus({ preventScroll: true }); } catch { /* ok */ } },
   };
 }

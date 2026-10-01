@@ -55,6 +55,8 @@ export async function montar(ctx) {
     fila: { itens: new Map(), db: null, rodando: false, emVoo: new Set(), pronta: null },
     painel: "lista", timers: [], limpar: [], seqConversa: 0, seqLista: 0, destruido: false, acoes,
     buscaMsgs: null, seqMsgs: 0,
+    avancar: lerPreferencia("avancar", "0") === "1",       // M35: «Ao resolver, abrir a próxima» (preferência por navegador; desligada até a pessoa ligar)
+    focoAoAbrir: null, resolvendo: new Set(), atendendo: false,
   };
   { const daRota = abaDaRota(ctx.rota); if (daRota) A.aba = daRota; }
   if (!A.podeEscrever && A.aba === "minhas") A.aba = "abertas";
@@ -96,6 +98,10 @@ export async function montar(ctx) {
   A.fila.pronta = filaIniciar();
   // tempo real: pulso do shell (3 s com Conversas aberta) + relógio de 1 min para janelas e esperas
   A.limpar.push(ctx.pulso.assinar(() => aoPulso()));
+  // teclado da central (M35) e ações na paleta de comandos (Ctrl/⌘+K), quando o shell oferece o registro
+  document.addEventListener("keydown", aoTeclaCentral);
+  A.limpar.push(() => document.removeEventListener("keydown", aoTeclaCentral));
+  registrarComandos();
   // o navegador só deixa tocar som depois de um toque/clique na página
   const destravar = () => desbloquearAudio();
   document.addEventListener("pointerdown", destravar, { once: true, capture: true });
@@ -217,7 +223,12 @@ async function carregarLista({ reset = false, mais = false } = {}) {
   try {
     const r = await A.api.rpcC("nx_cv_listar", { p_filtro: filtroAtual(), p_limite: limite, p_antes: antes });
     if (!A || seq !== A.seqLista) return;
-    if (!reset && !mais) avisarNovidades(A.itens, r.itens || [], A.contagens && A.contagens.nao_lidas, r.contagens && r.contagens.nao_lidas);
+    if (!reset && !mais) {
+      avisarNovidades(A.itens, r.itens || [], A.contagens && A.contagens.nao_lidas, r.contagens && r.contagens.nao_lidas);
+      // leitor de tela: a lista anuncia a conversa nova (a que está aberta e à vista não: quem a lê já viu)
+      const novas = A.L.novasEntradas(A.itens, r.itens || [], { ignorar: A.selId && !document.hidden ? A.selId : null });
+      if (novas.length) A.lista.anunciar(A.L.textoNovaMensagem(novas));
+    }
     A.itens = mais ? [...A.itens, ...(r.itens || []).filter(n => !A.itens.some(x => x.id === n.id))] : (r.itens || []);
     A.temMais = !!r.tem_mais;
     A.contagens = r.contagens || {};
@@ -378,6 +389,10 @@ async function aplicarRota(r) {
   A.lateral.render();
   A.lista.render();
   mostrarPainel("lista");
+  if (A.focoAoAbrir === "lista") {            // sem próxima conversa: o foco volta para a lista (depois de o shell levar o foco ao título)
+    A.focoAoAbrir = null;
+    setTimeout(() => focarListaOuVazio(), 160);
+  }
 }
 
 function abrir(id) { A.ctx.navegar(`#/conversas/${id}`); }
@@ -389,6 +404,7 @@ async function selecionar(id) {
   A.selId = id;
   mostrarPainel("chat");
   A.lista.render();
+  A.lista.mostrarSelecionada();
   if (!trocou && A.ver) { A.chat.focarMensagens(); return; }
   const seq = ++A.seqConversa;
   A.ver = null; A.msgs = []; A.conversasContato = []; A.ultimoId = null; A.agora = null; A.temMaisAntes = false;
@@ -414,10 +430,15 @@ async function selecionar(id) {
     A.chat.renderTudo({ rolar: "fim" });
     A.composer.definirConversa();
     A.lateral.render();
+    if (A.focoAoAbrir === "composer") {            // veio do teclado (próxima, anterior, atender, resolver que avança): o campo já está pronto para digitar
+      A.focoAoAbrir = null;
+      if (!matchMedia("(pointer: coarse)").matches) A.composer.focar();
+    }
     marcarLida();
     if (ver.conversa?.canal?.provedor === "codewords") carregarEstadoIA(id, seq);
   } catch (e) {
     if (!A || seq !== A.seqConversa) return;
+    A.focoAoAbrir = null;
     A.chat.mostrarErro(e, () => selecionar(id));
   }
 }
@@ -725,7 +746,17 @@ const acoes = {
     });
     if (r && r.id) { trocarConversa(r); ui.toast("Conversa transferida.", { tipo: "ok" }); delta(); recarregarVer(); carregarLista({}); }
   },
+  resolver: botao => resolverComDesfazer(botao),
+  atenderProximo: botao => atenderProximo(botao),
+  focarLista: () => focarListaOuVazio(),
+  avancarAoResolver: () => !!(A && A.avancar),
+  definirAvancar(sim) {
+    A.avancar = !!sim; gravarPreferencia("avancar", sim ? "1" : "0");
+    A.ui.toast(sim ? "Ao resolver, a próxima conversa abre sozinha." : "Ao resolver, a conversa continua aberta.", { tipo: "info" });
+  },
+  abrirAjudaTeclado: () => abrirAjudaTeclado(),
   async status(novo, botao) {
+    if (novo === "resolvida") return resolverComDesfazer(botao);
     const textos = { resolvida: "Atendimento resolvido.", aberta: "Atendimento reaberto.", pendente: "Marcado como pendente." };
     const r = await executar(A.api.rpcC("nx_cv_status", { p_conversa: A.selId, p_status: novo }), { botao, ok: textos[novo] });
     if (r) { trocarConversa(r); delta(); recarregarVer(); carregarLista({}); }
@@ -785,6 +816,199 @@ const acoes = {
   guardarRascunho, rascunhoDe, rascunhoMudou,
   cancelarFila: m => cancelarFila(m), enviarAgora: m => enviarAgora(m),
 };
+
+/* ============================================================ teclado da central (M35)
+   Acordes com Alt valem até dentro do campo de mensagem (Alt+Shift+letra evita o AltGr do ABNT2); as letras soltas (j, k, /, ?) só fora dos
+   campos. A decisão de «qual tecla é qual comando» é pura e fica em cv-logica.js (acordeDoEvento). */
+function aviso(texto) { if (A) A.ui.toast(texto, { tipo: "info" }); }
+
+function emCampoDeTexto(el) { return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)); }
+
+function aoTeclaCentral(ev) {
+  if (!A || ev.defaultPrevented) return;
+  if (document.querySelector("dialog[open]")) return;       // modal ou gaveta aberta: o teclado é dela
+  const id = A.L.acordeDoEvento(ev, { emCampo: emCampoDeTexto(ev.target) });
+  if (!id) return;
+  ev.preventDefault();
+  executarComando(id);
+}
+
+/** Pede uma conversa aberta onde a pessoa possa escrever; avisa o motivo quando não há. */
+function conversaParaAgir() {
+  const conv = A.ver && A.ver.conversa;
+  if (!conv || !A.selId) { aviso("Abra uma conversa para usar este atalho."); return null; }
+  if (!A.podeEscrever) { aviso("Seu acesso é só de leitura nesta central."); return null; }
+  return conv;
+}
+
+function executarComando(id) {
+  if (!A) return;
+  switch (id) {
+    case "proxima": irParaVizinha(1); break;
+    case "anterior": irParaVizinha(-1); break;
+    case "atender": atenderProximo(); break;
+    case "assumir": comandoAssumir(); break;
+    case "resolver": if (conversaParaAgir()) resolverComDesfazer(); break;
+    case "nota": if (conversaParaAgir()) A.composer.alternarNota(); break;
+    case "transferir": if (conversaParaAgir()) acoes.transferir(); break;
+    case "mover_baixo": A.lista.moverFoco(1); break;
+    case "mover_cima": A.lista.moverFoco(-1); break;
+    case "buscar": A.lista.focarBusca(); break;
+    case "ajuda": abrirAjudaTeclado(); break;
+    case "foco_lista": focarListaOuVazio(); break;
+  }
+}
+
+/** Alt+↓ / Alt+↑: abre a conversa seguinte (ou anterior) da lista e deixa o cursor no campo de mensagem. */
+async function irParaVizinha(dir) {
+  if (!A.itens.length) { aviso("Não há conversas nesta lista."); return; }
+  let id = A.L.proximaConversa(A.itens, A.selId, dir);
+  if (id == null && dir > 0 && A.temMais) {                   // fim da página carregada: busca a seguinte antes de desistir
+    await carregarLista({ mais: true });
+    if (!A) return;
+    id = A.L.proximaConversa(A.itens, A.selId, dir);
+  }
+  if (id == null) { aviso(dir > 0 ? "Esta é a última conversa da lista." : "Esta é a primeira conversa da lista."); return; }
+  A.focoAoAbrir = "composer";
+  abrir(id);
+}
+
+/** Alt+Shift+A: a mesma regra do botão principal do cabeçalho (assumir; com a IA atendendo, pausa a IA e assume). */
+async function comandoAssumir() {
+  const conv = conversaParaAgir();
+  if (!conv) return;
+  const est = A.chat.estadoAcoes() || {};
+  if (est.primaria === "assumir_ia") return acoes.assumirIA();
+  if (est.primaria === "assumir") return acoes.assumir();
+  aviso(conv.status === "resolvida" ? "A conversa está resolvida. Reabra antes de assumir." : "A conversa já está com você.");
+}
+
+/** Espera a conversa `id` terminar de abrir (a rota chama `selecionar`, que é assíncrona). */
+async function esperarConversa(id, ms = 6000) {
+  const fim = Date.now() + ms;
+  while (A && Date.now() < fim) {
+    if (A.selId === id && A.ver && A.ver.conversa && A.ver.conversa.id === id) return true;
+    await new Promise(r => setTimeout(r, 80));
+  }
+  return false;
+}
+
+/** «Atender o próximo»: a conversa aberta que espera resposta há mais tempo (a que é de outra pessoa fica de fora): abre, assume e deixa o cursor no campo. */
+async function atenderProximo(botao) {
+  if (!A || A.atendendo) return;
+  if (!A.podeEscrever) { aviso("Seu acesso é só de leitura nesta central."); return; }
+  A.atendendo = true;
+  if (botao) botao.setAttribute("aria-busy", "true");
+  try {
+    const r = await A.api.rpcC("nx_cv_listar", { p_filtro: { aba: "aguardando" }, p_limite: 50, p_antes: null });
+    if (!A) return;
+    const c = A.L.proximaParaAtender((r && r.itens) || [], A.eu && A.eu.id);
+    if (!c) { aviso("Ninguém espera resposta agora."); return; }
+    A.focoAoAbrir = "composer";
+    if (A.selId !== c.id) A.ctx.navegar(`#/conversas/${c.id}`);
+    if (!await esperarConversa(c.id)) return;
+    const est = A.chat.estadoAcoes() || {};
+    if (est.primaria === "assumir_ia") await acoes.assumirIA();
+    else if (est.primaria === "assumir") await acoes.assumir();
+    else A.composer.focar();
+  } catch (e) {
+    if (A) tratarErro(e);
+  } finally {
+    if (A) A.atendendo = false;
+    if (botao) botao.removeAttribute("aria-busy");
+  }
+}
+
+/**
+ * Resolver com Desfazer (ui.acaoComDesfazer): o toast «Resolvida · Mariana» dura 7 s; Desfazer devolve o estado que a conversa tinha
+ * (aberta ou pendente) e, se a próxima abriu sozinha, volta para ela. Com «Ao resolver, abrir a próxima» ligado, a seguinte da lista abre
+ * com o cursor no campo; sem seguinte, volta ao painel da fila.
+ */
+async function resolverComDesfazer(botao) {
+  const conv = A && A.ver && A.ver.conversa;
+  if (!conv || !A.selId) { aviso("Abra uma conversa para resolver."); return; }
+  const id = conv.id;
+  if (conv.status === "resolvida") { aviso("Esta conversa já está resolvida."); return; }
+  if (A.resolvendo.has(id)) return;
+  A.resolvendo.add(id);
+  const antes = conv.status;                                 // «aberta» ou «pendente»: é o que o Desfazer devolve
+  const nome = nomeContato(A.ver.contato || conv.contato) || "Conversa";
+  const proxima = A.avancar ? A.L.proximaAposResolver(A.itens, id, { aba: A.aba }) : null;
+  let avancou = false;
+  try {
+    await A.ui.acaoComDesfazer({
+      texto: `Resolvida · ${nome}`,
+      aplicar: async () => {
+        const pedido = A.api.rpcC("nx_cv_status", { p_conversa: id, p_status: "resolvida" });
+        const r = await (botao ? A.ui.carregando(botao, pedido) : pedido);
+        if (!A) return;
+        if (A.selId === id) trocarConversa(r); else atualizarItemLista(r);
+        if (A.avancar && A.selId === id) {
+          avancou = true;
+          if (proxima) { A.focoAoAbrir = "composer"; A.ctx.navegar(`#/conversas/${proxima.id}`); }
+          else { A.focoAoAbrir = "lista"; A.ctx.navegar("#/conversas"); }
+        } else if (A.selId === id) { delta(); recarregarVer(); }
+        carregarLista({});
+      },
+      reverter: async () => {
+        const r = await A.api.rpcC("nx_cv_status", { p_conversa: id, p_status: antes });
+        if (!A) return;
+        if (A.selId === id) trocarConversa(r); else atualizarItemLista(r);
+        carregarLista({});
+        const aindaNaProxima = proxima ? A.selId === proxima.id : A.selId == null;
+        if (avancou && aindaNaProxima) { A.focoAoAbrir = "composer"; abrir(id); }
+        else if (A.selId === id) { delta(); recarregarVer(); }
+      },
+    });
+  } finally {
+    if (A) A.resolvendo.delete(id);
+  }
+}
+
+/** Devolve o foco à lista (Esc no campo); sem conversa à vista, ao painel vazio ou à busca. */
+function focarListaOuVazio() {
+  if (!A) return;
+  if (A.lista.focarItem()) return;
+  const b = A.raiz.querySelector(".cvc-atender, .cvc-num");
+  if (b && b.getClientRects().length) { b.focus(); return; }
+  A.lista.focarBusca();
+}
+
+/** Folha de atalhos da central (também por «?» fora de campo e pelo menu ⋮). A preferência «Ao resolver, abrir a próxima» mora aqui. */
+function abrirAjudaTeclado() {
+  if (!A) return;
+  const ui = A.ui, h = ui.h;
+  const grupos = [...new Set(A.L.ACORDES.map(a => a.grupo))];
+  const teclas = txt => h("span", { class: "cv-teclas-k" }, txt.split("+").flatMap((t, i) => (i ? ["+"] : []).concat([h("kbd", null, t)])));
+  const campoAvancar = ui.campo({ tipo: "interruptor", nome: "avancar", rotulo: "Ao resolver, abrir a próxima conversa", valor: A.avancar });
+  const entrada = campoAvancar.querySelector("input");
+  if (entrada) entrada.addEventListener("change", () => A.acoes.definirAvancar(entrada.checked));
+  const corpo = h("div", { class: "pilha cv-teclas" },
+    h("p", { class: "sub" }, "Os acordes com Alt valem também com o cursor no campo de mensagem. As letras soltas só valem fora dos campos de texto."),
+    grupos.map(g => h("section", { class: "cv-teclas-grupo" },
+      h("h3", { class: "rotulo" }, g),
+      h("dl", { class: "cv-teclas-lista" }, A.L.ACORDES.filter(a => a.grupo === g).flatMap(a => [h("dt", null, teclas(a.teclas)), h("dd", null, a.rotulo)])))),
+    campoAvancar);
+  ui.modal({ titulo: "Atalhos da central de conversas", corpo, largura: "m", acoes: [{ rotulo: "Fechar", tipo: "primario" }] });
+}
+
+/** Ações na paleta de comandos (Ctrl/⌘+K) enquanto Conversas está aberta; só se o shell oferecer o registro (ctx.comandos.registrar, M18). */
+function registrarComandos() {
+  const reg = A.ctx.comandos;
+  if (!reg || typeof reg.registrar !== "function") return;
+  const def = (id, rotulo, palavras, fazer, atalho) => {
+    try { const cancelar = reg.registrar({ id: `conversas.${id}`, rotulo, palavras, atalho, fazer }); if (typeof cancelar === "function") A.limpar.push(cancelar); } catch { /* o registro não pode derrubar a tela */ }
+  };
+  if (A.podeEscrever) {
+    def("atender", "Atender o próximo", "conversa fila espera atender proxima responder cliente", () => atenderProximo(), "Alt+Shift+P");
+    def("nova", "Nova conversa", "conversa nova mensagem iniciar whatsapp contato", () => novaConversa());
+    def("assumir", "Assumir a conversa aberta", "conversa assumir atribuir", () => executarComando("assumir"), "Alt+Shift+A");
+    def("resolver", "Resolver a conversa aberta", "conversa resolver encerrar finalizar", () => executarComando("resolver"), "Alt+Shift+R");
+    def("nota", "Nota interna na conversa", "conversa nota interna equipe", () => executarComando("nota"), "Alt+Shift+N");
+    def("transferir", "Transferir a conversa aberta", "conversa transferir passar atendente departamento", () => executarComando("transferir"), "Alt+Shift+T");
+  }
+  def("atalhos", "Atalhos da central de conversas", "atalhos teclado ajuda conversas", () => abrirAjudaTeclado(), "?");
+}
 
 /* ============================================================ envio (nx-enviar) */
 /** enviar({tipo:'texto'|'midia'|'template', texto, arquivo, legenda, template, parametros, respondeA}) */
