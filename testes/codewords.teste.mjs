@@ -784,7 +784,24 @@ test("envio de mídia: rota e campo por tipo (foto → send/image, áudio → se
     assert.equal(x.multipart.arquivo.nome, nome); assert.equal(x.multipart.arquivo.mime, mime);
     assert.deepEqual([...x.multipart.arquivo.bytes], [...BYTES], "os bytes chegam inteiros");
   }
-  assert.equal(PRAZOS.enviarMidia, 75_000, "prazo próprio da mídia (a tela espera 100 s)");
+  assert.equal(PRAZOS.enviarMidia, 70_000, "deixa orçamento para conferência do número, download e gravação da saída dentro dos 100 s da tela");
+});
+
+test("envio de mídia: não aceita rota incompatível com o MIME nem foto acima de 5 MB", async () => {
+  const erros = [
+    ["image", "application/pdf", new Uint8Array([1]), /não corresponde à rota/],
+    ["audio", "application/pdf", new Uint8Array([1]), /não corresponde à rota/],
+    ["document", "image/jpeg", new Uint8Array([1]), /não corresponde à rota/],
+    ["image", "image/jpeg", new Uint8Array(5 * 1024 * 1024 + 1), /passa de 5 MB/],
+  ];
+  for (const [grupo, mime, bytes, aviso] of erros) {
+    const s = cenario();
+    const r = await enviarMidiaCodeWords(s.cred, TEL, { grupo, mime, bytes, nome: "arquivo" }, { fetch: s.fetch });
+    assert.equal(r.ok, false, `${grupo} / ${mime}`);
+    assert.equal(r.tipo, "dados");
+    assert.match(r.erro.title, aviso);
+    assert.equal(s.cwChamadas.length, 0, "validação local, nenhuma chamada ao aparelho");
+  }
 });
 
 test("envio de mídia: áudio NUNCA leva legenda; o corpo é FormData e o Content-Type (com boundary) é do fetch, não definido à mão", async () => {
@@ -878,7 +895,7 @@ test("envio de mídia: sem chave, sem aparelho, @lid, telefone ou tipo inválido
     [s.cred, TEL, midiaDe("document", { bytes: undefined }), "dados", /vazio/],
     [s.cred, TEL, midiaDe("document", { bytes: "texto solto" }), "dados", /vazio ou não pôde ser lido/],
     [s.cred, TEL, midiaDe("document", { bytes: new Uint8Array(MAX_MIDIA + 1) }), "dados", /passa de 16 MB/],
-    [s.cred, TEL, midiaDe("audio", { bytes: new Blob([new Uint8Array(MAX_MIDIA + 1)]) }), "dados", /passa de 16 MB/],
+    [s.cred, TEL, midiaDe("audio", { mime: "audio/ogg", bytes: new Blob([new Uint8Array(MAX_MIDIA + 1)]) }), "dados", /passa de 16 MB/],
   ];
   for (const [cred, para, midia, tipo, re] of casos) {
     const r = await enviarMidiaCodeWords(cred, para, midia, { fetch: f });

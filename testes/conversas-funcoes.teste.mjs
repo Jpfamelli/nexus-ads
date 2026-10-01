@@ -1369,9 +1369,20 @@ test("nx-enviar mídia CodeWords: arquivo que não baixa, vazio ou acima de 16 M
   s.estado.downloadHandler = () => new Response(new Uint8Array(8), { status: 200, headers: { "content-length": String(16 * 1024 * 1024 + 1) } });
   r = await pedir();
   assert.equal(r.status, 400); assert.equal(r.corpo.erro, "midia_grande"); semReserva();
-  s.estado.downloadHandler = () => new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(16 * 1024 * 1024 + 1)); c.close(); } }), { status: 200 });
+  let partesLidas = 0, cancelado = false;
+  s.estado.downloadHandler = () => new Response(new ReadableStream({
+    pull(c) {
+      partesLidas++;
+      if (partesLidas === 1) c.enqueue(new Uint8Array(10 * 1024 * 1024));
+      else if (partesLidas === 2) c.enqueue(new Uint8Array(7 * 1024 * 1024));
+      else { c.enqueue(new Uint8Array(1)); c.close(); }
+    },
+    cancel() { cancelado = true; },
+  }, { highWaterMark: 0 }), { status: 200 });
   r = await pedir();
   assert.equal(r.status, 400); assert.equal(r.corpo.erro, "midia_grande"); semReserva();
+  assert.equal(partesLidas, 2, "o leitor para assim que cruza o teto, sem baixar o resto");
+  assert.equal(cancelado, true, "a resposta excedente é cancelada");
   assert.equal(s.estado.codewords.filter(x => x.caminho.startsWith("/proxy/")).length, 0, "o aparelho nunca foi chamado");
   assert.equal(s.rpcs("nx_cv_saida").length, 0, "nenhuma saída gravada");
   assert.equal(s.rpcs("nx_cv_ref_liberar").length, 6, "cada recusa soltou a reserva");

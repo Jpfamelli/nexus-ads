@@ -405,10 +405,15 @@ export function criarComposer(A) {
       return;
     }
     let fluxo;
+    const idGravacao = conv() ? conv().id : null;    // intenção capturada antes da permissão; não muda com a seleção do chat
+    if (!idGravacao) return;
     try {
       fluxo = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      if (!el.isConnected || !aceitaAnexo()) { fluxo.getTracks().forEach(t => t.stop()); return; }
-      const idGravacao = conv() ? conv().id : null;  // o áudio é para ESTA conversa (a conversão para WAV leva um instante)
+      if (!el.isConnected || !aceitaAnexo() || !mesmaConversa(idGravacao)) {
+        fluxo.getTracks().forEach(t => t.stop());
+        if (el.isConnected && !mesmaConversa(idGravacao)) ui.toast("A conversa mudou antes de liberar o microfone. A gravação não foi iniciada.", { tipo: "info", ms: 8000 });
+        return;
+      }
       const rec = emWav ? new MediaRecorder(fluxo) : new MediaRecorder(fluxo, { mimeType: mimePreferido });
       const atual = { rec, fluxo, partes: [], cancelar: false, timer: null, inicio: Date.now() };
       gravacao = atual;
@@ -585,7 +590,7 @@ export function criarComposer(A) {
     const arquivoFinal = usaOriginal ? f : escolhidoInicial;
     // o aparelho do CodeWords não cita mensagem: a faixa «Respondendo…» sai para o arquivo não parecer uma resposta citada
     if (codeWords && respondendo) { respondendo = null; desenharResposta(); }
-    await A.acoes.enviar({ tipo: "midia", conversa: idInicio, arquivo: arquivoFinal, validacao: usaOriginal ? vOriginal : v, legenda: v.tipo === "audio" ? "" : leg.value.trim() });
+    await A.acoes.enviar({ tipo: "midia", conversa: idInicio, arquivo: arquivoFinal, validacao: usaOriginal ? vOriginal : v, legenda: v.tipo === "audio" ? "" : leg.value.trim(), client_ref: L.novoClientRef() });
   }
 
   /* ---------------- modelos (templates aprovados) */

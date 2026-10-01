@@ -1,7 +1,6 @@
 # Melhorias de 01/10/2026 — Frente D (Conversas, Início, Anúncios/Relatórios, Automações, Configurações)
 
-Plano: `docs/orbita/MELHORIAS-20261001.md` (seção "Frente D"). Este follow-up R119 está na branch `codex/orbita-r119` e não foi publicado.
-A migração `supabase/migrations/20261002d_conversas_client_ref_onboarding.sql` não foi confirmada/aplicada no Supabase nesta retomada. Integração local: bump único para `20261001d` em `/app/`, os três atalhos de produto e `versao.json`; não publicado.
+Plano: `docs/orbita/MELHORIAS-20261001.md` (seção "Frente D"). O follow-up R119 foi publicado pelo PR #2. O adendo R122 da mídia CodeWords está na branch `codex/midia-codewords`; não acrescenta migração e a versão do app permanece `20261001e` até o passo de release.
 
 Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://127.0.0.1:4740/app/?dev-falso=1&dev=1#/conversas/901` (ou `#/inicio`, `#/anuncios`, `#/relatorios`, `#/config`).
 
@@ -16,7 +15,7 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
 | M32 | feito | Cartão "Deixe o Órbita pronto" no Início (admin): progresso, 11 itens na ordem, "Fazer agora" abre a seção exata (1-5: o assistente), "Já está bom", "Dispensar por 7 dias", some a 100 %; ponto de pendência no menu das Configurações; RPC de leitura nx_onboarding_estado na migração 20261002d |
 | M33 | feito | Assistente do número CodeWords em 5 passos (um primário por vez, feitos recolhidos com ✓/Refazer, consulta do aparelho a cada ~5 s nos passos 2-3, "Não sei" virou "Aguardando confirmação"); número da Meta com os mesmos marcos; seção com ui.cabecalho nível 2 |
 | M35 | feito | Central por teclado: "Atender o próximo" (botão no vazio e no cabeçalho da lista, Alt+Shift+P), Alt+↓/↑, Alt+Shift+A/R/N/T, Esc no campo volta à lista, j/k, /, ?; Resolver com Desfazer e a preferência "Ao resolver, abrir a próxima"; lista anuncia a conversa nova (aria-live, 1 a cada 10 s); ações ligadas à paleta do shell |
-| M36 | feito (texto) | Rascunho persistente por conversa (e nota), "Rascunho:" na lista, fila de saída em IndexedDB com envio idempotente por client_ref (servidor + migração 20261002d), "Na fila" com Cancelar/Enviar agora; mídia segue como era |
+| M36 | texto + mídia CodeWords | Rascunho persistente por conversa (e nota), fila de saída em IndexedDB e idempotência do texto. O complemento R122 estende `client_ref` e limites seguros à mídia CodeWords; envio de modelo não foi alterado neste adendo. |
 | M39 | feito | Filtros resumidos em uma folha no celular; Radar prioriza alertas ativos e ordena por gravidade com rótulo e ícone além da cor |
 | M40 | feito com limite explícito | Escala visual, cabeçalhos/segmentados, estados vazios/esqueletos, preloads, cache de lista e ações da paleta integrados; mover avisos para o motor global depende do M19, fora deste follow-up |
 
@@ -75,7 +74,7 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
 - Desvio: o texto do plano pede o cache do último dado; ele depende do `rpcC({cache})` da frente B (M16), que não está na branch.
 - **Verificar**: `node testes/relatorios.teste.mjs` (52 ok).
 
-## M36 — feito (texto; mídia e modelo seguem pelo caminho antigo)
+## M36 — feito (texto; mídia CodeWords complementada no R122)
 
 - **Rascunho** (`cv-composer.js` + `ctx.rascunho.ligar` da frente B): o campo guarda por conversa (`conversa:<id>`) e a nota interna tem rascunho próprio (`conversa:<id>:nota`); recarregar, a aba ser descartada ou a sessão cair devolvem o texto com o selo "Rascunho restaurado · descartar". Alternar mensagem↔nota leva o texto junto e move o rascunho. O rascunho só sai depois de o envio estar guardado na fila (e se a pessoa já não digitou outra coisa). A lista mostra "Rascunho: …" em itálico (`A.acoes.rascunhoDe`: campo aberto, memória da sessão ou `ctx.rascunho.texto` quando a B expuser).
 - **Fila de saída** (`conversas.js`, lógica pura em `cv-logica.js`: `novoClientRef`, `proximaTentativaFila`, `classificarFalhaEnvio`, `filaDevidos`, `filaDescartavel`): todo texto é gravado no IndexedDB `orbita-fila` ANTES de falar com o servidor, com um `client_ref` ("orbita:<uuid>") por intenção. Offline ou erro de transporte/503/429/prazo estourado: o item fica na fila ("Na fila · envia quando a internet voltar" com **Enviar agora** e **Cancelar**, este devolve o texto ao campo) e é repetido com o MESMO client_ref; esvazia em ordem no `orbita:online`, no 1º pulso, em `ctx.rede.aoVoltar` e a cada 20 s com backoff 20/40/80/160 s → 5 min; para na 1ª falha de rede (a ordem importa). Prazo estourado com a requisição em voo mostra "Sem resposta do servidor · tentando de novo (nada sai em dobro)" em vez do antigo "Status incerto" (que fica só para quando o PRÓPRIO servidor diz que pode ter saído, CodeWords). Falha definitiva (`fora_da_janela`, `conversa_resolvida`, …) vira "Não enviada" com o motivo e o texto continua guardado (7 dias) até Tentar de novo (intenção nova, client_ref novo) ou Descartar. Item de outra conta/empresa ou com mais de 7 dias é descartado ao abrir. `ctx.naoAtualizar` segura a atualização automática enquanto há fila. Mensagem nova entra com `.entra`.
@@ -85,6 +84,15 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
 - **Banco** (`supabase/migrations/20261002d_conversas_client_ref_onboarding.sql` — NÃO aplicada): `nx_mensagens.client_ref` (check de formato) + índice único parcial `(cliente_id, client_ref)`; `nx_cv_ref_ver` e `nx_cv_ref_marcar` (só service_role; `nx_cv_saida` NÃO foi tocada). A mesma migração traz o `nx_onboarding_estado` do M32. Smoke: `supabase/testes/15_conversas_client_ref_onboarding.sql` (begin … rollback; passa no PGlite local: `node supabase/testes/rodar-local.mjs 15`, todos os 16 smokes ok exceto o 02, que depende do banco real).
 - **Verificado no dev-falso** (puppeteer): digitar → recarregar → texto e selo voltam e a lista mostra "Rascunho: …"; offline → "Na fila" → online → enviada em 0,5 s com 1 só envio externo; 503 depois de aplicar → repete com o mesmo ref e o servidor devolve a mesma mensagem (envios externos 1, chamadas 2); recarregar com item na fila → a bolha volta e envia.
 - **Verificar**: `node testes/conversas.teste.mjs` (53 ok), `node --test testes/conversas-funcoes.teste.mjs` (8 testes novos do client_ref; o teste que proibia client_ref passou a proibir só workflow/`/run/`), `node supabase/testes/rodar-local.mjs 15`.
+
+### Complemento R122 — mídia CodeWords e idempotência
+
+O envio de mídia do painel também recebe um `client_ref` por intenção e o reusa em novas tentativas.
+Para o canal CodeWords, o servidor verifica que o grupo corresponde ao MIME, aplica o teto real por
+tipo (foto ≤ 5 MiB, demais arquivos ≤ 16 MiB) e lê o download do Storage em fluxo: ao exceder 16 MiB,
+cancela a leitura antes de baixar o restante. A permissão tardia do microfone não inicia gravação em
+outra conversa; o aparelho de áudio é liberado. O envio do aparelho tem timeout de 70 s, mantendo
+margem dentro do limite de 100 s da interface. Veja os limites de formato em `ESPEC.md` §D13 e §6.3.
 
 ## M33 — feito
 

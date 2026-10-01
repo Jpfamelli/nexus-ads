@@ -32,13 +32,13 @@ import {
 } from "./comum.js";
 import { hojeSP } from "./nucleo.js";
 import { montarInstrucoes, montarReceita } from "./codewords_prompt.js";
-import { extensaoDe, mimeBase } from "./midia.js";
+import { extensaoDe, mimeBase, tipoAceito } from "./midia.js";
 
 export const CW_BASE = "https://runtime.codewords.ai/run/whatsapp_device_manager";
 export const MAX_CORPO = 64 * 1024;
 export const ID_OK = /^[A-Za-z0-9._:=+/@-]{1,160}$/;
 // enviarMidia: a tela espera 100 s; conferência do aparelho (15 s) + download do arquivo + envio têm de caber nisso
-export const PRAZOS = { conexoes: 15_000, parear: 90_000, inscrever: 60_000, enviar: 60_000, enviarMidia: 75_000, mensagens: 20_000 };
+export const PRAZOS = { conexoes: 15_000, parear: 90_000, inscrever: 60_000, enviar: 60_000, enviarMidia: 70_000, mensagens: 20_000 };
 export const MAX_MIDIA = 16 * 1024 * 1024;   // teto do WhatsApp (e do bucket nx-midia)
 const CONFERENCIA_MS = 10 * 60_000;          // número do aparelho conferido vale 10 min
 const ESTADO_CONECTADO = /^(logged_in|connected)$/i;   // exato: "disconnected" contém "connected"
@@ -561,10 +561,15 @@ export async function enviarMidiaCodeWords(cred, destino, midia, o = {}) {
   const bytes = midia.bytes;
   const tamanho = bytes instanceof Blob ? bytes.size : bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes) ? bytes.byteLength : 0;
   if (!tamanho) return falhaEnvio("dados", "O arquivo está vazio ou não pôde ser lido. Nada foi enviado: anexe de novo.");
-  if (tamanho > MAX_MIDIA) return falhaEnvio("dados", "O arquivo passa de 16 MB, o limite do WhatsApp. Nada foi enviado.");
+  const mime = mimeBase(midia.mime);
+  const tipo = tipoAceito(mime);
+  if (!tipo || tipo.grupo !== midia.grupo) return falhaEnvio("dados", "O MIME do arquivo não corresponde à rota de mídia do CodeWords.");
+  if (tamanho > Math.min(MAX_MIDIA, tipo.max)) {
+    const limite = Math.min(MAX_MIDIA, tipo.max) / (1024 * 1024);
+    return falhaEnvio("dados", `O arquivo passa de ${limite} MB, o limite deste tipo no WhatsApp. Nada foi enviado.`);
+  }
   const outroNumero = await barreiraDoNumero(cred, o);
   if (outroNumero) return outroNumero;
-  const mime = mimeBase(midia.mime) || "application/octet-stream";
   const legenda = String(midia.legenda ?? "").trim().slice(0, 1024);
   const fd = new FormData();
   fd.append("phone", tel);

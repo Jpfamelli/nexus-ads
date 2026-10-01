@@ -505,19 +505,20 @@ WhatsApp mandou no `from` (evita o problema do 9º dígito). Embedded Signup/Coe
 Tech Provider).
 
 **D13 — canal WhatsApp via CodeWords (opcional).** Para organizações com plano CodeWords que
-inclua API, `nx_canais.provedor='codewords'` liga um workflow publicado ao atendimento do Órbita.
-Uma chave reutilizável `cwk-` fica no Vault e o Service ID fica no cadastro do canal; a chave nunca volta ao navegador.
-O adaptador usa o endpoint síncrono `POST /run/{serviceId}` e autenticação Bearer da [OpenAPI oficial do CodeWords](https://www.codewords.ai/openapi.json); os campos `orbita.send_message` e `orbita.health_check` pertencem ao contrato do workflow do cliente.
-O Órbita chama o Runtime API para enviar texto, e o CodeWords encaminha mensagens recebidas,
-ecos das respostas automáticas e recibos `sent/delivered/read/failed` a `nx-codewords`. Cada canal
-tem URL de eventos própria, com segredo aleatório de 256 bits; o banco guarda o hash. O canal
-compartilha CRM, contatos, conversas e recibos, preservando a atribuição de anúncio quando houver
-referral. O MVP aceita texto dentro da janela de 24 h; mídia, modelos da Meta, recibo de leitura
-enviado ao contato e validação automática do número não são oferecidos por esse adaptador. O teste
-de conexão comprova somente que a API chamou o workflow publicado. A conexão precisa ser validada
-com uma mensagem real de entrada e outra de saída. Recibos que chegam antes do eco outbound ficam
-em fila transacional por até sete dias e são aplicados quando o eco chega; as duas operações usam
-uma trava comum por canal e ID do provedor. O modo legado em Configurações → Formulário
+inclua API, `nx_canais.provedor='codewords'` liga um aparelho pareado ao atendimento do Órbita.
+A chave reutilizável `cwk-` fica no Vault; `phone_id` é associado ao canal e a chave nunca volta ao
+navegador. O envio usa o proxy do aparelho (`/proxy/send/text`, `/proxy/send/image`,
+`/proxy/send/audio` e `/proxy/send/file`) autenticado no servidor. Entrada, eco de saída e recibos
+normalizados chegam a `nx-codewords`; cada canal tem URL de eventos própria e segredo aleatório de
+256 bits, guardado no banco somente como hash. CRM, contatos e conversas são compartilhados com a
+Cloud API, preservando referral de anúncio quando houver. Texto e mídia não usam janela de 24 h nem
+modelos da Meta. O envio de mídia aceita imagem até 5 MB e áudio/arquivo até 16 MB; vídeo é enviado
+pela rota de arquivo e chega como arquivo para baixar. Áudio gravado no navegador é convertido para
+WAV PCM mono, 16 kHz; WAV só é aceito pelo aparelho CodeWords, pois a Graph da Meta o recusa. A
+mídia não admite citação/resposta neste canal, e a fila automática continua enviando somente texto.
+Falha de rede ou timeout depois de chamar o aparelho é ambígua e nunca é reenviada automaticamente.
+O teste do proxy com `fetch` falso não prova a entrega no aparelho: o canal deve ser pareado e
+validado com mensagens reais de entrada e saída. O modo legado em Configurações → Formulário
 continua sendo apenas captura de leads e não é necessário para sincronizar conversas.
 
 ### 3.3 Rotas de dados de ponta a ponta (P0)
@@ -1927,7 +1928,7 @@ sem nenhuma chamada à Graph**. Ações de canal usam `nx_canal_credencial(canal
 | `acao` | corpo | regras | resposta |
 |---|---|---|---|
 | `texto` | `{conversa, texto (1..4096), responde_a?: wamid}` | resolvida → `conversa_resolvida`; janela fechada → `fora_da_janela`; canal sem token → `canal_sem_token`; `cfg.cv.assinatura` → prefixo `*<primeiro nome>:*\n`; `responde_a` precisa ser wamid de mensagem do mesmo contato (senão é ignorado) | `{ok, mensagem:Mensagem}` |
-| `midia` | `{conversa, path, mime, nome, legenda?}` | `path` começa com `<cliente>/out/` (senão 404 `midia_nao_encontrada`); URL assinada (1 h) → `{type: image|video|audio|document, <type>:{link, caption?, filename?}}` (áudio sem legenda) | idem |
+| `midia` | `{conversa, path, mime, nome, legenda?, tamanho?, client_ref?}` | `path` começa com `<cliente>/out/` (senão 404 `midia_nao_encontrada`); URL assinada de 1 h. Meta envia o link à Graph. CodeWords baixa os bytes em fluxo com teto de 16 MiB (limite do tipo conferido também antes do proxy) e usa a rota multipart do aparelho. `client_ref` usa as mesmas regras de idempotência de texto/modelo; erro ambíguo nunca dispara reenvio automático. Áudio sem legenda | idem |
 | `template` | `{conversa, template_id, parametros:[texto]}` | `nx_template_ver(cliente, template_id, canal da conversa)` (senão `template_invalido`); nº de parâmetros = `num_parametros`; corpo gravado = texto do modelo com parâmetros aplicados. Vale também sem janela (é o caminho do "Nova conversa") | idem |
 | `lido` | `{conversa}` | só com janela aberta, token e `cfg.cv.recibo_leitura`; `POST {status:'read', message_id: ultimo_wamid_in}`; nunca falha para o usuário | `{ok}` |
 | `testar_canal` (admin) | `{canal}` | (1) `GET /v23.0/{phone_number_id}?fields=display_phone_number,verified_name,quality_rating`; (2) `GET /v23.0/{waba_id}/subscribed_apps` (Bearer do canal) → `inscrito = data.length > 0` (https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-account/subscribed-apps-api) → `nx_canal_verificado(canal, cliente, ok, numero, qualidade, inscrito, erro)`. O canal só fica `ativo` com número respondendo E app inscrito | `{ok, numero, nome_verificado, qualidade, app_inscrito}` ou `{ok:false, erro}` |
@@ -1965,7 +1966,7 @@ Modo **cron** (header `x-nx-cron` = `nx_config.cron_token`; só o `nx_disparar` 
 
 | `acao` | papel | corpo | resposta |
 |---|---|---|---|
-| `subir` | atendente | `{token, cliente, nome, mime, tamanho}` | tipos aceitos: `image/jpeg, image/png, image/webp` (≤ 5 MB), `video/mp4, video/3gpp, audio/aac, audio/mp4, audio/mpeg, audio/amr, audio/ogg` (≤ 16 MB), `application/pdf`, Office (`application/msword`, `application/vnd.openxmlformats-officedocument.*`, `application/vnd.ms-excel`, `application/vnd.ms-powerpoint`), `text/plain` (≤ 16 MB). Senão `midia_tipo` / `midia_grande`. Gera `path = <cliente>/out/<AAAA-MM>/<uuid>.<ext>`; `POST /storage/v1/object/upload/sign/nx-midia/<path>` → `{path, upload_url: SUPABASE_URL + '/storage/v1' + url}`. O navegador faz `PUT upload_url` com o arquivo e `content-type` |
+| `subir` | atendente | `{token, cliente, nome, mime, tamanho}` | tipos aceitos: `image/jpeg, image/png, image/webp` (≤ 5 MB), `video/mp4, video/3gpp, audio/aac, audio/mp4, audio/mpeg, audio/amr, audio/ogg, audio/wav` (≤ 16 MB), `application/pdf`, Office (`application/msword`, `application/vnd.openxmlformats-officedocument.*`, `application/vnd.ms-excel`, `application/vnd.ms-powerpoint`), `text/plain` (≤ 16 MB). WAV só pode sair pelo CodeWords; `nx-enviar` recusa WAV em Meta antes de reservar/enviar. Senão `midia_tipo` / `midia_grande`. Gera `path = <cliente>/out/<AAAA-MM>/<uuid>.<ext>`; `POST /storage/v1/object/upload/sign/nx-midia/<path>` → `{path, upload_url: SUPABASE_URL + '/storage/v1' + url}`. O navegador faz `PUT upload_url` com o arquivo e `content-type` |
 | `ver` | leitura | `{token, cliente, paths:[≤ 50]}` | cada path precisa começar com `<cliente>/` (qualquer um fora → HTTP 404 `midia_nao_encontrada`, nada assinado); `POST /storage/v1/object/sign/nx-midia {expiresIn:3600, paths}` → `{urls:{<path>: <url completa>}}` |
 | `apagar` | admin | `{token, cliente, paths}` | mesma checagem de prefixo; `DELETE /storage/v1/object/nx-midia {prefixes: paths}` → `{ok}` (uso manual; a exclusão de contato usa a fila `nx_midia_lixo`, §5.3) |
 

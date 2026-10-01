@@ -283,18 +283,50 @@ async function acaoTexto(db, ctx, corpo, deps, { conversa, texto, respondeA, ass
  * Não baixou ou veio vazio → 404 midia_nao_encontrada; acima de 16 MB (declarado ou real) → 400 midia_grande.
  */
 async function baixarMidia(link, f) {
-  let r;
-  try { r = await comPrazo(f, PRAZO_BAIXAR_MS)(link); }
-  catch { throw new ErroApi("midia_nao_encontrada", 404); }
-  const soltar = () => r.body?.cancel().catch(() => null);   // resposta não lida não fica pendurada
-  if (!r.ok) { await soltar(); throw new ErroApi("midia_nao_encontrada", 404); }
-  if (Number(r.headers.get("content-length")) > MAX_MIDIA) { await soltar(); throw new ErroApi("midia_grande", 400); }
-  let bytes;
-  try { bytes = new Uint8Array(await r.arrayBuffer()); }
-  catch { throw new ErroApi("midia_nao_encontrada", 404); }
-  if (!bytes.length) throw new ErroApi("midia_nao_encontrada", 404);
-  if (bytes.length > MAX_MIDIA) throw new ErroApi("midia_grande", 400);
-  return bytes;
+  const ctl = new AbortController();
+  let r = null, leitor = null, timer;
+  const prazo = new Promise((_, rejeita) => {
+    timer = setTimeout(() => {
+      const erro = new Error("prazo do download excedido");
+      ctl.abort(erro);
+      rejeita(erro);
+    }, PRAZO_BAIXAR_MS);
+  });
+  const cancelar = () => {
+    try {
+      const p = leitor ? leitor.cancel() : r?.body?.cancel();
+      if (p && typeof p.catch === "function") p.catch(() => null);
+    } catch { /* melhor esforço: não prende a Edge numa resposta recusada */ }
+  };
+  try {
+    r = await Promise.race([f(link, { signal: ctl.signal }), prazo]);
+    if (!r.ok) throw new ErroApi("midia_nao_encontrada", 404);
+    const declarado = Number(r.headers.get("content-length"));
+    if (Number.isFinite(declarado) && declarado > MAX_MIDIA) throw new ErroApi("midia_grande", 400);
+    if (!r.body) throw new ErroApi("midia_nao_encontrada", 404);
+    leitor = r.body.getReader();
+    const partes = [];
+    let total = 0;
+    while (true) {
+      const item = await Promise.race([leitor.read(), prazo]);
+      if (item.done) break;
+      const parte = item.value instanceof Uint8Array ? item.value : new Uint8Array(item.value);
+      // O teto vale enquanto o corpo chega, inclusive sem Content-Length ou com cabeçalho incorreto.
+      if (parte.byteLength > MAX_MIDIA - total) throw new ErroApi("midia_grande", 400);
+      if (parte.byteLength) { partes.push(parte.slice()); total += parte.byteLength; }
+    }
+    if (!total) throw new ErroApi("midia_nao_encontrada", 404);
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const parte of partes) { bytes.set(parte, offset); offset += parte.byteLength; }
+    return bytes;
+  } catch (e) {
+    cancelar();
+    if (e instanceof ErroApi) throw e;
+    throw new ErroApi("midia_nao_encontrada", 404);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function acaoMidia(db, ctx, corpo, deps, env) {
@@ -322,7 +354,11 @@ async function acaoMidia(db, ctx, corpo, deps, env) {
     const link = ass.ok ? ass.urls[path] : null;
     if (!link) throw new ErroApi("midia_nao_encontrada", 404);
     // aparelho: o arquivo vai em bytes (baixado aqui, antes do canal: se falhar, nada saiu) e não há citação
-    if (ehCodeWords(cred)) return { cred, link, citacao: null, bytes: await baixarMidia(link, deps.fetch) };
+    if (ehCodeWords(cred)) {
+      const bytes = await baixarMidia(link, deps.fetch);
+      if (bytes.byteLength > tipo.max) throw new ErroApi("midia_grande", 400);
+      return { cred, link, citacao: null, bytes };
+    }
     const citacao = await citacaoValida(db, cliente, cx.contato?.id, corpo.responde_a);
     return { cred, link, citacao };
   });

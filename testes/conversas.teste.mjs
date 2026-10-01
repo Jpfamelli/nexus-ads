@@ -1013,6 +1013,7 @@ await teste("R119 anexo e modelo: o modal diz para quem vai e, se a conversa mud
   t.aoModal(async () => true);
   await t.comp.anexar(pdf);
   assert.equal(t.enviados.length, 1); assert.equal(t.enviados[0].tipo, "midia"); assert.equal(t.enviados[0].conversa, 42);
+  assert.match(t.enviados[0].client_ref, /^orbita:[A-Za-z0-9_.-]{1,74}$/, "a mídia recebe uma referência estável para esta intenção de envio");
   // modelos: título com o nome e a mesma trava no botão «Enviar modelo»
   const comp = ler("cv-composer.js"), conv = ler("conversas.js");
   assert.match(comp, /titulo: `Enviar modelo para \$\{nomeDestino\(\)\}`/);
@@ -1195,7 +1196,7 @@ await teste("CodeWords composer: vídeo avisa que chega como arquivo (só neste 
   // e o pedido ao servidor nunca leva responde_a em mídia (com o tamanho, como combinado com o nx-enviar)
   const chamada = /A\.api\.fn\("nx-enviar", \{ acao: "midia",[^}]*\}\)/.exec(ler("conversas.js"));
   assert.ok(chamada, "chamada de mídia do nx-enviar");
-  assert.equal(chamada[0], 'A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: o.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined, tamanho: o.arquivo.size })');
+  assert.equal(chamada[0], 'A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: o.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined, tamanho: o.arquivo.size, client_ref: o.client_ref })');
   assert.doesNotMatch(chamada[0], /responde_a/);
 });
 
@@ -1275,6 +1276,28 @@ await teste("CodeWords gravação: grava no formato padrão do navegador (mesmo 
     acharClasse(m.comp.el, "cvx-audio").dispatchEvent({ type: "click" }); await tique();
     assert.equal(reg.gravadores.length, 1, "nenhum gravador novo na Meta");
     assert.match(m.toasts.join("\n"), /A gravação não está disponível aqui\. Anexe um áudio salvo em MP3, OGG, AAC ou M4A\./);
+  });
+});
+
+await teste("CodeWords gravação: se a permissão do microfone terminar depois da troca de conversa, a gravação não começa nem muda de destino", async () => {
+  await comGravadorFalso(async reg => {
+    const t = await montarCompositor();
+    t.abrirCodeWords(93);
+    const btAudio = acharClasse(t.comp.el, "cvx-audio");
+    let liberarPermissao, paradas = 0;
+    navigator.mediaDevices.getUserMedia = () => new Promise(ok => { liberarPermissao = ok; });
+    btAudio.dispatchEvent({ type: "click" });
+    await tique();
+    t.abrirCodeWords(94);
+    liberarPermissao({ getTracks: () => [{ stop() { paradas++; } }] });
+    await tique();
+    if (reg.gravadores[0] && reg.gravadores[0].state !== "inactive") {
+      t.abrirCodeWords(95);            // limpa a regressão no caso RED, sem deixar microfone/timer aberto
+      await reg.gravadores[0].fim;
+    }
+    assert.equal(reg.gravadores.length, 0, "não cria MediaRecorder para a conversa que substituiu a original durante a permissão");
+    assert.equal(paradas, 1, "solta o microfone que chegou tarde");
+    assert.deepEqual(t.enviados, [], "nenhum áudio é anexado à conversa nova");
   });
 });
 

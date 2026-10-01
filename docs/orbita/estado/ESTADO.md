@@ -1,8 +1,15 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-10-01 14:26 (America/Sao_Paulo)
-Branch de follow-up: `codex/orbita-r119` · PR [#2](https://github.com/Jpfamelli/nexus-ads/pull/2) aberto em rascunho (não publicado)
+Atualizado: 2026-10-01 18:26 (America/Sao_Paulo)
+Branch de mídia R122: `codex/midia-codewords` · revisão local concluída, publicação pendente
+Follow-up R119: `codex/orbita-r119` · PR [#2](https://github.com/Jpfamelli/nexus-ads/pull/2) merged
 Base em produção: F8/PR [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) mesclado; https://orbita-nexus-ads.netlify.app
+
+## Seguimento R122 — mídia CodeWords — 01/10/2026
+
+- **Implementação local na branch `codex/midia-codewords`:** envio de foto, áudio e arquivo pelo aparelho pareado; áudio gravado convertido em WAV 16 kHz mono; `client_ref` na mídia; validação MIME/limites; download do Storage em fluxo com corte efetivo no limite; proteção contra permissão tardia do microfone em outra conversa.
+- **Testes focados:** 71/71 CodeWords, 89/89 funções de conversa e 92/92 verificações do painel.
+- **Ainda não publicado:** falta suíte geral e `deno check`, revisão completa e sequência PR/deploy. A prova de dispositivo real depende do pareamento do número pelo João. Nenhum banco foi alterado nesta fase.
 
 ## Follow-up R119 — integração local, não publicado — 2026-10-01 14:26 -03
 
