@@ -13,7 +13,7 @@
 export const MENSAGENS = {
   resposta_invalida: "O servidor respondeu em formato inesperado. Atualize os dados; se tentou salvar ou enviar, confira o resultado antes de repetir.",
   // do painel clássico (web/dados.js), com a marca no lugar de "Nexus"
-  sessao_invalida: "Sua sessão expirou. Entre de novo.",
+  sessao_invalida: "Sua sessão expirou. Entre para continuar; o que você digitou fica guardado.",
   conta_pendente: "Sua conta ainda está aguardando aprovação.",
   credenciais_invalidas: "E-mail ou senha não conferem.",
   codigo_invalido: "Código de ativação inválido.",

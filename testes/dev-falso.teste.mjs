@@ -199,3 +199,13 @@ test("falha programada: 503 N vezes (com Retry-After), atraso e 'depois de aplic
   assert.equal((await rpc("nx_inicio", { p_token: novo })).status, 200, "o token novo vale");
   assert.equal((await rpc("nx_inicio", { p_token: "demo-local-session" })).status, 401, "o antigo continua inválido");
 }));
+
+test("sessão: entrar de novo devolve token da MESMA conta; com ?outra=1 o próximo token é de OUTRA conta (para testar a troca de conta)", () => comServidor(async ({ rpc, sim }) => {
+  const a = (await rpc("nx_app_sessao", { p_token: "demo-local-session" })).corpo.conta.id;
+  await sim("sessao-invalida");
+  const t1 = (await rpc("nx_entrar", { p_email: "a@b.c", p_senha: "x" })).corpo.token;
+  assert.equal((await rpc("nx_app_sessao", { p_token: t1 })).corpo.conta.id, a, "mesma conta");
+  await sim("sessao-invalida", "?outra=1");
+  const t2 = (await rpc("nx_entrar", { p_email: "a@b.c", p_senha: "x" })).corpo.token;
+  assert.notEqual((await rpc("nx_app_sessao", { p_token: t2 })).corpo.conta.id, a, "outra conta");
+}));

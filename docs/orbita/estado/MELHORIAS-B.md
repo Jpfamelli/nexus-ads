@@ -12,6 +12,7 @@ Testes da frente: `node testes/shell.teste.mjs` (registrado em `testes/rodar-tud
 | M12 service worker + versão | feito (falta só o `curl -I` em produção, depois da publicação) | ver `git log --grep "M12"` |
 | M14 estado de conexão | feito | ver `git log --grep "M14"` |
 | M15 leituras que insistem, escritas que não duplicam, boot | feito | ver `git log --grep "M15"` |
+| M17 sessão que não derruba o trabalho + rascunhos | feito (migração só no repositório; smoke 16 rodado no PGlite local) | ver `git log --grep "M17"` |
 
 ## M11 · Abrir em ~1,5 s em vez de ~3,5 s
 
@@ -113,8 +114,34 @@ Depois de resolver: voltar ao `sw.js` normal, `"sw": true` e subir o `?v=`.
 - No dev-falso (Chrome, 390×844) com falhas programadas (`/__dev_falso/simular/falha?rpc=nx_app_sessao&status=503&vezes=N`): 1 falha → abre em 0,5 s (2 chamadas); 7 falhas → mostra o laço e abre sozinho em 8 s;
   falha permanente → «Tentar agora» abre em 0,16 s depois de limpar a falha; sessão inválida na abertura → login sem laço.
 
+## M17 · Sessão que não derruba o trabalho e rascunhos que sobrevivem
+
+**Feito**
+- **Servidor (não aplicado):** `supabase/migrations/20261002b_sessao_pulso_push.sql` (parte sessão) — `nx_app_sessao` renova `expira_em` para `now() + 30 dias` quando faltam menos de 20 (UPDATE condicional por `token_hash`,
+  uma escrita a cada ~10 dias; só depois de `nx_conta_do_token` aceitar; sessão vencida/token inválido continuam levantando `sessao_invalida` sem ressuscitar). O corpo da função é idêntico ao de `20260928c_plataforma.sql`
+  (conferido por diff: só 2 linhas novas). Smoke `supabase/testes/16_sessao_pulso_push.sql` (begin … rollback): 10 dias renova, 25 e 21 não, 19 renova, segunda abertura não reescreve, vencida não renova, token inexistente/nulo, outra conta não é tocada,
+  sessão ociosa vence. **Rodado só no PGlite local** (`supabase/testes/rodar-local.mjs 16`, sem tocar o banco compartilhado): verde com a migração, vermelho sem ela. O ensaio no banco real (begin … rollback pelo MCP) fica para a publicação.
+- **Sessão expirada (`app.js`):** `sessao_invalida` com a app aberta NÃO desmonta mais a tela nem apaga o token: abre por cima a janela «Sua sessão expirou» (e-mail preenchido, «Entrar» e «Sair»; Esc/Voltar reabrem, ela é obrigatória).
+  As LEITURAS que falharam esperam (uma só janela para todas) e se repetem com o token novo; escritas falham na hora com «Sua sessão expirou. Entre para continuar; o que você digitou fica guardado.». Entrou com a mesma conta → toast
+  «Sessão renovada» e a tela segue (texto digitado intacto). Entrou com OUTRA conta → apaga todos os rascunhos, volta a `#/` e recarrega. Na abertura (sem sessão na memória) o caminho antigo continua (login com o destino guardado).
+  O pulso lê assim que a aba volta ao primeiro plano, então ficar horas fora também cai na janela.
+- **`web/app/rascunho.js`** (novo, módulo base com preload) e `ctx.rascunho.ligar(campo, chave, {seloEm?})` / `ctx.rascunho.apagar(chave)`: localStorage `nx-rasc:<conta>:<empresa>:<chave>`, debounce de 400 ms, TTL 7 dias,
+  teto de ~200 KB no total (o mais antigo sai) e ~100 KB por rascunho, restaura com o selo «Rascunho restaurado · descartar» (dispara um `input` no campo; digitar tira o selo), grava ao esconder a aba/`pagehide`, só apaga quando o módulo chama
+  `apagar` (servidor confirmou) ou a pessoa descarta. **Nunca guarda** senha, `type=password/hidden/file…`, `autocomplete=*-password/one-time-code/cc-*`, nem campo/ancestral com `data-segredo`. Todo acesso ao storage em try/catch
+  (sem storage vira no-op; cota cheia limpa o mais velho e tenta uma vez). Logout (`sair()`) apaga tudo; `apagarTudo()` também desliga os campos (um flush depois não ressuscita o que foi apagado). Rascunho mexido nos últimos 10 min segura a atualização automática (M12).
+- `dev-falso`: `simular/sessao-invalida?outra=1` faz o próximo `nx_entrar` devolver token de OUTRA conta; o BOOT só põe o token se não houver (entrar de novo sobrevive ao recarregar).
+
+**Como verificar**
+- `node testes/shell.teste.mjs` (10 testes de M17: rascunho.js com storage/relógio/DOM de mentira, app.js, migração).
+- `PGlite`: copiar `supabase/{migrations,testes}` para uma pasta com `@electric-sql/pglite` e `node supabase/testes/rodar-local.mjs 16` → `OK 16_sessao_pulso_push.sql`.
+- No dev-falso (Chrome 390×844, um `textarea` ligado ao `rascunho.js` real): `simular/sessao-invalida` com a pessoa na mesma tela → a janela abre em ≤ 10 s (próxima leitura do pulso), o texto continua no campo; «Entrar» fecha a janela, toast de sessão renovada, o pulso volta com o token novo;
+  recarregar → o texto volta com o selo; «descartar» limpa o campo e o armazenamento; entrar com outra conta apaga os rascunhos.
+
 ## Pendências para outras frentes
 
 - **C e D (M14):** o navegador guarda a falha de `import()` por URL. Se um módulo seu importa dependências com `import()` direto e a rede cair no meio, o cartão de erro precisa de recarga (o shell já faz isso quando a mensagem é de import). Para tentar de novo SEM recarregar, repetir com `&r=<n>` depois do `?v=` (a regra de `?v=` dos testes aceita).
 - **C e D (M14):** use `ctx.rede.aoVoltar(fn)` para reler dados que ficaram na tela quando a conexão volta (o shell só refaz sozinho os cartões de erro).
 - **C (M25) e D (M36):** escrita idempotente = `ctx.api.rpcC("nx_...", params, { req: true })` (o `api.js` manda `p_req` e repete com o mesmo uuid em transporte/408/429/50x); para o «Salvar de novo» depois de erro ambíguo, passe `{ req: erro.req }`. Só use `req` em função que aceite `p_req` (a migração de C); `p_req` num RPC que não o conhece dá 404 do PostgREST.
+- **C (M30), D (M36/M40):** ligar `ctx.rascunho.ligar(campo, "<tipo>:<id>[:parte]")` nas notas, no modal de nova oportunidade/tarefa e no compositor/notas internas do chat, e chamar `ctx.rascunho.apagar(chave)` SÓ quando o servidor confirmar o envio. Para o selo ficar no lugar certo, passar `{ seloEm: elemento }`. Campo de segredo: `data-segredo` (ou `type=password`).
+- **D (M36):** a janela de sessão expirada espera as LEITURAS e repete com o token novo; escritas falham na hora (o erro tem `codigo: "sessao_invalida"`): mostre «não enviada · tentar de novo» em vez de descartar o texto.
+- **Integração/publicação:** aplicar `supabase/migrations/20261002b_sessao_pulso_push.sql` só com o ok do dono (ensaio em begin … rollback pelo MCP com `supabase/testes/16_sessao_pulso_push.sql` antes); ela vem ANTES de 20261002c/d na ordem de nome.

@@ -38,7 +38,7 @@ const PRONTOS_PADRAO = { MODULOS_PRONTOS: [], CONFIG_PRONTAS: ["perfil"] };
 const ROTAS_PUBLICAS = new Set(["login", "convite", "senha"]);
 
 /** Os módulos que o boot carrega juntos. Cada um tem um <link rel="modulepreload"> no index.html com o MESMO ?v= (testes/shell.teste.mjs confere). */
-const MODULOS_BASE = ["api.js", "ui.js", "tema.js", "vocab.js", "rotas.js", "pulso.js", "rede.js"];
+const MODULOS_BASE = ["api.js", "ui.js", "tema.js", "vocab.js", "rotas.js", "pulso.js", "rede.js", "rascunho.js"];
 
 const E = {
   M: {},                 // módulos base: dados, api, ui, tema, vocab, rotas, pulso
@@ -131,8 +131,8 @@ async function iniciar() {
         await esperarAbertura(ESPERAS_ABERTURA[Math.min(i, ESPERAS_ABERTURA.length - 1)] / 1000, navigator.onLine === false ? "Sem conexão." : "Não consegui abrir o sistema.");
       }
     }
-    const [dados, api, ui, tema, vocab, rotas, pulso, rede] = carregados;
-    E.M = { dados, api, ui, tema, vocab, rotas, pulso, rede };
+    const [dados, api, ui, tema, vocab, rotas, pulso, rede, rascunho] = carregados;
+    E.M = { dados, api, ui, tema, vocab, rotas, pulso, rede, rascunho };
     E.workspace = rotas.produtoDe(location.search);
     document.documentElement.dataset.produto = E.workspace || "orbita";
     document.title = E.workspace ? rotas.PRODUTOS[E.workspace].titulo : "Órbita · Nexus";
@@ -164,6 +164,8 @@ async function iniciar() {
     aoSessaoInvalida: () => sessaoCaiu(),
     rede: E.rede, contexto: true, retentar: true,
   });
+  // M17: rascunhos por conta + empresa (localStorage, 7 dias, ~200 KB, nunca senha); somem no logout
+  E.rascunhos = E.M.rascunho.criarRascunhos({ conta: () => (E.sessao ? E.sessao.conta.id : null), cliente: () => (E.cliente ? E.cliente.id : null) });
   E.pulso = E.M.pulso.criarPulso({
     ler: () => (E.cliente ? E.api.rpcC("nx_pulso") : Promise.resolve(null)),
     aoNotif: n => atualizarSino(n),
@@ -297,6 +299,7 @@ function ehFalhaDeImport(e) { return /dynamically imported module|importing a mo
 
 /** Trabalho que uma atualização automática não pode interromper (o módulo ativo registra por ctx.naoAtualizar). */
 function ocupadoParaAtualizar() {
+  if (E.rascunhos && E.rascunhos.pendentes() > 0) return true;
   for (const f of E.naoAtualizar) { try { if (f()) return true; } catch { /* ignora */ } }
   return false;
 }
@@ -510,7 +513,63 @@ async function aplicarMarcaCliente() {
    SESSÃO
    ============================================================ */
 let _avisouSessao = false;
+let loginPendente = null;
+
+/**
+ * Chamado pelo api.js quando o servidor diz sessao_invalida. Devolve (Promise de) true quando a pessoa entrou de novo: as LEITURAS que
+ * falharam esperam por isso e se repetem com o token novo. A tela NÃO é desmontada e nada do que foi digitado se perde: abre por cima
+ * uma janela «Sua sessão expirou» com o e-mail preenchido. Na abertura (ainda sem sessão) não há tela a preservar: volta ao login como antes.
+ */
 function sessaoCaiu() {
+  if (!E.sessao) { sessaoCaiuTotal(); return false; }
+  if (!loginPendente) loginPendente = pedirLoginNaTela().finally(() => { loginPendente = null; });
+  return loginPendente;
+}
+
+async function pedirLoginNaTela() {
+  const { ui } = E;
+  const antes = E.sessao.conta;
+  if (E.rascunhos) E.rascunhos.salvarTudo();
+  for (;;) {
+    const form = ui.h("form", { class: "pilha", novalidate: true },
+      ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", valor: antes.email || "", autocomplete: "username", obrigatorio: true, inputmode: "email" }),
+      ui.campo({ rotulo: "Senha", nome: "senha", tipo: "senha", autocomplete: "current-password", obrigatorio: true }));
+    const r = await ui.modal({
+      titulo: "Sua sessão expirou", largura: "p", fecharFora: false, protegerTexto: false,
+      descricao: "Entre para continuar de onde parou. O que você digitou fica guardado.",
+      corpo: form,
+      aoAbrir: a => { const s = a.el.querySelector("input[name=senha]"); if (s && !(typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches)) s.focus(); },
+      acoes: [
+        { rotulo: "Sair", tipo: "neutro", valor: "sair" },
+        { rotulo: "Entrar", tipo: "primario", fn: async () => {
+          const d = ui.lerForm(form);
+          if (!d.email || !d.senha) throw Object.assign(new Error("credenciais_invalidas"), { codigo: "credenciais_invalidas" });
+          const tokenAntigo = E.M.dados.lerToken();
+          const r2 = await E.api.publica("nx_entrar", { p_email: d.email, p_senha: d.senha });
+          if (!r2 || !r2.token) throw Object.assign(new Error("credenciais_invalidas"), { codigo: "credenciais_invalidas" });
+          E.M.dados.guardarToken(r2.token);
+          let nova;
+          try { nova = await lerSessao(); } catch (e) { E.M.dados.guardarToken(tokenAntigo); throw e; }
+          if (nova.conta.id !== antes.id) return "outra";       // entrou com OUTRA conta: nada do que era da anterior pode ficar
+          return "ok";
+        } },
+      ],
+    });
+    if (r === "ok") { ui.toast("Sessão renovada. Pode continuar.", { tipo: "ok" }); return true; }
+    if (r === "outra") {
+      if (E.rascunhos) E.rascunhos.apagarTudo();
+      try { sessionStorage.removeItem("nx-app-destino"); } catch { /* ok */ }
+      location.hash = "#/";
+      location.reload();
+      return false;
+    }
+    if (r === "sair") { await sair(); return false; }
+    // Esc ou Voltar: a janela é obrigatória, pergunta de novo
+  }
+}
+
+/** Sem sessão na memória (abertura) ou sem como continuar: apaga o token, limpa a tela e volta ao login. */
+function sessaoCaiuTotal() {
   if (!E.sessao && !E.M.dados.lerToken()) return;
   E.M.dados.apagarToken();
   E.sessao = null; E.cliente = null;
@@ -562,6 +621,7 @@ async function recarregarSessao() {
 
 async function sair() {
   try { await E.api.rpc("nx_sair"); } catch { /* sai do mesmo jeito */ }
+  if (E.rascunhos) E.rascunhos.apagarTudo();     // logout: nenhum rascunho fica no aparelho
   E.M.dados.apagarToken();
   E.sessao = null; E.cliente = null; E.imgOrg = null; E.notif = 0;
   if (E.pulso) E.pulso.parar();
@@ -731,6 +791,7 @@ async function aoMudarRota(doUsuario) {
    MONTAGEM DE MÓDULOS
    ============================================================ */
 function desmontarAtual() {
+  if (E.rascunhos) E.rascunhos.salvarTudo();
   for (const cancelar of E.assinaturas) try { cancelar(); } catch { /* ok */ }
   E.assinaturas.clear();
   if (E.atual && E.atual.mod && typeof E.atual.mod.desmontar === "function") {
@@ -772,6 +833,12 @@ function construirCtx(r, alvo) {
       },
     },
     carregar,
+    /** Rascunho de um campo: ligar(campo, chave) guarda o que a pessoa digita e devolve na volta («Rascunho restaurado · descartar»);
+        apagar(chave) SÓ depois que o servidor confirmar o envio. Nunca guarda senha nem campo com data-segredo. */
+    rascunho: {
+      ligar: (campo, chave, opcoes) => E.rascunhos.ligar(campo, chave, opcoes),
+      apagar: chave => E.rascunhos.apagar(chave),
+    },
     /** Conexão: estado atual e aoVoltar(fn) — fn() roda quando a internet/servidor voltam (releia o que está na tela). Devolve cancelar(). */
     rede: {
       get estado() { return E.rede.estado; },

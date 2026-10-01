@@ -162,8 +162,9 @@ const demoAds = (() => {
       { canal: "google", ativo: true, ultimo_sync: new Date(Date.now() - 18 * 60000).toISOString(), status: "ok — 31 linhas" }] };
 })();
 
-function sessao() {
-  return { conta: { id: ID.eu, nome: "Dra. Helena", email: "demo@example.test", papel: "gestor", super: true, telefone: null },
+function sessao(token = "") {
+  const outra = String(token).includes("outra");
+  return { conta: { id: outra ? ID.ana : ID.eu, nome: outra ? "Ana Paula" : "Dra. Helena", email: "demo@example.test", papel: "gestor", super: true, telefone: null },
     org: { id: ID.org, nome: "Nexus", slug: "nexus", marca: { produto: "Órbita", cores: { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" } }, img_hash: "dev-falso" },
     super: true, link_base_padrao: null, modulos_plano: {}, clientes: [{ id: ID.cliente, slug: "sorriso-vivo", nome: "Clínica Sorriso Vivo", plano: "completo", status: "teste", vertical: "odonto", papel: "admin", proprio: true,
       modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"], teste_ate: somaDia(hoje, 14), tem_tema: false, cfg: {} }] };
@@ -398,9 +399,9 @@ function enviarTexto(p) {
 function rpc(nome, p = {}) {
   switch (nome) {
     case "nx_marca_publica": return marcaPublica;
-    case "nx_entrar": { const token = `demo-local-token-${++dev.seqToken}`; dev.tokens.add(token); return { token }; }
+    case "nx_entrar": { const token = `demo-local-${dev.proximaContaOutra ? "outra" : "token"}-${++dev.seqToken}`; dev.tokens.add(token); return { token }; }
     case "nx_sair": dev.tokens.clear(); return { ok: true };
-    case "nx_app_sessao": return sessao();
+    case "nx_app_sessao": return sessao(p.p_token);
     case "nx_cliente_tema": return { tema: {}, marca_cliente: {}, atualizado: "dev-falso" };
     case "nx_pulso": {
       const vis = conversas.filter(c => !c.oculta);
@@ -668,7 +669,7 @@ function simular(acao, q) {
         codigo: q.get("codigo") || null, retryAfter: n("retryAfter") || 0 });
       return { ok: true, falhas: dev.falhas.length };
     }
-    case "sessao-invalida": dev.tokens.clear(); dev.verificarToken = true; return { ok: true };
+    case "sessao-invalida": dev.tokens.clear(); dev.verificarToken = true; dev.proximaContaOutra = q.get("outra") === "1"; return { ok: true };
     case "sessao-valida": dev.verificarToken = false; return { ok: true };
     case "mensagem": return { ok: true, mensagem: simularEntrada(q.get("conversa") || 901, q.get("texto")) };
     case "onboarding": onboardingDefinir(q.get("modo") || "parcial"); return { ok: true, estado: onboardingEstado() };

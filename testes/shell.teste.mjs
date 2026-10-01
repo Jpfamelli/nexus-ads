@@ -856,6 +856,180 @@ await teste("app.js: o boot repete sozinho (módulos e sessão), mostra o tempo 
   assert.match(html, /id="boot-tentar"/); assert.match(html, /id="boot-sair"/);
 });
 
+/* ============================================================ M17 */
+secao("M17 · sessão que não derruba o trabalho e rascunhos que sobrevivem");
+
+const RASC = await imp("rascunho.js");
+
+function storageFalso(inicial = {}) {
+  const m = new Map(Object.entries(inicial));
+  return { m, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: k => { m.delete(k); }, key: i => [...m.keys()][i] ?? null, get length() { return m.size; } };
+}
+/** textarea de mentira com ouvintes e um pai que sabe inserir o selo. */
+function campoFalso({ tag = "TEXTAREA", tipo = "textarea", valor = "", atributos = {}, ancestrais = [] } = {}) {
+  const ouv = {}; const irmaos = [];
+  const c = { tagName: tag, type: tipo, value: valor, isContentEditable: false, disparos: 0, ouv,
+    addEventListener(e, f) { (ouv[e] ||= []).push(f); }, removeEventListener(e, f) { ouv[e] = (ouv[e] || []).filter(x => x !== f); },
+    dispatchEvent(ev) { c.disparos++; (ouv[ev.type] || []).forEach(f => f(ev)); return true; },
+    hasAttribute: a => a in atributos, getAttribute: a => atributos[a] ?? null,
+    closest: sel => (sel === "[data-segredo]" && ancestrais.includes("data-segredo") ? {} : null),
+    parentNode: { filhos: irmaos, insertBefore(el) { irmaos.push(el); } },
+    digitar(txt) { c.value = txt; (ouv.input || []).forEach(f => f({ type: "input", isTrusted: true })); } };
+  return c;
+}
+function docFalso() {
+  const el = tag => { const e = { tag, className: "", filhos: [], attrs: {}, ouv: {}, setAttribute(k, v) { e.attrs[k] = v; }, appendChild(f) { e.filhos.push(f); return f; }, addEventListener(ev, f) { e.ouv[ev] = f; }, clique() { e.ouv.click && e.ouv.click(); } }; return e; };
+  const ouv = {};
+  return { visibilityState: "visible", createElement: el, createTextNode: t => ({ texto: t }), addEventListener: (e, f) => { ouv[e] = f; }, ouv,
+    textoDoSelo: s => s.filhos.map(f => f.texto ?? f.textContent).join("") };
+}
+function novoRasc({ storage = storageFalso(), conta = "conta-1", cliente = "cli-1", rel = relogioFalso(), extra = {} } = {}) {
+  const doc = docFalso();
+  const r = RASC.criarRascunhos({ storage, conta: () => conta, cliente: () => cliente, agora: rel.agora, agendar: rel.agendar, cancelar: rel.cancelar, doc, janela: { addEventListener() {} }, ...extra });
+  return { r, storage, rel, doc };
+}
+
+await teste("rascunho.js: nunca guarda senha, chave de API ou data-segredo (campo, ancestral, autocomplete) nem tipos que não são texto", async () => {
+  const x = novoRasc();
+  const proibidos = [campoFalso({ tag: "INPUT", tipo: "password" }), campoFalso({ atributos: { "data-segredo": "" } }), campoFalso({ ancestrais: ["data-segredo"] }),
+    campoFalso({ tag: "INPUT", tipo: "text", atributos: { autocomplete: "current-password" } }), campoFalso({ tag: "INPUT", tipo: "text", atributos: { autocomplete: "new-password" } }),
+    campoFalso({ tag: "INPUT", tipo: "hidden" }), campoFalso({ tag: "INPUT", tipo: "file" }), campoFalso({ tag: "INPUT", tipo: "checkbox" }), campoFalso({ tag: "DIV" }), null];
+  for (const c of proibidos) {
+    assert.equal(RASC.campoPermitido(c), false);
+    const ctl = x.r.ligar(c, "qualquer"); if (c) c.digitar && c.digitar("minha-senha-123");
+    await x.rel.andar(1000);
+    assert.equal(ctl.restaurado, false);
+  }
+  assert.equal(x.storage.m.size, 0, "nada foi para o armazenamento");
+  assert.equal(RASC.campoPermitido(campoFalso()), true);
+  assert.equal(RASC.campoPermitido(campoFalso({ tag: "INPUT", tipo: "text" })), true);
+  assert.equal(RASC.campoPermitido(campoFalso({ tag: "INPUT", tipo: "search" })), true);
+});
+
+await teste("rascunho.js: grava com debounce de 400 ms (só o último texto) e apaga quando o campo esvazia", async () => {
+  const x = novoRasc();
+  const c = campoFalso(); x.r.ligar(c, "conversa:901");
+  c.digitar("Olá"); await x.rel.andar(300); assert.equal(x.storage.m.size, 0, "antes de 400 ms nada é gravado");
+  c.digitar("Olá, tudo bem?"); await x.rel.andar(399); assert.equal(x.storage.m.size, 0, "digitar de novo reinicia o relógio");
+  await x.rel.andar(2);
+  const [[k, v]] = [...x.storage.m.entries()];
+  assert.equal(k, "nx-rasc:conta-1:cli-1:conversa:901"); assert.equal(JSON.parse(v).t, "Olá, tudo bem?");
+  c.digitar("   "); await x.rel.andar(500); assert.equal(x.storage.m.size, 0, "texto vazio apaga o rascunho");
+});
+
+await teste("rascunho.js: restaura ao voltar, mostra «Rascunho restaurado · descartar», dispara input sem tratar como digitação e respeita campo já preenchido", async () => {
+  const st = storageFalso();
+  const a = novoRasc({ storage: st }); const c1 = campoFalso(); a.r.ligar(c1, "nota:7"); c1.digitar("Retornar a ligação amanhã"); await a.rel.andar(500);
+  const b = novoRasc({ storage: st, rel: a.rel }); const c2 = campoFalso();
+  const ctl = b.r.ligar(c2, "nota:7");
+  assert.equal(ctl.restaurado, true); assert.equal(c2.value, "Retornar a ligação amanhã"); assert.equal(c2.disparos, 1, "o módulo é avisado por um evento input");
+  assert.equal(c2.parentNode.filhos.length, 1); const selo = c2.parentNode.filhos[0];
+  assert.equal(b.doc.textoDoSelo(selo), "Rascunho restaurado · descartar"); assert.equal(selo.attrs.role, "status");
+  assert.equal(st.m.size, 1, "restaurar não apaga: só o envio confirmado apaga");
+  selo.filhos[1].clique();                                   // descartar
+  assert.equal(c2.value, ""); assert.equal(st.m.size, 0); assert.equal(c2.parentNode.filhos.length, 1, "(o selo some do DOM de verdade na tela; aqui o pai falso só acumula)");
+  const d = novoRasc({ storage: st, rel: a.rel }); a.r.ligar(campoFalso(), "nota:8");
+  const cheio = campoFalso({ valor: "texto que já estava lá" });
+  st.setItem("nx-rasc:conta-1:cli-1:nota:9", JSON.stringify({ t: "rascunho antigo", em: a.rel.agora() }));
+  assert.equal(d.r.ligar(cheio, "nota:9").restaurado, false); assert.equal(cheio.value, "texto que já estava lá", "campo com texto não é sobrescrito");
+});
+
+await teste("rascunho.js: apagar() só quando o servidor confirma; digitar depois de restaurar tira o selo; escopo por conta e empresa", async () => {
+  const st = storageFalso();
+  const a = novoRasc({ storage: st }); const c = campoFalso(); const ctl = a.r.ligar(c, "cv:1"); c.digitar("rascunho A"); await a.rel.andar(500);
+  assert.equal(a.r.existe("cv:1"), true);
+  ctl.apagar(); assert.equal(st.m.size, 0); assert.equal(a.r.existe("cv:1"), false);
+  const w = novoRasc({ storage: st, rel: a.rel }); const c1 = campoFalso(); w.r.ligar(c1, "cv:2"); c1.digitar("segredo da conta 1"); await w.rel.andar(500);
+  const outraConta = novoRasc({ storage: st, rel: a.rel, conta: "conta-2" }); const c2 = campoFalso();
+  assert.equal(outraConta.r.ligar(c2, "cv:2").restaurado, false, "outra conta não vê o rascunho");
+  const outraEmpresa = novoRasc({ storage: st, rel: a.rel, cliente: "cli-2" }); const c3 = campoFalso();
+  assert.equal(outraEmpresa.r.ligar(c3, "cv:2").restaurado, false, "outra empresa também não");
+  const mesma = novoRasc({ storage: st, rel: a.rel }); const c4 = campoFalso(); mesma.r.ligar(c4, "cv:2");
+  assert.equal(c4.parentNode.filhos.length, 1); c4.digitar("novo texto"); assert.equal(c4.disparos, 1);
+  mesma.r.apagar("cv:2"); assert.equal(mesma.r.existe("cv:2"), false);
+});
+
+await teste("rascunho.js: TTL de 7 dias, teto de ~200 KB no total (o mais antigo sai) e ~100 KB por rascunho", async () => {
+  const x = novoRasc(); const dia = 24 * 3600 * 1000;
+  const c = campoFalso(); x.r.ligar(c, "velho"); c.digitar("rascunho antigo"); await x.rel.andar(500);
+  await x.rel.andar(6 * dia); assert.equal(x.r.existe("velho"), true, "6 dias: ainda vale");
+  await x.rel.andar(1 * dia + 1000); assert.equal(x.r.existe("velho"), false, "passou de 7 dias: venceu");
+  x.r.varrer(); assert.equal(x.storage.m.size, 0, "e a varredura apaga do armazenamento");
+  const grande = "x".repeat(45 * 1024);                      // ~90 KB em UTF-16
+  for (let i = 0; i < 4; i++) { const f = campoFalso(); x.r.ligar(f, `g${i}`); f.digitar(grande); await x.rel.andar(500); await x.rel.andar(1000); }
+  let total = 0; for (const [k, v] of x.storage.m) total += (k.length + v.length) * 2;
+  assert.ok(total <= RASC.TETO_TOTAL_BYTES, `total ${total} ≤ ${RASC.TETO_TOTAL_BYTES}`);
+  assert.equal(x.r.existe("g3"), true, "o mais novo fica"); assert.equal(x.r.existe("g0"), false, "o mais antigo saiu para caber");
+  const enorme = campoFalso(); x.r.ligar(enorme, "enorme"); enorme.digitar("y".repeat(60 * 1024)); await x.rel.andar(500);
+  assert.equal(x.r.existe("enorme"), false, "rascunho acima de ~100 KB não é guardado");
+});
+
+await teste("rascunho.js: logout apaga tudo (de qualquer conta); salvarTudo e esconder a aba gravam o que estava no debounce; pendentes() = mexidos há menos de 10 min", async () => {
+  const x = novoRasc(); const c = campoFalso(); x.r.ligar(c, "a"); c.digitar("não deu tempo do debounce");
+  assert.equal(x.storage.m.size, 0); x.doc.visibilityState = "hidden"; x.doc.ouv.visibilitychange(); assert.equal(x.storage.m.size, 1, "esconder a aba grava na hora");
+  assert.equal(x.r.pendentes(), 1);
+  await x.rel.andar(11 * 60 * 1000); assert.equal(x.r.pendentes(), 0, "rascunho velho não segura a atualização automática");
+  const o = novoRasc({ storage: x.storage, rel: x.rel, conta: "conta-2" }); const c2 = campoFalso(); o.r.ligar(c2, "b"); c2.digitar("de outra conta"); await o.rel.andar(500);
+  assert.equal(x.storage.m.size, 2);
+  x.storage.setItem("outra-coisa", "não é rascunho");
+  x.r.apagarTudo();
+  assert.deepEqual([...x.storage.m.keys()], ["outra-coisa"], "só some o que tem o prefixo nx-rasc:");
+});
+
+await teste("rascunho.js: sem armazenamento ou com armazenamento que lança erro (janela anônima, cota cheia) nada quebra", async () => {
+  const sem = novoRasc({ storage: null }); const c = campoFalso(); const ctl = sem.r.ligar(c, "x"); c.digitar("texto"); await sem.rel.andar(500);
+  assert.equal(ctl.restaurado, false); assert.equal(sem.r.existe("x"), false); assert.equal(sem.r.pendentes(), 0); sem.r.apagarTudo();
+  const explode = { getItem() { throw new Error("SecurityError"); }, setItem() { throw new Error("QuotaExceededError"); }, removeItem() { throw new Error("x"); }, key() { throw new Error("x"); }, get length() { throw new Error("x"); } };
+  const e = novoRasc({ storage: explode }); const c2 = campoFalso(); e.r.ligar(c2, "y"); c2.digitar("texto"); await e.rel.andar(500);
+  e.r.apagar("y"); e.r.apagarTudo(); e.r.salvarTudo();
+  assert.equal(e.r.existe("y"), false);
+  const cheia = storageFalso(); let n = 0; const orig = cheia.setItem; cheia.setItem = (k, v) => { if (n++ === 0) throw new Error("QuotaExceededError"); orig(k, v); };
+  const q = novoRasc({ storage: cheia }); const c3 = campoFalso(); q.r.ligar(c3, "z"); c3.digitar("tenta de novo uma vez"); await q.rel.andar(500);
+  assert.equal(q.r.existe("z"), true, "cota cheia: limpa o mais velho e tenta mais uma vez");
+});
+
+await teste("app.js (M17): sessão expirada abre a janela sem desmontar a tela; outra conta limpa tudo; logout apaga os rascunhos; ctx.rascunho e rascunho.js entram no boot", () => {
+  const pedir = /async function pedirLoginNaTela\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
+  assert.doesNotMatch(pedir, /desmontarAtual\(|ui\.limpar\(/, "a tela e o que foi digitado ficam como estão");
+  assert.match(pedir, /titulo: "Sua sessão expirou"/); assert.match(pedir, /valor: antes\.email/, "e-mail preenchido");
+  assert.match(pedir, /nova\.conta\.id !== antes\.id\) return "outra"/);
+  assert.match(pedir, /if \(r === "outra"\) \{\s*if \(E\.rascunhos\) E\.rascunhos\.apagarTudo\(\);/);
+  assert.match(pedir, /E\.M\.dados\.guardarToken\(r2\.token\)/);
+  const caiu = /function sessaoCaiu\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
+  assert.match(caiu, /if \(!E\.sessao\) \{ sessaoCaiuTotal\(\); return false; \}/, "na abertura (sem sessão) segue o caminho antigo");
+  assert.match(caiu, /loginPendente = pedirLoginNaTela\(\)/, "várias leituras que falham dividem UMA janela");
+  assert.match(/async function sair\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0], /E\.rascunhos\.apagarTudo\(\)/);
+  assert.match(APP_JS, /rascunho: \{\s*ligar: \(campo, chave, opcoes\) => E\.rascunhos\.ligar\(campo, chave, opcoes\),\s*apagar: chave => E\.rascunhos\.apagar\(chave\),/);
+  assert.match(APP_JS, /if \(E\.rascunhos && E\.rascunhos\.pendentes\(\) > 0\) return true;/, "rascunho recente segura a atualização automática");
+  assert.match(APP_JS, /const MODULOS_BASE = \[[^\]]*"rascunho\.js"/);
+  assert.match(HTML, /<link rel="modulepreload" href="rascunho\.js\?v=/);
+  assert.match(ler("api.js"), /sessao_invalida: "Sua sessão expirou\. Entre para continuar; o que você digitou fica guardado\."/);
+});
+
+await teste("migração 20261002b (M17): aditiva e idempotente; nx_app_sessao renova só com < 20 dias e só o que nx_conta_do_token aceitou; smoke 16 existe", () => {
+  const sql = readFileSync(join(RAIZ, "supabase/migrations/20261002b_sessao_pulso_push.sql"), "utf8");
+  const semComentario = sql.replace(/^\s*--.*$/gm, "");
+  assert.match(semComentario, /create or replace function public\.nx_app_sessao\(p_token text\)/);
+  assert.match(semComentario, /update public\.nx_sessoes set expira_em = now\(\) \+ interval '30 days'\s*where token_hash = public\.nx_hash\(p_token\) and expira_em < now\(\) \+ interval '20 days';/);
+  assert.match(semComentario, /c public\.nx_contas := public\.nx_conta_do_token\(p_token\)/, "continua validando o token antes de qualquer escrita");
+  assert.doesNotMatch(semComentario, /\bdrop\b|\bdelete\s+from\b|\btruncate\b|alter\s+table\s+\S+\s+drop/i, "aditiva: nada de drop, delete nem truncate");
+  assert.doesNotMatch(semComentario, /\b(update|insert\s+into|delete\s+from)\s+public\.nx_config\b/i, "e nenhuma escrita em nx_config (a leitura do saas_url já era do corpo original)");
+  const smoke = readFileSync(join(RAIZ, "supabase/testes/16_sessao_pulso_push.sql"), "utf8");
+  assert.match(smoke, /^begin;/m); assert.match(smoke, /^rollback;/m); assert.match(smoke, /OK_16_SESSAO_PULSO_PUSH/);
+  for (const caso of ["faltando 10 dias", "faltando 25 dias", "sessão vencida", "outra conta", "ociosa"]) assert.ok(smoke.includes(caso), `smoke cobre: ${caso}`);
+});
+
+await teste("rascunho.js: apagarTudo (logout, outra conta) desliga os campos — um flush depois (esconder a aba, pagehide) não ressuscita o que foi apagado", async () => {
+  const x = novoRasc(); const c = campoFalso(); x.r.ligar(c, "cv:5"); c.digitar("vai sumir no logout"); await x.rel.andar(500);
+  c.digitar("e este texto estava no debounce");
+  x.r.apagarTudo();
+  assert.equal(x.storage.m.size, 0);
+  x.r.salvarTudo(); x.doc.visibilityState = "hidden"; x.doc.ouv.visibilitychange(); await x.rel.andar(1000);
+  assert.equal(x.storage.m.size, 0, "nada voltou para o armazenamento");
+  c.digitar("digitou depois do logout"); await x.rel.andar(1000);
+  assert.equal(x.storage.m.size, 0, "e o campo desligado não grava mais");
+});
+
 /* ============================================================ fim */
 console.log(`\n${ok} ok · ${falhas} falha${falhas === 1 ? "" : "s"}`);
 if (falhas) process.exitCode = 1;
