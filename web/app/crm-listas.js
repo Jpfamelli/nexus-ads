@@ -248,16 +248,20 @@ export async function formContato(k, { nome = "", telefone = "" } = {}) {
   const form = h("form", { class: "crm-form", novalidate: true },
     h("div", { class: "crm-form-2" },
       h("div", { class: "inteiro" }, ui.campo({ rotulo: "Nome", nome: "nome", valor: nome, max: 160, autocomplete: "off" })),
-      ui.campo({ rotulo: "Telefone / WhatsApp", nome: "telefone", tipo: "tel", valor: telefone, placeholder: "(12) 99830-3030", autocomplete: "off" }),
+      ui.campo({ rotulo: "Telefone / WhatsApp", nome: "telefone", tipo: "tel", valor: telefone, placeholder: "(12) 99830-3030", autocomplete: "off", validar: "telefone" }),
       ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", autocomplete: "off" }),
       ui.campo({ rotulo: "Origem", nome: "origem", tipo: "select", valor: "manual", opcoes: Object.entries(L.ROTULO_ORIGEM).filter(([v]) => v !== "importacao").map(([valor, rotulo]) => ({ valor, rotulo })) }),
       ui.campo({ rotulo: "Cidade", nome: "cidade", max: 80 })),
     ...campos.map(c => N.campoPersonalizado(k, c, null)),
     h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true }));
   const status = form.querySelector(".crm-status");
+  // M24: o aviso de cadastro já existente aparece enquanto digita o telefone (não só depois de salvar)
+  let apiModal = null;
+  const caixaDup = N.avisoDuplicado(k, form.querySelector("[name=telefone]"), { aoUsar: achado => { if (apiModal) apiModal.fechar(null); k.ctx.navegar(`#/contatos/${achado.id}`); } });
+  form.querySelector("[name=telefone]").closest(".campo").appendChild(caixaDup);
   let reqAtual = null, reqConteudo = "";   // M25: uma chave por intenção; erro ambíguo repete com a MESMA chave
   return ui.modal({
-    titulo: k.v.novo("contato"), corpo: form,
+    titulo: k.v.novo("contato"), corpo: form, aoAbrir: a => { apiModal = a; },
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
       { rotulo: "Cadastrar", tipo: "primario", fn: async api => {
@@ -407,9 +411,9 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
       ui.acaoComDesfazer({ texto, reverter: async () => { await salvar({ etiquetas: antes }); montarEtq(antes); } });
     }
     montarEtq(c.etiquetas || []);
-    dl.append(h("dt", null, "Etiquetas"), ddEtq);
+    dl.append(h("div", { class: "ng-campo ng-campo-largo" }, h("dt", null, "Etiquetas"), ddEtq));
     const obs = h("textarea", { rows: 3, maxlength: 5000, placeholder: "Observações gerais" }, c.obs || "");
-    dl.append(...N.linhaEd(k, { rotulo: "Observação", desabilitado: !pode, controle: obs, ler: x => x.value.trim() || null, salvar: v => salvar({ obs: v }) }));
+    dl.append(...N.linhaEd(k, { rotulo: "Observação", desabilitado: !pode, controle: obs, largo: true, ler: x => x.value.trim() || null, salvar: v => salvar({ obs: v }) }));
     const blocoDados = h("section", { class: "ng-bloco", "aria-label": "Dados" }, h("div", { class: "ng-bloco-cab" }, h("h3", null, "Dados")), dl);
 
     /* campos personalizados */

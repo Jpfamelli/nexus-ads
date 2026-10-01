@@ -165,7 +165,7 @@ export async function moverComPerguntas(k, card, estagio, ordem = null) {
 
 /* ============================================================ edição por campo */
 /** Linha dt/dd com input .ed que salva sozinho (change/blur). aoErro(e, erroEl) personaliza a mensagem. */
-export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro, validar }) {
+export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro, validar, largo = false }) {
   const { ui, h } = k;
   const erro = h("small", { class: "ed-erro", role: "alert", hidden: true });
   const id = `ed-${Math.random().toString(36).slice(2, 9)}`;
@@ -210,7 +210,8 @@ export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro
   if (controle.tagName === "INPUT" && controle.type !== "date" && controle.type !== "datetime-local") {
     controle.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); controle.blur(); } if (ev.key === "Escape") { controle.value = typeof ultimo === "number" ? String(ultimo) : (ultimo ?? ""); controle.blur(); } });
   }
-  return [h("dt", null, h("label", { for: id }, rotulo)), h("dd", null, controle), erro];
+  // um bloco por campo (M24): no desktop é «rótulo | valor»; no celular os blocos formam uma grade de 2 colunas (`largo` ocupa a linha toda)
+  return [h("div", { class: ["ng-campo", largo && "ng-campo-largo"] }, h("dt", null, h("label", { for: id }, rotulo)), h("dd", null, controle), erro)];
 }
 
 /* ============================================================ gaveta do negócio */
@@ -284,10 +285,18 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
     titulo.addEventListener("blur", async () => {
       const t = titulo.value.trim();
       if (t === tituloAntes) return;
-      try { await salvar({ titulo: t }); tituloAntes = t; ui.toast("Salvo.", { tipo: "ok", ms: 1500 }); }
+      try { await salvar({ titulo: t }); tituloAntes = t; tituloTxt.textContent = t || (d.contato && d.contato.nome) || n.nome || "Sem título"; ui.toast("Salvo.", { tipo: "ok", ms: 1500 }); }
       catch (e) { k.toastErro(e); titulo.value = tituloAntes; }
     });
-    titulo.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); titulo.blur(); } if (ev.key === "Escape") { titulo.value = tituloAntes; titulo.blur(); } });
+    const tituloTxt = h("h3", { class: "ng-titulo ng-titulo-txt" }, n.titulo || (d.contato && d.contato.nome) || n.nome || "Sem título");
+    const caixaTitulo = h("div", { class: "ng-titulo-l" }, tituloTxt);
+    const lapis = podeEditar ? h("button", { type: "button", class: "bt-icone ng-lapis", "aria-label": "Editar o título", title: "Editar o título" }, ui.icone("editar")) : null;
+    if (lapis) caixaTitulo.appendChild(lapis);
+    const mostrarTexto = () => { tituloTxt.textContent = tituloAntes || (d.contato && d.contato.nome) || n.nome || "Sem título"; ui.limpar(caixaTitulo); caixaTitulo.append(...[tituloTxt, lapis].filter(Boolean)); if (lapis) lapis.focus({ preventScroll: true }); };
+    if (lapis) lapis.addEventListener("click", () => { ui.limpar(caixaTitulo); caixaTitulo.appendChild(titulo); titulo.focus(); titulo.select(); });
+    titulo.addEventListener("blur", () => setTimeout(() => { if (caixaTitulo.contains(titulo)) mostrarTexto(); }, 0));
+    // Esc só cancela a edição do título (não fecha a gaveta)
+    titulo.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); titulo.blur(); } if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); titulo.value = tituloAntes; titulo.blur(); } });
 
     const valorFinal = n.status === "ganho";
     const valorEl = h("div", { class: ["ng-valor", valorFinal && "ganho"] },
@@ -353,7 +362,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
         n.anuncio ? ui.pilula(n.plataforma === "google" ? "Google Ads" : "Anúncio Meta", n.plataforma === "google" ? "google" : "meta", { icone: "anuncio" }) : null,
         funil && funil.conta_no_ads ? ui.pilula("Conta no retorno do anúncio", "neutra", { title: "Este funil entra nos números de Anúncios" }) : null,
         dono ? ui.pilula(dono.nome, "neutra", { icone: "usuario" }) : null),
-      titulo,
+      caixaTitulo,
       h("div", { class: "ng-linha1" }, valorEl, acoes),
       fita,
       n.status === "perdido" && (n.motivo_perda_id || n.motivo_perda_txt)
@@ -440,7 +449,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       const servicos = Object.keys(k.base.ticket || {});
       const idLista = `srv-${n.id}`;
       const inServ = h("input", { type: "text", value: n.servico || "", list: servicos.length ? idLista : null, maxlength: 120, placeholder: `Ex.: ${servicos[0] || k.v.servico}` });
-      dl.append(...linhaEd(k, { rotulo: k.v.servico, desabilitado: !podeEditar, controle: inServ,
+      dl.append(...linhaEd(k, { rotulo: k.v.servico, desabilitado: !podeEditar, controle: inServ, largo: true,
         ler: c => c.value.trim() || null,
         salvar: async v => {
           const extra = {};
@@ -450,7 +459,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
           if (extra.valor_previsto != null) ui.toast(`Valor previsto sugerido pelo ticket: ${ui.brl(t)}.`, { tipo: "info" });
         } }));
       if (servicos.length) el.appendChild(h("datalist", { id: idLista }, servicos.map(s => h("option", { value: s }))));
-      dl.append(...linhaEd(k, { rotulo: `Data e hora da ${nomeCompromisso(k)}`, desabilitado: !podeEditar,
+      dl.append(...linhaEd(k, { rotulo: `Data e hora da ${nomeCompromisso(k)}`, desabilitado: !podeEditar, largo: true,
         controle: h("input", { type: "datetime-local", value: k.L.paraDataHoraLocal(n.consulta_em) }),
         ler: c => c.value || null, salvar: v => salvar({ consulta_em: v }) }));
       dl.append(...linhaEd(k, { rotulo: "Previsão de fechamento", desabilitado: !podeEditar,
@@ -461,10 +470,10 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
         ler: c => c.value, salvar: v => salvar({ origem: v }) }));
       // pontuação do lead (automação «preencher um campo» = score, ou a IA): só leitura, com o motivo e quando foi atribuída
       const pont = k.L.pontuacao(n);
-      if (pont) dl.append(h("dt", null, "Pontuação do lead"), h("dd", { class: "ng-pontuacao" },
+      if (pont) dl.append(h("div", { class: "ng-campo ng-campo-largo" }, h("dt", null, "Pontuação do lead"), h("dd", { class: "ng-pontuacao" },
         ui.pilula(`${pont.score} de 100`, pont.faixa === "alta" ? "ok" : pont.faixa === "media" ? "aten" : "neutra", { icone: "ia" }),
         pont.motivo ? h("span", { class: "ng-pontuacao-motivo" }, pont.motivo) : null,
-        pont.em ? h("small", { class: "ng-pontuacao-em" }, `Atribuída em ${pont.em.replace("T", " às ")}`) : null));
+        pont.em ? h("small", { class: "ng-pontuacao-em" }, `Atribuída em ${pont.em.replace("T", " às ")}`) : null)));
       const ddEtq = h("dd", null);
       const montarEtq = marcadas => {
         const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas, rotulo: "Etiquetas do negócio",
@@ -483,7 +492,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
         ui.acaoComDesfazer({ texto, reverter: async () => { await salvar({ etiquetas: antes }); montarEtq(antes); } });
       }
       montarEtq(n.etiquetas || []);
-      dl.append(h("dt", null, "Etiquetas"), ddEtq);
+      dl.append(h("div", { class: "ng-campo ng-campo-largo" }, h("dt", null, "Etiquetas"), ddEtq));
       el.appendChild(h("section", { class: "ng-bloco", "aria-label": "Dados" }, h("div", { class: "ng-bloco-cab" }, h("h3", null, "Dados")), dl));
 
       /* campos personalizados do funil */
@@ -508,7 +517,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
 
       /* observação */
       const obs = h("textarea", { rows: 3, maxlength: 5000, placeholder: "Observações sobre este negócio" }, n.obs || "");
-      const dlObs = h("dl", { class: "ng-kv" }, ...linhaEd(k, { rotulo: "Observação", desabilitado: !podeEditar, controle: obs,
+      const dlObs = h("dl", { class: "ng-kv" }, ...linhaEd(k, { rotulo: "Observação", desabilitado: !podeEditar, controle: obs, largo: true,
         ler: c => c.value.trim() || null, salvar: v => salvar({ obs: v }) }));
       el.appendChild(h("section", { class: "ng-bloco" }, dlObs));
 
@@ -607,6 +616,36 @@ export async function iniciarPosVenda(k, n, contato, { aoCriar } = {}) {
   abrirNegocio(k, r.id, {});
 }
 
+/* ============================================================ duplicado (M24) */
+/**
+ * Com 10–13 dígitos no telefone procura o cadastro que já existe e avisa ANTES de criar: «Já existe: Mariana Costa, última conversa há 2 dias · Usar este cadastro».
+ * inputTel = o <input> do telefone; aoUsar(contato) = o que fazer ao aceitar; ignorarId = o próprio cadastro (edição). → a caixa (insira no formulário).
+ */
+export function avisoDuplicado(k, inputTel, { aoUsar, ignorarId = null } = {}) {
+  const { ui, h, L } = k;
+  const caixa = h("div", { class: "crm-dup", role: "status", "aria-live": "polite", hidden: true });
+  let seq = 0;
+  const checar = ui.debounce(async () => {
+    const minha = ++seq;
+    const dig = String(inputTel.value || "").replace(/\D/g, "");
+    ui.limpar(caixa); caixa.hidden = true;
+    if (dig.length < 10 || dig.length > 13) return;
+    try {
+      const r = await k.api.rpcC("nx_contatos_listar", { p_filtro: { busca: dig }, p_por_pagina: 5 });
+      if (minha !== seq) return;
+      const achado = L.acharDuplicado(r && r.itens, dig, { ignorarId });
+      if (!achado) return;
+      const quando = achado.ultimo_contato_em ? `última conversa ${ui.relativo(achado.ultimo_contato_em)}` : "ainda sem conversa";
+      caixa.append(ui.icone("info"),
+        h("span", { class: "crm-dup-txt" }, h("b", null, "Já existe: "), `${achado.nome || ui.telBR(achado.telefone)}, ${quando}`),
+        h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { if (aoUsar) aoUsar(achado); } } }, "Usar este cadastro"));
+      caixa.hidden = false;
+    } catch { /* sem a checagem o servidor ainda não duplica: reaproveita o cadastro (nx_negocio_salvar) ou recusa (telefone_em_uso) */ }
+  }, 400);
+  inputTel.addEventListener("input", checar);
+  return caixa;
+}
+
 /* ============================================================ novo negócio */
 export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
   const { ui, h, L } = k;
@@ -633,12 +672,13 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
       return;
     }
     if (modoNovo) {
-      zonaContato.append(
-        h("div", { class: "crm-form-2" },
-          ui.campo({ rotulo: "Nome", nome: "c_nome", max: 160, autocomplete: "off" }),
-          ui.campo({ rotulo: "Telefone / WhatsApp", nome: "c_telefone", tipo: "tel", placeholder: "(12) 99830-3030", autocomplete: "off" }),
-          h("div", { class: "inteiro" }, ui.campo({ rotulo: "E-mail (opcional)", nome: "c_email", tipo: "email", autocomplete: "off" }))),
-        h("p", { class: "campo-ajuda" }, "Se o telefone já estiver cadastrado, usamos o mesmo cadastro (sem duplicar)."),
+      const grade = h("div", { class: "crm-form-2" },
+        ui.campo({ rotulo: "Nome", nome: "c_nome", max: 160, autocomplete: "off" }),
+        ui.campo({ rotulo: "Telefone / WhatsApp", nome: "c_telefone", tipo: "tel", placeholder: "(12) 99830-3030", autocomplete: "off", validar: "telefone" }),
+        h("div", { class: "inteiro" }, ui.campo({ rotulo: "E-mail (opcional)", nome: "c_email", tipo: "email", autocomplete: "off" })));
+      // M24: o aviso de cadastro já existente aparece enquanto digita o telefone («Já existe: Mariana Costa, última conversa há 2 dias · Usar este cadastro»)
+      zonaContato.append(grade,
+        avisoDuplicado(k, grade.querySelector("[name=c_telefone]"), { aoUsar: achado => { contato = achado; modoNovo = false; desenharContato(); } }),
         h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { modoNovo = false; desenharContato(); } } }, "Buscar um cadastro existente"));
       return;
     }
@@ -691,7 +731,7 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
     inServico.querySelector("input").setAttribute("list", "srv-novo");
     inServico.appendChild(lista);
   }
-  const inValor = ui.campo({ rotulo: "Valor previsto", nome: "valor_previsto", tipo: "moeda", placeholder: "R$ 0,00" });
+  const inValor = ui.campo({ rotulo: "Valor previsto", nome: "valor_previsto", tipo: "moeda", placeholder: "R$ 0,00", validar: "moeda" });
   inServico.querySelector("input").addEventListener("change", ev => {
     const t = Number(k.base.ticket && k.base.ticket[ev.target.value]);
     const iv = inValor.querySelector("input");

@@ -309,6 +309,13 @@ export async function montarKanban(k, el, rota) {
     distBarra.setAttribute("aria-label", `Distribuição por etapa — ${partes.join(", ")}`);
   }
 
+  /** O símbolo do sprite existe? (i-meta e i-google chegam com os ícones novos da frente B; antes disso o megafone genérico). */
+  const simbolo = (nome, reserva) => (typeof document !== "undefined" && document.getElementById(`i-${nome}`) ? nome : reserva);
+
+  /**
+   * Cartão em 3 linhas (M24): título · valor + «contato · procedimento» · rodapé (tempo na etapa — âmbar depois do prazo —, consulta, tarefa
+   * [ponto vermelho se atrasada], pontuação, glifo da origem, até 3 pontos de etiqueta e o dono). Nenhum texto abaixo de 12 px.
+   */
   function criarCartao(c, e) {
     const titulo = L.tituloCard(c);
     const nomeContato = c.contato && c.contato.nome && c.contato.nome !== titulo ? c.contato.nome : null;
@@ -317,40 +324,33 @@ export async function montarKanban(k, el, rota) {
     const sla = e.tipo === "aberto" && L.slaEstourado(c.estagio_em, e.sla_horas);
     const dono = k.usuario(c.dono_id);
     const etqs = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean);
-    const selos = [];
-    if (c.plataforma) {
-      const plataforma = c.plataforma === "google" ? "Google Ads" : c.plataforma === "meta" ? "Meta Ads" : "Anúncio";
-      selos.push(ui.pilula(plataforma, c.plataforma === "google" ? "google" : "meta", { icone: "anuncio" }));
-    }
-    const rastreio = c.rastreio && typeof c.rastreio === "object" ? c.rastreio : {};
-    const campanha = c.campanha_nome || c.campanha || c.campanha_ext || rastreio.utm_campaign;
-    if (campanha) selos.push(ui.pilula(`Campanha · ${campanha}`, "neutra", { title: String(campanha) }));
-    const anuncioNome = c.anuncio_nome || c.anuncio_ext || rastreio.utm_content;
-    if (anuncioNome) selos.push(ui.pilula(`Anúncio · ${anuncioNome}`, "neutra", { title: String(anuncioNome) }));
-    const origem = c.origem && c.origem !== "anuncio" ? (L.ROTULO_ORIGEM[c.origem] || c.origem) : null;
-    if (origem) selos.push(ui.pilula(origem, "neutra", { title: `Origem: ${origem}` }));
     const pont = L.pontuacao(c);
-    if (pont) selos.push(ui.pilula(`Lead ${pont.score}`, pont.faixa === "alta" ? "ok" : pont.faixa === "media" ? "aten" : "neutra", { icone: "ia", title: `Pontuação do lead: ${pont.score} de 100${pont.motivo ? ` — ${pont.motivo}` : ""}` }));
-    if (c.consulta_em) selos.push(ui.pilula(`${ui.dataCurtaBR ? ui.dataCurtaBR(c.consulta_em) : ui.dataBR(c.consulta_em)} ${ui.horaBR(c.consulta_em)}`, "info", { icone: "relogio", title: "Consulta/visita marcada" }));
-    if (c.tarefa) {
-      const txt = c.tarefa.atrasada ? "Tarefa atrasada" : c.tarefa.vence_em ? `Tarefa ${ui.relativo(c.tarefa.vence_em)}` : "Tarefa";
-      selos.push(h("span", { class: ["kc-tarefa", c.tarefa.atrasada && "atrasada"] }, ui.icone("tarefa"), txt));
-    }
-    const rotulo = `${titulo}${valor != null ? `, ${ui.brl(valor)}` : ""}${pont ? `, pontuação ${pont.score} de 100` : ""}${dono ? `, responsável ${dono.nome}` : ""}${c.nao_lidas ? `, ${c.nao_lidas} mensagens não lidas` : ""}`;
+    const origemTxt = L.descricaoOrigem(c);
+    const tarefa = c.tarefa && typeof c.tarefa === "object" ? c.tarefa : null;
+    const tarefaTxt = tarefa ? (tarefa.atrasada ? "Tarefa atrasada" : tarefa.vence_em ? `Tarefa ${ui.relativo(tarefa.vence_em)}` : "Tarefa") : "";
+    const consultaTxt = c.consulta_em ? `${ui.dataCurtaBR ? ui.dataCurtaBR(c.consulta_em) : ui.dataBR(c.consulta_em)} ${ui.horaBR(c.consulta_em)}` : "";
+    const rotulo = `${titulo}${valor != null ? `, ${ui.brl(valor)}` : ""}${sub ? `, ${sub}` : ""}${consultaTxt ? `, consulta ${consultaTxt}` : ""}${tarefaTxt ? `, ${tarefaTxt.toLowerCase()}` : ""}${origemTxt ? `, origem ${origemTxt}` : ""}${etqs.length ? `, etiquetas ${etqs.map(x => x.nome).join(", ")}` : ""}${pont ? `, pontuação ${pont.score} de 100` : ""}${dono ? `, responsável ${dono.nome}` : ""}${c.nao_lidas ? `, ${c.nao_lidas} mensagens não lidas` : ""}`;
     const art = h("article", { class: ["kc", S.pend.has(c.id) && "confirmando salvando"], role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
       "aria-label": rotulo, "aria-describedby": instr.id, "aria-busy": S.pend.has(c.id) ? "true" : null, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
       h("span", { class: "kc-t" }, titulo),
-      sub ? h("span", { class: "kc-s" }, sub) : null,
-      selos.length ? h("div", { class: "kc-selos" }, selos) : null,
-      etqs.length ? h("div", { class: "kc-etiqs" }, etqs.slice(0, 2).map(x => ui.etiqueta(x)), etqs.length > 2 ? h("span", { class: "kc-mais-etq" }, `+${etqs.length - 2}`) : null) : null,
+      h("div", { class: "kc-l2" },
+        valor != null ? h("b", { class: "kc-valor" }, ui.brl(valor, { centavos: false })) : h("span", { class: ["kc-valor", "sem"] }, "sem valor"),
+        sub ? h("span", { class: "kc-s", title: sub }, sub) : null),
       h("div", { class: "kc-rod" },
-        valor != null ? h("span", { class: "kc-valor" }, ui.brl(valor, { centavos: false })) : h("span", { class: ["kc-valor", "sem"] }, "sem valor"),
         h("span", { class: ["kc-dias", sla && "sla"], title: e.tipo === "aberto" ? `${L.textoDiasEtapa(c.estagio_em)}${sla ? ` — passou do prazo da etapa (${e.sla_horas} h)` : ""}` : null },
           e.tipo === "aberto" ? L.textoDiasEtapa(c.estagio_em).replace(" na etapa", "") : c.fechado_em ? `${e.tipo === "ganho" ? k.v.ganhar.toLowerCase() : "fechado"} ${ui.relativo(c.fechado_em)}` : ""),
-        dono ? ui.avatar(dono.nome, dono.id) : h("span", { class: "kc-avatar-vazio", title: "Sem responsável" }, ui.icone("usuario")),
-        // alternativa ao arrastar (toque, leitor de tela): a mesma folha «Mover para…» do toque longo
-        podeMover ? h("button", { type: "button", class: "bt-icone kc-mover", "aria-label": `Mover «${titulo}» para outra etapa`, title: "Mover para…",
-          on: { click: ev => { ev.stopPropagation(); abrirMoverPara(c.id); } } }, ui.icone("opcoes")) : null),
+        consultaTxt ? h("span", { class: "kc-consulta", title: "Consulta/visita marcada" }, ui.icone("relogio"), consultaTxt) : null,
+        tarefa ? h("span", { class: ["kc-tarefa", tarefa.atrasada && "atrasada"], title: tarefaTxt }, tarefa.atrasada ? h("i", { class: "kc-ponto-ruim", "aria-hidden": "true" }) : ui.icone("tarefa")) : null,
+        pont ? h("span", { class: ["kc-score", pont.faixa], title: `Pontuação do lead: ${pont.score} de 100${pont.motivo ? ` — ${pont.motivo}` : ""}` }, String(pont.score)) : null,
+        c.plataforma ? h("span", { class: ["kc-origem", c.plataforma], title: origemTxt }, ui.icone(simbolo(c.plataforma === "google" ? "google" : "meta", "anuncio"))) : null,
+        etqs.length ? h("span", { class: "kc-pontos", title: etqs.map(x => x.nome).join(", ") },
+          etqs.slice(0, 3).map(x => h("i", { class: "kc-ponto", "aria-hidden": "true", style: k.cor(x.cor) ? { "--cor": k.cor(x.cor) } : null })),
+          etqs.length > 3 ? h("small", null, `+${etqs.length - 3}`) : null) : null,
+        h("span", { class: "kc-fim" },
+          dono ? ui.avatar(dono.nome, dono.id) : h("span", { class: "kc-avatar-vazio", title: "Sem responsável" }, ui.icone("usuario")),
+          // alternativa ao arrastar (toque, leitor de tela): a mesma folha «Mover para…» do toque longo
+          podeMover ? h("button", { type: "button", class: "bt-icone kc-mover", "aria-label": `Mover «${titulo}» para outra etapa`, title: "Mover para…",
+            on: { click: ev => { ev.stopPropagation(); abrirMoverPara(c.id); } } }, ui.icone("opcoes")) : null)),
       c.nao_lidas ? h("span", { class: "kc-naolidas", title: `${c.nao_lidas} não lidas` }, String(c.nao_lidas > 99 ? "99+" : c.nao_lidas)) : null);
     art.addEventListener("click", ev => {
       if (S.arrasto && (S.arrasto.moveu || S.arrasto.engoleClique)) return;

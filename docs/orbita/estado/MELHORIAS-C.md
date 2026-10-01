@@ -98,3 +98,17 @@ Arquivos que esta frente edita: `web/app/crm.js`, `crm-*.js`, `agenda.js`, `agen
   e a consulta some; busca digitando «Camila» = 1 pedido (debounce), resultado → horários → «Amanhã de manhã» seleciona amanhã antes do meio-dia; Esc com texto digitado mostra a faixa «Descartar o que você digitou?» (M08 da frente A); 390 px sem corte.
 - Testes (`crm.teste.mjs`): `agruparLivres`, `rotuloDoDia`, `primeiroLivre`, `amanhaDeManha`, `slotMaisPerto` e o estático da janela e do botão na gaveta.
 - Excluir tarefa/nota passou a usar o `firmar` do `ui.acaoComDesfazer` da frente A (Ctrl/⌘+Z, saída da página e erro devolvendo a tela).
+
+## M24 · Cartão do Kanban em 3 linhas, gaveta leve e cadastro sem duplicado — FEITO
+
+- **Cartão em 3 linhas** (`crm-kanban.js`/`crm.css`): título 15 px/600 · valor em Clash 16 px + «contato · procedimento» 13 px · rodapé com tempo na etapa (âmbar e negrito depois do prazo da etapa),
+  consulta (relógio + data/hora), tarefa (ponto vermelho se atrasada, ícone se não), pontuação do lead (número), **glifo da origem** (`i-meta`/`i-google`; megafone se o símbolo não existir; tooltip «Google Ads · Campanha X · Anúncio Y»,
+  `L.descricaoOrigem`), **até 3 pontos de etiqueta** (nome no tooltip e no rótulo de acessibilidade do cartão; todos os nomes na gaveta) e o dono. 104 px de altura (eram ~154). Sonda a 390 px: **0 textos < 12 px** nos 15 cartões
+  (também travado no `crm.teste.mjs`).
+- **Gaveta leve** (`crm-negocio.js`/`crm-listas.js`): cada campo de «Dados» é um bloco `.ng-campo` (`linhaEd` devolve um bloco; `largo` ocupa a linha toda): «rótulo | valor» no desktop e **grade de 2 colunas no celular**
+  (rótulo 12 px, folga de 8 px; campos com borda visível porque não há hover). «Dados» com os 6 campos mede **274 px a 390** (limite do plano: 300). **Título editável pelo lápis** (texto + ✎; o teclado não sobe ao abrir a gaveta; Esc só cancela a edição).
+- **Cadastro sem duplicado:** com 10–13 dígitos no telefone aparece «Já existe: Mariana Costa, última conversa há 2 dias · Usar este cadastro» (`avisoDuplicado`, `nx_contatos_listar` com debounce de 400 ms, `L.acharDuplicado` casa pela mesma chave do banco:
+  com/sem 55 e 9º dígito). Em «Nova oportunidade» o botão escolhe o cadastro; em «Novo paciente» abre a ficha dele. A frase fixa «Se o telefone já estiver cadastrado, usamos o mesmo cadastro» saiu.
+  **Telefone e valor com `ui.campo({validar})`** (máscara com cursor estável e erro ao sair do campo; M08 da frente A).
+- Verificado (puppeteer + dev-falso): sonda de fontes, medidas da gaveta, lápis do título, aviso de duplicado nos dois formulários (e «Usar este cadastro» abre `#/contatos/<id>` / escolhe o contato); tema escuro conferido.
+- Testes (`crm.teste.mjs`): `acharDuplicado` (máscara, +55, sem 9º dígito, incompleto, outro número, o próprio, listas vazias), `descricaoOrigem` e o estático do cartão/gaveta/aviso.

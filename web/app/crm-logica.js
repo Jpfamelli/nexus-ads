@@ -431,6 +431,28 @@ export function alvoDoPonto(alvos, x, y) {
   return a ? a.id : null;
 }
 
+/* ------------------------------------------------------------ cartão (M24) */
+/** De onde veio o contato, em uma linha (tooltip do glifo do cartão): «Google Ads · Campanha X · Anúncio Y» ou o rótulo da origem («WhatsApp»). */
+export function descricaoOrigem(c) {
+  if (!c || typeof c !== "object") return "";
+  const rastreio = c.rastreio && typeof c.rastreio === "object" ? c.rastreio : {};
+  const plataforma = c.plataforma === "google" ? "Google Ads" : c.plataforma === "meta" ? "Meta Ads" : c.plataforma ? "Anúncio" : null;
+  const campanha = c.campanha_nome || c.campanha || c.campanha_ext || rastreio.utm_campaign;
+  const anuncio = c.anuncio_nome || c.anuncio_ext || rastreio.utm_content;
+  const origem = !plataforma && c.origem ? (ROTULO_ORIGEM[c.origem] || c.origem) : null;
+  return [plataforma || origem, campanha ? `Campanha ${campanha}` : null, anuncio ? `Anúncio ${anuncio}` : null].filter(Boolean).join(" · ");
+}
+
+/**
+ * M24: o cadastro que a pessoa está prestes a duplicar. `itens` = resposta de nx_contatos_listar; `digitado` = o telefone na caixa (com máscara ou DDI).
+ * Só vale com 10–13 dígitos; casa pela MESMA chave do banco (com/sem 55 e 9º dígito). → o contato ou null.
+ */
+export function acharDuplicado(itens, digitado, { ignorarId = null } = {}) {
+  const dig = String(digitado ?? "").replace(/\D/g, "");
+  if (dig.length < 10 || dig.length > 13) return null;
+  return (itens || []).find(c => c && c.telefone && c.id !== ignorarId && mesmoTelefone(c.telefone, dig)) || null;
+}
+
 /* ------------------------------------------------------------ escrita segura (M25) */
 /** Chave de idempotência (uuid v4) de UMA intenção: o mesmo p_req repetido nunca grava duas vezes no servidor (24 h). */
 export function novaReq(c = globalThis.crypto) {

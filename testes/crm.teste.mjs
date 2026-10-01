@@ -674,6 +674,47 @@ await teste("marcar consulta (M27): 2 toques, busca ao digitar, atalhos, desfaze
   assert.ok(/\.ag-hora-pill\[aria-checked="true"\]/.test(css) && /\.ag-dia-chip\[aria-checked="true"\]/.test(css), "estilo do selecionado");
 });
 
+await teste("cadastro (M24): aviso de duplicado pelo telefone digitado e a origem do cartão em uma linha", () => {
+  const itens = [{ id: 501, telefone: "5512998303030", nome: "Mariana Costa", ultimo_contato_em: "2026-09-29T12:00:00Z" }, { id: 502, telefone: "5512981112222", nome: "Rafael" }, { id: 503, telefone: null, nome: "Sem telefone" }];
+  // a mesma pessoa em qualquer formato (máscara, +55, sem o 9º dígito, só dígitos)
+  for (const dig of ["(12) 99830-3030", "12998303030", "+55 12 99830-3030", "5512998303030", "1298303030", "(12) 9830-3030"]) assert.equal(L.acharDuplicado(itens, dig).id, 501, dig);
+  // só vale com 10–13 dígitos; outra pessoa, a própria (edição) ou lista vazia não avisam
+  assert.equal(L.acharDuplicado(itens, "(12) 99830-30"), null, "ainda incompleto");
+  assert.equal(L.acharDuplicado(itens, "12998303031"), null, "outro número");
+  assert.equal(L.acharDuplicado(itens, "12998303030", { ignorarId: 501 }), null, "o próprio cadastro não é duplicado dele mesmo");
+  assert.equal(L.acharDuplicado([], "12998303030"), null);
+  assert.equal(L.acharDuplicado(null, "12998303030"), null);
+  assert.equal(L.acharDuplicado(itens, "55129983030301234"), null, "mais de 13 dígitos");
+  // origem do cartão (tooltip do glifo)
+  assert.equal(L.descricaoOrigem({ plataforma: "google", campanha_nome: "Aparelho invisível", anuncio_nome: "Vídeo 1", origem: "anuncio" }), "Google Ads · Campanha Aparelho invisível · Anúncio Vídeo 1");
+  assert.equal(L.descricaoOrigem({ plataforma: "meta" }), "Meta Ads");
+  assert.equal(L.descricaoOrigem({ origem: "whatsapp" }), "WhatsApp");
+  assert.equal(L.descricaoOrigem({ origem: "indicacao", rastreio: { utm_campaign: "x" } }), "Indicação · Campanha x");
+  assert.equal(L.descricaoOrigem({}), "");
+  assert.equal(L.descricaoOrigem(null), "");
+});
+
+await teste("cartão e gaveta (M24): 3 linhas, nenhum tamanho abaixo de 12 px, glifo da origem, pontos de etiqueta, campos em blocos e aviso de duplicado — estático", () => {
+  const k = ler("crm-kanban.js"), css = ler("crm.css"), neg = ler("crm-negocio.js"), listas = ler("crm-listas.js");
+  assert.ok(/class: "kc-l2"/.test(k) && /class: "kc-rod"/.test(k) && /class: "kc-pontos"/.test(k) && /L\.descricaoOrigem\(c\)/.test(k), "cartão: título, valor + contato/procedimento, rodapé");
+  assert.ok(!/kc-selos|kc-etiqs/.test(k) && !/kc-selos|kc-etiqs/.test(css), "as pílulas e etiquetas por extenso saíram do cartão");
+  assert.ok(/simbolo\(c\.plataforma === "google" \? "google" : "meta", "anuncio"\)/.test(k), "glifo i-meta/i-google (megafone se o símbolo ainda não existe)");
+  assert.ok(/etqs\.slice\(0, 3\)/.test(k), "até 3 pontos de etiqueta");
+  // nenhum font-size literal abaixo de 12 px nas regras do cartão (--fs-11 = 11 px e px soltos < 12)
+  const cartao = css.split("\n").filter(l => /^\.kc(-[a-z-]+)?\b/.test(l.trim()));
+  for (const l of cartao) { assert.ok(!/--fs-11\b/.test(l), "11 px no cartão: " + l.slice(0, 60)); const m = l.match(/font-size:\s*(\d+(?:\.\d+)?)px/); assert.ok(!m || Number(m[1]) >= 12, "tamanho < 12 px: " + l.slice(0, 60)); }
+  assert.ok(/\.kc-t \{[^}]*font-size: var\(--fs-15\)/.test(css) && /\.kc-valor \{[^}]*font-family: var\(--f-titulo\)[^}]*font-size: var\(--fs-h3\)/.test(css), "título 15 px / valor em Clash 16 px");
+  // gaveta: campos em blocos (2 colunas no celular) e título com lápis
+  assert.ok(/class: \["ng-campo", largo && "ng-campo-largo"\]/.test(neg) && /\.ng-campo-largo \{ grid-column: 1 \/ -1; \}/.test(css), "campos em blocos .ng-campo (largo ocupa a linha toda)");
+  assert.ok(/@media \(max-width: 760px\) \{[\s\S]*?\.ng-kv \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/.test(css), "Dados em grade de 2 colunas no celular");
+  assert.ok(/ng-lapis/.test(neg) && /Editar o título/.test(neg), "título editável pelo lápis");
+  // duplicado e validação ao digitar
+  assert.ok(/export function avisoDuplicado\(/.test(neg) && /L\.acharDuplicado\(/.test(neg) && /nx_contatos_listar/.test(neg), "aviso de duplicado (nx_contatos_listar)");
+  assert.ok(/avisoDuplicado\(k, grade\.querySelector\("\[name=c_telefone\]"\)/.test(neg) && /N\.avisoDuplicado\(k, form\.querySelector\("\[name=telefone\]"\)/.test(listas), "Nova oportunidade e Novo paciente");
+  assert.ok(!/Se o telefone já estiver cadastrado, usamos o mesmo cadastro/.test(neg), "a frase fixa saiu");
+  assert.ok(/validar: "telefone"/.test(neg) && /validar: "moeda"/.test(neg) && /validar: "telefone"/.test(listas), "telefone e valor com ui.campo({validar})");
+});
+
 /* ============================================================ (b) estáticos */
 console.log("\n(b) estáticos dos arquivos do CRM");
 const ARQS_JS = ["crm.js", "crm-kanban.js", "crm-listas.js", "crm-negocio.js", "crm-tarefas.js", "crm-importar.js", "crm-config.js", "crm-logica.js", "agenda.js", "agenda-config.js"];
