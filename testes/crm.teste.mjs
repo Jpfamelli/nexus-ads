@@ -442,9 +442,122 @@ await teste("exportar: linhas do CSV com colunas que a importação reconhece e 
   assert.equal(L.dataCurtaCSV(null), "");
 });
 
+/* ============================================================ (a2) agenda (M26) */
+console.log("\n(a2) agenda.js — grade de horário");
+const AG = await import("../web/app/agenda.js");
+
+await teste("agenda: semana de segunda a domingo, dia civil e instantes em São Paulo", () => {
+  assert.equal(AG.diaISO("2026-10-31", 1), "2026-11-01");
+  assert.equal(AG.diaISO("2026-03-01", -1), "2026-02-28");
+  assert.equal(AG.diaDaSemana("2026-10-01"), 4);                 // quinta
+  assert.equal(AG.segundaDe("2026-10-01"), "2026-09-28");        // quinta → segunda
+  assert.equal(AG.segundaDe("2026-09-28"), "2026-09-28");        // segunda → ela mesma
+  assert.equal(AG.segundaDe("2026-10-04"), "2026-09-28");        // domingo fecha a semana
+  assert.deepEqual(AG.partesSP("2026-10-01T10:30:00-03:00"), { dia: "2026-10-01", min: 630 });
+  assert.deepEqual(AG.partesSP("2026-10-01T02:30:00Z"), { dia: "2026-09-30", min: 23 * 60 + 30 });   // 02:30Z = 23:30 do dia anterior em SP
+  assert.equal(AG.partesSP("não é data"), null);
+  assert.equal(AG.horaTxt(630), "10:30");
+});
+
+await teste("agenda: horário de atendimento — faixas, intervalos, horário aberto e janelas fechadas", () => {
+  const cfg = { horario: { 1: [["08:00", "18:00"]], 2: [["08:00", "18:00"]], 6: [["08:00", "12:00"]] }, intervalos: [["12:00", "13:00"]], duracao_min: 30 };
+  const seg = "2026-09-28", dom = "2026-10-04", sab = "2026-10-03";
+  assert.deepEqual(AG.faixasDoDia(cfg, seg), [[480, 1080]]);
+  assert.deepEqual(AG.faixasDoDia(cfg, dom), []);                 // sem faixa = dia fechado
+  assert.equal(AG.faixasDoDia({}, seg), null);                    // sem horário na configuração = não sabe (nada é sombreado)
+  assert.equal(AG.horarioAberto(cfg, seg, 10 * 60), true);
+  assert.equal(AG.horarioAberto(cfg, seg, 12 * 60 + 30), false);  // almoço
+  assert.equal(AG.horarioAberto(cfg, seg, 7 * 60), false);
+  assert.equal(AG.horarioAberto(cfg, dom, 10 * 60), false);
+  assert.equal(AG.horarioAberto({}, seg, 10 * 60), null);
+  const eixo = { ini: 7, fim: 19 };
+  assert.deepEqual(AG.janelasFechadas(cfg, seg, eixo), [[420, 480], [720, 780], [1080, 1140]]);
+  assert.deepEqual(AG.janelasFechadas(cfg, dom, eixo), [[420, 1140]]);
+  assert.deepEqual(AG.janelasFechadas(cfg, sab, eixo), [[420, 480], [720, 1140]]);
+  assert.deepEqual(AG.janelasFechadas({}, seg, eixo), []);
+});
+
+await teste("agenda: eixo de horas — expediente dos dias mostrados, esticado para caber toda consulta (mínimo 4 h)", () => {
+  const cfg = { horario: { 1: [["08:00", "18:00"]], 2: [["08:00", "18:00"]], 6: [["08:00", "12:00"]] }, duracao_min: 30 };
+  const dias = ["2026-09-28", "2026-09-29"];
+  assert.deepEqual(AG.eixoDaGrade({}), { ini: 8, fim: 18 });                                         // sem nada: 08–18
+  assert.deepEqual(AG.eixoDaGrade({ dias, config: cfg }), { ini: 8, fim: 18 });
+  assert.deepEqual(AG.eixoDaGrade({ dias: ["2026-10-03"], config: cfg }), { ini: 8, fim: 12 });
+  const cedo = { inicio: "2026-09-28T07:30:00-03:00", fim: "2026-09-28T08:15:00-03:00" };
+  const tarde = { inicio: "2026-09-29T18:30:00-03:00", fim: "2026-09-29T19:15:00-03:00" };
+  assert.deepEqual(AG.eixoDaGrade({ dias, config: cfg, consultas: [cedo, tarde] }), { ini: 7, fim: 20 });
+  const outroDia = { inicio: "2026-10-09T06:00:00-03:00", fim: "2026-10-09T07:00:00-03:00" };
+  assert.deepEqual(AG.eixoDaGrade({ dias, config: cfg, consultas: [outroDia] }), { ini: 8, fim: 18 });   // consulta de outro dia não estica o eixo
+  assert.deepEqual(AG.eixoDaGrade({ dias: ["2026-09-28"], config: { horario: { 1: [["09:00", "10:00"]] } } }), { ini: 9, fim: 13 });
+  assert.deepEqual(AG.eixoDaGrade({ dias: ["2026-10-04"], config: cfg }), { ini: 8, fim: 18 });          // semana toda fechada: volta a 08–18
+});
+
+await teste("agenda: posição do bloco — a altura é a duração (60 min = o dobro de 30 min)", () => {
+  const eixo = { ini: 8, fim: 18 };
+  const um = AG.posicaoNoDia({ inicio: "2026-09-28T10:00:00-03:00", fim: "2026-09-28T10:30:00-03:00" }, "2026-09-28", eixo);
+  const dois = AG.posicaoNoDia({ inicio: "2026-09-28T11:00:00-03:00", fim: "2026-09-28T12:00:00-03:00" }, "2026-09-28", eixo);
+  assert.deepEqual(um, { topo: 2, altura: 0.5 });
+  assert.deepEqual(dois, { topo: 3, altura: 1 });
+  assert.equal(dois.altura, 2 * um.altura);
+  // sem `fim`: duração padrão; fim antes do início: duração padrão
+  assert.deepEqual(AG.posicaoNoDia({ inicio: "2026-09-28T09:00:00-03:00" }, "2026-09-28", eixo, 45), { topo: 1, altura: 0.75 });
+  assert.deepEqual(AG.posicaoNoDia({ inicio: "2026-09-28T09:00:00-03:00", fim: "2026-09-28T08:00:00-03:00" }, "2026-09-28", eixo, 30), { topo: 1, altura: 0.5 });
+  // começa antes do eixo: corta no topo; fora do eixo: null
+  assert.deepEqual(AG.posicaoNoDia({ inicio: "2026-09-28T07:00:00-03:00", fim: "2026-09-28T09:00:00-03:00" }, "2026-09-28", eixo), { topo: 0, altura: 1 });
+  assert.equal(AG.posicaoNoDia({ inicio: "2026-09-28T19:00:00-03:00", fim: "2026-09-28T20:00:00-03:00" }, "2026-09-28", eixo), null);
+  // bloqueio de dia inteiro (00:00 → 00:00 do dia seguinte) ocupa o eixo todo
+  assert.deepEqual(AG.posicaoNoDia({ inicio: "2026-10-04T00:00:00-03:00", fim: "2026-10-05T00:00:00-03:00" }, "2026-10-04", eixo), { topo: 0, altura: 10 });
+});
+
+await teste("agenda: consultas no mesmo horário ficam LADO A LADO (colunas dentro da faixa)", () => {
+  const b = (topo, altura, nome) => ({ topo, altura, nome });
+  // duas no mesmo horário
+  const duas = AG.colocarEmFaixas([b(1, 0.5, "A"), b(1, 0.5, "B")]);
+  assert.deepEqual(duas.map(x => [x.nome, x.col, x.cols]), [["A", 0, 2], ["B", 1, 2]]);
+  // em sequência: cada uma ocupa a largura toda
+  assert.deepEqual(AG.colocarEmFaixas([b(1, 0.5, "A"), b(1.5, 0.5, "B"), b(3, 1, "C")]).map(x => [x.col, x.cols]), [[0, 1], [0, 1], [0, 1]]);
+  // três ao mesmo tempo
+  assert.deepEqual(AG.colocarEmFaixas([b(2, 1, "A"), b(2, 1, "B"), b(2, 1, "C")]).map(x => [x.col, x.cols]), [[0, 3], [1, 3], [2, 3]]);
+  // cadeia: A 9–10, B 9:30–10:30, C 10–11 → A e C dividem a mesma faixa (A termina quando C começa), B a outra; ordem de entrada preservada
+  const cad = AG.colocarEmFaixas([b(1, 1, "A"), b(1.5, 1, "B"), b(2, 1, "C")]);
+  assert.deepEqual(cad.map(x => [x.nome, x.col, x.cols]), [["A", 0, 2], ["B", 1, 2], ["C", 0, 2]]);
+  // grupos independentes não se afetam: o 1º tem 2 colunas, o 2º só 1
+  const g = AG.colocarEmFaixas([b(1, 1, "A"), b(1, 1, "B"), b(5, 1, "C")]);
+  assert.deepEqual(g.map(x => x.cols), [2, 2, 1]);
+  // um bloco que contém outro
+  assert.deepEqual(AG.colocarEmFaixas([b(1, 3, "grande"), b(2, 0.5, "pequeno")]).map(x => [x.col, x.cols]), [[0, 2], [1, 2]]);
+  assert.deepEqual(AG.colocarEmFaixas([]), []);
+});
+
+await teste("agenda: cor do procedimento (sempre a mesma), consultas e bloqueios do dia, hora do clique", () => {
+  const c = AG.corDoProcedimento("Limpeza");
+  assert.ok(Number.isInteger(c) && c >= 0 && c <= 11);
+  assert.equal(AG.corDoProcedimento("  LIMPEZA "), c);
+  assert.equal(AG.corDoProcedimento("Limpeza"), c);
+  assert.equal(AG.corDoProcedimento("Avaliação"), AG.corDoProcedimento("avaliacao"));
+  assert.equal(AG.corDoProcedimento(""), 3);
+  assert.equal(AG.corDoProcedimento(null), 3);
+  const todas = new Set(["Limpeza", "Clareamento", "Implante", "Ortodontia", "Avaliação", "Canal", "Faceta", "Lente", "Extração", "Revisão"].map(AG.corDoProcedimento));
+  assert.ok(todas.size >= 6, "as cores se espalham pela paleta");
+  const consultas = [{ inicio: "2026-09-28T14:00:00-03:00", n: 2 }, { inicio: "2026-09-28T09:00:00-03:00", n: 1 }, { inicio: "2026-09-29T09:00:00-03:00", n: 3 }, { n: 4 }];
+  assert.deepEqual(AG.consultasDoDia(consultas, "2026-09-28").map(x => x.n), [1, 2]);
+  const bloqueios = [{ id: 1, inicio: "2026-10-04T00:00:00-03:00", fim: "2026-10-05T00:00:00-03:00" }, { id: 2, inicio: "2026-10-02T12:00:00-03:00", fim: "2026-10-02T13:00:00-03:00" }];
+  assert.deepEqual(AG.bloqueiosDoDia(bloqueios, "2026-10-04").map(x => x.id), [1]);
+  assert.deepEqual(AG.bloqueiosDoDia(bloqueios, "2026-10-05"), [], "o bloqueio que termina à meia-noite não vaza para o dia seguinte");
+  assert.deepEqual(AG.bloqueiosDoDia(bloqueios, "2026-10-02").map(x => x.id), [2]);
+  const eixo = { ini: 8, fim: 18 };
+  assert.equal(AG.horaDoClique(0.5, eixo, 30), "13:00");
+  assert.equal(AG.horaDoClique(0.32, eixo, 30), "11:00");        // 11:12 → arredonda PARA BAIXO ao passo
+  assert.equal(AG.horaDoClique(0, eixo, 30), "08:00");
+  assert.equal(AG.horaDoClique(1, eixo, 30), "17:30");           // a borda de baixo não vira 18:00
+  assert.equal(AG.horaDoClique(0.5, eixo, 60), "13:00");
+  assert.equal(AG.horaDoClique(0.54, eixo, 15), "13:15");   // 13:24 → 13:15
+  assert.equal(AG.horaDoClique(0.55, eixo, 15), "13:30");
+});
+
 /* ============================================================ (b) estáticos */
 console.log("\n(b) estáticos dos arquivos do CRM");
-const ARQS_JS = ["crm.js", "crm-kanban.js", "crm-listas.js", "crm-negocio.js", "crm-tarefas.js", "crm-importar.js", "crm-config.js", "crm-logica.js"];
+const ARQS_JS = ["crm.js", "crm-kanban.js", "crm-listas.js", "crm-negocio.js", "crm-tarefas.js", "crm-importar.js", "crm-config.js", "crm-logica.js", "agenda.js", "agenda-config.js"];
 const existentes = ARQS_JS.filter(f => existsSync(join(APP, f)));
 
 await teste("arquivos do CRM existem e passam em node --check", () => {
@@ -503,6 +616,20 @@ await teste("kanban no toque (M23): touchmove não passivo, sem snap ao arrastar
   assert.ok(/class:\s*"kb-fita"/.test(js) && /class:\s*"crm-fab"/.test(js) && /crm-resumo/.test(js), "fita de etapas, totais numa linha e botão flutuante");
   assert.ok(/\.kb-zonas\s*\{[^}]*animation-name:\s*zonasEntramM/.test(css), "zonas Ganhou/Perdeu valem no celular");
   assert.ok(!/\.kb-zonas\s*\{\s*display:\s*none/.test(css), "zonas não somem mais no celular");
+});
+
+await teste("agenda.css (M26): só tokens, paleta --pal-*, hachura do bloqueio, altura da hora pela tela, celular sem Dia/Semana", () => {
+  const css = ler("agenda.css");
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(css.replace(/:root\s*\{[^}]*\}/g, "")), "hex fora de :root");
+  assert.ok(!/\brgba?\(/.test(css), "rgb/rgba fixo");
+  assert.ok(!/(^|[\s(,])1fr/.test(css.replace(/minmax\(0,\s*1fr\)/g, "")), "1fr solto (use minmax(0,1fr))");
+  assert.ok(!/ease-in(?!-out)/.test(css), "ease-in");
+  assert.ok(/--h-hora:\s*clamp\(/.test(css), "a altura da hora acompanha a tela");
+  assert.ok(/repeating-linear-gradient\(135deg/.test(css), "bloqueio hachurado");
+  assert.ok(/\.ag-item\s*\{[\s\S]*?height:\s*calc\(var\(--d\) \* var\(--h-hora\)\)/.test(css), "altura do bloco = duração × altura da hora");
+  assert.ok(/--pal-\$\{cor\}/.test(ler("agenda.js")), "cor do bloco pelo token da paleta");
+  assert.ok(!/\.agenda-dia\b|agenda-consulta\b/.test(css), "os cartões de dia antigos saíram");
+  assert.ok(/\.agenda-abas \{ display: none; \}/.test(css), "celular: sem Dia/Semana (a visão é o dia com a faixa da semana)");
 });
 
 console.log(`\n${ok} ok, ${falhas} falha(s)`);

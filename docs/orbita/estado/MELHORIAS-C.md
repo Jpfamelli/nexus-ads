@@ -32,3 +32,22 @@ Arquivos que esta frente edita: `web/app/crm.js`, `crm-*.js`, `agenda.js`, `agen
   `Abra um cartão e escolha ‘Mover para…’`. O texto mudou de propósito (era o problema do plano): no toque agora é «Segure um cartão e arraste até aqui» e a
   alternativa é o botão ⋮ do cartão. A asserção deve passar a conferir `Segure um cartão e arraste até aqui` (a linha seguinte, `(pointer: coarse)`, continua valendo).
 - Risco 11 do plano: só emulação de toque; falta provar em aparelho real antes de publicar (Android e iPhone).
+
+## M26 · Agenda como grade de horário — FEITO
+
+- `agenda.js` + `agenda.css` reescritos. Eixo de horas (o expediente dos dias mostrados vindo de `config.horario`, ou 08–18 sem configuração; estica para caber
+  qualquer consulta; mínimo 4 h), colunas por dia (semana de segunda a domingo) ou por responsável (Dia com 2+ pessoas, com «Juntos | Por responsável»),
+  blocos com altura = duração (`posicaoNoDia`) e cor = procedimento (`--pal-N` por hash do nome, sempre a mesma), consultas no mesmo horário LADO A LADO
+  (`colocarEmFaixas`), bloqueios hachurados (inclusive o de dia inteiro), horário fechado sombreado (fora do expediente e almoço), linha de «agora» no acento
+  (atualiza a cada minuto), toque/clique no vazio abre «Marcar consulta» já no dia e perto do horário (arredonda ao passo da agenda; avisa se já passou ou se
+  está fora do atendimento), «+» no cabeçalho de cada dia, clique no bloco abre o detalhe (quem, quando, origem; Abrir negócio · Remarcar · Desmarcar).
+- Celular (≤ 760 px): faixa de dias rolável (com a contagem de consultas), o dia com régua de horas (64 px por hora), dia livre vira a linha de 40 px
+  «Livre · Marcar», título e «Marcar consulta» na mesma linha, sem Dia/Semana. Troca de dia dentro da semana não pede nada ao servidor.
+- Dados: `nx_agenda_dia` como antes (sem RPC nova; usa `config.horario`, `intervalos`, `passo_min` quando vêm).
+- Verificado (puppeteer): 1440×900 a semana 08–18 h cabe sem rolar a página (`.vista` termina em 900; o 1 px de `scrollHeight` é o `div.sr-only` do aviso do shell);
+  consulta de 60 min = 55 px e a de 30 min = 28 px; Terça 09:00 com duas consultas lado a lado (78 px cada); sem rolagem horizontal em 390, 768, 1024 e 1440;
+  tema escuro conferido; 0 erros de console. 390: dia livre = 40 px.
+- Testes (`crm.teste.mjs`, seção a2): semana/dia civil/fuso, faixas e janelas fechadas, eixo, posição (60 min = 2 × 30 min), sobreposição lado a lado
+  (duas no mesmo horário, três, cadeia, grupos independentes, bloco dentro de bloco), cor do procedimento, consultas/bloqueios do dia, hora do clique;
+  e o estático de `agenda.css` (só tokens, hachura, altura = duração × hora, celular sem Dia/Semana). `agenda.js`/`agenda-config.js` entram nos estáticos do CRM.
+- Adiado de propósito para o M27: reescrever o modal «Marcar consulta» (hoje só recebe o dia e o horário do clique) e o desfazer.
