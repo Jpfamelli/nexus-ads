@@ -1,9 +1,8 @@
 # Funções publicadas pela tag funcoes-* (uma por linha; ver docs/orbita/DEPLOY-FUNCOES.md).
-# Rodada de 01/10/2026 (correções do backend): todas as 7 carregam o comum.js novo (JSON sem NUL, 400 do banco) e as de
-# drenagem de corpo que ainda só estavam no repositório (nx-ciclo, nx-relatorio, nx-midia).
-# JÁ NO AR (tag funcoes-20261001-3, 01/10 10:45 UTC): nx-ia v4, nx-codewords v5, nx-enviar v6, nx-whatsapp v7, nx-midia v3.
-# PENDENTES: nx-ciclo e nx-relatorio — só depois do relatório mensal das 12:00 UTC de 01/10 (após 12:10 UTC); depois, conferir o ciclo das :07 e o relatório das 8h.
-# NÃO publicar nx-ciclo/nx-relatorio no dia 1º às 12:00 UTC (relatório mensal). A migração 20261001b já está aplicada (01/10 10:40 UTC).
+# Rodada de 01/10/2026 à tarde (R119, tag funcoes-20261001-4): as 7 juntas. nx-enviar leva a reserva do client_ref antes do envio
+# (migração 20261002d, aplicada em 01/10 19:39 UTC); nx-ciclo, nx-relatorio e nx-whatsapp levam o web/nucleo.js novo e as correções
+# do backend que ainda só estavam no repositório (comum.js, drenagem de corpo). Migrações 20261002b/c/d já aplicadas.
+# NÃO publicar nx-ciclo/nx-relatorio no dia 1º perto das 12:00 UTC (relatório mensal). Depois de publicar: conferir o ciclo das :07 e o relatório das 8h.
 nx-ia
 nx-codewords
 nx-enviar
