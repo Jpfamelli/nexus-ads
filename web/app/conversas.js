@@ -770,9 +770,9 @@ const acoes = {
     const textos = { resolvida: "Atendimento resolvido.", aberta: "Atendimento reaberto.", pendente: "Marcado como pendente." };
     // «Reabrir» com o Resolver ainda esperando o Desfazer: o servidor nunca soube do Resolver — basta cancelá-lo (senão ele resolveria de novo ao fechar o aviso)
     const pend = _pendResolver.get(A.selId);
-    if (pend) {
+    if (pend && !pend.firmando) {   // com o Resolver já a caminho do servidor (firmando), o Reabrir segue para o nx_cv_status normal
       const id = A.selId;
-      pend.cancelado = true; _pendResolver.delete(id);
+      pend.cancelado = true; _pendResolver.delete(id); A.resolvendo.delete(id);   // libera o próximo «Resolver» desta conversa
       if (novo === pend.antes.status) {
         trocarConversa({ id, ...pend.antes });
         A.ui.toast(textos[novo], { tipo: "ok" });
@@ -974,6 +974,7 @@ async function resolverComDesfazer() {
   if (A.resolvendo.has(id)) return;
   A.resolvendo.add(id);
   const antes = conv.status;                                 // «aberta» ou «pendente»: é o que o Desfazer devolve
+  const entradaAntes = Date.parse(conv.ultima_entrada_em || "") || 0;   // última mensagem do cliente vista no clique
   const pend = { antes: { status: antes, aguardando: !!conv.aguardando, nao_lidas: Number(conv.nao_lidas) || 0 }, cancelado: false };
   const nome = nomeContato(A.ver.contato || conv.contato) || "Conversa";
   const proxima = A.avancar ? A.L.proximaAposResolver(A.itens, id, { aba: A.aba }) : null;
@@ -1011,6 +1012,21 @@ async function resolverComDesfazer() {
       // o aviso fechou sem Desfazer: agora sim o servidor resolve. Página saindo ou oculta (saindo): keepalive, para o pedido sobreviver ao fechamento
       firmar: async ({ saindo = false } = {}) => {
         if (pend.cancelado) return;
+        if (!saindo) {
+          // o cliente escreveu com o «Desfazer» na tela: não resolve por cima da mensagem nova (com a página saindo não dá tempo de ler)
+          let lido = null;
+          try { lido = await api.rpc("nx_cv_ver", { p_cliente: cliente, p_id: id }); } catch { /* sem a leitura, o Resolver vale */ }
+          if (pend.cancelado) return;
+          const c = lido && lido.conversa;
+          if (c && (Date.parse(c.ultima_entrada_em || "") || 0) > entradaAntes) {
+            pend.cancelado = true;
+            if (_pendResolver.get(id) === pend) _pendResolver.delete(id);
+            if (A) A.ui.toast(`${nome} escreveu de novo: a conversa continua aberta.`, { tipo: "info" });
+            if (naMesmaEmpresa()) { if (A.selId === id) { trocarConversa(c); delta(); recarregarVer(); } else atualizarItemLista(c); carregarLista({}); }
+            return;
+          }
+        }
+        pend.firmando = true;
         let r;
         try { r = await api.rpc("nx_cv_status", { p_cliente: cliente, p_conversa: id, p_status: "resolvida" }, saindo ? { keepalive: true } : {}); }
         catch (e) { if (saindo) voltarTela(); throw e; }     // fora do «saindo» quem devolve a tela é o próprio aviso (chama reverter)
@@ -1255,9 +1271,13 @@ async function reenviarLocal(m) {
 /** «Tentar de novo» de uma falha que o SERVIDOR gravou: pede o reenvio da própria mensagem (ação "reenviar" do nx-enviar). O texto gravado já
     saiu assinado e o servidor não assina de novo — mandar como texto novo repetiria a assinatura. Passa pela fila como qualquer texto. */
 async function reenviarGravada(m) {
-  if (!A || !m || !m.id || !m.corpo || !A.ver || A.reenviadas.has(m.id)) return;
+  if (!A || !m || !m.id || !m.corpo || !A.ver || !A.ver.conversa || A.reenviadas.has(m.id)) return;
   A.reenviadas.add(m.id);                 // o botão da bolha antiga some: um toque só
-  return enviarTexto({ tipo: "texto", texto: m.corpo, reenvio: Number(m.id) });
+  // o servidor reenvia na conversa DA MENSAGEM: falha de um atendimento anterior (já resolvido) vai como texto novo no atendimento aberto
+  const daAberta = m.conversa_id == null || Number(m.conversa_id) === Number(A.ver.conversa.id);
+  if (daAberta) return enviarTexto({ tipo: "texto", texto: m.corpo, reenvio: Number(m.id) });
+  // texto novo: tira a assinatura «*Nome:*» que o servidor já tinha gravado, para não sair assinada duas vezes
+  return enviarTexto({ tipo: "texto", texto: String(m.corpo).replace(/^\*[^*\n]+:\*\n/, ""), reenvio: null });
 }
 
 /* ============================================================ fila de saída (M36)
@@ -1279,7 +1299,12 @@ function abrirFila() {
     let r;
     try { r = indexedDB.open(DB_FILA, 1); } catch (e) { return no(e); }
     r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains(ST_FILA)) r.result.createObjectStore(ST_FILA, { keyPath: "id" }); };
-    r.onsuccess = () => ok(r.result);
+    r.onsuccess = () => {
+      const db = r.result;
+      // o shell apaga este banco no Sair (deleteDatabase): sem fechar aqui o pedido fica bloqueado e todo open() seguinte espera atrás dele
+      db.onversionchange = () => { try { db.close(); } catch { /* ok */ } };
+      ok(db);
+    };
     r.onerror = () => no(r.error);
     r.onblocked = () => no(new Error("fila_bloqueada"));
   });

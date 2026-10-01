@@ -714,7 +714,9 @@ export function aposFalhaFila(item, c, { agora = Date.now(), jitter = 0, textoEr
   }
   if (c && c.tipo === "sessao") return { fim: false, campos: { estado: "fila", motivo: c.motivo, enviada_em: 0, tentativas: tent + 1, proxima_em: agora + 15000 } };
   if (c && c.tipo === "rede") {
-    return { fim: false, campos: { estado: c.subtipo === "em_voo" ? "incerto" : "fila", motivo: c.motivo, tentativas: tent + 1, proxima_em: proximaTentativaFila(tent, agora, jitter) } };
+    // «sem conexão»: o pedido nem saiu (e, se saiu, a reserva do client_ref no servidor responde «em andamento» ou devolve a gravada): sem trava de 90 s
+    return { fim: false, campos: { estado: c.subtipo === "em_voo" ? "incerto" : "fila", motivo: c.motivo, tentativas: tent + 1, proxima_em: proximaTentativaFila(tent, agora, jitter),
+      ...(c.subtipo === "sem_conexao" ? { enviada_em: 0 } : {}) } };
   }
   if (c && c.ambigua) return { fim: true, campos: { estado: "ambigua", motivo: c.motivo || "Pode ter saído — confira no WhatsApp antes de reenviar." } };
   return { fim: true, campos: { estado: "falhou", motivo: (c && c.motivo) || textoErro || "A mensagem não foi enviada." } };

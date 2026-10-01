@@ -739,7 +739,7 @@ await teste("R119 fila: aposFalhaFila — 409 «em andamento» não é falha (20
   assert.equal("enviada_em" in p.campos, false, "prazo estourado: a hora do pedido fica (os 90 s valem)");
   assert.deepEqual(L.filaDevidos([{ ...item, ...p.campos }], T + 80001).map(i => i.id), [], "backoff de 80 s vencido, mas ainda dentro dos 90 s do pedido");
   p = L.aposFalhaFila(item, L.classificarFalhaEnvio(e("sem_conexao")), { agora: T });
-  assert.equal(p.campos.estado, "fila"); assert.equal("enviada_em" in p.campos, false, "«sem conexão» não garante que o pedido não chegou");
+  assert.equal(p.campos.estado, "fila"); assert.equal(p.campos.enviada_em, 0, "«sem conexão»: sai assim que a internet volta (a reserva do client_ref no servidor impede o envio em dobro)");
   p = L.aposFalhaFila(item, L.classificarFalhaEnvio(e("sessao_invalida", { status: 401 })), { agora: T });
   assert.deepEqual([p.fim, p.campos.estado, p.campos.enviada_em, p.campos.proxima_em], [false, "fila", 0, T + 15000]);
   // 502 ambíguo sem mensagem gravada: fica na tela com o aviso e NUNCA sai sozinha
@@ -833,7 +833,10 @@ await teste("R119: «Tentar de novo» de falha gravada pelo servidor pede o reen
   assert.match(srv, /const id = Number\(corpo\.mensagem\);/);
   assert.match(srv, /assinar: false/);
   assert.match(conv, /\{ acao: "reenviar", mensagem: it\.reenvio, client_ref: it\.id \}/);
-  assert.match(conv, /A\.reenviadas\.add\(m\.id\);[^\n]*\n\s*return enviarTexto\(\{ tipo: "texto", texto: m\.corpo, reenvio: Number\(m\.id\) \}\);/);
+  assert.match(conv, /A\.reenviadas\.add\(m\.id\);/);
+  assert.match(conv, /if \(daAberta\) return enviarTexto\(\{ tipo: "texto", texto: m\.corpo, reenvio: Number\(m\.id\) \}\);/, "falha da conversa aberta: reenvio da própria mensagem");
+  assert.match(conv, /const daAberta = m\.conversa_id == null \|\| Number\(m\.conversa_id\) === Number\(A\.ver\.conversa\.id\);/, "falha de atendimento anterior não usa o reenvio (o servidor recusaria: atendimento resolvido)");
+  assert.match(conv, /replace\(\/\^\\\*\[\^\*\\n\]\+:\\\*\\n\/, ""\), reenvio: null \}\);/, "texto novo sai sem a assinatura já gravada");
   assert.match(chat, /m\.tipo === "texto" && m\.corpo && !A\.acoes\.foiReenviada\(m\)\) \{[\s\S]{0,260}A\.acoes\.reenviarGravada\(m\)/);
   assert.doesNotMatch(chat, /A\.acoes\.enviar\(\{ tipo: "texto", texto: m\.corpo \}\)/, "o texto já assinado não volta como mensagem nova");
 });
@@ -1289,7 +1292,11 @@ assert.match(f, /const antes = conv\.status;/);
   assert.match(f, /reverter: voltarTela,/);
   assert.match(cv, /const _pendResolver = new Map\(\);/, "o Resolver pendente sobrevive a sair de Conversas e voltar");
   assert.match(cv, /A\.itens = itensComPendencia\(mais \?/, "o pulso não desfaz na tela o Resolver que ainda espera o Desfazer");
-  assert.match(cv, /const pend = _pendResolver\.get\(A\.selId\);\s*if \(pend\) \{[\s\S]{0,120}pend\.cancelado = true; _pendResolver\.delete\(id\);/, "«Reabrir» durante o Desfazer cancela o Resolver pendente");
+  assert.match(cv, /const pend = _pendResolver\.get\(A\.selId\);\s*if \(pend && !pend\.firmando\) \{[\s\S]{0,220}pend\.cancelado = true; _pendResolver\.delete\(id\); A\.resolvendo\.delete\(id\);/, "«Reabrir» durante o Desfazer cancela o Resolver pendente e libera o próximo Resolver");
+  assert.match(cv, /const entradaAntes = Date\.parse\(conv\.ultima_entrada_em \|\| ""\) \|\| 0;/, "o Resolver guarda a última mensagem do cliente vista no clique");
+  assert.match(cv, /if \(c && \(Date\.parse\(c\.ultima_entrada_em \|\| ""\) \|\| 0\) > entradaAntes\) \{/, "cliente escreveu durante o aviso: não resolve por cima");
+  assert.match(cv, /pend\.firmando = true;/);
+  assert.match(cv, /db\.onversionchange = \(\) => \{ try \{ db\.close\(\); \}/, "o Sair consegue apagar a fila (a conexão se fecha)");
   assert.match(f, /const proxima = A\.avancar \? A\.L\.proximaAposResolver\(A\.itens, id, \{ aba: A\.aba \}\) : null;/, "sem a preferência a conversa fica aberta, como sempre foi");
   assert.match(f, /if \(proxima\) \{ A\.focoAoAbrir = "composer"; A\.ctx\.navegar\(`#\/conversas\/\$\{proxima\.id\}`\); \}\s*else \{ A\.focoAoAbrir = "lista"; A\.ctx\.navegar\("#\/conversas"\); \}/, "sem próxima, volta ao painel da fila");
   assert.match(f, /if \(avancou && aindaNaProxima\) \{ A\.focoAoAbrir = "composer"; abrir\(id\); \}/, "Desfazer reabre a resolvida se a próxima abriu sozinha e a pessoa ainda está nela");

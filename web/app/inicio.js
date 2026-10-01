@@ -103,8 +103,8 @@ export async function montar(ctx) {
       // 1ª abertura: pinta o último dado guardado (se o shell tiver cache) e confere na rede em seguida
       const aoCache = dados => { if (minha === montagem && !desenhou && dados && typeof dados === "object") { desenhou = true; desenhar(dados, null, false); } };
       const [d, agenda, onb] = await Promise.all([ctx.api.rpcC("nx_inicio", {}, { cache: true, aoCache }), buscarAgenda(), buscarOnboarding(forcar || primeira)]);
+      if (minha !== montagem) return;          // resposta de uma montagem antiga (outra empresa ou conta): não toca no estado guardado
       ultimoOnb = onb; ultimaAgenda = agenda;
-      if (minha !== montagem) return;
       ultimaCarga = Date.now();
       quando.textContent = `Atualizado às ${L.horaSP(new Date())}`;
       const js = JSON.stringify({ ...d, agora: null, agenda: agenda && agenda.consultas ? agenda.consultas.length : null, onb: onb ? onb.itens.map(i => i.feito) : null });
