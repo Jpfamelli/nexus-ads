@@ -14,6 +14,7 @@ Testes da frente: `node testes/shell.teste.mjs` (registrado em `testes/rodar-tud
 | M15 leituras que insistem, escritas que não duplicam, boot | feito | ver `git log --grep "M15"` |
 | M17 sessão que não derruba o trabalho + rascunhos | feito (migração só no repositório; smoke 16 rodado no PGlite local) | ver `git log --grep "M17"` |
 | M16 telas que abrem com o último dado (cache.js) | feito | ver `git log --grep "M16"` |
+| M21 ícones que dizem a coisa certa | feito | ver `git log --grep "M21"` |
 
 ## M11 · Abrir em ~1,5 s em vez de ~3,5 s
 
@@ -160,6 +161,20 @@ Reaberto SEM internet: shell + sessão + Início vêm do aparelho, faixa «Sem c
 - `node testes/shell.teste.mjs` (9 testes de M16: lista negra/branca, chave, TTL, redutor de conversas, `limpar()` no logout, `api.js` com cache de mentira, app.js).
 - IndexedDB real: no Chrome, `await import("./cache.js?v=…")` + `api.js` com `cache` → 2ª chamada devolve `aoCache` antes da rede (conferido nesta rodada).
 
+## M21 · Ícones que dizem a coisa certa
+
+**Feito**
+- `index.html` (sprite): `i-anuncio` deixou de ser um alto-falante e virou **megafone** (cone que alarga, cabo e ondas) — aparece no menu, nos selos de origem e nas listas; novos `i-dente`, `i-chave`, `i-sacola`
+  (CRM por vertical) e `i-meta`, `i-google` (monocromáticos, só `currentColor`, para C e D usarem nos selos de origem/campanha).
+- **Achado:** seis ícones que as telas de Conversas já pediam NÃO existiam no sprite (apareciam em branco): `i-reabrir`, `i-transferir`, `i-lateral`, `i-baixar`, `i-modelo`, `i-responder`. Foram desenhados no mesmo estilo (24×24, traço).
+- `vocab.js`: `ICONE_CRM` e `v.icone_crm` por vertical (odonto = dente, oficina = chave, loja = sacola, genérico = funil); `app.js` troca só o ícone do item CRM do menu e da barra inferior (o seletor «Seus produtos» continua com o funil: ali é o produto, não a vertical).
+- `scripts/dev-falso.mjs`: `/__dev_falso/simular/vertical?v=oficina|loja|generico|odonto` para ver o menu em cada vertical.
+
+**Como verificar**: `node testes/shell.teste.mjs` (3 testes: todo ícone usado no código existe no sprite — a regra pega qualquer `ui.icone("x")`/`icone: "x"`/`#i-x` novo sem símbolo; megafone e marcas sem cor fixa; vocab × menu).
+Capturas conferidas no Chrome (menu lateral a 1440 e barra inferior a 390, nas 4 verticais): dente em Pacientes, chave em Orçamentos, sacola em Vendas, funil no genérico, megafone em Anúncios.
+
+**Para a frente A (app.css):** o plano pede traço de 1,6 e 22 px na barra inferior; hoje `.ic` tem `stroke-width: 1.7` e 18 px (arquivo da A). Os símbolos novos foram feitos para o traço atual.
+
 ## Pendências para outras frentes
 
 - **C e D (M14):** o navegador guarda a falha de `import()` por URL. Se um módulo seu importa dependências com `import()` direto e a rede cair no meio, o cartão de erro precisa de recarga (o shell já faz isso quando a mensagem é de import). Para tentar de novo SEM recarregar, repetir com `&r=<n>` depois do `?v=` (a regra de `?v=` dos testes aceita).
@@ -169,3 +184,5 @@ Reaberto SEM internet: shell + sessão + Início vêm do aparelho, faixa «Sem c
 - **D (M36):** a janela de sessão expirada espera as LEITURAS e repete com o token novo; escritas falham na hora (o erro tem `codigo: "sessao_invalida"`): mostre «não enviada · tentar de novo» em vez de descartar o texto.
 - **Integração/publicação:** aplicar `supabase/migrations/20261002b_sessao_pulso_push.sql` só com o ok do dono (ensaio em begin … rollback pelo MCP com `supabase/testes/16_sessao_pulso_push.sql` antes); ela vem ANTES de 20261002c/d na ordem de nome.
 - **C e D (M16):** quem usa `{cache: true, aoCache}` precisa tratar `e.comCache` (rede falhou DEPOIS de pintar do cache): mantenha a tela e mostre só um aviso (a mensagem do erro já é "Sem internet. Mostrando o que já tinha."), não troque por cartão de erro. A frente D já faz isso no Início; confira CRM (kanban, `nx_crm_base`, agenda) e a 1ª página de `nx_cv_listar`. Só estas RPCs ficam no aparelho (`CACHEAVEIS` em `web/app/cache.js`): se uma tela precisar de outra, peça a inclusão a B (não vale pôr nome com config/admin/mensagens/usuários).
+- **A (M21):** `app.css` `.ic` está com `stroke-width: 1.7` e 18 px; o plano pede 1,6 e 22 px na barra inferior (`.barra-b .ic`). Os símbolos novos funcionam nos dois.
+- **C e D (M21):** `i-meta` e `i-google` estão no sprite (use `ui.icone("meta")`/`ui.icone("google")` nos selos de origem). Qualquer ícone novo precisa de um `<symbol id="i-…">` em `web/app/index.html` (arquivo de B): o teste `todo ícone usado no código existe no sprite` falha se faltar.

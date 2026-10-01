@@ -166,7 +166,7 @@ function sessao(token = "") {
   const outra = String(token).includes("outra");
   return { conta: { id: outra ? ID.ana : ID.eu, nome: outra ? "Ana Paula" : "Dra. Helena", email: "demo@example.test", papel: "gestor", super: true, telefone: null },
     org: { id: ID.org, nome: "Nexus", slug: "nexus", marca: { produto: "Órbita", cores: { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" } }, img_hash: "dev-falso" },
-    super: true, link_base_padrao: null, modulos_plano: {}, clientes: [{ id: ID.cliente, slug: "sorriso-vivo", nome: "Clínica Sorriso Vivo", plano: "completo", status: "teste", vertical: "odonto", papel: "admin", proprio: true,
+    super: true, link_base_padrao: null, modulos_plano: {}, clientes: [{ id: ID.cliente, slug: "sorriso-vivo", nome: "Clínica Sorriso Vivo", plano: "completo", status: "teste", vertical: dev.vertical || "odonto", papel: "admin", proprio: true,
       modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"], teste_ate: somaDia(hoje, 14), tem_tema: false, cfg: {} }] };
 }
 const marcaPublica = { org: { id: ID.org, nome: "Nexus", slug: "nexus" }, marca: { produto: "Órbita", cores: { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" }, login_titulo: "Seu atendimento em movimento", login_texto: "Entre para acompanhar conversas, pacientes e campanhas.", suporte_wa: "5500000000000" } };
@@ -674,6 +674,7 @@ function simular(acao, q) {
     case "mensagem": return { ok: true, mensagem: simularEntrada(q.get("conversa") || 901, q.get("texto")) };
     case "onboarding": onboardingDefinir(q.get("modo") || "parcial"); return { ok: true, estado: onboardingEstado() };
     case "versao": dev.versao = q.get("v") || null; return { ok: true, versao: dev.versao };
+    case "vertical": dev.vertical = ["odonto", "oficina", "loja", "generico"].includes(q.get("v")) ? q.get("v") : null; return { ok: true, vertical: dev.vertical };
     case "zerar": dev.chamadas = {}; dev.falhas = []; dev.enviosExternos = 0; dev.reqs.clear(); dev.refs.clear(); return { ok: true };
     default: return { ok: false, erro: "acao_desconhecida" };
   }

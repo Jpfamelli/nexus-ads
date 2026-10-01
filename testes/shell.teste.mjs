@@ -1183,6 +1183,52 @@ await teste("app.js (M16): sessão guardada pinta o shell e a rede revalida; sel
   assert.equal(ROTAS_MOD.esqueletoDaRota("crm", []), "kanban"); assert.equal(ROTAS_MOD.esqueletoDaRota("crm", ["negocio", "9"]), "lista"); assert.equal(ROTAS_MOD.esqueletoDaRota("conversas", ["901"]), "chat");
 });
 
+/* ============================================================ M21 */
+secao("M21 · ícones que dizem a coisa certa");
+
+const VOC = await imp("vocab.js");
+const sprite = new Set([...HTML.matchAll(/<symbol id="i-([a-z0-9-]+)"/g)].map(m => m[1]));
+
+/** Nomes de ícone usados nos .js do app (literais; os dinâmicos são cobertos pelos mapas que o teste confere à parte). */
+function iconesUsados() {
+  const usos = new Map();
+  for (const f of readdirSyncApp().filter(x => x.endsWith(".js"))) {
+    const t = ler(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").replace(/\s\/\/ .*$/gm, "");
+    const nomes = new Set();
+    for (const m of t.matchAll(/\bicone\(\s*["']([a-z0-9-]+)["']/g)) nomes.add(m[1]);
+    for (const m of t.matchAll(/\bicone:\s*["']([a-z0-9-]+)["']/g)) nomes.add(m[1]);
+    for (const m of t.matchAll(/\bicone\([^()]*\?\s*["']([a-z0-9-]+)["']\s*:\s*(?:[^()]*?\?\s*["']([a-z0-9-]+)["']\s*:\s*)?["']([a-z0-9-]+)["']/g)) for (const n of [m[1], m[2], m[3]]) if (n) nomes.add(n);
+    for (const m of t.matchAll(/["']#i-([a-z0-9-]+)["']/g)) nomes.add(m[1]);
+    for (const n of nomes) { if (!usos.has(n)) usos.set(n, new Set()); usos.get(n).add(f); }
+  }
+  return usos;
+}
+
+await teste("todo ícone usado no código (ui.icone, icone: «…», #i-…) existe no sprite do index.html", () => {
+  const faltam = [...iconesUsados()].filter(([n]) => !sprite.has(n)).map(([n, fs_]) => `i-${n} ← ${[...fs_].join(", ")}`);
+  assert.deepEqual(faltam, [], `símbolos que as telas pedem e o sprite não tem (peça a B para acrescentar em web/app/index.html): ${faltam.join(" | ")}`);
+  assert.ok(sprite.size >= 60, `sprite com ${sprite.size} símbolos`);
+});
+
+await teste("i-anuncio deixa de ser um alto-falante (megafone); Meta e Google são símbolos monocromáticos em currentColor; ícones novos sem cor fixa", () => {
+  assert.ok(!HTML.includes('M3.5 10.5v3a1 1 0 0 0 1 1h2l5 4v-13l-5 4h-2a1 1 0 0 0-1 1z'), "o desenho do alto-falante saiu de i-anuncio");
+  const simbolo = id => (new RegExp(`<symbol id="${id}"[^>]*>([\\s\\S]*?)</symbol>`).exec(HTML) || [])[1];
+  assert.match(simbolo("i-anuncio"), /M3\.5 10v4l11 5V5z/, "megafone: cone alargando para a boca + cabo + ondas");
+  for (const id of ["i-meta", "i-google", "i-dente", "i-chave", "i-sacola", "i-reabrir", "i-transferir", "i-lateral", "i-baixar", "i-modelo", "i-responder", "i-anuncio"]) {
+    const s = simbolo(id);
+    assert.ok(s, `${id} existe`);
+    assert.doesNotMatch(s, /#[0-9a-fA-F]{3,8}\b|fill="(?!none)|stroke="(?!none)|style=/, `${id} não traz cor fixa: herda currentColor do CSS (.ic)`);
+  }
+});
+
+await teste("vocab.js: o CRM ganha ícone por vertical (odonto dente, oficina chave, loja sacola, genérico funil) e o menu usa", () => {
+  assert.deepEqual(VOC.ICONE_CRM, { odonto: "dente", oficina: "chave", loja: "sacola", generico: "funil" });
+  for (const [vert, ic] of Object.entries(VOC.ICONE_CRM)) { assert.equal(VOC.vocab(vert).icone_crm, ic, vert); assert.ok(sprite.has(ic), `i-${ic} no sprite`); }
+  assert.equal(VOC.vocab("xpto").icone_crm, "funil", "vertical desconhecida = genérico");
+  assert.match(APP_JS, /icone: it\.id === "crm" \? v\.icone_crm : it\.icone/, "app.js troca só o ícone do CRM");
+  for (const it of ROTAS_MOD.MENU) assert.ok(sprite.has(it.icone), `menu: i-${it.icone} no sprite`);
+});
+
 /* ============================================================ fim */
 console.log(`\n${ok} ok · ${falhas} falha${falhas === 1 ? "" : "s"}`);
 if (falhas) process.exitCode = 1;

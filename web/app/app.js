@@ -1143,7 +1143,7 @@ function itensVisiveis() {
     if (it.id === "config") { itens.push(it); continue; }
     const acesso = rotas.acessoRota(it.id, op);
     const emConstrucao = devLigado() && !E.prontos.MODULOS_PRONTOS.includes(rotas.ROTAS[it.id].pronto);
-    if (acesso === "ok") itens.push({ ...it, rotulo: it.rotulo.replace(/\{(\w+)\}/g, (_, k) => v[k] || k), emConstrucao });
+    if (acesso === "ok") itens.push({ ...it, rotulo: it.rotulo.replace(/\{(\w+)\}/g, (_, k) => v[k] || k), icone: it.id === "crm" ? v.icone_crm : it.icone, emConstrucao });
   }
   return rotas.itensDoProduto(E.workspace, itens);
 }
