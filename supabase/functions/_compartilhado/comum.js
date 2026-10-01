@@ -27,6 +27,14 @@ export function somaDias(iso, n) {
 
 export const soDigitos = v => String(v ?? "").replace(/\D/g, "");
 
+/** 16 hex aleatórios por chamada: o texto de terceiros (conversa, cadastro, pedido) fica entre essas marcas
+    no prompt — é DADO, nunca instrução — e nenhuma marca igual pode aparecer dentro dele. */
+export function novoDelimitador() {
+  const b = new Uint8Array(8);
+  crypto.getRandomValues(b);
+  return Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+}
+
 /** Comparação em tempo constante (não para no primeiro byte diferente). */
 export function iguaisSeguro(a, b) {
   const x = new TextEncoder().encode(String(a ?? "")), y = new TextEncoder().encode(String(b ?? ""));
@@ -50,6 +58,8 @@ export function limparErro(msg) {
     .replace(/(^|[^\w/])1\/\/[\w-]{16,}/g, (_, antes) => `${antes}1//***`)   // refresh token do Google
     .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "eyJ***")     // JWT (chave service_role antiga)
     .replace(/\bsb_secret_[\w-]+/g, "sb_secret_***")
+    .replace(/\bsk-ant-[\w-]{4,}/g, "sk-ant-***")                  // chave da Anthropic (inclusive a copiada num erro)
+    .replace(/(x-api-key["']?\s*[=:]\s*["']?)[^&\s)"',]+/gi, "$1***")
     .replace(/\bcw(?:k|otk)-[A-Za-z0-9_-]{4,}/g, "cwk-***")   // chave do CodeWords
     .replace(/([?&]ch=)[0-9a-f]{8,}/gi, "$1***")              // segredo da URL do canal CodeWords
     .replace(/\s+/g, " ")
