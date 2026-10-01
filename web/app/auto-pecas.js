@@ -67,6 +67,23 @@ export function pecas(ui, L) {
     return b;
   }
 
+  /** Grupo de «rádios» (chips): setas, Home e End movem a escolha, como num radiogroup nativo. */
+  function setas(grupo) {
+    grupo.addEventListener("keydown", ev => {
+      const bs = [...grupo.querySelectorAll("[role=radio]:not(:disabled)")];
+      const i = bs.indexOf(document.activeElement);
+      if (i < 0) return;
+      let j = null;
+      if (ev.key === "ArrowRight" || ev.key === "ArrowDown") j = (i + 1) % bs.length;
+      else if (ev.key === "ArrowLeft" || ev.key === "ArrowUp") j = (i - 1 + bs.length) % bs.length;
+      else if (ev.key === "Home") j = 0;
+      else if (ev.key === "End") j = bs.length - 1;
+      if (j === null) return;
+      ev.preventDefault(); bs[j].focus(); bs[j].click();
+    });
+    return grupo;
+  }
+
   /** Dias da semana: sete chips + atalhos («Dias úteis»…). valor = [0..6]; aoMudar(novoArray). */
   function campoDias({ rotulo, valor, aoMudar, desabilitado, ajuda }) {
     let sel = L.normalizarDias(valor);
@@ -139,6 +156,7 @@ export function pecas(ui, L) {
       num.querySelector("input").focus();
     } });
     grupo.appendChild(btOutro);
+    setas(grupo);
     const lerOutro = () => { const m = L.comporDuracao(num.querySelector("input").value, un.querySelector("select").value); define(m); };
     num.querySelector("input").addEventListener("input", lerOutro);
     un.querySelector("select").addEventListener("change", lerOutro);
@@ -160,6 +178,7 @@ export function pecas(ui, L) {
       b.addEventListener("click", () => { if (b.disabled) return; marcar(o.valor); aoMudar(o.valor); });
       bts.push([o.valor, b]); grupo.appendChild(b);
     }
+    setas(grupo);
     return h("div", { class: "campo au-campo-esc" }, h("span", { class: "campo-rot", id }, rotulo), grupo);
   }
 
@@ -186,5 +205,5 @@ export function pecas(ui, L) {
     }
   }
 
-  return { interruptor, seletor, entrada, chip, campoDias, campoDuracao, escolhaCartoes, opcoesBase, novoId };
+  return { interruptor, seletor, entrada, chip, setas, campoDias, campoDuracao, escolhaCartoes, opcoesBase, novoId };
 }

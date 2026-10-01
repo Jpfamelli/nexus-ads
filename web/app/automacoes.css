@@ -65,6 +65,7 @@
 .au-item-gat { font-family: var(--f-corpo); letter-spacing: 0; }
 .au-item-gat .ic { width: 14px; height: 14px; }
 .au-com-erro { color: var(--c-ruim); }
+.au-item-espera { color: var(--c-info); }
 .au-item-mais { align-self: start; }
 
 /* ---------------------------------------------------------------- modelos prontos */
@@ -137,7 +138,11 @@
 .au-rodape-movel { display: none; }
 
 .au-ed-grade { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 21rem); gap: 1.4rem; align-items: start; }
-.au-lado { position: sticky; top: calc(var(--topo) + 8.5rem); display: flex; flex-direction: column; gap: .9rem; }
+.au-lado {
+  position: sticky; top: calc(var(--topo) + 8.5rem); display: flex; flex-direction: column; gap: .9rem;
+  /* em telas baixas o resumo + teste + variáveis rolam dentro da coluna em vez de ficarem cortados */
+  max-height: calc(100vh - var(--topo) - 9.5rem); overflow-y: auto; overscroll-behavior: contain; padding-bottom: .2rem;
+}
 
 /* ---------------------------------------------------------------- fluxo (espinha Quando → Se → Então) */
 .au-fluxo { position: relative; display: flex; flex-direction: column; gap: 1.1rem; min-width: 0; }
@@ -316,7 +321,7 @@
 /* ================================================================ telas menores */
 @media (max-width: 1080px) {
   .au-ed-grade { grid-template-columns: minmax(0, 1fr); }
-  .au-lado { position: static; }
+  .au-lado { position: static; max-height: none; overflow: visible; }
 }
 @media (max-width: 900px) {
   .au-sis { grid-template-columns: minmax(0, 1fr); }

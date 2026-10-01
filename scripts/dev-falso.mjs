@@ -344,7 +344,7 @@ function rpc(nome, p = {}) {
       itens: [
         { id: "auto-lembrete", nome: "Lembrete 24 h antes da consulta", gatilho: "antes_da_data", ativo: false, execucoes: 11, erros: 0, ultima_execucao_em: null, condicoes: [],
           acoes: [{ tipo: "enviar_mensagem", texto: "Olá, {primeiro_nome}! Lembrando da sua consulta amanhã, {data_consulta}, às {hora_consulta}." }], config: { campo: "consulta", horas: 24 } },
-        { id: "auto-followup", nome: "Acompanhar orçamento sem resposta", gatilho: "negocio_estagio", ativo: true, execucoes: 7, erros: 1, ultima_execucao_em: isoAgora(), respeitar_horario: true,
+        { id: "auto-followup", nome: "Acompanhar orçamento sem resposta", gatilho: "negocio_estagio", ativo: true, execucoes: 7, erros: 1, em_espera: 3, ultima_execucao_em: isoAgora(), respeitar_horario: true,
           config: { estagio_id: "s3" }, condicoes: [],
           acoes: [{ tipo: "esperar", minutos: 1440, cancelar_se_cliente_responder: true }, { tipo: "enviar_mensagem", texto: "Oi, {primeiro_nome}! Ficou alguma dúvida sobre o orçamento?" },
             { tipo: "esperar", minutos: 2880, cancelar_se_cliente_responder: true }, { tipo: "criar_tarefa", titulo: "Ligar para {primeiro_nome}", tipo_tarefa: "ligacao", vence_em_horas: 0, dono: "responsavel" }] },

@@ -926,7 +926,7 @@ test("erroDaIA: cota, chave, IA desligada, pedidos, rede e formato inválido →
   const k = L.erroDaIA({ codigo: "ia_indisponivel", detalhe: "sem_chave", detalhe_texto: "sem_chave" });
   assert.equal(k.tipo, "chave");
   assert.match(k.texto, /chave da Anthropic/);
-  assert.match(k.texto, /Assistente de IA/);
+  assert.match(k.texto, /equipe da Nexus/);
   assert.equal(L.erroDaIA({ codigo: "ia_indisponivel", detalhe_texto: "sem_sdk" }).tipo, "indisponivel");
   assert.equal(L.erroDaIA({ codigo: "ia_desligada" }).tipo, "desligada");
   assert.equal(L.erroDaIA({ codigo: "muitos_pedidos" }).tipo, "pedidos");
@@ -934,6 +934,15 @@ test("erroDaIA: cota, chave, IA desligada, pedidos, rede e formato inválido →
   assert.equal(L.erroDaIA({ codigo: "tempo_rede" }).tipo, "rede");
   assert.equal(L.erroDaIA({ codigo: "ia_resposta_invalida" }).tipo, "indisponivel");
   assert.match(L.erroDaIA({ codigo: "automacao_invalida", hint: "ação 2: escolha a etapa" }).texto, /ação 2: escolha a etapa/);
+  // o nx-ia manda o motivo em .detalhe e uma mensagem pronta em português em .resposta.mensagem
+  const conf = L.erroDaIA({ codigo: "automacao_invalida", detalhe_texto: "ação 2: escolha a etapa", detalhe: "ação 2: escolha a etapa", resposta: { mensagem: "A IA montou uma automação que não passou na conferência (ação 2: escolha a etapa)." } });
+  assert.equal(conf.tipo, "invalida");
+  assert.match(conf.texto, /não passou na conferência/);
+  assert.match(L.erroDaIA({ codigo: "automacao_invalida", detalhe_texto: "ação 2: escolha a etapa" }).texto, /Problema: ação 2: escolha a etapa/);
+  assert.equal(L.erroDaIA({ codigo: "ia_indisponivel", detalhe_texto: "recusa", resposta: { mensagem: "A IA recusou este pedido. Escreva de outro jeito e tente de novo." } }).texto, "A IA recusou este pedido. Escreva de outro jeito e tente de novo.");
+  assert.equal(L.erroDaIA({ codigo: "dados_invalidos", detalhe_texto: "descricao" }).tipo, "invalida");
+  assert.match(L.erroDaIA({ codigo: "dados_invalidos", detalhe_texto: "descricao" }).texto, /1500/);
+  assert.equal(L.erroDaIA({ codigo: "qualquer", resposta: { mensagem: "Texto do servidor." } }, "padrão").texto, "Texto do servidor.");
   assert.equal(L.erroDaIA({ codigo: "qualquer" }, "Texto padrão").texto, "Texto padrão");
   assert.equal(L.erroDaIA(null).tipo, "outro");
 });

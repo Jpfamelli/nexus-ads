@@ -785,6 +785,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       painelExec.appendChild(h("div", { class: "au-ex-cab" },
         h("p", { class: "sub" }, `As últimas ${Math.min(arr.length, execLimite)} execuções. Erro numa automação não atrapalha as outras.`),
         btAtualizar));
+      P.setas(filtro);
       painelExec.appendChild(filtro);
       painelExec.appendChild(corpoLista);
       desenhar();

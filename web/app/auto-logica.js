@@ -1316,28 +1316,36 @@ export function detalheLegivel(detalhe, traduzir) {
 export const temIA = auto => (auto && auto.acoes || []).some(ac => ac && ac.tipo === "ia_decidir");
 
 /**
- * Erro do nx-ia (api.js: .codigo, .detalhe_texto, .hint) → {tipo, titulo, texto} para a caixa «Criar com IA».
+ * Erro do nx-ia (api.js: .codigo, .detalhe_texto, .hint, .resposta) → {tipo, titulo, texto} para a caixa «Criar com IA».
  * tipo: "cota" | "chave" | "desligada" | "indisponivel" | "pedidos" | "rede" | "invalida" | "outro".
- * O nx-ia responde {ok:false, erro:"ia_indisponivel", detalhe:"sem_chave"} quando falta a chave da Anthropic.
+ * O nx-ia responde {ok:false, erro, mensagem, detalhe}: `erro` é o código estável, `mensagem` já vem em português
+ * (usada quando não temos um texto melhor) e `detalhe` explica (sem_chave, sem_sdk, recusa, o motivo da conferência…).
  */
 export function erroDaIA(e, mensagemPadrao) {
   const cod = texto(e && (e.codigo || e.message));
   const det = normalizar(e && (e.detalhe_texto || (typeof e.detalhe === "string" ? e.detalhe : "") || e.hint));
+  const doServidor = texto(e && e.resposta && e.resposta.mensagem).trim();
   if (cod === "ia_cota") return { tipo: "cota", titulo: "A cota de IA deste mês acabou",
-    texto: "Você ainda pode criar a automação pelas receitas prontas ou do zero. A cota volta no começo do próximo mês; para usar mais agora, fale com o suporte." };
+    texto: "Você ainda pode criar a automação pelas receitas prontas ou do zero. A cota volta no começo do próximo mês; para usar mais agora, fale com a equipe da Nexus." };
   if (cod === "sem_chave" || det === "sem_chave") return { tipo: "chave", titulo: "A IA ainda não foi ligada",
-    texto: "Falta cadastrar a chave da Anthropic nesta plataforma. Peça ao administrador da plataforma para configurar em Configurações → Assistente de IA. Enquanto isso, use uma receita pronta abaixo." };
+    texto: "Falta cadastrar a chave da Anthropic nesta plataforma. Avise a equipe da Nexus para ativar. Enquanto isso, use uma receita pronta abaixo ou crie do zero." };
   if (cod === "ia_desligada") return { tipo: "desligada", titulo: "A IA está desligada",
-    texto: "O administrador desligou a IA para esta empresa. Use as receitas prontas ou crie a automação do zero." };
+    texto: "A IA está desligada nesta plataforma. Avise a equipe da Nexus para ativar; enquanto isso use as receitas prontas ou crie a automação do zero." };
   if (cod === "muitos_pedidos" || cod === "limite_taxa") return { tipo: "pedidos", titulo: "Muitos pedidos seguidos",
     texto: "Espere cerca de um minuto e tente de novo." };
   if (cod === "sem_conexao" || cod === "tempo_rede" || cod === "tempo_esgotado") return { tipo: "rede", titulo: "A conexão falhou",
     texto: "Não deu para falar com o servidor. Confira a internet e tente de novo; nada foi salvo." };
   if (cod === "ia_indisponivel" || cod === "ia_resposta_invalida" || cod === "ia_invalida") return { tipo: "indisponivel", titulo: "A IA não conseguiu montar agora",
-    texto: cod === "ia_indisponivel" ? "Ela não respondeu desta vez. Tente de novo em instantes, ou escreva o pedido com outras palavras." : "A resposta veio fora do formato esperado. Tente descrever com outras palavras ou use uma receita pronta." };
-  if (cod === "automacao_invalida") return { tipo: "invalida", titulo: "A IA montou algo que não passa na conferência",
-    texto: (e && e.hint ? `Problema: ${e.hint}. ` : "") + "Tente descrever com outras palavras ou use uma receita pronta." };
-  return { tipo: "outro", titulo: "Não foi possível montar", texto: mensagemPadrao || "Tente de novo em instantes." };
+    texto: doServidor || (cod === "ia_indisponivel" ? "Ela não respondeu desta vez. Tente de novo em instantes, ou escreva o pedido com outras palavras."
+      : "A resposta veio fora do formato esperado. Tente descrever com outras palavras ou use uma receita pronta.") };
+  if (cod === "automacao_invalida") {
+    const motivo = texto(e && (e.hint || e.detalhe_texto)).trim();
+    return { tipo: "invalida", titulo: "A IA montou algo que não passa na conferência",
+      texto: doServidor || ((motivo ? `Problema: ${motivo}. ` : "") + "Tente descrever com outras palavras ou use uma receita pronta.") };
+  }
+  if (cod === "dados_invalidos" && det === "descricao") return { tipo: "invalida", titulo: "Descreva com mais detalhes",
+    texto: `Escreva o que deve acontecer, com pelo menos algumas palavras (de 12 a ${LIMITES.descricao_ia} caracteres).` };
+  return { tipo: "outro", titulo: "Não foi possível montar", texto: doServidor || mensagemPadrao || "Tente de novo em instantes." };
 }
 
 /* ------------------------------------------------------------------ rótulos para a tela */

@@ -110,7 +110,7 @@ function telaLista(ctx, raiz, dados, P) {
     : `${lim.usadas} de ${lim.limite} no plano`;
   const btNova = podeEditar ? h("button", { type: "button", class: "bt bt-sec", disabled: noLimite,
     title: noLimite ? `Seu plano permite até ${lim.limite} automações.` : null,
-    on: { click: () => ctx.navegar("#/automacoes/nova") } }, ui.icone("mais"), "Do zero") : null;
+    on: { click: () => ctx.navegar("#/automacoes/nova") } }, ui.icone("mais"), "Criar do zero") : null;
 
   raiz.appendChild(h("header", { class: "cab-pag au-cab" },
     h("div", null,
@@ -206,6 +206,7 @@ function cartaoIA(ctx, dados, noLimite) {
     textoIA = area.value;
   };
   area.addEventListener("input", pintarBotao);
+  area.addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey) && !btCriar.disabled) { ev.preventDefault(); btCriar.click(); } });
   pintarBotao();
 
   const cartao = h("section", { class: ["cartao", "au-ia", desligada && "au-ia-off"], "aria-labelledby": `${id}-t` },
@@ -224,9 +225,9 @@ function cartaoIA(ctx, dados, noLimite) {
     estado);
 
   if (desligada) estado.appendChild(h("p", { class: "aviso aviso-aten" }, ui.icone("ia"),
-    h("span", null, "A IA está desligada para esta empresa. Use as receitas prontas abaixo ou crie do zero. Para ligar, abra ", h("a", { href: "#/config/ia" }, "Configurações → Assistente de IA"), ".")));
+    h("span", null, "A IA ainda não está ligada nesta plataforma. Avise a equipe da Nexus para ativar; enquanto isso, use as receitas prontas abaixo ou crie do zero.")));
   else if (semCota) estado.appendChild(h("p", { class: "aviso aviso-aten" }, ui.icone("alerta"),
-    h("span", null, "A cota de IA deste mês acabou. As receitas prontas e o editor continuam funcionando; a cota volta no começo do próximo mês.")));
+    h("span", null, "A cota de IA deste mês acabou. As receitas prontas e o editor continuam funcionando; a cota volta no começo do próximo mês (ou fale com a equipe da Nexus para ampliar).")));
 
   let pedindo = false;
   btCriar.addEventListener("click", async () => {
@@ -314,6 +315,7 @@ function secaoSuas(ctx, dados, itens, metas, P) {
       filtro = k; barra.querySelectorAll(".au-chip").forEach(c => c.setAttribute("aria-checked", String(c === b))); desenhar(); } });
     barra.appendChild(b);
   }
+  P.setas(barra);
   desenhar();
   return h("section", { class: "au-sec", "aria-labelledby": "au-suas" },
     h("div", { class: "au-sec-cab" },
@@ -333,12 +335,16 @@ function itemLista(ctx, dados, it, metas, P) {
   const exec = h("span", { class: "au-item-num" });
   const errs = h("span", { class: "au-item-num au-com-erro" });
   const ultima = h("span", { class: "au-item-ult" });
+  const espera = h("span", { class: "au-item-num au-item-espera" });
   const li = h("li", { class: ["au-item", !it.ativo && "au-desligada"] });
   const pintar = x => {
     const e = Number(x.execucoes) || 0, r = Number(x.erros) || 0;
     exec.textContent = e === 1 ? "1 execução" : `${e} execuções`;
     errs.textContent = r === 1 ? "1 erro" : `${r} erros`;
     errs.hidden = !r;
+    const w = Number(x.em_espera) || 0;
+    espera.textContent = w === 1 ? "1 em espera" : `${w} em espera`;
+    espera.hidden = !w;
     ultima.textContent = x.ultima_execucao_em ? `última ${ui.relativo(x.ultima_execucao_em)}` : "ainda não rodou";
     ultima.title = x.ultima_execucao_em ? ui.dataHoraBR(x.ultima_execucao_em) : "";
   };
@@ -381,7 +387,7 @@ function itemLista(ctx, dados, it, metas, P) {
       h("span", { class: "au-item-frase" }, frase),
       h("span", { class: "au-item-meta" },
         h("span", { class: "pilula pilula-neutra au-item-gat" }, ui.icone(g ? g.icone : "raio"), L.rotuloGatilho(it.gatilho, vv)),
-        etiquetas, exec, errs, ultima)),
+        etiquetas, exec, errs, espera, ultima)),
     btMais);
   return li;
 }
@@ -468,6 +474,7 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P) {
       categoria = k; barra.querySelectorAll(".au-chip").forEach(c => c.setAttribute("aria-checked", String(c === b))); desenhar(); } });
     barra.appendChild(b);
   }
+  P.setas(barra);
   desenhar();
   return h("section", { class: "au-sec", "aria-labelledby": "au-mod" },
     h("div", { class: "au-sec-cab" },

@@ -17,7 +17,7 @@ export const LIMITES = Object.freeze({
   nome: 80, condicoes: 10, acoes: 10, palavras: 20, palavra: 60,
   titulo_tarefa: 160, titulo_negocio: 120, mensagem: 4096, titulo_aviso: 120, texto_aviso: 500, alerta: 1000,
   sem_resposta: [5, 1440], tempo_no_estagio: [1, 2160], antes_da_data: [1, 72], apos_data: [1, 720], prazo_tarefa: [0, 2160],
-  esperar: [1, 43200], esperas: 5, nota: 1000, instrucao_ia: 500, valor_campo: 200, descricao_ia: 800,
+  esperar: [1, 43200], esperas: 5, nota: 1000, instrucao_ia: 500, valor_campo: 200, descricao_ia: 1500,
   parametros: 10,
 });
 
