@@ -9,12 +9,13 @@ export const PRODUTO_PADRAO = "Órbita";
 
 export const PADRAO = Object.freeze({
   produto: PRODUTO_PADRAO,
-  cores: Object.freeze({ primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#FAFAF8" }),
+  cores: Object.freeze({ primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#F3F0E9" }),
 });
 
 /** Preferência visual do usuário. `marca` respeita o fundo configurado pela empresa. */
 export const ESQUEMAS = Object.freeze({ claro: "claro", escuro: "escuro", marca: "marca" });
-export const FUNDOS_ESQUEMA = Object.freeze({ claro: "#FAFAF8", escuro: "#07090C" });
+/** O claro é "papel" quente (M01): o cartão (--c-sup) sobe para o lado do branco e fica mais claro que a página. */
+export const FUNDOS_ESQUEMA = Object.freeze({ claro: "#F3F0E9", escuro: "#07090C" });
 export function coresNoEsquema(cores = {}, esquema = "claro") {
   const modo = Object.hasOwn(ESQUEMAS, esquema) ? esquema : "claro";
   return { ...PADRAO.cores, ...(cores || {}), ...(modo === "marca" ? {} : { fundo: FUNDOS_ESQUEMA[modo] }) };
@@ -29,7 +30,7 @@ export const PALETA = Object.freeze([
 /** Fundos sugeridos no editor de marca: 5 noturnos (palco) e 3 claros. */
 export const FUNDOS = Object.freeze([
   "#07090C", "#0B1416", "#0E1116", "#12100E", "#0A0F1A",
-  "#FAFAF8", "#F4F1EA", "#FFFFFF",
+  "#F3F0E9", "#FAFAF8", "#FFFFFF",
 ]);
 
 const TEXTO_ESCURO = "#F2EEE8";   // texto no esquema escuro
@@ -175,6 +176,8 @@ export function derivarTema(cores = {}) {
   // e o poço (campos, áreas rebaixadas) fica um sopro abaixo da página; --c-sup-3 só serve de "pressionado" (o mais escuro).
   const sup = escuro ? superficies[0] : misturar(fundo, BRANCO, .7);
   const poco = escuro ? misturar(fundo, PRETO, .35) : misturar(fundo, texto, .05);
+  // 2º degrau (blocos dentro do cartão, hover): no escuro é a escada de sempre; no claro é um sopro abaixo do CARTÃO (não do papel), senão cada bloco vira um retângulo cinza pesado
+  const sup2 = escuro ? superficies[1] : misturar(sup, texto, .05);
 
   const primSuave = misturar(fundo, prim, .16);
   const secSuave = misturar(fundo, sec, .14);
@@ -226,7 +229,7 @@ export function derivarTema(cores = {}) {
     "--c-texto-3": ajustarContraste(misturar(fundo, texto, .56), superficies[2], 4.5).cor,
     "--c-sup": sup,                       // cartão
     "--c-poco": poco,                     // área rebaixada (campos, fundo de bloco dentro do cartão)
-    "--c-sup-2": superficies[1],
+    "--c-sup-2": sup2,
     "--c-sup-3": superficies[2],          // pressionado
     "--c-borda": misturar(fundo, texto, .12),
     "--c-borda-2": misturar(fundo, texto, .20),

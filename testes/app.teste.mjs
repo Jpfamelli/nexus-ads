@@ -1377,9 +1377,13 @@ await teste("T08: pílulas de status e texto secundário legíveis em fundos de 
       assert.ok(T.contraste(T.misturar(v[luz], v["--c-texto"], 0.22), v[suave]) >= 4.5 - 1e-9, `pílula ${luz} ${JSON.stringify(m)}`);
     assert.ok(T.contraste(v["--c-prim-luz"], v["--c-fundo"]) >= 4.5 - 1e-9 && T.contraste(v["--c-sec-luz"], v["--c-fundo"]) >= 4.5 - 1e-9);
   }
-  // o tema padrão e os fundos que já passavam NÃO mudam de cor
+  // os fundos que já passavam NÃO mudam de cor (o #FAFAF8 era o fundo claro padrão até o M01; hoje é só um fundo de marca)
+  const antigo = T.derivarTema({ ...T.PADRAO.cores, fundo: "#FAFAF8" }).vars;
+  assert.deepEqual([antigo["--c-ok"], antigo["--c-aten"], antigo["--c-prim-luz"], antigo["--c-texto-2"]], ["#1A6E44", "#8A5A00", "#8D5F19", "#54595D"]);
+  // o novo padrão (M01: papel #F3F0E9) tem a mesma primária e só ajusta o que o papel mais escuro exige
   const padrao = T.derivarTema(T.PADRAO.cores).vars;
-  assert.deepEqual([padrao["--c-ok"], padrao["--c-aten"], padrao["--c-prim-luz"], padrao["--c-texto-2"]], ["#1A6E44", "#8A5A00", "#8D5F19", "#54595D"]);
+  assert.equal(padrao["--c-fundo"], "#F3F0E9"); assert.equal(padrao["--c-prim-luz"], "#8D5F19");
+  assert.deepEqual([padrao["--c-ok"], padrao["--c-aten"], padrao["--c-texto-2"]], ["#165E3A", "#764D00", "#525659"], "o papel pede verde, âmbar e texto-2 um pouco mais escuros");
   assert.equal(T.garantirContraste("#1A6E44", ["#FFFFFF"]), "#1A6E44", "já passa: devolve a mesma cor");
 });
 await teste("T08: logo estreito/alto demais ganha aviso na prévia (avisoProporcaoLogo); largo e quadrado não", () => {
@@ -1558,6 +1562,23 @@ await teste("M01/M10 (parte do contrato): .cartao sem backdrop-filter; esqueleto
   assert.match(CSS_APP, /\.sk::after \{[^}]*linear-gradient\(100deg, transparent 20%, var\(--c-sk-luz\) 50%, transparent 80%\)[^}]*animation: skVarre 1\.4s linear infinite/);
   assert.match(CSS_APP, /@media \(prefers-reduced-motion: reduce\) \{\s*\.sk::after \{ animation: none !important; display: none; \}\s*\.sk \{ animation: skPulso 1\.4s ease-in-out infinite alternate !important; \}/);
 });
+/** Bloco do :root (até o comentário de tipografia) como mapa { token: valor }. */
+function tokensRaiz() {
+  const raiz = CSS_APP.slice(CSS_APP.indexOf(":root {"), CSS_APP.indexOf("/* ---- tipografia ---- */"));
+  return Object.fromEntries([...raiz.matchAll(/(--[a-z0-9-]+):\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
+}
+await teste("app.css :root = o tema padrão claro (todo token em hex que o tema.js escreve tem o MESMO valor no :root: sem defasagem antes da 1ª pintura)", () => {
+  const { vars } = T.derivarTema(T.coresNoEsquema(T.PADRAO.cores, "claro"));
+  const raiz = tokensRaiz();
+  let conferidos = 0;
+  for (const [k, v] of Object.entries(vars)) {
+    if (!/^#[0-9A-F]{6}$/.test(v)) continue;
+    assert.ok(k in raiz, `falta ${k} no :root`);
+    assert.equal(raiz[k].toUpperCase(), v, `${k}: :root ${raiz[k]} × tema ${v}`);
+    conferidos++;
+  }
+  assert.ok(conferidos > 40, `tokens conferidos: ${conferidos}`);
+});
 await teste("[data-produto] escolhe --c-prod entre os três acentos; o tema.js não escreve --c-prod (inline venceria a regra do CSS)", () => {
   assert.match(CSS_APP, /html\[data-produto="crm"\] \{ --c-prod: var\(--c-prod-crm\); \}/);
   assert.match(CSS_APP, /html\[data-produto="ads"\] \{ --c-prod: var\(--c-prod-ads\); \}/);
@@ -1618,6 +1639,24 @@ await teste("tema escuro: o poço fica abaixo do fundo e o cartão acima (escada
     assert.ok(luz(T, vars["--c-poco"]) < luz(T, vars["--c-fundo"]));
     assert.ok(luz(T, vars["--c-sup"]) > luz(T, vars["--c-fundo"]));
   }
+});
+await teste("M01: papel quente no claro (#F3F0E9); cartão com borda e sombra de duas camadas; campos no poço; popover no degrau do cartão; o escuro mantém a sombra de antes", () => {
+  assert.equal(T.FUNDOS_ESQUEMA.claro, "#F3F0E9"); assert.equal(T.PADRAO.cores.fundo, "#F3F0E9");
+  assert.equal(T.derivarTema(T.coresNoEsquema({}, "claro")).vars["--c-fundo"], "#F3F0E9");
+  for (const [nome, m] of Object.entries(CLARO_4)) {
+    const { vars } = T.derivarTema(m);
+    assert.ok(T.contraste(vars["--c-sup"], vars["--c-fundo"]) >= 1.05, `${nome}: o cartão se separa do papel (${T.contraste(vars["--c-sup"], vars["--c-fundo"]).toFixed(3)}:1)`);
+    assert.ok(luz(T, vars["--c-sup-2"]) > luz(T, vars["--c-poco"]) && luz(T, vars["--c-sup-2"]) < luz(T, vars["--c-sup"]), `${nome}: sup-2 entre o poço e o cartão (bloco dentro do cartão não vira cinza pesado)`);
+  }
+  const cartao = (CSS_APP.match(/(?:^|\n)\.cartao \{([^}]*)\}/) || [])[1] || "";
+  assert.match(cartao, /border: 1px solid var\(--c-borda\)/);
+  assert.match(cartao, /box-shadow: 0 1px 2px color-mix\(in srgb, var\(--c-sombra\) 42%, transparent\), 0 14px 28px -22px var\(--c-sombra\);/, "duas camadas: contato curto + queda longa");
+  assert.match(CSS_APP, /html\[data-esquema="escuro"\] \.cartao \{ box-shadow: 0 24px 48px -36px var\(--c-sombra\), inset 0 1px 0 var\(--c-luz-borda\); \}/, "o escuro continua com a sombra de antes");
+  assert.match(CSS_APP, /\.campo textarea, \.sel, \.busca input, \.cor-hex \{\s*width: 100%;[^}]*background: var\(--c-poco\)/, "campos no poço");
+  assert.match(CSS_APP, /--c-pop: var\(--c-sup\); --c-hover: var\(--c-sup-2\);/); assert.match(CSS_APP, /html\[data-esquema="escuro"\] \{[^}]*--c-pop: var\(--c-sup-2\); --c-hover: var\(--c-sup-3\);/);
+  for (const sel of [".menu-pop, .flut", ".toast"]) assert.match(CSS_APP, new RegExp(`${sel.replace(/[.]/g, "\\.")} \\{[^}]*background: var\\(--c-pop\\)`), `${sel} flutua em --c-pop`);
+  // antes.js (cache do tema) e shells de outras frentes só entendem tokens; nenhum hex novo fora do :root
+  assert.doesNotMatch(semRaiz(CSS_APP), /#[0-9a-fA-F]{3,8}\b/);
 });
 
 

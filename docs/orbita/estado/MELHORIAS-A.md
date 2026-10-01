@@ -40,7 +40,7 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
 
 | Item | Situação | Feito | Falta |
 |---|---|---|---|
-| M01 papel e elevação | parcial | derivação por esquema em `tema.js` (cartão > página, poço, pressionado), escuro idêntico (golden), `.cartao` sem blur, testes de contraste em 4 marcas × 2 esquemas e em 34 marcas | papel quente `#F3F0E9` como fundo claro padrão (`FUNDOS_ESQUEMA`, `PADRAO`), borda + sombra de duas camadas, blocos de número sem fundo, captura do Início |
+| M01 papel e elevação | **feito** | ver "Etapa 2 · M01" abaixo | — |
 | M02 escala + cabeçalho + Zodiak | parcial | 9 tokens `--fs-*`, `--f-narr`, `@font-face`, `.narr`, `ui.cabecalho` com testes | zerar `font-size` literal de `app.css`, marcador `/* escala: tokens */` e o teste dele, Clash só 600 |
 | M03 rótulos | parcial | `.rotulo`, `.dado`, `.selo-caps` | as ~30 regras `uppercase`, piso 12/13 px, teste do piso |
 | M04 cor com intenção | parcial | tokens `--c-sev-*` e `--c-prod-*`/`--c-prod`, regra `[data-produto]`, `.bt-contorno-perigo` | rotação de matiz das semânticas, glifos nas pílulas, `--c-google/--c-meta` próprios, `.produto-grade` em 1 coluna |
@@ -56,3 +56,12 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
 - **B (`rede.js`, `app.js`)**: disparar `window.dispatchEvent(new Event("orbita:online"))` ao reconectar (o `erroCartao` já escuta). Pôr `data-produto` no `<html>` (M13) para o `--c-prod` trocar. Para M10: classe no `<body>` quando a tela for Login/Início (palco animado só ali). A busca global (`type=search`) já fica fora da proteção de texto; qualquer modal do shell com campo `name` que seja filtro/busca deve passar `protegerTexto: false` ou `data-sem-protecao`.
 - **C e D**: `ui.cabecalho` nível 1 só uma vez por tela; `esqueleto('kanban'|'lista'|'tabela', n)` continua igual (miolo). `ui.acaoComDesfazer` não rejeita: confira `.estado`. Modais de formulário passam a proteger o texto sozinhos; se algum modal tiver campo com `name` que não é "dado digitado" (filtro, busca), passe `protegerTexto: false`.
 - **Todos**: para CSS novo seguir as travas (nenhum hex fora de `:root`, `minmax(0, 1fr)`, tamanhos por `--fs-*`, caixa-alta só `.selo-caps`); o bloco "LINGUAGEM VISUAL — contratos da frente A" no fim do `app.css` é conferido por teste.
+
+## Etapa 2 — itens completos (cada um com o seu commit)
+
+### M01 · papel e elevação no claro — FEITO
+
+- **O que mudou:** o claro padrão é o papel quente `#F3F0E9` (`FUNDOS_ESQUEMA.claro`, `PADRAO.cores.fundo`; a lista `FUNDOS` do editor de marca começa por ele). Cartão (`--c-sup`) = papel + 70 % de branco (≈ `#FBFBF8`), poço (`--c-poco`) = papel → texto 5 %, pressionado (`--c-sup-3`) segue o mais escuro. **`--c-sup-2` no claro** passou a ser "um sopro abaixo do cartão" (cartão → texto 5 %): antes (papel → texto 9 %) cada bloco dentro de um cartão virava um retângulo cinza pesado. O escuro continua exatamente como era.
+- **CSS:** `.cartao` com borda de 1 px e sombra de duas camadas (contato curto + queda longa; o escuro mantém a sombra de antes), sem `backdrop-filter`. Campos, caixas de marcar, busca flutuante, bloco de link e DNS no poço. Tokens novos `--c-pop` (o que flutua: menu, popover, toast = cartão no claro, 2º degrau no escuro) e `--c-hover` (realce de item sob o mouse). O `:root` do `app.css` agora é o tema padrão claro EXATO (teste de sincronia: nenhum token em hex defasado antes da 1ª pintura).
+- **Como verificar:** `node testes/app.teste.mjs` (seção (i): "papel quente…", ":root = o tema padrão claro", golden do escuro). Visual: `scripts/dev-falso.mjs` → Início claro (cartões acima do papel, com borda e sombra) e escuro (idêntico).
+- **Para as outras frentes:** (D) `relatorios.css` (`.ini-numero`, `.rel-kpi`, `.ini-canal`, `.ini-passo`, `.ads-cri-resumo>div`…): os blocos de número dentro de cartão ainda têm fundo `--c-sup-2`; para o plano ("número + linha fina") tirar o fundo e usar só uma borda de baixo; `--c-prim-suave` só no item que pede ação. (B) `index.html`: `<meta name="theme-color">` e o favicon ainda usam `#FAFAF8`; o papel é `#F3F0E9`. O cache `nx-app-marca` lido por `antes.js` guarda as variáveis ANTIGAS até o `app.js` reaplicar: haverá um piscar único depois do deploy (nada a fazer, só saber).
