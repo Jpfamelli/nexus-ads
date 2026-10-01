@@ -28,9 +28,11 @@ export function criarComposer(A) {
   const btIA = h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Sugerir resposta com IA", title: "Sugerir com IA" }, ui.icone("ia"));
   const btMaisM = h("button", { type: "button", class: "bt-icone so-estreito", "aria-label": "Mais opções", title: "Mais" }, ui.icone("mais"));
   const btEnviar = h("button", { type: "button", class: "bt bt-prim cvx-enviar", "aria-label": "Enviar" }, ui.icone("enviar"));
-  const ferr = h("div", { class: "cvx-ferr" }, btClipe, btAudio, btModelos, btNota, btIA, btMaisM);
+  const btInfo = h("button", { type: "button", class: "bt-icone cvx-info", "aria-label": "Por que não dá para anexar?", "aria-expanded": "false", title: "Por que não dá para anexar?", hidden: true }, ui.icone("info"));
+  const ferr = h("div", { class: "cvx-ferr" }, btClipe, btInfo, btAudio, btModelos, btNota, btIA, btMaisM);
   const linha = h("div", { class: "cvx-linha" }, ferr, campo, btEnviar);
-  const capInfo = h("p", { class: "cvx-cap-info", role: "status", "aria-live": "polite", hidden: true });
+  const capInfo = h("p", { class: "cvx-cap-info", id: "cvx-cap-info", role: "status", "aria-live": "polite", hidden: true });
+  let infoAberta = false, infoTimer = null;   // o aviso do canal só aparece quando a pessoa toca no clipe ou no ⓘ (não ocupa a conversa o tempo todo)
   const tempoGravacao = h("span", { class: "cvx-rec-tempo", role: "timer", "aria-live": "off" }, "00:00");
   const btCancelarGravacao = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Cancelar");
   const painelGravacao = h("div", { class: "cvx-gravacao", role: "status", "aria-live": "polite", hidden: true },
@@ -132,7 +134,7 @@ export function criarComposer(A) {
     const formatoAudio = formatoGravacao();
     btClipe.hidden = false;
     btModelos.hidden = usaCodeWords();
-    btClipe.disabled = codeWords || modoNota || s !== "ok";
+    btClipe.setAttribute("aria-disabled", String(codeWords || modoNota || s !== "ok"));   // não é "disabled": o toque precisa explicar o motivo
     btClipe.title = codeWords ? "Este canal CodeWords envia texto; use um canal WhatsApp Cloud API para enviar mídia."
       : "Anexar foto, vídeo, áudio ou documento (até 16 MB)";
     btAudio.hidden = false;
@@ -145,7 +147,12 @@ export function criarComposer(A) {
     btAudio.setAttribute("aria-label", btAudio.title);
     btAudio.setAttribute("aria-pressed", String(gravando));
     ui.limpar(btAudio); btAudio.appendChild(ui.icone(gravando ? "parar" : "microfone"));
-    capInfo.hidden = !codeWords && (!!formatoAudio && globalThis.isSecureContext);
+    const temAviso = codeWords || !formatoAudio || !globalThis.isSecureContext;
+    btInfo.hidden = !temAviso;
+    btInfo.setAttribute("aria-controls", "cvx-cap-info");
+    if (!temAviso) infoAberta = false;
+    capInfo.hidden = !temAviso || !infoAberta;
+    btInfo.setAttribute("aria-expanded", String(temAviso && infoAberta));
     capInfo.textContent = codeWords
       ? "Este número CodeWords envia texto. Para anexar documentos e áudios, selecione um canal WhatsApp Cloud API."
       : "Este navegador não grava áudio em formato aceito. Você ainda pode anexar um áudio MP3, OGG, AAC ou M4A.";
@@ -300,7 +307,17 @@ export function criarComposer(A) {
 
   /* ---------------- anexos */
   function aceitaAnexo() { return !usaCodeWords() && !modoNota && situacao() === "ok"; }
-  btClipe.addEventListener("click", () => { arquivo.value = ""; arquivo.click(); });
+  function mostrarInfoCanal(abrir = !infoAberta) {
+    clearTimeout(infoTimer);
+    infoAberta = abrir;
+    atualizar();
+    if (infoAberta) infoTimer = setTimeout(() => { infoAberta = false; atualizar(); }, 9000);
+  }
+  btInfo.addEventListener("click", () => mostrarInfoCanal());
+  btClipe.addEventListener("click", () => {
+    if (btClipe.getAttribute("aria-disabled") === "true") { if (usaCodeWords()) mostrarInfoCanal(true); return; }
+    arquivo.value = ""; arquivo.click();
+  });
   arquivo.addEventListener("change", () => { const f = arquivo.files && arquivo.files[0]; if (f) anexar(f); });
   btAudio.addEventListener("click", () => gravacao ? pararGravacao(false) : iniciarGravacao());
   btCancelarGravacao.addEventListener("click", () => pararGravacao(true));

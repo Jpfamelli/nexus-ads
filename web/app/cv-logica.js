@@ -57,6 +57,13 @@ export const ABAS = Object.freeze([
   { id: "ocultas", rotulo: "Ocultas", vazio: "Nenhuma conversa oculta.", min: "supervisor" },
 ]);
 
+/** Abas sempre à vista (1 linha); as demais ficam no "Mais ▾". Quem não escreve não tem "Minhas". */
+export const ABAS_FIXAS = Object.freeze(["minhas", "sem_dono", "aguardando"]);
+export function abasVisiveis(papel, podeEscrever = true) {
+  const todas = ABAS.filter(a => (!a.min || pode(papel, a.min)) && (a.id !== "minhas" || podeEscrever));
+  return { fixas: todas.filter(a => ABAS_FIXAS.includes(a.id)), mais: todas.filter(a => !ABAS_FIXAS.includes(a.id)) };
+}
+
 /** Mesma regra do nx_cv_listar: a conversa pertence à aba? */
 export function pertenceAba(c, aba, euId, agora = new Date()) {
   if (!c) return false;
@@ -558,4 +565,33 @@ export function partesDestaque(texto, termo) {
     i = j + q.length;
   }
   return out;
+}
+
+/* ------------------------------------------------------------ cabeçalho do chat (M34): um primário por estado */
+/**
+ * estadoCabecalho({conv, eu, pode, codeWords, ia}) → {primaria, estilo, resolverIcone, resolverNoMenu, devolverIA}
+ *  - sem permissão para escrever → nada;
+ *  - resolvida → "reabrir" (secundário);
+ *  - IA atendendo (CodeWords, IA ligada e viva) → "assumir_ia" (primário) e o resto no ⋮;
+ *  - minha → "resolver" em contorno de `--c-ok` (sem primário);
+ *  - sem dono ou com colega → "assumir" (primário) e Resolver vira ícone neutro.
+ * Nunca há mais de um primário; "devolverIA" liga a entrada no ⋮ quando a IA está pausada.
+ */
+export function estadoCabecalho({ conv, eu = null, pode: podeEscrever = true, codeWords = false, ia = null } = {}) {
+  const base = { primaria: null, estilo: null, resolverIcone: false, resolverNoMenu: false, devolverIA: false };
+  if (!conv || !podeEscrever) return base;
+  if (conv.status === "resolvida") return { ...base, primaria: "reabrir", estilo: "sec" };
+  const iaViva = !!(codeWords && ia && ia.disponivel !== false && ia.ia_ligada);
+  const minha = !!(eu && conv.atribuida_a && conv.atribuida_a === eu);
+  const devolverIA = iaViva && !!ia.pausada;
+  if (iaViva && !ia.pausada) return { ...base, primaria: "assumir_ia", estilo: "prim", resolverNoMenu: true };
+  if (minha) return { ...base, primaria: "resolver", estilo: "contorno", devolverIA };
+  return { ...base, primaria: "assumir", estilo: "prim", resolverIcone: true, devolverIA };
+}
+
+/** Texto curto da janela de 24 h para o celular: "18 h", "25 min" ou "fechada". */
+export function janelaCurta(j) {
+  if (!j || !j.aberta) return "Janela fechada";
+  const m = Math.floor((Number(j.restanteMs) || 0) / 60000);
+  return m >= 60 ? `Janela ${Math.floor(m / 60)} h` : `Janela ${Math.max(1, m)} min`;
 }

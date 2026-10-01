@@ -30,31 +30,39 @@ export function criarLista(A) {
   const btAvisos = h("button", { type: "button", class: "bt-icone cvl-avisos", "aria-label": "Avisos de mensagem nova", title: "Avisos de mensagem nova" }, ui.icone("sino"));
   btAvisos.addEventListener("click", () => A.acoes.menuAvisos(btAvisos));
 
-  /* ---------------- abas */
-  const abasEl = h("div", { class: "cvl-abas", role: "tablist", "aria-label": "Situação das conversas" });
-  const botoesAba = new Map();
+  /* ---------------- abas: uma linha só — Minhas · Sem dono · Aguardando (ui.segmentado) + botão "Mais situações ▾" */
+  const abasEl = h("div", { class: "cvl-abas" });
+  let seg = null, btVisoes = null, abasMais = [];
+  const contadoresAba = new Map();   // id → número já conhecido (para o menu "Mais")
+  function escolherAba(id) { if (A.aba !== id || A.busca) { busca.value = ""; A.acoes.mudarLista({ aba: id, busca: "" }); } }
   function montarAbas() {
-    ui.limpar(abasEl); botoesAba.clear();
-    for (const a of L.ABAS) {
-      if (a.min && !A.acoes.pode(a.min)) continue;
-      if (a.id === "minhas" && !A.podeEscrever) continue;
-      const n = h("span", { class: "n" });
-      const b = h("button", { type: "button", role: "tab", class: "cvl-aba", id: `cvl-aba-${a.id}`, "aria-controls": "cvl-lista", dataset: { aba: a.id } }, a.rotulo, n);
-      b.addEventListener("click", () => { if (A.aba !== a.id || A.busca) { busca.value = ""; A.acoes.mudarLista({ aba: a.id, busca: "" }); } });
-      botoesAba.set(a.id, { b, n });
-      abasEl.appendChild(b);
+    ui.limpar(abasEl);
+    const { fixas, mais } = L.abasVisiveis(A.ctx.papel, A.podeEscrever);
+    abasMais = mais;
+    seg = ui.segmentado({ opcoes: fixas.map(x => ({ valor: x.id, rotulo: x.rotulo, contador: null })), valor: abaDestaque(), tipo: "abas",
+      rotulo: "Situação das conversas", aoMudar: escolherAba });
+    // a aba marcada pode ser a mesma que o segmentado "lembra" (quando a atual mora no menu ou há busca): clique e Enter/Espaço escolhem sempre
+    seg.addEventListener("click", ev => { const op = ev.target.closest && ev.target.closest(".seg-op"); if (op) escolherAba(op.dataset.valor); });
+    seg.addEventListener("keydown", ev => {
+      if ((ev.key === "Enter" || ev.key === " ") && abasEl.dataset.semsel === "1") {
+        const op = document.activeElement && document.activeElement.closest && document.activeElement.closest(".seg-op");
+        if (op) { ev.preventDefault(); ev.stopImmediatePropagation(); escolherAba(op.dataset.valor); }
+      }
+    }, true);
+    abasEl.appendChild(seg);
+    if (mais.length) {
+      btVisoes = h("button", { type: "button", class: "cvl-visoes", "aria-label": "Mais situações", title: "Mais situações: Todas abertas, Pendentes, Resolvidas" }, ui.icone("seta-baixo"));
+      btVisoes.addEventListener("click", () => {
+        ui.menu(btVisoes, abasMais.map(x => {
+          const n = contadoresAba.get(x.id);
+          return { rotulo: n ? `${x.rotulo} · ${n}` : x.rotulo, icone: A.aba === x.id && !A.busca ? "check" : undefined, fn: () => escolherAba(x.id) };
+        }));
+      });
+      abasEl.appendChild(btVisoes);
     }
-    abasEl.addEventListener("keydown", ev => {
-      if (A.busca) return;
-      const arr = [...botoesAba.values()].map(x => x.b);
-      const i = arr.indexOf(document.activeElement);
-      if (i < 0) return;
-      let j = null;
-      if (ev.key === "ArrowRight") j = (i + 1) % arr.length; else if (ev.key === "ArrowLeft") j = (i - 1 + arr.length) % arr.length;
-      else if (ev.key === "Home") j = 0; else if (ev.key === "End") j = arr.length - 1;
-      if (j !== null) { ev.preventDefault(); arr[j].focus(); arr[j].click(); }
-    });
   }
+  /** A aba fixa que fica marcada (ou a 1ª quando a atual mora no menu "Mais"). */
+  function abaDestaque() { return L.ABAS_FIXAS.includes(A.aba) ? A.aba : L.ABAS_FIXAS.find(x => !(x === "minhas" && !A.podeEscrever)) || "sem_dono"; }
   montarAbas();
 
   const avisoCanal = h("div", { class: "cvl-aviso", hidden: true });
@@ -168,25 +176,28 @@ export function criarLista(A) {
     const nl = Number(c.nao_lidas) || 0;
     const resumo = c.ultima_msg_resumo ? String(c.ultima_msg_resumo) : (c.status === "aberta" && !c.ultima_msg_dir ? "Conversa iniciada — sem mensagens ainda" : "");
     const meta = [];
+    // etapa e etiquetas viram pontos de cor (o nome fica no tooltip e no rótulo do item): nenhum selo é cortado com reticências
     if (c.negocio && c.negocio.estagio_nome) {
       const cor = ui.corOk(c.negocio.estagio_cor);
-      meta.push(h("span", { class: "cv-etapa cvl-etapa", style: cor ? { "--cor": cor } : null, title: `Etapa: ${c.negocio.estagio_nome}` }, h("span", null, c.negocio.estagio_nome)));
+      meta.push(h("span", { class: "cvl-dot cvl-dot-etapa", style: cor ? { "--cor": cor } : null, title: `Etapa: ${c.negocio.estagio_nome}`, role: "img", "aria-label": `Etapa: ${c.negocio.estagio_nome}` }));
     }
     if (c.status === "aberta" && c.aguardando && c.ultima_entrada_em) {
       meta.push(h("span", { class: "cvl-espera", title: "Esperando resposta há" }, ui.icone("relogio"), L.tempoEspera(c.ultima_entrada_em)));
     }
     if (A.busca && c.status !== "aberta") meta.push(ui.pilula(c.status === "resolvida" ? "Resolvida" : "Pendente", c.status === "resolvida" ? "neutra" : "aten"));
     const etqs = (c.etiquetas || []).map(etiquetaDe).filter(Boolean);
-    const cabem = meta.length ? 1 : 2;
-    for (const e of etqs.slice(0, cabem)) meta.push(ui.etiqueta(e));
-    if (etqs.length > cabem) meta.push(h("span", { class: "cvl-mais-etq", title: etqs.slice(cabem).map(e => e.nome).join(", ") }, `+${etqs.length - cabem}`));
+    for (const e of etqs.slice(0, 3)) {
+      const cor = ui.corOk(e.cor);
+      meta.push(h("span", { class: "cvl-dot", style: cor ? { "--cor": cor } : null, title: `Etiqueta: ${e.nome}`, role: "img", "aria-label": `Etiqueta: ${e.nome}` }));
+    }
+    if (etqs.length > 3) meta.push(h("span", { class: "cvl-mais-etq", title: etqs.slice(3).map(e => e.nome).join(", ") }, `+${etqs.length - 3}`));
     if (c.atribuida_a) {
       const av = ui.avatar(c.atribuida_nome || "?", c.atribuida_a);
       av.classList.add("cvl-dono");
       av.setAttribute("title", `Com ${c.atribuida_nome || "atendente"}`);
       meta.push(av);
     }
-    const rotuloA11y = [nome, nl ? `${nl} não ${nl === 1 ? "lida" : "lidas"}` : null,
+    const rotuloA11y = [nome, c.negocio && c.negocio.estagio_nome ? `etapa ${c.negocio.estagio_nome}` : null, etqs.length ? `etiquetas ${etqs.map(e => e.nome).join(", ")}` : null, nl ? `${nl} não ${nl === 1 ? "lida" : "lidas"}` : null,
       resumo ? `${c.ultima_msg_dir === "out" ? "Você: " : ""}${resumo}` : null, L.horaLista(c.ultima_msg_em),
       c.aguardando && c.status === "aberta" ? `esperando há ${L.tempoEspera(c.ultima_entrada_em)}` : null,
       c.atribuida_nome ? `com ${c.atribuida_nome}` : "sem dono"].filter(Boolean).join(", ");
@@ -285,39 +296,48 @@ export function criarLista(A) {
 
   function renderCabecalho() {
     const cont = A.contagens || {};
-    const abaAtiva = botoesAba.get(A.aba)?.b;
+    for (const a of L.ABAS) {
+      const v = a.id === "resolvidas" || a.id === "ocultas" ? null : cont[a.id];
+      contadoresAba.set(a.id, v === undefined || v === null ? 0 : v);
+      if (L.ABAS_FIXAS.includes(a.id) && seg) seg.contar(a.id, v === undefined || v === null ? null : (v > 999 ? "999+" : String(v)));
+      const x = seg && seg.querySelector(`[data-valor="${a.id}"] .seg-n`);
+      if (x) x.dataset.alerta = a.id === "aguardando" && v > 0 ? "1" : "0";
+    }
+    const extra = A.aba && !L.ABAS_FIXAS.includes(A.aba) ? L.ABAS.find(x => x.id === A.aba) : null;
+    // sem aba marcada quando há busca (a lista mostra todas as abas) ou quando a aba atual mora no menu "Mais situações"
+    const semSel = !!A.busca || !!extra;
+    abasEl.dataset.semsel = semSel ? "1" : "0";
+    if (seg) {
+      for (const x of L.ABAS_FIXAS) { const op = seg.querySelector(`[data-valor="${x}"]`); if (op) op.title = `${op.querySelector(".seg-rot").textContent}: ${contadoresAba.get(x) || 0}`; }
+      if (!semSel) seg.ativar(abaDestaque());
+      for (const b of seg.querySelectorAll(".seg-op")) {
+        if (A.busca) { b.removeAttribute("role"); b.removeAttribute("aria-selected"); b.tabIndex = 0; }
+        else { b.setAttribute("role", "tab"); if (semSel) { b.setAttribute("aria-selected", "false"); b.tabIndex = 0; } }
+      }
+      seg.setAttribute("role", A.busca ? "none" : "tablist");
+      seg.reposicionar();
+    }
+    // a lista é o painel da aba marcada; durante a busca ela mostra todas as abas e as abas viram um grupo de filtros
+    const abaAtiva = seg && seg.querySelector('.seg-op[aria-selected="true"]');
     if (A.busca) {
       abasEl.setAttribute("role", "group");
       abasEl.setAttribute("aria-label", "Filtrar conversas por situação");
       lista.removeAttribute("role");
       lista.removeAttribute("aria-labelledby");
     } else {
-      abasEl.setAttribute("role", "tablist");
-      abasEl.setAttribute("aria-label", "Situação das conversas");
+      abasEl.removeAttribute("role");
+      abasEl.removeAttribute("aria-label");
       lista.setAttribute("role", "tabpanel");
       if (abaAtiva) lista.setAttribute("aria-labelledby", abaAtiva.id);
       else lista.removeAttribute("aria-labelledby");
     }
-    for (const [id, { b, n }] of botoesAba) {
-      const on = id === A.aba && !A.busca;
-      if (A.busca) {
-        b.removeAttribute("role");
-        b.removeAttribute("aria-selected");
-        b.removeAttribute("aria-controls");
-        b.tabIndex = 0;
-      } else {
-        b.setAttribute("role", "tab");
-        b.setAttribute("aria-controls", "cvl-lista");
-        b.setAttribute("aria-selected", String(on));
-        b.tabIndex = on ? 0 : -1;
-      }
-      const v = id === "resolvidas" || id === "ocultas" ? null : cont[id];
-      n.textContent = v === undefined || v === null ? "" : (v > 999 ? "999+" : String(v));
-      n.hidden = v === undefined || v === null;
-      n.dataset.alerta = id === "aguardando" && v > 0 ? "1" : "0";
+    if (btVisoes) {
+      btVisoes.dataset.ativo = extra && !A.busca ? "1" : "0";
+      btVisoes.setAttribute("aria-label", extra && !A.busca ? `Mais situações (agora: ${extra.rotulo})` : "Mais situações");
     }
     const ag = Number(cont.aguardando) || 0, nl = Number(cont.nao_lidas) || 0;
-    sub.textContent = ag ? `${ag} esperando resposta` : nl ? `${nl} com mensagens novas` : "Tudo respondido";
+    sub.textContent = extra && !A.busca ? `${extra.rotulo}${contadoresAba.get(extra.id) ? ` · ${contadoresAba.get(extra.id)}` : ""}`
+      : ag ? `${ag} esperando resposta` : nl ? `${nl} com mensagens novas` : "Tudo respondido";
     ponto.hidden = !filtrosAtivos();
     { const p = A.acoes.lerAvisos(); btAvisos.dataset.ligado = p.som || p.tela ? "1" : "0";
       btAvisos.setAttribute("aria-label", `Avisos de mensagem nova (${p.som ? "som ligado" : "som desligado"}${p.tela ? ", área de trabalho ligada" : ""})`); }

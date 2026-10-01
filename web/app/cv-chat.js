@@ -131,24 +131,27 @@ export function criarChat(A) {
           h("i", { class: "cvc-via-sep" }, "·"), h("span", { class: "cvc-via" }, canal),
           h("i", { class: "cvc-proto-sep" }, "·"), h("span", { class: "mono" }, conv.protocolo || ""))));
 
-    const selos = faixa;
+    // faixa de situação: UMA pílula com dono + departamento; janela e IA ao lado; avisos só quando existem
     ui.limpar(faixa);
-    // o aparelho do CodeWords não tem janela de 24 h: nada de «Janela aberta/fechada» nesse canal
     const provedorCanal = (conv.canal && conv.canal.provedor) || ((A.base && A.base.canais) || []).find(k => k.id === conv.canal_id)?.provedor || "meta";
-    if (conv.status !== "resolvida" && L.canalTemJanela(provedorCanal)) {
-      selos.appendChild(ui.pilula(jan.texto, jan.nivel === "aberta" ? "ok" : jan.nivel === "acabando" ? "aten" : "ruim",
-        { icone: "relogio", class: "cv-janela", title: jan.ate ? `Até ${ui.dataHoraBR(jan.ate)}` : "O cliente ainda não mandou mensagem neste número" }));
-    } else if (conv.status === "resolvida") selos.appendChild(ui.pilula("Resolvida", "neutra", { icone: "check" }));
-    if (conv.status === "pendente") selos.appendChild(ui.pilula("Pendente", "aten"));
-    if (conv.oculta) selos.appendChild(ui.pilula("Oculta · contato bloqueado", "ruim", { icone: "alerta" }));
-    if (ct.optin_marketing === false) selos.appendChild(ui.pilula("Não quer marketing", "aten", { title: "Pediu para não receber mensagens de marketing" }));
-    selos.appendChild(ui.pilula(conv.atribuida ? `Com ${conv.atribuida.nome}` : "Sem dono", conv.atribuida ? "neutra" : "aten", { icone: "usuario" }));
-    if (conv.departamento) selos.appendChild(ui.pilula(conv.departamento.nome, conv.departamento.cor || "neutra"));
-
-    const codeWords = conv.canal?.provedor === "codewords";
+    const codeWords = provedorCanal === "codewords";
     const ia = codeWords ? A.iaEstado : null;
+    const dono = conv.atribuida ? `Com ${conv.atribuida.nome}` : conv.atribuida_nome ? `Com ${conv.atribuida_nome}` : "Sem dono";
+    const semDono = dono === "Sem dono";
+    faixa.appendChild(ui.pilula(conv.departamento ? `${dono} · ${conv.departamento.nome}` : dono, semDono && conv.status !== "resolvida" ? "aten" : "neutra",
+      { icone: "usuario", class: "cv-pil-status", title: conv.departamento ? `${dono} · departamento ${conv.departamento.nome}` : dono }));
+    // o aparelho do CodeWords não tem janela de 24 h: nada de «Janela aberta/fechada» nesse canal
+    if (conv.status !== "resolvida" && L.canalTemJanela(provedorCanal)) {
+      const pj = ui.pilula("", jan.nivel === "aberta" ? "ok" : jan.nivel === "acabando" ? "aten" : "ruim",
+        { icone: "relogio", class: "cv-janela", title: jan.ate ? `${jan.texto}. Até ${ui.dataHoraBR(jan.ate)}` : "O cliente ainda não mandou mensagem neste número" });
+      pj.append(h("span", { class: "so-largo-txt" }, jan.texto), h("span", { class: "so-curto-txt" }, L.janelaCurta(jan)));
+      faixa.appendChild(pj);
+    } else if (conv.status === "resolvida") faixa.appendChild(ui.pilula("Resolvida", "neutra", { icone: "check" }));
+    if (conv.status === "pendente") faixa.appendChild(ui.pilula("Pendente", "aten"));
+    if (conv.oculta) faixa.appendChild(ui.pilula("Oculta · contato bloqueado", "ruim", { icone: "alerta" }));
+    if (ct.optin_marketing === false) faixa.appendChild(ui.pilula("Não quer marketing", "aten", { title: "Pediu para não receber mensagens de marketing" }));
     if (codeWords) {
-      let rotuloIA = "Verificando IA…", corIA = "neutra", dicaIA = "";
+      let rotuloIA = "Verificando IA…", curtoIA = "", corIA = "neutra", dicaIA = "";
       if (ia && !ia.ia_ligada) {
         rotuloIA = "IA desligada no canal"; corIA = "neutra";
       } else if (ia?.disponivel === false) {
@@ -161,48 +164,54 @@ export function criarChat(A) {
             try { hora = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date(ia.pausada_ate)); } catch { /* estado continua legível */ }
           }
           rotuloIA = ia.so_manual ? `IA pausada — retorno manual` : `IA pausada até ${hora || "em breve"} — ${autor}`;
+          curtoIA = ia.so_manual ? "IA pausada" : `IA pausada até ${hora || "em breve"}`;
           corIA = "aten";
         } else { rotuloIA = "IA atendendo"; corIA = "ok"; dicaIA = ia.respondendo ? "O CodeWords está respondendo a esta conversa." : "O agente do CodeWords pode responder automaticamente."; }
       }
-      selos.appendChild(ui.pilula(rotuloIA, corIA, { icone: "ia", title: dicaIA }));
+      const pia = ui.pilula("", corIA, { icone: "ia", title: [rotuloIA, dicaIA].filter(Boolean).join(". "), class: "cv-pil-ia" });
+      pia.append(h("span", { class: "so-largo-txt" }, rotuloIA), h("span", { class: "so-curto-txt" }, curtoIA || rotuloIA));
+      faixa.appendChild(pia);
     }
 
-    const acoes = h("div", { class: "cvc-acoes" });
+    // ações: no máximo UM primário por estado (ver L.estadoCabecalho)
     const pode = A.podeEscrever;
-    const minha = conv.atribuida_a && conv.atribuida_a === eu;
-    if (pode && conv.status !== "resolvida" && !minha) {
-      const b = h("button", { type: "button", class: "bt bt-sec bt-p so-largo" }, ui.icone("usuario"), codeWords ? "Atribuir a mim" : "Assumir");
+    const minha = !!(conv.atribuida_a && conv.atribuida_a === eu);
+    const est = L.estadoCabecalho({ conv, eu, pode, codeWords, ia });
+    const acoes = h("div", { class: "cvc-acoes" });
+    if (est.primaria === "assumir_ia") {
+      const b = h("button", { type: "button", class: "bt bt-prim bt-p cvc-ia-acao", title: "Pausar a IA e assumir esta conversa" }, ui.icone("usuario"), "Assumir");
+      b.addEventListener("click", () => A.acoes.assumirIA(b));
+      acoes.appendChild(b);
+    } else if (est.primaria === "assumir") {
+      const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("usuario"), "Assumir");
       b.addEventListener("click", () => A.acoes.assumir(b));
       acoes.appendChild(b);
-    }
-    if (pode && codeWords && conv.status !== "resolvida" && ia?.disponivel && ia.ia_ligada) {
-      const devolver = !!ia.pausada;
-      const bIA = h("button", { type: "button", class: devolver ? "bt bt-sec bt-p cvc-ia-acao" : "bt bt-prim bt-p cvc-ia-acao" },
-        ui.icone(devolver ? "ia" : "usuario"), devolver ? "Devolver para a IA" : "Assumir");
-      bIA.title = devolver ? "Retomar as respostas automáticas nesta conversa" : "Pausar a IA e assumir esta conversa";
-      bIA.addEventListener("click", () => devolver ? A.acoes.devolverIA(bIA) : A.acoes.assumirIA(bIA));
-      acoes.appendChild(bIA);
-    }
-    if (pode) acoes.appendChild(h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Transferir", title: "Transferir",
-      on: { click: () => A.acoes.transferir() } }, A.icone("transferir")));
-    if (pode && conv.status !== "resolvida") {
-      const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("check"), h("span", { class: "rot-longo" }, "Resolver"));
-      b.setAttribute("aria-label", "Resolver atendimento");
+    } else if (est.primaria === "resolver") {
+      const b = h("button", { type: "button", class: "bt bt-p bt-resolver", "aria-label": "Resolver atendimento" }, ui.icone("check"), h("span", { class: "rot-longo" }, "Resolver"));
       b.addEventListener("click", () => A.acoes.status("resolvida", b));
       acoes.appendChild(b);
-    } else if (pode) {
+    } else if (est.primaria === "reabrir") {
       const b = h("button", { type: "button", class: "bt bt-sec bt-p" }, A.icone("reabrir"), "Reabrir");
       b.addEventListener("click", () => A.acoes.status("aberta", b));
       acoes.appendChild(b);
     }
+    if (pode && est.primaria !== "assumir_ia") acoes.appendChild(h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Transferir", title: "Transferir",
+      on: { click: () => A.acoes.transferir() } }, A.icone("transferir")));
+    if (est.resolverIcone) {
+      const b = h("button", { type: "button", class: "bt-icone so-largo cvc-resolver-ic", "aria-label": "Resolver atendimento", title: "Resolver" }, ui.icone("check"));
+      b.addEventListener("click", () => A.acoes.status("resolvida", b));
+      acoes.appendChild(b);
+    }
     if (A.raiz && A.raiz.dataset.lateral === "gaveta") {
-      acoes.appendChild(h("button", { type: "button", class: "bt-icone", "aria-label": "Detalhes do contato", title: "Detalhes",
+      acoes.appendChild(h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Detalhes do contato", title: "Detalhes",
         on: { click: () => A.acoes.abrirDetalhes() } }, A.icone("lateral")));
     }
-    const mais = h("button", { type: "button", class: "bt-icone", "aria-label": "Mais ações", title: "Mais ações" }, ui.icone("opcoes"));
+    const mais = h("button", { type: "button", class: "bt-icone cvc-mais", "aria-label": "Mais ações", title: "Mais ações" }, ui.icone("opcoes"));
     mais.addEventListener("click", () => {
       const itens = [];
-      if (pode && conv.status !== "resolvida" && !minha) itens.push({ rotulo: "Assumir", icone: "usuario", fn: () => A.acoes.assumir() });
+      if (pode && conv.status !== "resolvida" && est.primaria !== "resolver") itens.push({ rotulo: "Resolver atendimento", icone: "check", fn: () => A.acoes.status("resolvida") });
+      if (pode && conv.status !== "resolvida" && !minha && est.primaria === "assumir_ia") itens.push({ rotulo: "Atribuir a mim (sem pausar a IA)", icone: "usuario", fn: () => A.acoes.assumir() });
+      if (pode && est.devolverIA) itens.push({ rotulo: "Devolver para a IA", icone: "ia", fn: () => A.acoes.devolverIA() });
       if (pode) itens.push({ rotulo: "Transferir…", icone: "seta-dir", fn: () => A.acoes.transferir() });
       if (pode && conv.status === "aberta") itens.push({ rotulo: "Marcar como pendente", icone: "relogio", fn: () => A.acoes.status("pendente") });
       if (pode && conv.status === "pendente") itens.push({ rotulo: "Retomar (aberta)", icone: "chat", fn: () => A.acoes.status("aberta") });

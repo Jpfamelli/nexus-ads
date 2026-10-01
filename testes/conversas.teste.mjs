@@ -451,5 +451,75 @@ await teste("SQL: nenhuma função definida nos DOIS arquivos (e / e_b) — reap
   for (const f of ["nx_cv_listar", "nx_cv_nova", "nx_canal_salvar", "nx_cv_distribuir"]) assert.ok(e.has(f), `${f} no arquivo e`);
 });
 
+/* ============================================================ M34 — um botão primário por vez, cabeçalho de uma linha, abas numa linha */
+console.log("\n(c) M34 — cabeçalho do chat e abas da lista");
+
+await teste("M34: estadoCabecalho — no máximo UM primário em qualquer estado e Resolver segue o dono", () => {
+  const EU = "u1";
+  const ia = (o = {}) => ({ disponivel: true, ia_ligada: true, pausada: false, ...o });
+  const casos = [];
+  for (const status of ["aberta", "pendente", "resolvida"]) for (const dono of [null, EU, "u2"]) for (const cw of [false, true]) for (const estIA of [null, ia(), ia({ pausada: true }), { disponivel: false }, ia({ ia_ligada: false })]) for (const pode of [true, false])
+    casos.push({ conv: { status, atribuida_a: dono }, eu: EU, pode, codeWords: cw, ia: estIA });
+  assert.equal(casos.length, 3 * 3 * 2 * 5 * 2);
+  for (const c of casos) {
+    const e = L.estadoCabecalho(c);
+    const primarios = [e.estilo === "prim" ? e.primaria : null].filter(Boolean);
+    assert.ok(primarios.length <= 1, `≤ 1 primário: ${JSON.stringify(c)}`);
+    if (!c.pode) assert.equal(e.primaria, null, "sem permissão: nenhum botão de ação");
+  }
+  // sem dono → Assumir primário; Resolver vira ícone neutro
+  let e = L.estadoCabecalho({ conv: { status: "aberta", atribuida_a: null }, eu: EU, pode: true });
+  assert.deepEqual([e.primaria, e.estilo, e.resolverIcone], ["assumir", "prim", true]);
+  // minha → Resolver em contorno (nenhum primário)
+  e = L.estadoCabecalho({ conv: { status: "aberta", atribuida_a: EU }, eu: EU, pode: true });
+  assert.deepEqual([e.primaria, e.estilo, e.resolverIcone], ["resolver", "contorno", false]);
+  // IA atendendo (CodeWords): Assumir (pausa a IA) e o resto no ⋮ — mesmo com a conversa já minha
+  for (const dono of [null, EU, "u2"]) {
+    e = L.estadoCabecalho({ conv: { status: "aberta", atribuida_a: dono }, eu: EU, pode: true, codeWords: true, ia: ia() });
+    assert.deepEqual([e.primaria, e.estilo, e.resolverNoMenu], ["assumir_ia", "prim", true], `IA atendendo, dono ${dono}`);
+  }
+  // IA pausada: volta a valer a regra do dono e o "Devolver para a IA" entra no ⋮
+  e = L.estadoCabecalho({ conv: { status: "aberta", atribuida_a: EU }, eu: EU, pode: true, codeWords: true, ia: ia({ pausada: true }) });
+  assert.deepEqual([e.primaria, e.devolverIA], ["resolver", true]);
+  // IA fora do ar ou desligada não esconde o Assumir comum
+  e = L.estadoCabecalho({ conv: { status: "aberta", atribuida_a: null }, eu: EU, pode: true, codeWords: true, ia: { disponivel: false } });
+  assert.equal(e.primaria, "assumir");
+  // resolvida → só Reabrir, em secundário
+  e = L.estadoCabecalho({ conv: { status: "resolvida", atribuida_a: EU }, eu: EU, pode: true });
+  assert.deepEqual([e.primaria, e.estilo], ["reabrir", "sec"]);
+});
+
+await teste("M34: janelaCurta e abasVisiveis (Minhas some para leitura; Ocultas só do supervisor; o resto vai para o menu)", () => {
+  assert.equal(L.janelaCurta(L.janela({ ultima_entrada_em: new Date(AGORA.getTime() - 6 * 3600000).toISOString() }, AGORA)), "Janela 18 h");
+  assert.equal(L.janelaCurta(L.janela({ ultima_entrada_em: new Date(AGORA.getTime() - (24 * 3600000 - 25 * 60000)).toISOString() }, AGORA)), "Janela 25 min");
+  assert.equal(L.janelaCurta(L.janela({}, AGORA)), "Janela fechada");
+  assert.deepEqual(L.ABAS_FIXAS, ["minhas", "sem_dono", "aguardando"]);
+  const atendente = L.abasVisiveis("atendente", true);
+  assert.deepEqual(atendente.fixas.map(a => a.id), ["minhas", "sem_dono", "aguardando"]);
+  assert.deepEqual(atendente.mais.map(a => a.id), ["abertas", "pendentes", "resolvidas"], "Ocultas só para supervisor");
+  assert.deepEqual(L.abasVisiveis("supervisor", true).mais.map(a => a.id), ["abertas", "pendentes", "resolvidas", "ocultas"]);
+  assert.deepEqual(L.abasVisiveis("leitura", false).fixas.map(a => a.id), ["sem_dono", "aguardando"], "leitura não tem Minhas");
+  const todas = [...atendente.fixas, ...atendente.mais].map(a => a.id);
+  assert.equal(new Set(todas).size, todas.length, "nenhuma aba repetida entre fixas e menu");
+});
+
+await teste("M34: o cabeçalho usa um primário por estado, uma linha no celular e a lista usa 1 linha de abas + pontos de cor", () => {
+  const chat = ler("cv-chat.js"), lista = ler("cv-lista.js"), comp = ler("cv-composer.js"), css = ler("conversas.css");
+  assert.match(chat, /L\.estadoCabecalho\(\{ conv, eu, pode, codeWords, ia \}\)/, "cabeçalho decidido pela função pura");
+  assert.doesNotMatch(chat, /"bt bt-prim bt-p"\s*\}[^)]*"Resolver"|class: "bt bt-prim bt-p" \}, ui\.icone\("check"\)/, "Resolver nunca é primário");
+  assert.match(chat, /class: "bt bt-p bt-resolver"/, "Resolver (minha) em contorno");
+  assert.match(css, /\.bt-resolver \{[^}]*border-color: var\(--c-ok\)/, "contorno em --c-ok");
+  assert.match(css, /@media \(max-width: 760px\) \{\s*\/\* M34[^*]*\*\/\s*\.cvc-cab \{ display: flex;/, "cabeçalho de uma linha no celular");
+  assert.doesNotMatch(css, /grid-template-areas: "voltar contato" "acoes acoes"/, "sem a segunda linha de ações");
+  assert.match(lista, /ui\.segmentado\(\{ opcoes: fixas\.map/, "abas pelo segmentado");
+  assert.match(lista, /class: "cvl-dot cvl-dot-etapa"/, "etapa vira ponto de cor");
+  assert.doesNotMatch(lista, /cv-etapa cvl-etapa/, "nenhuma pílula de etapa na lista (era cortada com reticências)");
+  assert.match(css, /\.cvl-dot \{[^}]*background: var\(--cor/, "ponto de cor pelo token --cor");
+  // o aviso do canal CodeWords deixou de ocupar a conversa: só aparece ao tocar no clipe ou no ⓘ
+  assert.match(comp, /const btInfo = h\("button"[^;]*"aria-expanded": "false"/, "botão ⓘ ao lado do clipe");
+  assert.match(comp, /capInfo\.hidden = !temAviso \|\| !infoAberta/, "faixa escondida até a pessoa pedir");
+  assert.match(comp, /if \(btClipe\.getAttribute\("aria-disabled"\) === "true"\) \{ if \(usaCodeWords\(\)\) mostrarInfoCanal\(true\)/, "tocar no clipe do CodeWords explica o motivo");
+});
+
 console.log(`\n${ok} ok · ${falhas} falha(s)`);
 if (falhas) process.exit(1);
