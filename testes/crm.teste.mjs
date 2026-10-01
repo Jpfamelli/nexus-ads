@@ -792,5 +792,195 @@ await teste("agenda.css (M26): só tokens, paleta --pal-*, hachura do bloqueio, 
   assert.ok(/\.agenda-abas \{ display: none; \}/.test(css), "celular: sem Dia/Semana (a visão é o dia com a faixa da semana)");
 });
 
+/* ============================================================ (a3) listas do celular (M28) */
+console.log("\n(a3) listas do celular — Ligar/Conversa, deslizar e botão");
+
+await teste("M28: tel: do cadastro, ações da linha (o deslizar aponta para ações que o ⋮/botão já têm) e adiar para amanhã", () => {
+  // hrefTel: só dígitos; DDD + número ganha o 55; fora de 10–13 dígitos não dá para ligar
+  assert.equal(L.hrefTel("5512998303030"), "tel:+5512998303030");
+  assert.equal(L.hrefTel("(12) 99830-3030"), "tel:+5512998303030");
+  assert.equal(L.hrefTel("1230303030"), "tel:+551230303030");
+  assert.equal(L.hrefTel("447911123456"), "tel:+447911123456");
+  assert.equal(L.hrefTel("123"), null); assert.equal(L.hrefTel(""), null); assert.equal(L.hrefTel(null), null); assert.equal(L.hrefTel("55129983030301234"), null);
+  // contato: quem pode escrever tem Tarefa (direita) e Oportunidade (esquerda); todo lado do gesto existe no ⋮
+  for (const pode of [true, false]) for (const conversas of [true, false]) for (const telefone of [true, false]) {
+    const A = L.acoesDoContato({ pode, conversas, telefone });
+    for (const lado of [A.direita, A.esquerda]) if (lado) assert.ok(A.menu.includes(lado) || A.botoes.includes(lado), `o gesto «${lado}» precisa de botão equivalente`);
+    assert.ok(A.menu.includes("abrir"), "abrir a ficha sempre existe");
+    assert.deepEqual(A.botoes, [telefone && "ligar", conversas && "conversa"].filter(Boolean));
+    if (!pode) { assert.equal(A.direita, null); assert.equal(A.esquerda, null); assert.deepEqual(A.menu, ["abrir"]); }
+  }
+  assert.deepEqual(L.acoesDoContato({ pode: true }), { botoes: [], menu: ["abrir", "tarefa", "negocio"], direita: "tarefa", esquerda: "negocio" });
+  // tarefa: direita = concluir (o círculo é o botão), esquerda = adiar (no ⋮); concluída reabre e não adia; excluir só no ⋮
+  const T = L.acoesDaTarefa({ pode: true });
+  assert.deepEqual(T, { botoes: ["concluir"], menu: ["editar", "adiar", "excluir"], direita: "concluir", esquerda: "adiar" });
+  for (const lado of [T.direita, T.esquerda]) assert.ok(T.menu.includes(lado) || T.botoes.includes(lado));
+  assert.deepEqual(L.acoesDaTarefa({ pode: true, concluida: true }), { botoes: ["concluir"], menu: ["editar", "excluir"], direita: "concluir", esquerda: null });
+  assert.deepEqual(L.acoesDaTarefa({ pode: false }), { botoes: [], menu: [], direita: null, esquerda: null });
+  assert.ok(T.menu.includes("excluir") && T.direita !== "excluir" && T.esquerda !== "excluir", "excluir só no ⋮: deslizar nunca exclui, só conclui e adia");
+  // adiar: amanhã (dia de SP) na mesma hora; sem data = 09:00; já à frente = só +1 dia
+  const agora = new Date("2026-10-01T15:00:00Z");                                          // 12:00 em SP
+  assert.equal(L.adiarParaAmanha("2026-10-01T12:33:00Z", agora), "2026-10-02T12:33:00.000Z");   // hoje 09:33 → amanhã 09:33
+  assert.equal(L.adiarParaAmanha("2026-09-28T17:00:00Z", agora), "2026-10-02T17:00:00.000Z");   // atrasada há dias → amanhã, não «ontem + 1»
+  assert.equal(L.adiarParaAmanha(null, agora), "2026-10-02T12:00:00.000Z");                     // sem prazo → amanhã 09:00
+  assert.equal(L.adiarParaAmanha("2026-10-02T12:00:00Z", agora), "2026-10-03T12:00:00.000Z");   // já era amanhã → depois de amanhã
+  assert.equal(L.adiarParaAmanha("2026-10-05T20:15:00Z", agora), "2026-10-06T20:15:00.000Z");   // dias à frente → +1 dia
+  // virada de dia: 23:40 de 30/09 em SP (= 02:40Z de 01/10) — «amanhã» é 01/10, não 02/10
+  assert.equal(L.adiarParaAmanha("2026-10-01T02:30:00Z", new Date("2026-10-01T02:40:00Z")), "2026-10-02T02:30:00.000Z");
+});
+
+/* DOM falso mínimo: o suficiente para montar a lista de contatos e a linha de tarefa e chamar, como o dedo ou o mouse chamariam, o gesto e o botão */
+function criarFalso() {
+  const classe = el => [].concat(el.attrs.class || []).filter(Boolean).join(" ");
+  const h = (tag, attrs, ...filhos) => {
+    const el = { tag, attrs: attrs || {}, filhos: filhos.flat(Infinity).filter(x => x !== null && x !== undefined && x !== false), ouvintes: {},
+      checked: !!(attrs && attrs.checked), classList: { toggle() {}, add() {}, remove() {}, contains: () => false },
+      addEventListener(t, f) { this.ouvintes[t] = f; }, appendChild(x) { this.filhos.push(x); return x; } };
+    if (attrs && attrs.on) for (const [t, f] of Object.entries(attrs.on)) el.ouvintes[t] = f;
+    return el;
+  };
+  const achar = (raiz, pred, todos = false) => {
+    const out = [];
+    (function ir(x) { if (!x || typeof x !== "object") return; if (x.tag && pred(x)) out.push(x); for (const f of x.filhos || []) ir(f); })(raiz);
+    return todos ? out : out[0];
+  };
+  const dormir = () => new Promise(r => setTimeout(r, 0));
+  return { h, achar, classe, dormir };
+}
+
+await teste("M28: deslizar e botão chamam a MESMA ação — contatos (Tarefa/Oportunidade) e tarefas (concluir/adiar/excluir)", async () => {
+  const { h, achar, classe, dormir } = criarFalso();
+  const { listaCompacta } = await import("../web/app/crm-listas.js");
+  const { itemTarefa } = await import("../web/app/crm-tarefas.js");
+  const chamadas = [], gestos = [], menus = [], desfazeres = [];
+  const ui = {
+    icone: n => ({ tag: "ic", attrs: { n }, filhos: [] }), avatar: () => h("span"), pilula: t => h("span", { class: "pilula" }, t), etiqueta: e => h("span", { class: "etiq" }, e.nome),
+    telBR: t => String(t), limpar: el => { el.filhos = []; return el; }, anunciar() {}, toast() {}, horaBR: () => "09:00", dataCurtaBR: () => "02/10", relativo: () => "ontem", hojeSP: () => "2026-10-01",
+    deslizar: (el, o) => { gestos.push({ el, o }); return () => {}; },
+    menu: (ancora, itens) => { menus.push({ ancora, itens }); return { fechar() {} }; },
+    acaoComDesfazer: async o => { desfazeres.push(o); return { estado: "mantida" }; },
+  };
+  const mods = { tarefas: { formTarefa: async (k_, t, o) => { chamadas.push(["formTarefa", t, o]); return null; } }, negocio: { novoNegocio: async (k_, d) => { chamadas.push(["novoNegocio", d]); } } };
+  const mk = (pode = true) => ({
+    ui, h, L, ctx: { temModulo: () => true, navegar: h_ => chamadas.push(["navegar", h_]) }, pode: () => pode, etiqueta: () => null, mod: async n => mods[n], toastErro() {}, escrever: async () => ({}),
+    v: { contatos: "Pacientes", contato: "Paciente", negocio: "Oportunidade", negocios: "Oportunidades", novo: x => `Nova ${x === "negocio" ? "oportunidade" : x}` },
+    api: { rpcC: async (nome, p) => { chamadas.push([nome, p]); return { id: 71, concluida_em: p && p.p_concluida ? "2026-10-01T15:00:00Z" : null }; } },
+  });
+  const limpa = () => { chamadas.length = 0; gestos.length = 0; menus.length = 0; desfazeres.length = 0; };
+
+  /* ---- contatos ---- */
+  const c = { id: 501, nome: "Mariana Costa", telefone: "5512998303030", cidade: "Taubaté", plataforma: "google", etiquetas: [] };
+  let k = mk(true);
+  const lista = listaCompacta(k, { aoMudar: () => chamadas.push(["aoMudar"]) });
+  lista.atualizar([c]);
+  const li = achar(lista.el, x => classe(x) === "ct-li");
+  assert.ok(li, "uma linha por paciente");
+  const tel = achar(li, x => x.tag === "a" && /^tel:/.test(x.attrs.href || ""));
+  assert.equal(tel.attrs.href, "tel:+5512998303030"); assert.match(tel.attrs["aria-label"], /Ligar para Mariana Costa/);
+  const conv = achar(li, x => x.tag === "a" && /conversas\?contato=501/.test(x.attrs.href || ""));
+  assert.ok(conv && /Abrir conversa/.test(conv.attrs["aria-label"]), "Abrir conversa");
+  assert.equal(achar(li, x => classe(x) === "ct-abrir").attrs.href, "#/contatos/501", "tocar na linha abre a ficha");
+  assert.equal(achar(li, x => classe(x) === "pilula").filhos[0], "Google", "uma pílula só: a origem do anúncio");
+  assert.equal(gestos.length, 1, "a linha desliza");
+  const g = gestos[0].o;
+  assert.equal(typeof g.direita, "function"); assert.equal(typeof g.esquerda, "function");
+  achar(li, x => /Mais ações para/.test(x.attrs["aria-label"] || "")).ouvintes.click();
+  const itens = menus.at(-1).itens;
+  assert.deepEqual(itens.map(i => i.rotulo), ["Abrir ficha", "Nova tarefa", "Nova oportunidade"]);
+  // direita = Nova tarefa; esquerda = Nova oportunidade — e o ⋮ faz exatamente o mesmo
+  limpa(); await g.direita(); await dormir(); const viaGestoT = JSON.stringify(chamadas);
+  limpa(); await itens[1].fn(); await dormir(); const viaMenuT = JSON.stringify(chamadas);
+  assert.equal(viaGestoT, viaMenuT, "Tarefa: gesto = ⋮"); assert.equal(viaGestoT, JSON.stringify([["formTarefa", null, { contato_id: 501 }]]));
+  limpa(); await g.esquerda(); await dormir(); const viaGestoN = JSON.stringify(chamadas.map(x => x.slice(0, 2)));
+  limpa(); await itens[2].fn(); await dormir(); const viaMenuN = JSON.stringify(chamadas.map(x => x.slice(0, 2)));
+  assert.equal(viaGestoN, viaMenuN, "Oportunidade: gesto = ⋮"); assert.equal(viaGestoN, JSON.stringify([["novoNegocio", { contato_id: 501 }]]));
+  // sem permissão de escrita: sem gesto e só «Abrir ficha»; sem telefone não há Ligar
+  limpa(); k = mk(false);
+  const l2 = listaCompacta(k, { aoMudar() {} }); l2.atualizar([{ id: 9, nome: "Sem fone", telefone: null }]);
+  assert.equal(gestos[0].o.direita, undefined); assert.equal(gestos[0].o.esquerda, undefined);
+  const li2 = achar(l2.el, x => classe(x) === "ct-li");
+  assert.ok(!achar(li2, x => x.tag === "a" && /^tel:/.test(x.attrs.href || "")), "sem telefone, sem Ligar");
+  achar(li2, x => /Mais ações para/.test(x.attrs["aria-label"] || "")).ouvintes.click();
+  assert.deepEqual(menus.at(-1).itens.map(i => i.rotulo), ["Abrir ficha"]);
+  limpa(); l2.atualizar([]);
+  assert.match(String(achar(l2.el, x => classe(x) === "ct-vazio").filhos[0]), /Nada encontrado/);
+
+  /* ---- tarefas ---- */
+  const t = { id: 71, titulo: "Confirmar avaliação", tipo: "ligacao", vence_em: "2099-01-10T15:00:00Z", concluida_em: null, contato: { id: 501, nome: "Mariana Costa" } };
+  limpa(); k = mk(true);
+  const eventos = [];
+  const li3 = itemTarefa(k, t, { aoMudar: ev => eventos.push(ev), mostrarVinculo: true });
+  const mais = achar(li3, x => /Mais ações da tarefa/.test(x.attrs["aria-label"] || ""));
+  assert.equal(gestos[0].el.attrs.class[0], "tf", "o que desliza é a linha .tf (a moldura .tf-li fica parada, com o fundo do gesto)");
+  mais.ouvintes.click();
+  const mi = menus.at(-1).itens;
+  assert.deepEqual(mi.map(i => i.rotulo), ["Editar", "Adiar para amanhã", "Excluir"]);
+  assert.equal(mi[2].perigo, true);
+  // concluir: o círculo e o deslizar para a direita
+  limpa(); k.api.rpcC = async (n, p) => { chamadas.push([n, p]); return { ...t, concluida_em: p.p_concluida ? "2026-10-01T15:00:00Z" : null }; };
+  const liA = itemTarefa(k, t, { aoMudar() {} }); const ckA = achar(liA, x => x.tag === "input");
+  ckA.checked = true; await ckA.ouvintes.change(); await dormir();
+  const viaCirculo = JSON.stringify(chamadas); const desfCirculo = desfazeres.length;
+  limpa(); k.api.rpcC = async (n, p) => { chamadas.push([n, p]); return { ...t, concluida_em: p.p_concluida ? "2026-10-01T15:00:00Z" : null }; };
+  const liB = itemTarefa(k, t, { aoMudar() {} }); const swB = gestos[0].o;
+  await swB.direita(); await dormir();
+  assert.equal(JSON.stringify(chamadas), viaCirculo, "concluir: gesto = círculo"); assert.equal(viaCirculo, JSON.stringify([["nx_tarefa_concluir", { p_id: 71, p_concluida: true }]]));
+  assert.equal(desfazeres.length, desfCirculo, "e os dois oferecem o Desfazer");
+  await desfazeres[0].reverter(); assert.deepEqual(chamadas.at(-1), ["nx_tarefa_concluir", { p_id: 71, p_concluida: false }], "Desfazer reabre");
+  // adiar: ⋮ e deslizar para a esquerda gravam o mesmo vencimento; Desfazer devolve o de antes
+  limpa(); k.api.rpcC = async (n, p) => { chamadas.push([n, p]); return { ...t, vence_em: p.p_tarefa.vence_em }; };
+  const liC = itemTarefa(k, t, { aoMudar: ev => eventos.push(ev) });
+  achar(liC, x => /Mais ações da tarefa/.test(x.attrs["aria-label"] || "")).ouvintes.click();
+  await menus.at(-1).itens[1].fn(); await dormir(); const viaMenuAdiar = JSON.stringify(chamadas); const txtMenu = desfazeres.at(-1).texto;
+  limpa(); k.api.rpcC = async (n, p) => { chamadas.push([n, p]); return { ...t, vence_em: p.p_tarefa.vence_em }; };
+  itemTarefa(k, t, { aoMudar() {} }); await gestos[0].o.esquerda(); await dormir();
+  assert.equal(JSON.stringify(chamadas), viaMenuAdiar, "adiar: gesto = ⋮");
+  assert.equal(viaMenuAdiar, JSON.stringify([["nx_tarefa_salvar", { p_tarefa: { id: 71, vence_em: "2099-01-11T15:00:00.000Z" } }]]));
+  assert.match(txtMenu, /adiada para 02\/10/);
+  await desfazeres.at(-1).reverter(); assert.deepEqual(chamadas.at(-1), ["nx_tarefa_salvar", { p_tarefa: { id: 71, vence_em: "2099-01-10T15:00:00Z" } }], "Desfazer devolve o vencimento anterior");
+  // excluir: a lixeira (desktop) e o ⋮ (celular) — a mesma ação com Desfazer; deslizar NÃO exclui
+  limpa(); const ev3 = []; k.api.rpcC = async (n, p) => { chamadas.push([n, p]); return {}; };
+  const liD = itemTarefa(k, t, { aoMudar: e => ev3.push(e) });
+  achar(liD, x => /Excluir a tarefa/.test(x.attrs["aria-label"] || "")).ouvintes.click();
+  const viaLixeira = desfazeres.at(-1); limpa();
+  achar(liD, x => /Mais ações da tarefa/.test(x.attrs["aria-label"] || "")).ouvintes.click();
+  await menus.at(-1).itens[2].fn(); const viaMais = desfazeres.at(-1);
+  assert.equal(viaLixeira.texto, viaMais.texto); assert.match(viaMais.texto, /excluída/);
+  viaMais.aplicar(); assert.equal(ev3.at(-1).tipo, "excluida");
+  await viaMais.firmar(); assert.deepEqual(chamadas.at(-1), ["nx_tarefa_excluir", { p_id: 71 }], "a exclusão de verdade só no firmar");
+  viaMais.reverter(); assert.equal(ev3.at(-1).tipo, "salva", "Desfazer devolve a tarefa");
+  // concluída: reabre ao deslizar para a direita; não adia
+  limpa(); itemTarefa(k, { ...t, concluida_em: "2026-10-01T10:00:00Z" }, { aoMudar() {} });
+  assert.equal(typeof gestos[0].o.direita, "function"); assert.equal(gestos[0].o.esquerda, undefined);
+  // sem permissão: nada desliza, sem ⋮
+  limpa(); const semPode = mk(false); const liE = itemTarefa(semPode, t, { aoMudar() {} });
+  assert.equal(gestos.length, 0, "sem permissão não há gesto"); assert.ok(!achar(liE, x => /Mais ações da tarefa/.test(x.attrs["aria-label"] || "")));
+});
+
+await teste("M28 (estático): lista compacta só no celular, Exportar/Importar no ⋮, «Novo» flutuante, busca fixa, ⋮ e deslizar nas tarefas", () => {
+  const js = ler("crm-listas.js"), tj = ler("crm-tarefas.js"), css = ler("crm.css");
+  // contatos
+  assert.ok(/L\.acoesDoContato\(/.test(js) && /ui\.deslizar\(frente,\s*\{\s*direita:\s*A\.direita \? \(\) => executar\(A\.direita, c\)/.test(js) && /fn:\s*\(\) => executar\(id, c\)/.test(js), "gesto e ⋮ chamam executar()");
+  assert.ok(js.includes("href: L.hrefTel(c.telefone)"), "Ligar usa tel:");
+  assert.ok(/class:\s*"bt-icone crm-cab-mais"/.test(js) && /Exportar planilha/.test(js) && /Importar planilha/.test(js), "Exportar/Importar no ⋮ do cabeçalho");
+  assert.ok(/class:\s*"crm-fab"/.test(js) && /class:\s*"pilha-p crm-fixa"/.test(js), "«Novo» flutuante e busca fixa");
+  assert.ok(/listaM\.atualizar\(r\.itens\)/.test(js) && /tab\.atualizar\(r\.itens\)/.test(js), "a tabela continua (desktop) e a lista compacta é desenhada junto");
+  assert.ok(!/innerHTML/.test(js), "sem innerHTML");
+  // tarefas
+  assert.ok(/L\.acoesDaTarefa\(/.test(tj) && /ui\.deslizar\(el,\s*\{\s*direita:\s*A\.direita \? \(\) => executar\(A\.direita\)/.test(tj), "o deslizar da tarefa usa executar()");
+  assert.ok(/check\.addEventListener\("change",\s*\(\) => alternar\(check\.checked\)\)/.test(tj) && /return alternar\(!check\.checked\)/.test(tj), "círculo e gesto chamam alternar()");
+  assert.ok(/ui\.menu\(mais,\s*A\.menu\.map\(id => \(\{[^}]*fn:\s*\(\) => executar\(id\)/.test(tj), "o ⋮ chama executar()");
+  assert.ok(/ocultas\.add\(t\.id\)/.test(tj) && /carregar\(true\)/.test(tj), "recarga quieta e exclusão pendente não volta na recarga");
+  // CSS
+  assert.ok(/\.ct-lista-env,\s*\.crm-cab-mais,\s*\.tf-mais\s*\{\s*display:\s*none;\s*\}/.test(css), "a lista compacta, o ⋮ do cabeçalho e o ⋮ da tarefa começam escondidos (desktop)");
+  const m760 = css.slice(css.indexOf("/* M28: Pacientes e Tarefas"));
+  assert.ok(/\.crm\[data-tela="contatos"\] \.tabela-env\s*\{\s*display:\s*none;\s*\}/.test(m760) && /\.ct-lista-env\s*\{\s*display:\s*block;\s*\}/.test(m760), "≤ 760 px: tabela some, lista compacta aparece");
+  assert.ok(/\.crm\[data-tela="contatos"\] \.crm-fixa\s*\{[^}]*position:\s*sticky;[^}]*top:\s*var\(--topo\)/.test(m760), "busca fixa ao rolar");
+  assert.ok(/\.tf-acoes \.bt-icone:not\(\.tf-mais\)\s*\{\s*display:\s*none;/.test(m760) && /\.tf-acoes \.tf-mais\s*\{\s*display:\s*inline-grid;/.test(m760), "lápis e lixeira viram um ⋮ no celular");
+  assert.ok(/\.ct-linha\s*\{[^}]*min-height:\s*68px/.test(css) && /\.ct-bt\s*\{\s*width:\s*44px;\s*height:\s*44px;/.test(css), "linha de ~72 px com alvos de 44 px");
+  assert.ok(/\.ct-fundo, \.tf-fundo\s*\{[^}]*width:\s*50%/.test(css) && /\.ct-fundo-d, \.tf-fundo-d \{ left: 0; \}/.test(css), "cada fundo do gesto ocupa só a sua metade (um não cobre o outro)");
+  assert.ok(!/(^|\n)\s*\.ct-[a-z-]+[^{]*\{[^}]*font-size:\s*(?:1[01]|[0-9])px/.test(css), "nada abaixo de 12 px na lista compacta");
+});
+
 console.log(`\n${ok} ok, ${falhas} falha(s)`);
 if (falhas) process.exit(1);

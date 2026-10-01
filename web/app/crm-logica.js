@@ -1086,3 +1086,46 @@ export function linhasExportacao(itens, campos = []) {
   ]);
   return { cabecalho, linhas };
 }
+
+/* ------------------------------------------------------------ listas do celular (M28) */
+/** `tel:+55…` a partir do telefone do cadastro (só dígitos): 10–11 dígitos = DDD + número, ganham o 55; 12–13 já trazem o país; fora disso não dá para ligar → null. */
+export function hrefTel(telefone) {
+  let d = String(telefone == null ? "" : telefone).replace(/\D/g, "");
+  if (d.length < 10 || d.length > 13) return null;
+  if (d.length <= 11) d = `55${d}`;
+  return `tel:+${d}`;
+}
+
+/**
+ * Ações de uma linha de contato no celular. Uma lista só: `menu` (o ⋮), `botoes` (sempre visíveis) e os dois lados do deslizar, que apontam para
+ * ações que JÁ existem em `menu`/`botoes` — assim o gesto e o botão chamam a mesma função e produzem o mesmo resultado.
+ * Deslizar para a direita = nova tarefa; para a esquerda = nova oportunidade (só quem pode escrever).
+ */
+export function acoesDoContato({ pode = false, conversas = false, telefone = false } = {}) {
+  const botoes = [telefone && "ligar", conversas && "conversa"].filter(Boolean);
+  const menu = ["abrir", ...(pode ? ["tarefa", "negocio"] : [])];
+  return { botoes, menu, direita: pode ? "tarefa" : null, esquerda: pode ? "negocio" : null };
+}
+
+/**
+ * Ações de uma linha de tarefa no celular. `botoes` = o que está sempre à mostra (o círculo de concluir); `menu` = o ⋮.
+ * Direita = concluir (ou reabrir, se já está concluída); esquerda = adiar para amanhã. Excluir fica só no ⋮ (com Desfazer).
+ */
+export function acoesDaTarefa({ pode = false, concluida = false } = {}) {
+  if (!pode) return { botoes: [], menu: [], direita: null, esquerda: null };
+  return { botoes: ["concluir"], menu: concluida ? ["editar", "excluir"] : ["editar", "adiar", "excluir"], direita: "concluir", esquerda: concluida ? null : "adiar" };
+}
+
+/**
+ * Novo vencimento de «Adiar para amanhã»: amanhã (dia de São Paulo, UTC−3 sem horário de verão) na MESMA hora de antes — às 09:00 se a tarefa não tinha data.
+ * Se ela já vencia depois desse instante (amanhã mais tarde, ou dias à frente), só empurra um dia. → ISO UTC.
+ */
+export function adiarParaAmanha(venceEm, agora = new Date()) {
+  const DIA = 86400000, SP = 3 * 3600000;
+  const ymd = ms => new Date(ms - SP).toISOString().slice(0, 10);
+  const atual = venceEm ? Date.parse(venceEm) : NaN;
+  const hhmm = Number.isFinite(atual) ? new Date(atual - SP).toISOString().slice(11, 16) : "09:00";
+  let alvo = Date.parse(`${ymd(new Date(agora).getTime() + DIA)}T${hhmm}:00-03:00`);
+  if (Number.isFinite(atual) && atual + DIA > alvo) alvo = atual + DIA;
+  return new Date(alvo).toISOString();
+}

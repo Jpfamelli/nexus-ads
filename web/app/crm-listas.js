@@ -3,7 +3,10 @@
    T7 Contatos (#/contatos): tabela com busca sem acento, filtros
       (etiquetas alguma/todas/nenhuma, origem, responsável, criados
       entre, com negócio aberto), ordenação, páginas de 50; "+ Novo",
-      "Importar" (supervisor+). No celular a tabela vira cartões.
+      "Importar" (supervisor+). No celular (M28) a tabela vira uma lista
+      compacta (linha de ~72 px com Ligar / Abrir conversa / ⋮ e deslizar
+      para agir), Exportar/Importar no ⋮ do cabeçalho, "Novo" flutuante e
+      a busca fixa ao rolar.
    Ficha 360 (#/contatos/<id> — página; também em gaveta pelo
       abrirContato): dados editáveis, campos, etiquetas, consentimento,
       RFM, negócios, atendimentos, tarefas, notas e linha do tempo.
@@ -11,9 +14,12 @@
    ============================================================ */
 
 const POR_PAGINA = 50;
-const ORDENS = [["recentes", "Mais recentes"], ["nome", "Nome (A–Z)"], ["ultimo_contato", "Último contato"]];
+const ORDENS = [["recentes", "Recentes"], ["nome", "Nome (A–Z)"], ["ultimo_contato", "Último contato"]];
 
 /* ============================================================ T7 — lista de contatos */
+// celular (≤ 760 px): a busca fixa divide a linha com Filtros e Ordenar, então o texto de ajuda é curto
+const pequena = () => { try { return !!(globalThis.matchMedia && globalThis.matchMedia("(max-width: 760px)").matches); } catch { return false; } };
+
 export async function montarContatos(k, el, rota) {
   const { ui, h, L, ctx } = k;
   ctx.titulo(k.v.contatos);
@@ -25,11 +31,11 @@ export async function montarContatos(k, el, rota) {
   const gravar = () => { try { localStorage.setItem(chaveLocal, JSON.stringify({ filtro: S.filtro, ordem: S.ordem })); } catch { /* ok */ } };
 
   const sub = h("p", { class: "sub" });
-  const busca = h("input", { type: "search", placeholder: "Buscar por nome, telefone, e-mail ou documento", "aria-label": `Buscar ${k.v.min("contatos")}`, value: S.filtro.busca || "" });
+  const busca = h("input", { type: "search", placeholder: pequena() ? `Buscar ${k.v.min("contatos")}` : "Buscar por nome, telefone, e-mail ou documento", "aria-label": `Buscar ${k.v.min("contatos")}`, value: S.filtro.busca || "" });
   const aoBuscar = ui.debounce(() => { const q = busca.value.trim(); if (q) S.filtro.busca = q; else delete S.filtro.busca; S.pagina = 1; gravar(); carregar(); }, 320);
   busca.addEventListener("input", aoBuscar);
   const nF = h("span", { class: "crm-filtro-n", hidden: true });
-  const btF = h("button", { type: "button", class: "bt bt-sec crm-filtro-bt", "aria-haspopup": "dialog" }, ui.icone("filtro"), "Filtros", nF);
+  const btF = h("button", { type: "button", class: "bt bt-sec crm-filtro-bt", "aria-haspopup": "dialog", "aria-label": "Filtros" }, ui.icone("filtro"), h("span", { class: "crm-filtro-txt" }, "Filtros"), nF);
   btF.addEventListener("click", abrirFiltros);
   const selOrdem = h("select", { class: "sel", "aria-label": "Ordenar" }, ORDENS.map(([v, t]) => h("option", { value: v, selected: v === S.ordem }, t)));
   selOrdem.addEventListener("change", () => { S.ordem = selOrdem.value; S.pagina = 1; gravar(); carregar(); });
@@ -37,15 +43,24 @@ export async function montarContatos(k, el, rota) {
   const corpo = h("div", { class: "pilha" });
   const pag = h("nav", { class: "ct-pag", "aria-label": "Páginas" });
 
+  // M28: no celular Exportar/Importar/Novo saem do cabeçalho — viram o ⋮ (aqui) e o botão flutuante
+  const maisBt = k.pode("supervisor") ? h("button", { type: "button", class: "bt-icone crm-cab-mais", "aria-label": "Mais ações" }, ui.icone("opcoes")) : null;
+  if (maisBt) maisBt.addEventListener("click", () => ui.menu(maisBt, [
+    k.pode("admin") ? { rotulo: "Exportar planilha", icone: "seta-baixo", fn: () => exportar(maisBt) } : null,
+    { rotulo: "Importar planilha", icone: "camadas", fn: () => ctx.navegar("#/contatos/importar") }]));
+  const fab = k.pode("atendente") ? h("button", { type: "button", class: "crm-fab", "aria-label": k.v.novo("contato"), title: k.v.novo("contato"), on: { click: novoContato } },
+    ui.icone("mais"), h("span", { class: "crm-fab-txt" }, k.v.novo("contato"))) : null;
   const acoes = h("div", { class: "crm-cab-acoes" },
+    maisBt,
     k.pode("admin") ? h("button", { type: "button", class: "bt bt-sec", title: "Baixa uma planilha (CSV) com os filtros atuais",
       on: { click: ev => exportar(ev.currentTarget) } }, ui.icone("seta-baixo"), "Exportar") : null,
     k.pode("supervisor") ? h("a", { class: "bt bt-sec", href: "#/contatos/importar" }, ui.icone("camadas"), "Importar") : null,
     k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novoContato } }, ui.icone("mais"), k.v.novo("contato")) : null);
   el.append(
     h("header", { class: "crm-cab" }, h("div", null, h("p", { class: "rotulo" }, ctx.cliente.nome), h("h1", { class: "titulo-pag" }, k.v.contatos), sub), acoes),
-    h("div", { class: "pilha-p" }, h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btF, selOrdem), chips),
+    h("div", { class: "pilha-p crm-fixa" }, h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btF, selOrdem), chips),
     corpo, pag);
+  if (fab) el.appendChild(fab);
 
   const tab = ui.tabela({
     rotulo: k.v.contatos,
@@ -66,16 +81,17 @@ export async function montarContatos(k, el, rota) {
     aoClicar: c => ctx.navegar(`#/contatos/${c.id}`),
     vazio: "Nada encontrado com esses filtros.",
   });
+  const listaM = listaCompacta(k, { aoMudar: () => carregar() });
 
   async function carregar() {
     const minha = ++S.seq;
     desenharChips();
     if (!corpo.contains(tab.el)) { ui.limpar(corpo); corpo.appendChild(ui.esqueleto("tabela", 8)); }
-    else tab.el.setAttribute("aria-busy", "true");
+    else { tab.el.setAttribute("aria-busy", "true"); listaM.el.setAttribute("aria-busy", "true"); }
     try {
       const r = await k.api.rpcC("nx_contatos_listar", { p_filtro: S.filtro, p_pagina: S.pagina, p_por_pagina: POR_PAGINA, p_ordem: S.ordem });
       if (minha !== S.seq || !S.vivo) return;
-      tab.el.removeAttribute("aria-busy");
+      tab.el.removeAttribute("aria-busy"); listaM.el.removeAttribute("aria-busy");
       S.total = r.total;
       const n = r.total != null ? r.total : r.total_aprox;
       sub.textContent = n != null ? `${ui.num(n)}${r.total == null ? "+" : ""} ${n === 1 ? k.v.min("contato") : k.v.min("contatos")}` : "";
@@ -90,7 +106,9 @@ export async function montarContatos(k, el, rota) {
         return;
       }
       tab.atualizar(r.itens);
+      listaM.atualizar(r.itens);
       corpo.appendChild(tab.el);
+      corpo.appendChild(listaM.el);
       desenharPaginas(r);
     } catch (e) {
       if (minha !== S.seq || !S.vivo) return;
@@ -238,6 +256,69 @@ export async function montarContatos(k, el, rota) {
 
   await carregar();
   return { desmontar() { S.vivo = false; S.seq++; } };
+}
+
+/* ------------------------------------------------------------ lista compacta do celular (M28) */
+/**
+ * listaCompacta(k, {aoMudar}) → {el, atualizar(itens)}. Em ≤ 760 px a CSS troca a tabela por esta lista: linha de ~72 px com avatar, nome,
+ * «telefone · cidade», UMA pílula (origem do anúncio, senão a 1ª etiqueta, senão a origem), Ligar (tel:), Abrir conversa e ⋮. Tocar na linha abre a ficha.
+ * Deslizar: direita = nova tarefa, esquerda = nova oportunidade. Gesto e botão chamam a MESMA função (`executar`); L.acoesDoContato diz quais
+ * ações existem e que lado leva a qual (o ⋮ sempre tem as duas, para quem não desliza).
+ */
+export function listaCompacta(k, { aoMudar }) {
+  const { ui, h, L, ctx } = k;
+  const pode = k.pode("atendente");
+  const comConversas = !!(ctx.temModulo && ctx.temModulo("conversas"));
+  const ROT = { abrir: ["Abrir ficha", "contato"], tarefa: ["Nova tarefa", "tarefa"], negocio: [k.v.novo("negocio"), "funil"] };
+  const FUNDO = { tarefa: "Tarefa", negocio: k.v.negocio };
+  const raiz = h("div", { class: "ct-lista-env" });
+
+  async function executar(id, c) {
+    if (id === "abrir") { ctx.navegar(`#/contatos/${c.id}`); return; }
+    try {
+      if (id === "tarefa") {
+        const T = await k.mod("tarefas");
+        const t = await T.formTarefa(k, null, { contato_id: c.id });
+        if (t) ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 });
+      } else if (id === "negocio") {
+        const N = await k.mod("negocio");
+        await N.novoNegocio(k, { contato_id: c.id }, { aoCriar: () => aoMudar() });
+      }
+    } catch (e) { k.toastErro(e); }
+  }
+
+  function linha(c) {
+    const nome = c.nome || ui.telBR(c.telefone) || "Sem nome";
+    const sub = [c.telefone ? ui.telBR(c.telefone) : null, c.cidade].filter(Boolean).join(" · ")
+      || (c.optin_marketing === false ? "Não quer marketing" : L.ROTULO_ORIGEM[c.origem] || "");
+    const etq = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean)[0];
+    const pil = c.plataforma ? ui.pilula(c.plataforma === "google" ? "Google" : "Anúncio", c.plataforma === "google" ? "google" : "meta")
+      : etq ? ui.etiqueta(etq)
+      : c.origem && c.origem !== "manual" && L.ROTULO_ORIGEM[c.origem] ? ui.pilula(L.ROTULO_ORIGEM[c.origem], "neutra") : null;
+    const A = L.acoesDoContato({ pode, conversas: comConversas, telefone: !!L.hrefTel(c.telefone) });
+    const mais = h("button", { type: "button", class: "bt-icone ct-bt", "aria-label": `Mais ações para ${nome}`, title: "Mais ações" }, ui.icone("opcoes"));
+    mais.addEventListener("click", () => ui.menu(mais, A.menu.map(id => ({ rotulo: ROT[id][0], icone: ROT[id][1], fn: () => executar(id, c) }))));
+    const frente = h("div", { class: "ct-linha" },
+      h("a", { class: "ct-abrir", href: `#/contatos/${c.id}` }, ui.avatar(c.nome || c.telefone, c.id),
+        h("span", { class: "ct-txt" }, h("b", { class: "ct-nome" }, nome), h("small", { class: "ct-sub" }, sub), pil)),
+      h("div", { class: "ct-bts" },
+        A.botoes.includes("ligar") ? h("a", { class: "bt-icone ct-bt", href: L.hrefTel(c.telefone), "aria-label": `Ligar para ${nome}`, title: "Ligar" }, ui.icone("telefone")) : null,
+        A.botoes.includes("conversa") ? h("a", { class: "bt-icone ct-bt", href: `#/conversas?contato=${c.id}`, "aria-label": `Abrir conversa com ${nome}`, title: "Abrir conversa" }, ui.icone("whatsapp")) : null,
+        mais));
+    const fundo = (lado, id) => id ? h("div", { class: `ct-fundo ct-fundo-${lado}`, "aria-hidden": "true" }, ui.icone(ROT[id][1]), h("span", null, FUNDO[id])) : null;
+    const li = h("li", { class: "ct-li", dataset: { id: c.id } }, fundo("d", A.direita), fundo("e", A.esquerda), frente);
+    ui.deslizar(frente, { direita: A.direita ? () => executar(A.direita, c) : undefined, esquerda: A.esquerda ? () => executar(A.esquerda, c) : undefined });
+    return li;
+  }
+
+  return {
+    el: raiz,
+    atualizar(itens) {
+      ui.limpar(raiz);
+      if (!itens.length) { raiz.appendChild(h("p", { class: "ct-vazio" }, "Nada encontrado com esses filtros.")); return; }
+      raiz.appendChild(h("ul", { class: "ct-lista", role: "list", "aria-label": k.v.contatos }, itens.map(linha)));
+    },
+  };
 }
 
 /* ------------------------------------------------------------ formulário de contato novo */

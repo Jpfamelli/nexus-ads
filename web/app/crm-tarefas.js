@@ -77,12 +77,20 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
 }
 
 /* ------------------------------------------------------------ lista de tarefas */
-function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
+/**
+ * itemTarefa → <div.tf-li>: a linha (.tf) dentro de uma moldura que mostra, ao deslizar, o que o gesto faz.
+ * M28: no celular lápis + lixeira viram o ⋮ (Editar, Adiar para amanhã, Excluir) e a linha desliza — direita = concluir (ou reabrir), esquerda = adiar.
+ * Gesto, botão e ⋮ chamam as MESMAS funções (`executar`); L.acoesDaTarefa diz o que existe e que lado leva a quê. Tudo com Desfazer.
+ */
+export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
   const { ui, h, L } = k;
   const pode = k.pode("atendente");
   const v = textoVence(k, t);
+  const A = L.acoesDaTarefa({ pode, concluida: !!t.concluida_em });
+  const ROT = { editar: ["Editar", "editar"], adiar: ["Adiar para amanhã", "relogio"], excluir: ["Excluir", "lixeira"] };
   const check = h("input", { type: "checkbox", checked: !!t.concluida_em, disabled: !pode,
     "aria-label": t.concluida_em ? `Reabrir a tarefa ${t.titulo}` : `Concluir a tarefa ${t.titulo}` });
+  const mais = pode ? h("button", { type: "button", class: "bt-icone tf-mais", "aria-label": `Mais ações da tarefa ${t.titulo}`, title: "Mais ações" }, ui.icone("opcoes")) : null;
   const el = h("div", { class: ["tf", t.concluida_em && "feita"], dataset: { id: t.id } },
     h("label", { class: "tf-check" }, check, h("span", { "aria-hidden": "true" })),
     h("div", { class: "tf-corpo" },
@@ -97,19 +105,13 @@ function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
         t.automacao ? h("span", null, ui.icone("raio"), "Automação") : null),
       t.descricao ? h("span", { class: "fraco", style: { "font-size": "var(--fs-13)" } }, t.descricao) : null),
     pode ? h("div", { class: "tf-acoes" },
-      h("button", { type: "button", class: "bt-icone", "aria-label": `Editar a tarefa ${t.titulo}`, on: { click: async () => {
-        const nova = await formTarefa(k, t);
-        if (nova) { ui.toast("Tarefa salva.", { tipo: "ok", ms: 1800 }); aoMudar && aoMudar({ tipo: "salva", tarefa: nova }); }
-      } } }, ui.icone("editar")),
-      h("button", { type: "button", class: "bt-icone", "aria-label": `Excluir a tarefa ${t.titulo}`, on: { click: () => {
-        // M25: sem «tem certeza?». A tarefa some na hora e a exclusão de verdade (firmar) só vai ao servidor depois dos 7 s do «Desfazer»
-        ui.acaoComDesfazer({ texto: `Tarefa «${t.titulo}» excluída`,
-          aplicar: () => { aoMudar && aoMudar({ tipo: "excluida", tarefa: t }); },
-          firmar: () => k.api.rpcC("nx_tarefa_excluir", { p_id: t.id }),
-          reverter: () => { aoMudar && aoMudar({ tipo: "salva", tarefa: t }); } });
-      } } }, ui.icone("lixeira"))) : h("span"));
-  check.addEventListener("change", async () => {
-    const quer = check.checked;
+      h("button", { type: "button", class: "bt-icone", "aria-label": `Editar a tarefa ${t.titulo}`, on: { click: () => executar("editar") } }, ui.icone("editar")),
+      h("button", { type: "button", class: "bt-icone", "aria-label": `Excluir a tarefa ${t.titulo}`, on: { click: () => executar("excluir") } }, ui.icone("lixeira")),
+      mais) : h("span"));
+
+  /** Concluir/reabrir: o círculo e o deslizar chamam esta. Concluiu → Desfazer reabre. */
+  async function alternar(quer) {
+    check.checked = quer;
     el.classList.toggle("feita", quer);
     try {
       const nova = await k.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: quer });
@@ -123,8 +125,47 @@ function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
       check.checked = !quer; el.classList.toggle("feita", !quer);
       k.toastErro(e);
     }
-  });
-  return el;
+  }
+  /** Adiar para amanhã (mesma hora; L.adiarParaAmanha): grava já e o Desfazer devolve o vencimento de antes. */
+  async function adiar() {
+    const antes = t.vence_em || null;
+    const novo = L.adiarParaAmanha(antes);
+    try {
+      const nova = await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: { id: t.id, vence_em: novo } });
+      ui.anunciar("Tarefa adiada.");
+      aoMudar && aoMudar({ tipo: "salva", tarefa: nova });
+      ui.acaoComDesfazer({ texto: `Tarefa adiada para ${ui.dataCurtaBR(novo)}, ${ui.horaBR(novo)}`, reverter: async () => {
+        const r = await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: { id: t.id, vence_em: antes } });
+        aoMudar && aoMudar({ tipo: "salva", tarefa: r });
+      } });
+    } catch (e) { k.toastErro(e); }
+  }
+  async function executar(id) {
+    if (id === "concluir") return alternar(!check.checked);
+    if (id === "adiar") return adiar();
+    if (id === "editar") {
+      const nova = await formTarefa(k, t);
+      if (nova) { ui.toast("Tarefa salva.", { tipo: "ok", ms: 1800 }); aoMudar && aoMudar({ tipo: "salva", tarefa: nova }); }
+      return;
+    }
+    if (id === "excluir") {
+      // M25: sem «tem certeza?». A tarefa some na hora e a exclusão de verdade (firmar) só vai ao servidor depois dos 7 s do «Desfazer»
+      ui.acaoComDesfazer({ texto: `Tarefa «${t.titulo}» excluída`,
+        aplicar: () => { aoMudar && aoMudar({ tipo: "excluida", tarefa: t }); },
+        firmar: () => k.api.rpcC("nx_tarefa_excluir", { p_id: t.id }),
+        reverter: () => { aoMudar && aoMudar({ tipo: "salva", tarefa: t }); } });
+    }
+  }
+  check.addEventListener("change", () => alternar(check.checked));
+  if (mais) mais.addEventListener("click", () => ui.menu(mais, A.menu.map(id => ({ rotulo: ROT[id][0], icone: ROT[id][1], perigo: id === "excluir", fn: () => executar(id) }))));
+
+  const fundo = (lado, icone, texto) => h("div", { class: `tf-fundo tf-fundo-${lado}`, "aria-hidden": "true" }, ui.icone(icone), h("span", null, texto));
+  const li = h("div", { class: "tf-li" },
+    A.direita ? fundo("d", t.concluida_em ? "reabrir" : "check", t.concluida_em ? "Reabrir" : "Concluir") : null,
+    A.esquerda ? fundo("e", "relogio", "Adiar") : null,
+    el);
+  if (A.direita || A.esquerda) ui.deslizar(el, { direita: A.direita ? () => executar(A.direita) : undefined, esquerda: A.esquerda ? () => executar(A.esquerda) : undefined });
+  return li;
 }
 
 /**
@@ -290,31 +331,44 @@ export async function montarTarefas(k, el, rota) {
       x === "eu" ? "Minhas" : "Todas")));
   seg.hidden = !podeTodas;
   const corpo = h("div", { class: "pilha" });
+  const novaTarefa = async () => {
+    const t = await formTarefa(k, null, {});
+    if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); carregar(true); }
+  };
   el.append(
     h("header", { class: "crm-cab" },
       h("div", null, h("p", { class: "rotulo" }, ctx.cliente.nome), h("h1", { class: "titulo-pag" }, "Tarefas")),
       h("div", { class: "crm-cab-acoes" },
-        k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: async () => {
-          const t = await formTarefa(k, null, {});
-          if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); carregar(); }
-        } } }, ui.icone("mais"), "Tarefa") : null)),
+        k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novaTarefa } }, ui.icone("mais"), "Tarefa") : null)),
     h("div", { class: "tfp-fita" }, abasEl.el, seg),
     corpo);
+  // M28: no celular «+ Tarefa» sai do cabeçalho e vira o botão flutuante
+  if (k.pode("atendente")) el.appendChild(h("button", { type: "button", class: "crm-fab", "aria-label": "Nova tarefa", title: "Nova tarefa", on: { click: novaTarefa } },
+    ui.icone("mais"), h("span", { class: "crm-fab-txt" }, "Nova tarefa")));
+  const ocultas = new Set();   // excluídas esperando os 7 s do Desfazer: uma recarga no meio não pode trazê-las de volta
 
-  async function carregar() {
+  /** quieto = refaz a lista sem trocar tudo pelo esqueleto (depois de concluir/adiar/desfazer a tela não pisca) */
+  async function carregar(quieto = false) {
     const minha = ++seq;
-    ui.limpar(corpo);
-    corpo.appendChild(ui.esqueleto("lista", 5));
+    if (quieto && corpo.firstChild) corpo.setAttribute("aria-busy", "true");
+    else { ui.limpar(corpo); corpo.appendChild(ui.esqueleto("lista", 5)); }
     try {
       const r = await k.api.rpcC("nx_tarefas_listar", { p_filtro: { dono, situacao: aba } });
       if (minha !== seq) return;
       const c = r.contagens || {};
       abasEl.contar("hoje", c.hoje || null); abasEl.contar("atrasadas", c.atrasadas || null); abasEl.contar("proximas", c.proximas || null);
+      corpo.removeAttribute("aria-busy");
       ui.limpar(corpo);
-      if (!r.itens.length) { corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], icone: "tarefa" })); return; }
+      const itens = r.itens.filter(t => !ocultas.has(t.id));
+      if (!itens.length) { corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], icone: "tarefa" })); return; }
       const lista = h("div", { class: "at-lista" });
-      for (const t of r.itens) {
-        const item = itemTarefa(k, t, { mostrarVinculo: true, aoMudar: ev => { if (ev && ev.tipo === "excluida") item.remove(); else carregar(); } });
+      for (const t of itens) {
+        const item = itemTarefa(k, t, { mostrarVinculo: true, aoMudar: ev => {
+          if (ev && ev.tipo === "excluida") {
+            ocultas.add(t.id); item.remove();
+            if (!lista.firstChild) { ui.limpar(corpo); corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], icone: "tarefa" })); }
+          } else { if (ev && ev.tarefa) ocultas.delete(ev.tarefa.id); carregar(true); }
+        } });
         lista.appendChild(item);
       }
       corpo.appendChild(lista);
@@ -322,8 +376,9 @@ export async function montarTarefas(k, el, rota) {
       if (r.tem_mais) corpo.appendChild(h("p", { class: "sub" }, `Mostrando as ${r.itens.length} primeiras. Conclua algumas${podeTodas && dono === "todos" ? " ou veja só as suas" : ""} para ver as outras.`));
     } catch (e) {
       if (minha !== seq) return;
+      corpo.removeAttribute("aria-busy");
       ui.limpar(corpo);
-      corpo.appendChild(ui.erroCartao(e, carregar));
+      corpo.appendChild(ui.erroCartao(e, () => carregar()));
     }
   }
   await carregar();

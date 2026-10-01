@@ -327,7 +327,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .tf-meta > span { display: inline-flex; align-items: center; gap: .25rem; }
 .tf-meta .atrasada { color: var(--c-ruim); font-weight: 700; }
 .tf-meta .hoje { color: var(--c-aten); font-weight: 700; }
-.tf-meta a { color: var(--c-texto-2); }
+.tf-meta a { display: inline-flex; align-items: center; gap: .25rem; color: var(--c-texto-2); }
 .tf-acoes { display: flex; gap: .1rem; }
 .tf-acoes .bt-icone { width: 32px; height: 32px; }
 .tf-acoes .ic { width: 15px; height: 15px; }
@@ -385,6 +385,37 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .ct-etqs .etiq { min-height: 22px; font-size: 11.5px; padding: .06rem .5rem .06rem .4rem; }
 .ct-nneg { display: inline-grid; place-items: center; min-width: 26px; height: 24px; padding: 0 .4rem; border-radius: 999px; background: var(--c-sup-2); font-family: var(--f-mono); font-size: var(--fs-12); }
 .ct-nneg.tem { background: var(--c-prim-suave); color: var(--c-prim-luz); }
+
+/* lista compacta do celular (M28) e linhas que deslizam: escondidas no desktop, onde a tabela segue */
+.ct-lista-env, .crm-cab-mais, .tf-mais { display: none; }
+.ct-lista { list-style: none; display: flex; flex-direction: column; gap: .35rem; }
+.ct-li, .tf-li { position: relative; overflow: hidden; border-radius: var(--r-p); }
+/* o que aparece atrás da linha ao deslizar: a linha é opaca, então em repouso o fundo não aparece */
+.ct-fundo, .tf-fundo {
+  position: absolute; top: 0; bottom: 0; width: 50%; display: flex; align-items: center; gap: .5rem; padding: 0 1.1rem; color: var(--c-texto); font-size: var(--fs-13); font-weight: 700;
+}
+.ct-fundo .ic, .tf-fundo .ic { width: 20px; height: 20px; flex: none; }
+.ct-fundo-d, .tf-fundo-d { left: 0; }
+.ct-fundo-e, .tf-fundo-e { right: 0; }
+.ct-fundo-d { justify-content: flex-start; background: color-mix(in srgb, var(--c-prim) 28%, var(--c-sup)); }
+.ct-fundo-e { justify-content: flex-end; background: color-mix(in srgb, var(--c-info) 24%, var(--c-sup)); }
+.tf-fundo-d { justify-content: flex-start; background: color-mix(in srgb, var(--c-ok) 30%, var(--c-sup)); }
+.tf-fundo-e { justify-content: flex-end; background: color-mix(in srgb, var(--c-aten) 32%, var(--c-sup)); }
+.ct-linha {
+  position: relative; display: flex; align-items: center; gap: .15rem; min-height: 68px; padding: .3rem .3rem .3rem .7rem;
+  border: 1px solid var(--c-borda); border-radius: var(--r-p); background: linear-gradient(var(--c-sup), var(--c-sup)), var(--c-fundo);
+}
+.ct-abrir { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: .65rem; min-height: 52px; color: inherit; text-decoration: none; border-radius: var(--r-pp); }
+.ct-abrir .avatar { width: 40px; height: 40px; flex: none; font-size: var(--fs-13); }
+.ct-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: .05rem; }
+.ct-nome { max-width: 100%; font-size: var(--fs-15); font-weight: 700; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-sub { max-width: 100%; color: var(--c-texto-2); font-size: var(--fs-13); line-height: 1.25; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-txt > .pilula, .ct-txt > .etiq { max-width: 100%; min-height: 22px; margin-top: .15rem; font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-bts { flex: none; display: flex; align-items: center; }
+.ct-bt { width: 44px; height: 44px; color: var(--c-texto-2); }
+.ct-bt .ic { width: 20px; height: 20px; }
+.tf-li > .tf { background: linear-gradient(var(--c-sup-2), var(--c-sup-2)), var(--c-fundo); }   /* opaca: por trás dela fica o fundo do gesto */
+.ct-vazio { padding: 1.4rem .5rem; text-align: center; color: var(--c-texto-2); font-size: var(--fs-14); }
 
 /* ficha 360 */
 .fx { display: flex; flex-direction: column; gap: 1.2rem; min-width: 0; }
@@ -550,6 +581,27 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .fx-grade { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 760px) {
+  /* M28: Pacientes e Tarefas — cabeçalho numa linha, busca fixa ao rolar, lista compacta, «Novo» flutuante (Exportar/Importar viram o ⋮) */
+  .crm[data-tela="contatos"], .crm[data-tela="tarefas"] { gap: .6rem; padding-bottom: 5.2rem; }
+  .crm[data-tela="contatos"] .crm-cab, .crm[data-tela="tarefas"] .crm-cab { padding: .55rem .9rem; border-radius: var(--r); align-items: center; flex-wrap: nowrap; }
+  .crm[data-tela="contatos"] .crm-cab > div:first-child, .crm[data-tela="tarefas"] .crm-cab > div:first-child { flex: 1; }
+  .crm[data-tela="contatos"] .crm-cab .rotulo, .crm[data-tela="tarefas"] .crm-cab .rotulo { display: none; }
+  .crm[data-tela="contatos"] .titulo-pag, .crm[data-tela="tarefas"] .titulo-pag { font-size: var(--fs-20); }
+  .crm[data-tela="contatos"] .crm-cab-acoes { width: auto; flex: none; }
+  .crm[data-tela="contatos"] .crm-cab-acoes .bt, .crm[data-tela="tarefas"] .crm-cab-acoes { display: none; }
+  .crm-cab-mais { display: inline-flex; }
+  .tf-acoes .bt-icone:not(.tf-mais) { display: none; }   /* lápis + lixeira lado a lado viram um ⋮ só */
+  .tf-acoes .tf-mais { display: inline-grid; }
+  .crm[data-tela="contatos"] .crm-fixa {
+    position: sticky; top: var(--topo); z-index: 6; margin: 0 -16px; padding: .45rem 16px; background: var(--c-fundo); border-bottom: 1px solid var(--c-borda);
+  }
+  .crm[data-tela="contatos"] .crm-fita { flex-wrap: nowrap; gap: .5rem; }
+  .crm[data-tela="contatos"] .crm-fita .busca { flex: 1 1 auto; min-width: 0; max-width: none; }
+  .crm[data-tela="contatos"] .crm-fita .sel { flex: 0 1 7.6rem; min-width: 0; padding-left: .8rem; padding-right: 2rem; background-position: calc(100% - 1rem) 52%, calc(100% - .65rem) 52%; }
+  .crm[data-tela="contatos"] .crm-filtro-bt { flex: none; position: relative; min-width: 44px; padding-inline: .6rem; gap: .3rem; justify-content: center; }
+  .crm[data-tela="contatos"] .crm-filtro-txt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .crm[data-tela="contatos"] .tabela-env { display: none; }
+  .ct-lista-env { display: block; }
   .crm-cab-acoes { width: 100%; }
   .crm-cab-acoes .bt-prim { flex: 1 1 auto; } /* basis pelo conteúdo: quebra de linha em vez de cortar o texto do botão */
   .crm-fita .busca { flex-basis: 100%; max-width: none; }

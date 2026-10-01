@@ -28,9 +28,7 @@ Arquivos que esta frente edita: `web/app/crm.js`, `crm-*.js`, `agenda.js`, `agen
   coluna (rolagem de borda) move o cartão (`nx_negocio_mover` com `p_ordem`); toque longo sem mexer abre a folha e escolher move; toque curto abre a gaveta;
   arrastar sobre um chip da fita funciona; 1º cartão em y = 423 (de 844) sem a faixa demo; sem rolagem horizontal da página; 0 erros de console. Desktop 1440 igual ao de antes.
 - Testes: `crm.teste.mjs` — gesto de toque (toque, rolagem, longo, arrasto, cancelamento, timer atrasado), destino do arrasto e resumo dos totais, e o estático do kanban no toque.
-- **Pendência para a frente A:** `testes/app.teste.mjs:842` (teste «acessibilidade: painel de inbox…») ainda exige o texto antigo da coluna vazia
-  `Abra um cartão e escolha ‘Mover para…’`. O texto mudou de propósito (era o problema do plano): no toque agora é «Segure um cartão e arraste até aqui» e a
-  alternativa é o botão ⋮ do cartão. A asserção deve passar a conferir `Segure um cartão e arraste até aqui` (a linha seguinte, `(pointer: coarse)`, continua valendo).
+- Resolvido pela frente A: o teste de `app.teste.mjs` que pinava o texto antigo da coluna vazia já confere «Segure um cartão e arraste até aqui» (commit 607d136 e anteriores). Nada pendente para A.
 - Risco 11 do plano: só emulação de toque; falta provar em aparelho real antes de publicar (Android e iPhone).
 
 ## M26 · Agenda como grade de horário — FEITO
@@ -112,3 +110,24 @@ Arquivos que esta frente edita: `web/app/crm.js`, `crm-*.js`, `agenda.js`, `agen
   **Telefone e valor com `ui.campo({validar})`** (máscara com cursor estável e erro ao sair do campo; M08 da frente A).
 - Verificado (puppeteer + dev-falso): sonda de fontes, medidas da gaveta, lápis do título, aviso de duplicado nos dois formulários (e «Usar este cadastro» abre `#/contatos/<id>` / escolhe o contato); tema escuro conferido.
 - Testes (`crm.teste.mjs`): `acharDuplicado` (máscara, +55, sem 9º dígito, incompleto, outro número, o próprio, listas vazias), `descricaoOrigem` e o estático do cartão/gaveta/aviso.
+
+## M28 · Listas do celular compactas, com Ligar/WhatsApp e deslizar para agir — FEITO
+
+- **Pacientes (≤ 760 px)**: a tabela-em-cartões de 322 px sai e entra uma lista compacta (`listaCompacta` em `crm-listas.js`, a tabela segue no desktop; a CSS escolhe qual aparece):
+  linha de 72–76 px com avatar, nome, «telefone · cidade», **uma pílula** (origem do anúncio — Google/Anúncio —, senão a 1ª etiqueta, senão a origem), **Ligar** (`<a href="tel:+55…">`, `L.hrefTel`),
+  **Abrir conversa** (`#/conversas?contato=ID`, só com o módulo de conversas) e **⋮** (Abrir ficha · Nova tarefa · Nova oportunidade). Tocar na linha abre a ficha (é um `<a>`: Enter e abrir em outra aba funcionam).
+- **Cabeçalho de uma linha** (título + contagem + ⋮ com «Exportar planilha» (admin) e «Importar planilha» (supervisor)), **«Novo paciente» flutuante** (o `.crm-fab` do Kanban), **busca fixa ao rolar**
+  (busca + Filtros só com ícone e contador + ordenação numa linha só; «Mais recentes» virou «Recentes»; texto de ajuda curto no celular). A 390×844 aparecem **7 pacientes inteiros** na primeira tela (aceite: ≥ 6).
+- **Tarefas**: lápis + lixeira lado a lado viram o **⋮** (Editar · Adiar para amanhã · Excluir) no celular; no desktop continuam os dois botões. «+ Tarefa» também vira botão flutuante e o cabeçalho encolhe.
+  A lista recarrega em silêncio depois de concluir/adiar/desfazer (sem trocar tudo pelo esqueleto) e uma exclusão que espera os 7 s do Desfazer não volta numa recarga no meio (`ocultas`).
+- **Deslizar (`ui.deslizar`, A) com botão equivalente sempre à mão**: contato — direita = Nova tarefa, esquerda = Nova oportunidade (os dois estão no ⋮); tarefa — direita = concluir/reabrir (o círculo é o botão),
+  esquerda = adiar para amanhã (no ⋮; `L.adiarParaAmanha`: amanhã em SP na mesma hora, 09:00 se não havia hora, só +1 dia se já vencia depois de amanhã). **Deslizar nunca exclui** — Excluir fica só no ⋮, com Desfazer (M25).
+  O fundo do gesto (rótulo + ícone) aparece atrás da linha, cada lado em sua metade; contraste do rótulo ≥ 6,6:1 no claro e no escuro. Concluir e adiar oferecem Desfazer (reabre / devolve o vencimento antigo).
+- **Gesto e botão chamam a mesma função** (`executar`/`alternar`/`adiar`): `L.acoesDoContato` e `L.acoesDaTarefa` (puras) dizem quais ações existem e que lado leva a qual; o teste monta a lista com um DOM falso mínimo e prova que
+  `g.direita()` e o item do ⋮ produzem as MESMAS chamadas (formTarefa, novoNegocio, nx_tarefa_concluir, nx_tarefa_salvar com o mesmo vencimento, firmar da exclusão), e o Desfazer de cada um.
+- Verificado (puppeteer-core, 390×844 e 375×812, toque real por `page.touchscreen`; dev-falso com 12 pacientes e 6 tarefas): ⋮ abre os 3 itens; deslizar à direita abre «Nova tarefa» e à esquerda «Nova oportunidade»
+  (os mesmos modais do ⋮); gesto curto (40 px) não aciona; rolagem vertical começando na linha rola a página (0 → 545 px) sem acionar nada; tocar na linha vai a `#/contatos/501`; `tel:+55…` e link da conversa corretos;
+  tarefa: deslizar à direita conclui (some de «Hoje», toast «Tarefa concluída · Desfazer», Desfazer devolve), à esquerda adia (vai para «Próximas», toast «adiada para 02/10, 09:44»); 1440 e 768 px: tabela, botões e
+  lápis/lixeira como antes, lista/⋮/botão flutuante escondidos; sem rolagem horizontal; tema escuro conferido; 0 erros de console.
+- Testes (`crm.teste.mjs`, seção (a3)): `hrefTel`, `acoesDoContato`/`acoesDaTarefa` (todo lado do gesto existe no ⋮/botão), `adiarParaAmanha` (virada de dia, atrasada, sem prazo, já à frente), o teste de gesto = botão com DOM falso e o estático.
+- Limite conhecido (risco 11): o deslizar foi provado só com toque emulado; falta aparelho real (Android e iPhone), principalmente o conflito com o gesto de «voltar» do navegador na borda da tela.
