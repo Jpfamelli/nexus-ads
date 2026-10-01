@@ -102,13 +102,11 @@ function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
         if (nova) { ui.toast("Tarefa salva.", { tipo: "ok", ms: 1800 }); aoMudar && aoMudar({ tipo: "salva", tarefa: nova }); }
       } } }, ui.icone("editar")),
       h("button", { type: "button", class: "bt-icone", "aria-label": `Excluir a tarefa ${t.titulo}`, on: { click: () => {
-        // M25: sem «tem certeza?». A tarefa some na hora e a exclusão de verdade só vai ao servidor depois dos 7 s do «Desfazer»
-        aoMudar && aoMudar({ tipo: "excluida", tarefa: t });
-        ui.acaoComDesfazer({ texto: `Tarefa «${t.titulo}» excluída`, reverter: () => { aoMudar && aoMudar({ tipo: "salva", tarefa: t }); } }).then(async res => {
-          if (res.estado !== "mantida") return;
-          try { await k.api.rpcC("nx_tarefa_excluir", { p_id: t.id }); }
-          catch (e) { k.toastErro(e); aoMudar && aoMudar({ tipo: "salva", tarefa: t }); }
-        });
+        // M25: sem «tem certeza?». A tarefa some na hora e a exclusão de verdade (firmar) só vai ao servidor depois dos 7 s do «Desfazer»
+        ui.acaoComDesfazer({ texto: `Tarefa «${t.titulo}» excluída`,
+          aplicar: () => { aoMudar && aoMudar({ tipo: "excluida", tarefa: t }); },
+          firmar: () => k.api.rpcC("nx_tarefa_excluir", { p_id: t.id }),
+          reverter: () => { aoMudar && aoMudar({ tipo: "salva", tarefa: t }); } });
       } } }, ui.icone("lixeira"))) : h("span"));
   check.addEventListener("change", async () => {
     const quer = check.checked;
@@ -192,13 +190,11 @@ function itemNota(k, n, { aoMudar }) {
         if (r) aoMudar({ tipo: "salva", nota: r });
       } } }, ui.icone("editar")) : null,
       pode ? h("button", { type: "button", class: "bt-icone", "aria-label": "Excluir nota", on: { click: () => {
-        // M25: some na hora; a exclusão de verdade só depois dos 7 s do «Desfazer»
-        aoMudar({ tipo: "excluida", nota: n });
-        ui.acaoComDesfazer({ texto: "Nota excluída", reverter: () => { aoMudar({ tipo: "salva", nota: n }); } }).then(async res => {
-          if (res.estado !== "mantida") return;
-          try { await k.api.rpcC("nx_nota_excluir", { p_id: n.id }); }
-          catch (e) { k.toastErro(e); aoMudar({ tipo: "salva", nota: n }); }
-        });
+        // M25: some na hora; a exclusão de verdade (firmar) só depois dos 7 s do «Desfazer»
+        ui.acaoComDesfazer({ texto: "Nota excluída",
+          aplicar: () => { aoMudar({ tipo: "excluida", nota: n }); },
+          firmar: () => k.api.rpcC("nx_nota_excluir", { p_id: n.id }),
+          reverter: () => { aoMudar({ tipo: "salva", nota: n }); } });
       } } }, ui.icone("lixeira")) : null));
   return el;
 }

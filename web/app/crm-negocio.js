@@ -297,6 +297,17 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
     const acoes = h("div", { class: "ng-acoes" });
     const estGanho = (funil ? funil.estagios : []).find(e => e.tipo === "ganho");
     const estPerda = (funil ? funil.estagios : []).find(e => e.tipo === "perdido");
+    // M27: marcar a consulta daqui são 2 toques — «Marcar consulta» abre a janela com os horários livres prontos e o primeiro selecionado; «Confirmar» é o 2º
+    if (podeEditar && n.status === "aberto" && k.ctx.carregar) {
+      const remarcar = n.consulta_em && Date.parse(n.consulta_em) > Date.now();
+      acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-marcar", on: { click: async () => {
+        try {
+          const ag = await k.ctx.carregar("agenda");
+          await ag.marcarConsulta(k.ctx, { negocio: { id: n.id, titulo: n.titulo || (d.contato && d.contato.nome) || n.nome, servico: n.servico, funil_nome: funil ? funil.nome : "", inicio: n.consulta_em },
+            aoMudar: () => { if (!fechada) carregar(); } });
+        } catch (err) { k.toastErro(err); }
+      } } }, ui.icone("calendario"), remarcar ? "Remarcar consulta" : "Marcar consulta"));
+    }
     if (podeEditar && n.status === "aberto") {
       if (estGanho) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-ganhou", on: { click: () => mover(estGanho) } }, ui.icone("check"), k.v.ganhar));
       if (estPerda) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-perdeu", on: { click: () => mover(estPerda) } }, ui.icone("fechar"), k.v.perder));

@@ -196,6 +196,319 @@ function erroResposta(r) {
   return r;
 }
 
+/* ============================================================ marcar / remarcar / desmarcar (M27) */
+const logicaDe = ctx => import(`./crm-logica.js?v=${encodeURIComponent(ctx.versao)}`);
+
+/** Horários do servidor ({inicio, livre, ocupados, capacidade}) → só os livres, agrupados por dia de São Paulo: [{dia, itens:[{inicio, dia, min, …}]}] em ordem. */
+export function agruparLivres(horarios) {
+  const mapa = new Map();
+  for (const s of horarios || []) {
+    if (!s || s.livre === false) continue;
+    const p = partesSP(s.inicio);
+    if (!p) continue;
+    if (!mapa.has(p.dia)) mapa.set(p.dia, []);
+    mapa.get(p.dia).push({ ...s, dia: p.dia, min: p.min });
+  }
+  return [...mapa.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([dia, itens]) => ({ dia, itens: itens.sort((a, b) => a.min - b.min) }));
+}
+/** «Hoje», «Amanhã» ou «Sex 03/10». */
+export function rotuloDoDia(iso, hojeISO) {
+  if (iso === hojeISO) return "Hoje";
+  if (iso === diaISO(hojeISO, 1)) return "Amanhã";
+  const sem = semanaCurta(iso);
+  return `${sem.charAt(0).toUpperCase()}${sem.slice(1)} ${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+}
+/** O primeiro horário livre de todos. */
+export function primeiroLivre(grupos) { return (grupos && grupos[0] && grupos[0].itens[0]) || null; }
+/** O primeiro horário livre de amanhã de manhã (antes do meio-dia); null se não há. */
+export function amanhaDeManha(grupos, hojeISO) {
+  const g = (grupos || []).find(x => x.dia === diaISO(hojeISO, 1));
+  return (g && g.itens.find(s => s.min < 12 * 60)) || null;
+}
+/** O horário livre do dia `dia` mais perto de `hhmm` (o clique na grade); null se o dia não tem horário livre. */
+export function slotMaisPerto(grupos, dia, hhmm) {
+  const g = (grupos || []).find(x => x.dia === dia);
+  const alvo = paraMin(hhmm);
+  if (!g || alvo === null) return null;
+  return g.itens.reduce((m, s) => (Math.abs(s.min - alvo) < Math.abs(m.min - alvo) ? s : m), g.itens[0]);
+}
+
+/** Oportunidades ABERTAS que casam com a busca (uma chamada: nx_buscar). Servidor sem a busca → cai no quadro do funil (mais lento). */
+async function procurarNegocios(ctx, q) {
+  const { api } = ctx;
+  const r = await api.rpcC("nx_buscar", { p_q: q });
+  if (r && Array.isArray(r.negocios)) return r.negocios.filter(n => n.status === "aberto").slice(0, 8);
+  const crm = await ctx.carregar("crm");
+  const k = await crm.kit(ctx);
+  const mapa = new Map();
+  for (const funil of (k.base.funis || []).filter(f => f.ativo !== false)) {
+    const rr = await api.rpcC("nx_negocios_kanban", { p_funil: funil.id, p_filtro: { busca: q, status: "aberto" }, p_por_coluna: 30 });
+    for (const coluna of rr.colunas || []) for (const item of coluna.itens || []) {
+      if (item.status === "aberto" && !mapa.has(String(item.id))) mapa.set(String(item.id), { id: item.id, titulo: item.titulo || item.nome, contato_nome: item.contato && item.contato.nome, estagio_nome: item.estagio_nome || funil.nome, status: "aberto" });
+    }
+  }
+  return [...mapa.values()].slice(0, 8);
+}
+
+/** Setas movem e escolhem dentro de um grupo de botões role=radio (só o marcado fica na ordem do Tab). */
+function radiosComSetas(grupo) {
+  grupo.addEventListener("keydown", ev => {
+    const bts = [...grupo.querySelectorAll('[role="radio"]')];
+    const i = bts.indexOf(document.activeElement);
+    if (i < 0) return;
+    let j = null;
+    if (ev.key === "ArrowRight" || ev.key === "ArrowDown") j = (i + 1) % bts.length;
+    else if (ev.key === "ArrowLeft" || ev.key === "ArrowUp") j = (i - 1 + bts.length) % bts.length;
+    else if (ev.key === "Home") j = 0; else if (ev.key === "End") j = bts.length - 1;
+    if (j === null) return;
+    ev.preventDefault(); bts[j].focus(); bts[j].click();
+  });
+}
+
+/**
+ * marcarConsulta(ctx, {negocio, dia, hora, base, aoMudar}) → Promise<resultado | null>.
+ * Marcar em 2 toques: com a oportunidade já escolhida (vindo do negócio, da consulta a remarcar ou da grade) a janela abre com os horários livres
+ * prontos — dias em chips («Hoje», «Amanhã», «Sex 03/10»), horários em pílulas, o primeiro (ou o mais perto do clique) já selecionado — e «Confirmar» é o 2º toque.
+ * Sem oportunidade: busca enquanto digita; escolher o resultado já carrega os horários. Atalhos «Primeiro livre» e «Amanhã de manhã».
+ * Confirmar → aviso «Marcada para qui 02/10 às 10:00 · Desfazer» (desmarca, ou volta ao horário anterior se era remarcação).
+ * negocio: {id | negocio_id, titulo | nome, servico?, funil_nome?, inicio? (consulta atual: é remarcação)}; dia/hora: o que veio do clique na grade; base: dia aberto na tela.
+ */
+export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = null, base = null, aoMudar = null } = {}) {
+  if (!ctx.pode("atendente")) return null;
+  const { ui, api } = ctx;
+  const h = ui.h;
+  const [Lg] = await Promise.all([logicaDe(ctx), ui.carregarCss("agenda")]);   // o CSS da agenda também vale quando a janela abre pelo CRM (gaveta do negócio)
+  const hoje = ui.hojeSP();
+  let sel = negocio ? { id: negocio.id || negocio.negocio_id, titulo: negocio.titulo || negocio.nome || "Negócio", servico: negocio.servico || "", funil_nome: negocio.funil_nome || negocio.estagio_nome || "",
+    consultaAtual: negocio.inicio || negocio.consulta_em || null } : null;
+  const aPartirInicial = dia && dia >= hoje ? dia : (base && base >= hoje ? base : hoje);
+  let grupos = [], diaSel = null, slotSel = null, duracao = null, seqH = 0, seqB = 0;
+  let reqAtual = null, reqConteudo = "";
+  const preferido = dia && hora ? { dia, hora } : null;
+
+  const campoBusca = ui.campo({ rotulo: "Buscar oportunidade aberta", nome: "busca", tipo: "busca", placeholder: "Nome, serviço ou telefone", ajuda: "A consulta fica vinculada à oportunidade escolhida." });
+  const inputBusca = campoBusca.querySelector("input");
+  const resultados = h("div", { class: "agenda-resultados", role: "listbox", "aria-label": "Oportunidades encontradas" });
+  const secBusca = h("section", { class: "agenda-busca" }, campoBusca, resultados);
+  const escolhido = h("div", { class: "agenda-escolhido-l" });
+  const servicoEl = ui.campo({ rotulo: "Serviço", nome: "servico", valor: sel && sel.servico || "", max: 80, placeholder: "Ex.: avaliação, limpeza", ajuda: "Define a duração; vazio = o da oportunidade." });
+  const outraData = ui.campo({ rotulo: "Ver a partir de", nome: "data", tipo: "data", valor: aPartirInicial });
+  const atalhos = h("div", { class: "ag-atalhos" });
+  const diasEl = h("div", { class: "ag-dias", role: "radiogroup", "aria-label": "Dia" });
+  const horasEl = h("div", { class: "ag-horas", role: "radiogroup", "aria-label": "Horário" });
+  const info = h("p", { class: "campo-ajuda ag-info", role: "status", "aria-live": "polite" });
+  const statusEl = h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true });
+  const formulario = h("form", { class: "agenda-form", novalidate: true }, secBusca, escolhido,
+    h("div", { class: "agenda-form-grade" }, servicoEl, outraData), atalhos, diasEl, horasEl, info, statusEl);
+  radiosComSetas(diasEl); radiosComSetas(horasEl);
+  const servicoValor = () => servicoEl.querySelector("input").value.trim();
+  const dataValor = () => outraData.querySelector("input").value || hoje;
+
+  function pintarEscolhido() {
+    ui.limpar(escolhido);
+    secBusca.hidden = !!sel;
+    escolhido.hidden = !sel;
+    if (!sel) return;
+    escolhido.append(h("div", { class: "linha agenda-escolhido-topo" },
+      h("p", { class: "agenda-escolhido", role: "status" }, `${sel.titulo}${sel.funil_nome ? ` · ${sel.funil_nome}` : ""}`),
+      negocio ? null : h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { sel = null; slotSel = null; grupos = []; diaSel = null; ui.limpar(atalhos); ui.limpar(diasEl); ui.limpar(horasEl); info.textContent = ""; pintarEscolhido(); inputBusca.focus(); } } }, "Trocar")));
+    if (sel.consultaAtual && Date.parse(sel.consultaAtual) > Date.now()) {
+      escolhido.append(h("p", { class: "aviso aviso-aten" }, ui.icone("info"), h("span", null, `Já tem consulta marcada para ${ui.dataHoraBR(sel.consultaAtual)}. Ao confirmar, ela será remarcada.`)));
+    }
+  }
+
+  /* ---------- horários: chips de dia, pílulas de hora, atalhos ---------- */
+  function selecionarSlot(slot) {
+    slotSel = slot || null;
+    diaSel = slot ? slot.dia : (grupos[0] && grupos[0].dia) || null;
+    desenharAtalhos(); desenharDias(); desenharHoras();
+    info.textContent = slot ? `${rotuloDoDia(slot.dia, hoje)}, ${ui.horaBR(slot.inicio)} · duração prevista ${ui.num(duracao)} min · horário de São Paulo` : "";
+  }
+  function desenharAtalhos() {
+    ui.limpar(atalhos);
+    const pl = primeiroLivre(grupos), am = amanhaDeManha(grupos, hoje);
+    atalhos.append(...[
+      pl ? h("button", { type: "button", class: ["bt", "bt-fant", "bt-p", slotSel && pl.inicio === slotSel.inicio && "ativo"], on: { click: () => selecionarSlot(pl) } }, ui.icone("relogio"), "Primeiro livre") : null,
+      am ? h("button", { type: "button", class: ["bt", "bt-fant", "bt-p", slotSel && am.inicio === slotSel.inicio && "ativo"], on: { click: () => selecionarSlot(am) } }, "Amanhã de manhã") : null,
+    ].filter(Boolean));
+  }
+  function desenharDias() {
+    ui.limpar(diasEl);
+    for (const g of grupos) {
+      const on = g.dia === diaSel;
+      diasEl.appendChild(h("button", { type: "button", role: "radio", class: "ag-dia-chip", "aria-checked": String(on), tabindex: on ? "0" : "-1", dataset: { dia: g.dia },
+        "aria-label": `${rotuloDoDia(g.dia, hoje)}, ${g.itens.length} horários livres`,
+        on: { click: () => {
+          // trocar de dia mantém, se der, o mesmo horário
+          const mesmo = slotSel ? slotMaisPerto(grupos, g.dia, horaTxt(slotSel.min)) : null;
+          selecionarSlot(mesmo || g.itens[0]);
+        } } }, rotuloDoDia(g.dia, hoje)));
+    }
+    queueMicrotask(() => { const s = diasEl.querySelector('[aria-checked="true"]'); if (s && s.scrollIntoView) try { s.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch { /* ok */ } });
+  }
+  function desenharHoras() {
+    ui.limpar(horasEl);
+    const g = grupos.find(x => x.dia === diaSel);
+    for (const s of (g ? g.itens : [])) {
+      const on = slotSel && s.inicio === slotSel.inicio;
+      const vagas = (Number(s.capacidade) || 1) - (Number(s.ocupados) || 0);
+      horasEl.appendChild(h("button", { type: "button", role: "radio", class: "ag-hora-pill dado", "aria-checked": String(!!on), tabindex: on ? "0" : "-1", title: `${vagas} vaga${vagas === 1 ? "" : "s"}`,
+        "aria-label": `${horaTxt(s.min)}, ${vagas} vaga${vagas === 1 ? "" : "s"}`, on: { click: () => selecionarSlot(s) } }, horaTxt(s.min)));
+    }
+  }
+  async function carregarHorarios({ inicial = false } = {}) {
+    if (!sel) return;
+    const minha = ++seqH;
+    info.textContent = "Buscando horários livres…";
+    ui.limpar(atalhos); ui.limpar(diasEl); ui.limpar(horasEl);
+    try {
+      const r = await api.rpcC("nx_agenda_livres", { p_a_partir: dataValor(), p_dias: 14, p_servico: servicoValor() || null, p_negocio: sel.id });
+      if (minha !== seqH) return;
+      duracao = r.duracao_min;
+      grupos = agruparLivres(r.horarios);
+      if (!grupos.length) { slotSel = null; diaSel = null; info.textContent = "Não há horários livres nos 14 dias a partir desta data. Tente outra data ou confira as configurações da agenda."; return; }
+      let escolha = null;
+      if (inicial && preferido) escolha = slotMaisPerto(grupos, preferido.dia, preferido.hora);
+      if (!escolha && slotSel) escolha = grupos.flatMap(g => g.itens).find(s => s.inicio === slotSel.inicio) || null;
+      selecionarSlot(escolha || primeiroLivre(grupos));
+    } catch (e) {
+      if (minha !== seqH) return;
+      info.textContent = "";
+      ui.limpar(horasEl);
+      horasEl.appendChild(h("p", { class: "agenda-erro" }, api.mensagemErro(e)));
+    }
+  }
+  servicoEl.querySelector("input").addEventListener("change", () => { if (sel) carregarHorarios(); });
+  outraData.querySelector("input").addEventListener("change", () => { if (sel) { slotSel = null; carregarHorarios(); } });
+
+  /* ---------- busca enquanto digita ---------- */
+  function escolher(item) {
+    sel = { id: item.id, titulo: item.titulo || item.contato_nome || "Negócio", servico: "", funil_nome: item.estagio_nome || "", consultaAtual: null };
+    pintarEscolhido();
+    carregarHorarios({ inicial: true });
+    // a ficha traz o serviço e a consulta atual (se houver, o aviso de que será remarcada); a duração já vem do servidor pelo negócio
+    api.rpcC("nx_negocio_ver", { p_id: item.id }).then(d => {
+      if (!d || !d.negocio || !sel || sel.id !== item.id) return;
+      sel.servico = d.negocio.servico || "";
+      sel.consultaAtual = d.negocio.consulta_em || null;
+      const campo = servicoEl.querySelector("input");
+      if (!campo.value && sel.servico) campo.value = sel.servico;
+      pintarEscolhido();
+    }).catch(() => { /* sem a ficha: segue só com os horários */ });
+  }
+  async function buscarAgora() {
+    const q = inputBusca.value.trim();
+    const minha = ++seqB;
+    ui.limpar(resultados);
+    if (q.length < 2) { if (q.length) resultados.appendChild(h("p", { class: "campo-ajuda" }, "Digite pelo menos duas letras ou quatro números.")); return; }
+    resultados.setAttribute("aria-busy", "true");
+    try {
+      const itens = await procurarNegocios(ctx, q);
+      if (minha !== seqB) return;
+      ui.limpar(resultados);
+      if (!itens.length) { resultados.appendChild(h("p", { class: "campo-ajuda" }, "Nenhuma oportunidade aberta com esse nome. Crie ou atualize pelo CRM.")); return; }
+      for (const item of itens) {
+        resultados.appendChild(h("button", { type: "button", class: "agenda-resultado", role: "option", "aria-selected": "false", on: { click: () => escolher(item) } },
+          h("b", null, item.titulo || item.contato_nome || "Negócio"),
+          h("small", null, [item.contato_nome && item.contato_nome !== item.titulo ? item.contato_nome : null, item.estagio_nome].filter(Boolean).join(" · "))));
+      }
+      resultados.dataset.n = String(itens.length);
+    } catch (e) { if (minha === seqB) { ui.limpar(resultados); resultados.appendChild(h("p", { class: "agenda-erro" }, api.mensagemErro(e))); } }
+    finally { if (minha === seqB) resultados.removeAttribute("aria-busy"); }
+  }
+  const buscarDepois = ui.debounce(buscarAgora, 300);
+  inputBusca.addEventListener("input", buscarDepois);
+  inputBusca.addEventListener("keydown", ev => {
+    if (ev.key !== "Enter") return;
+    ev.preventDefault();
+    if (buscarDepois.cancelar) buscarDepois.cancelar();
+    buscarAgora().then(() => { const unico = resultados.querySelectorAll(".agenda-resultado"); if (unico.length === 1) unico[0].click(); });
+  });
+
+  /* ---------- a janela ---------- */
+  pintarEscolhido();
+  const modal = ui.modal({
+    titulo: sel && sel.consultaAtual ? "Remarcar consulta" : "Marcar consulta", corpo: formulario, largura: "m",
+    descricao: "Escolha o dia e o horário. A disponibilidade é validada de novo ao salvar.",
+    aoAbrir: a => {
+      if (!sel) return;
+      carregarHorarios({ inicial: true });
+      // oportunidade já escolhida: o foco vai direto para «Confirmar consulta» (Enter = o 2º toque)
+      const bt = a.el.querySelector('.modal-rod [data-tipo="primario"]');
+      if (bt) try { bt.focus({ preventScroll: true }); } catch { /* ok */ }
+    },
+    acoes: [
+      { rotulo: "Cancelar", tipo: "neutro", valor: false },
+      { rotulo: "Confirmar consulta", tipo: "primario", fn: async m => {
+        if (!sel) { m.erro("Escolha uma oportunidade aberta para continuar."); return false; }
+        if (!slotSel) { m.erro("Escolha um dia e um horário livre."); return false; }
+        try {
+          const params = { p_negocio: sel.id, p_inicio: slotSel.inicio, p_servico: servicoValor() || null };
+          const conteudo = JSON.stringify(params);
+          if (conteudo !== reqConteudo) { reqAtual = Lg.novaReq(); reqConteudo = conteudo; }
+          const { resultado } = await Lg.escreverComReq(api, "nx_agenda_marcar", params, { req: reqAtual, aoStatus: t => { statusEl.textContent = t; statusEl.hidden = false; } });
+          statusEl.hidden = true;
+          return erroResposta(resultado);
+        } catch (e) {
+          statusEl.hidden = true;
+          const codigo = e && e.codigo;
+          m.erro(e && e.ambigua ? "Não foi possível confirmar se foi salvo. Toque em «Confirmar consulta» de novo: é seguro, não marca duas vezes."
+            : codigo === "horario_ocupado" ? "Esse horário acabou de ser ocupado. Escolha outro (a lista foi atualizada)."
+              : codigo === "ja_agendada" ? "Esta oportunidade já tem uma consulta futura. Atualize a agenda antes de tentar novamente."
+                : api.mensagemErro(e));
+          if (!(e && e.ambigua)) { slotSel = null; carregarHorarios(); }      // recusa: traz os horários de novo; dúvida de conexão: o horário escolhido continua valendo
+          return false;
+        }
+      } },
+    ],
+  });
+
+  const resultado = await modal;
+  if (!(resultado && resultado.ok)) return null;
+  const rotulo = (resultado.consulta && resultado.consulta.rotulo) || ui.dataHoraBR(slotSel && slotSel.inicio);
+  const anterior = resultado.remarcada && resultado.anterior ? resultado.anterior.inicio : null;
+  const servicoMarcado = servicoValor() || null;
+  if (aoMudar) try { aoMudar(resultado); } catch (e) { console.error(e); }
+  ui.acaoComDesfazer({
+    texto: `${resultado.remarcada ? "Remarcada" : "Marcada"} para ${rotulo}`,
+    reverter: async () => {
+      // remarcação volta ao horário anterior; consulta nova some
+      if (anterior) erroResposta(await api.rpcC("nx_agenda_marcar", { p_negocio: sel.id, p_inicio: anterior, p_servico: servicoMarcado }));
+      else erroResposta(await api.rpcC("nx_agenda_desmarcar", { p_negocio: sel.id, p_motivo: "Desfeito logo depois de marcar" }));
+      if (aoMudar) try { aoMudar(null); } catch (e) { console.error(e); }
+    },
+  });
+  return resultado;
+}
+
+/** Desmarcar (pede o motivo) com «Desfazer»: marcar de volta o mesmo horário. */
+export async function desmarcarConsulta(ctx, c, { aoMudar = null } = {}) {
+  if (!ctx.pode("atendente")) return null;
+  const { ui, api } = ctx;
+  const h = ui.h;
+  const motivo = ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", tipo: "textarea", max: 200, linhas: 2 });
+  const r = await ui.modal({
+    titulo: "Desmarcar consulta", largura: "p",
+    corpo: h("div", { class: "pilha" }, h("p", null, `${c.nome || c.titulo || "Esta consulta"} · ${ui.dataHoraBR(c.inicio)}`), motivo),
+    acoes: [
+      { rotulo: "Voltar", tipo: "neutro", valor: false },
+      { rotulo: "Desmarcar consulta", tipo: "perigo", fn: async () => erroResposta(await api.rpcC("nx_agenda_desmarcar", {
+        p_negocio: c.negocio_id, p_motivo: motivo.querySelector("textarea").value.trim() || null,
+      })) },
+    ],
+  });
+  if (!(r && r.ok)) return null;
+  if (aoMudar) try { aoMudar(r); } catch (e) { console.error(e); }
+  ui.acaoComDesfazer({
+    texto: `Consulta de ${ui.dataHoraBR(c.inicio)} desmarcada`,
+    reverter: async () => {
+      erroResposta(await api.rpcC("nx_agenda_marcar", { p_negocio: c.negocio_id, p_inicio: c.inicio, p_servico: c.servico || null }));
+      if (aoMudar) try { aoMudar(null); } catch (e) { console.error(e); }
+    },
+  });
+  return r;
+}
+
 export function desmontar() {}
 
 export async function montar(ctx) {
@@ -214,9 +527,6 @@ export async function montar(ctx) {
   let vivo = true;
   let eixoAtual = null;
   let nomesDonos = null;
-  // a lógica pura do CRM (chave de idempotência, erro ambíguo): carregada sob demanda, com o mesmo ?v= do shell
-  let logicaP = null;
-  const logica = () => logicaP || (logicaP = import(`./crm-logica.js?v=${encodeURIComponent(ctx.versao)}`));
 
   const cabecalho = h("header", { class: "agenda-cab" });
   const conteudo = h("div", { class: "agenda-conteudo", "aria-live": "polite" });
@@ -502,167 +812,11 @@ export async function montar(ctx) {
     return pop;
   }
 
-  /* ============================================================ marcar / remarcar / desmarcar */
-  async function procurarNegocios(q) {
-    const crm = await ctx.carregar("crm");
-    if (!crm || typeof crm.kit !== "function") throw new Error("CRM indisponível.");
-    const k = await crm.kit(ctx);
-    const funis = (k.base.funis || []).filter(f => f.ativo !== false);
-    const mapa = new Map();
-    for (const funil of funis) {
-      const r = await api.rpcC("nx_negocios_kanban", {
-        p_funil: funil.id, p_filtro: { busca: q, status: "aberto" }, p_por_coluna: 100,
-      });
-      for (const coluna of r.colunas || []) for (const item of coluna.itens || []) {
-        if (item.status === "aberto" && !item.consulta_em && !mapa.has(String(item.id))) mapa.set(String(item.id), { ...item, funil_nome: funil.nome });
-      }
-    }
-    return [...mapa.values()].slice(0, 30);
-  }
-
-  /** quando = {dia, hora?}: o clique na grade ou no «+» do dia já leva o dia (e o horário) para o formulário. */
-  async function abrirAgendamento(preselecionado = null, quando = null) {
-    if (!ctx.pode("atendente")) return;
-    let selecionado = preselecionado ? {
-      ...preselecionado,
-      id: preselecionado.id || preselecionado.negocio_id,
-      titulo: preselecionado.titulo || preselecionado.nome,
-    } : null;
-    let horarios = [];
-    const diaInicial = (quando && quando.dia) || (data >= ui.hojeSP() ? data : ui.hojeSP());   // a partir do dia na tela (nunca no passado)
-    const busca = ui.campo({ rotulo: "Buscar oportunidade aberta", nome: "busca", tipo: "busca", placeholder: "Nome, serviço ou telefone", ajuda: "A consulta fica vinculada ao negócio escolhido." });
-    const campoBusca = busca.querySelector("input");
-    const lista = h("div", { class: "agenda-resultados", role: "listbox", "aria-label": "Oportunidades encontradas" });
-    const escolhido = h("p", { class: "agenda-escolhido", role: "status" });
-    const btBuscar = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Buscar negócios");
-    const dataEl = ui.campo({ rotulo: "A partir de", nome: "data", tipo: "data", valor: diaInicial });
-    const servicoEl = ui.campo({ rotulo: "Serviço", nome: "servico", valor: selecionado && selecionado.servico || "", max: 80, placeholder: "Ex.: avaliação, limpeza" });
-    const btHorarios = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Ver horários livres");
-    const slots = h("div", { class: "agenda-slots", role: "status", "aria-live": "polite" });
-    const statusEl = h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true });
-    let reqAtual = null, reqConteudo = "";      // M25: uma chave por intenção; erro ambíguo repete com a MESMA chave (nunca marca duas vezes)
-    const formulario = h("div", { class: "agenda-form" },
-      selecionado ? null : h("section", { class: "agenda-busca" }, busca, btBuscar, lista),
-      escolhido, h("div", { class: "agenda-form-grade" }, dataEl, servicoEl), btHorarios, slots, statusEl);
-
-    function pintarEscolhido() {
-      escolhido.textContent = selecionado
-        ? `${selecionado.titulo || selecionado.nome || "Negócio"}${selecionado.funil_nome ? ` · ${selecionado.funil_nome}` : ""}`
-        : "Selecione um negócio para continuar.";
-      if (selecionado && servicoEl.querySelector("input")) servicoEl.querySelector("input").value = selecionado.servico || "";
-    }
-
-    const modal = ui.modal({
-      titulo: selecionado ? "Remarcar consulta" : "Marcar consulta", corpo: formulario, largura: "m",
-      descricao: "Escolha um horário livre. A disponibilidade é validada novamente ao salvar.",
-      acoes: [
-        { rotulo: "Cancelar", tipo: "neutro", valor: false },
-        { rotulo: "Confirmar consulta", tipo: "primario", fn: async m => {
-          if (!selecionado) { m.erro("Escolha um negócio aberto para continuar."); return false; }
-          const radio = slots.querySelector('input[name="agenda-slot"]:checked');
-          const slot = radio && horarios[Number(radio.value)];
-          if (!slot) { m.erro("Busque e selecione um horário livre."); return false; }
-          try {
-            const Lg = await logica();
-            const params = { p_negocio: selecionado.id, p_inicio: slot.inicio, p_servico: servicoEl.querySelector("input").value.trim() || null };
-            const conteudo = JSON.stringify(params);
-            if (conteudo !== reqConteudo) { reqAtual = Lg.novaReq(); reqConteudo = conteudo; }
-            const { resultado } = await Lg.escreverComReq(api, "nx_agenda_marcar", params, { req: reqAtual, aoStatus: t => { statusEl.textContent = t; statusEl.hidden = false; } });
-            statusEl.hidden = true;
-            return erroResposta(resultado);
-          } catch (e) {
-            statusEl.hidden = true;
-            const codigo = e && e.codigo;
-            const texto = e && e.ambigua ? "Não foi possível confirmar se foi salvo. Toque em «Confirmar consulta» de novo: é seguro, não marca duas vezes."
-              : codigo === "horario_ocupado" ? "Esse horário acabou de ser ocupado. Busque os horários livres novamente."
-              : codigo === "ja_agendada" ? "Este negócio já tem uma consulta futura. Atualize a agenda antes de tentar novamente."
-                : api.mensagemErro(e);
-            m.erro(texto);
-            if (!(e && e.ambigua)) { horarios = []; ui.limpar(slots); }   // recusa: busca de novo; dúvida de conexão: o horário escolhido continua valendo para o «Salvar de novo»
-            return false;
-          }
-        } },
-      ],
-    });
-
-    pintarEscolhido();
-    btBuscar.addEventListener("click", async () => {
-      const q = campoBusca.value.trim();
-      ui.limpar(lista);
-      if (q.length < 2) { lista.appendChild(h("p", { class: "campo-ajuda" }, "Digite pelo menos duas letras ou quatro números.")); return; }
-      lista.appendChild(h("p", { class: "campo-ajuda" }, "Buscando oportunidades…"));
-      try {
-        const itens = await ui.carregando(btBuscar, procurarNegocios(q));
-        ui.limpar(lista);
-        if (!itens.length) { lista.appendChild(h("p", { class: "campo-ajuda" }, "Nenhum negócio aberto sem consulta marcada. Crie ou atualize a oportunidade pelo CRM.")); return; }
-        for (const item of itens) {
-          const botao = h("button", { type: "button", class: "agenda-resultado", role: "option", "aria-selected": "false" },
-            h("b", null, item.titulo || item.nome || "Negócio"),
-            h("small", null, [item.contato && item.contato.nome, item.servico, item.funil_nome].filter(Boolean).join(" · ")));
-          botao.addEventListener("click", () => {
-            selecionado = item;
-            for (const op of lista.querySelectorAll("[aria-selected]")) op.setAttribute("aria-selected", "false");
-            botao.setAttribute("aria-selected", "true");
-            pintarEscolhido();
-            horarios = [];
-            ui.limpar(slots);
-          });
-          lista.appendChild(botao);
-        }
-      } catch (e) { ui.limpar(lista); lista.appendChild(h("p", { class: "agenda-erro" }, api.mensagemErro(e))); }
-    });
-
-    btHorarios.addEventListener("click", async () => {
-      ui.limpar(slots);
-      if (!selecionado) { slots.appendChild(h("p", { class: "agenda-erro" }, "Escolha um negócio primeiro.")); return; }
-      const dia = dataEl.querySelector("input").value || data;
-      if (!dia) { slots.appendChild(h("p", { class: "agenda-erro" }, "Escolha uma data.")); return; }
-      try {
-        const r = await ui.carregando(btHorarios, api.rpcC("nx_agenda_livres", {
-          p_a_partir: dia, p_dias: 14, p_servico: servicoEl.querySelector("input").value.trim() || null,
-          p_negocio: selecionado.id,
-        }));
-        horarios = (r.horarios || []).filter(x => x.livre);
-        if (!horarios.length) { slots.appendChild(h("p", { class: "agenda-vazio" }, "Não há horários livres nos próximos 14 dias. Tente outra data ou confira as configurações da agenda.")); return; }
-        // o clique na grade leva o horário: seleciona o livre mais perto dele (no mesmo dia, senão o primeiro)
-        let preferido = 0;
-        if (quando && quando.hora && quando.dia === dia) {
-          const alvo = paraMin(quando.hora);
-          const doDia = horarios.map((s, i) => ({ i, p: partesSP(s.inicio) })).filter(x => x.p && x.p.dia === dia);
-          if (doDia.length) preferido = doDia.reduce((m, x) => (Math.abs(x.p.min - alvo) < Math.abs(m.p.min - alvo) ? x : m)).i;
-        }
-        const opcoes = h("div", { class: "agenda-slots-grade", role: "radiogroup", "aria-label": "Horários livres" },
-          horarios.map((slot, i) => {
-            const id = `ag-slot-${Date.now()}-${i}`;
-            const radio = h("input", { type: "radio", name: "agenda-slot", id, value: String(i), checked: i === preferido });
-            return h("label", { class: "agenda-slot", for: id }, radio,
-              h("span", null, h("b", null, ui.dataHoraBR(slot.inicio)), h("small", null, `${ui.num(slot.capacidade - slot.ocupados)} vaga${slot.capacidade - slot.ocupados === 1 ? "" : "s"}`)));
-          }));
-        slots.append(opcoes, h("p", { class: "campo-ajuda" }, `Duração prevista: ${ui.num(r.duracao_min)} min. O servidor confirma o horário ao salvar.`));
-      } catch (e) { slots.appendChild(h("p", { class: "agenda-erro" }, api.mensagemErro(e))); }
-    });
-
-    const resultado = await modal;
-    if (resultado && resultado.ok) {
-      ui.toast(resultado.remarcada ? "Consulta remarcada." : "Consulta marcada.", { tipo: "ok" });
-      carregar({ silencioso: true, forcar: true });
-    }
-  }
-
-  async function desmarcar(c) {
-    const motivo = ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", tipo: "textarea", max: 200, linhas: 2 });
-    const r = await ui.modal({
-      titulo: "Desmarcar consulta", largura: "p",
-      corpo: h("div", { class: "pilha" }, h("p", null, `${c.nome || c.titulo || "Esta consulta"} · ${ui.dataHoraBR(c.inicio)}`), motivo),
-      acoes: [
-        { rotulo: "Voltar", tipo: "neutro", valor: false },
-        { rotulo: "Desmarcar consulta", tipo: "perigo", fn: async () => erroResposta(await api.rpcC("nx_agenda_desmarcar", {
-          p_negocio: c.negocio_id, p_motivo: motivo.querySelector("textarea").value.trim() || null,
-        })) },
-      ],
-    });
-    if (r && r.ok) { ui.toast("Consulta desmarcada.", { tipo: "ok" }); carregar({ silencioso: true, forcar: true }); }
-  }
+  /* ============================================================ marcar / remarcar / desmarcar (as janelas são marcarConsulta e desmarcarConsulta) */
+  const recarregar = () => carregar({ silencioso: true, forcar: true });
+  /** pre = consulta a remarcar (ou null); quando = {dia, hora} do clique na grade ou do «+» do dia */
+  const abrirAgendamento = (pre = null, quando = null) => marcarConsulta(ctx, { negocio: pre, dia: quando && quando.dia, hora: quando && quando.hora, base: data, aoMudar: recarregar });
+  const desmarcar = c => desmarcarConsulta(ctx, c, { aoMudar: recarregar });
 
   // atravessar os 760 px (girar o aparelho, redimensionar a janela) troca de visão
   const aoMudarLargura = () => {
@@ -672,10 +826,15 @@ export async function montar(ctx) {
   };
   if (mq.addEventListener) mq.addEventListener("change", aoMudarLargura);
 
+  // paleta de comandos (Ctrl/⌘+K, frente B): a ação «Marcar consulta» aparece enquanto a Agenda está aberta
+  const desregistrar = ctx.comandos && typeof ctx.comandos.registrar === "function"
+    ? ctx.comandos.registrar({ id: "agenda.marcar", rotulo: "Marcar consulta", palavras: "agenda consulta horário agendar", fazer: () => abrirAgendamento() }) : null;
+
   montarCabecalho();
   await carregar();
   return () => {
     vivo = false; sequencia++;
+    if (typeof desregistrar === "function") try { desregistrar(); } catch { /* ok */ }
     clearInterval(relogio);
     if (mq.removeEventListener) mq.removeEventListener("change", aoMudarLargura);
   };

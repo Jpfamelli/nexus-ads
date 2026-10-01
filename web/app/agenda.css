@@ -153,15 +153,30 @@
 .agenda-resultado small { color: var(--c-texto-3); font-size: var(--fs-12); }
 .agenda-escolhido { padding: .65rem .8rem; border-left: 2px solid var(--c-prim-luz); border-radius: 0 var(--r-p) var(--r-p) 0; background: var(--c-prim-suave); font-size: var(--fs-13); }
 .agenda-form-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
-.agenda-slots { display: grid; gap: .55rem; }
-.agenda-slots-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; max-height: 240px; overflow: auto; padding: .1rem; }
-.agenda-slot { min-width: 0; display: flex; align-items: center; gap: .55rem; padding: .6rem .65rem; border: 1px solid var(--c-borda-2); border-radius: var(--r-m); background: var(--c-sup-2); cursor: pointer; }
-.agenda-slot:has(input:checked) { border-color: var(--c-prim-luz); box-shadow: inset 0 0 0 1px var(--c-prim-luz); background: var(--c-prim-suave); }
-.agenda-slot input { flex: none; accent-color: var(--c-prim-luz); }
-.agenda-slot span { min-width: 0; display: grid; gap: .12rem; }
-.agenda-slot b, .agenda-slot small { overflow-wrap: anywhere; }
-.agenda-slot b { font: 600 var(--fs-12) var(--f-dado); }
-.agenda-slot small { color: var(--c-texto-3); font-size: var(--fs-11); }
+.agenda-escolhido-topo { align-items: center; justify-content: space-between; gap: .6rem; }
+.agenda-escolhido-topo .agenda-escolhido { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.agenda-escolhido-l { display: grid; gap: .5rem; }
+/* M27: atalhos, chips de dia («Hoje», «Amanhã», «Sex 03/10») e pílulas de horário; o primeiro livre já vem selecionado */
+.ag-atalhos { display: flex; flex-wrap: wrap; gap: .4rem; }
+.ag-atalhos .bt { gap: .3rem; }
+.ag-atalhos .bt.ativo { border-color: var(--c-prim); background: var(--c-prim-suave); color: var(--c-texto); }
+.ag-atalhos .ic { width: 14px; height: 14px; }
+.ag-dias { display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none; padding: .15rem .05rem .3rem; }
+.ag-dias::-webkit-scrollbar { display: none; }
+.ag-dia-chip {
+  flex: none; min-height: 40px; padding: .3rem .95rem; border-radius: 999px; white-space: nowrap;
+  border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 600;
+}
+.ag-dia-chip:hover { color: var(--c-texto); border-color: var(--c-texto-3); }
+.ag-dia-chip[aria-checked="true"] { border-color: var(--c-prim); background: var(--c-prim-suave); color: var(--c-texto); }
+.ag-horas { display: flex; flex-wrap: wrap; gap: .4rem; max-height: 220px; overflow: auto; padding: .1rem; }
+.ag-hora-pill {
+  flex: 0 0 4.6rem; min-height: 40px; padding: .3rem .4rem; border-radius: var(--r-p); border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto); font-size: var(--fs-13);
+}
+.ag-hora-pill:hover { border-color: var(--c-texto-3); }
+.ag-hora-pill[aria-checked="true"] { border-color: var(--c-prim); background: var(--c-prim); color: var(--c-prim-txt); font-weight: 600; }
+.ag-dia-chip:focus-visible, .ag-hora-pill:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.ag-info { min-height: 1.2em; }
 .agenda-vazio { padding: .8rem .65rem; color: var(--c-texto-3); font-size: var(--fs-13); text-align: center; }
 .agenda-erro { padding: .55rem .7rem; border-radius: var(--r-p); background: var(--c-ruim-suave); color: var(--c-ruim); font-size: var(--fs-13); }
 
@@ -209,7 +224,9 @@
   .ag-grade.ag-movel { --h-hora: 64px; --larg-regua: 44px; }
   .ag-grade.ag-movel .ag-col { border-left: 1px solid var(--c-borda); }
   .ag-grade.ag-movel .ag-bloco-nome { font-size: var(--fs-14); }
-  .agenda-form-grade, .agenda-slots-grade { grid-template-columns: minmax(0, 1fr); }
+  .agenda-form-grade { grid-template-columns: minmax(0, 1fr); }
+  .ag-horas { max-height: 40dvh; }
+  .ag-hora-pill { flex-basis: calc(25% - .3rem); }
   .agenda-busca { grid-template-columns: minmax(0, 1fr); }
   .agenda-busca > .agenda-resultados { grid-column: auto; }
   .agc-dias, .rastc-plataformas { grid-template-columns: minmax(0, 1fr); }

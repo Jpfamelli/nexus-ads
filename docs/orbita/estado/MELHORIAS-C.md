@@ -81,3 +81,20 @@ Arquivos que esta frente edita: `web/app/crm.js`, `crm-*.js`, `agenda.js`, `agen
 - Testes: `crm.teste.mjs` — `escreverComReq` com servidor falso (aplica e perde a resposta → repete com a mesma chave → 1 registro; caiu antes → aplica na repetição; sem sucesso → `.ambigua` + chave e o «Salvar de novo» não duplica; recusa não repete),
   `erroAmbiguo`, `movimentoAdiado`.
 - Pedido para a frente B: `api.rpcC` deve repassar `p_req` explícito sem sobrescrever (hoje repassa); o dev-falso de B já tem a idempotência por `p_req` (usada nos testes de C).
+
+## M27 · Marcar consulta em 2 toques — FEITO
+
+- `agenda.js` exporta `marcarConsulta(ctx, {negocio, dia, hora, base, aoMudar})` e `desmarcarConsulta(ctx, consulta, {aoMudar})` (a janela deixou de ser um fechamento da tela: o CRM abre a MESMA).
+  Com a oportunidade já escolhida (gaveta do negócio, «Remarcar» da consulta, clique/«+» da grade) a janela abre com os horários livres prontos: **chips de dia** («Hoje», «Amanhã», «Sex 03/10»),
+  **pílulas de horário**, o primeiro livre (ou o mais perto do clique na grade, no mesmo dia) já selecionado e o foco em «Confirmar consulta» → **2 toques**: «Marcar consulta» (gaveta do negócio) e «Confirmar».
+  Sem oportunidade: **busca enquanto digita** (debounce 300 ms, Enter busca na hora e escolhe se há um só), por UMA chamada (`nx_buscar`; sem ela cai no quadro do funil); escolher o resultado já carrega os horários
+  (`nx_agenda_livres` com `p_negocio`: o servidor deduz serviço e duração) e a ficha (`nx_negocio_ver`) traz o serviço e avisa «Já tem consulta marcada para …; ao confirmar, será remarcada».
+  Atalhos «Primeiro livre» e «Amanhã de manhã», «Ver a partir de» (outra data) e «Serviço» (muda a duração) recarregam os horários; setas movem chips e pílulas (radios).
+- Confirmar → aviso **«Marcada para qui 02/10 às 10:00 · Desfazer»** (desmarca; se era remarcação, volta ao horário anterior); «Desmarcar» (pede o motivo) também ganha Desfazer (marca de volta o mesmo horário).
+  A escrita usa a chave `p_req` do M25 (erro ambíguo repete com a mesma chave e não marca duas vezes).
+- Botão **«Marcar consulta»/«Remarcar consulta»** na gaveta do negócio aberto (`crm-negocio.js`); ação «Marcar consulta» registrada na paleta (`ctx.comandos.registrar`, só se o registro existir — é da frente B/M18).
+  O CSS da agenda também carrega quando a janela abre pelo CRM.
+- Verificado (puppeteer + dev-falso): do negócio aberto à consulta marcada em **2 toques** (gaveta → «Marcar consulta» → «Confirmar consulta»): `nx_agenda_marcar` com `p_req`, aviso com Desfazer, Desfazer chama `nx_agenda_desmarcar`
+  e a consulta some; busca digitando «Camila» = 1 pedido (debounce), resultado → horários → «Amanhã de manhã» seleciona amanhã antes do meio-dia; Esc com texto digitado mostra a faixa «Descartar o que você digitou?» (M08 da frente A); 390 px sem corte.
+- Testes (`crm.teste.mjs`): `agruparLivres`, `rotuloDoDia`, `primeiroLivre`, `amanhaDeManha`, `slotMaisPerto` e o estático da janela e do botão na gaveta.
+- Excluir tarefa/nota passou a usar o `firmar` do `ui.acaoComDesfazer` da frente A (Ctrl/⌘+Z, saída da página e erro devolvendo a tela).

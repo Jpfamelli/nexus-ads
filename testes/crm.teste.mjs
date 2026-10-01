@@ -620,6 +620,60 @@ await teste("agenda: cor do procedimento (sempre a mesma), consultas e bloqueios
   assert.equal(AG.horaDoClique(0.55, eixo, 15), "13:30");
 });
 
+await teste("agenda (M27): horários livres por dia, rótulos «Hoje/Amanhã/Sex 03/10», primeiro livre, amanhã de manhã e o mais perto do clique", () => {
+  const sl = (iso, livre = true) => ({ inicio: iso, livre, ocupados: livre ? 0 : 1, capacidade: 1 });
+  const horarios = [
+    sl("2026-10-01T14:30:00.000Z"),            // 11:30 de quinta (hoje)
+    sl("2026-10-01T16:00:00.000Z", false),     // ocupado: fora
+    sl("2026-10-02T11:30:00.000Z"),            // 08:30 de sexta (amanhã)
+    sl("2026-10-02T12:00:00.000Z"),            // 09:00 de sexta
+    sl("2026-10-02T19:30:00.000Z"),            // 16:30 de sexta
+    sl("2026-10-03T12:00:00.000Z"),            // 09:00 de sábado
+    { inicio: "lixo", livre: true },
+    null,
+  ];
+  const g = AG.agruparLivres(horarios);
+  assert.deepEqual(g.map(x => [x.dia, x.itens.length]), [["2026-10-01", 1], ["2026-10-02", 3], ["2026-10-03", 1]], "só os livres, agrupados por dia de São Paulo");
+  assert.deepEqual(g[1].itens.map(s => s.min), [510, 540, 990], "em ordem de horário");
+  assert.deepEqual(AG.agruparLivres([]), []);
+  assert.deepEqual(AG.agruparLivres(null), []);
+  // rótulos
+  assert.equal(AG.rotuloDoDia("2026-10-01", "2026-10-01"), "Hoje");
+  assert.equal(AG.rotuloDoDia("2026-10-02", "2026-10-01"), "Amanhã");
+  assert.equal(AG.rotuloDoDia("2026-10-03", "2026-10-01"), "Sáb 03/10");
+  assert.equal(AG.rotuloDoDia("2026-10-05", "2026-10-01"), "Seg 05/10");
+  assert.equal(AG.rotuloDoDia("2026-11-01", "2026-10-31"), "Amanhã", "virada de mês");
+  // atalhos
+  assert.equal(AG.primeiroLivre(g).inicio, "2026-10-01T14:30:00.000Z");
+  assert.equal(AG.primeiroLivre([]), null);
+  assert.equal(AG.amanhaDeManha(g, "2026-10-01").inicio, "2026-10-02T11:30:00.000Z", "amanhã antes do meio-dia");
+  const tarde = AG.agruparLivres([sl("2026-10-02T19:30:00.000Z")]);
+  assert.equal(AG.amanhaDeManha(tarde, "2026-10-01"), null, "amanhã só tem tarde → sem atalho");
+  assert.equal(AG.amanhaDeManha(g, "2026-10-02").inicio, "2026-10-03T12:00:00.000Z", "o «amanhã» acompanha o «hoje» informado");
+  // o horário livre mais perto do clique, no mesmo dia
+  assert.equal(AG.slotMaisPerto(g, "2026-10-02", "09:10").min, 540);
+  assert.equal(AG.slotMaisPerto(g, "2026-10-02", "15:00").min, 990);
+  assert.equal(AG.slotMaisPerto(g, "2026-10-02", "08:00").min, 510);
+  assert.equal(AG.slotMaisPerto(g, "2026-10-09", "09:00"), null, "dia sem horário livre");
+  assert.equal(AG.slotMaisPerto(g, "2026-10-02", "xx"), null);
+});
+
+await teste("marcar consulta (M27): 2 toques, busca ao digitar, atalhos, desfazer — estático de agenda.js e do botão na gaveta", () => {
+  const js = ler("agenda.js"), neg = ler("crm-negocio.js"), css = ler("agenda.css");
+  assert.ok(/export async function marcarConsulta\(ctx,/.test(js) && /export async function desmarcarConsulta\(ctx,/.test(js), "as janelas são exportadas (o CRM abre a mesma pela gaveta)");
+  assert.ok(/ui\.debounce\(buscarAgora, 300\)/.test(js) && !/Buscar negócios/.test(js), "a busca roda enquanto digita; sem o botão «Buscar negócios»");
+  assert.ok(/api\.rpcC\("nx_buscar", \{ p_q: q \}\)/.test(js), "busca por uma chamada só (nx_buscar)");
+  assert.ok(/api\.rpcC\("nx_agenda_livres"/.test(js) && /carregarHorarios\(\{ inicial: true \}\)/.test(js), "escolher a oportunidade já carrega os horários livres");
+  assert.ok(/Primeiro livre/.test(js) && /Amanhã de manhã/.test(js), "atalhos");
+  assert.ok(/role: "radio"/.test(js) && /radiosComSetas/.test(js), "chips e pílulas como radios, com setas");
+  assert.ok(/\[data-tipo="primario"\]/.test(js) && /\.focus\(/.test(js), "com a oportunidade escolhida o foco vai para «Confirmar consulta» (Enter = 2º toque)");
+  assert.ok(/ui\.acaoComDesfazer\(/.test(js) && /nx_agenda_desmarcar/.test(js) && /anterior/.test(js), "aviso «Marcada para … · Desfazer» (desmarca, ou volta ao horário anterior)");
+  assert.ok(/ui\.carregarCss\("agenda"\)/.test(js.slice(js.indexOf("export async function marcarConsulta"))), "o CSS da agenda carrega também quando a janela abre pelo CRM");
+  assert.ok(/ctx\.comandos\.registrar\(\{ id: "agenda\.marcar"/.test(js), "ação «Marcar consulta» registrada na paleta (M18)");
+  assert.ok(/class: "bt bt-sec ng-marcar"/.test(neg) && /marcarConsulta\(k\.ctx/.test(neg), "gaveta do negócio: botão «Marcar consulta»");
+  assert.ok(/\.ag-hora-pill\[aria-checked="true"\]/.test(css) && /\.ag-dia-chip\[aria-checked="true"\]/.test(css), "estilo do selecionado");
+});
+
 /* ============================================================ (b) estáticos */
 console.log("\n(b) estáticos dos arquivos do CRM");
 const ARQS_JS = ["crm.js", "crm-kanban.js", "crm-listas.js", "crm-negocio.js", "crm-tarefas.js", "crm-importar.js", "crm-config.js", "crm-logica.js", "agenda.js", "agenda-config.js"];
