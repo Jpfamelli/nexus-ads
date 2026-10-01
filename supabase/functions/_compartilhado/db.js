@@ -5,28 +5,57 @@
    ============================================================ */
 
 const PAGINA = 1000;   // teto padrão de linhas por resposta do PostgREST no Supabase
+const PRAZO_PADRAO_MS = 10_000;
 
-export function criarDb({ url, chave } = {}, f = globalThis.fetch) {
+export function criarDb({ url, chave } = {}, f = globalThis.fetch, { prazoMs = PRAZO_PADRAO_MS } = {}) {
   if (!url || !chave) throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes");
   const base = `${String(url).replace(/\/+$/, "")}/rest/v1`;
   const cab = { apikey: chave, "Content-Type": "application/json", Accept: "application/json" };
+  const prazo = Number.isFinite(Number(prazoMs)) && Number(prazoMs) > 0 ? Math.min(120_000, Number(prazoMs)) : PRAZO_PADRAO_MS;
   // Chave nova (sb_secret_…) não é JWT: o gateway recusa se vier no Authorization.
   if (!String(chave).startsWith("sb_")) cab.Authorization = `Bearer ${chave}`;
 
   async function pedir(metodo, caminho, { params, corpo, prefer } = {}) {
     const qs = params && Object.keys(params).length ? `?${new URLSearchParams(params)}` : "";
-    const r = await f(`${base}/${caminho}${qs}`, {
-      method: metodo,
-      headers: prefer ? { ...cab, Prefer: prefer } : cab,
-      body: corpo === undefined ? undefined : JSON.stringify(corpo),
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    let timer, expirou = false;
+    const rede = (async () => {
+      const r = await f(`${base}/${caminho}${qs}`, {
+        method: metodo,
+        headers: prefer ? { ...cab, Prefer: prefer } : cab,
+        body: corpo === undefined ? undefined : JSON.stringify(corpo),
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+      return { r, txt: await r.text() };
+    })();
+    const limite = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        expirou = true;
+        controller?.abort();
+        const e = new Error(`tempo esgotado no banco (${metodo} ${caminho.split("?")[0]})`);
+        e.codigo = "tempo_esgotado"; e.banco = true;
+        reject(e);
+      }, prazo);
     });
-    const txt = await r.text();
+    let r, txt;
+    try {
+      ({ r, txt } = await Promise.race([rede.catch(e => {
+        if (expirou) {
+          const t = new Error(`tempo esgotado no banco (${metodo} ${caminho.split("?")[0]})`);
+          t.codigo = "tempo_esgotado"; t.banco = true; throw t;
+        }
+        e.banco = true; e.codigo ||= "sem_conexao"; throw e;
+      }), limite]));
+    } finally { clearTimeout(timer); }
     let dados = null;
     if (txt) { try { dados = JSON.parse(txt); } catch { dados = txt; } }
     if (!r.ok) {
       const msg = dados && typeof dados === "object" ? (dados.message || dados.details || dados.hint || dados.code) : dados;
       const e = new Error(`banco ${r.status} em ${caminho.split("?")[0]}: ${msg || "erro"}`);
       e.status = r.status;
+      // Webhooks só pedem retry para falhas transitórias. Um 4xx permanente (por
+      // exemplo, dados inválidos ou RPC inexistente) não pode abrir um ciclo de retries.
+      e.banco = r.status === 408 || r.status === 425 || r.status === 429 || r.status >= 500;
       throw e;
     }
     return dados;

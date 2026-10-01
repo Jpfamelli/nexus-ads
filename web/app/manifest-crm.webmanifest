@@ -1,0 +1,13 @@
+{
+  "id": "/app/?produto=crm",
+  "name": "Órbita CRM",
+  "short_name": "CRM",
+  "description": "Contatos, oportunidades, tarefas e vendas da sua empresa.",
+  "lang": "pt-BR",
+  "start_url": "/app/?produto=crm#/crm",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#07090C",
+  "theme_color": "#07090C",
+  "icons": [{ "src": "orbita-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

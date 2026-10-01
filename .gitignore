@@ -1,3 +1,5 @@
 node_modules/
 supabase/dist/
+supabase/.temp/
+.netlify/
 *.log

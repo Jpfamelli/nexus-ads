@@ -1,0 +1,13 @@
+{
+  "id": "/app/?produto=ads",
+  "name": "Nexus Ads · Órbita",
+  "short_name": "Nexus Ads",
+  "description": "Campanhas, origem de leads e receita confirmada no CRM.",
+  "lang": "pt-BR",
+  "start_url": "/app/?produto=ads#/anuncios",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#07090C",
+  "theme_color": "#07090C",
+  "icons": [{ "src": "orbita-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

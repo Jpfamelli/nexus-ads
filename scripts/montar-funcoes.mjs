@@ -2,7 +2,8 @@
    NEXUS ADS — montar-funcoes.mjs
    Monta supabase/dist/<funcao>/ em diretório PLANO, do jeito que o
    deploy sem CLI envia: index.ts + todos os .js de _compartilhado +
-   cópia byte a byte de web/nucleo.js.
+   cópia byte a byte de web/nucleo.js. Funções: nx-ciclo, nx-relatorio,
+   nx-whatsapp, nx-enviar, nx-midia, nx-ia, nx-codewords (verify_jwt: false).
    Uso: node scripts/montar-funcoes.mjs
    ============================================================ */
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } from "node:fs";
@@ -15,7 +16,14 @@ const FUNCOES = join(RAIZ, "supabase", "functions");
 const COMPARTILHADO = join(FUNCOES, "_compartilhado");
 const NUCLEO = join(RAIZ, "web", "nucleo.js");
 const DIST = join(RAIZ, "supabase", "dist");
-const LISTA = ["nx-ciclo", "nx-relatorio", "nx-whatsapp"];
+// As funções usam verify_jwt: false e validação própria do handler.
+const LISTA = ["nx-ciclo", "nx-relatorio", "nx-whatsapp", "nx-enviar", "nx-midia", "nx-ia", "nx-codewords"];
+// handler de cada função (o index.ts importa tratar dele)
+const HANDLER = {
+  "nx-ciclo": "ciclo.js", "nx-relatorio": "relatorio.js", "nx-whatsapp": "webhook.js",
+  "nx-enviar": "enviar.js", "nx-midia": "midia.js", "nx-ia": "ia_conversas.js",
+  "nx-codewords": "codewords.js",
+};
 
 const sha = b => createHash("sha256").update(b).digest("hex").slice(0, 12);
 const falhar = msg => { console.error(`ERRO: ${msg}`); process.exit(1); };
@@ -54,6 +62,8 @@ for (const fn of LISTA) {
 
   if (sha(readFileSync(join(destino, "nucleo.js"))) !== sha(nucleo)) falhar(`${fn}: nucleo.js diferente do original`);
   conferirImports(destino);
+  const idx = readFileSync(join(destino, "index.ts"), "utf8");
+  if (!idx.includes(`from "./${HANDLER[fn]}"`)) falhar(`${fn}: index.ts não importa tratar de ${HANDLER[fn]}`);
 
   const arquivos = readdirSync(destino).sort((a, b) => (a === "index.ts" ? -1 : b === "index.ts" ? 1 : a.localeCompare(b)));
   console.log(`${fn}  (entrypoint index.ts, verify_jwt: false)`);

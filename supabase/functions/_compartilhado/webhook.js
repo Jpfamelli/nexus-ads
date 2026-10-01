@@ -1,18 +1,22 @@
 /* ============================================================
-   NEXUS ADS — webhook.js (nx-whatsapp)
-   Um webhook, dois números:
-   - número da CLÍNICA (nx_clientes.wa_phone_number_id): cada conversa nova
-     vira um lead em nx_leads, com o anúncio de origem (referral);
+   NEXUS ADS / ÓRBITA — webhook.js (nx-whatsapp)
+   - números dos CLIENTES (nx_canais, SaaS): mensagem → contato + conversa +
+     mensagem (nx_wa_entrada) → lead no funil do cliente DO CANAL (nx_lead_webhook),
+     mídia e "fora do horário" em segundo plano; recibos → nx_wa_status do canal.
+     URL por número (?c=<chave>) só aceita eventos DAQUELE número (canal_divergente).
+   - número da CLÍNICA sem nx_canais (nx_clientes.wa_phone_number_id): caminho
+     antigo — cada conversa nova vira um lead, com o anúncio de origem (referral);
    - número da NEXUS (nx_config.wa_phone_number_id): recibos de entrega dos
      alertas e relatórios (delivered/read/failed) → entregue_em / erro; fora
-     da janela de 24h, reenvia UMA vez como template.
+     da janela de 24h, reenvia UMA vez como template. Só com o segredo global.
    ============================================================ */
 import { criarDb } from "./db.js";
 import { hojeSP } from "./nucleo.js";
 import { enviarTemplate, foraDaJanela } from "./whatsapp.js";
+import { processarCanal } from "./conversas.js";
 import {
   json, agoraDe, soDigitos, iguaisSeguro, limparErro, lerConfig, comPrazo,
-  nomeCurto, tituloRadar, tituloRelatorio,
+  nomeCurto, tituloRadar, tituloRelatorio, lerCorpoLimitado, soltandoCorpo, CorpoGrande,
 } from "./comum.js";
 
 const DIAS_MESMA_CONVERSA = 30;
@@ -26,6 +30,9 @@ const RECENTE_S = 600;
 const TRAVA_REENVIO_S = 7 * 86400;
 // o webhook precisa responder rápido à Meta: o reenvio por template não espera os 30 s do sync
 const PRAZO_ENVIO_MS = 10_000;
+const PRAZO_MIDIA_MS = 60_000;
+// 2 MiB exatos passam; 1 byte a mais → o resto é drenado e descartado e sai 413 (lerCorpoLimitado)
+export const MAX_CORPO_WEBHOOK = 2 * 1024 * 1024;
 // wamid é base64 com prefixo: nada de aspas, chaves, vírgulas ou barra invertida
 const WAMID_OK = /^[\w.:=+/-]{1,256}$/;
 
@@ -89,7 +96,11 @@ async function registrarMensagem(db, clienteId, telefone, nome, referral, hoje) 
     p_cliente: clienteId, p_telefone: telefone, p_variantes: variantesTelefone(telefone),
     p_nome: nome || null, p_atr: atr, p_hoje: hoje, p_dias: DIAS_MESMA_CONVERSA,
   });
-  if (!RESULTADOS_LEAD.has(r)) throw new Error(`nx_lead_webhook devolveu ${JSON.stringify(r)}`);
+  if (!RESULTADOS_LEAD.has(r)) {
+    const e = new Error(`nx_lead_webhook devolveu ${JSON.stringify(r)}`);
+    e.banco = true;
+    throw e;
+  }
   return r;
 }
 
@@ -127,6 +138,12 @@ const DICAS_FALHA = {
   131042: "problema de pagamento na conta do WhatsApp da Nexus",
   131049: "a Meta segurou a mensagem para não cansar quem recebe",
   131050: "a pessoa pediu para não receber mensagens da Nexus",
+  131051: "tipo de mensagem não suportado",
+  131052: "a mídia não pôde ser baixada pelo WhatsApp",
+  131053: "a mídia não pôde ser enviada (formato ou tamanho)",
+  131056: "muitas mensagens para o mesmo número em pouco tempo",
+  190: "token vencido ou revogado",
+  368: "conta temporariamente bloqueada pela Meta",
 };
 
 /** "WhatsApp não entregou (código X): título" (+ dica em português quando conhecida). */
@@ -230,9 +247,32 @@ async function processarStatuses(db, cfg, lista, cont, ctx) {
 
 /* ------------------------------------------------------------ */
 
+/* ------------------------------------------------------------
+   Números dos clientes cadastrados em nx_canais (SaaS, ESPEC §6.2)
+   ------------------------------------------------------------ */
+
+/** Canal pelo phone_number_id de um evento JÁ autenticado com o segredo global (cache por requisição). */
+async function canalDoPid(db, pid, cache, ctx) {
+  if (!cache.has(pid)) {
+    let c = null;
+    try { c = await db.rpc("nx_wa_canal", { p_phone_number_id: String(pid) }); }
+    catch (e) { ctx.falhou(e); }
+    cache.set(pid, c && c.canal_id ? c : null);
+  }
+  return cache.get(pid);
+}
+
 async function processar(db, cfg, corpo, ctx) {
-  const cont = { criado: 0, atribuido: 0, existente: 0, sem_cliente: 0 };
-  const clientes = new Map();   // phone_number_id → cliente | null
+  const cont = {
+    criado: 0, atribuido: 0, existente: 0, sem_cliente: 0,
+    mensagens: 0, duplicadas: 0, recibos_canal: 0, canal_divergente: 0,
+  };
+  // lead do número de cliente: cliente = o do CANAL (2º, 3º… número também cria negócio e atribui o anúncio)
+  ctx.registrarLead = async (clienteId, msg) => {
+    cont[await registrarMensagem(db, clienteId, msg.wa_id, msg.nome, msg.referral || null, ctx.hoje)]++;
+  };
+  const clientes = new Map();   // phone_number_id → cliente | null (caminho antigo, sem nx_canais)
+  const canais = new Map();     // phone_number_id → canal | null
   const recibos = [];
   const nexus = cfg.wa_phone_number_id ? String(cfg.wa_phone_number_id) : null;
   for (const entry of corpo?.entry || []) {
@@ -241,8 +281,37 @@ async function processar(db, cfg, corpo, ctx) {
       const v = ch?.value || {};
       const pid = v.metadata?.phone_number_id;
       if (!pid) continue;
-      // recibos só do número da Nexus; os dos números das clínicas continuam ignorados
-      if (nexus && String(pid) === nexus && Array.isArray(v.statuses)) recibos.push(...v.statuses);
+
+      // URL ?c=<chave>: o admin do cliente conhece esse segredo → a requisição só grava
+      // eventos DO número da URL. Outro número (ou o número da Nexus, nem que o pid bata) → descartado.
+      if (ctx.canalUrl) {
+        if (String(pid) !== String(ctx.canalUrl.phone_number_id) || (nexus && String(pid) === nexus)) {
+          cont.canal_divergente++;
+          continue;
+        }
+        try { await processarCanal(db, ctx.canalUrl, v, ctx, cont); }
+        catch (e) { ctx.falhou(e); }
+        continue;
+      }
+
+      // sem ?c= (segredo global, que só a Meta e a Nexus conhecem)
+      if (nexus && String(pid) === nexus) {
+        // recibos dos avisos da Nexus, como antes
+        if (Array.isArray(v.statuses)) recibos.push(...v.statuses);
+        const msgs = Array.isArray(v.messages) ? v.messages : [];
+        if (msgs.length) {
+          try { await processarMensagens(db, v, msgs, clientes, cont, ctx); }
+          catch (e) { ctx.falhou(e); }
+        }
+        continue;
+      }
+      const canal = await canalDoPid(db, pid, canais, ctx);
+      if (canal) {
+        try { await processarCanal(db, canal, v, ctx, cont); }
+        catch (e) { ctx.falhou(e); }
+        continue;
+      }
+      // reserva: número sem nx_canais → caminho antigo por nx_clientes.wa_phone_number_id (só leads)
       const msgs = Array.isArray(v.messages) ? v.messages : [];
       if (!msgs.length) continue;
       try { await processarMensagens(db, v, msgs, clientes, cont, ctx); }
@@ -256,51 +325,101 @@ async function processar(db, cfg, corpo, ctx) {
   return cont;
 }
 
+const texto = (t, status) => new Response(t, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+// chave pública do canal (?c=): hex gerado pelo banco
+const CHAVE_OK = /^[0-9a-f]{8,64}$/i;
+
+/** ?c=<chave> → canal (nx_wa_canal) ou null. Chave com formato errado nem consulta o banco. */
+async function canalDaUrl(db, u) {
+  const c = u.searchParams.get("c");
+  if (c == null) return { tem: false, canal: null };
+  if (!CHAVE_OK.test(c)) return { tem: true, canal: null };
+  const canal = await db.rpc("nx_wa_canal", { p_chave: c });
+  return { tem: true, canal: canal && canal.canal_id ? canal : null };
+}
+
 /**
  * GET: verificação do webhook (hub.challenge). POST: mensagens e recibos, com assinatura da Meta.
- * @param {{fetch?: Function, agora?: Date|Function, prazoRede?: number, esperar?: (ms: number) => Promise<void>}} [deps]
+ * Sem ?c=: app da Nexus (segredo e verify token globais), como antes. Com ?c=<chave>: URL de UM
+ * número de cliente (verify token do canal; segredo = app secret do canal ?? o global).
+ * @param {{fetch?: Function, agora?: Date|Function, prazoRede?: number, esperar?: (ms: number) => Promise<void>,
+ *          emSegundoPlano?: (p: Promise<any>) => void, drenagem?: {prazoMs?: number, teto?: number}}} [deps]
+ *        emSegundoPlano: EdgeRuntime.waitUntil no index.ts; sem ele, a mídia e a fila rodam antes da resposta.
+ *        drenagem: prazo/teto absoluto do descarte do corpo (comum.js; só os testes mudam).
  */
-export async function tratar(req, env, deps = {}) {
+export function tratar(req, env, deps = {}) {
+  // o corpo que não foi lido (GET/PUT, falha antes da leitura) é drenado antes da resposta
+  return soltandoCorpo(req, () => tratarWebhook(req, env, deps), deps.drenagem);
+}
+
+async function tratarWebhook(req, env, deps) {
   const f = deps.fetch || globalThis.fetch;
   try {
     const db = criarDb(env, f);
+    const u = new URL(req.url);
 
     if (req.method === "GET") {
-      const u = new URL(req.url);
-      const cfg = await lerConfig(db);
-      const ok = u.searchParams.get("hub.mode") === "subscribe"
-        && cfg?.wa_verify_token && iguaisSeguro(u.searchParams.get("hub.verify_token"), cfg.wa_verify_token);
-      return ok
-        ? new Response(u.searchParams.get("hub.challenge") ?? "", { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } })
-        : new Response("proibido", { status: 403 });
+      const url = await canalDaUrl(db, u);
+      let esperado;
+      if (url.tem) esperado = url.canal?.verify_token;
+      else esperado = (await lerConfig(db))?.wa_verify_token;
+      const ok = u.searchParams.get("hub.mode") === "subscribe" && esperado && iguaisSeguro(u.searchParams.get("hub.verify_token"), esperado);
+      return ok ? texto(u.searchParams.get("hub.challenge") ?? "", 200) : texto("proibido", 403);
     }
-    if (req.method !== "POST") return new Response("método não permitido", { status: 405 });
+    if (req.method !== "POST") return texto("método não permitido", 405);
 
-    const cru = new Uint8Array(await req.arrayBuffer());
+    // corpo com teto ANTES de tudo (banco, assinatura): acima de 2 MiB o resto é drenado e
+    // descartado e sai 413; a assinatura só é conferida sobre o corpo cru inteiro dentro do limite
+    let cru;
+    try { cru = await lerCorpoLimitado(req, MAX_CORPO_WEBHOOK, deps.drenagem); }
+    catch (e) { return e instanceof CorpoGrande ? texto("corpo grande demais", 413) : texto("corpo inválido", 400); }
+    const url = await canalDaUrl(db, u);
+    if (url.tem && !url.canal) return texto("canal desconhecido", 401);
     const cfg = await lerConfig(db);
-    if (!cfg?.meta_app_secret || !(await assinaturaValida(cfg.meta_app_secret, cru, req.headers.get("x-hub-signature-256")))) {
-      return new Response("assinatura inválida", { status: 401 });
+    const segredo = (url.canal && url.canal.app_secret) || cfg?.meta_app_secret;
+    if (!cfg || !segredo || !(await assinaturaValida(segredo, cru, req.headers.get("x-hub-signature-256")))) {
+      return texto("assinatura inválida", 401);
     }
 
-    // Assinatura válida → sempre 200: erro aqui não pode virar uma fila de reenvios da Meta.
+    // Assinatura válida: falha de persistência pede retry da Meta; as RPCs envolvidas são idempotentes.
     let corpo;
     try { corpo = JSON.parse(new TextDecoder().decode(cru)); } catch { return json({ ok: true, ignorado: "corpo não é JSON" }); }
     const agora = agoraDe(deps);
     const erros = [];
+    const pendentes = [];
     const ctx = {
-      agora, hoje: hojeSP(agora), dono: crypto.randomUUID(),
+      agora, hoje: hojeSP(agora), dono: crypto.randomUUID(), env, fetch: f,
       rede: comPrazo(f, deps.prazoRede ?? PRAZO_ENVIO_MS),
+      // mídia recebida (até 16 MB) baixa em segundo plano: prazo maior que o do envio
+      redeMidia: comPrazo(f, deps.prazoMidia ?? PRAZO_MIDIA_MS),
       esperar: deps.esperar || (ms => new Promise(r => setTimeout(r, ms))),
-      falhou: e => { const m = limparErro(e?.message || e); erros.push(m); console.error("nx-whatsapp:", m); },
+      persistenciaFalhou: false,
+      falhou: e => {
+        const m = limparErro(e?.message || e); erros.push(m);
+        if (e?.banco) ctx.persistenciaFalhou = true;
+        console.error("nx-whatsapp:", m);
+      },
+      canalUrl: url.canal,
+      assinadoGlobal: !url.tem,
+    };
+    ctx.emSegundoPlano = p => {
+      const seguro = Promise.resolve(p).catch(e => ctx.falhou(e));
+      if (deps.emSegundoPlano) deps.emSegundoPlano(seguro); else pendentes.push(seguro);
     };
     try {
       const cont = await processar(db, cfg, corpo, ctx);
-      return json({ ok: true, ...cont, ...(erros.length ? { erros: erros.length, erro: erros[0] } : {}) });
+      if (pendentes.length) await Promise.allSettled(pendentes);
+      const status = ctx.persistenciaFalhou ? 503 : 200;
+      return json({ ok: status === 200, retry: status !== 200, ...cont, ...(erros.length ? { erros: erros.length, erro: erros[0] } : {}) }, status);
     } catch (e) {
       ctx.falhou(e);
-      return json({ ok: true, erros: erros.length, erro: erros[0] });
+      if (pendentes.length) await Promise.allSettled(pendentes);
+      const retry = ctx.persistenciaFalhou;
+      return json({ ok: !retry, retry, erros: erros.length, erro: erros[0] }, retry ? 503 : 200);
     }
   } catch (e) {
-    return json({ ok: false, erro: limparErro(e?.message || e) }, 500);
+    const permanente = Number(e?.status) >= 400 && Number(e?.status) < 500 && e?.banco === false;
+    const status = e?.banco === true ? 503 : permanente ? 200 : 500;
+    return json({ ok: permanente, retry: status === 503, erro: limparErro(e?.message || e) }, status);
   }
 }

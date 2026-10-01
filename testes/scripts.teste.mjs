@@ -274,3 +274,75 @@ test("seed demo: arquivo supabase/seed-demo.sql está atualizado", () => {
   assert.ok(hoje, "cabeçalho com a data de geração");
   assert.equal(arq, gerarSql(montarSeed({ hoje })));
 });
+
+/* ============================================================
+   .github/workflows/funcoes-supabase.yml (deploy das Edge Functions)
+   ============================================================ */
+test("workflow de funções: só tag funcoes-*, contents: read, um por vez, portão, lista validada e segredo só por env", () => {
+  const y = readFileSync(resolve(RAIZ, ".github/workflows/funcoes-supabase.yml"), "utf8").replace(/\r\n/g, "\n");
+  const semComentario = y.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+  // gatilho: SÓ push de tag funcoes-* (nada de PR, workflow_run, branch ou disparo manual)
+  assert.match(semComentario, /^on:\n {2}push:\n {4}tags: \["funcoes-\*"\]\n\n/m);
+  for (const proibido of ["pull_request", "pull_request_target", "workflow_run", "workflow_dispatch", "branches:", "schedule:"]) {
+    assert.ok(!semComentario.includes(proibido), `gatilho proibido: ${proibido}`);
+  }
+  assert.match(semComentario, /^permissions:\n {2}contents: read\n\n/m, "só leitura do repositório");
+  assert.match(semComentario, /concurrency:\n {2}group: funcoes-supabase\n {2}cancel-in-progress: false/);
+  // nada de github.event em lugar nenhum; ref_name só por variável de ambiente
+  assert.doesNotMatch(y, /github\.event/);
+  for (const m of semComentario.matchAll(/\$\{\{([^}]*)\}\}/g)) {
+    assert.match(m[1].trim(), /^(secrets\.SUPABASE_ACCESS_TOKEN|github\.ref_name)$/, `expressão inesperada: ${m[0]}`);
+  }
+  const linhasExpr = semComentario.split("\n").filter(l => l.includes("${{"));
+  for (const l of linhasExpr) assert.match(l, /^\s+(SUPABASE_ACCESS_TOKEN|TAG): \$\{\{ (secrets\.SUPABASE_ACCESS_TOKEN|github\.ref_name) \}\}$/, `expressão fora de env: ${l.trim()}`);
+  // ordem: segredo → checkout → node → portão → montar → CLI fixado → lista → deploy
+  const ordem = ["SUPABASE_ACCESS_TOKEN presente", "actions/checkout@", "actions/setup-node@", "node testes/rodar-tudo.mjs",
+    "node scripts/montar-funcoes.mjs", "supabase/setup-cli@", "Validar supabase/deploy-lista.txt", "supabase functions deploy"];
+  const pos = ordem.map(t => semComentario.indexOf(t));
+  assert.ok(pos.every(p => p >= 0), `passos: ${ordem.filter((_, i) => pos[i] < 0).join(", ")}`);
+  assert.deepEqual([...pos].sort((a, b) => a - b), pos, "passos na ordem");
+  // toda action fixada pelo SHA completo do commit (40 hex), com a versão no comentário; nada de @v4/@main
+  const usos = [...semComentario.matchAll(/^\s*(?:-\s+)?uses:\s*(.+)$/gm)].map(m => m[1].trim());
+  assert.deepEqual(usos.map(u => u.split("@")[0]), ["actions/checkout", "actions/setup-node", "supabase/setup-cli"]);
+  for (const u of usos) assert.match(u, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$/, `action sem SHA de 40 hex + versão: ${u}`);
+  assert.match(semComentario, /\n {10}version: 2\.118\.0\n/, "CLI do Supabase fixado em 2.118.0");
+  assert.match(semComentario, /if \[ -z "\$\{SUPABASE_ACCESS_TOKEN\}" \]; then/, "falha cedo com o segredo vazio");
+  assert.doesNotMatch(semComentario, /echo[^\n]*SUPABASE_ACCESS_TOKEN\}/, "o segredo nunca é impresso");
+  assert.match(semComentario, /grep -Eq '\^nx-\[a-z\]\+\$'/, "nome validado com ^nx-[a-z]+$");
+  assert.match(semComentario, /\[ ! -f "supabase\/dist\/\$\{fn\}\/index\.ts" \]/, "a pasta montada existe");
+  assert.match(semComentario, /supabase functions deploy "\$\{fn\}" --use-api --no-verify-jwt --project-ref "\$\{PROJETO\}"/);
+  assert.match(semComentario, /PROJETO: dtjznipitihnwmcgpzqh\n/);
+  assert.match(semComentario, /persist-credentials: false/);
+  // a lista publicada: nomes válidos, sem repetição, todos montados pelo montar-funcoes
+  const lista = readFileSync(resolve(RAIZ, "supabase/deploy-lista.txt"), "utf8").split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith("#"));
+  assert.deepEqual(lista, ["nx-codewords", "nx-enviar", "nx-whatsapp"]);
+  const montar = readFileSync(resolve(RAIZ, "scripts/montar-funcoes.mjs"), "utf8");
+  for (const fn of lista) {
+    assert.match(fn, /^nx-[a-z]+$/);
+    assert.ok(montar.includes(`"${fn}"`), `${fn} fora do montar-funcoes`);
+  }
+});
+
+test("workflow de funções: sondas de autenticação (401/403/405) são fatais; a do 413 só avisa e nunca deixa o run vermelho", () => {
+  const y = readFileSync(resolve(RAIZ, ".github/workflows/funcoes-supabase.yml"), "utf8").replace(/\r\n/g, "\n");
+  const semComentario = y.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+  const ini = semComentario.indexOf("- name: Sondas sem segredo");
+  assert.ok(ini >= 0, "passo de sondas");
+  const sondas = semComentario.slice(ini);
+  // fatal: confere soma em falhas e o passo termina com exit 1
+  assert.match(sondas, /confere\(\) \{[^\n]*\n[^\n]*::error::[^\n]*falhas=\$\(\(falhas \+ 1\)\)/);
+  assert.match(sondas, /if \[ "\$\{falhas\}" -gt 0 \]; then [^\n]*exit 1; fi/);
+  for (const [cod, desc] of [[401, "nx-whatsapp POST sem assinatura"], [403, "nx-whatsapp GET com verify token inválido"],
+    [401, "nx-codewords ?ch= curto"], [405, "nx-codewords GET"], [401, "nx-enviar ação válida sem sessão"]]) {
+    assert.ok(sondas.includes(`confere ${cod} "${desc}"`), `sonda fatal: ${cod} ${desc}`);
+  }
+  // 413: nunca pela confere; avisa413 emite ::warning:: e não mexe em falhas nem sai
+  assert.doesNotMatch(sondas, /confere 413/);
+  const avisa = sondas.match(/avisa413\(\) \{[^\n]*\n([^\n]*)\n\s*\}/);
+  assert.ok(avisa, "função avisa413");
+  assert.match(avisa[1], /::warning::/);
+  assert.doesNotMatch(avisa[1], /falhas|exit|::error::/);
+  const usos = sondas.match(/^\s+avisa413 "nx-whatsapp [^"]+" "\$\(head -c \d+ \/dev\/zero \| curl [^\n]+-w '%\{http_code\} %\{time_total\}s'[^\n]+\|\| true\)"$/gm) || [];
+  assert.equal(usos.length, 2, "2 MiB + 1 com Content-Length e 2,4 MB em pedaços");
+  assert.ok(usos.some(l => l.includes("head -c 2097153")) && usos.some(l => l.includes("Transfer-Encoding: chunked")));
+});

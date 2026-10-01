@@ -18,6 +18,7 @@ import { tratar as webhook, variantesTelefone, textoFalha } from "../supabase/fu
 import { enviarParaTodos, normalizarTelefone, idsDoEnvio } from "../supabase/functions/_compartilhado/whatsapp.js";
 import { comTrava, limparErro } from "../supabase/functions/_compartilhado/comum.js";
 import { criarDb } from "../supabase/functions/_compartilhado/db.js";
+import { criarBanco as criarBancoFalso } from "./apoio/postgrest-falso.mjs";
 
 const RAIZ = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SUPA = "https://fake.supabase.co";
@@ -68,106 +69,15 @@ const NAO_NULOS = {
   nx_metricas_dia: UNICAS.nx_metricas_dia, nx_leads: ["cliente_id", "telefone"],
   nx_alertas: ["cliente_id", "chave", "wa_ids", "wa_ids_template"], nx_relatorios: ["wa_ids", "wa_ids_template"], nx_travas: ["nome", "ate"],
 };
-const RESERVADOS = new Set(["select", "order", "limit", "offset", "on_conflict", "or"]);
+// SaaS (20260928a/f): o webhook consulta nx_canais pelo phone_number_id; este banco não tem canais
+// (só o caminho antigo, nx_clientes.wa_phone_number_id). carregarModelo lê nx_funis (filtro do Ads).
+COLUNAS.nx_funis = new Set("id cliente_id nome ordem padrao conta_no_ads ativo criado_em".split(" "));
+COLUNAS.nx_leads.add("funil_id");
+const ESQUEMA = { colunas: COLUNAS, unicas: UNICAS, padroes: PADROES, checks: CHECKS, naoNulos: NAO_NULOS };
 
-/** Literal de array do Postgres ({a,"b.c"}) → lista. */
-function arrayPg(lit) {
-  const s = String(lit).trim();
-  if (!s.startsWith("{") || !s.endsWith("}")) throw new Error(`malformed array literal: ${s}`);
-  const corpo = s.slice(1, -1);
-  if (!corpo) return [];
-  const out = [];
-  let cur = "", aspas = false, escape = false;
-  for (const ch of corpo) {
-    if (escape) { cur += ch; escape = false; continue; }
-    if (ch === "\\") { escape = true; continue; }
-    if (ch === '"') { aspas = !aspas; continue; }
-    if (ch === "," && !aspas) { out.push(cur); cur = ""; continue; }
-    cur += ch;
-  }
-  out.push(cur);
-  return out;
-}
-
-/** Filtro or=(a.eq.1,b.cs.{"x,y"}) em partes — vírgula dentro de {} ou "" não separa (igual ao PostgREST). */
-function partes(expr) {
-  const s = expr.replace(/^\(|\)$/g, "");
-  const out = [];
-  let cur = "", chaves = 0, aspas = false;
-  for (const ch of s) {
-    if (ch === '"') aspas = !aspas;
-    else if (!aspas && ch === "{") chaves++;
-    else if (!aspas && ch === "}") chaves--;
-    if (ch === "," && !aspas && chaves === 0) { out.push(cur); cur = ""; } else cur += ch;
-  }
-  out.push(cur);
-  return out;
-}
-
-function criarBanco(inicial, relogio) {
-  const t = structuredClone(inicial);
-  // linhas semeadas pelo teste também ganham os defaults (como as antigas ganharam na migração)
-  for (const [n, pad] of Object.entries(PADROES)) for (const r of t[n] || []) for (const [c, v] of Object.entries(pad)) if (r[c] == null) r[c] = structuredClone(v);
-  let seq = 1000;
-  const tab = n => (t[n] ||= []);
-  const erro = (status, message, code = "PGRST") => new Response(JSON.stringify({ code, message }), { status, headers: { "content-type": "application/json" } });
-  const ok = dados => new Response(JSON.stringify(dados), { status: 200, headers: { "content-type": "application/json" } });
-
-  function casa(row, col, expr) {
-    const i = expr.indexOf(".");
-    const op = expr.slice(0, i), val = expr.slice(i + 1), a = row[col];
-    const cmp = () => (typeof a === "number" ? a - Number(val) : String(a) < val ? -1 : String(a) > val ? 1 : 0);
-    switch (op) {
-      case "eq": return a != null && String(a) === val;
-      case "neq": return a == null || String(a) !== val;
-      case "is": return val === "null" ? a == null : String(a) === val;
-      case "in": return a != null && val.replace(/^\(|\)$/g, "").split(",").includes(String(a));
-      case "gte": return a != null && cmp() >= 0;
-      case "gt": return a != null && cmp() > 0;
-      case "lte": return a != null && cmp() <= 0;
-      case "lt": return a != null && cmp() < 0;
-      case "cs": return Array.isArray(a) && arrayPg(val).every(x => a.includes(x));   // @> (contém)
-      default: throw new Error(`operador não suportado no banco falso: ${op}`);
-    }
-  }
-  function colunasFiltro(nome, sp) {
-    const cols = [...sp.keys()].filter(k => !RESERVADOS.has(k));
-    if (sp.get("or")) cols.push(...partes(sp.get("or")).map(p => p.split(".")[0]));
-    if (sp.get("order")) cols.push(...sp.get("order").split(",").map(o => o.split(".")[0]));
-    if (sp.get("select") && sp.get("select") !== "*") cols.push(...sp.get("select").split(","));
-    return cols.filter(c => !COLUNAS[nome].has(c));
-  }
-  function filtrar(nome, sp) {
-    return tab(nome).filter(r => {
-      for (const [k, v] of sp) if (!RESERVADOS.has(k) && !casa(r, k, v)) return false;
-      const ou = sp.get("or");
-      if (ou && !partes(ou).some(p => { const [c, ...resto] = p.split("."); return casa(r, c, resto.join(".")); })) return false;
-      return true;
-    });
-  }
-  function validar(nome, obj) {
-    for (const k of Object.keys(obj)) if (!COLUNAS[nome].has(k)) return `Could not find the '${k}' column of '${nome}'`;
-    for (const [c, ok] of Object.entries(CHECKS[nome] || {})) if (c in obj && !ok.includes(obj[c])) return `violates check constraint ${nome}_${c}: ${obj[c]}`;
-    return null;
-  }
-
-  /* ---------- RPCs (mesma semântica de supabase/migrations/20260927_melhorias.sql) ---------- */
-  const agoraMs = () => relogio().getTime();
-
-  // pg_advisory_xact_lock: uma fila por chave; solta no fim da "transação"
-  const filasXact = new Map();
-  async function travaXact(chave, fn) {
-    const antes = filasXact.get(chave) || Promise.resolve();
-    let soltar;
-    const minha = antes.then(() => new Promise(r => { soltar = r; }));
-    filasXact.set(chave, minha);
-    await antes;
-    try { return await fn(); }
-    finally { soltar(); if (filasXact.get(chave) === minha) filasXact.delete(chave); }
-  }
-  const pausa = () => new Promise(r => setImmediate(r));   // a transação leva tempo: sem trava, dois webhooks se cruzariam aqui
-
-  const RPCS = {
+/** RPCs com a mesma semântica de supabase/migrations/20260927_melhorias.sql. */
+function rpcsAds({ t, tab, relogio, agoraMs, travaXact, pausa, novoId }) {
+  return {
     nx_trava_pegar: { args: ["p_nome", "p_segundos", "p_dono"], fn({ p_nome, p_segundos, p_dono }) {
       if (!String(p_nome ?? "").trim()) throw new Error("trava_sem_nome");
       const agora = agoraMs();
@@ -209,7 +119,7 @@ function criarBanco(inicial, relogio) {
             return "atribuido";
           }
           tab("nx_leads").push({
-            id: ++seq, cliente_id: p_cliente, telefone: tel, nome: String(p_nome ?? "").trim() || null,
+            id: novoId(), cliente_id: p_cliente, telefone: tel, nome: String(p_nome ?? "").trim() || null,
             origem: atr.origem || "whatsapp", plataforma: plat, campanha_ext: atr.campanha_ext || null, anuncio_ext: anuncio,
             ctwa_clid: atr.ctwa_clid || null, servico: null, etapa: "nova", data_conversa: p_hoje, data_agenda: null, data_consulta: null,
             valor: null, obs: null, criado_em: relogio().toISOString(), atualizado_em: relogio().toISOString(),
@@ -231,96 +141,10 @@ function criarBanco(inicial, relogio) {
         return linhas.length;
       } },
   };
-
-  async function rpc(nome, req) {
-    const def = RPCS[nome];
-    const corpo = req.method === "POST" ? JSON.parse((await req.text()) || "{}") : null;
-    const chaves = corpo ? Object.keys(corpo) : [];
-    // PostgREST acha a função pelos NOMES dos parâmetros: faltando ou sobrando, é 404
-    if (!def || def.args.some(a => !chaves.includes(a)) || chaves.some(k => !def.args.includes(k) && !(def.opcionais || []).includes(k))) {
-      return erro(404, `Could not find the function public.${nome}(${chaves.join(", ")}) in the schema cache`, "PGRST202");
-    }
-    try { return ok(await def.fn(structuredClone(corpo))); }
-    catch (e) { return erro(400, e.message, "P0001"); }
-  }
-
-  async function responder(req) {
-    // ida e volta ao banco é rede (macrotarefa): sem isso, duas requisições "paralelas" nunca se cruzam aqui
-    await new Promise(r => setImmediate(r));
-    if (!req.headers.get("apikey")) return erro(401, "sem apikey");
-    if (req.headers.get("authorization") !== `Bearer ${ENV.chave}`) return erro(401, "sem Authorization");
-    const u = new URL(req.url), sp = u.searchParams;
-    const nome = u.pathname.replace(/^\/rest\/v1\//, "");
-    if (nome.startsWith("rpc/")) return rpc(nome.slice(4), req);
-    if (!COLUNAS[nome]) return erro(404, `relation ${nome} does not exist`);
-    const ruins = colunasFiltro(nome, sp);
-    if (ruins.length) return erro(400, `column ${nome}.${ruins[0]} does not exist`);
-    const prefer = req.headers.get("prefer") || "";
-    const devolve = linhas => prefer.includes("return=representation")
-      ? new Response(JSON.stringify(structuredClone(linhas)), { status: 201, headers: { "content-type": "application/json" } })
-      : new Response(null, { status: 201 });
-
-    if (req.method === "GET") {
-      let rows = filtrar(nome, sp);
-      const ordem = sp.get("order");
-      if (ordem) {
-        const regras = ordem.split(",").map(o => { const [c, d] = o.split("."); return { c, s: d === "desc" ? -1 : 1 }; });
-        rows = [...rows].sort((x, y) => { for (const { c, s } of regras) { if (x[c] < y[c]) return -s; if (x[c] > y[c]) return s; } return 0; });
-      }
-      const off = +(sp.get("offset") || 0), lim = sp.get("limit") != null ? +sp.get("limit") : Infinity;
-      rows = rows.slice(off, off + lim);
-      const sel = sp.get("select");
-      if (sel && sel !== "*") { const cs = sel.split(","); rows = rows.map(r => Object.fromEntries(cs.map(c => [c, r[c] ?? null]))); }
-      return new Response(JSON.stringify(structuredClone(rows)), { status: 200, headers: { "content-type": "application/json" } });
-    }
-
-    if (req.method === "POST") {
-      const corpo = JSON.parse(await req.text());
-      const lista = Array.isArray(corpo) ? corpo : [corpo];
-      const conflito = sp.get("on_conflict");
-      const merge = conflito && prefer.includes("resolution=merge-duplicates");
-      if (conflito && !merge) return erro(400, "on_conflict sem merge-duplicates");
-      const chaves = conflito ? conflito.split(",") : UNICAS[nome];
-      const vistos = new Set(), out = [];
-      for (const obj of lista) {
-        const ruim = validar(nome, obj);
-        if (ruim) return erro(400, ruim);
-        const ex = chaves ? tab(nome).find(r => chaves.every(c => String(r[c]) === String(obj[c]))) : null;
-        // NOT NULL: coluna enviada vale; ausente fica com o valor da linha (upsert) ou o default (insert)
-        const base = ex && merge ? ex : (PADROES[nome] || {});
-        for (const c of NAO_NULOS[nome] || []) if ((c in obj ? obj[c] : base[c]) == null) return erro(400, `null value in column "${c}" of ${nome}`);
-        if (chaves) {
-          const k = chaves.map(c => String(obj[c])).join("|");
-          if (merge && vistos.has(k)) return erro(500, "ON CONFLICT DO UPDATE command cannot affect row a second time");
-          vistos.add(k);
-          if (ex && merge) { Object.assign(ex, obj); out.push(ex); continue; }
-          if (ex) return erro(409, `duplicate key value violates unique constraint on ${nome}`);
-        }
-        const novo = { ...structuredClone(PADROES[nome] || {}), ...obj };
-        if (COLUNAS[nome].has("id") && novo.id == null) novo.id = ++seq;
-        if (COLUNAS[nome].has("criado_em") && novo.criado_em == null) novo.criado_em = relogio().toISOString();
-        for (const c of COLUNAS[nome]) if (!(c in novo)) novo[c] = null;
-        tab(nome).push(novo);
-        out.push(novo);
-      }
-      return devolve(out);
-    }
-
-    if (req.method === "PATCH") {
-      const dados = JSON.parse(await req.text());
-      const ruim = validar(nome, dados);
-      if (ruim) return erro(400, ruim);
-      for (const c of NAO_NULOS[nome] || []) if (c in dados && dados[c] == null) return erro(400, `null value in column "${c}" of ${nome}`);
-      const rows = filtrar(nome, sp);
-      for (const r of rows) Object.assign(r, dados);
-      return prefer.includes("return=representation")
-        ? new Response(JSON.stringify(structuredClone(rows)), { status: 200, headers: { "content-type": "application/json" } })
-        : new Response(null, { status: 204 });
-    }
-    return erro(405, "método");
-  }
-  return { t, tab, responder };
 }
+const rpcsBanco = api => ({ ...rpcsAds(api), nx_wa_canal: { args: [], opcionais: ["p_phone_number_id", "p_chave"], fn: () => null } });
+const criarBanco = (inicial, relogio) => criarBancoFalso(inicial, relogio, { esquema: ESQUEMA, rpcs: rpcsBanco, chave: ENV.chave });
+
 
 /* ------------------------------------------------------------
    APIs externas falsas
@@ -985,7 +809,7 @@ test("A entrega: nx-ciclo e nx-relatorio gravam o wamid de cada envio (texto →
   assert.match(rel().erro, /código 100/);
 });
 
-test("A entrega: delivered/read do número da Nexus grava entregue_em uma vez; recibo de clínica e 'sent' são ignorados", async () => {
+test("A entrega: delivered/read do número da Nexus grava entregue_em uma vez; recibo de clínica não mexe nos avisos e 'sent' é ignorado", async () => {
   const s = cenario();
   await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps());
   await relatorio(pedirCron("nx-relatorio", { tipo: "diario", cliente: CLI_B }), ENV, s.deps());
@@ -994,10 +818,14 @@ test("A entrega: delivered/read do número da Nexus grava entregue_em uma vez; r
   const t = new Date(AGORA.getTime() + 5e3);
   const al = () => s.banco.tab("nx_alertas"), rel = () => s.banco.tab("nx_relatorios")[0];
 
-  // o mesmo wamid num recibo do número da CLÍNICA: continua ignorado
+  // o mesmo wamid num recibo do número da CLÍNICA nunca mexe nos avisos da Nexus. Desde o SaaS
+  // (ESPEC §6.2) recibo de número de cliente vai para nx_wa_status do CANAL (só mensagens das
+  // conversas daquele canal — testes/conversas-funcoes.teste.mjs); este banco não tem canais.
   let r = await lerJson(await webhook(recibos([recibo(idAlerta, "delivered", t)], "222"), ENV, s.deps()));
   assert.equal(r.status, 200);
   assert.equal(r.corpo.recibos, undefined);
+  assert.equal(r.corpo.recibos_canal, 0);
+  assert.ok(al().every(a => a.entregue_em === null), "recibo de clínica não marca aviso da Nexus como entregue");
   r = await lerJson(await webhook(recibos([recibo(idAlerta, "sent", t)]), ENV, s.deps()));
   assert.deepEqual(r.corpo.recibos, { ignorado: 1 }, "'sent' não é entrega");
   assert.ok(al().every(a => a.entregue_em === null));
@@ -1118,14 +946,23 @@ test("A entrega: recibo que chega antes do wamid ser gravado espera e confere de
   // um recibo que quebra (banco falhando só para ele) não impede os outros do lote
   const s2 = cenario();
   await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s2.deps());
-  const fetch = (url, init) => (String(url).includes("quebra") ? Promise.reject(new TypeError("fetch failed")) : s2.fetch(url, init));
+  let falhaRecibo = true;
+  const fetch = (url, init) => (String(url).includes("quebra") && falhaRecibo
+    ? (falhaRecibo = false, Promise.reject(new TypeError("fetch failed")))
+    : s2.fetch(url, init));
   r = await lerJson(await webhook(recibos([recibo("wamid.quebra", "delivered", t), recibo(s2.estado.wa[0].id, "delivered", t)]), ENV,
     { fetch, agora: () => s2.estado.agora, esperar: async () => {} }));
-  assert.equal(r.status, 200);
+  assert.equal(r.status, 503, "falha temporária de persistência pede reentrega à Meta");
+  assert.equal(r.corpo.retry, true);
   assert.equal(r.corpo.erros, 1);
   assert.match(r.corpo.erro, /fetch failed/);
   assert.deepEqual(r.corpo.recibos, { entregue: 1 });
   assert.ok(s2.banco.tab("nx_alertas").every(a => a.entregue_em === t.toISOString()));
+  r = await lerJson(await webhook(recibos([recibo("wamid.quebra", "delivered", t), recibo(s2.estado.wa[0].id, "delivered", t)]), ENV,
+    { fetch, agora: () => s2.estado.agora, esperar: async () => {} }));
+  assert.equal(r.status, 200, "reentrega conclui depois da indisponibilidade transitória");
+  assert.deepEqual(r.corpo.recibos, { sem_registro: 1, entregue: 1 });
+  assert.ok(s2.banco.tab("nx_alertas").every(a => a.entregue_em === t.toISOString()), "o recibo conhecido é idempotente");
 
   // assinatura continua obrigatória para recibos
   const s3 = cenario();
@@ -1159,21 +996,40 @@ test("B lead: webhooks paralelos para o mesmo número novo viram UM lead (també
   assert.equal(s.banco.tab("nx_leads").filter(l => l.telefone === "5512944443333").length, 1);
 });
 
-test("B lead: uma mensagem com erro não derruba as outras do lote (200, erro contado)", async () => {
+test("B lead: erro transitório pede reentrega sem derrubar as outras mensagens nem duplicar leads", async () => {
   const s = cenario();
-  const fetch = (url, init) => (String(url).includes("/rpc/nx_lead_webhook") && String(init?.body).includes("5512900000099")
-    ? Promise.resolve(jsonResp({ code: "40P01", message: "deadlock detected" }, 500))
+  let falharUmaVez = true;
+  const fetch = (url, init) => (String(url).includes("/rpc/nx_lead_webhook") && String(init?.body).includes("5512900000099") && falharUmaVez
+    ? (falharUmaVez = false, Promise.resolve(jsonResp({ code: "40P01", message: "deadlock detected" }, 500)))
     : s.fetch(url, init));
   const payload = mensagem({ from: "5512900000099", nome: "Quebra" });
   const v = payload.entry[0].changes[0].value;
   v.contacts.push({ profile: { name: "Outra" }, wa_id: "5512988887777" });
   v.messages.push({ from: "5512988887777", id: "wamid.m2", timestamp: "1790506800", type: "text", text: { body: "oi" } });
   const r = await lerJson(await webhook(postWebhook(payload), ENV, { fetch, agora: () => s.estado.agora }));
-  assert.equal(r.status, 200);
+  assert.equal(r.status, 503);
+  assert.equal(r.corpo.retry, true);
   assert.equal(r.corpo.criado, 1);
   assert.equal(r.corpo.erros, 1);
   assert.match(r.corpo.erro, /deadlock detected/);
   assert.deepEqual(s.banco.tab("nx_leads").map(l => [l.telefone, l.nome]), [["5512988887777", "Outra"]]);
+  const repetida = await lerJson(await webhook(postWebhook(payload), ENV, { fetch, agora: () => s.estado.agora }));
+  assert.equal(repetida.status, 200);
+  assert.equal(repetida.corpo.criado, 1, "a reentrega completa o lead que falhou");
+  assert.equal(repetida.corpo.existente, 1, "o lead já persistido permanece idempotente");
+  assert.deepEqual(s.banco.tab("nx_leads").map(l => l.telefone).sort(), ["5512900000099", "5512988887777"]);
+});
+
+test("B lead: erro permanente 4xx não pede reentrega repetida da Meta", async () => {
+  const s = cenario();
+  const fetch = (url, init) => String(url).includes("/rpc/nx_lead_webhook")
+    ? Promise.resolve(jsonResp({ code: "22023", message: "dados_invalidos" }, 400)) : s.fetch(url, init);
+  const r = await lerJson(await webhook(postWebhook(mensagem({ from: "5512900000098" })), ENV,
+    { fetch, agora: () => s.estado.agora }));
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.retry, false);
+  assert.equal(r.corpo.erros, 1);
+  assert.equal(s.banco.tab("nx_leads").length, 0);
 });
 
 test("C trava: nx-ciclo com o cliente travado responde pulado sem processar nem registrar; trava vencida é retomada e solta no fim", async () => {

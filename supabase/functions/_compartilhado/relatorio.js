@@ -9,7 +9,7 @@ import { hojeSP, MESES } from "./nucleo.js";
 import {
   ErroHttp, json, agoraDe, somaDias, limparErro, lerCorpo, autenticarCron, listarClientes,
   carregarModelo, emLotes, erroDeEnvio, registrarExecucao, listaDestinos, comPrazo, PRAZO_REDE_MS,
-  tituloRelatorio, comTravaDoCliente, todosPulados, EM_EXECUCAO,
+  tituloRelatorio, comTravaDoCliente, todosPulados, EM_EXECUCAO, soltandoCorpo,
 } from "./comum.js";
 
 const JANELA = 130;         // a mesma do painel (nx_dados p_dias padrão): os números batem
@@ -102,7 +102,12 @@ async function gerar(db, cfg, cliente, ctx) {
  * @param {{fetch?: Function, agora?: Date|Function, ia?: Function, prazoIA?: number, prazoRede?: number}} [deps]
  *   ia({chave, modelo, tipo, contexto}) → texto; padrão: ./ia.js (SDK oficial)
  */
-export async function tratar(req, env, deps = {}) {
+export function tratar(req, env, deps = {}) {
+  // 405/401 respondem sem ler: o corpo é drenado antes da resposta (senão o runtime espera o envio)
+  return soltandoCorpo(req, () => tratarRelatorio(req, env, deps), deps.drenagem);
+}
+
+async function tratarRelatorio(req, env, deps) {
   if (req.method !== "POST") return json({ erro: "use POST" }, 405);
   if (!req.headers.get("x-nx-cron")) return json({ erro: "não autorizado" }, 401);
   const t0 = Date.now();
@@ -111,8 +116,9 @@ export async function tratar(req, env, deps = {}) {
   const agora = agoraDe(deps);
   try {
     const db = criarDb(env, f);
+    // corpo antes do banco: teto de 64 KiB (resto drenado, 413 sem tocar no banco)
+    const corpo = await lerCorpo(req, undefined, deps.drenagem);
     const cfg = await autenticarCron(req, db);
-    const corpo = await lerCorpo(req);
     const tipo = corpo.tipo ?? "diario";
     if (tipo !== "diario" && tipo !== "mensal") throw new ErroHttp(400, "tipo deve ser diario ou mensal");
     const clientes = await listarClientes(db, corpo.cliente);
