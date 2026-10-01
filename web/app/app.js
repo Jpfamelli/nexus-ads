@@ -22,12 +22,16 @@ const CHAVE_ESQUEMA = "nx-app-esquema";
 const PRONTOS_PADRAO = { MODULOS_PRONTOS: [], CONFIG_PRONTAS: ["perfil"] };
 const ROTAS_PUBLICAS = new Set(["login", "convite", "senha"]);
 
+/** Os módulos que o boot carrega juntos. Cada um tem um <link rel="modulepreload"> no index.html com o MESMO ?v= (testes/shell.teste.mjs confere). */
+const MODULOS_BASE = ["api.js", "ui.js", "tema.js", "vocab.js", "rotas.js", "pulso.js"];
+
 const E = {
   M: {},                 // módulos base: dados, api, ui, tema, vocab, rotas, pulso
   api: null, ui: null,
   prontos: PRONTOS_PADRAO,
   marcaPublica: null,    // resposta de nx_marca_publica
   sessao: null,          // resposta de nx_app_sessao
+  sessaoPromessa: null,  // a leitura de nx_app_sessao que o boot dispara em paralelo com a marca (aoMudarRota consome)
   cliente: null,         // empresa ativa (item de sessao.clientes + tema)
   pulso: null,
   atual: null,           // { arquivo, mod, chave }
@@ -62,9 +66,12 @@ async function iniciar() {
   E.faviconPadrao = $("favicon") && $("favicon").getAttribute("href");
   $("boot-tentar").addEventListener("click", () => location.reload());
   $("boot-sair").addEventListener("click", () => { try { E.M.dados && E.M.dados.apagarToken(); } catch { /* ok */ } location.hash = "#/login"; location.reload(); });
+  // M11: tudo o que o boot precisa começa AGORA, junto (o index.html já pré-carrega estes arquivos com <link rel="modulepreload">)
+  const prontosP = arq("prontos.js");
+  prontosP.catch(() => { /* tratado abaixo; aqui só evita o aviso de promessa sem dono */ });
   try {
     const [dados, api, ui, tema, vocab, rotas, pulso] = await Promise.all([
-      import(`../dados.js?v=${encodeURIComponent(VERSAO)}`), arq("api.js"), arq("ui.js"), arq("tema.js"), arq("vocab.js"), arq("rotas.js"), arq("pulso.js")]);
+      import(`../dados.js?v=${encodeURIComponent(VERSAO)}`), ...MODULOS_BASE.map(arq)]);
     E.M = { dados, api, ui, tema, vocab, rotas, pulso };
     E.workspace = rotas.produtoDe(location.search);
     document.documentElement.dataset.produto = E.workspace || "orbita";
@@ -77,7 +84,7 @@ async function iniciar() {
     return;
   }
   try {
-    const p = await arq("prontos.js");
+    const p = await prontosP;
     E.prontos = {
       MODULOS_PRONTOS: Array.isArray(p.MODULOS_PRONTOS) ? p.MODULOS_PRONTOS : [],
       CONFIG_PRONTAS: Array.isArray(p.CONFIG_PRONTAS) ? p.CONFIG_PRONTAS : ["perfil"],
@@ -104,6 +111,8 @@ async function iniciar() {
   if (dev === "1") try { sessionStorage.setItem("nx-app-dev", "1"); } catch { /* ok */ }
   if (dev === "0") try { sessionStorage.removeItem("nx-app-dev"); } catch { /* ok */ }
 
+  // M11: a sessão (nx_app_sessao, a chamada mais pesada) sai junto com a marca pública, não depois dela
+  if (dados.lerToken()) { E.sessaoPromessa = lerSessao(); E.sessaoPromessa.catch(() => { /* quem consome (aoMudarRota) trata o erro */ }); }
   await carregarMarcaPublica();
   addEventListener("hashchange", () => aoMudarRota(true));
   // «Pular para o conteúdo»: o href="#vista" mudaria o hash e o roteador mostraria «Página não encontrada»; aqui só o foco se move
@@ -339,7 +348,8 @@ function sessaoCaiu() {
   }
 }
 
-async function carregarSessao({ forcarImagens = false } = {}) {
+/** Só a chamada (nx_app_sessao) e a normalização: não mexe em E, pode rodar em paralelo com a marca pública. */
+async function lerSessao() {
   const s = await E.api.rpc("nx_app_sessao");
   if (!s || !s.conta) throw Object.assign(new Error("sessao_invalida"), { codigo: "sessao_invalida" });
   s.clientes = Array.isArray(s.clientes) ? s.clientes : [];
@@ -353,9 +363,18 @@ async function carregarSessao({ forcarImagens = false } = {}) {
     c.tem_tema = !!c.tem_tema;
     c.suporte = (c.papel === "gestor" || c.papel === "super") && !c.proprio;
   }
+  return s;
+}
+
+/** Adota a sessão lida e busca as imagens da org (depende da marca pública já resolvida). */
+async function adotarSessao(s, { forcarImagens = false } = {}) {
   E.sessao = s;
   await carregarImagensOrg({ forcar: forcarImagens });
   return s;
+}
+
+async function carregarSessao({ forcarImagens = false } = {}) {
+  return adotarSessao(await lerSessao(), { forcarImagens });
 }
 
 async function recarregarSessao() {
@@ -475,7 +494,9 @@ async function aoMudarRota(doUsuario) {
   if (!E.sessao) {
     bootMsg("Abrindo…");
     try {
-      await carregarSessao();
+      const antecipada = E.sessaoPromessa;           // M11: já saiu junto com a marca pública
+      E.sessaoPromessa = null;
+      await (antecipada ? adotarSessao(await antecipada) : carregarSessao());
     } catch (e) {
       if (e && e.codigo === "sessao_invalida") return; // sessaoCaiu já levou ao login
       if (e && e.codigo === "conta_pendente") { dados.apagarToken(); E.ui.toast(E.api.mensagemErro(e), { tipo: "erro" }); return navegar("#/login", { substituir: true }); }

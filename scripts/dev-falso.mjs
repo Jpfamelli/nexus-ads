@@ -3,6 +3,7 @@
 // Não lê credenciais, não chama serviços externos e nunca altera prontos.js.
 import http from "node:http";
 import { readFile } from "node:fs/promises";
+import { gzipSync } from "node:zlib";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gerarDemo } from "../web/demo.js";
@@ -715,9 +716,16 @@ const servidor = http.createServer(async (req, res) => {
     }
     if (caminho === "/app/index.html" && url.searchParams.get("dev-falso") === "1") {
       const boot = `<script src="/__dev_falso/boot.js"></script>`;
-      arquivo = Buffer.from(arquivo.toString("utf8").replace("<body>", `<body>\n${boot}`));
+      // no fim do <head> (depois do antes.js): o pedido sai junto com os outros em vez de esperar o <body> — como na produção, sem um salto a mais
+      arquivo = Buffer.from(arquivo.toString("utf8").replace("</head>", `${boot}\n</head>`));
     }
-    res.writeHead(200, { "content-type": MIME[extname(alvo).toLowerCase()] || "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "same-origin" });
+    const tipo = MIME[extname(alvo).toLowerCase()] || "application/octet-stream";
+    const cab = { "content-type": tipo, "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "same-origin" };
+    // como o Netlify: texto vai comprimido (as medições de rede lenta ficam parecidas com a produção)
+    if (/\bgzip\b/.test(String(req.headers["accept-encoding"] || "")) && /^(text\/|application\/(json|manifest)|image\/svg)/.test(tipo)) {
+      arquivo = gzipSync(arquivo); cab["content-encoding"] = "gzip"; cab.vary = "Accept-Encoding";
+    }
+    res.writeHead(200, cab);
     res.end(arquivo);
   } catch { res.writeHead(404, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }); res.end("Não encontrado"); }
 });
