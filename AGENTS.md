@@ -20,7 +20,8 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
   `nx-ciclo` v4, `nx-relatorio` v4, `nx-ia` v2, `nx-midia` v2 (estas quatro NÃO foram republicadas: carregam a drenagem do
   corpo só no repositório; publicação de rotina futura, nunca no dia 1º às 12:00 UTC, quando roda o relatório mensal).
   **Bug 1 do E2E-meta (413) CORRIGIDO em produção:** sondas de 01/10 — 2 MiB + 1 → 413 em 0,19 s e 2,4 MB em pedaços → 413
-  em 0,31 s; autenticação 401/403/405 ok. A prova em produção do @lid (roteiro em `estado/F8.md`) ainda não foi feita.
+  em 0,31 s; autenticação 401/403/405 ok. **@lid provado em produção** (01/10, 03:49–03:52 UTC, `teste-e2e`) e ciclo :07
+  da kamiguchi ok depois da publicação (04:07 UTC, 200 e `ok:true`).
   Cron continua de hora em hora (nx-ciclo :07), relatório diário 8h e mensal dia 1º.
 - **Publicação das funções = GitHub Actions** (`.github/workflows/funcoes-supabase.yml`), disparada SÓ por tag `funcoes-*`
   (`git tag funcoes-AAAAMMDD-N && git push origin <tag>`), com a lista em `supabase/deploy-lista.txt` e o segredo
@@ -36,11 +37,11 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
 - Branch `codex/orbita` enviada ao GitHub; PR #1 está aberto em rascunho. Migrações `supabase/migrations/20260928a…h` constam como aplicadas no handoff, mas não foram revalidadas nesta retomada.
 - Construídas localmente: F1 banco, F2 funções (nx-enviar, nx-midia, nx-ia, webhook ampliado), F3 login/white-label/admin (`web/app/`),
   F4 CRM, F5 Conversas, F6 Anúncios/Relatórios, F7 Automações. Em 29/09, os 10 smokes SQL (`01`–`09`, incluindo `04_crm_b`) passaram no SQL Editor autenticado do projeto autorizado, com `ROLLBACK`; marcadores finais e algumas exclusões de fixtures foram adaptados apenas no texto temporário por causa da tradução automática. Os arquivos SQL do repositório não foram alterados.
-- F8 (01/10/2026): runner serial 15/15 verde, smokes SQL reais aprovados, E2E pela API (tenant `teste-e2e`), E2E-A do caminho Meta e E2E-B (clientes de teste próprios, já apagados) executados (`estado/E2E*.md`) e funções publicadas pela Actions (ver "O que está NO AR"). **O dono aceitou e escolheu LIBERAR TUDO** (CRM + Ads + Atendimento + pacotes) e autorizou o merge na `main` e a produção no Netlify. No repositório: `web/app/prontos.js` libera os 9 módulos e as 18 telas de configuração (`app.teste.mjs` confere as listas contra o código e mantém o portão com lista injetada) e o `netlify.toml` não pula mais o build da `main`. Limpeza decidida (§8.5-17): **limpeza fina (b12)** — mantém o tenant `teste-e2e` e a Conta E2E para futuros E2E.
+- F8 (01/10/2026): runner serial 15/15 verde, smokes SQL reais aprovados, E2E pela API (tenant `teste-e2e`), E2E-A do caminho Meta e E2E-B (clientes de teste próprios, já apagados) executados (`estado/E2E*.md`) e funções publicadas pela Actions (ver "O que está NO AR"). **O dono aceitou e escolheu LIBERAR TUDO** (CRM + Ads + Atendimento + pacotes) e autorizou o merge na `main` e a produção no Netlify. No repositório: `web/app/prontos.js` libera os 9 módulos e as 18 telas de configuração (`app.teste.mjs` confere as listas contra o código e mantém o portão com lista injetada) e o `netlify.toml` não pula mais o build da `main`. **F8 ACEITA em 01/10/2026** (evidências e limitações em `estado/F8.md`). **Limpeza fina (b12) aplicada** em 01/10 04:09 UTC — o tenant `teste-e2e` (só estrutura) e a Conta E2E ficam para futuros E2E; o Vault ficou com 0 segredos.
 - **Falta (em ordem):**
-  1. Merge na `main` (PR #1 sai de rascunho) com a suíte verde; o push na `main` também publica o painel clássico no GitHub Pages.
-  2. Produção no Netlify: conferir o deploy da `main`, validar `/` e `/index.html` → `/app/` e definir a URL do app pelo caminho administrativo autorizado.
-  3. Depois de no ar: conferir o site publicado (login e uma tela por módulo em 390 px, console limpo), provar o @lid em produção (roteiro em `estado/F8.md`) e publicar de rotina nx-ciclo/nx-relatorio/nx-ia/nx-midia (fora do dia 1º às 12:00 UTC).
+  1. Publicação (etapa logo depois do commit de aceite): merge do PR #1 na `main` (o push na `main` também publica o painel clássico no GitHub Pages) e deploy de produção no Netlify (`orbita-nexus-ads`, `/` e `/index.html` → `/app/`). O site não está ligado ao repositório: a produção é por deploy do CLI a partir de um checkout limpo da `main`.
+  2. João: `nx_config.saas_url` com a URL de produção, chaves reais (CodeWords, Meta, Anthropic) e as configurações do cliente.
+  3. Depois de no ar: conferir o site publicado (login e uma tela por módulo em 390 px, console limpo) e publicar de rotina nx-ciclo/nx-relatorio/nx-ia/nx-midia (fora do dia 1º às 12:00 UTC).
 
 ## Testes (todos têm de passar antes de commit)
 ```

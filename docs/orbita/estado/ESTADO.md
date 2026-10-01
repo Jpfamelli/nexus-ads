@@ -1,10 +1,17 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-10-01 01:05 (America/Sao_Paulo)
+Atualizado: 2026-10-01 01:15 (America/Sao_Paulo)
 Branch: `codex/orbita`
-PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — rascunho aberto
+PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — sai de rascunho e é mesclado na `main` na etapa de publicação (logo depois deste commit)
 
-## Atualização atual — 2026-10-01 01:05 -03 (aceite F8: liberar tudo)
+## F8 ACEITA em 01/10/2026 — 2026-10-01 01:15 -03
+
+- **Aceite:** o dono aceitou a F8 e liberou tudo (CRM + Ads + Atendimento + pacotes), com merge na `main` e produção no Netlify. A tabela completa de evidências está em `F8.md` (seção "F8 ACEITA em 01/10/2026").
+- **Evidências:** E2E CodeWords 15/16 casos (o defeito `@lid` corrigido e provado em produção); E2E Meta 26/27 casos (o bug 1, 413, corrigido em produção); E2E-B 256/256 asserções; isolamento (106/106 sondas SQL negadas, 64 RPCs + 23 operações pela API negadas, `09_isolamento` verde, hash do `kamiguchi` sem diferença); QA final de interface **201/201** telas×larguras sem defeito; sondas de produção 401/403/405 e **413 em 0,19 s / 0,31 s**; **prova do `@lid` em produção** (01/10 03:49–03:52 UTC: `lid_sem_numero` sem gravar nada, número real por `sender_pn`/`remoteJidAlt`, telefone normal registrado, grupo ignorado); **ciclo :07 ok** (04:07 UTC: 200, `ok:true`, `kamiguchi ok:true`, pg_cron sem falhas desde 03:42); **limpeza fina b12 aplicada** (04:09:48 UTC: canal falso, Vault 0, lead, contato, convites, sessão de 30 dias e auditoria do `teste-e2e`; tenant e Conta E2E mantidos; impressão digital do `kamiguchi` igual antes e depois). Suíte local `rodar-tudo` 15/15.
+- **Limitações conhecidas:** só a chave real do CodeWords/WhatsApp/Meta prova a entrega real, os recibos reais e se o id do envio bate com o da lista do aparelho (senão a sincronização duplica a mensagem e pausa a IA como "celular"); IA real com chave não exercitada; mídia recebida não é durável; mutação RPC genérica sem reconciliação depois de timeout; nx-ciclo, nx-relatorio, nx-ia e nx-midia com a drenagem do corpo só no repositório (rotina futura, nunca dia 1º às 12:00 UTC); `nx_execucoes` id 95 aceita como histórico; aparelho real/iOS/Firefox não testados.
+- **Publicação (esta etapa, depois deste commit):** push, PR #1 pronto e merge na `main` (commit de merge), GitHub Pages pelo push na `main` e deploy de produção no Netlify `orbita-nexus-ads`. O resultado conferido fica no PR #1 e na Ponte. `nx_config.saas_url` fica com o João (os agentes não alteram `nx_config`).
+
+## Atualização anterior — 2026-10-01 01:05 -03 (aceite F8: liberar tudo)
 
 - **Primeiro deploy real pela GitHub Actions** (run `36811688641`, tag `funcoes-20261001-1`, 01/10 03:42 UTC): nx-codewords **v3**, nx-enviar **v4**, nx-whatsapp **v6** (correção @lid + 413 por drenagem). Sondas em produção: 401/403/405 ok; 2 MiB + 1 → **413 em 0,19 s** e 2,4 MB em pedaços → **413 em 0,31 s**: o bug 1 do E2E-meta está **corrigido em produção** (antes ~160 s e 503). A prova em produção do @lid (roteiro em `F8.md`) ainda não foi feita.
 - **Versões no ar:** nx-codewords v3, nx-enviar v4, nx-whatsapp v6, nx-ciclo v4, nx-relatorio v4, nx-ia v2, nx-midia v2. As quatro últimas **não foram republicadas**: a drenagem do corpo está só no repositório; publicação de rotina futura, nunca no dia 1º às 12:00 UTC (relatório mensal).
@@ -36,7 +43,7 @@ O branch `codex/orbita` contém as frentes em revisão e o commit `40b4f7b` já 
 | F5 — conversas | Adaptador CodeWords, webhook, fila e recibos cobertos por testes locais; migração e funções publicadas | Nenhum canal CodeWords real está configurado no tenant de teste; envio e recibos reais pendentes |
 | F6 — anúncios e relatórios | Implementação local e testes Node aprovados | Tenant de teste sem métricas; integrações reais e paridade CRM/Ads pendentes |
 | F7 — automações | Implementação local e testes Node aprovados | Aceite autenticado de runtime permanece pendente |
-| F8 — entrega | Runner serial 15/15, `deno check` 7/7, smoke local da agenda fictícia 1/1; E2E-A (Meta) 26/27 e E2E-B 256/256 com os dois defeitos corrigidos no repositório | Aceite do dono em 01/10 (liberar tudo; limpeza fina b12 mantém `teste-e2e` e a Conta E2E); `prontos.js` liberado e `netlify.toml` sem a regra `ignore` no repositório; faltam push, merge na `main`, deploy de produção e conferência do site no ar |
+| F8 — entrega | **ACEITA em 01/10/2026.** Runner serial 15/15, `deno check` 7/7; E2E CodeWords 15/16, E2E Meta 26/27 e E2E-B 256/256, com os defeitos corrigidos e o `@lid` e o 413 provados em produção; QA final 201/201 | Limpeza fina b12 aplicada (mantém `teste-e2e` e a Conta E2E); `prontos.js` liberado e `netlify.toml` sem a regra `ignore`; publicação (merge na `main`, Pages, Netlify de produção) na etapa logo depois do commit de aceite |
 
 ## Retomada CodeWords — 2026-09-29 13:42
 

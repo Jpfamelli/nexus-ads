@@ -110,8 +110,9 @@ Versões no ar depois dessa publicação: nx-codewords v3, nx-enviar v4, nx-what
 nx-ia v2, nx-midia v2. **As quatro últimas NÃO foram republicadas**: carregam a drenagem do corpo só no repositório e
 vão ao ar numa publicação de rotina futura (acrescentar ao `supabase/deploy-lista.txt` e usar uma tag nova). Não
 publicar nx-ciclo/nx-relatorio no dia 1º às 12:00 UTC, quando roda o relatório mensal; fora disso, conferir o ciclo
-das :07 e o relatório das 8h depois. A prova em produção da correção `@lid` (roteiro em `estado/F8.md`) é separada e
-continua por fazer; o resultado do ciclo :07 da kamiguchi após esta publicação não está registrado neste arquivo.
+das :07 e o relatório das 8h depois. Depois desta publicação: a correção `@lid` foi **provada em produção** (01/10,
+03:49–03:52 UTC, roteiro em `estado/F8.md`) e o ciclo das :07 da kamiguchi (04:07 UTC) voltou HTTP 200, `ok:true` e
+`kamiguchi ok:true`, sem falha no pg_cron desde 03:42.
 
 ## Plano de volta
 
