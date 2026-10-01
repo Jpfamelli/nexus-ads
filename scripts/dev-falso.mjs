@@ -250,6 +250,11 @@ function agendaDesmarcar(p) {
   return { ok: true, negocio_id: Number(id), motivo: String(p.p_motivo || "").slice(0, 200) || null };
 }
 
+// o editor das automações só aceita ids em formato uuid; os ids curtos desta demo viram uuids estáveis
+const IDS_CURTOS = new Set(["s1", "s2", "s3", "s4", "s5", "s6", "s7", "p1", "p2", "e1", "e2", "e3", "d1", "cw1", "wa1", "t1", "f1", "f2"]);
+const uuidDe = id => "00000000-0000-4000-8000-" + Buffer.from(String(id)).toString("hex").padStart(12, "0").slice(-12);
+const uuidizar = obj => JSON.parse(JSON.stringify(obj), (k, v) => (typeof v === "string" && IDS_CURTOS.has(v) ? uuidDe(v) : v));
+
 function rpc(nome, p = {}) {
   switch (nome) {
     case "nx_marca_publica": return marcaPublica;
@@ -335,9 +340,23 @@ function rpc(nome, p = {}) {
     case "nx_rel_vendas": return relVendas();
     case "nx_rel_atendimento": return relAtendimento();
     case "nx_dados": return demoAds;
-    case "nx_automacoes_listar": return { vertical: "odonto", pode_editar: true, limite: { usadas: 2, limite: 8 },
-      itens: [{ id: "auto-lembrete", nome: "Lembrete de consulta", gatilho: "antes_da_data", ativo: false, execucoes: 11, erros: 0, ultima_execucao_em: null, condicoes: [], acoes: [], config: {} }],
-      base: { ...baseConversas, funis, canais, departamentos, templates } , sistema: [{ nome: "Nova conversa → oportunidade", descricao: "Cada novo atendimento entra no funil automaticamente." }, { nome: "Atribuição de campanha", descricao: "Origem e anúncio acompanham o contato." }] };
+    case "nx_automacoes_listar": return uuidizar({ vertical: "odonto", pode_editar: true, limite: { usadas: 4, limite: 8 },
+      itens: [
+        { id: "auto-lembrete", nome: "Lembrete 24 h antes da consulta", gatilho: "antes_da_data", ativo: false, execucoes: 11, erros: 0, ultima_execucao_em: null, condicoes: [],
+          acoes: [{ tipo: "enviar_mensagem", texto: "Olá, {primeiro_nome}! Lembrando da sua consulta amanhã, {data_consulta}, às {hora_consulta}." }], config: { campo: "consulta", horas: 24 } },
+        { id: "auto-followup", nome: "Acompanhar orçamento sem resposta", gatilho: "negocio_estagio", ativo: true, execucoes: 7, erros: 1, ultima_execucao_em: isoAgora(), respeitar_horario: true,
+          config: { estagio_id: "s3" }, condicoes: [],
+          acoes: [{ tipo: "esperar", minutos: 1440, cancelar_se_cliente_responder: true }, { tipo: "enviar_mensagem", texto: "Oi, {primeiro_nome}! Ficou alguma dúvida sobre o orçamento?" },
+            { tipo: "esperar", minutos: 2880, cancelar_se_cliente_responder: true }, { tipo: "criar_tarefa", titulo: "Ligar para {primeiro_nome}", tipo_tarefa: "ligacao", vence_em_horas: 0, dono: "responsavel" }] },
+        { id: "auto-ia", nome: "IA classifica a etapa", gatilho: "mensagem_recebida", ativo: true, execucoes: 23, erros: 0, ultima_execucao_em: isoAgora(), config: {},
+          condicoes: [{ campo: "estagio_id", op: "igual", valor: "s1" }], acoes: [{ tipo: "ia_decidir", tarefa: "classificar_etapa" }] },
+        { id: "auto-agendado", nome: "Bom dia: orçamentos parados", gatilho: "agendado", ativo: false, execucoes: 0, erros: 0, ultima_execucao_em: null,
+          config: { horario: "09:00", dias_semana: [1, 2, 3, 4, 5], estagio_id: "s3" }, condicoes: [],
+          acoes: [{ tipo: "criar_tarefa", titulo: "Retomar {primeiro_nome}", tipo_tarefa: "whatsapp", vence_em_horas: 4, dono: "responsavel" }] },
+      ],
+      base: { ...baseConversas, funis, canais, departamentos, templates, campos: baseCrm.campos.map(c => ({ chave: c.chave, rotulo: c.rotulo, tipo: c.tipo })),
+        campos_negocio: [{ chave: "origem_detalhe", rotulo: "Detalhe da origem", tipo: "texto" }] },
+      ia: { disponivel: true, usadas: 42, limite: 300 }, sistema: [{ nome: "Nova conversa → oportunidade", descricao: "Cada novo atendimento entra no funil automaticamente." }, { nome: "Atribuição de campanha", descricao: "Origem e anúncio acompanham o contato." }] });
     case "nx_agenda_dia": { const de = p.p_data || hoje, ate = somaDia(de, Number(p.p_dias || 1)); return { data: de, dias: Number(p.p_dias || 1), fuso: "America/Sao_Paulo", config: { horario_fonte: "agenda", duracao_min: 30, capacidade: 1 },
       consultas: agendamentos.filter(a => a.inicio.slice(0,10) >= de && a.inicio.slice(0,10) < ate), bloqueios: bloqueios.filter(b => b.inicio.slice(0,10) < ate && b.fim.slice(0,10) >= de) }; }
     case "nx_agenda_config_ver": return { config: { horario_fonte: "agenda", horario: horarioDefault, intervalos: [["12:00", "13:00"]], duracao_min: 30, capacidade: 1, antecedencia_horas: 2, dias_a_frente: 30, passo_min: 30,
@@ -347,7 +366,21 @@ function rpc(nome, p = {}) {
     case "nx_agenda_desmarcar": return agendaDesmarcar(p);
     case "nx_entrada_chave": return { chave: "FALSO-CHAVE-LOCAL" };
     case "nx_integracoes_status": return { integracoes: demoAds.integracoes, preenchidos: ["meta", "google"] };
-    case "nx_automacao_execucoes": return { itens: [], total: 0 };
+    case "nx_automacao_execucoes": return [
+      { criado_em: isoAgora(), ok: true, detalhe: "Mensagem na fila para Mariana Costa", chave: "ev:1", estado: "esperando", passo: 2, total_passos: 4, continua_em: new Date(Date.now() + 86400e3).toISOString(), link: "#/crm" },
+      { criado_em: new Date(Date.now() - 3600e3).toISOString(), ok: false, detalhe: "codewords_sem_aparelho", chave: "ev:2", estado: "erro", passo: 1, total_passos: 4 },
+      { criado_em: new Date(Date.now() - 7200e3).toISOString(), ok: true, detalhe: "Pulada: contato pediu para não receber", chave: "ev:3", estado: "concluida", passo: 4, total_passos: 4 },
+      { criado_em: new Date(Date.now() - 20000e3 / 4).toISOString(), ok: true, detalhe: "O cliente respondeu: sequência cancelada", chave: "ev:5", estado: "cancelada", passo: 2, total_passos: 4 },
+      { criado_em: new Date(Date.now() - 86400e3).toISOString(), ok: true, detalhe: "Tarefa criada para Dra. Helena", chave: "ev:4", estado: "concluida", passo: 4, total_passos: 4 }];
+    case "nx_auto_simular": return { ok: true, automacao: p.p_automacao || {}, tamanho_amostra: 5, amostra: [
+      { rotulo: "Mariana Costa", negocio_id: 801, contato_id: 501, link: "#/crm/negocio/801", casa_gatilho: true, passa_condicoes: true, erro: null, parou: false, passos: [
+        { n: 0, tipo: "esperar", texto: "esperaria 1 dia (parando se o cliente responder)", pulado: false, depois_min: 0 },
+        { n: 1, tipo: "enviar_mensagem", texto: "mensagem na fila para Mariana Costa: «Oi, Mariana! Ficou alguma dúvida…»", pulado: false, depois_min: 1440 }] },
+      { rotulo: "Bianca Ferreira", negocio_id: 803, contato_id: 503, link: "#/crm/negocio/803", casa_gatilho: true, passa_condicoes: true, erro: null, parou: false, passos: [
+        { n: 0, tipo: "enviar_mensagem", texto: "mensagem pulada: contato pediu para não receber", pulado: true, depois_min: 0 }] },
+      { rotulo: "Lucas Oliveira", negocio_id: 804, contato_id: 504, link: "#/crm/negocio/804", casa_gatilho: true, passa_condicoes: false, erro: null, parou: false, passos: [] }],
+      aviso: null };
+    case "nx_automacao_salvar": return { ...p.p_auto, id: p.p_auto.id || "auto-novo", execucoes: 0, erros: 0, ultima_execucao_em: null };
     case "nx_tarefas_listar": return { itens: [{ id: 71, tipo: "ligacao", titulo: "Confirmar avaliação", vence_em: isoAgora(), concluida: false, contato_id: 501, negocio_id: 801, dono: { id: ID.eu, nome: "Dra. Helena" } }], hoje: 1, atrasadas: 0 };
     case "nx_planos_listar": return [{ id: "essencial", nome: "Essencial", ativo: true, modulos: ["crm", "conversas"] }, { id: "profissional", nome: "Profissional", ativo: true, modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"] }];
     case "nx_orgs_listar": return [{ id: ID.org, nome: "Nexus", slug: "nexus", ativa: true }];
@@ -366,6 +399,16 @@ function fn(nome, p = {}) {
   if (nome === "nx-codewords") return { ok: true, inscrito_certo: true, conectado: true, numero_confere: true, rota: "fluxo", service_id: "cw-demo-fluxo", motivo: "Ambiente fictício local — nenhuma chamada saiu do computador." };
   if (nome === "nx-enviar") return { ok: true, app_inscrito: true, total: 1, numero: "+55 00 00000-0001" };
   if (nome === "nx-midia") return { ok: true, url: null };
+  if (nome === "nx-ia" && p.acao === "automacao_montar") {
+    if (/cota/i.test(String(p.descricao || ""))) return { ok: false, erro: "ia_cota" };
+    if (/chave/i.test(String(p.descricao || ""))) return { ok: false, erro: "ia_indisponivel", detalhe: "sem_chave" };
+    return uuidizar({ ok: true, explicacao: "Quando um orçamento ficar parado, espero 2 dias; se o cliente não responder, mando uma mensagem e aviso o responsável.",
+      avisos: ["Confira o texto da mensagem antes de ligar.", "Escolhi a etapa «Avaliou / orçamento» porque você falou em orçamento."],
+      automacao: { nome: "Orçamento sem resposta em 2 dias", gatilho: { tipo: "negocio_estagio", campos: { estagio_id: "s3" } }, condicoes: [],
+        acoes: [{ tipo: "esperar", campos: { minutos: 2880, cancelar_se_cliente_responder: true } },
+          { tipo: "enviar_mensagem", campos: { texto: "Oi, {primeiro_nome}! Ficou alguma dúvida sobre o orçamento?" } },
+          { tipo: "notificar", campos: { para: "responsavel", titulo: "{nome} não respondeu o orçamento", texto: "Sem resposta há 2 dias." } }] } });
+  }
   if (nome === "nx-ia") return { ok: true, sugestao: "Resposta fictícia de demonstração. Revise antes de enviar." };
   return { ok: true, simulado: true };
 }
