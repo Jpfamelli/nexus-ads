@@ -12,7 +12,7 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
 | Item | Situação | Resumo |
 |---|---|---|
 | M34 | feito | Chat com um primário por estado, cabeçalho de uma linha no celular, aviso do canal virou ⓘ, abas em uma linha, selos da lista viram pontos de cor |
-| M37 | — | — |
+| M37 | feito | Foto do celular comprimida no aparelho (1600 px, JPEG 0,82, EXIF corrigido), resumo "de 7,3 MB para 216 KB", "enviar original" quando cabe, upload com barra, Cancelar e Tentar de novo sem recomprimir |
 | M38 | — | — |
 | M31 | — | — |
 | M32 | — | — |
@@ -34,6 +34,17 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
   (o subtítulo da lista mostra a situação). Etapa e etiquetas viram pontos de cor (nome no tooltip e no rótulo do item): nenhum selo é cortado com reticências. A coluna da lista ficou com 320 px mínimo a partir de 761 px (as 3 abas com contador cabem).
 - **Medido no dev-falso** (390×844, discontada a faixa DEMO): mensagens = 61-62 % da altura (antes 42 %); cabeçalho 56 px (antes 104-182); composer 113 px (antes 190). 1024 e 1440: 0 selo cortado, 0 erro de console.
 - **Verificar**: `node testes/conversas.teste.mjs` (40 ok), `node testes/app.teste.mjs` (as travas de a11y do painel de inbox continuam valendo: mantive `aria-labelledby`, `role=group` na busca e `removeAttribute("aria-selected")`).
+
+## M37 — feito
+
+- **Compressão** (`cv-composer.js` `otimizarFoto`, regras puras em `cv-logica.js`: `dimensoesFoto`, `planoFoto`, `proximaQualidadeFoto`, `resumoOtimizacao`): antes de validar o limite de 5 MB, jpeg/png/webp/heic passam por `createImageBitmap` (`imageOrientation: "from-image"`; fallback `<img>`) + canvas e saem em JPEG com o lado maior em 1600 px, qualidade 0,82 (cai para 0,72 e 0,62 se passar de 500 KB). Foto pequena (≤ 300 KB e dentro de 1600 px) segue como veio; se a recompressão não ajudar o original é mantido. PNG com transparência ganha fundo branco. HEIC só funciona onde o navegador decodifica (Safari); fora dele aparece uma frase clara.
+  Desvio consciente do plano: saída só em JPEG (não WebP), porque a API do WhatsApp só aceita JPEG/PNG como foto (WebP é só figurinha).
+- **Pré-visualização**: miniatura do arquivo otimizado, frase "Foto otimizada de 7,3 MB para 216 KB" e, quando o original também cabe (≤ 5 MB), a opção "Enviar a original".
+- **Upload com progresso** (`conversas.js`): `XMLHttpRequest` com `upload.onprogress` (no máximo ~8 atualizações/s), barra e "62 %" dentro do balão, **Cancelar** enquanto sobe, "Entregando…" depois, e **Tentar de novo** que reaproveita o arquivo já comprimido (e, se o arquivo já tinha subido, não sobe de novo — só repete a `nx-enviar`). Vídeo e documento usam a mesma barra. Só em canal com mídia (Cloud API), como antes.
+- Correção de passagem: imagem que termina de carregar depois de a conversa rolar até o fim empurrava a barra de envio para baixo do compositor; a conversa agora se mantém no fim por 2,5 s depois de abrir/enviar.
+- **Medido no dev-falso** (puppeteer, foto sintética de 7,3 MB 4032×3024 com EXIF orientação 6): saiu 1200×1600 (orientação certa) com 214–217 KB; barra "0 %" e Cancelar visíveis a 390 px; cancelar remove a bolha e avisa; falha de rede → "Não enviada… Tentar de novo" → reenvia o MESMO blob de 217 KB. Console limpo.
+- **Não provado**: aparelho real (câmera de celular, iOS Safari/HEIC); o `progress` do XHR só foi exercitado na parte lógica (a interceptação do puppeteer não emite eventos de subida).
+- **Verificar**: `node testes/conversas.teste.mjs` (46 ok).
 
 ## Pendências para outras frentes
 

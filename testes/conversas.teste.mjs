@@ -521,5 +521,77 @@ await teste("M34: o cabeçalho usa um primário por estado, uma linha no celular
   assert.match(comp, /if \(btClipe\.getAttribute\("aria-disabled"\) === "true"\) \{ if \(usaCodeWords\(\)\) mostrarInfoCanal\(true\)/, "tocar no clipe do CodeWords explica o motivo");
 });
 
+/* ============================================================ M37 — fotos do celular sem rejeição */
+console.log("\n(d) M37 — fotos: comprimir no aparelho e mostrar o progresso");
+
+await teste("M37: dimensoesFoto — lado maior 1600, nunca amplia, mantém proporção (retrato e paisagem)", () => {
+  assert.deepEqual(L.dimensoesFoto(4032, 3024), { w: 1600, h: 1200, mudou: true }, "12 MP paisagem");
+  assert.deepEqual(L.dimensoesFoto(3024, 4032), { w: 1200, h: 1600, mudou: true }, "12 MP retrato");
+  assert.deepEqual(L.dimensoesFoto(1600, 900), { w: 1600, h: 900, mudou: false }, "já cabe");
+  assert.deepEqual(L.dimensoesFoto(800, 600), { w: 800, h: 600, mudou: false }, "pequena não é ampliada");
+  assert.deepEqual(L.dimensoesFoto(1601, 1), { w: 1600, h: 1, mudou: true }, "faixa fina nunca vira 0 px");
+  assert.deepEqual(L.dimensoesFoto(0, 0), { w: 1, h: 1, mudou: false });
+  assert.deepEqual(L.dimensoesFoto(8000, 6000, 1000), { w: 1000, h: 750, mudou: true }, "lado máximo configurável");
+});
+
+await teste("M37: planoFoto decide manter ou otimizar (HEIC sempre otimiza; foto pequena segue como veio)", () => {
+  const KB = 1024, MB = KB * 1024;
+  assert.equal(L.planoFoto({ tipo: "image/jpeg", bytes: 7.2 * MB, largura: 4032, altura: 3024 }).acao, "otimizar");
+  assert.equal(L.planoFoto({ tipo: "image/jpeg", bytes: 200 * KB, largura: 1200, altura: 800 }).acao, "manter", "pequena e dentro de 1600 px");
+  assert.equal(L.planoFoto({ tipo: "image/jpeg", bytes: 200 * KB, largura: 3000, altura: 2000 }).acao, "otimizar", "leve mas grande demais em px");
+  assert.equal(L.planoFoto({ tipo: "image/png", bytes: 900 * KB, largura: 1000, altura: 1000 }).acao, "otimizar", "PNG de 900 KB vira JPEG");
+  assert.equal(L.planoFoto({ tipo: "image/heic", bytes: 100 * KB, largura: 800, altura: 600 }).acao, "otimizar", "o WhatsApp não aceita HEIC");
+  assert.deepEqual([L.planoFoto({ tipo: "image/jpeg", bytes: 2 * MB, largura: 4000, altura: 3000 }).w, L.planoFoto({ tipo: "image/jpeg", bytes: 2 * MB, largura: 4000, altura: 3000 }).h], [1600, 1200]);
+});
+
+await teste("M37: ehFoto, qualidades do JPEG e frases do resumo", () => {
+  assert.equal(L.ehFoto({ name: "a.jpg", type: "image/jpeg" }), true);
+  assert.equal(L.ehFoto({ name: "a.HEIC", type: "" }), true, "HEIC sem type vem da extensão");
+  assert.equal(L.ehFoto({ name: "a.pdf", type: "application/pdf" }), false);
+  assert.equal(L.ehFoto({ name: "v.mp4", type: "video/mp4" }), false);
+  assert.deepEqual([...L.FOTO_QUALIDADES], [0.82, 0.72, 0.62], "JPEG 0,82 primeiro");
+  assert.equal(L.proximaQualidadeFoto(300 * 1024, 0), null, "dentro do alvo (500 KB): para");
+  assert.equal(L.proximaQualidadeFoto(900 * 1024, 0), 0.72);
+  assert.equal(L.proximaQualidadeFoto(900 * 1024, 1), 0.62);
+  assert.equal(L.proximaQualidadeFoto(900 * 1024, 2), null, "acabaram as tentativas");
+  assert.equal(L.resumoOtimizacao(7.2 * 1048576, 380 * 1024), "Foto otimizada de 7,2 MB para 380 KB");
+  assert.equal(L.resumoOtimizacao(100, 200), "", "se não diminuiu, nada a dizer");
+  assert.equal(L.nomeFotoOtimizada("IMG_2231.HEIC"), "IMG_2231.jpg");
+  assert.equal(L.nomeFotoOtimizada(""), "foto.jpg");
+});
+
+await teste("M37: a foto otimizada passa na regra de 5 MB e o original de 7 MB não; vídeo e documento seguem em 16 MB", () => {
+  const MB = 1048576;
+  assert.equal(L.validarArquivo({ name: "a.jpg", type: "image/jpeg", size: 7.2 * MB }).erro, "midia_grande");
+  assert.equal(L.validarArquivo({ name: "a.jpg", type: "image/jpeg", size: 380 * 1024 }).ok, true);
+  assert.equal(L.validarArquivo({ name: "a.heic", type: "image/heic", size: 3 * MB }).ok, false, "HEIC só segue depois de virar JPEG");
+  assert.equal(L.validarArquivo({ name: "v.mp4", type: "video/mp4", size: 15 * MB }).ok, true);
+});
+
+await teste("M37: progressoEnvio (0–99 até acabar) e mensagem de falha do envio", () => {
+  assert.deepEqual(L.progressoEnvio(620, 1000), { pct: 62, texto: "62 %" });
+  assert.deepEqual(L.progressoEnvio(1000, 1000), { pct: 99, texto: "99 %" }, "100 só quando o servidor confirma");
+  assert.deepEqual(L.progressoEnvio(0, 0), { pct: 0, texto: "0 %" });
+  assert.deepEqual(L.progressoEnvio(-5, 100), { pct: 0, texto: "0 %" });
+  assert.match(L.dicaErroEnvio("upload_falhou"), /Tentar de novo/);
+});
+
+await teste("M37: o compositor otimiza antes de validar, mostra o ganho e oferece o original; o upload usa XMLHttpRequest com progresso e cancelamento", () => {
+  const comp = ler("cv-composer.js"), conv = ler("conversas.js"), chat = ler("cv-chat.js");
+  assert.match(comp, /createImageBitmap\(f, \{ imageOrientation: "from-image" \}\)/, "EXIF corrigido");
+  assert.match(comp, /L\.planoFoto\(/);
+  assert.match(comp, /L\.FOTO_QUALIDADES\[t\]/);
+  assert.match(comp, /otim = await otimizarFoto\(f\);[\s\S]{0,600}L\.validarArquivo\(escolhidoInicial\)/, "otimiza ANTES de validar o limite de 5 MB");
+  assert.match(comp, /L\.resumoOtimizacao\(f\.size, otim\.arquivo\.size\)/, "resumo 'de X para Y'");
+  assert.match(comp, /Enviar a original/, "opção de enviar o original");
+  assert.match(conv, /new XMLHttpRequest\(\)/);
+  assert.match(conv, /x\.upload\.addEventListener\("progress"/);
+  assert.match(conv, /x\.addEventListener\("abort"/);
+  assert.doesNotMatch(conv, /fetch\(s\.upload_url/, "o PUT não é mais fetch (sem progresso)");
+  assert.match(conv, /if \(!o\.path\) \{/, "tentar de novo não sobe o arquivo outra vez quando ele já subiu");
+  assert.match(chat, /role: "progressbar"/);
+  assert.match(chat, /A\.acoes\.cancelarEnvio\(m\)/);
+});
+
 console.log(`\n${ok} ok · ${falhas} falha(s)`);
 if (falhas) process.exit(1);

@@ -383,35 +383,103 @@ export function criarComposer(A) {
     if (f) anexar(new File([f], f.name && f.name !== "image.png" ? f.name : `imagem-colada-${Date.now()}.png`, { type: f.type }));
   });
 
+  /* ---------------- fotos: otimiza no aparelho antes de validar (M37) */
+  const otimStatus = h("p", { class: "cvx-otim", role: "status", "aria-live": "polite", hidden: true }, "Otimizando a foto…");
+  el.insertBefore(otimStatus, linha);
+
+  /** Decodifica a foto (EXIF corrigido), reduz o lado maior para 1600 px e recodifica em JPEG 0,82 (cai para 0,72 e 0,62 se passar do alvo).
+      Devolve {arquivo, original, otimizada}; lança "foto_ilegivel" quando o navegador não decodifica (ex.: HEIC fora do Safari). */
+  async function otimizarFoto(f) {
+    let fonte = null, w = 0, h2 = 0, urlTmp = null;
+    try {
+      try { fonte = await createImageBitmap(f, { imageOrientation: "from-image" }); w = fonte.width; h2 = fonte.height; }
+      catch { fonte = null; }
+      if (!fonte) {   // navegador sem createImageBitmap com opções: o <img> também aplica o EXIF
+        urlTmp = URL.createObjectURL(f);
+        fonte = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(Object.assign(new Error("foto_ilegivel"), { codigo: "foto_ilegivel" })); i.src = urlTmp; });
+        w = fonte.naturalWidth; h2 = fonte.naturalHeight;
+      }
+      if (!(w > 0 && h2 > 0)) throw Object.assign(new Error("foto_ilegivel"), { codigo: "foto_ilegivel" });
+      const plano = L.planoFoto({ tipo: L.mimeDe(f), bytes: f.size, largura: w, altura: h2 });
+      if (plano.acao === "manter") return { arquivo: f, original: f, otimizada: false };
+      const tela = document.createElement("canvas");
+      tela.width = plano.w; tela.height = plano.h;
+      const c2 = tela.getContext("2d");
+      if (!c2) throw Object.assign(new Error("foto_ilegivel"), { codigo: "foto_ilegivel" });
+      c2.fillStyle = "white";            // PNG com fundo transparente vira JPEG: o fundo precisa ser opaco
+      c2.fillRect(0, 0, plano.w, plano.h);
+      c2.imageSmoothingQuality = "high";
+      c2.drawImage(fonte, 0, 0, plano.w, plano.h);
+      let blob = null;
+      for (let t = 0; t < L.FOTO_QUALIDADES.length; t++) {
+        blob = await new Promise(ok => tela.toBlob(ok, "image/jpeg", L.FOTO_QUALIDADES[t]));
+        if (!blob) throw Object.assign(new Error("foto_ilegivel"), { codigo: "foto_ilegivel" });
+        if (L.proximaQualidadeFoto(blob.size, t) === null) break;
+      }
+      tela.width = tela.height = 0;
+      // recodificar não pode piorar: se ficou maior que o original (e o original é aceito), segue o original
+      const heic = /^image\/hei[cf]$/.test(L.mimeDe(f));
+      if (!heic && blob.size >= f.size && L.validarArquivo(f).ok) return { arquivo: f, original: f, otimizada: false };
+      return { arquivo: new File([blob], L.nomeFotoOtimizada(f.name), { type: "image/jpeg", lastModified: Date.now() }), original: f, otimizada: true, w: plano.w, h: plano.h };
+    } finally {
+      try { if (fonte && typeof fonte.close === "function") fonte.close(); } catch { /* ok */ }
+      if (urlTmp) URL.revokeObjectURL(urlTmp);
+    }
+  }
+
   async function anexar(f) {
     if (!aceitaAnexo()) {
       ui.toast(usaCodeWords() ? "Este canal CodeWords envia apenas texto por enquanto."
         : situacao() === "janela" ? "Fora da janela de 24 h só vale modelo aprovado." : "Não dá para anexar agora.", { tipo: "info" });
       return;
     }
-    const v = L.validarArquivo(f);
+    // foto de câmera tem 3 a 8 MB: reduz no aparelho ANTES de olhar o limite de 5 MB (e a pessoa vê o ganho no resumo)
+    let otim = null;
+    if (L.ehFoto(f)) {
+      otimStatus.hidden = false;
+      try { otim = await otimizarFoto(f); }
+      catch (e) {
+        otim = null;
+        if (/^image\/hei[cf]$/.test(L.mimeDe(f))) {
+          ui.toast("Este navegador não abre fotos HEIC. Tire a foto em JPEG ou envie pelo celular.", { tipo: "erro" });
+          return;
+        }
+      } finally { otimStatus.hidden = true; }
+      if (!aceitaAnexo()) return;      // a conversa mudou enquanto a foto era reduzida
+    }
+    const escolhidoInicial = otim ? otim.arquivo : f;
+    const v = L.validarArquivo(escolhidoInicial);
     if (!v.ok) {
       ui.toast(v.erro === "midia_grande"
-        ? `Arquivo grande demais: ${L.tamanhoLegivel(f.size)} (limite ${v.tipo === "imagem" ? "5 MB para fotos" : "16 MB"}).`
+        ? `Arquivo grande demais: ${L.tamanhoLegivel(escolhidoInicial.size)} (limite ${v.tipo === "imagem" ? "5 MB para fotos" : "16 MB"}).`
         : "Tipo de arquivo não aceito pelo WhatsApp. Use foto (JPG, PNG, WEBP), vídeo MP4, áudio (MP3, OGG, AAC), PDF ou Office.", { tipo: "erro" });
       return;
     }
+    const vOriginal = otim && otim.otimizada ? L.validarArquivo(f) : null;      // "enviar original" só quando o original também cabe (≤ 5 MB)
     let url = null;
     let previa;
-    if (v.tipo === "imagem") { url = URL.createObjectURL(f); previa = h("img", { src: url, alt: "Prévia da foto" }); }
+    if (v.tipo === "imagem") { url = URL.createObjectURL(escolhidoInicial); previa = h("img", { src: url, alt: "Prévia da foto" }); }
     else if (v.tipo === "video") { url = URL.createObjectURL(f); previa = h("video", { src: url, controls: true, preload: "metadata" }); }
     else if (v.tipo === "audio") { url = URL.createObjectURL(f); previa = h("audio", { src: url, controls: true }); }
     else previa = h("div", { class: "cv-doc" }, h("span", { class: "cv-doc-ic" }, (f.name.split(".").pop() || "ARQ").slice(0, 4).toUpperCase()),
       h("span", { class: "cv-doc-txt" }, h("b", null, f.name), h("small", null, L.tamanhoLegivel(f.size))));
     const leg = h("textarea", { id: "cvx-legenda", rows: 2, maxlength: 1024, placeholder: v.tipo === "audio" ? "Áudio vai sem legenda" : "Legenda (opcional)", disabled: v.tipo === "audio" });
-    const corpo = h("div", { class: "pilha" }, h("div", { class: "cv-anexo-previa" }, previa),
-      h("p", { class: "sub" }, `${f.name} · ${L.tamanhoLegivel(f.size)}`),
+    const resumo = otim && otim.otimizada ? L.resumoOtimizacao(f.size, otim.arquivo.size) : "";
+    const info = h("p", { class: "sub cv-otim-info", role: "status" }, resumo || `${f.name} · ${L.tamanhoLegivel(f.size)}`);
+    const chkOriginal = vOriginal && vOriginal.ok ? h("input", { type: "checkbox", id: "cvx-original", "data-sem-protecao": "" }) : null;
+    if (chkOriginal) chkOriginal.addEventListener("change", () => {
+      info.textContent = chkOriginal.checked ? `Vai a foto original (${L.tamanhoLegivel(f.size)}).` : resumo;
+    });
+    const corpo = h("div", { class: "pilha" }, h("div", { class: "cv-anexo-previa" }, previa), info,
+      chkOriginal ? h("label", { class: "chip-check cv-original", for: "cvx-original" }, chkOriginal, `Enviar a original (${L.tamanhoLegivel(f.size)})`) : null,
       h("div", { class: "campo" }, h("label", { for: "cvx-legenda" }, "Legenda"), leg));
     const ok = await ui.modal({ titulo: "Enviar arquivo", corpo, largura: "m", aoAbrir: () => setTimeout(() => { if (!leg.disabled) leg.focus(); }, 40),
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Enviar", tipo: "primario", valor: true }] });
     if (url) URL.revokeObjectURL(url);
     if (!ok) return;
-    await A.acoes.enviar({ tipo: "midia", arquivo: f, validacao: v, legenda: v.tipo === "audio" ? "" : leg.value.trim() });
+    const usaOriginal = !!(chkOriginal && chkOriginal.checked);
+    const arquivoFinal = usaOriginal ? f : escolhidoInicial;
+    await A.acoes.enviar({ tipo: "midia", arquivo: arquivoFinal, validacao: usaOriginal ? vOriginal : v, legenda: v.tipo === "audio" ? "" : leg.value.trim() });
   }
 
   /* ---------------- modelos (templates aprovados) */

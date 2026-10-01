@@ -27,6 +27,8 @@ export function criarChat(A) {
   novas.addEventListener("click", () => { rolarFim(true); novas.hidden = true; });
 
   /* ---------------- rolagem */
+  let grudarFimAte = 0;      // até quando uma mídia que termina de carregar deve manter a conversa no fim (a imagem só ganha altura ao carregar)
+  const aposMidiaCarregar = () => { if (Date.now() < grudarFimAte) msgs.scrollTop = msgs.scrollHeight; };
   function noFim() { return msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80; }
   function rolarFim(suave) {
     if (suave && !matchMedia("(prefers-reduced-motion: reduce)").matches) msgs.scrollTo({ top: msgs.scrollHeight, behavior: "smooth" });
@@ -315,7 +317,7 @@ export function criarChat(A) {
       }
     }
     if (m.tipo === "imagem" || m.tipo === "sticker") {
-      const img = h("img", { src: url, alt: m.tipo === "sticker" ? "Figurinha" : (m.direcao === "in" ? "Foto recebida" : "Foto enviada"), loading: "lazy", decoding: "async" });
+      const img = h("img", { on: { load: aposMidiaCarregar }, src: url, alt: m.tipo === "sticker" ? "Figurinha" : (m.direcao === "in" ? "Foto recebida" : "Foto enviada"), loading: "lazy", decoding: "async" });
       aoFalharMidia(img, md.path);
       if (m.tipo === "sticker") return h("div", { class: "cv-midia cv-sticker" }, img);
       return h("div", { class: "cv-midia" }, h("button", { type: "button", class: "cv-img-bt", "aria-label": "Ampliar foto", on: { click: () => lupa(url, nome) } }, img));
@@ -326,6 +328,18 @@ export function criarChat(A) {
       h("span", { class: "cv-doc-ic", "aria-hidden": "true" }, extensao(nome, md.mime)),
       h("span", { class: "cv-doc-txt" }, h("b", null, nome || "Documento"), h("small", null, [L.tamanhoLegivel(md.tamanho), local ? "enviando…" : "Baixar"].filter(Boolean).join(" · "))));
     return doc;
+  }
+
+  /** Barra de progresso do envio de arquivo (bolha local): "62 %", Cancelar enquanto sobe e "Entregando…" quando já subiu. */
+  function blocoProgresso(m) {
+    const md = m.midia || {};
+    const pct = Math.max(0, Math.min(100, Number(md.progresso) || 0));
+    const entregando = md.fase === "entregando";
+    const cancelavel = !entregando && A.acoes.podeCancelarEnvio(m);
+    return h("div", { class: "cv-prog", role: "progressbar", "aria-label": "Enviando arquivo", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct) },
+      h("span", { class: "cv-prog-barra", "aria-hidden": "true" }, h("i", { style: { width: `${pct}%` } })),
+      h("span", { class: "cv-prog-txt dado" }, entregando ? "Entregando…" : `${pct} %`),
+      cancelavel ? h("button", { type: "button", class: "bt bt-fant bt-p cv-prog-cancel", on: { click: () => A.acoes.cancelarEnvio(m) } }, "Cancelar") : null);
   }
 
   function rodape(m) {
@@ -373,6 +387,7 @@ export function criarChat(A) {
       bolha.appendChild(cita);
     }
     if (["imagem", "video", "audio", "documento", "sticker"].includes(m.tipo)) bolha.appendChild(blocoMidia(m));
+    if (m.local && m.status === "pendente" && m.midia && m.midia.estado === "enviando") bolha.appendChild(blocoProgresso(m));
     const texto = m.tipo === "desconhecido" ? (m.corpo || "Mensagem não suportada pela API do WhatsApp — veja no celular") : m.corpo;
     if (texto) {
       const t = h("div", { class: ["cv-texto", m.tipo === "desconhecido" && "cv-texto-fraco"] }, textoFormatado(texto));
@@ -412,7 +427,7 @@ export function criarChat(A) {
     const m = ln.msg;
     const md = m.midia || {};
     const urlOk = md.path ? A.acoes.estadoMidia(md.path) : "";
-    return [m.atualizado_em, m.status, m.erro, m.ambigua, m.origem, m.reacao, ln.junta, md.estado, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
+    return [m.atualizado_em, m.status, m.erro, m.ambigua, m.origem, m.reacao, ln.junta, md.estado, md.progresso, md.fase, m.local && A.acoes.podeCancelarEnvio(m) ? 1 : 0, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
       m.responde_a && m.responde_a.id, m.enviado_por && m.enviado_por.nome].join("|");
   }
 
@@ -463,6 +478,7 @@ export function criarChat(A) {
     }
     renderTopo();
     const ult = A.L.ultimoId(A.msgs);
+    if (rolar === "fim" || (rolar === "novas" && estavaNoFim)) grudarFimAte = Date.now() + 2500;
     if (rolar === "fim") requestAnimationFrame(() => rolarFim(false));
     else if (rolar === "anterior") msgs.scrollTop = topoAntes + (msgs.scrollHeight - alturaAntes);
     else if (rolar === "novas") {

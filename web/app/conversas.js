@@ -51,7 +51,7 @@ export async function montar(ctx) {
     itens: [], contagens: {}, temMais: false, carregandoLista: false,
     selId: null, ver: null, msgs: [], conversasContato: [], agora: null, ultimoId: null, temMaisAntes: false,
     iaEstado: null, iaEstadoEm: 0, iaEstadoPendente: false,
-    carregandoAntes: false, rascunhos: new Map(), midia: new Map(), pedidosMidia: new Set(), blobs: new Set(),
+    carregandoAntes: false, rascunhos: new Map(), midia: new Map(), pedidosMidia: new Set(), blobs: new Set(), envios: new Map(),
     painel: "lista", timers: [], limpar: [], seqConversa: 0, seqLista: 0, destruido: false, acoes,
     buscaMsgs: null, seqMsgs: 0,
   };
@@ -110,6 +110,7 @@ export function desmontar() {
   if (A.composer && typeof A.composer.desmontar === "function") A.composer.desmontar();
   for (const t of A.timers) clearInterval(t);
   for (const f of A.limpar) try { f(); } catch { /* ok */ }
+  for (const cancelar of A.envios.values()) try { cancelar(); } catch { /* ok */ }
   for (const u of A.blobs) try { URL.revokeObjectURL(u); } catch { /* ok */ }
   document.documentElement.classList.remove("cv-chat-aberto");
   if (A.gavetaLateral) try { A.gavetaLateral.fechar(); } catch { /* ok */ }
@@ -736,6 +737,8 @@ const acoes = {
   novaConversa: (o) => novaConversa(o),
   enviar: (...a) => enviar(...a),
   reenviarLocal: (m) => reenviarLocal(m),
+  podeCancelarEnvio: m => !!(A && m && A.envios.has(m.id)),
+  cancelarEnvio(m) { const c = m && A.envios.get(m.id); if (c) c(); },
   descartarLocal(m) { A.msgs = A.msgs.filter(x => x.id !== m.id); A.chat.renderMensagens({ rolar: "manter" }); },
   async nota(texto) {
     const r = await A.api.rpcC("nx_cv_nota", { p_conversa: A.selId, p_texto: texto });
@@ -775,7 +778,7 @@ async function enviar(o) {
     const url = URL.createObjectURL(o.arquivo);
     A.blobs.add(url);
     tmp = L.mensagemOtimista({ conversaId: conv.id, tipo: o.validacao.tipo, corpo: o.legenda || null, eu,
-      midia: { nome: o.arquivo.name, mime: o.validacao.mime, tamanho: o.arquivo.size, estado: "enviando", local_url: url } });
+      midia: { nome: o.arquivo.name, mime: o.validacao.mime, tamanho: o.arquivo.size, estado: "enviando", local_url: url, progresso: 0, fase: "subindo" } });
   } else {
     tmp = L.mensagemOtimista({ conversaId: conv.id, tipo: "template", corpo: L.preencherModelo(o.template.corpo, o.parametros), eu,
       template: { nome: o.template.nome, idioma: o.template.idioma } });
@@ -795,11 +798,20 @@ async function enviarPedido(tmp, o) {
       r = await A.api.fn("nx-enviar", { acao: "texto", conversa: convId, texto: o.texto, client_ref: o.clientRef,
         responde_a: o.respondeA && o.respondeA.wamid ? o.respondeA.wamid : undefined });
     } else if (o.tipo === "midia") {
-      const s = await A.api.fn("nx-midia", { acao: "subir", nome: o.arquivo.name, mime: o.validacao.mime, tamanho: o.arquivo.size });
-      if (!s || !s.path || !/^https:\/\//.test(String(s.upload_url || ""))) throw Object.assign(new Error("envio_falhou"), { codigo: "envio_falhou", detalhe_texto: "o servidor não liberou o envio do arquivo" });
-      const put = await fetch(s.upload_url, { method: "PUT", headers: { "content-type": o.validacao.mime, "x-upsert": "true" }, body: o.arquivo });
-      if (!put.ok) throw Object.assign(new Error("envio_falhou"), { codigo: "envio_falhou", detalhe_texto: `não foi possível subir o arquivo (${put.status})` });
-      r = await A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: s.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined });
+      // o arquivo já subiu numa tentativa anterior (a nx-enviar é que falhou): "Tentar de novo" não sobe tudo outra vez
+      if (!o.path) {
+        definirProgresso(tmp, 0, "subindo", convId);
+        const s = await A.api.fn("nx-midia", { acao: "subir", nome: o.arquivo.name, mime: o.validacao.mime, tamanho: o.arquivo.size });
+        if (!s || !s.path || !/^https:\/\//.test(String(s.upload_url || ""))) throw Object.assign(new Error("envio_falhou"), { codigo: "envio_falhou", detalhe_texto: "o servidor não liberou o envio do arquivo" });
+        try {
+          await subirArquivo(s.upload_url, o.arquivo, o.validacao.mime, {
+            aoProgresso: (env, total) => definirProgresso(tmp, L.progressoEnvio(env, total).pct, "subindo", convId),
+            registrar: cancelar => { A.envios.set(tmp.id, cancelar); if (A.selId === convId) A.chat.renderMensagens({ rolar: "manter" }); } });
+        } finally { A.envios.delete(tmp.id); }
+        o.path = s.path;
+      }
+      definirProgresso(tmp, 100, "entregando", convId);
+      r = await A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: o.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined });
     } else {
       r = await A.api.fn("nx-enviar", { acao: "template", conversa: convId, template_id: o.template.id, parametros: o.parametros || [] });
     }
@@ -817,6 +829,12 @@ async function enviarPedido(tmp, o) {
   } catch (e) {
     if (!A || A.selId !== convId) return;
     const codigo = e && e.codigo;
+    if (codigo === "upload_cancelado") {   // a pessoa cancelou: nada saiu, a bolha local some
+      A.msgs = A.msgs.filter(m => m.id !== tmp.id);
+      A.chat.renderMensagens({ rolar: "manter" });
+      A.ui.toast("Envio cancelado.", { tipo: "info" });
+      return;
+    }
     // Só a resposta marcada pelo servidor ou um timeout de transporte deixa incerto se o
     // aparelho recebeu. Um 5xx interno sem essa marca não deve bloquear a recuperação.
     const envioAmbiguo = e?.resposta?.ambigua === true || ["sem_conexao", "tempo_rede"].includes(codigo)
@@ -851,9 +869,47 @@ async function enviarPedido(tmp, o) {
   }
 }
 
+/** PUT com progresso: o fetch não diz quanto já subiu. Rejeita com codigo "upload_falhou" (rede/HTTP) ou "upload_cancelado". */
+function subirArquivo(url, arquivo, mime, { aoProgresso, registrar } = {}) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    const falha = (codigo, texto) => reject(Object.assign(new Error(codigo), { codigo, detalhe_texto: texto }));
+    x.open("PUT", url);
+    x.setRequestHeader("content-type", mime);
+    x.setRequestHeader("x-upsert", "true");
+    x.timeout = 180000;
+    let ultimo = 0;
+    x.upload.addEventListener("progress", ev => {
+      if (!ev.lengthComputable || !aoProgresso) return;
+      const agora = Date.now();
+      if (agora - ultimo < 120) return;       // no máximo ~8 atualizações por segundo
+      ultimo = agora;
+      aoProgresso(ev.loaded, ev.total);
+    });
+    x.addEventListener("load", () => (x.status >= 200 && x.status < 300 ? resolve() : falha("upload_falhou", `não foi possível subir o arquivo (${x.status})`)));
+    x.addEventListener("error", () => falha("upload_falhou", "a conexão caiu durante o envio"));
+    x.addEventListener("timeout", () => falha("upload_falhou", "o envio demorou demais"));
+    x.addEventListener("abort", () => falha("upload_cancelado", "envio cancelado"));
+    if (registrar) registrar(() => x.abort());
+    x.send(arquivo);
+  });
+}
+
+/** Barra de progresso da bolha local (só se a conversa ainda é a aberta). */
+function definirProgresso(tmp, pct, fase, convId) {
+  if (!A || A.selId !== convId) return;
+  let mudou = false;
+  A.msgs = A.msgs.map(m => {
+    if (m.id !== tmp.id || !m.midia || (m.midia.progresso === pct && m.midia.fase === fase)) return m;
+    mudou = true;
+    return { ...m, midia: { ...m.midia, progresso: pct, fase } };
+  });
+  if (mudou) A.chat.renderMensagens({ rolar: "manter" });
+}
+
 async function reenviarLocal(m) {
   if (!m || !m.pedido) return;
-  A.msgs = A.msgs.map(x => x.id === m.id ? { ...x, status: "pendente", erro: null } : x);
+  A.msgs = A.msgs.map(x => x.id === m.id ? { ...x, status: "pendente", erro: null, falhaLocal: false, ...(x.midia && x.midia.local_url ? { midia: { ...x.midia, progresso: 0, fase: x.pedido && x.pedido.path ? "entregando" : "subindo" } } : {}) } : x);
   A.chat.renderMensagens({ rolar: "manter" });
   await enviarPedido(m, m.pedido);
 }

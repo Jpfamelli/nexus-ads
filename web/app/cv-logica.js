@@ -372,7 +372,7 @@ const TIPOS_IMAGEM = new Set(["image/jpeg", "image/png", "image/webp"]);
 const TIPOS_16 = new Set(["video/mp4", "video/3gpp", "audio/aac", "audio/mp4", "audio/mpeg", "audio/amr", "audio/ogg",
   "application/pdf", "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint", "text/plain"]);
 const EXT_MIME = Object.freeze({
-  jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", mp4: "video/mp4", "3gp": "video/3gpp",
+  jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", heic: "image/heic", heif: "image/heif", mp4: "video/mp4", "3gp": "video/3gpp",
   aac: "audio/aac", m4a: "audio/mp4", mp3: "audio/mpeg", amr: "audio/amr", ogg: "audio/ogg", opus: "audio/ogg",
   pdf: "application/pdf", doc: "application/msword", xls: "application/vnd.ms-excel", ppt: "application/vnd.ms-powerpoint",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -464,6 +464,7 @@ export function dicaErroEnvio(codigo) {
     canal_sem_token: "Este número ainda não tem o token da Meta.",
     sem_conexao: "Sem internet agora. Tente de novo.",
     tempo_esgotado: "Demorou demais. Tente de novo.",
+    upload_falhou: "O arquivo não subiu — confira a internet e toque em Tentar de novo (a foto já está pronta).",
   }[codigo] || "";
 }
 
@@ -594,4 +595,58 @@ export function janelaCurta(j) {
   if (!j || !j.aberta) return "Janela fechada";
   const m = Math.floor((Number(j.restanteMs) || 0) / 60000);
   return m >= 60 ? `Janela ${Math.floor(m / 60)} h` : `Janela ${Math.max(1, m)} min`;
+}
+
+/* ------------------------------------------------------------ fotos do celular (M37): comprimir no aparelho antes de validar */
+export const FOTO_LADO_MAX = 1600;                 // lado maior, em px
+export const FOTO_QUALIDADES = Object.freeze([0.82, 0.72, 0.62]);   // 1ª tentativa e reduções para chegar perto do alvo
+export const FOTO_PEQUENA = 300 * 1024;            // até isto (e dentro do lado máximo) o original segue sem recompressão
+export const FOTO_ALVO = 500 * 1024;               // alvo do JPEG (200–500 KB para uma foto de câmera)
+const TIPOS_FOTO = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]);
+
+/** O arquivo é uma foto que vale tentar otimizar? (heic/heif só dá certo onde o navegador decodifica — quem chama trata a falha.) */
+export function ehFoto(arquivo) { return TIPOS_FOTO.has(mimeDe(arquivo)); }
+
+/** dimensoesFoto(4032, 3024) → {w: 1600, h: 1200, mudou: true}; nunca amplia; arredonda; lado mínimo 1. */
+export function dimensoesFoto(largura, altura, max = FOTO_LADO_MAX) {
+  const w0 = Math.max(1, Math.round(Number(largura) || 0)), h0 = Math.max(1, Math.round(Number(altura) || 0));
+  const maior = Math.max(w0, h0);
+  if (!(maior > max)) return { w: w0, h: h0, mudou: false };
+  const f = max / maior;
+  return { w: Math.max(1, Math.round(w0 * f)), h: Math.max(1, Math.round(h0 * f)), mudou: true };
+}
+
+/** planoFoto({tipo, bytes, largura, altura}) → {acao: "manter"|"otimizar", w, h}.
+    Foto pequena (≤ 300 KB e dentro de 1600 px) segue como veio; o resto é redimensionado e recodificado. HEIC sempre otimiza (o WhatsApp não aceita). */
+export function planoFoto({ tipo, bytes, largura, altura } = {}, { pequena = FOTO_PEQUENA, max = FOTO_LADO_MAX } = {}) {
+  const d = dimensoesFoto(largura, altura, max);
+  const heic = /^image\/hei[cf]$/.test(String(tipo || ""));
+  if (!heic && !d.mudou && Number(bytes) <= pequena) return { acao: "manter", w: d.w, h: d.h };
+  return { acao: "otimizar", w: d.w, h: d.h };
+}
+
+/** Qualidade da próxima tentativa (ou null quando acabaram): só insiste se ainda passou do alvo. */
+export function proximaQualidadeFoto(bytes, tentativa = 0, { alvo = FOTO_ALVO } = {}) {
+  if (!(Number(bytes) > alvo)) return null;
+  return FOTO_QUALIDADES[tentativa + 1] ?? null;
+}
+
+/** "Foto otimizada de 7,2 MB para 380 KB" — ou a frase neutra quando nada mudou. */
+export function resumoOtimizacao(antes, depois) {
+  if (!(Number(antes) > 0) || !(Number(depois) > 0) || depois >= antes) return "";
+  return `Foto otimizada de ${tamanhoLegivel(antes)} para ${tamanhoLegivel(depois)}`;
+}
+
+/** Nome do arquivo otimizado: troca a extensão por .jpg (mantém o nome que a pessoa conhece). */
+export function nomeFotoOtimizada(nome) {
+  const base = String(nome || "foto").replace(/\.[A-Za-z0-9]{1,5}$/, "").slice(0, 80) || "foto";
+  return `${base}.jpg`;
+}
+
+/** Progresso de envio como texto e como fração: progressoEnvio(620, 1000) → {pct: 62, texto: "62 %"}; nunca passa de 99 antes de acabar. */
+export function progressoEnvio(enviados, total) {
+  const t = Number(total), e = Number(enviados);
+  if (!(t > 0) || !(e >= 0)) return { pct: 0, texto: "0 %" };
+  const pct = Math.max(0, Math.min(99, Math.floor((e / t) * 100)));
+  return { pct, texto: `${pct} %` };
 }

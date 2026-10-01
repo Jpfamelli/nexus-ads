@@ -231,6 +231,15 @@
 .cv-midia-off { display: flex; align-items: flex-start; gap: .5rem; max-width: 22rem; margin: 0 0 .35rem; padding: .55rem .7rem; border-radius: 12px; background: var(--c-aten-suave); border: 1px dashed color-mix(in srgb, var(--c-aten) 50%, transparent); font-size: var(--fs-13); color: var(--c-texto); }
 .cv-midia-off .ic { width: 16px; height: 16px; color: var(--c-aten); margin-top: .1rem; }
 .cv-local { opacity: .72; }
+/* envio de arquivo: barra de progresso dentro da bolha (M37) */
+.cv-prog { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .3rem .6rem; min-width: min(14rem, 62vw); margin: .1rem 0 .3rem; }
+.cv-prog-barra { grid-column: 1 / -1; display: block; height: 6px; border-radius: 999px; background: var(--c-poco); overflow: hidden; }
+.cv-prog-barra i { display: block; height: 100%; border-radius: inherit; background: var(--c-prim); transition: width var(--t-ui) var(--e-out); }
+.cv-prog-txt { font-size: var(--fs-12); color: var(--c-texto-2); }
+.cv-prog-cancel { justify-self: end; min-height: 28px; padding: .1rem .6rem; }
+.cvx-otim { margin: 0 0 .45rem; padding: .35rem .65rem; border-radius: 10px; background: var(--c-poco); color: var(--c-texto-2); font-size: var(--fs-13); }
+.cv-otim-info { color: var(--c-ok); font-weight: 600; }
+.cv-original { margin-top: .1rem; }
 
 .cvc-novas {
   position: absolute; left: 50%; bottom: 1rem; transform: translateX(-50%); z-index: 3;
