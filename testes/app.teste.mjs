@@ -2499,5 +2499,45 @@ await teste("M04: pílulas de estado ganham glifo por CSS (✓ ▲ ✕ i); açã
   } finally { d.fim(); }
 });
 
+/* ---------- M02: uma escala tipográfica ---------- */
+/** font-size (ou o tamanho do atalho `font:`) em px/rem/pt/clamp literal, fora do :root. Relativos (em, %) e var(--fs-*) são válidos. */
+function tamanhosLiterais(texto) {
+  const cod = semRaiz(texto).replace(/\/\*[\s\S]*?\*\//g, "").replace(/@font-face\s*\{[^}]*\}/g, "");
+  const ruins = [];
+  for (const m of cod.matchAll(/(?:^|[;{\s])font-size:\s*([^;}]+)/g)) {
+    const v = m[1].trim();
+    if (/^(var\(--[a-z0-9-]+\)|inherit|initial|unset|smaller|larger|calc\(var\(--[a-z0-9-]+\)[^;]*\)|max\([\d.]+em, var\(--[a-z0-9-]+\)\)|[\d.]+(em|%))(\s*!important)?$/.test(v)) continue;
+    ruins.push(`font-size: ${v}`);
+  }
+  for (const m of cod.matchAll(/(?:^|[;{\s])font:\s*([^;}]+)/g)) {
+    if (/[\d.]+(px|rem|pt)\b/.test(m[1].replace(/var\([^)]*\)/g, ""))) ruins.push(`font: ${m[1].trim()}`);
+  }
+  return ruins;
+}
+await teste("M02: app.css traz o marcador '/* escala: tokens */' e nenhum font-size literal (px/rem/clamp) fora do :root; o teste vale para todo CSS que trouxer o marcador", () => {
+  assert.match(CSS_APP, /\/\* escala: tokens \*\//, "marcador no app.css");
+  assert.deepEqual(tamanhosLiterais(CSS_APP), [], "app.css sem tamanho de letra literal");
+  // o detector pega o que deve pegar (e deixa passar o que é token ou relativo)
+  assert.deepEqual(tamanhosLiterais(".a { font-size: 13px; } .b { font-size: clamp(1rem, 2vw, 2rem); } .c { font: 600 12px/1.2 x; } .d { font-size: var(--fs-13); } .e { font-size: .6em; } :root { --fs-x: 1rem; font-size: 14px; }"),
+    ["font-size: 13px", "font-size: clamp(1rem, 2vw, 2rem)", "font: 600 12px/1.2 x"]);
+  // os outros CSS só entram na checagem quando trouxerem o marcador (C e D põem o marcador ao migrar M30/M40)
+  for (const f of css.filter(x => x !== "app.css")) {
+    const t = ler(f);
+    if (!/\/\* escala: tokens \*\//.test(t)) continue;
+    assert.deepEqual(tamanhosLiterais(t), [], `${f} traz o marcador mas tem font-size literal`);
+  }
+});
+await teste("M02: escala de 7 degraus nos títulos antigos (.titulo-pag = h1, .titulo-sec = h2, .num-grande = número L) e Clash só no peso 600 em app.css", () => {
+  const regra = sel => { const m = CSS_APP.match(new RegExp(`(?:^|\\n)${sel.replace(/[.]/g, "\\$&")} \\{([^}]*)\\}`)); assert.ok(m, sel); return m[1]; };
+  assert.match(regra(".titulo-pag"), /font-size: var\(--fs-h1\)/); assert.match(regra(".titulo-sec"), /font-size: var\(--fs-h2\)/); assert.match(regra(".num-grande"), /font-size: var\(--fs-num-l\)/);
+  assert.match(regra(".entrar-titulo".replace("{", "")).replace(/\s+/g, " ") || "", /font-size: var\(--fs-display\)/);
+  const clash = [...CSS_APP.matchAll(/([^{}]+)\{([^}]*font-family:\s*var\(--f-titulo\)[^}]*)\}/g)].map(m => [m[1].trim().split("\n").pop().trim(), m[2]]).filter(([sel]) => !sel.startsWith(":root"));
+  assert.ok(clash.length >= 10, `regras com Clash: ${clash.length}`);
+  for (const [sel, corpo] of clash) {
+    assert.match(corpo, /font-weight:\s*600/, `${sel}: Clash com peso único 600`);
+    assert.doesNotMatch(corpo, /font-weight:\s*(4|5|7|8|9)\d\d/, `${sel}: outro peso`);
+  }
+});
+
 console.log(`\n${ok} ok · ${falhas} falha(s)${avisos ? ` · ${avisos} aviso(s)` : ""}\n`);
 process.exit(falhas ? 1 : 0);
