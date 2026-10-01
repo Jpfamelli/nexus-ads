@@ -185,7 +185,9 @@ test("montar: o pedido à Anthropic — modelo, esforço, schema do catálogo e 
   assert.equal(p.chave, CHAVE_IA);
   assert.equal(p.modelo, "claude-opus-5-5", "o modelo é o de nx_config (padrão do código: claude-opus-5-5)");
   assert.equal(p.esforco, "medium");
-  assert.ok(p.maxTokens >= 4000);
+  assert.equal(p.maxTokens, 12000, "folga para o raciocínio + o JSON");
+  assert.equal(p.timeoutMs, 110_000);
+  assert.equal(p.retentativas, 0, "o tempo total (110 s) cabe na Edge Function: sem retentativa");
   assert.ok(!("tool_choice" in p) && !("prefill" in p) && !("thinking" in p), "nada de tool_choice forçado, prefill ou thinking desligado");
   // o schema é de saída estruturada: tudo obrigatório, objetos fechados, anyOf só nas variantes
   assert.equal(p.schema.type, "object");
@@ -330,6 +332,32 @@ test("montar: nome em vez de id é resolvido contra a lista do cliente (e nome a
   const r2 = await chamar({ acao: "automacao_montar", token: "tok-adm", cliente: CLI_A, descricao: "x" }, criarBanco(),
     criarIa(() => saida(automacaoIA({ acoes: [acao("etiqueta_adicionar", { etiqueta_id: "Etiqueta que não existe" })] }))));
   assert.equal(r2.corpo.erro, "automacao_invalida");
+});
+
+test("montar: a saída estruturada não garante a caixa das letras de um enum — ids e tipos são comparados sem diferença de maiúscula", async () => {
+  const auto = automacaoIA({
+    gatilho: { ...gat("negocio_estagio", { estagio_id: U("e", 13).toUpperCase() }), tipo: "Negocio_Estagio" },
+    acoes: [{ ...acao("atribuir", { dono: "RODIZIO" }), tipo: "ATRIBUIR" },
+            { ...acao("atribuir", { dono: "Conta", conta_id: U("2", 1).toUpperCase() }), tipo: "Atribuir" },
+            { ...acao("ia_decidir", { tarefa: "Classificar_Etapa" }), tipo: "IA_decidir" },
+            { ...acao("criar_tarefa", { titulo: "t", dono: "Responsavel", tipo_tarefa: "WhatsApp" }), tipo: "criar_tarefa" }],
+    condicoes: [{ campo: "Estagio_Id", op: "IGUAL", valor: U("e", 12).toUpperCase() }],
+  });
+  const r = await chamar({ acao: "automacao_montar", token: "tok-adm", cliente: CLI_A, descricao: "x" }, criarBanco(), criarIa(() => saida(auto)));
+  assert.equal(r.corpo.ok, true, r.txt);
+  const a = r.corpo.automacao;
+  assert.equal(a.gatilho, "negocio_estagio");
+  assert.equal(a.config.estagio_id, U("e", 13));
+  assert.deepEqual(a.acoes[0], { tipo: "atribuir", dono: "rodizio" });
+  assert.deepEqual(a.acoes[1], { tipo: "atribuir", dono: "conta", conta_id: U("2", 1) });
+  assert.deepEqual(a.acoes[2], { tipo: "ia_decidir", tarefa: "classificar_etapa" });
+  assert.equal(a.acoes[3].dono, "responsavel");
+  assert.equal(a.acoes[3].tipo_tarefa, "whatsapp");
+  assert.deepEqual(a.condicoes, [{ campo: "estagio_id", op: "igual", valor: U("e", 12) }]);
+  // a decisão: o id da etapa em maiúsculas também vale
+  const banco = criarBanco({ pedidos: [pedido(5, "classificar_etapa")] });
+  await decidir(banco, criarIa(() => saida({ etapa_id: U("e", 12).toUpperCase(), motivo: "x" })));
+  assert.equal(banco.resolvidos[0].p_resultado.etapa_id, U("e", 12));
 });
 
 test("montar: avisos do servidor (modelo não aprovado, IA gasta cota, agendado, limite do plano)", async () => {
@@ -531,6 +559,7 @@ test("decidir: classificar_etapa válida → o banco recebe só {etapa_id, motiv
   // o pedido à IA
   const p = ia.pedidos[0];
   assert.equal(p.esforco, "low");
+  assert.deepEqual([p.maxTokens, p.timeoutMs, p.retentativas], [6000, 40_000, 1]);
   assert.deepEqual(p.schema.properties.etapa_id.enum, CTX_CLASSIFICAR.etapas.map(e => e.id), "as opções são as etapas oferecidas pelo banco (e só elas)");
   assert.equal(p.schema.additionalProperties, false);
   assert.match(p.sistema, /Quem quer marcar é interesse alto/);
@@ -717,6 +746,7 @@ test("ia.js estruturarClaude: opus-5-5 com saída estruturada, effort e reserva 
   const r = await mod.estruturarClaude({ chave: "k", sistema: "S", usuario: "U", schema: SCHEMA, esforco: "medium", maxTokens: 8000, timeoutMs: 60000 });
   assert.deepEqual(r, { json: { a: "oi" }, texto: "{\"a\":\"oi\"}", modelo: "claude-opus-5-5", tokens_in: 500, tokens_out: 70 });
   assert.equal(globalThis.__ia3[0].ctor.timeout, 60000);
+  assert.equal(globalThis.__ia3[0].ctor.maxRetries, 1, "1 retentativa por padrão");
   const { t, p } = globalThis.__ia3[1];
   assert.equal(t, "beta");
   assert.equal(p.model, "claude-opus-5-5", "padrão claude-opus-5-5");

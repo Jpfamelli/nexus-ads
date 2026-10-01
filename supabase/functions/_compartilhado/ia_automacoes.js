@@ -32,7 +32,7 @@ export const LIMITE_DESCRICAO = 1500;
 export const MODELO_PADRAO = "claude-opus-5-5";
 const MAX_DECISOES = 10;               // pedidos por chamada da nx-ia
 const SIMULTANEAS = 3;                 // chamadas à Anthropic ao mesmo tempo
-const PRAZO_LOTE_MS = 90_000;          // depois disso, o que não começou volta para a fila (a Edge Function tem teto de ~150 s)
+const PRAZO_LOTE_MS = 40_000;          // depois disso, o que não começou volta para a fila (a Edge Function tem teto de ~150 s)
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ehUuid = s => typeof s === "string" && RE_UUID.test(s);
@@ -319,11 +319,37 @@ function nomeParaId(valor, tipo, ix) {
   return achados.length === 1 ? achados[0].id : t;
 }
 
+const ENUM_FIXO = {
+  campo_data: ["consulta", "previsao_fechamento"], alvo_etiqueta: ["contato", "conversa"],
+  modo_atribuir: ["rodizio", "conta", "departamento"], tarefa_ia: TAREFAS_IA.map(t => t[0]),
+};
+
+/**
+ * A saída estruturada garante a FORMA, não a caixa das letras de um enum (a doc da Anthropic avisa: compare sem
+ * diferença de maiúscula). Devolve o valor canônico do campo: id em minúsculas, opção/palavra-chave do catálogo
+ * com a grafia certa. O que não casa com nada fica como veio (a validação recusa).
+ */
+function canonico(c, v) {
+  if (typeof v !== "string") return v;
+  const t = v.trim();
+  if (ehUuid(t)) return t.toLowerCase();
+  const lista = c.tipo === "opcoes" ? c.opcoes.map(o => o[0]) : c.tipo === "dono" ? ["responsavel", "atendente"]
+    : c.tipo === "para" ? ["responsavel", "admins", "departamento"] : ENUM_FIXO[c.tipo];
+  if (lista) { const achado = lista.find(x => x.toLowerCase() === t.toLowerCase()); if (achado) return achado; }
+  if (c.tipo === "campo_contato" && /^[A-Za-z][A-Za-z0-9_]*$/.test(t)) return t.toLowerCase();
+  return t;
+}
+/** id do catálogo (gatilho/ação/campo de condição/operador) sem diferença de maiúscula. */
+const casarId = (v, ids) => { const t = texto(v).trim(); return ids.find(x => x.toLowerCase() === t.toLowerCase()) || t; };
+
 function limparCampos(campos, origem, ix) {
   const out = {};
   for (const c of campos) {
-    if (c.quando && Object.entries(c.quando).some(([k, v]) => origem[k] !== v)) continue;
-    let v = origem[c.nome];
+    if (c.quando && Object.entries(c.quando).some(([k, v]) => {
+      const def = campos.find(x => x.nome === k);
+      return (def ? canonico(def, origem[k]) : origem[k]) !== v;
+    })) continue;
+    let v = canonico(c, origem[c.nome]);
     switch (c.tipo) {
       case "numero": case "duracao": { const n = inteiro(v); if (n != null) out[c.nome] = n; break; }
       case "sim_nao": if (typeof v === "boolean") out[c.nome] = v; break;
@@ -353,20 +379,25 @@ export function converterSaida(saida, base) {
   const ix = indexarBase(base);
   const s = saida && typeof saida === "object" ? saida : {};
   const g = s.gatilho && typeof s.gatilho === "object" ? s.gatilho : {};
-  const gat = GATILHO[g.tipo];
+  const gid = casarId(g.tipo, GATILHOS.map(x => x.id));
+  const gat = GATILHO[gid];
   const condicoes = (Array.isArray(s.condicoes) ? s.condicoes : []).map(c => {
-    const campo = texto(c?.campo), op = texto(c?.op), semValor = OPERADORES.find(o => o.id === op)?.semValor;
+    const campo = /^contato./i.test(texto(c?.campo).trim()) ? texto(c.campo).trim().toLowerCase() : casarId(c?.campo, CAMPOS_CONDICAO.map(x => x.id));
+    const op = casarId(c?.op, OPERADORES.map(o => o.id));
+    const semValor = OPERADORES.find(o => o.id === op)?.semValor;
     const tipoValor = CAMPOS_CONDICAO.find(x => x.id === campo)?.valor;
     let valor = texto(c?.valor).trim();
+    if (ehUuid(valor)) valor = valor.toLowerCase();
     if (!semValor && ["funil", "estagio", "canal", "departamento", "etiqueta", "pessoa"].includes(tipoValor)) valor = nomeParaId(valor, tipoValor, ix);
     return semValor ? { campo, op } : { campo, op, valor };
   });
   const acoes = (Array.isArray(s.acoes) ? s.acoes : []).map(a => {
-    const d = ACAO[a?.tipo];
-    return d ? { tipo: a.tipo, ...limparCampos(d.campos, a, ix) } : { tipo: texto(a?.tipo) };
+    const tid = casarId(a?.tipo, ACOES.map(x => x.id));
+    const d = ACAO[tid];
+    return d ? { tipo: tid, ...limparCampos(d.campos, a, ix) } : { tipo: texto(a?.tipo) };
   });
   return {
-    nome: texto(s.nome).trim(), gatilho: gat ? g.tipo : texto(g.tipo), config: gat ? limparCampos(gat.campos, g, ix) : {},
+    nome: texto(s.nome).trim(), gatilho: gat ? gid : texto(g.tipo), config: gat ? limparCampos(gat.campos, g, ix) : {},
     condicoes, acoes, respeitar_horario: s.respeitar_horario === true, ativo: false,
   };
 }
@@ -588,7 +619,7 @@ export async function montarAutomacao(corpo, env, deps = {}) {
   const delim = novoDelimitador(), delimOpcoes = novoDelimitador();
   const { sistema, usuario } = montarPromptAutomacao({ descricao, empresa: info?.empresa, vertical: info?.vertical, base }, delim, delimOpcoes);
   let r;
-  const perguntar = schema => mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, usuario, schema, maxTokens: 8000, esforco: "medium", timeoutMs: 60_000 });
+  const perguntar = schema => mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, usuario, schema, maxTokens: 12000, esforco: "medium", timeoutMs: 110_000, retentativas: 0 });
   try {
     try {
       r = await perguntar(montarSchema(base));
@@ -706,7 +737,7 @@ export function validarDecisao(tarefa, saida, contexto) {
   if (!s) return { ok: false, motivo: "a resposta não é um objeto" };
   if (tarefa === "classificar_etapa") {
     const opcoes = new Set((contexto?.etapas || []).map(e => e.id));
-    const id = typeof s.etapa_id === "string" ? s.etapa_id.trim() : "";
+    const id = typeof s.etapa_id === "string" ? s.etapa_id.trim().toLowerCase() : "";
     if (!id || !opcoes.has(id)) return { ok: false, motivo: "a etapa escolhida não é uma das opções do funil" };
     const motivo = cortar(s.motivo, 300);
     return { ok: true, resultado: { etapa_id: id, ...(motivo ? { motivo } : {}) } };
@@ -767,7 +798,7 @@ export async function decidirAutomacoes(req, corpo, env, deps = {}) {
       const { sistema, usuario } = montarPromptDecisao({ tarefa: p.tarefa, instrucao: p.instrucao, contexto: p.contexto }, delim);
       let r;
       try {
-        r = await mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, usuario, schema: schemaDecisao(p.tarefa, p.contexto), maxTokens: 4000, esforco: "low", timeoutMs: 45_000 });
+        r = await mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, usuario, schema: schemaDecisao(p.tarefa, p.contexto), maxTokens: 6000, esforco: "low", timeoutMs: 40_000, retentativas: 1 });
       } catch (e) {
         await registrar(false, null);
         const t = traduzirErroIA(e);

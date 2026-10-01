@@ -136,11 +136,13 @@ export async function perguntarClaude({ chave, modelo, sistema, usuario, maxToke
  * @param {number} [o.maxTokens]
  * @param {"low"|"medium"|"high"} [o.esforco]
  * @param {number} [o.timeoutMs]
+ * @param {number} [o.retentativas] retentativas do SDK em 408/429/5xx/rede (padrão 1)
  * @returns {Promise<{json: object, texto: string, modelo: string, tokens_in: number|null, tokens_out: number|null}>}
  */
-export async function estruturarClaude({ chave, modelo, sistema, usuario, schema, maxTokens = 4000, esforco = "low", timeoutMs = 45_000 }) {
+export async function estruturarClaude({ chave, modelo, sistema, usuario, schema, maxTokens = 4000, esforco = "low", timeoutMs = 45_000, retentativas = 1 }) {
   const model = modelo || "claude-opus-5-5";
-  const client = new Anthropic({ apiKey: chave, timeout: timeoutMs, maxRetries: 1 });
+  // timeout × (retentativas + 1) tem de caber no teto de tempo da Edge Function (~150 s)
+  const client = new Anthropic({ apiKey: chave, timeout: timeoutMs, maxRetries: retentativas });
   const pedido = {
     model,
     max_tokens: maxTokens,
