@@ -47,7 +47,7 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
 | M05 segmentado + gestos | **feito** | ver "Etapa 2 · M05" abaixo | — |
 | M06 esqueletos/erro | **feito** (CLS das telas depende de C/D) | ver "Etapa 2 · M06" abaixo | medir CLS ≤ 0,02 depois de M30/M31/M40 |
 | M07 desfazer | **feito** (uso em M25/M35) | ver "Etapa 2 · M07" abaixo | uso nas telas (C: M25, D: M35) |
-| M08 formulários | feito (componentes) | `protegerTexto`, `validar`, máscaras, medidor, contador, foco em toque | uso nas telas (C/D) |
+| M08 formulários | **feito** (uso nas telas é de C/D) | ver "Etapa 2 · M08" abaixo | uso de validar/máscaras nos formulários (C/D/B) |
 | M09 vazios | parcial | 3 tipos com SVG por `createElementNS` | tirar o ícone "+" padrão do vazio sem `tipo` (compatibilidade por ora), usos |
 | M10 movimento | parcial | `.entra`, `.assenta`, `.destaque`, `G.destacar` | tirar sweep do botão e hover-lift, palco animado só em Login/Início (precisa de classe no `<body>` posta pelo shell, B), sonda CDP |
 
@@ -116,3 +116,12 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
 - O botão "Desfazer" do toast ganhou a dica "Desfazer (Ctrl ou ⌘ + Z)". `ui.confirmar` permanece para o irreversível.
 - **Como verificar:** `node testes/app.teste.mjs` ("ui.acaoComDesfazer (M07)" e "M07: acaoComDesfazer({firmar})": 7 cenários, inclusive pagehide).
 - **Para as outras frentes:** (C, M25) mover etapa/ganho/perdido, etiquetar e excluir tarefa/nota: `await ui.acaoComDesfazer({ texto: "Movida para Ganho", aplicar: () => /* UI */, reverter: () => /* UI */, firmar: () => ctx.api.rpcC("nx_negocio_mover", {…}, {req: true}) })` e conferir `r.estado`; excluir negócio/contato continua em `ui.confirmar({digitar})`. (D, M35) "Resolvida · Desfazer": o mesmo padrão com `firmar` = resolver no servidor.
+
+### M08 · formulários que protegem o texto e validam enquanto digita — FEITO (conferido no Chrome real)
+
+- Os componentes estavam prontos desde a etapa 1 (proteção do texto em `ui.modal`/`ui.gaveta`, `ui.campo({validar})`, máscaras de telefone BR e moeda com cursor estável, medidor de senha, contador, foco inicial no diálogo em toque, `ui.validarForm`). Nesta etapa foi feita a conferência no navegador de verdade (puppeteer-core + Chrome, dev-falso), que o DOM de mentira dos testes não substitui:
+  - Modal com 6 campos: telefone `12998303030` → `(12) 99830-3030`; digitar `7` no meio deixa `(12) 79983-0303` com o cursor logo depois do 7 (`selectionStart` 6); moeda `1234,5` → `1.234,5` e o 9 no começo dá `19.234,5` com cursor estável; e-mail `joao@` e senha `abc` mostram o erro com "!" e a borda (além do aria-invalid), telefone e valor mostram "✓ Confere"; medidor da senha em "Curta".
+  - Esc com texto digitado: o modal CONTINUA aberto, a faixa "Descartar o que você digitou?" aparece e o foco vai para "Continuar editando"; o botão Voltar do navegador com texto também mantém o modal (a rota não muda); "Descartar" fecha.
+  - Emulação de toque (390×844, `pointer: coarse`): ao abrir o modal e a gaveta o `document.activeElement` é o próprio diálogo (o teclado não sobe).
+- **Como verificar:** `node testes/app.teste.mjs` ("ui.modal (M08)", "ui.gaveta (M08)", "ui.campo({validar}) (M08)", "máscaras com cursor estável (14 casos)"). A conferência real é um script de QA fora do repositório.
+- **Para as outras frentes (uso):** (B) `login.js`: `ui.campo({tipo:"email", validar:"email"})` e `ui.validarForm(form)` antes de enviar; senha nova com `validar:"senha"`. (C) `crm-negocio.js`/`crm-listas.js`: telefone com `validar:"telefone"` e valor com `validar:"moeda"`; modais de busca/filtro que tenham campo com `name` e não sejam "dado digitado" passam `protegerTexto: false` (ou `data-sem-protecao`). (D) `config.js`/`cv-config.js`: os campos de telefone e e-mail idem. `ui.campo({tipo:"tel"})` SEM `validar` continua sem máscara de propósito (não muda o que já existia). O botão Voltar com a GAVETA aberta (o CRM a dirige pela rota) não é interceptado: C pode consultar `gaveta.estaSujo()` antes de navegar.
