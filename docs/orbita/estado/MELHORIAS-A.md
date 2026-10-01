@@ -36,13 +36,13 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
 - `.sk` (esqueleto) agora varre uma faixa clara em 1,4 s; com movimento reduzido só pulsa a opacidade.
 - `ui.mensagemErro` troca jargão/URL de erro de rede e de import() por frase em português.
 
-## Itens M01–M10 (situação depois da etapa 1)
+## Itens M01–M10 (situação FINAL desta rodada: os 10 estão feitos; o que sobra é adoção nas telas das outras frentes)
 
 | Item | Situação | Feito | Falta |
 |---|---|---|---|
 | M01 papel e elevação | **feito** | ver "Etapa 2 · M01" abaixo | — |
-| M02 escala + cabeçalho + Zodiak | parcial | 9 tokens `--fs-*`, `--f-narr`, `@font-face`, `.narr`, `ui.cabecalho` com testes | zerar `font-size` literal de `app.css`, marcador `/* escala: tokens */` e o teste dele, Clash só 600 |
-| M03 rótulos | parcial | `.rotulo`, `.dado`, `.selo-caps` | as ~30 regras `uppercase`, piso 12/13 px, teste do piso |
+| M02 escala + cabeçalho + Zodiak | **feito** | ver "Etapa 2 · M02" abaixo | telas migram em M30/M40 (C/D) |
+| M03 rótulos | **feito** | ver "Etapa 2 · M03" abaixo | telas migram em M30/M40 (C/D) |
 | M04 cor com intenção | **feito** | ver "Etapa 2 · M04" abaixo | — |
 | M05 segmentado + gestos | **feito** | ver "Etapa 2 · M05" abaixo | — |
 | M06 esqueletos/erro | **feito** (CLS das telas depende de C/D) | ver "Etapa 2 · M06" abaixo | medir CLS ≤ 0,02 depois de M30/M31/M40 |
@@ -51,11 +51,12 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
 | M09 vazios | **feito** (usos nas telas são de C/D) | ver "Etapa 2 · M09" abaixo | trocar os vazios das telas pelos 3 tipos (C/D) |
 | M10 movimento | **feito** | ver "Etapa 2 · M10" abaixo | — |
 
-## Pendências para outras frentes
+## Pendências para outras frentes (consolidado no fim da rodada; o detalhe por item está em cada seção da Etapa 2)
 
-- **B (`rede.js`, `app.js`)**: disparar `window.dispatchEvent(new Event("orbita:online"))` ao reconectar (o `erroCartao` já escuta). Pôr `data-produto` no `<html>` (M13) para o `--c-prod` trocar. Para M10: classe no `<body>` quando a tela for Login/Início (palco animado só ali). A busca global (`type=search`) já fica fora da proteção de texto; qualquer modal do shell com campo `name` que seja filtro/busca deve passar `protegerTexto: false` ou `data-sem-protecao`.
-- **C e D**: `ui.cabecalho` nível 1 só uma vez por tela; `esqueleto('kanban'|'lista'|'tabela', n)` continua igual (miolo). `ui.acaoComDesfazer` não rejeita: confira `.estado`. Modais de formulário passam a proteger o texto sozinhos; se algum modal tiver campo com `name` que não é "dado digitado" (filtro, busca), passe `protegerTexto: false`.
-- **Todos**: para CSS novo seguir as travas (nenhum hex fora de `:root`, `minmax(0, 1fr)`, tamanhos por `--fs-*`, caixa-alta só `.selo-caps`); o bloco "LINGUAGEM VISUAL — contratos da frente A" no fim do `app.css` é conferido por teste.
+- **B (shell):** (1) disparar `window.dispatchEvent(new Event("orbita:online"))` ao reconectar — o `ui.erroCartao` já escuta (M06/M14); (2) `data-produto="crm|ads|atendimento"` no `<html>` (M13) para o `--c-prod` (acento do produto) trocar, e nos botões `.produto-op` de `abrirSeletorProduto` (hoje o acento por opção sai da ordem dos filhos); (3) `index.html`: `<meta name="theme-color">` e o favicon ainda usam `#FAFAF8` — o papel do claro é `#F3F0E9` (M01); (4) `login.js`: `ui.campo({tipo:"email", validar:"email"})` e `ui.validarForm` antes de enviar (M08); (5) NÃO precisa ligar o palco animado: o `ui.js` põe `body.palco-vivo` sozinho no Login e no Início (M10); (6) `antes.js` repinta com as variáveis ANTIGAS do cache `nx-app-marca` até o `app.js` reaplicar: piscar único depois do deploy. Qualquer modal do shell com campo `name` que seja filtro/busca passa `protegerTexto: false`.
+- **C (CRM e Agenda):** `crm.css`/`agenda.css`: pôr `/* escala: tokens */` e trocar todo `font-size` literal e `uppercase` por tokens/`.rotulo`/`.dado`/`.selo-caps` (hoje: `.kc .avatar` 10 px, `.kc-selos .pilula` 11,5 px, `.kb-col-tipo` em caixa-alta); `.crm-seg` → `ui.segmentado({tipo:"filtro"})` (M05/M30); usar `ui.acaoComDesfazer({..., firmar})` para mover/ganho/perdido/etiquetar/excluir tarefa e nota (M07/M25); `ui.cabecalho` sem eyebrow da empresa, `ui.esqueleto(tipo, {cabecalho})` igual ao cabeçalho real, vazios pelos 3 tipos (Agenda: um só "Sem consultas ou bloqueios.") (M06/M09/M30); telefone/valor com `validar` (M08); `gaveta.estaSujo()` se quiser interceptar o Voltar da gaveta.
+- **D (Conversas, Início, Anúncios/Relatórios, Automações, Config):** `relatorios.css` (64 literais), `conversas.css`, `automacoes.css` com o marcador e só tokens; blocos de número dentro de cartão sem fundo (hoje `.ini-numero`, `.rel-kpi`, `.ini-canal`, `.ini-passo`, `.ads-cri-resumo>div`… usam `--c-sup-2`) (M01); `.rel-seg-b` (dourado cheio) → `ui.segmentado` (M05); `ui.cabecalho` nível 1 no Início/Anúncios/Relatórios/Conversas/Automações/Configurações e nível 2 em toda seção de Configurações — acabou o segundo H1 de 36 px de `cv-config.js` (M02/M40); sonda: `.rel-olho` e `.rel-var` com 11 px/caixa-alta no Início (M03); `ui.vazio` pelos 3 tipos (`em_dia`, `primeiro_uso` do checklist, `sem_resultado` com "Limpar filtros") (M09); "Resolvida · Desfazer" com `firmar` (M07/M35).
+- **Teste que mudei por causa de outra frente:** em `app.teste.mjs`, a asserção de acessibilidade do Kanban (`crm-kanban.js`) agora espera o texto "Segure um cartão e arraste até aqui" e o botão `kc-mover` (M23 da frente C trocou a instrução antiga "Abra um cartão e escolha Mover para…"); a intenção (instrução certa no toque + alternativa acessível ao arrastar) foi mantida.
 
 ## Etapa 2 — itens completos (cada um com o seu commit)
 
