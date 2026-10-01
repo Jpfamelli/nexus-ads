@@ -13,8 +13,16 @@ const VERSAO = new URL(import.meta.url).searchParams.get("v") || "dev";
 const importFalhou = new Map();
 const arq = async nome => {
   const n = importFalhou.get(nome) || 0;
-  try { return await import(`./${nome}?v=${encodeURIComponent(VERSAO)}${n ? `&r=${n}` : ""}`); }
+  const r = n ? "&r=" + n : "";
+  try { return await import(`./${nome}?v=${encodeURIComponent(VERSAO)}${r}`); }
   catch (e) { importFalhou.set(nome, n + 1); throw e; }
+};
+/** O mesmo para o dados.js, que mora uma pasta acima (web/dados.js, compartilhado com o painel clássico). */
+const arqRaiz = async nome => {
+  const k = "../" + nome, n = importFalhou.get(k) || 0;
+  const r = n ? "&r=" + n : "";
+  try { return await import(`../${nome}?v=${encodeURIComponent(VERSAO)}${r}`); }
+  catch (e) { importFalhou.set(k, n + 1); throw e; }
 };
 
 const $ = id => document.getElementById(id);
@@ -45,6 +53,7 @@ const E = {
   assinaturas: new Set(),
   naoAtualizar: new Set(), // funções de módulos com trabalho pendente: enquanto alguma devolver true, a atualização automática espera
   pwa: null,
+  bootTentar: null,        // o que o botão da tela de abertura faz agora (pular a espera do laço, refazer a etapa…)
   badges: {},
   titulo: "",
   produto: "Órbita",
@@ -59,12 +68,45 @@ const E = {
 /* ============================================================
    ABRINDO / ERRO DE ABERTURA
    ============================================================ */
-function bootMsg(texto, comAcoes = false) {
+/** acoes: true (as duas) ou {tentar, sair}. «Sair» só aparece quando o problema é da conta/sessão: erro de rede nunca apaga o token. */
+function bootMsg(texto, acoes = null) {
   const b = $("boot");
   if (!b) return;
   b.hidden = false;
   $("boot-msg").textContent = texto;
-  $("boot-acoes").hidden = !comAcoes;
+  const a = acoes === true ? { tentar: true, sair: true } : (acoes || {});
+  $("boot-acoes").hidden = !(a.tentar || a.sair);
+  $("boot-tentar").hidden = !a.tentar;
+  $("boot-sair").hidden = !a.sair;
+}
+
+/** Espera visível do laço de abertura: «<prefixo> Tentando de novo em N s…», interrompida por «Tentar agora» ou pela volta da internet. */
+function esperarAbertura(segundos, prefixo) {
+  return new Promise(resolve => {
+    let restam = segundos, timer = null;
+    const fim = () => {
+      clearInterval(timer);
+      removeEventListener("online", fim); removeEventListener("orbita:online", fim);
+      E.bootTentar = null;
+      bootMsg("Tentando de novo…", { tentar: true });    // enquanto a nova tentativa está em voo
+      resolve();
+    };
+    const desenhar = () => { $("boot-tentar").textContent = "Tentar agora"; bootMsg(`${prefixo} Tentando de novo em ${Math.max(restam, 0)} s…`, { tentar: true }); };
+    desenhar();
+    timer = setInterval(() => { restam -= 1; if (restam <= 0) fim(); else desenhar(); }, 1000);
+    E.bootTentar = fim;
+    addEventListener("online", fim); addEventListener("orbita:online", fim);
+  });
+}
+/** Mesmas esperas do rede.js (ESPERAS_ABERTURA); aqui ficam por perto porque a etapa dos módulos roda ANTES de o rede.js carregar. */
+const ESPERAS_ABERTURA = [2000, 4000, 8000, 16000];
+const MAX_ABERTURA = 8;
+function fraseCurta(e) {
+  const c = e && (e.codigo || "");
+  if (c === "sem_conexao") return "Sem conexão.";
+  if (/^(http_50[234]|servico_indisponivel)$/.test(c)) return "Servidor indisponível.";
+  if (c === "tempo_rede") return "O servidor demorou a responder.";
+  return "Não deu certo agora.";
 }
 function bootEsconder() { const b = $("boot"); if (b) b.hidden = true; }
 
@@ -73,14 +115,23 @@ function bootEsconder() { const b = $("boot"); if (b) b.hidden = true; }
    ============================================================ */
 async function iniciar() {
   E.faviconPadrao = $("favicon") && $("favicon").getAttribute("href");
-  $("boot-tentar").addEventListener("click", () => location.reload());
+  $("boot-tentar").addEventListener("click", () => { if (E.bootTentar) E.bootTentar(); else location.reload(); });
   $("boot-sair").addEventListener("click", () => { try { E.M.dados && E.M.dados.apagarToken(); } catch { /* ok */ } location.hash = "#/login"; location.reload(); });
   // M11: tudo o que o boot precisa começa AGORA, junto (o index.html já pré-carrega estes arquivos com <link rel="modulepreload">)
   const prontosP = arq("prontos.js");
   prontosP.catch(() => { /* tratado abaixo; aqui só evita o aviso de promessa sem dono */ });
   try {
-    const [dados, api, ui, tema, vocab, rotas, pulso, rede] = await Promise.all([
-      import(`../dados.js?v=${encodeURIComponent(VERSAO)}`), ...MODULOS_BASE.map(arq)]);
+    // sem internet ou com o servidor ocupado a abertura NÃO desiste: repete sozinha (2, 4, 8, 16 s…) mostrando quanto falta
+    let carregados = null;
+    for (let i = 0; !carregados; i++) {
+      try { carregados = await Promise.all([arqRaiz("dados.js"), ...MODULOS_BASE.map(arq)]); }
+      catch (e) {
+        console.error("abertura: módulos", e);
+        if (i + 1 >= MAX_ABERTURA) throw e;
+        await esperarAbertura(ESPERAS_ABERTURA[Math.min(i, ESPERAS_ABERTURA.length - 1)] / 1000, navigator.onLine === false ? "Sem conexão." : "Não consegui abrir o sistema.");
+      }
+    }
+    const [dados, api, ui, tema, vocab, rotas, pulso, rede] = carregados;
     E.M = { dados, api, ui, tema, vocab, rotas, pulso, rede };
     E.workspace = rotas.produtoDe(location.search);
     document.documentElement.dataset.produto = E.workspace || "orbita";
@@ -89,7 +140,8 @@ async function iniciar() {
     if (manifesto) manifesto.setAttribute("href", E.workspace ? rotas.manifestoProduto(E.workspace) : "manifest.webmanifest");
   } catch (e) {
     console.error(e);
-    bootMsg("Não foi possível abrir o sistema. Confira a internet e tente de novo.", true);
+    $("boot-tentar").textContent = "Tentar de novo";
+    bootMsg("Não foi possível abrir o sistema. Confira a internet e tente de novo.", { tentar: true });
     return;
   }
   try {
@@ -110,7 +162,7 @@ async function iniciar() {
     token: () => dados.lerToken(),
     cliente: () => (E.cliente ? E.cliente.id : null),
     aoSessaoInvalida: () => sessaoCaiu(),
-    rede: E.rede, contexto: true,
+    rede: E.rede, contexto: true, retentar: true,
   });
   E.pulso = E.M.pulso.criarPulso({
     ler: () => (E.cliente ? E.api.rpcC("nx_pulso") : Promise.resolve(null)),
@@ -618,13 +670,21 @@ async function aoMudarRota(doUsuario) {
   if (!E.sessao) {
     bootMsg("Abrindo…");
     try {
-      const antecipada = E.sessaoPromessa;           // M11: já saiu junto com a marca pública
+      let antecipada = E.sessaoPromessa;             // M11: já saiu junto com a marca pública
       E.sessaoPromessa = null;
-      await (antecipada ? adotarSessao(await antecipada) : carregarSessao());
+      let ultimo = null;
+      // M15: só a etapa que falhou é refeita (a sessão), com o laço visível; erro de conta/sessão não repete
+      const s = await E.M.rede.repetirAbertura(() => { const p = antecipada || lerSessao(); antecipada = null; return p; }, {
+        maximo: 12, aoFalha: e => { ultimo = e; }, esperar: seg => esperarAbertura(seg, fraseCurta(ultimo)),
+      });
+      await adotarSessao(s);
     } catch (e) {
       if (e && e.codigo === "sessao_invalida") return; // sessaoCaiu já levou ao login
       if (e && e.codigo === "conta_pendente") { dados.apagarToken(); E.ui.toast(E.api.mensagemErro(e), { tipo: "erro" }); return navegar("#/login", { substituir: true }); }
-      bootMsg(E.api.mensagemErro(e), true);
+      // desistiu depois de várias tentativas: «Tentar de novo» recomeça o laço; «Sair» só se o problema for da conta
+      $("boot-tentar").textContent = "Tentar de novo";
+      E.bootTentar = () => { E.bootTentar = null; aoMudarRota(false); };
+      bootMsg(E.api.mensagemErro(e), { tentar: true, sair: E.M.rede.erroDeConta(e) });
       return;
     }
     if (seq !== E.montando) return;

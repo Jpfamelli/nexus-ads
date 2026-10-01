@@ -52,7 +52,7 @@ await teste("index.html: modulepreload do app.js e de TODO módulo base, com o M
 
 await teste("app.js: o boot lê os mesmos arquivos que o index.html pré-carrega (dados.js, MODULOS_BASE e prontos.js em paralelo)", () => {
   assert.match(APP_JS, /const prontosP = arq\("prontos\.js"\);/, "prontos.js sai junto, não depois");
-  assert.match(APP_JS, /import\(`\.\.\/dados\.js\?v=\$\{encodeURIComponent\(VERSAO\)\}`\), \.\.\.MODULOS_BASE\.map\(arq\)/);
+  assert.match(APP_JS, /Promise\.all\(\[arqRaiz\("dados\.js"\), \.\.\.MODULOS_BASE\.map\(arq\)\]\)/);
   const iniciar = /async function iniciar\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
   assert.ok(iniciar.indexOf("const prontosP") < iniciar.indexOf("await Promise.all"), "prontos.js começa antes de esperar os módulos");
 });
@@ -63,8 +63,9 @@ await teste("app.js: nx_app_sessao sai junto com a marca pública (antes do awai
   const iMarca = iniciar.indexOf("await carregarMarcaPublica()");
   assert.ok(iSessao > 0 && iMarca > 0 && iSessao < iMarca, "a sessão é pedida antes de esperar a marca");
   const rota = /async function aoMudarRota\(doUsuario\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
-  assert.match(rota, /const antecipada = E\.sessaoPromessa;/);
-  assert.match(rota, /adotarSessao\(await antecipada\)/);
+  assert.match(rota, /let antecipada = E\.sessaoPromessa;/);
+  assert.match(rota, /antecipada \|\| lerSessao\(\)/, "a promessa antecipada é a 1ª tentativa; as repetições leem de novo");
+  assert.match(rota, /adotarSessao\(s\)/);
   assert.match(APP_JS, /E\.sessaoPromessa\.catch\(/, "promessa antecipada nunca vira 'unhandled rejection'");
 });
 
@@ -659,7 +660,7 @@ await teste("api.js (rede): sucesso e falha de cada chamada chegam ao rede.js; 4
   proxima = () => { throw new TypeError("Failed to fetch"); }; await api.rpc("nx_inicio").catch(() => {}); assert.deepEqual(eventos.splice(0), ["falha:sem_conexao"]);
   const lenta = mk({ lentoMs: 15 });
   proxima = () => new Promise(r => setTimeout(() => r(resp(200, {})), 60));
-  await lenta.rpc("nx_inicio"); assert.deepEqual(eventos.splice(0), ["lento:1", "lento:-1", "ok"], "aos 4 s (aqui 15 ms) conta como lenta e desconta ao terminar");
+  await lenta.rpc("nx_inicio"); assert.deepEqual(eventos.splice(0), ["lento:1", "ok", "lento:-1"], "aos 4 s (aqui 15 ms) conta como lenta e desconta ao terminar");
   proxima = resp(200, {}); await lenta.rpc("nx_inicio"); assert.deepEqual(eventos.splice(0), ["ok"], "chamada rápida nunca conta como lenta");
   const sem = API.criarApi({ url: "https://x.test", chave: "k", fetch: async () => resp(200, {}) });
   await sem.rpc("nx_inicio"); assert.deepEqual(eventos, [], "sem a opção rede nada é reportado");
@@ -687,12 +688,172 @@ await teste("app.js: o shell liga rede.js ao api.js, desenha a faixa (aria-live)
 
 await teste("app.js: import() que falhou é refeito com &r=<n> (o navegador guarda a falha da URL) e erro de dependência recarrega a página em vez de repetir em vão", () => {
   assert.match(APP_JS, /const importFalhou = new Map\(\);/);
-  assert.match(APP_JS, /import\(`\.\/\$\{nome\}\?v=\$\{encodeURIComponent\(VERSAO\)\}\$\{n \? `&r=\$\{n\}` : ""\}`\)/);
+  assert.match(APP_JS, /const r = n \? "&r=" \+ n : "";\s*try \{ return await import\(`\.\/\$\{nome\}\?v=\$\{encodeURIComponent\(VERSAO\)\}\$\{r\}`\); \}/);
   assert.match(APP_JS, /importFalhou\.set\(nome, n \+ 1\)/);
   assert.match(APP_JS, /ehFalhaDeImport\(e\) \? \(\) => location\.reload\(\) : \(\) => aoMudarRota\(false\)/);
   // a falha de abertura da tela usa o cartão de erro do ui.js (frase em português, sem URL, refaz no orbita:online)
   assert.match(APP_JS, /ui\.erroCartao\(e, \(\) => aoMudarRota\(false\)\)/);
   assert.doesNotMatch(APP_JS, /Recarregue a página\. Se continuar, fale com o suporte\./);
+});
+
+/* ============================================================ M15 */
+secao("M15 · leituras que insistem, escritas que não duplicam e boot que se recupera");
+
+/** api com fetch simulado, espera instantânea (registra os tempos) e sem sorteio (jitter 0). */
+function apiRetentando({ respostas, extra = {} } = {}) {
+  const chamadas = [], esperas = [];
+  const fila = [...respostas];
+  const fetchFalso = async (url, init) => {
+    chamadas.push({ url, corpo: JSON.parse(init.body) });
+    const r = fila.length > 1 ? fila.shift() : fila[0];
+    if (r instanceof Error) throw r;
+    const h = new Map(Object.entries(r.headers || {}));
+    return { ok: r.status >= 200 && r.status < 300, status: r.status, headers: { get: k => h.get(String(k).toLowerCase()) ?? null }, text: async () => (r.corpo === undefined ? "" : JSON.stringify(r.corpo)) };
+  };
+  let t = 1_000_000;
+  const api = API.criarApi({ url: "https://x.test", chave: "k", token: () => "tok", cliente: () => "cli", fetch: fetchFalso, retentar: true, aleatorio: () => 0.5,
+    agora: () => t, esperar: async ms => { esperas.push(ms); t += ms; }, online: () => true, ...extra });
+  return { api, chamadas, esperas, relogio: { avanca: ms => { t += ms; } } };
+}
+const ok200 = { status: 200, corpo: { v: 1 } };
+const s503 = { status: 503 };
+
+await teste("api.js: leitura com 503 + 503 + 200 resolve (2 repetições, 400 ms e 1,2 s) sem mostrar erro", async () => {
+  const x = apiRetentando({ respostas: [s503, s503, ok200] });
+  assert.deepEqual(await x.api.rpcC("nx_negocios_kanban", { p_funil: "f1" }), { v: 1 });
+  assert.equal(x.chamadas.length, 3);
+  assert.deepEqual(x.esperas, [400, 1200]);
+  assert.deepEqual(x.chamadas[2].corpo, { p_token: "tok", p_cliente: "cli", p_funil: "f1" }, "mesmos parâmetros a cada tentativa");
+});
+
+await teste("api.js: leitura que continua falhando para depois da 2ª repetição, com a frase em português e o número de tentativas", async () => {
+  const x = apiRetentando({ respostas: [s503] });
+  const e = await x.api.rpc("nx_inicio").catch(v => v);
+  assert.equal(x.chamadas.length, 3); assert.equal(e.codigo, "http_503"); assert.equal(e.tentativas, 3);
+  assert.doesNotMatch(API.mensagemErro(e), /http_|503/);
+  const t = apiRetentando({ respostas: [new TypeError("Failed to fetch"), new TypeError("Failed to fetch"), ok200] });
+  assert.deepEqual(await t.api.rpc("nx_pulso"), { v: 1 }, "falha de transporte também repete");
+});
+
+await teste("api.js: escrita comum NUNCA repete sozinha (503 falha com 1 chamada); erro de negócio e 4xx nunca repetem", async () => {
+  const w = apiRetentando({ respostas: [s503, ok200] });
+  const e = await w.api.rpcC("nx_negocio_salvar", { p_negocio: { titulo: "x" } }).catch(v => v);
+  assert.equal(w.chamadas.length, 1); assert.equal(e.codigo, "http_503"); assert.deepEqual(w.esperas, []);
+  const f = apiRetentando({ respostas: [new TypeError("Failed to fetch"), ok200] });
+  await f.api.fn("nx-enviar", { acao: "texto" }).catch(() => {}); assert.equal(f.chamadas.length, 1, "função de envio nunca repete");
+  for (const r of [{ status: 400, corpo: { message: "limite_plano" } }, { status: 401, corpo: { message: "sessao_invalida" } }, { status: 404, corpo: { message: "x" } }, { status: 500, corpo: { message: "erro_interno" } }]) {
+    const x = apiRetentando({ respostas: [r, ok200] });
+    await x.api.rpc("nx_inicio").catch(() => {}); assert.equal(x.chamadas.length, 1, `status ${r.status}`);
+  }
+});
+
+await teste("api.js: {req:true} repete com o MESMO uuid em p_req (e o erro final devolve o uuid para o «Salvar de novo»)", async () => {
+  const x = apiRetentando({ respostas: [s503, s503, ok200] });
+  assert.deepEqual(await x.api.rpcC("nx_negocio_salvar", { p_negocio: { titulo: "x" } }, { req: true }), { v: 1 });
+  assert.equal(x.chamadas.length, 3);
+  const reqs = x.chamadas.map(c => c.corpo.p_req);
+  assert.match(reqs[0], /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, "uuid v4");
+  assert.deepEqual([...new Set(reqs)], [reqs[0]], "o mesmo uuid em todas as tentativas");
+  const y = apiRetentando({ respostas: [s503] });
+  const e = await y.api.rpcC("nx_tarefa_salvar", { p_tarefa: {} }, { req: true }).catch(v => v);
+  assert.equal(e.req, y.chamadas[0].corpo.p_req, "o erro carrega o req para repetir com o mesmo uuid");
+  assert.equal(y.chamadas.length, 3);
+  const z = apiRetentando({ respostas: [ok200] });
+  await z.api.rpcC("nx_agenda_marcar", {}, { req: "ffffffff-ffff-4fff-8fff-ffffffffffff" });
+  assert.equal(z.chamadas[0].corpo.p_req, "ffffffff-ffff-4fff-8fff-ffffffffffff", "uuid informado pela tela é respeitado");
+  const w = apiRetentando({ respostas: [ok200] });
+  await w.api.rpcC("nx_negocio_salvar", { p_negocio: {}, p_req: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+  assert.equal(w.chamadas[0].corpo.p_req, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  const sem = apiRetentando({ respostas: [ok200] });
+  await sem.api.rpcC("nx_negocio_salvar", { p_negocio: {} });
+  assert.equal("p_req" in sem.chamadas[0].corpo, false, "sem a opção não manda p_req (as funções antigas não conhecem o parâmetro)");
+});
+
+await teste("api.js: Retry-After manda na espera; orçamento de ~8 s e offline limitam as repetições; sem a opção retentar nada muda", async () => {
+  const a = apiRetentando({ respostas: [{ status: 429, headers: { "retry-after": "2" } }, ok200] });
+  await a.api.rpc("nx_inicio"); assert.deepEqual(a.esperas, [2000], "respeita o Retry-After (maior que o recuo)");
+  const b = apiRetentando({ respostas: [{ status: 429, headers: { "retry-after": "30" } }, ok200] });
+  const eb = await b.api.rpc("nx_inicio").catch(v => v); assert.equal(b.chamadas.length, 1, "30 s estoura o orçamento: não espera, falha"); assert.equal(eb.codigo, "http_429");
+  const c = apiRetentando({ respostas: [s503], extra: { retentar: { orcamentoMs: 1000 } } });
+  await c.api.rpc("nx_inicio").catch(() => {}); assert.equal(c.chamadas.length, 2, "orçamento de 1 s: cabe o recuo de 400 ms, não o de 1,2 s");
+  const off = apiRetentando({ respostas: [new TypeError("Failed to fetch"), ok200], extra: { online: () => false } });
+  const eo = await off.api.rpc("nx_inicio").catch(v => v); assert.equal(off.chamadas.length, 1, "offline não gasta repetição: o rede.js cuida da volta"); assert.equal(eo.codigo, "sem_conexao");
+  const legado = API.criarApi({ url: "https://x.test", chave: "k", fetch: async () => ({ ok: false, status: 503, text: async () => "" }) });
+  const el = await legado.rpc("nx_inicio").catch(v => v); assert.equal(el.codigo, "http_503", "sem retentar o cliente é o de sempre");
+  assert.equal(API.lerRetryAfter("120"), 120000); assert.equal(API.lerRetryAfter(""), null); assert.equal(API.lerRetryAfter("amanhã"), null);
+  assert.equal(API.lerRetryAfter(new Date(1_005_000).toUTCString(), 1_000_000), 5000);
+});
+
+await teste("api.js: o rede.js só recebe o resultado FINAL (503 + 200 não vira 'servidor fora'); falha final vira uma falha só", async () => {
+  const ev = [];
+  const rede = { sucesso: () => ev.push("ok"), falha: i => ev.push("falha:" + i.codigo), lento: d => ev.push("lento:" + d) };
+  const a = apiRetentando({ respostas: [s503, ok200], extra: { rede } });
+  await a.api.rpc("nx_inicio"); assert.deepEqual(ev.splice(0), ["ok"], "a primeira falha não piscou 'servidor indisponível'");
+  const b = apiRetentando({ respostas: [s503], extra: { rede } });
+  await b.api.rpc("nx_inicio").catch(() => {}); assert.deepEqual(ev.splice(0), ["falha:http_503"]);
+});
+
+await teste("api.js: sessao_invalida — leitura espera a pessoa entrar de novo e repete com o token novo; escrita falha na hora; cancelou = erro", async () => {
+  let token = "velho", liberar = null;
+  const respostas = (url, init) => (JSON.parse(init.body).p_token === "velho" ? { status: 401, corpo: { message: "sessao_invalida" } } : { status: 200, corpo: { v: 2 } });
+  const chamadas = [];
+  const fetchFalso = async (url, init) => { const r = respostas(url, init); chamadas.push(JSON.parse(init.body).p_token); return { ok: r.status === 200, status: r.status, headers: { get: () => null }, text: async () => JSON.stringify(r.corpo) }; };
+  let avisos = 0;
+  const mk = decisao => API.criarApi({ url: "https://x.test", chave: "k", token: () => token, fetch: fetchFalso, retentar: true,
+    aoSessaoInvalida: () => { avisos++; return decisao(); } });
+  const api = mk(() => new Promise(r => { liberar = r; }));
+  let resolvida = false;
+  const leitura = api.rpc("nx_app_sessao").then(v => { resolvida = true; return v; });
+  await new Promise(r => setImmediate(r));
+  assert.equal(resolvida, false, "a leitura fica esperando enquanto a janela de login está aberta");
+  token = "novo"; liberar(true);
+  assert.deepEqual(await leitura, { v: 2 });
+  assert.deepEqual(chamadas, ["velho", "novo"], "repetiu com o token novo");
+  token = "velho"; chamadas.length = 0; avisos = 0;
+  const w = mk(() => new Promise(() => {}));
+  const e = await w.rpc("nx_negocio_salvar", {}).catch(v => v);
+  assert.equal(e.codigo, "sessao_invalida"); assert.equal(avisos, 1); assert.deepEqual(chamadas, ["velho"], "escrita não espera nem repete");
+  const c = mk(async () => false);
+  const ec = await c.rpc("nx_inicio").catch(v => v);
+  assert.equal(ec.codigo, "sessao_invalida", "cancelou o login: o erro sobe");
+  token = "velho";
+  const d = mk(async () => true);
+  assert.equal((await d.rpc("nx_inicio").catch(v => v)).codigo, "sessao_invalida", "entrou mas continua inválido: não entra em laço");
+});
+
+await teste("rede.repetirAbertura: refaz só a etapa que falhou (2, 4, 8, 16, 16 s…), erro de conta sobe na hora e o laço tem limite", async () => {
+  const esperas = [], falhas = [];
+  let n = 0;
+  const r = await REDE.repetirAbertura(async () => { n++; if (n < 4) throw Object.assign(new Error("x"), { codigo: "http_503" }); return "aberta"; },
+    { esperar: async s => { esperas.push(s); }, aoFalha: (e, i, s) => falhas.push([e.codigo, i, s]) });
+  assert.equal(r, "aberta"); assert.deepEqual(esperas, [2, 4, 8]); assert.deepEqual(falhas, [["http_503", 0, 2], ["http_503", 1, 4], ["http_503", 2, 8]]);
+  esperas.length = 0; n = 0;
+  await REDE.repetirAbertura(async () => { n++; if (n < 7) throw new Error("y"); return 1; }, { esperar: async s => { esperas.push(s); }, maximo: 20 });
+  assert.deepEqual(esperas, [2, 4, 8, 16, 16, 16], "depois de 16 s continua de 16 em 16");
+  for (const codigo of ["sessao_invalida", "conta_pendente", "conta_suspensa", "sem_acesso"]) {
+    let chamou = 0;
+    await assert.rejects(REDE.repetirAbertura(async () => { chamou++; throw Object.assign(new Error(codigo), { codigo }); }, { esperar: async () => { throw new Error("não devia esperar"); } }), e => e.codigo === codigo);
+    assert.equal(chamou, 1, codigo);
+  }
+  let tentou = 0;
+  await assert.rejects(REDE.repetirAbertura(async () => { tentou++; throw new Error("sempre"); }, { esperar: async () => {}, maximo: 3 }), /sempre/);
+  assert.equal(tentou, 3, "limite de tentativas");
+  for (const c of ["sem_conexao", "http_503", "tempo_rede", "erro_interno", undefined]) assert.equal(REDE.erroDeConta({ codigo: c }), false, String(c));
+  assert.deepEqual([...REDE.ESPERAS_ABERTURA], [2000, 4000, 8000, 16000]);
+});
+
+await teste("app.js: o boot repete sozinho (módulos e sessão), mostra o tempo que falta, «Sair» só em erro de conta e a api nasce com retentar", () => {
+  assert.match(APP_JS, /const ESPERAS_ABERTURA = \[2000, 4000, 8000, 16000\];/, "as mesmas esperas do rede.js (a etapa dos módulos roda antes dele carregar)");
+  assert.match(APP_JS, /Tentando de novo em \$\{Math\.max\(restam, 0\)\} s…/);
+  assert.match(APP_JS, /E\.M\.rede\.repetirAbertura\(/);
+  assert.match(APP_JS, /sair: E\.M\.rede\.erroDeConta\(e\)/, "«Sair» só aparece em erro de conta/sessão");
+  assert.match(APP_JS, /rede: E\.rede, contexto: true, retentar: true,/);
+  assert.match(APP_JS, /arqRaiz\("dados\.js"\)/, "dados.js também ganha a memória de falhas de import()");
+  assert.doesNotMatch(APP_JS, /bootMsg\(E\.api\.mensagemErro\(e\), true\)/, "o erro da sessão não oferece mais «Sair» sem critério");
+  const boot = /async function iniciar\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
+  assert.doesNotMatch(boot, /Sair/, "iniciar() não apaga o token por erro de rede");
+  const html = HTML;
+  assert.match(html, /id="boot-tentar"/); assert.match(html, /id="boot-sair"/);
 });
 
 /* ============================================================ fim */

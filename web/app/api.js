@@ -245,13 +245,48 @@ export const PRAZO_FN_LENTA_MS = 100_000;
 const FN_LENTAS = new Set(["nx-ia:sugerir", "nx-ia:resumir", "nx-codewords:parear", "nx-codewords:inscrever",
   "nx-enviar:texto", "nx-enviar:midia", "nx-enviar:template"]);
 
+/** Retentativas das LEITURAS (e das escritas com {req:true}): até 2 repetições, 400 ms e 1,2 s (±25 % de jitter), orçamento de ~8 s por chamada. */
+export const RETENTAR_PADRAO = Object.freeze({ tentativas: 2, esperasMs: Object.freeze([400, 1200]), orcamentoMs: 8000, jitter: 0.25 });
+
+/** uuid v4 (identificador da INTENÇÃO de uma escrita, enviado como p_req). */
+export function novoUuid() {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  const b = new Uint8Array(16);
+  if (c && typeof c.getRandomValues === "function") c.getRandomValues(b); else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/** Este erro vale uma nova tentativa? Só transporte e "servidor ocupado" (408/429/502/503/504); regra de negócio, 4xx e sessão nunca. */
+export function erroRetentavel(e) {
+  if (!e) return false;
+  if (e.codigo === "sem_conexao") return true;
+  return [408, 429, 502, 503, 504].includes(Number(e.status));
+}
+
+/** Retry-After (segundos ou data HTTP) → ms; ausente ou ilegível → null. */
+export function lerRetryAfter(v, agora = Date.now()) {
+  if (v === null || v === undefined || v === "") return null;
+  const s = String(v).trim();
+  if (/^\d+$/.test(s)) return Math.min(Number(s), 3600) * 1000;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? Math.max(0, Math.min(t - agora, 3600_000)) : null;
+}
+
 /**
  * Cria o cliente.
  * @param {object} o
  *   url, chave            — SUPA_URL e CHAVE_PUBLICA (de ../dados.js)
  *   token(): string|null  — token atual (nx-token)
  *   cliente(): uuid|null  — empresa ativa
- *   aoSessaoInvalida(e)   — shell volta ao login
+ *   aoSessaoInvalida(e)   — shell volta ao login. Pode devolver uma Promise: nas LEITURAS a chamada espera por ela e, se vier `true`
+ *                           (a pessoa entrou de novo), repete a leitura com o token novo; nas escritas o erro sobe na hora.
+ *   rede                  — {sucesso(), falha(info), lento(±1)}: o rede.js do shell recebe o resultado FINAL de cada chamada
+ *   contexto              — mensagens por contexto (leitura × escrita) nos erros de conexão (o shell liga)
+ *   retentar              — true ou {tentativas, esperasMs, orcamentoMs, jitter}: repete leituras e escritas com {req:true}
+ *   agora, esperar(ms), aleatorio(), online() — relógio, espera, sorteio e "tem internet?" (testes)
  *   fetch                 — opcional (testes)
  */
 export function criarApi(o) {
@@ -261,11 +296,16 @@ export function criarApi(o) {
   const prazoRpc = normalizarPrazo(o.prazoMs ?? o.prazoRpcMs, 20_000);
   const prazoFn = normalizarPrazo(o.prazoMs ?? o.prazoFnMs, 75_000);
 
-  const rede = o.rede || null;                 // M14: {sucesso(), falha(info), lento(±1)} — o rede.js do shell
+  const rede = o.rede || null;                 // M14
   const contexto = !!o.contexto;               // M14: mensagens por contexto (leitura × escrita) nos erros de conexão
   const lentoMs = Number.isFinite(Number(o.lentoMs)) && Number(o.lentoMs) > 0 ? Number(o.lentoMs) : 4000;
+  const retentar = o.retentar ? { ...RETENTAR_PADRAO, ...(o.retentar === true ? {} : o.retentar) } : null;   // M15
+  const agora = o.agora || (() => Date.now());
+  const esperar = o.esperar || (ms => new Promise(r => setTimeout(r, ms)));
+  const aleatorio = o.aleatorio || Math.random;
+  const estaOnline = o.online || (() => !(typeof navigator !== "undefined" && navigator.onLine === false));
   const avisarRede = (fn, ...a) => { if (rede && typeof rede[fn] === "function") { try { rede[fn](...a); } catch { /* o shell decide */ } } };
-  /** aos 4 s sem resposta a chamada conta como "lenta" para o estado de conexão; devolve quem encerra a contagem */
+  /** aos 4 s sem resposta (somando as repetições) a chamada conta como "lenta" para o estado de conexão; devolve quem encerra a contagem */
   function contarLento() {
     if (!rede) return () => {};
     let ativo = false;
@@ -301,15 +341,9 @@ export function criarApi(o) {
     } finally { clearTimeout(timer); }
   }
 
-  function avisarSessao(e) {
-    if (e.codigo === "sessao_invalida" && typeof o.aoSessaoInvalida === "function") {
-      try { o.aoSessaoInvalida(e); } catch { /* o shell decide */ }
-    }
-  }
-
-  async function post(url, corpo, prazo = prazoRpc, meta = {}) {
+  /** UMA tentativa: devolve os dados ou lança Error (.codigo, .status, .hint…). Não fala com o rede.js nem com a sessão. */
+  async function tentarUma(url, corpo, prazo, meta) {
     let r, txt;
-    const fimLento = contarLento();
     try {
       ({ r, txt } = await buscarComPrazo(url, {
         method: "POST",
@@ -317,16 +351,10 @@ export function criarApi(o) {
         body: JSON.stringify((typeof corpo === "function" ? corpo() : corpo) ?? {}),
       }, prazo));
     } catch (causa) {
-      fimLento();
       const e = causa?.codigo === "tempo_rede" ? causa : erroApi("sem_conexao", { causa });
       if (contexto) e.contexto = { leitura: !!meta.leitura };
-      avisarRede("falha", { codigo: e.codigo });
       throw e;
     }
-    fimLento();
-    // 502/503/504 = o servidor (ou o caminho até ele) não atendeu; qualquer outra resposta, mesmo de erro, prova que ele responde
-    if (r.status === 502 || r.status === 503 || r.status === 504) avisarRede("falha", { codigo: `http_${r.status}`, status: r.status });
-    else avisarRede("sucesso");
     const dados = lerCorpo(txt);
     const obj = dados && typeof dados === "object" && !Array.isArray(dados) ? dados : null;
     if (!r.ok) {
@@ -340,35 +368,95 @@ export function criarApi(o) {
       if (!codigo) codigo = r.status === 504 ? "tempo_esgotado" : `http_${r.status}`;
       // .resposta = corpo inteiro (ex.: nx-enviar devolve {ok:false, erro, detalhe, mensagem} e a F5 precisa da mensagem gravada)
       const e = erroApi(codigo, { status: r.status, hint, detalhe, detalhe_texto: typeof detalhe === "string" ? detalhe : null, resposta: obj });
+      const ra = r.headers && typeof r.headers.get === "function" ? lerRetryAfter(r.headers.get("retry-after"), agora()) : null;
+      if (ra !== null) e.retryAfterMs = ra;
       if (contexto) e.contexto = { leitura: !!meta.leitura };
-      avisarSessao(e);
       throw e;
     }
     // único caso de erro "por retorno": {ok:false, erro} (nx_convite_aceitar e Edge Functions)
     if (obj && obj.ok === false && obj.erro) {
-      const e = erroApi(String(obj.erro), { status: r.status, hint: obj.hint ?? null, detalhe: obj.detalhe ?? null,
+      throw erroApi(String(obj.erro), { status: r.status, hint: obj.hint ?? null, detalhe: obj.detalhe ?? null,
         detalhe_texto: typeof obj.detalhe === "string" ? obj.detalhe : null, resposta: obj });
-      avisarSessao(e);
-      throw e;
     }
     return dados;
   }
 
+  /** Quanto esperar (ms) antes de repetir, ou null se não vale repetir (escrita comum, erro de negócio, offline, esgotou tentativas ou orçamento). */
+  function esperaAntesDeRepetir(e, meta, repeticoes, inicio) {
+    if (!retentar || !(meta.leitura || meta.req) || repeticoes >= retentar.tentativas || !erroRetentavel(e)) return null;
+    if (e.codigo === "sem_conexao" && !estaOnline()) return null;      // offline não gasta tentativa: o rede.js cuida da volta
+    const baseMs = retentar.esperasMs[Math.min(repeticoes, retentar.esperasMs.length - 1)];
+    let espera = Math.round(baseMs * (1 + (aleatorio() * 2 - 1) * retentar.jitter));
+    if (e.retryAfterMs != null) espera = Math.max(espera, e.retryAfterMs);
+    return agora() - inicio + espera > retentar.orcamentoMs ? null : espera;
+  }
+
+  /** Resultado FINAL da chamada para o estado de conexão: 502/503/504 e falha de transporte = servidor fora; qualquer outra resposta prova que ele responde. */
+  function relatarErro(e) {
+    if (e.codigo === "sem_conexao" || e.codigo === "tempo_rede") avisarRede("falha", { codigo: e.codigo });
+    else if ([502, 503, 504].includes(Number(e.status))) avisarRede("falha", { codigo: `http_${e.status}`, status: e.status });
+    else avisarRede("sucesso");
+  }
+
+  async function chamar(url, corpo, prazo = prazoRpc, meta = {}) {
+    const fimLento = contarLento();
+    const inicio = agora();
+    let repeticoes = 0, reentrou = false;
+    try {
+      for (;;) {
+        try {
+          const dados = await tentarUma(url, corpo, prazo, meta);
+          avisarRede("sucesso");
+          return dados;
+        } catch (e) {
+          if (e.codigo === "sessao_invalida" && typeof o.aoSessaoInvalida === "function") {
+            // leitura: espera a pessoa entrar de novo e repete com o token novo (uma vez); escrita: o erro sobe na hora
+            let voltou = false;
+            try {
+              const r = o.aoSessaoInvalida(e);
+              if (meta.leitura && !reentrou) { reentrou = true; voltou = (await r) === true; }
+            } catch { voltou = false; }
+            if (voltou) continue;
+            avisarRede("sucesso");
+            throw e;
+          }
+          const espera = esperaAntesDeRepetir(e, meta, repeticoes, inicio);
+          if (espera !== null) { repeticoes += 1; await esperar(espera); continue; }
+          if (repeticoes) e.tentativas = repeticoes + 1;
+          if (meta.req) e.req = meta.req;
+          relatarErro(e);
+          throw e;
+        }
+      }
+    } finally { fimLento(); }
+  }
+
+  /** {req:true} ou p_req já nos parâmetros: a escrita ganha um uuid por INTENÇÃO (o mesmo em todas as repetições) e pode repetir sem duplicar. */
+  function prepararReq(params, opcoes) {
+    const quer = opcoes && opcoes.req;
+    const dado = params && params.p_req;
+    if (!quer && !dado) return { params, req: null };
+    const req = typeof quer === "string" && quer ? quer : (dado ? String(dado) : novoUuid());
+    return { params: { ...params, p_req: req }, req };
+  }
+
   const api = {
-    /** RPC com p_token. */
-    rpc(nome, params = {}) {
+    /** RPC com p_token. opcoes: {req:true|uuid} (escrita idempotente por p_req). */
+    rpc(nome, params = {}, opcoes = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
-      return post(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, ...params }), prazoRpc, { leitura: ehLeitura(nome) });
+      const { params: p, req } = prepararReq(params, opcoes);
+      return chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req });
     },
-    /** RPC com p_token e p_cliente (empresa ativa). */
-    rpcC(nome, params = {}) {
+    /** RPC com p_token e p_cliente (empresa ativa). opcoes: {req:true|uuid}. */
+    rpcC(nome, params = {}, opcoes = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
-      return post(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, p_cliente: o.cliente ? o.cliente() : null, ...params }), prazoRpc, { leitura: ehLeitura(nome) });
+      const { params: p, req } = prepararReq(params, opcoes);
+      return chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, p_cliente: o.cliente ? o.cliente() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req });
     },
     /** RPC pública (sem token): nx_marca_publica, nx_convite_ver, nx_convite_aceitar, nx_senha_redefinir, nx_entrar. */
     publica(nome, params = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
-      return post(`${base}/rest/v1/rpc/${nome}`, params, prazoRpc, { leitura: ehLeitura(nome) });
+      return chamar(`${base}/rest/v1/rpc/${nome}`, params, prazoRpc, { leitura: ehLeitura(nome) });
     },
     /**
      * Edge Function: POST /functions/v1/<funcao> com {token, cliente, ...corpo}.
@@ -377,7 +465,7 @@ export function criarApi(o) {
      */
     fn(funcao, corpo = {}, opcoes = {}) {
       if (!/^nx-[a-z0-9-]+$/.test(funcao)) return Promise.reject(erroApi("funcao_invalida"));
-      return post(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }), prazoDaChamada(opcoes, `${funcao}:${corpo && corpo.acao}`), { leitura: false });
+      return chamar(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }), prazoDaChamada(opcoes, `${funcao}:${corpo && corpo.acao}`), { leitura: false });
     },
     mensagemErro,
   };

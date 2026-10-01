@@ -11,6 +11,7 @@ Testes da frente: `node testes/shell.teste.mjs` (registrado em `testes/rodar-tud
 | M11 abertura em paralelo | feito (Início 1,8 s; Conversas e CRM melhoram ~0,7 s, o resto é cadeia interna das telas) | ver `git log --grep "M11"` |
 | M12 service worker + versão | feito (falta só o `curl -I` em produção, depois da publicação) | ver `git log --grep "M12"` |
 | M14 estado de conexão | feito | ver `git log --grep "M14"` |
+| M15 leituras que insistem, escritas que não duplicam, boot | feito | ver `git log --grep "M15"` |
 
 ## M11 · Abrir em ~1,5 s em vez de ~3,5 s
 
@@ -93,7 +94,27 @@ Depois de resolver: voltar ao `sw.js` normal, `"sw": true` e subir o `?v=`.
 - No dev-falso (Chrome, 390×844, CDP `Network.emulateNetworkConditions`): rede cortada → faixa em 9 ms (meta: ≤ 2 s); tela nova offline → cartão de erro em português; rede de volta → tela se refaz sozinha em 87 ms (meta: ≤ 3 s) e "Reconectado" some em 2 s;
   `/__dev_falso/simular/falha?rpc=nx_pulso&status=503&vezes=30` → "Servidor indisponível"; «Tentar agora» recupera em ~0,6 s.
 
+## M15 · Leituras que insistem, escritas que não duplicam e boot que se recupera
+
+**Feito**
+- `api.js` (opção `retentar`, ligada pelo shell; sem ela o cliente é o de sempre): leituras (`ehLeitura`: sufixos `_listar/_ver/_base/_kanban/_coluna/_buscar`, `nx_pulso`, `nx_app_sessao`, `nx_marca_publica`, `nx_inicio`, `nx_rel_*`,
+  `nx_agenda_dia/livres`, `nx_cv_*` de leitura, `nx_dados`…) repetem até 2 vezes em transporte/408/429/502/503/504 (400 ms e 1,2 s ±25 %, respeita `Retry-After`, orçamento ~8 s; **offline não gasta repetição**: quem cuida da volta é o `rede.js`).
+  Escritas NUNCA repetem sozinhas, exceto com `{req: true}` (ou `{req: "<uuid>"}`, ou `p_req` já nos parâmetros): o `api.js` gera um uuid v4 por INTENÇÃO, manda como `p_req` e repete com o MESMO uuid; o erro final traz `e.req`
+  para o «Salvar de novo». Erro de negócio, 4xx, 500 e sessão nunca repetem. O `rede.js` só recebe o resultado FINAL (503 + 200 não vira "servidor indisponível"); "lento" conta a chamada inteira (aos 4 s).
+  Funções (`api.fn`) nunca repetem (envio é escrita; a idempotência do chat é o `client_ref` da frente D).
+- Boot que se recupera (`app.js` + `rede.js: repetirAbertura/erroDeConta/ESPERAS_ABERTURA`): a etapa dos módulos e a da sessão repetem SOZINHAS (2, 4, 8, 16 s, depois de 16 em 16 s) mostrando
+  "Servidor indisponível. Tentando de novo em 4 s…" (ou "Sem conexão.", "O servidor demorou a responder."), refazendo só a etapa que falhou; «Tentar agora» e a volta da internet pulam a espera; enquanto a nova tentativa está em voo a tela diz
+  "Tentando de novo…". Depois de 8 (módulos) ou 12 (sessão) tentativas aparece o erro com «Tentar de novo» (recomeça o laço sem recarregar). **«Sair» só aparece em erro de conta/sessão** (`conta_pendente`, `conta_suspensa`, `sem_acesso`…):
+  erro de rede nunca apaga o token. O `dados.js` ganhou a mesma memória de falhas de `import()` do `arq()` (`arqRaiz`).
+- Mensagens em português para `servico_indisponivel` e `http_429/500/502/503/504` (feito em M14).
+
+**Como verificar**
+- `node testes/shell.teste.mjs` (9 testes de M15: 503+503+200 resolve; escrita 503 falha com 1 chamada; `{req:true}` repete com o mesmo uuid; Retry-After, orçamento e offline; resultado final ao rede.js; `sessao_invalida`; laço de abertura).
+- No dev-falso (Chrome, 390×844) com falhas programadas (`/__dev_falso/simular/falha?rpc=nx_app_sessao&status=503&vezes=N`): 1 falha → abre em 0,5 s (2 chamadas); 7 falhas → mostra o laço e abre sozinho em 8 s;
+  falha permanente → «Tentar agora» abre em 0,16 s depois de limpar a falha; sessão inválida na abertura → login sem laço.
+
 ## Pendências para outras frentes
 
 - **C e D (M14):** o navegador guarda a falha de `import()` por URL. Se um módulo seu importa dependências com `import()` direto e a rede cair no meio, o cartão de erro precisa de recarga (o shell já faz isso quando a mensagem é de import). Para tentar de novo SEM recarregar, repetir com `&r=<n>` depois do `?v=` (a regra de `?v=` dos testes aceita).
 - **C e D (M14):** use `ctx.rede.aoVoltar(fn)` para reler dados que ficaram na tela quando a conexão volta (o shell só refaz sozinho os cartões de erro).
+- **C (M25) e D (M36):** escrita idempotente = `ctx.api.rpcC("nx_...", params, { req: true })` (o `api.js` manda `p_req` e repete com o mesmo uuid em transporte/408/429/50x); para o «Salvar de novo» depois de erro ambíguo, passe `{ req: erro.req }`. Só use `req` em função que aceite `p_req` (a migração de C); `p_req` num RPC que não o conhece dá 404 do PostgREST.

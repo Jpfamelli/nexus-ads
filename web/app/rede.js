@@ -164,3 +164,29 @@ export function criarRede(o = {}) {
     },
   };
 }
+
+/* ============================================================
+   Abertura que não desiste (M15). Não depende de criarRede: serve ao boot, que roda antes da faixa de conexão existir.
+   ============================================================ */
+export const ESPERAS_ABERTURA = Object.freeze([2000, 4000, 8000, 16000]);
+const CODIGOS_DE_CONTA = new Set(["sessao_invalida", "conta_pendente", "conta_suspensa", "credenciais_invalidas", "sem_acesso", "teste_expirado"]);
+
+/** Erro da CONTA ou da sessão (repetir não adianta; só aqui «Sair» faz sentido). Rede e servidor NÃO são erro de conta. */
+export function erroDeConta(e) { return CODIGOS_DE_CONTA.has(String((e && (e.codigo || e.message)) || "")); }
+
+/**
+ * Repete só a etapa que falhou: fn(tentativa) até dar certo. Erro de conta/sessão sobe na hora; depois de `maximo` tentativas o erro também sobe.
+ *   esperar(segundos)            — espera visível (o shell mostra «Tentando de novo em N s…» e a interrompe com «Tentar agora» ou a volta da internet)
+ *   aoFalha(erro, tentativa, s)  — antes de cada espera
+ */
+export async function repetirAbertura(fn, { esperas = ESPERAS_ABERTURA, esperar, aoFalha, eConta = erroDeConta, maximo = 8 } = {}) {
+  for (let i = 0; ; i++) {
+    try { return await fn(i); }
+    catch (e) {
+      if (eConta(e) || i + 1 >= maximo) throw e;
+      const s = esperas[Math.min(i, esperas.length - 1)] / 1000;
+      if (aoFalha) aoFalha(e, i, s);
+      await esperar(s);
+    }
+  }
+}
