@@ -12,7 +12,7 @@
 const INTERVALO_PULSO = 30000;
 let L = null, G = null;
 let montagem = 0, cancelarPulso = null, cancelarOcupado = null, tPulso = 0, ultimaCarga = 0, ultimoJson = "";
-let ultimoDado = null, maisAberto = false;
+let ultimoDado = null, maisAberto = false, ultimoOnb = null, ultimaAgenda = null;
 
 export function desmontar() {
   montagem++;
@@ -54,6 +54,11 @@ export async function montar(ctx) {
   const primeiro = String((ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.nome) || "").trim().split(/\s+/)[0] || "";
   const int = v => Math.round(v).toLocaleString("pt-BR");
   const brl0 = v => ui.brl(v, { centavos: false });
+  const admin = ctx.pode("admin");
+  // M32: o que a pessoa fez só neste aparelho ("Já está bom" e "Dispensar por 7 dias"), por empresa e conta; tudo em try/catch (janela anônima)
+  const chaveOnb = `nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`;
+  const lerOnb = () => { try { const p = JSON.parse(localStorage.getItem(chaveOnb) || "{}"); return { pulados: Array.isArray(p.pulados) ? p.pulados : [], dispensadoAte: Number(p.dispensadoAte) || 0 }; } catch { return { pulados: [], dispensadoAte: 0 }; } };
+  const gravarOnb = p => { try { localStorage.setItem(chaveOnb, JSON.stringify(p)); } catch { /* sem storage */ } };
 
   // cabeçalho: saudação pequena em cima, manchete no degrau display, hora da leitura + Atualizar
   const quando = h("p", { class: "rel-nota", "aria-live": "polite" });
@@ -74,21 +79,28 @@ export async function montar(ctx) {
     catch { return null; }          // a agenda é um complemento: sem ela a frase só não fala de consulta
   }
 
+  async function buscarOnboarding() {
+    if (!admin) return null;
+    try { return await ctx.api.rpcC("nx_onboarding_estado", {}); }
+    catch { return ultimoOnb; }          // sem o checklist a tela segue (a RPC é um complemento: vale o último estado conhecido)
+  }
+
   async function carregar({ forcar = false, primeira = false } = {}) {
     if (minha !== montagem) return;
     btn.disabled = true;
     try {
       // 1ª abertura: pinta o último dado guardado (se o shell tiver cache) e confere na rede em seguida
       const aoCache = dados => { if (minha === montagem && !desenhou && dados && typeof dados === "object") { desenhou = true; desenhar(dados, null, false); } };
-      const [d, agenda] = await Promise.all([ctx.api.rpcC("nx_inicio", {}, { cache: true, aoCache }), buscarAgenda()]);
+      const [d, agenda, onb] = await Promise.all([ctx.api.rpcC("nx_inicio", {}, { cache: true, aoCache }), buscarAgenda(), buscarOnboarding()]);
+      ultimoOnb = onb; ultimaAgenda = agenda;
       if (minha !== montagem) return;
       ultimaCarga = Date.now();
       quando.textContent = `Atualizado às ${L.horaSP(new Date())}`;
-      const js = JSON.stringify({ ...d, agora: null, agenda: agenda && agenda.consultas ? agenda.consultas.length : null });
+      const js = JSON.stringify({ ...d, agora: null, agenda: agenda && agenda.consultas ? agenda.consultas.length : null, onb: onb ? onb.itens.map(i => i.feito) : null });
       if (!forcar && !primeira && js === ultimoJson) return;      // nada mudou: não mexe na tela
       ultimoJson = js;
       const antes = ultimoDado;
-      desenhar(d, agenda, primeira && !desenhou, antes);
+      desenhar(d, agenda, primeira && !desenhou, antes, onb);
       desenhou = true;
     } catch (e) {
       if (minha !== montagem || (e && e.codigo === "sessao_invalida")) return;
@@ -119,7 +131,7 @@ export async function montar(ctx) {
     titulo.setAttribute("aria-label", m.texto);       // o leitor de tela lê a frase inteira, sem picotar por link
   }
 
-  function desenhar(d, agenda, animar, antes = null) {
+  function desenhar(d, agenda, animar, antes = null, onb = ultimoOnb) {
     // preserva o foco (checkbox de tarefa, links) entre redesenhos do pulso
     const foco = document.activeElement && (corpo.contains(document.activeElement) || titulo.contains(document.activeElement)) ? document.activeElement.dataset.k : null;
     ultimoDado = d;
@@ -142,21 +154,21 @@ export async function montar(ctx) {
     titulo.dataset.tam = m.texto.length > 70 ? "longa" : "curta";     // frase curta ganha o degrau display; a longa cabe em 2-3 linhas no degrau h1
     ui.limpar(corpo);
 
+    const local = lerOnb();
+    const onbRes = L.resumoOnboarding(onb, { pulados: local.pulados, dispensadoAte: local.dispensadoAte, admin });
     if (L.inicioVazio(d)) {
-      const passo = (num_, tx, rot, hash, pode) => h("li", { class: "ini-passo" },
-        h("span", { class: "ini-passo-n", "aria-hidden": "true" }, String(num_)),
-        h("div", {}, h("p", { class: "ini-passo-t" }, tx),
-          pode ? h("a", { class: "rel-btn rel-btn-sec", href: hash }, rot) : h("p", { class: "rel-nota" }, "Peça ao administrador da sua empresa.")));
-      corpo.append(h("div", { class: "rel-cartao ini-comecar rel-entra" },
-        h("p", { class: "rel-olho" }, "Primeiros passos"),
-        h("h2", { class: "ini-comecar-t" }, "Tudo pronto para começar."),
-        h("ol", { class: "ini-passos" },
-          passo(1, "Conecte um número de WhatsApp em Configurações → Números.", "Conectar número", "#/config/numeros", ctx.pode("admin")),
-          passo(2, "Convide sua equipe.", "Convidar equipe", "#/config/usuarios", ctx.pode("admin")),
-          passo(3, "Ajuste o funil.", "Ajustar o funil", "#/config/funis", ctx.pode("admin")))));
+      // cliente zerado: a órbita com os satélites que acendem conforme os passos ficam prontos (M09 + M32)
+      const feito = ids => !!(onb && Array.isArray(onb.itens) && ids.every(id => (onb.itens.find(i => i.id === id) || {}).feito));
+      corpo.append(h("div", { class: "ini-comecar rel-entra" }, ui.vazio({ tipo: "primeiro_uso", titulo: "Tudo pronto para começar.",
+        texto: admin ? "Três passos e o Órbita já recebe e responde pelo WhatsApp." : "Peça ao administrador da sua empresa para concluir a configuração.",
+        passos: [{ rotulo: "Conectar o WhatsApp", feito: feito(["chave_codewords", "aparelho_pareado", "recebimento"]) }, { rotulo: "Convidar a equipe", feito: feito(["colega_convidado"]) },
+          { rotulo: "Ajustar o funil", feito: feito(["funil_ajustado"]) }],
+        acao: admin ? { rotulo: "Conectar o WhatsApp", fn: () => ctx.navegar("#/config/numeros?assistente=novo") } : null })));
+      if (onbRes) corpo.append(cartaoChecklist(onbRes));
       trocar();
       return;
     }
+    if (onbRes) corpo.append(cartaoChecklist(onbRes));
 
     // ---- blocos (cada um é uma função: a ordem e o que fica recolhido vêm de L.blocosInicio)
     const numLink = (valor, rot, hash, k, destaque, chave) => {
@@ -273,6 +285,32 @@ export async function montar(ctx) {
     if (antes) for (const chave of L.numerosMudaram(antes, d)) { const el = corpo.querySelector(`[data-n="${chave}"]`); if (el) G.destacar(el); }
     trocar().then(() => { for (const f of contarDepois) f(); });
     if (foco) { const alvo = raiz.querySelector(`[data-k="${CSS.escape(foco)}"]`); if (alvo) alvo.focus({ preventScroll: true }); }
+  }
+
+  /** M32 — "Deixe o Órbita pronto": progresso + o que falta, cada item abre a seção exata (1-5: o assistente do número). Só admin; some a 100 %. */
+  function cartaoChecklist(r) {
+    const local = lerOnb();
+    const refazer = () => carregar({ forcar: true });
+    const itemPendente = (i, destaque) => h("li", { class: "ini-onb-item", dataset: { item: i.id } },
+      h("span", { class: "ini-onb-ponto", "aria-hidden": "true" }),
+      h("div", { class: "ini-onb-txt" }, h("b", null, i.rotulo, i.opcional ? h("span", { class: "rel-nota" }, " · opcional") : null), h("span", { class: "rel-nota" }, i.ajuda)),
+      h("div", { class: "ini-onb-acoes" },
+        h("a", { class: destaque ? "bt bt-prim bt-p" : "bt bt-sec bt-p", href: i.rota, dataset: { k: `onb-${i.id}` } }, "Fazer agora"),
+        h("button", { type: "button", class: "bt bt-fant bt-p", title: "Marcar como feito só neste aparelho", on: { click: () => { const p = lerOnb(); p.pulados = [...new Set([...p.pulados, i.id])]; gravarOnb(p); desenhar(ultimoDado, ultimaAgenda, false, null, ultimoOnb); } } }, "Já está bom")));
+    const feitos = r.itens.filter(i => i.feito);
+    return h("section", { class: "rel-cartao ini-onb rel-entra", "aria-labelledby": "ini-ob" },
+      h("div", { class: "rel-cartao-topo" },
+        h("h2", { id: "ini-ob", class: "rel-h2" }, "Deixe o Órbita pronto"),
+        h("p", { class: "rel-nota" }, `${r.obrigFeitos} de ${r.obrigatorios} passos · ${r.pct} %`)),
+      h("span", { class: "ini-onb-barra", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(r.pct), "aria-label": "Progresso da configuração" },
+        h("i", { style: { "--w": `${r.pct}%` } })),
+      h("ol", { class: "ini-onb-lista" }, r.pendentes.slice(0, 4).map(i => itemPendente(i, r.proximo && i.id === r.proximo.id))),
+      r.pendentes.length > 4 ? h("details", { class: "ini-onb-mais" }, h("summary", null, `Mais ${r.pendentes.length - 4} ${r.pendentes.length - 4 === 1 ? "passo" : "passos"}`),
+        h("ol", { class: "ini-onb-lista" }, r.pendentes.slice(4).map(i => itemPendente(i, false)))) : null,
+      feitos.length ? h("details", { class: "ini-onb-feitos" }, h("summary", null, `Já feitos (${feitos.length})`),
+        h("ul", null, feitos.map(i => h("li", null, ui.icone("check"), i.rotulo, i.pulado ? h("span", { class: "rel-nota" }, " · marcado por você") : null)))) : null,
+      h("div", { class: "ini-onb-rodape" },
+        h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { const p = lerOnb(); p.dispensadoAte = L.dispensarOnboardingAte(); gravarOnb(p); ui.toast("Escondemos este cartão por 7 dias.", { tipo: "info" }); refazer(); } } }, "Dispensar por 7 dias")));
   }
 
   /** 1ª pintura: o esqueleto sai e o cabeçalho + o corpo entram com um fade curto (a troca não desloca nada). */

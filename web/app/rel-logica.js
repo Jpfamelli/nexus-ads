@@ -620,3 +620,71 @@ export function numerosMudaram(antes, depois) {
   }
   return mudou;
 }
+
+/* ============================================================
+   8. CHECKLIST "DEIXE O ÓRBITA PRONTO" (M32) — nx_onboarding_estado vira progresso, próximos passos e selos do menu
+   ============================================================ */
+/** Os 11 itens, na ordem recomendada (o servidor devolve a mesma ordem; aqui ficam o texto, a ajuda e a seção que o item abre). */
+export const ONBOARDING_ITENS = Object.freeze([
+  { id: "chave_codewords", rotulo: "Chave do WhatsApp salva", secao: "numeros", assistente: true, ajuda: "A chave do CodeWords (ou o token da Meta) guardada com segurança." },
+  { id: "aparelho_pareado", rotulo: "Aparelho pareado", secao: "numeros", assistente: true, ajuda: "O WhatsApp do celular ligado ao Órbita." },
+  { id: "recebimento", rotulo: "Recebimento conferido", secao: "numeros", assistente: true, ajuda: "Confirmamos que as mensagens chegam por este número." },
+  { id: "ia_ou_direto", rotulo: "IA validada ou receber direto", secao: "numeros", assistente: true, ajuda: "Escolha quem responde primeiro: a IA ou a equipe." },
+  { id: "mensagem_teste", rotulo: "Mensagem de teste enviada", secao: "numeros", assistente: true, ajuda: "Uma mensagem real saindo pelo número." },
+  { id: "departamento_horario", rotulo: "Departamento com horário", secao: "departamentos", ajuda: "Fora do horário o cliente recebe a mensagem automática." },
+  { id: "agenda_faixas", rotulo: "Faixas da agenda", secao: "agenda", ajuda: "Os horários em que a agenda aceita consultas." },
+  { id: "script_site", rotulo: "Script do site com contato recebido", secao: "rastreio", ajuda: "Para saber de onde vem cada contato do site." },
+  { id: "colega_convidado", rotulo: "Colega convidado", secao: "usuarios", ajuda: "Quem atende junto com você." },
+  { id: "funil_ajustado", rotulo: "Funil ajustado", secao: "funis", ajuda: "As etapas que a sua equipe realmente usa." },
+  { id: "anuncios_ligados", rotulo: "Anúncios ligados", secao: "anuncios", opcional: true, ajuda: "Opcional: ligue o Meta e o Google para ver o retorno." },
+]);
+
+/**
+ * Para onde o "Fazer agora" leva. Passos 1-5 abrem o assistente do número (o do canal que pede ação, quando o servidor diz qual);
+ * os demais abrem a seção exata das Configurações.
+ */
+export function rotaOnboarding(item) {
+  const base = ONBOARDING_ITENS.find(x => x.id === (item && item.id));
+  if (!base) return "#/config";
+  if (base.assistente) return `#/config/numeros?assistente=${encodeURIComponent(item && item.canal_id ? item.canal_id : "novo")}`;
+  return `#/config/${base.secao}`;
+}
+
+/**
+ * resumoOnboarding(estado, {pulados, dispensadoAte, agora, admin}) → null (não mostrar) ou
+ *   {itens, total, feitos, obrigatorios, obrigFeitos, pct, completo, proximo, pendentes}
+ * - só admin vê; some a 100 % (dos obrigatórios); "Dispensar por 7 dias" esconde até a data; "Já está bom" (pulados) conta como feito neste aparelho;
+ * - `itens` mantém a ordem recomendada e traz o rótulo/ajuda/rota local mesmo se o servidor mandar só ids.
+ */
+export function resumoOnboarding(estado, { pulados = [], dispensadoAte = 0, agora = Date.now(), admin = true } = {}) {
+  if (!admin || !estado || !Array.isArray(estado.itens) || !estado.itens.length) return null;
+  const jaPulado = new Set(pulados || []);
+  const porId = new Map(estado.itens.map(i => [i.id, i]));
+  const itens = ONBOARDING_ITENS.filter(b => porId.has(b.id)).map(b => {
+    const s = porId.get(b.id);
+    const feitoServidor = !!s.feito, pulado = !feitoServidor && jaPulado.has(b.id);
+    return { id: b.id, rotulo: b.rotulo, ajuda: b.ajuda, opcional: !!(b.opcional || s.opcional), feito: feitoServidor || pulado, pulado,
+      secao: b.secao, rota: rotaOnboarding({ id: b.id, canal_id: s.canal_id }), ultimo_em: s.ultimo_em || null };
+  });
+  const obrig = itens.filter(i => !i.opcional);
+  const obrigFeitos = obrig.filter(i => i.feito).length;
+  const completo = obrig.length > 0 && obrigFeitos === obrig.length;
+  const pendentes = itens.filter(i => !i.feito);
+  const resumo = { itens, total: itens.length, feitos: itens.filter(i => i.feito).length, obrigatorios: obrig.length, obrigFeitos,
+    pct: obrig.length ? Math.round(obrigFeitos * 100 / obrig.length) : 0, completo, pendentes, proximo: pendentes.find(i => !i.opcional) || pendentes[0] || null };
+  if (completo) return null;
+  if (Number(dispensadoAte) > agora) return null;
+  return resumo;
+}
+
+/** Passos pendentes (obrigatórios, não pulados) por seção das Configurações — o ponto "nav-selo" do menu: {numeros: 3, departamentos: 1, …}. */
+export function pendenciasConfig(estado, { pulados = [] } = {}) {
+  const r = resumoOnboarding(estado, { pulados, dispensadoAte: 0, admin: true });
+  const out = {};
+  if (!r) return out;
+  for (const i of r.pendentes) if (!i.opcional) out[i.secao] = (out[i.secao] || 0) + 1;
+  return out;
+}
+
+/** "Dispensar por 7 dias": o instante até quando o cartão fica escondido neste aparelho. */
+export function dispensarOnboardingAte(agora = Date.now(), dias = 7) { return agora + dias * 86400000; }

@@ -782,5 +782,85 @@ await teste("M31: inicio.js — esqueleto até chegar o dado, manchete por ui.ca
   assert.doesNotMatch(s, /innerHTML/);
 });
 
+/* ============================================================ M32 — checklist "Deixe o Órbita pronto" */
+console.log("\n(h) M32 — checklist de configuração");
+
+const ESTADO_NOVO = () => ({ total: 11, feitos: 0, itens: L.ONBOARDING_ITENS.map(i => ({ id: i.id, rotulo: i.rotulo, feito: false, opcional: !!i.opcional })) });
+const ESTADO_FEITOS = ids => { const e = ESTADO_NOVO(); for (const i of e.itens) if (ids.includes(i.id)) i.feito = true; return e; };
+const TODOS_OBRIG = L.ONBOARDING_ITENS.filter(i => !i.opcional).map(i => i.id);
+
+await teste("M32: os 11 itens na ordem recomendada e o mapeamento item → rota (1-5 abrem o assistente do número; os demais, a seção exata)", () => {
+  assert.deepEqual(L.ONBOARDING_ITENS.map(i => i.id), ["chave_codewords", "aparelho_pareado", "recebimento", "ia_ou_direto", "mensagem_teste",
+    "departamento_horario", "agenda_faixas", "script_site", "colega_convidado", "funil_ajustado", "anuncios_ligados"]);
+  for (const id of ["chave_codewords", "aparelho_pareado", "recebimento", "ia_ou_direto", "mensagem_teste"])
+    assert.equal(L.rotaOnboarding({ id }), "#/config/numeros?assistente=novo", `${id}: sem canal apontado → assistente de um número novo/pendente`);
+  assert.equal(L.rotaOnboarding({ id: "recebimento", canal_id: "abc-123" }), "#/config/numeros?assistente=abc-123", "o servidor aponta o número que pede ação");
+  assert.equal(L.rotaOnboarding({ id: "departamento_horario" }), "#/config/departamentos");
+  assert.equal(L.rotaOnboarding({ id: "agenda_faixas" }), "#/config/agenda");
+  assert.equal(L.rotaOnboarding({ id: "script_site" }), "#/config/rastreio");
+  assert.equal(L.rotaOnboarding({ id: "colega_convidado" }), "#/config/usuarios");
+  assert.equal(L.rotaOnboarding({ id: "funil_ajustado" }), "#/config/funis");
+  assert.equal(L.rotaOnboarding({ id: "anuncios_ligados" }), "#/config/anuncios");
+  assert.equal(L.rotaOnboarding({ id: "inexistente" }), "#/config");
+  // toda rota aponta uma seção que existe nas Configurações (a lista pronta do prontos.js)
+  const prontos = readFileSync(join(WEB, "app", "prontos.js"), "utf8");
+  for (const i of L.ONBOARDING_ITENS) assert.match(prontos, new RegExp(`"${i.secao}"`), `seção «${i.secao}» existe em CONFIG_PRONTAS`);
+});
+
+await teste("M32: resumoOnboarding — 0/10 (novo), parcial, 100 % some, opcional não conta, só admin, dispensar por 7 dias e «Já está bom»", () => {
+  const AG = 1_000_000_000_000;
+  let r = L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG });
+  assert.equal(r.total, 11); assert.equal(r.obrigatorios, 10); assert.equal(r.feitos, 0); assert.equal(r.pct, 0); assert.equal(r.completo, false);
+  assert.equal(r.pendentes.length, 11); assert.equal(r.proximo.id, "chave_codewords");
+  // parcial: 6 de 10 obrigatórios = 60 %
+  r = L.resumoOnboarding(ESTADO_FEITOS(TODOS_OBRIG.slice(0, 6)), { admin: true, agora: AG });
+  assert.equal(r.obrigFeitos, 6); assert.equal(r.pct, 60); assert.equal(r.proximo.id, "agenda_faixas", "o próximo é o 1º obrigatório pendente (o 7º da ordem)");
+  // os 10 obrigatórios prontos (sem anúncios): 100 % → o cartão some
+  assert.equal(L.resumoOnboarding(ESTADO_FEITOS(TODOS_OBRIG), { admin: true, agora: AG }), null);
+  assert.equal(L.resumoOnboarding(ESTADO_FEITOS([...TODOS_OBRIG, "anuncios_ligados"]), { admin: true, agora: AG }), null);
+  // só admin
+  assert.equal(L.resumoOnboarding(ESTADO_NOVO(), { admin: false, agora: AG }), null);
+  assert.equal(L.resumoOnboarding(null, { admin: true }), null);
+  assert.equal(L.resumoOnboarding({ itens: [] }, { admin: true }), null);
+  // dispensar por 7 dias: some até a data e volta depois
+  const ate = L.dispensarOnboardingAte(AG);
+  assert.equal(ate - AG, 7 * 86400000);
+  assert.equal(L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG + 3 * 86400000, dispensadoAte: ate }), null);
+  assert.notEqual(L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: ate + 1, dispensadoAte: ate }), null, "passados os 7 dias o cartão volta");
+  // "Já está bom" conta como feito neste aparelho (e é marcado como pulado)
+  r = L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG, pulados: ["funil_ajustado", "agenda_faixas"] });
+  assert.equal(r.obrigFeitos, 2); assert.equal(r.itens.find(i => i.id === "funil_ajustado").pulado, true);
+  // um item que o servidor já deu como feito não vira "pulado"
+  assert.equal(L.resumoOnboarding(ESTADO_FEITOS(["funil_ajustado"]), { admin: true, agora: AG, pulados: ["funil_ajustado"] }).itens.find(i => i.id === "funil_ajustado").pulado, false);
+  // o servidor manda só alguns ids (versão antiga): o resto simplesmente não aparece
+  r = L.resumoOnboarding({ itens: [{ id: "chave_codewords", feito: false }, { id: "desconhecido", feito: false }] }, { admin: true, agora: AG });
+  assert.deepEqual(r.itens.map(i => i.id), ["chave_codewords"]);
+  assert.equal(r.itens[0].rota, "#/config/numeros?assistente=novo");
+});
+
+await teste("M32: pendenciasConfig — o número do ponto em cada seção do menu (obrigatórios pendentes, sem os já pulados nem o opcional)", () => {
+  assert.deepEqual(L.pendenciasConfig(ESTADO_NOVO()), { numeros: 5, departamentos: 1, agenda: 1, rastreio: 1, usuarios: 1, funis: 1 }, "anúncios é opcional: sem ponto");
+  assert.deepEqual(L.pendenciasConfig(ESTADO_FEITOS(["chave_codewords", "aparelho_pareado", "recebimento"])), { numeros: 2, departamentos: 1, agenda: 1, rastreio: 1, usuarios: 1, funis: 1 });
+  assert.deepEqual(L.pendenciasConfig(ESTADO_NOVO(), { pulados: ["funil_ajustado", "colega_convidado"] }), { numeros: 5, departamentos: 1, agenda: 1, rastreio: 1 });
+  assert.deepEqual(L.pendenciasConfig(ESTADO_FEITOS(TODOS_OBRIG)), {}, "completo: nenhum ponto");
+  assert.deepEqual(L.pendenciasConfig(null), {});
+});
+
+await teste("M32: Início (cartão só para admin, estado por RPC de leitura, «Dispensar»/«Já está bom» em localStorage), menu das Configurações com ponto e ?assistente= abrindo o assistente", () => {
+  const ini = ler("web/app/inicio.js"), cfg = ler("web/app/config.js"), cw = ler("web/app/cv-config.js"), css = ler("web/app/relatorios.css");
+  assert.match(ini, /if \(!admin\) return null;\s*try \{ return await ctx\.api\.rpcC\("nx_onboarding_estado", \{\}\); \}/, "só admin chama a RPC");
+  assert.match(ini, /L\.resumoOnboarding\(onb, \{ pulados: local\.pulados, dispensadoAte: local\.dispensadoAte, admin \}\)/);
+  assert.match(ini, /localStorage\.setItem\(chaveOnb/, "escolhas locais em try/catch");
+  assert.match(ini, /try \{ localStorage\.setItem\(chaveOnb, JSON\.stringify\(p\)\); \} catch/);
+  assert.match(ini, /tipo: "primeiro_uso", titulo: "Tudo pronto para começar\."/, "cliente zerado: órbita com os satélites");
+  assert.match(ini, /role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String\(r\.pct\)/);
+  assert.match(ini, /"Dispensar por 7 dias"/);
+  assert.doesNotMatch(ini, /innerHTML/);
+  assert.match(cfg, /L\.pendenciasConfig\(est, \{ pulados \}\)/); assert.match(cfg, /class: "nav-selo cfg-pend"/);
+  assert.match(cfg, /ctx\.pode\("admin"\) && vistas\.some/, "o ponto só para admin");
+  assert.match(cw, /ctx\.rota\.query\.assistente/); assert.match(cw, /ctx\.navegar\("#\/config\/numeros", \{ substituir: true \}\)/, "limpa o endereço depois de abrir");
+  assert.match(css, /\.ini-onb-barra i \{[^}]*background: var\(--c-prod\)/, "barra no acento do produto, por token");
+});
+
 console.log(`\n${ok} ok · ${falhas} falha(s)`);
 if (falhas) process.exit(1);

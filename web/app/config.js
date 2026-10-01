@@ -13,6 +13,7 @@ const EXTERNOS = ["crm-config.js", "cv-config.js", "ads-config.js", "agenda-conf
 let _externas = null;      // cache das seções das outras frentes (por versão)
 let _versaoExt = null;
 let _limpeza = [];
+let _montagemCfg = 0;
 
 /**
  * Aviso para um logo muito estreito/alto (largura < metade da altura): no menu (caixa de 36 px) e no login (44 px) o logo é desenhado
@@ -87,6 +88,23 @@ export async function montar(ctx) {
     const emObra = !ctx.shell.prontos.CONFIG_PRONTAS.includes(s.id);
     lista.appendChild(h("a", { class: "cfg-nav-item", href: `#/config/${s.id}`, "aria-current": atual && atual.id === s.id ? "page" : null },
       ui.icone(s.icone || "engrenagem"), h("span", null, s.titulo), emObra ? h("span", { class: "nav-selo" }, "obra") : null));
+  }
+  // M32: o mesmo estado do checklist do Início vira um ponto com o número de passos pendentes ao lado de cada seção (só admin; é um complemento)
+  const minhaMontagem = ++_montagemCfg;
+  if (ctx.cliente && ctx.pode("admin") && vistas.some(s => ["numeros", "departamentos", "agenda", "rastreio", "usuarios", "funis"].includes(s.id))) {
+    Promise.all([import(`./rel-logica.js?v=${encodeURIComponent(ctx.versao)}`), ctx.api.rpcC("nx_onboarding_estado", {})]).then(([L, est]) => {
+      if (minhaMontagem !== _montagemCfg || !lista.isConnected) return;
+      let pulados = [];
+      try { pulados = (JSON.parse(localStorage.getItem(`nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`) || "{}").pulados) || []; } catch { /* sem storage */ }
+      const pend = L.pendenciasConfig(est, { pulados });
+      for (const a of lista.querySelectorAll(".cfg-nav-item")) {
+        const id = String(a.getAttribute("href") || "").replace("#/config/", "");
+        const n = pend[id];
+        if (!n) continue;
+        a.appendChild(h("span", { class: "nav-selo cfg-pend", title: `${n} ${n === 1 ? "passo pendente" : "passos pendentes"} no checklist` }, String(n)));
+        a.setAttribute("aria-label", `${a.textContent.trim()}, ${n} ${n === 1 ? "passo pendente" : "passos pendentes"}`);
+      }
+    }).catch(() => { /* sem o checklist o menu fica como estava */ });
   }
   const sec = h("section", { class: "cfg-sec", "aria-live": "polite" });
   const raiz = h("div", { class: ["cfg", pedida && "na-secao"] }, lista, sec);
