@@ -1,6 +1,6 @@
 # Melhorias de 01/10/2026 — Frente D (Conversas, Início, Anúncios/Relatórios, Automações, Configurações)
 
-Plano: `docs/orbita/MELHORIAS-20261001.md` (seção "Frente D"). O follow-up R119 foi publicado pelo PR #2. O adendo R122 da mídia CodeWords está na branch `codex/midia-codewords`, no PR #3; não acrescenta migração. O backend foi publicado pela tag `funcoes-20261001-5`; o front está em `20261001f` e aguarda os gates do PR e do Netlify.
+Plano: `docs/orbita/MELHORIAS-20261001.md` (seção "Frente D"). O follow-up R119 foi publicado pelo PR #2. O adendo R122 de mídia CodeWords foi mesclado pelo PR #3 e publicado: backend pela tag `funcoes-20261001-5`, front `20261001f` em https://orbita-nexus-ads.netlify.app. R122 não acrescenta migração. A prova final de envio real aguarda o pareamento de um aparelho CodeWords.
 
 Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://127.0.0.1:4740/app/?dev-falso=1&dev=1#/conversas/901` (ou `#/inicio`, `#/anuncios`, `#/relatorios`, `#/config`).
 
