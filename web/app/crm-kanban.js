@@ -45,6 +45,7 @@ export async function montarKanban(k, el, rota) {
     ultimaRecarga: 0,
     vivo: true,
     pend: new Map(),      // M25: movimentos que ainda não chegaram ao servidor (adiados pelos 7 s do Desfazer) ou à espera de confirmação
+    adiado: null,         // redesenho que chegou no meio de um arrasto: {dados?} — feito quando o gesto termina (aplicarAdiado)
   };
   delete S.filtro.fechados_dias;
   const podeMover = k.pode("atendente");
@@ -133,10 +134,23 @@ export async function montarKanban(k, el, rota) {
     return f;
   }
 
+  /** Há um gesto mexendo no quadro agora (ponteiro apertado sobre um cartão, ou cartão pego pelo teclado)? Redesenhar apagaria o cartão escondido e o marcador do arrasto. */
+  const emGesto = () => !!((S.arrasto && !S.arrasto.encerrado) || S.teclado);
+
+  /** O gesto terminou: faz o redesenho que ficou esperando (com os dados que a rede trouxe no meio do arrasto, se trouxe). */
+  function aplicarAdiado() {
+    const ad = S.adiado;
+    if (!ad || !S.vivo || emGesto() || !S.dados) return;
+    S.adiado = null;
+    if (ad.dados) { S.dados = ad.dados; reaplicarPendentes(); }
+    desenharQuadro();
+  }
+
   async function carregar({ silencioso = false } = {}) {
     const minha = ++S.seq;
     if (!S.funil) { mostrarSemFunil(); return; }
-    if (!silencioso || !S.dados) { ui.limpar(quadro); quadro.appendChild(ui.esqueleto("kanban", Math.min(6, S.funil.estagios.length || 4))); }
+    const trocouTudo = !silencioso || !S.dados;
+    if (trocouTudo) { S.teclado = null; S.adiado = null; ui.limpar(quadro); quadro.appendChild(ui.esqueleto("kanban", Math.min(6, S.funil.estagios.length || 4))); }   // o cartão pego pelo teclado saiu da tela junto
     desenharChips();
     let doCache = false;
     try {
@@ -149,8 +163,11 @@ export async function montarKanban(k, el, rota) {
       } });
       if (minha !== S.seq || !S.vivo) return;
       const igual = doCache && JSON.stringify(S.dados) === JSON.stringify(d);     // nada mudou desde o guardado: não refaz o quadro
-      S.dados = d;
       S.ultimaRecarga = Date.now();
+      // a resposta chegou com um cartão sendo arrastado: redesenhar agora apagaria o cartão e o marcador do gesto (no celular o arrasto cairia) — fica para o fim do gesto
+      if (!igual && !trocouTudo && emGesto()) { S.adiado = { dados: d }; return; }
+      S.adiado = null;
+      S.dados = d;
       if (igual) return;
       reaplicarPendentes();
       desenharQuadro();
@@ -399,10 +416,27 @@ export async function montarKanban(k, el, rota) {
     return [...lista.querySelectorAll(".kc, .kb-lugar")].filter(x => x.dataset.id !== String(idIgnorar));
   }
 
+  /**
+   * O cartão ainda tem um movimento sem confirmação (os 7 s do «Desfazer», ou a gravação em andamento)? Então não aceita outro por cima: o movimento antigo
+   * iria ao servidor de qualquer jeito (com as mensagens automáticas) e a tela ficaria diferente do banco. Avisa e devolve true.
+   */
+  function recusarSePendente(id) {
+    const mov = S.pend.get(id);
+    if (!mov) return false;
+    const msg = mov.efetivado ? "Ainda estamos gravando a última mudança deste cartão. Tente de novo em instantes."
+      : "A última mudança deste cartão ainda pode ser desfeita. Toque em «Desfazer» ou espere alguns segundos para mover de novo.";
+    ui.toast(msg, { tipo: "info" });
+    ui.anunciar(msg);
+    return true;
+  }
+  /** Tira o movimento da lista de pendentes só se ainda for ELE (um movimento antigo não pode apagar o pendente mais novo do mesmo cartão). */
+  function soltarPendente(mov) { if (S.pend.get(mov.id) === mov) S.pend.delete(mov.id); }
+
   /** soltar(id, etapa, pos) — pos = posição entre os OUTROS cartões da coluna de destino (0 = topo). */
   async function soltar(id, estagioId, indice) {
     const origemCol = S.dados.colunas.find(c => c.itens.some(x => x.id === id));
     if (!origemCol) return;
+    if (recusarSePendente(id)) { preencherColunaDoCartao(id); focarCartao(id); return; }
     const card = origemCol.itens.find(x => x.id === id);
     const posOrig = origemCol.itens.indexOf(card);
     const destino = k.estagio(estagioId);
@@ -448,7 +482,8 @@ export async function montarKanban(k, el, rota) {
       const texto = destino.tipo === "ganho" ? `${k.v.ganhar}! «${titulo}»${valorTxt}`
         : destino.tipo === "perdido" ? `«${titulo}» registrad${k.v.art("negocio")} como «${destino.nome}»` : `«${titulo}» reaberto em «${destino.nome}»`;
       ui.anunciar(`${titulo}: ${destino.nome}. Dá para desfazer por 7 segundos.`);
-      const res = await ui.acaoComDesfazer({ texto, reverter: () => desfazerMovimento(mov) });
+      // firmar = a gravação adiada. Se a página sair ou ficar oculta antes dos 7 s, o aviso chama firmar({ saindo: true }) e o pedido vai com keepalive
+      const res = await ui.acaoComDesfazer({ texto, reverter: () => desfazerMovimento(mov), firmar: o => efetivar(mov, { saindo: !!(o && o.saindo) }) });
       if (res.estado === "desfeita") return;
       await efetivar(mov);       // «mantida» (o aviso acabou) ou a tela saiu: agora vai ao servidor
       return;
@@ -483,21 +518,26 @@ export async function montarKanban(k, el, rota) {
     catch { return null; }
   }
 
-  /** Grava o movimento no servidor. → true se ficou gravado. Erro ambíguo: confere no servidor ANTES de reverter o cartão. */
-  function efetivar(mov) {
+  /**
+   * Grava o movimento no servidor. → true se ficou gravado. Erro ambíguo: confere no servidor ANTES de reverter o cartão.
+   * `saindo` = a página está fechando ou ficou oculta: o pedido vai com keepalive, para o navegador não o cancelar junto com a aba.
+   */
+  function efetivar(mov, { saindo = false } = {}) {
     if (mov.promessa) return mov.promessa;
     mov.efetivado = true;
     mov.promessa = (async () => {
       marcarConfirmando(mov.id, true);
       const chegou = novoCard => {
-        S.pend.delete(mov.id);
+        soltarPendente(mov);
         const col = colunaDe(mov.estagioId);
         const i = col ? col.itens.findIndex(x => x.id === mov.id) : -1;
         if (i >= 0) col.itens[i] = { ...col.itens[i], ...novoCard };
         // o servidor devolve o valor real: corrige a soma da coluna
         if (col && mov.destino.tipo === "ganho" && novoCard.valor != null && mov.patch.valor == null) col.soma_valor = (Number(col.soma_valor) || 0) + Number(novoCard.valor) - Number(mov.card.valor || 0);
-        if (col) preencherColuna(mov.estagioId);
-        desenharTotais();
+        // outro cartão está sendo arrastado: refazer a coluna agora derrubaria o gesto — o quadro é refeito quando ele terminar
+        // (com o que está em memória: dados que a rede trouxe ANTES desta gravação mostrariam este cartão na etapa antiga)
+        if (emGesto()) S.adiado = {};
+        else { if (col) preencherColuna(mov.estagioId); desenharTotais(); }
         const el = quadro.querySelector(`.kc[data-id="${mov.id}"]`);
         if (el) { el.classList.add("chegou"); el.classList.add("assenta"); }
         marcarConfirmando(mov.id, false);
@@ -505,20 +545,20 @@ export async function montarKanban(k, el, rota) {
         return true;
       };
       try {
-        return chegou(await N.moverNegocio(k, mov.card, mov.destino, { ordem: mov.ordem, extra: mov.extra }));
+        return chegou(await N.moverNegocio(k, mov.card, mov.destino, { ordem: mov.ordem, extra: mov.extra, keepalive: saindo }));
       } catch (e) {
         if (L.erroAmbiguo(e)) {
           const real = await consultarEtapa(mov.id);
           if (real === mov.destino.id) return chegou({});     // o servidor já tinha aplicado: o cartão fica onde está
           if (real === null) {                                 // sem resposta: mostra o que se sabe e confere quando a internet voltar
             ui.toast("Não deu para confirmar a mudança de etapa. Vamos conferir com o servidor quando a conexão voltar.", { tipo: "info", ms: 6000 });
-            const conferir = () => { S.pend.delete(mov.id); if (S.vivo) carregar({ silencioso: true }); };
+            const conferir = () => { soltarPendente(mov); if (S.vivo) carregar({ silencioso: true }); };
             if (typeof addEventListener === "function") addEventListener("orbita:online", conferir, { once: true });
             return false;
           }
           // o servidor está em OUTRA etapa: não foi aplicado → volta o cartão
         }
-        S.pend.delete(mov.id);
+        soltarPendente(mov);
         reverterNaTela(mov);
         // erro de prazo/conexão com o servidor ainda na etapa antiga: a mudança NÃO foi feita (a mensagem padrão de «tempo esgotado» fala de relatórios)
         const msg = L.erroAmbiguo(e) ? "O servidor não confirmou a mudança de etapa e o cartão voltou para onde estava. Tente de novo." : k.erro(e);
@@ -533,6 +573,7 @@ export async function montarKanban(k, el, rota) {
   /** Volta o cartão para onde estava, só na tela (sem mexer nos outros cartões que também estejam esperando). */
   function reverterNaTela(mov) {
     S.dados.colunas = L.moverLocal(S.dados.colunas, mov.id, mov.origemEstagioId, mov.origemPos, mov.origem.ordem, mov.origemPatch);
+    if (emGesto()) { S.adiado = {}; return; }       // outro cartão em arrasto: o quadro é refeito quando o gesto terminar
     preencherColuna(mov.origemEstagioId); if (mov.estagioId !== mov.origemEstagioId) preencherColuna(mov.estagioId);
     desenharTotais();
     focarCartao(mov.id);
@@ -540,7 +581,7 @@ export async function montarKanban(k, el, rota) {
 
   /** «Desfazer» (botão do aviso ou Ctrl/⌘+Z). Ainda não foi ao servidor → só a tela; já foi → move de volta (e devolve a data da consulta, se esta mudou). */
   async function desfazerMovimento(mov) {
-    if (!mov.efetivado) { S.pend.delete(mov.id); reverterNaTela(mov); ui.anunciar("Movimento desfeito."); return; }
+    if (!mov.efetivado) { soltarPendente(mov); reverterNaTela(mov); ui.anunciar("Movimento desfeito."); return; }
     const volta = k.estagio(mov.origemEstagioId);
     if (!volta) throw new Error("estagio_invalido");
     const atual = cardDe(mov.id) || mov.card;
@@ -560,11 +601,15 @@ export async function montarKanban(k, el, rota) {
     }
   }
 
-  /** A tela vai sair (outra rota, aparelho bloqueado): o que está esperando o fim do aviso vai ao servidor agora. */
-  function efetivarPendentes() { for (const mov of S.pend.values()) if (!mov.efetivado) efetivar(mov); }
-  const aoEsconder = () => { if (document.hidden) efetivarPendentes(); };
+  /**
+   * A tela vai sair (outra rota, aba fechada, aparelho bloqueado): o que está esperando o fim do aviso vai ao servidor agora.
+   * `saindo` = a página está fechando ou ficou oculta: o pedido vai com keepalive (um pedido comum seria cancelado junto com a aba e o Ganho/Perdido se perderia).
+   */
+  function efetivarPendentes({ saindo = false } = {}) { for (const mov of [...S.pend.values()]) if (!mov.efetivado) efetivar(mov, { saindo }); }
+  const aoEsconder = () => { if (document.hidden) efetivarPendentes({ saindo: true }); };
+  const aoSairDaPagina = () => efetivarPendentes({ saindo: true });
   document.addEventListener("visibilitychange", aoEsconder);
-  addEventListener("pagehide", efetivarPendentes);
+  addEventListener("pagehide", aoSairDaPagina);
 
   function focarCartao(id) {
     const c = quadro.querySelector(`.kc[data-id="${id}"]`);
@@ -581,6 +626,7 @@ export async function montarKanban(k, el, rota) {
       if (ev.key === "Enter") { ev.preventDefault(); abrir(id); return; }
       if ((ev.key === " " || ev.key === "Spacebar") && podeMover) {
         ev.preventDefault();
+        if (recusarSePendente(id)) return;
         const lista = art.parentElement;
         S.teclado = { id, estagio: lista.dataset.estagio, origem: lista.dataset.estagio, art };
         art.classList.add("pego");
@@ -607,6 +653,7 @@ export async function montarKanban(k, el, rota) {
       const indice = cards.indexOf(art);
       art.classList.remove("pego"); art.removeAttribute("aria-pressed");
       S.teclado = null;
+      aplicarAdiado();
       soltar(id, destino, indice);
       return;
     }
@@ -646,6 +693,7 @@ export async function montarKanban(k, el, rota) {
     S.teclado = null;
     preencherColuna(t.origem);
     if (t.estagio !== t.origem) preencherColuna(t.estagio);
+    aplicarAdiado();
     focarCartao(t.id);
     if (anunciar) ui.anunciar("Movimento cancelado.");
   }
@@ -678,7 +726,7 @@ export async function montarKanban(k, el, rota) {
   /** Folha com as etapas do funil (cor, nome, quantos cartões; a atual marcada). Escolher = soltar no topo da etapa, com as mesmas perguntas (valor, motivo, data). */
   async function abrirMoverPara(id) {
     const card = cardDe(id);
-    if (!card || !podeMover) return;
+    if (!card || !podeMover || recusarSePendente(id)) return;
     const atualId = (colunaDeCard(id) || {}).estagio_id;
     let modalApi = null;
     const corpo = h("div", { class: "kb-mover", role: "list" }, S.funil.estagios.map(e => {
@@ -780,6 +828,13 @@ export async function montarKanban(k, el, rota) {
     posicionarLugar(ev.clientX, ev.clientY);
   }
 
+  /** O ponto está dentro do quadro, logo ABAIXO de uma coluna curta e na largura dela (a «raia» da coluna)? Soltar ali vale como soltar no fim da coluna. */
+  function colunaDaRaia(x, y) {
+    const q = quadro.getBoundingClientRect();
+    const raias = [...colEls].map(([id, c]) => { const r = c.sec.getBoundingClientRect(); return { id, left: Math.max(r.left, q.left), right: Math.min(r.right, q.right), top: r.bottom, bottom: q.bottom }; });
+    return colEls.get(L.alvoDoPonto(raias, x, y)) || null;
+  }
+
   function posicionarLugar(x, y) {
     const a = S.arrasto;
     const sob = document.elementFromPoint(x, y);
@@ -789,9 +844,9 @@ export async function montarKanban(k, el, rota) {
     for (const c of colEls.values()) c.sec.classList.remove("alvo");
     if (zona) { a.alvo = { zona: zona.dataset.estagio }; a.lugar.hidden = true; return; }
     const col = sob && sob.closest && sob.closest(".kb-col");
-    if (!col || !quadro.contains(col)) return;
-    const info = colEls.get(col.dataset.estagio);
-    if (!info) return;
+    const info = (col && quadro.contains(col) ? colEls.get(col.dataset.estagio) : null) || colunaDaRaia(x, y);
+    // fora de qualquer coluna e de qualquer zona: não há destino — soltar aqui devolve o cartão (antes valia a última etapa em que o dedo encostou, sem destaque nenhum)
+    if (!info) { a.alvo = null; a.lugar.hidden = true; return; }
     info.sec.classList.add("alvo");
     a.lugar.hidden = false;
     a.lugar.style.setProperty("--cor", k.cor(info.e.cor) || "");
@@ -835,6 +890,7 @@ export async function montarKanban(k, el, rota) {
   function limparArrasto() {
     const a = S.arrasto;
     if (!a) return;
+    a.encerrado = true;                 // o ponteiro soltou: daqui em diante um redesenho não atrapalha mais (emGesto)
     clearTimeout(a.timer);
     removeEventListener("pointermove", movePonteiro);
     removeEventListener("pointerup", fimPonteiro);
@@ -856,18 +912,21 @@ export async function montarKanban(k, el, rota) {
     let acao = a.moveu ? "soltar" : "nada";
     if (a.toque) acao = (a.gesto = L.gestoSoltar(a.gesto, agora())).acao;
     limparArrasto();
-    if (!a.toque && !a.moveu) { S.arrasto = null; return; }        // clique simples do mouse
-    if (acao === "toque") { S.arrasto = null; return; }            // toque curto: o click normal abre o cartão
+    // redesenho que chegou no meio do gesto: nos casos sem soltar, só depois do click que ainda vem (ele precisa achar o cartão no lugar)
+    if (!a.toque && !a.moveu) { S.arrasto = null; setTimeout(aplicarAdiado, 0); return; }        // clique simples do mouse
+    if (acao === "toque") { S.arrasto = null; setTimeout(aplicarAdiado, 0); return; }            // toque curto: o click normal abre o cartão
     if (acao === "nada") {                                         // o dedo estava rolando (ou o sistema tomou o gesto)
       if (a.lugar) a.lugar.remove();
       a.art.hidden = false;
       S.arrasto = null;
       if (a.moveu) preencherColunaDoCartao(a.id);
+      aplicarAdiado();
       return;
     }
     if (acao === "mover_para") {                                   // segurou e soltou sem arrastar: a folha «Mover para…»
       a.engoleClique = true;
       setTimeout(() => { if (S.arrasto === a) S.arrasto = null; }, 450);   // o click que vem depois do pointerup não abre a gaveta
+      aplicarAdiado();
       abrirMoverPara(a.id);
       return;
     }
@@ -875,6 +934,7 @@ export async function montarKanban(k, el, rota) {
     if (a.lugar) a.lugar.remove();
     a.art.hidden = false;
     setTimeout(() => { S.arrasto = null; }, 0);   // o click que vem depois do pointerup não abre a gaveta
+    aplicarAdiado();                              // antes de soltar: o movimento parte do quadro já atualizado
     if (!alvo) { preencherColunaDoCartao(a.id); return; }
     if (alvo.zona) { soltar(a.id, alvo.zona, 0); return; }
     soltar(a.id, alvo.estagio, Math.max(0, alvo.indice));
@@ -888,6 +948,7 @@ export async function montarKanban(k, el, rota) {
     a.art.hidden = false;
     S.arrasto = null;
     if (a.moveu) preencherColunaDoCartao(a.id);
+    aplicarAdiado();
   }
 
   function preencherColunaDoCartao(id) {
@@ -1006,6 +1067,15 @@ export async function montarKanban(k, el, rota) {
     carregar({ silencioso: true });
   }) : null;
 
+  // a base veio do aparelho e a rede trouxe funis/etapas diferentes: o quadro foi montado com os antigos — refaz o funil atual, o seletor e recarrega em silêncio
+  const cancelarBase = typeof k.aoBaseMudar === "function" ? k.aoBaseMudar(() => {
+    if (!S.vivo) return;
+    S.funil = (S.funil && k.funil(S.funil.id)) || k.funilPadrao();
+    gravarLocal();
+    desenharSelFunil();
+    carregar({ silencioso: true });
+  }) : null;
+
   // M30: a tela entra assim que há o que mostrar — o último quadro guardado (aoCache) ou a resposta da rede, o que vier primeiro
   const pronta = new Promise(res => { S.pronta = res; });
   carregar().finally(() => S.pronta());
@@ -1017,9 +1087,10 @@ export async function montarKanban(k, el, rota) {
       if (S.arrasto) cancelarPonteiro();
       efetivarPendentes();
       document.removeEventListener("visibilitychange", aoEsconder);
-      removeEventListener("pagehide", efetivarPendentes);
+      removeEventListener("pagehide", aoSairDaPagina);
       document.removeEventListener("keydown", aoTeclaGlobal);
       if (cancelarPulso) cancelarPulso();
+      if (cancelarBase) cancelarBase();
     },
   };
 }

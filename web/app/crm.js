@@ -12,6 +12,7 @@
 
 const BASE_VALIDADE_MS = 5 * 60 * 1000;
 const cacheBase = new Map();          // clienteId → {base, em, promessa}
+const ouvintesBase = new Map();       // clienteId → Set<fn>: telas que querem saber quando os funis da base mudaram
 const modulos = new Map();            // "logica" | "kanban" | … → Promise<módulo>
 let L = null;                         // crm-logica.js
 let montagem = 0;
@@ -35,7 +36,8 @@ async function logica(ctx) {
 /**
  * Base do CRM (funis, etapas, campos, etiquetas, motivos, usuários, ticket) — em memória por empresa.
  * M30: a PRIMEIRA leitura da sessão usa o último dado guardado no aparelho (rpcC com cache) e já devolve; quando a rede responde, a mesma base é
- * atualizada no lugar (Object.assign: quem já guarda `k.base` passa a ver o dado novo). Recarga forçada (depois de criar etiqueta/funil) vai direto à rede.
+ * atualizada no lugar (Object.assign: quem já guarda `k.base` passa a ver o dado novo) e, se os funis ou as etapas mudaram, as telas que pediram
+ * (k.aoBaseMudar) são avisadas. Recarga forçada (depois de criar etiqueta/funil) vai direto à rede e também renova a cópia guardada no aparelho.
  */
 async function obterBase(ctx, { forcar = false } = {}) {
   const id = ctx.cliente && ctx.cliente.id;
@@ -46,23 +48,36 @@ async function obterBase(ctx, { forcar = false } = {}) {
   const promessa = new Promise((resolve, reject) => {
     let servida = null;
     const fim = base => {
-      if (servida) {                                               // a tela já recebeu o dado guardado: atualiza o MESMO objeto
+      let mudouFunis = false;
+      if (servida && servida !== base) {                           // a tela já recebeu o dado guardado: atualiza o MESMO objeto
+        mudouFunis = JSON.stringify(servida.funis || null) !== JSON.stringify(base.funis || null);
         for (const k of Object.keys(servida)) if (!(k in base)) delete servida[k];
         Object.assign(servida, base);
         base = servida;
       }
       cacheBase.set(id, { base, em: Date.now(), promessa: null });
       resolve(base);
+      if (mudouFunis) avisarBase(id);                              // o quadro foi desenhado com etapas antigas: refaz o funil e recarrega
     };
-    ctx.api.rpcC("nx_crm_base", {}, forcar ? {} : { cache: true, aoCache: dados => {
+    // forçada: `cache: true` sem `aoCache` — nada é servido do aparelho, mas a resposta nova substitui a cópia guardada (a próxima abertura não mostra etapas antigas)
+    ctx.api.rpcC("nx_crm_base", {}, forcar ? { cache: true } : { cache: true, aoCache: dados => {
       if (servida || !dados || typeof dados !== "object") return;
-      servida = dados;
-      cacheBase.set(id, { base: dados, em: Date.now() - BASE_VALIDADE_MS + 15000, promessa });   // vale por 15 s: a rede atualiza em seguida
-      resolve(dados);
-    } }).then(fim, e => { if (servida) return; cacheBase.delete(id); reject(e); });
+      servida = (c && c.base) || dados;                            // já havia uma base em memória (vencida)? é ELA que as telas guardam: a rede atualiza esse objeto
+      cacheBase.set(id, { base: servida, em: Date.now() - BASE_VALIDADE_MS + 15000, promessa });   // vale por 15 s: a rede atualiza em seguida
+      resolve(servida);
+    } }).then(fim, e => {
+      // a rede falhou depois de a tela abrir com o dado guardado: a base fica, mas vencida e sem promessa — a próxima chamada tenta a rede de novo
+      if (servida) { cacheBase.set(id, { base: servida, em: 0, promessa: null }); return; }
+      cacheBase.delete(id); reject(e);
+    });
   });
   cacheBase.set(id, { base: c && c.base, em: c ? c.em : 0, promessa });
   return promessa;
+}
+
+/** Os funis/etapas da base desta empresa mudaram depois de a tela abrir com o dado guardado: chama quem pediu para saber (o Kanban). */
+function avisarBase(id) {
+  for (const fn of [...(ouvintesBase.get(id) || [])]) { try { fn(); } catch (e) { console.error(e); } }
 }
 
 /** Kit compartilhado pelos arquivos do CRM. */
@@ -74,6 +89,14 @@ async function kitDe(ctx) {
     h: ui.h,
     mod: nome => carregarArq(ctx, nome),
     async recarregarBase() { k.base = await obterBase(ctx, { forcar: true }); return k.base; },
+    /** aoBaseMudar(fn) → cancelar(). `fn` roda quando a rede troca os funis/etapas da base que a tela recebeu do aparelho (a tela refaz o que desenhou com eles). */
+    aoBaseMudar(fn) {
+      const id = ctx.cliente && ctx.cliente.id;
+      if (!id || typeof fn !== "function") return () => {};
+      if (!ouvintesBase.has(id)) ouvintesBase.set(id, new Set());
+      ouvintesBase.get(id).add(fn);
+      return () => { const s = ouvintesBase.get(id); if (s) { s.delete(fn); if (!s.size) ouvintesBase.delete(id); } };
+    },
     /** texto do erro (rótulo de campo, trava do Ads, códigos do CRM; o resto pelo api.mensagemErro) */
     erro: e => Lg.textoErro(e, { campos: k.base.campos, padrao: ctx.api && ctx.api.mensagemErro ? ctx.api.mensagemErro : ui.mensagemErro }),
     toastErro: e => ui.toast(k.erro(e), { tipo: "erro" }),

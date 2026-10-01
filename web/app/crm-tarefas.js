@@ -8,6 +8,40 @@
 
 const TIPOS = ["tarefa", "ligacao", "whatsapp", "reuniao", "visita", "email"];
 
+/* Exclusões à espera dos 7 s do «Desfazer» (M25). A tarefa/nota ainda existe no servidor, então uma recarga da ficha ou da gaveta a traria de volta
+   (e, depois de excluída de verdade, ela ficaria na tela como fantasma). id → Set das funções «voltar» das listas que a esconderam ao recarregar
+   (o «Desfazer» devolve o item a elas); depois de excluída de verdade o id fica com null: uma resposta atrasada do servidor não a ressuscita. */
+const pendentes = { tarefa: new Map(), nota: new Map() };
+
+/** Tira de `itens` o que está em exclusão pendente. `voltar(item)` fica guardada: é como o «Desfazer» devolve o item a esta lista. */
+function semPendentes(tipo, itens, voltar) {
+  const m = pendentes[tipo];
+  return (itens || []).filter(x => {
+    if (!m.has(x.id)) return true;
+    const vs = m.get(x.id);
+    if (vs) vs.add(voltar);
+    return false;
+  });
+}
+
+/**
+ * Excluir sem «tem certeza?» (M25): o item some na hora (`sumir`) e a exclusão de verdade (`firmar`) só vai ao servidor depois dos 7 s do «Desfazer».
+ * Se a página sair ou ficar oculta antes disso, o aviso chama firmar({ saindo: true }) e o pedido vai com keepalive (senão o navegador o cancela junto
+ * com a aba e o item «volta a existir»). `voltar` desfaz na lista de origem; as listas que recarregaram no meio recebem o item de volta também.
+ */
+function excluirComDesfazer(k, tipo, item, { texto, rpc, sumir, voltar }) {
+  const m = pendentes[tipo];
+  return k.ui.acaoComDesfazer({ texto,
+    aplicar: () => { m.set(item.id, new Set()); sumir(); },
+    firmar: async o => { await k.api.rpcC(rpc, { p_id: item.id }, o && o.saindo ? { keepalive: true } : {}); m.set(item.id, null); },
+    reverter: () => {
+      const vs = m.get(item.id);
+      m.delete(item.id);
+      voltar();
+      for (const v of vs || []) { try { v(item); } catch (e) { console.error(e); } }
+    } });
+}
+
 function hojeISO(ui) { return ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10); }
 
 /** Rótulo do vencimento: "Atrasada · ontem 14:00", "Hoje 15:30", "amanhã", "05/10 09:00". */
@@ -153,10 +187,9 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
     }
     if (id === "excluir") {
       // M25: sem «tem certeza?». A tarefa some na hora e a exclusão de verdade (firmar) só vai ao servidor depois dos 7 s do «Desfazer»
-      ui.acaoComDesfazer({ texto: `Tarefa «${t.titulo}» excluída`,
-        aplicar: () => { aoMudar && aoMudar({ tipo: "excluida", tarefa: t }); },
-        firmar: () => k.api.rpcC("nx_tarefa_excluir", { p_id: t.id }),
-        reverter: () => { aoMudar && aoMudar({ tipo: "salva", tarefa: t }); } });
+      excluirComDesfazer(k, "tarefa", t, { texto: `Tarefa «${t.titulo}» excluída`, rpc: "nx_tarefa_excluir",
+        sumir: () => { aoMudar && aoMudar({ tipo: "excluida", tarefa: t }); },
+        voltar: () => { aoMudar && aoMudar({ tipo: "salva", tarefa: t }); } });
     }
   }
   check.addEventListener("change", () => alternar(check.checked));
@@ -177,7 +210,9 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
  */
 export function blocoTarefas(k, { tarefas = [], contato_id = null, negocio_id = null, aoMudar, titulo = "Tarefas", vazio = "Nenhuma tarefa por aqui." } = {}) {
   const { ui, h } = k;
-  let lista = tarefas.slice();
+  // tarefa em exclusão pendente não reaparece quando a ficha recarrega; o «Desfazer» a devolve por `voltou`
+  const voltou = t => mudou({ tipo: "salva", tarefa: t });
+  let lista = semPendentes("tarefa", tarefas, voltou);
   const corpo = h("div", { class: "at-lista" });
   const cont = h("span", { class: "abas-n" });
   function desenhar() {
@@ -201,7 +236,7 @@ export function blocoTarefas(k, { tarefas = [], contato_id = null, negocio_id = 
   desenhar();
   const el = h("section", { class: "ng-bloco", "aria-label": titulo },
     h("div", { class: "ng-bloco-cab" }, h("h3", null, titulo, " ", cont), novo), corpo);
-  el.atualizar = novas => { lista = (novas || []).slice(); desenhar(); };
+  el.atualizar = novas => { lista = semPendentes("tarefa", novas, voltou); desenhar(); };
   el.lista = () => lista.slice();
   return el;
 }
@@ -235,10 +270,9 @@ function itemNota(k, n, { aoMudar }) {
       } } }, ui.icone("editar")) : null,
       pode ? h("button", { type: "button", class: "bt-icone", "aria-label": "Excluir nota", on: { click: () => {
         // M25: some na hora; a exclusão de verdade (firmar) só depois dos 7 s do «Desfazer»
-        ui.acaoComDesfazer({ texto: "Nota excluída",
-          aplicar: () => { aoMudar({ tipo: "excluida", nota: n }); },
-          firmar: () => k.api.rpcC("nx_nota_excluir", { p_id: n.id }),
-          reverter: () => { aoMudar({ tipo: "salva", nota: n }); } });
+        excluirComDesfazer(k, "nota", n, { texto: "Nota excluída", rpc: "nx_nota_excluir",
+          sumir: () => { aoMudar({ tipo: "excluida", nota: n }); },
+          voltar: () => { aoMudar({ tipo: "salva", nota: n }); } });
       } } }, ui.icone("lixeira")) : null));
   return el;
 }
@@ -246,7 +280,9 @@ function itemNota(k, n, { aoMudar }) {
 /** blocoNotas(k, {notas, contato_id, negocio_id, aoMudar}) → Node — nova nota no topo, fixadas primeiro. */
 export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null, aoMudar } = {}) {
   const { ui, h } = k;
-  let lista = notas.slice();
+  // nota em exclusão pendente não reaparece quando a ficha recarrega; o «Desfazer» a devolve por `voltou`
+  const voltou = n => mudou({ tipo: "salva", nota: n });
+  let lista = semPendentes("nota", notas, voltou);
   const corpo = h("div", { class: "at-lista" });
   const cont = h("span", { class: "abas-n" });
   function desenhar() {
@@ -285,7 +321,7 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
   desenhar();
   const el = h("section", { class: "ng-bloco", "aria-label": "Notas" },
     h("div", { class: "ng-bloco-cab" }, h("h3", null, "Notas ", cont)), nova, corpo);
-  el.atualizar = novas => { lista = (novas || []).slice(); desenhar(); };
+  el.atualizar = novas => { lista = semPendentes("nota", novas, voltou); desenhar(); };
   return el;
 }
 

@@ -26,12 +26,13 @@ export function iniciais(nome) {
 
 /* ------------------------------------------------------------ telefone */
 /**
- * Igual a public.nx_tel_normalizar: só dígitos. comDdi (número do WhatsApp):
- * 8–15 dígitos como está. Digitado/importado: 10–11 → prefixa 55; 12–15 como está. Fora disso → null.
+ * Igual a public.nx_tel_normalizar: só dígitos. comDdi (número do WhatsApp) OU texto começando com «+» (a pessoa informou o país):
+ * 8–15 dígitos como está, nunca ganha 55. Digitado/importado: 10–11 → prefixa 55; 12–15 como está. Fora disso → null.
  */
 export function normalizarTelefone(p, comDdi = false) {
-  const d = String(p ?? "").replace(/\D/g, "");
-  if (comDdi) return d.length >= 8 && d.length <= 15 ? d : null;
+  const txt = String(p ?? "");
+  const d = txt.replace(/\D/g, "");
+  if (comDdi || txt.trim().startsWith("+")) return d.length >= 8 && d.length <= 15 ? d : null;
   if (d.length >= 10 && d.length <= 11) return "55" + d;
   if (d.length >= 12 && d.length <= 15) return d;
   return null;
@@ -486,9 +487,22 @@ export function esperarOuOnline(ms) {
 }
 
 /**
- * escreverComReq(api, nome, params, {req, aoStatus, esperas, dormir}) → {resultado, req, repetiu}.
+ * O servidor não conhece a função COM estes parâmetros (PostgREST: HTTP 404, código PGRST202, «Could not find the function…»)? É o que acontece
+ * quando o site novo chega antes da migração que cria as versões com `p_req`. Nada foi gravado.
+ */
+export function funcaoInexistente(e) {
+  if (!e) return false;
+  const r = e.resposta && typeof e.resposta === "object" ? e.resposta : null;
+  return Number(e.status) === 404 || /could not find the function/i.test(String(e.codigo || e.message || ""))
+    || String(e.codigo || "").toUpperCase() === "PGRST202" || String((r && r.code) || "").toUpperCase() === "PGRST202";
+}
+
+/**
+ * escreverComReq(api, nome, params, {req, aoStatus, esperas, dormir}) → {resultado, req, repetiu, semReq?}.
  * Chama a RPC com `p_req`. Em erro AMBÍGUO repete com a MESMA chave (depois de 1,5 s e de 4 s): se o servidor já tinha aplicado, devolve o resultado
  * guardado; se não, aplica agora — nunca duplica. Sem sucesso depois das tentativas lança o erro com `.ambigua = true` e `.req` (para «Salvar de novo»).
+ * Servidor sem a versão com `p_req` (função inexistente): repete UMA vez sem a chave, para ninguém ficar sem conseguir cadastrar (`semReq = true`);
+ * essa chamada não tem proteção contra duplicar, então um erro nela sobe como veio, sem `.ambigua`.
  * Qualquer outro erro sobe na hora, com `.req`.
  */
 export async function escreverComReq(api, nome, params, { req, aoStatus, esperas = [1500, 4000], dormir = esperarOuOnline } = {}) {
@@ -500,12 +514,23 @@ export async function escreverComReq(api, nome, params, { req, aoStatus, esperas
       return { resultado, req: chave, repetiu: i > 0 };
     } catch (e) {
       ultimo = e;
+      if (funcaoInexistente(e)) return { resultado: await api.rpcC(nome, params), req: chave, repetiu: i > 0, semReq: true };
       if (!erroAmbiguo(e)) { try { e.req = chave; } catch { /* erro congelado */ } throw e; }
       if (i < esperas.length) { if (aoStatus) aoStatus("Conferindo se foi salvo…"); await dormir(esperas[i]); }
     }
   }
   try { ultimo.ambigua = true; ultimo.req = chave; } catch { /* erro congelado */ }
   throw ultimo;
+}
+
+/**
+ * «Desfazer» de uma troca de etiquetas: sobre o conjunto ATUAL, tira as que aquela ação pôs (`mais`) e devolve as que ela tirou (`menos`).
+ * O que foi marcado ou desmarcado DEPOIS fica como está (voltar ao conjunto inteiro de antes apagaria a etiqueta posta em seguida).
+ */
+export function desfazerEtiquetas(atual, mais = [], menos = []) {
+  const fica = (atual || []).filter(id => !(mais || []).includes(id));
+  for (const id of menos || []) if (!fica.includes(id)) fica.push(id);
+  return fica;
 }
 
 /** Mover entre etapas de TIPO diferente (aberto ↔ ganho/perdido) dispara automações (mensagens, tarefas): essas só se efetivam depois dos 7 s do «Desfazer». */
@@ -534,6 +559,14 @@ export function pontuacao(x) {
   const txt = v => (typeof v === "string" ? v.trim() : "");
   return { score, faixa: score >= 70 ? "alta" : score >= 40 ? "media" : "baixa",
     motivo: txt(x.score_motivo) || txt(campos.score_motivo), em: txt(x.score_em) || txt(campos.score_em) };
+}
+
+/** Quando a pontuação foi atribuída, para a tela: «2026-10-01T14:03» (hora de São Paulo, como o servidor grava) → «01/10/2026 às 14:03». Outro formato volta como veio. */
+export function quandoPontuacao(em) {
+  const t = String(em ?? "").trim();
+  const r = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(t);
+  if (!r) return t;
+  return `${r[3]}/${r[2]}/${r[1]}${r[4] ? ` às ${r[4]}:${r[5]}` : ""}`;
 }
 
 /** Valor que o cartão "vale" na coluna: final se ganho, senão o previsto. */
@@ -745,6 +778,14 @@ export function tituloCard(c) {
   if (n && String(n).trim()) return String(n).trim();
   const tel = (c.contato && c.contato.telefone) || c.telefone;
   return tel ? formatarTel(tel) : "Sem nome";
+}
+
+/** Como chamar o contato na tela: nome → telefone → e-mail → "Sem nome" (quem entrou só com e-mail, pelo site ou por planilha, continua identificável). */
+export function nomeContato(c) {
+  if (!c) return "Sem nome";
+  const n = String(c.nome || "").trim();
+  if (n) return n;
+  return (c.telefone && formatarTel(c.telefone)) || String(c.email || "").trim() || "Sem nome";
 }
 
 /** "5512998303030" → "(12) 99830-3030" (igual ao ui.telBR) */

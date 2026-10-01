@@ -233,6 +233,30 @@ export function slotMaisPerto(grupos, dia, hhmm) {
   return g.itens.reduce((m, s) => (Math.abs(s.min - alvo) < Math.abs(m.min - alvo) ? s : m), g.itens[0]);
 }
 
+/**
+ * O dia pedido (clique na grade, «+» do dia) não tem horário livre e a janela abriu em outro: «Sem horário livre em qui 02/10 — mostrando o próximo: sex 03/10».
+ * null quando o horário selecionado é do dia pedido (ou não houve dia pedido).
+ */
+export function avisoOutroDia(diaPedido, slot, hojeISO) {
+  if (!diaPedido || !slot || !slot.dia || slot.dia === diaPedido) return null;
+  const nome = iso => (iso === hojeISO ? "hoje" : iso === diaISO(hojeISO, 1) ? "amanhã" : `${semanaCurta(iso)} ${iso.slice(8, 10)}/${iso.slice(5, 7)}`);
+  const pedido = nome(diaPedido);
+  return `Sem horário livre ${pedido === "hoje" || pedido === "amanhã" ? pedido : `em ${pedido}`} — mostrando o próximo: ${nome(slot.dia)}`;
+}
+
+/**
+ * «Desfazer» devolve a oportunidade à etapa (e à posição) em que estava: marcar leva o cartão para «Agendada» e desmarcar, para «Nova».
+ * antes = {estagio_id, ordem} lido ANTES de marcar. → true se deu certo (ou não havia o que devolver); false se a etapa não pôde ser devolvida
+ * (a consulta já foi desfeita: isso não vira erro do Desfazer).
+ */
+export async function devolverEtapa(api, negocioId, antes) {
+  if (!antes || !antes.estagio_id) return true;
+  try {
+    await api.rpcC("nx_negocio_mover", { p_id: negocioId, p_estagio: antes.estagio_id, p_ordem: antes.ordem ?? null, p_extra: {} });
+    return true;
+  } catch (e) { console.error("agenda: não devolveu a etapa", e); return false; }
+}
+
 /** Oportunidades ABERTAS que casam com a busca (uma chamada: nx_buscar). Servidor sem a busca → cai no quadro do funil (mais lento). */
 async function procurarNegocios(ctx, q) {
   const { api } = ctx;
@@ -271,7 +295,8 @@ function radiosComSetas(grupo) {
  * prontos — dias em chips («Hoje», «Amanhã», «Sex 03/10»), horários em pílulas, o primeiro (ou o mais perto do clique) já selecionado — e «Confirmar» é o 2º toque.
  * Sem oportunidade: busca enquanto digita; escolher o resultado já carrega os horários. Atalhos «Primeiro livre» e «Amanhã de manhã».
  * Confirmar → aviso «Marcada para qui 02/10 às 10:00 · Desfazer» (desmarca, ou volta ao horário anterior se era remarcação).
- * negocio: {id | negocio_id, titulo | nome, servico?, funil_nome?, inicio? (consulta atual: é remarcação)}; dia/hora: o que veio do clique na grade; base: dia aberto na tela.
+ * negocio: {id | negocio_id, titulo | nome, servico?, funil_nome?, inicio? (consulta atual: é remarcação), estagio_id?, ordem? (etapa atual: o Desfazer devolve o cartão a ela)};
+ * dia/hora: o que veio do clique na grade; base: dia aberto na tela.
  */
 export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = null, base = null, aoMudar = null } = {}) {
   if (!ctx.pode("atendente")) return null;
@@ -280,13 +305,15 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   const [Lg] = await Promise.all([logicaDe(ctx), ui.carregarCss("agenda")]);   // o CSS da agenda também vale quando a janela abre pelo CRM (gaveta do negócio)
   const hoje = ui.hojeSP();
   let sel = negocio ? { id: negocio.id || negocio.negocio_id, titulo: negocio.titulo || negocio.nome || "Negócio", servico: negocio.servico || "", funil_nome: negocio.funil_nome || negocio.estagio_nome || "",
-    consultaAtual: negocio.inicio || negocio.consulta_em || null } : null;
-  const aPartirInicial = dia && dia >= hoje ? dia : (base && base >= hoje ? base : hoje);
+    consultaAtual: negocio.inicio || negocio.consulta_em || null,
+    antes: negocio.estagio_id ? { estagio_id: negocio.estagio_id, ordem: negocio.ordem ?? null } : null } : null;
+  const diaPedido = dia && dia >= hoje ? dia : null;      // o dia que a pessoa pediu (clique na grade ou «+» do dia)
+  const aPartirInicial = diaPedido || (base && base >= hoje ? base : hoje);
   let grupos = [], diaSel = null, slotSel = null, duracao = null, seqH = 0, seqB = 0;
   let reqAtual = null, reqConteudo = "";
   const preferido = dia && hora ? { dia, hora } : null;
 
-  const campoBusca = ui.campo({ rotulo: "Buscar oportunidade aberta", nome: "busca", tipo: "busca", placeholder: "Nome, serviço ou telefone", ajuda: "A consulta fica vinculada à oportunidade escolhida." });
+  const campoBusca = ui.campo({ rotulo: "Buscar oportunidade aberta", nome: "busca", tipo: "busca", placeholder: "Nome ou telefone", ajuda: "A consulta fica vinculada à oportunidade escolhida." });
   const inputBusca = campoBusca.querySelector("input");
   const resultados = h("div", { class: "agenda-resultados", role: "listbox", "aria-label": "Oportunidades encontradas" });
   const secBusca = h("section", { class: "agenda-busca" }, campoBusca, resultados);
@@ -297,9 +324,13 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   const diasEl = h("div", { class: "ag-dias", role: "radiogroup", "aria-label": "Dia" });
   const horasEl = h("div", { class: "ag-horas", role: "radiogroup", "aria-label": "Horário" });
   const info = h("p", { class: "campo-ajuda ag-info", role: "status", "aria-live": "polite" });
+  // o dia pedido não tem vaga e a janela abriu em outro: avisa com destaque (senão «Confirmar», o 2º toque, marcaria no dia errado)
+  const outroDiaTxt = h("span");
+  const outroDia = h("p", { class: "aviso aviso-aten ag-outro-dia", role: "status", hidden: true }, ui.icone("info"), outroDiaTxt);
   const statusEl = h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true });
   const formulario = h("form", { class: "agenda-form", novalidate: true }, secBusca, escolhido,
-    h("div", { class: "agenda-form-grade" }, servicoEl, outraData), atalhos, diasEl, horasEl, info, statusEl);
+    h("div", { class: "agenda-form-grade" }, servicoEl, outraData), outroDia, atalhos, diasEl, horasEl, info, statusEl);
+  const avisarOutroDia = txt => { outroDiaTxt.textContent = txt || ""; outroDia.hidden = !txt; };
   radiosComSetas(diasEl); radiosComSetas(horasEl);
   const servicoValor = () => servicoEl.querySelector("input").value.trim();
   const dataValor = () => outraData.querySelector("input").value || hoje;
@@ -311,7 +342,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
     if (!sel) return;
     escolhido.append(h("div", { class: "linha agenda-escolhido-topo" },
       h("p", { class: "agenda-escolhido", role: "status" }, `${sel.titulo}${sel.funil_nome ? ` · ${sel.funil_nome}` : ""}`),
-      negocio ? null : h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { sel = null; slotSel = null; grupos = []; diaSel = null; ui.limpar(atalhos); ui.limpar(diasEl); ui.limpar(horasEl); info.textContent = ""; pintarEscolhido(); inputBusca.focus(); } } }, "Trocar")));
+      negocio ? null : h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { sel = null; slotSel = null; grupos = []; diaSel = null; ui.limpar(atalhos); ui.limpar(diasEl); ui.limpar(horasEl); info.textContent = ""; avisarOutroDia(null); pintarEscolhido(); inputBusca.focus(); } } }, "Trocar")));
     if (sel.consultaAtual && Date.parse(sel.consultaAtual) > Date.now()) {
       escolhido.append(h("p", { class: "aviso aviso-aten" }, ui.icone("info"), h("span", null, `Já tem consulta marcada para ${ui.dataHoraBR(sel.consultaAtual)}. Ao confirmar, ela será remarcada.`)));
     }
@@ -360,6 +391,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
     if (!sel) return;
     const minha = ++seqH;
     info.textContent = "Buscando horários livres…";
+    avisarOutroDia(null);
     ui.limpar(atalhos); ui.limpar(diasEl); ui.limpar(horasEl);
     try {
       const r = await api.rpcC("nx_agenda_livres", { p_a_partir: dataValor(), p_dias: 14, p_servico: servicoValor() || null, p_negocio: sel.id });
@@ -371,6 +403,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
       if (inicial && preferido) escolha = slotMaisPerto(grupos, preferido.dia, preferido.hora);
       if (!escolha && slotSel) escolha = grupos.flatMap(g => g.itens).find(s => s.inicio === slotSel.inicio) || null;
       selecionarSlot(escolha || primeiroLivre(grupos));
+      if (inicial) avisarOutroDia(avisoOutroDia(diaPedido, slotSel, hoje));
     } catch (e) {
       if (minha !== seqH) return;
       info.textContent = "";
@@ -382,19 +415,27 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   outraData.querySelector("input").addEventListener("change", () => { if (sel) { slotSel = null; carregarHorarios(); } });
 
   /* ---------- busca enquanto digita ---------- */
-  function escolher(item) {
-    sel = { id: item.id, titulo: item.titulo || item.contato_nome || "Negócio", servico: "", funil_nome: item.estagio_nome || "", consultaAtual: null };
-    pintarEscolhido();
-    carregarHorarios({ inicial: true });
-    // a ficha traz o serviço e a consulta atual (se houver, o aviso de que será remarcada); a duração já vem do servidor pelo negócio
-    api.rpcC("nx_negocio_ver", { p_id: item.id }).then(d => {
-      if (!d || !d.negocio || !sel || sel.id !== item.id) return;
+  /** A ficha diz em que etapa a oportunidade está AGORA (o «Desfazer» devolve o cartão a ela) e, na busca, traz o serviço e a consulta atual. */
+  let fichaP = null;
+  function lerFicha({ completar = false } = {}) {
+    const id = sel.id;
+    fichaP = api.rpcC("nx_negocio_ver", { p_id: id }).then(d => {
+      if (!d || !d.negocio || !sel || sel.id !== id) return;
+      if (d.negocio.estagio_id) sel.antes = { estagio_id: d.negocio.estagio_id, ordem: d.negocio.ordem ?? null };
+      if (!completar) return;
       sel.servico = d.negocio.servico || "";
       sel.consultaAtual = d.negocio.consulta_em || null;
       const campo = servicoEl.querySelector("input");
       if (!campo.value && sel.servico) campo.value = sel.servico;
       pintarEscolhido();
     }).catch(() => { /* sem a ficha: segue só com os horários */ });
+  }
+  function escolher(item) {
+    sel = { id: item.id, titulo: item.titulo || item.contato_nome || "Negócio", servico: "", funil_nome: item.estagio_nome || "", consultaAtual: null, antes: null };
+    pintarEscolhido();
+    carregarHorarios({ inicial: true });
+    // a ficha traz o serviço e a consulta atual (se houver, o aviso de que será remarcada); a duração já vem do servidor pelo negócio
+    lerFicha({ completar: true });
   }
   async function buscarAgora() {
     const q = inputBusca.value.trim();
@@ -433,6 +474,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
     aoAbrir: a => {
       if (!sel) return;
       carregarHorarios({ inicial: true });
+      if (!sel.antes) lerFicha();        // quem abriu a janela não disse a etapa: lê agora, enquanto a pessoa escolhe o horário
       // oportunidade já escolhida: o foco vai direto para «Confirmar consulta» (Enter = o 2º toque)
       const bt = a.el.querySelector('.modal-rod [data-tipo="primario"]');
       if (bt) try { bt.focus({ preventScroll: true }); } catch { /* ok */ }
@@ -443,6 +485,8 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
         if (!sel) { m.erro("Escolha uma oportunidade aberta para continuar."); return false; }
         if (!slotSel) { m.erro("Escolha um dia e um horário livre."); return false; }
         try {
+          // a etapa de antes ainda está chegando? espera um instante (no máximo 1,5 s): depois de marcar o cartão já estará em «Agendada»
+          if (!sel.antes && fichaP) await Promise.race([fichaP, new Promise(r => setTimeout(r, 1500))]);
           const params = { p_negocio: sel.id, p_inicio: slotSel.inicio, p_servico: servicoValor() || null };
           const conteudo = JSON.stringify(params);
           if (conteudo !== reqConteudo) { reqAtual = Lg.novaReq(); reqConteudo = conteudo; }
@@ -468,13 +512,18 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   const rotulo = (resultado.consulta && resultado.consulta.rotulo) || ui.dataHoraBR(slotSel && slotSel.inicio);
   const anterior = resultado.remarcada && resultado.anterior ? resultado.anterior.inicio : null;
   const servicoMarcado = servicoValor() || null;
+  const marcada = { id: sel.id, antes: sel.antes || null, servicoAntes: sel.servico || null };      // o que valia ANTES de marcar
   if (aoMudar) try { aoMudar(resultado); } catch (e) { console.error(e); }
   ui.acaoComDesfazer({
     texto: `${resultado.remarcada ? "Remarcada" : "Marcada"} para ${rotulo}`,
     reverter: async () => {
-      // remarcação volta ao horário anterior; consulta nova some
-      if (anterior) erroResposta(await api.rpcC("nx_agenda_marcar", { p_negocio: sel.id, p_inicio: anterior, p_servico: servicoMarcado }));
-      else erroResposta(await api.rpcC("nx_agenda_desmarcar", { p_negocio: sel.id, p_motivo: "Desfeito logo depois de marcar" }));
+      // remarcação volta ao horário (e ao serviço) anterior, como ENCAIXE: devolver o que já estava marcado não passa pela regra de antecedência
+      // nem de horário de atendimento (senão desfazer em cima da hora era recusado e a consulta ficava no horário errado); consulta nova some
+      if (anterior) erroResposta(await api.rpcC("nx_agenda_marcar", { p_negocio: marcada.id, p_inicio: anterior, p_servico: marcada.servicoAntes || servicoMarcado, p_encaixe: true }));
+      else erroResposta(await api.rpcC("nx_agenda_desmarcar", { p_negocio: marcada.id, p_motivo: "Desfeito logo depois de marcar" }));
+      // marcar levou o cartão para «Agendada» (e desmarcar o leva para «Nova»): volta para a etapa em que estava
+      if (resultado.etapa && !(await devolverEtapa(api, marcada.id, marcada.antes)))
+        ui.toast("A consulta foi desfeita, mas o cartão não voltou para a etapa em que estava. Confira no CRM.", { tipo: "info" });
       if (aoMudar) try { aoMudar(null); } catch (e) { console.error(e); }
     },
   });
@@ -502,16 +551,32 @@ export async function desmarcarConsulta(ctx, c, { aoMudar = null } = {}) {
   ui.acaoComDesfazer({
     texto: `Consulta de ${ui.dataHoraBR(c.inicio)} desmarcada`,
     reverter: async () => {
-      erroResposta(await api.rpcC("nx_agenda_marcar", { p_negocio: c.negocio_id, p_inicio: c.inicio, p_servico: c.servico || null }));
+      // a consulta estava numa etapa que não é «Agendada» (e por isso o cartão não saiu dela ao desmarcar)? marcar de volta o levaria para «Agendada»:
+      // lê a etapa de agora para devolvê-lo a ela depois
+      let antes = null;
+      if (!r.voltou_para_nova && c.marco !== "agendada") {
+        try { const d = await api.rpcC("nx_negocio_ver", { p_id: c.negocio_id }); if (d && d.negocio && d.negocio.estagio_id) antes = { estagio_id: d.negocio.estagio_id, ordem: d.negocio.ordem ?? null }; }
+        catch { /* sem a ficha: a consulta volta, a etapa fica a que o servidor escolher */ }
+      }
+      // marca de volta como ENCAIXE: devolver a consulta que já existia não passa pela regra de antecedência (desfazer às 14h a consulta das 15h era recusado)
+      const volta = erroResposta(await api.rpcC("nx_agenda_marcar", { p_negocio: c.negocio_id, p_inicio: c.inicio, p_servico: c.servico || null, p_encaixe: true }));
+      if (antes && volta && volta.etapa) await devolverEtapa(api, c.negocio_id, antes);
       if (aoMudar) try { aoMudar(null); } catch (e) { console.error(e); }
     },
   });
   return r;
 }
 
-export function desmontar() {}
+/** Limpeza da tela aberta (relógio da linha de «agora», ouvinte de largura, comando da paleta). O shell chama desmontar() ao sair da rota. */
+let limpezaAtual = null;
+export function desmontar() {
+  const limpar = limpezaAtual;
+  limpezaAtual = null;
+  if (limpar) try { limpar(); } catch (e) { console.error(e); }
+}
 
 export async function montar(ctx) {
+  desmontar();          // montar de novo sem ter saído (troca de empresa, recarga da rota): a tela anterior não fica viva por trás
   const { ui, api } = ctx;
   const h = ui.h;
   ui.carregarCss("agenda");
@@ -527,6 +592,8 @@ export async function montar(ctx) {
   let vivo = true;
   let eixoAtual = null;
   let nomesDonos = null;
+  let Lg = null;                    // crm-logica.js (hrefTel do balão da consulta): chega em paralelo, a tela não espera por ele
+  logicaDe(ctx).then(m => { Lg = m; }).catch(() => { /* sem ele o telefone aparece como texto */ });
 
   // M30: ui.cabecalho (sem a empresa em cima); os controles de data e as ações entram no lugar das ações do cabeçalho
   const controles = h("div", { class: "agenda-cab-controles" });
@@ -797,11 +864,14 @@ export async function montar(ctx) {
   }
   const relogio = setInterval(posicionarAgora, 60_000);
 
-  /** Detalhe da consulta ao tocar no bloco: quem, quando, origem e as ações (Abrir negócio, Remarcar, Desmarcar). */
+  /** Detalhe da consulta ao tocar no bloco: quem, quando, telefone (toque para ligar), origem e as ações (Abrir conversa, Abrir negócio, Remarcar, Desmarcar). */
   function abrirDetalhe(c, ancora) {
     const nome = c.nome || c.titulo || "Consulta sem nome";
     const p = partesSP(c.inicio);
+    const hrefTel = c.telefone && Lg ? Lg.hrefTel(c.telefone) : null;
+    const comConversas = !!(c.contato_id && ctx.temModulo && ctx.temModulo("conversas"));
     const acoes = h("div", { class: "ag-det-acoes" },
+      comConversas ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { pop.fechar(); ctx.navegar(`#/conversas?contato=${encodeURIComponent(c.contato_id)}`); } } }, ui.icone("whatsapp"), "Abrir conversa") : null,
       h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { pop.fechar(); ctx.navegar(`#/crm/negocio/${encodeURIComponent(c.negocio_id)}`); } } }, "Abrir negócio"),
       ctx.pode("atendente") ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { pop.fechar(); abrirAgendamento(c); } } }, "Remarcar") : null,
       ctx.pode("atendente") ? h("button", { type: "button", class: "bt bt-contorno-perigo bt-p", on: { click: () => { pop.fechar(); desmarcar(c); } } }, "Desmarcar") : null);
@@ -809,7 +879,9 @@ export async function montar(ctx) {
       h("b", { class: "ag-det-nome" }, nome),
       h("span", { class: "ag-det-quando dado" }, `${p ? nomeDia(p.dia) : ""} · ${ui.horaBR(c.inicio)}${c.fim ? `–${ui.horaBR(c.fim)}` : ""}`),
       c.servico ? h("span", null, c.servico) : null,
-      c.telefone ? h("span", { class: "dado" }, ui.telBR(c.telefone)) : null,
+      c.telefone ? (hrefTel
+        ? h("a", { class: "dado ag-det-tel", href: hrefTel, "aria-label": `Ligar para ${nome}, ${ui.telBR(c.telefone)}` }, ui.icone("telefone"), ui.telBR(c.telefone))
+        : h("span", { class: "dado" }, ui.telBR(c.telefone))) : null,
       h("span", { class: "ag-det-origem" }, [origemDo(c), c.etapa || (c.marco === "agendada" ? "Agendada" : null)].filter(Boolean).join(" · ")),
       acoes);
     const pop = ui.flutuante(ancora, corpo, { classe: "flut-ag" });
@@ -834,12 +906,15 @@ export async function montar(ctx) {
   const desregistrar = ctx.comandos && typeof ctx.comandos.registrar === "function"
     ? ctx.comandos.registrar({ id: "agenda.marcar", rotulo: "Marcar consulta", palavras: "agenda consulta horário agendar", fazer: () => abrirAgendamento() }) : null;
 
-  montarCabecalho();
-  await carregar();
-  return () => {
+  // a limpeza fica guardada no módulo ANTES de qualquer espera: se a pessoa sair da Agenda com a 1ª carga em andamento, o desmontar() já a encontra
+  const limpar = () => {
     vivo = false; sequencia++;
     if (typeof desregistrar === "function") try { desregistrar(); } catch { /* ok */ }
     clearInterval(relogio);
     if (mq.removeEventListener) mq.removeEventListener("change", aoMudarLargura);
   };
+  limpezaAtual = limpar;
+  montarCabecalho();
+  await carregar();
+  return limpar;
 }

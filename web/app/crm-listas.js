@@ -66,7 +66,7 @@ export async function montarContatos(k, el, rota) {
     rotulo: k.v.contatos,
     colunas: [
       { chave: "nome", rotulo: "Nome", principal: true, render: c => h("div", { class: "cel-nome" }, ui.avatar(c.nome || c.telefone, c.id),
-        h("div", null, h("b", null, c.nome || ui.telBR(c.telefone) || "Sem nome"), h("small", null, c.cidade || (c.optin_marketing === false ? "Não quer marketing" : L.ROTULO_ORIGEM[c.origem] || "")))) },
+        h("div", null, h("b", null, L.nomeContato(c)), h("small", null, c.cidade || (c.optin_marketing === false ? "Não quer marketing" : L.ROTULO_ORIGEM[c.origem] || "")))) },
       { chave: "telefone", rotulo: "Telefone", render: c => c.telefone ? h("span", { class: "mono" }, ui.telBR(c.telefone)) : null },
       { chave: "email", rotulo: "E-mail" },
       { chave: "empresa", rotulo: "Empresa", render: c => c.empresa ? c.empresa.nome : null },
@@ -288,7 +288,7 @@ export function listaCompacta(k, { aoMudar }) {
   }
 
   function linha(c) {
-    const nome = c.nome || ui.telBR(c.telefone) || "Sem nome";
+    const nome = L.nomeContato(c);
     const sub = [c.telefone ? ui.telBR(c.telefone) : null, c.cidade].filter(Boolean).join(" · ")
       || (c.optin_marketing === false ? "Não quer marketing" : L.ROTULO_ORIGEM[c.origem] || "");
     const etq = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean)[0];
@@ -404,8 +404,9 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
     const c = d.contato;
     const pode = k.pode("atendente");
     ui.limpar(el);
-    if (!gaveta) ctx.titulo(c.nome || ui.telBR(c.telefone) || k.v.contato);
-    else gaveta.trocarTitulo(c.nome || ui.telBR(c.telefone) || k.v.contato);
+    const nomeOuTipo = c.nome || (c.telefone && ui.telBR(c.telefone)) || c.email || k.v.contato;
+    if (!gaveta) ctx.titulo(nomeOuTipo);
+    else gaveta.trocarTitulo(nomeOuTipo);
     const avisar = () => { if (aoMudar) try { aoMudar(c); } catch { /* ok */ } };
     async function salvar(chaves) {
       const r = await k.api.rpcC("nx_contato_salvar", { p_contato: { id: c.id, ...chaves } });
@@ -416,7 +417,7 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
     const conv = (d.conversas || []).find(x => x.status !== "resolvida");
 
     /* cabeçalho */
-    const nomeH = h("h1", null, c.nome || ui.telBR(c.telefone) || "Sem nome");
+    const nomeH = h("h1", null, L.nomeContato(c));
     const menuBt = h("button", { type: "button", class: "bt-icone", "aria-label": "Mais ações" }, ui.icone("opcoes"));
     menuBt.addEventListener("click", () => ui.menu(menuBt, [
       c.telefone ? { rotulo: "Copiar telefone", icone: "copiar", fn: () => ui.copiar(ui.telBR(c.telefone)) } : null,
@@ -454,9 +455,9 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
     const inp = (tipo, valor, extra = {}) => h("input", { type: tipo, value: valor ?? "", ...extra });
     dl.append(
       ...N.linhaEd(k, { rotulo: "Nome", desabilitado: !pode, controle: inp("text", c.nome, { maxlength: 160 }), ler: x => x.value.trim() || null,
-        salvar: async v => { await salvar({ nome: v }); nomeH.textContent = v || ui.telBR(c.telefone) || "Sem nome"; } }),
+        salvar: async v => { await salvar({ nome: v }); nomeH.textContent = L.nomeContato(c); } }),
       ...N.linhaEd(k, { rotulo: "Telefone", desabilitado: !pode, controle: inp("tel", c.telefone ? ui.telBR(c.telefone) : "", { placeholder: "(12) 99830-3030" }),
-        ler: x => { const dg = x.value.replace(/\D/g, ""); return dg || null; },
+        ler: x => { const dg = x.value.replace(/\D/g, ""); return dg ? (x.value.trim().startsWith("+") ? "+" : "") + dg : null; },
         salvar: v => salvar({ telefone: v }),
         aoErro: (e, erroEl) => {
           if (e && e.codigo === "telefone_em_uso" && /^\d+$/.test(String(e.hint || ""))) {
@@ -481,7 +482,7 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
       if (!pode) for (const b of etq.querySelectorAll("button")) b.disabled = true;
       ui.limpar(ddEtq); ddEtq.appendChild(etq);
     };
-    // M25: etiquetar grava na hora e oferece «Desfazer»
+    // M25: etiquetar grava na hora e oferece «Desfazer» — que desfaz só ESTA troca (uma etiqueta posta depois continua)
     async function etiquetar(ids) {
       const antes = (c.etiquetas || []).slice();
       const nomeDe = id => (k.etiqueta(id) || {}).nome || "etiqueta";
@@ -489,7 +490,11 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
       const texto = mais.length ? `Etiqueta «${nomeDe(mais[0])}» adicionada` : menos.length ? `Etiqueta «${nomeDe(menos[0])}» removida` : "Etiquetas atualizadas";
       try { await salvar({ etiquetas: ids }); }
       catch (e) { k.toastErro(e); montarEtq(antes); return; }
-      ui.acaoComDesfazer({ texto, reverter: async () => { await salvar({ etiquetas: antes }); montarEtq(antes); } });
+      ui.acaoComDesfazer({ texto, reverter: async () => {
+        const volta = L.desfazerEtiquetas(c.etiquetas || [], mais, menos);
+        await salvar({ etiquetas: volta });
+        montarEtq(c.etiquetas || volta);
+      } });
     }
     montarEtq(c.etiquetas || []);
     dl.append(h("div", { class: "ng-campo ng-campo-largo" }, h("dt", null, "Etiquetas"), ddEtq));

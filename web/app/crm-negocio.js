@@ -151,9 +151,9 @@ export async function prepararMovimento(k, card, estagio) {
   return {};
 }
 
-/** nx_negocio_mover → Card (lança o erro do servidor, com .codigo/.hint). */
-export function moverNegocio(k, card, estagio, { ordem = null, extra = {} } = {}) {
-  return k.api.rpcC("nx_negocio_mover", { p_id: card.id, p_estagio: estagio.id, p_ordem: ordem, p_extra: extra || {} });
+/** nx_negocio_mover → Card (lança o erro do servidor, com .codigo/.hint). `keepalive`: a página está saindo — o pedido termina mesmo com a aba fechada. */
+export function moverNegocio(k, card, estagio, { ordem = null, extra = {}, keepalive = false } = {}) {
+  return k.api.rpcC("nx_negocio_mover", { p_id: card.id, p_estagio: estagio.id, p_ordem: ordem, p_extra: extra || {} }, keepalive ? { keepalive: true } : {});
 }
 
 /** Pergunta o que for preciso e move. → Card | null (cancelado). Erros sobem. */
@@ -312,7 +312,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-marcar", on: { click: async () => {
         try {
           const ag = await k.ctx.carregar("agenda");
-          await ag.marcarConsulta(k.ctx, { negocio: { id: n.id, titulo: n.titulo || (d.contato && d.contato.nome) || n.nome, servico: n.servico, funil_nome: funil ? funil.nome : "", inicio: n.consulta_em },
+          await ag.marcarConsulta(k.ctx, { negocio: { id: n.id, titulo: n.titulo || (d.contato && d.contato.nome) || n.nome, servico: n.servico, funil_nome: funil ? funil.nome : "", inicio: n.consulta_em, estagio_id: n.estagio_id, ordem: n.ordem ?? null },
             aoMudar: () => { if (!fechada) carregar(); } });
         } catch (err) { k.toastErro(err); }
       } } }, ui.icone("calendario"), remarcar ? "Remarcar consulta" : "Marcar consulta"));
@@ -403,7 +403,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
         el.appendChild(h("section", { class: "ng-bloco", "aria-label": k.v.contato },
           h("div", { class: "ng-contato" },
             ui.avatar(ct.nome || ct.telefone, ct.id),
-            h("div", null, h("b", null, ct.nome || L_tel(k, ct.telefone)), h("small", null, [ct.telefone ? ui.telBR(ct.telefone) : null, ct.email].filter(Boolean).join(" · ") || "Sem telefone")),
+            h("div", null, h("b", null, L.nomeContato(ct)), h("small", null, [ct.telefone ? ui.telBR(ct.telefone) : null, ct.email].filter(Boolean).join(" · ") || "Sem telefone")),
             h("div", { class: "linha" },
               k.ctx.temModulo && k.ctx.temModulo("conversas") ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => {
                 g.fechar();
@@ -473,7 +473,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       if (pont) dl.append(h("div", { class: "ng-campo ng-campo-largo" }, h("dt", null, "Pontuação do lead"), h("dd", { class: "ng-pontuacao" },
         ui.pilula(`${pont.score} de 100`, pont.faixa === "alta" ? "ok" : pont.faixa === "media" ? "aten" : "neutra", { icone: "ia" }),
         pont.motivo ? h("span", { class: "ng-pontuacao-motivo" }, pont.motivo) : null,
-        pont.em ? h("small", { class: "ng-pontuacao-em" }, `Atribuída em ${pont.em.replace("T", " às ")}`) : null)));
+        pont.em ? h("small", { class: "ng-pontuacao-em" }, `Atribuída em ${L.quandoPontuacao(pont.em)}`) : null)));
       const ddEtq = h("dd", null);
       const montarEtq = marcadas => {
         const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas, rotulo: "Etiquetas do negócio",
@@ -481,7 +481,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
         if (!podeEditar) for (const b of etq.querySelectorAll("button")) b.disabled = true;
         ui.limpar(ddEtq); ddEtq.appendChild(etq);
       };
-      // M25: etiquetar grava na hora e oferece «Desfazer» (volta ao conjunto anterior)
+      // M25: etiquetar grava na hora e oferece «Desfazer» — que desfaz só ESTA troca (uma etiqueta posta depois continua)
       async function etiquetar(ids) {
         const antes = (n.etiquetas || []).slice();
         const nomeDe = id => (k.etiqueta(id) || {}).nome || "etiqueta";
@@ -489,7 +489,11 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
         const texto = mais.length ? `Etiqueta «${nomeDe(mais[0])}» adicionada` : menos.length ? `Etiqueta «${nomeDe(menos[0])}» removida` : "Etiquetas atualizadas";
         try { await salvar({ etiquetas: ids }); }
         catch (e) { k.toastErro(e); montarEtq(antes); return; }
-        ui.acaoComDesfazer({ texto, reverter: async () => { await salvar({ etiquetas: antes }); montarEtq(antes); } });
+        ui.acaoComDesfazer({ texto, reverter: async () => {
+          const volta = L.desfazerEtiquetas(n.etiquetas || [], mais, menos);
+          await salvar({ etiquetas: volta });
+          montarEtq(n.etiquetas || volta);
+        } });
       }
       montarEtq(n.etiquetas || []);
       dl.append(h("div", { class: "ng-campo ng-campo-largo" }, h("dt", null, "Etiquetas"), ddEtq));
@@ -551,8 +555,6 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
   await carregar();
   return g;
 }
-
-function L_tel(k, t) { return t ? k.ui.telBR(t) : "Sem nome"; }
 
 /* ============================================================ mover de funil */
 export async function moverDeFunil(k, n, { aoMover } = {}) {
@@ -637,7 +639,7 @@ export function avisoDuplicado(k, inputTel, { aoUsar, ignorarId = null } = {}) {
       if (!achado) return;
       const quando = achado.ultimo_contato_em ? `última conversa ${ui.relativo(achado.ultimo_contato_em)}` : "ainda sem conversa";
       caixa.append(ui.icone("info"),
-        h("span", { class: "crm-dup-txt" }, h("b", null, "Já existe: "), `${achado.nome || ui.telBR(achado.telefone)}, ${quando}`),
+        h("span", { class: "crm-dup-txt" }, h("b", null, "Já existe: "), `${L.nomeContato(achado)}, ${quando}`),
         h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { if (aoUsar) aoUsar(achado); } } }, "Usar este cadastro"));
       caixa.hidden = false;
     } catch { /* sem a checagem o servidor ainda não duplica: reaproveita o cadastro (nx_negocio_salvar) ou recusa (telefone_em_uso) */ }
@@ -667,7 +669,7 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
     zonaContato.appendChild(h("span", { class: "campo-rot" }, k.v.contato, h("span", { class: "obrig", "aria-hidden": "true" }, " *")));
     if (contato) {
       zonaContato.appendChild(h("div", { class: "crm-escolhido" }, ui.avatar(contato.nome || contato.telefone, contato.id),
-        h("span", null, h("b", null, contato.nome || ui.telBR(contato.telefone)), h("small", null, contato.telefone ? ui.telBR(contato.telefone) : contato.email || "")),
+        h("span", null, h("b", null, L.nomeContato(contato)), h("small", null, contato.telefone ? ui.telBR(contato.telefone) : contato.email || "")),
         dados.contato_id ? null : h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { contato = null; desenharContato(); } } }, "Trocar")));
       return;
     }
@@ -695,7 +697,7 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
         if (minha !== seq) return;
         if (!r.itens.length) res.appendChild(h("p", { class: "flut-vazio" }, "Nada encontrado. Cadastre como novo."));
         for (const c of r.itens) res.appendChild(h("button", { type: "button", role: "option", on: { click: () => { contato = c; desenharContato(); } } },
-          ui.avatar(c.nome || c.telefone, c.id), h("span", null, h("b", null, c.nome || ui.telBR(c.telefone)), h("small", null, [c.telefone ? ui.telBR(c.telefone) : null, c.email].filter(Boolean).join(" · ")))));
+          ui.avatar(c.nome || c.telefone, c.id), h("span", null, h("b", null, L.nomeContato(c)), h("small", null, [c.telefone ? ui.telBR(c.telefone) : null, c.email].filter(Boolean).join(" · ")))));
       } catch (e) { if (minha === seq) res.appendChild(h("p", { class: "flut-vazio" }, k.erro(e))); }
     }, 250);
     busca.addEventListener("input", buscar);

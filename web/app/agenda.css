@@ -102,8 +102,11 @@
 .ag-bloco.curto { justify-content: center; padding-block: 0; }
 .ag-bloco.curto .ag-bloco-serv { display: none; }
 .ag-bloco.feita { opacity: .75; }
+/* bloco baixo (consulta de 40–55 min na grade compacta de 44 px/hora): decide pela altura real e mostra só a 1ª linha, sem a 2ª cortada */
+.ag-item { container-type: size; }
+@container (max-height: 40px) { .ag-bloco { justify-content: center; padding-block: 0; } .ag-bloco-serv { display: none; } }
 
-.ag-agora { position: absolute; z-index: 4; left: 0; right: 0; height: 0; list-style: none; pointer-events: none; border-top: 2px solid var(--c-prim); top: calc(var(--t, 0) * var(--h-hora)); }
+.ag-agora { position: absolute; z-index: 1; left: 0; right: 0; height: 0; list-style: none; pointer-events: none; border-top: 2px solid var(--c-prim); top: calc(var(--t, 0) * var(--h-hora)); }
 .ag-agora::before { content: ""; position: absolute; left: -5px; top: -6px; width: 10px; height: 10px; border-radius: 50%; background: var(--c-prim); }
 
 /* popover do detalhe da consulta */
@@ -111,6 +114,11 @@
 .ag-det { display: grid; gap: .25rem; font-size: var(--fs-13); }
 .ag-det-nome { font-size: var(--fs-15); }
 .ag-det-quando { color: var(--c-texto-2); font-size: var(--fs-13); }
+.ag-det-tel { display: inline-flex; align-items: center; gap: .35rem; min-height: 32px; width: fit-content; color: var(--c-prim-luz); font-weight: 600; text-decoration: none; }
+.ag-det-tel:hover { text-decoration: underline; }
+.ag-det-tel .ic { width: 15px; height: 15px; }
+.ag-det-acoes .ic { width: 15px; height: 15px; }
+.ag-outro-dia { font-size: var(--fs-13); padding: .6rem .8rem; }
 .ag-det-origem { color: var(--c-texto-2); font-size: var(--fs-12); overflow-wrap: anywhere; }
 .ag-det-acoes { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .45rem; padding-top: .55rem; border-top: 1px solid var(--c-borda); }
 

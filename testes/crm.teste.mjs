@@ -982,5 +982,473 @@ await teste("M28 (estático): lista compacta só no celular, Exportar/Importar n
   assert.ok(!/(^|\n)\s*\.ct-[a-z-]+[^{]*\{[^}]*font-size:\s*(?:1[01]|[0-9])px/.test(css), "nada abaixo de 12 px na lista compacta");
 });
 
+/* ============================================================ (c) revisão do R119 — o que a tela mostra é o que o banco tem */
+console.log("\n(c) revisão do R119 — CRM e Agenda");
+
+await teste("p_req sem plano B: servidor sem a função com p_req (404 / PGRST202) → repete UMA vez sem a chave e a criação funciona", async () => {
+  const naoAchou = () => Object.assign(new Error("Could not find the function public.nx_negocio_salvar(p_cliente, p_negocio, p_req, p_token) in the schema cache"),
+    { codigo: "Could not find the function public.nx_negocio_salvar(p_cliente, p_negocio, p_req, p_token) in the schema cache", status: 404, resposta: { code: "PGRST202" } });
+  // o que conta como «função inexistente»
+  assert.ok(L.funcaoInexistente(naoAchou()));
+  assert.ok(L.funcaoInexistente({ codigo: "http_404", status: 404 }), "HTTP 404");
+  assert.ok(L.funcaoInexistente({ codigo: "PGRST202" }) && L.funcaoInexistente({ codigo: "x", resposta: { code: "PGRST202" } }), "código PGRST202");
+  assert.ok(L.funcaoInexistente({ message: "could not find the function public.nx_x" }), "texto do PostgREST, em qualquer caixa");
+  for (const e of [null, {}, { codigo: "dados_invalidos", status: 400 }, { codigo: "sem_conexao" }, { codigo: "http_500", status: 500 }, { codigo: "negocio_nao_encontrado", status: 400 }]) assert.ok(!L.funcaoInexistente(e), JSON.stringify(e));
+  // servidor ANTIGO: só existe a versão sem p_req
+  const antigo = (falhaSemReq = null) => {
+    const chamadas = [], criados = [];
+    return { chamadas, criados, api: { async rpcC(nome, p) {
+      chamadas.push({ nome, temReq: "p_req" in p });
+      if ("p_req" in p) throw naoAchou();
+      if (falhaSemReq) throw Object.assign(new Error(falhaSemReq), { codigo: falhaSemReq });
+      const r = { id: criados.length + 1, titulo: p.p_negocio.titulo }; criados.push(r); return r;
+    } } };
+  };
+  const sem = async () => {};
+  let s = antigo();
+  const r = await L.escreverComReq(s.api, "nx_negocio_salvar", { p_negocio: { titulo: "A" } }, { dormir: sem });
+  assert.deepEqual(s.chamadas, [{ nome: "nx_negocio_salvar", temReq: true }, { nome: "nx_negocio_salvar", temReq: false }], "1ª com p_req, 2ª sem");
+  assert.deepEqual([s.criados.length, r.resultado.id, r.semReq], [1, 1, true], "criou uma vez e avisa que foi sem a chave");
+  // a 2ª (sem chave) não tem proteção contra duplicar: um erro nela NÃO se repete nem vira «ambíguo» (a tela não promete «é seguro, não duplica»)
+  s = antigo("sem_conexao");
+  await assert.rejects(() => L.escreverComReq(s.api, "nx_negocio_salvar", { p_negocio: { titulo: "B" } }, { dormir: sem }), e => e.codigo === "sem_conexao" && !e.ambigua);
+  assert.equal(s.chamadas.length, 2, "uma vez só sem p_req");
+  // função que não existe de jeito nenhum: duas chamadas e o erro sobe
+  const nunca = [];
+  await assert.rejects(() => L.escreverComReq({ rpcC: async (n, p) => { nunca.push("p_req" in p); throw naoAchou(); } }, "nx_negocio_salvar", { p_negocio: {} }, { dormir: sem }), e => e.status === 404);
+  assert.deepEqual(nunca, [true, false]);
+  // servidor NOVO continua igual: uma chamada, com p_req, sem semReq
+  const novo = [];
+  const rn = await L.escreverComReq({ rpcC: async (n, p) => { novo.push("p_req" in p); return { id: 9 }; } }, "nx_negocio_salvar", { p_negocio: {} }, { dormir: sem });
+  assert.deepEqual([novo, rn.semReq, rn.resultado.id], [[true], undefined, 9]);
+  // os 5 pontos de criação passam por escreverComReq (negócio, pós-venda, contato, tarefa, consulta)
+  assert.equal((ler("crm-negocio.js").match(/k\.escrever\("nx_negocio_salvar"/g) || []).length, 2);
+  assert.ok(/k\.escrever\("nx_contato_salvar"/.test(ler("crm-listas.js")) && /k\.escrever\("nx_tarefa_salvar"/.test(ler("crm-tarefas.js")) && /Lg\.escreverComReq\(api, "nx_agenda_marcar"/.test(ler("agenda.js")));
+});
+
+await teste("telefone com «+» (outro país): 8 a 15 dígitos, nunca ganha 55 — na checagem dos formulários, na importação e nos campos", () => {
+  assert.equal(L.normalizarTelefone("+1 415 555 2671"), "14155552671", "EUA: 11 dígitos com + não viram número brasileiro");
+  assert.equal(L.normalizarTelefone("+14155552671"), "14155552671", "o que o ui.lerForm devolve (+ e dígitos)");
+  assert.equal(L.normalizarTelefone("  +44 20 7946 0958"), "442079460958");
+  assert.equal(L.normalizarTelefone("+351 912 345 678"), "351912345678");
+  assert.equal(L.normalizarTelefone("+12345678"), "12345678", "8 dígitos com + valem");
+  assert.equal(L.normalizarTelefone("+1234567"), null, "menos de 8");
+  assert.equal(L.normalizarTelefone("+1234567890123456"), null, "mais de 15");
+  assert.equal(L.normalizarTelefone("14155552671"), "5514155552671", "sem o +, 11 dígitos continuam sendo DDD + número (regra do banco)");
+  assert.deepEqual(L.checarLinha({ nome: "Ana", telefone: "+1 415 555 2671" }), []);
+  assert.equal(L.validarCampo({ tipo: "telefone" }, "+12345678"), null);
+  assert.equal(L.normalizarCampo({ tipo: "telefone" }, "+1 415 555 2671"), "14155552671");
+  // ficha do contato: editar o telefone mantém o + (senão o servidor trata como brasileiro)
+  assert.ok(/return dg \? \(x\.value\.trim\(\)\.startsWith\("\+"\) \? "\+" : ""\) \+ dg : null;/.test(ler("crm-listas.js")));
+});
+
+await teste("etiquetas: o Desfazer aplica só o inverso da diferença (a etiqueta posta depois continua)", () => {
+  // pôs VIP (aviso 1), depois Retorno (aviso 2); Desfazer do aviso 1 tira só VIP
+  assert.deepEqual(L.desfazerEtiquetas(["a", "vip", "retorno"], ["vip"], []), ["a", "retorno"]);
+  // tirou «a» e depois pôs «b»: Desfazer devolve «a» e mantém «b»
+  assert.deepEqual(L.desfazerEtiquetas(["b"], [], ["a"]), ["b", "a"]);
+  // o que já voltou não duplica; o que já saiu não dá erro
+  assert.deepEqual(L.desfazerEtiquetas(["a", "b"], ["x"], ["a"]), ["a", "b"]);
+  assert.deepEqual(L.desfazerEtiquetas(null, ["x"], null), []);
+  for (const f of ["crm-negocio.js", "crm-listas.js"]) {
+    const js = ler(f);
+    assert.ok(/L\.desfazerEtiquetas\((n|c)\.etiquetas \|\| \[\], mais, menos\)/.test(js), `${f}: o reverter parte do conjunto ATUAL`);
+    assert.ok(!/salvar\(\{ etiquetas: antes \}\)/.test(js), `${f}: não regrava o conjunto inteiro de antes`);
+  }
+});
+
+await teste("textos: contato sem nome (telefone → e-mail → «Sem nome») e data da pontuação do lead (01/10/2026 às 14:03)", () => {
+  assert.equal(L.nomeContato({ nome: "Ana", telefone: "5512998303030" }), "Ana");
+  assert.equal(L.nomeContato({ nome: "  ", telefone: "5512998303030", email: "a@x.com" }), "(12) 99830-3030");
+  assert.equal(L.nomeContato({ nome: null, telefone: null, email: "ana@x.com" }), "ana@x.com", "quem entrou só com e-mail continua identificável");
+  assert.equal(L.nomeContato({ nome: null, telefone: null, email: null }), "Sem nome");
+  assert.equal(L.nomeContato(null), "Sem nome");
+  const listas = ler("crm-listas.js");
+  assert.ok(!/ui\.telBR\(c\.telefone\) \|\| "Sem nome"/.test(listas), "ui.telBR(null) devolve «—»: o «Sem nome» nunca aparecia");
+  assert.ok((listas.match(/L\.nomeContato\(c\)/g) || []).length >= 4, "tabela, lista do celular e ficha");
+  assert.equal(L.quandoPontuacao("2026-10-01T14:03"), "01/10/2026 às 14:03");
+  assert.equal(L.quandoPontuacao("2026-10-01 09:30:12"), "01/10/2026 às 09:30");
+  assert.equal(L.quandoPontuacao("2026-10-01"), "01/10/2026");
+  assert.equal(L.quandoPontuacao("ontem"), "ontem", "formato desconhecido volta como veio");
+  assert.equal(L.quandoPontuacao(null), "");
+  assert.ok(/Atribuída em \$\{L\.quandoPontuacao\(pont\.em\)\}/.test(ler("crm-negocio.js")));
+});
+
+await teste("base do CRM: a rede troca os funis da base servida do aparelho → a tela é avisada; rede que falha depois do cache → a próxima chamada tenta de novo; recarga forçada renova a cópia guardada", async () => {
+  const CRM = await import("../web/app/crm.js");
+  const tique = () => new Promise(r => setTimeout(r, 0));
+  const funil = (nome, etapas) => ({ id: "f1", nome, padrao: true, ativo: true, estagios: etapas.map((n, i) => ({ id: `e${i}`, nome: n, tipo: "aberto" })) });
+  const baseDe = f => ({ funis: [f], etiquetas: [], usuarios: [], campos: [], motivos: [], ticket: {} });
+  const mkCtx = (id, responder) => {
+    const chamadas = [];
+    return { chamadas, ctx: { versao: "TESTE", cliente: { id }, vocab: {}, pode: () => true, ui: { h() {}, corOk: () => null, toast() {}, brl: v => String(v) },
+      api: { rpcC(nome, p, o = {}) { chamadas.push({ nome, o }); return responder(o, chamadas.length); } } } };
+  };
+  // 1) aparelho tem a base ANTIGA (2 etapas); a rede traz 3 etapas
+  const antiga = baseDe(funil("Vendas", ["Nova", "Fechou"])), nova = baseDe(funil("Vendas", ["Nova", "Orçamento", "Fechou"]));
+  // como o api.js de verdade: a cópia do aparelho chega DEPOIS de a chamada sair (leitura assíncrona do IndexedDB), antes da rede
+  const servir = o => { if (o.aoCache) Promise.resolve().then(() => o.aoCache(JSON.parse(JSON.stringify(antiga)))); };
+  let soltarRede;
+  let a = mkCtx("cli-r119-1", o => { servir(o); return new Promise(res => { soltarRede = () => res(JSON.parse(JSON.stringify(nova))); }); });
+  const k = await CRM.kit(a.ctx);
+  assert.equal(k.base.funis[0].estagios.length, 2, "a tela abre com o que estava guardado");
+  const guardada = k.base;
+  let avisos = 0;
+  const cancelar = k.aoBaseMudar(() => { avisos++; });
+  soltarRede(); await tique();
+  assert.equal(k.base, guardada, "o MESMO objeto é atualizado");
+  assert.equal(k.funil("f1").estagios.length, 3, "a base passa a ter as etapas novas");
+  assert.equal(avisos, 1, "o quadro é avisado para refazer o funil e recarregar");
+  // sem mudança nos funis não há aviso; depois de cancelar também não
+  cancelar();
+  a = mkCtx("cli-r119-2", o => { servir(o); return Promise.resolve(JSON.parse(JSON.stringify(antiga))); });
+  const k2 = await CRM.kit(a.ctx); let avisos2 = 0; k2.aoBaseMudar(() => { avisos2++; });
+  await tique();
+  assert.equal(avisos2, 0, "funis iguais: nada a refazer");
+  // 2) a rede FALHA depois de servir o cache: a próxima chamada tenta a rede de novo (antes ficava presa na promessa antiga pelo resto da sessão)
+  a = mkCtx("cli-r119-3", (o, n) => { servir(o); return n === 1 ? Promise.reject(Object.assign(new Error("sem_conexao"), { codigo: "sem_conexao" })) : Promise.resolve(JSON.parse(JSON.stringify(nova))); });
+  const k3 = await CRM.kit(a.ctx); let avisos3 = 0; k3.aoBaseMudar(() => { avisos3++; });
+  await tique();
+  assert.equal(a.chamadas.length, 1);
+  const k3b = await CRM.kit(a.ctx);
+  assert.equal(a.chamadas.length, 2, "nova tentativa na rede");
+  assert.equal(k3b.base, k3.base, "a tela que já estava aberta guarda o mesmo objeto");
+  await tique();
+  assert.equal(k3.base.funis[0].estagios.length, 3, "…e ele recebe o dado novo");
+  assert.equal(avisos3, 1);
+  // 3) recarga forçada: vai à rede com `cache: true` (renova a cópia do aparelho) e SEM aoCache (nada é servido do aparelho)
+  await k3.recarregarBase();
+  const forcada = a.chamadas.at(-1).o;
+  assert.ok(forcada.cache === true && typeof forcada.aoCache !== "function");
+});
+
+await teste("Kanban (estático): pendente não aceita outro movimento, remoção condicional, soltar fora não move, keepalive ao sair, redesenho adiado no arrasto, funis da base", () => {
+  const js = ler("crm-kanban.js");
+  // mover de novo o mesmo cartão durante os 7 s: recusado nos 3 caminhos (arrastar/soltar, teclado, «Mover para…»)
+  assert.ok(/function recusarSePendente\(id\)/.test(js));
+  assert.ok(/if \(recusarSePendente\(id\)\) \{ preencherColunaDoCartao\(id\); focarCartao\(id\); return; \}/.test(js), "soltar");
+  assert.ok(/ev\.preventDefault\(\);\s*if \(recusarSePendente\(id\)\) return;/.test(js), "Espaço (teclado)");
+  assert.ok(/if \(!card \|\| !podeMover \|\| recusarSePendente\(id\)\) return;/.test(js), "«Mover para…»");
+  // um movimento antigo nunca apaga o pendente mais novo do mesmo cartão
+  assert.ok(/function soltarPendente\(mov\) \{ if \(S\.pend\.get\(mov\.id\) === mov\) S\.pend\.delete\(mov\.id\); \}/.test(js));
+  assert.ok(!/S\.pend\.delete\(mov\.id\)(?!; \})/.test(js), "nenhum S.pend.delete(mov.id) solto");
+  // sem zona nem coluna sob o ponto: sem destino
+  assert.ok(/if \(!info\) \{ a\.alvo = null; a\.lugar\.hidden = true; return; \}/.test(js));
+  // …menos logo abaixo de uma coluna curta (a «raia» dela, até a base do quadro): ali ainda vale a coluna, com o marcador à vista
+  assert.ok(/\|\| colunaDaRaia\(x, y\);/.test(js) && /L\.alvoDoPonto\(raias, x, y\)/.test(js));
+  const raias = [{ id: "s1", left: 0, right: 300, top: 240, bottom: 600 }, { id: "s2", left: 314, right: 614, top: 500, bottom: 600 }];
+  assert.equal(L.alvoDoPonto(raias, 150, 400), "s1", "abaixo da coluna curta");
+  assert.equal(L.alvoDoPonto(raias, 307, 550), null, "entre duas colunas não há destino");
+  assert.equal(L.alvoDoPonto(raias, 150, 700), null, "abaixo do quadro não há destino");
+  assert.ok(/if \(!alvo\) \{ preencherColunaDoCartao\(a\.id\); return; \}/.test(js), "soltar sem alvo devolve o cartão");
+  // página saindo ou oculta: a gravação adiada vai com keepalive (pelo aviso «Desfazer» e pelo próprio quadro)
+  assert.ok(/firmar: o => efetivar\(mov, \{ saindo: !!\(o && o\.saindo\) \}\)/.test(js));
+  assert.ok(/N\.moverNegocio\(k, mov\.card, mov\.destino, \{ ordem: mov\.ordem, extra: mov\.extra, keepalive: saindo \}\)/.test(js));
+  assert.ok(/if \(document\.hidden\) efetivarPendentes\(\{ saindo: true \}\)/.test(js) && /addEventListener\("pagehide", aoSairDaPagina\)/.test(js) && /removeEventListener\("pagehide", aoSairDaPagina\)/.test(js));
+  // redesenho no meio do arrasto fica para o fim do gesto
+  assert.ok(/if \(!igual && !trocouTudo && emGesto\(\)\) \{ S\.adiado = \{ dados: d \}; return; \}/.test(js), "resposta da rede");
+  assert.ok(/if \(emGesto\(\)\) S\.adiado = \{\};\s*else \{ if \(col\) preencherColuna\(mov\.estagioId\); desenharTotais\(\); \}/.test(js), "chegada de outro movimento");
+  assert.ok((js.match(/aplicarAdiado\(\)|setTimeout\(aplicarAdiado, 0\)/g) || []).length >= 7, "todo fim de gesto (ponteiro e teclado) faz o redesenho que esperava");
+  // base servida do aparelho e atualizada pela rede
+  assert.ok(/k\.aoBaseMudar\(\(\) => \{[\s\S]{0,200}S\.funil = \(S\.funil && k\.funil\(S\.funil\.id\)\) \|\| k\.funilPadrao\(\);[\s\S]{0,120}desenharSelFunil\(\);\s*carregar\(\{ silencioso: true \}\);/.test(js));
+  assert.ok(/if \(cancelarBase\) cancelarBase\(\);/.test(js));
+});
+
+await teste("moverNegocio: keepalive só quando a página está saindo", async () => {
+  const { moverNegocio } = await import("../web/app/crm-negocio.js");
+  const vistas = [];
+  const k = { api: { rpcC: async (n, p, o) => { vistas.push([n, p, o]); return {}; } } };
+  await moverNegocio(k, { id: 7 }, { id: "e2" }, { ordem: 3, extra: { valor: 10 } });
+  await moverNegocio(k, { id: 7 }, { id: "e2" }, { keepalive: true });
+  assert.deepEqual(vistas[0], ["nx_negocio_mover", { p_id: 7, p_estagio: "e2", p_ordem: 3, p_extra: { valor: 10 } }, {}]);
+  assert.deepEqual(vistas[1][2], { keepalive: true });
+});
+
+await teste("excluir tarefa/nota: keepalive ao sair, não reaparece quando a ficha recarrega nos 7 s e o Desfazer devolve à lista nova", async () => {
+  const { h, achar, classe } = criarFalso();
+  const { blocoTarefas, blocoNotas } = await import("../web/app/crm-tarefas.js");
+  const chamadas = [], desfazeres = [];
+  const ui = { icone: n => ({ tag: "ic", attrs: { n }, filhos: [] }), limpar: el => { el.filhos = []; return el; }, anunciar() {}, toast() {}, horaBR: () => "09:00", dataCurtaBR: () => "02/10", dataHoraBR: () => "01/10/2026 09:00",
+    relativo: () => "ontem", hojeSP: () => "2026-10-01", deslizar: () => () => {}, menu: () => ({ fechar() {} }), carregando: (b, p) => p,
+    acaoComDesfazer: async o => { desfazeres.push(o); return { estado: "mantida" }; } };
+  const k = { ui, h, L, pode: () => true, toastErro() {}, rascunho: () => ({ apagar() {} }), base: { usuarios: [] }, eu: () => null,
+    api: { rpcC: async (nome, p, o) => { chamadas.push(o && o.keepalive ? [nome, p, "keepalive"] : [nome, p]); return {}; } } };
+  const linhas = el => achar(el, x => classe(x).split(" ").includes("tf"), true).map(x => x.attrs.dataset.id);
+  const t1 = { id: 9101, titulo: "Ligar", tipo: "ligacao", vence_em: "2099-01-10T15:00:00Z", concluida_em: null };
+  const t2 = { id: 9102, titulo: "Enviar orçamento", tipo: "tarefa", vence_em: "2099-01-11T15:00:00Z", concluida_em: null };
+  /* ---- tarefas ---- */
+  const b1 = blocoTarefas(k, { tarefas: [t1, t2], contato_id: 5 });
+  assert.deepEqual(linhas(b1), [9101, 9102]);
+  achar(b1, x => /Excluir a tarefa Ligar/.test(x.attrs["aria-label"] || "")).ouvintes.click();
+  const d1 = desfazeres.at(-1);
+  d1.aplicar();
+  assert.deepEqual(linhas(b1), [9102], "some na hora");
+  assert.equal(chamadas.length, 0, "nada foi ao servidor ainda");
+  // a ficha recarrega nos 7 s (ex.: criou outra tarefa pelo cabeçalho): o servidor ainda devolve a tarefa, mas ela NÃO volta à tela
+  const b2 = blocoTarefas(k, { tarefas: [t1, t2], contato_id: 5 });
+  assert.deepEqual(linhas(b2), [9102], "recarga não ressuscita a tarefa em exclusão");
+  b2.atualizar([t1, t2]);
+  assert.deepEqual(linhas(b2), [9102], "nem o atualizar()");
+  // Desfazer: a tarefa volta na lista que está na tela (a nova) e na antiga
+  d1.reverter();
+  assert.deepEqual(linhas(b2).sort(), [9101, 9102]);
+  assert.deepEqual(linhas(b1).sort(), [9101, 9102]);
+  assert.equal(chamadas.length, 0, "desfeito antes dos 7 s = nada aconteceu no servidor");
+  // exclusão que vale: firmar comum sem keepalive; com a página saindo, keepalive
+  achar(b2, x => /Excluir a tarefa Ligar/.test(x.attrs["aria-label"] || "")).ouvintes.click();
+  const d2 = desfazeres.at(-1); d2.aplicar();
+  await d2.firmar();
+  assert.deepEqual(chamadas.at(-1), ["nx_tarefa_excluir", { p_id: 9101 }]);
+  assert.deepEqual(linhas(blocoTarefas(k, { tarefas: [t1, t2] })), [9102], "uma resposta atrasada do servidor não traz a excluída de volta");
+  achar(b2, x => /Excluir a tarefa Enviar orçamento/.test(x.attrs["aria-label"] || "")).ouvintes.click();
+  const d3 = desfazeres.at(-1); d3.aplicar();
+  await d3.firmar({ saindo: true });
+  assert.deepEqual(chamadas.at(-1), ["nx_tarefa_excluir", { p_id: 9102 }, "keepalive"], "página saindo: o pedido vai com keepalive");
+  /* ---- notas ---- */
+  const n1 = { id: 9201, texto: "Prefere de manhã", fixada: false, criado_em: "2026-10-01T12:00:00Z", pode_editar: true, autor: { nome: "Ana" } };
+  const notas = el => achar(el, x => classe(x).split(" ").includes("nota"), true).map(x => x.attrs.dataset.id);
+  const bn = blocoNotas(k, { notas: [n1], contato_id: 5 });
+  assert.deepEqual(notas(bn), [9201]);
+  achar(bn, x => x.attrs["aria-label"] === "Excluir nota").ouvintes.click();
+  const dn = desfazeres.at(-1); dn.aplicar();
+  assert.deepEqual(notas(bn), []);
+  const bn2 = blocoNotas(k, { notas: [n1], contato_id: 5 });
+  assert.deepEqual(notas(bn2), [], "a nota em exclusão não reaparece na recarga");
+  dn.reverter();
+  assert.deepEqual(notas(bn2), [9201], "Desfazer devolve a nota à lista da tela");
+  achar(bn2, x => x.attrs["aria-label"] === "Excluir nota").ouvintes.click();
+  const dn2 = desfazeres.at(-1); dn2.aplicar();
+  await dn2.firmar({ saindo: true });
+  assert.deepEqual(chamadas.at(-1), ["nx_nota_excluir", { p_id: 9201 }, "keepalive"]);
+});
+
+await teste("Agenda: Desfazer remarca como encaixe e devolve a etapa; aviso de outro dia; desmontar limpa de verdade; ligar e abrir conversa no balão", async () => {
+  const AG = await import("../web/app/agenda.js");
+  // aviso quando o dia pedido não tem vaga e a janela abriu em outro (2026-10-02 = sexta; 05 = segunda)
+  assert.equal(AG.avisoOutroDia("2026-10-02", { dia: "2026-10-05" }, "2026-09-30"), "Sem horário livre em sex 02/10 — mostrando o próximo: seg 05/10");
+  assert.equal(AG.avisoOutroDia("2026-10-01", { dia: "2026-10-02" }, "2026-10-01"), "Sem horário livre hoje — mostrando o próximo: amanhã");
+  assert.equal(AG.avisoOutroDia("2026-10-02", { dia: "2026-10-05" }, "2026-10-01"), "Sem horário livre amanhã — mostrando o próximo: seg 05/10");
+  assert.equal(AG.avisoOutroDia("2026-10-02", { dia: "2026-10-02" }, "2026-10-01"), null, "o horário é do dia pedido: sem aviso");
+  assert.equal(AG.avisoOutroDia(null, { dia: "2026-10-02" }, "2026-10-01"), null);
+  assert.equal(AG.avisoOutroDia("2026-10-02", null, "2026-10-01"), null);
+  // devolver a etapa: nx_negocio_mover com a etapa e a posição de ANTES; falha não vira erro do Desfazer
+  const vistas = [];
+  assert.equal(await AG.devolverEtapa({ rpcC: async (n, p) => { vistas.push([n, p]); return {}; } }, 42, { estagio_id: "e-orc", ordem: 7.5 }), true);
+  assert.deepEqual(vistas, [["nx_negocio_mover", { p_id: 42, p_estagio: "e-orc", p_ordem: 7.5, p_extra: {} }]]);
+  assert.equal(await AG.devolverEtapa({ rpcC: async () => { vistas.push("x"); } }, 42, null), true, "sem etapa conhecida não chama nada");
+  assert.equal(vistas.length, 1);
+  const erroCalado = console.error; console.error = () => {};
+  try { assert.equal(await AG.devolverEtapa({ rpcC: async () => { throw new Error("estagio_invalido"); } }, 42, { estagio_id: "x" }), false); }
+  finally { console.error = erroCalado; }
+  const js = ler("agenda.js"), neg = ler("crm-negocio.js");
+  // os dois Desfazer que marcam de volta mandam p_encaixe: true (a regra de antecedência não vale para devolver o que já existia)
+  assert.equal((js.match(/api\.rpcC\("nx_agenda_marcar", \{[^}]*p_encaixe: true \}\)/g) || []).length, 2);
+  assert.ok(!/api\.rpcC\("nx_agenda_marcar", \{(?![^}]*p_encaixe)[^}]*\}\)/.test(js), "nenhum reverter marca de volta sem encaixe");
+  // consulta nova desfeita: a etapa lida ANTES de marcar volta (a gaveta informa; a busca e a grade leem a ficha)
+  assert.ok(/sel\.antes = \{ estagio_id: d\.negocio\.estagio_id, ordem: d\.negocio\.ordem \?\? null \}/.test(js) && /if \(!sel\.antes\) lerFicha\(\);/.test(js));
+  assert.ok(/if \(resultado\.etapa && !\(await devolverEtapa\(api, marcada\.id, marcada\.antes\)\)\)/.test(js));
+  assert.ok(/inicio: n\.consulta_em, estagio_id: n\.estagio_id, ordem: n\.ordem \?\? null \}/.test(neg), "a gaveta do negócio informa a etapa atual");
+  // desmontar: a limpeza fica no módulo (o shell ignora o retorno de montar) e roda também ao montar de novo
+  assert.ok(!/export function desmontar\(\) \{\}/.test(js) && /let limpezaAtual = null;/.test(js) && /limpezaAtual = limpar;\s*montarCabecalho\(\);\s*await carregar\(\);/.test(js));
+  assert.ok(/export async function montar\(ctx\) \{\s*desmontar\(\);/.test(js));
+  AG.desmontar();   // sem tela montada não dá erro
+  // balão da consulta e textos
+  assert.ok(/href: hrefTel, "aria-label": `Ligar para \$\{nome\}/.test(js) && /Lg\.hrefTel\(c\.telefone\)/.test(js), "telefone como link para ligar");
+  assert.ok(/ctx\.navegar\(`#\/conversas\?contato=\$\{encodeURIComponent\(c\.contato_id\)\}`\)/.test(js) && /"Abrir conversa"/.test(js) && /ctx\.temModulo\("conversas"\)/.test(js));
+  assert.ok(/query\.contato/.test(ler("conversas.js")), "a rota #/conversas?contato=<id> existe no módulo Conversas");
+  assert.ok(/placeholder: "Nome ou telefone"/.test(js) && !/Nome, serviço ou telefone/.test(js), "a busca não promete procurar por serviço");
+  assert.ok(/avisarOutroDia\(avisoOutroDia\(diaPedido, slotSel, hoje\)\)/.test(js) && /class: "aviso aviso-aten ag-outro-dia"/.test(js));
+});
+
+/* DOM de mentira para montar o Kanban DE VERDADE (crm-kanban.js) no Node: elementos com filhos, classes, dataset, ouvintes, seletores simples
+   (.classe, [data-x="v"], :not([hidden]), lista com vírgula) e os globais que o quadro usa. `desfazer()` devolve os globais como estavam. */
+function domDoKanban() {
+  let ativo = null, sobOPonto = null;
+  class El {
+    constructor(tag) {
+      this.tagName = String(tag).toUpperCase(); this.children = []; this.parentElement = null; this.attrs = {}; this.dataset = {}; this.hidden = false; this.disabled = false;
+      this._cls = new Set(); this._l = {}; this._t = ""; this.rect = null; this.scrollLeft = 0; this.scrollTop = 0;
+      this.style = new Proxy({}, { get: (o, p) => (p === "setProperty" ? (a, b) => { o[a] = b; } : o[p]), set: (o, p, v) => { o[p] = v; return true; } });
+      const eu = this;
+      this.classList = { add: (...c) => c.forEach(x => eu._cls.add(x)), remove: (...c) => c.forEach(x => eu._cls.delete(x)), contains: c => eu._cls.has(c),
+        toggle: (c, f) => { const on = f === undefined ? !eu._cls.has(c) : !!f; if (on) eu._cls.add(c); else eu._cls.delete(c); return on; } };
+    }
+    get id() { return this.attrs.id || ""; } set id(v) { this.attrs.id = String(v); }
+    get value() { return this._v ?? ""; } set value(v) { this._v = v; }
+    setAttribute(a, v) { this.attrs[a] = String(v); } removeAttribute(a) { delete this.attrs[a]; }
+    get els() { return this.children.filter(c => c instanceof El); }
+    appendChild(c) { if (c instanceof El) { c.remove(); c.parentElement = this; } this.children.push(c); return c; }
+    append(...cs) { for (const c of cs.flat(Infinity)) { if (c === null || c === undefined || c === false) continue; this.appendChild(c instanceof El ? c : { texto: String(c) }); } }
+    insertBefore(n, ref) { n.remove(); const i = ref ? this.children.indexOf(ref) : -1; if (i < 0) this.children.push(n); else this.children.splice(i, 0, n); n.parentElement = this; return n; }
+    remove() { const p = this.parentElement; if (!p) return; const i = p.children.indexOf(this); if (i >= 0) p.children.splice(i, 1); this.parentElement = null; }
+    get firstChild() { return this.children[0] || null; } get lastChild() { return this.children[this.children.length - 1] || null; }
+    get nextSibling() { const p = this.parentElement; return p ? p.children[p.children.indexOf(this) + 1] || null : null; }
+    contains(x) { for (let n = x; n; n = n.parentElement) if (n === this) return true; return false; }
+    get isConnected() { return doc.body.contains(this); } get offsetWidth() { return 0; } get offsetParent() { return this.parentElement; }
+    matches(sel) { return sel.split(",").some(s => this._m(s.trim())); }
+    _m(s) {
+      const m = /^([a-z0-9]*)((?:\.[\w-]+|\[[\w-]+(?:="[^"]*")?\]|:not\(\[hidden\]\))*)$/i.exec(s);
+      if (!m) throw new Error("seletor não suportado no DOM de mentira: " + s);
+      if (m[1] && m[1].toUpperCase() !== this.tagName) return false;
+      for (const p of m[2].match(/\.[\w-]+|\[[\w-]+(?:="[^"]*")?\]|:not\(\[hidden\]\)/g) || []) {
+        if (p[0] === ".") { if (!this._cls.has(p.slice(1))) return false; continue; }
+        if (p === ":not([hidden])") { if (this.hidden) return false; continue; }
+        const a = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(p);
+        const v = a[1].startsWith("data-") ? this.dataset[a[1].slice(5)] : this.attrs[a[1]];
+        if (v === undefined || v === null || (a[2] !== undefined && String(v) !== a[2])) return false;
+      }
+      return true;
+    }
+    querySelectorAll(sel) { const out = []; (function ir(n) { for (const c of n.els) { if (c.matches(sel)) out.push(c); ir(c); } })(this); return out; }
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+    closest(sel) { for (let n = this; n; n = n.parentElement) if (n.matches(sel)) return n; return null; }
+    addEventListener(t, f) { (this._l[t] || (this._l[t] = [])).push(f); } removeEventListener(t, f) { this._l[t] = (this._l[t] || []).filter(x => x !== f); }
+    dispara(t, ev = {}) { for (const f of [...(this._l[t] || [])]) f({ type: t, target: this, currentTarget: this, preventDefault() {}, stopPropagation() {}, ...ev }); }
+    getBoundingClientRect() { const r = this.rect || { left: 0, top: 0, right: 0, bottom: 0 }; return { ...r, width: r.right - r.left, height: r.bottom - r.top }; }
+    focus() { ativo = this; } scrollTo() {} scrollIntoView() {}
+    cloneNode() { const c = new El(this.tagName); c._cls = new Set(this._cls); c.attrs = { ...this.attrs }; c.dataset = { ...this.dataset }; return c; }
+    get textContent() { return this._t + this.children.map(c => (c instanceof El ? c.textContent : c.texto)).join(""); }
+    set textContent(v) { for (const c of this.els) c.parentElement = null; this.children = []; this._t = String(v ?? ""); }
+  }
+  const h = (tag, attrs, ...filhos) => {
+    const el = new El(tag);
+    for (const [a, v] of Object.entries(attrs || {})) {
+      if (v === null || v === undefined || v === false) continue;
+      if (a === "class") [].concat(v).flat(Infinity).filter(Boolean).forEach(c => String(c).split(/\s+/).filter(Boolean).forEach(x => el._cls.add(x)));
+      else if (a === "dataset") for (const [x, y] of Object.entries(v)) el.dataset[x] = String(y);
+      else if (a === "style") for (const [x, y] of Object.entries(v || {})) el.style[x] = y;
+      else if (a === "on") for (const [x, y] of Object.entries(v)) el.addEventListener(x, y);
+      else if (a === "hidden" || a === "disabled") el[a] = !!v;
+      else if (a === "value") el.value = v;
+      else el.setAttribute(a, v === true ? "" : v);
+    }
+    el.append(...filhos);
+    return el;
+  };
+  const daJanela = {}, doDoc = {};
+  const doc = { body: new El("body"), hidden: false, get activeElement() { return ativo || this.body; },
+    addEventListener: (t, f) => (doDoc[t] || (doDoc[t] = [])).push(f), removeEventListener: (t, f) => { doDoc[t] = (doDoc[t] || []).filter(x => x !== f); },
+    getElementById: () => null, querySelector: sel => doc.body.querySelector(sel), elementFromPoint: () => sobOPonto };
+  const globais = { document: doc, addEventListener: (t, f) => (daJanela[t] || (daJanela[t] = [])).push(f), removeEventListener: (t, f) => { daJanela[t] = (daJanela[t] || []).filter(x => x !== f); },
+    matchMedia: () => ({ matches: false }), requestAnimationFrame: () => 1, cancelAnimationFrame() {}, history: { state: null, replaceState() {} },
+    location: { pathname: "/app/", search: "", hash: "#/crm" }, innerHeight: 800, scrollBy() {} };
+  const antes = {};
+  for (const [nome, v] of Object.entries(globais)) { antes[nome] = Object.getOwnPropertyDescriptor(globalThis, nome); Object.defineProperty(globalThis, nome, { value: v, configurable: true, writable: true }); }
+  return { h, doc, daJanela, doDoc, sob: el => { sobOPonto = el || null; },
+    janela: (t, ev = {}) => { for (const f of [...(daJanela[t] || [])]) f({ type: t, ...ev }); },
+    desfazer() { for (const nome of Object.keys(globais)) { if (antes[nome]) Object.defineProperty(globalThis, nome, antes[nome]); else delete globalThis[nome]; } } };
+}
+
+await teste("Kanban de verdade (DOM de mentira): soltar fora não move, pendente recusa outro movimento, keepalive ao ocultar, redesenho espera o arrasto, etapa nova da base", async () => {
+  const D = domDoKanban();
+  try {
+    const { h } = D;
+    const tique = () => new Promise(r => setTimeout(r, 0));
+    const etapas = () => [
+      { id: "s1", nome: "Nova", tipo: "aberto", probabilidade: 10, ordem: 1 }, { id: "s2", nome: "Orçamento", tipo: "aberto", probabilidade: 50, ordem: 2 },
+      { id: "s5", nome: "Fechou", tipo: "ganho", probabilidade: 100, ordem: 3 }, { id: "s6", nome: "Perdido", tipo: "perdido", probabilidade: 0, ordem: 4 }];
+    const base = { funis: [{ id: "f1", nome: "Pacientes", padrao: true, ativo: true, estagios: etapas() }], etiquetas: [], usuarios: [], campos: [], motivos: [], ticket: {} };
+    const quadroDoServidor = () => ({ colunas: [
+      { estagio_id: "s1", total: 2, soma_previsto: 300, soma_valor: 0, itens: [{ id: 1, titulo: "Ana", status: "aberto", estagio_id: "s1", valor_previsto: 100, ordem: 1 }, { id: 2, titulo: "Bia", status: "aberto", estagio_id: "s1", valor_previsto: 200, ordem: 2 }] },
+      { estagio_id: "s2", total: 1, soma_previsto: 50, soma_valor: 0, itens: [{ id: 3, titulo: "Caio", status: "aberto", estagio_id: "s2", valor_previsto: 50, ordem: 1 }] },
+      { estagio_id: "s5", total: 0, soma_previsto: 0, soma_valor: 0, itens: [] }, { estagio_id: "s6", total: 0, soma_previsto: 0, soma_valor: 0, itens: [] }] });
+    const leituras = [], toasts = [], avisos = [], movidos = [], respostas = [];
+    let ouvinteBase = null;
+    const ui = { h, limpar: el => { el.textContent = ""; return el; }, icone: n => h("svg", { class: "ic", dataset: { n } }), debounce: f => f,
+      cabecalho: o => h("header", { class: "cab" }, o.titulo, ...[].concat(o.acoes || []).filter(Boolean)), segmentado: () => h("div", { class: "seg" }),
+      esqueleto: () => h("div", { class: "esqueleto" }), vazio: o => h("div", { class: "vazio" }, o.titulo || ""), erroCartao: e => h("div", { class: "erro-cartao" }, String(e && e.codigo)),
+      brl: v => `R$ ${v}`, num: v => String(v), relativo: () => "ontem", avatar: () => h("span"), dataBR: () => "01/10/2026", horaBR: () => "09:00",
+      toast: t => { toasts.push(t); return { fechar() {} }; }, anunciar() {}, comportamentoRolagem: () => "auto",
+      acaoComDesfazer: o => new Promise(res => { avisos.push({ ...o, res }); }), modal: async () => null };
+    const k = { ui, h, L, base, v: { crm: "CRM", negocios: "Oportunidades", ganhar: "Ganhou", perder: "Perdeu", min: x => x, art: () => "a", novo: () => "Nova oportunidade", nenhum: () => "Nenhuma oportunidade" },
+      ctx: { cliente: { id: "cli-kb" }, titulo() {}, navegar() {}, pulso: null },
+      mod: async () => ({ abrirNegocio() {}, novoNegocio() {}, prepararMovimento: async (k_, card, destino) => (destino.tipo === "ganho" ? { valor: 500 } : {}),
+        moverNegocio: async (k_, card, destino, o) => { movidos.push({ id: card.id, para: destino.id, keepalive: !!o.keepalive }); return { id: card.id, estagio_id: destino.id }; } }),
+      api: { rpcC: async nome => { leituras.push(nome); if (nome === "nx_negocios_kanban") { const f = respostas.shift(); return f ? f() : quadroDoServidor(); } return {}; } },
+      pode: () => true, cor: () => null, usuario: () => null, etiqueta: () => null, toastErro() {}, erro: e => String(e && (e.codigo || e.message)),
+      funil: id => base.funis.find(f => f.id === id) || null, funilPadrao: () => base.funis[0] || null,
+      estagio: id => { for (const f of base.funis) { const e = f.estagios.find(x => x.id === id); if (e) return e; } return null; },
+      aoBaseMudar: fn => { ouvinteBase = fn; return () => { ouvinteBase = null; }; } };
+    const { montarKanban } = await import("../web/app/crm-kanban.js");
+    const tela = h("div", { class: "crm" });
+    D.doc.body.appendChild(tela);
+    const quadroApi = await montarKanban(k, tela, { query: {} });
+    const quadro = tela.querySelector(".kb");
+    const cartao = id => quadro.querySelector(`.kc[data-id="${id}"]`);
+    const colunaDo = id => cartao(id).closest(".kb-col").dataset.estagio;
+    const listaDe = e => quadro.querySelector(`.kb-col[data-estagio="${e}"]`).querySelector(".kb-lista");
+    const kanbans = () => leituras.filter(x => x === "nx_negocios_kanban").length;
+    const pegar = (id, sobre) => {
+      const art = cartao(id);
+      art.rect = { left: 10, top: 10, right: 210, bottom: 90 };
+      art.dispara("pointerdown", { button: 0, pointerId: 1, pointerType: "mouse", clientX: 20, clientY: 20 });
+      D.sob(sobre);
+      D.janela("pointermove", { pointerId: 1, clientX: 50, clientY: 50 });
+    };
+    const soltar = async () => { D.janela("pointerup", { pointerId: 1 }); await tique(); await tique(); await tique(); };
+    const sairDasColunas = () => { D.sob(tela.querySelector(".cab")); D.janela("pointermove", { pointerId: 1, clientX: 60, clientY: -40 }); };
+
+    assert.equal(quadro.querySelectorAll(".kb-col").length, 4);
+    assert.deepEqual([colunaDo(1), colunaDo(2), colunaDo(3)], ["s1", "s1", "s2"]);
+    // (5) passou por uma coluna e soltou fora de qualquer coluna: não move
+    pegar(1, listaDe("s2"));
+    assert.ok(quadro.querySelector(".kb-lugar"), "o marcador aparece na coluna sob o ponteiro");
+    sairDasColunas(); await soltar();
+    assert.equal(colunaDo(1), "s1"); assert.equal(movidos.length, 0, "soltar fora não grava nada");
+    // etapa aberta → aberta: grava na hora, sem keepalive
+    pegar(1, listaDe("s2")); await soltar();
+    assert.equal(colunaDo(1), "s2"); assert.deepEqual(movidos.at(-1), { id: 1, para: "s2", keepalive: false });
+    // (3) Ganho fica pendente (7 s do Desfazer); mover o MESMO cartão de novo é recusado com aviso
+    pegar(2, listaDe("s5")); await soltar();
+    assert.equal(colunaDo(2), "s5"); assert.ok(cartao(2).classList.contains("confirmando"));
+    assert.equal(movidos.filter(m => m.id === 2).length, 0, "ainda não foi ao servidor");
+    const ganho = avisos.at(-1);
+    assert.equal(typeof ganho.firmar, "function", "o aviso leva a gravação adiada (firmar)");
+    pegar(2, listaDe("s1")); await soltar();
+    assert.equal(colunaDo(2), "s5", "o 2º movimento não entra por cima do pendente");
+    assert.match(toasts.at(-1), /ainda pode ser desfeita/);
+    assert.equal(movidos.filter(m => m.id === 2).length, 0);
+    // (2) a página ficou oculta: o pendente vai ao servidor JÁ, com keepalive — e o fim do aviso não grava de novo
+    D.doc.hidden = true; for (const f of [...(D.doDoc.visibilitychange || [])]) f({}); await tique(); await tique(); D.doc.hidden = false;
+    assert.deepEqual(movidos.at(-1), { id: 2, para: "s5", keepalive: true });
+    ganho.res({ estado: "mantida" }); await tique(); await tique();
+    assert.equal(movidos.filter(m => m.id === 2).length, 1);
+    assert.ok(!cartao(2).classList.contains("confirmando"));
+    // Desfazer antes dos 7 s = nada no servidor; firmar({saindo:true}) (aviso avisado pelo shell) = keepalive
+    pegar(3, listaDe("s6")); await soltar();
+    const perda = avisos.at(-1);
+    await perda.reverter(); perda.res({ estado: "desfeita" }); await tique();
+    assert.equal(colunaDo(3), "s2"); assert.equal(movidos.filter(m => m.id === 3).length, 0);
+    pegar(3, listaDe("s6")); await soltar();
+    const perda2 = avisos.at(-1);
+    await perda2.firmar({ saindo: true }); perda2.res({ estado: "mantida" }); await tique();
+    assert.deepEqual(movidos.at(-1), { id: 3, para: "s6", keepalive: true });
+    // (7) a resposta da rede chega no meio de um arrasto: o quadro só é refeito quando o gesto termina
+    const antesLeituras = kanbans();
+    pegar(1, listaDe("s2"));
+    const arrastado = cartao(1);
+    respostas.push(() => { const q = quadroDoServidor(); q.colunas[0].itens = [{ id: 9, titulo: "Chegou agora", status: "aberto", estagio_id: "s1", valor_previsto: 10, ordem: 0 }]; q.colunas[0].total = 1;
+      q.colunas[1].itens = [{ id: 1, titulo: "Ana", status: "aberto", estagio_id: "s2", valor_previsto: 100, ordem: 1 }]; q.colunas[1].total = 1; return q; });
+    quadroApi.aoMudarNegocio(); await tique(); await tique();
+    assert.equal(kanbans(), antesLeituras + 1);
+    assert.equal(cartao(9), null, "nada de redesenho no meio do arrasto");
+    assert.ok(arrastado.isConnected && quadro.querySelector(".kb-lugar"), "o cartão arrastado e o marcador continuam lá");
+    sairDasColunas(); await soltar();
+    assert.ok(cartao(9), "terminado o gesto, o quadro mostra o que a rede trouxe");
+    assert.equal(quadro.querySelector(".kb-lugar"), null);
+    // (4) a rede trocou as etapas da base que veio do aparelho: o quadro refaz o funil e recarrega em silêncio
+    base.funis = [{ id: "f1", nome: "Pacientes", padrao: true, ativo: true, estagios: [...etapas().slice(0, 2), { id: "s3", nome: "Etapa nova", tipo: "aberto", probabilidade: 60, ordem: 3 }, ...etapas().slice(2)] }];
+    const antesBase = kanbans();
+    assert.equal(typeof ouvinteBase, "function");
+    ouvinteBase(); await tique(); await tique();
+    assert.equal(kanbans(), antesBase + 1);
+    assert.ok(quadro.querySelector('.kb-col[data-estagio="s3"]'), "a etapa nova ganha coluna sem sair da tela");
+    // desmontar solta os ouvintes
+    quadroApi.desmontar();
+    assert.equal(ouvinteBase, null);
+    assert.equal((D.daJanela.pagehide || []).length, 0); assert.equal((D.doDoc.visibilitychange || []).length, 0);
+  } finally { D.desfazer(); }
+});
+
 console.log(`\n${ok} ok, ${falhas} falha(s)`);
 if (falhas) process.exit(1);
