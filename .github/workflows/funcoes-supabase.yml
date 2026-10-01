@@ -96,21 +96,27 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: supabase functions list --project-ref "${PROJETO}"
 
-      - name: Sondas sem segredo (401/403/413 esperados)
+      - name: Sondas sem segredo (401/403/405 fatais; 413 só avisa)
         run: |
           set -uo pipefail
           base="https://${PROJETO}.supabase.co/functions/v1"
           falhas=0
+          # FATAL (autenticação 401/403/405): errada → run vermelho → plano de volta
           confere() {   # confere <esperado> <descrição> <código obtido>
             if [ "$3" = "$1" ]; then echo "ok   $2 → $3"; else echo "::error::$2 → $3 (esperado $1)"; falhas=$((falhas + 1)); fi
+          }
+          # NÃO fatal (bug 1 do E2E-meta, correção candidata): só avisa e segue; falha isolada vira
+          # pendência, nunca reversão (a versão anterior pendura do mesmo jeito)
+          avisa413() {   # avisa413 <descrição> <"código tempo" obtido>
+            if [ "${2%% *}" = "413" ]; then echo "ok   $1 → $2"; else echo "::warning::$1 → $2 (esperado 413 em menos de 30 s) — pendência do bug 1, NÃO reverter (docs/orbita/DEPLOY-FUNCOES.md)"; fi
           }
           publicada() { grep -qx -- "$1" "${RUNNER_TEMP}/deploy-lista.validada"; }
           if publicada nx-whatsapp; then
             confere 401 "nx-whatsapp POST sem assinatura" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H 'content-type: application/json' --data '{}' "${base}/nx-whatsapp" || true)"
             confere 403 "nx-whatsapp GET com verify token inválido" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "${base}/nx-whatsapp?hub.mode=subscribe&hub.verify_token=sonda-invalida&hub.challenge=1" || true)"
-            # bug 1 do E2E-meta: 2 MiB + 1 tem de dar 413 na hora (antes pendurava ~160 s e o gateway dava 503)
-            confere 413 "nx-whatsapp corpo de 2 MiB + 1 (Content-Length)" "$(head -c 2097153 /dev/zero | curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H 'content-type: application/json' --data-binary @- "${base}/nx-whatsapp" || true)"
-            confere 413 "nx-whatsapp corpo de 2,4 MB em pedaços (chunked)" "$(head -c 2400000 /dev/zero | curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H 'content-type: application/json' -H 'Transfer-Encoding: chunked' --data-binary @- "${base}/nx-whatsapp" || true)"
+            # bug 1 do E2E-meta: 2 MiB + 1 tem de dar 413 em segundos (antes pendurava ~160 s e o gateway dava 503)
+            avisa413 "nx-whatsapp corpo de 2 MiB + 1 (Content-Length)" "$(head -c 2097153 /dev/zero | curl -sS -o /dev/null -w '%{http_code} %{time_total}s' --max-time 30 -X POST -H 'content-type: application/json' --data-binary @- "${base}/nx-whatsapp" || true)"
+            avisa413 "nx-whatsapp corpo de 2,4 MB em pedaços (chunked)" "$(head -c 2400000 /dev/zero | curl -sS -o /dev/null -w '%{http_code} %{time_total}s' --max-time 30 -X POST -H 'content-type: application/json' -H 'Transfer-Encoding: chunked' --data-binary @- "${base}/nx-whatsapp" || true)"
           fi
           if publicada nx-codewords; then
             confere 401 "nx-codewords ?ch= curto" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST --data '{}' "${base}/nx-codewords?ch=abc" || true)"

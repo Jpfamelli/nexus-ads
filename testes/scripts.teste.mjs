@@ -318,3 +318,27 @@ test("workflow de funções: só tag funcoes-*, contents: read, um por vez, port
     assert.ok(montar.includes(`"${fn}"`), `${fn} fora do montar-funcoes`);
   }
 });
+
+test("workflow de funções: sondas de autenticação (401/403/405) são fatais; a do 413 só avisa e nunca deixa o run vermelho", () => {
+  const y = readFileSync(resolve(RAIZ, ".github/workflows/funcoes-supabase.yml"), "utf8").replace(/\r\n/g, "\n");
+  const semComentario = y.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+  const ini = semComentario.indexOf("- name: Sondas sem segredo");
+  assert.ok(ini >= 0, "passo de sondas");
+  const sondas = semComentario.slice(ini);
+  // fatal: confere soma em falhas e o passo termina com exit 1
+  assert.match(sondas, /confere\(\) \{[^\n]*\n[^\n]*::error::[^\n]*falhas=\$\(\(falhas \+ 1\)\)/);
+  assert.match(sondas, /if \[ "\$\{falhas\}" -gt 0 \]; then [^\n]*exit 1; fi/);
+  for (const [cod, desc] of [[401, "nx-whatsapp POST sem assinatura"], [403, "nx-whatsapp GET com verify token inválido"],
+    [401, "nx-codewords ?ch= curto"], [405, "nx-codewords GET"], [401, "nx-enviar ação válida sem sessão"]]) {
+    assert.ok(sondas.includes(`confere ${cod} "${desc}"`), `sonda fatal: ${cod} ${desc}`);
+  }
+  // 413: nunca pela confere; avisa413 emite ::warning:: e não mexe em falhas nem sai
+  assert.doesNotMatch(sondas, /confere 413/);
+  const avisa = sondas.match(/avisa413\(\) \{[^\n]*\n([^\n]*)\n\s*\}/);
+  assert.ok(avisa, "função avisa413");
+  assert.match(avisa[1], /::warning::/);
+  assert.doesNotMatch(avisa[1], /falhas|exit|::error::/);
+  const usos = sondas.match(/^\s+avisa413 "nx-whatsapp [^"]+" "\$\(head -c \d+ \/dev\/zero \| curl [^\n]+-w '%\{http_code\} %\{time_total\}s'[^\n]+\|\| true\)"$/gm) || [];
+  assert.equal(usos.length, 2, "2 MiB + 1 com Content-Length e 2,4 MB em pedaços");
+  assert.ok(usos.some(l => l.includes("head -c 2097153")) && usos.some(l => l.includes("Transfer-Encoding: chunked")));
+});

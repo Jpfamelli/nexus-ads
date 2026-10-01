@@ -59,10 +59,13 @@ espera a primeira terminar.
    `supabase functions deploy <fn> --use-api --no-verify-jwt --project-ref dtjznipitihnwmcgpzqh`
    (bundle no servidor, `verify_jwt=false`: cada handler se autentica sozinho);
 8. `supabase functions list` (versões no ar, no log);
-9. sondas sem segredo, só das funções publicadas: nx-whatsapp POST sem assinatura → 401, GET com verify token
-   inválido → 403, **corpo de 2 MiB + 1 → 413 em menos de 30 s** (com Content-Length e em pedaços; bug 1 do
-   E2E-meta: antes pendurava ~160 s e o gateway dava 503); nx-codewords `?ch=abc` → 401 e GET → 405; nx-enviar
-   sem sessão → 401. Sonda errada faz o workflow terminar vermelho (a função já está publicada: ver "plano de volta").
+9. sondas sem segredo, só das funções publicadas.
+   - **Fatais (autenticação):** nx-whatsapp POST sem assinatura → 401 e GET com verify token inválido → 403;
+     nx-codewords `?ch=abc` → 401 e GET → 405; nx-enviar sem sessão → 401. Qualquer uma errada deixa o run
+     vermelho (a função já está publicada: ver "plano de volta").
+   - **Só aviso (bug 1 do E2E-meta, correção candidata por drenagem):** nx-whatsapp com corpo de 2 MiB + 1
+     (Content-Length) e de 2,4 MB em pedaços → 413 em menos de 30 s (antes pendurava ~160 s e o gateway dava 503).
+     Errada, emite `::warning::` com o código e o tempo e o run segue: vira pendência, nunca reversão.
 
 ## Como acompanhar
 
@@ -72,6 +75,11 @@ gh run watch <id-da-execução> --exit-status
 gh run view <id-da-execução> --log-failed
 ```
 
+A sonda de 413 fica no log do passo de sondas (`ok … → 413 0.4s`) e, quando falha, também nas anotações do run
+(`gh run view <id-da-execução>`, aviso amarelo com o código e o tempo). Com aviso, registrar em
+`docs/orbita/estado/E2E-meta.md` (bug 1) e `F8.md` como pendência; o bug 1 só é dado como corrigido quando essa sonda
+passar em produção.
+
 Depois de verde, conferir pelo MCP do Supabase (ou Dashboard → Edge Functions): as funções da lista `ACTIVE`,
 `verify_jwt=false` e versão +1. A primeira publicação pela Actions deve levar a **nx-codewords v3, nx-enviar v4 e
 nx-whatsapp v6** (no ar em 30/09: v2, v3 e v5). Se nx-whatsapp, nx-ciclo ou nx-relatorio foram publicadas, conferir o
@@ -79,6 +87,16 @@ próximo ciclo em `net._http_response` (HTTP 200, `ok:true`, `kamiguchi ok:true`
 Registrar o resultado em `docs/orbita/estado/F8.md`.
 
 ## Plano de volta
+
+**Reverter SÓ quando** (depois de uma publicação):
+- falhar uma sonda de autenticação (401/403/405, as fatais do passo 9 — o run fica vermelho);
+- alguma função da lista não estiver `ACTIVE` ou estiver com `verify_jwt=true`;
+- o ciclo das :07 da kamiguchi (nx-ciclo, em `net._http_response`) não der HTTP 200, `ok:true` e `kamiguchi ok:true`
+  — vale quando a publicação incluiu nx-whatsapp, nx-ciclo ou nx-relatorio.
+
+**Não reverter** por falha isolada da sonda de 413 (o `::warning::` do passo 9): ela vira pendência do bug 1 em
+`E2E-meta.md`/`F8.md`. A versão anterior (nx-whatsapp v5) pendura do mesmo jeito com corpo grande, então voltar não
+melhora nada — e desfaria a correção @lid (`a1fc214`), que **nunca** se reverte por causa dessa sonda.
 
 A tag precisa apontar para um commit que **tenha este workflow**; uma tag num commit antigo (antes de 30/09) não
 dispara nada. Para voltar:
@@ -90,8 +108,8 @@ dispara nada. Para voltar:
 
 Referências do que estava no ar antes da primeira publicação pela Actions: nx-whatsapp v5, nx-enviar v3 e
 nx-codewords v2 = dist de `49de8d8`; nx-ciclo v4, nx-relatorio v4, nx-ia v2 e nx-midia v2 = dist de `49de8d8`
-(a correção @lid `a1fc214` e o 413 `99003de` vieram depois). Funções SQL antigas: nas migrações `20260928*`,
-`20260929a` e `20260930*`.
+(a correção @lid `a1fc214` e o 413 por drenagem `31404a4`, que substituiu `99003de`, vieram depois). Funções SQL
+antigas: nas migrações `20260928*`, `20260929a` e `20260930*`.
 
 Se o próprio workflow não puder rodar (Actions fora do ar, segredo revogado), a publicação fica parada até alguém
 com o CLI funcionando seguir os mesmos passos 4–9 à mão. Não usar o deploy por MCP para estas funções
