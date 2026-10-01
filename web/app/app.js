@@ -34,11 +34,12 @@ const LS = {
 };
 const CHAVE_CLIENTE = "nx-app-cliente";
 const CHAVE_ESQUEMA = "nx-app-esquema";
+const CHAVE_CONTA = "nx-app-conta";      // id da conta da última sessão lida (a chave do cache da sessão precisa dele antes de ler a rede)
 const PRONTOS_PADRAO = { MODULOS_PRONTOS: [], CONFIG_PRONTAS: ["perfil"] };
 const ROTAS_PUBLICAS = new Set(["login", "convite", "senha"]);
 
 /** Os módulos que o boot carrega juntos. Cada um tem um <link rel="modulepreload"> no index.html com o MESMO ?v= (testes/shell.teste.mjs confere). */
-const MODULOS_BASE = ["api.js", "ui.js", "tema.js", "vocab.js", "rotas.js", "pulso.js", "rede.js", "rascunho.js"];
+const MODULOS_BASE = ["api.js", "ui.js", "tema.js", "vocab.js", "rotas.js", "pulso.js", "rede.js", "rascunho.js", "cache.js"];
 
 const E = {
   M: {},                 // módulos base: dados, api, ui, tema, vocab, rotas, pulso
@@ -47,6 +48,7 @@ const E = {
   marcaPublica: null,    // resposta de nx_marca_publica
   sessao: null,          // resposta de nx_app_sessao
   sessaoPromessa: null,  // a leitura de nx_app_sessao que o boot dispara em paralelo com a marca (aoMudarRota consome)
+  sessaoGuardada: null,  // M16: {dados, em} da última sessão guardada no aparelho (o shell pinta com ela e revalida pela rede)
   cliente: null,         // empresa ativa (item de sessao.clientes + tema)
   pulso: null,
   atual: null,           // { arquivo, mod, chave }
@@ -131,8 +133,8 @@ async function iniciar() {
         await esperarAbertura(ESPERAS_ABERTURA[Math.min(i, ESPERAS_ABERTURA.length - 1)] / 1000, navigator.onLine === false ? "Sem conexão." : "Não consegui abrir o sistema.");
       }
     }
-    const [dados, api, ui, tema, vocab, rotas, pulso, rede, rascunho] = carregados;
-    E.M = { dados, api, ui, tema, vocab, rotas, pulso, rede, rascunho };
+    const [dados, api, ui, tema, vocab, rotas, pulso, rede, rascunho, cache] = carregados;
+    E.M = { dados, api, ui, tema, vocab, rotas, pulso, rede, rascunho, cache };
     E.workspace = rotas.produtoDe(location.search);
     document.documentElement.dataset.produto = E.workspace || "orbita";
     document.title = E.workspace ? rotas.PRODUTOS[E.workspace].titulo : "Órbita · Nexus";
@@ -155,6 +157,8 @@ async function iniciar() {
   const { dados, api, ui } = E.M;
   E.ui = ui;
   ui.configurar({ mensagemErro: api.mensagemErro });
+  // M16: última resposta de leituras seguras no aparelho (IndexedDB, 12 h, lista branca): a tela abre com o que havia e revalida
+  E.cache = E.M.cache.criarCache();
   // M14: estado de conexão (online · lento · offline · servidor fora) alimentado por cada chamada do api.js
   E.rede = E.M.rede.criarRede({ ping: pingDoSite, sondar: sondarServidor });
   E.api = api.criarApi({
@@ -163,6 +167,7 @@ async function iniciar() {
     cliente: () => (E.cliente ? E.cliente.id : null),
     aoSessaoInvalida: () => sessaoCaiu(),
     rede: E.rede, contexto: true, retentar: true,
+    cache: E.cache, conta: () => (E.sessao ? E.sessao.conta.id : LS.lerTxt(CHAVE_CONTA)), aoCache: ev => aoCacheEvento(ev),
   });
   // M17: rascunhos por conta + empresa (localStorage, 7 dias, ~200 KB, nunca senha); somem no logout
   E.rascunhos = E.M.rascunho.criarRascunhos({ conta: () => (E.sessao ? E.sessao.conta.id : null), cliente: () => (E.cliente ? E.cliente.id : null) });
@@ -173,6 +178,7 @@ async function iniciar() {
   E.pulso.assinar(() => { atualizarNaoLidas(); });
   E.rede.aoVoltar(() => { if (E.pulso) E.pulso.agora(); });   // reconectou: o pulso lê agora (e as telas pelo orbita:online / ctx.rede.aoVoltar)
   montarIndicadoresRede();
+  montarSeloCache();
 
   if (LS.lerTxt("nx-app-menu") === "1") document.documentElement.classList.add("menu-recolhido");
   const dev = new URLSearchParams(location.search).get("dev");
@@ -180,8 +186,19 @@ async function iniciar() {
   if (dev === "0") try { sessionStorage.removeItem("nx-app-dev"); } catch { /* ok */ }
 
   // M11: a sessão (nx_app_sessao, a chamada mais pesada) sai junto com a marca pública, não depois dela
-  if (dados.lerToken()) { E.sessaoPromessa = lerSessao(); E.sessaoPromessa.catch(() => { /* quem consome (aoMudarRota) trata o erro */ }); }
-  await carregarMarcaPublica();
+  if (dados.lerToken()) {
+    E.sessaoPromessa = lerSessao();
+    E.sessaoPromessa.catch(() => { /* quem consome (aoMudarRota) trata o erro */ });
+    // M16: com a sessão guardada no aparelho o shell pinta na hora e a rede só confirma depois
+    const conta = LS.lerTxt(CHAVE_CONTA);
+    if (conta) {
+      try {
+        const g = await E.cache.ler(E.cache.chaveDe("nx_app_sessao", {}, { conta }));
+        if (g && g.dados && g.dados.conta && g.dados.conta.id === conta && !g.dados.conta.trocar_senha && Array.isArray(g.dados.clientes)) E.sessaoGuardada = g;
+      } catch { /* sem cache: abre pela rede */ }
+    }
+  }
+  if (E.sessaoGuardada) carregarMarcaPublica({ pintar: false }); else await carregarMarcaPublica();
   addEventListener("hashchange", () => aoMudarRota(true));
   // «Pular para o conteúdo»: o href="#vista" mudaria o hash e o roteador mostraria «Página não encontrada»; aqui só o foco se move
   const pular = document.querySelector(".pular");
@@ -201,6 +218,48 @@ async function iniciar() {
   montarEsqueletoShell();
   await aoMudarRota(false);
   iniciarPwa();
+}
+
+/* ============================================================
+   DADOS GUARDADOS (M16): selo único «Mostrando dados de 14:02 · atualizando…» em #faixas-sistema
+   ============================================================ */
+const selo = { servidos: 0, em: null, falhou: false, el: null };
+let renderSelo = () => {};
+let atualizarFaixaRede = () => {};
+
+/** Eventos do api.js: {fase:"servido", em} quando uma tela foi pintada do cache; {fase:"fim", ok, em} quando a rede respondeu (ou falhou). */
+function aoCacheEvento(ev) {
+  if (!ev) return;
+  if (ev.fase === "servido") { selo.servidos += 1; selo.em = selo.em == null ? ev.em : Math.min(selo.em, ev.em); }
+  else if (ev.fase === "fim") {
+    selo.servidos = Math.max(0, selo.servidos - 1);
+    if (ev.ok) { if (!selo.servidos) selo.falhou = false; }
+    else { selo.falhou = true; if (ev.em != null) selo.em = selo.em == null ? ev.em : Math.min(selo.em, ev.em); }
+  }
+  renderSelo();
+  atualizarFaixaRede();
+}
+function reiniciarSelo() { selo.servidos = 0; selo.em = null; selo.falhou = false; renderSelo(); }
+
+function montarSeloCache() {
+  const { ui } = E;
+  const alvo = $("faixas-sistema");
+  renderSelo = () => {
+    const falhando = E.rede && (E.rede.estado === "offline" || E.rede.estado === "servidor_fora");
+    const mostrar = selo.em != null && (selo.servidos > 0 || selo.falhou) && !falhando;   // offline/servidor fora: a faixa de conexão já fala
+    if (!mostrar) { if (selo.el) { selo.el.remove(); selo.el = null; } return; }
+    const hora = ui.horaBR(new Date(selo.em).toISOString());
+    const texto = selo.servidos > 0 ? `Mostrando dados de ${hora} · atualizando…` : `Mostrando dados de ${hora} · não foi possível atualizar`;
+    if (!selo.el) {
+      selo.el = ui.h("div", { class: "faixa faixa-cache" }, ui.icone("relogio"), ui.h("p", null));
+      alvo.appendChild(selo.el);
+    }
+    const p = selo.el.querySelector("p");
+    if (p.textContent !== texto) p.textContent = texto;
+  };
+  E.rede.assinar(() => renderSelo());
+  // a conexão voltou e a tela está com dado velho: relê a tela (o cartão de erro já refaz sozinho; aqui é a tela pintada do cache)
+  E.rede.aoVoltar(() => { if (selo.falhou) aoMudarRota(false); });
 }
 
 /* ============================================================
@@ -243,7 +302,8 @@ function montarIndicadoresRede() {
   const segundos = f => (f.proxima ? Math.max(0, Math.ceil((f.proxima - Date.now()) / 1000)) : null);
   function texto(f) {
     if (f.estado === "offline" || f.estado === "servidor_fora") {
-      return [ROTULO_REDE[f.estado], hora(f.ultimoOk) ? `dados de ${hora(f.ultimoOk)}` : null].filter(Boolean).join(" · ");
+      const quando = f.ultimoOk || selo.em;      // aberto sem internet: vale a hora do dado guardado que a tela mostra
+      return [ROTULO_REDE[f.estado], hora(quando) ? `dados de ${hora(quando)}` : null].filter(Boolean).join(" · ");
     }
     if (f.estado === "lento") return "Conexão lenta · ainda carregando…";
     return "Reconectado";
@@ -280,6 +340,7 @@ function montarIndicadoresRede() {
   }
   E.rede.assinar(render);
   render(E.rede.foto());
+  atualizarFaixaRede = () => render(E.rede.foto());
 }
 
 /* ============================================================
@@ -515,6 +576,13 @@ async function aplicarMarcaCliente() {
 let _avisouSessao = false;
 let loginPendente = null;
 
+/** nx_sair, queda de sessão e troca de conta: nenhuma resposta guardada fica no aparelho (privacidade). */
+function limparDadosDoAparelho() {
+  if (E.cache) E.cache.limpar().catch(() => {});
+  LS.apagar(CHAVE_CONTA);
+  E.sessaoGuardada = null;
+}
+
 /**
  * Chamado pelo api.js quando o servidor diz sessao_invalida. Devolve (Promise de) true quando a pessoa entrou de novo: as LEITURAS que
  * falharam esperam por isso e se repetem com o token novo. A tela NÃO é desmontada e nada do que foi digitado se perde: abre por cima
@@ -558,6 +626,7 @@ async function pedirLoginNaTela() {
     if (r === "ok") { ui.toast("Sessão renovada. Pode continuar.", { tipo: "ok" }); return true; }
     if (r === "outra") {
       if (E.rascunhos) E.rascunhos.apagarTudo();
+      limparDadosDoAparelho();
       try { sessionStorage.removeItem("nx-app-destino"); } catch { /* ok */ }
       location.hash = "#/";
       location.reload();
@@ -571,6 +640,7 @@ async function pedirLoginNaTela() {
 /** Sem sessão na memória (abertura) ou sem como continuar: apaga o token, limpa a tela e volta ao login. */
 function sessaoCaiuTotal() {
   if (!E.sessao && !E.M.dados.lerToken()) return;
+  limparDadosDoAparelho();
   E.M.dados.apagarToken();
   E.sessao = null; E.cliente = null;
   if (E.pulso) E.pulso.parar();
@@ -598,7 +668,27 @@ async function lerSessao() {
     c.tem_tema = !!c.tem_tema;
     c.suporte = (c.papel === "gestor" || c.papel === "super") && !c.proprio;
   }
+  // M16: a sessão já normalizada fica no aparelho (a próxima abertura pinta menu, empresa e marca sem esperar a rede)
+  LS.gravar(CHAVE_CONTA, s.conta.id);
+  E.cache.gravar(E.cache.chaveDe("nx_app_sessao", {}, { conta: s.conta.id }), "nx_app_sessao", s).catch(() => {});
   return s;
+}
+
+/** M16: depois de pintar com a sessão guardada, a leitura da rede confirma. Mudou algo (empresas, módulos, papel) → repinta o shell.
+    sessao_invalida já abriu a janela de login (api.js → sessaoCaiu); falha de rede só mantém o que está (a faixa de conexão avisa). */
+function revalidarSessao() {
+  const p = E.sessaoPromessa;
+  E.sessaoPromessa = null;
+  if (!p) return;
+  p.then(async nova => {
+    if (!E.sessao || nova.conta.id !== E.sessao.conta.id) return;
+    const mudou = E.M.tema.hashCurto(nova) !== E.M.tema.hashCurto(E.sessao);
+    E.sessao = nova;
+    if (!mudou) return;
+    const idAtual = E.cliente && E.cliente.id;
+    const novo = nova.clientes.find(c => c.id === idAtual);
+    await escolherCliente(novo ? novo.id : null, { remontar: false });
+  }).catch(() => { /* ver acima */ });
 }
 
 /** Adota a sessão lida e busca as imagens da org (depende da marca pública já resolvida). */
@@ -622,6 +712,7 @@ async function recarregarSessao() {
 async function sair() {
   try { await E.api.rpc("nx_sair"); } catch { /* sai do mesmo jeito */ }
   if (E.rascunhos) E.rascunhos.apagarTudo();     // logout: nenhum rascunho fica no aparelho
+  limparDadosDoAparelho();
   E.M.dados.apagarToken();
   E.sessao = null; E.cliente = null; E.imgOrg = null; E.notif = 0;
   if (E.pulso) E.pulso.parar();
@@ -729,7 +820,13 @@ async function aoMudarRota(doUsuario) {
   }
   if (!E.sessao) {
     bootMsg("Abrindo…");
-    try {
+    const guardada = E.sessaoGuardada;
+    E.sessaoGuardada = null;
+    if (guardada) {
+      // M16: pinta com a sessão do aparelho; a leitura da rede (já em voo) confirma em segundo plano
+      await adotarSessao(guardada.dados);
+      revalidarSessao();
+    } else try {
       let antecipada = E.sessaoPromessa;             // M11: já saiu junto com a marca pública
       E.sessaoPromessa = null;
       let ultimo = null;
@@ -909,6 +1006,7 @@ async function montarNoShell(r, seq, doUsuario) {
   const acesso = rotas.acessoRota(r.modulo, opcoesAcesso());
   const def = rotas.rotaDe(r.modulo);
   E.ultimaRota = r;
+  reiniciarSelo();
   marcarMenu(r.modulo);
   if (E.pulso) E.pulso.modo(r.modulo === "conversas" ? "conversas" : "normal");
 
@@ -927,7 +1025,7 @@ async function montarNoShell(r, seq, doUsuario) {
   else {
     desmontarAtual();
     ui.limpar(vista);
-    vista.appendChild(ui.esqueleto("cartoes", 4));
+    vista.appendChild(ui.esqueleto(rotas.esqueletoDaRota(r.modulo, r.partes)));   // a forma da tela, não 4 cartões iguais
     try {
       mod = await arq(def.arquivo);
     } catch (e) {

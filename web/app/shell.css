@@ -26,3 +26,8 @@
 .sino { position: relative; }
 .faixa-rede { padding-block: .4rem; row-gap: .15rem; }
 .faixa-rede .bt { min-height: 28px; padding: .1rem .75rem; }
+
+/* ---- dados guardados (M16): selo único «Mostrando dados de 14:02 · atualizando…» ---- */
+.faixa-cache { background: var(--c-sup-2); }
+.faixa-cache .ic { color: var(--c-texto-2); }
+.faixa-cache p { color: var(--c-texto-2); }

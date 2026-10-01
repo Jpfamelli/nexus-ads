@@ -93,6 +93,16 @@ export function itensDoProduto(id, disponiveis = []) {
   return disponiveis.filter(it => it.fixo || permitidos.has(it.id));
 }
 
+/** Tipo de esqueleto (ui.esqueleto) com a forma de cada tela enquanto o módulo e os dados chegam. */
+const ESQUELETO_DA_ROTA = Object.freeze({
+  inicio: "inicio", conversas: "chat", crm: "kanban", contatos: "lista", empresas: "lista", tarefas: "lista", agenda: "agenda",
+  anuncios: "ads", relatorios: "ads", automacoes: "lista", config: "lista", admin: "tabela",
+});
+export function esqueletoDaRota(modulo, partes = []) {
+  if (modulo === "crm" && partes && partes[0] === "negocio") return "lista";
+  return Object.hasOwn(ESQUELETO_DA_ROTA, modulo) ? ESQUELETO_DA_ROTA[modulo] : "lista";
+}
+
 /** Barra inferior do celular: até 4 itens + "Mais". */
 export const BARRA = Object.freeze(["inicio", "conversas", "crm", "agenda"]);
 

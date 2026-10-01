@@ -286,6 +286,9 @@ export function lerRetryAfter(v, agora = Date.now()) {
  *   rede                  — {sucesso(), falha(info), lento(±1)}: o rede.js do shell recebe o resultado FINAL de cada chamada
  *   contexto              — mensagens por contexto (leitura × escrita) nos erros de conexão (o shell liga)
  *   retentar              — true ou {tentativas, esperasMs, orcamentoMs, jitter}: repete leituras e escritas com {req:true}
+ *   cache                 — o cache.js do shell ({cacheavel, chaveDe, ler, gravar}): liga rpcC(nome, params, {cache: true, aoCache(dados, em)}) (stale-while-revalidate)
+ *   conta()               — id da conta (a chave do cache leva conta + empresa)
+ *   aoCache(evento)       — {fase: "servido", em} / {fase: "fim", ok, em}: o shell mostra «Mostrando dados de 14:02 · atualizando…»
  *   agora, esperar(ms), aleatorio(), online() — relógio, espera, sorteio e "tem internet?" (testes)
  *   fetch                 — opcional (testes)
  */
@@ -431,6 +434,38 @@ export function criarApi(o) {
     } finally { fimLento(); }
   }
 
+  /**
+   * M16 — stale-while-revalidate. A rede sai JÁ; se há resposta guardada (≤ 12 h) ela chega antes pelo aoCache(dados, em) e a da rede
+   * vem depois (é o que a promessa devolve). Se a rede falhar depois de a tela ter sido pintada do cache, o erro sobe com
+   * `e.comCache = true`: a tela mantém o que já mostra e não troca por um cartão de erro. Nunca guarda o que não é cacheável.
+   */
+  async function comCache(nome, params, opcoes, executar) {
+    const chave = o.cache.chaveDe(nome, params, { conta: o.conta ? o.conta() : null, cliente: o.cliente ? o.cliente() : null });
+    let resolvida = false, local = null, servido = false;
+    const redeP = executar().then(d => { resolvida = true; return d; }, e => { resolvida = true; throw e; });
+    redeP.catch(() => {});                                   // a leitura do cache pode demorar mais que um erro imediato: sem aviso de promessa sem dono
+    try { local = await o.cache.ler(chave); } catch { local = null; }
+    if (local && !resolvida) {
+      servido = true;
+      try { if (typeof opcoes.aoCache === "function") opcoes.aoCache(local.dados, local.em); } catch (e) { console.error("aoCache falhou", e); }
+      if (typeof o.aoCache === "function") { try { o.aoCache({ fase: "servido", em: local.em, nome }); } catch { /* o shell decide */ } }
+    }
+    try {
+      const dados = await redeP;
+      o.cache.gravar(chave, nome, dados).catch(() => {});     // sem await: gravar não atrasa a tela
+      if (servido && typeof o.aoCache === "function") { try { o.aoCache({ fase: "fim", ok: true, nome }); } catch { /* ok */ } }
+      return dados;
+    } catch (e) {
+      if (servido) {
+        e.comCache = true;
+        if (e.contexto) e.contexto.comCache = true;
+        if (typeof o.aoCache === "function") { try { o.aoCache({ fase: "fim", ok: false, em: local.em, nome, erro: e }); } catch { /* ok */ } }
+      }
+      throw e;
+    }
+  }
+  const querCache = (nome, opcoes) => !!(o.cache && opcoes && opcoes.cache && o.cache.cacheavel(nome));
+
   /** {req:true} ou p_req já nos parâmetros: a escrita ganha um uuid por INTENÇÃO (o mesmo em todas as repetições) e pode repetir sem duplicar. */
   function prepararReq(params, opcoes) {
     const quer = opcoes && opcoes.req;
@@ -441,22 +476,25 @@ export function criarApi(o) {
   }
 
   const api = {
-    /** RPC com p_token. opcoes: {req:true|uuid} (escrita idempotente por p_req). */
+    /** RPC com p_token. opcoes: {req:true|uuid} (escrita idempotente por p_req) e {cache:true, aoCache(dados, em)} (última resposta guardada primeiro). */
     rpc(nome, params = {}, opcoes = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
       const { params: p, req } = prepararReq(params, opcoes);
-      return chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req });
+      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req });
+      return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar) : executar();
     },
     /** RPC com p_token e p_cliente (empresa ativa). opcoes: {req:true|uuid}. */
     rpcC(nome, params = {}, opcoes = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
       const { params: p, req } = prepararReq(params, opcoes);
-      return chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, p_cliente: o.cliente ? o.cliente() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req });
+      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, p_cliente: o.cliente ? o.cliente() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req });
+      return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar) : executar();
     },
     /** RPC pública (sem token): nx_marca_publica, nx_convite_ver, nx_convite_aceitar, nx_senha_redefinir, nx_entrar. */
-    publica(nome, params = {}) {
+    publica(nome, params = {}, opcoes = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
-      return chamar(`${base}/rest/v1/rpc/${nome}`, params, prazoRpc, { leitura: ehLeitura(nome) });
+      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, params, prazoRpc, { leitura: ehLeitura(nome) });
+      return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar) : executar();
     },
     /**
      * Edge Function: POST /functions/v1/<funcao> com {token, cliente, ...corpo}.

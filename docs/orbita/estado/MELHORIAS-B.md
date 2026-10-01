@@ -13,6 +13,7 @@ Testes da frente: `node testes/shell.teste.mjs` (registrado em `testes/rodar-tud
 | M14 estado de conexão | feito | ver `git log --grep "M14"` |
 | M15 leituras que insistem, escritas que não duplicam, boot | feito | ver `git log --grep "M15"` |
 | M17 sessão que não derruba o trabalho + rascunhos | feito (migração só no repositório; smoke 16 rodado no PGlite local) | ver `git log --grep "M17"` |
+| M16 telas que abrem com o último dado (cache.js) | feito | ver `git log --grep "M16"` |
 
 ## M11 · Abrir em ~1,5 s em vez de ~3,5 s
 
@@ -137,6 +138,28 @@ Depois de resolver: voltar ao `sw.js` normal, `"sw": true` e subir o `?v=`.
 - No dev-falso (Chrome 390×844, um `textarea` ligado ao `rascunho.js` real): `simular/sessao-invalida` com a pessoa na mesma tela → a janela abre em ≤ 10 s (próxima leitura do pulso), o texto continua no campo; «Entrar» fecha a janela, toast de sessão renovada, o pulso volta com o token novo;
   recarregar → o texto volta com o selo; «descartar» limpa o campo e o armazenamento; entrar com outra conta apaga os rascunhos.
 
+## M16 · Telas que abrem com o último dado (stale-while-revalidate)
+
+**Feito**
+- `web/app/cache.js` (novo, módulo base com preload): IndexedDB `orbita-cache` (loja `rpc`), TTL de 12 h, versão do formato, resposta > 1 MB não fica. **Lista branca** (`CACHEAVEIS`): `nx_app_sessao`, `nx_marca_publica`, `nx_inicio`, `nx_crm_base`,
+  `nx_negocios_kanban/_coluna`, `nx_contatos_listar`, `nx_empresas_listar`, `nx_tarefas_listar`, `nx_agenda_dia`, `nx_rel_vendas`, `nx_rel_atendimento`, `nx_dados`, `nx_cv_listar`; mais um filtro de palavras (`PROIBIDO`: config, admin, senha, chave, token,
+  convite, domínio, plano, usuário, mensagens, canais, integração, notificações, `cv_ver`, `cv_base`, buscar…) como defesa em profundidade. **Nunca** corpo de mensagem, configurações ou Admin. `nx_cv_listar` só guarda o que a lista mostra
+  (nome, prévia de até 80 caracteres e contadores; sem `mensagens`). Chave = `conta:empresa:rpc:hash(parâmetros)` (token, `p_cliente` e `p_req` fora do hash): outra conta/empresa nunca lê. Sem IndexedDB (janela anônima, Safari) o cache vira só memória da aba.
+- `api.js`: `rpcC/rpc/publica(nome, params, {cache: true, aoCache(dados, em)})` — a rede sai JÁ; o guardado chega antes por `aoCache` e a promessa devolve a rede (que também atualiza o cache sem atrasar a tela). Rede mais rápida que o cache nunca pinta o velho por cima do novo.
+  Se a rede falha DEPOIS de pintar do cache, o erro sobe com `e.comCache = true` e a mensagem vira "Sem internet. Mostrando o que já tinha." (a tela deve manter o que mostra, não trocar por cartão de erro).
+- `app.js`: **boot pelo cache** — com sessão guardada (IndexedDB + `nx-app-conta`) o shell (menu, empresa, marca) pinta na hora e a leitura de `nx_app_sessao` (já em voo) só confirma em segundo plano (`revalidarSessao`: se algo mudou, repinta;
+  `sessao_invalida` abre a janela de login por cima do shell em cache). `trocar_senha` nunca abre pelo cache. **Selo único** em `#faixas-sistema`: «Mostrando dados de 14:02 · atualizando…» (e «· não foi possível atualizar» se a rede falhar; some quando a
+  faixa de conexão assume); recomeça a cada tela; quando a conexão volta e a tela está com dado velho, o shell relê a tela. A faixa «Sem conexão» usa a hora do dado guardado ("dados de 14:02") quando ainda não houve chamada boa.
+  **Privacidade:** `limparDadosDoAparelho()` (apaga o IndexedDB, `nx-app-conta` e a sessão guardada) em `sair()`, na queda de sessão da abertura e na troca de conta pela janela de sessão expirada.
+- `rotas.esqueletoDaRota(modulo, partes)`: o esqueleto do shell enquanto o módulo carrega tem a forma da tela (`inicio`, `chat`, `kanban`, `lista`, `agenda`, `ads`, `tabela`) em vez de 4 cartões iguais.
+
+**Medição (dev-falso, Chrome 390×844, rede lenta 150 ms/4 Mbps, SW ligado com `?sw=1`, 2ª abertura)**: shell visível em **472 ms** (meta < 500 ms) e conteúdo real do Início (já com o `{cache:true}` da frente D) em **685 ms** (antes: 2,4 s).
+Reaberto SEM internet: shell + sessão + Início vêm do aparelho, faixa «Sem conexão · tentando em 4 s · Tentar agora» e o aviso "Sem internet. Mostrando o que já tinha.".
+
+**Como verificar**
+- `node testes/shell.teste.mjs` (9 testes de M16: lista negra/branca, chave, TTL, redutor de conversas, `limpar()` no logout, `api.js` com cache de mentira, app.js).
+- IndexedDB real: no Chrome, `await import("./cache.js?v=…")` + `api.js` com `cache` → 2ª chamada devolve `aoCache` antes da rede (conferido nesta rodada).
+
 ## Pendências para outras frentes
 
 - **C e D (M14):** o navegador guarda a falha de `import()` por URL. Se um módulo seu importa dependências com `import()` direto e a rede cair no meio, o cartão de erro precisa de recarga (o shell já faz isso quando a mensagem é de import). Para tentar de novo SEM recarregar, repetir com `&r=<n>` depois do `?v=` (a regra de `?v=` dos testes aceita).
@@ -145,3 +168,4 @@ Depois de resolver: voltar ao `sw.js` normal, `"sw": true` e subir o `?v=`.
 - **C (M30), D (M36/M40):** ligar `ctx.rascunho.ligar(campo, "<tipo>:<id>[:parte]")` nas notas, no modal de nova oportunidade/tarefa e no compositor/notas internas do chat, e chamar `ctx.rascunho.apagar(chave)` SÓ quando o servidor confirmar o envio. Para o selo ficar no lugar certo, passar `{ seloEm: elemento }`. Campo de segredo: `data-segredo` (ou `type=password`).
 - **D (M36):** a janela de sessão expirada espera as LEITURAS e repete com o token novo; escritas falham na hora (o erro tem `codigo: "sessao_invalida"`): mostre «não enviada · tentar de novo» em vez de descartar o texto.
 - **Integração/publicação:** aplicar `supabase/migrations/20261002b_sessao_pulso_push.sql` só com o ok do dono (ensaio em begin … rollback pelo MCP com `supabase/testes/16_sessao_pulso_push.sql` antes); ela vem ANTES de 20261002c/d na ordem de nome.
+- **C e D (M16):** quem usa `{cache: true, aoCache}` precisa tratar `e.comCache` (rede falhou DEPOIS de pintar do cache): mantenha a tela e mostre só um aviso (a mensagem do erro já é "Sem internet. Mostrando o que já tinha."), não troque por cartão de erro. A frente D já faz isso no Início; confira CRM (kanban, `nx_crm_base`, agenda) e a 1ª página de `nx_cv_listar`. Só estas RPCs ficam no aparelho (`CACHEAVEIS` em `web/app/cache.js`): se uma tela precisar de outra, peça a inclusão a B (não vale pôr nome com config/admin/mensagens/usuários).

@@ -1030,6 +1030,159 @@ await teste("rascunho.js: apagarTudo (logout, outra conta) desliga os campos —
   assert.equal(x.storage.m.size, 0, "e o campo desligado não grava mais");
 });
 
+/* ============================================================ M16 */
+secao("M16 · telas que abrem com o último dado (cache.js)");
+
+const CACHE = await imp("cache.js");
+const ROTAS_MOD = await imp("rotas.js");
+
+function armazemFalso({ quebra = false } = {}) {
+  const m = new Map();
+  const falha = () => { if (quebra) throw new Error("IndexedDB indisponível"); };
+  return { m, ler: async k => { falha(); return m.has(k) ? JSON.parse(JSON.stringify(m.get(k))) : null; }, gravar: async (k, v) => { falha(); m.set(k, JSON.parse(JSON.stringify({ k, ...v }))); return true; },
+    apagar: async k => { falha(); m.delete(k); return true; }, limpar: async () => { falha(); m.clear(); return true; } };
+}
+
+await teste("cache.js: lista branca — só leituras seguras; nunca mensagem, configuração, Admin, segredo, convite, domínio, usuário", () => {
+  for (const n of ["nx_app_sessao", "nx_inicio", "nx_crm_base", "nx_negocios_kanban", "nx_negocios_coluna", "nx_contatos_listar", "nx_empresas_listar", "nx_tarefas_listar", "nx_agenda_dia",
+    "nx_rel_vendas", "nx_rel_atendimento", "nx_dados", "nx_cv_listar", "nx_marca_publica"]) assert.equal(CACHE.cacheavel(n), true, n);
+  for (const n of ["nx_cv_mensagens", "nx_cv_buscar_msgs", "nx_cv_ver", "nx_cv_base", "nx_cv_config_salvar", "nx_ia_config_salvar", "nx_agenda_config_ver", "nx_usuarios_listar", "nx_clientes_admin", "nx_orgs_listar",
+    "nx_dominios_listar", "nx_planos_listar", "nx_canais_listar", "nx_entrada_chave", "nx_integracoes_status", "nx_buscar", "nx_notificacoes_listar", "nx_contato_ver", "nx_negocio_ver", "nx_convite_criar",
+    "nx_senha_redefinir", "nx_entrar", "nx_sair", "nx_negocio_salvar", "nx_automacoes_listar", "", undefined]) assert.equal(CACHE.cacheavel(n), false, String(n));
+  // defesa em profundidade: mesmo que alguém ponha um nome perigoso na lista, o filtro de palavras segura
+  for (const n of ["nx_x_config", "nx_admin_dados", "nx_cv_mensagens", "nx_chave_listar", "nx_token_ver", "nx_usuarios", "nx_convite_listar"]) assert.match(n, CACHE.PROIBIDO, n);
+});
+
+await teste("cache.js: a chave leva conta, empresa, RPC e os parâmetros (em qualquer ordem); token, empresa e p_req não entram no hash", () => {
+  const k = (p, e = {}) => CACHE.chaveDe("nx_negocios_kanban", p, { conta: "c1", cliente: "e1", ...e });
+  assert.equal(k({ p_funil: "f1", p_busca: "x" }), k({ p_busca: "x", p_funil: "f1" }), "ordem dos parâmetros não muda a chave");
+  assert.notEqual(k({ p_funil: "f1" }), k({ p_funil: "f2" }));
+  assert.equal(k({ p_funil: "f1", p_token: "t", p_cliente: "e1", p_req: "r" }), k({ p_funil: "f1" }), "token, p_cliente e p_req ficam de fora");
+  assert.notEqual(k({}, { conta: "c2" }), k({}), "outra conta = outra chave");
+  assert.notEqual(k({}, { cliente: "e2" }), k({}), "outra empresa = outra chave");
+  assert.match(k({}), /^c1:e1:nx_negocios_kanban:[0-9a-f]{8}$/);
+  assert.equal(CACHE.chaveDe("nx_app_sessao", {}, { conta: "c1" }), CACHE.chaveDe("nx_app_sessao", {}, { conta: "c1", cliente: null }));
+  assert.match(CACHE.chaveDe("nx_marca_publica", { p_host: "x" }), /^-:-:nx_marca_publica:/);
+  assert.equal(CACHE.estavel({ b: 1, a: [2, { d: 1, c: undefined }] }), '{"a":[2,{"d":1}],"b":1}');
+});
+
+await teste("cache.js: guarda e devolve com a hora; vence em 12 h; ignora formato de outra versão; resposta enorme não fica; só cacheável", async () => {
+  let t = 5_000_000; const arm = armazemFalso();
+  const c = CACHE.criarCache({ armazem: arm, agora: () => t });
+  const k = CACHE.chaveDe("nx_inicio", {}, { conta: "c", cliente: "e" });
+  assert.equal(await c.ler(k), null, "vazio");
+  assert.equal(await c.gravar(k, "nx_inicio", { n: 1 }), true);
+  assert.deepEqual(await c.ler(k), { dados: { n: 1 }, em: 5_000_000 });
+  t += 12 * 3600 * 1000 - 1; assert.ok(await c.ler(k), "11h59: ainda vale");
+  t += 2; assert.equal(await c.ler(k), null, "passou de 12 h: vence"); assert.equal(arm.m.size, 0, "e some do armazém");
+  assert.equal(await c.gravar("x", "nx_cv_mensagens", { corpo: "oi" }), false, "mensagem nunca"); assert.equal(arm.m.size, 0);
+  assert.equal(await c.gravar("y", "nx_inicio", { grande: "z".repeat(600 * 1024) }), false, "> 1 MB não fica");
+  arm.m.set("v2", { k: "v2", v: 99, em: t, dados: { x: 1 } }); assert.equal(await c.ler("v2"), null, "formato de outra versão é ignorado");
+  const circular = {}; circular.a = circular; assert.equal(await c.gravar("c", "nx_inicio", circular), false, "não serializável não quebra");
+});
+
+await teste("cache.js: a lista de conversas só leva nome, prévia de até 80 caracteres e contadores (nada de mensagens)", async () => {
+  const c = CACHE.criarCache({ armazem: armazemFalso() });
+  const longa = "Olá, tudo bem? ".repeat(20);
+  const dados = { itens: [{ id: 1, contato: { nome: "Mariana" }, ultima_msg_resumo: longa, mensagens: [{ corpo: "segredo" }], ultimas_mensagens: [1], nao_lidas: 2 }], contagens: { minhas: 1, nao_lidas: 2 }, tem_mais: false };
+  const k = CACHE.chaveDe("nx_cv_listar", { p_filtro: { aba: "abertas" } }, { conta: "c", cliente: "e" });
+  await c.gravar(k, "nx_cv_listar", dados);
+  const lido = (await c.ler(k)).dados;
+  assert.ok(lido.itens[0].ultima_msg_resumo.length <= 80, "prévia até 80 caracteres"); assert.match(lido.itens[0].ultima_msg_resumo, /…$/);
+  assert.equal(lido.itens[0].mensagens, undefined); assert.equal(lido.itens[0].ultimas_mensagens, undefined);
+  assert.equal(lido.itens[0].contato.nome, "Mariana"); assert.deepEqual(lido.contagens, { minhas: 1, nao_lidas: 2 });
+  assert.equal(JSON.stringify(lido).includes("segredo"), false);
+  assert.equal(dados.itens[0].mensagens.length, 1, "o objeto original não foi alterado");
+});
+
+await teste("cache.js: limpar() apaga tudo (nx_sair, queda de sessão, troca de conta); armazém que falha vira cache só em memória", async () => {
+  const arm = armazemFalso(); const c = CACHE.criarCache({ armazem: arm });
+  await c.gravar("a", "nx_inicio", { n: 1 }); await c.gravar("b", "nx_crm_base", { n: 2 });
+  assert.equal(arm.m.size, 2);
+  await c.limpar(); assert.equal(arm.m.size, 0); assert.equal(await c.ler("a"), null, "nem na memória");
+  const q = CACHE.criarCache({ armazem: armazemFalso({ quebra: true }) });
+  assert.equal(await q.gravar("a", "nx_inicio", { n: 1 }), true); assert.deepEqual((await q.ler("a")).dados, { n: 1 }, "IndexedDB indisponível: fica na memória desta aba");
+  await q.limpar(); assert.equal(await q.ler("a"), null);
+  const sem = CACHE.criarCache({ armazem: null }); await sem.gravar("a", "nx_inicio", { n: 1 }); assert.ok(await sem.ler("a"));
+  assert.equal(CACHE.criarArmazemIDB(undefined) === null || typeof CACHE.criarArmazemIDB(undefined) === "object", true);
+  assert.equal(CACHE.criarArmazemIDB({}), null, "sem indexedDB.open não há armazém");
+});
+
+/** api com cache de mentira e rede programável. */
+function apiComCache({ rede, cacheado = null, esperaCache = 0, extra = {} }) {
+  const eventos = [], chamadas = [];
+  const cache = { cacheavel: CACHE.cacheavel, chaveDe: CACHE.chaveDe,
+    ler: async k => { chamadas.push("ler:" + k); if (esperaCache) await new Promise(r => setTimeout(r, esperaCache)); return cacheado; },
+    gravar: async (k, n, d) => { chamadas.push("gravar:" + n); eventos.push("gravou"); return true; } };
+  const fetchFalso = async () => { const r = await rede(); if (r instanceof Error) throw r; return { ok: r.status === 200, status: r.status, headers: { get: () => null }, text: async () => JSON.stringify(r.corpo ?? {}) }; };
+  const api = API.criarApi({ url: "https://x.test", chave: "k", token: () => "t", cliente: () => "e1", conta: () => "c1", cache, fetch: fetchFalso, contexto: true, aoCache: ev => eventos.push("selo:" + ev.fase + (ev.ok === false ? ":falhou" : "")), ...extra });
+  return { api, eventos, chamadas };
+}
+
+await teste("api.js (cache): serve o guardado ANTES da rede (aoCache), devolve o da rede, atualiza o cache e avisa o selo", async () => {
+  const x = apiComCache({ rede: async () => { await new Promise(r => setTimeout(r, 30)); return { status: 200, corpo: { v: "rede" } }; }, cacheado: { dados: { v: "cache" }, em: 1234 } });
+  const ordem = [];
+  const dados = await x.api.rpcC("nx_negocios_kanban", { p_funil: "f1" }, { cache: true, aoCache: (d, em) => ordem.push(["cache", d.v, em]) });
+  assert.deepEqual(ordem, [["cache", "cache", 1234]]); assert.deepEqual(dados, { v: "rede" });
+  await new Promise(r => setImmediate(r));
+  assert.ok(x.eventos.includes("selo:servido") && x.eventos.includes("selo:fim") && x.eventos.includes("gravou"));
+  assert.ok(x.eventos.indexOf("selo:servido") < x.eventos.indexOf("selo:fim"));
+  assert.match(x.chamadas[0], /^ler:c1:e1:nx_negocios_kanban:[0-9a-f]{8}$/, "chave com conta e empresa");
+});
+
+await teste("api.js (cache): rede falhou depois de pintar do cache → erro com comCache (a tela mantém o que mostra) e mensagem 'Mostrando o que já tinha'; sem cache nada disso", async () => {
+  const x = apiComCache({ rede: async () => new TypeError("Failed to fetch"), cacheado: { dados: { v: "cache" }, em: 99 }, esperaCache: 0 });
+  let pintou = 0;
+  const e = await x.api.rpcC("nx_crm_base", {}, { cache: true, aoCache: () => pintou++ }).catch(v => v);
+  assert.equal(pintou, 1); assert.equal(e.comCache, true); assert.equal(e.codigo, "sem_conexao");
+  assert.equal(API.mensagemErro(e), "Sem internet. Mostrando o que já tinha.");
+  assert.ok(x.eventos.includes("selo:fim:falhou"));
+  const y = apiComCache({ rede: async () => new TypeError("Failed to fetch"), cacheado: null });
+  let pintou2 = 0;
+  const e2 = await y.api.rpcC("nx_crm_base", {}, { cache: true, aoCache: () => pintou2++ }).catch(v => v);
+  assert.equal(pintou2, 0); assert.equal(e2.comCache, undefined); assert.equal(API.mensagemErro(e2), "Sem internet. Confira a conexão e tente de novo.");
+});
+
+await teste("api.js (cache): rede mais rápida que o cache não pinta o velho depois do novo; RPC fora da lista e opção ausente ignoram o cache", async () => {
+  const x = apiComCache({ rede: async () => ({ status: 200, corpo: { v: "rede" } }), cacheado: { dados: { v: "velho" }, em: 1 }, esperaCache: 40 });
+  let pintou = 0;
+  assert.deepEqual(await x.api.rpcC("nx_inicio", {}, { cache: true, aoCache: () => pintou++ }), { v: "rede" });
+  await new Promise(r => setTimeout(r, 80));
+  assert.equal(pintou, 0, "o dado velho nunca aparece por cima do novo");
+  const y = apiComCache({ rede: async () => ({ status: 200, corpo: { v: 1 } }), cacheado: { dados: { v: "cache" }, em: 1 } });
+  let p = 0;
+  await y.api.rpcC("nx_cv_mensagens", { p_conversa: 1 }, { cache: true, aoCache: () => p++ }); await y.api.rpcC("nx_inicio", {}, { aoCache: () => p++ }); await y.api.rpc("nx_inicio", {});
+  assert.equal(p, 0); assert.deepEqual(y.chamadas, [], "mensagem não passa pelo cache; sem {cache:true} também não");
+  const sem = API.criarApi({ url: "https://x.test", chave: "k", fetch: async () => ({ ok: true, status: 200, text: async () => "{}" }) });
+  assert.deepEqual(await sem.rpcC("nx_inicio", {}, { cache: true, aoCache: () => { throw new Error("não devia"); } }), {}, "api sem cache ignora a opção");
+});
+
+await teste("app.js (M16): sessão guardada pinta o shell e a rede revalida; selo único; limpa no logout, queda e troca de conta; esqueleto com a forma da rota", () => {
+  assert.match(APP_JS, /E\.cache = E\.M\.cache\.criarCache\(\);/);
+  assert.match(APP_JS, /cache: E\.cache, conta: \(\) => \(E\.sessao \? E\.sessao\.conta\.id : LS\.lerTxt\(CHAVE_CONTA\)\), aoCache: ev => aoCacheEvento\(ev\)/);
+  assert.match(APP_JS, /E\.cache\.gravar\(E\.cache\.chaveDe\("nx_app_sessao", \{\}, \{ conta: s\.conta\.id \}\), "nx_app_sessao", s\)/, "a sessão normalizada fica no aparelho");
+  assert.match(APP_JS, /!g\.dados\.conta\.trocar_senha/, "troca de senha obrigatória nunca abre pelo cache");
+  assert.match(APP_JS, /if \(E\.sessaoGuardada\) carregarMarcaPublica\(\{ pintar: false \}\); else await carregarMarcaPublica\(\);/, "com sessão guardada o shell não espera a marca pública");
+  assert.match(APP_JS, /await adotarSessao\(guardada\.dados\);\s*revalidarSessao\(\);/);
+  for (const nome of ["async function sair()", "function sessaoCaiuTotal()"]) {
+    const corpo = APP_JS.slice(APP_JS.indexOf(nome), APP_JS.indexOf("\n}\n", APP_JS.indexOf(nome)));
+    assert.match(corpo, /limparDadosDoAparelho\(\)/, `${nome} limpa o cache`);
+  }
+  assert.match(/async function pedirLoginNaTela\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0], /if \(r === "outra"\) \{[\s\S]*?limparDadosDoAparelho\(\);/, "troca de conta limpa o cache");
+  assert.match(APP_JS, /function limparDadosDoAparelho\(\) \{\s*if \(E\.cache\) E\.cache\.limpar\(\)/);
+  assert.match(APP_JS, /Mostrando dados de \$\{hora\} · atualizando…/);
+  assert.match(APP_JS, /reiniciarSelo\(\);\s*marcarMenu\(r\.modulo\);/, "o selo recomeça a cada tela");
+  assert.match(HTML, /<link rel="modulepreload" href="cache\.js\?v=/);
+  assert.match(APP_JS, /ui\.esqueleto\(rotas\.esqueletoDaRota\(r\.modulo, r\.partes\)\)/);
+  const tiposUi = [...ler("ui.js").matchAll(/tipo === "([a-z]+)"/g)].map(m => m[1]);
+  for (const m of ["inicio", "conversas", "crm", "contatos", "empresas", "tarefas", "agenda", "anuncios", "relatorios", "automacoes", "config", "admin", "qualquer"]) {
+    const tipo = ROTAS_MOD.esqueletoDaRota(m, []);
+    assert.ok(["inicio", "chat", "lista", "kanban", "ads", "tabela", "agenda"].includes(tipo), `${m} → ${tipo}`);
+    assert.ok(tiposUi.includes(tipo) || tipo === "lista", `ui.esqueleto conhece "${tipo}"`);
+  }
+  assert.equal(ROTAS_MOD.esqueletoDaRota("crm", []), "kanban"); assert.equal(ROTAS_MOD.esqueletoDaRota("crm", ["negocio", "9"]), "lista"); assert.equal(ROTAS_MOD.esqueletoDaRota("conversas", ["901"]), "chat");
+});
+
 /* ============================================================ fim */
 console.log(`\n${ok} ok · ${falhas} falha${falhas === 1 ? "" : "s"}`);
 if (falhas) process.exitCode = 1;
