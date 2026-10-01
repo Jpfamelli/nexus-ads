@@ -842,14 +842,24 @@ export function seletorCor({ valor = null, paleta, aoMudar, rotulo = "Cor" } = {
   return el;
 }
 
-/** abas({itens:[{id, rotulo, n}], ativo, aoMudar(id), rotulo}) → {el, ativar(id), contar(id, n)} (setas ←→, roving tabindex) */
+/**
+ * abas({itens:[{id, rotulo, n, painel}], ativo, aoMudar(id), rotulo}) → {el, ativar(id), contar(id, n)} (setas ←→, roving tabindex)
+ * `painel` (elemento, opcional): vira role=tabpanel, ligado à aba por aria-controls/aria-labelledby (padrão ARIA de abas).
+ * O contador vem separado do rótulo por um espaço («Execuções 3», não «Execuções3» no leitor de tela).
+ */
 export function abas({ itens = [], ativo, aoMudar, rotulo = "Seções", classe = "" } = {}) {
   let atual = ativo ?? (itens[0] && itens[0].id);
   const bts = new Map();
   const lista = h("div", { class: ["abas", classe], role: "tablist", "aria-label": rotulo });
   for (const it of itens) {
     const n = h("span", { class: "abas-n", hidden: it.n === undefined || it.n === null }, it.n ?? "");
-    const b = h("button", { type: "button", role: "tab", class: "aba", id: novoId("aba"), dataset: { id: it.id } }, it.icone ? icone(it.icone) : null, h("span", null, it.rotulo), n);
+    const b = h("button", { type: "button", role: "tab", class: "aba", id: novoId("aba"), dataset: { id: it.id } }, it.icone ? icone(it.icone) : null, h("span", null, it.rotulo), " ", n);
+    if (it.painel) {
+      if (!it.painel.id) it.painel.id = novoId("painel");
+      b.setAttribute("aria-controls", it.painel.id);
+      it.painel.setAttribute("role", "tabpanel");
+      it.painel.setAttribute("aria-labelledby", b.id);
+    }
     b.addEventListener("click", () => { ativar(it.id); if (aoMudar) aoMudar(it.id); });
     bts.set(it.id, { b, n });
     lista.appendChild(b);
@@ -913,6 +923,19 @@ export function dataCurtaBR(iso) {
 }
 export function horaBR(iso) { const d = dataDe(iso); return d ? _fmt.hora.format(d) : vazioFmt; }
 export function dataHoraBR(iso) { const d = dataDe(iso); return d ? `${_fmt.data.format(d)} ${_fmt.hora.format(d)}` : vazioFmt; }
+/**
+ * Período [inicio, fim) para a tela. O fim é EXCLUSIVO: um bloqueio de dia(s) inteiro(s) termina à meia-noite do dia seguinte, e escrever
+ * «06/10 00:00 — 07/10 00:00» parece bloquear também o dia 07. Dia(s) inteiro(s) viram «Dia inteiro · 06/10/2026» ou «Dias inteiros · 06/10/2026 a 08/10/2026».
+ */
+export function periodoBR(inicio, fim, sep = " — ") {
+  const a = dataDe(inicio), b = dataDe(fim);
+  if (!a || !b) return `${dataHoraBR(inicio)}${sep}${dataHoraBR(fim)}`;
+  if (_fmt.hora.format(a) === "00:00" && _fmt.hora.format(b) === "00:00" && b > a) {
+    const d1 = _fmt.data.format(a), d2 = _fmt.data.format(new Date(b.getTime() - 60_000));   // 23:59 do último dia
+    return d1 === d2 ? `Dia inteiro · ${d1}` : `Dias inteiros · ${d1} a ${d2}`;
+  }
+  return `${dataHoraBR(a)}${sep}${dataHoraBR(b)}`;
+}
 /** "agora", "há 5 min", "há 2 h", "ontem", "há 3 dias", "em 2 h", "amanhã"… depois de 7 dias, a data. */
 export function relativo(iso, agora = new Date()) {
   const d = dataDe(iso); if (!d) return vazioFmt;
@@ -972,15 +995,35 @@ export function atalho(combinacao, fn) {
   return () => document.removeEventListener("keydown", ouvir);
 }
 
-/** carregando(botao, promessa|função) — trava o botão (aria-busy) até terminar; devolve o resultado. */
+/**
+ * manterFoco(el) → devolver(): lembra se `el` tem o foco do teclado agora. Um botão/campo desabilitado perde o foco
+ * (cai no <body>) e, ao reabilitar, ele não volta sozinho: `devolver()` o traz de volta, se ninguém mais o pegou no meio
+ * do caminho e o elemento ainda está na tela (WCAG 2.4.3 — quem usa só o teclado não precisa procurar o controle de novo).
+ */
+export function manterFoco(el) {
+  const tinha = !!el && typeof document !== "undefined" && document.activeElement === el;
+  return () => {
+    if (!tinha || !el.isConnected || el.disabled) return;
+    const a = document.activeElement;
+    if (!a || a === document.body || a === document.documentElement) { try { el.focus({ preventScroll: true }); } catch { /* ok */ } }
+  };
+}
+
+/** carregando(botao, promessa|função) — trava o botão (aria-busy) até terminar; devolve o resultado e o foco do teclado. */
 export async function carregando(botao, promessa) {
   const estavaDesab = botao ? botao.disabled : false;
+  const devolverFoco = botao ? manterFoco(botao) : null;
   if (botao) { botao.disabled = true; botao.setAttribute("aria-busy", "true"); }
   try {
     return await (typeof promessa === "function" ? promessa() : promessa);
   } finally {
-    if (botao) { botao.disabled = estavaDesab; botao.removeAttribute("aria-busy"); }
+    if (botao) { botao.disabled = estavaDesab; botao.removeAttribute("aria-busy"); devolverFoco(); }
   }
+}
+
+/** «smooth» só para quem não pediu menos movimento (prefers-reduced-motion): para scrollIntoView/scrollTo. */
+export function comportamentoRolagem() {
+  try { return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"; } catch { return "auto"; }
 }
 
 /** copiar(texto) → Promise<boolean> (+ aviso "Copiado."). */

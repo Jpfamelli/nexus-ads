@@ -128,7 +128,8 @@
   font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: clamp(1.4rem, 2.4vw, 2rem); letter-spacing: -.02em; line-height: 1.15;
   transition: border-color var(--t-ui) var(--e-out);
 }
-.au-nome-inp::placeholder { color: var(--c-texto-3); }
+.au-nome-inp { text-overflow: ellipsis; }
+.au-nome-inp::placeholder { color: var(--c-texto-3); text-overflow: ellipsis; }
 .au-nome-inp:hover:not(:disabled) { border-bottom-color: var(--c-texto-3); }
 .au-nome-inp:focus-visible { outline: none; border-bottom-color: var(--c-prim-luz); }
 .au-nome-inp[aria-invalid="true"] { border-bottom-color: var(--c-ruim); }
@@ -233,12 +234,15 @@
 .au-acao-espera { background: var(--c-sec-suave); }
 .au-acao-parar { background: var(--c-ruim-suave); }
 .au-acao-ia { background: linear-gradient(155deg, var(--c-prim-suave), var(--c-sup-2) 70%); }
-.au-acao-resumo { flex: none; font-size: var(--fs-12); color: var(--c-sec-luz); white-space: nowrap; }
+.au-passo-ia-off { margin: .6rem .8rem 0; font-size: var(--fs-13); }
+.au-tile-txt .au-tile-off { color: var(--c-aten); font-weight: 600; }
+.au-modelo-nota-ia { color: var(--c-aten); }
+.au-acao-resumo { flex: none; font-size: var(--fs-12); color: color-mix(in srgb, var(--c-sec-luz) 72%, var(--c-texto)); white-space: nowrap; }
 .au-item-erro { margin: 0; padding: 0 1rem .85rem; color: var(--c-ruim); font-weight: 600; font-size: var(--fs-13); }
 .au-cond .au-item-erro { grid-column: 1 / -1; padding: 0 0 .1rem; }
 .au-cond.au-tem-erro { padding-bottom: .1rem; }
 .au-acao-cab {
-  display: flex; align-items: center; gap: .55rem; padding: .35rem .4rem .35rem .6rem;
+  display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .55rem; padding: .35rem .4rem .35rem .6rem;   /* estreito: os 3 botões descem para a linha de baixo, sem sobrepor o título */
   background: var(--c-tinta); border-bottom: 1px solid var(--c-borda);
 }
 .au-alca { display: grid; place-items: center; width: 24px; height: 40px; color: var(--c-texto-3); cursor: grab; touch-action: none; }
@@ -247,8 +251,8 @@
   flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
   background: var(--c-prim); color: var(--c-prim-txt); font-family: var(--f-mono); font-weight: 500; font-size: var(--fs-12);
 }
-.au-acao-tit { flex: 1 1 auto; min-width: 0; font-size: var(--fs-15); font-weight: 700; line-height: 1.3; }
-.au-acao-bts { display: flex; gap: .1rem; flex: none; }
+.au-acao-tit { flex: 1 1 8rem; min-width: 0; font-size: var(--fs-15); font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+.au-acao-bts { display: flex; gap: .1rem; flex: none; margin-left: auto; }
 .au-gira { transform: rotate(180deg); }
 .au-acao-corpo { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem 1rem; padding: .9rem 1rem 1rem; }
 .au-acao-corpo > .campo-textarea,
@@ -268,6 +272,11 @@
 /* ---------------------------------------------------------------- modelo da Meta (WABA) */
 .au-tpl { display: flex; flex-direction: column; gap: .8rem; min-width: 0; }
 .au-tpl-aviso { align-items: flex-start; }
+.au-tpl-aviso .bt { white-space: normal; text-align: left; line-height: 1.25; max-width: 100%; padding-block: .4rem; }
+@media (max-width: 420px) {
+  /* colunas aninhadas deixam ~100 px para o texto a 320 px: o ícone vai para cima e o aviso ganha a largura toda */
+  .au-tpl-aviso { flex-direction: column; gap: .35rem; padding: .7rem .75rem; }
+}
 .au-tpl-sugerido {
   margin: .1rem 0; padding: .7rem .9rem; border-left: 3px solid var(--c-aten); border-radius: 0 var(--r-pp) var(--r-pp) 0;
   background: var(--c-sup-2); color: var(--c-texto); font-size: var(--fs-14); overflow-wrap: anywhere;
@@ -297,7 +306,7 @@
 .au-vars-lista { display: flex; flex-wrap: wrap; gap: .4rem; }
 .au-var {
   min-height: 32px; padding: .3rem .65rem; border-radius: 999px; border: 1px solid var(--c-borda-2); background: var(--c-tinta);
-  font-family: var(--f-mono); font-weight: 500; font-size: var(--fs-12); color: var(--c-sec-luz);
+  font-family: var(--f-mono); font-weight: 500; font-size: var(--fs-12); color: color-mix(in srgb, var(--c-sec-luz) 72%, var(--c-texto));
   transition: border-color var(--t-micro) var(--e-out), background-color var(--t-micro) var(--e-out);
 }
 .au-var:hover:not(:disabled) { border-color: var(--c-sec-luz); background: var(--c-sec-suave); }
@@ -441,7 +450,7 @@
   background: var(--c-tinta); border: 1px solid var(--c-borda); color: var(--c-texto-2); font-weight: 600;
 }
 .au-mini-passo .ic { width: 12px; height: 12px; }
-.au-mini-espera { background: var(--c-sec-suave); border-color: transparent; color: var(--c-sec-luz); }
+.au-mini-espera { background: var(--c-sec-suave); border-color: transparent; color: color-mix(in srgb, var(--c-sec-luz) 72%, var(--c-texto)); }
 .au-mini-passo + .au-mini-passo::before { content: "›"; margin-right: .3rem; color: var(--c-texto-3); font-weight: 400; }
 
 /* ================================================================ editor: dias, tempo de espera, escolha da IA */
@@ -492,7 +501,7 @@
 .au-sim-alvo { padding: .65rem .75rem; border-radius: var(--r-p); background: var(--c-tinta); border: 1px solid var(--c-borda); min-width: 0; }
 .au-sim-alvo-cab { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .6rem; min-width: 0; }
 .au-sim-alvo-cab strong { overflow-wrap: anywhere; }
-.au-sim-link { margin-left: auto; font-size: var(--fs-13); font-weight: 600; color: var(--c-prim-luz); }
+.au-sim-link { margin-left: auto; font-size: var(--fs-13); font-weight: 600; color: color-mix(in srgb, var(--c-prim-luz) 72%, var(--c-texto)); }
 .au-sim-passos { list-style: none; display: flex; flex-direction: column; gap: .35rem; margin-top: .5rem; }
 .au-sim-passo { display: flex; align-items: flex-start; gap: .5rem; font-size: var(--fs-13); min-width: 0; }
 .au-sim-passo .pilula { flex: none; }
@@ -533,4 +542,21 @@
 @media (max-width: 760px), (pointer: coarse) {
   .au-chip { min-height: 44px; }
   .au-tile, .au-esc-op { min-height: 52px; }
+}
+
+/* ================================================================ acessibilidade: foco, movimento, alto contraste */
+/* o cabeçalho fixo do editor (--au-cab-h, medido em auto-editor.js; 0 no celular, onde ele não fica fixo) não pode cobrir o controle que recebe o foco */
+html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h, 0px) + 1rem); }
+
+@media (forced-colors: active) {
+  /* alto contraste: a cor some, então o estado liga/desliga e o chip marcado precisam de forma e de cores do sistema */
+  .au-sw-trilho { forced-color-adjust: none; background: ButtonFace; border: 2px solid ButtonText; }
+  .au-sw-bola { forced-color-adjust: none; background: ButtonText; }
+  .au-sw[aria-checked="true"] .au-sw-trilho { background: Highlight; border-color: Highlight; }
+  .au-sw[aria-checked="true"] .au-sw-bola { background: HighlightText; }
+  .au-sw:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+  .au-chip[aria-checked="true"], .au-chip[aria-pressed="true"], .au-esc-op[aria-checked="true"] {
+    forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; border-width: 2px;
+  }
+  .au-chip:disabled, .au-sw:disabled { color: GrayText; border-color: GrayText; }
 }

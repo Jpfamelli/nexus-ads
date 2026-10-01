@@ -122,6 +122,23 @@ export function ajustarContraste(cor, fundo, alvo = 4.5) {
   return { cor: corTexto(fundo), mudou: true };
 }
 
+/**
+ * Garante `min`:1 de `cor` sobre CADA um dos `fundos` (a pílula de status, por exemplo, escreve a cor sobre o próprio fundo suave).
+ * Move a luminosidade no sentido que afasta do fundo, em passos de 4%, como ajustarContraste. Só mexe se preciso.
+ */
+export function garantirContraste(cor, fundos, min = 4.5) {
+  let c = normalizarHex(cor);
+  for (let volta = 0; volta < 3; volta++) {
+    let mudou = false;
+    for (const f of fundos) {
+      if (contraste(c, f) >= min) continue;
+      c = ajustarContraste(c, f, min).cor; mudou = true;
+    }
+    if (!mudou) break;
+  }
+  return c;
+}
+
 /** Todas as variáveis do app a partir das 3 cores. Nunca lança: cor inválida cai no padrão (com aviso). */
 export function derivarTema(cores = {}) {
   const avisos = [];
@@ -153,11 +170,24 @@ export function derivarTema(cores = {}) {
   const esq = escuro ? "escuro" : "claro";
   const fx = FIXOS[esq];
 
+  const primSuave = misturar(fundo, prim, .16);
+  const secSuave = misturar(fundo, sec, .14);
+  /** A pílula primária/secundária escreve color-mix(luz 78%, texto) sobre o fundo suave: precisa de 4,5:1 ali também (fundos de marca médios falhavam). */
+  const luzNaPilula = (luz, suave) => {
+    const [h, s, l0] = hsl(luz);
+    for (let i = 0; i <= 25; i++) {
+      const c = i === 0 ? normalizarHex(luz) : deHsl([h, s, l0 + (escuro ? 1 : -1) * .04 * i]);
+      if (contraste(misturar(c, texto, .22), suave) >= 4.5) return c;
+    }
+    return corTexto(fundo);
+  };
   const primLuz = ajustarContraste(prim, fundo);
+  primLuz.cor = luzNaPilula(primLuz.cor, primSuave);
   if (primLuz.mudou) avisos.push({ campo: "primaria", texto: escuro
     ? "A cor primária ficou escura demais sobre o fundo; usamos um tom mais claro para textos e links."
     : "A cor primária ficou clara demais sobre o fundo; usamos um tom mais escuro para texto." });
   const secLuz = ajustarContraste(sec, fundo);
+  secLuz.cor = luzNaPilula(secLuz.cor, secSuave);
   if (secLuz.mudou) avisos.push({ campo: "secundaria", texto: escuro
     ? "A cor secundária ficou escura demais sobre o fundo; usamos um tom mais claro para texto."
     : "A cor secundária ficou clara demais sobre o fundo; usamos um tom mais escuro para texto." });
@@ -165,11 +195,17 @@ export function derivarTema(cores = {}) {
   // o botão primário fica "apagado" se quase não se destaca do fundo
   if (contraste(prim, fundo) < 1.6) avisos.push({ campo: "primaria", texto: "A cor primária quase some sobre o fundo; os botões vão aparecer pouco." });
 
+  // status (pílulas ok/ruim/aten/info, meta, google): a cor é o TEXTO sobre o fundo suave da própria pílula
+  const st = {};
+  for (const k of ["ok", "ruim", "aten", "info"]) st[k] = garantirContraste(fx[k], [misturar(fundo, fx[k], .16)]);
+  const meta = garantirContraste(fx.meta, [secSuave]);
+  const google = garantirContraste(fx.google, [misturar(fundo, fx.aten, .16)]);
+
   const vars = {
     "--esquema": esq,
     "--c-fundo": fundo,
     "--c-texto": texto,
-    "--c-texto-2": misturar(fundo, texto, .72),
+    "--c-texto-2": garantirContraste(misturar(fundo, texto, .72), [superficies[2]]),
     // Rótulos menores também precisam de 4,5:1; 56% falha em vários fundos claros.
     "--c-texto-3": ajustarContraste(misturar(fundo, texto, .56), superficies[2], 4.5).cor,
     "--c-sup": superficies[0],
@@ -181,20 +217,20 @@ export function derivarTema(cores = {}) {
     "--c-prim-hi": escuro ? misturar(prim, BRANCO, .12) : misturar(prim, PRETO, .12),
     "--c-prim-txt": primTxt,
     "--c-prim-luz": primLuz.cor,
-    "--c-prim-suave": misturar(fundo, prim, .16),
+    "--c-prim-suave": primSuave,
     "--c-sec": sec,
     "--c-sec-luz": secLuz.cor,
-    "--c-sec-suave": misturar(fundo, sec, .14),
+    "--c-sec-suave": secSuave,
     "--c-foco": primLuz.cor,
-    "--c-ok": fx.ok, "--c-ruim": fx.ruim, "--c-aten": fx.aten, "--c-info": fx.info,
-    "--c-ok-txt": corTexto(fx.ok), "--c-ruim-txt": corTexto(fx.ruim),
+    "--c-ok": st.ok, "--c-ruim": st.ruim, "--c-aten": st.aten, "--c-info": st.info,
+    "--c-ok-txt": corTexto(st.ok), "--c-ruim-txt": corTexto(st.ruim),
     "--c-ok-suave": misturar(fundo, fx.ok, .16),
     "--c-ruim-suave": misturar(fundo, fx.ruim, .16),
     "--c-aten-suave": misturar(fundo, fx.aten, .16),
     "--c-info-suave": misturar(fundo, fx.info, .16),
     "--c-nota": misturar(fundo, fx.aten, .18),
     "--c-nota-txt": texto,
-    "--c-meta": fx.meta, "--c-google": fx.google,
+    "--c-meta": meta, "--c-google": google,
     "--c-bolha-in": misturar(fundo, texto, .09),
     "--c-bolha-out": misturar(fundo, prim, .16),
     // palco e vidro

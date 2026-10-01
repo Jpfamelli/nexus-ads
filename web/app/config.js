@@ -14,6 +14,16 @@ let _externas = null;      // cache das seções das outras frentes (por versão
 let _versaoExt = null;
 let _limpeza = [];
 
+/**
+ * Aviso para um logo muito estreito/alto (largura < metade da altura): no menu (caixa de 36 px) e no login (44 px) o logo é desenhado
+ * «contido», então um 90 × 500 sobra com ~7 px de largura. Devolve o texto do aviso ou "" quando a proporção serve.
+ */
+export function avisoProporcaoLogo(largura, altura) {
+  const w = Number(largura), h = Number(altura);
+  if (!(w > 0) || !(h > 0) || w / h >= 0.5) return "";
+  return "Este logo é muito estreito e alto: no menu e na tela de entrada ele aparece bem pequeno e pode ficar ilegível. Prefira um logo quadrado ou mais largo.";
+}
+
 /** Valida o contrato da RPC antes de a tela tratar uma resposta inválida como lista vazia. */
 export function validarListaDominios(valor) {
   if (!Array.isArray(valor) || valor.some(d => !d || typeof d !== "object" || typeof d.host !== "string" || !["pendente", "ativo"].includes(d.status))) {
@@ -616,11 +626,22 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     const btRemover = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("lixeira"), "Remover");
     const extra = favicon ? h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("copiar"), "Gerar do logo") : null;
     const erro = h("small", { class: "campo-erro", role: "alert", hidden: true });
+    const avisoProp = h("p", { class: "aviso aviso-aten img-aviso", role: "status", hidden: true });
     function desenhar() {
       ui.limpar(amostra);
+      avisoProp.hidden = true;
       const u = T.imagemSegura(m[chave]);
-      if (u) amostra.append(h("img", { src: u, alt: `${rotulo} atual` }));
-      else amostra.append(h("span", { class: "fraco" }, "Sem imagem"));
+      if (u) {
+        const im = h("img", { src: u, alt: `${rotulo} atual` });
+        // logo estreito/alto demais: avisa na prévia (o ícone da aba é sempre quadrado e fica de fora)
+        if (!favicon) im.addEventListener("load", () => {
+          const txt = avisoProporcaoLogo(im.naturalWidth, im.naturalHeight);
+          ui.limpar(avisoProp);
+          if (txt) avisoProp.append(ui.icone("alerta"), h("span", null, txt));
+          avisoProp.hidden = !txt;
+        });
+        amostra.append(im);
+      } else amostra.append(h("span", { class: "fraco" }, "Sem imagem"));
       btRemover.hidden = !u;
     }
     btEnviar.addEventListener("click", () => arquivo.click());
@@ -652,7 +673,7 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     desenhar();
     return h("div", { class: "img-campo" },
       h("div", { class: "img-campo-txt" }, h("b", null, rotulo), ajuda ? h("small", { class: "campo-ajuda" }, ajuda) : null),
-      h("div", { class: "logo-caixa" }, amostra, h("div", { class: "linha" }, btEnviar, extra, btRemover), arquivo), erro);
+      h("div", { class: "logo-caixa" }, amostra, h("div", { class: "linha" }, btEnviar, extra, btRemover), arquivo), erro, avisoProp);
   }
 
   // ---- cores

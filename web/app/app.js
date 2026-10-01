@@ -106,6 +106,16 @@ async function iniciar() {
 
   await carregarMarcaPublica();
   addEventListener("hashchange", () => aoMudarRota(true));
+  // «Pular para o conteúdo»: o href="#vista" mudaria o hash e o roteador mostraria «Página não encontrada»; aqui só o foco se move
+  const pular = document.querySelector(".pular");
+  if (pular) pular.addEventListener("click", ev => {
+    ev.preventDefault();
+    const alvo = $("app") && !$("app").hidden ? $("vista") : $("publico");
+    if (!alvo) return;
+    if (!alvo.hasAttribute("tabindex")) alvo.setAttribute("tabindex", "-1");
+    try { alvo.focus({ preventScroll: true }); } catch { alvo.focus(); }
+    scrollTo({ top: 0 });
+  });
   ui.atalho("mod+k", ev => {
     if (!E.sessao || !buscaDisponivel() || $("app").hidden) return;
     ev.preventDefault();

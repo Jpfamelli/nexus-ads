@@ -133,10 +133,12 @@ export function criarChat(A) {
 
     const selos = faixa;
     ui.limpar(faixa);
-    if (conv.status !== "resolvida") {
+    // o aparelho do CodeWords não tem janela de 24 h: nada de «Janela aberta/fechada» nesse canal
+    const provedorCanal = (conv.canal && conv.canal.provedor) || ((A.base && A.base.canais) || []).find(k => k.id === conv.canal_id)?.provedor || "meta";
+    if (conv.status !== "resolvida" && L.canalTemJanela(provedorCanal)) {
       selos.appendChild(ui.pilula(jan.texto, jan.nivel === "aberta" ? "ok" : jan.nivel === "acabando" ? "aten" : "ruim",
         { icone: "relogio", class: "cv-janela", title: jan.ate ? `Até ${ui.dataHoraBR(jan.ate)}` : "O cliente ainda não mandou mensagem neste número" }));
-    } else selos.appendChild(ui.pilula("Resolvida", "neutra", { icone: "check" }));
+    } else if (conv.status === "resolvida") selos.appendChild(ui.pilula("Resolvida", "neutra", { icone: "check" }));
     if (conv.status === "pendente") selos.appendChild(ui.pilula("Pendente", "aten"));
     if (conv.oculta) selos.appendChild(ui.pilula("Oculta · contato bloqueado", "ruim", { icone: "alerta" }));
     if (ct.optin_marketing === false) selos.appendChild(ui.pilula("Não quer marketing", "aten", { title: "Pediu para não receber mensagens de marketing" }));

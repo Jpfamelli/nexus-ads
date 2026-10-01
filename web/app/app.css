@@ -703,6 +703,7 @@ html.menu-recolhido .lat-conta { justify-content: center; }
     background: var(--c-vidro); border-top: 1px solid var(--c-borda); backdrop-filter: blur(18px) saturate(1.1); -webkit-backdrop-filter: blur(18px) saturate(1.1);
   }
   .grade-2, .grade-3, .form-grade { grid-template-columns: minmax(0, 1fr); }
+  html { scroll-padding-bottom: calc(var(--barra) + env(safe-area-inset-bottom) + 1rem); }   /* a barra inferior fixa não cobre o controle focado */
   .toasts { inset: auto 12px calc(var(--barra) + 12px + env(safe-area-inset-bottom)) 12px; width: auto; align-items: stretch; }
   .topo-produtos { width: 42px; min-width: 42px; max-width: 42px; min-height: 42px; padding: .4rem; }
   .topo-produtos span { display: none; }
@@ -740,16 +741,16 @@ html.menu-recolhido .lat-conta { justify-content: center; }
   gap: clamp(1.5rem, 4vw, 4rem); padding: clamp(1.5rem, 4vw, 3.5rem) clamp(1rem, 5vw, 5rem);
 }
 .entrar-arte { display: flex; flex-direction: column; gap: 1.6rem; min-width: 0; animation: aparece var(--t-move) var(--e-out) both; }
-.entrar-marca { display: flex; align-items: center; gap: .8rem; }
+.entrar-marca { display: flex; align-items: center; gap: .8rem; min-width: 0; }
 .entrar-marca svg, .entrar-marca img { width: 44px; height: 44px; object-fit: contain; flex: none; }
 .entrar-marca img.largo { width: auto; max-width: 200px; height: 44px; }
-.entrar-marca span { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-25); letter-spacing: -.01em; }
+.entrar-marca span { min-width: 0; overflow-wrap: anywhere; font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-25); letter-spacing: -.01em; }   /* nome do produto de até 40 letras numa palavra só quebra em vez de alargar a página */
 .entrar-titulo {
   font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; letter-spacing: -.035em; line-height: .98;
-  font-size: clamp(2.4rem, 5.2vw, 4.8rem); max-width: 13ch; text-wrap: balance;
+  font-size: clamp(2.4rem, 5.2vw, 4.8rem); max-width: 13ch; text-wrap: balance; min-width: 0; overflow-wrap: anywhere;   /* título de até 80 letras sem espaço (ex.: um endereço) quebra em vez de estourar */
 }
 .entrar-titulo em { font-style: normal; color: var(--c-prim-luz); }
-.entrar-sub { color: var(--c-texto-2); font-size: var(--fs-17); max-width: 44ch; }
+.entrar-sub { color: var(--c-texto-2); font-size: var(--fs-17); max-width: 44ch; overflow-wrap: anywhere; }
 .entrar-orbita { position: relative; width: min(420px, 80%); aspect-ratio: 2.4 / 1; margin-top: .6rem; transform: rotate(-10deg); }
 .entrar-orbita i { position: absolute; border-radius: 50%; }
 .entrar-orbita .o1 { inset: 0; border: 1px solid var(--c-borda-2); }
@@ -769,6 +770,7 @@ html.menu-recolhido .lat-conta { justify-content: center; }
   backdrop-filter: blur(18px) saturate(1.1); -webkit-backdrop-filter: blur(18px) saturate(1.1);
   animation: aparece var(--t-move) var(--e-out) both; animation-delay: calc(var(--escada) * 3);
 }
+.entrar-cartao h1, .entrar-cartao .sub { overflow-wrap: anywhere; }
 .entrar-cartao h1 { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-25); letter-spacing: -.015em; line-height: 1.15; }
 .entrar-cartao .sub { margin-top: .4rem; }
 .entrar-form { display: flex; flex-direction: column; gap: .95rem; margin-top: 1.4rem; }
@@ -1169,4 +1171,9 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 }
 @media (prefers-reduced-motion: reduce) {
   .palco::before, .palco::after { animation: none; transform: none; will-change: auto; }
+}
+
+@media (forced-colors: active) {
+  /* alto contraste: a aba marcada precisa se distinguir das outras sem depender de cor de fundo */
+  .aba[aria-selected="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
 }

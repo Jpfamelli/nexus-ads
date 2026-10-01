@@ -225,6 +225,9 @@
 .ng-kv { display: grid; grid-template-columns: minmax(0, 9.5rem) minmax(0, 1fr); gap: .45rem 1rem; align-items: start; }
 .ng-kv > dt { color: var(--c-texto-3); font-size: var(--fs-13); padding-top: .55rem; }
 .ng-kv > dd { min-width: 0; font-size: var(--fs-14); }
+.ng-kv > dd.ng-pontuacao { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .7rem; padding-top: .4rem; }
+.ng-pontuacao-motivo { min-width: 0; overflow-wrap: anywhere; color: var(--c-texto-2); font-size: var(--fs-13); }
+.ng-pontuacao-em { flex-basis: 100%; color: var(--c-texto-3); font-size: var(--fs-12); }
 .ng-contato { display: flex; align-items: center; gap: .5rem .8rem; flex-wrap: wrap; min-width: 0; }
 .ng-contato > div { flex: 1 1 9rem; min-width: 0; }
 .ng-contato > .linha { flex: 0 1 auto; flex-wrap: wrap; } /* sem espaço ao lado do nome, "Abrir conversa" e "Ficha" descem para a linha de baixo */

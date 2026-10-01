@@ -1288,12 +1288,26 @@ export function situacaoExecucao(x) {
   return /\b(pulad[oa]|nao (foi )?enviad[oa]|contato pediu|fora da janela|ignorad[oa])\b/.test(normalizar(x.detalhe)) ? "pulado" : "ok";
 }
 
+/**
+ * Por que a execução foi cancelada: o servidor acrescenta ao detalhe « · cancelada: <motivo>» (o cliente respondeu, a automação foi
+ * desligada, o negócio mudou de etapa…) ou « · cancelada pela equipe». Sem o motivo (detalhe cortado em 1.000 letras), a frase é neutra.
+ */
+function textoCancelada(x) {
+  const det = texto(x && x.detalhe);
+  let motivo = "";
+  for (const m of det.matchAll(/·\s*cancelada(?:\s+(pela equipe)|:\s*([^·]+))/gi)) motivo = (m[1] || m[2] || "").trim();
+  if (!motivo) return "Cancelada";
+  if (/^pela equipe$/i.test(motivo)) return "Cancelada pela equipe";
+  if (/^o cliente respondeu$/i.test(motivo)) return "Cancelada: o cliente respondeu antes do fim da espera";
+  return `Cancelada: ${motivo.replace(/[.\s]+$/, "")}`;
+}
+
 /** Frase do estado da sequência ("Esperando para continuar", "Cancelada: o cliente respondeu") ou "" quando é uma execução comum. */
 export function estadoExecucaoTexto(x) {
   switch (normalizar(x && x.estado)) {
     case "esperando": return "Esperando para continuar";
     case "aguardando_ia": return "Aguardando a IA decidir";
-    case "cancelada": return "Cancelada: o cliente respondeu antes do fim da espera";
+    case "cancelada": return textoCancelada(x);
     case "parada": return "Encerrada no passo «Parar por aqui»";
     default: return "";
   }
@@ -1364,6 +1378,28 @@ export function erroDaIA(e, mensagemPadrao) {
   if (cod === "dados_invalidos" && det === "descricao") return { tipo: "invalida", titulo: "Descreva com mais detalhes",
     texto: `Escreva o que deve acontecer, com pelo menos algumas palavras (de 12 a ${LIMITES.descricao_ia} caracteres).` };
   return { tipo: "outro", titulo: "Não foi possível montar", texto: doServidor || mensagemPadrao || "Tente de novo em instantes." };
+}
+
+/**
+ * A IA está desligada nesta plataforma (sem a chave da Anthropic)? Lê `ia` de nx_automacoes_listar ({disponivel, usadas, limite})
+ * ou da base de Conversas ({ligada, cota}); sem a informação, assume que está disponível (nenhum aviso falso).
+ */
+export function iaDesligada(dados) {
+  const ia = dados && (dados.ia || (dados.base && dados.base.ia)) || null;
+  return !!ia && (ia.disponivel === false || ia.ligada === false);
+}
+
+/** Aviso nos passos de IA quando a plataforma ainda não tem a chave: a automação roda, mas o passo é pulado. */
+export const AVISO_IA_DESLIGADA = "A IA ainda não está ligada nesta plataforma: este passo é pulado (nada é decidido) até a equipe da Nexus cadastrar a chave. O resto da automação continua.";
+
+/**
+ * Erro de uma chamada das Automações → texto para a pessoa. O tempo esgotado do banco (57014) não tem «período» nem «itens» aqui
+ * (a mensagem geral da API fala disso), então ganha uma frase própria; o resto segue a mensagem padrão da API.
+ */
+export function erroAutomacao(e, mensagemPadrao) {
+  const c = e && (e.codigo || e.message);
+  if (c === "tempo_esgotado") return "O servidor demorou a responder. Tente de novo em instantes.";
+  return mensagemPadrao;
 }
 
 /* ------------------------------------------------------------------ rótulos para a tela */

@@ -40,6 +40,12 @@ export function janela(conversa, agora = new Date()) {
   return { aberta: true, ate: new Date(ate).toISOString(), restanteMs: rest, texto, nivel: rest < 2 * 3600000 ? "acabando" : "aberta" };
 }
 
+/**
+ * O canal tem a janela de 24 h? Só a API oficial da Meta. O aparelho do CodeWords é um WhatsApp comum: não há janela, e o servidor
+ * (enviar.js, exigeJanela) deixa texto livre sair a qualquer hora — a tela não pode travar o que o servidor aceita.
+ */
+export function canalTemJanela(provedor) { return provedor !== "codewords"; }
+
 /* ------------------------------------------------------------ abas */
 export const ABAS = Object.freeze([
   { id: "minhas", rotulo: "Minhas", vazio: "Nenhuma conversa com você agora." },

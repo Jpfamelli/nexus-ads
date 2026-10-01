@@ -941,7 +941,7 @@ async function novaConversa({ contato = null } = {}) {
   busca.addEventListener("input", procurar);
 
   const corpo = ui.h("div", { class: "pilha" }, campoCanal, contato ? null : alterna, blocoEscolhido, blocoBusca, blocoDigitar,
-    ui.h("p", { class: "sub" }, "Se o cliente não falou com a empresa nas últimas 24 h, o WhatsApp só aceita um modelo aprovado — o seletor de modelos abre em seguida."));
+    ui.h("p", { class: "sub" }, "Em número da Meta (WhatsApp oficial), se o cliente não falou com a empresa nas últimas 24 h só vale um modelo aprovado — o seletor de modelos abre em seguida. Em número do CodeWords não há essa janela."));
   desenharEscolhido();
   if (contato) { blocoBusca.hidden = true; }
 
@@ -972,8 +972,9 @@ async function novaConversa({ contato = null } = {}) {
   if (!item || !item.id) return;
   await carregarLista({});
   abrir(item.id);
-  // sem janela → direto para os modelos
-  if (!L.janela(item).aberta) {
+  // sem janela → direto para os modelos (só na Meta; o aparelho do CodeWords não tem janela de 24 h)
+  const provedorItem = (item.canal && item.canal.provedor) || ((A.base && A.base.canais) || []).find(c => c.id === item.canal_id)?.provedor || "meta";
+  if (L.canalTemJanela(provedorItem) && !L.janela(item).aberta) {
     const espera = async () => {
       for (let i = 0; i < 40 && A && (!A.ver || A.ver.conversa.id !== item.id); i++) await new Promise(r => setTimeout(r, 100));
       if (A && A.ver && A.ver.conversa.id === item.id) A.composer.abrirModelos();

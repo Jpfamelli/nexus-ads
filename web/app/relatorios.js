@@ -162,15 +162,16 @@ export async function montar(ctx) {
   function kpis(lista) {
     const g = h("div", { class: "rel-kpis rel-kpis-6" });
     lista.forEach((k, i) => {
-      const c = L.chipVar(+k.v, k.a == null ? null : +k.a, k.sentido);
+      // valor ou base ausentes ficam null (+null seria 0: «—» ganhava um falso ▼ 100%); sem base o chip diz «sem base», neutro
       const vv = k.v === null || k.v === undefined ? null : +k.v;
+      const c = L.chipVar(vv, k.a == null ? null : +k.a, k.sentido);
       const b = h("b", { class: "rel-num rel-kpi-v" });
       if (vv === null || !Number.isFinite(vv)) b.textContent = "—";
       else if (k.fmt === "min" || k.fmt === "h" || k.fmt === "pct" || k.fmt === "dias") b.textContent = FMT[k.fmt](vv);
       else G.contar(b, vv, FMT[k.fmt]);
       g.append(h("div", { class: "rel-kpi rel-cartao rel-entra", style: `--i:${i}` },
         h("span", { class: "rel-kpi-l" }, k.rotulo), b,
-        k.a === null ? h("span", { class: "rel-kpi-linha" }, h("span", { class: "rel-nota" }, "agora"))
+        k.agora ? h("span", { class: "rel-kpi-linha" }, h("span", { class: "rel-nota" }, "agora"))   // só o estado de agora (abertas agora) não tem período anterior
           : h("span", { class: "rel-kpi-linha" },
             h("span", { class: `rel-var rel-var-${c.cls}`, title: `antes: ${k.a == null ? "—" : FMT[k.fmt](+k.a)}` }, c.v == null ? c.txt : `${c.seta} ${c.txt}`),
             h("span", { class: "rel-nota" }, "vs. período anterior")),

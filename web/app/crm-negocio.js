@@ -165,7 +165,7 @@ export async function moverComPerguntas(k, card, estagio, ordem = null) {
 
 /* ============================================================ edição por campo */
 /** Linha dt/dd com input .ed que salva sozinho (change/blur). aoErro(e, erroEl) personaliza a mensagem. */
-export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro }) {
+export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro, validar }) {
   const { ui, h } = k;
   const erro = h("small", { class: "ed-erro", role: "alert", hidden: true });
   const id = `ed-${Math.random().toString(36).slice(2, 9)}`;
@@ -174,9 +174,22 @@ export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro
   if (desabilitado) controle.disabled = true;
   let ultimo = ler(controle);
   let salvando = false;
+  /** validar(controle) → texto do erro ou null: texto que não vira valor (ex.: «abc» num campo de dinheiro) NÃO é gravado como se fosse «vazio». */
+  const mostrarInvalido = texto => {
+    ui.limpar(erro);
+    erro.textContent = texto;
+    erro.hidden = false;
+    controle.setAttribute("aria-invalid", "true");
+    controle.setAttribute("aria-describedby", erro.id = `${id}-er`);
+  };
   async function aoMudar() {
+    const invalido = validar ? validar(controle) : null;
+    if (invalido) { mostrarInvalido(invalido); return; }
     const v = ler(controle);
-    if (JSON.stringify(v) === JSON.stringify(ultimo) || salvando) return;
+    if (JSON.stringify(v) === JSON.stringify(ultimo) || salvando) {
+      if (!salvando) { erro.hidden = true; controle.removeAttribute("aria-invalid"); }   // voltou ao valor que já estava gravado
+      return;
+    }
     salvando = true;
     erro.hidden = true; controle.removeAttribute("aria-invalid");
     try {
@@ -394,10 +407,12 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
         ler: c => c.value || null, salvar: v => salvar({ dono_id: v }) }));
       dl.append(...linhaEd(k, { rotulo: "Valor previsto", desabilitado: !podeEditar,
         controle: h("input", { type: "text", inputmode: "decimal", value: n.valor_previsto != null ? Number(n.valor_previsto).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "", placeholder: "R$ 0,00" }),
-        ler: c => k.L.lerNumero(c.value), salvar: v => salvar({ valor_previsto: v }) }));
+        ler: c => k.L.lerNumero(c.value), validar: c => k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null,
+        salvar: v => salvar({ valor_previsto: v }) }));
       if (n.status === "ganho") dl.append(...linhaEd(k, { rotulo: "Valor final", desabilitado: !podeEditar,
         controle: h("input", { type: "text", inputmode: "decimal", value: n.valor != null ? Number(n.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "" }),
-        ler: c => k.L.lerNumero(c.value), salvar: v => salvar({ valor: v }) }));
+        ler: c => k.L.lerNumero(c.value), validar: c => k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null,
+        salvar: v => salvar({ valor: v }) }));
       const servicos = Object.keys(k.base.ticket || {});
       const idLista = `srv-${n.id}`;
       const inServ = h("input", { type: "text", value: n.servico || "", list: servicos.length ? idLista : null, maxlength: 120, placeholder: `Ex.: ${servicos[0] || k.v.servico}` });
@@ -420,6 +435,12 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       dl.append(...linhaEd(k, { rotulo: "Origem", desabilitado: !podeEditar || !!n.plataforma,
         controle: sel(Object.entries(k.L.ROTULO_ORIGEM).map(([valor, rotulo]) => ({ valor, rotulo })), n.origem),
         ler: c => c.value, salvar: v => salvar({ origem: v }) }));
+      // pontuação do lead (automação «preencher um campo» = score, ou a IA): só leitura, com o motivo e quando foi atribuída
+      const pont = k.L.pontuacao(n);
+      if (pont) dl.append(h("dt", null, "Pontuação do lead"), h("dd", { class: "ng-pontuacao" },
+        ui.pilula(`${pont.score} de 100`, pont.faixa === "alta" ? "ok" : pont.faixa === "media" ? "aten" : "neutra", { icone: "ia" }),
+        pont.motivo ? h("span", { class: "ng-pontuacao-motivo" }, pont.motivo) : null,
+        pont.em ? h("small", { class: "ng-pontuacao-em" }, `Atribuída em ${pont.em.replace("T", " às ")}`) : null));
       const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas: n.etiquetas || [], rotulo: "Etiquetas do negócio",
         podeCriar: podeEditar ? nome => k.criarEtiqueta(nome) : false,
         aoMudar: async ids => { try { await salvar({ etiquetas: ids }); } catch (e) { k.toastErro(e); } } });

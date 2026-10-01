@@ -10,6 +10,7 @@
    (g) estáticos: CSP (sem <script> inline nem on*=), nenhum hex fora de :root/tema.js, [hidden] forte,
        nenhum 1fr solto, innerHTML só constante, nenhum import estático, import() sempre com ?v=,
        módulos não carregam ui/api/app/tema, arquivos do §7.1 existem e passam em node --check
+   (h) correções de 01/10/2026: achados da rodada de testes do front (CRM, Conversas/CodeWords, Agenda, Relatórios, white-label, a11y, API)
    Os arquivos de OUTRAS frentes que ainda não existem só geram aviso; com ORBITA_COMPLETO=1
    (a F8 usa no rodar-tudo, depois de todas as frentes) a falta vira falha.
    ============================================================ */
@@ -1210,6 +1211,289 @@ await teste("netlify.toml: publish web, / e /index.html → /app/ (302 forçado)
   assert.match(t, /from = "\/index\.html"\s*\n\s*to = "\/app\/"\s*\n\s*status = 302\s*\n\s*force = true/);
   assert.match(t, /Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co; connect-src 'self' https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"/);
   for (const k of ["Referrer-Policy", "X-Content-Type-Options", "Permissions-Policy"]) assert.match(t, new RegExp(k));
+});
+
+/* ============================================================ (h) correções de 01/10/2026 (rodada de testes: achados do front) */
+console.log("\n(h) correções de 01/10/2026");
+const CRMLOG = await imp("crm-logica.js");
+const RELLOG = await imp("rel-logica.js");
+const GRAF = await imp("graficos.js");
+const CVLOG = await imp("cv-logica.js");
+const NUCLEO = await import(pathToFileURL(join(RAIZ, "web", "nucleo.js")).href);
+
+await teste("T03: soltar no fim de uma coluna com «Ver mais» não pula os cartões não carregados (ordemDoSoltar)", () => {
+  const itens = Array.from({ length: 30 }, (_, i) => ({ id: i + 1, ordem: 100 + i * 0.1 }));     // 30 carregados: 100,0 … 102,9
+  // o próximo do servidor tem ordem 102,95: o cartão solto vai ENTRE o 30º e o 31º (antes: última + 1 = 103,9, depois dos não carregados)
+  const o = CRMLOG.ordemDoSoltar(itens, 30, 102.95);
+  assert.ok(o > 102.9 && o < 102.95, `ordem ${o}`);
+  assert.equal(CRMLOG.ordemDoSoltar(itens, 30, undefined), itens[29].ordem + 1, "sem vizinho de baixo: fim de lista, como antes");
+  assert.equal(CRMLOG.ordemDoSoltar(itens, 30, null), itens[29].ordem + 1, "o próximo sem ordem (nulo) fica depois de todos: última + 1 serve");
+  assert.equal(CRMLOG.ordemDoSoltar(itens, 5, 999), CRMLOG.ordemEntre(itens[4].ordem, itens[5].ordem), "no meio da lista vale o vizinho carregado");
+  assert.equal(CRMLOG.ordemDoSoltar([], 0, undefined, 5000), -5, "coluna vazia: topo (ordem negativa pelo relógio)");
+  const k = ler("crm-kanban.js");
+  assert.match(k, /nx_negocios_coluna", \{ p_estagio: estagioId, p_filtro: filtroServidor\(\), p_offset: destCol\.itens\.length \}/, "busca o próximo cartão do servidor");
+  assert.match(k, /L\.ordemDoSoltar\(itens, pos, proxima\)/);
+});
+await teste("T03: a pontuação do lead (campos.score, score_motivo, score_em) aparece no cartão e na gaveta (pontuacao)", () => {
+  assert.deepEqual(CRMLOG.pontuacao({ campos: { score: 85, score_motivo: "pediu orçamento", score_em: "2026-10-01T09:30" } }),
+    { score: 85, faixa: "alta", motivo: "pediu orçamento", em: "2026-10-01T09:30" });
+  assert.equal(CRMLOG.pontuacao({ score: 40 }).faixa, "media", "o cartão pode trazer score solto");
+  assert.equal(CRMLOG.pontuacao({ campos: { score: "12" } }).faixa, "baixa", "texto numérico também");
+  assert.equal(CRMLOG.pontuacao({ campos: { score: 0 } }).score, 0, "zero é nota válida");
+  for (const ruim of [null, {}, { campos: {} }, { campos: { score: "abc" } }, { campos: { score: 101 } }, { campos: { score: -1 } }, { campos: { score: "" } }, "x"])
+    assert.equal(CRMLOG.pontuacao(ruim), null, JSON.stringify(ruim));
+  const cartao = ler("crm-kanban.js"), gaveta = ler("crm-negocio.js");
+  assert.match(cartao, /L\.pontuacao\(c\)/); assert.match(cartao, /`Lead \$\{pont\.score\}`/);
+  assert.match(gaveta, /k\.L\.pontuacao\(n\)/); assert.match(gaveta, /"Pontuação do lead"/);
+});
+await teste("T03: «Valor previsto» com texto que não é número não apaga o valor (dinheiroInvalido + validar da linha editável)", () => {
+  assert.equal(CRMLOG.dinheiroInvalido("abc"), true);
+  assert.equal(CRMLOG.dinheiroInvalido("12abc"), true);
+  for (const bom of ["", "   ", "1.500,50", "R$ 2.000", "2.000", "0", "1500.5"]) assert.equal(CRMLOG.dinheiroInvalido(bom), false, JSON.stringify(bom));
+  assert.equal(CRMLOG.lerNumero("1.500,50"), 1500.5);
+  const g = ler("crm-negocio.js");
+  assert.match(g, /validar: c => k\.L\.dinheiroInvalido\(c\.value\)[^\n]*\n\s*salvar: v => salvar\(\{ valor_previsto: v \}\)/, "Valor previsto valida antes de gravar");
+  assert.match(g, /validar: c => k\.L\.dinheiroInvalido\(c\.value\)[^\n]*\n\s*salvar: v => salvar\(\{ valor: v \}\)/, "Valor final também");
+  assert.match(g, /if \(invalido\) \{ mostrarInvalido\(invalido\); return; \}/, "inválido mostra o erro e NÃO chama salvar");
+});
+await teste("T03: aviso «Ao salvar» do funil concorda no singular (1 negócio vai, 2 vão)", () => {
+  const c = ler("crm-config.js");
+  assert.match(c, /\$\{r\.e\._n === 1 \? "vai" : "vão"\} para «/);
+  assert.doesNotMatch(c, /"negocios"\)\} vão para «/, "nunca mais «vão» fixo depois da contagem");
+});
+
+await teste("T04: o aparelho do CodeWords não tem janela de 24 h — a tela não trava o que o servidor aceita (canalTemJanela)", () => {
+  assert.equal(CVLOG.canalTemJanela("codewords"), false);
+  assert.equal(CVLOG.canalTemJanela("meta"), true);
+  assert.equal(CVLOG.canalTemJanela(undefined), true, "canal desconhecido segue a regra da Meta");
+  const comp = ler("cv-composer.js"), chat = ler("cv-chat.js"), conv = ler("conversas.js");
+  assert.match(comp, /L\.canalTemJanela\(provedorCanal\(\)\) && !L\.janela\(c\)\.aberta\) return "janela"/);
+  assert.match(chat, /L\.canalTemJanela\(provedorCanal\)/, "o selo «Janela aberta/fechada» some no CodeWords");
+  assert.match(conv, /L\.canalTemJanela\(provedorItem\) && !L\.janela\(item\)\.aberta/, "«Nova conversa» no CodeWords não abre os modelos da Meta");
+  // o servidor (enviar.js) é a fonte: texto livre sem janela só no CodeWords
+  const env = readFileSync(join(RAIZ, "supabase", "functions", "_compartilhado", "enviar.js"), "utf8");
+  assert.match(env, /exigeJanela: cx\.canal\?\.provedor !== "codewords"/);
+});
+
+await teste("T06: bloqueio de dia(s) inteiro(s) mostra «Dia inteiro · 06/10/2026», não «06/10 00:00 — 07/10 00:00» (periodoBR)", () => {
+  assert.equal(U.periodoBR("2026-10-06T03:00:00Z", "2026-10-07T03:00:00Z"), "Dia inteiro · 06/10/2026");
+  assert.equal(U.periodoBR("2026-10-06T03:00:00Z", "2026-10-09T03:00:00Z"), "Dias inteiros · 06/10/2026 a 08/10/2026");
+  assert.equal(U.periodoBR("2026-10-06T12:00:00Z", "2026-10-06T15:00:00Z", " · "), "06/10/2026 09:00 · 06/10/2026 12:00", "faixa de horário continua com as horas");
+  assert.equal(U.periodoBR("2026-10-06T12:00:00Z", "2026-10-07T15:00:00Z"), "06/10/2026 09:00 — 07/10/2026 12:00");
+  assert.match(ler("agenda.js"), /ui\.periodoBR\(b\.inicio, b\.fim, " · "\)/);
+  assert.match(ler("agenda-config.js"), /ui\.periodoBR\(b\.inicio, b\.fim, " — "\)/);
+});
+
+await teste("T07: KPI sem valor mostra «sem base» neutro, não um ▼ 100% falso; «agora» só em «Abertas agora»", () => {
+  assert.equal(RELLOG.chipVar(null, 593.33, "cima").txt, "sem base");
+  assert.equal(RELLOG.chipVar(null, 593.33, "cima").cls, "neutro");
+  assert.equal(RELLOG.chipVar(0, 593.33, "cima").cls, "ruim", "zero de verdade continua caindo");
+  const k = RELLOG.kpisVendas({ kpis: { ticket_medio: null, ciclo_medio_dias: null }, kpis_anterior: { ticket_medio: 593.33, ciclo_medio_dias: 7 } });
+  for (const id of ["ticket_medio", "ciclo_medio_dias"]) assert.equal(k.find(x => x.id === id).v, null);
+  assert.equal(k.filter(x => x.agora).length, 0, "nenhum KPI de vendas é «agora»");
+  const at = RELLOG.kpisAtendimento({ kpis: { abertas_agora: 3 }, kpis_anterior: {} });
+  assert.deepEqual(at.filter(x => x.agora).map(x => x.id), ["abertas_agora"]);
+  const r = ler("relatorios.js");
+  assert.match(r, /const c = L\.chipVar\(vv, k\.a == null \? null : \+k\.a, k\.sentido\)/, "nunca +null (virava 0)");
+  assert.match(r, /k\.agora \? h\("span", \{ class: "rel-kpi-linha" \}/);
+});
+await teste("T07: campanhas — o que o CRM atribuiu a anúncios fora das linhas com gasto aparece como «Sem investimento no período» (herói = Total + sobra)", () => {
+  const hoje = "2026-10-01";
+  const metricas = [{ n: "campanha", d: "2026-09-30", p: "meta", c: "A", cn: "Com gasto", g: 50, imp: 1000, cli: 20, conv: 5 }];
+  const leads = [
+    { id: 1, data_conversa: "2026-09-29", plataforma: "meta", campanha_ext: "A", etapa: "agendada", data_agenda: "2026-09-30", servico: "Implante" },
+    { id: 2, data_conversa: "2026-09-29", plataforma: "meta", campanha_ext: "PAUSADA", etapa: "agendada", data_agenda: "2026-09-30", servico: "Implante" },
+    { id: 3, data_conversa: "2026-09-29", plataforma: "meta", campanha_ext: "PAUSADA", etapa: "agendada", data_agenda: "2026-09-30", servico: "Implante" },
+  ];
+  const M = NUCLEO.montar(NUCLEO.datasetDeLinhas({ metricas, leads, hoje, dias: 60, cliente: { nome: "T" } }));
+  const heroi = RELLOG.numerosPeriodo(M, { dias: 30 }).c.agendadas;
+  const { linhas, total, outras } = RELLOG.linhasCampanhas(M, { dias: 30 });
+  assert.equal(linhas.length, 1, "só a campanha com gasto vira linha");
+  assert.equal(total.ag, 1);
+  assert.equal(outras.ag, 2, "as 2 agendadas da campanha sem gasto");
+  assert.equal(total.ag + outras.ag, heroi, "Total + sobra = o que a Visão geral mostra");
+  assert.match(ler("anuncios.js"), /Sem investimento no período/);
+});
+await teste("T07: texto do ranking de criativos concorda no singular (O criativo com… / Os 3 criativos com…)", () => {
+  const a = ler("anuncios.js");
+  assert.match(a, /R\.lista\.length === 1 \? "O criativo com" : `Os \$\{R\.lista\.length\} criativos com`/);
+  assert.match(a, /R\.lista\.length === 1 \? "O criativo com menor custo por conversa" : `Os \$\{R\.lista\.length\} criativos com menor custo por conversa`/);
+});
+await teste("T07: rótulos do eixo X nunca se sobrepõem (indicesRotulo) — 30 dias a 390 px derrubava o penúltimo", () => {
+  const n = 30, iw = 390 - 40 - 16 - 32, x = k => 40 + k / (n - 1) * iw;
+  const rot = Array.from({ length: n }, (_, i) => `${String(i + 1).padStart(2, "0")}/10`);
+  const idx = GRAF.indicesRotulo(n, GRAF.passoRotulo(n, 4), x, rot);
+  assert.equal(idx[0], 0); assert.equal(idx[idx.length - 1], n - 1, "o último dia sempre aparece");
+  for (let i = 1; i < idx.length; i++) assert.ok(x(idx[i]) - x(idx[i - 1]) >= 5 * 6.6 * 1.5 + 6 - 0.001, `rótulos ${idx[i - 1]} e ${idx[i]} colados`);
+  // largo: 90 dias a 1440 px mantém os intervalos normais
+  const xG = k => 52 + k / 89 * 900;
+  const idxG = GRAF.indicesRotulo(90, GRAF.passoRotulo(90, 7), xG, Array.from({ length: 90 }, (_, i) => `${i}/09`));
+  assert.ok(idxG.length >= 7 && idxG.includes(89));
+  assert.deepEqual(GRAF.indicesRotulo(1, 1, () => 0, ["a"]), [0]);
+});
+await teste("T07: o alerta «gasto mínimo» compara em centavos — 1,16 + 14,87 + 5,97 = R$ 22,00 dispara a regra r2", () => {
+  const hoje = "2026-10-01";
+  const dia = (d, g) => ({ n: "campanha", d, p: "meta", c: "X", cn: "Camp X", g, imp: 500, cli: 5, conv: 0 });
+  const M = NUCLEO.montar(NUCLEO.datasetDeLinhas({ metricas: [dia("2026-09-28", 1.16), dia("2026-09-29", 14.87), dia("2026-09-30", 5.97)], hoje, dias: 30, cliente: { nome: "T" } }));
+  const t = M.consolidar(M.linhasDe(M.R - 2, M.R));
+  assert.notEqual(t.gasto, 22, "a soma em ponto flutuante não dá exatamente 22");
+  assert.ok(M.avaliar(M.R).some(a => a.regra.id === "r2"), "R$ 22,00 sem conversa: alerta");
+  const M2 = NUCLEO.montar(NUCLEO.datasetDeLinhas({ metricas: [dia("2026-09-28", 1.16), dia("2026-09-29", 14.86), dia("2026-09-30", 5.97)], hoje, dias: 30, cliente: { nome: "T" } }));
+  assert.ok(!M2.avaliar(M2.R).some(a => a.regra.id === "r2"), "R$ 21,99 continua sem alertar");
+});
+await teste("T07: resumo mensal omite «Em relação a…» quando nenhum dos dois meses fechou paciente", () => {
+  const hoje = "2026-10-01";
+  const metricas = [{ n: "campanha", d: "2026-08-15", p: "meta", c: "A", cn: "A", g: 40, imp: 900, cli: 9, conv: 3 }, { n: "campanha", d: "2026-09-15", p: "meta", c: "A", cn: "A", g: 40, imp: 900, cli: 9, conv: 3 }];
+  const M = NUCLEO.montar(NUCLEO.datasetDeLinhas({ metricas, hoje, dias: 130, cliente: { nome: "Clínica" } }));
+  const set = M.mesesDados().find(m => m.mes === 8 && m.completo);
+  assert.ok(set, "setembro completo");
+  const txt = M.relMensal(set);
+  assert.doesNotMatch(txt, /Em relação a/, "0 → 0 é ruído");
+  assert.match(txt, /Resultados de setembro/);
+  // com fechamento nos dois meses a comparação volta
+  const leads = [{ id: 1, data_conversa: "2026-09-10", plataforma: "meta", campanha_ext: "A", etapa: "fechou", data_agenda: "2026-09-12", servico: "Implante", valor: 3000 },
+    { id: 2, data_conversa: "2026-08-10", plataforma: "meta", campanha_ext: "A", etapa: "fechou", data_agenda: "2026-08-12", servico: "Implante", valor: 3000 }];
+  const M2 = NUCLEO.montar(NUCLEO.datasetDeLinhas({ metricas, leads, hoje, dias: 130, cliente: { nome: "Clínica" } }));
+  assert.match(M2.relMensal(M2.mesesDados().find(m => m.mes === 8 && m.completo)), /Em relação a agosto/);
+});
+
+await teste("T08: pílulas de status e texto secundário legíveis em fundos de marca médios (derivarTema, 4.000 combinações)", () => {
+  const sorteio = rng(20261001);
+  const cor = () => "#" + Array.from({ length: 3 }, () => Math.floor(sorteio() * 256).toString(16).padStart(2, "0")).join("").toUpperCase();
+  const casos = [{ primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#C8B79A" }, { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#E8D5C4" },
+    { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#F4F1EA" }, { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#210AFD" },
+    { primaria: "#FF00FF", secundaria: "#6FA3CF", fundo: "#00FF00" }];
+  for (let i = 0; i < 4000; i++) casos.push({ primaria: cor(), secundaria: cor(), fundo: cor() });
+  for (const m of casos) {
+    const v = T.derivarTema(m).vars;
+    for (const k of ["ok", "ruim", "aten", "info"]) assert.ok(T.contraste(v[`--c-${k}`], v[`--c-${k}-suave`]) >= 4.5 - 1e-9, `pílula ${k} ${JSON.stringify(m)}`);
+    assert.ok(T.contraste(v["--c-texto-2"], v["--c-sup-3"]) >= 4.5 - 1e-9, `texto-2 ${JSON.stringify(m)}`);
+    assert.ok(T.contraste(v["--c-meta"], v["--c-sec-suave"]) >= 4.5 - 1e-9, `meta ${JSON.stringify(m)}`);
+    assert.ok(T.contraste(v["--c-google"], v["--c-aten-suave"]) >= 4.5 - 1e-9, `google ${JSON.stringify(m)}`);
+    for (const [luz, suave] of [["--c-prim-luz", "--c-prim-suave"], ["--c-sec-luz", "--c-sec-suave"]])
+      assert.ok(T.contraste(T.misturar(v[luz], v["--c-texto"], 0.22), v[suave]) >= 4.5 - 1e-9, `pílula ${luz} ${JSON.stringify(m)}`);
+    assert.ok(T.contraste(v["--c-prim-luz"], v["--c-fundo"]) >= 4.5 - 1e-9 && T.contraste(v["--c-sec-luz"], v["--c-fundo"]) >= 4.5 - 1e-9);
+  }
+  // o tema padrão e os fundos que já passavam NÃO mudam de cor
+  const padrao = T.derivarTema(T.PADRAO.cores).vars;
+  assert.deepEqual([padrao["--c-ok"], padrao["--c-aten"], padrao["--c-prim-luz"], padrao["--c-texto-2"]], ["#1A6E44", "#8A5A00", "#8D5F19", "#54595D"]);
+  assert.equal(T.garantirContraste("#1A6E44", ["#FFFFFF"]), "#1A6E44", "já passa: devolve a mesma cor");
+});
+await teste("T08: logo estreito/alto demais ganha aviso na prévia (avisoProporcaoLogo); largo e quadrado não", () => {
+  assert.match(CFG.avisoProporcaoLogo(90, 500), /muito estreito e alto/);
+  assert.match(CFG.avisoProporcaoLogo(29, 160), /ilegível/);
+  for (const [w, h] of [[1200, 240], [200, 200], [100, 200], [300, 450], [0, 0], [null, 10]]) assert.equal(CFG.avisoProporcaoLogo(w, h), "", `${w}x${h}`);
+  assert.match(ler("config.js"), /avisoProporcaoLogo\(im\.naturalWidth, im\.naturalHeight\)/);
+});
+await teste("T08: tela de entrada não alarga com nome do produto/título de uma palavra só (overflow-wrap + min-width:0)", () => {
+  const css = ler("app.css");
+  assert.match(css, /\.entrar-marca \{[^}]*min-width: 0/);
+  assert.match(css, /\.entrar-marca span \{[^}]*overflow-wrap: anywhere/);
+  assert.match(css, /\.entrar-titulo \{[\s\S]*?overflow-wrap: anywhere/);
+  assert.match(css, /\.entrar-sub \{[^}]*overflow-wrap: anywhere/);
+  assert.match(css, /\.entrar-cartao h1, \.entrar-cartao \.sub \{ overflow-wrap: anywhere/);
+});
+
+await teste("T09: «Pular para o conteúdo» não vira rota (#vista → Página não encontrada): o clique só move o foco", () => {
+  const app = ler("app.js");
+  assert.match(app, /document\.querySelector\("\.pular"\)/);
+  assert.match(app, /pular\.addEventListener\("click", ev => \{\s*ev\.preventDefault\(\);/);
+  assert.match(app, /\$\("app"\) && !\$\("app"\)\.hidden \? \$\("vista"\) : \$\("publico"\)/);
+  assert.match(readFileSync(join(APP, "index.html"), "utf8"), /<a class="pular" href="#vista">/);
+});
+await teste("T09: ui.carregando devolve o foco do teclado ao botão (desabilitar o derruba no <body>)", async () => {
+  const corpo = { nome: "body" };
+  const botao = { disabled: false, isConnected: true, chamadasFoco: 0, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; },
+    focus() { this.chamadasFoco++; globalThis.document.activeElement = this; } };
+  const anterior = globalThis.document;
+  try {
+    globalThis.document = { activeElement: botao, body: corpo, documentElement: {} };
+    const r = await U.carregando(botao, async () => { globalThis.document.activeElement = corpo; /* o navegador soltou o foco do botão desabilitado */ return 42; });
+    assert.equal(r, 42);
+    assert.equal(botao.disabled, false); assert.equal(botao.attrs["aria-busy"], undefined);
+    assert.equal(botao.chamadasFoco, 1, "o foco voltou ao botão");
+    assert.equal(globalThis.document.activeElement, botao);
+    // quem NÃO tinha o foco não ganha foco; quem já foi para outro campo não perde para o botão
+    const outro = { id: "outro" }; botao.chamadasFoco = 0;
+    globalThis.document.activeElement = corpo;
+    await U.carregando(botao, Promise.resolve());
+    assert.equal(botao.chamadasFoco, 0, "sem foco antes, sem foco depois");
+    globalThis.document.activeElement = botao;
+    await U.carregando(botao, async () => { globalThis.document.activeElement = outro; });
+    assert.equal(botao.chamadasFoco, 0); assert.equal(globalThis.document.activeElement, outro);
+    // erro da promessa: ainda reabilita e devolve o foco
+    globalThis.document.activeElement = botao;
+    await assert.rejects(U.carregando(botao, async () => { globalThis.document.activeElement = corpo; throw new Error("x"); }));
+    assert.equal(botao.disabled, false); assert.equal(botao.chamadasFoco, 1);
+  } finally { if (anterior === undefined) delete globalThis.document; else globalThis.document = anterior; }
+});
+await teste("T09: rolagem suave respeita prefers-reduced-motion (comportamentoRolagem) e o editor não fixa «smooth»", () => {
+  const tinha = Object.hasOwn(globalThis, "matchMedia"), anterior = globalThis.matchMedia;
+  try {
+    globalThis.matchMedia = q => ({ matches: /reduce/.test(q) });
+    assert.equal(U.comportamentoRolagem(), "auto");
+    globalThis.matchMedia = () => ({ matches: false });
+    assert.equal(U.comportamentoRolagem(), "smooth");
+    delete globalThis.matchMedia;
+    assert.equal(U.comportamentoRolagem(), "smooth", "sem matchMedia não há preferência a respeitar");
+  } finally { if (tinha) globalThis.matchMedia = anterior; else delete globalThis.matchMedia; }
+  assert.doesNotMatch(ler("auto-editor.js"), /behavior: "smooth"/);
+  assert.doesNotMatch(ler("crm-kanban.js"), /behavior: "smooth"/);
+});
+await teste("T09: editor de Automações — Esc fecha a paleta, foco segue ao remover passo/condição, abas ARIA, frase sem aria-live", () => {
+  const ed = ler("auto-editor.js");
+  assert.match(ed, /ev\.key !== "Escape" \|\| !paletaAberta/);
+  assert.match(ed, /xs\[Math\.min\(i, xs\.length - 1\)\] \|\| blocoEntao\.querySelector\("\.au-mais"\)/);
+  assert.match(ed, /xs\[Math\.min\(i, xs\.length - 1\)\] \|\| blocoSe\.querySelector\("\.au-mais"\)/);
+  assert.match(ed, /painel: painelRegra/); assert.match(ed, /painel: painelExec/);
+  assert.match(ed, /const frase = h\("p", \{ class: "au-frase" \}\);/);
+  assert.match(ed, /refoco/, "«Atualizar» das execuções devolve o foco");
+  assert.match(ed, /--au-cab-h/); assert.match(ed, /amb\.aoSair/);
+  const ap = ler("automacoes.js");
+  assert.match(ap, /area\.readOnly = true/, "Criar com IA: só-leitura (não disabled) durante a chamada");
+  assert.match(ap, /ui\.manterFoco\(b\)/, "interruptor da lista devolve o foco");
+  const u = ler("ui.js");
+  assert.match(u, /it\.painel\.setAttribute\("role", "tabpanel"\)/); assert.match(u, /"aria-controls", it\.painel\.id/);
+});
+await teste("T09: chips «radio» são UMA parada de Tab (roving tabindex) em auto-pecas.js", () => {
+  const p = ler("auto-pecas.js");
+  assert.match(p, /b\.tabIndex = b === marcado \? 0 : -1/);
+  assert.match(p, /new MutationObserver\(sincronizar\)\.observe\(grupo, \{ attributes: true, attributeFilter: \["aria-checked", "disabled"\]/);
+});
+await teste("T09: CSS — cabeçalho do passo quebra no celular, contraste dos 4 textos pequenos, forced-colors, scroll-padding, placeholder", () => {
+  const css = ler("automacoes.css"), app = ler("app.css");
+  assert.match(css, /\.au-acao-cab \{\s*display: flex; flex-wrap: wrap;/);
+  assert.match(css, /\.au-acao-tit \{ flex: 1 1 8rem;/); assert.match(css, /\.au-acao-bts \{[^}]*margin-left: auto/);
+  for (const sel of [".au-var", ".au-acao-resumo", ".au-mini-espera", ".au-sim-link"]) {
+    const i = css.indexOf(`${sel} {`); assert.ok(i >= 0, sel);
+    assert.match(css.slice(i, i + 400), /color: color-mix\(in srgb, var\(--c-(sec|prim)-luz\) 72%, var\(--c-texto\)\)/, `${sel} puxa a cor para o texto (≥ 4,5:1)`);
+  }
+  assert.match(css, /@media \(forced-colors: active\) \{[\s\S]*\.au-sw\[aria-checked="true"\] \.au-sw-trilho \{ background: Highlight/);
+  assert.match(app, /@media \(forced-colors: active\) \{[\s\S]*\.aba\[aria-selected="true"\] \{ forced-color-adjust: none; background: Highlight/);
+  assert.match(css, /html:has\(\.au-pag-editor\) \{ scroll-padding-top: calc\(var\(--topo\) \+ var\(--au-cab-h, 0px\) \+ 1rem\)/);
+  assert.match(app, /html \{ scroll-padding-bottom: calc\(var\(--barra\) \+ env\(safe-area-inset-bottom\) \+ 1rem\)/);
+  assert.match(css, /\.au-nome-inp::placeholder \{[^}]*text-overflow: ellipsis/);
+  assert.match(css, /\.au-tpl-aviso \.bt \{ white-space: normal/);
+});
+
+await teste("T10: chamadas de servidor que passam dos 75 s esperam MAIS que o pior caso do servidor (sugerir/resumir/parear/envio)", async () => {
+  const vistos = [];
+  const original = globalThis.setTimeout;
+  globalThis.setTimeout = (cb, ms, ...r) => { vistos.push(ms); return original(cb, ms, ...r); };
+  try {
+    const f = fetchFalso(() => ({ status: 200, corpo: { ok: true } }));
+    const api = A.criarApi({ url: URLS, chave: "pub", token: () => "t", cliente: () => "c", fetch: f });
+    for (const [fn, acao] of [["nx-ia", "sugerir"], ["nx-ia", "resumir"], ["nx-codewords", "parear"], ["nx-codewords", "inscrever"], ["nx-enviar", "texto"], ["nx-enviar", "midia"], ["nx-enviar", "template"]])
+      await api.fn(fn, { acao });
+    await api.fn("nx-enviar", { acao: "lido" });                    // chamadas rápidas seguem em 75 s
+    await api.fn("nx-ia", { acao: "automacao_montar" }, { prazoMs: 130_000 });
+    assert.deepEqual(vistos, [100_000, 100_000, 100_000, 100_000, 100_000, 100_000, 100_000, 75_000, 130_000]);
+    assert.ok(A.PRAZO_FN_LENTA_MS > 91_000 && A.PRAZO_FN_LENTA_MS < A.TETO_PRAZO_FN_MS, "acima de 2 × 45 s da Anthropic e abaixo do teto da Edge Function");
+    vistos.length = 0;
+    const fixo = A.criarApi({ url: URLS, chave: "pub", fetch: f, prazoMs: 9_000 });
+    await fixo.fn("nx-ia", { acao: "sugerir" });
+    assert.deepEqual(vistos, [9_000], "o prazo geral fixado nos testes continua valendo");
+  } finally { globalThis.setTimeout = original; }
 });
 
 console.log(`\n${ok} ok · ${falhas} falha(s)${avisos ? ` · ${avisos} aviso(s)` : ""}\n`);

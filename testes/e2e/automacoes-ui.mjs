@@ -76,6 +76,17 @@ try {
   const escolher = (sel, v) => digitar(sel, v);
   const ultimaChamada = nome => aval(`(() => { const l = window.__rpc.filter(x => x.nome === ${JSON.stringify(nome)}); return l.length ? l[l.length - 1].corpo : null; })()`);
   const limparChamadas = () => aval("window.__rpc.length = 0");
+  // tecla de verdade (CDP): keydown + keyup, com o foco onde estiver — é o que o teclado e o leitor de tela fazem
+  const tecla = async (key, { shift = false, ctrl = false } = {}) => {
+    const mapa = { Tab: 9, Enter: 13, Escape: 27, " ": 32 };
+    const vk = mapa[key] || key.charCodeAt(0);
+    const base = { modifiers: (shift ? 8 : 0) | (ctrl ? 2 : 0), key, code: key === " " ? "Space" : key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
+    await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base, ...(key === "Enter" ? { text: "\r" } : key === " " ? { text: " " } : {}) });
+    if (key === "Enter" || key === " ") await send("Input.dispatchKeyEvent", { type: "char", ...base, text: key === "Enter" ? "\r" : " " });
+    await send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+    await dormir(150);
+  };
+  const ir2 = async (hash, ms = 900) => { await ir("#/inicio"); await ir(hash, ms); };   // hash igual ao atual não remonta a tela
 
   await tamanho(1280, 1200, false);
   await send("Page.navigate", { url: BASE + "#/inicio" });
@@ -285,7 +296,9 @@ try {
     await ir("#/automacoes/auto-followup?aba=execucoes");
     await ate(`document.querySelectorAll(".au-ex").length === 5`, "5 execuções");
     const t = await aval(`document.querySelector(".au-exs").textContent`);
-    assert.match(t, /2 de 4 passos feitos/); assert.match(t, /Esperando para continuar/); assert.match(t, /Cancelada: o cliente respondeu/);
+    assert.match(t, /2 de 4 passos feitos/); assert.match(t, /Esperando para continuar/); assert.match(t, /Cancelada/);
+    // o servidor de mentira grava só «O cliente respondeu: sequência cancelada» (sem « · cancelada: <motivo>»): a frase é neutra, nunca inventa o motivo
+    assert.deepEqual(await aval(`[...document.querySelectorAll(".au-ex-estado")].map(e => e.textContent).filter(x => /^Cancelada/.test(x))`), ["Cancelada"]);
     assert.match(t, /Este número ainda não foi pareado no CodeWords/);
     assert.doesNotMatch(t, /codewords_sem_aparelho/);
     await clicarTexto(".au-ex-filtro .au-chip", "Com erro");
@@ -365,6 +378,85 @@ try {
       assert.equal(await aval(`!!document.querySelector(".au-ia")`), true);
       assert.equal(await aval(`document.querySelector('#nav [aria-current="page"]').dataset.id`), "automacoes");
     }
+  });
+
+  await teste("teclado (achados T09): o interruptor da lista mantém o foco (2 × Space alterna), remover passo/condição e Esc na paleta não derrubam o foco no body", async () => {
+    await ir2("#/automacoes", 1200);
+    await ate(`document.querySelector(".au-item .au-sw")`, "interruptor");
+    await aval(`document.querySelector(".au-item .au-sw").focus()`);
+    const antes = await aval(`document.querySelector(".au-item .au-sw").getAttribute("aria-checked")`);
+    await tecla(" "); await dormir(450);
+    assert.equal(await aval(`document.activeElement === document.querySelector(".au-item .au-sw")`), true, "foco no interruptor depois do 1º Space");
+    const meio = await aval(`document.querySelector(".au-item .au-sw").getAttribute("aria-checked")`);
+    await tecla(" "); await dormir(450);
+    const fim = await aval(`document.querySelector(".au-item .au-sw").getAttribute("aria-checked")`);
+    assert.ok(antes !== meio && antes === fim, `o 2º Space precisa alternar de novo (${antes} → ${meio} → ${fim})`);
+
+    await ir2("#/automacoes/auto-followup", 1400);
+    await ate(`document.querySelector(".au-passo")`, "passos");
+    await aval(`document.querySelectorAll(".au-passo .au-x")[2].focus()`);
+    await tecla("Enter");
+    assert.match(await aval(`document.activeElement.getAttribute("aria-label") || document.activeElement.tagName`), /Tirar o passo/, "remover o passo 3: o foco vai ao «Tirar» do passo que ocupou o lugar");
+    await clicarTexto(".au-mais", "Condição"); await clicarTexto(".au-mais", "Condição");
+    await aval(`document.querySelectorAll(".au-cond .au-x")[0].focus()`);
+    await tecla("Enter");
+    assert.match(await aval(`document.activeElement.getAttribute("aria-label") || document.activeElement.tagName`), /Tirar a condição/, "remover a condição: o foco segue para a próxima");
+    await aval(`[...document.querySelectorAll(".au-mais")].find(b => /Adicionar passo/.test(b.textContent)).focus()`);
+    await tecla("Enter");
+    assert.equal(await aval(`document.activeElement.classList.contains("au-tile")`), true, "Enter abre a paleta e leva o foco ao 1º passo");
+    await tecla("Escape");
+    assert.deepEqual(await aval(`({ fechada: document.querySelector(".au-paleta").hidden, foco: document.activeElement.textContent.trim() })`), { fechada: true, foco: "Adicionar passo" }, "Esc fecha a paleta e devolve o foco ao botão");
+  });
+
+  await teste("leitor de tela (achados T09): abas com tabpanel ligado, contador separado, frase sem aria-live, chips de espera = 1 parada de Tab", async () => {
+    await ir2("#/automacoes/auto-followup", 1400);
+    await ate(`document.querySelector(".au-abas .aba")`, "abas");
+    const abas = await aval(`[...document.querySelectorAll(".au-abas .aba")].map(b => { const p = document.getElementById(b.getAttribute("aria-controls")); return { tx: b.textContent, painel: !!p && p.getAttribute("role") === "tabpanel" && p.getAttribute("aria-labelledby") === b.id }; })`);
+    assert.ok(abas.length === 2 && abas.every(a => a.painel), JSON.stringify(abas));
+    assert.match(abas[1].tx, /Execuções\s+\d/, "«Execuções 3», não «Execuções3»");
+    assert.equal(await aval(`document.querySelector(".au-frase").hasAttribute("aria-live")`), false, "a frase muda a cada tecla: sem região viva");
+    const chips = await aval(`(() => { const rs = [...document.querySelector(".au-passo-esperar").querySelectorAll(".au-chips [role=radio]")]; return { total: rs.length, tab0: rs.filter(r => r.tabIndex === 0).length, marcadoTem: rs.find(r => r.tabIndex === 0).getAttribute("aria-checked") }; })()`);
+    assert.ok(chips.total >= 10 && chips.tab0 === 1 && chips.marcadoTem === "true", JSON.stringify(chips));
+    // Atualizar nas execuções devolve o foco ao botão novo
+    await ir2("#/automacoes/auto-followup?aba=execucoes", 1400);
+    await ate(`document.querySelector(".au-ex-cab .bt")`, "Atualizar");
+    await aval(`document.querySelector(".au-ex-cab .bt").focus()`);
+    await tecla("Enter"); await dormir(800);
+    assert.match(await aval(`document.activeElement.textContent.trim()`), /Atualizar/);
+  });
+
+  await teste("«Pular para o conteúdo» não vira rota: Enter no link mantém #/automacoes e foca o <main>", async () => {
+    await ir2("#/automacoes", 1200);
+    await aval(`document.querySelector(".pular").focus()`);
+    await tecla("Enter"); await dormir(400);
+    const r = await aval(`({ hash: location.hash, foco: document.activeElement.id, texto: document.querySelector("#vista").textContent })`);
+    assert.equal(r.hash, "#/automacoes"); assert.equal(r.foco, "vista");
+    assert.doesNotMatch(r.texto, /Página não encontrada/);
+  });
+
+  await teste("Criar com IA: o texto digitado fica só com quem digitou — sair da conta e entrar de novo começa com a caixa vazia", async () => {
+    await ir2("#/automacoes", 1200);
+    await ate(`document.querySelector(".au-ia-txt")`, "caixa");
+    await digitar(".au-ia-txt", "T02-A SEGREDO do cliente A: oferecer 30% de desconto");
+    assert.match(await aval(`document.querySelector(".au-ia-txt").value`), /SEGREDO/);
+    // Criar com IA com a chamada lenta: o campo fica só-leitura (não disabled) e mantém o foco do teclado
+    await aval(`document.querySelector(".au-ia-txt").focus()`);
+    await aval(`(() => { const o = window.fetch.bind(window); window.__fetchOriginal = o; window.fetch = (u, i) => /nx-ia/.test(String(u)) ? new Promise(r => setTimeout(r, 1800)).then(() => o(u, i)) : o(u, i); })()`);
+    await tecla("Enter", { ctrl: true }); await dormir(400);
+    assert.deepEqual(await aval(`({ ro: document.querySelector(".au-ia-txt").readOnly, dis: document.querySelector(".au-ia-txt").disabled, foco: document.activeElement.className })`),
+      { ro: true, dis: false, foco: "au-ia-txt" }, "durante a chamada: só-leitura e com o foco");
+    await ate(`document.querySelector(".au-ia-res, .au-ia-erro")`, "resposta da IA", 9000);
+    await aval(`window.fetch = window.__fetchOriginal`);
+    // sair da conta (menu da conta › Sair) e entrar de novo
+    await aval(`document.querySelector(".lat-conta").click()`); await dormir(300);
+    await aval(`[...document.querySelectorAll("[role=menuitem], .menu button")].find(b => /^Sair/.test(b.textContent.trim())).click()`);
+    await ate(`document.querySelector(".entrar-form")`, "tela de entrada");
+    await aval(`(() => { const f = document.querySelector(".entrar-form"); const i = f.querySelectorAll("input"); i[0].value = "a@b.test"; i[1].value = "senha-qualquer"; i[0].dispatchEvent(new Event("input", { bubbles: true })); i[1].dispatchEvent(new Event("input", { bubbles: true })); f.requestSubmit(); })()`);
+    await ate(`!document.querySelector(".entrar-form") && document.querySelector("#vista")`, "app de novo", 8000);
+    await ir2("#/automacoes", 1300);
+    await ate(`document.querySelector(".au-ia-txt")`, "caixa de novo");
+    assert.equal(await aval(`document.querySelector(".au-ia-txt").value`), "", "o texto de quem saiu não aparece para quem entra");
+    assert.equal(await aval(`document.querySelector(".au-ia-res")`), null, "a montagem da IA também some");
   });
 
   await teste("celular (390 px): lista, editor com sequência, paleta e testar sem rolagem lateral", async () => {

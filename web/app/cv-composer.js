@@ -60,7 +60,7 @@ export function criarComposer(A) {
     if (!A.podeEscrever) return "leitura";
     if (c.status === "resolvida") return "resolvida";
     if (!c.canal_id) return "sem_canal";
-    if (!L.janela(c).aberta) return "janela";
+    if (L.canalTemJanela(provedorCanal()) && !L.janela(c).aberta) return "janela";   // CodeWords não tem janela de 24 h
     if (!usaCodeWords() && c.canal && c.canal.tem_token === false) return "sem_token";
     return "ok";
   }
@@ -107,16 +107,12 @@ export function criarComposer(A) {
         h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => A.acoes.novaConversa({ contato: contato() }) } }, "Nova conversa"));
     } else if (s === "janela" && !modoNota) {
       trava.hidden = false;
-      if (usaCodeWords()) {
-        trava.append(ui.icone("relogio"), h("p", null,
-          "A janela de 24 h do WhatsApp fechou. Neste canal CodeWords, aguarde uma nova mensagem do contato; modelos da Meta não estão disponíveis."));
-      } else {
-        const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, A.icone("modelo"), "Modelos");
-        b.addEventListener("click", () => abrirModelos());
-        trava.append(ui.icone("relogio"), h("p", null, c && c.ultima_entrada_em
-          ? "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado para retomar a conversa."
-          : "O cliente ainda não mandou mensagem por este número. Para começar, envie um modelo aprovado."), b);
-      }
+      // (só chega aqui em canal da Meta: no CodeWords não existe janela — ver situacao())
+      const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, A.icone("modelo"), "Modelos");
+      b.addEventListener("click", () => abrirModelos());
+      trava.append(ui.icone("relogio"), h("p", null, c && c.ultima_entrada_em
+        ? "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado para retomar a conversa."
+        : "O cliente ainda não mandou mensagem por este número. Para começar, envie um modelo aprovado."), b);
     } else if (s === "sem_token" && !modoNota) {
       trava.hidden = false;
       trava.append(...[ui.icone("alerta"), h("p", null, "Este número ainda não tem o token da Meta. Configure em Números de WhatsApp."),

@@ -331,7 +331,9 @@ export function montar(ds) {
       }
       for (const [k, ls] of grupos) {
         const t = consolidar(ls);
-        if (t.gasto < r.minGasto || t.impressoes < r.minImpr) continue;
+        // o gasto é soma de centavos em ponto flutuante (1,16 + 14,87 + 5,97 = 21,999999999999996): compara em centavos, senão gasto
+        // exatamente igual ao mínimo da regra deixava de alertar
+        if (Math.round(t.gasto * 100) < Math.round(r.minGasto * 100) || t.impressoes < r.minImpr) continue;
         const v = t[r.metrica];
         if (!fin(v)) continue;          // sem base (CPA sem conversa) — coberto pela r2
         const lim = r.limite();
@@ -457,7 +459,8 @@ export function montar(ds) {
     if (fin(roas) && c.receita > 0) L.push(`Cada R$ 1 em anúncio virou *R$ ${dec(roas, 1)}* em tratamentos.`);
     if (prev && prev.ate - prev.de >= 19) {
       const cp = crmTot(prev.de, prev.ate), v = variacao(c.fecharam, cp.fecharam);
-      if (v != null) L.push("", `Em relação a ${MESES[prev.mes]}: ${v >= 0 ? "+" : ""}${v.toFixed(0)}% em pacientes novos (${cp.fecharam} → ${c.fecharam}).`);
+      // sem paciente fechado nos dois meses a comparação seria ruído («+0% (0 → 0)») no WhatsApp do cliente
+      if (v != null && (c.fecharam > 0 || cp.fecharam > 0)) L.push("", `Em relação a ${MESES[prev.mes]}: ${v >= 0 ? "+" : ""}${v.toFixed(0)}% em pacientes novos (${cp.fecharam} → ${c.fecharam}).`);
     }
     const top = Object.entries(c.serv).sort((a, b) => b[1].v - a[1].v)[0];
     const campTop = Object.values(CAMP).filter(cc => cc.plat).map(cc => ({ cc, k: crmTot(m.de, m.ate, { camp: cc.id }) }))

@@ -331,7 +331,7 @@ export async function montar(ctx) {
 
   /* ---------------- CAMPANHAS ---------------- */
   function abaCampanhas(M) {
-    const { linhas, total } = L.linhasCampanhas(M, { dias: S.dias, plat: S.plat });
+    const { linhas, total, outras } = L.linhasCampanhas(M, { dias: S.dias, plat: S.plat });
     const COLS = [["nome", "Campanha"], ["gasto", "Investido"], ["conv", "Conversas"], ["cpa", "Custo/conversa"],
       ["ag", "Agendados"], ["fe", "Fechados"], ["rec", "Receita"], ["roas", "Retorno", "Receita ÷ investimento em anúncios desta campanha (sem a gestão)."]];
     const cartao = h("div", { class: "rel-cartao rel-entra ads-camp" });
@@ -366,10 +366,15 @@ export async function montar(ctx) {
           td("roas", Number.isFinite(r.roas) ? `${N.dec(r.roas, 1)}x` : "—", "Retorno"));
       }));
       const T = total.t;
+      // negócios de anúncio sem investimento na janela (pausada, sem campanha identificada): contam na Visão geral e ficam fora do Total
+      const temOutras = !!outras && (outras.ag > 0 || outras.fe > 0 || outras.rec > 0);
       const tfoot = h("tfoot", {}, h("tr", {}, h("th", { scope: "row" }, "Total"),
         td("gasto", N.brl0(T.gasto), "Investido"), td("conv", N.int(T.conversoes), "Conversas"), td("cpa", N.brl(T.cpa), "Custo por conversa"),
         td("ag", N.int(total.ag), "Agendados"), td("fe", N.int(total.fe), "Fechados"), td("rec", N.brl0(total.rec), "Receita"),
-        td("roas", Number.isFinite(total.roas) ? `${N.dec(total.roas, 1)}x` : "—", "Retorno")));
+        td("roas", Number.isFinite(total.roas) ? `${N.dec(total.roas, 1)}x` : "—", "Retorno")),
+        temOutras ? h("tr", { class: "ads-camp-outras" }, h("th", { scope: "row", title: "Negócios de anúncio sem investimento nestes dias (campanha pausada ou sem campanha identificada). Entram na Visão geral." }, "Sem investimento no período"),
+          td("gasto", "—", "Investido"), td("conv", "—", "Conversas"), td("cpa", "—", "Custo por conversa"),
+          td("ag", N.int(outras.ag), "Agendados"), td("fe", N.int(outras.fe), "Fechados"), td("rec", N.brl0(outras.rec), "Receita"), td("roas", "—", "Retorno")) : null);
       cartao.append(h("div", { class: "rel-cartao-topo" }, h("h2", { class: "rel-h2" }, `Campanhas nos últimos ${S.dias} dias`),
         h("p", { class: "rel-nota" }, "Toque numa campanha para ver os criativos. Agendados, fechados e receita vêm do CRM, pela data de cada evento.")),
         h("div", { class: "rel-tabela-rolagem" }, h("table", { class: "rel-tabela ads-tabela" },
@@ -390,8 +395,8 @@ export async function montar(ctx) {
         h("h2", { id: "ads-rank-h", class: "rel-h2" }, "Ranking de criativos"),
         segmento("Ordenar o ranking", L.RANK_CRI, R.por, v => { S.rank = v; gravarLocal("nx-app-ads-rank", v); pintar(); cartao.querySelector('[aria-pressed="true"]')?.focus(); }),
         h("p", { class: "rel-nota" }, R.por === "cpa"
-          ? `Os ${R.lista.length} criativos com menor custo por conversa nos últimos ${S.dias} dias (com pelo menos ${L.MIN_CONV_CPA} conversas).`
-          : `Os ${R.lista.length} criativos com ${nomeRank} nos últimos ${S.dias} dias. Fechados e receita vêm do CRM, pelo anúncio que trouxe cada ${voc(ctx, "contato", "contato").toLowerCase()}.`)));
+          ? `${R.lista.length === 1 ? "O criativo com menor custo por conversa" : `Os ${R.lista.length} criativos com menor custo por conversa`} nos últimos ${S.dias} dias (com pelo menos ${L.MIN_CONV_CPA} conversas).`
+          : `${R.lista.length === 1 ? "O criativo com" : `Os ${R.lista.length} criativos com`} ${nomeRank} nos últimos ${S.dias} dias. Fechados e receita vêm do CRM, pelo anúncio que trouxe cada ${voc(ctx, "contato", "contato").toLowerCase()}.`)));
       if (!R.lista.length) {
         cartao.append(h("p", { class: "rel-vazio-txt" }, !R.total ? "Nenhum criativo com investimento no período."
           : R.por === "cpa" ? `Nenhum criativo com ${L.MIN_CONV_CPA} conversas ou mais no período.`

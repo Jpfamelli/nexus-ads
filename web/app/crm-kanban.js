@@ -247,12 +247,14 @@ export async function montarKanban(k, el, rota) {
     if (anuncioNome) selos.push(ui.pilula(`Anúncio · ${anuncioNome}`, "neutra", { title: String(anuncioNome) }));
     const origem = c.origem && c.origem !== "anuncio" ? (L.ROTULO_ORIGEM[c.origem] || c.origem) : null;
     if (origem) selos.push(ui.pilula(origem, "neutra", { title: `Origem: ${origem}` }));
+    const pont = L.pontuacao(c);
+    if (pont) selos.push(ui.pilula(`Lead ${pont.score}`, pont.faixa === "alta" ? "ok" : pont.faixa === "media" ? "aten" : "neutra", { icone: "ia", title: `Pontuação do lead: ${pont.score} de 100${pont.motivo ? ` — ${pont.motivo}` : ""}` }));
     if (c.consulta_em) selos.push(ui.pilula(`${ui.dataCurtaBR ? ui.dataCurtaBR(c.consulta_em) : ui.dataBR(c.consulta_em)} ${ui.horaBR(c.consulta_em)}`, "info", { icone: "relogio", title: "Consulta/visita marcada" }));
     if (c.tarefa) {
       const txt = c.tarefa.atrasada ? "Tarefa atrasada" : c.tarefa.vence_em ? `Tarefa ${ui.relativo(c.tarefa.vence_em)}` : "Tarefa";
       selos.push(h("span", { class: ["kc-tarefa", c.tarefa.atrasada && "atrasada"] }, ui.icone("tarefa"), txt));
     }
-    const rotulo = `${titulo}${valor != null ? `, ${ui.brl(valor)}` : ""}${dono ? `, responsável ${dono.nome}` : ""}${c.nao_lidas ? `, ${c.nao_lidas} mensagens não lidas` : ""}`;
+    const rotulo = `${titulo}${valor != null ? `, ${ui.brl(valor)}` : ""}${pont ? `, pontuação ${pont.score} de 100` : ""}${dono ? `, responsável ${dono.nome}` : ""}${c.nao_lidas ? `, ${c.nao_lidas} mensagens não lidas` : ""}`;
     const art = h("article", { class: "kc", role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
       "aria-label": rotulo, "aria-describedby": instr.id, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
       h("span", { class: "kc-t" }, titulo),
@@ -313,7 +315,16 @@ export async function montarKanban(k, el, rota) {
     const itens = destCol.itens.filter(x => x.id !== id);
     const pos = Math.max(0, Math.min(indice, itens.length));
     if (origemCol === destCol && pos === posOrig) { preencherColuna(estagioId); focarCartao(id); return; }
-    const ordem = L.ordemEntre(itens[pos - 1] ? itens[pos - 1].ordem : null, itens[pos] ? itens[pos].ordem : null);
+    // soltou no fim de uma coluna com «Ver mais» pendente: o vizinho de baixo é o próximo cartão do SERVIDOR (ainda não carregado), não «ninguém»
+    let proxima;
+    if (pos >= itens.length && (Number(destCol.total) || 0) > destCol.itens.length) {
+      try {
+        const r = await k.api.rpcC("nx_negocios_coluna", { p_estagio: estagioId, p_filtro: filtroServidor(), p_offset: destCol.itens.length });
+        const viz = ((r && r.itens) || []).find(x => x.id !== id);
+        if (viz) proxima = viz.ordem ?? null;
+      } catch { /* sem o vizinho, vale a ordem de fim de lista */ }
+    }
+    const ordem = L.ordemDoSoltar(itens, pos, proxima);
     // perguntas (valor / motivo / data e hora) ANTES de gravar
     let extra = {};
     try { extra = await N.prepararMovimento(k, card, destino); }
@@ -421,7 +432,7 @@ export async function montarKanban(k, el, rota) {
       art.style.setProperty("--cor", k.cor(alvo.e.cor) || "");
       t.estagio = ids[j];
       art.focus();
-      alvo.sec.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+      alvo.sec.scrollIntoView({ block: "nearest", inline: "nearest", behavior: ui.comportamentoRolagem() });
       ui.anunciar(`Etapa «${alvo.e.nome}», posição ${pos + 1} de ${cards.length + 1}.`);
     }
   }

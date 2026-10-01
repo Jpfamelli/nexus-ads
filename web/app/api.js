@@ -200,6 +200,16 @@ function lerCorpo(txt) {
 export const TETO_PRAZO_FN_MS = 145_000;
 
 /**
+ * Chamadas cujo SERVIDOR pode levar mais que os 75 s padrão: IA com uma retentativa (Anthropic 45 s × 2 ≈ 91 s: sugerir, resumir),
+ * parear do CodeWords (até 90 s), inscrever (60 s) e envio pelo CodeWords com conferência do aparelho (15 s + 60 s). O navegador precisa
+ * esperar MAIS que o pior caso do servidor: desistir antes mostraria «tempo_rede» enquanto ele ainda conclui (cota de IA gasta, código de
+ * pareamento perdido, mensagem possivelmente enviada).
+ */
+export const PRAZO_FN_LENTA_MS = 100_000;
+const FN_LENTAS = new Set(["nx-ia:sugerir", "nx-ia:resumir", "nx-codewords:parear", "nx-codewords:inscrever",
+  "nx-enviar:texto", "nx-enviar:midia", "nx-enviar:template"]);
+
+/**
  * Cria o cliente.
  * @param {object} o
  *   url, chave            — SUPA_URL e CHAVE_PUBLICA (de ../dados.js)
@@ -216,9 +226,11 @@ export function criarApi(o) {
   const prazoFn = normalizarPrazo(o.prazoMs ?? o.prazoFnMs, 75_000);
 
   const prazoGeralFixo = o.prazoMs != null || o.prazoFnMs != null;
-  const prazoDaChamada = opcoes => {
+  const prazoDaChamada = (opcoes, chave) => {
+    if (prazoGeralFixo) return prazoFn;
+    const base = FN_LENTAS.has(chave) ? Math.max(prazoFn, PRAZO_FN_LENTA_MS) : prazoFn;
     const extra = Number(opcoes && opcoes.prazoMs);
-    if (prazoGeralFixo || !Number.isFinite(extra) || extra <= prazoFn) return prazoFn;
+    if (!Number.isFinite(extra) || extra <= base) return base;
     return Math.min(TETO_PRAZO_FN_MS, extra);
   };
 
@@ -308,7 +320,7 @@ export function criarApi(o) {
      */
     fn(funcao, corpo = {}, opcoes = {}) {
       if (!/^nx-[a-z0-9-]+$/.test(funcao)) return Promise.reject(erroApi("funcao_invalida"));
-      return post(`${base}/functions/v1/${funcao}`, { token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }, prazoDaChamada(opcoes));
+      return post(`${base}/functions/v1/${funcao}`, { token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }, prazoDaChamada(opcoes, `${funcao}:${corpo && corpo.acao}`));
     },
     mensagemErro,
   };

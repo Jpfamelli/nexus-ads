@@ -290,6 +290,12 @@ export function lerNumero(s) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** O texto de um campo de dinheiro tem algo escrito que NÃO vira número («abc»)? Vazio não é inválido: é «sem valor». */
+export function dinheiroInvalido(s) {
+  const t = String(s ?? "").trim();
+  return t !== "" && lerNumero(t) === null;
+}
+
 /** "31/12/1990" | "1990-12-31" → "1990-12-31"; inválido → null */
 export function lerData(s) {
   const t = String(s ?? "").trim();
@@ -352,6 +358,33 @@ export function ordemEntre(antes, depois, agora = Date.now()) {
   if (b === null) return a + 1;
   if (a === b) return a;           // vizinhos empatados: o servidor desempata por id
   return a + (b - a) / 2;
+}
+
+/**
+ * Ordem do cartão solto na posição `pos` entre `itens` (a coluna de destino SEM ele). Soltar no fim de uma coluna que ainda tem cartões
+ * não carregados («Ver mais») não pode pular por cima deles: `proxima` = ordem do 1º cartão não carregado (null = esse cartão não tem ordem,
+ * que o servidor põe no fim; undefined = não há mais cartões ou não deu para saber → comportamento de fim de lista).
+ */
+export function ordemDoSoltar(itens, pos, proxima, agora = Date.now()) {
+  const antes = itens[pos - 1] ? itens[pos - 1].ordem : null;
+  const depois = itens[pos] ? itens[pos].ordem : (proxima === undefined ? null : proxima);
+  return ordemEntre(antes, depois, agora);
+}
+
+/**
+ * Pontuação do lead (0 a 100) gravada pelo passo «preencher um campo» ou pela IA: campos.score, com score_motivo e score_em.
+ * Aceita o negócio completo (`campos` dentro) ou o cartão com `score` solto. null quando não há nota válida.
+ */
+export function pontuacao(x) {
+  if (!x || typeof x !== "object") return null;
+  const campos = x.campos && typeof x.campos === "object" ? x.campos : {};
+  const bruto = x.score !== undefined && x.score !== null ? x.score : campos.score;
+  const n = typeof bruto === "number" ? bruto : (typeof bruto === "string" && bruto.trim() !== "" ? Number(bruto) : NaN);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
+  const score = Math.round(n);
+  const txt = v => (typeof v === "string" ? v.trim() : "");
+  return { score, faixa: score >= 70 ? "alta" : score >= 40 ? "media" : "baixa",
+    motivo: txt(x.score_motivo) || txt(campos.score_motivo), em: txt(x.score_em) || txt(campos.score_em) };
 }
 
 /** Valor que o cartão "vale" na coluna: final se ganho, senão o previsto. */

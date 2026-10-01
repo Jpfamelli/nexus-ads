@@ -67,8 +67,21 @@ export function pecas(ui, L) {
     return b;
   }
 
-  /** Grupo de «rádios» (chips): setas, Home e End movem a escolha, como num radiogroup nativo. */
+  /**
+   * Grupo de «rádios» (chips): setas, Home e End movem a escolha, como num radiogroup nativo, e o grupo é UMA parada de Tab
+   * (roving tabindex: só o marcado — ou o 1º, se nenhum — entra na ordem do Tab; sem isso eram 13 paradas por grupo).
+   */
   function setas(grupo) {
+    const sincronizar = () => {
+      const bs = [...grupo.querySelectorAll("[role=radio]:not(:disabled)")];
+      if (!bs.length) return;
+      const marcado = bs.find(b => b.getAttribute("aria-checked") === "true") || bs[0];
+      for (const b of bs) b.tabIndex = b === marcado ? 0 : -1;
+    };
+    sincronizar();
+    if (typeof MutationObserver === "function") {
+      new MutationObserver(sincronizar).observe(grupo, { attributes: true, attributeFilter: ["aria-checked", "disabled"], subtree: true, childList: true });
+    }
     grupo.addEventListener("keydown", ev => {
       const bs = [...grupo.querySelectorAll("[role=radio]:not(:disabled)")];
       const i = bs.indexOf(document.activeElement);

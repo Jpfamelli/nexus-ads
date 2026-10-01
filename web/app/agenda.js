@@ -132,7 +132,7 @@ export async function montar(ctx) {
       if (!itens.length && !travas.length) lista.appendChild(h("p", { class: "agenda-vazio" }, "Sem consultas ou bloqueios."));
       for (const b of travas) lista.appendChild(h("div", { class: "agenda-bloqueio" }, ui.icone("fechar"),
         h("span", null, h("b", null, "Horário bloqueado"), h("small", null,
-          [b.motivo, ui.dataHoraBR(b.inicio), ui.dataHoraBR(b.fim)].filter(Boolean).join(" · ") || "Dia indisponível"))));
+          [b.motivo, ui.periodoBR(b.inicio, b.fim, " · ")].filter(Boolean).join(" · ") || "Dia indisponível"))));
       for (const c of itens) lista.appendChild(cartaoConsulta(c));
       const cabDia = h("header", { class: "agenda-dia-cab" },
         h("span", { class: "agenda-dia-nome" }, modo === "dia" ? nomeDia(iso, true) : nomeDia(iso)),

@@ -107,7 +107,11 @@ export function linhasCampanhas(M, { dias = 30, plat = "" } = {}) {
   }).filter(Boolean);
   const T = M.consolidar(linhas.flatMap(r => M.linhasDe(de, ate, { camp: r.c.id })));
   const K = linhas.reduce((a, r) => ({ ag: a.ag + r.k.agendadas, fe: a.fe + r.k.fecharam, rec: a.rec + r.k.receita }), { ag: 0, fe: 0, rec: 0 });
-  return { linhas, total: { t: T, ag: K.ag, fe: K.fe, rec: K.rec, roas: T.gasto ? K.rec / T.gasto : null } };
+  // o que o CRM atribuiu a anúncios mas NÃO está em nenhuma linha acima (campanha pausada/sem investimento na janela, ou sem campanha identificada):
+  // entra no herói da Visão geral (crmTot da plataforma inteira) e fica fora do «Total» — esta sobra explica a diferença
+  const todos = M.crmTot(de, ate, { plat });
+  const outras = { ag: Math.max(0, (todos.agendadas || 0) - K.ag), fe: Math.max(0, (todos.fecharam || 0) - K.fe), rec: Math.max(0, (todos.receita || 0) - K.rec) };
+  return { linhas, total: { t: T, ag: K.ag, fe: K.fe, rec: K.rec, roas: T.gasto ? K.rec / T.gasto : null }, outras };
 }
 export const VAL_CAMP = {
   nome: r => r.c.nome, plat: r => r.c.plat, gasto: r => r.t.gasto, conv: r => r.t.conversoes, cpa: r => r.t.cpa, ctr: r => r.t.ctr,
@@ -392,7 +396,7 @@ export function kpisAtendimento(r) {
     { id: "tpr_mediana_min", rotulo: "1ª resposta (mediana)", v: k.tpr_mediana_min, a: a.tpr_mediana_min, fmt: "min", sentido: "baixo",
       extra: fin(k.tpr_media_min) ? `média ${duracaoMin(k.tpr_media_min)}` : "" },
     { id: "resolucao_mediana_h", rotulo: "Até resolver (mediana)", v: k.resolucao_mediana_h, a: a.resolucao_mediana_h, fmt: "h", sentido: "baixo" },
-    { id: "abertas_agora", rotulo: "Abertas agora", v: k.abertas_agora, a: null, fmt: "int", sentido: "neutro",
+    { id: "abertas_agora", rotulo: "Abertas agora", v: k.abertas_agora, a: null, agora: true, fmt: "int", sentido: "neutro",
       extra: fin(k.aguardando_agora) ? `${k.aguardando_agora} aguardando resposta` : "" },
     { id: "sem_resposta", rotulo: "Sem resposta", v: k.sem_resposta, a: a.sem_resposta, fmt: "int", sentido: "baixo", extra: "abertas no período e nunca respondidas" },
   ];

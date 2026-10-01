@@ -53,6 +53,20 @@ await teste("janela: janela_ate do servidor tem prioridade", () => {
   assert.equal(j.texto, "Janela aberta · 3 h restantes");
 });
 
+await teste("janela: o aparelho do CodeWords não tem janela de 24 h (canalTemJanela) — composer, selo e «Nova conversa» não travam", () => {
+  assert.equal(L.canalTemJanela("codewords"), false);
+  assert.equal(L.canalTemJanela("meta"), true);
+  assert.equal(L.canalTemJanela(undefined), true, "canal desconhecido segue a regra da Meta");
+  // número que nunca escreveu (janela_ate nulo) e conversa de 30 h atrás: fechadas pela conta da Meta, mas só a Meta se importa
+  assert.equal(L.janela({ janela_ate: null, ultima_entrada_em: null }, AGORA).aberta, false);
+  assert.equal(L.janela({ ultima_entrada_em: new Date(AGORA.getTime() - 30 * 3600000).toISOString() }, AGORA).aberta, false);
+  const comp = ler("cv-composer.js");
+  assert.match(comp, /L\.canalTemJanela\(provedorCanal\(\)\) && !L\.janela\(c\)\.aberta\) return "janela"/, "situacao(): sem «janela» no CodeWords");
+  assert.doesNotMatch(comp, /A janela de 24 h do WhatsApp fechou\. Neste canal CodeWords/, "a faixa «aguarde uma nova mensagem» some");
+  assert.match(ler("cv-chat.js"), /L\.canalTemJanela\(provedorCanal\)/, "o selo do cabeçalho some no CodeWords");
+  assert.match(ler("conversas.js"), /L\.canalTemJanela\(provedorItem\) && !L\.janela\(item\)\.aberta/, "Nova conversa por CodeWords não abre os modelos da Meta");
+});
+
 await teste("abaDe e pertenceAba seguem a regra do nx_cv_listar", () => {
   const eu = "u1";
   assert.equal(L.abaDe({ status: "aberta", atribuida_a: "u1", aguardando: true }, eu), "minhas");

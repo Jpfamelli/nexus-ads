@@ -16,6 +16,16 @@ let montagem = 0;          // descarta respostas de montagens antigas
 let cancelarPulso = null;
 let rascunhoIA = null;     // {auto, explicacao, avisos} — a montagem da IA que o editor abre (só na memória)
 let textoIA = "";          // o que a pessoa já digitou na caixa «Criar com IA» (sobrevive a voltar da lista)
+let donoIA = "";           // «cliente|conta» a quem pertencem textoIA e rascunhoIA: outro cliente ou outra pessoa nunca os vê
+
+/** Zera o que foi digitado/montado na «Criar com IA» (troca de empresa, de pessoa, saída do módulo). */
+function esquecerIA() { textoIA = ""; rascunhoIA = null; donoIA = ""; }
+
+/** Guarda o dono do texto/rascunho; se mudou o cliente ativo ou a conta (a aba não recarrega ao trocar), descarta o que era do outro. */
+function conferirDonoIA(ctx) {
+  const dono = `${ctx.cliente ? ctx.cliente.id : "-"}|${ctx.sessao && ctx.sessao.conta ? (ctx.sessao.conta.id || ctx.sessao.conta.email || "?") : "-"}`;
+  if (donoIA !== dono) { esquecerIA(); donoIA = dono; }
+}
 
 async function modulos(ctx, editor) {
   const v = encodeURIComponent(ctx.versao);
@@ -24,6 +34,9 @@ async function modulos(ctx, editor) {
   if (editor && !ED) ED = await import(`./auto-editor.js?v=${v}`);
   return { L, P: PE.pecas(ctx.ui, L), ED };
 }
+
+let limpezas = [];         // o que a tela montada precisa desfazer ao sair (ex.: a altura do cabeçalho fixo no scroll-padding)
+function desfazerTela() { for (const f of limpezas.splice(0)) { try { f(); } catch { /* ok */ } } }
 
 function pararPulso() {
   if (cancelarPulso) { try { cancelarPulso(); } catch { /* ok */ } cancelarPulso = null; }
@@ -35,6 +48,8 @@ export async function montar(ctx) {
   const eu = ++montagem;
   const { ui } = ctx;
   pararPulso();
+  desfazerTela();
+  conferirDonoIA(ctx);
   ui.carregarCss("automacoes");
   ui.limpar(ctx.alvo);
   const parte = ctx.rota.partes[0] || null;
@@ -61,6 +76,7 @@ export async function montar(ctx) {
     rascunho: null,
     duplicar: (c, a) => duplicar(c, a, dados.base),
     limparRascunho: () => { rascunhoIA = null; },
+    aoSair: f => { limpezas.push(f); },
     testarAoAbrir: false,
   };
   if (!parte) return telaLista(ctx, raiz, dados, pecas.P);
@@ -85,6 +101,8 @@ export async function montar(ctx) {
 export function desmontar() {
   montagem++;
   pararPulso();
+  desfazerTela();
+  esquecerIA();   // o app só desmonta ao sair do módulo, trocar de empresa ou sair da conta
 }
 
 function semEditar(ctx, raiz) {
@@ -181,7 +199,7 @@ function cartaoIA(ctx, dados, noLimite) {
   const h = ui.h;
   const ia = dados.ia || (dados.base && dados.base.ia) || null;
   // nx_automacoes_listar → ia:{disponivel, usadas, limite}; a base de Conversas usa ia:{ligada, cota:{usadas, limite}} (aceitamos as duas)
-  const desligada = !!ia && (ia.disponivel === false || ia.ligada === false);
+  const desligada = L.iaDesligada(dados);
   const cota = ia && (ia.cota || (ia.limite !== undefined ? { usadas: ia.usadas, limite: ia.limite } : null));
   const semCota = !!cota && cota.limite != null && Number(cota.usadas) >= Number(cota.limite);
   const MAX = L.LIMITES.descricao_ia;
@@ -239,7 +257,7 @@ function cartaoIA(ctx, dados, noLimite) {
     estado.appendChild(h("p", { class: "au-ia-carregando", role: "status" }, h("span", { class: "au-giro", "aria-hidden": "true" }), txtCarregando));
     // pedidos grandes demoram (o navegador espera até L.PRAZO_MONTAR_IA_MS): diz que ainda está trabalhando, para não clicarem de novo
     const lento = setTimeout(() => { txtCarregando.textContent = "Ainda montando… pedidos maiores levam até 2 minutos. Não feche esta tela nem clique de novo."; }, 20_000);
-    area.disabled = true;
+    area.readOnly = true;   // só-leitura (não disabled): o campo mantém o foco do teclado durante a chamada
     try {
       const r = await ui.carregando(btCriar, ctx.api.fn("nx-ia", { acao: "automacao_montar", descricao }, { prazoMs: L.PRAZO_MONTAR_IA_MS }));
       if (!r || !r.automacao || typeof r.automacao !== "object") throw Object.assign(new Error("ia_resposta_invalida"), { codigo: "ia_resposta_invalida" });
@@ -260,7 +278,7 @@ function cartaoIA(ctx, dados, noLimite) {
     } finally {
       clearTimeout(lento);
       pedindo = false;
-      area.disabled = desligada;
+      area.readOnly = false;
       pintarBotao();
     }
   });
@@ -355,6 +373,7 @@ function itemLista(ctx, dados, it, metas, P) {
   const sw = P.interruptor({
     ligado: it.ativo, rotulo: `Ligar a automação ${it.nome}`, desabilitado: !podeEditar,
     aoMudar: async (v, b) => {
+      const devolverFoco = ui.manterFoco(b);
       b.disabled = true;
       try {
         const novo = await ctx.api.rpcC("nx_automacao_ativar", { p_id: it.id, p_ativo: v });
@@ -363,8 +382,8 @@ function itemLista(ctx, dados, it, metas, P) {
         ui.toast(v ? `«${it.nome}» ligada.` : `«${it.nome}» desligada.`, { tipo: "ok" });
       } catch (e) {
         b.definir(!v);
-        ui.toast(ctx.api.mensagemErro(e), { tipo: "erro" });
-      } finally { b.disabled = !podeEditar; }
+        ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e)), { tipo: "erro" });
+      } finally { b.disabled = !podeEditar; devolverFoco(); }   // desabilitado o botão perde o foco: o 2º Space precisa achá-lo de novo
     },
   });
   metas.set(it.id, x => { Object.assign(it, x); pintar(it); sw.definir(it.ativo); li.classList.toggle("au-desligada", !it.ativo); });
@@ -407,7 +426,7 @@ async function duplicar(ctx, origem, base) {
     const novo = await ctx.api.rpcC("nx_automacao_salvar", { p_auto: a });
     ctx.ui.toast("Cópia criada (desligada). Revise e ligue quando quiser.", { tipo: "ok" });
     ctx.navegar(`#/automacoes/${novo.id}`);
-  } catch (e) { ctx.ui.toast(ctx.api.mensagemErro(e), { tipo: "erro" }); }
+  } catch (e) { ctx.ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e)), { tipo: "erro" }); }
 }
 
 async function excluir(ctx, it, depois) {
@@ -419,7 +438,7 @@ async function excluir(ctx, it, depois) {
     ctx.ui.toast("Automação excluída.", { tipo: "ok" });
     if (depois) depois();
     return true;
-  } catch (e) { ctx.ui.toast(ctx.api.mensagemErro(e), { tipo: "erro" }); return false; }
+  } catch (e) { ctx.ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e)), { tipo: "erro" }); return false; }
 }
 
 /* ------------------------------------------------------------------ Receitas prontas */
@@ -431,6 +450,7 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P) {
   const temModeloAprovado = (dados.base.templates || []).some(t => String(t.status || "").toUpperCase() === "APPROVED");
   const exemplo = L.exemploVariaveis({ empresa: ctx.cliente ? ctx.cliente.nome : "", atendente: ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.nome : "Ana" });
   const todas = L.modelosDaVertical(vertical);
+  const iaOff = L.iaDesligada(dados);
   let categoria = "todas";
 
   const cartao = (m, primeiro) => {
@@ -458,6 +478,7 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P) {
       previa,
       acTpl && !temModeloAprovado ? h("p", { class: "au-modelo-nota" }, ui.icone("info"), "Precisa de um modelo aprovado na Meta; dá para deixar pronta e ligar depois.") : null,
       m.aviso && !acTpl ? h("p", { class: "au-modelo-nota" }, ui.icone("info"), m.aviso) : null,
+      iaOff && L.usaIA(m) ? h("p", { class: "au-modelo-nota au-modelo-nota-ia" }, ui.icone("ia"), "A IA ainda não está ligada nesta plataforma: dá para deixar pronta, mas o passo de IA só funciona depois que a equipe da Nexus ativar.") : null,
       h("div", { class: "au-modelo-rod" },
         h("button", { type: "button", class: ["bt", selo ? "bt-prim" : "bt-sec", "bt-p"], disabled: noLimite,
           on: { click: () => ctx.navegar(`#/automacoes/nova?modelo=${encodeURIComponent(m.id)}`) } }, "Usar receita")));

@@ -18,6 +18,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   const q = ctx.rota.query || {};
   const base = dados.base || {};
   const seletor = P.seletor, entrada = P.entrada, interruptor = P.interruptor, opcoesBase = P.opcoesBase, novoId = P.novoId;
+  const iaOff = L.iaDesligada(dados);     // sem a chave da Anthropic: os passos de IA são pulados (avisa, em vez de ligar em silêncio)
   const copia = x => JSON.parse(JSON.stringify(x));
 
   // ------------------------------------------------ estado
@@ -91,7 +92,12 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         h("div", { class: "au-ia-ped-tit" },
           h("p", { class: "rotulo" }, "Montada pela IA"),
           h("h2", { class: "titulo-sec" }, "Confira antes de salvar")),
-        h("button", { type: "button", class: "bt-icone", "aria-label": "Fechar este aviso", on: { click: () => caixa.remove() } }, ui.icone("fechar"))),
+        h("button", { type: "button", class: "bt-icone", "aria-label": "Fechar este aviso", on: { click: () => {
+          const tinhaFoco = caixa.contains(document.activeElement);
+          caixa.remove();
+          // o foco não pode cair no <body>: segue para o primeiro controle do que vem depois da caixa
+          if (tinhaFoco) { const prox = raiz.querySelector(".au-abas [role=tab][aria-selected=true], .au-nome-inp:not(:disabled), .au-painel select:not(:disabled)"); if (prox) prox.focus({ preventScroll: true }); }
+        } } }, ui.icone("fechar"))),
       rascunho.explicacao ? h("p", { class: "au-ia-ped-txt" }, rascunho.explicacao) : null,
       avisosIA.length ? h("ul", { class: "au-ia-ped-avisos", role: "list" }, avisosIA.map(t => h("li", null, ui.icone("alerta"), h("span", null, t)))) : null,
       h("p", { class: "sub" }, "Nada foi salvo ainda. Ajuste o que quiser abaixo e toque em «Criar automação». A IA só escolhe entre as etapas, etiquetas e pessoas que já existem no seu sistema."));
@@ -102,7 +108,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   const painelRegra = h("div", { class: "au-painel", id: novoId("regra") });
   const painelExec = h("div", { class: "au-painel", id: novoId("exec"), hidden: true });
   if (item) {
-    const ab = ui.abas({ itens: [{ id: "regra", rotulo: "Regra", icone: "raio" }, { id: "execucoes", rotulo: "Execuções", icone: "relogio", n: item.execucoes + item.erros || null }],
+    const ab = ui.abas({ itens: [{ id: "regra", rotulo: "Regra", icone: "raio", painel: painelRegra }, { id: "execucoes", rotulo: "Execuções", icone: "relogio", n: item.execucoes + item.erros || null, painel: painelExec }],
       ativo: q.aba === "execucoes" ? "execucoes" : "regra", rotulo: "Partes da automação", classe: "au-abas",
       aoMudar: id => mostrarAba(id) });
     raiz.appendChild(ab.el);
@@ -115,7 +121,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   const blocoEntao = h("section", { class: "au-bloco", dataset: { onde: "entao" }, "aria-labelledby": "au-e-t" });
   const fluxo = h("div", { class: "au-fluxo" }, blocoQuando, blocoSe, blocoEntao);
 
-  const frase = h("p", { class: "au-frase", "aria-live": "polite" });
+  const frase = h("p", { class: "au-frase" });   // sem aria-live: é reescrita a cada tecla e o leitor de tela repetiria a frase inteira
   const estado = h("p", { class: "au-estado" });
   const avisos = h("div", { class: "au-avisos" });
   const chips = h("div", { class: "au-vars-lista" }, L.VARIAVEIS.map(([k, rot]) => {
@@ -264,7 +270,16 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       ctlValor.classList.add("au-cond-val");
     }
     const btX = podeEditar ? h("button", { type: "button", class: "bt-icone au-x", "aria-label": `Tirar a condição ${i + 1}` }, ui.icone("fechar")) : null;
-    if (btX) btX.addEventListener("click", () => { auto.condicoes.splice(i, 1); pintarSe(); mudou("se"); });
+    if (btX) btX.addEventListener("click", () => {
+      const tinhaFoco = document.activeElement === btX;
+      auto.condicoes.splice(i, 1); pintarSe(); mudou("se");
+      // igual aos passos: o foco vai para o «Tirar a condição» que ocupou o lugar (ou o anterior; sem condições, «Condição»)
+      if (tinhaFoco) {
+        const xs = blocoSe.querySelectorAll(".au-cond .au-x");
+        const alvo = xs[Math.min(i, xs.length - 1)] || blocoSe.querySelector(".au-mais");
+        if (alvo) alvo.focus({ preventScroll: true });
+      }
+    });
     return h("li", { class: "au-cond" },
       h("span", { class: "au-cond-e", "aria-hidden": "true" }, i === 0 ? "se" : "e"),
       selCampo, selOp, ctlValor || h("span", { class: "au-cond-vazio" }), btX,
@@ -290,6 +305,13 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       btMais.setAttribute("aria-expanded", String(paletaAberta));
       paleta.hidden = !paletaAberta;
       if (paletaAberta) { const b = paleta.querySelector("button"); if (b) b.focus({ preventScroll: true }); }
+    });
+    // Esc fecha a paleta e devolve o foco ao botão que a abriu
+    if (btMais && paleta) paleta.addEventListener("keydown", ev => {
+      if (ev.key !== "Escape" || !paletaAberta) return;
+      ev.preventDefault(); ev.stopPropagation();
+      paletaAberta = false; btMais.setAttribute("aria-expanded", "false"); paleta.hidden = true;
+      btMais.focus({ preventScroll: true });
     });
     const temMensagem = L.enviaMensagem(auto);
     const swHorario = interruptor({ ligado: !!auto.respeitar_horario, rotulo: "Respeitar horário de funcionamento", desabilitado: !podeEditar,
@@ -323,7 +345,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         h("div", { class: "au-paleta-grade" }, itens.map(a => {
           const b = h("button", { type: "button", class: ["au-tile", a.sequencia && "au-tile-seq", a.ia && "au-tile-ia"] },
             h("span", { class: "au-tile-ic", "aria-hidden": "true" }, ui.icone(a.icone)),
-            h("span", { class: "au-tile-txt" }, h("strong", null, L.rotuloAcao(a.id, vv)), h("small", null, a.descricao || "")));
+            h("span", { class: "au-tile-txt" }, h("strong", null, L.rotuloAcao(a.id, vv)), h("small", null, a.descricao || ""),
+              iaOff && a.ia ? h("small", { class: "au-tile-off" }, "IA ainda desligada: o passo seria pulado") : null));
           b.addEventListener("click", () => adicionar(a.id));
           return b;
         }))));
@@ -337,7 +360,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     pintarEntao(); mudou("entao");
     const cards = blocoEntao.querySelectorAll(".au-passo");
     const ult = cards[cards.length - 1];
-    if (ult) { ult.scrollIntoView({ block: "nearest", behavior: "smooth" }); const f = ult.querySelector("input,select,textarea,.au-chip"); if (f) f.focus({ preventScroll: true }); }
+    if (ult) { ult.scrollIntoView({ block: "nearest", behavior: ui.comportamentoRolagem() }); const f = ult.querySelector("input,select,textarea,.au-chip"); if (f) f.focus({ preventScroll: true }); }
   }
 
   function passo(ac, i, t) {
@@ -355,7 +378,16 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       const b = blocoEntao.querySelectorAll(".au-passo")[para]; if (b) { const alvo = b.querySelector(para < i ? "[aria-label^='Subir']" : "[aria-label^='Descer']"); (alvo && !alvo.disabled ? alvo : b.querySelector("button")).focus(); } };
     if (btSobe) btSobe.addEventListener("click", () => mover(i - 1));
     if (btDesce) btDesce.addEventListener("click", () => mover(i + 1));
-    if (btX) btX.addEventListener("click", () => { auto.acoes.splice(i, 1); pintarEntao(); mudou("entao"); });
+    if (btX) btX.addEventListener("click", () => {
+      const tinhaFoco = document.activeElement === btX;
+      auto.acoes.splice(i, 1); pintarEntao(); mudou("entao");
+      // o botão saiu da tela com o passo: o foco vai para o «Tirar» do passo que ocupou o lugar (ou o anterior; sem passos, «Adicionar passo»)
+      if (tinhaFoco) {
+        const xs = blocoEntao.querySelectorAll(".au-passo .au-x");
+        const alvo = xs[Math.min(i, xs.length - 1)] || blocoEntao.querySelector(".au-mais");
+        if (alvo) alvo.focus({ preventScroll: true });
+      }
+    });
     const resumo = ac.tipo === "esperar" ? h("span", { class: "au-acao-resumo mono" }, Number(ac.minutos) > 0 ? L.formatarDuracao(ac.minutos) : "—") : null;
     const cartao = h("div", { class: ["au-acao", seq && "au-acao-seq", ac.tipo === "parar" && "au-acao-parar", ac.tipo === "esperar" && "au-acao-espera", def && def.ia && "au-acao-ia"] },
       h("div", { class: "au-acao-cab" },
@@ -364,6 +396,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         h("h3", { class: "au-acao-tit" }, h("span", { class: "sr-only" }, `Passo ${i + 1}: `), L.rotuloAcao(ac.tipo, vv)),
         resumo,
         h("span", { class: "au-acao-bts" }, btSobe, btDesce, btX)),
+      iaOff && def && def.ia ? h("p", { class: "aviso aviso-aten au-passo-ia-off" }, ui.icone("ia"), h("span", null, L.AVISO_IA_DESLIGADA)) : null,
       corpo,
       h("p", { class: "au-item-erro", role: "alert", hidden: true }));
     if (ac.tipo === "enviar_template") corpo.appendChild(editorModelo(ac));
@@ -578,6 +611,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     if (L.faltaModelo(auto)) bloqs.push("Sem modelo aprovado escolhido: dá para salvar desligada e ligar quando a Meta aprovar.");
     if (auto.gatilho === "antes_da_data" && auto.acoes.some(a => a.tipo === "enviar_template" && (a.parametros || []).some(p => /\{hora_consulta\}/.test(p))))
       bloqs.push(`Quem tiver só a data (sem a hora) da ${L.palavraConsulta(vertical)} aparece nas execuções como erro, para ninguém receber mensagem com buraco.`);
+    if (iaOff && L.temIA(auto)) bloqs.push(L.AVISO_IA_DESLIGADA);
     for (const t of L.avisosEstrutura(auto)) bloqs.push(t);
     for (const t of bloqs) avisos.appendChild(h("p", { class: "au-aviso-lat" }, ui.icone("info"), h("span", null, t)));
   }
@@ -629,7 +663,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const e = onde.querySelector(".au-bloco-erro");
     if (r.indice == null || !e.hidden) { e.textContent = `Falta: ${r.motivo}.`; e.hidden = false; }
     onde.classList.add("au-bloco-com-erro");
-    onde.scrollIntoView({ block: "center", behavior: "smooth" });
+    onde.scrollIntoView({ block: "center", behavior: ui.comportamentoRolagem() });
     let alvo = null;
     if (r.onde === "entao" && r.indice != null) alvo = onde.querySelectorAll(".au-passo")[r.indice];
     if (r.onde === "se" && r.indice != null) alvo = onde.querySelectorAll(".au-cond")[r.indice];
@@ -654,7 +688,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       ctx.navegar("#/automacoes");
     })();
     ui.carregando(botao, p).finally(() => { salvando = false; }).catch(e => {
-      const msg = ctx.api.mensagemErro(e);
+      const msg = L.erroAutomacao(e, ctx.api.mensagemErro(e));
       const lugar = e && e.codigo === "automacao_invalida" && e.hint ? L.ondeDoHint(e.hint) : null;
       if (lugar && lugar.onde) mostrarErro({ motivo: e.hint, onde: lugar.onde, indice: lugar.indice });
       else ui.toast(msg, { tipo: "erro" });
@@ -677,12 +711,12 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     if (!r.ok) {
       tocado.add(r.onde === "nome" ? "nome" : r.onde); pintarValidacao();
       areaSim.appendChild(h("p", { class: "aviso aviso-aten au-sim-aviso" }, ui.icone("alerta"), h("span", null, `Para testar, falta: ${r.motivo}.`)));
-      cartaoTeste.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      cartaoTeste.scrollIntoView({ block: "nearest", behavior: ui.comportamentoRolagem() });
       return;
     }
     testando = true;
     areaSim.appendChild(h("p", { class: "au-sim-carregando" }, h("span", { class: "au-giro", "aria-hidden": "true" }), "Conferindo o que aconteceria agora…"));
-    cartaoTeste.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    cartaoTeste.scrollIntoView({ block: "nearest", behavior: ui.comportamentoRolagem() });
     let sim = null, erro = null;
     try {
       const resp = await ui.carregando(botao, ctx.api.rpcC("nx_auto_simular", { p_automacao: L.limpar(auto) }));
@@ -698,7 +732,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       const indisponivel = /could not find the function|pgrst202|http_404|funcao_invalida/i.test(c);
       areaSim.appendChild(h("p", { class: "aviso aviso-aten au-sim-aviso" }, ui.icone("alerta"),
         h("span", null, indisponivel ? "O teste ainda não está disponível neste ambiente. Abaixo está o passo a passo do que a automação faz."
-          : ctx.api.mensagemErro(erro))));
+          : L.erroAutomacao(erro, ctx.api.mensagemErro(erro)))));
       const plano = L.passosEmFrases(auto, base, vv);
       if (plano.length) areaSim.appendChild(blocoPlano(plano));
       return;
@@ -753,7 +787,9 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   let execCarregadas = false;
   let execLimite = 50;
   let execFiltro = "todas";
-  async function pintarExecucoes() {
+  async function pintarExecucoes(opc = {}) {
+    // a lista é redesenhada (o botão antigo sai da tela): quem usa o teclado continua no mesmo botão
+    const refoco = opc.foco || (painelExec.contains(document.activeElement) ? (document.activeElement.classList.contains("au-mais") ? "mais" : document.activeElement.textContent.trim() === "Atualizar" ? "atualizar" : null) : null);
     ui.limpar(painelExec);
     painelExec.appendChild(ui.esqueleto("lista", 5));
     try {
@@ -763,7 +799,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       const contagem = { todas: arr.length, ok: 0, erro: 0, pulado: 0, espera: 0 };
       for (const x of arr) contagem[L.situacaoExecucao(x)]++;
       const btAtualizar = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("relogio"), "Atualizar");
-      btAtualizar.addEventListener("click", () => pintarExecucoes());
+      btAtualizar.addEventListener("click", () => pintarExecucoes({ foco: "atualizar" }));
       const filtro = h("div", { class: "au-chips au-ex-filtro", role: "radiogroup", "aria-label": "Filtrar por situação" });
       const corpoLista = h("div", { class: "au-ex-corpo" });
       const desenhar = () => {
@@ -792,10 +828,11 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       desenhar();
       if (arr.length >= execLimite && execLimite < 200) {
         const mais = h("button", { type: "button", class: "bt bt-sec bt-p au-mais" }, "Carregar mais");
-        mais.addEventListener("click", () => { execLimite = Math.min(200, execLimite + 50); pintarExecucoes(); });
+        mais.addEventListener("click", () => { execLimite = Math.min(200, execLimite + 50); pintarExecucoes({ foco: "mais" }); });
         painelExec.appendChild(mais);
       }
       execCarregadas = true;
+      if (refoco) { const alvo = (refoco === "mais" && painelExec.querySelector(".au-mais")) || btAtualizar; if (alvo) alvo.focus({ preventScroll: true }); }
     } catch (e) {
       ui.limpar(painelExec);
       painelExec.appendChild(ui.erroCartao(e, () => pintarExecucoes()));
@@ -824,6 +861,19 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     painelRegra.hidden = id !== "regra";
     painelExec.hidden = id !== "execucoes";
     if (id === "execucoes" && !execCarregadas) pintarExecucoes();
+  }
+
+  // ------------------------------------------------ cabeçalho fixo × foco do teclado (WCAG 2.4.11)
+  // enquanto o cabeçalho está fixo (≥ 761 px), o scroll-padding do documento acompanha a altura dele: Tab/Shift+Tab não deixam o controle atrás dele
+  const cabEd = raiz.querySelector(".au-ed-cab");
+  if (cabEd && typeof ResizeObserver === "function" && amb.aoSair) {
+    const raizDoc = document.documentElement;
+    const medir = () => { const fixo = getComputedStyle(cabEd).position === "sticky"; raizDoc.style.setProperty("--au-cab-h", fixo ? `${cabEd.offsetHeight}px` : "0px"); };
+    const ro = new ResizeObserver(medir);
+    ro.observe(cabEd);
+    window.addEventListener("resize", medir);
+    medir();
+    amb.aoSair(() => { ro.disconnect(); window.removeEventListener("resize", medir); raizDoc.style.removeProperty("--au-cab-h"); });
   }
 
   // ------------------------------------------------ primeira pintura

@@ -907,6 +907,41 @@ test("ondeDoHint: o hint do servidor aponta o bloco e o item certos na tela", ()
   o(null, null);
 });
 
+test("IA desligada (sem chave): iaDesligada lê as duas formas do servidor e os avisos aparecem nas receitas, no passo e na paleta", () => {
+  assert.equal(L.iaDesligada({ ia: { disponivel: false } }), true, "nx_automacoes_listar → ia.disponivel");
+  assert.equal(L.iaDesligada({ base: { ia: { ligada: false } } }), true, "base de Conversas → ia.ligada");
+  assert.equal(L.iaDesligada({ ia: { disponivel: true, usadas: 3, limite: 50 } }), false);
+  assert.equal(L.iaDesligada({ ia: { ligada: true } }), false);
+  assert.equal(L.iaDesligada({}), false, "sem a informação: nenhum aviso falso");
+  assert.equal(L.iaDesligada(null), false);
+  assert.match(L.AVISO_IA_DESLIGADA, /pulado/);
+  const ed = lerApp("auto-editor.js"), lista = lerApp("automacoes.js");
+  assert.match(ed, /const iaOff = L\.iaDesligada\(dados\)/);
+  assert.match(ed, /if \(iaOff && L\.temIA\(auto\)\) bloqs\.push\(L\.AVISO_IA_DESLIGADA\)/, "aviso lateral do editor");
+  assert.match(ed, /iaOff && def && def\.ia \? h\("p", \{ class: "aviso aviso-aten au-passo-ia-off" \}/, "aviso no próprio passo de IA");
+  assert.match(ed, /IA ainda desligada: o passo seria pulado/, "tile da paleta");
+  assert.match(lista, /iaOff && L\.usaIA\(m\)/, "receitas de IA avisam");
+  assert.match(lista, /const desligada = L\.iaDesligada\(dados\)/, "o cartão «Criar com IA» usa a mesma regra");
+});
+
+test("erroAutomacao: o timeout do banco (57014) em Testar/salvar não fala de «período» nem «itens»", () => {
+  assert.equal(L.erroAutomacao({ codigo: "tempo_esgotado" }, "Operação grande demais; tente um período menor ou menos itens de uma vez."),
+    "O servidor demorou a responder. Tente de novo em instantes.");
+  assert.equal(L.erroAutomacao({ codigo: "sem_permissao" }, "padrão"), "padrão");
+  assert.equal(L.erroAutomacao(null, "padrão"), "padrão");
+  assert.match(lerApp("auto-editor.js"), /L\.erroAutomacao\(erro, ctx\.api\.mensagemErro\(erro\)\)/, "Testar");
+  assert.match(lerApp("auto-editor.js"), /const msg = L\.erroAutomacao\(e, ctx\.api\.mensagemErro\(e\)\)/, "salvar");
+});
+
+test("Criar com IA: o texto digitado e a montagem da IA não passam para outro cliente nem outra pessoa (esquecerIA / conferirDonoIA)", () => {
+  const a = lerApp("automacoes.js");
+  assert.match(a, /function esquecerIA\(\) \{ textoIA = ""; rascunhoIA = null; donoIA = ""; \}/);
+  assert.match(a, /const dono = `\$\{ctx\.cliente \? ctx\.cliente\.id : "-"\}\|\$\{ctx\.sessao && ctx\.sessao\.conta/, "o dono é cliente + conta");
+  assert.match(a, /if \(donoIA !== dono\) \{ esquecerIA\(\); donoIA = dono; \}/);
+  assert.match(a, /export async function montar\(ctx\) \{[\s\S]*?conferirDonoIA\(ctx\);/, "montar confere o dono antes de usar o texto");
+  assert.match(a, /export function desmontar\(\) \{[\s\S]*?esquecerIA\(\);/, "sair do módulo / trocar de empresa / sair da conta zera");
+});
+
 test("execuções: situação, passo, e códigos técnicos viram português", () => {
   assert.equal(L.situacaoExecucao({ ok: true, detalhe: "Tarefa criada" }), "ok");
   assert.equal(L.situacaoExecucao({ ok: false, detalhe: "x" }), "erro");
@@ -935,7 +970,14 @@ test("execuções: situação, passo, e códigos técnicos viram português", ()
   assert.equal(L.situacaoExecucao({ ok: false, estado: "erro" }), "erro");
   assert.equal(L.estadoExecucaoTexto({ estado: "esperando" }), "Esperando para continuar");
   assert.equal(L.estadoExecucaoTexto({ estado: "aguardando_ia" }), "Aguardando a IA decidir");
-  assert.match(L.estadoExecucaoTexto({ estado: "cancelada" }), /cliente respondeu/);
+  // achado T09: «cancelada» não é sempre «o cliente respondeu»; a frase segue o motivo que o servidor grava no detalhe
+  assert.match(L.estadoExecucaoTexto({ estado: "cancelada", detalhe: "Nota criada · cancelada: o cliente respondeu" }), /cliente respondeu/);
+  assert.equal(L.estadoExecucaoTexto({ estado: "cancelada", detalhe: "Nota criada · cancelada: a automação foi desligada" }), "Cancelada: a automação foi desligada");
+  assert.equal(L.estadoExecucaoTexto({ estado: "cancelada", detalhe: "x · cancelada: o negócio mudou de etapa" }), "Cancelada: o negócio mudou de etapa");
+  assert.equal(L.estadoExecucaoTexto({ estado: "cancelada", detalhe: "x · cancelada pela equipe" }), "Cancelada pela equipe");
+  assert.equal(L.estadoExecucaoTexto({ estado: "cancelada", detalhe: "a · cancelada: o cliente respondeu · cancelada pela equipe" }), "Cancelada pela equipe", "vale o último motivo gravado");
+  assert.equal(L.estadoExecucaoTexto({ estado: "cancelada" }), "Cancelada", "sem motivo no detalhe: frase neutra, nunca «o cliente respondeu»");
+  assert.doesNotMatch(L.estadoExecucaoTexto({ estado: "cancelada", detalhe: "texto longo cortado pelo servidor" }), /respondeu/);
   assert.equal(L.estadoExecucaoTexto({ estado: "concluida" }), "");
   assert.equal(L.estadoExecucaoTexto({}), "");
   assert.equal(L.passoDaExecucao({ passo: 2, total_passos: 5 }), "2 de 5 passos feitos");
