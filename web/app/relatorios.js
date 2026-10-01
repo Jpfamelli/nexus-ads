@@ -168,6 +168,7 @@ export async function montar(ctx) {
       const b = h("b", { class: "rel-num rel-kpi-v" });
       if (vv === null || !Number.isFinite(vv)) b.textContent = "—";
       else if (k.fmt === "min" || k.fmt === "h" || k.fmt === "pct" || k.fmt === "dias") b.textContent = FMT[k.fmt](vv);
+      else if (k.fmt === "brl0") L.contarMoeda(ui, G, b, vv, { centavos: false });     // "R$" a 60 %, colado ao valor
       else G.contar(b, vv, FMT[k.fmt]);
       g.append(h("div", { class: "rel-kpi rel-cartao rel-entra", style: `--i:${i}` },
         h("span", { class: "rel-kpi-l" }, k.rotulo), b,

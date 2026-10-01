@@ -467,3 +467,48 @@ export function mesVsAnterior(n) {
   return { atual: +n.receita_mes || 0, anterior: +(n.receita_mes_anterior_parcial ?? n.receita_mes_anterior) || 0,
            anteriorInteiro: +n.receita_mes_anterior || 0, dia: +n.dia_do_mes || null };
 }
+
+/* ============================================================
+   6. MOEDA EDITORIAL (M38) — "R$" e centavos a 60 %, colados ao valor (classe .num-moeda do app.css)
+   O DOM entra por parâmetro (ui.h / ui.limpar): este arquivo continua sem imports e sem DOM global.
+   ============================================================ */
+/** partesMoeda(28400.5, {centavos:false}) → {neg:"", rs:"R$", inteiro:"28.401", cent:""}; sem número → null. */
+export function partesMoeda(valor, { centavos = true } = {}) {
+  if (valor === null || valor === undefined || valor === "") return null;
+  const n = Number(valor);
+  if (!Number.isFinite(n)) return null;
+  const abs = Math.abs(n);
+  const fixo = centavos ? abs.toFixed(2) : String(Math.round(abs));
+  const [inteiro, cent] = fixo.split(".");
+  const zero = Number(fixo) === 0;
+  return { neg: n < 0 && !zero ? "−" : "", rs: "R$", inteiro: Number(inteiro).toLocaleString("pt-BR"), cent: centavos ? `,${cent}` : "" };
+}
+/** O mesmo valor em texto corrido ("R$ 28.400", "−R$ 1,50"), para tooltips, aria-label e teste. */
+export function textoMoeda(valor, opc) {
+  const p = partesMoeda(valor, opc);
+  return p ? `${p.neg}${p.rs} ${p.inteiro}${p.cent}` : "—";
+}
+/** preencherMoeda(ui, el, valor, {centavos}) → el com <span class="nm-rs">R$</span>28.400<span class="nm-cent">,00</span> (só nós de texto/elementos: nada de innerHTML). */
+export function preencherMoeda(ui, el, valor, opc = {}) {
+  const p = partesMoeda(valor, opc);
+  ui.limpar(el);
+  el.classList.add("num-moeda");
+  if (!p) { el.textContent = "—"; return el; }
+  el.append(...[p.neg || null, ui.h("span", { class: "nm-rs" }, p.rs), p.inteiro, p.cent ? ui.h("span", { class: "nm-cent" }, p.cent) : null].filter(Boolean));
+  return el;
+}
+/** Igual a G.contar, mas para moeda: o número sobe de 0 até `valor` (--t-dados) já com o formato editorial. Sem movimento (ou animar:false) pinta direto. */
+export function contarMoeda(ui, G, el, valor, { centavos = true, animar = true } = {}) {
+  preencherMoeda(ui, el, valor, { centavos });
+  const dur = animar && G && typeof G.duracaoToken === "function" ? G.duracaoToken("--t-dados") : 0;
+  const n = Number(valor);
+  if (!dur || !Number.isFinite(n) || n === 0 || typeof requestAnimationFrame !== "function") return el;
+  const t0 = performance.now();
+  const passo = t => {
+    const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+    preencherMoeda(ui, el, p < 1 ? n * e : n, { centavos });
+    if (p < 1 && el.isConnected) requestAnimationFrame(passo);
+  };
+  requestAnimationFrame(passo);
+  return el;
+}

@@ -588,5 +588,95 @@ await teste("segurança e tokens: sem innerHTML, sem on*= inline, sem hex de cor
   }
 });
 
+/* ============================================================ M38 — números que cabem e moeda editorial */
+console.log("\n(f) M38 — números que cabem e moeda editorial");
+
+await teste("M38: partesMoeda/textoMoeda — arredonda, separa milhar, sinal de menos, vazio vira «—»", () => {
+  assert.deepEqual(L.partesMoeda(28400, { centavos: false }), { neg: "", rs: "R$", inteiro: "28.400", cent: "" });
+  assert.deepEqual(L.partesMoeda(3155.56, { centavos: false }), { neg: "", rs: "R$", inteiro: "3.156", cent: "" }, "sem centavos arredonda");
+  assert.deepEqual(L.partesMoeda(3.4), { neg: "", rs: "R$", inteiro: "3", cent: ",40" }, "centavos por padrão");
+  assert.deepEqual(L.partesMoeda(1234567.891), { neg: "", rs: "R$", inteiro: "1.234.567", cent: ",89" });
+  assert.equal(L.partesMoeda(-1.5).neg, "−");
+  assert.equal(L.partesMoeda(-0.001).neg, "", "−0 não aparece");
+  assert.equal(L.partesMoeda(null), null);
+  assert.equal(L.partesMoeda(""), null);
+  assert.equal(L.partesMoeda("abc"), null);
+  assert.equal(L.textoMoeda(28400, { centavos: false }), "R$ 28.400");
+  assert.equal(L.textoMoeda(-1.5), "−R$ 1,50");
+  assert.equal(L.textoMoeda(undefined), "—");
+});
+
+await teste("M38: preencherMoeda monta R$ e centavos em spans (60 % pelo CSS) só com nós de texto/elementos", () => {
+  // DOM de mentira mínimo: o que o preencherMoeda usa (limpar, h, classList, append, textContent)
+  const no = (tag, cls) => ({ tag, cls, filhos: [], append(...x) { this.filhos.push(...x); }, classList: { add() {} }, set textContent(v) { this.filhos = [String(v)]; } });
+  const ui = { limpar: el => { el.filhos = []; }, h: (tag, a, ...f) => { const n = no(tag, a && a.class); n.append(...f); return n; } };
+  const el = no("b");
+  L.preencherMoeda(ui, el, 28400.5, { centavos: true });
+  assert.deepEqual(el.filhos.map(x => (typeof x === "string" ? x : `${x.cls}:${x.filhos.join("")}`)), ["nm-rs:R$", "28.400", "nm-cent:,50"]);
+  L.preencherMoeda(ui, el, 950, { centavos: false });
+  assert.deepEqual(el.filhos.map(x => (typeof x === "string" ? x : `${x.cls}:${x.filhos.join("")}`)), ["nm-rs:R$", "950"]);
+  L.preencherMoeda(ui, el, null);
+  assert.deepEqual(el.filhos, ["—"]);
+});
+
+await teste("M38: CSS — o número encolhe pela largura do CARTÃO (container query), 6 KPIs só em uma linha quando cabem e nada de 6 colunas fixas", () => {
+  const css = ler("web/app/relatorios.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(css, /\.rel-corpo \{[^}]*container: relcorpo \/ inline-size/, "a área do relatório é container");
+  assert.match(css, /\.rel-kpi \{[^}]*container-type: inline-size/, "o cartão de KPI é container");
+  assert.match(css, /\.rel-kpi-v \{[^}]*font-size: clamp\(var\(--fs-h2\), 11cqi, var\(--fs-num-l\)\)/, "tamanho por cqi, só com tokens");
+  assert.match(css, /@container relcorpo \(min-width: 62rem\) \{ \.rel-kpis-6 \{ grid-template-columns: repeat\(6, minmax\(0, 1fr\)\); \} \}/, "6 em uma linha só com 62 rem ou mais");
+  assert.match(css, /@container relcorpo \(min-width: 31rem\) \{ \.rel-kpis-6 \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\); \} \}/);
+  assert.doesNotMatch(css, /\n\.rel-kpis-6 \{ grid-template-columns: repeat\(6/, "sem 6 colunas fixas fora da container query");
+  assert.match(css, /\.ini-numero \{\s*container-type: inline-size;/, "o bloco de número do Início também é container");
+  assert.match(css, /\.ini-n \{[^}]*font-size: clamp\(var\(--fs-h2\), 16cqi, var\(--fs-num-l\)\)/);
+  assert.match(css, /\.rel-num \{[^}]*font-variant-numeric: tabular-nums/, "números tabulares");
+  assert.match(css, /\.rel-tabela \.num \{ text-align: right; white-space: nowrap; \}/, "coluna numérica à direita");
+});
+
+await teste("M38: Início, Anúncios e Relatórios montam dinheiro com contarMoeda/preencherMoeda (nunca innerHTML)", () => {
+  assert.match(ler("web/app/relatorios.js"), /k\.fmt === "brl0"\) L\.contarMoeda\(ui, G, b, vv, \{ centavos: false \}\)/);
+  assert.match(ler("web/app/anuncios.js"), /fmt === N\.brl \|\| fmt === N\.brl0\) L\.contarMoeda\(ui, G, b, valor, \{ centavos: fmt === N\.brl \}\)/);
+  const ini = ler("web/app/inicio.js");
+  assert.match(ini, /fmt === brl0\) L\.contarMoeda\(ui, G, b, \+v \|\| 0, \{ centavos: false, animar \}\)/);
+  assert.match(ini, /L\.preencherMoeda\(ui, h\("b", \{ class: "ini-barra-v rel-num" \}\), v, \{ centavos: false \}\)/);
+});
+
+await teste("M38 (navegador): nenhum número passa do cartão em 768, 1024, 1180, 1280 e 1440 px — roda com ORBITA_QA_NAVEGADOR=1 (puppeteer-core + Chrome; ORBITA_PUPPETEER aponta a pasta node_modules)", async () => {
+  if (process.env.ORBITA_QA_NAVEGADOR !== "1") { console.log("      (pulado: defina ORBITA_QA_NAVEGADOR=1 para abrir o Chrome)"); return; }
+  const { createRequire } = await import("node:module");
+  const { spawn } = await import("node:child_process");
+  const req = createRequire(join(process.env.ORBITA_PUPPETEER || RAIZ, "x.js"));
+  const puppeteer = req("puppeteer-core");
+  const chrome = process.env.ORBITA_CHROME || ["C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/google-chrome", "/usr/bin/chromium"].find(existsSync);
+  assert.ok(chrome, "Chrome não encontrado (ORBITA_CHROME)");
+  const porta = 4900 + Math.floor(Math.random() * 90);
+  const srv = spawn(process.execPath, [join(RAIZ, "scripts", "dev-falso.mjs")], { env: { ...process.env, ORBITA_DEV_FALSO_PORT: String(porta) }, stdio: "ignore", windowsHide: true });
+  try {
+    await new Promise(r => setTimeout(r, 1800));
+    const browser = await puppeteer.launch({ executablePath: chrome, headless: "new", args: ["--no-sandbox", "--disable-gpu"] });
+    const fora = [];
+    try {
+      for (const w of [768, 1024, 1180, 1280, 1440]) {
+        const page = await browser.newPage();
+        await page.setViewport({ width: w, height: 900 });
+        await page.goto(`http://127.0.0.1:${porta}/app/?dev-falso=1&dev=1#/inicio`, { waitUntil: "domcontentloaded" });
+        for (const rota of ["#/inicio", "#/relatorios/vendas", "#/relatorios/atendimento", "#/anuncios"]) {
+          await page.evaluate(h => { location.hash = h; }, rota);
+          await new Promise(r => setTimeout(r, 2400));
+          const r = await page.evaluate(() => [...document.querySelectorAll(".rel-num, .rel-kpi-v, .ini-n")].filter(el => el.offsetParent).flatMap(el => {
+            const caixa = el.closest(".rel-kpi, .ini-numero, .ads-passo, .ads-conta, .rel-cartao") || el.parentElement;
+            const rg = document.createRange(); rg.selectNodeContents(el);
+            const t = rg.getBoundingClientRect(), c = caixa.getBoundingClientRect();
+            return t.right > c.right + 0.5 || (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) ? [(el.textContent || "").trim().slice(0, 20)] : [];
+          }));
+          for (const t of r) fora.push(`${w}px ${rota}: «${t}»`);
+        }
+        await page.close();
+      }
+    } finally { await browser.close(); }
+    assert.deepEqual(fora, [], "número passando do cartão");
+  } finally { srv.kill(); }
+});
+
 console.log(`\n${ok} ok · ${falhas} falha(s)`);
 if (falhas) process.exit(1);

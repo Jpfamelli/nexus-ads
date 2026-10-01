@@ -13,7 +13,7 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
 |---|---|---|
 | M34 | feito | Chat com um primário por estado, cabeçalho de uma linha no celular, aviso do canal virou ⓘ, abas em uma linha, selos da lista viram pontos de cor |
 | M37 | feito | Foto do celular comprimida no aparelho (1600 px, JPEG 0,82, EXIF corrigido), resumo "de 7,3 MB para 216 KB", "enviar original" quando cabe, upload com barra, Cancelar e Tentar de novo sem recomprimir |
-| M38 | — | — |
+| M38 | feito | KPIs que cabem a 768-1440 px (container query), "R$" e centavos a 60 % (`.num-moeda`) em Relatórios, Anúncios e Início; sonda de navegador no teste |
 | M31 | — | — |
 | M32 | — | — |
 | M33 | — | — |
@@ -45,6 +45,14 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
 - **Medido no dev-falso** (puppeteer, foto sintética de 7,3 MB 4032×3024 com EXIF orientação 6): saiu 1200×1600 (orientação certa) com 214–217 KB; barra "0 %" e Cancelar visíveis a 390 px; cancelar remove a bolha e avisa; falha de rede → "Não enviada… Tentar de novo" → reenvia o MESMO blob de 217 KB. Console limpo.
 - **Não provado**: aparelho real (câmera de celular, iOS Safari/HEIC); o `progress` do XHR só foi exercitado na parte lógica (a interceptação do puppeteer não emite eventos de subida).
 - **Verificar**: `node testes/conversas.teste.mjs` (46 ok).
+
+## M38 — feito
+
+- **Números que cabem**: `.rel-corpo` é container (`relcorpo`) e cada `.rel-kpi` também; o valor usa `clamp(var(--fs-h2), 11cqi, var(--fs-num-l))` (só tokens). A grade de 6 KPIs deixou de ser "6 colunas até 1100 px": 6 em uma linha só quando a área tem ≥ 62 rem, 3+3 de 31 rem até lá, 2 colunas abaixo. No Início o bloco `.ini-numero` também é container (`16cqi`) e a receita do mês usa `--fs-num-xl`.
+  Desvio do plano: o plano pede `auto-fit(minmax(9.5rem, 1fr))`; `auto-fit` deixava uma linha órfã (5 + 1) em 1180 px, então a escolha de colunas é por container query (mesmo mínimo de 9,5 rem por cartão).
+- **Moeda editorial**: `rel-logica.js` ganhou `partesMoeda`, `textoMoeda`, `preencherMoeda(ui, el, valor, {centavos})` e `contarMoeda(ui, G, el, valor, …)` (o contador de G.contar, mas com o formato editorial; só nós de texto e spans `nm-rs`/`nm-cent`, CSS do `.num-moeda` é da frente A). Usado nos KPIs de Relatórios, em todo valor em R$ de `num()` de Anúncios e do Início (receita, previsão, barras do mês). Tabelas e textos corridos continuam com `ui.brl` (texto), já alinhadas à direita e com `tabular-nums`.
+- **Medido** (puppeteer + dev-falso, antes → depois): Relatórios › Vendas a 1180 px `R$ 28.400` passava 33 px do cartão e a 1280 px 21 px; Início `R$ 26.200` passava 7 px a 1180 px e 2 px a 390 px. Depois: 0 número fora do cartão em 768, 1024, 1180, 1280, 1440 e 390 px nas 5 telas (Vendas, Atendimento, Anúncios, Campanhas, Início).
+- **Verificar**: `node testes/relatorios.teste.mjs` (45 ok); a sonda de navegador entra com `ORBITA_QA_NAVEGADOR=1 ORBITA_PUPPETEER=<pasta com node_modules/puppeteer-core> node testes/relatorios.teste.mjs` (sem a variável o teste é pulado: o repositório não depende de puppeteer).
 
 ## Pendências para outras frentes
 

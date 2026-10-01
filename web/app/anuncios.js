@@ -195,7 +195,9 @@ export async function montar(ctx) {
 
   const num = (valor, fmt, cls = "") => {
     const b = h("b", { class: `rel-num ${cls}` });
-    G.contar(b, valor, fmt);
+    // dinheiro ganha o formato editorial ("R$" e centavos a 60 %); o resto conta como antes
+    if (fmt === N.brl || fmt === N.brl0) L.contarMoeda(ui, G, b, valor, { centavos: fmt === N.brl });
+    else G.contar(b, valor, fmt);
     return b;
   };
   const chip = (atual, anterior, sentido) => {

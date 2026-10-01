@@ -81,13 +81,14 @@ export async function montar(ctx) {
     // preserva o foco (checkbox de tarefa, links) entre redesenhos do pulso
     const foco = document.activeElement && corpo.contains(document.activeElement) ? document.activeElement.dataset.k : null;
     ui.limpar(corpo);
-    const num = (v, fmt, cls = "") => {
-      const b = h("b", { class: `rel-num ${cls}` });
-      if (animar) G.contar(b, +v || 0, fmt); else b.textContent = fmt(+v || 0);
-      return b;
-    };
     const int = v => Math.round(v).toLocaleString("pt-BR");
     const brl0 = v => ui.brl(v, { centavos: false });
+    const num = (v, fmt, cls = "") => {
+      const b = h("b", { class: `rel-num ${cls}` });
+      if (fmt === brl0) L.contarMoeda(ui, G, b, +v || 0, { centavos: false, animar });      // "R$" a 60 %, colado ao valor
+      else if (animar) G.contar(b, +v || 0, fmt); else b.textContent = fmt(+v || 0);
+      return b;
+    };
 
     if (L.inicioVazio(d)) {
       const passo = (n, t, rot, hash, pode) => h("li", { class: "ini-passo" },
@@ -146,7 +147,7 @@ export async function montar(ctx) {
     const barraMes = (rot, v, cls) => h("div", { class: "ini-barra" },
       h("span", { class: "ini-barra-r" }, rot),
       h("span", { class: "ini-barra-t", "aria-hidden": "true" }, h("i", { class: cls, style: { "--w": `${v > 0 ? Math.max(2, v / topoMes * 100) : 0}%` } })),
-      h("b", { class: "ini-barra-v rel-num" }, brl0(v)));
+      L.preencherMoeda(ui, h("b", { class: "ini-barra-v rel-num" }), v, { centavos: false }));
     const ateDia = mv.dia ? ` (até o dia ${mv.dia})` : "";
     const vendas = h("section", { class: "rel-cartao ini-vendas rel-entra", "aria-labelledby": "ini-vd", style: "--i:2" },
       h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ini-vd", class: "rel-h2" }, "Vendas"),

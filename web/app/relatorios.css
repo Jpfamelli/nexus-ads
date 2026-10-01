@@ -82,7 +82,7 @@
 .rel-faixa p { margin: 0; flex: 1 1 18rem; font-size: .875rem; }
 
 /* cartões */
-.rel-corpo { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+.rel-corpo { display: flex; flex-direction: column; gap: 1rem; min-width: 0; container: relcorpo / inline-size; }
 .rel-cartao { min-width: 0; padding: 1.15rem 1.25rem; border-radius: 18px; background: var(--c-sup); border: 1px solid var(--c-borda); }
 .rel-cartao-topo { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .4rem 1rem; margin-bottom: .9rem; }
 .rel-cartao-topo .rel-nota { flex-basis: 100%; }
@@ -92,6 +92,7 @@
 
 /* números e variação */
 .rel-num { font-family: var(--f-titulo); font-weight: 600; word-spacing: .1em; font-variant-numeric: tabular-nums; }
+.rel-num.num-moeda { white-space: nowrap; }
 .rel-var {
   display: inline-flex; align-items: center; gap: .2rem; padding: .12rem .5rem; border-radius: 999px; white-space: nowrap;
   font: 500 .6875rem/1.4 var(--f-mono); border: 1px solid var(--c-borda); color: var(--c-texto-3);
@@ -119,10 +120,13 @@
 /* KPIs */
 .rel-kpis { display: grid; gap: .75rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .rel-kpis-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.rel-kpis-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-.rel-kpi { display: flex; flex-direction: column; gap: .35rem; padding: 1rem 1.1rem; }
+.rel-kpis-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* 6 KPIs só em uma linha quando cada cartão tem pelo menos 9,5 rem (6 × 9,5 + gaps); antes disso 3 + 3, e 2 colunas no celular */
+@container relcorpo (min-width: 31rem) { .rel-kpis-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container relcorpo (min-width: 62rem) { .rel-kpis-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.rel-kpi { display: flex; flex-direction: column; gap: .35rem; padding: 1rem 1.1rem; container-type: inline-size; }
 .rel-kpi-l { font-size: .8125rem; color: var(--c-texto-2); font-weight: 500; }
-.rel-kpi-v { font-size: clamp(1.45rem, 1.2rem + .8vw, 1.85rem); line-height: 1.1; color: var(--c-texto); }
+.rel-kpi-v { font-size: clamp(var(--fs-h2), 11cqi, var(--fs-num-l)); line-height: 1.1; color: var(--c-texto); max-width: 100%; }
 .rel-kpi-linha { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem; }
 .rel-kpi-extra { font-size: .75rem; color: var(--c-texto-3); }
 .rel-medidor { position: relative; display: block; height: 6px; border-radius: 999px; background: var(--c-sup-3); margin-top: .2rem; }
@@ -431,7 +435,6 @@
    ============================================================ */
 @media (max-width: 1100px) {
   .ads-grade, .ads-radar-grade { grid-template-columns: minmax(0, 1fr); }
-  .rel-kpis-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 900px) {
   .ads-heroi { grid-template-columns: minmax(0, 1fr); }
@@ -444,7 +447,6 @@
   .ads-heroi { padding: 1.2rem 1.1rem; }
   .ads-trilha { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 0; padding: 1rem .5rem; }
   .ads-passo:nth-child(3) { border-left: 0; }
-  .rel-kpis-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rel-ate { margin-left: 0; flex-basis: 100%; }
   .rel-abas { width: 100%; }
   .rel-aba { flex: 1 0 auto; justify-content: center; padding: .45rem .7rem; font-size: .8125rem; }
@@ -488,20 +490,21 @@
 .ini-numeros-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .ini-numeros-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .ini-numero {
+  container-type: inline-size;
   display: flex; flex-direction: column; gap: .25rem; min-height: 44px; padding: .85rem .9rem; border-radius: 14px;
   background: var(--c-sup-2); color: inherit; text-decoration: none; border: 1px solid transparent;
   transition: background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out), transform var(--t-micro) var(--e-out);
 }
 a.ini-numero:hover { background: var(--c-sup-3); border-color: var(--c-borda-2); }
 a.ini-numero:active { transform: scale(.98); }
-.ini-n { font-size: clamp(1.7rem, 1.3rem + 1.2vw, 2.3rem); line-height: 1; color: var(--c-texto); }
+.ini-n { font-size: clamp(var(--fs-h2), 16cqi, var(--fs-num-l)); line-height: 1; color: var(--c-texto); max-width: 100%; }
 .ini-n-destaque { color: var(--c-prim-luz); }
 .ini-n-ruim { color: var(--c-ruim); }
 .ini-n-l { font-size: .8125rem; color: var(--c-texto-2); line-height: 1.3; }
 .ini-espera { display: inline-flex; align-items: center; gap: .35rem; margin: 0; font-size: .8125rem; color: var(--c-texto-2); }
 .ini-espera svg { width: 1rem; height: 1rem; flex: none; }
 .ini-mes { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .9rem; }
-.ini-receita { font-size: clamp(2rem, 1.5rem + 1.6vw, 2.7rem); line-height: 1; color: var(--c-texto); }
+.ini-receita { font-size: var(--fs-num-xl); line-height: 1; color: var(--c-texto); max-width: 100%; }
 .ini-mes-l { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; margin: .2rem 0 0; }
 .ini-sub { margin: 1rem 0 .4rem; }
 .ini-vendas, .ini-tf { display: flex; flex-direction: column; }
