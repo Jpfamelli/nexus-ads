@@ -637,7 +637,8 @@ await teste("M38: Início, Anúncios e Relatórios montam dinheiro com contarMoe
   assert.match(ler("web/app/relatorios.js"), /k\.fmt === "brl0"\) L\.contarMoeda\(ui, G, b, vv, \{ centavos: false \}\)/);
   assert.match(ler("web/app/anuncios.js"), /fmt === N\.brl \|\| fmt === N\.brl0\) L\.contarMoeda\(ui, G, b, valor, \{ centavos: fmt === N\.brl \}\)/);
   const ini = ler("web/app/inicio.js");
-  assert.match(ini, /fmt === brl0\) L\.contarMoeda\(ui, G, b, \+v \|\| 0, \{ centavos: false, animar \}\)/);
+  assert.match(ini, /fmt === brl0\) L\.preencherMoeda\(ui, b, valor, \{ centavos: false \}\)/, "valor final já na tela");
+  assert.match(ini, /fmt === brl0 \? L\.contarMoeda\(ui, G, b, valor, \{ centavos: false \}\) : G\.contar\(b, valor, fmt\)/, "o contador começa depois de o esqueleto sair");
   assert.match(ini, /L\.preencherMoeda\(ui, h\("b", \{ class: "ini-barra-v rel-num" \}\), v, \{ centavos: false \}\)/);
 });
 
@@ -676,6 +677,109 @@ await teste("M38 (navegador): nenhum número passa do cartão em 768, 1024, 1180
     } finally { await browser.close(); }
     assert.deepEqual(fora, [], "número passando do cartão");
   } finally { srv.kill(); }
+});
+
+/* ============================================================ M31 — Início que diz o que importa agora */
+console.log("\n(g) M31 — manchete do Início");
+
+const LINKS = { conversas: "#/conversas?aba=aguardando", tarefas: "#/tarefas?aba=atrasadas", agenda: "#/agenda", crm: "#/crm" };
+const VOC = { contato: "paciente", contatos: "pacientes", negocio: "oportunidade", negocios: "oportunidades", feminino: true };
+const base = (o = {}) => ({ hoje: "2026-10-01",
+  conversas: { aguardando: 0, sem_dono: 0, minhas: 0, abertas: 0, espera_mais_antiga_min: null },
+  tarefas: { hoje: 0, atrasadas: 0, abertas: 0 }, negocios: { abertos: 0, valor_aberto: 0, ganhos_mes: 0 }, leads: { hoje: 0, semana: 0 }, canais: [{ nome: "n", status: "ativo", ultima_entrada_em: new Date().toISOString() }], ...o });
+const agendaCom = n => ({ consultas: Array.from({ length: n }, (_, i) => ({ negocio_id: i, inicio: `2026-10-01T${String(9 + i).padStart(2, "0")}:00:00-03:00`, status: "aberto" })) });
+
+await teste("M31: manchete — a frase do exemplo (muitos, singular/plural, com agenda e dinheiro em aberto)", () => {
+  const d = base({ conversas: { aguardando: 2, espera_mais_antiga_min: 15 }, negocios: { abertos: 3, valor_aberto: 5200 } });
+  const m = L.manchete(d, { agenda: agendaCom(1), voc: { ...VOC, contato: "cliente", contatos: "clientes", negocio: "orçamento", negocios: "orçamentos", feminino: false }, links: LINKS });
+  assert.equal(m.texto, "2 clientes esperam resposta há 15 min. Hoje tem 1 consulta e R$ 5.200 em orçamentos abertos.");
+  assert.equal(m.pendencia, true); assert.equal(m.urgente, true); assert.equal(m.contexto, true);
+  // singular: 1 cliente espera; 1 consulta; 1 oportunidade aberta
+  const s = L.manchete(base({ conversas: { aguardando: 1, espera_mais_antiga_min: 3 }, negocios: { abertos: 1, valor_aberto: 950 } }), { agenda: agendaCom(1), voc: VOC, links: LINKS });
+  assert.equal(s.texto, "1 paciente espera resposta há 3 min. Hoje tem 1 consulta e R$ 950 em oportunidade aberta.");
+  // plural de consulta e feminino
+  const p = L.manchete(base({ negocios: { abertos: 4, valor_aberto: 12950 } }), { agenda: agendaCom(3), voc: VOC, links: LINKS });
+  assert.match(p.texto, /Hoje tem 3 consultas e R\$ 12\.950 em oportunidades abertas\./);
+});
+
+await teste("M31: manchete — zero (tudo em dia), só tarefas atrasadas, as duas urgências juntas e a espera de horas", () => {
+  const zero = L.manchete(base(), { agenda: null, voc: VOC, links: LINKS });
+  assert.equal(zero.texto, "Tudo em dia."); assert.equal(zero.pendencia, false); assert.equal(zero.urgente, false);
+  // sem pendência mas com contexto: a manchete só fala do dia e o selo "Tudo em dia." aparece embaixo
+  const dia = L.manchete(base({ negocios: { abertos: 2, valor_aberto: 3000 } }), { agenda: agendaCom(2), voc: VOC, links: LINKS });
+  assert.equal(dia.texto, "Hoje tem 2 consultas e R$ 3.000 em oportunidades abertas."); assert.equal(dia.pendencia, false);
+  const so = L.manchete(base({ tarefas: { hoje: 1, atrasadas: 3 } }), { voc: VOC, links: LINKS });
+  assert.equal(so.texto, "3 tarefas atrasadas."); assert.equal(so.pendencia, true);
+  assert.equal(L.manchete(base({ tarefas: { atrasadas: 1 } }), { voc: VOC, links: LINKS }).texto, "1 tarefa atrasada.");
+  const duas = L.manchete(base({ conversas: { aguardando: 1, espera_mais_antiga_min: 120 }, tarefas: { atrasadas: 2 } }), { voc: VOC, links: LINKS });
+  assert.equal(duas.texto, "1 paciente espera resposta há 2 h e 2 tarefas atrasadas.");
+  // tarefa para hoje ou conversa sem dono é pendência (o selo "tudo em dia" não aparece), mas não entra na frase
+  assert.equal(L.manchete(base({ tarefas: { hoje: 2 } }), { voc: VOC }).pendencia, true);
+  assert.equal(L.manchete(base({ conversas: { sem_dono: 1 } }), { voc: VOC }).pendencia, true);
+  assert.equal(L.manchete(null, {}).texto, "Tudo em dia.", "sem dado nenhum não quebra");
+});
+
+await teste("M31: manchete — sem dado de agenda a frase não fala de consulta; dinheiro só com negócio aberto", () => {
+  const d = base({ negocios: { abertos: 2, valor_aberto: 4000 } });
+  assert.equal(L.manchete(d, { agenda: null, voc: VOC }).texto, "R$ 4.000 em oportunidades abertas.", "sem agenda: só o dinheiro");
+  assert.equal(L.manchete(d, { agenda: { consultas: [] }, voc: VOC }).texto, "R$ 4.000 em oportunidades abertas.", "agenda vazia: nada de «0 consultas»");
+  assert.equal(L.manchete(base({ negocios: { abertos: 0, valor_aberto: 0 } }), { agenda: agendaCom(1), voc: VOC }).texto, "Hoje tem 1 consulta.");
+  assert.equal(L.manchete(base({ negocios: { abertos: 2, valor_aberto: 0 } }), { voc: VOC }).texto, "Tudo em dia.", "valor zerado não vira «R$ 0»");
+  // consulta cancelada ou de outro dia não conta
+  const ag = { consultas: [{ inicio: "2026-10-01T10:00:00-03:00", status: "cancelada" }, { inicio: "2026-10-02T10:00:00-03:00", status: "aberto" }, { inicio: "2026-10-01T15:00:00-03:00", status: "aberto" }] };
+  assert.equal(L.consultasHoje(ag, "2026-10-01"), 1);
+  assert.equal(L.consultasHoje(null, "2026-10-01"), null);
+  assert.equal(L.consultasHoje({}, "2026-10-01"), null);
+});
+
+await teste("M31: manchete — cada trecho é link (conversas, tarefas, agenda, CRM) e sem permissão vira texto; o verbo vai em .narr e o número no acento", () => {
+  const d = base({ conversas: { aguardando: 2, espera_mais_antiga_min: 15 }, tarefas: { atrasadas: 1 }, negocios: { abertos: 1, valor_aberto: 900 } });
+  const m = L.manchete(d, { agenda: agendaCom(1), voc: VOC, links: LINKS });
+  const nos = m.frases.flat().filter(n => n.t === "link");
+  assert.deepEqual(nos.map(n => n.href), [LINKS.conversas, LINKS.tarefas, LINKS.agenda, LINKS.crm]);
+  assert.equal(nos[0].partes.find(p => p.t === "narr").v, "pacientes esperam resposta", "o verbo de ação é a voz narrativa");
+  assert.equal(nos[0].partes.find(p => p.t === "n").v, "2");
+  assert.equal(nos[1].tom, "ruim", "tarefa atrasada no tom de erro");
+  assert.deepEqual(nos[3].partes, [{ t: "moeda", v: 900 }]);
+  const sem = L.manchete(d, { agenda: agendaCom(1), voc: VOC, links: { conversas: null, tarefas: null, agenda: null, crm: null } });
+  assert.deepEqual(sem.frases.flat().filter(n => n.t === "link").map(n => n.href), [null, null, null, null], "sem permissão: sem href");
+  assert.equal(sem.texto, m.texto, "o texto é o mesmo com ou sem link");
+});
+
+await teste("M31: blocosInicio — atendimento, tarefas e número com problema abertos nessa ordem; leads sempre recolhido; sem ação, só vendas aberto", () => {
+  const ocupado = L.blocosInicio(base({ conversas: { aguardando: 1 }, tarefas: { atrasadas: 1 }, negocios: { abertos: 2 }, canais: [{ nome: "n", status: "erro" }] }));
+  assert.deepEqual(ocupado.abertos, ["atendimento", "tarefas", "numeros", "vendas"]);
+  assert.deepEqual(ocupado.recolhidos, ["leads"]);
+  const calmo = L.blocosInicio(base({ negocios: { abertos: 2 } }));
+  assert.deepEqual(calmo.abertos, ["vendas"]);
+  assert.deepEqual(calmo.recolhidos.sort(), ["atendimento", "leads", "numeros", "tarefas"]);
+  assert.ok(L.blocosInicio(base({ canais: [] })).abertos.includes("numeros"), "sem número conectado é ação");
+  assert.ok(L.blocosInicio(base({ conversas: { sem_dono: 2 } })).abertos.includes("atendimento"), "conversa sem dono pede ação");
+  assert.ok(!L.blocosInicio(base()).abertos.includes("vendas"), "sem nada em vendas, vendas também recolhe");
+});
+
+await teste("M31: numerosMudaram aponta só o que mudou (para G.destacar); campo ausente não conta", () => {
+  const a = base({ conversas: { aguardando: 2, abertas: 3 }, negocios: { abertos: 3, valor_aberto: 5000 } });
+  const b = base({ conversas: { aguardando: 3, abertas: 3 }, negocios: { abertos: 3, valor_aberto: 5200 } });
+  assert.deepEqual(L.numerosMudaram(a, b).sort(), ["conversas.aguardando", "negocios.valor_aberto"]);
+  assert.deepEqual(L.numerosMudaram(a, a), []);
+  assert.deepEqual(L.numerosMudaram(null, b), []);
+  assert.deepEqual(L.numerosMudaram({ conversas: {} }, { conversas: { aguardando: 4 } }), [], "sem valor antigo não pisca");
+});
+
+await teste("M31: inicio.js — esqueleto até chegar o dado, manchete por ui.cabecalho, cartões só com ação, «Mais detalhes» recolhido, G.destacar e agenda opcional", () => {
+  const s = ler("web/app/inicio.js");
+  assert.match(s, /raiz\.append\(ui\.esqueleto\("inicio"\)\)/, "esqueleto na entrada");
+  assert.match(s, /ui\.trocarEsqueleto\(raiz, \[cab, corpo\]\)/, "o esqueleto só sai quando há dado");
+  assert.match(s, /ui\.cabecalho\(\{ rotulo:/, "cabeçalho pelo componente do contrato");
+  assert.match(s, /L\.manchete\(d, \{ agenda, links/);
+  assert.match(s, /L\.blocosInicio\(d\)/);
+  assert.match(s, /h\("details", \{ class: "ini-mais"/, "o que não pede ação fica recolhido");
+  assert.match(s, /ui\.vazio\(\{ tipo: "em_dia", titulo: "Tudo em dia\."/);
+  assert.match(s, /G\.destacar\(el\)/, "número que mudou acende");
+  assert.match(s, /"nx_inicio", \{\}, \{ cache: true, aoCache \}/, "último dado pelo cache do shell");
+  assert.match(s, /nx_agenda_dia[\s\S]{0,120}catch \{ return null; \}/, "a agenda é complemento: se falhar a frase só não fala de consulta");
+  assert.doesNotMatch(s, /innerHTML/);
 });
 
 console.log(`\n${ok} ok · ${falhas} falha(s)`);

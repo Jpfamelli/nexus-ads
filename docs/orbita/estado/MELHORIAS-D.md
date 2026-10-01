@@ -14,7 +14,7 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
 | M34 | feito | Chat com um primário por estado, cabeçalho de uma linha no celular, aviso do canal virou ⓘ, abas em uma linha, selos da lista viram pontos de cor |
 | M37 | feito | Foto do celular comprimida no aparelho (1600 px, JPEG 0,82, EXIF corrigido), resumo "de 7,3 MB para 216 KB", "enviar original" quando cabe, upload com barra, Cancelar e Tentar de novo sem recomprimir |
 | M38 | feito | KPIs que cabem a 768-1440 px (container query), "R$" e centavos a 60 % (`.num-moeda`) em Relatórios, Anúncios e Início; sonda de navegador no teste |
-| M31 | — | — |
+| M31 | feito | Início com manchete editorial (frase em links, número no acento, verbo em Zodiak), blocos só com ação em ordem de urgência, "Mais detalhes" recolhido, "Tudo em dia.", esqueleto até o dado e destaque do número que muda |
 | M32 | — | — |
 | M33 | — | — |
 | M35 | — | — |
@@ -53,6 +53,16 @@ Como ver: `ORBITA_DEV_FALSO_PORT=4740 node scripts/dev-falso.mjs` → `http://12
 - **Moeda editorial**: `rel-logica.js` ganhou `partesMoeda`, `textoMoeda`, `preencherMoeda(ui, el, valor, {centavos})` e `contarMoeda(ui, G, el, valor, …)` (o contador de G.contar, mas com o formato editorial; só nós de texto e spans `nm-rs`/`nm-cent`, CSS do `.num-moeda` é da frente A). Usado nos KPIs de Relatórios, em todo valor em R$ de `num()` de Anúncios e do Início (receita, previsão, barras do mês). Tabelas e textos corridos continuam com `ui.brl` (texto), já alinhadas à direita e com `tabular-nums`.
 - **Medido** (puppeteer + dev-falso, antes → depois): Relatórios › Vendas a 1180 px `R$ 28.400` passava 33 px do cartão e a 1280 px 21 px; Início `R$ 26.200` passava 7 px a 1180 px e 2 px a 390 px. Depois: 0 número fora do cartão em 768, 1024, 1180, 1280, 1440 e 390 px nas 5 telas (Vendas, Atendimento, Anúncios, Campanhas, Início).
 - **Verificar**: `node testes/relatorios.teste.mjs` (45 ok); a sonda de navegador entra com `ORBITA_QA_NAVEGADOR=1 ORBITA_PUPPETEER=<pasta com node_modules/puppeteer-core> node testes/relatorios.teste.mjs` (sem a variável o teste é pulado: o repositório não depende de puppeteer).
+
+## M31 — feito
+
+- **Manchete** (`rel-logica.js`: `manchete`, `consultasHoje`, `blocosInicio`, `numerosMudaram` — tudo puro e testado): "2 pacientes esperam resposta há 15 min e 1 tarefa atrasada. Hoje tem 1 consulta e R$ 67.400 em oportunidades abertas." Vocabulário da vertical (pacientes/clientes, oportunidades/orçamentos, concordância de gênero); cada trecho é link (conversas aguardando, tarefas atrasadas, agenda, CRM) e vira texto sem permissão. Número no acento (`--c-prod`; tarefa atrasada em `--c-ruim`), dinheiro em `.num-moeda`, o verbo em `.narr` (Zodiak). Frase curta usa o degrau display; a longa (> 70 caracteres) usa o h1 e fica em 2-3 linhas. É o próprio `<h1>` da tela (com `aria-label` da frase inteira), montado por `ui.cabecalho` (saudação pequena em `.rotulo`).
+  A agenda de hoje vem de `nx_agenda_dia` (já existente; `nx_inicio` não traz consultas) em paralelo, como complemento: se falhar ou o módulo não existir a frase só não fala de consulta.
+- **Só o que pede ação**: grade de 2 colunas (o último bloco ímpar ocupa a linha) com Atendimento, Tarefas, Número de WhatsApp com problema (ou sem número) e Vendas, nessa ordem; Leads e o que está calmo vão para "Mais detalhes" (`<details>`, estado lembrado entre atualizações). Sem pendência (ninguém esperando, sem tarefa para hoje, sem conversa sem dono) aparece o selo `ui.vazio({tipo:"em_dia"})` "Tudo em dia." e a manchete fala só do dia.
+- **Nunca em branco**: `ui.esqueleto("inicio")` até o dado chegar (antes o esqueleto era apagado antes de `nx_inicio` responder) e `ui.trocarEsqueleto` na 1ª pintura; com rede de 3,5 s de atraso o esqueleto ficou na tela e a manchete entrou depois. `rpcC("nx_inicio", {}, {cache: true, aoCache})` já passa as opções do contrato (a B ainda não as lê: sem cache o comportamento é o de antes). `G.destacar` acende o número que mudou entre duas leituras (testado com Atualizar). Os números só contam até o valor depois que o esqueleto sai (corrige a animação que parava no 1º quadro).
+- **Medido** (dev-falso): manchete começa em y = 197 a 390×844 (≤ 300); 1 `h1` por tela; 0 erro de console; estado calmo, rede lenta e destaque conferidos por puppeteer.
+- Desvio: o texto do plano pede o cache do último dado; ele depende do `rpcC({cache})` da frente B (M16), que não está na branch.
+- **Verificar**: `node testes/relatorios.teste.mjs` (52 ok).
 
 ## Pendências para outras frentes
 

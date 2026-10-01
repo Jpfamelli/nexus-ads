@@ -512,3 +512,111 @@ export function contarMoeda(ui, G, el, valor, { centavos = true, animar = true }
   requestAnimationFrame(passo);
   return el;
 }
+
+/* ============================================================
+   7. INÍCIO EDITORIAL (M31) — a manchete que diz o que importa agora e quais blocos merecem ficar abertos
+   Tudo PURO: a tela só desenha o que estas funções devolvem.
+   ============================================================ */
+const plural = (n, um, varios) => (Number(n) === 1 ? um : varios);
+
+/** Quantas consultas existem hoje na resposta de nx_agenda_dia (null quando não há dado de agenda). */
+export function consultasHoje(agenda, hoje) {
+  if (!agenda || !Array.isArray(agenda.consultas)) return null;
+  const dia = hoje || hojeSP();
+  return agenda.consultas.filter(c => c && c.inicio && !/cancelad|desmarcad/i.test(String(c.status || "")) && hojeSP(new Date(c.inicio)) === dia).length;
+}
+
+/**
+ * manchete(d, {agenda, voc, links}) → {frases, texto, pendencia, urgente, contexto}
+ *  - `d` é a resposta de nx_inicio; `agenda` a de nx_agenda_dia (opcional: sem ela a frase não fala de consulta);
+ *  - `voc` = {contato, contatos, negocio, negocios, feminino} em minúsculas (vocabulário da vertical);
+ *  - `links` = {conversas, tarefas, agenda, crm} (hash ou null — sem permissão o trecho vira texto);
+ *  - cada frase é uma lista de nós: {t:"txt", v} ou {t:"link", href, tom?, partes:[{t:"n"|"moeda"|"narr"|"txt", v}]}.
+ *  "n" = número (acento), "moeda" = valor em R$ (acento, formato editorial), "narr" = o verbo de ação (Zodiak itálica).
+ *  Exemplo: "2 clientes esperam resposta há 15 min. Hoje tem 1 consulta e R$ 5.200 em orçamentos abertos."
+ */
+export function manchete(d, { agenda = null, voc = {}, links = {} } = {}) {
+  const V = { contato: "cliente", contatos: "clientes", negocio: "negócio", negocios: "negócios", feminino: false, ...voc };
+  const c = (d && d.conversas) || {}, t = (d && d.tarefas) || {}, n = (d && d.negocios) || {};
+  const ag = Math.max(0, Math.floor(+c.aguardando) || 0);
+  const atr = Math.max(0, Math.floor(+t.atrasadas) || 0);
+  const espera = Number.isFinite(+c.espera_mais_antiga_min) && c.espera_mais_antiga_min !== null ? +c.espera_mais_antiga_min : null;
+  const link = (href, partes, tom) => ({ t: "link", href: href || null, tom, partes });   // sem href (sem permissão) vira trecho sem link, com o mesmo destaque
+
+  // 1) o que pede ação agora
+  const urgentes = [];
+  if (ag > 0) {
+    urgentes.push(link(links.conversas, [{ t: "n", v: String(ag) }, { t: "txt", v: " " },
+      { t: "narr", v: plural(ag, `${V.contato} espera resposta`, `${V.contatos} esperam resposta`) },
+      ...(espera !== null && espera >= 1 ? [{ t: "txt", v: ` há ${duracaoMin(espera)}` }] : [])]));
+  }
+  if (atr > 0) {
+    urgentes.push(link(links.tarefas, [{ t: "n", v: String(atr) }, { t: "txt", v: " " }, { t: "narr", v: plural(atr, "tarefa atrasada", "tarefas atrasadas") }], "ruim"));
+  }
+  const frases = [];
+  if (urgentes.length) {
+    const f = [];
+    urgentes.forEach((u, i) => { if (i) f.push({ t: "txt", v: " e " }); f.push(u); });
+    f.push({ t: "txt", v: "." });
+    frases.push(f);
+  }
+
+  // 2) o contexto do dia: consultas e dinheiro em aberto
+  const nCons = consultasHoje(agenda, d && d.hoje);
+  const abertos = Math.max(0, Math.floor(+n.abertos) || 0), valor = +n.valor_aberto || 0;
+  const adj = (m, q) => (V.feminino ? m.replace(/o$/, "a") : m) + (Number(q) === 1 ? "" : "s");
+  const ctx = [];
+  if (nCons !== null && nCons > 0) {
+    ctx.push([{ t: "txt", v: "Hoje tem " }, link(links.agenda, [{ t: "n", v: String(nCons) }, { t: "txt", v: ` ${plural(nCons, "consulta", "consultas")}` }])]);
+  }
+  if (abertos > 0 && valor > 0) {
+    ctx.push([link(links.crm, [{ t: "moeda", v: valor }]),
+      { t: "txt", v: ` em ${plural(abertos, V.negocio, V.negocios)} ${adj("aberto", abertos)}` }]);
+  }
+  if (ctx.length) {
+    const f = [];
+    ctx.forEach((parte, i) => { if (i) f.push({ t: "txt", v: " e " }); f.push(...parte); });
+    f.push({ t: "txt", v: "." });
+    frases.push(f);
+  }
+
+  const pendencia = ag > 0 || atr > 0 || (+t.hoje || 0) > 0 || (+c.sem_dono || 0) > 0;
+  // sem nada a dizer (cliente zerado): a manchete é só o "Tudo em dia."
+  if (!frases.length) frases.push([{ t: "link", href: null, partes: [{ t: "narr", v: "Tudo em dia." }] }]);
+  const achatar = no => (no.t === "txt" ? no.v : no.partes.map(p => (p.t === "moeda" ? textoMoeda(p.v, { centavos: false }) : p.v)).join(""));
+  const texto = frases.map(f => f.map(achatar).join("")).join(" ");
+  return { frases, texto, pendencia, urgente: urgentes.length > 0, contexto: ctx.length > 0 };
+}
+
+/**
+ * blocosInicio(d, {canais}) → {abertos: [...ids], recolhidos: [...ids]} na ordem de urgência.
+ * Abertos = o que pede ação (atendimento, tarefas, número com problema) + vendas; o resto vai para "Mais detalhes".
+ */
+export function blocosInicio(d) {
+  const c = (d && d.conversas) || {}, t = (d && d.tarefas) || {}, n = (d && d.negocios) || {};
+  const canais = (d && d.canais) || [];
+  const abertos = [], recolhidos = [];
+  const poe = (id, aberto) => (aberto ? abertos : recolhidos).push(id);
+  poe("atendimento", (+c.aguardando || 0) > 0 || (+c.sem_dono || 0) > 0);
+  poe("tarefas", (+t.atrasadas || 0) > 0 || (+t.hoje || 0) > 0);
+  poe("numeros", !canais.length || canais.some(k => estadoCanal(k).nivel !== "bom"));
+  poe("vendas", (+n.abertos || 0) > 0 || (+n.ganhos_mes || 0) > 0 || (+n.receita_mes || 0) > 0);
+  recolhidos.push("leads");
+  // a ordem dos abertos segue a urgência: atendimento → tarefas → número com problema → vendas
+  const ordem = ["atendimento", "tarefas", "numeros", "vendas"];
+  abertos.sort((a, b) => ordem.indexOf(a) - ordem.indexOf(b));
+  return { abertos, recolhidos };
+}
+
+/** Quais números mudaram entre duas respostas de nx_inicio (para G.destacar no pulso): lista de chaves "grupo.campo". */
+export function numerosMudaram(antes, depois) {
+  if (!antes || !depois) return [];
+  const campos = { conversas: ["aguardando", "sem_dono", "minhas", "abertas"], tarefas: ["hoje", "atrasadas"], leads: ["hoje", "hoje_anuncio", "semana"],
+    negocios: ["abertos", "valor_aberto", "previsao_ponderada", "receita_mes", "ganhos_mes"] };
+  const mudou = [];
+  for (const [g, ks] of Object.entries(campos)) for (const k of ks) {
+    const a = antes[g] && antes[g][k], b = depois[g] && depois[g][k];
+    if (a !== undefined && a !== null && b !== undefined && b !== null && +a !== +b) mudou.push(`${g}.${k}`);
+  }
+  return mudou;
+}

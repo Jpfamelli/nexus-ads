@@ -479,12 +479,30 @@
    INÍCIO (T3)
    ============================================================ */
 .rel-txt-ruim { color: var(--c-ruim); }
-.ini-grade { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 1rem; align-items: stretch; }
-.ini-atend { grid-column: span 8; }
-.ini-leads { grid-column: span 4; }
-.ini-vendas { grid-column: span 6; }
-.ini-tf { grid-column: span 6; }
-.ini-num { grid-column: span 12; }
+.ini-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; align-items: stretch; }
+.ini-grade > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+.ini-num { grid-column: 1 / -1; }
+
+/* M31 — a manchete: saudação pequena, frase no degrau display, números no acento e o verbo de ação em Zodiak */
+.ini-cab .cab-titulo { font-size: var(--fs-h1); line-height: 1.12; letter-spacing: -.025em; max-width: 28ch; text-wrap: balance; color: var(--c-texto); }
+@media (min-width: 761px) { .ini-cab .cab-titulo { font-size: var(--fs-display); max-width: 24ch; } .ini-cab .cab-titulo[data-tam="longa"] { font-size: var(--fs-h1); max-width: 40ch; } }
+.ini-cab .cab-rotulo { margin-bottom: .35rem; }
+.ini-m-trecho { color: inherit; text-decoration: none; }
+a.ini-m-trecho { text-decoration: underline; text-decoration-color: transparent; text-decoration-thickness: .05em; text-underline-offset: .14em; transition: text-decoration-color var(--t-ui) var(--e-out); }
+a.ini-m-trecho:hover, a.ini-m-trecho:focus-visible { text-decoration-color: currentColor; }
+.ini-m-n { color: var(--c-prod); }
+.ini-m-ruim .ini-m-n { color: var(--c-ruim); }
+.ini-cab .narr { color: var(--c-texto); }
+.ini-em-dia { display: flex; justify-content: center; padding: .5rem 0; }
+.ini-em-dia .vazio { max-width: 34rem; }
+/* o que não pede ação fica recolhido */
+.ini-mais { border-radius: 18px; border: 1px solid var(--c-borda); background: var(--c-sup); }
+.ini-mais > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .8rem; padding: .9rem 1.25rem; min-height: 44px; cursor: pointer; list-style: none; }
+.ini-mais > summary::-webkit-details-marker { display: none; }
+.ini-mais > summary::after { content: "▾"; margin-left: auto; color: var(--c-texto-3); transition: transform var(--t-ui) var(--e-out); }
+.ini-mais[open] > summary::after { transform: rotate(180deg); }
+.ini-mais-t { font-weight: 600; font-size: var(--fs-corpo); }
+.ini-mais > .ini-grade { padding: 0 1rem 1rem; }
 .ini-numeros { display: grid; gap: .6rem; }
 .ini-numeros-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .ini-numeros-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -609,12 +627,8 @@ a.ini-numero:active { transform: scale(.98); }
 .cfgf-campos dd { margin: 0; color: var(--c-texto-2); }
 
 /* telas médias e celular (Início, Relatórios, Configurações) */
-@media (max-width: 1100px) {
-  .ini-atend, .ini-leads { grid-column: span 12; }
-}
 @media (max-width: 900px) {
-  .relat-grade, .cfga-integ, .ini-canais { grid-template-columns: minmax(0, 1fr); }
-  .ini-vendas, .ini-tf { grid-column: span 12; }
+  .relat-grade, .cfga-integ, .ini-canais, .ini-grade { grid-template-columns: minmax(0, 1fr); }
   .ini-passos { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 760px) {
