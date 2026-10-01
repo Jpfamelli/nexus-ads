@@ -1076,6 +1076,116 @@ begin
   perform pg_temp.ok((j ->> 'sequencias')::int >= 1 and (j ->> 'pedidos_ia')::int >= 1 and not exists (select 1 from public.nx_auto_sequencias where chave = 'velha:1')
                  and exists (select 1 from public.nx_auto_sequencias where chave = 'recente:1'), 'faxina: sequências e pedidos de IA antigos saem: ' || j::text);
 
+  -- ---------------------------------------------------------- bordas das ações (campos de cada tipo, atribuição só da conversa, notas, IA)
+  insert into public.nx_campos (cliente_id, entidade, chave, rotulo, tipo) values
+    (cA, 'contato', 'ativo_sn', 'Ativo', 'sim_nao'), (cA, 'contato', 'nasc', 'Nascimento', 'data'), (cA, 'negocio', 'ticket', 'Ticket', 'moeda'),
+    (cA, 'contato', 'varios', 'Vários', 'multi');
+  insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Nina Bordas', '12992220020') returning id into ct1;
+  insert into public.nx_leads (cliente_id, contato_id, funil_id, estagio_id, origem) values (cA, ct1, f_p1, sp1, 'manual') returning id into l1;
+  j := public.nx_automacao_salvar('tok-12-adm', cA, jsonb_build_object('nome', 'Bordas de campos', 'gatilho', 'negocio_estagio', 'ativo', true,
+    'config', jsonb_build_object('estagio_id', sp2),
+    'acoes', jsonb_build_array(
+      jsonb_build_object('tipo', 'campo_atualizar', 'campo', 'ativo_sn', 'valor', 'Sim'),
+      jsonb_build_object('tipo', 'campo_atualizar', 'campo', 'nasc', 'valor', '25/12/1990'),
+      jsonb_build_object('tipo', 'campo_atualizar', 'campo', 'ticket', 'valor', '1250,75'),
+      jsonb_build_object('tipo', 'campo_atualizar', 'campo', 'convenio', 'valor', 'x'))));
+  a_campo := (j ->> 'id')::uuid;
+  perform pg_temp.lote(200);
+  update public.nx_leads set estagio_id = sp2 where id = l1;
+  perform pg_temp.lote(25);
+  perform pg_temp.ok((select (campos -> 'ativo_sn') = 'true'::jsonb and campos ->> 'nasc' = '1990-12-25' and campos ->> 'convenio' = 'x' from public.nx_contatos where id = ct1)
+                 and (select (campos -> 'ticket')::numeric = 1250.75 and jsonb_typeof(campos -> 'ticket') = 'number' from public.nx_leads where id = l1),
+                     'campos tipados: sim/não, data (DD/MM/AAAA → ISO), moeda e texto: ' || coalesce((select detalhe from public.nx_auto_execucoes where automacao_id = a_campo order by id desc limit 1), '∅'));
+  update public.nx_automacoes set acoes = '[{"tipo":"campo_atualizar","campo":"varios","valor":"a"}]'::jsonb where id = a_campo;
+  delete from public.nx_auto_execucoes where automacao_id = a_campo;
+  update public.nx_eventos set processado_em = null where cliente_id = cA and tipo = 'negocio_estagio' and ref ->> 'negocio_id' = l1::text and ref ->> 'estagio_para' = sp2::text;
+  perform pg_temp.lote(25);
+  perform pg_temp.ok(exists (select 1 from public.nx_auto_execucoes where automacao_id = a_campo)
+                 and not exists (select 1 from public.nx_auto_execucoes where automacao_id = a_campo
+                                    and detalhe <> 'Ação 1 (preencher campo): dados inválidos (esse tipo de campo não pode ser preenchido por automação).'),
+                     'campo de múltipla escolha não é preenchido por automação');
+  update public.nx_automacoes set ativo = false where id = a_campo;
+
+  -- atribuir só da conversa (sem negócio): rodízio explícito e departamento sem rodízio
+  update public.nx_acessos set recebe_conversas = false where conta_id in (k_adm, k_sup) and cliente_id = cA;
+  update public.nx_acessos set ultima_atribuicao_em = null where cliente_id = cA;
+  insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Otávio Conversa', '12992220021') returning id into ct2;
+  j := public.nx_automacao_salvar('tok-12-adm', cA, jsonb_build_object('nome', 'Rodízio da conversa', 'gatilho', 'conversa_nova', 'ativo', true,
+    'acoes', jsonb_build_array(jsonb_build_object('tipo', 'atribuir', 'dono', 'rodizio'))));
+  a_atr := (j ->> 'id')::uuid;
+  perform pg_temp.lote(200);
+  insert into public.nx_conversas (cliente_id, canal_id, contato_id, departamento_id, protocolo, status, aguardando)
+  values (cA, can, ct2, dep_rec, 'T12-000011', 'aberta', true) returning id into cv1;
+  perform pg_temp.lote(25);
+  perform pg_temp.ok((select atribuida_a = k_at from public.nx_conversas where id = cv1),
+                     'rodízio da conversa: só a Ana é do departamento Recepção (a Bia é do Financeiro): ' || coalesce((select atribuida_a::text from public.nx_conversas where id = cv1), 'nulo'));
+  insert into public.nx_departamentos (cliente_id, nome, distribuicao) values (cA, 'Manual 12', 'manual') returning id into v_dono;
+  update public.nx_automacoes set acoes = jsonb_build_array(jsonb_build_object('tipo', 'atribuir', 'dono', 'departamento', 'departamento_id', v_dono)) where id = a_atr;
+  insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Paulo Depto', '12992220022') returning id into ct3;
+  insert into public.nx_conversas (cliente_id, canal_id, contato_id, departamento_id, protocolo, status, aguardando)
+  values (cA, can, ct3, dep_fin, 'T12-000012', 'aberta', true) returning id into cv2;
+  perform pg_temp.lote(25);
+  perform pg_temp.ok((select departamento_id = v_dono and atribuida_a is null from public.nx_conversas where id = cv2)
+                 and (select detalhe like '%conversa em «Manual 12»' from public.nx_auto_execucoes where automacao_id = a_atr order by id desc limit 1),
+                     'departamento sem rodízio: a conversa só muda de fila: ' || coalesce((select detalhe from public.nx_auto_execucoes where automacao_id = a_atr order by id desc limit 1), '∅'));
+  update public.nx_automacoes set ativo = false where id = a_atr;
+  update public.nx_acessos set recebe_conversas = true where conta_id in (k_adm, k_sup) and cliente_id = cA;
+
+  -- nota sem contato nem negócio é pulada; agendado com etapa
+  j := public.nx_automacao_salvar('tok-12-adm', cA, jsonb_build_object('nome', 'Nota de tarefa', 'gatilho', 'tarefa_vencida', 'ativo', true,
+    'acoes', '[{"tipo":"nota","texto":"venceu"}]'::jsonb));
+  a_nota := (j ->> 'id')::uuid;
+  insert into public.nx_tarefas (cliente_id, tipo, titulo, vence_em) values (cA, 'tarefa', 'Solta 12', now() - interval '1 hour');
+  perform pg_temp.lote(25);
+  perform pg_temp.ok(exists (select 1 from public.nx_auto_execucoes where automacao_id = a_nota and ok and detalhe like '%nota: pulada (sem contato nem negócio)'), 'nota sem contato nem negócio é pulada');
+  update public.nx_automacoes set ativo = false where id = a_nota;
+  update public.nx_tarefas set concluida_em = now() where titulo = 'Solta 12' and cliente_id = cA;
+
+  -- IA: classificar para uma etapa «perdido» (grava o motivo da perda), mesma etapa (nada muda), pular quando já há pedido, sem mensagens para resumir
+  j := public.nx_automacao_salvar('tok-12-adm', cA, jsonb_build_object('nome', 'IA bordas', 'gatilho', 'tarefa_vencida', 'ativo', true,
+    'acoes', jsonb_build_array(jsonb_build_object('tipo', 'ia_decidir', 'tarefa', 'classificar_etapa'), jsonb_build_object('tipo', 'ia_decidir', 'tarefa', 'resumir_nota'))));
+  a_ia4 := (j ->> 'id')::uuid;
+  insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Quita IA', '12992220023') returning id into ct4;
+  insert into public.nx_leads (cliente_id, contato_id, funil_id, estagio_id, origem) values (cA, ct4, f_p1, sp1, 'manual') returning id into l2;
+  update public.nx_automacoes set ativo = false where id = a_ia4;
+  -- (1) perdida
+  ped := pg_temp.pedido(a_ia4, cA, l2, ct4, 'classificar_etapa');
+  update public.nx_automacoes set ativo = true where id = a_ia4;
+  r2 := public.nx_auto_ia_resolver(ped, jsonb_build_object('etapa_id', sp_perd, 'motivo', 'disse que não tem interesse'), 'm');
+  perform pg_temp.ok((r2 ->> 'ok')::boolean and (select status = 'perdido' and motivo_perda_txt = 'IA: disse que não tem interesse' and estagio_id = sp_perd from public.nx_leads where id = l2),
+                     'IA classifica como perdido: status, etapa e motivo da perda: ' || r2::text);
+  -- (2) negócio já fechado: pedido novo é recusado
+  ped := pg_temp.pedido(a_ia4, cA, l2, ct4, 'classificar_etapa');
+  r2 := public.nx_auto_ia_resolver(ped, jsonb_build_object('etapa_id', sp2), 'm');
+  perform pg_temp.ok(r2 ->> 'erro' = 'resultado_invalido' and (r2 ->> 'detalhe') like '%já foi fechado%', 'negócio perdido não é reclassificado pela IA');
+  -- (3) mesma etapa: nada muda
+  insert into public.nx_leads (cliente_id, contato_id, funil_id, estagio_id, origem) values (cA, ct4, f_p1, sp2, 'manual') returning id into l3;
+  ped := pg_temp.pedido(a_ia4, cA, l3, ct4, 'classificar_etapa');
+  r2 := public.nx_auto_ia_resolver(ped, jsonb_build_object('etapa_id', sp2, 'motivo', 'segue igual'), 'm');
+  perform pg_temp.ok((r2 ->> 'ok')::boolean and r2 ->> 'detalhe' = 'IA: já estava em «Pós 2» (segue igual)'
+                 and not exists (select 1 from public.nx_notas where negocio_id = l3), 'IA escolhe a etapa atual: nada muda e nenhuma nota é criada: ' || r2::text);
+  -- (4) engine: fila não duplica e conversa vazia não resume
+  update public.nx_leads set status = 'aberto' where id = l2 and false;
+  insert into public.nx_tarefas (cliente_id, tipo, titulo, vence_em, negocio_id, contato_id) values (cA, 'tarefa', 'Ia 12', now() - interval '1 hour', l3, ct4);
+  perform pg_temp.lote(25);
+  perform pg_temp.ok((select count(*) from public.nx_auto_ia_pedidos where automacao_id = a_ia4 and status = 'pendente' and tarefa = 'classificar_etapa' and (alvo ->> 'negocio_id')::bigint = l3) = 1,
+                     'tarefa vencida enfileira UM pedido de classificação para o negócio da tarefa');
+  update public.nx_tarefas set concluida_em = now() where titulo = 'Ia 12' and cliente_id = cA;
+  update public.nx_automacoes set ativo = false where id = a_ia4;
+  perform pg_temp.ok(not exists (select 1 from public.nx_auto_ia_pedidos where automacao_id = a_ia4 and status in ('pendente', 'processando')), 'desligar limpa os pedidos pendentes');
+  -- resumir sem conversa: pulado
+  j := public.nx_automacao_salvar('tok-12-adm', cA, jsonb_build_object('nome', 'Resumo sem conversa', 'gatilho', 'negocio_criado', 'ativo', true,
+    'acoes', jsonb_build_array(jsonb_build_object('tipo', 'ia_decidir', 'tarefa', 'resumir_nota'))));
+  a_ia3 := (j ->> 'id')::uuid;
+  perform pg_temp.lote(200);
+  insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Sem Conversa', '12992220024') returning id into ct5;
+  insert into public.nx_leads (cliente_id, contato_id, funil_id, origem) values (cA, ct5, f_pac, 'manual') returning id into l4;
+  perform pg_temp.lote(25);
+  perform pg_temp.ok(exists (select 1 from public.nx_auto_execucoes where automacao_id = a_ia3 and ok and estado = 'concluida' and detalhe like '%IA: pulado (sem conversa para resumir)')
+                 and not exists (select 1 from public.nx_auto_ia_pedidos where automacao_id = a_ia3), 'resumir sem mensagens: pulado, nada enfileirado');
+  update public.nx_automacoes set ativo = false where id = a_ia3;
+  update public.nx_config set anthropic_api_key = null where id = 1;
+
   raise notice 'OK 12_automacoes_ia: todos os casos passaram';
 end $t$;
 

@@ -379,6 +379,44 @@ test("montar: o erro da API vira mensagem em português SEM a chave; a cota é c
   }
 });
 
+test("montar: se a API recusar o schema por complexidade (400), tenta o schema simples UMA vez e a conferência é a mesma", async () => {
+  const banco = criarBanco();
+  const ia = criarIa((p, n) => {
+    if (n === 1) throw Object.assign(new Error("Anthropic 400: Schema is too complex for compilation"), { status: 400 });
+    // plano B: gatilho e ações com os campos num JSON em texto
+    return saida({
+      nome: "Follow-up", explicacao: "Espera 1 dia e manda lembrete.", avisos: [], respeitar_horario: false, condicoes: [],
+      gatilho: { tipo: "negocio_estagio", campos_json: JSON.stringify({ estagio_id: U("e", 13) }) },
+      acoes: [{ tipo: "esperar", campos_json: JSON.stringify({ minutos: 1440, cancelar_se_cliente_responder: true }) },
+              { tipo: "enviar_mensagem", campos_json: JSON.stringify({ texto: "Oi, {primeiro_nome}!" }) }],
+    });
+  });
+  const r = await chamar({ acao: "automacao_montar", token: "tok-adm", cliente: CLI_A, descricao: "x" }, banco, ia);
+  assert.equal(r.corpo.ok, true, r.txt);
+  assert.equal(ia.pedidos.length, 2);
+  assert.ok(ia.pedidos[0].schema.properties.gatilho.anyOf, "1ª tentativa: schema completo");
+  assert.deepEqual(Object.keys(ia.pedidos[1].schema.properties.gatilho.properties), ["tipo", "campos_json"], "2ª tentativa: schema simples");
+  assert.deepEqual(r.corpo.automacao.config, { estagio_id: U("e", 13) });
+  assert.deepEqual(r.corpo.automacao.acoes.map(a => a.tipo), ["esperar", "enviar_mensagem"]);
+  assert.equal(banco.reservas.length, 1, "uma reserva só (a segunda tentativa não cobra de novo)");
+  assert.deepEqual(banco.registros.map(x => x.p_ok), [true]);
+  // JSON de campos quebrado: a conferência acusa o que falta
+  const ruim = await chamar({ acao: "automacao_montar", token: "tok-adm", cliente: CLI_A, descricao: "x" }, criarBanco(), criarIa((p, n) => {
+    if (n === 1) throw Object.assign(new Error("Anthropic 400: schema too complex"), { status: 400 });
+    return saida({ nome: "x", explicacao: "y", avisos: [], respeitar_horario: false, condicoes: [], gatilho: { tipo: "negocio_estagio", campos_json: "{quebrado" }, acoes: [{ tipo: "nota", campos_json: "{\"texto\":\"a\"}" }] });
+  }));
+  assert.equal(ruim.corpo.erro, "automacao_invalida");
+  assert.match(ruim.corpo.detalhe, /Quando: escolha «Etapa»/);
+  // 400 por outro motivo NÃO repete (e as demais falhas também não)
+  const ia2 = criarIa(() => { throw Object.assign(new Error("Anthropic 400: prompt is too long"), { status: 400 }); });
+  const r2 = await chamar({ acao: "automacao_montar", token: "tok-adm", cliente: CLI_A, descricao: "x" }, criarBanco(), ia2);
+  assert.equal(ia2.pedidos.length, 1);
+  assert.equal(r2.corpo.erro, "ia_indisponivel");
+  const ia3 = criarIa(() => { throw Object.assign(new Error("Anthropic 529: Overloaded"), { status: 529 }); });
+  await chamar({ acao: "automacao_montar", token: "tok-adm", cliente: CLI_A, descricao: "x" }, criarBanco(), ia3);
+  assert.equal(ia3.pedidos.length, 1);
+});
+
 test("montar: cota esgotada → ia_cota, ritmo → muitos_pedidos; a IA nem é chamada", async () => {
   for (const [erro, re] of [["ia_cota", /cota de IA deste mês acabou/], ["muitos_pedidos", /Muitos pedidos à IA/]]) {
     const banco = criarBanco({ reservar: () => ({ ok: false, erro }) });

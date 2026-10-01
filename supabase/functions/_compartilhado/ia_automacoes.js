@@ -202,6 +202,48 @@ export function montarSchema(base) {
   };
 }
 
+/**
+ * Schema SIMPLES (plano B): o mesmo conteúdo, mas gatilho e ações levam os campos como um objeto JSON em texto
+ * (campos_json). Só é usado se a API recusar o schema completo por complexidade (HTTP 400); o servidor
+ * converte para o mesmo formato e a validação é a mesma.
+ */
+export function montarSchemaSimples() {
+  const par = lista => ({
+    type: "object", additionalProperties: false, required: ["tipo", "campos_json"],
+    properties: {
+      tipo: { type: "string", enum: lista },
+      campos_json: { type: "string", description: "objeto JSON (em texto) com os campos do catálogo para este tipo, com os ids exatos da lista de opções" },
+    },
+  });
+  return {
+    type: "object", additionalProperties: false,
+    required: ["nome", "explicacao", "avisos", "gatilho", "condicoes", "acoes", "respeitar_horario"],
+    properties: {
+      nome: { type: "string" }, explicacao: { type: "string" }, avisos: { type: "array", items: { type: "string" } },
+      gatilho: par(GATILHOS.map(g => g.id)),
+      condicoes: { type: "array", items: { type: "object", additionalProperties: false, required: ["campo", "op", "valor"],
+        properties: { campo: { type: "string" }, op: { type: "string", enum: OPERADORES.map(o => o.id) }, valor: { type: "string" } } } },
+      acoes: { type: "array", items: par(ACOES.filter(a => !esconde(a)).map(a => a.id)) },
+      respeitar_horario: { type: "boolean" },
+    },
+  };
+}
+
+/** Saída do schema simples → a forma do schema completo (campos soltos no objeto do gatilho/da ação). */
+export function expandirSaidaSimples(saida) {
+  const s = saida && typeof saida === "object" ? saida : {};
+  const abrir = x => {
+    const o = x && typeof x === "object" ? x : {};
+    let campos = {};
+    try { const j = JSON.parse(texto(o.campos_json) || "{}"); if (j && typeof j === "object" && !Array.isArray(j)) campos = j; } catch { /* campos vazios: a validação diz o que falta */ }
+    return { ...campos, tipo: o.tipo };
+  };
+  return { ...s, gatilho: abrir(s.gatilho), acoes: (Array.isArray(s.acoes) ? s.acoes : []).map(abrir) };
+}
+
+/** A API recusou o schema por ser complexo demais (e não por causa do pedido)? */
+const schemaComplexo = e => Number(e?.status) === 400 && /schema|grammar|too complex|complex|union|optional/i.test(limparErro(e?.message || ""));
+
 /* ------------------------------------------------------------------ prompt de montar */
 
 const itensDoCatalogo = () => [
@@ -546,8 +588,16 @@ export async function montarAutomacao(corpo, env, deps = {}) {
   const delim = novoDelimitador(), delimOpcoes = novoDelimitador();
   const { sistema, usuario } = montarPromptAutomacao({ descricao, empresa: info?.empresa, vertical: info?.vertical, base }, delim, delimOpcoes);
   let r;
+  const perguntar = schema => mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, usuario, schema, maxTokens: 8000, esforco: "medium", timeoutMs: 60_000 });
   try {
-    r = await mod.estruturarClaude({ chave: cfg.anthropic_api_key, modelo, sistema, usuario, schema: montarSchema(base), maxTokens: 8000, esforco: "medium", timeoutMs: 60_000 });
+    try {
+      r = await perguntar(montarSchema(base));
+    } catch (e) {
+      if (!schemaComplexo(e)) throw e;
+      console.error("automacao_montar: schema completo recusado, usando o simples:", limparErro(e?.message || e));
+      r = await perguntar(montarSchemaSimples());
+      r = { ...r, json: expandirSaidaSimples(r.json) };
+    }
   } catch (e) {
     await registrar(false, null);
     const t = traduzirErroIA(e);
