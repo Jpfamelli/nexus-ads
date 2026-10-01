@@ -11,12 +11,18 @@
    - soltar em ganho/perdido/agendada abre o modal (valor; motivo;
      data e hora) e só então chama nx_negocio_mover; erro volta o
      cartão e mostra a frase certa (trava do Ads incluída)
-   - celular: colunas com rolagem lateral com snap, sem arrastar
+   - celular (M23): colunas com rolagem lateral com snap; TOQUE LONGO de
+     350 ms levanta o cartão e o dedo o arrasta (rolagem de borda, fita de
+     etapas e «Ganhou/Perdeu» como destinos); toque longo sem arrastar, a
+     tecla M e o botão ⋮ do cartão abrem a folha «Mover para…»; a rolagem
+     vertical/horizontal normal nunca inicia arrasto (limiar + touch-action);
+     fita de etapas fixa sob a busca, totais numa linha e «Novo» flutuante
    ============================================================ */
 
 const LIMIAR_ARRASTO = 6;           // px antes de virar arrasto
 const BORDA_ROLAGEM = 70;           // px da borda que começam a rolar
 const PULSO_MIN_MS = 8000;          // recarga silenciosa no máximo a cada 8 s
+const agora = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
 
 export async function montarKanban(k, el, rota) {
   const { ui, h, L, ctx } = k;
@@ -58,14 +64,18 @@ export async function montarKanban(k, el, rota) {
     const lista = funis();
     selFunil.hidden = lista.length < 2;
     if (lista.length < 2) return;
+    const select = classe => {
+      const s = h("select", { class: ["sel", "crm-funil-sel", classe], "aria-label": "Funil" }, lista.map(f => h("option", { value: f.id, selected: S.funil && f.id === S.funil.id }, f.nome)));
+      s.addEventListener("change", () => trocarFunil(s.value));
+      return s;
+    };
     if (lista.length <= 5) {
       const ab = ui.abas({ itens: lista.map(f => ({ id: f.id, rotulo: f.nome, icone: f.conta_no_ads ? "anuncio" : null })),
         ativo: S.funil && S.funil.id, rotulo: "Funis", aoMudar: trocarFunil });
-      selFunil.appendChild(ab.el);
+      // no celular as abas dão lugar a um seletor (cabe na linha do título); o CSS mostra um dos dois
+      selFunil.append(ab.el, select("crm-funil-sel-m"));
     } else {
-      const s = h("select", { class: "sel crm-funil-sel", "aria-label": "Funil" }, lista.map(f => h("option", { value: f.id, selected: S.funil && f.id === S.funil.id }, f.nome)));
-      s.addEventListener("change", () => trocarFunil(s.value));
-      selFunil.appendChild(s);
+      selFunil.appendChild(select());
     }
   }
 
@@ -90,17 +100,29 @@ export async function montarKanban(k, el, rota) {
 
   const quadro = h("div", { class: "kb", role: "region", "aria-label": `Quadro de ${k.v.min("negocios")}`, tabindex: "-1" });
   const instr = h("p", { id: `kb-instr-${cli}`, class: "sr-only" },
-    podeMover ? "Enter abre. Espaço pega o cartão para mover: setas esquerda e direita trocam de etapa, cima e baixo mudam a posição, Enter solta, Esc cancela." : "Enter abre.");
+    podeMover ? "Enter abre. Espaço pega o cartão para mover: setas esquerda e direita trocam de etapa, cima e baixo mudam a posição, Enter solta, Esc cancela. A tecla M abre a lista de etapas para mover o cartão." : "Enter abre.");
   const areaVazia = h("div", { hidden: true });
   const corpoQuadro = h("div", { class: "kb-env" }, quadro);
 
-  const btNovo = podeMover ? h("button", { type: "button", class: "bt bt-prim", on: { click: () => novo({}) } }, ui.icone("mais"), k.v.novo("negocio")) : null;
-  el.append(
+  // celular (M23): fita de etapas fixa sob a busca (também é destino do arrasto) + totais numa linha que expande ao toque
+  const fitaEtapas = h("nav", { class: "kb-fita", "aria-label": "Etapas do funil" });
+  const idTotais = `crm-totais-${cli}`;
+  totais.id = idTotais;
+  const resumoLinha = h("button", { type: "button", class: "crm-resumo", "aria-expanded": "false", "aria-controls": idTotais,
+    on: { click: () => { const aberto = totais.classList.toggle("aberto"); resumoLinha.setAttribute("aria-expanded", String(aberto)); } } });
+  const resumoTxt = h("span", null, "—");
+  resumoLinha.append(resumoTxt, ui.icone("seta-baixo"));
+
+  const btNovo = podeMover ? h("button", { type: "button", class: "bt bt-prim crm-novo", on: { click: () => novo({}) } }, ui.icone("mais"), k.v.novo("negocio")) : null;
+  // botão flutuante do celular: irmão direto do .crm (um ancestral com transform prenderia o position:fixed)
+  const fab = podeMover ? h("button", { type: "button", class: "crm-fab", "aria-label": k.v.novo("negocio"), title: k.v.novo("negocio"), on: { click: () => novo({}) } },
+    ui.icone("mais"), h("span", { class: "crm-fab-txt" }, k.v.novo("negocio"))) : null;
+  el.append(...[
     h("header", { class: "crm-cab" },
       h("div", null, h("p", { class: "rotulo" }, ctx.cliente.nome), h("div", { class: "crm-titulo" }, h("h1", { class: "titulo-pag" }, k.v.crm), selFunil)),
       h("div", { class: "crm-cab-acoes" }, btNovo)),
     h("div", { class: "pilha-p" }, h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btFiltros), chips),
-    totais, areaVazia, corpoQuadro, instr);
+    fitaEtapas, resumoLinha, totais, areaVazia, corpoQuadro, instr, fab].filter(Boolean));
   desenharSelFunil();
 
   /* ============================================================ dados */
@@ -141,6 +163,8 @@ export async function montarKanban(k, el, rota) {
   function colunaDe(id) { return S.dados.colunas.find(c => c.estagio_id === id); }
 
   function desenharQuadro() {
+    // a recarga silenciosa (pulso, busca) refaz as colunas: guarda a rolagem para o quadro não voltar à 1ª coluna no celular
+    const rolagem = colEls.size ? { x: quadro.scrollLeft, y: new Map([...colEls].map(([id, c]) => [id, c.lista.scrollTop])) } : null;
     colEls.clear();
     ui.limpar(quadro);
     const vazioTotal = S.dados.colunas.every(c => !c.total) && L.filtroVazio(S.filtro);
@@ -157,8 +181,62 @@ export async function montarKanban(k, el, rota) {
       const col = colunaDe(e.id) || { estagio_id: e.id, total: 0, soma_previsto: 0, soma_valor: 0, itens: [] };
       quadro.appendChild(criarColuna(e, col));
     }
+    if (rolagem) {
+      quadro.style.scrollBehavior = "auto";
+      quadro.scrollLeft = rolagem.x;
+      for (const [id, c] of colEls) { const y = rolagem.y.get(id); if (y) c.lista.scrollTop = y; }
+      quadro.style.scrollBehavior = "";
+    }
     desenharTotais();
+    desenharFita();
   }
+
+  /* ---------- fita de etapas (celular): atalho para cada coluna + destino do arrasto ---------- */
+  function desenharFita() {
+    ui.limpar(fitaEtapas);
+    if (!S.dados) return;
+    for (const e of S.funil.estagios) {
+      const col = colunaDe(e.id);
+      const n = col ? Number(col.total) || 0 : 0;
+      const b = h("button", { type: "button", class: "kb-fita-b", dataset: { estagio: e.id }, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null,
+        "aria-label": `${e.nome}, ${n} ${n === 1 ? "cartão" : "cartões"}`, on: { click: () => irParaColuna(e.id) } },
+        h("i", { "aria-hidden": "true" }), h("span", null, e.nome), h("b", { class: "dado" }, ui.num(n)));
+      fitaEtapas.appendChild(b);
+    }
+    marcarColunaAtual();
+  }
+
+  /** Só os números da fita (depois de mover um cartão): a fita inteira só é refeita ao redesenhar o quadro. */
+  function contarFita() {
+    for (const b of fitaEtapas.children) {
+      const col = colunaDe(b.dataset.estagio), n = col ? Number(col.total) || 0 : 0;
+      if (b.lastChild) b.lastChild.textContent = ui.num(n);
+      b.setAttribute("aria-label", `${(k.estagio(b.dataset.estagio) || {}).nome || ""}, ${n} ${n === 1 ? "cartão" : "cartões"}`);
+    }
+  }
+
+  function irParaColuna(estagioId) {
+    const c = colEls.get(estagioId);
+    if (!c) return;
+    const r = c.sec.getBoundingClientRect(), q = quadro.getBoundingClientRect();
+    quadro.scrollTo({ left: quadro.scrollLeft + (r.left - q.left) - 16, behavior: ui.comportamentoRolagem() });
+  }
+
+  /** A coluna cujo lado esquerdo está mais perto da borda do quadro é a «atual» na fita (e a fita acompanha). */
+  function marcarColunaAtual() {
+    if (!colEls.size) return;
+    const q = quadro.getBoundingClientRect();
+    let melhor = null, dist = Infinity;
+    for (const [id, c] of colEls) { const d = Math.abs(c.sec.getBoundingClientRect().left - q.left - 16); if (d < dist) { dist = d; melhor = id; } }
+    for (const b of fitaEtapas.children) {
+      const atual = b.dataset.estagio === melhor;
+      if (atual) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current");
+      if (atual && !S.arrasto) { const f = fitaEtapas.getBoundingClientRect(), r = b.getBoundingClientRect(); if (r.left < f.left || r.right > f.right) fitaEtapas.scrollTo({ left: fitaEtapas.scrollLeft + (r.left - f.left) - 12, behavior: "auto" }); }
+    }
+  }
+  let rafFita = 0;
+  const aoRolarQuadro = () => { if (rafFita) return; rafFita = requestAnimationFrame(() => { rafFita = 0; marcarColunaAtual(); }); };
+  quadro.addEventListener("scroll", aoRolarQuadro, { passive: true });
 
   function criarColuna(e, col) {
     const idNome = `kb-c-${e.id}`;
@@ -191,7 +269,7 @@ export async function montarKanban(k, el, rota) {
     ui.limpar(c.lista);
     for (const it of col.itens) c.lista.appendChild(criarCartao(it, e));
     if (!col.itens.length) c.lista.appendChild(h("div", { class: "kb-vazia" }, podeMover
-      ? (matchMedia("(max-width: 760px), (pointer: coarse)").matches ? "Abra um cartão e escolha ‘Mover para…’" : "Arraste um cartão para cá")
+      ? (matchMedia("(pointer: coarse)").matches ? "Segure um cartão e arraste até aqui" : "Arraste um cartão para cá")
       : "Nada nesta etapa"));
     ui.limpar(c.extra);
     const faltam = (col.total || 0) - col.itens.length;
@@ -213,6 +291,8 @@ export async function montarKanban(k, el, rota) {
     totAbertos.textContent = ui.num(t.abertos);
     totSoma.textContent = ui.brl(t.soma_aberto, { centavos: false });
     totPrev.textContent = ui.brl(t.previsao_ponderada, { centavos: false });
+    resumoTxt.textContent = L.resumoDoFunil({ abertos: t.abertos, soma: ui.brl(t.soma_aberto, { centavos: false }), previsao: ui.brl(t.previsao_ponderada, { centavos: false }) }, k.v.art("negocio"));
+    contarFita();
     ui.limpar(distBarra); ui.limpar(distLeg);
     const totalGeral = S.dados.colunas.reduce((s, c) => s + (Number(c.total) || 0), 0);
     const partes = [];
@@ -265,15 +345,20 @@ export async function montarKanban(k, el, rota) {
         valor != null ? h("span", { class: "kc-valor" }, ui.brl(valor, { centavos: false })) : h("span", { class: ["kc-valor", "sem"] }, "sem valor"),
         h("span", { class: ["kc-dias", sla && "sla"], title: e.tipo === "aberto" ? `${L.textoDiasEtapa(c.estagio_em)}${sla ? ` — passou do prazo da etapa (${e.sla_horas} h)` : ""}` : null },
           e.tipo === "aberto" ? L.textoDiasEtapa(c.estagio_em).replace(" na etapa", "") : c.fechado_em ? `${e.tipo === "ganho" ? k.v.ganhar.toLowerCase() : "fechado"} ${ui.relativo(c.fechado_em)}` : ""),
-        dono ? ui.avatar(dono.nome, dono.id) : h("span", { class: "kc-avatar-vazio", title: "Sem responsável" }, ui.icone("usuario"))),
+        dono ? ui.avatar(dono.nome, dono.id) : h("span", { class: "kc-avatar-vazio", title: "Sem responsável" }, ui.icone("usuario")),
+        // alternativa ao arrastar (toque, leitor de tela): a mesma folha «Mover para…» do toque longo
+        podeMover ? h("button", { type: "button", class: "bt-icone kc-mover", "aria-label": `Mover «${titulo}» para outra etapa`, title: "Mover para…",
+          on: { click: ev => { ev.stopPropagation(); abrirMoverPara(c.id); } } }, ui.icone("opcoes")) : null),
       c.nao_lidas ? h("span", { class: "kc-naolidas", title: `${c.nao_lidas} não lidas` }, String(c.nao_lidas > 99 ? "99+" : c.nao_lidas)) : null);
     art.addEventListener("click", ev => {
-      if (S.arrasto && S.arrasto.moveu) return;
+      if (S.arrasto && (S.arrasto.moveu || S.arrasto.engoleClique)) return;
       if (S.teclado) return;
       if (ev.target.closest("a, button")) return;
       abrir(c.id);
     });
     art.addEventListener("keydown", ev => teclaCartao(ev, c.id));
+    // o toque longo do celular não pode abrir o menu do sistema (copiar/colar, imagem) em cima do cartão
+    art.addEventListener("contextmenu", ev => { if (S.arrasto && S.arrasto.toque) ev.preventDefault(); });
     if (podeMover) art.addEventListener("pointerdown", ev => inicioPonteiro(ev, c.id, art));
     return art;
   }
@@ -386,6 +471,7 @@ export async function montarKanban(k, el, rota) {
         ui.anunciar(`Pegou «${L.tituloCard(cardDe(id))}». Setas esquerda e direita trocam de etapa, cima e baixo a posição. Enter solta, Esc cancela.`);
         return;
       }
+      if ((ev.key === "m" || ev.key === "M") && podeMover && !ev.ctrlKey && !ev.metaKey && !ev.altKey && ev.target === art) { ev.preventDefault(); abrirMoverPara(id); return; }
       // setas sem pegar: navega entre cartões
       if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(ev.key)) { ev.preventDefault(); navegar(art, ev.key); }
       return;
@@ -471,23 +557,70 @@ export async function montarKanban(k, el, rota) {
     return null;
   }
 
-  /* ============================================================ mouse (pointer events) */
+  /* ============================================================ «Mover para…» (alternativa a arrastar) */
+  /** Folha com as etapas do funil (cor, nome, quantos cartões; a atual marcada). Escolher = soltar no topo da etapa, com as mesmas perguntas (valor, motivo, data). */
+  async function abrirMoverPara(id) {
+    const card = cardDe(id);
+    if (!card || !podeMover) return;
+    const atualId = (colunaDeCard(id) || {}).estagio_id;
+    let modalApi = null;
+    const corpo = h("div", { class: "kb-mover", role: "list" }, S.funil.estagios.map(e => {
+      const col = colunaDe(e.id), n = col ? Number(col.total) || 0 : 0, atual = e.id === atualId;
+      return h("button", { type: "button", role: "listitem", class: ["kb-mover-op", atual && "atual"], disabled: atual, "aria-current": atual ? "step" : null,
+        style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, on: { click: () => modalApi && modalApi.fechar(e.id) } },
+        h("i", { "aria-hidden": "true" }), h("span", { class: "kb-mover-nome" }, e.nome),
+        h("small", null, atual ? "etapa atual" : `${n} ${n === 1 ? "cartão" : "cartões"}`));
+    }));
+    const escolhida = await ui.modal({ titulo: "Mover para…", descricao: L.tituloCard(card), corpo, largura: "p", protegerTexto: false,
+      acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: null }], aoAbrir: a => { modalApi = a; } });
+    if (escolhida && S.vivo) soltar(id, escolhida, 0);
+  }
+  function colunaDeCard(id) { return S.dados.colunas.find(c => c.itens.some(x => x.id === id)) || null; }
+
+  /* ============================================================ mouse e toque (pointer events) */
   let zonasEl = null;
   function inicioPonteiro(ev, id, art) {
-    if (ev.button !== 0 || ev.pointerType === "touch" || S.teclado) return;
+    if (ev.button !== 0 || S.teclado || S.arrasto) return;
     if (ev.target.closest("a, button, input, select, textarea")) return;
-    if (matchMedia("(max-width: 760px)").matches) return;
-    S.arrasto = { id, art, x0: ev.clientX, y0: ev.clientY, moveu: false, pid: ev.pointerId };
+    // toque: o cartão só sai do lugar depois de segurar 350 ms (antes disso o dedo está rolando o quadro ou tocando para abrir)
+    const toque = ev.pointerType === "touch";
+    S.arrasto = { id, art, x0: ev.clientX, y0: ev.clientY, x: ev.clientX, y: ev.clientY, moveu: false, pid: ev.pointerId, toque };
+    const a = S.arrasto;
+    if (toque) {
+      a.gesto = L.novoGesto(ev.clientX, ev.clientY, agora());
+      a.timer = setTimeout(() => {
+        if (S.arrasto !== a) return;
+        a.gesto = L.gestoTempo(a.gesto, a.gesto.t0 + L.TOQUE.MS_LONGO);
+        if (a.gesto.acao === "levantar") levantarCartao(a);
+      }, L.TOQUE.MS_LONGO);
+    }
     addEventListener("pointermove", movePonteiro);
     addEventListener("pointerup", fimPonteiro);
     addEventListener("pointercancel", cancelarPonteiro);
   }
+
+  /** Segurou 350 ms: o cartão «sobe» (vibração curta, sombra) e o dedo passa a arrastá-lo. Soltar sem mexer abre «Mover para…». */
+  function levantarCartao(a) {
+    if (a.levantado) return;
+    a.levantado = true;
+    a.engoleClique = true;
+    try { if (navigator.vibrate) navigator.vibrate(10); } catch { /* sem vibração */ }
+    a.art.classList.add("kc-pega-toque");
+    document.body.style.userSelect = "none";
+    ui.anunciar(`Pegou «${L.tituloCard(cardDe(a.id))}». Arraste até a etapa ou solte para escolher onde colocar.`);
+  }
+
+  // enquanto o cartão está levantado a rolagem do navegador fica desligada (o touchmove é cancelável até a rolagem começar);
+  // antes disso (dedo rolando) nada é cancelado. O ouvinte nasce ao montar a tela: a rolagem só espera o JS depois de existir um ouvinte não passivo
+  const aoToqueMover = ev => { const a = S.arrasto; if (a && a.toque && a.levantado && ev.cancelable) ev.preventDefault(); };
+  quadro.addEventListener("touchmove", aoToqueMover, { passive: false });
 
   function comecarArrasto(a, ev) {
     a.moveu = true;
     const r = a.art.getBoundingClientRect();
     a.dx = ev.clientX - r.left; a.dy = ev.clientY - r.top;
     a.fantasma = a.art.cloneNode(true);
+    a.fantasma.classList.remove("kc-pega-toque");   // o clone nasce de um cartão já «levantado»: o transform é do fantasma
     a.fantasma.classList.add("kc-fantasma");
     a.fantasma.removeAttribute("id");
     a.fantasma.setAttribute("aria-hidden", "true");
@@ -498,6 +631,7 @@ export async function montarKanban(k, el, rota) {
     a.art.parentElement.insertBefore(a.lugar, a.art);
     a.art.hidden = true;
     quadro.classList.add("arrastando");
+    el.classList.add("crm-arrastando");
     document.body.style.userSelect = "none";
     // zonas Ganhou / Perdeu
     const g = S.funil.estagios.find(e => e.tipo === "ganho"), p = S.funil.estagios.find(e => e.tipo === "perdido");
@@ -510,9 +644,17 @@ export async function montarKanban(k, el, rota) {
 
   function movePonteiro(ev) {
     const a = S.arrasto;
-    if (!a) return;
+    if (!a || ev.pointerId !== a.pid) return;
     a.x = ev.clientX; a.y = ev.clientY;
-    if (!a.moveu) {
+    if (a.toque) {
+      // quem decide é a máquina de estados do crm-logica: dedo rolando nunca vira arrasto; só o cartão levantado se move
+      a.gesto = L.gestoMover(a.gesto, ev.clientX, ev.clientY, agora());
+      const acao = a.gesto.acao;
+      if (acao === "rolar") { clearTimeout(a.timer); return; }
+      if (acao === "levantar" || acao === "arrastar") levantarCartao(a);
+      if (acao === "arrastar" && !a.moveu) comecarArrasto(a, ev);
+      if (!a.moveu) return;
+    } else if (!a.moveu) {
       if (Math.hypot(ev.clientX - a.x0, ev.clientY - a.y0) < LIMIAR_ARRASTO) return;
       comecarArrasto(a, ev);
     }
@@ -525,7 +667,8 @@ export async function montarKanban(k, el, rota) {
     const a = S.arrasto;
     const sob = document.elementFromPoint(x, y);
     for (const z of (zonasEl ? zonasEl.children : [])) z.classList.toggle("alvo", !!sob && z.contains(sob));
-    const zona = sob && sob.closest && sob.closest(".kb-zona");
+    const zona = sob && sob.closest && sob.closest(".kb-zona, .kb-fita-b");     // «Ganhou/Perdeu» e a fita de etapas do celular
+    for (const b of fitaEtapas.children) b.classList.toggle("alvo", !!zona && zona === b);
     for (const c of colEls.values()) c.sec.classList.remove("alvo");
     if (zona) { a.alvo = { zona: zona.dataset.estagio }; a.lugar.hidden = true; return; }
     const col = sob && sob.closest && sob.closest(".kb-col");
@@ -560,6 +703,13 @@ export async function montarKanban(k, el, rota) {
         if (a.y < rl.top + 40) lista.scrollTop -= Math.ceil((rl.top + 40 - a.y) / 5);
         else if (a.y > rl.bottom - 40) lista.scrollTop += Math.ceil((a.y - (rl.bottom - 40)) / 5);
       }
+      // a própria página rola quando o dedo chega perto do topo (abaixo da fita fixa) ou da base (acima das zonas Ganhou/Perdeu)
+      const sobreZona = sob && sob.closest && sob.closest(".kb-zona, .kb-fita-b");
+      if (!sobreZona) {
+        const topoFixo = (fitaEtapas.offsetParent ? fitaEtapas.getBoundingClientRect().bottom : 0) || 70;
+        if (a.y < topoFixo + 36) window.scrollBy(0, -Math.ceil((topoFixo + 36 - a.y) / 5));
+        else if (a.y > innerHeight - 130) window.scrollBy(0, Math.ceil((a.y - (innerHeight - 130)) / 5));
+      }
       if (vx) posicionarLugar(a.x, a.y);
     }
     a.raf = requestAnimationFrame(rolarBordas);
@@ -568,22 +718,42 @@ export async function montarKanban(k, el, rota) {
   function limparArrasto() {
     const a = S.arrasto;
     if (!a) return;
+    clearTimeout(a.timer);
     removeEventListener("pointermove", movePonteiro);
     removeEventListener("pointerup", fimPonteiro);
     removeEventListener("pointercancel", cancelarPonteiro);
     if (a.raf) cancelAnimationFrame(a.raf);
     if (a.fantasma) a.fantasma.remove();
     if (zonasEl) { zonasEl.remove(); zonasEl = null; }
+    a.art.classList.remove("kc-pega-toque");
     quadro.classList.remove("arrastando");
+    el.classList.remove("crm-arrastando");
     document.body.style.userSelect = "";
     for (const c of colEls.values()) c.sec.classList.remove("alvo");
+    for (const b of fitaEtapas.children) b.classList.remove("alvo");
   }
 
-  function fimPonteiro() {
+  function fimPonteiro(ev) {
     const a = S.arrasto;
-    if (!a) return;
+    if (!a || (ev && ev.pointerId !== a.pid)) return;
+    let acao = a.moveu ? "soltar" : "nada";
+    if (a.toque) acao = (a.gesto = L.gestoSoltar(a.gesto, agora())).acao;
     limparArrasto();
-    if (!a.moveu) { S.arrasto = null; return; }
+    if (!a.toque && !a.moveu) { S.arrasto = null; return; }        // clique simples do mouse
+    if (acao === "toque") { S.arrasto = null; return; }            // toque curto: o click normal abre o cartão
+    if (acao === "nada") {                                         // o dedo estava rolando (ou o sistema tomou o gesto)
+      if (a.lugar) a.lugar.remove();
+      a.art.hidden = false;
+      S.arrasto = null;
+      if (a.moveu) preencherColunaDoCartao(a.id);
+      return;
+    }
+    if (acao === "mover_para") {                                   // segurou e soltou sem arrastar: a folha «Mover para…»
+      a.engoleClique = true;
+      setTimeout(() => { if (S.arrasto === a) S.arrasto = null; }, 450);   // o click que vem depois do pointerup não abre a gaveta
+      abrirMoverPara(a.id);
+      return;
+    }
     const alvo = a.alvo;
     if (a.lugar) a.lugar.remove();
     a.art.hidden = false;
@@ -593,14 +763,14 @@ export async function montarKanban(k, el, rota) {
     soltar(a.id, alvo.estagio, Math.max(0, alvo.indice));
   }
 
-  function cancelarPonteiro() {
+  function cancelarPonteiro(ev) {
     const a = S.arrasto;
-    if (!a) return;
+    if (!a || (ev && ev.pointerId !== undefined && a.pid !== undefined && ev.pointerId !== a.pid)) return;
     limparArrasto();
     if (a.lugar) a.lugar.remove();
     a.art.hidden = false;
     S.arrasto = null;
-    preencherColunaDoCartao(a.id);
+    if (a.moveu) preencherColunaDoCartao(a.id);
   }
 
   function preencherColunaDoCartao(id) {

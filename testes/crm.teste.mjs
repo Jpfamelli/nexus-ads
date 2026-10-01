@@ -158,6 +158,59 @@ await teste("moverLocal: tira de uma coluna, põe na outra e ajusta contagens e 
   assert.equal(r[0].total, 2);
 });
 
+await teste("gesto de toque no Kanban (M23): toque curto abre, rolagem nunca arrasta, toque longo levanta, arrasta e solta", () => {
+  // toque curto: soltar antes dos 350 ms = o click normal abre o cartão
+  let g = L.novoGesto(100, 200, 1000);
+  assert.equal(L.gestoSoltar(g, 1120).acao, "toque");
+  // rolagem (mexeu > 10 px antes dos 350 ms): vira «rolando» e NUNCA arrasto, mesmo que o dedo pare depois dos 350 ms
+  let r = L.gestoMover(g, 100, 230, 1080);
+  assert.equal(r.estado, "rolando"); assert.equal(r.acao, "rolar");
+  r = L.gestoMover(r, 100, 232, 1600);
+  assert.equal(r.estado, "rolando"); assert.equal(r.acao, null);
+  assert.equal(L.gestoSoltar(r, 1700).acao, "nada");
+  // tremor de até 10 px antes dos 350 ms não é rolagem
+  r = L.gestoMover(g, 104, 205, 1100);
+  assert.equal(r.estado, "espera"); assert.equal(r.acao, null);
+  // toque longo: levanta aos 350 ms (não antes); soltar sem mexer abre «Mover para…»
+  g = L.novoGesto(100, 200, 0);
+  assert.deepEqual([L.gestoTempo(g, 349).estado, L.gestoTempo(g, 349).acao], ["espera", null]);
+  const lev = L.gestoTempo(g, 350);
+  assert.deepEqual([lev.estado, lev.acao], ["levantado", "levantar"]);
+  assert.equal(L.gestoSoltar(lev, 900).acao, "mover_para");
+  // levantado: mexer menos que o limiar de arrasto (6 px) segue levantado; a partir dele arrasta; depois só «mover»; soltar = soltar no destino
+  let a = L.gestoMover(lev, 103, 202, 500);
+  assert.equal(a.estado, "levantado"); assert.equal(a.acao, null);
+  a = L.gestoMover(a, 100, 212, 520);
+  assert.equal(a.estado, "arrastando"); assert.equal(a.acao, "arrastar");
+  a = L.gestoMover(a, 100, 300, 540);
+  assert.equal(a.estado, "arrastando"); assert.equal(a.acao, "mover");
+  assert.equal(L.gestoSoltar(a, 600).acao, "soltar");
+  // o timer atrasou: parado 400 ms e depois 40 px = levantou e arrastou (não é rolagem)
+  a = L.gestoMover(L.novoGesto(0, 0, 0), 40, 0, 400);
+  assert.equal(a.estado, "arrastando"); assert.equal(a.acao, "arrastar"); assert.equal(a.levantou, true);
+  // soltar depois dos 350 ms sem o timer ter rodado = «Mover para…»
+  assert.equal(L.gestoSoltar(L.novoGesto(0, 0, 0), 360).acao, "mover_para");
+  // o sistema tomou o gesto (pointercancel): nunca solta nem move
+  assert.equal(L.gestoCancelar(a).acao, "nada");
+  assert.deepEqual(L.TOQUE, { MS_LONGO: 350, LIMIAR_ROLAGEM: 10, LIMIAR_ARRASTO: 6 });
+});
+
+await teste("destino do arrasto: posição na coluna pelo meio dos cartões, coluna/etapa pelo ponto e resumo dos totais", () => {
+  const cartoes = [{ top: 0, bottom: 100 }, { top: 110, bottom: 210 }];
+  assert.equal(L.indiceDoPonto(cartoes, 40), 0);
+  assert.equal(L.indiceDoPonto(cartoes, 60), 1);
+  assert.equal(L.indiceDoPonto(cartoes, 170), 2);
+  assert.equal(L.indiceDoPonto([], 50), 0);
+  const alvos = [{ id: "a", left: 0, right: 100, top: 0, bottom: 50 }, { id: "b", left: 110, right: 210, top: 0, bottom: 50 }];
+  assert.equal(L.alvoDoPonto(alvos, 150, 20), "b");
+  assert.equal(L.alvoDoPonto(alvos, 105, 20), null);
+  assert.equal(L.alvoDoPonto(alvos, 50, 80), null);
+  assert.equal(L.resumoDoFunil({ abertos: 3, soma: "R$ 12.950", previsao: "R$ 4.735" }, "a"), "3 abertas · R$ 12.950 · previsão R$ 4.735");
+  assert.equal(L.resumoDoFunil({ abertos: 1, soma: "R$ 900", previsao: "R$ 90" }, "a"), "1 aberta · R$ 900 · previsão R$ 90");
+  assert.equal(L.resumoDoFunil({ abertos: 2, soma: "R$ 5", previsao: "" }, "o"), "2 abertos · R$ 5");
+  assert.equal(L.resumoDoFunil({}, "o"), "0 abertos");
+});
+
 await teste("filtrar local: busca sem acento, telefone, dono, etiquetas alguma/todas/nenhuma, origem, valor", () => {
   const cards = [
     { id: 1, titulo: "Implante", nome: "João da Silva", telefone: "5512998303030", dono_id: "u1", etiquetas: ["e1"], origem: "anuncio", valor_previsto: 3500 },
@@ -435,6 +488,21 @@ await teste("crm.css: só tokens (nenhum hex/rgb fixo), [hidden] forte, sem 1fr 
   assert.ok(!/(^|[\s(,])1fr/.test(css.replace(/minmax\(0,\s*1fr\)/g, "")), "1fr solto (use minmax(0,1fr))");
   assert.ok(!/ease-in(?!-out)/.test(css), "ease-in");
   assert.ok(/prefers-reduced-motion/.test(css) || !/animation:/.test(css), "reduced-motion");
+});
+
+await teste("kanban no toque (M23): touchmove não passivo, sem snap ao arrastar, touch-action nos dois eixos, «Mover para…» sempre à mão", () => {
+  const js = ler("crm-kanban.js"), css = ler("crm.css");
+  assert.ok(/addEventListener\("touchmove",\s*aoToqueMover,\s*\{\s*passive:\s*false\s*\}\)/.test(js), "touchmove não passivo (cancelar a rolagem só com o cartão levantado)");
+  assert.ok(/ev\.cancelable/.test(js), "só cancela touchmove cancelável");
+  assert.ok(/\.kb\.arrastando\s*\{[^}]*scroll-snap-type:\s*none/.test(css), "snap desligado durante o arrasto (a rolagem de borda é por scrollLeft)");
+  assert.ok(/\.kc \{[\s\S]*?touch-action:\s*pan-x pan-y/.test(css), ".kc rola nos dois eixos (nunca touch-action: none)");
+  assert.ok(!/\.kc[^{]*\{[^}]*touch-action:\s*none/.test(css), "touch-action: none em cartão roubaria a rolagem");
+  assert.ok(/\.vista > \.crm\s*\{\s*animation-fill-mode:\s*backwards/.test(css), "sem transform residual no .crm (prenderia o position: fixed do botão flutuante)");
+  assert.ok(/L\.gestoMover\(/.test(js) && /L\.gestoSoltar\(/.test(js) && /L\.TOQUE\.MS_LONGO/.test(js), "o arrasto por toque segue a máquina de estados do crm-logica");
+  assert.ok(/abrirMoverPara/.test(js) && /class:\s*"bt-icone kc-mover"/.test(js) && /ev\.key === "m"/.test(js), "«Mover para…»: botão no cartão, tecla M e toque longo sem arrastar");
+  assert.ok(/class:\s*"kb-fita"/.test(js) && /class:\s*"crm-fab"/.test(js) && /crm-resumo/.test(js), "fita de etapas, totais numa linha e botão flutuante");
+  assert.ok(/\.kb-zonas\s*\{[^}]*animation-name:\s*zonasEntramM/.test(css), "zonas Ganhou/Perdeu valem no celular");
+  assert.ok(!/\.kb-zonas\s*\{\s*display:\s*none/.test(css), "zonas não somem mais no celular");
 });
 
 console.log(`\n${ok} ok, ${falhas} falha(s)`);

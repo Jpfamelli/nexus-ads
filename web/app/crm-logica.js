@@ -371,6 +371,73 @@ export function ordemDoSoltar(itens, pos, proxima, agora = Date.now()) {
   return ordemEntre(antes, depois, agora);
 }
 
+/* ------------------------------------------------------------ gesto de toque no Kanban (M23)
+ * O DOM só repassa pontos e tempo; quem decide o que o dedo está fazendo é esta máquina de estados (pura, testável).
+ *   espera ──(350 ms parado)──▶ levantado ──(mexeu ≥ 6 px)──▶ arrastando
+ *   espera ──(mexeu > 10 px antes dos 350 ms)──▶ rolando  (a rolagem é do navegador: nunca vira arrasto)
+ * Ao soltar: «toque» (antes dos 350 ms: o clique normal abre o cartão) · «mover_para» (levantou e soltou sem mexer: folha «Mover para…»)
+ * · «soltar» (arrastou: soltar no destino) · «nada» (rolou ou o sistema cancelou). */
+export const TOQUE = Object.freeze({ MS_LONGO: 350, LIMIAR_ROLAGEM: 10, LIMIAR_ARRASTO: 6 });
+
+const dist2 = (x0, y0, x1, y1) => Math.hypot(x1 - x0, y1 - y0);
+
+/** Dedo encostou no cartão em (x, y) no instante t (ms). */
+export function novoGesto(x, y, t = 0) {
+  return { estado: "espera", x0: x, y0: y, t0: t, xl: null, yl: null, acao: null };
+}
+
+/** O tempo andou até t: depois de MS_LONGO sem mexer o cartão é «levantado» (acao = "levantar"). */
+export function gestoTempo(g, t) {
+  if (g.estado === "espera" && t - g.t0 >= TOQUE.MS_LONGO) return { ...g, estado: "levantado", xl: g.xl ?? g.x0, yl: g.yl ?? g.y0, acao: "levantar" };
+  return { ...g, acao: null };
+}
+
+/** O dedo foi para (x, y) no instante t. acao: "levantar" | "rolar" | "arrastar" | "mover" | null. */
+export function gestoMover(g, x, y, t = g.t0) {
+  let s = gestoTempo(g, t);
+  const levantou = s.acao === "levantar";
+  if (s.estado === "espera") {
+    if (dist2(s.x0, s.y0, x, y) > TOQUE.LIMIAR_ROLAGEM) return { ...s, estado: "rolando", acao: "rolar" };
+    return s;
+  }
+  if (s.estado === "levantado") {
+    if (dist2(s.xl, s.yl, x, y) >= TOQUE.LIMIAR_ARRASTO) return { ...s, estado: "arrastando", acao: "arrastar", levantou };
+    return levantou ? s : { ...s, acao: null };
+  }
+  if (s.estado === "arrastando") return { ...s, acao: "mover" };
+  return { ...s, acao: null };
+}
+
+/** O dedo saiu da tela no instante t. acao: "toque" | "mover_para" | "soltar" | "nada". */
+export function gestoSoltar(g, t = g.t0) {
+  const s = gestoTempo(g, t);
+  const acao = s.estado === "espera" ? "toque" : s.estado === "levantado" ? "mover_para" : s.estado === "arrastando" ? "soltar" : "nada";
+  return { ...s, estado: "encerrado", acao };
+}
+
+/** O sistema tomou o gesto (pointercancel: rolagem, chamada, etc.). Nunca solta nem move nada. */
+export function gestoCancelar(g) { return { ...g, estado: "encerrado", acao: "nada" }; }
+
+/** Posição (0 = topo) em que um cartão arrastado entra numa coluna: antes do primeiro cartão cujo meio está abaixo de y. cartoes = [{top, bottom}] sem o arrastado. */
+export function indiceDoPonto(cartoes, y) {
+  const lista = cartoes || [];
+  for (let i = 0; i < lista.length; i++) { if (y < lista[i].top + (lista[i].bottom - lista[i].top) / 2) return i; }
+  return lista.length;
+}
+
+/** Em qual coluna/etapa o ponto cai. alvos = [{id, left, right, top, bottom}] → id | null. */
+export function alvoDoPonto(alvos, x, y) {
+  const a = (alvos || []).find(r => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+  return a ? a.id : null;
+}
+
+/** Texto curto dos totais no celular: «3 abertas · R$ 12.950 · previsão R$ 4.735». artigo = "a" | "o". */
+export function resumoDoFunil({ abertos = 0, soma = "", previsao: prev = "" } = {}, artigo = "o") {
+  const n = Number(abertos) || 0;
+  const rot = `abert${artigo === "a" ? "a" : "o"}${n === 1 ? "" : "s"}`;
+  return [`${n} ${rot}`, soma, prev ? `previsão ${prev}` : ""].filter(Boolean).join(" · ");
+}
+
 /**
  * Pontuação do lead (0 a 100) gravada pelo passo «preencher um campo» ou pela IA: campos.score, com score_motivo e score_em.
  * Aceita o negócio completo (`campos` dentro) ou o cartão com `score` solto. null quando não há nota válida.

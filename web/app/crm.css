@@ -8,6 +8,9 @@
 [hidden] { display: none !important; }
 
 .crm { display: flex; flex-direction: column; gap: 1.1rem; min-width: 0; }
+/* a entrada (.vista > * { animation: aparece … both }) deixava transform: matrix(identidade) no fim, e isso prende o position: fixed dos filhos
+   (botão flutuante do celular) à própria tela: com `backwards` o transform some quando a animação acaba */
+.vista > .crm { animation-fill-mode: backwards; }
 .crm-cab { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem 1.5rem; flex-wrap: wrap; }
 .crm-cab > div:first-child { min-width: 0; }
 .crm-cab .rotulo { margin-bottom: .4rem; }
@@ -79,7 +82,7 @@
   overflow-x: auto; overflow-y: hidden; padding: .2rem .2rem 1rem; margin: 0 -.2rem; scroll-behavior: smooth;
   scrollbar-width: thin; scrollbar-color: var(--c-borda-2) transparent; overscroll-behavior-x: contain;
 }
-.kb.arrastando { scroll-behavior: auto; cursor: grabbing; }
+.kb.arrastando { scroll-behavior: auto; scroll-snap-type: none; cursor: grabbing; }
 .kb-col {
   --cor: var(--c-texto-3);
   position: relative; display: flex; flex-direction: column; min-width: 0; max-height: calc(100dvh - 260px); min-height: 220px;
@@ -115,7 +118,8 @@
 .kc {
   --cor: var(--c-texto-3);
   position: relative; display: flex; flex-direction: column; gap: .5rem; padding: .75rem .8rem .7rem .95rem; border-radius: var(--r-p);
-  background: var(--c-sup-2); border: 1px solid var(--c-borda); cursor: grab; user-select: none; touch-action: pan-y;
+  background: var(--c-sup-2); border: 1px solid var(--c-borda); cursor: grab; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  touch-action: pan-x pan-y; /* o navegador rola nos dois eixos; o arrasto só nasce do toque LONGO (JS) e, enquanto o cartão está levantado, o touchmove é cancelado */
   box-shadow: 0 10px 22px -18px var(--c-sombra);
   transition: border-color var(--t-ui) var(--e-out), transform var(--t-micro) var(--e-out), background-color var(--t-ui) var(--e-out), opacity var(--t-ui) var(--e-out);
 }
@@ -124,6 +128,12 @@
 .kc:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
 .kc.pego { border-color: var(--c-prim); box-shadow: 0 0 0 3px var(--c-prim-suave), 0 16px 34px -18px var(--c-sombra); transform: scale(1.015); }
 .kc.fantasma-origem { opacity: .35; }
+.kc.kc-pega-toque { border-color: var(--c-prim); box-shadow: 0 0 0 3px var(--c-prim-suave), 0 16px 34px -18px var(--c-sombra); transform: scale(1.03); }
+/* alternativa ao arrastar: «Mover para…» (sempre no toque e ao focar o cartão pelo teclado; a tecla M também abre) */
+.kc-mover { display: none; width: 40px; height: 40px; margin: -8px -8px -8px 0; flex: none; }
+.kc-mover .ic { width: 16px; height: 16px; }
+.kc:focus-within .kc-mover { display: inline-grid; }
+@media (pointer: coarse), (max-width: 760px) { .kc-mover { display: inline-grid; } }
 .kc.salvando { opacity: .65; }
 .kc.salvando::after { content: ""; position: absolute; right: .6rem; top: .6rem; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--c-prim-luz); border-right-color: transparent; animation: gira var(--t-giro) linear infinite; }
 .kc.chegou { animation: kcChega var(--t-move) var(--e-out) both; }
@@ -152,6 +162,22 @@
 .kc-tarefa .ic { width: 13px; height: 13px; }
 .kc-tarefa.atrasada { color: var(--c-ruim); }
 
+/* folha «Mover para…» */
+.kb-mover { display: flex; flex-direction: column; gap: .35rem; }
+.kb-mover-op {
+  --cor: var(--c-texto-3); display: flex; align-items: center; gap: .7rem; width: 100%; min-height: 52px; padding: .5rem .9rem; border-radius: var(--r-p);
+  border: 1px solid var(--c-borda); background: var(--c-sup-2); color: var(--c-texto); text-align: left; font-weight: 600; font-size: var(--fs-15);
+}
+.kb-mover-op i { width: 12px; height: 12px; flex: none; border-radius: 50%; background: var(--cor); }
+.kb-mover-nome { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-mover-op small { flex: none; color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 500; }
+.kb-mover-op:hover:not(:disabled) { border-color: var(--c-borda-2); background: var(--c-sup-3); }
+.kb-mover-op.atual { border-color: var(--cor); background: color-mix(in srgb, var(--cor) 12%, var(--c-sup)); cursor: default; opacity: 1; }
+
+/* celular: fita de etapas, totais numa linha e botão flutuante (só aparecem em ≤ 760 px) */
+.kb-fita, .crm-resumo, .crm-fab { display: none; }
+.crm-funil-sel-m { display: none; }
+
 /* arrastar: fantasma, lugar, zonas ganhou/perdeu */
 .kc-fantasma {
   position: fixed; z-index: 120; pointer-events: none; margin: 0; width: var(--w, 280px); transform-origin: 30% 20%;
@@ -164,6 +190,7 @@
   animation: zonasEntram var(--t-ui) var(--e-out) both;
 }
 @keyframes zonasEntram { from { opacity: 0; transform: translate(-50%, 16px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes zonasEntramM { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 .kb-zona {
   display: flex; align-items: center; gap: .6rem; min-width: 180px; min-height: 64px; padding: .7rem 1.2rem; border-radius: 18px;
   border: 1.5px dashed var(--c-borda-2); background: var(--c-vidro-forte); color: var(--c-texto-2); font-weight: 700; font-size: var(--fs-15);
@@ -509,8 +536,54 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .kb { grid-auto-columns: min(86vw, 340px); scroll-snap-type: x mandatory; scroll-padding: 0 16px; gap: .7rem; margin: 0 -16px; padding: .2rem 16px 1rem; }
   .kb-col { scroll-snap-align: start; max-height: none; }
   .kb-lista { max-height: 62dvh; }
-  .kc { cursor: pointer; touch-action: auto; }
-  .kb-zonas { display: none; }
+  .kc { cursor: pointer; }
+  /* zonas Ganhou/Perdeu: agora também valem no toque (arrastando); ficam acima da barra inferior, lado a lado */
+  .kb-zonas { left: 12px; right: 12px; transform: none; gap: .6rem; bottom: calc(var(--barra) + env(safe-area-inset-bottom) + 10px); animation-name: zonasEntramM; }
+  .kb-zona { flex: 1 1 0; min-width: 0; min-height: 56px; justify-content: center; padding: .5rem .8rem; }
+  /* M23: o primeiro cartão tem de aparecer na primeira tela — cabeçalho compacto, busca + filtros numa linha, fita fixa, totais numa linha */
+  .crm[data-tela="kanban"] { gap: .6rem; }
+  .crm[data-tela="kanban"] .crm-cab { padding: .55rem .9rem; border-radius: var(--r); align-items: center; flex-wrap: nowrap; }
+  .crm[data-tela="kanban"] .crm-cab > div:first-child { flex: 1; }
+  .crm[data-tela="kanban"] .crm-cab .rotulo, .crm[data-tela="kanban"] .crm-cab-acoes { display: none; }
+  .crm[data-tela="kanban"] .crm-titulo { flex-wrap: nowrap; justify-content: space-between; gap: .6rem; }
+  .crm[data-tela="kanban"] .titulo-pag { font-size: var(--fs-20); }
+  .crm[data-tela="kanban"] .crm-funis .abas { display: none; }
+  .crm-funil-sel-m { display: block; flex: 0 1 auto; min-width: 9.5rem; max-width: 62%; min-height: 40px; }
+  .crm[data-tela="kanban"] .crm-fita { flex-wrap: nowrap; gap: .5rem; }
+  .crm[data-tela="kanban"] .crm-fita .busca { flex: 1 1 auto; min-width: 0; max-width: none; }
+  .kb-fita {
+    display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none; position: sticky; top: var(--topo); z-index: 6;
+    margin: 0 -16px; padding: .45rem 16px; background: var(--c-fundo); border-bottom: 1px solid var(--c-borda);
+  }
+  .kb-fita::-webkit-scrollbar { display: none; }
+  .kb-fita-b {
+    --cor: var(--c-texto-3); flex: none; display: inline-flex; align-items: center; gap: .4rem; min-height: 40px; padding: .2rem .8rem; border-radius: 999px;
+    border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 600; white-space: nowrap;
+    transition: transform var(--t-micro) var(--e-out), background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out);
+  }
+  .kb-fita-b i { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--cor); }
+  .kb-fita-b b { font-size: var(--fs-12); font-weight: 500; color: var(--c-texto-2); }
+  .kb-fita-b[aria-current="true"] { background: var(--c-prim-suave); border-color: var(--c-prim); color: var(--c-texto); }
+  .kb-fita-b.alvo { transform: scale(1.06); border-color: var(--cor); background: color-mix(in srgb, var(--cor) 18%, var(--c-sup)); color: var(--c-texto); }
+  .crm-resumo {
+    display: flex; align-items: center; justify-content: space-between; gap: .6rem; width: 100%; min-height: 40px; padding: .2rem .9rem;
+    border-radius: var(--r-p); border: 1px solid var(--c-borda); background: var(--c-sup); color: var(--c-texto); text-align: left; font-size: var(--fs-13); font-weight: 600;
+  }
+  .crm-resumo > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crm-resumo .ic { width: 16px; height: 16px; flex: none; transition: transform var(--t-ui) var(--e-out); }
+  .crm-resumo[aria-expanded="true"] .ic { transform: rotate(180deg); }
+  .crm-totais:not(.aberto) { display: none; }
+  .crm-dist { display: none; }
+  .crm-fab {
+    display: inline-flex; align-items: center; justify-content: center; position: fixed; right: 16px; z-index: 24;
+    bottom: calc(var(--barra) + env(safe-area-inset-bottom) + 14px); width: 56px; height: 56px; padding: 0; border: 0; border-radius: 50%;
+    background: var(--c-prim); color: var(--c-prim-txt); box-shadow: 0 14px 28px -12px var(--c-sombra), 0 0 0 1px var(--c-borda);
+    transition: transform var(--t-micro) var(--e-out);
+  }
+  .crm-fab:active { transform: scale(.95); }
+  .crm-fab .ic { width: 24px; height: 24px; }
+  .crm-fab-txt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .crm.crm-arrastando .crm-fab { display: none; }
   .ng-kv { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
   .ng-kv > dt { margin-top: .45rem; }
   .ed-erro { grid-column: 1; }
@@ -538,7 +611,8 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .crm-seg button, .tf-acoes .bt-icone, .nota-meta .bt-icone, .crm-cfg-item .bt-icone, .fe-rem, .fe-alca { min-width: 44px; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .kc, .kc-fantasma, .kb-zona, .crm-chip, .kb-zonas { transition: none !important; animation: none !important; }
+  .kc, .kc-fantasma, .kb-zona, .crm-chip, .kb-zonas, .kb-fita-b, .crm-fab { transition: none !important; animation: none !important; }
+  .kc.kc-pega-toque { transform: none; }
   .kb { scroll-behavior: auto; }
 }
 
