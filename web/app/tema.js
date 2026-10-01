@@ -9,12 +9,13 @@ export const PRODUTO_PADRAO = "Órbita";
 
 export const PADRAO = Object.freeze({
   produto: PRODUTO_PADRAO,
-  cores: Object.freeze({ primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#FAFAF8" }),
+  cores: Object.freeze({ primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#F3F0E9" }),
 });
 
 /** Preferência visual do usuário. `marca` respeita o fundo configurado pela empresa. */
 export const ESQUEMAS = Object.freeze({ claro: "claro", escuro: "escuro", marca: "marca" });
-export const FUNDOS_ESQUEMA = Object.freeze({ claro: "#FAFAF8", escuro: "#07090C" });
+/** O claro é "papel" quente (M01): o cartão (--c-sup) sobe para o lado do branco e fica mais claro que a página. */
+export const FUNDOS_ESQUEMA = Object.freeze({ claro: "#F3F0E9", escuro: "#07090C" });
 export function coresNoEsquema(cores = {}, esquema = "claro") {
   const modo = Object.hasOwn(ESQUEMAS, esquema) ? esquema : "claro";
   return { ...PADRAO.cores, ...(cores || {}), ...(modo === "marca" ? {} : { fundo: FUNDOS_ESQUEMA[modo] }) };
@@ -29,7 +30,7 @@ export const PALETA = Object.freeze([
 /** Fundos sugeridos no editor de marca: 5 noturnos (palco) e 3 claros. */
 export const FUNDOS = Object.freeze([
   "#07090C", "#0B1416", "#0E1116", "#12100E", "#0A0F1A",
-  "#FAFAF8", "#F4F1EA", "#FFFFFF",
+  "#F3F0E9", "#FAFAF8", "#FFFFFF",
 ]);
 
 const TEXTO_ESCURO = "#F2EEE8";   // texto no esquema escuro
@@ -38,10 +39,18 @@ const TINTA = "#0B1B2B";          // tinta da marca (texto escuro preferido sobr
 const BRANCO = "#FFFFFF";
 const PRETO = "#000000";
 
+/* Cores de estado (e as duas de plataforma). Meta e Google têm tom PRÓPRIO (M04): antes reaproveitavam `info` e `aten`
+   (no claro o Google tinha o mesmo hex do aviso). Índigo e verde-azulado ficam longe do âmbar, do vermelho, do verde e do azul de estado. */
 const FIXOS = {
-  escuro: { ok: "#7FD1A5", ruim: "#F08A74", aten: "#E5B35C", info: "#8FB8DD", meta: "#6FA3CF", google: "#CF9540" },
-  claro: { ok: "#1A6E44", ruim: "#B3261E", aten: "#8A5A00", info: "#2B5A80", meta: "#2B5A80", google: "#8A5A00" },
+  escuro: { ok: "#7FD1A5", ruim: "#F08A74", aten: "#E5B35C", info: "#8FB8DD", meta: "#9298F2", google: "#6ECFC8" },
+  claro: { ok: "#1A6E44", ruim: "#B3261E", aten: "#8A5A00", info: "#2B5A80", meta: "#2C3396", google: "#0B645E" },
 };
+const ESTADOS = ["ruim", "ok", "aten", "info", "meta", "google"];   // ordem de prioridade ao girar o matiz (o que carrega significado primeiro)
+const ROTULO_ESTADO = { ok: "sucesso", ruim: "erro", aten: "atenção", info: "informação", meta: "Meta", google: "Google" };
+/** Distância mínima de matiz (graus) entre a marca e uma cor de estado; abaixo disso o ESTADO gira, nunca a marca (M04). */
+export const MARGEM_MATIZ = 30;
+/** Distância preferida entre dois estados quando um deles gira (evita "sucesso ciano" ao lado de "informação azul"). */
+const ENTRE_ESTADOS = 22;
 
 const RE_HEX = /^#[0-9a-f]{6}$/i;
 
@@ -122,6 +131,66 @@ export function ajustarContraste(cor, fundo, alvo = 4.5) {
   return { cor: corTexto(fundo), mudou: true };
 }
 
+/**
+ * Garante `min`:1 de `cor` sobre CADA um dos `fundos` (a pílula de status, por exemplo, escreve a cor sobre o próprio fundo suave).
+ * Move a luminosidade no sentido que afasta do fundo, em passos de 4%, como ajustarContraste. Só mexe se preciso.
+ */
+export function garantirContraste(cor, fundos, min = 4.5) {
+  let c = normalizarHex(cor);
+  for (let volta = 0; volta < 3; volta++) {
+    let mudou = false;
+    for (const f of fundos) {
+      if (contraste(c, f) >= min) continue;
+      c = ajustarContraste(c, f, min).cor; mudou = true;
+    }
+    if (!mudou) break;
+  }
+  return c;
+}
+
+/** Matiz (0..360°) de uma cor; null se for quase cinza, preto ou branco (sem matiz para se confundir com um estado). */
+export function matiz(hex) {
+  const [h, s, l] = hsl(hex);
+  return s < .18 || l < .06 || l > .94 ? null : h * 360;
+}
+/** Distância circular entre dois matizes (0..180°). */
+export function distMatiz(a, b) { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; }
+
+/**
+ * M04 — a marca não engole as cores de estado. Se o matiz de um estado (sucesso, erro, atenção, informação, Meta, Google) ficar a menos de
+ * MARGEM_MATIZ° da marca, gira o ESTADO (nunca a marca) para o tom livre mais próximo do original, mantendo saturação e luminosidade
+ * (o contraste é refeito depois, em derivarTema). A primária vale para os seis estados; a secundária só para os três que carregam significado
+ * (sucesso, erro, atenção): "azul secundário" ao lado de "azul de informação" não confunde ninguém, "vermelho secundário" ao lado de erro confunde.
+ * Prefere um tom que também fique ≥ ENTRE_ESTADOS° dos outros estados (senão aceita o mais próximo que respeite só a marca). Devolve { cores, giradas }.
+ */
+export function girarEstados(base, marca = {}) {
+  const hp = marca.prim ? matiz(marca.prim) : null, hs = marca.sec ? matiz(marca.sec) : null;
+  const daMarca = k => ((k === "ruim" || k === "ok" || k === "aten") ? [hp, hs] : [hp]).filter(x => x !== null);
+  const folga = MARGEM_MATIZ + 2;
+  const livre = (h, k, folgaK = MARGEM_MATIZ) => daMarca(k).every(b => distMatiz(h, b) >= folgaK);
+  const atual = Object.fromEntries(ESTADOS.map(k => [k, hsl(base[k])[0] * 360]));
+  const cores = { ...base }, giradas = [];
+  for (const k of ESTADOS) {
+    if (livre(atual[k], k, folga)) continue;   // com 2° de folga: o ajuste de contraste mexe na luminosidade e o hex arredonda o matiz
+    const outros = ESTADOS.filter(x => x !== k).map(x => atual[x]);
+    let achou = null, relaxado = null;
+    for (let d = 1; d <= 180 && achou === null; d++) {
+      for (const sinal of [1, -1]) {
+        const h = (atual[k] + sinal * d + 360) % 360;
+        if (!livre(h, k, folga)) continue;
+        if (relaxado === null) relaxado = h;
+        if (outros.every(o => distMatiz(h, o) >= ENTRE_ESTADOS)) { achou = h; break; }
+      }
+    }
+    const novo = achou !== null ? achou : relaxado;
+    if (novo === null) continue;
+    const [, s, l] = hsl(base[k]);
+    cores[k] = deHsl([novo / 360, s, l]);
+    atual[k] = novo; giradas.push(k);
+  }
+  return { cores, giradas };
+}
+
 /** Todas as variáveis do app a partir das 3 cores. Nunca lança: cor inválida cai no padrão (com aviso). */
 export function derivarTema(cores = {}) {
   const avisos = [];
@@ -149,15 +218,40 @@ export function derivarTema(cores = {}) {
     fundo = f;
   }
   // Derive superfícies só depois da guarda: o fundo pode ter sido corrigido acima.
+  // superficies[0..2] = a escada "para dentro do texto" (5/9/14 %): no escuro ela CLAREIA e é exatamente a de antes.
   const superficies = [.05, .09, .14].map(t => misturar(fundo, texto, t));
   const esq = escuro ? "escuro" : "claro";
-  const fx = FIXOS[esq];
+  // M04: se a marca ficar a menos de 30° de um estado, o ESTADO gira (nunca a marca) e o aviso diz quais
+  const girados = girarEstados(FIXOS[esq], { prim, sec });
+  const fx = girados.cores;
+  if (girados.giradas.length) avisos.push({ campo: "estados", texto:
+    `A cor da marca ficou parecida com as cores de ${girados.giradas.map(k => ROTULO_ESTADO[k]).join(", ").replace(/, ([^,]*)$/, " e $1")}; giramos o tom delas para não se confundirem com os botões da marca.` });
+  // Papel e elevação (M01). Escuro: o cartão é a 1ª degrau da escada (mais claro que a página) e o poço é um tom abaixo do fundo.
+  // Claro: a escada para o texto ESCURECE, então o cartão sobe para o lado do branco (mais claro que a página, com borda e sombra)
+  // e o poço (campos, áreas rebaixadas) fica um sopro abaixo da página; --c-sup-3 só serve de "pressionado" (o mais escuro).
+  const sup = escuro ? superficies[0] : misturar(fundo, BRANCO, .7);
+  const poco = escuro ? misturar(fundo, PRETO, .35) : misturar(fundo, texto, .05);
+  // 2º degrau (blocos dentro do cartão, hover): no escuro é a escada de sempre; no claro é um sopro abaixo do CARTÃO (não do papel), senão cada bloco vira um retângulo cinza pesado
+  const sup2 = escuro ? superficies[1] : misturar(sup, texto, .05);
 
+  const primSuave = misturar(fundo, prim, .16);
+  const secSuave = misturar(fundo, sec, .14);
+  /** A pílula primária/secundária escreve color-mix(luz 78%, texto) sobre o fundo suave: precisa de 4,5:1 ali também (fundos de marca médios falhavam). */
+  const luzNaPilula = (luz, suave) => {
+    const [h, s, l0] = hsl(luz);
+    for (let i = 0; i <= 25; i++) {
+      const c = i === 0 ? normalizarHex(luz) : deHsl([h, s, l0 + (escuro ? 1 : -1) * .04 * i]);
+      if (contraste(misturar(c, texto, .22), suave) >= 4.5) return c;
+    }
+    return corTexto(fundo);
+  };
   const primLuz = ajustarContraste(prim, fundo);
+  primLuz.cor = luzNaPilula(primLuz.cor, primSuave);
   if (primLuz.mudou) avisos.push({ campo: "primaria", texto: escuro
     ? "A cor primária ficou escura demais sobre o fundo; usamos um tom mais claro para textos e links."
     : "A cor primária ficou clara demais sobre o fundo; usamos um tom mais escuro para texto." });
   const secLuz = ajustarContraste(sec, fundo);
+  secLuz.cor = luzNaPilula(secLuz.cor, secSuave);
   if (secLuz.mudou) avisos.push({ campo: "secundaria", texto: escuro
     ? "A cor secundária ficou escura demais sobre o fundo; usamos um tom mais claro para texto."
     : "A cor secundária ficou clara demais sobre o fundo; usamos um tom mais escuro para texto." });
@@ -165,36 +259,59 @@ export function derivarTema(cores = {}) {
   // o botão primário fica "apagado" se quase não se destaca do fundo
   if (contraste(prim, fundo) < 1.6) avisos.push({ campo: "primaria", texto: "A cor primária quase some sobre o fundo; os botões vão aparecer pouco." });
 
+  // status (pílulas ok/ruim/aten/info, meta, google): a cor é o TEXTO sobre o fundo suave da própria pílula e também sobre página, cartão e poço
+  // (o botão destrutivo e o glifo do estado usam a mesma cor direto no cartão)
+  const st = {};
+  for (const k of ["ok", "ruim", "aten", "info"]) st[k] = garantirContraste(fx[k], [misturar(fundo, fx[k], .16), fundo, sup, poco]);
+  const meta = garantirContraste(fx.meta, [misturar(fundo, fx.meta, .16), fundo, sup, poco]);
+  const google = garantirContraste(fx.google, [misturar(fundo, fx.google, .16), fundo, sup, poco]);
+
+  // Gravidade do Radar (--c-sev-*) e acento do produto (--c-prod-*): texto/ícone sobre QUALQUER superfície do app, não só sobre o suave da pílula.
+  const superf = [fundo, sup, poco, superficies[1], superficies[2]];
+  const sev = {};
+  for (const [k, de] of [["info", "info"], ["aten", "aten"], ["crit", "ruim"]]) sev[k] = garantirContraste(fx[de], [misturar(fundo, fx[de], .16), ...superf]);
+  const prod = {
+    crm: garantirContraste(primLuz.cor, superf),
+    ads: garantirContraste(secLuz.cor, superf),
+    atend: garantirContraste(misturar(primLuz.cor, secLuz.cor, .5), superf),
+  };
+
   const vars = {
     "--esquema": esq,
     "--c-fundo": fundo,
     "--c-texto": texto,
-    "--c-texto-2": misturar(fundo, texto, .72),
+    "--c-texto-2": garantirContraste(misturar(fundo, texto, .72), [superficies[2]]),
     // Rótulos menores também precisam de 4,5:1; 56% falha em vários fundos claros.
     "--c-texto-3": ajustarContraste(misturar(fundo, texto, .56), superficies[2], 4.5).cor,
-    "--c-sup": superficies[0],
-    "--c-sup-2": superficies[1],
-    "--c-sup-3": superficies[2],
+    "--c-sup": sup,                       // cartão
+    "--c-poco": poco,                     // área rebaixada (campos, fundo de bloco dentro do cartão)
+    "--c-sup-2": sup2,
+    "--c-sup-3": superficies[2],          // pressionado
     "--c-borda": misturar(fundo, texto, .12),
     "--c-borda-2": misturar(fundo, texto, .20),
     "--c-prim": prim,
     "--c-prim-hi": escuro ? misturar(prim, BRANCO, .12) : misturar(prim, PRETO, .12),
     "--c-prim-txt": primTxt,
     "--c-prim-luz": primLuz.cor,
-    "--c-prim-suave": misturar(fundo, prim, .16),
+    "--c-prim-suave": primSuave,
     "--c-sec": sec,
     "--c-sec-luz": secLuz.cor,
-    "--c-sec-suave": misturar(fundo, sec, .14),
+    "--c-sec-suave": secSuave,
     "--c-foco": primLuz.cor,
-    "--c-ok": fx.ok, "--c-ruim": fx.ruim, "--c-aten": fx.aten, "--c-info": fx.info,
-    "--c-ok-txt": corTexto(fx.ok), "--c-ruim-txt": corTexto(fx.ruim),
+    "--c-ok": st.ok, "--c-ruim": st.ruim, "--c-aten": st.aten, "--c-info": st.info,
+    "--c-ok-txt": corTexto(st.ok), "--c-ruim-txt": corTexto(st.ruim),
     "--c-ok-suave": misturar(fundo, fx.ok, .16),
     "--c-ruim-suave": misturar(fundo, fx.ruim, .16),
     "--c-aten-suave": misturar(fundo, fx.aten, .16),
     "--c-info-suave": misturar(fundo, fx.info, .16),
     "--c-nota": misturar(fundo, fx.aten, .18),
     "--c-nota-txt": texto,
-    "--c-meta": fx.meta, "--c-google": fx.google,
+    "--c-meta": meta, "--c-google": google,
+    "--c-meta-suave": misturar(fundo, fx.meta, .16),
+    "--c-google-suave": misturar(fundo, fx.google, .16),
+    "--c-sev-info": sev.info, "--c-sev-aten": sev.aten, "--c-sev-crit": sev.crit,
+    // --c-prod (acento do produto) NÃO sai daqui: o app.css o escolhe por [data-produto] entre estes três (inline venceria a regra do CSS)
+    "--c-prod-crm": prod.crm, "--c-prod-ads": prod.ads, "--c-prod-atend": prod.atend,
     "--c-bolha-in": misturar(fundo, texto, .09),
     "--c-bolha-out": misturar(fundo, prim, .16),
     // palco e vidro

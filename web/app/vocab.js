@@ -61,8 +61,13 @@ export function vocab(vertical) {
   v.novo = chave => (v["g_" + chave] === "a" ? "Nova " : "Novo ") + minusc(v[chave]);
   /** artigo: "a"/"o". */
   v.art = chave => v["g_" + chave] === "a" ? "a" : "o";
+  /** ícone do CRM no menu (dente, chave, sacola ou funil) */
+  v.icone_crm = ICONE_CRM[v.vertical] || "funil";
   return Object.freeze(v);
 }
+
+/** Ícone do sprite (index.html) da entrada do CRM no menu, por vertical: dente, chave, sacola ou funil (genérico). */
+export const ICONE_CRM = Object.freeze({ odonto: "dente", oficina: "chave", loja: "sacola", generico: "funil" });
 
 export const ROTULO_PAPEL = Object.freeze({
   super: "Plataforma", gestor: "Gestor", admin: "Administrador", supervisor: "Supervisor",

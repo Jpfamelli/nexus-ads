@@ -61,11 +61,13 @@ export function normalizarMensagem(m, contacts) {
   const achado = lista.find(c => soDigitos(c?.wa_id) === wa);
   const nome = limpo(achado?.profile?.name || (lista.length === 1 ? lista[0]?.profile?.name : "")) || null;
   const t = Number(m.timestamp);
+  // timestamp absurdo («99999999999999999999») dá Invalid Date: vira null em vez de derrubar o lote inteiro
+  const quando = Number.isFinite(t) && t > 0 ? new Date(t * 1000) : null;
   const base = {
     wamid: m.id ? corta(m.id, 256) : null,
     wa_id: wa,
     nome: nome ? corta(nome, LIMITES.nome) : null,
-    em: Number.isFinite(t) && t > 0 ? new Date(t * 1000).toISOString().replace(/\.\d{3}Z$/, "Z") : null,
+    em: quando && Number.isFinite(quando.getTime()) ? quando.toISOString().replace(/\.\d{3}Z$/, "Z") : null,
   };
   if (m.type === "reaction") {
     return { ...base, reacao: { wamid: corta(m.reaction?.message_id, 256), emoji: corta(m.reaction?.emoji ?? "", 16) } };
@@ -149,9 +151,10 @@ const comTextoDeErro = st => (st?.status === "failed"
 export async function processarCanal(db, canal, v, ctx, cont) {
   const msgs = Array.isArray(v?.messages) ? v.messages : [];
   for (const m of msgs) {
-    const msg = normalizarMensagem(m, v.contacts);
-    if (!msg) continue;
     try {
+      // a normalização também fica dentro do try: uma mensagem malformada vira erro SÓ dela
+      const msg = normalizarMensagem(m, v.contacts);
+      if (!msg) continue;
       const r = await db.rpc("nx_wa_entrada", { p_canal: canal.canal_id, p_msg: msg });
       if (r?.duplicada) {
         cont.duplicadas++;

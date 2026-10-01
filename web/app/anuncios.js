@@ -11,6 +11,7 @@
 
 const DIAS_JANELA = 130;             // igual ao painel clássico
 const VALIDADE_MS = 5 * 60 * 1000;   // números do Ads mudam de hora em hora
+const URL_PAINEL = "https://jpfamelli.github.io/nexus-ads/";
 const PERIODOS = [7, 30, 60];
 const PLATS = [["", "Tudo"], ["meta", "Meta"], ["google", "Google"]];
 const ABAS = [
@@ -66,30 +67,36 @@ export async function montar(ctx) {
   const raiz = h("section", { class: "rel ads", "aria-labelledby": "ads-h" });
   ctx.alvo.append(raiz);
 
-  // topo: título, pílula de conexão, atualizar, atalhos do gestor
+  // topo: título, «Atualizado há 27 min» (texto pequeno no celular) + botão-ícone, atalhos do gestor (no celular, num ⋮)
   const pilula = h("span", { class: "ads-pilula", role: "status" });
   pilula.hidden = true;
-  const btnAtualizar = h("button", { type: "button", class: "rel-btn rel-btn-sec", on: { click: () => recarregar(true) } }, "Atualizar");
+  const btnAtualizar = h("button", { type: "button", class: "rel-btn rel-btn-sec rel-btn-ic", title: "Atualizar os números", on: { click: () => recarregar(true) } },
+    ui.icone("reabrir"), h("span", { class: "rel-rot" }, "Atualizar"));
   const acoes = h("div", { class: "rel-topo-acoes" }, pilula, btnAtualizar);
   if (eGestor(ctx)) {
-    acoes.append(h("a", { class: "rel-btn rel-btn-sec", href: "#/config/anuncios" }, "Ajustes de anúncios"));
-    acoes.append(h("a", { class: "rel-link", href: "https://jpfamelli.github.io/nexus-ads/", target: "_blank", rel: "noopener noreferrer" }, "Painel de apresentação ↗"));
+    acoes.append(h("a", { class: "rel-btn rel-btn-sec rel-so-largo", href: "#/config/anuncios" }, "Ajustes de anúncios"));
+    acoes.append(h("a", { class: "rel-link rel-so-largo", href: URL_PAINEL, target: "_blank", rel: "noopener noreferrer" }, "Painel de apresentação ↗"));
+    const maisAcoes = h("button", { type: "button", class: "rel-btn rel-btn-sec rel-btn-ic rel-so-movel", "aria-label": "Mais ações", title: "Mais ações" }, ui.icone("opcoes"));
+    maisAcoes.addEventListener("click", () => ui.menu(maisAcoes, [
+      { rotulo: "Ajustes de anúncios", icone: "engrenagem", fn: () => ctx.navegar("#/config/anuncios") },
+      { rotulo: "Painel de apresentação", icone: "externo", fn: () => { try { window.open(URL_PAINEL, "_blank", "noopener,noreferrer"); } catch { /* bloqueado */ } } },
+    ]));
+    acoes.append(maisAcoes);
   }
   const tituloAba = (ABAS.find(a => a.id === aba) || ABAS[0]).rotulo;
   raiz.append(h("header", { class: "rel-topo" },
     h("div", { class: "rel-topo-t" }, h("p", { class: "rel-olho" }, `Anúncios · ${ctx.cliente.nome}`), h("h1", { id: "ads-h", class: "rel-h1" }, tituloAba)),
     acoes));
 
-  // abas (navegação por rota)
-  const nav = h("nav", { class: "rel-abas", "aria-label": "Seções de Anúncios" });
+  // abas (navegação por rota) numa linha só: ui.segmentado({tipo: "abas"}); o selo de alertas mora na aba Radar
   const badge = h("span", { class: "rel-badge", "aria-label": "" });
   badge.hidden = true;
-  for (const a of ABAS) {
-    const link = h("a", { href: a.hash, class: "rel-aba" }, a.rotulo);
-    if (a.id === aba) link.setAttribute("aria-current", "page");
-    if (a.id === "radar") link.append(badge);
-    nav.append(link);
-  }
+  const idAba = id => id || "geral";
+  const nav = ui.segmentado({ tipo: "abas", rotulo: "Seções de Anúncios", valor: idAba(aba), classe: "rel-abas-seg",
+    opcoes: ABAS.map(a => ({ valor: idAba(a.id), rotulo: a.rotulo })),
+    aoMudar: v => { const a = ABAS.find(x => idAba(x.id) === v); if (a) ctx.navegar(a.hash); } });
+  const tabRadar = nav.querySelector('[data-valor="radar"]');
+  if (tabRadar) tabRadar.append(badge);
   raiz.append(nav);
 
   const faixa = h("div", { class: "rel-faixa rel-faixa-ruim", role: "alert" });
@@ -142,7 +149,7 @@ export async function montar(ctx) {
       if (e.erros.length) {
         faixa.append(h("p", {}, L.textoQueda(e.erros)),
           eGestor(ctx) ? h("a", { class: "rel-btn rel-btn-prim", href: "#/config/anuncios" }, "Refazer a conexão")
-            : h("p", { class: "rel-nota" }, "A equipe de gestão já foi avisada e está resolvendo."));
+            : h("p", { class: "rel-nota" }, "Nossa equipe já foi avisada."));
       }
     };
     pintarPilula();
@@ -157,8 +164,13 @@ export async function montar(ctx) {
     ui.limpar(filtros);
     filtros.hidden = !(aba === "" || aba === "campanhas") || L.semAnuncios(M);
     if (!filtros.hidden) {
-      filtros.append(segmento("Período", PERIODOS.map(d => [d, `${d} dias`]), S.dias, d => { S.dias = d; gravarLocal("nx-app-ads-dias", d); desenhar({ dados, M }); }),
-        segmento("Plataforma", PLATS, S.plat, p => { S.plat = p; gravarLocal("nx-app-ads-plat", p); desenhar({ dados, M }); }),
+      const chipResumo = h("button", { type: "button", class: "rel-resumo", "aria-haspopup": "dialog", title: "Período e plataforma" },
+        h("span", { class: "rel-resumo-t" }, L.textoChipAnuncios(S.dias, S.plat)), ui.icone("seta-baixo"));
+      chipResumo.addEventListener("click", () => abrirFolha(M, dados));
+      filtros.append(chipResumo,
+        h("div", { class: "rel-filtros-lg" },
+          segmento("Período", PERIODOS.map(d => [d, `${d} dias`]), S.dias, d => { S.dias = d; gravarLocal("nx-app-ads-dias", d); desenhar({ dados, M }); }),
+          segmento("Plataforma", PLATS, S.plat, p => { S.plat = p; gravarLocal("nx-app-ads-plat", p); desenhar({ dados, M }); })),
         h("p", { class: "rel-nota rel-ate" }, `Números até ontem, ${M.dataBR(M.R)}`));
     }
 
@@ -168,6 +180,22 @@ export async function montar(ctx) {
     if (L.semAnuncios(M)) return corpo.append(vazioAds());
     if (aba === "campanhas") return abaCampanhas(M);
     return abaGeral(M);
+  }
+
+  /** O chip-resumo «Últimos 30 dias · Tudo ▾» abre esta folha: período e plataforma num lugar só, aplicados de uma vez. */
+  async function abrirFolha(M, dados) {
+    let dias = S.dias, plat = S.plat;
+    const campoSeg = (rotulo, el) => h("div", { class: "campo" }, h("p", { class: "rotulo" }, rotulo), el);
+    const segDias = ui.segmentado({ tipo: "filtro", rotulo: "Período", valor: dias, opcoes: PERIODOS.map(d => ({ valor: d, rotulo: `${d} dias` })), aoMudar: v => { dias = v; } });
+    const segPlat = ui.segmentado({ tipo: "filtro", rotulo: "Plataforma", valor: plat, opcoes: PLATS.map(([v, t]) => ({ valor: v, rotulo: t })), aoMudar: v => { plat = v; } });
+    const r = await ui.modal({ titulo: "Período e plataforma", largura: "p", protegerTexto: false,
+      corpo: h("div", { class: "pilha" }, campoSeg("Período", segDias), campoSeg("Plataforma", segPlat)),
+      acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Aplicar", tipo: "primario", fn: () => true }] });
+    if (r !== true || (dias === S.dias && plat === S.plat)) return;
+    S.dias = dias; S.plat = plat; gravarLocal("nx-app-ads-dias", dias); gravarLocal("nx-app-ads-plat", plat);
+    desenhar({ dados, M });
+    // o chip foi recriado e a folha ainda devolve o foco ao chip antigo ao fechar: o foco do teclado vai para o novo logo depois (nunca cai no <body>)
+    setTimeout(() => { const novo = raiz.querySelector(".rel-resumo"); if (novo) novo.focus(); }, 220);
   }
 
   function segmento(rotulo, opcoes, atual, aoMudar) {
@@ -195,7 +223,9 @@ export async function montar(ctx) {
 
   const num = (valor, fmt, cls = "") => {
     const b = h("b", { class: `rel-num ${cls}` });
-    G.contar(b, valor, fmt);
+    // dinheiro ganha o formato editorial ("R$" e centavos a 60 %); o resto conta como antes
+    if (fmt === N.brl || fmt === N.brl0) L.contarMoeda(ui, G, b, valor, { centavos: fmt === N.brl });
+    else G.contar(b, valor, fmt);
     return b;
   };
   const chip = (atual, anterior, sentido) => {
@@ -331,7 +361,7 @@ export async function montar(ctx) {
 
   /* ---------------- CAMPANHAS ---------------- */
   function abaCampanhas(M) {
-    const { linhas, total } = L.linhasCampanhas(M, { dias: S.dias, plat: S.plat });
+    const { linhas, total, outras } = L.linhasCampanhas(M, { dias: S.dias, plat: S.plat });
     const COLS = [["nome", "Campanha"], ["gasto", "Investido"], ["conv", "Conversas"], ["cpa", "Custo/conversa"],
       ["ag", "Agendados"], ["fe", "Fechados"], ["rec", "Receita"], ["roas", "Retorno", "Receita ÷ investimento em anúncios desta campanha (sem a gestão)."]];
     const cartao = h("div", { class: "rel-cartao rel-entra ads-camp" });
@@ -366,13 +396,18 @@ export async function montar(ctx) {
           td("roas", Number.isFinite(r.roas) ? `${N.dec(r.roas, 1)}x` : "—", "Retorno"));
       }));
       const T = total.t;
+      // negócios de anúncio sem investimento na janela (pausada, sem campanha identificada): contam na Visão geral e ficam fora do Total
+      const temOutras = !!outras && (outras.ag > 0 || outras.fe > 0 || outras.rec > 0);
       const tfoot = h("tfoot", {}, h("tr", {}, h("th", { scope: "row" }, "Total"),
         td("gasto", N.brl0(T.gasto), "Investido"), td("conv", N.int(T.conversoes), "Conversas"), td("cpa", N.brl(T.cpa), "Custo por conversa"),
         td("ag", N.int(total.ag), "Agendados"), td("fe", N.int(total.fe), "Fechados"), td("rec", N.brl0(total.rec), "Receita"),
-        td("roas", Number.isFinite(total.roas) ? `${N.dec(total.roas, 1)}x` : "—", "Retorno")));
+        td("roas", Number.isFinite(total.roas) ? `${N.dec(total.roas, 1)}x` : "—", "Retorno")),
+        temOutras ? h("tr", { class: "ads-camp-outras" }, h("th", { scope: "row", title: "Negócios de anúncio sem investimento nestes dias (campanha pausada ou sem campanha identificada). Entram na Visão geral." }, "Sem investimento no período"),
+          td("gasto", "—", "Investido"), td("conv", "—", "Conversas"), td("cpa", "—", "Custo por conversa"),
+          td("ag", N.int(outras.ag), "Agendados"), td("fe", N.int(outras.fe), "Fechados"), td("rec", N.brl0(outras.rec), "Receita"), td("roas", "—", "Retorno")) : null);
       cartao.append(h("div", { class: "rel-cartao-topo" }, h("h2", { class: "rel-h2" }, `Campanhas nos últimos ${S.dias} dias`),
         h("p", { class: "rel-nota" }, "Toque numa campanha para ver os criativos. Agendados, fechados e receita vêm do CRM, pela data de cada evento.")),
-        h("div", { class: "rel-tabela-rolagem" }, h("table", { class: "rel-tabela ads-tabela" },
+        h("div", { class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": `Campanhas nos últimos ${S.dias} dias` }, h("table", { class: "rel-tabela ads-tabela" },
           h("caption", { class: "sr-only" }, `Campanhas nos últimos ${S.dias} dias`), thead, tbody, tfoot)));
     };
     desenharTabela();
@@ -390,8 +425,8 @@ export async function montar(ctx) {
         h("h2", { id: "ads-rank-h", class: "rel-h2" }, "Ranking de criativos"),
         segmento("Ordenar o ranking", L.RANK_CRI, R.por, v => { S.rank = v; gravarLocal("nx-app-ads-rank", v); pintar(); cartao.querySelector('[aria-pressed="true"]')?.focus(); }),
         h("p", { class: "rel-nota" }, R.por === "cpa"
-          ? `Os ${R.lista.length} criativos com menor custo por conversa nos últimos ${S.dias} dias (com pelo menos ${L.MIN_CONV_CPA} conversas).`
-          : `Os ${R.lista.length} criativos com ${nomeRank} nos últimos ${S.dias} dias. Fechados e receita vêm do CRM, pelo anúncio que trouxe cada ${voc(ctx, "contato", "contato").toLowerCase()}.`)));
+          ? `${R.lista.length === 1 ? "O criativo com menor custo por conversa" : `Os ${R.lista.length} criativos com menor custo por conversa`} nos últimos ${S.dias} dias (com pelo menos ${L.MIN_CONV_CPA} conversas).`
+          : `${R.lista.length === 1 ? "O criativo com" : `Os ${R.lista.length} criativos com`} ${nomeRank} nos últimos ${S.dias} dias. Fechados e receita vêm do CRM, pelo anúncio que trouxe cada ${voc(ctx, "contato", "contato").toLowerCase()}.`)));
       if (!R.lista.length) {
         cartao.append(h("p", { class: "rel-vazio-txt" }, !R.total ? "Nenhum criativo com investimento no período."
           : R.por === "cpa" ? `Nenhum criativo com ${L.MIN_CONV_CPA} conversas ou mais no período.`
@@ -452,21 +487,9 @@ export async function montar(ctx) {
       h("span", { class: `ads-radar-luz${R.ativos ? " ativo" : ""}`, "aria-hidden": "true" }),
       L.semAnuncios(M) ? "Sem números de anúncio ainda: o radar começa a vigiar assim que a primeira leitura chegar."
         : u ? `Última leitura dos anúncios: ${L.quandoSP(u)} · ${qtd}.` : `${qtd}.`));
+    // do mais grave para o menos (L.ordenarRadar): o crítico ativo está sempre no topo; cada alerta leva barra lateral, ícone e rótulo da gravidade
     const lista = h("ul", { class: "ads-alertas" });
-    R.conexoes.forEach((x, n) => lista.append(h("li", { class: "ads-al ads-al-critico", style: `--i:${n}` },
-      h("span", { class: "ads-sev ads-sev-critico", role: "img", "aria-label": "conexão parada" }, ui.icone("alerta")),
-      h("div", { class: "ads-al-t" },
-        h("p", { class: "ads-al-nome" }, x.nome, " ", h("span", { class: `rel-chip ${x.ativo ? "rel-chip-ruim" : "rel-chip-bom"}` }, x.ativo ? "ativo" : "resolvido")),
-        h("p", { class: "ads-al-msg" }, x.a.mensagem || ""),
-        h("p", { class: "rel-nota" }, L.quandoSP(x.a.criado_em), x.envio ? envio(x.envio, " · aviso ") : null),
-        x.ativo && eGestor(ctx) ? h("a", { class: "rel-link", href: "#/config/anuncios" }, "Resolver em Ajustes de anúncios") : null))));
-    R.episodios.forEach((e, n) => lista.append(h("li", { class: `ads-al ads-al-${e.sev}${e.ativo ? "" : " resolvido"}`, style: `--i:${n + R.conexoes.length}` },
-      h("span", { class: `ads-sev ads-sev-${e.sev}`, role: "img", "aria-label": L.SEV_NOME[e.sev] }),
-      h("div", { class: "ads-al-t" },
-        h("p", { class: "ads-al-nome" }, e.nome, " ", h("span", { class: `rel-chip ${e.ativo ? (e.sev === "critico" ? "rel-chip-ruim" : "rel-chip-aten") : "rel-chip-bom"}` }, e.ativo ? "ativo" : "resolvido")),
-        h("p", { class: "ads-al-msg" }, e.msg),
-        e.ativo ? h("p", { class: "ads-al-acao" }, h("span", { class: "rel-olho" }, "O que fazer "), e.acao) : null,
-        h("p", { class: "rel-nota" }, e.desde, e.envio ? envio(e.envio, " · aviso ") : null)))));
+    L.ordenarRadar(R).forEach((it, n) => lista.append(it.tipo === "conexao" ? alertaConexao(it, n) : alertaEpisodio(it, n)));
     if (!lista.childElementCount) lista.append(h("li", { class: "rel-vazio-txt" }, "Nenhum alerta nos últimos 14 dias. Todas as campanhas dentro dos limites."));
     const regras = h("ul", { class: "ads-regras" }, M.REGRAS.map(r => h("li", {},
       h("div", {}, h("p", { class: "ads-regra-n" }, r.nome, " ", h("span", { class: `rel-chip rel-chip-${r.sev === "critico" ? "ruim" : r.sev === "alerta" ? "aten" : "info"}` }, L.SEV_NOME[r.sev])),
@@ -484,6 +507,28 @@ export async function montar(ctx) {
         h("div", { class: "rel-cartao rel-entra" }, h("h2", { class: "rel-h2" }, "Avisos enviados no WhatsApp"), log),
         h("div", { class: "rel-cartao rel-entra" }, h("h2", { class: "rel-h2" }, "Regras do radar"), regras,
           h("p", { class: "rel-nota" }, eGestor(ctx) ? "Metas e regras são ajustadas em Ajustes de anúncios." : "As metas e as regras são definidas pela equipe de gestão.")))));
+  }
+  /** Marca de gravidade: ícone + rótulo escrito (nunca só cor), na cor --c-sev-*; a barra de 3 px fica no <li> (data-sev). */
+  function marcaSev(sev) {
+    return h("span", { class: "ads-sev-marca" }, ui.icone(L.SEV_ICONE[sev]), h("span", { class: "ads-sev-rot" }, L.SEV_ROTULO[sev]));
+  }
+  function alertaConexao({ ref: x, sev }, n) {
+    return h("li", { class: `ads-al ads-al-critico${x.ativo ? "" : " resolvido"}`, dataset: { sev }, style: `--i:${n}` },
+      h("div", { class: "ads-al-t" },
+        h("p", { class: "ads-al-topo" }, marcaSev(sev), h("span", { class: `rel-chip ${x.ativo ? "rel-chip-ruim" : "rel-chip-bom"}` }, x.ativo ? "ativo" : "resolvido")),
+        h("p", { class: "ads-al-nome" }, x.nome),
+        h("p", { class: "ads-al-msg" }, x.a.mensagem || ""),
+        h("p", { class: "rel-nota" }, L.quandoSP(x.a.criado_em), x.envio ? envio(x.envio, " · aviso ") : null),
+        x.ativo && eGestor(ctx) ? h("a", { class: "rel-link", href: "#/config/anuncios" }, "Resolver em Ajustes de anúncios") : null));
+  }
+  function alertaEpisodio({ ref: e, sev }, n) {
+    return h("li", { class: `ads-al ads-al-${sev}${e.ativo ? "" : " resolvido"}`, dataset: { sev }, style: `--i:${n}` },
+      h("div", { class: "ads-al-t" },
+        h("p", { class: "ads-al-topo" }, marcaSev(sev), h("span", { class: `rel-chip ${e.ativo ? (sev === "critico" ? "rel-chip-ruim" : "rel-chip-aten") : "rel-chip-bom"}` }, e.ativo ? "ativo" : "resolvido")),
+        h("p", { class: "ads-al-nome" }, e.nome),
+        h("p", { class: "ads-al-msg" }, e.msg),
+        e.ativo ? h("p", { class: "ads-al-acao" }, h("span", { class: "rel-olho" }, "O que fazer "), e.acao) : null,
+        h("p", { class: "rel-nota" }, e.desde, e.envio ? envio(e.envio, " · aviso ") : null)));
   }
   const MET = { cpa: "Custo por conversa", ctr: "CTR", freq: "Frequência", conversoes: "Conversas" };
   const OPS = { ">": "acima de", "<": "abaixo de", ">=": "a partir de", "<=": "até" };

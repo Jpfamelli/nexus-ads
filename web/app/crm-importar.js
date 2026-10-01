@@ -45,10 +45,8 @@ export async function montarImportar(k, el) {
   const corpo = h("section", { class: "cartao imp-corpo", "aria-live": "polite" });
   const rodape = h("div", { class: "imp-rod" });
   el.append(
-    h("header", { class: "crm-cab" },
-      h("div", null, h("p", { class: "rotulo" }, ctx.cliente.nome), h("h1", { class: "titulo-pag" }, `Importar ${v.min("contatos")}`),
-        h("p", { class: "sub" }, "Traga a sua planilha. Quem já existe é reconhecido pelo telefone (com ou sem 55 e 9) ou pelo e-mail.")),
-      h("div", { class: "crm-cab-acoes" }, h("a", { class: "bt bt-sec", href: "#/contatos" }, ui.icone("seta-esq"), v.contatos))),
+    ui.cabecalho({ titulo: `Importar ${v.min("contatos")}`, sub: "Traga a sua planilha. Quem já existe é reconhecido pelo telefone (com ou sem 55 e 9) ou pelo e-mail.",
+      acoes: h("a", { class: "bt bt-sec", href: "#/contatos" }, ui.icone("seta-esq"), v.contatos) }),
     passosEl, corpo, rodape);
 
   // não perder uma importação no meio sem aviso

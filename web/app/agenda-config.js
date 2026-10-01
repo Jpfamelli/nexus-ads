@@ -165,7 +165,7 @@ async function secaoAgenda(ctx, alvo) {
         } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
       } } }, ui.icone("lixeira"), "Remover");
       listaBloqueios.appendChild(h("article", { class: "agc-bloqueio", role: "listitem" },
-        h("div", null, h("b", null, b.motivo || "Indisponível"), h("small", null, `${ui.dataHoraBR(b.inicio)} — ${ui.dataHoraBR(b.fim)}`)), excluir));
+        h("div", null, h("b", null, b.motivo || "Indisponível"), h("small", null, ui.periodoBR(b.inicio, b.fim, " — "))), excluir));
     }
     if ((estado.bloqueios || []).length > 30) listaBloqueios.appendChild(h("p", { class: "campo-ajuda" }, "Mostrando os próximos 30 bloqueios."));
   }

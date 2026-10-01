@@ -26,12 +26,13 @@ export function iniciais(nome) {
 
 /* ------------------------------------------------------------ telefone */
 /**
- * Igual a public.nx_tel_normalizar: só dígitos. comDdi (número do WhatsApp):
- * 8–15 dígitos como está. Digitado/importado: 10–11 → prefixa 55; 12–15 como está. Fora disso → null.
+ * Igual a public.nx_tel_normalizar: só dígitos. comDdi (número do WhatsApp) OU texto começando com «+» (a pessoa informou o país):
+ * 8–15 dígitos como está, nunca ganha 55. Digitado/importado: 10–11 → prefixa 55; 12–15 como está. Fora disso → null.
  */
 export function normalizarTelefone(p, comDdi = false) {
-  const d = String(p ?? "").replace(/\D/g, "");
-  if (comDdi) return d.length >= 8 && d.length <= 15 ? d : null;
+  const txt = String(p ?? "");
+  const d = txt.replace(/\D/g, "");
+  if (comDdi || txt.trim().startsWith("+")) return d.length >= 8 && d.length <= 15 ? d : null;
   if (d.length >= 10 && d.length <= 11) return "55" + d;
   if (d.length >= 12 && d.length <= 15) return d;
   return null;
@@ -290,6 +291,12 @@ export function lerNumero(s) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** O texto de um campo de dinheiro tem algo escrito que NÃO vira número («abc»)? Vazio não é inválido: é «sem valor». */
+export function dinheiroInvalido(s) {
+  const t = String(s ?? "").trim();
+  return t !== "" && lerNumero(t) === null;
+}
+
 /** "31/12/1990" | "1990-12-31" → "1990-12-31"; inválido → null */
 export function lerData(s) {
   const t = String(s ?? "").trim();
@@ -352,6 +359,214 @@ export function ordemEntre(antes, depois, agora = Date.now()) {
   if (b === null) return a + 1;
   if (a === b) return a;           // vizinhos empatados: o servidor desempata por id
   return a + (b - a) / 2;
+}
+
+/**
+ * Ordem do cartão solto na posição `pos` entre `itens` (a coluna de destino SEM ele). Soltar no fim de uma coluna que ainda tem cartões
+ * não carregados («Ver mais») não pode pular por cima deles: `proxima` = ordem do 1º cartão não carregado (null = esse cartão não tem ordem,
+ * que o servidor põe no fim; undefined = não há mais cartões ou não deu para saber → comportamento de fim de lista).
+ */
+export function ordemDoSoltar(itens, pos, proxima, agora = Date.now()) {
+  const antes = itens[pos - 1] ? itens[pos - 1].ordem : null;
+  const depois = itens[pos] ? itens[pos].ordem : (proxima === undefined ? null : proxima);
+  return ordemEntre(antes, depois, agora);
+}
+
+/* ------------------------------------------------------------ gesto de toque no Kanban (M23)
+ * O DOM só repassa pontos e tempo; quem decide o que o dedo está fazendo é esta máquina de estados (pura, testável).
+ *   espera ──(350 ms parado)──▶ levantado ──(mexeu ≥ 6 px)──▶ arrastando
+ *   espera ──(mexeu > 10 px antes dos 350 ms)──▶ rolando  (a rolagem é do navegador: nunca vira arrasto)
+ * Ao soltar: «toque» (antes dos 350 ms: o clique normal abre o cartão) · «mover_para» (levantou e soltou sem mexer: folha «Mover para…»)
+ * · «soltar» (arrastou: soltar no destino) · «nada» (rolou ou o sistema cancelou). */
+export const TOQUE = Object.freeze({ MS_LONGO: 350, LIMIAR_ROLAGEM: 10, LIMIAR_ARRASTO: 6 });
+
+const dist2 = (x0, y0, x1, y1) => Math.hypot(x1 - x0, y1 - y0);
+
+/** Dedo encostou no cartão em (x, y) no instante t (ms). */
+export function novoGesto(x, y, t = 0) {
+  return { estado: "espera", x0: x, y0: y, t0: t, xl: null, yl: null, acao: null };
+}
+
+/** O tempo andou até t: depois de MS_LONGO sem mexer o cartão é «levantado» (acao = "levantar"). */
+export function gestoTempo(g, t) {
+  if (g.estado === "espera" && t - g.t0 >= TOQUE.MS_LONGO) return { ...g, estado: "levantado", xl: g.xl ?? g.x0, yl: g.yl ?? g.y0, acao: "levantar" };
+  return { ...g, acao: null };
+}
+
+/** O dedo foi para (x, y) no instante t. acao: "levantar" | "rolar" | "arrastar" | "mover" | null. */
+export function gestoMover(g, x, y, t = g.t0) {
+  let s = gestoTempo(g, t);
+  const levantou = s.acao === "levantar";
+  if (s.estado === "espera") {
+    if (dist2(s.x0, s.y0, x, y) > TOQUE.LIMIAR_ROLAGEM) return { ...s, estado: "rolando", acao: "rolar" };
+    return s;
+  }
+  if (s.estado === "levantado") {
+    if (dist2(s.xl, s.yl, x, y) >= TOQUE.LIMIAR_ARRASTO) return { ...s, estado: "arrastando", acao: "arrastar", levantou };
+    return levantou ? s : { ...s, acao: null };
+  }
+  if (s.estado === "arrastando") return { ...s, acao: "mover" };
+  return { ...s, acao: null };
+}
+
+/** O dedo saiu da tela no instante t. acao: "toque" | "mover_para" | "soltar" | "nada". */
+export function gestoSoltar(g, t = g.t0) {
+  const s = gestoTempo(g, t);
+  const acao = s.estado === "espera" ? "toque" : s.estado === "levantado" ? "mover_para" : s.estado === "arrastando" ? "soltar" : "nada";
+  return { ...s, estado: "encerrado", acao };
+}
+
+/** O sistema tomou o gesto (pointercancel: rolagem, chamada, etc.). Nunca solta nem move nada. */
+export function gestoCancelar(g) { return { ...g, estado: "encerrado", acao: "nada" }; }
+
+/** Posição (0 = topo) em que um cartão arrastado entra numa coluna: antes do primeiro cartão cujo meio está abaixo de y. cartoes = [{top, bottom}] sem o arrastado. */
+export function indiceDoPonto(cartoes, y) {
+  const lista = cartoes || [];
+  for (let i = 0; i < lista.length; i++) { if (y < lista[i].top + (lista[i].bottom - lista[i].top) / 2) return i; }
+  return lista.length;
+}
+
+/** Em qual coluna/etapa o ponto cai. alvos = [{id, left, right, top, bottom}] → id | null. */
+export function alvoDoPonto(alvos, x, y) {
+  const a = (alvos || []).find(r => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+  return a ? a.id : null;
+}
+
+/* ------------------------------------------------------------ cartão (M24) */
+/** De onde veio o contato, em uma linha (tooltip do glifo do cartão): «Google Ads · Campanha X · Anúncio Y» ou o rótulo da origem («WhatsApp»). */
+export function descricaoOrigem(c) {
+  if (!c || typeof c !== "object") return "";
+  const rastreio = c.rastreio && typeof c.rastreio === "object" ? c.rastreio : {};
+  const plataforma = c.plataforma === "google" ? "Google Ads" : c.plataforma === "meta" ? "Meta Ads" : c.plataforma ? "Anúncio" : null;
+  const campanha = c.campanha_nome || c.campanha || c.campanha_ext || rastreio.utm_campaign;
+  const anuncio = c.anuncio_nome || c.anuncio_ext || rastreio.utm_content;
+  const origem = !plataforma && c.origem ? (ROTULO_ORIGEM[c.origem] || c.origem) : null;
+  return [plataforma || origem, campanha ? `Campanha ${campanha}` : null, anuncio ? `Anúncio ${anuncio}` : null].filter(Boolean).join(" · ");
+}
+
+/**
+ * M24: o cadastro que a pessoa está prestes a duplicar. `itens` = resposta de nx_contatos_listar; `digitado` = o telefone na caixa (com máscara ou DDI).
+ * Só vale com 10–13 dígitos; casa pela MESMA chave do banco (com/sem 55 e 9º dígito). → o contato ou null.
+ */
+export function acharDuplicado(itens, digitado, { ignorarId = null } = {}) {
+  const dig = String(digitado ?? "").replace(/\D/g, "");
+  if (dig.length < 10 || dig.length > 13) return null;
+  return (itens || []).find(c => c && c.telefone && c.id !== ignorarId && mesmoTelefone(c.telefone, dig)) || null;
+}
+
+/* ------------------------------------------------------------ escrita segura (M25) */
+/** Chave de idempotência (uuid v4) de UMA intenção: o mesmo p_req repetido nunca grava duas vezes no servidor (24 h). */
+export function novaReq(c = globalThis.crypto) {
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  const b = c && typeof c.getRandomValues === "function" ? c.getRandomValues(new Uint8Array(16)) : Uint8Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/**
+ * O erro deixa dúvida se o servidor JÁ aplicou? Prazo estourado, conexão que caiu no meio, resposta ilegível e 502/503/504 (o pedido pode ter chegado
+ * e sido gravado). Recusa do servidor (código do CRM, 4xx, 500 do banco) NÃO é ambígua: nada foi gravado.
+ */
+export function erroAmbiguo(e) {
+  const c = String((e && (e.codigo || e.message)) || "");
+  if (/^(tempo_rede|tempo_esgotado|sem_conexao|resposta_invalida|servico_indisponivel)$/.test(c)) return true;   // tempo_esgotado também vem de 504 do gateway (pode ter aplicado)
+  if (/^http_50[234]$/.test(c)) return true;
+  const st = Number(e && e.status);
+  return Number.isFinite(st) && st >= 502 && st <= 504;
+}
+
+/** Espera `ms` ou até a internet voltar (o que vier primeiro). */
+export function esperarOuOnline(ms) {
+  return new Promise(resolve => {
+    let t = null;
+    const fim = () => { clearTimeout(t); if (typeof removeEventListener === "function") removeEventListener("online", fim); resolve(); };
+    t = setTimeout(fim, ms);
+    if (typeof addEventListener === "function") addEventListener("online", fim);
+  });
+}
+
+/**
+ * O servidor não conhece a função COM estes parâmetros (PostgREST: HTTP 404, código PGRST202, «Could not find the function…»)? É o que acontece
+ * quando o site novo chega antes da migração que cria as versões com `p_req`. Nada foi gravado.
+ */
+export function funcaoInexistente(e) {
+  if (!e) return false;
+  const r = e.resposta && typeof e.resposta === "object" ? e.resposta : null;
+  return Number(e.status) === 404 || /could not find the function/i.test(String(e.codigo || e.message || ""))
+    || String(e.codigo || "").toUpperCase() === "PGRST202" || String((r && r.code) || "").toUpperCase() === "PGRST202";
+}
+
+/**
+ * escreverComReq(api, nome, params, {req, aoStatus, esperas, dormir}) → {resultado, req, repetiu, semReq?}.
+ * Chama a RPC com `p_req`. Em erro AMBÍGUO repete com a MESMA chave (depois de 1,5 s e de 4 s): se o servidor já tinha aplicado, devolve o resultado
+ * guardado; se não, aplica agora — nunca duplica. Sem sucesso depois das tentativas lança o erro com `.ambigua = true` e `.req` (para «Salvar de novo»).
+ * Servidor sem a versão com `p_req` (função inexistente): repete UMA vez sem a chave, para ninguém ficar sem conseguir cadastrar (`semReq = true`);
+ * essa chamada não tem proteção contra duplicar, então um erro nela sobe como veio, sem `.ambigua`.
+ * Qualquer outro erro sobe na hora, com `.req`.
+ */
+export async function escreverComReq(api, nome, params, { req, aoStatus, esperas = [1500, 4000], dormir = esperarOuOnline } = {}) {
+  const chave = req || novaReq();
+  let ultimo = null;
+  for (let i = 0; i <= esperas.length; i++) {
+    try {
+      const resultado = await api.rpcC(nome, { ...params, p_req: chave });
+      return { resultado, req: chave, repetiu: i > 0 };
+    } catch (e) {
+      ultimo = e;
+      if (funcaoInexistente(e)) return { resultado: await api.rpcC(nome, params), req: chave, repetiu: i > 0, semReq: true };
+      if (!erroAmbiguo(e)) { try { e.req = chave; } catch { /* erro congelado */ } throw e; }
+      if (i < esperas.length) { if (aoStatus) aoStatus("Conferindo se foi salvo…"); await dormir(esperas[i]); }
+    }
+  }
+  try { ultimo.ambigua = true; ultimo.req = chave; } catch { /* erro congelado */ }
+  throw ultimo;
+}
+
+/**
+ * «Desfazer» de uma troca de etiquetas: sobre o conjunto ATUAL, tira as que aquela ação pôs (`mais`) e devolve as que ela tirou (`menos`).
+ * O que foi marcado ou desmarcado DEPOIS fica como está (voltar ao conjunto inteiro de antes apagaria a etiqueta posta em seguida).
+ */
+export function desfazerEtiquetas(atual, mais = [], menos = []) {
+  const fica = (atual || []).filter(id => !(mais || []).includes(id));
+  for (const id of menos || []) if (!fica.includes(id)) fica.push(id);
+  return fica;
+}
+
+/** Mover entre etapas de TIPO diferente (aberto ↔ ganho/perdido) dispara automações (mensagens, tarefas): essas só se efetivam depois dos 7 s do «Desfazer». */
+export function movimentoAdiado(tipoOrigem, tipoDestino) {
+  return !!tipoOrigem && !!tipoDestino && tipoOrigem !== tipoDestino;
+}
+
+/** Texto curto dos totais no celular: «3 abertas · R$ 12.950 · previsão R$ 4.735». artigo = "a" | "o". */
+export function resumoDoFunil({ abertos = 0, soma = "", previsao: prev = "" } = {}, artigo = "o") {
+  const n = Number(abertos) || 0;
+  const rot = `abert${artigo === "a" ? "a" : "o"}${n === 1 ? "" : "s"}`;
+  return [`${n} ${rot}`, soma, prev ? `previsão ${prev}` : ""].filter(Boolean).join(" · ");
+}
+
+/**
+ * Pontuação do lead (0 a 100) gravada pelo passo «preencher um campo» ou pela IA: campos.score, com score_motivo e score_em.
+ * Aceita o negócio completo (`campos` dentro) ou o cartão com `score` solto. null quando não há nota válida.
+ */
+export function pontuacao(x) {
+  if (!x || typeof x !== "object") return null;
+  const campos = x.campos && typeof x.campos === "object" ? x.campos : {};
+  const bruto = x.score !== undefined && x.score !== null ? x.score : campos.score;
+  const n = typeof bruto === "number" ? bruto : (typeof bruto === "string" && bruto.trim() !== "" ? Number(bruto) : NaN);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
+  const score = Math.round(n);
+  const txt = v => (typeof v === "string" ? v.trim() : "");
+  return { score, faixa: score >= 70 ? "alta" : score >= 40 ? "media" : "baixa",
+    motivo: txt(x.score_motivo) || txt(campos.score_motivo), em: txt(x.score_em) || txt(campos.score_em) };
+}
+
+/** Quando a pontuação foi atribuída, para a tela: «2026-10-01T14:03» (hora de São Paulo, como o servidor grava) → «01/10/2026 às 14:03». Outro formato volta como veio. */
+export function quandoPontuacao(em) {
+  const t = String(em ?? "").trim();
+  const r = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(t);
+  if (!r) return t;
+  return `${r[3]}/${r[2]}/${r[1]}${r[4] ? ` às ${r[4]}:${r[5]}` : ""}`;
 }
 
 /** Valor que o cartão "vale" na coluna: final se ganho, senão o previsto. */
@@ -563,6 +778,14 @@ export function tituloCard(c) {
   if (n && String(n).trim()) return String(n).trim();
   const tel = (c.contato && c.contato.telefone) || c.telefone;
   return tel ? formatarTel(tel) : "Sem nome";
+}
+
+/** Como chamar o contato na tela: nome → telefone → e-mail → "Sem nome" (quem entrou só com e-mail, pelo site ou por planilha, continua identificável). */
+export function nomeContato(c) {
+  if (!c) return "Sem nome";
+  const n = String(c.nome || "").trim();
+  if (n) return n;
+  return (c.telefone && formatarTel(c.telefone)) || String(c.email || "").trim() || "Sem nome";
 }
 
 /** "5512998303030" → "(12) 99830-3030" (igual ao ui.telBR) */
@@ -903,4 +1126,47 @@ export function linhasExportacao(itens, campos = []) {
     ...extras.map(c => valorCampo(c, (k.campos || {})[c.chave])),
   ]);
   return { cabecalho, linhas };
+}
+
+/* ------------------------------------------------------------ listas do celular (M28) */
+/** `tel:+55…` a partir do telefone do cadastro (só dígitos): 10–11 dígitos = DDD + número, ganham o 55; 12–13 já trazem o país; fora disso não dá para ligar → null. */
+export function hrefTel(telefone) {
+  let d = String(telefone == null ? "" : telefone).replace(/\D/g, "");
+  if (d.length < 10 || d.length > 13) return null;
+  if (d.length <= 11) d = `55${d}`;
+  return `tel:+${d}`;
+}
+
+/**
+ * Ações de uma linha de contato no celular. Uma lista só: `menu` (o ⋮), `botoes` (sempre visíveis) e os dois lados do deslizar, que apontam para
+ * ações que JÁ existem em `menu`/`botoes` — assim o gesto e o botão chamam a mesma função e produzem o mesmo resultado.
+ * Deslizar para a direita = nova tarefa; para a esquerda = nova oportunidade (só quem pode escrever).
+ */
+export function acoesDoContato({ pode = false, conversas = false, telefone = false } = {}) {
+  const botoes = [telefone && "ligar", conversas && "conversa"].filter(Boolean);
+  const menu = ["abrir", ...(pode ? ["tarefa", "negocio"] : [])];
+  return { botoes, menu, direita: pode ? "tarefa" : null, esquerda: pode ? "negocio" : null };
+}
+
+/**
+ * Ações de uma linha de tarefa no celular. `botoes` = o que está sempre à mostra (o círculo de concluir); `menu` = o ⋮.
+ * Direita = concluir (ou reabrir, se já está concluída); esquerda = adiar para amanhã. Excluir fica só no ⋮ (com Desfazer).
+ */
+export function acoesDaTarefa({ pode = false, concluida = false } = {}) {
+  if (!pode) return { botoes: [], menu: [], direita: null, esquerda: null };
+  return { botoes: ["concluir"], menu: concluida ? ["editar", "excluir"] : ["editar", "adiar", "excluir"], direita: "concluir", esquerda: concluida ? null : "adiar" };
+}
+
+/**
+ * Novo vencimento de «Adiar para amanhã»: amanhã (dia de São Paulo, UTC−3 sem horário de verão) na MESMA hora de antes — às 09:00 se a tarefa não tinha data.
+ * Se ela já vencia depois desse instante (amanhã mais tarde, ou dias à frente), só empurra um dia. → ISO UTC.
+ */
+export function adiarParaAmanha(venceEm, agora = new Date()) {
+  const DIA = 86400000, SP = 3 * 3600000;
+  const ymd = ms => new Date(ms - SP).toISOString().slice(0, 10);
+  const atual = venceEm ? Date.parse(venceEm) : NaN;
+  const hhmm = Number.isFinite(atual) ? new Date(atual - SP).toISOString().slice(11, 16) : "09:00";
+  let alvo = Date.parse(`${ymd(new Date(agora).getTime() + DIA)}T${hhmm}:00-03:00`);
+  if (Number.isFinite(atual) && atual + DIA > alvo) alvo = atual + DIA;
+  return new Date(alvo).toISOString();
 }

@@ -107,7 +107,11 @@ export function linhasCampanhas(M, { dias = 30, plat = "" } = {}) {
   }).filter(Boolean);
   const T = M.consolidar(linhas.flatMap(r => M.linhasDe(de, ate, { camp: r.c.id })));
   const K = linhas.reduce((a, r) => ({ ag: a.ag + r.k.agendadas, fe: a.fe + r.k.fecharam, rec: a.rec + r.k.receita }), { ag: 0, fe: 0, rec: 0 });
-  return { linhas, total: { t: T, ag: K.ag, fe: K.fe, rec: K.rec, roas: T.gasto ? K.rec / T.gasto : null } };
+  // o que o CRM atribuiu a anúncios mas NÃO está em nenhuma linha acima (campanha pausada/sem investimento na janela, ou sem campanha identificada):
+  // entra no herói da Visão geral (crmTot da plataforma inteira) e fica fora do «Total» — esta sobra explica a diferença
+  const todos = M.crmTot(de, ate, { plat });
+  const outras = { ag: Math.max(0, (todos.agendadas || 0) - K.ag), fe: Math.max(0, (todos.fecharam || 0) - K.fe), rec: Math.max(0, (todos.receita || 0) - K.rec) };
+  return { linhas, total: { t: T, ag: K.ag, fe: K.fe, rec: K.rec, roas: T.gasto ? K.rec / T.gasto : null }, outras };
 }
 export const VAL_CAMP = {
   nome: r => r.c.nome, plat: r => r.c.plat, gasto: r => r.t.gasto, conv: r => r.t.conversoes, cpa: r => r.t.cpa, ctr: r => r.t.ctr,
@@ -253,7 +257,7 @@ export function textoPilula(e, agora = Date.now()) {
   if (e.nivel === "ok") return `Atualizado ${minutosAtras(e.ultimo, agora)}`;
   return "";
 }
-export const textoQueda = erros => erros.map(x => `A conexão com o ${nomePlat(x.canal)} caiu: os números do ${nomePlat(x.canal)} estão parados desde ${x.sync ? `${ddmmSP(x.sync)} ${horaSP(x.sync)}` : "a última leitura"}.`).join(" ");
+export const textoQueda = erros => erros.map(x => `${nomePlat(x.canal)} desconectado · dados até ${x.sync ? `${ddmmSP(x.sync)} ${horaSP(x.sync)}` : "aguardando primeira leitura"}.`).join(" ");
 
 /* ---------- radar: episódios (núcleo) + registro do servidor ---------- */
 export const SEV_NOME = { critico: "crítico", alerta: "alerta", info: "informativo" };
@@ -392,7 +396,7 @@ export function kpisAtendimento(r) {
     { id: "tpr_mediana_min", rotulo: "1ª resposta (mediana)", v: k.tpr_mediana_min, a: a.tpr_mediana_min, fmt: "min", sentido: "baixo",
       extra: fin(k.tpr_media_min) ? `média ${duracaoMin(k.tpr_media_min)}` : "" },
     { id: "resolucao_mediana_h", rotulo: "Até resolver (mediana)", v: k.resolucao_mediana_h, a: a.resolucao_mediana_h, fmt: "h", sentido: "baixo" },
-    { id: "abertas_agora", rotulo: "Abertas agora", v: k.abertas_agora, a: null, fmt: "int", sentido: "neutro",
+    { id: "abertas_agora", rotulo: "Abertas agora", v: k.abertas_agora, a: null, agora: true, fmt: "int", sentido: "neutro",
       extra: fin(k.aguardando_agora) ? `${k.aguardando_agora} aguardando resposta` : "" },
     { id: "sem_resposta", rotulo: "Sem resposta", v: k.sem_resposta, a: a.sem_resposta, fmt: "int", sentido: "baixo", extra: "abertas no período e nunca respondidas" },
   ];
@@ -462,4 +466,296 @@ export function mesVsAnterior(n) {
   if (!n) return null;
   return { atual: +n.receita_mes || 0, anterior: +(n.receita_mes_anterior_parcial ?? n.receita_mes_anterior) || 0,
            anteriorInteiro: +n.receita_mes_anterior || 0, dia: +n.dia_do_mes || null };
+}
+
+/* ============================================================
+   6. MOEDA EDITORIAL (M38) — "R$" e centavos a 60 %, colados ao valor (classe .num-moeda do app.css)
+   O DOM entra por parâmetro (ui.h / ui.limpar): este arquivo continua sem imports e sem DOM global.
+   ============================================================ */
+/** partesMoeda(28400.5, {centavos:false}) → {neg:"", rs:"R$", inteiro:"28.401", cent:""}; sem número → null. */
+export function partesMoeda(valor, { centavos = true } = {}) {
+  if (valor === null || valor === undefined || valor === "") return null;
+  const n = Number(valor);
+  if (!Number.isFinite(n)) return null;
+  const abs = Math.abs(n);
+  const fixo = centavos ? abs.toFixed(2) : String(Math.round(abs));
+  const [inteiro, cent] = fixo.split(".");
+  const zero = Number(fixo) === 0;
+  return { neg: n < 0 && !zero ? "−" : "", rs: "R$", inteiro: Number(inteiro).toLocaleString("pt-BR"), cent: centavos ? `,${cent}` : "" };
+}
+/** O mesmo valor em texto corrido ("R$ 28.400", "−R$ 1,50"), para tooltips, aria-label e teste. */
+export function textoMoeda(valor, opc) {
+  const p = partesMoeda(valor, opc);
+  return p ? `${p.neg}${p.rs} ${p.inteiro}${p.cent}` : "—";
+}
+/** preencherMoeda(ui, el, valor, {centavos}) → el com <span class="nm-rs">R$</span>28.400<span class="nm-cent">,00</span> (só nós de texto/elementos: nada de innerHTML). */
+export function preencherMoeda(ui, el, valor, opc = {}) {
+  const p = partesMoeda(valor, opc);
+  ui.limpar(el);
+  el.classList.add("num-moeda");
+  if (!p) { el.textContent = "—"; return el; }
+  el.append(...[p.neg || null, ui.h("span", { class: "nm-rs" }, p.rs), p.inteiro, p.cent ? ui.h("span", { class: "nm-cent" }, p.cent) : null].filter(Boolean));
+  return el;
+}
+/** Igual a G.contar, mas para moeda: o número sobe de 0 até `valor` (--t-dados) já com o formato editorial. Sem movimento (ou animar:false) pinta direto. */
+export function contarMoeda(ui, G, el, valor, { centavos = true, animar = true } = {}) {
+  preencherMoeda(ui, el, valor, { centavos });
+  const dur = animar && G && typeof G.duracaoToken === "function" ? G.duracaoToken("--t-dados") : 0;
+  const n = Number(valor);
+  if (!dur || !Number.isFinite(n) || n === 0 || typeof requestAnimationFrame !== "function") return el;
+  const t0 = performance.now();
+  const passo = t => {
+    const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+    preencherMoeda(ui, el, p < 1 ? n * e : n, { centavos });
+    if (p < 1 && el.isConnected) requestAnimationFrame(passo);
+  };
+  requestAnimationFrame(passo);
+  return el;
+}
+
+/* ============================================================
+   7. INÍCIO EDITORIAL (M31) — a manchete que diz o que importa agora e quais blocos merecem ficar abertos
+   Tudo PURO: a tela só desenha o que estas funções devolvem.
+   ============================================================ */
+const plural = (n, um, varios) => (Number(n) === 1 ? um : varios);
+
+/**
+ * O nome do compromisso da agenda na vertical: oficina marca «visita», loja marca «entrega», os demais «consulta»
+ * (a mesma palavra das Automações — auto-catalogo.palavraConsulta; o teste trava as duas iguais). Devolve {um, varios}.
+ */
+export function palavraAgenda(vertical) {
+  const um = vertical === "oficina" ? "visita" : vertical === "loja" ? "entrega" : "consulta";
+  return { um, varios: `${um}s` };
+}
+
+/** Quantas consultas existem hoje na resposta de nx_agenda_dia (null quando não há dado de agenda). */
+export function consultasHoje(agenda, hoje) {
+  if (!agenda || !Array.isArray(agenda.consultas)) return null;
+  const dia = hoje || hojeSP();
+  return agenda.consultas.filter(c => c && c.inicio && !/cancelad|desmarcad/i.test(String(c.status || "")) && hojeSP(new Date(c.inicio)) === dia).length;
+}
+
+/**
+ * manchete(d, {agenda, voc, links}) → {frases, texto, pendencia, urgente, contexto}
+ *  - `d` é a resposta de nx_inicio; `agenda` a de nx_agenda_dia (opcional: sem ela a frase não fala de consulta);
+ *  - `voc` = {contato, contatos, negocio, negocios, feminino, consulta, consultas} em minúsculas (vocabulário da vertical;
+ *    consulta/consultas = o nome do compromisso da agenda: consulta, visita ou entrega — ver palavraAgenda);
+ *  - `links` = {conversas, tarefas, agenda, crm} (hash ou null — sem permissão o trecho vira texto);
+ *  - cada frase é uma lista de nós: {t:"txt", v} ou {t:"link", href, tom?, partes:[{t:"n"|"moeda"|"narr"|"txt", v}]}.
+ *  "n" = número (acento), "moeda" = valor em R$ (acento, formato editorial), "narr" = o verbo de ação (Zodiak itálica).
+ *  Exemplo: "2 clientes esperam resposta há 15 min. Hoje tem 1 consulta e R$ 5.200 em orçamentos abertos."
+ */
+export function manchete(d, { agenda = null, voc = {}, links = {} } = {}) {
+  const V = { contato: "cliente", contatos: "clientes", negocio: "negócio", negocios: "negócios", feminino: false, consulta: "consulta", consultas: "consultas", ...voc };
+  const c = (d && d.conversas) || {}, t = (d && d.tarefas) || {}, n = (d && d.negocios) || {};
+  const ag = Math.max(0, Math.floor(+c.aguardando) || 0);
+  const atr = Math.max(0, Math.floor(+t.atrasadas) || 0);
+  const espera = Number.isFinite(+c.espera_mais_antiga_min) && c.espera_mais_antiga_min !== null ? +c.espera_mais_antiga_min : null;
+  const link = (href, partes, tom) => ({ t: "link", href: href || null, tom, partes });   // sem href (sem permissão) vira trecho sem link, com o mesmo destaque
+
+  // 1) o que pede ação agora
+  const urgentes = [];
+  if (ag > 0) {
+    urgentes.push(link(links.conversas, [{ t: "n", v: String(ag) }, { t: "txt", v: " " },
+      { t: "narr", v: plural(ag, `${V.contato} espera resposta`, `${V.contatos} esperam resposta`) },
+      ...(espera !== null && espera >= 1 ? [{ t: "txt", v: ` há ${duracaoMin(espera)}` }] : [])]));
+  }
+  if (atr > 0) {
+    urgentes.push(link(links.tarefas, [{ t: "n", v: String(atr) }, { t: "txt", v: " " }, { t: "narr", v: plural(atr, "tarefa atrasada", "tarefas atrasadas") }], "ruim"));
+  }
+  const frases = [];
+  if (urgentes.length) {
+    const f = [];
+    urgentes.forEach((u, i) => { if (i) f.push({ t: "txt", v: " e " }); f.push(u); });
+    f.push({ t: "txt", v: "." });
+    frases.push(f);
+  }
+
+  // 2) o contexto do dia: consultas e dinheiro em aberto
+  const nCons = consultasHoje(agenda, d && d.hoje);
+  const abertos = Math.max(0, Math.floor(+n.abertos) || 0), valor = +n.valor_aberto || 0;
+  const adj = (m, q) => (V.feminino ? m.replace(/o$/, "a") : m) + (Number(q) === 1 ? "" : "s");
+  const ctx = [];
+  if (nCons !== null && nCons > 0) {
+    ctx.push([{ t: "txt", v: "Hoje tem " }, link(links.agenda, [{ t: "n", v: String(nCons) }, { t: "txt", v: ` ${plural(nCons, V.consulta, V.consultas)}` }])]);
+  }
+  if (abertos > 0 && valor > 0) {
+    ctx.push([link(links.crm, [{ t: "moeda", v: valor }]),
+      { t: "txt", v: ` em ${plural(abertos, V.negocio, V.negocios)} ${adj("aberto", abertos)}` }]);
+  }
+  if (ctx.length) {
+    const f = [];
+    ctx.forEach((parte, i) => { if (i) f.push({ t: "txt", v: " e " }); f.push(...parte); });
+    f.push({ t: "txt", v: "." });
+    frases.push(f);
+  }
+
+  const pendencia = ag > 0 || atr > 0 || (+t.hoje || 0) > 0 || (+c.sem_dono || 0) > 0;
+  // sem nada a dizer (cliente zerado): a manchete é só o "Tudo em dia."
+  if (!frases.length) frases.push([{ t: "link", href: null, partes: [{ t: "narr", v: "Tudo em dia." }] }]);
+  const achatar = no => (no.t === "txt" ? no.v : no.partes.map(p => (p.t === "moeda" ? textoMoeda(p.v, { centavos: false }) : p.v)).join(""));
+  const texto = frases.map(f => f.map(achatar).join("")).join(" ");
+  return { frases, texto, pendencia, urgente: urgentes.length > 0, contexto: ctx.length > 0 };
+}
+
+/**
+ * blocosInicio(d, {canais}) → {abertos: [...ids], recolhidos: [...ids]} na ordem de urgência.
+ * Abertos = o que pede ação (atendimento, tarefas, número com problema) + vendas; o resto vai para "Mais detalhes".
+ */
+export function blocosInicio(d) {
+  const c = (d && d.conversas) || {}, t = (d && d.tarefas) || {}, n = (d && d.negocios) || {};
+  const canais = (d && d.canais) || [];
+  const abertos = [], recolhidos = [];
+  const poe = (id, aberto) => (aberto ? abertos : recolhidos).push(id);
+  poe("atendimento", (+c.aguardando || 0) > 0 || (+c.sem_dono || 0) > 0);
+  poe("tarefas", (+t.atrasadas || 0) > 0 || (+t.hoje || 0) > 0);
+  poe("numeros", !canais.length || canais.some(k => estadoCanal(k).nivel !== "bom"));
+  poe("vendas", (+n.abertos || 0) > 0 || (+n.ganhos_mes || 0) > 0 || (+n.receita_mes || 0) > 0);
+  recolhidos.push("leads");
+  // a ordem dos abertos segue a urgência: atendimento → tarefas → número com problema → vendas
+  const ordem = ["atendimento", "tarefas", "numeros", "vendas"];
+  abertos.sort((a, b) => ordem.indexOf(a) - ordem.indexOf(b));
+  return { abertos, recolhidos };
+}
+
+/** Quais números mudaram entre duas respostas de nx_inicio (para G.destacar no pulso): lista de chaves "grupo.campo". */
+export function numerosMudaram(antes, depois) {
+  if (!antes || !depois) return [];
+  const campos = { conversas: ["aguardando", "sem_dono", "minhas", "abertas"], tarefas: ["hoje", "atrasadas"], leads: ["hoje", "hoje_anuncio", "semana"],
+    negocios: ["abertos", "valor_aberto", "previsao_ponderada", "receita_mes", "ganhos_mes"] };
+  const mudou = [];
+  for (const [g, ks] of Object.entries(campos)) for (const k of ks) {
+    const a = antes[g] && antes[g][k], b = depois[g] && depois[g][k];
+    if (a !== undefined && a !== null && b !== undefined && b !== null && +a !== +b) mudou.push(`${g}.${k}`);
+  }
+  return mudou;
+}
+
+/* ============================================================
+   8. CHECKLIST "DEIXE O ÓRBITA PRONTO" (M32) — nx_onboarding_estado vira progresso, próximos passos e selos do menu
+   ============================================================ */
+/**
+ * Os 11 itens, na ordem recomendada (o servidor devolve a mesma ordem; aqui ficam o texto, a ajuda e a seção que o item abre).
+ * `modulo` e `papel` são os filtros da seção nas Configurações (os mesmos dos *-config.js; o teste trava os dois lados):
+ * item cuja seção a pessoa não abre não é cobrado. `opcional` aqui é o padrão; quando o servidor manda `opcional`, vale o dele.
+ */
+export const ONBOARDING_ITENS = Object.freeze([
+  { id: "chave_codewords", rotulo: "Chave do WhatsApp salva", secao: "numeros", modulo: "conversas", papel: "admin", assistente: true, ajuda: "A chave do CodeWords (ou o token da Meta) guardada com segurança." },
+  { id: "aparelho_pareado", rotulo: "Aparelho pareado", secao: "numeros", modulo: "conversas", papel: "admin", assistente: true, ajuda: "O WhatsApp do celular ligado ao Órbita." },
+  { id: "recebimento", rotulo: "Recebimento conferido", secao: "numeros", modulo: "conversas", papel: "admin", assistente: true, ajuda: "Confirmamos que as mensagens chegam por este número." },
+  { id: "ia_ou_direto", rotulo: "IA validada ou receber direto", secao: "numeros", modulo: "conversas", papel: "admin", assistente: true, ajuda: "Escolha quem responde primeiro: a IA ou a equipe." },
+  { id: "mensagem_teste", rotulo: "Mensagem de teste enviada", secao: "numeros", modulo: "conversas", papel: "admin", assistente: true, ajuda: "Uma mensagem real saindo pelo número." },
+  { id: "departamento_horario", rotulo: "Departamento com horário", secao: "departamentos", modulo: "conversas", papel: "admin", ajuda: "Fora do horário o cliente recebe a mensagem automática." },
+  { id: "agenda_faixas", rotulo: "Faixas da agenda", secao: "agenda", modulo: "crm", papel: "admin", ajuda: "Os horários em que a agenda aceita consultas." },
+  { id: "script_site", rotulo: "Script do site com contato recebido", secao: "rastreio", modulo: "crm", papel: "admin", opcional: true, ajuda: "Opcional: só para quem tem site. Mostra de onde vem cada contato." },
+  { id: "colega_convidado", rotulo: "Colega convidado", secao: "usuarios", modulo: null, papel: "admin", ajuda: "Quem atende junto com você." },
+  { id: "funil_ajustado", rotulo: "Funil ajustado", secao: "funis", modulo: "crm", papel: "admin", ajuda: "As etapas que a sua equipe realmente usa." },
+  { id: "anuncios_ligados", rotulo: "Anúncios ligados", secao: "anuncios", modulo: "ads", papel: "gestor", opcional: true, ajuda: "Opcional: ligue o Meta e o Google para ver o retorno." },
+]);
+
+/**
+ * filtroSecoesOnboarding({temModulo, pode, configPronta}) → item => a pessoa consegue abrir a seção deste item?
+ * É a régua do config.js (seção pronta, módulo do plano e papel mínimo); cada função é opcional (sem ela, aquele filtro não barra).
+ */
+export function filtroSecoesOnboarding({ temModulo = null, pode = null, configPronta = null } = {}) {
+  return item => {
+    const b = ONBOARDING_ITENS.find(x => x.id === (item && item.id)) || item || {};
+    try {
+      if (typeof configPronta === "function" && b.secao && !configPronta(b.secao)) return false;
+      if (b.modulo && typeof temModulo === "function" && !temModulo(b.modulo)) return false;
+      if (b.papel && typeof pode === "function" && !pode(b.papel)) return false;
+    } catch { return false; }
+    return true;
+  };
+}
+
+/**
+ * Para onde o "Fazer agora" leva. Passos 1-5 abrem o assistente do número (o do canal que pede ação, quando o servidor diz qual);
+ * os demais abrem a seção exata das Configurações.
+ */
+export function rotaOnboarding(item) {
+  const base = ONBOARDING_ITENS.find(x => x.id === (item && item.id));
+  if (!base) return "#/config";
+  if (base.assistente) return `#/config/numeros?assistente=${encodeURIComponent(item && item.canal_id ? item.canal_id : "novo")}`;
+  return `#/config/${base.secao}`;
+}
+
+/**
+ * resumoOnboarding(estado, {pulados, dispensadoAte, agora, admin, podeSecao}) → null (não mostrar) ou
+ *   {itens, total, feitos, obrigatorios, obrigFeitos, pct, completo, proximo, pendentes}
+ * - só admin vê; some a 100 % (dos obrigatórios); "Dispensar por 7 dias" esconde até a data; "Já está bom" (pulados) conta como feito neste aparelho;
+ * - `itens` mantém a ordem recomendada e traz o rótulo/ajuda/rota local mesmo se o servidor mandar só ids;
+ * - `podeSecao` (filtroSecoesOnboarding): item cuja seção a pessoa não abre sai ANTES da conta — não vira link morto nem trava o progresso;
+ * - obrigatórios, total e porcentagem saem dos itens recebidos (nenhum número fixo): o que o servidor marca como opcional não conta.
+ */
+export function resumoOnboarding(estado, { pulados = [], dispensadoAte = 0, agora = Date.now(), admin = true, podeSecao = null } = {}) {
+  if (!admin || !estado || !Array.isArray(estado.itens) || !estado.itens.length) return null;
+  const jaPulado = new Set(pulados || []);
+  const porId = new Map(estado.itens.map(i => [i.id, i]));
+  const itens = ONBOARDING_ITENS.filter(b => porId.has(b.id) && (typeof podeSecao !== "function" || podeSecao(b))).map(b => {
+    const s = porId.get(b.id);
+    const feitoServidor = !!s.feito, pulado = !feitoServidor && jaPulado.has(b.id);
+    return { id: b.id, rotulo: b.rotulo, ajuda: b.ajuda, opcional: typeof s.opcional === "boolean" ? s.opcional : !!b.opcional, feito: feitoServidor || pulado, pulado,
+      secao: b.secao, rota: rotaOnboarding({ id: b.id, canal_id: s.canal_id }), ultimo_em: s.ultimo_em || null };
+  });
+  const obrig = itens.filter(i => !i.opcional);
+  if (!obrig.length) return null;                 // nada que esta pessoa possa (e precise) fazer: sem cartão
+  const obrigFeitos = obrig.filter(i => i.feito).length;
+  const completo = obrigFeitos === obrig.length;
+  const pendentes = itens.filter(i => !i.feito);
+  const resumo = { itens, total: itens.length, feitos: itens.filter(i => i.feito).length, obrigatorios: obrig.length, obrigFeitos,
+    pct: obrig.length ? Math.round(obrigFeitos * 100 / obrig.length) : 0, completo, pendentes, proximo: pendentes.find(i => !i.opcional) || pendentes[0] || null };
+  if (completo) return null;
+  if (Number(dispensadoAte) > agora) return null;
+  return resumo;
+}
+
+/** Passos pendentes (obrigatórios, não pulados) por seção das Configurações — o ponto "nav-selo" do menu: {numeros: 3, departamentos: 1, …}. */
+export function pendenciasConfig(estado, { pulados = [], podeSecao = null } = {}) {
+  const r = resumoOnboarding(estado, { pulados, dispensadoAte: 0, admin: true, podeSecao });
+  const out = {};
+  if (!r) return out;
+  for (const i of r.pendentes) if (!i.opcional) out[i.secao] = (out[i.secao] || 0) + 1;
+  return out;
+}
+
+/** "Dispensar por 7 dias": o instante até quando o cartão fica escondido neste aparelho. */
+export function dispensarOnboardingAte(agora = Date.now(), dias = 7) { return agora + dias * 86400000; }
+
+/* ============================================================ 9. M39 — painéis no celular: chip-resumo dos filtros e Radar com gravidade */
+/** Gravidade do Radar: a ordem (0 = mais grave), o rótulo escrito (nunca só cor) e o ícone da sprite. A gravidade já vem do alerta; sem RPC nova. */
+export const SEV_ORDEM = Object.freeze({ critico: 0, alerta: 1, info: 2 });
+export const SEV_ROTULO = Object.freeze({ critico: "Crítico", alerta: "Atenção", info: "Informativo" });
+export const SEV_ICONE = Object.freeze({ critico: "alerta", alerta: "sino", info: "info" });
+/** Gravidade desconhecida vira "alerta" (o meio-termo): nunca esconde nem exagera. */
+export const nivelSev = sev => (Object.prototype.hasOwnProperty.call(SEV_ORDEM, sev) ? sev : "alerta");
+
+/**
+ * ordenarRadar(R) → lista única do Radar, da mais grave para a menos: ativos primeiro (por gravidade; conexão caída é sempre crítica),
+ * depois os já resolvidos; em empate vale a ordem em que o `montarRadar` entregou (conexões antes, depois o histórico mais recente).
+ * Cada item: {tipo: "conexao"|"episodio", sev, ativo, ref} — `ref` é o objeto original de R.conexoes / R.episodios.
+ */
+export function ordenarRadar(R) {
+  const itens = [
+    ...((R && R.conexoes) || []).map(ref => ({ tipo: "conexao", sev: "critico", ativo: !!ref.ativo, ref })),
+    ...((R && R.episodios) || []).map(ref => ({ tipo: "episodio", sev: nivelSev(ref.sev), ativo: !!ref.ativo, ref })),
+  ];
+  return itens.map((x, i) => ({ x, i }))
+    .sort((a, b) => (Number(b.x.ativo) - Number(a.x.ativo)) || (SEV_ORDEM[a.x.sev] - SEV_ORDEM[b.x.sev]) || (a.i - b.i))
+    .map(o => o.x);
+}
+
+/** O chip-resumo de Anúncios: "Últimos 30 dias · Tudo" (ou Meta / Google). */
+export function textoChipAnuncios(dias, plat) {
+  return `Últimos ${Number(dias) || 30} dias · ${plat ? nomePlat(plat) : "Tudo"}`;
+}
+
+/**
+ * O chip-resumo de Relatórios: "Últimos 30 dias · Todos os funis" · "01/09 a 30/09 · Funil Consultas" · "Últimos 7 dias · Todos os departamentos".
+ * preset: 7 | 30 | 90 | "per" (com de/ate ISO); aba: "vendas" (funil) | "atendimento" (departamento); `nome` é o do funil/departamento escolhido ('' = todos).
+ */
+export function textoChipRelatorios({ preset = 30, de = null, ate = null, aba = "vendas", nome = "" } = {}) {
+  const curto = iso => { const [, m, d] = String(iso || "").slice(0, 10).split("-"); return d ? `${d}/${m}` : "—"; };
+  const per = preset === "per" && de && ate ? `${curto(de)} a ${curto(ate)}` : `Últimos ${[7, 30, 90].includes(Number(preset)) ? Number(preset) : 30} dias`;
+  return `${per} · ${nome || (aba === "atendimento" ? "Todos os departamentos" : "Todos os funis")}`;
 }

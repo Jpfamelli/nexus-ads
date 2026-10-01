@@ -8,7 +8,7 @@
 import Anthropic from "npm:@anthropic-ai/sdk";
 
 // modelos cujos classificadores podem recusar: o servidor refaz no modelo reserva
-const COM_RESERVA = new Set(["claude-opus-5", "claude-fable-5-1"]);
+const COM_RESERVA = new Set(["claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"]);
 // modelos que não aceitam output_config.effort (dariam 400): anteriores ao Opus 4.5,
 // Sonnet 4.5 e Haiku — inclui os apelidos claude-opus-4-0/4-1 e claude-sonnet-4-0
 const SEM_EFFORT = /haiku|sonnet-4-5|sonnet-4-[02]|opus-4-[012]|claude-3/;
@@ -114,6 +114,79 @@ export async function perguntarClaude({ chave, modelo, sistema, usuario, maxToke
   if (!texto) throw new Error(`a IA não devolveu texto (stop_reason: ${resp.stop_reason})`);
   return {
     texto,
+    modelo: resp.model || model,
+    tokens_in: Number.isFinite(resp.usage?.input_tokens) ? resp.usage.input_tokens : null,
+    tokens_out: Number.isFinite(resp.usage?.output_tokens) ? resp.usage.output_tokens : null,
+  };
+}
+
+/**
+ * Pergunta com SAÍDA ESTRUTURADA (automações: montar a partir da descrição e decidir etapa/resumo/nota).
+ * `output_config.format` com JSON Schema (nunca tool_choice forçado nem prefill: dão 400 no Opus 5.5) e o
+ * mesmo reserva de modelo do perguntarClaude. Quem chama valida o JSON de novo: o schema garante a forma,
+ * não os limites (tamanho, faixa) nem que os ids sejam do cliente.
+ * Erros viram `Error` com `.status` (HTTP da API), `.conexao`, `.recusa`, `.incompleta` ou `.invalido` — quem
+ * chama traduz para o usuário (a mensagem original pode citar a chave: nunca é mostrada).
+ * @param {object} o
+ * @param {string} o.chave    nx_config.anthropic_api_key
+ * @param {string} [o.modelo] nx_config.modelo_ia (padrão claude-opus-5-5)
+ * @param {string} o.sistema  instruções
+ * @param {string} o.usuario  o pedido (dados de terceiros entre marcas aleatórias)
+ * @param {object} o.schema   JSON Schema do objeto de saída (additionalProperties:false em todo objeto)
+ * @param {number} [o.maxTokens]
+ * @param {"low"|"medium"|"high"} [o.esforco]
+ * @param {number} [o.timeoutMs]
+ * @param {number} [o.retentativas] retentativas do SDK em 408/429/5xx/rede (padrão 1)
+ * @returns {Promise<{json: object, texto: string, modelo: string, tokens_in: number|null, tokens_out: number|null}>}
+ */
+export async function estruturarClaude({ chave, modelo, sistema, usuario, schema, maxTokens = 4000, esforco = "low", timeoutMs = 45_000, retentativas = 1 }) {
+  const model = modelo || "claude-opus-5-5";
+  // timeout × (retentativas + 1) tem de caber no teto de tempo da Edge Function (~150 s)
+  const client = new Anthropic({ apiKey: chave, timeout: timeoutMs, maxRetries: retentativas });
+  const pedido = {
+    model,
+    max_tokens: maxTokens,
+    system: sistema,
+    messages: [{ role: "user", content: usuario }],
+    output_config: { format: { type: "json_schema", schema } },
+  };
+  if (!SEM_EFFORT.test(model)) pedido.output_config.effort = esforco;
+
+  let resp;
+  try {
+    resp = COM_RESERVA.has(model)
+      ? await client.beta.messages.create({ ...pedido, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" })
+      : await client.messages.create(pedido);
+  } catch (e) {
+    if (e instanceof Anthropic.APIError) {
+      const erro = new Error(`Anthropic ${e.status ?? "sem resposta"}: ${e.message}`);
+      erro.status = e.status ?? null;
+      erro.conexao = e.status == null;
+      throw erro;
+    }
+    throw e;
+  }
+  if (resp.stop_reason === "refusal") {
+    const cat = resp.stop_details?.category;
+    const erro = new Error(`a IA recusou o pedido${cat ? ` (${cat})` : ""}`);
+    erro.recusa = true;
+    throw erro;
+  }
+  if (resp.stop_reason === "max_tokens") {
+    const erro = new Error("a resposta da IA veio incompleta (max_tokens)");
+    erro.incompleta = true;
+    throw erro;
+  }
+  const texto = (resp.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+  let json;
+  try { json = JSON.parse(texto); } catch { json = undefined; }
+  if (json === undefined || json === null || typeof json !== "object" || Array.isArray(json)) {
+    const erro = new Error(`a IA não devolveu um objeto JSON (stop_reason: ${resp.stop_reason})`);
+    erro.invalido = true;
+    throw erro;
+  }
+  return {
+    json, texto,
     modelo: resp.model || model,
     tokens_in: Number.isFinite(resp.usage?.input_tokens) ? resp.usage.input_tokens : null,
     tokens_out: Number.isFinite(resp.usage?.output_tokens) ? resp.usage.output_tokens : null,

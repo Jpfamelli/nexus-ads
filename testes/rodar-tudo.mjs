@@ -13,6 +13,7 @@ const comandos = [
   ["testes/crm.teste.mjs"],
   ["testes/conversas.teste.mjs"],
   ["testes/relatorios.teste.mjs"],
+  ["testes/shell.teste.mjs"],
   ["--test", "testes/funcoes.teste.mjs"],
   ["--test", "testes/scripts.teste.mjs"],
   ["--test", "testes/dev-falso.teste.mjs"],
@@ -21,6 +22,9 @@ const comandos = [
   ["--test", "testes/codewords.teste.mjs"],
   ["--test", "testes/rastreio.teste.mjs"],
   ["--test", "testes/automacoes.teste.mjs"],
+  ["--test", "testes/automacoes-catalogo.teste.mjs"],
+  ["--test", "testes/automacoes-ia.teste.mjs"],
+  ["--test", "testes/correcoes-backend.teste.mjs"],
   ["--test", "testes/isolamento.teste.mjs"],
 ];
 

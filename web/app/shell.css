@@ -1,0 +1,87 @@
+/* ============================================================
+   ÓRBITA — shell.css · frente B (plano de 01/10/2026)
+   Estilos do que é do shell e não de uma tela: faixas do sistema (versão nova, conexão), selo de dados guardados,
+   janela de sessão expirada, paleta de comandos, folhas de atalhos e ajuda, instalar o app. Só tokens do app.css
+   (nenhuma cor literal, nenhum 1fr solto, nenhum tamanho de fonte fora dos tokens).
+   ============================================================ */
+/* escala: tokens */
+
+/* ---- faixas do sistema: ficam entre o topo e a tela, empurram o conteúdo (nunca cobrem) ---- */
+.faixas-sistema:empty { display: none; }
+.faixas-sistema { position: relative; z-index: 2; }
+.faixa-versao { background: var(--c-prim-suave); }
+.faixa-versao .ic { color: var(--c-prim-luz); }
+
+/* ---- conexão (M14): faixa de estado e ponto junto ao sino ---- */
+.faixa-rede { background: var(--c-ruim-suave); }
+.faixa-rede .ic { color: var(--c-ruim); }
+.faixa-rede[data-estado="lento"] { background: var(--c-aten-suave); }
+.faixa-rede[data-estado="lento"] .ic { color: var(--c-aten); }
+.faixa-rede[data-estado="ok"] { background: var(--c-ok-suave); }
+.faixa-rede[data-estado="ok"] .ic { color: var(--c-ok); }
+.faixa-rede .rede-msg { flex: 1 1 12rem; }
+.rede-espera { color: var(--c-texto-2); white-space: nowrap; }
+.rede-ponto { position: absolute; right: 6px; bottom: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--c-ruim); box-shadow: 0 0 0 2px var(--c-fundo); pointer-events: none; }
+.rede-ponto[data-estado="lento"] { background: var(--c-aten); }
+.sino { position: relative; }
+.faixa-rede { padding-block: .4rem; row-gap: .15rem; }
+.faixa-rede .bt { min-height: 28px; padding: .1rem .75rem; }
+
+/* ---- dados guardados (M16): selo único «Mostrando dados de 14:02 · atualizando…» ---- */
+.faixa-cache { background: var(--c-sup-2); }
+.faixa-cache .ic { color: var(--c-texto-2); }
+.faixa-cache p { color: var(--c-texto-2); }
+
+/* ---- atalhos «Ir para…» (M22): escondidos até receber o foco, como o «Pular para o conteúdo»; todos no mesmo lugar (um foco por vez) ---- */
+.pular-regioes { display: contents; }
+.pular-regiao { position: absolute; left: -9999px; top: .8rem; z-index: 999; padding: .6rem 1rem; border-radius: 999px; background: var(--c-texto); color: var(--c-fundo); font-weight: 600; border: 0; }
+.pular-regiao:focus { left: 1rem; }
+.pular-regiao[hidden] { display: none; }
+/* o título que recebe o foco depois de navegar não desenha um anel enorme para quem navega com mouse; no teclado o anel fica */
+h1[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
+
+/* ---- contraste forçado (Windows): foco, faixas e pontos de estado nunca dependem só de cor de fundo ---- */
+@media (forced-colors: active) {
+  :focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+  .pular-regiao, .pular { border: 2px solid CanvasText; background: Canvas; color: CanvasText; }
+  .faixa { border: 1px solid CanvasText; }
+  .rede-ponto { border: 2px solid CanvasText; background: Highlight; forced-color-adjust: none; }
+  .faixa-rede .bt, .faixa-versao .bt { border: 1px solid ButtonText; }
+}
+
+/* ---- produto aberto no login e passo a passo de instalação (M13) ---- */
+.entrar-produto { display: flex; align-items: flex-start; gap: .55rem; margin: 0 0 1rem; color: var(--c-texto-2); font-size: var(--fs-peq); line-height: 1.4; }
+.entrar-produto .ic { flex: none; width: 20px; height: 20px; margin-top: .05rem; color: var(--c-prod, var(--c-prim)); }
+.entrar-produto b { color: var(--c-texto); font-weight: 700; }
+.instalar-passos { margin: 0; padding-left: 1.2rem; display: grid; gap: .5rem; color: var(--c-texto); }
+.folha-mais button { display: flex; flex-direction: column; align-items: center; gap: .4rem; padding: 1rem .25rem; min-width: 0; overflow-wrap: anywhere; border-radius: var(--r); background: var(--c-sup-2); border: 1px solid var(--c-borda); font-size: var(--fs-12); font-weight: 600; text-align: center; color: inherit; cursor: pointer; }
+.folha-mais button .ic { width: 22px; height: 22px; color: var(--c-prim-luz); }
+
+/* ---- paleta de comandos, atalhos e período de teste (M18) ---- */
+.pal-bloco, .pal-secao { display: flex; flex-direction: column; gap: .15rem; }
+.pal-corpo { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.pal-atalho { flex: none; margin-left: auto; font-family: var(--f-mono); font-size: var(--fs-11); padding: .05rem .4rem; border-radius: 6px; background: var(--c-sup-2); border: 1px solid var(--c-borda); color: var(--c-texto-3); }
+@media (pointer: coarse) { .pal-atalho { display: none; } }
+.pal-grupo-teclas + .pal-grupo-teclas { margin-top: .4rem; }
+.pal-lista-teclas { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .45rem 1rem; align-items: center; margin: 0; }
+.pal-lista-teclas dt, .pal-lista-teclas dd { margin: 0; }
+.pal-lista-teclas dd { color: var(--c-texto-2); }
+.pal-teclas { display: inline-flex; align-items: center; gap: .25rem; color: var(--c-texto-3); }
+.pal-teclas kbd { font-family: var(--f-mono); font-size: var(--fs-12); min-width: 24px; text-align: center; padding: .1rem .4rem; border-radius: 6px; background: var(--c-sup-2); border: 1px solid var(--c-borda); color: var(--c-texto); }
+.topo-empresa { display: flex; align-items: center; gap: .5rem; }
+.pilula-teste { position: relative; display: inline-flex; align-items: center; gap: .35rem; flex: 0 1 auto; min-width: 0; min-height: 28px; padding: 0 .7rem 0 .55rem; border-radius: 999px; border: 1px solid var(--c-borda-2); background: var(--c-sup-2); color: var(--c-texto-2); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; cursor: pointer; }
+.pilula-teste::before { content: ""; position: absolute; inset: -8px 0; }   /* a área de toque tem 44 px mesmo com a pílula de 28 */
+.pilula-teste .ic { width: 14px; height: 14px; flex: none; color: var(--c-info); }
+.pilula-teste span { overflow: hidden; text-overflow: ellipsis; }
+.pilula-teste:hover { border-color: var(--c-texto-3); }
+.pilula-teste:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.pilula-teste[data-urgente="1"] { background: var(--c-aten-suave); color: var(--c-aten); border-color: transparent; }
+.pilula-teste[data-urgente="1"] .ic { color: var(--c-aten); }
+@media (max-width: 760px) {
+  .bt-tema { display: none; }   /* o tema mora no menu da conta («Aparência»): o topo do celular fica com 5 controles */
+  .topo.topo-emp-troca .topo-marca, .topo.topo-pilula-on .topo-marca { display: none; }   /* a empresa (ou a pílula) já ocupa o lugar da marca; o Início está na barra de baixo */
+  .pilula-teste span { max-width: 9.5rem; }
+  .pilula-teste { flex: none; }   /* no celular a pílula não encolhe: some o prefixo «Teste», fica «até 15/10» inteiro (o relógio e o aviso dizem que é teste) */
+  .pilula-teste .pt-pre { display: none; }
+}
+@media (forced-colors: active) { .pilula-teste, .pal-atalho, .pal-teclas kbd { border: 1px solid ButtonText; } }

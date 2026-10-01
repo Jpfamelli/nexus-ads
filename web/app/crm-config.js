@@ -311,7 +311,7 @@ async function secaoFunis(ctx, alvo) {
       notaMover.append(h("p", { class: "rotulo" }, "Ao salvar"), h("ul", null, removidas.map((r, n) => {
         const dest = r.e.id && mover[r.e.id] ? etapas.find(x => x.id === mover[r.e.id]) : null;
         return h("li", null,
-          h("span", null, r.e.id && r.e._n ? `«${r.e.nome}» sai; ${r.e._n} ${k.v.min(r.e._n === 1 ? "negocio" : "negocios")} vão para «${dest ? dest.nome : "?"}».` : `«${r.e.nome || "Etapa nova"}» sai.`),
+          h("span", null, r.e.id && r.e._n ? `«${r.e.nome}» sai; ${r.e._n} ${k.v.min(r.e._n === 1 ? "negocio" : "negocios")} ${r.e._n === 1 ? "vai" : "vão"} para «${dest ? dest.nome : "?"}».` : `«${r.e.nome || "Etapa nova"}» sai.`),
           btn(k, "Desfazer", { tipo: "fant", p: true, fn: () => {
             removidas.splice(n, 1);
             if (r.e.id) delete mover[r.e.id];

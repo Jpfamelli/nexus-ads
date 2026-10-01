@@ -9,7 +9,7 @@
 import { writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { montarReceita } from "../supabase/functions/_compartilhado/codewords_prompt.js";
+import { montarReceita, VERSAO_PROMPT } from "../supabase/functions/_compartilhado/codewords_prompt.js";
 
 export const MARCADOR_URL = "{{URL_DO_ORBITA}}";
 const RAIZ = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -19,6 +19,9 @@ export function documento() {
   const prompt = montarReceita({ url: MARCADOR_URL });
   return [
     "# Prompt do CodeWords — fluxo de atendimento por WhatsApp (Órbita)",
+    "",
+    `**Prompt ${VERSAO_PROMPT}.** O fluxo ficou mais leve: conversa, agenda, chama uma pessoa, anota a origem que o cliente contar e repassa mensagens ao Órbita.`,
+    "A etapa do funil, as notas, o resumo da conversa e os follow-ups agora são **Automações do Órbita** (com IA do Claude), em Órbita › Automações. As receitas de IA nascem **desligadas**: a empresa precisa ligar «IA classifica a etapa» e «Resumo da conversa ao resolver».",
     "",
     "Este é o texto que o DONO cola no construtor de fluxos do CodeWords (o Cody) para criar **um** fluxo que liga o aparelho de",
     "WhatsApp (pareado no `whatsapp_device_manager`) à IA do Órbita. O painel entrega o mesmo texto já com a URL do canal",
@@ -31,6 +34,8 @@ export function documento() {
     "2. Copie o prompt abaixo (o painel já preenche a URL) e cole no Cody. Peça para ele publicar o fluxo.",
     "3. O Cody devolve o **Service ID** do fluxo. Cole-o no canal (Órbita › Configurações › Números) e clique em «Ligar ao fluxo de IA».",
     "4. Teste com um número seu: a IA responde, a resposta aparece no Órbita como resposta da IA, e uma mensagem sua pelo celular pausa a IA na conversa.",
+    "",
+    "Já tem um fluxo da versão 1? Não crie outro: cole este prompt no Cody pedindo para **atualizar o mesmo fluxo** (mesmo Service ID) e tirar dele as ferramentas etapa e nota (a origem continua). A API do Órbita continua aceitando essas ações, então o fluxo antigo segue funcionando até você atualizar.",
     "",
     "Este arquivo é gerado por `node scripts/gerar-prompt-codewords.mjs` a partir de `supabase/functions/_compartilhado/codewords_prompt.js`; não edite à mão.",
     "",

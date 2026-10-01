@@ -315,7 +315,7 @@ test("workflow de funções: só tag funcoes-*, contents: read, um por vez, port
   assert.match(semComentario, /persist-credentials: false/);
   // a lista publicada: nomes válidos, sem repetição, todos montados pelo montar-funcoes
   const lista = readFileSync(resolve(RAIZ, "supabase/deploy-lista.txt"), "utf8").split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith("#"));
-  assert.deepEqual(lista, ["nx-codewords", "nx-enviar", "nx-whatsapp"]);
+  assert.deepEqual(lista, ["nx-ia", "nx-codewords", "nx-enviar", "nx-whatsapp", "nx-ciclo", "nx-relatorio", "nx-midia"]);
   const montar = readFileSync(resolve(RAIZ, "scripts/montar-funcoes.mjs"), "utf8");
   for (const fn of lista) {
     assert.match(fn, /^nx-[a-z]+$/);

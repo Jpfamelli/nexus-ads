@@ -5,15 +5,16 @@
    --cor (validada no JS). Nenhum hex aqui. Movimento com os tokens
    do painel; some tudo com prefers-reduced-motion.
    ============================================================ */
+/* escala: tokens */   /* marcador (M30): tamanho de letra só por token --fs-*, em ou %; nada de px/rem solto fora do :root; caixa-alta só em .selo-caps (travado em app.teste.mjs e crm.teste.mjs) */
 [hidden] { display: none !important; }
 
 .crm { display: flex; flex-direction: column; gap: 1.1rem; min-width: 0; }
-.crm-cab { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem 1.5rem; flex-wrap: wrap; }
-.crm-cab > div:first-child { min-width: 0; }
-.crm-cab .rotulo { margin-bottom: .4rem; }
-.crm-cab-acoes { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
-.crm-titulo { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; min-width: 0; }
-.crm-titulo .titulo-pag { min-width: 0; }
+/* a entrada (.vista > * { animation: aparece … both }) deixava transform: matrix(identidade) no fim, e isso prende o position: fixed dos filhos
+   (botão flutuante do celular) à própria tela: com `backwards` o transform some quando a animação acaba */
+.vista > .crm { animation-fill-mode: backwards; }
+/* cabeçalho (M30): vem do ui.cabecalho (.cab), plano e sem a empresa em cima; aqui só a folga e o que o CRM acrescenta */
+.crm > .cab { margin: .2rem 0 0; }
+.crm-funis, .crm-funil-m { min-width: 0; }
 .crm-funil-sel { max-width: min(320px, 100%); }
 
 /* ---------------- barra de busca e filtros ---------------- */
@@ -79,7 +80,7 @@
   overflow-x: auto; overflow-y: hidden; padding: .2rem .2rem 1rem; margin: 0 -.2rem; scroll-behavior: smooth;
   scrollbar-width: thin; scrollbar-color: var(--c-borda-2) transparent; overscroll-behavior-x: contain;
 }
-.kb.arrastando { scroll-behavior: auto; cursor: grabbing; }
+.kb.arrastando { scroll-behavior: auto; scroll-snap-type: none; cursor: grabbing; }
 .kb-col {
   --cor: var(--c-texto-3);
   position: relative; display: flex; flex-direction: column; min-width: 0; max-height: calc(100dvh - 260px); min-height: 220px;
@@ -105,9 +106,12 @@
 }
 .kb-col-l2 { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; font-size: var(--fs-13); color: var(--c-texto-2); }
 .kb-col-soma { font-weight: 700; color: var(--c-texto); font-variant-numeric: tabular-nums; }
-.kb-col-tipo { font-family: var(--f-mono); font-size: var(--fs-11); letter-spacing: .08em; text-transform: uppercase; color: var(--c-texto-3); }
+.kb-col-tipo { font-weight: 600; font-size: var(--fs-12); color: var(--c-texto-2); }
 .kb-lista { display: flex; flex-direction: column; gap: .55rem; padding: .7rem .6rem .8rem; overflow-y: auto; min-height: 90px; flex: 1; scrollbar-width: thin; scrollbar-color: var(--c-borda-2) transparent; }
-.kb-vazia { display: grid; place-items: center; min-height: 80px; padding: .8rem; border: 1px dashed var(--c-borda-2); border-radius: var(--r-p); color: var(--c-texto-3); font-size: var(--fs-13); text-align: center; }
+.kb-vazia { display: grid; place-items: center; padding: .2rem; text-align: center; }
+.kb-mais-item { display: flex; justify-content: center; }
+.kb-vazia .vazio { padding: .5rem .4rem; border: 0; justify-content: center; }
+.kb-vazia .vazio-linha { font-size: var(--fs-13); color: var(--c-texto-2); }
 .kb-mais { align-self: center; margin-top: .2rem; }
 .kb-antigos { display: flex; align-items: center; justify-content: center; gap: .4rem; padding: .1rem .6rem .7rem; font-size: var(--fs-12); color: var(--c-texto-3); text-align: center; }
 
@@ -115,7 +119,8 @@
 .kc {
   --cor: var(--c-texto-3);
   position: relative; display: flex; flex-direction: column; gap: .5rem; padding: .75rem .8rem .7rem .95rem; border-radius: var(--r-p);
-  background: var(--c-sup-2); border: 1px solid var(--c-borda); cursor: grab; user-select: none; touch-action: pan-y;
+  background: var(--c-sup-2); border: 1px solid var(--c-borda); cursor: grab; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  touch-action: pan-x pan-y; /* o navegador rola nos dois eixos; o arrasto só nasce do toque LONGO (JS) e, enquanto o cartão está levantado, o touchmove é cancelado */
   box-shadow: 0 10px 22px -18px var(--c-sombra);
   transition: border-color var(--t-ui) var(--e-out), transform var(--t-micro) var(--e-out), background-color var(--t-ui) var(--e-out), opacity var(--t-ui) var(--e-out);
 }
@@ -124,33 +129,70 @@
 .kc:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
 .kc.pego { border-color: var(--c-prim); box-shadow: 0 0 0 3px var(--c-prim-suave), 0 16px 34px -18px var(--c-sombra); transform: scale(1.015); }
 .kc.fantasma-origem { opacity: .35; }
+.kc.kc-pega-toque { border-color: var(--c-prim); box-shadow: 0 0 0 3px var(--c-prim-suave), 0 16px 34px -18px var(--c-sombra); transform: scale(1.03); }
+/* alternativa ao arrastar: «Mover para…» (sempre no toque e ao focar o cartão pelo teclado; a tecla M também abre) */
+.kc-mover { display: none; width: 40px; height: 40px; margin: -8px -8px -8px 0; flex: none; }
+.kc-mover .ic { width: 16px; height: 16px; }
+.kc:focus-within .kc-mover { display: inline-grid; }
+@media (pointer: coarse), (max-width: 760px) { .kc-mover { display: inline-grid; } }
 .kc.salvando { opacity: .65; }
+/* M25: o cartão que ainda não chegou ao servidor (7 s do «Desfazer») ou espera a confirmação fica com a borda tracejada */
+.kc.confirmando { border-style: dashed; border-color: var(--c-prim); }
+.crm-status { color: var(--c-texto-2); font-size: var(--fs-13); }
+/* M24: aviso de cadastro já existente (telefone digitado) */
+.crm-dup { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; padding: .6rem .8rem; border-radius: var(--r-p); background: var(--c-aten-suave); border: 1px solid color-mix(in srgb, var(--c-aten) 35%, transparent); font-size: var(--fs-13); }
+.crm-dup .ic { width: 16px; height: 16px; flex: none; color: var(--c-aten); }
+.crm-dup-txt { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
 .kc.salvando::after { content: ""; position: absolute; right: .6rem; top: .6rem; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--c-prim-luz); border-right-color: transparent; animation: gira var(--t-giro) linear infinite; }
 .kc.chegou { animation: kcChega var(--t-move) var(--e-out) both; }
 @keyframes kcChega { 0% { box-shadow: 0 0 0 0 var(--c-prim-suave); } 30% { box-shadow: 0 0 0 5px var(--c-prim-suave); } 100% { box-shadow: 0 10px 22px -18px var(--c-sombra); } }
-.kc-t { font-weight: 650; font-size: var(--fs-14); line-height: 1.3; color: var(--c-texto); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; padding-right: 1.3rem; }
-.kc-s { margin-top: -.3rem; font-size: var(--fs-12); color: var(--c-texto-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kc-selos { display: flex; flex-wrap: wrap; gap: .3rem; }
-.kc-selos .pilula { min-height: 22px; font-size: 11.5px; padding: .08rem .5rem; }
-.kc-selos .pilula { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
-.kc-etiqs { display: flex; flex-wrap: wrap; gap: .3rem; min-width: 0; }
-.kc-etiqs .etiq { min-height: 22px; font-size: 11.5px; padding: .08rem .5rem .08rem .4rem; max-width: 140px; }
-.kc-mais-etq { font-family: var(--f-mono); font-size: var(--fs-11); color: var(--c-texto-3); align-self: center; }
-.kc-rod { display: flex; align-items: center; gap: .5rem; min-width: 0; }
-.kc-valor { font-weight: 800; font-size: var(--fs-14); font-variant-numeric: tabular-nums; color: var(--c-texto); white-space: nowrap; }
-.kc-valor.sem { font-weight: 500; color: var(--c-texto-3); font-size: var(--fs-12); }
-.kc-dias { flex: 1; min-width: 0; font-family: var(--f-mono); font-size: var(--fs-11); color: var(--c-texto-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
-.kc-dias.sla { color: var(--c-aten); }
-.kc .avatar { width: 24px; height: 24px; font-size: 10px; }
+/* cartão em 3 linhas (M24): título · valor + contato/procedimento · rodapé. Nenhum texto abaixo de 12 px. */
+.kc-t { font-weight: 600; font-size: var(--fs-15); line-height: 1.3; color: var(--c-texto); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; padding-right: 1.3rem; }
+.kc-l2 { display: flex; align-items: baseline; gap: .5rem; min-width: 0; }
+.kc-valor { flex: none; font-family: var(--f-titulo); font-weight: 600; font-size: var(--fs-h3); line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--c-texto); white-space: nowrap; }
+.kc-valor.sem { font-family: var(--f-corpo); font-weight: 500; color: var(--c-texto-2); font-size: var(--fs-peq); }
+.kc-s { min-width: 0; font-size: var(--fs-peq); color: var(--c-texto-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kc-mais-etq { font-family: var(--f-mono); font-size: var(--fs-12); color: var(--c-texto-2); align-self: center; }
+.kc-rod { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem .55rem; min-width: 0; color: var(--c-texto-2); font-size: var(--fs-12); }
+.kc-dias { flex: 0 1 auto; min-width: 0; font-size: var(--fs-12); color: var(--c-texto-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kc-dias.sla { color: var(--c-aten); font-weight: 700; }
+.kc-consulta { display: inline-flex; align-items: center; gap: .25rem; font-size: var(--fs-12); font-weight: 600; color: var(--c-texto-2); white-space: nowrap; }
+.kc-consulta .ic { width: 13px; height: 13px; }
+.kc-tarefa { display: inline-flex; align-items: center; color: var(--c-texto-2); }
+.kc-tarefa .ic { width: 14px; height: 14px; }
+.kc-ponto-ruim { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--c-ruim); box-shadow: 0 0 0 2px var(--c-ruim-suave); }
+.kc-score { display: inline-grid; place-items: center; min-width: 1.6rem; height: 1.3rem; padding: 0 .35rem; border-radius: 999px; background: var(--c-sup-3); color: var(--c-texto); font-size: var(--fs-12); font-weight: 700; font-variant-numeric: tabular-nums; }
+.kc-score.alta { background: var(--c-ok-suave); }
+.kc-score.media { background: var(--c-aten-suave); }
+.kc-origem { display: inline-grid; place-items: center; color: var(--c-meta); }
+.kc-origem.google { color: var(--c-google); }
+.kc-origem .ic { width: 15px; height: 15px; }
+.kc-pontos { display: inline-flex; align-items: center; gap: .25rem; }
+.kc-ponto { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--cor, var(--c-texto-3)); box-shadow: 0 0 0 1px var(--c-borda-2); }
+.kc-fim { margin-left: auto; display: inline-flex; align-items: center; gap: .35rem; }
+.kc .avatar { width: 24px; height: 24px; font-size: var(--fs-12); }
 .kc-avatar-vazio { display: inline-grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 50%; border: 1px dashed var(--c-borda-2); color: var(--c-texto-3); }
 .kc-avatar-vazio .ic { width: 12px; height: 12px; }
 .kc-naolidas {
   position: absolute; top: .55rem; right: .55rem; display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 .3rem; border-radius: 999px;
-  background: var(--c-prim); color: var(--c-prim-txt); font-family: var(--f-mono); font-size: var(--fs-11); box-shadow: 0 0 0 3px var(--c-sup-2);
+  background: var(--c-prim); color: var(--c-prim-txt); font-family: var(--f-mono); font-size: var(--fs-12); box-shadow: 0 0 0 3px var(--c-sup-2);
 }
-.kc-tarefa { display: inline-flex; align-items: center; gap: .25rem; font-size: 11.5px; font-weight: 700; color: var(--c-texto-2); }
-.kc-tarefa .ic { width: 13px; height: 13px; }
-.kc-tarefa.atrasada { color: var(--c-ruim); }
+
+/* folha «Mover para…» */
+.kb-mover { display: flex; flex-direction: column; gap: .35rem; }
+.kb-mover-op {
+  --cor: var(--c-texto-3); display: flex; align-items: center; gap: .7rem; width: 100%; min-height: 52px; padding: .5rem .9rem; border-radius: var(--r-p);
+  border: 1px solid var(--c-borda); background: var(--c-sup-2); color: var(--c-texto); text-align: left; font-weight: 600; font-size: var(--fs-15);
+}
+.kb-mover-op i { width: 12px; height: 12px; flex: none; border-radius: 50%; background: var(--cor); }
+.kb-mover-nome { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-mover-op small { flex: none; color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 500; }
+.kb-mover-op:hover:not(:disabled) { border-color: var(--c-borda-2); background: var(--c-sup-3); }
+.kb-mover-op.atual { border-color: var(--cor); background: color-mix(in srgb, var(--cor) 12%, var(--c-sup)); cursor: default; opacity: 1; }
+
+/* celular: fita de etapas, totais numa linha e botão flutuante (só aparecem em ≤ 760 px) */
+.kb-fita, .crm-resumo, .crm-fab { display: none; }
+.crm-funil-sel-m { display: none; }
 
 /* arrastar: fantasma, lugar, zonas ganhou/perdeu */
 .kc-fantasma {
@@ -164,6 +206,7 @@
   animation: zonasEntram var(--t-ui) var(--e-out) both;
 }
 @keyframes zonasEntram { from { opacity: 0; transform: translate(-50%, 16px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes zonasEntramM { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 .kb-zona {
   display: flex; align-items: center; gap: .6rem; min-width: 180px; min-height: 64px; padding: .7rem 1.2rem; border-radius: 18px;
   border: 1.5px dashed var(--c-borda-2); background: var(--c-vidro-forte); color: var(--c-texto-2); font-weight: 700; font-size: var(--fs-15);
@@ -222,9 +265,14 @@
 .ng-bloco { display: flex; flex-direction: column; gap: .6rem; padding: 1rem 1.05rem; border-radius: var(--r); background: var(--c-sup); border: 1px solid var(--c-borda); }
 .ng-bloco-cab { display: flex; align-items: center; justify-content: space-between; gap: .6rem; flex-wrap: wrap; }
 .ng-bloco-cab h3 { font-size: var(--fs-15); font-weight: 700; }
-.ng-kv { display: grid; grid-template-columns: minmax(0, 9.5rem) minmax(0, 1fr); gap: .45rem 1rem; align-items: start; }
-.ng-kv > dt { color: var(--c-texto-3); font-size: var(--fs-13); padding-top: .55rem; }
-.ng-kv > dd { min-width: 0; font-size: var(--fs-14); }
+/* dados do negócio/contato (M24): cada campo é um bloco .ng-campo — «rótulo | valor» no desktop, grade de 2 colunas no celular (.ng-campo-largo ocupa a linha toda) */
+.ng-kv { display: flex; flex-direction: column; gap: .45rem; }
+.ng-campo { display: grid; grid-template-columns: minmax(0, 9.5rem) minmax(0, 1fr); gap: .1rem 1rem; align-items: start; min-width: 0; }
+.ng-campo > dt { color: var(--c-texto-2); font-size: var(--fs-13); padding-top: .55rem; }
+.ng-campo > dd { min-width: 0; font-size: var(--fs-14); }
+.ng-campo > dd.ng-pontuacao { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .7rem; padding-top: .4rem; }
+.ng-pontuacao-motivo { min-width: 0; overflow-wrap: anywhere; color: var(--c-texto-2); font-size: var(--fs-13); }
+.ng-pontuacao-em { flex-basis: 100%; color: var(--c-texto-3); font-size: var(--fs-12); }
 .ng-contato { display: flex; align-items: center; gap: .5rem .8rem; flex-wrap: wrap; min-width: 0; }
 .ng-contato > div { flex: 1 1 9rem; min-width: 0; }
 .ng-contato > .linha { flex: 0 1 auto; flex-wrap: wrap; } /* sem espaço ao lado do nome, "Abrir conversa" e "Ficha" descem para a linha de baixo */
@@ -238,6 +286,12 @@ textarea.ed { resize: vertical; min-height: 4.5rem; line-height: 1.45; }
 select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .ed[aria-invalid="true"] { border-color: var(--c-ruim); }
 .ed-erro { grid-column: 2; color: var(--c-ruim); font-size: var(--fs-12); font-weight: 600; margin-top: -.3rem; }
+/* título: texto com lápis; só vira campo ao tocar no lápis (o teclado não sobe ao abrir a gaveta) */
+.ng-titulo-l { display: flex; align-items: center; gap: .3rem; min-width: 0; }
+.ng-titulo-txt { flex: 0 1 auto; margin: 0; min-width: 0; overflow-wrap: anywhere; cursor: default; }
+.ng-titulo-txt.ng-titulo { border: 1px solid transparent; }
+.ng-lapis { flex: none; width: 36px; height: 36px; color: var(--c-texto-2); }
+.ng-lapis .ic { width: 16px; height: 16px; }
 .ed-salvo { color: var(--c-ok); font-size: var(--fs-12); }
 .ng-anuncio { display: flex; gap: .7rem; align-items: flex-start; padding: .75rem .9rem; border-radius: var(--r-p); background: var(--c-sec-suave); border: 1px solid var(--c-borda); font-size: var(--fs-13); }
 .ng-anuncio .ic { color: var(--c-meta); margin-top: .1rem; }
@@ -274,7 +328,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .tf-meta > span { display: inline-flex; align-items: center; gap: .25rem; }
 .tf-meta .atrasada { color: var(--c-ruim); font-weight: 700; }
 .tf-meta .hoje { color: var(--c-aten); font-weight: 700; }
-.tf-meta a { color: var(--c-texto-2); }
+.tf-meta a { display: inline-flex; align-items: center; gap: .25rem; color: var(--c-texto-2); }
 .tf-acoes { display: flex; gap: .1rem; }
 .tf-acoes .bt-icone { width: 32px; height: 32px; }
 .tf-acoes .ic { width: 15px; height: 15px; }
@@ -329,16 +383,47 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .ct-pag { display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; font-size: var(--fs-13); color: var(--c-texto-2); }
 .ct-pag .linha { gap: .4rem; }
 .ct-etqs { display: flex; flex-wrap: wrap; gap: .25rem; }
-.ct-etqs .etiq { min-height: 22px; font-size: 11.5px; padding: .06rem .5rem .06rem .4rem; }
+.ct-etqs .etiq { min-height: 22px; font-size: var(--fs-12); padding: .06rem .5rem .06rem .4rem; }
 .ct-nneg { display: inline-grid; place-items: center; min-width: 26px; height: 24px; padding: 0 .4rem; border-radius: 999px; background: var(--c-sup-2); font-family: var(--f-mono); font-size: var(--fs-12); }
 .ct-nneg.tem { background: var(--c-prim-suave); color: var(--c-prim-luz); }
+
+/* lista compacta do celular (M28) e linhas que deslizam: escondidas no desktop, onde a tabela segue */
+.ct-lista-env, .crm-cab-mais, .tf-mais { display: none; }
+.ct-lista { list-style: none; display: flex; flex-direction: column; gap: .35rem; }
+.ct-li, .tf-li { position: relative; overflow: hidden; border-radius: var(--r-p); }
+/* o que aparece atrás da linha ao deslizar: a linha é opaca, então em repouso o fundo não aparece */
+.ct-fundo, .tf-fundo {
+  position: absolute; top: 0; bottom: 0; width: 50%; display: flex; align-items: center; gap: .5rem; padding: 0 1.1rem; color: var(--c-texto); font-size: var(--fs-13); font-weight: 700;
+}
+.ct-fundo .ic, .tf-fundo .ic { width: 20px; height: 20px; flex: none; }
+.ct-fundo-d, .tf-fundo-d { left: 0; }
+.ct-fundo-e, .tf-fundo-e { right: 0; }
+.ct-fundo-d { justify-content: flex-start; background: color-mix(in srgb, var(--c-prim) 28%, var(--c-sup)); }
+.ct-fundo-e { justify-content: flex-end; background: color-mix(in srgb, var(--c-info) 24%, var(--c-sup)); }
+.tf-fundo-d { justify-content: flex-start; background: color-mix(in srgb, var(--c-ok) 30%, var(--c-sup)); }
+.tf-fundo-e { justify-content: flex-end; background: color-mix(in srgb, var(--c-aten) 32%, var(--c-sup)); }
+.ct-linha {
+  position: relative; display: flex; align-items: center; gap: .15rem; min-height: 68px; padding: .3rem .3rem .3rem .7rem;
+  border: 1px solid var(--c-borda); border-radius: var(--r-p); background: linear-gradient(var(--c-sup), var(--c-sup)), var(--c-fundo);
+}
+.ct-abrir { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: .65rem; min-height: 52px; color: inherit; text-decoration: none; border-radius: var(--r-pp); }
+.ct-abrir .avatar { width: 40px; height: 40px; flex: none; font-size: var(--fs-13); }
+.ct-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: .05rem; }
+.ct-nome { max-width: 100%; font-size: var(--fs-15); font-weight: 700; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-sub { max-width: 100%; color: var(--c-texto-2); font-size: var(--fs-13); line-height: 1.25; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-txt > .pilula, .ct-txt > .etiq { max-width: 100%; min-height: 22px; margin-top: .15rem; font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-bts { flex: none; display: flex; align-items: center; }
+.ct-bt { width: 44px; height: 44px; color: var(--c-texto-2); }
+.ct-bt .ic { width: 20px; height: 20px; }
+.tf-li > .tf { background: linear-gradient(var(--c-sup-2), var(--c-sup-2)), var(--c-fundo); }   /* opaca: por trás dela fica o fundo do gesto */
+.ct-vazio { padding: 1.4rem .5rem; text-align: center; color: var(--c-texto-2); font-size: var(--fs-14); }
 
 /* ficha 360 */
 .fx { display: flex; flex-direction: column; gap: 1.2rem; min-width: 0; }
 .fx-cab { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; padding: 1.2rem 1.3rem; border-radius: var(--r-g); background: var(--c-sup); border: 1px solid var(--c-borda); box-shadow: inset 0 1px 0 var(--c-luz-borda); }
 .fx-cab .avatar { width: 56px; height: 56px; font-size: var(--fs-17); }
 .fx-id { flex: 1 1 16rem; min-width: 0; display: flex; flex-direction: column; gap: .25rem; }
-.fx-id h1 { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: clamp(1.5rem, 2.4vw, 2rem); letter-spacing: -.02em; line-height: 1.1; overflow-wrap: anywhere; }
+.fx-id h1 { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-h1); letter-spacing: -.02em; line-height: 1.1; overflow-wrap: anywhere; }
 .fx-id p { display: flex; flex-wrap: wrap; gap: .3rem .9rem; color: var(--c-texto-2); font-size: var(--fs-14); }
 .fx-id p span { display: inline-flex; align-items: center; gap: .3rem; }
 .fx-id p .ic { width: 14px; height: 14px; color: var(--c-texto-3); }
@@ -361,7 +446,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 /* ---------------- tarefas (T9) ---------------- */
 .tfp-fita { display: flex; align-items: center; justify-content: space-between; gap: .8rem; flex-wrap: wrap; }
 .tfp-grupo { display: flex; flex-direction: column; gap: .45rem; }
-.tfp-grupo h3 { font-family: var(--f-mono); font-weight: 500; font-size: var(--fs-11); letter-spacing: .12em; text-transform: uppercase; color: var(--c-texto-3); margin-top: .4rem; }
+.tfp-grupo h3 { font-weight: 600; font-size: var(--fs-peq); color: var(--c-texto-2); margin-top: .4rem; }
 
 /* ---------------- importar (T10) ---------------- */
 .imp-passos { display: flex; gap: .4rem; flex-wrap: wrap; counter-reset: passo; }
@@ -401,7 +486,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .imp-res span { color: var(--c-texto-2); font-size: var(--fs-13); }
 .imp-corpo { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
 .imp-tit { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-20); outline: none; }
-.imp-sub { font-family: var(--f-mono); font-weight: 500; font-size: var(--fs-11); letter-spacing: .12em; text-transform: uppercase; color: var(--c-texto-3); margin-top: .4rem; }
+.imp-sub { font-weight: 600; font-size: var(--fs-peq); color: var(--c-texto-2); margin-top: .4rem; }
 .imp-solta { cursor: pointer; }
 .imp-solta b { font-size: var(--fs-17); }
 .imp-solta:focus-within, .imp-solta:hover { border-color: var(--c-prim); }
@@ -488,7 +573,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .fe-etapa input, .fe-etapa select { width: 100%; min-width: 0; min-height: 38px; padding: .35rem .6rem; border-radius: 10px; border: 1px solid var(--c-borda-2); background: var(--c-fundo); color: var(--c-texto); font-size: var(--fs-13); }
 .fe-cab { display: grid; grid-template-columns: 28px 26px minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, .75fr) minmax(0, .7fr) 36px; gap: .5rem; padding: 0 .55rem 0 calc(.55rem + 3px); }
 .fe-cab.sem-marco { grid-template-columns: 28px 26px minmax(0, 1.9fr) minmax(0, 1fr) minmax(0, .75fr) minmax(0, .7fr) 36px; }
-.fe-cab span { font-family: var(--f-mono); font-size: var(--fs-11); letter-spacing: .08em; text-transform: uppercase; color: var(--c-texto-3); }
+.fe-cab span { font-weight: 600; font-size: var(--fs-12); color: var(--c-texto-2); }
 
 /* ---------------- celular ---------------- */
 @media (max-width: 1100px) {
@@ -497,8 +582,27 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .fx-grade { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 760px) {
-  .crm-cab-acoes { width: 100%; }
-  .crm-cab-acoes .bt-prim { flex: 1 1 auto; } /* basis pelo conteúdo: quebra de linha em vez de cortar o texto do botão */
+  /* M28: Pacientes e Tarefas — cabeçalho numa linha, busca fixa ao rolar, lista compacta, «Novo» flutuante (Exportar/Importar viram o ⋮) */
+  .crm[data-tela="contatos"], .crm[data-tela="tarefas"] { gap: .6rem; padding-bottom: 5.2rem; }
+  .crm[data-tela="kanban"] > .cab, .crm[data-tela="contatos"] > .cab, .crm[data-tela="tarefas"] > .cab { margin: 0; flex-wrap: nowrap; align-items: center; gap: .6rem; }
+  .crm[data-tela="kanban"] > .cab .cab-txt, .crm[data-tela="contatos"] > .cab .cab-txt, .crm[data-tela="tarefas"] > .cab .cab-txt { flex: 1 1 0; }
+  .crm[data-tela="kanban"] > .cab .cab-titulo, .crm[data-tela="contatos"] > .cab .cab-titulo, .crm[data-tela="tarefas"] > .cab .cab-titulo { font-size: var(--fs-20); }
+  .crm[data-tela="contatos"] > .cab .cab-sub { margin-top: .1rem; font-size: var(--fs-13); }
+  .crm[data-tela="kanban"] .cab-acoes .bt, .crm[data-tela="contatos"] .cab-acoes .bt, .crm[data-tela="tarefas"] .cab-acoes .bt { display: none; }   /* o «Novo» é o botão flutuante */
+  .crm-cab-mais { display: inline-flex; }
+  .tf-acoes .bt-icone:not(.tf-mais) { display: none; }   /* lápis + lixeira lado a lado viram um ⋮ só */
+  .tf-acoes .tf-mais { display: inline-grid; }
+  .crm[data-tela="contatos"] .crm-fixa {
+    position: sticky; top: var(--topo); z-index: 6; margin: 0 -16px; padding: .45rem 16px; background: var(--c-fundo); border-bottom: 1px solid var(--c-borda);
+  }
+  .crm[data-tela="contatos"] .crm-fita { flex-wrap: nowrap; gap: .5rem; }
+  .crm[data-tela="contatos"] .crm-fita .busca { flex: 1 1 auto; min-width: 0; max-width: none; }
+  .crm[data-tela="contatos"] .crm-fita .sel { flex: 0 1 7.6rem; min-width: 0; padding-left: .8rem; padding-right: 2rem; background-position: calc(100% - 1rem) 52%, calc(100% - .65rem) 52%; }
+  .crm[data-tela="contatos"] .crm-filtro-bt { flex: none; position: relative; min-width: 44px; padding-inline: .6rem; gap: .3rem; justify-content: center; }
+  .crm[data-tela="contatos"] .crm-filtro-txt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .crm[data-tela="contatos"] .tabela-env { display: none; }
+  .ct-lista-env { display: block; }
+  .crm > .cab .cab-acoes .bt-prim { flex: 1 1 auto; } /* basis pelo conteúdo: quebra de linha em vez de cortar o texto do botão */
   .crm-fita .busca { flex-basis: 100%; max-width: none; }
   .crm-totais { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .crm-tot-prev { grid-column: 1 / -1; }
@@ -506,10 +610,54 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .kb { grid-auto-columns: min(86vw, 340px); scroll-snap-type: x mandatory; scroll-padding: 0 16px; gap: .7rem; margin: 0 -16px; padding: .2rem 16px 1rem; }
   .kb-col { scroll-snap-align: start; max-height: none; }
   .kb-lista { max-height: 62dvh; }
-  .kc { cursor: pointer; touch-action: auto; }
-  .kb-zonas { display: none; }
-  .ng-kv { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
-  .ng-kv > dt { margin-top: .45rem; }
+  .kc { cursor: pointer; }
+  /* zonas Ganhou/Perdeu: agora também valem no toque (arrastando); ficam acima da barra inferior, lado a lado */
+  .kb-zonas { left: 12px; right: 12px; transform: none; gap: .6rem; bottom: calc(var(--barra) + env(safe-area-inset-bottom) + 10px); animation-name: zonasEntramM; }
+  .kb-zona { flex: 1 1 0; min-width: 0; min-height: 56px; justify-content: center; padding: .5rem .8rem; }
+  /* M23: o primeiro cartão tem de aparecer na primeira tela — cabeçalho compacto, busca + filtros numa linha, fita fixa, totais numa linha */
+  .crm[data-tela="kanban"] { gap: .6rem; }
+  .crm[data-tela="kanban"] .crm-funis { display: none; }   /* no celular as abas dão lugar ao seletor do cabeçalho */
+  .crm-funil-sel-m { display: block; flex: 0 1 auto; min-width: 9.5rem; max-width: 62%; min-height: 40px; }
+  .crm[data-tela="kanban"] .crm-fita { flex-wrap: nowrap; gap: .5rem; }
+  .crm[data-tela="kanban"] .crm-fita .busca { flex: 1 1 auto; min-width: 0; max-width: none; }
+  .kb-fita {
+    display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none; position: sticky; top: var(--topo); z-index: 6;
+    margin: 0 -16px; padding: .45rem 16px; background: var(--c-fundo); border-bottom: 1px solid var(--c-borda);
+  }
+  .kb-fita::-webkit-scrollbar { display: none; }
+  .kb-fita-b {
+    --cor: var(--c-texto-3); flex: none; display: inline-flex; align-items: center; gap: .4rem; min-height: 40px; padding: .2rem .8rem; border-radius: 999px;
+    border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 600; white-space: nowrap;
+    transition: transform var(--t-micro) var(--e-out), background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out);
+  }
+  .kb-fita-b i { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--cor); }
+  .kb-fita-b b { font-size: var(--fs-12); font-weight: 500; color: var(--c-texto-2); }
+  .kb-fita-b[aria-current="true"] { background: var(--c-prim-suave); border-color: var(--c-prim); color: var(--c-texto); }
+  .kb-fita-b.alvo { transform: scale(1.06); border-color: var(--cor); background: color-mix(in srgb, var(--cor) 18%, var(--c-sup)); color: var(--c-texto); }
+  .crm-resumo {
+    display: flex; align-items: center; justify-content: space-between; gap: .6rem; width: 100%; min-height: 40px; padding: .2rem .9rem;
+    border-radius: var(--r-p); border: 1px solid var(--c-borda); background: var(--c-sup); color: var(--c-texto); text-align: left; font-size: var(--fs-13); font-weight: 600;
+  }
+  .crm-resumo > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crm-resumo .ic { width: 16px; height: 16px; flex: none; transition: transform var(--t-ui) var(--e-out); }
+  .crm-resumo[aria-expanded="true"] .ic { transform: rotate(180deg); }
+  .crm-totais:not(.aberto) { display: none; }
+  .crm-dist { display: none; }
+  .crm-fab {
+    display: inline-flex; align-items: center; justify-content: center; position: fixed; right: 16px; z-index: 24;
+    bottom: calc(var(--barra) + env(safe-area-inset-bottom) + 14px); width: 56px; height: 56px; padding: 0; border: 0; border-radius: 50%;
+    background: var(--c-prim); color: var(--c-prim-txt); box-shadow: 0 14px 28px -12px var(--c-sombra), 0 0 0 1px var(--c-borda);
+    transition: transform var(--t-micro) var(--e-out);
+  }
+  .crm-fab:active { transform: scale(.95); }
+  .crm-fab .ic { width: 24px; height: 24px; }
+  .crm-fab-txt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .crm.crm-arrastando .crm-fab { display: none; }
+  .ng-kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem .75rem; }
+  .ng-campo { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
+  .ng-campo-largo { grid-column: 1 / -1; }
+  .ng-campo > dt { padding-top: 0; font-size: var(--fs-12); }
+  .ng-campo .ed { min-height: 40px; padding-block: .3rem; border-color: var(--c-borda-2); background: var(--c-fundo); }   /* no toque não há hover: o campo já se mostra como campo */
   .ed-erro { grid-column: 1; }
   .ng-valor b { font-size: var(--fs-25); }
   .fx-rfm { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -535,7 +683,8 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .crm-seg button, .tf-acoes .bt-icone, .nota-meta .bt-icone, .crm-cfg-item .bt-icone, .fe-rem, .fe-alca { min-width: 44px; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .kc, .kc-fantasma, .kb-zona, .crm-chip, .kb-zonas { transition: none !important; animation: none !important; }
+  .kc, .kc-fantasma, .kb-zona, .crm-chip, .kb-zonas, .kb-fita-b, .crm-fab { transition: none !important; animation: none !important; }
+  .kc.kc-pega-toque { transform: none; }
   .kb { scroll-behavior: auto; }
 }
 
@@ -543,18 +692,6 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
    ÓRBITA · CRM como mesa de operação
    ============================================================ */
 .crm { gap: clamp(1rem, 2vw, 1.4rem); }
-.crm-cab {
-  position: relative;
-  align-items: center;
-  padding: clamp(1rem, 2.2vw, 1.45rem);
-  border: 1px solid var(--c-borda);
-  border-radius: var(--r-g);
-  background: radial-gradient(95% 150% at 0% 0%, var(--c-prim-suave), transparent 68%), var(--c-sup);
-  box-shadow: inset 0 1px 0 var(--c-luz-borda), 0 20px 42px -34px var(--c-sombra);
-}
-.crm-cab .rotulo { letter-spacing: .14em; }
-.crm-titulo .titulo-pag { letter-spacing: -.035em; }
-.crm-cab-acoes .bt { box-shadow: inset 0 1px 0 var(--c-luz-borda), 0 10px 22px -20px var(--c-sombra); }
 .crm-totais { border-radius: var(--r-g); box-shadow: 0 18px 38px -32px var(--c-sombra); }
 .crm-tot { padding: clamp(.85rem, 1.6vw, 1.2rem); }
 .kb { scrollbar-color: color-mix(in srgb, var(--c-prim) 48%, var(--c-borda-2)) transparent; }
@@ -570,8 +707,6 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .kc.pego { transform: translateY(-2px) scale(1.01); }
 .crm-fita .busca input { box-shadow: inset 0 1px 0 var(--c-luz-borda); }
 @media (max-width: 760px) {
-  .crm-cab { align-items: flex-start; padding: 1rem; }
-  .crm-cab-acoes { gap: .4rem; }
   .crm-totais { border-radius: 18px; }
   .kb { padding-bottom: 1.25rem; }
 }

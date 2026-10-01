@@ -9,15 +9,12 @@
 import { criarDb } from "./db.js";
 import {
   lerConfig, limparErro, ErroApi, respostaPainel, respostaErro, tratarPainel, lerCorpoPainel,
-  autenticarPainel, interna,
+  autenticarPainel, interna, novoDelimitador,
 } from "./comum.js";
+import { montarAutomacao, decidirAutomacoes } from "./ia_automacoes.js";
 
-/** 16 hex aleatórios por chamada: a conversa real fica entre essas marcas (é DADO, não instrução). */
-export function novoDelimitador() {
-  const b = new Uint8Array(8);
-  crypto.getRandomValues(b);
-  return Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
-}
+// novoDelimitador mora no comum.js (a ia_automacoes.js usa o mesmo); continua exportado daqui
+export { novoDelimitador };
 
 const nada = v => (String(v ?? "").trim() || "não informado");
 const primeiroNome = n => String(n ?? "").trim().split(/\s+/)[0] || "a equipe";
@@ -68,6 +65,10 @@ export async function tratar(req, env, deps = {}) {
   return tratarPainel(req, async () => {
     const corpo = await lerCorpoPainel(req, undefined, deps.drenagem);
     const acao = String(corpo.acao ?? "");
+    // automações (PLANO-NOITE-20261001): montar a automação a partir de uma descrição (painel, admin) e
+    // decidir pedidos do motor (só o cron, com o x-nx-cron)
+    if (acao === "automacao_montar") return montarAutomacao(corpo, env, deps);
+    if (acao === "automacao_decidir") return decidirAutomacoes(req, corpo, env, deps);
     if (acao !== "sugerir" && acao !== "resumir") throw new ErroApi("dados_invalidos", 400, "acao");
     const db = criarDb(env, f);
     const ctx = await autenticarPainel(db, corpo, "atendente");

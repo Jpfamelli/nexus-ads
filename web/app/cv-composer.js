@@ -28,19 +28,25 @@ export function criarComposer(A) {
   const btIA = h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Sugerir resposta com IA", title: "Sugerir com IA" }, ui.icone("ia"));
   const btMaisM = h("button", { type: "button", class: "bt-icone so-estreito", "aria-label": "Mais opções", title: "Mais" }, ui.icone("mais"));
   const btEnviar = h("button", { type: "button", class: "bt bt-prim cvx-enviar", "aria-label": "Enviar" }, ui.icone("enviar"));
-  const ferr = h("div", { class: "cvx-ferr" }, btClipe, btAudio, btModelos, btNota, btIA, btMaisM);
+  const btInfo = h("button", { type: "button", class: "bt-icone cvx-info", "aria-label": "Por que não dá para anexar?", "aria-expanded": "false", title: "Por que não dá para anexar?", hidden: true }, ui.icone("info"));
+  const ferr = h("div", { class: "cvx-ferr" }, btClipe, btInfo, btAudio, btModelos, btNota, btIA, btMaisM);
   const linha = h("div", { class: "cvx-linha" }, ferr, campo, btEnviar);
-  const capInfo = h("p", { class: "cvx-cap-info", role: "status", "aria-live": "polite", hidden: true });
+  const capInfo = h("p", { class: "cvx-cap-info", id: "cvx-cap-info", role: "status", "aria-live": "polite", hidden: true });
+  let infoAberta = false, infoTimer = null;   // o aviso do canal só aparece quando a pessoa toca no clipe ou no ⓘ (não ocupa a conversa o tempo todo)
   const tempoGravacao = h("span", { class: "cvx-rec-tempo", role: "timer", "aria-live": "off" }, "00:00");
   const btCancelarGravacao = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Cancelar");
   const painelGravacao = h("div", { class: "cvx-gravacao", role: "status", "aria-live": "polite", hidden: true },
     h("span", { class: "cvx-rec-ponto", "aria-hidden": "true" }), h("span", {}, "Gravando"), tempoGravacao, btCancelarGravacao);
   const resp = h("div", { class: "cvx-resp", hidden: true });
+  const seloRasc = h("div", { class: "cvx-rasc-selo" });       // "Rascunho restaurado · descartar" (o ctx.rascunho põe o selo aqui)
+  let rasc = null;                                               // rascunho do campo ligado a esta conversa (ctx.rascunho.ligar)
+  let idDoCampo = null;                                          // de QUAL conversa é o texto que está no campo (A.selId muda antes de a conversa nova carregar)
   const trava = h("div", { class: "cvx-trava", hidden: true });
   const iaTrab = h("div", { class: "cvx-ia-trab", hidden: true, role: "status" }, "Escrevendo…");
   const dica = h("p", { class: "cvx-dica" }, h("kbd", null, "Enter"), " envia · ", h("kbd", null, "Shift"), "+", h("kbd", null, "Enter"), " quebra linha · ", h("kbd", null, "/"), " respostas rápidas");
   const rr = h("div", { class: "cvx-rr", role: "listbox", "aria-label": "Respostas rápidas", hidden: true, id: "cvx-rr" });
-  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, resp, iaTrab, trava, capInfo, painelGravacao, linha, dica, arquivo);
+  const rrStatus = h("span", { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
+  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, rrStatus, resp, iaTrab, trava, capInfo, painelGravacao, seloRasc, linha, dica, arquivo);
 
   ta.setAttribute("aria-controls", "cvx-rr");
   ta.setAttribute("aria-autocomplete", "list");
@@ -60,7 +66,7 @@ export function criarComposer(A) {
     if (!A.podeEscrever) return "leitura";
     if (c.status === "resolvida") return "resolvida";
     if (!c.canal_id) return "sem_canal";
-    if (!L.janela(c).aberta) return "janela";
+    if (L.canalTemJanela(provedorCanal()) && !L.janela(c).aberta) return "janela";   // CodeWords não tem janela de 24 h
     if (!usaCodeWords() && c.canal && c.canal.tem_token === false) return "sem_token";
     return "ok";
   }
@@ -107,16 +113,12 @@ export function criarComposer(A) {
         h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => A.acoes.novaConversa({ contato: contato() }) } }, "Nova conversa"));
     } else if (s === "janela" && !modoNota) {
       trava.hidden = false;
-      if (usaCodeWords()) {
-        trava.append(ui.icone("relogio"), h("p", null,
-          "A janela de 24 h do WhatsApp fechou. Neste canal CodeWords, aguarde uma nova mensagem do contato; modelos da Meta não estão disponíveis."));
-      } else {
-        const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, A.icone("modelo"), "Modelos");
-        b.addEventListener("click", () => abrirModelos());
-        trava.append(ui.icone("relogio"), h("p", null, c && c.ultima_entrada_em
-          ? "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado para retomar a conversa."
-          : "O cliente ainda não mandou mensagem por este número. Para começar, envie um modelo aprovado."), b);
-      }
+      // (só chega aqui em canal da Meta: no CodeWords não existe janela — ver situacao())
+      const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, A.icone("modelo"), "Modelos");
+      b.addEventListener("click", () => abrirModelos());
+      trava.append(ui.icone("relogio"), h("p", null, c && c.ultima_entrada_em
+        ? "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado para retomar a conversa."
+        : "O cliente ainda não mandou mensagem por este número. Para começar, envie um modelo aprovado."), b);
     } else if (s === "sem_token" && !modoNota) {
       trava.hidden = false;
       trava.append(...[ui.icone("alerta"), h("p", null, "Este número ainda não tem o token da Meta. Configure em Números de WhatsApp."),
@@ -136,7 +138,7 @@ export function criarComposer(A) {
     const formatoAudio = formatoGravacao();
     btClipe.hidden = false;
     btModelos.hidden = usaCodeWords();
-    btClipe.disabled = codeWords || modoNota || s !== "ok";
+    btClipe.setAttribute("aria-disabled", String(codeWords || modoNota || s !== "ok"));   // não é "disabled": o toque precisa explicar o motivo
     btClipe.title = codeWords ? "Este canal CodeWords envia texto; use um canal WhatsApp Cloud API para enviar mídia."
       : "Anexar foto, vídeo, áudio ou documento (até 16 MB)";
     btAudio.hidden = false;
@@ -149,7 +151,12 @@ export function criarComposer(A) {
     btAudio.setAttribute("aria-label", btAudio.title);
     btAudio.setAttribute("aria-pressed", String(gravando));
     ui.limpar(btAudio); btAudio.appendChild(ui.icone(gravando ? "parar" : "microfone"));
-    capInfo.hidden = !codeWords && (!!formatoAudio && globalThis.isSecureContext);
+    const temAviso = codeWords || !formatoAudio || !globalThis.isSecureContext;
+    btInfo.hidden = !temAviso;
+    btInfo.setAttribute("aria-controls", "cvx-cap-info");
+    if (!temAviso) infoAberta = false;
+    capInfo.hidden = !temAviso || !infoAberta;
+    btInfo.setAttribute("aria-expanded", String(temAviso && infoAberta));
     capInfo.textContent = codeWords
       ? "Este número CodeWords envia texto. Para anexar documentos e áudios, selecione um canal WhatsApp Cloud API."
       : "Este navegador não grava áudio em formato aceito. Você ainda pode anexar um áudio MP3, OGG, AAC ou M4A.";
@@ -162,13 +169,31 @@ export function criarComposer(A) {
     autoAltura();
   }
 
+  /** M36: o que se digita fica guardado no aparelho (por conversa, e a nota à parte) e volta depois de recarregar, da sessão cair ou da aba ser descartada. */
+  /** Desliga o rascunho da conversa do campo. O desligar GRAVA o texto do campo na chave dela: só pode rodar com o texto dela ainda no campo. */
+  function desligarRascunho() { if (rasc) { try { rasc.desligar(); } catch { /* ok */ } rasc = null; } }
+  function ligarRascunho() {
+    desligarRascunho();
+    ui.limpar(seloRasc);
+    const r = A.ctx && A.ctx.rascunho;
+    if (!r || !idDoCampo || typeof r.ligar !== "function") return;
+    rasc = r.ligar(ta, `conversa:${idDoCampo}${modoNota ? ":nota" : ""}`, { seloEm: seloRasc });
+    if (rasc && rasc.restaurado) { autoAltura(); A.acoes.rascunhoMudou(); }
+  }
+  /** Apaga o rascunho guardado — só depois de o servidor/fila terem a mensagem (e se a pessoa já não digitou outra coisa). */
+  function apagarRascunho() { if (rasc && !ta.value.trim()) { try { rasc.apagar(); } catch { /* ok */ } } }
+
   function definirConversa() {
     if (gravacao) pararGravacao(true);
+    // o rascunho da conversa ANTERIOR sai antes de o campo mudar: desligado depois, ele gravaria o texto da conversa nova na chave da antiga
+    desligarRascunho();
     modoNota = false;
     respondendo = null;
     fecharRR();
     desenharResposta();
-    ta.value = (A.selId && A.rascunhos.get(A.selId)) || "";
+    idDoCampo = A.selId || null;
+    ta.value = (idDoCampo && A.rascunhos.get(idDoCampo)) || "";
+    ligarRascunho();
     atualizar();
     el.hidden = false;
     if (!matchMedia("(pointer: coarse)").matches && podeTexto()) setTimeout(() => ta.focus({ preventScroll: true }), 30);
@@ -182,7 +207,18 @@ export function criarComposer(A) {
 
   /* ---------------- nota interna */
   function alternarNota(forcar) {
+    const antes = modoNota;
     modoNota = typeof forcar === "boolean" ? forcar : !modoNota;
+    if (modoNota !== antes && rasc) {            // o texto digitado acompanha a pessoa para o outro modo: o rascunho antigo sai e o novo nasce
+      try { rasc.apagar(); if (typeof rasc.parar === "function") rasc.parar(); else rasc.desligar(); } catch { /* ok */ }
+      rasc = null;
+      ligarRascunho();
+      if (rasc && ta.value.trim()) rasc.salvarAgora();
+    }
+    if (modoNota !== antes && idDoCampo) {       // o rascunho da sessão segue a mesma regra: texto de nota nunca fica guardado como mensagem para o cliente
+      if (modoNota) A.rascunhos.delete(idDoCampo); else A.rascunhos.set(idDoCampo, ta.value);
+      A.acoes.rascunhoMudou();
+    }
     if (modoNota) { respondendo = null; desenharResposta(); fecharRR(); }
     atualizar();
     if (!ta.disabled) ta.focus();
@@ -223,7 +259,9 @@ export function criarComposer(A) {
   function desenharRR(termo) {
     ui.limpar(rr);
     rr.hidden = false;
-    ta.setAttribute("aria-expanded", "true");
+    rrStatus.textContent = rrItens.length
+      ? `${rrItens.length} respostas rápidas disponíveis. Use as setas e Enter para escolher, ou Escape para fechar.`
+      : (termo ? "Nenhuma resposta rápida encontrada." : "Nenhuma resposta rápida cadastrada.");
     rr.appendChild(h("div", { class: "cvx-rr-cab" }, h("span", { class: "rotulo" }, "Respostas rápidas"), h("span", { class: "rotulo" }, "↑↓ Enter · Esc")));
     if (!rrItens.length) {
       rr.appendChild(h("p", { class: "cvx-rr-vazio" }, termo ? `Nenhuma resposta com «${termo}».` : "Nenhuma resposta cadastrada. ",
@@ -244,7 +282,7 @@ export function criarComposer(A) {
   function fecharRR() {
     rrAberto = false; rrItens = [];
     rr.hidden = true; ui.limpar(rr);
-    ta.setAttribute("aria-expanded", "false");
+    rrStatus.textContent = "Respostas rápidas fechadas.";
     ta.removeAttribute("aria-activedescendant");
   }
   function escolherRR(i) {
@@ -252,6 +290,7 @@ export function criarComposer(A) {
     if (!r) return;
     ta.value = L.aplicarVariaveis(r.corpo, varsAtuais());
     fecharRR();
+    rrStatus.textContent = "Resposta rápida aplicada.";
     autoAltura();
     ta.focus();
     const pos = ta.value.search(/\{[^}]+\}/);    // cai no primeiro {campo a preencher}
@@ -262,6 +301,7 @@ export function criarComposer(A) {
 
   ta.addEventListener("input", () => {
     autoAltura();
+    if (!modoNota && idDoCampo) { A.rascunhos.set(idDoCampo, ta.value); A.acoes.rascunhoMudou(); }
     if (modoNota) return;
     const t = L.termoBarra(ta.value);
     if (t !== null) abrirRR(t); else if (rrAberto) fecharRR();
@@ -275,6 +315,8 @@ export function criarComposer(A) {
       if (ev.key === "Escape") { ev.preventDefault(); fecharRR(); return; }
     }
     if (ev.key === "Escape" && respondendo) { ev.preventDefault(); respondendo = null; desenharResposta(); return; }
+    // M35: Esc no campo devolve o foco à lista (o rascunho já está guardado); j/k, / e ? passam a valer fora do campo
+    if (ev.key === "Escape" && !ev.isComposing) { ev.preventDefault(); A.acoes.focarLista(); return; }
     if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && !matchMedia("(pointer: coarse)").matches) { ev.preventDefault(); enviarDoCampo(); }
   });
   btEnviar.addEventListener("click", () => enviarDoCampo());
@@ -282,13 +324,15 @@ export function criarComposer(A) {
   async function enviarDoCampo() {
     const texto = ta.value.trim();
     if (!texto || !podeTexto()) return;
+    // o texto do campo é de uma conversa só: enquanto a aberta não for ela (troca em andamento), Enter não manda nada para ninguém
+    if (!idDoCampo || idDoCampo !== A.selId || !conv() || conv().id !== idDoCampo) return;
     if (texto.length > 4096) { ui.toast("A mensagem passou de 4.096 caracteres. Divida em duas.", { tipo: "erro" }); return; }
     if (modoNota) {
       btEnviar.disabled = true;
       try {
         await A.acoes.nota(texto);
         ta.value = ""; autoAltura();
-        A.rascunhos.delete(A.selId);
+        apagarRascunho();
         alternarNota(false);
       } catch (e) { A.acoes.tratarErro(e); }
       finally { btEnviar.disabled = !podeTexto(); }
@@ -297,14 +341,26 @@ export function criarComposer(A) {
     const citada = respondendo;
     ta.value = ""; autoAltura();
     respondendo = null; desenharResposta();
-    A.rascunhos.delete(A.selId);
+    A.rascunhos.delete(idDoCampo);
+    A.acoes.rascunhoMudou();
     ta.focus();
-    await A.acoes.enviar({ tipo: "texto", texto, respondeA: citada });
+    const r = await A.acoes.enviar({ tipo: "texto", texto, respondeA: citada });
+    if (r && r.persistido !== false) apagarRascunho();      // a mensagem está na fila (IndexedDB): o rascunho cumpriu o papel
   }
 
   /* ---------------- anexos */
   function aceitaAnexo() { return !usaCodeWords() && !modoNota && situacao() === "ok"; }
-  btClipe.addEventListener("click", () => { arquivo.value = ""; arquivo.click(); });
+  function mostrarInfoCanal(abrir = !infoAberta) {
+    clearTimeout(infoTimer);
+    infoAberta = abrir;
+    atualizar();
+    if (infoAberta) infoTimer = setTimeout(() => { infoAberta = false; atualizar(); }, 9000);
+  }
+  btInfo.addEventListener("click", () => mostrarInfoCanal());
+  btClipe.addEventListener("click", () => {
+    if (btClipe.getAttribute("aria-disabled") === "true") { if (usaCodeWords()) mostrarInfoCanal(true); return; }
+    arquivo.value = ""; arquivo.click();
+  });
   arquivo.addEventListener("change", () => { const f = arquivo.files && arquivo.files[0]; if (f) anexar(f); });
   btAudio.addEventListener("click", () => gravacao ? pararGravacao(false) : iniciarGravacao());
   btCancelarGravacao.addEventListener("click", () => pararGravacao(true));
@@ -370,35 +426,113 @@ export function criarComposer(A) {
     if (f) anexar(new File([f], f.name && f.name !== "image.png" ? f.name : `imagem-colada-${Date.now()}.png`, { type: f.type }));
   });
 
+  /* ---------------- fotos: otimiza no aparelho antes de validar (M37) */
+  const otimStatus = h("p", { class: "cvx-otim", role: "status", "aria-live": "polite", hidden: true }, "Otimizando a foto…");
+  el.insertBefore(otimStatus, linha);
+
+  /** Decodifica a foto (EXIF corrigido), reduz o lado maior para 1600 px e recodifica em JPEG 0,82 (cai para 0,72 e 0,62 se passar do alvo).
+      Devolve {arquivo, original, otimizada}; lança "foto_ilegivel" quando o navegador não decodifica (ex.: HEIC fora do Safari). */
+  async function otimizarFoto(f) {
+    let fonte = null, w = 0, h2 = 0, urlTmp = null;
+    try {
+      try { fonte = await createImageBitmap(f, { imageOrientation: "from-image" }); w = fonte.width; h2 = fonte.height; }
+      catch { fonte = null; }
+      if (!fonte) {   // navegador sem createImageBitmap com opções: o <img> também aplica o EXIF
+        urlTmp = URL.createObjectURL(f);
+        fonte = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(Object.assign(new Error("foto_ilegivel"), { codigo: "foto_ilegivel" })); i.src = urlTmp; });
+        w = fonte.naturalWidth; h2 = fonte.naturalHeight;
+      }
+      if (!(w > 0 && h2 > 0)) throw Object.assign(new Error("foto_ilegivel"), { codigo: "foto_ilegivel" });
+      const plano = L.planoFoto({ tipo: L.mimeDe(f), bytes: f.size, largura: w, altura: h2 });
+      if (plano.acao === "manter") return { arquivo: f, original: f, otimizada: false };
+      const tela = document.createElement("canvas");
+      tela.width = plano.w; tela.height = plano.h;
+      const c2 = tela.getContext("2d");
+      if (!c2) throw Object.assign(new Error("foto_ilegivel"), { codigo: "foto_ilegivel" });
+      c2.fillStyle = "white";            // PNG com fundo transparente vira JPEG: o fundo precisa ser opaco
+      c2.fillRect(0, 0, plano.w, plano.h);
+      c2.imageSmoothingQuality = "high";
+      c2.drawImage(fonte, 0, 0, plano.w, plano.h);
+      let blob = null;
+      for (let t = 0; t < L.FOTO_QUALIDADES.length; t++) {
+        blob = await new Promise(ok => tela.toBlob(ok, "image/jpeg", L.FOTO_QUALIDADES[t]));
+        if (!blob) throw Object.assign(new Error("foto_ilegivel"), { codigo: "foto_ilegivel" });
+        if (L.proximaQualidadeFoto(blob.size, t) === null) break;
+      }
+      tela.width = tela.height = 0;
+      // recodificar não pode piorar: se ficou maior que o original (e o original é aceito), segue o original
+      const heic = /^image\/hei[cf]$/.test(L.mimeDe(f));
+      if (!heic && blob.size >= f.size && L.validarArquivo(f).ok) return { arquivo: f, original: f, otimizada: false };
+      return { arquivo: new File([blob], L.nomeFotoOtimizada(f.name), { type: "image/jpeg", lastModified: Date.now() }), original: f, otimizada: true, w: plano.w, h: plano.h };
+    } finally {
+      try { if (fonte && typeof fonte.close === "function") fonte.close(); } catch { /* ok */ }
+      if (urlTmp) URL.revokeObjectURL(urlTmp);
+    }
+  }
+
+  /** Nome de quem vai receber (título dos modais de envio: a última conferência antes de mandar foto ou modelo). */
+  function nomeDestino() { return A.acoes.nomeContato(contato()) || "este contato"; }
+  /** A conversa aberta ainda é a `id`? Anexo e modelo esperam (otimizar a foto, o modal): nesse meio tempo a pessoa pode ter aberto outra. */
+  function mesmaConversa(id) { return !!id && A.selId === id && !!conv() && conv().id === id; }
+
   async function anexar(f) {
+    const idInicio = conv() ? conv().id : null;      // o arquivo foi escolhido para ESTA conversa
     if (!aceitaAnexo()) {
       ui.toast(usaCodeWords() ? "Este canal CodeWords envia apenas texto por enquanto."
         : situacao() === "janela" ? "Fora da janela de 24 h só vale modelo aprovado." : "Não dá para anexar agora.", { tipo: "info" });
       return;
     }
-    const v = L.validarArquivo(f);
+    // foto de câmera tem 3 a 8 MB: reduz no aparelho ANTES de olhar o limite de 5 MB (e a pessoa vê o ganho no resumo)
+    let otim = null;
+    if (L.ehFoto(f)) {
+      otimStatus.hidden = false;
+      try { otim = await otimizarFoto(f); }
+      catch (e) {
+        otim = null;
+        if (/^image\/hei[cf]$/.test(L.mimeDe(f))) {
+          ui.toast("Este navegador não abre fotos HEIC. Tire a foto em JPEG ou envie pelo celular.", { tipo: "erro" });
+          return;
+        }
+      } finally { otimStatus.hidden = true; }
+      // a conversa mudou enquanto a foto era reduzida: o arquivo não segue para outro cliente
+      if (!mesmaConversa(idInicio)) { ui.toast("Você trocou de conversa enquanto a foto era preparada: nada foi enviado. Anexe de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
+      if (!aceitaAnexo()) return;
+    }
+    const escolhidoInicial = otim ? otim.arquivo : f;
+    const v = L.validarArquivo(escolhidoInicial);
     if (!v.ok) {
       ui.toast(v.erro === "midia_grande"
-        ? `Arquivo grande demais: ${L.tamanhoLegivel(f.size)} (limite ${v.tipo === "imagem" ? "5 MB para fotos" : "16 MB"}).`
+        ? `Arquivo grande demais: ${L.tamanhoLegivel(escolhidoInicial.size)} (limite ${v.tipo === "imagem" ? "5 MB para fotos" : "16 MB"}).`
         : "Tipo de arquivo não aceito pelo WhatsApp. Use foto (JPG, PNG, WEBP), vídeo MP4, áudio (MP3, OGG, AAC), PDF ou Office.", { tipo: "erro" });
       return;
     }
+    const vOriginal = otim && otim.otimizada ? L.validarArquivo(f) : null;      // "enviar original" só quando o original também cabe (≤ 5 MB)
     let url = null;
     let previa;
-    if (v.tipo === "imagem") { url = URL.createObjectURL(f); previa = h("img", { src: url, alt: "Prévia da foto" }); }
+    if (v.tipo === "imagem") { url = URL.createObjectURL(escolhidoInicial); previa = h("img", { src: url, alt: "Prévia da foto" }); }
     else if (v.tipo === "video") { url = URL.createObjectURL(f); previa = h("video", { src: url, controls: true, preload: "metadata" }); }
     else if (v.tipo === "audio") { url = URL.createObjectURL(f); previa = h("audio", { src: url, controls: true }); }
     else previa = h("div", { class: "cv-doc" }, h("span", { class: "cv-doc-ic" }, (f.name.split(".").pop() || "ARQ").slice(0, 4).toUpperCase()),
       h("span", { class: "cv-doc-txt" }, h("b", null, f.name), h("small", null, L.tamanhoLegivel(f.size))));
     const leg = h("textarea", { id: "cvx-legenda", rows: 2, maxlength: 1024, placeholder: v.tipo === "audio" ? "Áudio vai sem legenda" : "Legenda (opcional)", disabled: v.tipo === "audio" });
-    const corpo = h("div", { class: "pilha" }, h("div", { class: "cv-anexo-previa" }, previa),
-      h("p", { class: "sub" }, `${f.name} · ${L.tamanhoLegivel(f.size)}`),
+    const resumo = otim && otim.otimizada ? L.resumoOtimizacao(f.size, otim.arquivo.size) : "";
+    const info = h("p", { class: "sub cv-otim-info", role: "status" }, resumo || `${f.name} · ${L.tamanhoLegivel(f.size)}`);
+    const chkOriginal = vOriginal && vOriginal.ok ? h("input", { type: "checkbox", id: "cvx-original", "data-sem-protecao": "" }) : null;
+    if (chkOriginal) chkOriginal.addEventListener("change", () => {
+      info.textContent = chkOriginal.checked ? `Vai a foto original (${L.tamanhoLegivel(f.size)}).` : resumo;
+    });
+    const corpo = h("div", { class: "pilha" }, h("div", { class: "cv-anexo-previa" }, previa), info,
+      chkOriginal ? h("label", { class: "chip-check cv-original", for: "cvx-original" }, chkOriginal, `Enviar a original (${L.tamanhoLegivel(f.size)})`) : null,
       h("div", { class: "campo" }, h("label", { for: "cvx-legenda" }, "Legenda"), leg));
-    const ok = await ui.modal({ titulo: "Enviar arquivo", corpo, largura: "m", aoAbrir: () => setTimeout(() => { if (!leg.disabled) leg.focus(); }, 40),
+    const ok = await ui.modal({ titulo: `Enviar arquivo para ${nomeDestino()}`, corpo, largura: "m", aoAbrir: () => setTimeout(() => { if (!leg.disabled) leg.focus(); }, 40),
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Enviar", tipo: "primario", valor: true }] });
     if (url) URL.revokeObjectURL(url);
     if (!ok) return;
-    await A.acoes.enviar({ tipo: "midia", arquivo: f, validacao: v, legenda: v.tipo === "audio" ? "" : leg.value.trim() });
+    // a conversa mudou com o modal aberto (mensagem nova abriu outra, atalho de teclado): o arquivo não vai para quem não era o destino
+    if (!mesmaConversa(idInicio)) { ui.toast("A conversa aberta mudou antes do envio: o arquivo não foi enviado. Anexe de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
+    const usaOriginal = !!(chkOriginal && chkOriginal.checked);
+    const arquivoFinal = usaOriginal ? f : escolhidoInicial;
+    await A.acoes.enviar({ tipo: "midia", conversa: idInicio, arquivo: arquivoFinal, validacao: usaOriginal ? vOriginal : v, legenda: v.tipo === "audio" ? "" : leg.value.trim() });
   }
 
   /* ---------------- modelos (templates aprovados) */
@@ -407,6 +541,7 @@ export function criarComposer(A) {
     const c = conv();
     if (!c) return;
     if (!c.canal_id) { ui.toast("Este atendimento não tem mais número para enviar.", { tipo: "erro" }); return; }
+    const idInicio = c.id;                            // o modelo é para ESTA conversa
     const ct = contato();
     const todos = ((A.base && A.base.templates) || []).filter(t => t.canal_id === c.canal_id && String(t.status || "").toUpperCase() !== "DELETED");
     const lista = h("div", { class: "cv-modelos", role: "listbox", "aria-label": "Modelos" });
@@ -454,13 +589,14 @@ export function criarComposer(A) {
     const corpo = h("div", { class: "pilha" },
       h("p", { class: "sub" }, "Modelos aprovados pela Meta abrem ou retomam a conversa fora da janela de 24 h. A Meta cobra por modelo entregue."),
       lista, params, previa);
-    await ui.modal({ titulo: "Enviar modelo", corpo, largura: "m",
+    await ui.modal({ titulo: `Enviar modelo para ${nomeDestino()}`, corpo, largura: "m",
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Enviar modelo", tipo: "primario", fn: api => {
+        if (!mesmaConversa(idInicio)) { api.erro("A conversa aberta mudou. Feche e escolha o modelo de novo na conversa certa."); return false; }
         if (!escolhido) { api.erro("Escolha um modelo."); return false; }
         const vals = campos.map(x => x.value.trim());
         const falta = vals.findIndex(v => !v);
         if (falta >= 0) { api.erro(`Preencha o parâmetro {{${falta + 1}}}.`); campos[falta].focus(); return false; }
-        A.acoes.enviar({ tipo: "template", template: escolhido, parametros: vals });
+        A.acoes.enviar({ tipo: "template", conversa: idInicio, template: escolhido, parametros: vals });
         return true;
       } }] });
   }
@@ -476,15 +612,32 @@ export function criarComposer(A) {
     if (cota && cota.limite != null && Number(cota.usadas) >= Number(cota.limite)) { ui.toast("A cota de IA do mês acabou.", { tipo: "info" }); return; }
     iaTrab.hidden = false;
     btIA.disabled = true;
+    const idPedido = idDoCampo;                       // a sugestão é para ESTA conversa
     try {
       const r = await A.acoes.sugerirIA();
       const texto = r && typeof r.texto === "string" ? r.texto.trim() : "";
       if (!texto) throw Object.assign(new Error("ia_indisponivel"), { codigo: "ia_indisponivel" });
-      ta.value = texto;
-      autoAltura();
-      ta.focus();
-      ta.select();
-      ui.anunciar("Sugestão da IA no campo. Revise antes de enviar.");
+      // a IA pode levar dezenas de segundos: se a pessoa já está em outra conversa, a sugestão não entra no campo (seria texto de um cliente indo para outro)
+      if (!idPedido || idDoCampo !== idPedido || A.selId !== idPedido) {
+        ui.toast("A sugestão da IA chegou depois que você trocou de conversa e não foi usada. Peça de novo na conversa certa.", { tipo: "info", ms: 8000 });
+        return;
+      }
+      if (ta.value.trim()) {
+        // o campo já tem texto da pessoa: a sugestão entra ABAIXO (e só ela fica selecionada), nunca por cima do que foi digitado
+        const base = `${ta.value.replace(/\s+$/, "")}\n\n`;
+        ta.value = (base + texto).slice(0, 4096);
+        autoAltura();
+        ta.focus();
+        ta.setSelectionRange(Math.min(base.length, ta.value.length), ta.value.length);
+        ui.anunciar("Sugestão da IA acrescentada abaixo do que você já tinha escrito. Revise antes de enviar.");
+      } else {
+        ta.value = texto;
+        autoAltura();
+        ta.focus();
+        ta.select();
+        ui.anunciar("Sugestão da IA no campo. Revise antes de enviar.");
+      }
+      if (!modoNota) { A.rascunhos.set(idDoCampo, ta.value); A.acoes.rascunhoMudou(); }
     } catch (e) {
       const c = e && e.codigo;
       ui.toast(c === "ia_cota" ? "A cota de IA do mês acabou." : c === "muitos_pedidos" ? "Muitos pedidos seguidos; espere um minuto." : "A IA não está disponível agora.", { tipo: c === "ia_cota" || c === "muitos_pedidos" ? "info" : "erro" });
@@ -507,8 +660,23 @@ export function criarComposer(A) {
 
   return {
     el, atualizar, definirConversa, responder, anexar, aceitaAnexo, abrirModelos,
-    lerRascunho() { return ta.value; },
-    desmontar() { if (gravacao) pararGravacao(true); },
+    /** Alt+Shift+N: liga/desliga a nota interna (true/false força; sem argumento alterna). Devolve se o campo está em nota. */
+    alternarNota(forcar) { if (el.hidden || !A.podeEscrever) return false; alternarNota(forcar); return modoNota; },
+    get emNota() { return modoNota; },
+    /** Guarda o texto do campo como rascunho (da sessão) da conversa a que ele PERTENCE — não da que está selecionada agora — e nunca o de uma nota interna. */
+    guardar() { if (idDoCampo && !modoNota) A.rascunhos.set(idDoCampo, ta.value); },
+    /** O texto do campo, se ele é da conversa `id` e não é nota interna (para o "Rascunho:" da lista); senão "". */
+    textoDe(id) { return idDoCampo === id && !modoNota ? ta.value : ""; },
+    /** "Cancelar" na fila: o texto volta ao campo (se já houver algo, vai embaixo). */
+    devolverTexto(texto) {
+      const t = String(texto || "");
+      if (!t) return;
+      ta.value = ta.value.trim() ? `${ta.value.replace(/\s+$/, "")}\n${t}` : t;
+      if (modoNota) alternarNota(false);
+      autoAltura(); ta.focus();
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+    desmontar() { if (gravacao) pararGravacao(true); desligarRascunho(); },
     focar() { if (!ta.disabled) ta.focus(); },
   };
 }

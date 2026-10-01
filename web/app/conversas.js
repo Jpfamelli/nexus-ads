@@ -51,9 +51,13 @@ export async function montar(ctx) {
     itens: [], contagens: {}, temMais: false, carregandoLista: false,
     selId: null, ver: null, msgs: [], conversasContato: [], agora: null, ultimoId: null, temMaisAntes: false,
     iaEstado: null, iaEstadoEm: 0, iaEstadoPendente: false,
-    carregandoAntes: false, rascunhos: new Map(), midia: new Map(), pedidosMidia: new Set(), blobs: new Set(),
+    carregandoAntes: false, rascunhos: new Map(), midia: new Map(), pedidosMidia: new Set(), blobs: new Set(), envios: new Map(),
+    fila: { itens: new Map(), db: null, rodando: false, emVoo: new Set(), pronta: null },
     painel: "lista", timers: [], limpar: [], seqConversa: 0, seqLista: 0, destruido: false, acoes,
     buscaMsgs: null, seqMsgs: 0,
+    avancar: lerPreferencia("avancar", "0") === "1",       // M35: «Ao resolver, abrir a próxima» (preferência por navegador; desligada até a pessoa ligar)
+    focoAoAbrir: null, resolvendo: new Set(), atendendo: false,
+    reenviadas: new Set(),          // falhas gravadas pelo servidor em que a pessoa já tocou em «Tentar de novo» (o botão da bolha antiga some)
   };
   { const daRota = abaDaRota(ctx.rota); if (daRota) A.aba = daRota; }
   if (!A.podeEscrever && A.aba === "minhas") A.aba = "abertas";
@@ -79,11 +83,14 @@ export async function montar(ctx) {
   ajustarAltura();
   observarLayout();
 
+  // M40: base da central e primeira página da fila não dependem uma da outra; começa a leitura da lista enquanto chega a configuração.
+  const listaInicial = carregarLista({ reset: true });
   try {
     await carregarBase();
   } catch (e) {
+    desmontar();
     ui.limpar(ctx.alvo);
-    ctx.alvo.appendChild(ui.erroCartao(e, () => { desmontar(); montar(A ? A.ctx : ctx); }));
+    ctx.alvo.appendChild(ui.erroCartao(e, () => montar(ctx)));
     return;
   }
   ui.limpar(colLista); colLista.appendChild(A.lista.el);
@@ -91,8 +98,14 @@ export async function montar(ctx) {
   A.chat.mostrarVazio();
   A.lateral.montarEm(colLat);
 
+  // fila de saída (M36): o que a pessoa mandou e ainda não foi confirmado pelo servidor sobrevive a recarregar, a aba descartada e a internet que cai
+  A.fila.pronta = filaIniciar();
   // tempo real: pulso do shell (3 s com Conversas aberta) + relógio de 1 min para janelas e esperas
   A.limpar.push(ctx.pulso.assinar(() => aoPulso()));
+  // teclado da central (M35) e ações na paleta de comandos (Ctrl/⌘+K), quando o shell oferece o registro
+  document.addEventListener("keydown", aoTeclaCentral);
+  A.limpar.push(() => document.removeEventListener("keydown", aoTeclaCentral));
+  registrarComandos();
   // o navegador só deixa tocar som depois de um toque/clique na página
   const destravar = () => desbloquearAudio();
   document.addEventListener("pointerdown", destravar, { once: true, capture: true });
@@ -100,7 +113,7 @@ export async function montar(ctx) {
   A.timers.push(setInterval(() => { if (!document.hidden) { A.lista.render(); A.chat.renderCabecalho(); A.composer.atualizar(); } }, 60000));
   A.timers.push(setInterval(() => { if (Date.now() - (A.baseEm || 0) > 5 * 60000) carregarBase().catch(() => {}); }, 60000));
 
-  await carregarLista({ reset: true });
+  await listaInicial;
   await aplicarRota(ctx.rota);
 }
 
@@ -110,6 +123,7 @@ export function desmontar() {
   if (A.composer && typeof A.composer.desmontar === "function") A.composer.desmontar();
   for (const t of A.timers) clearInterval(t);
   for (const f of A.limpar) try { f(); } catch { /* ok */ }
+  for (const cancelar of A.envios.values()) try { cancelar(); } catch { /* ok */ }
   for (const u of A.blobs) try { URL.revokeObjectURL(u); } catch { /* ok */ }
   document.documentElement.classList.remove("cv-chat-aberto");
   if (A.gavetaLateral) try { A.gavetaLateral.fechar(); } catch { /* ok */ }
@@ -213,8 +227,13 @@ async function carregarLista({ reset = false, mais = false } = {}) {
   try {
     const r = await A.api.rpcC("nx_cv_listar", { p_filtro: filtroAtual(), p_limite: limite, p_antes: antes });
     if (!A || seq !== A.seqLista) return;
-    if (!reset && !mais) avisarNovidades(A.itens, r.itens || [], A.contagens && A.contagens.nao_lidas, r.contagens && r.contagens.nao_lidas);
-    A.itens = mais ? [...A.itens, ...(r.itens || []).filter(n => !A.itens.some(x => x.id === n.id))] : (r.itens || []);
+    if (!reset && !mais) {
+      avisarNovidades(A.itens, r.itens || [], A.contagens && A.contagens.nao_lidas, r.contagens && r.contagens.nao_lidas);
+      // leitor de tela: a lista anuncia a conversa nova (a que está aberta e à vista não: quem a lê já viu)
+      const novas = A.L.novasEntradas(A.itens, r.itens || [], { ignorar: A.selId && !document.hidden ? A.selId : null });
+      if (novas.length) A.lista.anunciar(A.L.textoNovaMensagem(novas));
+    }
+    A.itens = itensComPendencia(mais ? [...A.itens, ...(r.itens || []).filter(n => !A.itens.some(x => x.id === n.id))] : (r.itens || []));
     A.temMais = !!r.tem_mais;
     A.contagens = r.contagens || {};
     A.ctx.badge("conversas", A.contagens.nao_lidas || 0);
@@ -374,6 +393,10 @@ async function aplicarRota(r) {
   A.lateral.render();
   A.lista.render();
   mostrarPainel("lista");
+  if (A.focoAoAbrir === "lista") {            // sem próxima conversa: o foco volta para a lista (depois de o shell levar o foco ao título)
+    A.focoAoAbrir = null;
+    setTimeout(() => focarListaOuVazio(), 160);
+  }
 }
 
 function abrir(id) { A.ctx.navegar(`#/conversas/${id}`); }
@@ -381,10 +404,12 @@ function abrir(id) { A.ctx.navegar(`#/conversas/${id}`); }
 async function selecionar(id) {
   if (!A) return;
   const trocou = A.selId !== id;
+  // o texto do campo é guardado na conversa DELE (o composer sabe qual é), não na selecionada: numa troca dupla rápida o campo ainda é da primeira
   if (A.selId && trocou) guardarRascunho();
   A.selId = id;
   mostrarPainel("chat");
   A.lista.render();
+  A.lista.mostrarSelecionada();
   if (!trocou && A.ver) { A.chat.focarMensagens(); return; }
   const seq = ++A.seqConversa;
   A.ver = null; A.msgs = []; A.conversasContato = []; A.ultimoId = null; A.agora = null; A.temMaisAntes = false;
@@ -397,21 +422,29 @@ async function selecionar(id) {
       A.api.rpcC("nx_cv_mensagens", { p_conversa: id, p_limite: 50 }),
     ]);
     if (!A || seq !== A.seqConversa) return;
-    A.ver = ver;
+    if (A.fila.pronta) await A.fila.pronta;
+    if (!A || seq !== A.seqConversa) return;        // a conversa pode ter mudado enquanto a fila abria
+    A.ver = { ...ver, conversa: comPendencia(ver.conversa) };
     A.msgs = A.L.mesclarDelta([], pag.itens || []);
+    for (const it of filaDaConversa(id)) A.msgs = A.L.mesclarDelta(A.msgs, [bolhaDeItem(it)]);
     A.conversasContato = pag.conversas || [];
     A.agora = pag.agora || null;
     A.ultimoId = pag.ultimo_id ?? A.L.ultimoId(A.msgs);
     A.temMaisAntes = !!pag.tem_mais;
-    atualizarItemLista(ver.conversa);
+    atualizarItemLista(A.ver.conversa);
     A.ctx.titulo(nomeContato(ver.contato) || "Conversas");
     A.chat.renderTudo({ rolar: "fim" });
     A.composer.definirConversa();
     A.lateral.render();
+    if (A.focoAoAbrir === "composer") {            // veio do teclado (próxima, anterior, atender, resolver que avança): o campo já está pronto para digitar
+      A.focoAoAbrir = null;
+      if (!matchMedia("(pointer: coarse)").matches) A.composer.focar();
+    }
     marcarLida();
     if (ver.conversa?.canal?.provedor === "codewords") carregarEstadoIA(id, seq);
   } catch (e) {
     if (!A || seq !== A.seqConversa) return;
+    A.focoAoAbrir = null;
     A.chat.mostrarErro(e, () => selecionar(id));
   }
 }
@@ -437,6 +470,7 @@ function nomeContato(c) {
 
 function atualizarItemLista(conv) {
   if (!conv) return;
+  conv = comPendencia(conv);
   const i = A.itens.findIndex(x => x.id === conv.id);
   if (i >= 0) {
     const novo = { ...A.itens[i], ...pick(conv, ["status", "aguardando", "nao_lidas", "atribuida_a", "atribuida_nome", "departamento_id",
@@ -453,8 +487,8 @@ async function recarregarVer() {
   try {
     const ver = await A.api.rpcC("nx_cv_ver", { p_id: id });
     if (!A || A.selId !== id) return;
-    A.ver = ver;
-    atualizarItemLista(ver.conversa);
+    A.ver = { ...ver, conversa: comPendencia(ver.conversa) };
+    atualizarItemLista(A.ver.conversa);
     A.chat.renderCabecalho();
     A.composer.atualizar();
     A.lateral.render();
@@ -512,6 +546,7 @@ async function delta() {
 let _pulsoT = null, _verT = null;
 function aoPulso() {
   if (!A) return;
+  if (A.fila.itens.size) esvaziarFila();
   clearTimeout(_pulsoT);
   _pulsoT = setTimeout(async () => {
     if (!A) return;
@@ -601,11 +636,31 @@ async function buscarMidias() {
 }
 
 /* ============================================================ rascunhos */
-function guardarRascunho() { if (A.composer && A.selId) A.rascunhos.set(A.selId, A.composer.lerRascunho()); }
+/** Guarda o texto do campo como rascunho da conversa a que ele pertence (nunca o de uma nota interna): quem sabe isso é o composer. */
+function guardarRascunho() { if (A && A.composer) A.composer.guardar(); }
+
+/** O que a pessoa digitou e não enviou nesta conversa (para o "Rascunho:" da lista): o campo aberto, o da sessão ou o guardado no aparelho. */
+function rascunhoDe(id) {
+  if (!A) return "";
+  // o campo só conta se o texto dele é DESTA conversa e não é nota interna (durante a troca de conversa ele ainda é da anterior)
+  if (A.composer) { const t = A.composer.textoDe(id); if (t && t.trim()) return t; }
+  const m = A.rascunhos.get(id);
+  if (m && m.trim()) return m;
+  const r = A.ctx.rascunho;
+  if (r && typeof r.texto === "function") { const t = r.texto(`conversa:${id}`); if (t && t.trim()) return t; }
+  return "";
+}
+let _rascT = null;
+/** O texto do campo mudou: a linha da lista acompanha (sem refazer a lista a cada tecla). */
+function rascunhoMudou() {
+  clearTimeout(_rascT);
+  _rascT = setTimeout(() => { if (A && A.lista && A.lista.el.isConnected) A.lista.render(); }, 500);
+}
 
 /* ============================================================ ações */
 function trocarConversa(item) {
   if (!item) return;
+  item = comPendencia(item);
   if (A.ver && A.ver.conversa && A.ver.conversa.id === item.id) A.ver.conversa = { ...A.ver.conversa, ...item };
   atualizarItemLista(item);
   A.chat.renderCabecalho();
@@ -701,8 +756,30 @@ const acoes = {
     });
     if (r && r.id) { trocarConversa(r); ui.toast("Conversa transferida.", { tipo: "ok" }); delta(); recarregarVer(); carregarLista({}); }
   },
+  resolver: botao => resolverComDesfazer(botao),
+  atenderProximo: botao => atenderProximo(botao),
+  focarLista: () => focarListaOuVazio(),
+  avancarAoResolver: () => !!(A && A.avancar),
+  definirAvancar(sim) {
+    A.avancar = !!sim; gravarPreferencia("avancar", sim ? "1" : "0");
+    A.ui.toast(sim ? "Ao resolver, a próxima conversa abre sozinha." : "Ao resolver, a conversa continua aberta.", { tipo: "info" });
+  },
+  abrirAjudaTeclado: () => abrirAjudaTeclado(),
   async status(novo, botao) {
+    if (novo === "resolvida") return resolverComDesfazer(botao);
     const textos = { resolvida: "Atendimento resolvido.", aberta: "Atendimento reaberto.", pendente: "Marcado como pendente." };
+    // «Reabrir» com o Resolver ainda esperando o Desfazer: o servidor nunca soube do Resolver — basta cancelá-lo (senão ele resolveria de novo ao fechar o aviso)
+    const pend = _pendResolver.get(A.selId);
+    if (pend && !pend.firmando) {   // com o Resolver já a caminho do servidor (firmando), o Reabrir segue para o nx_cv_status normal
+      const id = A.selId;
+      pend.cancelado = true; _pendResolver.delete(id); A.resolvendo.delete(id);   // libera o próximo «Resolver» desta conversa
+      if (novo === pend.antes.status) {
+        trocarConversa({ id, ...pend.antes });
+        A.ui.toast(textos[novo], { tipo: "ok" });
+        carregarLista({}); recarregarVer();
+        return;
+      }
+    }
     const r = await executar(A.api.rpcC("nx_cv_status", { p_conversa: A.selId, p_status: novo }), { botao, ok: textos[novo] });
     if (r) { trocarConversa(r); delta(); recarregarVer(); carregarLista({}); }
   },
@@ -736,7 +813,12 @@ const acoes = {
   novaConversa: (o) => novaConversa(o),
   enviar: (...a) => enviar(...a),
   reenviarLocal: (m) => reenviarLocal(m),
-  descartarLocal(m) { A.msgs = A.msgs.filter(x => x.id !== m.id); A.chat.renderMensagens({ rolar: "manter" }); },
+  podeCancelarEnvio: m => !!(A && m && A.envios.has(m.id)),
+  cancelarEnvio(m) { const c = m && A.envios.get(m.id); if (c) c(); },
+  descartarLocal(m) {
+    if (m && m.ref) { filaRemover(m.ref); }
+    A.msgs = A.msgs.filter(x => x.id !== m.id); A.chat.renderMensagens({ rolar: "manter" });
+  },
   async nota(texto) {
     const r = await A.api.rpcC("nx_cv_nota", { p_conversa: A.selId, p_texto: texto });
     A.msgs = A.L.mesclarDelta(A.msgs, [r]);
@@ -753,29 +835,278 @@ const acoes = {
   },
   respostaUsada(id) { if (A.podeEscrever) A.api.rpcC("nx_resposta_usada", { p_id: id }).catch(() => {}); },
   pode: min => A.L.pode(A.ctx.papel, min),
-  guardarRascunho,
+  guardarRascunho, rascunhoDe, rascunhoMudou,
+  cancelarFila: m => cancelarFila(m), enviarAgora: m => enviarAgora(m),
+  filaResumo: id => filaResumo(id),
+  reenviarGravada: m => reenviarGravada(m), foiReenviada: m => !!(A && m && A.reenviadas.has(m.id)),
 };
+
+/* ============================================================ teclado da central (M35)
+   Acordes com Alt valem até dentro do campo de mensagem (Alt+Shift+letra evita o AltGr do ABNT2); as letras soltas (j, k, /, ?) só fora dos
+   campos. A decisão de «qual tecla é qual comando» é pura e fica em cv-logica.js (acordeDoEvento). */
+function aviso(texto) { if (A) A.ui.toast(texto, { tipo: "info" }); }
+
+function emCampoDeTexto(el) { return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)); }
+
+function aoTeclaCentral(ev) {
+  if (!A || ev.defaultPrevented) return;
+  if (document.querySelector("dialog[open]")) return;       // modal ou gaveta aberta: o teclado é dela
+  const id = A.L.acordeDoEvento(ev, { emCampo: emCampoDeTexto(ev.target) });
+  if (!id) return;
+  ev.preventDefault();
+  executarComando(id);
+}
+
+/** Pede uma conversa aberta onde a pessoa possa escrever; avisa o motivo quando não há. */
+function conversaParaAgir() {
+  const conv = A.ver && A.ver.conversa;
+  if (!conv || !A.selId) { aviso("Abra uma conversa para usar este atalho."); return null; }
+  if (!A.podeEscrever) { aviso("Seu acesso é só de leitura nesta central."); return null; }
+  return conv;
+}
+
+function executarComando(id) {
+  if (!A) return;
+  switch (id) {
+    case "proxima": irParaVizinha(1); break;
+    case "anterior": irParaVizinha(-1); break;
+    case "atender": atenderProximo(); break;
+    case "assumir": comandoAssumir(); break;
+    case "resolver": if (conversaParaAgir()) resolverComDesfazer(); break;
+    case "nota": if (conversaParaAgir()) A.composer.alternarNota(); break;
+    case "transferir": if (conversaParaAgir()) acoes.transferir(); break;
+    case "mover_baixo": A.lista.moverFoco(1); break;
+    case "mover_cima": A.lista.moverFoco(-1); break;
+    case "buscar": A.lista.focarBusca(); break;
+    case "ajuda": abrirAjudaTeclado(); break;
+    case "foco_lista": focarListaOuVazio(); break;
+  }
+}
+
+/** Alt+↓ / Alt+↑: abre a conversa seguinte (ou anterior) da lista e deixa o cursor no campo de mensagem. */
+async function irParaVizinha(dir) {
+  if (!A.itens.length) { aviso("Não há conversas nesta lista."); return; }
+  let id = A.L.proximaConversa(A.itens, A.selId, dir);
+  if (id == null && dir > 0 && A.temMais) {                   // fim da página carregada: busca a seguinte antes de desistir
+    await carregarLista({ mais: true });
+    if (!A) return;
+    id = A.L.proximaConversa(A.itens, A.selId, dir);
+  }
+  if (id == null) { aviso(dir > 0 ? "Esta é a última conversa da lista." : "Esta é a primeira conversa da lista."); return; }
+  A.focoAoAbrir = "composer";
+  abrir(id);
+}
+
+/** Alt+Shift+A: a mesma regra do botão principal do cabeçalho (assumir; com a IA atendendo, pausa a IA e assume). */
+async function comandoAssumir() {
+  const conv = conversaParaAgir();
+  if (!conv) return;
+  const est = A.chat.estadoAcoes() || {};
+  if (est.primaria === "assumir_ia") return acoes.assumirIA();
+  if (est.primaria === "assumir") return acoes.assumir();
+  aviso(conv.status === "resolvida" ? "A conversa está resolvida. Reabra antes de assumir." : "A conversa já está com você.");
+}
+
+/** Espera a conversa `id` terminar de abrir (a rota chama `selecionar`, que é assíncrona). */
+async function esperarConversa(id, ms = 6000) {
+  const fim = Date.now() + ms;
+  while (A && Date.now() < fim) {
+    if (A.selId === id && A.ver && A.ver.conversa && A.ver.conversa.id === id) return true;
+    await new Promise(r => setTimeout(r, 80));
+  }
+  return false;
+}
+
+/** «Atender o próximo»: a conversa aberta que espera resposta há mais tempo (a que é de outra pessoa fica de fora): abre, assume e deixa o cursor no campo. */
+async function atenderProximo(botao) {
+  if (!A || A.atendendo) return;
+  if (!A.podeEscrever) { aviso("Seu acesso é só de leitura nesta central."); return; }
+  A.atendendo = true;
+  if (botao) botao.setAttribute("aria-busy", "true");
+  try {
+    const r = await A.api.rpcC("nx_cv_listar", { p_filtro: { aba: "aguardando" }, p_limite: 50, p_antes: null });
+    if (!A) return;
+    // a que acabou de ser resolvida (o «Desfazer» ainda na tela; o servidor ainda a tem aberta) não volta como «a próxima»
+    const esperando = ((r && r.itens) || []).filter(x => !_pendResolver.has(x.id));
+    const c = A.L.proximaParaAtender(esperando, A.eu && A.eu.id);
+    if (!c) { aviso("Ninguém espera resposta agora."); return; }
+    A.focoAoAbrir = "composer";
+    if (A.selId !== c.id) A.ctx.navegar(`#/conversas/${c.id}`);
+    if (!await esperarConversa(c.id)) return;
+    const est = A.chat.estadoAcoes() || {};
+    if (est.primaria === "assumir_ia") await acoes.assumirIA();
+    else if (est.primaria === "assumir") await acoes.assumir();
+    else A.composer.focar();
+  } catch (e) {
+    if (A) tratarErro(e);
+  } finally {
+    if (A) A.atendendo = false;
+    if (botao) botao.removeAttribute("aria-busy");
+  }
+}
+
+/* Resolver adiado: enquanto o «Desfazer» está na tela, NADA foi ao servidor (como Ganho/Perdido no CRM). Fica no módulo, e não no A, para
+   valer também se a pessoa sair de Conversas e voltar nesses 7 s. id da conversa → { antes: {status, aguardando, nao_lidas}, cancelado }. */
+const _pendResolver = new Map();
+
+/** A conversa como a tela deve mostrá-la: resolvida, se o «Resolver» dela ainda espera o fim do Desfazer (o servidor ainda a tem aberta). */
+function comPendencia(conv) {
+  return conv && _pendResolver.has(conv.id) ? { ...conv, status: "resolvida", aguardando: false, nao_lidas: 0 } : conv;
+}
+/** A lista com os «Resolver» pendentes aplicados: a conversa sai das abas de abertas (como o servidor fará) e continua visível na busca. */
+function itensComPendencia(itens) {
+  if (!_pendResolver.size) return itens;
+  const eu = A.eu && A.eu.id, busca = !!filtroAtual().busca;
+  return itens.map(comPendencia).filter(c => !_pendResolver.has(c.id) || busca || A.L.pertenceAba(c, A.aba, eu));
+}
+
+/**
+ * Resolver com Desfazer (ui.acaoComDesfazer): a tela resolve na hora e o toast «Resolvida · Mariana» dura 7 s; a mudança só vai ao servidor
+ * (nx_cv_status) quando o aviso fecha (firmar). Assim o Desfazer devolve a conversa exatamente como estava (aberta ou pendente, ainda na fila
+ * de espera) e nenhuma automação de «conversa resolvida» dispara por engano. Com «Ao resolver, abrir a próxima» ligado, a seguinte da lista
+ * abre com o cursor no campo; sem seguinte, volta ao painel da fila; o Desfazer volta para a resolvida.
+ */
+async function resolverComDesfazer() {
+  const conv = A && A.ver && A.ver.conversa;
+  if (!conv || !A.selId) { aviso("Abra uma conversa para resolver."); return; }
+  const id = conv.id;
+  if (conv.status === "resolvida") { aviso("Esta conversa já está resolvida."); return; }
+  if (A.resolvendo.has(id)) return;
+  A.resolvendo.add(id);
+  const antes = conv.status;                                 // «aberta» ou «pendente»: é o que o Desfazer devolve
+  const entradaAntes = Date.parse(conv.ultima_entrada_em || "") || 0;   // última mensagem do cliente vista no clique
+  const pend = { antes: { status: antes, aguardando: !!conv.aguardando, nao_lidas: Number(conv.nao_lidas) || 0 }, cancelado: false };
+  const nome = nomeContato(A.ver.contato || conv.contato) || "Conversa";
+  const proxima = A.avancar ? A.L.proximaAposResolver(A.itens, id, { aba: A.aba }) : null;
+  // o api e a empresa ficam guardados: a escrita sai 7 s depois, e até lá a pessoa pode ter saído de Conversas ou trocado de empresa
+  const api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id;
+  const naMesmaEmpresa = () => !!A && (A.ctx.cliente && A.ctx.cliente.id) === cliente;
+  let avancou = false;
+  // Desfazer (ou a escrita adiada falhou): nada mudou no servidor, basta devolver a tela ao que era
+  const voltarTela = () => {
+    if (pend.cancelado) return;
+    pend.cancelado = true;
+    if (_pendResolver.get(id) === pend) _pendResolver.delete(id);
+    if (!naMesmaEmpresa()) return;                           // a pessoa saiu de Conversas: ao voltar, a tela lê o servidor, que nunca soube do «Resolver»
+    if (A.selId === id) trocarConversa({ id, ...pend.antes }); else atualizarItemLista({ id, ...pend.antes });
+    carregarLista({});
+    const aindaNaProxima = proxima ? A.selId === proxima.id : A.selId == null;
+    if (avancou && aindaNaProxima) { A.focoAoAbrir = "composer"; abrir(id); }
+    else if (A.selId === id) { delta(); recarregarVer(); }
+  };
+  try {
+    await A.ui.acaoComDesfazer({
+      texto: `Resolvida · ${nome}`,
+      // só a tela: nada vai ao servidor antes de o aviso fechar
+      aplicar: () => {
+        _pendResolver.set(id, pend);
+        if (A.selId === id) trocarConversa({ id, status: "resolvida" }); else atualizarItemLista({ id, status: "resolvida" });
+        A.itens = itensComPendencia(A.itens);
+        if (A.avancar && A.selId === id) {
+          avancou = true;
+          if (proxima) { A.focoAoAbrir = "composer"; A.ctx.navegar(`#/conversas/${proxima.id}`); }
+          else { A.focoAoAbrir = "lista"; A.ctx.navegar("#/conversas"); }
+        } else if (A.selId === id) A.lateral.render();
+        A.lista.render();
+      },
+      // o aviso fechou sem Desfazer: agora sim o servidor resolve. Página saindo ou oculta (saindo): keepalive, para o pedido sobreviver ao fechamento
+      firmar: async ({ saindo = false } = {}) => {
+        if (pend.cancelado) return;
+        if (!saindo) {
+          // o cliente escreveu com o «Desfazer» na tela: não resolve por cima da mensagem nova (com a página saindo não dá tempo de ler)
+          let lido = null;
+          try { lido = await api.rpc("nx_cv_ver", { p_cliente: cliente, p_id: id }); } catch { /* sem a leitura, o Resolver vale */ }
+          if (pend.cancelado) return;
+          const c = lido && lido.conversa;
+          if (c && (Date.parse(c.ultima_entrada_em || "") || 0) > entradaAntes) {
+            pend.cancelado = true;
+            if (_pendResolver.get(id) === pend) _pendResolver.delete(id);
+            if (A) A.ui.toast(`${nome} escreveu de novo: a conversa continua aberta.`, { tipo: "info" });
+            if (naMesmaEmpresa()) { if (A.selId === id) { trocarConversa(c); delta(); recarregarVer(); } else atualizarItemLista(c); carregarLista({}); }
+            return;
+          }
+        }
+        pend.firmando = true;
+        let r;
+        try { r = await api.rpc("nx_cv_status", { p_cliente: cliente, p_conversa: id, p_status: "resolvida" }, saindo ? { keepalive: true } : {}); }
+        catch (e) { if (saindo) voltarTela(); throw e; }     // fora do «saindo» quem devolve a tela é o próprio aviso (chama reverter)
+        if (_pendResolver.get(id) === pend) _pendResolver.delete(id);
+        pend.cancelado = true;                               // já está no servidor: um Desfazer atrasado não mexe mais na tela
+        if (!naMesmaEmpresa()) return;
+        if (A.selId === id) { trocarConversa(r); delta(); recarregarVer(); } else atualizarItemLista(r);
+        carregarLista({});
+      },
+      reverter: voltarTela,
+    });
+  } finally {
+    if (A) A.resolvendo.delete(id);
+  }
+}
+
+/** Devolve o foco à lista (Esc no campo); sem conversa à vista, ao painel vazio ou à busca. */
+function focarListaOuVazio() {
+  if (!A) return;
+  if (A.lista.focarItem()) return;
+  const b = A.raiz.querySelector(".cvc-atender, .cvc-num");
+  if (b && b.getClientRects().length) { b.focus(); return; }
+  A.lista.focarBusca();
+}
+
+/** Folha de atalhos da central (também por «?» fora de campo e pelo menu ⋮). A preferência «Ao resolver, abrir a próxima» mora aqui. */
+function abrirAjudaTeclado() {
+  if (!A) return;
+  const ui = A.ui, h = ui.h;
+  const grupos = [...new Set(A.L.ACORDES.map(a => a.grupo))];
+  const teclas = txt => h("span", { class: "cv-teclas-k" }, txt.split("+").flatMap((t, i) => (i ? ["+"] : []).concat([h("kbd", null, t)])));
+  const campoAvancar = ui.campo({ tipo: "interruptor", nome: "avancar", rotulo: "Ao resolver, abrir a próxima conversa", valor: A.avancar });
+  const entrada = campoAvancar.querySelector("input");
+  if (entrada) entrada.addEventListener("change", () => A.acoes.definirAvancar(entrada.checked));
+  const corpo = h("div", { class: "pilha cv-teclas" },
+    h("p", { class: "sub" }, "Os acordes com Alt valem também com o cursor no campo de mensagem. As letras soltas só valem fora dos campos de texto."),
+    grupos.map(g => h("section", { class: "cv-teclas-grupo" },
+      h("h3", { class: "rotulo" }, g),
+      h("dl", { class: "cv-teclas-lista" }, A.L.ACORDES.filter(a => a.grupo === g).flatMap(a => [h("dt", null, teclas(a.teclas)), h("dd", null, a.rotulo)])))),
+    campoAvancar);
+  ui.modal({ titulo: "Atalhos da central de conversas", corpo, largura: "m", acoes: [{ rotulo: "Fechar", tipo: "primario" }] });
+}
+
+/** Ações na paleta de comandos (Ctrl/⌘+K) enquanto Conversas está aberta; só se o shell oferecer o registro (ctx.comandos.registrar, M18). */
+function registrarComandos() {
+  const reg = A.ctx.comandos;
+  if (!reg || typeof reg.registrar !== "function") return;
+  const def = (id, rotulo, palavras, fazer, atalho) => {
+    try { const cancelar = reg.registrar({ id: `conversas.${id}`, rotulo, palavras, atalho, fazer }); if (typeof cancelar === "function") A.limpar.push(cancelar); } catch { /* o registro não pode derrubar a tela */ }
+  };
+  if (A.podeEscrever) {
+    def("atender", "Atender o próximo", "conversa fila espera atender proxima responder cliente", () => atenderProximo(), "Alt+Shift+P");
+    def("nova", "Nova conversa", "conversa nova mensagem iniciar whatsapp contato", () => novaConversa());
+    def("assumir", "Assumir a conversa aberta", "conversa assumir atribuir", () => executarComando("assumir"), "Alt+Shift+A");
+    def("resolver", "Resolver a conversa aberta", "conversa resolver encerrar finalizar", () => executarComando("resolver"), "Alt+Shift+R");
+    def("nota", "Nota interna na conversa", "conversa nota interna equipe", () => executarComando("nota"), "Alt+Shift+N");
+    def("transferir", "Transferir a conversa aberta", "conversa transferir passar atendente departamento", () => executarComando("transferir"), "Alt+Shift+T");
+  }
+  def("atalhos", "Atalhos da central de conversas", "atalhos teclado ajuda conversas", () => abrirAjudaTeclado(), "?");
+}
 
 /* ============================================================ envio (nx-enviar) */
 /** enviar({tipo:'texto'|'midia'|'template', texto, arquivo, legenda, template, parametros, respondeA}) */
 async function enviar(o) {
   const L = A.L;
   const conv = A.ver && A.ver.conversa;
-  if (!conv) return;
-  if (o.tipo === "texto" && !o.clientRef) {
-    const id = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    o = { ...o, clientRef: `orbita:${id}` };
+  if (!conv) return null;
+  // quem pede o envio diz para qual conversa ele foi preparado: se a aberta já é outra, nada sai (nunca para o cliente errado)
+  if (o.conversa != null && (o.conversa !== conv.id || A.selId !== conv.id)) {
+    A.ui.toast("Você trocou de conversa antes de enviar: nada foi enviado. Volte à conversa certa e envie de novo.", { tipo: "info", ms: 8000 });
+    return null;
   }
+  if (o.tipo === "texto") return enviarTexto(o);
   const eu = { id: A.eu.id, nome: A.eu.nome };
   let tmp;
-  if (o.tipo === "texto") {
-    tmp = L.mensagemOtimista({ conversaId: conv.id, corpo: o.texto, eu,
-      respondeA: o.respondeA ? { id: o.respondeA.id, direcao: o.respondeA.direcao, resumo: L.resumoMensagem(o.respondeA, 100) } : null });
-  } else if (o.tipo === "midia") {
+  if (o.tipo === "midia") {
     const url = URL.createObjectURL(o.arquivo);
     A.blobs.add(url);
     tmp = L.mensagemOtimista({ conversaId: conv.id, tipo: o.validacao.tipo, corpo: o.legenda || null, eu,
-      midia: { nome: o.arquivo.name, mime: o.validacao.mime, tamanho: o.arquivo.size, estado: "enviando", local_url: url } });
+      midia: { nome: o.arquivo.name, mime: o.validacao.mime, tamanho: o.arquivo.size, estado: "enviando", local_url: url, progresso: 0, fase: "subindo" } });
   } else {
     tmp = L.mensagemOtimista({ conversaId: conv.id, tipo: "template", corpo: L.preencherModelo(o.template.corpo, o.parametros), eu,
       template: { nome: o.template.nome, idioma: o.template.idioma } });
@@ -784,22 +1115,30 @@ async function enviar(o) {
   A.msgs = L.mesclarDelta(A.msgs, [tmp]);
   A.chat.renderMensagens({ rolar: "fim" });
   await enviarPedido(tmp, o);
+  return { persistido: false };
 }
 
 async function enviarPedido(tmp, o) {
-  const L = A.L;
+  const L = A.L, ui = A.ui, ctx = A.ctx;
   const convId = A.selId;
+  const para = nomeContato(A.ver && (A.ver.contato || (A.ver.conversa && A.ver.conversa.contato))) || "um contato";
   try {
     let r;
-    if (o.tipo === "texto") {
-      r = await A.api.fn("nx-enviar", { acao: "texto", conversa: convId, texto: o.texto, client_ref: o.clientRef,
-        responde_a: o.respondeA && o.respondeA.wamid ? o.respondeA.wamid : undefined });
-    } else if (o.tipo === "midia") {
-      const s = await A.api.fn("nx-midia", { acao: "subir", nome: o.arquivo.name, mime: o.validacao.mime, tamanho: o.arquivo.size });
-      if (!s || !s.path || !/^https:\/\//.test(String(s.upload_url || ""))) throw Object.assign(new Error("envio_falhou"), { codigo: "envio_falhou", detalhe_texto: "o servidor não liberou o envio do arquivo" });
-      const put = await fetch(s.upload_url, { method: "PUT", headers: { "content-type": o.validacao.mime, "x-upsert": "true" }, body: o.arquivo });
-      if (!put.ok) throw Object.assign(new Error("envio_falhou"), { codigo: "envio_falhou", detalhe_texto: `não foi possível subir o arquivo (${put.status})` });
-      r = await A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: s.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined });
+    if (o.tipo === "midia") {
+      // o arquivo já subiu numa tentativa anterior (a nx-enviar é que falhou): "Tentar de novo" não sobe tudo outra vez
+      if (!o.path) {
+        definirProgresso(tmp, 0, "subindo", convId);
+        const s = await A.api.fn("nx-midia", { acao: "subir", nome: o.arquivo.name, mime: o.validacao.mime, tamanho: o.arquivo.size });
+        if (!s || !s.path || !/^https:\/\//.test(String(s.upload_url || ""))) throw Object.assign(new Error("envio_falhou"), { codigo: "envio_falhou", detalhe_texto: "o servidor não liberou o envio do arquivo" });
+        try {
+          await subirArquivo(s.upload_url, o.arquivo, o.validacao.mime, {
+            aoProgresso: (env, total) => definirProgresso(tmp, L.progressoEnvio(env, total).pct, "subindo", convId),
+            registrar: cancelar => { A.envios.set(tmp.id, cancelar); if (A.selId === convId) A.chat.renderMensagens({ rolar: "manter" }); } });
+        } finally { if (A) A.envios.delete(tmp.id); }
+        o.path = s.path;
+      }
+      definirProgresso(tmp, 100, "entregando", convId);
+      r = await A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: o.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined });
     } else {
       r = await A.api.fn("nx-enviar", { acao: "template", conversa: convId, template_id: o.template.id, parametros: o.parametros || [] });
     }
@@ -815,8 +1154,26 @@ async function enviarPedido(tmp, o) {
     delta();
     carregarLista({});
   } catch (e) {
-    if (!A || A.selId !== convId) return;
     const codigo = e && e.codigo;
+    if (!A || A.selId !== convId) {
+      // a pessoa já está em outra conversa (ou saiu de Conversas) e a bolha não está mais à vista: a falha não pode passar em branco
+      if (codigo === "upload_cancelado") {            // sair de Conversas interrompe o arquivo que ainda subia: diga isso
+        if (!A) ui.toast(`O envio do arquivo para ${para} foi interrompido porque você saiu de Conversas. Nada foi enviado.`, { tipo: "info", ms: 8000 });
+      } else {
+        const oQue = o.tipo === "midia" ? "O arquivo" : "O modelo";
+        const duvida = e?.resposta?.ambigua === true || ["sem_conexao", "tempo_rede"].includes(codigo) || Number(e?.status) === 504;
+        const motivo = (typeof e?.resposta?.detalhe === "string" && e.resposta.detalhe) || L.dicaErroEnvio(codigo) || ui.mensagemErro(e);
+        toastAbrir(ui, ctx, duvida ? `${oQue} para ${para} pode ter saído — confira no WhatsApp antes de reenviar.`
+          : `${oQue} para ${para} não foi enviado: ${motivo}`, convId);
+      }
+      return;
+    }
+    if (codigo === "upload_cancelado") {   // a pessoa cancelou: nada saiu, a bolha local some
+      A.msgs = A.msgs.filter(m => m.id !== tmp.id);
+      A.chat.renderMensagens({ rolar: "manter" });
+      A.ui.toast("Envio cancelado.", { tipo: "info" });
+      return;
+    }
     // Só a resposta marcada pelo servidor ou um timeout de transporte deixa incerto se o
     // aparelho recebeu. Um 5xx interno sem essa marca não deve bloquear a recuperação.
     const envioAmbiguo = e?.resposta?.ambigua === true || ["sem_conexao", "tempo_rede"].includes(codigo)
@@ -851,11 +1208,388 @@ async function enviarPedido(tmp, o) {
   }
 }
 
+/** PUT com progresso: o fetch não diz quanto já subiu. Rejeita com codigo "upload_falhou" (rede/HTTP) ou "upload_cancelado". */
+function subirArquivo(url, arquivo, mime, { aoProgresso, registrar } = {}) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    const falha = (codigo, texto) => reject(Object.assign(new Error(codigo), { codigo, detalhe_texto: texto }));
+    x.open("PUT", url);
+    x.setRequestHeader("content-type", mime);
+    x.setRequestHeader("x-upsert", "true");
+    x.timeout = 180000;
+    let ultimo = 0;
+    x.upload.addEventListener("progress", ev => {
+      if (!ev.lengthComputable || !aoProgresso) return;
+      const agora = Date.now();
+      if (agora - ultimo < 120) return;       // no máximo ~8 atualizações por segundo
+      ultimo = agora;
+      aoProgresso(ev.loaded, ev.total);
+    });
+    x.addEventListener("load", () => (x.status >= 200 && x.status < 300 ? resolve() : falha("upload_falhou", `não foi possível subir o arquivo (${x.status})`)));
+    x.addEventListener("error", () => falha("upload_falhou", "a conexão caiu durante o envio"));
+    x.addEventListener("timeout", () => falha("upload_falhou", "o envio demorou demais"));
+    x.addEventListener("abort", () => falha("upload_cancelado", "envio cancelado"));
+    if (registrar) registrar(() => x.abort());
+    x.send(arquivo);
+  });
+}
+
+/** Barra de progresso da bolha local (só se a conversa ainda é a aberta). */
+function definirProgresso(tmp, pct, fase, convId) {
+  if (!A || A.selId !== convId) return;
+  let mudou = false;
+  A.msgs = A.msgs.map(m => {
+    if (m.id !== tmp.id || !m.midia || (m.midia.progresso === pct && m.midia.fase === fase)) return m;
+    mudou = true;
+    return { ...m, midia: { ...m.midia, progresso: pct, fase } };
+  });
+  if (mudou) A.chat.renderMensagens({ rolar: "manter" });
+}
+
 async function reenviarLocal(m) {
+  if (m && m.ref && A.fila.itens.has(m.ref)) {
+    const velho = A.fila.itens.get(m.ref);
+    if (velho.parada) {
+      // ficou PARADA na fila (ninguém a recusou): tenta com o MESMO client_ref — se a primeira tentativa tinha saído, o servidor devolve a mesma mensagem em vez de enviar outra
+      if (avisarEsperaReenvio(velho)) return;
+      velho.proxima_em = 0;
+      return transmitir(velho);
+    }
+    // falha DEFINITIVA (ou "pode ter saído", depois de a pessoa conferir): "tentar de novo" é uma intenção nova (client_ref novo), senão o servidor devolveria a mesma resposta
+    await filaRemover(velho.id);
+    A.msgs = A.msgs.filter(x => x.id !== m.id);
+    A.chat.renderMensagens({ rolar: "manter" });
+    return enviarTexto({ tipo: "texto", texto: velho.texto, reenvio: velho.reenvio || null,
+      respondeA: velho.respondeA ? { id: velho.respondeA.id, wamid: velho.respondeA.wamid, direcao: velho.respondeA.direcao } : null });
+  }
   if (!m || !m.pedido) return;
-  A.msgs = A.msgs.map(x => x.id === m.id ? { ...x, status: "pendente", erro: null } : x);
+  A.msgs = A.msgs.map(x => x.id === m.id ? { ...x, status: "pendente", erro: null, falhaLocal: false, ...(x.midia && x.midia.local_url ? { midia: { ...x.midia, progresso: 0, fase: x.pedido && x.pedido.path ? "entregando" : "subindo" } } : {}) } : x);
   A.chat.renderMensagens({ rolar: "manter" });
   await enviarPedido(m, m.pedido);
+}
+
+/** «Tentar de novo» de uma falha que o SERVIDOR gravou: pede o reenvio da própria mensagem (ação "reenviar" do nx-enviar). O texto gravado já
+    saiu assinado e o servidor não assina de novo — mandar como texto novo repetiria a assinatura. Passa pela fila como qualquer texto. */
+async function reenviarGravada(m) {
+  if (!A || !m || !m.id || !m.corpo || !A.ver || !A.ver.conversa || A.reenviadas.has(m.id)) return;
+  A.reenviadas.add(m.id);                 // o botão da bolha antiga some: um toque só
+  // o servidor reenvia na conversa DA MENSAGEM: falha de um atendimento anterior (já resolvido) vai como texto novo no atendimento aberto
+  const daAberta = m.conversa_id == null || Number(m.conversa_id) === Number(A.ver.conversa.id);
+  if (daAberta) return enviarTexto({ tipo: "texto", texto: m.corpo, reenvio: Number(m.id) });
+  // texto novo: tira a assinatura «*Nome:*» que o servidor já tinha gravado, para não sair assinada duas vezes
+  return enviarTexto({ tipo: "texto", texto: String(m.corpo).replace(/^\*[^*\n]+:\*\n/, ""), reenvio: null });
+}
+
+/* ============================================================ fila de saída (M36)
+   Todo texto passa por aqui: grava no IndexedDB (orbita-fila) ANTES de falar com o servidor, envia com o client_ref da intenção e só apaga
+   quando o servidor confirma. Offline, timeout ou 5xx deixam o item na fila e a MESMA mensagem é repetida com o MESMO client_ref
+   (o servidor devolve a que já gravou: nunca sai em dobro). Falha definitiva (janela fechada, conversa resolvida…) vira "Não enviada"
+   com o motivo e o texto continua guardado até a pessoa tentar de novo ou descartar. Roda enquanto Conversas está aberta.
+   Três travas contra o envio em dobro e fora de hora (regras puras em cv-logica.js):
+   - a hora de cada pedido (enviada_em) é gravada ANTES de ele sair, e o mesmo item nunca é retransmitido antes de 90 s — nem com «Enviar
+     agora», nem ao remontar a tela, nem quando a internet volta (o primeiro pedido ainda pode estar a caminho);
+   - item parado há mais de 15 min não sai sozinho: vira "Não enviada · Ficou na fila desde…" e a pessoa decide;
+   - resposta "pode ter saído" sem mensagem gravada fica na tela com o aviso e nunca é reenviada sozinha.
+   Item de outra conta ou de outra empresa nunca é tocado: fica guardado para quem o escreveu. */
+const DB_FILA = "orbita-fila", ST_FILA = "saida";
+const FILA_PRAZO_ABRIR_MS = 1500;      // há navegador em que o IndexedDB nunca responde: o chat não espera mais que isto por ele
+const reqIdb = req => new Promise((ok, no) => { req.onsuccess = () => ok(req.result); req.onerror = () => no(req.error); });
+function abrirFila() {
+  return new Promise((ok, no) => {
+    let r;
+    try { r = indexedDB.open(DB_FILA, 1); } catch (e) { return no(e); }
+    r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains(ST_FILA)) r.result.createObjectStore(ST_FILA, { keyPath: "id" }); };
+    r.onsuccess = () => {
+      const db = r.result;
+      // o shell apaga este banco no Sair (deleteDatabase): sem fechar aqui o pedido fica bloqueado e todo open() seguinte espera atrás dele
+      db.onversionchange = () => { try { db.close(); } catch { /* ok */ } };
+      ok(db);
+    };
+    r.onerror = () => no(r.error);
+    r.onblocked = () => no(new Error("fila_bloqueada"));
+  });
+}
+const lojaFila = (db, modo) => db.transaction(ST_FILA, modo).objectStore(ST_FILA);
+const serializarItem = it => ({ id: it.id, conta: it.conta, cliente: it.cliente, conversa: it.conversa, texto: it.texto, respondeA: it.respondeA || null,
+  criada_em: it.criada_em, tentativas: it.tentativas || 0, proxima_em: it.proxima_em || 0, enviada_em: it.enviada_em || 0,
+  estado: it.estado === "enviando" ? "fila" : it.estado, motivo: it.motivo || null, para: it.para || null, parada: !!it.parada, reenvio: it.reenvio || null });
+
+/** Abre o banco da fila e lê o que está guardado, com prazo: passou de 1,5 s, a tela segue sem fila persistente (o envio continua funcionando na aba). */
+function lerFilaGuardada(fila) {
+  const lido = (async () => { const db = await abrirFila(); return { db, itens: await reqIdb(lojaFila(db, "readonly").getAll()) }; })();
+  return new Promise((ok, no) => {
+    let desistiu = false;
+    const t = setTimeout(() => { desistiu = true; no(new Error("fila_lenta")); }, FILA_PRAZO_ABRIR_MS);
+    lido.then(r => {
+      clearTimeout(t);
+      if (desistiu) { try { r.db.close(); } catch { /* ok */ } return; }     // abriu depois do prazo: ninguém vai usar
+      fila.db = r.db; ok(r.itens);
+    }, e => { clearTimeout(t); no(e); });
+  });
+}
+
+async function filaIniciar() {
+  if (!A) return;
+  const fila = A.fila;
+  const conta = A.ctx.sessao && A.ctx.sessao.conta && A.ctx.sessao.conta.id, cliente = A.ctx.cliente && A.ctx.cliente.id;
+  let guardados = [];
+  try { guardados = await lerFilaGuardada(fila); }
+  catch { fila.db = null; }       // janela anônima/Safari sem IndexedDB (ou banco que não respondeu a tempo): a fila vale só nesta aba (o envio continua funcionando)
+  if (!A || A.fila !== fila) return;
+  const agora = Date.now();
+  const paradas = [];
+  for (const it of guardados || []) {
+    const destino = A.L.filaDestino(it, { conta, cliente, agora });
+    if (destino === "pular") continue;       // de outra conta ou de outra empresa: fica guardado para quem o escreveu (nunca se apaga o que é de outro escopo)
+    if (destino === "apagar") { if (fila.db) reqIdb(lojaFila(fila.db, "readwrite").delete(it.id)).catch(() => {}); continue; }
+    if (it.estado === "falhou" || it.estado === "ambigua") { fila.itens.set(it.id, { ...it }); continue; }     // esperam a pessoa: nunca saem sozinhos
+    if (A.L.filaParada(it, agora)) {         // parada há mais de 15 min: não sai sozinha (nada de mensagem de sexta chegando na segunda)
+      const parado = { ...it, estado: "falhou", parada: true, motivo: A.L.motivoFilaParada(it.criada_em, new Date(agora)) };
+      paradas.push(parado);
+      filaSalvar(parado);
+      continue;
+    }
+    // o que estava a caminho quando a aba fechou volta a ser tentado com o MESMO client_ref (o servidor devolve a mensagem se ela já tinha
+    // saído) — mas só 90 s depois do último pedido (filaDevidos): recarregar a página não pode repetir um envio que ainda está a caminho
+    fila.itens.set(it.id, { ...it, estado: it.enviada_em ? "incerto" : "fila", proxima_em: 0 });
+  }
+  if (paradas.length) {
+    const p = paradas[0];
+    toastAbrir(A.ui, A.ctx, paradas.length === 1
+      ? `Uma mensagem para ${p.para || "um contato"} ficou na fila e não foi enviada. Abra a conversa para enviar de novo ou descartar.`
+      : `${paradas.length} mensagens ficaram na fila e não foram enviadas. Abra as conversas marcadas na lista para enviar de novo ou descartar.`, p.conversa);
+  }
+  if (typeof A.ctx.naoAtualizar === "function") A.limpar.push(A.ctx.naoAtualizar(() => filaPendentes() > 0));
+  A.timers.push(setInterval(() => { esvaziarFila(); }, 20000));
+  if (A.ctx.rede && typeof A.ctx.rede.aoVoltar === "function") A.limpar.push(A.ctx.rede.aoVoltar(() => esvaziarFila({ forcar: true })));
+  const aoOnline = () => esvaziarFila({ forcar: true });
+  window.addEventListener("orbita:online", aoOnline);
+  A.limpar.push(() => window.removeEventListener("orbita:online", aoOnline));
+  filaNaLista();
+  esvaziarFila();
+}
+const ESPERA_PESSOA = new Set(["falhou", "ambigua"]);      // não saem sozinhos: a pessoa decide
+const filaPendentes = () => (A ? [...A.fila.itens.values()].filter(x => !ESPERA_PESSOA.has(x.estado)).length : 0);
+const filaDaConversa = id => (A ? [...A.fila.itens.values()].filter(x => x.conversa === id).sort((a, b) => a.criada_em - b.criada_em) : []);
+/** Marca da linha da lista: "falhou" (há mensagem não enviada ou em dúvida nesta conversa), "pendente" (há mensagem esperando na fila) ou null. */
+function filaResumo(id) {
+  if (!A || !A.fila.itens.size) return null;
+  let r = null;
+  for (const x of A.fila.itens.values()) {
+    if (x.conversa !== id) continue;
+    if (ESPERA_PESSOA.has(x.estado)) return "falhou";
+    if (x.estado !== "enviando") r = "pendente";       // o envio normal (1 s) não pisca na lista
+  }
+  return r;
+}
+/** A fila mudou: a marca da linha da lista acompanha. */
+function filaNaLista() { if (A && A.lista && A.lista.el.isConnected) A.lista.render(); }
+
+async function filaSalvar(it) {
+  if (!A) return false;
+  A.fila.itens.set(it.id, it);
+  if (!A.fila.db) return false;
+  try { await reqIdb(lojaFila(A.fila.db, "readwrite").put(serializarItem(it))); return true; }
+  catch { if (A) A.fila.db = null; return false; }
+}
+async function filaRemover(id) {
+  if (!A) return;
+  A.fila.itens.delete(id);
+  filaNaLista();
+  if (A.fila.db) { try { await reqIdb(lojaFila(A.fila.db, "readwrite").delete(id)); } catch { /* a limpeza das 7 dias pega */ } }
+}
+/** A pessoa saiu de Conversas com o pedido a caminho: guarda (ou apaga) o item direto no banco da fila, sem a tela. Melhor esforço. */
+function filaSemTela(fila, it, apagar = false) {
+  if (!fila || !fila.db) return;
+  try { const loja = lojaFila(fila.db, "readwrite"); if (apagar) loja.delete(it.id); else loja.put(serializarItem(it)); } catch { /* ok */ }
+}
+
+/** Aviso de erro com o atalho «Abrir» para a conversa (o toast do shell só traz «Desfazer»: o botão entra aqui, antes do X). */
+function toastAbrir(ui, ctx, texto, conversaId) {
+  const t = ui.toast(texto, { tipo: "erro", ms: 12000 });
+  try {
+    const b = ui.h("button", { type: "button", class: "toast-acao", on: { click: () => { t.fechar(); ctx.navegar(`#/conversas/${conversaId}`); } } }, "Abrir");
+    t.el.insertBefore(b, t.el.querySelector(".toast-x"));
+  } catch { /* sem o botão o aviso continua valendo */ }
+  return t;
+}
+/** Texto que falhou (ou ficou em dúvida) numa conversa que NÃO está aberta: ninguém veria a bolha, então avisa com o nome e o «Abrir». */
+function avisarFalhaFora(it, motivo, { ui = A && A.ui, ctx = A && A.ctx } = {}) {
+  if (!ui || !ctx || (A && A.selId === it.conversa)) return;
+  const nome = it.para || "um contato";
+  toastAbrir(ui, ctx, it.estado === "ambigua"
+    ? `A mensagem para ${nome} pode ter saído — confira no WhatsApp antes de reenviar.`
+    : `Mensagem para ${nome} não foi enviada: ${motivo || it.motivo || "o canal não aceitou a mensagem."}`, it.conversa);
+}
+
+/** A bolha local de um item da fila (◷ + "Na fila", "tentando de novo" ou "Não enviada"). */
+function bolhaDeItem(it) {
+  const b = A.L.mensagemOtimista({ conversaId: it.conversa, corpo: it.texto, eu: { id: A.eu.id, nome: A.eu.nome }, agora: new Date(it.criada_em),
+    respondeA: it.respondeA ? { id: it.respondeA.id, direcao: it.respondeA.direcao, resumo: it.respondeA.resumo } : null });
+  b.ref = it.id;
+  b.pedido = { tipo: "texto", texto: it.texto, clientRef: it.id };
+  return aplicarEstado(b, it);
+}
+function aplicarEstado(b, it) {
+  const falhou = it.estado === "falhou", ambigua = it.estado === "ambigua", espera = it.estado === "fila" || it.estado === "incerto";
+  // "ambigua": pode ter saído e o servidor não tem a mensagem gravada — a bolha fica com o aviso e os botões, e nunca é reenviada sozinha
+  return Object.assign(b, { filaEstado: it.estado, status: falhou ? "falhou" : "pendente", falhaLocal: falhou, ambigua,
+    filaProxima: espera ? A.L.proximaSaidaFila(it) : 0,
+    erro: falhou ? (it.motivo || "A mensagem não foi enviada.") : ambigua ? (it.motivo || "Pode ter saído — confira no WhatsApp antes de reenviar.") : espera ? (it.motivo || null) : null });
+}
+function atualizarBolha(it) {
+  if (!A) return;
+  filaNaLista();
+  if (A.selId !== it.conversa) return;
+  let mudou = false;
+  A.msgs = A.msgs.map(m => { if (m.ref !== it.id) return m; mudou = true; return aplicarEstado({ ...m }, it); });
+  if (mudou) A.chat.renderMensagens({ rolar: "manter" });
+}
+function concluirBolha(it, msg) {
+  const L = A.L;
+  A.msgs = A.msgs.filter(m => m.ref !== it.id);
+  if (A.selId === it.conversa) {
+    if (msg && msg.id) { A.msgs = L.mesclarDelta(A.msgs, [msg]); A.ultimoId = L.ultimoId(A.msgs, A.ultimoId); }
+    A.chat.renderMensagens({ rolar: "fim" });
+    delta();
+  }
+  carregarLista({});
+}
+
+/** Texto novo: grava na fila, mostra a bolha e manda (se houver rede). Resolve quando o item está GUARDADO (não quando o servidor responde). */
+async function enviarTexto(o) {
+  const L = A.L, conv = A.ver.conversa;
+  const it = { id: o.clientRef || L.novoClientRef(globalThis.crypto && globalThis.crypto.randomUUID ? globalThis.crypto.randomUUID() : null),
+    conta: A.ctx.sessao.conta.id, cliente: A.ctx.cliente.id, conversa: conv.id, texto: o.texto,
+    respondeA: o.respondeA ? { id: o.respondeA.id, wamid: o.respondeA.wamid || null, direcao: o.respondeA.direcao, resumo: L.resumoMensagem(o.respondeA, 100) } : null,
+    criada_em: Date.now(), tentativas: 0, proxima_em: 0, enviada_em: 0, estado: "fila", motivo: null,
+    para: nomeContato(A.ver.contato || conv.contato) || null,      // para o aviso «Mensagem para Mariana não foi enviada» quando a conversa já não é a aberta
+    reenvio: o.reenvio || null };                                    // «Tentar de novo» de uma falha gravada pelo servidor: id da mensagem a reenviar
+  const persistido = await filaSalvar(it);
+  A.msgs = L.mesclarDelta(A.msgs, [bolhaDeItem(it)]);
+  A.chat.renderMensagens({ rolar: "fim" });
+  const offline = A.ctx.rede ? A.ctx.rede.estado === "offline" : (typeof navigator !== "undefined" && navigator.onLine === false);
+  if (offline) { it.motivo = "Sem internet: a mensagem espera na fila."; it.proxima_em = Date.now() + 20000; await filaSalvar(it); atualizarBolha(it); }
+  else transmitir(it);          // sem await: a tela não espera o servidor
+  return { persistido };
+}
+
+/** Uma tentativa de envio. Devolve "ok" | "rede" (parar e tentar depois) | "espera" (o último pedido deste item saiu há menos de 90 s) | "definitiva". */
+async function transmitir(it) {
+  const L = A.L;
+  if (A.fila.emVoo.has(it.id)) return "ok";
+  // NUNCA antes de 90 s do último pedido do mesmo item (nem «Enviar agora», nem remontar a tela, nem a internet voltar): o primeiro ainda pode estar a caminho
+  if (L.esperaReenvioFila(it) > 0) return "espera";
+  const fila = A.fila, ui = A.ui, ctx = A.ctx;      // seguem valendo se a pessoa sair de Conversas com o pedido a caminho
+  fila.emVoo.add(it.id);
+  try {
+    it.estado = "enviando"; it.motivo = null; it.enviada_em = Date.now();
+    atualizarBolha(it);
+    await filaSalvar(it);                           // a hora do pedido fica guardada ANTES de ele sair: recarregar a página não o repete na hora
+    if (!A) return "rede";
+    let r;
+    try {
+      r = await A.api.fn("nx-enviar", it.reenvio
+        ? { acao: "reenviar", mensagem: it.reenvio, client_ref: it.id }      // falha gravada pelo servidor: ele reenvia o texto gravado, sem assinar de novo
+        : { acao: "texto", conversa: it.conversa, texto: it.texto, client_ref: it.id,
+          responde_a: it.respondeA && it.respondeA.wamid ? it.respondeA.wamid : undefined });
+    } catch (e) {
+      return await falhaDeEnvio(it, e, { L, fila, ui, ctx });      // só o pedido cai aqui: um erro de tela DEPOIS da confirmação nunca vira "Não enviada"
+    }
+    const msg = r && r.mensagem ? { ...r.mensagem, ...(r.ambigua === true ? { ambigua: true } : {}) } : null;
+    const duvida = msg && msg.ambigua ? { ...it, estado: "ambigua" } : null;      // o servidor gravou, mas não sabe se o aparelho enviou
+    if (!A) {                                       // saiu de Conversas: o item confirmado não fica para ser reenviado na volta
+      filaSemTela(fila, it, true);
+      if (duvida) avisarFalhaFora(duvida, "", { ui, ctx });
+      return "ok";
+    }
+    await filaRemover(it.id);
+    concluirBolha(it, msg);
+    if (duvida) avisarFalhaFora(duvida);
+    return "ok";
+  } finally { fila.emVoo.delete(it.id); if (A && A.fila !== fila) A.fila.emVoo.delete(it.id); }
+}
+
+/** O pedido de envio falhou: decide o destino do item (volta à fila, "Não enviada", "pode ter saído") e avisa quem não está vendo a bolha. */
+async function falhaDeEnvio(it, e, { L, fila, ui, ctx }) {
+  const c = L.classificarFalhaEnvio(e);
+  // definitiva com a saída GRAVADA pelo servidor ("falhou"/"pendente", com o motivo): mostra a do servidor e libera o item
+  const salva = c.tipo === "definitiva" && e && e.resposta && e.resposta.mensagem && e.resposta.mensagem.id ? e.resposta.mensagem : null;
+  if (salva) {
+    const motivo = (e.resposta && typeof e.resposta.detalhe === "string" && e.resposta.detalhe) || salva.erro || c.motivo || "";
+    it.estado = c.ambigua ? "ambigua" : "falhou";
+    if (!A) { filaSemTela(fila, it, true); avisarFalhaFora(it, motivo, { ui, ctx }); return "definitiva"; }
+    await filaRemover(it.id);
+    concluirBolha(it, { ...salva, ...(c.ambigua ? { ambigua: true } : {}) });
+    avisarFalhaFora(it, motivo);
+    return "definitiva";
+  }
+  // o que fazer com o item é regra pura (cv-logica.js): rede/sessão voltam à fila com backoff; 409 "em andamento" pergunta de novo em ~20 s sem
+  // contar como falha; "pode ter saído" SEM mensagem gravada e falha definitiva ficam guardadas com o aviso e nunca saem sozinhas (fim)
+  const p = L.aposFalhaFila(it, c, { agora: Date.now(), jitter: Math.floor(Math.random() * 3000), textoErro: ui.mensagemErro(e) });
+  Object.assign(it, p.campos);
+  if (!A) { filaSemTela(fila, it); if (p.fim) avisarFalhaFora(it, it.motivo, { ui, ctx }); return p.fim ? "definitiva" : "rede"; }
+  await filaSalvar(it); atualizarBolha(it);
+  // "em andamento": pergunta de novo logo que o prazo vence, sem esperar o próximo tique de 20 s da fila (que pode cair quase 20 s depois)
+  if (it.estado === "andamento") setTimeout(() => { if (A) esvaziarFila(); }, L.FILA_EM_ANDAMENTO_MS + 250);
+  if (!p.fim) return "rede";
+  avisarFalhaFora(it, it.motivo);
+  if (c.codigo === "fora_da_janela" || c.codigo === "conversa_resolvida") recarregarVer();
+  return "definitiva";
+}
+
+/** Item parado há mais de 15 min: deixa de sair sozinho e vira "Não enviada · Ficou na fila desde…" (Tentar de novo usa o MESMO client_ref). */
+async function filaParar(it, agora = Date.now()) {
+  it.estado = "falhou"; it.parada = true; it.motivo = A.L.motivoFilaParada(it.criada_em, new Date(agora));
+  await filaSalvar(it); atualizarBolha(it);
+  avisarFalhaFora(it, it.motivo);
+}
+
+/** Esvazia a fila em ordem: no online, no 1º pulso bom e a cada 20 s (com o backoff de cada item). Para na 1ª falha de rede (a ordem importa). */
+async function esvaziarFila({ forcar = false } = {}) {
+  if (!A || A.fila.rodando || !A.fila.itens.size) return;
+  const fila = A.fila;
+  fila.rodando = true;
+  try {
+    const agora = Date.now();
+    for (const it of [...fila.itens.values()]) {
+      if (!A) return;
+      if (A.L.filaParada(it, agora) && !fila.emVoo.has(it.id)) await filaParar(it, agora);
+    }
+    if (!A) return;
+    for (const it of A.L.filaDevidos([...fila.itens.values()], Date.now(), { forcar })) {
+      if (!A) return;
+      if (await transmitir(it) === "rede") break;
+    }
+  } finally { fila.rodando = false; }
+}
+
+/** "Cancelar" numa bolha da fila: o texto volta para o campo (nada se perde) e o item sai. */
+async function cancelarFila(m) {
+  if (!A || !m || !m.ref) return;
+  const it = A.fila.itens.get(m.ref);
+  if (!it || A.fila.emVoo.has(it.id)) return;
+  await filaRemover(it.id);
+  A.msgs = A.msgs.filter(x => x.ref !== it.id);
+  A.chat.renderMensagens({ rolar: "manter" });
+  if (A.composer && A.selId === it.conversa && typeof A.composer.devolverTexto === "function") A.composer.devolverTexto(it.texto);
+  A.ui.toast("Envio cancelado. O texto voltou para o campo.", { tipo: "info" });
+}
+/** "Enviar agora": tenta já, sem esperar o backoff — mas nunca antes de 90 s do último pedido (ele ainda pode estar a caminho). */
+async function enviarAgora(m) {
+  if (!A || !m || !m.ref) return;
+  const it = A.fila.itens.get(m.ref);
+  if (!it) return;
+  if (avisarEsperaReenvio(it)) return;
+  it.proxima_em = 0;
+  await transmitir(it);
+}
+/** Dentro dos 90 s do último pedido: explica a espera (true) em vez de arriscar a mensagem em dobro. */
+function avisarEsperaReenvio(it) {
+  const falta = A.L.esperaReenvioFila(it);
+  if (!(falta > 0)) return false;
+  A.ui.toast(`A última tentativa ainda pode estar a caminho. Para a mensagem não sair em dobro, a próxima só pode sair em ${Math.ceil(falta / 1000)} s.`, { tipo: "info" });
+  return true;
 }
 
 /* ============================================================ nova conversa */
@@ -941,7 +1675,7 @@ async function novaConversa({ contato = null } = {}) {
   busca.addEventListener("input", procurar);
 
   const corpo = ui.h("div", { class: "pilha" }, campoCanal, contato ? null : alterna, blocoEscolhido, blocoBusca, blocoDigitar,
-    ui.h("p", { class: "sub" }, "Se o cliente não falou com a empresa nas últimas 24 h, o WhatsApp só aceita um modelo aprovado — o seletor de modelos abre em seguida."));
+    ui.h("p", { class: "sub" }, "Em número da Meta (WhatsApp oficial), se o cliente não falou com a empresa nas últimas 24 h só vale um modelo aprovado — o seletor de modelos abre em seguida. Em número do CodeWords não há essa janela."));
   desenharEscolhido();
   if (contato) { blocoBusca.hidden = true; }
 
@@ -972,8 +1706,9 @@ async function novaConversa({ contato = null } = {}) {
   if (!item || !item.id) return;
   await carregarLista({});
   abrir(item.id);
-  // sem janela → direto para os modelos
-  if (!L.janela(item).aberta) {
+  // sem janela → direto para os modelos (só na Meta; o aparelho do CodeWords não tem janela de 24 h)
+  const provedorItem = (item.canal && item.canal.provedor) || ((A.base && A.base.canais) || []).find(c => c.id === item.canal_id)?.provedor || "meta";
+  if (L.canalTemJanela(provedorItem) && !L.janela(item).aberta) {
     const espera = async () => {
       for (let i = 0; i < 40 && A && (!A.ver || A.ver.conversa.id !== item.id); i++) await new Promise(r => setTimeout(r, 100));
       if (A && A.ver && A.ver.conversa.id === item.id) A.composer.abrirModelos();

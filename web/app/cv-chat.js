@@ -27,6 +27,8 @@ export function criarChat(A) {
   novas.addEventListener("click", () => { rolarFim(true); novas.hidden = true; });
 
   /* ---------------- rolagem */
+  let grudarFimAte = 0;      // até quando uma mídia que termina de carregar deve manter a conversa no fim (a imagem só ganha altura ao carregar)
+  const aposMidiaCarregar = () => { if (Date.now() < grudarFimAte) msgs.scrollTop = msgs.scrollHeight; };
   function noFim() { return msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80; }
   function rolarFim(suave) {
     if (suave && !matchMedia("(prefers-reduced-motion: reduce)").matches) msgs.scrollTo({ top: msgs.scrollHeight, behavior: "smooth" });
@@ -84,7 +86,12 @@ export function criarChat(A) {
       : "Escolha uma conversa à esquerda ou comece uma nova.";
     const num = (id, rot, v, alerta) => h("button", { type: "button", class: "cvc-num", dataset: { alerta: alerta ? "1" : "0" },
       on: { click: () => A.acoes.mudarLista({ aba: id, busca: "" }) } }, h("b", null, String(v ?? 0)), h("span", null, rot));
-    vazio.appendChild(h("div", { class: "cvc-vazio-in" }, orbita(), tit, h("p", null, txt),
+    // M35: quem tem fila ganha o botão que abre e assume a que espera há mais tempo (também por Alt+Shift+P)
+    const atender = !semCanal && A.podeEscrever && ag > 0
+      ? h("button", { type: "button", class: "bt bt-prim cvc-atender", title: "Abre e assume a conversa que espera resposta há mais tempo (Alt+Shift+P)",
+        on: { click: ev => A.acoes.atenderProximo(ev.currentTarget) } }, ui.icone("seta-dir"), "Atender o próximo")
+      : null;
+    vazio.appendChild(h("div", { class: "cvc-vazio-in" }, orbita(), tit, h("p", null, txt), atender,
       semCanal ? (A.acoes.pode("admin") ? h("a", { class: "bt bt-prim", href: "#/config/numeros" }, "Conectar número") : null)
         : h("div", { class: "cvc-numeros" },
           num("aguardando", "Aguardando", c.aguardando, ag > 0),
@@ -131,22 +138,27 @@ export function criarChat(A) {
           h("i", { class: "cvc-via-sep" }, "·"), h("span", { class: "cvc-via" }, canal),
           h("i", { class: "cvc-proto-sep" }, "·"), h("span", { class: "mono" }, conv.protocolo || ""))));
 
-    const selos = faixa;
+    // faixa de situação: UMA pílula com dono + departamento; janela e IA ao lado; avisos só quando existem
     ui.limpar(faixa);
-    if (conv.status !== "resolvida") {
-      selos.appendChild(ui.pilula(jan.texto, jan.nivel === "aberta" ? "ok" : jan.nivel === "acabando" ? "aten" : "ruim",
-        { icone: "relogio", class: "cv-janela", title: jan.ate ? `Até ${ui.dataHoraBR(jan.ate)}` : "O cliente ainda não mandou mensagem neste número" }));
-    } else selos.appendChild(ui.pilula("Resolvida", "neutra", { icone: "check" }));
-    if (conv.status === "pendente") selos.appendChild(ui.pilula("Pendente", "aten"));
-    if (conv.oculta) selos.appendChild(ui.pilula("Oculta · contato bloqueado", "ruim", { icone: "alerta" }));
-    if (ct.optin_marketing === false) selos.appendChild(ui.pilula("Não quer marketing", "aten", { title: "Pediu para não receber mensagens de marketing" }));
-    selos.appendChild(ui.pilula(conv.atribuida ? `Com ${conv.atribuida.nome}` : "Sem dono", conv.atribuida ? "neutra" : "aten", { icone: "usuario" }));
-    if (conv.departamento) selos.appendChild(ui.pilula(conv.departamento.nome, conv.departamento.cor || "neutra"));
-
-    const codeWords = conv.canal?.provedor === "codewords";
+    const provedorCanal = (conv.canal && conv.canal.provedor) || ((A.base && A.base.canais) || []).find(k => k.id === conv.canal_id)?.provedor || "meta";
+    const codeWords = provedorCanal === "codewords";
     const ia = codeWords ? A.iaEstado : null;
+    const dono = conv.atribuida ? `Com ${conv.atribuida.nome}` : conv.atribuida_nome ? `Com ${conv.atribuida_nome}` : "Sem dono";
+    const semDono = dono === "Sem dono";
+    faixa.appendChild(ui.pilula(conv.departamento ? `${dono} · ${conv.departamento.nome}` : dono, semDono && conv.status !== "resolvida" ? "aten" : "neutra",
+      { icone: "usuario", class: "cv-pil-status", title: conv.departamento ? `${dono} · departamento ${conv.departamento.nome}` : dono }));
+    // o aparelho do CodeWords não tem janela de 24 h: nada de «Janela aberta/fechada» nesse canal
+    if (conv.status !== "resolvida" && L.canalTemJanela(provedorCanal)) {
+      const pj = ui.pilula("", jan.nivel === "aberta" ? "ok" : jan.nivel === "acabando" ? "aten" : "ruim",
+        { icone: "relogio", class: "cv-janela", title: jan.ate ? `${jan.texto}. Até ${ui.dataHoraBR(jan.ate)}` : "O cliente ainda não mandou mensagem neste número" });
+      pj.append(h("span", { class: "so-largo-txt" }, jan.texto), h("span", { class: "so-curto-txt" }, L.janelaCurta(jan)));
+      faixa.appendChild(pj);
+    } else if (conv.status === "resolvida") faixa.appendChild(ui.pilula("Resolvida", "neutra", { icone: "check" }));
+    if (conv.status === "pendente") faixa.appendChild(ui.pilula("Pendente", "aten"));
+    if (conv.oculta) faixa.appendChild(ui.pilula("Oculta · contato bloqueado", "ruim", { icone: "alerta" }));
+    if (ct.optin_marketing === false) faixa.appendChild(ui.pilula("Não quer marketing", "aten", { title: "Pediu para não receber mensagens de marketing" }));
     if (codeWords) {
-      let rotuloIA = "Verificando IA…", corIA = "neutra", dicaIA = "";
+      let rotuloIA = "Verificando IA…", curtoIA = "", corIA = "neutra", dicaIA = "";
       if (ia && !ia.ia_ligada) {
         rotuloIA = "IA desligada no canal"; corIA = "neutra";
       } else if (ia?.disponivel === false) {
@@ -159,48 +171,54 @@ export function criarChat(A) {
             try { hora = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date(ia.pausada_ate)); } catch { /* estado continua legível */ }
           }
           rotuloIA = ia.so_manual ? `IA pausada — retorno manual` : `IA pausada até ${hora || "em breve"} — ${autor}`;
+          curtoIA = ia.so_manual ? "IA pausada" : `IA pausada até ${hora || "em breve"}`;
           corIA = "aten";
         } else { rotuloIA = "IA atendendo"; corIA = "ok"; dicaIA = ia.respondendo ? "O CodeWords está respondendo a esta conversa." : "O agente do CodeWords pode responder automaticamente."; }
       }
-      selos.appendChild(ui.pilula(rotuloIA, corIA, { icone: "ia", title: dicaIA }));
+      const pia = ui.pilula("", corIA, { icone: "ia", title: [rotuloIA, dicaIA].filter(Boolean).join(". "), class: "cv-pil-ia" });
+      pia.append(h("span", { class: "so-largo-txt" }, rotuloIA), h("span", { class: "so-curto-txt" }, curtoIA || rotuloIA));
+      faixa.appendChild(pia);
     }
 
-    const acoes = h("div", { class: "cvc-acoes" });
+    // ações: no máximo UM primário por estado (ver L.estadoCabecalho)
     const pode = A.podeEscrever;
-    const minha = conv.atribuida_a && conv.atribuida_a === eu;
-    if (pode && conv.status !== "resolvida" && !minha) {
-      const b = h("button", { type: "button", class: "bt bt-sec bt-p so-largo" }, ui.icone("usuario"), codeWords ? "Atribuir a mim" : "Assumir");
+    const minha = !!(conv.atribuida_a && conv.atribuida_a === eu);
+    const est = L.estadoCabecalho({ conv, eu, pode, codeWords, ia });
+    const acoes = h("div", { class: "cvc-acoes" });
+    if (est.primaria === "assumir_ia") {
+      const b = h("button", { type: "button", class: "bt bt-prim bt-p cvc-ia-acao", title: "Pausar a IA e assumir esta conversa" }, ui.icone("usuario"), "Assumir");
+      b.addEventListener("click", () => A.acoes.assumirIA(b));
+      acoes.appendChild(b);
+    } else if (est.primaria === "assumir") {
+      const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("usuario"), "Assumir");
       b.addEventListener("click", () => A.acoes.assumir(b));
       acoes.appendChild(b);
-    }
-    if (pode && codeWords && conv.status !== "resolvida" && ia?.disponivel && ia.ia_ligada) {
-      const devolver = !!ia.pausada;
-      const bIA = h("button", { type: "button", class: devolver ? "bt bt-sec bt-p cvc-ia-acao" : "bt bt-prim bt-p cvc-ia-acao" },
-        ui.icone(devolver ? "ia" : "usuario"), devolver ? "Devolver para a IA" : "Assumir");
-      bIA.title = devolver ? "Retomar as respostas automáticas nesta conversa" : "Pausar a IA e assumir esta conversa";
-      bIA.addEventListener("click", () => devolver ? A.acoes.devolverIA(bIA) : A.acoes.assumirIA(bIA));
-      acoes.appendChild(bIA);
-    }
-    if (pode) acoes.appendChild(h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Transferir", title: "Transferir",
-      on: { click: () => A.acoes.transferir() } }, A.icone("transferir")));
-    if (pode && conv.status !== "resolvida") {
-      const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("check"), h("span", { class: "rot-longo" }, "Resolver"));
-      b.setAttribute("aria-label", "Resolver atendimento");
-      b.addEventListener("click", () => A.acoes.status("resolvida", b));
+    } else if (est.primaria === "resolver") {
+      const b = h("button", { type: "button", class: "bt bt-p bt-resolver", "aria-label": "Resolver atendimento" }, ui.icone("check"), h("span", { class: "rot-longo" }, "Resolver"));
+      b.addEventListener("click", () => A.acoes.resolver(b));
       acoes.appendChild(b);
-    } else if (pode) {
+    } else if (est.primaria === "reabrir") {
       const b = h("button", { type: "button", class: "bt bt-sec bt-p" }, A.icone("reabrir"), "Reabrir");
       b.addEventListener("click", () => A.acoes.status("aberta", b));
       acoes.appendChild(b);
     }
+    if (pode && est.primaria !== "assumir_ia") acoes.appendChild(h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Transferir", title: "Transferir",
+      on: { click: () => A.acoes.transferir() } }, A.icone("transferir")));
+    if (est.resolverIcone) {
+      const b = h("button", { type: "button", class: "bt-icone so-largo cvc-resolver-ic", "aria-label": "Resolver atendimento", title: "Resolver" }, ui.icone("check"));
+      b.addEventListener("click", () => A.acoes.resolver(b));
+      acoes.appendChild(b);
+    }
     if (A.raiz && A.raiz.dataset.lateral === "gaveta") {
-      acoes.appendChild(h("button", { type: "button", class: "bt-icone", "aria-label": "Detalhes do contato", title: "Detalhes",
+      acoes.appendChild(h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Detalhes do contato", title: "Detalhes",
         on: { click: () => A.acoes.abrirDetalhes() } }, A.icone("lateral")));
     }
-    const mais = h("button", { type: "button", class: "bt-icone", "aria-label": "Mais ações", title: "Mais ações" }, ui.icone("opcoes"));
+    const mais = h("button", { type: "button", class: "bt-icone cvc-mais", "aria-label": "Mais ações", title: "Mais ações" }, ui.icone("opcoes"));
     mais.addEventListener("click", () => {
       const itens = [];
-      if (pode && conv.status !== "resolvida" && !minha) itens.push({ rotulo: "Assumir", icone: "usuario", fn: () => A.acoes.assumir() });
+      if (pode && conv.status !== "resolvida" && est.primaria !== "resolver") itens.push({ rotulo: "Resolver atendimento", icone: "check", fn: () => A.acoes.resolver() });
+      if (pode && conv.status !== "resolvida" && !minha && est.primaria === "assumir_ia") itens.push({ rotulo: "Atribuir a mim (sem pausar a IA)", icone: "usuario", fn: () => A.acoes.assumir() });
+      if (pode && est.devolverIA) itens.push({ rotulo: "Devolver para a IA", icone: "ia", fn: () => A.acoes.devolverIA() });
       if (pode) itens.push({ rotulo: "Transferir…", icone: "seta-dir", fn: () => A.acoes.transferir() });
       if (pode && conv.status === "aberta") itens.push({ rotulo: "Marcar como pendente", icone: "relogio", fn: () => A.acoes.status("pendente") });
       if (pode && conv.status === "pendente") itens.push({ rotulo: "Retomar (aberta)", icone: "chat", fn: () => A.acoes.status("aberta") });
@@ -213,6 +231,9 @@ export function criarChat(A) {
       if (ct.telefone) itens.push({ rotulo: "Copiar telefone", icone: "copiar", fn: () => ui.copiar(ct.telefone, { aviso: "Telefone copiado." }) });
       itens.push({ rotulo: "Abrir ficha", icone: "contato", fn: () => A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }) });
       if (A.raiz && A.raiz.dataset.lateral === "gaveta") itens.push({ rotulo: "Detalhes e negócios", icone: "info", fn: () => A.acoes.abrirDetalhes() });
+      if (pode) itens.push({ rotulo: A.acoes.avancarAoResolver() ? "Ao resolver, abrir a próxima: ligado" : "Ao resolver, abrir a próxima: desligado",
+        icone: A.acoes.avancarAoResolver() ? "check" : "seta-dir", fn: () => A.acoes.definirAvancar(!A.acoes.avancarAoResolver()) });
+      itens.push({ rotulo: "Atalhos de teclado", icone: "info", fn: () => A.acoes.abrirAjudaTeclado() });
       if (A.acoes.pode("supervisor")) {
         itens.push("-");
         itens.push(conv.oculta
@@ -223,6 +244,15 @@ export function criarChat(A) {
     });
     acoes.appendChild(mais);
     cab.append(voltar, quem, acoes);
+  }
+
+  /** O mesmo estado que decide o botão principal do cabeçalho (assumir / assumir IA / resolver / reabrir): o teclado usa a mesma regra. */
+  function estadoAcoes() {
+    const conv = A.ver && A.ver.conversa;
+    if (!conv) return null;
+    const prov = (conv.canal && conv.canal.provedor) || ((A.base && A.base.canais) || []).find(k => k.id === conv.canal_id)?.provedor || "meta";
+    const codeWords = prov === "codewords";
+    return L.estadoCabecalho({ conv, eu: A.eu && A.eu.id, pode: A.podeEscrever, codeWords, ia: codeWords ? A.iaEstado : null });
   }
 
   function abrirEtiquetas() {
@@ -304,7 +334,7 @@ export function criarChat(A) {
       }
     }
     if (m.tipo === "imagem" || m.tipo === "sticker") {
-      const img = h("img", { src: url, alt: m.tipo === "sticker" ? "Figurinha" : (m.direcao === "in" ? "Foto recebida" : "Foto enviada"), loading: "lazy", decoding: "async" });
+      const img = h("img", { on: { load: aposMidiaCarregar }, src: url, alt: m.tipo === "sticker" ? "Figurinha" : (m.direcao === "in" ? "Foto recebida" : "Foto enviada"), loading: "lazy", decoding: "async" });
       aoFalharMidia(img, md.path);
       if (m.tipo === "sticker") return h("div", { class: "cv-midia cv-sticker" }, img);
       return h("div", { class: "cv-midia" }, h("button", { type: "button", class: "cv-img-bt", "aria-label": "Ampliar foto", on: { click: () => lupa(url, nome) } }, img));
@@ -315,6 +345,18 @@ export function criarChat(A) {
       h("span", { class: "cv-doc-ic", "aria-hidden": "true" }, extensao(nome, md.mime)),
       h("span", { class: "cv-doc-txt" }, h("b", null, nome || "Documento"), h("small", null, [L.tamanhoLegivel(md.tamanho), local ? "enviando…" : "Baixar"].filter(Boolean).join(" · "))));
     return doc;
+  }
+
+  /** Barra de progresso do envio de arquivo (bolha local): "62 %", Cancelar enquanto sobe e "Entregando…" quando já subiu. */
+  function blocoProgresso(m) {
+    const md = m.midia || {};
+    const pct = Math.max(0, Math.min(100, Number(md.progresso) || 0));
+    const entregando = md.fase === "entregando";
+    const cancelavel = !entregando && A.acoes.podeCancelarEnvio(m);
+    return h("div", { class: "cv-prog", role: "progressbar", "aria-label": "Enviando arquivo", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct) },
+      h("span", { class: "cv-prog-barra", "aria-hidden": "true" }, h("i", { style: { width: `${pct}%` } })),
+      h("span", { class: "cv-prog-txt dado" }, entregando ? "Entregando…" : `${pct} %`),
+      cancelavel ? h("button", { type: "button", class: "bt bt-fant bt-p cv-prog-cancel", on: { click: () => A.acoes.cancelarEnvio(m) } }, "Cancelar") : null);
   }
 
   function rodape(m) {
@@ -362,6 +404,7 @@ export function criarChat(A) {
       bolha.appendChild(cita);
     }
     if (["imagem", "video", "audio", "documento", "sticker"].includes(m.tipo)) bolha.appendChild(blocoMidia(m));
+    if (m.local && m.status === "pendente" && m.midia && m.midia.estado === "enviando") bolha.appendChild(blocoProgresso(m));
     const texto = m.tipo === "desconhecido" ? (m.corpo || "Mensagem não suportada pela API do WhatsApp — veja no celular") : m.corpo;
     if (texto) {
       const t = h("div", { class: ["cv-texto", m.tipo === "desconhecido" && "cv-texto-fraco"] }, textoFormatado(texto));
@@ -377,6 +420,17 @@ export function criarChat(A) {
       box.appendChild(h("button", { type: "button", class: "bt-icone cv-responder", "aria-label": "Responder a esta mensagem", title: "Responder",
         on: { click: () => A.composer.responder(m) } }, A.icone("responder")));
     }
+    // M36: a fila de saída — "Na fila", "tentando de novo" (prazo estourado: o servidor não deixa sair em dobro) e a falha definitiva logo abaixo
+    if (m.local && (m.filaEstado === "fila" || m.filaEstado === "incerto")) {
+      // o texto diz o motivo REAL (internet, servidor ocupado, sessão) e a hora da próxima tentativa: a pessoa não procura problema no próprio wifi
+      const fila = h("div", { class: "cv-fila", role: "status" },
+        h("span", { class: "cv-fila-t" }, ui.icone("relogio"), L.textoFila({ estado: m.filaEstado, motivo: m.erro, proxima: m.filaProxima })));
+      if (m.filaEstado === "fila" && A.podeEscrever) {
+        fila.append(h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.enviarAgora(m) } }, "Enviar agora"),
+          h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.cancelarFila(m) } }, "Cancelar"));
+      }
+      box.appendChild(fila);
+    }
     const ambigua = m.ambigua === true || (m.status === "pendente" && /^status incerto:/i.test(String(m.erro || "")));
     if (m.status === "falhou" || (m.status === "pendente" && ambigua)) {
       const erro = ambigua
@@ -386,11 +440,17 @@ export function criarChat(A) {
         h("b", null, ambigua ? "Status incerto: " : "Não enviada: "), erro));
       if (ambigua) {
         falha.classList.add("cv-falha-ambigua");
+        // item da fila em dúvida (o servidor não tem a mensagem gravada): nunca sai sozinho; depois de conferir no WhatsApp, a pessoa decide
+        if (m.local && m.ref && m.filaEstado === "ambigua" && A.podeEscrever) {
+          falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarLocal(m) } }, "Enviar de novo"),
+            h("button", { type: "button", class: "bt bt-fant", on: { click: () => A.acoes.descartarLocal(m) } }, "Descartar"));
+        }
       } else if (m.falhaLocal && m.pedido) {
         falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarLocal(m) } }, "Tentar de novo"),
           h("button", { type: "button", class: "bt bt-fant", on: { click: () => A.acoes.descartarLocal(m) } }, "Descartar"));
-      } else if (A.podeEscrever && m.tipo === "texto" && m.corpo) {
-        falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.enviar({ tipo: "texto", texto: m.corpo }) } }, "Tentar de novo"));
+      } else if (A.podeEscrever && m.tipo === "texto" && m.corpo && !A.acoes.foiReenviada(m)) {
+        // falha gravada pelo servidor: pede o reenvio da PRÓPRIA mensagem (o texto gravado já tem a assinatura; como texto novo ela sairia em dobro)
+        falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarGravada(m) } }, "Tentar de novo"));
       }
       box.appendChild(falha);
     }
@@ -401,7 +461,7 @@ export function criarChat(A) {
     const m = ln.msg;
     const md = m.midia || {};
     const urlOk = md.path ? A.acoes.estadoMidia(md.path) : "";
-    return [m.atualizado_em, m.status, m.erro, m.ambigua, m.origem, m.reacao, ln.junta, md.estado, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
+    return [m.atualizado_em, m.status, m.erro, m.ambigua, m.filaEstado, m.filaProxima, !m.local && m.status === "falhou" && A.acoes.foiReenviada(m) ? 1 : 0, m.origem, m.reacao, ln.junta, md.estado, md.progresso, md.fase, m.local && A.acoes.podeCancelarEnvio(m) ? 1 : 0, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
       m.responde_a && m.responde_a.id, m.enviado_por && m.enviado_por.nome].join("|");
   }
 
@@ -436,6 +496,7 @@ export function criarChat(A) {
       let x = cache.get(chave);
       if (!x || x.sig !== sig) {
         const novo = construirLinha(ln);
+        if (!x && ultimoRenderId !== null && ln.tipo === "msg") novo.classList.add("entra");
         if (x && x.el.isConnected) x.el.replaceWith(novo);
         x = { el: novo, sig };
         cache.set(chave, x);
@@ -452,6 +513,7 @@ export function criarChat(A) {
     }
     renderTopo();
     const ult = A.L.ultimoId(A.msgs);
+    if (rolar === "fim" || (rolar === "novas" && estavaNoFim)) grudarFimAte = Date.now() + 2500;
     if (rolar === "fim") requestAnimationFrame(() => rolarFim(false));
     else if (rolar === "anterior") msgs.scrollTop = topoAntes + (msgs.scrollHeight - alturaAntes);
     else if (rolar === "novas") {
@@ -484,7 +546,7 @@ export function criarChat(A) {
 
   return {
     el, mostrarVazio, mostrarCarregando, mostrarErro, renderCabecalho, renderMensagens, renderTudo, renderTopo, destacar,
-    noFim, rolarFim,
+    noFim, rolarFim, estadoAcoes,
     focarMensagens() { try { msgs.focus({ preventScroll: true }); } catch { /* ok */ } },
   };
 }

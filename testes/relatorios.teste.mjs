@@ -173,6 +173,7 @@ await teste("radar: episódios do núcleo + registro do servidor com ✓/✓✓/
   assert.equal(R.registro[1].envio.k, "erro"); assert.equal(R.registro[1].envio.tique, "!");
   assert.deepEqual(L.estadoIntegracao(integracoes, alertas, agora), puroPainel.estadoIntegracao(integracoes, alertas, agora));
   assert.equal(L.textoPilula(L.estadoIntegracao(integracoes, alertas, agora)), "Meta desconectado");
+  assert.equal(L.textoQueda(L.estadoIntegracao(integracoes, alertas, agora).erros), "Meta desconectado · dados até 27/09 05:00.");
 });
 
 await teste("statusEnvio, canalDe, nomeRegraSrv e eixoTopo = os do painel", () => {
@@ -586,6 +587,611 @@ await teste("segurança e tokens: sem innerHTML, sem on*= inline, sem hex de cor
     assert.ok(!/ease-in(?!-out)/.test(css), `${f}: ease-in`);
     assert.match(css, /prefers-reduced-motion/, `${f}: movimento reduzido`);
   }
+});
+
+/* ============================================================ M38 — números que cabem e moeda editorial */
+console.log("\n(f) M38 — números que cabem e moeda editorial");
+
+await teste("M38: partesMoeda/textoMoeda — arredonda, separa milhar, sinal de menos, vazio vira «—»", () => {
+  assert.deepEqual(L.partesMoeda(28400, { centavos: false }), { neg: "", rs: "R$", inteiro: "28.400", cent: "" });
+  assert.deepEqual(L.partesMoeda(3155.56, { centavos: false }), { neg: "", rs: "R$", inteiro: "3.156", cent: "" }, "sem centavos arredonda");
+  assert.deepEqual(L.partesMoeda(3.4), { neg: "", rs: "R$", inteiro: "3", cent: ",40" }, "centavos por padrão");
+  assert.deepEqual(L.partesMoeda(1234567.891), { neg: "", rs: "R$", inteiro: "1.234.567", cent: ",89" });
+  assert.equal(L.partesMoeda(-1.5).neg, "−");
+  assert.equal(L.partesMoeda(-0.001).neg, "", "−0 não aparece");
+  assert.equal(L.partesMoeda(null), null);
+  assert.equal(L.partesMoeda(""), null);
+  assert.equal(L.partesMoeda("abc"), null);
+  assert.equal(L.textoMoeda(28400, { centavos: false }), "R$ 28.400");
+  assert.equal(L.textoMoeda(-1.5), "−R$ 1,50");
+  assert.equal(L.textoMoeda(undefined), "—");
+});
+
+await teste("M38: preencherMoeda monta R$ e centavos em spans (60 % pelo CSS) só com nós de texto/elementos", () => {
+  // DOM de mentira mínimo: o que o preencherMoeda usa (limpar, h, classList, append, textContent)
+  const no = (tag, cls) => ({ tag, cls, filhos: [], append(...x) { this.filhos.push(...x); }, classList: { add() {} }, set textContent(v) { this.filhos = [String(v)]; } });
+  const ui = { limpar: el => { el.filhos = []; }, h: (tag, a, ...f) => { const n = no(tag, a && a.class); n.append(...f); return n; } };
+  const el = no("b");
+  L.preencherMoeda(ui, el, 28400.5, { centavos: true });
+  assert.deepEqual(el.filhos.map(x => (typeof x === "string" ? x : `${x.cls}:${x.filhos.join("")}`)), ["nm-rs:R$", "28.400", "nm-cent:,50"]);
+  L.preencherMoeda(ui, el, 950, { centavos: false });
+  assert.deepEqual(el.filhos.map(x => (typeof x === "string" ? x : `${x.cls}:${x.filhos.join("")}`)), ["nm-rs:R$", "950"]);
+  L.preencherMoeda(ui, el, null);
+  assert.deepEqual(el.filhos, ["—"]);
+});
+
+await teste("M38: CSS — o número encolhe pela largura do CARTÃO (container query), 6 KPIs só em uma linha quando cabem e nada de 6 colunas fixas", () => {
+  const css = ler("web/app/relatorios.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(css, /\.rel-corpo \{[^}]*container: relcorpo \/ inline-size/, "a área do relatório é container");
+  assert.match(css, /\.rel-kpi \{[^}]*container-type: inline-size/, "o cartão de KPI é container");
+  assert.match(css, /\.rel-kpi-v \{[^}]*font-size: clamp\(var\(--fs-h2\), 11cqi, var\(--fs-num-l\)\)/, "tamanho por cqi, só com tokens");
+  assert.match(css, /@container relcorpo \(min-width: 62rem\) \{ \.rel-kpis-6 \{ grid-template-columns: repeat\(6, minmax\(0, 1fr\)\); \} \}/, "6 em uma linha só com 62 rem ou mais");
+  assert.match(css, /@container relcorpo \(min-width: 31rem\) \{ \.rel-kpis-6 \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\); \} \}/);
+  assert.doesNotMatch(css, /\n\.rel-kpis-6 \{ grid-template-columns: repeat\(6/, "sem 6 colunas fixas fora da container query");
+  assert.match(css, /\.ini-numero \{\s*container-type: inline-size;/, "o bloco de número do Início também é container");
+  assert.match(css, /\.ini-n \{[^}]*font-size: clamp\(var\(--fs-h2\), 16cqi, var\(--fs-num-l\)\)/);
+  assert.match(css, /\.rel-num \{[^}]*font-variant-numeric: tabular-nums/, "números tabulares");
+  assert.match(css, /\.rel-tabela \.num \{ text-align: right; white-space: nowrap; \}/, "coluna numérica à direita");
+});
+
+await teste("M38: Início, Anúncios e Relatórios montam dinheiro com contarMoeda/preencherMoeda (nunca innerHTML)", () => {
+  assert.match(ler("web/app/relatorios.js"), /k\.fmt === "brl0"\) L\.contarMoeda\(ui, G, b, vv, \{ centavos: false \}\)/);
+  assert.match(ler("web/app/anuncios.js"), /fmt === N\.brl \|\| fmt === N\.brl0\) L\.contarMoeda\(ui, G, b, valor, \{ centavos: fmt === N\.brl \}\)/);
+  const ini = ler("web/app/inicio.js");
+  assert.match(ini, /fmt === brl0\) L\.preencherMoeda\(ui, b, valor, \{ centavos: false \}\)/, "valor final já na tela");
+  assert.match(ini, /fmt === brl0 \? L\.contarMoeda\(ui, G, b, valor, \{ centavos: false \}\) : G\.contar\(b, valor, fmt\)/, "o contador começa depois de o esqueleto sair");
+  assert.match(ini, /L\.preencherMoeda\(ui, h\("b", \{ class: "ini-barra-v rel-num" \}\), v, \{ centavos: false \}\)/);
+});
+
+await teste("M38 (navegador): nenhum número passa do cartão em 768, 1024, 1180, 1280 e 1440 px — roda com ORBITA_QA_NAVEGADOR=1 (puppeteer-core + Chrome; ORBITA_PUPPETEER aponta a pasta node_modules)", async () => {
+  if (process.env.ORBITA_QA_NAVEGADOR !== "1") { console.log("      (pulado: defina ORBITA_QA_NAVEGADOR=1 para abrir o Chrome)"); return; }
+  const { createRequire } = await import("node:module");
+  const { spawn } = await import("node:child_process");
+  const req = createRequire(join(process.env.ORBITA_PUPPETEER || RAIZ, "x.js"));
+  const puppeteer = req("puppeteer-core");
+  const chrome = process.env.ORBITA_CHROME || ["C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/google-chrome", "/usr/bin/chromium"].find(existsSync);
+  assert.ok(chrome, "Chrome não encontrado (ORBITA_CHROME)");
+  const porta = 4900 + Math.floor(Math.random() * 90);
+  const srv = spawn(process.execPath, [join(RAIZ, "scripts", "dev-falso.mjs")], { env: { ...process.env, ORBITA_DEV_FALSO_PORT: String(porta) }, stdio: "ignore", windowsHide: true });
+  try {
+    await new Promise(r => setTimeout(r, 1800));
+    const browser = await puppeteer.launch({ executablePath: chrome, headless: "new", args: ["--no-sandbox", "--disable-gpu"] });
+    const fora = [];
+    try {
+      for (const w of [768, 1024, 1180, 1280, 1440]) {
+        const page = await browser.newPage();
+        await page.setViewport({ width: w, height: 900 });
+        await page.goto(`http://127.0.0.1:${porta}/app/?dev-falso=1&dev=1#/inicio`, { waitUntil: "domcontentloaded" });
+        for (const rota of ["#/inicio", "#/relatorios/vendas", "#/relatorios/atendimento", "#/anuncios"]) {
+          await page.evaluate(h => { location.hash = h; }, rota);
+          await new Promise(r => setTimeout(r, 2400));
+          const r = await page.evaluate(() => [...document.querySelectorAll(".rel-num, .rel-kpi-v, .ini-n")].filter(el => el.offsetParent).flatMap(el => {
+            const caixa = el.closest(".rel-kpi, .ini-numero, .ads-passo, .ads-conta, .rel-cartao") || el.parentElement;
+            const rg = document.createRange(); rg.selectNodeContents(el);
+            const t = rg.getBoundingClientRect(), c = caixa.getBoundingClientRect();
+            return t.right > c.right + 0.5 || (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) ? [(el.textContent || "").trim().slice(0, 20)] : [];
+          }));
+          for (const t of r) fora.push(`${w}px ${rota}: «${t}»`);
+        }
+        await page.close();
+      }
+    } finally { await browser.close(); }
+    assert.deepEqual(fora, [], "número passando do cartão");
+  } finally { srv.kill(); }
+});
+
+/* ============================================================ M31 — Início que diz o que importa agora */
+console.log("\n(g) M31 — manchete do Início");
+
+const LINKS = { conversas: "#/conversas?aba=aguardando", tarefas: "#/tarefas?aba=atrasadas", agenda: "#/agenda", crm: "#/crm" };
+const VOC = { contato: "paciente", contatos: "pacientes", negocio: "oportunidade", negocios: "oportunidades", feminino: true };
+const base = (o = {}) => ({ hoje: "2026-10-01",
+  conversas: { aguardando: 0, sem_dono: 0, minhas: 0, abertas: 0, espera_mais_antiga_min: null },
+  tarefas: { hoje: 0, atrasadas: 0, abertas: 0 }, negocios: { abertos: 0, valor_aberto: 0, ganhos_mes: 0 }, leads: { hoje: 0, semana: 0 }, canais: [{ nome: "n", status: "ativo", ultima_entrada_em: new Date().toISOString() }], ...o });
+const agendaCom = n => ({ consultas: Array.from({ length: n }, (_, i) => ({ negocio_id: i, inicio: `2026-10-01T${String(9 + i).padStart(2, "0")}:00:00-03:00`, status: "aberto" })) });
+
+await teste("M31: manchete — a frase do exemplo (muitos, singular/plural, com agenda e dinheiro em aberto)", () => {
+  const d = base({ conversas: { aguardando: 2, espera_mais_antiga_min: 15 }, negocios: { abertos: 3, valor_aberto: 5200 } });
+  const m = L.manchete(d, { agenda: agendaCom(1), voc: { ...VOC, contato: "cliente", contatos: "clientes", negocio: "orçamento", negocios: "orçamentos", feminino: false }, links: LINKS });
+  assert.equal(m.texto, "2 clientes esperam resposta há 15 min. Hoje tem 1 consulta e R$ 5.200 em orçamentos abertos.");
+  assert.equal(m.pendencia, true); assert.equal(m.urgente, true); assert.equal(m.contexto, true);
+  // singular: 1 cliente espera; 1 consulta; 1 oportunidade aberta
+  const s = L.manchete(base({ conversas: { aguardando: 1, espera_mais_antiga_min: 3 }, negocios: { abertos: 1, valor_aberto: 950 } }), { agenda: agendaCom(1), voc: VOC, links: LINKS });
+  assert.equal(s.texto, "1 paciente espera resposta há 3 min. Hoje tem 1 consulta e R$ 950 em oportunidade aberta.");
+  // plural de consulta e feminino
+  const p = L.manchete(base({ negocios: { abertos: 4, valor_aberto: 12950 } }), { agenda: agendaCom(3), voc: VOC, links: LINKS });
+  assert.match(p.texto, /Hoje tem 3 consultas e R\$ 12\.950 em oportunidades abertas\./);
+});
+
+await teste("M31: manchete — zero (tudo em dia), só tarefas atrasadas, as duas urgências juntas e a espera de horas", () => {
+  const zero = L.manchete(base(), { agenda: null, voc: VOC, links: LINKS });
+  assert.equal(zero.texto, "Tudo em dia."); assert.equal(zero.pendencia, false); assert.equal(zero.urgente, false);
+  // sem pendência mas com contexto: a manchete só fala do dia e o selo "Tudo em dia." aparece embaixo
+  const dia = L.manchete(base({ negocios: { abertos: 2, valor_aberto: 3000 } }), { agenda: agendaCom(2), voc: VOC, links: LINKS });
+  assert.equal(dia.texto, "Hoje tem 2 consultas e R$ 3.000 em oportunidades abertas."); assert.equal(dia.pendencia, false);
+  const so = L.manchete(base({ tarefas: { hoje: 1, atrasadas: 3 } }), { voc: VOC, links: LINKS });
+  assert.equal(so.texto, "3 tarefas atrasadas."); assert.equal(so.pendencia, true);
+  assert.equal(L.manchete(base({ tarefas: { atrasadas: 1 } }), { voc: VOC, links: LINKS }).texto, "1 tarefa atrasada.");
+  const duas = L.manchete(base({ conversas: { aguardando: 1, espera_mais_antiga_min: 120 }, tarefas: { atrasadas: 2 } }), { voc: VOC, links: LINKS });
+  assert.equal(duas.texto, "1 paciente espera resposta há 2 h e 2 tarefas atrasadas.");
+  // tarefa para hoje ou conversa sem dono é pendência (o selo "tudo em dia" não aparece), mas não entra na frase
+  assert.equal(L.manchete(base({ tarefas: { hoje: 2 } }), { voc: VOC }).pendencia, true);
+  assert.equal(L.manchete(base({ conversas: { sem_dono: 1 } }), { voc: VOC }).pendencia, true);
+  assert.equal(L.manchete(null, {}).texto, "Tudo em dia.", "sem dado nenhum não quebra");
+});
+
+await teste("M31: manchete — sem dado de agenda a frase não fala de consulta; dinheiro só com negócio aberto", () => {
+  const d = base({ negocios: { abertos: 2, valor_aberto: 4000 } });
+  assert.equal(L.manchete(d, { agenda: null, voc: VOC }).texto, "R$ 4.000 em oportunidades abertas.", "sem agenda: só o dinheiro");
+  assert.equal(L.manchete(d, { agenda: { consultas: [] }, voc: VOC }).texto, "R$ 4.000 em oportunidades abertas.", "agenda vazia: nada de «0 consultas»");
+  assert.equal(L.manchete(base({ negocios: { abertos: 0, valor_aberto: 0 } }), { agenda: agendaCom(1), voc: VOC }).texto, "Hoje tem 1 consulta.");
+  assert.equal(L.manchete(base({ negocios: { abertos: 2, valor_aberto: 0 } }), { voc: VOC }).texto, "Tudo em dia.", "valor zerado não vira «R$ 0»");
+  // consulta cancelada ou de outro dia não conta
+  const ag = { consultas: [{ inicio: "2026-10-01T10:00:00-03:00", status: "cancelada" }, { inicio: "2026-10-02T10:00:00-03:00", status: "aberto" }, { inicio: "2026-10-01T15:00:00-03:00", status: "aberto" }] };
+  assert.equal(L.consultasHoje(ag, "2026-10-01"), 1);
+  assert.equal(L.consultasHoje(null, "2026-10-01"), null);
+  assert.equal(L.consultasHoje({}, "2026-10-01"), null);
+});
+
+await teste("M31: manchete — cada trecho é link (conversas, tarefas, agenda, CRM) e sem permissão vira texto; o verbo vai em .narr e o número no acento", () => {
+  const d = base({ conversas: { aguardando: 2, espera_mais_antiga_min: 15 }, tarefas: { atrasadas: 1 }, negocios: { abertos: 1, valor_aberto: 900 } });
+  const m = L.manchete(d, { agenda: agendaCom(1), voc: VOC, links: LINKS });
+  const nos = m.frases.flat().filter(n => n.t === "link");
+  assert.deepEqual(nos.map(n => n.href), [LINKS.conversas, LINKS.tarefas, LINKS.agenda, LINKS.crm]);
+  assert.equal(nos[0].partes.find(p => p.t === "narr").v, "pacientes esperam resposta", "o verbo de ação é a voz narrativa");
+  assert.equal(nos[0].partes.find(p => p.t === "n").v, "2");
+  assert.equal(nos[1].tom, "ruim", "tarefa atrasada no tom de erro");
+  assert.deepEqual(nos[3].partes, [{ t: "moeda", v: 900 }]);
+  const sem = L.manchete(d, { agenda: agendaCom(1), voc: VOC, links: { conversas: null, tarefas: null, agenda: null, crm: null } });
+  assert.deepEqual(sem.frases.flat().filter(n => n.t === "link").map(n => n.href), [null, null, null, null], "sem permissão: sem href");
+  assert.equal(sem.texto, m.texto, "o texto é o mesmo com ou sem link");
+});
+
+await teste("M31: blocosInicio — atendimento, tarefas e número com problema abertos nessa ordem; leads sempre recolhido; sem ação, só vendas aberto", () => {
+  const ocupado = L.blocosInicio(base({ conversas: { aguardando: 1 }, tarefas: { atrasadas: 1 }, negocios: { abertos: 2 }, canais: [{ nome: "n", status: "erro" }] }));
+  assert.deepEqual(ocupado.abertos, ["atendimento", "tarefas", "numeros", "vendas"]);
+  assert.deepEqual(ocupado.recolhidos, ["leads"]);
+  const calmo = L.blocosInicio(base({ negocios: { abertos: 2 } }));
+  assert.deepEqual(calmo.abertos, ["vendas"]);
+  assert.deepEqual(calmo.recolhidos.sort(), ["atendimento", "leads", "numeros", "tarefas"]);
+  assert.ok(L.blocosInicio(base({ canais: [] })).abertos.includes("numeros"), "sem número conectado é ação");
+  assert.ok(L.blocosInicio(base({ conversas: { sem_dono: 2 } })).abertos.includes("atendimento"), "conversa sem dono pede ação");
+  assert.ok(!L.blocosInicio(base()).abertos.includes("vendas"), "sem nada em vendas, vendas também recolhe");
+});
+
+await teste("M31: numerosMudaram aponta só o que mudou (para G.destacar); campo ausente não conta", () => {
+  const a = base({ conversas: { aguardando: 2, abertas: 3 }, negocios: { abertos: 3, valor_aberto: 5000 } });
+  const b = base({ conversas: { aguardando: 3, abertas: 3 }, negocios: { abertos: 3, valor_aberto: 5200 } });
+  assert.deepEqual(L.numerosMudaram(a, b).sort(), ["conversas.aguardando", "negocios.valor_aberto"]);
+  assert.deepEqual(L.numerosMudaram(a, a), []);
+  assert.deepEqual(L.numerosMudaram(null, b), []);
+  assert.deepEqual(L.numerosMudaram({ conversas: {} }, { conversas: { aguardando: 4 } }), [], "sem valor antigo não pisca");
+});
+
+await teste("M31: inicio.js — esqueleto até chegar o dado, manchete por ui.cabecalho, cartões só com ação, «Mais detalhes» recolhido, G.destacar e agenda opcional", () => {
+  const s = ler("web/app/inicio.js");
+  assert.match(s, /raiz\.append\(ui\.esqueleto\("inicio"\)\)/, "esqueleto na entrada");
+  assert.match(s, /ui\.trocarEsqueleto\(raiz, \[cab, corpo\]\)/, "o esqueleto só sai quando há dado");
+  assert.match(s, /ui\.cabecalho\(\{ rotulo:/, "cabeçalho pelo componente do contrato");
+  assert.match(s, /L\.manchete\(d, \{ agenda, links/);
+  assert.match(s, /L\.blocosInicio\(d\)/);
+  assert.match(s, /h\("details", \{ class: "ini-mais"/, "o que não pede ação fica recolhido");
+  assert.match(s, /ui\.vazio\(\{ tipo: "em_dia", titulo: "Tudo em dia\."/);
+  assert.match(s, /G\.destacar\(el\)/, "número que mudou acende");
+  assert.match(s, /"nx_inicio", \{\}, \{ cache: true, aoCache \}/, "último dado pelo cache do shell");
+  assert.match(s, /nx_agenda_dia[\s\S]{0,120}catch \{ return null; \}/, "a agenda é complemento: se falhar a frase só não fala de consulta");
+  assert.doesNotMatch(s, /innerHTML/);
+});
+
+/* ============================================================ M32 — checklist "Deixe o Órbita pronto" */
+console.log("\n(h) M32 — checklist de configuração");
+
+const ESTADO_NOVO = () => ({ total: 11, feitos: 0, itens: L.ONBOARDING_ITENS.map(i => ({ id: i.id, rotulo: i.rotulo, feito: false, opcional: !!i.opcional })) });
+const ESTADO_FEITOS = ids => { const e = ESTADO_NOVO(); for (const i of e.itens) if (ids.includes(i.id)) i.feito = true; return e; };
+const TODOS_OBRIG = L.ONBOARDING_ITENS.filter(i => !i.opcional).map(i => i.id);
+
+await teste("M32: os 11 itens na ordem recomendada e o mapeamento item → rota (1-5 abrem o assistente do número; os demais, a seção exata)", () => {
+  assert.deepEqual(L.ONBOARDING_ITENS.map(i => i.id), ["chave_codewords", "aparelho_pareado", "recebimento", "ia_ou_direto", "mensagem_teste",
+    "departamento_horario", "agenda_faixas", "script_site", "colega_convidado", "funil_ajustado", "anuncios_ligados"]);
+  for (const id of ["chave_codewords", "aparelho_pareado", "recebimento", "ia_ou_direto", "mensagem_teste"])
+    assert.equal(L.rotaOnboarding({ id }), "#/config/numeros?assistente=novo", `${id}: sem canal apontado → assistente de um número novo/pendente`);
+  assert.equal(L.rotaOnboarding({ id: "recebimento", canal_id: "abc-123" }), "#/config/numeros?assistente=abc-123", "o servidor aponta o número que pede ação");
+  assert.equal(L.rotaOnboarding({ id: "departamento_horario" }), "#/config/departamentos");
+  assert.equal(L.rotaOnboarding({ id: "agenda_faixas" }), "#/config/agenda");
+  assert.equal(L.rotaOnboarding({ id: "script_site" }), "#/config/rastreio");
+  assert.equal(L.rotaOnboarding({ id: "colega_convidado" }), "#/config/usuarios");
+  assert.equal(L.rotaOnboarding({ id: "funil_ajustado" }), "#/config/funis");
+  assert.equal(L.rotaOnboarding({ id: "anuncios_ligados" }), "#/config/anuncios");
+  assert.equal(L.rotaOnboarding({ id: "inexistente" }), "#/config");
+  // toda rota aponta uma seção que existe nas Configurações (a lista pronta do prontos.js)
+  const prontos = readFileSync(join(WEB, "app", "prontos.js"), "utf8");
+  for (const i of L.ONBOARDING_ITENS) assert.match(prontos, new RegExp(`"${i.secao}"`), `seção «${i.secao}» existe em CONFIG_PRONTAS`);
+});
+
+await teste("M32: resumoOnboarding — 0/9 (novo), parcial, 100 % some, opcional não conta, só admin, dispensar por 7 dias e «Já está bom»", () => {
+  const AG = 1_000_000_000_000;
+  let r = L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG });
+  assert.equal(r.total, 11); assert.equal(r.obrigatorios, 9, "site e anúncios são opcionais: 9 obrigatórios de 11"); assert.equal(r.feitos, 0); assert.equal(r.pct, 0); assert.equal(r.completo, false);
+  assert.equal(r.pendentes.length, 11); assert.equal(r.proximo.id, "chave_codewords");
+  // parcial: 6 de 9 obrigatórios = 67 %
+  r = L.resumoOnboarding(ESTADO_FEITOS(TODOS_OBRIG.slice(0, 6)), { admin: true, agora: AG });
+  assert.equal(r.obrigFeitos, 6); assert.equal(r.pct, 67); assert.equal(r.proximo.id, "agenda_faixas", "o próximo é o 1º obrigatório pendente (o 7º da ordem)");
+  // os 9 obrigatórios prontos (sem site nem anúncios): 100 % → o cartão some
+  assert.equal(L.resumoOnboarding(ESTADO_FEITOS(TODOS_OBRIG), { admin: true, agora: AG }), null);
+  assert.equal(L.resumoOnboarding(ESTADO_FEITOS([...TODOS_OBRIG, "anuncios_ligados"]), { admin: true, agora: AG }), null);
+  // só admin
+  assert.equal(L.resumoOnboarding(ESTADO_NOVO(), { admin: false, agora: AG }), null);
+  assert.equal(L.resumoOnboarding(null, { admin: true }), null);
+  assert.equal(L.resumoOnboarding({ itens: [] }, { admin: true }), null);
+  // dispensar por 7 dias: some até a data e volta depois
+  const ate = L.dispensarOnboardingAte(AG);
+  assert.equal(ate - AG, 7 * 86400000);
+  assert.equal(L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG + 3 * 86400000, dispensadoAte: ate }), null);
+  assert.notEqual(L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: ate + 1, dispensadoAte: ate }), null, "passados os 7 dias o cartão volta");
+  // "Já está bom" conta como feito neste aparelho (e é marcado como pulado)
+  r = L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG, pulados: ["funil_ajustado", "agenda_faixas"] });
+  assert.equal(r.obrigFeitos, 2); assert.equal(r.itens.find(i => i.id === "funil_ajustado").pulado, true);
+  // um item que o servidor já deu como feito não vira "pulado"
+  assert.equal(L.resumoOnboarding(ESTADO_FEITOS(["funil_ajustado"]), { admin: true, agora: AG, pulados: ["funil_ajustado"] }).itens.find(i => i.id === "funil_ajustado").pulado, false);
+  // o servidor manda só alguns ids (versão antiga): o resto simplesmente não aparece
+  r = L.resumoOnboarding({ itens: [{ id: "chave_codewords", feito: false }, { id: "desconhecido", feito: false }] }, { admin: true, agora: AG });
+  assert.deepEqual(r.itens.map(i => i.id), ["chave_codewords"]);
+  assert.equal(r.itens[0].rota, "#/config/numeros?assistente=novo");
+});
+
+await teste("M32: pendenciasConfig — o número do ponto em cada seção do menu (obrigatórios pendentes, sem os já pulados nem o opcional)", () => {
+  assert.deepEqual(L.pendenciasConfig(ESTADO_NOVO()), { numeros: 5, departamentos: 1, agenda: 1, usuarios: 1, funis: 1 }, "site e anúncios são opcionais: sem ponto");
+  assert.deepEqual(L.pendenciasConfig(ESTADO_FEITOS(["chave_codewords", "aparelho_pareado", "recebimento"])), { numeros: 2, departamentos: 1, agenda: 1, usuarios: 1, funis: 1 });
+  assert.deepEqual(L.pendenciasConfig(ESTADO_NOVO(), { pulados: ["funil_ajustado", "colega_convidado"] }), { numeros: 5, departamentos: 1, agenda: 1 });
+  assert.deepEqual(L.pendenciasConfig(ESTADO_FEITOS(TODOS_OBRIG)), {}, "completo: nenhum ponto");
+  assert.deepEqual(L.pendenciasConfig(null), {});
+});
+
+await teste("M32: Início (cartão só para admin, estado por RPC de leitura, «Dispensar»/«Já está bom» em localStorage), menu das Configurações com ponto e ?assistente= abrindo o assistente", () => {
+  const ini = ler("web/app/inicio.js"), cfg = ler("web/app/config.js"), cw = ler("web/app/cv-config.js"), css = ler("web/app/relatorios.css");
+  assert.match(ini, /if \(!admin\) return null;[\s\S]{0,400}?try \{ return await ctx\.api\.rpcC\("nx_onboarding_estado", \{\}\); \}/, "só admin chama a RPC");
+  assert.match(ini, /L\.resumoOnboarding\(onb, \{ pulados: local\.pulados, dispensadoAte: local\.dispensadoAte, admin, podeSecao \}\)/);
+  assert.match(ini, /localStorage\.setItem\(chaveOnb/, "escolhas locais em try/catch");
+  assert.match(ini, /try \{ localStorage\.setItem\(chaveOnb, JSON\.stringify\(p\)\); \} catch/);
+  assert.match(ini, /tipo: "primeiro_uso", titulo: "Tudo pronto para começar\."/, "cliente zerado: órbita com os satélites");
+  assert.match(ini, /role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String\(r\.pct\)/);
+  assert.match(ini, /"Dispensar por 7 dias"/);
+  assert.doesNotMatch(ini, /innerHTML/);
+  assert.match(cfg, /L\.pendenciasConfig\(est, \{ pulados \}\)/); assert.match(cfg, /class: "nav-selo cfg-pend"/);
+  assert.match(cfg, /ctx\.pode\("admin"\) && vistas\.some/, "o ponto só para admin");
+  assert.match(cw, /ctx\.rota\.query\.assistente/);
+  assert.match(cw, /history\.replaceState\(history\.state, "", location\.pathname \+ location\.search \+ "#\/config\/numeros"\)/, "limpa o endereço depois de abrir");
+  assert.match(css, /\.ini-onb-barra i \{[^}]*background: var\(--c-prod\)/, "barra no acento do produto, por token");
+});
+
+/* ============================================================ revisão R119 — checklist, assistente do número, Início e paleta */
+console.log("\n(h2) R119 — checklist que não cobra o impossível, assistente sem remontar, palavra da vertical");
+
+await teste("R119: o assistente aberto pelo checklist (?assistente=) limpa o endereço SEM navegar — a lista de Números continua a mesma e se atualiza", () => {
+  const cw = ler("web/app/cv-config.js");
+  const fim = cw.slice(cw.indexOf("const pedido = ctx.rota && ctx.rota.query && ctx.rota.query.assistente;"), cw.indexOf("/* ============================================================ RESPOSTAS RÁPIDAS */"));
+  assert.ok(fim.length > 100, "trecho do pedido encontrado");
+  assert.doesNotMatch(fim, /ctx\.navegar\(/, "ctx.navegar remonta a seção: o assistente ficava preso à lista antiga");
+  assert.match(fim, /lista\.isConnected && \/\^#\\\/config\\\/numeros\\\?\/\.test\(location\.hash\)/, "só mexe no endereço se a pessoa ainda está nesta tela");
+  assert.match(fim, /assistenteCodeWords\(c\)/);
+});
+
+await teste("R119: resumoOnboarding conta a partir dos itens recebidos — o «opcional» do servidor vale; sem ele, vale o padrão local", () => {
+  const AG = 1_000_000_000_000;
+  // servidor novo: script_site e anuncios_ligados opcionais → 9 obrigatórios de 11
+  const novo = ESTADO_NOVO();
+  assert.deepEqual(novo.itens.filter(i => i.opcional).map(i => i.id), ["script_site", "anuncios_ligados"]);
+  let r = L.resumoOnboarding(novo, { admin: true, agora: AG });
+  assert.deepEqual([r.total, r.obrigatorios], [11, 9]);
+  assert.equal(r.itens.find(i => i.id === "script_site").opcional, true);
+  // servidor antigo (script_site obrigatório): a conta segue o que veio, nenhum número fixo no front
+  const antigo = ESTADO_NOVO(); antigo.itens.find(i => i.id === "script_site").opcional = false;
+  r = L.resumoOnboarding(antigo, { admin: true, agora: AG });
+  assert.deepEqual([r.total, r.obrigatorios], [11, 10]);
+  // um servidor que tornasse outro item opcional também é obedecido
+  const outro = ESTADO_NOVO(); outro.itens.find(i => i.id === "funil_ajustado").opcional = true;
+  assert.equal(L.resumoOnboarding(outro, { admin: true, agora: AG }).obrigatorios, 8);
+  // só ids (sem o campo): cai no padrão local
+  const soIds = { itens: L.ONBOARDING_ITENS.map(i => ({ id: i.id, feito: false })) };
+  assert.equal(L.resumoOnboarding(soIds, { admin: true, agora: AG }).obrigatorios, 9);
+  // todos os obrigatórios feitos com o site pendente: completo (o cartão some) — antes a clínica sem site parava em 9 de 10
+  assert.equal(L.resumoOnboarding(ESTADO_FEITOS(TODOS_OBRIG), { admin: true, agora: AG }), null);
+  assert.doesNotMatch(ler("web/app/rel-logica.js").slice(ler("web/app/rel-logica.js").indexOf("export function resumoOnboarding")).split("export function pendenciasConfig")[0], /\b(9|10|11)\b/, "nenhum total escrito à mão na conta");
+});
+
+await teste("R119: item cuja seção a pessoa não abre sai do checklist ANTES da conta (mesmos filtros de módulo e papel das Configurações)", () => {
+  const AG = 1_000_000_000_000;
+  const acesso = ({ papel = "admin", modulos = ["conversas", "crm", "ads"], prontas = null } = {}) => L.filtroSecoesOnboarding({
+    temModulo: m => modulos.includes(m),
+    pode: min => ({ leitura: 0, atendente: 1, supervisor: 2, admin: 3, gestor: 4 })[papel] >= ({ leitura: 0, atendente: 1, supervisor: 2, admin: 3, gestor: 4 })[min],
+    configPronta: prontas ? id => prontas.includes(id) : null });
+  // admin do cliente: «Anúncios ligados» abre uma seção só do gestor → some (era link morto «não faz parte do seu plano ou do seu acesso»)
+  let r = L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG, podeSecao: acesso() });
+  assert.ok(!r.itens.some(i => i.id === "anuncios_ligados")); assert.deepEqual([r.total, r.obrigatorios], [10, 9]);
+  // gestor vê os 11
+  assert.equal(L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG, podeSecao: acesso({ papel: "gestor" }) }).total, 11);
+  // cliente só com Anúncios: números, departamentos, agenda, site e funis são seções invisíveis → sobra o colega (e, para o gestor, os anúncios)
+  r = L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG, podeSecao: acesso({ modulos: ["ads"] }) });
+  assert.deepEqual(r.itens.map(i => i.id), ["colega_convidado"]); assert.deepEqual([r.obrigatorios, r.pct], [1, 0]);
+  assert.equal(L.resumoOnboarding(ESTADO_FEITOS(["colega_convidado"]), { admin: true, agora: AG, podeSecao: acesso({ modulos: ["ads"] }) }), null, "o único que ele pode fazer está feito: 100 %");
+  // sem CRM: agenda, site e funil saem; a porcentagem é sobre o que sobrou (5 do número + departamento + colega = 7)
+  r = L.resumoOnboarding(ESTADO_FEITOS(["chave_codewords", "aparelho_pareado", "recebimento", "ia_ou_direto", "mensagem_teste", "departamento_horario"]), { admin: true, agora: AG, podeSecao: acesso({ modulos: ["conversas"] }) });
+  assert.deepEqual([r.obrigatorios, r.obrigFeitos, r.pct], [7, 6, 86]); assert.equal(r.proximo.id, "colega_convidado");
+  // seção ainda em obra não é cobrada
+  r = L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG, podeSecao: acesso({ papel: "gestor", prontas: ["numeros", "usuarios"] }) });
+  assert.deepEqual([...new Set(r.itens.map(i => i.secao))], ["numeros", "usuarios"]);
+  // nada que a pessoa possa fazer: sem cartão
+  assert.equal(L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG, podeSecao: () => false }), null);
+  // o ponto do menu das Configurações usa a mesma régua
+  assert.deepEqual(L.pendenciasConfig(ESTADO_NOVO(), { podeSecao: acesso({ modulos: ["conversas"] }) }), { numeros: 5, departamentos: 1, usuarios: 1 });
+  // sem o filtro (chamadas antigas) nada muda
+  assert.equal(L.resumoOnboarding(ESTADO_NOVO(), { admin: true, agora: AG }).total, 11);
+});
+
+await teste("R119: os filtros do checklist são os declarados nas seções das Configurações (módulo e papel de cada *-config.js)", () => {
+  const fontes = ["cv-config.js", "agenda-config.js", "crm-config.js", "rastreio-config.js", "ads-config.js", "config.js"].map(f => ler(`web/app/${f}`)).join("\n");
+  const secoes = new Map();
+  for (const b of L.ONBOARDING_ITENS) secoes.set(b.secao, { modulo: b.modulo || null, papel: b.papel });
+  for (const [id, esperado] of secoes) {
+    const m = new RegExp(`\\{ id: "${id}",[^}]*\\}`).exec(fontes);
+    assert.ok(m, `seção «${id}» declarada em algum *-config.js`);
+    const papel = (/papelMin: "([a-z]+)"/.exec(m[0]) || [])[1] || null, modulo = (/modulo: "([a-z]+)"/.exec(m[0]) || [])[1] || null;
+    assert.deepEqual({ modulo, papel }, esperado, `seção «${id}»: o checklist usa o mesmo módulo e papel da tela`);
+  }
+  // um item da mesma seção nunca diverge de outro
+  for (const b of L.ONBOARDING_ITENS) assert.deepEqual({ modulo: b.modulo || null, papel: b.papel }, secoes.get(b.secao));
+  const ini = ler("web/app/inicio.js");
+  assert.match(ini, /L\.filtroSecoesOnboarding\(\{ temModulo: ctx\.temModulo, pode: ctx\.pode, configPronta: ctx\.configPronta \}\)/);
+});
+
+await teste("R119: «Sim, chegou» no teste do assistente marca «Mensagem de teste enviada» neste aparelho (a mesma chave do «Já está bom»)", () => {
+  const cw = ler("web/app/cv-config.js"), ini = ler("web/app/inicio.js"), cfg = ler("web/app/config.js");
+  const chave = "`nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || \"-\"}`";
+  for (const [nome, src] of [["cv-config", cw], ["inicio", ini], ["config", cfg]]) assert.ok(src.includes(chave), `${nome}: a mesma chave local`);
+  assert.match(cw, /p\.pulados = \[\.\.\.new Set\(\[\.\.\.\(Array\.isArray\(p\.pulados\) \? p\.pulados : \[\]\), "mensagem_teste"\]\)\];\s*localStorage\.setItem\(chave, JSON\.stringify\(p\)\);/, "acrescenta sem apagar o resto (dispensadoAte, outros pulados)");
+  assert.match(cw, /chegou\.addEventListener\("click", \(\) => \{ testeChegou = true; marcarTesteNoChecklist\(\);/);
+  assert.ok(L.ONBOARDING_ITENS.some(i => i.id === "mensagem_teste"), "o id marcado existe no checklist");
+  // e o Início conta esse item como feito
+  const r = L.resumoOnboarding(ESTADO_FEITOS(["chave_codewords", "aparelho_pareado", "recebimento", "ia_ou_direto"]), { admin: true, agora: 1, pulados: ["mensagem_teste"] });
+  assert.equal(r.itens.find(i => i.id === "mensagem_teste").feito, true); assert.equal(r.obrigFeitos, 5);
+});
+
+await teste("R119: Início — outra empresa não herda o checklist nem os números da anterior; pulso não reconsulta o checklist sem cartão", () => {
+  const ini = ler("web/app/inicio.js");
+  assert.match(ini, /if \(donoDados !== dono\) \{ ultimoOnb = null; ultimoDado = null; ultimaAgenda = null; ultimoJson = ""; maisAberto = false; donoDados = dono; \}/);
+  assert.match(ini, /const dono = `\$\{ctx\.cliente\.id\}\|/);
+  assert.match(ini, /if \(!reler && ultimoOnb && resumoOnb\(ultimoOnb\) === null\) return ultimoOnb;/, "completo, dispensado ou tudo marcado: o pulso não gasta a consulta");
+  assert.match(ini, /buscarOnboarding\(forcar \|\| primeira\)/, "abrir a tela e «Atualizar» sempre releem");
+});
+
+await teste("R119: manchete e paleta com a palavra da vertical (consulta / visita / entrega), a mesma das Automações", async () => {
+  const CAT = await import("../web/app/auto-catalogo.js");
+  for (const v of ["odonto", "oficina", "loja", "generico", "desconhecida", undefined]) {
+    assert.equal(L.palavraAgenda(v).um, CAT.palavraConsulta(v), `vertical ${v}`);
+    assert.equal(L.palavraAgenda(v).varios, `${CAT.palavraConsulta(v)}s`);
+  }
+  const d = base({ negocios: { abertos: 0, valor_aberto: 0 } });
+  const oficina = { ...VOC, consulta: L.palavraAgenda("oficina").um, consultas: L.palavraAgenda("oficina").varios };
+  assert.equal(L.manchete(d, { agenda: agendaCom(2), voc: oficina }).texto, "Hoje tem 2 visitas.");
+  assert.equal(L.manchete(d, { agenda: agendaCom(1), voc: oficina }).texto, "Hoje tem 1 visita.");
+  const loja = { ...VOC, consulta: L.palavraAgenda("loja").um, consultas: L.palavraAgenda("loja").varios };
+  assert.equal(L.manchete(d, { agenda: agendaCom(3), voc: loja }).texto, "Hoje tem 3 entregas.");
+  assert.equal(L.manchete(d, { agenda: agendaCom(1), voc: VOC }).texto, "Hoje tem 1 consulta.", "sem a palavra no vocabulário continua «consulta»");
+  assert.match(ler("web/app/inicio.js"), /consulta: palavra\.um, consultas: palavra\.varios/);
+  // paleta de comandos
+  const CMD = await import("../web/app/comandos.js");
+  const VOCAB = await import("../web/app/vocab.js");
+  const amb = vertical => ({ vocab: VOCAB.vocab(vertical), rotaOk: () => true, pode: () => true, empresas: 1, instalar: false, suporte: false, temCliente: true });
+  const marcar = vertical => CMD.acoesPadrao(amb(vertical), { "marcar-consulta": () => {} }).find(c => c.id === "marcar-consulta");
+  assert.equal(marcar("odonto").rotulo, "Marcar consulta"); assert.equal(marcar("generico").rotulo, "Marcar consulta");
+  assert.equal(marcar("oficina").rotulo, "Marcar visita"); assert.equal(marcar("loja").rotulo, "Marcar entrega");
+  for (const v of ["odonto", "oficina", "loja", "generico"]) assert.equal(marcar(v).rotulo, `Marcar ${CAT.palavraConsulta(v)}`);
+  // com a Agenda aberta (ela registra «agenda.marcar»), a ação genérica não repete, mesmo com rótulo diferente
+  const daTela = [{ id: "agenda.marcar", rotulo: "Marcar consulta", fazer() {}, origem: "tela" }];
+  assert.ok(!CMD.juntarAcoes([marcar("oficina")], daTela).geral.some(c => c.id === "marcar-consulta"));
+  assert.ok(CMD.juntarAcoes([marcar("oficina")], []).geral.some(c => c.id === "marcar-consulta"), "fora da Agenda ela aparece");
+  assert.match(ler("web/app/agenda.js"), /id: "agenda\.marcar"/, "o id que a Agenda registra é o que a paleta conhece");
+});
+
+await teste("R119: menu das Configurações — o nome acessível do item com pendência não repete o número", () => {
+  const cfg = ler("web/app/config.js");
+  assert.match(cfg, /const nome = \(a\.querySelector\("span:not\(\.nav-selo\)"\) \|\| a\)\.textContent\.trim\(\);\s*a\.appendChild\(h\("span", \{ class: "nav-selo cfg-pend"/, "o título é lido antes de o selo entrar");
+  assert.match(cfg, /a\.setAttribute\("aria-label", `\$\{nome\}, \$\{n\} /);
+  assert.doesNotMatch(cfg, /aria-label", `\$\{a\.textContent/);
+});
+
+await teste("R119: «Copiar prompt para o CodeWords» — trava o botão, copia dentro do toque, nomeia o botão pelo resultado, leva o foco ao Service ID; «Ligar na IA» espera o ID", () => {
+  const cw = ler("web/app/cv-config.js");
+  const bloco = cw.slice(cw.indexOf("async function assistenteCodeWords(canal)"), cw.indexOf("/* ---------------- assistente em 5 passos */"));
+  // (a) carregando, sem clique duplo
+  assert.match(bloco, /bPrompt\.addEventListener\("click", \(\) => \{\s*if \(bPrompt\.disabled\) return;/, "o clique não é async: a cópia começa ainda dentro do toque");
+  assert.match(bloco, /ui\.carregando\(bPrompt, \(async \(\) => \{/);
+  // (b) copiarDepois chamado de forma síncrona, com a promessa do texto; sem ele, cai no ui.copiar depois da espera
+  const clique = bloco.slice(bloco.indexOf('bPrompt.addEventListener("click"'), bloco.indexOf("function mostrarPrompt"));
+  assert.match(clique, /typeof ui\.copiarDepois === "function"\s*\? ui\.copiarDepois\(textoPronto, \{ aviso: null \}\)\s*: textoPronto\.then\(t => ui\.copiar\(t, \{ aviso: null \}\)\)/);
+  assert.ok(clique.indexOf("ui.copiarDepois(textoPronto") < clique.indexOf("ui.carregando(bPrompt"), "a cópia é pedida antes de qualquer espera");
+  assert.doesNotMatch(clique.slice(0, clique.indexOf("ui.copiarDepois(textoPronto")).replace(/const receita = \(async \(\) => \{[\s\S]*?\}\)\(\);/, ""), /\bawait\b/, "nenhum await entre o toque e o pedido de cópia");
+  // (c) o nome do botão da caixa segue o resultado
+  assert.match(bloco, /const rotuloCopiar = h\("span", null, "Copiar prompt"\);/);
+  assert.match(bloco, /if \(ok\) \{\s*rotuloCopiar\.textContent = "Copiar de novo";/);
+  assert.doesNotMatch(bloco, /ui\.icone\("copiar"\), "Copiar de novo"\)/, "não nasce «Copiar de novo» antes de copiar");
+  // (d) foco no Service ID, com a dica
+  assert.match(bloco, /dicaService\.hidden = false;/); assert.match(bloco, /inpService\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(bloco, /cole aqui o Service ID que ele mostrar/);
+  // (e) «Ligar o número na IA» desabilitado e explicado enquanto o Service ID está vazio
+  assert.match(bloco, /const falta = !inpService\.value\.trim\(\);\s*bFluxo\.disabled = falta;/);
+  assert.match(bloco, /inpService\.addEventListener\("input", ajustarFluxo\);\s*ajustarFluxo\(\);/);
+  assert.match(bloco, /dicaFluxo\.hidden = !falta;/);
+  // a ordem 1-2-3 escrita no passo continua
+  const i1 = bloco.indexOf('h("strong", null, "1. ")'), i2 = bloco.indexOf('h("strong", null, "2. ")'), i3 = bloco.indexOf('h("strong", null, "3. ")');
+  assert.ok(i1 > 0 && i1 < i2 && i2 < i3, "1 copiar o prompt, 2 colar o Service ID, 3 ligar o número");
+  assert.ok(bloco.indexOf("bPrompt), receitaBox") > i1 && bloco.indexOf("bPrompt), receitaBox") < i2 && bloco.indexOf("bFluxo, bPrefs") > i3);
+});
+
+await teste("R119: erros do assistente CodeWords dizem o campo — hint «numero» → campo do número, texto por campo, passo recolhido se abre, detalhe do servidor no aparelho errado", () => {
+  const cw = ler("web/app/cv-config.js");
+  assert.match(cw, /const CAMPO_DO_HINT = \{ numero: "numero_exibicao"/);
+  assert.match(cw, /numero_exibicao: "Informe o número com DDI e DDD, ex\.: \+55 12 99999-9999"/);
+  assert.match(cw, /codewords_service_id: "Cole só o identificador do fluxo, sem a URL\."/);
+  assert.match(cw, /if \(x && x\.corpoEl\.hidden\) \{ expandido = li\.dataset\.passo; desenharPassos\(\); \}/, "o passo recolhido abre antes de marcar o campo");
+  assert.match(cw, /\} catch \(e\) \{\s*if \(erroDoServidorNoCampo\(e\)\) return false;\s*ui\.toast\(ui\.mensagemErro\(e\), \{ tipo: "erro" \}\);/);
+  assert.doesNotMatch(cw.slice(cw.indexOf("async function assistenteCodeWords(canal)"), cw.indexOf("/* ---------------- assistente em 5 passos */")), /"Confira este campo\."\); return false;/, "o texto genérico saiu do assistente CodeWords");
+  assert.match(cw, /\(c === "numero_diferente" \|\| c === "aparelho_nao_encontrado"\) && e\.detalhe_texto\) return String\(e\.detalhe_texto\)/);
+  // a regra do Service ID é a mesma do banco
+  assert.match(cw, /!\/\^\[A-Za-z0-9_-\]\{1,120\}\$\/\.test\(String\(d\.codewords_service_id\)\)/);
+  assert.match(readFileSync(join(RAIZ, "supabase", "migrations", "20260929a_codewords.sql"), "utf8"), /v_service !~ '\^\[A-Za-z0-9_-\]\{1,120\}\$'/);
+  assert.match(readFileSync(join(RAIZ, "supabase", "migrations", "20260929a_codewords.sql"), "utf8"), /if v_num is null then raise exception 'dados_invalidos' using errcode = '22023', hint = 'numero';/);
+});
+
+/* ============================================================ M39 — painéis no celular: manchete na 1ª tela e Radar com gravidade */
+console.log("\n(i) M39 — Anúncios/Relatórios no celular e Radar com gravidade");
+
+const conexao = (ativo, extra = {}) => ({ nome: "Conexão com Meta", ativo, a: { mensagem: "caiu", criado_em: "2026-10-01T10:00:00Z" }, ...extra });
+const episodio = (sev, ativo, nome = `${sev}-${ativo ? "ativo" : "resolvido"}`) => ({ sev, ativo, nome, msg: "m", acao: "a", desde: "ontem" });
+
+await teste("M39: ordenarRadar — o crítico ativo sempre no topo, depois alerta e informativo; os resolvidos vêm depois dos ativos; em empate vale a ordem recebida", () => {
+  const R = {
+    conexoes: [conexao(false)],
+    episodios: [episodio("info", true, "i1"), episodio("alerta", true, "a1"), episodio("critico", false, "c-res"), episodio("critico", true, "c1"), episodio("alerta", true, "a2"), episodio("info", false, "i-res")],
+  };
+  const ordem = L.ordenarRadar(R).map(x => `${x.sev}:${x.ativo ? "ativo" : "resolvido"}:${x.ref.nome}`);
+  assert.deepEqual(ordem, [
+    "critico:ativo:c1",                       // o crítico ativo é o 1º, mesmo vindo no meio do histórico
+    "alerta:ativo:a1", "alerta:ativo:a2",     // empate: a ordem do montarRadar
+    "info:ativo:i1",
+    "critico:resolvido:Conexão com Meta", "critico:resolvido:c-res",    // resolvidos por último: conexão antes do histórico, ambos críticos
+    "info:resolvido:i-res"]);
+  assert.equal(L.ordenarRadar(R)[0].tipo, "episodio");
+  // uma conexão caída (ativa) é sempre crítica e vence qualquer episódio ativo; entre críticos ativos a conexão vem antes (ordem recebida)
+  const R2 = { conexoes: [conexao(true)], episodios: [episodio("critico", true, "c1"), episodio("alerta", true, "a1")] };
+  assert.deepEqual(L.ordenarRadar(R2).map(x => x.tipo + ":" + x.sev), ["conexao:critico", "episodio:critico", "episodio:alerta"]);
+  // gravidade desconhecida vira «alerta» (nunca some, nunca exagera); entrada vazia ou nula não quebra
+  assert.equal(L.nivelSev("grave?"), "alerta"); assert.equal(L.nivelSev("critico"), "critico"); assert.equal(L.nivelSev(undefined), "alerta");
+  assert.deepEqual(L.ordenarRadar({ conexoes: [], episodios: [episodio("???", true)] }).map(x => x.sev), ["alerta"]);
+  assert.deepEqual(L.ordenarRadar(null), []); assert.deepEqual(L.ordenarRadar({}), []);
+  // não muda o que recebeu
+  const antes = JSON.stringify(R); L.ordenarRadar(R); assert.equal(JSON.stringify(R), antes);
+  // as três gravidades têm rótulo escrito e ícone (nunca só cor)
+  for (const s of ["critico", "alerta", "info"]) { assert.ok(L.SEV_ROTULO[s]); assert.ok(L.SEV_ICONE[s]); assert.equal(typeof L.SEV_ORDEM[s], "number"); }
+  assert.equal(new Set(Object.values(L.SEV_ICONE)).size, 3, "um ícone por gravidade");
+});
+
+await teste("M39: textoChipAnuncios e textoChipRelatorios — «Últimos 30 dias · Tudo», «02/09 a 01/10 · Funil X», «Todos os departamentos»", () => {
+  assert.equal(L.textoChipAnuncios(30, ""), "Últimos 30 dias · Tudo");
+  assert.equal(L.textoChipAnuncios(7, "meta"), "Últimos 7 dias · Meta");
+  assert.equal(L.textoChipAnuncios(60, "google"), "Últimos 60 dias · Google");
+  assert.equal(L.textoChipAnuncios(undefined, ""), "Últimos 30 dias · Tudo");
+  assert.equal(L.textoChipRelatorios({ preset: 30 }), "Últimos 30 dias · Todos os funis");
+  assert.equal(L.textoChipRelatorios({ preset: 90, aba: "atendimento" }), "Últimos 90 dias · Todos os departamentos");
+  assert.equal(L.textoChipRelatorios({ preset: "per", de: "2026-09-02", ate: "2026-10-01", nome: "Funil Consultas" }), "02/09 a 01/10 · Funil Consultas");
+  assert.equal(L.textoChipRelatorios({ preset: "per", de: null, ate: null }), "Últimos 30 dias · Todos os funis", "personalizado sem datas cai no padrão");
+  assert.equal(L.textoChipRelatorios({ preset: 15 }), "Últimos 30 dias · Todos os funis", "preset desconhecido não inventa");
+});
+
+await teste("M39: Anúncios e Relatórios — abas por ui.segmentado, chip-resumo que abre a folha, «Atualizado» em texto pequeno com botão-ícone; os controles largos continuam para telas grandes", () => {
+  const ads = ler("web/app/anuncios.js"), rel = ler("web/app/relatorios.js"), css = ler("web/app/relatorios.css");
+  for (const [nome, src] of [["anuncios", ads], ["relatorios", rel]]) {
+    assert.match(src, /ui\.segmentado\(\{ tipo: "abas"/, `${nome}: abas por ui.segmentado`);
+    assert.match(src, /class: "rel-resumo", "aria-haspopup": "dialog"/, `${nome}: chip-resumo`);
+    assert.match(src, /class: "rel-filtros-lg"/, `${nome}: segmentos largos preservados`);
+    assert.match(src, /ui\.modal\(\{ titulo: "Período e (plataforma|filtros)"[^]*?protegerTexto: false/, `${nome}: a folha`);
+    assert.match(src, /rel-btn rel-btn-sec rel-btn-ic/, `${nome}: Atualizar também como botão-ícone`);
+    assert.match(src, /ui\.icone\("reabrir"\), h\("span", \{ class: "rel-rot" \}, "Atualizar"\)/, `${nome}: o nome acessível continua «Atualizar»`);
+    assert.doesNotMatch(src, /innerHTML/);
+  }
+  assert.match(ads, /L\.textoChipAnuncios\(S\.dias, S\.plat\)/); assert.match(rel, /L\.textoChipRelatorios\(\{ preset: P\.preset, de: P\.de, ate: P\.ate, aba, nome \}\)/);
+  assert.match(ads, /rel-so-largo[^]*?Ajustes de anúncios/, "os atalhos do gestor ficam para telas largas…");
+  assert.match(ads, /Mais ações[^]*?rotulo: "Ajustes de anúncios", icone: "engrenagem"/, "…e no ⋮ do celular");
+  assert.match(rel, /const v = L\.validarPeriodo\(de, ate\);\s*if \(!v\.ok\) \{ api\.erro\(v\.texto\); return false; \}/, "a folha valida o período antes de aplicar");
+  assert.match(ads, /abaRadar|L\.ordenarRadar\(R\)\.forEach/, "o Radar usa a ordenação por gravidade");
+  // CSS: o celular mostra o chip e esconde os segmentos; as regras que a frente A trava seguem no arquivo
+  assert.match(css, /\.rel-resumo, \.rel-so-movel \{ display: none; \}/);
+  assert.match(css, /@media \(max-width: 760px\) \{\s*\.rel \{ gap: \.4rem; \}[^]*?\.rel-filtros-lg \{ display: none; \}[^]*?\.rel-resumo \{ display: inline-flex;/);
+  assert.match(css, /\.ads-heroi \.rel-olho \{ display: none; \}/, "o herói não repete o chip");
+  assert.match(css, /\.ads-tabela td\.num::before \{[^}]*white-space: normal/); assert.match(css, /\.cfgf-codigo \{[^}]*white-space: pre-wrap/);
+  assert.match(css, /@media \(max-width: 400px\) \{\s*\.rel-aba \{ padding-inline: \.5rem;/, "a trava da frente A (abas em 375 px) continua");
+});
+
+await teste("M39: Radar — cada alerta com barra lateral de 3 px, ícone e rótulo da gravidade por token --c-sev-*, o crítico ativo no topo e o rótulo nunca só cor", () => {
+  const ads = ler("web/app/anuncios.js"), css = ler("web/app/relatorios.css");
+  assert.match(ads, /L\.ordenarRadar\(R\)\.forEach\(\(it, n\) => lista\.append\(it\.tipo === "conexao" \? alertaConexao\(it, n\) : alertaEpisodio\(it, n\)\)\)/);
+  assert.match(ads, /dataset: \{ sev \}/, "o <li> leva data-sev");
+  assert.match(ads, /h\("span", \{ class: "ads-sev-marca" \}, ui\.icone\(L\.SEV_ICONE\[sev\]\), h\("span", \{ class: "ads-sev-rot" \}, L\.SEV_ROTULO\[sev\]\)\)/, "ícone + rótulo escrito");
+  assert.match(css, /\.ads-al\[data-sev="critico"\] \{ --sev: var\(--c-sev-crit\); \}/);
+  assert.match(css, /\.ads-al\[data-sev="alerta"\] \{ --sev: var\(--c-sev-aten\); \}/);
+  assert.match(css, /\.ads-al\[data-sev="info"\] \{ --sev: var\(--c-sev-info\); \}/);
+  assert.match(css, /\.ads-alertas \.ads-al \{[^}]*border-left: 3px solid var\(--sev/, "barra lateral de 3 px");
+  assert.match(css, /\.ads-sev-marca \{[^}]*color: var\(--sev/);
+  assert.match(css, /\.ads-alertas \.ads-al\.resolvido \{ opacity: 1;/, "resolvido não perde contraste por opacidade");
+  const bloco = css.slice(css.indexOf("M39 — painéis no celular"));
+  assert.doesNotMatch(bloco, /#[0-9a-fA-F]{3,8}\b/, "nenhuma cor escrita no bloco novo: só token");
+  // os tokens de gravidade existem no app (e o tema recalcula para as 4 marcas)
+  const app = readFileSync(join(WEB, "app", "app.css"), "utf8");
+  assert.match(app, /--c-sev-info: #[0-9A-Fa-f]{6}; --c-sev-aten: #[0-9A-Fa-f]{6}; --c-sev-crit: #[0-9A-Fa-f]{6};/);
+});
+
+await teste("M39 (navegador): a manchete de Anúncios fica em y ≤ 300 a 390×844 (descontadas as faixas do sistema) e o alerta crítico abre o Radar — roda com ORBITA_QA_NAVEGADOR=1", async () => {
+  if (process.env.ORBITA_QA_NAVEGADOR !== "1") { console.log("      (pulado: defina ORBITA_QA_NAVEGADOR=1 para abrir o Chrome)"); return; }
+  const { createRequire } = await import("node:module");
+  const { spawn } = await import("node:child_process");
+  const req = createRequire(join(process.env.ORBITA_PUPPETEER || RAIZ, "x.js"));
+  const puppeteer = req("puppeteer-core");
+  const chrome = process.env.ORBITA_CHROME || ["C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/google-chrome", "/usr/bin/chromium"].find(existsSync);
+  assert.ok(chrome, "Chrome não encontrado (ORBITA_CHROME)");
+  const porta = 4800 + Math.floor(Math.random() * 90);
+  const srv = spawn(process.execPath, [join(RAIZ, "scripts", "dev-falso.mjs")], { env: { ...process.env, ORBITA_DEV_FALSO_PORT: String(porta) }, stdio: "ignore", windowsHide: true });
+  try {
+    await new Promise(r => setTimeout(r, 1800));
+    const base = `http://127.0.0.1:${porta}`;
+    const browser = await puppeteer.launch({ executablePath: chrome, headless: "new", args: ["--no-sandbox", "--disable-gpu"] });
+    try {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+      const erros = []; page.on("pageerror", e => erros.push(String(e.message || e)));
+      // uma conexão caída (alerta crítico ativo) junto dos alertas de atenção que o dev-falso já traz
+      await page.setRequestInterception(true);
+      // Injeta na primeira leitura de dados dos Anúncios; ao trocar para Radar a tela reaproveita essa resposta.
+      const critico = true;
+      page.on("request", async r => {
+        if (!critico || !r.url().includes("rpc/nx_dados")) return r.continue();
+        try {
+          const j = await (await fetch(`${base}/__dev_falso/rest/v1/rpc/nx_dados`, { method: "POST", headers: { "content-type": "application/json" }, body: r.postData() || "{}" })).json();
+          j.integracoes = (j.integracoes || []).map(i => (i.canal === "meta" ? { ...i, status: "erro: token expirado" } : i));
+          j.alertas = [...(j.alertas || []), { regra: "integracao", chave: "integracao|meta", mensagem: "A conexão com o Meta caiu: o token expirou.", criado_em: new Date().toISOString(), severidade: "critico" }];
+          r.respond({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(j) });
+        } catch { r.continue(); }
+      });
+      await page.goto(`${base}/app/?dev-falso=1&dev=1#/inicio`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => { const b = document.getElementById("boot"); return !b || b.hidden; }, { timeout: 25000 });
+      await new Promise(r => setTimeout(r, 1500));
+      await page.evaluate(() => { location.hash = "#/anuncios"; });
+      await page.waitForSelector(".ads-frase", { timeout: 15000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 1800));
+      const m = await page.evaluate(() => {
+        const faixas = [...document.querySelectorAll(".faixa")].reduce((s, f) => s + f.getBoundingClientRect().height, 0);
+        const fr = document.querySelector(".ads-frase");
+        return { topo: fr ? fr.getBoundingClientRect().top + scrollY : null, faixas, chip: !!document.querySelector(".rel-resumo") && document.querySelector(".rel-resumo").getClientRects().length > 0,
+          abasEmUmaLinha: (() => { const t = [...document.querySelectorAll(".rel-abas-seg .seg-op")].map(b => Math.round(b.getBoundingClientRect().top)); return new Set(t).size === 1 && t.length === 4; })(),
+          sobra: document.documentElement.scrollWidth > innerWidth };
+      });
+      assert.ok(m.topo !== null, "a manchete existe");
+      assert.ok(m.topo - m.faixas <= 300, `a manchete ficou em y=${Math.round(m.topo)} (faixas ${Math.round(m.faixas)} px)`);
+      assert.equal(m.chip, true, "chip-resumo visível no celular"); assert.equal(m.abasEmUmaLinha, true, "4 abas numa linha só"); assert.equal(m.sobra, false, "sem rolagem horizontal");
+      await page.evaluate(() => { location.hash = "#/anuncios/radar"; });
+      await new Promise(r => setTimeout(r, 3500));
+      const ordem = await page.evaluate(() => [...document.querySelectorAll(".ads-alertas > li")].filter(li => !li.classList.contains("resolvido")).map(li => li.dataset.sev));
+      assert.ok(ordem.length >= 2, "há mais de um alerta ativo"); assert.equal(ordem[0], "critico", "o crítico ativo está no topo");
+      assert.deepEqual(ordem, ordem.slice().sort((a, b) => ({ critico: 0, alerta: 1, info: 2 })[a] - ({ critico: 0, alerta: 1, info: 2 })[b]), "ativos do mais grave para o menos");
+      assert.deepEqual(erros, []);
+    } finally { await browser.close(); }
+  } finally { srv.kill(); }
+});
+
+await teste("A11Y: tabelas com rolagem horizontal têm região nomeada, foco de teclado visível", () => {
+  const rel = ler("web/app/relatorios.js"), ads = ler("web/app/anuncios.js"), css = ler("web/app/relatorios.css");
+  assert.match(rel, /class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": leg/);
+  assert.match(ads, /class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": `Campanhas nos últimos/);
+  assert.match(css, /\.rel-tabela-rolagem:focus-visible \{[^}]*outline: 2px solid var\(--c-prim\)/);
 });
 
 console.log(`\n${ok} ok · ${falhas} falha(s)`);

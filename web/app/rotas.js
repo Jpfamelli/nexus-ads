@@ -49,10 +49,27 @@ export const MENU = Object.freeze([
 /** Áreas com entrada própria e sessão compartilhada. A filtragem é só navegação;
     autorização, plano e módulos continuam sendo verificados em acessoRota(). */
 export const PRODUTOS = Object.freeze({
-  crm: Object.freeze({ nome: "CRM", resumo: "Contatos, oportunidades e vendas.", titulo: "Órbita CRM", rota: "crm", manifesto: "manifest-crm.webmanifest", itens: Object.freeze(["crm", "agenda", "empresas", "tarefas"]) }),
+  crm: Object.freeze({ nome: "CRM", resumo: "Contatos, oportunidades, vendas e automações.", titulo: "Órbita CRM", rota: "crm", manifesto: "manifest-crm.webmanifest", itens: Object.freeze(["crm", "agenda", "empresas", "tarefas", "automacoes"]) }),
   ads: Object.freeze({ nome: "Nexus Ads", resumo: "Campanhas, origem dos leads e retorno.", titulo: "Nexus Ads · Órbita", rota: "anuncios", manifesto: "manifest-ads.webmanifest", itens: Object.freeze(["inicio", "anuncios", "relatorios"]) }),
-  atendimento: Object.freeze({ nome: "Atendimento", resumo: "Conversas, equipe e agenda.", titulo: "Órbita Atendimento", rota: "conversas", manifesto: "manifest-atendimento.webmanifest", itens: Object.freeze(["inicio", "conversas", "agenda"]) }),
+  atendimento: Object.freeze({ nome: "Atendimento", resumo: "Conversas, equipe, agenda e automações.", titulo: "Órbita Atendimento", rota: "conversas", manifesto: "manifest-atendimento.webmanifest", itens: Object.freeze(["inicio", "conversas", "agenda", "automacoes"]) }),
 });
+
+/** Nome do app para o manifesto, o login e a pílula do topo: o produto da org (white-label) + a área aberta. Org padrão ("Órbita") usa os títulos fixos. */
+export function nomeDoApp({ produto = "Órbita", workspace = null } = {}) {
+  const p = String(produto || "Órbita").trim().slice(0, 40) || "Órbita";
+  const w = workspace && PRODUTOS[workspace];
+  const padrao = p === "Órbita";
+  if (!w) return { name: p, short_name: p.slice(0, 12), description: "Anúncio, conversa e venda na mesma órbita." };
+  const sufixo = { crm: "CRM", ads: "Anúncios", atendimento: "Atendimento" }[workspace] || w.nome;
+  const curto = { crm: "CRM", ads: "Ads", atendimento: "Atend." }[workspace] || w.nome;
+  return {
+    name: padrao ? w.titulo : `${p} ${sufixo}`,
+    short_name: padrao ? (workspace === "atendimento" ? "Atendimento" : curto) : `${p} ${curto}`.slice(0, 12),
+    description: w.resumo,
+  };
+}
+/** Ícone do sprite de cada produto (o CRM acompanha a vertical da empresa: dente, chave, sacola ou funil). */
+export function iconeDoProduto(workspace, iconeCrm = "funil") { return workspace === "crm" ? iconeCrm : workspace === "ads" ? "anuncio" : workspace === "atendimento" ? "chat" : "camadas"; }
 
 /** Produto solicitado na query string. Somente os três ids conhecidos são aceitos. */
 export function produtoDe(busca = "") {
@@ -91,6 +108,51 @@ export function itensDoProduto(id, disponiveis = []) {
   if (!regra) return disponiveis.slice();
   const permitidos = new Set(regra.itens);
   return disponiveis.filter(it => it.fixo || permitidos.has(it.id));
+}
+
+/**
+ * Itens do menu que ESTA pessoa vê neste produto: papel, plano, prontos.js e produto aberto (o menu lateral, a barra de baixo e o «Ir para» da
+ * paleta Ctrl/⌘+K leem a mesma lista). `op` é o que o shell dá a acessoRota (pronto, temModulo, pode, gestorConta, temCliente, produto);
+ * `prontos` = MODULOS_PRONTOS; `dev` marca como «obra» o que ainda não está pronto (só superadmin com ?dev=1).
+ */
+export function itensDoMenu({ op, vocab = {}, workspace = null, prontos = [], dev = false } = {}) {
+  const itens = [];
+  for (const it of MENU) {
+    if (it.id === "admin") { if (op.gestorConta) itens.push({ ...it, rotulo: "Admin" }); continue; }
+    if (it.id === "config") { itens.push(it); continue; }
+    const acesso = acessoRota(it.id, op);
+    const emConstrucao = !!dev && !prontos.includes(ROTAS[it.id].pronto);
+    if (acesso === "ok") itens.push({ ...it, rotulo: it.rotulo.replace(/\{(\w+)\}/g, (_, k) => vocab[k] || k), icone: it.id === "crm" ? (vocab.icone_crm || it.icone) : it.icone, emConstrucao });
+  }
+  return itensDoProduto(workspace, itens);
+}
+
+/** Tipo de esqueleto (ui.esqueleto) com a forma de cada tela enquanto o módulo e os dados chegam. */
+const ESQUELETO_DA_ROTA = Object.freeze({
+  inicio: "inicio", conversas: "chat", crm: "kanban", contatos: "lista", empresas: "lista", tarefas: "lista", agenda: "agenda",
+  anuncios: "ads", relatorios: "ads", automacoes: "lista", config: "lista", admin: "tabela",
+});
+export function esqueletoDaRota(modulo, partes = []) {
+  if (modulo === "crm" && partes && partes[0] === "negocio") return "lista";
+  return Object.hasOwn(ESQUELETO_DA_ROTA, modulo) ? ESQUELETO_DA_ROTA[modulo] : "lista";
+}
+
+/**
+ * Regiões de cada tela para os atalhos de teclado «Ir para…» (M22). Cada item é [rótulo do atalho, seletor do alvo]. O seletor usa o RÓTULO
+ * ACESSÍVEL da região (aria-label), que é o contrato com o leitor de tela — não uma classe de CSS. Alvo que não existe naquele momento
+ * (conversa ainda não aberta, outra visão do CRM) simplesmente não ganha atalho. O módulo pode registrar os seus por ctx.atalhosDeRegiao(…).
+ * A ORDEM é a do Tab: lista → conversa → campo de mensagem (o campo fica a 3 Tabs do topo).
+ */
+export const REGIOES_DA_ROTA = Object.freeze({
+  conversas: Object.freeze([
+    Object.freeze(["Ir para a lista de conversas", "[aria-label='Lista de conversas']"]),
+    Object.freeze(["Ir para a conversa", "[role='log'][aria-label='Mensagens']"]),
+    Object.freeze(["Ir para o campo de mensagem", "textarea[aria-label='Mensagem']"]),
+  ]),
+  crm: Object.freeze([Object.freeze(["Ir para o quadro", "[role='region'][aria-label^='Quadro de']"])]),
+});
+export function regioesDaRota(modulo) {
+  return (Object.hasOwn(REGIOES_DA_ROTA, modulo) ? REGIOES_DA_ROTA[modulo] : []).map(([rotulo, alvo]) => ({ rotulo, alvo }));
 }
 
 /** Barra inferior do celular: até 4 itens + "Mais". */

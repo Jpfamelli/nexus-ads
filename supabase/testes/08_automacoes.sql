@@ -267,7 +267,8 @@ begin
   a_ok := (j ->> 'id')::uuid;
   update public.nx_leads set estagio_id = s_agend where id = l1;
   perform pg_temp.lote(25);
-  perform pg_temp.ok((select erros = 1 and execucoes = 0 from public.nx_automacoes where id = a_err), 'automação com erro contada');
+  -- a execução com erro também tem linha na lista: conta em «execuções» e em «erros» (20261001b)
+  perform pg_temp.ok((select erros = 1 and execucoes = 1 from public.nx_automacoes where id = a_err), 'automação com erro contada');
   perform pg_temp.ok((select detalhe from public.nx_auto_execucoes where automacao_id = a_err) = 'Ação 2 (mover etapa): falta o valor para marcar como ganho.',
                      'detalhe do erro: ' || coalesce((select detalhe from public.nx_auto_execucoes where automacao_id = a_err), '∅'));
   perform pg_temp.ok(not exists (select 1 from public.nx_tarefas where titulo = 'antes do erro' and negocio_id = l1), 'automação com erro desfeita por inteiro');

@@ -1,3 +1,12 @@
+# Funções publicadas pela tag funcoes-* (uma por linha; ver docs/orbita/DEPLOY-FUNCOES.md).
+# Rodada de 01/10/2026 à tarde (R119, tag funcoes-20261001-4): as 7 juntas. nx-enviar leva a reserva do client_ref antes do envio
+# (migração 20261002d, aplicada em 01/10 19:39 UTC); nx-ciclo, nx-relatorio e nx-whatsapp levam o web/nucleo.js novo e as correções
+# do backend que ainda só estavam no repositório (comum.js, drenagem de corpo). Migrações 20261002b/c/d já aplicadas.
+# NÃO publicar nx-ciclo/nx-relatorio no dia 1º perto das 12:00 UTC (relatório mensal). Depois de publicar: conferir o ciclo das :07 e o relatório das 8h.
+nx-ia
 nx-codewords
 nx-enviar
 nx-whatsapp
+nx-ciclo
+nx-relatorio
+nx-midia

@@ -12,6 +12,7 @@
 
 const BASE_VALIDADE_MS = 5 * 60 * 1000;
 const cacheBase = new Map();          // clienteId → {base, em, promessa}
+const ouvintesBase = new Map();       // clienteId → Set<fn>: telas que querem saber quando os funis da base mudaram
 const modulos = new Map();            // "logica" | "kanban" | … → Promise<módulo>
 let L = null;                         // crm-logica.js
 let montagem = 0;
@@ -32,31 +33,70 @@ async function logica(ctx) {
   return L;
 }
 
-/** Base do CRM (funis, etapas, campos, etiquetas, motivos, usuários, ticket) — em memória por empresa. */
+/**
+ * Base do CRM (funis, etapas, campos, etiquetas, motivos, usuários, ticket) — em memória por empresa.
+ * M30: a PRIMEIRA leitura da sessão usa o último dado guardado no aparelho (rpcC com cache) e já devolve; quando a rede responde, a mesma base é
+ * atualizada no lugar (Object.assign: quem já guarda `k.base` passa a ver o dado novo) e, se os funis ou as etapas mudaram, as telas que pediram
+ * (k.aoBaseMudar) são avisadas. Recarga forçada (depois de criar etiqueta/funil) vai direto à rede e também renova a cópia guardada no aparelho.
+ */
 async function obterBase(ctx, { forcar = false } = {}) {
   const id = ctx.cliente && ctx.cliente.id;
   if (!id) throw Object.assign(new Error("cliente_nao_encontrado"), { codigo: "cliente_nao_encontrado" });
   const c = cacheBase.get(id);
   if (!forcar && c && c.base && Date.now() - c.em < BASE_VALIDADE_MS) return c.base;
   if (!forcar && c && c.promessa) return c.promessa;
-  const promessa = ctx.api.rpcC("nx_crm_base").then(base => {
-    cacheBase.set(id, { base, em: Date.now(), promessa: null });
-    return base;
-  }).catch(e => { cacheBase.delete(id); throw e; });
+  const promessa = new Promise((resolve, reject) => {
+    let servida = null;
+    const fim = base => {
+      let mudouFunis = false;
+      if (servida && servida !== base) {                           // a tela já recebeu o dado guardado: atualiza o MESMO objeto
+        mudouFunis = JSON.stringify(servida.funis || null) !== JSON.stringify(base.funis || null);
+        for (const k of Object.keys(servida)) if (!(k in base)) delete servida[k];
+        Object.assign(servida, base);
+        base = servida;
+      }
+      cacheBase.set(id, { base, em: Date.now(), promessa: null });
+      resolve(base);
+      if (mudouFunis) avisarBase(id);                              // o quadro foi desenhado com etapas antigas: refaz o funil e recarrega
+    };
+    // forçada: `cache: true` sem `aoCache` — nada é servido do aparelho, mas a resposta nova substitui a cópia guardada (a próxima abertura não mostra etapas antigas)
+    ctx.api.rpcC("nx_crm_base", {}, forcar ? { cache: true } : { cache: true, aoCache: dados => {
+      if (servida || !dados || typeof dados !== "object") return;
+      servida = (c && c.base) || dados;                            // já havia uma base em memória (vencida)? é ELA que as telas guardam: a rede atualiza esse objeto
+      cacheBase.set(id, { base: servida, em: Date.now() - BASE_VALIDADE_MS + 15000, promessa });   // vale por 15 s: a rede atualiza em seguida
+      resolve(servida);
+    } }).then(fim, e => {
+      // a rede falhou depois de a tela abrir com o dado guardado: a base fica, mas vencida e sem promessa — a próxima chamada tenta a rede de novo
+      if (servida) { cacheBase.set(id, { base: servida, em: 0, promessa: null }); return; }
+      cacheBase.delete(id); reject(e);
+    });
+  });
   cacheBase.set(id, { base: c && c.base, em: c ? c.em : 0, promessa });
   return promessa;
 }
 
+/** Os funis/etapas da base desta empresa mudaram depois de a tela abrir com o dado guardado: chama quem pediu para saber (o Kanban). */
+function avisarBase(id) {
+  for (const fn of [...(ouvintesBase.get(id) || [])]) { try { fn(); } catch (e) { console.error(e); } }
+}
+
 /** Kit compartilhado pelos arquivos do CRM. */
 async function kitDe(ctx) {
-  const Lg = await logica(ctx);
-  const base = await obterBase(ctx);
+  const [Lg, base] = await Promise.all([logica(ctx), obterBase(ctx)]);
   const ui = ctx.ui;
   const k = {
     ctx, ui, api: ctx.api, L: Lg, v: ctx.vocab, base,
     h: ui.h,
     mod: nome => carregarArq(ctx, nome),
     async recarregarBase() { k.base = await obterBase(ctx, { forcar: true }); return k.base; },
+    /** aoBaseMudar(fn) → cancelar(). `fn` roda quando a rede troca os funis/etapas da base que a tela recebeu do aparelho (a tela refaz o que desenhou com eles). */
+    aoBaseMudar(fn) {
+      const id = ctx.cliente && ctx.cliente.id;
+      if (!id || typeof fn !== "function") return () => {};
+      if (!ouvintesBase.has(id)) ouvintesBase.set(id, new Set());
+      ouvintesBase.get(id).add(fn);
+      return () => { const s = ouvintesBase.get(id); if (s) { s.delete(fn); if (!s.size) ouvintesBase.delete(id); } };
+    },
     /** texto do erro (rótulo de campo, trava do Ads, códigos do CRM; o resto pelo api.mensagemErro) */
     erro: e => Lg.textoErro(e, { campos: k.base.campos, padrao: ctx.api && ctx.api.mensagemErro ? ctx.api.mensagemErro : ui.mensagemErro }),
     toastErro: e => ui.toast(k.erro(e), { tipo: "erro" }),
@@ -81,6 +121,15 @@ async function kitDe(ctx) {
     },
     /** valor em reais formatado */
     brl: (v, o) => ui.brl(v, o),
+    /** M25: escrita com chave de idempotência — em erro ambíguo (prazo, conexão) repete com a MESMA chave e nunca duplica. → {resultado, req} */
+    escrever: (nome, params, o) => Lg.escreverComReq(ctx.api, nome, params, o),
+    novaReq: () => Lg.novaReq(),
+    /** M30: guarda o que a pessoa digita neste campo (ctx.rascunho do shell: por conta + empresa, 7 dias) e devolve o controle {apagar()}.
+        Chame `.apagar()` só depois que o servidor confirmar. Sem o recurso do shell vira no-op. */
+    rascunho: (campo, chave, opcoes) => {
+      try { if (ctx.rascunho && typeof ctx.rascunho.ligar === "function") return ctx.rascunho.ligar(campo, chave, opcoes); } catch { /* sem rascunho a tela funciona igual */ }
+      return { restaurado: false, apagar() {}, desligar() {}, salvarAgora() {} };
+    },
   };
   return k;
 }
@@ -117,9 +166,45 @@ function fecharGavetaAtual() {
   try { gaveta.fechar(); } catch (e) { console.error(e); }
 }
 
+/* ============================================================ esqueleto */
+/** Forma da tela enquanto carrega (a troca não desloca nada): cabeçalho, e no Kanban também os 3 totais, ou a lista de linhas. Só classes do ui.esqueleto (A). */
+function esqueletoDe(ctx, tipo) {
+  const { ui } = ctx;
+  if (tipo === "kanban") {
+    const sk = ui.esqueleto("kanban", { n: 5, cabecalho: { sub: false, acao: true } });
+    const kpis = ui.esqueleto("cartoes", { n: 3 }).querySelector(".sk-cartoes"), cols = sk.querySelector(".sk-kanban");
+    if (kpis && cols) sk.insertBefore(kpis, cols);
+    return sk;
+  }
+  if (tipo === "contatos" || tipo === "empresas") return ui.esqueleto("lista", { n: 8, cabecalho: { sub: true, acao: true } });
+  if (tipo === "tarefas") return ui.esqueleto("lista", { n: 5, cabecalho: { sub: false, acao: true } });
+  if (tipo === "ficha" || tipo === "empresa") return ui.esqueleto("cartoes", 4);
+  return ui.esqueleto("tabela", 6);
+}
+
+/* ============================================================ paleta de comandos (Ctrl/⌘+K, frente B) */
+let comandosAtivos = [];
+function limparComandos() { for (const f of comandosAtivos) { try { f(); } catch { /* ok */ } } comandosAtivos = []; }
+/** Enquanto o CRM está aberto, a paleta oferece «Nova oportunidade», «Nova tarefa» e «Novo paciente». Sem a paleta (shell antigo) não faz nada. */
+function registrarComandos(ctx, k) {
+  limparComandos();
+  if (!ctx.comandos || typeof ctx.comandos.registrar !== "function" || !k.pode("atendente")) return;
+  const reg = c => { try { const d = ctx.comandos.registrar(c); if (typeof d === "function") comandosAtivos.push(d); } catch { /* sem paleta */ } };
+  reg({ id: "crm.novo-negocio", rotulo: k.v.novo("negocio"), palavras: "oportunidade negócio lead cartão criar novo", fazer: () => novoNegocio(ctx, {}) });
+  reg({ id: "crm.nova-tarefa", rotulo: "Nova tarefa", palavras: "tarefa lembrete ligar retorno criar", fazer: async () => {
+    try { const kk = await kitDe(ctx); const T = await kk.mod("tarefas"); const t = await T.formTarefa(kk, null, {}); if (t) ctx.ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); }
+    catch (e) { console.error(e); ctx.ui.toast("Não foi possível abrir a tarefa.", { tipo: "erro" }); }
+  } });
+  reg({ id: "crm.novo-contato", rotulo: k.v.novo("contato"), palavras: "paciente contato cliente cadastrar criar novo", fazer: async () => {
+    try { const kk = await kitDe(ctx); const M = await kk.mod("listas"); const c = await M.formContato(kk); if (c) ctx.navegar(`#/contatos/${c.id}`); }
+    catch (e) { console.error(e); ctx.ui.toast("Não foi possível abrir o cadastro.", { tipo: "erro" }); }
+  } });
+}
+
 /* ============================================================ montagem */
 export function desmontar() {
   montagem++;
+  limparComandos();
   fecharGavetaAtual();
   if (telaAtual && typeof telaAtual.desmontar === "function") { try { telaAtual.desmontar(); } catch (e) { console.error(e); } }
   telaAtual = null;
@@ -151,12 +236,14 @@ export async function montar(ctx) {
     if (telaAtual && typeof telaAtual.desmontar === "function") { try { telaAtual.desmontar(); } catch (e) { console.error(e); } }
     telaAtual = null;
     ui.limpar(ctx.alvo);
-    ctx.alvo.appendChild(ui.esqueleto(tipo === "kanban" ? "kanban" : tipo === "ficha" ? "cartoes" : "tabela", 6));
+    ctx.alvo.appendChild(esqueletoDe(ctx, tipo));
   }
 
+  const arquivoDaTela = { kanban: "kanban", contatos: "listas", ficha: "listas", empresas: "listas", empresa: "listas", tarefas: "tarefas", importar: "importar" }[tipo];
   let k;
   try {
-    k = await kitDe(ctx);
+    // M30: lógica, base, o arquivo da tela (e, no Kanban, a gaveta do negócio) chegam juntos em vez de em fila
+    [k] = await Promise.all([kitDe(ctx), reaproveita ? null : carregarArq(ctx, arquivoDaTela), !reaproveita && tipo === "kanban" ? carregarArq(ctx, "negocio") : null]);
   } catch (e) {
     if (minha !== montagem) return;
     ui.limpar(ctx.alvo);
@@ -167,9 +254,7 @@ export async function montar(ctx) {
 
   try {
     if (!reaproveita) {
-      const arquivo = { kanban: "kanban", contatos: "listas", ficha: "listas", empresas: "listas", empresa: "listas",
-        tarefas: "tarefas", importar: "importar" }[tipo];
-      const M = await k.mod(arquivo);
+      const M = await k.mod(arquivoDaTela);
       if (minha !== montagem) return;
       const el = ui.h("div", { class: "crm", dataset: { tela: tipo } });
       let tela;
@@ -185,6 +270,7 @@ export async function montar(ctx) {
       ctx.alvo.appendChild(el);
       telaAtual = { tipo, chave, el, ...(tela || {}) };
     }
+    registrarComandos(ctx, k);
     // deep link da gaveta: #/crm/negocio/<id>
     if (tipo === "kanban" && partes[0] === "negocio" && /^\d+$/.test(partes[1] || "")) {
       const N = await k.mod("negocio");

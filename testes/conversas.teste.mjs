@@ -53,6 +53,20 @@ await teste("janela: janela_ate do servidor tem prioridade", () => {
   assert.equal(j.texto, "Janela aberta · 3 h restantes");
 });
 
+await teste("janela: o aparelho do CodeWords não tem janela de 24 h (canalTemJanela) — composer, selo e «Nova conversa» não travam", () => {
+  assert.equal(L.canalTemJanela("codewords"), false);
+  assert.equal(L.canalTemJanela("meta"), true);
+  assert.equal(L.canalTemJanela(undefined), true, "canal desconhecido segue a regra da Meta");
+  // número que nunca escreveu (janela_ate nulo) e conversa de 30 h atrás: fechadas pela conta da Meta, mas só a Meta se importa
+  assert.equal(L.janela({ janela_ate: null, ultima_entrada_em: null }, AGORA).aberta, false);
+  assert.equal(L.janela({ ultima_entrada_em: new Date(AGORA.getTime() - 30 * 3600000).toISOString() }, AGORA).aberta, false);
+  const comp = ler("cv-composer.js");
+  assert.match(comp, /L\.canalTemJanela\(provedorCanal\(\)\) && !L\.janela\(c\)\.aberta\) return "janela"/, "situacao(): sem «janela» no CodeWords");
+  assert.doesNotMatch(comp, /A janela de 24 h do WhatsApp fechou\. Neste canal CodeWords/, "a faixa «aguarde uma nova mensagem» some");
+  assert.match(ler("cv-chat.js"), /L\.canalTemJanela\(provedorCanal\)/, "o selo do cabeçalho some no CodeWords");
+  assert.match(ler("conversas.js"), /L\.canalTemJanela\(provedorItem\) && !L\.janela\(item\)\.aberta/, "Nova conversa por CodeWords não abre os modelos da Meta");
+});
+
 await teste("abaDe e pertenceAba seguem a regra do nx_cv_listar", () => {
   const eu = "u1";
   assert.equal(L.abaDe({ status: "aberta", atribuida_a: "u1", aguardando: true }, eu), "minhas");
@@ -413,6 +427,14 @@ await teste("seções de configuração com os ids fixos do §7.2", async () => 
   assert.ok(/export const secoesConfig/.test(s));
 });
 
+await teste("canal CodeWords: «Abrir Automações» pergunta antes de descartar o que não foi salvo (e depois de salvar não pergunta)", () => {
+  const s = ler("cv-config.js");
+  assert.match(s, /const formAlterado = \(\) => formInicial !== null && JSON\.stringify\(ui\.lerForm\(form\)\) !== formInicial/);
+  assert.match(s, /if \(formAlterado\(\) && !await ui\.confirmar\(\{ titulo: "Sair sem salvar\?"[\s\S]{0,200}perigo: true \}\)\) return;\s*if \(modalApi\) modalApi\.fechar\(null\);\s*ctx\.navegar\("#\/automacoes"\)/,
+    "a confirmação vem ANTES de fechar o modal e navegar");
+  assert.match(s, /formInicial = JSON\.stringify\(ui\.lerForm\(form\)\);\s*\/\/ salvo: nada mais a perder/, "salvar zera a alteração pendente");
+});
+
 await teste("conversas.js exporta montar/desmontar", () => {
   const s = ler("conversas.js");
   assert.ok(/export async function montar\(ctx\)/.test(s));
@@ -427,6 +449,949 @@ await teste("SQL: nenhuma função definida nos DOIS arquivos (e / e_b) — reap
   assert.deepEqual(dup, [], `definidas nos dois arquivos: ${dup.join(", ")}`);
   assert.ok(eb.has("nx_cv_base") && !e.has("nx_cv_base"), "nx_cv_base (com config) só no e_b");
   for (const f of ["nx_cv_listar", "nx_cv_nova", "nx_canal_salvar", "nx_cv_distribuir"]) assert.ok(e.has(f), `${f} no arquivo e`);
+});
+
+/* ============================================================ M34 — um botão primário por vez, cabeçalho de uma linha, abas numa linha */
+console.log("\n(c) M34 — cabeçalho do chat e abas da lista");
+
+await teste("M34: estadoCabecalho — no máximo UM primário em qualquer estado e Resolver segue o dono", () => {
+  const EU = "u1";
+  const ia = (o = {}) => ({ disponivel: true, ia_ligada: true, pausada: false, ...o });
+  const casos = [];
+  for (const status of ["aberta", "pendente", "resolvida"]) for (const dono of [null, EU, "u2"]) for (const cw of [false, true]) for (const estIA of [null, ia(), ia({ pausada: true }), { disponivel: false }, ia({ ia_ligada: false })]) for (const pode of [true, false])
+    casos.push({ conv: { status, atribuida_a: dono }, eu: EU, pode, codeWords: cw, ia: estIA });
+  assert.equal(casos.length, 3 * 3 * 2 * 5 * 2);
+  for (const c of casos) {
+    const e = L.estadoCabecalho(c);
+    const primarios = [e.estilo === "prim" ? e.primaria : null].filter(Boolean);
+    assert.ok(primarios.length <= 1, `≤ 1 primário: ${JSON.stringify(c)}`);
+    if (!c.pode) assert.equal(e.primaria, null, "sem permissão: nenhum botão de ação");
+  }
+  // sem dono → Assumir primário; Resolver vira ícone neutro
+  let e = L.estadoCabecalho({ conv: { status: "aberta", atribuida_a: null }, eu: EU, pode: true });
+  assert.deepEqual([e.primaria, e.estilo, e.resolverIcone], ["assumir", "prim", true]);
+  // minha → Resolver em contorno (nenhum primário)
+  e = L.estadoCabecalho({ conv: { status: "aberta", atribuida_a: EU }, eu: EU, pode: true });
+  assert.deepEqual([e.primaria, e.estilo, e.resolverIcone], ["resolver", "contorno", false]);
+  // IA atendendo (CodeWords): Assumir (pausa a IA) e o resto no ⋮ — mesmo com a conversa já minha
+  for (const dono of [null, EU, "u2"]) {
+    e = L.estadoCabecalho({ conv: { status: "aberta", atribuida_a: dono }, eu: EU, pode: true, codeWords: true, ia: ia() });
+    assert.deepEqual([e.primaria, e.estilo, e.resolverNoMenu], ["assumir_ia", "prim", true], `IA atendendo, dono ${dono}`);
+  }
+  // IA pausada: volta a valer a regra do dono e o "Devolver para a IA" entra no ⋮
+  e = L.estadoCabecalho({ conv: { status: "aberta", atribuida_a: EU }, eu: EU, pode: true, codeWords: true, ia: ia({ pausada: true }) });
+  assert.deepEqual([e.primaria, e.devolverIA], ["resolver", true]);
+  // IA fora do ar ou desligada não esconde o Assumir comum
+  e = L.estadoCabecalho({ conv: { status: "aberta", atribuida_a: null }, eu: EU, pode: true, codeWords: true, ia: { disponivel: false } });
+  assert.equal(e.primaria, "assumir");
+  // resolvida → só Reabrir, em secundário
+  e = L.estadoCabecalho({ conv: { status: "resolvida", atribuida_a: EU }, eu: EU, pode: true });
+  assert.deepEqual([e.primaria, e.estilo], ["reabrir", "sec"]);
+});
+
+await teste("M34: janelaCurta e abasVisiveis (Minhas some para leitura; Ocultas só do supervisor; o resto vai para o menu)", () => {
+  assert.equal(L.janelaCurta(L.janela({ ultima_entrada_em: new Date(AGORA.getTime() - 6 * 3600000).toISOString() }, AGORA)), "Janela 18 h");
+  assert.equal(L.janelaCurta(L.janela({ ultima_entrada_em: new Date(AGORA.getTime() - (24 * 3600000 - 25 * 60000)).toISOString() }, AGORA)), "Janela 25 min");
+  assert.equal(L.janelaCurta(L.janela({}, AGORA)), "Janela fechada");
+  assert.deepEqual(L.ABAS_FIXAS, ["minhas", "sem_dono", "aguardando"]);
+  const atendente = L.abasVisiveis("atendente", true);
+  assert.deepEqual(atendente.fixas.map(a => a.id), ["minhas", "sem_dono", "aguardando"]);
+  assert.deepEqual(atendente.mais.map(a => a.id), ["abertas", "pendentes", "resolvidas"], "Ocultas só para supervisor");
+  assert.deepEqual(L.abasVisiveis("supervisor", true).mais.map(a => a.id), ["abertas", "pendentes", "resolvidas", "ocultas"]);
+  assert.deepEqual(L.abasVisiveis("leitura", false).fixas.map(a => a.id), ["sem_dono", "aguardando"], "leitura não tem Minhas");
+  const todas = [...atendente.fixas, ...atendente.mais].map(a => a.id);
+  assert.equal(new Set(todas).size, todas.length, "nenhuma aba repetida entre fixas e menu");
+});
+
+await teste("M34: o cabeçalho usa um primário por estado, uma linha no celular e a lista usa 1 linha de abas + pontos de cor", () => {
+  const chat = ler("cv-chat.js"), lista = ler("cv-lista.js"), comp = ler("cv-composer.js"), css = ler("conversas.css");
+  assert.match(chat, /L\.estadoCabecalho\(\{ conv, eu, pode, codeWords, ia \}\)/, "cabeçalho decidido pela função pura");
+  assert.doesNotMatch(chat, /"bt bt-prim bt-p"\s*\}[^)]*"Resolver"|class: "bt bt-prim bt-p" \}, ui\.icone\("check"\)/, "Resolver nunca é primário");
+  assert.match(chat, /class: "bt bt-p bt-resolver"/, "Resolver (minha) em contorno");
+  assert.match(css, /\.bt-resolver \{[^}]*border-color: var\(--c-ok\)/, "contorno em --c-ok");
+  assert.match(css, /@media \(max-width: 760px\) \{\s*\/\* M34[^*]*\*\/\s*\.cvc-cab \{ display: flex;/, "cabeçalho de uma linha no celular");
+  assert.doesNotMatch(css, /grid-template-areas: "voltar contato" "acoes acoes"/, "sem a segunda linha de ações");
+  assert.match(lista, /ui\.segmentado\(\{ opcoes: fixas\.map/, "abas pelo segmentado");
+  assert.match(lista, /class: "cvl-dot cvl-dot-etapa"/, "etapa vira ponto de cor");
+  assert.doesNotMatch(lista, /cv-etapa cvl-etapa/, "nenhuma pílula de etapa na lista (era cortada com reticências)");
+  assert.match(css, /\.cvl-dot \{[^}]*background: var\(--cor/, "ponto de cor pelo token --cor");
+  // o aviso do canal CodeWords deixou de ocupar a conversa: só aparece ao tocar no clipe ou no ⓘ
+  assert.match(comp, /const btInfo = h\("button"[^;]*"aria-expanded": "false"/, "botão ⓘ ao lado do clipe");
+  assert.match(comp, /capInfo\.hidden = !temAviso \|\| !infoAberta/, "faixa escondida até a pessoa pedir");
+  assert.match(comp, /if \(btClipe\.getAttribute\("aria-disabled"\) === "true"\) \{ if \(usaCodeWords\(\)\) mostrarInfoCanal\(true\)/, "tocar no clipe do CodeWords explica o motivo");
+});
+
+/* ============================================================ M37 — fotos do celular sem rejeição */
+console.log("\n(d) M37 — fotos: comprimir no aparelho e mostrar o progresso");
+
+await teste("M37: dimensoesFoto — lado maior 1600, nunca amplia, mantém proporção (retrato e paisagem)", () => {
+  assert.deepEqual(L.dimensoesFoto(4032, 3024), { w: 1600, h: 1200, mudou: true }, "12 MP paisagem");
+  assert.deepEqual(L.dimensoesFoto(3024, 4032), { w: 1200, h: 1600, mudou: true }, "12 MP retrato");
+  assert.deepEqual(L.dimensoesFoto(1600, 900), { w: 1600, h: 900, mudou: false }, "já cabe");
+  assert.deepEqual(L.dimensoesFoto(800, 600), { w: 800, h: 600, mudou: false }, "pequena não é ampliada");
+  assert.deepEqual(L.dimensoesFoto(1601, 1), { w: 1600, h: 1, mudou: true }, "faixa fina nunca vira 0 px");
+  assert.deepEqual(L.dimensoesFoto(0, 0), { w: 1, h: 1, mudou: false });
+  assert.deepEqual(L.dimensoesFoto(8000, 6000, 1000), { w: 1000, h: 750, mudou: true }, "lado máximo configurável");
+});
+
+await teste("M37: planoFoto decide manter ou otimizar (HEIC sempre otimiza; foto pequena segue como veio)", () => {
+  const KB = 1024, MB = KB * 1024;
+  assert.equal(L.planoFoto({ tipo: "image/jpeg", bytes: 7.2 * MB, largura: 4032, altura: 3024 }).acao, "otimizar");
+  assert.equal(L.planoFoto({ tipo: "image/jpeg", bytes: 200 * KB, largura: 1200, altura: 800 }).acao, "manter", "pequena e dentro de 1600 px");
+  assert.equal(L.planoFoto({ tipo: "image/jpeg", bytes: 200 * KB, largura: 3000, altura: 2000 }).acao, "otimizar", "leve mas grande demais em px");
+  assert.equal(L.planoFoto({ tipo: "image/png", bytes: 900 * KB, largura: 1000, altura: 1000 }).acao, "otimizar", "PNG de 900 KB vira JPEG");
+  assert.equal(L.planoFoto({ tipo: "image/heic", bytes: 100 * KB, largura: 800, altura: 600 }).acao, "otimizar", "o WhatsApp não aceita HEIC");
+  assert.deepEqual([L.planoFoto({ tipo: "image/jpeg", bytes: 2 * MB, largura: 4000, altura: 3000 }).w, L.planoFoto({ tipo: "image/jpeg", bytes: 2 * MB, largura: 4000, altura: 3000 }).h], [1600, 1200]);
+});
+
+await teste("M37: ehFoto, qualidades do JPEG e frases do resumo", () => {
+  assert.equal(L.ehFoto({ name: "a.jpg", type: "image/jpeg" }), true);
+  assert.equal(L.ehFoto({ name: "a.HEIC", type: "" }), true, "HEIC sem type vem da extensão");
+  assert.equal(L.ehFoto({ name: "a.pdf", type: "application/pdf" }), false);
+  assert.equal(L.ehFoto({ name: "v.mp4", type: "video/mp4" }), false);
+  assert.deepEqual([...L.FOTO_QUALIDADES], [0.82, 0.72, 0.62], "JPEG 0,82 primeiro");
+  assert.equal(L.proximaQualidadeFoto(300 * 1024, 0), null, "dentro do alvo (500 KB): para");
+  assert.equal(L.proximaQualidadeFoto(900 * 1024, 0), 0.72);
+  assert.equal(L.proximaQualidadeFoto(900 * 1024, 1), 0.62);
+  assert.equal(L.proximaQualidadeFoto(900 * 1024, 2), null, "acabaram as tentativas");
+  assert.equal(L.resumoOtimizacao(7.2 * 1048576, 380 * 1024), "Foto otimizada de 7,2 MB para 380 KB");
+  assert.equal(L.resumoOtimizacao(100, 200), "", "se não diminuiu, nada a dizer");
+  assert.equal(L.nomeFotoOtimizada("IMG_2231.HEIC"), "IMG_2231.jpg");
+  assert.equal(L.nomeFotoOtimizada(""), "foto.jpg");
+});
+
+await teste("M37: a foto otimizada passa na regra de 5 MB e o original de 7 MB não; vídeo e documento seguem em 16 MB", () => {
+  const MB = 1048576;
+  assert.equal(L.validarArquivo({ name: "a.jpg", type: "image/jpeg", size: 7.2 * MB }).erro, "midia_grande");
+  assert.equal(L.validarArquivo({ name: "a.jpg", type: "image/jpeg", size: 380 * 1024 }).ok, true);
+  assert.equal(L.validarArquivo({ name: "a.heic", type: "image/heic", size: 3 * MB }).ok, false, "HEIC só segue depois de virar JPEG");
+  assert.equal(L.validarArquivo({ name: "v.mp4", type: "video/mp4", size: 15 * MB }).ok, true);
+});
+
+await teste("M37: progressoEnvio (0–99 até acabar) e mensagem de falha do envio", () => {
+  assert.deepEqual(L.progressoEnvio(620, 1000), { pct: 62, texto: "62 %" });
+  assert.deepEqual(L.progressoEnvio(1000, 1000), { pct: 99, texto: "99 %" }, "100 só quando o servidor confirma");
+  assert.deepEqual(L.progressoEnvio(0, 0), { pct: 0, texto: "0 %" });
+  assert.deepEqual(L.progressoEnvio(-5, 100), { pct: 0, texto: "0 %" });
+  assert.match(L.dicaErroEnvio("upload_falhou"), /Tentar de novo/);
+});
+
+await teste("M37: o compositor otimiza antes de validar, mostra o ganho e oferece o original; o upload usa XMLHttpRequest com progresso e cancelamento", () => {
+  const comp = ler("cv-composer.js"), conv = ler("conversas.js"), chat = ler("cv-chat.js");
+  assert.match(comp, /createImageBitmap\(f, \{ imageOrientation: "from-image" \}\)/, "EXIF corrigido");
+  assert.match(comp, /L\.planoFoto\(/);
+  assert.match(comp, /L\.FOTO_QUALIDADES\[t\]/);
+  assert.match(comp, /otim = await otimizarFoto\(f\);[\s\S]{0,900}L\.validarArquivo\(escolhidoInicial\)/, "otimiza ANTES de validar o limite de 5 MB");
+  assert.match(comp, /L\.resumoOtimizacao\(f\.size, otim\.arquivo\.size\)/, "resumo 'de X para Y'");
+  assert.match(comp, /Enviar a original/, "opção de enviar o original");
+  assert.match(conv, /new XMLHttpRequest\(\)/);
+  assert.match(conv, /x\.upload\.addEventListener\("progress"/);
+  assert.match(conv, /x\.addEventListener\("abort"/);
+  assert.doesNotMatch(conv, /fetch\(s\.upload_url/, "o PUT não é mais fetch (sem progresso)");
+  assert.match(conv, /if \(!o\.path\) \{/, "tentar de novo não sobe o arquivo outra vez quando ele já subiu");
+  assert.match(chat, /role: "progressbar"/);
+  assert.match(chat, /A\.acoes\.cancelarEnvio\(m\)/);
+});
+
+/* ============================================================ M36 — nada se perde no chat */
+console.log("\n(e) M36 — rascunho persistente, fila de saída e envio idempotente");
+
+await teste("M36: novoClientRef — formato aceito pelo servidor, único por intenção, sempre ≤ 80 caracteres", () => {
+  const REF = /^[A-Za-z0-9:_.-]{8,80}$/;
+  assert.match(L.novoClientRef("5c1b0d3e-0000-4000-8000-000000000001"), REF);
+  assert.equal(L.novoClientRef("5c1b0d3e-0000-4000-8000-000000000001"), "orbita:5c1b0d3e-0000-4000-8000-000000000001");
+  assert.match(L.novoClientRef(), REF, "sem crypto.randomUUID também gera um ref válido");
+  assert.notEqual(L.novoClientRef(), L.novoClientRef());
+  assert.ok(L.novoClientRef("x".repeat(200)).length <= 80);
+  assert.match(L.novoClientRef("com espaço;e/barra"), REF, "caracteres fora do formato são tirados");
+});
+
+await teste("M36: proximaTentativaFila — 20 s, 40 s, 80 s, 160 s e 5 min daí em diante (com jitter opcional)", () => {
+  const t0 = 1_000_000;
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 9].map(n => L.proximaTentativaFila(n, t0) - t0), [20000, 40000, 80000, 160000, 300000, 300000, 300000]);
+  assert.equal(L.proximaTentativaFila(0, t0, 1500) - t0, 21500);
+  assert.equal(L.proximaTentativaFila(-3, t0) - t0, 20000);
+});
+
+await teste("M36: classificarFalhaEnvio — internet que caiu espera na fila, prazo estourado repete com o MESMO ref, regra de negócio vira «Não enviada» com o motivo", () => {
+  const e = (codigo, extra = {}) => Object.assign(new Error(codigo), { codigo, ...extra });
+  let c = L.classificarFalhaEnvio(e("sem_conexao"));
+  assert.deepEqual([c.tipo, c.subtipo], ["rede", "sem_conexao"]);
+  for (const cod of ["tempo_rede", "tempo_esgotado"]) assert.deepEqual([L.classificarFalhaEnvio(e(cod)).tipo, L.classificarFalhaEnvio(e(cod)).subtipo], ["rede", "em_voo"], cod);
+  assert.equal(L.classificarFalhaEnvio(e("http_504", { status: 504 })).subtipo, "em_voo");
+  for (const cod of ["servico_indisponivel", "http_503", "http_502", "http_429", "http_408"]) assert.deepEqual([L.classificarFalhaEnvio(e(cod)).tipo, L.classificarFalhaEnvio(e(cod)).subtipo], ["rede", "servidor"], cod);
+  assert.equal(L.classificarFalhaEnvio(e("sessao_invalida", { status: 401 })).tipo, "sessao", "sessão caída: a fila espera o login");
+  c = L.classificarFalhaEnvio(e("fora_da_janela"));
+  assert.equal(c.tipo, "definitiva"); assert.match(c.motivo, /24 h.*modelo aprovado/);
+  assert.equal(L.classificarFalhaEnvio(e("conversa_resolvida")).tipo, "definitiva");
+  assert.equal(L.classificarFalhaEnvio(e("dados_invalidos")).tipo, "definitiva");
+  // a Graph recusou e o servidor GRAVOU a mensagem como "falhou": é definitiva e traz a mensagem salva
+  c = L.classificarFalhaEnvio(e("envio_falhou", { resposta: { ok: false, mensagem: { id: 9, status: "falhou" } } }));
+  assert.equal(c.tipo, "definitiva"); assert.equal(c.salva, true);
+  // 502 que o servidor marcou como "pode ter saído": definitiva-ambígua (não reenvia sozinha)
+  c = L.classificarFalhaEnvio(e("envio_falhou", { status: 502, resposta: { ok: false, ambigua: true } }));
+  assert.equal(c.ambigua, true); assert.equal(c.tipo, "definitiva");
+  assert.equal(L.classificarFalhaEnvio(null).tipo, "definitiva", "erro sem forma conhecida não repete para sempre");
+  // 409 do nx-enviar: outro pedido com o MESMO client_ref ainda está enviando — não é falha, não tem motivo na tela, tenta de novo depois
+  c = L.classificarFalhaEnvio(e("envio_em_andamento", { status: 409, resposta: { ok: false, erro: "envio_em_andamento" } }));
+  assert.deepEqual([c.tipo, c.subtipo, c.motivo], ["rede", "em_andamento", null]);
+  // reserva antiga sem mensagem: 502 marcado como ambíguo e SEM mensagem gravada — pode ter saído, nunca reenviar sozinho
+  c = L.classificarFalhaEnvio(e("envio_falhou", { status: 502, resposta: { ok: false, erro: "envio_falhou", ambigua: true } }));
+  assert.deepEqual([c.tipo, c.ambigua, c.salva], ["definitiva", true, false]);
+});
+
+await teste("M36: filaDevidos (ordem em que a pessoa mandou, só o que já venceu o backoff) e filaDestino (outra conta/empresa fica intacta; só o vencido do próprio escopo sai)", () => {
+  const AG = 10_000_000;
+  const itens = [
+    { id: "c", estado: "fila", criada_em: 300, proxima_em: 0 },
+    { id: "a", estado: "incerto", criada_em: 100, proxima_em: AG - 1 },
+    { id: "b", estado: "fila", criada_em: 200, proxima_em: AG + 5000 },
+    { id: "x", estado: "falhou", criada_em: 50, proxima_em: 0 },
+    { id: "y", estado: "enviando", criada_em: 60, proxima_em: 0 },
+  ];
+  assert.deepEqual(L.filaDevidos(itens, AG).map(i => i.id), ["a", "c"], "falhou e enviando nunca saem sozinhos; b ainda espera");
+  assert.deepEqual(L.filaDevidos(itens, AG, { forcar: true }).map(i => i.id), ["a", "b", "c"], "a internet voltou: ignora o backoff");
+  assert.deepEqual(L.filaDevidos([{ id: "w", estado: "andamento", criada_em: 1, proxima_em: AG - 1 }, { id: "z", estado: "ambigua", criada_em: 2, proxima_em: 0 }], AG).map(i => i.id), ["w"],
+    "«em andamento» (409) volta a perguntar; «pode ter saído» nunca sai sozinha");
+  const ok = { id: "r", conta: "u1", cliente: "c1", criada_em: AG - 1000 };
+  assert.equal(L.filaDestino(ok, { conta: "u1", cliente: "c1", agora: AG }), "usar");
+  assert.equal(L.filaDestino(ok, { conta: "u2", cliente: "c1", agora: AG }), "pular", "item de outra conta: fica onde está");
+  assert.equal(L.filaDestino(ok, { conta: "u1", cliente: "c2", agora: AG }), "pular", "item de outra empresa da mesma conta: NUNCA é apagado");
+  assert.equal(L.filaDestino({ ...ok, criada_em: AG - L.FILA_TTL_MS - 1 }, { conta: "u1", cliente: "c1", agora: AG }), "apagar", "mais de 7 dias, do próprio escopo");
+  assert.equal(L.filaDestino({ ...ok, criada_em: AG - L.FILA_TTL_MS - 1 }, { conta: "u1", cliente: "c2", agora: AG }), "pular", "vencido de OUTRA empresa: quem apaga é a sessão dela");
+  assert.equal(L.filaDestino({ ...ok, criada_em: AG - L.FILA_TTL_MS - 1 }, { conta: "u9", cliente: "c1", agora: AG }), "pular", "vencido de OUTRA conta também fica");
+  assert.equal(L.filaDestino(null, {}), "pular");
+  assert.equal(L.filaDestino(ok, {}), "pular", "sem escopo conhecido não se mexe em nada");
+  assert.equal(typeof L.filaDescartavel, "undefined", "a regra antiga (que apagava o item de outra empresa) saiu");
+});
+
+await teste("M36: textoRascunhoLista — uma linha, até 80 caracteres, sem quebras", () => {
+  assert.equal(L.textoRascunhoLista("  Oi,\n  tudo   bem?  "), "Oi, tudo bem?");
+  assert.equal(L.textoRascunhoLista(""), "");
+  assert.equal(L.textoRascunhoLista(null), "");
+  const longo = L.textoRascunhoLista("a".repeat(200));
+  assert.equal(longo.length, 80); assert.ok(longo.endsWith("…"));
+});
+
+await teste("M36: o compositor liga o rascunho por conversa (e a nota à parte), só apaga depois de o envio estar GUARDADO e devolve o texto cancelado", () => {
+  const comp = ler("cv-composer.js"), conv = ler("conversas.js"), lista = ler("cv-lista.js");
+assert.match(comp, /r\.ligar\(ta, `conversa:\$\{idDoCampo\}\$\{modoNota \? ":nota" : ""\}`, \{ seloEm: seloRasc \}\)/, "chave pela conversa DO CAMPO; nota com rascunho próprio");
+  assert.match(comp, /function apagarRascunho\(\) \{ if \(rasc && !ta\.value\.trim\(\)\)/, "não apaga o que a pessoa já digitou depois");
+  assert.match(comp, /const r = await A\.acoes\.enviar\(\{ tipo: "texto", texto, respondeA: citada \}\);\s*if \(r && r\.persistido !== false\) apagarRascunho\(\)/, "o rascunho sai depois de o item estar na fila");
+  assert.match(comp, /devolverTexto\(texto\)/, "Cancelar na fila devolve o texto ao campo");
+  assert.match(comp, /rasc\.apagar\(\); if \(typeof rasc\.parar === "function"\) rasc\.parar\(\)/, "alternar nota/mensagem move o rascunho");
+  assert.match(lista, /L\.textoRascunhoLista\(A\.acoes\.rascunhoDe\(c\.id\)\)/);
+  assert.match(lista, /h\("em", null, "Rascunho: "\)/, "\"Rascunho:\" em itálico na linha da lista");
+  assert.match(conv, /function rascunhoDe\(id\)/);
+});
+
+await teste("M36: o texto vai pela fila (IndexedDB antes do servidor, client_ref por intenção, backoff, online/pulso/20 s) e a falha definitiva guarda o texto", () => {
+  const conv = ler("conversas.js"), chat = ler("cv-chat.js");
+  assert.match(conv, /indexedDB\.open\(DB_FILA, 1\)/);
+  assert.match(conv, /const persistido = await filaSalvar\(it\);[\s\S]{0,400}transmitir\(it\);\s*\/\/ sem await/, "grava na fila ANTES de transmitir, sem esperar o servidor");
+  assert.match(conv, /acao: "texto", conversa: it\.conversa, texto: it\.texto, client_ref: it\.id/, "o MESMO client_ref em toda repetição do item");
+  assert.match(conv, /window\.addEventListener\("orbita:online", aoOnline\)/);
+  assert.match(conv, /A\.ctx\.rede\.aoVoltar\(\(\) => esvaziarFila\(\{ forcar: true \}\)\)/);
+  assert.match(conv, /if \(A\.fila\.itens\.size\) esvaziarFila\(\);\s*clearTimeout\(_pulsoT\)/, "1º pulso bom esvazia a fila");
+  assert.match(conv, /setInterval\(\(\) => \{ esvaziarFila\(\); \}, 20000\)/, "e a cada 20 s");
+  assert.match(conv, /if \(await transmitir\(it\) === "rede"\) break;/, "na 1ª falha de rede para (a ordem importa)");
+assert.match(conv, /const p = L\.aposFalhaFila\(it, c, \{[^}]*textoErro: ui\.mensagemErro\(e\) \}\);\s*Object\.assign\(it, p\.campos\);[\s\S]{0,260}await filaSalvar\(it\); atualizarBolha\(it\);/, "falha: a regra pura decide, o item é guardado e a bolha mostra o motivo");
+  assert.match(conv, /ctx\.naoAtualizar\(\(\) => filaPendentes\(\) > 0\)|A\.ctx\.naoAtualizar\(\(\) => filaPendentes\(\) > 0\)/, "fila pendente segura a atualização automática do app");
+assert.match(conv, /const destino = A\.L\.filaDestino\(it, \{ conta, cliente, agora \}\);\s*if \(destino === "pular"\) continue;/, "item de outra conta ou empresa é só pulado");
+  assert.match(conv, /if \(destino === "apagar"\) \{ if \(fila\.db\) reqIdb\(lojaFila\(fila\.db, "readwrite"\)\.delete\(it\.id\)\)/, "só o vencido do próprio escopo é apagado");
+  assert.equal((conv.match(/\.delete\(it\.id\)\)/g) || []).length, 1, "nenhum outro delete na leitura da fila");
+  assert.match(chat, /L\.textoFila\(\{ estado: m\.filaEstado, motivo: m\.erro, proxima: m\.filaProxima \}\)/, "a bolha da fila diz o motivo real e a próxima tentativa");
+  assert.match(ler("cv-logica.js"), /Na fila · envia quando a internet voltar/);
+  assert.match(chat, /A\.acoes\.enviarAgora\(m\)/); assert.match(chat, /A\.acoes\.cancelarFila\(m\)/);
+  assert.match(chat, /novo\.classList\.add\("entra"\)/, "mensagem nova entra com .entra (M10)");
+});
+
+/* ============================================================ R119 (revisão) — nada sai em dobro, nada vai para o cliente errado, nada some sem aviso */
+console.log("\n(e2) R119 — fila sem envio em dobro, rascunho na conversa certa, falha com aviso");
+
+await teste("R119 fila: depois de um pedido sair, o MESMO item só é retransmitido 90 s depois — nem com a internet voltando (forcar)", () => {
+  const T = 50_000_000;
+  assert.equal(L.FILA_ESPERA_REENVIO_MS, 90000);
+  const it = { id: "a", estado: "incerto", criada_em: T - 5000, proxima_em: 0, enviada_em: T - 1000 };
+  assert.equal(L.esperaReenvioFila(it, T), 89000);
+  assert.equal(L.esperaReenvioFila(it, T + 89000), 0);
+  assert.equal(L.esperaReenvioFila({ ...it, enviada_em: 0 }, T), 0, "item que nunca foi enviado (estava offline) sai na hora");
+  assert.deepEqual(L.filaDevidos([it], T).map(i => i.id), [], "recarregou a página 1 s depois de enviar: não repete");
+  assert.deepEqual(L.filaDevidos([it], T, { forcar: true }).map(i => i.id), [], "a internet voltou: também não");
+  assert.deepEqual(L.filaDevidos([it], T + 88999, { forcar: true }).map(i => i.id), [], "1 ms antes de completar os 90 s");
+  assert.deepEqual(L.filaDevidos([it], T + 90000 - 1000).map(i => i.id), ["a"], "90 s depois do pedido, sai (com o MESMO client_ref)");
+  assert.deepEqual(L.filaDevidos([{ ...it, enviada_em: 0 }], T, { forcar: true }).map(i => i.id), ["a"]);
+  assert.equal(L.proximaSaidaFila({ proxima_em: T + 20000, enviada_em: T }), T + 90000, "o que vale é o maior entre o backoff e os 90 s");
+  assert.equal(L.proximaSaidaFila({ proxima_em: T + 300000, enviada_em: T }), T + 300000);
+  assert.equal(L.proximaSaidaFila({ proxima_em: 0, enviada_em: 0 }), 0);
+});
+
+await teste("R119 fila: aposFalhaFila — 409 «em andamento» não é falha (20 s, sem motivo); rede volta com backoff; «pode ter saído» e definitiva ficam guardadas e não saem sozinhas", () => {
+  const T = 9_000_000;
+  const e = (codigo, extra = {}) => Object.assign(new Error(codigo), { codigo, ...extra });
+  const item = { id: "x", estado: "enviando", tentativas: 2, enviada_em: T - 500, proxima_em: 0 };
+  let p = L.aposFalhaFila(item, L.classificarFalhaEnvio(e("envio_em_andamento", { status: 409 })), { agora: T });
+  assert.deepEqual(p, { fim: false, campos: { estado: "andamento", motivo: null, enviada_em: 0, proxima_em: T + 20000 } }, "não conta tentativa, não mostra erro, pergunta de novo em ~20 s");
+  assert.deepEqual(L.filaDevidos([{ ...item, ...p.campos }], T + 20000).map(i => i.id), ["x"]);
+  p = L.aposFalhaFila(item, L.classificarFalhaEnvio(e("tempo_rede")), { agora: T, jitter: 0 });
+  assert.equal(p.fim, false); assert.equal(p.campos.estado, "incerto"); assert.equal(p.campos.tentativas, 3);
+  assert.equal(p.campos.proxima_em, L.proximaTentativaFila(2, T, 0));
+  assert.equal("enviada_em" in p.campos, false, "prazo estourado: a hora do pedido fica (os 90 s valem)");
+  assert.deepEqual(L.filaDevidos([{ ...item, ...p.campos }], T + 80001).map(i => i.id), [], "backoff de 80 s vencido, mas ainda dentro dos 90 s do pedido");
+  p = L.aposFalhaFila(item, L.classificarFalhaEnvio(e("sem_conexao")), { agora: T });
+  assert.equal(p.campos.estado, "fila"); assert.equal(p.campos.enviada_em, 0, "«sem conexão»: sai assim que a internet volta (a reserva do client_ref no servidor impede o envio em dobro)");
+  p = L.aposFalhaFila(item, L.classificarFalhaEnvio(e("sessao_invalida", { status: 401 })), { agora: T });
+  assert.deepEqual([p.fim, p.campos.estado, p.campos.enviada_em, p.campos.proxima_em], [false, "fila", 0, T + 15000]);
+  // 502 ambíguo sem mensagem gravada: fica na tela com o aviso e NUNCA sai sozinha
+  p = L.aposFalhaFila(item, L.classificarFalhaEnvio(e("envio_falhou", { status: 502, resposta: { ok: false, ambigua: true } })), { agora: T });
+  assert.deepEqual(p, { fim: true, campos: { estado: "ambigua", motivo: "Pode ter saído — confira no WhatsApp antes de reenviar." } });
+  assert.deepEqual(L.filaDevidos([{ ...item, ...p.campos, enviada_em: 0 }], T + 10 * 3600000, { forcar: true }), []);
+  p = L.aposFalhaFila(item, L.classificarFalhaEnvio(e("conversa_resolvida")), { agora: T });
+  assert.equal(p.fim, true); assert.equal(p.campos.estado, "falhou"); assert.match(p.campos.motivo, /Reabra/);
+  p = L.aposFalhaFila(item, L.classificarFalhaEnvio(e("coisa_nova")), { agora: T, textoErro: "Não deu certo agora." });
+  assert.deepEqual(p.campos, { estado: "falhou", motivo: "Não deu certo agora." });
+});
+
+await teste("R119 fila: item parado há mais de 15 min não sai sozinho e ganha o motivo «Ficou na fila desde <dia hora>»", () => {
+  const AGORA2 = new Date("2026-09-28T09:00:00-03:00").getTime();      // segunda, 9h
+  const sexta = new Date("2026-09-25T18:02:00-03:00").getTime();
+  assert.equal(L.FILA_AUTO_MAX_MS, 15 * 60000);
+  assert.equal(L.filaParada({ estado: "fila", criada_em: AGORA2 - 15 * 60000 - 1 }, AGORA2), true);
+  assert.equal(L.filaParada({ estado: "incerto", criada_em: sexta }, AGORA2), true);
+  assert.equal(L.filaParada({ estado: "andamento", criada_em: sexta }, AGORA2), true);
+  assert.equal(L.filaParada({ estado: "fila", criada_em: AGORA2 - 14 * 60000 }, AGORA2), false);
+  assert.equal(L.filaParada({ estado: "falhou", criada_em: sexta }, AGORA2), false, "o que já espera a pessoa não muda");
+  assert.equal(L.filaParada({ estado: "ambigua", criada_em: sexta }, AGORA2), false);
+  assert.equal(L.filaParada({ estado: "enviando", criada_em: sexta }, AGORA2), false, "pedido a caminho não é interrompido");
+  assert.equal(L.motivoFilaParada(sexta, new Date(AGORA2)), "Ficou na fila desde sex. às 18:02");
+  assert.equal(L.motivoFilaParada(AGORA2 - 40 * 60000, new Date(AGORA2)), "Ficou na fila desde hoje às 08:20");
+  assert.equal(L.motivoFilaParada(new Date("2026-09-27T23:10:00-03:00").getTime(), new Date(AGORA2)), "Ficou na fila desde ontem às 23:10");
+  assert.equal(L.motivoFilaParada(new Date("2026-09-10T10:00:00-03:00").getTime(), new Date(AGORA2)), "Ficou na fila desde 10/09 às 10:00");
+  assert.match(L.motivoFilaParada(null), /^Ficou na fila/);
+});
+
+await teste("R119 fila: o texto da bolha diz o motivo real e a hora da próxima tentativa", () => {
+  const T = new Date("2026-09-28T14:30:00-03:00").getTime();
+  assert.equal(L.textoFila({ estado: "fila", motivo: "Sem internet: a mensagem espera na fila.", proxima: T + 20000 }, T), "Na fila · envia quando a internet voltar");
+  assert.equal(L.textoFila({ estado: "fila", motivo: null }, T), "Na fila · envia quando a internet voltar");
+  assert.equal(L.textoFila({ estado: "fila", motivo: "O servidor está ocupado: tentando de novo.", proxima: T + 120000 }, T), "Na fila · O servidor está ocupado · nova tentativa às 14:32");
+  assert.equal(L.textoFila({ estado: "incerto", motivo: "x", proxima: T + 90000 }, T), "Sem resposta do servidor · tentando de novo (nada sai em dobro) · nova tentativa às 14:31");
+  assert.equal(L.textoFila({ estado: "incerto", proxima: T - 1 }, T), "Sem resposta do servidor · tentando de novo (nada sai em dobro)");
+  assert.equal(L.textoFila({ estado: "fila", motivo: "Sua sessão expirou. Entre de novo: a mensagem continua guardada." }, T), "Sua sessão expirou. Entre de novo: a mensagem continua guardada.");
+});
+
+await teste("R119 fila (tela): a hora do pedido é gravada ANTES do envio, a trava dos 90 s vale em todo caminho, o 409 e o «pode ter saído» não somem, e sair de Conversas não deixa item para reenviar", () => {
+  const conv = ler("conversas.js"), chat = ler("cv-chat.js");
+  const t = conv.slice(conv.indexOf("async function transmitir(it)"), conv.indexOf("async function falhaDeEnvio"));
+  assert.match(t, /if \(L\.esperaReenvioFila\(it\) > 0\) return "espera";/, "a trava fica dentro do transmitir: «Enviar agora», remontar e online passam por ela");
+  assert.ok(t.indexOf("it.enviada_em = Date.now();") > 0 && t.indexOf("it.enviada_em = Date.now();") < t.indexOf("await filaSalvar(it);") && t.indexOf("await filaSalvar(it);") < t.indexOf('A.api.fn("nx-enviar"'),
+    "enviada_em é gravada no IndexedDB antes do fetch");
+  assert.match(conv, /enviada_em: it\.enviada_em \|\| 0,/, "e vai para o banco da fila");
+  assert.match(t, /catch \(e\) \{\s*return await falhaDeEnvio\(it, e, \{ L, fila, ui, ctx \}\);/, "só a falha do PEDIDO vira falha de envio");
+  assert.match(t, /if \(!A\) \{[^\n]*\n\s*filaSemTela\(fila, it, true\);/, "confirmou com a pessoa fora de Conversas: o item sai do banco (não é reenviado na volta)");
+  assert.match(conv, /A\.L\.filaDevidos\(\[\.\.\.fila\.itens\.values\(\)\], Date\.now\(\), \{ forcar \}\)/, "forcar não vira mais «agora = infinito»");
+  assert.match(conv, /fila\.itens\.set\(it\.id, \{ \.\.\.it, estado: it\.enviada_em \? "incerto" : "fila", proxima_em: 0 \}\);/);
+  assert.match(conv, /if \(it\.estado === "falhou" \|\| it\.estado === "ambigua"\) \{ fila\.itens\.set\(it\.id, \{ \.\.\.it \}\); continue; \}/, "falha e «pode ter saído» voltam como estavam ao remontar");
+  assert.match(conv, /if \(A\.L\.filaParada\(it, agora\)\) \{[\s\S]{0,200}estado: "falhou", parada: true, motivo: A\.L\.motivoFilaParada\(it\.criada_em, new Date\(agora\)\)/, "ao abrir: parado há mais de 15 min não sai sozinho");
+  assert.match(conv, /if \(A\.L\.filaParada\(it, agora\) && !fila\.emVoo\.has\(it\.id\)\) await filaParar\(it, agora\);/, "e com a tela aberta também não");
+  assert.match(conv, /if \(velho\.parada\) \{[\s\S]{0,400}return transmitir\(velho\);/, "«Tentar de novo» de item parado usa o MESMO client_ref (se já tinha saído, o servidor devolve a mesma)");
+  assert.match(conv, /const ESPERA_PESSOA = new Set\(\["falhou", "ambigua"\]\);/);
+  assert.match(conv, /ambigua \? \(it\.motivo \|\| "Pode ter saído — confira no WhatsApp antes de reenviar\."\)/, "a bolha do item em dúvida fica com o aviso");
+  assert.match(chat, /m\.filaEstado === "ambigua" && A\.podeEscrever\) \{\s*falha\.append\(h\("button", \{[^}]*A\.acoes\.reenviarLocal\(m\) \} \}, "Enviar de novo"\),\s*h\("button", \{[^}]*A\.acoes\.descartarLocal\(m\) \} \}, "Descartar"\)\);/);
+  assert.match(conv, /setTimeout\(\(\) => \{ desistiu = true; no\(new Error\("fila_lenta"\)\); \}, FILA_PRAZO_ABRIR_MS\)/, "IndexedDB que não abre em 1,5 s não trava o chat");
+  assert.match(conv, /const FILA_PRAZO_ABRIR_MS = 1500;/);
+  assert.match(conv, /if \(A\.fila\.pronta\) await A\.fila\.pronta;\s*if \(!A \|\| seq !== A\.seqConversa\) return;/);
+});
+
+await teste("R119 aviso: falha em conversa que não está aberta vira toast com o nome e «Abrir», marca na linha da lista; mídia e modelo não engolem o erro", () => {
+  const conv = ler("conversas.js"), lista = ler("cv-lista.js"), css = ler("conversas.css");
+  assert.match(conv, /`Mensagem para \$\{nome\} não foi enviada: \$\{motivo \|\| it\.motivo \|\| "o canal não aceitou a mensagem\."\}`/);
+  assert.match(conv, /function avisarFalhaFora\(it, motivo, \{ ui = A && A\.ui, ctx = A && A\.ctx \} = \{\}\) \{\s*if \(!ui \|\| !ctx \|\| \(A && A\.selId === it\.conversa\)\) return;/, "só quando a bolha não está à vista");
+  assert.match(conv, /class: "toast-acao", on: \{ click: \(\) => \{ t\.fechar\(\); ctx\.navegar\(`#\/conversas\/\$\{conversaId\}`\); \} \} \}, "Abrir"\)/);
+  assert.match(conv, /para: nomeContato\(A\.ver\.contato \|\| conv\.contato\) \|\| null,/, "o item guarda o nome do destinatário");
+  const ped = conv.slice(conv.indexOf("async function enviarPedido"), conv.indexOf("/** PUT com progresso"));
+  assert.match(ped, /if \(!A \|\| A\.selId !== convId\) \{[\s\S]{0,900}toastAbrir\(ui, ctx, duvida \? `\$\{oQue\} para \$\{para\} pode ter saído — confira no WhatsApp antes de reenviar\.`\s*: `\$\{oQue\} para \$\{para\} não foi enviado: \$\{motivo\}`, convId\);/);
+  assert.doesNotMatch(ped, /catch \(e\) \{\s*if \(!A \|\| A\.selId !== convId\) return;/, "o catch não devolve em silêncio");
+  // lista: "!" (não enviada / em dúvida) e relógio (na fila); entra na assinatura da linha e no rótulo para leitor de tela
+  assert.match(lista, /A\.acoes\.rascunhoDe\(c\.id\), A\.acoes\.filaResumo\(c\.id\),/);
+  assert.match(lista, /class: "cvl-fila cvl-fila-falhou"/); assert.match(lista, /"Mensagem não enviada"/); assert.match(lista, /"Mensagem na fila de envio"/);
+  assert.match(css, /\.cvl-fila-falhou \{/);
+  assert.match(conv, /if \(ESPERA_PESSOA\.has\(x\.estado\)\) return "falhou";\s*if \(x\.estado !== "enviando"\) r = "pendente";/);
+  // rascunho x mensagem nova do cliente: a linha mostra a mensagem dele e um selo pequeno
+  assert.match(lista, /const rascunhoNaLinha = !!rascunho && !nl;/);
+  assert.match(lista, /class: "cvl-selo-rasc"/);
+  // j/k: o foco volta à mesma conversa depois de a lista redesenhar
+  assert.match(lista, /const idFocado = focada && lista\.contains\(focada\) \? focada\.dataset\.id : null;/);
+  assert.match(lista, /const volta = \[\.\.\.lista\.querySelectorAll\("\.cvl-item"\)\]\.find\(x => x\.dataset\.id === idFocado\);\s*if \(volta\) try \{ volta\.focus\(\{ preventScroll: true \}\); \}/);
+});
+
+await teste("R119: «Tentar de novo» de falha gravada pelo servidor pede o reenvio da própria mensagem (não assina em dobro) e o botão da bolha antiga some", () => {
+  const conv = ler("conversas.js"), chat = ler("cv-chat.js");
+  const srv = readFileSync(join(AQUI, "..", "supabase", "functions", "_compartilhado", "enviar.js"), "utf8");
+  // o contrato do servidor: ação "reenviar" com `mensagem` (id) e o client_ref no corpo, reenviando sem assinar
+  assert.match(srv, /case "reenviar": return acaoReenviar\(db, ctx, corpo, d\);/);
+  assert.match(srv, /const id = Number\(corpo\.mensagem\);/);
+  assert.match(srv, /assinar: false/);
+  assert.match(conv, /\{ acao: "reenviar", mensagem: it\.reenvio, client_ref: it\.id \}/);
+  assert.match(conv, /A\.reenviadas\.add\(m\.id\);/);
+  assert.match(conv, /if \(daAberta\) return enviarTexto\(\{ tipo: "texto", texto: m\.corpo, reenvio: Number\(m\.id\) \}\);/, "falha da conversa aberta: reenvio da própria mensagem");
+  assert.match(conv, /const daAberta = m\.conversa_id == null \|\| Number\(m\.conversa_id\) === Number\(A\.ver\.conversa\.id\);/, "falha de atendimento anterior não usa o reenvio (o servidor recusaria: atendimento resolvido)");
+  assert.match(conv, /replace\(\/\^\\\*\[\^\*\\n\]\+:\\\*\\n\/, ""\), reenvio: null \}\);/, "texto novo sai sem a assinatura já gravada");
+  assert.match(chat, /m\.tipo === "texto" && m\.corpo && !A\.acoes\.foiReenviada\(m\)\) \{[\s\S]{0,260}A\.acoes\.reenviarGravada\(m\)/);
+  assert.doesNotMatch(chat, /A\.acoes\.enviar\(\{ tipo: "texto", texto: m\.corpo \}\)/, "o texto já assinado não volta como mensagem nova");
+});
+
+/* ---- compositor de verdade (cv-composer.js + rascunho.js) sobre um DOM mínimo: o que importa é em QUAL conversa cada texto fica ---- */
+function elFalso(tag = "div") {
+  const ouvintes = new Map();
+  return {
+    tagName: String(tag).toUpperCase(), type: tag === "textarea" ? "textarea" : "", value: "", hidden: false, disabled: false, dataset: {}, style: {}, attrs: {},
+    children: [], parentNode: null, isConnected: true, scrollHeight: 20, textContent: "",
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
+    removeAttribute(k) { delete this.attrs[k]; }, hasAttribute(k) { return k in this.attrs; },
+    addEventListener(t, fn) { if (!ouvintes.has(t)) ouvintes.set(t, new Set()); ouvintes.get(t).add(fn); },
+    removeEventListener(t, fn) { if (ouvintes.has(t)) ouvintes.get(t).delete(fn); },
+    dispatchEvent(ev) { for (const fn of [...(ouvintes.get(ev.type) || [])]) fn(ev); return true; },
+    appendChild(x) { if (x && typeof x === "object") { this.children.push(x); x.parentNode = this; } return x; },
+    append(...xs) { for (const x of xs) this.appendChild(x); },
+    insertBefore(x) { return this.appendChild(x); },
+    removeChild(x) { this.children = this.children.filter(c => c !== x); return x; }, remove() {},
+    querySelector: () => null, querySelectorAll: () => [], closest: () => null,
+    focus() { globalThis.document.activeElement = this; }, select() { this.sel = [0, this.value.length]; }, setSelectionRange(a, b) { this.sel = [a, b]; }, click() {},
+  };
+}
+const achar = (raiz, teste2) => { if (teste2(raiz)) return raiz; for (const c of raiz.children || []) { const r = achar(c, teste2); if (r) return r; } return null; };
+
+/** Monta o compositor real com rascunho.js real; devolve os controles do teste. */
+async function montarCompositor() {
+  const guardado = new Map();
+  const storage = { getItem: k => (guardado.has(k) ? guardado.get(k) : null), setItem: (k, v) => { guardado.set(k, String(v)); }, removeItem: k => { guardado.delete(k); },
+    key: i => [...guardado.keys()][i] ?? null, get length() { return guardado.size; } };
+  const R = await import("../web/app/rascunho.js");
+  const { criarComposer } = await import("../web/app/cv-composer.js");
+  const rasc = R.criarRascunhos({ storage, conta: () => "u1", cliente: () => "c1", agendar: () => 1, cancelar: () => {},
+    doc: { createElement: elFalso, createTextNode: () => elFalso("texto"), addEventListener() {} }, janela: { addEventListener() {} } });
+  if (!globalThis.document) globalThis.document = { activeElement: null };
+  globalThis.matchMedia = () => ({ matches: true });        // "pointer: coarse": o compositor não agenda foco nem trata Enter (o teste chama o botão Enviar)
+  const toasts = [], enviados = [], modais = [];
+  let modalResposta = async () => true, ia = async () => ({ texto: "" });
+  const ui = {
+    h(tag, attrs, ...filhos) {
+      const el = elFalso(tag);
+      for (const [k, v] of Object.entries(attrs || {})) {
+        if (k === "on") for (const [t, fn] of Object.entries(v)) el.addEventListener(t, fn);
+        else if (k === "dataset") Object.assign(el.dataset, v);
+        else if (k === "hidden" || k === "disabled") el[k] = !!v;
+        else if (v !== null && v !== undefined && v !== false) el.setAttribute(k, v);
+      }
+      for (const x of filhos.flat(3)) if (x && typeof x === "object") el.appendChild(x);
+      return el;
+    },
+    icone: () => elFalso("svg"), limpar(el) { el.children = []; }, anunciar() {}, menu() {},
+    toast(t) { toasts.push(String(t)); return { fechar() {}, el: elFalso() }; },
+    modal: o => { modais.push(o); return modalResposta(o); },
+  };
+  const A = {
+    ui, L, ctx: { rascunho: rasc, cliente: { nome: "Clínica" } }, selId: null, ver: null, rascunhos: new Map(), podeEscrever: true,
+    base: { ia: {} }, eu: { id: "u1", nome: "Ana" }, icone: () => elFalso("svg"),
+    acoes: { rascunhoMudou() {}, nomeContato: c => (c && c.nome) || "", pode: () => true, focarLista() {}, tratarErro() {}, respostaUsada() {},
+      enviar: async o => { enviados.push(o); return { persistido: true }; }, sugerirIA: () => ia(), nota: async () => ({}) },
+  };
+  const comp = criarComposer(A);
+  const ta = achar(comp.el, x => x.tagName === "TEXTAREA" && x.attrs["aria-label"] === "Mensagem");
+  const botao = rotulo => achar(comp.el, x => x.tagName === "BUTTON" && x.attrs["aria-label"] === rotulo);
+  const verDe = id => ({ contato: { nome: `Cliente ${id}` },
+    conversa: { id, status: "aberta", canal_id: "k1", canal: { provedor: "meta", tem_token: true }, janela_ate: new Date(Date.now() + 3600000).toISOString() } });
+  return {
+    A, comp, ta, toasts, enviados, modais, botao,
+    /** como o conversas.js faz: guarda o texto do campo, troca a seleção e (carregar = true) a conversa nova termina de abrir */
+    selecionar(id, { carregar = true } = {}) { comp.guardar(); A.selId = id; A.ver = null; if (carregar) { A.ver = verDe(id); comp.definirConversa(); } },
+    carregar(id) { A.ver = verDe(id); comp.definirConversa(); },
+    digitar(texto) { ta.value = texto; ta.dispatchEvent({ type: "input" }); },
+    guardadoEm: chave => { const b = guardado.get(`nx-rasc:u1:c1:${chave}`); return b ? JSON.parse(b).t : null; },
+    chaves: () => [...guardado.keys()].map(k => k.replace("nx-rasc:u1:c1:", "")).sort(),
+    aoModal(fn) { modalResposta = fn; }, aoIA(fn) { ia = fn; },
+  };
+}
+
+await teste("R119 rascunho: A → B → A — cada texto fica na chave da conversa em que foi digitado (antes o da 902 ia parar na chave da 901 e o da 902 sumia)", async () => {
+  const t = await montarCompositor();
+  t.selecionar(902); t.digitar("Seu orçamento ficou em R$ 850");
+  t.selecionar(901);
+  assert.equal(t.guardadoEm("conversa:902"), "Seu orçamento ficou em R$ 850", "abrir outra conversa não apaga o rascunho guardado da anterior");
+  assert.equal(t.guardadoEm("conversa:901"), null);
+  assert.equal(t.ta.value, "", "a 901 abre com o campo vazio");
+  t.digitar("Pode vir às 15h");
+  t.selecionar(902);
+  assert.equal(t.guardadoEm("conversa:901"), "Pode vir às 15h", "a chave da 901 guarda o que foi escrito PARA a 901");
+  assert.equal(t.guardadoEm("conversa:902"), "Seu orçamento ficou em R$ 850", "e a da 902 continua com o dela");
+  assert.equal(t.ta.value, "Seu orçamento ficou em R$ 850");
+  assert.deepEqual(t.chaves(), ["conversa:901", "conversa:902"]);
+  assert.equal(t.A.rascunhos.get(901), "Pode vir às 15h"); assert.equal(t.A.rascunhos.get(902), "Seu orçamento ficou em R$ 850");
+});
+
+await teste("R119 rascunho: troca dupla rápida (Alt+↓ duas vezes) não copia o texto para a conversa do meio; digitar e Enter durante a troca ficam na conversa do campo", async () => {
+  const t = await montarCompositor();
+  t.selecionar(1); t.digitar("Seu orçamento ficou em R$ 850");
+  t.selecionar(2, { carregar: false });            // a 2 ainda está carregando…
+  t.selecionar(3, { carregar: false });            // …e a pessoa já pediu a 3: o campo ainda tem o texto da 1
+  assert.equal(t.A.rascunhos.get(2), undefined, "a conversa do meio não ganha o rascunho da primeira");
+  assert.equal(t.A.rascunhos.get(3), undefined);
+  assert.equal(t.A.rascunhos.get(1), "Seu orçamento ficou em R$ 850");
+  assert.equal(t.comp.textoDe(3), "", "a lista não mostra «Rascunho:» na conversa selecionada enquanto o campo é de outra");
+  assert.equal(t.comp.textoDe(1), "Seu orçamento ficou em R$ 850");
+  t.digitar("Seu orçamento ficou em R$ 850, à vista");     // ainda digitando enquanto a 3 carrega
+  assert.equal(t.A.rascunhos.get(1), "Seu orçamento ficou em R$ 850, à vista"); assert.equal(t.A.rascunhos.get(3), undefined);
+  t.botao("Enviar").dispatchEvent({ type: "click" });
+  await new Promise(r => setTimeout(r, 5));
+  assert.deepEqual(t.enviados, [], "com a troca em andamento, Enviar não manda o texto para ninguém");
+  t.carregar(3);
+  assert.equal(t.ta.value, "", "a 3 abre vazia");
+  assert.equal(t.guardadoEm("conversa:1"), "Seu orçamento ficou em R$ 850, à vista"); assert.equal(t.guardadoEm("conversa:3"), null); assert.equal(t.guardadoEm("conversa:2"), null);
+});
+
+await teste("R119 rascunho: nota interna nunca vira rascunho de mensagem para o cliente", async () => {
+  const t = await montarCompositor();
+  t.selecionar(7);
+  t.comp.alternarNota(true); t.digitar("cliente inadimplente, cobrar antes de marcar");
+  assert.equal(t.comp.textoDe(7), "", "a lista não mostra a nota como «Rascunho:»");
+  t.selecionar(8);
+  assert.equal(t.A.rascunhos.get(7), undefined, "trocar de conversa não guarda a nota como mensagem");
+  assert.equal(t.guardadoEm("conversa:7"), null); assert.equal(t.guardadoEm("conversa:7:nota"), "cliente inadimplente, cobrar antes de marcar");
+  t.selecionar(7);
+  assert.equal(t.ta.value, "", "ao voltar, o campo de MENSAGEM não traz o texto da nota");
+  // texto de mensagem que a pessoa leva para a nota deixa de ser rascunho de mensagem
+  t.digitar("anotar isto"); assert.equal(t.A.rascunhos.get(7), "anotar isto");
+  t.comp.alternarNota(true);
+  assert.equal(t.A.rascunhos.get(7), undefined); assert.equal(t.guardadoEm("conversa:7"), null);
+});
+
+await teste("R119 IA: sugestão que chega depois de trocar de conversa não entra no campo; com texto no campo, entra ABAIXO (não sobrescreve)", async () => {
+  const t = await montarCompositor();
+  let soltar; t.aoIA(() => new Promise(ok => { soltar = ok; }));
+  t.selecionar(1);
+  t.botao("Sugerir resposta com IA").dispatchEvent({ type: "click" });
+  t.selecionar(2); t.digitar("Oi, Bruna! Sobre o seu retorno");
+  soltar({ texto: "Olá, Ana! Seu exame ficou pronto." });
+  await new Promise(r => setTimeout(r, 5));
+  assert.equal(t.ta.value, "Oi, Bruna! Sobre o seu retorno", "o texto pensado para o cliente 1 não cai no campo do cliente 2");
+  assert.match(t.toasts.join("\n"), /sugestão da IA chegou depois que você trocou de conversa/i);
+  assert.equal(t.A.rascunhos.get(2), "Oi, Bruna! Sobre o seu retorno");
+  // mesma conversa, campo com texto: acrescenta abaixo e seleciona só a sugestão
+  t.aoIA(async () => ({ texto: "Posso agendar para amanhã às 10h?" }));
+  t.botao("Sugerir resposta com IA").dispatchEvent({ type: "click" });
+  await new Promise(r => setTimeout(r, 5));
+  assert.equal(t.ta.value, "Oi, Bruna! Sobre o seu retorno\n\nPosso agendar para amanhã às 10h?");
+  assert.deepEqual(t.ta.sel, ["Oi, Bruna! Sobre o seu retorno\n\n".length, t.ta.value.length]);
+  assert.equal(t.A.rascunhos.get(2), t.ta.value, "e o rascunho da sessão acompanha");
+  // campo vazio: a sugestão entra inteira, como sempre
+  t.selecionar(3);
+  t.botao("Sugerir resposta com IA").dispatchEvent({ type: "click" });
+  await new Promise(r => setTimeout(r, 5));
+  assert.equal(t.ta.value, "Posso agendar para amanhã às 10h?");
+});
+
+await teste("R119 anexo e modelo: o modal diz para quem vai e, se a conversa mudou no meio, nada é enviado (com aviso)", async () => {
+  const t = await montarCompositor();
+  const pdf = { name: "orcamento.pdf", type: "application/pdf", size: 120000 };
+  let soltar; t.aoModal(() => new Promise(ok => { soltar = ok; }));
+  t.selecionar(41);
+  const p = t.comp.anexar(pdf);
+  await new Promise(r => setTimeout(r, 5));
+  assert.equal(t.modais[0].titulo, "Enviar arquivo para Cliente 41");
+  t.selecionar(42);                               // chegou mensagem e a pessoa abriu outra conversa com o modal na tela
+  soltar(true); await p;
+  assert.deepEqual(t.enviados, [], "o arquivo escolhido para a 41 não vai para a 42");
+  assert.match(t.toasts.join("\n"), /o arquivo não foi enviado/);
+  // sem trocar de conversa: envia, e diz ao envio para qual conversa o arquivo foi preparado
+  t.aoModal(async () => true);
+  await t.comp.anexar(pdf);
+  assert.equal(t.enviados.length, 1); assert.equal(t.enviados[0].tipo, "midia"); assert.equal(t.enviados[0].conversa, 42);
+  // modelos: título com o nome e a mesma trava no botão «Enviar modelo»
+  const comp = ler("cv-composer.js"), conv = ler("conversas.js");
+  assert.match(comp, /titulo: `Enviar modelo para \$\{nomeDestino\(\)\}`/);
+  assert.match(comp, /if \(!mesmaConversa\(idInicio\)\) \{ api\.erro\("A conversa aberta mudou\./);
+  assert.match(comp, /A\.acoes\.enviar\(\{ tipo: "template", conversa: idInicio, template: escolhido, parametros: vals \}\)/);
+  assert.match(comp, /if \(!mesmaConversa\(idInicio\)\) \{ ui\.toast\("Você trocou de conversa enquanto a foto era preparada/, "depois de otimizar a foto também");
+  assert.match(conv, /if \(o\.conversa != null && \(o\.conversa !== conv\.id \|\| A\.selId !== conv\.id\)\) \{/, "e o próprio envio confere a conversa");
+});
+
+await teste("R119 rascunho.js: depois de parar()/apagarTudo() (Sair), desligar() e salvarAgora() não regravam nada", async () => {
+  const guardado = new Map();
+  const storage = { getItem: k => (guardado.has(k) ? guardado.get(k) : null), setItem: (k, v) => { guardado.set(k, String(v)); }, removeItem: k => { guardado.delete(k); },
+    key: i => [...guardado.keys()][i] ?? null, get length() { return guardado.size; } };
+  const R = await import("../web/app/rascunho.js");
+  const rasc = R.criarRascunhos({ storage, conta: () => "u1", cliente: () => "c1", agendar: () => 1, cancelar: () => {}, doc: null, janela: null });
+  const campo = elFalso("textarea");
+  const ctl = rasc.ligar(campo, "conversa:5");
+  campo.value = "resposta que não foi enviada"; campo.dispatchEvent({ type: "input" });
+  ctl.salvarAgora();
+  assert.equal(guardado.size, 1, "antes do Sair o rascunho está guardado");
+  rasc.apagarTudo();                               // Sair
+  assert.equal(guardado.size, 0);
+  ctl.desligar();                                  // a tela desmonta DEPOIS do Sair (o compositor desliga o rascunho)
+  ctl.salvarAgora(); rasc.salvarTudo();
+  assert.equal(guardado.size, 0, "nenhum rascunho fica no aparelho depois do Sair");
+  // um controle novo (outra pessoa entrou) funciona normalmente
+  const ctl2 = rasc.ligar(campo, "conversa:5");
+  ctl2.salvarAgora();
+  assert.equal(guardado.size, 1);
+});
+
+/* ============================================================ M33 — assistente passo a passo do número (CodeWords e Meta) */
+console.log("\n(f) M33 — assistente do número");
+
+await teste("M33: passosCodeWords — o passo atual é o 1º que o servidor ainda não confirmou (5 estados do canal)", () => {
+  const cw = (o = {}) => ({ id: "k1", nome: "Recepção", codewords: { tem_api_key: true, conectado: true, numero_conferido: true, rota: "fluxo", service_id: "svc-1", inscricao: "svc-1", ia_ligada: true, ...o } });
+  // 1) canal que ainda não existe → passo 1
+  let r = L.passosCodeWords({ canal: null });
+  assert.equal(r.atual, 1); assert.deepEqual(r.passos.map(p => p.estado), ["atual", "futuro", "futuro", "futuro", "futuro"]);
+  assert.equal(r.passos.length, 5); assert.deepEqual(r.passos.map(p => p.id), ["chave", "parear", "conferir", "destino", "teste"]);
+  // 2) chave salva, aparelho não pareado → passo 2
+  r = L.passosCodeWords({ canal: cw({ conectado: false, numero_conferido: null }) });
+  assert.equal(r.atual, 2); assert.equal(r.passos[0].feito, true); assert.equal(r.passos[1].estado, "atual");
+  assert.match(r.passos[1].texto, /Gere o código/);
+  assert.match(L.passosCodeWords({ canal: cw({ conectado: false }), aguardandoCodigo: true }).passos[1].texto, /Aguardando você ler o código no celular/);
+  // 3) pareado, número ainda não conferido → passo 3 ("Aguardando confirmação", nunca "Não sei")
+  r = L.passosCodeWords({ canal: cw({ numero_conferido: null }) });
+  assert.equal(r.atual, 3); assert.match(r.passos[2].texto, /Aguardando confirmação/);
+  // 4) conferido mas o destino ainda não aponta para o Órbita → passo 4
+  r = L.passosCodeWords({ canal: cw({ inscricao: null, service_id: null }) });
+  assert.equal(r.atual, 4); assert.match(r.passos[3].texto, /Escolha quem responde primeiro/);
+  // 5) tudo configurado → só falta a mensagem de teste (passo 5); com o teste entregue → 6 (tudo pronto)
+  r = L.passosCodeWords({ canal: cw() });
+  assert.equal(r.atual, 5); assert.equal(r.passos[3].feito, true); assert.match(r.passos[3].texto, /A IA atende primeiro/);
+  assert.match(L.passosCodeWords({ canal: cw(), testeEnviado: true }).passos[4].texto, /confirme se chegou/);
+  r = L.passosCodeWords({ canal: cw(), testeEnviado: true, testeChegou: true });
+  assert.equal(r.atual, 6); assert.ok(r.passos.every(p => p.feito));
+  // receber direto também fecha o passo 4
+  r = L.passosCodeWords({ canal: cw({ rota: "direta", service_id: null, inscricao: "URL deste canal" }) });
+  assert.equal(r.atual, 5); assert.match(r.passos[3].texto, /direto na caixa Conversas/);
+});
+
+await teste("M33: o estado vivo do aparelho (nx-codewords/estado) manda mais que o que o banco guardou; um passo só vale se os anteriores valem", () => {
+  const sem = { id: "k1", codewords: { tem_api_key: false } };
+  assert.equal(L.passosCodeWords({ canal: sem }).atual, 1, "sem chave não há aparelho");
+  assert.equal(L.passosCodeWords({ canal: sem, estado: { pareado: true, conectado: true, numero_confere: true, inscrito_certo: true } }).atual, 1, "mesmo com o estado verde, sem chave volta ao passo 1");
+  const salvo = { id: "k1", codewords: { tem_api_key: true, conectado: false } };
+  assert.equal(L.passosCodeWords({ canal: salvo }).atual, 2);
+  assert.equal(L.passosCodeWords({ canal: salvo, estado: { pareado: true, conectado: true, numero_confere: false } }).atual, 3, "pareou: segue para conferir");
+  assert.equal(L.passosCodeWords({ canal: salvo, estado: { pareado: true, conectado: true, numero_confere: true, rota_atual: "a", rota_esperada: "b" } }).atual, 4);
+  assert.equal(L.passosCodeWords({ canal: salvo, estado: { inscrito_certo: true } }).atual, 5, "inscrito_certo sozinho já confirma aparelho, número e destino");
+  assert.equal(L.passosCodeWords({ canal: salvo, estado: { pareado: false, conectado: false } }).atual, 2, "desconectou de novo: volta ao passo 2");
+});
+
+await teste("M33: situacaoCodeWords — «Não sei» virou «Aguardando confirmação»; Conectado, Desconectado e Conectado mas sem receber continuam", () => {
+  assert.deepEqual(L.situacaoCodeWords({ codewords: {} }), ["Aguardando confirmação", "neutra"]);
+  assert.deepEqual(L.situacaoCodeWords(null), ["Aguardando confirmação", "neutra"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: {} }, { inscrito_certo: true }), ["Conectado", "ok"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: {} }, { pareado: false }), ["Desconectado", "ruim"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: {} }, { pareado: true, conectado: true, numero_confere: false }), ["Conectado mas sem receber", "aten"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: { conectado: false, phone_id: "x" } }), ["Desconectado", "ruim"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: { conectado: true, numero_conferido: true, rota: "direta", inscricao: "Chega pela URL deste canal" } }), ["Conectado", "ok"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: { conectado: true, numero_conferido: true, rota: "fluxo", service_id: "s1", inscricao: "s1:ativo" } }), ["Conectado", "ok"]);
+  assert.deepEqual(L.situacaoCodeWords({ codewords: { conectado: true, numero_conferido: true, rota: "fluxo", service_id: "s1", inscricao: "outro" } }), ["Conectado mas sem receber", "aten"]);
+  assert.doesNotMatch(JSON.stringify([L.situacaoCodeWords(null)]), /Não sei/);
+});
+
+await teste("M33: marcosMeta — os mesmos 3 marcos para o número da Meta (token, app inscrito, modelos sincronizados)", () => {
+  assert.deepEqual(L.marcosMeta({ tem_token: true, app_inscrito: true }, 3).map(m => [m.id, m.feito]), [["token", true], ["inscrito", true], ["modelos", true]]);
+  assert.equal(L.marcosMeta({ tem_token: true, app_inscrito: true }, 3)[2].rotulo, "3 modelos sincronizados");
+  assert.equal(L.marcosMeta({ tem_token: true, app_inscrito: true }, 1)[2].rotulo, "1 modelo sincronizado");
+  assert.deepEqual(L.marcosMeta({ tem_token: false, app_inscrito: null }, 0).map(m => m.feito), [false, false, false]);
+  assert.deepEqual(L.marcosMeta(null).map(m => m.feito), [false, false, false]);
+});
+
+await teste("M33: o assistente do CodeWords tem UM primário por passo, desenha uma vez e consulta o aparelho a cada ~5 s só nos passos 2 e 3; a seção usa ui.cabecalho nível 2", () => {
+  const s = ler("cv-config.js");
+  const bloco = s.slice(s.indexOf("async function assistenteCodeWords(canal)"), s.indexOf("/* ---------------- assistente em 5 passos */"));
+  assert.match(bloco, /L\.PASSOS_CODEWORDS\.forEach\(\(p, i\) =>/, "o esqueleto dos 5 passos nasce uma vez");
+  assert.match(bloco, /L\.passosCodeWords\(\{ canal: atual, estado: estadoVivo, testeEnviado, testeChegou, aguardandoCodigo \}\)/);
+  assert.match(bloco, /\(passoAtual === 2 && aguardandoCodigo\) \|\| passoAtual === 3/, "só os passos 2 e 3 consultam sozinhos");
+  assert.match(bloco, /\}, 5000\);/, "a cada ~5 s");
+  assert.match(bloco, /5 \* 60000/, "e para depois de 5 minutos");
+  assert.match(bloco, /acoes: \[\{ rotulo: "Fechar", tipo: "neutro" \}\]/, "o rodapé só fecha: sem «Salvar configuração» competindo com o passo");
+  assert.equal((bloco.match(/class: "bt bt-prim"/g) || []).length, 6, "salvar, gerar código, conferir, ligar na IA, enviar teste e o «copiar prompt» que só nasce depois de pedir o prompt: um por passo");
+  assert.match(bloco, /pararPolling\(\);\s*\}\s*$/, "fechar o modal para a consulta");
+  assert.match(s, /ui\.cabecalho\(\{ rotulo: "Atendimento", titulo: "Números de WhatsApp", nivel: 2/, "fim do H1 duplicado na seção");
+  assert.doesNotMatch(s.slice(s.indexOf("async function montarNumeros"), s.indexOf("/* ============================================================ RESPOSTAS RÁPIDAS */")), /h\("h1"/, "Números de WhatsApp não cria H1");
+  assert.match(s, /tipo: "primeiro_uso", titulo: "Nenhum número conectado\."/, "primeiro uso com os passos acendendo");
+  assert.match(s, /L\.marcosMeta\(c,/, "Meta com os mesmos marcos");
+  assert.doesNotMatch(s, /"Não sei"/);
+});
+
+/* ============================================================ M35 — central de conversas por teclado */
+console.log("\n(g) M35 — teclado da central");
+
+const EV = (o = {}) => ({ key: "", code: "", altKey: false, shiftKey: false, ctrlKey: false, metaKey: false, isComposing: false, getModifierState: () => false, ...o });
+const C = (id, o = {}) => ({ id, status: "aberta", aguardando: false, atribuida_a: null, oculta: false, nao_lidas: 0, ultima_msg_dir: "out", contato: { nome: `Contato ${id}` }, ...o });
+
+await teste("M35: acordeDoEvento — Alt+↓/↑ e Alt+Shift+A/R/N/T/P funcionam dentro do campo; j k / ? só fora dele", () => {
+  const a = (o, emCampo = false) => L.acordeDoEvento(EV(o), { emCampo });
+  for (const emCampo of [false, true]) {
+    assert.equal(a({ key: "ArrowDown", altKey: true }, emCampo), "proxima");
+    assert.equal(a({ key: "ArrowUp", altKey: true }, emCampo), "anterior");
+    assert.equal(a({ key: "A", code: "KeyA", altKey: true, shiftKey: true }, emCampo), "assumir");
+    assert.equal(a({ key: "R", code: "KeyR", altKey: true, shiftKey: true }, emCampo), "resolver");
+    assert.equal(a({ key: "N", code: "KeyN", altKey: true, shiftKey: true }, emCampo), "nota");
+    assert.equal(a({ key: "T", code: "KeyT", altKey: true, shiftKey: true }, emCampo), "transferir");
+    assert.equal(a({ key: "P", code: "KeyP", altKey: true, shiftKey: true }, emCampo), "atender");
+  }
+  // no Mac Alt+letra muda o caractere (key vira «®»): o código físico manda
+  assert.equal(a({ key: "®", code: "KeyR", altKey: true, shiftKey: true }), "resolver");
+  // letras soltas: só fora de campo
+  assert.equal(a({ key: "j" }), "mover_baixo"); assert.equal(a({ key: "k" }), "mover_cima");
+  assert.equal(a({ key: "/" }), "buscar"); assert.equal(a({ key: "?", shiftKey: true }), "ajuda");
+  for (const key of ["j", "k", "/", "?"]) assert.equal(a({ key }, true), null, `«${key}» dentro do campo é texto`);
+  // nada de letra solta com Alt sem Shift, nem Alt+Shift com outra tecla
+  assert.equal(a({ key: "a", code: "KeyA", altKey: true }), null);
+  assert.equal(a({ key: "x", code: "KeyX", altKey: true, shiftKey: true }), null);
+  assert.equal(a({ key: "ArrowDown", altKey: true, shiftKey: true }), null);
+});
+
+await teste("M35: o AltGr do teclado ABNT2 (Ctrl+Alt) e Ctrl/⌘ nunca disparam um acorde; composição de IME também não", () => {
+  assert.equal(L.acordeDoEvento(EV({ key: "ArrowDown", altKey: true, ctrlKey: true })), null, "AltGr no Windows chega como Ctrl+Alt");
+  assert.equal(L.acordeDoEvento(EV({ key: "R", code: "KeyR", altKey: true, shiftKey: true, ctrlKey: true })), null);
+  assert.equal(L.acordeDoEvento(EV({ key: "R", code: "KeyR", altKey: true, shiftKey: true, metaKey: true })), null);
+  assert.equal(L.acordeDoEvento(EV({ key: "R", code: "KeyR", altKey: true, shiftKey: true, getModifierState: m => m === "AltGraph" })), null);
+  assert.equal(L.acordeDoEvento(EV({ key: "j", ctrlKey: true })), null);
+  assert.equal(L.acordeDoEvento(EV({ key: "ArrowDown", altKey: true, isComposing: true })), null);
+  assert.equal(L.acordeDoEvento(null), null);
+  // todo acorde da folha que usa Alt leva Shift quando é letra (a regra do risco 12 do plano)
+  for (const a of L.ACORDES.filter(x => /^Alt\+/.test(x.teclas) && /[A-Z]$/.test(x.teclas))) assert.match(a.teclas, /^Alt\+Shift\+[A-Z]$/, `${a.id}: Alt+Shift+letra`);
+  assert.deepEqual(["proxima", "anterior", "assumir", "resolver", "nota", "transferir"].map(id => L.ACORDES.find(a => a.id === id).teclas),
+    ["Alt+↓", "Alt+↑", "Alt+Shift+A", "Alt+Shift+R", "Alt+Shift+N", "Alt+Shift+T"], "os acordes do plano");
+});
+
+await teste("M35: proximaConversa — vizinha na lista, sem a oculta, null nas pontas; sem conversa aberta parte da 1ª (ou da última)", () => {
+  const itens = [C(1), C(2, { oculta: true }), C(3), C(4)];
+  assert.equal(L.proximaConversa(itens, 1, 1), 3);
+  assert.equal(L.proximaConversa(itens, 3, 1), 4);
+  assert.equal(L.proximaConversa(itens, 4, 1), null);
+  assert.equal(L.proximaConversa(itens, 3, -1), 1);
+  assert.equal(L.proximaConversa(itens, 1, -1), null);
+  assert.equal(L.proximaConversa(itens, null, 1), 1);
+  assert.equal(L.proximaConversa(itens, null, -1), 4);
+  assert.equal(L.proximaConversa(itens, 999, 1), 1, "a aberta saiu da lista");
+  assert.equal(L.proximaConversa([], null, 1), null);
+});
+
+await teste("M35: proximaParaAtender — a que espera há mais tempo, só aberta, aguardando e sem dono ou minha (nunca a de colega, a oculta ou a resolvida)", () => {
+  const h = min => new Date(Date.UTC(2026, 9, 1, 12, 0, 0) - min * 60000).toISOString();
+  const itens = [
+    C(1, { aguardando: true, ultima_entrada_em: h(5) }),
+    C(2, { aguardando: true, ultima_entrada_em: h(40), atribuida_a: "ana" }),           // da colega: fica de fora
+    C(3, { aguardando: true, ultima_entrada_em: h(20), atribuida_a: "eu" }),            // minha
+    C(4, { aguardando: true, ultima_entrada_em: h(90), oculta: true }),
+    C(5, { aguardando: true, ultima_entrada_em: h(60), status: "resolvida" }),
+    C(6, { aguardando: false, ultima_entrada_em: h(80) }),
+    C(7, { aguardando: true, ultima_entrada_em: h(20) }),                               // empate com a 3: o menor id
+  ];
+  assert.equal(L.proximaParaAtender(itens, "eu").id, 3);
+  assert.equal(L.proximaParaAtender(itens.slice(3, 6), "eu"), null, "ninguém espera");
+  assert.equal(L.proximaParaAtender([], "eu"), null);
+  assert.equal(L.proximaParaAtender([C(9, { aguardando: true })], "eu").id, 9, "sem hora de entrada ainda conta (vai para o fim)");
+  assert.equal(L.proximaParaAtender([C(8, { aguardando: true }), C(9, { aguardando: true, ultima_entrada_em: h(1) })], "eu").id, 9);
+});
+
+await teste("M35: proximaAposResolver — a seguinte (ou, no fim, a anterior), sem as já resolvidas, e na aba Resolvidas elas contam", () => {
+  const itens = [C(1), C(2), C(3, { status: "resolvida" }), C(4)];
+  assert.equal(L.proximaAposResolver(itens, 1).id, 2);
+  assert.equal(L.proximaAposResolver(itens, 2).id, 4, "pula a resolvida");
+  assert.equal(L.proximaAposResolver(itens, 4).id, 2, "no fim da lista volta para a anterior que ainda serve");
+  assert.equal(L.proximaAposResolver([C(1)], 1), null, "fila zerada");
+  assert.equal(L.proximaAposResolver(itens, 2, { aba: "resolvidas" }).id, 3);
+  assert.equal(L.proximaAposResolver([C(1), C(2, { oculta: true })], 1), null);
+  assert.equal(L.proximaAposResolver(itens, 99).id, 1, "a resolvida já saiu da lista: parte do começo");
+});
+
+await teste("M35: anúncio da lista — conversa nova (a aberta não), texto «Nova mensagem de Mariana, aguardando há 3 min», vários e 1 a cada 10 s", () => {
+  const agora = new Date("2026-10-01T12:00:00Z");
+  const antes = [C(1, { nao_lidas: 1, ultima_msg_dir: "in" }), C(2)];
+  const depois = [
+    C(1, { nao_lidas: 2, ultima_msg_dir: "in", aguardando: true, ultima_entrada_em: "2026-10-01T11:57:00Z", contato: { nome: "Mariana" } }),
+    C(2, { nao_lidas: 1, ultima_msg_dir: "out" }),                                       // saída: não anuncia
+    C(3, { nao_lidas: 1, ultima_msg_dir: "in", contato: { nome: "Rafael" } }),           // conversa nova
+  ];
+  const novas = L.novasEntradas(antes, depois);
+  assert.deepEqual(novas.map(c => c.id), [1, 3]);
+  assert.deepEqual(L.novasEntradas(antes, depois, { ignorar: 1 }).map(c => c.id), [3], "a conversa aberta e à vista fica de fora");
+  assert.equal(L.textoNovaMensagem([novas[0]], agora), "Nova mensagem de Mariana, aguardando há 3 min");
+  assert.equal(L.textoNovaMensagem([novas[1]], agora), "Nova mensagem de Rafael");
+  assert.equal(L.textoNovaMensagem(novas, agora), "2 conversas com mensagem nova, a primeira de Mariana");
+  assert.equal(L.textoNovaMensagem([], agora), "");
+  assert.equal(L.textoNovaMensagem([C(5, { contato: {}, ultima_msg_dir: "in" })], agora), "Nova mensagem de um contato");
+  assert.deepEqual(L.novasEntradas(depois, depois), [], "nada novo: nada a anunciar");
+  // no máximo 1 anúncio a cada 10 s
+  assert.equal(L.ANUNCIO_INTERVALO_MS, 10000);
+  assert.equal(L.esperaAnuncio(0, 1_000_000), 0);
+  assert.equal(L.esperaAnuncio(1_000_000, 1_004_000), 6000);
+  assert.equal(L.esperaAnuncio(1_000_000, 1_010_000), 0);
+  assert.equal(L.esperaAnuncio(1_000_000, 1_020_000), 0);
+});
+
+await teste("M40: base e primeira página da central iniciam juntas; falha da base desmonta a lista pendente", () => {
+  const cv = ler("conversas.js");
+  const listaInicial = cv.indexOf("const listaInicial = carregarLista({ reset: true });");
+  const base = cv.indexOf("await carregarBase();", listaInicial);
+  const listaAguardar = cv.indexOf("await listaInicial;", base);
+  const rota = cv.indexOf("await aplicarRota(ctx.rota);", listaAguardar);
+  assert.ok(listaInicial >= 0 && base > listaInicial && listaAguardar > base && rota > listaAguardar);
+  assert.match(cv.slice(base, listaAguardar), /catch \(e\) \{\s*desmontar\(\);[\s\S]*ui\.erroCartao\(e, \(\) => montar\(ctx\)\)/);
+});
+
+await teste("M22: respostas rápidas do compositor anunciam opções sem aria-expanded inválido no textarea", () => {
+  const comp = ler("cv-composer.js");
+  assert.doesNotMatch(comp, /ta\.setAttribute\("aria-expanded"/);
+  assert.match(comp, /role: "status", "aria-live": "polite", "aria-atomic": "true"/);
+  assert.match(comp, /rrStatus\.textContent = rrItens\.length/);
+  assert.match(comp, /Resposta rápida aplicada\./);
+});
+
+await teste("M35: a tela liga o teclado (um ouvinte que sai ao desmontar, sem se meter em modal), o botão «Atender o próximo» e a paleta (só se o shell oferecer o registro)", () => {
+  const cv = ler("conversas.js"), lista = ler("cv-lista.js"), chat = ler("cv-chat.js"), comp = ler("cv-composer.js"), css = ler("conversas.css");
+  assert.match(cv, /document\.addEventListener\("keydown", aoTeclaCentral\);\s*A\.limpar\.push\(\(\) => document\.removeEventListener\("keydown", aoTeclaCentral\)\)/);
+  assert.match(cv, /if \(!A \|\| ev\.defaultPrevented\) return;\s*if \(document\.querySelector\("dialog\[open\]"\)\) return;/, "com modal aberto o teclado é do modal; quem já tratou a tecla (a paleta do shell) vence");
+  assert.match(cv, /A\.L\.acordeDoEvento\(ev, \{ emCampo: emCampoDeTexto\(ev\.target\) \}\)/);
+  for (const id of ["proxima", "anterior", "atender", "assumir", "resolver", "nota", "transferir", "mover_baixo", "mover_cima", "buscar", "ajuda", "foco_lista"]) assert.match(cv, new RegExp(`case "${id}":`), `comando ${id}`);
+  // a paleta: só com ctx.comandos.registrar; ações do plano (Nova conversa, Atender o próximo) e atalhos exibidos
+  assert.match(cv, /if \(!reg \|\| typeof reg\.registrar !== "function"\) return;/);
+  assert.match(cv, /def\("atender", "Atender o próximo"/); assert.match(cv, /def\("nova", "Nova conversa"/);
+  assert.match(cv, /"Alt\+Shift\+R"/);
+  // Atender o próximo: a fila «aguardando», a regra pura, abre, e assume (a IA do CodeWords pausa pelo mesmo caminho do botão)
+  assert.match(cv, /rpcC\("nx_cv_listar", \{ p_filtro: \{ aba: "aguardando" \}/);
+  assert.match(cv, /const esperando = \(\(r && r\.itens\) \|\| \[\]\)\.filter\(x => !_pendResolver\.has\(x\.id\)\);\s*const c = A\.L\.proximaParaAtender\(esperando, A\.eu && A\.eu\.id\);/,
+    "a regra pura escolhe; a recém-resolvida (Desfazer ainda na tela) fica de fora");
+  assert.match(cv, /est\.primaria === "assumir_ia"\) await acoes\.assumirIA\(\);\s*else if \(est\.primaria === "assumir"\) await acoes\.assumir\(\);/);
+  assert.match(lista, /class: "bt bt-sec bt-p cvl-atender", hidden: true/, "no cabeçalho da lista, só quando há fila");
+  assert.match(lista, /btAtender\.hidden = !\(ag > 0\)/);
+  assert.match(chat, /cvc-atender[\s\S]{0,200}A\.acoes\.atenderProximo\(ev\.currentTarget\)/, "e no painel vazio");
+  // Esc no campo devolve o foco à lista; Alt+Shift+N alterna a nota do próprio compositor
+  assert.match(comp, /ev\.key === "Escape" && !ev\.isComposing\) \{ ev\.preventDefault\(\); A\.acoes\.focarLista\(\); return; \}/);
+  assert.match(comp, /alternarNota\(forcar\) \{ if \(el\.hidden \|\| !A\.podeEscrever\) return false; alternarNota\(forcar\); return modoNota; \}/);
+  assert.match(css, /\.cvl-item:focus-visible \{ outline: 2px solid var\(--c-prim\)/, "o foco do j/k aparece na lista");
+});
+
+await teste("M35: Resolver tem Desfazer (ui.acaoComDesfazer «Resolvida · nome»), devolve o estado anterior, abre a próxima só se a preferência estiver ligada e Desfazer volta para a resolvida", () => {
+  const cv = ler("conversas.js"), chat = ler("cv-chat.js");
+  const f = cv.slice(cv.indexOf("async function resolverComDesfazer"), cv.indexOf("/** Devolve o foco à lista (Esc no campo)"));
+  assert.match(f, /A\.ui\.acaoComDesfazer\(\{\s*texto: `Resolvida · \$\{nome\}`/);
+assert.match(f, /const antes = conv\.status;/);
+  assert.match(f, /const pend = \{ antes: \{ status: antes, aguardando: !!conv\.aguardando, nao_lidas: Number\(conv\.nao_lidas\) \|\| 0 \}, cancelado: false \};/, "Desfazer devolve aberta ou pendente, ainda na fila de espera, como estava");
+  // a tela resolve na hora; o servidor só recebe quando o aviso fecha (firmar) — o Desfazer não dispara automação nem tira a conversa da fila de espera
+  const aplicar = f.slice(f.indexOf("aplicar: () => {"), f.indexOf("firmar: async"));
+  assert.ok(aplicar.length > 100 && !/rpcC?\(/.test(aplicar), "aplicar não fala com o servidor");
+  assert.match(aplicar, /trocarConversa\(\{ id, status: "resolvida" \}\)/);
+  assert.match(f, /firmar: async \(\{ saindo = false \} = \{\}\) => \{\s*if \(pend\.cancelado\) return;/);
+  assert.match(f, /api\.rpc\("nx_cv_status", \{ p_cliente: cliente, p_conversa: id, p_status: "resolvida" \}, saindo \? \{ keepalive: true \} : \{\}\)/, "página saindo: keepalive; a empresa vai fixa (a pessoa pode ter trocado)");
+  assert.equal((f.match(/nx_cv_status/g) || []).length - (f.match(/\(nx_cv_status\)/g) || []).length, 1, "uma única escrita: a do firmar (o Desfazer não escreve nada)");
+  const volta = f.slice(f.indexOf("const voltarTela = () => {"), f.indexOf("await A.ui.acaoComDesfazer"));
+  assert.ok(volta.length > 100 && !/rpcC?\(/.test(volta), "Desfazer só devolve a tela");
+  assert.match(volta, /if \(!naMesmaEmpresa\(\)\) return;/, "Desfazer depois de sair de Conversas não quebra (A nulo)");
+  assert.match(f, /reverter: voltarTela,/);
+  assert.match(cv, /const _pendResolver = new Map\(\);/, "o Resolver pendente sobrevive a sair de Conversas e voltar");
+  assert.match(cv, /A\.itens = itensComPendencia\(mais \?/, "o pulso não desfaz na tela o Resolver que ainda espera o Desfazer");
+  assert.match(cv, /const pend = _pendResolver\.get\(A\.selId\);\s*if \(pend && !pend\.firmando\) \{[\s\S]{0,220}pend\.cancelado = true; _pendResolver\.delete\(id\); A\.resolvendo\.delete\(id\);/, "«Reabrir» durante o Desfazer cancela o Resolver pendente e libera o próximo Resolver");
+  assert.match(cv, /const entradaAntes = Date\.parse\(conv\.ultima_entrada_em \|\| ""\) \|\| 0;/, "o Resolver guarda a última mensagem do cliente vista no clique");
+  assert.match(cv, /if \(c && \(Date\.parse\(c\.ultima_entrada_em \|\| ""\) \|\| 0\) > entradaAntes\) \{/, "cliente escreveu durante o aviso: não resolve por cima");
+  assert.match(cv, /pend\.firmando = true;/);
+  assert.match(cv, /db\.onversionchange = \(\) => \{ try \{ db\.close\(\); \}/, "o Sair consegue apagar a fila (a conexão se fecha)");
+  assert.match(f, /const proxima = A\.avancar \? A\.L\.proximaAposResolver\(A\.itens, id, \{ aba: A\.aba \}\) : null;/, "sem a preferência a conversa fica aberta, como sempre foi");
+  assert.match(f, /if \(proxima\) \{ A\.focoAoAbrir = "composer"; A\.ctx\.navegar\(`#\/conversas\/\$\{proxima\.id\}`\); \}\s*else \{ A\.focoAoAbrir = "lista"; A\.ctx\.navegar\("#\/conversas"\); \}/, "sem próxima, volta ao painel da fila");
+  assert.match(f, /if \(avancou && aindaNaProxima\) \{ A\.focoAoAbrir = "composer"; abrir\(id\); \}/, "Desfazer reabre a resolvida se a próxima abriu sozinha e a pessoa ainda está nela");
+  assert.match(f, /if \(A\.resolvendo\.has\(id\)\) return;/, "Alt+Shift+R duas vezes não resolve duas vezes");
+  assert.match(f, /conv\.status === "resolvida"\) \{ aviso\("Esta conversa já está resolvida\."\)/);
+  // todo caminho de «Resolver» (botão, ✓, menu ⋮ e acorde) passa por ela; só pendente/aberta ficam no status direto
+  assert.equal((chat.match(/A\.acoes\.resolver\(/g) || []).length, 3);
+  assert.doesNotMatch(chat, /status\("resolvida"/);
+  assert.match(cv, /async status\(novo, botao\) \{\s*if \(novo === "resolvida"\) return resolverComDesfazer\(botao\);/);
+  // preferência por navegador, desligada até a pessoa ligar; mora no menu ⋮ e na folha de atalhos
+  assert.match(cv, /avancar: lerPreferencia\("avancar", "0"\) === "1"/);
+  assert.match(cv, /definirAvancar\(sim\) \{\s*A\.avancar = !!sim; gravarPreferencia\("avancar", sim \? "1" : "0"\);/);
+  assert.match(chat, /Ao resolver, abrir a próxima: ligado/); assert.match(cv, /rotulo: "Ao resolver, abrir a próxima conversa"/);
+  assert.match(chat, /rotulo: "Atalhos de teclado"/);
+});
+
+await teste("M35: o leitor de tela ouve a lista (role=status aria-live=polite), com texto na vez se vier dentro dos 10 s, e as conversas novas passam por ele a cada pulso", () => {
+  const cv = ler("conversas.js"), lista = ler("cv-lista.js");
+  assert.match(lista, /class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true"/);
+  assert.match(lista, /L\.esperaAnuncio\(ultimoAnuncio, Date\.now\(\)\)/);
+  assert.match(lista, /textoPendente = texto;/);
+  assert.match(cv, /const novas = A\.L\.novasEntradas\(A\.itens, r\.itens \|\| \[\], \{ ignorar: A\.selId && !document\.hidden \? A\.selId : null \}\);\s*if \(novas\.length\) A\.lista\.anunciar\(A\.L\.textoNovaMensagem\(novas\)\);/);
+  assert.match(cv, /if \(!reset && !mais\) \{\s*avisarNovidades/, "só nos pulsos, nunca na 1ª página nem em «carregar mais»");
+});
+
+await teste("M35 (navegador): 3 conversas resolvidas sem mouse no dev-falso (atender, nota, resolver que avança, fila zerada, anúncio, Desfazer) — roda com ORBITA_QA_NAVEGADOR=1", async () => {
+  if (process.env.ORBITA_QA_NAVEGADOR !== "1") { console.log("      (pulado: defina ORBITA_QA_NAVEGADOR=1 para abrir o Chrome)"); return; }
+  const { createRequire } = await import("node:module");
+  const { spawn } = await import("node:child_process");
+  const RAIZ = join(AQUI, "..");
+  const req = createRequire(join(process.env.ORBITA_PUPPETEER || RAIZ, "x.js"));
+  const puppeteer = req("puppeteer-core");
+  const chrome = process.env.ORBITA_CHROME || ["C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/google-chrome", "/usr/bin/chromium"].find(existsSync);
+  assert.ok(chrome, "Chrome não encontrado (ORBITA_CHROME)");
+  const porta = 4800 + Math.floor(Math.random() * 90);
+  const srv = spawn(process.execPath, [join(RAIZ, "scripts", "dev-falso.mjs")], { env: { ...process.env, ORBITA_DEV_FALSO_PORT: String(porta) }, stdio: "ignore", windowsHide: true });
+  try {
+    await new Promise(r => setTimeout(r, 1800));
+    const base = `http://127.0.0.1:${porta}`;
+    const status = async () => Object.fromEntries((await (await fetch(`${base}/__dev_falso/estado`)).json()).mensagens.map(c => [c.id, c.status]));
+    const dorme = ms => new Promise(r => setTimeout(r, ms));
+    const browser = await puppeteer.launch({ executablePath: chrome, headless: "new", args: ["--no-sandbox", "--disable-gpu"] });
+    try {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      const erros = []; page.on("pageerror", e => erros.push(String(e.message || e)));
+      await page.goto(`${base}/app/?dev-falso=1&dev=1#/inicio`, { waitUntil: "domcontentloaded" });
+      await page.evaluate(() => { try { localStorage.setItem("nx-cv-aba", "aguardando"); localStorage.setItem("nx-cv-avancar", "1"); } catch { /* ok */ } });
+      await page.evaluate(() => { location.hash = "#/conversas"; });
+      await dorme(3500);
+      const acorde = async (mods, key) => { for (const m of mods) await page.keyboard.down(m); await page.keyboard.press(key); for (const m of mods.slice().reverse()) await page.keyboard.up(m); };
+      const foco = () => page.evaluate(() => document.activeElement && document.activeElement.tagName);
+      const hash = () => page.evaluate(() => location.hash);
+      // 1) Atender o próximo: abre a que espera há mais tempo (902) e assume
+      await page.evaluate(() => document.body.focus());
+      await acorde(["Alt", "Shift"], "KeyP"); await dorme(2500);
+      assert.equal(await hash(), "#/conversas/902"); assert.equal(await foco(), "TEXTAREA", "o cursor já está no campo");
+      // nota interna liga e desliga pelo acorde, com o cursor no campo
+      await acorde(["Alt", "Shift"], "KeyN"); await dorme(250);
+      assert.equal(await page.evaluate(() => document.querySelector(".cvx").dataset.modo), "nota");
+      await acorde(["Alt", "Shift"], "KeyN"); await dorme(250);
+      assert.equal(await page.evaluate(() => document.querySelector(".cvx").dataset.modo), "texto");
+      // Esc devolve o foco à lista; ? abre a folha (fora de campo) e Esc a fecha
+      await page.keyboard.press("Escape"); await dorme(250);
+      assert.equal(await page.evaluate(() => document.activeElement.classList.contains("cvl-item")), true, "Esc no campo leva o foco à lista");
+      await page.keyboard.down("Shift"); await page.keyboard.press("Slash"); await page.keyboard.up("Shift"); await dorme(500);
+      assert.equal(await page.evaluate(() => !!document.querySelector("dialog[open] .cv-teclas")), true, "? abre a folha de atalhos");
+      await page.keyboard.press("Escape"); await dorme(300);
+      // 2) Resolver (avança para a próxima da lista, 901) e 3) resolver de novo (fila zerada: volta ao painel)
+      await page.evaluate(() => { const t = document.querySelector(".cvx textarea"); t && t.focus(); });
+      await acorde(["Alt", "Shift"], "KeyR"); await dorme(2500);
+      assert.equal(await hash(), "#/conversas/901", "a próxima abriu sozinha");
+      assert.match(await page.evaluate(() => document.body.innerText), /Resolvida · Rafael Mendes/);
+      assert.equal((await status())[902], "aberta", "com o Desfazer na tela, o servidor ainda não foi avisado");
+      await acorde(["Alt", "Shift"], "KeyR"); await dorme(2500);
+      assert.equal(await hash(), "#/conversas", "sem próxima, volta ao painel da fila");
+      await dorme(7500);                                     // os avisos fecham (7 s): agora sim a escrita vai ao servidor
+      assert.equal((await status())[902], "resolvida"); assert.equal((await status())[901], "resolvida");
+      // 4) o cliente volta a escrever: a lista anuncia a conversa nova; atender + resolver pelo teclado; Desfazer (Ctrl+Z) reabre
+      await fetch(`${base}/__dev_falso/simular/mensagem?conversa=902&texto=${encodeURIComponent("Voltei! Podem me ajudar?")}`);
+      await dorme(4500);
+      assert.match(await page.evaluate(() => (document.querySelector(".cvl [role=status].sr-only") || {}).textContent || ""), /Nova mensagem de Rafael Mendes/);
+      await page.evaluate(() => document.body.focus());
+      await acorde(["Alt", "Shift"], "KeyP"); await dorme(2500);
+      await acorde(["Alt", "Shift"], "KeyR"); await dorme(2000);
+      assert.equal(await hash(), "#/conversas", "resolveu na tela");
+      assert.equal((await status())[902], "aberta", "mas o servidor só saberá quando o aviso fechar");
+      await page.keyboard.press("Escape"); await dorme(200);
+      await acorde(["Control"], "KeyZ"); await dorme(2000);
+      await dorme(7000);                                     // passou o prazo do aviso: o Desfazer valeu, nada foi ao servidor
+      assert.equal((await status())[902], "aberta", "Desfazer: a conversa nunca chegou a ser resolvida no servidor");
+      assert.equal(await hash(), "#/conversas/902", "e volta para ela");
+      assert.deepEqual(erros, []);
+    } finally { await browser.close(); }
+  } finally { srv.kill(); }
 });
 
 console.log(`\n${ok} ok · ${falhas} falha(s)`);

@@ -13,6 +13,17 @@ const EXTERNOS = ["crm-config.js", "cv-config.js", "ads-config.js", "agenda-conf
 let _externas = null;      // cache das seções das outras frentes (por versão)
 let _versaoExt = null;
 let _limpeza = [];
+let _montagemCfg = 0;
+
+/**
+ * Aviso para um logo muito estreito/alto (largura < metade da altura): no menu (caixa de 36 px) e no login (44 px) o logo é desenhado
+ * «contido», então um 90 × 500 sobra com ~7 px de largura. Devolve o texto do aviso ou "" quando a proporção serve.
+ */
+export function avisoProporcaoLogo(largura, altura) {
+  const w = Number(largura), h = Number(altura);
+  if (!(w > 0) || !(h > 0) || w / h >= 0.5) return "";
+  return "Este logo é muito estreito e alto: no menu e na tela de entrada ele aparece bem pequeno e pode ficar ilegível. Prefira um logo quadrado ou mais largo.";
+}
 
 /** Valida o contrato da RPC antes de a tela tratar uma resposta inválida como lista vazia. */
 export function validarListaDominios(valor) {
@@ -77,6 +88,25 @@ export async function montar(ctx) {
     const emObra = !ctx.shell.prontos.CONFIG_PRONTAS.includes(s.id);
     lista.appendChild(h("a", { class: "cfg-nav-item", href: `#/config/${s.id}`, "aria-current": atual && atual.id === s.id ? "page" : null },
       ui.icone(s.icone || "engrenagem"), h("span", null, s.titulo), emObra ? h("span", { class: "nav-selo" }, "obra") : null));
+  }
+  // M32: o mesmo estado do checklist do Início vira um ponto com o número de passos pendentes ao lado de cada seção (só admin; é um complemento)
+  const minhaMontagem = ++_montagemCfg;
+  if (ctx.cliente && ctx.pode("admin") && vistas.some(s => ["numeros", "departamentos", "agenda", "rastreio", "usuarios", "funis"].includes(s.id))) {
+    Promise.all([import(`./rel-logica.js?v=${encodeURIComponent(ctx.versao)}`), ctx.api.rpcC("nx_onboarding_estado", {})]).then(([L, est]) => {
+      if (minhaMontagem !== _montagemCfg || !lista.isConnected) return;
+      let pulados = [];
+      try { pulados = (JSON.parse(localStorage.getItem(`nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`) || "{}").pulados) || []; } catch { /* sem storage */ }
+      const pend = L.pendenciasConfig(est, { pulados });
+      for (const a of lista.querySelectorAll(".cfg-nav-item")) {
+        const id = String(a.getAttribute("href") || "").replace("#/config/", "");
+        const n = pend[id];
+        if (!n) continue;
+        // só o título da seção, lido ANTES de pôr o selo: senão o leitor de tela ouve o número duas vezes («Números3, 3 passos»)
+        const nome = (a.querySelector("span:not(.nav-selo)") || a).textContent.trim();
+        a.appendChild(h("span", { class: "nav-selo cfg-pend", title: `${n} ${n === 1 ? "passo pendente" : "passos pendentes"} no checklist` }, String(n)));
+        a.setAttribute("aria-label", `${nome}, ${n} ${n === 1 ? "passo pendente" : "passos pendentes"}`);
+      }
+    }).catch(() => { /* sem o checklist o menu fica como estava */ });
   }
   const sec = h("section", { class: "cfg-sec", "aria-live": "polite" });
   const raiz = h("div", { class: ["cfg", pedida && "na-secao"] }, lista, sec);
@@ -616,11 +646,22 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     const btRemover = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("lixeira"), "Remover");
     const extra = favicon ? h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("copiar"), "Gerar do logo") : null;
     const erro = h("small", { class: "campo-erro", role: "alert", hidden: true });
+    const avisoProp = h("p", { class: "aviso aviso-aten img-aviso", role: "status", hidden: true });
     function desenhar() {
       ui.limpar(amostra);
+      avisoProp.hidden = true;
       const u = T.imagemSegura(m[chave]);
-      if (u) amostra.append(h("img", { src: u, alt: `${rotulo} atual` }));
-      else amostra.append(h("span", { class: "fraco" }, "Sem imagem"));
+      if (u) {
+        const im = h("img", { src: u, alt: `${rotulo} atual` });
+        // logo estreito/alto demais: avisa na prévia (o ícone da aba é sempre quadrado e fica de fora)
+        if (!favicon) im.addEventListener("load", () => {
+          const txt = avisoProporcaoLogo(im.naturalWidth, im.naturalHeight);
+          ui.limpar(avisoProp);
+          if (txt) avisoProp.append(ui.icone("alerta"), h("span", null, txt));
+          avisoProp.hidden = !txt;
+        });
+        amostra.append(im);
+      } else amostra.append(h("span", { class: "fraco" }, "Sem imagem"));
       btRemover.hidden = !u;
     }
     btEnviar.addEventListener("click", () => arquivo.click());
@@ -652,7 +693,7 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     desenhar();
     return h("div", { class: "img-campo" },
       h("div", { class: "img-campo-txt" }, h("b", null, rotulo), ajuda ? h("small", { class: "campo-ajuda" }, ajuda) : null),
-      h("div", { class: "logo-caixa" }, amostra, h("div", { class: "linha" }, btEnviar, extra, btRemover), arquivo), erro);
+      h("div", { class: "logo-caixa" }, amostra, h("div", { class: "linha" }, btEnviar, extra, btRemover), arquivo), erro, avisoProp);
   }
 
   // ---- cores
@@ -937,7 +978,7 @@ async function secaoPlano(ctx, alvo) {
   catch (e) { ui.limpar(alvo); alvo.append(ui.erroCartao(e, () => { ui.limpar(alvo); secaoPlano(ctx, alvo); })); return; }
   ui.limpar(alvo);
   const p = r.plano || {};
-  const [stTxt, stCor] = ROT_STATUS[r.status] || [r.status, "neutra"];
+  const [stTxt, stCor] = ROT_STATUS[r.status] || [r.status || "—", "neutra"];
   const wa = ctx.shell.marcaEfetiva() && ctx.shell.marcaEfetiva().suporte_wa;
   const hoje = ui.hojeSP();
   const fracao = k => (r.limites && r.limites[k] != null ? (r.limites[k] > 0 ? (r.uso[k] || 0) / r.limites[k] : 1) : 0);

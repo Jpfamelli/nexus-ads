@@ -97,6 +97,22 @@ export function nivelCalor(v, max, n = 5) {
 }
 /** De quantos em quantos rótulos mostrar no eixo X para caber `cabem` rótulos. */
 export const passoRotulo = (n, cabem) => Math.max(1, Math.ceil(n / Math.max(1, cabem)));
+/**
+ * Quais pontos ganham rótulo no eixo X: de `passo` em `passo` e o último (quando sobra mais da metade de um passo). Se o último ficaria
+ * colado no rótulo anterior (o anterior é centrado, o último termina no fim do eixo), o ANTERIOR sai: dois textos nunca se sobrepõem.
+ * `x(k)` = posição em px; `rotulos[k]` = o texto (a largura vem do comprimento, ~6,6 px por caractere nos 11–12 px do eixo).
+ */
+export function indicesRotulo(n, passo, x, rotulos) {
+  const idx = [];
+  for (let k = 0; k < n; k++) if (k % passo === 0) idx.push(k);
+  if (n > 1 && (n - 1) % passo > passo / 2) {
+    const larg = Math.max(...rotulos.slice(0, n).map(t => String(t ?? "").length), 1) * 6.6;
+    const ant = idx[idx.length - 1];
+    if (ant !== undefined && x(n - 1) - x(ant) < larg * 1.5 + 6) idx.pop();
+    idx.push(n - 1);
+  }
+  return idx;
+}
 /** Barras agrupadas: posição e largura de cada barra da série `s` no grupo `g`. */
 export function posBarra({ g, s, grupos, series, x0, largura, folga = .28 }) {
   const bw = largura / Math.max(1, grupos), dentro = bw * (1 - folga), w = dentro / Math.max(1, series);
@@ -334,7 +350,7 @@ export function linha(alvo, o) {
       svg.append(s("path", { class: `g-linha ${se.classe}`, d, pathLength: 1, style: { "--i": j * 4 } }, titulo(`${se.nome}: ${o.pontos.map(p => `${p.rotulo} ${o.fmt(p.valores[j])}`).slice(0, 60).join(", ")}`)));
     });
     const passo = passoRotulo(n, W < 560 ? 4 : 7), gX = s("g", { class: "g-eixo-x", "aria-hidden": "true" });
-    o.pontos.forEach((p, k) => { if (k % passo === 0 || (k === n - 1 && n > 1 && (n - 1) % passo > passo / 2)) gX.append(s("text", { x: f1(x(k)), y: H - 8, "text-anchor": k === 0 ? "start" : k === n - 1 ? "end" : "middle" }, p.rotulo)); });
+    for (const k of indicesRotulo(n, passo, x, o.pontos.map(p => p.rotulo))) gX.append(s("text", { x: f1(x(k)), y: H - 8, "text-anchor": k === 0 ? "start" : k === n - 1 ? "end" : "middle" }, o.pontos[k].rotulo));
     svg.append(gX);
     const mira = s("line", { class: "g-mira", x1: 0, x2: 0, y1: P.t, y2: base, visibility: "hidden" });
     svg.append(mira);
@@ -513,4 +529,17 @@ export function contar(el, valor, fmt) {
     if (p < 1 && el.isConnected) requestAnimationFrame(passo);
   };
   requestAnimationFrame(passo);
+}
+
+/* ---------- 2.9 Resposta ao dado: o número que mudou acende ---------- */
+/** G.destacar(el) — flash de 600 ms em --c-prim-suave (classe .destaque do app.css) quando um número muda de valor.
+    Sem flash com movimento reduzido; chamar de novo no meio reinicia o flash. Devolve o próprio elemento. */
+export function destacar(el) {
+  if (!el || !el.classList || reduzido()) return el;
+  el.classList.remove("destaque");
+  void el.offsetWidth;                      // força o recálculo de estilo para a animação recomeçar
+  el.classList.add("destaque");
+  clearTimeout(el.__destaqueT);
+  el.__destaqueT = setTimeout(() => el.classList.remove("destaque"), 620);
+  return el;
 }

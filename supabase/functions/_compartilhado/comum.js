@@ -27,6 +27,14 @@ export function somaDias(iso, n) {
 
 export const soDigitos = v => String(v ?? "").replace(/\D/g, "");
 
+/** 16 hex aleatórios por chamada: o texto de terceiros (conversa, cadastro, pedido) fica entre essas marcas
+    no prompt — é DADO, nunca instrução — e nenhuma marca igual pode aparecer dentro dele. */
+export function novoDelimitador() {
+  const b = new Uint8Array(8);
+  crypto.getRandomValues(b);
+  return Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+}
+
 /** Comparação em tempo constante (não para no primeiro byte diferente). */
 export function iguaisSeguro(a, b) {
   const x = new TextEncoder().encode(String(a ?? "")), y = new TextEncoder().encode(String(b ?? ""));
@@ -50,6 +58,8 @@ export function limparErro(msg) {
     .replace(/(^|[^\w/])1\/\/[\w-]{16,}/g, (_, antes) => `${antes}1//***`)   // refresh token do Google
     .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "eyJ***")     // JWT (chave service_role antiga)
     .replace(/\bsb_secret_[\w-]+/g, "sb_secret_***")
+    .replace(/\bsk-ant-[\w-]{4,}/g, "sk-ant-***")                  // chave da Anthropic (inclusive a copiada num erro)
+    .replace(/(x-api-key["']?\s*[=:]\s*["']?)[^&\s)"',]+/gi, "$1***")
     .replace(/\bcw(?:k|otk)-[A-Za-z0-9_-]{4,}/g, "cwk-***")   // chave do CodeWords
     .replace(/([?&]ch=)[0-9a-f]{8,}/gi, "$1***")              // segredo da URL do canal CodeWords
     .replace(/\s+/g, " ")
@@ -83,7 +93,10 @@ export function comPrazo(f, ms = PRAZO_REDE_MS) {
    Regra: acima do teto, DRENAR E DESCARTAR — continuar lendo até o fim só contando bytes
    (nada acumulado), com prazo curto e teto absoluto — e só então responder 413. Estourou o
    prazo ou o teto absoluto: aí sim cancela o leitor e responde (melhor esforço).
-   Content-Length declarado acima do teto absoluto: 413 já, sem drenar (melhor esforço).
+   Content-Length declarado acima do teto absoluto: cancela sem ler e responde 413 (melhor esforço) — MEDIDO em
+   produção (rodada de 01/10): acima de 16 MiB a resposta NÃO sai de forma confiável (502 do gateway em ~34 s ou sem
+   resposta); até 15 MiB o 413 sai em ~1 s. É limite da plataforma (o runtime não solta a resposta sem consumir o
+   corpo), RISCO ACEITO e documentado em docs/orbita/estado/F8.md; o teto de corpo de verdade é do gateway.
    Quem responde sem ler o corpo (405/401/429) drena do mesmo jeito (soltandoCorpo).
    ------------------------------------------------------------ */
 export class CorpoGrande extends Error {
@@ -195,6 +208,16 @@ export async function soltandoCorpo(req, fn, drenagem = {}) {
 
 export const MAX_CORPO_CRON = 64 * 1024;
 
+/** Reviver do JSON.parse que tira o caractere NUL (\u0000) e o surrogate solto de TODO texto que chega de fora: o banco recusa os
+    dois ("unsupported Unicode escape sequence"), o que virava 500/erro permanente em vez de gravar o resto. */
+export const semNul = (_chave, valor) => {
+  if (typeof valor !== "string") return valor;
+  let v = valor;
+  if (v.includes("\u0000")) v = v.replace(/\u0000/g, "");
+  if (typeof v.toWellFormed === "function" && !v.isWellFormed()) v = v.toWellFormed();
+  return v;
+};
+
 /** Corpo JSON do cron (pequeno: {cliente}, {tipo}, {ids:[≤100]}). Acima do teto → 413; ilegível → {}. */
 export async function lerCorpo(req, limite = MAX_CORPO_CRON, drenagem = {}) {
   let bytes;
@@ -203,7 +226,7 @@ export async function lerCorpo(req, limite = MAX_CORPO_CRON, drenagem = {}) {
     if (e instanceof CorpoGrande) throw new ErroHttp(413, "corpo grande demais");
     return {};
   }
-  try { const c = JSON.parse(new TextDecoder().decode(bytes)); return c && typeof c === "object" ? c : {}; } catch { return {}; }
+  try { const c = JSON.parse(new TextDecoder().decode(bytes), semNul); return c && typeof c === "object" ? c : {}; } catch { return {}; }
 }
 
 export async function lerConfig(db) {
@@ -455,7 +478,7 @@ export async function lerCorpoPainel(req, max = 64_000, drenagem = {}) {
   try { bytes = await lerCorpoLimitado(req, max, drenagem); }
   catch (e) { if (e instanceof CorpoGrande) throw new ErroApi("dados_invalidos", 413); throw e; }
   const txt = new TextDecoder().decode(bytes);
-  try { const c = JSON.parse(txt || "{}"); if (c && typeof c === "object" && !Array.isArray(c)) return c; } catch { /* abaixo */ }
+  try { const c = JSON.parse(txt || "{}", semNul); if (c && typeof c === "object" && !Array.isArray(c)) return c; } catch { /* abaixo */ }
   throw new ErroApi("dados_invalidos", 400);
 }
 
@@ -472,7 +495,10 @@ export async function tratarPainel(req, fn, drenagem = {}) {
       if (x instanceof ErroApi) return respostaErro(x.codigo, x.status, x.detalhe);
       const msg = limparErro(e?.message || e);
       console.error("painel:", msg);
-      return respostaErro("erro_interno", 500, msg);
+      // 400 permanente do banco sem código conhecido (texto que ele recusa, uuid mal formado...): dado ruim de quem
+      // chamou, não falha nossa; e a resposta nunca carrega o nome da RPC interna
+      if (e?.status === 400 && e?.banco === false) return respostaErro("dados_invalidos", 400);
+      return respostaErro("erro_interno", 500, msg.replace(/\brpc\/[A-Za-z0-9_]+/g, "banco"));
     }
   }, drenagem);
 }
