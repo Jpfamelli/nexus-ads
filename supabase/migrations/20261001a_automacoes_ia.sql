@@ -2052,8 +2052,9 @@ begin
   return json_build_object('ok', true, 'tentar_de_novo', false);
 end $$;
 
--- aplica a decisão da IA (validada DE NOVO aqui: etapa ∈ etapas do funil do negócio · nota ≤ 1.000 ·
--- score 0–100 + motivo ≤ 200) e libera as ações seguintes da sequência
+-- aplica a decisão da IA (validada DE NOVO aqui: etapa ∈ etapas do funil do negócio · score 0–100 · texto e motivo
+-- não vazios; resumo > 1.000 e motivo > 200 caracteres são cortados com «…», não recusados) e libera as ações
+-- seguintes da sequência
 create or replace function public.nx_auto_ia_resolver(p_pedido bigint, p_resultado jsonb, p_modelo text default null,
                                                       p_in int default null, p_out int default null)
 returns json
@@ -2107,9 +2108,11 @@ begin
         v_det := 'IA: ' || v_det || coalesce(' (' || v_motivo || ')', '');
       when 'resumir_nota' then
         v_txt := btrim(coalesce(res ->> 'texto', ''));
-        if v_txt = '' or char_length(v_txt) > 1000 then
-          raise exception 'ia_resultado_invalido' using errcode = '22023', hint = 'o resumo precisa ter de 1 a 1000 caracteres';
+        if v_txt = '' then
+          raise exception 'ia_resultado_invalido' using errcode = '22023', hint = 'o resumo veio vazio';
         end if;
+        -- resumo longo demais é CORTADO (com «…»), não recusado: a IA não conta caracteres e a cota já foi gasta
+        if char_length(v_txt) > 1000 then v_txt := left(v_txt, 999) || '…'; end if;
         if v_ct is null and l.id is null then
           raise exception 'ia_resultado_invalido' using errcode = '22023', hint = 'sem contato nem negócio para anotar';
         end if;
@@ -2123,9 +2126,11 @@ begin
         if v_score is null or v_score not between 0 and 100 then
           raise exception 'ia_resultado_invalido' using errcode = '22023', hint = 'a nota vai de 0 a 100';
         end if;
-        if v_motivo = '' or char_length(v_motivo) > 200 then
-          raise exception 'ia_resultado_invalido' using errcode = '22023', hint = 'o motivo precisa ter de 1 a 200 caracteres';
+        if v_motivo = '' then
+          raise exception 'ia_resultado_invalido' using errcode = '22023', hint = 'o motivo veio vazio';
         end if;
+        -- motivo longo demais é CORTADO (com «…»), não recusado: o schema não limita o tamanho e a cota já foi gasta
+        if char_length(v_motivo) > 200 then v_motivo := left(v_motivo, 199) || '…'; end if;
         update public.nx_leads set
           campos = coalesce(campos, '{}'::jsonb) || jsonb_build_object('score', v_score, 'score_motivo', v_motivo,
                      'score_em', to_char(now() at time zone 'America/Sao_Paulo', 'YYYY-MM-DD"T"HH24:MI')),

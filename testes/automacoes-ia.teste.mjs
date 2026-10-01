@@ -623,7 +623,7 @@ test("decidir: resposta da IA fora das opções (injeção) é RECUSADA no servi
   }
 });
 
-test("decidir: resumir_nota (≤ 1.000) e pontuar_lead (0–100 + motivo ≤ 200): válido segue, inválido é recusado", async () => {
+test("decidir: resumir_nota (≤ 1.000) e pontuar_lead (0–100 + motivo ≤ 200): válido segue, longo é CORTADO, vazio/inválido é recusado", async () => {
   const caso = async (tarefa, json) => {
     const banco = criarBanco({ pedidos: [pedido(31, tarefa)] });
     const r = await decidir(banco, criarIa(() => saida(json)));
@@ -633,20 +633,37 @@ test("decidir: resumir_nota (≤ 1.000) e pontuar_lead (0–100 + motivo ≤ 200
   assert.deepEqual(x.banco.resolvidos.map(r => r.p_resultado), [{ texto: "• Quer clareamento\n• Pediu horário na quinta" }]);
   x = await caso("resumir_nota", { texto: "r".repeat(1000) });
   assert.equal(x.banco.resolvidos.length, 1, "1000 caracteres passam");
-  for (const texto of ["r".repeat(1001), "", "   ", undefined, 5]) {
+  // resumo longo demais: a cota já foi gasta e a IA não conta letras → corta em 1.000 (999 + «…»), não derruba a sequência
+  x = await caso("resumir_nota", { texto: "r".repeat(1001) });
+  assert.equal(x.banco.falhas.length, 0, "1001 caracteres NÃO são recusados");
+  assert.deepEqual(x.banco.resolvidos.map(r => r.p_resultado), [{ texto: `${"r".repeat(999)}…` }]);
+  x = await caso("resumir_nota", { texto: "• " + "linha\n".repeat(400) });
+  assert.equal(Array.from(x.banco.resolvidos[0].p_resultado.texto).length, 1000, "o corte conta por ponto de código (como o banco) e mantém as quebras de linha");
+  assert.match(x.banco.resolvidos[0].p_resultado.texto, /linha\nlinha/);
+  x = await caso("resumir_nota", { texto: "😀".repeat(600) });
+  assert.equal(Array.from(x.banco.resolvidos[0].p_resultado.texto).length, 600, "emojis contam 1 (como no banco): 600 emojis cabem");
+  x = await caso("resumir_nota", { texto: "😀".repeat(1001) });
+  assert.equal(x.banco.resolvidos[0].p_resultado.texto, `${"😀".repeat(999)}…`, "o corte nunca parte um emoji ao meio");
+  for (const texto of ["", "   ", undefined, 5]) {
     x = await caso("resumir_nota", { texto });
     assert.equal(x.banco.resolvidos.length, 0, `resumo ${JSON.stringify(texto)?.slice(0, 12)} recusado`);
     assert.equal(x.banco.falhas[0].p_tentar, false);
-    assert.match(x.banco.falhas[0].p_erro, /o resumo precisa ter de 1 a 1000 caracteres/);
+    assert.match(x.banco.falhas[0].p_erro, /o resumo veio vazio/);
   }
   x = await caso("pontuar_lead", { score: 87, motivo: "quer marcar e já tem horário" });
   assert.deepEqual(x.banco.resolvidos.map(r => r.p_resultado), [{ score: 87, motivo: "quer marcar e já tem horário" }]);
   x = await caso("pontuar_lead", { score: "55", motivo: "ok" });
   assert.equal(x.banco.resolvidos[0].p_resultado.score, 55, "número em texto é aceito como inteiro");
-  for (const json of [{ score: 101, motivo: "x" }, { score: -1, motivo: "x" }, { score: 50.5, motivo: "x" }, { score: "alto", motivo: "x" }, { score: 50 }, { score: 50, motivo: "m".repeat(201) }, { score: 50, motivo: "  " }]) {
+  // motivo longo demais: a nota é válida → o motivo é cortado em 200 (199 + «…»); a decisão e a sequência seguem
+  x = await caso("pontuar_lead", { score: 50, motivo: "m".repeat(230) });
+  assert.equal(x.banco.falhas.length, 0, "motivo de 230 caracteres NÃO derruba a decisão");
+  assert.deepEqual(x.banco.resolvidos.map(r => r.p_resultado), [{ score: 50, motivo: `${"m".repeat(199)}…` }]);
+  x = await caso("pontuar_lead", { score: 50, motivo: "m".repeat(200) });
+  assert.equal(x.banco.resolvidos[0].p_resultado.motivo, "m".repeat(200), "200 caracteres passam inteiros");
+  for (const json of [{ score: 101, motivo: "x" }, { score: -1, motivo: "x" }, { score: 50.5, motivo: "x" }, { score: "alto", motivo: "x" }, { score: 50 }, { score: 50, motivo: "  " }]) {
     x = await caso("pontuar_lead", json);
     assert.equal(x.banco.resolvidos.length, 0, `pontuação ${JSON.stringify(json)} recusada`);
-    assert.match(x.banco.falhas[0].p_erro, /a nota vai de 0 a 100|o motivo precisa ter de 1 a 200 caracteres/);
+    assert.match(x.banco.falhas[0].p_erro, /a nota vai de 0 a 100|o motivo veio vazio/);
   }
   assert.deepEqual(IA.schemaDecisao("pontuar_lead", {}).required, ["score", "motivo"]);
   assert.deepEqual(IA.schemaDecisao("resumir_nota", {}).required, ["texto"]);

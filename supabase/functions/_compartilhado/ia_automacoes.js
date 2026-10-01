@@ -49,6 +49,8 @@ const inteiro = x => {
   return null;
 };
 /** A marca nunca aparece dentro do texto de terceiros (nem por acaso, nem forjada). */
+/** No máximo `n` caracteres (como o Postgres conta: por ponto de código); passando disso, corta e termina em «…». Mantém quebras de linha. */
+const limitarPontos = (t, n) => { const a = Array.from(t); return a.length > n ? `${a.slice(0, n - 1).join("")}…` : t; };
 const semMarca = (s, delim) => texto(s).split(delim).join("").replace(/\r/g, "");
 
 /* ------------------------------------------------------------------ erros da API → português (sem a chave) */
@@ -745,17 +747,18 @@ export function validarDecisao(tarefa, saida, contexto) {
     const motivo = cortar(s.motivo, 300);
     return { ok: true, resultado: { etapa_id: id, ...(motivo ? { motivo } : {}) } };
   }
+  // texto/motivo longos demais são CORTADOS (a IA não conta caracteres e a cota já foi gasta); só o vazio é recusado
   if (tarefa === "resumir_nota") {
     const t = typeof s.texto === "string" ? s.texto.replace(/\r/g, "").trim() : "";
-    if (!t || t.length > 1000) return { ok: false, motivo: "o resumo precisa ter de 1 a 1000 caracteres" };
-    return { ok: true, resultado: { texto: t } };
+    if (!t) return { ok: false, motivo: "o resumo veio vazio" };
+    return { ok: true, resultado: { texto: limitarPontos(t, 1000) } };
   }
   if (tarefa === "pontuar_lead") {
     const n = inteiro(s.score);
     const motivo = typeof s.motivo === "string" ? s.motivo.replace(/\s+/g, " ").trim() : "";
     if (n == null || n < 0 || n > 100) return { ok: false, motivo: "a nota vai de 0 a 100" };
-    if (!motivo || motivo.length > 200) return { ok: false, motivo: "o motivo precisa ter de 1 a 200 caracteres" };
-    return { ok: true, resultado: { score: n, motivo } };
+    if (!motivo) return { ok: false, motivo: "o motivo veio vazio" };
+    return { ok: true, resultado: { score: n, motivo: limitarPontos(motivo, 200) } };
   }
   return { ok: false, motivo: "tarefa desconhecida" };
 }

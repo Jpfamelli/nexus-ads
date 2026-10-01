@@ -911,27 +911,34 @@ begin
   a_ia2 := (j ->> 'id')::uuid;
   update public.nx_automacoes set ativo = true where id = a_ia2;
   ped := pg_temp.pedido(a_ia2, cA, l2, ct3, 'resumir_nota');
-  r2 := public.nx_auto_ia_resolver(ped, jsonb_build_object('texto', repeat('r', 1001)), 'm');
-  perform pg_temp.ok(r2 ->> 'erro' = 'resultado_invalido' and (r2 ->> 'detalhe') like '%de 1 a 1000 caracteres%', 'resumo de 1001 caracteres rejeitado');
-  ped := pg_temp.pedido(a_ia2, cA, l2, ct3, 'resumir_nota');
   r2 := public.nx_auto_ia_resolver(ped, jsonb_build_object('texto', '   '), 'm');
-  perform pg_temp.ok(r2 ->> 'erro' = 'resultado_invalido', 'resumo vazio rejeitado');
+  perform pg_temp.ok(r2 ->> 'erro' = 'resultado_invalido' and (r2 ->> 'detalhe') like '%o resumo veio vazio%', 'resumo vazio rejeitado: ' || r2::text);
   perform pg_temp.ok(not exists (select 1 from public.nx_notas where negocio_id = l2 and texto like 'IA: %'), 'nenhuma nota gravada pelas recusas');
   ped := pg_temp.pedido(a_ia2, cA, l2, ct3, 'resumir_nota');
   r2 := public.nx_auto_ia_resolver(ped, jsonb_build_object('texto', repeat('r', 1000)), 'm');
   perform pg_temp.ok((r2 ->> 'ok')::boolean and exists (select 1 from public.nx_notas where negocio_id = l2 and contato_id = ct3 and autor_id is null and texto = 'IA: ' || repeat('r', 1000)),
                      'resumo de 1000 caracteres vira nota do negócio');
+  -- resumo de 1001 caracteres: a IA não conta letras e a cota já foi gasta → a nota fica com 999 + «…» (1000), não é recusado
+  ped := pg_temp.pedido(a_ia2, cA, l2, ct3, 'resumir_nota');
+  r2 := public.nx_auto_ia_resolver(ped, jsonb_build_object('texto', repeat('s', 1001)), 'm');
+  perform pg_temp.ok((r2 ->> 'ok')::boolean and exists (select 1 from public.nx_notas where negocio_id = l2 and contato_id = ct3 and autor_id is null and texto = 'IA: ' || repeat('s', 999) || '…'),
+                     'resumo de 1001 caracteres é cortado em 1000 (com «…») e vira nota: ' || r2::text);
   -- depois do resumo a sequência segue para o 2º passo de IA (pontuar), que fica aguardando de novo? aqui o passo 2 é a próxima ação do snapshot
   perform pg_temp.ok(exists (select 1 from public.nx_auto_sequencias where status = 'esperando' and pedido_id is null and automacao_id = a_ia2 and passo = 1), 'sequência segue para a próxima ação');
   ped := pg_temp.pedido(a_ia2, cA, l2, ct3, 'pontuar_lead');
-  for n in 1 .. 5 loop
+  for n in 1 .. 4 loop
     r2 := public.nx_auto_ia_resolver(ped, case n
         when 1 then '{"score":101,"motivo":"x"}'::jsonb when 2 then '{"score":-1,"motivo":"x"}'::jsonb when 3 then '{"score":"alto","motivo":"x"}'::jsonb
-        when 4 then '{"score":50}'::jsonb else jsonb_build_object('score', 50, 'motivo', repeat('m', 201)) end, 'm');
+        else '{"score":50}'::jsonb end, 'm');
     perform pg_temp.ok(r2 ->> 'erro' = 'resultado_invalido', 'pontuação inválida rejeitada (caso ' || n || '): ' || r2::text);
     ped := pg_temp.pedido(a_ia2, cA, l2, ct3, 'pontuar_lead');
   end loop;
   perform pg_temp.ok(not (select campos ? 'score' from public.nx_leads where id = l2), 'nenhuma pontuação inválida gravada');
+  -- motivo de 201 caracteres: a nota é válida, o motivo é cortado em 200 (com «…») — não derruba a decisão nem a sequência
+  r2 := public.nx_auto_ia_resolver(ped, jsonb_build_object('score', 50, 'motivo', repeat('m', 201)), 'm');
+  perform pg_temp.ok((r2 ->> 'ok')::boolean and (select (campos ->> 'score')::int = 50 and campos ->> 'score_motivo' = repeat('m', 199) || '…' from public.nx_leads where id = l2),
+                     'motivo de 201 caracteres é cortado em 200: ' || r2::text);
+  ped := pg_temp.pedido(a_ia2, cA, l2, ct3, 'pontuar_lead');
   r2 := public.nx_auto_ia_resolver(ped, '{"score":"87","motivo":"quer marcar e já tem horário em mente"}'::jsonb, 'm', 10, 5);
   perform pg_temp.ok((r2 ->> 'ok')::boolean and (select (campos ->> 'score')::int = 87 and campos ->> 'score_motivo' = 'quer marcar e já tem horário em mente' and campos ? 'score_em'
                                                     from public.nx_leads where id = l2), 'pontuação válida gravada em campos: ' || (select campos::text from public.nx_leads where id = l2));
