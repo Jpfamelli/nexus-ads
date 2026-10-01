@@ -103,6 +103,24 @@ export function esqueletoDaRota(modulo, partes = []) {
   return Object.hasOwn(ESQUELETO_DA_ROTA, modulo) ? ESQUELETO_DA_ROTA[modulo] : "lista";
 }
 
+/**
+ * Regiões de cada tela para os atalhos de teclado «Ir para…» (M22). Cada item é [rótulo do atalho, seletor do alvo]. O seletor usa o RÓTULO
+ * ACESSÍVEL da região (aria-label), que é o contrato com o leitor de tela — não uma classe de CSS. Alvo que não existe naquele momento
+ * (conversa ainda não aberta, outra visão do CRM) simplesmente não ganha atalho. O módulo pode registrar os seus por ctx.atalhosDeRegiao(…).
+ * A ORDEM é a do Tab: lista → conversa → campo de mensagem (o campo fica a 3 Tabs do topo).
+ */
+export const REGIOES_DA_ROTA = Object.freeze({
+  conversas: Object.freeze([
+    Object.freeze(["Ir para a lista de conversas", "[aria-label='Lista de conversas']"]),
+    Object.freeze(["Ir para a conversa", "[role='log'][aria-label='Mensagens']"]),
+    Object.freeze(["Ir para o campo de mensagem", "textarea[aria-label='Mensagem']"]),
+  ]),
+  crm: Object.freeze([Object.freeze(["Ir para o quadro", "[role='region'][aria-label^='Quadro de']"])]),
+});
+export function regioesDaRota(modulo) {
+  return (Object.hasOwn(REGIOES_DA_ROTA, modulo) ? REGIOES_DA_ROTA[modulo] : []).map(([rotulo, alvo]) => ({ rotulo, alvo }));
+}
+
 /** Barra inferior do celular: até 4 itens + "Mais". */
 export const BARRA = Object.freeze(["inicio", "conversas", "crm", "agenda"]);
 

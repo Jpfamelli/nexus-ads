@@ -31,3 +31,20 @@
 .faixa-cache { background: var(--c-sup-2); }
 .faixa-cache .ic { color: var(--c-texto-2); }
 .faixa-cache p { color: var(--c-texto-2); }
+
+/* ---- atalhos «Ir para…» (M22): escondidos até receber o foco, como o «Pular para o conteúdo»; todos no mesmo lugar (um foco por vez) ---- */
+.pular-regioes { display: contents; }
+.pular-regiao { position: absolute; left: -9999px; top: .8rem; z-index: 999; padding: .6rem 1rem; border-radius: 999px; background: var(--c-texto); color: var(--c-fundo); font-weight: 600; border: 0; }
+.pular-regiao:focus { left: 1rem; }
+.pular-regiao[hidden] { display: none; }
+/* o título que recebe o foco depois de navegar não desenha um anel enorme para quem navega com mouse; no teclado o anel fica */
+h1[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
+
+/* ---- contraste forçado (Windows): foco, faixas e pontos de estado nunca dependem só de cor de fundo ---- */
+@media (forced-colors: active) {
+  :focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+  .pular-regiao, .pular { border: 2px solid CanvasText; background: Canvas; color: CanvasText; }
+  .faixa { border: 1px solid CanvasText; }
+  .rede-ponto { border: 2px solid CanvasText; background: Highlight; forced-color-adjust: none; }
+  .faixa-rede .bt, .faixa-versao .bt { border: 1px solid ButtonText; }
+}

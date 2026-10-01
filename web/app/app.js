@@ -55,6 +55,7 @@ const E = {
   assinaturas: new Set(),
   naoAtualizar: new Set(), // funções de módulos com trabalho pendente: enquanto alguma devolver true, a atualização automática espera
   pwa: null,
+  regioes: null,           // M22: atalhos «Ir para…» registrados pelo módulo ativo (ctx.atalhosDeRegiao); null = valem os padrões da rota
   bootTentar: null,        // o que o botão da tela de abertura faz agora (pular a espera do laço, refazer a etapa…)
   badges: {},
   titulo: "",
@@ -216,6 +217,7 @@ async function iniciar() {
     abrirBusca();
   });
   montarEsqueletoShell();
+  observarRegioes();
   await aoMudarRota(false);
   iniciarPwa();
 }
@@ -888,6 +890,7 @@ async function aoMudarRota(doUsuario) {
    MONTAGEM DE MÓDULOS
    ============================================================ */
 function desmontarAtual() {
+  E.regioes = null;
   if (E.rascunhos) E.rascunhos.salvarTudo();
   for (const cancelar of E.assinaturas) try { cancelar(); } catch { /* ok */ }
   E.assinaturas.clear();
@@ -935,6 +938,15 @@ function construirCtx(r, alvo) {
     rascunho: {
       ligar: (campo, chave, opcoes) => E.rascunhos.ligar(campo, chave, opcoes),
       apagar: chave => E.rascunhos.apagar(chave),
+    },
+    /** Atalhos de teclado «Ir para…» desta tela (M22): [{rotulo, alvo: Element | seletor | () => Element}]. Aparecem ao receber o foco (Tab),
+        antes do «Pular para o conteúdo». Sem chamar isto, valem as regiões padrão da rota (rotas.REGIOES_DA_ROTA). Devolve cancelar(). */
+    atalhosDeRegiao(lista) {
+      E.regioes = Array.isArray(lista) ? lista.filter(x => x && x.rotulo && x.alvo) : null;
+      desenharRegioes();
+      const cancelar = () => { if (E.regioes) { E.regioes = null; desenharRegioes(); } };
+      E.assinaturas.add(cancelar);
+      return () => { cancelar(); E.assinaturas.delete(cancelar); };
     },
     /** Conexão: estado atual e aoVoltar(fn) — fn() roda quando a internet/servidor voltam (releia o que está na tela). Devolve cancelar(). */
     rede: {
@@ -1015,7 +1027,8 @@ async function montarNoShell(r, seq, doUsuario) {
     ui.limpar(vista);
     vista.appendChild(cartaoBloqueio(acesso));
     definirTitulo({ em_breve: "Em breve", fora_do_plano: "Fora do plano", sem_acesso: "Sem acesso", inexistente: "Página não encontrada", sem_cliente: "Início" }[acesso]);
-    if (doUsuario) focarVista();
+    desenharRegioes();
+    if (doUsuario) focarTitulo(seq);
     return;
   }
 
@@ -1057,7 +1070,81 @@ async function montarNoShell(r, seq, doUsuario) {
     // dependência que não carregou: o navegador guarda a falha para aquela URL, então recarregar é o único jeito de tentar de verdade
     vista.appendChild(ui.erroCartao(e, ehFalhaDeImport(e) ? () => location.reload() : () => aoMudarRota(false)));
   }
-  if (doUsuario) focarVista();
+  desenharRegioes();
+  if (doUsuario) focarTitulo(seq);
+}
+
+/* ============================================================
+   ACESSIBILIDADE DE FLUXO (M22): atalhos «Ir para…», foco no título e anúncio da página
+   ============================================================ */
+function resolverAlvo(alvo) {
+  try {
+    const el = typeof alvo === "function" ? alvo() : (typeof alvo === "string" ? document.querySelector(alvo) : alvo);
+    return el && el.isConnected ? el : null;
+  } catch { return null; }
+}
+/** Foca um alvo que talvez não seja focável por natureza (região, mensagens): ganha tabindex -1 e rola até ele. */
+function focarElemento(el) {
+  if (!el.hasAttribute("tabindex") && !/^(A|BUTTON|INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) el.setAttribute("tabindex", "-1");
+  try { el.focus({ preventScroll: true }); } catch { el.focus(); }
+  try { el.scrollIntoView({ block: "nearest" }); } catch { /* ok */ }
+}
+let regioesBotoes = [];
+function atualizarVisibilidadeRegioes() {
+  for (const b of regioesBotoes) b.el.hidden = !resolverAlvo(b.alvo);   // alvo que não existe agora não ganha atalho
+}
+function desenharRegioes() {
+  const cont = $("pular-regioes");
+  if (!cont || !E.ui) return;
+  E.ui.limpar(cont);
+  regioesBotoes = [];
+  const lista = E.regioes || (E.ultimaRota ? E.M.rotas.regioesDaRota(E.ultimaRota.modulo) : []);
+  for (const r of lista) {
+    const el = E.ui.h("button", { type: "button", class: "pular-regiao" }, r.rotulo);
+    el.addEventListener("click", ev => {
+      ev.preventDefault();
+      const alvo = resolverAlvo(r.alvo);
+      if (alvo) focarElemento(alvo); else E.ui.anunciar("Essa área não está disponível agora.");
+    });
+    cont.appendChild(el);
+    regioesBotoes.push({ el, alvo: r.alvo });
+  }
+  atualizarVisibilidadeRegioes();
+}
+/** A tela muda por dentro (a conversa abre, o quadro troca de visão): os atalhos acompanham, no máximo uma vez por quadro de tela. */
+function observarRegioes() {
+  const v = $("vista");
+  if (!v || typeof MutationObserver !== "function") return;
+  let agendado = false;
+  new MutationObserver(() => {
+    if (agendado || !regioesBotoes.length) return;
+    agendado = true;
+    requestAnimationFrame(() => { agendado = false; atualizarVisibilidadeRegioes(); });
+  }).observe(v, { childList: true, subtree: true });
+}
+
+/** Depois de navegar: o foco vai para o <h1> da tela (tabindex -1) e o leitor de tela ouve «Pacientes, carregado». Se o título ainda não existe,
+    espera até 3 s por ele; sem <h1>, cai para a própria vista com o título da aba. */
+function focarTitulo(seq) {
+  const v = $("vista");
+  if (!v) return;
+  const pronto = h1 => {
+    if (seq !== E.montando) return true;
+    const nome = String(h1.textContent || "").replace(/\s+/g, " ").trim();
+    h1.setAttribute("tabindex", "-1");
+    try { h1.focus({ preventScroll: true }); } catch { h1.focus(); }
+    scrollTo({ top: 0 });
+    if (nome) E.ui.anunciar(`${nome}, carregado`);
+    return true;
+  };
+  const achado = v.querySelector("h1");
+  if (achado) { pronto(achado); return; }
+  if (typeof MutationObserver !== "function") { focarVista(); return; }
+  let feito = false;
+  const fim = () => { if (feito) return; feito = true; obs.disconnect(); clearTimeout(limite); };
+  const obs = new MutationObserver(() => { const h1 = v.querySelector("h1"); if (h1) { fim(); pronto(h1); } });
+  obs.observe(v, { childList: true, subtree: true });
+  const limite = setTimeout(() => { if (feito) return; fim(); if (seq === E.montando) { focarVista(); if (E.titulo) E.ui.anunciar(`${E.titulo}, carregado`); } }, 3000);
 }
 
 function focarVista() {

@@ -15,6 +15,7 @@ Testes da frente: `node testes/shell.teste.mjs` (registrado em `testes/rodar-tud
 | M17 sessão que não derruba o trabalho + rascunhos | feito (migração só no repositório; smoke 16 rodado no PGlite local) | ver `git log --grep "M17"` |
 | M16 telas que abrem com o último dado (cache.js) | feito | ver `git log --grep "M16"` |
 | M21 ícones que dizem a coisa certa | feito | ver `git log --grep "M21"` |
+| M22 acessibilidade de fluxo | feito (shell sem violações no axe; 5 achados de C e D nas pendências) | ver `git log --grep "M22"` |
 
 ## M11 · Abrir em ~1,5 s em vez de ~3,5 s
 
@@ -175,6 +176,23 @@ Capturas conferidas no Chrome (menu lateral a 1440 e barra inferior a 390, nas 4
 
 **Para a frente A (app.css):** o plano pede traço de 1,6 e 22 px na barra inferior; hoje `.ic` tem `stroke-width: 1.7` e 18 px (arquivo da A). Os símbolos novos foram feitos para o traço atual.
 
+## M22 · Acessibilidade de fluxo
+
+**Feito**
+- **Atalhos «Ir para…» ao receber o foco** (`#pular-regioes` no `index.html`, ANTES do «Pular para o conteúdo», que continua lá): `ctx.atalhosDeRegiao([{rotulo, alvo: Element | seletor | () => Element}])` para o módulo registrar os seus;
+  sem chamar, valem as regiões padrão da rota em `rotas.REGIOES_DA_ROTA`: Conversas = «Ir para a lista de conversas», «Ir para a conversa», «Ir para o campo de mensagem» (nessa ordem); CRM = «Ir para o quadro».
+  Os seletores usam o **rótulo acessível** (`aria-label`), não classe de CSS; um teste confere que Conversas e o CRM ainda têm esses rótulos. O alvo é resolvido na hora (conversa ainda não aberta = atalho escondido) e acompanha a tela (MutationObserver com `requestAnimationFrame`).
+- **Foco no `<h1>` depois de navegar** (`focarTitulo`): o título da nova tela recebe `tabindex="-1"` e o foco, o leitor de tela ouve «Pacientes, carregado» (`ui.anunciar`); se o `<h1>` ainda não existe espera até 3 s; sem `<h1>` cai para o `<main>`. Navegação mais nova cancela a anterior. Só em navegação feita pela pessoa (não na primeira abertura).
+- **`forced-colors`** em `shell.css`: foco com `Highlight`, faixas e pontos de estado com borda `CanvasText` (nunca só cor de fundo).
+- `scripts/auditar-a11y.mjs`: axe-core nas telas principais a 1440 e 390 (precisa de `puppeteer-core` e `axe-core` fora do repositório: `PUPPETEER_CORE=… AXE_CORE=… node scripts/auditar-a11y.mjs [--telas …] [--moderadas]`; axe só entra nos testes, nada vai para o app).
+
+**Verificado no Chrome (dev-falso)**: abertura limpa em `#/conversas/901`, do topo da página: Tab 1 «Ir para a lista de conversas» → Tab 2 «Ir para a conversa» → Tab 3 «Ir para o campo de mensagem» (+ Enter = foco no `textarea` «Mensagem»;
+**3 Tabs**, meta ≤ 3) → Tab 4 «Pular para o conteúdo». Início → Pacientes pelo menu com o teclado: foco em `H1 «Pacientes»`, anúncio «Pacientes, carregado», atalhos trocam para «Ir para o quadro».
+**axe nas 6 telas × 2 larguras: o shell (topo, menu, faixas, atalhos) não tem nenhuma violação.** Restam 5 achados de telas de outras frentes (viram pendências abaixo): Conversas `aria-allowed-attr` (textarea com `aria-expanded`), CRM `aria-required-children` (colunas vazias do kanban com `role="list"` sem `listitem`),
+Relatórios a 390 `scrollable-region-focusable` (`.rel-tabela-rolagem` sem `tabindex="0"`).
+
+**Como verificar**: `node testes/shell.teste.mjs` (4 testes de M22) e `node scripts/auditar-a11y.mjs`.
+
 ## Pendências para outras frentes
 
 - **C e D (M14):** o navegador guarda a falha de `import()` por URL. Se um módulo seu importa dependências com `import()` direto e a rede cair no meio, o cartão de erro precisa de recarga (o shell já faz isso quando a mensagem é de import). Para tentar de novo SEM recarregar, repetir com `&r=<n>` depois do `?v=` (a regra de `?v=` dos testes aceita).
@@ -186,3 +204,6 @@ Capturas conferidas no Chrome (menu lateral a 1440 e barra inferior a 390, nas 4
 - **C e D (M16):** quem usa `{cache: true, aoCache}` precisa tratar `e.comCache` (rede falhou DEPOIS de pintar do cache): mantenha a tela e mostre só um aviso (a mensagem do erro já é "Sem internet. Mostrando o que já tinha."), não troque por cartão de erro. A frente D já faz isso no Início; confira CRM (kanban, `nx_crm_base`, agenda) e a 1ª página de `nx_cv_listar`. Só estas RPCs ficam no aparelho (`CACHEAVEIS` em `web/app/cache.js`): se uma tela precisar de outra, peça a inclusão a B (não vale pôr nome com config/admin/mensagens/usuários).
 - **A (M21):** `app.css` `.ic` está com `stroke-width: 1.7` e 18 px; o plano pede 1,6 e 22 px na barra inferior (`.barra-b .ic`). Os símbolos novos funcionam nos dois.
 - **C e D (M21):** `i-meta` e `i-google` estão no sprite (use `ui.icone("meta")`/`ui.icone("google")` nos selos de origem). Qualquer ícone novo precisa de um `<symbol id="i-…">` em `web/app/index.html` (arquivo de B): o teste `todo ícone usado no código existe no sprite` falha se faltar.
+- **D (M22/M40):** axe (`node scripts/auditar-a11y.mjs`) nas telas: Conversas — `aria-allowed-attr` crítico: o `textarea` do compositor (`cv-composer.js`) tem `aria-expanded="false"` (atributo que `textarea` não aceita; use `role="combobox"` com `aria-controls`/`aria-expanded` ou tire o atributo). Relatórios a 390 px — `scrollable-region-focusable` sério: `.rel-tabela-rolagem` precisa de `tabindex="0"` (e `role="region"` + `aria-label`).
+- **C (M22/M30):** axe no CRM — `aria-required-children` crítico: as colunas vazias do kanban (`.kb-lista[role=list]`) não têm `listitem`; tire o `role="list"` quando a coluna estiver vazia (ou ponha um item oculto com o texto do vazio).
+- **C e D (M22):** o shell já mostra «Ir para a lista de conversas / a conversa / o campo de mensagem» e «Ir para o quadro» pelos `aria-label` que as telas têm (um teste confere); se mudarem esses rótulos, registrem os seus com `ctx.atalhosDeRegiao([{rotulo, alvo}])`. Cada tela precisa de UM `<h1>`: o shell move o foco para ele depois de navegar e anuncia «<título>, carregado».

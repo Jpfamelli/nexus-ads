@@ -1229,6 +1229,53 @@ await teste("vocab.js: o CRM ganha ícone por vertical (odonto dente, oficina ch
   for (const it of ROTAS_MOD.MENU) assert.ok(sprite.has(it.icone), `menu: i-${it.icone} no sprite`);
 });
 
+/* ============================================================ M22 */
+secao("M22 · acessibilidade de fluxo (atalhos «Ir para…», foco no título, anúncio da página)");
+
+await teste("rotas.regioesDaRota: lista → conversa → campo de mensagem (o campo fica a 3 Tabs do topo), quadro do CRM; rota sem regiões = nada", () => {
+  const c = ROTAS_MOD.regioesDaRota("conversas");
+  assert.deepEqual(c.map(r => r.rotulo), ["Ir para a lista de conversas", "Ir para a conversa", "Ir para o campo de mensagem"]);
+  assert.deepEqual(ROTAS_MOD.regioesDaRota("crm").map(r => r.rotulo), ["Ir para o quadro"]);
+  for (const m of ["inicio", "agenda", "config", "admin", "qualquer"]) assert.deepEqual(ROTAS_MOD.regioesDaRota(m), [], m);
+  assert.throws(() => { ROTAS_MOD.REGIOES_DA_ROTA.conversas.push(1); }, TypeError, "tabela congelada");
+});
+
+await teste("contrato com as telas: os seletores dos atalhos usam rótulos acessíveis que o código de Conversas e do CRM realmente tem", () => {
+  const fontes = { conversas: ler("conversas.js") + ler("cv-chat.js") + ler("cv-composer.js") + ler("cv-lista.js"), crm: ler("crm-kanban.js") + ler("crm.js") };
+  const tem = (modulo, trecho, msg) => assert.ok(fontes[modulo].includes(trecho), `${msg}: ${trecho}`);
+  tem("conversas", '"aria-label": "Lista de conversas"', "coluna da lista (conversas.js)");
+  tem("conversas", 'role: "log"', "mensagens são um log (cv-chat.js)"); tem("conversas", '"aria-label": "Mensagens"', "rótulo das mensagens (cv-chat.js)");
+  tem("conversas", '"aria-label": "Mensagem"', "textarea do compositor (cv-composer.js)");
+  tem("crm", 'role: "region", "aria-label": `Quadro de ', "quadro do kanban (crm-kanban.js)");
+  for (const [rot, alvo] of ROTAS_MOD.REGIOES_DA_ROTA.conversas) assert.match(alvo, /aria-label/, `${rot}: o seletor usa aria-label, não classe de CSS`);
+  assert.doesNotMatch(JSON.stringify(ROTAS_MOD.REGIOES_DA_ROTA), /\.cv-|\.kb-/, "nenhuma classe de CSS das telas no contrato");
+});
+
+await teste("index.html e shell.css: atalhos de região antes do «Pular para o conteúdo» (que continua lá); escondidos até o foco; forced-colors com cores do sistema", () => {
+  const iReg = HTML.indexOf('<nav class="pular-regioes" id="pular-regioes"'), iPular = HTML.indexOf('<a class="pular" href="#vista">');
+  assert.ok(iReg > 0 && iPular > iReg, "os atalhos da tela vêm primeiro na ordem do Tab");
+  const css = ler("shell.css");
+  assert.match(css, /\.pular-regiao \{ position: absolute; left: -9999px;/); assert.match(css, /\.pular-regiao:focus \{ left: 1rem; \}/);
+  assert.match(css, /@media \(forced-colors: active\) \{[\s\S]*?:focus-visible \{ outline: 2px solid Highlight;/);
+  assert.match(css, /\.faixa \{ border: 1px solid CanvasText; \}/);
+  assert.doesNotMatch(css, /#[0-9a-fA-F]{3,8}\b/, "shell.css sem cor fixa");
+});
+
+await teste("app.js (M22): ctx.atalhosDeRegiao, alvo resolvido na hora do clique, foco no <h1> com anúncio «<título>, carregado» e o <main> só como reserva", () => {
+  assert.match(APP_JS, /atalhosDeRegiao\(lista\) \{/);
+  assert.match(APP_JS, /if \(alvo\) focarElemento\(alvo\); else E\.ui\.anunciar\("Essa área não está disponível agora\."\);/);
+  assert.match(APP_JS, /b\.el\.hidden = !resolverAlvo\(b\.alvo\)/, "alvo que não existe agora não ganha atalho");
+  const montar = /async function montarNoShell\([\s\S]*?\nfunction focarVista/.exec(APP_JS)[0];
+  assert.equal([...montar.matchAll(/if \(doUsuario\) focarTitulo\(seq\);/g)].length, 2, "as duas saídas de montarNoShell focam o título");
+  assert.doesNotMatch(montar, /if \(doUsuario\) focarVista\(\);/, "nada de focar o <main> direto");
+  const f = /function focarTitulo\(seq\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
+  assert.match(f, /h1\.setAttribute\("tabindex", "-1"\)/); assert.match(f, /E\.ui\.anunciar\(`\$\{nome\}, carregado`\)/);
+  assert.match(f, /if \(seq !== E\.montando\) return true;/, "navegação mais nova cancela o foco da antiga");
+  assert.match(f, /setTimeout\(\(\) => \{[\s\S]*?focarVista\(\)/, "sem <h1> em 3 s cai para o <main>");
+  assert.match(APP_JS, /observarRegioes\(\);/); assert.match(APP_JS, /E\.regioes = null;\s*if \(E\.rascunhos\)/, "desmontar limpa os atalhos do módulo");
+  assert.match(APP_JS, /document\.querySelector\("\.pular"\)/, "o «Pular para o conteúdo» continua sendo o .pular (teste T09 da frente A)");
+});
+
 /* ============================================================ fim */
 console.log(`\n${ok} ok · ${falhas} falha${falhas === 1 ? "" : "s"}`);
 if (falhas) process.exitCode = 1;
