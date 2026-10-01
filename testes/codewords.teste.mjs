@@ -1181,8 +1181,8 @@ test("contexto da IA: origem do site e do anúncio aparecem; gclid, fbclid e ids
 
 /* ---------------- prompt do CodeWords ---------------- */
 /** Ações que o FLUXO usa (versão 2) e as que a API só mantém por compatibilidade com fluxos antigos. */
-const ACOES_DO_FLUXO = ["mensagem", "contexto", "horarios", "agendar", "remarcar", "cancelar", "humano", "status"];
-const ACOES_LEGADAS = ["etapa", "origem", "nota"];
+const ACOES_DO_FLUXO = ["mensagem", "contexto", "horarios", "agendar", "remarcar", "cancelar", "origem", "humano", "status"];
+const ACOES_LEGADAS = ["etapa", "nota"];
 
 test("prompt: ensina o fluxo a NÃO usar @lid como telefone e lista o motivo lid_sem_numero", () => {
   const r = montarReceita({ url: "{{URL_DO_ORBITA}}" });
@@ -1200,7 +1200,7 @@ test("prompt: traz as ações do fluxo (versão 2), com o JSON exato, e nenhum s
   for (const l of linhas) assert.ok(exemplos.includes(l), `linha JSON fora dos exemplos: ${l}`);
   for (const e of exemplos) assert.ok(linhas.includes(e), `exemplo ausente da receita: ${e}`);
   // cada exemplo é aceito pelo handler REAL: nada de dados_invalidos, acao_desconhecida ou payload_desconhecido
-  // (os legados também: a API continua aceitando etapa/origem/nota para fluxos da versão 1, só não os ensina mais)
+  // (os legados também: a API continua aceitando etapa/nota para fluxos da versão 1, só não os ensina mais)
   for (const [nome, ex] of Object.entries({ ...EXEMPLOS_AGENTE, ...EXEMPLOS_LEGADOS })) {
     const s = cenario({ rpc: RPCS_AGENDA });
     const r = await ler(await agente(s, ex));
@@ -1253,19 +1253,24 @@ test("prompt v2: traz «versão 2 — 01/10/2026» no começo e um resumo das mu
   const resumo = rec.slice(iResumo);
   assert.equal(resumo.split("\n").filter(l => l.startsWith("- ")).length, RESUMO_VERSAO.length);
   assert.match(resumo, /Automações do Órbita/);
+  assert.match(resumo, /LIGAR as receitas de IA \(nascem desligadas\)/, "o resumo avisa que etapa e resumo dependem de ligar as receitas");
+  assert.match(resumo, /Saíram dele as ferramentas etapa e nota/);
   assert.match(resumo, /MESMO fluxo \(mesmo Service ID\)/, "diz como atualizar um fluxo da versão 1");
   // o documento gerado leva a mesma versão
   assert.match(documentoPrompt(), /\*\*Prompt versão 2 — 01\/10\/2026\.\*\*/);
 });
 
-test("prompt v2: o fluxo faz SÓ conversa, agenda, humano e repasse — etapa, origem, nota e resumo NÃO são obrigação dele", () => {
+test("prompt v2: o fluxo faz SÓ conversa (com a origem que o cliente contar), agenda, humano e repasse — etapa, nota e resumo NÃO são dele", () => {
   const rec = montarReceita({ url: URL_A });
   assert.match(rec, /O FLUXO FAZ SÓ QUATRO COISAS/);
   for (const t of ["a) CONVERSA com o cliente", "b) AGENDA: horarios, agendar, remarcar, cancelar", "c) CHAMA UMA PESSOA (humano)", "d) REPASSA ao Órbita toda mensagem, eco e recibo"]) {
     assert.ok(rec.includes(t), t);
   }
-  assert.match(rec, /O FLUXO NÃO CLASSIFICA O CLIENTE: não muda etapa, não registra origem, não escreve nota nem resumo e não cria follow-ups/);
-  assert.match(rec, /O Órbita faz o CRM sozinho, por Automações com IA/);
+  assert.match(rec, /a\) CONVERSA com o cliente \(modelo de linguagem \+ contexto\.instrucoes\) e anota a origem quando ele contar como conheceu a empresa/);
+  assert.match(rec, /O FLUXO NÃO CLASSIFICA O CLIENTE: não muda etapa, não escreve nota nem resumo e não cria follow-ups/);
+  assert.match(rec, /Isso é do Órbita, por Automações com IA que a empresa liga/, "etapa, nota e resumo dependem de ligar as receitas de IA");
+  // a origem que o cliente CONTAR (ex.: «vi no Instagram») só existe se a IA do fluxo a registrar: nenhuma automação escreve nx_leads.origem
+  assert.ok(rec.includes('"acao":"origem"') && /^- origem — quando o cliente CONTAR como conheceu a empresa/m.test(rec), "a ferramenta origem está na receita");
   // nenhuma ferramenta/ação de CRM sobrou nas seções do fluxo (só a negação e o resumo de mudanças a mencionam)
   const iResumo = rec.indexOf("RESUMO DAS MUDANÇAS");
   const secoes = rec.slice(0, iResumo);
@@ -1274,10 +1279,10 @@ test("prompt v2: o fluxo faz SÓ conversa, agenda, humano e repasse — etapa, o
     assert.ok(!new RegExp(`^- ${a} —`, "m").test(secoes), `ferramenta ${a} fora da lista de ferramentas`);
   }
   assert.ok(!/orcamento|perdida/.test(secoes), "o prompt não manda mais o fluxo escolher etapa (orcamento/perdida)");
-  assert.ok(!/resumo curto do que foi combinado|como conheceu a empresa/.test(secoes), "sem nota nem origem declarada pelo cliente");
-  // as seis ferramentas que sobraram
+  assert.ok(!/resumo curto do que foi combinado/.test(secoes), "sem nota");
+  // as ferramentas que sobraram (origem inclusa: é a única decisão de CRM que só a conversa conhece)
   assert.match(rec, /5\) FERRAMENTAS DO MODELO \(máximo de 6 chamadas por resposta\)/);
-  for (const f of ["horarios", "agendar", "remarcar", "cancelar", "humano", "contexto"]) assert.ok(rec.includes(`- ${f} —`), `ferramenta ${f}`);
+  for (const f of ["horarios", "agendar", "remarcar", "cancelar", "origem", "humano", "contexto"]) assert.ok(rec.includes(`- ${f} —`), `ferramenta ${f}`);
   // o follow-up é do Órbita: o fluxo não inicia conversa e o eco do que o Órbita enviou é só repassado
   assert.match(rec, /nunca inicie conversa por conta própria: follow-ups e lembretes são do Órbita/);
   assert.match(rec, /próprio Órbita envia pelo aparelho \(follow-ups, lembretes, resposta da equipe pelo painel\): repasse igual, sem decidir nada/);
@@ -1289,14 +1294,15 @@ test("prompt v2: o fluxo faz SÓ conversa, agenda, humano e repasse — etapa, o
   assert.ok(montarReceita({ url: "{{URL_DO_ORBITA}}" }).length < 11_667, "o prompt da v2 é menor que o da v1");
 });
 
-test("instruções da IA (contexto.instrucoes): divisão de trabalho — a IA não classifica etapa nem registra origem; o Órbita faz", () => {
+test("instruções da IA (contexto.instrucoes): divisão de trabalho — a IA registra só a origem que o cliente contar; etapa, nota e resumo são do Órbita (se ligado)", () => {
   const inst = montarContexto(DADOS).instrucoes;
   assert.match(inst, /SEU PAPEL \(o Órbita faz o resto\)/);
-  assert.match(inst, /O Órbita cuida do CRM sozinho, por automações: etapa do funil, origem do cliente, notas e resumo da conversa\. Você NÃO precisa classificar o cliente, mudar etapa, registrar origem nem resumir a conversa/);
+  assert.match(inst, /O Órbita cuida do resto do CRM por automações, que a empresa liga em Órbita › Automações: etapa do funil, notas e resumo da conversa\. Você NÃO precisa classificar o cliente, mudar etapa nem resumir a conversa\. Só a origem é com você: quando o cliente CONTAR como conheceu a empresa, registre com a ação origem/);
+  assert.ok(inst.includes('acao:"origem"'), "a ferramenta origem está nas instruções");
   assert.match(inst, /Lembretes e retomadas de conversa \(follow-ups\) também são enviados pelo Órbita/);
   assert.match(inst, /Não prometa mandar mensagem em dia e hora certos/);
-  // as ferramentas listadas para a IA são exatamente as do fluxo (sem etapa/origem/nota)
-  assert.deepEqual(ACOES_AGENTE.map(([a]) => a), ["contexto", "horarios", "agendar", "remarcar", "cancelar", "humano"]);
+  // as ferramentas listadas para a IA são exatamente as do fluxo (sem etapa/nota)
+  assert.deepEqual(ACOES_AGENTE.map(([a]) => a), ["contexto", "horarios", "agendar", "remarcar", "cancelar", "origem", "humano"]);
   for (const a of ACOES_LEGADAS) assert.ok(!inst.includes(`acao:"${a}"`), `instruções sem a ação ${a}`);
   assert.ok(!/orcamento|perdida|resumo curto do que foi combinado/.test(inst));
   // segurança e dados de terceiros continuam
@@ -1307,11 +1313,11 @@ test("instruções da IA (contexto.instrucoes): divisão de trabalho — a IA n�
   assert.deepEqual(Object.keys(montarContexto(DADOS)).sort(), ["agora", "contato", "empresa", "historico", "instrucoes", "negocio"]);
 });
 
-test("compatibilidade: fluxos da versão 1 ainda chamam etapa, origem e nota e a API responde igual", async () => {
+test("compatibilidade: fluxos da versão 1 ainda chamam etapa e nota (e a origem, que continua) e a API responde igual", async () => {
   const s = cenario();
   const e = await ler(await agente(s, EXEMPLOS_LEGADOS.etapa));
   assert.equal(e.status, 200); assert.equal(e.corpo.ok, true); assert.equal(s.rpcsDe("nx_codewords_etapa")[0].corpo.p_etapa, "orcamento");
-  const o = await ler(await agente(s, EXEMPLOS_LEGADOS.origem));
+  const o = await ler(await agente(s, EXEMPLOS_AGENTE.origem));
   assert.equal(o.corpo.ok, true); assert.equal(s.rpcsDe("nx_codewords_origem")[0].corpo.p_origem, "instagram");
   const n = await ler(await agente(s, EXEMPLOS_LEGADOS.nota));
   assert.equal(n.corpo.ok, true); assert.equal(s.rpcsDe("nx_codewords_nota")[0].corpo.p_texto, EXEMPLOS_LEGADOS.nota.texto);

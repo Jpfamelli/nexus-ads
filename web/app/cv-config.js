@@ -229,8 +229,8 @@ async function montarNumeros(ctx, alvo) {
         opcoes: base.departamentos.map(d => ({ valor: d.id, rotulo: d.nome })) }) : null,
       h("section", { class: "cartao cfg-cw-ia" },
         h("div", { class: "cfg-cw-ia-head" }, ui.icone("ia"), h("div", null, h("h3", { class: "titulo-sec" }, "IA no WhatsApp"),
-          h("p", { class: "sub" }, "O CodeWords conversa, agenda e chama a equipe pelo celular conectado; a equipe pode assumir uma conversa a qualquer momento."),
-          h("p", { class: "sub" }, "As decisões do CRM (mover de etapa, origem, notas e resumo da conversa) e os follow-ups são as Automações do Órbita: elas usam a IA do Claude e enviam as mensagens por este mesmo número. ",
+          h("p", { class: "sub" }, "O CodeWords conversa, agenda, anota como o cliente conheceu a empresa e chama a equipe pelo celular conectado; a equipe pode assumir uma conversa a qualquer momento."),
+          h("p", { class: "sub" }, "Mover de etapa, notas, resumo da conversa e follow-ups são as Automações do Órbita (a IA do Claude decide e as mensagens saem por este mesmo número). As receitas de IA nascem desligadas: ligue-as em Automações para valerem. ",
             ctx.temModulo("automacoes") && ctx.pronto("automacoes") && ctx.pode("supervisor")
               ? h("a", { class: "rel-link", href: "#/automacoes", on: { click: ev => { ev.preventDefault(); if (modalApi) modalApi.fechar(null); ctx.navegar("#/automacoes"); } } }, "Abrir Automações")
               : null))),

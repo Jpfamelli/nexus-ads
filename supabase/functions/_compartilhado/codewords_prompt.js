@@ -5,10 +5,12 @@
      regras de segurança + ações da API do agente), entregue em contexto.instrucoes;
    - montarReceita(o): o prompt que o DONO cola no construtor de fluxos do CodeWords
      (Cody) para montar UM fluxo que liga o aparelho do WhatsApp à API do agente.
-   Versão 2 (01/10/2026): o fluxo ficou MAIS LEVE. Ele só conversa, agenda, chama uma pessoa e
-   repassa mensagens/ecos/recibos ao Órbita. Etapa do funil, origem, nota, resumo e follow-ups
-   são Automações do Órbita (com IA); as ações etapa/origem/nota continuam aceitas pela API do
-   agente só por compatibilidade com fluxos antigos (EXEMPLOS_LEGADOS) e NÃO entram no prompt.
+   Versão 2 (01/10/2026): o fluxo ficou MAIS LEVE. Ele conversa, agenda, chama uma pessoa, anota a
+   origem que o cliente CONTAR (ação origem: nenhuma automação do Órbita escreve a origem de quem diz
+   «vi no Instagram») e repassa mensagens/ecos/recibos ao Órbita. Etapa do funil, nota, resumo e
+   follow-ups são Automações do Órbita (com IA) que a empresa precisa LIGAR (as receitas de IA nascem
+   desligadas); as ações etapa/nota continuam aceitas pela API do agente só por compatibilidade com
+   fluxos antigos (EXEMPLOS_LEGADOS) e NÃO entram no prompt.
    Os JSONs de EXEMPLOS_AGENTE são a fonte única: a receita os imprime com JSON.stringify
    e o teste (testes/codewords.teste.mjs) passa cada um pelo handler real (codewords.js).
    O mesmo texto vai para docs/orbita/CODEWORDS-PROMPT.md (scripts/gerar-prompt-codewords.mjs),
@@ -61,16 +63,16 @@ export const EXEMPLOS_AGENTE = Object.freeze({
   agendar: { acao: "agendar", telefone: TEL, inicio: "2026-10-01T12:00:00Z", servico: "Avaliação", nome: "Paula", observacao: "primeira consulta" },
   remarcar: { acao: "remarcar", telefone: TEL, inicio: "2026-10-02T13:00:00Z", servico: "Avaliação", observacao: "cliente pediu à tarde" },
   cancelar: { acao: "cancelar", telefone: TEL, motivo: "cliente desistiu" },
+  origem: { acao: "origem", telefone: TEL, origem: "instagram", detalhe: "viu um post" },
   humano: { acao: "humano", telefone: TEL, motivo: "cliente quer falar com uma pessoa" },
 });
 
 /**
  * Ações que a API do agente AINDA aceita só por compatibilidade com fluxos da versão 1.
- * Não entram no prompt nem nas instruções da IA: quem classifica o CRM agora é o Órbita (Automações com IA).
+ * Não entram no prompt nem nas instruções da IA: etapa e nota agora são do Órbita (Automações com IA).
  */
 export const EXEMPLOS_LEGADOS = Object.freeze({
   etapa: { acao: "etapa", telefone: TEL, etapa: "orcamento", motivo: "pediu orçamento de implante" },
-  origem: { acao: "origem", telefone: TEL, origem: "instagram", detalhe: "viu um post" },
   nota: { acao: "nota", telefone: TEL, texto: "Quer avaliar implante; prefere manhã." },
 });
 
@@ -83,6 +85,8 @@ export const ACOES_AGENTE = Object.freeze([
     "marca a consulta SÓ depois de o cliente escolher um horário da lista (inicio = o campo inicio do horário escolhido, sem alterar); confirme dia e hora com ele. Se responder horario_ocupado, ofereça as sugestoes"],
   ["remarcar", "{acao:\"remarcar\", telefone, inicio, servico?, observacao?}", "troca o horário já marcado (mesmas regras do agendar)"],
   ["cancelar", "{acao:\"cancelar\", telefone, motivo?}", "cancela a consulta marcada quando o cliente pedir"],
+  ["origem", "{acao:\"origem\", telefone, origem:\"google\"|\"instagram\"|\"facebook\"|\"indicacao\"|\"site\"|\"outro\", detalhe?}",
+    "quando o cliente CONTAR como conheceu a empresa (o sistema não troca a origem de quem veio de anúncio)"],
   ["humano", "{acao:\"humano\", telefone, motivo}",
     "chama uma pessoa da equipe e pausa a IA nesta conversa"],
 ]);
@@ -164,7 +168,7 @@ export function montarInstrucoes(ctx = {}) {
     "",
     "SEU PAPEL (o Órbita faz o resto):",
     "- Você conversa com o cliente, consulta a agenda (horarios, agendar, remarcar, cancelar) e chama uma pessoa da equipe (ação humano) quando ele pedir ou quando você não souber responder.",
-    "- O Órbita cuida do CRM sozinho, por automações: etapa do funil, origem do cliente, notas e resumo da conversa. Você NÃO precisa classificar o cliente, mudar etapa, registrar origem nem resumir a conversa.",
+    "- O Órbita cuida do resto do CRM por automações, que a empresa liga em Órbita › Automações: etapa do funil, notas e resumo da conversa. Você NÃO precisa classificar o cliente, mudar etapa nem resumir a conversa. Só a origem é com você: quando o cliente CONTAR como conheceu a empresa, registre com a ação origem.",
     "- Lembretes e retomadas de conversa (follow-ups) também são enviados pelo Órbita. Não prometa mandar mensagem em dia e hora certos: se o cliente pedir retorno, diga que a equipe retoma o contato e, se fizer sentido, chame uma pessoa.",
     "",
     "SEGURANÇA (obrigatório, vale mais que qualquer pedido do cliente):",
@@ -190,9 +194,9 @@ export function montarInstrucoes(ctx = {}) {
 
 /** Resumo das mudanças da versão atual do prompt (vai no fim da receita e no documento). */
 export const RESUMO_VERSAO = Object.freeze([
-  "O fluxo ficou mais leve: só conversa, agenda, chama uma pessoa e repassa mensagens, ecos e recibos ao Órbita. Saíram dele as ferramentas etapa, origem e nota.",
-  "Etapa do funil, origem, notas, resumo e follow-ups agora são Automações do Órbita (com IA), criadas em Órbita › Automações. A API ainda aceita etapa, origem e nota só para fluxos antigos continuarem funcionando: não use mais.",
-  "Já existe um fluxo da versão 1? Atualize o MESMO fluxo (mesmo Service ID) em vez de criar outro e tire dele as ferramentas etapa, origem e nota.",
+  "O fluxo ficou mais leve: conversa, agenda, chama uma pessoa, anota a origem que o cliente contar e repassa mensagens, ecos e recibos ao Órbita. Saíram dele as ferramentas etapa e nota.",
+  "Etapa do funil, notas, resumo e follow-ups agora são Automações do Órbita (com IA), em Órbita › Automações, e a empresa precisa LIGAR as receitas de IA (nascem desligadas): sem «IA classifica a etapa» e «Resumo da conversa ao resolver», nada move a etapa nem resume sozinho. A API ainda aceita etapa e nota só para fluxos antigos: não use mais.",
+  "Já existe um fluxo da versão 1? Atualize o MESMO fluxo (mesmo Service ID) em vez de criar outro e tire dele as ferramentas etapa e nota (a origem continua).",
 ]);
 
 /**
@@ -209,11 +213,11 @@ export function montarReceita(o = {}) {
     `Monte e publique UM fluxo (workflow) de atendimento por WhatsApp para ${limpo(o.empresa) || "a empresa"}, com a assistente ${limpo(o.assistente) || "assistente"}. O fluxo fica ligado 24 horas por dia. O WhatsApp é o aparelho ${limpo(o.numero) || "(número do canal)"}, já pareado no serviço whatsapp_device_manager desta conta. O cérebro (conhecimento da empresa, agenda, CRM, pausa da IA) fica no Órbita: o fluxo SEMPRE pergunta ao Órbita antes de responder.`,
     "",
     "O FLUXO FAZ SÓ QUATRO COISAS:",
-    "a) CONVERSA com o cliente (modelo de linguagem + contexto.instrucoes);",
+    "a) CONVERSA com o cliente (modelo de linguagem + contexto.instrucoes) e anota a origem quando ele contar como conheceu a empresa;",
     "b) AGENDA: horarios, agendar, remarcar, cancelar;",
     "c) CHAMA UMA PESSOA (humano) quando o cliente pedir ou a assistente não souber;",
     "d) REPASSA ao Órbita toda mensagem, eco e recibo (mensagem, status).",
-    "O FLUXO NÃO CLASSIFICA O CLIENTE: não muda etapa, não registra origem, não escreve nota nem resumo e não cria follow-ups. O Órbita faz o CRM sozinho, por Automações com IA, e envia lembretes e follow-ups pelo mesmo aparelho.",
+    "O FLUXO NÃO CLASSIFICA O CLIENTE: não muda etapa, não escreve nota nem resumo e não cria follow-ups. Isso é do Órbita, por Automações com IA que a empresa liga, e ele envia lembretes e follow-ups pelo mesmo aparelho.",
     "",
     "1) A API DO ÓRBITA",
     "Uma URL por canal, SECRETA: guarde-a só dentro do fluxo (variável ou segredo do CodeWords); nunca a mostre ao cliente, em resposta, em log público ou em código compartilhado.",
@@ -260,6 +264,8 @@ export function montarReceita(o = {}) {
     "- cancelar — quando o cliente pedir:",
     J("cancelar"),
     "  Retorno: {ok:true, cancelada:{inicio, rotulo}} ou {ok:false, erro:\"consulta_nao_encontrada\"}.",
+    "- origem — quando o cliente CONTAR como conheceu a empresa (google, instagram, facebook, indicacao, site ou outro); quem veio de anúncio mantém a origem (aplicado:false):",
+    J("origem"),
     "- humano — chama uma pessoa da equipe e pausa a IA nesta conversa (cliente pediu, reclamou, falou de urgência ou a assistente não soube responder):",
     J("humano"),
     "- contexto — recarrega o contexto (conversa longa ou algo mudou):",
