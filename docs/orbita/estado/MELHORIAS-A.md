@@ -46,7 +46,7 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
 | M04 cor com intenção | **feito** | ver "Etapa 2 · M04" abaixo | — |
 | M05 segmentado + gestos | **feito** | ver "Etapa 2 · M05" abaixo | — |
 | M06 esqueletos/erro | **feito** (CLS das telas depende de C/D) | ver "Etapa 2 · M06" abaixo | medir CLS ≤ 0,02 depois de M30/M31/M40 |
-| M07 desfazer | feito (infra) | `acaoComDesfazer`, Ctrl/⌘+Z, fila de 3, toasts anunciados | uso em M25/M35 (C/B) |
+| M07 desfazer | **feito** (uso em M25/M35) | ver "Etapa 2 · M07" abaixo | uso nas telas (C: M25, D: M35) |
 | M08 formulários | feito (componentes) | `protegerTexto`, `validar`, máscaras, medidor, contador, foco em toque | uso nas telas (C/D) |
 | M09 vazios | parcial | 3 tipos com SVG por `createElementNS` | tirar o ícone "+" padrão do vazio sem `tipo` (compatibilidade por ora), usos |
 | M10 movimento | parcial | `.entra`, `.assenta`, `.destaque`, `G.destacar` | tirar sweep do botão e hover-lift, palco animado só em Login/Início (precisa de classe no `<body>` posta pelo shell, B), sonda CDP |
@@ -108,3 +108,11 @@ Os testes de componente rodam num DOM de mentira mínimo escrito dentro do próp
 - **Erro:** `ui.erroCartao` refaz sozinho em `orbita:online` (uma vez, só se o cartão ainda está na tela). Rede de segurança nova: `http_408/429/5xx`, `servico_indisponivel`, `sem_conexao` e `tempo_esgotado` viram frase em português em `ui.mensagemErro` (o `api.js` do B também traduz; aqui é o cinto de segurança), junto com a limpeza de `Failed to fetch`/`import()`/URL que já existia. Teste: nenhum erro mostra `http`, `_`, `import` nem URL.
 - **Como verificar:** `node testes/app.teste.mjs` ("M06: …"); visual: um `ui.esqueleto(ads)` na página no claro mostra blocos e a faixa clara.
 - **Para as outras frentes:** (B) `rede.js` precisa disparar `window.dispatchEvent(new Event("orbita:online"))` ao reconectar. (C/D) trocar o esqueleto genérico pelo tipo da tela e usar `ui.trocarEsqueleto`; passar `{cabecalho: {…}}` igual ao `ui.cabecalho` que a tela usa para a troca não deslocar nada (CLS ≤ 0,02 é critério de M30/M31/M40).
+
+### M07 · desfazer como padrão — FEITO (o uso nas telas é de C e D)
+
+- A infra do contrato já estava: `ui.acaoComDesfazer({texto, aplicar, reverter, ms = 7000})`, Ctrl/⌘+Z fora de campo, fila de 3, toast anunciado a leitor de tela (erro urgente), `reverter` que falha → toast de erro com o estado real.
+- **Novo, aditivo: `firmar`.** Para as ações cuja escrita real tem de ficar ADIADA (excluir tarefa/nota, mover para Ganho/Perdido sem disparar automação por engano — risco 10 do plano): `aplicar` só mexe na tela, `firmar` é a escrita no servidor e roda quando o toast fecha sem desfazer (tempo, X, ou a 4ª ação da fila empurrando a mais antiga) ou, em melhor esforço, quando a página é fechada com a ação pendente (`pagehide`). Desfazer (botão ou Ctrl/⌘+Z) nunca firma. Se `firmar` falhar: toast "Não foi possível concluir…", `reverter` devolve a tela ao estado real e o resultado é `{estado: "falhou"}`. Sem `firmar` o comportamento é exatamente o de antes (os dois usos existentes — `inicio.js`, `crm-tarefas.js` — não mudam).
+- O botão "Desfazer" do toast ganhou a dica "Desfazer (Ctrl ou ⌘ + Z)". `ui.confirmar` permanece para o irreversível.
+- **Como verificar:** `node testes/app.teste.mjs` ("ui.acaoComDesfazer (M07)" e "M07: acaoComDesfazer({firmar})": 7 cenários, inclusive pagehide).
+- **Para as outras frentes:** (C, M25) mover etapa/ganho/perdido, etiquetar e excluir tarefa/nota: `await ui.acaoComDesfazer({ texto: "Movida para Ganho", aplicar: () => /* UI */, reverter: () => /* UI */, firmar: () => ctx.api.rpcC("nx_negocio_mover", {…}, {req: true}) })` e conferir `r.estado`; excluir negócio/contato continua em `ui.confirmar({digitar})`. (D, M35) "Resolvida · Desfazer": o mesmo padrão com `firmar` = resolver no servidor.

@@ -2159,7 +2159,7 @@ await teste("ui.acaoComDesfazer (M07): aplica na hora, Desfazer reverte, Ctrl/�
     const z4 = new d.Evento("keydown", { key: "z", ctrlKey: true }); d.doc.body.dispatchEvent(z4); assert.equal(z4.defaultPrevented, false, "nada pendente");
   } finally { d.fim(); }
   const src = ler("ui.js");
-  assert.match(src, /export async function acaoComDesfazer\(\{ texto, aplicar, reverter, ms = 7000 \} = \{\}\)/, "assinatura do contrato (ms = 7000)");
+  assert.match(src, /export async function acaoComDesfazer\(\{ texto, aplicar, reverter, firmar, ms = 7000 \} = \{\}\)/, "assinatura do contrato ({texto, aplicar, reverter, ms = 7000}) + o opcional `firmar`");
 });
 
 /* ---------- modal e gaveta que protegem o texto digitado ---------- */
@@ -2703,6 +2703,50 @@ await teste("M06: erro de carregamento nunca mostra código técnico nem URL (ht
       assert.doesNotMatch(e.textContent, /https?:|import|fetch|\.js|module/i, e.textContent);
     }
   } finally { d.fim(); }
+});
+
+/* ---------- M07: desfazer com a escrita real adiada (firmar) ---------- */
+await teste("M07: acaoComDesfazer({firmar}) — a escrita real só roda se o toast fechar sem desfazer; desfazer nunca firma; firmar que falha volta a tela; página fechada firma o que está pendente; fila de 3 firma a mais antiga", async () => {
+  const d = comDom();
+  const vivos = () => d.doc.querySelectorAll(".toast").filter(t => !t.classList.contains("saindo"));
+  try {
+    const log = [];
+    const mk = (nome, extra = {}) => U.acaoComDesfazer({ texto: `Feito ${nome}`, aplicar: () => { log.push(`tela:${nome}`); }, reverter: () => { log.push(`volta:${nome}`); }, firmar: () => { log.push(`servidor:${nome}`); }, ms: 5000, ...extra });
+    // 1) desfazer: a tela volta e o servidor nunca é tocado
+    const p1 = mk("a"); await esperar(5); assert.deepEqual(log, ["tela:a"], "só a tela mudou (UI otimista)");
+    achar(vivos()[0], ".toast-acao").click();
+    const r1 = await p1; assert.equal(r1.estado, "desfeita"); assert.deepEqual(log, ["tela:a", "volta:a"], "desfazer não firma");
+    assert.equal(achar(d.doc.body, ".toast-acao").getAttribute("title"), "Desfazer (Ctrl ou ⌘ + Z)", "a dica do atalho");
+    // 2) o toast fecha por tempo: firma e resolve "mantida" depois da escrita
+    log.length = 0;
+    const r2 = await mk("b", { ms: 30 }); assert.equal(r2.estado, "mantida"); assert.deepEqual(log, ["tela:b", "servidor:b"], "firmou depois do tempo");
+    // 3) Ctrl/⌘+Z antes do tempo = desfazer (não firma)
+    log.length = 0;
+    const p3 = mk("c"); await esperar(5); d.doc.body.dispatchEvent(new d.Evento("keydown", { key: "z", ctrlKey: true }));
+    assert.equal((await p3).estado, "desfeita"); assert.deepEqual(log, ["tela:c", "volta:c"]);
+    // 4) firmar que falha: a tela volta ao estado real, o erro é dito e o estado é "falhou"
+    log.length = 0;
+    const r4 = await mk("d", { ms: 30, firmar: () => { throw new Error("servidor_fora"); } });
+    assert.equal(r4.estado, "falhou"); assert.equal(r4.desfeita, false); assert.ok(r4.erro); assert.deepEqual(log, ["tela:d", "volta:d"], "a tela volta ao que o servidor tem");
+    assert.ok(d.doc.querySelectorAll(".toast-erro").some(t => /Não foi possível concluir/.test(t.textContent)), "avisa que não foi salvo");
+    // 5) fechar o toast no X também firma; sem `firmar` o comportamento de antes não muda
+    log.length = 0;
+    const p5 = mk("e"); await esperar(5); achar(vivos()[0], ".toast-x").click(); const r5 = await p5;
+    assert.equal(r5.estado, "mantida"); assert.deepEqual(log, ["tela:e", "servidor:e"]);
+    const sem = await U.acaoComDesfazer({ texto: "x", aplicar() {}, reverter() {}, ms: 30 }); assert.equal(sem.estado, "mantida");
+    // 6) a 4ª ação pendente firma a mais antiga (fila de 3)
+    log.length = 0;
+    const ps = ["f", "g", "h", "i"].map(n => mk(n)); await esperar(15);
+    assert.ok(log.includes("servidor:f"), "a mais antiga foi firmada ao entrar a 4ª"); assert.equal(log.filter(x => x.startsWith("servidor")).length, 1);
+    // 7) página fechada com ações pendentes: firma o que ficou (melhor esforço) e não repete depois
+    const antes = log.filter(x => x.startsWith("servidor")).length;
+    d.disparar("pagehide");
+    assert.equal(log.filter(x => x.startsWith("servidor")).length, antes + 3, "g, h e i firmados ao sair");
+    d.disparar("pagehide"); assert.equal(log.filter(x => x.startsWith("servidor")).length, antes + 3, "uma vez só");
+    for (const t of vivos()) t.__fechar("fechado"); await Promise.all(ps.map(p => Promise.race([p, esperar(50)])));
+    assert.equal(log.filter(x => x.startsWith("servidor")).length, antes + 3, "fechar os toasts depois não firma de novo");
+  } finally { d.fim(); }
+  assert.match(ler("ui.js"), /async function manterItem\(item\)/); assert.match(ler("ui.js"), /addEventListener\("pagehide", aoSair\)/);
 });
 
 console.log(`\n${ok} ok · ${falhas} falha(s)${avisos ? ` · ${avisos} aviso(s)` : ""}\n`);

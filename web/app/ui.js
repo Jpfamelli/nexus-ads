@@ -192,7 +192,7 @@ export function toast(texto, { tipo = "info", desfazer = null, ms, aoFechar = nu
   const el = h("div", { class: ["toast", `toast-${tipo}`] },
     icone(tipo === "ok" ? "check" : tipo === "erro" ? "alerta" : "info"),
     h("p", null, String(texto)),
-    desfazer ? h("button", { type: "button", class: "toast-acao", on: { click: () => { fechar("desfazer"); desfazer(); } } }, "Desfazer") : null,
+    desfazer ? h("button", { type: "button", class: "toast-acao", title: "Desfazer (Ctrl ou ⌘ + Z)", on: { click: () => { fechar("desfazer"); desfazer(); } } }, "Desfazer") : null,
     h("button", { type: "button", class: "toast-x", "aria-label": "Fechar aviso", on: { click: () => fechar("fechado") } }, icone("fechar")));
   el.__fechar = fechar;
   caixa.appendChild(el);
@@ -1724,21 +1724,36 @@ async function desfazerItem(item) {
     item.resolve({ estado: "falhou", desfeita: false, erro: e });
   }
 }
-function manterItem(item) {
+/** O toast fechou sem desfazer: a ação vale. Com `firmar` (a escrita no servidor que ficou adiada), roda agora; se falhar, volta a tela ao estado real. */
+async function manterItem(item) {
   if (item.fim) return;
   item.fim = true;
   const i = _desfazer.indexOf(item); if (i >= 0) _desfazer.splice(i, 1);
+  if (item.firmar) {
+    try { await item.firmar(); }
+    catch (e) {
+      toast(`Não foi possível concluir. ${mensagemErro(e)}`, { tipo: "erro" });
+      try { await item.reverter(); } catch { /* a tela fica como está; o erro já foi dito */ }
+      item.resolve({ estado: "falhou", desfeita: false, erro: e });
+      return;
+    }
+  }
   item.resolve({ estado: "mantida", desfeita: false });
 }
-/** acaoComDesfazer({texto, aplicar, reverter, ms = 7000}) → Promise<{estado: "mantida"|"desfeita"|"falhou", desfeita, erro?}>.
+let _ouvindoSaida = null;          // a função addEventListener em que já pedimos o pagehide
+function aoSair() { for (const item of [..._desfazer]) { if (item.fim || !item.firmar) continue; item.fim = true; try { Promise.resolve(item.firmar()).catch(() => {}); } catch { /* saindo da página: melhor esforço */ } } }
+/** acaoComDesfazer({texto, aplicar, reverter, firmar?, ms = 7000}) → Promise<{estado: "mantida"|"desfeita"|"falhou", desfeita, erro?}>.
     Roda `aplicar()` na hora (UI otimista), mostra o toast com "Desfazer" por `ms` e liga Ctrl/⌘+Z (fora de campo de texto) ao mais recente
     (até 3 pendentes: o 4º firma o mais antigo). A promessa só resolve quando o toast fecha (mantida), a pessoa desfaz (desfeita) ou algo falha.
-    `aplicar` que falha → toast de erro e estado "falhou" (nada fica pendente); `reverter` que falha → toast de erro dizendo que o estado real é o aplicado. */
-export async function acaoComDesfazer({ texto, aplicar, reverter, ms = 7000 } = {}) {
+    `aplicar` que falha → toast de erro e estado "falhou" (nada fica pendente); `reverter` que falha → toast de erro dizendo que o estado real é o aplicado.
+    `firmar` (opcional) é a escrita REAL adiada: quando `aplicar` só mexe na tela (excluir, mover para Ganho/Perdido…), `firmar` roda se o toast fechar sem
+    desfazer (ou se a página for fechada com a ação pendente, em melhor esforço) e nunca roda se a pessoa desfizer; se falhar, a tela volta (reverter) e o estado é "falhou". */
+export async function acaoComDesfazer({ texto, aplicar, reverter, firmar, ms = 7000 } = {}) {
   if (typeof document !== "undefined" && _ouvindoZ !== document) { document.addEventListener("keydown", aoTeclaZ); _ouvindoZ = document; }
+  if (typeof addEventListener === "function" && _ouvindoSaida !== addEventListener) { addEventListener("pagehide", aoSair); _ouvindoSaida = addEventListener; }
   let resolver;
   const fim = new Promise(r => { resolver = r; });
-  const item = { reverter: reverter || (() => {}), resolve: resolver, fim: false, t: null };
+  const item = { reverter: reverter || (() => {}), firmar: typeof firmar === "function" ? firmar : null, resolve: resolver, fim: false, t: null };
   try {
     if (aplicar) await aplicar();
   } catch (e) {
