@@ -218,9 +218,9 @@ begin
       select '{"tipo":"esperar","minutos":5}'::jsonb x from generate_series(1, 6) union all select '{"tipo":"parar"}'::jsonb) q))));
   perform pg_temp.ok(e = 'automacao_invalida|ação 6: use até 5 esperas', 'mais de 5 esperas: ' || e);
   j := public.nx_automacao_salvar('tok-12-adm', cA, '{"nome":"Esperar normaliza","gatilho":"tarefa_vencida","ativo":false,
-     "acoes":[{"tipo":"esperar","minutos":"90"},{"tipo":"esperar","minutos":5,"cancelar_se_cliente_responder":false},{"tipo":"parar"}]}');
+     "acoes":[{"tipo":"esperar","minutos":"90"},{"tipo":"esperar","minutos":5,"cancelar_se_cliente_responder":false},{"tipo":"nota","texto":"depois"},{"tipo":"parar"}]}');
   perform pg_temp.ok((j #>> '{acoes,0,minutos}')::int = 90 and (j #>> '{acoes,0,cancelar_se_cliente_responder}')::boolean
-                 and not (j #>> '{acoes,1,cancelar_se_cliente_responder}')::boolean and j #>> '{acoes,2,tipo}' = 'parar',
+                 and not (j #>> '{acoes,1,cancelar_se_cliente_responder}')::boolean and j #>> '{acoes,3,tipo}' = 'parar',
                      'esperar/parar normalizados: ' || (j ->> 'acoes'));
   e := pg_temp.erro(format('select public.nx_automacao_salvar(%L,%L,%L)', 'tok-12-adm', cA,
     '{"nome":"x","gatilho":"tarefa_vencida","acoes":[{"tipo":"ia_decidir","tarefa":"adivinhar"}]}'));

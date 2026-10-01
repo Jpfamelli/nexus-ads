@@ -265,7 +265,7 @@ begin
   perform pg_temp.ok((r ->> 'ok')::boolean and (select data_consulta from public.nx_leads where id = n2) = v_qua
     and (select consulta_em from public.nx_leads where id = n2) = ((v_qua + 1)::timestamp + time '01:30') at time zone 'UTC', 'encaixe às 22:30 SP: data_consulta é a de São Paulo, não a do UTC');
   perform pg_temp.ok(exists (select 1 from public.nx_notas where negocio_id = n2 and texto like '%[encaixe]%'), 'encaixe fica registrado');
-  perform pg_temp.ok(pg_temp.erro(format('select public.nx_agenda_marcar(%L,%L,%s,%L)', tAt, cA, n5, 'amanhã')) = 'dados_invalidos|t', 'data inválida');
+  perform pg_temp.ok(pg_temp.erro(format('select public.nx_agenda_marcar(%L,%L,%s,%L)', tAt, cA, n5, 'amanhã')) = 'dados_invalidos|inicio', 'data inválida');
   perform pg_temp.ok((public.nx_agenda_marcar(tAt, cA, n5, to_char(v_hoje - 2, 'YYYY-MM-DD') || 'T10:00:00') ->> 'erro') = 'passado', 'painel: passado → passado');
   r := public.nx_agenda_marcar(tAt, cA, n5, to_char(v_hoje - 2, 'YYYY-MM-DD') || 'T10:00:00', null, true);
   perform pg_temp.ok(r ->> 'erro' = 'passado', 'encaixe no passado → passado');
