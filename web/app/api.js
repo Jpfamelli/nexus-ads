@@ -110,6 +110,12 @@ export const MENSAGENS = {
   muitos_pedidos: "Muitos pedidos seguidos; espere um minuto.",
   automacao_invalida: "A automação tem um problema.",
   limite_taxa: "Muitos envios em pouco tempo. Tente mais tarde.",
+  envio_em_andamento: "A mensagem ainda está sendo enviada. Aguarde um instante.",
+  // agenda (nx_agenda_checar): sem estes textos a tela mostrava o código cru («antecedencia»)
+  antecedencia: "Esse horário está muito em cima da hora. Escolha um horário mais à frente.",
+  fora_do_horario: "Esse horário está fora do funcionamento da agenda. Escolha outro horário.",
+  passado: "Esse horário já passou. Escolha uma data e hora à frente.",
+  consulta_nao_encontrada: "Não encontramos essa consulta. Ela pode ter sido desmarcada.",
   // erros de servidor/rede (M15): o texto técnico (http_503, servico_indisponivel) nunca chega à tela
   servico_indisponivel: "O servidor está fora do ar neste momento. Tentamos de novo sozinhos; se continuar, avise o suporte.",
   http_429: "Muitos pedidos de uma vez. Espere um instante e tente de novo.",
@@ -237,12 +243,13 @@ export const TETO_PRAZO_FN_MS = 145_000;
 
 /**
  * Chamadas cujo SERVIDOR pode levar mais que os 75 s padrão: IA com uma retentativa (Anthropic 45 s × 2 ≈ 91 s: sugerir, resumir),
- * parear do CodeWords (até 90 s), inscrever (60 s) e envio pelo CodeWords com conferência do aparelho (15 s + 60 s). O navegador precisa
+ * parear do CodeWords (até 90 s), ligar o fluxo de IA / receber aqui / enviar teste (conexões 15 s + inscrição 60 s) e envio pelo CodeWords
+ * com conferência do aparelho (15 s + 60 s). Os nomes são os das ações que o front realmente envia (cv-config.js). O navegador precisa
  * esperar MAIS que o pior caso do servidor: desistir antes mostraria «tempo_rede» enquanto ele ainda conclui (cota de IA gasta, código de
  * pareamento perdido, mensagem possivelmente enviada).
  */
 export const PRAZO_FN_LENTA_MS = 100_000;
-const FN_LENTAS = new Set(["nx-ia:sugerir", "nx-ia:resumir", "nx-codewords:parear", "nx-codewords:inscrever",
+const FN_LENTAS = new Set(["nx-ia:sugerir", "nx-ia:resumir", "nx-codewords:parear", "nx-codewords:ligar_fluxo", "nx-codewords:receber_aqui", "nx-codewords:enviar_teste",
   "nx-enviar:texto", "nx-enviar:midia", "nx-enviar:template"]);
 
 /** Retentativas das LEITURAS (e das escritas com {req:true}): até 2 repetições, 400 ms e 1,2 s (±25 % de jitter), orçamento de ~8 s por chamada. */
@@ -352,6 +359,7 @@ export function criarApi(o) {
         method: "POST",
         headers: { apikey: o.chave, "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify((typeof corpo === "function" ? corpo() : corpo) ?? {}),
+        ...(meta.keepalive ? { keepalive: true } : {}),      // a página está saindo: o navegador termina o envio mesmo com a aba fechada
       }, prazo));
     } catch (causa) {
       const e = causa?.codigo === "tempo_rede" ? causa : erroApi("sem_conexao", { causa });
@@ -386,6 +394,7 @@ export function criarApi(o) {
 
   /** Quanto esperar (ms) antes de repetir, ou null se não vale repetir (escrita comum, erro de negócio, offline, esgotou tentativas ou orçamento). */
   function esperaAntesDeRepetir(e, meta, repeticoes, inicio) {
+    if (meta.keepalive) return null;                                   // saindo da página: uma tentativa só, em melhor esforço
     if (!retentar || !(meta.leitura || meta.req) || repeticoes >= retentar.tentativas || !erroRetentavel(e)) return null;
     if (e.codigo === "sem_conexao" && !estaOnline()) return null;      // offline não gasta tentativa: o rede.js cuida da volta
     const baseMs = retentar.esperasMs[Math.min(repeticoes, retentar.esperasMs.length - 1)];
@@ -417,7 +426,7 @@ export function criarApi(o) {
             let voltou = false;
             try {
               const r = o.aoSessaoInvalida(e);
-              if (meta.leitura && !reentrou) { reentrou = true; voltou = (await r) === true; }
+              if (meta.leitura && !reentrou && !meta.keepalive) { reentrou = true; voltou = (await r) === true; }
             } catch { voltou = false; }
             if (voltou) continue;
             avisarRede("sucesso");
@@ -437,10 +446,14 @@ export function criarApi(o) {
   /**
    * M16 — stale-while-revalidate. A rede sai JÁ; se há resposta guardada (≤ 12 h) ela chega antes pelo aoCache(dados, em) e a da rede
    * vem depois (é o que a promessa devolve). Se a rede falhar depois de a tela ter sido pintada do cache, o erro sobe com
-   * `e.comCache = true`: a tela mantém o que já mostra e não troca por um cartão de erro. Nunca guarda o que não é cacheável.
+   * `e.comCache = true`: a tela mantém o que já mostra e não troca por um cartão de erro. Nunca guarda o que não é cacheável, nem a
+   * resposta de uma chamada que começou com outra conta ou outro token (Sair ou troca de conta com a leitura em voo).
    */
-  async function comCache(nome, params, opcoes, executar) {
-    const chave = o.cache.chaveDe(nome, params, { conta: o.conta ? o.conta() : null, cliente: o.cliente ? o.cliente() : null });
+  async function comCache(nome, params, opcoes, executar, cliente = o.cliente ? o.cliente() : null) {
+    // quem pediu: se a conta ou o token mudarem no meio, a resposta desta chamada não volta para o aparelho (o limpar() já rodou)
+    const contaIni = o.conta ? o.conta() : null, tokenIni = o.token ? o.token() : null;
+    const mesmoDono = () => (o.conta ? o.conta() : null) === contaIni && (o.token ? o.token() : null) === tokenIni;
+    const chave = o.cache.chaveDe(nome, params, { conta: contaIni, cliente });
     let resolvida = false, local = null, servido = false;
     const redeP = executar().then(d => { resolvida = true; return d; }, e => { resolvida = true; throw e; });
     redeP.catch(() => {});                                   // a leitura do cache pode demorar mais que um erro imediato: sem aviso de promessa sem dono
@@ -452,7 +465,7 @@ export function criarApi(o) {
     }
     try {
       const dados = await redeP;
-      o.cache.gravar(chave, nome, dados).catch(() => {});     // sem await: gravar não atrasa a tela
+      if (mesmoDono()) o.cache.gravar(chave, nome, dados).catch(() => {});     // sem await: gravar não atrasa a tela
       if (servido && typeof o.aoCache === "function") { try { o.aoCache({ fase: "fim", ok: true, nome }); } catch { /* ok */ } }
       return dados;
     } catch (e) {
@@ -465,6 +478,8 @@ export function criarApi(o) {
     }
   }
   const querCache = (nome, opcoes) => !!(o.cache && opcoes && opcoes.cache && o.cache.cacheavel(nome));
+  /** {keepalive: true}: a página está saindo (pagehide, aba oculta); o fetch sai com keepalive, uma tentativa só. */
+  const saindo = opcoes => !!(opcoes && opcoes.keepalive === true);
 
   /** {req:true} ou p_req já nos parâmetros: a escrita ganha um uuid por INTENÇÃO (o mesmo em todas as repetições) e pode repetir sem duplicar. */
   function prepararReq(params, opcoes) {
@@ -476,19 +491,22 @@ export function criarApi(o) {
   }
 
   const api = {
-    /** RPC com p_token. opcoes: {req:true|uuid} (escrita idempotente por p_req) e {cache:true, aoCache(dados, em)} (última resposta guardada primeiro). */
+    /** RPC com p_token. opcoes: {req:true|uuid} (escrita idempotente por p_req), {cache:true, aoCache(dados, em)} (última resposta guardada primeiro)
+        e {keepalive:true} (a página está saindo: o envio termina mesmo com a aba fechada; uma tentativa, sem repetição). */
     rpc(nome, params = {}, opcoes = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
       const { params: p, req } = prepararReq(params, opcoes);
-      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req });
+      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req, keepalive: saindo(opcoes) });
       return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar) : executar();
     },
-    /** RPC com p_token e p_cliente (empresa ativa). opcoes: {req:true|uuid}. */
+    /** RPC com p_token e p_cliente (empresa ativa). opcoes: {req:true|uuid}, {cache:true, aoCache} e {keepalive:true}, como em rpc. */
     rpcC(nome, params = {}, opcoes = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
       const { params: p, req } = prepararReq(params, opcoes);
-      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, p_cliente: o.cliente ? o.cliente() : null, ...p }), prazoRpc, { leitura: ehLeitura(nome), req });
-      return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar) : executar();
+      // a empresa é lida UMA vez: uma repetição (M15) depois de a pessoa trocar de empresa não busca os dados da outra nem os guarda na chave desta
+      const cli = o.cliente ? o.cliente() : null;
+      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, p_cliente: cli, ...p }), prazoRpc, { leitura: ehLeitura(nome), req, keepalive: saindo(opcoes) });
+      return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar, cli) : executar();
     },
     /** RPC pública (sem token): nx_marca_publica, nx_convite_ver, nx_convite_aceitar, nx_senha_redefinir, nx_entrar. */
     publica(nome, params = {}, opcoes = {}) {
@@ -500,10 +518,11 @@ export function criarApi(o) {
      * Edge Function: POST /functions/v1/<funcao> com {token, cliente, ...corpo}.
      * `opcoes.prazoMs`: espera maior só para esta chamada (ex.: a IA que monta uma automação demora mais que os 75 s padrão),
      * no máximo TETO_PRAZO_FN_MS. Um prazo geral fixado em criarApi (testes) continua valendo por cima.
+     * `opcoes.keepalive`: a página está saindo; o envio termina mesmo com a aba fechada (melhor esforço, sem repetição).
      */
     fn(funcao, corpo = {}, opcoes = {}) {
       if (!/^nx-[a-z0-9-]+$/.test(funcao)) return Promise.reject(erroApi("funcao_invalida"));
-      return chamar(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }), prazoDaChamada(opcoes, `${funcao}:${corpo && corpo.acao}`), { leitura: false });
+      return chamar(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }), prazoDaChamada(opcoes, `${funcao}:${corpo && corpo.acao}`), { leitura: false, keepalive: saindo(opcoes) });
     },
     mensagemErro,
   };

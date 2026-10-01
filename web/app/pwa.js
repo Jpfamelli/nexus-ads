@@ -5,7 +5,8 @@
    - o registro do sw.js (só em https ou localhost; no ambiente fictício local só com ?sw=1);
    - a conferência de versão (web/app/versao.json, sem cache) ao voltar ao primeiro plano e a cada 10 min;
    - a faixa «Nova versão do Órbita pronta · Atualizar», aplicada sozinha depois de 2 min ocioso, sem modal aberto,
-     sem rascunho e sem fila (quem tem trabalho pendente avisa por ctx.naoAtualizar);
+     sem rascunho, sem fila e sem formulário mexido (o shell segura por 30 min depois da última edição, ou enquanto a aba
+     estiver oculta com algo editado; quem tem trabalho pendente avisa por ctx.naoAtualizar). O botão «Atualizar» aplica na hora;
    - o desligamento de emergência (versao.json com "sw": false).
    Como a versão entra na URL do service worker (sw.js?v=<versão>), quem instala o worker novo é a PÁGINA nova: «Atualizar» recarrega,
    a página nova registra sw.js?v=<nova> e, como já roda a versão nova, pede o skipWaiting sozinha (sem faixa). As outras abas, que
@@ -179,7 +180,8 @@ export function iniciar(o) {
     sw.addEventListener("controllerchange", () => {
       trocas += 1;
       if (!tinhaControle && trocas === 1) return;     // primeira instalação (clients.claim): não é versão nova
-      if (adotandoPropria) { adotandoPropria = false; return; }
+      // o worker desta versão assumiu: agora a lista vai para ELE (no `ready` quem estava no controle era o antigo, cujo cache o activate do novo apaga)
+      if (adotandoPropria) { adotandoPropria = false; api.precache(); return; }
       if (v.aplicando) { recarregar(); return; }      // fui eu quem clicou em «Atualizar»
       v.marcarPronta("sw");                           // outra aba trocou o worker: os arquivos antigos podem ter saído do cache
     });
@@ -195,6 +197,8 @@ export function iniciar(o) {
       try {
         const alvo = nav.serviceWorker && (nav.serviceWorker.controller || (reg && (reg.active || reg.waiting || reg.installing)));
         if (!alvo) return false;
+        // worker de OUTRA versão (atualização em andamento): ele baixaria tudo para um cache que o novo apaga ao assumir; a lista vai no controllerchange
+        if (alvo.scriptURL && versaoDaUrl(alvo.scriptURL) !== o.versao) return false;
         const vistos = (jan.performance && jan.performance.getEntriesByType ? jan.performance.getEntriesByType("resource") : []).map(e => e.name);
         alvo.postMessage({ tipo: "precache", urls: [...new Set([...(o.urlsPrecache ? o.urlsPrecache() : []), ...vistos])] });
         return true;

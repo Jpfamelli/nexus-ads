@@ -54,7 +54,7 @@ h1[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
 .entrar-produto .ic { flex: none; width: 20px; height: 20px; margin-top: .05rem; color: var(--c-prod, var(--c-prim)); }
 .entrar-produto b { color: var(--c-texto); font-weight: 700; }
 .instalar-passos { margin: 0; padding-left: 1.2rem; display: grid; gap: .5rem; color: var(--c-texto); }
-.folha-mais button { display: flex; flex-direction: column; align-items: center; gap: .4rem; padding: 1rem .4rem; border-radius: var(--r); background: var(--c-sup-2); border: 1px solid var(--c-borda); font-size: var(--fs-13); font-weight: 600; text-align: center; color: inherit; cursor: pointer; }
+.folha-mais button { display: flex; flex-direction: column; align-items: center; gap: .4rem; padding: 1rem .25rem; min-width: 0; overflow-wrap: anywhere; border-radius: var(--r); background: var(--c-sup-2); border: 1px solid var(--c-borda); font-size: var(--fs-12); font-weight: 600; text-align: center; color: inherit; cursor: pointer; }
 .folha-mais button .ic { width: 22px; height: 22px; color: var(--c-prim-luz); }
 
 /* ---- paleta de comandos, atalhos e período de teste (M18) ---- */
@@ -81,5 +81,7 @@ h1[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
   .bt-tema { display: none; }   /* o tema mora no menu da conta («Aparência»): o topo do celular fica com 5 controles */
   .topo.topo-emp-troca .topo-marca, .topo.topo-pilula-on .topo-marca { display: none; }   /* a empresa (ou a pílula) já ocupa o lugar da marca; o Início está na barra de baixo */
   .pilula-teste span { max-width: 9.5rem; }
+  .pilula-teste { flex: none; }   /* no celular a pílula não encolhe: some o prefixo «Teste», fica «até 15/10» inteiro (o relógio e o aviso dizem que é teste) */
+  .pilula-teste .pt-pre { display: none; }
 }
 @media (forced-colors: active) { .pilula-teste, .pal-atalho, .pal-teclas kbd { border: 1px solid ButtonText; } }

@@ -1500,11 +1500,16 @@ await teste("T10: chamadas de servidor que passam dos 75 s esperam MAIS que o pi
   try {
     const f = fetchFalso(() => ({ status: 200, corpo: { ok: true } }));
     const api = A.criarApi({ url: URLS, chave: "pub", token: () => "t", cliente: () => "c", fetch: f });
-    for (const [fn, acao] of [["nx-ia", "sugerir"], ["nx-ia", "resumir"], ["nx-codewords", "parear"], ["nx-codewords", "inscrever"], ["nx-enviar", "texto"], ["nx-enviar", "midia"], ["nx-enviar", "template"]])
+    const lentas = [["nx-ia", "sugerir"], ["nx-ia", "resumir"], ["nx-codewords", "parear"], ["nx-codewords", "ligar_fluxo"], ["nx-codewords", "receber_aqui"], ["nx-codewords", "enviar_teste"],
+      ["nx-enviar", "texto"], ["nx-enviar", "midia"], ["nx-enviar", "template"]];
+    for (const [fn, acao] of lentas)
       await api.fn(fn, { acao });
     await api.fn("nx-enviar", { acao: "lido" });                    // chamadas rápidas seguem em 75 s
     await api.fn("nx-ia", { acao: "automacao_montar" }, { prazoMs: 130_000 });
-    assert.deepEqual(vistos, [100_000, 100_000, 100_000, 100_000, 100_000, 100_000, 100_000, 75_000, 130_000]);
+    assert.deepEqual(vistos, [...lentas.map(() => 100_000), 75_000, 130_000]);
+    // revisão R119: os nomes do CodeWords são os das ações que o front realmente envia (cv-config.js); «inscrever» nunca saiu do front
+    for (const acao of ["ligar_fluxo", "receber_aqui", "enviar_teste"]) assert.ok(ler("cv-config.js").includes(`"${acao}"`), `cv-config.js envia ${acao}`);
+    assert.doesNotMatch(ler("api.js"), /nx-codewords:inscrever/);
     assert.ok(A.PRAZO_FN_LENTA_MS > 91_000 && A.PRAZO_FN_LENTA_MS < A.TETO_PRAZO_FN_MS, "acima de 2 × 45 s da Anthropic e abaixo do teto da Edge Function");
     vistos.length = 0;
     const fixo = A.criarApi({ url: URLS, chave: "pub", fetch: f, prazoMs: 9_000 });
@@ -2306,7 +2311,16 @@ await teste("ui.campo({validar}) (M08): e-mail, telefone (máscara; lerForm só 
     assert.equal(t.value, "(12) 99830-3030"); assert.equal(t.getAttribute("inputmode"), "tel");
     assert.equal(U.lerForm(form).tel, "12998303030", "lerForm devolve só os dígitos");
     t.value = "+55 12 99830-3030"; d.ev(t, "input"); assert.equal(t.value, "(12) 99830-3030");
+    assert.equal(U.lerForm(form).tel, "12998303030", "+55 colado vira número brasileiro, sem o +");
     d.ev(t, "blur"); assert.equal(tel.dataset.estado, "ok");
+    // revisão R119: número de outro país mantém o «+» (sem ele o servidor trataria 10–11 dígitos como brasileiros e poria 55 na frente)
+    t.value = "+1 415 555 2671"; d.ev(t, "input"); assert.equal(t.value, "+14155552671");
+    assert.equal(U.lerForm(form).tel, "+14155552671", "o + inicial chega ao servidor");
+    d.ev(t, "blur"); assert.equal(tel.dataset.estado, "ok");
+    t.value = "+351 912 345"; d.ev(t, "input"); d.ev(t, "blur"); assert.equal(tel.dataset.estado, "ok", "com +, de 8 a 15 dígitos");
+    assert.equal(U.lerForm(form).tel, "+351912345");
+    t.value = "+1 415"; d.ev(t, "input"); d.ev(t, "blur"); assert.equal(tel.dataset.estado, "erro", "com + e menos de 8 dígitos: inválido");
+    t.value = "12998303030"; d.ev(t, "input"); d.ev(t, "blur"); assert.equal(tel.dataset.estado, "ok");
     t.value = "(12) 9983"; d.ev(t, "input"); d.ev(t, "blur"); assert.equal(tel.dataset.estado, "erro"); assert.match(erro(tel).textContent, /DDD/);
     t.value = ""; d.ev(t, "input"); d.ev(t, "blur"); assert.equal(tel.dataset.estado, "", "opcional e vazio: sem erro nem ✓");
     // moeda
@@ -2759,7 +2773,128 @@ await teste("M07: acaoComDesfazer({firmar}) — a escrita real só roda se o toa
     for (const t of vivos()) t.__fechar("fechado"); await Promise.all(ps.map(p => Promise.race([p, esperar(50)])));
     assert.equal(log.filter(x => x.startsWith("servidor")).length, antes + 3, "fechar os toasts depois não firma de novo");
   } finally { d.fim(); }
-  assert.match(ler("ui.js"), /async function manterItem\(item\)/); assert.match(ler("ui.js"), /addEventListener\("pagehide", aoSair\)/);
+  assert.match(ler("ui.js"), /async function manterItem\(item, saida = null\)/); assert.match(ler("ui.js"), /addEventListener\("pagehide", aoSair\)/);
+});
+
+await teste("revisão R119: ação pendente é firmada com { saindo: true } ao sair da página E ao ir para segundo plano (celular não dispara pagehide); no fechamento normal, firmar() vem sem argumento", async () => {
+  const d = comDom();
+  const vivos = () => d.doc.querySelectorAll(".toast").filter(t => !t.classList.contains("saindo"));
+  try {
+    const args = [];
+    const mk = (nome, extra = {}) => U.acaoComDesfazer({ texto: `Feito ${nome}`, aplicar() {}, reverter: () => { args.push(`volta:${nome}`); }, firmar: (...a) => { args.push([nome, a.length, a[0] ? a[0].saindo : undefined]); }, ms: 5000, ...extra });
+    // fechamento normal (tempo ou X): sem argumento, como sempre foi
+    assert.equal((await mk("normal", { ms: 25 })).estado, "mantida");
+    assert.deepEqual(args, [["normal", 0, undefined]]);
+    // aba visível: visibilitychange sem document.hidden não firma nada
+    args.length = 0;
+    const p1 = mk("a"), p2 = mk("b"); await esperar(5);
+    d.doc.hidden = false; d.ev(d.doc, "visibilitychange"); assert.deepEqual(args, [], "a aba continua à vista");
+    // foi para segundo plano: firma JÁ, dentro do evento, com saindo
+    d.doc.hidden = true; d.ev(d.doc, "visibilitychange");
+    assert.deepEqual(args, [["a", 1, true], ["b", 1, true]], "firmou os dois na hora, com { saindo: true }");
+    const [r1, r2] = await Promise.all([p1, p2]);
+    assert.equal(r1.estado, "mantida"); assert.equal(r2.estado, "mantida"); assert.equal(vivos().length, 0, "o aviso «Desfazer» fecha: a ação passou a valer");
+    d.ev(d.doc, "visibilitychange"); d.disparar("pagehide"); assert.equal(args.length, 2, "uma vez só");
+    d.doc.body.dispatchEvent(new d.Evento("keydown", { key: "z", ctrlKey: true })); assert.equal(args.length, 2, "Ctrl+Z depois não desfaz o que já foi gravado");
+    // pagehide também manda saindo
+    args.length = 0; d.doc.hidden = false;
+    const p3 = mk("c"); await esperar(5); d.disparar("pagehide");
+    assert.deepEqual(args, [["c", 1, true]]); assert.equal((await p3).estado, "mantida");
+    // a página continuou viva e a escrita de saída falhou: a tela volta ao estado real e a pessoa é avisada
+    args.length = 0; d.doc.hidden = true;
+    const p4 = mk("d", { firmar: () => { throw new Error("sem_conexao"); } }); await esperar(5); d.ev(d.doc, "visibilitychange");
+    const r4 = await p4; assert.equal(r4.estado, "falhou"); assert.deepEqual(args, ["volta:d"]);
+    assert.ok(d.doc.querySelectorAll(".toast-erro").some(t => /Não foi possível concluir/.test(t.textContent)));
+    // ação sem firmar (a escrita já foi feita em aplicar) não é tocada ao ocultar
+    const p5 = U.acaoComDesfazer({ texto: "x", aplicar() {}, reverter() {}, ms: 40 }); await esperar(5); d.ev(d.doc, "visibilitychange");
+    assert.equal(vivos().filter(t => t.querySelector(".toast-acao")).length, 1, "o aviso com «Desfazer» segue aberto"); assert.equal((await p5).estado, "mantida");
+  } finally { d.fim(); }
+  assert.match(ler("ui.js"), /document\.addEventListener\("visibilitychange", aoOcultar\)/);
+  assert.match(ler("ui.js"), /function aoOcultar\(\) \{ if \(typeof document !== "undefined" && document\.hidden\) aoSair\(\); \}/);
+});
+
+await teste("revisão R119: ui.copiar com a área de transferência bloqueada copia de dentro do modal aberto e só diz «copiado» quando copiou; ui.copiarDepois copia um texto que ainda vai chegar", async () => {
+  const d = comDom();
+  const descNav = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const descItem = Object.getOwnPropertyDescriptor(globalThis, "ClipboardItem");
+  const porNav = nav => Object.defineProperty(globalThis, "navigator", { value: nav, configurable: true, writable: true });
+  const avisos = tipo => d.doc.querySelectorAll(`.toast-${tipo}`).map(t => t.querySelector("p").textContent);
+  try {
+    // como no navegador: com um <dialog> modal aberto, o que está fora dele é inerte (não recebe foco)
+    let modal = null;
+    const criar = d.doc.createElement;
+    d.doc.createElement = tag => { const el = criar(tag); const foco = el.focus.bind(el); el.focus = () => { if (!modal || modal.contains(el)) foco(); }; el.select = () => {}; return el; };
+    const copiados = []; let execDevolve = true;
+    d.doc.execCommand = cmd => { assert.equal(cmd, "copy"); const a = d.doc.activeElement; if (execDevolve) copiados.push({ texto: a.textContent, pai: a.parentNode }); return execDevolve; };
+    porNav({ clipboard: { writeText: async () => { throw new Error("NotAllowedError"); } } });
+    const bt = U.h("button", { type: "button" }, "Copiar"); d.doc.body.appendChild(bt); bt.focus();
+    // sem modal: o textarea vai no body, é copiado, some e o foco volta
+    assert.equal(await U.copiar("texto 1", { aviso: null }), true);
+    assert.equal(copiados.at(-1).texto, "texto 1"); assert.equal(copiados.at(-1).pai, d.doc.body);
+    assert.equal(d.doc.querySelectorAll("textarea").length, 0, "o textarea some"); assert.equal(d.doc.activeElement, bt, "o foco volta para o botão");
+    // dois diálogos abertos: entra no de cima (o último), que é o único que aceita foco
+    const dlg1 = U.h("dialog"), dlg2 = U.h("dialog"); dlg1.setAttribute("open", ""); dlg2.setAttribute("open", ""); d.doc.body.append(dlg1, dlg2);
+    const btModal = U.h("button", { type: "button" }, "Copiar de novo"); dlg2.appendChild(btModal); modal = dlg2; btModal.focus();
+    assert.equal(await U.copiar("prompt do fluxo"), true);
+    assert.equal(copiados.at(-1).texto, "prompt do fluxo", "copiou o texto certo (antes o foco ficava no botão e nada era copiado)"); assert.equal(copiados.at(-1).pai, dlg2);
+    assert.equal(d.doc.activeElement, btModal); assert.deepEqual(avisos("ok"), ["Copiado."]);
+    // o foco não chegou ao textarea (o diálogo de cima não é o que aceita foco): NÃO diz que copiou, mesmo com o execCommand devolvendo true
+    modal = dlg1; const antes = copiados.length;
+    assert.equal(await U.copiar("não copia"), false);
+    assert.ok(copiados.slice(antes).every(c => c.texto !== "não copia"), "nada foi copiado");
+    assert.deepEqual(avisos("erro"), ["Não foi possível copiar. Selecione e copie manualmente."]);
+    // o navegador recusou o execCommand
+    modal = dlg2; execDevolve = false;
+    assert.equal(await U.copiar("recusado", { aviso: null }), false);
+    execDevolve = true;
+    assert.equal(d.doc.querySelectorAll("textarea").length, 0);
+
+    /* ---- copiarDepois ---- */
+    const escritos = []; let chamouWrite = 0, writeFalha = false;
+    globalThis.ClipboardItem = class { constructor(itens) { this.itens = itens; } };
+    porNav({ clipboard: {
+      write: async ([item]) => { chamouWrite++; if (writeFalha) throw new Error("NotAllowedError"); const blob = await item.itens["text/plain"]; escritos.push([blob.type, await blob.text()]); },
+      writeText: async t => { escritos.push(["writeText", t]); } } });
+    const okAntes = avisos("ok").length;
+    const p = U.copiarDepois(new Promise(r => setTimeout(() => r("prompt que veio do servidor"), 20)), { aviso: "Prompt copiado." });
+    assert.equal(chamouWrite, 1, "a escrita é pedida de forma SÍNCRONA, ainda dentro do clique (o texto chega depois)");
+    assert.equal(await p, true); assert.deepEqual(escritos, [["text/plain", "prompt que veio do servidor"]]);
+    assert.deepEqual(avisos("ok").slice(okAntes), ["Prompt copiado."]);
+    // sem aviso pedido: copia calado
+    const nAvisos = avisos("ok").length + avisos("erro").length;
+    assert.equal(await U.copiarDepois(Promise.resolve("calado")), true); assert.equal(avisos("ok").length + avisos("erro").length, nAvisos);
+    // texto vazio ou nulo, e promessa que falha: false, sem aviso e sem promessa solta
+    escritos.length = 0;
+    for (const vazio of [() => Promise.resolve(""), () => Promise.resolve(null), () => undefined, () => Promise.reject(new Error("servidor_fora"))]) assert.equal(await U.copiarDepois(vazio(), { aviso: "Copiado." }), false);
+    assert.deepEqual(escritos, []); assert.equal(avisos("ok").length + avisos("erro").length, nAvisos, "nenhum aviso para texto vazio");
+    // o navegador recusou o ClipboardItem: espera o texto e cai no copiar()
+    writeFalha = true;
+    assert.equal(await U.copiarDepois(Promise.resolve("plano B"), { aviso: "Copiado de novo." }), true);
+    assert.deepEqual(escritos, [["writeText", "plano B"]]); assert.equal(avisos("ok").at(-1), "Copiado de novo.");
+    // navegador sem ClipboardItem: mesma queda
+    delete globalThis.ClipboardItem; writeFalha = false; escritos.length = 0; chamouWrite = 0;
+    assert.equal(await U.copiarDepois(Promise.resolve("sem ClipboardItem")), true);
+    assert.equal(chamouWrite, 0); assert.deepEqual(escritos, [["writeText", "sem ClipboardItem"]]);
+    // nada funcionou: false e nenhum aviso de sucesso
+    porNav({ clipboard: { writeText: async () => { throw new Error("NotAllowedError"); } } }); execDevolve = false;
+    const okFinal = avisos("ok").length;
+    assert.equal(await U.copiarDepois(Promise.resolve("não deu"), { aviso: "Copiado." }), false); assert.equal(avisos("ok").length, okFinal);
+  } finally {
+    if (descNav) Object.defineProperty(globalThis, "navigator", descNav); else delete globalThis.navigator;
+    if (descItem) Object.defineProperty(globalThis, "ClipboardItem", descItem); else delete globalThis.ClipboardItem;
+    d.fim();
+  }
+});
+
+await teste("revisão R119: erros da agenda e do envio em andamento têm frase clara (nada de «Não deu certo agora (antecedencia)»)", () => {
+  for (const c of ["antecedencia", "fora_do_horario", "passado", "consulta_nao_encontrada", "envio_em_andamento"]) {
+    assert.ok(A.MENSAGENS[c] && A.MENSAGENS[c].length > 15, `texto para ${c}`);
+    assert.doesNotMatch(A.mensagemErro({ codigo: c }), /Não deu certo agora|_/, c);
+  }
+  assert.equal(A.mensagemErro({ codigo: "envio_em_andamento" }), "A mensagem ainda está sendo enviada. Aguarde um instante.");
+  assert.match(A.mensagemErro({ codigo: "antecedencia" }), /em cima da hora/);
+  assert.match(A.mensagemErro({ codigo: "fora_do_horario" }), /fora do funcionamento/);
+  assert.match(A.mensagemErro({ codigo: "passado" }), /já passou/);
 });
 
 /* ---------- M10: movimento com propósito ---------- */

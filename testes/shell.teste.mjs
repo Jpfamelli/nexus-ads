@@ -486,6 +486,96 @@ await teste("app.js: pwa.js entra DEPOIS do boot (não está nos preloads) e ctx
   assert.match(APP_JS, /E\.pwa\.falhaDeImport\(\)/);
 });
 
+/** O texto de uma função de primeiro nível do app.js (para rodar SÓ ela num mundo de mentira: o app.js inteiro não importa em Node). */
+const fnDoApp = nome => {
+  const m = new RegExp(`(?:async )?function ${nome}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`).exec(APP_JS);
+  assert.ok(m, `app.js tem ${nome}()`);
+  return m[0];
+};
+
+await teste("revisão R119: o precache leva TODO .js e .css de web/app (menos o sw.js) mais ../dados.js e ../nucleo.js — lista conferida com a pasta, e o sw.js aceita cada endereço", async () => {
+  const bloco = /const ARQUIVOS_DO_APP = \[([\s\S]*?)\];/.exec(APP_JS);
+  assert.ok(bloco, "app.js declara ARQUIVOS_DO_APP");
+  const lista = [...bloco[1].matchAll(/"([a-z0-9-]+\.(?:js|css))"/g)].map(m => m[1]);
+  const pasta = readdirSyncApp().filter(f => /\.(js|css)$/.test(f) && f !== "sw.js");
+  assert.deepEqual([...lista].sort(), [...pasta].sort(), "arquivo novo em web/app tem de entrar em ARQUIVOS_DO_APP (e arquivo apagado tem de sair)");
+  assert.equal(new Set(lista).size, lista.length, "sem repetidos");
+  const raizDecl = /const ARQUIVOS_DA_RAIZ = \[([^\]]*)\];/.exec(APP_JS);
+  const raiz = [...raizDecl[1].matchAll(/"([a-z0-9-]+\.js)"/g)].map(m => m[1]);
+  for (const f of raiz) assert.ok(existsSync(join(RAIZ, "web", f)), `web/${f} existe`);
+  // tudo o que alguma tela importa de fora da pasta (../x.js) está na lista da raiz
+  const deFora = new Set(["dados.js"]);
+  for (const f of pasta.filter(x => x.endsWith(".js"))) for (const m of ler(f).matchAll(/import\(`\.\.\/([a-z0-9-]+\.js)\?v=/g)) deFora.add(m[1]);
+  for (const f of deFora) assert.ok(raiz.includes(f), `../${f} é importado por uma tela e não está em ARQUIVOS_DA_RAIZ`);
+  // os endereços são os MESMOS que o import() usa (./arquivo?v=<versão>) e o service worker guarda todos
+  const m = criarMundoSW({ versao: "V9" });
+  const fonte = [bloco[0], raizDecl[0], /const urlArq = [^\n]+/.exec(APP_JS)[0], /const urlArqRaiz = [^\n]+/.exec(APP_JS)[0], fnDoApp("urlsPrecache")].join("\n")
+    .replaceAll("import.meta.url", JSON.stringify(`${m.site}/app/app.js?v=V9`));
+  const urls = runInNewContext(`const VERSAO = "V9";\n${fonte}\nurlsPrecache();`, { URL, encodeURIComponent });
+  assert.equal(urls.length, lista.length + raiz.length);
+  for (const f of ["cv-chat.js", "crm-kanban.js", "auto-editor.js", "graficos.js", "cv-config.js", "conversas.css"]) assert.ok(urls.includes(`${m.site}/app/${f}?v=V9`), `${f} no precache`);
+  assert.ok(urls.includes(`${m.site}/nucleo.js?v=V9`) && urls.includes(`${m.site}/dados.js?v=V9`), "os dois arquivos da raiz");
+  assert.ok(urls.length <= 250, "cabe no teto de uma mensagem de precache do sw.js (MAX_PRECACHE)");
+  const ev = m.evento({ data: { tipo: "precache", urls } }); m.ouvintes.message(ev); await ev.fim();
+  const chaves = await (await m.cachesFalso.open("orbita-shell-V9")).keys();
+  assert.deepEqual([...chaves].sort(), [...urls].sort(), "o sw.js guarda cada um (todos têm ?v= e são do mesmo site)");
+});
+
+await teste("revisão R119: na atualização própria a lista do precache vai de novo ao worker NOVO; worker de outra versão no controle não recebe a lista", async () => {
+  const a = criarAmbientePWA({ controller: true });
+  const paraOAntigo = [];
+  a.sw.controller = { scriptURL: "http://localhost/app/sw.js?v=VELHA", postMessage: m => paraOAntigo.push(m) };
+  const p = PWA.iniciar({ versao: "VT", ui: a.ui, alvo: a.alvo, produto: () => "Órbita", nav: a.nav, doc: a.doc, janela: a.jan, loc: a.loc, storage: a.storage,
+    urlsPrecache: () => ["http://localhost/app/cv-chat.js?v=VT"], fetchFn: async () => ({ ok: true, json: async () => ({ versao: "VT" }) }) });
+  try {
+    await espera(10);
+    assert.equal(paraOAntigo.length, 0, "o worker antigo não baixa a versão nova para um cache que o novo apaga ao assumir");
+    const paraONovo = [];
+    const novo = { scriptURL: "http://localhost/app/sw.js?v=VT", state: "installing", postMessage: m => paraONovo.push(m), ouvintes: {}, addEventListener(e, f) { this.ouvintes[e] = f; } };
+    a.reg.installing = novo; a.reg.ouvintes.updatefound(); novo.state = "installed"; novo.ouvintes.statechange();
+    assert.deepEqual(paraONovo, [{ tipo: "pular" }], "mesma versão da página: só ativa");
+    a.sw.controller = novo;                                    // o worker novo assumiu a aba
+    a.sw.ouvintes.controllerchange();
+    const pre = paraONovo.find(x => x.tipo === "precache");
+    assert.ok(pre, "a lista foi mandada de novo, agora ao worker novo");
+    assert.ok(pre.urls.includes("http://localhost/app/cv-chat.js?v=VT") && pre.urls.includes("http://localhost/app/ui.js?v=VT"), "telas + o que a página já carregou");
+    assert.equal(a.recargas.length, 0); assert.equal(a.alvo.filhos.length, 0, "sem faixa e sem recarga: a página já roda a versão nova");
+  } finally { p.destruir(); }                                  // os relógios do pwa.js não podem prender o processo se uma conferência falhar
+});
+
+await teste("revisão R119: formulário mexido segura a atualização automática (30 min à vista; com a aba oculta, qualquer edição desde que a tela abriu); busca não conta; mudar de tela zera", async () => {
+  let agora = 5_000_000, pendentes = 0;
+  const E = { rascunhos: { pendentes: () => pendentes }, naoAtualizar: new Set(), editouEm: 0, hashEdicao: null };
+  const document = { hidden: false };
+  const s = runInNewContext(`${/const EDICAO_RECENTE_MS = [^;]+;/.exec(APP_JS)[0]}\n${fnDoApp("marcarEdicao")}\n${fnDoApp("ocupadoParaAtualizar")}\n({ marcarEdicao, ocupadoParaAtualizar, EDICAO_RECENTE_MS })`,
+    { E, document, Date: { now: () => agora } });
+  assert.equal(s.EDICAO_RECENTE_MS, 30 * 60 * 1000);
+  assert.equal(s.ocupadoParaAtualizar(), false, "nada mexido: pode atualizar");
+  s.marcarEdicao({ target: { type: "search" } }); assert.equal(E.editouEm, 0, "digitar numa busca não é trabalho a perder");
+  s.marcarEdicao({ target: { type: "text" } }); assert.equal(E.editouEm, agora);
+  assert.equal(s.ocupadoParaAtualizar(), true, "acabou de digitar");
+  agora += 29 * 60_000; assert.equal(s.ocupadoParaAtualizar(), true, "29 min depois ainda segura");
+  agora += 2 * 60_000; assert.equal(s.ocupadoParaAtualizar(), false, "31 min com a aba à vista: libera");
+  document.hidden = true; assert.equal(s.ocupadoParaAtualizar(), true, "aba oculta com algo editado nesta tela: nunca recarrega sozinha");
+  E.editouEm = 0; assert.equal(s.ocupadoParaAtualizar(), false, "aba oculta sem nada editado: pode");
+  document.hidden = false;
+  s.marcarEdicao({ target: { tagName: "SELECT" } }); assert.equal(s.ocupadoParaAtualizar(), true, "escolher numa lista (change) também conta");
+  E.editouEm = 0; pendentes = 1; assert.equal(s.ocupadoParaAtualizar(), true, "rascunho recente continua segurando");
+  pendentes = 0; E.naoAtualizar.add(() => true); assert.equal(s.ocupadoParaAtualizar(), true, "ctx.naoAtualizar continua segurando");
+  // a máquina da faixa respeita: ociosa há 2 min mas com formulário mexido não aplica; o botão «Atualizar» aplica na hora
+  E.naoAtualizar.clear(); E.editouEm = agora;
+  let aplicou = 0, t = 1_000;
+  const v = PWA.criarVersao({ versao: "A", agora: () => t, buscar: async () => ({ versao: "B" }), ocupado: () => s.ocupadoParaAtualizar(), aoAplicar: async () => { aplicou++; } });
+  await v.verificar(); t += 5 * 60_000;
+  await v.tique(); assert.equal(aplicou, 0, "não recarrega por cima do que foi digitado");
+  await v.aplicar(); assert.equal(aplicou, 1, "quem clica em «Atualizar» aplica na hora");
+  // ligação no shell
+  const iniciar = /async function iniciar\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
+  assert.match(iniciar, /document\.addEventListener\("input", marcarEdicao, true\);\s*document\.addEventListener\("change", marcarEdicao, true\);/);
+  assert.match(fnDoApp("aoMudarRota"), /if \(location\.hash !== E\.hashEdicao\) \{ E\.hashEdicao = location\.hash; E\.editouEm = 0; \}/, "outra tela zera; remontar a mesma não");
+  assert.match(APP_JS, /ocupado: ocupadoParaAtualizar,/);
+});
+
 /* ============================================================ M14 */
 secao("M14 · estado de conexão honesto e recuperação automática");
 
@@ -824,6 +914,52 @@ await teste("api.js: sessao_invalida — leitura espera a pessoa entrar de novo 
   token = "velho";
   const d = mk(async () => true);
   assert.equal((await d.rpc("nx_inicio").catch(v => v)).codigo, "sessao_invalida", "entrou mas continua inválido: não entra em laço");
+});
+
+await teste("revisão R119: {keepalive: true} em rpc, rpcC e fn sai com keepalive no fetch, em UMA tentativa (nem leitura nem {req} repetem); sem a opção nada muda", async () => {
+  const inits = [];
+  const fetchFalso = async (url, init) => { inits.push({ url, init }); return { ok: false, status: 503, headers: { get: () => null }, text: async () => "" }; };
+  let pediuLogin = 0;
+  const api = API.criarApi({ url: "https://x.test", chave: "k", token: () => "tok", cliente: () => "cli", fetch: fetchFalso, retentar: true, aleatorio: () => 0.5,
+    esperar: async () => {}, online: () => true, aoSessaoInvalida: () => { pediuLogin++; return new Promise(() => {}); } });
+  const e1 = await api.rpcC("nx_negocio_mover", { p_id: 7 }, { keepalive: true, req: true }).catch(e => e);
+  assert.equal(inits.length, 1, "escrita com {req} normalmente repete; saindo da página, não"); assert.equal(inits[0].init.keepalive, true);
+  assert.equal(JSON.parse(inits[0].init.body).p_cliente, "cli"); assert.equal(e1.status, 503);
+  inits.length = 0;
+  await api.rpc("nx_pulso", {}, { keepalive: true }).catch(e => e);
+  assert.equal(inits.length, 1, "leitura normalmente repete; com keepalive, uma só"); assert.equal(inits[0].init.keepalive, true);
+  inits.length = 0;
+  await api.fn("nx-enviar", { acao: "lido" }, { keepalive: true }).catch(e => e);
+  assert.equal(inits.length, 1); assert.equal(inits[0].init.keepalive, true); assert.match(inits[0].url, /\/functions\/v1\/nx-enviar$/);
+  inits.length = 0;
+  await api.rpcC("nx_negocios_kanban", {}).catch(e => e); await api.rpcC("nx_negocio_mover", { p_id: 7 }, { keepalive: false }).catch(e => e); await api.fn("nx-enviar", { acao: "lido" }).catch(e => e);
+  assert.equal(inits.length, 5, "sem a opção: a leitura repete 2 vezes, a escrita e a função não");
+  assert.ok(inits.every(x => !("keepalive" in x.init)), "e o fetch sai como sempre saiu");
+  // sessão caída com a página saindo: não fica esperando a pessoa entrar de novo
+  const caida = API.criarApi({ url: "https://x.test", chave: "k", token: () => "tok", cliente: () => "cli", retentar: true,
+    fetch: async () => ({ ok: false, status: 400, headers: { get: () => null }, text: async () => JSON.stringify({ message: "sessao_invalida" }) }), aoSessaoInvalida: () => { pediuLogin++; return new Promise(() => {}); } });
+  const e2 = await Promise.race([caida.rpc("nx_pulso", {}, { keepalive: true }).catch(e => e), new Promise(r => setTimeout(() => r("travou"), 80))]);
+  assert.equal(e2.codigo, "sessao_invalida", "a leitura com keepalive não espera o login");
+});
+
+await teste("revisão R119: rpcC lê a empresa UMA vez — a repetição depois de trocar de empresa manda (e guarda no cache) a empresa do pedido original", async () => {
+  let cli = "empresa-x";
+  const x = apiRetentando({ respostas: [s503, ok200], extra: { cliente: () => cli } });
+  const esperarOriginal = x.esperas;
+  const p = x.api.rpcC("nx_crm_base", {});
+  cli = "empresa-y";                                         // a pessoa trocou de empresa durante a espera da repetição
+  assert.deepEqual(await p, { v: 1 });
+  assert.equal(x.chamadas.length, 2); assert.equal(esperarOriginal.length, 1);
+  assert.deepEqual(x.chamadas.map(c => c.corpo.p_cliente), ["empresa-x", "empresa-x"], "a repetição não busca os dados da outra empresa");
+  // com cache: corpo e chave com a MESMA empresa
+  let cli2 = "e1"; const gravadas = [];
+  const cache = { cacheavel: () => true, chaveDe: (n, pp, o) => `${o.conta}:${o.cliente}:${n}`, ler: async () => null, gravar: async k => { gravadas.push(k); return true; } };
+  const corpos = [];
+  const api = API.criarApi({ url: "https://x.test", chave: "k", token: () => "t", cliente: () => cli2, conta: () => "c1", cache,
+    fetch: async (u, init) => { corpos.push(JSON.parse(init.body)); cli2 = "e2"; return { ok: true, status: 200, headers: { get: () => null }, text: async () => "{}" }; } });
+  await api.rpcC("nx_crm_base", {}, { cache: true });
+  await new Promise(r => setImmediate(r));
+  assert.equal(corpos[0].p_cliente, "e1"); assert.deepEqual(gravadas, ["c1:e1:nx_crm_base"], "gravou na chave da empresa que pediu");
 });
 
 await teste("rede.repetirAbertura: refaz só a etapa que falhou (2, 4, 8, 16, 16 s…), erro de conta sobe na hora e o laço tem limite", async () => {
@@ -1174,7 +1310,7 @@ await teste("app.js (M16): sessão guardada pinta o shell e a rede revalida; sel
     assert.match(corpo, /limparDadosDoAparelho\(\)/, `${nome} limpa o cache`);
   }
   assert.match(/async function pedirLoginNaTela\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0], /if \(r === "outra"\) \{[\s\S]*?limparDadosDoAparelho\(\);/, "troca de conta limpa o cache");
-  assert.match(APP_JS, /function limparDadosDoAparelho\(\) \{\s*if \(E\.cache\) E\.cache\.limpar\(\)/);
+  assert.match(APP_JS, /function limparDadosDoAparelho\(\) \{\s*const feito = E\.cache \? E\.cache\.limpar\(\)\.catch\(\(\) => \{\}\) : Promise\.resolve\(\);/);
   assert.match(APP_JS, /Mostrando dados de \$\{hora\} · atualizando…/);
   assert.match(APP_JS, /reiniciarSelo\(\);\s*marcarMenu\(r\.modulo\);/, "o selo recomeça a cada tela");
   assert.match(HTML, /<link rel="modulepreload" href="cache\.js\?v=/);
@@ -1186,6 +1322,237 @@ await teste("app.js (M16): sessão guardada pinta o shell e a rede revalida; sel
     assert.ok(tiposUi.includes(tipo) || tipo === "lista", `ui.esqueleto conhece "${tipo}"`);
   }
   assert.equal(ROTAS_MOD.esqueletoDaRota("crm", []), "kanban"); assert.equal(ROTAS_MOD.esqueletoDaRota("crm", ["negocio", "9"]), "lista"); assert.equal(ROTAS_MOD.esqueletoDaRota("conversas", ["901"]), "chat");
+});
+
+/* ============================================================ revisão R119 */
+secao("Revisão R119 · sessão certa, cache limpo e dados que saem do aparelho");
+
+/** Armazém de mentira que também sabe listar (como o do IndexedDB): [{k, v, em, bytes}]. */
+function armazemComLista() {
+  const a = armazemFalso();
+  a.listar = async () => [...a.m.values()].map(x => ({ k: x.k, v: x.v, em: x.em, bytes: x.b }));
+  return a;
+}
+
+await teste("cache.js: varrer() apaga o que venceu (12 h) e o que é de outro formato, mesmo que ninguém leia de novo", async () => {
+  let t = 10_000_000; const arm = armazemComLista();
+  const c = CACHE.criarCache({ armazem: arm, agora: () => t, varrer: false });
+  await c.gravar("c:e:nx_inicio:1", "nx_inicio", { n: 1 });
+  t += 6 * 3600 * 1000; await c.gravar("c:e:nx_crm_base:1", "nx_crm_base", { n: 2 });
+  arm.m.set("velho-formato", { k: "velho-formato", v: 99, em: t, dados: { x: 1 } });
+  assert.equal(await c.varrer(), 1, "só o formato estranho sai por enquanto"); assert.equal(arm.m.size, 2);
+  t += 7 * 3600 * 1000;                                        // a 1ª entrada tem 13 h; a 2ª, 7 h
+  assert.equal(await c.varrer(), 1); assert.deepEqual([...arm.m.keys()], ["c:e:nx_crm_base:1"], "o vencido saiu do aparelho sem ninguém ter lido");
+  assert.equal(await c.ler("c:e:nx_inicio:1"), null, "nem na memória da aba");
+  assert.ok(await c.ler("c:e:nx_crm_base:1"));
+  // armazém sem listar (ou que falha ao listar) não quebra
+  assert.equal(await CACHE.criarCache({ armazem: armazemFalso(), varrer: false }).varrer(), 0);
+  const ruim = armazemComLista(); ruim.listar = async () => { throw new Error("IndexedDB indisponível"); };
+  assert.equal(await CACHE.criarCache({ armazem: ruim, varrer: false }).varrer(), 0);
+  assert.equal(await CACHE.criarCache({ armazem: null, varrer: false }).varrer(), 0);
+});
+
+await teste("cache.js: teto total — passou de 200 entradas ou de 20 MB, as mais antigas saem primeiro", async () => {
+  let t = 20_000_000; const arm = armazemComLista();
+  const c = CACHE.criarCache({ armazem: arm, agora: () => t, varrer: false });
+  for (let i = 0; i < CACHE.TETO_ENTRADAS + 5; i++) { t += 1000; await c.gravar(`c:e:nx_negocios_kanban:${String(i).padStart(3, "0")}`, "nx_negocios_kanban", { filtro: i }); }
+  assert.equal(await c.varrer(), 5); assert.equal(arm.m.size, CACHE.TETO_ENTRADAS);
+  for (let i = 0; i < 5; i++) assert.equal(arm.m.has(`c:e:nx_negocios_kanban:00${i}`), false, `a ${i + 1}ª mais antiga saiu`);
+  assert.ok(arm.m.has("c:e:nx_negocios_kanban:005") && arm.m.has("c:e:nx_negocios_kanban:204"), "as mais novas ficam");
+  // por tamanho: 6 entradas de 4 MB = 24 MB → a mais antiga sai (5 × 4 MB cabem no teto de 20 MB)
+  const arm2 = armazemComLista(); const c2 = CACHE.criarCache({ armazem: arm2, agora: () => t, varrer: false });
+  for (let i = 0; i < 6; i++) arm2.m.set(`g${i}`, { k: `g${i}`, v: CACHE.VERSAO_FORMATO, em: t - (6 - i) * 1000, nome: "nx_dados", b: 4 * 1024 * 1024, dados: {} });
+  assert.equal(await c2.varrer(), 1); assert.deepEqual([...arm2.m.keys()].sort(), ["g1", "g2", "g3", "g4", "g5"]);
+  assert.equal(CACHE.TETO_TOTAL_BYTES, 20 * 1024 * 1024); assert.equal(CACHE.VARRER_A_CADA_MS, 3600 * 1000);
+  assert.match(ler("cache.js"), /setTimeout\(rodar, VARRER_AO_ABRIR_MS\)\);\s*solto\(setInterval\(rodar, VARRER_A_CADA_MS\)\);/, "a varredura roda ao abrir e a cada hora");
+});
+
+await teste("cache.js: apagarEmpresa tira do aparelho só o que era daquela empresa (acesso retirado); o resto da conta fica", async () => {
+  const arm = armazemComLista(); const c = CACHE.criarCache({ armazem: arm, varrer: false });
+  const k = (rpc, cliente, conta = "c1") => CACHE.chaveDe(rpc, {}, { conta, cliente });
+  await c.gravar(k("nx_crm_base", "e1"), "nx_crm_base", { n: 1 }); await c.gravar(k("nx_negocios_kanban", "e1"), "nx_negocios_kanban", { n: 2 });
+  await c.gravar(k("nx_crm_base", "e2"), "nx_crm_base", { n: 3 }); await c.gravar(k("nx_app_sessao", null), "nx_app_sessao", { conta: { id: "c1" } });
+  await c.gravar(k("nx_crm_base", "e1", "c2"), "nx_crm_base", { n: 4 });
+  assert.equal(await c.apagarEmpresa({ conta: "c1", cliente: "e1" }), 2);
+  assert.deepEqual([...arm.m.keys()].sort(), [k("nx_app_sessao", null), k("nx_crm_base", "e2"), k("nx_crm_base", "e1", "c2")].sort());
+  assert.equal(await c.ler(k("nx_crm_base", "e1")), null, "nem na memória");
+  assert.equal(await c.apagarEmpresa({ conta: "c1", cliente: null }), 0, "sem empresa não apaga nada (não vira 'apagar tudo')");
+  // sem IndexedDB (só memória) também funciona
+  const mem = CACHE.criarCache({ armazem: null, varrer: false }); await mem.gravar(k("nx_inicio", "e1"), "nx_inicio", { n: 1 });
+  assert.equal(await mem.apagarEmpresa({ conta: "c1", cliente: "e1" }), 1); assert.equal(await mem.ler(k("nx_inicio", "e1")), null);
+});
+
+await teste("cache.js: o armazém do IndexedDB lista as entradas com cursor (chave, hora e tamanho, sem devolver os dados)", async () => {
+  // IndexedDB de mentira: o bastante para open/transaction/objectStore com get, put, delete, clear e openCursor
+  const loja = new Map();
+  const pedido = fazer => { const r = { result: undefined, onsuccess: null, onerror: null }; queueMicrotask(() => { fazer(r); }); return r; };
+  const idbFalso = { open() {
+    const r = { result: null, onupgradeneeded: null, onsuccess: null };
+    const db = { objectStoreNames: { contains: () => true }, createObjectStore() {}, transaction() {
+      const tx = { oncomplete: null, pend: 0, objectStore: () => store };
+      const feito = () => { tx.pend--; if (tx.pend === 0) setTimeout(() => { if (tx.pend === 0 && tx.oncomplete) tx.oncomplete(); }, 0); };
+      const um = fazer => { tx.pend++; return pedido(r2 => { fazer(r2); if (r2.onsuccess) r2.onsuccess(); feito(); }); };
+      const store = {
+        get: k => um(r2 => { r2.result = loja.get(k); }), put: v => um(() => { loja.set(v.k, v); }), delete: k => um(() => { loja.delete(k); }), clear: () => um(() => { loja.clear(); }),
+        openCursor() {
+          const chaves = [...loja.keys()]; let i = 0; tx.pend++;
+          const r2 = { result: null, onsuccess: null };
+          const passo = () => queueMicrotask(() => {
+            r2.result = i < chaves.length ? { primaryKey: chaves[i], value: loja.get(chaves[i]), continue() { i++; passo(); } } : null;
+            if (r2.onsuccess) r2.onsuccess();
+            if (!r2.result) feito();
+          });
+          passo(); return r2;
+        },
+      };
+      return tx;
+    } };
+    queueMicrotask(() => { r.result = db; if (r.onsuccess) r.onsuccess(); });
+    return r;
+  } };
+  const arm = CACHE.criarArmazemIDB(idbFalso);
+  assert.deepEqual(await arm.listar(), [], "banco vazio");
+  await arm.gravar("a", { v: 1, em: 111, nome: "nx_inicio", b: 40, dados: { segredo: "não sai na listagem" } });
+  await arm.gravar("b", { v: 1, em: 222, nome: "nx_inicio", dados: { semTamanho: true } });
+  const lista = await arm.listar();
+  assert.deepEqual(lista.map(x => [x.k, x.v, x.em]), [["a", 1, 111], ["b", 1, 222]]);
+  assert.equal(lista[0].bytes, 40); assert.ok(lista[1].bytes > 0, "entrada sem tamanho gravado é medida na hora");
+  assert.ok(lista.every(x => !("dados" in x)), "a listagem não carrega os dados para a memória");
+  assert.deepEqual((await arm.ler("a")).dados, { segredo: "não sai na listagem" }, "ler e gravar continuam iguais");
+  // varredura de ponta a ponta sobre este armazém
+  let t = 1000; const c = CACHE.criarCache({ armazem: arm, agora: () => t, varrer: false });
+  t = 222 + CACHE.TTL_MS - 1; assert.equal(await c.varrer(), 1); assert.deepEqual([...loja.keys()], ["b"]);
+});
+
+await teste("api.js (cache): a resposta de uma leitura em voo NÃO volta para o aparelho se o token ou a conta mudaram (Sair, outra conta)", async () => {
+  let tok = "t1";
+  const x = apiComCache({ rede: async () => { tok = null; return { status: 200, corpo: { v: "da conta que saiu" } }; }, extra: { token: () => tok } });
+  assert.deepEqual(await x.api.rpcC("nx_crm_base", {}, { cache: true }), { v: "da conta que saiu" }, "quem pediu ainda recebe a resposta");
+  await new Promise(r => setImmediate(r));
+  assert.ok(!x.eventos.includes("gravou"), "mas ela não é regravada no cache depois do limpar()");
+  let conta = "c1";
+  const y = apiComCache({ rede: async () => { conta = "c2"; return { status: 200, corpo: { v: 1 } }; }, extra: { conta: () => conta } });
+  await y.api.rpcC("nx_crm_base", {}, { cache: true }); await new Promise(r => setImmediate(r));
+  assert.ok(!y.eventos.includes("gravou"), "outra conta entrou no meio: não grava");
+  const z = apiComCache({ rede: async () => ({ status: 200, corpo: { v: 1 } }) });
+  await z.api.rpcC("nx_crm_base", {}, { cache: true }); await new Promise(r => setImmediate(r));
+  assert.ok(z.eventos.includes("gravou"), "nada mudou: grava como sempre");
+});
+
+/** Roda o revalidarSessao() do app.js com um shell de mentira; devolve o que ele mandou fazer. */
+async function rodarRevalidar({ guardada, nova, cliente }) {
+  const log = [];
+  const E = { sessao: guardada, cliente, sessaoPromessa: Promise.resolve(nova), M: { tema: { hashCurto: o => JSON.stringify(o) } },
+    cache: { apagarEmpresa: async a => { log.push(["apagarEmpresa", a.conta, a.cliente]); return 1; } }, ui: { toast: t => log.push(["toast", t]) } };
+  runInNewContext(`${fnDoApp("fotoDoAcesso")}\n${fnDoApp("revalidarSessao")}\nrevalidarSessao();`, { E, JSON,
+    limparERecarregar: async () => { log.push(["limparERecarregar"]); },
+    clienteInicial: () => (E.sessao.clientes[0] ? E.sessao.clientes[0].id : null),
+    escolherCliente: async (id, o) => { log.push(["escolher", id, o.remontar]); E.cliente = E.sessao.clientes.find(c => c.id === id) || null; },
+    desmontarAtual: () => { log.push(["desmontar"]); }, aoMudarRota: async () => { log.push(["rota"]); } });
+  await new Promise(r => setTimeout(r, 10));
+  return { E, log };
+}
+const cliDe = (id, extra = {}) => ({ id, papel: "admin", modulos: ["crm", "conversas"], status: "ativo", teste_ate: null, plano: "pro", vertical: "odonto", ...extra });
+const sessaoDe = (conta, clientes, extra = {}) => ({ conta: { id: conta, papel: "usuario", super: false }, org: { nome: "Org" }, clientes, ...extra });
+
+await teste("app.js (revisão R119): a rede devolveu OUTRA conta → limpa o aparelho e recarrega, sem adotar nada", async () => {
+  const guardada = sessaoDe("conta-A", [cliDe("e1")]);
+  const r = await rodarRevalidar({ guardada, nova: sessaoDe("conta-B", [cliDe("e9")]), cliente: guardada.clientes[0] });
+  assert.deepEqual(r.log, [["limparERecarregar"]]);
+  assert.equal(r.E.sessao, guardada, "a sessão da outra conta não é misturada à tela da anterior");
+  const limpar = fnDoApp("limparERecarregar");
+  assert.match(limpar, /await limparComPrazo\(\); location\.reload\(\);/);
+  assert.match(fnDoApp("limparComPrazo"), /Promise\.race\(\[limparDadosDoAparelho\(\), new Promise\(r => setTimeout\(r, 800\)\)\]\)/, "a limpeza do IndexedDB não é cortada pelo recarregamento");
+  const dados = fnDoApp("limparDadosDoAparelho");
+  assert.match(dados, /LS\.apagar\(CHAVE_CONTA\);\s*E\.sessaoGuardada = null;\s*return feito;/, "sem CHAVE_CONTA a próxima abertura lê a sessão da rede (não há laço de recarga)");
+});
+
+await teste("app.js (revisão R119): empresa removida → cache dela apagado, outra empresa assume e a tela nasce de novo; papel ou módulos alterados → tela de novo", async () => {
+  // empresa ativa saiu da lista
+  let g = sessaoDe("c1", [cliDe("e1"), cliDe("e2")]);
+  let r = await rodarRevalidar({ guardada: g, nova: sessaoDe("c1", [cliDe("e2")]), cliente: g.clientes[0] });
+  assert.deepEqual(r.log.slice(0, 4), [["apagarEmpresa", "c1", "e1"], ["escolher", "e2", false], ["desmontar"], ["rota"]]);
+  assert.equal(r.log[4][0], "toast"); assert.match(r.log[4][1], /acesso foi alterado/);
+  // única empresa removida: fica sem empresa (cartão «sem acesso a nenhuma empresa»), e a tela antiga sai
+  g = sessaoDe("c1", [cliDe("e1")]);
+  r = await rodarRevalidar({ guardada: g, nova: sessaoDe("c1", []), cliente: g.clientes[0] });
+  assert.deepEqual(r.log.slice(0, 4), [["apagarEmpresa", "c1", "e1"], ["escolher", null, false], ["desmontar"], ["rota"]]);
+  // papel rebaixado na mesma empresa
+  g = sessaoDe("c1", [cliDe("e1")]);
+  r = await rodarRevalidar({ guardada: g, nova: sessaoDe("c1", [cliDe("e1", { papel: "leitura" })]), cliente: g.clientes[0] });
+  assert.deepEqual(r.log.slice(0, 3), [["escolher", "e1", false], ["desmontar"], ["rota"]], "sem apagar cache: a empresa continua dela");
+  // módulo retirado do plano
+  g = sessaoDe("c1", [cliDe("e1")]);
+  r = await rodarRevalidar({ guardada: g, nova: sessaoDe("c1", [cliDe("e1", { modulos: ["crm"] })]), cliente: g.clientes[0] });
+  assert.ok(r.log.some(x => x[0] === "desmontar"), "módulos mudaram: remonta");
+  // mudou algo que a tela aberta não usa (outra empresa entrou na lista; módulos na mesma, em outra ordem): só o shell é redesenhado
+  g = sessaoDe("c1", [cliDe("e1")]);
+  r = await rodarRevalidar({ guardada: g, nova: sessaoDe("c1", [cliDe("e1", { modulos: ["conversas", "crm"] }), cliDe("e3")]), cliente: g.clientes[0] });
+  assert.deepEqual(r.log, [["escolher", "e1", false]], "não desmonta a tela de quem está trabalhando");
+  // nada mudou: nem o shell é tocado
+  g = sessaoDe("c1", [cliDe("e1")]);
+  r = await rodarRevalidar({ guardada: g, nova: sessaoDe("c1", [cliDe("e1")]), cliente: g.clientes[0] });
+  assert.deepEqual(r.log, []);
+});
+
+await teste("app.js (revisão R119): entrar ou aceitar convite com outra conta aberta não adota a sessão antiga; rota pública não dispara a sessão antecipada", () => {
+  const entrar = /async aoEntrar\(token, \{ cliente_id \} = \{\}\) \{[\s\S]*?\n    \},/.exec(APP_JS)[0];
+  assert.match(entrar, /E\.sessaoPromessa = null; E\.sessaoGuardada = null;\s*limparDadosDoAparelho\(\);\s*E\.M\.dados\.guardarToken\(token\);/, "zera a antecipada e a guardada e limpa o aparelho ANTES de guardar o token e navegar");
+  assert.ok(entrar.indexOf("limparDadosDoAparelho()") < entrar.indexOf("navegar(destino"), "limpa antes de navegar");
+  const iniciar = /async function iniciar\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
+  assert.match(iniciar, /const ficaPublica = ROTAS_PUBLICAS\.has\(rotaInicial\) && rotaInicial !== "login";\s*if \(dados\.lerToken\(\) && !ficaPublica\) \{\s*E\.sessaoPromessa = lerSessao\(\);/,
+    "convite e nova senha não leem a sessão com o token antigo (o login com token vai direto para o app e segue antecipando)");
+  const ler2 = fnDoApp("lerSessao");
+  assert.match(ler2, /const token = E\.M\.dados\.lerToken\(\);\s*const s = await E\.api\.rpc\("nx_app_sessao"\);/);
+  assert.match(ler2, /if \(E\.M\.dados\.lerToken\(\) === token\) \{\s*LS\.gravar\(CHAVE_CONTA, s\.conta\.id\);/, "sessão lida com um token que já foi trocado não fica guardada para a próxima abertura");
+});
+
+await teste("app.js (revisão R119): o Sair da tela de abertura e a conta pendente limpam o aparelho; o Sair apaga a fila de saída das Conversas (mesmo nome do conversas.js)", () => {
+  const iniciar = /async function iniciar\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
+  assert.match(iniciar, /\$\("boot-sair"\)\.addEventListener\("click", async \(\) => \{[\s\S]*?apagarToken\(\);[\s\S]*?E\.rascunhos\.apagarTudo\(\); apagarFilaDeSaida\(\); await limparComPrazo\(\);[\s\S]*?location\.reload\(\);/);
+  assert.match(fnDoApp("aoMudarRota"), /e\.codigo === "conta_pendente"\) \{\s*dados\.apagarToken\(\);\s*if \(E\.rascunhos\) E\.rascunhos\.apagarTudo\(\);[^\n]*\s*limparDadosDoAparelho\(\);/);
+  const sair = fnDoApp("sair");
+  assert.ok(sair.indexOf("desmontarAtual();") > 0 && sair.indexOf("desmontarAtual();") < sair.indexOf("apagarFilaDeSaida();"), "apaga a fila depois de desmontar (Conversas já largou o banco)");
+  assert.match(/async function pedirLoginNaTela\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0], /if \(r === "outra"\) \{[\s\S]*?apagarFilaDeSaida\(\);/, "troca de conta também");
+  const nomeFila = (/const DB_FILA = "([^"]+)"/.exec(ler("conversas.js")) || [])[1];
+  assert.ok(nomeFila, "conversas.js declara o nome do banco da fila");
+  const apagar = fnDoApp("apagarFilaDeSaida");
+  assert.ok(apagar.includes(`indexedDB.deleteDatabase("${nomeFila}")`), `o shell apaga o banco «${nomeFila}»`);
+  const apagados = [];
+  runInNewContext(`${apagar}\napagarFilaDeSaida();`, { indexedDB: { deleteDatabase: n => apagados.push(n) } });
+  assert.deepEqual(apagados, [nomeFila]);
+  runInNewContext(`${apagar}\napagarFilaDeSaida();`, { indexedDB: { deleteDatabase() { throw new Error("SecurityError"); } } });   // janela anônima: não quebra o Sair
+  runInNewContext(`${apagar}\napagarFilaDeSaida();`, {});                                                                        // sem IndexedDB
+  assert.doesNotMatch(APP_JS, /import\(["'`]\.\/conversas\.js/, "sem importar o módulo de Conversas só para isso");
+});
+
+await teste("app.js (revisão R119): não lidas no ícone do app, armazenamento persistente pedido uma vez, «Recarregar» no app instalado e a versão no menu Ajuda", () => {
+  // selo do ícone
+  const chamadas = [];
+  const E = { sessao: { conta: {} }, cliente: { id: "e1" }, badges: { conversas: 3 } };
+  const nav = { setAppBadge: async n => { chamadas.push(["set", n]); }, clearAppBadge: async () => { chamadas.push(["clear"]); } };
+  const selo = runInNewContext(`let seloDoApp = null;\n${fnDoApp("atualizarSeloDoApp")}\natualizarSeloDoApp`, { E, navigator: nav, Math, Number, Promise });
+  selo(); selo(); assert.deepEqual(chamadas, [["set", 3]], "o mesmo número não é mandado duas vezes");
+  E.badges.conversas = 120; selo(); E.badges.conversas = 0; selo(); assert.deepEqual(chamadas.slice(1), [["set", 120], ["clear"]]);
+  E.badges.conversas = 4; selo(); E.sessao = null; selo(); assert.deepEqual(chamadas.slice(3), [["set", 4], ["clear"]], "sem sessão o número sai do ícone");
+  const semSuporte = runInNewContext(`let seloDoApp = null;\n${fnDoApp("atualizarSeloDoApp")}\natualizarSeloDoApp`, { E: { sessao: {}, cliente: {}, badges: { conversas: 2 } }, navigator: {}, Math, Number, Promise });
+  semSuporte();                                              // navegador sem a função: nada acontece, nada quebra
+  const limpos = [];
+  runInNewContext(`let seloDoApp = null;\n${fnDoApp("atualizarSeloDoApp")}\natualizarSeloDoApp();`, { E: { sessao: null, cliente: null, badges: {} }, navigator: { clearAppBadge: async () => { limpos.push(1); } }, Math, Number, Promise });
+  assert.equal(limpos.length, 1, "na 1ª chamada o ícone é acertado mesmo com zero (um número antigo não fica lá)");
+  assert.match(fnDoApp("atualizarBadges"), /atualizarSeloDoApp\(\);/); assert.match(fnDoApp("sair"), /atualizarSeloDoApp\(\);/);
+  // armazenamento persistente: uma vez por aparelho, depois de adotar a sessão
+  const guardado = new Map(); let pedidos = 0;
+  const LS = { lerTxt: k => guardado.get(k) ?? null, gravar: (k, v) => guardado.set(k, v) };
+  const pedir = runInNewContext(`${fnDoApp("pedirArmazenamentoPersistente")}\npedirArmazenamentoPersistente`, { LS, navigator: { storage: { persist: async () => { pedidos++; return true; } } }, Promise });
+  pedir(); pedir(); assert.equal(pedidos, 1, "pede uma vez só");
+  runInNewContext(`${fnDoApp("pedirArmazenamentoPersistente")}\npedirArmazenamentoPersistente();`, { LS: { lerTxt: () => null, gravar() {} }, navigator: {}, Promise });
+  runInNewContext(`${fnDoApp("pedirArmazenamentoPersistente")}\npedirArmazenamentoPersistente();`, { LS: { lerTxt: () => null, gravar() {} }, navigator: { storage: { persist() { throw new Error("negado"); } } }, Promise });
+  assert.match(fnDoApp("adotarSessao"), /pedirArmazenamentoPersistente\(\);/);
+  // menu da conta e Ajuda
+  assert.ok(APP_JS.includes('E.pwaMod && E.pwaMod.emStandalone() ? { rotulo: "Recarregar", icone: "reabrir", fn: () => location.reload() } : null,'), "«Recarregar» só no app instalado");
+  assert.ok(fnDoApp("abrirMenuAjuda").includes("{ rotulo: `Versão ${VERSAO}`, icone: \"info\", fn: () => E.ui.copiar(VERSAO, { aviso: \"Versão copiada.\" }) }"), "a versão em uso aparece no menu Ajuda");
+  assert.match(HTML, /<symbol id="i-reabrir"/);
 });
 
 /* ============================================================ M21 */
@@ -1626,7 +1993,7 @@ await teste("app.js (M18): a paleta abre em todo produto, módulo carregado sob 
   tem(APP_JS, 'E.workspace === null || E.workspace === "crm"', "contatos e negócios só no completo e no CRM (teste de A)");
   tem(APP_JS, 'E.workspace === null || E.workspace === "atendimento") && c.modulos.includes("conversas")', "Atendimento busca conversas");
   tem(APP_JS, 'E.paleta.mod = await arq("paleta.js")', "paleta.js sob demanda pelo mesmo arq() (?v=)");
-  tem(APP_JS, '"prontos.js", "shell.css", "pwa.js", "paleta.js"', "paleta.js no precache do service worker");
+  assert.match(/const ARQUIVOS_DO_APP = \[[\s\S]*?\];/.exec(APP_JS)[0], /"paleta\.js"/, "paleta.js no precache do service worker");
   assert.match(APP_JS, /const MODULOS_BASE = \[[^\]]*"comandos\.js"[^\]]*\]/, "o registro de comandos nasce no boot (a tela monta antes de alguém abrir a paleta)");
   assert.match(APP_JS, /E\.comandos = comandos\.criarComandos\(\)/);
   tem(APP_JS, "comandos: {\n      registrar(cmd) {\n        const cancelar = E.comandos.registrar(cmd);\n        E.assinaturas.add(cancelar);", "ctx.comandos.registrar some sozinho ao trocar de tela");

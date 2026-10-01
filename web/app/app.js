@@ -54,6 +54,8 @@ const E = {
   atual: null,           // { arquivo, mod, chave }
   assinaturas: new Set(),
   naoAtualizar: new Set(), // funções de módulos com trabalho pendente: enquanto alguma devolver true, a atualização automática espera
+  editouEm: 0,             // quando a pessoa mexeu por último num campo desta tela (0 = nada desde que a rota abriu): segura a atualização automática
+  hashEdicao: null,        // o endereço a que o editouEm se refere (mudou de tela → zera)
   pwa: null,
   regioes: null,           // M22: atalhos «Ir para…» registrados pelo módulo ativo (ctx.atalhosDeRegiao); null = valem os padrões da rota
   instalarEvento: null,    // M13: o beforeinstallprompt guardado (o botão «Instalar o app» usa)
@@ -123,7 +125,15 @@ function bootEsconder() { const b = $("boot"); if (b) b.hidden = true; }
 async function iniciar() {
   E.faviconPadrao = $("favicon") && $("favicon").getAttribute("href");
   $("boot-tentar").addEventListener("click", () => { if (E.bootTentar) E.bootTentar(); else location.reload(); });
-  $("boot-sair").addEventListener("click", () => { try { E.M.dados && E.M.dados.apagarToken(); } catch { /* ok */ } location.hash = "#/login"; location.reload(); });
+  $("boot-sair").addEventListener("click", async () => {
+    try { E.M.dados && E.M.dados.apagarToken(); } catch { /* ok */ }
+    // este botão também é um logout: rascunhos, respostas guardadas, Recentes e a fila de mensagens da conta não ficam no aparelho
+    try { if (E.rascunhos) E.rascunhos.apagarTudo(); apagarFilaDeSaida(); await limparComPrazo(); } catch { /* ok */ }
+    location.hash = "#/login"; location.reload();
+  });
+  // a pessoa mexeu num formulário: a atualização automática não recarrega por cima (ocupadoParaAtualizar)
+  document.addEventListener("input", marcarEdicao, true);
+  document.addEventListener("change", marcarEdicao, true);
   // M11: tudo o que o boot precisa começa AGORA, junto (o index.html já pré-carrega estes arquivos com <link rel="modulepreload">)
   const prontosP = arq("prontos.js");
   prontosP.catch(() => { /* tratado abaixo; aqui só evita o aviso de promessa sem dono */ });
@@ -191,8 +201,12 @@ async function iniciar() {
   if (dev === "1") try { sessionStorage.setItem("nx-app-dev", "1"); } catch { /* ok */ }
   if (dev === "0") try { sessionStorage.removeItem("nx-app-dev"); } catch { /* ok */ }
 
-  // M11: a sessão (nx_app_sessao, a chamada mais pesada) sai junto com a marca pública, não depois dela
-  if (dados.lerToken()) {
+  // M11: a sessão (nx_app_sessao, a chamada mais pesada) sai junto com a marca pública, não depois dela.
+  // Em rota pública que continua pública com token (convite, nova senha) ninguém consome essa leitura, e quem entrar por ali pode ser OUTRA conta:
+  // nem a sessão antecipada nem a guardada são preparadas (o login com token vai direto para o app, então segue antecipando)
+  const rotaInicial = E.M.rotas.rotear(location.hash).modulo;
+  const ficaPublica = ROTAS_PUBLICAS.has(rotaInicial) && rotaInicial !== "login";
+  if (dados.lerToken() && !ficaPublica) {
     E.sessaoPromessa = lerSessao();
     E.sessaoPromessa.catch(() => { /* quem consome (aoMudarRota) trata o erro */ });
     // M16: com a sessão guardada no aparelho o shell pinta na hora e a rede só confirma depois
@@ -410,21 +424,48 @@ async function instalarApp() {
 /* ============================================================
    PWA (M12): service worker, versão nova sem aba quebrada — depois do boot, nada disto atrasa a primeira pintura
    ============================================================ */
-const CSS_DAS_TELAS = ["conversas.css", "crm.css", "agenda.css", "relatorios.css", "automacoes.css"];
+/** TODOS os .js e .css de web/app que o app carrega (menos o sw.js): as telas e também os pedaços que elas importam por conta própria (cv-*, crm-*,
+    auto-*, gráficos, *-config). Lista fixa, conferida com a pasta por testes/shell.teste.mjs: arquivo novo que não entrar aqui quebra o teste. */
+const ARQUIVOS_DO_APP = [
+  "antes.js", "app.js", "api.js", "ui.js", "tema.js", "vocab.js", "rotas.js", "pulso.js", "rede.js", "rascunho.js", "cache.js", "comandos.js",
+  "prontos.js", "pwa.js", "paleta.js", "login.js", "inicio.js", "config.js", "admin.js",
+  "conversas.js", "cv-logica.js", "cv-lista.js", "cv-chat.js", "cv-composer.js", "cv-lateral.js", "cv-config.js",
+  "crm.js", "crm-logica.js", "crm-kanban.js", "crm-listas.js", "crm-negocio.js", "crm-tarefas.js", "crm-importar.js", "crm-config.js",
+  "agenda.js", "agenda-config.js", "rastreio-config.js",
+  "anuncios.js", "ads-config.js", "relatorios.js", "rel-logica.js", "graficos.js",
+  "automacoes.js", "auto-logica.js", "auto-catalogo.js", "auto-pecas.js", "auto-editor.js",
+  "app.css", "shell.css", "conversas.css", "crm.css", "agenda.css", "relatorios.css", "automacoes.css",
+];
+/** O que o app importa de fora da pasta (web/): os dados de conexão e o núcleo de cálculo que Anúncios divide com o painel clássico. */
+const ARQUIVOS_DA_RAIZ = ["dados.js", "nucleo.js"];
 const urlArq = nome => new URL(`./${nome}?v=${encodeURIComponent(VERSAO)}`, import.meta.url).href;
+const urlArqRaiz = nome => new URL(`../${nome}?v=${encodeURIComponent(VERSAO)}`, import.meta.url).href;
 
-/** O que o service worker deve ter guardado mesmo que a tela ainda não tenha sido aberta: as telas de rotas.ARQUIVOS e os CSS delas. */
+/** O que o service worker deve ter guardado mesmo que a tela ainda não tenha sido aberta: o app inteiro desta versão. Sem isso, depois de uma
+    publicação, a aba antiga abria uma tela pela primeira vez e recebia os pedaços NOVOS no endereço antigo (código misturado); offline, a tela falhava. */
 function urlsPrecache() {
-  const telas = new Set(Object.values(E.M.rotas.ARQUIVOS));
-  return [...MODULOS_BASE, "prontos.js", "shell.css", "pwa.js", "paleta.js", ...telas, ...CSS_DAS_TELAS].map(urlArq);
+  return [...ARQUIVOS_DO_APP.map(urlArq), ...ARQUIVOS_DA_RAIZ.map(urlArqRaiz)];
 }
 
 /** import() que falhou por arquivo que não existe mais naquela URL (a versão mudou por baixo da aba). */
 function ehFalhaDeImport(e) { return /dynamically imported module|importing a module script|module script failed|error loading dynamically/i.test(String((e && e.message) || "")); }
 
+/** Por quanto tempo um campo mexido segura a atualização automática (a faixa «Atualizar» continua lá para quem quiser aplicar na hora). */
+const EDICAO_RECENTE_MS = 30 * 60 * 1000;
+
+/** A pessoa digitou ou escolheu algo num campo desta tela. Busca não conta: não é trabalho que se perde. */
+function marcarEdicao(ev) {
+  const alvo = ev && ev.target;
+  if (!alvo || alvo.type === "search") return;
+  E.editouEm = Date.now();
+}
+
 /** Trabalho que uma atualização automática não pode interromper (o módulo ativo registra por ctx.naoAtualizar). */
 function ocupadoParaAtualizar() {
   if (E.rascunhos && E.rascunhos.pendentes() > 0) return true;
+  // formulário mexido (qualquer tela, mesmo as que não registram nada): recarregar apagaria o que foi digitado. Com a aba em segundo plano a pessoa
+  // pode ter ido buscar um texto em outra aba, então qualquer edição desde que a tela abriu segura; com a aba à vista, vale por 30 minutos
+  if (E.editouEm && (document.hidden || Date.now() - E.editouEm < EDICAO_RECENTE_MS)) return true;
   for (const f of E.naoAtualizar) { try { if (f()) return true; } catch { /* ignora */ } }
   return false;
 }
@@ -650,9 +691,10 @@ async function aplicarMarcaCliente() {
 let _avisouSessao = false;
 let loginPendente = null;
 
-/** nx_sair, queda de sessão e troca de conta: nenhuma resposta guardada fica no aparelho (privacidade). */
+/** nx_sair, queda de sessão, login e troca de conta: nenhuma resposta guardada fica no aparelho (privacidade).
+    Devolve a promessa da limpeza do IndexedDB (quem vai recarregar a página espera por ela: limparComPrazo). */
 function limparDadosDoAparelho() {
-  if (E.cache) E.cache.limpar().catch(() => {});
+  const feito = E.cache ? E.cache.limpar().catch(() => {}) : Promise.resolve();
   // M18: os «Recentes» da paleta têm nomes de pessoas: saem com a sessão
   try {
     const pref = E.M.comandos ? E.M.comandos.PREFIXO_RECENTES : "nx-rec:";
@@ -660,6 +702,31 @@ function limparDadosDoAparelho() {
   } catch { /* sem armazenamento: nada a apagar */ }
   LS.apagar(CHAVE_CONTA);
   E.sessaoGuardada = null;
+  return feito;
+}
+/** Limpa o aparelho e espera a limpeza assentar (no máximo 0,8 s): um location.reload() logo em seguida cortaria a transação do IndexedDB. */
+function limparComPrazo() {
+  return Promise.race([limparDadosDoAparelho(), new Promise(r => setTimeout(r, 800))]);
+}
+async function limparERecarregar() {
+  await limparComPrazo(); location.reload();
+}
+
+/** A fila de saída das Conversas (IndexedDB «orbita-fila», o nome está em conversas.js) guarda o texto das mensagens que ainda não saíram: no Sair
+    e na troca de conta ela sai do aparelho, senão a mensagem seria enviada dias depois, quando a conta entrasse de novo. */
+function apagarFilaDeSaida() {
+  try { if (typeof indexedDB !== "undefined" && indexedDB && typeof indexedDB.deleteDatabase === "function") indexedDB.deleteDatabase("orbita-fila"); }
+  catch { /* sem IndexedDB (janela anônima): não há fila guardada */ }
+}
+
+/** A fila de saída e os rascunhos vivem no aparelho: sem este pedido o navegador pode despejá-los quando falta espaço (o Safari, depois de dias sem
+    uso). Uma vez por aparelho, depois do login (o Firefox pergunta à pessoa; pedir a cada abertura seria um incômodo). */
+function pedirArmazenamentoPersistente() {
+  try {
+    if (LS.lerTxt("nx-app-persistir") || !navigator.storage || typeof navigator.storage.persist !== "function") return;
+    LS.gravar("nx-app-persistir", "1");
+    Promise.resolve(navigator.storage.persist()).catch(() => {});
+  } catch { /* sem suporte: fica como está */ }
 }
 
 /**
@@ -706,6 +773,7 @@ async function pedirLoginNaTela() {
     if (r === "outra") {
       if (E.rascunhos) E.rascunhos.apagarTudo();
       limparDadosDoAparelho();
+      apagarFilaDeSaida();
       try { sessionStorage.removeItem("nx-app-destino"); } catch { /* ok */ }
       location.hash = "#/";
       location.reload();
@@ -722,6 +790,7 @@ function sessaoCaiuTotal() {
   limparDadosDoAparelho();
   E.M.dados.apagarToken();
   E.sessao = null; E.cliente = null;
+  atualizarSeloDoApp();
   if (E.pulso) E.pulso.parar();
   desmontarAtual();
   if (!_avisouSessao) { _avisouSessao = true; E.ui.toast("Sua sessão expirou. Entre de novo.", { tipo: "info" }); setTimeout(() => { _avisouSessao = false; }, 4000); }
@@ -734,6 +803,7 @@ function sessaoCaiuTotal() {
 
 /** Só a chamada (nx_app_sessao) e a normalização: não mexe em E, pode rodar em paralelo com a marca pública. */
 async function lerSessao() {
+  const token = E.M.dados.lerToken();
   const s = await E.api.rpc("nx_app_sessao");
   if (!s || !s.conta) throw Object.assign(new Error("sessao_invalida"), { codigo: "sessao_invalida" });
   s.clientes = Array.isArray(s.clientes) ? s.clientes : [];
@@ -747,32 +817,55 @@ async function lerSessao() {
     c.tem_tema = !!c.tem_tema;
     c.suporte = (c.papel === "gestor" || c.papel === "super") && !c.proprio;
   }
-  // M16: a sessão já normalizada fica no aparelho (a próxima abertura pinta menu, empresa e marca sem esperar a rede)
-  LS.gravar(CHAVE_CONTA, s.conta.id);
-  E.cache.gravar(E.cache.chaveDe("nx_app_sessao", {}, { conta: s.conta.id }), "nx_app_sessao", s).catch(() => {});
+  // M16: a sessão já normalizada fica no aparelho (a próxima abertura pinta menu, empresa e marca sem esperar a rede).
+  // Só se o token ainda é o desta leitura: um login ou um Sair no meio do caminho não deixa a sessão da conta anterior para a próxima abertura
+  if (E.M.dados.lerToken() === token) {
+    LS.gravar(CHAVE_CONTA, s.conta.id);
+    E.cache.gravar(E.cache.chaveDe("nx_app_sessao", {}, { conta: s.conta.id }), "nx_app_sessao", s).catch(() => {});
+  }
   return s;
 }
 
-/** M16: depois de pintar com a sessão guardada, a leitura da rede confirma. Mudou algo (empresas, módulos, papel) → repinta o shell.
+/** O que a tela montada recebeu sobre o acesso da pessoa (conta, empresa ativa, papel, módulos, situação): se mudar, a tela precisa nascer de novo. */
+function fotoDoAcesso(sessao, cli) {
+  const c = sessao && sessao.conta;
+  return JSON.stringify([c ? [c.papel, !!c.super, !!c.trocar_senha] : null,
+    cli ? [cli.id, cli.papel, [...(cli.modulos || [])].sort(), cli.status, cli.teste_ate || null, cli.plano || null, cli.vertical || null] : null]);
+}
+
+/** M16: depois de pintar com a sessão guardada, a leitura da rede confirma. Mudou algo (empresas, módulos, papel) → repinta o shell; se o que
+    mudou é o acesso que a tela aberta usa (empresa ativa, papel, módulos), a tela é montada de novo. Outra conta → limpa o aparelho e recarrega.
     sessao_invalida já abriu a janela de login (api.js → sessaoCaiu); falha de rede só mantém o que está (a faixa de conexão avisa). */
 function revalidarSessao() {
   const p = E.sessaoPromessa;
   E.sessaoPromessa = null;
   if (!p) return;
   p.then(async nova => {
-    if (!E.sessao || nova.conta.id !== E.sessao.conta.id) return;
+    if (!E.sessao) return;
+    // a rede respondeu por OUTRA conta (o token mudou por baixo: convite aceito, login em outra aba). O shell foi pintado com a conta que o
+    // aparelho guardava: nada dela pode ficar na tela nem no aparelho, e a próxima abertura lê tudo da rede
+    if (nova.conta.id !== E.sessao.conta.id) { await limparERecarregar(); return; }
     const mudou = E.M.tema.hashCurto(nova) !== E.M.tema.hashCurto(E.sessao);
+    const antes = E.cliente, fotoAntes = fotoDoAcesso(E.sessao, antes);
     E.sessao = nova;
     if (!mudou) return;
-    const idAtual = E.cliente && E.cliente.id;
-    const novo = nova.clientes.find(c => c.id === idAtual);
-    await escolherCliente(novo ? novo.id : null, { remontar: false });
+    const novo = antes ? nova.clientes.find(c => c.id === antes.id) : null;
+    // a empresa ativa saiu da lista (acesso retirado): o que o aparelho guardava dela é apagado e a pessoa cai na empresa que a abertura escolheria
+    if (antes && !novo) E.cache.apagarEmpresa({ conta: nova.conta.id, cliente: antes.id }).catch(() => {});
+    await escolherCliente(novo ? novo.id : clienteInicial(), { remontar: false });
+    // a tela já montada (e pintada do cache) usa o acesso antigo: empresa removida ou papel rebaixado continuariam à vista até a pessoa navegar
+    if (fotoDoAcesso(E.sessao, E.cliente) !== fotoAntes) {
+      desmontarAtual();
+      await aoMudarRota(false);
+      E.ui.toast("Seu acesso foi alterado. A tela foi atualizada.", { tipo: "info" });
+    }
   }).catch(() => { /* ver acima */ });
 }
 
 /** Adota a sessão lida e busca as imagens da org (depende da marca pública já resolvida). */
 async function adotarSessao(s, { forcarImagens = false } = {}) {
   E.sessao = s;
+  pedirArmazenamentoPersistente();
   await carregarImagensOrg({ forcar: forcarImagens });
   return s;
 }
@@ -794,8 +887,10 @@ async function sair() {
   limparDadosDoAparelho();
   E.M.dados.apagarToken();
   E.sessao = null; E.cliente = null; E.imgOrg = null; E.notif = 0;
+  atualizarSeloDoApp();
   if (E.pulso) E.pulso.parar();
   desmontarAtual();
+  apagarFilaDeSaida();                           // depois de desmontar: Conversas já largou a fila
   const m = E.M.tema.marcaEfetiva(E.marcaPublica ? E.marcaPublica.marca : {}, {});
   pintarMarca(m);
   navegar("#/login", { substituir: true });
@@ -890,6 +985,8 @@ async function aoMudarRota(doUsuario) {
   const seq = ++E.montando;
   const { rotas, dados } = E.M;
   const r = rotas.rotear(location.hash);
+  // outra tela: o formulário da anterior não existe mais (remontar a MESMA tela, ex.: ao reconectar, não zera)
+  if (location.hash !== E.hashEdicao) { E.hashEdicao = location.hash; E.editouEm = 0; }
 
   if (r.modulo === "login" && dados.lerToken()) return navegar("#/", { substituir: true });
   if (ROTAS_PUBLICAS.has(r.modulo)) return montarPublico(r, seq);
@@ -916,7 +1013,13 @@ async function aoMudarRota(doUsuario) {
       await adotarSessao(s);
     } catch (e) {
       if (e && e.codigo === "sessao_invalida") return; // sessaoCaiu já levou ao login
-      if (e && e.codigo === "conta_pendente") { dados.apagarToken(); E.ui.toast(E.api.mensagemErro(e), { tipo: "erro" }); return navegar("#/login", { substituir: true }); }
+      if (e && e.codigo === "conta_pendente") {
+        dados.apagarToken();
+        if (E.rascunhos) E.rascunhos.apagarTudo();   // a conta não entra mais: nada dela fica no aparelho
+        limparDadosDoAparelho();
+        E.ui.toast(E.api.mensagemErro(e), { tipo: "erro" });
+        return navegar("#/login", { substituir: true });
+      }
       // desistiu depois de várias tentativas: «Tentar de novo» recomeça o laço; «Sair» só se o problema for da conta
       $("boot-tentar").textContent = "Tentar de novo";
       E.bootTentar = () => { E.bootTentar = null; aoMudarRota(false); };
@@ -1269,6 +1372,10 @@ async function montarPublico(r, seq) {
     titulo: definirTitulo,
     /** depois de entrar/aceitar convite: guarda o token e abre o app. */
     async aoEntrar(token, { cliente_id } = {}) {
+      // outra conta podia estar aberta neste navegador (o admin testando o convite que acabou de criar): a sessão lida com o token antigo e o
+      // que o aparelho guardava dela (sessão, respostas, Recentes) não podem ser adotados por quem entrou agora
+      E.sessaoPromessa = null; E.sessaoGuardada = null;
+      limparDadosDoAparelho();
       E.M.dados.guardarToken(token);
       if (cliente_id) LS.gravar(CHAVE_CLIENTE, cliente_id);
       E.sessao = null; E.cliente = null;
@@ -1390,7 +1497,7 @@ function pilulaDeTeste(cli) {
   if (!(cli.status === "teste" && cli.teste_ate && cli.teste_ate >= ui.hojeSP()) || testeOculto(cli)) return null;
   const dias = diasDeTeste(cli);
   const bt = ui.h("button", { type: "button", class: "pilula-teste", "aria-haspopup": "dialog", dataset: { urgente: dias !== null && dias <= 3 ? "1" : "0" },
-    title: `Teste grátis até ${ui.dataCurtaBR(cli.teste_ate)}` }, ui.icone("relogio"), ui.h("span", null, `Teste até ${ui.dataCurtaBR(cli.teste_ate)}`));
+    title: `Teste grátis até ${ui.dataCurtaBR(cli.teste_ate)}` }, ui.icone("relogio"), ui.h("span", null, ui.h("span", { class: "pt-pre" }, "Teste "), `até ${ui.dataCurtaBR(cli.teste_ate)}`));
   bt.addEventListener("click", () => abrirAvisoTeste(bt, cli, dias));
   return bt;
 }
@@ -1475,6 +1582,8 @@ function desenharConta() {
     { rotulo: "Aparência", icone: { claro: "sol", escuro: "lua", marca: "pincel" }[esquemaPreferido()] || "sol", fn: () => abrirMenuTema(ancora) },
     { rotulo: "Ajuda", icone: "ajuda", fn: () => abrirMenuAjuda(ancora) },
     modoInstalacao() ? { rotulo: "Instalar o app", icone: "baixar", fn: () => instalarApp() } : null,
+    // app instalado não tem o botão de recarregar do navegador: se uma tela travar, a saída é esta
+    E.pwaMod && E.pwaMod.emStandalone() ? { rotulo: "Recarregar", icone: "reabrir", fn: () => location.reload() } : null,
     "-",
     { rotulo: "Sair", icone: "sair", fn: () => sair() },
   ].filter(Boolean));
@@ -1736,6 +1845,9 @@ function abrirMenuAjuda(ancora) {
     a.rotaOk("inicio") && a.pode("admin") ? { rotulo: "Primeiros passos", icone: "check", fn: () => navegar("#/inicio") } : null,
     { rotulo: "Atalhos de teclado", icone: "ajuda", fn: () => abrirAtalhos() },
     E.marca && E.marca.suporte_wa ? { rotulo: "Falar com o suporte", icone: "whatsapp", fn: () => falarComSuporte() } : null,
+    "-",
+    // o suporte pergunta «qual versão aparece aí?»: fica à vista e um toque copia
+    { rotulo: `Versão ${VERSAO}`, icone: "info", fn: () => E.ui.copiar(VERSAO, { aviso: "Versão copiada." }) },
   ].filter(Boolean));
 }
 
@@ -1869,6 +1981,21 @@ function atualizarBadges(pulsar) {
     if (pulsar && el.dataset.badge === pulsar) { el.classList.remove("pulsa"); void el.offsetWidth; el.classList.add("pulsa"); }
   }
   for (const el of document.querySelectorAll("[data-ponto]")) el.hidden = !(E.badges[el.dataset.ponto] > 0);
+  atualizarSeloDoApp();
+}
+
+/** Conversas não lidas no ícone do app instalado (Chrome/Edge instalados, iPhone 16.4+): dá para ver quantas esperam sem abrir o app.
+    Navegador sem essa função simplesmente não mostra nada; sem sessão o número sai do ícone. Começa em null: a 1ª chamada sempre acerta o ícone
+    (um número que ficou da última vez não continua lá). */
+let seloDoApp = null;
+function atualizarSeloDoApp() {
+  const n = E.sessao && E.cliente ? Math.max(0, Number(E.badges.conversas) || 0) : 0;
+  if (n === seloDoApp) return;
+  seloDoApp = n;
+  try {
+    if (n > 0 && typeof navigator.setAppBadge === "function") Promise.resolve(navigator.setAppBadge(n)).catch(() => {});
+    else if (n === 0 && typeof navigator.clearAppBadge === "function") Promise.resolve(navigator.clearAppBadge()).catch(() => {});
+  } catch { /* sem suporte */ }
 }
 
 /** Não lidas de Conversas no menu e no título, mesmo fora da tela de Conversas (no máximo a cada 10 s). */

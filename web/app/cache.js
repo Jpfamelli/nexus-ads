@@ -7,6 +7,8 @@
    - a lista de conversas só leva o que a lista mostra (nome, prévia de até 80 caracteres e contadores);
    - chave = conta:empresa:rpc:hash(parâmetros): outra conta ou empresa nunca lê o que não é dela;
    - TTL de 12 h e versão do formato; tudo apagado em nx_sair, queda de sessão e troca de conta (limpar());
+   - varredura logo depois de abrir e a cada hora: o vencido sai do aparelho mesmo que ninguém o leia de novo, e o total tem teto
+     (200 entradas ou 20 MB; as mais antigas saem primeiro);
    - todo acesso ao IndexedDB em try/catch (janela anônima, Safari, cota cheia): sem IndexedDB o cache fica só na memória desta aba.
    Nada aqui importa outro arquivo (testes em Node com um armazém de mentira).
    ============================================================ */
@@ -15,6 +17,10 @@ export const NOME_BANCO = "orbita-cache";
 export const VERSAO_FORMATO = 1;
 export const TTL_MS = 12 * 3600 * 1000;
 export const TETO_ENTRADA_BYTES = 1024 * 1024;     // resposta maior que 1 MB não fica
+export const TETO_ENTRADAS = 200;                  // cada filtro do Kanban e cada semana da agenda viram uma entrada: sem teto o banco só cresce
+export const TETO_TOTAL_BYTES = 20 * 1024 * 1024;
+export const VARRER_A_CADA_MS = 3600 * 1000;
+export const VARRER_AO_ABRIR_MS = 5000;            // a 1ª varredura espera a abertura do app terminar (ela percorre o banco inteiro)
 
 /** O que PODE ficar no aparelho (lista branca). Qualquer RPC fora daqui nunca é guardada, mesmo que a tela peça. */
 export const CACHEAVEIS = Object.freeze(new Set([
@@ -82,7 +88,7 @@ export function criarArmazemIDB(idb = globalThis.indexedDB) {
         const tx = db.transaction("rpc", modo);
         const loja = tx.objectStore("rpc");
         let resultado = null;
-        const r = fn(loja);
+        const r = fn(loja, v => { resultado = v; });
         if (r) { r.onsuccess = () => { resultado = r.result; }; r.onerror = () => { resultado = null; }; }
         tx.oncomplete = () => resolve(resultado);
         tx.onerror = tx.onabort = () => resolve(null);
@@ -94,20 +100,44 @@ export function criarArmazemIDB(idb = globalThis.indexedDB) {
     gravar: (k, valor) => operar("readwrite", l => l.put({ k, ...valor })).then(() => true),
     apagar: k => operar("readwrite", l => l.delete(k)).then(() => true),
     limpar: () => operar("readwrite", l => l.clear()).then(() => true),
+    /** O que há guardado, sem os dados: [{k, v, em, bytes}] (a varredura decide o que sai). */
+    listar: () => operar("readonly", (l, definir) => {
+      const itens = [];
+      const c = l.openCursor();
+      c.onsuccess = () => {
+        const cur = c.result;
+        if (!cur) { definir(itens); return; }
+        const x = cur.value || {};
+        let bytes = Number(x.b);
+        if (!Number.isFinite(bytes)) { try { bytes = JSON.stringify(x.dados ?? null).length * 2; } catch { bytes = 0; } }
+        itens.push({ k: cur.primaryKey, v: x.v, em: x.em, bytes });
+        cur.continue();
+      };
+    }).then(v => (Array.isArray(v) ? v : [])),
   };
 }
 
 /**
  * @param {object} o
- *   armazem — {ler(k), gravar(k, v), apagar(k), limpar()} assíncrono (padrão: IndexedDB; testes passam um de mentira)
+ *   armazem — {ler(k), gravar(k, v), apagar(k), limpar(), listar()?} assíncrono (padrão: IndexedDB; testes passam um de mentira)
  *   agora()
- * → {ativo, ler(chave), gravar(chave, nome, dados), apagar(chave), limpar(), cacheavel, chaveDe}
+ *   varrer — false desliga a varredura automática (ao abrir e a cada hora); varrer() continua disponível
+ * → {ativo, ler(chave), gravar(chave, nome, dados), apagar(chave), apagarEmpresa({conta, cliente}), varrer(), limpar(), cacheavel, chaveDe}
  */
 export function criarCache(o = {}) {
   const armazem = o.armazem !== undefined ? o.armazem : criarArmazemIDB();
   const agora = o.agora || (() => Date.now());
   const memoria = new Map();            // o que foi lido/gravado nesta aba (e o único cache se o IndexedDB não abrir)
-  const valido = v => v && v.v === VERSAO_FORMATO && Number.isFinite(v.em) && agora() - v.em <= TTL_MS && v.dados !== undefined;
+  const noPrazo = v => !!v && v.v === VERSAO_FORMATO && Number.isFinite(v.em) && agora() - v.em <= TTL_MS;
+  const valido = v => noPrazo(v) && v.dados !== undefined;
+  const listar = async () => {
+    if (!armazem || typeof armazem.listar !== "function") return [];
+    try { const l = await armazem.listar(); return Array.isArray(l) ? l.filter(x => x && x.k != null) : []; } catch { return []; }
+  };
+  const apagarVarios = async chaves => {
+    for (const k of chaves) { memoria.delete(k); if (armazem) try { await armazem.apagar(k); } catch { /* ok */ } }
+    return chaves.length;
+  };
   const api = {
     get ativo() { return true; },
     cacheavel, chaveDe,
@@ -125,14 +155,39 @@ export function criarCache(o = {}) {
       let texto;
       try { texto = JSON.stringify(reduzir(nome, dados)); } catch { return false; }
       if (!texto || texto.length * 2 > TETO_ENTRADA_BYTES) return false;
-      const v = { v: VERSAO_FORMATO, em: agora(), nome, dados: JSON.parse(texto) };
+      const v = { v: VERSAO_FORMATO, em: agora(), nome, b: texto.length * 2, dados: JSON.parse(texto) };
       memoria.set(chave, v);
       if (armazem) { try { await armazem.gravar(chave, v); } catch { /* sem IndexedDB: fica na memória */ } }
       return true;
     },
     async apagar(chave) { memoria.delete(chave); if (armazem) try { await armazem.apagar(chave); } catch { /* ok */ } },
+    /** A pessoa perdeu o acesso a uma empresa: nada do que foi guardado dela fica no aparelho. → quantas entradas saíram. */
+    async apagarEmpresa({ conta = null, cliente = null } = {}) {
+      if (!cliente) return 0;
+      const prefixo = `${conta || "-"}:${cliente}:`;
+      const chaves = new Set([...memoria.keys()].filter(k => String(k).startsWith(prefixo)));
+      for (const it of await listar()) if (String(it.k).startsWith(prefixo)) chaves.add(it.k);
+      return apagarVarios([...chaves]);
+    },
+    /** Apaga o que venceu (12 h) ou é de outro formato e mantém o teto total: passou de 200 entradas ou 20 MB, as mais antigas saem. → quantas saíram. */
+    async varrer() {
+      for (const [k, v] of [...memoria]) if (!noPrazo(v)) memoria.delete(k);
+      const fora = [], vivos = [];
+      for (const it of await listar()) (noPrazo(it) ? vivos : fora).push(it);
+      vivos.sort((a, b) => b.em - a.em);                     // as mais novas ficam
+      let total = 0;
+      vivos.forEach((it, i) => { total += Number(it.bytes) || 0; if (i >= TETO_ENTRADAS || total > TETO_TOTAL_BYTES) fora.push(it); });
+      return apagarVarios(fora.map(it => it.k));
+    },
     /** nx_sair, queda de sessão e troca de conta: não sobra nada. */
     async limpar() { memoria.clear(); if (armazem) try { await armazem.limpar(); } catch { /* ok */ } return true; },
   };
+  // quem nunca clica em Sair acumulava uma cópia por filtro, para sempre: a varredura roda sozinha, sem atrasar a abertura nem prender o processo (testes)
+  if (o.varrer !== false && armazem && typeof armazem.listar === "function" && typeof setTimeout === "function") {
+    const solto = t => { if (t && typeof t.unref === "function") t.unref(); };
+    const rodar = () => { api.varrer().catch(() => {}); };
+    solto(setTimeout(rodar, VARRER_AO_ABRIR_MS));
+    solto(setInterval(rodar, VARRER_A_CADA_MS));
+  }
   return api;
 }

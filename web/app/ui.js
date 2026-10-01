@@ -26,7 +26,9 @@
    esqueleto(tipo, opcoes) / trocarEsqueleto(el, conteudo);
    erroCartao(erro, tentar) refaz sozinho em "orbita:online";
    acaoComDesfazer({texto, aplicar, reverter, ms}) → Promise<{estado, desfeita, erro?}>
-   (Ctrl/⌘+Z desfaz a mais recente, fila de 3); modal/gaveta({protegerTexto = true});
+   (Ctrl/⌘+Z desfaz a mais recente, fila de 3; com `firmar`, a escrita adiada sai com firmar({saindo: true})
+   quando a página fecha ou vai para segundo plano); copiar(texto) e copiarDepois(promessaDeTexto, {aviso})
+   (texto que ainda vem do servidor: chamar dentro do clique); modal/gaveta({protegerTexto = true});
    campo({validar: "telefone"|"email"|"senha"|"moeda"|fn}); vazio({tipo, ...}).
    ============================================================ */
 
@@ -861,7 +863,7 @@ const VALIDADORES = {
 };
 
 function ligarMascara(entrada, mascara) {
-  entrada.dataset.mascara = mascara;          // lerForm: telefone devolve só dígitos; moeda já vai por data-moeda
+  entrada.dataset.mascara = mascara;          // lerForm: telefone devolve só dígitos (com o «+» inicial de outro país); moeda já vai por data-moeda
   if (mascara === "moeda") entrada.dataset.moeda = "1";
   let anterior = String(entrada.value ?? "");
   entrada.addEventListener("input", ev => {
@@ -951,7 +953,7 @@ export function validarForm(raiz) {
     interruptor (checkbox), multipla (caixas), cor (paleta + hex), url, busca.
     validar: "telefone" | "email" | "senha" | "moeda" | fn(valor, {el, campo}) → texto de erro (ou vazio se ok).
     Valida ao sair do campo e, depois do 1º erro, a cada tecla (✓/! além da cor, aria-invalid). "telefone" e "moeda" ganham máscara
-    com cursor estável (tipo "moeda" já tem a máscara); "telefone" faz lerForm devolver só os dígitos; "senha" mostra o medidor;
+    com cursor estável (tipo "moeda" já tem a máscara); "telefone" faz lerForm devolver só os dígitos (e o «+» inicial, se houver); "senha" mostra o medidor;
     `max` mostra o contador perto do limite. Use validarCampo(el) / validarForm(raiz) antes de enviar. */
 export function campo(o = {}) {
   const { rotulo, nome, tipo = "texto", valor, opcoes, obrigatorio, ajuda, max, min, placeholder, desabilitado, autocomplete,
@@ -1043,7 +1045,8 @@ export function lerForm(form) {
     } else if (el.type === "radio") { if (el.checked) r[n] = el.value; else if (!(n in r)) r[n] = null; }
     else if (el.type === "number") r[n] = el.value === "" ? null : Number(el.value);
     else if (el.dataset.moeda) r[n] = lerMoeda(el.value);
-    else if (el.dataset.mascara === "telefone") r[n] = String(el.value ?? "").replace(/\D/g, "");
+    // o «+» inicial (número de outro país) fica: sem ele o servidor trataria 10–11 dígitos como brasileiros e poria 55 na frente
+    else if (el.dataset.mascara === "telefone") { const t = String(el.value ?? "").trim(); r[n] = (t.startsWith("+") ? "+" : "") + t.replace(/\D/g, ""); }
     else if (el.tagName === "SELECT" && el.multiple) r[n] = [...el.selectedOptions].map(o => o.value);
     else r[n] = typeof el.value === "string" ? el.value.trim() : el.value;
   }
@@ -1458,16 +1461,54 @@ export function comportamentoRolagem() {
   try { return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"; } catch { return "auto"; }
 }
 
+/** Plano B do copiar (o navegador recusou navigator.clipboard): <textarea> + execCommand. Com um <dialog> modal aberto o resto da página fica
+    inerte (não recebe foco nem seleção), então o textarea entra NO diálogo de cima. Só vale se o foco chegou nele e o navegador disse que copiou:
+    antes a tela dizia «copiado» sem ter copiado nada. */
+function copiarPorSelecao(texto) {
+  const antes = document.activeElement;
+  let t = null;
+  try {
+    t = h("textarea", { class: "sr-only", readonly: true }, String(texto));
+    const base = [...document.querySelectorAll("dialog[open]")].pop() || document.body;
+    base.appendChild(t);
+    try { t.focus({ preventScroll: true }); } catch { t.focus(); }
+    t.select();
+    return document.activeElement === t && document.execCommand("copy") === true;
+  } catch { return false; }
+  finally {
+    if (t) t.remove();
+    if (antes && antes !== t && antes.focus && antes.isConnected) try { antes.focus({ preventScroll: true }); } catch { /* ok */ }
+  }
+}
+
 /** copiar(texto) → Promise<boolean> (+ aviso "Copiado."). */
 export async function copiar(texto, { aviso = "Copiado." } = {}) {
   let ok = false;
-  try { await navigator.clipboard.writeText(String(texto)); ok = true; } catch {
-    try {
-      const t = h("textarea", { class: "sr-only", readonly: true }, String(texto));
-      document.body.appendChild(t); t.select(); ok = document.execCommand("copy"); t.remove();
-    } catch { ok = false; }
-  }
+  try { await navigator.clipboard.writeText(String(texto)); ok = true; } catch { ok = copiarPorSelecao(texto); }
   if (aviso) toast(ok ? aviso : "Não foi possível copiar. Selecione e copie manualmente.", { tipo: ok ? "ok" : "erro" });
+  return ok;
+}
+
+/** copiarDepois(promessaDeTexto, {aviso}) → Promise<boolean>. Para um texto que ainda vai chegar (do servidor): chame de forma SÍNCRONA dentro do
+    clique, passando a promessa. O navegador só deixa copiar durante o gesto da pessoa; o ClipboardItem aceita a promessa e espera por ela. Sem
+    ClipboardItem (ou se ele falhar), espera o texto e cai no copiar(). Texto vazio ou nulo = false, sem aviso. O aviso só aparece quando copiou. */
+export async function copiarDepois(promessaDeTexto, { aviso } = {}) {
+  const texto = Promise.resolve(promessaDeTexto).then(t => (t === null || t === undefined ? "" : String(t)));
+  texto.catch(() => {});                                   // quem chamou trata o erro da própria promessa
+  let ok = false;
+  try {
+    if (typeof ClipboardItem === "function" && navigator.clipboard && typeof navigator.clipboard.write === "function") {
+      const blob = texto.then(t => { if (!t) throw new Error("texto_vazio"); return new Blob([t], { type: "text/plain" }); });
+      blob.catch(() => {});
+      await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+      ok = true;
+    }
+  } catch { ok = false; }
+  let t = "";
+  try { t = await texto; } catch { return false; }
+  if (!t) return false;
+  if (!ok) ok = await copiar(t, { aviso: null });
+  if (ok && aviso) toast(aviso, { tipo: "ok" });
   return ok;
 }
 
@@ -1762,13 +1803,14 @@ async function desfazerItem(item) {
     item.resolve({ estado: "falhou", desfeita: false, erro: e });
   }
 }
-/** O toast fechou sem desfazer: a ação vale. Com `firmar` (a escrita no servidor que ficou adiada), roda agora; se falhar, volta a tela ao estado real. */
-async function manterItem(item) {
+/** O toast fechou sem desfazer: a ação vale. Com `firmar` (a escrita no servidor que ficou adiada), roda agora; se falhar, volta a tela ao estado real.
+    `saida` ({saindo: true}) só vem quando a página está saindo ou foi para segundo plano: a escrita deve ir com keepalive (ctx.api, {keepalive: true}). */
+async function manterItem(item, saida = null) {
   if (item.fim) return;
   item.fim = true;
   const i = _desfazer.indexOf(item); if (i >= 0) _desfazer.splice(i, 1);
   if (item.firmar) {
-    try { await item.firmar(); }
+    try { await (saida ? item.firmar(saida) : item.firmar()); }
     catch (e) {
       toast(`Não foi possível concluir. ${mensagemErro(e)}`, { tipo: "erro" });
       try { await item.reverter(); } catch { /* a tela fica como está; o erro já foi dito */ }
@@ -1779,16 +1821,30 @@ async function manterItem(item) {
   item.resolve({ estado: "mantida", desfeita: false });
 }
 let _ouvindoSaida = null;          // a função addEventListener em que já pedimos o pagehide
-function aoSair() { for (const item of [..._desfazer]) { if (item.fim || !item.firmar) continue; item.fim = true; try { Promise.resolve(item.firmar()).catch(() => {}); } catch { /* saindo da página: melhor esforço */ } } }
+let _ouvindoOculta = null;         // o document em que já pedimos o visibilitychange
+/** A página está saindo (pagehide) ou foi para segundo plano (no celular, trocar de app ou bloquear a tela não dispara pagehide, e a aba pode ser
+    encerrada sem aviso): firma JÁ o que estava pendente, com {saindo: true} para a escrita sair com keepalive. O aviso «Desfazer» fecha, porque a
+    ação passou a valer; se a página continuar viva e a escrita falhar, a tela volta ao estado real como em qualquer firmar. */
+function aoSair() {
+  for (const item of [..._desfazer]) {
+    if (item.fim || !item.firmar) continue;
+    manterItem(item, { saindo: true });            // chama item.firmar ainda dentro do evento (o envio precisa sair antes de a página morrer)
+    if (item.t) try { item.t.fechar(); } catch { /* saindo da página: melhor esforço */ }
+  }
+}
+function aoOcultar() { if (typeof document !== "undefined" && document.hidden) aoSair(); }
 /** acaoComDesfazer({texto, aplicar, reverter, firmar?, ms = 7000}) → Promise<{estado: "mantida"|"desfeita"|"falhou", desfeita, erro?}>.
     Roda `aplicar()` na hora (UI otimista), mostra o toast com "Desfazer" por `ms` e liga Ctrl/⌘+Z (fora de campo de texto) ao mais recente
     (até 3 pendentes: o 4º firma o mais antigo). A promessa só resolve quando o toast fecha (mantida), a pessoa desfaz (desfeita) ou algo falha.
     `aplicar` que falha → toast de erro e estado "falhou" (nada fica pendente); `reverter` que falha → toast de erro dizendo que o estado real é o aplicado.
     `firmar` (opcional) é a escrita REAL adiada: quando `aplicar` só mexe na tela (excluir, mover para Ganho/Perdido…), `firmar` roda se o toast fechar sem
-    desfazer (ou se a página for fechada com a ação pendente, em melhor esforço) e nunca roda se a pessoa desfizer; se falhar, a tela volta (reverter) e o estado é "falhou". */
+    desfazer e nunca roda se a pessoa desfizer; se falhar, a tela volta (reverter) e o estado é "falhou". Se a página for fechada (pagehide) ou for para
+    segundo plano (visibilitychange com document.hidden) com a ação pendente, `firmar({ saindo: true })` roda na hora: use o `saindo` para mandar a
+    escrita com {keepalive: true}. Quando o aviso fecha normalmente, `firmar()` é chamada sem argumento. */
 export async function acaoComDesfazer({ texto, aplicar, reverter, firmar, ms = 7000 } = {}) {
   if (typeof document !== "undefined" && _ouvindoZ !== document) { document.addEventListener("keydown", aoTeclaZ); _ouvindoZ = document; }
   if (typeof addEventListener === "function" && _ouvindoSaida !== addEventListener) { addEventListener("pagehide", aoSair); _ouvindoSaida = addEventListener; }
+  if (typeof document !== "undefined" && _ouvindoOculta !== document) { document.addEventListener("visibilitychange", aoOcultar); _ouvindoOculta = document; }
   let resolver;
   const fim = new Promise(r => { resolver = r; });
   const item = { reverter: reverter || (() => {}), firmar: typeof firmar === "function" ? firmar : null, resolve: resolver, fim: false, t: null };
