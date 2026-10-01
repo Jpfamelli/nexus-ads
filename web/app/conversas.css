@@ -273,6 +273,16 @@
 .cvx-audio[aria-pressed="true"] { background: var(--c-ruim-suave); color: var(--c-ruim); }
 .cvx-ferr .bt-icone[aria-disabled="true"], .cvx-ferr .bt-icone:disabled { opacity: .5; cursor: not-allowed; }
 .cvx-info { color: var(--c-info); }
+/* M36 — rascunho no campo, "Rascunho:" na lista e a bolha da fila de saída */
+.cvx-rasc-selo:empty { display: none; }
+.cvx-rasc-selo .rascunho-selo { margin: 0 0 .4rem; padding: .3rem .65rem; border-radius: 10px; background: var(--c-poco); color: var(--c-texto-2); font-size: var(--fs-13); }
+.cvx-rasc-selo .rascunho-selo .link { color: var(--c-prim-luz); }
+.cvl-rascunho em { font-style: italic; color: var(--c-ruim); font-weight: 600; }
+.cv-fila { display: flex; flex-wrap: nowrap; white-space: nowrap; align-items: center; justify-content: flex-end; gap: .2rem .6rem; margin-top: .3rem; font-size: var(--fs-13); color: var(--c-texto-2); }
+@media (max-width: 760px) { .cv-fila { flex-wrap: wrap; white-space: normal; max-width: 100%; } }
+.cv-fila-t { display: inline-flex; align-items: center; gap: .35rem; }
+.cv-fila-t .ic { width: 14px; height: 14px; color: var(--c-aten); }
+.cv-fila .bt { min-height: 28px; padding: .1rem .6rem; font-size: var(--fs-12); }
 .cvx-cap-info { margin: 0 0 .45rem; padding: .45rem .65rem; border-radius: 10px; background: var(--c-info-suave); color: var(--c-info); font-size: var(--fs-13); line-height: 1.4; }
 .cvx-gravacao { display: flex; align-items: center; gap: .55rem; width: fit-content; max-width: 100%; margin: 0 0 .45rem; padding: .35rem .45rem .35rem .7rem; border: 1px solid color-mix(in srgb, var(--c-ruim) 28%, var(--c-borda)); border-radius: 999px; background: var(--c-ruim-suave); color: var(--c-texto); font-size: var(--fs-13); }
 .cvx-rec-ponto { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--c-ruim); animation: cvx-pulso var(--t-pulso) var(--e-io) infinite; }

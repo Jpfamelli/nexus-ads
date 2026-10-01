@@ -11,6 +11,9 @@
    aparelho (form-urlencoded, 60 s), sem janela de 24 h nem modelo da Meta;
    timeout/5xx é ambíguo: grava 'pendente' com id provisório (a sincronização
    adota a gêmea) e NUNCA reenvia sozinho. Atendente respondeu → pausa a IA.
+   Idempotência (M36): o painel manda um `client_ref` por INTENÇÃO de envio; o
+   mesmo client_ref repetido (retentativa, fila de saída ao voltar a internet)
+   devolve a saída que já foi gravada e NÃO fala de novo com a Meta/CodeWords.
    ============================================================ */
 import { criarDb } from "./db.js";
 import {
@@ -36,6 +39,34 @@ const FILA_LIMITE_MS = 140_000;
 const RESERVA_ENVIO_MS = { codewords: 62_000, meta: 22_000 };
 const FILA_MAX_ITENS = 100;
 const FILA_MAX_MS = 110_000;
+
+const REF_CLIENTE = /^[A-Za-z0-9:_.-]{8,80}$/;
+/** client_ref do painel: ausente = comportamento de sempre; malformado = 400 dados_invalidos (hint client_ref). */
+function clientRefDe(corpo) {
+  const v = corpo?.client_ref;
+  if (v === undefined || v === null || v === "") return null;
+  if (typeof v !== "string" || !REF_CLIENTE.test(v)) throw new ErroApi("dados_invalidos", 400, "client_ref");
+  return v;
+}
+
+/**
+ * O mesmo client_ref já gravou uma saída nesta conversa? Devolve a resposta do painel SEM enviar nada (null = ainda não).
+ * Saída que falhou volta como falha (a pessoa decide "Tentar de novo", que é uma intenção NOVA, com outro client_ref);
+ * saída em dúvida (CodeWords, timeout) volta como ambígua — nunca reenvia sozinho.
+ */
+async function respostaJaGravada(db, cliente, conversa, ref) {
+  if (!ref) return null;
+  let m;
+  try { m = await interna(db, "nx_cv_ref_ver", { p_cliente: cliente, p_conversa: conversa, p_ref: ref }); }
+  catch (e) {
+    // a função só existe depois da migração 20261002d: sem ela o envio segue como sempre (sem idempotência), em vez de travar o chat
+    if (e?.status === 404 && /nx_cv_ref_ver/.test(String(e?.message))) { console.error("nx-enviar: nx_cv_ref_ver ausente (aplicar 20261002d); enviando sem idempotência"); return null; }
+    throw e;
+  }
+  if (!m) return null;
+  if (m.status === "falhou") return respostaPainel({ ok: false, erro: "envio_falhou", detalhe: m.erro || "O canal não aceitou a mensagem.", mensagem: m, repetida: true });
+  return respostaPainel({ ok: true, mensagem: m, repetida: true, ...(m.status === "pendente" ? { ambigua: true, aviso: m.erro || null } : {}) });
+}
 
 const idConversa = v => {
   const n = Number(v);
@@ -109,7 +140,7 @@ async function citacaoValida(db, cliente, contatoId, wamid) {
  * Grava a saída (enviada, falhou ou — CodeWords ambíguo — pendente) e monta a resposta do painel.
  * CodeWords: resposta de atendente pausa a IA da conversa (também quando o envio ficou em dúvida).
  */
-async function gravarSaida(db, ctx, cliente, conversa, msg, r, canal) {
+async function gravarSaida(db, ctx, cliente, conversa, msg, r, canal, ref = null) {
   const erro = textoFalha(r);
   const duvida = !r.ok && r.ambigua;
   const pausarIA = async () => {
@@ -141,6 +172,11 @@ async function gravarSaida(db, ctx, cliente, conversa, msg, r, canal) {
     }
     throw e;
   }
+  // grava o client_ref na saída (corrida: se outra saída já o tem, a mensagem fica sem ref e a repetição devolve a primeira)
+  if (ref && mensagem?.id) {
+    try { await interna(db, "nx_cv_ref_marcar", { p_cliente: cliente, p_mensagem: mensagem.id, p_ref: ref }); }
+    catch (e) { console.error("nx-enviar marcar client_ref:", limparErro(e?.message || e)); }
+  }
   await pausarIA();
   if (duvida) return respostaPainel({ ok: true, mensagem, ambigua: true, aviso: erro });
   return r.ok
@@ -154,6 +190,10 @@ async function acaoTexto(db, ctx, corpo, deps, { conversa, texto, respondeA, ass
   const cx = await contextoConversa(db, ctx, cliente, conversa ?? corpo.conversa);
   const bruto = String(texto ?? corpo.texto ?? "").trim();
   if (!bruto || bruto.length > 4096) throw new ErroApi("dados_invalidos", 400, "texto");
+  // M36: o mesmo client_ref não envia de novo (vale até para conversa resolvida/janela fechada depois: a saída já existe)
+  const ref = clientRefDe(corpo);
+  const ja = await respostaJaGravada(db, cliente, cx.conversa.id, ref);
+  if (ja) return ja;
   // o aparelho do CodeWords não tem janela de 24 h (é um WhatsApp comum)
   exigirConversaAberta(cx, { exigeJanela: cx.canal?.provedor !== "codewords" });
   const cred = await credencial(db, cx.canal_id, cliente);
@@ -163,7 +203,7 @@ async function acaoTexto(db, ctx, corpo, deps, { conversa, texto, respondeA, ass
   const nome = primeiroNome(cx.atendente_nome);
   const final = (assinar && cx.cfg_cv?.assinatura && nome ? `*${nome}:*\n${bruto}` : bruto).slice(0, 4096);
   const r = await enviarTextoPeloCanal(cred, destino(cx), final, { respondeA: citacao, fetch: deps.rede, fetchCru: deps.fetch, db });
-  return gravarSaida(db, ctx, cliente, cx.conversa.id, { tipo: "texto", corpo: final, responde_a_wamid: citacao }, r, cx.canal_id);
+  return gravarSaida(db, ctx, cliente, cx.conversa.id, { tipo: "texto", corpo: final, responde_a_wamid: citacao }, r, cx.canal_id, ref);
 }
 
 async function acaoMidia(db, ctx, corpo, deps, env) {
@@ -174,6 +214,9 @@ async function acaoMidia(db, ctx, corpo, deps, env) {
   if (!pathDoCliente(path, cliente, "out")) throw new ErroApi("midia_nao_encontrada", 404);
   const tipo = tipoAceito(corpo.mime);
   if (!tipo) throw new ErroApi("midia_tipo", 400);
+  const refMidia = clientRefDe(corpo);
+  const jaMidia = await respostaJaGravada(db, cliente, cx.conversa.id, refMidia);
+  if (jaMidia) return jaMidia;
   exigirConversaAberta(cx);
   const cred = await credencial(db, cx.canal_id, cliente);
   if (cred.provedor === "codewords") throw new ErroApi("codewords_tipo_nao_suportado", 400, "mídia");
@@ -190,13 +233,16 @@ async function acaoMidia(db, ctx, corpo, deps, env) {
   return gravarSaida(db, ctx, cliente, cx.conversa.id, {
     tipo: TIPO_MSG[tipo.grupo], corpo: tipo.grupo === "audio" ? null : legenda, responde_a_wamid: citacao,
     midia: { path, mime, nome, ...(tamanho ? { tamanho } : {}), estado: "ok" },
-  }, r);
+  }, r, null, refMidia);
 }
 
 async function acaoTemplate(db, ctx, corpo, deps) {
   const cliente = String(corpo.cliente);
   const cx = await contextoConversa(db, ctx, cliente, corpo.conversa);
   if (!UUID.test(String(corpo.template_id ?? ""))) throw new ErroApi("template_invalido", 400);
+  const refModelo = clientRefDe(corpo);
+  const jaModelo = await respostaJaGravada(db, cliente, cx.conversa.id, refModelo);
+  if (jaModelo) return jaModelo;
   exigirConversaAberta(cx, { exigeJanela: false });   // modelo vale também sem janela ("Nova conversa")
   if (!cx.canal_id) throw new ErroApi("canal_nao_encontrado", 404);
   const tpl = await interna(db, "nx_template_ver", { p_cliente: cliente, p_template: String(corpo.template_id), p_canal: cx.canal_id });
@@ -213,7 +259,7 @@ async function acaoTemplate(db, ctx, corpo, deps) {
   return gravarSaida(db, ctx, cliente, cx.conversa.id, {
     tipo: "template", corpo: aplicarParametros(tpl.corpo, parametros).slice(0, 4096),
     template: { id: tpl.id, nome: tpl.nome, idioma: tpl.idioma, categoria: tpl.categoria, parametros },
-  }, r);
+  }, r, null, refModelo);
 }
 
 /** Recibo de leitura para o cliente. Nunca falha para o usuário. */

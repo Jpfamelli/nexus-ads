@@ -166,7 +166,7 @@ export function criarLista(A) {
   function etiquetaDe(id) { return ((A.base && A.base.etiquetas) || []).find(e => e.id === id); }
 
   function assinatura(c, sel, minuto) {
-    return JSON.stringify([c.contato && c.contato.nome, c.contato && c.contato.telefone, c.ultima_msg_em, c.ultima_msg_resumo, c.ultima_msg_dir,
+    return JSON.stringify([A.acoes.rascunhoDe(c.id), c.contato && c.contato.nome, c.contato && c.contato.telefone, c.ultima_msg_em, c.ultima_msg_resumo, c.ultima_msg_dir,
       c.nao_lidas, c.status, c.atribuida_a, c.atribuida_nome, c.aguardando, c.ultima_entrada_em, c.etiquetas, c.negocio, sel, minuto, A.aba, !!A.busca,
       (A.base && A.base.etiquetas || []).length]);
   }
@@ -175,6 +175,7 @@ export function criarLista(A) {
     const nome = A.acoes.nomeContato(c.contato);
     const nl = Number(c.nao_lidas) || 0;
     const resumo = c.ultima_msg_resumo ? String(c.ultima_msg_resumo) : (c.status === "aberta" && !c.ultima_msg_dir ? "Conversa iniciada — sem mensagens ainda" : "");
+    const rascunho = L.textoRascunhoLista(A.acoes.rascunhoDe(c.id));       // M36: o que foi digitado e não enviado aparece na linha, em itálico
     const meta = [];
     // etapa e etiquetas viram pontos de cor (o nome fica no tooltip e no rótulo do item): nenhum selo é cortado com reticências
     if (c.negocio && c.negocio.estagio_nome) {
@@ -198,7 +199,7 @@ export function criarLista(A) {
       meta.push(av);
     }
     const rotuloA11y = [nome, c.negocio && c.negocio.estagio_nome ? `etapa ${c.negocio.estagio_nome}` : null, etqs.length ? `etiquetas ${etqs.map(e => e.nome).join(", ")}` : null, nl ? `${nl} não ${nl === 1 ? "lida" : "lidas"}` : null,
-      resumo ? `${c.ultima_msg_dir === "out" ? "Você: " : ""}${resumo}` : null, L.horaLista(c.ultima_msg_em),
+      rascunho ? `Rascunho: ${rascunho}` : resumo ? `${c.ultima_msg_dir === "out" ? "Você: " : ""}${resumo}` : null, L.horaLista(c.ultima_msg_em),
       c.aguardando && c.status === "aberta" ? `esperando há ${L.tempoEspera(c.ultima_entrada_em)}` : null,
       c.atribuida_nome ? `com ${c.atribuida_nome}` : "sem dono"].filter(Boolean).join(", ");
     const a = h("a", { class: "cvl-item", href: `#/conversas/${c.id}`, "aria-current": sel ? "true" : null, "aria-label": rotuloA11y,
@@ -206,7 +207,8 @@ export function criarLista(A) {
       ui.avatar(nome, c.contato && c.contato.id),
       h("span", { class: "cvl-nome" }, nome),
       h("span", { class: "cvl-hora" }, L.horaLista(c.ultima_msg_em)),
-      h("span", { class: "cvl-resumo" }, c.ultima_msg_dir === "out" && resumo ? h("b", null, "Você: ") : null, resumo),
+      rascunho ? h("span", { class: "cvl-resumo cvl-rascunho" }, h("em", null, "Rascunho: "), rascunho)
+        : h("span", { class: "cvl-resumo" }, c.ultima_msg_dir === "out" && resumo ? h("b", null, "Você: ") : null, resumo),
       nl ? h("span", { class: "cvl-badge", "aria-hidden": "true" }, nl > 99 ? "99+" : String(nl)) : h("span", { "aria-hidden": "true" }),
       meta.length ? h("span", { class: "cvl-meta", "aria-hidden": "true" }, meta) : null);
     return a;

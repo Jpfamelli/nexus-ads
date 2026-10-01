@@ -52,6 +52,7 @@ export async function montar(ctx) {
     selId: null, ver: null, msgs: [], conversasContato: [], agora: null, ultimoId: null, temMaisAntes: false,
     iaEstado: null, iaEstadoEm: 0, iaEstadoPendente: false,
     carregandoAntes: false, rascunhos: new Map(), midia: new Map(), pedidosMidia: new Set(), blobs: new Set(), envios: new Map(),
+    fila: { itens: new Map(), db: null, rodando: false, emVoo: new Set(), pronta: null },
     painel: "lista", timers: [], limpar: [], seqConversa: 0, seqLista: 0, destruido: false, acoes,
     buscaMsgs: null, seqMsgs: 0,
   };
@@ -91,6 +92,8 @@ export async function montar(ctx) {
   A.chat.mostrarVazio();
   A.lateral.montarEm(colLat);
 
+  // fila de saída (M36): o que a pessoa mandou e ainda não foi confirmado pelo servidor sobrevive a recarregar, a aba descartada e a internet que cai
+  A.fila.pronta = filaIniciar();
   // tempo real: pulso do shell (3 s com Conversas aberta) + relógio de 1 min para janelas e esperas
   A.limpar.push(ctx.pulso.assinar(() => aoPulso()));
   // o navegador só deixa tocar som depois de um toque/clique na página
@@ -400,6 +403,8 @@ async function selecionar(id) {
     if (!A || seq !== A.seqConversa) return;
     A.ver = ver;
     A.msgs = A.L.mesclarDelta([], pag.itens || []);
+    if (A.fila.pronta) await A.fila.pronta;
+    for (const it of filaDaConversa(id)) A.msgs = A.L.mesclarDelta(A.msgs, [bolhaDeItem(it)]);
     A.conversasContato = pag.conversas || [];
     A.agora = pag.agora || null;
     A.ultimoId = pag.ultimo_id ?? A.L.ultimoId(A.msgs);
@@ -513,6 +518,7 @@ async function delta() {
 let _pulsoT = null, _verT = null;
 function aoPulso() {
   if (!A) return;
+  if (A.fila.itens.size) esvaziarFila();
   clearTimeout(_pulsoT);
   _pulsoT = setTimeout(async () => {
     if (!A) return;
@@ -603,6 +609,23 @@ async function buscarMidias() {
 
 /* ============================================================ rascunhos */
 function guardarRascunho() { if (A.composer && A.selId) A.rascunhos.set(A.selId, A.composer.lerRascunho()); }
+
+/** O que a pessoa digitou e não enviou nesta conversa (para o "Rascunho:" da lista): o campo aberto, o da sessão ou o guardado no aparelho. */
+function rascunhoDe(id) {
+  if (!A) return "";
+  if (A.selId === id && A.composer) { const t = A.composer.lerRascunho(); if (t && t.trim()) return t; }
+  const m = A.rascunhos.get(id);
+  if (m && m.trim()) return m;
+  const r = A.ctx.rascunho;
+  if (r && typeof r.texto === "function") { const t = r.texto(`conversa:${id}`); if (t && t.trim()) return t; }
+  return "";
+}
+let _rascT = null;
+/** O texto do campo mudou: a linha da lista acompanha (sem refazer a lista a cada tecla). */
+function rascunhoMudou() {
+  clearTimeout(_rascT);
+  _rascT = setTimeout(() => { if (A && A.lista && A.lista.el.isConnected) A.lista.render(); }, 500);
+}
 
 /* ============================================================ ações */
 function trocarConversa(item) {
@@ -739,7 +762,10 @@ const acoes = {
   reenviarLocal: (m) => reenviarLocal(m),
   podeCancelarEnvio: m => !!(A && m && A.envios.has(m.id)),
   cancelarEnvio(m) { const c = m && A.envios.get(m.id); if (c) c(); },
-  descartarLocal(m) { A.msgs = A.msgs.filter(x => x.id !== m.id); A.chat.renderMensagens({ rolar: "manter" }); },
+  descartarLocal(m) {
+    if (m && m.ref) { filaRemover(m.ref); }
+    A.msgs = A.msgs.filter(x => x.id !== m.id); A.chat.renderMensagens({ rolar: "manter" });
+  },
   async nota(texto) {
     const r = await A.api.rpcC("nx_cv_nota", { p_conversa: A.selId, p_texto: texto });
     A.msgs = A.L.mesclarDelta(A.msgs, [r]);
@@ -756,7 +782,8 @@ const acoes = {
   },
   respostaUsada(id) { if (A.podeEscrever) A.api.rpcC("nx_resposta_usada", { p_id: id }).catch(() => {}); },
   pode: min => A.L.pode(A.ctx.papel, min),
-  guardarRascunho,
+  guardarRascunho, rascunhoDe, rascunhoMudou,
+  cancelarFila: m => cancelarFila(m), enviarAgora: m => enviarAgora(m),
 };
 
 /* ============================================================ envio (nx-enviar) */
@@ -764,17 +791,11 @@ const acoes = {
 async function enviar(o) {
   const L = A.L;
   const conv = A.ver && A.ver.conversa;
-  if (!conv) return;
-  if (o.tipo === "texto" && !o.clientRef) {
-    const id = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    o = { ...o, clientRef: `orbita:${id}` };
-  }
+  if (!conv) return null;
+  if (o.tipo === "texto") return enviarTexto(o);
   const eu = { id: A.eu.id, nome: A.eu.nome };
   let tmp;
-  if (o.tipo === "texto") {
-    tmp = L.mensagemOtimista({ conversaId: conv.id, corpo: o.texto, eu,
-      respondeA: o.respondeA ? { id: o.respondeA.id, direcao: o.respondeA.direcao, resumo: L.resumoMensagem(o.respondeA, 100) } : null });
-  } else if (o.tipo === "midia") {
+  if (o.tipo === "midia") {
     const url = URL.createObjectURL(o.arquivo);
     A.blobs.add(url);
     tmp = L.mensagemOtimista({ conversaId: conv.id, tipo: o.validacao.tipo, corpo: o.legenda || null, eu,
@@ -787,6 +808,7 @@ async function enviar(o) {
   A.msgs = L.mesclarDelta(A.msgs, [tmp]);
   A.chat.renderMensagens({ rolar: "fim" });
   await enviarPedido(tmp, o);
+  return { persistido: false };
 }
 
 async function enviarPedido(tmp, o) {
@@ -794,10 +816,7 @@ async function enviarPedido(tmp, o) {
   const convId = A.selId;
   try {
     let r;
-    if (o.tipo === "texto") {
-      r = await A.api.fn("nx-enviar", { acao: "texto", conversa: convId, texto: o.texto, client_ref: o.clientRef,
-        responde_a: o.respondeA && o.respondeA.wamid ? o.respondeA.wamid : undefined });
-    } else if (o.tipo === "midia") {
+    if (o.tipo === "midia") {
       // o arquivo já subiu numa tentativa anterior (a nx-enviar é que falhou): "Tentar de novo" não sobe tudo outra vez
       if (!o.path) {
         definirProgresso(tmp, 0, "subindo", convId);
@@ -908,10 +927,187 @@ function definirProgresso(tmp, pct, fase, convId) {
 }
 
 async function reenviarLocal(m) {
+  if (m && m.ref && A.fila.itens.has(m.ref)) {
+    // falha DEFINITIVA de um texto: "tentar de novo" é uma intenção nova (client_ref novo), senão o servidor devolveria a mesma falha
+    const velho = A.fila.itens.get(m.ref);
+    await filaRemover(velho.id);
+    A.msgs = A.msgs.filter(x => x.id !== m.id);
+    A.chat.renderMensagens({ rolar: "manter" });
+    return enviarTexto({ tipo: "texto", texto: velho.texto, respondeA: velho.respondeA ? { id: velho.respondeA.id, wamid: velho.respondeA.wamid, direcao: velho.respondeA.direcao } : null });
+  }
   if (!m || !m.pedido) return;
   A.msgs = A.msgs.map(x => x.id === m.id ? { ...x, status: "pendente", erro: null, falhaLocal: false, ...(x.midia && x.midia.local_url ? { midia: { ...x.midia, progresso: 0, fase: x.pedido && x.pedido.path ? "entregando" : "subindo" } } : {}) } : x);
   A.chat.renderMensagens({ rolar: "manter" });
   await enviarPedido(m, m.pedido);
+}
+
+/* ============================================================ fila de saída (M36)
+   Todo texto passa por aqui: grava no IndexedDB (orbita-fila) ANTES de falar com o servidor, envia com o client_ref da intenção e só apaga
+   quando o servidor confirma. Offline, timeout ou 5xx deixam o item na fila e a MESMA mensagem é repetida com o MESMO client_ref
+   (o servidor devolve a que já gravou: nunca sai em dobro). Falha definitiva (janela fechada, conversa resolvida…) vira "Não enviada"
+   com o motivo e o texto continua guardado até a pessoa tentar de novo ou descartar. Roda enquanto Conversas está aberta. */
+const DB_FILA = "orbita-fila", ST_FILA = "saida";
+const reqIdb = req => new Promise((ok, no) => { req.onsuccess = () => ok(req.result); req.onerror = () => no(req.error); });
+function abrirFila() {
+  return new Promise((ok, no) => {
+    let r;
+    try { r = indexedDB.open(DB_FILA, 1); } catch (e) { return no(e); }
+    r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains(ST_FILA)) r.result.createObjectStore(ST_FILA, { keyPath: "id" }); };
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => no(r.error);
+    r.onblocked = () => no(new Error("fila_bloqueada"));
+  });
+}
+const lojaFila = (db, modo) => db.transaction(ST_FILA, modo).objectStore(ST_FILA);
+const serializarItem = it => ({ id: it.id, conta: it.conta, cliente: it.cliente, conversa: it.conversa, texto: it.texto, respondeA: it.respondeA || null,
+  criada_em: it.criada_em, tentativas: it.tentativas || 0, proxima_em: it.proxima_em || 0, estado: it.estado === "enviando" ? "fila" : it.estado, motivo: it.motivo || null });
+
+async function filaIniciar() {
+  if (!A) return;
+  const conta = A.ctx.sessao && A.ctx.sessao.conta && A.ctx.sessao.conta.id, cliente = A.ctx.cliente && A.ctx.cliente.id;
+  let guardados = [];
+  try { A.fila.db = await abrirFila(); guardados = await reqIdb(lojaFila(A.fila.db, "readonly").getAll()); }
+  catch { A.fila.db = null; }       // janela anônima/Safari sem IndexedDB: a fila vale só nesta aba (o envio continua funcionando)
+  if (!A) return;
+  for (const it of guardados || []) {
+    if (A.L.filaDescartavel(it, { conta, cliente })) { if (A.fila.db && it && it.id && it.conta === conta) reqIdb(lojaFila(A.fila.db, "readwrite").delete(it.id)).catch(() => {}); continue; }
+    // o que estava a caminho quando a aba fechou volta a ser tentado com o MESMO client_ref (o servidor devolve a mensagem se ela já tinha saído)
+    A.fila.itens.set(it.id, { ...it, estado: it.estado === "falhou" ? "falhou" : "incerto", proxima_em: 0 });
+  }
+  if (typeof A.ctx.naoAtualizar === "function") A.limpar.push(A.ctx.naoAtualizar(() => filaPendentes() > 0));
+  A.timers.push(setInterval(() => { esvaziarFila(); }, 20000));
+  if (A.ctx.rede && typeof A.ctx.rede.aoVoltar === "function") A.limpar.push(A.ctx.rede.aoVoltar(() => esvaziarFila({ forcar: true })));
+  const aoOnline = () => esvaziarFila({ forcar: true });
+  window.addEventListener("orbita:online", aoOnline);
+  A.limpar.push(() => window.removeEventListener("orbita:online", aoOnline));
+  esvaziarFila();
+}
+const filaPendentes = () => (A ? [...A.fila.itens.values()].filter(x => x.estado !== "falhou").length : 0);
+const filaDaConversa = id => (A ? [...A.fila.itens.values()].filter(x => x.conversa === id).sort((a, b) => a.criada_em - b.criada_em) : []);
+
+async function filaSalvar(it) {
+  A.fila.itens.set(it.id, it);
+  if (!A.fila.db) return false;
+  try { await reqIdb(lojaFila(A.fila.db, "readwrite").put(serializarItem(it))); return true; }
+  catch { A.fila.db = null; return false; }
+}
+async function filaRemover(id) {
+  if (!A) return;
+  A.fila.itens.delete(id);
+  if (A.fila.db) { try { await reqIdb(lojaFila(A.fila.db, "readwrite").delete(id)); } catch { /* a limpeza das 7 dias pega */ } }
+}
+
+/** A bolha local de um item da fila (◷ + "Na fila", "tentando de novo" ou "Não enviada"). */
+function bolhaDeItem(it) {
+  const b = A.L.mensagemOtimista({ conversaId: it.conversa, corpo: it.texto, eu: { id: A.eu.id, nome: A.eu.nome }, agora: new Date(it.criada_em),
+    respondeA: it.respondeA ? { id: it.respondeA.id, direcao: it.respondeA.direcao, resumo: it.respondeA.resumo } : null });
+  b.ref = it.id;
+  b.pedido = { tipo: "texto", texto: it.texto, clientRef: it.id };
+  return aplicarEstado(b, it);
+}
+function aplicarEstado(b, it) {
+  const falhou = it.estado === "falhou";
+  return Object.assign(b, { filaEstado: it.estado, status: falhou ? "falhou" : "pendente", falhaLocal: falhou,
+    erro: falhou ? (it.motivo || "A mensagem não foi enviada.") : (it.estado === "fila" || it.estado === "incerto") ? (it.motivo || null) : null });
+}
+function atualizarBolha(it) {
+  if (!A || A.selId !== it.conversa) return;
+  let mudou = false;
+  A.msgs = A.msgs.map(m => { if (m.ref !== it.id) return m; mudou = true; return aplicarEstado({ ...m }, it); });
+  if (mudou) A.chat.renderMensagens({ rolar: "manter" });
+}
+function concluirBolha(it, msg) {
+  const L = A.L;
+  A.msgs = A.msgs.filter(m => m.ref !== it.id);
+  if (A.selId === it.conversa) {
+    if (msg && msg.id) { A.msgs = L.mesclarDelta(A.msgs, [msg]); A.ultimoId = L.ultimoId(A.msgs, A.ultimoId); }
+    A.chat.renderMensagens({ rolar: "fim" });
+    delta();
+  }
+  carregarLista({});
+}
+
+/** Texto novo: grava na fila, mostra a bolha e manda (se houver rede). Resolve quando o item está GUARDADO (não quando o servidor responde). */
+async function enviarTexto(o) {
+  const L = A.L, conv = A.ver.conversa;
+  const it = { id: o.clientRef || L.novoClientRef(globalThis.crypto && globalThis.crypto.randomUUID ? globalThis.crypto.randomUUID() : null),
+    conta: A.ctx.sessao.conta.id, cliente: A.ctx.cliente.id, conversa: conv.id, texto: o.texto,
+    respondeA: o.respondeA ? { id: o.respondeA.id, wamid: o.respondeA.wamid || null, direcao: o.respondeA.direcao, resumo: L.resumoMensagem(o.respondeA, 100) } : null,
+    criada_em: Date.now(), tentativas: 0, proxima_em: 0, estado: "fila", motivo: null };
+  const persistido = await filaSalvar(it);
+  A.msgs = L.mesclarDelta(A.msgs, [bolhaDeItem(it)]);
+  A.chat.renderMensagens({ rolar: "fim" });
+  const offline = A.ctx.rede ? A.ctx.rede.estado === "offline" : (typeof navigator !== "undefined" && navigator.onLine === false);
+  if (offline) { it.motivo = "Sem internet: a mensagem espera na fila."; it.proxima_em = Date.now() + 20000; await filaSalvar(it); atualizarBolha(it); }
+  else transmitir(it);          // sem await: a tela não espera o servidor
+  return { persistido };
+}
+
+/** Uma tentativa de envio. Devolve "ok" | "rede" (parar e tentar depois) | "definitiva". */
+async function transmitir(it) {
+  const L = A.L;
+  if (A.fila.emVoo.has(it.id)) return "ok";
+  A.fila.emVoo.add(it.id);
+  it.estado = "enviando"; it.motivo = null; atualizarBolha(it);
+  try {
+    const r = await A.api.fn("nx-enviar", { acao: "texto", conversa: it.conversa, texto: it.texto, client_ref: it.id,
+      responde_a: it.respondeA && it.respondeA.wamid ? it.respondeA.wamid : undefined });
+    if (!A) return "ok";
+    const msg = r && r.mensagem ? { ...r.mensagem, ...(r.ambigua === true ? { ambigua: true } : {}) } : null;
+    await filaRemover(it.id);
+    concluirBolha(it, msg);
+    return "ok";
+  } catch (e) {
+    if (!A) return "rede";
+    const c = L.classificarFalhaEnvio(e);
+    if (c.tipo === "rede" || c.tipo === "sessao") {
+      it.tentativas = (it.tentativas || 0) + 1;
+      it.estado = c.subtipo === "em_voo" ? "incerto" : "fila";
+      it.proxima_em = c.tipo === "sessao" ? Date.now() + 15000 : L.proximaTentativaFila(it.tentativas - 1, Date.now(), Math.floor(Math.random() * 3000));
+      it.motivo = c.motivo;
+      await filaSalvar(it); atualizarBolha(it);
+      return "rede";
+    }
+    // definitiva: o servidor pode ter gravado a saída como "falhou"/"pendente" (com o motivo) — mostra essa e libera o item
+    const salva = e && e.resposta && e.resposta.mensagem && e.resposta.mensagem.id ? e.resposta.mensagem : null;
+    if (salva || c.ambigua) { await filaRemover(it.id); concluirBolha(it, salva ? { ...salva, ...(c.ambigua ? { ambigua: true } : {}) } : null); return "definitiva"; }
+    it.estado = "falhou"; it.motivo = c.motivo || A.ui.mensagemErro(e);
+    await filaSalvar(it); atualizarBolha(it);
+    if (c.codigo === "fora_da_janela" || c.codigo === "conversa_resolvida") recarregarVer();
+    return "definitiva";
+  } finally { if (A) A.fila.emVoo.delete(it.id); }
+}
+
+/** Esvazia a fila em ordem: no online, no 1º pulso bom e a cada 20 s (com o backoff de cada item). Para na 1ª falha de rede (a ordem importa). */
+async function esvaziarFila({ forcar = false } = {}) {
+  if (!A || A.fila.rodando || !A.fila.itens.size) return;
+  A.fila.rodando = true;
+  try {
+    for (const it of A.L.filaDevidos([...A.fila.itens.values()], forcar ? Infinity : Date.now())) {
+      if (!A) return;
+      if (await transmitir(it) === "rede") break;
+    }
+  } finally { if (A) A.fila.rodando = false; }
+}
+
+/** "Cancelar" numa bolha da fila: o texto volta para o campo (nada se perde) e o item sai. */
+async function cancelarFila(m) {
+  if (!A || !m || !m.ref) return;
+  const it = A.fila.itens.get(m.ref);
+  if (!it || A.fila.emVoo.has(it.id)) return;
+  await filaRemover(it.id);
+  A.msgs = A.msgs.filter(x => x.ref !== it.id);
+  A.chat.renderMensagens({ rolar: "manter" });
+  if (A.composer && A.selId === it.conversa && typeof A.composer.devolverTexto === "function") A.composer.devolverTexto(it.texto);
+  A.ui.toast("Envio cancelado. O texto voltou para o campo.", { tipo: "info" });
+}
+/** "Enviar agora": tenta já, sem esperar o backoff. */
+async function enviarAgora(m) {
+  if (!A || !m || !m.ref) return;
+  const it = A.fila.itens.get(m.ref);
+  if (!it) return;
+  it.proxima_em = 0;
+  await transmitir(it);
 }
 
 /* ============================================================ nova conversa */

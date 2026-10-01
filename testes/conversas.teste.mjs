@@ -593,5 +593,103 @@ await teste("M37: o compositor otimiza antes de validar, mostra o ganho e oferec
   assert.match(chat, /A\.acoes\.cancelarEnvio\(m\)/);
 });
 
+/* ============================================================ M36 — nada se perde no chat */
+console.log("\n(e) M36 — rascunho persistente, fila de saída e envio idempotente");
+
+await teste("M36: novoClientRef — formato aceito pelo servidor, único por intenção, sempre ≤ 80 caracteres", () => {
+  const REF = /^[A-Za-z0-9:_.-]{8,80}$/;
+  assert.match(L.novoClientRef("5c1b0d3e-0000-4000-8000-000000000001"), REF);
+  assert.equal(L.novoClientRef("5c1b0d3e-0000-4000-8000-000000000001"), "orbita:5c1b0d3e-0000-4000-8000-000000000001");
+  assert.match(L.novoClientRef(), REF, "sem crypto.randomUUID também gera um ref válido");
+  assert.notEqual(L.novoClientRef(), L.novoClientRef());
+  assert.ok(L.novoClientRef("x".repeat(200)).length <= 80);
+  assert.match(L.novoClientRef("com espaço;e/barra"), REF, "caracteres fora do formato são tirados");
+});
+
+await teste("M36: proximaTentativaFila — 20 s, 40 s, 80 s, 160 s e 5 min daí em diante (com jitter opcional)", () => {
+  const t0 = 1_000_000;
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 9].map(n => L.proximaTentativaFila(n, t0) - t0), [20000, 40000, 80000, 160000, 300000, 300000, 300000]);
+  assert.equal(L.proximaTentativaFila(0, t0, 1500) - t0, 21500);
+  assert.equal(L.proximaTentativaFila(-3, t0) - t0, 20000);
+});
+
+await teste("M36: classificarFalhaEnvio — internet que caiu espera na fila, prazo estourado repete com o MESMO ref, regra de negócio vira «Não enviada» com o motivo", () => {
+  const e = (codigo, extra = {}) => Object.assign(new Error(codigo), { codigo, ...extra });
+  let c = L.classificarFalhaEnvio(e("sem_conexao"));
+  assert.deepEqual([c.tipo, c.subtipo], ["rede", "sem_conexao"]);
+  for (const cod of ["tempo_rede", "tempo_esgotado"]) assert.deepEqual([L.classificarFalhaEnvio(e(cod)).tipo, L.classificarFalhaEnvio(e(cod)).subtipo], ["rede", "em_voo"], cod);
+  assert.equal(L.classificarFalhaEnvio(e("http_504", { status: 504 })).subtipo, "em_voo");
+  for (const cod of ["servico_indisponivel", "http_503", "http_502", "http_429", "http_408"]) assert.deepEqual([L.classificarFalhaEnvio(e(cod)).tipo, L.classificarFalhaEnvio(e(cod)).subtipo], ["rede", "servidor"], cod);
+  assert.equal(L.classificarFalhaEnvio(e("sessao_invalida", { status: 401 })).tipo, "sessao", "sessão caída: a fila espera o login");
+  c = L.classificarFalhaEnvio(e("fora_da_janela"));
+  assert.equal(c.tipo, "definitiva"); assert.match(c.motivo, /24 h.*modelo aprovado/);
+  assert.equal(L.classificarFalhaEnvio(e("conversa_resolvida")).tipo, "definitiva");
+  assert.equal(L.classificarFalhaEnvio(e("dados_invalidos")).tipo, "definitiva");
+  // a Graph recusou e o servidor GRAVOU a mensagem como "falhou": é definitiva e traz a mensagem salva
+  c = L.classificarFalhaEnvio(e("envio_falhou", { resposta: { ok: false, mensagem: { id: 9, status: "falhou" } } }));
+  assert.equal(c.tipo, "definitiva"); assert.equal(c.salva, true);
+  // 502 que o servidor marcou como "pode ter saído": definitiva-ambígua (não reenvia sozinha)
+  c = L.classificarFalhaEnvio(e("envio_falhou", { status: 502, resposta: { ok: false, ambigua: true } }));
+  assert.equal(c.ambigua, true); assert.equal(c.tipo, "definitiva");
+  assert.equal(L.classificarFalhaEnvio(null).tipo, "definitiva", "erro sem forma conhecida não repete para sempre");
+});
+
+await teste("M36: filaDevidos (ordem em que a pessoa mandou, só o que já venceu o backoff) e filaDescartavel (outra conta/empresa ou mais de 7 dias)", () => {
+  const AG = 10_000_000;
+  const itens = [
+    { id: "c", estado: "fila", criada_em: 300, proxima_em: 0 },
+    { id: "a", estado: "incerto", criada_em: 100, proxima_em: AG - 1 },
+    { id: "b", estado: "fila", criada_em: 200, proxima_em: AG + 5000 },
+    { id: "x", estado: "falhou", criada_em: 50, proxima_em: 0 },
+    { id: "y", estado: "enviando", criada_em: 60, proxima_em: 0 },
+  ];
+  assert.deepEqual(L.filaDevidos(itens, AG).map(i => i.id), ["a", "c"], "falhou e enviando nunca saem sozinhos; b ainda espera");
+  assert.deepEqual(L.filaDevidos(itens, Infinity).map(i => i.id), ["a", "b", "c"], "\"Enviar agora\"/online ignora o backoff");
+  const ok = { id: "r", conta: "u1", cliente: "c1", criada_em: AG - 1000 };
+  assert.equal(L.filaDescartavel(ok, { conta: "u1", cliente: "c1", agora: AG }), false);
+  assert.equal(L.filaDescartavel(ok, { conta: "u2", cliente: "c1", agora: AG }), true, "item de outra conta");
+  assert.equal(L.filaDescartavel(ok, { conta: "u1", cliente: "c2", agora: AG }), true, "item de outra empresa");
+  assert.equal(L.filaDescartavel({ ...ok, criada_em: AG - L.FILA_TTL_MS - 1 }, { conta: "u1", cliente: "c1", agora: AG }), true, "mais de 7 dias");
+  assert.equal(L.filaDescartavel(null, {}), true);
+});
+
+await teste("M36: textoRascunhoLista — uma linha, até 80 caracteres, sem quebras", () => {
+  assert.equal(L.textoRascunhoLista("  Oi,\n  tudo   bem?  "), "Oi, tudo bem?");
+  assert.equal(L.textoRascunhoLista(""), "");
+  assert.equal(L.textoRascunhoLista(null), "");
+  const longo = L.textoRascunhoLista("a".repeat(200));
+  assert.equal(longo.length, 80); assert.ok(longo.endsWith("…"));
+});
+
+await teste("M36: o compositor liga o rascunho por conversa (e a nota à parte), só apaga depois de o envio estar GUARDADO e devolve o texto cancelado", () => {
+  const comp = ler("cv-composer.js"), conv = ler("conversas.js"), lista = ler("cv-lista.js");
+  assert.match(comp, /r\.ligar\(ta, `conversa:\$\{A\.selId\}\$\{modoNota \? ":nota" : ""\}`, \{ seloEm: seloRasc \}\)/, "chave por conversa; nota com rascunho próprio");
+  assert.match(comp, /function apagarRascunho\(\) \{ if \(rasc && !ta\.value\.trim\(\)\)/, "não apaga o que a pessoa já digitou depois");
+  assert.match(comp, /const r = await A\.acoes\.enviar\(\{ tipo: "texto", texto, respondeA: citada \}\);\s*if \(r && r\.persistido !== false\) apagarRascunho\(\)/, "o rascunho sai depois de o item estar na fila");
+  assert.match(comp, /devolverTexto\(texto\)/, "Cancelar na fila devolve o texto ao campo");
+  assert.match(comp, /rasc\.apagar\(\); if \(typeof rasc\.parar === "function"\) rasc\.parar\(\)/, "alternar nota/mensagem move o rascunho");
+  assert.match(lista, /L\.textoRascunhoLista\(A\.acoes\.rascunhoDe\(c\.id\)\)/);
+  assert.match(lista, /h\("em", null, "Rascunho: "\)/, "\"Rascunho:\" em itálico na linha da lista");
+  assert.match(conv, /function rascunhoDe\(id\)/);
+});
+
+await teste("M36: o texto vai pela fila (IndexedDB antes do servidor, client_ref por intenção, backoff, online/pulso/20 s) e a falha definitiva guarda o texto", () => {
+  const conv = ler("conversas.js"), chat = ler("cv-chat.js");
+  assert.match(conv, /indexedDB\.open\(DB_FILA, 1\)/);
+  assert.match(conv, /const persistido = await filaSalvar\(it\);[\s\S]{0,400}transmitir\(it\);\s*\/\/ sem await/, "grava na fila ANTES de transmitir, sem esperar o servidor");
+  assert.match(conv, /acao: "texto", conversa: it\.conversa, texto: it\.texto, client_ref: it\.id/, "o MESMO client_ref em toda repetição do item");
+  assert.match(conv, /window\.addEventListener\("orbita:online", aoOnline\)/);
+  assert.match(conv, /A\.ctx\.rede\.aoVoltar\(\(\) => esvaziarFila\(\{ forcar: true \}\)\)/);
+  assert.match(conv, /if \(A\.fila\.itens\.size\) esvaziarFila\(\);\s*clearTimeout\(_pulsoT\)/, "1º pulso bom esvazia a fila");
+  assert.match(conv, /setInterval\(\(\) => \{ esvaziarFila\(\); \}, 20000\)/, "e a cada 20 s");
+  assert.match(conv, /if \(await transmitir\(it\) === "rede"\) break;/, "na 1ª falha de rede para (a ordem importa)");
+  assert.match(conv, /it\.estado = "falhou"; it\.motivo = c\.motivo \|\| A\.ui\.mensagemErro\(e\);\s*await filaSalvar\(it\)/, "falha definitiva: guarda e mostra o motivo");
+  assert.match(conv, /ctx\.naoAtualizar\(\(\) => filaPendentes\(\) > 0\)|A\.ctx\.naoAtualizar\(\(\) => filaPendentes\(\) > 0\)/, "fila pendente segura a atualização automática do app");
+  assert.match(conv, /L\.filaDescartavel\(it, \{ conta, cliente \}\)/, "item de outra conta ou de mais de 7 dias é descartado");
+  assert.match(chat, /Na fila · envia quando a internet voltar/);
+  assert.match(chat, /A\.acoes\.enviarAgora\(m\)/); assert.match(chat, /A\.acoes\.cancelarFila\(m\)/);
+  assert.match(chat, /novo\.classList\.add\("entra"\)/, "mensagem nova entra com .entra (M10)");
+});
+
 console.log(`\n${ok} ok · ${falhas} falha(s)`);
 if (falhas) process.exit(1);

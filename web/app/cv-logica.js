@@ -650,3 +650,63 @@ export function progressoEnvio(enviados, total) {
   const pct = Math.max(0, Math.min(99, Math.floor((e / t) * 100)));
   return { pct, texto: `${pct} %` };
 }
+
+/* ------------------------------------------------------------ fila de saída e rascunho (M36) */
+export const FILA_BACKOFF_MS = Object.freeze([20000, 40000, 80000, 160000, 300000]);   // 20 s, dobrando até 5 min
+export const FILA_TTL_MS = 7 * 24 * 3600 * 1000;                                       // item que ninguém reenviou em 7 dias some
+
+/** client_ref de uma intenção de envio ("orbita:<uuid>"): o MESMO valor em toda repetição da mesma mensagem. */
+export function novoClientRef(uuid) {
+  const id = String(uuid || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`).replace(/[^A-Za-z0-9_.-]/g, "");
+  return `orbita:${id}`.slice(0, 80);
+}
+
+/** Quando tentar de novo: 20 s, 40 s, 80 s, 160 s e 5 min daí em diante (jitter opcional, em ms). */
+export function proximaTentativaFila(tentativas, agora = Date.now(), jitter = 0) {
+  const n = Math.max(0, Math.min(Number(tentativas) || 0, FILA_BACKOFF_MS.length - 1));
+  return agora + FILA_BACKOFF_MS[n] + (Number(jitter) || 0);
+}
+
+const REDE_SEM_CONEXAO = /^(sem_conexao)$/;
+const REDE_EM_VOO = /^(tempo_esgotado|tempo_rede)$/;
+const REDE_SERVIDOR = /^(servico_indisponivel|http_(408|425|429|5\d\d))$/;
+const SO_SESSAO = /^(sessao_invalida|sessao_expirada)$/;
+/**
+ * O que fazer com um erro de envio de TEXTO (com client_ref, repetir é seguro):
+ *   {tipo:"rede", subtipo:"sem_conexao"}  nunca chegou ao servidor → "Na fila · envia quando a internet voltar";
+ *   {tipo:"rede", subtipo:"em_voo"}       prazo estourado com a requisição em voo → "Status incerto" e repete com o MESMO client_ref;
+ *   {tipo:"rede", subtipo:"servidor"}     503/429/5xx do servidor → repete com backoff;
+ *   {tipo:"sessao"}                       sessão caída → espera o login (o rascunho/fila ficam);
+ *   {tipo:"definitiva", codigo, motivo}   fora_da_janela, conversa_resolvida, dados_invalidos… → "Não enviada" com o motivo (não repete sozinho).
+ */
+export function classificarFalhaEnvio(e) {
+  const cod = String((e && (e.codigo || e.code)) || "");
+  const status = Number(e && e.status);
+  const salva = !!(e && e.resposta && e.resposta.mensagem && e.resposta.mensagem.id);
+  if (SO_SESSAO.test(cod) || status === 401) return { tipo: "sessao", codigo: cod || "sessao_invalida", motivo: "Sua sessão expirou. Entre de novo: a mensagem continua guardada." };
+  if (e && e.resposta && e.resposta.ambigua === true) return { tipo: "definitiva", codigo: "ambigua", motivo: "Pode ter saído — confira no WhatsApp antes de reenviar.", ambigua: true, salva };
+  if (REDE_SEM_CONEXAO.test(cod)) return { tipo: "rede", subtipo: "sem_conexao", codigo: cod, motivo: "Sem internet: a mensagem espera na fila." };
+  if (REDE_EM_VOO.test(cod) || status === 504) return { tipo: "rede", subtipo: "em_voo", codigo: cod || "http_504", motivo: "O servidor não respondeu a tempo: tentando de novo sem enviar em dobro." };
+  if (REDE_SERVIDOR.test(cod) || (status >= 500 && !salva)) return { tipo: "rede", subtipo: "servidor", codigo: cod || `http_${status}`, motivo: "O servidor está ocupado: tentando de novo." };
+  return { tipo: "definitiva", codigo: cod || "envio_falhou", motivo: dicaErroEnvio(cod) || "", salva };
+}
+
+/** Itens da fila prontos para sair agora (estado fila/incerto e proxima_em vencida), na ordem em que a pessoa mandou. */
+export function filaDevidos(itens, agora = Date.now()) {
+  return (itens || []).filter(x => x && (x.estado === "fila" || x.estado === "incerto") && !(Number(x.proxima_em) > agora))
+    .sort((a, b) => (Number(a.criada_em) || 0) - (Number(b.criada_em) || 0));
+}
+/** Item guardado há mais de 7 dias, ou de outra conta/empresa: sai na limpeza. */
+export function filaDescartavel(item, { conta, cliente, agora = Date.now() } = {}) {
+  if (!item || !item.id) return true;
+  if (conta && item.conta !== conta) return true;
+  if (cliente && item.cliente !== cliente) return true;
+  return agora - (Number(item.criada_em) || 0) > FILA_TTL_MS;
+}
+
+/** "Rascunho:" da lista: uma linha só, no máximo 80 caracteres. */
+export function textoRascunhoLista(texto, max = 80) {
+  const t = String(texto ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+}

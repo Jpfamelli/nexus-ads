@@ -59,7 +59,7 @@ const COLUNAS = {
   nx_metricas_dia: "cliente_id plataforma nivel data campanha_ext anuncio_ext campanha_nome anuncio_nome impressoes alcance frequencia cliques gasto conversoes valor_conversao atualizado_em",
   nx_leads: "id cliente_id telefone nome origem plataforma campanha_ext anuncio_ext ctwa_clid servico etapa data_conversa data_agenda data_consulta valor obs criado_em atualizado_em funil_id contato_id",
   nx_funis: "id cliente_id nome ordem padrao conta_no_ads ativo criado_em",
-  nx_mensagens: "id cliente_id conversa_id contato_id canal_id direcao tipo corpo midia wamid responde_a_wamid reacao status erro enviado_por origem template referral criado_em atualizado_em",
+  nx_mensagens: "id cliente_id conversa_id contato_id canal_id direcao tipo corpo midia wamid responde_a_wamid reacao status erro enviado_por origem template referral criado_em atualizado_em client_ref",
   nx_alertas: "id cliente_id chave regra severidade mensagem acao valor referencia criado_em enviado_em erro_envio wa_ids wa_ids_template entregue_em",
   nx_relatorios: "id cliente_id tipo referencia texto leitura_ia destinos enviado_em erro wa_ids wa_ids_template entregue_em",
   nx_travas: "nome ate dono",
@@ -288,6 +288,22 @@ function rpcsSaaS(api) {
                           origem: p_msg.origem === "lista" ? "automacao" : (p_msg.origem || (p_conta ? "painel" : null)), template: p_msg.template ?? null });
       if (p_conta && status !== "falhou") { cv.aguardando = false; cv.primeira_resposta_em ??= iso(); }
       return msgJson(m);
+    } },
+    // M36 (20261002d): o mesmo client_ref devolve a saída já gravada; marcar só vale uma vez e só em saída ('out')
+    nx_cv_ref_ver: { args: ["p_cliente", "p_conversa", "p_ref"], fn({ p_cliente, p_conversa, p_ref }) {
+      if (!/^[A-Za-z0-9:_.-]{8,80}$/.test(String(p_ref ?? ""))) throw e("dados_invalidos", { hint: "client_ref" });
+      const m = tab("nx_mensagens").find(x => x.cliente_id === p_cliente && x.client_ref === p_ref);
+      if (!m) return null;
+      if (m.conversa_id !== Number(p_conversa)) throw e("dados_invalidos", { hint: "client_ref" });
+      return msgJson(m);
+    } },
+    nx_cv_ref_marcar: { args: ["p_cliente", "p_mensagem", "p_ref"], fn({ p_cliente, p_mensagem, p_ref }) {
+      if (!/^[A-Za-z0-9:_.-]{8,80}$/.test(String(p_ref ?? ""))) throw e("dados_invalidos", { hint: "client_ref" });
+      const m = tab("nx_mensagens").find(x => x.id === p_mensagem && x.cliente_id === p_cliente && x.direcao === "out");
+      if (!m || m.client_ref) return false;
+      if (tab("nx_mensagens").some(x => x.cliente_id === p_cliente && x.client_ref === p_ref)) return false;   // índice único parcial
+      m.client_ref = p_ref;
+      return true;
     } },
     nx_cv_ia_pausa_auto: { args: ["p_cliente", "p_conversa", "p_por", "p_conta"], fn({ p_cliente, p_conversa }) {
       const cv = conversa(p_conversa);
@@ -1144,10 +1160,102 @@ test("nx-enviar CodeWords (aparelho): HTTP 408/425 do gateway é AMBÍGUO como o
   }
 });
 
-test("nx-enviar: o modo workflow/Runtime API (client_ref, service_id) foi removido do envio — só o aparelho", () => {
+test("nx-enviar: o modo workflow/Runtime API (service_id, /run/) foi removido do envio — só o aparelho; client_ref é a IDEMPOTÊNCIA do painel (M36), não um workflow", () => {
   const sem = f => readFileSync(join(RAIZ, "supabase/functions/_compartilhado", f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  for (const f of ["enviar.js", "codewords.js"]) assert.ok(!/client_?ref|\/run\/\$\{|clientRef/i.test(sem(f)), `${f} sem envio por workflow`);
+  for (const f of ["enviar.js", "codewords.js"]) assert.ok(!/\/run\/\$\{/.test(sem(f)), `${f} sem envio por workflow`);
+  assert.ok(!/clientRef/.test(sem("codewords.js")) && !/client_ref/.test(sem("codewords.js")), "o aparelho do CodeWords não sabe de client_ref");
   assert.ok(!/codewords_service_id/.test(sem("enviar.js")), "nx-enviar não escolhe caminho por service_id");
+  assert.match(sem("enviar.js"), /nx_cv_ref_ver/, "o envio consulta o client_ref ANTES de falar com a Meta/CodeWords");
+});
+
+/* ============================================================ M36 — envio idempotente por client_ref */
+const REF1 = "orbita:5c1b0d3e-0000-4000-8000-000000000001", REF2 = "orbita:5c1b0d3e-0000-4000-8000-000000000002";
+
+test("M36 nx-enviar: o MESMO client_ref duas vezes = 1 mensagem e 1 chamada externa (a 2ª devolve a gravada, repetida:true)", async () => {
+  const s = cenario();
+  const a = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Custa R$ 500.", client_ref: REF1 }), ENV, s.deps()));
+  const b = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Custa R$ 500.", client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(a.corpo.ok, true); assert.equal(b.corpo.ok, true);
+  assert.equal(graphMsgs(s).length, 1, "uma só chamada à Graph");
+  assert.equal(s.rpcs("nx_cv_saida").length, 1, "uma só saída gravada");
+  assert.equal(b.corpo.repetida, true);
+  assert.equal(b.corpo.mensagem.id, a.corpo.mensagem.id, "devolve a MESMA mensagem");
+  assert.equal(s.tab("nx_mensagens").filter(m => m.client_ref === REF1).length, 1);
+  assert.equal(a.corpo.repetida, undefined, "a 1ª não é repetição");
+});
+
+test("M36 nx-enviar: outro client_ref é outra intenção; sem client_ref tudo segue como antes", async () => {
+  const s = cenario();
+  await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "um", client_ref: REF1 }), ENV, s.deps());
+  await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "dois", client_ref: REF2 }), ENV, s.deps());
+  await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "tres" }), ENV, s.deps());
+  await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "quatro" }), ENV, s.deps());
+  assert.equal(graphMsgs(s).length, 4);
+  assert.equal(s.rpcs("nx_cv_saida").length, 4);
+  assert.equal(s.rpcs("nx_cv_ref_ver").length, 2, "só consulta quando há client_ref");
+  assert.equal(s.rpcs("nx_cv_ref_marcar").length, 2);
+});
+
+test("M36 nx-enviar: client_ref malformado → 400 dados_invalidos (client_ref) sem falar com a Graph; ref de OUTRA conversa também", async () => {
+  const s = cenario();
+  for (const ruim of ["curto", "com espaço e ; ponto", "x".repeat(81), 42, { a: 1 }]) {
+    const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "oi", client_ref: ruim }), ENV, s.deps()));
+    assert.equal(r.status, 400, JSON.stringify(ruim));
+    assert.equal(r.corpo.erro, "dados_invalidos");
+  }
+  assert.equal(graphMsgs(s).length, 0);
+  // o ref já usado na conversa 601 não vale para outra conversa do mesmo cliente
+  await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "oi", client_ref: REF1 }), ENV, s.deps());
+  const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 602, texto: "oi", client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(r.corpo.erro === "dados_invalidos" || r.corpo.erro === "fora_da_janela", true);
+  assert.equal(graphMsgs(s).length, 1, "a outra conversa não enviou nada");
+});
+
+test("M36 nx-enviar: saída que FALHOU repete como falha (sem 2ª chamada); a nova tentativa é outra intenção (outro client_ref)", async () => {
+  const s = cenario();
+  const a = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 603, texto: "oi", client_ref: REF1 }, "tok-adm-b", CLI_B), ENV, s.deps()));
+  assert.equal(a.corpo.erro, "envio_falhou");
+  const nGraph = s.estado.graph.length;
+  const b = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 603, texto: "oi", client_ref: REF1 }, "tok-adm-b", CLI_B), ENV, s.deps()));
+  assert.equal(b.corpo.ok, false); assert.equal(b.corpo.erro, "envio_falhou"); assert.equal(b.corpo.repetida, true);
+  assert.equal(b.corpo.mensagem.id, a.corpo.mensagem.id);
+  assert.equal(s.estado.graph.length, nGraph, "nenhuma chamada nova à Graph");
+  assert.equal(s.rpcs("nx_cv_saida").length, 1);
+  await enviar(painel("nx-enviar", { acao: "texto", conversa: 603, texto: "oi", client_ref: REF2 }, "tok-adm-b", CLI_B), ENV, s.deps());
+  assert.equal(s.rpcs("nx_cv_saida").length, 2, "client_ref novo tenta de novo");
+});
+
+test("M36 nx-enviar CodeWords: saída em dúvida (timeout) repete como AMBÍGUA — nunca reenvia ao aparelho sozinha", async () => {
+  const s = cenario();
+  canalAparelho(s);
+  s.estado.codewordsHandler = () => jsonResp({ error: "gateway" }, 504);
+  const a = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá", client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(a.corpo.ambigua, true);
+  assert.equal(envioProxy(s).length, 1);
+  const b = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "Olá", client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(b.corpo.ok, true); assert.equal(b.corpo.ambigua, true); assert.equal(b.corpo.repetida, true);
+  assert.equal(b.corpo.mensagem.id, a.corpo.mensagem.id);
+  assert.equal(envioProxy(s).length, 1, "o aparelho não recebeu uma 2ª ordem de envio");
+});
+
+test("M36 nx-enviar: repetir depois de a conversa ser RESOLVIDA devolve a saída que já existe (não erro de conversa resolvida)", async () => {
+  const s = cenario();
+  const a = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "oi", client_ref: REF1 }), ENV, s.deps()));
+  s.tab("nx_conversas").find(c => c.id === 601).status = "resolvida";
+  const b = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "oi", client_ref: REF1 }), ENV, s.deps()));
+  assert.equal(b.corpo.ok, true); assert.equal(b.corpo.repetida, true); assert.equal(b.corpo.mensagem.id, a.corpo.mensagem.id);
+});
+
+test("M36 nx-enviar: sem a migração 20261002d (nx_cv_ref_ver inexistente → 404) o envio segue como sempre, sem travar o chat", async () => {
+  const s = cenario();
+  const semFuncao = (entrada, init) => {
+    const req = new Request(entrada, init);
+    if (new URL(req.url).pathname.endsWith("/rpc/nx_cv_ref_ver")) return Promise.resolve(jsonResp({ code: "PGRST202", message: "Could not find the function public.nx_cv_ref_ver(p_cliente, p_conversa, p_ref) in the schema cache" }, 404));
+    return s.fetch(entrada, init);
+  };
+  const r = await ler(await enviar(painel("nx-enviar", { acao: "texto", conversa: 601, texto: "oi", client_ref: REF1 }), ENV, s.deps({ fetch: semFuncao })));
+  assert.equal(r.corpo.ok, true);
+  assert.equal(graphMsgs(s).length, 1);
 });
 
 test("nx-enviar texto fora da janela → fora_da_janela SEM chamar a Graph; resolvida → conversa_resolvida", async () => {

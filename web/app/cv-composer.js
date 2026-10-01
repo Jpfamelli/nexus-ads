@@ -38,11 +38,13 @@ export function criarComposer(A) {
   const painelGravacao = h("div", { class: "cvx-gravacao", role: "status", "aria-live": "polite", hidden: true },
     h("span", { class: "cvx-rec-ponto", "aria-hidden": "true" }), h("span", {}, "Gravando"), tempoGravacao, btCancelarGravacao);
   const resp = h("div", { class: "cvx-resp", hidden: true });
+  const seloRasc = h("div", { class: "cvx-rasc-selo" });       // "Rascunho restaurado · descartar" (o ctx.rascunho põe o selo aqui)
+  let rasc = null;                                               // rascunho do campo ligado a esta conversa (ctx.rascunho.ligar)
   const trava = h("div", { class: "cvx-trava", hidden: true });
   const iaTrab = h("div", { class: "cvx-ia-trab", hidden: true, role: "status" }, "Escrevendo…");
   const dica = h("p", { class: "cvx-dica" }, h("kbd", null, "Enter"), " envia · ", h("kbd", null, "Shift"), "+", h("kbd", null, "Enter"), " quebra linha · ", h("kbd", null, "/"), " respostas rápidas");
   const rr = h("div", { class: "cvx-rr", role: "listbox", "aria-label": "Respostas rápidas", hidden: true, id: "cvx-rr" });
-  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, resp, iaTrab, trava, capInfo, painelGravacao, linha, dica, arquivo);
+  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, resp, iaTrab, trava, capInfo, painelGravacao, seloRasc, linha, dica, arquivo);
 
   ta.setAttribute("aria-controls", "cvx-rr");
   ta.setAttribute("aria-autocomplete", "list");
@@ -165,6 +167,18 @@ export function criarComposer(A) {
     autoAltura();
   }
 
+  /** M36: o que se digita fica guardado no aparelho (por conversa, e a nota à parte) e volta depois de recarregar, da sessão cair ou da aba ser descartada. */
+  function ligarRascunho() {
+    if (rasc) { try { rasc.desligar(); } catch { /* ok */ } rasc = null; }
+    ui.limpar(seloRasc);
+    const r = A.ctx && A.ctx.rascunho;
+    if (!r || !A.selId || typeof r.ligar !== "function") return;
+    rasc = r.ligar(ta, `conversa:${A.selId}${modoNota ? ":nota" : ""}`, { seloEm: seloRasc });
+    if (rasc && rasc.restaurado) { autoAltura(); A.acoes.rascunhoMudou(); }
+  }
+  /** Apaga o rascunho guardado — só depois de o servidor/fila terem a mensagem (e se a pessoa já não digitou outra coisa). */
+  function apagarRascunho() { if (rasc && !ta.value.trim()) { try { rasc.apagar(); } catch { /* ok */ } } }
+
   function definirConversa() {
     if (gravacao) pararGravacao(true);
     modoNota = false;
@@ -172,6 +186,7 @@ export function criarComposer(A) {
     fecharRR();
     desenharResposta();
     ta.value = (A.selId && A.rascunhos.get(A.selId)) || "";
+    ligarRascunho();
     atualizar();
     el.hidden = false;
     if (!matchMedia("(pointer: coarse)").matches && podeTexto()) setTimeout(() => ta.focus({ preventScroll: true }), 30);
@@ -185,7 +200,14 @@ export function criarComposer(A) {
 
   /* ---------------- nota interna */
   function alternarNota(forcar) {
+    const antes = modoNota;
     modoNota = typeof forcar === "boolean" ? forcar : !modoNota;
+    if (modoNota !== antes && rasc) {            // o texto digitado acompanha a pessoa para o outro modo: o rascunho antigo sai e o novo nasce
+      try { rasc.apagar(); if (typeof rasc.parar === "function") rasc.parar(); else rasc.desligar(); } catch { /* ok */ }
+      rasc = null;
+      ligarRascunho();
+      if (rasc && ta.value.trim()) rasc.salvarAgora();
+    }
     if (modoNota) { respondendo = null; desenharResposta(); fecharRR(); }
     atualizar();
     if (!ta.disabled) ta.focus();
@@ -265,6 +287,7 @@ export function criarComposer(A) {
 
   ta.addEventListener("input", () => {
     autoAltura();
+    if (!modoNota && A.selId) { A.rascunhos.set(A.selId, ta.value); A.acoes.rascunhoMudou(); }
     if (modoNota) return;
     const t = L.termoBarra(ta.value);
     if (t !== null) abrirRR(t); else if (rrAberto) fecharRR();
@@ -291,7 +314,7 @@ export function criarComposer(A) {
       try {
         await A.acoes.nota(texto);
         ta.value = ""; autoAltura();
-        A.rascunhos.delete(A.selId);
+        apagarRascunho();
         alternarNota(false);
       } catch (e) { A.acoes.tratarErro(e); }
       finally { btEnviar.disabled = !podeTexto(); }
@@ -301,8 +324,10 @@ export function criarComposer(A) {
     ta.value = ""; autoAltura();
     respondendo = null; desenharResposta();
     A.rascunhos.delete(A.selId);
+    A.acoes.rascunhoMudou();
     ta.focus();
-    await A.acoes.enviar({ tipo: "texto", texto, respondeA: citada });
+    const r = await A.acoes.enviar({ tipo: "texto", texto, respondeA: citada });
+    if (r && r.persistido !== false) apagarRascunho();      // a mensagem está na fila (IndexedDB): o rascunho cumpriu o papel
   }
 
   /* ---------------- anexos */
@@ -589,7 +614,16 @@ export function criarComposer(A) {
   return {
     el, atualizar, definirConversa, responder, anexar, aceitaAnexo, abrirModelos,
     lerRascunho() { return ta.value; },
-    desmontar() { if (gravacao) pararGravacao(true); },
+    /** "Cancelar" na fila: o texto volta ao campo (se já houver algo, vai embaixo). */
+    devolverTexto(texto) {
+      const t = String(texto || "");
+      if (!t) return;
+      ta.value = ta.value.trim() ? `${ta.value.replace(/\s+$/, "")}\n${t}` : t;
+      if (modoNota) alternarNota(false);
+      autoAltura(); ta.focus();
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+    desmontar() { if (gravacao) pararGravacao(true); if (rasc) { try { rasc.desligar(); } catch { /* ok */ } rasc = null; } },
     focar() { if (!ta.disabled) ta.focus(); },
   };
 }

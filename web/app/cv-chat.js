@@ -403,6 +403,17 @@ export function criarChat(A) {
       box.appendChild(h("button", { type: "button", class: "bt-icone cv-responder", "aria-label": "Responder a esta mensagem", title: "Responder",
         on: { click: () => A.composer.responder(m) } }, A.icone("responder")));
     }
+    // M36: a fila de saída — "Na fila", "tentando de novo" (prazo estourado: o servidor não deixa sair em dobro) e a falha definitiva logo abaixo
+    if (m.local && (m.filaEstado === "fila" || m.filaEstado === "incerto")) {
+      const fila = h("div", { class: "cv-fila", role: "status" },
+        h("span", { class: "cv-fila-t" }, ui.icone("relogio"), m.filaEstado === "incerto"
+          ? "Sem resposta do servidor · tentando de novo (nada sai em dobro)" : m.erro && /sessão/i.test(m.erro) ? m.erro : "Na fila · envia quando a internet voltar"));
+      if (m.filaEstado === "fila" && A.podeEscrever) {
+        fila.append(h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.enviarAgora(m) } }, "Enviar agora"),
+          h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.cancelarFila(m) } }, "Cancelar"));
+      }
+      box.appendChild(fila);
+    }
     const ambigua = m.ambigua === true || (m.status === "pendente" && /^status incerto:/i.test(String(m.erro || "")));
     if (m.status === "falhou" || (m.status === "pendente" && ambigua)) {
       const erro = ambigua
@@ -427,7 +438,7 @@ export function criarChat(A) {
     const m = ln.msg;
     const md = m.midia || {};
     const urlOk = md.path ? A.acoes.estadoMidia(md.path) : "";
-    return [m.atualizado_em, m.status, m.erro, m.ambigua, m.origem, m.reacao, ln.junta, md.estado, md.progresso, md.fase, m.local && A.acoes.podeCancelarEnvio(m) ? 1 : 0, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
+    return [m.atualizado_em, m.status, m.erro, m.ambigua, m.filaEstado, m.origem, m.reacao, ln.junta, md.estado, md.progresso, md.fase, m.local && A.acoes.podeCancelarEnvio(m) ? 1 : 0, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
       m.responde_a && m.responde_a.id, m.enviado_por && m.enviado_por.nome].join("|");
   }
 
@@ -462,6 +473,7 @@ export function criarChat(A) {
       let x = cache.get(chave);
       if (!x || x.sig !== sig) {
         const novo = construirLinha(ln);
+        if (!x && ultimoRenderId !== null && ln.tipo === "msg") novo.classList.add("entra");
         if (x && x.el.isConnected) x.el.replaceWith(novo);
         x = { el: novo, sig };
         cache.set(chave, x);
