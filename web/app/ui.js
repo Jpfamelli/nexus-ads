@@ -7,12 +7,27 @@
 
    Classes de apoio que os módulos podem usar no próprio HTML
    (estilo em app.css): botões .bt + .bt-prim | .bt-sec | .bt-fant |
-   .bt-perigo, tamanhos .bt-p | .bt-g, .bt-icone (redondo, só ícone);
-   .cartao (cartão opaco), .cartao-cab, .rotulo (Plex 11 px caixa alta),
-   .titulo-pag (Clash), .sub, .grade-2/.grade-3 (minmax), .pilha (coluna
-   com gap), .linha (flex com gap), .fita (barra de ferramentas), .sel
-   (select pílula), .busca (campo de busca com ícone), .mono (Plex),
-   .sr-only, .num-grande (Clash, número), .aviso(.aviso-ruim|-aten|-ok).
+   .bt-perigo | .bt-contorno-perigo, tamanhos .bt-p | .bt-g, .bt-icone
+   (redondo, só ícone); .cartao (cartão opaco), .cartao-cab, .rotulo
+   (Satoshi 600 13 px), .dado (Plex: protocolo, hora, telefone, ID),
+   .selo-caps (único caixa-alta), .narr (Zodiak itálica: manchetes,
+   vazios, resumo de IA), .num-moeda (R$ e centavos a 60 %), .entra /
+   .assenta / .destaque (movimento), .titulo-pag (Clash), .sub,
+   .grade-2/.grade-3 (minmax), .pilha (coluna com gap), .linha (flex
+   com gap), .fita (barra de ferramentas), .sel (select pílula), .busca
+   (campo de busca com ícone), .mono (Plex), .sr-only, .num-grande
+   (Clash, número), .aviso(.aviso-ruim|-aten|-ok).
+
+   Contratos da linguagem visual (plano de 01/10/2026, frente A):
+   cabecalho({rotulo?, titulo, sub?, acoes?, nivel: 1|2}) → <header>;
+   segmentado({opcoes:[{valor, rotulo, contador?}], valor, tipo:
+   "abas"|"filtro", aoMudar}) → <div role=tablist> (.ativar, .contar, .valor);
+   toqueLongo(el, fn, {ms}) e deslizar(el, {esquerda?, direita?}) → desligar();
+   esqueleto(tipo, opcoes) / trocarEsqueleto(el, conteudo);
+   erroCartao(erro, tentar) refaz sozinho em "orbita:online";
+   acaoComDesfazer({texto, aplicar, reverter, ms}) → Promise<{estado, desfeita, erro?}>
+   (Ctrl/⌘+Z desfaz a mais recente, fila de 3); modal/gaveta({protegerTexto = true});
+   campo({validar: "telefone"|"email"|"senha"|"moeda"|fn}); vazio({tipo, ...}).
    ============================================================ */
 
 const VERSAO = (() => { try { return new URL(import.meta.url).searchParams.get("v") || "dev"; } catch { return "dev"; } })();
@@ -31,7 +46,21 @@ const novoId = p => `${p || "u"}-${++_seq}`;
 
 /** O shell liga o tradutor de erros (api.mensagemErro). */
 export function configurar({ mensagemErro } = {}) { if (typeof mensagemErro === "function") _mensagemErro = mensagemErro; }
-export function mensagemErro(e) { return _mensagemErro(e); }
+
+const RE_ERRO_IMPORT = /dynamically imported module|importing a module script|module script failed|error loading dynamically/i;
+const RE_ERRO_REDE = /failed to fetch|networkerror|load failed|network request failed|fetch failed|err_internet|err_network/i;
+/** Tira jargão e endereço de mensagens que vêm do navegador ("Failed to fetch dynamically imported module: https://…"):
+    erro de transporte e de import() viram frase em português, sem URL. Texto que já é frase de produto passa intacto. */
+export function fraseDeErro(texto, { bruto = false } = {}) {
+  const t = String(texto ?? "");
+  if (RE_ERRO_IMPORT.test(t)) return "Não foi possível abrir esta tela agora. Confira a internet e tente de novo.";
+  if (RE_ERRO_REDE.test(t)) return "Sem conexão com o servidor. Confira a internet e tente de novo.";
+  if (bruto && /https?:\/\//i.test(t)) return "Não deu certo agora. Tente de novo.";
+  return t;
+}
+export function mensagemErro(e) {
+  return fraseDeErro(_mensagemErro(e), { bruto: e instanceof Error && !e.codigo });
+}
 export const versao = VERSAO;
 
 /* ============================================================
@@ -126,46 +155,54 @@ function mostrarNoTopo(el) {
    ============================================================ */
 let _toasts = null;
 function caixaToasts() {
-  if (_toasts && _toasts.isConnected) return _toasts;
+  if (_toasts && document.contains(_toasts)) return _toasts;
   _toasts = document.getElementById("toasts") || h("div", { id: "toasts" });
   _toasts.classList.add("toasts");
   _toasts.setAttribute("popover", "manual");
-  _toasts.setAttribute("aria-live", "polite");
-  _toasts.setAttribute("aria-relevant", "additions");
+  // o anúncio ao leitor de tela é de ui.anunciar (uma só voz); a caixa deixa de ser aria-live para não falar duas vezes
+  _toasts.removeAttribute("aria-live");
+  _toasts.removeAttribute("aria-relevant");
   if (!_toasts.isConnected) document.body.appendChild(_toasts);
   return _toasts;
 }
 
-/** toast(texto, {tipo:'ok'|'erro'|'info', desfazer:fn, ms:5000}) → {fechar} */
-export function toast(texto, { tipo = "info", desfazer = null, ms } = {}) {
+/** toast(texto, {tipo:'ok'|'erro'|'info', desfazer:fn, ms:5000, aoFechar(motivo)}) → {fechar, el}
+    motivo de aoFechar: "tempo" | "fechado" | "desfazer" | "fila". Todo toast é anunciado ao leitor de tela (erro, de forma urgente). */
+export function toast(texto, { tipo = "info", desfazer = null, ms, aoFechar = null } = {}) {
   const caixa = caixaToasts();
   const dur = ms ?? (tipo === "erro" ? 7000 : desfazer ? 7000 : 4500);
-  let timer = null;
-  const fechar = () => {
+  let timer = null, fechado = false;
+  const fechar = (motivo = "fechado") => {
+    if (fechado) return; fechado = true;
     clearTimeout(timer);
     el.classList.add("saindo");
     setTimeout(() => { el.remove(); if (!caixa.children.length && caixa.hidePopover) try { caixa.hidePopover(); } catch { /* ok */ } }, 180);
+    if (aoFechar) try { aoFechar(motivo); } catch (e) { console.error(e); }
   };
-  const el = h("div", { class: ["toast", `toast-${tipo}`], role: tipo === "erro" ? "alert" : "status" },
+  const el = h("div", { class: ["toast", `toast-${tipo}`] },
     icone(tipo === "ok" ? "check" : tipo === "erro" ? "alerta" : "info"),
     h("p", null, String(texto)),
-    desfazer ? h("button", { type: "button", class: "toast-acao", on: { click: () => { fechar(); desfazer(); } } }, "Desfazer") : null,
-    h("button", { type: "button", class: "toast-x", "aria-label": "Fechar aviso", on: { click: fechar } }, icone("fechar")));
+    desfazer ? h("button", { type: "button", class: "toast-acao", on: { click: () => { fechar("desfazer"); desfazer(); } } }, "Desfazer") : null,
+    h("button", { type: "button", class: "toast-x", "aria-label": "Fechar aviso", on: { click: () => fechar("fechado") } }, icone("fechar")));
+  el.__fechar = fechar;
   caixa.appendChild(el);
-  while (caixa.children.length > 4) caixa.firstElementChild.remove();
+  const vivos = [...caixa.children].filter(c => !c.classList.contains("saindo"));
+  for (const c of vivos.slice(0, Math.max(0, vivos.length - 4))) { if (c.__fechar) c.__fechar("fila"); else c.remove(); }
   mostrarNoTopo(caixa);
   if (dur > 0) {
-    timer = setTimeout(fechar, dur);
+    timer = setTimeout(() => fechar("tempo"), dur);
     el.addEventListener("mouseenter", () => clearTimeout(timer));
-    el.addEventListener("mouseleave", () => { timer = setTimeout(fechar, 2500); });
+    el.addEventListener("mouseleave", () => { if (!fechado) timer = setTimeout(() => fechar("tempo"), 2500); });
   }
-  return { fechar };
+  anunciar(String(texto), { urgente: tipo === "erro" });
+  return { fechar: () => fechar("fechado"), el };
 }
 
-/** Anúncio só para leitor de tela (aria-live). */
-export function anunciar(texto) {
-  let r = document.getElementById("anuncio");
-  if (!r) { r = h("div", { id: "anuncio", class: "sr-only", "aria-live": "polite" }); document.body.appendChild(r); }
+/** Anúncio só para leitor de tela (aria-live). `urgente` usa a região assertiva (erros). */
+export function anunciar(texto, { urgente = false } = {}) {
+  const id = urgente ? "anuncio-urgente" : "anuncio";
+  let r = document.getElementById(id);
+  if (!r) { r = h("div", { id, class: "sr-only", "aria-live": urgente ? "assertive" : "polite", "aria-atomic": "true" }); document.body.appendChild(r); }
   r.textContent = "";
   setTimeout(() => { r.textContent = String(texto); }, 30);
 }
@@ -253,9 +290,65 @@ function focarPrimeiro(raiz) {
   if (alvo) try { alvo.focus({ preventScroll: true }); } catch { alvo.focus(); }
 }
 
-/** modal({titulo, corpo, acoes:[{rotulo, tipo, fn, valor}], largura:'p'|'m'|'g', aoAbrir}) → Promise<valor>.
-    fn(api) pode ser async; devolver false mantém aberto; erro lançado aparece dentro do modal. Esc/fechar → null. */
-export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora = true, descricao } = {}) {
+/** Celular/tablet: o toque abre o teclado se o foco cair num campo, então o diálogo foca a si mesmo (M08). */
+function toqueGrosso() {
+  try { return typeof matchMedia === "function" && !!matchMedia("(pointer: coarse)").matches; } catch { return false; }
+}
+/** Foco inicial de um diálogo: em toque, o próprio diálogo (tabindex -1); com mouse/teclado, o 1º campo (ou o rodapé). */
+function focoInicial(dlg, alvoDesktop) {
+  if (toqueGrosso()) {
+    dlg.setAttribute("tabindex", "-1");
+    try { dlg.focus({ preventScroll: true }); } catch { try { dlg.focus(); } catch { /* ok */ } }
+    return;
+  }
+  if (alvoDesktop) focarPrimeiro(alvoDesktop);
+}
+
+/* ------------------------------------------------------------
+   Proteção do texto digitado (M08): modal e gaveta comparam o formulário da abertura com o atual.
+   Só o que a PESSOA mexeu conta (a base acompanha formulários preenchidos por RPC depois de abrir) e só os campos
+   com `name` (como ui.lerForm); busca (type=search), arquivo e [data-sem-protecao] ficam de fora.
+   Esc, clique fora e Voltar do navegador abrem a faixa "Descartar o que você digitou?"; os botões do próprio diálogo não.
+   ------------------------------------------------------------ */
+const TIPOS_SEM_PROTECAO = new Set(["search", "file", "button", "submit", "reset", "image"]);
+function assinaturaForm(raiz) {
+  const partes = [];
+  for (const el of raiz.querySelectorAll("input[name], select[name], textarea[name]")) {
+    const t = String(el.type || "").toLowerCase();
+    if (TIPOS_SEM_PROTECAO.has(t) || (el.hasAttribute && el.hasAttribute("data-sem-protecao"))) continue;
+    const v = t === "checkbox" || t === "radio" ? (el.checked ? "1" : "0") : String(el.value ?? "").trim();
+    partes.push(`${el.name}\u0001${t}\u0001${v}`);
+  }
+  return hashNum(partes.join("\u0002"));   // só o hash fica na memória (pode haver senha digitada)
+}
+function criarProtecao(raiz, ativo) {
+  let base = null, tocou = false;
+  const confiavel = ev => !ev || ev.isTrusted !== false;
+  if (ativo) {
+    setTimeout(() => { if (!tocou) base = assinaturaForm(raiz); }, 0);
+    const antes = () => { if (!tocou) base = assinaturaForm(raiz); };      // formulário preenchido por RPC depois de abrir não conta como "digitado"
+    for (const ev of ["pointerdown", "keydown", "focusin"]) raiz.addEventListener(ev, antes, true);
+    const mexeu = ev => { if (confiavel(ev)) tocou = true; };
+    for (const ev of ["input", "change", "click", "paste", "cut", "drop"]) raiz.addEventListener(ev, mexeu, true);
+  }
+  return {
+    sujo: () => !!ativo && tocou && base !== null && assinaturaForm(raiz) !== base,
+    zerar: () => { tocou = false; base = assinaturaForm(raiz); },
+  };
+}
+/** Faixa "Descartar o que você digitou?" (insere-se entre o cabeçalho e o corpo). */
+function criarFaixaDescartar(aoDescartar, aoContinuar) {
+  const continuar = h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => aoContinuar() } }, "Continuar editando");
+  const descartar = h("button", { type: "button", class: "bt bt-contorno-perigo bt-p", on: { click: () => aoDescartar() } }, icone("lixeira"), "Descartar");
+  const el = h("div", { class: "protege-faixa", role: "alert", hidden: true },
+    h("p", null, "Descartar o que você digitou?"), h("div", { class: "linha" }, continuar, descartar));
+  return { el, continuar };
+}
+
+/** modal({titulo, corpo, acoes:[{rotulo, tipo, fn, valor}], largura:'p'|'m'|'g', aoAbrir, protegerTexto = true}) → Promise<valor>.
+    fn(api) pode ser async; devolver false mantém aberto; erro lançado aparece dentro do modal. Esc/fechar → null.
+    protegerTexto: Esc, clique fora e Voltar com texto digitado pedem confirmação (X e botões do rodapé fecham direto). */
+export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora = true, descricao, protegerTexto = true } = {}) {
   return new Promise(resolve => {
     const anterior = document.activeElement;
     const idT = novoId("modal-t");
@@ -264,8 +357,10 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
     const lista = acoes && acoes.length ? acoes : [{ rotulo: "Fechar", tipo: "neutro", valor: null }];
     let feito = false, camada = null;
     const dlg = h("dialog", { class: ["modal", `modal-${largura}`], "aria-labelledby": idT });
+    const prot = criarProtecao(corpoEl, protegerTexto !== false);
     const api = {
       el: dlg, corpo: corpoEl,
+      estaSujo: () => prot.sujo(),
       fechar(v = null) {
         if (feito) return; feito = true;
         if (camada) camada.liberar();
@@ -275,6 +370,26 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
       },
       erro(texto) { erro.textContent = texto || ""; erro.hidden = !texto; },
     };
+    const faixa = criarFaixaDescartar(() => api.fechar(null), () => { faixa.el.hidden = true; });
+    /** Esc, clique fora e Voltar: com texto digitado mostra a faixa em vez de fechar. Devolve true se fechou. */
+    function tentarFechar() {
+      if (feito) return true;
+      if (prot.sujo()) {
+        if (faixa.el.hidden) { faixa.el.hidden = false; try { faixa.continuar.focus({ preventScroll: true }); } catch { /* ok */ } }
+        else faixa.el.hidden = true;     // 2º Esc: dispensa o aviso e volta a editar
+        return false;
+      }
+      api.fechar(null);
+      return true;
+    }
+    const abrirCamada = () => camadas.abrir(() => {
+      if (feito) return;
+      if (prot.sujo()) {
+        tentarFechar();
+        // o Voltar gastou a entrada do histórico: recoloca depois do popstate (dentro dele a pilha ainda está sendo esvaziada)
+        setTimeout(() => { if (!feito) camada = abrirCamada(); }, 0);
+      } else api.fechar(null);
+    });
     const botoes = lista.map(a => {
       const b = h("button", { type: "button", class: ["bt", a.tipo === "primario" ? "bt-prim" : a.tipo === "perigo" ? "bt-perigo" : "bt-sec"],
         dataset: { tipo: a.tipo || "neutro" }, disabled: !!a.desabilitado }, a.rotulo);
@@ -298,16 +413,18 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
       h("header", { class: "modal-cab" },
         h("h2", { id: idT }, titulo || ""),
         h("button", { type: "button", class: "bt-icone modal-x", "aria-label": "Fechar", on: { click: () => api.fechar(null) } }, icone("fechar"))),
+      faixa.el,
       corpoEl,
       h("footer", { class: "modal-rod" }, botoes));
-    dlg.addEventListener("cancel", ev => { ev.preventDefault(); api.fechar(null); });
+    dlg.addEventListener("cancel", ev => { ev.preventDefault(); tentarFechar(); });
     dlg.addEventListener("mousedown", ev => { if (fecharFora && ev.target === dlg) dlg.dataset.fora = "1"; });
-    dlg.addEventListener("click", ev => { if (fecharFora && ev.target === dlg && dlg.dataset.fora === "1") api.fechar(null); delete dlg.dataset.fora; });
+    dlg.addEventListener("click", ev => { if (fecharFora && ev.target === dlg && dlg.dataset.fora === "1") tentarFechar(); delete dlg.dataset.fora; });
     dlg.addEventListener("submit", ev => { ev.preventDefault(); if (primario && !primario.disabled) primario.click(); });
+    if (toqueGrosso()) dlg.setAttribute("autofocus", "");
     document.body.appendChild(dlg);
     dlg.showModal();
-    camada = camadas.abrir(() => api.fechar(null));   // botão Voltar do navegador fecha o modal
-    focarPrimeiro(corpoEl.querySelector("input,select,textarea") ? corpoEl : dlg.querySelector(".modal-rod"));
+    camada = abrirCamada();   // botão Voltar do navegador fecha o modal (ou pergunta, se houver texto digitado)
+    focoInicial(dlg, corpoEl.querySelector("input,select,textarea") ? corpoEl : dlg.querySelector(".modal-rod"));
     if (aoAbrir) try { aoAbrir(api); } catch (e) { console.error(e); }
   });
 }
@@ -319,7 +436,7 @@ export async function confirmar({ titulo = "Confirmar", texto = "", perigo = fal
     texto ? h("p", { class: "confirma-txt" }, texto) : null,
     digitar ? (campoDig = campo({ rotulo: `Digite «${digitar}» para confirmar`, nome: "digitar", autocomplete: "off" })) : null);
   const r = await modal({
-    titulo, corpo, largura: "p",
+    titulo, corpo, largura: "p", protegerTexto: false,
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: false },
       { rotulo: rotulo || (perigo ? "Excluir" : "Confirmar"), tipo: perigo ? "perigo" : "primario",
@@ -334,16 +451,19 @@ export async function confirmar({ titulo = "Confirmar", texto = "", perigo = fal
   return r === true;
 }
 
-/** gaveta({titulo, corpo, largura:'m'|'g', aoFechar, acoes:Node}) → {el, corpo, fechar, trocarTitulo} */
-export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes } = {}) {
+/** gaveta({titulo, corpo, largura:'m'|'g', aoFechar, acoes:Node, protegerTexto = true}) → {el, corpo, fechar, trocarTitulo, estaSujo}
+    Esc e clique fora com texto digitado pedem confirmação; fechar() (botões, código) fecha direto. */
+export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes, protegerTexto = true } = {}) {
   const anterior = document.activeElement;
   const idT = novoId("gav-t");
   const tit = h("h2", { id: idT }, titulo);
   const corpoEl = h("div", { class: "gaveta-corpo" }, corpo);
   const dlg = h("dialog", { class: ["gaveta", `gaveta-${largura}`], "aria-labelledby": idT });
   let fechada = false;
+  const prot = criarProtecao(corpoEl, protegerTexto !== false);
   const g = {
     el: dlg, corpo: corpoEl,
+    estaSujo: () => prot.sujo(),
     fechar() {
       if (fechada) return; fechada = true;
       dlg.classList.add("saindo");
@@ -356,18 +476,30 @@ export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes } = 
     },
     trocarTitulo(t) { tit.textContent = t || ""; },
   };
+  const faixa = criarFaixaDescartar(() => g.fechar(), () => { faixa.el.hidden = true; });
+  function tentarFechar() {
+    if (fechada) return;
+    if (prot.sujo()) {
+      if (faixa.el.hidden) { faixa.el.hidden = false; try { faixa.continuar.focus({ preventScroll: true }); } catch { /* ok */ } }
+      else faixa.el.hidden = true;
+      return;
+    }
+    g.fechar();
+  }
   dlg.append(
     h("header", { class: "gaveta-cab" },
       h("button", { type: "button", class: "bt-icone gaveta-voltar", "aria-label": "Fechar", on: { click: () => g.fechar() } }, icone("seta-esq")),
       tit, acoes || null,
       h("button", { type: "button", class: "bt-icone gaveta-x", "aria-label": "Fechar", on: { click: () => g.fechar() } }, icone("fechar"))),
+    faixa.el,
     corpoEl);
-  dlg.addEventListener("cancel", ev => { ev.preventDefault(); g.fechar(); });
+  dlg.addEventListener("cancel", ev => { ev.preventDefault(); tentarFechar(); });
   dlg.addEventListener("mousedown", ev => { if (ev.target === dlg) dlg.dataset.fora = "1"; });
-  dlg.addEventListener("click", ev => { if (ev.target === dlg && dlg.dataset.fora === "1") g.fechar(); delete dlg.dataset.fora; });
+  dlg.addEventListener("click", ev => { if (ev.target === dlg && dlg.dataset.fora === "1") tentarFechar(); delete dlg.dataset.fora; });
+  if (toqueGrosso()) dlg.setAttribute("autofocus", "");
   document.body.appendChild(dlg);
   dlg.showModal();
-  setTimeout(() => focarPrimeiro(corpoEl), 30);
+  if (toqueGrosso()) focoInicial(dlg, null); else setTimeout(() => focarPrimeiro(corpoEl), 30);
   return g;
 }
 
@@ -466,10 +598,55 @@ export function flutuante(ancora, conteudo, { classe = "", aoFechar, largura } =
 /* ============================================================
    Estados: vazio, esqueleto, erro
    ============================================================ */
-/** vazio({titulo, texto, acao:{rotulo, fn}, icone}) → Node */
-export function vazio({ titulo, texto, acao, icone: ic = "mais", acoes } = {}) {
-  const botoes = [...(acao ? [acao] : []), ...(acoes || [])].map((a, i) =>
-    h("button", { type: "button", class: ["bt", i === 0 ? "bt-prim" : "bt-sec"], on: { click: a.fn } }, a.icone ? icone(a.icone) : null, a.rotulo));
+/** Órbita em SVG (createElementNS via h, só classes de token): planeta + 2 órbitas + um satélite por passo, aceso quando feito. */
+function orbitaSvg({ total = 3, feitos = 0, selo = false } = {}) {
+  const n = Math.max(1, Math.min(8, total));
+  const sats = Array.from({ length: n }, (_, i) => {
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    return h("circle", { class: ["vo-sat", i < feitos && "vo-sat-on"], cx: (60 + 50 * Math.cos(a)).toFixed(1), cy: (60 + 24 * Math.sin(a)).toFixed(1), r: "5" });
+  });
+  return h("svg", { class: "vazio-orbita", viewBox: "0 0 120 120", "aria-hidden": "true", focusable: "false" },
+    h("g", { transform: "rotate(-18 60 60)" },
+      h("ellipse", { class: "vo-orbita", cx: "60", cy: "60", rx: "50", ry: "24" }),
+      h("ellipse", { class: ["vo-orbita", "vo-orbita-2"], cx: "60", cy: "60", rx: "30", ry: "14" }),
+      h("circle", { class: "vo-planeta", cx: "60", cy: "60", r: "9" }),
+      sats),
+    selo ? h("g", null, h("circle", { class: "vo-selo", cx: "98", cy: "24", r: "13" }), h("path", { class: "vo-selo-v", d: "M91.5 24.5 L96 29 L105 19.5" })) : null);
+}
+
+/** vazio({tipo, titulo, texto, acao:{rotulo, fn, icone?}, acoes, passos, icone}) → Node
+    tipo "primeiro_uso": órbita com um satélite por passo (aceso se feito) + lista de passos + 1 ação;
+    tipo "em_dia": selo ✓ na órbita + a frase (titulo) em .narr;
+    tipo "sem_resultado": 1 linha + ação ("Limpar filtros" por padrão).
+    Sem `tipo` mantém o vazio genérico de antes (ícone + título + texto). passos: ["texto" | {rotulo, feito}]. */
+export function vazio({ tipo, titulo, texto, acao, icone: ic = "mais", acoes, passos } = {}) {
+  const lista = [...(acao ? [acao] : []), ...(acoes || [])];
+  const botao = (a, i, extra) => h("button", { type: "button", class: ["bt", i === 0 ? "bt-prim" : "bt-sec", extra], on: { click: a.fn } },
+    a.icone ? icone(a.icone) : null, a.rotulo || (tipo === "sem_resultado" ? "Limpar filtros" : "Continuar"));
+  if (tipo === "sem_resultado") {
+    return h("div", { class: ["vazio", "vazio-sem"], dataset: { tipo } },
+      h("p", { class: "vazio-linha" }, titulo || "Nada encontrado.", texto ? ` ${texto}` : ""),
+      lista.length ? h("div", { class: "linha" }, lista.map((a, i) => botao(a, i === 0 ? 1 : i, "bt-p"))) : null);
+  }
+  if (tipo === "em_dia") {
+    return h("div", { class: ["vazio", "vazio-em-dia"], dataset: { tipo } },
+      orbitaSvg({ total: 3, feitos: 3, selo: true }),
+      h("div", { class: "vazio-txt" },
+        h("p", { class: "narr vazio-narr" }, titulo || "Tudo em dia."),
+        texto ? h("p", null, texto) : null,
+        lista.length ? h("div", { class: "linha vazio-acoes" }, lista.map((a, i) => botao(a, i === 0 ? 1 : i))) : null));
+  }
+  if (tipo === "primeiro_uso") {
+    const itens = (passos || []).map(p => typeof p === "string" ? { rotulo: p, feito: false } : { rotulo: p.rotulo, feito: !!p.feito });
+    return h("div", { class: ["vazio", "vazio-primeiro"], dataset: { tipo } },
+      orbitaSvg({ total: itens.length || 3, feitos: itens.filter(p => p.feito).length }),
+      h("div", { class: "vazio-txt" },
+        titulo ? h("h2", null, titulo) : null,
+        texto ? h("p", null, texto) : null,
+        itens.length ? h("ol", { class: "vazio-passos" }, itens.map(p => h("li", { dataset: { feito: p.feito ? "1" : "0" } }, p.rotulo))) : null,
+        lista.length ? h("div", { class: "linha vazio-acoes" }, lista.map((a, i) => botao(a, i))) : null));
+  }
+  const botoes = lista.map((a, i) => botao(a, i));
   return h("div", { class: "vazio" },
     h("div", { class: "vazio-ic", "aria-hidden": "true" }, icone(ic)),
     h("div", { class: "vazio-txt" },
@@ -478,28 +655,105 @@ export function vazio({ titulo, texto, acao, icone: ic = "mais", acoes } = {}) {
       botoes.length ? h("div", { class: "linha vazio-acoes" }, botoes) : null));
 }
 
-/** esqueleto('lista'|'cartoes'|'tabela'|'kanban', n) → Node com a geometria real */
-export function esqueleto(tipo = "lista", n = 6) {
+/** esqueleto(tipo, opcoes) → Node com a forma da tela (as mesmas classes de grade do conteúdo; a troca não desloca).
+    tipo: "inicio" | "chat" | "lista" | "kanban" | "ads" | "tabela" | "agenda" | "cartoes" (legado).
+    opcoes: número (= {n}) ou {n, cabecalho}. `cabecalho` (título + subtítulo + ação) vem ligado nas telas inteiras
+    (inicio, chat, ads, agenda) e desligado em lista/kanban/tabela/cartoes, que são só o miolo. */
+export function esqueleto(tipo = "lista", opcoes = {}) {
+  const o = typeof opcoes === "number" ? { n: opcoes } : (opcoes || {});
+  const n = o.n ?? (tipo === "inicio" ? 4 : tipo === "ads" ? 8 : 6);
+  const telaInteira = tipo === "inicio" || tipo === "chat" || tipo === "ads" || tipo === "agenda";
+  const comCab = o.cabecalho ?? telaInteira;
   const b = cls => h("span", { class: ["sk", cls] });
+  const cab = () => h("div", { class: "sk-cab" }, h("div", { class: "sk-cab-txt" }, b("sk-rotulo"), b("sk-titulo"), b("sk-sub")), b("sk-acao"));
+  const cartaoKpi = () => h("div", { class: "sk-cartao" }, b("sk-l1"), b("sk-num"), b("sk-l2"));
+  const itensLista = k => Array.from({ length: k }, () => h("div", { class: "sk-item" }, h("span", { class: "sk sk-av" }), h("div", { class: "sk-txt" }, b("sk-l1"), b("sk-l2"))));
   let corpo;
-  if (tipo === "cartoes") corpo = h("div", { class: "sk-cartoes" }, Array.from({ length: n }, () => h("div", { class: "sk-cartao" }, b("sk-l1"), b("sk-num"), b("sk-l2"))));
+  if (tipo === "cartoes") corpo = h("div", { class: "sk-cartoes" }, Array.from({ length: n }, cartaoKpi));
   else if (tipo === "tabela") corpo = h("div", { class: "sk-tabela" }, h("div", { class: "sk-tr sk-th" }, b(), b(), b(), b()),
     Array.from({ length: n }, () => h("div", { class: "sk-tr" }, b(), b(), b(), b())));
   else if (tipo === "kanban") corpo = h("div", { class: "sk-kanban" }, Array.from({ length: Math.max(3, Math.min(n, 6)) }, (_, i) =>
     h("div", { class: "sk-col" }, b("sk-l1"), Array.from({ length: 3 - (i % 2) }, () => h("div", { class: "sk-card" }, b("sk-l1"), b("sk-l2"))))));
-  else corpo = h("div", { class: "sk-lista" }, Array.from({ length: n }, () => h("div", { class: "sk-item" }, h("span", { class: "sk sk-av" }), h("div", { class: "sk-txt" }, b("sk-l1"), b("sk-l2")))));
-  return h("div", { class: ["esqueleto", `esqueleto-${tipo}`], "aria-busy": "true" }, h("span", { class: "sr-only", role: "status" }, "Carregando…"), corpo);
+  else if (tipo === "inicio") corpo = h("div", { class: "sk-pilha" },
+    h("div", { class: "sk-kpis" }, Array.from({ length: Math.max(2, Math.min(n, 6)) }, cartaoKpi)),
+    h("div", { class: "grade-2" }, h("div", { class: ["sk-cartao", "sk-grande"] }, b("sk-l1"), b("sk-l2")), h("div", { class: ["sk-cartao", "sk-grande"] }, b("sk-l1"), b("sk-l2"))));
+  else if (tipo === "chat") corpo = h("div", { class: "sk-chat" },
+    h("div", { class: "sk-chat-lista" }, h("div", { class: "sk-linha-ctl" }, b("sk-chip"), b("sk-chip"), b("sk-chip")), h("div", { class: "sk-lista" }, itensLista(n))),
+    h("div", { class: "sk-chat-painel" },
+      h("div", { class: "sk-chat-topo" }, h("span", { class: "sk sk-av" }), h("div", { class: "sk-txt" }, b("sk-l1"), b("sk-l2"))),
+      b("sk-bolha"), b("sk-bolha fim"), b("sk-bolha"), b("sk-chat-campo")));
+  else if (tipo === "ads") corpo = h("div", { class: "sk-pilha" },
+    h("div", { class: "sk-linha-ctl" }, b("sk-chip"), b("sk-chip"), b("sk-chip sk-chip-g")),
+    h("div", { class: "sk-manchete" }, b("sk-l1"), b("sk-num"), b("sk-l2")),
+    h("div", { class: "sk-kpis" }, Array.from({ length: Math.max(2, Math.min(n, 12)) }, cartaoKpi)),
+    h("div", { class: ["sk-cartao", "sk-grande"] }, b("sk-l1"), b("sk-l2")));
+  else if (tipo === "agenda") corpo = h("div", { class: "sk-pilha" },
+    h("div", { class: "sk-linha-ctl" }, b("sk-chip"), b("sk-chip")),
+    h("div", { class: "sk-agenda-grade" }, Array.from({ length: 7 }, (_, d) =>
+      h("div", { class: "sk-agenda-col" }, b("sk-l1"), Array.from({ length: 2 + (d % 3) }, () => b("sk-card"))))));
+  else corpo = h("div", { class: "sk-lista" }, itensLista(n));   // "lista" (e qualquer tipo desconhecido)
+  const raiz = h("div", { class: ["esqueleto", `esqueleto-${tipo}`], dataset: { tipo }, "aria-busy": "true" },
+    h("span", { class: "sr-only", role: "status" }, "Carregando…"), comCab ? cab() : null, corpo);
+  return raiz;
 }
 
-/** erroCartao(erro, tentarDeNovo) → Node (texto de api.mensagemErro) */
+/** trocarEsqueleto(el, conteudo, {ms = 120}) → Promise. `el` é o contêiner que mostra o esqueleto (ou o próprio .esqueleto):
+    o esqueleto some em ms e o conteúdo (Node, lista ou null) entra com fade; sem esqueleto na tela, só põe o conteúdo. */
+export function trocarEsqueleto(el, conteudo, { ms = 120 } = {}) {
+  return new Promise(resolve => {
+    if (!el) return resolve(false);
+    const itens = (Array.isArray(conteudo) ? conteudo : [conteudo]).flat(Infinity).filter(x => x !== null && x !== undefined && x !== false);
+    const proprio = !!(el.classList && el.classList.contains("esqueleto"));
+    const alvo = proprio ? el.parentNode : el;
+    if (!alvo) return resolve(false);
+    const sks = proprio ? [el] : [...alvo.children].filter(c => c.classList && c.classList.contains("esqueleto"));
+    const colocar = () => {
+      const novos = itens.map(x => (x && x.nodeType ? x : document.createTextNode(String(x))));
+      for (const nv of novos) if (nv.nodeType === 1) nv.classList.add("troca-entra");
+      if (proprio) { const pai = el.parentNode || alvo; for (const nv of novos) pai.insertBefore(nv, el); el.remove(); }
+      else { for (const s of sks) s.remove(); if (!sks.length) limpar(alvo); for (const nv of novos) alvo.appendChild(nv); }
+      resolve(true);
+    };
+    let reduz = false;
+    try { reduz = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { /* ok */ }
+    if (!sks.length || reduz || !(ms > 0)) return colocar();
+    for (const s of sks) s.classList.add("saindo");
+    setTimeout(colocar, ms);
+  });
+}
+
+/* O erro de carregamento tenta de novo sozinho quando a rede volta (evento "orbita:online", disparado pelo rede.js do shell). */
+const _erros = new Set();
+let _ouvindoOnline = null;       // a função addEventListener em que já nos penduramos (no navegador é sempre a mesma; nos testes cada janela falsa tem a sua)
+function aoVoltarOnline() {
+  for (const el of [..._erros]) {
+    _erros.delete(el);
+    if (!el.isConnected) continue;
+    const f = el.__tentar;
+    if (typeof f === "function") { try { f(); } catch (e) { console.error(e); } }
+  }
+}
+const RE_CODIGO_REDE = /^(sem_conexao|tempo_esgotado|servico_indisponivel|http_(408|429|5\d\d))$/;
+/** erroCartao(erro, tentarDeNovo) → Node (texto de api.mensagemErro, sem URL nem jargão). Com `tentarDeNovo`, refaz sozinho em "orbita:online". */
 export function erroCartao(erro, tentarDeNovo) {
-  return h("div", { class: "vazio vazio-erro", role: "alert" },
+  const frase = mensagemErro(erro);
+  const semRede = RE_ERRO_REDE.test(String((erro && (erro.message || erro.codigo)) || "")) || RE_ERRO_IMPORT.test(String((erro && erro.message) || ""))
+    || RE_CODIGO_REDE.test(String((erro && erro.codigo) || "")) || (typeof navigator !== "undefined" && navigator.onLine === false);
+  const el = h("div", { class: "vazio vazio-erro", role: "alert" },
     h("div", { class: "vazio-ic", "aria-hidden": "true" }, icone("alerta")),
     h("div", { class: "vazio-txt" },
       h("h2", null, "Não foi possível carregar"),
-      h("p", null, mensagemErro(erro)),
+      h("p", null, frase),
+      tentarDeNovo && semRede ? h("p", { class: "vazio-auto" }, "Quando a internet voltar, tentamos de novo sozinhos.") : null,
       tentarDeNovo ? h("div", { class: "linha vazio-acoes" },
         h("button", { type: "button", class: "bt bt-prim", on: { click: tentarDeNovo } }, "Tentar de novo")) : null));
+  if (tentarDeNovo) {
+    el.__tentar = tentarDeNovo;
+    for (const x of [..._erros]) if (!x.isConnected) _erros.delete(x);
+    _erros.add(el);
+    if (typeof addEventListener === "function" && _ouvindoOnline !== addEventListener) { addEventListener("orbita:online", aoVoltarOnline); _ouvindoOnline = addEventListener; }
+  }
+  return el;
 }
 
 /* ============================================================
@@ -509,12 +763,181 @@ function opcoesDe(opcoes) {
   return (opcoes || []).map(o => typeof o === "object" && o !== null ? o : { valor: o, rotulo: String(o) });
 }
 
-/** campo({rotulo, nome, tipo, valor, opcoes, obrigatorio, ajuda, max, min, placeholder, ...}) → Node
+/* ------------------------------------------------------------
+   Máscaras e validação ao vivo (M08). Funções PURAS (testáveis sem DOM) + a ligação em campo().
+   ------------------------------------------------------------ */
+const SIGNIFICA = { telefone: /\d/, moeda: /[\d,]/ };   // o que conta para manter o cursor no lugar
+
+/** Telefone BR enquanto digita: (12) 99830-3030 · (12) 3456-7890. Aceita +55 colado; "+" de outro país fica só com os dígitos. */
+export function formatarTelefone(bruto) {
+  const t = String(bruto ?? "").trim();
+  let d = t.replace(/\D/g, "");
+  if (t.startsWith("+") && !/^\+\s*55/.test(t)) return d ? `+${d.slice(0, 15)}` : "+";
+  if (/^\+\s*55/.test(t) || (d.length > 11 && d.startsWith("55"))) d = d.slice(2);
+  d = d.slice(0, 11);
+  if (!d) return "";
+  if (d.length <= 2) return `(${d}`;
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
+
+/** Moeda BR enquanto digita: "1234,5" → "1.234,5"; só uma vírgula, até 2 casas, sem zeros à esquerda; "1234.56" colado vira "1.234,56". */
+export function formatarMoeda(bruto) {
+  let t = String(bruto ?? "").replace(/[^\d,.]/g, "");
+  if (!t.includes(",") && /^\d+\.\d{1,2}$/.test(t)) t = t.replace(".", ",");
+  t = t.replace(/\./g, "");
+  const i = t.indexOf(",");
+  let inteiro = i >= 0 ? t.slice(0, i) : t;
+  const dec = i >= 0 ? t.slice(i + 1).replace(/,/g, "").slice(0, 2) : null;
+  inteiro = inteiro.replace(/^0+(?=\d)/, "").replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return dec === null ? inteiro : `${inteiro || "0"},${dec}`;
+}
+
+/** mascarar("telefone"|"moeda", textoBruto, posicaoDoCursor, {apagando, anterior}) → {texto, cursor}.
+    O cursor acompanha o mesmo caractere útil (dígito, ou dígito/vírgula na moeda) depois da formatação; apagar um separador
+    (ex.: o "-" do telefone) apaga o dígito anterior em vez de não fazer nada. */
+export function mascarar(tipo, bruto, cursor, { apagando = false, anterior = "" } = {}) {
+  const fmt = tipo === "moeda" ? formatarMoeda : formatarTelefone;
+  const sig = SIGNIFICA[tipo] || /\d/;
+  let texto = String(bruto ?? "");
+  const pos = cursor == null ? texto.length : Math.max(0, Math.min(cursor, texto.length));
+  let antes = 0;
+  for (let i = 0; i < pos; i++) if (sig.test(texto[i])) antes++;
+  if (tipo === "moeda" && !texto.includes(",") && /^\d+\.\d{1,2}$/.test(texto.replace(/[^\d.]/g, ""))) {
+    const f = fmt(texto); return { texto: f, cursor: f.length };    // "1234.56" colado: cursor no fim
+  }
+  if (apagando && anterior && texto.length < anterior.length && fmt(texto) === anterior && antes > 0) {
+    let k = 0, corte = -1;
+    for (let i = 0; i < texto.length; i++) if (sig.test(texto[i]) && ++k === antes) { corte = i; break; }
+    if (corte >= 0) { texto = texto.slice(0, corte) + texto.slice(corte + 1); antes--; }
+  }
+  const formatado = fmt(texto);
+  let novo = 0, vistos = 0;
+  if (antes > 0) {
+    for (; novo < formatado.length; novo++) if (sig.test(formatado[novo]) && ++vistos === antes) { novo++; break; }
+    if (vistos < antes) novo = formatado.length;
+  }
+  return { texto: formatado, cursor: novo };
+}
+
+/** 0 vazio · 1 curta (< 8) · 2 razoável · 3 boa · 4 forte */
+export function forcaSenha(s) {
+  const t = String(s ?? "");
+  if (!t) return 0;
+  if (t.length < 8) return 1;
+  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter(r => r.test(t)).length;
+  return t.length >= 12 && classes >= 3 ? 4 : t.length >= 10 && classes >= 2 ? 3 : 2;
+}
+const ROTULOS_FORCA = ["", "Curta", "Razoável", "Boa", "Forte"];
+
+const VALIDADORES = {
+  email: v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v) ? null : "Confira o e-mail (exemplo: nome@empresa.com.br).",
+  telefone: v => {
+    const d = String(v).replace(/\D/g, "");
+    return d.length === 10 || d.length === 11 || (String(v).trim().startsWith("+") && d.length >= 8 && d.length <= 15) ? null
+      : "Informe o telefone com DDD, por exemplo (12) 99830-3030.";
+  },
+  senha: v => v.length >= 8 ? null : "A senha precisa ter pelo menos 8 caracteres.",
+  moeda: v => { const n = lerMoeda(v); return n !== null && n >= 0 ? null : "Informe um valor, por exemplo 1.234,56."; },
+};
+
+function ligarMascara(entrada, mascara) {
+  entrada.dataset.mascara = mascara;          // lerForm: telefone devolve só dígitos; moeda já vai por data-moeda
+  if (mascara === "moeda") entrada.dataset.moeda = "1";
+  let anterior = String(entrada.value ?? "");
+  entrada.addEventListener("input", ev => {
+    const bruto = String(entrada.value ?? "");
+    const r = mascarar(mascara, bruto, entrada.selectionStart, { apagando: !!ev && ev.inputType === "deleteContentBackward", anterior });
+    if (r.texto !== bruto) {
+      entrada.value = r.texto;
+      try { entrada.setSelectionRange(r.cursor, r.cursor); } catch { /* tipos sem seleção */ }
+    }
+    anterior = String(entrada.value ?? "");
+  });
+}
+
+function ligarContador(w, entrada, max) {
+  const c = h("small", { class: "campo-contador", hidden: true });
+  w.appendChild(c);
+  const atualizar = () => {
+    const n = String(entrada.value ?? "").length;
+    c.hidden = n < max * 0.8;
+    c.textContent = `${n}/${max}`;
+    c.dataset.limite = n >= max ? "1" : "0";
+  };
+  entrada.addEventListener("input", atualizar);
+  atualizar();
+}
+
+function ligarValidacao(w, entrada, { validar, obrigatorio, tipo, erroEl }) {
+  const nome = typeof validar === "string" ? validar : null;
+  const fn = typeof validar === "function" ? validar : null;
+  const estadoEl = h("small", { class: "campo-estado", "aria-hidden": "true" });
+  w.insertBefore(estadoEl, erroEl);
+  let medidor = null;
+  if (nome === "senha" && tipo === "senha") {
+    const barras = h("span", { class: "medidor-seg" }, [0, 1, 2, 3].map(() => h("i")));
+    const txt = h("span", { class: "medidor-txt" });
+    medidor = h("div", { class: "medidor", role: "meter", "aria-label": "Força da senha", "aria-valuemin": "0", "aria-valuemax": "4", "aria-valuenow": "0", dataset: { nivel: "0" } }, barras, txt);
+    w.insertBefore(medidor, estadoEl);
+  }
+  const verificar = () => {
+    const v = String(entrada.value ?? "").trim();
+    if (!v) return obrigatorio ? "Preencha este campo." : null;
+    if (nome && VALIDADORES[nome]) return VALIDADORES[nome](v);
+    if (fn) return fn(v, { el: entrada, campo: w }) || null;
+    return null;
+  };
+  let errou = false;
+  const marcar = msg => {
+    const v = String(entrada.value ?? "").trim();
+    w.dataset.estado = msg ? "erro" : v ? "ok" : "";
+    erroEl.textContent = msg || ""; erroEl.hidden = !msg;
+    estadoEl.textContent = !msg && v ? "✓ Confere" : "";
+    const ids = new Set((entrada.getAttribute("aria-describedby") || "").split(" ").filter(Boolean));
+    if (msg) { entrada.setAttribute("aria-invalid", "true"); ids.add(erroEl.id); } else { entrada.removeAttribute("aria-invalid"); ids.delete(erroEl.id); }
+    if (ids.size) entrada.setAttribute("aria-describedby", [...ids].join(" ")); else entrada.removeAttribute("aria-describedby");
+  };
+  const atualizarMedidor = () => {
+    if (!medidor) return;
+    const nv = forcaSenha(entrada.value);
+    medidor.dataset.nivel = String(nv); medidor.setAttribute("aria-valuenow", String(nv));
+    medidor.setAttribute("aria-valuetext", ROTULOS_FORCA[nv] || "Vazia");
+    medidor.lastChild.textContent = ROTULOS_FORCA[nv];
+  };
+  w.validar = () => { const m = verificar(); marcar(m); if (m) errou = true; return !m; };
+  entrada.addEventListener("blur", () => { w.validar(); });
+  entrada.addEventListener("input", () => { if (errou) marcar(verificar()); atualizarMedidor(); });
+  atualizarMedidor();
+}
+
+/** Valida UM campo criado com `validar` (mostra ✓/!, aria-invalid). → true se está ok. Sem `validar` → true. */
+export function validarCampo(campoEl) { return !campoEl || typeof campoEl.validar !== "function" ? true : campoEl.validar(); }
+/** Valida todos os campos com `validar` dentro de `raiz`; foca o primeiro com erro. → true se tudo ok. */
+export function validarForm(raiz) {
+  let primeiro = null;
+  for (const c of raiz.querySelectorAll(".campo")) {
+    if (typeof c.validar !== "function") continue;
+    if (!c.validar() && !primeiro) primeiro = c;
+  }
+  if (primeiro) {
+    const ctl = primeiro.querySelector("input:not([type=hidden]), select, textarea");
+    if (ctl) try { ctl.focus({ preventScroll: false }); } catch { /* ok */ }
+  }
+  return !primeiro;
+}
+
+/** campo({rotulo, nome, tipo, valor, opcoes, obrigatorio, ajuda, max, min, placeholder, validar, ...}) → Node
     tipos: texto (padrão), email, senha, tel, numero, moeda, data, datahora, hora, textarea, select,
-    interruptor (checkbox), multipla (caixas), cor (paleta + hex), url, busca. */
+    interruptor (checkbox), multipla (caixas), cor (paleta + hex), url, busca.
+    validar: "telefone" | "email" | "senha" | "moeda" | fn(valor, {el, campo}) → texto de erro (ou vazio se ok).
+    Valida ao sair do campo e, depois do 1º erro, a cada tecla (✓/! além da cor, aria-invalid). "telefone" e "moeda" ganham máscara
+    com cursor estável (tipo "moeda" já tem a máscara); "telefone" faz lerForm devolver só os dígitos; "senha" mostra o medidor;
+    `max` mostra o contador perto do limite. Use validarCampo(el) / validarForm(raiz) antes de enviar. */
 export function campo(o = {}) {
   const { rotulo, nome, tipo = "texto", valor, opcoes, obrigatorio, ajuda, max, min, placeholder, desabilitado, autocomplete,
-    linhas = 3, passo, id: idDado, inputmode, paleta } = o;
+    linhas = 3, passo, id: idDado, inputmode, paleta, validar } = o;
   const id = idDado || novoId(`c-${nome || "x"}`);
   const idAj = ajuda ? `${id}-aj` : null, idEr = `${id}-er`;
   const desc = [idAj].filter(Boolean).join(" ") || null;
@@ -544,7 +967,7 @@ export function campo(o = {}) {
     return h("div", { class: "campo campo-cor", dataset: { campo: nome } }, h("span", { class: "campo-rot" }, rotulo), sc, oculto, aj, erro);
   }
 
-  let ctl;
+  let ctl, entrada;
   const comuns = { id, name: nome, required: !!obrigatorio, disabled: !!desabilitado, placeholder: placeholder || null,
     "aria-describedby": desc, autocomplete: autocomplete || null };
   if (tipo === "textarea") ctl = h("textarea", { ...comuns, rows: linhas, maxlength: max || null }, valor ?? "");
@@ -556,8 +979,10 @@ export function campo(o = {}) {
     const t = mapa[tipo] || "text";
     ctl = h("input", { ...comuns, type: t, value: valor ?? "", maxlength: t !== "number" && max ? max : null,
       max: t === "number" && max != null ? max : null, min: min != null ? min : null, step: passo || (tipo === "moeda" ? null : null),
-      inputmode: inputmode || (tipo === "moeda" ? "decimal" : tipo === "tel" ? "tel" : null), dataset: tipo === "moeda" ? { moeda: "1" } : null });
+      inputmode: inputmode || (tipo === "moeda" ? "decimal" : tipo === "tel" || validar === "telefone" ? "tel" : null), dataset: tipo === "moeda" ? { moeda: "1" } : null });
     if (tipo === "moeda" && typeof valor === "number") ctl.value = valor.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (validar === "telefone" && ctl.value) ctl.value = formatarTelefone(ctl.value);
+    entrada = ctl;
     if (tipo === "senha") {
       const olho = h("button", { type: "button", class: "bt-icone campo-olho", "aria-label": "Mostrar senha", "aria-pressed": "false" }, icone("olho"));
       olho.addEventListener("click", () => {
@@ -567,8 +992,14 @@ export function campo(o = {}) {
       ctl = h("div", { class: "campo-senha" }, ctl, olho);
     }
   }
-  return h("div", { class: ["campo", `campo-${tipo}`], dataset: { campo: nome } },
+  const w = h("div", { class: ["campo", `campo-${tipo}`], dataset: { campo: nome } },
     h("label", { for: id }, rotulo, obrigatorio ? h("span", { class: "obrig", "aria-hidden": "true" }, " *") : null), ctl, aj, erro);
+  entrada = entrada || ctl;
+  const mascara = tipo === "moeda" || validar === "moeda" ? "moeda" : validar === "telefone" ? "telefone" : null;
+  if (mascara && entrada.addEventListener) ligarMascara(entrada, mascara);
+  if (validar !== undefined && validar !== null && validar !== false) ligarValidacao(w, entrada, { validar, obrigatorio, tipo, erroEl: erro });
+  if (max && tipo !== "numero" && (tipo === "textarea" || entrada.tagName === "INPUT")) ligarContador(w, entrada, max);
+  return w;
 }
 
 /** "1.234,56" → 1234.56 ; "2.000" → 2000 (ponto de milhar do jeito brasileiro) ; "297.5" → 297.5 ; "" → null */
@@ -594,6 +1025,7 @@ export function lerForm(form) {
     } else if (el.type === "radio") { if (el.checked) r[n] = el.value; else if (!(n in r)) r[n] = null; }
     else if (el.type === "number") r[n] = el.value === "" ? null : Number(el.value);
     else if (el.dataset.moeda) r[n] = lerMoeda(el.value);
+    else if (el.dataset.mascara === "telefone") r[n] = String(el.value ?? "").replace(/\D/g, "");
     else if (el.tagName === "SELECT" && el.multiple) r[n] = [...el.selectedOptions].map(o => o.value);
     else r[n] = typeof el.value === "string" ? el.value.trim() : el.value;
   }
@@ -606,6 +1038,7 @@ export function marcarErro(form, nome, texto) {
   if (nome === null || nome === undefined) {
     for (const c of form.querySelectorAll(".campo")) {
       const e = c.querySelector(".campo-erro"); if (e) { e.hidden = true; e.textContent = ""; }
+      if (c.dataset && c.dataset.estado === "erro") c.dataset.estado = "";
       for (const x of c.querySelectorAll("[aria-invalid]")) x.removeAttribute("aria-invalid");
     }
     return;
@@ -615,6 +1048,7 @@ export function marcarErro(form, nome, texto) {
   const e = c.querySelector(".campo-erro");
   const ctl = c.querySelector("input:not([type=hidden]), select, textarea");
   if (e) { e.textContent = texto || ""; e.hidden = !texto; }
+  if (texto) c.dataset.estado = "erro"; else if (c.dataset.estado === "erro") c.dataset.estado = "";
   if (ctl) {
     if (texto) {
       ctl.setAttribute("aria-invalid", "true");
@@ -1070,4 +1504,251 @@ export function barraUso(rotulo, uso, limite, { detalhe } = {}) {
       "aria-valuemax": String(semLimite ? Math.max(u, 1) : limite), "aria-valuenow": String(u), "aria-label": rotulo, "aria-valuetext": txt },
       h("i", { style: { "--p": `${semLimite ? 0 : p}%` } })),
     detalhe ? h("small", { class: "uso-det" }, detalhe) : null);
+}
+
+/* ============================================================
+   Contratos da linguagem visual (frente A, plano de 01/10/2026)
+   ============================================================ */
+function movimentoReduzido() {
+  try { return typeof matchMedia === "function" && !!matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; }
+}
+const proximoQuadro = f => (typeof requestAnimationFrame === "function" ? requestAnimationFrame(f) : setTimeout(f, 16));
+
+/** cabecalho({rotulo?, titulo, sub?, acoes?, nivel: 1|2}) → <header class="cab">.
+    nível 1 gera o <h1> da página (tabindex -1: o shell leva o foco para ele ao navegar); nível 2 gera o <h2> de uma seção.
+    `rotulo` é a linha pequena acima (.rotulo); `acoes` é Node ou lista de Nodes (botões à direita). */
+export function cabecalho({ rotulo, titulo, sub, acoes, nivel = 1 } = {}) {
+  const n2 = nivel === 2;
+  const lista = (Array.isArray(acoes) ? acoes : [acoes]).flat(Infinity).filter(x => x !== null && x !== undefined && x !== false);
+  return h("header", { class: ["cab", n2 ? "cab-n2" : "cab-n1"] },
+    h("div", { class: "cab-txt" },
+      rotulo ? h("p", { class: "rotulo cab-rotulo" }, rotulo) : null,
+      h(n2 ? "h2" : "h1", { class: "cab-titulo", tabindex: n2 ? null : "-1" }, titulo ?? ""),
+      sub ? h("p", { class: "cab-sub" }, sub) : null),
+    lista.length ? h("div", { class: "cab-acoes" }, lista) : null);
+}
+
+/** segmentado({opcoes:[{valor, rotulo, contador?}], valor, tipo: "abas"|"filtro", aoMudar(valor), rotulo}) → elemento (role=tablist).
+    "abas" navegam (pílula neutra); "filtro" muda dados (--c-prim-suave + texto escuro, nunca cheio). O indicador desliza (translateX/width,
+    --t-ui; sem animação com movimento reduzido). Setas/Home/End movem e ativam; Enter/Espaço ativam o item em foco; roving tabindex.
+    Extras no elemento: .ativar(valor) (sem chamar aoMudar), .contar(valor, n), .valor, .reposicionar(). */
+export function segmentado({ opcoes = [], valor, tipo = "abas", aoMudar, rotulo = "Opções" } = {}) {
+  const t = tipo === "filtro" ? "filtro" : "abas";
+  const itens = opcoes.filter(Boolean);
+  let atual = itens.some(o => o.valor === valor) ? valor : (itens[0] ? itens[0].valor : null);
+  const ind = h("span", { class: "seg-ind", "aria-hidden": "true" });
+  const el = h("div", { class: ["seg", `seg-${t}`], role: "tablist", "aria-label": rotulo }, ind);
+  const mapa = new Map();
+  for (const o of itens) {
+    const n = h("span", { class: "seg-n dado", hidden: o.contador === undefined || o.contador === null }, o.contador ?? "");
+    const b = h("button", { type: "button", role: "tab", class: "seg-op", id: novoId("seg"), dataset: { valor: String(o.valor) } }, h("span", { class: "seg-rot" }, o.rotulo), " ", n);
+    b.addEventListener("click", () => escolher(o.valor, true));
+    mapa.set(o.valor, { b, n });
+    el.appendChild(b);
+  }
+  function posicionar() {
+    const x = mapa.get(atual);
+    if (!x) return;
+    const w = x.b.offsetWidth, esq = x.b.offsetLeft;
+    if (!w) return;      // ainda sem layout (oculto): o ResizeObserver chama de novo quando aparecer
+    el.style.setProperty("--seg-x", `${esq}px`);
+    el.style.setProperty("--seg-w", `${w}px`);
+    if (!el.classList.contains("seg-pronto")) {
+      el.classList.add("seg-pronto");
+      if (!movimentoReduzido()) proximoQuadro(() => el.classList.add("seg-anima"));   // a 1ª colocação não desliza desde o zero
+    }
+  }
+  function marcar() {
+    for (const [k, { b }] of mapa) { const on = k === atual; b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1; }
+    posicionar();
+  }
+  function escolher(v, usuario) {
+    if (!mapa.has(v)) return;
+    const mudou = v !== atual;
+    atual = v; marcar();
+    if (usuario) {
+      const b = mapa.get(v).b;
+      try { b.scrollIntoView({ block: "nearest", inline: "nearest", behavior: comportamentoRolagem() }); } catch { /* ok */ }
+      if (mudou && aoMudar) aoMudar(v);
+    }
+  }
+  el.addEventListener("keydown", ev => {
+    const chaves = [...mapa.keys()], bts = [...mapa.values()].map(x => x.b);
+    const i = bts.indexOf(document.activeElement);
+    if (i < 0) return;
+    let j = null;
+    if (ev.key === "ArrowRight") j = (i + 1) % bts.length; else if (ev.key === "ArrowLeft") j = (i - 1 + bts.length) % bts.length;
+    else if (ev.key === "Home") j = 0; else if (ev.key === "End") j = bts.length - 1;
+    if (j !== null) { ev.preventDefault(); bts[j].focus(); escolher(chaves[j], true); return; }
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); escolher(chaves[i], true); }
+  });
+  marcar();
+  if (typeof ResizeObserver === "function") { try { new ResizeObserver(() => posicionar()).observe(el); } catch { /* ok */ } }
+  try { if (typeof document !== "undefined" && document.fonts && document.fonts.ready) document.fonts.ready.then(posicionar); } catch { /* ok */ }
+  proximoQuadro(posicionar);
+  el.ativar = v => escolher(v, false);
+  el.contar = (v, n) => { const x = mapa.get(v); if (!x) return; x.n.textContent = n ?? ""; x.n.hidden = n === null || n === undefined || n === ""; };
+  el.reposicionar = posicionar;
+  Object.defineProperty(el, "valor", { get: () => atual, configurable: true });
+  return el;
+}
+
+/** toqueLongo(el, fn, {ms = 350, mouse = false}) → desligar(). Segurar o dedo (ou a caneta) por `ms` chama fn(ev) e engole o clique que viria
+    depois; mexer mais de 10 px, soltar antes ou rolar cancela. Com mouse só se `mouse: true`. Sempre ofereça também um botão visível. */
+export function toqueLongo(el, fn, { ms = 350, mouse = false } = {}) {
+  let timer = null, x0 = 0, y0 = 0, disparou = false, id = null;
+  const cancelar = () => { clearTimeout(timer); timer = null; id = null; };
+  const aceita = ev => mouse || (ev.pointerType && ev.pointerType !== "mouse");
+  const baixo = ev => {
+    if (!aceita(ev) || (ev.button !== undefined && ev.button > 0)) return;
+    disparou = false; id = ev.pointerId ?? null; x0 = ev.clientX ?? 0; y0 = ev.clientY ?? 0;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null; disparou = true;
+      try { if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(10); } catch { /* ok */ }
+      try { fn(ev); } catch (e) { console.error(e); }
+      setTimeout(() => { disparou = false; }, 500);
+    }, ms);
+  };
+  const mover = ev => { if (timer && (id === null || ev.pointerId === id) && Math.hypot((ev.clientX ?? 0) - x0, (ev.clientY ?? 0) - y0) > 10) cancelar(); };
+  const solto = ev => { if (!disparou) cancelar(); else if (ev && ev.type === "pointercancel") disparou = false; };
+  const clique = ev => { if (disparou) { disparou = false; ev.preventDefault(); ev.stopPropagation(); } };
+  const menu = ev => { if (timer || disparou) ev.preventDefault(); };
+  el.addEventListener("pointerdown", baixo);
+  el.addEventListener("pointermove", mover);
+  el.addEventListener("pointerup", solto);
+  el.addEventListener("pointercancel", solto);
+  el.addEventListener("pointerleave", () => { if (!disparou) cancelar(); });
+  el.addEventListener("click", clique, true);
+  el.addEventListener("contextmenu", menu);
+  el.classList.add("toque-longo");
+  return () => {
+    cancelar();
+    el.removeEventListener("pointerdown", baixo); el.removeEventListener("pointermove", mover); el.removeEventListener("pointerup", solto);
+    el.removeEventListener("pointercancel", solto); el.removeEventListener("click", clique, true); el.removeEventListener("contextmenu", menu);
+    el.classList.remove("toque-longo");
+  };
+}
+
+/** deslizar(el, {esquerda?, direita?, limiar = 72}) → desligar(). Arrastar o dedo na horizontal: `esquerda` roda ao soltar depois de
+    deslizar PARA a esquerda (≥ limiar px), `direita` para a direita. Cada lado é fn(ev) ou {fn, rotulo}. O elemento acompanha o dedo com resistência
+    e volta ao lugar. Só assume o gesto se ele começar mais horizontal que vertical (a rolagem vertical segue livre: touch-action pan-y).
+    Sempre ofereça também um botão equivalente visível. Mouse não desliza. */
+export function deslizar(el, { esquerda, direita, limiar = 72 } = {}) {
+  const acao = a => (typeof a === "function" ? a : a && typeof a.fn === "function" ? a.fn : null);
+  const fnE = acao(esquerda), fnD = acao(direita);
+  let ativo = false, travado = false, x0 = 0, y0 = 0, dx = 0, id = null, moveu = false;
+  const resistir = d => { const a = Math.abs(d), s = d < 0 ? -1 : 1; return s * (a <= limiar ? a : limiar + (a - limiar) * 0.3); };
+  const aplicar = d => {
+    el.style.setProperty("transform", d ? `translateX(${d}px)` : "");
+    el.dataset.deslizando = d < 0 ? "esquerda" : d > 0 ? "direita" : "";
+    el.style.setProperty("--dx", `${d}px`);
+  };
+  const baixo = ev => {
+    if (!ev.pointerType || ev.pointerType === "mouse" || (ev.button !== undefined && ev.button > 0)) return;
+    ativo = true; travado = false; moveu = false; dx = 0; id = ev.pointerId ?? null; x0 = ev.clientX ?? 0; y0 = ev.clientY ?? 0;
+    el.classList.remove("desliza-volta");
+  };
+  const mover = ev => {
+    if (!ativo || (id !== null && ev.pointerId !== id)) return;
+    const mx = (ev.clientX ?? 0) - x0, my = (ev.clientY ?? 0) - y0;
+    if (!travado) {
+      if (Math.abs(my) > 10 && Math.abs(my) > Math.abs(mx)) { ativo = false; return; }          // é rolagem vertical: larga
+      if (Math.abs(mx) < 10 || Math.abs(mx) < Math.abs(my) * 1.5) return;                        // ainda não é um gesto horizontal claro
+      travado = true;
+      try { if (el.setPointerCapture && ev.pointerId !== undefined) el.setPointerCapture(ev.pointerId); } catch { /* ok */ }
+    }
+    dx = mx;
+    if ((mx < 0 && !fnE) || (mx > 0 && !fnD)) dx = 0;      // sem ação nesse lado: não se move
+    moveu = true;
+    aplicar(resistir(dx));
+  };
+  const fim = ev => {
+    if (!ativo) return;
+    ativo = false;
+    const cancelou = ev && ev.type === "pointercancel";
+    const d = dx; dx = 0;
+    if (moveu) setTimeout(() => { moveu = false; }, 400);       // um toque simples logo depois não pode ser engolido
+    if (travado) {
+      el.classList.add("desliza-volta"); aplicar(0);
+      if (!cancelou && Math.abs(d) >= limiar) { const f = d < 0 ? fnE : fnD; if (f) try { f(ev); } catch (e) { console.error(e); } }
+      try { if (el.releasePointerCapture && ev && ev.pointerId !== undefined) el.releasePointerCapture(ev.pointerId); } catch { /* ok */ }
+    }
+  };
+  const cliqueGesto = ev => { if (moveu) { moveu = false; ev.preventDefault(); ev.stopPropagation(); } };   // o clique que o navegador solta depois do arrasto
+  el.addEventListener("pointerdown", baixo);
+  el.addEventListener("pointermove", mover);
+  el.addEventListener("pointerup", fim);
+  el.addEventListener("pointercancel", fim);
+  el.addEventListener("click", cliqueGesto, true);
+  el.classList.add("deslizavel");
+  return () => {
+    el.removeEventListener("pointerdown", baixo); el.removeEventListener("pointermove", mover); el.removeEventListener("pointerup", fim);
+    el.removeEventListener("pointercancel", fim); el.removeEventListener("click", cliqueGesto, true);
+    el.classList.remove("deslizavel", "desliza-volta"); aplicar(0);
+  };
+}
+
+/* ---- desfazer (M07): ação imediata + toast "Desfazer" + Ctrl/⌘+Z, fila de 3 ---- */
+const _desfazer = [];            // mais recente por último
+let _ouvindoZ = null;             // o document em que já ouvimos o teclado
+function aoTeclaZ(ev) {
+  if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey || String(ev.key || "").toLowerCase() !== "z") return;
+  if (dentroDeCampo(ev.target)) return;                    // dentro de texto o Ctrl+Z é do navegador
+  const item = _desfazer[_desfazer.length - 1];
+  if (!item) return;
+  ev.preventDefault();
+  desfazerItem(item);                                      // marca o item como encerrado ANTES de fechar o toast (o fechamento não vira "mantida")
+  if (item.t) item.t.fechar();
+}
+async function desfazerItem(item) {
+  if (item.fim) return;
+  item.fim = true;
+  const i = _desfazer.indexOf(item); if (i >= 0) _desfazer.splice(i, 1);
+  try {
+    await item.reverter();
+    anunciar("Desfeito.");
+    item.resolve({ estado: "desfeita", desfeita: true });
+  } catch (e) {
+    // não deu para voltar: o estado real é o aplicado — diga isso em vez de fingir que desfez
+    toast(`Não foi possível desfazer. ${mensagemErro(e)}`, { tipo: "erro" });
+    item.resolve({ estado: "falhou", desfeita: false, erro: e });
+  }
+}
+function manterItem(item) {
+  if (item.fim) return;
+  item.fim = true;
+  const i = _desfazer.indexOf(item); if (i >= 0) _desfazer.splice(i, 1);
+  item.resolve({ estado: "mantida", desfeita: false });
+}
+/** acaoComDesfazer({texto, aplicar, reverter, ms = 7000}) → Promise<{estado: "mantida"|"desfeita"|"falhou", desfeita, erro?}>.
+    Roda `aplicar()` na hora (UI otimista), mostra o toast com "Desfazer" por `ms` e liga Ctrl/⌘+Z (fora de campo de texto) ao mais recente
+    (até 3 pendentes: o 4º firma o mais antigo). A promessa só resolve quando o toast fecha (mantida), a pessoa desfaz (desfeita) ou algo falha.
+    `aplicar` que falha → toast de erro e estado "falhou" (nada fica pendente); `reverter` que falha → toast de erro dizendo que o estado real é o aplicado. */
+export async function acaoComDesfazer({ texto, aplicar, reverter, ms = 7000 } = {}) {
+  if (typeof document !== "undefined" && _ouvindoZ !== document) { document.addEventListener("keydown", aoTeclaZ); _ouvindoZ = document; }
+  let resolver;
+  const fim = new Promise(r => { resolver = r; });
+  const item = { reverter: reverter || (() => {}), resolve: resolver, fim: false, t: null };
+  try {
+    if (aplicar) await aplicar();
+  } catch (e) {
+    toast(mensagemErro(e), { tipo: "erro" });
+    return { estado: "falhou", desfeita: false, erro: e };
+  }
+  while (_desfazer.length >= 3) { const velho = _desfazer[0]; manterItem(velho); if (velho.t) velho.t.fechar(); }
+  _desfazer.push(item);
+  item.t = toast(texto, { tipo: "info", ms, desfazer: () => desfazerItem(item), aoFechar: motivo => { if (motivo !== "desfazer") manterItem(item); } });
+  return fim;
+}
+
+/** numMoeda(valor, {centavos = true}) → <span class="num-moeda"> com "R$" e centavos a 60 % (use no lugar de texto "R$ 1.234,56" nos números grandes). */
+export function numMoeda(valor, { centavos = true } = {}) {
+  const n = Number(valor);
+  if (valor === null || valor === undefined || valor === "" || !Number.isFinite(n)) return h("span", { class: "num-moeda" }, "—");
+  const neg = n < 0 ? "−" : "";
+  const [inteiro, cent] = Math.abs(n).toFixed(2).split(".");
+  return h("span", { class: "num-moeda" },
+    h("span", { class: "nm-rs" }, "R$"), neg + _fmt.num.format(Number(inteiro)),
+    centavos ? h("span", { class: "nm-cent" }, `,${cent}`) : null);
 }

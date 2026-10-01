@@ -166,9 +166,15 @@ export function derivarTema(cores = {}) {
     fundo = f;
   }
   // Derive superfícies só depois da guarda: o fundo pode ter sido corrigido acima.
+  // superficies[0..2] = a escada "para dentro do texto" (5/9/14 %): no escuro ela CLAREIA e é exatamente a de antes.
   const superficies = [.05, .09, .14].map(t => misturar(fundo, texto, t));
   const esq = escuro ? "escuro" : "claro";
   const fx = FIXOS[esq];
+  // Papel e elevação (M01). Escuro: o cartão é a 1ª degrau da escada (mais claro que a página) e o poço é um tom abaixo do fundo.
+  // Claro: a escada para o texto ESCURECE, então o cartão sobe para o lado do branco (mais claro que a página, com borda e sombra)
+  // e o poço (campos, áreas rebaixadas) fica um sopro abaixo da página; --c-sup-3 só serve de "pressionado" (o mais escuro).
+  const sup = escuro ? superficies[0] : misturar(fundo, BRANCO, .7);
+  const poco = escuro ? misturar(fundo, PRETO, .35) : misturar(fundo, texto, .05);
 
   const primSuave = misturar(fundo, prim, .16);
   const secSuave = misturar(fundo, sec, .14);
@@ -201,6 +207,16 @@ export function derivarTema(cores = {}) {
   const meta = garantirContraste(fx.meta, [secSuave]);
   const google = garantirContraste(fx.google, [misturar(fundo, fx.aten, .16)]);
 
+  // Gravidade do Radar (--c-sev-*) e acento do produto (--c-prod-*): texto/ícone sobre QUALQUER superfície do app, não só sobre o suave da pílula.
+  const superf = [fundo, sup, poco, superficies[1], superficies[2]];
+  const sev = {};
+  for (const [k, de] of [["info", "info"], ["aten", "aten"], ["crit", "ruim"]]) sev[k] = garantirContraste(fx[de], [misturar(fundo, fx[de], .16), ...superf]);
+  const prod = {
+    crm: garantirContraste(primLuz.cor, superf),
+    ads: garantirContraste(secLuz.cor, superf),
+    atend: garantirContraste(misturar(primLuz.cor, secLuz.cor, .5), superf),
+  };
+
   const vars = {
     "--esquema": esq,
     "--c-fundo": fundo,
@@ -208,9 +224,10 @@ export function derivarTema(cores = {}) {
     "--c-texto-2": garantirContraste(misturar(fundo, texto, .72), [superficies[2]]),
     // Rótulos menores também precisam de 4,5:1; 56% falha em vários fundos claros.
     "--c-texto-3": ajustarContraste(misturar(fundo, texto, .56), superficies[2], 4.5).cor,
-    "--c-sup": superficies[0],
+    "--c-sup": sup,                       // cartão
+    "--c-poco": poco,                     // área rebaixada (campos, fundo de bloco dentro do cartão)
     "--c-sup-2": superficies[1],
-    "--c-sup-3": superficies[2],
+    "--c-sup-3": superficies[2],          // pressionado
     "--c-borda": misturar(fundo, texto, .12),
     "--c-borda-2": misturar(fundo, texto, .20),
     "--c-prim": prim,
@@ -231,6 +248,9 @@ export function derivarTema(cores = {}) {
     "--c-nota": misturar(fundo, fx.aten, .18),
     "--c-nota-txt": texto,
     "--c-meta": meta, "--c-google": google,
+    "--c-sev-info": sev.info, "--c-sev-aten": sev.aten, "--c-sev-crit": sev.crit,
+    // --c-prod (acento do produto) NÃO sai daqui: o app.css o escolhe por [data-produto] entre estes três (inline venceria a regra do CSS)
+    "--c-prod-crm": prod.crm, "--c-prod-ads": prod.ads, "--c-prod-atend": prod.atend,
     "--c-bolha-in": misturar(fundo, texto, .09),
     "--c-bolha-out": misturar(fundo, prim, .16),
     // palco e vidro

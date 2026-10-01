@@ -530,3 +530,16 @@ export function contar(el, valor, fmt) {
   };
   requestAnimationFrame(passo);
 }
+
+/* ---------- 2.9 Resposta ao dado: o número que mudou acende ---------- */
+/** G.destacar(el) — flash de 600 ms em --c-prim-suave (classe .destaque do app.css) quando um número muda de valor.
+    Sem flash com movimento reduzido; chamar de novo no meio reinicia o flash. Devolve o próprio elemento. */
+export function destacar(el) {
+  if (!el || !el.classList || reduzido()) return el;
+  el.classList.remove("destaque");
+  void el.offsetWidth;                      // força o recálculo de estilo para a animação recomeçar
+  el.classList.add("destaque");
+  clearTimeout(el.__destaqueT);
+  el.__destaqueT = setTimeout(() => el.classList.remove("destaque"), 620);
+  return el;
+}

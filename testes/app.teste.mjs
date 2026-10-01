@@ -11,6 +11,8 @@
        nenhum 1fr solto, innerHTML só constante, nenhum import estático, import() sempre com ?v=,
        módulos não carregam ui/api/app/tema, arquivos do §7.1 existem e passam em node --check
    (h) correções de 01/10/2026: achados da rodada de testes do front (CRM, Conversas/CodeWords, Agenda, Relatórios, white-label, a11y, API)
+   (i) contratos da linguagem visual (frente A, plano de 01/10/2026): tokens, classes, tema por esquema, ui.cabecalho/segmentado/toqueLongo/deslizar/
+       esqueleto/trocarEsqueleto/erroCartao/acaoComDesfazer/modal+gaveta(protegerTexto)/campo(validar)/vazio e G.destacar — com um DOM de mentira mínimo
    Os arquivos de OUTRAS frentes que ainda não existem só geram aviso; com ORBITA_COMPLETO=1
    (a F8 usa no rodar-tudo, depois de todas as frentes) a falta vira falha.
    ============================================================ */
@@ -1097,7 +1099,8 @@ await teste("modal × Voltar: navegar com modal aberto reaproveita a entrada do 
 });
 await teste("modal: a camada nasce/morre com o modal(), e o navegar() do app espera o histórico assentar e reaproveita a entrada do modal", () => {
   const ui = ler("ui.js"), app = ler("app.js");
-  assert.match(ui, /camada = camadas\.abrir\(\(\) => api\.fechar\(null\)\)/, "modal() abre a camada (Voltar fecha o modal)");
+  assert.match(ui, /const abrirCamada = \(\) => camadas\.abrir\(\(\) => \{[\s\S]*?else api\.fechar\(null\);/, "modal() abre a camada (Voltar fecha o modal, ou pergunta se há texto digitado)");
+  assert.match(ui, /camada = abrirCamada\(\);/, "modal() liga a camada ao abrir");
   assert.match(ui, /if \(camada\) camada\.liberar\(\);/, "fechar() libera a camada");
   assert.match(app, /camadas\.voltaPendente\(\)\) \{ E\.ui\.camadas\.aposVolta\(\(\) => navegar\(hash, \{ substituir \}\)\); return; \}/);
   assert.match(app, /camadas\.consumirEntrada\(\)\) \{\s*history\.replaceState\(null,/);
@@ -1494,6 +1497,868 @@ await teste("T10: chamadas de servidor que passam dos 75 s esperam MAIS que o pi
     await fixo.fn("nx-ia", { acao: "sugerir" });
     assert.deepEqual(vistos, [9_000], "o prazo geral fixado nos testes continua valendo");
   } finally { globalThis.setTimeout = original; }
+});
+
+
+/* ============================================================ (i) CONTRATOS DA LINGUAGEM VISUAL (frente A, plano de 01/10/2026) */
+console.log("\n(i) contratos da linguagem visual (tokens, classes e componentes base)");
+const CSS_APP = ler("app.css");
+const BLOCO_A = CSS_APP.slice(CSS_APP.indexOf("LINGUAGEM VISUAL — contratos da frente A"));
+const luz = (T0, hex) => T0.luminancia(hex);
+
+/* ---------- tokens e classes ---------- */
+await teste("app.css :root traz os tokens do contrato (escala --fs-*, --f-narr, superfícies, gravidade, acento do produto)", () => {
+  const raiz = CSS_APP.slice(CSS_APP.indexOf(":root {"), CSS_APP.indexOf("@media (prefers-reduced-motion: reduce)"));
+  for (const t of ["--fs-display", "--fs-h1", "--fs-h2", "--fs-h3", "--fs-num-xl", "--fs-num-l", "--fs-num-m", "--fs-corpo", "--fs-peq",
+    "--f-narr", "--c-sup", "--c-poco", "--c-sup-3", "--c-sev-info", "--c-sev-aten", "--c-sev-crit", "--c-prod"]) {
+    assert.match(raiz, new RegExp(`${t}:`), `falta ${t} no :root`);
+  }
+  assert.match(raiz, /--fs-display: clamp\(2\.5rem,/, "display fluido de 40 px…");
+  assert.match(raiz, /--fs-h1: clamp\(1\.75rem,/, "h1 fluido de 28 px…");
+  assert.match(raiz, /--fs-h2: 1\.25rem; --fs-h3: 1rem;/);
+  assert.match(raiz, /--fs-num-xl: 2\.75rem; --fs-num-l: 2rem; --fs-num-m: 1\.5rem;/, "números 44/32/24");
+  assert.match(raiz, /--fs-corpo: \.9375rem; --fs-peq: \.8125rem;/);
+});
+await teste("Zodiak itálica: arquivo em web/fonts, @font-face com swap em app.css, --f-narr só em .narr (nada de requisição no login)", () => {
+  assert.ok(existsSync(join(RAIZ, "web", "fonts", "zodiak-variable-italic.woff2")), "arquivo da fonte");
+  assert.match(CSS_APP, /@font-face \{ font-family: "Nx Zodiak"; src: url\("\.\.\/fonts\/zodiak-variable-italic\.woff2"\)[^}]*font-style: italic; font-display: swap;/);
+  const usos = [...CSS_APP.matchAll(/([^{}]+)\{[^}]*font-family:\s*var\(--f-narr\)[^}]*\}/g)].map(m => m[1].trim());
+  assert.ok(usos.length >= 1 && usos.every(s => /^\.narr$/.test(s)), `--f-narr só pode estar em .narr: ${usos.join(" | ")}`);
+  const html = ler("index.html");
+  assert.doesNotMatch(html, /zodiak/i, "sem preload da Zodiak no HTML (só baixa quando aparece um .narr)");
+  assert.doesNotMatch(ler("login.js"), /\bnarr\b/, "a tela de login não usa .narr");
+});
+await teste("classes do contrato: .rotulo (Satoshi 600 13 px), .dado (Plex), .selo-caps, .narr, .num-moeda, .entra, .destaque", () => {
+  const regra = sel => { const m = CSS_APP.match(new RegExp(`(?:^|\\n)${sel.replace(/[.\\]/g, "\\$&")} \\{([^}]*)\\}`)); assert.ok(m, `regra ${sel}`); return m[1]; };
+  const r = regra(".rotulo");
+  assert.match(r, /font-family: var\(--f-corpo\)/); assert.match(r, /font-weight: 600/); assert.match(r, /font-size: var\(--fs-peq\)/);
+  assert.doesNotMatch(r, /uppercase|letter-spacing/, ".rotulo: minúscula e sem tracking");
+  assert.match(regra(".dado"), /font-family: var\(--f-mono\)/);
+  assert.match(regra(".selo-caps"), /text-transform: uppercase/);
+  assert.match(regra(".narr"), /font-family: var\(--f-narr\)/);
+  assert.match(CSS_APP, /\.num-moeda small, \.num-moeda \.nm-rs, \.num-moeda \.nm-cent \{ font-size: \.6em;/, "R$ e centavos a 60 %");
+  assert.match(regra(".entra"), /animation: entra 160ms/);
+  assert.match(regra(".destaque"), /animation: destaqueFlash 600ms/);
+  assert.match(CSS_APP, /@keyframes destaqueFlash \{ from \{ background-color: var\(--c-prim-suave\); \}/);
+});
+await teste("bloco da frente A em app.css: sem hex, sem tamanho de letra em px/rem fora de tokens, caixa-alta só em .selo-caps, grades com minmax", () => {
+  assert.ok(BLOCO_A.length > 2000, "bloco encontrado");
+  assert.doesNotMatch(BLOCO_A.replace(/\/\*[\s\S]*?\*\//g, ""), /#[0-9a-fA-F]{3,8}\b/, "hex no bloco");
+  for (const m of BLOCO_A.matchAll(/font-size:\s*([^;}]+)/g)) {
+    assert.doesNotMatch(m[1], /^[\d.]+(px|rem)\b/, `font-size literal: ${m[0]}`);
+  }
+  const caixaAlta = [...BLOCO_A.matchAll(/([^{}]+)\{[^}]*text-transform:\s*uppercase[^}]*\}/g)].map(m => m[1].trim().split("\n").pop().trim());
+  assert.deepEqual(caixaAlta, [".selo-caps"], "caixa-alta só em .selo-caps");
+  assert.doesNotMatch(semMinmax(BLOCO_A.replace(/\/\*[\s\S]*?\*\//g, "")), /[\s(:,]\d*\.?\d+fr\b/, "1fr solto");
+});
+await teste("M01/M10 (parte do contrato): .cartao sem backdrop-filter; esqueleto com faixa clara e pulso de opacidade com movimento reduzido", () => {
+  const cartoes = [...CSS_APP.matchAll(/(^|\n)\.cartao \{([^}]*)\}/g)].map(m => m[2]);
+  assert.ok(cartoes.length >= 1);
+  for (const c of cartoes) assert.doesNotMatch(c, /backdrop-filter/, ".cartao é opaco: sem backdrop-filter");
+  assert.match(CSS_APP, /\.sk::after \{[^}]*linear-gradient\(100deg, transparent 20%, var\(--c-sk-luz\) 50%, transparent 80%\)[^}]*animation: skVarre 1\.4s linear infinite/);
+  assert.match(CSS_APP, /@media \(prefers-reduced-motion: reduce\) \{\s*\.sk::after \{ animation: none !important; display: none; \}\s*\.sk \{ animation: skPulso 1\.4s ease-in-out infinite alternate !important; \}/);
+});
+await teste("[data-produto] escolhe --c-prod entre os três acentos; o tema.js não escreve --c-prod (inline venceria a regra do CSS)", () => {
+  assert.match(CSS_APP, /html\[data-produto="crm"\] \{ --c-prod: var\(--c-prod-crm\); \}/);
+  assert.match(CSS_APP, /html\[data-produto="ads"\] \{ --c-prod: var\(--c-prod-ads\); \}/);
+  assert.match(CSS_APP, /html\[data-produto="atendimento"\] \{ --c-prod: var\(--c-prod-atend\); \}/);
+  const { vars } = T.derivarTema(T.PADRAO.cores);
+  assert.ok(!("--c-prod" in vars));
+  for (const k of ["--c-prod-crm", "--c-prod-ads", "--c-prod-atend"]) assert.ok(k in vars, k);
+});
+
+/* ---------- tema.js: superfícies por esquema, gravidade e acento do produto ---------- */
+const CLARO_4 = { padrao: T.coresNoEsquema(T.PADRAO.cores, "claro"), vermelha: { primaria: "#C62828", secundaria: "#E57373", fundo: "#F3F0E9" },
+  verde: { primaria: "#1E8E3E", secundaria: "#81C995", fundo: "#F3F0E9" }, azul: { primaria: "#1A56DB", secundaria: "#7AA7F7", fundo: "#F3F0E9" } };
+const ESCURO_4 = { padrao: T.coresNoEsquema(T.PADRAO.cores, "escuro"), vermelha: T.coresNoEsquema({ primaria: "#C62828", secundaria: "#E57373", fundo: "#0B1416" }, "escuro"),
+  verde: { primaria: "#1E8E3E", secundaria: "#81C995", fundo: "#0E1116" }, azul: { primaria: "#1A56DB", secundaria: "#7AA7F7", fundo: "#0A0F1A" } };
+await teste("tema claro (M01): o cartão é mais claro que a página, o poço é mais escuro, --c-sup-3 é o mais escuro (pressionado); 4 marcas", () => {
+  for (const [nome, m] of Object.entries(CLARO_4)) {
+    const { vars, escuro } = T.derivarTema(m);
+    assert.equal(escuro, false, nome);
+    assert.ok(luz(T, vars["--c-sup"]) > luz(T, vars["--c-fundo"]), `${nome}: cartão ${vars["--c-sup"]} deve ser mais claro que a página ${vars["--c-fundo"]}`);
+    assert.ok(luz(T, vars["--c-poco"]) < luz(T, vars["--c-fundo"]), `${nome}: poço mais escuro que a página`);
+    assert.ok(luz(T, vars["--c-sup-3"]) < luz(T, vars["--c-poco"]), `${nome}: pressionado é o mais escuro`);
+  }
+});
+await teste("derivarTema: texto, texto-2 e texto-3 chegam a 4,5:1 sobre --c-sup e --c-poco nas 4 marcas × claro e escuro (e em 34 marcas)", () => {
+  const todas = [...Object.values(CLARO_4), ...Object.values(ESCURO_4), ...marcas];
+  for (const m of todas) {
+    const { vars } = T.derivarTema(m);
+    for (const sup of ["--c-sup", "--c-poco"]) for (const t of ["--c-texto", "--c-texto-2", "--c-texto-3"]) {
+      assert.ok(T.contraste(vars[t], vars[sup]) >= 4.5 - 1e-9, `${t} ${vars[t]} sobre ${sup} ${vars[sup]} = ${T.contraste(vars[t], vars[sup]).toFixed(2)} (${JSON.stringify(m)})`);
+    }
+  }
+});
+await teste("derivarTema: --c-sev-* (gravidade) e --c-prod-* (acento do produto) ≥ 4,5:1 sobre fundo, cartão, poço e pressionado, nas 4 marcas e nos dois esquemas", () => {
+  for (const m of [...Object.values(CLARO_4), ...Object.values(ESCURO_4), ...marcas]) {
+    const { vars } = T.derivarTema(m);
+    for (const k of ["--c-sev-info", "--c-sev-aten", "--c-sev-crit", "--c-prod-crm", "--c-prod-ads", "--c-prod-atend"]) {
+      assert.match(vars[k], /^#[0-9A-F]{6}$/, k);
+      for (const s of ["--c-fundo", "--c-sup", "--c-poco", "--c-sup-3"]) {
+        assert.ok(T.contraste(vars[k], vars[s]) >= 4.5 - 1e-9, `${k} ${vars[k]} sobre ${s} ${vars[s]} = ${T.contraste(vars[k], vars[s]).toFixed(2)} (${JSON.stringify(m)})`);
+      }
+    }
+  }
+});
+await teste("tema escuro (M01): as variáveis que já existiam saem IGUAIS às de antes (hash do conjunto, 4 marcas escuras)", () => {
+  // Golden gerado com o derivarTema anterior ao contrato (sem --c-poco, --c-sev-* e --c-prod-*): o escuro não pode mudar de cor.
+  const NOVAS = k => k === "--c-poco" || k.startsWith("--c-sev-") || k.startsWith("--c-prod-");
+  const ouro = { padrao: "crbj7x", vermelha: "1a72b8", azul: "5uy1mz", verde: "afn58s" };
+  for (const [nome, m] of Object.entries(ESCURO_4)) {
+    const { vars, escuro } = T.derivarTema(m);
+    assert.equal(escuro, true, nome);
+    const antigas = Object.fromEntries(Object.entries(vars).filter(([k]) => !NOVAS(k)));
+    assert.equal(T.hashCurto(antigas), ouro[nome], `${nome}: o escuro mudou`);
+  }
+});
+await teste("tema escuro: o poço fica abaixo do fundo e o cartão acima (escada que clareia)", () => {
+  for (const m of Object.values(ESCURO_4)) {
+    const { vars } = T.derivarTema(m);
+    assert.ok(luz(T, vars["--c-poco"]) < luz(T, vars["--c-fundo"]));
+    assert.ok(luz(T, vars["--c-sup"]) > luz(T, vars["--c-fundo"]));
+  }
+});
+
+
+/* ---------- DOM de mentira (sem dependências): o bastante para h(), eventos, seletores simples, foco e diálogo ---------- */
+function criarDom() {
+  const kebab = s => s.replace(/[A-Z]/g, c => "-" + c.toLowerCase());
+  class Evento {
+    constructor(type, init = {}) { this.type = type; this.bubbles = true; this.cancelable = true; this.isTrusted = true; this.defaultPrevented = false; Object.assign(this, init); }
+    preventDefault() { this.defaultPrevented = true; }
+    stopPropagation() { this._parado = true; }
+  }
+  class No {
+    constructor() { this.parentNode = null; this.childNodes = []; this._ouv = []; }
+    get isConnected() { let n = this; while (n.parentNode) n = n.parentNode; return n === doc; }
+    get firstChild() { return this.childNodes[0] || null; }
+    get lastChild() { return this.childNodes[this.childNodes.length - 1] || null; }
+    get firstElementChild() { return this.children[0] || null; }
+    get children() { return this.childNodes.filter(c => c.nodeType === 1); }
+    get nextSibling() { const p = this.parentNode; if (!p) return null; return p.childNodes[p.childNodes.indexOf(this) + 1] || null; }
+    appendChild(n) { return this.insertBefore(n, null); }
+    insertBefore(n, ref) {
+      if (n.parentNode) n.parentNode.removeChild(n);
+      const i = ref ? this.childNodes.indexOf(ref) : -1;
+      if (i < 0) this.childNodes.push(n); else this.childNodes.splice(i, 0, n);
+      n.parentNode = this; return n;
+    }
+    removeChild(n) { const i = this.childNodes.indexOf(n); if (i >= 0) { this.childNodes.splice(i, 1); n.parentNode = null; } return n; }
+    remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+    append(...ns) { for (const n of ns) this.appendChild(typeof n === "object" && n && n.nodeType ? n : new Texto(n)); }
+    contains(n) { for (let x = n; x; x = x.parentNode) if (x === this) return true; return false; }
+    addEventListener(tipo, fn, opc) { this._ouv.push({ tipo, fn, captura: opc === true || !!(opc && opc.capture) }); }
+    removeEventListener(tipo, fn, opc) { const c = opc === true || !!(opc && opc.capture); this._ouv = this._ouv.filter(o => !(o.tipo === tipo && o.fn === fn && o.captura === c)); }
+    dispatchEvent(ev) {
+      ev.target = ev.target || this;
+      const caminho = []; for (let n = this; n; n = n.parentNode) caminho.push(n);
+      const roda = (n, fase) => { ev.currentTarget = n; for (const o of [...n._ouv]) if (o.tipo === ev.type && (fase === "alvo" || (fase === "captura") === o.captura)) { o.fn(ev); } };
+      for (let i = caminho.length - 1; i > 0 && !ev._parado; i--) roda(caminho[i], "captura");
+      if (!ev._parado) roda(this, "alvo");
+      if (ev.bubbles) for (let i = 1; i < caminho.length && !ev._parado; i++) roda(caminho[i], "bolha");
+      return !ev.defaultPrevented;
+    }
+  }
+  class Texto extends No {
+    constructor(t) { super(); this.nodeType = 3; this.data = String(t); }
+    get textContent() { return this.data; } set textContent(v) { this.data = String(v); }
+  }
+  /* seletores: tag, #id, .classe, [attr], [attr=v], [attr^=v], :not(...), :disabled, lista com vírgula, descendente e filho (>) */
+  function splitVirgula(s) {
+    const out = []; let nivel = 0, cur = "";
+    for (const c of s) { if (c === "[" || c === "(") nivel++; if (c === "]" || c === ")") nivel--; if (nivel === 0 && c === ",") { out.push(cur.trim()); cur = ""; } else cur += c; }
+    if (cur.trim()) out.push(cur.trim()); return out;
+  }
+  function parseComplexo(s) {
+    const partes = []; let nivel = 0, cur = "", comb = null;
+    const fecha = () => { if (cur) { if (partes.length) partes.push(comb || " "); partes.push(cur); cur = ""; comb = null; } };
+    for (const c of s) {
+      if (c === "[" || c === "(") nivel++; if (c === "]" || c === ")") nivel--;
+      if (nivel === 0 && (c === " " || c === ">")) { fecha(); if (c === ">") comb = ">"; else if (!comb) comb = " "; } else cur += c;
+    }
+    fecha(); return partes;
+  }
+  function casaComposto(el, s) {
+    let i = 0; const m0 = /^([a-zA-Z][\w-]*|\*)/.exec(s);
+    if (m0) { if (m0[1] !== "*" && el.localName.toLowerCase() !== m0[1].toLowerCase()) return false; i = m0[0].length; }
+    while (i < s.length) {
+      const resto = s.slice(i); let mm;
+      if (resto[0] === "#") { mm = /^#([\w-]+)/.exec(resto); if (el.attrs.get("id") !== mm[1]) return false; }
+      else if (resto[0] === ".") { mm = /^\.([\w-]+)/.exec(resto); if (!el.classList.contains(mm[1])) return false; }
+      else if (resto[0] === "[") {
+        mm = /^\[([\w:-]+)(?:([~|^$*]?=)(?:"([^"]*)"|'([^']*)'|([^\]]*)))?\]/.exec(resto);
+        if (!el.attrs.has(mm[1])) return false;
+        if (mm[2]) { const v = el.attrs.get(mm[1]), a = mm[3] ?? mm[4] ?? mm[5]; if (mm[2] === "=" && v !== a) return false; if (mm[2] === "^=" && !v.startsWith(a)) return false; }
+      } else if (resto[0] === ":") {
+        mm = /^:([\w-]+)(?:\(((?:[^()]|\([^)]*\))*)\))?/.exec(resto);
+        if (mm[1] === "not") { if (casaLista(el, mm[2])) return false; } else if (mm[1] === "disabled") { if (!el.disabled) return false; } else return false;
+      } else return false;
+      i += mm[0].length;
+    }
+    return true;
+  }
+  function casaComplexo(el, partes) {
+    if (!casaComposto(el, partes[partes.length - 1])) return false;
+    if (partes.length === 1) return true;
+    const comb = partes[partes.length - 2], resto = partes.slice(0, -2);
+    if (comb === ">") return !!el.parentNode && el.parentNode.nodeType === 1 && casaComplexo(el.parentNode, resto);
+    for (let p = el.parentNode; p && p.nodeType === 1; p = p.parentNode) if (casaComplexo(p, resto)) return true;
+    return false;
+  }
+  function casaLista(el, lista) { return splitVirgula(lista).some(sel => casaComplexo(el, parseComplexo(sel))); }
+  class El extends No {
+    constructor(tag, ns) {
+      super(); this.nodeType = 1; this.localName = tag; this.tagName = tag.toUpperCase(); this.namespaceURI = ns || null;
+      this.attrs = new Map(); this.value = ""; this.checked = false; this.disabled = false; this.hidden = false; this.open = false;
+      this.offsetWidth = 0; this.offsetLeft = 0; this.selectionStart = null;
+      const estilos = new Map(); const el = this;
+      this.style = { setProperty: (k, v) => { if (v === "" || v == null) estilos.delete(k); else estilos.set(k, String(v)); }, getPropertyValue: k => estilos.get(k) || "", removeProperty: k => { estilos.delete(k); } };
+      this.dataset = new Proxy({}, {
+        get: (_, k) => (typeof k === "string" && el.attrs.has("data-" + kebab(k)) ? el.attrs.get("data-" + kebab(k)) : undefined),
+        set: (_, k, v) => { el.attrs.set("data-" + kebab(k), String(v)); return true; },
+        deleteProperty: (_, k) => { el.attrs.delete("data-" + kebab(k)); return true; },
+      });
+      const cls = () => (el.attrs.get("class") || "").split(/\s+/).filter(Boolean);
+      this.classList = {
+        add: (...c) => { const s = new Set(cls()); c.forEach(x => s.add(x)); el.attrs.set("class", [...s].join(" ")); },
+        remove: (...c) => { const s = new Set(cls()); c.forEach(x => s.delete(x)); el.attrs.set("class", [...s].join(" ")); },
+        contains: c => cls().includes(c), toggle: c => { const t = !cls().includes(c); t ? this.classList.add(c) : this.classList.remove(c); return t; },
+      };
+    }
+    setAttribute(k, v) { this.attrs.set(k, String(v)); } getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; }
+    hasAttribute(k) { return this.attrs.has(k); } removeAttribute(k) { this.attrs.delete(k); }
+    get id() { return this.attrs.get("id") || ""; }
+    get name() { return this.attrs.get("name") || ""; }
+    get type() { return this.attrs.get("type") || (this.localName === "input" ? "text" : ""); }
+    set type(v) { this.attrs.set("type", v); }
+    get tabIndex() { return Number(this.attrs.get("tabindex") ?? -1); } set tabIndex(v) { this.attrs.set("tabindex", String(v)); }
+    get className() { return this.attrs.get("class") || ""; }
+    get textContent() { return this.childNodes.map(c => c.textContent).join(""); }
+    set textContent(v) { for (const c of [...this.childNodes]) this.removeChild(c); if (v !== "" && v != null) this.appendChild(new Texto(v)); }
+    matches(sel) { return casaLista(this, sel); }
+    get multiple() { return this.attrs.has("multiple"); }
+    querySelectorAll(sel) {
+      const alvos = splitVirgula(sel).map(parseComplexo);
+      const out = [];
+      const andar = n => { for (const c of n.childNodes) if (c.nodeType === 1) { if (alvos.some(p => casaComplexo(c, p))) out.push(c); andar(c); } };
+      andar(this); return out;
+    }
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+    focus() { doc.activeElement = this; }
+    blur() { if (doc.activeElement === this) doc.activeElement = doc.body; }
+    click() { this.dispatchEvent(new Evento("click")); }
+    setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; }
+    scrollIntoView() {}
+    getBoundingClientRect() { return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }; }
+    showModal() { this.open = true; } close() { this.open = false; this.dispatchEvent(new Evento("close", { bubbles: false })); }
+  }
+  const doc = new No();
+  doc.nodeType = 9;
+  doc.createElement = t => new El(t); doc.createElementNS = (ns, t) => new El(t, ns); doc.createTextNode = t => new Texto(t);
+  doc.documentElement = doc.appendChild(new El("html")); doc.body = doc.documentElement.appendChild(new El("body")); doc.activeElement = doc.body;
+  doc.getElementById = id => { const f = n => { for (const c of n.childNodes) if (c.nodeType === 1) { if (c.attrs.get("id") === id) return c; const r = f(c); if (r) return r; } return null; }; return f(doc.documentElement); };
+  doc.querySelectorAll = sel => doc.documentElement.querySelectorAll(sel); doc.querySelector = sel => doc.documentElement.querySelector(sel);
+  return { doc, Evento, El };
+}
+/** Instala o DOM de mentira (e matchMedia/addEventListener globais) para UM teste; devolve utilidades e `fim()`. */
+function comDom({ grosso = false, reduzido = false } = {}) {
+  const { doc, Evento } = criarDom();
+  const salvo = { document: globalThis.document, matchMedia: globalThis.matchMedia, addEventListener: globalThis.addEventListener, Event: globalThis.Event };
+  const janela = [];
+  globalThis.document = doc;
+  globalThis.matchMedia = q => ({ matches: (/coarse/.test(q) && grosso) || (/reduce/.test(q) && reduzido) });
+  globalThis.addEventListener = (t, f) => janela.push([t, f]);
+  globalThis.Event = Evento;
+  return {
+    doc, Evento, janela,
+    disparar: (t, ...a) => { for (const [tipo, f] of janela.slice()) if (tipo === t) f(...a); },
+    ev: (el, tipo, init) => el.dispatchEvent(new Evento(tipo, init)),
+    fim() { for (const [k, v] of Object.entries(salvo)) { if (v === undefined) delete globalThis[k]; else globalThis[k] = v; } },
+  };
+}
+const esperar = ms => new Promise(r => setTimeout(r, ms));
+const lista = el => el.querySelectorAll("*");
+const achar = (el, sel) => { const x = el.querySelector(sel); assert.ok(x, `não achei ${sel}`); return x; };
+
+
+/* ---------- componentes (DOM de mentira) ---------- */
+await teste("contratos existem: ui.cabecalho/segmentado/toqueLongo/deslizar/esqueleto/trocarEsqueleto/erroCartao/acaoComDesfazer/modal/gaveta/campo/vazio e G.destacar; assinaturas antigas continuam", () => {
+  for (const f of ["cabecalho", "segmentado", "toqueLongo", "deslizar", "esqueleto", "trocarEsqueleto", "erroCartao", "acaoComDesfazer", "modal", "gaveta", "campo", "vazio",
+    "toast", "anunciar", "confirmar", "abas", "lerForm", "marcarErro", "carregando", "tabela", "pilula", "numMoeda", "validarCampo", "validarForm", "mascarar", "fraseDeErro"]) {
+    assert.equal(typeof U[f], "function", `ui.${f}`);
+  }
+  assert.equal(typeof GRAF.destacar, "function", "G.destacar");
+  assert.equal(U.esqueleto.length, 0, "esqueleto(tipo = 'lista', opcoes = {}) tem parâmetros com padrão (compatível com esqueleto('lista', 6))");
+});
+
+await teste("ui.cabecalho: nível 1 gera <h1> (tabindex -1), nível 2 gera <h2>; rótulo, subtítulo e ações opcionais", () => {
+  const d = comDom();
+  try {
+    const a = U.cabecalho({ rotulo: "Clínica Sorriso", titulo: "Pacientes", sub: "12 ativos", acoes: [U.h("button", null, "Novo"), null, U.h("button", null, "Importar")], nivel: 1 });
+    assert.equal(a.tagName, "HEADER");
+    const h1 = achar(a, "h1");
+    assert.equal(h1.textContent, "Pacientes"); assert.equal(h1.getAttribute("tabindex"), "-1");
+    assert.equal(a.querySelectorAll("h2").length, 0);
+    assert.equal(achar(a, ".cab-rotulo").textContent, "Clínica Sorriso"); assert.ok(achar(a, ".cab-rotulo").classList.contains("rotulo"));
+    assert.equal(achar(a, ".cab-sub").textContent, "12 ativos");
+    assert.equal(a.querySelectorAll(".cab-acoes button").length, 2, "ações nulas são ignoradas");
+    const b = U.cabecalho({ titulo: "Marca e tema", nivel: 2 });
+    assert.equal(b.querySelectorAll("h2").length, 1); assert.equal(b.querySelectorAll("h1").length, 0);
+    assert.equal(b.querySelector(".cab-rotulo"), null); assert.equal(b.querySelector(".cab-acoes"), null); assert.ok(b.classList.contains("cab-n2"));
+    assert.equal(achar(b, "h2").getAttribute("tabindex"), null);
+    assert.equal(U.cabecalho({ titulo: "X" }).querySelectorAll("h1").length, 1, "nível padrão = 1");
+    const so = U.cabecalho({ titulo: "Um botão", acoes: U.h("button", null, "Ok") });
+    assert.equal(so.querySelectorAll(".cab-acoes button").length, 1, "uma ação solta (não lista)");
+  } finally { d.fim(); }
+});
+
+await teste("ui.segmentado (M05): abas/filtro, aria-selected único, setas/Home/End/Enter/Espaço, aoMudar, contador em .dado, indicador que desliza e movimento reduzido", async () => {
+  const d = comDom();
+  try {
+    const mudou = [];
+    const s = U.segmentado({ opcoes: [{ valor: "a", rotulo: "Abertas", contador: 3 }, { valor: "b", rotulo: "Pendentes" }, { valor: "c", rotulo: "Resolvidas", contador: 0 }],
+      valor: "a", tipo: "abas", aoMudar: v => mudou.push(v), rotulo: "Situação" });
+    d.doc.body.appendChild(s);
+    assert.equal(s.getAttribute("role"), "tablist"); assert.ok(s.classList.contains("seg-abas")); assert.equal(s.getAttribute("aria-label"), "Situação");
+    const tabs = s.querySelectorAll("[role=tab]");
+    assert.equal(tabs.length, 3);
+    const marcadas = () => tabs.filter(t => t.getAttribute("aria-selected") === "true");
+    assert.equal(marcadas().length, 1); assert.equal(marcadas()[0].dataset.valor, "a");
+    assert.deepEqual(tabs.map(t => t.tabIndex), [0, -1, -1], "roving tabindex");
+    assert.equal(tabs[0].querySelector(".seg-n").textContent, "3"); assert.ok(tabs[0].querySelector(".seg-n").classList.contains("dado"), "contador em .dado");
+    assert.equal(tabs[1].querySelector(".seg-n").hidden, true); assert.equal(tabs[2].querySelector(".seg-n").hidden, false, "contador 0 aparece");
+    assert.match(tabs[0].textContent, /Abertas 3/, "espaço entre rótulo e contador (leitor de tela)");
+    // setas
+    tabs[0].focus();
+    d.ev(tabs[0], "keydown", { key: "ArrowRight" });
+    assert.equal(s.valor, "b"); assert.deepEqual(mudou, ["b"]); assert.equal(d.doc.activeElement, tabs[1]); assert.equal(marcadas().length, 1);
+    assert.deepEqual(tabs.map(t => t.tabIndex), [-1, 0, -1]);
+    d.ev(tabs[1], "keydown", { key: "ArrowRight" }); assert.equal(s.valor, "c");
+    d.ev(tabs[2], "keydown", { key: "ArrowRight" }); assert.equal(s.valor, "a", "dá a volta");
+    d.ev(tabs[0], "keydown", { key: "ArrowLeft" }); assert.equal(s.valor, "c", "volta pelo outro lado");
+    d.ev(tabs[2], "keydown", { key: "Home" }); assert.equal(s.valor, "a");
+    d.ev(tabs[0], "keydown", { key: "End" }); assert.equal(s.valor, "c");
+    assert.deepEqual(mudou, ["b", "c", "a", "c", "a", "c"]);
+    assert.equal(marcadas().length, 1, "aria-selected único depois de tudo");
+    // Enter e Espaço ativam o item com foco; repetir no ativo não chama aoMudar de novo
+    tabs[1].focus();
+    const e1 = new d.Evento("keydown", { key: "Enter" }); tabs[1].dispatchEvent(e1);
+    assert.equal(s.valor, "b"); assert.equal(e1.defaultPrevented, true); assert.equal(mudou.at(-1), "b");
+    tabs[0].focus(); d.ev(tabs[0], "keydown", { key: " " }); assert.equal(s.valor, "a");
+    const n = mudou.length; d.ev(tabs[0], "keydown", { key: "Enter" }); assert.equal(mudou.length, n, "mesmo item: sem aoMudar");
+    // clique
+    tabs[2].click(); assert.equal(s.valor, "c"); assert.equal(mudou.at(-1), "c");
+    // programático não chama aoMudar
+    const antes = mudou.length; s.ativar("a"); assert.equal(s.valor, "a"); assert.equal(mudou.length, antes);
+    s.contar("b", 7); assert.equal(tabs[1].querySelector(".seg-n").textContent, "7"); assert.equal(tabs[1].querySelector(".seg-n").hidden, false);
+    s.contar("b", null); assert.equal(tabs[1].querySelector(".seg-n").hidden, true);
+    // indicador: medidas viram variáveis; a 1ª colocação não desliza (seg-anima só no quadro seguinte)
+    assert.ok(!s.classList.contains("seg-pronto"), "sem layout (largura 0) o indicador espera");
+    tabs[1].offsetLeft = 40; tabs[1].offsetWidth = 90;
+    s.ativar("b");
+    assert.equal(s.style.getPropertyValue("--seg-x"), "40px"); assert.equal(s.style.getPropertyValue("--seg-w"), "90px");
+    assert.ok(s.classList.contains("seg-pronto")); assert.ok(!s.classList.contains("seg-anima"));
+    await esperar(40); assert.ok(s.classList.contains("seg-anima"), "depois do 1º quadro passa a deslizar");
+    tabs[2].offsetLeft = 130; tabs[2].offsetWidth = 110; s.ativar("c");
+    assert.equal(s.style.getPropertyValue("--seg-x"), "130px"); assert.equal(s.style.getPropertyValue("--seg-w"), "110px");
+    // filtro e valores inválidos
+    const f = U.segmentado({ opcoes: [{ valor: 1, rotulo: "Hoje" }, { valor: 2, rotulo: "7 dias" }], valor: 99, tipo: "filtro" });
+    assert.ok(f.classList.contains("seg-filtro")); assert.equal(f.valor, 1, "valor desconhecido → primeiro");
+    assert.equal(f.querySelectorAll("[aria-selected=true]").length, 1);
+    assert.ok(U.segmentado({ opcoes: [{ valor: "x", rotulo: "X" }], tipo: "qualquer" }).classList.contains("seg-abas"), "tipo desconhecido → abas");
+    assert.equal(U.segmentado({}).querySelectorAll("[role=tab]").length, 0, "sem opções não quebra");
+  } finally { d.fim(); }
+  const r = comDom({ reduzido: true });
+  try {
+    const s = U.segmentado({ opcoes: [{ valor: "a", rotulo: "A" }, { valor: "b", rotulo: "B" }], valor: "a" });
+    const [t0, t1] = s.querySelectorAll("[role=tab]");
+    t1.offsetLeft = 50; t1.offsetWidth = 60; s.ativar("b");
+    assert.ok(s.classList.contains("seg-pronto")); await esperar(40);
+    assert.ok(!s.classList.contains("seg-anima"), "com prefers-reduced-motion o indicador não anima");
+    void t0;
+  } finally { r.fim(); }
+  // CSS: o deslize usa os tokens de tempo (que viram 0s sob movimento reduzido) e há fallback sem medida
+  assert.match(CSS_APP, /\.seg-anima \.seg-ind \{ transition: transform var\(--t-ui\) var\(--e-out\), width var\(--t-ui\) var\(--e-out\); \}/);
+  assert.match(CSS_APP, /@media \(prefers-reduced-motion: reduce\) \{\s*:root \{ --t-micro: 0s; --t-ui: 0s;/);
+  assert.match(CSS_APP, /\.seg-filtro \.seg-ind \{ background: var\(--c-prim-suave\);/, "filtro: --c-prim-suave, nunca cheio");
+  assert.match(CSS_APP, /\.seg:not\(\.seg-pronto\) \.seg-op\[aria-selected="true"\] \{ background: var\(--c-sup\)/, "sem JS de medida a opção marcada se pinta sozinha");
+});
+
+await teste("ui.toqueLongo: dispara depois de ms; soltar cedo, mexer, mouse ou desligar não dispara; engole só o clique seguinte", async () => {
+  const d = comDom();
+  try {
+    const el = U.h("div", null, "cartão"); d.doc.body.appendChild(el);
+    let n = 0; const fim = U.toqueLongo(el, () => { n++; }, { ms: 40 });
+    assert.ok(el.classList.contains("toque-longo"));
+    const toque = (id, x = 10, y = 10) => d.ev(el, "pointerdown", { pointerType: "touch", pointerId: id, clientX: x, clientY: y, button: 0 });
+    toque(1); await esperar(70); assert.equal(n, 1, "segurou → dispara");
+    const clique = new d.Evento("click"); el.dispatchEvent(clique); assert.equal(clique.defaultPrevented, true, "engole o clique que vem depois");
+    d.ev(el, "pointerup", { pointerType: "touch", pointerId: 1 });
+    const c2 = new d.Evento("click"); el.dispatchEvent(c2); assert.equal(c2.defaultPrevented, false, "só o primeiro");
+    toque(2); await esperar(10); d.ev(el, "pointerup", { pointerType: "touch", pointerId: 2 }); await esperar(60); assert.equal(n, 1, "soltou cedo");
+    toque(3, 0, 0); d.ev(el, "pointermove", { pointerType: "touch", pointerId: 3, clientX: 2, clientY: 30 }); await esperar(70); assert.equal(n, 1, "mexeu mais de 10 px (rolagem)");
+    toque(4, 0, 0); d.ev(el, "pointermove", { pointerType: "touch", pointerId: 4, clientX: 3, clientY: 4 }); await esperar(70); assert.equal(n, 2, "tremor pequeno não cancela");
+    d.ev(el, "pointerdown", { pointerType: "mouse", pointerId: 5, clientX: 0, clientY: 0, button: 0 }); await esperar(70); assert.equal(n, 2, "mouse não");
+    const menu = new d.Evento("contextmenu"); toque(6); el.dispatchEvent(menu); assert.equal(menu.defaultPrevented, true, "menu de contexto do toque longo é suprimido"); d.ev(el, "pointerup", { pointerType: "touch", pointerId: 6 });
+    fim(); assert.ok(!el.classList.contains("toque-longo")); toque(7); await esperar(70); assert.equal(n, 2, "desligado");
+    let m = 0; const el2 = U.h("div"); U.toqueLongo(el2, () => { m++; }, { ms: 30, mouse: true });
+    d.ev(el2, "pointerdown", { pointerType: "mouse", pointerId: 1, clientX: 0, clientY: 0, button: 0 }); await esperar(60); assert.equal(m, 1, "mouse:true");
+  } finally { d.fim(); }
+});
+
+await teste("ui.deslizar: arrasto horizontal além do limiar aciona o lado certo; rolagem vertical, gesto curto, lado sem ação e mouse não acionam; o clique pós-gesto é engolido", async () => {
+  const d = comDom();
+  try {
+    const el = U.h("div", null, "linha"); d.doc.body.appendChild(el);
+    const log = []; const fim = U.deslizar(el, { esquerda: () => log.push("E"), direita: { fn: () => log.push("D"), rotulo: "Arquivar" }, limiar: 60 });
+    assert.ok(el.classList.contains("deslizavel"));
+    const gesto = (tipo, passos, id = 1) => {
+      d.ev(el, "pointerdown", { pointerType: tipo, pointerId: id, clientX: 200, clientY: 100, button: 0 });
+      for (const [x, y] of passos) d.ev(el, "pointermove", { pointerType: tipo, pointerId: id, clientX: x, clientY: y });
+      const [ux, uy] = passos.length ? passos[passos.length - 1] : [200, 100];
+      d.ev(el, "pointerup", { pointerType: tipo, pointerId: id, clientX: ux, clientY: uy });
+    };
+    gesto("touch", [[170, 102], [120, 104], [100, 104]]);
+    assert.deepEqual(log, ["E"], "−100 px ≥ 60 → esquerda");
+    assert.equal(el.style.getPropertyValue("transform"), "", "volta ao lugar ao soltar");
+    gesto("touch", [[230, 101], [290, 101]]); assert.deepEqual(log, ["E", "D"], "+90 px → direita ({fn, rotulo})");
+    gesto("touch", [[190, 100], [170, 100]]); assert.equal(log.length, 2, "−30 px < limiar");
+    gesto("touch", [[198, 130], [190, 200], [120, 210]]); assert.equal(log.length, 2, "começou vertical: é rolagem, não gesto");
+    gesto("touch", [[205, 112], [140, 112]]); assert.equal(log.length, 2, "diagonal (mais vertical que 1:1,5) não trava");
+    gesto("mouse", [[100, 100]]); assert.equal(log.length, 2, "mouse não desliza");
+    // durante o arrasto o elemento acompanha, com resistência além do limiar
+    d.ev(el, "pointerdown", { pointerType: "touch", pointerId: 9, clientX: 200, clientY: 100, button: 0 });
+    d.ev(el, "pointermove", { pointerType: "touch", pointerId: 9, clientX: 140, clientY: 100 });
+    assert.equal(el.style.getPropertyValue("transform"), "translateX(-60px)"); assert.equal(el.dataset.deslizando, "esquerda");
+    d.ev(el, "pointermove", { pointerType: "touch", pointerId: 9, clientX: 40, clientY: 100 });
+    assert.equal(el.style.getPropertyValue("transform"), "translateX(-90px)", "60 + (160−60)·0,3");
+    d.ev(el, "pointerup", { pointerType: "touch", pointerId: 9, clientX: 40, clientY: 100 });
+    assert.equal(log.at(-1), "E");
+    const c1 = new d.Evento("click"); el.dispatchEvent(c1); assert.equal(c1.defaultPrevented, true, "engole o clique depois do arrasto");
+    const c2 = new d.Evento("click"); el.dispatchEvent(c2); assert.equal(c2.defaultPrevented, false);
+    // pointercancel (o navegador assumiu a rolagem) não aciona
+    d.ev(el, "pointerdown", { pointerType: "touch", pointerId: 10, clientX: 200, clientY: 100, button: 0 });
+    d.ev(el, "pointermove", { pointerType: "touch", pointerId: 10, clientX: 100, clientY: 100 }); d.ev(el, "pointercancel", { pointerType: "touch", pointerId: 10 });
+    assert.equal(log.filter(x => x === "E").length, 2, "cancelado não aciona");
+    // lado sem ação não se move
+    const solo = U.h("div"); const l2 = []; U.deslizar(solo, { esquerda: () => l2.push("E") });
+    d.ev(solo, "pointerdown", { pointerType: "touch", pointerId: 1, clientX: 100, clientY: 0, button: 0 });
+    d.ev(solo, "pointermove", { pointerType: "touch", pointerId: 1, clientX: 180, clientY: 0 });
+    assert.equal(solo.style.getPropertyValue("transform"), "", "direita não tem ação: fica parado"); d.ev(solo, "pointerup", { pointerType: "touch", pointerId: 1, clientX: 180, clientY: 0 });
+    assert.deepEqual(l2, []);
+    fim(); assert.ok(!el.classList.contains("deslizavel"));
+    const antes = log.length; gesto("touch", [[100, 100]]); assert.equal(log.length, antes, "desligado");
+  } finally { d.fim(); }
+  assert.match(CSS_APP, /\.deslizavel \{ touch-action: pan-y;/, "a rolagem vertical continua com o navegador");
+});
+
+await teste("ui.esqueleto: os 7 tipos têm a forma da tela (+ 'cartoes' legado); número como 2º argumento e cabeçalho opcional", () => {
+  const d = comDom();
+  try {
+    for (const tipo of ["inicio", "chat", "lista", "kanban", "ads", "tabela", "agenda", "cartoes"]) {
+      const e = U.esqueleto(tipo);
+      assert.ok(e.classList.contains("esqueleto") && e.classList.contains(`esqueleto-${tipo}`), tipo);
+      assert.equal(e.getAttribute("aria-busy"), "true"); assert.equal(e.dataset.tipo, tipo);
+      assert.ok(e.querySelectorAll(".sk").length >= 3, `${tipo}: blocos`);
+      assert.ok(e.querySelector(".sr-only"), `${tipo}: texto "Carregando…" para leitor de tela`);
+    }
+    const ini = U.esqueleto("inicio"); assert.ok(ini.querySelector(".sk-cab") && ini.querySelector(".sk-kpis")); assert.equal(ini.querySelectorAll(".sk-kpis .sk-cartao").length, 4);
+    const chat = U.esqueleto("chat");
+    assert.ok(chat.querySelector(".sk-cab"), "título"); assert.equal(chat.querySelectorAll(".sk-chip").length, 3, "abas"); assert.ok(chat.querySelector(".sk-chat-lista") && chat.querySelector(".sk-chat-painel"));
+    const ads = U.esqueleto("ads"); assert.ok(ads.querySelector(".sk-manchete"), "manchete"); assert.equal(ads.querySelectorAll(".sk-kpis .sk-cartao").length, 8, "8 KPIs");
+    assert.equal(U.esqueleto("agenda").querySelectorAll(".sk-agenda-col").length, 7);
+    assert.equal(U.esqueleto("lista", 3).querySelectorAll(".sk-item").length, 3);
+    assert.equal(U.esqueleto("tabela", 4).querySelectorAll(".sk-tr").length, 5, "cabeçalho + 4 linhas");
+    assert.equal(U.esqueleto("kanban", 4).querySelectorAll(".sk-col").length, 4);
+    assert.equal(U.esqueleto("cartoes", 2).querySelectorAll(".sk-cartao").length, 2);
+    assert.equal(U.esqueleto("lista").querySelector(".sk-cab"), null, "miolo sem cabeçalho (como antes)");
+    assert.ok(U.esqueleto("lista", { n: 2, cabecalho: true }).querySelector(".sk-cab"));
+    assert.equal(U.esqueleto("inicio", { cabecalho: false }).querySelector(".sk-cab"), null);
+    assert.ok(U.esqueleto("tipo-inexistente").querySelector(".sk-item"), "tipo desconhecido cai na lista");
+  } finally { d.fim(); }
+});
+
+await teste("ui.trocarEsqueleto: o esqueleto some em 120 ms e o conteúdo entra com fade; sem esqueleto só põe o conteúdo; movimento reduzido troca na hora", async () => {
+  const d = comDom();
+  try {
+    const alvo = U.h("div"); d.doc.body.appendChild(alvo);
+    alvo.appendChild(U.esqueleto("lista", 2));
+    const novo = U.h("p", null, "pronto");
+    const t0 = Date.now(); const p = U.trocarEsqueleto(alvo, novo);
+    assert.ok(achar(alvo, ".esqueleto").classList.contains("saindo"), "o fade-out começa");
+    assert.equal(alvo.querySelector("p"), null, "o conteúdo ainda não entrou");
+    await p; assert.ok(Date.now() - t0 >= 100, "esperou ~120 ms");
+    assert.equal(alvo.querySelector(".esqueleto"), null); assert.equal(achar(alvo, "p").textContent, "pronto"); assert.ok(novo.classList.contains("troca-entra"));
+    await U.trocarEsqueleto(alvo, [U.h("span", null, "a"), U.h("span", null, "b")]);
+    assert.equal(alvo.children.length, 2, "sem esqueleto: substitui o conteúdo");
+    const sk2 = U.esqueleto("lista", 1); alvo.appendChild(sk2);
+    await U.trocarEsqueleto(sk2, U.h("em", null, "x"));
+    assert.equal(alvo.querySelector(".esqueleto"), null); assert.equal(achar(alvo, "em").textContent, "x"); assert.equal(alvo.children.length, 3, "o próprio esqueleto é trocado no lugar");
+    assert.equal(await U.trocarEsqueleto(null, U.h("i")), false);
+  } finally { d.fim(); }
+  const r = comDom({ reduzido: true });
+  try {
+    const alvo = U.h("div"); alvo.appendChild(U.esqueleto("lista", 1));
+    const p = U.trocarEsqueleto(alvo, U.h("b", null, "ok"));
+    assert.equal(alvo.querySelector(".esqueleto"), null, "reduzido: já trocou, sem espera"); await p;
+  } finally { r.fim(); }
+  assert.match(CSS_APP, /\.esqueleto\.saindo \{ opacity: 0; transition: opacity 120ms linear; \}/);
+});
+
+await teste("ui.fraseDeErro/mensagemErro (M06): erro de transporte e de import() viram frase em português, sem URL nem jargão; frase de produto passa intacta", () => {
+  for (const msg of ["Failed to fetch dynamically imported module: http://localhost:8099/app/agenda.js?v=1", "error loading dynamically imported module", "Importing a module script failed.",
+    "TypeError: Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."]) {
+    const t = U.mensagemErro(new TypeError(msg));
+    assert.doesNotMatch(t, /https?:|import|module|fetch|\.js/i, `${msg} → ${t}`);
+    assert.match(t, /internet|conexão/i, t);
+  }
+  assert.equal(U.mensagemErro({ codigo: "sem_acesso" }), "sem_acesso", "código sem tradutor passa (o shell liga api.mensagemErro)");
+  assert.equal(U.fraseDeErro("Seu plano permite até 3 usuários."), "Seu plano permite até 3 usuários.");
+  assert.doesNotMatch(U.mensagemErro(new Error("falhou em https://x.supabase.co/rest/v1/rpc/nx_x")), /https?:/, "erro cru com endereço");
+  assert.equal(U.fraseDeErro("Link: https://exemplo.com/ajuda"), "Link: https://exemplo.com/ajuda", "frase de produto com link não é tocada");
+});
+
+await teste("ui.erroCartao: frase sem URL/import; refaz sozinho em orbita:online (uma vez, só se ainda está na tela); sem retentar não registra nada", async () => {
+  const d = comDom();
+  try {
+    const e1 = new TypeError("Failed to fetch dynamically imported module: https://orbita.exemplo.app/app/agenda.js?v=20261001");
+    let tentou = 0;
+    const cartao = U.erroCartao(e1, () => { tentou++; });
+    d.doc.body.appendChild(cartao);
+    const texto = cartao.textContent;
+    assert.doesNotMatch(texto, /https?:|import|module|\.js/i, texto);
+    assert.match(texto, /Não foi possível abrir esta tela agora/); assert.match(texto, /tentamos de novo sozinhos/i);
+    assert.equal(cartao.getAttribute("role"), "alert");
+    const botao = achar(cartao, "button"); assert.equal(botao.textContent, "Tentar de novo");
+    botao.click(); assert.equal(tentou, 1, "o botão chama");
+    assert.ok(d.janela.some(([t]) => t === "orbita:online"), "ouve orbita:online");
+    d.disparar("orbita:online"); assert.equal(tentou, 2, "reexecuta sozinho");
+    d.disparar("orbita:online"); assert.equal(tentou, 2, "uma vez por cartão");
+    let t2 = 0; const c2 = U.erroCartao(new TypeError("Failed to fetch"), () => { t2++; });   // não foi para a tela
+    d.disparar("orbita:online"); assert.equal(t2, 0, "cartão que não está na tela não reexecuta");
+    assert.match(c2.textContent, /Sem conexão com o servidor/);
+    const c3 = U.erroCartao({ codigo: "sem_acesso" }); assert.equal(c3.querySelector("button"), null); assert.equal(c3.querySelector(".vazio-auto"), null);
+    const c4 = U.erroCartao({ codigo: "sem_conexao" }, () => {}); assert.ok(c4.querySelector(".vazio-auto"), "código de rede do api.js também avisa");
+    assert.doesNotMatch(U.erroCartao({ codigo: "tempo_esgotado" }, () => {}).textContent, /https?:/);
+  } finally { d.fim(); }
+});
+
+await teste("ui.toast: todo toast é anunciado (polido; erro urgente) e aoFechar recebe o motivo", async () => {
+  const d = comDom();
+  try {
+    U.toast("Salvo.", { tipo: "ok" }); await esperar(50);
+    assert.equal(d.doc.getElementById("anuncio").textContent, "Salvo."); assert.equal(d.doc.getElementById("anuncio").getAttribute("aria-live"), "polite");
+    U.toast("Falhou.", { tipo: "erro" }); await esperar(50);
+    assert.equal(d.doc.getElementById("anuncio-urgente").textContent, "Falhou."); assert.equal(d.doc.getElementById("anuncio-urgente").getAttribute("aria-live"), "assertive");
+    assert.equal(d.doc.getElementById("toasts").getAttribute("aria-live"), null, "a caixa não fala por conta própria (uma só voz: anunciar)");
+    const motivos = [];
+    const t = U.toast("x", { desfazer: () => motivos.push("desfez"), aoFechar: m => motivos.push(m), ms: 5000 });
+    achar(t.el, ".toast-acao").click(); assert.deepEqual(motivos, ["desfazer", "desfez"]);
+    U.toast("y", { ms: 25, aoFechar: m => motivos.push(m) }); await esperar(60); assert.equal(motivos.at(-1), "tempo");
+    const t3 = U.toast("z", { ms: 5000, aoFechar: m => motivos.push(m) }); achar(t3.el, ".toast-x").click(); assert.equal(motivos.at(-1), "fechado");
+    assert.equal(typeof t3.fechar, "function", "assinatura antiga: { fechar }");
+  } finally { d.fim(); }
+});
+
+await teste("ui.acaoComDesfazer (M07): aplica na hora, Desfazer reverte, Ctrl/⌘+Z desfaz o mais recente (não dentro de campo), fila de 3, falhas honestas", async () => {
+  const d = comDom();
+  const vivos = () => d.doc.querySelectorAll(".toast").filter(t => !t.classList.contains("saindo"));
+  try {
+    const estado = [];
+    const mk = (nome, extra = {}) => U.acaoComDesfazer({ texto: `Feito ${nome}`, aplicar: () => { estado.push(`+${nome}`); }, reverter: () => { estado.push(`-${nome}`); }, ms: 5000, ...extra });
+    const p1 = mk("a"); await esperar(5);
+    assert.deepEqual(estado, ["+a"], "aplicou na hora (UI otimista)");
+    assert.match(vivos()[0].textContent, /Feito a/); assert.equal(achar(vivos()[0], ".toast-acao").textContent, "Desfazer");
+    achar(vivos()[0], ".toast-acao").click();
+    const r1 = await p1; assert.deepEqual(estado, ["+a", "-a"]); assert.equal(r1.estado, "desfeita"); assert.equal(r1.desfeita, true);
+    // Ctrl+Z fora de campo desfaz o mais recente
+    estado.length = 0;
+    const pa = mk("a"), pb = mk("b"); await esperar(5);
+    assert.equal(vivos().length, 2);
+    const z = new d.Evento("keydown", { key: "z", ctrlKey: true }); d.doc.body.dispatchEvent(z);
+    assert.equal(z.defaultPrevented, true);
+    const rb = await pb; assert.equal(rb.estado, "desfeita"); assert.deepEqual(estado, ["+a", "+b", "-b"], "desfez só o mais recente");
+    assert.equal(vivos().length, 1, "o toast da desfeita fechou");
+    // dentro de textarea o Ctrl+Z é do navegador
+    const ta = U.h("textarea"); d.doc.body.appendChild(ta);
+    const z2 = new d.Evento("keydown", { key: "z", metaKey: true }); ta.dispatchEvent(z2);
+    assert.equal(z2.defaultPrevented, false); assert.deepEqual(estado, ["+a", "+b", "-b"], "nada desfeito dentro de campo");
+    // Shift+Ctrl+Z (refazer) não conta; ⌘+Z (maiúsculo ou não) conta
+    const zs = new d.Evento("keydown", { key: "z", ctrlKey: true, shiftKey: true }); d.doc.body.dispatchEvent(zs); assert.equal(zs.defaultPrevented, false);
+    const z3 = new d.Evento("keydown", { key: "Z", metaKey: true }); d.doc.body.dispatchEvent(z3);
+    const ra = await pa; assert.equal(ra.estado, "desfeita"); assert.deepEqual(estado, ["+a", "+b", "-b", "-a"]);
+    // fila de 3: a 4ª firma a mais antiga
+    estado.length = 0;
+    const ps = ["a", "b", "c", "d"].map(n => mk(n)); await esperar(10);
+    const r0 = await Promise.race([ps[0], esperar(80).then(() => "pendente")]);
+    assert.equal(r0.estado, "mantida", "o 4º pedido firma o mais antigo"); assert.equal(vivos().length, 3);
+    for (let i = 0; i < 3; i++) d.doc.body.dispatchEvent(new d.Evento("keydown", { key: "z", ctrlKey: true }));
+    const rr = await Promise.all(ps.slice(1)); assert.deepEqual(rr.map(x => x.estado), ["desfeita", "desfeita", "desfeita"]);
+    assert.deepEqual(estado.filter(x => x.startsWith("-")), ["-d", "-c", "-b"], "do mais recente para o mais antigo");
+    // o toast fecha sozinho → mantida
+    const rt = await mk("t", { ms: 30 }); assert.equal(rt.estado, "mantida"); assert.equal(rt.desfeita, false);
+    // reverter que falha: o estado real é o aplicado, e a pessoa é avisada
+    const pf = U.acaoComDesfazer({ texto: "Movido", aplicar() {}, reverter() { throw new Error("rede_caiu"); }, ms: 5000 }); await esperar(5);
+    achar(vivos()[0], ".toast-acao").click(); const rf = await pf;
+    assert.equal(rf.estado, "falhou"); assert.equal(rf.desfeita, false); assert.ok(rf.erro);
+    assert.ok(d.doc.querySelectorAll(".toast-erro").some(t => /Não foi possível desfazer/.test(t.textContent)), "toast de erro com o estado real");
+    // aplicar que falha: nada fica pendente
+    const rap = await U.acaoComDesfazer({ texto: "x", aplicar() { throw new Error("nao_pode"); }, reverter() { throw new Error("nunca"); } });
+    assert.equal(rap.estado, "falhou"); assert.ok(rap.erro);
+    const z4 = new d.Evento("keydown", { key: "z", ctrlKey: true }); d.doc.body.dispatchEvent(z4); assert.equal(z4.defaultPrevented, false, "nada pendente");
+  } finally { d.fim(); }
+  const src = ler("ui.js");
+  assert.match(src, /export async function acaoComDesfazer\(\{ texto, aplicar, reverter, ms = 7000 \} = \{\}\)/, "assinatura do contrato (ms = 7000)");
+});
+
+/* ---------- modal e gaveta que protegem o texto digitado ---------- */
+await teste("ui.modal (M08): Esc/clique fora/Voltar com texto digitado NÃO fecham e perguntam; sem texto fecham; Continuar/Descartar; X e rodapé fecham direto; busca e carga por script não contam", async () => {
+  const d = comDom();
+  try {
+    const ultimo = () => { const l = d.doc.querySelectorAll("dialog.modal"); return l[l.length - 1]; };
+    const abrir = (opts = {}) => {
+      const form = U.h("form", null, U.campo({ rotulo: "Título", nome: "titulo" }), U.campo({ rotulo: "Busca", nome: "q", tipo: "busca" }));
+      const p = U.modal({ titulo: "Nova oportunidade", corpo: form, acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: false }, { rotulo: "Salvar", tipo: "primario", fn: () => true }], ...opts });
+      const dlg = ultimo();
+      return { p, dlg, input: form.querySelector("input[name=titulo]"), busca: form.querySelector("input[name=q]"), faixa: dlg.querySelector(".protege-faixa") };
+    };
+    const esc = dlg => d.ev(dlg, "cancel");
+    const pendente = async p => (await Promise.race([p, esperar(30).then(() => "aberto")])) === "aberto";
+    // 1) sem texto: Esc fecha
+    let m = abrir(); await esperar(5);
+    assert.equal(m.faixa.hidden, true); esc(m.dlg); assert.equal(await m.p, null);
+    // 2) com texto: Esc mantém aberto e mostra a faixa
+    m = abrir(); await esperar(5);
+    m.input.value = "Orçamento"; d.ev(m.input, "input");
+    assert.equal(m.faixa.hidden, true); esc(m.dlg);
+    assert.equal(m.faixa.hidden, false); assert.match(m.faixa.textContent, /Descartar o que você digitou\?/);
+    assert.equal(await pendente(m.p), true, "continua aberto"); assert.equal(m.dlg.open, true);
+    assert.equal(d.doc.activeElement.textContent, "Continuar editando", "foco no botão seguro");
+    const [continuar, descartar] = m.faixa.querySelectorAll("button");
+    assert.equal(continuar.textContent, "Continuar editando"); assert.match(descartar.textContent, /Descartar/); assert.ok(descartar.classList.contains("bt-contorno-perigo"), "destrutivo: contorno, nunca preenchido");
+    continuar.click(); assert.equal(m.faixa.hidden, true);
+    esc(m.dlg); assert.equal(m.faixa.hidden, false); esc(m.dlg); assert.equal(m.faixa.hidden, true, "2º Esc dispensa o aviso");
+    esc(m.dlg); descartar.click(); assert.equal(await m.p, null);
+    // 3) clique fora também pergunta
+    m = abrir(); await esperar(5); m.input.value = "x"; d.ev(m.input, "input");
+    d.ev(m.dlg, "mousedown"); d.ev(m.dlg, "click"); assert.equal(m.faixa.hidden, false); assert.equal(await pendente(m.p), true);
+    m.faixa.querySelectorAll("button")[1].click(); assert.equal(await m.p, null);
+    // 4) Voltar do navegador: com texto pergunta e recoloca a camada; depois fecha
+    m = abrir(); await esperar(5); m.input.value = "x"; d.ev(m.input, "input");
+    const abertas = U.camadas.abertas();
+    U.camadas._aoPop({ state: null });
+    assert.equal(m.faixa.hidden, false); await esperar(10);
+    assert.equal(U.camadas.abertas(), abertas, "a camada foi recolocada (o Voltar gastou a entrada do histórico)"); assert.equal(m.dlg.open, true);
+    m.faixa.querySelectorAll("button")[1].click(); assert.equal(await m.p, null); assert.equal(U.camadas.abertas(), abertas - 1);
+    m = abrir(); await esperar(5); U.camadas._aoPop({ state: null }); assert.equal(await m.p, null, "Voltar sem texto fecha");
+    // 5) protegerTexto:false fecha direto mesmo com texto
+    m = abrir({ protegerTexto: false }); await esperar(5); m.input.value = "x"; d.ev(m.input, "input"); esc(m.dlg); assert.equal(await m.p, null);
+    // 6) campo de busca (type=search) não é "texto digitado"
+    m = abrir(); await esperar(5); m.busca.value = "joão"; d.ev(m.busca, "input"); esc(m.dlg); assert.equal(await m.p, null);
+    // 7) formulário preenchido por script depois de abrir (a pessoa não mexeu) não conta
+    m = abrir(); await esperar(5); m.input.value = "carregado do servidor"; esc(m.dlg); assert.equal(await m.p, null);
+    // 7b) …mas se a pessoa depois edita o que foi carregado, conta (a base é o que estava na tela quando ela começou)
+    m = abrir(); await esperar(5); m.input.value = "carregado"; d.ev(m.input, "keydown", { key: "a" }); m.input.value = "carregado!"; d.ev(m.input, "input");
+    esc(m.dlg); assert.equal(m.faixa.hidden, false); assert.equal(m.dlg.querySelector(".protege-faixa").hidden, false); m.faixa.querySelectorAll("button")[1].click(); assert.equal(await m.p, null);
+    // 7c) …e apagar o que digitou, voltando ao original, deixa de ser "sujo"
+    m = abrir(); await esperar(5); d.ev(m.input, "keydown", { key: "a" }); m.input.value = "a"; d.ev(m.input, "input"); m.input.value = ""; d.ev(m.input, "input");
+    esc(m.dlg); assert.equal(await m.p, null);
+    // 8) o X e os botões do rodapé fecham direto, mesmo sujo
+    m = abrir(); await esperar(5); m.input.value = "x"; d.ev(m.input, "input"); achar(m.dlg, ".modal-x").click(); assert.equal(await m.p, null);
+    m = abrir(); await esperar(5); m.input.value = "x"; d.ev(m.input, "input"); m.dlg.querySelectorAll(".modal-rod button").find(b => b.textContent === "Cancelar").click(); assert.equal(await m.p, false);
+    m = abrir(); await esperar(5); m.input.value = "x"; d.ev(m.input, "input"); assert.equal(m.dlg.querySelector(".modal-rod .bt-prim").textContent, "Salvar"); m.dlg.querySelector(".modal-rod .bt-prim").click(); assert.equal(await m.p, true);
+    // 9) confirmar() (campo "digitar") nunca pergunta
+    const pc = U.confirmar({ titulo: "Excluir?", perigo: true, digitar: "excluir" });
+    const dc = ultimo(); const campoDig = achar(dc, "input"); campoDig.value = "exc"; d.ev(campoDig, "input"); esc(dc); assert.equal(await pc, false);
+    await esperar(200);
+  } finally { d.fim(); }
+});
+
+await teste("ui.gaveta (M08): Esc/clique fora com texto pergunta; fechar(), o X e o voltar fecham direto; em toque o foco inicial é o próprio diálogo (modal e gaveta)", async () => {
+  let d = comDom();
+  try {
+    const corpo = U.h("div", null, U.campo({ rotulo: "Título", nome: "titulo" }));
+    let fechou = 0;
+    const g = U.gaveta({ titulo: "Negócio", corpo, aoFechar: () => { fechou++; } });
+    const inp = corpo.querySelector("input[name=titulo]"); await esperar(45);
+    assert.equal(d.doc.activeElement, inp, "desktop: foca o 1º campo");
+    const faixa = achar(g.el, ".protege-faixa");
+    d.ev(g.el, "cancel"); assert.equal(faixa.hidden, true, "sem texto: não pergunta"); await esperar(260); assert.equal(fechou, 1, "sem texto o Esc fecha");
+    const corpo2 = U.h("div", null, U.campo({ rotulo: "Título", nome: "titulo" }));
+    const g2 = U.gaveta({ titulo: "Negócio", corpo: corpo2, aoFechar: () => { fechou++; } });
+    const i2 = corpo2.querySelector("input[name=titulo]"); await esperar(45);
+    i2.value = "Reforma"; d.ev(i2, "input");
+    d.ev(g2.el, "cancel"); const f2 = achar(g2.el, ".protege-faixa");
+    assert.equal(f2.hidden, false); assert.equal(fechou, 1); assert.equal(g2.estaSujo(), true);
+    f2.querySelectorAll("button")[0].click(); assert.equal(f2.hidden, true);
+    d.ev(g2.el, "mousedown"); d.ev(g2.el, "click"); assert.equal(f2.hidden, false, "clique fora também pergunta"); assert.equal(fechou, 1);
+    f2.querySelectorAll("button")[1].click(); await esperar(260); assert.equal(fechou, 2, "Descartar fecha");
+    const g3 = U.gaveta({ titulo: "Negócio", corpo: U.h("div", null, U.campo({ rotulo: "Título", nome: "titulo" })), aoFechar: () => { fechou++; } });
+    const i3 = g3.corpo.querySelector("input"); await esperar(45); i3.value = "x"; d.ev(i3, "input");
+    g3.fechar(); await esperar(260); assert.equal(fechou, 3, "fechar() do código nunca é bloqueado");
+    const g4 = U.gaveta({ titulo: "Negócio", corpo: U.h("div", null, U.campo({ rotulo: "Título", nome: "titulo" })), aoFechar: () => { fechou++; } });
+    const i4 = g4.corpo.querySelector("input"); await esperar(45); i4.value = "x"; d.ev(i4, "input");
+    achar(g4.el, ".gaveta-x").click(); await esperar(260); assert.equal(fechou, 4, "o X fecha direto");
+    const g5 = U.gaveta({ titulo: "N", corpo: U.h("div", null, U.campo({ rotulo: "Título", nome: "titulo" })), protegerTexto: false, aoFechar: () => { fechou++; } });
+    const i5 = g5.corpo.querySelector("input"); await esperar(45); i5.value = "x"; d.ev(i5, "input"); d.ev(g5.el, "cancel"); await esperar(260); assert.equal(fechou, 5, "protegerTexto:false");
+  } finally { d.fim(); }
+  d = comDom({ grosso: true });
+  try {
+    const g = U.gaveta({ titulo: "Negócio", corpo: U.h("div", null, U.campo({ rotulo: "Título", nome: "titulo" })) });
+    assert.equal(d.doc.activeElement, g.el, "no celular o foco inicial é o diálogo, não o campo (o teclado não sobe)");
+    assert.equal(g.el.getAttribute("tabindex"), "-1"); await esperar(60); assert.equal(d.doc.activeElement, g.el, "nem depois");
+    const mp = U.modal({ titulo: "X", corpo: U.campo({ rotulo: "Nome", nome: "n" }) });
+    const dlgs = d.doc.querySelectorAll("dialog.modal"); const dlg = dlgs[dlgs.length - 1];
+    assert.equal(d.doc.activeElement, dlg, "modal também"); d.ev(dlg, "cancel"); assert.equal(await mp, null);
+    await esperar(260);
+  } finally { d.fim(); }
+  d = comDom();
+  try {
+    const mp = U.modal({ titulo: "X", corpo: U.campo({ rotulo: "Nome", nome: "n" }) });
+    const dlgs = d.doc.querySelectorAll("dialog.modal"); const dlg = dlgs[dlgs.length - 1];
+    assert.equal(d.doc.activeElement, achar(dlg, "input"), "mouse/teclado: foca o 1º campo como antes"); d.ev(dlg, "cancel"); await mp;
+    await esperar(200);
+  } finally { d.fim(); }
+});
+
+/* ---------- campo com validação, máscaras e medidor ---------- */
+await teste("ui.campo({validar}) (M08): e-mail, telefone (máscara; lerForm só dígitos), moeda, senha com medidor, função, obrigatório, contador, validarForm", () => {
+  const d = comDom();
+  try {
+    const form = U.h("form");
+    const email = U.campo({ rotulo: "E-mail", nome: "email", tipo: "email", validar: "email" });
+    const tel = U.campo({ rotulo: "Telefone", nome: "tel", tipo: "tel", validar: "telefone" });
+    const val = U.campo({ rotulo: "Valor", nome: "valor", tipo: "moeda", validar: "moeda", obrigatorio: true });
+    const sen = U.campo({ rotulo: "Senha", nome: "senha", tipo: "senha", validar: "senha" });
+    const doc = U.campo({ rotulo: "Documento", nome: "doc", validar: v => (v.length === 3 ? null : "Use 3 letras.") });
+    const obs = U.campo({ rotulo: "Obs.", nome: "obs", tipo: "textarea", max: 10 });
+    form.append(email, tel, val, sen, doc, obs); d.doc.body.appendChild(form);
+    const inp = c => c.querySelector("input, textarea");
+    const erro = c => achar(c, ".campo-erro");
+    // e-mail: valida ao sair; depois do 1º erro, a cada tecla; ✓ e ! além da cor; aria-invalid
+    const e = inp(email); e.value = "joao@"; d.ev(e, "blur", { bubbles: false });
+    assert.equal(email.dataset.estado, "erro"); assert.equal(e.getAttribute("aria-invalid"), "true");
+    assert.match(erro(email).textContent, /Confira o e-mail/); assert.equal(erro(email).hidden, false);
+    assert.ok((e.getAttribute("aria-describedby") || "").includes(erro(email).id), "erro ligado ao campo");
+    e.value = "joao@exemplo.com"; d.ev(e, "input");
+    assert.equal(email.dataset.estado, "ok"); assert.equal(e.getAttribute("aria-invalid"), null); assert.equal(erro(email).hidden, true);
+    assert.match(achar(email, ".campo-estado").textContent, /✓/);
+    // antes do 1º erro as teclas não incomodam
+    const e2 = inp(U.campo({ rotulo: "x", nome: "x", validar: "email" })); void e2;
+    // telefone: máscara e lerForm só dígitos
+    const t = inp(tel); t.value = "12998303030"; t.selectionStart = 11; d.ev(t, "input", { inputType: "insertText" });
+    assert.equal(t.value, "(12) 99830-3030"); assert.equal(t.getAttribute("inputmode"), "tel");
+    assert.equal(U.lerForm(form).tel, "12998303030", "lerForm devolve só os dígitos");
+    t.value = "+55 12 99830-3030"; d.ev(t, "input"); assert.equal(t.value, "(12) 99830-3030");
+    d.ev(t, "blur"); assert.equal(tel.dataset.estado, "ok");
+    t.value = "(12) 9983"; d.ev(t, "input"); d.ev(t, "blur"); assert.equal(tel.dataset.estado, "erro"); assert.match(erro(tel).textContent, /DDD/);
+    t.value = ""; d.ev(t, "input"); d.ev(t, "blur"); assert.equal(tel.dataset.estado, "", "opcional e vazio: sem erro nem ✓");
+    // moeda
+    const v = inp(val); v.value = "1234,5"; v.selectionStart = 6; d.ev(v, "input");
+    assert.equal(v.value, "1.234,5"); assert.equal(v.selectionStart, 7, "cursor estável");
+    assert.equal(U.lerForm(form).valor, 1234.5);
+    d.ev(v, "blur"); assert.equal(val.dataset.estado, "ok");
+    v.value = ""; d.ev(v, "blur"); assert.equal(val.dataset.estado, "erro"); assert.match(erro(val).textContent, /Preencha este campo/);
+    // senha + medidor
+    const s = inp(sen), med = achar(sen, ".medidor");
+    assert.equal(med.getAttribute("role"), "meter");
+    for (const [txt, nivel] of [["abc", "1"], ["abcdefgh", "2"], ["Abcdefgh12", "3"], ["Abcdefgh12!?", "4"]]) { s.value = txt; d.ev(s, "input"); assert.equal(med.dataset.nivel, nivel, txt); assert.equal(med.getAttribute("aria-valuenow"), nivel); }
+    assert.equal(med.getAttribute("aria-valuetext"), "Forte");
+    s.value = "abc"; d.ev(s, "blur"); assert.equal(sen.dataset.estado, "erro"); assert.match(erro(sen).textContent, /8 caracteres/);
+    assert.equal(U.campo({ rotulo: "Senha atual", nome: "s", tipo: "senha" }).querySelector(".medidor"), null, "sem validar:'senha' não há medidor");
+    // função
+    const dc = inp(doc); dc.value = "ab"; d.ev(dc, "blur"); assert.equal(doc.dataset.estado, "erro"); assert.match(erro(doc).textContent, /Use 3 letras/);
+    dc.value = "abc"; d.ev(dc, "input"); assert.equal(doc.dataset.estado, "ok");
+    // contador perto do limite
+    const o = inp(obs), cont = achar(obs, ".campo-contador"); assert.equal(cont.hidden, true);
+    o.value = "12345678"; d.ev(o, "input"); assert.equal(cont.hidden, false); assert.equal(cont.textContent, "8/10"); assert.equal(cont.dataset.limite, "0");
+    o.value = "1234567890"; d.ev(o, "input"); assert.equal(cont.dataset.limite, "1");
+    // validarForm: valida tudo e foca o primeiro com erro
+    e.value = "x"; t.value = ""; v.value = ""; s.value = ""; dc.value = "";
+    assert.equal(U.validarForm(form), false); assert.equal(d.doc.activeElement, e, "foca o primeiro com erro");
+    e.value = "ok@ok.com"; v.value = "10"; dc.value = "abc";
+    assert.equal(U.validarForm(form), true);
+    assert.equal(U.validarCampo(obs), true, "campo sem validar → true");
+    assert.equal(U.validarCampo(null), true);
+    // campos antigos (sem validar) continuam iguais: nada de ✓, erro escondido, tel sem máscara
+    const velho = U.campo({ rotulo: "Tel", nome: "t2", tipo: "tel" }); const iv = inp(velho); iv.value = "12998303030"; d.ev(iv, "input");
+    assert.equal(iv.value, "12998303030", "tipo tel sem validar não mascara (não muda o que já existia)"); assert.equal(velho.dataset.estado, undefined);
+    // moeda sem validar ganha a máscara (já usava lerMoeda)
+    const velhaMoeda = U.campo({ rotulo: "R$", nome: "m2", tipo: "moeda", valor: 1234.5 }); assert.equal(inp(velhaMoeda).value, "1.234,50");
+  } finally { d.fim(); }
+});
+
+await teste("máscaras com cursor estável (14 casos): telefone e moeda", () => {
+  const m = U.mascarar;
+  // telefone
+  assert.deepEqual(m("telefone", "1", 1), { texto: "(1", cursor: 2 }, "1º dígito");
+  assert.deepEqual(m("telefone", "123", 3), { texto: "(12) 3", cursor: 6 }, "3º dígito");
+  assert.deepEqual(m("telefone", "(127) 99830-3030", 4), { texto: "(12) 79983-0303", cursor: 6 }, "dígito no meio: o cursor fica depois dele");
+  assert.deepEqual(m("telefone", "+55 12 99830-3030", 17), { texto: "(12) 99830-3030", cursor: 15 }, "+55 colado");
+  assert.deepEqual(m("telefone", "(12) 998303030", 10, { apagando: true, anterior: "(12) 99830-3030" }), { texto: "(12) 9983-3030", cursor: 9 }, "backspace sobre o '-' apaga o dígito anterior");
+  assert.deepEqual(m("telefone", "+44 7911 123456", 15), { texto: "+447911123456", cursor: 13 }, "número de fora: só dígitos");
+  assert.deepEqual(m("telefone", "", 0), { texto: "", cursor: 0 });
+  assert.equal(m("telefone", "119999988887777", 15).texto, "(11) 99999-8888", "no máximo 11 dígitos");
+  // moeda
+  assert.deepEqual(m("moeda", "1234", 4), { texto: "1.234", cursor: 5 });
+  assert.deepEqual(m("moeda", "1.2345", 6), { texto: "12.345", cursor: 6 }, "5º dígito no fim");
+  assert.deepEqual(m("moeda", "129.345", 3), { texto: "129.345", cursor: 3 }, "dígito no meio");
+  assert.deepEqual(m("moeda", "1.234,567", 9), { texto: "1.234,56", cursor: 8 }, "só 2 casas");
+  assert.deepEqual(m("moeda", "1234.56", 7), { texto: "1.234,56", cursor: 8 }, "ponto decimal colado");
+  assert.deepEqual(m("moeda", "007", 3), { texto: "7", cursor: 1 }, "sem zeros à esquerda");
+  assert.deepEqual(m("moeda", "1234", 1, { apagando: true, anterior: "1.234" }), { texto: "234", cursor: 0 }, "backspace sobre o '.' apaga o dígito anterior");
+  assert.equal(U.formatarMoeda("abc"), ""); assert.equal(U.formatarMoeda(",5"), "0,5"); assert.equal(U.formatarMoeda("1,2,3"), "1,23");
+  assert.equal(U.forcaSenha(""), 0); assert.equal(U.forcaSenha("1234567"), 1);
+  assert.equal(U.lerMoeda(U.formatarMoeda("1234,5")), 1234.5, "a máscara é compatível com lerMoeda");
+});
+
+await teste("ui.vazio por tipo (M09): primeiro_uso (órbita + passos + ação), em_dia (selo + .narr), sem_resultado (1 linha + Limpar filtros); legado igual", () => {
+  const d = comDom();
+  try {
+    let n = 0;
+    const p = U.vazio({ tipo: "primeiro_uso", titulo: "Conecte o WhatsApp", texto: "Para começar a atender.", passos: [{ rotulo: "Conectar número", feito: true }, "Ligar a IA", "Marcar agenda"], acao: { rotulo: "Conectar número", fn: () => { n++; } } });
+    assert.ok(p.classList.contains("vazio") && p.classList.contains("vazio-primeiro")); assert.equal(p.dataset.tipo, "primeiro_uso");
+    const svg = achar(p, "svg.vazio-orbita"); assert.equal(svg.namespaceURI, "http://www.w3.org/2000/svg", "SVG por createElementNS");
+    assert.equal(p.querySelectorAll(".vo-sat").length, 3); assert.equal(p.querySelectorAll(".vo-sat-on").length, 1, "1 de 3 passos feito → 1 satélite aceso");
+    assert.deepEqual(p.querySelectorAll(".vazio-passos li").map(x => x.dataset.feito), ["1", "0", "0"]);
+    assert.equal(achar(p, "h2").textContent, "Conecte o WhatsApp");
+    achar(p, "button").click(); assert.equal(n, 1); assert.equal(achar(p, "button").textContent, "Conectar número");
+    const e = U.vazio({ tipo: "em_dia", titulo: "Tudo respondido.", texto: "Nenhum cliente esperando." });
+    assert.ok(e.classList.contains("vazio-em-dia")); assert.equal(achar(e, "p.narr").textContent, "Tudo respondido.");
+    assert.ok(e.querySelector(".vo-selo"), "selo ✓"); assert.equal(e.querySelectorAll(".vo-sat-on").length, 3);
+    const s = U.vazio({ tipo: "sem_resultado", titulo: "Nada encontrado.", acao: { fn: () => { n += 10; } } });
+    assert.ok(s.classList.contains("vazio-sem")); assert.match(s.textContent, /Nada encontrado\./);
+    assert.equal(achar(s, "button").textContent, "Limpar filtros"); achar(s, "button").click(); assert.equal(n, 11);
+    assert.equal(U.vazio({ tipo: "sem_resultado" }).querySelector("button"), null, "sem ação: só a linha");
+    const l = U.vazio({ titulo: "Sem pacientes", texto: "Crie o primeiro.", icone: "contato", acao: { rotulo: "Novo", fn() {} } });
+    assert.ok(l.querySelector(".vazio-ic")); assert.equal(achar(l, "h2").textContent, "Sem pacientes"); assert.equal(achar(l, "button").textContent, "Novo");
+    const fonte = ler("ui.js"); const corpoVazio = fonte.slice(fonte.indexOf("function orbitaSvg"), fonte.indexOf("export function esqueleto"));
+    assert.doesNotMatch(corpoVazio, /innerHTML/, "vazio e órbita sem innerHTML");
+  } finally { d.fim(); }
+});
+
+await teste("G.destacar(el) (M10): flash de 600 ms (.destaque), reinicia se chamado de novo, sem flash com movimento reduzido", async () => {
+  const d = comDom();
+  try {
+    const el = U.h("span", null, "R$ 10"); const r = GRAF.destacar(el);
+    assert.equal(r, el); assert.ok(el.classList.contains("destaque"));
+    GRAF.destacar(el); assert.ok(el.classList.contains("destaque"), "reinicia");
+    await esperar(650); assert.ok(!el.classList.contains("destaque"), "some depois de ~600 ms");
+    assert.equal(GRAF.destacar(null), null);
+  } finally { d.fim(); }
+  const d2 = comDom({ reduzido: true });
+  try { const el = U.h("span"); GRAF.destacar(el); assert.ok(!el.classList.contains("destaque"), "movimento reduzido: sem flash"); } finally { d2.fim(); }
+});
+
+await teste("ui.numMoeda: 'R$' e centavos a 60 % (.num-moeda), centavos opcionais, vazio vira traço", () => {
+  const d = comDom();
+  try {
+    const a = U.numMoeda(1234.5); assert.ok(a.classList.contains("num-moeda")); assert.equal(a.textContent, "R$1.234,50");
+    assert.equal(achar(a, ".nm-rs").textContent, "R$"); assert.equal(achar(a, ".nm-cent").textContent, ",50");
+    assert.equal(U.numMoeda(1234.5, { centavos: false }).textContent, "R$1.234"); assert.equal(U.numMoeda(1234.5, { centavos: false }).querySelector(".nm-cent"), null);
+    assert.equal(U.numMoeda(null).textContent, "—"); assert.equal(U.numMoeda(-5).textContent, "R$−5,00");
+  } finally { d.fim(); }
 });
 
 console.log(`\n${ok} ok · ${falhas} falha(s)${avisos ? ` · ${avisos} aviso(s)` : ""}\n`);
