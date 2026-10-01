@@ -1,4 +1,6 @@
 # Funções publicadas pela tag funcoes-* (uma por linha; ver docs/orbita/DEPLOY-FUNCOES.md).
+# R122 (01/10/2026, tag funcoes-20261001-5, commit 0583e2f): mídia CodeWords; as sete funções ACTIVE.
+# Versões após a publicação: nx-whatsapp v9, nx-relatorio v6, nx-ciclo v6, nx-enviar v8, nx-midia v5, nx-ia v6, nx-codewords v7.
 # Rodada de 01/10/2026 à tarde (R119, tag funcoes-20261001-4): as 7 juntas. nx-enviar leva a reserva do client_ref antes do envio
 # (migração 20261002d, aplicada em 01/10 19:39 UTC); nx-ciclo, nx-relatorio e nx-whatsapp levam o web/nucleo.js novo e as correções
 # do backend que ainda só estavam no repositório (comum.js, drenagem de corpo). Migrações 20261002b/c/d já aplicadas.

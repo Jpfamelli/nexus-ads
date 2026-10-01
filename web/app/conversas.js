@@ -1125,6 +1125,7 @@ async function enviarPedido(tmp, o) {
   try {
     let r;
     if (o.tipo === "midia") {
+      o.client_ref = o.client_ref || L.novoClientRef();
       // o arquivo já subiu numa tentativa anterior (a nx-enviar é que falhou): "Tentar de novo" não sobe tudo outra vez
       if (!o.path) {
         definirProgresso(tmp, 0, "subindo", convId);
@@ -1138,7 +1139,8 @@ async function enviarPedido(tmp, o) {
         o.path = s.path;
       }
       definirProgresso(tmp, 100, "entregando", convId);
-      r = await A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: o.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined });
+      // sem responde_a: mídia nunca vai como citação (e o aparelho do CodeWords nem tem citação)
+      r = await A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: o.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined, tamanho: o.arquivo.size, client_ref: o.client_ref });
     } else {
       r = await A.api.fn("nx-enviar", { acao: "template", conversa: convId, template_id: o.template.id, parametros: o.parametros || [] });
     }

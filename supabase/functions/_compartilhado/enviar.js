@@ -7,10 +7,14 @@
    Graph API / Storage. Toda saída é gravada por nx_cv_saida (também a que
    falhou, com o motivo: o atendente vê o "!" e a dica).
    Modo CRON (header x-nx-cron): {fila:true} | {ids:[…]} | {alerta:{cliente,texto}}.
-   Canal CodeWords (modelo "aparelho", codewords.js): só TEXTO, pelo proxy do
-   aparelho (form-urlencoded, 60 s), sem janela de 24 h nem modelo da Meta;
-   timeout/5xx é ambíguo: grava 'pendente' com id provisório (a sincronização
-   adota a gêmea) e NUNCA reenvia sozinho. Atendente respondeu → pausa a IA.
+   Canal CodeWords (modelo "aparelho", codewords.js): TEXTO (form-urlencoded,
+   60 s) e MÍDIA do painel — foto, áudio, vídeo e documento (multipart, 75 s:
+   o arquivo é baixado do Storage e vai em bytes para o proxy do aparelho) —,
+   sem janela de 24 h, sem citação e sem modelo da Meta. Áudio WAV (gravado na
+   tela) só existe neste canal: em canal Meta é midia_tipo. A fila de envios
+   automáticos continua só texto. Timeout/5xx é ambíguo: grava 'pendente' com
+   id provisório (a sincronização adota a gêmea) e NUNCA reenvia sozinho.
+   Atendente respondeu → pausa a IA.
    Idempotência (M36): o painel manda um `client_ref` por INTENÇÃO de envio
    (texto, mídia e modelo). O ref é RESERVADO no banco (nx_cv_ref_reservar)
    depois de conferir o pedido e ANTES de falar com a Meta/CodeWords, então
@@ -35,8 +39,8 @@ import {
   enviarTextoCanal, enviarMidiaCanal, enviarTemplateCanal, marcarLido, infoNumero, appsInscritos,
   inscreverApp, listarTemplates, textoFalhaCanal, aplicarParametros, enviarParaTodos,
 } from "./whatsapp.js";
-import { criarStorage, pathDoCliente, tipoAceito, arquivosDaPasta } from "./midia.js";
-import { enviarTextoCodeWords, estadoCanalCodeWords } from "./codewords.js";
+import { criarStorage, pathDoCliente, tipoAceito, arquivosDaPasta, soAparelho, mimeBase } from "./midia.js";
+import { enviarTextoCodeWords, enviarMidiaCodeWords, estadoCanalCodeWords, MAX_MIDIA } from "./codewords.js";
 
 const PAPEL = {
   texto: "atendente", midia: "atendente", template: "atendente", reenviar: "atendente", lido: "leitura",
@@ -45,6 +49,8 @@ const PAPEL = {
 const TIPO_MSG = { image: "imagem", video: "video", audio: "audio", document: "documento" };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRAZO_GRAPH_MS = 20_000;
+// mídia pelo aparelho: baixar do Storage é rápido (mesma região); o resto dos 100 s da tela fica para o envio (75 s) e a conferência (15 s)
+const PRAZO_BAIXAR_MS = 8_000;
 // fila: uma Edge Function morre em 150 s; envio que não cabe no que sobra volta para a fila sem sair
 const FILA_LIMITE_MS = 140_000;
 const RESERVA_ENVIO_MS = { codewords: 62_000, meta: 22_000 };
@@ -272,6 +278,57 @@ async function acaoTexto(db, ctx, corpo, deps, { conversa, texto, respondeA, ass
   return gravarSaida(db, ctx, cliente, cx.conversa.id, { tipo: "texto", corpo: final, responde_a_wamid: citacao }, r, cx.canal_id, reserva.ref);
 }
 
+/**
+ * Bytes do arquivo no Storage (pela URL assinada): o proxy do aparelho recebe o ARQUIVO, não um link.
+ * Não baixou ou veio vazio → 404 midia_nao_encontrada; acima de 16 MB (declarado ou real) → 400 midia_grande.
+ */
+async function baixarMidia(link, f) {
+  const ctl = new AbortController();
+  let r = null, leitor = null, timer;
+  const prazo = new Promise((_, rejeita) => {
+    timer = setTimeout(() => {
+      const erro = new Error("prazo do download excedido");
+      ctl.abort(erro);
+      rejeita(erro);
+    }, PRAZO_BAIXAR_MS);
+  });
+  const cancelar = () => {
+    try {
+      const p = leitor ? leitor.cancel() : r?.body?.cancel();
+      if (p && typeof p.catch === "function") p.catch(() => null);
+    } catch { /* melhor esforço: não prende a Edge numa resposta recusada */ }
+  };
+  try {
+    r = await Promise.race([f(link, { signal: ctl.signal }), prazo]);
+    if (!r.ok) throw new ErroApi("midia_nao_encontrada", 404);
+    const declarado = Number(r.headers.get("content-length"));
+    if (Number.isFinite(declarado) && declarado > MAX_MIDIA) throw new ErroApi("midia_grande", 400);
+    if (!r.body) throw new ErroApi("midia_nao_encontrada", 404);
+    leitor = r.body.getReader();
+    const partes = [];
+    let total = 0;
+    while (true) {
+      const item = await Promise.race([leitor.read(), prazo]);
+      if (item.done) break;
+      const parte = item.value instanceof Uint8Array ? item.value : new Uint8Array(item.value);
+      // O teto vale enquanto o corpo chega, inclusive sem Content-Length ou com cabeçalho incorreto.
+      if (parte.byteLength > MAX_MIDIA - total) throw new ErroApi("midia_grande", 400);
+      if (parte.byteLength) { partes.push(parte.slice()); total += parte.byteLength; }
+    }
+    if (!total) throw new ErroApi("midia_nao_encontrada", 404);
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const parte of partes) { bytes.set(parte, offset); offset += parte.byteLength; }
+    return bytes;
+  } catch (e) {
+    cancelar();
+    if (e instanceof ErroApi) throw e;
+    throw new ErroApi("midia_nao_encontrada", 404);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function acaoMidia(db, ctx, corpo, deps, env) {
   const cliente = String(corpo.cliente);
   const cx = await contextoConversa(db, ctx, cliente, corpo.conversa);
@@ -280,28 +337,42 @@ async function acaoMidia(db, ctx, corpo, deps, env) {
   if (!pathDoCliente(path, cliente, "out")) throw new ErroApi("midia_nao_encontrada", 404);
   const tipo = tipoAceito(corpo.mime);
   if (!tipo) throw new ErroApi("midia_tipo", 400);
+  // WAV só sai pelo aparelho do CodeWords: a Graph da Meta não aceita (recusa antes de reservar o client_ref)
+  const wav = soAparelho(corpo.mime);
+  if (wav && cx.canal?.provedor !== "codewords") throw new ErroApi("midia_tipo", 400);
   const reserva = await reservarRef(db, cliente, cx.conversa.id, clientRefDe(corpo));
   if (reserva.resposta) return reserva.resposta;
   const legenda = String(corpo.legenda ?? "").trim().slice(0, 1024) || null;
   const nome = String(corpo.nome ?? "").trim().slice(0, 200) || null;
-  const { cred, link, citacao } = await antesDoCanal(db, cliente, reserva, async () => {
-    exigirConversaAberta(cx);
+  const { cred, link, citacao, bytes } = await antesDoCanal(db, cliente, reserva, async () => {
+    // o aparelho do CodeWords não tem janela de 24 h (é um WhatsApp comum)
+    exigirConversaAberta(cx, { exigeJanela: cx.canal?.provedor !== "codewords" });
     const cred = await credencial(db, cx.canal_id, cliente);
-    if (cred.provedor === "codewords") throw new ErroApi("codewords_tipo_nao_suportado", 400, "mídia");
+    if (wav && !ehCodeWords(cred)) throw new ErroApi("midia_tipo", 400);   // quem escolhe a rota é a credencial: WAV nunca segue para a Graph
     const st = criarStorage(env, deps.fetch);
     const ass = await st.assinar([path], 3600);
     const link = ass.ok ? ass.urls[path] : null;
     if (!link) throw new ErroApi("midia_nao_encontrada", 404);
+    // aparelho: o arquivo vai em bytes (baixado aqui, antes do canal: se falhar, nada saiu) e não há citação
+    if (ehCodeWords(cred)) {
+      const bytes = await baixarMidia(link, deps.fetch);
+      if (bytes.byteLength > tipo.max) throw new ErroApi("midia_grande", 400);
+      return { cred, link, citacao: null, bytes };
+    }
     const citacao = await citacaoValida(db, cliente, cx.contato?.id, corpo.responde_a);
     return { cred, link, citacao };
   });
-  const r = await enviarMidiaCanal(cred, destino(cx), { tipo: tipo.grupo, link, legenda, nome }, { respondeA: citacao, fetch: deps.rede });
-  const mime = String(corpo.mime).split(";")[0].trim();
+  const cw = ehCodeWords(cred);
+  const mime = wav ? mimeBase(corpo.mime) : String(corpo.mime).split(";")[0].trim();
+  const r = cw
+    ? await enviarMidiaCodeWords(cred, destino(cx), { grupo: tipo.grupo, bytes, mime, nome, legenda }, { fetch: deps.fetch, db })
+    : await enviarMidiaCanal(cred, destino(cx), { tipo: tipo.grupo, link, legenda, nome }, { respondeA: citacao, fetch: deps.rede });
   const tamanho = Number(corpo.tamanho) > 0 ? Number(corpo.tamanho) : null;
+  // com o canal, a saída em dúvida do aparelho ganha o id provisório (igual ao texto)
   return gravarSaida(db, ctx, cliente, cx.conversa.id, {
     tipo: TIPO_MSG[tipo.grupo], corpo: tipo.grupo === "audio" ? null : legenda, responde_a_wamid: citacao,
     midia: { path, mime, nome, ...(tamanho ? { tamanho } : {}), estado: "ok" },
-  }, r, null, reserva.ref);
+  }, r, cw ? cx.canal_id : null, reserva.ref);
 }
 
 async function acaoTemplate(db, ctx, corpo, deps) {

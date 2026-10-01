@@ -244,3 +244,92 @@ test("sessão: entrar de novo devolve token da MESMA conta; com ?outra=1 o próx
   const t2 = (await rpc("nx_entrar", { p_email: "a@b.c", p_senha: "x" })).corpo.token;
   assert.notEqual((await rpc("nx_app_sessao", { p_token: t2 })).corpo.conta.id, a, "outra conta");
 }));
+
+test("mídia fictícia: nx-midia subir valida tipo e tamanho (WAV incluído), o upload fica no servidor local e o nx-enviar midia devolve a mensagem enviada com a mídia, em qualquer canal", () => comServidor(async ({ base, rpc, fnx, estado }) => {
+  const antes = await estado();
+  // subir: mesmas regras do nx-midia de verdade; o endereço de upload nunca aponta para um servidor real
+  const erro = async c => (await fnx("nx-midia", { acao: "subir", ...c })).corpo;
+  assert.deepEqual(await erro({ mime: "image/svg+xml", tamanho: 10 }), { ok: false, erro: "midia_tipo" });
+  assert.deepEqual(await erro({ mime: "image/png", tamanho: 6 * 1024 * 1024 }), { ok: false, erro: "midia_grande" });
+  assert.deepEqual(await erro({ mime: "audio/wav", tamanho: 17 * 1024 * 1024 }), { ok: false, erro: "midia_grande" });
+  assert.deepEqual(await erro({ mime: "audio/wav" }), { ok: false, erro: "dados_invalidos" });
+  const casos = [
+    [901, "image/jpeg", "jpg", "foto.jpg", "Olha a foto", "imagem", "Olha a foto"],          // canal CodeWords
+    [901, "audio/wav", "wav", "audio-orbita-1790000000000.wav", "ignorada", "audio", null],  // áudio gravado na tela (WAV), sem legenda
+    [901, "audio/x-wav", "wav", "voz.wav", undefined, "audio", null],
+    [902, "application/pdf", "pdf", "orcamento.pdf", undefined, "documento", null],          // canal Meta
+    [902, "video/mp4", "mp4", "video.mp4", "Segue o vídeo", "video", "Segue o vídeo"],
+  ];
+  let n = 0;
+  for (const [conversa, mime, ext, nome, legenda, tipo, corpo] of casos) {
+    const s = (await fnx("nx-midia", { acao: "subir", nome, mime, tamanho: 5 })).corpo;
+    assert.equal(s.ok, true, mime);
+    assert.match(s.path, new RegExp(`^[0-9a-f-]{36}/out/\\d{4}-\\d{2}/[0-9a-f-]{36}\\.${ext}$`), mime);
+    const u = new URL(s.upload_url);
+    assert.equal(u.protocol, "https:", "a tela só aceita upload em https");
+    assert.equal(u.hostname, "dev-falso.invalid", "host que não existe: sem o boot.js nada sai do computador");
+    // o boot.js troca o host pelo servidor local (testado abaixo); aqui o PUT vai direto para lá
+    const put = await fetch(`${base}/__dev_falso${u.pathname}${u.search}`, { method: "PUT", headers: { "content-type": mime, "x-upsert": "true" }, body: new Uint8Array([1, 2, 3, 4, 5]) });
+    assert.equal(put.status, 200, mime);
+    const ref = `bbbbbbbb-0000-4000-8000-00000000000${++n}`;
+    const pedido = { acao: "midia", conversa, path: s.path, mime, nome, legenda, tamanho: 5, client_ref: ref };
+    const a = (await fnx("nx-enviar", pedido)).corpo;
+    assert.equal(a.ok, true, mime);
+    assert.equal(a.mensagem.tipo, tipo); assert.equal(a.mensagem.corpo, corpo); assert.equal(a.mensagem.status, "enviada");
+    assert.equal(a.mensagem.direcao, "out"); assert.equal(a.mensagem.conversa_id, conversa);
+    assert.deepEqual(a.mensagem.midia, { path: s.path, mime: mime === "audio/x-wav" ? "audio/wav" : mime, nome, tamanho: 5, estado: "ok" });
+    const b = (await fnx("nx-enviar", pedido)).corpo;
+    assert.equal(b.repetida, true); assert.equal(b.mensagem.id, a.mensagem.id, "o mesmo client_ref não envia de novo");
+    const gravada = (await rpc("nx_cv_mensagens", { p_conversa: conversa })).corpo.itens.find(m => m.id === a.mensagem.id);
+    assert.equal(gravada.tipo, tipo); assert.deepEqual(gravada.midia, a.mensagem.midia, "a mídia aparece ao reabrir a conversa");
+  }
+  const depois = await estado();
+  assert.equal(depois.enviosExternos, antes.enviosExternos + casos.length, "um envio por intenção");
+  assert.equal(depois.uploads, casos.length);
+  const lista = (await rpc("nx_cv_listar", { p_filtro: { aba: "abertas" }, p_limite: 50 })).corpo.itens;
+  assert.equal(lista.find(c => c.id === 901).ultima_msg_resumo, "Áudio", "mídia sem legenda tem resumo na lista");
+  assert.equal(lista.find(c => c.id === 902).ultima_msg_resumo, "Segue o vídeo");
+  // caminho que não é da pasta de envio da empresa, tipo recusado e conversa inexistente
+  const ok = (await fnx("nx-midia", { acao: "subir", nome: "a.jpg", mime: "image/jpeg", tamanho: 5 })).corpo;
+  assert.equal((await fnx("nx-enviar", { acao: "midia", conversa: 901, path: "outro-cliente/out/2026-10/x.jpg", mime: "image/jpeg" })).corpo.erro, "midia_nao_encontrada");
+  assert.equal((await fnx("nx-enviar", { acao: "midia", conversa: 901, path: ok.path, mime: "image/svg+xml" })).corpo.erro, "midia_tipo");
+  assert.equal((await fnx("nx-enviar", { acao: "midia", conversa: 999999, path: ok.path, mime: "image/jpeg" })).corpo.erro, "conversa_nao_encontrada");
+  assert.equal((await fetch(`${base}/__dev_falso/storage/v1/object/upload/sign/nx-midia/outro/in/x.jpg`, { method: "PUT", body: "x" })).status, 400, "upload só no caminho que o subir devolveu");
+  assert.equal((await estado()).enviosExternos, depois.enviosExternos, "pedido recusado não conta envio");
+  // as outras ações continuam como antes
+  assert.deepEqual((await fnx("nx-midia", { acao: "ver", paths: [ok.path] })).corpo, { ok: true, url: null });
+  assert.equal((await fnx("nx-enviar", { acao: "lido", conversa: 901 })).corpo.ok, true);
+}));
+
+test("boot.js fictício: fetch E XMLHttpRequest para o Supabase (ou para o host de upload fictício) são trocados pelo servidor local; o resto não muda", () => comServidor(async ({ base }) => {
+  const codigo = await (await fetch(`${base}/__dev_falso/boot.js`)).text();
+  const pedidos = [], abertos = [];
+  class XHR { open(...a) { abertos.push(a); return "aberto"; } }
+  const origem = "http://127.0.0.1:4173";
+  const guardado = new Map();
+  const armazem = { getItem: k => guardado.get(k) ?? null, setItem: (k, v) => guardado.set(k, v), removeItem: k => guardado.delete(k) };
+  const janela = { fetch: (u, init) => { pedidos.push([String(u), init]); return "resposta"; } };
+  const local = { hostname: "127.0.0.1", search: "?dev-falso=1", href: `${origem}/app/?dev-falso=1`, origin: origem, hash: "" };
+  const rodar = (window, location) => new Function("window", "location", "localStorage", "sessionStorage", "XMLHttpRequest", codigo)(window, location, armazem, armazem, XHR);
+  rodar(janela, local);
+  janela.fetch("https://dtjznipitihnwmcgpzqh.supabase.co/functions/v1/nx-enviar", { method: "POST" });
+  janela.fetch("/app/versao.json");
+  assert.equal(pedidos[0][0], `${origem}/__dev_falso/functions/v1/nx-enviar`);
+  assert.deepEqual(pedidos[0][1], { method: "POST" });
+  assert.equal(pedidos[1][0], "/app/versao.json", "pedido local segue igual");
+  const x = new XHR();
+  assert.equal(x.open("PUT", "https://dev-falso.invalid/storage/v1/object/upload/sign/nx-midia/c/out/2026-10/a.wav?token=dev-falso"), "aberto");
+  x.open("PUT", "https://dtjznipitihnwmcgpzqh.supabase.co/storage/v1/object/upload/sign/nx-midia/c/out/2026-10/b.jpg?token=t", true);
+  x.open("GET", "/app/versao.json");
+  x.open("GET", "https://exemplo.test/outro");
+  assert.deepEqual(abertos, [
+    ["PUT", `${origem}/__dev_falso/storage/v1/object/upload/sign/nx-midia/c/out/2026-10/a.wav?token=dev-falso`],
+    ["PUT", `${origem}/__dev_falso/storage/v1/object/upload/sign/nx-midia/c/out/2026-10/b.jpg?token=t`, true],
+    ["GET", "/app/versao.json"],
+    ["GET", "https://exemplo.test/outro"],
+  ], "upload por XHR nunca sai do computador; os demais argumentos do open são preservados");
+  // fora do computador local o boot não instala nada
+  const fora = { fetch: () => "original" }, antes = XHR.prototype.open;
+  rodar(fora, { ...local, hostname: "orbita-nexus-ads.netlify.app" });
+  assert.equal(fora.fetch(), "original"); assert.equal(XHR.prototype.open, antes);
+}));

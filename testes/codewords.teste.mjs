@@ -15,6 +15,7 @@ import {
   tratar, lerPayload, idEstavel, formaDoPayload, enviarTextoCodeWords, traduzirErroCW, avaliarAparelho,
   classificarDestino, itemDoAparelho, montarContexto, rotuloHorario, textoHorario, dataIso, variantesTelefone,
   CW_BASE, tipoDaMidia, rotuloMidia, extrairCodigoRastreio, ehJidLid, mensagensDoAparelho,
+  enviarMidiaCodeWords, nomeDoArquivo, PRAZOS, MAX_MIDIA,
 } from "../supabase/functions/_compartilhado/codewords.js";
 import {
   montarInstrucoes, montarReceita, ACOES_AGENTE, EXEMPLOS_AGENTE, EXEMPLOS_LEGADOS, VERSAO_PROMPT, RESUMO_VERSAO,
@@ -163,14 +164,25 @@ function cenario({ rpc = {}, cw = {}, credB = false } = {}) {
     if (u.origin === SUPA && u.pathname === "/rest/v1/nx_metricas_dia") return resp([{ campanha_ext: "CAMP-7" }]);
     if (u.host === "runtime.codewords.ai") {
       const caminho = u.pathname.replace("/run/whatsapp_device_manager", "");
-      const corpo = await req.text();
+      const tipo = req.headers.get("content-type");
+      // mídia: multipart (FormData) — guarda os campos de texto e o arquivo (campo, nome, mime, bytes)
+      let corpo = "", multipart = null;
+      if (/^multipart\/form-data/i.test(tipo || "")) {
+        multipart = { campos: {}, arquivo: null };
+        for (const [k, v] of await req.formData()) {
+          if (typeof v === "string") multipart.campos[k] = v;
+          else multipart.arquivo = { campo: k, nome: v.name, mime: v.type, bytes: new Uint8Array(await v.arrayBuffer()) };
+        }
+      } else corpo = await req.text();
       const x = { metodo: req.method, caminho, query: Object.fromEntries(u.searchParams), auth: req.headers.get("authorization"),
-                  tipo: req.headers.get("content-type"), corpo, temPrazo: !!init.signal };
+                  tipo, corpo, multipart, temPrazo: !!init.signal, corpoFormData: init.body instanceof FormData,
+                  cabecalhos: Object.keys(init.headers || {}).map(k => k.toLowerCase()) };
       cwChamadas.push(x);
       if (req.method === "GET" && caminho === "/connections") return typeof devices.lista === "function" ? devices.lista(x) : resp(devices.lista);
       if (req.method === "POST" && caminho === "/connections") return devices.parear ? devices.parear(x) : resp({ pair_code: "ABCD-1234", phone_id: "dev-a-2" });
       if (req.method === "PUT" && /^\/connections\/[^/]+\/subscribe$/.test(caminho)) return devices.subscribe ? devices.subscribe(x) : resp({ ok: true });
       if (req.method === "POST" && caminho === "/proxy/send/message") return devices.envio(x);
+      if (req.method === "POST" && /^\/proxy\/send\/(image|audio|file)$/.test(caminho)) return (devices.envioMidia || devices.envio)(x);
       if (req.method === "GET" && caminho.startsWith("/proxy/chat/")) return devices.mensagens ? devices.mensagens(x) : resp({ results: { data: [] } });
       return resp({ erro: "rota falsa" }, 404);
     }
@@ -742,6 +754,179 @@ test("envio: número do aparelho diferente do canal → nada sai (conferência p
   // CodeWords fora do ar na conferência → deixa passar (o envio responde por si)
   const fora = cenario({ cw: { lista: () => resp({ erro: "x" }, 503) } });
   assert.equal((await enviarTextoCodeWords(fora.cred, TEL, "Olá", { fetch: fora.fetch, db })).ok, true);
+});
+
+/* ============================================================
+   Envio de MÍDIA pelo aparelho (multipart): foto, áudio, vídeo e documento
+   ============================================================ */
+const BYTES = new Uint8Array([82, 73, 70, 70, 1, 2, 3, 4]);
+const midiaDe = (grupo, extra = {}) => ({ grupo, bytes: BYTES, mime: "application/pdf", nome: "arquivo.pdf", ...extra });
+const enviosMidia = s => s.cwChamadas.filter(x => x.caminho.startsWith("/proxy/send/") && x.caminho !== "/proxy/send/message");
+
+test("envio de mídia: rota e campo por tipo (foto → send/image, áudio → send/audio, vídeo e documento → send/file), multipart com phone, legenda e o arquivo", async () => {
+  const casos = [
+    ["image", "image/jpeg", "foto.jpg", "/proxy/send/image", "image", "Olha a foto"],
+    ["audio", "audio/wav", "audio-orbita-1.wav", "/proxy/send/audio", "audio", undefined],
+    ["video", "video/mp4", "video.mp4", "/proxy/send/file", "file", "Segue o vídeo"],
+    ["document", "application/pdf", "orcamento.pdf", "/proxy/send/file", "file", "Seu orçamento"],
+  ];
+  for (const [grupo, mime, nome, caminho, campo, legenda] of casos) {
+    const s = cenario();
+    const r = await enviarMidiaCodeWords(s.cred, "+55 12 98888-7777", { grupo, bytes: BYTES, mime, nome, legenda: legenda && `  ${legenda}  ` }, { fetch: s.fetch });
+    assert.equal(r.ok, true, grupo); assert.equal(r.provedor, "codewords");
+    assert.equal(r.providerId, "3EB0AAA111"); assert.equal(r.wamid, `cw:${K_A}:3EB0AAA111`); assert.equal(r.provisorio, false);
+    assert.equal(s.cwChamadas.length, 1, "uma chamada só");
+    const x = s.cwChamadas[0];
+    assert.equal(x.metodo, "POST"); assert.equal(x.caminho, caminho, grupo); assert.deepEqual(x.query, { phone_id: "dev-a-1" });
+    assert.equal(x.auth, CHAVE, "chave crua, sem Bearer"); assert.equal(x.temPrazo, true);
+    assert.deepEqual(x.multipart.campos, legenda ? { phone: TEL, caption: legenda } : { phone: TEL }, grupo);
+    assert.equal(x.multipart.arquivo.campo, campo, grupo);
+    assert.equal(x.multipart.arquivo.nome, nome); assert.equal(x.multipart.arquivo.mime, mime);
+    assert.deepEqual([...x.multipart.arquivo.bytes], [...BYTES], "os bytes chegam inteiros");
+  }
+  assert.equal(PRAZOS.enviarMidia, 70_000, "deixa orçamento para conferência do número, download e gravação da saída dentro dos 100 s da tela");
+});
+
+test("envio de mídia: não aceita rota incompatível com o MIME nem foto acima de 5 MB", async () => {
+  const erros = [
+    ["image", "application/pdf", new Uint8Array([1]), /não corresponde à rota/],
+    ["audio", "application/pdf", new Uint8Array([1]), /não corresponde à rota/],
+    ["document", "image/jpeg", new Uint8Array([1]), /não corresponde à rota/],
+    ["image", "image/jpeg", new Uint8Array(5 * 1024 * 1024 + 1), /passa de 5 MB/],
+  ];
+  for (const [grupo, mime, bytes, aviso] of erros) {
+    const s = cenario();
+    const r = await enviarMidiaCodeWords(s.cred, TEL, { grupo, mime, bytes, nome: "arquivo" }, { fetch: s.fetch });
+    assert.equal(r.ok, false, `${grupo} / ${mime}`);
+    assert.equal(r.tipo, "dados");
+    assert.match(r.erro.title, aviso);
+    assert.equal(s.cwChamadas.length, 0, "validação local, nenhuma chamada ao aparelho");
+  }
+});
+
+test("envio de mídia: áudio NUNCA leva legenda; o corpo é FormData e o Content-Type (com boundary) é do fetch, não definido à mão", async () => {
+  const s = cenario();
+  const r = await enviarMidiaCodeWords(s.cred, TEL, { grupo: "audio", bytes: BYTES.buffer, mime: "audio/x-wav; codecs=1", nome: null, legenda: "legenda que o proxy de áudio recusaria" }, { fetch: s.fetch });
+  assert.equal(r.ok, true);
+  const x = s.cwChamadas[0];
+  assert.deepEqual(x.multipart.campos, { phone: TEL }, "sem caption no áudio");
+  assert.equal(x.multipart.arquivo.campo, "audio");
+  assert.equal(x.multipart.arquivo.mime, "audio/wav", "apelido audio/x-wav normalizado");
+  assert.equal(x.multipart.arquivo.nome, "arquivo.wav", "sem nome: arquivo + extensão do mime");
+  assert.equal(x.corpoFormData, true, "o corpo entregue ao fetch é um FormData");
+  assert.deepEqual(x.cabecalhos, ["authorization"], "nenhum Content-Type manual: só a chave");
+  assert.match(x.tipo, /^multipart\/form-data; boundary=/, "o boundary é escrito pelo fetch");
+  // Blob também serve como entrada
+  const b = cenario();
+  assert.equal((await enviarMidiaCodeWords(b.cred, TEL, midiaDe("document", { bytes: new Blob([BYTES], { type: "application/pdf" }) }), { fetch: b.fetch })).ok, true);
+  assert.deepEqual([...b.cwChamadas[0].multipart.arquivo.bytes], [...BYTES]);
+});
+
+test("envio de mídia: nome do arquivo saneado (sem barras, controle ou reservados) e padrão coerente com o mime", () => {
+  assert.equal(nomeDoArquivo("../../etc/passwd", "text/plain"), "_.._etc_passwd");
+  assert.equal(nomeDoArquivo("C:\\pasta\\nota fiscal.pdf", "application/pdf"), "C__pasta_nota fiscal.pdf");
+  assert.equal(nomeDoArquivo("orça\r\nmento\u0000\t.pdf", "application/pdf"), "orçamento.pdf");
+  assert.equal(nomeDoArquivo('a"b<c>d|e?f*g:h.png', "image/png"), "a_b_c_d_e_f_g_h.png");
+  assert.equal(nomeDoArquivo("", "image/jpeg"), "arquivo.jpg");
+  assert.equal(nomeDoArquivo(null, "audio/wav"), "arquivo.wav");
+  assert.equal(nomeDoArquivo("   ", "audio/ogg; codecs=opus"), "arquivo.ogg");
+  assert.equal(nomeDoArquivo(undefined, "application/x-desconhecido"), "arquivo.bin");
+  assert.equal(nomeDoArquivo("x".repeat(400), "application/pdf").length, 150);
+});
+
+test("envio de mídia: HTTP 200 NÃO é entrega (recusa no corpo); 401/404 traduzidos; timeout e 5xx ambíguos; uma chamada só; chave nunca no texto", async () => {
+  const casos = [
+    [() => resp({ status: "skip", message: "Own message or empty" }), false, /own message or empty/],
+    [() => resp({ code: "error", message: "file too big" }), false, /não entregou: file too big/],
+    [() => resp({ error: "phone invalid", code: "SUCCESS" }), false, /phone invalid/],
+    [() => resp({ code: "INVALID_WA_CLI", message: "whatsapp cli is invalid" }, 500), false, /desconectado do CodeWords/],
+    [() => resp({ message: "Unauthorized" }, 401), false, /recusou a chave/],
+    [() => resp({ message: "No connection found" }, 404), false, /não achou o aparelho/],
+    [() => resp({ message: "quota" }, 429), false, /limite de uso/],
+    [() => resp({ message: "payload" }, 413), false, /recusou o pedido \(HTTP 413\)/],
+    [() => resp({ message: "gateway" }, 503), true, /pode ter saído/],
+    [() => resp({ message: "gateway" }, 408), true, /pode ter saído/],
+    [() => { throw new Error(`timeout Authorization ${CHAVE}`); }, true, /não respondeu a tempo/],
+    [() => new Response("texto solto", { status: 200 }), true, /sem confirmação legível/],
+    [() => resp({ message: "recebido" }), true, /não confirmou o envio/],
+  ];
+  for (const [envioMidia, ambigua, re] of casos) {
+    const s = cenario({ cw: { envioMidia } });
+    const r = await enviarMidiaCodeWords(s.cred, TEL, midiaDe("document"), { fetch: s.fetch });
+    assert.equal(r.ok, false, re.source); assert.equal(r.provedor, "codewords");
+    assert.equal(r.ambigua, ambigua, re.source); assert.match(r.erro.title, re);
+    assert.ok(!JSON.stringify(r).includes(CHAVE), "chave nunca no erro");
+    assert.equal(s.cwChamadas.length, 1, "uma chamada só: nunca reenvia sozinho");
+  }
+  // sucesso sem message_id: vale, com id provisório (a sincronização adota a gêmea)
+  const semId = cenario({ cw: { envioMidia: () => resp({ code: "SUCCESS", message: "Image sent" }) } });
+  const p = await enviarMidiaCodeWords(semId.cred, TEL, midiaDe("image", { mime: "image/png", nome: "x.png" }), { fetch: semId.fetch });
+  assert.equal(p.ok, true); assert.equal(p.provisorio, true); assert.match(p.wamid, new RegExp(`^cw:${K_A}:orbita-p-[0-9a-f]{32}$`));
+});
+
+test("envio de mídia: o prazo estourou (o proxy não respondeu) → AMBÍGUA, nunca 'falhou' nem nova tentativa", async () => {
+  const s = cenario();
+  let chamadas = 0;
+  // fetch que só termina quando o prazo aborta (como o fetch de verdade)
+  const preso = (entrada, init) => {
+    if (!String(entrada).includes("/proxy/send/")) return s.fetch(entrada, init);
+    chamadas++;
+    return new Promise((_, falhar) => init.signal.addEventListener("abort", () => falhar(init.signal.reason)));
+  };
+  const r = await enviarMidiaCodeWords(s.cred, TEL, midiaDe("image", { mime: "image/jpeg", nome: "foto.jpg" }), { fetch: preso, timeoutMs: 25 });
+  assert.equal(r.ok, false); assert.equal(r.tipo, "rede"); assert.equal(r.ambigua, true);
+  assert.match(r.erro.title, /não respondeu a tempo.*pode ter saído/);
+  assert.equal(chamadas, 1);
+});
+
+test("envio de mídia: sem chave, sem aparelho, @lid, telefone ou tipo inválido, arquivo vazio ou acima de 16 MB → falha certa SEM chamar o proxy", async () => {
+  let rede = 0;
+  const f = async () => { rede++; return resp({ code: "SUCCESS" }); };
+  const s = cenario();
+  const casos = [
+    [{ ...s.cred, codewords_api_key: null }, TEL, midiaDe("document"), "sem_chave", /sem a chave/],
+    [{ ...s.cred, codewords_phone_id: null }, TEL, midiaDe("document"), "sem_aparelho", /não foi pareado/],
+    [s.cred, `${LID}@lid`, midiaDe("image"), "dados", /sem número de telefone/],
+    [s.cred, "123", midiaDe("document"), "dados", /Telefone ou tipo de arquivo inválido/],
+    [s.cred, TEL, midiaDe("sticker"), "dados", /Telefone ou tipo de arquivo inválido/],
+    [s.cred, TEL, midiaDe("constructor"), "dados", /tipo de arquivo inválido/],
+    [s.cred, TEL, null, "dados", /tipo de arquivo inválido/],
+    [s.cred, TEL, midiaDe("document", { bytes: new Uint8Array(0) }), "dados", /vazio/],
+    [s.cred, TEL, midiaDe("document", { bytes: undefined }), "dados", /vazio/],
+    [s.cred, TEL, midiaDe("document", { bytes: "texto solto" }), "dados", /vazio ou não pôde ser lido/],
+    [s.cred, TEL, midiaDe("document", { bytes: new Uint8Array(MAX_MIDIA + 1) }), "dados", /passa de 16 MB/],
+    [s.cred, TEL, midiaDe("audio", { mime: "audio/ogg", bytes: new Blob([new Uint8Array(MAX_MIDIA + 1)]) }), "dados", /passa de 16 MB/],
+  ];
+  for (const [cred, para, midia, tipo, re] of casos) {
+    const r = await enviarMidiaCodeWords(cred, para, midia, { fetch: f });
+    assert.equal(r.ok, false, re.source); assert.equal(r.tipo, tipo, re.source); assert.equal(r.ambigua, false, "nada saiu: falha certa");
+    assert.match(r.erro.title, re);
+  }
+  assert.equal(rede, 0, "nenhuma chamada ao CodeWords");
+  // exatamente 16 MB ainda passa
+  const cheio = cenario();
+  assert.equal((await enviarMidiaCodeWords(cheio.cred, TEL, midiaDe("document", { bytes: new Uint8Array(MAX_MIDIA) }), { fetch: cheio.fetch })).ok, true);
+  assert.equal(cheio.cwChamadas[0].multipart.arquivo.bytes.length, MAX_MIDIA);
+});
+
+test("envio de mídia: número do aparelho diferente do canal → nada sai (mesma conferência do texto, cache de 10 min pelo banco)", async () => {
+  const s = cenario({ cw: { lista: [{ phone_id: "dev-a-1", phone_number: "+5512900001111", status: "logged_in" }] } });
+  const db = { rpc: async (nome, p) => { s.chamadas.push({ nome, corpo: p }); return {}; } };
+  const r = await enviarMidiaCodeWords(s.cred, TEL, midiaDe("image", { mime: "image/jpeg", nome: "foto.jpg" }), { fetch: s.fetch, db });
+  assert.equal(r.ok, false); assert.equal(r.tipo, "numero_diferente"); assert.equal(r.ambigua, false);
+  assert.match(r.erro.title, /não é o número deste canal/);
+  assert.equal(enviosMidia(s).length, 0, "nada enviado");
+  assert.equal(s.rpcsDe("nx_codewords_situacao")[0].corpo.p_dados.numero_conferido, false);
+  // conferido há pouco → não consulta de novo e envia
+  const fresco = cenario();
+  const cred = { ...fresco.cred, codewords_numero_conferido: true, codewords_conferido_em: new Date().toISOString() };
+  assert.equal((await enviarMidiaCodeWords(cred, TEL, midiaDe("document"), { fetch: fresco.fetch, db })).ok, true);
+  assert.equal(fresco.cwChamadas.filter(x => x.caminho === "/connections").length, 0);
+  assert.equal(enviosMidia(fresco).length, 1);
+  // número confere → confere uma vez (GET /connections) e envia
+  const certo = cenario();
+  assert.equal((await enviarMidiaCodeWords(certo.cred, TEL, midiaDe("document"), { fetch: certo.fetch, db })).ok, true);
+  assert.deepEqual(certo.cwChamadas.map(x => x.caminho), ["/connections", "/proxy/send/file"]);
 });
 
 test("aparelho: avaliação pelo número (não só pelo phone_id), status exato e destino sem segredo", () => {
