@@ -2,7 +2,8 @@
    NEXUS ADS — montar-funcoes.mjs
    Monta supabase/dist/<funcao>/ em diretório PLANO, do jeito que o
    deploy sem CLI envia: index.ts + todos os .js de _compartilhado +
-   cópia byte a byte de web/nucleo.js. Funções: nx-ciclo, nx-relatorio,
+   cópia byte a byte de web/nucleo.js e de web/app/auto-catalogo.js (o
+   catálogo das automações, compartilhado com o painel). Funções: nx-ciclo, nx-relatorio,
    nx-whatsapp, nx-enviar, nx-midia, nx-ia, nx-codewords (verify_jwt: false).
    Uso: node scripts/montar-funcoes.mjs
    ============================================================ */
@@ -15,6 +16,7 @@ const RAIZ = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FUNCOES = join(RAIZ, "supabase", "functions");
 const COMPARTILHADO = join(FUNCOES, "_compartilhado");
 const NUCLEO = join(RAIZ, "web", "nucleo.js");
+const CATALOGO = join(RAIZ, "web", "app", "auto-catalogo.js");
 const DIST = join(RAIZ, "supabase", "dist");
 // As funções usam verify_jwt: false e validação própria do handler.
 const LISTA = ["nx-ciclo", "nx-relatorio", "nx-whatsapp", "nx-enviar", "nx-midia", "nx-ia", "nx-codewords"];
@@ -29,9 +31,13 @@ const sha = b => createHash("sha256").update(b).digest("hex").slice(0, 12);
 const falhar = msg => { console.error(`ERRO: ${msg}`); process.exit(1); };
 
 if (!existsSync(NUCLEO)) falhar(`não achei ${NUCLEO}`);
-// _compartilhado/nucleo.js é só a ponte do layout de desenvolvimento: no deploy vai o original
-const modulos = readdirSync(COMPARTILHADO).filter(n => n.endsWith(".js") && n !== "nucleo.js").sort();
+if (!existsSync(CATALOGO)) falhar(`não achei ${CATALOGO}`);
+// _compartilhado/nucleo.js e _compartilhado/auto-catalogo.js são só as pontes do layout de desenvolvimento:
+// no deploy vão os originais (cópia byte a byte)
+const PONTES = new Set(["nucleo.js", "auto-catalogo.js"]);
+const modulos = readdirSync(COMPARTILHADO).filter(n => n.endsWith(".js") && !PONTES.has(n)).sort();
 const nucleo = readFileSync(NUCLEO);
+const catalogo = readFileSync(CATALOGO);
 
 /** Todo import relativo precisa apontar para um arquivo que está na mesma pasta plana. */
 function conferirImports(pasta) {
@@ -48,7 +54,8 @@ function conferirImports(pasta) {
   }
 }
 
-console.log(`nucleo.js  sha256 ${sha(nucleo)}  (${nucleo.length} bytes)\n`);
+console.log(`nucleo.js  sha256 ${sha(nucleo)}  (${nucleo.length} bytes)`);
+console.log(`auto-catalogo.js  sha256 ${sha(catalogo)}  (${catalogo.length} bytes)\n`);
 for (const fn of LISTA) {
   const entrada = join(FUNCOES, fn, "index.ts");
   if (!existsSync(entrada)) falhar(`não achei ${entrada}`);
@@ -59,8 +66,10 @@ for (const fn of LISTA) {
   writeFileSync(join(destino, "index.ts"), readFileSync(entrada));
   for (const m of modulos) writeFileSync(join(destino, m), readFileSync(join(COMPARTILHADO, m)));
   writeFileSync(join(destino, "nucleo.js"), nucleo);
+  writeFileSync(join(destino, "auto-catalogo.js"), catalogo);
 
   if (sha(readFileSync(join(destino, "nucleo.js"))) !== sha(nucleo)) falhar(`${fn}: nucleo.js diferente do original`);
+  if (sha(readFileSync(join(destino, "auto-catalogo.js"))) !== sha(catalogo)) falhar(`${fn}: auto-catalogo.js diferente do original`);
   conferirImports(destino);
   const idx = readFileSync(join(destino, "index.ts"), "utf8");
   if (!idx.includes(`from "./${HANDLER[fn]}"`)) falhar(`${fn}: index.ts não importa tratar de ${HANDLER[fn]}`);

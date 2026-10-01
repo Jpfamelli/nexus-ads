@@ -21,6 +21,7 @@ const comandos = [
   ["--test", "testes/codewords.teste.mjs"],
   ["--test", "testes/rastreio.teste.mjs"],
   ["--test", "testes/automacoes.teste.mjs"],
+  ["--test", "testes/automacoes-catalogo.teste.mjs"],
   ["--test", "testes/isolamento.teste.mjs"],
 ];
 
