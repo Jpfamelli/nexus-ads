@@ -2,7 +2,7 @@
 
 Atualizado: 2026-10-01 01:15 (America/Sao_Paulo)
 Branch: `codex/orbita`
-PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — sai de rascunho e é mesclado na `main` na etapa de publicação (logo depois deste commit)
+PR: [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) — MESCLADO na `main` em 01/10/2026 04:17 UTC (merge 4db317d). Produção: https://orbita-nexus-ads.netlify.app
 
 ## F8 ACEITA em 01/10/2026 — 2026-10-01 01:15 -03
 
@@ -43,7 +43,7 @@ O branch `codex/orbita` contém as frentes em revisão e o commit `40b4f7b` já 
 | F5 — conversas | Adaptador CodeWords, webhook, fila e recibos cobertos por testes locais; migração e funções publicadas | Nenhum canal CodeWords real está configurado no tenant de teste; envio e recibos reais pendentes |
 | F6 — anúncios e relatórios | Implementação local e testes Node aprovados | Tenant de teste sem métricas; integrações reais e paridade CRM/Ads pendentes |
 | F7 — automações | Implementação local e testes Node aprovados | Aceite autenticado de runtime permanece pendente |
-| F8 — entrega | **ACEITA em 01/10/2026.** Runner serial 15/15, `deno check` 7/7; E2E CodeWords 15/16, E2E Meta 26/27 e E2E-B 256/256, com os defeitos corrigidos e o `@lid` e o 413 provados em produção; QA final 201/201 | Limpeza fina b12 aplicada (mantém `teste-e2e` e a Conta E2E); `prontos.js` liberado e `netlify.toml` sem a regra `ignore`; publicação (merge na `main`, Pages, Netlify de produção) na etapa logo depois do commit de aceite |
+| F8 — entrega | **ACEITA em 01/10/2026.** Runner serial 15/15, `deno check` 7/7; E2E CodeWords 15/16, E2E Meta 26/27 e E2E-B 256/256, com os defeitos corrigidos e o `@lid` e o 413 provados em produção; QA final 201/201 | Limpeza fina b12 aplicada (mantém `teste-e2e` e a Conta E2E); `prontos.js` liberado e `netlify.toml` sem a regra `ignore`; publicado em 01/10: merge 4db317d na `main`, Pages run 36814384242 ok, Netlify produção https://orbita-nexus-ads.netlify.app |
 
 ## Retomada CodeWords — 2026-09-29 13:42
 
