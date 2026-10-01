@@ -1545,7 +1545,7 @@ await teste("classes do contrato: .rotulo (Satoshi 600 13 px), .dado (Plex), .se
   assert.match(regra(".dado"), /font-family: var\(--f-mono\)/);
   assert.match(regra(".selo-caps"), /text-transform: uppercase/);
   assert.match(regra(".narr"), /font-family: var\(--f-narr\)/);
-  assert.match(CSS_APP, /\.num-moeda small, \.num-moeda \.nm-rs, \.num-moeda \.nm-cent \{ font-size: \.6em;/, "R$ e centavos a 60 %");
+  assert.match(CSS_APP, /\.num-moeda small, \.num-moeda \.nm-rs, \.num-moeda \.nm-cent \{ font-size: max\(\.6em, var\(--fs-12\)\);/, "R$ e centavos a 60 % (nunca abaixo do piso de 12 px)");
   assert.match(regra(".entra"), /animation: entra 160ms/);
   assert.match(regra(".destaque"), /animation: destaqueFlash 600ms/);
   assert.match(CSS_APP, /@keyframes destaqueFlash \{ from \{ background-color: var\(--c-prim-suave\); \}/);
@@ -2537,6 +2537,41 @@ await teste("M02: escala de 7 degraus nos títulos antigos (.titulo-pag = h1, .t
     assert.match(corpo, /font-weight:\s*600/, `${sel}: Clash com peso único 600`);
     assert.doesNotMatch(corpo, /font-weight:\s*(4|5|7|8|9)\d\d/, `${sel}: outro peso`);
   }
+});
+
+/* ---------- M03: rótulos legíveis ---------- */
+await teste("M03: caixa-alta só em .selo-caps (app.css inteiro); rótulos de tabela, menu e conta em Satoshi, minúsculos, sem tracking; Plex só para dado", () => {
+  const cod = CSS_APP.replace(/\/\*[\s\S]*?\*\//g, "");
+  const caixaAlta = [...cod.matchAll(/([^{}]+)\{[^{}]*text-transform:\s*uppercase[^{}]*\}/g)].map(m => m[1].trim().split("\n").pop().trim());
+  assert.deepEqual(caixaAlta, [".selo-caps"], `caixa-alta fora do selo: ${caixaAlta.join(" | ")}`);
+  assert.doesNotMatch(cod, /text-transform:\s*capitalize/);
+  const regra = sel => { const m = CSS_APP.match(new RegExp(`(?:^|\\n)${sel.replace(/[.]/g, "\\$&")} \\{([^}]*)\\}`)); assert.ok(m, sel); return m[1]; };
+  // o que era "Plex 11 px caixa-alta com tracking" virou texto de rótulo (Satoshi 600, tamanho de token, sem letter-spacing)
+  for (const sel of [".nav-selo", ".produto-op-atual", ".entrar-assina", ".adm-kv dt", ".oferta-inclusoes-tit", ".pv-kpi small", ".lat-conta small", ".empresa-bt small"]) {
+    const r = regra(sel);
+    assert.doesNotMatch(r, /f-mono|letter-spacing|uppercase/, `${sel}: nada de Plex, tracking ou caixa-alta`);
+    assert.match(r, /font-size: var\(--fs-(12|peq)\)/, `${sel}: tamanho de token`);
+  }
+  assert.match(CSS_APP, /\.tabela th \{\s*text-align: left; font-family: var\(--f-corpo\); font-weight: 600; font-size: var\(--fs-peq\);/, "cabeçalho de tabela em Satoshi");
+  assert.match(CSS_APP, /\.tabela td::before \{ content: attr\(data-rotulo\); font-weight: 600; font-size: var\(--fs-peq\);/, "rótulo do cartão (celular) em Satoshi");
+  assert.doesNotMatch(regra(".cor-hex"), /uppercase/);
+  // o que continua em Plex é dado: valor, tecla, DNS, domínio, contagem
+  for (const sel of [".mono", ".dado"]) assert.match(regra(sel), /font-family: var\(--f-mono\)/);
+  assert.match(regra(".dado"), /font-variant-numeric: tabular-nums/);
+});
+await teste("M03: piso de 12 px em qualquer texto e de 13 px quando o ponteiro é o dedo (os tokens pequenos sobem juntos)", () => {
+  const ini = CSS_APP.indexOf(":root {"), blocoRaiz = CSS_APP.slice(ini, CSS_APP.indexOf("\n}\n", ini));
+  const raiz = Object.fromEntries([...blocoRaiz.matchAll(/(--[a-z0-9-]+):\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
+  const rem = v => parseFloat(/([\d.]+)rem/.exec(v)[1]) * 16;
+  for (const t of ["--fs-11", "--fs-12", "--fs-13", "--fs-peq"]) assert.ok(rem(raiz[t]) >= 12, `${t} = ${raiz[t]} (piso de 12 px)`);
+  assert.match(CSS_APP, /@media \(pointer: coarse\) \{ :root \{ --fs-11: \.8125rem; --fs-12: \.8125rem; \} \}/, "toque: 13 px");
+  assert.equal(rem("0.8125rem"), 13);
+  assert.deepEqual(tamanhosLiterais(CSS_APP), [], "nenhum tamanho literal (nem abaixo do piso) fora do :root");
+  // dentro do .rotulo a regra do contrato continua: 13 px
+  assert.match((CSS_APP.match(/(?:^|\n)\.rotulo \{([^}]*)\}/) || [])[1], /font-size: var\(--fs-peq\)/);
+  // texto de estado e de aviso não cai abaixo do piso: nenhum em/% abaixo de 1em aplicado a texto corrido (só glifos de ::before e o R$ com max())
+  const emPequenos = [...CSS_APP.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{[^{}]*font-size:\s*(0?\.\d+)em[^{}]*\}/g)].map(m => m[1].trim().split("\n").pop().trim());
+  assert.ok(emPequenos.every(s => /::before$|::after$/.test(s)), `font-size relativo < 1em fora de glifo: ${emPequenos.filter(s => !/::before$|::after$/.test(s)).join(" | ")}`);
 });
 
 console.log(`\n${ok} ok · ${falhas} falha(s)${avisos ? ` · ${avisos} aviso(s)` : ""}\n`);
