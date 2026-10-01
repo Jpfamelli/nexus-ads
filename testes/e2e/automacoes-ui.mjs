@@ -190,6 +190,36 @@ try {
     assert.deepEqual(await aval(`[...document.querySelectorAll(".au-passo-quando")].map(p => p.textContent.trim())`), ["Na hora", "Depois de 3 dias", "Depois de 3 dias", "Depois de 5 dias"]);
   });
 
+  await teste("atribuir antigo («modo»): abre mostrando o jeito antigo, salva sem mexer SEM trocar por «dono» e só converte ao escolher outro jeito", async () => {
+    await ir("#/automacoes/auto-atribuir-antigo");
+    await ate(`document.querySelector(".au-passo-atribuir select")`, "passo atribuir");
+    const r = await aval(`({ como: document.querySelector(".au-passo-atribuir select").value, texto: document.querySelector(".au-passo-atribuir").textContent })`);
+    assert.equal(r.como, "rodizio");
+    assert.match(r.texto, /Automação criada antes: só a conversa muda/, "o editor avisa que o jeito antigo se comporta diferente");
+    // renomear e salvar, sem mexer na ação: vai com «modo» (o servidor mantém o comportamento antigo), nunca com «dono»
+    await limparChamadas();
+    await digitar(".au-nome-inp", "Conversa nova → rodízio (renomeada)");
+    await clicar(".au-ed-acoes .bt-prim");
+    await ate(`window.__rpc.some(x => x.nome === "nx_automacao_salvar")`, "gravação");
+    let a = (await ultimaChamada("nx_automacao_salvar")).p_auto;
+    assert.deepEqual(a.acoes, [{ tipo: "atribuir", modo: "rodizio" }], "salvar sem mexer na ação mantém «modo»");
+    // escolhendo outro jeito, passa para o contrato novo («dono») e some o «modo»
+    await ir("#/automacoes/auto-atribuir-antigo");
+    await ate(`document.querySelector(".au-passo-atribuir select")`, "passo atribuir (de novo)");
+    await aval(`(() => { const s = document.querySelector(".au-passo-atribuir select"); s.value = "departamento"; s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    await dormir(200);
+    await aval(`(() => { const s = [...document.querySelectorAll(".au-passo-atribuir select")][1]; s.value = s.options[1].value; s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    assert.doesNotMatch(await aval(`document.querySelector(".au-passo-atribuir").textContent`), /Automação criada antes/, "depois da troca não é mais o jeito antigo");
+    await limparChamadas();
+    await clicar(".au-ed-acoes .bt-prim");
+    await ate(`window.__rpc.some(x => x.nome === "nx_automacao_salvar")`, "gravação 2");
+    a = (await ultimaChamada("nx_automacao_salvar")).p_auto;
+    assert.equal(a.acoes[0].tipo, "atribuir");
+    assert.equal(a.acoes[0].dono, "departamento");
+    assert.ok(a.acoes[0].departamento_id, "com o departamento escolhido");
+    assert.equal("modo" in a.acoes[0], false, "o «modo» antigo saiu");
+  });
+
   await teste("Criar com IA: pedido → explicação e avisos → editor preenchido e DESLIGADO → grava sem ligar nada", async () => {
     await ir("#/automacoes");
     await ate(`document.querySelector(".au-ia-txt")`, "caixa");

@@ -521,6 +521,12 @@ export function avisosEstrutura(auto) {
 
 /* ------------------------------------------------------------------ limpeza para o servidor */
 
+/** «atribuir» gravado com o campo antigo «modo» (rodizio | conta) e sem o «dono» do contrato novo. */
+export const ehAtribuirAntigo = ac => !!ac && ac.tipo === "atribuir" && ac.dono == null && ac.modo != null;
+
+/** Valor de um campo da ação; no «atribuir» antigo, «dono» é lido de «modo» (o editor mostra o jeito antigo sem trocá-lo). */
+export const valorCampo = (ac, nome) => (nome === "dono" && ehAtribuirAntigo(ac) ? ac.modo : ac[nome]);
+
 /** Só as chaves conhecidas, sem vazios opcionais, números como número. */
 export function limpar(auto) {
   const a = auto || {};
@@ -556,18 +562,21 @@ export function limpar(auto) {
     if (!(OPERADOR[cd.op] || {}).semValor) x.valor = tipoValorCondicao(cd.campo) === "numero" ? Number(String(cd.valor).replace(",", ".")) : cd.valor;
     out.condicoes.push(x);
   }
-  for (const ac0 of a.acoes || []) {
-    const ac = ac0 && ac0.tipo === "atribuir" && ac0.dono == null && ac0.modo != null ? Object.assign({}, ac0, { dono: ac0.modo }) : ac0;
+  for (const ac of a.acoes || []) {
     const d = ACAO[ac.tipo];
     const x = { tipo: ac.tipo };
     if (d) {
+      // «atribuir» antigo (com «modo», sem «dono») NÃO é igual ao novo: o servidor só mexe na conversa e usa a regra de
+      // distribuição do departamento. Por isso o campo continua gravado como «modo» até a pessoa escolher outro jeito.
+      const legado = ehAtribuirAntigo(ac);
       for (const f of d.campos) {
-        const v = ac[f.nome];
-        if (f.tipo === "numero" || f.tipo === "duracao") { const n = inteiro(v); if (n != null) x[f.nome] = n; continue; }
-        if (f.tipo === "sim_nao") { if (f.gravaSempre) x[f.nome] = v == null ? !!f.padrao : !!v; else if (v) x[f.nome] = true; continue; }
-        if (f.tipo === "parametros") { x[f.nome] = (v || []).map(y => texto(y)); continue; }
-        if (f.quando && Object.entries(f.quando).some(([k, val]) => ac[k] !== val)) continue;
-        if (!vazio(v)) x[f.nome] = typeof v === "string" ? v.trim() : v;
+        const v = valorCampo(ac, f.nome);
+        const nome = legado && f.nome === "dono" ? "modo" : f.nome;
+        if (f.tipo === "numero" || f.tipo === "duracao") { const n = inteiro(v); if (n != null) x[nome] = n; continue; }
+        if (f.tipo === "sim_nao") { if (f.gravaSempre) x[nome] = v == null ? !!f.padrao : !!v; else if (v) x[nome] = true; continue; }
+        if (f.tipo === "parametros") { x[nome] = (v || []).map(y => texto(y)); continue; }
+        if (f.quando && Object.entries(f.quando).some(([k, val]) => valorCampo(ac, k) !== val)) continue;
+        if (!vazio(v)) x[nome] = typeof v === "string" ? v.trim() : v;
       }
       if ((ac.tipo === "etiquetar" || ac.tipo === "etiqueta_adicionar") && vazio(ac.etiqueta_id) && !vazio(ac.etiqueta_nome)) x.etiqueta_nome = texto(ac.etiqueta_nome).trim();
       if (ac.tipo === "enviar_template" && vazio(ac.template_id) && !vazio(ac.template_nome)) x.template_nome = texto(ac.template_nome).trim();

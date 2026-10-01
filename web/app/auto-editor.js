@@ -35,8 +35,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   auto.condicoes = auto.condicoes || [];
   auto.acoes = auto.acoes || [];
   auto.config = auto.config || {};
-  // automações antigas gravaram «modo» em «atribuir»; o contrato novo chama de «dono» (e ganhou «departamento»)
-  for (const ac of auto.acoes) if (ac && ac.tipo === "atribuir" && ac.dono == null && ac.modo != null) { ac.dono = ac.modo; delete ac.modo; }
+  // automações antigas gravaram «modo» em «atribuir» (só a conversa, regra de distribuição do departamento): o editor mostra esse jeito
+  // e só passa ao «dono» do contrato novo (que também troca o responsável do negócio) quando a pessoa escolhe outro em «Como»
   const modelo = origem === "modelo" ? L.MODELOS.find(m => m.id === q.modelo) : null;
   let salvoJson = item ? JSON.stringify(L.limpar(auto)) : null;
   const sujo = () => JSON.stringify(L.limpar(auto)) !== salvoJson;
@@ -344,7 +344,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const def = L.ACAO[ac.tipo];
     const n = auto.acoes.length;
     const seq = !!(def && def.sequencia);
-    const corpo = h("div", { class: "au-acao-corpo" }, (def ? def.campos : []).filter(f => !f.quando || Object.entries(f.quando).every(([k, v]) => ac[k] === v))
+    const corpo = h("div", { class: "au-acao-corpo" }, (def ? def.campos : []).filter(f => !f.quando || Object.entries(f.quando).every(([k, v]) => L.valorCampo(ac, k) === v))
       .filter(f => f.tipo !== "parametros").map(f => campoAcao(ac, f, i)));
     if (def && !def.campos.length && def.descricao) corpo.appendChild(h("p", { class: "sub au-passo-desc" }, def.descricao));
     const alca = podeEditar ? h("span", { class: "au-alca", title: "Arraste para reordenar", "aria-hidden": "true" }, ui.icone("arrastar")) : null;
@@ -473,8 +473,9 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         return seletor({ rotulo: f.rotulo, valor: v ?? "contato", desabilitado: dis, aoMudar: set,
           opcoes: [{ valor: "contato", rotulo: `No ${vv.min ? vv.min("contato") : "contato"}` }, { valor: "conversa", rotulo: "Na conversa" }] });
       case "modo_atribuir":
-        return seletor({ rotulo: f.rotulo, valor: v ?? "rodizio", desabilitado: dis,
-          aoMudar: x => { ac.dono = x; if (x !== "conta") delete ac.conta_id; pintarEntao(); mudou("entao"); },
+        return seletor({ rotulo: f.rotulo, valor: L.valorCampo(ac, f.nome) ?? "rodizio", desabilitado: dis,
+          ajuda: L.ehAtribuirAntigo(ac) ? "Automação criada antes: só a conversa muda e vale a regra de distribuição do departamento. Ao escolher outra opção, passa a trocar também o responsável do negócio." : null,
+          aoMudar: x => { ac.dono = x; delete ac.modo; if (x !== "conta") delete ac.conta_id; pintarEntao(); mudou("entao"); },
           opcoes: [{ valor: "rodizio", rotulo: "Rodízio (quem tem menos atendimentos)" }, { valor: "conta", rotulo: "Uma pessoa" },
             ...(opcoesBase(dados, "departamento").length ? [{ valor: "departamento", rotulo: "Um departamento" }] : [])] });
       case "tarefa_ia":

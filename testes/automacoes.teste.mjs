@@ -289,12 +289,20 @@ test("limpar: só chaves conhecidas, números como número, sem opcionais vazios
     id: U(90), nome: "Teste", gatilho: "sem_resposta", config: { minutos: 30, so_no_horario: true },
     condicoes: [{ campo: "valor", op: "maior", valor: 1500.5 }, { campo: "etiqueta", op: "vazio" }],
     acoes: [{ tipo: "criar_tarefa", titulo: "Ligar", vence_em_horas: 12, dono: "responsavel" },
-            { tipo: "atribuir", dono: "rodizio" },
+            { tipo: "atribuir", modo: "rodizio" },
             { tipo: "etiquetar", alvo: "contato", etiqueta_nome: "Nova" }],
     respeitar_horario: false, ativo: true,
   });
   const p = L.limpar({ nome: "a", gatilho: "mensagem_recebida", config: { palavras: "preço, valor ,, quanto custa" }, acoes: [] });
   assert.deepEqual(p.config.palavras, ["preço", "valor", "quanto custa"]);
+});
+
+test("editor: abrir uma automação antiga não troca «modo» por «dono» em silêncio", () => {
+  const editor = lerApp("auto-editor.js");
+  assert.doesNotMatch(editor, /ac\.dono\s*=\s*ac\.modo/, "a conversão antiga ao abrir mudava o comportamento no servidor");
+  assert.match(editor, /L\.valorCampo\(ac, f\.nome\)/, "o seletor mostra o «modo» antigo");
+  assert.match(editor, /ac\.dono = x; delete ac\.modo;/, "só ao escolher outro jeito passa para o contrato novo");
+  assert.match(editor, /L\.ehAtribuirAntigo\(ac\)/, "o editor avisa que o jeito antigo se comporta diferente");
 });
 
 test("aplicarVariaveis: nomes, valor em reais e data/hora no fuso de São Paulo", () => {
@@ -576,9 +584,26 @@ test("limpar: campos novos (hora, dias, duração, notificar departamento, nota,
   ]);
   // cancelar_se_cliente_responder vira SEMPRE booleano (o contrato do motor); o padrão é ligado
   assert.equal(L.limpar({ nome: "a", gatilho: "tarefa_vencida", acoes: [L.novaAcao("esperar")] }).acoes[0].cancelar_se_cliente_responder, true);
-  // «modo» antigo de atribuir é gravado como «dono»; departamento é novo
+  // «modo» antigo de atribuir CONTINUA «modo» (no servidor os dois jeitos fazem coisas diferentes: o antigo só mexe na conversa
+  // e usa a regra de distribuição do departamento; o novo «dono» também troca o responsável do negócio e usa o rodízio da equipe)
   assert.deepEqual(L.limpar({ nome: "a", gatilho: "tarefa_vencida", acoes: [{ tipo: "atribuir", modo: "conta", conta_id: U(41), departamento_id: U(51) }, { tipo: "atribuir", dono: "departamento", departamento_id: U(51), conta_id: U(41) }] }).acoes,
-    [{ tipo: "atribuir", dono: "conta", conta_id: U(41), departamento_id: U(51) }, { tipo: "atribuir", dono: "departamento", departamento_id: U(51) }]);
+    [{ tipo: "atribuir", modo: "conta", conta_id: U(41), departamento_id: U(51) }, { tipo: "atribuir", dono: "departamento", departamento_id: U(51) }]);
+  assert.deepEqual(L.limpar({ nome: "a", gatilho: "conversa_nova", acoes: [{ tipo: "atribuir", modo: "rodizio", conta_id: U(41) }] }).acoes,
+    [{ tipo: "atribuir", modo: "rodizio" }], "o antigo em rodízio não carrega a pessoa de antes");
+  // abrir → salvar sem mexer não muda o jeito (e salvar duas vezes dá o mesmo resultado)
+  const antiga = { nome: "Conversa nova: rodízio", gatilho: "conversa_nova", ativo: true, acoes: [{ tipo: "atribuir", modo: "rodizio" }] };
+  const salva = L.limpar(antiga);
+  assert.equal(salva.acoes[0].modo, "rodizio");
+  assert.equal("dono" in salva.acoes[0], false, "sem «dono»: o servidor continua no comportamento antigo");
+  assert.deepEqual(L.limpar(salva), salva);
+  // escolher outro jeito no editor passa ao contrato novo (o editor grava «dono» e apaga «modo»)
+  assert.deepEqual(L.limpar({ nome: "a", gatilho: "conversa_nova", acoes: [{ tipo: "atribuir", dono: "rodizio" }] }).acoes, [{ tipo: "atribuir", dono: "rodizio" }]);
+  assert.equal(L.ehAtribuirAntigo({ tipo: "atribuir", modo: "conta" }), true);
+  assert.equal(L.ehAtribuirAntigo({ tipo: "atribuir", dono: "conta", modo: "conta" }), false);
+  assert.equal(L.ehAtribuirAntigo({ tipo: "nota", modo: "x" }), false);
+  assert.equal(L.valorCampo({ tipo: "atribuir", modo: "conta" }, "dono"), "conta", "o editor lê «dono» do «modo» antigo (a pessoa aparece)");
+  assert.equal(L.valorCampo({ tipo: "atribuir", dono: "rodizio", modo: "conta" }, "dono"), "rodizio");
+  assert.equal(L.valorCampo({ tipo: "atribuir", modo: "conta", conta_id: "x" }, "conta_id"), "x");
 });
 
 test("novaAutomacao/novaAcao: padrões do catálogo sem compartilhar referência", () => {

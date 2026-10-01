@@ -350,6 +350,9 @@ function rpc(nome, p = {}) {
             { tipo: "esperar", minutos: 2880, cancelar_se_cliente_responder: true }, { tipo: "criar_tarefa", titulo: "Ligar para {primeiro_nome}", tipo_tarefa: "ligacao", vence_em_horas: 0, dono: "responsavel" }] },
         { id: "auto-ia", nome: "IA classifica a etapa", gatilho: "mensagem_recebida", ativo: true, execucoes: 23, erros: 0, ultima_execucao_em: isoAgora(), config: {},
           condicoes: [{ campo: "estagio_id", op: "igual", valor: "s1" }], acoes: [{ tipo: "ia_decidir", tarefa: "classificar_etapa" }] },
+        // criada antes do «dono»: grava «modo» (só a conversa muda; o servidor usa a regra de distribuição do departamento)
+        { id: "auto-atribuir-antigo", nome: "Conversa nova → rodízio (antiga)", gatilho: "conversa_nova", ativo: true, execucoes: 5, erros: 0, ultima_execucao_em: null,
+          config: {}, condicoes: [], acoes: [{ tipo: "atribuir", modo: "rodizio" }] },
         { id: "auto-agendado", nome: "Bom dia: orçamentos parados", gatilho: "agendado", ativo: false, execucoes: 0, erros: 0, ultima_execucao_em: null,
           config: { horario: "09:00", dias_semana: [1, 2, 3, 4, 5], estagio_id: "s3" }, condicoes: [],
           acoes: [{ tipo: "criar_tarefa", titulo: "Retomar {primeiro_nome}", tipo_tarefa: "whatsapp", vence_em_horas: 4, dono: "responsavel" }] },
