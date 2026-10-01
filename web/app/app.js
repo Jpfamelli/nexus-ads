@@ -8,7 +8,14 @@
    ============================================================ */
 
 const VERSAO = new URL(import.meta.url).searchParams.get("v") || "dev";
-const arq = nome => import(`./${nome}?v=${encodeURIComponent(VERSAO)}`);
+/** Quantas vezes o import() de cada arquivo já falhou. O navegador GUARDA a falha de um import() para aquela URL (mesmo com a rede de volta,
+    a mesma URL continua falhando até recarregar a página): a nova tentativa usa a mesma versão com &r=<n> e carrega de verdade. */
+const importFalhou = new Map();
+const arq = async nome => {
+  const n = importFalhou.get(nome) || 0;
+  try { return await import(`./${nome}?v=${encodeURIComponent(VERSAO)}${n ? `&r=${n}` : ""}`); }
+  catch (e) { importFalhou.set(nome, n + 1); throw e; }
+};
 
 const $ = id => document.getElementById(id);
 const LS = {
@@ -23,7 +30,7 @@ const PRONTOS_PADRAO = { MODULOS_PRONTOS: [], CONFIG_PRONTAS: ["perfil"] };
 const ROTAS_PUBLICAS = new Set(["login", "convite", "senha"]);
 
 /** Os módulos que o boot carrega juntos. Cada um tem um <link rel="modulepreload"> no index.html com o MESMO ?v= (testes/shell.teste.mjs confere). */
-const MODULOS_BASE = ["api.js", "ui.js", "tema.js", "vocab.js", "rotas.js", "pulso.js"];
+const MODULOS_BASE = ["api.js", "ui.js", "tema.js", "vocab.js", "rotas.js", "pulso.js", "rede.js"];
 
 const E = {
   M: {},                 // módulos base: dados, api, ui, tema, vocab, rotas, pulso
@@ -72,9 +79,9 @@ async function iniciar() {
   const prontosP = arq("prontos.js");
   prontosP.catch(() => { /* tratado abaixo; aqui só evita o aviso de promessa sem dono */ });
   try {
-    const [dados, api, ui, tema, vocab, rotas, pulso] = await Promise.all([
+    const [dados, api, ui, tema, vocab, rotas, pulso, rede] = await Promise.all([
       import(`../dados.js?v=${encodeURIComponent(VERSAO)}`), ...MODULOS_BASE.map(arq)]);
-    E.M = { dados, api, ui, tema, vocab, rotas, pulso };
+    E.M = { dados, api, ui, tema, vocab, rotas, pulso, rede };
     E.workspace = rotas.produtoDe(location.search);
     document.documentElement.dataset.produto = E.workspace || "orbita";
     document.title = E.workspace ? rotas.PRODUTOS[E.workspace].titulo : "Órbita · Nexus";
@@ -96,17 +103,22 @@ async function iniciar() {
   const { dados, api, ui } = E.M;
   E.ui = ui;
   ui.configurar({ mensagemErro: api.mensagemErro });
+  // M14: estado de conexão (online · lento · offline · servidor fora) alimentado por cada chamada do api.js
+  E.rede = E.M.rede.criarRede({ ping: pingDoSite, sondar: sondarServidor });
   E.api = api.criarApi({
     url: dados.SUPA_URL, chave: dados.CHAVE_PUBLICA,
     token: () => dados.lerToken(),
     cliente: () => (E.cliente ? E.cliente.id : null),
     aoSessaoInvalida: () => sessaoCaiu(),
+    rede: E.rede, contexto: true,
   });
   E.pulso = E.M.pulso.criarPulso({
     ler: () => (E.cliente ? E.api.rpcC("nx_pulso") : Promise.resolve(null)),
     aoNotif: n => atualizarSino(n),
   });
   E.pulso.assinar(() => { atualizarNaoLidas(); });
+  E.rede.aoVoltar(() => { if (E.pulso) E.pulso.agora(); });   // reconectou: o pulso lê agora (e as telas pelo orbita:online / ctx.rede.aoVoltar)
+  montarIndicadoresRede();
 
   if (LS.lerTxt("nx-app-menu") === "1") document.documentElement.classList.add("menu-recolhido");
   const dev = new URLSearchParams(location.search).get("dev");
@@ -135,6 +147,85 @@ async function iniciar() {
   montarEsqueletoShell();
   await aoMudarRota(false);
   iniciarPwa();
+}
+
+/* ============================================================
+   CONEXÃO (M14): faixa fina, ponto junto ao sino e releitura quando a internet volta
+   ============================================================ */
+const ROTULO_REDE = { offline: "Sem conexão", servidor_fora: "Servidor indisponível", lento: "Conexão lenta" };
+
+/** A página do próprio site responde? (distingue "sem internet" de "servidor fora"). Qualquer resposta HTTP serve. */
+async function pingDoSite() {
+  try {
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const t = setTimeout(() => ctl && ctl.abort(), 4000);
+    try { await fetch(new URL(`versao.json?t=${Date.now()}`, location.href).href, { cache: "no-store", ...(ctl ? { signal: ctl.signal } : {}) }); return true; }
+    finally { clearTimeout(t); }
+  } catch { return false; }
+}
+
+/** Uma chamada real e barata ao servidor; o api.js reporta o resultado ao rede.js. */
+async function sondarServidor() {
+  if (E.cliente) return E.api.rpcC("nx_pulso");
+  if (E.sessao) return E.api.rpc("nx_app_sessao");
+  return E.api.publica("nx_marca_publica", { p_host: location.hostname, p_org: orgDaUrl() });
+}
+
+function atualizarPontoRede() {
+  const p = $("rede-ponto");
+  if (!p || !E.rede) return;
+  const e = E.rede.estado;
+  p.hidden = e === "online";
+  p.dataset.estado = e;
+}
+
+/** Monta a faixa em #faixas-sistema (primeira da pilha, antes da de versão) e acompanha o estado. */
+function montarIndicadoresRede() {
+  const { ui } = E;
+  const alvo = $("faixas-sistema");
+  let el = null, relogio = null;
+  const pararRelogio = () => { if (relogio) { clearInterval(relogio); relogio = null; } };
+  const hora = ms => (ms ? ui.horaBR(new Date(ms).toISOString()) : null);
+  const segundos = f => (f.proxima ? Math.max(0, Math.ceil((f.proxima - Date.now()) / 1000)) : null);
+  function texto(f) {
+    if (f.estado === "offline" || f.estado === "servidor_fora") {
+      return [ROTULO_REDE[f.estado], hora(f.ultimoOk) ? `dados de ${hora(f.ultimoOk)}` : null].filter(Boolean).join(" · ");
+    }
+    if (f.estado === "lento") return "Conexão lenta · ainda carregando…";
+    return "Reconectado";
+  }
+  function render(f) {
+    atualizarPontoRede();
+    atualizarSinoUI();
+    const mostrar = f.estado !== "online" || f.reconectado;
+    if (!mostrar) { if (el) { el.remove(); el = null; } pararRelogio(); return; }
+    const chave = f.estado !== "online" ? f.estado : "ok";
+    const msg = texto(f);
+    if (!el) {
+      const espera = ui.h("span", { class: "rede-espera", "aria-hidden": "true" });
+      const bt = ui.h("button", { type: "button", class: "bt bt-sec" }, "Tentar agora");
+      bt.addEventListener("click", () => { E.rede.tentarAgora(); });
+      el = ui.h("div", { class: "faixa faixa-rede" }, ui.icone("info"), ui.h("p", { class: "rede-msg", "aria-live": "polite" }), espera, bt);
+      alvo.insertBefore(el, alvo.firstChild);
+    }
+    const p = el.querySelector(".rede-msg");
+    const mudou = el.dataset.estado !== chave || p.textContent !== msg;
+    el.dataset.estado = chave;
+    p.textContent = msg;
+    const espera = el.querySelector(".rede-espera"), bt = el.querySelector("button");
+    const falhando = f.estado === "offline" || f.estado === "servidor_fora";
+    bt.hidden = !falhando;
+    const atualizarEspera = () => {
+      const s = segundos(E.rede.foto());
+      espera.textContent = falhando && s != null ? `tentando em ${s} s` : "";
+    };
+    atualizarEspera();
+    pararRelogio();
+    if (falhando) relogio = setInterval(atualizarEspera, 1000);
+    if (mudou) ui.anunciar(msg);
+  }
+  E.rede.assinar(render);
+  render(E.rede.foto());
 }
 
 /* ============================================================
@@ -621,6 +712,15 @@ function construirCtx(r, alvo) {
       },
     },
     carregar,
+    /** Conexão: estado atual e aoVoltar(fn) — fn() roda quando a internet/servidor voltam (releia o que está na tela). Devolve cancelar(). */
+    rede: {
+      get estado() { return E.rede.estado; },
+      aoVoltar(fn) {
+        const cancelar = E.rede.aoVoltar(fn);
+        E.assinaturas.add(cancelar);
+        return () => { cancelar(); E.assinaturas.delete(cancelar); };
+      },
+    },
     /** fn() → true enquanto este módulo tem trabalho que uma atualização automática não pode interromper (rascunho enviando, fila de saída…). Devolve cancelar(). */
     naoAtualizar(fn) {
       E.naoAtualizar.add(fn);
@@ -708,9 +808,8 @@ async function montarNoShell(r, seq, doUsuario) {
       if (E.pwa && navigator.onLine !== false) E.pwa.falhaDeImport();   // arquivo que a versão nova trocou: a faixa de versão avisa
       if (seq !== E.montando) return;
       ui.limpar(vista);
-      vista.appendChild(ui.h("div", { class: "area-bloqueada" }, ui.vazio({
-        titulo: "Não foi possível abrir esta área.", texto: "Recarregue a página. Se continuar, fale com o suporte.", icone: "alerta",
-        acao: { rotulo: "Recarregar", fn: () => location.reload() } })));
+      // frase em português sem endereço; refaz sozinho quando a internet volta (orbita:online) e tem «Tentar de novo»
+      vista.appendChild(ui.h("div", { class: "area-bloqueada" }, ui.erroCartao(e, () => aoMudarRota(false))));
       return;
     }
     if (seq !== E.montando) return;
@@ -730,7 +829,8 @@ async function montarNoShell(r, seq, doUsuario) {
     if (E.pwa && ehFalhaDeImport(e) && navigator.onLine !== false) E.pwa.falhaDeImport();
     if (seq !== E.montando) return;
     ui.limpar(vista);
-    vista.appendChild(ui.erroCartao(e, () => aoMudarRota(false)));
+    // dependência que não carregou: o navegador guarda a falha para aquela URL, então recarregar é o único jeito de tentar de verdade
+    vista.appendChild(ui.erroCartao(e, ehFalhaDeImport(e) ? () => location.reload() : () => aoMudarRota(false)));
   }
   if (doUsuario) focarVista();
 }
@@ -973,10 +1073,11 @@ function desenharFerramentasTopo(dir) {
     dir.appendChild(bt);
   }
   const sino = ui.h("button", { type: "button", class: "bt-icone sino", id: "bt-sino", "aria-haspopup": "dialog", "aria-expanded": "false" },
-    ui.icone("sino"), ui.h("span", { class: "badge", id: "sino-n", hidden: true }));
+    ui.icone("sino"), ui.h("span", { class: "badge", id: "sino-n", hidden: true }), ui.h("span", { class: "rede-ponto", id: "rede-ponto", hidden: true, "aria-hidden": "true" }));
   sino.addEventListener("click", () => abrirSino(sino));
   dir.appendChild(sino);
   atualizarSinoUI();
+  atualizarPontoRede();
 }
 
 function urlWorkspace(id, rotaOverride = null) {
@@ -1141,7 +1242,11 @@ function atualizarSinoUI() {
   const n = Math.max(0, Number(E.notif) || 0);
   const badge = $("sino-n"), bt = $("bt-sino");
   if (badge) { badge.hidden = n <= 0; badge.textContent = n > 99 ? "99+" : n > 0 ? String(n) : ""; }
-  if (bt) bt.setAttribute("aria-label", n > 0 ? `Notificações: ${n} não lida${n === 1 ? "" : "s"}` : "Notificações");
+  if (bt) {
+    const base = n > 0 ? `Notificações: ${n} não lida${n === 1 ? "" : "s"}` : "Notificações";
+    const sit = E.rede ? ROTULO_REDE[E.rede.estado] : null;
+    bt.setAttribute("aria-label", sit ? `${base}. ${sit}` : base);
+  }
 }
 
 function abrirSino(ancora) {

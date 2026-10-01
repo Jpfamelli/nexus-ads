@@ -10,6 +10,7 @@ Testes da frente: `node testes/shell.teste.mjs` (registrado em `testes/rodar-tud
 | dev-falso para C e D (onboarding, p_req, client_ref, nao_lidas) | feito | ver `git log --grep "Órbita (B)"` |
 | M11 abertura em paralelo | feito (Início 1,8 s; Conversas e CRM melhoram ~0,7 s, o resto é cadeia interna das telas) | ver `git log --grep "M11"` |
 | M12 service worker + versão | feito (falta só o `curl -I` em produção, depois da publicação) | ver `git log --grep "M12"` |
+| M14 estado de conexão | feito | ver `git log --grep "M14"` |
 
 ## M11 · Abrir em ~1,5 s em vez de ~3,5 s
 
@@ -70,5 +71,29 @@ Depois de resolver: voltar ao `sw.js` normal, `"sw": true` e subir o `?v=`.
   Atenção: se o Netlify somar em vez de substituir o `Cache-Control` quando duas regras casam (`/app/*.js` e `/app/sw.js`), o `sw.js` não é afetado na prática (`updateViaCache: "none"` e a checagem do navegador ignoram o cache HTTP), mas confira.
 - Nota de QA: o Cache Storage do Chrome no Windows falha ("Entry already exists") com perfil em caminho longo (como o do scratchpad). Os testes de navegador da frente B usam `--user-data-dir` curto (`C:/Temp/ob/<perfil>`).
 
+## M14 · Estado de conexão honesto e recuperação automática
+
+**Feito**
+- `web/app/rede.js` (novo, módulo base com preload): estados `online | lento | offline | servidor_fora`. Alimentado por `online/offline` do navegador, pelo resultado de CADA chamada do `api.js`
+  (`sucesso()`, `falha({codigo,status})`, `lento(±1)` aos 4 s) e por um ping barato à própria página (`versao.json`) quando `navigator.onLine` mente:
+  página responde = internet existe e o servidor está fora; não responde = offline. Só 502/503/504, `servico_indisponivel`, `sem_conexao` e timeout (2 seguidos) contam como "fora";
+  erro de regra de negócio, 4xx, 500 de função e 57014 provam que o servidor respondeu.
+  Em offline/servidor fora tenta de novo sozinho (2-4-8-15-30 s; também ao abrir já offline) e no «Tentar agora»; ao voltar chama `aoVoltar`, dispara `orbita:online` (o `ui.erroCartao` da frente A refaz sozinho) e `orbita:rede`,
+  e guarda "Reconectado" por 2 s.
+- `api.js`: opções `rede` e `contexto` (ligadas pelo shell; sem elas o cliente se comporta como antes, os testes da frente A seguem verdes). Erros de conexão carregam `contexto.leitura`;
+  mensagens por contexto: leitura offline = "Sem internet. Confira a conexão e tente de novo." (com dado já mostrado: "Sem internet. Mostrando o que já tinha."), escrita offline = "Sem internet: nada foi salvo.",
+  "confira antes de repetir" só no prazo estourado de uma ESCRITA. Textos novos em português para `servico_indisponivel` e `http_429/500/502/503/504` (nada de código técnico na tela). `ehLeitura(nome)` exportado.
+- `app.js`: faixa fina em `#faixas-sistema` ("Sem conexão · dados de 14:02 · tentando em 8 s · Tentar agora", `aria-live` só no texto que muda por estado; a contagem regressiva não é anunciada), "Reconectado" por 2 s,
+  ponto de estado junto ao sino (e no rótulo acessível dele), `ctx.rede = { estado, aoVoltar(fn) }`, o pulso lê assim que a conexão volta. O erro de abertura de tela virou `ui.erroCartao` (frase sem URL e refaz sozinho).
+- **Achado de QA:** o Chrome GUARDA a falha de um `import()` para aquela URL (mesmo com a rede de volta a mesma URL continua falhando). `arq()` agora conta as falhas e repete com `&r=<n>`;
+  quando a falha é de uma DEPENDÊNCIA (importada dentro do módulo da tela), o «Tentar de novo» recarrega a página. Os módulos de C e D que fazem `import()` direto de dependências continuam sujeitos a isso (ver pendências).
+
+**Como verificar**
+- `node testes/shell.teste.mjs` (12 testes de M14: máquina de estados com relógio de mentira, backoff, api com fetch simulado, mensagens por contexto, `ehLeitura`).
+- No dev-falso (Chrome, 390×844, CDP `Network.emulateNetworkConditions`): rede cortada → faixa em 9 ms (meta: ≤ 2 s); tela nova offline → cartão de erro em português; rede de volta → tela se refaz sozinha em 87 ms (meta: ≤ 3 s) e "Reconectado" some em 2 s;
+  `/__dev_falso/simular/falha?rpc=nx_pulso&status=503&vezes=30` → "Servidor indisponível"; «Tentar agora» recupera em ~0,6 s.
+
 ## Pendências para outras frentes
-- (preenchido ao longo do trabalho)
+
+- **C e D (M14):** o navegador guarda a falha de `import()` por URL. Se um módulo seu importa dependências com `import()` direto e a rede cair no meio, o cartão de erro precisa de recarga (o shell já faz isso quando a mensagem é de import). Para tentar de novo SEM recarregar, repetir com `&r=<n>` depois do `?v=` (a regra de `?v=` dos testes aceita).
+- **C e D (M14):** use `ctx.rede.aoVoltar(fn)` para reler dados que ficaram na tela quando a conexão volta (o shell só refaz sozinho os cartões de erro).

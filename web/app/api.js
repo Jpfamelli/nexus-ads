@@ -110,7 +110,33 @@ export const MENSAGENS = {
   muitos_pedidos: "Muitos pedidos seguidos; espere um minuto.",
   automacao_invalida: "A automação tem um problema.",
   limite_taxa: "Muitos envios em pouco tempo. Tente mais tarde.",
+  // erros de servidor/rede (M15): o texto técnico (http_503, servico_indisponivel) nunca chega à tela
+  servico_indisponivel: "O servidor está fora do ar neste momento. Tentamos de novo sozinhos; se continuar, avise o suporte.",
+  http_429: "Muitos pedidos de uma vez. Espere um instante e tente de novo.",
+  http_500: "O servidor falhou ao concluir o pedido. Tente de novo em instantes; se continuar, fale com o suporte.",
+  http_502: "O servidor está fora do ar neste momento. Tentamos de novo sozinhos; se continuar, avise o suporte.",
+  http_503: "O servidor está fora do ar neste momento. Tentamos de novo sozinhos; se continuar, avise o suporte.",
+  http_504: "O servidor demorou demais para responder. Se tentou salvar ou enviar, confira o resultado antes de repetir.",
 };
+
+/**
+ * Mensagens por contexto (M14), só para erros criados por um api com `contexto: true` (o shell liga): leitura offline não fala em
+ * "salvar"; escrita offline diz que NADA foi salvo; "confira antes de repetir" fica só para o prazo estourado de uma escrita, que
+ * pode ter chegado ao servidor.
+ */
+function mensagemDeContexto(codigo, ctx) {
+  const leitura = !!ctx.leitura;
+  if (codigo === "sem_conexao") {
+    if (ctx.comCache) return "Sem internet. Mostrando o que já tinha.";
+    return leitura ? "Sem internet. Confira a conexão e tente de novo." : "Sem internet: nada foi salvo.";
+  }
+  if (codigo === "tempo_rede") {
+    return leitura ? "O servidor demorou a responder. Tente de novo em instantes."
+      : "O servidor demorou a responder. Se tentou salvar ou enviar, confira o resultado antes de repetir.";
+  }
+  if (/^(servico_indisponivel|http_50[23])$/.test(codigo) && !leitura) return "O servidor está fora do ar neste momento: nada foi salvo. Tente de novo em instantes.";
+  return null;
+}
 
 const NOME_LIMITE = {
   usuarios: ["usuário", "usuários"], canais: ["número de WhatsApp", "números de WhatsApp"],
@@ -127,6 +153,7 @@ const CAMPO_MARCA = {
 export function mensagemErro(e) {
   const c = e && (e.codigo || e.message);
   const hint = e && e.hint != null ? String(e.hint) : "";
+  if (e && e.contexto) { const m = mensagemDeContexto(c, e.contexto); if (m) return m; }
   switch (c) {
     case "limite_plano": {
       const m = /^(org_)?([a-z_]+):(\d+)$/.exec(hint);
@@ -183,6 +210,15 @@ export function mensagemErro(e) {
   return MENSAGENS[c] ||`Não deu certo agora${c ? ` (${String(c).slice(0, 80)})` : ""}. Tente de novo em instantes.`;
 }
 
+/** RPCs que só LEEM (podem ser repetidas sem efeito colateral). Tudo que não está aqui é tratado como escrita. */
+const LEITURA_SUFIXOS = /_(listar|ver|base|kanban|coluna|buscar)$/;
+const LEITURA_NOMES = new Set(["nx_pulso", "nx_app_sessao", "nx_marca_publica", "nx_inicio", "nx_agenda_dia", "nx_agenda_livres", "nx_dados",
+  "nx_cv_mensagens", "nx_cv_ia_estado", "nx_cv_buscar_msgs", "nx_automacao_execucoes", "nx_cliente_tema", "nx_integracoes_status", "nx_uso_plano"]);
+export function ehLeitura(nome) {
+  const n = String(nome || "");
+  return LEITURA_NOMES.has(n) || LEITURA_SUFIXOS.test(n) || /^nx_rel_/.test(n);
+}
+
 /** Cria um Error no padrão da API. */
 export function erroApi(codigo, extra = {}) {
   const e = new Error(codigo);
@@ -225,6 +261,18 @@ export function criarApi(o) {
   const prazoRpc = normalizarPrazo(o.prazoMs ?? o.prazoRpcMs, 20_000);
   const prazoFn = normalizarPrazo(o.prazoMs ?? o.prazoFnMs, 75_000);
 
+  const rede = o.rede || null;                 // M14: {sucesso(), falha(info), lento(±1)} — o rede.js do shell
+  const contexto = !!o.contexto;               // M14: mensagens por contexto (leitura × escrita) nos erros de conexão
+  const lentoMs = Number.isFinite(Number(o.lentoMs)) && Number(o.lentoMs) > 0 ? Number(o.lentoMs) : 4000;
+  const avisarRede = (fn, ...a) => { if (rede && typeof rede[fn] === "function") { try { rede[fn](...a); } catch { /* o shell decide */ } } };
+  /** aos 4 s sem resposta a chamada conta como "lenta" para o estado de conexão; devolve quem encerra a contagem */
+  function contarLento() {
+    if (!rede) return () => {};
+    let ativo = false;
+    const t = setTimeout(() => { ativo = true; avisarRede("lento", 1); }, lentoMs);
+    return () => { clearTimeout(t); if (ativo) { ativo = false; avisarRede("lento", -1); } };
+  }
+
   const prazoGeralFixo = o.prazoMs != null || o.prazoFnMs != null;
   const prazoDaChamada = (opcoes, chave) => {
     if (prazoGeralFixo) return prazoFn;
@@ -259,18 +307,26 @@ export function criarApi(o) {
     }
   }
 
-  async function post(url, corpo, prazo = prazoRpc) {
+  async function post(url, corpo, prazo = prazoRpc, meta = {}) {
     let r, txt;
+    const fimLento = contarLento();
     try {
       ({ r, txt } = await buscarComPrazo(url, {
         method: "POST",
         headers: { apikey: o.chave, "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(corpo ?? {}),
+        body: JSON.stringify((typeof corpo === "function" ? corpo() : corpo) ?? {}),
       }, prazo));
     } catch (causa) {
-      if (causa?.codigo === "tempo_rede") throw causa;
-      throw erroApi("sem_conexao", { causa });
+      fimLento();
+      const e = causa?.codigo === "tempo_rede" ? causa : erroApi("sem_conexao", { causa });
+      if (contexto) e.contexto = { leitura: !!meta.leitura };
+      avisarRede("falha", { codigo: e.codigo });
+      throw e;
     }
+    fimLento();
+    // 502/503/504 = o servidor (ou o caminho até ele) não atendeu; qualquer outra resposta, mesmo de erro, prova que ele responde
+    if (r.status === 502 || r.status === 503 || r.status === 504) avisarRede("falha", { codigo: `http_${r.status}`, status: r.status });
+    else avisarRede("sucesso");
     const dados = lerCorpo(txt);
     const obj = dados && typeof dados === "object" && !Array.isArray(dados) ? dados : null;
     if (!r.ok) {
@@ -284,6 +340,7 @@ export function criarApi(o) {
       if (!codigo) codigo = r.status === 504 ? "tempo_esgotado" : `http_${r.status}`;
       // .resposta = corpo inteiro (ex.: nx-enviar devolve {ok:false, erro, detalhe, mensagem} e a F5 precisa da mensagem gravada)
       const e = erroApi(codigo, { status: r.status, hint, detalhe, detalhe_texto: typeof detalhe === "string" ? detalhe : null, resposta: obj });
+      if (contexto) e.contexto = { leitura: !!meta.leitura };
       avisarSessao(e);
       throw e;
     }
@@ -301,17 +358,17 @@ export function criarApi(o) {
     /** RPC com p_token. */
     rpc(nome, params = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
-      return post(`${base}/rest/v1/rpc/${nome}`, { p_token: o.token ? o.token() : null, ...params });
+      return post(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, ...params }), prazoRpc, { leitura: ehLeitura(nome) });
     },
     /** RPC com p_token e p_cliente (empresa ativa). */
     rpcC(nome, params = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
-      return post(`${base}/rest/v1/rpc/${nome}`, { p_token: o.token ? o.token() : null, p_cliente: o.cliente ? o.cliente() : null, ...params });
+      return post(`${base}/rest/v1/rpc/${nome}`, () => ({ p_token: o.token ? o.token() : null, p_cliente: o.cliente ? o.cliente() : null, ...params }), prazoRpc, { leitura: ehLeitura(nome) });
     },
     /** RPC pública (sem token): nx_marca_publica, nx_convite_ver, nx_convite_aceitar, nx_senha_redefinir, nx_entrar. */
     publica(nome, params = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
-      return post(`${base}/rest/v1/rpc/${nome}`, params);
+      return post(`${base}/rest/v1/rpc/${nome}`, params, prazoRpc, { leitura: ehLeitura(nome) });
     },
     /**
      * Edge Function: POST /functions/v1/<funcao> com {token, cliente, ...corpo}.
@@ -320,7 +377,7 @@ export function criarApi(o) {
      */
     fn(funcao, corpo = {}, opcoes = {}) {
       if (!/^nx-[a-z0-9-]+$/.test(funcao)) return Promise.reject(erroApi("funcao_invalida"));
-      return post(`${base}/functions/v1/${funcao}`, { token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }, prazoDaChamada(opcoes, `${funcao}:${corpo && corpo.acao}`));
+      return post(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }), prazoDaChamada(opcoes, `${funcao}:${corpo && corpo.acao}`), { leitura: false });
     },
     mensagemErro,
   };

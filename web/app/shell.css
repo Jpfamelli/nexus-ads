@@ -11,3 +11,18 @@
 .faixas-sistema { position: relative; z-index: 2; }
 .faixa-versao { background: var(--c-prim-suave); }
 .faixa-versao .ic { color: var(--c-prim-luz); }
+
+/* ---- conexão (M14): faixa de estado e ponto junto ao sino ---- */
+.faixa-rede { background: var(--c-ruim-suave); }
+.faixa-rede .ic { color: var(--c-ruim); }
+.faixa-rede[data-estado="lento"] { background: var(--c-aten-suave); }
+.faixa-rede[data-estado="lento"] .ic { color: var(--c-aten); }
+.faixa-rede[data-estado="ok"] { background: var(--c-ok-suave); }
+.faixa-rede[data-estado="ok"] .ic { color: var(--c-ok); }
+.faixa-rede .rede-msg { flex: 1 1 12rem; }
+.rede-espera { color: var(--c-texto-2); white-space: nowrap; }
+.rede-ponto { position: absolute; right: 6px; bottom: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--c-ruim); box-shadow: 0 0 0 2px var(--c-fundo); pointer-events: none; }
+.rede-ponto[data-estado="lento"] { background: var(--c-aten); }
+.sino { position: relative; }
+.faixa-rede { padding-block: .4rem; row-gap: .15rem; }
+.faixa-rede .bt { min-height: 28px; padding: .1rem .75rem; }

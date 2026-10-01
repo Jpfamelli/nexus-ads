@@ -480,6 +480,221 @@ await teste("app.js: pwa.js entra DEPOIS do boot (não está nos preloads) e ctx
   assert.match(APP_JS, /E\.pwa\.falhaDeImport\(\)/);
 });
 
+/* ============================================================ M14 */
+secao("M14 · estado de conexão honesto e recuperação automática");
+
+const REDE = await imp("rede.js");
+const API = await imp("api.js");
+
+/** Relógio de mentira (como o do app.teste.mjs): agendar/cancelar/andar. */
+function relogioFalso() {
+  let t = 1_000_000, fila = [];
+  return {
+    agora: () => t,
+    agendar(fn, ms) { const id = Symbol(); fila.push({ id, fn, em: t + ms }); return id; },
+    cancelar(id) { fila = fila.filter(x => x.id !== id); },
+    async andar(ms) {
+      const fim = t + ms;
+      for (;;) {
+        fila.sort((a, b) => a.em - b.em);
+        const prox = fila[0];
+        if (!prox || prox.em > fim) break;
+        fila.shift(); t = prox.em; await prox.fn(); await new Promise(r => setImmediate(r));
+      }
+      t = fim;
+    },
+    proximo() { fila.sort((a, b) => a.em - b.em); return fila[0] ? fila[0].em - t : null; },
+    pendentes: () => fila.length,
+  };
+}
+function janelaFalsa() {
+  const ouv = {}, disparados = [];
+  return { addEventListener: (e, f) => { (ouv[e] ||= []).push(f); }, removeEventListener: (e, f) => { ouv[e] = (ouv[e] || []).filter(x => x !== f); },
+    dispatchEvent: ev => { disparados.push(ev.type + ":" + JSON.stringify(ev.detail || {})); return true; }, emitir: e => (ouv[e] || []).forEach(f => f()), disparados, ouvintes: ouv };
+}
+function novaRede({ onLine = true, ping = async () => true, sondar } = {}) {
+  const rel = relogioFalso(), jan = janelaFalsa(), nav = { onLine };
+  const r = REDE.criarRede({ nav, janela: jan, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, ping, sondar });
+  const vistos = []; r.assinar(f => { if (f.mudouEstado || (!f.reconectado && vistos.at(-1)?.endsWith("*"))) vistos.push(`${f.antes}>${f.estado}${f.reconectado ? "*" : ""}`); });
+  return { r, rel, jan, nav, vistos };
+}
+
+await teste("rede.js: estado inicial vem do navegador; online/offline do navegador mudam o estado na hora", () => {
+  assert.equal(novaRede({ onLine: false }).r.estado, "offline");
+  const x = novaRede();
+  assert.equal(x.r.estado, "online");
+  x.nav.onLine = false; x.jan.emitir("offline");
+  assert.equal(x.r.estado, "offline");
+  assert.deepEqual(x.vistos, ["online>offline"]);
+  assert.deepEqual(x.jan.disparados, ['orbita:rede:{"estado":"offline","antes":"online"}']);
+  assert.ok(REDE.ESTADOS.includes("lento") && REDE.ESTADOS.includes("servidor_fora"));
+});
+
+await teste("rede.js: sem_conexao com onLine verdadeiro pergunta à página — responde = servidor fora; não responde = offline", async () => {
+  let a = novaRede({ ping: async () => true });
+  a.r.falha({ codigo: "sem_conexao" }); await new Promise(r => setImmediate(r));
+  assert.equal(a.r.estado, "servidor_fora");
+  let b = novaRede({ ping: async () => false });
+  b.r.falha({ codigo: "sem_conexao" }); await new Promise(r => setImmediate(r));
+  assert.equal(b.r.estado, "offline");
+  let c = novaRede({ onLine: false });
+  c.nav.onLine = false; c.r.falha({ codigo: "sem_conexao" });
+  assert.equal(c.r.estado, "offline");
+});
+
+await teste("rede.js: 502/503/504 e servico_indisponivel = servidor fora; timeout só depois de 2 seguidos; erro de negócio e 57014 não contam", () => {
+  for (const codigo of ["http_503", "http_502", "http_504", "servico_indisponivel"]) { const x = novaRede(); x.r.falha({ codigo }); assert.equal(x.r.estado, "servidor_fora", codigo); }
+  const t = novaRede();
+  t.r.falha({ codigo: "tempo_rede" }); assert.equal(t.r.estado, "online", "um timeout isolado pode ser consulta pesada");
+  t.r.sucesso(); t.r.falha({ codigo: "tempo_rede" }); assert.equal(t.r.estado, "online", "sucesso entre os dois zera a conta");
+  t.r.falha({ codigo: "tempo_rede" }); assert.equal(t.r.estado, "servidor_fora");
+  const n = novaRede();
+  for (const codigo of ["tempo_esgotado", "limite_plano", "sessao_invalida", "http_500", "erro_interno", "http_429", undefined]) n.r.falha({ codigo });
+  assert.equal(n.r.estado, "online");
+  assert.equal(REDE.falhaDeConexao({ codigo: "sem_conexao" }), true);
+  assert.equal(REDE.falhaDeConexao({ codigo: "tempo_esgotado" }), false);
+});
+
+await teste("rede.js: ao voltar — assinantes, aoVoltar, orbita:online e 'Reconectado' por 2 s", async () => {
+  const x = novaRede();
+  let voltou = 0; x.r.aoVoltar(() => voltou++);
+  x.r.falha({ codigo: "http_503" });
+  assert.equal(x.r.estado, "servidor_fora"); assert.equal(voltou, 0);
+  x.r.sucesso();
+  assert.equal(x.r.estado, "online"); assert.equal(voltou, 1);
+  assert.equal(x.r.reconectado, true, "mostra 'Reconectado'");
+  assert.ok(x.jan.disparados.some(d => d.startsWith("orbita:online")), "evento orbita:online na janela (o ui.erroCartao escuta)");
+  assert.deepEqual(x.vistos.slice(0, 2), ["online>servidor_fora", "servidor_fora>online*"]);
+  await x.rel.andar(1999); assert.equal(x.r.reconectado, true);
+  await x.rel.andar(2); assert.equal(x.r.reconectado, false, "some depois de 2 s");
+  assert.equal(x.vistos.at(-1).includes("*"), false, "e avisa quem desenha a faixa");
+  x.r.sucesso(); assert.equal(voltou, 1, "sucesso normal não é 'voltou'");
+});
+
+await teste("rede.js: chamada lenta (aos 4 s) vira 'lento' e volta sozinha; offline não é mascarado por lento", () => {
+  const x = novaRede();
+  x.r.lento(1); assert.equal(x.r.estado, "lento");
+  x.r.lento(1); x.r.lento(-1); assert.equal(x.r.estado, "lento", "ainda há uma lenta em voo");
+  x.r.lento(-1); assert.equal(x.r.estado, "online");
+  x.r.lento(-5); assert.equal(x.r.estado, "online", "contador nunca fica negativo");
+  x.r.falha({ codigo: "http_503" }); x.r.lento(1); assert.equal(x.r.estado, "servidor_fora");
+  x.r.sucesso(); assert.equal(x.r.estado, "lento", "recuperou, mas a chamada lenta ainda está em voo");
+});
+
+await teste("rede.js: tenta sozinho em 2, 4, 8, 15 e 30 s (e 30 s depois); acha a internet, depois o servidor, e volta", async () => {
+  let internet = false, servidor = false, sondagens = 0;
+  const rel = relogioFalso(), jan = janelaFalsa(), nav = { onLine: false };
+  const r = REDE.criarRede({ nav, janela: jan, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, ping: async () => internet,
+    sondar: async () => { sondagens++; if (servidor) r.sucesso(); else r.falha({ codigo: "http_503" }); } });
+  assert.equal(r.estado, "offline");
+  const esperas = [];
+  for (let i = 0; i < 7; i++) { esperas.push(rel.proximo()); await rel.andar(rel.proximo()); }
+  assert.deepEqual(esperas, [2000, 4000, 8000, 15000, 30000, 30000, 30000], "recuo 2-4-8-15-30 s");
+  assert.equal(r.estado, "offline", "internet ainda fora");
+  assert.ok(r.proximaTentativaEm > rel.agora(), "a faixa mostra 'tentando em N s'");
+  internet = true; nav.onLine = true;
+  await rel.andar(rel.proximo());
+  assert.equal(r.estado, "servidor_fora", "a internet voltou; o servidor ainda não responde");
+  assert.ok(sondagens >= 1);
+  servidor = true;
+  await rel.andar(rel.proximo());
+  assert.equal(r.estado, "online");
+  assert.equal(rel.pendentes(), 1 /* só o relógio do 'Reconectado' */, "sem tentativas agendadas depois de voltar");
+  r.destruir();
+});
+
+await teste("rede.js: «Tentar agora» e o evento online tentam já (sem esperar o recuo)", async () => {
+  let sondagens = 0, internet = false;
+  const rel = relogioFalso(), jan = janelaFalsa(), nav = { onLine: true };
+  const r = REDE.criarRede({ nav, janela: jan, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, ping: async () => internet, sondar: async () => { sondagens++; r.sucesso(); } });
+  r.falha({ codigo: "http_503" });
+  assert.equal(r.proximaTentativaEm - rel.agora(), 2000);
+  internet = false; await r.tentarAgora();
+  assert.equal(r.estado, "offline", "o ping disse que a internet não existe");
+  assert.equal(sondagens, 0);
+  internet = true; await r.tentarAgora();
+  assert.equal(sondagens, 1); assert.equal(r.estado, "online");
+  r.falha({ codigo: "http_503" }); jan.emitir("online"); await new Promise(res => setImmediate(res)); await new Promise(res => setImmediate(res));
+  assert.equal(sondagens, 2, "o evento online do navegador tenta na hora");
+  r.destruir();
+  assert.equal((jan.ouvintes.online || []).length, 0, "destruir solta os ouvintes");
+});
+
+await teste("api.js (contexto): erros de conexão trazem leitura × escrita; mensagens por contexto só no modo do shell", async () => {
+  const falha = () => { throw new TypeError("Failed to fetch"); };
+  const legado = API.criarApi({ url: "https://x.test", chave: "k", fetch: async () => falha() });
+  const e0 = await legado.rpc("nx_inicio").catch(x => x);
+  assert.equal(e0.contexto, undefined, "sem a opção, o erro é o de antes");
+  assert.match(API.mensagemErro(e0), /A comunicação foi interrompida/);
+  const api = API.criarApi({ url: "https://x.test", chave: "k", contexto: true, fetch: async () => falha() });
+  const leit = await api.rpcC("nx_negocios_kanban").catch(x => x);
+  assert.deepEqual(leit.contexto, { leitura: true });
+  assert.equal(API.mensagemErro(leit), "Sem internet. Confira a conexão e tente de novo.");
+  assert.equal(API.mensagemErro({ ...leit, contexto: { leitura: true, comCache: true } }), "Sem internet. Mostrando o que já tinha.");
+  const esc = await api.rpcC("nx_negocio_salvar", { p_negocio: {} }).catch(x => x);
+  assert.deepEqual(esc.contexto, { leitura: false });
+  assert.equal(API.mensagemErro(esc), "Sem internet: nada foi salvo.");
+  const fnErro = await api.fn("nx-enviar", { acao: "texto" }).catch(x => x);
+  assert.equal(API.mensagemErro(fnErro), "Sem internet: nada foi salvo.", "função de envio é escrita");
+  assert.doesNotMatch(API.mensagemErro(leit), /salvar|enviar|confira o resultado/, "tela só de leitura não fala em salvar ou enviar");
+  const lenta = API.criarApi({ url: "https://x.test", chave: "k", contexto: true, prazoMs: 10, fetch: () => new Promise(() => {}) });
+  const t = await lenta.rpc("nx_inicio").catch(x => x), tw = await lenta.rpc("nx_tarefa_salvar").catch(x => x);
+  assert.equal(API.mensagemErro(t), "O servidor demorou a responder. Tente de novo em instantes.");
+  assert.match(API.mensagemErro(tw), /confira o resultado antes de repetir/, "só o prazo estourado de uma ESCRITA pede conferência");
+  for (const c of ["servico_indisponivel", "http_429", "http_500", "http_502", "http_503", "http_504"]) assert.doesNotMatch(API.mensagemErro({ codigo: c }), /Não deu certo agora|http_|servico_/, c);
+});
+
+await teste("api.js (rede): sucesso e falha de cada chamada chegam ao rede.js; 4xx de negócio prova que o servidor responde; 503 não; lenta aos 4 s", async () => {
+  const eventos = [];
+  const rede = { sucesso: () => eventos.push("ok"), falha: i => eventos.push("falha:" + i.codigo), lento: d => eventos.push("lento:" + d) };
+  const resp = (status, corpo) => ({ ok: status >= 200 && status < 300, status, text: async () => (corpo === undefined ? "" : JSON.stringify(corpo)) });
+  let proxima = resp(200, {});
+  const mk = (extra = {}) => API.criarApi({ url: "https://x.test", chave: "k", rede, fetch: async () => (typeof proxima === "function" ? proxima() : proxima), ...extra });
+  const api = mk();
+  await api.rpc("nx_inicio"); assert.deepEqual(eventos.splice(0), ["ok"]);
+  proxima = resp(400, { message: "limite_plano" }); await api.rpc("nx_x_salvar").catch(() => {}); assert.deepEqual(eventos.splice(0), ["ok"], "erro de negócio = servidor respondeu");
+  proxima = resp(401, { message: "sessao_invalida" }); await api.rpc("nx_inicio").catch(() => {}); assert.deepEqual(eventos.splice(0), ["ok"]);
+  proxima = resp(500, { message: "erro_interno" }); await api.rpc("nx_x_salvar").catch(() => {}); assert.deepEqual(eventos.splice(0), ["ok"], "500 de função não é 'servidor fora'");
+  proxima = resp(503); const e503 = await api.rpc("nx_inicio").catch(x => x); assert.deepEqual(eventos.splice(0), ["falha:http_503"]); assert.equal(e503.codigo, "http_503");
+  proxima = () => { throw new TypeError("Failed to fetch"); }; await api.rpc("nx_inicio").catch(() => {}); assert.deepEqual(eventos.splice(0), ["falha:sem_conexao"]);
+  const lenta = mk({ lentoMs: 15 });
+  proxima = () => new Promise(r => setTimeout(() => r(resp(200, {})), 60));
+  await lenta.rpc("nx_inicio"); assert.deepEqual(eventos.splice(0), ["lento:1", "lento:-1", "ok"], "aos 4 s (aqui 15 ms) conta como lenta e desconta ao terminar");
+  proxima = resp(200, {}); await lenta.rpc("nx_inicio"); assert.deepEqual(eventos.splice(0), ["ok"], "chamada rápida nunca conta como lenta");
+  const sem = API.criarApi({ url: "https://x.test", chave: "k", fetch: async () => resp(200, {}) });
+  await sem.rpc("nx_inicio"); assert.deepEqual(eventos, [], "sem a opção rede nada é reportado");
+});
+
+await teste("api.ehLeitura: sufixos e nomes de leitura; escritas e desconhecidas NÃO são leitura", () => {
+  for (const n of ["nx_contatos_listar", "nx_negocio_ver", "nx_crm_base", "nx_negocios_kanban", "nx_negocios_coluna", "nx_buscar", "nx_pulso", "nx_app_sessao", "nx_marca_publica", "nx_inicio",
+    "nx_rel_vendas", "nx_rel_atendimento", "nx_agenda_dia", "nx_agenda_livres", "nx_cv_base", "nx_cv_listar", "nx_cv_ver", "nx_cv_mensagens", "nx_notificacoes_listar", "nx_dados"]) assert.equal(API.ehLeitura(n), true, n);
+  for (const n of ["nx_negocio_salvar", "nx_negocio_mover", "nx_contato_salvar", "nx_tarefa_concluir", "nx_cv_status", "nx_cv_nota", "nx_cv_atribuir", "nx_cv_marcar_lida", "nx_notificacoes_marcar",
+    "nx_entrar", "nx_sair", "nx_agenda_marcar", "nx_agenda_desmarcar", "nx_etiqueta_salvar", "nx_algo_novo", ""]) assert.equal(API.ehLeitura(n), false, n || "(vazio)");
+});
+
+await teste("app.js: o shell liga rede.js ao api.js, desenha a faixa (aria-live) e o ponto junto ao sino, e expõe ctx.rede.aoVoltar", () => {
+  assert.match(APP_JS, /E\.rede = E\.M\.rede\.criarRede\(\{ ping: pingDoSite, sondar: sondarServidor \}\);/);
+  assert.match(APP_JS, /rede: E\.rede, contexto: true,/);
+  assert.match(APP_JS, /class: "rede-msg", "aria-live": "polite"/);
+  assert.match(APP_JS, /class: "rede-ponto", id: "rede-ponto"/);
+  assert.match(APP_JS, /Tentar agora/);
+  assert.match(APP_JS, /rede: \{\s*get estado\(\) \{ return E\.rede\.estado; \},\s*aoVoltar\(fn\)/);
+  assert.match(HTML, /<link rel="modulepreload" href="rede\.js\?v=/, "rede.js é módulo base: preload no index.html");
+  const css = ler("shell.css");
+  assert.match(css, /\.faixa-rede/);
+  assert.match(css, /\.rede-ponto/);
+});
+
+await teste("app.js: import() que falhou é refeito com &r=<n> (o navegador guarda a falha da URL) e erro de dependência recarrega a página em vez de repetir em vão", () => {
+  assert.match(APP_JS, /const importFalhou = new Map\(\);/);
+  assert.match(APP_JS, /import\(`\.\/\$\{nome\}\?v=\$\{encodeURIComponent\(VERSAO\)\}\$\{n \? `&r=\$\{n\}` : ""\}`\)/);
+  assert.match(APP_JS, /importFalhou\.set\(nome, n \+ 1\)/);
+  assert.match(APP_JS, /ehFalhaDeImport\(e\) \? \(\) => location\.reload\(\) : \(\) => aoMudarRota\(false\)/);
+  // a falha de abertura da tela usa o cartão de erro do ui.js (frase em português, sem URL, refaz no orbita:online)
+  assert.match(APP_JS, /ui\.erroCartao\(e, \(\) => aoMudarRota\(false\)\)/);
+  assert.doesNotMatch(APP_JS, /Recarregue a página\. Se continuar, fale com o suporte\./);
+});
+
 /* ============================================================ fim */
 console.log(`\n${ok} ok · ${falhas} falha${falhas === 1 ? "" : "s"}`);
 if (falhas) process.exitCode = 1;
