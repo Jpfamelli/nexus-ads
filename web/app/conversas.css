@@ -391,7 +391,9 @@
 .cfg-vars { display: flex; gap: .35rem; flex-wrap: wrap; }
 .cfg-vars button { min-height: 30px; padding: .15rem .7rem; border-radius: 999px; border: 1px dashed var(--c-borda-2); font-family: var(--f-mono); font-size: var(--fs-12); color: var(--c-texto-2); }
 .cfg-vars button:hover { border-color: var(--c-prim-luz); color: var(--c-prim-luz); }
-.cfg-resp-corpo { max-width: 36rem; font-size: var(--fs-13); color: var(--c-texto-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cfg-resp-corpo { display: block; max-width: 36rem; font-size: var(--fs-13); color: var(--c-texto-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* em tabela (>= 761 px) a coluna Prévia é a flexível: ocupa o que sobra e termina em "…"; com largura própria empurrava Departamento, Usos e Situação para fora do cartão */
+@media (min-width: 761px) { .tabela td:has(> .cfg-resp-corpo) { width: 100%; max-width: 0; } .cfg-resp-corpo { max-width: none; } }
 .cfg-grade-horario { display: flex; flex-direction: column; gap: .35rem; margin-top: .7rem; }
 .cfg-faixas { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
 .cfg-faixas input[type="time"] { width: auto; min-height: 36px; padding: .2rem .5rem; border-radius: 10px; border: 1px solid var(--c-borda-2); background: var(--c-fundo); color: var(--c-texto); }

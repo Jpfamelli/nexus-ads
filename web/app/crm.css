@@ -344,6 +344,8 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .fx-id p .ic { width: 14px; height: 14px; color: var(--c-texto-3); }
 .fx-acoes { display: flex; gap: .5rem; flex-wrap: wrap; }
 .fx-grade { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 1.2rem; align-items: start; }
+/* ficha dentro da gaveta (820 px): uma coluna só — com duas, "Dados" ficava com ~320 px e os valores dos campos eram cortados */
+.gaveta .fx-grade { grid-template-columns: minmax(0, 1fr); }
 .fx-col { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
 .fx-rfm { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border-radius: var(--r); border: 1px solid var(--c-borda); background: var(--c-borda); }
 .fx-rfm > div { display: flex; flex-direction: column; gap: .25rem; padding: .85rem 1rem; background: var(--c-sup); min-width: 0; }

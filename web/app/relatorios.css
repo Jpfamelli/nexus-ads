@@ -451,13 +451,14 @@
   .ads-cri-resumo { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ads-cri-num { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   /* tabela de campanhas vira cartões */
-  .ads-tabela thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .ads-tabela thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); visibility: hidden; }
   .ads-tabela, .ads-tabela tbody, .ads-tabela tfoot { display: block; }
-  .ads-tabela tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem .75rem; padding: .85rem 0; border-bottom: 1px solid var(--c-borda); }
+  /* rótulos longos ("Custo por conversa") quebram de linha em vez de vazar da coluna; valores alinhados pela base */
+  .ads-tabela tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem .75rem; align-items: end; padding: .85rem 0; border-bottom: 1px solid var(--c-borda); }
   .ads-tabela th, .ads-tabela td, .ads-tabela td.num, .ads-tabela tfoot th, .ads-tabela tfoot td { display: block; padding: 0; border: 0; text-align: left; }
   .ads-tabela tfoot tr { border-top: 1px solid var(--c-borda-2); }
   .ads-tabela .c-nome, .ads-tabela tfoot th { grid-column: 1 / -1; }
-  .ads-tabela td.num::before { content: attr(data-l); display: block; font: 500 .6875rem/1.3 var(--f-mono); color: var(--c-texto-3); text-transform: uppercase; letter-spacing: .05em; }
+  .ads-tabela td.num::before { content: attr(data-l); display: block; font: 500 .6875rem/1.3 var(--f-mono); color: var(--c-texto-3); text-transform: uppercase; letter-spacing: .05em; white-space: normal; overflow-wrap: anywhere; }
   .ads-tabela tfoot tr { border-bottom: 0; }
   .g-fetapa { grid-template-columns: minmax(0, 1fr) auto; }
   .g-ftrilho { grid-column: 1 / -1; grid-row: 2; }
@@ -466,6 +467,10 @@
   .g-rosca-caixa { grid-template-columns: minmax(0, 1fr); justify-items: center; }
   .g-rosca-leg { width: 100%; }
   .g-hitem { grid-template-columns: minmax(0, 1fr); }
+}
+/* 375 px: as 4 abas de Anúncios (Visão geral, Campanhas, Radar, Relatórios) cabem sem cortar a última */
+@media (max-width: 400px) {
+  .rel-aba { padding-inline: .5rem; font-size: .78rem; }
 }
 
 /* ============================================================
@@ -593,7 +598,7 @@ a.ini-numero:active { transform: scale(.98); }
 .cfgf-codigo {
   margin: 0; max-height: 22rem; overflow: auto; padding: 1rem 1.1rem; border-radius: 14px; border: 1px solid var(--c-borda);
   background: color-mix(in srgb, var(--c-fundo) 70%, var(--c-sup)); color: var(--c-texto-2);
-  font: 500 .75rem/1.6 var(--f-mono); white-space: pre; tab-size: 2;
+  font: 500 .75rem/1.6 var(--f-mono); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2;
 }
 .cfgf-codigo:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
 .cfgf-campos { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .4rem 1rem; margin: 0; font-size: .875rem; }

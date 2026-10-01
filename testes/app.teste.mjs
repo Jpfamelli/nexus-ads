@@ -909,6 +909,24 @@ await teste("CSS mobile: botões em linhas que quebram não usam flex:1 (basis 0
   assert.doesNotMatch(ler("agenda.css"), /text-transform: capitalize/, "datas da agenda: só a 1ª letra maiúscula");
   for (const f of ["agenda.js", "agenda-config.js"]) assert.doesNotMatch(ler(f), /class: "bt bt-icone/, `${f}: bt + bt-icone espremia o ícone para 7 px`);
 });
+await teste("CSS (QA final 30/09): prévia das respostas é bloco com reticências; rótulo da tabela de campanhas quebra no celular; instruções do formulário quebram linha; campos terminam em reticências", () => {
+  const cv = ler("conversas.css"), rel = ler("relatorios.css"), app = ler("app.css");
+  // <span> em célula de tabela é inline: overflow/text-overflow não valem e a linha da tabela empurrava Departamento/Usos/Situação para fora do cartão
+  assert.match(cv, /\.cfg-resp-corpo \{ display: block;[^}]*text-overflow: ellipsis/, "prévia da resposta rápida: bloco com reticências");
+  assert.match(cv, /@media \(min-width: 761px\) \{ \.tabela td:has\(> \.cfg-resp-corpo\) \{ width: 100%; max-width: 0; \}/, "coluna Prévia flexível em tabela: Departamento/Usos/Situação ficam visíveis");
+  // "CUSTO POR CONVERSA" (nowrap herdado de .num) passava da coluna de 95 px e o cartão rolava na horizontal
+  assert.match(rel, /\.ads-tabela td\.num::before \{[^}]*white-space: normal/, "rótulo do cartão de campanha quebra de linha");
+  assert.match(rel, /\.ads-tabela tr \{ display: grid;[^}]*align-items: end/, "valores alinhados pela base quando o rótulo quebra");
+  assert.match(rel, /\.ads-tabela thead \{[^}]*visibility: hidden/, "cabeçalho oculto do cartão não recebe foco do teclado");
+  // o prompt do CodeWords tem parágrafos longos: rolar na horizontal para ler não serve
+  assert.match(rel, /\.cfgf-codigo \{[^}]*white-space: pre-wrap/, "instruções do formulário quebram linha");
+  assert.match(app, /\.campo input:not\(\[type=checkbox\]\):not\(\[type=radio\]\)[^{]*\{[^}]*text-overflow: ellipsis/, "campos: placeholder comprido com reticências");
+  assert.match(app, /\.busca-grande \.busca-campo \{[^}]*text-overflow: ellipsis/, "busca global: placeholder comprido com reticências");
+  assert.match(rel, /@media \(max-width: 400px\) \{\s*\.rel-aba \{ padding-inline: \.5rem;/, "abas de Anúncios cabem em 375 px");
+  assert.match(app, /@media \(max-width: 400px\) \{ \.aba \{ padding-inline: \.7rem; \} \}/, "abas de Tarefas cabem em 375 px");
+  // a ficha 360 na gaveta de 820 px (Conversas › ficha do contato) tinha 2 colunas: "Dados" com ~320 px cortava nome, telefone e responsável
+  assert.match(ler("crm.css"), /\.gaveta \.fx-grade \{ grid-template-columns: minmax\(0, 1fr\); \}/, "ficha na gaveta: uma coluna");
+});
 /** Histórico do navegador em memória: pushState, back() ASSÍNCRONO (como no navegador) e popstate. */
 function historicoFalso() {
   const entradas = [{ state: null }]; let i = 0; const ouvintes = []; let backs = 0;

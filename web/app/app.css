@@ -246,6 +246,7 @@ button.link { min-height: 32px; padding-block: .35rem; }
 .campo input:not([type=checkbox]):not([type=radio]), .campo select, .campo textarea, .sel, .busca input, .cor-hex {
   width: 100%; min-width: 0; min-height: 44px; padding: .6rem .9rem; border-radius: var(--r-p);
   border: 1px solid var(--c-borda-2); background: var(--c-fundo); color: var(--c-texto); font-size: var(--fs-15);
+  text-overflow: ellipsis; /* placeholder/valor comprido termina em "…" em vez de ser cortado seco */
   transition: border-color var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out);
 }
 .campo textarea { resize: vertical; min-height: 5.5rem; line-height: 1.45; }
@@ -358,6 +359,8 @@ html[data-esquema="claro"] input[type="date"]::-webkit-calendar-picker-indicator
 .aba[aria-selected="true"] { background: var(--c-sup-3); color: var(--c-texto); box-shadow: inset 0 1px 0 var(--c-luz-borda); }
 .abas-n { font-family: var(--f-mono); font-size: var(--fs-11); color: var(--c-texto-3); }
 .aba[aria-selected="true"] .abas-n { color: var(--c-prim-luz); }
+/* 375 px: faixas de 4 abas (Tarefas: Hoje, Atrasadas, Próximas, Concluídas) cabem inteiras; faixas maiores continuam rolando */
+@media (max-width: 400px) { .aba { padding-inline: .7rem; } }
 
 /* ============================================================
    TABELA (vira cartões no celular)
@@ -1098,7 +1101,7 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 .busca-grande { display: flex; align-items: center; gap: .6rem; padding: 0 .9rem; min-height: 52px; border-radius: 16px; background: var(--c-sup-2); border: 1px solid var(--c-borda-2); }
 .busca-grande:focus-within { border-color: var(--c-prim-luz); }
 .busca-grande > .ic { width: 20px; height: 20px; color: var(--c-texto-3); }
-.busca-grande .busca-campo { flex: 1; min-width: 0; width: auto; min-height: 50px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: var(--fs-17); outline: none; }
+.busca-grande .busca-campo { flex: 1; min-width: 0; width: auto; min-height: 50px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: var(--fs-17); outline: none; text-overflow: ellipsis; }
 .busca-ic { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border-radius: 10px; background: var(--c-sup-2); color: var(--c-prim-luz); }
 .busca-ic .ic { width: 17px; height: 17px; }
 .busca-item mark { background: var(--c-prim-suave); color: var(--c-texto); border-radius: 3px; padding: 0 1px; }
