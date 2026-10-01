@@ -1,8 +1,8 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-10-01 18:32 (America/Sao_Paulo)
-Branch de mídia R122: `codex/midia-codewords` · PR [#3](https://github.com/Jpfamelli/nexus-ads/pull/3) em rascunho
-Follow-up R119: `codex/orbita-r119` · PR [#2](https://github.com/Jpfamelli/nexus-ads/pull/2) merged
+Atualizado: 2026-10-01 18:39 (America/Sao_Paulo)
+Follow-up R122: PR [#3](https://github.com/Jpfamelli/nexus-ads/pull/3) mesclado em `main` (merge `f0602b9`); produção publicada com front `20261001f`.
+Follow-up R119: `codex/orbita-r119` · PR [#2](https://github.com/Jpfamelli/nexus-ads/pull/2) mesclado
 Base em produção: F8/PR [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) mesclado; https://orbita-nexus-ads.netlify.app
 
 ## Seguimento R122 — mídia CodeWords — 01/10/2026
@@ -10,7 +10,8 @@ Base em produção: F8/PR [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) me
 - **Implementação local na branch `codex/midia-codewords`:** envio de foto, áudio e arquivo pelo aparelho pareado; áudio gravado convertido em WAV 16 kHz mono; `client_ref` na mídia; validação MIME/limites; download do Storage em fluxo com corte efetivo no limite; proteção contra permissão tardia do microfone em outra conversa.
 - **Verificações locais:** suíte completa 19/19, montagem de sete funções, `deno check` 7/7 e `git diff --check`; teste automatizado opcional do Chrome indisponível porque `puppeteer-core` não está instalado. A central local abriu no navegador integrado.
 - **Backend publicado:** `funcoes-20261001-5`, commit `0583e2f`, Actions 36929001866 verde; sete funções ACTIVE e probes 401/403/405/413 aprovadas. Versões: whatsapp v9, relatorio v6, ciclo v6, enviar v8, midia v5, ia v6, codewords v7.
-- **Front em revisão:** `web/app/` agora usa `20261001f`; PR #3 está em rascunho. Falta completar os checks, integrar na `main` pelos gates e publicar o Netlify de produção a partir de um arquivo limpo de `main`. O teste real de mídia continua dependente do pareamento CodeWords pelo João. Sem alterações no banco ou em credenciais.
+- **Front publicado:** PR #3 mesclado (`f0602b9`); release Netlify `6abed2b47eab05dec79aaf0f`, produção em https://orbita-nexus-ads.netlify.app. A verificação HTTP encontrou `/app/index.html` em 200 com `app.js?v=20261001f`, a raiz em 302 para `/app/` e cabeçalho CSP presente.
+- **Aceite técnico R122:** suíte Node 19/19, `deno check` 7/7, montagem das sete funções e probes 401/403/405/413 verdes. Funções ativas: nx-whatsapp v9, nx-relatorio v6, nx-ciclo v6, nx-enviar v8, nx-midia v5, nx-ia v6 e nx-codewords v7. A entrega real de foto/áudio/arquivo ainda precisa de aparelho CodeWords pareado e teste manual do João. Nenhuma alteração de banco/credenciais.
 
 ## Follow-up R119 — integração local, não publicado — 2026-10-01 14:26 -03
 
