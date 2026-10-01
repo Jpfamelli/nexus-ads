@@ -93,3 +93,109 @@ test("agenda local fictícia: marca, bloqueia conflito e desmarca sem rede exter
     assert.ok(!depois.consultas.some(x => x.negocio_id === 803));
   } finally { child.kill(); }
 });
+
+/* ---- respostas fictícias para as frentes C e D (plano de 01/10/2026): onboarding, p_req, client_ref, nao_lidas, falhas programadas ---- */
+async function comServidor(corpo) {
+  const { child, base } = await subir(await portaLivre());
+  const chamar = async (rota, corpoReq) => {
+    const r = await fetch(`${base}${rota}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(corpoReq || {}) });
+    const txt = await r.text();
+    return { status: r.status, corpo: txt ? JSON.parse(txt) : null, headers: r.headers };
+  };
+  const rpc = (nome, p) => chamar(`/__dev_falso/rest/v1/rpc/${nome}`, p);
+  const fnx = (nome, p) => chamar(`/__dev_falso/functions/v1/${nome}`, p);
+  const sim = async (acao, qs = "") => (await fetch(`${base}/__dev_falso/simular/${acao}${qs}`)).json();
+  const estado = async () => (await fetch(`${base}/__dev_falso/estado`)).json();
+  try { await corpo({ base, rpc, fnx, sim, estado }); } finally { child.kill(); }
+}
+
+test("nx_onboarding_estado: 11 itens (10 obrigatórios + anúncios opcional), marcam sozinhos e o tenant novo começa em 0", () => comServidor(async ({ rpc, sim }) => {
+  const e = (await rpc("nx_onboarding_estado", {})).corpo;
+  assert.equal(e.itens.length, 11);
+  assert.equal(e.itens.filter(i => i.opcional).length, 1);
+  assert.equal(e.total, 10);
+  assert.ok(e.feitos > 0 && e.feitos < e.total, "estado parcial por padrão");
+  const novo = (await sim("onboarding", "?modo=novo")).estado;
+  assert.equal(novo.feitos, 0);
+  assert.equal(novo.itens.find(i => i.id === "chave_codewords").feito, false);
+  await rpc("nx_codewords_canal_salvar", { p_canal: { id: "cw1" } });
+  assert.equal((await rpc("nx_onboarding_estado", {})).corpo.itens.find(i => i.id === "chave_codewords").feito, true, "salvar a chave marca o passo 1 sem recarregar");
+  const completo = (await sim("onboarding", "?modo=completo")).estado;
+  assert.equal(completo.completo, true);
+  assert.equal(completo.feitos, completo.total);
+}));
+
+test("p_req: a mesma intenção repetida não cria outra linha (negócio, contato, tarefa)", () => comServidor(async ({ rpc, estado }) => {
+  const antes = await estado();
+  const req = "11111111-1111-4111-8111-111111111111";
+  const a = (await rpc("nx_negocio_salvar", { p_negocio: { contato_id: 501, titulo: "Teste de req" }, p_req: req })).corpo;
+  const b = (await rpc("nx_negocio_salvar", { p_negocio: { contato_id: 501, titulo: "Teste de req" }, p_req: req })).corpo;
+  assert.equal(a.id, b.id, "mesmo resultado");
+  const c = (await rpc("nx_negocio_salvar", { p_negocio: { contato_id: 501, titulo: "Teste de req" }, p_req: "22222222-2222-4222-8222-222222222222" })).corpo;
+  assert.notEqual(c.id, a.id, "outro p_req = outra criação");
+  assert.equal((await estado()).negocios, antes.negocios + 2);
+  const t1 = (await rpc("nx_tarefa_salvar", { p_tarefa: { titulo: "Ligar" }, p_req: req })).corpo;
+  const t2 = (await rpc("nx_tarefa_salvar", { p_tarefa: { titulo: "Ligar" }, p_req: req })).corpo;
+  assert.equal(t1.id, t2.id);
+  const k1 = (await rpc("nx_contato_salvar", { p_contato: { nome: "Novo", telefone: "(12) 99111-2222" }, p_req: req })).corpo;
+  const k2 = (await rpc("nx_contato_salvar", { p_contato: { nome: "Novo", telefone: "(12) 99111-2222" }, p_req: req })).corpo;
+  assert.equal(k1.id, k2.id);
+  const dup = await rpc("nx_contato_salvar", { p_contato: { nome: "Outro", telefone: "12991112222" } });
+  assert.equal(dup.status, 400);
+  assert.equal(dup.corpo.message, "telefone_em_uso");
+  assert.equal(String(dup.corpo.hint), String(k1.id), "o telefone repetido aponta o cadastro existente");
+  const achados = (await rpc("nx_contatos_listar", { p_filtro: { busca: "991112222" }, p_por_pagina: 8 })).corpo;
+  assert.equal(achados.itens.length, 1, "busca por dígitos do telefone");
+}));
+
+test("client_ref: o mesmo client_ref duas vezes = 1 mensagem e 1 envio externo; a mensagem aparece em nx_cv_mensagens", () => comServidor(async ({ rpc, fnx, estado }) => {
+  const antes = await estado();
+  const ref = "aaaaaaaa-0000-4000-8000-000000000001";
+  const a = (await fnx("nx-enviar", { acao: "texto", conversa: 902, texto: "Olá!", client_ref: ref })).corpo;
+  const b = (await fnx("nx-enviar", { acao: "texto", conversa: 902, texto: "Olá!", client_ref: ref })).corpo;
+  assert.equal(a.ok, true); assert.equal(a.mensagem.id, b.mensagem.id);
+  const depois = await estado();
+  assert.equal(depois.enviosExternos, antes.enviosExternos + 1, "uma só chamada externa");
+  assert.equal(depois.mensagens.find(c => c.id === 902).total, antes.mensagens.find(c => c.id === 902).total + 1, "uma só mensagem gravada");
+  const lista = (await rpc("nx_cv_mensagens", { p_conversa: 902 })).corpo.itens;
+  assert.equal(lista.filter(m => m.client_ref === ref).length, 1);
+  await fnx("nx-enviar", { acao: "texto", conversa: 902, texto: "Outra", client_ref: "aaaaaaaa-0000-4000-8000-000000000002" });
+  assert.equal((await estado()).enviosExternos, antes.enviosExternos + 2);
+}));
+
+test("nx_pulso: devolve nao_lidas e o maior id de entrada; mensagem simulada muda v e a contagem", () => comServidor(async ({ rpc, sim }) => {
+  const p1 = (await rpc("nx_pulso", {})).corpo;
+  assert.equal(p1.nao_lidas, 2, "conversas com mensagens não lidas (901 e 902)");
+  assert.ok(Number.isInteger(p1.ultima_entrada_id));
+  const r = await sim("mensagem", "?conversa=903&texto=Oi%20de%20novo");
+  assert.equal(r.mensagem.direcao, "in");
+  const p2 = (await rpc("nx_pulso", {})).corpo;
+  assert.notEqual(p2.v, p1.v, "o pulso muda");
+  assert.equal(p2.nao_lidas, 3);
+  assert.ok(p2.ultima_entrada_id > p1.ultima_entrada_id);
+}));
+
+test("falha programada: 503 N vezes (com Retry-After), atraso e 'depois de aplicar'; sessão invalidada → 401 sessao_invalida até entrar de novo", () => comServidor(async ({ rpc, sim, estado }) => {
+  await sim("falha", "?rpc=nx_inicio&status=503&vezes=2&retryAfter=1");
+  const f1 = await rpc("nx_inicio", {}); assert.equal(f1.status, 503); assert.equal(f1.headers.get("retry-after"), "1");
+  assert.equal((await rpc("nx_inicio", {})).status, 503);
+  assert.equal((await rpc("nx_inicio", {})).status, 200, "depois das N falhas volta ao normal");
+  const antes = (await estado()).tarefas;
+  await sim("falha", "?rpc=nx_tarefa_salvar&status=504&vezes=1&depois=1");
+  assert.equal((await rpc("nx_tarefa_salvar", { p_tarefa: { titulo: "Aplicou e deu 504" }, p_req: "33333333-3333-4333-8333-333333333333" })).status, 504);
+  assert.equal((await estado()).tarefas, antes + 1, "o servidor aplicou mesmo respondendo 504");
+  const rep = await rpc("nx_tarefa_salvar", { p_tarefa: { titulo: "Aplicou e deu 504" }, p_req: "33333333-3333-4333-8333-333333333333" });
+  assert.equal(rep.status, 200); assert.equal((await estado()).tarefas, antes + 1, "repetir com o mesmo p_req não duplica");
+  const t0 = Date.now();
+  await sim("falha", "?rpc=nx_inicio&atraso=300&vezes=1");
+  assert.equal((await rpc("nx_inicio", {})).status, 200);
+  assert.ok(Date.now() - t0 >= 280, "atraso aplicado");
+  assert.equal((await rpc("nx_inicio", { p_token: "demo-local-session" })).status, 200, "por padrão a sessão não é verificada");
+  await sim("sessao-invalida");
+  const inv = await rpc("nx_inicio", { p_token: "demo-local-session" });
+  assert.equal(inv.status, 401); assert.equal(inv.corpo.message, "sessao_invalida");
+  assert.equal((await rpc("nx_marca_publica", {})).status, 200, "rotas públicas seguem abertas");
+  const novo = (await rpc("nx_entrar", { p_email: "a@b.c", p_senha: "x" })).corpo.token;
+  assert.equal((await rpc("nx_inicio", { p_token: novo })).status, 200, "o token novo vale");
+  assert.equal((await rpc("nx_inicio", { p_token: "demo-local-session" })).status, 401, "o antigo continua inválido");
+}));
