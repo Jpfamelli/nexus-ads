@@ -204,6 +204,7 @@ async function montarNumeros(ctx, alvo) {
 
   async function assistenteCodeWords(canal) {
     let atual = canal ? { ...canal, codewords: { ...(canal.codewords || {}) } } : null;
+    let modalApi = null;   // o link «Abrir Automações» fecha o modal antes de navegar
     const cw = atual?.codewords || {};
     const corpo = h("div", { class: "pilha cfg-cw-config" });
     const form = h("form", { class: "pilha", novalidate: true });
@@ -227,7 +228,12 @@ async function montarNumeros(ctx, alvo) {
         valor: atual?.departamento_id || (base.departamentos.find(d => d.padrao) || base.departamentos[0]).id,
         opcoes: base.departamentos.map(d => ({ valor: d.id, rotulo: d.nome })) }) : null,
       h("section", { class: "cartao cfg-cw-ia" },
-        h("div", { class: "cfg-cw-ia-head" }, ui.icone("ia"), h("div", null, h("h3", { class: "titulo-sec" }, "IA no WhatsApp"), h("p", { class: "sub" }, "O CodeWords responde pelo celular conectado; a equipe pode assumir uma conversa a qualquer momento."))),
+        h("div", { class: "cfg-cw-ia-head" }, ui.icone("ia"), h("div", null, h("h3", { class: "titulo-sec" }, "IA no WhatsApp"),
+          h("p", { class: "sub" }, "O CodeWords conversa, agenda e chama a equipe pelo celular conectado; a equipe pode assumir uma conversa a qualquer momento."),
+          h("p", { class: "sub" }, "As decisões do CRM (mover de etapa, origem, notas e resumo da conversa) e os follow-ups são as Automações do Órbita: elas usam a IA do Claude e enviam as mensagens por este mesmo número. ",
+            ctx.temModulo("automacoes") && ctx.pronto("automacoes") && ctx.pode("supervisor")
+              ? h("a", { class: "rel-link", href: "#/automacoes", on: { click: ev => { ev.preventDefault(); if (modalApi) modalApi.fechar(null); ctx.navegar("#/automacoes"); } } }, "Abrir Automações")
+              : null))),
         ui.campo({ rotulo: "IA atendendo 24h", nome: "ia_ligada", tipo: "interruptor",
           valor: cw.rota === "direta" ? false : (cw.ia_ligada ?? atual?.ia_ligada ?? true),
           ajuda: "Quando desligada, o fluxo não responde automaticamente por este número. Só vale quando o destino estiver ligado ao fluxo de IA." }),
@@ -364,7 +370,7 @@ async function montarNumeros(ctx, alvo) {
 
     await ui.modal({
       titulo: atual ? `WhatsApp CodeWords · ${atual.nome}` : "Adicionar WhatsApp pelo CodeWords",
-      corpo, largura: "g", fecharFora: false,
+      corpo, largura: "g", fecharFora: false, aoAbrir: api => { modalApi = api; },
       acoes: [
         { rotulo: "Fechar", tipo: "neutro" },
         { rotulo: "Salvar configuração", tipo: "primario", fn: async () => {

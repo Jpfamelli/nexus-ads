@@ -330,9 +330,19 @@ async function enviarItem(db, item, creds, rede, prazo = {}) {
     let corpoMsg, envio;
     const chave = `${item.cliente_id}:${item.canal_id}`;
     if (!creds.has(chave)) {
-      creds.set(chave, await db.rpc("nx_canal_credencial", { p_canal: item.canal_id, p_cliente: item.cliente_id }).catch(() => null));
+      let lida;
+      try { lida = await db.rpc("nx_canal_credencial", { p_canal: item.canal_id, p_cliente: item.cliente_id }); }
+      catch (e) { lida = { indisponivel: limparErro(e?.message || e) || "credencial indisponível" }; }
+      creds.set(chave, lida ?? { indisponivel: "credencial indisponível" });
     }
     const cred = creds.get(chave);
+    if (cred.indisponivel !== undefined) {
+      // sem a credencial não dá para saber se o número é CodeWords (sem janela de 24 h) ou Meta: nunca "pula por janela"
+      if (/canal_nao_encontrado/.test(cred.indisponivel) || Number(item.tentativas) >= 5) {
+        await concluir("falhou", "não deu para ler a credencial do número deste envio (nada foi enviado)"); return "falhou";
+      }
+      await concluir("pendente", null); return "adiado";   // falha passageira do banco: volta para a fila SEM ter saído
+    }
     const cw = ehCodeWords(cred);
     if (item.tipo === "texto") {
       // o aparelho do CodeWords não tem janela de 24 h
