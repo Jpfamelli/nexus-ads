@@ -20,7 +20,7 @@ ou com `docs/orbita/ESPEC.md`, esses dois vencem.
 
 ## Órbita — estado e fonte da verdade
 - Fonte técnica: `CONTRATO.md` e `docs/orbita/ESPEC.md`; evidências e estado: `docs/orbita/estado/F1.md`…`F8.md`, `ESTADO.md` e `MELHORIAS-*.md`.
-- F8 está ACEITA e publicada desde 01/10/2026. O pacote R119 é follow-up separado e permanece fora de produção até sua integração/aprovação. A branch desta continuação é `codex/orbita-r119`.
+- F8 está ACEITA e publicada desde 01/10/2026. O pacote R119 é follow-up separado e permanece fora de produção até sua integração/aprovação. Branch `codex/orbita-r119`; PR #2 está aberto em rascunho: https://github.com/Jpfamelli/nexus-ads/pull/2.
 - A suíte local consolidada é `node testes/rodar-tudo.mjs` (19/19 arquivos nesta revisão); também executar montagem das sete funções, `deno check` dos sete entrypoints e `git diff --check` antes de commitar.
 - As migrações `20261002b`, `20261002c` e `20261002d` estão no repositório e têm smokes locais, mas a aplicação remota não foi confirmada nesta retomada. Não publicar funções dependentes antes da migração correspondente.
 

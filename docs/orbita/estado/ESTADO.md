@@ -1,16 +1,17 @@
 # Estado geral do Órbita
 
-Atualizado: 2026-10-01 14:20 (America/Sao_Paulo)
-Branch de follow-up: `codex/orbita-r119` (em preparação; não publicado)
+Atualizado: 2026-10-01 14:26 (America/Sao_Paulo)
+Branch de follow-up: `codex/orbita-r119` · PR [#2](https://github.com/Jpfamelli/nexus-ads/pull/2) aberto em rascunho (não publicado)
 Base em produção: F8/PR [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) mesclado; https://orbita-nexus-ads.netlify.app
 
-## Follow-up R119 — integração local, não publicado — 2026-10-01 14:20 -03
+## Follow-up R119 — integração local, não publicado — 2026-10-01 14:26 -03
 
 - **Fechado localmente:** WIP de B/C/D integrado na branch `codex/orbita-r119`: paleta/ações do shell; CRM/Agenda; chips compactos e ordenação do Radar; pré-carregamento, Conversas com base/lista em paralelo; leitura de rascunho persistido; correções de acessibilidade. O shell está na versão `20261001d`; o teste novo confirma `ctx.rascunho.existe/texto` e seu uso em Conversas.
-- **Verificações:** `node testes/rodar-tudo.mjs` passou **19/19 arquivos** após a última correção; `testes/app.teste.mjs` 147/147; `deno check` 7/7; Axe em 6 telas × desktop/celular, **12/12 sem violações**. QA browser em dev-falso: Conversas 70/70 e Relatórios/Anúncios 62/62. Três smokes de migração passaram somente em ambiente local/PGlite com rollback.
+- **Verificações:** `node testes/rodar-tudo.mjs` passou **19/19 arquivos** após a última correção; `testes/app.teste.mjs` 147/147; montagem das sete funções passou; Axe em 6 telas × desktop/celular, **12/12 sem violações**. QA browser em dev-falso: Conversas 70/70 e Relatórios/Anúncios 62/62. Três smokes de migração passaram somente em ambiente local/PGlite com rollback. O handoff registrou `deno check` 7/7; não consegui repetir agora porque `deno` não está instalado/no PATH neste shell.
 - **Fora do pacote fechado:** M19 (motor global de avisos/pulso entre abas) não foi implementado; fila IndexedDB pode reter mensagem não enviada até TTL/limpeza. Aparelho real (iOS/Android) não foi testado nesta rodada.
 - **Bloqueio de publicação:** o Supabase MCP falhou ao renovar OAuth. As migrações `20261002b/c/d` não foram confirmadas/aplicadas no remoto; não publiquei funções nem deploy Netlify. A produção permanece no F8 já aceita.
-- **Próximo gate:** reconectar Supabase MCP pela interface; ensaiar/aplicar as migrações aprovadas em ordem; publicar funções pelas Actions depois da migração; abrir/revisar PR e só então fazer release manual de checkout LF da `main`. Não mexer em `nx_config`.
+- **PR:** #2 está em rascunho e o GitHub marcou o branch como mergeable; nenhum status check foi retornado. Revisar a sequência das migrações e os arquivos incluídos antes de qualquer merge.
+- **Próximo gate:** reconectar Supabase MCP pela interface; conferir e ensaiar/aplicar as migrações aprovadas em ordem; publicar funções pelas Actions depois das migrações; só após revisão e gates verdes mesclar e fazer release manual de checkout LF da `main`. Não mexer em `nx_config`.
 
 ## F8 ACEITA em 01/10/2026 — 2026-10-01 01:15 -03
 
