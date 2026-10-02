@@ -407,7 +407,7 @@ export function criarApi(o) {
   /** Resultado FINAL da chamada para o estado de conexão: 502/503/504 e falha de transporte = servidor fora; qualquer outra resposta prova que ele responde. */
   function relatarErro(e) {
     if (e.codigo === "sem_conexao" || e.codigo === "tempo_rede") avisarRede("falha", { codigo: e.codigo });
-    else if ([502, 503, 504].includes(Number(e.status))) avisarRede("falha", { codigo: `http_${e.status}`, status: e.status });
+    else if ([502, 503, 504].includes(Number(e.status)) && e.codigo !== "midia_indisponivel") avisarRede("falha", { codigo: `http_${e.status}`, status: e.status });   // um arquivo que não baixou não é «servidor fora»
     else avisarRede("sucesso");
   }
 

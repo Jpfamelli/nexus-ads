@@ -392,7 +392,11 @@ export function traduzirErroCW(r) {
     return { tipo: "instavel", ambigua: true,
       texto: `O CodeWords falhou (HTTP ${r.status}). A mensagem pode ter saído: confira no celular antes de mandar de novo.` };
   }
-  return { tipo: "recusado", ambigua: false, texto: `O CodeWords recusou o pedido (HTTP ${r?.status ?? "?"}).` };
+  if (r?.status === 400 && /not (on|registered (on|in)) whatsapp|is not a valid whatsapp|no whatsapp account|not found on whatsapp|invalid (phone|jid)|phone.{0,20}invalid/i.test(corpo)) {
+    return { tipo: "sem_whatsapp", ambigua: false, texto: "Esse número não tem WhatsApp ou está errado. Confira o telefone do contato (com DDD) e tente de novo." };
+  }
+  const motivo = texto1(OBJ(r?.dados) ? (r.dados.message ?? r.dados.error ?? r.dados.detail ?? "") : String(r?.texto ?? ""), 120);
+  return { tipo: "recusado", ambigua: false, texto: `O CodeWords recusou o pedido (HTTP ${r?.status ?? "?"})${motivo ? `: ${erroSeguro(motivo)}` : "."}` };
 }
 
 /** Corpo de 200 que diz falha (status/code skip|error|failed, ou campo error). */

@@ -658,7 +658,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .ng-campo { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
   .ng-campo-largo { grid-column: 1 / -1; }
   .ng-campo > dt { padding-top: 0; font-size: var(--fs-12); }
-  .ng-campo .ed { min-height: 40px; padding-block: .3rem; border-color: var(--c-borda-2); background: var(--c-fundo); }   /* no toque não há hover: o campo já se mostra como campo */
+  .ng-campo .ed { min-height: 40px; padding-block: .3rem; border-color: var(--c-borda-2); background: var(--c-fundo); font-size: var(--fs-16); }   /* no toque não há hover: o campo já se mostra como campo */
   .ed-erro { grid-column: 1; }
   .ng-valor b { font-size: var(--fs-25); }
   .fx-rfm { grid-template-columns: repeat(2, minmax(0, 1fr)); }

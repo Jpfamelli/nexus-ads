@@ -392,7 +392,7 @@ async function acaoTemplate(db, ctx, corpo, deps) {
     if (parametros.length !== Number(tpl.num_parametros || 0) || parametros.some(p => !p || p.length > 1000)) {
       throw new ErroApi("template_invalido", 400, "parâmetros");
     }
-    if (cx.contato?.optin_marketing !== true && String(tpl.categoria).toUpperCase() === "MARKETING") {
+    if (cx.contato?.optin_marketing === false && String(tpl.categoria).toUpperCase() === "MARKETING") {
       throw new ErroApi("template_invalido", 400, "é preciso consentimento explícito para mensagens de marketing");
     }
     const cred = await credencial(db, cx.canal_id, cliente);
@@ -542,7 +542,7 @@ async function enviarItem(db, item, creds, rede, prazo = {}) {
     } else {
       const modelo = item.modelo;
       if (!modelo || modelo.status !== "APPROVED") { await concluir("falhou", "modelo não aprovado ou não encontrado neste número"); return "falhou"; }
-      if (item.contato?.optin_marketing !== true && String(modelo.categoria).toUpperCase() === "MARKETING") {
+      if (item.contato?.optin_marketing === false && String(modelo.categoria).toUpperCase() === "MARKETING") {
         const motivo = item.contato?.optin_marketing === false
           ? "contato pediu para não receber mensagens de marketing"
           : "consentimento de marketing não confirmado";

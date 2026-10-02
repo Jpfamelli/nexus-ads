@@ -104,22 +104,34 @@ const PAGINA_OFFLINE = "<!doctype html><meta charset=\"utf-8\"><meta name=\"view
 
 async function navegacao(ev) {
   const cache = await caches.open(NOME_CACHE);
-  const rede = fetchComPrazo(ev.request, PRAZO_REDE_MS).then(async r => {
+  const rede = fetch(ev.request).then(async r => {   // sem abortar: estourado o prazo, a resposta ainda atualiza o shell guardado
     // só guarda página de verdade: HTML e 200 (um redirecionamento ou erro nunca vira o "shell offline")
     if (r && r.ok && !r.redirected && /text\/html/i.test(r.headers.get("content-type") || "")) { try { await cache.put(URL_INDEX, r.clone()); } catch (e) { /* cheio */ } }
     return r;
   });
   ev.waitUntil(rede.then(() => null, () => null));
-  try { return await rede; } catch (e) { /* offline/prazo: cai no que está guardado */ }
+  const ate = ms => { let t; return Promise.race([rede, new Promise(ok => { t = setTimeout(() => ok(null), ms); })]).finally(() => clearTimeout(t)); };
+  try { const r = await ate(PRAZO_REDE_MS); if (r) return r; } catch (e) { /* offline: cai no que está guardado */ }
   const guardada = await cache.match(URL_INDEX);
   if (guardada) return guardada;
+  // sem shell guardado, a rede lenta ainda pode atender: espera mais um pouco antes da tela «Sem conexão»
+  try { const r = await ate(PRAZO_ARQUIVO_MS); if (r) return r; } catch (e) { /* sem cache e sem rede */ }
   return new Response(PAGINA_OFFLINE, { status: 503, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+
+/** Aba antiga: o arquivo da versão dela está num dos caches anteriores que o activate conserva. */
+async function acharEmVersoesAnteriores(url) {
+  for (const nome of (await caches.keys()).filter(n => n.startsWith(PREFIXO) && n !== NOME_CACHE).sort().reverse()) {
+    const r = await (await caches.open(nome)).match(url);
+    if (r) return r;
+  }
+  return undefined;
 }
 
 async function cachePrimeiro(ev) {
   const cache = await caches.open(NOME_CACHE);
   const url = ev.request.url;
-  const achado = await cache.match(url);
+  const achado = await cache.match(url) || await acharEmVersoesAnteriores(url);
   if (achado) return achado;
   let r;
   try { r = await fetchComPrazo(ev.request, PRAZO_ARQUIVO_MS); }

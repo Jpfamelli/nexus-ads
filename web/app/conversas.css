@@ -456,9 +456,11 @@
   .cvl-abas { scroll-padding-inline: 16px; }
   .cvc-acoes .so-largo { display: none; }
   .cvc-msgs { padding: .8rem .7rem 1rem; }
-  .cv-msg { max-width: 88%; }
-  .cv-responder { position: static; transform: none; display: inline-grid; place-items: center; opacity: 1; align-self: flex-start; margin: .15rem 0 .1rem; }
-  .cv-msg[data-dir="out"] .cv-responder { align-self: flex-end; }
+  .cv-msg { max-width: min(88%, calc(100% - 50px)); }   /* sobra lugar para o Responder AO LADO da bolha, sem ocupar altura (44x44 no toque) */
+  .cv-responder { display: inline-grid; place-items: center; opacity: .7; }
+  .cv-msg[data-dir="in"] .cv-responder { right: -46px; }
+  .cv-msg[data-dir="out"] .cv-responder { left: -46px; }
+  .cvx textarea { font-size: var(--fs-16); }   /* 16 px: sem zoom do iPhone ao focar o campo de mensagem */
   .cvx { padding: .5rem .5rem calc(.5rem + env(safe-area-inset-bottom)); }
   .cvx-ferr .so-largo { display: none; }
   .cvx-dica { display: none; }
@@ -671,7 +673,7 @@
 
 @media (max-width: 760px) {
   /* M34 — cabeçalho de UMA linha: voltar · avatar · nome + telefone · ação principal · ⋮ (situação na faixa de baixo, detalhes no ⋮ e na ficha) */
-  .cvc-cab { display: flex; align-items: center; gap: .25rem; min-height: 56px; padding: .3rem .5rem .3rem .35rem; }
+  .cvc-cab { display: flex; align-items: center; gap: .2rem; min-height: 56px; padding: .3rem .25rem .3rem .1rem; }   /* em 360 px o telefone cabe inteiro */
   .cvc-voltar { display: inline-grid; place-items: center; flex: none; width: 44px; height: 44px; margin: 0; }
   .cvc-quem { flex: 1 1 0; min-width: 0; min-height: 44px; padding: .1rem .3rem; gap: .5rem; }
   .cvc-quem .avatar { width: 34px; height: 34px; }

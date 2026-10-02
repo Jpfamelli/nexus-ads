@@ -28,6 +28,9 @@ export function criarPulso(o) {
   const assinantes = new Set();
   let modo = "normal", timer = null, rodando = false, v = null, notif = null, naoLidas = null, falhas = 0, lendo = false;
   let ultimaAtividade = agora(), papel = "parado", canal = null, escopoAtual = "", lockPendente = false, liberarLider = null;
+  // geracao: cada parar()/iniciar() invalida leituras e pedidos de trava em voo · ultimoDoLider: quando chegou o último resultado da líder
+  // largada: a 1ª rodada depois do iniciar() lê na hora, mesmo como seguidora (fixa a referência e o sino sem esperar a líder)
+  let geracao = 0, ultimoDoLider = -Infinity, largada = false;
 
   function escondida() { return !!(doc && doc.visibilityState === "hidden"); }
   function offline() { return !!(nav && nav.onLine === false); }
@@ -35,9 +38,10 @@ export function criarPulso(o) {
   function baseIntervalo() {
     if (falhas > 0) return Math.min(INTERVALOS.maximo, INTERVALOS.normal * 2 ** Math.min(falhas - 1, 3));
     if (escondida()) return INTERVALOS.escondida;
+    if (modo === "conversas") return INTERVALOS.conversas;   // Conversas aberta e visível: sempre 3 s (o atendente espera a mensagem sem tocar na tela)
     if (inatividade() >= 15 * 60_000) return INTERVALOS.muitoInativo;
     if (inatividade() >= 3 * 60_000) return INTERVALOS.inativo;
-    return modo === "conversas" ? INTERVALOS.conversas : INTERVALOS.normal;
+    return INTERVALOS.normal;
   }
   function intervalo() {
     const base = baseIntervalo();
@@ -73,7 +77,7 @@ export function criarPulso(o) {
       canal = new BroadcastChannel(`orbita-pulso:${host}:${escopoAtual}`);
       canal.addEventListener("message", ev => {
         const d = ev && ev.data;
-        if (rodando && papel === "seguidora" && d && d.tipo === "resultado") processar(d.dados);
+        if (rodando && (papel === "seguidora" || papel === "aguardando") && d && d.tipo === "resultado") { ultimoDoLider = agora(); processar(d.dados); }
       });
       return true;
     } catch { canal = null; return false; }
@@ -89,39 +93,45 @@ export function criarPulso(o) {
     if (!rodando || papel === "lider" || papel === "solo" || lockPendente) return;
     lockPendente = true;
     papel = "aguardando";
+    const g = geracao;
     const nome = `orbita-pulso:${globalThis.location && globalThis.location.host || "orbita"}:${escopoAtual}`;
     try {
       await nav.locks.request(nome, { mode: "exclusive", ifAvailable: true }, async lock => {
+        // resposta de um pedido antigo (parar()/iniciar() no meio): devolve a trava na hora e não mexe no estado da rodada nova
+        if (g !== geracao) return;
         lockPendente = false;
-        if (!rodando) { papel = "parado"; return; }
-        if (!lock) { papel = "seguidora"; programar(INTERVALOS.eleicao); return; }
+        if (!lock) { papel = "seguidora"; const ms = largada ? 0 : intervalo(); largada = false; programar(ms); return; }
         papel = "lider";
-        programar(0);
-        await new Promise(resolve => { liberarLider = resolve; });
-        liberarLider = null;
-        papel = "parado";
+        const ms = largada ? 0 : intervalo(); largada = false;
+        programar(ms);
+        await new Promise(resolve => { liberarLider = resolve; });   // só o parar() resolve (e ele mesmo zera liberarLider e o papel)
       });
     } catch {
+      if (g !== geracao) return;
       lockPendente = false;
       if (rodando) { papel = "solo"; programar(0); }
     }
   }
   async function tique() {
     timer = null;
-    if (!rodando || lendo) return;
-    if (papel === "seguidora") { await tentarLider(); return; }
-    if (papel === "aguardando") return;
+    if (!rodando || lendo || papel === "aguardando") return;
+    // a seguidora só deixa de ler enquanto a líder entrega no ritmo que ESTA aba precisa (líder oculta lê a cada 60 s; congelada, nunca)
+    if (papel === "seguidora" && agora() - ultimoDoLider < baseIntervalo() * 1.5) { await tentarLider(); return; }
+    const g = geracao;
     lendo = true;
     try {
       const r = await o.ler();
+      if (g !== geracao) return;          // parou ou trocou de empresa no meio: o resultado é da rodada anterior
       falhas = 0;
       processar(r);
       publicar(r);
     } catch (e) {
+      if (g !== geracao) return;
       if (e && e.codigo === "sessao_invalida") { parar(); return; }
       falhas++;
     }
     lendo = false;
+    if (papel === "seguidora") { await tentarLider(); return; }   // a líder pode ter fechado: tenta assumir; senão reprograma no ritmo desta aba
     programar();
   }
   function aoVisibilidade() { if (rodando) programar(escondida() ? intervalo() : 0); }
@@ -142,9 +152,11 @@ export function criarPulso(o) {
 
   function parar() {
     rodando = false;
+    geracao++;
+    lendo = false;
     if (timer) cancelar(timer);
     timer = null;
-    if (liberarLider) liberarLider();
+    if (liberarLider) { const soltar = liberarLider; liberarLider = null; soltar(); }
     lockPendente = false;
     papel = "parado";
     if (canal) { try { canal.close(); } catch { /* ok */ } canal = null; }
@@ -157,13 +169,13 @@ export function criarPulso(o) {
     /** (re)começa do zero — troca de empresa zera referência e escolhe novo líder. */
     iniciar() {
       parar();
-      rodando = true; v = null; notif = null; naoLidas = null; falhas = 0; ultimaAtividade = agora();
+      rodando = true; v = null; notif = null; naoLidas = null; falhas = 0; ultimaAtividade = agora(); ultimoDoLider = -Infinity; largada = true;
       if (abrirCanal()) tentarLider();
       else { papel = "solo"; programar(0); }
     },
     parar,
     /** lê agora (ex.: depois de uma ação do próprio usuário). */
-    agora() { if (rodando) programar(0); },
+    agora() { if (rodando) { ultimoDoLider = -Infinity; programar(0); } },
     get estado() { return { rodando, modo, v, notif, naoLidas, falhas, papel, intervalo: intervalo() }; },
     destruir() {
       parar(); assinantes.clear();

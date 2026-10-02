@@ -42,7 +42,7 @@
 .ag-dia-cab.hoje .ag-dia-sem { color: var(--c-texto); }
 .ag-dia-total { margin-left: auto; display: inline-grid; place-items: center; min-width: 1.5rem; height: 1.5rem; padding: 0 .35rem; border-radius: 999px; background: var(--c-prim-suave); color: var(--c-texto); font-size: var(--fs-12); font-weight: 600; }
 .ag-dia-total:empty { display: none; }
-.ag-dia-mais { width: 44px; height: 44px; flex: none; color: var(--c-texto-2); }
+.ag-dia-mais { width: 28px; height: 28px; flex: none; color: var(--c-texto-2); }   /* no toque e em tela estreita vira 44 px (regra do @media abaixo) */
 .ag-dia-mais .ic { width: 15px; height: 15px; }
 .ag-dia-total:empty + .ag-dia-mais { margin-left: auto; }
 .ag-dono-cab { min-height: 48px; }

@@ -83,7 +83,7 @@
   --f-mono: "Nx Plex", "IBM Plex Mono", ui-monospace, "Cascadia Mono", monospace;
   --f-narr: "Nx Zodiak", "Zodiak", Georgia, "Times New Roman", serif;   /* voz da narração: só manchetes, vazios e resumo de IA (.narr) */
   --ws-d: .12em;               /* respiro entre palavras na Clash */
-  --fs-11: .75rem;   /* piso de 12 px (M03): o antigo 11 px virou 12 */ --fs-12: .75rem; --fs-13: .8125rem; --fs-14: .875rem; --fs-15: .9375rem;
+  --fs-11: .75rem;   /* piso de 12 px (M03): o antigo 11 px virou 12 */ --fs-12: .75rem; --fs-13: .8125rem; --fs-14: .875rem; --fs-15: .9375rem; --fs-16: 1rem;
   --fs-17: 1.0625rem; --fs-20: 1.25rem; --fs-25: 1.5625rem; --fs-31: 1.953rem; --fs-39: 2.441rem; --fs-52: 3.25rem;
   /* escala única (M02): display 40→56 e h1 28→36 (fluidos de 390 a 1440 px), h2 20, h3 16, números 44/32/24, corpo 15, pequeno 13 */
   --fs-display: clamp(2.5rem, 2.129rem + 1.524vw, 3.5rem);
@@ -275,10 +275,10 @@ html[data-esquema="escuro"] .cartao { box-shadow: 0 24px 48px -36px var(--c-somb
   background-image: linear-gradient(45deg, transparent 50%, var(--c-texto-3) 50%), linear-gradient(135deg, var(--c-texto-3) 50%, transparent 50%);
   background-position: calc(100% - 1.15rem) 52%, calc(100% - .8rem) 52%; background-size: 6px 6px, 6px 6px; background-repeat: no-repeat;
 }
-@media (max-width: 760px) {
+.sel { width: auto; min-height: 40px; border-radius: 999px; padding-left: 1rem; font-size: var(--fs-14); font-weight: 600; }
+@media (max-width: 760px) {   /* 16 px no celular: o iPhone não dá zoom ao focar (vem DEPOIS de .sel para valer também nele) */
   .campo input:not([type=checkbox]):not([type=radio]), .campo select, .campo textarea, .sel, .busca input, .cor-hex { font-size: var(--fs-16); }
 }
-.sel { width: auto; min-height: 40px; border-radius: 999px; padding-left: 1rem; font-size: var(--fs-14); font-weight: 600; }
 .campo input::placeholder, .campo textarea::placeholder, .busca input::placeholder { color: var(--c-texto-3); opacity: 1; }
 .campo input:hover:not(:disabled), .campo select:hover:not(:disabled), .campo textarea:hover:not(:disabled), .sel:hover, .busca input:hover { border-color: var(--c-texto-3); }
 .campo input:focus-visible, .campo select:focus-visible, .campo textarea:focus-visible, .sel:focus-visible, .busca input:focus-visible, .cor-hex:focus-visible {

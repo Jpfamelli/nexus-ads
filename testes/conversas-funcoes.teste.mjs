@@ -1821,14 +1821,15 @@ test("nx-enviar template: parâmetros no corpo da Graph; corpo gravado com os pa
   assert.equal(mk.corpo.erro, "template_invalido");
   assert.match(mk.corpo.detalhe, /consentimento explícito/);
   assert.equal(s.estado.graph.length, n);
+  // consentimento DESCONHECIDO (nulo, o padrão de quem chega pelo WhatsApp) não bloqueia: só quem pediu SAIR (false). Mudar isso é decisão do dono,
+  // e teria de vir junto com a tela (cv-logica.js só bloqueia optin === false) e com a automação SQL.
   s.tab("nx_contatos").find(c => c.id === 502).optin_marketing = null;
   const consentimentoDesconhecido = await ler(await enviar(painel("nx-enviar", { acao: "template", conversa: 602, template_id: P, parametros: [] }), ENV, s.deps()));
-  assert.equal(consentimentoDesconhecido.corpo.erro, "template_invalido", "sem opt-in afirmativo não envia marketing");
-  assert.equal(s.estado.graph.length, n, "nenhum envio externo sem consentimento registrado");
+  assert.equal(consentimentoDesconhecido.corpo.ok, true, "consentimento desconhecido continua permitido (regra que já estava no ar)");
   s.tab("nx_contatos").find(c => c.id === 502).optin_marketing = true;
   const consentido = await ler(await enviar(painel("nx-enviar", { acao: "template", conversa: 602, template_id: P, parametros: [] }), ENV, s.deps()));
   assert.equal(consentido.corpo.ok, true, "opt-in explícito continua permitido");
-  assert.equal(s.estado.graph.length, n + 1);
+  assert.equal(s.estado.graph.length, n + 2, "os dois envios permitidos (consentimento desconhecido e explícito) foram à Graph");
   assert.equal(aplicarParametros("Oi {{nome}}, {{nome}} dia {{data}}", ["Ana", "3"]), "Oi Ana, Ana dia 3");
   assert.deepEqual(parametrosDoCorpo("{{2}} e {{1}}"), ["1", "2"]);
 });
@@ -2028,7 +2029,7 @@ test("nx-enviar cron fila: pula texto fora da janela, envia modelo, pula marketi
   assert.equal(s.tab("nx_mensagens").find(m => m.id === f(5).mensagem_id).status, "falhou");
 });
 
-test("nx-enviar cron: marketing com consentimento nulo é pulado com segurança", async () => {
+test("nx-enviar cron: marketing com consentimento nulo segue a regra que estava no ar: é enviado (só quem pediu SAIR é pulado)", async () => {
   const s = cenario();
   const promo = "7e7e7e7e-0000-4000-8000-000000000003";
   s.tab("nx_templates").find(t => t.id === "tpl-promo").id = promo;
@@ -2037,9 +2038,8 @@ test("nx-enviar cron: marketing com consentimento nulo é pulado com segurança"
     template: { nome: "promo", idioma: "pt_BR", parametros: [] }, origem: "automacao", status: "pendente",
     enviar_em: new Date(AGORA.getTime() - 60e3).toISOString(), tentativas: 0, criado_por: null });
   const r = await ler(await enviar(cron({ fila: true }), ENV, s.deps()));
-  assert.deepEqual(r.corpo.fila, { total: 1, enviado: 0, pulado: 1, falhou: 0 });
-  assert.match(s.tab("nx_envios_fila")[0].erro, /consentimento|marketing/i);
-  assert.equal(s.estado.graph.length, 0);
+  assert.deepEqual(r.corpo.fila, { total: 1, enviado: 1, pulado: 0, falhou: 0 });
+  assert.equal(s.estado.graph.length, 1);
 });
 
 test("nx-enviar cron alerta (P1): cliente inexistente → nada enviado; texto de 1.500 → sai com 1.000", async () => {
