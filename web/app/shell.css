@@ -25,7 +25,7 @@
 .rede-ponto[data-estado="lento"] { background: var(--c-aten); }
 .sino { position: relative; }
 .faixa-rede { padding-block: .4rem; row-gap: .15rem; }
-.faixa-rede .bt { min-height: 28px; padding: .1rem .75rem; }
+.faixa-rede .bt { min-height: 44px; padding: .35rem .85rem; }
 
 /* ---- dados guardados (M16): selo único «Mostrando dados de 14:02 · atualizando…» ---- */
 .faixa-cache { background: var(--c-sup-2); }

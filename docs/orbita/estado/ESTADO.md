@@ -331,3 +331,11 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 - Aplicadas no Supabase (ensaiadas antes em ROLLBACK): memória operacional da IA (30a) e sua leitura na tela (30e), pacotes comerciais (30b), reservas atômicas de cota da IA (30c) e fila com STATUS INCERTO (30d). Smokes 03, 05, 06, 08, 09, 10 e 11 verdes depois de aplicado. A cota da IA agora conta toda tentativa.
 - Sete Edge Functions republicadas: nx-ciclo v4, nx-relatorio v4, nx-whatsapp v5, nx-enviar v3, nx-midia v2, nx-ia v2, nx-codewords v2. Autenticação conferida; ciclo das 20:07 UTC devolveu 200/ok para kamiguchi. Detalhes e plano de volta em F8.md.
 - Não houve Netlify, merge na main, alteração de prontos.js ou mudança em dados de produção. F8 segue em andamento pelos gates de E2E e mobile.
+
+## Follow-up — três rodadas de melhorias — 2026-10-02
+
+- Entregues 37 melhorias locais em três rodadas para UX móvel, conectividade/cache e segurança/estados de CRM e atendimento. Inventário e arquivos de evidência: `docs/orbita/estado/MELHORIAS-20261002.md`.
+- `node testes/rodar-tudo.mjs`: **20/20 arquivos**; montagem das sete Edge Functions e `npx --yes deno check` dos sete entrypoints também concluíram com código 0.
+- Chrome headless com `dev-falso`: Atendimento, CRM, Ads e Início em 390 × 844 sem overflow da página; jornada simulada anúncio → conversa → agenda → CodeWords → CRM → receita Ads coberta por testes.
+- Sem chamadas a APIs reais, sem alterações no banco, `nx_config`, `prontos.js`, `main` ou produção. F8 permanece ACEITA conforme o registro mais recente no `AGENTS.md`; este follow-up não altera `F8.md` nem seus gates.
+- Branch: `codex/orbita-melhorias-20261002`. A11y axe não executado porque `puppeteer-core` não está instalado; conferir o relatório datado para esse limite e as demais verificações.

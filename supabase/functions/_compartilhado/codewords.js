@@ -749,10 +749,12 @@ async function acaoMensagem(db, canal, corpo, deps) {
   };
   const r = await db.rpc("nx_wa_entrada", { p_canal: canal.canal_id, p_msg: msg });
   const conversa = r?.conversa_id ?? null;
-  if (r?.duplicada) return { ok: true, conversa_id: conversa, registrada: false, responder: false, motivo: "duplicada" };
   if (r?.bloqueado) return { ok: true, conversa_id: conversa, registrada: !!r?.mensagem_id, responder: false, motivo: "bloqueado" };
   try { await registrarLead(db, canal.cliente_id, p.telefone, p.nome, p.referral); }
   catch (e) { console.error("nx-codewords lead:", erroSeguro(e?.message || e)); }   // a conversa já está gravada
+  // a conversação pode existir enquanto a gravação do lead falhou em tentativa anterior:
+  // o evento repetido refaz o upsert idempotente e só então para, sem chamar a IA.
+  if (r?.duplicada) return { ok: true, conversa_id: conversa, registrada: false, responder: false, motivo: "duplicada" };
   // código do site na mensagem → origem/campanha/gclid do negócio (não derruba o atendimento se falhar)
   const codigo = extrairCodigoRastreio(p.texto);
   if (codigo) {

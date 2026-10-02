@@ -1467,11 +1467,22 @@ async function enviarTexto(o) {
     criada_em: Date.now(), tentativas: 0, proxima_em: 0, enviada_em: 0, estado: "fila", motivo: null,
     para: nomeContato(A.ver.contato || conv.contato) || null,      // para o aviso «Mensagem para Mariana não foi enviada» quando a conversa já não é a aberta
     reenvio: o.reenvio || null };                                    // «Tentar de novo» de uma falha gravada pelo servidor: id da mensagem a reenviar
-  const persistido = await filaSalvar(it);
+  let persistido = await filaSalvar(it);
   A.msgs = L.mesclarDelta(A.msgs, [bolhaDeItem(it)]);
   A.chat.renderMensagens({ rolar: "fim" });
   const offline = A.ctx.rede ? A.ctx.rede.estado === "offline" : (typeof navigator !== "undefined" && navigator.onLine === false);
-  if (offline) { it.motivo = "Sem internet: a mensagem espera na fila."; it.proxima_em = Date.now() + 20000; await filaSalvar(it); atualizarBolha(it); }
+  if (offline) {
+    it.motivo = "Sem internet: a mensagem espera na fila.";
+    it.proxima_em = Date.now() + 20000;
+    persistido = (await filaSalvar(it)) || persistido;
+    if (!persistido) {
+      A.msgs = A.msgs.filter(m => m.ref !== it.id);
+      A.chat.renderMensagens({ rolar: "manter" });
+      A.ui.toast("Sem conexão: não foi possível guardar a mensagem neste aparelho. O texto continua no campo; tente novamente.", { tipo: "erro", ms: 9000 });
+      return { persistido: false };
+    }
+    atualizarBolha(it);
+  }
   else transmitir(it);          // sem await: a tela não espera o servidor
   return { persistido };
 }

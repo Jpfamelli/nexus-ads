@@ -515,6 +515,7 @@ console.log("\n(e) pulso.js com relógio falso");
 function relogio() {
   let t = 0, fila = [];
   return {
+    agora() { return t; },
     agendar(fn, ms) { const id = Symbol(); fila.push({ id, fn, em: t + ms }); return id; },
     cancelar(id) { fila = fila.filter(x => x.id !== id); },
     async andar(ms) {
@@ -534,13 +535,14 @@ await teste("intervalos: 10 s normal, 3 s em Conversas, 60 s com a aba escondida
   const rel = relogio();
   const doc = { visibilityState: "visible", addEventListener() {}, removeEventListener() {} };
   let v = 1, leituras = 0, notif = null;
-  const p = P.criarPulso({ ler: async () => { leituras++; return { v, notif: 2, agora: "x" }; }, aoNotif: n => { notif = n; },
-    agendar: rel.agendar, cancelar: rel.cancelar, doc, nav: { onLine: true }, janela: { addEventListener() {}, removeEventListener() {} } });
+  let naoLidas = null;
+  const p = P.criarPulso({ ler: async () => { leituras++; return { v, notif: 2, nao_lidas: 4, agora: "x" }; }, aoNotif: n => { notif = n; }, aoNaoLidas: n => { naoLidas = n; },
+    agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, aleatorio: () => .5, doc, nav: { onLine: true }, janela: { addEventListener() {}, removeEventListener() {} } });
   const vistos = [];
   p.assinar(x => vistos.push(x));
   p.iniciar();
   await rel.andar(0);
-  assert.equal(leituras, 1); assert.deepEqual(vistos, [], "a 1ª leitura só fixa a referência"); assert.equal(notif, 2);
+  assert.equal(leituras, 1); assert.deepEqual(vistos, [], "a 1ª leitura só fixa a referência"); assert.equal(notif, 2); assert.equal(naoLidas, 4);
   assert.equal(rel.proximo(), 10000);
   await rel.andar(10000);
   assert.equal(leituras, 2); assert.deepEqual(vistos, []);
@@ -559,7 +561,7 @@ await teste("erro de rede espera dobrando; sessao_invalida para o pulso", async 
   const rel = relogio();
   let modoErro = "rede";
   const p = P.criarPulso({ ler: async () => { const e = new Error(modoErro); e.codigo = modoErro === "rede" ? "sem_conexao" : "sessao_invalida"; throw e; },
-    agendar: rel.agendar, cancelar: rel.cancelar, doc: { visibilityState: "visible", addEventListener() {} }, nav: { onLine: true }, janela: { addEventListener() {} } });
+    agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, aleatorio: () => .5, doc: { visibilityState: "visible", addEventListener() {} }, nav: { onLine: true }, janela: { addEventListener() {} } });
   p.iniciar();
   await rel.andar(0);
   assert.equal(rel.proximo(), 10000);
@@ -574,12 +576,75 @@ await teste("timeout do fetch libera o pulso e agenda nova tentativa com backoff
   const rel = relogio();
   const api = A.criarApi({ url: URLS, chave: "pub", fetch: () => new Promise(() => {}), prazoMs: 8 });
   const p = P.criarPulso({ ler: () => api.rpc("nx_pulso"), agendar: rel.agendar, cancelar: rel.cancelar,
-    doc: { visibilityState: "visible", addEventListener() {} }, nav: { onLine: true }, janela: { addEventListener() {} } });
+    agora: rel.agora, aleatorio: () => .5, doc: { visibilityState: "visible", addEventListener() {} }, nav: { onLine: true }, janela: { addEventListener() {} } });
   p.iniciar();
   await Promise.race([rel.andar(0), new Promise(r => setTimeout(r, 40))]);
   assert.equal(p.estado.falhas, 1);
   assert.equal(rel.proximo(), 10000, "a primeira falha aplica o primeiro intervalo de backoff");
   p.parar();
+});
+await teste("pulso: espalha chamadas com jitter, desacelera em inatividade e acelera ao voltar a usar", async () => {
+  const rel = relogio(), eventos = new Map();
+  const doc = { visibilityState: "visible", addEventListener(n, fn) { eventos.set(n, fn); }, removeEventListener(n) { eventos.delete(n); } };
+  let leituras = 0;
+  const p = P.criarPulso({ ler: async () => { leituras++; return { v: leituras }; }, agendar: rel.agendar, cancelar: rel.cancelar,
+    agora: rel.agora, aleatorio: () => 0, doc, nav: { onLine: true }, janela: { addEventListener() {}, removeEventListener() {} } });
+  p.iniciar(); await rel.andar(0);
+  assert.equal(rel.proximo(), 8500, "jitter de -15% distribui clientes e abas no tempo");
+  await rel.andar(180000);
+  await rel.andar(rel.proximo());
+  assert.equal(p.estado.intervalo, 12750, "após 3 min sem atividade, o intervalo-base sobe de 10 s para 15 s e mantém o jitter");
+  eventos.get("keydown")(); await rel.andar(0);
+  assert.equal(p.estado.intervalo, 8500, "atividade reinicia a atualização imediatamente e restaura o intervalo normal");
+  await rel.andar(930000);
+  assert.equal(p.estado.intervalo, 25500, "após 15 min, usa 30 s como intervalo-base");
+  p.destruir();
+});
+await teste("pulso entre abas: uma líder por empresa, as seguidoras recebem o resultado e empresas não dividem a trava", async () => {
+  const descrBC = Object.getOwnPropertyDescriptor(globalThis, "BroadcastChannel");
+  const descrLoc = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const grupos = new Map(), donos = new Map();
+  class CanalFalso {
+    constructor(nome) { this.nome = nome; this.ouvintes = new Set(); this.fechado = false; if (!grupos.has(nome)) grupos.set(nome, new Set()); grupos.get(nome).add(this); }
+    addEventListener(tipo, fn) { if (tipo === "message") this.ouvintes.add(fn); }
+    postMessage(data) { for (const outro of grupos.get(this.nome) || []) if (outro !== this && !outro.fechado) queueMicrotask(() => { for (const fn of outro.ouvintes) fn({ data }); }); }
+    close() { this.fechado = true; grupos.get(this.nome)?.delete(this); }
+  }
+  const locks = { request: async (nome, _opcoes, callback) => {
+    if (donos.has(nome)) return callback(null);
+    let liberar;
+    const dono = new Promise(r => { liberar = r; });
+    donos.set(nome, liberar);
+    try { return await callback({ name: nome }); }
+    finally { if (donos.get(nome) === liberar) donos.delete(nome); liberar(); }
+  } };
+  Object.defineProperty(globalThis, "BroadcastChannel", { configurable: true, writable: true, value: CanalFalso });
+  Object.defineProperty(globalThis, "location", { configurable: true, value: { host: "orbita.test" } });
+  const relA = relogio(), relB = relogio(), relOutro = relogio();
+  const leu = { A: 0, B: 0, outro: 0 }, naoLidasB = [];
+  const deps = (rel, empresa, chave) => P.criarPulso({ escopo: () => empresa, ler: async () => {
+    leu[chave]++; return { v: leu[chave], notif: leu[chave], nao_lidas: leu[chave] + 2 };
+  }, aoNaoLidas: n => { if (chave === "B") naoLidasB.push(n); }, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora,
+  aleatorio: () => .5, nav: { onLine: true, locks }, doc: { visibilityState: "visible", addEventListener() {}, removeEventListener() {} },
+  janela: { addEventListener() {}, removeEventListener() {} } });
+  const a = deps(relA, "empresa-A", "A"), b = deps(relB, "empresa-A", "B"), outro = deps(relOutro, "empresa-B", "outro");
+  try {
+    a.iniciar(); b.iniciar(); outro.iniciar();
+    await new Promise(r => setImmediate(r));
+    assert.equal(a.estado.papel, "lider");
+    assert.equal(b.estado.papel, "seguidora");
+    assert.equal(outro.estado.papel, "lider", "outra empresa tem liderança independente");
+    await relA.andar(0); await relOutro.andar(0); await new Promise(r => setImmediate(r));
+    assert.deepEqual(leu, { A: 1, B: 0, outro: 1 }, "só líderes fazem chamadas de rede");
+    assert.equal(b.estado.v, 1, "a aba seguidora recebe o pulso sem outra chamada");
+    assert.deepEqual(naoLidasB, [3], "badge de não lidas também chega à seguidora");
+    assert.equal(a.estado.papel, "lider"); assert.equal(b.estado.papel, "seguidora");
+  } finally {
+    a.parar(); b.parar(); outro.parar();
+    await new Promise(r => setImmediate(r));
+    if (descrBC) Object.defineProperty(globalThis, "BroadcastChannel", descrBC); else delete globalThis.BroadcastChannel;
+    if (descrLoc) Object.defineProperty(globalThis, "location", descrLoc); else delete globalThis.location;
+  }
 });
 
 /* ============================================================ (f) UI puras */

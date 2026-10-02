@@ -290,7 +290,7 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .ng-titulo-l { display: flex; align-items: center; gap: .3rem; min-width: 0; }
 .ng-titulo-txt { flex: 0 1 auto; margin: 0; min-width: 0; overflow-wrap: anywhere; cursor: default; }
 .ng-titulo-txt.ng-titulo { border: 1px solid transparent; }
-.ng-lapis { flex: none; width: 36px; height: 36px; color: var(--c-texto-2); }
+.ng-lapis { flex: none; width: 44px; height: 44px; color: var(--c-texto-2); }
 .ng-lapis .ic { width: 16px; height: 16px; }
 .ed-salvo { color: var(--c-ok); font-size: var(--fs-12); }
 .ng-anuncio { display: flex; gap: .7rem; align-items: flex-start; padding: .75rem .9rem; border-radius: var(--r-p); background: var(--c-sec-suave); border: 1px solid var(--c-borda); font-size: var(--fs-13); }
@@ -621,12 +621,13 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .crm[data-tela="kanban"] .crm-fita { flex-wrap: nowrap; gap: .5rem; }
   .crm[data-tela="kanban"] .crm-fita .busca { flex: 1 1 auto; min-width: 0; max-width: none; }
   .kb-fita {
-    display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none; position: sticky; top: var(--topo); z-index: 6;
+    display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--c-borda-2) transparent; position: sticky; top: var(--topo); z-index: 6;
     margin: 0 -16px; padding: .45rem 16px; background: var(--c-fundo); border-bottom: 1px solid var(--c-borda);
   }
-  .kb-fita::-webkit-scrollbar { display: none; }
+  .kb-fita::-webkit-scrollbar { height: 4px; }
+  .kb-fita::-webkit-scrollbar-thumb { background: var(--c-borda-2); border-radius: 999px; }
   .kb-fita-b {
-    --cor: var(--c-texto-3); flex: none; display: inline-flex; align-items: center; gap: .4rem; min-height: 40px; padding: .2rem .8rem; border-radius: 999px;
+    --cor: var(--c-texto-3); flex: none; display: inline-flex; align-items: center; gap: .4rem; min-height: 44px; padding: .2rem .8rem; border-radius: 999px;
     border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 600; white-space: nowrap;
     transition: transform var(--t-micro) var(--e-out), background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out);
   }

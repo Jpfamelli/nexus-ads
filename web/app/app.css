@@ -275,6 +275,9 @@ html[data-esquema="escuro"] .cartao { box-shadow: 0 24px 48px -36px var(--c-somb
   background-image: linear-gradient(45deg, transparent 50%, var(--c-texto-3) 50%), linear-gradient(135deg, var(--c-texto-3) 50%, transparent 50%);
   background-position: calc(100% - 1.15rem) 52%, calc(100% - .8rem) 52%; background-size: 6px 6px, 6px 6px; background-repeat: no-repeat;
 }
+@media (max-width: 760px) {
+  .campo input:not([type=checkbox]):not([type=radio]), .campo select, .campo textarea, .sel, .busca input, .cor-hex { font-size: var(--fs-16); }
+}
 .sel { width: auto; min-height: 40px; border-radius: 999px; padding-left: 1rem; font-size: var(--fs-14); font-weight: 600; }
 .campo input::placeholder, .campo textarea::placeholder, .busca input::placeholder { color: var(--c-texto-3); opacity: 1; }
 .campo input:hover:not(:disabled), .campo select:hover:not(:disabled), .campo textarea:hover:not(:disabled), .sel:hover, .busca input:hover { border-color: var(--c-texto-3); }

@@ -190,6 +190,8 @@ async function iniciar() {
   E.pulso = E.M.pulso.criarPulso({
     ler: () => (E.cliente ? E.api.rpcC("nx_pulso") : Promise.resolve(null)),
     aoNotif: n => atualizarSino(n),
+    aoNaoLidas: n => { E.naoLidasPulsoEm = Date.now(); definirBadge("conversas", n); },
+    escopo: () => E.cliente && E.cliente.id,
   });
   E.pulso.assinar(() => { atualizarNaoLidas(); });
   E.rede.aoVoltar(() => { if (E.pulso) E.pulso.agora(); });   // reconectou: o pulso lê agora (e as telas pelo orbita:online / ctx.rede.aoVoltar)
@@ -2003,6 +2005,7 @@ async function atualizarNaoLidas() {
   const cli = E.cliente;
   if (!cli || !cli.modulos.includes("conversas") || !pronto("conversas")) return;
   if (E.atual && E.atual.arquivo === "conversas.js") return; // a própria tela chama ctx.badge
+  if (Date.now() - (E.naoLidasPulsoEm || 0) < 10000) return; // nx_pulso já trouxe a contagem: não consulta a lista de novo
   const agora = Date.now();
   if (agora - E.naoLidasEm < 10000) return;
   E.naoLidasEm = agora;

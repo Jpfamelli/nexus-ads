@@ -58,6 +58,7 @@ export const MENSAGENS = {
   canal_nao_encontrado: "Não encontramos esse registro — ele pode ter sido removido.",
   mensagem_nao_encontrada: "Não encontramos esse registro — ele pode ter sido removido.",
   midia_nao_encontrada: "Não encontramos esse registro — ele pode ter sido removido.",
+  midia_indisponivel: "O armazenamento de arquivos está temporariamente indisponível. Tente novamente; o arquivo não foi enviado.",
   tarefa_nao_encontrada: "Não encontramos esse registro — ele pode ter sido removido.",
   nota_nao_encontrada: "Não encontramos esse registro — ele pode ter sido removido.",
   etiqueta_nao_encontrada: "Não encontramos esse registro — ele pode ter sido removido.",
