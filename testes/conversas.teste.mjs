@@ -689,7 +689,7 @@ assert.match(comp, /r\.ligar\(ta, `conversa:\$\{idDoCampo\}\$\{modoNota \? ":not
 await teste("M36: o texto vai pela fila (IndexedDB antes do servidor, client_ref por intenção, backoff, online/pulso/20 s) e a falha definitiva guarda o texto", () => {
   const conv = ler("conversas.js"), chat = ler("cv-chat.js");
   assert.match(conv, /indexedDB\.open\(DB_FILA, 1\)/);
-  assert.match(conv, /const persistido = await filaSalvar\(it\);[\s\S]{0,400}transmitir\(it\);\s*\/\/ sem await/, "grava na fila ANTES de transmitir, sem esperar o servidor");
+  assert.match(conv, /(?:const|let) persistido = await filaSalvar\(it\);[\s\S]{0,1400}transmitir\(it\);\s*\/\/ sem await/, "grava na fila ANTES de transmitir, sem esperar o servidor; o trecho offline também pode atualizar o resultado da persistência");
   assert.match(conv, /acao: "texto", conversa: it\.conversa, texto: it\.texto, client_ref: it\.id/, "o MESMO client_ref em toda repetição do item");
   assert.match(conv, /window\.addEventListener\("orbita:online", aoOnline\)/);
   assert.match(conv, /A\.ctx\.rede\.aoVoltar\(\(\) => esvaziarFila\(\{ forcar: true \}\)\)/);

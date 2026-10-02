@@ -300,7 +300,10 @@ async function baixarMidia(link, f) {
   };
   try {
     r = await Promise.race([f(link, { signal: ctl.signal }), prazo]);
-    if (!r.ok) throw new ErroApi("midia_nao_encontrada", 404);
+    if (!r.ok) {
+      if ([408, 425, 429].includes(r.status) || r.status >= 500) throw new ErroApi("midia_indisponivel", 503);
+      throw new ErroApi("midia_nao_encontrada", 404);
+    }
     const declarado = Number(r.headers.get("content-length"));
     if (Number.isFinite(declarado) && declarado > MAX_MIDIA) throw new ErroApi("midia_grande", 400);
     if (!r.body) throw new ErroApi("midia_nao_encontrada", 404);
@@ -323,7 +326,7 @@ async function baixarMidia(link, f) {
   } catch (e) {
     cancelar();
     if (e instanceof ErroApi) throw e;
-    throw new ErroApi("midia_nao_encontrada", 404);
+    throw new ErroApi("midia_indisponivel", 503);
   } finally {
     clearTimeout(timer);
   }
@@ -390,7 +393,7 @@ async function acaoTemplate(db, ctx, corpo, deps) {
       throw new ErroApi("template_invalido", 400, "parâmetros");
     }
     if (cx.contato?.optin_marketing === false && String(tpl.categoria).toUpperCase() === "MARKETING") {
-      throw new ErroApi("template_invalido", 400, "o contato pediu para não receber mensagens de marketing");
+      throw new ErroApi("template_invalido", 400, "é preciso consentimento explícito para mensagens de marketing");
     }
     const cred = await credencial(db, cx.canal_id, cliente);
     if (cred.provedor === "codewords") throw new ErroApi("codewords_tipo_nao_suportado", 400, "modelo");
@@ -540,7 +543,10 @@ async function enviarItem(db, item, creds, rede, prazo = {}) {
       const modelo = item.modelo;
       if (!modelo || modelo.status !== "APPROVED") { await concluir("falhou", "modelo não aprovado ou não encontrado neste número"); return "falhou"; }
       if (item.contato?.optin_marketing === false && String(modelo.categoria).toUpperCase() === "MARKETING") {
-        await concluir("pulado", "contato pediu para não receber mensagens de marketing"); return "pulado";
+        const motivo = item.contato?.optin_marketing === false
+          ? "contato pediu para não receber mensagens de marketing"
+          : "consentimento de marketing não confirmado";
+        await concluir("pulado", motivo); return "pulado";
       }
       const parametros = (Array.isArray(item.template?.parametros) ? item.template.parametros : []).map(p => String(p ?? ""));
       if (parametros.length !== Number(modelo.num_parametros || 0)) { await concluir("falhou", "número de parâmetros não bate com o modelo"); return "falhou"; }

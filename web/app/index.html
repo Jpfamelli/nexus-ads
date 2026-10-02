@@ -12,23 +12,23 @@
   <title>Órbita</title>
   <meta name="description" content="Anúncio, conversa e venda na mesma órbita: CRM, central de WhatsApp oficial e retorno do anúncio.">
   <link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%23FAFAF8'/%3E%3Ccircle cx='24' cy='24' r='8.5' fill='%23B0761F'/%3E%3Cellipse cx='24' cy='24' rx='18' ry='7.5' transform='rotate(-24 24 24)' fill='none' stroke='%230B1B2B' stroke-width='2.2'/%3E%3Ccircle cx='37.3' cy='14' r='3' fill='%236FA3CF'/%3E%3C/svg%3E">
-  <link rel="preload" href="antes.js?v=20261001f" as="script" fetchpriority="high">
+  <link rel="preload" href="antes.js?v=20261002a" as="script" fetchpriority="high">
   <!-- o app.js e os módulos base baixam JUNTOS, sem esperar o app.js executar (mesmo ?v= do app.js; o shell testa a igualdade) -->
-  <link rel="modulepreload" href="app.js?v=20261001f">
-  <link rel="modulepreload" href="../dados.js?v=20261001f">
-  <link rel="modulepreload" href="api.js?v=20261001f">
-  <link rel="modulepreload" href="ui.js?v=20261001f">
-  <link rel="modulepreload" href="tema.js?v=20261001f">
-  <link rel="modulepreload" href="vocab.js?v=20261001f">
-  <link rel="modulepreload" href="rotas.js?v=20261001f">
-  <link rel="modulepreload" href="pulso.js?v=20261001f">
-  <link rel="modulepreload" href="rede.js?v=20261001f">
-  <link rel="modulepreload" href="rascunho.js?v=20261001f">
-  <link rel="modulepreload" href="cache.js?v=20261001f">
-  <link rel="modulepreload" href="comandos.js?v=20261001f">
-  <link rel="modulepreload" href="prontos.js?v=20261001f">
-  <link rel="stylesheet" href="app.css?v=20261001f">
-  <link rel="stylesheet" href="shell.css?v=20261001f">
+  <link rel="modulepreload" href="app.js?v=20261002a">
+  <link rel="modulepreload" href="../dados.js?v=20261002a">
+  <link rel="modulepreload" href="api.js?v=20261002a">
+  <link rel="modulepreload" href="ui.js?v=20261002a">
+  <link rel="modulepreload" href="tema.js?v=20261002a">
+  <link rel="modulepreload" href="vocab.js?v=20261002a">
+  <link rel="modulepreload" href="rotas.js?v=20261002a">
+  <link rel="modulepreload" href="pulso.js?v=20261002a">
+  <link rel="modulepreload" href="rede.js?v=20261002a">
+  <link rel="modulepreload" href="rascunho.js?v=20261002a">
+  <link rel="modulepreload" href="cache.js?v=20261002a">
+  <link rel="modulepreload" href="comandos.js?v=20261002a">
+  <link rel="modulepreload" href="prontos.js?v=20261002a">
+  <link rel="stylesheet" href="app.css?v=20261002a">
+  <link rel="stylesheet" href="shell.css?v=20261002a">
   <link rel="manifest" id="manifest" href="manifest.webmanifest">
   <!-- instalar no iPhone/iPad (o iOS ignora o manifesto para o ícone): valores padrão; o shell troca pelos da marca do cliente -->
   <link rel="apple-touch-icon" id="apple-icone" href="icones/apple-touch-icon.png">
@@ -38,7 +38,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <!-- pinta a marca guardada antes da primeira pintura (a CSP proíbe script inline). Fica por ÚLTIMO no <head>: um script síncrono
        segura o que vem depois dele, e os preloads acima precisam sair junto com o pedido dele, não depois -->
-  <script src="antes.js?v=20261001f"></script>
+  <script src="antes.js?v=20261002a"></script>
 </head>
 <body>
   <!-- ícones (ESPEC §7.3) + marca padrão; tudo em currentColor ou tokens -->
@@ -172,6 +172,6 @@
   <div class="toasts" id="toasts" popover="manual" aria-live="polite"></div>
   <div class="sr-only" id="anuncio" aria-live="polite"></div>
 
-  <script type="module" src="app.js?v=20261001f"></script>
+  <script type="module" src="app.js?v=20261002a"></script>
 </body>
 </html>

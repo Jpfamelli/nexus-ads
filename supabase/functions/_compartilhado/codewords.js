@@ -392,7 +392,11 @@ export function traduzirErroCW(r) {
     return { tipo: "instavel", ambigua: true,
       texto: `O CodeWords falhou (HTTP ${r.status}). A mensagem pode ter saído: confira no celular antes de mandar de novo.` };
   }
-  return { tipo: "recusado", ambigua: false, texto: `O CodeWords recusou o pedido (HTTP ${r?.status ?? "?"}).` };
+  if (r?.status === 400 && /not (on|registered (on|in)) whatsapp|is not a valid whatsapp|no whatsapp account|not found on whatsapp|invalid (phone|jid)|phone.{0,20}invalid/i.test(corpo)) {
+    return { tipo: "sem_whatsapp", ambigua: false, texto: "Esse número não tem WhatsApp ou está errado. Confira o telefone do contato (com DDD) e tente de novo." };
+  }
+  const motivo = texto1(OBJ(r?.dados) ? (r.dados.message ?? r.dados.error ?? r.dados.detail ?? "") : String(r?.texto ?? ""), 120);
+  return { tipo: "recusado", ambigua: false, texto: `O CodeWords recusou o pedido (HTTP ${r?.status ?? "?"})${motivo ? `: ${erroSeguro(motivo)}` : "."}` };
 }
 
 /** Corpo de 200 que diz falha (status/code skip|error|failed, ou campo error). */
@@ -749,10 +753,12 @@ async function acaoMensagem(db, canal, corpo, deps) {
   };
   const r = await db.rpc("nx_wa_entrada", { p_canal: canal.canal_id, p_msg: msg });
   const conversa = r?.conversa_id ?? null;
-  if (r?.duplicada) return { ok: true, conversa_id: conversa, registrada: false, responder: false, motivo: "duplicada" };
   if (r?.bloqueado) return { ok: true, conversa_id: conversa, registrada: !!r?.mensagem_id, responder: false, motivo: "bloqueado" };
   try { await registrarLead(db, canal.cliente_id, p.telefone, p.nome, p.referral); }
   catch (e) { console.error("nx-codewords lead:", erroSeguro(e?.message || e)); }   // a conversa já está gravada
+  // a conversação pode existir enquanto a gravação do lead falhou em tentativa anterior:
+  // o evento repetido refaz o upsert idempotente e só então para, sem chamar a IA.
+  if (r?.duplicada) return { ok: true, conversa_id: conversa, registrada: false, responder: false, motivo: "duplicada" };
   // código do site na mensagem → origem/campanha/gclid do negócio (não derruba o atendimento se falhar)
   const codigo = extrairCodigoRastreio(p.texto);
   if (codigo) {

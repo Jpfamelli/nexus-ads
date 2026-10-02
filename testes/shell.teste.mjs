@@ -188,7 +188,7 @@ function criarMundoSW({ versao = "V1", site = "http://site.test", escopo = "/app
     addEventListener: (t, fn) => { ouvintes[t] = fn; },
   };
   const relogioCurto = (fn, ms) => setTimeout(fn, Math.min(ms, 15));
-  runInNewContext(SW_TXT, { self: self_, caches: cachesFalso, fetch: fetchFalso, Request, Response, URL, URLSearchParams, Promise, setTimeout: relogioCurto, clearTimeout, console });
+  runInNewContext(SW_TXT, { self: self_, caches: cachesFalso, fetch: fetchFalso, Request, Response, URL, URLSearchParams, Promise, AbortController, setTimeout: relogioCurto, clearTimeout, console });
   const evento = extra => { const pend = []; return { ...extra, respondWith(p) { this.resposta = p; }, waitUntil(p) { pend.push(p); }, async fim() { await Promise.all(pend); } }; };
   const req = (url, extra = {}) => ({ method: "GET", url: `${site}${url}`, mode: "cors", headers: new Headers(), ...extra });
   return { armazem, cachesFalso, chamadas, ouvintes, state, evento, req, site, escopo };
@@ -269,17 +269,35 @@ await teste("sw.js: install guarda os arquivos que o index.html do ar lista (ess
   await assert.rejects(ev.fim(), /shell_incompleto/, "sem o app.js a instalação falha (tenta de novo depois) em vez de guardar um shell quebrado");
 });
 
-await teste("sw.js: activate apaga só caches de versões antigas do próprio prefixo e assume as abas; skipWaiting só pela mensagem", async () => {
-  const m = criarMundoSW({ versao: "V2" });
-  await m.cachesFalso.open("orbita-shell-V1"); await m.cachesFalso.open("orbita-shell-V2"); await m.cachesFalso.open("outro-app-cache");
+await teste("sw.js: activate conserva a versão atual + duas anteriores para abas abertas; remove versões mais antigas", async () => {
+  const m = criarMundoSW({ versao: "V5" });
+  for (const v of ["V0", "V1", "V2", "V3", "V4", "V5"]) await m.cachesFalso.open(`orbita-shell-${v}`);
+  await m.cachesFalso.open("outro-app-cache");
   const ev = m.evento({}); m.ouvintes.activate(ev); await ev.fim();
-  assert.deepEqual([...m.armazem.keys()].sort(), ["orbita-shell-V2", "outro-app-cache"]);
+  assert.deepEqual([...m.armazem.keys()].sort(), ["orbita-shell-V3", "orbita-shell-V4", "orbita-shell-V5", "outro-app-cache"]);
   assert.equal(m.state.claim, true);
   assert.equal(m.state.pulou, false, "nada de skipWaiting sozinho");
   m.ouvintes.message(m.evento({ data: { tipo: "qualquer" } }));
   assert.equal(m.state.pulou, false);
   m.ouvintes.message(m.evento({ data: { tipo: "pular" } }));
   assert.equal(m.state.pulou, true, "só com a mensagem pular");
+});
+
+await teste("sw.js: fetch que não responde é abortado; navegação e recurso sem cache devolvem fallback limitado", async () => {
+  const preso = criarMundoSW({ resposta: () => new Promise(() => {}) });
+  const nav = preso.evento({ request: preso.req("/app/", { mode: "navigate" }) }); preso.ouvintes.fetch(nav);
+  assert.equal((await nav.resposta).status, 503, "sem shell guardado termina com a tela offline após o prazo");
+  const asset = preso.evento({ request: preso.req("/app/crm.js?v=V1") }); preso.ouvintes.fetch(asset);
+  assert.equal((await asset.resposta).status, 503, "módulo sem cache também não fica carregando para sempre");
+});
+
+await teste("sw.js: precache opcional com servidor travado encerra no prazo", async () => {
+  const m = criarMundoSW({ resposta: url => url.endsWith("/app/index.html")
+    ? new Response('<script type="module" src="app.js?v=V1"></script>', { status: 200, headers: { "content-type": "text/html" } })
+    : new Promise(() => {}) });
+  const ev = m.evento({ data: { tipo: "precache", urls: [`${m.site}/app/crm.js?v=V1`] } });
+  m.ouvintes.message(ev);
+  await Promise.race([ev.fim(), new Promise((_, rej) => setTimeout(() => rej(new Error("precache travou")), 100))]);
 });
 
 await teste("sw.js: mensagem precache guarda só arquivo versionado do mesmo site (nada de outro domínio, nada sem ?v=)", async () => {
@@ -1259,6 +1277,21 @@ function apiComCache({ rede, cacheado = null, esperaCache = 0, extra = {} }) {
   const api = API.criarApi({ url: "https://x.test", chave: "k", token: () => "t", cliente: () => "e1", conta: () => "c1", cache, fetch: fetchFalso, contexto: true, aoCache: ev => eventos.push("selo:" + ev.fase + (ev.ok === false ? ":falhou" : "")), ...extra });
   return { api, eventos, chamadas };
 }
+
+await teste("cache.js: IndexedDB travado tem prazo curto, cache degrada para memória e a transação atrasada é abortada", async () => {
+  const abertoTravado = CACHE.criarArmazemIDB({ open: () => ({}) }, { prazoMs: 8 });
+  assert.equal(await abertoTravado.ler("x"), null, "open que nunca responde não segura o boot");
+
+  let abortou = false;
+  const db = { transaction() { return { objectStore: () => ({ get: () => ({}) }), abort() { abortou = true; this.onabort?.(); } }; } };
+  const idb = { open() { const r = {}; queueMicrotask(() => { r.result = db; r.onsuccess?.(); }); return r; } };
+  const armazem = CACHE.criarArmazemIDB(idb, { prazoMs: 8 });
+  assert.equal(await armazem.ler("x"), null, "transação sem evento termina como miss de cache");
+  assert.equal(abortou, true, "aborta a transação presa para evitar trabalho pendente");
+  const memoria = CACHE.criarCache({ armazem: abertoTravado, varrer: false });
+  assert.equal(await memoria.gravar("c:e:nx_inicio:0", "nx_inicio", { n: 7 }), true);
+  assert.deepEqual((await memoria.ler("c:e:nx_inicio:0")).dados, { n: 7 });
+});
 
 await teste("api.js (cache): serve o guardado ANTES da rede (aoCache), devolve o da rede, atualiza o cache e avisa o selo", async () => {
   const x = apiComCache({ rede: async () => { await new Promise(r => setTimeout(r, 30)); return { status: 200, corpo: { v: "rede" } }; }, cacheado: { dados: { v: "cache" }, em: 1234 } });

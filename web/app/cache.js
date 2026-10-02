@@ -21,6 +21,7 @@ export const TETO_ENTRADAS = 200;                  // cada filtro do Kanban e ca
 export const TETO_TOTAL_BYTES = 20 * 1024 * 1024;
 export const VARRER_A_CADA_MS = 3600 * 1000;
 export const VARRER_AO_ABRIR_MS = 5000;            // a 1ª varredura espera a abertura do app terminar (ela percorre o banco inteiro)
+export const PRAZO_IDB_MS = 1800;                   // cache local é opcional; uma aba não pode esperar um IndexedDB preso
 
 /** O que PODE ficar no aparelho (lista branca). Qualquer RPC fora daqui nunca é guardada, mesmo que a tela peça. */
 export const CACHEAVEIS = Object.freeze(new Set([
@@ -65,39 +66,54 @@ const REDUTORES = {
 export function reduzir(nome, dados) { const f = REDUTORES[nome]; return f ? f(dados) : dados; }
 
 /** Armazém sobre IndexedDB (uma loja «rpc» com chave `k`). Devolve null se o navegador não deixar abrir. */
-export function criarArmazemIDB(idb = globalThis.indexedDB) {
+export function criarArmazemIDB(idb = globalThis.indexedDB, { prazoMs = PRAZO_IDB_MS } = {}) {
   if (!idb || typeof idb.open !== "function") return null;
+  const prazo = Math.max(1, Number(prazoMs) || PRAZO_IDB_MS);
   let dbP = null;
   const abrir = () => {
     if (dbP) return dbP;
-    dbP = new Promise(resolve => {
+    let p;
+    const abertura = new Promise(resolve => {
+      let fim = false, timer;
+      const concluir = db => {
+        if (fim) { try { db?.close?.(); } catch { /* abertura tardia */ } return; }
+        fim = true; clearTimeout(timer); resolve(db || null);
+      };
+      timer = setTimeout(() => concluir(null), prazo);
       let req;
-      try { req = idb.open(NOME_BANCO, VERSAO_FORMATO); } catch { resolve(null); return; }
+      try { req = idb.open(NOME_BANCO, VERSAO_FORMATO); } catch { concluir(null); return; }
       req.onupgradeneeded = () => { try { if (!req.result.objectStoreNames.contains("rpc")) req.result.createObjectStore("rpc", { keyPath: "k" }); } catch { /* ok */ } };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => resolve(null);
-      req.onblocked = () => resolve(null);
+      req.onsuccess = () => concluir(req.result);
+      req.onerror = req.onblocked = () => concluir(null);
     });
-    return dbP;
+    p = abertura.then(db => { if (!db && dbP === p) dbP = null; return db; });
+    dbP = p;
+    return p;
   };
   const operar = async (modo, fn) => {
     const db = await abrir();
     if (!db) return null;
     return new Promise(resolve => {
+      let tx = null, terminou = false;
+      const concluir = v => { if (terminou) return; terminou = true; clearTimeout(timer); resolve(v); };
+      const timer = setTimeout(() => {
+        concluir(null);
+        try { tx?.abort?.(); } catch { /* já terminou */ }
+      }, prazo);
       try {
-        const tx = db.transaction("rpc", modo);
+        tx = db.transaction("rpc", modo);
         const loja = tx.objectStore("rpc");
         let resultado = null;
         const r = fn(loja, v => { resultado = v; });
         if (r) { r.onsuccess = () => { resultado = r.result; }; r.onerror = () => { resultado = null; }; }
-        tx.oncomplete = () => resolve(resultado);
-        tx.onerror = tx.onabort = () => resolve(null);
-      } catch { resolve(null); }
+        tx.oncomplete = () => concluir(resultado);
+        tx.onerror = tx.onabort = () => concluir(null);
+      } catch { concluir(null); }
     });
   };
   return {
     ler: k => operar("readonly", l => l.get(k)).then(v => (v && v.k === k ? v : null)),
-    gravar: (k, valor) => operar("readwrite", l => l.put({ k, ...valor })).then(() => true),
+    gravar: (k, valor) => operar("readwrite", l => l.put({ k, ...valor })).then(v => v !== null),
     apagar: k => operar("readwrite", l => l.delete(k)).then(() => true),
     limpar: () => operar("readwrite", l => l.clear()).then(() => true),
     /** O que há guardado, sem os dados: [{k, v, em, bytes}] (a varredura decide o que sai). */

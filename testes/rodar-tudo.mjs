@@ -13,6 +13,7 @@ const comandos = [
   ["testes/crm.teste.mjs"],
   ["testes/conversas.teste.mjs"],
   ["testes/relatorios.teste.mjs"],
+  ["--test", "testes/melhorias-20261002.teste.mjs"],
   ["testes/shell.teste.mjs"],
   ["--test", "testes/funcoes.teste.mjs"],
   ["--test", "testes/scripts.teste.mjs"],

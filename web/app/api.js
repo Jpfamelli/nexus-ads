@@ -58,6 +58,7 @@ export const MENSAGENS = {
   canal_nao_encontrado: "Não encontramos esse registro — ele pode ter sido removido.",
   mensagem_nao_encontrada: "Não encontramos esse registro — ele pode ter sido removido.",
   midia_nao_encontrada: "Não encontramos esse registro — ele pode ter sido removido.",
+  midia_indisponivel: "O armazenamento de arquivos está temporariamente indisponível. Tente novamente; o arquivo não foi enviado.",
   tarefa_nao_encontrada: "Não encontramos esse registro — ele pode ter sido removido.",
   nota_nao_encontrada: "Não encontramos esse registro — ele pode ter sido removido.",
   etiqueta_nao_encontrada: "Não encontramos esse registro — ele pode ter sido removido.",
@@ -406,7 +407,7 @@ export function criarApi(o) {
   /** Resultado FINAL da chamada para o estado de conexão: 502/503/504 e falha de transporte = servidor fora; qualquer outra resposta prova que ele responde. */
   function relatarErro(e) {
     if (e.codigo === "sem_conexao" || e.codigo === "tempo_rede") avisarRede("falha", { codigo: e.codigo });
-    else if ([502, 503, 504].includes(Number(e.status))) avisarRede("falha", { codigo: `http_${e.status}`, status: e.status });
+    else if ([502, 503, 504].includes(Number(e.status)) && e.codigo !== "midia_indisponivel") avisarRede("falha", { codigo: `http_${e.status}`, status: e.status });   // um arquivo que não baixou não é «servidor fora»
     else avisarRede("sucesso");
   }
 

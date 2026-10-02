@@ -347,6 +347,26 @@ test("agente mensagem (entrada): grava por nx_wa_entrada no canal DO SEGREDO, cr
   assert.ok(!c.instrucoes.includes("Oi, quero marcar"), "o histórico vai separado, como dado");
 });
 
+test("CodeWords: repetição do webhook repara lead do CRM que falhou na primeira entrega", async () => {
+  let jaEntrou = false, falhasLead = 1, chamadasLead = 0;
+  const s = cenario({ rpc: {
+    nx_wa_entrada: () => {
+      if (jaEntrou) return { conversa_id: 601, duplicada: true, bloqueado: false };
+      jaEntrou = true;
+      return { mensagem_id: 7001, conversa_id: 601, contato_id: 501, duplicada: false, bloqueado: false, optout: false, fila_id: null };
+    },
+    nx_lead_webhook: () => { chamadasLead++; if (falhasLead-- > 0) throw new Error("falha transitória do CRM"); return "criado"; },
+  } });
+  const msg = { acao: "mensagem", telefone: TEL, texto: "Quero marcar", nome: "Paula", message_id: "RETRY-CRM-1", direcao: "entrada",
+    referral: { source_type: "ad", source_id: "AD-1", ctwa_clid: "CL1" } };
+  assert.equal((await ler(await agente(s, msg))).corpo.registrada, true);
+  assert.equal(chamadasLead, 1);
+  const repetida = await ler(await agente(s, msg));
+  assert.equal(repetida.corpo.motivo, "duplicada");
+  assert.equal(chamadasLead, 2, "webhook repetido refaz o upsert idempotente do lead");
+  assert.equal(s.rpcsDe("nx_codewords_decidir").length, 1, "não roda a IA de novo para mensagem duplicada");
+});
+
 test("E2E fictício: anúncio → conversa → agenda → resposta CodeWords → venda manual no CRM → receita no Ads", async () => {
   // Banco, provedor e modelo são determinísticos e locais; nenhum serviço externo é chamado.
   const telefone = "5512990007700", idContato = 99001, idConversa = 99002, idNegocio = 99003;
@@ -457,7 +477,7 @@ test("agente mensagem: resposta curta quando NÃO responde (pausada, limite, IA 
   let s = cenario({ rpc: { nx_wa_entrada: () => ({ mensagem_id: null, conversa_id: 601, duplicada: true }) } });
   let r = await ler(await agente(s, { telefone: TEL, texto: "oi", message_id: "M1" }));
   assert.deepEqual(r.corpo, { ok: true, conversa_id: 601, registrada: false, responder: false, motivo: "duplicada" });
-  assert.equal(s.rpcsDe("nx_codewords_decidir").length, 0); assert.equal(s.rpcsDe("nx_lead_webhook").length, 0);
+  assert.equal(s.rpcsDe("nx_codewords_decidir").length, 0); assert.equal(s.rpcsDe("nx_lead_webhook").length, 1, "a repetição ainda tenta reparar o lead");
   s = cenario({ rpc: { nx_wa_entrada: () => ({ mensagem_id: 9, conversa_id: 605, bloqueado: true }) } });
   r = await ler(await agente(s, { telefone: TEL, texto: "oi" }));
   assert.equal(r.corpo.motivo, "bloqueado"); assert.equal(s.rpcsDe("nx_lead_webhook").length, 0, "bloqueado não vira lead");

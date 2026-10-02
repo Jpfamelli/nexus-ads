@@ -525,6 +525,12 @@ async function carregarEstadoIA(id = A?.selId, seq = A?.seqConversa) {
 }
 
 /** Delta da conversa aberta (cursor duplo: id > último visto OU atualizado nos últimos 30 s do servidor). */
+/** Bolha local de mídia cujo arquivo já veio numa mensagem gravada pelo servidor: vale a do servidor (o path é único por upload). */
+function descartarMidiaLocalGravada() {
+  if (!A) return;
+  const gravados = new Set(A.msgs.filter(m => !m.local && m.midia && m.midia.path).map(m => m.midia.path));
+  if (gravados.size) A.msgs = A.msgs.filter(m => !(m.local && m.pedido && m.pedido.path && gravados.has(m.pedido.path)));
+}
 async function delta() {
   if (!A || !A.selId || !A.ver) return;
   const id = A.selId, seq = A.seqConversa;
@@ -534,6 +540,7 @@ async function delta() {
     const antes = A.msgs.length;
     const tinhaUlt = A.L.ultimoId(A.msgs);
     A.msgs = A.L.mesclarDelta(A.msgs, r.itens || []);
+    descartarMidiaLocalGravada();
     A.conversasContato = r.conversas || A.conversasContato;
     A.agora = r.agora || A.agora;
     A.ultimoId = r.ultimo_id ?? A.L.ultimoId(A.msgs, A.ultimoId);
@@ -591,6 +598,7 @@ async function carregarAntes() {
     const r = await A.api.rpcC("nx_cv_mensagens", { p_conversa: id, p_antes_id: primeira.id, p_limite: 50 });
     if (!A || A.selId !== id) return;
     A.msgs = A.L.mesclarDelta(A.msgs, r.itens || []);
+    descartarMidiaLocalGravada();
     A.temMaisAntes = !!r.tem_mais;
     A.conversasContato = r.conversas || A.conversasContato;
     A.chat.renderMensagens({ rolar: "anterior" });
@@ -1193,8 +1201,8 @@ async function enviarPedido(tmp, o) {
       await delta();
       if (!A || A.selId !== convId) return;
       const encontrada = A.msgs.find(m => Number(m.id) > antesId && m.direcao === "out" &&
-        (m.status === "falhou" || (envioAmbiguo && m.status === "pendente")));
-      if (encontrada && envioAmbiguo) {
+        ((o.path && m.midia && m.midia.path === o.path) || m.status === "falhou" || (envioAmbiguo && m.status === "pendente")));
+      if (encontrada && envioAmbiguo && encontrada.status === "pendente") {
         A.msgs = A.msgs.map(m => m.id === encontrada.id ? { ...m, ambigua: true } : m);
       } else if (!encontrada) {
         A.msgs = L.mesclarDelta(A.msgs, [{ ...tmp, status: envioAmbiguo ? "pendente" : "falhou",
@@ -1467,11 +1475,24 @@ async function enviarTexto(o) {
     criada_em: Date.now(), tentativas: 0, proxima_em: 0, enviada_em: 0, estado: "fila", motivo: null,
     para: nomeContato(A.ver.contato || conv.contato) || null,      // para o aviso «Mensagem para Mariana não foi enviada» quando a conversa já não é a aberta
     reenvio: o.reenvio || null };                                    // «Tentar de novo» de uma falha gravada pelo servidor: id da mensagem a reenviar
-  const persistido = await filaSalvar(it);
+  let persistido = await filaSalvar(it);
   A.msgs = L.mesclarDelta(A.msgs, [bolhaDeItem(it)]);
   A.chat.renderMensagens({ rolar: "fim" });
   const offline = A.ctx.rede ? A.ctx.rede.estado === "offline" : (typeof navigator !== "undefined" && navigator.onLine === false);
-  if (offline) { it.motivo = "Sem internet: a mensagem espera na fila."; it.proxima_em = Date.now() + 20000; await filaSalvar(it); atualizarBolha(it); }
+  if (offline) {
+    it.motivo = "Sem internet: a mensagem espera na fila.";
+    it.proxima_em = Date.now() + 20000;
+    persistido = (await filaSalvar(it)) || persistido;
+    if (!persistido) {
+      await filaRemover(it.id);          // sai também da fila em memória: senão a mensagem «não guardada» é enviada sozinha quando a rede volta
+      A.msgs = A.msgs.filter(m => m.ref !== it.id);
+      A.chat.renderMensagens({ rolar: "manter" });
+      if (A.composer && A.selId === it.conversa && typeof A.composer.devolverTexto === "function") A.composer.devolverTexto(it.texto);
+      A.ui.toast("Sem conexão: não foi possível guardar a mensagem neste aparelho. O texto continua no campo; tente novamente.", { tipo: "erro", ms: 9000 });
+      return { persistido: false };
+    }
+    atualizarBolha(it);
+  }
   else transmitir(it);          // sem await: a tela não espera o servidor
   return { persistido };
 }

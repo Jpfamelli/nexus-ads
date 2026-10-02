@@ -1,9 +1,7 @@
 # Funções publicadas pela tag funcoes-* (uma por linha; ver docs/orbita/DEPLOY-FUNCOES.md).
-# R122 (01/10/2026, tag funcoes-20261001-5, commit 0583e2f): mídia CodeWords; as sete funções ACTIVE.
-# Versões após a publicação: nx-whatsapp v9, nx-relatorio v6, nx-ciclo v6, nx-enviar v8, nx-midia v5, nx-ia v6, nx-codewords v7.
-# Rodada de 01/10/2026 à tarde (R119, tag funcoes-20261001-4): as 7 juntas. nx-enviar leva a reserva do client_ref antes do envio
-# (migração 20261002d, aplicada em 01/10 19:39 UTC); nx-ciclo, nx-relatorio e nx-whatsapp levam o web/nucleo.js novo e as correções
-# do backend que ainda só estavam no repositório (comum.js, drenagem de corpo). Migrações 20261002b/c/d já aplicadas.
+# Rodada de 02/10/2026 (tag funcoes-20261002-1): PR #5 revisado. nx-enviar volta à regra de consentimento que estava no ar (só quem pediu
+# SAIR é bloqueado) e codewords.js explica o HTTP 400 do aparelho («número sem WhatsApp»). Migração 20261003a (gêmea de mídia) já aplicada
+# em 02/10 22:09 UTC. As 7 vão juntas (todas carregam codewords.js/enviar.js/comum.js).
 # NÃO publicar nx-ciclo/nx-relatorio no dia 1º perto das 12:00 UTC (relatório mensal). Depois de publicar: conferir o ciclo das :07 e o relatório das 8h.
 nx-ia
 nx-codewords

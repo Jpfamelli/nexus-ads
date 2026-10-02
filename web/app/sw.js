@@ -6,7 +6,7 @@
    - Navegação (abrir o app, recarregar): rede primeiro, com 3 s de prazo; estourou ou está offline, entrega o index.html guardado.
    - Arquivo do próprio site com ?v= (módulos, CSS, ícones) e /fonts/*: cache primeiro, chave = URL completa. Como cada versão tem URLs
      próprias, uma aba antiga continua achando os arquivos da versão dela (não mistura agenda.js novo com ui.js antigo).
-   - O cache tem o nome da versão (orbita-shell-<v>); a versão vem do ?v= do próprio sw.js. Versões antigas são apagadas no activate.
+   - O cache tem o nome da versão (orbita-shell-<v>); a versão vem do ?v= do próprio sw.js. Mantém a atual + 2 anteriores para abas antigas.
    - Instalação: o index.html do ar diz quais arquivos formam o shell (links e scripts dele); não há lista para esquecer de atualizar.
      A página manda o resto por mensagem ({tipo:"precache", urls:[…]}): telas e CSS que ainda não foram abertas.
    - Nunca chama skipWaiting sozinho: só com a mensagem {tipo:"pular"} (o clique em «Atualizar» ou a regra de ociosidade do pwa.js).
@@ -29,12 +29,22 @@ const VERSAO = (() => { try { return new URL(self.location.href).searchParams.ge
 const PREFIXO = "orbita-shell-";
 const NOME_CACHE = PREFIXO + VERSAO;
 const PRAZO_REDE_MS = 3000;
+const PRAZO_ARQUIVO_MS = 8000;
 const MAX_PRECACHE = 250;
 const ESCOPO = new URL(self.registration.scope);
 const URL_INDEX = new URL("index.html", ESCOPO).href;      // a navegação cai aqui, qualquer que seja a query (?produto=, ?org=)
 
 function mesmoSite(url) { return url.origin === self.location.origin; }
 function dentroDoEscopo(url) { return mesmoSite(url) && url.pathname.startsWith(ESCOPO.pathname); }
+
+/** Um fetch preso não deve impedir instalação, precache ou carregamento de um módulo. */
+async function fetchComPrazo(recurso, ms, opcoes = {}) {
+  const ctl = new AbortController();
+  let timer, expirou = false;
+  const limite = new Promise((_, rejeita) => { timer = setTimeout(() => { expirou = true; ctl.abort(); rejeita(new Error("rede_sem_resposta")); }, ms); });
+  try { return await Promise.race([fetch(recurso, { ...opcoes, signal: ctl.signal }), limite]); }
+  finally { clearTimeout(timer); if (expirou) { try { ctl.abort(); } catch { /* já cancelado */ } } }
+}
 /** O que vale guardar para sempre sob a URL completa: arquivos versionados, fontes e ícones. */
 function versionado(url) {
   if (!mesmoSite(url)) return false;
@@ -46,7 +56,7 @@ function versionado(url) {
 
 /** Arquivos do shell = os links e scripts do index.html que está no ar agora. */
 async function urlsDoShell() {
-  const r = await fetch(new Request(URL_INDEX, { cache: "no-store" }));
+  const r = await fetchComPrazo(new Request(URL_INDEX, { cache: "no-store" }), PRAZO_ARQUIVO_MS);
   if (!r.ok) throw new Error("index_indisponivel");
   const html = await r.clone().text();
   const urls = new Set();
@@ -59,7 +69,7 @@ async function urlsDoShell() {
 async function guardar(cache, url) {
   try {
     if (await cache.match(url)) return true;
-    const r = await fetch(new Request(url, { cache: "reload" }));
+    const r = await fetchComPrazo(new Request(url, { cache: "reload" }), PRAZO_ARQUIVO_MS);
     if (r && r.ok) { await cache.put(url, r.clone()); return true; }
   } catch (e) { /* offline ou arquivo ausente: a instalação não depende dele */ }
   return false;
@@ -81,7 +91,9 @@ self.addEventListener("install", ev => {
 
 self.addEventListener("activate", ev => {
   ev.waitUntil((async () => {
-    for (const nome of await caches.keys()) if (nome.startsWith(PREFIXO) && nome !== NOME_CACHE) await caches.delete(nome);
+    const versoes = (await caches.keys()).filter(nome => nome.startsWith(PREFIXO) && nome !== NOME_CACHE).sort();
+    const manter = new Set([NOME_CACHE, ...versoes.slice(-2)]);
+    for (const nome of versoes) if (!manter.has(nome)) await caches.delete(nome);
     await self.clients.claim();
   })());
 });
@@ -92,30 +104,38 @@ const PAGINA_OFFLINE = "<!doctype html><meta charset=\"utf-8\"><meta name=\"view
 
 async function navegacao(ev) {
   const cache = await caches.open(NOME_CACHE);
-  const rede = fetch(ev.request).then(async r => {
+  const rede = fetch(ev.request).then(async r => {   // sem abortar: estourado o prazo, a resposta ainda atualiza o shell guardado
     // só guarda página de verdade: HTML e 200 (um redirecionamento ou erro nunca vira o "shell offline")
     if (r && r.ok && !r.redirected && /text\/html/i.test(r.headers.get("content-type") || "")) { try { await cache.put(URL_INDEX, r.clone()); } catch (e) { /* cheio */ } }
     return r;
   });
   ev.waitUntil(rede.then(() => null, () => null));
-  let prazo;
-  const limite = new Promise(ok => { prazo = setTimeout(() => ok(null), PRAZO_REDE_MS); });
-  try {
-    const r = await Promise.race([rede, limite]);
-    if (r) return r;
-  } catch (e) { /* offline: cai no que está guardado */ } finally { clearTimeout(prazo); }
+  const ate = ms => { let t; return Promise.race([rede, new Promise(ok => { t = setTimeout(() => ok(null), ms); })]).finally(() => clearTimeout(t)); };
+  try { const r = await ate(PRAZO_REDE_MS); if (r) return r; } catch (e) { /* offline: cai no que está guardado */ }
   const guardada = await cache.match(URL_INDEX);
   if (guardada) return guardada;
-  try { return await rede; } catch (e) { /* sem cache e sem rede */ }
+  // sem shell guardado, a rede lenta ainda pode atender: espera mais um pouco antes da tela «Sem conexão»
+  try { const r = await ate(PRAZO_ARQUIVO_MS); if (r) return r; } catch (e) { /* sem cache e sem rede */ }
   return new Response(PAGINA_OFFLINE, { status: 503, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+
+/** Aba antiga: o arquivo da versão dela está num dos caches anteriores que o activate conserva. */
+async function acharEmVersoesAnteriores(url) {
+  for (const nome of (await caches.keys()).filter(n => n.startsWith(PREFIXO) && n !== NOME_CACHE).sort().reverse()) {
+    const r = await (await caches.open(nome)).match(url);
+    if (r) return r;
+  }
+  return undefined;
 }
 
 async function cachePrimeiro(ev) {
   const cache = await caches.open(NOME_CACHE);
   const url = ev.request.url;
-  const achado = await cache.match(url);
+  const achado = await cache.match(url) || await acharEmVersoesAnteriores(url);
   if (achado) return achado;
-  const r = await fetch(ev.request);
+  let r;
+  try { r = await fetchComPrazo(ev.request, PRAZO_ARQUIVO_MS); }
+  catch { return new Response("Recurso temporariamente indisponível. Tente novamente.", { status: 503, headers: { "content-type": "text/plain; charset=utf-8" } }); }
   if (r && r.ok && r.type !== "opaque") ev.waitUntil(cache.put(url, r.clone()).catch(() => null));
   return r;
 }

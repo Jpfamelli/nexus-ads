@@ -178,8 +178,6 @@ export async function montar(ctx) {
       trocar();
       return;
     }
-    if (onbRes) corpo.append(cartaoChecklist(onbRes));
-
     // ---- blocos (cada um é uma função: a ordem e o que fica recolhido vêm de L.blocosInicio)
     const numLink = (valor, rot, hash, k, destaque, chave) => {
       const conteudo = [num(valor, int, `ini-n${destaque ? " ini-n-destaque" : ""}`, chave), h("span", { class: "ini-n-l" }, rot)];
@@ -290,6 +288,8 @@ export async function montar(ctx) {
       det.addEventListener("toggle", () => { maisAberto = det.open; });
       corpo.append(det);
     }
+    // O atendimento e as tarefas abertas têm prioridade sobre o checklist de configuração.
+    if (onbRes) corpo.append(cartaoChecklist(onbRes));
 
     // o número que mudou desde a última leitura acende (resposta ao dado)
     if (antes) for (const chave of L.numerosMudaram(antes, d)) { const el = corpo.querySelector(`[data-n="${chave}"]`); if (el) G.destacar(el); }

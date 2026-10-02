@@ -840,6 +840,20 @@ test("webhook (4) M3: anúncio no 2º número do cliente → nx_lead_webhook com
   assert.equal(ent.params.p_msg.referral.source_id, "AD-1");
 });
 
+test("webhook Meta: referral desconhecido conserva origem Meta e id do anúncio sem campanha ainda sincronizada", async () => {
+  const s = cenario();
+  s.tab("nx_metricas_dia").length = 0;
+  const p = valor("112", { contacts: contato("5512944443333", "Ana Lead"), messages: [texto("5512944443333", "vim pelo anúncio", {
+    referral: { source_type: "ad", source_id: "AD-AINDA-NAO-SINCRONIZADO", ctwa_clid: "CLID-UNKNOWN" },
+  })] });
+  const r = await ler(await webhook(postWebhook(p), ENV, s.deps()));
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.criado, 1);
+  assert.deepEqual(s.rpcs("nx_lead_webhook")[0].params.p_atr, {
+    origem: "anuncio", plataforma: "meta", anuncio_ext: "AD-AINDA-NAO-SINCRONIZADO", campanha_ext: null, ctwa_clid: "CLID-UNKNOWN",
+  });
+});
+
 test("webhook (5): recibo com wamid de OUTRO canal → ignorados; do próprio canal → nx_wa_status atualiza", async () => {
   const s = cenario();
   // wamid.OUT-A1 é do canal A1; o recibo vem pelo número A2 (mesmo cliente)
@@ -1354,12 +1368,12 @@ test("nx-enviar mídia CodeWords: arquivo que não baixa, vazio ou acima de 16 M
   // 1. ainda não está no Storage (não assina)
   let r = await pedir();
   assert.equal(r.status, 404); assert.equal(r.corpo.erro, "midia_nao_encontrada"); semReserva();
-  // 2. assinou, mas o download falha (Storage fora do ar / rede)
+  // 2. assinou, mas o download falha (Storage fora do ar / rede): erro transitório, nunca "arquivo removido"
   s.estado.arquivos.set(path, { bytes: PDF, mime: "application/pdf" });
   for (const falha of [() => jsonResp({ message: "indisponível" }, 503), () => { throw new Error("socket hang up"); }]) {
     s.estado.downloadHandler = falha;
     r = await pedir();
-    assert.equal(r.status, 404); assert.equal(r.corpo.erro, "midia_nao_encontrada"); semReserva();
+    assert.equal(r.status, 503); assert.equal(r.corpo.erro, "midia_indisponivel"); semReserva();
   }
   // 3. arquivo vazio (o upload não terminou)
   s.estado.downloadHandler = () => new Response(new Uint8Array(0), { status: 200 });
@@ -1805,8 +1819,17 @@ test("nx-enviar template: parâmetros no corpo da Graph; corpo gravado com os pa
   s.tab("nx_templates").find(t => t.id === "tpl-promo").id = P;
   const mk = await ler(await enviar(painel("nx-enviar", { acao: "template", conversa: 602, template_id: P, parametros: [] }), ENV, s.deps()));
   assert.equal(mk.corpo.erro, "template_invalido");
-  assert.match(mk.corpo.detalhe, /não receber mensagens de marketing/);
+  assert.match(mk.corpo.detalhe, /consentimento explícito/);
   assert.equal(s.estado.graph.length, n);
+  // consentimento DESCONHECIDO (nulo, o padrão de quem chega pelo WhatsApp) não bloqueia: só quem pediu SAIR (false). Mudar isso é decisão do dono,
+  // e teria de vir junto com a tela (cv-logica.js só bloqueia optin === false) e com a automação SQL.
+  s.tab("nx_contatos").find(c => c.id === 502).optin_marketing = null;
+  const consentimentoDesconhecido = await ler(await enviar(painel("nx-enviar", { acao: "template", conversa: 602, template_id: P, parametros: [] }), ENV, s.deps()));
+  assert.equal(consentimentoDesconhecido.corpo.ok, true, "consentimento desconhecido continua permitido (regra que já estava no ar)");
+  s.tab("nx_contatos").find(c => c.id === 502).optin_marketing = true;
+  const consentido = await ler(await enviar(painel("nx-enviar", { acao: "template", conversa: 602, template_id: P, parametros: [] }), ENV, s.deps()));
+  assert.equal(consentido.corpo.ok, true, "opt-in explícito continua permitido");
+  assert.equal(s.estado.graph.length, n + 2, "os dois envios permitidos (consentimento desconhecido e explícito) foram à Graph");
   assert.equal(aplicarParametros("Oi {{nome}}, {{nome}} dia {{data}}", ["Ana", "3"]), "Oi Ana, Ana dia 3");
   assert.deepEqual(parametrosDoCorpo("{{2}} e {{1}}"), ["1", "2"]);
 });
@@ -2004,6 +2027,19 @@ test("nx-enviar cron fila: pula texto fora da janela, envia modelo, pula marketi
   assert.equal(saida.origem, "automacao");
   // a falha também vira mensagem 'falhou' na conversa (o atendente vê o "!")
   assert.equal(s.tab("nx_mensagens").find(m => m.id === f(5).mensagem_id).status, "falhou");
+});
+
+test("nx-enviar cron: marketing com consentimento nulo segue a regra que estava no ar: é enviado (só quem pediu SAIR é pulado)", async () => {
+  const s = cenario();
+  const promo = "7e7e7e7e-0000-4000-8000-000000000003";
+  s.tab("nx_templates").find(t => t.id === "tpl-promo").id = promo;
+  s.tab("nx_contatos").find(c => c.id === 501).optin_marketing = null;
+  s.tab("nx_envios_fila").push({ id: 1, cliente_id: CLI_A, conversa_id: 601, contato_id: 501, canal_id: K_A1, tipo: "template", texto: null,
+    template: { nome: "promo", idioma: "pt_BR", parametros: [] }, origem: "automacao", status: "pendente",
+    enviar_em: new Date(AGORA.getTime() - 60e3).toISOString(), tentativas: 0, criado_por: null });
+  const r = await ler(await enviar(cron({ fila: true }), ENV, s.deps()));
+  assert.deepEqual(r.corpo.fila, { total: 1, enviado: 1, pulado: 0, falhou: 0 });
+  assert.equal(s.estado.graph.length, 1);
 });
 
 test("nx-enviar cron alerta (P1): cliente inexistente → nada enviado; texto de 1.500 → sai com 1.000", async () => {
