@@ -22,13 +22,18 @@ const pequena = () => { try { return !!(globalThis.matchMedia && globalThis.matc
 
 export async function montarContatos(k, el, rota) {
   const { ui, h, L, ctx } = k;
+  const Vis = await k.mod("visoes");
   ctx.titulo(k.v.contatos);
   const chaveLocal = `nx-app-crm-ct-${ctx.cliente.id}`;
   let salvo = {};
   try { salvo = JSON.parse(localStorage.getItem(chaveLocal) || "{}") || {}; } catch { salvo = {}; }
   const S = { filtro: salvo.filtro || {}, ordem: ORDENS.some(o => o[0] === salvo.ordem) ? salvo.ordem : "recentes", pagina: 1, seq: 0, vivo: true, total: null };
   if (rota.query && rota.query.busca) S.filtro.busca = rota.query.busca;
-  const gravar = () => { try { localStorage.setItem(chaveLocal, JSON.stringify({ filtro: S.filtro, ordem: S.ordem })); } catch { /* ok */ } };
+  let controlesVisoes = null;
+  const gravar = () => {
+    try { localStorage.setItem(chaveLocal, JSON.stringify({ filtro: S.filtro, ordem: S.ordem })); } catch { /* ok */ }
+    if (controlesVisoes) controlesVisoes.atualizar();
+  };
 
   const sub = h("span");      // a contagem «12 pacientes» entra no subtítulo do ui.cabecalho
   const busca = h("input", { type: "search", placeholder: pequena() ? `Buscar ${k.v.min("contatos")}` : "Buscar por nome, telefone, e-mail ou documento", "aria-label": `Buscar ${k.v.min("contatos")}`, value: S.filtro.busca || "" });
@@ -42,6 +47,12 @@ export async function montarContatos(k, el, rota) {
   const chips = h("div", { class: "crm-chips", "aria-label": "Filtros ativos" });
   const corpo = h("div", { class: "pilha" });
   const pag = h("nav", { class: "ct-pag", "aria-label": "Páginas" });
+  controlesVisoes = Vis.controlesVisoes(k, { tipo: "contatos", obterDados: () => ({ filtro: S.filtro, ordem: S.ordem }), aplicar: async dados => {
+    S.filtro = dados.filtro || {}; S.ordem = ORDENS.some(o => o[0] === dados.ordem) ? dados.ordem : "recentes"; S.pagina = 1;
+    busca.value = S.filtro.busca || ""; selOrdem.value = S.ordem;
+    gravar(); await carregar();
+    ui.toast("Visão aplicada; lista reiniciada na primeira página.", { tipo: "ok", ms: 1800 });
+  } });
 
   // M28: no celular Exportar/Importar/Novo saem do cabeçalho — viram o ⋮ (aqui) e o botão flutuante
   const maisBt = k.pode("supervisor") ? h("button", { type: "button", class: "bt-icone crm-cab-mais", "aria-label": "Mais ações" }, ui.icone("opcoes")) : null;
@@ -58,7 +69,7 @@ export async function montarContatos(k, el, rota) {
     k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novoContato } }, ui.icone("mais"), k.v.novo("contato")) : null];
   el.append(
     ui.cabecalho({ titulo: k.v.contatos, sub, acoes }),
-    h("div", { class: "pilha-p crm-fixa" }, h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btF, selOrdem), chips),
+    h("div", { class: "pilha-p crm-fixa" }, h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btF, selOrdem), controlesVisoes.el, chips),
     corpo, pag);
   if (fab) el.appendChild(fab);
 
@@ -141,6 +152,9 @@ export async function montarContatos(k, el, rota) {
     if (typeof f.tem_negocio_aberto === "boolean") add(f.tem_negocio_aberto ? `Com ${k.v.min("negocio")} abert${k.v.art("negocio")}` : `Sem ${k.v.min("negocio")} abert${k.v.art("negocio")}`, () => delete f.tem_negocio_aberto);
     if (f.empresa_id) add(`Empresa: ${f.empresa_nome || "escolhida"}`, () => { delete f.empresa_id; delete f.empresa_nome; });
     if (f.optin_marketing === false) add("Não querem marketing", () => delete f.optin_marketing);
+    if (n) chips.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p crm-chips-limpar", on: { click: () => {
+      const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; S.pagina = 1; gravar(); carregar();
+    } } }, "Limpar filtros"));
     nF.textContent = String(n); nF.hidden = !n;
     btF.classList.toggle("ativo", n > 0);
     chips.hidden = !n;
@@ -220,6 +234,7 @@ export async function montarContatos(k, el, rota) {
       if (typeof f.tem_negocio_aberto === "boolean") nf.tem_negocio_aberto = f.tem_negocio_aberto;
       if (de.value) nf.criado_de = de.value;
       if (ate.value) nf.criado_ate = ate.value;
+      if (de.value && ate.value && de.value > ate.value) { ui.toast("A data inicial precisa ser anterior ou igual à final.", { tipo: "erro" }); de.focus(); return; }
       if (empresa) { nf.empresa_id = empresa.id; nf.empresa_nome = empresa.nome; }
       S.filtro = nf; S.pagina = 1; gravar(); pop.fechar(); carregar();
     });
@@ -254,8 +269,15 @@ export async function montarContatos(k, el, rota) {
     if (c) { ui.toast(`${k.v.contato} cadastrad${k.v.art("contato")}.`, { tipo: "ok" }); ctx.navegar(`#/contatos/${c.id}`); }
   }
 
+  const aoTeclaBusca = ev => {
+    const alvo = ev.target;
+    const editando = alvo && (alvo.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(alvo.tagName) || alvo.closest?.("[role=dialog],dialog"));
+    if (ev.key === "/" && !ev.altKey && !ev.ctrlKey && !ev.metaKey && !editando) { ev.preventDefault(); busca.focus(); }
+    else if (ev.key === "Escape" && alvo === busca && busca.value) { busca.value = ""; aoBuscar(); }
+  };
+  document.addEventListener("keydown", aoTeclaBusca);
   await carregar();
-  return { desmontar() { S.vivo = false; S.seq++; } };
+  return { desmontar() { S.vivo = false; S.seq++; document.removeEventListener("keydown", aoTeclaBusca); } };
 }
 
 /* ------------------------------------------------------------ lista compacta do celular (M28) */

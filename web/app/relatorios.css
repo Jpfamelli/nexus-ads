@@ -216,6 +216,20 @@
 .ads-camp-t > span { font-weight: 600; color: var(--c-texto); }
 .ads-camp-t small { font-size: .75rem; color: var(--c-texto-3); }
 .ads-camp-nome:hover .ads-camp-t > span { color: var(--c-prim-luz); }
+.ads-painel-camp { display: grid; gap: .7rem; min-width: 0; margin-block: .75rem 1rem; }
+.ads-camp-filtros { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto auto auto; gap: .6rem; align-items: end; }
+.ads-camp-busca, .ads-camp-filtro { display: grid; gap: .3rem; min-width: 0; color: var(--c-texto-3); font: 500 .75rem/1.3 var(--f-corpo); }
+.ads-camp-busca-input, .ads-camp-resultado { width: 100%; min-width: 0; min-height: 44px; padding: .55rem .8rem; border: 1px solid var(--c-borda-2); border-radius: 12px; background: var(--c-sup); color: var(--c-texto); font: 500 .9375rem/1.3 var(--f-corpo); }
+.ads-camp-busca-input:focus-visible, .ads-camp-resultado:focus-visible, .ads-camp-comparar:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.ads-camp-filtros > .bt { min-height: 44px; white-space: nowrap; }
+.ads-camp-resumo { min-height: 1.3em; margin: 0; }
+.ads-camp-comparar { width: 20px; height: 20px; accent-color: var(--c-prim); cursor: pointer; }
+.ads-camp-comparacao { min-width: 0; padding: .9rem; border: 1px solid var(--c-borda); border-radius: var(--r-p); background: var(--c-sup-2); }
+.ads-camp-comparacao .rel-cartao-topo { align-items: start; }
+.ads-comparacao-tabela { min-width: 35rem; }
+.ads-comp-acoes { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .65rem; }
+.ads-comp-acoes .bt { min-height: 44px; }
+.ads-camp-outras { color: var(--c-texto-3); }
 
 /* ranking de criativos (P1) */
 .ads-rank .rel-cartao-topo { align-items: center; }
@@ -649,6 +663,8 @@ a.ini-numero:active { transform: scale(.98); }
 @media (max-width: 900px) {
   .relat-grade, .cfga-integ, .ini-canais, .ini-grade { grid-template-columns: minmax(0, 1fr); }
   .ini-passos { grid-template-columns: minmax(0, 1fr); }
+  .ads-camp-filtros { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+  .ads-camp-filtros > .bt { white-space: normal; }
 }
 @media (max-width: 760px) {
   .ini-numeros-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -661,6 +677,9 @@ a.ini-numero:active { transform: scale(.98); }
   .relat-select { max-width: 100%; }
   .relat-per { flex-basis: 100%; }
   .cfga-tk { grid-template-columns: minmax(0, 1fr) minmax(0, 6.5rem) auto; }
+  .ads-camp-filtros { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ads-camp-filtros > .bt { width: 100%; white-space: normal; }
+  .ads-camp-comparacao { padding: .7rem; }
 }
 
 /* toque: todo alvo com pelo menos 44 px (§7.5) — no mouse os controles seguem compactos */

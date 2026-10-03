@@ -23,8 +23,145 @@ const ABAS = [
 
 let N = null, L = null, G = null;    // nucleo.js, rel-logica.js, graficos.js
 const cache = new Map();             // clienteId → {dados, M, em}
-const S = { dias: 30, plat: "", ordem: { chave: "gasto", dir: -1 }, rel: null, rank: null };
+const S = { dias: 30, plat: "", ordem: { chave: "gasto", dir: -1 }, rel: null, rank: null,
+  buscaCamp: "", resultadoCamp: "todos", comparacaoCamp: [] };
 let graficos = [], tPilula = 0, montagem = 0;
+
+const centavos = n => Math.round((Number(n) || 0) * 100);
+const nomeNormalizado = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
+
+/** Totais devem reconciliar com a série do MESMO período e plataforma; CRM não entra nos totais Ads. */
+export function reconciliarSerieAds(P, serie = []) {
+  const gastoSerie = serie.reduce((s, d) => s + (Number(d.gasto) || 0), 0);
+  const conversoesSerie = serie.reduce((s, d) => s + (Number(d.conv) || 0), 0);
+  const gastoFiltro = Number(P?.t?.gasto) || 0, conversoesFiltro = Number(P?.t?.conversoes) || 0;
+  return { de: P?.de, ate: P?.ate, plat: P?.plat || "", gastoSerie, gastoFiltro, conversoesSerie, conversoesFiltro,
+    gastoAlinha: centavos(gastoSerie) === centavos(gastoFiltro), conversoesAlinha: Math.abs(conversoesSerie - conversoesFiltro) < 1e-9 };
+}
+
+/** Rótulo inclusivo: índice do primeiro e último dia, e canal exato do recorte fechado. */
+export function descricaoPeriodoAds(P, dataBR, nomePlat) {
+  const canal = P?.plat ? nomePlat(P.plat) : "todas as plataformas";
+  return `Últimos ${P?.dias || 0} dias (${dataBR(P.de)} a ${dataBR(P.ate)}) · ${canal} · dados fechados até ontem`;
+}
+
+/** O orçamento acompanha o mês-calendário até ontem; projeção é linear, não parte dos últimos N dias. */
+export function descricaoOrcamentoMensal(m, _dataBR, brl0) {
+  const fmt = dia => new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" })
+    .format(new Date(Date.UTC(m.ano, m.mes, dia)));
+  return `${fmt(1)} a ${fmt(m.pass)} · mês até ontem · todas as plataformas · ${brl0(m.gasto)} acumulados; projeção linear: gasto acumulado ÷ ${m.pass} dias decorridos × ${m.diasMes} dias do mês = ${brl0(m.proj)}`;
+}
+
+export function filtrarCampanhas(linhas = [], { busca = "", resultado = "todos" } = {}) {
+  const q = nomeNormalizado(busca.trim());
+  return linhas.filter(r => {
+    if (q && !nomeNormalizado(r?.c?.nome).includes(q)) return false;
+    const temCRM = (Number(r?.k?.conversas) || 0) > 0 || (Number(r?.k?.agendadas) || 0) > 0 || (Number(r?.k?.fecharam) || 0) > 0 || (Number(r?.k?.receita) || 0) > 0;
+    return resultado === "com_crm" ? temCRM : resultado === "sem_crm" ? !temCRM : true;
+  });
+}
+
+export function alternarComparacaoCampanhas(ids = [], id) {
+  const lista = ids.filter(x => x !== id);
+  if (lista.length !== ids.length) return { alterou: true, ids: lista, cheia: false };
+  if (ids.length >= 3) return { alterou: false, ids: [...ids], cheia: true };
+  return { alterou: true, ids: [...ids, id], cheia: false };
+}
+
+export function taxasFunilCampanha(r) {
+  const taxa = (n, d) => Number(d) > 0 ? Math.round((Number(n) || 0) / Number(d) * 10000) / 100 : null;
+  return { agendaSobreConversoesAds: taxa(r?.k?.agendadas, r?.t?.conversoes),
+    fechamentoSobreAgendadasCrm: taxa(r?.k?.fecharam, r?.k?.agendadas) };
+}
+
+/** Exportação de campanhas separa campos Ads e CRM e reutiliza o CSV formula-safe do módulo de relatórios. */
+export function csvCampanhas(rows, { periodo, csv, moeda, inteiro, decimal }) {
+  const colunas = ["Período", "Campanha", "Plataforma", "Investimento Ads", "Conversões da plataforma", "CPA da plataforma",
+    "Conversas CRM", "Agendamentos CRM", "Fechamentos CRM", "Receita CRM", "ROAS (receita CRM ÷ investimento Ads)"];
+  const linhas = rows.map(r => [periodo, r.c.nome, r.c.plat, moeda(r.t.gasto), inteiro(r.t.conversoes), moeda(r.t.cpa),
+    inteiro(r.k.conversas), inteiro(r.k.agendadas), inteiro(r.k.fecharam), moeda(r.k.receita), Number.isFinite(r.roas) ? decimal(r.roas) : ""]);
+  return csv(colunas, linhas);
+}
+
+/** Componente puro da área de filtros/comparação: a tela real e o teste dirigem os mesmos eventos. */
+export function criarPainelCampanhas({ h, limpar, linhas = [], estado = {}, periodo = "", moeda = String,
+  inteiro = String, decimal = String, aoFiltrar = () => {}, aoComparar = () => {}, aoLimpar = () => {},
+  aoExportar = () => {}, aoAviso = () => {}, aoFocoComparar = () => {} }) {
+  if (typeof h !== "function") throw new TypeError("criarPainelCampanhas exige o criador de elementos h");
+  const raiz = h("section", { class: "ads-painel-camp", "aria-label": "Filtros e comparação de campanhas" });
+  const st = { busca: String(estado.busca || ""), resultado: ["todos", "com_crm", "sem_crm"].includes(estado.resultado) ? estado.resultado : "todos",
+    comparacao: Array.isArray(estado.comparacao) ? [...estado.comparacao].slice(0, 3) : [] };
+  let visiveis = [];
+
+  function render() {
+    visiveis = filtrarCampanhas(linhas, st);
+    const busca = h("input", { type: "search", class: "ads-camp-busca-input", value: st.busca, autocomplete: "off",
+      placeholder: "Ex.: implante…", "aria-label": "Buscar campanha por nome" });
+    const filtro = h("select", { class: "ads-camp-resultado", "aria-label": "Filtrar campanhas pela atividade no CRM" },
+      h("option", { value: "todos" }, "Todas as campanhas"),
+      h("option", { value: "com_crm" }, "Com atividade no CRM"),
+      h("option", { value: "sem_crm" }, "Sem atividade no CRM"));
+    filtro.value = st.resultado;
+    const status = h("p", { class: "rel-nota ads-camp-resumo", role: "status", "aria-live": "polite" },
+      visiveis.length ? `${visiveis.length} de ${linhas.length} campanhas · ${periodo}` : "Nenhuma campanha corresponde aos filtros.");
+    const aplicar = h("button", { type: "button", class: "bt bt-prim bt-p", on: { click: () => {
+      st.busca = busca.value; st.resultado = ["todos", "com_crm", "sem_crm"].includes(filtro.value) ? filtro.value : "todos";
+      estado.busca = st.busca; estado.resultado = st.resultado;
+      aoFiltrar({ busca: st.busca, resultado: st.resultado }); render();
+    } } }, "Aplicar filtros");
+    const limparBtn = h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => {
+      st.busca = ""; st.resultado = "todos"; estado.busca = ""; estado.resultado = "todos";
+      aoLimpar(); render();
+    } } }, "Limpar filtros");
+    const exportar = h("button", { type: "button", class: "bt bt-sec bt-p ads-camp-baixar", disabled: !visiveis.length,
+      "aria-label": "Exportar campanhas filtradas em CSV", on: { click: () => aoExportar(visiveis) } }, "Exportar CSV filtrado");
+
+    const selecionadas = st.comparacao.map(id => linhas.find(r => String(r?.c?.id) === String(id))).filter(Boolean).slice(0, 3);
+    st.comparacao = selecionadas.map(r => r.c.id); estado.comparacao = [...st.comparacao];
+    const medidas = [
+      ["Investimento Ads", r => moeda(r.t.gasto)], ["Conversões da plataforma", r => inteiro(r.t.conversoes)],
+      ["CPA da plataforma", r => moeda(r.t.cpa)], ["Conversas CRM", r => inteiro(r.k.conversas)],
+      ["Agendamentos CRM", r => inteiro(r.k.agendadas)], ["Fechamentos CRM", r => inteiro(r.k.fecharam)],
+      ["Receita CRM", r => moeda(r.k.receita)], ["ROAS CRM ÷ Ads", r => Number.isFinite(r.roas) ? `${decimal(r.roas)}x` : "—"],
+      ["Agendamentos CRM ÷ conversões Ads", r => { const n = taxasFunilCampanha(r).agendaSobreConversoesAds; return n == null ? "—" : `${decimal(n)}%`; }],
+      ["Fechamentos CRM ÷ agendamentos CRM", r => { const n = taxasFunilCampanha(r).fechamentoSobreAgendadasCrm; return n == null ? "—" : `${decimal(n)}%`; }],
+    ];
+    const comparacao = h("section", { class: "ads-camp-comparacao", hidden: !selecionadas.length, "aria-labelledby": "ads-comp-titulo" });
+    if (selecionadas.length) {
+      const tabela = h("div", { class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": "Comparação de campanhas" },
+        h("table", { class: "rel-tabela ads-comparacao-tabela" },
+          h("caption", { class: "sr-only" }, `Comparação de ${selecionadas.length} campanhas no recorte ${periodo}`),
+          h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Métrica"), selecionadas.map(r => h("th", { scope: "col" }, r.c.nome)))),
+          h("tbody", {}, medidas.map(([rot, valor]) => h("tr", {}, h("th", { scope: "row" }, rot), selecionadas.map(r => h("td", { class: "num" }, valor(r))))))));
+      comparacao.append(h("div", { class: "rel-cartao-topo" }, h("h3", { id: "ads-comp-titulo", class: "rel-h2" }, `Comparação · ${selecionadas.length} de 3`),
+        h("p", { class: "rel-nota" }, `Mesmo recorte: ${periodo}. Cada etapa usa a data do evento correspondente; os totais não formam uma coorte de contatos.`)), tabela,
+        h("div", { class: "ads-comp-acoes" }, selecionadas.map(r => h("button", { type: "button", class: "bt bt-fant bt-p",
+          "aria-label": `Remover ${r.c.nome} da comparação`, on: { click: () => {
+            st.comparacao = st.comparacao.filter(id => String(id) !== String(r.c.id)); estado.comparacao = [...st.comparacao];
+            aoComparar(r.c.id, { alterou: true, ids: [...st.comparacao], cheia: false }); aoFocoComparar(r.c.id); render();
+          } } }, `Remover ${r.c.nome}`))));
+    }
+    if (limpar) limpar(raiz); else if (typeof raiz.replaceChildren === "function") raiz.replaceChildren(); else if (Array.isArray(raiz.filhos)) raiz.filhos = [];
+    raiz.append(h("div", { class: "ads-camp-filtros" },
+      h("label", { class: "ads-camp-busca" }, h("span", {}, "Buscar campanha"), busca),
+      h("label", { class: "ads-camp-filtro" }, h("span", {}, "Filtrar pelo resultado no CRM"), filtro),
+      aplicar, limparBtn, exportar), status, comparacao);
+    return raiz;
+  }
+
+  function alternar(linha) {
+    const troca = alternarComparacaoCampanhas(st.comparacao, linha?.c?.id);
+    if (!troca.alterou) { aoAviso("Compare até três campanhas por vez."); return troca; }
+    st.comparacao = troca.ids; estado.comparacao = [...st.comparacao];
+    aoComparar(linha?.c?.id, troca); render(); return troca;
+  }
+  render();
+  return { elemento: raiz, get linhas() { return [...visiveis]; }, alternar,
+    botaoComparar: linha => h("button", { type: "button", class: "bt bt-fant bt-p", "aria-label": `Comparar campanha ${linha?.c?.nome || ""}`,
+      on: { click: () => alternar(linha) } }, `Comparar ${linha?.c?.nome || "campanha"}`),
+    aplicar(busca, resultado) { st.busca = String(busca || ""); st.resultado = resultado; estado.busca = st.busca; estado.resultado = st.resultado; aoFiltrar({ busca: st.busca, resultado: st.resultado }); return render(); },
+    exportar: () => aoExportar(visiveis), render };
+}
 
 const lerLocal = (k, padrao) => { try { const v = localStorage.getItem(k); return v == null ? padrao : v; } catch { return padrao; } };
 const gravarLocal = (k, v) => { try { localStorage.setItem(k, String(v)); } catch { /* modo privado */ } };
@@ -61,6 +198,8 @@ export async function montar(ctx) {
   S.dias = PERIODOS.includes(+lerLocal("nx-app-ads-dias", 30)) ? +lerLocal("nx-app-ads-dias", 30) : 30;
   S.plat = ["", "meta", "google"].includes(lerLocal("nx-app-ads-plat", "")) ? lerLocal("nx-app-ads-plat", "") : "";
   S.rank = L.RANK_CRI.some(([k]) => k === lerLocal("nx-app-ads-rank", "")) ? lerLocal("nx-app-ads-rank", "") : "receita";
+  // filtros e comparação só duram nesta montagem: uma troca de empresa nunca reaproveita estado privado da anterior
+  S.buscaCamp = ""; S.resultadoCamp = "todos"; S.comparacaoCamp = [];
 
   const aba = ABAS.some(a => a.id === (ctx.rota.partes[0] || "")) ? (ctx.rota.partes[0] || "") : "";
   ui.limpar(ctx.alvo);
@@ -171,7 +310,7 @@ export async function montar(ctx) {
         h("div", { class: "rel-filtros-lg" },
           segmento("Período", PERIODOS.map(d => [d, `${d} dias`]), S.dias, d => { S.dias = d; gravarLocal("nx-app-ads-dias", d); desenhar({ dados, M }); }),
           segmento("Plataforma", PLATS, S.plat, p => { S.plat = p; gravarLocal("nx-app-ads-plat", p); desenhar({ dados, M }); })),
-        h("p", { class: "rel-nota rel-ate" }, `Números até ontem, ${M.dataBR(M.R)}`));
+        h("p", { class: "rel-nota rel-ate" }, descricaoPeriodoAds(L.numerosPeriodo(M, { dias: S.dias, plat: S.plat }), M.dataBR, L.nomePlat)));
     }
 
     ui.limpar(corpo);
@@ -236,12 +375,13 @@ export async function montar(ctx) {
   /* ---------------- VISÃO GERAL ---------------- */
   function abaGeral(M) {
     const P = L.numerosPeriodo(M, { dias: S.dias, plat: S.plat });
+    const periodoTexto = descricaoPeriodoAds(P, M.dataBR, L.nomePlat);
     const { t, ta, c, ca } = P;
     const contatos = voc(ctx, "contatos", "Clientes").toLowerCase();
     const umContato = voc(ctx, "contato", "Cliente").toLowerCase();
 
     // herói: a frase que o dono lê em 3 segundos + a conta do retorno
-    const frase = h("p", { class: "ads-frase" }, "Os anúncios trouxeram ", num(c.conversas, N.int), ` ${c.conversas === 1 ? "conversa" : "conversas"} no WhatsApp, `,
+    const frase = h("p", { class: "ads-frase" }, "No CRM, com origem atribuída a anúncios, registramos ", num(c.conversas, N.int), ` ${c.conversas === 1 ? "conversa" : "conversas"}, `,
       num(c.agendadas, N.int), ` ${c.agendadas === 1 ? "agendamento" : "agendamentos"} e `, num(c.fecharam, N.int),
       ` ${c.fecharam === 1 ? `novo ${umContato}` : `novos ${contatos}`}.`);
     const conta = h("div", { class: "ads-conta" },
@@ -252,11 +392,11 @@ export async function montar(ctx) {
       h("p", { class: "rel-nota" }, S.plat ? "receita ÷ investimento em anúncios" : "receita ÷ (anúncios + gestão)"),
       h("p", { class: "ads-receita" }, num(c.receita, N.brl0), h("span", {}, " em receita fechada")));
     corpo.append(h("div", { class: "ads-heroi rel-cartao rel-entra" },
-      h("div", { class: "ads-heroi-t" }, h("p", { class: "rel-olho" }, `Últimos ${S.dias} dias${S.plat ? ` · só ${L.nomePlat(S.plat)}` : ""}`), frase), conta));
+      h("div", { class: "ads-heroi-t" }, h("p", { class: "rel-olho" }, periodoTexto), frase), conta));
 
     // trilha do funil: conversas → agendaram → compareceram → fecharam
     const passos = [
-      { v: c.conversas, a: ca.conversas, l: "Conversas no WhatsApp", taxa: null },
+      { v: c.conversas, a: ca.conversas, l: "Conversas registradas no CRM", taxa: null },
       { v: c.agendadas, a: ca.agendadas, l: "Agendaram", taxa: L.razao(c.agendadas, c.conversas), tl: "das conversas" },
       { v: c.compareceram, a: ca.compareceram, l: "Compareceram", taxa: L.razao(c.compareceram, c.agendadas), tl: "dos agendados" },
       { v: c.fecharam, a: ca.fecharam, l: "Fecharam", taxa: L.razao(c.fecharam, c.compareceram), tl: "de quem veio" },
@@ -271,9 +411,9 @@ export async function montar(ctx) {
     const meta = M.CFG.cpaAlvo, dif = Number.isFinite(t.cpa) ? Math.abs(t.cpa - meta) / meta * 100 : null;
     const kpis = [
       { l: "Investido em anúncios", v: t.gasto, a: ta.gasto, f: N.brl0, s: "neutro", extra: Number.isFinite(P.fee) && P.fee > 0 && eGestor(ctx) ? `+ ${N.brl0(P.fee)} de gestão no período` : "" },
-      { l: "Custo por conversa", v: t.cpa, a: ta.cpa, f: N.brl, s: "baixo", medidor: true,
+      { l: "Custo por conversão da plataforma", v: t.cpa, a: ta.cpa, f: N.brl, s: "baixo", medidor: true,
         extra: !Number.isFinite(t.cpa) ? `meta ${N.brl(meta)}` : `meta ${N.brl(meta)} · ${N.pc(dif, 0)} ${t.cpa <= meta ? "abaixo" : "acima"}` },
-      { l: "Conversas contadas pela plataforma", v: t.conversoes, a: ta.conversoes, f: N.int, s: "cima", extra: "o que o Meta/Google registrou" },
+      { l: "Conversões registradas pela plataforma", v: t.conversoes, a: ta.conversoes, f: N.int, s: "cima", extra: "Meta/Google; denominador do custo por conversão" },
       { l: "Receita fechada", v: c.receita, a: ca.receita, f: N.brl0, s: "cima",
         extra: eGestor(ctx) && Number.isFinite(P.roas) ? `${N.dec(P.roas, 1)}x o investido em anúncios` : "valor informado nos negócios ganhos do CRM" },
     ];
@@ -301,10 +441,10 @@ export async function montar(ctx) {
     const legenda = h("ul", { class: "g-legenda", "aria-hidden": "true" },
       (S.plat !== "google" ? h("li", {}, h("i", { class: "g-marca g-meta" }), "Meta") : null),
       (S.plat !== "meta" ? h("li", {}, h("i", { class: "g-marca g-google" }), "Google") : null),
-      h("li", {}, h("i", { class: "g-marca g-linha-m g-linha-texto" }), "Conversas (média de 7 dias)"),
+      h("li", {}, h("i", { class: "g-marca g-linha-m g-linha-texto" }), "Conversões da plataforma (média móvel de 7 dias)"),
       h("li", {}, h("i", { class: "g-marca g-ant-m" }), `${S.dias} dias antes`));
     const cartaoG = h("div", { class: "rel-cartao ads-cartao-g rel-entra" },
-      h("div", { class: "rel-cartao-topo" }, h("h2", { class: "rel-h2" }, "Investimento por dia × conversas"), legenda),
+      h("div", { class: "rel-cartao-topo" }, h("h2", { class: "rel-h2" }, "Investimento diário × conversões da plataforma"), legenda),
       alvoG, rodape);
     const tot = { g: 0, conv: 0 };
     serie.atual.forEach(d => { tot.g += d.gasto; tot.conv += d.conv; });
@@ -312,11 +452,11 @@ export async function montar(ctx) {
       serie: serie.atual, anterior: serie.anterior, rotuloDia: M.ddmm,
       diaLongo: i => `${L.SEMANA[M.dataDe(i).getDay()]} · ${M.ddmm(i)}`,
       fmtGasto: N.brl, fmtGastoCurto: N.brl0, fmtNum: N.int,
-      resumo: `Investimento diário e conversas nos últimos ${S.dias} dias: ${N.brl0(tot.g)} investidos e ${N.int(tot.conv)} conversas registradas pelas plataformas`,
+      resumo: `${periodoTexto}. Investimento diário total ${N.brl0(tot.g)}; ${N.int(tot.conv)} conversões da plataforma no período. A linha do gráfico usa a média móvel de 7 dias`,
     }));
     G.alternarTabela(rodape, alvoG, {
-      legenda: `Investimento e conversas por dia, últimos ${S.dias} dias`,
-      colunas: ["Dia", "Meta", "Google", "Conversas", "Custo por conversa"],
+      legenda: `${periodoTexto}; valores diários`,
+      colunas: ["Dia", "Investimento Meta", "Investimento Google", "Conversões da plataforma", "Custo por conversão Ads"],
       linhas: serie.atual.map(d => [M.dataBR(d.i), N.brl(d.meta), N.brl(d.google), N.int(d.conv), d.conv ? N.brl(d.gasto / d.conv) : "—"]),
     });
 
@@ -328,13 +468,14 @@ export async function montar(ctx) {
       if (pl.length) {
         const maxG = Math.max(1, ...pl.map(x => x.t.gasto));
         lado.append(h("div", { class: "rel-cartao ads-plats rel-entra" }, h("h2", { class: "rel-h2" }, "Por plataforma"),
+          h("p", { class: "rel-nota" }, `${periodoTexto}. Os eventos do CRM usam suas próprias datas e não são o denominador do CPA da plataforma.`),
           h("ul", { class: "ads-plat-lista" }, pl.map(x => {
             const barra = h("span", { class: `ads-plat-barra g-${x.p}` });
             barra.style.setProperty("--w", `${(x.t.gasto / maxG * 100).toFixed(1)}%`);
             return h("li", {},
               h("span", { class: "ads-plat-nome" }, h("i", { class: `g-marca g-${x.p}` }), L.nomePlat(x.p)),
               h("span", { class: "ads-plat-trilho" }, barra),
-              h("span", { class: "ads-plat-num" }, `${N.brl0(x.t.gasto)} · ${N.int(x.c.conversas)} ${x.c.conversas === 1 ? "conversa" : "conversas"} · ${N.brl(x.t.cpa)} cada · ${N.int(x.c.fecharam)} ${x.c.fecharam === 1 ? "fechou" : "fecharam"}`));
+              h("span", { class: "ads-plat-num" }, `${N.brl0(x.t.gasto)} · ${N.int(x.t.conversoes)} conversões da plataforma · CPA ${N.brl(x.t.cpa)} · CRM: ${N.int(x.c.conversas)} conversas registradas, ${N.int(x.c.agendadas)} agendamentos, ${N.int(x.c.fecharam)} fechamentos`));
           }))));
       }
     }
@@ -345,25 +486,27 @@ export async function montar(ctx) {
       : acima ? `No ritmo atual o mês fecha ${N.brl0(m.proj - orc)} acima do orçamento — segurar ${N.brl((m.proj - orc) / m.restam)} por dia resolve.`
       : noLimite ? `No limite: o mês deve fechar em ${N.brl0(m.proj)}, praticamente no orçamento.`
       : `Dentro do orçamento: o mês deve fechar em ${N.brl0(m.proj)} (sobram ${N.brl0(orc - m.proj)}).`;
-    const barra = h("div", { class: `ads-orc-barra${acima ? " acima" : ""}`, role: "img", "aria-label": `${N.brl0(m.gasto)} investidos de ${N.brl0(orc)}; projeção ${N.brl0(m.proj)}` }, h("i"), h("u"), h("b"));
+    const descrOrcamento = descricaoOrcamentoMensal(m, M.dataBR, N.brl0);
+    const barra = h("div", { class: `ads-orc-barra${acima ? " acima" : ""}`, role: "img", "aria-label": `${descrOrcamento}; orçamento mensal ${N.brl0(orc)}` }, h("i"), h("u"), h("b"));
     barra.style.setProperty("--w", `${(m.gasto / escala * 100).toFixed(1)}%`);
     barra.style.setProperty("--wp", `${(Math.max(0, m.proj - m.gasto) / escala * 100).toFixed(1)}%`);
     barra.style.setProperty("--m", `${(orc / escala * 100).toFixed(1)}%`);
     lado.append(h("div", { class: "rel-cartao ads-orc rel-entra" },
       h("h2", { class: "rel-h2" }, "Orçamento do mês"),
-      h("p", { class: "rel-nota" }, `${L.MESES[m.mes]} · dia ${m.pass} de ${m.diasMes} · todas as plataformas`),
+      h("p", { class: "rel-nota" }, descrOrcamento),
       h("p", { class: "ads-orc-n" }, num(m.gasto, N.brl0), h("span", {}, ` de ${N.brl0(orc)}`)),
       barra,
-      h("p", { class: "ads-orc-leg rel-nota" }, h("span", {}, "gasto até ontem"), h("span", {}, `projeção ${N.brl0(m.proj)}`), h("span", {}, "▮ orçamento")),
+      h("p", { class: "ads-orc-leg rel-nota" }, h("span", {}, `real ${N.brl0(m.gasto)} até ontem`), h("span", {}, `projeção linear ${N.brl0(m.proj)}`), h("span", {}, `orçamento mensal ${N.brl0(orc)}`)),
       h("p", { class: `ads-orc-msg${acima ? " rel-txt-aten" : ""}` }, msg)));
     corpo.append(h("div", { class: "ads-grade" }, cartaoG, lado));
   }
 
   /* ---------------- CAMPANHAS ---------------- */
   function abaCampanhas(M) {
+    const P = L.numerosPeriodo(M, { dias: S.dias, plat: S.plat });
     const { linhas, total, outras } = L.linhasCampanhas(M, { dias: S.dias, plat: S.plat });
-    const COLS = [["nome", "Campanha"], ["gasto", "Investido"], ["conv", "Conversas"], ["cpa", "Custo/conversa"],
-      ["ag", "Agendados"], ["fe", "Fechados"], ["rec", "Receita"], ["roas", "Retorno", "Receita ÷ investimento em anúncios desta campanha (sem a gestão)."]];
+    const COLS = [["nome", "Campanha"], ["gasto", "Investimento Ads"], ["conv", "Conversões Ads"], ["cpa", "CPA Ads"],
+      ["ag", "Agendamentos CRM"], ["fe", "Fechamentos CRM"], ["rec", "Receita CRM"], ["roas", "Retorno", "Receita do CRM ÷ investimento em anúncios desta campanha (sem a gestão)."]];
     const cartao = h("div", { class: "rel-cartao rel-entra ads-camp" });
     corpo.append(cartao);
     if (!linhas.length) {
@@ -374,7 +517,10 @@ export async function montar(ctx) {
       ui.limpar(cartao);
       const rows = L.ordenarCampanhas(linhas, S.ordem.chave, S.ordem.dir);
       const meta = M.CFG.cpaAlvo;
-      const thead = h("thead", {}, h("tr", {}, COLS.map(([k, l, dica]) => {
+      const linhasDOM = [];
+      const estadoCamp = { busca: S.buscaCamp, resultado: S.resultadoCamp, comparacao: [...S.comparacaoCamp] };
+      let painelCampanhas;
+      const thead = h("thead", {}, h("tr", {}, h("th", { scope: "col", class: "c-comparar" }, "Comparar"), COLS.map(([k, l, dica]) => {
         const th = h("th", { scope: "col", class: k === "nome" ? "" : "num" });
         if (S.ordem.chave === k) th.setAttribute("aria-sort", S.ordem.dir < 0 ? "descending" : "ascending");
         const b = h("button", { type: "button", class: "rel-ord", title: dica || `Ordenar por ${l.toLowerCase()}` }, l,
@@ -386,27 +532,62 @@ export async function montar(ctx) {
       })));
       const td = (k, texto, rot) => h("td", { class: `num c-${k}`, dataset: { l: rot || "" } }, texto);
       const tbody = h("tbody", {}, rows.map((r, n) => {
+        const check = h("input", { type: "checkbox", class: "ads-camp-comparar", checked: S.comparacaoCamp.some(id => String(id) === String(r.c.id)),
+          "aria-label": `Comparar campanha ${r.c.nome}`, dataset: { campId: r.c.id } });
+        check.addEventListener("change", () => {
+          const nova = painelCampanhas.alternar(r);
+          if (!nova.alterou) check.checked = false;
+        });
         const abrir = h("button", { type: "button", class: "ads-camp-nome", "aria-haspopup": "dialog" },
-          h("i", { class: `rel-ponto rel-ponto-${L.nivelCpa(r.t.cpa, meta)}`, title: "custo por conversa × meta" }),
+          h("i", { class: `rel-ponto rel-ponto-${L.nivelCpa(r.t.cpa, meta)}`, title: "CPA das conversões informadas pela plataforma × meta" }),
           h("span", { class: "ads-camp-t" }, h("span", {}, r.c.nome), h("small", {}, h("span", { class: `rel-chip rel-chip-${r.c.plat}` }, L.nomePlat(r.c.plat)), " · ver criativos")));
         abrir.addEventListener("click", () => criativos(M, r));
-        return h("tr", { style: `--i:${n}` }, h("td", { class: "c-nome" }, abrir),
-          td("gasto", N.brl0(r.t.gasto), "Investido"), td("conv", N.int(r.t.conversoes), "Conversas"), td("cpa", N.brl(r.t.cpa), "Custo por conversa"),
-          td("ag", N.int(r.k.agendadas), "Agendados"), td("fe", N.int(r.k.fecharam), "Fechados"), td("rec", N.brl0(r.k.receita), "Receita"),
+        const tr = h("tr", { style: `--i:${n}` }, h("td", { class: "c-comparar" }, check), h("td", { class: "c-nome" }, abrir),
+          td("gasto", N.brl0(r.t.gasto), "Investimento Ads"), td("conv", N.int(r.t.conversoes), "Conversões Ads"), td("cpa", N.brl(r.t.cpa), "CPA Ads"),
+          td("ag", N.int(r.k.agendadas), "Agendamentos CRM"), td("fe", N.int(r.k.fecharam), "Fechamentos CRM"), td("rec", N.brl0(r.k.receita), "Receita CRM"),
           td("roas", Number.isFinite(r.roas) ? `${N.dec(r.roas, 1)}x` : "—", "Retorno"));
+        linhasDOM.push({ r, tr });
+        return tr;
       }));
       const T = total.t;
       // negócios de anúncio sem investimento na janela (pausada, sem campanha identificada): contam na Visão geral e ficam fora do Total
       const temOutras = !!outras && (outras.ag > 0 || outras.fe > 0 || outras.rec > 0);
-      const tfoot = h("tfoot", {}, h("tr", {}, h("th", { scope: "row" }, "Total"),
-        td("gasto", N.brl0(T.gasto), "Investido"), td("conv", N.int(T.conversoes), "Conversas"), td("cpa", N.brl(T.cpa), "Custo por conversa"),
-        td("ag", N.int(total.ag), "Agendados"), td("fe", N.int(total.fe), "Fechados"), td("rec", N.brl0(total.rec), "Receita"),
+      const tfoot = h("tfoot", {}, h("tr", {}, h("td", {}, ""), h("th", { scope: "row" }, "Total"),
+        td("gasto", N.brl0(T.gasto), "Investimento Ads"), td("conv", N.int(T.conversoes), "Conversões Ads"), td("cpa", N.brl(T.cpa), "CPA Ads"),
+        td("ag", N.int(total.ag), "Agendamentos CRM"), td("fe", N.int(total.fe), "Fechamentos CRM"), td("rec", N.brl0(total.rec), "Receita CRM"),
         td("roas", Number.isFinite(total.roas) ? `${N.dec(total.roas, 1)}x` : "—", "Retorno")),
-        temOutras ? h("tr", { class: "ads-camp-outras" }, h("th", { scope: "row", title: "Negócios de anúncio sem investimento nestes dias (campanha pausada ou sem campanha identificada). Entram na Visão geral." }, "Sem investimento no período"),
-          td("gasto", "—", "Investido"), td("conv", "—", "Conversas"), td("cpa", "—", "Custo por conversa"),
-          td("ag", N.int(outras.ag), "Agendados"), td("fe", N.int(outras.fe), "Fechados"), td("rec", N.brl0(outras.rec), "Receita"), td("roas", "—", "Retorno")) : null);
-      cartao.append(h("div", { class: "rel-cartao-topo" }, h("h2", { class: "rel-h2" }, `Campanhas nos últimos ${S.dias} dias`),
-        h("p", { class: "rel-nota" }, "Toque numa campanha para ver os criativos. Agendados, fechados e receita vêm do CRM, pela data de cada evento.")),
+        temOutras ? h("tr", { class: "ads-camp-outras" }, h("td", {}, ""), h("th", { scope: "row", title: "Negócios de anúncio sem investimento nestes dias (campanha pausada ou sem campanha identificada). Entram na Visão geral." }, "Sem investimento no período"),
+          td("gasto", "—", "Investimento Ads"), td("conv", "—", "Conversões Ads"), td("cpa", "—", "CPA Ads"),
+          td("ag", N.int(outras.ag), "Agendamentos CRM"), td("fe", N.int(outras.fe), "Fechamentos CRM"), td("rec", N.brl0(outras.rec), "Receita CRM"), td("roas", "—", "Retorno")) : null);
+      const periodo = `${M.dataBR(P.de)} a ${M.dataBR(P.ate)}${S.plat ? ` · ${L.nomePlat(S.plat)}` : " · todas as plataformas"}`;
+      painelCampanhas = criarPainelCampanhas({ h, limpar: ui.limpar, linhas, estado: estadoCamp, periodo,
+        moeda: N.brl0, inteiro: N.int, decimal: n => N.dec(n, 1),
+        aoFiltrar: f => {
+          S.buscaCamp = f.busca; S.resultadoCamp = f.resultado;
+          const visiveis = new Set(filtrarCampanhas(linhas, f).map(r => String(r.c.id)));
+          for (const { r, tr } of linhasDOM) tr.hidden = !visiveis.has(String(r.c.id));
+        },
+        aoComparar: (_id, troca) => {
+          S.comparacaoCamp = [...troca.ids];
+          for (const { r, tr } of linhasDOM) {
+            const input = tr.querySelector(".ads-camp-comparar");
+            if (input) input.checked = S.comparacaoCamp.some(id => String(id) === String(r.c.id));
+          }
+        },
+        aoLimpar: () => { S.buscaCamp = ""; S.resultadoCamp = "todos"; },
+        aoAviso: texto => ui.toast(texto, { tipo: "nota" }),
+        aoFocoComparar: id => linhasDOM.find(x => String(x.r.c.id) === String(id))?.tr.querySelector(".ads-camp-comparar")?.focus(),
+        aoExportar: visiveis => {
+          const csv = csvCampanhas(visiveis, { periodo, csv: L.csv, moeda: N.brl0, inteiro: N.int, decimal: n => N.dec(n, 1) });
+          const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+          const a = h("a", { href: url, download: `orbita-campanhas-${P.de}-a-${P.ate}.csv` });
+          document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+        } });
+      const visiveis = new Set(painelCampanhas.linhas.map(r => String(r.c.id)));
+      for (const { r, tr } of linhasDOM) tr.hidden = !visiveis.has(String(r.c.id));
+      cartao.append(h("div", { class: "rel-cartao-topo" }, h("h2", { class: "rel-h2" }, `Campanhas · ${S.dias} dias`),
+        h("p", { class: "rel-nota" }, "Conversões e CPA vêm do Meta/Google. Conversas, agendamentos, fechamentos e receita vêm do CRM, pela data de cada evento.")),
+        painelCampanhas.elemento,
         h("div", { class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": `Campanhas nos últimos ${S.dias} dias` }, h("table", { class: "rel-tabela ads-tabela" },
           h("caption", { class: "sr-only" }, `Campanhas nos últimos ${S.dias} dias`), thead, tbody, tfoot)));
     };

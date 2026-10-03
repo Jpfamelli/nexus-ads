@@ -499,9 +499,14 @@ export function preencherMoeda(ui, el, valor, opc = {}) {
 }
 /** Igual a G.contar, mas para moeda: o número sobe de 0 até `valor` (--t-dados) já com o formato editorial. Sem movimento (ou animar:false) pinta direto. */
 export function contarMoeda(ui, G, el, valor, { centavos = true, animar = true } = {}) {
-  preencherMoeda(ui, el, valor, { centavos });
-  const dur = animar && G && typeof G.duracaoToken === "function" ? G.duracaoToken("--t-dados") : 0;
   const n = Number(valor);
+  const pintar = v => preencherMoeda(ui, el, v, { centavos });
+  if (animar && G && typeof G.animarValor === "function") {
+    G.animarValor(el, n, pintar, textoMoeda(n, { centavos }));
+    return el;
+  }
+  pintar(n);
+  const dur = animar && G && typeof G.duracaoToken === "function" ? G.duracaoToken("--t-dados") : 0;
   if (!dur || !Number.isFinite(n) || n === 0 || typeof requestAnimationFrame !== "function") return el;
   const t0 = performance.now();
   const passo = t => {

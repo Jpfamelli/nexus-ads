@@ -85,3 +85,12 @@ h1[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
   .pilula-teste .pt-pre { display: none; }
 }
 @media (forced-colors: active) { .pilula-teste, .pal-atalho, .pal-teclas kbd { border: 1px solid ButtonText; } }
+
+/* ÓRBITA · shell transversal 2026-10-03 */
+.faixa-rede .rede-msg { min-width: 0; overflow-wrap: anywhere; }
+.rede-espera { white-space: normal; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@media (pointer: coarse) {
+  .faixa .bt, .faixa-rede .bt, .menu-item, .flut-op, .flut-criar, .empresa-op {
+    min-height: var(--alvo-toque);
+  }
+}

@@ -707,6 +707,20 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .kc:hover { transform: translateY(-2px); box-shadow: inset 0 1px 0 var(--c-luz-borda), 0 18px 34px -24px var(--c-sombra); }
 .kc.pego { transform: translateY(-2px) scale(1.01); }
 .crm-fita .busca input { box-shadow: inset 0 1px 0 var(--c-luz-borda); }
+.crm-visoes { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .4rem; min-width: 0; }
+.crm-visoes-select { min-width: 0; max-width: 100%; }
+.crm-visoes > .bt { min-height: 40px; white-space: nowrap; }
+.crm-atalhos { display: flex; flex-wrap: wrap; gap: .35rem; min-width: 0; }
+.crm-atalho[aria-pressed="true"] { border-color: var(--c-prim); background: var(--c-prim-suave); color: var(--c-texto); }
+.crm-atalho:focus-visible, .crm-visoes-select:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.crm-kb-ferramentas { display: grid; gap: .45rem; min-width: 0; }
+@media (max-width: 760px) {
+  .crm-visoes { grid-template-columns: minmax(0, 1fr) auto; }
+  .crm-visoes-select { grid-column: 1 / -1; width: 100%; }
+  .crm-visoes > .bt { min-height: 44px; }
+  .crm-atalhos { flex-wrap: nowrap; overflow-x: auto; padding-block: .1rem; }
+  .crm-atalho { min-height: 44px; white-space: nowrap; }
+}
 @media (max-width: 760px) {
   .crm-totais { border-radius: 18px; }
   .kb { padding-bottom: 1.25rem; }

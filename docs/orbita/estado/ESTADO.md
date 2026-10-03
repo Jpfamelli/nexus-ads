@@ -339,3 +339,10 @@ F8 segue em andamento. Os testes locais (14/14 suítes, sete `deno check` e QA r
 - Chrome headless com `dev-falso`: Atendimento, CRM, Ads e Início em 390 × 844 sem overflow da página; jornada simulada anúncio → conversa → agenda → CodeWords → CRM → receita Ads coberta por testes.
 - Sem chamadas a APIs reais, sem alterações no banco, `nx_config`, `prontos.js`, `main` ou produção. F8 permanece ACEITA conforme o registro mais recente no `AGENTS.md`; este follow-up não altera `F8.md` nem seus gates.
 - Branch: `codex/orbita-melhorias-20261002`. A11y axe não executado porque `puppeteer-core` não está instalado; conferir o relatório datado para esse limite e as demais verificações.
+
+## Follow-up — 58 melhorias adicionais — 2026-10-03
+
+- CRM/Agenda: 15; Atendimento: 11; visual/acessibilidade transversal: 18; Ads/Início/Relatórios: 14. Inventário e evidências: [`MELHORIAS-20261003.md`](MELHORIAS-20261003.md).
+- Verificação fresca: `node testes/rodar-tudo.mjs` — **23/23 arquivos**; focados CRM 15/15, Atendimento 103/103, visual 18/18 e Ads 14/14. Montagem das sete funções e `npx --yes deno check` 7/7 passaram; `node --check` 73 arquivos JavaScript/ESM e `git diff --check` limpos.
+- Smoke no Chrome em `dev-falso`: Anúncios/Campanhas e o modo claro carregaram; busca de campanha retornou 1/7, filtro CRM e comparação de duas campanhas funcionaram; telas CRM e Atendimento carregaram com fixtures; nenhum erro no console. Nenhuma mensagem foi enviada e nenhuma API real foi chamada.
+- Escopo somente local/front/testes/documentação na branch `codex/orbita-40-melhorias-20261003`. Sem API externa, banco, `nx_config`, `prontos.js`, `main` ou deploy. F8 permanece aceita; este follow-up não altera seu estado/gates.

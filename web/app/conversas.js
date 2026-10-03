@@ -339,6 +339,7 @@ async function buscarMensagens() {
   const seq = ++A.seqMsgs;
   if (q.length < 3) { A.buscaMsgs = null; return; }
   A.buscaMsgs = { q, carregando: true, itens: [], erro: null };
+  A.lista.render();
   try {
     const r = await A.api.rpcC("nx_cv_buscar_msgs", { p_q: q, p_limite: 20 });
     if (!A || seq !== A.seqMsgs) return;
@@ -708,7 +709,7 @@ function tratarErro(e) {
 }
 
 const acoes = {
-  abrir, carregarAntes, carregarLista, mudarLista, urlMidia, estadoMidia, abrirDetalhes, nomeContato, tratarErro,
+  abrir, carregarAntes, carregarLista, mudarLista, repetirBuscaMensagens: buscarMensagens, urlMidia, estadoMidia, abrirDetalhes, nomeContato, tratarErro,
   menuAvisos: ancora => menuAvisos(ancora), lerAvisos: () => lerAvisos(),
   voltar() { A.ctx.navegar("#/conversas"); },
   recarregarVer,

@@ -24,6 +24,43 @@ export function diaISO(iso, delta = 0) {
   const dt = new Date(Date.UTC(a, m - 1, d + delta, 12));
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
 }
+
+const dataAgendaValida = v => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
+
+/** Preferências locais sem conteúdo de consulta; o escopo evita misturar empresas ou contas no mesmo navegador. */
+export function chavePreferenciasAgenda(clienteId, contaId) {
+  if (!clienteId) return null;
+  return `nx-app-agenda-pref-v1:${encodeURIComponent(String(clienteId).slice(0, 120))}:${encodeURIComponent(String(contaId || "local").slice(0, 120))}`;
+}
+
+export function normalizarPreferenciasAgenda(valor, hoje = "") {
+  const v = valor && typeof valor === "object" && !Array.isArray(valor) ? valor : {};
+  return {
+    data: dataAgendaValida(v.data) ? v.data : (dataAgendaValida(hoje) ? hoje : ""),
+    modo: ["dia", "semana"].includes(v.modo) ? v.modo : "semana",
+    agrupar: ["juntos", "responsavel"].includes(v.agrupar) ? v.agrupar : "responsavel",
+  };
+}
+
+/** Atalhos da Agenda são explícitos (Alt+setas, Alt+T) e o chamador ignora campos editáveis/diálogos. */
+export function acaoTeclaAgenda(ev) {
+  if (!ev || !ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return null;
+  if (ev.key === "ArrowLeft") return "anterior";
+  if (ev.key === "ArrowRight") return "proximo";
+  if (String(ev.key).toLowerCase() === "t") return "hoje";
+  return null;
+}
+
+/** Índice para o roving tabindex das abas de dias no celular. */
+export function indiceAbaAgendaTecla(tecla, atual, total) {
+  const n = Math.max(0, Number(total) || 0), i = Math.max(0, Math.min(n - 1, Number(atual) || 0));
+  if (!n) return null;
+  if (tecla === "Home") return 0;
+  if (tecla === "End") return n - 1;
+  if (tecla === "ArrowRight" || tecla === "ArrowDown") return (i + 1) % n;
+  if (tecla === "ArrowLeft" || tecla === "ArrowUp") return (i - 1 + n) % n;
+  return null;
+}
 /** 0 = domingo … 6 = sábado (o dia civil, sem fuso). */
 export function diaDaSemana(iso) {
   const [a, m, d] = String(iso).split("-").map(Number);
@@ -584,12 +621,19 @@ export async function montar(ctx) {
 
   const mq = typeof matchMedia === "function" ? matchMedia("(max-width: 760px)") : { matches: false, addEventListener() {}, removeEventListener() {} };
   let movel = mq.matches;
-  let data = ui.hojeSP();
-  let modo = "semana";
-  let agrupar = "responsavel";      // dia com 2+ responsáveis: uma coluna por pessoa
+  const chavePreferencias = chavePreferenciasAgenda(ctx.cliente && ctx.cliente.id, ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id);
+  const hojeInicial = ui.hojeSP();
+  let preferencias = {};
+  try { preferencias = normalizarPreferenciasAgenda(JSON.parse(localStorage.getItem(chavePreferencias) || "{}"), hojeInicial); }
+  catch { preferencias = normalizarPreferenciasAgenda({}, hojeInicial); }
+  let data = preferencias.data || hojeInicial;
+  let modo = preferencias.modo;
+  let agrupar = preferencias.agrupar;      // dia com 2+ responsáveis: uma coluna por pessoa
   let atual = null, chaveAtual = "";
   let sequencia = 0;
   let vivo = true;
+  let atualizandoManual = false;
+  let mensagemAtualizacao = "";
   let eixoAtual = null;
   let nomesDonos = null;
   let Lg = null;                    // crm-logica.js (hrefTel do balão da consulta): chega em paralelo, a tela não espera por ele
@@ -603,6 +647,10 @@ export async function montar(ctx) {
   ui.limpar(ctx.alvo);
   ctx.alvo.append(cabecalho, conteudo);
 
+  function gravarPreferencias() {
+    try { localStorage.setItem(chavePreferencias, JSON.stringify({ data, modo, agrupar })); } catch { /* preferências não bloqueiam a Agenda */ }
+  }
+
   /** O que o servidor precisa devolver: a semana (segunda a domingo) na semana e no celular; o dia só no desktop em «Dia». */
   function intervalo() {
     const semanal = modo === "semana" || movel;
@@ -612,29 +660,54 @@ export async function montar(ctx) {
 
   function montarCabecalho() {
     ui.limpar(controles);
-    const anterior = h("button", { type: "button", class: "bt-icone", "aria-label": passoDeNavegacao() === 1 ? "Dia anterior" : "Semana anterior", on: { click: () => mover(-1) } }, ui.icone("seta-esq"));
-    const proximo = h("button", { type: "button", class: "bt-icone", "aria-label": passoDeNavegacao() === 1 ? "Próximo dia" : "Próxima semana", on: { click: () => mover(1) } }, ui.icone("seta-dir"));
-    const hoje = h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { data = ui.hojeSP(); carregar(); } } }, "Hoje");
+    const anterior = h("button", { type: "button", class: "bt-icone", "aria-label": passoDeNavegacao() === 1 ? "Dia anterior" : "Semana anterior", "aria-keyshortcuts": "Alt+ArrowLeft", on: { click: () => mover(-1) } }, ui.icone("seta-esq"));
+    const proximo = h("button", { type: "button", class: "bt-icone", "aria-label": passoDeNavegacao() === 1 ? "Próximo dia" : "Próxima semana", "aria-keyshortcuts": "Alt+ArrowRight", on: { click: () => mover(1) } }, ui.icone("seta-dir"));
+    const hoje = h("button", { type: "button", class: "bt bt-sec bt-p", "aria-keyshortcuts": "Alt+T", on: { click: () => { data = ui.hojeSP(); gravarPreferencias(); carregar(); } } }, "Hoje");
     const seletor = h("input", { class: "agenda-data", type: "date", value: data, "aria-label": "Escolher data" });
-    seletor.addEventListener("change", () => { if (seletor.value) { data = seletor.value; carregar(); } });
+    seletor.addEventListener("change", () => { if (dataAgendaValida(seletor.value)) { data = seletor.value; gravarPreferencias(); carregar(); } });
     const periodo = h("div", { class: "agenda-periodo" }, anterior, seletor, proximo, hoje);
     const alternador = ui.segmentado({ opcoes: [{ valor: "dia", rotulo: "Dia" }, { valor: "semana", rotulo: "Semana" }], valor: modo, rotulo: "Visualização da agenda", classe: "agenda-abas",
-      aoMudar: id => { modo = id; carregar(); } });
-    const acoes = h("div", { class: "agenda-acoes" }, alternador,
+      aoMudar: id => { modo = id; gravarPreferencias(); carregar(); } });
+    const atualizar = h("button", { type: "button", class: "bt bt-sec bt-p agenda-atualizar", disabled: atualizandoManual, "aria-busy": String(atualizandoManual), on: { click: atualizarAgora } }, atualizandoManual ? "Atualizando…" : "Atualizar");
+    const estado = h("span", { class: "agenda-atualizacao", role: "status", "aria-live": "polite" }, mensagemAtualizacao);
+    const acoes = h("div", { class: "agenda-acoes" }, estado, alternador, atualizar,
       ctx.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim agenda-marcar", on: { click: () => abrirAgendamento(null, { dia: movel || modo === "dia" ? data : null }) } }, ui.icone("mais"), "Marcar consulta") : null);
     controles.append(periodo, acoes);
   }
 
   function mover(delta) {
     data = diaISO(data, delta * passoDeNavegacao());
+    gravarPreferencias();
     carregar();
   }
+
+  async function atualizarAgora() {
+    if (atualizandoManual || !vivo) return;
+    atualizandoManual = true; mensagemAtualizacao = "Buscando alterações…"; montarCabecalho();
+    const ok = await carregar({ silencioso: true, forcar: true, manual: true });
+    if (!vivo) return;
+    atualizandoManual = false;
+    if (ok) mensagemAtualizacao = `Atualizada às ${new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date())}.`;
+    montarCabecalho();
+  }
+
+  function aoTeclaAgenda(ev) {
+    const alvo = ev.target;
+    const editando = alvo && (alvo.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(alvo.tagName) || alvo.closest?.("[role=dialog],dialog"));
+    if (editando) return;
+    const acao = acaoTeclaAgenda(ev);
+    if (!acao) return;
+    ev.preventDefault();
+    if (acao === "hoje") { data = ui.hojeSP(); gravarPreferencias(); carregar(); }
+    else mover(acao === "anterior" ? -1 : 1);
+  }
+  document.addEventListener("keydown", aoTeclaAgenda);
 
   async function carregar({ silencioso = false, forcar = false } = {}) {
     const iv = intervalo();
     const chave = `${iv.de}|${iv.dias}`;
     montarCabecalho();
-    if (!forcar && atual && chave === chaveAtual) { desenhar(); return; }   // mesmo período já em mãos (ex.: outro dia da mesma semana)
+    if (!forcar && atual && chave === chaveAtual) { desenhar(); return true; }   // mesmo período já em mãos (ex.: outro dia da mesma semana)
     const minha = ++sequencia;
     if (!silencioso || !atual) {
       ui.limpar(conteudo);
@@ -648,17 +721,26 @@ export async function montar(ctx) {
         atual = dc; chaveAtual = chave; doCache = true;
         desenhar();
       } });
-      if (!vivo || minha !== sequencia) return;
+      if (!vivo || minha !== sequencia) return false;
       const igual = doCache && JSON.stringify(atual) === JSON.stringify(r);     // nada mudou desde o guardado: não refaz a grade
       atual = r || { consultas: [], bloqueios: [] };
       chaveAtual = chave;
       if (!igual) desenhar();
+      return true;
     } catch (e) {
-      if (!vivo || minha !== sequencia) return;
-      if (e && e.comCache) return;      // a rede falhou depois de pintar a última agenda: fica o que está na tela
+      if (!vivo || minha !== sequencia) return false;
+      if (e && e.comCache) {
+        if (silencioso && atual && chaveAtual === chave) { mensagemAtualizacao = "Sem conexão · mostrando a última agenda guardada."; return false; }
+        return false;
+      }
+      if (silencioso && atual && chaveAtual === chave) {
+        mensagemAtualizacao = "Não foi possível atualizar · a agenda exibida foi mantida.";
+        return false;
+      }
       atual = null; chaveAtual = "";
       ui.limpar(conteudo);
       conteudo.appendChild(ui.erroCartao(e, () => carregar({ forcar: true })));
+      return false;
     }
   }
 
@@ -703,7 +785,7 @@ export async function montar(ctx) {
       h("div", { class: "agenda-resumo-data" },
         h("b", null, titulo), legendaFonte ? h("small", null, legendaFonte) : null),
       porDono ? ui.segmentado({ opcoes: [{ valor: "juntos", rotulo: "Juntos" }, { valor: "responsavel", rotulo: "Por responsável" }], valor: agrupar, tipo: "filtro", rotulo: "Agrupar a agenda do dia",
-        aoMudar: v => { agrupar = v; desenhar(); } }) : null,
+        aoMudar: v => { agrupar = v; gravarPreferencias(); desenhar(); } }) : null,
       h("div", { class: "agenda-resumo-num" },
         h("span", null, h("b", { class: "dado" }, ui.num(nDentro)), ` ${nDentro === 1 ? "consulta" : "consultas"}`),
         h("span", null, h("b", { class: "dado" }, ui.num(nBloq)), ` ${nBloq === 1 ? "bloqueio" : "bloqueios"}`)));
@@ -749,10 +831,16 @@ export async function montar(ctx) {
       const sel = iso === data;
       el.appendChild(h("button", { type: "button", role: "tab", class: ["ag-faixa-d", sel && "sel", iso === hoje && "hoje"], "aria-selected": String(sel), tabindex: sel ? "0" : "-1",
         "aria-label": `${nomeDia(iso, true)}, ${n} ${n === 1 ? "consulta" : "consultas"}`, dataset: { iso },
-        on: { click: () => { data = iso; montarCabecalho(); desenhar(); } } },
+        on: { click: () => { data = iso; gravarPreferencias(); montarCabecalho(); desenhar(); } } },
         h("span", { class: "ag-faixa-sem" }, semanaCurta(iso)), h("b", { class: "dado ag-faixa-num" }, diaDoMes(iso)),
         h("i", { class: ["ag-faixa-n", n && "tem"], "aria-hidden": "true" }, n ? String(n) : "")));
     }
+    const abas = [...el.querySelectorAll('[role="tab"]')];
+    for (const [i, botao] of abas.entries()) botao.addEventListener("keydown", ev => {
+      const alvo = indiceAbaAgendaTecla(ev.key, i, abas.length);
+      if (alvo == null) return;
+      ev.preventDefault(); abas[alvo].focus(); abas[alvo].click();
+    });
     // o dia escolhido sempre à vista na faixa
     queueMicrotask(() => { const s = el.querySelector(".sel"); if (s && s.scrollIntoView) try { s.scrollIntoView({ block: "nearest", inline: "center" }); } catch { /* ok */ } });
     return el;
@@ -909,6 +997,7 @@ export async function montar(ctx) {
   // a limpeza fica guardada no módulo ANTES de qualquer espera: se a pessoa sair da Agenda com a 1ª carga em andamento, o desmontar() já a encontra
   const limpar = () => {
     vivo = false; sequencia++;
+    document.removeEventListener("keydown", aoTeclaAgenda);
     if (typeof desregistrar === "function") try { desregistrar(); } catch { /* ok */ }
     clearInterval(relogio);
     if (mq.removeEventListener) mq.removeEventListener("change", aoMudarLargura);

@@ -93,7 +93,7 @@ await teste("antes.js: injeta o modulepreload da tela do endereço (8 telas + lo
   const extras = {
     "inicio.js": ["modulepreload:rel-logica.js?v=VTESTE", "modulepreload:graficos.js?v=VTESTE", "preload:relatorios.css?v=VTESTE"],
     "conversas.js": ["modulepreload:cv-logica.js?v=VTESTE", "modulepreload:cv-lista.js?v=VTESTE", "modulepreload:cv-chat.js?v=VTESTE", "modulepreload:cv-composer.js?v=VTESTE", "modulepreload:cv-lateral.js?v=VTESTE", "preload:conversas.css?v=VTESTE"],
-    "crm.js": ["modulepreload:crm-logica.js?v=VTESTE", "modulepreload:crm-kanban.js?v=VTESTE", "modulepreload:crm-negocio.js?v=VTESTE", "preload:crm.css?v=VTESTE"],
+    "crm.js": ["modulepreload:crm-logica.js?v=VTESTE", "modulepreload:crm-kanban.js?v=VTESTE", "modulepreload:crm-negocio.js?v=VTESTE", "modulepreload:crm-visoes.js?v=VTESTE", "preload:crm.css?v=VTESTE"],
   };
   for (const [hash, arq] of casos) assert.deepEqual(rodarAntes({ hash, token: "t" }).preloads, [`modulepreload:${arq}?v=VTESTE`, ...(extras[arq] || [])], hash);
   assert.deepEqual(rodarAntes({ hash: "", token: "t" }).preloads, ["modulepreload:inicio.js?v=VTESTE", ...extras["inicio.js"]], "sem rota: Início");

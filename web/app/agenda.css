@@ -209,6 +209,12 @@
 .rastc-plataforma > .linha { justify-content: space-between; }
 .rastc-plataforma > .mono { display: block; overflow-wrap: anywhere; white-space: normal; color: var(--c-texto-2); font-size: var(--fs-12); line-height: 1.6; }
 .rastc-privacidade { max-width: 100%; }
+.agenda-acoes { min-width: 0; }
+.agenda-atualizar { flex: none; min-height: 40px; }
+.agenda-atualizacao { max-width: 15rem; overflow: hidden; color: var(--c-texto-3); font-size: var(--fs-12); text-overflow: ellipsis; white-space: nowrap; }
+.agenda-atualizacao:empty { display: none; }
+.agenda-atualizar[aria-busy="true"] { cursor: progress; }
+.agenda-faixa [role="tab"]:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
 
 @media (max-width: 760px) {
   /* título e «Marcar consulta» na mesma linha; navegação de datas na de baixo (a tela é do dia, não do cabeçalho) */
@@ -217,6 +223,9 @@
   .agenda-cab .cab-txt { grid-column: 1; grid-row: 1; }
   .agenda-cab .cab-titulo { font-size: var(--fs-20); }
   .agenda-acoes .agenda-marcar { grid-column: 2; grid-row: 1; }
+  .agenda-acoes { grid-column: 1 / -1; grid-row: 3; display: flex; flex-wrap: wrap; justify-content: flex-end; }
+  .agenda-atualizacao { flex: 1 1 100%; max-width: none; text-align: right; }
+  .agenda-atualizar { min-height: 44px; }
   .agenda-periodo { grid-column: 1 / -1; grid-row: 2; flex-wrap: nowrap; }
   .agenda-data { flex: 1; width: auto; min-width: 120px; }
   .agenda-abas { display: none; }   /* no celular a visão é sempre «o dia» com a faixa da semana */

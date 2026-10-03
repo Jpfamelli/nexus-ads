@@ -14,6 +14,22 @@ const ABAS = [
 const CHAVE = "nx-app-rel";
 let L = null, G = null, montagem = 0, graficos = [];
 
+/** Janela inclusiva imediatamente anterior, com o mesmo número de dias (aritmética UTC, sem desvio de fuso). */
+export function janelaComparacao(de, ate) {
+  const parse = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? Date.parse(`${s}T00:00:00Z`) : NaN;
+  const a = parse(de), b = parse(ate), dia = 86400000;
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return null;
+  const dias = Math.floor((b - a) / dia) + 1;
+  const iso = ms => new Date(ms).toISOString().slice(0, 10);
+  return { dias, atual: { de, ate }, anterior: { de: iso(a - dias * dia), ate: iso(a - dia) } };
+}
+
+/** Remove filtros do cliente atual sem apagar preferências de outros clientes do mesmo navegador. */
+export function limparFiltrosRelatorios(pref = {}, clienteId) {
+  return { ...pref, preset: 30, de: null, ate: null,
+    funil: { ...(pref.funil || {}), [clienteId]: "" }, dep: { ...(pref.dep || {}), [clienteId]: "" } };
+}
+
 const lerPref = () => { try { return JSON.parse(localStorage.getItem(CHAVE) || "{}") || {}; } catch { return {}; } };
 const gravarPref = p => { try { localStorage.setItem(CHAVE, JSON.stringify(p)); } catch { /* modo privado */ } };
 function soltar() { for (const g of graficos) try { g.destruir(); } catch { /* ok */ } graficos = []; }
@@ -124,6 +140,15 @@ export async function montar(ctx) {
     const nome = filtroExtra && filtroExtra.atual ? ((filtroExtra.lista || []).find(x => x.id === filtroExtra.atual) || {}).nome || "" : "";
     chipTxt.textContent = L.textoChipRelatorios({ preset: P.preset, de: P.de, ate: P.ate, aba, nome });
   }
+
+  function limparFiltrosAtuais() {
+    const p = limparFiltrosRelatorios(lerPref(), ctx.cliente.id);
+    gravarPref(p);
+    P.preset = 30; P.de = null; P.ate = null; P.funil = ""; P.dep = "";
+    deIn.value = ""; ateIn.value = "";
+    pintarSeg(); pintarChip(); carregar();
+    setTimeout(() => chipResumo.focus(), 0);
+  }
   /** O chip-resumo «Últimos 30 dias · Todos os funis ▾» abre esta folha: período (com datas) e funil/departamento, aplicados de uma vez. */
   async function abrirFolha() {
     let preset = P.preset, de = P.de || deIn.value || "", ate = P.ate || ateIn.value || "", extra = filtroExtra ? filtroExtra.atual : "";
@@ -184,7 +209,10 @@ export async function montar(ctx) {
     ui.limpar(corpo);
     corpo.append(ui.esqueleto("cartoes", 6));
     const { de, ate } = periodo();
-    legenda.textContent = `${L.dataIsoBR(de)} a ${L.dataIsoBR(ate)} · comparado com os ${L.difDias(de, ate) + 1} dias anteriores`;
+    const j = janelaComparacao(de, ate);
+    legenda.textContent = j
+      ? `${L.dataIsoBR(de)} a ${L.dataIsoBR(ate)} · comparado com ${L.dataIsoBR(j.anterior.de)} a ${L.dataIsoBR(j.anterior.ate)} (${j.dias} dias)`
+      : `${L.dataIsoBR(de)} a ${L.dataIsoBR(ate)} · comparação anterior indisponível`;
     btnAtualizar.disabled = true;
     try {
       const r = aba === "vendas"
@@ -254,7 +282,10 @@ export async function montar(ctx) {
       h("tbody", {}, linhas.map((l, i) => h("tr", { style: `--i:${i}` }, l.map((v, j) => j ? h("td", { class: "num", dataset: { l: colunas[j] } }, v) : h("th", { scope: "row" }, v)))))));
   }
   function semDados(msg = "Sem dados no período.") {
-    return h("div", { class: "rel-cartao relat-vazio rel-entra" }, ui.vazio({ titulo: msg, texto: "Escolha outro período ou outro filtro.", icone: "grafico" }));
+    const filtrado = P.preset !== 30 || (P.preset === "per" && (P.de || P.ate)) || !!P.funil || !!P.dep;
+    return h("div", { class: "rel-cartao relat-vazio rel-entra" }, ui.vazio({ titulo: msg,
+      texto: filtrado ? "Não há dados com este recorte. Limpe os filtros para voltar ao período padrão." : "Escolha outro período ou outro filtro.",
+      icone: "grafico", acao: filtrado ? { rotulo: "Limpar período e filtros", fn: limparFiltrosAtuais } : null }));
   }
 
   // ---------- VENDAS

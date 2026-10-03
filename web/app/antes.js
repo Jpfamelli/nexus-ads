@@ -71,7 +71,7 @@
       var aquecer = {
         inicio: { js: ["rel-logica.js", "graficos.js"], css: "relatorios.css" },
         conversas: { js: ["cv-logica.js", "cv-lista.js", "cv-chat.js", "cv-composer.js", "cv-lateral.js"], css: "conversas.css" },
-        crm: { js: ["crm-logica.js", "crm-kanban.js", "crm-negocio.js"], css: "crm.css" },
+        crm: { js: ["crm-logica.js", "crm-kanban.js", "crm-negocio.js", "crm-visoes.js"], css: "crm.css" },
       };
       var seg = (location.hash || "").replace(/^#\/?/, "").split(/[\/?]/)[0];
       var logado = false;
