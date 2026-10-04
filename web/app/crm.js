@@ -33,6 +33,16 @@ async function logica(ctx) {
   return L;
 }
 
+/** graficos.js (contadores animados, sparkline quando a frente A entregar): opcional — sem ele as telas mostram os números parados. */
+let G = null, promessaG = null;
+function graficos(ctx) {
+  if (G) return Promise.resolve(G);
+  if (!promessaG) {
+    promessaG = import(`./graficos.js?v=${encodeURIComponent(ctx.versao)}`).then(m => { G = m; return m; }, () => { promessaG = null; return null; });
+  }
+  return promessaG;
+}
+
 /**
  * Base do CRM (funis, etapas, campos, etiquetas, motivos, usuários, ticket) — em memória por empresa.
  * M30: a PRIMEIRA leitura da sessão usa o último dado guardado no aparelho (rpcC com cache) e já devolve; quando a rede responde, a mesma base é
@@ -82,10 +92,11 @@ function avisarBase(id) {
 
 /** Kit compartilhado pelos arquivos do CRM. */
 async function kitDe(ctx) {
-  const [Lg, base] = await Promise.all([logica(ctx), obterBase(ctx)]);
+  const [Lg, base, Gr] = await Promise.all([logica(ctx), obterBase(ctx), graficos(ctx)]);
   const ui = ctx.ui;
   const k = {
     ctx, ui, api: ctx.api, L: Lg, v: ctx.vocab, base,
+    G: Gr,                                   // graficos.js ou null: as telas conferem `typeof k.G.contar === "function"` antes de usar
     h: ui.h,
     mod: nome => carregarArq(ctx, nome),
     async recarregarBase() { k.base = await obterBase(ctx, { forcar: true }); return k.base; },
@@ -262,7 +273,7 @@ export async function montar(ctx) {
       else if (tipo === "contatos") tela = await M.montarContatos(k, el, r);
       else if (tipo === "ficha") tela = await M.montarFicha(k, el, partes[0], {});
       else if (tipo === "empresas") tela = await M.montarEmpresas(k, el, r);
-      else if (tipo === "empresa") tela = await M.montarEmpresa(k, el, partes[0]);
+      else if (tipo === "empresa") tela = await M.montarEmpresa(k, el, partes[0], r);
       else if (tipo === "tarefas") tela = await M.montarTarefas(k, el, r);
       else if (tipo === "importar") tela = await M.montarImportar(k, el, r);
       if (minha !== montagem) { if (tela && tela.desmontar) tela.desmontar(); return; }

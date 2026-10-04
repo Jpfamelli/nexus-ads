@@ -779,7 +779,8 @@ await teste("M31: inicio.js — esqueleto até chegar o dado, manchete por ui.ca
   assert.match(s, /ui\.vazio\(\{ tipo: "em_dia", titulo: "Tudo em dia\."/);
   assert.match(s, /G\.destacar\(el\)/, "número que mudou acende");
   assert.match(s, /"nx_inicio", \{\}, \{ cache: true, aoCache \}/, "último dado pelo cache do shell");
-  assert.match(s, /nx_agenda_dia[\s\S]{0,120}catch \{ return null; \}/, "a agenda é complemento: se falhar a frase só não fala de consulta");
+  // a agenda é complemento (sem ela a frase só não fala de consulta), mas falha ≠ sem permissão: a falha volta {erro: true} e a tela oferece «Tentar de novo»
+  assert.match(s, /if \(!podeAgenda\) return null;[\s\S]{0,200}?nx_agenda_dia[\s\S]{0,300}?catch \{[\s\S]{0,200}?return \{ erro: true \};/, "a agenda é complemento, e falha passageira não vira «sem permissão»");
   assert.doesNotMatch(s, /innerHTML/);
 });
 
@@ -995,7 +996,8 @@ await teste("R119: manchete e paleta com a palavra da vertical (consulta / visit
 
 await teste("R119: menu das Configurações — o nome acessível do item com pendência não repete o número", () => {
   const cfg = ler("web/app/config.js");
-  assert.match(cfg, /const nome = \(a\.querySelector\("span:not\(\.nav-selo\)"\) \|\| a\)\.textContent\.trim\(\);\s*a\.appendChild\(h\("span", \{ class: "nav-selo cfg-pend"/, "o título é lido antes de o selo entrar");
+  // plano 50 · 56: o item do menu ganhou descrição (.cfg-nav-desc); o nome acessível lê SÓ o título (.cfg-nav-tit), antes de o selo entrar
+  assert.match(cfg, /const nome = \(a\.querySelector\("(?:\.cfg-nav-tit|span:not\(\.nav-selo\))"\) \|\| a\)\.textContent\.trim\(\);\s*a\.appendChild\(h\("span", \{ class: "nav-selo cfg-pend"/, "o título é lido antes de o selo entrar");
   assert.match(cfg, /a\.setAttribute\("aria-label", `\$\{nome\}, \$\{n\} /);
   assert.doesNotMatch(cfg, /aria-label", `\$\{a\.textContent/);
 });
@@ -1114,7 +1116,9 @@ await teste("M39: Anúncios e Relatórios — abas por ui.segmentado, chip-resum
 
 await teste("M39: Radar — cada alerta com barra lateral de 3 px, ícone e rótulo da gravidade por token --c-sev-*, o crítico ativo no topo e o rótulo nunca só cor", () => {
   const ads = ler("web/app/anuncios.js"), css = ler("web/app/relatorios.css");
-  assert.match(ads, /L\.ordenarRadar\(R\)\.forEach\(\(it, n\) => lista\.append\(it\.tipo === "conexao" \? alertaConexao\(it, n\) : alertaEpisodio\(it, n\)\)\)/);
+  // plano 50 (item 51): a lista passa pelo filtro do semáforo (todos/ativos/resolvidos), mas continua na ordem de L.ordenarRadar
+  assert.match(ads, /const ordenados = L\.ordenarRadar\(R\);/);
+  assert.match(ads, /const itens = L\.filtrarRadar\(ordenados, filtro\);\s*itens\.forEach\(\(it, n\) => lista\.append\(it\.tipo === "conexao" \? alertaConexao\(it, n\) : alertaEpisodio\(it, n\)\)\)/);
   assert.match(ads, /dataset: \{ sev \}/, "o <li> leva data-sev");
   assert.match(ads, /h\("span", \{ class: "ads-sev-marca" \}, ui\.icone\(L\.SEV_ICONE\[sev\]\), h\("span", \{ class: "ads-sev-rot" \}, L\.SEV_ROTULO\[sev\]\)\)/, "ícone + rótulo escrito");
   assert.match(css, /\.ads-al\[data-sev="critico"\] \{ --sev: var\(--c-sev-crit\); \}/);

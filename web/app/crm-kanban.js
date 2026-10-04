@@ -17,6 +17,12 @@
      tecla M e o botão ⋮ do cartão abrem a folha «Mover para…»; a rolagem
      vertical/horizontal normal nunca inicia arrasto (limiar + touch-action);
      fita de etapas fixa sob a busca, totais numa linha e «Novo» flutuante
+   - plano 50 (04/10): resumo do funil acima do quadro (barras por etapa +
+     «quantos seguem» entre etapas, com versão em tabela), mini-barra de
+     participação no cabeçalho da coluna, cartão com avatar, barra de
+     «tempo na etapa» (verde→âmbar→vermelho pelo prazo da etapa ou 3/7 dias),
+     próxima tarefa e selo da origem; totais que contam ao entrar e acendem
+     ao mudar; legenda da distribuição leva à coluna; «/» foca a busca
    ============================================================ */
 
 const LIMIAR_ARRASTO = 6;           // px antes de virar arrasto
@@ -132,6 +138,48 @@ export async function montarKanban(k, el, rota) {
     h("div", { class: "crm-tot" }, h("span", { class: "rotulo" }, "Em aberto"), totSoma, h("small", null, "soma dos valores previstos")),
     h("div", { class: "crm-tot crm-tot-prev" }, h("span", { class: "rotulo" }, "Previsão ponderada"), totPrev, h("small", null, "valor × chance de cada etapa")),
     h("div", { class: "crm-dist" }, h("span", { class: "rotulo" }, "Distribuição por etapa"), distBarra, distLeg));
+  const reduzido = () => { try { return !!(matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches); } catch { return false; } };
+  const telaPequena = () => { try { return !!(matchMedia && matchMedia("(max-width: 760px)").matches); } catch { return false; } };
+  /** Número do topo: na 1ª pintura conta até o valor (G.contar); quando muda depois, troca e acende (G.destacar). Sem graficos.js só troca o texto.
+      Compara com o ALVO (o aria-label guarda o valor final durante a contagem), não com o número parcial; a rede que chega no meio da contagem do
+      quadro guardado para a contagem e escreve o valor novo no texto e no aria-label. */
+  function pintarNumero(el, valor, fmt) {
+    const txt = fmt(valor), alvo = el.getAttribute("aria-label");
+    if (alvo === txt || (alvo === null && el.textContent === txt)) return;
+    const primeira = el.textContent === "—";
+    const G = k.G;
+    if (primeira && G && typeof G.contar === "function") { G.contar(el, valor, fmt); return; }
+    if (typeof el.__pararContagem === "function") el.__pararContagem();
+    el.textContent = txt;
+    el.setAttribute("aria-label", txt);
+    if (!primeira && G && typeof G.destacar === "function") G.destacar(el);
+  }
+
+  // plano 50 (item 24): resumo do funil — barras «chegaram até aqui» por etapa e «quantos seguem» para a próxima, só com as contagens do quadro.
+  // Recolhível (estado por empresa no aparelho). Começa aberto só em tela alta (≥ 900 px) e larga: em 768 px de altura e no celular o quadro
+  // precisa aparecer na 1ª tela — recolhido, o cabeçalho mostra a faixa compacta (contagem e % entre as etapas). Com versão em tabela.
+  const telaAlta = () => { try { return !!(matchMedia && matchMedia("(min-height: 900px)").matches); } catch { return false; } };
+  const chaveResumo = `nx-app-crm-fr-${cli}`;
+  let resumoAberto = (() => { try { const v = localStorage.getItem(chaveResumo); return v === null ? (!telaPequena() && telaAlta()) : v !== "0"; } catch { return false; } })();
+  const resMini = h("span", { class: "crm-fr-mini", "aria-hidden": "true" });      // «● 4 → 75% ● 3 → 67% …» enquanto recolhido (o texto completo está nas linhas)
+  const resLista = h("ol", { class: "crm-fr-lista", "aria-label": "Etapas do funil" });
+  const resTabela = h("div", { class: "crm-fr-tabela", hidden: true });
+  const resNota = h("p", { class: "crm-fr-nota" });
+  const btResTabela = h("button", { type: "button", class: "bt bt-fant bt-p crm-fr-vertabela", "aria-pressed": "false", on: { click: () => {
+    const liga = resTabela.hidden;
+    resTabela.hidden = !liga; resLista.hidden = liga;
+    btResTabela.setAttribute("aria-pressed", String(liga));
+    btResTabela.textContent = liga ? "Ver como barras" : "Ver como tabela";
+  } } }, "Ver como tabela");
+  const idRes = `crm-fr-${cli}`;
+  const resCorpo = h("div", { class: "crm-fr-corpo", id: idRes }, resLista, resTabela, resNota);
+  const btResumo = h("button", { type: "button", class: "crm-fr-cab", "aria-expanded": String(resumoAberto), "aria-controls": idRes, on: { click: () => {
+    resumoAberto = !resumoAberto; aplicarResumoAberto();
+    try { localStorage.setItem(chaveResumo, resumoAberto ? "1" : "0"); } catch { /* ok */ }
+  } } }, h("span", { class: "crm-fr-titulo" }, "Resumo do funil"), h("span", { class: "crm-fr-sub" }, "quantos seguem de uma etapa para a próxima"), resMini, ui.icone("seta-baixo"));
+  const resumoFunil = h("section", { class: "crm-fr", "aria-label": "Resumo do funil", hidden: true }, h("div", { class: "crm-fr-topo" }, btResumo, btResTabela), resCorpo);
+  function aplicarResumoAberto() { btResumo.setAttribute("aria-expanded", String(resumoAberto)); resCorpo.hidden = !resumoAberto; btResTabela.hidden = !resumoAberto; }
+  aplicarResumoAberto();
 
   const quadro = h("div", { class: "kb", role: "region", "aria-label": `Quadro de ${k.v.min("negocios")}`, tabindex: "-1" });
   const instr = h("p", { id: `kb-instr-${cli}`, class: "sr-only" },
@@ -156,7 +204,7 @@ export async function montarKanban(k, el, rota) {
     ui.cabecalho({ titulo: k.v.crm, acoes: [btNovo, selFunilM] }),
     selFunil,
     h("div", { class: "pilha-p crm-kb-ferramentas" }, fitaBusca, atalhos, controlesVisoes.el, chips),
-    fitaEtapas, resumoLinha, totais, areaVazia, corpoQuadro, instr, fab].filter(Boolean));
+    fitaEtapas, resumoLinha, totais, resumoFunil, areaVazia, corpoQuadro, instr, fab].filter(Boolean));
   desenharSelFunil();
 
   /* ============================================================ dados */
@@ -309,14 +357,66 @@ export async function montarKanban(k, el, rota) {
     const mais = podeMover && e.tipo === "aberto"
       ? h("button", { type: "button", class: "bt-icone kb-col-mais", "aria-label": `${k.v.novo("negocio")} em ${e.nome}`, title: `${k.v.novo("negocio")} em ${e.nome}`,
         on: { click: () => novo({ estagio_id: e.id }) } }, ui.icone("mais")) : null;
+    // plano 50 (item 23): mini-barra de participação — quanto desta etapa há no funil (abertas: entre as abertas; fechadas: no quadro todo)
+    const prop = h("span", { class: "kb-col-prop", role: "img" }, h("i"));
+    const pct = h("span", { class: "kb-col-pct dado" });
     const sec = h("section", { class: "kb-col", dataset: { estagio: e.id, tipo: e.tipo }, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, "aria-labelledby": idNome },
       h("header", { class: "kb-col-cab" },
         h("div", { class: "kb-col-l1" }, h("i", { "aria-hidden": "true" }), h("h2", { class: "kb-col-nome", id: idNome }, e.nome), n, mais),
-        h("div", { class: "kb-col-l2" }, soma, h("span", { class: "kb-col-tipo" }, tipoTxt))),
+        h("div", { class: "kb-col-l2" }, soma, h("span", { class: "kb-col-tipo" }, tipoTxt)),
+        h("div", { class: "kb-col-l3" }, prop, pct)),
       lista, extra);
-    colEls.set(e.id, { sec, lista, n, soma, extra, e });
+    colEls.set(e.id, { sec, lista, n, soma, extra, e, prop, pct });
     preencherColuna(e.id, col);
     return sec;
+  }
+
+  /** Participação de cada coluna (item 23): largura da mini-barra e a porcentagem ao lado. */
+  function desenharParticipacao() {
+    const part = L.participacaoEtapas(S.dados.colunas, S.funil.estagios);
+    for (const [id, c] of colEls) {
+      const p = part.get(id) || { n: 0, fracao: 0, pct: 0 };
+      c.prop.style.setProperty("--w", `${Math.max(p.n ? 2 : 0, p.fracao * 100).toFixed(1)}%`);
+      c.pct.textContent = `${p.pct}%`;
+      c.prop.setAttribute("aria-label", `${p.pct}% d${k.v.art("negocio")}s ${k.v.min("negocios")} ${c.e.tipo === "aberto" ? `abert${k.v.art("negocio")}s` : "do quadro"}`);
+    }
+  }
+
+  /** Resumo do funil (item 24): uma linha por etapa aberta (e a de ganho) com a barra «chegaram», o que está nela agora e quantos seguem. */
+  function desenharResumoFunil() {
+    const linhas = L.resumoFunil(S.dados.colunas, S.funil.estagios);
+    ui.limpar(resLista); ui.limpar(resTabela); ui.limpar(resMini);
+    resumoFunil.hidden = !linhas.length;
+    if (!linhas.length) return;
+    linhas.forEach((l, i) => {
+      // append nativo: nada de null na lista (viraria o texto «null»)
+      resMini.append(h("i", { class: "crm-fr-mini-p", style: k.cor(l.cor) ? { "--cor": k.cor(l.cor) } : null, title: l.nome }), h("b", { class: "dado" }, ui.num(l.chegaram)));
+      if (l.conversao != null) resMini.append(h("small", { class: ["dado", l.conversao >= .5 ? "boa" : l.conversao >= .25 ? "media" : "baixa"] }, `→ ${L.pctInteiro(l.conversao)} →`));
+      else if (linhas[i + 1]) resMini.append(h("small", { class: "dado" }, "→"));
+    });
+    linhas.forEach((l, i) => {
+      const prox = linhas[i + 1];
+      const conv = l.conversao;
+      resLista.appendChild(h("li", { class: ["crm-fr-it", `t-${l.tipo}`], style: { "--i": String(i), ...(k.cor(l.cor) ? { "--cor": k.cor(l.cor) } : {}) } },
+        h("button", { type: "button", class: "crm-fr-nome", title: `Ir para a coluna ${l.nome}`, on: { click: () => irParaColuna(l.id) } }, h("i", { "aria-hidden": "true" }), h("span", null, l.nome)),
+        h("span", { class: "crm-fr-trilho", role: "img", "aria-label": `${l.nome}: ${ui.num(l.chegaram)} ${l.chegaram === 1 ? "cartão chegou" : "cartões chegaram"} até aqui; ${ui.num(l.n)} ${l.n === 1 ? "está" : "estão"} nela agora` },
+          h("i", { class: "crm-fr-barra", style: { "--w": `${Math.max(l.chegaram > 0 ? 3 : 0, l.pctTopo * 100).toFixed(1)}%` } }),
+          h("b", { class: "dado" }, ui.num(l.chegaram))),
+        h("span", { class: "crm-fr-agora" }, `${ui.num(l.n)} agora`, l.valor ? h("small", { class: "dado" }, ui.brl(l.valor, { centavos: false })) : null),
+        h("span", { class: ["crm-fr-conv", conv != null && (conv >= .5 ? "boa" : conv >= .25 ? "media" : "baixa")] },
+          prox ? (conv != null ? [h("b", { class: "dado" }, L.pctInteiro(conv)), ` seguem para ${prox.nome}`] : "—") : h("span", { class: "crm-fr-fim" }, "fim do funil"))));
+    });
+    resTabela.appendChild(h("table", { class: "tabela crm-fr-tab" },
+      h("caption", { class: "sr-only" }, "Resumo do funil por etapa"),
+      h("thead", null, h("tr", null, h("th", { scope: "col" }, "Etapa"), h("th", { scope: "col", class: "dir" }, "Chegaram"), h("th", { scope: "col", class: "dir" }, "Agora"), h("th", { scope: "col", class: "dir" }, "Valor"), h("th", { scope: "col", class: "dir" }, "Seguem"))),
+      // data-rotulo: no celular a .tabela vira cartões e cada número leva o rótulo da coluna (o padrão do ui.tabela)
+      h("tbody", null, linhas.map(l => h("tr", null, h("th", { scope: "row" }, l.nome), h("td", { class: "dir", dataset: { rotulo: "Chegaram" } }, ui.num(l.chegaram)), h("td", { class: "dir", dataset: { rotulo: "Agora" } }, ui.num(l.n)),
+        h("td", { class: "dir", dataset: { rotulo: "Valor" } }, l.valor ? ui.brl(l.valor, { centavos: false }) : "—"), h("td", { class: "dir", dataset: { rotulo: "Seguem" } }, L.pctInteiro(l.conversao)))))));
+    // etapas laterais (marco «faltou»): não são degrau do funil — só a contagem, sem taxa para elas nem a partir delas
+    const fora = (linhas.fora || []).map(f => `«${f.nome}» (${ui.num(f.n)} agora)`);
+    resNota.textContent = `Estimativa pelo quadro de agora: um cartão «chegou» a uma etapa se está nela ou numa etapa à frente (${k.v.art("negocio") === "a" ? "as perdidas" : "os perdidos"} não entram).`
+      + (fora.length ? ` ${fora.join(" e ")} ${fora.length === 1 ? "fica" : "ficam"} fora da sequência: é desvio, não passo do funil.` : "");
+    if (!reduzido()) resLista.classList.add("anim");
   }
 
   function preencherColuna(estagioId, col) {
@@ -349,9 +449,9 @@ export async function montarKanban(k, el, rota) {
 
   function desenharTotais() {
     const t = L.previsao(S.dados.colunas, S.funil.estagios);
-    totAbertos.textContent = ui.num(t.abertos);
-    totSoma.textContent = ui.brl(t.soma_aberto, { centavos: false });
-    totPrev.textContent = ui.brl(t.previsao_ponderada, { centavos: false });
+    pintarNumero(totAbertos, t.abertos, v => ui.num(Math.round(v)));
+    pintarNumero(totSoma, t.soma_aberto, v => ui.brl(v, { centavos: false }));
+    pintarNumero(totPrev, t.previsao_ponderada, v => ui.brl(v, { centavos: false }));
     resumoTxt.textContent = L.resumoDoFunil({ abertos: t.abertos, soma: ui.brl(t.soma_aberto, { centavos: false }), previsao: ui.brl(t.previsao_ponderada, { centavos: false }) }, k.v.art("negocio"));
     contarFita();
     ui.limpar(distBarra); ui.limpar(distLeg);
@@ -362,10 +462,14 @@ export async function montarKanban(k, el, rota) {
       const n = col ? Number(col.total) || 0 : 0;
       partes.push(`${e.nome}: ${n}`);
       if (n > 0) distBarra.appendChild(h("i", { style: { "flex-grow": String(n), ...(k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : {}) }, title: `${e.nome}: ${n}` }));
-      distLeg.appendChild(h("span", { style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null }, h("i", { "aria-hidden": "true" }), `${e.nome} ${n}`));
+      // a legenda leva à coluna (plano 50): mesmo atalho da fita de etapas do celular
+      distLeg.appendChild(h("button", { type: "button", class: "crm-dist-leg-b", style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, title: `Ir para a coluna ${e.nome}`,
+        on: { click: () => irParaColuna(e.id) } }, h("i", { "aria-hidden": "true" }), `${e.nome} `, h("b", { class: "dado" }, ui.num(n))));
     }
     if (!totalGeral) distBarra.appendChild(h("i", { style: { "flex-grow": "1" } }));
     distBarra.setAttribute("aria-label", `Distribuição por etapa — ${partes.join(", ")}`);
+    desenharParticipacao();
+    desenharResumoFunil();
   }
 
   /** O símbolo do sprite existe? (i-meta e i-google chegam com os ícones novos da frente B; antes disso o megafone genérico). */
@@ -388,20 +492,30 @@ export async function montarKanban(k, el, rota) {
     const tarefa = c.tarefa && typeof c.tarefa === "object" ? c.tarefa : null;
     const tarefaTxt = tarefa ? (tarefa.atrasada ? "Tarefa atrasada" : tarefa.vence_em ? `Tarefa ${ui.relativo(tarefa.vence_em)}` : "Tarefa") : "";
     const consultaTxt = c.consulta_em ? `${ui.dataCurtaBR ? ui.dataCurtaBR(c.consulta_em) : ui.dataBR(c.consulta_em)} ${ui.horaBR(c.consulta_em)}` : "";
-    const rotulo = `${titulo}${valor != null ? `, ${ui.brl(valor)}` : ""}${sub ? `, ${sub}` : ""}${consultaTxt ? `, consulta ${consultaTxt}` : ""}${tarefaTxt ? `, ${tarefaTxt.toLowerCase()}` : ""}${origemTxt ? `, origem ${origemTxt}` : ""}${etqs.length ? `, etiquetas ${etqs.map(x => x.nome).join(", ")}` : ""}${pont ? `, pontuação ${pont.score} de 100` : ""}${dono ? `, responsável ${dono.nome}` : ""}${c.nao_lidas ? `, ${c.nao_lidas} mensagens não lidas` : ""}`;
-    const art = h("article", { class: ["kc", S.pend.has(c.id) && "confirmando salvando"], role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
+    // plano 50 (item 22): barra de tempo na etapa pelo prazo da etapa (sla_horas da base) ou 3/7 dias; avatar do contato; selo da origem sem anúncio
+    const faixa = e.tipo === "aberto" ? L.faixaTempoEtapa(c.estagio_em, e.sla_horas) : null;
+    const nomeAvatar = (c.contato && (c.contato.nome || c.contato.telefone)) || c.nome || c.telefone || titulo;
+    const idAvatar = c.contato && c.contato.id != null ? c.contato.id : nomeAvatar;
+    const ICONE_ORIGEM = { whatsapp: "whatsapp", site: "globo", indicacao: "usuario", organico: "busca", importacao: "camadas" };
+    const seloOrigem = !c.plataforma && c.origem && c.origem !== "manual" && ICONE_ORIGEM[c.origem] ? ICONE_ORIGEM[c.origem] : null;
+    const rotulo = `${titulo}${valor != null ? `, ${ui.brl(valor)}` : ""}${sub ? `, ${sub}` : ""}${faixa ? `, ${faixa.texto.toLowerCase()}` : ""}${consultaTxt ? `, consulta ${consultaTxt}` : ""}${tarefaTxt ? `, ${tarefaTxt.toLowerCase()}` : ""}${origemTxt ? `, origem ${origemTxt}` : ""}${etqs.length ? `, etiquetas ${etqs.map(x => x.nome).join(", ")}` : ""}${pont ? `, pontuação ${pont.score} de 100` : ""}${dono ? `, responsável ${dono.nome}` : ""}${c.nao_lidas ? `, ${c.nao_lidas} mensagens não lidas` : ""}`;
+    const art = h("article", { class: ["kc", S.pend.has(c.id) && "confirmando salvando", faixa && `kc-prazo-${faixa.nivel}`], role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
       "aria-label": rotulo, "aria-describedby": instr.id, "aria-busy": S.pend.has(c.id) ? "true" : null, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
-      h("span", { class: "kc-t" }, titulo),
+      h("div", { class: "kc-l1" }, ui.avatar(nomeAvatar, idAvatar), h("span", { class: "kc-t" }, titulo)),
       h("div", { class: "kc-l2" },
         valor != null ? h("b", { class: "kc-valor" }, ui.brl(valor, { centavos: false })) : h("span", { class: ["kc-valor", "sem"] }, "sem valor"),
         sub ? h("span", { class: "kc-s", title: sub }, sub) : null),
+      faixa ? h("span", { class: ["kc-tempo", faixa.nivel], role: "img", "aria-label": `${L.textoDiasEtapa(c.estagio_em)}: ${faixa.texto.toLowerCase()}`, title: `${L.textoDiasEtapa(c.estagio_em)} · ${faixa.texto}` },
+        h("i", { style: { "--w": `${Math.round(faixa.pct * 100)}%` } })) : null,
       h("div", { class: "kc-rod" },
-        h("span", { class: ["kc-dias", sla && "sla"], title: e.tipo === "aberto" ? `${L.textoDiasEtapa(c.estagio_em)}${sla ? ` — passou do prazo da etapa (${e.sla_horas} h)` : ""}` : null },
+        h("span", { class: ["kc-dias", sla && "sla", faixa && faixa.nivel !== "ok" && faixa.nivel], title: e.tipo === "aberto" ? `${L.textoDiasEtapa(c.estagio_em)}${sla ? ` — passou do prazo da etapa (${e.sla_horas} h)` : faixa ? ` · ${faixa.texto}` : ""}` : null },
           e.tipo === "aberto" ? L.textoDiasEtapa(c.estagio_em).replace(" na etapa", "") : c.fechado_em ? `${e.tipo === "ganho" ? k.v.ganhar.toLowerCase() : "fechado"} ${ui.relativo(c.fechado_em)}` : ""),
         consultaTxt ? h("span", { class: "kc-consulta", title: "Consulta/visita marcada" }, ui.icone("relogio"), consultaTxt) : null,
-        tarefa ? h("span", { class: ["kc-tarefa", tarefa.atrasada && "atrasada"], title: tarefaTxt }, tarefa.atrasada ? h("i", { class: "kc-ponto-ruim", "aria-hidden": "true" }) : ui.icone("tarefa")) : null,
+        tarefa ? h("span", { class: ["kc-tarefa", tarefa.atrasada && "atrasada"], title: tarefaTxt }, tarefa.atrasada ? h("i", { class: "kc-ponto-ruim", "aria-hidden": "true" }) : ui.icone("tarefa"),
+          h("span", { class: "kc-tarefa-txt" }, tarefa.atrasada ? "atrasada" : tarefa.vence_em ? ui.relativo(tarefa.vence_em) : "")) : null,
         pont ? h("span", { class: ["kc-score", pont.faixa], title: `Pontuação do lead: ${pont.score} de 100${pont.motivo ? ` — ${pont.motivo}` : ""}` }, String(pont.score)) : null,
         c.plataforma ? h("span", { class: ["kc-origem", c.plataforma], title: origemTxt }, ui.icone(simbolo(c.plataforma === "google" ? "google" : "meta", "anuncio"))) : null,
+        seloOrigem ? h("span", { class: "kc-origem kc-origem-outra", title: origemTxt || L.ROTULO_ORIGEM[c.origem] }, ui.icone(seloOrigem)) : null,
         etqs.length ? h("span", { class: "kc-pontos", title: etqs.map(x => x.nome).join(", ") },
           etqs.slice(0, 3).map(x => h("i", { class: "kc-ponto", "aria-hidden": "true", style: k.cor(x.cor) ? { "--cor": k.cor(x.cor) } : null })),
           etqs.length > 3 ? h("small", null, `+${etqs.length - 3}`) : null) : null,
@@ -530,10 +644,10 @@ export async function montarKanban(k, el, rota) {
   function assentar(id) {
     const el = quadro.querySelector(`.kc[data-id="${id}"]`);
     if (!el) return;
-    el.classList.remove("assenta");
+    el.classList.remove("assenta", "kc-solto");
     void el.offsetWidth;
-    el.classList.add("assenta");
-    el.addEventListener("animationend", () => el.classList.remove("assenta"), { once: true });
+    el.classList.add("assenta", "kc-solto");     // kc-solto (plano 50): entrada animada do cartão solto — sobe 6 px e acende a borda da cor da etapa
+    el.addEventListener("animationend", () => el.classList.remove("assenta", "kc-solto"), { once: true });
   }
 
   function marcarConfirmando(id, sim) {
@@ -571,7 +685,7 @@ export async function montarKanban(k, el, rota) {
         if (emGesto()) S.adiado = {};
         else { if (col) preencherColuna(mov.estagioId); desenharTotais(); }
         const el = quadro.querySelector(`.kc[data-id="${mov.id}"]`);
-        if (el) { el.classList.add("chegou"); el.classList.add("assenta"); }
+        if (el) { el.classList.add("chegou"); el.classList.add("assenta"); el.classList.add("kc-solto"); }   // a coluna foi redesenhada: a entrada animada continua no cartão novo
         marcarConfirmando(mov.id, false);
         ui.anunciar(`${L.tituloCard(mov.card)} movido para ${mov.destino.nome}.`);
         return true;
@@ -989,7 +1103,15 @@ export async function montarKanban(k, el, rota) {
     for (const c of colEls.values()) { const v = c.lista.querySelector(".kb-vazia"); if (v) v.hidden = false; }
   }
 
-  const aoTeclaGlobal = ev => { if (ev.key === "Escape" && S.arrasto && S.arrasto.moveu) { ev.preventDefault(); cancelarPonteiro(); ui.anunciar("Movimento cancelado."); } };
+  const aoTeclaGlobal = ev => {
+    if (ev.key === "Escape" && S.arrasto && S.arrasto.moveu) { ev.preventDefault(); cancelarPonteiro(); ui.anunciar("Movimento cancelado."); return; }
+    // «/» foca a busca (como em Pacientes), fora de campos e diálogos
+    if (ev.key === "/" && !ev.altKey && !ev.ctrlKey && !ev.metaKey) {
+      const a = ev.target;
+      const editando = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || "") || (a.closest && a.closest("[role=dialog],dialog")));
+      if (!editando) { ev.preventDefault(); busca.focus(); }
+    }
+  };
   document.addEventListener("keydown", aoTeclaGlobal);
 
   /* ============================================================ filtros */

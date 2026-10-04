@@ -1287,3 +1287,149 @@ export function adiarParaAmanha(venceEm, agora = new Date()) {
   if (Number.isFinite(atual) && atual + DIA > alvo) alvo = atual + DIA;
   return new Date(alvo).toISOString();
 }
+
+/* ------------------------------------------------------------ plano 50 (04/10/2026) — Kanban, gaveta, tarefas, importação, empresas */
+/** Padrão quando a etapa não tem prazo (sla_horas) na base: âmbar a partir de 3 dias, vermelho a partir de 7. */
+export const PRAZO_ETAPA_PADRAO_H = Object.freeze({ aten: 72, ruim: 168 });
+
+/**
+ * Barra de «tempo na etapa» do cartão: quanto do prazo já passou e a cor.
+ * Com `slaHoras` (prazo da etapa na base do CRM): verde até metade, âmbar até o prazo, vermelho depois. Sem prazo: 3/7 dias (PRAZO_ETAPA_PADRAO_H).
+ * → {horas, pct (0–1 do limite vermelho), nivel: "ok"|"aten"|"ruim", limiteHoras, padrao, texto} ou null sem data.
+ */
+export function faixaTempoEtapa(estagioEm, slaHoras, agora = new Date()) {
+  const t = estagioEm ? new Date(estagioEm).getTime() : NaN;
+  const a = new Date(agora).getTime();
+  if (!Number.isFinite(t) || !Number.isFinite(a)) return null;
+  const horas = Math.max(0, (a - t) / 3600000);
+  const sla = Number(slaHoras);
+  const comSla = Number.isFinite(sla) && sla > 0;
+  const limiteAten = comSla ? sla / 2 : PRAZO_ETAPA_PADRAO_H.aten;
+  const limiteRuim = comSla ? sla : PRAZO_ETAPA_PADRAO_H.ruim;
+  const nivel = horas >= limiteRuim ? "ruim" : horas >= limiteAten ? "aten" : "ok";
+  const pct = Math.max(0.04, Math.min(1, horas / limiteRuim));   // um fio sempre aparece (cartão de hoje)
+  const dias = Math.floor(horas / 24);
+  const texto = nivel === "ruim" ? `Passou do prazo da etapa (${comSla ? `${sla} h` : "7 dias"})`
+    : nivel === "aten" ? `Perto do prazo da etapa (${comSla ? `${sla} h` : "7 dias"})`
+      : dias <= 0 ? "Entrou hoje na etapa" : `Dentro do prazo da etapa (${comSla ? `${sla} h` : "7 dias"})`;
+  return { horas: Math.round(horas * 10) / 10, pct: Math.round(pct * 1000) / 1000, nivel, limiteHoras: limiteRuim, padrao: !comSla, texto };
+}
+
+/**
+ * Participação de cada etapa nos cartões do funil (mini-barra do cabeçalho da coluna): fração 0–1 do total de cartões ABERTOS; ganho/perdido
+ * entram com a fração sobre todos os cartões do quadro. → Map estagio_id → {n, fracao, pct (inteiro)}.
+ */
+export function participacaoEtapas(colunas, estagios) {
+  const porId = new Map((estagios || []).map(e => [e.id, e]));
+  const nDe = c => Number(c.total) || 0;
+  const abertos = (colunas || []).filter(c => (porId.get(c.estagio_id) || {}).tipo === "aberto").reduce((s, c) => s + nDe(c), 0);
+  const todos = (colunas || []).reduce((s, c) => s + nDe(c), 0);
+  const out = new Map();
+  for (const c of colunas || []) {
+    const e = porId.get(c.estagio_id);
+    if (!e) continue;
+    const base = e.tipo === "aberto" ? abertos : todos;
+    const fracao = base > 0 ? nDe(c) / base : 0;
+    out.set(c.estagio_id, { n: nDe(c), fracao: Math.round(fracao * 1000) / 1000, pct: Math.round(fracao * 100) });
+  }
+  return out;
+}
+
+/**
+ * Resumo do funil acima do quadro, só com o que o quadro já carregou (contagens e somas por etapa, nada de RPC nova).
+ * Para cada etapa ABERTA, em ordem, e a de ganho: `chegaram` = cartões que estão nela OU numa etapa mais à frente (ganho conta; perdido não,
+ * porque não dá para saber de que etapa saiu). `conversao` = chegaram da próxima ÷ chegaram desta (fração) — é a estimativa «de quem passou
+ * por aqui, quantos seguiram». `pctTopo` = chegaram ÷ chegaram da 1ª etapa (largura da barra).
+ * Etapa com marco «faltou» NÃO é degrau (é um desvio que sai de «Agendada»): fica fora da sequência — ninguém «chega» a ela por estar à frente,
+ * e quem está nela não conta como tendo chegado às seguintes. Vem à parte em `linhas.fora` só com a contagem: [{id, nome, cor, n}].
+ * → [{id, nome, cor, tipo, n, valor, chegaram, pctTopo, conversao}] (vazio sem etapas abertas).
+ */
+export function resumoFunil(colunas, estagios) {
+  const cols = new Map((colunas || []).map(c => [c.estagio_id, c]));
+  const ordenados = (estagios || []).slice().sort((a, b) => (Number(a.ordem) || 0) - (Number(b.ordem) || 0));
+  const lateral = e => e.marco === "faltou";
+  const abertas = ordenados.filter(e => e.tipo === "aberto" && !lateral(e));
+  if (!abertas.length) return [];
+  const ganho = ordenados.find(e => e.tipo === "ganho") || null;
+  const seq = ganho ? [...abertas, ganho] : abertas;
+  const nDe = e => Number((cols.get(e.id) || {}).total) || 0;
+  const valorDe = e => Number((cols.get(e.id) || {})[e.tipo === "ganho" ? "soma_valor" : "soma_previsto"]) || 0;
+  const linhas = seq.map(e => ({ id: e.id, nome: e.nome, cor: e.cor || null, tipo: e.tipo, n: nDe(e), valor: valorDe(e), chegaram: 0, pctTopo: 0, conversao: null }));
+  let acumulado = 0;
+  for (let i = linhas.length - 1; i >= 0; i--) { acumulado += linhas[i].n; linhas[i].chegaram = acumulado; }
+  const topo = linhas[0].chegaram;
+  for (let i = 0; i < linhas.length; i++) {
+    linhas[i].pctTopo = topo > 0 ? Math.round(linhas[i].chegaram / topo * 1000) / 1000 : 0;
+    const prox = linhas[i + 1];
+    linhas[i].conversao = prox && linhas[i].chegaram > 0 ? Math.round(prox.chegaram / linhas[i].chegaram * 1000) / 1000 : null;
+  }
+  linhas.fora = ordenados.filter(e => e.tipo === "aberto" && lateral(e)).map(e => ({ id: e.id, nome: e.nome, cor: e.cor || null, n: nDe(e) }));
+  return linhas;
+}
+
+/** «Hoje» / «Ontem» / «Amanhã» / «Seg, 06/10» para um dia civil (AAAA-MM-DD) comparado com `hoje`. */
+export function rotuloDia(dia, hoje) {
+  if (!dia) return "Sem data";
+  if (dia === hoje) return "Hoje";
+  const d = Date.parse(`${dia}T12:00:00Z`), h = Date.parse(`${hoje}T12:00:00Z`);
+  if (Number.isFinite(d) && Number.isFinite(h)) {
+    const delta = Math.round((d - h) / 86400000);
+    if (delta === -1) return "Ontem";
+    if (delta === 1) return "Amanhã";
+  }
+  const [y, m, dd] = String(dia).split("-").map(Number);
+  if (!y || !m || !dd) return String(dia);
+  const sem = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"][new Date(Date.UTC(y, m - 1, dd, 12)).getUTCDay()];
+  return `${sem}, ${String(dd).padStart(2, "0")}/${String(m).padStart(2, "0")}${y !== Number(String(hoje).slice(0, 4)) ? `/${y}` : ""}`;
+}
+
+/**
+ * Agrupa itens por dia civil (tarefas por vencimento, linha do tempo por data). `instanteDe(item)` → ISO; `diaDe(iso)` → "AAAA-MM-DD"
+ * (a tela passa ui.hojeSP para o dia de São Paulo). Itens sem data vão para o fim como «Sem data». `ordem` "asc" (tarefas) ou "desc" (histórico).
+ * → [{dia, rotulo, itens}]
+ */
+export function agruparPorDia(itens, { instanteDe, diaDe = iso => String(iso || "").slice(0, 10), hoje, ordem = "asc" } = {}) {
+  const grupos = new Map();
+  for (const it of itens || []) {
+    const iso = instanteDe ? instanteDe(it) : null;
+    const dia = iso ? diaDe(iso) : "";
+    if (!grupos.has(dia)) grupos.set(dia, []);
+    grupos.get(dia).push(it);
+  }
+  const dias = [...grupos.keys()].filter(Boolean).sort();
+  if (ordem === "desc") dias.reverse();
+  const out = dias.map(dia => ({ dia, rotulo: rotuloDia(dia, hoje), itens: grupos.get(dia) }));
+  if (grupos.has("")) out.push({ dia: "", rotulo: "Sem data", itens: grupos.get("") });
+  return out;
+}
+
+/** Densidade da lista de contatos guardada no aparelho: só «compacta» ou «confortavel» (qualquer outra coisa vira o padrão confortável). */
+export function densidadeLista(valor) { return valor === "compacta" ? "compacta" : "confortavel"; }
+
+/**
+ * Cabeçalho da prévia da importação (passo das colunas): para cada coluna da planilha, o destino escolhido e o rótulo dele.
+ * → [{i, coluna, destino (valor ou null), rotulo (do destino ou «Ignorada»)}]
+ */
+export function cabecalhoPrevia(cabecalho, mapa, destinos = []) {
+  const rot = new Map((destinos || []).map(d => [d.valor, String(d.rotulo || "").replace(/^Campo: /, "")]));
+  return (cabecalho || []).map((coluna, i) => {
+    const destino = (mapa || [])[i] || null;
+    return { i, coluna: coluna || `Coluna ${i + 1}`, destino, rotulo: destino ? (rot.get(destino) || destino) : "Ignorada" };
+  });
+}
+
+/** Contadores da página da empresa a partir do que nx_empresa_ver devolve: contatos, negócios abertos, valor em aberto e ganhos. */
+export function resumoEmpresa(d) {
+  const negs = (d && d.negocios) || [];
+  const abertos = negs.filter(n => !n.status || n.status === "aberto");
+  const ganhos = negs.filter(n => n.status === "ganho");
+  const soma = (lista, chave) => Math.round(lista.reduce((s, n) => s + (Number(n[chave]) || 0), 0) * 100) / 100;
+  return { contatos: ((d && d.contatos) || []).length, abertos: abertos.length, valorAberto: soma(abertos, "valor_previsto"), ganhos: ganhos.length, valorGanho: soma(ganhos, "valor") };
+}
+
+/** Porcentagem inteira legível («62%») de uma fração; null/NaN → «—». */
+export function pctInteiro(fracao) {
+  if (fracao === null || fracao === undefined || fracao === "") return "—";
+  const n = Number(fracao);
+  return Number.isFinite(n) ? `${Math.round(n * 100)}%` : "—";
+}

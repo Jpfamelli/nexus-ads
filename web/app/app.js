@@ -52,6 +52,7 @@ const E = {
   cliente: null,         // empresa ativa (item de sessao.clientes + tema)
   pulso: null,
   atual: null,           // { arquivo, mod, chave }
+  telaVista: null,       // a tela que está na vista (chave do módulo ou do bloqueio): a transição de rota só roda quando ela muda
   assinaturas: new Set(),
   naoAtualizar: new Set(), // funções de módulos com trabalho pendente: enquanto alguma devolver true, a atualização automática espera
   editouEm: 0,             // quando a pessoa mexeu por último num campo desta tela (0 = nada desde que a rota abriu): segura a atualização automática
@@ -436,7 +437,7 @@ const ARQUIVOS_DO_APP = [
   "agenda.js", "agenda-config.js", "rastreio-config.js",
   "anuncios.js", "ads-config.js", "relatorios.js", "rel-logica.js", "graficos.js",
   "automacoes.js", "auto-logica.js", "auto-catalogo.js", "auto-pecas.js", "auto-editor.js",
-  "app.css", "shell.css", "conversas.css", "crm.css", "agenda.css", "relatorios.css", "automacoes.css",
+  "app.css", "shell.css", "conversas.css", "crm.css", "agenda.css", "relatorios.css", "automacoes.css", "inicio.css", "config.css",
 ];
 /** O que o app importa de fora da pasta (web/): os dados de conexão e o núcleo de cálculo que Anúncios divide com o painel clássico. */
 const ARQUIVOS_DA_RAIZ = ["dados.js", "nucleo.js"];
@@ -451,6 +452,16 @@ function urlsPrecache() {
 
 /** import() que falhou por arquivo que não existe mais naquela URL (a versão mudou por baixo da aba). */
 function ehFalhaDeImport(e) { return /dynamically imported module|importing a module script|module script failed|error loading dynamically/i.test(String((e && e.message) || "")); }
+
+/** Transição de rota (plano 50 · A12): a vista entra com fade + 6 px em 180 ms (token --t-rota, zerado com movimento reduzido).
+    A classe sai no fim da animação; trocar de tela duas vezes seguidas reinicia o movimento (reflow forçado). O foco no título já é do focarTitulo. */
+function transicaoRota(vista) {
+  if (!vista || !vista.classList) return;
+  vista.classList.remove("rota-entra");
+  void vista.offsetWidth;
+  vista.classList.add("rota-entra");
+  vista.addEventListener("animationend", () => vista.classList.remove("rota-entra"), { once: true });
+}
 
 /** Por quanto tempo um campo mexido segura a atualização automática (a faixa «Atualizar» continua lá para quem quiser aplicar na hora). */
 const EDICAO_RECENTE_MS = 30 * 60 * 1000;
@@ -1215,8 +1226,13 @@ async function montarNoShell(r, seq, doUsuario) {
   if (E.pulso) E.pulso.modo(r.modulo === "conversas" ? "conversas" : "normal");
 
   if (acesso !== "ok") {
+    // o mesmo bloqueio em outro endereço do mesmo módulo não pisca a vista de novo
+    const chaveBloq = `bloqueio|${acesso}|${r.modulo}`;
+    const bloqueioNovo = E.telaVista !== chaveBloq;
+    E.telaVista = chaveBloq;
     desmontarAtual();
     ui.limpar(vista);
+    if (bloqueioNovo) transicaoRota(vista);
     vista.appendChild(cartaoBloqueio(acesso));
     definirTitulo({ em_breve: "Em breve", fora_do_plano: "Fora do plano", sem_acesso: "Sem acesso", inexistente: "Página não encontrada", sem_cliente: "Início" }[acesso]);
     desenharRegioes();
@@ -1225,6 +1241,10 @@ async function montarNoShell(r, seq, doUsuario) {
   }
 
   const chave = `${def.arquivo}|${E.cliente ? E.cliente.id : "-"}`;
+  // abrir uma conversa, trocar de aba (Relatórios) ou de seção (Configurações) reaproveita o módulo: isso não é trocar de tela, a vista não pisca.
+  // Calculado antes do if/else: o else desmonta (zera E.atual) e grava a chave nova.
+  const trocouDeTela = !(E.atual && E.atual.chave === chave);
+  E.telaVista = chave;
   let mod = null;
   if (E.atual && E.atual.chave === chave) mod = E.atual.mod;
   else {
@@ -1252,6 +1272,7 @@ async function montarNoShell(r, seq, doUsuario) {
     return;
   }
   const ctx = construirCtx(r, vista);
+  if (trocouDeTela) transicaoRota(vista);
   try {
     await mod.montar(ctx);
   } catch (e) {
@@ -1799,14 +1820,21 @@ function ambientePaleta(inicial) {
   const gs = gruposDeDados();
   const v = a.vocab;
   const rec = recentesDaEmpresa();
+  // plano 50 · 59: os últimos comandos executados neste aparelho (por conta) voltam como «Usados por último»
+  let ult = null;
+  try { if (typeof C.criarUltimosComandos === "function") ult = C.criarUltimosComandos({ armazenamento: localStorage, chave: C.chaveUltimos(E.sessao.conta.id) }); } catch { ult = null; }
   const que = gs.includes("contatos") ? `${v.contatos.toLowerCase()}, ${v.negocios.toLowerCase()}${gs.includes("conversas") ? " e conversas" : ""}` : gs.includes("conversas") ? "conversas" : "";
   return {
     ui: E.ui, C, destinos: destinosDaPaleta(), acoes: geral, daTela, inicial,
     placeholder: que ? `Buscar ${que} ou digitar um comando` : "Ir para uma tela ou executar um comando",
     recentes: () => (rec ? rec.ler() : []),
+    ultimos: () => (ult ? ult.ler() : []),
     buscarDados: gs.length ? buscarNaPaleta : null,
     navegar, mensagemErro: E.api.mensagemErro,
-    aoEscolher: it => { if (rec && it.hash && it.tipo) rec.registrar({ hash: it.hash, titulo: it.titulo, sub: it.sub, tipo: it.tipo }); },
+    aoEscolher: it => {
+      if (rec && it.hash && it.tipo) rec.registrar({ hash: it.hash, titulo: it.titulo, sub: it.sub, tipo: it.tipo });
+      if (ult && it.id && typeof it.fazer === "function") ult.registrar(it.id);
+    },
   };
 }
 

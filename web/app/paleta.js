@@ -71,17 +71,29 @@ export function abrir(amb) {
   const aDestino = d => ({ icone: d.icone, l1: d.rotulo, l2: d.emConstrucao ? "em obra" : "", hash: d.hash, id: d.id });
   const aRecente = r => ({ icone: C.TIPOS_RECENTE[r.tipo] ? C.TIPOS_RECENTE[r.tipo].icone : "contato", l1: r.titulo, l2: r.sub, hash: r.hash, tipo: r.tipo });
 
+  /* plano 50 · 59: «>» sem texto mostra as ações por grupo (Nesta tela · Criar · Ir e ver · …) em vez de uma lista corrida;
+     a tela vazia começa pelos comandos usados por último neste aparelho (quando houver). Com texto, a busca continua uma lista só. */
+  const ultimos = () => { try { return typeof amb.ultimos === "function" ? amb.ultimos() : []; } catch { return []; } };
   function desenharLocais(modo, termo) {
     ui.limpar(locais); itensLocais = [];
     const todas = [...amb.daTela, ...amb.acoes];
     const grupos = [];
     if (modo === "acoes") {
-      const f = C.filtrar(todas, termo);
-      if (f.length) grupos.push(["Ações", f.map(aAcao)]);
+      if (!termo && typeof C.agruparAcoes === "function") {
+        for (const g of C.agruparAcoes(todas)) grupos.push([g.grupo, g.itens.map(aAcao)]);
+      } else {
+        const f = typeof C.ordenarPorUso === "function" ? C.ordenarPorUso(C.filtrar(todas, termo), ultimos()) : C.filtrar(todas, termo);
+        if (f.length) grupos.push(["Ações", f.map(aAcao)]);
+      }
     } else if (modo === "tudo" && !termo) {
       const rec = amb.recentes();
       if (rec.length) grupos.push(["Recentes", rec.map(aRecente)]);
-      if (amb.daTela.length) grupos.push(["Nesta tela", amb.daTela.slice(0, 4).map(aAcao)]);
+      const usados = typeof C.ultimosUsados === "function" ? C.ultimosUsados(todas, ultimos(), 4) : [];
+      if (usados.length) grupos.push(["Usados por último", usados.map(aAcao)]);
+      // a mesma ação não aparece duas vezes (as setas passariam por ela de novo): o que já está em «Usados por último» sai de «Nesta tela»
+      const jaMostradas = new Set(usados), idsMostrados = new Set(usados.map(c => c.id).filter(Boolean));
+      const daTela = amb.daTela.filter(c => !jaMostradas.has(c) && !(c.id && idsMostrados.has(c.id))).slice(0, 4);
+      if (daTela.length) grupos.push(["Nesta tela", daTela.map(aAcao)]);
       grupos.push(["Ir para", amb.destinos.map(aDestino)]);
     } else if (modo === "tudo") {
       const ir = C.filtrar(amb.destinos, termo, { limite: 4 });

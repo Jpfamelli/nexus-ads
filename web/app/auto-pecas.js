@@ -218,5 +218,137 @@ export function pecas(ui, L) {
     }
   }
 
-  return { interruptor, seletor, entrada, chip, setas, campoDias, campoDuracao, escolhaCartoes, opcoesBase, novoId };
+  /* ================================================================ plano 50 (frente G) */
+
+  const reduzido = () => { try { return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } };
+  const SVG = "http://www.w3.org/2000/svg";
+  /** Nó SVG (o ui.h só conhece algumas tags de SVG; aqui precisamos de rect/text/line/use). */
+  function s(tag, attrs = {}, ...filhos) {
+    const el = document.createElementNS(SVG, tag);
+    for (const [k, v] of Object.entries(attrs)) { if (v === null || v === undefined || v === false) continue; el.setAttribute(k, v === true ? "" : String(v)); }
+    for (const f of filhos.flat()) if (f !== null && f !== undefined && f !== false) el.append(typeof f === "string" ? document.createTextNode(f) : f);
+    return el;
+  }
+
+  /** Mini-barra da taxa de sucesso (role=meter): «87 % deram certo» · «ainda sem execuções». */
+  function barraTaxa({ pct, total = 0, rotulo = "Taxa de sucesso" }) {
+    const nivel = L.nivelTaxa(pct);
+    const texto = pct == null ? "ainda sem execuções" : `${pct}% deram certo (${total} ${total === 1 ? "execução" : "execuções"})`;
+    return h("span", { class: ["au-taxa", `au-taxa-${nivel}`], role: "meter", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct ?? 0),
+      "aria-label": rotulo, "aria-valuetext": texto, title: `${rotulo}: ${texto}` },
+      h("span", { class: "au-taxa-trilho", "aria-hidden": "true" }, h("i", { style: { "--p": `${pct ?? 0}%` } })),
+      h("span", { class: "au-taxa-txt mono", "aria-hidden": "true" }, pct == null ? "—" : `${pct}%`));
+  }
+
+  /** Ponto de estado (ligada pulsa de leve; desligada fica parado). Só decoração: o texto vem do switch e das pilulas. */
+  function pontoEstado(ligado, { erro = false } = {}) {
+    return h("span", { class: ["au-ponto", ligado ? "au-ponto-on" : "au-ponto-off", erro && "au-ponto-erro"], "aria-hidden": "true" });
+  }
+
+  /** KPI simples (número grande em Plex Mono + rótulo + ajuda) — usado quando a frente A ainda não entregou ui.kpi. */
+  function kpi({ rotulo, valor, ajuda, tom, icone }) {
+    const id = novoId("kpi");
+    return h("div", { class: ["au-kpi", tom && `au-kpi-${tom}`], role: "group", "aria-labelledby": `${id}-r`, "aria-describedby": ajuda ? `${id}-a` : null, title: ajuda || null },
+      h("span", { class: "au-kpi-rot", id: `${id}-r` }, icone ? ui.icone(icone) : null, rotulo),
+      h("span", { class: "au-kpi-val mono dado" }, String(valor)),
+      ajuda ? h("span", { class: "au-kpi-aj", id: `${id}-a` }, ajuda) : null);
+  }
+
+  /**
+   * Diagrama ao vivo do fluxo em SVG puro: gatilho → condições → passos. Cada nó é um botão (role=button, foco por Tab,
+   * Enter/Espaço) que chama aoFocar(no) — o editor leva o foco até o bloco certo. `nos` vem de L.nosDoDiagrama; o texto
+   * alternativo (L.textoDiagrama) vai no <title> e no aria-label do grupo.
+   */
+  function diagrama({ nos, aoFocar, largura = 300 }) {
+    const lista = Array.isArray(nos) ? nos : [];
+    const W = Math.max(220, Math.round(largura));
+    const ALT = 44, GAP = 16, PX = 6, TRILHO = 22;     // altura do nó, vão entre nós, margem lateral, x da linha-tronco
+    const H = PX + lista.length * (ALT + GAP) - GAP + PX;
+    const alt = L.textoDiagrama(lista);
+    const svg = s("svg", { class: "au-dg-svg", viewBox: `0 0 ${W} ${Math.max(ALT + 2 * PX, H)}`, width: "100%", role: "group", "aria-label": `Diagrama do fluxo. ${alt}`, preserveAspectRatio: "xMinYMin meet" });
+    svg.append(s("title", {}, alt));
+    // tronco: do centro do 1º nó ao centro do último
+    if (lista.length > 1) svg.append(s("line", { class: "au-dg-tronco", x1: TRILHO, x2: TRILHO, y1: PX + ALT / 2, y2: PX + (lista.length - 1) * (ALT + GAP) + ALT / 2, "aria-hidden": "true" }));
+    const maxTxt = Math.max(14, Math.floor((W - 64) / 6.6));      // ~6,6 px por letra a 12 px: corta antes de sair do nó
+    const corta = (t, n) => { const x = String(t || ""); return x.length > n ? `${x.slice(0, n - 1).trimEnd()}…` : x; };
+    lista.forEach((no, i) => {
+      const y = PX + i * (ALT + GAP);
+      const g = s("g", { class: ["au-dg-no", `au-dg-${no.tipo}`, `au-dg-tom-${no.tom}`, no.inalcancavel && "au-dg-nunca"].filter(Boolean).join(" "),
+        role: "button", tabindex: "0", "aria-label": `${no.tipo === "mais" ? "" : no.tipo === "gatilho" ? "Gatilho: " : no.tipo === "condicao" ? `Condição ${no.n}: ` : `Passo ${no.n || ""}: `.replace(" :", ":")}${no.rotulo}${no.sub ? `. ${no.sub}` : ""}. Ir até este bloco.`,
+        "data-id": no.id, "data-onde": no.onde, "data-indice": no.indice == null ? "" : String(no.indice) });
+      g.append(s("rect", { class: "au-dg-ret", x: PX, y, width: W - 2 * PX, height: ALT, rx: no.tipo === "condicao" ? 8 : 12 }));
+      g.append(s("rect", { class: "au-dg-faixa", x: PX, y, width: 4, height: ALT, rx: 2 }));
+      // bolinha do tronco com o ícone do sprite
+      g.append(s("circle", { class: "au-dg-bola", cx: TRILHO, cy: y + ALT / 2, r: 11 }));
+      const uso = s("use", { href: `#i-${no.icone || "raio"}`, x: TRILHO - 6, y: y + ALT / 2 - 6, width: 12, height: 12, class: "au-dg-ic" });
+      g.append(uso);
+      const semSub = !no.sub;
+      g.append(s("text", { class: "au-dg-rot", x: TRILHO + 20, y: y + (semSub ? ALT / 2 + 4 : 18) }, corta(no.rotulo, maxTxt)));
+      if (!semSub) g.append(s("text", { class: "au-dg-sub", x: TRILHO + 20, y: y + 33 }, corta(no.sub, maxTxt + 4)));
+      if (no.n != null && no.tipo === "passo") g.append(s("text", { class: "au-dg-n", x: W - PX - 10, y: y + ALT / 2 + 4, "text-anchor": "end" }, String(no.n)));
+      const ir = ev => { if (ev) ev.preventDefault(); if (typeof aoFocar === "function") aoFocar(no); };
+      g.addEventListener("click", ir);
+      g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") ir(ev); });
+      svg.append(g);
+    });
+    if (!reduzido()) svg.classList.add("au-dg-anim");
+    return svg;
+  }
+
+  /**
+   * Execuções por dia (barras empilhadas: deram certo · em espera · puladas · com erro), calculadas no navegador.
+   * `serie` vem de L.execucoesPorDia. Tem título, unidade, estado vazio e «Ver como tabela» (a versão acessível).
+   * `carregadas` (número): a série saiu só das últimas N execuções carregadas (janela recortada) e o subtítulo diz isso.
+   */
+  function graficoDias({ serie, dias, n, titulo = "Execuções por dia", unidade = "execuções", carregadas = null }) {
+    const lista = Array.isArray(serie) ? serie : [];
+    const raiz = h("div", { class: "au-gd" });
+    const nd = dias || lista.length;
+    const janela = nd === 1 ? "Hoje" : `Últimos ${nd} dias`;
+    const sub = carregadas ? `${janela} · nas últimas ${carregadas} ${carregadas === 1 ? "execução carregada" : "execuções carregadas"}`
+      : `${janela} · ${n || 0} ${n === 1 ? "execução registrada" : "execuções registradas"}`;
+    const cab = h("div", { class: "au-gd-cab" },
+      h("div", null, h("p", { class: "rotulo" }, titulo), h("p", { class: "sub au-gd-sub" }, sub)));
+    raiz.appendChild(cab);
+    const max = Math.max(0, ...lista.map(p => p.total));
+    if (!max) {
+      raiz.appendChild(h("p", { class: "au-gd-vazio" }, ui.icone("relogio"), h("span", null, `Nenhuma execução nos últimos ${dias || lista.length} dias. Quando a automação rodar, as barras aparecem aqui.`)));
+      return raiz;
+    }
+    // barras em CSS (grade de colunas): escalam com a largura sem esticar o texto, como um SVG «none» faria
+    const ORDEM = [["ok", "deram certo"], ["espera", "em espera"], ["pulado", "puladas"], ["erro", "com erro"]];
+    const n0 = lista.length, cada = n0 > 10 ? Math.ceil(n0 / 7) : 1;
+    const barras = h("div", { class: ["au-gd-barras", !reduzido() && "au-gd-anim"], role: "img", style: { "--n": String(n0) },
+      "aria-label": `${titulo}: ${n} ${unidade} em ${nd} ${nd === 1 ? "dia" : "dias"}${carregadas ? `, contando só as últimas ${carregadas} carregadas` : ""}; pico de ${max} em um dia.` },
+      h("span", { class: "au-gd-eixo au-gd-eixo-max mono", "aria-hidden": "true" }, String(max)),
+      h("span", { class: "au-gd-eixo au-gd-eixo-zero mono", "aria-hidden": "true" }, "0"));
+    lista.forEach((p, i) => {
+      const titulo2 = `${p.semana} ${p.rotulo}: ${p.total} ${p.total === 1 ? "execução" : "execuções"}${p.total ? ` (${ORDEM.filter(([k]) => p[k]).map(([k, r]) => `${p[k]} ${r}`).join(", ")})` : ""}`;
+      const pilha = h("span", { class: "au-gd-pilha" });
+      for (const [k] of ORDEM) if (p[k]) pilha.appendChild(h("i", { class: `au-gd-seg au-gd-${k}`, style: { "--h": `${((p[k] / max) * 100).toFixed(2)}%` } }));
+      if (!p.total) pilha.appendChild(h("i", { class: "au-gd-seg au-gd-zero" }));
+      // todo dia leva o rótulo; o CSS mostra 1 a cada 2 (ou 1 a cada 4 no celular) para as datas não se encavalarem
+      barras.appendChild(h("div", { class: ["au-gd-col", p.total && "au-gd-col-tem", (i % cada === 0 || i === n0 - 1) && "au-gd-col-rot"], style: { "--i": String(i) }, title: titulo2 },
+        pilha, h("span", { class: "au-gd-x mono", "aria-hidden": "true" }, p.rotulo)));
+    });
+    const caixaG = h("div", { class: "au-gd-caixa" }, barras,
+      h("ul", { class: "au-gd-leg", "aria-hidden": "true" }, ORDEM.filter(([k]) => lista.some(p => p[k])).map(([k, r]) => h("li", null, h("i", { class: `au-gd-marca au-gd-${k}` }), r))));
+    // a mesma informação em tabela (leitor de tela e quem prefere números)
+    const tabela = h("div", { class: "au-gd-tabela", hidden: true },
+      h("table", { class: "au-gd-tab" }, h("caption", { class: "sr-only" }, `${titulo}, ${unidade}`),
+        h("thead", null, h("tr", null, h("th", { scope: "col" }, "Dia"), ORDEM.map(([, r]) => h("th", { scope: "col", class: "num" }, r)), h("th", { scope: "col", class: "num" }, "Total"))),
+        h("tbody", null, lista.filter(p => p.total).map(p => h("tr", null, h("th", { scope: "row" }, `${p.semana} ${p.rotulo}`), ORDEM.map(([k]) => h("td", { class: "num mono" }, String(p[k]))), h("td", { class: "num mono" }, String(p.total)))))));
+    const bt = h("button", { type: "button", class: "bt bt-fant bt-p au-gd-alt", "aria-pressed": "false" }, "Ver como tabela");
+    bt.addEventListener("click", () => {
+      const ligar = tabela.hidden;
+      tabela.hidden = !ligar; caixaG.hidden = ligar;
+      bt.setAttribute("aria-pressed", String(ligar));
+      bt.textContent = ligar ? "Ver como gráfico" : "Ver como tabela";
+    });
+    cab.appendChild(bt);
+    raiz.append(caixaG, tabela);
+    return raiz;
+  }
+
+  return { interruptor, seletor, entrada, chip, setas, campoDias, campoDuracao, escolhaCartoes, opcoesBase, novoId, barraTaxa, pontoEstado, kpi, diagrama, graficoDias };
 }

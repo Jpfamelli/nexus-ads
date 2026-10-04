@@ -985,3 +985,256 @@ export function esperaAnuncio(ultimoEm, agora = Date.now(), intervalo = ANUNCIO_
   if (!ultimoEm) return 0;
   return Math.max(0, intervalo - (agora - ultimoEm));
 }
+
+/* ============================================================ Plano 50 (04/10/2026) — frente D · Conversas
+   Regras puras das melhorias visuais do chat, da lista, da lateral e do composer. Tudo testável em Node. */
+
+/* ---------- 31. bolhas agrupadas: cauda só na última do grupo · «Mensagens novas» ---------- */
+/** Marca `cauda` nas linhas de mensagem: a última de um grupo colado (a seguinte não é `junta`). Devolve a MESMA lista. */
+export function marcarCaudas(linhas) {
+  const msgs = (linhas || []).filter(l => l && l.tipo === "msg");
+  for (let i = 0; i < msgs.length; i++) msgs[i].cauda = !(msgs[i + 1] && msgs[i + 1].junta);
+  return linhas;
+}
+
+/** Id da primeira mensagem não lida: a N-ésima mensagem do cliente de trás para a frente (N = nao_lidas). null sem não lidas. */
+export function primeiraNaoLida(msgs, naoLidas) {
+  const n = Number(naoLidas) || 0;
+  if (n <= 0) return null;
+  const entradas = (msgs || []).filter(m => m && m.direcao === "in" && m.tipo !== "sistema" && !ehLocal(m.id));
+  const m = entradas[Math.max(0, entradas.length - n)];
+  return m ? m.id : null;
+}
+
+/**
+ * Põe o separador «Mensagens novas» antes da mensagem `id` (quando ela está nas linhas). Devolve lista nova.
+ * O chat chama ANTES de agruparMidia/agruparSistema (o separador fecha a grade); se receber linhas já agrupadas,
+ * acha o id dentro da grade de fotos ou do bloco do sistema e põe o separador antes do grupo, em vez de sumir.
+ */
+export function inserirNovas(linhas, id) {
+  if (id === null || id === undefined) return linhas;
+  const alvo = String(id);
+  const contem = l => {
+    if (!l) return false;
+    if (l.tipo === "msg") return !!l.msg && String(l.msg.id) === alvo;
+    if (l.tipo === "grade" || l.tipo === "sistema_grupo") return (l.msgs || []).some(m => m && String(m.id) === alvo);
+    return false;
+  };
+  const i = (linhas || []).findIndex(contem);
+  if (i < 0) return linhas;
+  const out = linhas.slice();
+  out.splice(i, 0, { tipo: "novas", chave: "novas" });
+  return out;
+}
+
+/** Quantas mensagens do cliente chegaram depois de `desdeId` (a pílula «Novas mensagens ↓» mostra o número). */
+export function contarNovasEntradas(msgs, desdeId) {
+  const base = Number(desdeId) || 0;
+  return (msgs || []).filter(m => m && m.direcao === "in" && !ehLocal(m.id) && Number(m.id) > base).length;
+}
+
+/* ---------- 32. mídia em grade · áudio ---------- */
+/** Foto «limpa» que pode entrar numa grade: gravada, sem legenda, sem citação, sem reação, com arquivo. */
+export function entraNaGrade(m) {
+  if (!m || m.tipo !== "imagem" || m.local || m.status === "falhou") return false;
+  if (m.corpo || m.responde_a || m.reacao) return false;
+  const md = m.midia || {};
+  return !!(md.path || md.local_url) && (md.estado || "ok") === "ok";
+}
+
+/** Fotos seguidas e coladas (mesmo remetente, até 5 min) viram UMA linha {tipo:"grade", msgs}; sozinhas continuam bolha. */
+export function agruparMidia(linhas, { minimo = 2, maximo = 6 } = {}) {
+  const out = [];
+  let grupo = null;
+  const fechar = () => {
+    if (!grupo) return;
+    if (grupo.length >= minimo) {
+      out.push({ tipo: "grade", chave: `g-${grupo[0].msg.id}`, msgs: grupo.map(l => l.msg), junta: !!grupo[0].junta, cauda: grupo[grupo.length - 1].cauda !== false });
+    } else out.push(...grupo);
+    grupo = null;
+  };
+  for (const l of linhas || []) {
+    const cand = l && l.tipo === "msg" && entraNaGrade(l.msg);
+    if (cand && grupo && l.junta && grupo.length < maximo) { grupo.push(l); continue; }
+    fechar();
+    if (cand) { grupo = [l]; continue; }
+    out.push(l);
+  }
+  fechar();
+  return out;
+}
+
+/** As fotos da conversa (para o visualizador andar com as setas), na ordem das mensagens. */
+export function imagensDaConversa(msgs) {
+  return (msgs || []).filter(m => m && m.tipo === "imagem" && m.midia && (m.midia.path || m.midia.local_url) && (m.midia.estado || "ok") === "ok")
+    .map(m => ({ id: m.id, path: m.midia.path || null, local_url: m.midia.local_url || null, nome: m.midia.nome || null, legenda: m.corpo || "", criado_em: m.criado_em, direcao: m.direcao }));
+}
+
+export const VELOCIDADES_AUDIO = Object.freeze([1, 1.5, 2]);
+/** 1 → 1,5 → 2 → 1 (valor desconhecido volta a 1). */
+export function proximaVelocidade(v) {
+  const i = VELOCIDADES_AUDIO.indexOf(Number(v));
+  return VELOCIDADES_AUDIO[(i + 1) % VELOCIDADES_AUDIO.length];
+}
+export function velocidadeValida(v) { const n = Number(v); return VELOCIDADES_AUDIO.includes(n) ? n : 1; }
+/** "1×" · "1,5×" · "2×" */
+export function rotuloVelocidade(v) { return `${String(velocidadeValida(v)).replace(".", ",")}×`; }
+/** 65 → "1:05"; 3725 → "1:02:05"; sem número → "–:––". */
+export function formatarDuracao(seg) {
+  const s = Number(seg);
+  if (!Number.isFinite(s) || s < 0) return "–:––";
+  const t = Math.round(s), hh = Math.floor(t / 3600), mm = Math.floor((t % 3600) / 60), ss = t % 60;
+  const p2 = n => String(n).padStart(2, "0");
+  return hh ? `${hh}:${p2(mm)}:${p2(ss)}` : `${mm}:${p2(ss)}`;
+}
+
+/** Grupo visual do documento pela extensão (cor do ícone): pdf · texto · planilha · slides · outro. */
+export function grupoDocumento(nome, mime = "") {
+  const ext = String(nome || "").toLowerCase().split(".").pop();
+  const m = String(mime || "").toLowerCase();
+  if (ext === "pdf" || m === "application/pdf") return "pdf";
+  if (["xls", "xlsx", "csv"].includes(ext) || /spreadsheet|ms-excel|csv/.test(m)) return "planilha";
+  if (["ppt", "pptx"].includes(ext) || /presentation|powerpoint/.test(m)) return "slides";
+  if (["doc", "docx", "txt", "rtf"].includes(ext) || /wordprocessing|msword|text\/plain/.test(m)) return "texto";
+  return "outro";
+}
+
+/* ---------- 34. lista: tipo da última mensagem · SLA de espera ---------- */
+const TIPO_POR_RESUMO = Object.freeze({ Foto: "imagem", "Áudio": "audio", "Vídeo": "video", Documento: "documento", Figurinha: "sticker",
+  "Localização": "localizacao", Contato: "contato", Modelo: "template" });
+/** O servidor só manda o resumo ("Foto", "Áudio: …"): deduz o tipo para o ícone da linha. null = texto comum. */
+export function tipoDoResumo(resumo) {
+  const m = /^(Foto|Áudio|Vídeo|Documento|Figurinha|Localização|Contato|Modelo)(?=:|$)/.exec(String(resumo || "").trim());
+  return m ? TIPO_POR_RESUMO[m[1]] || null : null;
+}
+
+export const SLA_MINUTOS = Object.freeze({ aten: 15, ruim: 30, critico: 60 });
+/** Quanto o cliente espera e em que faixa: ok (< 15 min) · aten (15–29) · ruim (30–59) · critico (60+). */
+export function nivelEspera(desde, agora = new Date()) {
+  const d = ms(agora) - ms(desde);
+  if (!Number.isFinite(d)) return { minutos: 0, nivel: "ok" };
+  const minutos = Math.max(0, Math.floor(d / 60000));
+  const nivel = minutos >= SLA_MINUTOS.critico ? "critico" : minutos >= SLA_MINUTOS.ruim ? "ruim" : minutos >= SLA_MINUTOS.aten ? "aten" : "ok";
+  return { minutos, nivel };
+}
+
+/** Fração restante da janela de 24 h (0–1), para a barrinha sob a pílula. */
+export function fracaoJanela(j) {
+  if (!j || !j.aberta) return 0;
+  return Math.max(0, Math.min(1, (Number(j.restanteMs) || 0) / JANELA_MS));
+}
+
+/* ---------- 35. lateral: resumo do contato · interações por dia ---------- */
+/** Contadores do painel lateral a partir do que nx_cv_ver já devolve (negócios abertos e valor, atendimentos, tarefas). */
+export function resumoContato(ver) {
+  const negs = (ver && ver.negocios) || [];
+  const abertos = negs.filter(n => n && (!n.status || n.status === "aberto"));
+  const tarefas = (ver && ver.tarefas) || [];
+  return { negocios: abertos.length, valor: abertos.reduce((s, n) => s + (Number(n.valor_previsto) || 0), 0),
+    atendimentos: ((ver && ver.atendimentos) || []).length, tarefas: tarefas.length, atrasadas: tarefas.filter(t => t && t.atrasada).length };
+}
+
+/** Mensagens (sem sistema/nota) por dia nos últimos `dias`, a partir das mensagens CARREGADAS: [{dia, rotulo, entrada, saida}]. */
+export function interacoesPorDia(msgs, agora = new Date(), dias = 7) {
+  const base = Date.parse(`${diaSP(agora)}T12:00:00-03:00`);
+  const out = [], idx = new Map();
+  for (let k = dias - 1; k >= 0; k--) {
+    const d = new Date(base - k * 86400000), dia = diaSP(d);
+    idx.set(dia, out.length);
+    out.push({ dia, rotulo: _fmtSem.format(d).replace(".", "").slice(0, 3), entrada: 0, saida: 0 });
+  }
+  for (const m of msgs || []) {
+    if (!m || m.tipo === "sistema" || m.tipo === "nota") continue;
+    const i = idx.get(diaSP(m.criado_em));
+    if (i === undefined) continue;
+    if (m.direcao === "in") out[i].entrada++; else out[i].saida++;
+  }
+  return out;
+}
+
+/* ---------- 36. respostas rápidas: variáveis destacadas · próximo {campo} ---------- */
+/**
+ * Segmentos do corpo com as variáveis marcadas (a prévia pinta cada tipo): texto · var (preenchida) · pendente ({campo} que a pessoa completa).
+ * A concatenação dos `t` é IGUAL a aplicarVariaveis(corpo, vars) — inclusive a vírgula que some com a variável vazia.
+ */
+export function partesVariaveis(corpo, vars = {}) {
+  const v = { primeiro_nome: vars.primeiro_nome ?? primeiroNome(vars.nome), nome: vars.nome ?? "", atendente: vars.atendente ?? "", empresa: vars.empresa ?? "", protocolo: vars.protocolo ?? "" };
+  const s = String(corpo ?? "");
+  const re = /\{([^{}\n]+)\}/g;
+  const out = [];
+  let i = 0, m;
+  const texto = t => { if (!t) return; const u = out[out.length - 1]; if (u && u.tipo === "texto") u.t += t; else out.push({ t, tipo: "texto" }); };
+  while ((m = re.exec(s))) {
+    texto(s.slice(i, m.index));
+    const k = m[1];
+    if (VARIAVEIS.includes(k)) {
+      const val = String(v[k] ?? "").trim();
+      if (val) out.push({ t: val, tipo: "var", nome: k });
+      else { const u = out[out.length - 1]; if (u && u.tipo === "texto") { u.t = u.t.replace(/(,\s*|\s+)$/, ""); if (!u.t) out.pop(); } }
+    } else out.push({ t: m[0], tipo: "pendente" });
+    i = m.index + m[0].length;
+  }
+  texto(s.slice(i));
+  return out;
+}
+
+/** Próximo {campo a preencher} a partir de `desde` ([ini, fim]); dir < 0 volta; dá a volta no fim; null sem campos. */
+export function proximoCampo(texto, desde = 0, dir = 1) {
+  const s = String(texto ?? "");
+  const re = /\{[^{}\n]+\}/g;
+  const todos = [];
+  let m;
+  while ((m = re.exec(s))) todos.push([m.index, m.index + m[0].length]);
+  if (!todos.length) return null;
+  if (dir >= 0) return todos.find(([a]) => a >= desde) || todos[0];
+  return todos.slice().reverse().find(([a]) => a < desde) || todos[todos.length - 1];
+}
+export function contarCampos(texto) { return (String(texto ?? "").match(/\{[^{}\n]+\}/g) || []).length; }
+
+/* ---------- 37. linha do tempo do sistema (IA, transferências…) ---------- */
+/** Mensagens de sistema seguidas (≥ minimo) viram UMA linha {tipo:"sistema_grupo", msgs}; a solta continua como está. */
+export function agruparSistema(linhas, { minimo = 2 } = {}) {
+  const out = [];
+  let grupo = null;
+  const fechar = () => {
+    if (!grupo) return;
+    if (grupo.length >= minimo) out.push({ tipo: "sistema_grupo", chave: `s-${grupo[0].msg.id}`, msgs: grupo.map(l => l.msg) });
+    else out.push(...grupo);
+    grupo = null;
+  };
+  for (const l of linhas || []) {
+    if (l && l.tipo === "msg" && l.msg && l.msg.tipo === "sistema") { (grupo || (grupo = [])).push(l); continue; }
+    fechar();
+    out.push(l);
+  }
+  fechar();
+  return out;
+}
+
+/** Ícone de um evento do sistema pelo texto (IA, transferência, resolvido, atribuição…). */
+export function iconeSistema(texto) {
+  const t = semAcento(texto);
+  if (/\bia\b|assistente|codewords|pausad|retomou|retomad/.test(t)) return "ia";
+  if (/transfer|departamento/.test(t)) return "transferir";
+  if (/reabert|reabriu/.test(t)) return "reabrir";
+  if (/resolvid|encerr|finaliz/.test(t)) return "check";
+  if (/atribu|assumiu|responsavel/.test(t)) return "usuario";
+  if (/etiqueta/.test(t)) return "etiqueta";
+  if (/automac/.test(t)) return "raio";
+  if (/ocult|bloque/.test(t)) return "alerta";
+  return "info";
+}
+
+/** "3 eventos do sistema" · "4 eventos do sistema · 2 da IA" */
+export function resumoGrupoSistema(msgs) {
+  const n = (msgs || []).length;
+  const ia = (msgs || []).filter(m => iconeSistema(m && m.corpo) === "ia").length;
+  return `${n} ${n === 1 ? "evento" : "eventos"} do sistema${ia ? ` · ${ia} da IA` : ""}`;
+}
+
+/* ---------- 38. barra de ações: atalho de cada comando ---------- */
+export function atalhoDe(id) { const a = ACORDES.find(x => x.id === id); return a ? a.teclas : ""; }
+/** "Alt+Shift+A" → "Alt+Shift+A" (aria-keyshortcuts usa os nomes das teclas: ↓/↑ viram ArrowDown/ArrowUp). */
+export function ariaKeyshortcuts(teclas) {
+  return String(teclas || "").split("+").map(t => ({ "↓": "ArrowDown", "↑": "ArrowUp", Esc: "Escape" }[t] || t)).join("+");
+}

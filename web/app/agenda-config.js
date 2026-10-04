@@ -12,6 +12,46 @@ export const secoesConfig = [
   { id: "agenda", titulo: "Agenda", grupo: "Atendimento", papelMin: "admin", modulo: "crm", icone: "calendario", montar: secaoAgenda },
 ];
 
+const DIAS_CURTOS = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+const paraHoras = s => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || "")); return m ? Number(m[1]) + Number(m[2]) / 60 : null; };
+/** «8h», «8h30», «42h15». */
+export function horasTxt(h) {
+  const total = Math.round(Math.max(0, Number(h) || 0) * 60), hh = Math.floor(total / 60), mm = total % 60;
+  return mm ? `${hh}h${String(mm).padStart(2, "0")}` : `${hh}h`;
+}
+/** Prévia da semana (pura, plano 50): por dia (segunda a domingo) as faixas abertas em horas decimais {a, d}, as pausas que caem dentro delas,
+    as horas úteis do dia e o total da semana. Horário vazio ou inválido conta como fechado. */
+export function previaSemana(horario, intervalos = []) {
+  const pausas = (Array.isArray(intervalos) ? intervalos : []).map(f => [paraHoras(f && f[0]), paraHoras(f && f[1])]).filter(([a, b]) => a !== null && b !== null && b > a);
+  const dias = [];
+  let total = 0;
+  for (let i = 1; i <= 7; i++) {
+    const id = String(i % 7);
+    const brutas = horario && Array.isArray(horario[id]) ? horario[id] : [];
+    const faixas = brutas.map(f => [paraHoras(f && f[0]), paraHoras(f && f[1])]).filter(([a, b]) => a !== null && b !== null && b > a);
+    let horas = faixas.reduce((s, [a, b]) => s + (b - a), 0);
+    for (const [pa, pb] of pausas) for (const [a, b] of faixas) horas -= Math.max(0, Math.min(b, pb) - Math.max(a, pa));   // a pausa só desconta o que cai dentro da faixa
+    total += horas;
+    dias.push({ id, nome: DIAS_CURTOS[Number(id)], fechado: !faixas.length, horas,
+      faixas: faixas.map(([a, b]) => ({ a, d: b - a })), pausas: faixas.length ? pausas.map(([a, b]) => ({ a, d: b - a })) : [] });
+  }
+  return { dias, total };
+}
+/** Desenha a prévia (sete colunas de 0 a 24 h) a partir do que previaSemana devolve. */
+export function montarPreviaSemana(h, previa) {
+  const el = h("div", { class: "agc-previa", role: "img", "aria-label": `Prévia da semana: ${horasTxt(previa.total)} de atendimento` });
+  el.appendChild(h("div", { class: "agc-previa-cab" }, h("b", null, "Prévia da semana"),
+    h("span", { class: "agc-previa-total" }, h("b", { class: "dado" }, horasTxt(previa.total)), " de atendimento por semana")));
+  el.appendChild(h("div", { class: "agc-previa-dias" }, previa.dias.map(d => h("div", { class: ["agc-previa-dia", d.fechado && "fechado"] },
+    h("span", null, d.nome),
+    h("div", { class: "agc-previa-col" },
+      [6, 12, 18].map(hh => h("i", { class: "agc-previa-marca", style: { "--h": String(hh) } })),
+      d.faixas.map(f => h("i", { class: "agc-previa-faixa", style: { "--a": f.a.toFixed(3), "--d": f.d.toFixed(3) } })),
+      d.pausas.map(p => h("i", { class: "agc-previa-pausa", style: { "--a": p.a.toFixed(3), "--d": p.d.toFixed(3) } }))),
+    h("small", { class: "dado" }, d.fechado ? "—" : horasTxt(d.horas))))));
+  return el;
+}
+
 function listaFaixas(h, ui, dia, faixas, habilitado) {
   const caixa = h("div", { class: "agc-faixas", hidden: !habilitado });
   function adicionar([de = "08:00", ate = "18:00"] = []) {
@@ -85,10 +125,19 @@ async function secaoAgenda(ctx, alvo) {
   for (const [nome, minutos] of Object.entries(cfg.duracoes || {})) adicionarDuracao(nome, minutos);
   const addDuracao = h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => adicionarDuracao() } }, ui.icone("mais"), "Adicionar serviço");
 
+  // prévia ao vivo: o que está marcado acima vira sete colunas de 0 a 24 h (horas úteis por dia e por semana)
+  const previaCaixa = h("div", { class: "agc-previa-caixa" });
+  function pintarPrevia() {
+    ui.limpar(previaCaixa);
+    if (!fonteAgenda.checked) { previaCaixa.appendChild(h("p", { class: "campo-ajuda" }, "A prévia aparece quando os horários são definidos nesta agenda.")); return; }
+    const horario = Object.fromEntries(controlesDia.map(d => [d.id, d.ligada.checked ? d.linhas.ler() : []]));
+    const pausas = [...intervalos.querySelectorAll(".agc-faixa")].map(l => [...l.querySelectorAll("input")].map(x => x.value));
+    previaCaixa.appendChild(montarPreviaSemana(h, previaSemana(horario, pausas)));
+  }
   const form = h("form", { class: "pilha agc-form", novalidate: true },
     h("section", { class: "cartao pilha" },
       h("div", { class: "cartao-cab" }, h("div", null, h("h3", { class: "titulo-sec" }, "Disponibilidade"), h("p", { class: "sub" }, "Os horários livres são calculados no fuso de São Paulo."))),
-      usarAgenda, gradeDias,
+      usarAgenda, gradeDias, previaCaixa,
       h("div", { class: "pilha-p" }, h("div", null, h("h4", null, "Pausas e almoço"), h("p", { class: "sub" }, "Intervalos aplicados a todos os dias de atendimento.")), intervalos, addIntervalo)),
     h("section", { class: "cartao pilha" },
       h("div", { class: "cartao-cab" }, h("div", null, h("h3", { class: "titulo-sec" }, "Duração e capacidade"), h("p", { class: "sub" }, "Ajuste o tempo por serviço. O padrão é usado quando um serviço não tem duração própria."))),
@@ -102,9 +151,13 @@ async function secaoAgenda(ctx, alvo) {
       h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, ui.icone("check"), "Salvar agenda"))));
 
   const fonteAgenda = usarAgenda.querySelector("input");
-  const fonteToggle = () => { gradeDias.hidden = !fonteAgenda.checked; };
+  const fonteToggle = () => { gradeDias.hidden = !fonteAgenda.checked; pintarPrevia(); };
   fonteAgenda.addEventListener("change", fonteToggle);
   fonteToggle();
+  // qualquer mudança de horário (digitar, ligar um dia, adicionar ou remover faixa/pausa) redesenha a prévia; o clique chega depois do remove()
+  form.addEventListener("input", pintarPrevia);
+  form.addEventListener("change", pintarPrevia);
+  form.addEventListener("click", ev => { if (ev.target.closest && ev.target.closest("button[type=button]")) queueMicrotask(pintarPrevia); });
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     ui.marcarErro(form, null);

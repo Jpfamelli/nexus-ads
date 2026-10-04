@@ -1910,10 +1910,14 @@ const achar = (el, sel) => { const x = el.querySelector(sel); assert.ok(x, `não
 /* ---------- componentes (DOM de mentira) ---------- */
 await teste("contratos existem: ui.cabecalho/segmentado/toqueLongo/deslizar/esqueleto/trocarEsqueleto/erroCartao/acaoComDesfazer/modal/gaveta/campo/vazio e G.destacar; assinaturas antigas continuam", () => {
   for (const f of ["cabecalho", "segmentado", "toqueLongo", "deslizar", "esqueleto", "trocarEsqueleto", "erroCartao", "acaoComDesfazer", "modal", "gaveta", "campo", "vazio",
-    "toast", "anunciar", "confirmar", "abas", "lerForm", "marcarErro", "carregando", "tabela", "pilula", "numMoeda", "validarCampo", "validarForm", "mascarar", "fraseDeErro"]) {
+    "toast", "anunciar", "confirmar", "abas", "lerForm", "marcarErro", "carregando", "tabela", "pilula", "numMoeda", "validarCampo", "validarForm", "mascarar", "fraseDeErro",
+    "kpi", "dica", "ligarDicas", "checkSucesso", "numCompacto", "avatar", "ilustracaoVazio"]) {   // plano 50 (04/10/2026): peças novas da frente A
     assert.equal(typeof U[f], "function", `ui.${f}`);
   }
   assert.equal(typeof GRAF.destacar, "function", "G.destacar");
+  for (const f of ["sparkline", "donut", "pontosSparkline", "tendenciaDe", "taxaEntreEtapas"]) assert.equal(typeof GRAF[f], "function", `G.${f} (plano 50)`);
+  assert.equal(U.pilula.length, 1, "pilula(texto, cor = 'neutra', extra = {}) continua com os mesmos padrões");
+  assert.equal(U.avatar.length, 3, "avatar(nome, id, img, opcoes = {}) continua compatível");
   assert.equal(U.esqueleto.length, 0, "esqueleto(tipo = 'lista', opcoes = {}) tem parâmetros com padrão (compatível com esqueleto('lista', 6))");
 });
 

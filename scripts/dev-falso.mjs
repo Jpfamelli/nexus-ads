@@ -55,6 +55,17 @@ const negocios = [
   { id: 803, contato_id: 503, titulo: "Clareamento", servico: "Clareamento", estagio_id: "s1", valor_previsto: 950, dono_id: null, origem: "anuncio", plataforma: "meta", campanha_nome: "Avaliação humanizada" },
   { id: 804, contato_id: 504, titulo: "Avaliação preventiva", servico: "Clínica geral", estagio_id: "s5", valor_previsto: 0, valor: 1450, dono_id: ID.eu, consulta_offset: -4, origem: "indicacao" },
 ];
+// empresas (T8 · plano 50, item 30): linhas no formato da tabela nx_empresas; o vínculo contato → empresa fica em empresaDoContato
+// (os contatos acima não mudam). nx_empresas_listar / nx_empresa_ver devolvem o mesmo formato das RPCs da migração 20260928d_crm_b.
+const empresas = [
+  { id: 71, nome: "Convênio Metalúrgica Vale", documento: "00.000.000/0001-00", site: null, telefone: "5500000000710", email: "rh@metalurgica.example.test",
+    cidade: "Taubaté", uf: "SP", obs: "Convênio com desconto na avaliação para os funcionários.", campos: {}, criado_em: "2026-09-02T13:00:00Z", atualizado_em: "2026-09-20T13:00:00Z" },
+  { id: 72, nome: "Frota Sul Transportes", documento: null, site: null, telefone: null, email: null,
+    cidade: "Pindamonhangaba", uf: "SP", obs: null, campos: {}, criado_em: "2026-09-10T13:00:00Z", atualizado_em: "2026-09-10T13:00:00Z" },
+  { id: 73, nome: "Escola Primeiros Passos", documento: null, site: null, telefone: null, email: null,
+    cidade: null, uf: null, obs: null, campos: {}, criado_em: "2026-09-25T13:00:00Z", atualizado_em: "2026-09-25T13:00:00Z" },
+];
+const empresaDoContato = { 501: 71, 504: 71, 503: 72 };
 const usuarios = [
   { id: ID.eu, nome: "Dra. Helena", papel: "admin", aprovado: true, departamentos: [ID.dep], recebe_conversas: true },
   { id: ID.ana, nome: "Ana Paula", papel: "atendente", aprovado: true, departamentos: [ID.dep], recebe_conversas: true },
@@ -83,7 +94,7 @@ const agendamentos = negocios.filter(n => n.consulta_offset != null).map(n => {
   const [hh, mm] = h.split(":").map(Number);
   const end = new Date(`${dia}T${h}:00-03:00`); end.setMinutes(end.getMinutes() + 45);
   return { negocio_id: n.id, contato_id: c.id, nome: c.nome, telefone: c.telefone, inicio: hora(dia, String(hh).padStart(2,"0"), String(mm).padStart(2,"0")), fim: end.toISOString(), servico: n.servico,
-    status: "aberto", etapa: nomesEtapas.find(e => e.id === n.estagio_id)?.nome, marco: n.estagio_id === "s2" ? "agendada" : null, titulo: n.titulo,
+    status: "aberto", etapa: nomesEtapas.find(e => e.id === n.estagio_id)?.nome, marco: n.estagio_id === "s2" ? "agendada" : null, dono_id: n.dono_id || null, titulo: n.titulo,
     origem: n.origem, plataforma: n.plataforma || null, campanha_nome: n.campanha_nome || null, anuncio_nome: null, rastreio: null };
 });
 const bloqueios = [{ id: "b1", inicio: hora(somaDia(hoje, 2), "12", "00"), fim: hora(somaDia(hoje, 2), "13", "00"), motivo: "Intervalo da equipe" }];
@@ -291,7 +302,7 @@ function agendaMarcar(p) {
   const idx = agendamentos.findIndex(a => String(a.negocio_id) === negocioId);
   const item = { negocio_id: n.id, contato_id: c.id, nome: c.nome, telefone: c.telefone, inicio, fim,
     servico: String(p.p_servico || n.servico || "").slice(0, 80), status: "aberto",
-    etapa: nomesEtapas.find(e => e.id === n.estagio_id)?.nome, marco: "agendada", titulo: n.titulo,
+    etapa: nomesEtapas.find(e => e.id === n.estagio_id)?.nome, marco: "agendada", dono_id: n.dono_id || null, titulo: n.titulo,
     origem: n.origem, plataforma: n.plataforma || null, campanha_nome: n.campanha_nome || null, anuncio_nome: null, rastreio: null };
   if (idx >= 0) agendamentos[idx] = item; else agendamentos.push(item);
   n.consulta_inicio = inicio;
@@ -538,6 +549,29 @@ function rpc(nome, p = {}) {
     }
     case "nx_cv_marcar_lida": { const c = conversaPorId(p.p_conversa); if (c) { c.nao_lidas = 0; bater(); } return { ok: true }; }
     case "nx_contato_ver": { const c = contatos.find(x => String(x.id) === String(p.p_id)) || contatos[0]; return { contato: { ...c }, negocios: negocios.filter(n => n.contato_id === c.id), conversas: conversas.filter(v => v.contato_id === c.id).map(v => dataConv(v)), tarefas: [], notas: [] }; }
+    // empresas: mesmo formato de nx_empresas_listar / nx_empresa_ver (20260928d_crm_b.sql) — contagens de contatos e de negócios abertos por empresa
+    case "nx_empresas_listar": {
+      const norm = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+      const q = norm(String((p.p_filtro && p.p_filtro.busca) || "").trim());
+      const por = Math.max(1, Math.min(100, Number(p.p_por_pagina) || 50)), pg = Math.max(1, Number(p.p_pagina) || 1);
+      const achadas = empresas.filter(e => !q || norm(`${e.nome} ${e.documento || ""} ${e.cidade || ""}`).includes(q)).sort((a, b) => norm(a.nome).localeCompare(norm(b.nome)) || a.id - b.id);
+      const doContato = e => contatos.filter(c => empresaDoContato[c.id] === e.id);
+      const abertoDe = n => (nomesEtapas.find(s => s.id === n.estagio_id) || {}).tipo === "aberto";
+      return { itens: achadas.slice((pg - 1) * por, pg * por).map(e => ({ id: e.id, nome: e.nome, documento: e.documento, cidade: e.cidade, uf: e.uf, telefone: e.telefone, email: e.email, site: e.site, criado_em: e.criado_em,
+        contatos: doContato(e).length, negocios_abertos: negocios.filter(n => empresaDoContato[n.contato_id] === e.id && abertoDe(n)).length })),
+        total: achadas.length, pagina: pg, por_pagina: por, tem_mais: pg * por < achadas.length };
+    }
+    case "nx_empresa_ver": {
+      const e = empresas.find(x => String(x.id) === String(p.p_id));
+      if (!e) throw new ErroDev("empresa_nao_encontrada");
+      const doContato = contatos.filter(c => empresaDoContato[c.id] === e.id);
+      const cards = negocios.filter(n => empresaDoContato[n.contato_id] === e.id).map(n => {
+        const s = nomesEtapas.find(x => x.id === n.estagio_id) || {};
+        return { ...n, contato: { ...contatos.find(c => c.id === n.contato_id) }, funil_id: ID.funil, funil_nome: "Pacientes", estagio_nome: s.nome, estagio_cor: s.cor, estagio_tipo: s.tipo, status: s.tipo, valor: n.valor || null };
+      }).sort((a, b) => (b.status === "aberto") - (a.status === "aberto"));
+      return { empresa: { ...e, cliente_id: ID.cliente },
+        contatos: doContato.map(c => ({ id: c.id, nome: c.nome, telefone: c.telefone, email: c.email, etiquetas: c.etiquetas, dono_id: null })), negocios: cards };
+    }
     case "nx_cv_base": return baseConversas;
     case "nx_canais_listar": return canais;
     case "nx_cv_listar": {
@@ -658,7 +692,9 @@ function rpc(nome, p = {}) {
     case "nx_config": return { codigo_gestor: null };
     case "nx_uso_plano": return { clientes: 1, usuarios: 2, canais: 2, automacoes: 2 };
     case "nx_relatorios": return { itens: [] };
-    case "nx_dominio_status": case "nx_automacao_ativar": case "nx_notificacoes_marcar": return { ok: true };
+    case "nx_dominio_status": case "nx_notificacoes_marcar": return { ok: true };
+    // como o real (nx_auto_item): o item volta com id e ativo, para a lista recontar «Ligadas de N»
+    case "nx_automacao_ativar": return { id: p.p_id, ativo: !!p.p_ativo };
     case "nx_codewords_canal_salvar": marcarOnb("chave_codewords"); return { ok: true, codewords: { tem_api_key: true } };
     case "nx_departamento_salvar": marcarOnb("departamento_horario"); return { ...(p.p_departamento || {}), ok: true };
     case "nx_convite_criar": marcarOnb("colega_convidado"); return { ok: true, link: "http://127.0.0.1/app/#/convite/" + "0".repeat(64) };
@@ -685,7 +721,8 @@ function fn(nome, p = {}) {
           { tipo: "enviar_mensagem", campos: { texto: "Oi, {primeiro_nome}! Ficou alguma dúvida sobre o orçamento?" } },
           { tipo: "notificar", campos: { para: "responsavel", titulo: "{nome} não respondeu o orçamento", texto: "Sem resposta há 2 dias." } }] } });
   }
-  if (nome === "nx-ia") return { ok: true, sugestao: "Resposta fictícia de demonstração. Revise antes de enviar." };
+  // mesmo formato de _compartilhado/ia_conversas.js (sugerir e resumir devolvem { ok, texto, acao })
+  if (nome === "nx-ia") return { ok: true, texto: p.acao === "resumir" ? "Resumo fictício: a pessoa quer saber o preço e horários da avaliação." : "Resposta fictícia de demonstração. Revise antes de enviar.", acao: p.acao || "sugerir" };
   return { ok: true, simulado: true };
 }
 

@@ -388,15 +388,26 @@ function legenda(series) {
 }
 
 /* ---------- 2.3 Barras horizontais agrupadas (origem: criados × ganhos; departamento; número) ---------- */
+/** Posição de um elemento dentro da caixa (px), para a dica apontar para a linha/célula certa mesmo com rolagem interna. */
+function posNaCaixa(caixa, el) {
+  try {
+    const c = caixa.getBoundingClientRect(), r = el.getBoundingClientRect();
+    return { x: r.left - c.left + r.width / 2, y: r.top - c.top };
+  } catch { return { x: 0, y: 0 }; }
+}
 /**
  * @param o {itens:[{rotulo, valores:[…], extra?}], series:[{nome, classe}], fmt(v), resumo}
+ * A dica (plano 50 · A2) aparece ao passar o mouse e no foco de teclado: ↑ ↓ (ou ← →) percorrem as linhas, Home/End vão às pontas, Esc fecha;
+ * o texto também vai para a região aria-live da própria dica.
  */
 export function barras(alvo, o) {
   limpar(alvo);
   const max = Math.max(1, ...o.itens.flatMap(it => it.valores.map(v => v || 0)));
+  const caixa = h("div", { class: "g-caixa g-hcaixa", tabindex: "0", role: "group", "aria-label": `${o.resumo}. Use as setas para ler linha a linha.` });
   const lista = h("ul", { class: "g-hbarras", role: "list", "aria-label": o.resumo });
+  const linhas = [];
   o.itens.forEach((it, n) => {
-    const li = h("li", { class: "g-hitem", style: { "--i": n } },
+    const li = h("li", { class: "g-hitem", style: { "--i": n }, "data-k": n },
       h("span", { class: "g-hrot" }, h("span", { class: "g-hnome", texto: it.rotulo }), it.extra ? h("span", { class: "g-hextra", texto: it.extra }) : null));
     const trilhos = h("span", { class: "g-htrilhos" });
     it.valores.forEach((v, j) => {
@@ -408,10 +419,30 @@ export function barras(alvo, o) {
     });
     li.append(trilhos);
     lista.append(li);
+    linhas.push(li);
   });
   if (!reduzido()) lista.classList.add("g-anim");
-  alvo.append(...[lista, o.series.length > 1 ? legenda(o.series) : null].filter(Boolean));
-  return { destruir() {} };
+  caixa.append(lista);
+  const tr = trilho(caixa, {
+    n: () => o.itens.length,
+    texto: k => { const it = o.itens[k]; return `${it.rotulo}${it.extra ? ` (${it.extra})` : ""} — ${o.series.map((se, j) => `${se.nome}: ${o.fmt(it.valores[j])}`).join(" · ")}`; },
+    aoMostrar: k => { linhas.forEach((li, i) => li.classList.toggle("g-ativa", i === k)); caixa.classList.add("g-foco"); },
+    aoEsconder: () => { linhas.forEach(li => li.classList.remove("g-ativa")); caixa.classList.remove("g-foco"); },
+  });
+  const mostrarLinha = k => { const li = linhas[k]; if (!li) return; const p = posNaCaixa(caixa, li); caixa.style.setProperty("--y", `${Math.round(p.y)}px`); tr.mostrar(k, p.x); };
+  caixa.addEventListener("pointermove", e => { const li = e.target && e.target.closest ? e.target.closest(".g-hitem") : null; if (!li) return tr.esconder(); mostrarLinha(+li.dataset.k); });
+  caixa.addEventListener("pointerleave", e => { if (e.pointerType !== "touch") tr.esconder(); });
+  caixa.addEventListener("blur", () => tr.esconder());
+  caixa.addEventListener("keydown", e => {
+    const ult = o.itens.length - 1, n = tr.atual;
+    const mapa = { ArrowDown: n < 0 ? 0 : n + 1, ArrowRight: n < 0 ? 0 : n + 1, ArrowUp: n < 0 ? ult : n - 1, ArrowLeft: n < 0 ? ult : n - 1, Home: 0, End: ult };
+    if (e.key === "Escape") return tr.esconder();
+    if (!(e.key in mapa) || ult < 0) return;
+    e.preventDefault();
+    mostrarLinha(Math.max(0, Math.min(ult, mapa[e.key])));
+  });
+  alvo.append(...[caixa, o.series.length > 1 ? legenda(o.series) : null].filter(Boolean));
+  return { destruir() { tr.esconder(); }, mostrar: mostrarLinha, esconder: () => tr.esconder() };
 }
 
 /* ---------- 2.4 Rosca (motivos de perda) ---------- */
@@ -442,7 +473,14 @@ export function rosca(alvo, o) {
 }
 
 /* ---------- 2.5 Funil horizontal por etapa ---------- */
-/** @param o {etapas:[{nome, cor, qtd, valorTxt, conversao (texto)|null, tipo}], resumo} */
+/** Taxa entre duas etapas vizinhas em texto («62% da etapa anterior»); null quando não dá para calcular (sem inventar). */
+export function taxaEntreEtapas(qtd, anterior) {
+  if (!(anterior > 0) || !fin(qtd)) return null;
+  const p = Math.max(0, qtd) / anterior * 100;
+  return { pct: p, texto: `${p >= 10 || p === 0 ? Math.round(p) : (Math.round(p * 10) / 10).toString().replace(".", ",")}% da etapa anterior` };
+}
+/** @param o {etapas:[{nome, cor, qtd, valorTxt, conversao (texto)|null, tipo}], resumo, taxas?: true}
+    Sem `conversao` na etapa, a taxa entre etapas vizinhas é calculada das próprias quantidades (plano 50 · A3); `taxas: false` desliga. */
 export function funil(alvo, o) {
   limpar(alvo);
   const max = Math.max(1, ...o.etapas.map(e => e.qtd || 0));
@@ -450,12 +488,17 @@ export function funil(alvo, o) {
   o.etapas.forEach((e, n) => {
     const cor = corValida(e.cor);
     const pct = Math.max(e.qtd > 0 ? 3 : 0, (e.qtd || 0) / max * 100);
+    const ant = n > 0 ? o.etapas[n - 1] : null;
+    // só entre etapas ABERTAS vizinhas: «ganho»/«perdido» não vêm da etapa anterior (9 ganhos ÷ 1 em orçamento daria «900%»)
+    const sequencial = ant && (e.tipo || "aberto") === "aberto" && (ant.tipo || "aberto") === "aberto";
+    const taxa = e.conversao ? null : (o.taxas !== false && sequencial ? taxaEntreEtapas(e.qtd || 0, ant.qtd || 0) : null);
+    const convTxt = e.conversao || (taxa ? taxa.texto : "");
     const li = h("li", { class: `g-fetapa g-f-${e.tipo || "aberto"}`, style: { "--i": n } },
       h("span", { class: "g-fnome" }, h("i", { class: "g-fcor", style: cor ? { "--cor": cor } : {} }), h("span", { texto: e.nome })),
       h("span", { class: "g-ftrilho" }, h("span", { class: "g-fbarra", style: { "--w": `${pct.toFixed(2)}%`, ...(cor ? { "--cor": cor } : {}) } }),
         h("span", { class: "g-fqtd", texto: String(e.qtd || 0) })),
       h("span", { class: "g-fvalor", texto: e.valorTxt || "" }),
-      e.conversao ? h("span", { class: "g-fconv", texto: e.conversao }) : h("span", { class: "g-fconv" }));
+      h("span", { class: `g-fconv${taxa ? " g-fconv-taxa" : ""}`, texto: convTxt, ...(taxa ? { "data-taxa": String(Math.round(taxa.pct)) } : {}) }));
     lista.append(li);
   });
   alvo.append(lista);
@@ -463,7 +506,8 @@ export function funil(alvo, o) {
 }
 
 /* ---------- 2.6 Mapa de calor 7 × 24 ---------- */
-/** @param o {matriz:[7][24] números (0 = domingo), dias:['dom',…], fmt(v), resumo} */
+/** @param o {matriz:[7][24] números (0 = domingo), dias:['dom',…], fmt(v), resumo}
+    Dica (plano 50 · A2): mouse sobre a célula ou teclado — ← → mudam a hora, ↑ ↓ o dia, Home/End as pontas, Esc fecha — com aria-live. */
 export function calor(alvo, o) {
   limpar(alvo);
   const max = Math.max(0, ...o.matriz.flat());
@@ -471,17 +515,48 @@ export function calor(alvo, o) {
   grade.append(h("span", { class: "g-cal-canto", "aria-hidden": "true" }));
   for (let hr = 0; hr < 24; hr++) grade.append(h("span", { class: "g-cal-h", "aria-hidden": "true", texto: hr % 3 === 0 ? String(hr).padStart(2, "0") : "" }));
   const ordem = [1, 2, 3, 4, 5, 6, 0];   // semana começando na segunda
+  const celulas = [];                      // [linha][hora] → célula (linha 0 = segunda)
   ordem.forEach((d, lin) => {
     grade.append(h("span", { class: "g-cal-d", "aria-hidden": "true", texto: o.dias[d] }));
+    celulas.push([]);
     for (let hr = 0; hr < 24; hr++) {
       const v = o.matriz[d][hr] || 0;
-      grade.append(h("span", { class: `g-cal-c g-n${nivelCalor(v, max)}`, title: `${o.dias[d]} ${String(hr).padStart(2, "0")}h: ${o.fmt(v)}`, style: { "--i": lin * 3 + Math.floor(hr / 4) } }));
+      const c = h("span", { class: `g-cal-c g-n${nivelCalor(v, max)}`, title: `${o.dias[d]} ${String(hr).padStart(2, "0")}h: ${o.fmt(v)}`, style: { "--i": lin * 3 + Math.floor(hr / 4) }, "data-l": lin, "data-h": hr });
+      celulas[lin].push(c);
+      grade.append(c);
     }
   });
   const esc = h("div", { class: "g-cal-escala", "aria-hidden": "true" }, h("span", { texto: "menos" }),
     ...[0, 1, 2, 3, 4, 5].map(k => h("i", { class: `g-cal-c g-n${k}` })), h("span", { texto: "mais" }));
-  alvo.append(h("div", { class: "g-cal-rolagem" }, grade), esc);
-  return { destruir() {} };
+  const caixa = h("div", { class: "g-caixa g-calcaixa", tabindex: "0", role: "group", "aria-label": `${o.resumo}. Use as setas para ler dia e hora.` },
+    h("div", { class: "g-cal-rolagem" }, grade), esc);
+  let atual = -1;   // índice linear lin * 24 + hr
+  const tr = trilho(caixa, {
+    n: () => 7 * 24,
+    texto: k => { const lin = Math.floor(k / 24), hr = k % 24, d = ordem[lin]; return `${o.dias[d]} ${String(hr).padStart(2, "0")}h: ${o.fmt(o.matriz[d][hr] || 0)}`; },
+    aoMostrar: k => { if (atual >= 0) celulas[Math.floor(atual / 24)][atual % 24].classList.remove("g-ativa"); atual = k; celulas[Math.floor(k / 24)][k % 24].classList.add("g-ativa"); },
+    aoEsconder: () => { if (atual >= 0) celulas[Math.floor(atual / 24)][atual % 24].classList.remove("g-ativa"); atual = -1; },
+  });
+  const mostrarCelula = (lin, hr) => {
+    lin = Math.max(0, Math.min(6, lin)); hr = Math.max(0, Math.min(23, hr));
+    const c = celulas[lin][hr], p = posNaCaixa(caixa, c);
+    caixa.style.setProperty("--y", `${Math.round(p.y)}px`);
+    tr.mostrar(lin * 24 + hr, p.x);
+  };
+  caixa.addEventListener("pointermove", e => { const c = e.target && e.target.closest ? e.target.closest(".g-calor .g-cal-c") : null; if (!c) return tr.esconder(); mostrarCelula(+c.dataset.l, +c.dataset.h); });
+  caixa.addEventListener("pointerleave", e => { if (e.pointerType !== "touch") tr.esconder(); });
+  caixa.addEventListener("blur", () => tr.esconder());
+  caixa.addEventListener("keydown", e => {
+    if (e.key === "Escape") return tr.esconder();
+    const lin = atual < 0 ? 0 : Math.floor(atual / 24), hr = atual < 0 ? 8 : atual % 24;   // começa na segunda às 8h (horário comercial)
+    const mapa = { ArrowRight: [lin, hr + 1], ArrowLeft: [lin, hr - 1], ArrowDown: [lin + 1, hr], ArrowUp: [lin - 1, hr], Home: [lin, 0], End: [lin, 23] };
+    if (!(e.key in mapa)) return;
+    e.preventDefault();
+    if (atual < 0 && e.key !== "Home" && e.key !== "End") return mostrarCelula(lin, hr);
+    mostrarCelula(...mapa[e.key]);
+  });
+  alvo.append(caixa);
+  return { destruir() { tr.esconder(); }, mostrar: mostrarCelula, esconder: () => tr.esconder() };
 }
 
 /* ---------- 2.7 "Ver como tabela" (alternativa acessível de todo gráfico) ---------- */
@@ -520,8 +595,11 @@ export function duracaoToken(nome) {
   return Number.isFinite(ms) ? Math.max(0, Math.min(2000, ms)) : 0;
 }
 
-/** Anima um valor visível e mantém seu equivalente acessível completo, encerrando no valor exato ao ocultar a aba. */
+/** Anima um valor visível e mantém seu equivalente acessível completo, encerrando no valor exato ao ocultar a aba.
+    Uma contagem nova no MESMO elemento para a anterior sem pintá-la (senão o rAF velho terminava escrevendo o valor antigo por cima);
+    quem escreve o número sem contar chama antes `el.__pararContagem()`. */
 export function animarValor(el, valor, pintar, acessivel = String(valor)) {
+  if (typeof el.__pararContagem === "function") el.__pararContagem();
   const final = () => { pintar(valor); el.setAttribute?.("aria-label", acessivel); };
   el.setAttribute?.("aria-label", acessivel);
   const dur = duracaoToken("--t-dados");
@@ -530,10 +608,12 @@ export function animarValor(el, valor, pintar, acessivel = String(valor)) {
   const limpar = () => {
     if (!ativo) return false;
     ativo = false;
+    if (el.__pararContagem === limpar) el.__pararContagem = null;
     if (frame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame);
     document.removeEventListener?.("visibilitychange", visibilidade);
     return true;
   };
+  el.__pararContagem = limpar;
   const concluir = () => { if (limpar()) final(); };
   const visibilidade = () => { if (document.hidden) concluir(); };
   document.addEventListener?.("visibilitychange", visibilidade);
@@ -541,7 +621,7 @@ export function animarValor(el, valor, pintar, acessivel = String(valor)) {
   const passo = t => {
     if (!ativo) return;
     if (!el.isConnected) { limpar(); return; }
-    const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+    const p = Math.min(1, Math.max(0, (t - t0) / dur)), e = 1 - Math.pow(1 - p, 3);   // o 1º quadro pode vir com t < t0: nada de «-0»
     pintar(p < 1 ? valor * e : valor);
     if (p < 1) frame = requestAnimationFrame(passo);
     else { limpar(); final(); }
@@ -565,4 +645,151 @@ export function destacar(el) {
   clearTimeout(el.__destaqueT);
   el.__destaqueT = setTimeout(() => el.classList.remove("destaque"), 620);
   return el;
+}
+
+/* ============================================================
+   3. PLANO 50 (04/10/2026) — frente A: sparkline e rosca com legenda clicável
+   As classes vivem no app.css (não no relatorios.css): KPI do Início, cartão do CRM e painel de Conversas
+   usam estas peças sem carregar o CSS de Relatórios.
+   ============================================================ */
+/** Tendência de uma série: compara o último ponto útil com o primeiro. */
+export function tendenciaDe(valores) {
+  const u = (valores || []).map(Number).filter(fin);
+  if (u.length < 2) return "igual";
+  const a = u[0], b = u[u.length - 1];
+  return b > a ? "sobe" : b < a ? "desce" : "igual";
+}
+/** Pontos [x,y] de uma sparkline (PURO): valores nulos ficam de fora; série reta fica no meio da altura. */
+export function pontosSparkline(valores, W, H, P = 3) {
+  const n = valores.length;
+  const uteis = valores.filter(fin);
+  if (!uteis.length) return [];
+  let min = Math.min(...uteis), max = Math.max(...uteis);
+  if (min === max) { min -= 1; max += 1; }
+  const x = k => P + (n > 1 ? k / (n - 1) * (W - 2 * P) : (W - 2 * P) / 2);
+  const y = escala([min, max], [H - P, P]);
+  return valores.map((v, k) => (fin(v) ? [x(k), y(v)] : null)).filter(Boolean);
+}
+/** Redesenho por largura para peças pequenas (mínimo 48 px; o `responsivo` dos gráficos grandes começa em 260). */
+function responsivoMini(alvo, desenhar, minimo = 48) {
+  let w = 0, ro = null;
+  const rodar = anim => { const nw = Math.max(minimo, Math.round(alvo.clientWidth || 120)); w = nw; desenhar(nw, anim); };
+  rodar(true);
+  if (typeof ResizeObserver === "function") {
+    ro = new ResizeObserver(() => { const nw = Math.round(alvo.clientWidth || 0); if (nw && Math.abs(nw - w) > 12) rodar(false); });
+    ro.observe(alvo);
+  }
+  return { destruir() { if (ro) ro.disconnect(); ro = null; }, redesenhar() { rodar(false); } };
+}
+
+/* ---------- 3.1 Sparkline: SVG de 32 px, último ponto marcado ---------- */
+/**
+ * G.sparkline(alvo, {valores:[n…], cor?: "#RRGGBB", area?: bool, rotulo, fmt?, altura?: 28–40}) → {destruir, redesenhar, tendencia}
+ * Menos de 2 números úteis: desenha o traço «sem histórico» e diz isso ao leitor de tela (a tela nunca fica em branco, nada é inventado).
+ * A cor vem do tema (--g = primária) ou de `cor` validada; data-tendencia="sobe|desce|igual" deixa a tela colorir por sentido.
+ */
+export function sparkline(alvo, o = {}) {
+  limpar(alvo);
+  const valores = (o.valores || []).map(v => (fin(Number(v)) ? Number(v) : null));
+  const uteis = valores.filter(fin);
+  const rotulo = o.rotulo || "Série";
+  const fmt = o.fmt || (v => String(Math.round(v * 100) / 100).replace(".", ","));
+  const H = Math.max(28, Math.min(40, Number(o.altura) || 32));
+  alvo.classList.add("g-spark-alvo");
+  if (uteis.length < 2) {
+    alvo.append(h("span", { class: "g-spark g-spark-vazio", role: "img", "aria-label": `${rotulo}: sem histórico suficiente`, style: { "--h": `${H}px` } }));
+    return { destruir() {}, redesenhar() {}, tendencia: "igual" };
+  }
+  const tendencia = tendenciaDe(uteis);
+  const cor = corValida(o.cor);
+  const resumo = `${rotulo}: de ${fmt(uteis[0])} a ${fmt(uteis[uteis.length - 1])} em ${uteis.length} pontos` + (tendencia === "igual" ? "" : tendencia === "sobe" ? ", subindo" : ", caindo");
+  const desenhar = (W, anim) => {
+    const velho = alvo.querySelector("svg"); if (velho) velho.remove();
+    const pts = pontosSparkline(valores, W, H, 4);
+    const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: `g-spark${anim && !reduzido() ? " g-anim" : ""}`, role: "img", "aria-label": resumo,
+      "data-tendencia": tendencia, style: cor ? { "--g": cor } : {} }, titulo(resumo));
+    if (o.area !== false) svg.append(s("path", { class: "g-spark-area", d: caminhoArea(pts, H - 1) }));
+    svg.append(s("path", { class: "g-spark-linha", d: caminhoSuave(pts), pathLength: 1 }));
+    const fim = pts[pts.length - 1];
+    svg.append(s("circle", { class: "g-spark-fim", cx: f1(fim[0]), cy: f1(fim[1]), r: 3 }));
+    alvo.append(svg);
+  };
+  const ctl = responsivoMini(alvo, desenhar);
+  return { ...ctl, tendencia };
+}
+
+/* ---------- 3.2 Rosca com legenda clicável (esconde a fatia) e dica acessível ---------- */
+/**
+ * G.donut(alvo, {fatias:[{rotulo, valor, extra?, cor?}], fmt(v), centro?: {valor?, rotulo}, resumo, aoMudar?(visiveis)}) → {destruir, ocultas(), alternar(i)}
+ * Cada item da legenda é um botão (aria-pressed): tirar uma fatia refaz a rosca e os percentuais com o que ficou; o centro mostra o total visível.
+ * As fatias usam a paleta CATEGÓRICA do app (.g-d0…7 → --pal-*, a mesma das etapas e etiquetas), nunca as cores de estado: «Site» em vermelho pareceria erro.
+ * (ou `centro.valor`, quando a tela manda um fixo). Mouse na fatia ou foco no item da legenda destacam os dois e falam o texto na dica (aria-live).
+ */
+export function donut(alvo, o) {
+  limpar(alvo);
+  const tam = 200, cx = 100, cy = 100, r = 92, r0 = 62;
+  const fatias = (o.fatias || []).map((f, i) => ({ ...f, i, valor: fin(Number(f.valor)) ? Number(f.valor) : 0 }));
+  const ocultas = new Set();
+  const svg = s("svg", { viewBox: `0 0 ${tam} ${tam}`, class: `g-rosca g-donut${reduzido() ? "" : " g-anim"}`, role: "img", "aria-label": o.resumo });
+  const gFatias = s("g", { class: "g-donut-fatias" });
+  const centroN = s("text", { class: "g-rosca-n g-donut-n", x: cx, y: cy + 4, "text-anchor": "middle" });
+  const centroL = s("text", { class: "g-rosca-l g-donut-l", x: cx, y: cy + 24, "text-anchor": "middle" }, (o.centro && o.centro.rotulo) || "");
+  svg.append(s("circle", { class: "g-trilho", cx, cy, r: (r + r0) / 2, "stroke-width": r - r0, fill: "none" }), gFatias, centroN, centroL);
+  const leg = h("ul", { class: "g-donut-leg", "aria-label": "Legenda: toque para esconder ou mostrar uma fatia" });
+  const caixa = h("div", { class: "g-caixa g-donut-caixa" }, svg);
+  const itens = new Map();   // i → {bt, valorEl, path}
+  const tr = trilho(caixa, {
+    n: () => fatias.length,
+    texto: k => { const f = fatias[k], p = pctDe(k); return `${f.rotulo}: ${o.fmt(f.valor)}${p != null ? ` (${Math.round(p)}%)` : ""}${ocultas.has(k) ? " · escondida" : ""}`; },
+    aoMostrar: k => { for (const [i, it] of itens) { const on = i === k; it.bt.classList.toggle("g-ativa", on); if (it.path) it.path.classList.toggle("g-ativa", on); } caixa.classList.add("g-foco"); },
+    aoEsconder: () => { for (const it of itens.values()) { it.bt.classList.remove("g-ativa"); if (it.path) it.path.classList.remove("g-ativa"); } caixa.classList.remove("g-foco"); },
+  });
+  const visiveis = () => fatias.filter(f => !ocultas.has(f.i));
+  const pctDe = i => { if (ocultas.has(i)) return null; const tot = visiveis().reduce((a, f) => a + Math.max(0, f.valor), 0); return tot > 0 ? Math.max(0, fatias[i].valor) / tot * 100 : null; };
+  function desenharFatias() {
+    limpar(gFatias);
+    for (const it of itens.values()) it.path = null;
+    const fs = fatiasDe(fatias.map(f => (ocultas.has(f.i) ? 0 : f.valor)), .012);
+    fs.forEach((f, n) => {
+      const it = fatias[f.i], cor = corValida(it.cor);
+      const p = s("path", { class: `g-fatia g-d${f.i % 8}`, d: arcoAnel(cx, cy, r, r0, f.a0, f.a1), style: { "--i": n, ...(cor ? { "--g": cor } : {}) }, "data-i": f.i },
+        titulo(`${it.rotulo}: ${o.fmt(it.valor)} (${Math.round(f.pct)}%)`));
+      gFatias.append(p);
+      const reg = itens.get(f.i); if (reg) reg.path = p;
+    });
+    const tot = visiveis().reduce((a, f) => a + Math.max(0, f.valor), 0);
+    const fixo = o.centro && o.centro.valor !== undefined && o.centro.valor !== null && !ocultas.size;
+    centroN.textContent = fixo ? String(o.centro.valor) : (visiveis().length ? o.fmt(tot) : "—");
+    for (const [i, reg] of itens) { const p = pctDe(i); reg.valorEl.textContent = `${o.fmt(fatias[i].valor)}${p != null ? ` · ${Math.round(p)}%` : ""}`; }
+    svg.setAttribute("aria-label", ocultas.size ? `${o.resumo}. ${ocultas.size} ${ocultas.size === 1 ? "fatia escondida" : "fatias escondidas"}.` : o.resumo);
+  }
+  function alternar(i) {
+    if (!itens.has(i)) return;
+    if (ocultas.has(i)) ocultas.delete(i); else ocultas.add(i);
+    const reg = itens.get(i);
+    reg.bt.setAttribute("aria-pressed", String(!ocultas.has(i)));
+    reg.bt.parentNode.classList.toggle("g-oculta", ocultas.has(i));
+    svg.classList.remove("g-anim");   // a troca não repete a animação de entrada
+    desenharFatias();
+    if (typeof o.aoMudar === "function") { try { o.aoMudar(visiveis().map(f => f.i)); } catch (e) { console.error(e); } }
+  }
+  fatias.forEach(f => {
+    const cor = corValida(f.cor);
+    const valorEl = h("b", {});
+    const bt = h("button", { type: "button", class: "g-donut-op", "aria-pressed": "true", "data-i": f.i, title: "Esconder ou mostrar esta fatia" },
+      h("i", { class: `g-marca g-d${f.i % 8}`, style: cor ? { "--g": cor } : {} }), h("span", { class: "g-rl-nome", texto: f.rotulo }), valorEl,
+      f.extra ? h("small", { texto: f.extra }) : null);
+    bt.addEventListener("click", () => alternar(f.i));
+    bt.addEventListener("focus", () => tr.mostrar(f.i, posNaCaixa(caixa, svg).x));
+    bt.addEventListener("blur", () => tr.esconder());
+    bt.addEventListener("pointerenter", e => { if (e.pointerType !== "touch") tr.mostrar(f.i, posNaCaixa(caixa, svg).x); });
+    bt.addEventListener("pointerleave", () => tr.esconder());
+    itens.set(f.i, { bt, valorEl, path: null });
+    leg.append(h("li", {}, bt));
+  });
+  svg.addEventListener("pointermove", e => { const p = e.target && e.target.closest ? e.target.closest(".g-fatia") : null; if (!p) return tr.esconder(); const pos = posNaCaixa(caixa, p); caixa.style.setProperty("--y", `${Math.round(pos.y)}px`); tr.mostrar(+p.dataset.i, pos.x); });
+  svg.addEventListener("pointerleave", () => tr.esconder());
+  desenharFatias();
+  alvo.append(h("div", { class: "g-rosca-caixa g-donut-env" }, caixa, leg));
+  return { destruir() { tr.esconder(); }, ocultas: () => [...ocultas], alternar };
 }

@@ -4,7 +4,7 @@
    ============================================================ */
 
 export const secoesConfig = [
-  { id: "rastreio", titulo: "Site e anúncios", grupo: "Anúncios", papelMin: "admin", modulo: "crm", icone: "anuncio", montar: secaoRastreio },
+  { id: "rastreio", titulo: "Site e anúncios", desc: "Script que diz de qual campanha veio o contato", grupo: "Anúncios", papelMin: "admin", modulo: "crm", icone: "anuncio", montar: secaoRastreio },
 ];
 
 async function secaoRastreio(ctx, alvo) {

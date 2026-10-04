@@ -194,10 +194,16 @@ export function criarLista(A) {
         return h("label", { class: "chip-check", for: idc }, h("input", { type: "checkbox", id: idc, value: e.id, checked: marcadas.has(e.id) }), ui.etiqueta(e));
       }))) : null;
     const cNl = ui.campo({ tipo: "interruptor", nome: "nao_lidas", rotulo: "Só não lidas", valor: !!f.nao_lidas });
+    // plano 50 · 34: densidade das linhas (lembrada por navegador); vale na hora, sem «Aplicar»
+    const compacta = !!(A.acoes.densidade && A.acoes.densidade() === "compacta");
+    const cDens = A.acoes.definirDensidade ? ui.campo({ tipo: "interruptor", nome: "densidade", rotulo: "Linhas compactas", valor: compacta }) : null;
+    if (cDens) { const sw = cDens.querySelector("input[name=densidade]"); if (sw) sw.addEventListener("change", () => A.acoes.definirDensidade(sw.checked ? "compacta" : "confortavel")); }
     const aplicar = h("button", { type: "button", class: "bt bt-prim bt-p" }, "Aplicar");
     const limparB = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Limpar");
     const corpo = h("div", { class: "pilha cvf" },
-      h("p", { class: "rotulo" }, "Filtrar a lista"), cDep, cCanal, cAt, cEtq, cNl, h("div", { class: "linha linha-fim" }, limparB, aplicar));
+      h("p", { class: "rotulo" }, "Filtrar a lista"), cDep, cCanal, cAt, cEtq, cNl,
+      cDens ? h("div", { class: "cvf-pref" }, h("p", { class: "rotulo" }, "Aparência"), cDens) : null,
+      h("div", { class: "linha linha-fim" }, limparB, aplicar));
     const pop = ui.flutuante(btFiltro, corpo, { largura: 300 });
     const ler = () => {
       const r = {};
@@ -218,6 +224,18 @@ export function criarLista(A) {
   /* ---------------- itens */
   const cache = new Map();   // id → {el, sig}
   function etiquetaDe(id) { return ((A.base && A.base.etiquetas) || []).find(e => e.id === id); }
+  // plano 50 · 34: ícone do tipo da última mensagem (o servidor manda só o resumo: «Foto», «Áudio: …») e selo do canal quando há mais de um número
+  const ICONE_TIPO = Object.freeze({ imagem: "imagem", sticker: "imagem", audio: "microfone", video: "video", documento: "documento", template: "modelo", localizacao: "globo", contato: "contato" });
+  const ROTULO_TIPO = Object.freeze({ imagem: "Foto", sticker: "Figurinha", audio: "Áudio", video: "Vídeo", documento: "Documento", template: "Modelo", localizacao: "Localização", contato: "Contato" });
+  function multiCanal() { return ((A.base && A.base.canais) || []).length > 1; }
+  function avatarComCanal(c, nome) {
+    const av = ui.avatar(nome, c.contato && c.contato.id);
+    const canal = c.canal || ((A.base && A.base.canais) || []).find(k => k.id === c.canal_id);
+    if (!multiCanal() || !canal) return av;
+    const prov = canal.provedor === "codewords" ? "codewords" : "meta";
+    return h("span", { class: "cvl-av", "aria-hidden": "true" }, av,
+      h("i", { class: "cvl-canal", dataset: { provedor: prov }, title: `via ${canal.nome || (prov === "codewords" ? "CodeWords" : "WhatsApp oficial")}` }, ui.icone("whatsapp")));
+  }
 
   function assinatura(c, sel, minuto) {
     return JSON.stringify([A.acoes.rascunhoDe(c.id), A.acoes.filaResumo(c.id), c.contato && c.contato.nome, c.contato && c.contato.telefone, c.ultima_msg_em, c.ultima_msg_resumo, c.ultima_msg_dir,
@@ -244,8 +262,11 @@ export function criarLista(A) {
       const cor = ui.corOk(c.negocio.estagio_cor);
       meta.push(h("span", { class: "cvl-dot cvl-dot-etapa", style: cor ? { "--cor": cor } : null, title: `Etapa: ${c.negocio.estagio_nome}`, role: "img", "aria-label": `Etapa: ${c.negocio.estagio_nome}` }));
     }
-    if (c.status === "aberta" && c.aguardando && c.ultima_entrada_em) {
-      meta.push(h("span", { class: "cvl-espera", title: "Esperando resposta há" }, ui.icone("relogio"), L.tempoEspera(c.ultima_entrada_em)));
+    // SLA visual (34): a espera muda de cor aos 15, 30 e 60 min; a linha ganha a mesma marca na borda
+    const sla = c.status === "aberta" && c.aguardando && c.ultima_entrada_em ? L.nivelEspera(c.ultima_entrada_em) : null;
+    if (sla) {
+      const rotSla = { ok: "Esperando resposta há", aten: "Esperando há mais de 15 min", ruim: "Esperando há mais de 30 min", critico: "Esperando há mais de 1 h" }[sla.nivel];
+      meta.push(h("span", { class: "cvl-espera", dataset: { sla: sla.nivel }, title: `${rotSla}: ${L.tempoEspera(c.ultima_entrada_em)}` }, ui.icone("relogio"), L.tempoEspera(c.ultima_entrada_em)));
     }
     if (A.busca && c.status !== "aberta") meta.push(ui.pilula(c.status === "resolvida" ? "Resolvida" : "Pendente", c.status === "resolvida" ? "neutra" : "aten"));
     const etqs = (c.etiquetas || []).map(etiquetaDe).filter(Boolean);
@@ -264,15 +285,18 @@ export function criarLista(A) {
       filaTxt || null,
       rascunhoNaLinha ? `Rascunho: ${rascunho}` : resumo ? `${c.ultima_msg_dir === "out" ? "Você: " : ""}${resumo}` : null,
       rascunho && !rascunhoNaLinha ? "tem rascunho" : null, L.horaLista(c.ultima_msg_em),
-      c.aguardando && c.status === "aberta" ? `esperando há ${L.tempoEspera(c.ultima_entrada_em)}` : null,
+      sla ? `esperando há ${L.tempoEspera(c.ultima_entrada_em)}${sla.nivel === "critico" || sla.nivel === "ruim" ? ", espera longa" : ""}` : null,
+      multiCanal() && c.canal ? `via ${c.canal.nome}` : null,
       c.atribuida_nome ? `com ${c.atribuida_nome}` : "sem dono"].filter(Boolean).join(", ");
+    const tipoUlt = rascunhoNaLinha ? null : L.tipoDoResumo(resumo);
     const a = h("a", { class: "cvl-item", href: `#/conversas/${c.id}`, "aria-current": sel ? "true" : null, "aria-label": rotuloA11y,
-      dataset: { id: c.id, naoLida: nl ? "1" : "0" } },
-      ui.avatar(nome, c.contato && c.contato.id),
+      dataset: { id: c.id, naoLida: nl ? "1" : "0", sla: sla ? sla.nivel : null } },
+      avatarComCanal(c, nome),
       h("span", { class: "cvl-nome" }, nome),
       h("span", { class: "cvl-hora" }, L.horaLista(c.ultima_msg_em)),
       rascunhoNaLinha ? h("span", { class: "cvl-resumo cvl-rascunho" }, h("em", null, "Rascunho: "), rascunho)
-        : h("span", { class: "cvl-resumo" }, c.ultima_msg_dir === "out" && resumo ? h("b", null, "Você: ") : null, resumo),
+        : h("span", { class: "cvl-resumo", dataset: { tipo: tipoUlt || "texto" } }, c.ultima_msg_dir === "out" && resumo ? h("b", null, "Você: ") : null,
+          tipoUlt ? h("span", { class: "cvl-tipo", title: ROTULO_TIPO[tipoUlt] || "" }, A.icone(ICONE_TIPO[tipoUlt] || "clipe", "cvl-tipo-ic")) : null, resumo),
       nl ? h("span", { class: "cvl-badge", "aria-hidden": "true" }, nl > 99 ? "99+" : String(nl)) : h("span", { "aria-hidden": "true" }),
       meta.length ? h("span", { class: "cvl-meta", "aria-hidden": "true" }, meta) : null);
     return a;
@@ -335,11 +359,11 @@ export function criarLista(A) {
       if (A.busca) {
         const temMsgs = renderBlocoMsgs();
         if (temMsgs) lista.appendChild(h("p", { class: "sub cvl-msgs-info", role: "status" }, "Nenhum contato ou protocolo com esse termo."));
-        else lista.appendChild(ui.vazio({ titulo: "Nada encontrado.", texto: "Confira o nome, o telefone, o protocolo ou um trecho da mensagem.", icone: "busca" }));
+        else lista.appendChild(ui.vazio({ titulo: "Nada encontrado.", texto: "Confira o nome, o telefone, o protocolo ou um trecho da mensagem.", icone: "busca", tema: "busca" }));   // `tema`: ilustração da frente A (ignorado onde não existe)
         if (!blocoMsgs.hidden) lista.appendChild(blocoMsgs);
       }
-      else if (filtrosAtivos()) lista.appendChild(ui.vazio({ titulo: "Nenhuma conversa com esses filtros.", icone: "filtro", acao: { rotulo: "Limpar filtros", fn: () => A.acoes.mudarLista({ filtro: {} }) } }));
-      else lista.appendChild(ui.vazio({ titulo: aba ? aba.vazio : "Nada por aqui.", icone: "chat" }));
+      else if (filtrosAtivos()) lista.appendChild(ui.vazio({ titulo: "Nenhuma conversa com esses filtros.", icone: "filtro", tema: "busca", acao: { rotulo: "Limpar filtros", fn: () => A.acoes.mudarLista({ filtro: {} }) } }));
+      else lista.appendChild(ui.vazio({ titulo: aba ? aba.vazio : "Nada por aqui.", icone: "chat", tema: "conversas" }));
       maisBox.hidden = true;
       return;
     }

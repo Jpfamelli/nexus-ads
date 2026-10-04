@@ -38,7 +38,9 @@ function moldura(ctx, { titulo, sub, cartao, marca }) {
   const i = t.lastIndexOf(" ");
   const tituloEl = h("p", { class: "entrar-titulo" }, i > 0 ? [t.slice(0, i + 1), h("em", null, t.slice(i + 1))] : t);
   const arte = h("section", { class: "entrar-arte", "aria-label": m.produto || "Órbita" },
-    marcaEl, tituloEl,
+    marcaEl,
+    h("p", { class: "entrar-regua", "aria-hidden": "true" }, h("i"), h("span", { class: "selo-caps" }, "Anúncio · Conversa · Venda")),   // régua editorial acima da manchete (plano 50 · A14)
+    tituloEl,
     sub ? h("p", { class: "entrar-sub" }, sub) : null,
     h("div", { class: "entrar-orbita", "aria-hidden": "true" }, h("i", { class: "o1" }), h("i", { class: "o2" }), h("i", { class: "p" }), h("i", { class: "l l1" }), h("i", { class: "l l2" }), h("i", { class: "l l3" })),
     h("div", { class: "entrar-pontos", "aria-hidden": "true" },
@@ -56,11 +58,14 @@ function telaEntrar(ctx) {
   const m = ctx.marca || {};
   ctx.titulo("Entrar");
   const erro = caixaMsg(ui);
+  // o botão mostra o que está acontecendo («Entrando…» com o giro ao lado) em vez de sumir o texto (plano 50 · A14)
+  const rotuloBt = h("span", { class: "bt-rotulo" }, "Entrar");
+  const botao = h("button", { type: "submit", class: "bt bt-prim bt-g bt-bloco bt-carrega" }, rotuloBt);
   const form = h("form", { class: "entrar-form", novalidate: true },
     ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", autocomplete: "username", obrigatorio: true, inputmode: "email" }),
     ui.campo({ rotulo: "Senha", nome: "senha", tipo: "senha", autocomplete: "current-password", obrigatorio: true }),
     erro,
-    h("button", { type: "submit", class: "bt bt-prim bt-g bt-bloco" }, "Entrar"));
+    botao);
   const esqueci = h("button", { type: "button", class: "link", "aria-expanded": "false" }, "Esqueci a senha");
   const ajuda = h("div", { class: "aviso", hidden: true, role: "status" }, ui.icone("info"),
     h("div", { class: "pilha-p" },
@@ -76,19 +81,26 @@ function telaEntrar(ctx) {
     if (!d.email) return ui.marcarErro(form, "email", "Informe o e-mail.");
     if (!d.senha) return ui.marcarErro(form, "senha", "Informe a senha.");
     const bt = form.querySelector("button[type=submit]");
+    rotuloBt.textContent = "Entrando…";
     try {
       const r = await ui.carregando(bt, api.publica("nx_entrar", { p_email: d.email, p_senha: d.senha }));
       if (!r || !r.token) throw Object.assign(new Error("credenciais_invalidas"), { codigo: "credenciais_invalidas" });
+      rotuloBt.textContent = "Abrindo…";
       await ctx.aoEntrar(r.token);
     } catch (e) {
-      mostrar(erro, api.mensagemErro(e));
-      const s = form.querySelector("input[name=senha]"); if (s) { s.value = ""; s.focus(); }
+      rotuloBt.textContent = "Entrar";
+      const msg = api.mensagemErro(e);
+      const s = form.querySelector("input[name=senha]"); if (s) s.value = "";
+      // senha ou e-mail errados: o erro fica colado no campo de senha (inline) e o foco volta para lá; erro de rede/servidor usa a caixa
+      if (e && e.codigo === "credenciais_invalidas") ui.marcarErro(form, "senha", msg);
+      else { mostrar(erro, msg); if (s) s.focus(); }
     }
   });
 
   const prod = ctx.produtoAberto;
   const cartao = h("section", { class: "entrar-cartao", "aria-labelledby": "t-entrar" },
     prod ? h("p", { class: "entrar-produto" }, ui.icone(prod.icone), h("span", null, h("b", null, prod.titulo), " · ", prod.resumo)) : null,
+    h("p", { class: "entrar-kicker selo-caps", "aria-hidden": "true" }, m.produto || "Órbita"),
     h("h1", { id: "t-entrar" }, "Entrar"),
     h("p", { class: "sub" }, m.login_texto || "Entre com o e-mail e a senha que você recebeu."),
     form,

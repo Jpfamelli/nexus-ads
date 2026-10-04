@@ -19,8 +19,12 @@ test("R1: a fila de atendimento vem antes do checklist de configuração", () =>
 });
 
 test("R1: responder citando permanece acessível em telas móveis", () => {
-  assert.match(conv, /@media \(max-width: 760px\)[\s\S]*?\.cv-responder\s*\{[^}]*display:\s*inline-grid/s);
-  assert.match(conv, /\.cv-responder\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s);
+  // plano 50 · 31: o «Responder» mora em .cv-msg-acoes (com «Copiar»), ao lado da bolha; no celular os botões têm 44 px e a caixa fica meio visível sem hover
+  assert.match(conv, /@media \(max-width: 760px\)[\s\S]*?\.cv-msg-acoes\s*\{[^}]*opacity:\s*\.7/s);
+  assert.match(conv, /@media \(max-width: 760px\)[\s\S]*?\.cv-msg-acoes \.bt-icone\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s);
+  assert.match(conv, /\.cv-msg:hover \.cv-msg-acoes, \.cv-msg-acoes:focus-within \{ opacity: 1; \}/, "aparece no hover e no foco de teclado");
+  assert.match(conv, /@media \(hover: none\) \{ \.cv-msg-acoes \{ opacity: \.7; \}/, "no toque nunca fica invisível");
+  assert.match(ler("web/app/cv-chat.js"), /class: "bt-icone cv-responder", "aria-label": "Responder a esta mensagem"/);
 });
 
 test("R1: citação, responder, fila e cancelamento de upload têm alvo confortável", () => {
