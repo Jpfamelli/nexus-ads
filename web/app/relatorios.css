@@ -224,6 +224,9 @@
 .ads-camp-filtros > .bt { min-height: 44px; white-space: nowrap; }
 .ads-camp-resumo { min-height: 1.3em; margin: 0; }
 .ads-camp-comparar { width: 20px; height: 20px; accent-color: var(--c-prim); cursor: pointer; }
+.ads-camp-comparar-alvo { display: inline-flex; align-items: center; gap: .5rem; min-width: 44px; min-height: 44px; margin-block: -12px; cursor: pointer; }
+.ads-camp-comparar-txt { font-size: var(--fs-13); color: var(--c-texto-2); }
+@media (min-width: 761px) { .ads-camp-comparar-txt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } }
 .ads-camp-comparacao { min-width: 0; padding: .9rem; border: 1px solid var(--c-borda); border-radius: var(--r-p); background: var(--c-sup-2); }
 .ads-camp-comparacao .rel-cartao-topo { align-items: start; }
 .ads-comparacao-tabela { min-width: 35rem; }
@@ -478,6 +481,8 @@
   .ads-tabela .c-nome, .ads-tabela tfoot th { grid-column: 1 / -1; }
   .ads-tabela td.num::before { content: attr(data-l); display: block; font: 500 .6875rem/1.3 var(--f-mono); color: var(--c-texto-3); text-transform: uppercase; letter-spacing: .05em; white-space: normal; overflow-wrap: anywhere; }
   .ads-tabela tfoot tr { border-bottom: 0; }
+  .ads-tabela td.c-comparar { grid-column: 1 / -1; }   /* no cartão o «Comparar» ganha linha própria, com o rótulo visível */
+  .ads-tabela tfoot td:empty { display: none; }
   .g-fetapa { grid-template-columns: minmax(0, 1fr) auto; }
   .g-ftrilho { grid-column: 1 / -1; grid-row: 2; }
   .g-fvalor { grid-row: 1; grid-column: 2; }

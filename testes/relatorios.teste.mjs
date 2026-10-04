@@ -958,7 +958,7 @@ await teste("R119: «Sim, chegou» no teste do assistente marca «Mensagem de te
 
 await teste("R119: Início — outra empresa não herda o checklist nem os números da anterior; pulso não reconsulta o checklist sem cartão", () => {
   const ini = ler("web/app/inicio.js");
-  assert.match(ini, /if \(donoDados !== dono\) \{ ultimoOnb = null; ultimoDado = null; ultimaAgenda = null; ultimoJson = ""; maisAberto = false; donoDados = dono; \}/);
+  assert.match(ini, /if \(donoDados !== dono\) \{ ultimoOnb = null; ultimoDado = null; ultimaAgenda = null; ultimoJson = ""; maisAberto = false; ultimaCarga = 0; donoDados = dono; \}/, "a hora da última carga também é da empresa anterior");
   assert.match(ini, /const dono = `\$\{ctx\.cliente\.id\}\|/);
   assert.match(ini, /if \(!reler && ultimoOnb && resumoOnb\(ultimoOnb\) === null\) return ultimoOnb;/, "completo, dispensado ou tudo marcado: o pulso não gasta a consulta");
   assert.match(ini, /buscarOnboarding\(forcar \|\| primeira\)/, "abrir a tela e «Atualizar» sempre releem");

@@ -646,7 +646,8 @@ export function filtroVazio(f) {
 const LIMITE_VISOES_CRM = 12;
 const ORIGENS_VISAO = new Set(["anuncio", "whatsapp", "indicacao", "organico", "manual", "site", "importacao"]);
 const ORDEM_VISAO_CONTATOS = new Set(["recentes", "nome", "ultimo_contato"]);
-const idVisaoSeguro = v => typeof v === "string" && /^[a-zA-Z0-9:_-]{1,100}$/.test(v);
+const idVisaoSeguro = v => (typeof v === "number" && Number.isSafeInteger(v) && v > 0)   // nx_empresas.id é bigint
+  || (typeof v === "string" && /^[a-zA-Z0-9:_-]{1,100}$/.test(v));
 const dataISOVisao = v => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
 
 /** Chave sem dados pessoais em texto: qualquer usuário/empresa/tela ganha seu próprio espaço local. */

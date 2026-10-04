@@ -78,13 +78,16 @@ export function taxasFunilCampanha(r) {
 export function csvCampanhas(rows, { periodo, csv, moeda, inteiro, decimal }) {
   const colunas = ["Período", "Campanha", "Plataforma", "Investimento Ads", "Conversões da plataforma", "CPA da plataforma",
     "Conversas CRM", "Agendamentos CRM", "Fechamentos CRM", "Receita CRM", "ROAS (receita CRM ÷ investimento Ads)"];
-  const linhas = rows.map(r => [periodo, r.c.nome, r.c.plat, moeda(r.t.gasto), inteiro(r.t.conversoes), moeda(r.t.cpa),
-    inteiro(r.k.conversas), inteiro(r.k.agendadas), inteiro(r.k.fecharam), moeda(r.k.receita), Number.isFinite(r.roas) ? decimal(r.roas) : ""]);
+  // números crus (L.csv troca o ponto por vírgula e deixa vazio o que não é finito): no Excel a coluna soma, «R$ 359» em texto não
+  const num = (v, casas) => (Number.isFinite(v) ? Math.round(v * 10 ** casas) / 10 ** casas : "");
+  const linhas = rows.map(r => [periodo, r.c.nome, r.c.plat, num(r.t.gasto, 2), num(r.t.conversoes, 0), num(r.t.cpa, 2),
+    num(r.k.conversas, 0), num(r.k.agendadas, 0), num(r.k.fecharam, 0), num(r.k.receita, 2), num(r.roas, 1)]);
+  void moeda; void inteiro; void decimal;
   return csv(colunas, linhas);
 }
 
 /** Componente puro da área de filtros/comparação: a tela real e o teste dirigem os mesmos eventos. */
-export function criarPainelCampanhas({ h, limpar, linhas = [], estado = {}, periodo = "", moeda = String,
+export function criarPainelCampanhas({ h, limpar, linhas = [], estado = {}, periodo = "", moeda = String, moedaCent = moeda,
   inteiro = String, decimal = String, aoFiltrar = () => {}, aoComparar = () => {}, aoLimpar = () => {},
   aoExportar = () => {}, aoAviso = () => {}, aoFocoComparar = () => {} }) {
   if (typeof h !== "function") throw new TypeError("criarPainelCampanhas exige o criador de elementos h");
@@ -104,14 +107,16 @@ export function criarPainelCampanhas({ h, limpar, linhas = [], estado = {}, peri
     filtro.value = st.resultado;
     const status = h("p", { class: "rel-nota ads-camp-resumo", role: "status", "aria-live": "polite" },
       visiveis.length ? `${visiveis.length} de ${linhas.length} campanhas · ${periodo}` : "Nenhuma campanha corresponde aos filtros.");
-    const aplicar = h("button", { type: "button", class: "bt bt-prim bt-p", on: { click: () => {
+    // depois do render() o botão clicado deixa de existir: o foco volta para o botão novo de mesma função (nunca cai no body)
+    const refocar = cls => { try { const b = raiz.querySelector(cls); if (b && typeof b.focus === "function") b.focus({ preventScroll: true }); } catch { /* ok */ } };
+    const aplicar = h("button", { type: "button", class: "bt bt-prim bt-p ads-camp-aplicar", on: { click: () => {
       st.busca = busca.value; st.resultado = ["todos", "com_crm", "sem_crm"].includes(filtro.value) ? filtro.value : "todos";
       estado.busca = st.busca; estado.resultado = st.resultado;
-      aoFiltrar({ busca: st.busca, resultado: st.resultado }); render();
+      aoFiltrar({ busca: st.busca, resultado: st.resultado }); render(); refocar(".ads-camp-aplicar");
     } } }, "Aplicar filtros");
-    const limparBtn = h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => {
+    const limparBtn = h("button", { type: "button", class: "bt bt-sec bt-p ads-camp-limpar", on: { click: () => {
       st.busca = ""; st.resultado = "todos"; estado.busca = ""; estado.resultado = "todos";
-      aoLimpar(); render();
+      aoLimpar(); render(); refocar(".ads-camp-limpar");
     } } }, "Limpar filtros");
     const exportar = h("button", { type: "button", class: "bt bt-sec bt-p ads-camp-baixar", disabled: !visiveis.length,
       "aria-label": "Exportar campanhas filtradas em CSV", on: { click: () => aoExportar(visiveis) } }, "Exportar CSV filtrado");
@@ -120,7 +125,7 @@ export function criarPainelCampanhas({ h, limpar, linhas = [], estado = {}, peri
     st.comparacao = selecionadas.map(r => r.c.id); estado.comparacao = [...st.comparacao];
     const medidas = [
       ["Investimento Ads", r => moeda(r.t.gasto)], ["Conversões da plataforma", r => inteiro(r.t.conversoes)],
-      ["CPA da plataforma", r => moeda(r.t.cpa)], ["Conversas CRM", r => inteiro(r.k.conversas)],
+      ["CPA da plataforma", r => moedaCent(r.t.cpa)], ["Conversas CRM", r => inteiro(r.k.conversas)],
       ["Agendamentos CRM", r => inteiro(r.k.agendadas)], ["Fechamentos CRM", r => inteiro(r.k.fecharam)],
       ["Receita CRM", r => moeda(r.k.receita)], ["ROAS CRM ÷ Ads", r => Number.isFinite(r.roas) ? `${decimal(r.roas)}x` : "—"],
       ["Agendamentos CRM ÷ conversões Ads", r => { const n = taxasFunilCampanha(r).agendaSobreConversoesAds; return n == null ? "—" : `${decimal(n)}%`; }],
@@ -542,7 +547,9 @@ export async function montar(ctx) {
           h("i", { class: `rel-ponto rel-ponto-${L.nivelCpa(r.t.cpa, meta)}`, title: "CPA das conversões informadas pela plataforma × meta" }),
           h("span", { class: "ads-camp-t" }, h("span", {}, r.c.nome), h("small", {}, h("span", { class: `rel-chip rel-chip-${r.c.plat}` }, L.nomePlat(r.c.plat)), " · ver criativos")));
         abrir.addEventListener("click", () => criativos(M, r));
-        const tr = h("tr", { style: `--i:${n}` }, h("td", { class: "c-comparar" }, check), h("td", { class: "c-nome" }, abrir),
+        // rótulo visível no celular (cartões sem cabeçalho) e alvo de 44 px; no desktop o texto fica só para leitor de tela
+        const alvoComparar = h("label", { class: "ads-camp-comparar-alvo" }, check, h("span", { class: "ads-camp-comparar-txt" }, "Comparar"));
+        const tr = h("tr", { style: `--i:${n}` }, h("td", { class: "c-comparar" }, alvoComparar), h("td", { class: "c-nome" }, abrir),
           td("gasto", N.brl0(r.t.gasto), "Investimento Ads"), td("conv", N.int(r.t.conversoes), "Conversões Ads"), td("cpa", N.brl(r.t.cpa), "CPA Ads"),
           td("ag", N.int(r.k.agendadas), "Agendamentos CRM"), td("fe", N.int(r.k.fecharam), "Fechamentos CRM"), td("rec", N.brl0(r.k.receita), "Receita CRM"),
           td("roas", Number.isFinite(r.roas) ? `${N.dec(r.roas, 1)}x` : "—", "Retorno"));
@@ -560,13 +567,15 @@ export async function montar(ctx) {
           td("gasto", "—", "Investimento Ads"), td("conv", "—", "Conversões Ads"), td("cpa", "—", "CPA Ads"),
           td("ag", N.int(outras.ag), "Agendamentos CRM"), td("fe", N.int(outras.fe), "Fechamentos CRM"), td("rec", N.brl0(outras.rec), "Receita CRM"), td("roas", "—", "Retorno")) : null);
       const periodo = `${M.dataBR(P.de)} a ${M.dataBR(P.ate)}${S.plat ? ` · ${L.nomePlat(S.plat)}` : " · todas as plataformas"}`;
+      // filtro e «Limpar» mexem nas MESMAS linhas; o «Total» é das N campanhas do período, então some quando há recorte
+      const aplicarVisibilidade = f => {
+        const visiveis = new Set(filtrarCampanhas(linhas, f).map(r => String(r.c.id)));
+        for (const { r, tr } of linhasDOM) tr.hidden = !visiveis.has(String(r.c.id));
+        tfoot.hidden = visiveis.size !== linhasDOM.length;
+      };
       painelCampanhas = criarPainelCampanhas({ h, limpar: ui.limpar, linhas, estado: estadoCamp, periodo,
-        moeda: N.brl0, inteiro: N.int, decimal: n => N.dec(n, 1),
-        aoFiltrar: f => {
-          S.buscaCamp = f.busca; S.resultadoCamp = f.resultado;
-          const visiveis = new Set(filtrarCampanhas(linhas, f).map(r => String(r.c.id)));
-          for (const { r, tr } of linhasDOM) tr.hidden = !visiveis.has(String(r.c.id));
-        },
+        moeda: N.brl0, moedaCent: N.brl, inteiro: N.int, decimal: n => N.dec(n, 1),
+        aoFiltrar: f => { S.buscaCamp = f.busca; S.resultadoCamp = f.resultado; aplicarVisibilidade(f); },
         aoComparar: (_id, troca) => {
           S.comparacaoCamp = [...troca.ids];
           for (const { r, tr } of linhasDOM) {
@@ -574,17 +583,16 @@ export async function montar(ctx) {
             if (input) input.checked = S.comparacaoCamp.some(id => String(id) === String(r.c.id));
           }
         },
-        aoLimpar: () => { S.buscaCamp = ""; S.resultadoCamp = "todos"; },
+        aoLimpar: () => { S.buscaCamp = ""; S.resultadoCamp = "todos"; aplicarVisibilidade({ busca: "", resultado: "todos" }); },
         aoAviso: texto => ui.toast(texto, { tipo: "nota" }),
         aoFocoComparar: id => linhasDOM.find(x => String(x.r.c.id) === String(id))?.tr.querySelector(".ads-camp-comparar")?.focus(),
         aoExportar: visiveis => {
           const csv = csvCampanhas(visiveis, { periodo, csv: L.csv, moeda: N.brl0, inteiro: N.int, decimal: n => N.dec(n, 1) });
           const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-          const a = h("a", { href: url, download: `orbita-campanhas-${P.de}-a-${P.ate}.csv` });
+          const a = h("a", { href: url, download: `orbita-campanhas-${periodo.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "")}.csv` });
           document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
         } });
-      const visiveis = new Set(painelCampanhas.linhas.map(r => String(r.c.id)));
-      for (const { r, tr } of linhasDOM) tr.hidden = !visiveis.has(String(r.c.id));
+      aplicarVisibilidade({ busca: S.buscaCamp, resultado: S.resultadoCamp });
       cartao.append(h("div", { class: "rel-cartao-topo" }, h("h2", { class: "rel-h2" }, `Campanhas · ${S.dias} dias`),
         h("p", { class: "rel-nota" }, "Conversões e CPA vêm do Meta/Google. Conversas, agendamentos, fechamentos e receita vêm do CRM, pela data de cada evento.")),
         painelCampanhas.elemento,

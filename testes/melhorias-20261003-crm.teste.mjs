@@ -106,17 +106,20 @@ test("preferências da Agenda isolam cliente/conta e corrigem valores locais inv
   assert.equal(A.chavePreferenciasAgenda("", "conta 1"), null);
   assert.deepEqual(A.normalizarPreferenciasAgenda({ data: "2026-02-30", modo: "mês", agrupar: "qualquer" }, "2026-10-03"),
     { data: "2026-10-03", modo: "semana", agrupar: "responsavel" });
-  assert.deepEqual(A.normalizarPreferenciasAgenda({ data: "2026-10-02", modo: "dia", agrupar: "juntos" }),
-    { data: "2026-10-02", modo: "dia", agrupar: "juntos" });
+  assert.deepEqual(A.normalizarPreferenciasAgenda({ data: "2026-10-02", modo: "dia", agrupar: "juntos", em: "2026-10-02" }, "2026-10-03"),
+    { data: "2026-10-03", modo: "dia", agrupar: "juntos" }, "data guardada em OUTRO dia não volta: a Agenda abre em hoje");
+  assert.deepEqual(A.normalizarPreferenciasAgenda({ data: "2026-10-02", modo: "dia", agrupar: "juntos", em: "2026-10-02" }, "2026-10-02"),
+    { data: "2026-10-02", modo: "dia", agrupar: "juntos" }, "no mesmo dia a data volta");
 });
 
-test("atalhos explícitos da Agenda navegam sem capturar Ctrl/Meta/Shift", () => {
-  assert.equal(A.acaoTeclaAgenda({ key: "ArrowLeft", altKey: true }), "anterior");
-  assert.equal(A.acaoTeclaAgenda({ key: "ArrowRight", altKey: true }), "proximo");
-  assert.equal(A.acaoTeclaAgenda({ key: "t", altKey: true }), "hoje");
+test("atalhos da Agenda («[», «]», «T») não capturam Alt/Ctrl/Meta/Shift (Alt+setas são Voltar/Avançar do navegador)", () => {
+  assert.equal(A.acaoTeclaAgenda({ key: "[" }), "anterior");
+  assert.equal(A.acaoTeclaAgenda({ key: "]" }), "proximo");
+  assert.equal(A.acaoTeclaAgenda({ key: "t" }), "hoje");
+  assert.equal(A.acaoTeclaAgenda({ key: "T" }), "hoje");
   for (const ev of [
-    { key: "ArrowLeft" }, { key: "x", altKey: true }, { key: "t", altKey: true, ctrlKey: true },
-    { key: "t", altKey: true, metaKey: true }, { key: "t", altKey: true, shiftKey: true },
+    { key: "ArrowLeft", altKey: true }, { key: "ArrowRight", altKey: true }, { key: "t", altKey: true }, { key: "x" },
+    { key: "t", ctrlKey: true }, { key: "t", metaKey: true }, { key: "[", shiftKey: true },
   ]) assert.equal(A.acaoTeclaAgenda(ev), null);
   assert.equal(A.acaoTeclaAgenda(null), null);
 });

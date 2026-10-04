@@ -147,7 +147,7 @@ export async function montar(ctx) {
     P.preset = 30; P.de = null; P.ate = null; P.funil = ""; P.dep = "";
     deIn.value = ""; ateIn.value = "";
     pintarSeg(); pintarChip(); carregar();
-    setTimeout(() => chipResumo.focus(), 0);
+    setTimeout(() => { const alvo = chipResumo.offsetParent ? chipResumo : (seg.querySelector('[aria-pressed="true"]') || deIn); try { alvo.focus(); } catch { /* ok */ } }, 0);
   }
   /** O chip-resumo «Últimos 30 dias · Todos os funis ▾» abre esta folha: período (com datas) e funil/departamento, aplicados de uma vez. */
   async function abrirFolha() {

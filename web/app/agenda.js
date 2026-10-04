@@ -35,19 +35,23 @@ export function chavePreferenciasAgenda(clienteId, contaId) {
 
 export function normalizarPreferenciasAgenda(valor, hoje = "") {
   const v = valor && typeof valor === "object" && !Array.isArray(valor) ? valor : {};
+  // a DATA só volta no mesmo dia em que foi guardada: no dia seguinte a Agenda abre em hoje (senão «Marcar» pré-preenche um dia antigo)
+  const mesmoDia = dataAgendaValida(hoje) && v.em === hoje;
   return {
-    data: dataAgendaValida(v.data) ? v.data : (dataAgendaValida(hoje) ? hoje : ""),
+    data: mesmoDia && dataAgendaValida(v.data) ? v.data : (dataAgendaValida(hoje) ? hoje : ""),
     modo: ["dia", "semana"].includes(v.modo) ? v.modo : "semana",
     agrupar: ["juntos", "responsavel"].includes(v.agrupar) ? v.agrupar : "responsavel",
   };
 }
 
-/** Atalhos da Agenda são explícitos (Alt+setas, Alt+T) e o chamador ignora campos editáveis/diálogos. */
+/** Atalhos da Agenda sem modificador («[», «]», «T»), como o «?» do app: Alt+setas são Voltar/Avançar do navegador e não podem ser tomados.
+    O chamador ignora campos editáveis e diálogos. */
 export function acaoTeclaAgenda(ev) {
-  if (!ev || !ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return null;
-  if (ev.key === "ArrowLeft") return "anterior";
-  if (ev.key === "ArrowRight") return "proximo";
-  if (String(ev.key).toLowerCase() === "t") return "hoje";
+  if (!ev || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return null;
+  const k = String(ev.key).toLowerCase();
+  if (k === "[") return "anterior";
+  if (k === "]") return "proximo";
+  if (k === "t") return "hoje";
   return null;
 }
 
@@ -648,7 +652,7 @@ export async function montar(ctx) {
   ctx.alvo.append(cabecalho, conteudo);
 
   function gravarPreferencias() {
-    try { localStorage.setItem(chavePreferencias, JSON.stringify({ data, modo, agrupar })); } catch { /* preferências não bloqueiam a Agenda */ }
+    try { localStorage.setItem(chavePreferencias, JSON.stringify({ data, modo, agrupar, em: ui.hojeSP() })); } catch { /* preferências não bloqueiam a Agenda */ }
   }
 
   /** O que o servidor precisa devolver: a semana (segunda a domingo) na semana e no celular; o dia só no desktop em «Dia». */
@@ -660,9 +664,9 @@ export async function montar(ctx) {
 
   function montarCabecalho() {
     ui.limpar(controles);
-    const anterior = h("button", { type: "button", class: "bt-icone", "aria-label": passoDeNavegacao() === 1 ? "Dia anterior" : "Semana anterior", "aria-keyshortcuts": "Alt+ArrowLeft", on: { click: () => mover(-1) } }, ui.icone("seta-esq"));
-    const proximo = h("button", { type: "button", class: "bt-icone", "aria-label": passoDeNavegacao() === 1 ? "Próximo dia" : "Próxima semana", "aria-keyshortcuts": "Alt+ArrowRight", on: { click: () => mover(1) } }, ui.icone("seta-dir"));
-    const hoje = h("button", { type: "button", class: "bt bt-sec bt-p", "aria-keyshortcuts": "Alt+T", on: { click: () => { data = ui.hojeSP(); gravarPreferencias(); carregar(); } } }, "Hoje");
+    const anterior = h("button", { type: "button", class: "bt-icone", "aria-label": passoDeNavegacao() === 1 ? "Dia anterior" : "Semana anterior", "aria-keyshortcuts": "[", on: { click: () => mover(-1) } }, ui.icone("seta-esq"));
+    const proximo = h("button", { type: "button", class: "bt-icone", "aria-label": passoDeNavegacao() === 1 ? "Próximo dia" : "Próxima semana", "aria-keyshortcuts": "]", on: { click: () => mover(1) } }, ui.icone("seta-dir"));
+    const hoje = h("button", { type: "button", class: "bt bt-sec bt-p", "aria-keyshortcuts": "T", on: { click: () => { data = ui.hojeSP(); gravarPreferencias(); carregar(); } } }, "Hoje");
     const seletor = h("input", { class: "agenda-data", type: "date", value: data, "aria-label": "Escolher data" });
     seletor.addEventListener("change", () => { if (dataAgendaValida(seletor.value)) { data = seletor.value; gravarPreferencias(); carregar(); } });
     const periodo = h("div", { class: "agenda-periodo" }, anterior, seletor, proximo, hoje);
@@ -694,7 +698,7 @@ export async function montar(ctx) {
   function aoTeclaAgenda(ev) {
     const alvo = ev.target;
     const editando = alvo && (alvo.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(alvo.tagName) || alvo.closest?.("[role=dialog],dialog"));
-    if (editando) return;
+    if (editando || document.querySelector("dialog[open]")) return;
     const acao = acaoTeclaAgenda(ev);
     if (!acao) return;
     ev.preventDefault();
@@ -725,18 +729,20 @@ export async function montar(ctx) {
       const igual = doCache && JSON.stringify(atual) === JSON.stringify(r);     // nada mudou desde o guardado: não refaz a grade
       atual = r || { consultas: [], bloqueios: [] };
       chaveAtual = chave;
+      // leitura certa: o aviso de agenda guardada/sem conexão não pode ficar preso
+      if (mensagemAtualizacao && !mensagemAtualizacao.startsWith("Atualizada às")) { mensagemAtualizacao = ""; montarCabecalho(); }
       if (!igual) desenhar();
       return true;
     } catch (e) {
       if (!vivo || minha !== sequencia) return false;
-      if (e && e.comCache) {
-        if (silencioso && atual && chaveAtual === chave) { mensagemAtualizacao = "Sem conexão · mostrando a última agenda guardada."; return false; }
-        return false;
-      }
       if (silencioso && atual && chaveAtual === chave) {
-        mensagemAtualizacao = "Não foi possível atualizar · a agenda exibida foi mantida.";
+        // «sem conexão» só com evidência de rede: comCache vem em QUALQUER erro quando havia cópia guardada (até HTTP 400)
+        const semRede = typeof navigator !== "undefined" && navigator.onLine === false;
+        mensagemAtualizacao = semRede ? "Sem conexão · mostrando a última agenda guardada." : "Não foi possível atualizar · a agenda exibida foi mantida.";
+        montarCabecalho();
         return false;
       }
+      if (e && e.comCache) return false;
       atual = null; chaveAtual = "";
       ui.limpar(conteudo);
       conteudo.appendChild(ui.erroCartao(e, () => carregar({ forcar: true })));
@@ -839,7 +845,10 @@ export async function montar(ctx) {
     for (const [i, botao] of abas.entries()) botao.addEventListener("keydown", ev => {
       const alvo = indiceAbaAgendaTecla(ev.key, i, abas.length);
       if (alvo == null) return;
-      ev.preventDefault(); abas[alvo].focus(); abas[alvo].click();
+      ev.preventDefault();
+      abas[alvo].click();   // redesenha a faixa inteira: o foco tem de ir para a aba NOVA, senão cai no body
+      const nova = conteudo.querySelector('.ag-faixa [role="tab"][aria-selected="true"]');
+      if (nova) { try { nova.focus({ preventScroll: true }); } catch { nova.focus(); } }
     });
     // o dia escolhido sempre à vista na faixa
     queueMicrotask(() => { const s = el.querySelector(".sel"); if (s && s.scrollIntoView) try { s.scrollIntoView({ block: "nearest", inline: "center" }); } catch { /* ok */ } });

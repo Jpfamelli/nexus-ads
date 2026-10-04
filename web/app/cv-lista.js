@@ -291,12 +291,16 @@ export function criarLista(A) {
     blocoMsgs.setAttribute("aria-busy", String(!!b.carregando));
     if (b.carregando) { blocoMsgs.appendChild(h("p", { class: "sub cvl-msgs-info", role: "status" }, "Procurando nas mensagens…")); return true; }
     if (b.erro) {
-      const aviso = h("p", { class: "sub cvl-msgs-info", role: "alert" }, "Não deu para procurar nas mensagens agora.");
+      // sem role=alert/status aqui: este bloco é redesenhado a cada render e repetiria a frase sem parar; quem anuncia (uma vez) é buscarMensagens
+      const aviso = h("p", { class: "sub cvl-msgs-info" }, "Não deu para procurar nas mensagens agora.");
       const tentar = h("button", { type: "button", class: "bt bt-fant bt-p cvl-msgs-tentar", "aria-label": "Tentar buscar mensagens novamente" }, "Tentar novamente");
-      tentar.addEventListener("click", () => A.acoes.repetirBuscaMensagens && A.acoes.repetirBuscaMensagens());
+      tentar.addEventListener("click", () => {
+        try { busca.focus({ preventScroll: true }); } catch { /* o botão vai ser redesenhado: o foco volta para a busca */ }
+        if (A.acoes.repetirBuscaMensagens) A.acoes.repetirBuscaMensagens();
+      });
       blocoMsgs.append(aviso, tentar); return true;
     }
-    if (!b.itens.length) { blocoMsgs.appendChild(h("p", { class: "sub cvl-msgs-info", role: "status" }, `Nenhuma mensagem com «${q}».`)); return false; }
+    if (!b.itens.length) { blocoMsgs.appendChild(h("p", { class: "sub cvl-msgs-info" }, `Nenhuma mensagem com «${q}».`)); return false; }
     for (const r of b.itens) {
       const partes = L.partesDestaque(r.trecho || "", q).map(p => (p.marca ? h("mark", null, p.t) : p.t));
       const nota = r.tipo === "nota";
@@ -365,7 +369,7 @@ export function criarLista(A) {
     maisBox.hidden = !A.temMais;
     if (!A.temMais) maisBox.remove(); else lista.appendChild(maisBox);
     renderBlocoMsgs();
-    if (blocoMsgs.hidden) blocoMsgs.remove(); else lista.appendChild(blocoMsgs);
+    if (blocoMsgs.hidden) blocoMsgs.remove(); else if (blocoMsgs.parentNode !== lista || lista.lastElementChild !== blocoMsgs) lista.appendChild(blocoMsgs);
     if (idFocado && !(document.activeElement && lista.contains(document.activeElement))) {
       const volta = [...lista.querySelectorAll(".cvl-item")].find(x => x.dataset.id === idFocado);
       if (volta) try { volta.focus({ preventScroll: true }); } catch { volta.focus(); }

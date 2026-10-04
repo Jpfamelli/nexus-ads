@@ -1011,14 +1011,15 @@ await teste("Atendimento follow-up: erro de busca nas mensagens é anunciado e p
   const t = await montarLista({ busca: "consulta", buscaMsgs: { q: "consulta", carregando: false, itens: [], erro: new Error("offline") } });
   t.lista.render();
   const erro = acharClasse(t.classe("cvl-msgs"), "cvl-msgs-info");
-  assert.equal(erro.attrs.role, "alert");
+  assert.equal(erro.attrs.role, undefined, "sem região viva aqui: o bloco é redesenhado a cada render e repetiria a frase; quem anuncia uma vez é buscarMensagens");
   assert.match(erro.textContent, /não deu para procurar/i);
   const tentar = t.encontrar(x => x.tagName === "BUTTON" && x.attrs["aria-label"] === "Tentar buscar mensagens novamente");
   assert.ok(tentar, "há uma ação explícita de nova tentativa");
   tentar.dispatchEvent({ type: "click" });
   assert.ok(t.chamadas.some(x => x.repetirBuscaMensagens));
   t.A.buscaMsgs = { q: "consulta", carregando: false, itens: [], erro: null }; t.lista.render();
-  assert.equal(acharClasse(t.classe("cvl-msgs"), "cvl-msgs-info").attrs.role, "status", "resultado vazio também é comunicado");
+  assert.match(acharClasse(t.classe("cvl-msgs"), "cvl-msgs-info").textContent, /nenhuma mensagem com/i, "resultado vazio também é comunicado (texto; o anúncio único sai de buscarMensagens)");
+  assert.match(ler("conversas.js"), /A\.ui\.anunciar\(b\.erro \? "Não deu para procurar nas mensagens agora/, "o anúncio ao leitor de tela acontece uma vez por resultado");
 });
 
 await teste("Atendimento follow-up: lista marca aria-busy durante carga e limpa o estado ao concluir", async () => {

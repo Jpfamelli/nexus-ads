@@ -1384,7 +1384,10 @@ button, a, [role="button"], [role="tab"], [role="option"], [role="menuitem"], in
     left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right));
     bottom: calc(var(--barra) + var(--esp-3) + env(safe-area-inset-bottom));
   }
-  .barra { left: env(safe-area-inset-left); right: env(safe-area-inset-right); }
+  /* conversa aberta: a barra inferior está oculta e o composer ocupa o fundo — o aviso vai para baixo do topo, nunca sobre o campo */
+  html.cv-chat-aberto .toasts { top: calc(var(--topo) + var(--esp-3) + env(safe-area-inset-top)); bottom: auto; }
+  /* barra de borda a borda (fundo e borda cobrem a tela toda); só os botões saem da área do notch em paisagem */
+  .barra { left: 0; right: 0; padding-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right)); }
 }
 @media (max-width: 420px) {
   .modal-rod { display: grid; grid-template-columns: minmax(0, 1fr); }

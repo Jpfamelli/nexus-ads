@@ -117,7 +117,8 @@ test("controles comuns usam toque imediato e cor de destaque white-label", () =>
 test("barra móvel e menus preservam foco visível em alto contraste e áreas seguras", () => {
   const altoContraste = ultimaMedia(app, "forced-colors: active");
   assert.match(altoContraste, /\.menu-item:focus-visible,[\s\S]*?\.empresa-op:focus-visible\s*\{[^}]*outline-color:\s*Highlight/s);
-  assert.match(ultimaMedia(app, "max-width: 760px"), /\.barra\s*\{[^}]*left:\s*env\(safe-area-inset-left\);[^}]*right:\s*env\(safe-area-inset-right\)/s);
+  assert.match(ultimaMedia(app, "max-width: 760px"), /\.barra\s*\{[^}]*left:\s*0;[^}]*right:\s*0;[^}]*padding-inline:\s*max\(8px,\s*env\(safe-area-inset-left\)\)/s, "barra de borda a borda; o notch só empurra os botões");
+  assert.match(ultimaMedia(app, "max-width: 760px"), /html\.cv-chat-aberto \.toasts\s*\{[^}]*bottom:\s*auto/s, "com a conversa aberta o aviso não cobre o campo de mensagem");
 });
 
 test("contrato transversal preserva hidden e mantém a camada nova em cores tokenizadas", () => {

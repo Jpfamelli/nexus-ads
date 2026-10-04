@@ -349,6 +349,12 @@ async function buscarMensagens() {
     A.buscaMsgs = { q, carregando: false, itens: [], erro: e };
   }
   A.lista.render();
+  // anuncia UMA vez por resultado: o bloco «Nas mensagens» é redesenhado a cada render e uma região viva ali repetiria a frase sem parar
+  const b = A.buscaMsgs;
+  if (b && b.q === q && !b.carregando && A.ui && typeof A.ui.anunciar === "function") {
+    A.ui.anunciar(b.erro ? "Não deu para procurar nas mensagens agora. Use «Tentar novamente» na lista."
+      : b.itens.length ? `${b.itens.length} ${b.itens.length === 1 ? "mensagem" : "mensagens"} com «${q}».` : `Nenhuma mensagem com «${q}».`);
+  }
 }
 
 /** Abre a conversa já na mensagem (resultado da busca): carrega páginas anteriores até achar. */

@@ -223,9 +223,9 @@
   .agenda-cab .cab-txt { grid-column: 1; grid-row: 1; }
   .agenda-cab .cab-titulo { font-size: var(--fs-20); }
   .agenda-acoes .agenda-marcar { grid-column: 2; grid-row: 1; }
-  .agenda-acoes { grid-column: 1 / -1; grid-row: 3; display: flex; flex-wrap: wrap; justify-content: flex-end; }
-  .agenda-atualizacao { flex: 1 1 100%; max-width: none; text-align: right; }
-  .agenda-atualizar { min-height: 44px; }
+  /* .agenda-acoes continua display: contents (acima): cada filho ocupa a própria célula da grade; «Marcar consulta» fica na linha do título */
+  .agenda-acoes .agenda-atualizar { grid-column: 2; grid-row: 3; justify-self: end; min-height: 44px; }
+  .agenda-acoes .agenda-atualizacao { grid-column: 1; grid-row: 3; align-self: center; max-width: none; text-align: right; }
   .agenda-periodo { grid-column: 1 / -1; grid-row: 2; flex-wrap: nowrap; }
   .agenda-data { flex: 1; width: auto; min-width: 120px; }
   .agenda-abas { display: none; }   /* no celular a visão é sempre «o dia» com a faixa da semana */
