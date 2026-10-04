@@ -69,8 +69,8 @@
       var tela = { inicio: "inicio", conversas: "conversas", crm: "crm", contatos: "crm", empresas: "crm", tarefas: "crm", agenda: "agenda",
         anuncios: "anuncios", automacoes: "automacoes", relatorios: "relatorios", config: "config" };
       var aquecer = {
-        inicio: { js: ["rel-logica.js", "graficos.js"], css: "relatorios.css" },
-        conversas: { js: ["cv-logica.js", "cv-lista.js", "cv-chat.js", "cv-composer.js", "cv-lateral.js"], css: "conversas.css" },
+        inicio: { js: ["rel-logica.js", "graficos.js"], css: ["relatorios.css", "inicio.css"] },
+        conversas: { js: ["cv-logica.js", "cv-lista.js", "cv-chat.js", "cv-composer.js", "cv-lateral.js", "graficos.js"], css: "conversas.css" },
         crm: { js: ["crm-logica.js", "crm-kanban.js", "crm-negocio.js", "crm-visoes.js"], css: "crm.css" },
       };
       var seg = (location.hash || "").replace(/^#\/?/, "").split(/[\/?]/)[0];
@@ -96,11 +96,14 @@
             modulo.href = extras.js[i] + "?v=" + ver;
             document.head.appendChild(modulo);
           }
-          var estilo = document.createElement("link");
-          estilo.rel = "preload";
-          estilo.as = "style";
-          estilo.href = extras.css + "?v=" + ver;
-          document.head.appendChild(estilo);
+          var folhas = Array.isArray(extras.css) ? extras.css : [extras.css];
+          for (var j = 0; j < folhas.length; j++) {
+            var estilo = document.createElement("link");
+            estilo.rel = "preload";
+            estilo.as = "style";
+            estilo.href = folhas[j] + "?v=" + ver;
+            document.head.appendChild(estilo);
+          }
         }
       }
     }

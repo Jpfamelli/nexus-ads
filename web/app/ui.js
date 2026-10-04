@@ -152,6 +152,19 @@ export function carregarCss(nome) {
 /** Cor vinda do banco (etapa, etiqueta…) só entra se for #RRGGBB. */
 export function corOk(c) { return typeof c === "string" && RE_HEX.test(c) ? c : null; }
 
+/** Olho cortado («senha à mostra»): o único ícone desenhado fora do sprite, com o mesmo traço (.ic). */
+function iconeOlhoCortado() {
+  return h("svg", { class: "ic", viewBox: "0 0 24 24", "aria-hidden": "true", focusable: "false" },
+    h("path", { d: "M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10.7 10.7 0 0 1 12 4.9c5 0 8.6 3.6 10 7.1a11.4 11.4 0 0 1-2.7 3.9M6.6 6.6C4.3 8 2.8 10 2 12c1.4 3.5 5 7.1 10 7.1 1.8 0 3.4-.5 4.8-1.2" }));
+}
+
+let _graficosP = null;
+/** graficos.js sob demanda (mesmo ?v=): o KPI desenha a sparkline e conta o número com as peças de lá, sem duplicar geometria aqui. */
+function graficos() {
+  if (!_graficosP) _graficosP = import(`./graficos.js?v=${VERSAO}`).catch(e => { console.error("graficos.js não carregou", e); return null; });
+  return _graficosP;
+}
+
 /* ============================================================
    Camada de cima (popover) — fica acima de <dialog> aberto
    ============================================================ */
@@ -627,18 +640,73 @@ function orbitaSvg({ total = 3, feitos = 0, selo = false } = {}) {
     selo ? h("g", null, h("circle", { class: "vo-selo", cx: "98", cy: "24", r: "13" }), h("path", { class: "vo-selo-v", d: "M91.5 24.5 L96 29 L105 19.5" })) : null);
 }
 
-/** vazio({tipo, titulo, texto, acao:{rotulo, fn, icone?}, acoes, passos, icone}) → Node
+/* Ilustrações leves por tema (plano 50 · A5): SVG inline só com classes de token (.vz-*), 160 × 100, aria-hidden.
+   Cada uma conta a cena da tela vazia: bolhas sem conversa, quadro sem cartões, mês sem consulta, campanha sem retorno, fluxo sem passos, lupa sem achado. */
+const TEMAS_ILUSTRACAO = {
+  conversas: () => [
+    h("rect", { class: "vz-a", x: "18", y: "18", width: "78", height: "40", rx: "14" }),
+    h("path", { class: "vz-a", d: "M34 58 L30 72 L48 58 Z" }),
+    h("circle", { class: "vz-pt", cx: "44", cy: "38", r: "3.5" }), h("circle", { class: "vz-pt", cx: "57", cy: "38", r: "3.5" }), h("circle", { class: "vz-pt", cx: "70", cy: "38", r: "3.5" }),
+    h("rect", { class: "vz-b", x: "72", y: "50", width: "70", height: "34", rx: "12" }),
+    h("path", { class: "vz-b", d: "M126 84 L132 94 L116 84 Z" }),
+    h("line", { class: "vz-tr", x1: "86", y1: "63", x2: "126", y2: "63" }), h("line", { class: "vz-tr vz-curta", x1: "86", y1: "72", x2: "112", y2: "72" }),
+  ],
+  crm: () => [
+    ...[0, 1, 2].map(i => h("rect", { class: "vz-col", x: String(14 + i * 46), y: "12", width: "40", height: "78", rx: "8" })),
+    h("rect", { class: "vz-card vz-acento", x: "20", y: "22", width: "28", height: "14", rx: "4" }),
+    h("rect", { class: "vz-card", x: "20", y: "40", width: "28", height: "14", rx: "4" }),
+    h("rect", { class: "vz-card", x: "66", y: "22", width: "28", height: "14", rx: "4" }),
+    h("path", { class: "vz-tr", d: "M118 50 h20 m-6 -6 l6 6 -6 6" }),
+  ],
+  agenda: () => [
+    h("rect", { class: "vz-col", x: "24", y: "14", width: "112", height: "76", rx: "10" }),
+    h("rect", { class: "vz-a", x: "24", y: "14", width: "112", height: "18", rx: "10" }),
+    h("line", { class: "vz-tr", x1: "50", y1: "8", x2: "50", y2: "20" }), h("line", { class: "vz-tr", x1: "110", y1: "8", x2: "110", y2: "20" }),
+    ...[0, 1, 2].flatMap(l => [0, 1, 2, 3, 4].map(c => h("circle", { class: l === 1 && c === 2 ? "vz-pt vz-acento" : "vz-pt vz-fraco", cx: String(44 + c * 18), cy: String(46 + l * 15), r: l === 1 && c === 2 ? "5" : "2.5" }))),
+  ],
+  ads: () => [
+    ...[0, 1, 2, 3].map(i => h("rect", { class: i === 3 ? "vz-card vz-acento" : "vz-card", x: String(22 + i * 22), y: String(70 - i * 14), width: "14", height: String(20 + i * 14), rx: "4" })),
+    h("path", { class: "vz-tr", d: "M24 58 C 50 50, 70 44, 100 26" }), h("path", { class: "vz-tr", d: "M92 24 h10 v10" }),
+    h("path", { class: "vz-a", d: "M114 38 l22 -10 v40 l-22 -10 z" }), h("rect", { class: "vz-a", x: "106", y: "42", width: "10", height: "12", rx: "3" }),
+  ],
+  automacoes: () => [
+    h("circle", { class: "vz-a", cx: "28", cy: "50", r: "12" }), h("path", { class: "vz-acento-tr", d: "M24 44 l8 6 -8 6" }),
+    h("line", { class: "vz-tr", x1: "40", y1: "50", x2: "62", y2: "50" }),
+    h("rect", { class: "vz-col", x: "62", y: "36", width: "30", height: "28", rx: "7", transform: "rotate(45 77 50)" }),
+    h("line", { class: "vz-tr", x1: "92", y1: "50", x2: "112", y2: "50" }),
+    h("circle", { class: "vz-b", cx: "126", cy: "50", r: "12" }), h("path", { class: "vz-acento-tr", d: "M120 50 l4 4 8 -8" }),
+    h("line", { class: "vz-tr vz-pontilhada", x1: "77", y1: "70", x2: "77", y2: "90" }),
+  ],
+  busca: () => [
+    h("circle", { class: "vz-col", cx: "70", cy: "46", r: "28" }),
+    h("circle", { class: "vz-pontilhada vz-tr", cx: "70", cy: "46", r: "14" }),
+    h("line", { class: "vz-grossa", x1: "92", y1: "68", x2: "118", y2: "92" }),
+    h("path", { class: "vz-tr vz-fraco", d: "M24 20 h12 M30 14 v12 M128 24 h8 M132 20 v8" }),
+  ],
+};
+/** ilustracaoVazio(tema) → <svg class="vazio-il"> ou null quando o tema não existe (a tela cai no vazio de sempre). */
+export function ilustracaoVazio(tema) {
+  const f = TEMAS_ILUSTRACAO[tema];
+  if (!f) return null;
+  return h("svg", { class: ["vazio-il", `vazio-il-${tema}`], viewBox: "0 0 160 100", "aria-hidden": "true", focusable: "false" }, f());
+}
+export const TEMAS_VAZIO = Object.freeze(Object.keys(TEMAS_ILUSTRACAO));
+
+/** vazio({tipo, titulo, texto, acao:{rotulo, fn, icone?}, acoes, passos, icone, tema}) → Node
     tipo "primeiro_uso": órbita com um satélite por passo (aceso se feito) + lista de passos + 1 ação;
     tipo "em_dia": selo ✓ na órbita + a frase (titulo) em .narr;
     tipo "sem_resultado": 1 linha + ação ("Limpar filtros" por padrão).
     Sem `tipo` é o vazio genérico (título + texto + ação); só leva o círculo de ícone se `icone` for dado (o "+" que todo vazio sem ícone herdava saiu, M09).
+    `tema` ("conversas" | "crm" | "agenda" | "ads" | "automacoes" | "busca") troca o ícone por uma ilustração leve (plano 50 · A5), também no sem_resultado.
     passos: ["texto" | {rotulo, feito}]. */
-export function vazio({ tipo, titulo, texto, acao, icone: ic, acoes, passos } = {}) {
+export function vazio({ tipo, titulo, texto, acao, icone: ic, acoes, passos, tema } = {}) {
   const lista = [...(acao ? [acao] : []), ...(acoes || [])];
+  const il = tema ? ilustracaoVazio(tema) : null;
   const botao = (a, i, extra) => h("button", { type: "button", class: ["bt", i === 0 ? "bt-prim" : "bt-sec", extra], on: { click: a.fn } },
     a.icone ? icone(a.icone) : null, a.rotulo || (tipo === "sem_resultado" ? "Limpar filtros" : "Continuar"));
   if (tipo === "sem_resultado") {
-    return h("div", { class: ["vazio", "vazio-sem"], dataset: { tipo } },
+    return h("div", { class: ["vazio", "vazio-sem", il && "vazio-sem-il"], dataset: { tipo, tema: il ? tema : null } },
+      il,
       h("p", { class: "vazio-linha" }, titulo || "Nada encontrado.", texto ? ` ${texto}` : ""),
       lista.length ? h("div", { class: "linha" }, lista.map((a, i) => botao(a, i === 0 ? 1 : i, "bt-p"))) : null);
   }
@@ -661,8 +729,8 @@ export function vazio({ tipo, titulo, texto, acao, icone: ic, acoes, passos } = 
         lista.length ? h("div", { class: "linha vazio-acoes" }, lista.map((a, i) => botao(a, i))) : null));
   }
   const botoes = lista.map((a, i) => botao(a, i));
-  return h("div", { class: ["vazio", !ic && "vazio-sem-ic"] },
-    ic ? h("div", { class: "vazio-ic", "aria-hidden": "true" }, icone(ic)) : null,
+  return h("div", { class: ["vazio", !ic && !il && "vazio-sem-ic", il && "vazio-tema"], dataset: il ? { tema } : null },
+    il || (ic ? h("div", { class: "vazio-ic", "aria-hidden": "true" }, icone(ic)) : null),
     h("div", { class: "vazio-txt" },
       titulo ? h("h2", null, titulo) : null,
       texto ? h("p", null, texto) : null,
@@ -670,7 +738,7 @@ export function vazio({ tipo, titulo, texto, acao, icone: ic, acoes, passos } = 
 }
 
 /** esqueleto(tipo, opcoes) → Node com a forma da tela (as mesmas classes de grade do conteúdo; a troca não desloca).
-    tipo: "inicio" | "chat" | "lista" | "kanban" | "ads" | "tabela" | "agenda" | "cartoes" (legado).
+    tipo: "inicio" | "chat" | "lista" | "kanban" | "ads" | "tabela" | "agenda" | "cartoes" (legado) | "cartao" | "grafico" | "kpi" (plano 50 · A6).
     opcoes: número (= {n}) ou {n, cabecalho}. `cabecalho` (título + subtítulo + ação) vem ligado nas telas inteiras
     (inicio, chat, ads, agenda) e desligado em lista/kanban/tabela/cartoes, que são só o miolo. `cabecalho` também aceita
     {rotulo = false, sub = true, acao = true} para espelhar o ui.cabecalho da tela (sem o rótulo de cima, que a tela nova não tem). */
@@ -688,8 +756,17 @@ export function esqueleto(tipo = "lista", opcoes = {}) {
     cabOpc.acao ? b("sk-acao") : null);
   const cartaoKpi = () => h("div", { class: "sk-cartao" }, b("sk-l1"), b("sk-num"), b("sk-l2"));
   const itensLista = k => Array.from({ length: k }, () => h("div", { class: "sk-item" }, h("span", { class: "sk sk-av" }), h("div", { class: "sk-txt" }, b("sk-l1"), b("sk-l2"))));
+  // gráfico: 10 barras de alturas fixas (nada aleatório: a forma é a mesma a cada abertura) e uma linha de base
+  const ALTURAS = [38, 62, 48, 80, 56, 70, 44, 90, 66, 52];
+  const grafico = () => h("div", { class: "sk-cartao sk-grafico" }, b("sk-l1"),
+    h("div", { class: "sk-gr-barras", "aria-hidden": "true" }, ALTURAS.slice(0, Math.max(4, Math.min(o.n || 10, 10))).map((a, i) => h("span", { class: "sk sk-gr-b", style: { "--h": `${a}%`, "--i": i } }))),
+    h("div", { class: "sk-gr-eixo" }, b("sk-gr-rot"), b("sk-gr-rot"), b("sk-gr-rot")));
+  const kpi = () => h("div", { class: "sk-cartao sk-kpi" }, b("sk-l1"), b("sk-num"), h("span", { class: "sk sk-spark" }));
   let corpo;
   if (tipo === "cartoes") corpo = h("div", { class: "sk-cartoes" }, Array.from({ length: n }, cartaoKpi));
+  else if (tipo === "cartao") corpo = h("div", { class: "sk-cartao sk-um" }, b("sk-l1"), b("sk-l2"), b("sk-l2 sk-l2-curta"), b("sk-l2"));
+  else if (tipo === "grafico") corpo = grafico();
+  else if (tipo === "kpi" || tipo === "kpis") corpo = h("div", { class: "sk-kpis" }, Array.from({ length: Math.max(2, Math.min(o.n ?? 4, 6)) }, kpi));
   else if (tipo === "tabela") corpo = h("div", { class: "sk-tabela" }, h("div", { class: "sk-tr sk-th" }, b(), b(), b(), b()),
     Array.from({ length: n }, () => h("div", { class: "sk-tr" }, b(), b(), b(), b())));
   else if (tipo === "kanban") corpo = h("div", { class: "sk-kanban" }, Array.from({ length: Math.max(3, Math.min(n, 6)) }, (_, i) =>
@@ -716,6 +793,7 @@ export function esqueleto(tipo = "lista", opcoes = {}) {
     h("span", { class: "sr-only", role: "status" }, "Carregando…"), comCab ? cab() : null, corpo);
   return raiz;
 }
+export const TIPOS_ESQUELETO = Object.freeze(["inicio", "chat", "lista", "kanban", "ads", "tabela", "agenda", "cartoes", "cartao", "grafico", "kpi"]);
 
 /** trocarEsqueleto(el, conteudo, {ms = 120}) → Promise. `el` é o contêiner que mostra o esqueleto (ou o próprio .esqueleto):
     o esqueleto some em ms e o conteúdo (Node, lista ou null) entra com fade; sem esqueleto na tela, só põe o conteúdo. */
@@ -1004,10 +1082,15 @@ export function campo(o = {}) {
     if (validar === "telefone" && ctl.value) ctl.value = formatarTelefone(ctl.value);
     entrada = ctl;
     if (tipo === "senha") {
-      const olho = h("button", { type: "button", class: "bt-icone campo-olho", "aria-label": "Mostrar senha", "aria-pressed": "false" }, icone("olho"));
+      // o ícone acompanha o estado (olho aberto = senha escondida; olho cortado = senha à mostra): o sprite não tem o cortado, então ele é desenhado aqui
+      const olhoAberto = icone("olho"), olhoCortado = iconeOlhoCortado();
+      const olho = h("button", { type: "button", class: "bt-icone campo-olho", "aria-label": "Mostrar senha", "aria-pressed": "false" }, olhoAberto);
+      // `entrada` é o <input>: `ctl` vira o embrulho logo abaixo, e o olho antigo trocava o type do <div> (a senha nunca aparecia)
       olho.addEventListener("click", () => {
-        const vis = ctl.type === "password"; ctl.type = vis ? "text" : "password";
+        const vis = entrada.type === "password"; entrada.type = vis ? "text" : "password";
         olho.setAttribute("aria-pressed", String(vis)); olho.setAttribute("aria-label", vis ? "Esconder senha" : "Mostrar senha");
+        limpar(olho).appendChild(vis ? olhoCortado : olhoAberto);
+        try { entrada.focus({ preventScroll: true }); } catch { /* ok */ }
       });
       ctl = h("div", { class: "campo-senha" }, ctl, olho);
     }
@@ -1083,19 +1166,24 @@ export function marcarErro(form, nome, texto) {
 /* ============================================================
    Tabela (vira cartões no celular via data-rotulo)
    ============================================================ */
-/** tabela({colunas:[{chave, rotulo, render, largura, ordenavel, alinhar}], linhas, aoClicar, selecao, vazio, rotulo}) → {el, selecionados(), atualizar(linhas)} */
-export function tabela({ colunas, linhas = [], aoClicar, selecao = false, vazio: txtVazio = "Nada por aqui.", rotulo, chave = "id" } = {}) {
+/** tabela({colunas:[{chave, rotulo, render, largura, ordenavel, alinhar}], linhas, aoClicar, selecao, vazio, rotulo, rolagem}) → {el, selecionados(), atualizar(linhas)}
+    `rolagem: true` (opcional) põe .tabela-rolavel: no desktop a tabela ganha altura máxima e rola por dentro com o cabeçalho preso. Fica desligado
+    por padrão: dentro de uma página que já rola, a caixa com barra própria vira rolagem dupla e esconde o rodapé e a paginação. */
+export function tabela({ colunas, linhas = [], aoClicar, selecao = false, vazio: txtVazio = "Nada por aqui.", rotulo, chave = "id", rolagem = false } = {}) {
   let dados = linhas.slice(), ordem = null;
   const marcadas = new Set();
   const tbody = h("tbody");
   const cabs = colunas.map(c => {
     const th = h("th", { scope: "col", style: c.largura ? { width: c.largura } : null, class: c.alinhar === "dir" ? "dir" : null });
     if (c.ordenavel) {
-      const b = h("button", { type: "button", class: "th-ord" }, c.rotulo, icone("ordenar"));
+      // aria-sort="none" desde o início: o leitor de tela sabe que a coluna ordena; o ícone vira seta no sentido ativo (CSS por [aria-sort])
+      th.setAttribute("aria-sort", "none");
+      const b = h("button", { type: "button", class: "th-ord", title: `Ordenar por ${c.rotulo}` }, c.rotulo, icone("ordenar"));
       b.addEventListener("click", () => {
         ordem = ordem && ordem.chave === c.chave ? { chave: c.chave, dir: -ordem.dir } : { chave: c.chave, dir: 1 };
-        for (const x of cabs) x.removeAttribute("aria-sort");
+        for (const x of cabs) if (x.hasAttribute("aria-sort")) x.setAttribute("aria-sort", "none");
         th.setAttribute("aria-sort", ordem.dir > 0 ? "ascending" : "descending");
+        anunciar(`Ordenado por ${c.rotulo}, ${ordem.dir > 0 ? "crescente" : "decrescente"}.`);
         desenhar();
       });
       th.appendChild(b);
@@ -1107,7 +1195,7 @@ export function tabela({ colunas, linhas = [], aoClicar, selecao = false, vazio:
   const table = h("table", { class: ["tabela", aoClicar && "tabela-clicavel"] },
     rotulo ? h("caption", { class: "sr-only" }, rotulo) : null,
     h("thead", null, h("tr", null, selecao ? h("th", { class: "th-sel" }, todas) : null, cabs)), tbody);
-  const env = h("div", { class: "tabela-env" }, table);
+  const env = h("div", { class: ["tabela-env", rolagem && "tabela-rolavel"] }, table);
 
   function valorOrd(l, c) { const v = l[c]; return v === null || v === undefined ? "" : v; }
   function desenhar() {
@@ -1155,12 +1243,50 @@ export function tabela({ colunas, linhas = [], aoClicar, selecao = false, vazio:
    Pílulas, etiquetas, avatar
    ============================================================ */
 const TOKENS_COR = new Set(["ok", "ruim", "aten", "info", "prim", "sec", "neutra", "meta", "google"]);
-/** pilula(texto, cor) — cor = token ('ok','ruim','aten','info','prim','sec','neutra') ou #RRGGBB do banco */
+/* Variantes semânticas da pílula (plano 50 · A9): o mesmo chip em todas as telas para canal, prioridade e situação.
+   A chave entra em `cor` (ex.: pilula("WhatsApp", "whatsapp", {variante: "canal"})); texto nulo usa o rótulo da tabela. */
+export const PILULA_CANAIS = Object.freeze({
+  whatsapp: { tok: "ok", icone: "whatsapp", rotulo: "WhatsApp" }, meta: { tok: "meta", icone: "meta", rotulo: "Meta" }, instagram: { tok: "meta", icone: "meta", rotulo: "Instagram" },
+  facebook: { tok: "meta", icone: "meta", rotulo: "Facebook" }, google: { tok: "google", icone: "google", rotulo: "Google" }, site: { tok: "info", icone: "globo", rotulo: "Site" },
+  indicacao: { tok: "prim", icone: "usuario", rotulo: "Indicação" }, telefone: { tok: "neutra", icone: "telefone", rotulo: "Telefone" }, manual: { tok: "neutra", icone: "editar", rotulo: "Manual" },
+  anuncio: { tok: "sec", icone: "anuncio", rotulo: "Anúncio" }, importacao: { tok: "neutra", icone: "baixar", rotulo: "Importação" },
+});
+export const PILULA_PRIORIDADES = Object.freeze({
+  urgente: { tok: "ruim", rotulo: "Urgente", n: 3 }, alta: { tok: "ruim", rotulo: "Alta", n: 3 }, media: { tok: "aten", rotulo: "Média", n: 2 }, normal: { tok: "neutra", rotulo: "Normal", n: 1 }, baixa: { tok: "neutra", rotulo: "Baixa", n: 1 },
+});
+export const PILULA_STATUS = Object.freeze({
+  ativo: "ok", ligado: "ok", ok: "ok", ganho: "ok", resolvido: "ok", concluido: "ok", conectado: "ok", aprovado: "ok",
+  pausado: "aten", pendente: "aten", aguardando: "aten", atrasado: "aten", em_teste: "aten", rascunho: "neutra", desligado: "neutra", inativo: "neutra", arquivado: "neutra",
+  erro: "ruim", perdido: "ruim", falhou: "ruim", bloqueado: "ruim", desconectado: "ruim", recusado: "ruim",
+  novo: "info", aberto: "info", andamento: "info", info: "info",
+});
+const chaveDe = v => String(v ?? "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[\s-]+/g, "_");
+/** pilula(texto, cor, {icone, title, class, variante: "status"|"prioridade"|"canal", tamanho: "p"}) — cor = token ('ok','ruim','aten','info','prim','sec','neutra') ou #RRGGBB do banco;
+    com `variante`, `cor` é a chave semântica (ex.: "whatsapp", "alta", "pausado") e a cor sai da tabela. */
 export function pilula(texto, cor = "neutra", extra = {}) {
-  const tok = TOKENS_COR.has(cor) ? cor : null;
-  const hex = !tok ? corOk(cor) : null;
-  return h("span", { class: ["pilula", tok ? `pilula-${tok}` : hex ? "pilula-cor" : "pilula-neutra", extra.class], style: hex ? { "--cor": hex } : null, title: extra.title || null },
-    extra.icone ? icone(extra.icone) : null, String(texto));
+  let tok = TOKENS_COR.has(cor) ? cor : null;
+  let hex = !tok ? corOk(cor) : null;
+  let ic = extra.icone || null, glifo = null;
+  const classes = ["pilula"];
+  const v = extra.variante;
+  if (v === "canal") {
+    const c = PILULA_CANAIS[chaveDe(cor)] || PILULA_CANAIS[chaveDe(texto)];
+    if (c) { tok = c.tok; hex = null; ic = ic || c.icone; if (texto === null || texto === undefined) texto = c.rotulo; }
+    classes.push("pilula-canal");
+  } else if (v === "prioridade") {
+    const p = PILULA_PRIORIDADES[chaveDe(cor)] || PILULA_PRIORIDADES[chaveDe(texto)];
+    if (p) { tok = p.tok; hex = null; if (texto === null || texto === undefined) texto = p.rotulo; glifo = h("i", { class: "pilula-prio", "aria-hidden": "true", dataset: { n: p.n } }, h("b"), h("b"), h("b")); }
+    classes.push("pilula-prioridade");
+  } else if (v === "status") {
+    const st = PILULA_STATUS[chaveDe(cor)];
+    if (st) { tok = st; hex = null; }
+    classes.push("pilula-status");
+  }
+  classes.push(tok ? `pilula-${tok}` : hex ? "pilula-cor" : "pilula-neutra");
+  if (extra.tamanho === "p") classes.push("pilula-p");
+  if (extra.class) classes.push(extra.class);
+  return h("span", { class: classes, style: hex ? { "--cor": hex } : null, title: extra.title || null, dataset: v ? { variante: v } : null },
+    glifo, ic ? icone(ic) : null, String(texto ?? ""));
 }
 
 /** etiqueta({nome, cor}) */
@@ -1178,13 +1304,22 @@ function iniciais(nome) {
 }
 function hashNum(s) { let x = 0; for (const ch of String(s || "")) x = (x * 31 + ch.codePointAt(0)) >>> 0; return x; }
 
-/** avatar(nome, id, img?) — iniciais sobre uma cor da paleta (estável por id). */
-export function avatar(nome, id, img) {
-  const i = hashNum(id ?? nome) % 12;
-  const el = h("span", { class: "avatar", style: { "--cor": `var(--pal-${i})` }, "aria-hidden": "true", title: nome || null });
+/** 8 matizes da paleta bem separados (azul, âmbar, verde, coral, bronze, lilás, verde-azulado, rosa): o avatar mistura cada um com o fundo e
+    com o texto do tema, então o mesmo tom é legível no claro e no escuro (plano 50 · A9). */
+export const TONS_AVATAR = Object.freeze([0, 2, 4, 5, 7, 9, 10, 11]);
+/** tomAvatar(nome, id) → índice 0..11 da paleta: estável pelo NOME (a mesma pessoa tem a mesma cor em qualquer lista); sem nome, pelo id. */
+export function tomAvatar(nome, id) {
+  const chave = String(nome ?? "").trim().toLowerCase() || String(id ?? "");
+  return TONS_AVATAR[hashNum(chave) % TONS_AVATAR.length];
+}
+/** avatar(nome, id, img?, {tamanho: "p"|"g", estado: "online"|"ausente"|"ocupado"}) — iniciais sobre uma cor estável por nome; `estado` põe o ponto no canto. */
+export function avatar(nome, id, img, { tamanho, estado } = {}) {
+  const i = tomAvatar(nome, id);
+  const el = h("span", { class: ["avatar", tamanho === "g" && "avatar-g", tamanho === "p" && "avatar-p"], style: { "--cor": `var(--pal-${i})` }, "aria-hidden": "true", title: nome || null, dataset: { tom: i } });
   const src = typeof img === "string" && (/^data:image\/(png|jpeg|webp);base64,/.test(img) || /^https:\/\//.test(img)) ? img : null;
   if (src) el.appendChild(h("img", { src, alt: "" }));
   else el.textContent = iniciais(nome);
+  if (estado && /^(online|ausente|ocupado)$/.test(estado)) el.appendChild(h("i", { class: ["avatar-estado", `avatar-${estado}`] }));
   return el;
 }
 
@@ -1858,6 +1993,237 @@ export async function acaoComDesfazer({ texto, aplicar, reverter, firmar, ms = 7
   _desfazer.push(item);
   item.t = toast(texto, { tipo: "info", ms, desfazer: () => desfazerItem(item), aoFechar: motivo => { if (motivo !== "desfazer") manterItem(item); } });
   return fim;
+}
+
+/* ============================================================
+   Plano 50 (04/10/2026) — frente A: KPI, dica, check de sucesso, número compacto
+   ============================================================ */
+/** numCompacto(1234) → "1,2 mil"; 2500000 → "2,5 mi"; abaixo de mil, o número inteiro. Para KPI onde o espaço é curto. */
+export function numCompacto(v) {
+  const n = Number(v);
+  if (v === null || v === undefined || v === "" || !Number.isFinite(n)) return vazioFmt;
+  const a = Math.abs(n), s = n < 0 ? "−" : "";
+  const um = x => (Math.round(x * 10) / 10).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
+  if (a >= 1e9) return `${s}${um(a / 1e9)} bi`;
+  if (a >= 1e6) return `${s}${um(a / 1e6)} mi`;
+  if (a >= 1e3) return `${s}${um(a / 1e3)} mil`;
+  return _fmt.num.format(n);
+}
+const FORMATOS_KPI = {
+  int: v => _fmt.num.format(Math.round(v)), num: v => _fmt.num.format(v), moeda: v => brl(v, { centavos: false }), moeda2: v => brl(v),
+  pct: v => pct(v), pct1: v => pct(v, 1), compacto: v => numCompacto(v), minutos: v => `${_fmt.num.format(Math.round(v))} min`,
+};
+/** Variação do KPI: fração (0.12 = +12 %) ou {valor, texto?, sr?, invertido?}. `invertido` = subir é ruim (tempo de espera, custo). */
+export function variacaoKpi(v, invertido = false) {
+  const x = typeof v === "number" ? { valor: v } : (v && typeof v === "object" ? v : null);
+  if (!x || !Number.isFinite(Number(x.valor))) return null;
+  const n = Number(x.valor), inv = x.invertido ?? invertido;
+  const sinal = n > 0.0005 ? "sobe" : n < -0.0005 ? "desce" : "igual";
+  const tom = sinal === "igual" ? "neutra" : ((sinal === "sobe") !== !!inv ? "bom" : "ruim");
+  const casas = Math.abs(n) < 0.1 && n !== 0 ? 1 : 0;
+  const texto = x.texto || (sinal === "igual" ? "0%" : `${n > 0 ? "+" : "−"}${pct(Math.abs(n), casas)}`);
+  const sr = x.sr || (sinal === "igual" ? "sem mudança em relação ao período anterior" : `${sinal === "sobe" ? "subiu" : "caiu"} ${pct(Math.abs(n), casas)} em relação ao período anterior`);
+  return { sinal, tom, texto, sr, seta: sinal === "sobe" ? "↑" : sinal === "desce" ? "↓" : "→" };
+}
+/** kpi({rotulo, valor, formato, variacao, serie, ajuda, invertido, aoClicar, destaque}) → <article class="kpi"> (ou <button> com aoClicar).
+    formato: "int" (padrão) | "num" | "moeda" | "moeda2" | "pct" | "pct1" | "compacto" | "minutos" | fn(valor) → texto.
+    Número grande em Plex (contado com G.contar quando o tema anima), seta ↑↓ com cor semântica (invertido = subir é ruim), sparkline opcional
+    (`serie`, desenhada por G.sparkline) e `ajuda` na dica do «i» (sem title: o tooltip nativo repetia o mesmo texto por cima). No cartão comum
+    o «i» é focável (Tab abre a dica; Enter, espaço e o toque também) e o nome dele já diz a ajuda, uma vez só; no cartão-botão (aoClicar) não cabe
+    outro controle dentro: a dica é do botão e a ajuda vira a descrição dele. Valor nulo mostra «—» (nunca inventa zero). `el.pronto` resolve
+    quando a sparkline e a contagem terminaram de montar (os gráficos carregam sob demanda). */
+export function kpi(o = {}) {
+  const { rotulo, valor, formato = "int", variacao, serie, ajuda, invertido = false, aoClicar, destaque } = o;
+  const fmt = typeof formato === "function" ? formato : (FORMATOS_KPI[formato] || FORMATOS_KPI.int);
+  const n = Number(valor);
+  const temValor = valor !== null && valor !== undefined && valor !== "" && Number.isFinite(n);
+  const idAj = ajuda && aoClicar ? novoId("kpi-aj") : null;
+  const valorEl = h("p", { class: "kpi-valor dado" }, temValor ? fmt(n) : vazioFmt);
+  const varInfo = variacaoKpi(variacao, invertido);
+  const varEl = varInfo ? h("p", { class: ["kpi-var", `kpi-var-${varInfo.tom}`], dataset: { sinal: varInfo.sinal } },
+    h("span", { class: "kpi-seta", "aria-hidden": "true" }, varInfo.seta), h("span", { "aria-hidden": "true" }, varInfo.texto), h("span", { class: "sr-only" }, varInfo.sr)) : null;
+  const temSerie = Array.isArray(serie) && serie.filter(x => Number.isFinite(Number(x))).length >= 2;
+  const sparkEl = temSerie ? h("div", { class: "kpi-spark", "aria-hidden": "true" }) : null;
+  let ajudaEl = null;
+  if (ajuda && !aoClicar) {
+    ajudaEl = h("span", { class: "kpi-ajuda", tabindex: "0", role: "button", "aria-label": `Ajuda: ${ajuda}`, dataset: { dica: ajuda } }, icone("info"));
+    // Enter, espaço e o toque (que não tem hover) abrem a dica na hora
+    ajudaEl.addEventListener("click", () => mostrarDica(ajudaEl, String(ajuda)));
+    ajudaEl.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); mostrarDica(ajudaEl, String(ajuda)); } });
+  } else if (ajuda) ajudaEl = h("span", { class: "kpi-ajuda", "aria-hidden": "true" }, icone("info"));
+  const el = h(aoClicar ? "button" : "article", {
+    class: ["kpi", !temValor && "kpi-vazio", aoClicar && "kpi-clicavel", destaque && "kpi-destaque", temSerie && "kpi-com-serie"], type: aoClicar ? "button" : null,
+    "aria-describedby": idAj, dataset: { formato: typeof formato === "string" ? formato : "fn", dica: idAj ? ajuda : null },
+  },
+    h("p", { class: "kpi-rot rotulo" }, rotulo ?? "", ajudaEl),
+    h("div", { class: "kpi-corpo" }, h("div", { class: "kpi-num" }, valorEl, varEl), sparkEl),
+    // aria-hidden: entra só como descrição do botão, não no nome dele (senão o leitor de tela lia a ajuda duas vezes)
+    idAj ? h("span", { class: "sr-only", id: idAj, "aria-hidden": "true" }, ajuda) : null);
+  if (aoClicar) el.addEventListener("click", aoClicar);
+  el.pronto = graficos().then(G => {
+    if (!G) return false;
+    if (sparkEl) G.sparkline(sparkEl, { valores: serie, rotulo: String(rotulo || "Série"), area: true });
+    if (temValor && n !== 0 && typeof G.contar === "function") G.contar(valorEl, n, fmt);
+    return true;
+  });
+  return el;
+}
+
+/* ---- dica (tooltip) genérica: um só elemento role=tooltip para a página, delegado no documento ---- */
+let _dicaEl = null, _dicaAlvo = null, _dicaT = null, _dicaVigia = null, _dicaPendente = null, _semTitle = null;
+function caixaDica() {
+  if (_dicaEl && _dicaEl.isConnected) return _dicaEl;
+  _dicaEl = h("div", { class: "dica", role: "tooltip", id: "dica-global", popover: "manual", hidden: true });
+  document.body.appendChild(_dicaEl);
+  return _dicaEl;
+}
+/* Enquanto a dica vale para um alvo (agendada pelo mouse ou à mostra), o title dele fica guardado em data-title: senão o tooltip nativo
+   do navegador aparece por cima da dica, às vezes com outro texto. Ao fechar, o title volta (se a tela não tiver posto outro nesse meio-tempo). */
+function guardarTitle(el) {
+  if (_semTitle && _semTitle !== el) devolverTitle();
+  if (!el || typeof el.hasAttribute !== "function" || !el.hasAttribute("title")) return;
+  el.setAttribute("data-title", el.getAttribute("title"));
+  el.removeAttribute("title");
+  _semTitle = el;
+}
+function devolverTitle() {
+  const el = _semTitle; _semTitle = null;
+  if (!el || !el.hasAttribute("data-title")) return;
+  if (!el.hasAttribute("title")) el.setAttribute("title", el.getAttribute("data-title"));
+  el.removeAttribute("data-title");
+}
+function esconderDica() {
+  clearTimeout(_dicaT); _dicaT = null; _dicaPendente = null;
+  clearInterval(_dicaVigia); _dicaVigia = null;
+  devolverTitle();
+  if (_dicaAlvo && _dicaAlvo.classList) _dicaAlvo.classList.remove("com-dica");
+  _dicaAlvo = null;
+  if (!_dicaEl) return;
+  _dicaEl.hidden = true;
+  if (typeof _dicaEl.hidePopover === "function") try { _dicaEl.hidePopover(); } catch { /* ok */ }
+}
+function mostrarDica(el, texto) {
+  if (!el || !texto || !el.isConnected) return;
+  clearTimeout(_dicaT); _dicaT = null; _dicaPendente = null;
+  if (_semTitle && _semTitle !== el) devolverTitle();
+  if (_dicaAlvo && _dicaAlvo !== el && _dicaAlvo.classList) _dicaAlvo.classList.remove("com-dica");
+  const d = caixaDica();
+  d.textContent = texto;
+  d.hidden = false;
+  mostrarNoTopo(d);
+  _dicaAlvo = el;
+  if (el.classList) el.classList.add("com-dica");
+  // o elemento pode sumir sem pointerout nem focusout (troca de rota, lista redesenhada): a dica não pode ficar órfã na tela
+  clearInterval(_dicaVigia);
+  _dicaVigia = setInterval(() => { if (!_dicaAlvo || !_dicaAlvo.isConnected) esconderDica(); }, 300);
+  if (_dicaVigia && typeof _dicaVigia.unref === "function") _dicaVigia.unref();   // Node (testes): o vigia não segura o processo
+  try {
+    // mede com a caixa no canto: na posição anterior (perto da borda direita, como o «Fechar» das gavetas) ela encolhe, o texto quebra
+    // em várias linhas e a conta põe a dica longe do alvo
+    d.style.left = "0px"; d.style.top = "0px";
+    const m = d.getBoundingClientRect();
+    const r = el.getBoundingClientRect(), vw = innerWidth, vh = innerHeight, w = m.width || d.offsetWidth || 160, hh = m.height || d.offsetHeight || 32;
+    let x = r.left + r.width / 2 - w / 2; x = Math.max(8, Math.min(x, vw - w - 8));
+    let y = r.top - hh - 8, lado = "cima";
+    if (y < 8) { y = Math.min(vh - hh - 8, r.bottom + 8); lado = "baixo"; }
+    d.style.left = `${Math.round(x)}px`; d.style.top = `${Math.round(y)}px`; d.dataset.lado = lado;
+    d.style.setProperty("--seta-x", `${Math.round(Math.max(10, Math.min(w - 10, r.left + r.width / 2 - x)))}px`);
+  } catch { /* sem layout (testes) */ }
+}
+const SEL_DICA = "[data-dica], .bt-icone[aria-label]";
+function textoDaDica(el) { return (el.dataset && el.dataset.dica) || el.getAttribute("aria-label") || ""; }
+/** O foco veio do teclado? Gaveta e modal focam o «Fechar» por script e, ao fechar, o foco volta ao botão que os abriu: depois de um clique
+    o navegador não marca esse foco como :focus-visible, e a dica não deve abrir sozinha. Navegador sem :focus-visible: abre como antes. */
+function focoDeTeclado(el) {
+  try { return !el || typeof el.matches !== "function" ? true : el.matches(":focus-visible"); } catch { return true; }
+}
+let _dicaDoc = null;
+/** ligarDicas(doc) — delegação única: tudo que tiver data-dica (ou for .bt-icone com aria-label) ganha dica ao passar o mouse (400 ms) ou focar
+    pelo teclado (150 ms; foco por script não abre); toque não abre dica ao encostar (o rótulo já está no aria-label); Esc, clique e rolagem fecham.
+    Andar do fundo do botão para o ícone dentro dele não fecha nem reabre a dica. Roda sozinha ao carregar o ui.js. */
+export function ligarDicas(doc = typeof document !== "undefined" ? document : null) {
+  if (!doc || typeof doc.addEventListener !== "function" || _dicaDoc === doc) return () => {};
+  _dicaDoc = doc;
+  const alvoDe = ev => { const t = ev.target; return t && typeof t.closest === "function" ? t.closest(SEL_DICA) : null; };
+  const sobre = ev => {
+    const el = alvoDe(ev);
+    if (!el || el === _dicaAlvo || el === _dicaPendente || el.hasAttribute("data-sem-dica")) return;
+    const foco = ev.type === "focusin";
+    if (!foco && ev.pointerType === "touch") return;
+    if (foco && !focoDeTeclado(ev.target)) return;
+    clearTimeout(_dicaT);
+    _dicaPendente = el;
+    // só no mouse: no foco o title continua lá, ele é a descrição que o leitor de tela lê (o tooltip nativo não abre no foco)
+    if (!foco) guardarTitle(el);
+    _dicaT = setTimeout(() => {
+      _dicaT = null; _dicaPendente = null;
+      if (el.isConnected) mostrarDica(el, textoDaDica(el)); else devolverTitle();
+    }, foco ? 150 : 400);
+  };
+  const fora = ev => {
+    const el = alvoDe(ev);
+    if (!el) return;
+    // pointerout do fundo do botão para o <svg> filho (ou foco que passa para dentro do mesmo alvo): continua no mesmo alvo
+    const para = ev.relatedTarget;
+    if (para && para.nodeType && typeof el.contains === "function" && el.contains(para)) return;
+    if (el === _dicaAlvo || el === _dicaPendente) esconderDica();
+  };
+  const fechar = () => esconderDica();
+  // rolar só fecha a dica que já está à mostra: focar por Tab rola o elemento para a vista, e isso não pode cancelar a dica que ia abrir
+  const aoRolar = () => { if (_dicaEl && !_dicaEl.hidden) esconderDica(); };
+  const tecla = ev => { if (ev.key === "Escape") esconderDica(); };
+  const janela = doc.defaultView && typeof doc.defaultView.addEventListener === "function" ? doc.defaultView : null;
+  doc.addEventListener("pointerover", sobre); doc.addEventListener("focusin", sobre);
+  doc.addEventListener("pointerout", fora); doc.addEventListener("focusout", fora);
+  doc.addEventListener("pointerdown", fechar, true); doc.addEventListener("keydown", tecla, true); doc.addEventListener("scroll", aoRolar, true);
+  // trocar de tela ou de aba do navegador fecha a dica (o botão que a abriu já não está mais ali)
+  if (janela) janela.addEventListener("hashchange", fechar);
+  doc.addEventListener("visibilitychange", fechar);
+  return () => {
+    doc.removeEventListener("pointerover", sobre); doc.removeEventListener("focusin", sobre); doc.removeEventListener("pointerout", fora); doc.removeEventListener("focusout", fora);
+    doc.removeEventListener("pointerdown", fechar, true); doc.removeEventListener("keydown", tecla, true); doc.removeEventListener("scroll", aoRolar, true);
+    if (janela) janela.removeEventListener("hashchange", fechar);
+    doc.removeEventListener("visibilitychange", fechar);
+    esconderDica(); _dicaDoc = null;
+  };
+}
+ligarDicas();
+/** dica(el, texto) → desligar(). Tooltip no hover e no foco (atraso de 400 ms, role=tooltip) com o texto também em aria-describedby
+    (só quando difere do nome acessível, para não ler duas vezes). Plano 50 · A10. */
+export function dica(el, texto, { descrever = true } = {}) {
+  if (!el || !el.dataset || !texto) return () => {};
+  el.dataset.dica = String(texto);
+  let desc = null;
+  const nome = (el.getAttribute("aria-label") || el.textContent || "").trim();
+  if (descrever && nome !== String(texto).trim()) {
+    desc = h("span", { class: "sr-only", id: novoId("dica") }, String(texto));
+    if (el.parentNode) el.parentNode.insertBefore(desc, el.nextSibling); else el.appendChild(desc);
+    const ids = new Set((el.getAttribute("aria-describedby") || "").split(" ").filter(Boolean)); ids.add(desc.id);
+    el.setAttribute("aria-describedby", [...ids].join(" "));
+  }
+  return () => {
+    delete el.dataset.dica;
+    if (_dicaAlvo === el) esconderDica();
+    if (desc) {
+      const ids = new Set((el.getAttribute("aria-describedby") || "").split(" ").filter(Boolean)); ids.delete(desc.id);
+      if (ids.size) el.setAttribute("aria-describedby", [...ids].join(" ")); else el.removeAttribute("aria-describedby");
+      desc.remove();
+    }
+  };
+}
+/** dicaAberta() → o elemento que tem a dica à mostra agora (ou null): para testes e para a tela saber se deve esperar. */
+export function dicaAberta() { return _dicaEl && !_dicaEl.hidden ? _dicaAlvo : null; }
+
+/** checkSucesso(el, {ms = 900, texto}) → Promise<true>. Um ✓ desenhado em 300 ms cobre o botão/cartão e some depois de `ms` (plano 50 · A7);
+    `texto` é anunciado ao leitor de tela («Salvo.»). Com movimento reduzido o ✓ aparece sem traço e fica 400 ms. */
+export function checkSucesso(el, { ms = 900, texto } = {}) {
+  if (!el || !el.appendChild) return Promise.resolve(false);
+  const marca = h("span", { class: "ok-check", "aria-hidden": "true" },
+    h("svg", { viewBox: "0 0 24 24", focusable: "false" }, h("path", { d: "M5 12.5l4.5 4.5L19 7", pathLength: "1" })));
+  el.classList.add("tem-ok-check");
+  el.appendChild(marca);
+  if (texto) anunciar(String(texto));
+  return new Promise(r => setTimeout(() => { marca.remove(); el.classList.remove("tem-ok-check"); r(true); }, movimentoReduzido() ? 400 : ms));
 }
 
 /** numMoeda(valor, {centavos = true}) → <span class="num-moeda"> com "R$" e centavos a 60 % (use no lugar de texto "R$ 1.234,56" nos números grandes). */

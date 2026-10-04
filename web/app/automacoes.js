@@ -164,13 +164,37 @@ function telaLista(ctx, raiz, dados, P) {
   if (noLimite && podeEditar) raiz.appendChild(h("p", { class: "aviso aviso-aten" }, ui.icone("alerta"),
     h("span", null, `Seu plano chegou ao limite de ${lim.limite} automações. Exclua uma que não usa ou fale com o suporte para aumentar.`)));
 
+  // ------------------------------------------------ resumo em números (item 52): ligadas, execuções, taxa de sucesso, em espera
+  const faixaResumo = h("div", { class: "au-resumo", role: "group", "aria-label": "Resumo das automações" });
+  const pintarResumo = () => {
+    ui.limpar(faixaResumo);
+    const r = L.resumoAutomacoes(itens);
+    // ui.kpi (frente A) quer número + formato; enquanto não existe, a peça local aceita o texto pronto
+    const kpi = typeof ui.kpi === "function"
+      ? o => ui.kpi({ rotulo: o.rotulo, valor: o.num, formato: o.formato || "int", ajuda: o.ajuda })
+      : o => P.kpi({ rotulo: o.rotulo, valor: o.texto, ajuda: o.ajuda, icone: o.icone, tom: o.tom });
+    faixaResumo.append(
+      kpi({ rotulo: `Ligadas de ${r.total}`, num: r.ligadas, texto: `${r.ligadas} de ${r.total}`, ajuda: "Automações que estão rodando agora.", icone: "raio", tom: r.ligadas ? "ok" : null }),
+      kpi({ rotulo: "Execuções", num: r.execucoes, texto: ui.num(r.execucoes), ajuda: "Quantas vezes as automações rodaram, somando todas.", icone: "relogio" }),
+      kpi({ rotulo: "Deram certo", num: r.pct == null ? null : r.pct / 100, formato: "pct", texto: r.pct == null ? "—" : `${r.pct}%`,
+        ajuda: r.pct == null ? "Ainda não há execuções para medir." : `${ui.num(r.execucoes - r.erros)} de ${ui.num(r.execucoes)} execuções sem erro.`, icone: "check", tom: r.pct == null ? null : L.nivelTaxa(r.pct) }),
+      kpi({ rotulo: "Em espera", num: r.em_espera, texto: ui.num(r.em_espera), ajuda: "Pessoas no meio de uma sequência, aguardando o próximo passo.", icone: "relogio", tom: r.em_espera ? "info" : null }));
+  };
+  if (itens.length) { pintarResumo(); raiz.appendChild(faixaResumo); }
+
   // ------------------------------------------------ criar com IA
   if (podeEditar) raiz.appendChild(cartaoIA(ctx, dados, noLimite));
 
   // ------------------------------------------------ as do cliente
   const metas = new Map();
-  if (itens.length) raiz.appendChild(secaoSuas(ctx, dados, itens, metas, P));
-  else raiz.appendChild(h("div", { class: "au-vazio" }, ui.vazio({
+  // ligar/desligar (interruptor ou pulso) muda os números do topo e as contagens dos filtros: tudo sai de `itens`, recontado na hora
+  let recontarSuas = () => {};
+  const aoMudarEstado = () => { if (itens.length) pintarResumo(); recontarSuas(); };
+  if (itens.length) {
+    const suas = secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado);
+    recontarSuas = suas.recontar;
+    raiz.appendChild(suas.el);
+  } else raiz.appendChild(h("div", { class: "au-vazio" }, ui.vazio({
     titulo: "Automações fazem o trabalho repetitivo.", texto: podeEditar ? "Descreva o que você quer na caixa acima, ou comece por uma receita pronta." : "Ainda não há automações criadas.", icone: "raio" })));
 
   // ------------------------------------------------ receitas prontas
@@ -200,23 +224,39 @@ function telaLista(ctx, raiz, dados, P) {
       try {
         const novo = await ctx.api.rpcC("nx_automacoes_listar");
         if (eu !== montagem) return;
-        for (const it of novo.itens || []) { const m = metas.get(it.id); if (m) m(it); }
+        // os da lista se repintam; os fora do filtro atual (sem cartão na tela) só atualizam o dado, que o resumo e os filtros contam
+        for (const it of novo.itens || []) { const m = metas.get(it.id); if (m) m(it); else { const x = itens.find(y => y.id === it.id); if (x) Object.assign(x, it); } }
+        aoMudarEstado();
       } catch { /* silencioso: o próximo pulso tenta de novo */ } finally { pedindo = false; }
     });
+  }
+
+  // ------------------------------------------------ paleta Ctrl/⌘+K (item 59): o que esta tela oferece
+  registrarComandos(ctx, [
+    podeEditar && !noLimite ? { id: "automacoes.nova", rotulo: "Criar automação do zero", palavras: "nova automacao criar regra fluxo", icone: "mais", fazer: () => ctx.navegar("#/automacoes/nova") } : null,
+    podeEditar && !L.iaDesligada(dados) ? { id: "automacoes.ia", rotulo: "Criar automação com IA", palavras: "ia inteligencia artificial descrever montar", icone: "ia",
+      fazer: () => { const t = raiz.querySelector(".au-ia-txt"); if (t) { t.scrollIntoView({ block: "center", behavior: ui.comportamentoRolagem() }); t.focus({ preventScroll: true }); } } } : null,
+    podeEditar ? { id: "automacoes.receitas", rotulo: "Ver receitas prontas", palavras: "receitas modelos prontas exemplos", icone: "modelo",
+      fazer: () => { const e = raiz.querySelector("#au-mod"); if (e) { e.scrollIntoView({ block: "start", behavior: ui.comportamentoRolagem() }); const b = raiz.querySelector(".au-modelos-busca input"); if (b) b.focus({ preventScroll: true }); } } } : null,
+  ]);
+}
+
+/** Registra comandos na paleta (quando o shell oferece ctx.comandos) e desfaz ao sair da tela. Nunca derruba a tela. */
+function registrarComandos(ctx, lista) {
+  const reg = ctx.comandos && typeof ctx.comandos.registrar === "function" ? ctx.comandos.registrar : null;
+  if (!reg) return;
+  for (const c of lista) {
+    if (!c) continue;
+    try { const cancelar = reg(c); if (typeof cancelar === "function") limpezas.push(cancelar); } catch { /* a paleta é um extra */ }
   }
 }
 
 /* ------------------------------------------------------------------ Criar com IA */
 
-const EXEMPLOS_IA = Object.freeze([
-  "Quando um orçamento ficar 2 dias sem resposta, manda uma mensagem e avisa o responsável",
-  "Todo dia às 9h, cria uma tarefa para ligar para quem está parado há 3 dias na etapa de orçamento",
-  "Quando o cliente faltar, pede para remarcar e avisa a recepção",
-]);
-
 function cartaoIA(ctx, dados, noLimite) {
   const { ui } = ctx;
   const h = ui.h;
+  const EXEMPLOS_IA = L.exemplosIA(ctx.vocab);     // 5 pedidos do dia a dia, no vocabulário da vertical (item 55)
   const ia = dados.ia || (dados.base && dados.base.ia) || null;
   // nx_automacoes_listar → ia:{disponivel, usadas, limite}; a base de Conversas usa ia:{ligada, cota:{usadas, limite}} (aceitamos as duas)
   const desligada = L.iaDesligada(dados);
@@ -231,11 +271,13 @@ function cartaoIA(ctx, dados, noLimite) {
   const contador = h("span", { class: "au-ia-cont mono", "aria-hidden": "true" }, `${textoIA.length}/${MAX}`);
   const btCriar = h("button", { type: "button", class: "bt bt-prim bt-g au-ia-bt", disabled: true }, ui.icone("ia"), "Criar com IA");
   const estado = h("div", { class: "au-ia-estado", "aria-live": "polite" });
-  const exemplos = h("div", { class: "au-chips au-ia-ex", role: "group", "aria-label": "Exemplos de pedido" }, EXEMPLOS_IA.map(t => {
-    const b = h("button", { type: "button", class: "au-chip au-chip-ex", disabled: desligada, title: t }, t.length > 56 ? `${t.slice(0, 55)}…` : t);
-    b.addEventListener("click", () => { area.value = t; area.dispatchEvent(new Event("input", { bubbles: true })); area.focus(); });
-    return b;
-  }));
+  const exemplos = h("div", { class: "au-ia-ex-caixa" },
+    h("p", { class: "au-ia-ex-rot", id: `${id}-ex` }, "Exemplos — toque para usar"),
+    h("div", { class: "au-chips au-ia-ex", role: "group", "aria-labelledby": `${id}-ex` }, EXEMPLOS_IA.map(t => {
+      const b = h("button", { type: "button", class: "au-chip au-chip-ex", disabled: desligada, title: t }, ui.icone("ia"), h("span", null, t));
+      b.addEventListener("click", () => { area.value = t; area.dispatchEvent(new Event("input", { bubbles: true })); area.focus(); });
+      return b;
+    })));
 
   const pintarBotao = () => {
     const n = area.value.trim().length;
@@ -332,10 +374,10 @@ function resultadoIA(ctx, dados, m, tentarOutra) {
 
 /* ------------------------------------------------------------------ Suas automações */
 
-function secaoSuas(ctx, dados, itens, metas, P) {
+/** «Suas automações»: filtros com contagem + lista. Devolve {el, recontar}; recontar() refaz as contagens depois de ligar/desligar. */
+function secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado) {
   const { ui } = ctx;
   const h = ui.h;
-  const ligadas = itens.filter(x => x.ativo).length;
   let filtro = "todas";
   const lista = h("ul", { class: "au-lista", role: "list" });
   const vazio = h("div", { class: "au-lista-vazio", hidden: true });
@@ -347,30 +389,40 @@ function secaoSuas(ctx, dados, itens, metas, P) {
     const f = filtros.find(x => x[0] === filtro)[2];
     const vis = itens.filter(f);
     metas.clear();
-    for (const it of vis) lista.appendChild(itemLista(ctx, dados, it, metas, P));
-    // os itens fora do filtro continuam recebendo o pulso (o contador do cabeçalho não depende da lista)
+    vis.forEach((it, i) => lista.appendChild(itemLista(ctx, dados, it, metas, P, i, aoMudarEstado)));
+    // só os da tela entram em `metas`; o pulso atualiza o dado dos outros direto em `itens` (o resumo do topo conta todos)
     vazio.hidden = vis.length > 0;
     ui.limpar(vazio);
     if (!vis.length) vazio.appendChild(h("p", { class: "sub" }, "Nenhuma automação nesta situação."));
   };
+  const chips = [];
   for (const [k, rot, fn] of filtros) {
     const n = itens.filter(fn).length;
     if (k === "erros" && !n) continue;
     const b = P.chip({ rotulo: `${rot} · ${n}`, ligado: k === filtro, modo: "radio", aoClicar: () => {
       filtro = k; barra.querySelectorAll(".au-chip").forEach(c => c.setAttribute("aria-checked", String(c === b))); desenhar(); } });
+    chips.push([b, rot, fn]);
     barra.appendChild(b);
   }
   P.setas(barra);
   desenhar();
-  return h("section", { class: "au-sec", "aria-labelledby": "au-suas" },
+  const contaCab = h("span", { class: "rotulo" });
+  const recontar = () => {
+    const ligadas = itens.filter(x => x.ativo).length;
+    contaCab.textContent = `${ligadas} ${ligadas === 1 ? "ligada" : "ligadas"} de ${itens.length}`;
+    for (const [b, rot, fn] of chips) b.textContent = `${rot} · ${itens.filter(fn).length}`;
+  };
+  recontar();
+  const el = h("section", { class: "au-sec", "aria-labelledby": "au-suas" },
     h("div", { class: "au-sec-cab" },
       h("h2", { class: "titulo-sec", id: "au-suas" }, "Suas automações"),
-      h("span", { class: "rotulo" }, `${ligadas} ${ligadas === 1 ? "ligada" : "ligadas"} de ${itens.length}`)),
+      contaCab),
     itens.length > 3 ? barra : null,
     lista, vazio);
+  return { el, recontar };
 }
 
-function itemLista(ctx, dados, it, metas, P) {
+function itemLista(ctx, dados, it, metas, P, posicao = 0, aoMudarEstado = () => {}) {
   const { ui } = ctx;
   const h = ui.h;
   const vv = ctx.vocab;
@@ -381,33 +433,51 @@ function itemLista(ctx, dados, it, metas, P) {
   const errs = h("span", { class: "au-item-num au-com-erro" });
   const ultima = h("span", { class: "au-item-ult" });
   const espera = h("span", { class: "au-item-num au-item-espera" });
-  const li = h("li", { class: ["au-item", !it.ativo && "au-desligada"] });
+  const taxa = h("span", { class: "au-item-taxa" });
+  const estadoTxt = h("span", { class: "au-item-estado" });
+  const ponto = h("span", { class: "au-item-ponto" });
+  const li = h("li", { class: ["au-item", !it.ativo && "au-desligada"], style: { "--i": String(posicao) } });
   const pintar = x => {
-    const e = Number(x.execucoes) || 0, r = Number(x.erros) || 0;
-    exec.textContent = e === 1 ? "1 execução" : `${e} execuções`;
-    errs.textContent = r === 1 ? "1 erro" : `${r} erros`;
-    errs.hidden = !r;
+    const t = L.taxaSucesso(x);
+    exec.textContent = t.total === 1 ? "1 execução" : `${ui.num(t.total)} execuções`;
+    errs.textContent = t.erros === 1 ? "1 erro" : `${t.erros} erros`;
+    errs.hidden = !t.erros;
     const w = Number(x.em_espera) || 0;
     espera.textContent = w === 1 ? "1 em espera" : `${w} em espera`;
     espera.hidden = !w;
     ultima.textContent = x.ultima_execucao_em ? `última ${ui.relativo(x.ultima_execucao_em)}` : "ainda não rodou";
     ultima.title = x.ultima_execucao_em ? ui.dataHoraBR(x.ultima_execucao_em) : "";
+    ui.limpar(taxa); taxa.appendChild(P.barraTaxa({ pct: t.pct, total: t.total }));
+    estadoTxt.textContent = x.ativo ? "Ligada" : "Desligada";
+    ui.limpar(ponto); ponto.appendChild(P.pontoEstado(!!x.ativo, { erro: t.erros > 0 }));
   };
   pintar(it);
   const sw = P.interruptor({
     ligado: it.ativo, rotulo: `Ligar a automação ${it.nome}`, desabilitado: !podeEditar,
     aoMudar: async (v, b) => {
+      // ligar algo que manda mensagem ao cliente merece uma confirmação (item 52): a partir dali sai WhatsApp de verdade
+      if (v && L.enviaMensagem(it)) {
+        const ok = await ui.confirmar({ titulo: `Ligar «${it.nome}»?`, rotulo: "Ligar",
+          texto: "Esta automação envia mensagens de WhatsApp para clientes. Assim que ligar, quem se encaixar no gatilho começa a receber. Dá para desligar a qualquer momento." });
+        if (!ok) { b.definir(false); b.focus({ preventScroll: true }); return; }
+      }
       const devolverFoco = ui.manterFoco(b);
       b.disabled = true;
       try {
         const novo = await ctx.api.rpcC("nx_automacao_ativar", { p_id: it.id, p_ativo: v });
-        Object.assign(it, novo);
+        // o servidor devolve o item atualizado (nx_auto_item); sem «ativo» na resposta, vale o que foi pedido e aceito
+        if (novo && typeof novo === "object") Object.assign(it, novo);
+        if (!novo || typeof novo.ativo !== "boolean") it.ativo = v;
         li.classList.toggle("au-desligada", !it.ativo);
+        pintar(it);
         ui.toast(v ? `«${it.nome}» ligada.` : `«${it.nome}» desligada.`, { tipo: "ok" });
       } catch (e) {
         b.definir(!v);
         ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e)), { tipo: "erro" });
-      } finally { b.disabled = !podeEditar; devolverFoco(); }   // desabilitado o botão perde o foco: o 2º Space precisa achá-lo de novo
+      } finally {
+        b.disabled = !podeEditar; devolverFoco();   // desabilitado o botão perde o foco: o 2º Space precisa achá-lo de novo
+        aoMudarEstado();                            // «Ligadas de N», os chips e o cabeçalho da seção acompanham o cartão (no erro, voltam junto)
+      }
     },
   });
   metas.set(it.id, x => { Object.assign(it, x); pintar(it); sw.definir(it.ativo); li.classList.toggle("au-desligada", !it.ativo); });
@@ -429,11 +499,12 @@ function itemLista(ctx, dados, it, metas, P) {
   li.append(
     h("div", { class: "au-item-sw" }, sw),
     h("a", { class: "au-item-corpo", href: `#/automacoes/${it.id}` },
-      h("span", { class: "au-item-nome" }, it.nome),
+      h("span", { class: "au-item-topo" }, ponto, h("span", { class: "au-item-nome" }, it.nome), estadoTxt),
       h("span", { class: "au-item-frase" }, frase),
       h("span", { class: "au-item-meta" },
         h("span", { class: "pilula pilula-neutra au-item-gat" }, ui.icone(g ? g.icone : "raio"), L.rotuloGatilho(it.gatilho, vv)),
-        etiquetas, exec, errs, espera, ultima)),
+        etiquetas, exec, errs, espera, ultima),
+      h("span", { class: "au-item-rodape" }, taxa)),
     btMais);
   return li;
 }
@@ -476,12 +547,16 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P) {
   const todas = L.modelosDaVertical(vertical);
   const iaOff = L.iaDesligada(dados);
   let categoria = "todas";
+  let termo = "";
 
   const cartao = (m, primeiro) => {
     const selo = L.seloModelo(m, vertical);
     const acTpl = m.auto.acoes.find(a => a.tipo === "enviar_template");
     const acMsg = m.auto.acoes.find(a => a.tipo === "enviar_mensagem");
     const canal = L.canalDaReceita(m);
+    // «o que faz», em uma frase, já com as etapas e etiquetas desta empresa (item 55)
+    let fraz = "";
+    try { fraz = L.descrever(L.aplicarModelo(m, dados.base, vv), dados.base, vv); } catch { fraz = ""; }
     // no cartão em destaque que manda mensagem: como o cliente vai receber (texto com um exemplo)
     const previa = primeiro && selo && (acTpl || acMsg) ? h("figure", { class: "au-modelo-previa" },
       h("figcaption", { class: "rotulo" }, "Como chega no WhatsApp"),
@@ -498,6 +573,7 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P) {
           L.usaIA(m) ? h("span", { class: "pilula pilula-prim", title: "Usa uma sugestão da cota de IA do mês a cada execução." }, ui.icone("ia"), "usa IA") : null)),
       h("h3", null, L.tituloModelo(m, vv)),
       h("p", { class: "sub" }, L.textoModelo(m, vv)),
+      fraz ? h("p", { class: "au-modelo-frase" }, ui.icone("raio"), h("span", null, fraz)) : null,
       tempo,
       previa,
       acTpl && !temModeloAprovado ? h("p", { class: "au-modelo-nota" }, ui.icone("info"), "Precisa de um modelo aprovado na Meta; dá para deixar pronta e ligar depois.") : null,
@@ -508,12 +584,23 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P) {
           on: { click: () => ctx.navegar(`#/automacoes/nova?modelo=${encodeURIComponent(m.id)}`) } }, "Usar receita")));
   };
 
+  const vazioBusca = h("div", { class: "au-modelos-vazio", hidden: true });
+  const statusBusca = h("p", { class: "sr-only", role: "status", "aria-live": "polite" });
   const desenhar = () => {
     ui.limpar(grade);
-    const vis = todas.filter(m => categoria === "todas" || m.categoria === categoria);
-    vis.forEach((m, i) => grade.appendChild(cartao(m, i === 0 && categoria === "todas")));
-    grade.classList.toggle("au-modelos-filtrada", categoria !== "todas");
+    const vis = L.filtrarModelos(todas.filter(m => categoria === "todas" || m.categoria === categoria), termo, vv);
+    vis.forEach((m, i) => grade.appendChild(cartao(m, i === 0 && categoria === "todas" && !termo)));
+    grade.classList.toggle("au-modelos-filtrada", categoria !== "todas" || !!termo);
+    vazioBusca.hidden = vis.length > 0;
+    ui.limpar(vazioBusca);
+    if (!vis.length) vazioBusca.appendChild(ui.vazio({ tipo: "sem_resultado", titulo: "Nenhuma receita com essas palavras.", texto: "Tente «mensagem», «tarefa», «IA» ou «orçamento».",
+      acao: { rotulo: "Limpar busca", fn: () => { campoBusca.value = ""; termo = ""; desenhar(); campoBusca.focus(); } } }));
+    statusBusca.textContent = termo ? `${vis.length} ${vis.length === 1 ? "receita encontrada" : "receitas encontradas"}.` : "";
   };
+  // busca nas receitas (item 55): título, texto, tipo de passo e gatilho, sem acento
+  const campoBusca = h("input", { type: "search", placeholder: "Buscar receita: mensagem, tarefa, orçamento…", "aria-label": "Buscar receita", autocomplete: "off" });
+  campoBusca.addEventListener("input", ui.debounce(() => { termo = campoBusca.value; desenhar(); }, 150));
+  const busca = h("label", { class: "busca au-modelos-busca" }, ui.icone("busca"), campoBusca);
   const barra = h("div", { class: "au-chips au-modelos-filtro", role: "radiogroup", "aria-label": "Tipo de receita" });
   for (const [k, rot] of L.CATEGORIAS_MODELO) {
     const n = todas.filter(m => k === "todas" || m.categoria === k).length;
@@ -527,8 +614,9 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P) {
   return h("section", { class: "au-sec", "aria-labelledby": "au-mod" },
     h("div", { class: "au-sec-cab" },
       h("h2", { class: "titulo-sec", id: "au-mod" }, qtdItens ? "Receitas prontas" : "Comece por uma receita"),
-      h("span", { class: "rotulo" }, "revise e salve em 1 minuto")),
-    barra, grade);
+      h("span", { class: "rotulo" }, `${todas.length} receitas · revise e salve em 1 minuto`)),
+    h("div", { class: "au-modelos-ferramentas" }, busca, barra),
+    grade, vazioBusca, statusBusca);
 }
 
 /** Mini linha do tempo de uma receita com esperas: «Na hora · Esperar 1 dia · Mensagem · …». */

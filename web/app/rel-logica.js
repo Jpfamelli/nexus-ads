@@ -764,3 +764,143 @@ export function textoChipRelatorios({ preset = 30, de = null, ate = null, aba = 
   const per = preset === "per" && de && ate ? `${curto(de)} a ${curto(ate)}` : `Últimos ${[7, 30, 90].includes(Number(preset)) ? Number(preset) : 30} dias`;
   return `${per} · ${nome || (aba === "atendimento" ? "Todos os departamentos" : "Todos os funis")}`;
 }
+
+/* ============================================================ 10. PLANO 50 (frente F) — Anúncios e Relatórios: tendência, funil por plataforma,
+   calor semanal, sparklines, semáforo do Radar e exportação. Tudo PURO (as telas só desenham). */
+
+/** Série do gráfico de tendência: por dia da janela, investimento (Ads), conversões da plataforma e o que o CRM registrou
+    (conversas, agendamentos, fechamentos, receita) — conversas pela data da conversa, as outras pela data do próprio evento. */
+export function serieTendencia(M, { dias = 30, plat = "" } = {}) {
+  const { de, ate } = janela(M, dias);
+  const sd = M.porDia(plat);
+  const conv = new Array(M.DIAS).fill(0);
+  for (const Ld of M.LEADS) { if (!Ld.plat || (plat && Ld.plat !== plat)) continue; if (Ld.i >= 0 && Ld.i < conv.length) conv[Ld.i]++; }
+  const out = [];
+  for (let i = de; i <= ate; i++) {
+    if (i < 0) continue;
+    out.push({ i, gasto: (sd.meta[i] || 0) + (sd.google[i] || 0), convAds: sd.conv[i] || 0, conversas: conv[i] || 0, agendadas: sd.ag[i] || 0, fecharam: sd.fe[i] || 0, receita: sd.rec[i] || 0 });
+  }
+  return out;
+}
+
+/** Funil anúncio → conversa → agenda → venda por plataforma: 4 etapas com a taxa entre cada par (null sem base). Só plataformas com movimento. */
+export function funilPorPlataforma(M, { dias = 30 } = {}) {
+  const { de, ate } = janela(M, dias);
+  const taxa = (n, d) => (d > 0 ? Math.round(n / d * 1000) / 10 : null);
+  return ["meta", "google"].map(p => {
+    const t = M.consolidar(M.linhasDe(de, ate, { plat: p })), c = M.crmTot(de, ate, { plat: p });
+    const etapas = [
+      { id: "convAds", rotulo: "Conversões do anúncio", v: Number(t.conversoes) || 0 },
+      { id: "conversas", rotulo: "Conversas no CRM", v: Number(c.conversas) || 0 },
+      { id: "agendadas", rotulo: "Agendaram", v: Number(c.agendadas) || 0 },
+      { id: "fecharam", rotulo: "Fecharam", v: Number(c.fecharam) || 0 },
+    ];
+    const taxas = etapas.slice(1).map((e, k) => ({ de: etapas[k].id, para: e.id, pct: taxa(e.v, etapas[k].v) }));
+    return { plat: p, nome: nomePlat(p), gasto: Number(t.gasto) || 0, receita: Number(c.receita) || 0, etapas, taxas, max: Math.max(...etapas.map(e => e.v), 0) };
+  }).filter(x => x.gasto > 0 || x.etapas.some(e => e.v > 0));
+}
+
+/** Mapa de calor dia da semana × semana (nx_dados não traz a hora da conversa): matriz[dow 0..6][semana], semanas da mais antiga à atual. */
+export function calorSemanal(M, { dias = 30, plat = "", campo = "conversas" } = {}) {
+  const serie = serieTendencia(M, { dias, plat });
+  if (!serie.length) return { matriz: Array.from({ length: 7 }, () => []), semanas: [], max: 0, pico: null, campo };
+  const dow = i => M.dataDe(i).getDay();
+  // a 1ª coluna começa na segunda-feira da semana do 1º dia; cada coluna é uma semana corrida
+  const primeiro = serie[0].i, deslocPrimeiro = (dow(primeiro) + 6) % 7;
+  const nSem = Math.ceil((serie.length + deslocPrimeiro) / 7);
+  const matriz = Array.from({ length: 7 }, () => new Array(nSem).fill(0));
+  const semanas = Array.from({ length: nSem }, (_, k) => { const ini = primeiro - deslocPrimeiro + k * 7; const fim = Math.min(ini + 6, serie[serie.length - 1].i); return { ini, fim, rotulo: ddmmDe(M, Math.max(ini, primeiro)), rotuloFim: ddmmDe(M, fim) }; });
+  let max = 0, pico = null;
+  for (const d of serie) {
+    const k = Math.floor((d.i - primeiro + deslocPrimeiro) / 7), w = dow(d.i), v = Number(d[campo]) || 0;
+    matriz[w][k] += v;
+    if (matriz[w][k] > max) { max = matriz[w][k]; pico = { dow: w, semana: k, v: matriz[w][k] }; }
+  }
+  // dia da semana mais forte somando todas as semanas (a frase do cartão)
+  const porDow = matriz.map(l => l.reduce((s, x) => s + x, 0)), topo = Math.max(...porDow);
+  const melhorDow = topo > 0 ? porDow.indexOf(topo) : null;
+  return { matriz, semanas, max, pico, campo, porDow, melhorDow };
+}
+const ddmmDe = (M, i) => (typeof M.ddmm === "function" ? M.ddmm(i) : String(i));
+
+/** Pontos de uma sparkline (polilinha) numa caixa w×h: y invertido, 1 ponto vira traço reto; sem números finitos → "". */
+export function pontosSparkline(valores = [], w = 96, h = 28, folga = 2) {
+  const v = (valores || []).map(x => (x == null || x === "" || !Number.isFinite(+x) ? null : +x));   // null/vazio é buraco, não zero
+  const uteis = v.filter(x => x !== null);
+  if (!uteis.length) return "";
+  const min = Math.min(...uteis), max = Math.max(...uteis), amp = max - min || 1, n = v.length;
+  const x = k => (n > 1 ? folga + k / (n - 1) * (w - folga * 2) : w / 2);
+  const y = val => h - folga - (val - min) / amp * (h - folga * 2);
+  return v.map((val, k) => (val === null ? null : `${Math.round(x(k) * 10) / 10},${Math.round(y(val) * 10) / 10}`)).filter(Boolean).join(" ");
+}
+/** Valores de uma chave numa lista de dias ({d, criados…}) — a entrada da sparkline dos KPIs; vazio quando a chave não existe. */
+export function valoresSerie(lista = [], chave) {
+  if (!Array.isArray(lista) || !lista.length || !lista.some(x => x && x[chave] != null)) return [];
+  return lista.map(x => Number(x && x[chave]) || 0);
+}
+/** Melhor dia de uma série ({d, <campo>}): {d, v} ou null quando tudo é zero. */
+export function melhorDia(serie = [], campo) {
+  let melhor = null;
+  for (const x of serie || []) { const v = Number(x && x[campo]) || 0; if (v > 0 && (!melhor || v > melhor.v)) melhor = { d: x.d, v }; }
+  return melhor;
+}
+/** Faixas do dia do mapa de calor (madrugada/manhã/tarde/noite): soma e a faixa mais forte. */
+export function faixasCalor(m) {
+  const FAIXAS = [["madrugada", 0], ["manhã", 6], ["tarde", 12], ["noite", 18]];
+  const soma = FAIXAS.map(([nome, ini]) => ({ nome, ini, fim: ini + 5, total: (m || []).reduce((s, lin) => s + (lin || []).slice(ini, ini + 6).reduce((a, b) => a + (+b || 0), 0), 0) }));
+  const total = soma.reduce((s, f) => s + f.total, 0);
+  const forte = total ? soma.reduce((a, b) => (b.total > a.total ? b : a)) : null;
+  return { faixas: soma.map(f => ({ ...f, pct: total ? Math.round(f.total / total * 100) : 0 })), total, forte };
+}
+
+/** Nome do arquivo exportado: orbita-<base>-<de>-a-<ate>.<ext>, só letras/números/traço. */
+export function nomeArquivoExport(base, de, ate, ext = "png") {
+  const limpo = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return `orbita-${limpo(base) || "grafico"}${de ? `-${limpo(de)}` : ""}${ate ? `-a-${limpo(ate)}` : ""}.${limpo(ext) || "png"}`;
+}
+/** Propriedades de estilo que o PNG precisa carregar dentro do SVG (cores vêm de classes do tema). */
+export const ESTILOS_SVG_EXPORT = Object.freeze(["fill", "stroke", "stroke-width", "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "opacity", "font-family", "font-size", "font-weight", "text-anchor", "visibility"]);
+
+/** Explicação em linguagem simples de cada regra do radar: o que é, por que importa e o que fazer. */
+export function explicarRegra(id) {
+  const E = {
+    r1: { oQue: "Cada conversa vinda desta campanha está custando mais do que a meta.", porque: "O dinheiro rende menos: mais investimento para o mesmo número de pessoas.", acao: "Revise o público e o anúncio; se não melhorar em alguns dias, pause e redistribua a verba." },
+    r2: { oQue: "A campanha gastou e ninguém chamou.", porque: "Pode ser anúncio sem botão de WhatsApp, público errado ou link quebrado.", acao: "Abra o anúncio como cliente e teste o caminho até a conversa." },
+    r3: { oQue: "Poucas pessoas clicam neste criativo em relação a quantas o veem.", porque: "A imagem ou o texto não chamam a atenção; o Meta cobra mais caro por isso.", acao: "Troque a imagem ou a primeira frase e compare com o criativo que vai melhor." },
+    r4: { oQue: "As mesmas pessoas já viram este criativo muitas vezes.", porque: "Anúncio repetido cansa e passa a ser ignorado — e o custo sobe.", acao: "Publique uma variação nova e deixe esta descansar." },
+    ritmo: { oQue: "No ritmo atual o mês fecha fora do orçamento combinado.", porque: "Gastar além do planejado no começo deixa o fim do mês sem verba.", acao: "Ajuste o orçamento diário das campanhas para voltar ao ritmo." },
+    integracao: { oQue: "O Órbita parou de conseguir ler os números desta plataforma.", porque: "Sem leitura, os relatórios e o radar ficam cegos a partir daquela hora.", acao: "Refaça a conexão em Ajustes de anúncios." },
+  };
+  return E[id] || { oQue: "O radar encontrou algo fora do combinado.", porque: "Vale olhar antes que vire custo.", acao: "Abra a campanha e confira os números." };
+}
+
+/**
+ * Semáforo do Radar: vermelho (crítico ativo), amarelo (atenção ativa), verde (nada ativo, COM números para vigiar) e neutro
+ * (nada ativo e ainda sem número de anúncio: não há o que avaliar, então não acende verde); com contagens por gravidade e a frase para leigo.
+ * semaforoRadar(R, {semDados}) — `semDados` = L.semAnuncios(M).
+ */
+export function semaforoRadar(R, { semDados = false } = {}) {
+  const ativos = ordenarRadar(R).filter(x => x.ativo);
+  const cont = { critico: 0, alerta: 0, info: 0 };
+  for (const x of ativos) cont[nivelSev(x.sev)]++;
+  const nivel = cont.critico ? "vermelho" : cont.alerta ? "amarelo" : semDados ? "neutro" : "verde";
+  const n = (q, um, varios) => `${q} ${q === 1 ? um : varios}`;
+  const partes = [];
+  if (cont.critico) partes.push(n(cont.critico, "problema crítico", "problemas críticos"));
+  if (cont.alerta) partes.push(n(cont.alerta, "ponto de atenção", "pontos de atenção"));
+  if (cont.info) partes.push(n(cont.info, "aviso informativo", "avisos informativos"));
+  const frase = nivel === "neutro" ? "Ainda sem números de anúncio para avaliar."
+    : nivel === "verde" ? "Tudo dentro do combinado: nenhuma campanha precisa de ajuste agora."
+    : nivel === "vermelho" ? `Precisa de ação hoje: ${partes.join(" e ")}.` : `Vale olhar esta semana: ${partes.join(" e ")}.`;
+  const primeiro = ativos[0] || null;
+  const acao = nivel === "neutro" ? "O radar começa a vigiar assim que as contas de anúncio estiverem conectadas e a primeira leitura chegar."
+    : !primeiro ? "Continue acompanhando; o radar avisa no WhatsApp quando algo mudar."
+    : primeiro.tipo === "conexao" ? explicarRegra("integracao").acao : explicarRegra(primeiro.ref.regra).acao;
+  return { nivel, cor: nivel === "vermelho" ? "ruim" : nivel === "amarelo" ? "aten" : nivel === "neutro" ? "neutro" : "ok", contagens: cont, ativos: ativos.length, frase, acao,
+    primeiro: primeiro ? { tipo: primeiro.tipo, nome: primeiro.ref.nome, regra: primeiro.tipo === "conexao" ? "integracao" : primeiro.ref.regra } : null };
+}
+
+/** Filtro da lista do Radar: "todos" | "ativos" | "resolvidos". */
+export function filtrarRadar(itens = [], filtro = "todos") {
+  return filtro === "ativos" ? itens.filter(x => x.ativo) : filtro === "resolvidos" ? itens.filter(x => !x.ativo) : itens.slice();
+}

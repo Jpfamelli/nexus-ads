@@ -52,10 +52,23 @@ async function secoesExternas(ctx) {
 
 function secoesProprias() {
   return [
-    { id: "perfil", titulo: "Perfil", grupo: "Você", papelMin: null, icone: "usuario", semCliente: true, montar: secaoPerfil },
-    { id: "usuarios", titulo: "Usuários e convites", grupo: "Equipe", papelMin: "admin", icone: "convidar", montar: secaoUsuarios },
+    { id: "perfil", titulo: "Perfil", desc: "Seu nome, celular e senha", grupo: "Você", papelMin: null, icone: "usuario", semCliente: true, montar: secaoPerfil },
+    { id: "usuarios", titulo: "Usuários e convites", desc: "Quem entra e com qual papel", grupo: "Equipe", papelMin: "admin", icone: "convidar", montar: secaoUsuarios },
     ...secoesMarcaPlano(),
   ];
+}
+
+/** Agrupa as seções visíveis na ordem de GRUPOS: [{grupo, itens}] (o que a navegação lateral desenha). */
+export function agruparSecoes(vistas, grupos = GRUPOS) {
+  const ordenadas = [...(vistas || [])].sort((a, b) => (grupos.indexOf(a.grupo) + 1 || 99) - (grupos.indexOf(b.grupo) + 1 || 99));
+  const out = [];
+  for (const s of ordenadas) {
+    const nome = s.grupo || "Outros";
+    let g = out[out.length - 1];
+    if (!g || g.grupo !== nome) out.push(g = { grupo: nome, itens: [] });
+    g.itens.push(s);
+  }
+  return out;
 }
 
 function visivel(ctx, s) {
@@ -74,20 +87,25 @@ export async function montar(ctx) {
   desmontar();
   const { ui } = ctx;
   const h = ui.h;
+  ui.carregarCss("config");
   ctx.titulo("Configurações");
   const todas = [...secoesProprias(), ...(await secoesExternas(ctx))];
-  const vistas = todas.filter(s => visivel(ctx, s));
-  vistas.sort((a, b) => (GRUPOS.indexOf(a.grupo) + 1 || 99) - (GRUPOS.indexOf(b.grupo) + 1 || 99));
+  const grupos = agruparSecoes(todas.filter(s => visivel(ctx, s)));
+  const vistas = grupos.flatMap(g => g.itens);
   const pedida = ctx.rota.partes[0] || null;
   const atual = vistas.find(s => s.id === pedida) || (pedida ? null : vistas[0]);
 
+  // navegação lateral (item 56): grupo, ícone, título e uma linha dizendo o que a seção faz; o ponto de pendência entra depois
   const lista = h("nav", { class: "cfg-lista", "aria-label": "Seções das configurações" });
-  let grupo = null;
-  for (const s of vistas) {
-    if (s.grupo !== grupo) { grupo = s.grupo; lista.appendChild(h("p", { class: "rotulo cfg-grupo" }, grupo || "Outros")); }
-    const emObra = !ctx.shell.prontos.CONFIG_PRONTAS.includes(s.id);
-    lista.appendChild(h("a", { class: "cfg-nav-item", href: `#/config/${s.id}`, "aria-current": atual && atual.id === s.id ? "page" : null },
-      ui.icone(s.icone || "engrenagem"), h("span", null, s.titulo), emObra ? h("span", { class: "nav-selo" }, "obra") : null));
+  for (const g of grupos) {
+    lista.appendChild(h("p", { class: "rotulo cfg-grupo" }, g.grupo));
+    for (const s of g.itens) {
+      const emObra = !ctx.shell.prontos.CONFIG_PRONTAS.includes(s.id);
+      lista.appendChild(h("a", { class: "cfg-nav-item", href: `#/config/${s.id}`, "aria-current": atual && atual.id === s.id ? "page" : null },
+        h("span", { class: "cfg-nav-ic", "aria-hidden": "true" }, ui.icone(s.icone || "engrenagem")),
+        h("span", { class: "cfg-nav-txt" }, h("span", { class: "cfg-nav-tit" }, s.titulo), s.desc ? h("small", { class: "cfg-nav-desc" }, s.desc) : null),
+        emObra ? h("span", { class: "nav-selo" }, "obra") : null));
+    }
   }
   // M32: o mesmo estado do checklist do Início vira um ponto com o número de passos pendentes ao lado de cada seção (só admin; é um complemento)
   const minhaMontagem = ++_montagemCfg;
@@ -102,8 +120,9 @@ export async function montar(ctx) {
         const n = pend[id];
         if (!n) continue;
         // só o título da seção, lido ANTES de pôr o selo: senão o leitor de tela ouve o número duas vezes («Números3, 3 passos»)
-        const nome = (a.querySelector("span:not(.nav-selo)") || a).textContent.trim();
+        const nome = (a.querySelector(".cfg-nav-tit") || a).textContent.trim();
         a.appendChild(h("span", { class: "nav-selo cfg-pend", title: `${n} ${n === 1 ? "passo pendente" : "passos pendentes"} no checklist` }, String(n)));
+        a.dataset.pend = String(n);
         a.setAttribute("aria-label", `${nome}, ${n} ${n === 1 ? "passo pendente" : "passos pendentes"}`);
       }
     }).catch(() => { /* sem o checklist o menu fica como estava */ });
@@ -410,10 +429,45 @@ async function secaoUsuarios(ctx, alvo) {
    ============================================================ */
 function secoesMarcaPlano() {
   return [
-    { id: "marca", titulo: "Marca e tema", grupo: "Marca", icone: "pincel", semCliente: true, visivel: podeMarca, montar: secaoMarca },
-    { id: "dominio", titulo: "Domínio próprio", grupo: "Marca", icone: "globo", conta: "gestor", montar: secaoDominio },
-    { id: "plano", titulo: "Plano e uso", grupo: "Plano", icone: "cartao", papelMin: "admin", montar: secaoPlano },
+    { id: "marca", titulo: "Marca e tema", desc: "Logo, cores e a tela de entrada", grupo: "Marca", icone: "pincel", semCliente: true, visivel: podeMarca, montar: secaoMarca },
+    { id: "dominio", titulo: "Domínio próprio", desc: "O app no seu endereço, com a sua marca", grupo: "Marca", icone: "globo", conta: "gestor", montar: secaoDominio },
+    { id: "plano", titulo: "Plano e uso", desc: "Limites do plano e o uso do mês", grupo: "Plano", icone: "cartao", papelMin: "admin", montar: secaoPlano },
   ];
+}
+
+/**
+ * Mini tela de entrada para a prévia da Marca (item 56): recebe as mesmas variáveis do tema que o mini-app e os textos do login.
+ * Devolve { el, atualizar(ef, {logo}) }. Tudo dentro é decoração (role=img no contêiner): nada aqui é um controle de verdade.
+ */
+export function montarPreviaLogin(ui) {
+  const h = ui.h;
+  const logo = h("span", { class: "pv-login-logo" });
+  const prod = h("b", { class: "pv-login-prod" });
+  const tit = h("p", { class: "pv-login-tit" });
+  const txt = h("p", { class: "pv-login-txt" });
+  const rod = h("p", { class: "pv-login-rodape" });
+  const el = h("div", { class: "pv-login", role: "img", "aria-label": "Pré-visualização da tela de entrada com a marca" },
+    h("div", { class: "pv-login-palco", "aria-hidden": "true" },
+      h("div", { class: "pv-login-marca" }, logo, prod),
+      tit, txt,
+      h("div", { class: "pv-login-cartao" },
+        h("span", { class: "pv-login-campo" }, h("small", null, "E-mail"), h("span", null, "voce@suaempresa.com.br")),
+        h("span", { class: "pv-login-campo" }, h("small", null, "Senha"), h("span", null, "••••••••")),
+        h("span", { class: "bt bt-prim pv-login-bt" }, "Entrar"),
+        h("span", { class: "pv-link" }, "Esqueci a senha")),
+      rod));
+  return {
+    el,
+    atualizar(ef = {}, { logo: lg = null } = {}) {
+      ui.limpar(logo);
+      logo.append(lg ? h("img", { src: lg, alt: "" }) : h("svg", { class: "pv-marca", viewBox: "0 0 48 48", "aria-hidden": "true" }, h("use", { href: "#marca-orbita" })));
+      prod.textContent = ef.produto || "";
+      tit.textContent = ef.login_titulo || "Anúncio, conversa e venda na mesma órbita.";
+      txt.textContent = ef.login_texto || "Entre com o e-mail e a senha que você recebeu.";
+      rod.textContent = ef.suporte_wa ? "Precisa de ajuda? Fale com o suporte pelo WhatsApp." : "";
+      rod.hidden = !ef.suporte_wa;
+    },
+  };
 }
 
 const EQUIPE = ["gestor", "super"];
@@ -756,6 +810,13 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
         h("div", { class: "pv-botoes" },
           h("span", { class: "bt bt-prim" }, "Agendar"), h("span", { class: "bt bt-sec" }, "Transferir"),
           h("span", { class: "pv-link" }, "Ver histórico"), h("span", { class: "pilula pilula-ok" }, "Fechou"), h("span", { class: "pilula pilula-sec" }, "Meta")))));
+  // a mesma marca na tela de entrada (item 56): alterna com o mini-app; as duas prévias recebem as variáveis do tema
+  const pvLogin = montarPreviaLogin(ui);
+  pvLogin.el.hidden = true;
+  const segPrevia = ui.segmentado({ tipo: "abas", rotulo: "Qual prévia mostrar", valor: "app", classe: "marca-seg",
+    opcoes: [{ valor: "app", rotulo: "App", icone: "inicio" }, { valor: "entrada", rotulo: "Tela de entrada", icone: "cadeado" }],
+    aoMudar: v => { previa.hidden = v !== "app"; pvLogin.el.hidden = v !== "entrada"; } });
+  const segPreviaEl = segPrevia && segPrevia.nodeType ? segPrevia : segPrevia.el;     // ui.segmentado devolve o elemento (ou {el}, nas versões anteriores)
   const avisos = h("div", { class: "avisos-marca", "aria-live": "polite" });
   const estado = h("small", { class: "fraco marca-estado", "aria-live": "polite" });
 
@@ -777,6 +838,8 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     pvLogo.append(lg ? h("img", { src: lg, alt: "" }) : h("svg", { class: "pv-marca", viewBox: "0 0 48 48", "aria-hidden": "true" }, h("use", { href: "#marca-orbita" })));
     pvProduto.textContent = ef.produto;
     pvEsquema.textContent = t.escuro ? "Palco escuro" : "Tema claro";
+    T.aplicarTema(t.vars, pvLogin.el);
+    pvLogin.atualizar(ef, { logo: lg });
     ui.limpar(avisos);
     if (t.avisos.length) for (const a of t.avisos) avisos.append(h("div", { class: "aviso aviso-aten" }, ui.icone("alerta"), h("p", null, a.texto)));
     else avisos.append(h("div", { class: "aviso aviso-ok" }, ui.icone("check"), h("p", null, "Contraste conferido: textos, links e botões legíveis.")));
@@ -845,7 +908,8 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     soTema ? null : cartao("Tela de entrada", h("span", null, "O que aparece antes do login, no seu domínio ou pelo link ", h("span", { class: "mono nowrap" }, "/app/?org=" + (orgInfo ? orgInfo.slug : "")), "."), formEntrada));
   const direita = h("div", { class: "marca-previa-env" },
     h("div", { class: "linha linha-entre" }, h("p", { class: "rotulo" }, "Pré-visualização ao vivo"), pvEsquema),
-    previa, avisos,
+    segPreviaEl,
+    previa, pvLogin.el, avisos,
     h("div", { class: "linha marca-acoes" }, btApp, btPadrao, h("span", { class: "marca-espaco" }), btSalvar),
     estado);
   ui.limpar(alvo);

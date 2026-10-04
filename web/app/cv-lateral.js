@@ -27,8 +27,74 @@ export function criarLateral(A) {
     return (rotulos && rotulos[k]) || k.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
   }
 
-  function secao(titulo, acao, ...filhos) {
-    return h("section", { class: "cvt-sec" }, h("div", { class: "cvt-sec-cab" }, h("h3", { class: "rotulo" }, titulo), acao || null), ...filhos);
+  /* plano 50 · 35: seções recolhíveis (<details>) com o estado lembrado por navegador; a ação da seção fica fora do <summary> para não recolher ao clicar */
+  const lerAberta = id => { try { return localStorage.getItem(`nx-cv-lat-${id}`) !== "0"; } catch { return true; } };
+  const gravarAberta = (id, aberta) => { try { localStorage.setItem(`nx-cv-lat-${id}`, aberta ? "1" : "0"); } catch { /* sem storage */ } };
+  function secao({ id, titulo, acao = null, contador = null }, ...filhos) {
+    // tudo pelo h(): append(null) escreveria «null» na tela
+    const det = h("details", { class: "cvt-sec", dataset: { sec: id }, open: lerAberta(id) },
+      h("summary", { class: "cvt-sec-cab" }, h("h3", { class: "rotulo" }, titulo, contador !== null && contador !== undefined ? h("span", { class: "cvt-sec-n dado" }, String(contador)) : null),
+        ui.icone("seta-baixo", "cvt-sec-chev")),
+      acao ? h("div", { class: "cvt-sec-acao" }, acao) : null,
+      h("div", { class: "cvt-sec-corpo" }, ...filhos));
+    det.addEventListener("toggle", () => gravarAberta(id, det.open));
+    return det;
+  }
+
+  /* ---------------- resumo do contato (35): contadores do que nx_cv_ver já traz + mini-gráfico das mensagens carregadas
+     Linhas compactas (número · rótulo · detalhe): a lateral tem 300 px e o ui.kpi (frente A) é um cartão de painel, largo demais para três lado a lado. */
+  function kpi({ rotulo, valor, detalhe, ajuda, tom }) {
+    return h("div", { class: "cvt-kpi", dataset: { tom: tom || "neutro" }, title: ajuda || null },
+      h("b", { class: "cvt-kpi-v" }, String(valor)), h("span", { class: "cvt-kpi-r" }, rotulo), detalhe ? h("small", { class: "cvt-kpi-d dado" }, detalhe) : null);
+  }
+  function blocoResumoContato(ver) {
+    const r = L.resumoContato(ver);
+    const neg = (A.ctx.vocab && A.ctx.vocab.negocios) || "Negócios";
+    const kpis = h("div", { class: "cvt-kpis", role: "group", "aria-label": "Resumo do contato" },
+      kpi({ rotulo: r.negocios === 1 ? ((A.ctx.vocab && A.ctx.vocab.negocio) || "Negócio") : neg, valor: r.negocios, detalhe: r.valor ? ui.brl(r.valor, { centavos: false }) : null, ajuda: `${neg} em aberto deste contato`, tom: r.negocios ? "prim" : "neutro" }),
+      kpi({ rotulo: r.atendimentos === 1 ? "Atendimento" : "Atendimentos", valor: r.atendimentos, ajuda: "Atendimentos deste contato (este incluído)" }),
+      kpi({ rotulo: r.tarefas === 1 ? "Tarefa" : "Tarefas", valor: r.tarefas, detalhe: r.atrasadas ? `${r.atrasadas} atrasada${r.atrasadas === 1 ? "" : "s"}` : null, ajuda: "Tarefas abertas ligadas ao contato", tom: r.atrasadas ? "ruim" : "neutro" }));
+    return h("section", { class: "cvt-resumo-ct" }, kpis, blocoInteracoes(), blocoAtalhos(ver));
+  }
+  /** Mensagens por dia (últimos 7) a partir do que já está carregado — honesto: o servidor não devolve essa série. */
+  function blocoInteracoes() {
+    const dias = L.interacoesPorDia(A.msgs || []);
+    const total = dias.reduce((s, d) => s + d.entrada + d.saida, 0);
+    const resumo = total ? `${total} ${total === 1 ? "mensagem" : "mensagens"} nos últimos 7 dias (nas mensagens carregadas)` : "Sem mensagens nos últimos 7 dias nas mensagens carregadas";
+    const caixa = h("div", { class: "cvt-mini-caixa" });
+    const G = A.G;
+    if (G && typeof G.sparkline === "function") {
+      try { G.sparkline(caixa, { valores: dias.map(d => d.entrada + d.saida), area: true, rotulo: resumo }); }
+      catch { ui.limpar(caixa); caixa.appendChild(barrasSimples(dias, resumo)); }
+    } else caixa.appendChild(barrasSimples(dias, resumo));
+    const tabela = h("table", { class: "cvt-mini-tab" }, h("caption", { class: "sr-only" }, "Mensagens por dia"),
+      h("thead", null, h("tr", null, h("th", { scope: "col" }, "Dia"), h("th", { scope: "col", class: "num" }, "Cliente"), h("th", { scope: "col", class: "num" }, "Equipe"))),
+      h("tbody", null, dias.map(d => h("tr", null, h("th", { scope: "row" }, d.rotulo), h("td", { class: "num" }, String(d.entrada)), h("td", { class: "num" }, String(d.saida))))));
+    return h("div", { class: "cvt-mini" },
+      h("div", { class: "cvt-mini-cab" }, h("span", { class: "rotulo" }, "Mensagens · 7 dias"), h("span", { class: "cvt-mini-total dado" }, String(total))),
+      caixa,
+      h("p", { class: "sr-only" }, resumo),
+      h("details", { class: "cvt-mini-det" }, h("summary", null, "Ver números"), tabela));
+  }
+  function barrasSimples(dias, resumo) {
+    const max = Math.max(1, ...dias.map(d => d.entrada + d.saida));
+    return h("div", { class: "cvt-barras", role: "img", "aria-label": resumo }, dias.map((d, i) => {
+      const tot = d.entrada + d.saida;
+      return h("span", { class: "cvt-barra", style: { "--h": `${Math.round((tot / max) * 100)}%`, "--in": `${tot ? Math.round((d.entrada / tot) * 100) : 0}%`, "--i": String(i) },
+        title: `${d.rotulo}: ${d.entrada} do cliente · ${d.saida} da equipe`, dataset: { hoje: i === dias.length - 1 ? "1" : "0", vazio: tot ? "0" : "1" } },
+        h("small", null, d.rotulo.slice(0, 1).toUpperCase()));
+    }));
+  }
+  /** Atalhos: ligar, copiar o protocolo, agenda (quando a empresa tem o módulo) e a ficha completa. */
+  function blocoAtalhos(ver) {
+    const ct = ver.contato || {}, conv = ver.conversa || {};
+    const atalho = (icone, rotulo, props) => h(props.href ? "a" : "button", { class: "cvt-atalho", ...(props.href ? {} : { type: "button" }), ...props }, ui.icone(icone), h("span", null, rotulo));
+    const temCrm = !!(A.ctx.temModulo && A.ctx.temModulo("crm"));
+    return h("div", { class: "cvt-atalhos", role: "group", "aria-label": "Atalhos" },
+      ct.telefone ? atalho("telefone", "Ligar", { href: `tel:+${String(ct.telefone).replace(/\D/g, "")}`, title: `Ligar para ${ui.telBR(ct.telefone)}` }) : null,
+      conv.protocolo ? atalho("copiar", "Protocolo", { title: `Copiar o protocolo ${conv.protocolo}`, on: { click: () => ui.copiar(conv.protocolo, { aviso: "Protocolo copiado." }) } }) : null,
+      temCrm ? atalho("calendario", "Agenda", { href: "#/agenda", title: "Abrir a agenda" }) : null,
+      ct.id ? atalho("contato", "Ficha", { title: "Abrir a ficha completa", on: { click: () => A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }) } }) : null);
   }
 
   function editarNome(ct, caixa) {
@@ -96,8 +162,8 @@ export function criarLateral(A) {
           aoMudar: ids => A.acoes.etiquetas(ids), podeCriar: nome => A.acoes.criarEtiqueta(nome) })
       : h("div", { class: "linha" }, (conv.etiquetas || []).map(id => ((A.base && A.base.etiquetas) || []).find(e => e.id === id)).filter(Boolean).map(e => ui.etiqueta(e)));
 
-    return [topo, h("section", { class: "cvt-sec" }, anuncio, anuncio ? h("div", { class: "cvt-esp" }) : null, dados),
-      secao("Etiquetas", null, etq)];
+    return [topo, blocoResumoContato(ver), secao({ id: "dados", titulo: "Dados" }, anuncio, anuncio ? h("div", { class: "cvt-esp" }) : null, dados),
+      secao({ id: "etiquetas", titulo: "Etiquetas", contador: (conv.etiquetas || []).length || null }, etq)];
   }
 
   function blocoNegocios(ver) {
@@ -128,7 +194,7 @@ export function criarLateral(A) {
       }
       return wrap;
     });
-    return secao(A.ctx.vocab.negocios || "Negócios", novo,
+    return secao({ id: "negocios", titulo: A.ctx.vocab.negocios || "Negócios", acao: novo, contador: itens.length || null },
       itens.length ? h("div", null, itens) : h("p", { class: "cvt-vazio" }, "Nada em aberto para este contato."));
   }
 
@@ -138,15 +204,18 @@ export function criarLateral(A) {
     const itens = tarefas.map(t => {
       const idc = `cvt-t-${t.id}`;
       const chk = h("input", { type: "checkbox", id: idc, disabled: !A.podeEscrever, "aria-label": `Concluir: ${t.titulo}` });
+      const linha = h("div", { class: "cvt-tar" });
       chk.addEventListener("change", async () => {
+        linha.dataset.feita = "1";                     // risca na hora (check animado); o servidor confirma em seguida
         try { await A.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: true }); ui.toast("Tarefa concluída.", { tipo: "ok" }); A.acoes.recarregarVer(); }
-        catch (e) { chk.checked = false; A.acoes.tratarErro(e); }
+        catch (e) { chk.checked = false; delete linha.dataset.feita; A.acoes.tratarErro(e); }
       });
-      return h("div", { class: "cvt-tar" }, chk, h("label", { for: idc }, h("b", null, t.titulo)),
+      linha.append(chk, h("label", { for: idc }, h("b", null, t.titulo)),
         h("small", { dataset: { atrasada: t.atrasada ? "1" : "0" } }, t.vence_em ? `${t.atrasada ? "Atrasada · " : ""}${ui.relativo(t.vence_em)}` : "Sem prazo",
           t.dono && t.dono.nome ? ` · ${t.dono.nome}` : ""));
+      return linha;
     });
-    return secao("Tarefas", nova, itens.length ? h("div", null, itens) : h("p", { class: "cvt-vazio" }, "Nenhuma tarefa aberta."));
+    return secao({ id: "tarefas", titulo: "Tarefas", acao: nova, contador: itens.length || null }, itens.length ? h("div", null, itens) : h("p", { class: "cvt-vazio" }, "Nenhuma tarefa aberta."));
   }
 
   async function novaTarefa(ver) {
@@ -178,7 +247,7 @@ export function criarLateral(A) {
         ui.pilula(a.status === "resolvida" ? "Resolvido" : a.status === "pendente" ? "Pendente" : "Aberto", a.status === "resolvida" ? "neutra" : a.status === "pendente" ? "aten" : "ok"),
         h("small", null, [ui.dataBR(a.aberta_em), a.atribuida_nome ? `com ${a.atribuida_nome}` : "sem dono"].join(" · ")));
     });
-    return secao("Atendimentos", null, itens.length ? h("div", null, itens) : h("p", { class: "cvt-vazio" }, "Primeiro atendimento."));
+    return secao({ id: "atendimentos", titulo: "Atendimentos", contador: itens.length > 1 ? itens.length : null }, itens.length ? h("div", null, itens) : h("p", { class: "cvt-vazio" }, "Primeiro atendimento."));
   }
 
   /* ---------------- resumo com IA (P1: a IA só lê; nunca envia) */
@@ -205,7 +274,7 @@ export function criarLateral(A) {
           { tipo: c === "ia_cota" || c === "muitos_pedidos" ? "info" : "erro" });
       }
     });
-    return secao("Resumo da conversa", b, saida);
+    return secao({ id: "resumo-ia", titulo: "Resumo da conversa", acao: b }, saida);
   }
 
   function render() {

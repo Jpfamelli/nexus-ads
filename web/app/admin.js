@@ -83,6 +83,45 @@ export function sugerirSlug(nome) {
 async function planos(ctx) { if (!_planos) _planos = await ctx.api.rpc("nx_planos_listar"); return _planos; }
 async function orgs(ctx) { if (!_orgs) _orgs = await ctx.api.rpc("nx_orgs_listar"); return _orgs; }
 
+/** Resumo da lista de clientes (item 58): por situação e quantos estão perto de algum limite (≥ 80 %). */
+export function resumoClientes(itens) {
+  const l = Array.isArray(itens) ? itens : [];
+  const r = { total: l.length, ativo: 0, teste: 0, suspenso: 0, cancelado: 0, perto_limite: 0 };
+  for (const it of l) {
+    if (it && Object.hasOwn(r, it.status) && it.status !== "total") r[it.status]++;
+    const u = (it && it.uso) || {}, lim = (it && it.limites) || {};
+    if (Object.keys(lim).some(k => Number(lim[k]) > 0 && (Number(u[k]) || 0) / Number(lim[k]) >= .8)) r.perto_limite++;
+  }
+  return r;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs = {}, texto = null) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined) el.setAttribute(k, String(v));
+  if (texto !== null) el.appendChild(document.createTextNode(String(texto)));
+  return el;
+}
+
+/** Anel de uso (role=meter): uso ÷ limite, com cor por faixa; sem limite mostra só o número. Usado no uso de IA do cliente. */
+export function anelUso(ui, { uso, limite, rotulo = "Uso" } = {}) {
+  const h = ui.h;
+  const u = Math.max(0, Number(uso) || 0);
+  const semLimite = limite === null || limite === undefined || !(Number(limite) > 0);
+  const p = semLimite ? 0 : Math.min(100, Math.round((u / Number(limite)) * 100));
+  const r = 44, C = 2 * Math.PI * r;
+  const nivel = semLimite ? "neutra" : p >= 100 ? "ruim" : p >= 80 ? "aten" : "ok";
+  const txt = semLimite ? `${ui.num(u)} · sem limite` : `${ui.num(u)} de ${ui.num(limite)} (${p}%)`;
+  const svg = svgEl("svg", { class: `adm-anel adm-anel-${nivel}`, viewBox: "0 0 112 112", role: "meter", "aria-valuemin": "0",
+    "aria-valuemax": String(semLimite ? Math.max(u, 1) : Number(limite)), "aria-valuenow": String(u), "aria-label": rotulo, "aria-valuetext": txt });
+  svg.appendChild(svgEl("circle", { class: "adm-anel-trilho", cx: 56, cy: 56, r, fill: "none", "stroke-width": 10 }));
+  svg.appendChild(svgEl("circle", { class: "adm-anel-arco", cx: 56, cy: 56, r, fill: "none", "stroke-width": 10, "stroke-linecap": "round",
+    "stroke-dasharray": C.toFixed(1), "stroke-dashoffset": (C * (1 - (semLimite ? 1 : p / 100))).toFixed(1), transform: "rotate(-90 56 56)" }));
+  svg.appendChild(svgEl("text", { class: "adm-anel-num", x: 56, y: 53, "text-anchor": "middle" }, semLimite ? ui.num(u) : `${p}%`));
+  svg.appendChild(svgEl("text", { class: "adm-anel-sub", x: 56, y: 71, "text-anchor": "middle" }, semLimite ? "sem limite" : "do limite"));
+  return h("div", { class: "adm-anel-caixa" }, svg, h("div", { class: "adm-anel-txt" }, h("b", null, rotulo), h("span", null, txt)));
+}
+
 export async function montar(ctx) {
   desmontar();
   _planos = null; _orgs = null;
@@ -90,6 +129,7 @@ export async function montar(ctx) {
   const id = ctx.rota.partes[1] || null;
   const { ui } = ctx;
   const h = ui.h;
+  ui.carregarCss("config");
   const superConta = !!ctx.sessao.conta.super;
   const extras = ctx.pronto("admin_revendas");
   const abas = [
@@ -104,7 +144,7 @@ export async function montar(ctx) {
   ui.limpar(ctx.alvo);
   if (id) {
     // detalhe: só o caminho de volta; o cartão do cliente faz o papel de título
-    ctx.alvo.append(h("a", { class: "voltar-link", href: "#/admin/clientes" }, ui.icone("seta-esq"), "Clientes"), corpo);
+    ctx.alvo.append(h("a", { class: "voltar-link adm-voltar", href: "#/admin/clientes" }, ui.icone("seta-esq"), "Clientes"), corpo);
     return telaCliente(ctx, corpo, id);
   }
   ctx.alvo.append(
@@ -135,13 +175,44 @@ async function telaClientes(ctx, corpo) {
   const filtro = { busca: ctx.rota.query.busca || "", status: ctx.rota.query.status || "", org_id: ctx.rota.query.org || "" };
 
   const busca = h("input", { type: "search", value: filtro.busca, placeholder: "Buscar por nome ou endereço", "aria-label": "Buscar cliente" });
-  const status = h("select", { class: "sel", "aria-label": "Filtrar por situação" },
-    h("option", { value: "" }, "Todas as situações"), STATUS.map(s => h("option", { value: s.valor, selected: s.valor === filtro.status }, s.rotulo)));
+  // filtro de situação como segmentado com contagem (item 58); as contagens vêm da lista sem filtro de situação
+  const segStatus = ui.segmentado({ tipo: "filtro", rotulo: "Filtrar por situação", classe: "adm-seg-status", valor: filtro.status || "",
+    opcoes: [{ valor: "", rotulo: "Todas" }, ...STATUS.map(s => ({ valor: s.valor, rotulo: s.rotulo }))],
+    aoMudar: v => { filtro.status = v; carregar(); } });
   const selOrg = superConta ? h("select", { class: "sel", "aria-label": "Filtrar por revenda" }, h("option", { value: "" }, "Todas as orgs")) : null;
   const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Cliente");
   novo.setAttribute("aria-label", "Novo cliente");
+  const segStatusEl = segStatus && segStatus.nodeType ? segStatus : segStatus.el;     // ui.segmentado devolve o elemento (ou {el}, nas versões anteriores)
+  const faixa = h("div", { class: "adm-kpis", role: "group", "aria-label": "Resumo dos clientes", hidden: true });
   const lista = h("div");
-  corpo.append(h("div", { class: "adm-filtros" }, h("label", { class: "busca" }, ui.icone("busca"), busca), status, selOrg, novo), lista);
+  corpo.append(faixa, h("div", { class: "adm-filtros" }, h("label", { class: "busca" }, ui.icone("busca"), busca), segStatusEl, selOrg, novo), lista);
+  const kpi = typeof ui.kpi === "function"
+    ? o => ui.kpi({ rotulo: o.rotulo, valor: o.valor, ajuda: o.ajuda })
+    : o => h("div", { class: "adm-kpi", title: o.ajuda || null }, h("span", { class: "adm-kpi-rot" }, o.rotulo), h("span", { class: "adm-kpi-val mono dado" }, ui.num(o.valor)));
+  // o resumo é sempre da lista SEM situação nem busca (só a revenda do filtro): é o que dá as contagens do segmentado
+  let resumoDaOrg = null, seqResumo = 0;          // de qual org_id ("" = todas) é o resumo pintado
+  function pintarResumo(itens, orgId) {
+    const r = resumoClientes(itens);
+    resumoDaOrg = orgId;
+    ui.limpar(faixa);
+    const ajudaTotal = orgId ? "Todos os clientes da revenda escolhida no filtro." : superConta ? "Todos os clientes da plataforma." : "Todos os clientes desta revenda.";
+    faixa.append(
+      kpi({ rotulo: "Clientes", valor: r.total, ajuda: ajudaTotal }),
+      kpi({ rotulo: "Ativos", valor: r.ativo, ajuda: "Pagando e com acesso liberado." }),
+      kpi({ rotulo: "Em teste", valor: r.teste, ajuda: "Período de avaliação em andamento." }),
+      kpi({ rotulo: "Perto do limite", valor: r.perto_limite, ajuda: "Usando 80 % ou mais de algum limite do plano." }));
+    faixa.hidden = false;
+    if (typeof segStatus.contar === "function") { for (const s of STATUS) segStatus.contar(s.valor, r[s.valor]); segStatus.contar("", r.total); }
+  }
+  /** Aberto com ?status= ou ?busca= (ou trocou a revenda com eles ligados): busca à parte a lista sem esses filtros, só para o resumo. */
+  async function carregarResumo() {
+    const n = ++seqResumo, orgId = filtro.org_id || "";
+    try {
+      const todos = await api.rpc("nx_clientes_admin", { p_filtro: { busca: null, status: null, org_id: orgId || null } });
+      if (n !== seqResumo || orgId !== (filtro.org_id || "")) return;
+      pintarResumo(Array.isArray(todos) ? todos : [], orgId);
+    } catch { /* sem resumo: a lista continua; a faixa só aparece com números de verdade */ }
+  }
 
   if (superConta) {
     orgs(ctx).then(os => { for (const o of os) selOrg.appendChild(h("option", { value: o.id, selected: o.id === filtro.org_id }, o.nome)); }).catch(() => { /* filtro some */ });
@@ -156,14 +227,17 @@ async function telaClientes(ctx, corpo) {
       const itens = await api.rpc("nx_clientes_admin", { p_filtro: { busca: filtro.busca || null, status: filtro.status || null, org_id: filtro.org_id || null } });
       if (n !== seq) return;
       ui.limpar(lista);
+      if (!filtro.status && !filtro.busca) { seqResumo++; pintarResumo(itens, filtro.org_id || ""); }
+      else if (resumoDaOrg !== (filtro.org_id || "")) carregarResumo();
       if (!itens.length && !filtro.busca && !filtro.status && !filtro.org_id) {
         lista.appendChild(ui.vazio({ titulo: "Nenhum cliente ainda.", texto: "Crie o primeiro — o funil, as etiquetas e as respostas rápidas da área dele entram prontos.",
           icone: "empresa", acao: { rotulo: "Criar o primeiro cliente", fn: () => criarCliente(ctx) } }));
         return;
       }
-      const uso = (it, k) => {
+      // uso × limite como mini-barra (item 58): a cor avisa quem está perto do teto
+      const uso = (it, k, rot) => {
         const u = it.uso ? it.uso[k] : null, l = it.limites ? it.limites[k] : null;
-        return h("span", { class: "mono", title: l == null ? "Sem limite" : `Limite ${l}` }, `${ui.num(u ?? 0)}${l == null ? "" : ` / ${ui.num(l)}`}`);
+        return h("span", { class: "adm-uso-mini" }, ui.barraUso(rot, u ?? 0, l));
       };
       const tab = ui.tabela({
         rotulo: "Clientes",
@@ -174,9 +248,9 @@ async function telaClientes(ctx, corpo) {
           { chave: "plano", rotulo: "Plano", ordenavel: true, render: it => ui.pilula(nomePlano(it.plano), it.plano === "interno" ? "sec" : "prim") },
           { chave: "status", rotulo: "Situação", ordenavel: true, render: it => ui.pilula(statusDe(it.status).rotulo, statusDe(it.status).cor) },
           { chave: "teste_ate", rotulo: "Fim do teste", ordenavel: true, render: it => it.status === "teste" && it.teste_ate ? ui.dataBR(it.teste_ate) : "—" },
-          { chave: "u_usuarios", rotulo: "Usuários", alinhar: "dir", render: it => uso(it, "usuarios") },
-          { chave: "u_canais", rotulo: "Números", alinhar: "dir", render: it => uso(it, "canais") },
-          { chave: "u_contatos", rotulo: "Contatos", alinhar: "dir", render: it => uso(it, "contatos") },
+          { chave: "u_usuarios", rotulo: "Usuários", render: it => uso(it, "usuarios", "Usuários") },
+          { chave: "u_canais", rotulo: "Números", render: it => uso(it, "canais", "Números de WhatsApp") },
+          { chave: "u_contatos", rotulo: "Contatos", render: it => uso(it, "contatos", "Contatos") },
           { chave: "criado_em", rotulo: "Criado em", ordenavel: true, render: it => ui.dataBR(it.criado_em) },
         ],
         linhas: itens.map(it => ({ ...it, org_nome: it.org ? it.org.nome : "", u_usuarios: it.uso && it.uso.usuarios })),
@@ -192,7 +266,6 @@ async function telaClientes(ctx, corpo) {
   }
   const aoBuscar = ui.debounce(() => { filtro.busca = busca.value.trim(); carregar(); }, 300);
   busca.addEventListener("input", aoBuscar);
-  status.addEventListener("change", () => { filtro.status = status.value; carregar(); });
   if (selOrg) selOrg.addEventListener("change", () => { filtro.org_id = selOrg.value; carregar(); });
   novo.addEventListener("click", () => criarCliente(ctx));
   _limpeza.push(() => aoBuscar.cancelar());
@@ -445,6 +518,9 @@ async function telaCliente(ctx, corpo, id) {
         h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Plano e situação"),
           h("p", { class: "sub" }, superConta ? "Como plataforma, você também define limites extras." : "O plano Interno e os limites extras são só da plataforma."))), form)),
       h("div", { class: "pilha" },
+        // uso de IA do mês em anel (item 58): o servidor devolve só o total do mês e o limite; a evolução por dia fica para quando houver série
+        h("div", { class: "cartao adm-ia" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "IA neste mês"), h("p", { class: "sub" }, "Sugestões da IA usadas no mês corrente. Zera todo dia 1."))),
+          anelUso(ui, { uso: cli.uso ? cli.uso.ia_mes : 0, limite: cli.limites ? cli.limites.ia_mes : null, rotulo: "Sugestões de IA" })),
         h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Uso do plano"), h("p", { class: "sub" }, "Contagem de agora; sugestões de IA no mês corrente."))), usoEl),
         h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Usuários com acesso"))), usuariosEl),
         EXTRAS.dominiosCliente ? EXTRAS.dominiosCliente(ctx, cli) : null)));
@@ -857,5 +933,5 @@ function cartaoDominiosCliente(ctx, cli) {
   carregar();
   return h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Domínios do cliente"),
     h("p", { class: "sub" }, "Quem entra por esse endereço já cai nesta empresa, com a marca dela."))),
-    lista, form, erro, h("a", { class: "voltar-link", href: "#/admin/dominios" }, "Instruções de DNS e ativação", ui.icone("seta-dir")));
+    lista, form, erro, h("a", { class: "voltar-link adm-voltar", href: "#/admin/dominios" }, "Instruções de DNS e ativação", ui.icone("seta-dir")));
 }

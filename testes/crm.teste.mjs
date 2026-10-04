@@ -1275,7 +1275,8 @@ function domDoKanban() {
     }
     get id() { return this.attrs.id || ""; } set id(v) { this.attrs.id = String(v); }
     get value() { return this._v ?? ""; } set value(v) { this._v = v; }
-    setAttribute(a, v) { this.attrs[a] = String(v); } removeAttribute(a) { delete this.attrs[a]; }
+    // getAttribute: os totais do topo comparam com o aria-label (o valor final de uma contagem em andamento — revisão do plano 50)
+    setAttribute(a, v) { this.attrs[a] = String(v); } getAttribute(a) { return a in this.attrs ? this.attrs[a] : null; } removeAttribute(a) { delete this.attrs[a]; }
     get els() { return this.children.filter(c => c instanceof El); }
     appendChild(c) { if (c instanceof El) { c.remove(); c.parentElement = this; } this.children.push(c); return c; }
     append(...cs) { for (const c of cs.flat(Infinity)) { if (c === null || c === undefined || c === false) continue; this.appendChild(c instanceof El ? c : { texto: String(c) }); } }

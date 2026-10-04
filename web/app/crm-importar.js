@@ -8,6 +8,10 @@
    marcados; (4) importar em lotes de 100 (metade ao receber
    tempo_esgotado, mínimo 10), barra de progresso, Pausar, resumo final
    com "Baixar erros em CSV". Só supervisor+ (o servidor confere de novo).
+   Plano 50 (04/10): no passo das colunas uma prévia ao vivo com o destino
+   de cada coluna no cabeçalho (mapeada/ignorada) e a contagem que muda ao
+   escolher; barra de progresso com porcentagem, listras enquanto roda e
+   aria-valuetext.
    ============================================================ */
 
 const LIMITE_LINHAS = 20000;
@@ -194,18 +198,33 @@ export async function montarImportar(k, el) {
       lista.appendChild(linha);
     });
 
+    const nMap = () => S.mapa.filter(Boolean).length;
+    const subTxt = h("p", { class: "sub imp-col-sub", "aria-live": "polite" });
+    // prévia ao vivo (plano 50, item 29): as 3 primeiras linhas com o destino de cada coluna no cabeçalho — mapeada em destaque, ignorada apagada
+    const previa = h("div", { class: "imp-previa-env" });
+    function desenharPrevia() {
+      ui.limpar(previa);
+      subTxt.textContent = `Sugerimos pelo nome do cabeçalho — confira. ${nMap()} de ${d.cabecalho.length} colunas reconhecidas. Colunas ignoradas não entram.`;
+      const cab = L.cabecalhoPrevia(d.cabecalho, S.mapa, destinos);
+      previa.appendChild(h("div", { class: "tabela-env imp-previa-cx" }, h("table", { class: "tabela imp-previa imp-previa-mapa" },
+        h("caption", { class: "sr-only" }, "Prévia das 3 primeiras linhas com o destino de cada coluna"),
+        h("thead", null, h("tr", null, cab.map(c => h("th", { scope: "col", class: ["imp-th", c.destino ? "mapeada" : "ignorada"] },
+          h("span", { class: "imp-th-col" }, c.coluna), h("span", { class: "imp-th-dest" }, ui.icone(c.destino ? "seta-dir" : "fechar"), c.rotulo))))),
+        h("tbody", null, d.linhas.slice(0, 3).map(l => h("tr", null, cab.map(c => h("td", { class: c.destino ? null : "ignorada" }, (l[c.i] || "").trim() || "—"))))))));
+    }
     function validar() {
       const ok = L.mapaValido(S.mapa);
       aviso.hidden = ok;
       continuar.disabled = !ok;
+      desenharPrevia();
       return ok;
     }
-    const nMap = () => S.mapa.filter(Boolean).length;
     const continuar = botao("Continuar", "prim", () => { if (validar()) { if (L.mapaTemNegocio(S.mapa)) S.opcoes.criarNegocio = true; ir(3); } });
     corpo.append(
       h("h2", { class: "imp-tit" }, "O que é cada coluna?"),
-      h("p", { class: "sub" }, `Sugerimos pelo nome do cabeçalho — confira. ${nMap()} de ${d.cabecalho.length} colunas reconhecidas. Colunas ignoradas não entram.`),
-      lista, aviso);
+      subTxt,
+      lista, aviso,
+      h("h3", { class: "imp-sub" }, "Como vai ficar"), previa);
     rodape.append(botao("Voltar", "sec", () => ir(1)), continuar);
     validar();
   }
@@ -294,12 +313,14 @@ export async function montarImportar(k, el) {
   function passoImportar() {
     const total = S.dados.linhas.length;
     const barra = h("div", { class: "imp-barra", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(total), "aria-valuenow": "0", "aria-label": "Progresso da importação" }, h("i"));
+    const pctTxt = h("b", { class: "imp-barra-pct dado" }, "0%");
+    const barraLinha = h("div", { class: "imp-barra-linha" }, barra, pctTxt);
     const texto = h("p", { class: "imp-prog-txt", "aria-live": "polite" });
     const resultado = h("div", { class: "pilha" });
     const btPausar = botao("Pausar", "sec", () => {
       S.pausado = !S.pausado;
       btPausar.textContent = S.pausado ? "Continuar" : "Pausar";
-      atualizarTexto();
+      atualizarBarra();
     }, { hidden: true });
     const faltam = total - S.feitas;
     const btIniciar = botao(S.feitas > 0 ? `Importar ${faltam === 1 ? "a linha que falta" : `as ${ui.num(faltam)} linhas que faltam`}`
@@ -319,7 +340,7 @@ export async function montarImportar(k, el) {
     corpo.append(
       h("h2", { class: "imp-tit" }, S.terminou ? "Importação concluída" : "Tudo pronto"),
       h("ul", { class: "imp-lista", hidden: S.rodando || S.terminou }, lista.map(t => h("li", null, t))),
-      h("div", { class: "imp-prog", hidden: !S.rodando && !S.terminou }, barra, texto),
+      h("div", { class: "imp-prog", hidden: !S.rodando && !S.terminou }, barraLinha, texto),
       resultado);
     rodape.append(btVoltar, h("div", { class: "linha" }, btPausar, btIniciar));
 
@@ -327,6 +348,11 @@ export async function montarImportar(k, el) {
       const p = total ? Math.round((S.feitas / total) * 100) : 100;
       barra.querySelector("i").style.setProperty("--p", `${p}%`);
       barra.setAttribute("aria-valuenow", String(S.feitas));
+      barra.setAttribute("aria-valuetext", `${p}% — ${ui.num(S.feitas)} de ${ui.num(total)} linhas`);
+      pctTxt.textContent = `${p}%`;
+      // listras em movimento só enquanto importa (param na pausa e no fim; somem com movimento reduzido pelo CSS)
+      barra.classList.toggle("andando", S.rodando && !S.pausado && !S.terminou);
+      barra.classList.toggle("pronta", S.terminou && !S.erroFatal);
       atualizarTexto();
     }
     function atualizarTexto() {

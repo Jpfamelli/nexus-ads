@@ -89,6 +89,7 @@ export function criarComandos() {
       const item = {
         id: String(cmd.id || cmd.rotulo).slice(0, 80), rotulo: String(cmd.rotulo).trim().slice(0, 80), palavras: String(cmd.palavras || "").slice(0, 240),
         atalho: cmd.atalho ? String(cmd.atalho).slice(0, 40) : "", icone: /^[a-z0-9-]{1,24}$/.test(cmd.icone || "") ? cmd.icone : "raio", fazer: cmd.fazer, origem: "tela",
+        grupo: GRUPOS_ACAO.includes(cmd.grupo) ? cmd.grupo : "Nesta tela",
       };
       itens.set(item.id, item);
       avisar();
@@ -123,26 +124,83 @@ export function criarComandos() {
 /** O compromisso da agenda na vertical: oficina marca «visita», loja marca «entrega», os demais «consulta» (a mesma palavra das Automações e do Início). */
 const palavraAgenda = vertical => (vertical === "oficina" ? "visita" : vertical === "loja" ? "entrega" : "consulta");
 
+/** Grupos das ações na paleta (item 59), na ordem em que aparecem. Comando de tela sem grupo cai em «Nesta tela». */
+export const GRUPOS_ACAO = Object.freeze(["Nesta tela", "Criar", "Ir e ver", "Aparência e app", "Ajuda", "Conta"]);
+
 export const CATALOGO = Object.freeze([
-  { id: "nova-oportunidade", rotulo: a => a.vocab.novo("negocio"), palavras: "nova oportunidade negocio venda orcamento lead criar adicionar", icone: "funil", quando: a => a.rotaOk("crm") && a.pode("atendente") },
+  { id: "nova-oportunidade", grupo: "Criar", rotulo: a => a.vocab.novo("negocio"), palavras: "nova oportunidade negocio venda orcamento lead criar adicionar", icone: "funil", quando: a => a.rotaOk("crm") && a.pode("atendente") },
   // `naTela` = o id do comando que a Agenda registra para a mesma ação: com ela aberta, a genérica não repete mesmo que os rótulos difiram
-  { id: "marcar-consulta", rotulo: a => `Marcar ${palavraAgenda(a && a.vocab && a.vocab.vertical)}`, palavras: "agenda agendar consulta horario marcar atendimento visita entrega", icone: "calendario", naTela: "agenda.marcar", quando: a => a.rotaOk("agenda") && a.pode("atendente") },
-  { id: "nova-conversa", rotulo: () => "Nova conversa", palavras: "conversa mensagem whatsapp iniciar contato enviar", icone: "chat", quando: a => a.rotaOk("conversas") && a.pode("atendente") },
-  { id: "nova-tarefa", rotulo: () => "Nova tarefa", palavras: "tarefa lembrete afazer pendencia criar", icone: "tarefa", quando: a => a.rotaOk("tarefas") && a.pode("atendente") },
-  { id: "alternar-tema", rotulo: () => "Alternar tema", palavras: "tema claro escuro aparencia modo noturno dark", icone: "pincel", quando: () => true },
-  { id: "trocar-empresa", rotulo: () => "Trocar empresa", palavras: "empresa cliente conta trocar mudar", icone: "empresa", quando: a => a.empresas > 1 },
-  { id: "abrir-produto", rotulo: () => "Abrir outro produto", palavras: "produto crm anuncios ads atendimento trocar espaco area", icone: "camadas", quando: a => !!a.temCliente },
-  { id: "instalar", rotulo: () => "Instalar o app", palavras: "instalar app aplicativo celular tela inicial", icone: "baixar", quando: a => !!a.instalar },
-  { id: "atalhos", rotulo: () => "Atalhos de teclado", palavras: "atalhos teclado ajuda teclas", icone: "ajuda", atalho: "?", quando: () => true },
-  { id: "primeiros-passos", rotulo: () => "Primeiros passos", palavras: "primeiros passos comecar configurar checklist ajuda deixe pronto", icone: "check", quando: a => a.rotaOk("inicio") && a.pode("admin") },
-  { id: "suporte", rotulo: () => "Falar com o suporte", palavras: "suporte ajuda whatsapp falar contato", icone: "whatsapp", quando: a => !!a.suporte },
-  { id: "sair", rotulo: () => "Sair", palavras: "sair logout encerrar desconectar", icone: "sair", quando: () => true },
+  { id: "marcar-consulta", grupo: "Criar", rotulo: a => `Marcar ${palavraAgenda(a && a.vocab && a.vocab.vertical)}`, palavras: "agenda agendar consulta horario marcar atendimento visita entrega", icone: "calendario", naTela: "agenda.marcar", quando: a => a.rotaOk("agenda") && a.pode("atendente") },
+  { id: "nova-conversa", grupo: "Criar", rotulo: () => "Nova conversa", palavras: "conversa mensagem whatsapp iniciar contato enviar", icone: "chat", quando: a => a.rotaOk("conversas") && a.pode("atendente") },
+  { id: "nova-tarefa", grupo: "Criar", rotulo: () => "Nova tarefa", palavras: "tarefa lembrete afazer pendencia criar", icone: "tarefa", quando: a => a.rotaOk("tarefas") && a.pode("atendente") },
+  { id: "alternar-tema", grupo: "Aparência e app", rotulo: () => "Alternar tema", palavras: "tema claro escuro aparencia modo noturno dark", icone: "pincel", quando: () => true },
+  { id: "trocar-empresa", grupo: "Ir e ver", rotulo: () => "Trocar empresa", palavras: "empresa cliente conta trocar mudar", icone: "empresa", quando: a => a.empresas > 1 },
+  { id: "abrir-produto", grupo: "Ir e ver", rotulo: () => "Abrir outro produto", palavras: "produto crm anuncios ads atendimento trocar espaco area", icone: "camadas", quando: a => !!a.temCliente },
+  { id: "instalar", grupo: "Aparência e app", rotulo: () => "Instalar o app", palavras: "instalar app aplicativo celular tela inicial", icone: "baixar", quando: a => !!a.instalar },
+  { id: "atalhos", grupo: "Ajuda", rotulo: () => "Atalhos de teclado", palavras: "atalhos teclado ajuda teclas", icone: "ajuda", atalho: "?", quando: () => true },
+  { id: "primeiros-passos", grupo: "Ir e ver", rotulo: () => "Primeiros passos", palavras: "primeiros passos comecar configurar checklist ajuda deixe pronto", icone: "check", quando: a => a.rotaOk("inicio") && a.pode("admin") },
+  { id: "suporte", grupo: "Ajuda", rotulo: () => "Falar com o suporte", palavras: "suporte ajuda whatsapp falar contato", icone: "whatsapp", quando: a => !!a.suporte },
+  { id: "sair", grupo: "Conta", rotulo: () => "Sair", palavras: "sair logout encerrar desconectar", icone: "sair", quando: () => true },
 ]);
 
 /** As ações do shell que valem agora para esta pessoa, neste produto. `fazer` = { [id]: () => void }. */
 export function acoesPadrao(a, fazer = {}) {
   return CATALOGO.filter(c => typeof fazer[c.id] === "function" && c.quando(a))
-    .map(c => ({ id: c.id, rotulo: c.rotulo(a), palavras: c.palavras, icone: c.icone, atalho: c.atalho || "", fazer: fazer[c.id], origem: "shell", naTela: c.naTela || "" }));
+    .map(c => ({ id: c.id, rotulo: c.rotulo(a), palavras: c.palavras, icone: c.icone, atalho: c.atalho || "", fazer: fazer[c.id], origem: "shell", naTela: c.naTela || "", grupo: c.grupo || "Ir e ver" }));
+}
+
+/** Ações por grupo, na ordem de GRUPOS_ACAO (grupo desconhecido vai para o fim); grupos vazios ficam de fora. */
+export function agruparAcoes(acoes) {
+  const mapa = new Map();
+  for (const c of acoes || []) {
+    const g = c && c.grupo && GRUPOS_ACAO.includes(c.grupo) ? c.grupo : (c && c.origem === "tela" ? "Nesta tela" : (c && c.grupo) || "Ir e ver");
+    if (!mapa.has(g)) mapa.set(g, []);
+    mapa.get(g).push(c);
+  }
+  const ordem = [...GRUPOS_ACAO, ...[...mapa.keys()].filter(g => !GRUPOS_ACAO.includes(g))];
+  return ordem.filter(g => mapa.has(g)).map(g => ({ grupo: g, itens: mapa.get(g) }));
+}
+
+/* ---------- Últimos usados (ações da paleta) ---------- */
+
+export const MAX_ULTIMOS = 6;
+export const chaveUltimos = conta => `nx-cmd:${conta || "-"}`;
+
+/**
+ * Os últimos comandos executados pela pessoa neste aparelho (por conta, não por empresa: «Alternar tema» vale em qualquer uma).
+ * `armazenamento` = localStorage (ou um igual). Guarda [{id, em}], mais recente primeiro. Nunca lança erro.
+ */
+export function criarUltimosComandos({ armazenamento, chave, max = MAX_ULTIMOS }) {
+  const ler = () => {
+    try {
+      const v = JSON.parse(armazenamento.getItem(chave) || "[]");
+      return Array.isArray(v) ? v.filter(x => x && typeof x.id === "string" && x.id.length <= 80).map(x => ({ id: x.id, em: Number(x.em) || 0 })).slice(0, max) : [];
+    } catch { return []; }
+  };
+  const gravar = lista => { try { armazenamento.setItem(chave, JSON.stringify(lista)); } catch { /* sem armazenamento: some ao recarregar */ } };
+  return {
+    ler,
+    registrar(id, agora = Date.now()) {
+      const s = String(id || "").slice(0, 80);
+      if (!s) return ler();
+      const lista = [{ id: s, em: agora }, ...ler().filter(x => x.id !== s)].slice(0, max);
+      gravar(lista);
+      return lista;
+    },
+    limpar() { try { armazenamento.removeItem(chave); } catch { /* ok */ } },
+  };
+}
+
+/** As ações (das que valem agora) que a pessoa usou por último, na ordem de uso; no máximo `n`. */
+export function ultimosUsados(acoes, ultimos, n = 4) {
+  const por = new Map((acoes || []).map(c => [c.id, c]));
+  return (ultimos || []).map(u => por.get(u.id)).filter(Boolean).slice(0, n);
+}
+
+/** Reordena as ações pondo as usadas por último na frente (empate = ordem original). Não altera a lista de entrada. */
+export function ordenarPorUso(acoes, ultimos) {
+  const pos = new Map((ultimos || []).map((u, i) => [u.id, i]));
+  return (acoes || []).map((c, i) => ({ c, i })).sort((a, b) => (pos.has(a.c.id) ? pos.get(a.c.id) : 1e9) - (pos.has(b.c.id) ? pos.get(b.c.id) : 1e9) || a.i - b.i).map(x => x.c);
 }
 
 /** A tela aberta manda nos comandos de mesmo nome (ex.: a Agenda registra «Marcar consulta»): a ação genérica do shell não repete. */

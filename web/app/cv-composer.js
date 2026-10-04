@@ -32,9 +32,11 @@ export function criarComposer(A) {
   const btNota = h("button", { type: "button", class: "bt-icone", "aria-label": "Nota interna", title: "Nota interna (a equipe vê, o cliente não)", "aria-pressed": "false" }, ui.icone("nota"));
   const btIA = h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Sugerir resposta com IA", title: "Sugerir com IA" }, ui.icone("ia"));
   const btMaisM = h("button", { type: "button", class: "bt-icone so-estreito", "aria-label": "Mais opções", title: "Mais" }, ui.icone("mais"));
+  // plano 50 · 36: o menu de respostas rápidas também abre por botão (no celular a «/» fica escondida no teclado)
+  const btRR = h("button", { type: "button", class: "bt-icone cvx-rr-bt", "aria-label": "Respostas rápidas (/)", title: "Respostas rápidas: digite / ou toque aqui", "aria-expanded": "false", "aria-controls": "cvx-rr" }, ui.icone("raio"));
   const btEnviar = h("button", { type: "button", class: "bt bt-prim cvx-enviar", "aria-label": "Enviar" }, ui.icone("enviar"));
   const btInfo = h("button", { type: "button", class: "bt-icone cvx-info", "aria-label": "Por que não dá para gravar áudio?", "aria-expanded": "false", title: "Por que não dá para gravar áudio?", hidden: true }, ui.icone("info"));
-  const ferr = h("div", { class: "cvx-ferr" }, btClipe, btInfo, btAudio, btModelos, btNota, btIA, btMaisM);
+  const ferr = h("div", { class: "cvx-ferr" }, btClipe, btInfo, btAudio, btRR, btModelos, btNota, btIA, btMaisM);
   const linha = h("div", { class: "cvx-linha" }, ferr, campo, btEnviar);
   const capInfo = h("p", { class: "cvx-cap-info", id: "cvx-cap-info", role: "status", "aria-live": "polite", hidden: true });
   let infoAberta = false, infoTimer = null;   // o aviso (navegador que não grava áudio) só aparece quando a pessoa toca no ⓘ (não ocupa a conversa o tempo todo)
@@ -55,6 +57,14 @@ export function criarComposer(A) {
 
   ta.setAttribute("aria-controls", "cvx-rr");
   ta.setAttribute("aria-autocomplete", "list");
+  /* plano 50: selo visível «Sugestão da IA no campo» com «Descartar» (some quando a pessoa edita, envia ou troca de conversa).
+     Nasce aqui, junto do campo: definirConversa() e o «input» já podem escondê-lo sem depender da ordem do arquivo. */
+  let sugestaoIA = null, textoAntesIA = "";
+  const btDescartarIA = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Descartar");
+  const seloIA = h("div", { class: "cvx-ia-selo", role: "status", hidden: true }, ui.icone("ia"), h("span", null, "Sugestão da IA no campo — revise antes de enviar."), btDescartarIA);
+  el.insertBefore(seloIA, linha);
+  function mostrarSeloIA(textoNoCampo, antes) { sugestaoIA = textoNoCampo; textoAntesIA = antes; seloIA.hidden = false; }
+  function esconderSeloIA() { sugestaoIA = null; textoAntesIA = ""; seloIA.hidden = true; }
 
   /* ---------------- estado da conversa */
   function conv() { return A.ver && A.ver.conversa; }
@@ -172,6 +182,8 @@ export function criarComposer(A) {
       ? "Este navegador não grava áudio. Você ainda pode anexar um áudio salvo (MP3, OGG, AAC, M4A ou WAV)."
       : "Este navegador não grava áudio em formato aceito. Você ainda pode anexar um áudio MP3, OGG, AAC ou M4A.";
     btIA.disabled = modoNota || s !== "ok";
+    btRR.disabled = modoNota || s !== "ok";
+    btRR.setAttribute("aria-expanded", String(rrAberto));
     btModelos.disabled = codeWords || modoNota || !(s === "ok" || s === "janela");
     btNota.disabled = !A.podeEscrever;
     btNota.setAttribute("aria-pressed", String(modoNota));
@@ -201,6 +213,7 @@ export function criarComposer(A) {
     modoNota = false;
     respondendo = null;
     fecharRR();
+    esconderSeloIA();                                // o selo fala do texto da conversa anterior: na nova ele seria falso
     desenharResposta();
     idDoCampo = A.selId || null;
     ta.value = (idDoCampo && A.rascunhos.get(idDoCampo)) || "";
@@ -283,52 +296,109 @@ export function criarComposer(A) {
     rrAberto = true;
     desenharRR(termo);
   }
+  /** Trecho com o termo buscado em <mark> (sem acento/caixa): o olho acha o porquê de cada item ter aparecido. */
+  function comMarca(texto, termo) {
+    const partes = L.partesDestaque(String(texto ?? ""), termo || "");
+    return partes.map(p => (p.marca ? h("mark", null, p.t) : p.t));
+  }
+  /** Prévia com as variáveis pintadas: preenchidas em <mark class=cvx-var>, {campos a preencher} em <mark class=cvx-pend>. */
+  function previaVariaveis(corpo) {
+    return L.partesVariaveis(corpo, varsAtuais()).map(p => (p.tipo === "var" ? h("mark", { class: "cvx-var", title: `{${p.nome}}` }, p.t)
+      : p.tipo === "pendente" ? h("mark", { class: "cvx-pend", title: "Você preenche depois de inserir" }, p.t) : p.t));
+  }
+  function nomeDepartamento(id) { return id ? ((A.base && A.base.departamentos) || []).find(d => d.id === id)?.nome || "" : ""; }
   function desenharRR(termo) {
     ui.limpar(rr);
     rr.hidden = false;
+    btRR.setAttribute("aria-expanded", "true");
     rrStatus.textContent = rrItens.length
       ? `${rrItens.length} respostas rápidas disponíveis. Use as setas e Enter para escolher, ou Escape para fechar.`
       : (termo ? "Nenhuma resposta rápida encontrada." : "Nenhuma resposta rápida cadastrada.");
-    rr.appendChild(h("div", { class: "cvx-rr-cab" }, h("span", { class: "rotulo" }, "Respostas rápidas"), h("span", { class: "rotulo" }, "↑↓ Enter · Esc")));
+    rr.appendChild(h("div", { class: "cvx-rr-cab" }, h("span", { class: "rotulo" }, termo ? `Respostas rápidas · «${termo}»` : "Respostas rápidas"), h("span", { class: "rotulo" }, "↑↓ Enter · Esc")));
     if (!rrItens.length) {
       rr.appendChild(h("p", { class: "cvx-rr-vazio" }, termo ? `Nenhuma resposta com «${termo}».` : "Nenhuma resposta cadastrada. ",
         A.acoes.pode("supervisor") ? h("a", { class: "link", href: "#/config/respostas" }, "Cadastrar respostas") : null));
       return;
     }
+    const lista = h("div", { class: "cvx-rr-lista" });
     rrItens.forEach((r, i) => {
+      const dep = nomeDepartamento(r.departamento_id);
+      const meta = [r.usos ? `${r.usos} ${r.usos === 1 ? "uso" : "usos"}` : null, dep || null].filter(Boolean).join(" · ");
       const op = h("button", { type: "button", role: "option", class: "cvx-rr-op", id: `cvx-rr-${i}`, "aria-selected": String(i === rrSel), tabindex: "-1" },
-        h("span", { class: "mono" }, `/${r.atalho}`), h("b", null, r.titulo), h("small", null, L.aplicarVariaveis(r.corpo, varsAtuais())));
+        h("span", { class: "mono" }, "/", ...comMarca(r.atalho, termo)), h("b", null, ...comMarca(r.titulo, termo)),
+        h("small", null, L.aplicarVariaveis(r.corpo, varsAtuais())),
+        meta ? h("span", { class: "cvx-rr-meta dado" }, meta) : null);
       op.addEventListener("mousedown", ev => ev.preventDefault());
+      op.addEventListener("mouseenter", () => { if (rrSel !== i) { rrSel = i; desenharRR(termo); } });
       op.addEventListener("click", () => escolherRR(i));
-      rr.appendChild(op);
+      lista.appendChild(op);
     });
+    // prévia do item marcado (desktop): o texto inteiro com as variáveis pintadas e quantos campos ficam para preencher
+    const sel = rrItens[rrSel];
+    const pend = sel ? L.contarCampos(L.aplicarVariaveis(sel.corpo, varsAtuais())) : 0;
+    const previa = h("div", { class: "cvx-rr-previa", "aria-hidden": "true" },
+      h("div", { class: "cvx-rr-previa-cab" }, h("b", null, sel ? sel.titulo : ""), h("span", { class: "mono" }, sel ? `/${sel.atalho}` : "")),
+      h("p", { class: "cvx-rr-previa-txt" }, sel ? previaVariaveis(sel.corpo) : ""),
+      h("p", { class: "cvx-rr-previa-rod" }, pend ? `${pend} ${pend === 1 ? "campo" : "campos"} para preencher depois de inserir (Tab pula entre eles)` : "Pronta para enviar: nenhum campo a preencher"));
+    rr.appendChild(h("div", { class: "cvx-rr-corpo" }, lista, previa));
     ta.setAttribute("aria-activedescendant", `cvx-rr-${rrSel}`);
     const atual = rr.querySelector(`#cvx-rr-${rrSel}`);
-    if (atual) atual.scrollIntoView({ block: "nearest" });
+    if (atual && typeof atual.scrollIntoView === "function") atual.scrollIntoView({ block: "nearest" });
   }
   function fecharRR() {
     rrAberto = false; rrItens = [];
     rr.hidden = true; ui.limpar(rr);
+    btRR.setAttribute("aria-expanded", "false");
     rrStatus.textContent = "Respostas rápidas fechadas.";
     ta.removeAttribute("aria-activedescendant");
   }
   function escolherRR(i) {
     const r = rrItens[i];
     if (!r) return;
-    ta.value = L.aplicarVariaveis(r.corpo, varsAtuais());
+    const texto = L.aplicarVariaveis(r.corpo, varsAtuais());
+    const base = ta.value;
+    let inicio = 0;
+    if (L.termoBarra(base) !== null || !base.trim()) ta.value = texto;        // «/termo» (ou campo vazio): a resposta ocupa o campo
+    else {                                                                   // veio pelo botão com texto já digitado: entra no cursor, sem apagar nada
+      const ini = ta.selectionStart ?? base.length, fim = ta.selectionEnd ?? ini;
+      const antes = base.slice(0, ini), sep = antes && !/\s$/.test(antes) ? " " : "";
+      ta.value = `${antes}${sep}${texto}${base.slice(fim)}`;
+      inicio = antes.length + sep.length;
+    }
     atualizarContador();
     fecharRR();
-    rrStatus.textContent = "Resposta rápida aplicada.";
+    const campos = L.contarCampos(texto);
+    rrStatus.textContent = campos ? `Resposta rápida aplicada. ${campos} ${campos === 1 ? "campo" : "campos"} para preencher: Tab pula para o próximo.` : "Resposta rápida aplicada.";
     autoAltura();
     ta.focus();
-    const pos = ta.value.search(/\{[^}]+\}/);    // cai no primeiro {campo a preencher}
-    if (pos >= 0) { const fim = ta.value.indexOf("}", pos) + 1; ta.setSelectionRange(pos, fim); }
-    else ta.setSelectionRange(ta.value.length, ta.value.length);
+    const campo = L.proximoCampo(ta.value, inicio);    // cai no primeiro {campo a preencher}
+    if (campo) ta.setSelectionRange(campo[0], campo[1]);
+    else { const fim = inicio + texto.length; ta.setSelectionRange(fim, fim); }
+    if (!modoNota && idDoCampo) { A.rascunhos.set(idDoCampo, ta.value); A.acoes.rascunhoMudou(); }
     A.acoes.respostaUsada(r.id);
   }
+  /** Tab com um {campo} selecionado pula para o próximo (Shift+Tab volta); sem outro campo, o Tab segue o caminho normal. */
+  function pularCampo(ev) {
+    const ini = ta.selectionStart, fim = ta.selectionEnd;
+    if (ini === null || ini === undefined || fim === null || fim === undefined || fim <= ini) return false;
+    if (!/^\{[^{}\n]+\}$/.test(ta.value.slice(ini, fim))) return false;
+    const r = L.proximoCampo(ta.value, ev.shiftKey ? ini : fim, ev.shiftKey ? -1 : 1);
+    if (!r || (r[0] === ini && r[1] === fim)) return false;
+    ev.preventDefault();
+    ta.setSelectionRange(r[0], r[1]);
+    return true;
+  }
+  btRR.addEventListener("click", () => {
+    if (rrAberto) { fecharRR(); ta.focus(); return; }
+    if (btRR.disabled) return;
+    if (!ta.value.trim()) { ta.value = "/"; atualizarContador(); autoAltura(); if (!modoNota && idDoCampo) A.rascunhos.set(idDoCampo, ta.value); }
+    ta.focus();
+    abrirRR(L.termoBarra(ta.value) ?? "");
+  });
 
   ta.addEventListener("input", () => {
     autoAltura(); atualizarContador();
+    if (!seloIA.hidden && ta.value !== sugestaoIA) esconderSeloIA();   // a pessoa mexeu no texto: a sugestão virou texto dela
     if (!modoNota && idDoCampo) { A.rascunhos.set(idDoCampo, ta.value); A.acoes.rascunhoMudou(); }
     if (modoNota) return;
     const t = L.termoBarra(ta.value);
@@ -342,6 +412,7 @@ export function criarComposer(A) {
       if (ev.key === "Enter" || ev.key === "Tab") { if (rrItens.length) { ev.preventDefault(); escolherRR(rrSel); } else if (ev.key === "Enter") ev.preventDefault(); return; }
       if (ev.key === "Escape") { ev.preventDefault(); fecharRR(); return; }
     }
+    if (ev.key === "Tab" && !ev.isComposing && pularCampo(ev)) return;       // {campo} selecionado: Tab vai para o próximo campo da resposta rápida
     if (ev.key === "Escape" && respondendo) { ev.preventDefault(); respondendo = null; desenharResposta(); return; }
     // M35: Esc no campo devolve o foco à lista (o rascunho já está guardado); j/k, / e ? passam a valer fora do campo
     if (ev.key === "Escape" && !ev.isComposing) { ev.preventDefault(); A.acoes.focarLista(); return; }
@@ -368,6 +439,7 @@ export function criarComposer(A) {
     }
     const citada = respondendo;
     ta.value = ""; autoAltura(); atualizarContador();
+    esconderSeloIA();
     respondendo = null; desenharResposta();
     A.rascunhos.delete(idDoCampo);
     A.acoes.rascunhoMudou();
@@ -728,12 +800,14 @@ export function criarComposer(A) {
         ta.focus();
         ta.setSelectionRange(Math.min(base.length, ta.value.length), ta.value.length);
         ui.anunciar("Sugestão da IA acrescentada abaixo do que você já tinha escrito. Revise antes de enviar.");
+        mostrarSeloIA(ta.value, base.replace(/\n\n$/, ""));
       } else {
         ta.value = texto; atualizarContador();
         autoAltura();
         ta.focus();
         ta.select();
         ui.anunciar("Sugestão da IA no campo. Revise antes de enviar.");
+        mostrarSeloIA(ta.value, "");
       }
       if (!modoNota) { A.rascunhos.set(idDoCampo, ta.value); A.acoes.rascunhoMudou(); }
     } catch (e) {
@@ -745,6 +819,13 @@ export function criarComposer(A) {
     }
   }
   btIA.addEventListener("click", () => sugerir());
+  // o selo (seloIA) nasce lá em cima, junto do campo
+  btDescartarIA.addEventListener("click", () => {
+    if (ta.value === sugestaoIA) { ta.value = textoAntesIA; atualizarContador(); autoAltura(); if (!modoNota && idDoCampo) { A.rascunhos.set(idDoCampo, ta.value); A.acoes.rascunhoMudou(); } }
+    esconderSeloIA();
+    ta.focus();
+    ui.anunciar("Sugestão da IA descartada.");
+  });
 
   /* ---------------- menu "+" (celular) */
   btMaisM.addEventListener("click", () => {

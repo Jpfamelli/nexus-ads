@@ -9,6 +9,9 @@
    - moverComPerguntas(k, card, estagio, ordem): o MESMO fluxo do
      kanban e da fita (valor ao ganhar, motivo ao perder, data e hora
      ao agendar) → nx_negocio_mover
+   - plano 50 (04/10): pílula de tempo na etapa (escala do cartão), campos
+     em grade de 2 colunas também no desktop (CSS) e ações num rodapé
+     fixo no celular; a linha do tempo agrupada por dia vem do crm-tarefas
    ============================================================ */
 
 /* ============================================================ campos personalizados */
@@ -215,6 +218,9 @@ export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro
 }
 
 /* ============================================================ gaveta do negócio */
+// celular (≤ 760 px): as ações (Marcar consulta, Fechou, Não fechou, ⋮) descem para um rodapé fixo da gaveta (plano 50, item 26)
+const telaPequena = () => { try { return !!(globalThis.matchMedia && globalThis.matchMedia("(max-width: 760px)").matches); } catch { return false; } };
+
 export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
   const { ui, h, L } = k;
   let fechada = false;
@@ -357,13 +363,17 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       fita.appendChild(b);
     }
 
+    // tempo na etapa atual com a mesma escala do cartão (verde→âmbar→vermelho pelo prazo da etapa ou 3/7 dias); só quando o servidor manda estagio_em
+    const faixa = n.status === "aberto" && estagio && n.estagio_em ? L.faixaTempoEtapa(n.estagio_em, estagio.sla_horas) : null;
+    const movel = telaPequena();
     const topo = h("div", { class: "ng-topo" },
       h("div", { class: "ng-status" }, statusPil,
+        faixa ? ui.pilula(L.textoDiasEtapa(n.estagio_em), faixa.nivel === "ruim" ? "ruim" : faixa.nivel === "aten" ? "aten" : "neutra", { icone: "relogio", title: faixa.texto, class: "ng-tempo" }) : null,
         n.anuncio ? ui.pilula(n.plataforma === "google" ? "Google Ads" : "Anúncio Meta", n.plataforma === "google" ? "google" : "meta", { icone: "anuncio" }) : null,
         funil && funil.conta_no_ads ? ui.pilula("Conta no retorno do anúncio", "neutra", { title: "Este funil entra nos números de Anúncios" }) : null,
         dono ? ui.pilula(dono.nome, "neutra", { icone: "usuario" }) : null),
       caixaTitulo,
-      h("div", { class: "ng-linha1" }, valorEl, acoes),
+      h("div", { class: "ng-linha1" }, valorEl, movel ? null : acoes),
       fita,
       n.status === "perdido" && (n.motivo_perda_id || n.motivo_perda_txt)
         ? h("p", { class: "aviso aviso-ruim" }, ui.icone("info"), h("span", null, `Motivo: ${k.motivosPorId()[n.motivo_perda_id] || "—"}${n.motivo_perda_txt ? ` — ${n.motivo_perda_txt}` : ""}`)) : null);
@@ -547,7 +557,8 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       return el;
     }
 
-    corpo.append(h("div", { class: "ng" }, topo, abasEl.el, conteudo));
+    // no celular as ações ficam num rodapé fixo (sticky no fim da gaveta): sempre à mão, sem rolar de volta ao topo
+    corpo.append(h("div", { class: ["ng", movel && "ng-com-rodape"] }, topo, abasEl.el, conteudo, movel ? h("div", { class: "ng-acoes-rodape" }, acoes) : null));
     mostrar();
   }
 

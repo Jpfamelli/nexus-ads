@@ -104,12 +104,15 @@ test("preferências da Agenda isolam cliente/conta e corrigem valores locais inv
   assert.notEqual(chave, A.chavePreferenciasAgenda("clinica B", "conta 1"));
   assert.notEqual(chave, A.chavePreferenciasAgenda("clinica A", "conta 2"));
   assert.equal(A.chavePreferenciasAgenda("", "conta 1"), null);
-  assert.deepEqual(A.normalizarPreferenciasAgenda({ data: "2026-02-30", modo: "mês", agrupar: "qualquer" }, "2026-10-03"),
-    { data: "2026-10-03", modo: "semana", agrupar: "responsavel" });
+  assert.deepEqual(A.normalizarPreferenciasAgenda({ data: "2026-02-30", modo: "mês", agrupar: "qualquer", cor: "arco-íris" }, "2026-10-03"),
+    { data: "2026-10-03", modo: "semana", agrupar: "responsavel", cor: "servico" });
   assert.deepEqual(A.normalizarPreferenciasAgenda({ data: "2026-10-02", modo: "dia", agrupar: "juntos", em: "2026-10-02" }, "2026-10-03"),
-    { data: "2026-10-03", modo: "dia", agrupar: "juntos" }, "data guardada em OUTRO dia não volta: a Agenda abre em hoje");
+    { data: "2026-10-03", modo: "dia", agrupar: "juntos", cor: "servico" }, "data guardada em OUTRO dia não volta: a Agenda abre em hoje");
   assert.deepEqual(A.normalizarPreferenciasAgenda({ data: "2026-10-02", modo: "dia", agrupar: "juntos", em: "2026-10-02" }, "2026-10-02"),
-    { data: "2026-10-02", modo: "dia", agrupar: "juntos" }, "no mesmo dia a data volta");
+    { data: "2026-10-02", modo: "dia", agrupar: "juntos", cor: "servico" }, "no mesmo dia a data volta");
+  // plano 50: «mes» é visão válida e a cor por profissional é lembrada (qualquer outro valor cai em serviço)
+  assert.deepEqual(A.normalizarPreferenciasAgenda({ modo: "mes", cor: "profissional" }, "2026-10-04"),
+    { data: "2026-10-04", modo: "mes", agrupar: "responsavel", cor: "profissional" });
 });
 
 test("atalhos da Agenda («[», «]», «T») não capturam Alt/Ctrl/Meta/Shift (Alt+setas são Voltar/Avançar do navegador)", () => {

@@ -37,8 +37,8 @@ export function lerReais(s) {
 }
 
 export const secoesConfig = [
-  { id: "anuncios", titulo: "Anúncios", grupo: "Anúncios", papelMin: "gestor", modulo: "ads", icone: "anuncio", montar: secaoAnuncios },
-  { id: "formulario", titulo: "Formulário do site", grupo: "Anúncios", papelMin: "admin", modulo: "crm", icone: "contato", montar: secaoFormulario },
+  { id: "anuncios", titulo: "Anúncios", desc: "Contas da Meta e do Google ligadas aqui", grupo: "Anúncios", papelMin: "gestor", modulo: "ads", icone: "anuncio", montar: secaoAnuncios },
+  { id: "formulario", titulo: "Formulário do site", desc: "O formulário do site cai direto no funil", grupo: "Anúncios", papelMin: "admin", modulo: "crm", icone: "contato", montar: secaoFormulario },
 ];
 
 /* ============================================================

@@ -16,10 +16,10 @@ async function kitDe(ctx) {
 }
 
 export const secoesConfig = [
-  { id: "funis", titulo: "Funis e etapas", grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "funil", montar: secaoFunis },
-  { id: "campos", titulo: "Campos personalizados", grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "editar", montar: secaoCampos },
-  { id: "etiquetas", titulo: "Etiquetas", grupo: "CRM", papelMin: "supervisor", modulo: "crm", icone: "etiqueta", montar: secaoEtiquetas },
-  { id: "motivos", titulo: "Motivos de perda", grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "alerta", montar: secaoMotivos },
+  { id: "funis", titulo: "Funis e etapas", desc: "As etapas por onde cada venda passa", grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "funil", montar: secaoFunis },
+  { id: "campos", titulo: "Campos personalizados", desc: "Dados extras do cadastro e da venda", grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "editar", montar: secaoCampos },
+  { id: "etiquetas", titulo: "Etiquetas", desc: "Marcas coloridas para achar depois", grupo: "CRM", papelMin: "supervisor", modulo: "crm", icone: "etiqueta", montar: secaoEtiquetas },
+  { id: "motivos", titulo: "Motivos de perda", desc: "Por que uma venda não fechou", grupo: "CRM", papelMin: "admin", modulo: "crm", icone: "alerta", montar: secaoMotivos },
 ];
 
 /* ------------------------------------------------------------ peças comuns */

@@ -12,7 +12,10 @@ const ABAS = [
   { id: "atendimento", rotulo: "Atendimento", hash: "#/relatorios/atendimento" },
 ];
 const CHAVE = "nx-app-rel";
-let L = null, G = null, montagem = 0, graficos = [];
+let L = null, G = null, X = null, montagem = 0, graficos = [];   // X = peças de tela compartilhadas (sparkline, PNG) que moram em anuncios.js
+
+/** Série diária que alimenta a sparkline de cada KPI (só os que têm dado por dia; os outros ficam sem, nunca inventados). */
+export const SPARK_KPI = Object.freeze({ vendas: { criados: "criados", ganhos: "ganhos", receita: "receita" }, atendimento: { novas: "novas", resolvidas: "resolvidas" } });
 
 /** Janela inclusiva imediatamente anterior, com o mesmo número de dias (aritmética UTC, sem desvio de fuso). */
 export function janelaComparacao(de, ate) {
@@ -47,7 +50,7 @@ export async function montar(ctx) {
   const raiz = ui.h("section", { class: "rel relat", "aria-labelledby": "relat-h" });
   ctx.alvo.append(raiz);
   if (!L) {
-    try { [L, G] = await Promise.all([import(`./rel-logica.js?v=${ctx.versao}`), import(`./graficos.js?v=${ctx.versao}`)]); }
+    try { [L, G, X] = await Promise.all([import(`./rel-logica.js?v=${ctx.versao}`), import(`./graficos.js?v=${ctx.versao}`), import(`./anuncios.js?v=${ctx.versao}`)]); }
     catch (e) { raiz.append(ui.erroCartao(e, () => montar(ctx))); return; }
   }
   if (minha !== montagem) return;
@@ -81,10 +84,13 @@ export async function montar(ctx) {
     opcoes: ABAS.map(a => ({ valor: a.id, rotulo: a.rotulo })),
     aoMudar: v => { const a = ABAS.find(x => x.id === v); if (a) ctx.navegar(a.hash); } });
   const btnAtualizar = h("button", { type: "button", class: "rel-btn rel-btn-sec rel-btn-ic", title: "Atualizar os números" }, ui.icone("reabrir"), h("span", { class: "rel-rot" }, "Atualizar"));
+  // item 50: impressão limpa (@media print em relatorios.css esconde filtros e botões e abre as tabelas)
+  const btnImprimir = h("button", { type: "button", class: "rel-btn rel-btn-sec rel-btn-ic relat-imprimir", title: "Imprimir ou salvar em PDF" }, ui.icone("modelo"), h("span", { class: "rel-rot" }, "Imprimir"));
+  btnImprimir.addEventListener("click", () => { try { window.print(); } catch { ui.toast("Não foi possível abrir a impressão aqui.", { tipo: "nota" }); } });
   raiz.append(h("header", { class: "rel-topo" },
     h("div", { class: "rel-topo-t" }, h("p", { class: "rel-olho" }, `Relatórios · ${ctx.cliente.nome}`),
       h("h1", { id: "relat-h", class: "rel-h1" }, aba === "vendas" ? "Vendas" : "Atendimento")),
-    h("div", { class: "rel-topo-acoes" }, btnAtualizar)), nav);
+    h("div", { class: "rel-topo-acoes" }, btnImprimir, btnAtualizar)), nav);
 
   const filtros = h("div", { class: "rel-filtros relat-filtros" });
   const seg = h("div", { class: "rel-seg", role: "group", "aria-label": "Período" });
@@ -235,8 +241,10 @@ export async function montar(ctx) {
   }
 
   // ---------- peças comuns
-  function kpis(lista) {
+  /** KPIs (item 49): número grande, seta ↑↓ contra o período anterior e, quando há série diária, a sparkline do período. */
+  function kpis(lista, serie = []) {
     const g = h("div", { class: "rel-kpis rel-kpis-6" });
+    const mapa = SPARK_KPI[aba] || {};
     lista.forEach((k, i) => {
       // valor ou base ausentes ficam null (+null seria 0: «—» ganhava um falso ▼ 100%); sem base o chip diz «sem base», neutro
       const vv = k.v === null || k.v === undefined ? null : +k.v;
@@ -246,26 +254,34 @@ export async function montar(ctx) {
       else if (k.fmt === "min" || k.fmt === "h" || k.fmt === "pct" || k.fmt === "dias") b.textContent = FMT[k.fmt](vv);
       else if (k.fmt === "brl0") L.contarMoeda(ui, G, b, vv, { centavos: false });     // "R$" a 60 %, colado ao valor
       else G.contar(b, vv, FMT[k.fmt]);
-      g.append(h("div", { class: "rel-kpi rel-cartao rel-entra", style: `--i:${i}` },
+      const cel = h("div", { class: "rel-kpi rel-cartao rel-entra", style: `--i:${i}`, dataset: { kpi: k.id } },
         h("span", { class: "rel-kpi-l" }, k.rotulo), b,
         k.agora ? h("span", { class: "rel-kpi-linha" }, h("span", { class: "rel-nota" }, "agora"))   // só o estado de agora (abertas agora) não tem período anterior
           : h("span", { class: "rel-kpi-linha" },
             h("span", { class: `rel-var rel-var-${c.cls}`, title: `antes: ${k.a == null ? "—" : FMT[k.fmt](+k.a)}` }, c.v == null ? c.txt : `${c.seta} ${c.txt}`),
-            h("span", { class: "rel-nota" }, "vs. período anterior")),
-        k.extra ? h("span", { class: "rel-kpi-extra" }, k.extra) : null));
+            h("span", { class: "rel-nota" }, "vs. período anterior")));
+      const valores = mapa[k.id] ? L.valoresSerie(serie, mapa[k.id]) : [];
+      if (valores.length > 1 && valores.some(v => v > 0)) {
+        const sp = h("span", { class: "rel-kpi-spark", "aria-hidden": "true" });
+        if (X.desenharSparkline({ G, L, alvo: sp, valores, rotulo: `${k.rotulo}: dia a dia` })) cel.append(sp);
+      }
+      if (k.extra) cel.append(h("span", { class: "rel-kpi-extra" }, k.extra));
+      g.append(cel);
     });
     return g;
   }
-  function cartao(titulo, { sub, largo, csv } = {}) {
+  function cartao(titulo, { sub, largo, csv, png } = {}) {
     const alvo = h("div", { class: "rel-grafico" });
     const rodape = h("div", { class: "rel-cartao-rodape" });
     const c = h("section", { class: `rel-cartao rel-entra relat-bloco${largo ? " relat-largo" : ""}` },
       h("div", { class: "rel-cartao-topo" }, h("h2", { class: "rel-h2" }, titulo), sub ? h("p", { class: "rel-nota" }, sub) : null), alvo, rodape);
     if (csv) {
-      const b = h("button", { type: "button", class: "g-ver-tabela relat-csv", title: "Baixar este bloco em CSV (abre no Excel)" }, "CSV");
+      const b = h("button", { type: "button", class: "g-ver-tabela relat-csv", title: "Baixar este bloco em CSV (abre no Excel)", "aria-label": `Baixar «${titulo}» em CSV` }, "CSV");
       b.addEventListener("click", () => baixarCsv(csv.nome, csv.colunas, csv.linhas()));
       rodape.append(b);
     }
+    // item 50: PNG só nos blocos desenhados em SVG (linha, rosca); funil, barras e calor são HTML e ficam com CSV + tabela
+    if (png) rodape.append(X.botaoPng({ h, alvo, L, titulo, nome: () => { const { de, ate } = periodo(); return L.nomeArquivoExport(png, de, ate, "png"); }, aoFalhar: t => ui.toast(t, { tipo: "nota" }) }));
     return { c, alvo, rodape };
   }
   function baixarCsv(nome, colunas, linhas) {
@@ -291,7 +307,7 @@ export async function montar(ctx) {
   // ---------- VENDAS
   function desenharVendas(r) {
     montarSelect(r.funis, P.funil, "Funil", "Todos os funis", v => { P.funil = v; salvar(); carregar(); });
-    corpo.append(kpis(L.kpisVendas(r, { negocios: typeof V.min === "function" ? V.min("negocios") : "negócios" })));
+    corpo.append(kpis(L.kpisVendas(r, { negocios: typeof V.min === "function" ? V.min("negocios") : "negócios" }), r.serie || []));
     const k = r.kpis || {};
     corpo.append(h("div", { class: "relat-carteira rel-cartao rel-entra" },
       h("p", { class: "rel-olho" }, "Carteira agora"),
@@ -319,9 +335,10 @@ export async function montar(ctx) {
         linhas: (r.funil || []).map(e => [e.nome, int(e.qtd_atual), brl0(e.valor_atual), int(e.passaram), e.tipo === "aberto" ? pctTxt(e.conversao_proxima_pct) : "—"]) });
     } else bf.alvo.append(h("p", { class: "rel-vazio-txt" }, "Nenhum funil ativo."));
 
-    // série diária
+    // série diária (com o melhor dia de ganhos destacado no subtítulo)
     const serie = r.serie || [];
-    const bs = cartao("Dia a dia", { sub: "Criados × ganhos por dia (fuso de São Paulo).", largo: true,
+    const melhor = L.melhorDia(serie, "ganhos");
+    const bs = cartao("Dia a dia", { sub: `Criados × ganhos por dia (fuso de São Paulo).${melhor ? ` Melhor dia: ${L.diaLongoIso(melhor.d)}, com ${int(melhor.v)} ${melhor.v === 1 ? "ganho" : "ganhos"}.` : ""}`, largo: true, png: "vendas-dia-a-dia",
       csv: { nome: "vendas-dia-a-dia", colunas: ["Dia", "Criados", "Ganhos", "Receita"], linhas: () => serie.map(d => [L.dataIsoBR(d.d), d.criados, d.ganhos, d.receita]) } });
     grade.append(bs.c);
     graficos.push(G.linha(bs.alvo, {
@@ -351,7 +368,7 @@ export async function montar(ctx) {
 
     // motivos de perda
     const mot = r.motivos_perda || [];
-    const bm = cartao("Motivos de perda", { sub: `${vcap("negocios", "Negócios")} ${fem ? "perdidas" : "perdidos"} no período, por motivo.`,
+    const bm = cartao("Motivos de perda", { sub: `${vcap("negocios", "Negócios")} ${fem ? "perdidas" : "perdidos"} no período, por motivo.`, png: mot.length ? "motivos-de-perda" : null,
       csv: { nome: "motivos-de-perda", colunas: ["Motivo", "Quantidade", "Valor previsto"], linhas: () => mot.map(m => [m.nome, m.qtd, m.valor]) } });
     grade.append(bm.c);
     if (mot.length) {
@@ -393,14 +410,15 @@ export async function montar(ctx) {
   // ---------- ATENDIMENTO
   function desenharAtendimento(r) {
     montarSelect(r.departamentos, P.dep, "Departamento", "Todos os departamentos", v => { P.dep = v; salvar(); carregar(); });
-    corpo.append(kpis(L.kpisAtendimento(r)));
+    corpo.append(kpis(L.kpisAtendimento(r), r.serie || []));
     if (L.atendimentoVazio(r)) { corpo.append(semDados()); return; }
     const grade = h("div", { class: "relat-grade" });
     corpo.append(grade);
 
-    // série novas × resolvidas
+    // série novas × resolvidas (com o dia mais movimentado no subtítulo)
     const serie = r.serie || [];
-    const bs = cartao("Dia a dia", { sub: "Conversas novas × resolvidas por dia (fuso de São Paulo).", largo: true,
+    const melhor = L.melhorDia(serie, "novas");
+    const bs = cartao("Dia a dia", { sub: `Conversas novas × resolvidas por dia (fuso de São Paulo).${melhor ? ` Dia mais movimentado: ${L.diaLongoIso(melhor.d)}, com ${int(melhor.v)} novas.` : ""}`, largo: true, png: "atendimento-dia-a-dia",
       csv: { nome: "atendimento-dia-a-dia", colunas: ["Dia", "Novas", "Resolvidas"], linhas: () => serie.map(d => [L.dataIsoBR(d.d), d.novas, d.resolvidas]) } });
     grade.append(bs.c);
     graficos.push(G.linha(bs.alvo, {
@@ -419,6 +437,10 @@ export async function montar(ctx) {
     grade.append(bc.c);
     graficos.push(G.calor(bc.alvo, { matriz: m, dias: L.SEMANA, fmt: v => `${int(v)} ${+v === 1 ? "mensagem" : "mensagens"}`,
       resumo: pico ? `Mapa de calor das mensagens recebidas; o horário de pico é ${L.SEMANA[pico.dow]} às ${pico.hora} horas` : "Mapa de calor sem mensagens no período" }));
+    // faixas do dia (madrugada/manhã/tarde/noite) em chips: a leitura rápida que o dono quer antes de olhar as 168 células
+    const fx = L.faixasCalor(m);
+    if (fx.total > 0) bc.alvo.append(h("ul", { class: "relat-faixas", "aria-label": "Mensagens por faixa do dia" }, fx.faixas.map(f => h("li", { class: `relat-faixa${fx.forte && fx.forte.nome === f.nome ? " relat-faixa-forte" : ""}` },
+      h("span", { class: "relat-faixa-n" }, f.nome), h("b", { class: "rel-num" }, `${f.pct}%`), h("small", { class: "rel-nota" }, `${int(f.total)} msgs · ${String(f.ini).padStart(2, "0")}–${String(f.fim).padStart(2, "0")}h`)))));
     G.alternarTabela(bc.rodape, bc.alvo.querySelector(".g-cal-rolagem") || bc.alvo, { legenda: "Mensagens recebidas por dia da semana e hora",
       colunas: ["Dia", "Madrugada (0–5h)", "Manhã (6–11h)", "Tarde (12–17h)", "Noite (18–23h)"],
       linhas: [1, 2, 3, 4, 5, 6, 0].map(d => [L.SEMANA[d], ...[0, 6, 12, 18].map(i => int(m[d].slice(i, i + 6).reduce((s, x) => s + x, 0)))]) });

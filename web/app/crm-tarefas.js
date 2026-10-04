@@ -4,6 +4,9 @@
    blocoTarefas, blocoNotas, blocoTempo, formTarefa.
    Tela T9 Tarefas (#/tarefas): montarTarefas (abas Hoje, Atrasadas,
    Próximas, Concluídas; Minhas/Todas) sobre nx_tarefas_listar.
+   Plano 50 (04/10): painel do dia com contagens, lista agrupada por dia,
+   check que desenha ao concluir (CSS) e linha do tempo agrupada por dia
+   com ícone colorido por tipo de evento.
    ============================================================ */
 
 const TIPOS = ["tarefa", "ligacao", "whatsapp", "reuniao", "visita", "email"];
@@ -43,6 +46,12 @@ function excluirComDesfazer(k, tipo, item, { texto, rpc, sumir, voltar }) {
 }
 
 function hojeISO(ui) { return ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10); }
+/** Dia civil de São Paulo de um instante ("" se a data for inválida — o Intl lançaria erro). */
+function diaSP(ui, iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return ui.hojeSP ? ui.hojeSP(d) : d.toISOString().slice(0, 10);
+}
 
 /** Rótulo do vencimento: "Atrasada · ontem 14:00", "Hoje 15:30", "amanhã", "05/10 09:00". */
 function textoVence(k, t) {
@@ -326,21 +335,39 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
 }
 
 /* ------------------------------------------------------------ linha do tempo */
-/** blocoTempo(k, itens, {titulo}) → Node */
+/** Família do evento para o ícone colorido (plano 50, item 26): ganho, perdido, nota, tarefa, estagio, conversa, automacao ou "". */
+export function familiaTempo(it) {
+  if (!it) return "";
+  if (it.fonte === "nota") return "nota";
+  if (it.fonte === "tarefa") return "tarefa";
+  if (it.tipo === "ganho" || it.tipo === "perdido") return it.tipo;
+  if (it.tipo === "estagio" || it.tipo === "reaberto" || it.tipo === "negocio_criado") return "estagio";
+  if (/^conversa_|^atribuida$/.test(String(it.tipo || ""))) return "conversa";
+  if (it.tipo === "automacao") return "automacao";
+  return "";
+}
+
+/** blocoTempo(k, itens, {titulo}) → Node — agrupada por dia («Hoje», «Ontem», «Seg, 29/09»), ícone colorido por tipo de evento, hora de cada item. */
 export function blocoTempo(k, itens = [], { titulo = "Linha do tempo" } = {}) {
   const { ui, h, L } = k;
   const nomes = k.nomes();
   const motivos = k.motivosPorId();
-  const corpo = h("ol", { class: "tempo" });
-  if (!itens.length) corpo.appendChild(h("li", { class: "fraco", style: { "font-size": "var(--fs-14)", "list-style": "none" } }, "Ainda não há registros."));
-  for (const it of itens) {
-    const cls = it.fonte === "nota" ? "nota" : it.tipo === "ganho" ? "ganho" : it.tipo === "perdido" ? "perdido" : "";
-    const txt = L.textoTempo(it, { nomes, vocab: k.v, brl: v => ui.brl(v), motivos });
-    const link = it.conversa_id ? h("a", { href: `#/conversas/${it.conversa_id}` }, " Abrir conversa") : null;
-    corpo.appendChild(h("li", { class: ["tempo-it", cls] },
-      h("span", { class: "tempo-ic", "aria-hidden": "true" }, ui.icone(L.iconeTempo(it))),
-      h("div", { class: "tempo-txt" }, txt, link,
-        h("small", null, `${ui.dataHoraBR(it.em)}${it.autor ? ` · ${it.autor.nome}` : " · sistema"}`))));
+  const corpo = h("div", { class: "tempo-dias" });
+  if (!itens.length) corpo.appendChild(h("p", { class: "fraco", style: { "font-size": "var(--fs-14)" } }, "Ainda não há registros."));
+  const grupos = L.agruparPorDia(itens, { instanteDe: it => it.em, diaDe: iso => diaSP(ui, iso), hoje: hojeISO(ui), ordem: "desc" });
+  for (const g of grupos) {
+    const ol = h("ol", { class: "tempo" });
+    for (const it of g.itens) {
+      const cls = familiaTempo(it);
+      const txt = L.textoTempo(it, { nomes, vocab: k.v, brl: v => ui.brl(v), motivos });
+      const link = it.conversa_id ? h("a", { href: `#/conversas/${it.conversa_id}` }, " Abrir conversa") : null;
+      ol.appendChild(h("li", { class: ["tempo-it", cls] },
+        h("span", { class: "tempo-ic", "aria-hidden": "true" }, ui.icone(L.iconeTempo(it))),
+        h("div", { class: "tempo-txt" }, txt, link,
+          h("small", null, h("time", { datetime: it.em || null, title: ui.dataHoraBR(it.em) }, g.dia ? ui.horaBR(it.em) : ui.dataHoraBR(it.em)), `${it.autor ? ` · ${it.autor.nome}` : " · sistema"}`))));
+    }
+    corpo.appendChild(h("section", { class: "tempo-dia", "aria-label": g.rotulo },
+      h("h4", { class: "tempo-dia-t" }, h("span", null, g.rotulo), h("span", { class: "tempo-dia-n dado" }, String(g.itens.length))), ol));
   }
   return h("section", { class: "ng-bloco", "aria-label": titulo }, h("div", { class: "ng-bloco-cab" }, h("h3", null, titulo)), corpo);
 }
@@ -356,7 +383,7 @@ const VAZIO_T9 = {
 };
 
 export async function montarTarefas(k, el, rota) {
-  const { ui, h, ctx } = k;
+  const { ui, h, ctx, L } = k;
   ctx.titulo("Tarefas");
   const lerLocal = (c, p) => { try { return localStorage.getItem(c) || p; } catch { return p; } };
   const gravar = (c, v) => { try { localStorage.setItem(c, v); } catch { /* ok */ } };
@@ -375,8 +402,24 @@ export async function montarTarefas(k, el, rota) {
     const t = await formTarefa(k, null, {});
     if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); carregar(true); }
   };
+  // plano 50 (item 28): painel do dia — Hoje / Atrasadas / Próximas com contagem e cor; tocar leva à aba
+  const painelNums = { hoje: h("b", { class: "dado" }, "—"), atrasadas: h("b", { class: "dado" }, "—"), proximas: h("b", { class: "dado" }, "—") };
+  const painelItem = (id, rotulo) => h("button", { type: "button", class: ["tfp-pn", `tfp-pn-${id}`], "aria-pressed": String(aba === id), dataset: { aba: id },
+    on: { click: () => { if (aba === id) return; aba = id; gravar("nx-app-tarefas-aba", id); if (typeof abasEl.ativar === "function") abasEl.ativar(id); carregar(); } } },
+    painelNums[id], h("span", null, rotulo));
+  const painel = h("div", { class: "tfp-painel", role: "group", "aria-label": "Resumo das tarefas" },
+    painelItem("hoje", "para hoje"), painelItem("atrasadas", "atrasadas"), painelItem("proximas", "nos próximos dias"));
+  function desenharPainel(c) {
+    for (const id of ["hoje", "atrasadas", "proximas"]) {
+      const n = Number(c[id]) || 0;
+      painelNums[id].textContent = String(n);
+      const bt = painelNums[id].parentElement;
+      if (bt) { bt.setAttribute("aria-pressed", String(aba === id)); bt.classList.toggle("zero", n === 0); bt.classList.toggle("alerta", id === "atrasadas" && n > 0); }
+    }
+  }
   el.append(
     ui.cabecalho({ titulo: "Tarefas", acoes: k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novaTarefa } }, ui.icone("mais"), "Tarefa") : null }),
+    painel,
     h("div", { class: "tfp-fita" }, abasEl, seg),
     corpo);
   // M28: no celular «+ Tarefa» sai do cabeçalho e vira o botão flutuante
@@ -392,21 +435,33 @@ export async function montarTarefas(k, el, rota) {
     try {
       const r = await k.api.rpcC("nx_tarefas_listar", { p_filtro: { dono, situacao: aba } });
       if (minha !== seq) return;
-      const c = r.contagens || {};
+      // as contagens vêm em r.contagens (banco) ou soltas no topo da resposta (servidor fictício): o painel e as abas leem as duas formas
+      const c = r.contagens || r || {};
       abasEl.contar("hoje", c.hoje || null); abasEl.contar("atrasadas", c.atrasadas || null); abasEl.contar("proximas", c.proximas || null);
+      desenharPainel(c);
       corpo.removeAttribute("aria-busy");
       ui.limpar(corpo);
       const itens = r.itens.filter(t => !ocultas.has(t.id));
       if (!itens.length) { corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], icone: "tarefa" })); return; }
-      const lista = h("div", { class: "at-lista" });
-      for (const t of itens) {
-        const item = itemTarefa(k, t, { mostrarVinculo: true, aoMudar: ev => {
-          if (ev && ev.tipo === "excluida") {
-            ocultas.add(t.id); item.remove();
-            if (!lista.firstChild) { ui.limpar(corpo); corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], icone: "tarefa" })); }
-          } else { if (ev && ev.tarefa) ocultas.delete(ev.tarefa.id); carregar(true); }
-        } });
-        lista.appendChild(item);
+      // agrupadas por dia de vencimento («Hoje», «Amanhã», «Qui, 09/10»…; concluídas do mais recente para o mais antigo)
+      const hoje = hojeISO(ui);
+      const grupos = L.agruparPorDia(itens, { instanteDe: t => t.vence_em, diaDe: iso => diaSP(ui, iso), hoje, ordem: aba === "concluidas" ? "desc" : "asc" });
+      const lista = h("div", { class: "at-lista tfp-lista" });
+      let restantes = itens.length;
+      for (const g of grupos) {
+        const grupo = h("section", { class: ["tfp-grupo", g.dia && g.dia < hoje && aba !== "concluidas" && "passado"], "aria-label": g.rotulo },
+          h("h3", { class: "tfp-grupo-t" }, h("span", null, g.rotulo), h("span", { class: "tfp-grupo-n dado" }, String(g.itens.length))));
+        for (const t of g.itens) {
+          const item = itemTarefa(k, t, { mostrarVinculo: true, aoMudar: ev => {
+            if (ev && ev.tipo === "excluida") {
+              ocultas.add(t.id); item.remove(); restantes--;
+              if (!grupo.querySelector(".tf-li")) grupo.remove();
+              if (restantes <= 0) { ui.limpar(corpo); corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], icone: "tarefa" })); }
+            } else { if (ev && ev.tarefa) ocultas.delete(ev.tarefa.id); carregar(true); }
+          } });
+          grupo.appendChild(item);
+        }
+        lista.appendChild(grupo);
       }
       corpo.appendChild(lista);
       // o servidor devolve no máximo 200: sem isso a lista parecia completa

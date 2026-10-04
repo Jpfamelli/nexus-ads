@@ -1,0 +1,112 @@
+/* ============================================================
+   ÓRBITA — config.css · plano 50 (frente G) · Configurações, Números de WhatsApp e Admin
+   Carregado por config.js, cv-config.js (Números) e admin.js com ui.carregarCss("config").
+   Só tokens do app.css (white-label): nenhuma cor escrita aqui. Grades com minmax(0, …); sem rolagem lateral em 360 px.
+   ============================================================ */
+
+[hidden] { display: none !important; }
+
+/* ---------------------------------------------------------------- navegação lateral das Configurações (item 56)
+   Mudou para o app.css (bloco T14): o config.js desenha a lista sem esperar esta folha, e o mesmo seletor com valores diferentes nos dois
+   arquivos fazia o item nascer como pílula de 40 px e virar cartão de 44/56 px quando esta folha chegava. Uma só definição, lá. */
+
+/* ---------------------------------------------------------------- Marca: prévia da tela de entrada + alternância (item 56) */
+.marca-seg { align-self: flex-start; }
+.pv-login {
+  position: relative; overflow: hidden; border-radius: var(--r-g); border: 1px solid var(--c-borda-2);
+  background: var(--c-fundo); color: var(--c-texto); min-height: 420px; font-size: var(--fs-13); isolation: isolate;
+  display: grid; place-items: center; padding: 1.6rem 1.2rem;
+}
+.pv-login::before { content: ""; position: absolute; inset: 0; z-index: -1; background: radial-gradient(55% 45% at 10% 0%, var(--c-brilho-1), transparent 70%), radial-gradient(50% 45% at 100% 100%, var(--c-brilho-2), transparent 70%); }
+.pv-login-palco { width: min(100%, 22rem); display: flex; flex-direction: column; gap: .45rem; }
+.pv-login-marca { display: flex; align-items: center; gap: .55rem; margin-bottom: .4rem; }
+.pv-login-logo { display: grid; place-items: center; width: 34px; height: 34px; }
+.pv-login-logo img, .pv-login-logo svg { width: 30px; height: 30px; object-fit: contain; }
+.pv-login-prod { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-17); }
+.pv-login-tit { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-20); line-height: 1.15; letter-spacing: -.01em; }
+.pv-login-txt { color: var(--c-texto-2); font-size: var(--fs-13); line-height: 1.45; }
+.pv-login-cartao { display: flex; flex-direction: column; gap: .5rem; margin-top: .6rem; padding: .9rem; border-radius: var(--r-p); background: var(--c-sup); border: 1px solid var(--c-borda); }
+.pv-login-campo { display: flex; flex-direction: column; gap: .15rem; padding: .45rem .7rem; border-radius: 10px; background: var(--c-poco); border: 1px solid var(--c-borda); color: var(--c-texto-3); font-size: var(--fs-12); }
+.pv-login-campo small { font-weight: 600; font-size: var(--fs-11); color: var(--c-texto-2); }
+.pv-login-bt { justify-content: center; min-height: 34px; margin-top: .2rem; font-size: var(--fs-13); pointer-events: none; }
+.pv-login .pv-link { align-self: center; color: var(--c-prim-luz); font-weight: 600; font-size: var(--fs-12); text-decoration: underline; text-underline-offset: 2px; }
+.pv-login-rodape { margin-top: .5rem; text-align: center; font-size: var(--fs-11); color: var(--c-texto-3); }
+
+/* ---------------------------------------------------------------- Números de WhatsApp: estado vivo, progresso e histórico (item 57) */
+.cfg-status { display: inline-flex; align-items: center; gap: .4rem; }
+.cfg-status-dot { position: relative; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--c-borda-2); box-shadow: 0 0 0 3px var(--c-tinta); }
+.cfg-status[data-tom="ok"] .cfg-status-dot { background: var(--c-ok); box-shadow: 0 0 0 3px var(--c-ok-suave); }
+.cfg-status[data-tom="aten"] .cfg-status-dot { background: var(--c-aten); box-shadow: 0 0 0 3px var(--c-aten-suave); }
+.cfg-status[data-tom="ruim"] .cfg-status-dot { background: var(--c-ruim); box-shadow: 0 0 0 3px var(--c-ruim-suave); }
+.cfg-status[data-tom="info"] .cfg-status-dot { background: var(--c-info); box-shadow: 0 0 0 3px var(--c-info-suave); }
+.cfg-status[data-tom="ok"] .cfg-status-dot::after, .cfg-status[data-tom="aten"] .cfg-status-dot::after {
+  content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 2px solid currentColor; opacity: 0; color: var(--c-ok);
+  animation: cfg-pulso 2.2s var(--e-out) infinite;
+}
+.cfg-status[data-tom="aten"] .cfg-status-dot::after { color: var(--c-aten); animation-duration: 3.2s; }
+@keyframes cfg-pulso { 0% { transform: scale(.7); opacity: .9; } 70% { transform: scale(1.7); opacity: 0; } 100% { transform: scale(1.7); opacity: 0; } }
+.cfg-canal[data-tom="ok"] { border-color: color-mix(in srgb, var(--c-ok) 32%, var(--c-borda)); }
+.cfg-canal[data-tom="ruim"] { border-color: color-mix(in srgb, var(--c-ruim) 38%, var(--c-borda)); }
+.cfg-progresso { display: flex; align-items: center; gap: .6rem; margin-top: .55rem; min-width: 0; }
+.cfg-progresso-segs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 3px; flex: 1 1 10rem; max-width: 16rem; }
+.cfg-progresso-segs i { display: block; height: 6px; border-radius: 999px; background: var(--c-sup-3); }
+.cfg-progresso-segs i.feito { background: var(--c-ok); }
+.cfg-progresso-txt { flex: none; font-family: var(--f-mono); font-size: var(--fs-12); color: var(--c-texto-2); }
+.cfg-hist { margin-top: .7rem; border-top: 1px solid var(--c-borda); padding-top: .5rem; }
+.cfg-hist summary { display: inline-flex; align-items: center; gap: .4rem; min-height: 32px; cursor: pointer; font-size: var(--fs-13); font-weight: 600; color: var(--c-texto-2); list-style: none; }
+.cfg-hist summary::-webkit-details-marker { display: none; }
+.cfg-hist summary .ic { width: 15px; height: 15px; }
+.cfg-hist summary::after { content: "▾"; margin-left: .2rem; font-size: var(--fs-12); color: var(--c-texto-3); transition: transform var(--t-ui) var(--e-out); }
+.cfg-hist[open] summary::after { transform: rotate(180deg); }
+.cfg-hist summary:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; border-radius: var(--r-pp); }
+.cfg-hist-lista { list-style: none; display: flex; flex-direction: column; gap: .2rem; margin: .4rem 0 .3rem; padding: 0; }
+.cfg-hist-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .55rem; min-height: 32px; padding: .15rem .3rem; font-size: var(--fs-13); border-radius: var(--r-pp); }
+.cfg-hist-item:nth-child(odd) { background: var(--c-tinta); }
+.cfg-hist-item i { width: 8px; height: 8px; border-radius: 50%; background: var(--c-borda-2); }
+.cfg-hist-item[data-tom="ok"] i { background: var(--c-ok); }
+.cfg-hist-item[data-tom="aten"] i { background: var(--c-aten); }
+.cfg-hist-item[data-tom="ruim"] i { background: var(--c-ruim); }
+.cfg-hist-item time { font-size: var(--fs-12); color: var(--c-texto-3); white-space: nowrap; }
+.cfg-hist .sub { font-size: var(--fs-12); }
+
+/* ---------------------------------------------------------------- Admin: resumo, filtro de situação, mini-barras e anel de IA (item 58) */
+.adm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--esp-3); margin-bottom: var(--esp-4); }
+.adm-kpi { display: flex; flex-direction: column; gap: .2rem; min-width: 0; padding: .8rem 1rem; border-radius: var(--r-p); background: var(--c-sup); border: 1px solid var(--c-borda); }
+.adm-kpi-rot { font-weight: 600; font-size: var(--fs-12); color: var(--c-texto-2); }
+.adm-kpi-val { font-size: var(--fs-25); font-weight: 500; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.adm-seg-status { flex: 1 1 auto; min-width: 0; }
+.adm-uso-mini { display: block; min-width: 8rem; }
+.adm-uso-mini .uso { gap: .25rem; }
+.adm-uso-mini .uso-l { font-size: var(--fs-12); }
+.adm-uso-mini .uso-l > span:first-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.adm-uso-mini .uso-barra { height: 5px; }
+.adm-anel-caixa { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.adm-anel { flex: none; width: 112px; height: 112px; }
+.adm-anel-trilho { stroke: var(--c-sup-3); }
+.adm-anel-arco { stroke: var(--c-ok); transition: stroke-dashoffset var(--t-dados) var(--e-out); }
+.adm-anel-aten .adm-anel-arco { stroke: var(--c-aten); }
+.adm-anel-ruim .adm-anel-arco { stroke: var(--c-ruim); }
+.adm-anel-neutra .adm-anel-arco { stroke: var(--c-borda-2); }
+.adm-anel-num { font-family: var(--f-mono); font-weight: 500; font-size: 22px; fill: var(--c-texto); }
+.adm-anel-sub { font-family: var(--f-corpo); font-size: 10px; fill: var(--c-texto-3); }
+.adm-anel-txt { display: flex; flex-direction: column; gap: .2rem; min-width: 0; font-size: var(--fs-14); color: var(--c-texto-2); }
+.adm-anel-txt b { color: var(--c-texto); }
+.adm-voltar { display: inline-flex; align-items: center; min-height: 44px; padding-inline: .3rem; border-radius: var(--r-pp); }
+@media (max-width: 900px) { .adm-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .adm-kpi { padding: .65rem .8rem; }
+  .adm-kpi-val { font-size: var(--fs-20); }
+  .adm-seg-status { flex-basis: 100%; }
+  .adm-uso-mini { min-width: 6rem; }
+}
+
+/* ---------------------------------------------------------------- movimento reduzido e alto contraste */
+@media (prefers-reduced-motion: reduce) {
+  .cfg-status-dot::after { animation: none !important; display: none; }
+  .adm-anel-arco, .cfg-hist summary::after { transition: none; }
+}
+@media (forced-colors: active) {
+  .cfg-status-dot, .cfg-hist-item i, .cfg-progresso-segs i { forced-color-adjust: none; border: 1px solid ButtonText; }
+  .cfg-progresso-segs i.feito { background: Highlight; }
+  .cfg-pend { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+}

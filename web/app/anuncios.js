@@ -24,7 +24,7 @@ const ABAS = [
 let N = null, L = null, G = null;    // nucleo.js, rel-logica.js, graficos.js
 const cache = new Map();             // clienteId → {dados, M, em}
 const S = { dias: 30, plat: "", ordem: { chave: "gasto", dir: -1 }, rel: null, rank: null,
-  buscaCamp: "", resultadoCamp: "todos", comparacaoCamp: [] };
+  buscaCamp: "", resultadoCamp: "todos", comparacaoCamp: [], filtroRadar: "todos" };
 let graficos = [], tPilula = 0, montagem = 0;
 
 const centavos = n => Math.round((Number(n) || 0) * 100);
@@ -166,6 +166,297 @@ export function criarPainelCampanhas({ h, limpar, linhas = [], estado = {}, peri
       on: { click: () => alternar(linha) } }, `Comparar ${linha?.c?.nome || "campanha"}`),
     aplicar(busca, resultado) { st.busca = String(busca || ""); st.resultado = resultado; estado.busca = st.busca; estado.resultado = st.resultado; aoFiltrar({ busca: st.busca, resultado: st.resultado }); return render(); },
     exportar: () => aoExportar(visiveis), render };
+}
+
+/* ============================================================
+   PLANO 50 (frente F) — peças de tela compartilhadas com relatorios.js: sparkline com fallback, exportação PNG,
+   gráfico de tendência (2 eixos, legenda clicável, teclado), funil por plataforma, calor semanal, semáforo do Radar e
+   barras por campanha. Recebem `h`/`G`/`document` por parâmetro ou global: o teste roda com um DOM mínimo.
+   ============================================================ */
+const NS_SVG = "http://www.w3.org/2000/svg";
+const sv = (tag, attrs = {}, ...filhos) => {
+  const el = document.createElementNS(NS_SVG, tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "style" && typeof v === "object") for (const [p, q] of Object.entries(v)) el.style.setProperty(p, q);
+    else el.setAttribute(k, String(v));
+  }
+  for (const f of filhos.flat()) if (f != null && f !== false) el.append(typeof f === "string" ? document.createTextNode(f) : f);
+  return el;
+};
+const movReduzido = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+const r1 = v => String(Math.round(v * 10) / 10);
+
+/** Sparkline: usa graficos.sparkline quando a frente A já entregou; senão um SVG mínimo (polilinha + último ponto) com a geometria pura de L. */
+export function desenharSparkline({ G, L, alvo, valores = [], rotulo = "", classe = "" }) {
+  const v = (valores || []).filter(x => Number.isFinite(+x));
+  if (!alvo || v.length < 2) return null;
+  if (G && typeof G.sparkline === "function") { try { return G.sparkline(alvo, { valores: v, rotulo, area: true }); } catch { /* cai no fallback */ } }
+  const W = 96, H = 28, pts = L.pontosSparkline(v, W, H);
+  if (!pts) return null;
+  const ultimo = pts.split(" ").pop().split(",");
+  const svg = sv("svg", { class: `spark ${classe}`.trim(), viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": rotulo || "tendência", focusable: "false" },
+    sv("polyline", { class: "spark-area", points: `${pts.split(" ")[0].split(",")[0]},${H} ${pts} ${ultimo[0]},${H}` }),
+    sv("polyline", { class: "spark-linha", points: pts }),
+    sv("circle", { class: "spark-fim", cx: ultimo[0], cy: ultimo[1], r: 2.5 }));
+  alvo.append(svg);
+  return svg;
+}
+
+const escXml = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+/** Serializa um SVG levando os estilos calculados para dentro (as cores vêm de classes do tema, que o PNG não enxergaria). Puro além de `lerEstilo`. */
+export function svgParaTexto(el, lerEstilo, props = [], { fundo = null } = {}) {
+  const andar = no => {
+    if (no.nodeType === 3) return escXml(no.textContent || "");
+    if (no.nodeType !== 1) return "";
+    const tag = String(no.tagName || "").toLowerCase();
+    if (tag === "title") return "";                       // dica de hover não vai para a imagem
+    const nomes = typeof no.getAttributeNames === "function" ? no.getAttributeNames() : [...(no.attributes || [])].map(a => a.name);
+    const attrs = nomes.filter(n => n !== "style" && n !== "class" && !/^on/i.test(n)).map(n => ` ${n}="${escXml(no.getAttribute(n))}"`).join("");
+    const cs = lerEstilo ? lerEstilo(no) : null;
+    const estilo = cs ? props.map(p => { const v = cs.getPropertyValue ? cs.getPropertyValue(p) : cs[p]; return v && v !== "none" || (p === "fill" || p === "stroke") ? `${p}:${v || "none"}` : ""; }).filter(Boolean).join(";") : "";
+    const filhos = [...(no.childNodes || [])].map(andar).join("");
+    const extra = tag === "svg" && fundo ? `<rect width="100%" height="100%" fill="${escXml(fundo)}"/>` : "";
+    return `<${tag}${tag === "svg" ? ` xmlns="${NS_SVG}"` : ""}${attrs}${estilo ? ` style="${escXml(estilo)}"` : ""}>${extra}${filhos}</${tag}>`;
+  };
+  return andar(el);
+}
+/** Baixa o SVG de um gráfico como PNG (canvas em 2×). Devolve true se conseguiu; false quando o navegador não deixa (o chamador avisa). */
+export async function exportarSvgPng(svg, nome, { L, escala = 2 } = {}) {
+  if (!svg || typeof document === "undefined") return false;
+  try {
+    // fundo do cartão (token do tema); sem ele, o fundo da página — nunca uma cor escrita aqui
+    const fundo = getComputedStyle(document.documentElement).getPropertyValue("--c-sup").trim() || getComputedStyle(document.body).backgroundColor || "white";
+    const texto = svgParaTexto(svg, el => getComputedStyle(el), (L && L.ESTILOS_SVG_EXPORT) || ["fill", "stroke", "stroke-width", "font-family", "font-size", "opacity"], { fundo });
+    const r = svg.getBoundingClientRect(), W = Math.max(1, Math.round(r.width || +svg.getAttribute("width") || 640)), H = Math.max(1, Math.round(r.height || +svg.getAttribute("height") || 280));
+    const img = new Image();
+    await new Promise((ok, erro) => { img.onload = ok; img.onerror = () => erro(new Error("svg")); img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(texto)}`; });
+    const canvas = document.createElement("canvas");
+    canvas.width = W * escala; canvas.height = H * escala;
+    const ctx2d = canvas.getContext("2d");
+    ctx2d.fillStyle = fundo; ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+    ctx2d.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(ok => canvas.toBlob(ok, "image/png"));
+    if (!blob) return false;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = nome || "grafico.png";
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    return true;
+  } catch { return false; }
+}
+/** Botão «PNG» do rodapé de um gráfico: acha o SVG dentro de `alvo` na hora do clique (o gráfico redesenha ao redimensionar).
+    `titulo` entra no rótulo («Baixar “Tendência” em PNG»): com dois gráficos na tela, o leitor de tela sabe qual é qual. */
+export function botaoPng({ h, alvo, nome, L, titulo = "", aoFalhar = () => {} }) {
+  const b = h("button", { type: "button", class: "g-ver-tabela relat-csv rel-png", title: "Baixar este gráfico como imagem (PNG)", "aria-label": titulo ? `Baixar «${titulo}» em PNG` : "Baixar gráfico em PNG" }, "PNG");
+  b.addEventListener("click", async () => {
+    const svg = alvo && typeof alvo.querySelector === "function" ? alvo.querySelector("svg") : null;
+    if (!svg) { aoFalhar("Este bloco não tem gráfico para exportar."); return; }
+    b.disabled = true;
+    const ok = await exportarSvgPng(svg, typeof nome === "function" ? nome() : nome, { L });
+    b.disabled = false;
+    if (!ok) aoFalhar("Não foi possível gerar a imagem agora. Use «Ver como tabela» e copie os números.");
+  });
+  return b;
+}
+
+/**
+ * Gráfico de tendência (item 45): investimento (área, eixo da esquerda em R$) × conversas e agendamentos do CRM (linhas, eixo da direita).
+ * A legenda é clicável (esconde a série e reescala os eixos); setas/Home/End leem dia a dia; o texto da dica vai para um aria-live discreto.
+ * @param o {serie:[{i,gasto,conversas,agendadas}], rotuloDia(i), diaLongo(i), fmtMoeda, fmtMoedaCurto, fmtNum, resumo, G}
+ */
+export function criarGraficoTendencia(alvo, o) {
+  const G = o.G;
+  const SERIES = [
+    { id: "gasto", nome: "Investimento", classe: "g-td-gasto", eixo: "esq", area: true },
+    { id: "conversas", nome: "Conversas no CRM", classe: "g-td-conv", eixo: "dir" },
+    { id: "agendadas", nome: "Agendamentos", classe: "g-td-ag", eixo: "dir" },
+  ];
+  const ativas = new Set(SERIES.map(x => x.id));
+  const caixa = document.createElement("div");
+  caixa.className = "g-caixa g-tendencia"; caixa.tabIndex = 0; caixa.setAttribute("role", "group");
+  caixa.setAttribute("aria-label", `${o.resumo}. Use as setas para ler dia a dia; a legenda liga e desliga cada série.`);
+  const dica = document.createElement("div"); dica.className = "g-dica"; dica.setAttribute("role", "status"); dica.setAttribute("aria-live", "polite"); dica.hidden = true;
+  const legenda = document.createElement("ul"); legenda.className = "g-legenda g-legenda-botoes"; legenda.setAttribute("aria-label", "Séries do gráfico");
+  const botoes = new Map();
+  for (const se of SERIES) {
+    const b = document.createElement("button"); b.type = "button"; b.className = `g-leg-b ${se.classe}`; b.setAttribute("aria-pressed", "true"); b.dataset.serie = se.id;
+    const i = document.createElement("i"); i.className = `g-marca ${se.classe}`; i.setAttribute("aria-hidden", "true");
+    b.append(i, document.createTextNode(se.nome));
+    b.addEventListener("click", () => alternar(se.id));
+    const li = document.createElement("li"); li.append(b); legenda.append(li); botoes.set(se.id, b);
+  }
+  alvo.append(caixa, legenda);
+  caixa.append(dica);
+  let geo = null, atual = -1, W = 0;
+  const n = () => o.serie.length;
+  const texto = k => { const p = o.serie[k]; const partes = []; if (ativas.has("gasto")) partes.push(`investimento ${o.fmtMoeda(p.gasto)}`); if (ativas.has("conversas")) partes.push(`${o.fmtNum(p.conversas)} ${p.conversas === 1 ? "conversa" : "conversas"}`); if (ativas.has("agendadas")) partes.push(`${o.fmtNum(p.agendadas)} ${p.agendadas === 1 ? "agendamento" : "agendamentos"}`); return `${o.diaLongo(p.i)} — ${partes.join(" · ")}`; };
+  const desenhar = (anim) => {
+    const velho = caixa.querySelector("svg"); if (velho) velho.remove();
+    const serie = o.serie, N = serie.length;
+    if (!N) { geo = null; return; }
+    const Wt = W || 640, H = Wt < 560 ? 220 : 260;
+    const P = { l: Wt < 560 ? 48 : 60, r: Wt < 560 ? 34 : 44, t: 14, b: 28 }, iw = Wt - P.l - P.r, ih = H - P.t - P.b, base = P.t + ih;
+    const maxG = G.topoBonito(Math.max(1, ...serie.map(d => (ativas.has("gasto") ? d.gasto : 0))));
+    const maxC = Math.max(4, G.topoBonito(Math.max(1, ...serie.map(d => Math.max(ativas.has("conversas") ? d.conversas : 0, ativas.has("agendadas") ? d.agendadas : 0)))));
+    const x = k => P.l + (N > 1 ? k / (N - 1) * iw : iw / 2);
+    const yG = G.escala([0, maxG], [base, P.t]), yC = G.escala([0, maxC], [base, P.t]);
+    const svg = sv("svg", { viewBox: `0 0 ${Wt} ${H}`, width: Wt, height: H, role: "img", "aria-label": o.resumo, class: anim && !movReduzido() ? "g-anim" : "" });
+    const grade = sv("g", { class: "g-grade", "aria-hidden": "true" });
+    for (let k = 0; k <= 4; k++) {
+      const yy = yG(maxG * k / 4);
+      grade.append(sv("line", { x1: P.l, x2: Wt - P.r, y1: r1(yy), y2: r1(yy) }));
+      if (ativas.has("gasto")) grade.append(sv("text", { x: P.l - 8, y: r1(yy + 4), "text-anchor": "end" }, o.fmtMoedaCurto(maxG * k / 4)));
+      if (ativas.has("conversas") || ativas.has("agendadas")) grade.append(sv("text", { x: Wt - P.r + 8, y: r1(yy + 4), class: "g-eixo-dir" }, o.fmtNum(Math.round(maxC * k / 4))));
+    }
+    svg.append(grade);
+    const pontos = [];
+    SERIES.forEach((se, j) => {
+      if (!ativas.has(se.id)) return;
+      const y = se.eixo === "esq" ? yG : yC;
+      const pts = serie.map((d, k) => [x(k), y(d[se.id] || 0)]);
+      // traço reto: contagens inteiras por dia não podem «mergulhar» abaixo de zero como a curva suave faria
+      if (se.area && pts.length > 1) svg.append(sv("path", { class: `g-area ${se.classe}`, d: G.caminhoArea(pts, base, false) }));
+      const d = pts.length > 1 ? G.caminhoReto(pts) : `M${r1(pts[0][0] - 3)} ${r1(pts[0][1])} L${r1(pts[0][0] + 3)} ${r1(pts[0][1])}`;
+      svg.append(sv("path", { class: `g-linha ${se.classe}`, d, pathLength: 1, style: { "--i": j * 3 } }, sv("title", {}, se.nome)));
+      pontos.push({ se, c: sv("circle", { class: `g-ponto ${se.classe}`, r: 4, cx: -20, cy: -20, visibility: "hidden" }) });
+    });
+    const passo = G.passoRotulo(N, Wt < 560 ? 4 : 7), gX = sv("g", { class: "g-eixo-x", "aria-hidden": "true" });
+    for (const k of G.indicesRotulo(N, passo, x, serie.map(d => o.rotuloDia(d.i)))) gX.append(sv("text", { x: r1(x(k)), y: H - 8, "text-anchor": k === 0 ? "start" : k === N - 1 ? "end" : "middle" }, o.rotuloDia(serie[k].i)));
+    svg.append(gX);
+    const mira = sv("line", { class: "g-mira", x1: 0, x2: 0, y1: P.t, y2: base, visibility: "hidden" });
+    svg.append(mira); for (const p of pontos) svg.append(p.c);
+    caixa.prepend(svg);
+    geo = { x, yG, yC, mira, pontos, P, W: Wt, iw, N };
+    if (atual >= 0) mostrar(atual);
+  };
+  const posDica = k => { const svg = caixa.querySelector("svg"); const sr = svg && svg.getBoundingClientRect ? svg.getBoundingClientRect() : { width: geo.W, left: 0 }; const cr = caixa.getBoundingClientRect ? caixa.getBoundingClientRect() : { left: 0 }; return geo.x(k) * (sr.width || geo.W) / geo.W + ((sr.left || 0) - (cr.left || 0)); };
+  function mostrar(k) {
+    if (!geo) return;
+    k = Math.max(0, Math.min(n() - 1, k)); atual = k;
+    dica.textContent = texto(k); dica.hidden = false;
+    const larg = caixa.clientWidth || geo.W, dw = dica.offsetWidth || 160, px = posDica(k);
+    dica.style.setProperty("--x", `${Math.max(4, Math.min(larg - dw - 4, px - dw / 2))}px`);
+    const xx = geo.x(k);
+    geo.mira.setAttribute("x1", r1(xx)); geo.mira.setAttribute("x2", r1(xx)); geo.mira.removeAttribute("visibility");
+    for (const { se, c } of geo.pontos) { const y = se.eixo === "esq" ? geo.yG : geo.yC; c.setAttribute("cx", r1(xx)); c.setAttribute("cy", r1(y(o.serie[k][se.id] || 0))); c.removeAttribute("visibility"); }
+  }
+  function esconder() { atual = -1; dica.hidden = true; if (!geo) return; geo.mira.setAttribute("visibility", "hidden"); for (const { c } of geo.pontos) c.setAttribute("visibility", "hidden"); }
+  function alternar(id) {
+    if (!botoes.has(id)) return false;
+    if (ativas.has(id)) { if (ativas.size === 1) return false; ativas.delete(id); } else ativas.add(id);   // a última série ligada não desliga
+    for (const [sid, b] of botoes) { const on = ativas.has(sid); b.setAttribute("aria-pressed", String(on)); b.classList.toggle("g-leg-off", !on); }
+    desenhar(false);
+    if (typeof o.aoMudarSeries === "function") o.aoMudarSeries([...ativas]);
+    return true;
+  }
+  const medir = () => Math.max(260, Math.round(caixa.clientWidth || alvo.clientWidth || 640));
+  W = medir(); desenhar(true);
+  let ro = null;
+  if (typeof ResizeObserver === "function") { ro = new ResizeObserver(() => { const nw = medir(); if (Math.abs(nw - W) > 24) { W = nw; desenhar(false); } }); ro.observe(caixa); }
+  const indice = e => { if (!geo) return -1; const svg = caixa.querySelector("svg"); const r = svg.getBoundingClientRect(); const k = r.width / geo.W; const px = (e.clientX - r.left) / k - geo.P.l; return geo.N > 1 ? Math.round(px / geo.iw * (geo.N - 1)) : 0; };
+  const ponteiro = e => { const k = indice(e); if (k < 0 || k >= n()) return esconder(); mostrar(k); };
+  caixa.addEventListener("pointermove", ponteiro);
+  caixa.addEventListener("pointerdown", ponteiro);
+  caixa.addEventListener("pointerleave", e => { if (e.pointerType !== "touch") esconder(); });
+  caixa.addEventListener("blur", () => esconder());
+  caixa.addEventListener("keydown", e => {
+    const ult = n() - 1, mapa = { ArrowRight: atual < 0 ? 0 : atual + 1, ArrowLeft: atual < 0 ? ult : atual - 1, Home: 0, End: ult };
+    if (e.key === "Escape") return esconder();
+    if (!(e.key in mapa) || !geo) return;
+    if (typeof e.preventDefault === "function") e.preventDefault();
+    mostrar(Math.max(0, Math.min(ult, mapa[e.key])));
+  });
+  return { elemento: caixa, legenda, destruir() { if (ro) ro.disconnect(); ro = null; }, redesenhar() { W = medir(); desenhar(false); }, alternar, mostrar, esconder,
+    get ativas() { return [...ativas]; }, get atual() { return atual; } };
+}
+
+/** Funil por plataforma (item 46): uma coluna por plataforma, 4 etapas em barra proporcional e a taxa entre cada par. */
+export function criarFunilPlataformas({ h, dados = [], fmtInt = String, fmtMoeda = String, pctTxt = v => `${v}%` }) {
+  const raiz = h("div", { class: "ads-fp", role: "list", "aria-label": "Funil por plataforma" });
+  for (const p of dados) {
+    const col = h("div", { class: `ads-fp-col ads-fp-${p.plat}`, role: "listitem" },
+      h("div", { class: "ads-fp-cab" }, h("span", { class: `rel-chip rel-chip-${p.plat}` }, p.nome),
+        h("span", { class: "rel-nota" }, `${fmtMoeda(p.gasto)} investidos → ${fmtMoeda(p.receita)} em receita`)));
+    const ol = h("ol", { class: "ads-fp-etapas" });
+    p.etapas.forEach((e, k) => {
+      const w = p.max > 0 ? Math.max(e.v > 0 ? 4 : 0, e.v / p.max * 100) : 0;
+      const taxa = k ? p.taxas[k - 1] : null;
+      ol.append(h("li", { class: "ads-fp-etapa", style: `--i:${k}` },
+        taxa ? h("span", { class: `ads-fp-taxa${taxa.pct == null ? " ads-fp-taxa-0" : ""}`, title: `${e.rotulo} ÷ ${p.etapas[k - 1].rotulo}` }, taxa.pct == null ? "sem base" : `${pctTxt(taxa.pct)} ↓`) : h("span", { class: "ads-fp-taxa ads-fp-taxa-0", "aria-hidden": "true" }),
+        h("span", { class: "ads-fp-trilho" }, h("i", { class: `ads-fp-barra g-${p.plat}`, style: `--w:${w.toFixed(1)}%` })),
+        h("span", { class: "ads-fp-rot" }, h("b", { class: "rel-num" }, fmtInt(e.v)), " ", e.rotulo)));
+    });
+    col.append(ol);
+    raiz.append(col);
+  }
+  if (!dados.length) raiz.append(h("p", { class: "rel-vazio-txt" }, "Nenhuma plataforma com movimento no período."));
+  return raiz;
+}
+
+/** Calor semanal (item 47): dia da semana × semana; célula com título legível e escala no rodapé. `nivel(v, max)` vem de graficos.nivelCalor. */
+export function criarCalorSemanal({ h, calor, dias = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"], fmt = String, nivel = (v, max) => (v > 0 ? Math.max(1, Math.min(5, Math.ceil(v / max * 5))) : 0), resumo = "" }) {
+  const nSem = calor.semanas.length;
+  const grade = h("div", { class: `ads-cal${movReduzido() ? "" : " g-anim"}`, role: "img", "aria-label": resumo, style: `--n:${nSem}` });
+  grade.append(h("span", { class: "g-cal-canto", "aria-hidden": "true" }));
+  calor.semanas.forEach(s => grade.append(h("span", { class: "g-cal-h", "aria-hidden": "true" }, s.rotulo)));
+  [1, 2, 3, 4, 5, 6, 0].forEach((d, lin) => {
+    grade.append(h("span", { class: "g-cal-d", "aria-hidden": "true" }, dias[d]));
+    for (let k = 0; k < nSem; k++) {
+      const v = calor.matriz[d][k] || 0;
+      grade.append(h("span", { class: `g-cal-c g-n${nivel(v, calor.max)}${calor.pico && calor.pico.dow === d && calor.pico.semana === k ? " ads-cal-pico" : ""}`,
+        title: `${dias[d]} · semana de ${calor.semanas[k].rotulo}: ${fmt(v)}`, style: `--i:${lin * 2 + k}` }));
+    }
+  });
+  const esc = h("div", { class: "g-cal-escala", "aria-hidden": "true" }, h("span", {}, "menos"), [0, 1, 2, 3, 4, 5].map(k => h("i", { class: `g-cal-c g-n${k}` })), h("span", {}, "mais"));
+  return h("div", { class: "ads-cal-caixa" }, h("div", { class: "g-cal-rolagem" }, grade), esc);
+}
+
+/** Semáforo do Radar (item 51): três luzes com contagem, frase para leigo, ação sugerida (com `link` opcional: {rotulo, href}) e filtro da lista (todos/ativos/resolvidos).
+    Nível neutro (sem números de anúncio): nenhuma luz acesa e o cartão sem a cor verde. */
+export function criarSemaforoRadar({ h, semaforo, icone = null, filtro = "todos", aoFiltrar = () => {}, link = null }) {
+  // o leitor de tela ouve «0 críticos», «1 ponto de atenção», «2 informativos» (com plural)
+  const luz = (sev, um, varios, q) => { const rotulo = `${q} ${q === 1 ? um : varios}`;
+    return h("span", { class: `ads-sem-luz ads-sem-${sev}${q ? " acesa" : ""}`, role: "img", "aria-label": rotulo },
+      h("i", { "aria-hidden": "true" }), h("b", { class: "rel-num" }, String(q)), h("small", {}, rotulo)); };
+  const luzes = h("div", { class: "ads-sem-luzes" }, luz("critico", "crítico", "críticos", semaforo.contagens.critico),
+    luz("alerta", "ponto de atenção", "pontos de atenção", semaforo.contagens.alerta), luz("info", "informativo", "informativos", semaforo.contagens.info));
+  const seg = h("div", { class: "rel-seg ads-sem-filtro", role: "group", "aria-label": "Mostrar alertas" });
+  const OPC = [["todos", "Todos"], ["ativos", "Ativos"], ["resolvidos", "Resolvidos"]];
+  let atual = OPC.some(([v]) => v === filtro) ? filtro : "todos";
+  for (const [v, t] of OPC) {
+    const b = h("button", { type: "button", class: "rel-seg-b", "aria-pressed": String(v === atual), dataset: { filtro: v } }, t);
+    b.addEventListener("click", () => { if (v === atual) return; atual = v; for (const x of seg.querySelectorAll ? seg.querySelectorAll("button") : (seg.filhos || [])) x.setAttribute("aria-pressed", String(x.dataset && x.dataset.filtro === v)); aoFiltrar(v); });
+    seg.append(b);
+  }
+  const raiz = h("section", { class: `rel-cartao rel-entra ads-semaforo ads-semaforo-${semaforo.cor}`, "aria-labelledby": "ads-sem-h" },
+    h("div", { class: "ads-sem-topo" }, luzes,
+      h("div", { class: "ads-sem-txt" }, h("p", { class: "rel-olho" }, "Radar dos anúncios"), h("h2", { id: "ads-sem-h", class: "ads-sem-frase narr" }, semaforo.frase),
+        h("p", { class: "ads-sem-acao" }, icone ? icone("raio") : null, h("span", { class: "rel-olho" }, "Sugestão "), semaforo.acao),
+        link && link.href ? h("a", { class: "rel-btn rel-btn-sec ads-sem-link", href: link.href }, link.rotulo) : null)),
+    seg);
+  return { elemento: raiz, get filtro() { return atual; } };
+}
+
+/** Barras por campanha (item 48): investimento de cada campanha; a marcada para comparação ou sob o mouse na tabela fica em destaque. */
+export function criarBarrasCampanhas({ h, linhas = [], fmtMoeda = String, fmtInt = String, nomePlat = String, aoEscolher = () => {}, max = 8 }) {
+  const topo = linhas.slice().sort((a, b) => (b.t.gasto || 0) - (a.t.gasto || 0)).slice(0, max);
+  const maior = Math.max(1, ...topo.map(r => r.t.gasto || 0));
+  const itens = new Map();
+  const ol = h("ol", { class: `ads-cb${movReduzido() ? "" : " g-anim"}`, "aria-label": "Investimento por campanha" });
+  topo.forEach((r, n) => {
+    const b = h("button", { type: "button", class: "ads-cb-item", "aria-pressed": "false", dataset: { campId: String(r.c.id) }, style: `--i:${n}`,
+      title: `${r.c.nome}: ${fmtMoeda(r.t.gasto)} · ${fmtInt(r.t.conversoes)} conversões · ${fmtInt(r.k.agendadas)} agendamentos` },
+      h("span", { class: "ads-cb-nome" }, h("i", { class: `g-marca g-${r.c.plat}`, "aria-hidden": "true" }), r.c.nome, h("span", { class: "sr-only" }, ` · ${nomePlat(r.c.plat)}`)),
+      h("span", { class: "ads-cb-trilho" }, h("i", { class: `ads-cb-barra g-${r.c.plat}`, style: `--w:${((r.t.gasto || 0) / maior * 100).toFixed(1)}%` })),
+      h("span", { class: "ads-cb-val rel-num" }, fmtMoeda(r.t.gasto)));
+    b.addEventListener("click", () => aoEscolher(r));
+    itens.set(String(r.c.id), b);
+    ol.append(h("li", {}, b));
+  });
+  const destacar = ids => { const set = new Set((ids || []).map(String)); for (const [id, b] of itens) { const on = set.has(id); b.setAttribute("aria-pressed", String(on)); if (b.classList) b.classList.toggle("ads-cb-dest", on); } };
+  const realcar = id => { for (const [k, b] of itens) if (b.classList) b.classList.toggle("ads-cb-hover", id != null && String(id) === k); };
+  return { elemento: ol, destacar, realcar, itens };
 }
 
 const lerLocal = (k, padrao) => { try { const v = localStorage.getItem(k); return v == null ? padrao : v; } catch { return padrao; } };
@@ -376,6 +667,17 @@ export async function montar(ctx) {
     const c = L.chipVar(atual, anterior, sentido);
     return h("span", { class: `rel-var rel-var-${c.cls}`, title: `vs. ${S.dias} dias antes` }, c.v == null ? c.txt : `${c.seta} ${c.txt}`);
   };
+  /** Baixa um bloco em CSV (números crus: L.csv troca o ponto por vírgula e escapa fórmula). */
+  const baixarCsv = (nome, colunas, linhas) => {
+    const url = URL.createObjectURL(new Blob([L.csv(colunas, linhas)], { type: "text/csv;charset=utf-8" }));
+    const a = h("a", { href: url, download: L.nomeArquivoExport(nome, `${S.dias}dias`, S.plat || "tudo", "csv") });
+    document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+  const botaoCsv = (nome, colunas, linhas, titulo = "") => {
+    const b = h("button", { type: "button", class: "g-ver-tabela relat-csv", title: "Baixar este bloco em CSV (abre no Excel)", "aria-label": titulo ? `Baixar «${titulo}» em CSV` : "Baixar este bloco em CSV" }, "CSV");
+    b.addEventListener("click", () => baixarCsv(nome, colunas, linhas()));
+    return b;
+  };
 
   /* ---------------- VISÃO GERAL ---------------- */
   function abaGeral(M) {
@@ -422,6 +724,10 @@ export async function montar(ctx) {
       { l: "Receita fechada", v: c.receita, a: ca.receita, f: N.brl0, s: "cima",
         extra: eGestor(ctx) && Number.isFinite(P.roas) ? `${N.dec(P.roas, 1)}x o investido em anúncios` : "valor informado nos negócios ganhos do CRM" },
     ];
+    // item 49 (Ads): cada KPI com a sparkline dos dias do período (o CPA não tem série diária honesta: fica sem)
+    const tend = L.serieTendencia(M, { dias: S.dias, plat: S.plat });
+    const sparkDe = campo => (campo ? tend.map(d => d[campo]) : []);
+    kpis[0].spark = sparkDe("gasto"); kpis[2].spark = sparkDe("convAds"); kpis[3].spark = sparkDe("receita");
     const regua = h("div", { class: "rel-kpis rel-kpis-4" });
     kpis.forEach((k, n) => {
       const cel = h("div", { class: "rel-kpi rel-cartao rel-entra", style: `--i:${n + 2}` },
@@ -434,10 +740,35 @@ export async function montar(ctx) {
         med.style.setProperty("--w", `${w.toFixed(1)}%`);
         cel.append(med);
       }
+      if (k.spark && k.spark.length > 1 && k.spark.some(v => v > 0)) {
+        const sp = h("span", { class: "rel-kpi-spark", "aria-hidden": "true" });
+        if (desenharSparkline({ G, L, alvo: sp, valores: k.spark, rotulo: `${k.l}: dia a dia` })) cel.append(sp);
+      }
       if (k.extra) cel.append(h("span", { class: "rel-kpi-extra" }, k.extra));
       regua.append(cel);
     });
     corpo.append(regua);
+
+    // item 45: tendência investimento × conversas × agendamentos (2 eixos, legenda clicável, teclado) + tabela/CSV/PNG
+    const alvoT = h("div", { class: "rel-grafico" });
+    const rodapeT = h("div", { class: "rel-cartao-rodape" });
+    const totT = tend.reduce((a, d) => ({ g: a.g + d.gasto, c: a.c + d.conversas, ag: a.ag + d.agendadas }), { g: 0, c: 0, ag: 0 });
+    const resumoT = `${periodoTexto}. Tendência: ${N.brl0(totT.g)} investidos, ${N.int(totT.c)} conversas e ${N.int(totT.ag)} agendamentos registrados no CRM`;
+    const cartaoT = h("section", { class: "rel-cartao ads-cartao-g rel-entra", "aria-labelledby": "ads-tend-h" },
+      h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ads-tend-h", class: "rel-h2" }, "Tendência: investimento × conversas × agendamentos"),
+        h("p", { class: "rel-nota" }, "R$ no eixo da esquerda; conversas e agendamentos do CRM no da direita, pela data de cada evento. Clique na legenda para esconder uma série.")),
+      alvoT, rodapeT);
+    if (tend.length > 1) {
+      const gT = criarGraficoTendencia(alvoT, { G, serie: tend, rotuloDia: M.ddmm, diaLongo: i => `${L.SEMANA[M.dataDe(i).getDay()]} · ${M.ddmm(i)}`,
+        fmtMoeda: N.brl, fmtMoedaCurto: N.brl0, fmtNum: N.int, resumo: resumoT });
+      graficos.push(gT);
+      G.alternarTabela(rodapeT, alvoT, { legenda: `${resumoT}; valores diários`, colunas: ["Dia", "Investimento", "Conversas CRM", "Agendamentos CRM", "Fechamentos CRM"],
+        linhas: tend.map(d => [M.dataBR(d.i), N.brl(d.gasto), N.int(d.conversas), N.int(d.agendadas), N.int(d.fecharam)]) });
+      rodapeT.append(botaoCsv("tendencia", ["Dia", "Investimento", "Conversões Ads", "Conversas CRM", "Agendamentos CRM", "Fechamentos CRM", "Receita CRM"],
+        () => tend.map(d => [M.dataBR(d.i), Math.round(d.gasto * 100) / 100, d.convAds, d.conversas, d.agendadas, d.fecharam, Math.round(d.receita * 100) / 100]), "Tendência"),
+        botaoPng({ h, alvo: alvoT, nome: () => L.nomeArquivoExport("tendencia", N.isoDe(M.dataDe(P.de)), N.isoDe(M.dataDe(P.ate))), L, titulo: "Tendência", aoFalhar: t => ui.toast(t, { tipo: "nota" }) }));
+    } else alvoT.append(h("p", { class: "rel-vazio-txt" }, "Ainda não há dias suficientes para desenhar a tendência."));
+    corpo.append(cartaoT);
 
     // gráfico diário + coluna lateral (plataformas e orçamento do mês)
     const serie = L.serieDiaria(M, { dias: S.dias, plat: S.plat });
@@ -464,6 +795,8 @@ export async function montar(ctx) {
       colunas: ["Dia", "Investimento Meta", "Investimento Google", "Conversões da plataforma", "Custo por conversão Ads"],
       linhas: serie.atual.map(d => [M.dataBR(d.i), N.brl(d.meta), N.brl(d.google), N.int(d.conv), d.conv ? N.brl(d.gasto / d.conv) : "—"]),
     });
+    rodape.append(botaoCsv("investimento-diario", ["Dia", "Investimento Meta", "Investimento Google", "Conversões Ads"], () => serie.atual.map(d => [M.dataBR(d.i), Math.round(d.meta * 100) / 100, Math.round(d.google * 100) / 100, d.conv]), "Investimento diário"),
+      botaoPng({ h, alvo: alvoG, nome: () => L.nomeArquivoExport("investimento-diario", N.isoDe(M.dataDe(P.de)), N.isoDe(M.dataDe(P.ate))), L, titulo: "Investimento diário", aoFalhar: t => ui.toast(t, { tipo: "nota" }) }));
 
     const lado = h("div", { class: "ads-lado" });
     // Meta × Google
@@ -472,8 +805,16 @@ export async function montar(ctx) {
       const pl = ["meta", "google"].map(p => ({ p, t: M.consolidar(M.linhasDe(de, ate, { plat: p })), c: M.crmTot(de, ate, { plat: p }) })).filter(x => x.t.gasto > 0 || x.c.conversas > 0);
       if (pl.length) {
         const maxG = Math.max(1, ...pl.map(x => x.t.gasto));
+        // item 48: rosca da divisão do investimento (ordem fixa Meta → Google: as cores das fatias casam com as marcas)
+        const alvoD = h("div", { class: "ads-donut-plat" });
+        const fatias = ["meta", "google"].map(p => { const x = pl.find(y => y.p === p); return { rotulo: L.nomePlat(p), valor: x ? x.t.gasto : 0, extra: x ? `${N.int(x.t.conversoes)} conversões · CPA ${N.brl(x.t.cpa)}` : "sem investimento" }; });
+        const totalD = fatias.reduce((s, f) => s + f.valor, 0);
+        const donut = typeof G.donut === "function" ? G.donut : G.rosca;
+        if (totalD > 0) graficos.push(donut(alvoD, { resumo: `Divisão do investimento: ${fatias.map(f => `${f.rotulo} ${N.brl0(f.valor)}`).join(", ")}`, fatias, fmt: N.brl0,
+          centro: { valor: `${Math.round((fatias[0].valor / totalD) * 100)}%`, rotulo: "no Meta" } }));
         lado.append(h("div", { class: "rel-cartao ads-plats rel-entra" }, h("h2", { class: "rel-h2" }, "Por plataforma"),
           h("p", { class: "rel-nota" }, `${periodoTexto}. Os eventos do CRM usam suas próprias datas e não são o denominador do CPA da plataforma.`),
+          alvoD,
           h("ul", { class: "ads-plat-lista" }, pl.map(x => {
             const barra = h("span", { class: `ads-plat-barra g-${x.p}` });
             barra.style.setProperty("--w", `${(x.t.gasto / maxG * 100).toFixed(1)}%`);
@@ -504,6 +845,30 @@ export async function montar(ctx) {
       h("p", { class: "ads-orc-leg rel-nota" }, h("span", {}, `real ${N.brl0(m.gasto)} até ontem`), h("span", {}, `projeção linear ${N.brl0(m.proj)}`), h("span", {}, `orçamento mensal ${N.brl0(orc)}`)),
       h("p", { class: `ads-orc-msg${acima ? " rel-txt-aten" : ""}` }, msg)));
     corpo.append(h("div", { class: "ads-grade" }, cartaoG, lado));
+
+    // item 46: funil anúncio → conversa → agenda → venda, por plataforma (com a plataforma filtrada, só ela)
+    const fp = L.funilPorPlataforma(M, { dias: S.dias }).filter(x => !S.plat || x.plat === S.plat);
+    const cartaoF = h("section", { class: "rel-cartao rel-entra ads-cartao-fp", "aria-labelledby": "ads-fp-h" },
+      h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ads-fp-h", class: "rel-h2" }, "Do anúncio à venda, por plataforma"),
+        h("p", { class: "rel-nota" }, `${periodoTexto}. A conversão do anúncio é contada pela plataforma; conversas, agendamentos e fechamentos vêm do CRM, cada um na sua data — a taxa entre etapas é uma leitura de ritmo, não uma coorte.`)),
+      criarFunilPlataformas({ h, dados: fp, fmtInt: N.int, fmtMoeda: N.brl0, pctTxt: v => N.pc(v, 0) }));
+    if (fp.length) cartaoF.append(h("div", { class: "rel-cartao-rodape" }, botaoCsv("funil-plataformas", ["Plataforma", "Investimento", "Conversões do anúncio", "Conversas CRM", "Agendaram", "Fecharam", "Receita"],
+      () => fp.map(p => [p.nome, Math.round(p.gasto * 100) / 100, ...p.etapas.map(e => e.v), Math.round(p.receita * 100) / 100]), "Do anúncio à venda, por plataforma")));
+
+    // item 47: calor dia da semana × semana das conversas de anúncio (nx_dados não traz a hora: a leitura é por dia)
+    const cal = L.calorSemanal(M, { dias: S.dias, plat: S.plat, campo: "conversas" });
+    const resumoC = cal.melhorDow == null ? "Nenhuma conversa de anúncio no período." : `Conversas de anúncio por dia da semana e semana; ${L.SEMANA[cal.melhorDow]} é o dia mais forte (${N.int(cal.porDow[cal.melhorDow])} no período).`;
+    const alvoC = h("div", { class: "rel-grafico" }), rodapeC = h("div", { class: "rel-cartao-rodape" });
+    const cartaoC = h("section", { class: "rel-cartao rel-entra ads-cartao-cal", "aria-labelledby": "ads-cal-h" },
+      h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ads-cal-h", class: "rel-h2" }, "Em que dias as conversas chegam"),
+        h("p", { class: "rel-nota" }, cal.melhorDow == null ? "Sem conversas atribuídas a anúncios neste período." : `${resumoC} A hora da conversa não vem com os dados de anúncios; por isso a leitura é por dia.`)),
+      alvoC, rodapeC);
+    if (cal.max > 0) {
+      alvoC.append(criarCalorSemanal({ h, calor: cal, dias: L.SEMANA, fmt: v => `${N.int(v)} ${v === 1 ? "conversa" : "conversas"}`, nivel: G.nivelCalor, resumo: resumoC }));
+      G.alternarTabela(rodapeC, alvoC, { legenda: "Conversas de anúncio por dia da semana e semana", colunas: ["Dia", ...cal.semanas.map(s => `sem. ${s.rotulo}`), "Total"],
+        linhas: [1, 2, 3, 4, 5, 6, 0].map(d => [L.SEMANA[d], ...cal.matriz[d].map(v => N.int(v)), N.int(cal.porDow[d])]) });
+    } else alvoC.append(h("p", { class: "rel-vazio-txt" }, "Quando as primeiras conversas chegarem, o mapa mostra os dias mais fortes."));
+    corpo.append(h("div", { class: "ads-grade-2" }, cartaoF, cartaoC));
   }
 
   /* ---------------- CAMPANHAS ---------------- */
@@ -573,11 +938,24 @@ export async function montar(ctx) {
         for (const { r, tr } of linhasDOM) tr.hidden = !visiveis.has(String(r.c.id));
         tfoot.hidden = visiveis.size !== linhasDOM.length;
       };
+      // item 48: barras de investimento por campanha; a marcada para comparar fica em destaque e a linha sob o mouse realça a barra
+      const barras = criarBarrasCampanhas({ h, linhas, fmtMoeda: N.brl0, fmtInt: N.int, nomePlat: L.nomePlat, aoEscolher: r => {
+        const troca = painelCampanhas.alternar(r);
+        if (troca.alterou) linhasDOM.find(x => String(x.r.c.id) === String(r.c.id))?.tr.querySelector(".ads-camp-comparar")?.focus({ preventScroll: true });
+      } });
+      for (const { r, tr } of linhasDOM) {
+        tr.addEventListener("pointerenter", () => barras.realcar(r.c.id));
+        tr.addEventListener("pointerleave", () => barras.realcar(null));
+        tr.addEventListener("focusin", () => barras.realcar(r.c.id));
+        tr.addEventListener("focusout", () => barras.realcar(null));
+      }
+      barras.destacar(S.comparacaoCamp);
       painelCampanhas = criarPainelCampanhas({ h, limpar: ui.limpar, linhas, estado: estadoCamp, periodo,
         moeda: N.brl0, moedaCent: N.brl, inteiro: N.int, decimal: n => N.dec(n, 1),
         aoFiltrar: f => { S.buscaCamp = f.busca; S.resultadoCamp = f.resultado; aplicarVisibilidade(f); },
         aoComparar: (_id, troca) => {
           S.comparacaoCamp = [...troca.ids];
+          barras.destacar(S.comparacaoCamp);
           for (const { r, tr } of linhasDOM) {
             const input = tr.querySelector(".ads-camp-comparar");
             if (input) input.checked = S.comparacaoCamp.some(id => String(id) === String(r.c.id));
@@ -596,6 +974,8 @@ export async function montar(ctx) {
       cartao.append(h("div", { class: "rel-cartao-topo" }, h("h2", { class: "rel-h2" }, `Campanhas · ${S.dias} dias`),
         h("p", { class: "rel-nota" }, "Conversões e CPA vêm do Meta/Google. Conversas, agendamentos, fechamentos e receita vêm do CRM, pela data de cada evento.")),
         painelCampanhas.elemento,
+        h("div", { class: "ads-cb-caixa" }, h("h3", { class: "rel-h2 ads-cb-h" }, `Investimento por campanha${linhas.length > 8 ? " · 8 maiores" : ""}`),
+          h("p", { class: "rel-nota" }, "Toque numa barra para marcar a campanha na comparação; passe pela tabela para realçar a barra."), barras.elemento),
         h("div", { class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": `Campanhas nos últimos ${S.dias} dias` }, h("table", { class: "rel-tabela ads-tabela" },
           h("caption", { class: "sr-only" }, `Campanhas nos últimos ${S.dias} dias`), thead, tbody, tfoot)));
     };
@@ -672,18 +1052,36 @@ export async function montar(ctx) {
   function abaRadar(M, dados, R) {
     const u = (dados.integracoes || []).map(i => i.ultimo_sync).filter(Boolean).sort().pop();
     const qtd = `${R.ativos} ${R.ativos === 1 ? "alerta ativo" : "alertas ativos"}`;
-    corpo.append(h("p", { class: "ads-radar-status rel-cartao rel-entra" },
-      h("span", { class: `ads-radar-luz${R.ativos ? " ativo" : ""}`, "aria-hidden": "true" }),
-      L.semAnuncios(M) ? "Sem números de anúncio ainda: o radar começa a vigiar assim que a primeira leitura chegar."
-        : u ? `Última leitura dos anúncios: ${L.quandoSP(u)} · ${qtd}.` : `${qtd}.`));
-    // do mais grave para o menos (L.ordenarRadar): o crítico ativo está sempre no topo; cada alerta leva barra lateral, ícone e rótulo da gravidade
+    // item 51: semáforo (vermelho/amarelo/verde) com frase para leigo, ação sugerida e filtro da lista;
+    // sem nenhum número de anúncio não há o que avaliar: nível neutro (sem luz verde) e, para quem gere, o caminho para conectar
+    const semDados = L.semAnuncios(M);
+    const sem = L.semaforoRadar(R, { semDados });
+    const statusTxt = semDados ? (sem.nivel === "neutro" ? null : "Sem números de anúncio ainda: o radar começa a vigiar assim que a primeira leitura chegar.")
+      : u ? `Última leitura dos anúncios: ${L.quandoSP(u)} · ${qtd}.` : `${qtd}.`;
     const lista = h("ul", { class: "ads-alertas" });
-    L.ordenarRadar(R).forEach((it, n) => lista.append(it.tipo === "conexao" ? alertaConexao(it, n) : alertaEpisodio(it, n)));
-    if (!lista.childElementCount) lista.append(h("li", { class: "rel-vazio-txt" }, "Nenhum alerta nos últimos 14 dias. Todas as campanhas dentro dos limites."));
-    const regras = h("ul", { class: "ads-regras" }, M.REGRAS.map(r => h("li", {},
-      h("div", {}, h("p", { class: "ads-regra-n" }, r.nome, " ", h("span", { class: `rel-chip rel-chip-${r.sev === "critico" ? "ruim" : r.sev === "alerta" ? "aten" : "info"}` }, L.SEV_NOME[r.sev])),
-        h("p", { class: "rel-nota" }, descreverRegra(r))),
-      h("span", { class: `rel-chip ${r.ativa ? "rel-chip-bom" : "rel-chip-neutro"}` }, r.ativa ? "ligada" : "desligada"))));
+    const ordenados = L.ordenarRadar(R);
+    const pintarLista = filtro => {
+      ui.limpar(lista);
+      const itens = L.filtrarRadar(ordenados, filtro);
+      itens.forEach((it, n) => lista.append(it.tipo === "conexao" ? alertaConexao(it, n) : alertaEpisodio(it, n)));
+      if (!itens.length) lista.append(h("li", { class: "rel-vazio-txt" }, filtro === "resolvidos" ? "Nenhum alerta resolvido nos últimos 14 dias."
+        : semDados ? "Nenhum alerta ainda: o radar vigia a partir da primeira leitura dos anúncios."
+        : filtro === "ativos" ? "Nenhum alerta ativo agora. Tudo dentro dos limites." : "Nenhum alerta nos últimos 14 dias. Todas as campanhas dentro dos limites."));
+    };
+    const semaforo = criarSemaforoRadar({ h, semaforo: sem, icone: n => ui.icone(n), filtro: S.filtroRadar || "todos", aoFiltrar: f => { S.filtroRadar = f; pintarLista(f); },
+      link: sem.nivel === "neutro" && eGestor(ctx) ? { rotulo: "Conectar em Ajustes de anúncios", href: "#/config/anuncios" } : null });
+    if (statusTxt) semaforo.elemento.append(h("p", { class: "ads-radar-status rel-nota" }, h("span", { class: `ads-radar-luz${R.ativos ? " ativo" : ""}`, "aria-hidden": "true" }), statusTxt));
+    corpo.append(semaforo.elemento);
+    // do mais grave para o menos (L.ordenarRadar): o crítico ativo está sempre no topo; cada alerta leva barra lateral, ícone e rótulo da gravidade
+    pintarLista(S.filtroRadar || "todos");
+    const regras = h("ul", { class: "ads-regras" }, M.REGRAS.map(r => {
+      const ex = L.explicarRegra(r.id);
+      return h("li", {},
+        h("div", {}, h("p", { class: "ads-regra-n" }, r.nome, " ", h("span", { class: `rel-chip rel-chip-${r.sev === "critico" ? "ruim" : r.sev === "alerta" ? "aten" : "info"}` }, L.SEV_NOME[r.sev])),
+          h("p", { class: "ads-regra-simples" }, ex.oQue),
+          h("details", { class: "ads-regra-det" }, h("summary", {}, "Como a regra funciona"), h("p", { class: "rel-nota" }, descreverRegra(r)), h("p", { class: "rel-nota" }, h("b", {}, "Por que importa: "), ex.porque), h("p", { class: "rel-nota" }, h("b", {}, "O que fazer: "), ex.acao))),
+        h("span", { class: `rel-chip ${r.ativa ? "rel-chip-bom" : "rel-chip-neutro"}` }, r.ativa ? "ligada" : "desligada"));
+    }));
     const log = h("ul", { class: "ads-log" });
     R.registro.forEach(x => log.append(h("li", {},
       h("span", { class: `ads-sev ads-sev-${x.sev}`, "aria-hidden": "true" }),
@@ -707,16 +1105,19 @@ export async function montar(ctx) {
         h("p", { class: "ads-al-topo" }, marcaSev(sev), h("span", { class: `rel-chip ${x.ativo ? "rel-chip-ruim" : "rel-chip-bom"}` }, x.ativo ? "ativo" : "resolvido")),
         h("p", { class: "ads-al-nome" }, x.nome),
         h("p", { class: "ads-al-msg" }, x.a.mensagem || ""),
+        x.ativo ? h("p", { class: "ads-al-acao" }, h("span", { class: "rel-olho" }, "Em palavras simples "), L.explicarRegra("integracao").oQue, " ", L.explicarRegra("integracao").acao) : null,
         h("p", { class: "rel-nota" }, L.quandoSP(x.a.criado_em), x.envio ? envio(x.envio, " · aviso ") : null),
         x.ativo && eGestor(ctx) ? h("a", { class: "rel-link", href: "#/config/anuncios" }, "Resolver em Ajustes de anúncios") : null));
   }
   function alertaEpisodio({ ref: e, sev }, n) {
+    const ex = L.explicarRegra(e.regra);
     return h("li", { class: `ads-al ads-al-${sev}${e.ativo ? "" : " resolvido"}`, dataset: { sev }, style: `--i:${n}` },
       h("div", { class: "ads-al-t" },
         h("p", { class: "ads-al-topo" }, marcaSev(sev), h("span", { class: `rel-chip ${e.ativo ? (sev === "critico" ? "rel-chip-ruim" : "rel-chip-aten") : "rel-chip-bom"}` }, e.ativo ? "ativo" : "resolvido")),
         h("p", { class: "ads-al-nome" }, e.nome),
         h("p", { class: "ads-al-msg" }, e.msg),
-        e.ativo ? h("p", { class: "ads-al-acao" }, h("span", { class: "rel-olho" }, "O que fazer "), e.acao) : null,
+        e.ativo ? h("p", { class: "ads-al-acao" }, h("span", { class: "rel-olho" }, "O que fazer "), e.acao || ex.acao) : null,
+        e.ativo ? h("p", { class: "ads-al-simples rel-nota" }, h("b", {}, "Em palavras simples: "), ex.oQue, " ", ex.porque) : null,
         h("p", { class: "rel-nota" }, e.desde, e.envio ? envio(e.envio, " · aviso ") : null)));
   }
   const MET = { cpa: "Custo por conversa", ctr: "CTR", freq: "Frequência", conversoes: "Conversas" };

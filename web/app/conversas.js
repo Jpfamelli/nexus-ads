@@ -19,6 +19,11 @@ const ICONES_LOCAIS = Object.freeze({
   reabrir: ["M4.5 12a7.5 7.5 0 1 0 2.2-5.3", "M4.5 4.5v4h4"],
   modelo: ["M4.5 5.5h15v4h-15z", "M4.5 12.5h9", "M4.5 16.5h12", "M4.5 20h6"],
   lateral: ["M4 5h16v14H4z", "M14.5 5v14"],
+  // plano 50: tipo da última mensagem na lista, player de áudio e visualizador de mídia
+  video: ["M4 6.5h11a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 16V8A1.5 1.5 0 0 1 4 6.5z", "M16.5 10.5 21.5 8v8l-5-2.5"],
+  play: ["M8 5.5v13l10.5-6.5z"],
+  pausa: ["M8 5.5h3v13H8z", "M13.5 5.5h3v13h-3z"],
+  ampliar: ["M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13z", "M15.5 15.5 20 20", "M10.5 7.5v6M7.5 10.5h6"],
 });
 
 function icone(nome, cls) {
@@ -38,14 +43,15 @@ export async function montar(ctx) {
   }
   desmontar();
   const v = encodeURIComponent(ctx.versao || "dev");
-  const [L, mLista, mChat, mComposer, mLateral] = await Promise.all([
+  const [L, mLista, mChat, mComposer, mLateral, , G] = await Promise.all([
     import(`./cv-logica.js?v=${v}`), import(`./cv-lista.js?v=${v}`), import(`./cv-chat.js?v=${v}`),
     import(`./cv-composer.js?v=${v}`), import(`./cv-lateral.js?v=${v}`),
     ctx.ui.carregarCss("conversas"),
+    import(`./graficos.js?v=${v}`).catch(() => null),      // mini-gráfico da lateral (plano 50 · 35): sem ele a lateral mostra só os contadores
   ]);
   const { ui } = ctx;
   A = {
-    ctx, ui, api: ctx.api, L, icone: (n, c) => icone(n, c),
+    ctx, ui, api: ctx.api, L, G, icone: (n, c) => icone(n, c),
     raiz: null, base: null, eu: null, podeEscrever: ctx.pode("atendente"),
     aba: lerPreferencia("aba", "minhas"), filtro: {}, busca: "",
     itens: [], contagens: {}, temMais: false, carregandoLista: false,
@@ -58,12 +64,15 @@ export async function montar(ctx) {
     avancar: lerPreferencia("avancar", "0") === "1",       // M35: «Ao resolver, abrir a próxima» (preferência por navegador; desligada até a pessoa ligar)
     focoAoAbrir: null, resolvendo: new Set(), atendendo: false,
     reenviadas: new Set(),          // falhas gravadas pelo servidor em que a pessoa já tocou em «Tentar de novo» (o botão da bolha antiga some)
+    marcaNovas: null,               // plano 50 · 31: id da 1ª mensagem não lida ao abrir (separador «Mensagens novas»)
+    velocidadeAudio: L.velocidadeValida(lerPreferencia("audio-vel", "1")),   // plano 50 · 32: 1× · 1,5× · 2×, lembrada por navegador
+    densidade: lerPreferencia("densidade", "confortavel") === "compacta" ? "compacta" : "confortavel",   // plano 50 · 34: linhas da lista
   };
   { const daRota = abaDaRota(ctx.rota); if (daRota) A.aba = daRota; }
   if (!A.podeEscrever && A.aba === "minhas") A.aba = "abertas";
 
   // esqueleto da tela
-  A.raiz = ui.h("div", { class: "cv", dataset: { painel: "lista" } });
+  A.raiz = ui.h("div", { class: "cv", dataset: { painel: "lista", densidade: A.densidade } });
   const colLista = ui.h("section", { class: "cv-col cv-col-lista", "aria-label": "Lista de conversas" });
   const colChat = ui.h("section", { class: "cv-col cv-col-chat", "aria-label": "Conversa" });
   const colLat = ui.h("aside", { class: "cv-col cv-col-lat", "aria-label": "Detalhes do contato" });
@@ -420,7 +429,7 @@ async function selecionar(id) {
   if (!trocou && A.ver) { A.chat.focarMensagens(); return; }
   const seq = ++A.seqConversa;
   A.ver = null; A.msgs = []; A.conversasContato = []; A.ultimoId = null; A.agora = null; A.temMaisAntes = false;
-  A.iaEstado = null; A.iaEstadoEm = 0; A.iaEstadoPendente = false;
+  A.iaEstado = null; A.iaEstadoEm = 0; A.iaEstadoPendente = false; A.marcaNovas = null;
   A.chat.mostrarCarregando();
   A.lateral.render();
   try {
@@ -438,6 +447,7 @@ async function selecionar(id) {
     A.agora = pag.agora || null;
     A.ultimoId = pag.ultimo_id ?? A.L.ultimoId(A.msgs);
     A.temMaisAntes = !!pag.tem_mais;
+    A.marcaNovas = A.L.primeiraNaoLida(A.msgs, ver.conversa && ver.conversa.nao_lidas);   // «Mensagens novas» fica onde a leitura parou
     atualizarItemLista(A.ver.conversa);
     A.ctx.titulo(nomeContato(ver.contato) || "Conversas");
     A.chat.renderTudo({ rolar: "fim" });
@@ -851,6 +861,17 @@ const acoes = {
   respostaUsada(id) { if (A.podeEscrever) A.api.rpcC("nx_resposta_usada", { p_id: id }).catch(() => {}); },
   pode: min => A.L.pode(A.ctx.papel, min),
   guardarRascunho, rascunhoDe, rascunhoMudou,
+  /* plano 50 — preferências visuais da central (por navegador) e ações das bolhas */
+  velocidadeAudio: () => (A ? A.velocidadeAudio : 1),
+  definirVelocidadeAudio(v) { if (!A) return 1; A.velocidadeAudio = A.L.velocidadeValida(v); gravarPreferencia("audio-vel", String(A.velocidadeAudio)); return A.velocidadeAudio; },
+  densidade: () => (A ? A.densidade : "confortavel"),
+  definirDensidade(d) {
+    if (!A) return;
+    A.densidade = d === "compacta" ? "compacta" : "confortavel";
+    gravarPreferencia("densidade", A.densidade);
+    if (A.raiz) A.raiz.dataset.densidade = A.densidade;
+  },
+  copiarTexto(m) { if (m && m.corpo) A.ui.copiar(String(m.corpo), { aviso: "Mensagem copiada." }); },
   cancelarFila: m => cancelarFila(m), enviarAgora: m => enviarAgora(m),
   filaResumo: id => filaResumo(id),
   reenviarGravada: m => reenviarGravada(m), foiReenviada: m => !!(A && m && A.reenviadas.has(m.id)),

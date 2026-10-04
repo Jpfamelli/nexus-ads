@@ -12,12 +12,56 @@ async function logica(ctx) { return import(`./cv-logica.js?v=${encodeURIComponen
 
 const STATUS_CANAL = { ativo: ["Ativo", "ok"], pendente: ["Pendente", "aten"], erro: ["Com erro", "ruim"] };
 
+/* ------------------------------------------------------------ histórico de conexão (item 57)
+   O servidor não guarda o histórico de situação do número; esta tela anota, NESTE aparelho (localStorage), cada vez
+   que vê a situação mudar («Conectado» → «Desconectado» → …). É honesto com o que é: o que esta tela observou. */
+/** Acrescenta uma observação ao histórico: só quando a situação mudou; mais recente primeiro; até `max`. Nunca lança erro. */
+export function atualizarHistorico(lista, { rotulo, tom, em = Date.now() } = {}, max = 8) {
+  const l = (Array.isArray(lista) ? lista : []).filter(x => x && typeof x.rotulo === "string" && Number.isFinite(Number(x.em))).slice(0, max);
+  if (!rotulo) return l;
+  if (l[0] && l[0].rotulo === rotulo) return l;
+  return [{ rotulo: String(rotulo).slice(0, 60), tom: /^(ok|aten|ruim|neutra|info)$/.test(tom) ? tom : "neutra", em: Number(em) || Date.now() }, ...l].slice(0, max);
+}
+export const chaveHistorico = (clienteId, canalId) => `nx-canal-hist:${clienteId || "-"}:${canalId || "-"}`;
+function historicoCanal(ctx, canalId) {
+  const chave = chaveHistorico(ctx.cliente && ctx.cliente.id, canalId);
+  const ler = () => { try { return atualizarHistorico(JSON.parse(localStorage.getItem(chave) || "[]")); } catch { return []; } };
+  return {
+    ler,
+    registrar(obs) { const l = atualizarHistorico(ler(), obs); try { localStorage.setItem(chave, JSON.stringify(l)); } catch { /* sem storage: só a sessão */ } return l; },
+  };
+}
+
 /* ============================================================ NÚMEROS */
 async function montarNumeros(ctx, alvo) {
   const { ui } = ctx;
   const h = ui.h;
-  const [L] = await Promise.all([logica(ctx), ui.carregarCss("conversas")]);
+  const [L] = await Promise.all([logica(ctx), ui.carregarCss("conversas"), ui.carregarCss("config")]);
   let canais = [], base = null;
+
+  /** Situação com ponto animado (pulsa quando está tudo certo; parado quando não). O texto continua na pilula. */
+  function statusVivo(rotulo, cor) {
+    return h("span", { class: "cfg-status", dataset: { tom: cor } }, h("span", { class: "cfg-status-dot", "aria-hidden": "true" }),
+      ui.pilula(rotulo, cor, { icone: cor === "ok" ? "check" : cor === "ruim" ? "alerta" : "relogio" }));
+  }
+  /** Passo a passo com progresso: um segmento por passo, os feitos preenchidos. */
+  function progresso(passos, { rotulo = "Passos da conexão" } = {}) {
+    const total = passos.length, feitos = passos.filter(p => p.feito).length;
+    return h("div", { class: "cfg-progresso", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(total), "aria-valuenow": String(feitos), "aria-label": rotulo,
+      "aria-valuetext": `${feitos} de ${total} passos feitos` },
+      h("span", { class: "cfg-progresso-segs", "aria-hidden": "true" }, passos.map(p => h("i", { class: p.feito ? "feito" : null, title: p.rotulo }))),
+      h("span", { class: "cfg-progresso-txt" }, feitos === total ? "Tudo pronto" : `${feitos} de ${total} passos`));
+  }
+  /** O histórico observado neste aparelho, recolhido num <details>. */
+  function blocoHistorico(lista) {
+    if (!lista.length) return null;
+    const iso = x => new Date(Number(x.em) || 0).toISOString();
+    return h("details", { class: "cfg-hist" },
+      h("summary", null, ui.icone("relogio"), h("span", null, `Histórico de conexão neste aparelho · ${lista.length}`)),
+      h("ol", { class: "cfg-hist-lista" }, lista.map(x => h("li", { class: "cfg-hist-item", dataset: { tom: x.tom } }, h("i", { "aria-hidden": "true" }),
+        h("span", null, x.rotulo), h("time", { class: "mono", datetime: iso(x), title: ui.dataHoraBR(iso(x)) }, ui.relativo(iso(x)))))),
+      h("p", { class: "sub" }, "Anotado cada vez que esta tela viu a situação mudar; não é o histórico do servidor."));
+  }
 
   const lista = h("div", { class: "cfg-canais" });
   const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Conectar número");
@@ -75,9 +119,12 @@ async function montarNumeros(ctx, alvo) {
         "-",
         { rotulo: "Excluir número", icone: "lixeira", perigo: true, fn: () => excluir(c) },
       ]));
-      lista.appendChild(h("article", { class: "cartao cfg-canal" },
+      const marcos = L.marcosMeta(c, ((base && base.templates) || []).filter(t => t.canal_id === c.id).length);
+      const hist = historicoCanal(ctx, c.id).registrar({ rotulo: rot, tom: cor });
+      lista.appendChild(h("article", { class: "cartao cfg-canal", dataset: { tom: cor } },
         h("div", null,
-          h("h3", { class: "titulo-sec" }, c.nome, ui.pilula(rot, cor)),
+          h("h3", { class: "titulo-sec" }, c.nome, statusVivo(rot, cor)),
+          progresso(marcos),
           h("div", { class: "cfg-canal-kv" },
             h("span", null, "Número ", h("b", null, c.numero_exibicao || "—")),
             h("span", null, "Phone number ID ", h("b", null, c.phone_number_id || "—")),
@@ -86,11 +133,12 @@ async function montarNumeros(ctx, alvo) {
             c.qualidade ? h("span", null, "Qualidade ", h("b", null, c.qualidade)) : null,
             c.verificado_em ? h("span", null, "Testado ", h("b", null, ui.relativo(c.verificado_em))) : null),
           h("div", { class: "cfg-checks", role: "list", "aria-label": "Marcos da conexão" },
-            L.marcosMeta(c, ((base && base.templates) || []).filter(t => t.canal_id === c.id).length).map(m => h("span", { role: "listitem" },
+            marcos.map(m => h("span", { role: "listitem" },
               ui.pilula(m.rotulo, m.feito ? "ok" : "neutra", { icone: m.feito ? "check" : "relogio" }))),
             c.tem_app_secret ? ui.pilula("Webhook próprio", "info") : ui.pilula("Webhook do app da plataforma", "neutra"),
             c.app_inscrito === false ? ui.pilula("App NÃO inscrito: nenhuma mensagem chega", "ruim", { icone: "alerta" }) : null),
-          c.ultimo_erro ? h("div", { class: "aviso aviso-ruim cfg-erro" }, ui.icone("alerta"), h("p", null, c.ultimo_erro)) : null),
+          c.ultimo_erro ? h("div", { class: "aviso aviso-ruim cfg-erro" }, ui.icone("alerta"), h("p", null, c.ultimo_erro)) : null,
+          blocoHistorico(hist)),
         h("div", { class: "cfg-canal-acoes" }, bTestar, bInscr, bSync, bMais)));
     }
   }
@@ -183,9 +231,11 @@ async function montarNumeros(ctx, alvo) {
       rotulo === "Conectado mas sem receber" ? "O aparelho está ligado, mas o destino das mensagens precisa ser corrigido." :
       rotulo === "Desconectado" ? "Pareie ou reconecte este número pelo WhatsApp no celular." : "O aparelho e o destino foram conferidos.");
     const aviso = c.ultimo_erro && /^status incerto/i.test(String(c.ultimo_erro)) ? null : c.ultimo_erro;
-    return h("article", { class: "cartao cfg-canal cfg-cw-card" },
+    const hist = historicoCanal(ctx, c.id).registrar({ rotulo, tom: cor });
+    return h("article", { class: "cartao cfg-canal cfg-cw-card", dataset: { tom: cor } },
       h("div", { class: "cfg-cw-main" },
-        h("div", { class: "cfg-cw-titulo" }, h("h3", { class: "titulo-sec" }, c.nome), ui.pilula(rotulo, cor, { icone: cor === "ok" ? "check" : cor === "ruim" ? "alerta" : "relogio" }), ui.pilula("CodeWords", "info")),
+        h("div", { class: "cfg-cw-titulo" }, h("h3", { class: "titulo-sec" }, c.nome), statusVivo(rotulo, cor), ui.pilula("CodeWords", "info")),
+        progresso(pr.passos),
         h("div", { class: "cfg-canal-kv" },
           h("span", null, "Número ", h("b", null, c.numero_exibicao || cw.numero || "—")),
           h("span", null, "Fluxo de IA ", h("b", { class: "mono" }, cw.service_id || "Ainda não configurado")),
@@ -195,7 +245,8 @@ async function montarNumeros(ctx, alvo) {
           resumoRota,
           cw.sync?.em ? ui.pilula(`Sincronizado ${ui.relativo(cw.sync.em)}`, cw.sync.erro ? "aten" : "neutra") : null),
         h("p", { class: "sub cfg-cw-status-text", role: "status" }, explicacao),
-        aviso ? h("div", { class: "aviso aviso-aten cfg-erro" }, ui.icone("info"), h("p", null, aviso)) : null),
+        aviso ? h("div", { class: "aviso aviso-aten cfg-erro" }, ui.icone("info"), h("p", null, aviso)) : null,
+        blocoHistorico(hist)),
       h("div", { class: "cfg-canal-acoes cfg-cw-card-actions" }, conectar, atualizar, mais));
   }
 
@@ -1406,9 +1457,9 @@ async function montarIA(ctx, alvo) {
 }
 
 export const secoesConfig = [
-  { id: "numeros", titulo: "Números de WhatsApp", grupo: "Atendimento", papelMin: "admin", modulo: "conversas", icone: "whatsapp", montar: montarNumeros },
-  { id: "respostas", titulo: "Respostas rápidas", grupo: "Atendimento", papelMin: "supervisor", modulo: "conversas", icone: "chat", montar: montarRespostas },
-  { id: "atendimento", titulo: "Preferências do atendimento", grupo: "Atendimento", papelMin: "admin", modulo: "conversas", icone: "engrenagem", montar: montarAtendimento },
-  { id: "ia", titulo: "Assistente de IA", grupo: "Atendimento", papelMin: "admin", modulo: "conversas", icone: "ia", montar: montarIA },
-  { id: "departamentos", titulo: "Departamentos e horários", grupo: "Equipe", papelMin: "admin", modulo: "conversas", icone: "usuario", montar: montarDepartamentos },
+  { id: "numeros", titulo: "Números de WhatsApp", desc: "Conecte o WhatsApp pelo CodeWords ou pela Meta", grupo: "Atendimento", papelMin: "admin", modulo: "conversas", icone: "whatsapp", montar: montarNumeros },
+  { id: "respostas", titulo: "Respostas rápidas", desc: "Frases prontas que a equipe usa com /", grupo: "Atendimento", papelMin: "supervisor", modulo: "conversas", icone: "chat", montar: montarRespostas },
+  { id: "atendimento", titulo: "Preferências do atendimento", desc: "Assinatura, fila e avisos das conversas", grupo: "Atendimento", papelMin: "admin", modulo: "conversas", icone: "engrenagem", montar: montarAtendimento },
+  { id: "ia", titulo: "Assistente de IA", desc: "O que a IA sabe e como ela fala", grupo: "Atendimento", papelMin: "admin", modulo: "conversas", icone: "ia", montar: montarIA },
+  { id: "departamentos", titulo: "Departamentos e horários", desc: "Quem atende o quê e em qual horário", grupo: "Equipe", papelMin: "admin", modulo: "conversas", icone: "usuario", montar: montarDepartamentos },
 ];

@@ -1486,3 +1486,192 @@ export const enviaMensagem = auto => (auto && auto.acoes || []).some(ac => (ACAO
 
 /** Precisa de um modelo aprovado para poder ligar? */
 export const faltaModelo = auto => (auto && auto.acoes || []).some(ac => ac.tipo === "enviar_template" && vazio(ac.template_id));
+
+/* ================================================================== plano 50 (frente G): cartões, execuções por dia, diagrama, busca */
+
+const nat = x => Math.max(0, Math.floor(Number(x) || 0));
+
+/** Taxa de sucesso do histórico de UMA automação: {total, ok, erros, pct}. pct = null sem execuções (a barra não finge 100 %). */
+export function taxaSucesso(item) {
+  const total = nat(item && item.execucoes);
+  const erros = Math.min(total, nat(item && item.erros));
+  const ok = total - erros;
+  return { total, ok, erros, pct: total ? Math.round((ok / total) * 100) : null };
+}
+
+/** Nível da taxa para a cor da barra: "vazia" (sem execuções) · "ok" (≥ 90 %) · "aten" (≥ 60 %) · "ruim". */
+export function nivelTaxa(pct) {
+  if (pct == null) return "vazia";
+  return pct >= 90 ? "ok" : pct >= 60 ? "aten" : "ruim";
+}
+
+/** Resumo das automações da empresa (topo da lista): ligadas, execuções, erros, em espera e a taxa geral. */
+export function resumoAutomacoes(itens) {
+  const l = Array.isArray(itens) ? itens : [];
+  const r = { total: l.length, ligadas: 0, execucoes: 0, erros: 0, em_espera: 0, com_erro: 0, pct: null };
+  for (const it of l) {
+    if (it && it.ativo) r.ligadas++;
+    const t = taxaSucesso(it);
+    r.execucoes += t.total; r.erros += t.erros;
+    if (t.erros) r.com_erro++;
+    r.em_espera += nat(it && it.em_espera);
+  }
+  r.pct = r.execucoes ? Math.round(((r.execucoes - r.erros) / r.execucoes) * 100) : null;
+  return r;
+}
+
+/** Dia (AAAA-MM-DD) em São Paulo de um instante; null quando a data não serve. */
+function diaSP(x) {
+  if (x === null || x === undefined || x === "") return null;     // new Date(null) seria 1970: sem data é sem data
+  const d = x instanceof Date ? x : new Date(x);
+  if (isNaN(d)) return null;
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+}
+function somarDia(dia, delta) {
+  const [a, m, d] = dia.split("-").map(Number);
+  const x = new Date(Date.UTC(a, m - 1, d + delta, 12));
+  return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, "0")}-${String(x.getUTCDate()).padStart(2, "0")}`;
+}
+const DIAS_CURTOS = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+function diaSemanaDe(dia) { const [a, m, d] = dia.split("-").map(Number); return new Date(Date.UTC(a, m - 1, d, 12)).getUTCDay(); }
+const ddmm = dia => `${dia.slice(8, 10)}/${dia.slice(5, 7)}`;
+
+const diaUTC = dia => { const [a, m, d] = dia.split("-").map(Number); return Date.UTC(a, m - 1, d, 12); };
+
+/**
+ * Execuções por dia, calculadas no navegador a partir de nx_automacao_execucoes (o servidor não devolve séries):
+ * os últimos `dias` dias terminando hoje (São Paulo), [{dia, rotulo:"dd/mm", semana:"seg", ok, erro, espera, pulado, total}].
+ * Linhas sem data válida ou fora da janela ficam de fora; `n` diz quantas entraram.
+ * `recortar` (a lista é só as N mais recentes, não tudo): a janela começa no dia da execução mais antiga carregada, para
+ * não desenhar dias vazios que na verdade não foram carregados; `recortado` diz se isso aconteceu (a tela avisa).
+ */
+export function execucoesPorDia(lista, { dias = 14, agora = new Date(), recortar = false } = {}) {
+  const hoje = diaSP(agora) || diaSP(new Date());
+  let n = Math.max(1, Math.min(60, nat(dias) || 14));
+  let recortado = false;
+  if (recortar) {
+    let antiga = null;
+    for (const x of Array.isArray(lista) ? lista : []) { const d = x ? diaSP(x.criado_em) : null; if (d && d <= hoje && (!antiga || d < antiga)) antiga = d; }
+    // a mais antiga carregada já está antes da janela: tudo o que caiu na janela veio, nada a recortar.
+    // Dentro dela (até no 1º dia), o dia dela pode estar pela metade: a janela começa ali e a tela avisa.
+    if (antiga && antiga >= somarDia(hoje, -(n - 1))) { n = Math.round((diaUTC(hoje) - diaUTC(antiga)) / 86400000) + 1; recortado = true; }
+  }
+  const mapa = new Map();
+  const serie = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const dia = somarDia(hoje, -i);
+    const p = { dia, rotulo: ddmm(dia), semana: DIAS_CURTOS[diaSemanaDe(dia)], ok: 0, erro: 0, espera: 0, pulado: 0, total: 0 };
+    mapa.set(dia, p); serie.push(p);
+  }
+  let contadas = 0;
+  for (const x of Array.isArray(lista) ? lista : []) {
+    const dia = x ? diaSP(x.criado_em) : null;
+    const p = dia && mapa.get(dia);
+    if (!p) continue;
+    p[situacaoExecucao(x)]++; p.total++; contadas++;
+  }
+  return { serie, n: contadas, dias: n, maximo: Math.max(0, ...serie.map(p => p.total)), recortado };
+}
+
+/** Rótulo de um dia para a linha do tempo: "Hoje" · "Ontem" · "seg, 02/10". */
+export function rotuloDia(dia, agora = new Date()) {
+  const hoje = diaSP(agora);
+  if (dia === hoje) return "Hoje";
+  if (dia === somarDia(hoje, -1)) return "Ontem";
+  return `${DIAS_CURTOS[diaSemanaDe(dia)]}, ${ddmm(dia)}`;
+}
+
+/** Agrupa execuções por dia, mais recente primeiro: [{dia, rotulo, itens}]. Linhas sem data vão para um grupo «Sem data» no fim. */
+export function agruparExecucoesPorDia(lista, agora = new Date()) {
+  const grupos = new Map();
+  const semData = [];
+  for (const x of Array.isArray(lista) ? lista : []) {
+    const dia = x ? diaSP(x.criado_em) : null;
+    if (!dia) { semData.push(x); continue; }
+    if (!grupos.has(dia)) grupos.set(dia, []);
+    grupos.get(dia).push(x);
+  }
+  const out = [...grupos.keys()].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0)).map(dia => ({ dia, rotulo: rotuloDia(dia, agora), itens: grupos.get(dia) }));
+  if (semData.length) out.push({ dia: null, rotulo: "Sem data", itens: semData });
+  return out;
+}
+
+/** Classe visual de um passo no diagrama e nos cartões: "msg" · "espera" · "parar" · "ia" · "crm" · "equipe". */
+export function tomDaAcao(tipo) {
+  const d = ACAO[tipo];
+  if (!d) return "crm";
+  if (tipo === "esperar") return "espera";
+  if (tipo === "parar") return "parar";
+  if (d.ia) return "ia";
+  if (d.mensagem) return "msg";
+  if (tipo === "notificar" || tipo === "alerta_whatsapp" || tipo === "atribuir" || tipo === "criar_tarefa") return "equipe";
+  return "crm";
+}
+
+/**
+ * Nós do diagrama ao vivo do editor (gatilho → condições → passos), na ordem em que são desenhados.
+ * [{id, tipo:"gatilho"|"condicao"|"passo"|"mais", onde:"quando"|"se"|"entao", indice, rotulo, sub, icone, tom, inalcancavel, n}]
+ * O nó «mais» só entra quando `podeEditar` e ainda cabe passo: é o atalho para «Adicionar passo».
+ */
+export function nosDoDiagrama(auto, base, vocab, { podeEditar = false } = {}) {
+  const a = auto || {};
+  const ix = indexarBase(base);
+  const vv = voc(vocab);
+  const nos = [];
+  const g = GATILHO[a.gatilho];
+  nos.push({ id: "gatilho", tipo: "gatilho", onde: "quando", indice: null, icone: g ? g.icone : "raio", tom: "gatilho",
+    rotulo: g ? rotuloGatilho(a.gatilho, vocab) : "Escolha o gatilho", sub: cortar(fraseQuando(a, ix, vv), 64), inalcancavel: false });
+  const conds = Array.isArray(a.condicoes) ? a.condicoes : [];
+  conds.forEach((cd, i) => nos.push({ id: `cond-${i}`, tipo: "condicao", onde: "se", indice: i, icone: "filtro", tom: "condicao", n: i + 1,
+    rotulo: `Só se ${cortar(fraseCondicao(cd, ix) || "(condição incompleta)", 52)}`, sub: "", inalcancavel: false }));
+  const acoes = Array.isArray(a.acoes) ? a.acoes : [];
+  const tl = linhaDoTempo(acoes);
+  acoes.forEach((ac, i) => {
+    const d = ac && ACAO[ac.tipo];
+    const esp = ac && ac.tipo === "esperar";
+    nos.push({ id: `passo-${i}`, tipo: "passo", onde: "entao", indice: i, icone: d ? d.icone : "raio", tom: tomDaAcao(ac && ac.tipo), n: i + 1,
+      rotulo: esp ? `Esperar ${nat(ac.minutos) > 0 ? formatarDuracao(ac.minutos) : "(tempo)"}` : rotuloAcao(ac && ac.tipo, vocab),
+      sub: tl[i].inalcancavel ? "nunca roda (depois de «Parar»)" : esp ? (ac.cancelar_se_cliente_responder ? "para se o cliente responder" : "") : cortar(fraseAcao(ac, ix, vv) || "", 56),
+      inalcancavel: !!tl[i].inalcancavel });
+  });
+  if (!acoes.length) nos.push({ id: "vazio", tipo: "passo", onde: "entao", indice: null, icone: "mais", tom: "vazio", rotulo: "Nenhum passo ainda", sub: "acrescente pelo menos um", inalcancavel: false });
+  else if (podeEditar && acoes.length < LIMITES.acoes) nos.push({ id: "mais", tipo: "mais", onde: "entao", indice: null, icone: "mais", tom: "mais", rotulo: "Adicionar passo", sub: "", inalcancavel: false });
+  return nos;
+}
+
+/** Texto alternativo do diagrama (leitor de tela e title): "Fluxo: quando …; só se …; então 1. …, 2. …". */
+export function textoDiagrama(nos) {
+  const l = Array.isArray(nos) ? nos : [];
+  const g = l.find(x => x.tipo === "gatilho");
+  const conds = l.filter(x => x.tipo === "condicao").map(x => x.rotulo.replace(/^Só se /, ""));
+  const passos = l.filter(x => x.tipo === "passo" && x.indice != null).map(x => `${x.n}. ${x.rotulo}${x.inalcancavel ? " (nunca roda)" : ""}`);
+  const partes = [`Fluxo: ${g ? g.sub || g.rotulo : "sem gatilho"}`];
+  if (conds.length) partes.push(`só se ${listaFrase(conds)}`);
+  partes.push(passos.length ? `então ${passos.join(", ")}` : "então nenhum passo ainda");
+  return partes.join("; ") + ".";
+}
+
+/** Busca nas receitas sem acento: cada palavra do termo precisa aparecer no título, no texto, na categoria ou nos tipos de passo. */
+export function filtrarModelos(modelos, termo, vocab) {
+  const toks = normalizar(termo).split(/\s+/).filter(Boolean);
+  const lista = Array.isArray(modelos) ? modelos : [];
+  if (!toks.length) return lista.slice();
+  return lista.filter(m => {
+    const txt = normalizar([tituloModelo(m, vocab), textoModelo(m, vocab), m.categoria, m.auto && m.auto.nome,
+      ...((m.auto && m.auto.acoes) || []).map(ac => `${ac.tipo} ${rotuloAcao(ac.tipo, vocab)}`), rotuloGatilho(m.auto && m.auto.gatilho, vocab)].join(" "));
+    return toks.every(k => txt.includes(k));
+  });
+}
+
+/** Exemplos clicáveis da caixa «Criar com IA» (frases do dia a dia, no vocabulário da vertical quando faz diferença). */
+export function exemplosIA(vocab) {
+  const vv = voc(vocab);
+  const c = palavraConsulta(vv.vertical);
+  return [
+    "Quando um orçamento ficar 2 dias sem resposta, manda uma mensagem e avisa o responsável",
+    "Todo dia às 9h, cria uma tarefa para ligar para quem está parado há 3 dias na etapa de orçamento",
+    `Quando o cliente faltar à ${c}, pede para remarcar e avisa a recepção`,
+    "Quando chegar mensagem com a palavra preço, põe a etiqueta Orçamento e avisa a equipe",
+    `No dia seguinte à ${c}, manda uma mensagem pedindo uma avaliação`,
+  ];
+}

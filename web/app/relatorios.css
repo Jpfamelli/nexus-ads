@@ -758,3 +758,177 @@ a.ini-numero:active { transform: scale(.98); }
   /* Radar */
   .ads-alertas .ads-al { padding: .7rem .8rem; }
 }
+
+/* ============================================================
+   PLANO 50 — frente F (Anúncios e Relatórios): sparklines nos KPIs, tendência de 2 eixos com legenda clicável,
+   funil por plataforma, calor semanal, rosca por plataforma, barras por campanha, semáforo do Radar, PNG/CSV e impressão.
+   Só tokens; movimento com --t-dados/--escada e desligado em prefers-reduced-motion (regra geral acima).
+   ============================================================ */
+/* sparkline (fallback local; a versão da frente A chega por graficos.sparkline) */
+.rel-kpi-spark { display: block; width: 100%; max-width: 9rem; height: 28px; margin-top: .15rem; color: var(--c-prim-luz); }
+.spark { display: block; width: 100%; height: 28px; overflow: visible; }
+.spark-linha { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.spark-area { fill: color-mix(in srgb, currentColor 14%, transparent); stroke: none; }
+.spark-fim { fill: currentColor; stroke: var(--c-sup); stroke-width: 1.5; }
+.rel-kpi .rel-kpi-spark { order: 10; }
+.rel-kpi .rel-kpi-extra { order: 11; }
+
+/* tendência: investimento (área, esquerda) × conversas × agendamentos (direita) */
+.g-td-gasto { --g: var(--c-prim-luz); }
+.g-td-conv { --g: var(--c-sec-luz); }
+.g-td-ag { --g: var(--c-ok); }
+.g-tendencia .g-area { fill: color-mix(in srgb, var(--g) 14%, transparent); }
+.g-tendencia .g-ponto { stroke: var(--g); }
+.g-eixo-dir { text-anchor: start; }
+.g-legenda-botoes { margin-top: .6rem; gap: .35rem .5rem; }
+.g-leg-b { display: inline-flex; align-items: center; gap: .4rem; min-height: 36px; padding: .3rem .75rem; border-radius: 999px; border: 1px solid var(--c-borda); background: var(--c-sup); color: var(--c-texto-2); font: 600 .8125rem/1 var(--f-corpo); cursor: pointer;
+  transition: background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out), color var(--t-ui) var(--e-out), opacity var(--t-ui) var(--e-out); }
+.g-leg-b:hover { border-color: var(--c-prim-luz); color: var(--c-texto); }
+.g-leg-b[aria-pressed="true"] { background: color-mix(in srgb, var(--g) 12%, var(--c-sup)); border-color: color-mix(in srgb, var(--g) 50%, var(--c-borda)); color: var(--c-texto); }
+.g-leg-b.g-leg-off .g-marca { background: transparent; box-shadow: inset 0 0 0 2px var(--g); }
+.g-leg-b.g-leg-off { opacity: .7; text-decoration: line-through; text-decoration-color: var(--c-texto-3); }
+@media (pointer: coarse), (max-width: 760px) { .g-leg-b { min-height: 44px; } }
+
+
+/* enquanto o app.css da frente A não traz .g-spark-*/.g-donut-*, estas telas garantem a aparência das peças que usam (escopo só nos contêineres daqui) */
+.rel-kpi-spark .g-spark { display: block; width: 100%; height: 28px; overflow: visible; }
+.rel-kpi-spark .g-spark-area { fill: color-mix(in srgb, currentColor 14%, transparent); stroke: none; }
+.rel-kpi-spark .g-spark-linha { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.rel-kpi-spark .g-spark-fim { fill: currentColor; stroke: var(--c-sup); stroke-width: 1.5; }
+.rel-kpi-spark .g-spark.g-anim .g-spark-linha { stroke-dasharray: 1; animation: g-traco var(--t-dados) var(--e-out) both; }
+.ads-donut-plat .g-rosca-caixa { grid-template-columns: minmax(0, 1fr); justify-items: stretch; gap: .6rem; }
+.ads-donut-plat .g-donut-caixa { display: flex; justify-content: center; }
+.ads-donut-plat .g-rosca { max-width: 8.5rem; }
+.ads-donut-plat .g-donut-leg { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .3rem; }
+.ads-donut-plat .g-donut-op { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .1rem .5rem; align-items: center; width: 100%; min-height: 44px; padding: .35rem .6rem; border-radius: 10px; border: 1px solid transparent; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out); }
+.ads-donut-plat .g-donut-op:hover, .ads-donut-plat .g-donut-op.g-ativa { background: var(--c-sup-2); }
+.ads-donut-plat .g-donut-op[aria-pressed="false"] { opacity: .6; text-decoration: line-through; }
+.ads-donut-plat .g-donut-op .g-rl-nome { font-weight: 600; font-size: .875rem; }
+.ads-donut-plat .g-donut-op b { font-size: .875rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ads-donut-plat .g-donut-op small { grid-column: 2 / -1; color: var(--c-texto-3); font-size: .75rem; }
+.ads-donut-plat .g-donut .g-fatia.g-ativa { opacity: 1; }
+.ads-donut-plat .g-dica { top: auto; bottom: 100%; }
+/* ranking de criativos: pódio com três tons (ouro = acento, prata e bronze mais discretos) */
+.ads-rank-item:nth-child(2) .ads-rank-pos { color: var(--c-texto-2); }
+.ads-rank-item:nth-child(3) .ads-rank-pos { color: color-mix(in srgb, var(--c-prim-luz) 55%, var(--c-texto-3)); }
+.ads-rank-item:nth-child(2) .ads-rank-barra i, .ads-rank-item:nth-child(3) .ads-rank-barra i { background: color-mix(in srgb, var(--c-prim-luz) 70%, var(--c-texto-3)); }
+.ads-rank-item:nth-child(n+4) .ads-rank-barra i { background: color-mix(in srgb, var(--c-prim-luz) 45%, var(--c-sup-3)); }
+
+/* grade de dois cartões (funil por plataforma + calor semanal) */
+.ads-grade-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; align-items: start; }
+
+/* funil por plataforma */
+.ads-fp { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem 1.5rem; }
+.ads-fp:has(> .ads-fp-col:only-child) { grid-template-columns: minmax(0, 1fr); }
+.ads-fp-col { min-width: 0; padding: .9rem 1rem; border-radius: 14px; background: var(--c-sup-2); border-top: 3px solid var(--c-texto-3); }
+.ads-fp-meta { border-top-color: var(--c-meta); }
+.ads-fp-google { border-top-color: var(--c-google); }
+.ads-fp-cab { display: flex; flex-direction: column; gap: .3rem; align-items: flex-start; margin-bottom: .8rem; }
+.ads-fp-etapas { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .2rem; }
+.ads-fp-etapa { display: grid; grid-template-columns: minmax(0, 1fr); gap: .25rem; animation: rel-sobe var(--t-move) var(--e-out) both; animation-delay: calc(var(--i, 0) * var(--escada) * 2); }
+.ads-fp-taxa { justify-self: start; display: inline-flex; align-items: center; min-height: 1.35rem; padding: .05rem .5rem; border-radius: 999px; background: var(--c-sup); border: 1px solid var(--c-borda); font: 500 .6875rem/1.4 var(--f-mono); color: var(--c-texto-2); }
+.ads-fp-taxa-0 { visibility: hidden; min-height: .4rem; }
+.ads-fp-trilho { display: block; height: 22px; border-radius: 8px; background: var(--c-sup); overflow: hidden; }
+.ads-fp-barra { display: block; height: 100%; width: var(--w); border-radius: inherit; transform-origin: left; animation: g-cresce-x var(--t-dados) var(--e-out) both; animation-delay: calc(var(--i, 0) * var(--escada) * 2); opacity: .9; }
+.ads-fp-rot { font-size: .8125rem; color: var(--c-texto-2); }
+.ads-fp-rot .rel-num { font-size: 1.05rem; color: var(--c-texto); }
+
+/* calor semanal (dia da semana × semana) */
+.ads-cal { display: grid; grid-template-columns: 2.4rem repeat(var(--n, 4), minmax(0, 1fr)); gap: 3px; min-width: calc(2.4rem + var(--n, 4) * 1.9rem); }
+.ads-cal .g-cal-h { height: 1.1rem; justify-content: center; white-space: nowrap; }
+.ads-cal .g-cal-c { aspect-ratio: auto; height: 1.9rem; border-radius: 6px; }
+.ads-cal.g-anim .g-cal-c { animation: g-aparece var(--t-move) var(--e-out) both; animation-delay: calc(var(--i, 0) * var(--escada) * .6); }
+.ads-cal-pico { box-shadow: inset 0 0 0 2px var(--c-texto); }
+.ads-cal-caixa .g-cal-rolagem { padding-bottom: .1rem; }
+
+/* rosca por plataforma: Meta e Google com as cores das marcas (ordem fixa das fatias) */
+.ads-donut-plat { margin: .8rem 0 .4rem; }
+.ads-donut-plat .g-c0 { --g: var(--c-meta); }
+.ads-donut-plat .g-c1 { --g: var(--c-google); }
+.ads-donut-plat .g-rosca-caixa { grid-template-columns: minmax(0, 7rem) minmax(0, 1fr); gap: .9rem; }
+.ads-donut-plat .g-rosca { max-width: 7rem; }
+.ads-donut-plat .g-rosca-n { font-size: 26px; }
+
+/* barras por campanha (campanhas) */
+.ads-cb-caixa { margin: .25rem 0 1rem; padding: .9rem 1rem; border-radius: 14px; background: var(--c-sup-2); }
+.ads-cb-h { font-size: .9375rem; }
+.ads-cb { list-style: none; margin: .7rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .3rem; }
+.ads-cb-item { display: grid; grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) auto; gap: .6rem .9rem; align-items: center; width: 100%; min-height: 44px; padding: .4rem .6rem; border-radius: 10px; border: 1px solid transparent; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  transition: background-color var(--t-ui) var(--e-out), border-color var(--t-ui) var(--e-out); animation: rel-sobe var(--t-move) var(--e-out) both; animation-delay: calc(var(--i, 0) * var(--escada)); }
+.ads-cb-item:hover, .ads-cb-item.ads-cb-hover { background: var(--c-sup); }
+.ads-cb-item[aria-pressed="true"] { background: var(--c-prim-suave); border-color: var(--c-borda-2); }
+.ads-cb-nome { display: inline-flex; align-items: center; gap: .45rem; min-width: 0; font-weight: 600; font-size: .875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ads-cb-trilho { display: block; height: 12px; border-radius: 999px; background: var(--c-sup-3); overflow: hidden; }
+.ads-cb-barra { display: block; height: 100%; width: var(--w); border-radius: inherit; transform-origin: left; opacity: .85; transition: opacity var(--t-ui) var(--e-out); }
+.ads-cb.g-anim .ads-cb-barra { animation: g-cresce-x var(--t-dados) var(--e-out) both; animation-delay: calc(var(--i, 0) * var(--escada)); }
+.ads-cb-item.ads-cb-hover .ads-cb-barra, .ads-cb-item[aria-pressed="true"] .ads-cb-barra { opacity: 1; }
+.ads-cb-val { font-size: .9375rem; color: var(--c-texto); white-space: nowrap; }
+.rel-tabela tbody tr:nth-child(even) { background: color-mix(in srgb, var(--c-sup-2) 55%, transparent); }
+.rel-tabela tbody tr:hover, .rel-tabela tbody tr:focus-within { background: var(--c-sup-2); }
+
+/* semáforo do Radar */
+.ads-semaforo { display: flex; flex-direction: column; gap: .9rem; border-left: 4px solid var(--c-ok); }
+.ads-semaforo-aten { border-left-color: var(--c-aten); }
+.ads-semaforo-ruim { border-left-color: var(--c-ruim); }
+/* sem números de anúncio ainda: nada a avaliar, então nenhuma cor de veredito (nem o verde do «tudo certo») */
+.ads-semaforo-neutro { border-left-color: var(--c-borda-2); }
+.ads-sem-link { align-self: flex-start; margin-top: .2rem; }
+.ads-sem-topo { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1rem 1.5rem; align-items: center; }
+.ads-sem-luzes { display: flex; flex-direction: column; gap: .45rem; padding: .7rem; border-radius: 999px; background: var(--c-sup-2); border: 1px solid var(--c-borda); }
+.ads-sem-luz { position: relative; display: grid; place-items: center; width: 3.4rem; height: 3.4rem; border-radius: 50%; background: var(--c-sup-3); color: var(--c-texto-3); }
+.ads-sem-luz i { position: absolute; inset: 0; border-radius: 50%; background: var(--luz); opacity: .18; transition: opacity var(--t-ui) var(--e-out); }
+.ads-sem-luz .rel-num { position: relative; font-size: 1.15rem; line-height: 1; }
+.ads-sem-luz small { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.ads-sem-critico { --luz: var(--c-ruim); }
+.ads-sem-alerta { --luz: var(--c-aten); }
+.ads-sem-info { --luz: var(--c-info); }
+.ads-sem-luz.acesa { color: var(--c-fundo); }
+.ads-sem-luz.acesa i { opacity: 1; box-shadow: 0 0 0 4px color-mix(in srgb, var(--luz) 25%, transparent); animation: ads-acende var(--t-dados) var(--e-out) both; }
+@keyframes ads-acende { from { opacity: .18; transform: scale(.85); } }
+.ads-sem-txt { min-width: 0; display: flex; flex-direction: column; gap: .35rem; }
+.ads-sem-frase { margin: .1rem 0 0; font-family: var(--f-narr); font-style: italic; font-weight: 400; font-size: clamp(1.2rem, 1rem + .9vw, 1.6rem); line-height: 1.25; color: var(--c-texto); text-wrap: balance; }
+.ads-sem-acao { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; margin: .2rem 0 0; padding: .55rem .75rem; border-radius: 12px; background: var(--c-sup-2); font-size: .875rem; color: var(--c-texto-2); line-height: 1.45; }
+.ads-sem-acao .ic { width: 16px; height: 16px; flex: none; color: var(--c-prim-luz); }
+.ads-sem-filtro { align-self: flex-start; }
+.ads-semaforo .ads-radar-status { padding: 0; font-size: .8125rem; }
+.ads-regra-simples { margin: .2rem 0 .3rem; font-size: .875rem; color: var(--c-texto-2); line-height: 1.45; }
+.ads-regra-det summary { cursor: pointer; min-height: 32px; display: inline-flex; align-items: center; font-size: .8125rem; color: var(--c-prim-luz); }
+@media (pointer: coarse), (max-width: 760px) { .ads-regra-det summary { min-height: 44px; } }
+.ads-regra-det[open] summary { margin-bottom: .3rem; }
+.ads-regra-det p { margin: .15rem 0; }
+.ads-al-simples { line-height: 1.45; }
+
+/* relatórios: faixas do dia e impressão */
+.relat-faixas { list-style: none; margin: .9rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; }
+.relat-faixa { display: flex; flex-direction: column; gap: .1rem; min-width: 0; padding: .55rem .7rem; border-radius: 12px; background: var(--c-sup-2); border: 1px solid transparent; }
+.relat-faixa-forte { border-color: color-mix(in srgb, var(--c-prim-luz) 45%, transparent); background: color-mix(in srgb, var(--c-prim) 12%, var(--c-sup-2)); }
+.relat-faixa-n { font-size: .75rem; color: var(--c-texto-3); text-transform: capitalize; }
+.relat-faixa .rel-num { font-size: 1.2rem; color: var(--c-texto); }
+.relat-faixa-forte .rel-num { color: var(--c-prim-luz); }
+.rel-png { letter-spacing: .06em; }
+
+@media (max-width: 1100px) { .ads-grade-2 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .ads-sem-topo { grid-template-columns: minmax(0, 1fr); }
+  .ads-sem-luzes { flex-direction: row; justify-content: space-around; border-radius: 999px; padding: .45rem .7rem; }
+  .ads-sem-luz { width: 2.9rem; height: 2.9rem; }
+  .ads-cb-item { grid-template-columns: minmax(0, 1fr) auto; gap: .3rem .75rem; }
+  .ads-cb-trilho { grid-column: 1 / -1; }
+  .relat-faixas { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ads-fp { grid-template-columns: minmax(0, 1fr); }
+  .ads-donut-plat .g-rosca-caixa { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* impressão limpa: sem filtros, abas e botões; cartões inteiros na página; tabelas abertas */
+@media print {
+  .rel { gap: .6rem; padding-bottom: 0; }
+  .rel-filtros, .rel-topo-acoes, .rel-abas-seg, .rel-abas, .g-ver-tabela, .relat-csv, .rel-png, .ads-camp-filtros, .ads-comp-acoes, .g-leg-b.g-leg-off, .rel-faixa { display: none !important; }
+  .rel-cartao, .relat-bloco, .ads-al { break-inside: avoid; page-break-inside: avoid; box-shadow: none; border-color: color-mix(in srgb, CanvasText 25%, Canvas); background: Canvas !important; color: CanvasText; }
+  .rel-corpo, .relat-grade, .ads-grade, .ads-grade-2, .rel-kpis { display: block; }
+  .rel-kpis .rel-kpi, .relat-grade > *, .ads-grade > *, .ads-grade-2 > * { margin-bottom: .6rem; }
+  .g-tabela-caixa { max-height: none; overflow: visible; }
+  .g-cal-rolagem, .rel-tabela-rolagem { overflow: visible; }
+  .rel-entra, .rel-tabela tbody tr, .g-anim * { animation: none !important; opacity: 1 !important; transform: none !important; }
+  .g-dica { display: none !important; }
+  .rel-h1, .rel-h2, .ads-sem-frase { color: CanvasText; }
+}

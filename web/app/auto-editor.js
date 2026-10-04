@@ -199,7 +199,55 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     h("p", { class: "sub" }, "Veja o que aconteceria agora com o que está na tela. Nada é enviado nem salvo."),
     h("div", { class: "linha" }, btTestarLado),
     areaSim) : null;
+  // diagrama ao vivo do fluxo (item 53): SVG gerado de gatilho/condições/passos, redesenhado a cada mudança; cada nó leva ao bloco
+  const caixaDiagrama = h("div", { class: "au-dg-caixa", id: novoId("dg") });
+  // no celular a lateral vem depois do formulário: o diagrama sobe para o topo (CSS) e nasce recolhido, para não empurrar os campos
+  const estreito = () => { try { return typeof matchMedia === "function" && matchMedia("(max-width: 1080px)").matches; } catch { return false; } };
+  let diagramaAberto = !estreito();
+  const btFluxo = h("button", { type: "button", class: "bt bt-fant bt-p au-dg-toggle", "aria-expanded": String(diagramaAberto), "aria-controls": caixaDiagrama.id },
+    h("span", null, diagramaAberto ? "Esconder" : "Ver o fluxo"), ui.icone("seta-baixo"));
+  btFluxo.addEventListener("click", () => {
+    diagramaAberto = !diagramaAberto;
+    caixaDiagrama.hidden = !diagramaAberto;
+    btFluxo.setAttribute("aria-expanded", String(diagramaAberto));
+    btFluxo.firstChild.textContent = diagramaAberto ? "Esconder" : "Ver o fluxo";
+  });
+  caixaDiagrama.hidden = !diagramaAberto;
+  const cartaoDiagrama = h("div", { class: "cartao au-dg" },
+    h("div", { class: "au-dg-cab" }, h("div", null, h("p", { class: "rotulo" }, "Fluxo"), h("span", { class: "sub au-dg-dica" }, "Toque num bloco para ir até ele.")), btFluxo),
+    caixaDiagrama);
+  const resumoNos = h("span", { class: "au-dg-resumo mono" });
+  cartaoDiagrama.querySelector(".au-dg-cab > div").appendChild(resumoNos);
+  function pintarDiagrama() {
+    const nos = L.nosDoDiagrama(auto, base, vv, { podeEditar });
+    const svg = P.diagrama({ nos, aoFocar: focarNo, largura: 300 });
+    ui.limpar(caixaDiagrama);
+    caixaDiagrama.appendChild(svg);
+    const nc = nos.filter(x => x.tipo === "condicao").length, np = nos.filter(x => x.tipo === "passo" && x.indice != null).length;
+    resumoNos.textContent = `${nc ? `${nc} ${nc === 1 ? "condição" : "condições"} · ` : ""}${np} ${np === 1 ? "passo" : "passos"}`;
+  }
+  /** Leva a pessoa ao bloco/passo do nó clicado no diagrama: rola até lá, foca o 1º controle e dá um brilho curto no cartão. */
+  function focarNo(no) {
+    if (!no) return;
+    let bloco = { quando: blocoQuando, se: blocoSe, entao: blocoEntao }[no.onde] || blocoQuando;
+    let alvo = bloco;
+    if (no.onde === "se" && no.indice != null) alvo = blocoSe.querySelectorAll(".au-cond")[no.indice] || bloco;
+    if (no.onde === "entao" && no.indice != null) alvo = blocoEntao.querySelectorAll(".au-passo")[no.indice] || bloco;
+    if (painelRegra.hidden && item) { const aba = raiz.querySelector(".au-abas [role=tab]"); if (aba) aba.click(); }
+    alvo.scrollIntoView({ block: "center", behavior: ui.comportamentoRolagem() });
+    const ctl = no.tipo === "mais" || (no.onde === "entao" && no.indice == null)
+      ? blocoEntao.querySelector(".au-mais")
+      : alvo.querySelector("select:not(:disabled), input:not(:disabled), textarea:not(:disabled), .au-chip:not(:disabled), button:not(:disabled)");
+    if (ctl) setTimeout(() => ctl.focus({ preventScroll: true }), 60);
+    const cartaoAlvo = alvo.querySelector(".au-acao, .au-bloco-corpo") || alvo;
+    cartaoAlvo.classList.remove("au-foco-brilho");
+    void cartaoAlvo.offsetWidth;    // reinicia a animação quando se clica duas vezes no mesmo nó
+    cartaoAlvo.classList.add("au-foco-brilho");
+    setTimeout(() => cartaoAlvo.classList.remove("au-foco-brilho"), 1200);
+  }
+
   const lado = h("aside", { class: "au-lado", "aria-label": "Resumo da automação" },
+    cartaoDiagrama,
     h("div", { class: "cartao au-previa" },
       h("p", { class: "rotulo" }, "Em uma frase"), frase, estado, avisos),
     cartaoTeste,
@@ -672,6 +720,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   // ------------------------------------------------ prévia, avisos e validação ao vivo
   function atualizarPrevia() {
     frase.textContent = L.descrever(auto, base, vv);
+    pintarDiagrama();
     const r = L.validar(auto, { base, ligar: !!auto.ativo });
     ui.limpar(estado);
     estado.className = ["au-estado", r.ok ? "au-ok" : "au-falta"].join(" ");
@@ -887,9 +936,14 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
             texto: arr.length ? "Tente outro filtro." : item.ativo ? "Assim que o gatilho acontecer, cada execução aparece aqui, com o que foi feito." : "Ela está desligada. Ligue para começar a rodar." }));
           return;
         }
-        const ul = h("ul", { class: "au-exs", role: "list" });
-        for (const x of vis) ul.appendChild(linhaExecucao(x));
-        corpoLista.appendChild(ul);
+        // linha do tempo agrupada por dia («Hoje», «Ontem», «seg, 02/10»), com entrada escalonada
+        let k = 0;
+        for (const grupo of L.agruparExecucoesPorDia(vis)) {
+          const ul = h("ul", { class: "au-exs", role: "list", "aria-label": `Execuções: ${grupo.rotulo}` });
+          for (const x of grupo.itens) { const li = linhaExecucao(x); li.style.setProperty("--i", String(Math.min(k++, 12))); ul.appendChild(li); }
+          corpoLista.appendChild(h("section", { class: "au-ex-dia" },
+            h("h3", { class: "au-ex-dia-tit" }, h("span", null, grupo.rotulo), h("span", { class: "au-ex-dia-n mono" }, `${grupo.itens.length}`)), ul));
+        }
       };
       for (const [k, rot] of L.SITUACOES_EXECUCAO) {
         const b = P.chip({ rotulo: `${rot} · ${contagem[k]}`, ligado: execFiltro === k, modo: "radio", aoClicar: () => {
@@ -902,6 +956,15 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       painelExec.appendChild(h("div", { class: "au-ex-cab" },
         h("p", { class: "sub" }, `As últimas ${Math.min(arr.length, execLimite)} execuções. Erro numa automação não atrapalha as outras.`),
         h("div", { class: "linha" }, btCancelarTodas, btAtualizar)));
+      // gráfico de execuções por dia (item 54): calculado aqui a partir da lista, com estado vazio e versão em tabela.
+      // A lista é só as últimas `execLimite`: cheia, pode faltar execução dentro dos 14 dias — a janela recorta no dia da mais
+      // antiga carregada e o subtítulo avisa «nas últimas N execuções carregadas» (sem série do servidor, é o honesto).
+      if (arr.length) {
+        const truncada = arr.length >= execLimite;
+        const porDia = L.execucoesPorDia(arr, { dias: 14, recortar: truncada });
+        painelExec.appendChild(h("div", { class: "cartao au-ex-graf" }, P.graficoDias({ serie: porDia.serie, dias: porDia.dias, n: porDia.n,
+          carregadas: porDia.recortado ? arr.length : null })));
+      }
       P.setas(filtro);
       painelExec.appendChild(filtro);
       painelExec.appendChild(corpoLista);
@@ -946,14 +1009,29 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const abrir = x.link && /^#\//.test(String(x.link)) ? h("a", { class: "bt bt-fant bt-p au-ex-abrir", href: x.link }, "Abrir", ui.icone("seta-dir")) : null;
     const btParar = podeEditar && sit === "espera" && x.chave ? h("button", { type: "button", class: "bt bt-sec bt-p", "aria-label": "Cancelar esta espera" }, "Cancelar") : null;
     if (btParar) btParar.addEventListener("click", () => cancelarEspera(x, btParar));
+    // detalhe expansível (item 54): tudo o que o servidor mandou sobre esta execução, em palavras
+    const idDet = novoId("exdet");
+    const n = Number(x.passo), tot = Number(x.total_passos);
+    const linhasDet = [
+      ["Situação", { ok: "Deu certo", espera: "Em espera", pulado: "Pulada ou parada", erro: "Com erro" }[sit] + (estadoTxt ? ` · ${estadoTxt}` : "")],
+      Number.isFinite(n) && n > 0 ? ["Passo", Number.isFinite(tot) && tot > 0 ? `${Math.min(n, tot)} de ${tot}` : String(n)] : null,
+      ["Registrada em", ui.dataHoraBR(x.criado_em)],
+      x.continua_em ? ["Continua em", ui.dataHoraBR(x.continua_em)] : null,
+      x.chave ? ["Registro", String(x.chave)] : null,
+      ["O que aconteceu", String(x.detalhe || detalhe || "—")],
+    ].filter(Boolean);
+    const det = h("dl", { class: "au-ex-mais", id: idDet, hidden: true }, linhasDet.flatMap(([k, v]) => [h("dt", null, k), h("dd", { class: k === "Registro" ? "mono" : null }, v)]));
+    const btDet = h("button", { type: "button", class: "bt bt-fant bt-p au-ex-det-bt", "aria-expanded": "false", "aria-controls": idDet }, "Detalhes", ui.icone("seta-baixo"));
+    btDet.addEventListener("click", () => { const abre = det.hidden; det.hidden = !abre; btDet.setAttribute("aria-expanded", String(abre)); });
     return h("li", { class: ["au-ex", sit === "erro" && "au-ex-erro", sit === "pulado" && "au-ex-pulado", sit === "espera" && "au-ex-espera"] },
       h("span", { class: "au-ex-ic", "aria-hidden": "true" }, ui.icone(icone)),
       h("div", { class: "au-ex-txt" },
         passoTxt ? h("p", { class: "au-ex-passo mono" }, passoTxt) : null,
         estadoTxt ? h("p", { class: "au-ex-estado" }, `${estadoTxt}${retoma}`) : null,
         h("p", { class: "au-ex-det" }, h("span", { class: "sr-only" }, rotuloSit), detalhe),
-        h("p", { class: "au-ex-quando mono", title: ui.dataHoraBR(x.criado_em) }, `${ui.dataHoraBR(x.criado_em)} · ${ui.relativo(x.criado_em)}`)),
-      abrir || btParar ? h("div", { class: "au-ex-acoes" }, btParar, abrir) : null);
+        h("p", { class: "au-ex-quando mono", title: ui.dataHoraBR(x.criado_em) }, `${ui.horaBR(x.criado_em)} · ${ui.relativo(x.criado_em)}`),
+        det),
+      h("div", { class: "au-ex-acoes" }, btParar, abrir, btDet));
   }
 
   function mostrarAba(id) {
@@ -973,6 +1051,15 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     window.addEventListener("resize", medir);
     medir();
     amb.aoSair(() => { ro.disconnect(); window.removeEventListener("resize", medir); raizDoc.style.removeProperty("--au-cab-h"); });
+  }
+
+  // ------------------------------------------------ paleta Ctrl/⌘+K (item 59): salvar, testar e ver execuções desta automação
+  if (ctx.comandos && typeof ctx.comandos.registrar === "function" && amb.aoSair) {
+    const reg = c => { try { const cancelar = ctx.comandos.registrar(c); if (typeof cancelar === "function") amb.aoSair(cancelar); } catch { /* a paleta é um extra */ } };
+    if (btSalvar) reg({ id: "automacoes.salvar", rotulo: item ? "Salvar automação" : "Criar automação", palavras: "salvar gravar criar", icone: "check", fazer: () => salvar(btSalvar) });
+    if (btTestar) reg({ id: "automacoes.testar", rotulo: "Testar automação (sem enviar nada)", palavras: "testar simular conferir", icone: "olho", fazer: () => testar(btTestarLado) });
+    if (item) reg({ id: "automacoes.execucoes", rotulo: "Ver execuções desta automação", palavras: "execucoes historico rodou", icone: "relogio",
+      fazer: () => { const aba = raiz.querySelectorAll(".au-abas [role=tab]")[1]; if (aba) aba.click(); else mostrarAba("execucoes"); } });
   }
 
   // ------------------------------------------------ primeira pintura

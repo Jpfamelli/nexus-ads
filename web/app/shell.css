@@ -37,6 +37,9 @@
 .pular-regiao { position: absolute; left: -9999px; top: .8rem; z-index: 999; padding: .6rem 1rem; border-radius: 999px; background: var(--c-texto); color: var(--c-fundo); font-weight: 600; border: 0; }
 .pular-regiao:focus { left: 1rem; }
 .pular-regiao[hidden] { display: none; }
+/* plano 50 · A15: o atalho que aparece ao focar tem anel e sombra (nunca só muda de lugar) e cabe na faixa do topo sem cobrir a marca */
+.pular-regiao:focus-visible, .pular:focus-visible { outline: var(--foco-largura) solid var(--c-foco); outline-offset: 3px; box-shadow: 0 12px 30px -12px var(--c-sombra); }
+.pular-regiao, .pular { font-size: var(--fs-14); line-height: 1.2; min-height: var(--alvo-toque); display: inline-flex; align-items: center; }
 /* o título que recebe o foco depois de navegar não desenha um anel enorme para quem navega com mouse; no teclado o anel fica */
 h1[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
 

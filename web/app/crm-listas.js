@@ -11,6 +11,10 @@
       abrirContato): dados editáveis, campos, etiquetas, consentimento,
       RFM, negócios, atendimentos, tarefas, notas e linha do tempo.
    T8 Empresas (#/empresas, #/empresas/<id>).
+   Plano 50 (04/10): densidade compacta/confortável lembrada e «último
+      contato» relativo com a data na dica (contatos); empresas em cartões
+      com contagens e «Ver negócios»/«Ver contatos»; página da empresa com
+      resumo e foco na seção pedida (?sec=negocios).
    ============================================================ */
 
 const POR_PAGINA = 50;
@@ -29,11 +33,20 @@ export async function montarContatos(k, el, rota) {
   try { salvo = JSON.parse(localStorage.getItem(chaveLocal) || "{}") || {}; } catch { salvo = {}; }
   const S = { filtro: salvo.filtro || {}, ordem: ORDENS.some(o => o[0] === salvo.ordem) ? salvo.ordem : "recentes", pagina: 1, seq: 0, vivo: true, total: null };
   if (rota.query && rota.query.busca) S.filtro.busca = rota.query.busca;
+  // «Ver pacientes» do cartão da empresa (plano 50, item 30): #/contatos?empresa=<id>&empresa_nome=<nome> já abre filtrado, com o chip removível
+  if (rota.query && rota.query.empresa) { S.filtro.empresa_id = rota.query.empresa; S.filtro.empresa_nome = rota.query.empresa_nome || ""; }
   let controlesVisoes = null;
   const gravar = () => {
     try { localStorage.setItem(chaveLocal, JSON.stringify({ filtro: S.filtro, ordem: S.ordem })); } catch { /* ok */ }
     if (controlesVisoes) controlesVisoes.atualizar();
   };
+  // densidade da tabela (plano 50, item 27): compacta/confortável, lembrada por empresa neste aparelho
+  const chaveDens = `nx-app-crm-ct-dens-${ctx.cliente.id}`;
+  let densidade = L.densidadeLista((() => { try { return localStorage.getItem(chaveDens); } catch { return null; } })());
+  const aplicarDensidade = () => { el.classList.toggle("crm-dens-compacta", densidade === "compacta"); el.dataset.densidade = densidade; };
+  const segDens = ui.segmentado({ opcoes: [{ valor: "confortavel", rotulo: "Confortável" }, { valor: "compacta", rotulo: "Compacta" }], valor: densidade, tipo: "filtro", rotulo: "Densidade da lista", classe: "crm-dens",
+    aoMudar: v => { densidade = L.densidadeLista(v); try { localStorage.setItem(chaveDens, densidade); } catch { /* ok */ } aplicarDensidade(); ui.anunciar(densidade === "compacta" ? "Lista compacta." : "Lista confortável."); } });
+  aplicarDensidade();
 
   const sub = h("span");      // a contagem «12 pacientes» entra no subtítulo do ui.cabecalho
   const busca = h("input", { type: "search", placeholder: pequena() ? `Buscar ${k.v.min("contatos")}` : "Buscar por nome, telefone, e-mail ou documento", "aria-label": `Buscar ${k.v.min("contatos")}`, value: S.filtro.busca || "" });
@@ -69,9 +82,11 @@ export async function montarContatos(k, el, rota) {
     k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novoContato } }, ui.icone("mais"), k.v.novo("contato")) : null];
   el.append(
     ui.cabecalho({ titulo: k.v.contatos, sub, acoes }),
-    h("div", { class: "pilha-p crm-fixa" }, h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btF, selOrdem), controlesVisoes.el, chips),
+    h("div", { class: "pilha-p crm-fixa" }, h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btF, selOrdem, segDens), controlesVisoes.el, chips),
     corpo, pag);
   if (fab) el.appendChild(fab);
+  // «último contato» relativo com a data completa na dica e para o leitor de tela (item 27)
+  const quando = iso => iso ? h("time", { class: "ct-rel", datetime: iso, title: ui.dataHoraBR(iso), "aria-label": `Último contato em ${ui.dataHoraBR(iso)}` }, ui.relativo(iso)) : null;
 
   const tab = ui.tabela({
     rotulo: k.v.contatos,
@@ -87,7 +102,7 @@ export async function montarContatos(k, el, rota) {
       } },
       { chave: "origem", rotulo: "Origem", render: c => c.plataforma ? ui.pilula(c.plataforma === "google" ? "Google" : "Anúncio", c.plataforma === "google" ? "google" : "meta") : (L.ROTULO_ORIGEM[c.origem] || c.origem) },
       { chave: "negocios_abertos", rotulo: `${k.v.negocios} abert${k.v.art("negocio")}s`, alinhar: "dir", render: c => h("span", { class: ["ct-nneg", c.negocios_abertos > 0 && "tem"] }, String(c.negocios_abertos || 0)) },
-      { chave: "ultimo_contato_em", rotulo: "Último contato", render: c => c.ultimo_contato_em ? ui.relativo(c.ultimo_contato_em) : null },
+      { chave: "ultimo_contato_em", rotulo: "Último contato", render: c => quando(c.ultimo_contato_em) },
     ],
     aoClicar: c => ctx.navegar(`#/contatos/${c.id}`),
     vazio: "Nada encontrado com esses filtros.",
@@ -311,7 +326,7 @@ export function listaCompacta(k, { aoMudar }) {
 
   function linha(c) {
     const nome = L.nomeContato(c);
-    const sub = [c.telefone ? ui.telBR(c.telefone) : null, c.cidade].filter(Boolean).join(" · ")
+    const sub = [c.telefone ? ui.telBR(c.telefone) : null, c.cidade, c.ultimo_contato_em ? ui.relativo(c.ultimo_contato_em) : null].filter(Boolean).join(" · ")
       || (c.optin_marketing === false ? "Não quer marketing" : L.ROTULO_ORIGEM[c.origem] || "");
     const etq = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean)[0];
     const pil = c.plataforma ? ui.pilula(c.plataforma === "google" ? "Google" : "Anúncio", c.plataforma === "google" ? "google" : "meta")
@@ -632,6 +647,25 @@ export async function montarFicha(k, el, id, { gaveta = null, aoMudar } = {}) {
 }
 
 /* ============================================================ T8 — Empresas */
+/**
+ * Cartão de empresa (plano 50, item 30): avatar, nome, documento/cidade, contagem de contatos e de negócios abertos, «Ver negócios» (abre a
+ * empresa já na seção de negócios) e «Ver contatos» (lista de contatos filtrada pela empresa).
+ */
+export function cartaoEmpresa(k, e) {
+  const { ui, h } = k;
+  const nCt = Number(e.contatos) || 0, abertos = Number(e.negocios_abertos) || 0;
+  const sub = [e.documento, e.cidade ? `${e.cidade}${e.uf ? `/${e.uf}` : ""}` : null].filter(Boolean).join(" · ");
+  return h("li", { class: "emp-cartao", dataset: { id: e.id } },
+    h("a", { class: "emp-cab", href: `#/empresas/${e.id}` }, ui.avatar(e.nome, e.id),
+      h("span", { class: "emp-txt" }, h("b", { class: "emp-nome" }, e.nome || "Empresa"), h("small", null, sub || "Sem documento nem cidade"))),
+    h("div", { class: "emp-nums" },
+      h("span", { class: "emp-num" }, h("b", { class: "dado" }, ui.num(nCt)), h("small", null, nCt === 1 ? k.v.min("contato") : k.v.min("contatos"))),
+      h("span", { class: ["emp-num", abertos > 0 && "tem"] }, h("b", { class: "dado" }, ui.num(abertos)), h("small", null, `${abertos === 1 ? k.v.min("negocio") : k.v.min("negocios")} abert${k.v.art("negocio")}${abertos === 1 ? "" : "s"}`))),
+    h("div", { class: "emp-acoes" },
+      h("a", { class: "bt bt-sec bt-p emp-ver-neg", href: `#/empresas/${e.id}?sec=negocios` }, ui.icone("funil"), `Ver ${k.v.min("negocios")}`),
+      h("a", { class: "bt bt-fant bt-p emp-ver-ct", href: `#/contatos?empresa=${encodeURIComponent(e.id)}&empresa_nome=${encodeURIComponent(e.nome || "")}` }, ui.icone("contato"), `Ver ${k.v.min("contatos")}`)));
+}
+
 export async function montarEmpresas(k, el) {
   const { ui, h, ctx } = k;
   ctx.titulo("Empresas");
@@ -647,26 +681,28 @@ export async function montarEmpresas(k, el) {
         if (e) ctx.navegar(`#/empresas/${e.id}`);
       } } }, ui.icone("mais"), "Empresa") : null }),
     h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca)), corpo, pag);
-  const tab = ui.tabela({ rotulo: "Empresas", colunas: [
-    { chave: "nome", rotulo: "Nome", principal: true, render: e => h("div", { class: "cel-nome" }, ui.avatar(e.nome, e.id), h("div", null, h("b", null, e.nome), h("small", null, e.documento || ""))) },
-    { chave: "cidade", rotulo: "Cidade", render: e => e.cidade ? `${e.cidade}${e.uf ? `/${e.uf}` : ""}` : null },
-    { chave: "contatos", rotulo: k.v.contatos, alinhar: "dir", render: e => h("span", { class: "ct-nneg" }, String(e.contatos || 0)) },
-    { chave: "negocios_abertos", rotulo: `${k.v.negocios} abert${k.v.art("negocio")}s`, alinhar: "dir", render: e => h("span", { class: ["ct-nneg", e.negocios_abertos > 0 && "tem"] }, String(e.negocios_abertos || 0)) },
-  ], aoClicar: e => ctx.navegar(`#/empresas/${e.id}`), vazio: "Nada encontrado." });
+  // cartões em vez de tabela (item 30): contagens à vista e as duas ações sem abrir a empresa
+  const grade = h("ul", { class: "emp-grade", role: "list", "aria-label": "Empresas" });
   async function carregar() {
     const minha = ++S.seq;
-    if (!corpo.contains(tab.el)) { ui.limpar(corpo); corpo.appendChild(ui.esqueleto("tabela", 6)); }
+    if (!corpo.contains(grade)) { ui.limpar(corpo); corpo.appendChild(ui.esqueleto("cartoes", 6)); }
+    else grade.setAttribute("aria-busy", "true");
     try {
       const r = await k.api.rpcC("nx_empresas_listar", { p_filtro: S.busca ? { busca: S.busca } : {}, p_pagina: S.pagina });
       if (minha !== S.seq) return;
+      // resposta fora do formato (sem «itens») não vira exceção em inglês na tela: o servidor recusou o formato, e a frase diz isso
+      if (!r || !Array.isArray(r.itens)) throw Object.assign(new Error("resposta_invalida"), { codigo: "resposta_invalida" });
+      grade.removeAttribute("aria-busy");
       ui.limpar(corpo); ui.limpar(pag);
       if (!r.itens.length && !S.busca && S.pagina === 1) {
         corpo.appendChild(ui.vazio({ titulo: "Nenhuma empresa ainda.", texto: "Cadastre empresas quando atender outras empresas (convênios, frotas, parceiros).", icone: "empresa",
           acao: k.pode("atendente") ? { rotulo: "Cadastrar empresa", fn: async () => { const e = await formEmpresa(k, null); if (e) ctx.navegar(`#/empresas/${e.id}`); } } : null }));
         return;
       }
-      tab.atualizar(r.itens);
-      corpo.appendChild(tab.el);
+      ui.limpar(grade);
+      if (!r.itens.length) corpo.appendChild(ui.vazio({ tipo: "sem_resultado", titulo: "Nenhuma empresa com esse nome.", acao: { rotulo: "Limpar busca", fn: () => { busca.value = ""; S.busca = ""; S.pagina = 1; carregar(); } } }));
+      for (const e of r.itens) grade.appendChild(cartaoEmpresa(k, e));
+      corpo.appendChild(grade);
       pag.append(h("span", null, `${ui.num(r.total)} empresa${r.total === 1 ? "" : "s"}`), h("div", { class: "linha" },
         h("button", { type: "button", class: "bt bt-sec bt-p", disabled: S.pagina <= 1, on: { click: () => { S.pagina--; carregar(); } } }, ui.icone("seta-esq"), "Anterior"),
         h("button", { type: "button", class: "bt bt-sec bt-p", disabled: !r.tem_mais, on: { click: () => { S.pagina++; carregar(); } } }, "Próxima", ui.icone("seta-dir"))));
@@ -711,18 +747,27 @@ async function formEmpresa(k, emp) {
     } }] });
 }
 
-export async function montarEmpresa(k, el, id) {
+export async function montarEmpresa(k, el, id, rota = {}) {
   const { ui, h, L, ctx } = k;
   const N = await k.mod("negocio");
   let vivo = true;
+  let focarNegocios = !!(rota && rota.query && rota.query.sec === "negocios");   // veio de «Ver negócios» do cartão: abre já na seção
   async function carregar() {
     ui.limpar(el); el.appendChild(ui.esqueleto("cartoes", 3));
     try {
-      const d = await k.api.rpcC("nx_empresa_ver", { p_id: Number(id) });
+      const bruto = await k.api.rpcC("nx_empresa_ver", { p_id: Number(id) });
       if (!vivo) return;
+      if (!bruto || !bruto.empresa || typeof bruto.empresa !== "object") throw Object.assign(new Error("resposta_invalida"), { codigo: "resposta_invalida" });
+      const d = { ...bruto, contatos: Array.isArray(bruto.contatos) ? bruto.contatos : [], negocios: Array.isArray(bruto.negocios) ? bruto.negocios : [] };
       const e = d.empresa;
       ctx.titulo(e.nome);
       ui.limpar(el);
+      // resumo da empresa (item 30): contatos, negócios abertos (e o valor em aberto), fechados — do que nx_empresa_ver já devolve
+      const res = L.resumoEmpresa(d);
+      const resumo = h("div", { class: "emp-resumo", role: "group", "aria-label": "Resumo da empresa" },
+        h("div", { class: "emp-res-it" }, h("b", { class: "dado" }, ui.num(res.contatos)), h("span", null, res.contatos === 1 ? k.v.min("contato") : k.v.min("contatos"))),
+        h("div", { class: ["emp-res-it", res.abertos > 0 && "tem"] }, h("b", { class: "dado" }, ui.num(res.abertos)), h("span", null, `${res.abertos === 1 ? k.v.min("negocio") : k.v.min("negocios")} abert${k.v.art("negocio")}${res.abertos === 1 ? "" : "s"}`), res.valorAberto ? h("small", null, ui.brl(res.valorAberto, { centavos: false })) : null),
+        h("div", { class: ["emp-res-it", res.ganhos > 0 && "ok"] }, h("b", { class: "dado" }, ui.num(res.ganhos)), h("span", null, `${k.v.ganhar.toLowerCase()}${res.ganhos === 1 ? "" : "s"}`), res.valorGanho ? h("small", null, ui.brl(res.valorGanho, { centavos: false })) : null));
       const contatos = h("div", { class: "ng-outros" }, (d.contatos || []).map(c => h("a", { class: "fx-proto", href: `#/contatos/${c.id}` },
         ui.avatar(c.nome || c.telefone, c.id), h("b", null, c.nome || ui.telBR(c.telefone)), h("span", null, c.telefone ? ui.telBR(c.telefone) : c.email || ""))));
       if (!(d.contatos || []).length) contatos.appendChild(h("p", { class: "fraco" }, `Nenhum ${k.v.min("contato")} ligado. Abra a ficha de alguém e escolha esta empresa.`));
@@ -764,11 +809,21 @@ export async function montarEmpresa(k, el, id) {
                 if (!(await ui.confirmar({ titulo: "Excluir empresa?", texto: `Os ${k.v.min("contatos")} continuam; só deixam de estar ligados a ela.`, perigo: true }))) return;
                 try { await k.api.rpcC("nx_empresa_excluir", { p_id: e.id }); ui.toast("Empresa excluída.", { tipo: "ok" }); ctx.navegar("#/empresas", { substituir: true }); } catch (err) { k.toastErro(err); }
               } } }, ui.icone("lixeira"), "Excluir") : null)),
+          resumo,
           e.obs ? h("p", { class: "aviso" }, ui.icone("nota"), h("span", null, e.obs)) : null,
           blocoCampos,
           h("div", { class: "fx-grade" },
-            h("section", { class: "ng-bloco" }, h("div", { class: "ng-bloco-cab" }, h("h3", null, k.v.contatos)), contatos),
-            h("section", { class: "ng-bloco" }, h("div", { class: "ng-bloco-cab" }, h("h3", null, k.v.negocios)), negs))));
+            h("section", { class: "ng-bloco", "aria-label": k.v.contatos }, h("div", { class: "ng-bloco-cab" }, h("h3", null, k.v.contatos),
+              (d.contatos || []).length ? h("a", { class: "bt bt-fant bt-p", href: `#/contatos?empresa=${encodeURIComponent(e.id)}&empresa_nome=${encodeURIComponent(e.nome || "")}` }, "Ver na lista") : null), contatos),
+            h("section", { class: "ng-bloco emp-negocios", "aria-label": k.v.negocios, tabindex: "-1" }, h("div", { class: "ng-bloco-cab" }, h("h3", null, k.v.negocios)), negs))));
+      if (focarNegocios) {
+        focarNegocios = false;
+        // depois do shell: ao fim do montar ele põe o foco no <h1> e volta a página ao topo (focarTitulo) — focar agora seria desfeito na hora
+        setTimeout(() => {
+          const sec = vivo && el.querySelector(".emp-negocios");
+          if (sec) { try { sec.scrollIntoView({ block: "start", behavior: ui.comportamentoRolagem ? ui.comportamentoRolagem() : "auto" }); sec.focus({ preventScroll: true }); } catch { /* ok */ } }
+        }, 0);
+      }
     } catch (err) {
       if (!vivo) return;
       ui.limpar(el);
