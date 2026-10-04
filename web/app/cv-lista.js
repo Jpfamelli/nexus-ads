@@ -44,9 +44,34 @@ export function criarLista(A) {
 
   /* ---------------- busca e filtros */
   const busca = h("input", { type: "search", placeholder: "Nome, telefone, protocolo", "aria-label": "Buscar conversas", autocomplete: "off", value: A.busca || "" });
-  const aoBuscar = ui.debounce(() => A.acoes.mudarLista({ busca: busca.value }), 320);
-  busca.addEventListener("input", () => { if (busca.value.trim().length === 1) return; aoBuscar(); });
-  busca.addEventListener("keydown", ev => { if (ev.key === "Escape" && busca.value) { ev.preventDefault(); busca.value = ""; aoBuscar.cancelar(); A.acoes.mudarLista({ busca: "" }); } });
+  const buscaAjuda = h("p", { class: "cvl-busca-ajuda", role: "status", "aria-live": "polite", "aria-atomic": "true", hidden: true });
+  let timerBusca = null, compondoBusca = false;
+  function cancelarBuscaPendente() { clearTimeout(timerBusca); timerBusca = null; }
+  function aplicarBusca() {
+    const q = String(busca.value || "").trim();
+    if (q.length === 1) {
+      if (A.busca) A.acoes.mudarLista({ busca: "" });
+      buscaAjuda.textContent = "Digite mais 1 caractere para buscar conversas.";
+      buscaAjuda.hidden = false;
+      return;
+    }
+    buscaAjuda.hidden = true;
+    if (q !== (A.busca || "")) A.acoes.mudarLista({ busca: q });
+  }
+  function programarBusca(imediato = false) {
+    cancelarBuscaPendente();
+    if (compondoBusca) return;
+    const q = String(busca.value || "").trim();
+    if (q.length < 2 || imediato) { aplicarBusca(); return; }
+    timerBusca = setTimeout(() => { timerBusca = null; aplicarBusca(); }, 320);
+  }
+  busca.addEventListener("input", ev => { if (ev.isComposing || compondoBusca) return; programarBusca(); });
+  busca.addEventListener("compositionstart", () => { compondoBusca = true; cancelarBuscaPendente(); });
+  busca.addEventListener("compositionend", () => { compondoBusca = false; programarBusca(true); });
+  busca.addEventListener("keydown", ev => {
+    if (ev.key === "Escape" && busca.value) { ev.preventDefault(); busca.value = ""; cancelarBuscaPendente(); buscaAjuda.hidden = true; aplicarBusca(); return; }
+    if (ev.key === "Enter" && !ev.isComposing && !compondoBusca && ev.keyCode !== 229) { ev.preventDefault(); programarBusca(true); }
+  });
   const ponto = h("span", { class: "cvl-ponto", hidden: true });
   const btFiltro = h("button", { type: "button", class: "bt-icone cvl-filtro", "aria-label": "Filtros", title: "Filtros" }, ui.icone("filtro"), ponto);
   btFiltro.addEventListener("click", () => abrirFiltros());
@@ -101,12 +126,17 @@ export function criarLista(A) {
     h("header", { class: "cvl-cab" }, titulo, btNova, btAtender),
     leitor,
     h("div", { class: "cvl-busca" }, h("label", { class: "busca" }, ui.icone("busca"), busca), btFiltro, btAvisos),
-    infoBusca, filtrosEl, abasEl, avisoCanal, lista);
+    buscaAjuda, infoBusca, filtrosEl, abasEl, avisoCanal, lista);
 
   /* ---------------- filtros (popover) */
   function filtrosAtivos() {
     const f = A.filtro || {};
     return !!(f.departamento_id || f.canal_id || f.atendente || (f.etiquetas && f.etiquetas.length) || f.nao_lidas);
+  }
+  function contarFiltrosAtivos() {
+    const f = A.filtro || {};
+    return Number(!!f.departamento_id) + Number(!!f.canal_id) + Number(!!f.atendente)
+      + (Array.isArray(f.etiquetas) ? f.etiquetas.length : 0) + Number(!!f.nao_lidas);
   }
   function desenharFiltrosAtivos() {
     const f = A.filtro || {};
@@ -258,8 +288,18 @@ export function criarLista(A) {
     if (!b || q.length < 3 || b.q !== q) { blocoMsgs.hidden = true; return false; }
     blocoMsgs.hidden = false;
     blocoMsgs.appendChild(h("h2", { class: "rotulo cvl-msgs-tit" }, "Nas mensagens"));
+    blocoMsgs.setAttribute("aria-busy", String(!!b.carregando));
     if (b.carregando) { blocoMsgs.appendChild(h("p", { class: "sub cvl-msgs-info", role: "status" }, "Procurando nas mensagens…")); return true; }
-    if (b.erro) { blocoMsgs.appendChild(h("p", { class: "sub cvl-msgs-info" }, "Não deu para procurar nas mensagens agora.")); return true; }
+    if (b.erro) {
+      // sem role=alert/status aqui: este bloco é redesenhado a cada render e repetiria a frase sem parar; quem anuncia (uma vez) é buscarMensagens
+      const aviso = h("p", { class: "sub cvl-msgs-info" }, "Não deu para procurar nas mensagens agora.");
+      const tentar = h("button", { type: "button", class: "bt bt-fant bt-p cvl-msgs-tentar", "aria-label": "Tentar buscar mensagens novamente" }, "Tentar novamente");
+      tentar.addEventListener("click", () => {
+        try { busca.focus({ preventScroll: true }); } catch { /* o botão vai ser redesenhado: o foco volta para a busca */ }
+        if (A.acoes.repetirBuscaMensagens) A.acoes.repetirBuscaMensagens();
+      });
+      blocoMsgs.append(aviso, tentar); return true;
+    }
     if (!b.itens.length) { blocoMsgs.appendChild(h("p", { class: "sub cvl-msgs-info" }, `Nenhuma mensagem com «${q}».`)); return false; }
     for (const r of b.itens) {
       const partes = L.partesDestaque(r.trecho || "", q).map(p => (p.marca ? h("mark", null, p.t) : p.t));
@@ -294,7 +334,7 @@ export function criarLista(A) {
       ui.limpar(lista);
       if (A.busca) {
         const temMsgs = renderBlocoMsgs();
-        if (temMsgs) lista.appendChild(h("p", { class: "sub cvl-msgs-info" }, "Nenhum contato ou protocolo com esse termo."));
+        if (temMsgs) lista.appendChild(h("p", { class: "sub cvl-msgs-info", role: "status" }, "Nenhum contato ou protocolo com esse termo."));
         else lista.appendChild(ui.vazio({ titulo: "Nada encontrado.", texto: "Confira o nome, o telefone, o protocolo ou um trecho da mensagem.", icone: "busca" }));
         if (!blocoMsgs.hidden) lista.appendChild(blocoMsgs);
       }
@@ -329,7 +369,7 @@ export function criarLista(A) {
     maisBox.hidden = !A.temMais;
     if (!A.temMais) maisBox.remove(); else lista.appendChild(maisBox);
     renderBlocoMsgs();
-    if (blocoMsgs.hidden) blocoMsgs.remove(); else lista.appendChild(blocoMsgs);
+    if (blocoMsgs.hidden) blocoMsgs.remove(); else if (blocoMsgs.parentNode !== lista || lista.lastElementChild !== blocoMsgs) lista.appendChild(blocoMsgs);
     if (idFocado && !(document.activeElement && lista.contains(document.activeElement))) {
       const volta = [...lista.querySelectorAll(".cvl-item")].find(x => x.dataset.id === idFocado);
       if (volta) try { volta.focus({ preventScroll: true }); } catch { volta.focus(); }
@@ -385,7 +425,9 @@ export function criarLista(A) {
     ponto.hidden = !filtrosAtivos();
     { const p = A.acoes.lerAvisos(); btAvisos.dataset.ligado = p.som || p.tela ? "1" : "0";
       btAvisos.setAttribute("aria-label", `Avisos de mensagem nova (${p.som ? "som ligado" : "som desligado"}${p.tela ? ", área de trabalho ligada" : ""})`); }
-    btFiltro.setAttribute("aria-label", filtrosAtivos() ? "Filtros (ativos)" : "Filtros");
+    const nFiltros = contarFiltrosAtivos();
+    btFiltro.setAttribute("aria-pressed", String(nFiltros > 0));
+    btFiltro.setAttribute("aria-label", nFiltros ? `Filtros (${nFiltros} ativo${nFiltros === 1 ? "" : "s"})` : "Filtros");
     desenharFiltrosAtivos();
     // sem número conectado
     const semCanal = A.base && !(A.base.canais || []).length;
@@ -409,13 +451,14 @@ export function criarLista(A) {
 
   function render(o = {}) {
     renderCabecalho();
+    lista.setAttribute("aria-busy", String(!!A.carregandoLista));
     renderItens(o);
   }
 
   return {
     el,
     render,
-    mostrarCarregando() { cache.clear(); ui.limpar(lista); lista.appendChild(ui.esqueleto("lista", 8)); renderCabecalho(); },
+    mostrarCarregando() { cache.clear(); lista.setAttribute("aria-busy", "true"); ui.limpar(lista); lista.appendChild(ui.esqueleto("lista", 8)); renderCabecalho(); },
     focarBusca() { busca.focus(); busca.select(); },
     anunciar,
     /** Rola a lista até a conversa aberta (Alt+↓/↑ abrem vizinhas que podem estar fora da tela). */

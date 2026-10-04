@@ -432,7 +432,7 @@ const ARQUIVOS_DO_APP = [
   "antes.js", "app.js", "api.js", "ui.js", "tema.js", "vocab.js", "rotas.js", "pulso.js", "rede.js", "rascunho.js", "cache.js", "comandos.js",
   "prontos.js", "pwa.js", "paleta.js", "login.js", "inicio.js", "config.js", "admin.js",
   "conversas.js", "cv-logica.js", "cv-lista.js", "cv-chat.js", "cv-composer.js", "cv-lateral.js", "cv-config.js",
-  "crm.js", "crm-logica.js", "crm-kanban.js", "crm-listas.js", "crm-negocio.js", "crm-tarefas.js", "crm-importar.js", "crm-config.js",
+  "crm.js", "crm-logica.js", "crm-kanban.js", "crm-listas.js", "crm-visoes.js", "crm-negocio.js", "crm-tarefas.js", "crm-importar.js", "crm-config.js",
   "agenda.js", "agenda-config.js", "rastreio-config.js",
   "anuncios.js", "ads-config.js", "relatorios.js", "rel-logica.js", "graficos.js",
   "automacoes.js", "auto-logica.js", "auto-catalogo.js", "auto-pecas.js", "auto-editor.js",

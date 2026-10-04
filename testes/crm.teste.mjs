@@ -1329,7 +1329,9 @@ function domDoKanban() {
   const doc = { body: new El("body"), hidden: false, get activeElement() { return ativo || this.body; },
     addEventListener: (t, f) => (doDoc[t] || (doDoc[t] = [])).push(f), removeEventListener: (t, f) => { doDoc[t] = (doDoc[t] || []).filter(x => x !== f); },
     getElementById: () => null, querySelector: sel => doc.body.querySelector(sel), elementFromPoint: () => sobOPonto };
+  const storage = new Map();
   const globais = { document: doc, addEventListener: (t, f) => (daJanela[t] || (daJanela[t] = [])).push(f), removeEventListener: (t, f) => { daJanela[t] = (daJanela[t] || []).filter(x => x !== f); },
+    localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, String(v)), removeItem: k => storage.delete(k) },
     matchMedia: () => ({ matches: false }), requestAnimationFrame: () => 1, cancelAnimationFrame() {}, history: { state: null, replaceState() {} },
     location: { pathname: "/app/", search: "", hash: "#/crm" }, innerHeight: 800, scrollBy() {} };
   const antes = {};
@@ -1362,8 +1364,9 @@ await teste("Kanban de verdade (DOM de mentira): soltar fora não move, pendente
       acaoComDesfazer: o => new Promise(res => { avisos.push({ ...o, res }); }), modal: async () => null };
     const k = { ui, h, L, base, v: { crm: "CRM", negocios: "Oportunidades", ganhar: "Ganhou", perder: "Perdeu", min: x => x, art: () => "a", novo: () => "Nova oportunidade", nenhum: () => "Nenhuma oportunidade" },
       ctx: { cliente: { id: "cli-kb" }, titulo() {}, navegar() {}, pulso: null },
-      mod: async () => ({ abrirNegocio() {}, novoNegocio() {}, prepararMovimento: async (k_, card, destino) => (destino.tipo === "ganho" ? { valor: 500 } : {}),
-        moverNegocio: async (k_, card, destino, o) => { movidos.push({ id: card.id, para: destino.id, keepalive: !!o.keepalive }); return { id: card.id, estagio_id: destino.id }; } }),
+      mod: async nome => nome === "visoes" ? { controlesVisoes: () => ({ el: h("div", { class: "crm-visoes-teste" }), atualizar() {} }) }
+        : ({ abrirNegocio() {}, novoNegocio() {}, prepararMovimento: async (k_, card, destino) => (destino.tipo === "ganho" ? { valor: 500 } : {}),
+          moverNegocio: async (k_, card, destino, o) => { movidos.push({ id: card.id, para: destino.id, keepalive: !!o.keepalive }); return { id: card.id, estagio_id: destino.id }; } }),
       api: { rpcC: async nome => { leituras.push(nome); if (nome === "nx_negocios_kanban") { const f = respostas.shift(); return f ? f() : quadroDoServidor(); } return {}; } },
       pode: () => true, cor: () => null, usuario: () => null, etiqueta: () => null, toastErro() {}, erro: e => String(e && (e.codigo || e.message)),
       funil: id => base.funis.find(f => f.id === id) || null, funilPadrao: () => base.funis[0] || null,

@@ -339,6 +339,7 @@ async function buscarMensagens() {
   const seq = ++A.seqMsgs;
   if (q.length < 3) { A.buscaMsgs = null; return; }
   A.buscaMsgs = { q, carregando: true, itens: [], erro: null };
+  A.lista.render();
   try {
     const r = await A.api.rpcC("nx_cv_buscar_msgs", { p_q: q, p_limite: 20 });
     if (!A || seq !== A.seqMsgs) return;
@@ -348,6 +349,12 @@ async function buscarMensagens() {
     A.buscaMsgs = { q, carregando: false, itens: [], erro: e };
   }
   A.lista.render();
+  // anuncia UMA vez por resultado: o bloco «Nas mensagens» é redesenhado a cada render e uma região viva ali repetiria a frase sem parar
+  const b = A.buscaMsgs;
+  if (b && b.q === q && !b.carregando && A.ui && typeof A.ui.anunciar === "function") {
+    A.ui.anunciar(b.erro ? "Não deu para procurar nas mensagens agora. Use «Tentar novamente» na lista."
+      : b.itens.length ? `${b.itens.length} ${b.itens.length === 1 ? "mensagem" : "mensagens"} com «${q}».` : `Nenhuma mensagem com «${q}».`);
+  }
 }
 
 /** Abre a conversa já na mensagem (resultado da busca): carrega páginas anteriores até achar. */
@@ -708,7 +715,7 @@ function tratarErro(e) {
 }
 
 const acoes = {
-  abrir, carregarAntes, carregarLista, mudarLista, urlMidia, estadoMidia, abrirDetalhes, nomeContato, tratarErro,
+  abrir, carregarAntes, carregarLista, mudarLista, repetirBuscaMensagens: buscarMensagens, urlMidia, estadoMidia, abrirDetalhes, nomeContato, tratarErro,
   menuAvisos: ancora => menuAvisos(ancora), lerAvisos: () => lerAvisos(),
   voltar() { A.ctx.navegar("#/conversas"); },
   recarregarVer,

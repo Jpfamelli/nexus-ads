@@ -510,26 +510,49 @@ export function alternarTabela(rodape, alvoGrafico, o) {
 }
 
 /* ---------- 2.8 Números que contam (odômetro simples) ---------- */
-/** Duração de um token de tempo do :root ("900ms"/"0s") — com movimento reduzido o token vale 0. */
+/** Lê a duração do tema, mas não anima quando a aba está oculta ou o usuário reduz movimento. */
 export function duracaoToken(nome) {
-  if (typeof getComputedStyle !== "function" || reduzido()) return 0;
-  const v = getComputedStyle(document.documentElement).getPropertyValue(nome).trim();
-  const m = /^([\d.]+)(ms|s)$/.exec(v);
-  return m ? parseFloat(m[1]) * (m[2] === "s" ? 1000 : 1) : 0;
+  if (typeof document === "undefined" || document.hidden || typeof getComputedStyle !== "function" || reduzido()) return 0;
+  const bruto = getComputedStyle(document.documentElement).getPropertyValue(nome).trim();
+  const m = bruto.match(/^([\d.]+)\s*(ms|s)$/i);
+  if (!m) return 0;
+  const ms = Number(m[1]) * (m[2].toLowerCase() === "s" ? 1000 : 1);
+  return Number.isFinite(ms) ? Math.max(0, Math.min(2000, ms)) : 0;
 }
-/** Faz o texto do elemento contar de 0 até `valor` (formatado por `fmt`) na duração de --t-dados. */
-export function contar(el, valor, fmt) {
-  el.textContent = fmt(valor);
+
+/** Anima um valor visível e mantém seu equivalente acessível completo, encerrando no valor exato ao ocultar a aba. */
+export function animarValor(el, valor, pintar, acessivel = String(valor)) {
+  const final = () => { pintar(valor); el.setAttribute?.("aria-label", acessivel); };
+  el.setAttribute?.("aria-label", acessivel);
   const dur = duracaoToken("--t-dados");
-  if (!dur || !fin(valor) || valor === 0 || typeof requestAnimationFrame !== "function") return;
+  if (!dur || !fin(valor) || valor === 0 || typeof requestAnimationFrame !== "function") { final(); return el; }
+  let ativo = true, frame = 0;
+  const limpar = () => {
+    if (!ativo) return false;
+    ativo = false;
+    if (frame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame);
+    document.removeEventListener?.("visibilitychange", visibilidade);
+    return true;
+  };
+  const concluir = () => { if (limpar()) final(); };
+  const visibilidade = () => { if (document.hidden) concluir(); };
+  document.addEventListener?.("visibilitychange", visibilidade);
   const t0 = performance.now();
   const passo = t => {
+    if (!ativo) return;
+    if (!el.isConnected) { limpar(); return; }
     const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
-    el.textContent = fmt(p < 1 ? valor * e : valor);
-    if (p < 1 && el.isConnected) requestAnimationFrame(passo);
+    pintar(p < 1 ? valor * e : valor);
+    if (p < 1) frame = requestAnimationFrame(passo);
+    else { limpar(); final(); }
   };
-  requestAnimationFrame(passo);
+  pintar(0);
+  frame = requestAnimationFrame(passo);
+  return el;
 }
+
+/** O rótulo de acessibilidade anuncia o valor final; o odômetro visível termina mesmo ao suspender a aba. */
+export function contar(el, valor, fmt) { return animarValor(el, valor, n => { el.textContent = fmt(n); }, fmt(valor)); }
 
 /* ---------- 2.9 Resposta ao dado: o número que mudou acende ---------- */
 /** G.destacar(el) — flash de 600 ms em --c-prim-suave (classe .destaque do app.css) quando um número muda de valor.

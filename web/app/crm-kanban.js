@@ -27,17 +27,23 @@ const agora = () => (typeof performance !== "undefined" && performance.now ? per
 export async function montarKanban(k, el, rota) {
   const { ui, h, L, ctx } = k;
   const N = await k.mod("negocio");
+  const Vis = await k.mod("visoes");
   const cli = ctx.cliente.id;
   const chaveLocal = `nx-app-crm-kb-${cli}`;
   const lerLocal = () => { try { return JSON.parse(localStorage.getItem(chaveLocal) || "{}") || {}; } catch { return {}; } };
-  const gravarLocal = () => { try { localStorage.setItem(chaveLocal, JSON.stringify({ funil: S.funil && S.funil.id, filtro: S.filtro })); } catch { /* ok */ } };
+  let controlesVisoes = null;
+  const gravarLocal = () => {
+    try { localStorage.setItem(chaveLocal, JSON.stringify({ funil: S.funil && S.funil.id, filtro: S.filtro, todosFechados: S.todosFechados })); } catch { /* ok */ }
+    if (controlesVisoes) controlesVisoes.atualizar();
+    atualizarAtalhos();
+  };
 
   const salvo = lerLocal();
   const funis = () => k.base.funis.filter(f => f.ativo !== false);
   const S = {
     funil: k.funil(rota.query && rota.query.funil) || k.funil(salvo.funil) || k.funilPadrao(),
     filtro: salvo.filtro && typeof salvo.filtro === "object" ? salvo.filtro : {},
-    todosFechados: false,
+    todosFechados: salvo.todosFechados === true,
     dados: null,
     seq: 0,
     arrasto: null,
@@ -91,6 +97,32 @@ export async function montarKanban(k, el, rota) {
   const btFiltros = h("button", { type: "button", class: "bt bt-sec crm-filtro-bt", "aria-haspopup": "dialog" }, ui.icone("filtro"), "Filtros", nFiltros);
   btFiltros.addEventListener("click", abrirFiltros);
   const chips = h("div", { class: "crm-chips", "aria-label": "Filtros ativos" });
+  const btMeus = h("button", { type: "button", class: "bt bt-fant bt-p crm-atalho", "aria-pressed": String(S.filtro.dono === "eu"), on: { click: () => {
+    S.filtro.dono = S.filtro.dono === "eu" ? undefined : "eu"; if (!S.filtro.dono) delete S.filtro.dono;
+    gravarLocal(); carregar({ silencioso: true });
+  } } }, "Meus negócios");
+  const btParados = h("button", { type: "button", class: "bt bt-fant bt-p crm-atalho", "aria-pressed": String(Number(S.filtro.parado_dias) === 7), on: { click: () => {
+    if (Number(S.filtro.parado_dias) === 7) delete S.filtro.parado_dias; else S.filtro.parado_dias = 7;
+    gravarLocal(); carregar({ silencioso: true });
+  } } }, "Parados · 7 dias+");
+  const atalhos = h("div", { class: "crm-atalhos", "aria-label": "Filtros rápidos" }, btMeus, btParados);
+  function atualizarAtalhos() {
+    if (!btMeus || !btParados) return;
+    btMeus.setAttribute("aria-pressed", String(S.filtro.dono === "eu"));
+    btParados.setAttribute("aria-pressed", String(Number(S.filtro.parado_dias) === 7));
+  }
+  const fitaBusca = h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btFiltros);
+  controlesVisoes = Vis.controlesVisoes(k, { tipo: "kanban",
+    obterDados: () => ({ funil: S.funil && String(S.funil.id), filtro: S.filtro, todosFechados: S.todosFechados }),
+    aplicar: async dados => {
+      const funil = k.funil(dados.funil);
+      if (!funil || funil.ativo === false) throw new Error("O funil desta visão não está disponível.");
+      S.funil = funil; S.filtro = dados.filtro || {}; S.todosFechados = dados.todosFechados === true;
+      busca.value = S.filtro.busca || "";
+      history.replaceState(history.state, "", `${location.pathname}${location.search}#/crm?funil=${encodeURIComponent(funil.id)}`);
+      desenharSelFunil(); gravarLocal(); await carregar({ silencioso: true });
+      ui.toast("Visão aplicada.", { tipo: "ok", ms: 1600 });
+    } });
 
   const totAbertos = h("b", null, "—"), totSoma = h("b", null, "—"), totPrev = h("b", null, "—");
   const distBarra = h("div", { class: "crm-dist-barra", role: "img" });
@@ -123,7 +155,7 @@ export async function montarKanban(k, el, rota) {
   el.append(...[
     ui.cabecalho({ titulo: k.v.crm, acoes: [btNovo, selFunilM] }),
     selFunil,
-    h("div", { class: "pilha-p" }, h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btFiltros), chips),
+    h("div", { class: "pilha-p crm-kb-ferramentas" }, fitaBusca, atalhos, controlesVisoes.el, chips),
     fitaEtapas, resumoLinha, totais, areaVazia, corpoQuadro, instr, fab].filter(Boolean));
   desenharSelFunil();
 
@@ -988,7 +1020,7 @@ export async function montarKanban(k, el, rota) {
     if (f.parado_dias) add(`Parados há ${f.parado_dias}+ dias`, () => delete f.parado_dias);
     if (f.criado_de || f.criado_ate) add(`Criados ${f.criado_de ? `de ${ui.dataBR(f.criado_de)} ` : ""}${f.criado_ate ? `até ${ui.dataBR(f.criado_ate)}` : ""}`.trim(), () => { delete f.criado_de; delete f.criado_ate; });
     const n = contarFiltros();
-    if (n > 1) chips.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p crm-chips-limpar", on: { click: () => {
+    if (n > 0) chips.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p crm-chips-limpar", on: { click: () => {
       const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; gravarLocal(); carregar({ silencioso: true });
     } } }, "Limpar filtros"));
     nFiltros.textContent = String(n); nFiltros.hidden = !n;
@@ -1050,6 +1082,8 @@ export async function montarKanban(k, el, rota) {
       if (et.ids && et.ids.length) nf.etiquetas = { op: et.op || "alguma", ids: et.ids };
       if (orig.size) nf.origem = [...orig];
       const mn = vMin.value === "" ? null : Number(vMin.value), mx = vMax.value === "" ? null : Number(vMax.value);
+      if (mn != null && mx != null && mn > mx) { ui.toast("O valor mínimo precisa ser menor ou igual ao máximo.", { tipo: "erro" }); vMin.focus(); return; }
+      if (de.value && ate.value && de.value > ate.value) { ui.toast("A data inicial precisa ser anterior ou igual à final.", { tipo: "erro" }); de.focus(); return; }
       if (mn != null && mn >= 0) nf.valor_min = mn;
       if (mx != null && mx >= 0) nf.valor_max = mx;
       if (parado.value) nf.parado_dias = Number(parado.value);

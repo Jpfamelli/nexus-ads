@@ -50,6 +50,8 @@
 
 .cvl-aviso { margin: .7rem 1rem 0; }
 .cvl-busca-info { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .55rem 1rem; font-size: var(--fs-13); color: var(--c-texto-2); border-bottom: 1px solid var(--c-borda); }
+.cvl-busca-ajuda { margin: 0; padding: .35rem 1rem; color: var(--c-texto-2); font-size: var(--fs-12); }
+.cvl-busca-ajuda[hidden] { display: none !important; }
 .cvl-filtros-ativos { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; padding: 0 1rem .55rem; }
 .cvl-filtros-ativos[hidden] { display: none !important; }
 .cvl-filtro-chip { display: inline-flex; align-items: center; gap: .35rem; min-height: 32px; max-width: 100%; padding: .25rem .65rem; border: 1px solid var(--c-borda-2); border-radius: 999px; background: var(--c-prim-suave); color: var(--c-texto); font-size: var(--fs-12); font-weight: 600; }
@@ -263,6 +265,9 @@
 }
 .cvx textarea::placeholder { color: var(--c-texto-3); opacity: 1; }
 .cvx textarea:disabled { cursor: not-allowed; }
+.cvx-contador { align-self: flex-end; padding: 0 .9rem .35rem; color: var(--c-texto-2); font-size: var(--fs-12); font-variant-numeric: tabular-nums; }
+.cvx-contador[hidden] { display: none !important; }
+.cvx-contador[data-alerta="1"] { color: var(--c-aten); font-weight: 650; }
 .cvx[data-modo="nota"] .cvx-campo { background: var(--c-nota); border-color: color-mix(in srgb, var(--c-aten) 60%, transparent); }
 .cvx[data-modo="nota"] textarea { color: var(--c-nota-txt); }
 .cvx-rot-nota { display: none; align-items: center; gap: .4rem; padding: .45rem 1rem 0; font-family: var(--f-mono); font-size: var(--fs-11); letter-spacing: .08em; text-transform: uppercase; color: var(--c-aten); }
@@ -557,6 +562,7 @@
 .cvl-msgs { margin-top: .5rem; padding-top: .5rem; border-top: 1px solid var(--c-borda); }
 .cvl-msgs-tit { padding: .35rem .75rem .45rem; }
 .cvl-msgs-info { padding: .2rem .75rem .6rem; font-size: var(--fs-13); }
+.cvl-msgs-tentar { margin: 0 .75rem .6rem; }
 .cvl-msg { display: flex; flex-direction: column; gap: .25rem; padding: .6rem .75rem; border-radius: 14px; color: var(--c-texto); text-decoration: none; transition: background-color var(--t-micro) var(--e-out); }
 .cvl-msg + .cvl-msg { margin-top: 2px; }
 .cvl-msg:hover { background: var(--c-tinta); }

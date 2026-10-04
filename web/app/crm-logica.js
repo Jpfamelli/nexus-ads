@@ -640,6 +640,123 @@ export function filtroVazio(f) {
   });
 }
 
+/* ------------------------------------------------------------ visões locais (quadro/lista)
+   As visões ficam neste navegador e são isoladas por empresa, usuário e tela. Não são
+   sincronizadas para outras pessoas e nunca substituem os filtros enviados ao servidor. */
+const LIMITE_VISOES_CRM = 12;
+const ORIGENS_VISAO = new Set(["anuncio", "whatsapp", "indicacao", "organico", "manual", "site", "importacao"]);
+const ORDEM_VISAO_CONTATOS = new Set(["recentes", "nome", "ultimo_contato"]);
+const idVisaoSeguro = v => (typeof v === "number" && Number.isSafeInteger(v) && v > 0)   // nx_empresas.id é bigint
+  || (typeof v === "string" && /^[a-zA-Z0-9:_-]{1,100}$/.test(v));
+const dataISOVisao = v => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
+
+/** Chave sem dados pessoais em texto: qualquer usuário/empresa/tela ganha seu próprio espaço local. */
+export function chaveVisoesCRM(clienteId, contaId, tela) {
+  if (!clienteId || !["kanban", "contatos"].includes(tela)) return null;
+  const parte = v => encodeURIComponent(String(v || "local").slice(0, 120));
+  return `nx-app-visoes-v1:${parte(clienteId)}:${parte(contaId)}:${tela}`;
+}
+
+function filtroDaVisao(f, tela) {
+  if (!f || typeof f !== "object" || Array.isArray(f)) return {};
+  const o = {};
+  if (typeof f.busca === "string" && f.busca.trim()) o.busca = f.busca.trim().slice(0, 120);
+  if (f.dono === "eu" || f.dono === "sem" || idVisaoSeguro(f.dono)) o.dono = f.dono;
+  if (f.etiquetas && typeof f.etiquetas === "object") {
+    const ids = Array.isArray(f.etiquetas.ids) ? [...new Set(f.etiquetas.ids.filter(idVisaoSeguro))].slice(0, 30) : [];
+    if (ids.length) o.etiquetas = { op: ["alguma", "todas", "nenhuma"].includes(f.etiquetas.op) ? f.etiquetas.op : "alguma", ids };
+  }
+  if (Array.isArray(f.origem)) {
+    const origem = [...new Set(f.origem.filter(x => ORIGENS_VISAO.has(x)))];
+    if (origem.length) o.origem = origem;
+  }
+  if (tela === "kanban") {
+    for (const k of ["valor_min", "valor_max"]) if (f[k] !== "" && f[k] != null && Number.isFinite(Number(f[k])) && Number(f[k]) >= 0) o[k] = Number(f[k]);
+    if (o.valor_min != null && o.valor_max != null && o.valor_min > o.valor_max) { delete o.valor_min; delete o.valor_max; }
+    if ([3, 7, 15, 30].includes(Number(f.parado_dias))) o.parado_dias = Number(f.parado_dias);
+    if (dataISOVisao(f.criado_de)) o.criado_de = f.criado_de;
+    if (dataISOVisao(f.criado_ate)) o.criado_ate = f.criado_ate;
+  } else {
+    if (dataISOVisao(f.criado_de)) o.criado_de = f.criado_de;
+    if (dataISOVisao(f.criado_ate)) o.criado_ate = f.criado_ate;
+    if (typeof f.tem_negocio_aberto === "boolean") o.tem_negocio_aberto = f.tem_negocio_aberto;
+    if (idVisaoSeguro(f.empresa_id)) { o.empresa_id = f.empresa_id; if (typeof f.empresa_nome === "string") o.empresa_nome = f.empresa_nome.slice(0, 120); }
+    if (f.optin_marketing === false) o.optin_marketing = false;
+  }
+  if (o.criado_de && o.criado_ate && o.criado_de > o.criado_ate) { delete o.criado_de; delete o.criado_ate; }
+  return o;
+}
+
+function dadosDaVisao(dados, tela) {
+  if (!dados || typeof dados !== "object" || Array.isArray(dados)) return null;
+  const filtro = filtroDaVisao(dados.filtro, tela);
+  if (tela === "kanban") {
+    if (!idVisaoSeguro(String(dados.funil || ""))) return null;
+    return { funil: String(dados.funil), filtro, todosFechados: dados.todosFechados === true };
+  }
+  return { filtro, ordem: ORDEM_VISAO_CONTATOS.has(dados.ordem) ? dados.ordem : "recentes" };
+}
+
+/** Descarta estrutura inesperada, valores inválidos e excessos ao ler o armazenamento local. */
+export function normalizarVisoesCRM(valor, tela) {
+  if (!["kanban", "contatos"].includes(tela) || !Array.isArray(valor)) return [];
+  const saida = [], ids = new Set(), nomes = new Set();
+  for (const item of valor.slice(0, 100)) {
+    if (!item || !idVisaoSeguro(item.id) || ids.has(item.id)) continue;
+    const nome = typeof item.nome === "string" ? item.nome.trim().slice(0, 32) : "";
+    const chaveNome = semAcento(nome);
+    const dados = dadosDaVisao(item.dados, tela);
+    if (!nome || !chaveNome || nomes.has(chaveNome) || !dados) continue;
+    ids.add(item.id); nomes.add(chaveNome);
+    saida.push({ id: item.id, nome, dados, atualizado_em: Number.isFinite(Number(item.atualizado_em)) ? Number(item.atualizado_em) : 0 });
+    if (saida.length >= LIMITE_VISOES_CRM) break;
+  }
+  return saida;
+}
+
+/** Valida título antes de gravar; duplicidade ignora acentos e maiúsculas. */
+export function validarNomeVisaoCRM(nome, visoes = [], ignorarId = null) {
+  const limpo = String(nome ?? "").trim().replace(/\s+/g, " ");
+  if (limpo.length < 2 || limpo.length > 32) return { ok: false, codigo: "nome_invalido" };
+  const chave = semAcento(limpo);
+  if (visoes.some(v => v.id !== ignorarId && semAcento(v.nome) === chave)) return { ok: false, codigo: "nome_duplicado" };
+  return { ok: true, nome: limpo };
+}
+
+/** Cria/atualiza uma visão local. `idNovo` é injetável para manter os testes determinísticos. */
+export function salvarVisaoCRM(visoes, tela, { id = null, nome, dados } = {}, { agora = Date.now(), idNovo = `v${Number(agora).toString(36)}-${Math.random().toString(36).slice(2, 8)}` } = {}) {
+  const atuais = normalizarVisoesCRM(visoes, tela);
+  const existente = id ? atuais.find(v => v.id === id) : null;
+  const validacao = validarNomeVisaoCRM(nome, atuais, existente && existente.id);
+  if (!validacao.ok) return { ...validacao, visoes: atuais };
+  if (!existente && atuais.length >= LIMITE_VISOES_CRM) return { ok: false, codigo: "limite", visoes: atuais };
+  const limpos = dadosDaVisao(dados, tela);
+  if (!limpos) return { ok: false, codigo: "dados_invalidos", visoes: atuais };
+  const visao = { id: existente ? existente.id : idNovo, nome: validacao.nome, dados: limpos, atualizado_em: Number(agora) || Date.now() };
+  if (!idVisaoSeguro(visao.id)) return { ok: false, codigo: "id_invalido", visoes: atuais };
+  const novas = existente ? atuais.map(v => v.id === existente.id ? visao : v) : [...atuais, visao];
+  return { ok: true, codigo: existente ? "atualizada" : "criada", visoes: novas, visao };
+}
+
+/** Devolve uma cópia segura para aplicar; uma visão removida/inválida não altera a tela. */
+export function aplicarVisaoCRM(visoes, tela, id) {
+  const visao = normalizarVisoesCRM(visoes, tela).find(v => v.id === id);
+  if (!visao) return null;
+  return { id: visao.id, nome: visao.nome, dados: JSON.parse(JSON.stringify(visao.dados)) };
+}
+
+export function excluirVisaoCRM(visoes, tela, id) {
+  return normalizarVisoesCRM(visoes, tela).filter(v => v.id !== id);
+}
+
+/** Retorna o id da visão que corresponde ao estado atual ou vazio se os filtros foram alterados. */
+export function visaoCorrespondenteCRM(visoes, tela, dados) {
+  const atual = dadosDaVisao(dados, tela);
+  if (!atual) return "";
+  const serial = JSON.stringify(atual);
+  return normalizarVisoesCRM(visoes, tela).find(v => JSON.stringify(v.dados) === serial)?.id || "";
+}
+
 /**
  * filtrar(cards, filtro, {eu}) — mesma semântica do servidor (§5.1) para o que dá para
  * conferir no cartão: busca (sem acento; só dígitos ≥ 4 → telefone), dono (eu|sem|id),

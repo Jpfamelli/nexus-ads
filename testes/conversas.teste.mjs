@@ -858,11 +858,13 @@ function elFalso(tag = "div") {
     append(...xs) { for (const x of xs) this.appendChild(x); },
     insertBefore(x) { return this.appendChild(x); },
     removeChild(x) { this.children = this.children.filter(c => c !== x); return x; }, remove() {},
+    contains(x) { return this === x || this.children.some(c => c && typeof c.contains === "function" && c.contains(x)); },
     querySelector: () => null, querySelectorAll: () => [], closest: () => null,
     focus() { globalThis.document.activeElement = this; }, select() { this.sel = [0, this.value.length]; }, setSelectionRange(a, b) { this.sel = [a, b]; }, click() {},
   };
 }
 const achar = (raiz, teste2) => { if (teste2(raiz)) return raiz; for (const c of raiz.children || []) { const r = achar(c, teste2); if (r) return r; } return null; };
+const acharClasse = (raiz, classe) => achar(raiz, x => String(x.attrs && x.attrs.class || "").split(" ").includes(classe));
 
 /** Monta o compositor real com rascunho.js real; devolve os controles do teste. */
 async function montarCompositor() {
@@ -886,10 +888,13 @@ async function montarCompositor() {
         else if (k === "hidden" || k === "disabled") el[k] = !!v;
         else if (v !== null && v !== undefined && v !== false) el.setAttribute(k, v);
       }
-      for (const x of filhos.flat(3)) if (x && typeof x === "object") el.appendChild(x);
+      for (const x of filhos.flat(3)) {
+        if (x && typeof x === "object") el.appendChild(x);
+        else if (typeof x === "string" || typeof x === "number") el.textContent += String(x);
+      }
       return el;
     },
-    icone: () => elFalso("svg"), limpar(el) { el.children = []; }, anunciar() {}, menu() {},
+    icone: () => elFalso("svg"), pilula: () => elFalso("span"), limpar(el) { el.children = []; }, anunciar() {}, menu() {},
     toast(t) { toasts.push(String(t)); return { fechar() {}, el: elFalso() }; },
     modal: o => { modais.push(o); return modalResposta(o); },
   };
@@ -919,6 +924,193 @@ async function montarCompositor() {
     aoModal(fn) { modalResposta = fn; }, aoIA(fn) { ia = fn; },
   };
 }
+
+/** Lista real sobre DOM mínimo: controla busca, estados acessíveis e tentativa de novo da busca em mensagens. */
+async function montarLista({ busca = "", filtro = {}, buscaMsgs = null } = {}) {
+  const { criarLista } = await import("../web/app/cv-lista.js");
+  const chamadas = [], toasts = [];
+  let A;
+  const ui = {
+    h(tag, attrs, ...filhos) {
+      const el = elFalso(tag);
+      for (const [k, v] of Object.entries(attrs || {})) {
+        if (k === "on") for (const [t, fn] of Object.entries(v)) el.addEventListener(t, fn);
+        else if (k === "dataset") Object.assign(el.dataset, v);
+        else if (k === "hidden" || k === "disabled") el[k] = !!v;
+        else if (v !== null && v !== undefined && v !== false) el.setAttribute(k, v);
+      }
+      for (const x of filhos.flat(3)) {
+        if (x && typeof x === "object") el.appendChild(x);
+        else if (typeof x === "string" || typeof x === "number") el.textContent += String(x);
+      }
+      return el;
+    },
+    icone: () => elFalso("svg"),
+    limpar(el) { el.children = []; },
+    debounce(fn, ms) { let timer; const f = (...a) => { clearTimeout(timer); timer = setTimeout(() => fn(...a), ms); }; f.cancelar = () => clearTimeout(timer); return f; },
+    segmentado() { const el = elFalso(); el.ativar = () => {}; el.reposicionar = () => {}; el.contar = () => {}; return el; },
+    avatar: () => elFalso("span"), pilula: () => elFalso("span"), etiqueta: () => elFalso("span"),
+    vazio: () => elFalso("div"), esqueleto: () => elFalso("div"), erroCartao: () => elFalso("div"),
+    toast(t) { toasts.push(String(t)); }, menu() {},
+  };
+  A = {
+    ui, L, ctx: { papel: "admin" }, podeEscrever: true, eu: { id: "u1", nome: "Ana" }, aba: "minhas", busca, buscaMsgs,
+    filtro: { ...filtro }, itens: [], temMais: false, carregandoLista: false, base: { canais: [{ id: "canal" }], departamentos: [], usuarios: [], etiquetas: [] }, contagens: {},
+    acoes: {
+      mudarLista(p) { chamadas.push(p); if (p.busca !== undefined) A.busca = p.busca; if (p.filtro !== undefined) A.filtro = p.filtro; },
+      carregarLista() { chamadas.push({ carregarLista: true }); }, repetirBuscaMensagens() { chamadas.push({ repetirBuscaMensagens: true }); },
+      lerAvisos: () => ({ som: false, tela: false }), pode: () => true, novaConversa() {}, atenderProximo() {}, menuAvisos() {},
+    },
+  };
+  const lista = criarLista(A);
+  return { A, lista, chamadas, toasts, encontrar: pred => achar(lista.el, pred), classe: nome => acharClasse(lista.el, nome) };
+}
+
+await teste("Atendimento follow-up: busca de um caractere limpa o filtro antigo e explica o mínimo de busca", async () => {
+  const t = await montarLista({ busca: "Mariana" });
+  const busca = t.encontrar(x => x.tagName === "INPUT" && x.attrs["aria-label"] === "Buscar conversas");
+  busca.value = "M"; busca.dispatchEvent({ type: "input" });
+  assert.equal(t.A.busca, "", "não mantém resultados antigos filtrados por Mariana");
+  assert.ok(t.chamadas.some(x => x.busca === ""), "limpa a busca aplicada sem esperar o debounce");
+  const dica = t.classe("cvl-busca-ajuda");
+  assert.equal(dica.hidden, false);
+  assert.match(dica.textContent, /digite mais 1 caractere/i);
+});
+
+await teste("Atendimento follow-up: Enter aplica a busca pendente e composição IME só busca ao terminar", async () => {
+  const t = await montarLista();
+  const busca = t.encontrar(x => x.tagName === "INPUT" && x.attrs["aria-label"] === "Buscar conversas");
+  busca.value = "Mar"; busca.dispatchEvent({ type: "input" });
+  assert.equal(t.chamadas.length, 0, "texto normal aguarda o debounce curto");
+  const enter = { type: "keydown", key: "Enter", preventDefault() { this.defaultPrevented = true; } };
+  busca.dispatchEvent(enter);
+  assert.equal(enter.defaultPrevented, true);
+  assert.equal(t.A.busca, "Mar", "Enter aplica imediatamente");
+  busca.value = ""; busca.dispatchEvent({ type: "input" });
+  t.chamadas.length = 0;
+  busca.dispatchEvent({ type: "compositionstart" });
+  busca.value = "María"; busca.dispatchEvent({ type: "input", isComposing: true });
+  busca.dispatchEvent({ type: "keydown", key: "Enter", isComposing: true, keyCode: 229, preventDefault() { this.defaultPrevented = true; } });
+  assert.equal(t.chamadas.length, 0, "não envia uma busca parcial enquanto o IME compõe caracteres");
+  busca.dispatchEvent({ type: "compositionend" });
+  assert.equal(t.A.busca, "María", "o termo final é aplicado ao encerrar composição");
+});
+
+await teste("Atendimento follow-up: o botão Filtros expõe estado e quantidade de filtros ativos", async () => {
+  const t = await montarLista({ filtro: { departamento_id: "d1", etiquetas: ["e1", "e2"], nao_lidas: true } });
+  t.lista.render();
+  const b = t.encontrar(x => x.tagName === "BUTTON" && String(x.attrs.class).includes("cvl-filtro"));
+  assert.equal(b.attrs["aria-pressed"], "true");
+  assert.equal(b.attrs["aria-label"], "Filtros (4 ativos)");
+  t.A.filtro = {}; t.lista.render();
+  assert.equal(b.attrs["aria-pressed"], "false");
+  assert.equal(b.attrs["aria-label"], "Filtros");
+});
+
+await teste("Atendimento follow-up: erro de busca nas mensagens é anunciado e pode ser repetido", async () => {
+  const t = await montarLista({ busca: "consulta", buscaMsgs: { q: "consulta", carregando: false, itens: [], erro: new Error("offline") } });
+  t.lista.render();
+  const erro = acharClasse(t.classe("cvl-msgs"), "cvl-msgs-info");
+  assert.equal(erro.attrs.role, undefined, "sem região viva aqui: o bloco é redesenhado a cada render e repetiria a frase; quem anuncia uma vez é buscarMensagens");
+  assert.match(erro.textContent, /não deu para procurar/i);
+  const tentar = t.encontrar(x => x.tagName === "BUTTON" && x.attrs["aria-label"] === "Tentar buscar mensagens novamente");
+  assert.ok(tentar, "há uma ação explícita de nova tentativa");
+  tentar.dispatchEvent({ type: "click" });
+  assert.ok(t.chamadas.some(x => x.repetirBuscaMensagens));
+  t.A.buscaMsgs = { q: "consulta", carregando: false, itens: [], erro: null }; t.lista.render();
+  assert.match(acharClasse(t.classe("cvl-msgs"), "cvl-msgs-info").textContent, /nenhuma mensagem com/i, "resultado vazio também é comunicado (texto; o anúncio único sai de buscarMensagens)");
+  assert.match(ler("conversas.js"), /A\.ui\.anunciar\(b\.erro \? "Não deu para procurar nas mensagens agora/, "o anúncio ao leitor de tela acontece uma vez por resultado");
+});
+
+await teste("Atendimento follow-up: lista marca aria-busy durante carga e limpa o estado ao concluir", async () => {
+  const t = await montarLista();
+  t.A.carregandoLista = true; t.lista.render();
+  const lista = t.classe("cvl-lista");
+  assert.equal(lista.attrs["aria-busy"], "true");
+  t.A.carregandoLista = false; t.lista.render();
+  assert.equal(lista.attrs["aria-busy"], "false");
+});
+
+await teste("Atendimento follow-up: compositor mostra caracteres restantes perto do limite sem anunciar cada tecla", async () => {
+  const t = await montarCompositor(); t.selecionar(72); t.digitar("x".repeat(3900));
+  const contador = acharClasse(t.comp.el, "cvx-contador");
+  assert.equal(contador.hidden, false);
+  assert.match(contador.textContent, /196 caracteres restantes/);
+  assert.equal(contador.attrs["aria-live"], "off", "evita ler 4 mil atualizações por tecla");
+  t.digitar("x".repeat(3890));
+  assert.equal(contador.hidden, true, "a indicação visual some quando ainda há folga");
+});
+
+await teste("Atendimento follow-up: gravação com erro descarta o fragmento e libera o microfone", async () => {
+  await comGravadorFalso(async reg => {
+    const t = await montarCompositor(); t.abrirCodeWords(73);
+    acharClasse(t.comp.el, "cvx-audio").dispatchEvent({ type: "click" }); await new Promise(r => setTimeout(r, 5));
+    const rec = reg.gravadores[0]; rec.emitirErro();
+    if (rec.state !== "inactive") rec.stop();
+    await rec.fim; await new Promise(r => setTimeout(r, 5));
+    assert.deepEqual(t.enviados, [], "erro de captura nunca abre um envio com áudio parcial");
+    assert.equal(t.modais.length, 0);
+    assert.equal(reg.faixasParadas, 1);
+    assert.match(t.toasts.join(" "), /gravação falhou|gravação foi interrompida/i);
+  });
+});
+
+await teste("Atendimento follow-up: anexo é revalidado após a confirmação do modal", async () => {
+  const t = await montarCompositor(); t.selecionar(74);
+  const pdf = { name: "proposta.pdf", type: "application/pdf", size: 1000 };
+  let liberar; t.aoModal(() => new Promise(ok => { liberar = ok; }));
+  const pendente = t.comp.anexar(pdf); await new Promise(r => setTimeout(r, 5));
+  t.A.ver.conversa.status = "resolvida";
+  liberar(true); await pendente;
+  assert.deepEqual(t.enviados, [], "não envia se o atendimento foi resolvido enquanto o modal estava aberto");
+  assert.match(t.toasts.join(" "), /atendimento mudou|não está mais disponível|nada foi enviado|não foi enviado/i);
+});
+
+await teste("Atendimento follow-up: URL temporária de prévia é revogada mesmo se o modal falhar", async () => {
+  const t = await montarCompositor(); t.selecionar(75);
+  const criar = URL.createObjectURL, revogar = URL.revokeObjectURL, revogadas = [];
+  URL.createObjectURL = () => "blob:preview-followup";
+  URL.revokeObjectURL = u => revogadas.push(u);
+  try {
+    t.aoModal(() => Promise.reject(new Error("modal fechado pelo navegador")));
+    await assert.rejects(t.comp.anexar(new File([new Uint8Array([1])], "voz.mp3", { type: "audio/mpeg" })));
+    assert.deepEqual(revogadas, ["blob:preview-followup"]);
+    assert.deepEqual(t.enviados, []);
+  } finally { URL.createObjectURL = criar; URL.revokeObjectURL = revogar; }
+});
+
+await teste("Atendimento follow-up: modelo é validado de novo com status e consentimento atuais no clique final", async () => {
+  const t = await montarCompositor(); t.selecionar(76);
+  t.A.ver.contato.optin_marketing = true;
+  t.A.base.templates = [{ id: "tpl-1", canal_id: "k1", status: "APPROVED", categoria: "MARKETING", nome: "novidade", idioma: "pt_BR", corpo: "Novidades" }];
+  const erros = [];
+  t.aoModal(async o => {
+    achar(o.corpo, x => String(x.attrs.class || "").split(" ").includes("cv-modelo")).dispatchEvent({ type: "click" });
+    t.A.ver.contato.optin_marketing = false;
+    const aceito = o.acoes[1].fn({ erro: e => erros.push(e) });
+    assert.equal(aceito, false, "confirmação não aceita o modelo depois do opt-out");
+    return false;
+  });
+  await t.comp.abrirModelos();
+  assert.deepEqual(t.enviados, []);
+  assert.match(erros.join(" "), /não receber marketing/i);
+});
+
+await teste("Atendimento follow-up: colar várias imagens informa que só a primeira será anexada", async () => {
+  const t = await montarCompositor(); t.selecionar(77);
+  const criar = URL.createObjectURL, revogar = URL.revokeObjectURL, bitmap = globalThis.createImageBitmap;
+  URL.createObjectURL = () => "blob:paste-followup"; URL.revokeObjectURL = () => {};
+  globalThis.createImageBitmap = async () => { throw new Error("fallback de navegador"); };
+  try {
+    const imagens = ["um.png", "dois.png"].map(nome => new File([new Uint8Array([1, 2])], nome, { type: "image/png" }));
+    const ev = { type: "paste", clipboardData: { items: imagens.map(f => ({ kind: "file", type: f.type, getAsFile: () => f })) }, preventDefault() { this.defaultPrevented = true; } };
+    t.ta.dispatchEvent(ev); await new Promise(r => setTimeout(r, 15));
+    assert.equal(ev.defaultPrevented, true);
+    assert.match(t.toasts.join(" "), /2 imagens|somente a primeira/i);
+    assert.equal(t.enviados.length, 1);
+    assert.equal(t.enviados[0].arquivo.name, "um.png");
+  } finally { URL.createObjectURL = criar; URL.revokeObjectURL = revogar; if (bitmap === undefined) delete globalThis.createImageBitmap; else globalThis.createImageBitmap = bitmap; }
+});
 
 await teste("R119 rascunho: A → B → A — cada texto fica na chave da conversa em que foi digitado (antes o da 902 ia parar na chave da 901 e o da 902 sumia)", async () => {
   const t = await montarCompositor();
@@ -1122,8 +1314,6 @@ await teste("CodeWords anexos: WAV passa só em número do CodeWords; na Meta é
   assert.equal(L.validarArquivo({ name: "z.zip", type: "application/zip", size: 1000 }, cw).erro, "midia_tipo");
 });
 
-const acharClasse = (raiz, classe) => achar(raiz, x => String(x.attrs && x.attrs.class || "").split(" ").includes(classe));
-
 await teste("CodeWords composer: clipe e arrastar liberados (sem janela de 24 h e sem token da Meta); modelos continuam fora; .wav entra aqui e é recusado na Meta com texto claro", async () => {
   const t = await montarCompositor();
   t.abrirCodeWords(77);
@@ -1209,6 +1399,7 @@ async function comGravadorFalso(fn) {
     static isTypeSupported() { return false; }
     constructor(fluxo, opcoes) { this.opcoes = opcoes; this.state = "inactive"; this.mimeType = "audio/webm;codecs=opus"; this.ouvintes = {}; reg.gravadores.push(this); }
     addEventListener(tipo, f) { (this.ouvintes[tipo] ||= []).push(f); }
+    emitirErro() { for (const f of this.ouvintes.error || []) f({ error: new Error("capture failed") }); }
     start() { this.state = "recording"; }
     stop() {
       this.state = "inactive";
@@ -1354,7 +1545,11 @@ await teste("CodeWords tela: nenhum texto diz mais que o canal é «só texto»;
   // arrastar para o chat e colar imagem passam pelo mesmo aceitaAnexo()/anexar()
   assert.match(chat, /corpo\.addEventListener\("dragenter", ev => \{ if \(!temArquivo\(ev\) \|\| !A\.composer\.aceitaAnexo\(\)\) return;/);
   assert.match(chat, /if \(f\) A\.composer\.anexar\(f\);/);
-  assert.match(comp, /ta\.addEventListener\("paste"[\s\S]{0,420}if \(f\) anexar\(new File\(/);
+  const colagem = comp.slice(comp.indexOf('ta.addEventListener("paste"'), comp.indexOf('/* ---------------- fotos: otimiza'));
+  assert.match(colagem, /const imagens = itens\.filter\(i => i\.kind === "file" && \/\^image\\\/\/\.test\(i\.type\)\)/);
+  assert.match(colagem, /imagens\[0\]/, "a colagem só anexa a primeira imagem da área de transferência");
+  assert.match(colagem, /getAsFile\(\)[\s\S]*new File\(/);
+  assert.match(colagem, /somente a primeira será anexada/);
   // resposta ambígua (timeout/5xx do aparelho): a mensagem gravada entra marcada e a bolha avisa, sem reenviar sozinha
   assert.match(conv, /const msg = r && r\.mensagem \? \{ \.\.\.r\.mensagem, \.\.\.\(r\.ambigua === true \? \{ ambigua: true \} : \{\}\) \} : null;\s*A\.msgs = A\.msgs\.filter\(m => m\.id !== tmp\.id\);/);
   assert.match(conv, /if \(tmp\.midia && tmp\.midia\.local_url && msg\.midia && msg\.midia\.path\) A\.midia\.set\(msg\.midia\.path, \{ url: null, local: tmp\.midia\.local_url/, "a prévia local segue na bolha gravada");

@@ -15,6 +15,16 @@ let montagem = 0, cancelarPulso = null, cancelarOcupado = null, tPulso = 0, ulti
 let ultimoDado = null, maisAberto = false, ultimoOnb = null, ultimaAgenda = null;
 let donoDados = "";        // «empresa|conta» a quem pertencem os últimos dados guardados acima (a aba não recarrega ao trocar de empresa)
 
+export function statusAtualizacaoInicio({ hora = "", falhou = false } = {}) {
+  if (falhou) return hora ? `A atualização falhou; exibindo os últimos dados confirmados às ${hora}.` : "A atualização falhou; ainda não há dados confirmados nesta sessão.";
+  return hora ? `Atualizado às ${hora}` : "Aguardando a primeira atualização confirmada.";
+}
+
+export function atalhosLeadsInicio({ crm = false, ads = false } = {}) {
+  return [crm ? { rotulo: "Abrir CRM", href: "#/crm" } : null,
+    ads ? { rotulo: "Abrir Anúncios", href: "#/anuncios" } : null].filter(Boolean);
+}
+
 export function desmontar() {
   montagem++;
   if (cancelarPulso) { try { cancelarPulso(); } catch { /* ok */ } }
@@ -42,7 +52,7 @@ export async function montar(ctx) {
   if (minha !== montagem) return;
   // outra empresa (ou outra conta): o último checklist e os últimos números eram da anterior e não podem aparecer nesta
   const dono = `${ctx.cliente.id}|${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`;
-  if (donoDados !== dono) { ultimoOnb = null; ultimoDado = null; ultimaAgenda = null; ultimoJson = ""; maisAberto = false; donoDados = dono; }
+  if (donoDados !== dono) { ultimoOnb = null; ultimoDado = null; ultimaAgenda = null; ultimoJson = ""; maisAberto = false; ultimaCarga = 0; donoDados = dono; }
   const h = G.criarH(ui);
   const V = ctx.vocab || {};
   const vmin = (k, p) => (typeof V.min === "function" ? V.min(k) : (V[k] || p).toLowerCase());
@@ -51,6 +61,7 @@ export async function montar(ctx) {
   const adj = (m, n = 2) => (fem ? m.replace(/o$/, "a") : m) + (n === 1 ? "" : "s");
   const podeConversas = ctx.temModulo("conversas") && ctx.pronto("conversas");
   const podeCrm = ctx.temModulo("crm") && ctx.pronto("crm");
+  const podeAds = ctx.temModulo("ads") && ctx.pronto("ads");
   const podeTarefas = ctx.temModulo("crm") && ctx.pronto("tarefas");
   const podeAgenda = ctx.temModulo("crm") && ctx.pronto("crm");
   const podeRel = ctx.temModulo("relatorios") && ctx.pronto("relatorios");
@@ -101,12 +112,12 @@ export async function montar(ctx) {
     btn.disabled = true;
     try {
       // 1ª abertura: pinta o último dado guardado (se o shell tiver cache) e confere na rede em seguida
-      const aoCache = dados => { if (minha === montagem && !desenhou && dados && typeof dados === "object") { desenhou = true; desenhar(dados, null, false); } };
+      const aoCache = (dados, em) => { if (minha === montagem && !desenhou && dados && typeof dados === "object") { desenhou = true; if (!ultimaCarga && em) ultimaCarga = Number(new Date(em)) || 0; desenhar(dados, null, false); } };
       const [d, agenda, onb] = await Promise.all([ctx.api.rpcC("nx_inicio", {}, { cache: true, aoCache }), buscarAgenda(), buscarOnboarding(forcar || primeira)]);
       if (minha !== montagem) return;          // resposta de uma montagem antiga (outra empresa ou conta): não toca no estado guardado
       ultimoOnb = onb; ultimaAgenda = agenda;
       ultimaCarga = Date.now();
-      quando.textContent = `Atualizado às ${L.horaSP(new Date())}`;
+      quando.textContent = statusAtualizacaoInicio({ hora: L.horaSP(new Date(ultimaCarga)) });
       const js = JSON.stringify({ ...d, agora: null, agenda: agenda && agenda.consultas ? agenda.consultas.length : null, onb: onb ? onb.itens.map(i => i.feito) : null });
       if (!forcar && !primeira && js === ultimoJson) return;      // nada mudou: não mexe na tela
       ultimoJson = js;
@@ -115,6 +126,7 @@ export async function montar(ctx) {
       desenhou = true;
     } catch (e) {
       if (minha !== montagem || (e && e.codigo === "sessao_invalida")) return;
+      quando.textContent = statusAtualizacaoInicio({ hora: ultimaCarga ? L.horaSP(new Date(ultimaCarga)) : "", falhou: true });
       if (primeira && !desenhou) { ui.trocarEsqueleto(raiz, ui.erroCartao(e, () => { ui.limpar(raiz); raiz.append(ui.esqueleto("inicio")); carregar({ primeira: true }); })); }
       else ui.toast(ctx.api.mensagemErro ? ctx.api.mensagemErro(e) : "Não foi possível atualizar agora.", { tipo: "erro" });
     } finally { btn.disabled = false; }
@@ -204,7 +216,9 @@ export async function montar(ctx) {
           h("div", { class: "ini-numero" }, num(l.hoje, int, "ini-n", "leads.hoje"), h("span", { class: "ini-n-l" }, "hoje")),
           h("div", { class: "ini-numero" }, num(l.hoje_anuncio, int, "ini-n", "leads.hoje_anuncio"), h("span", { class: "ini-n-l" }, "de anúncio hoje")),
           h("div", { class: "ini-numero" }, num(l.semana, int, "ini-n", "leads.semana"), h("span", { class: "ini-n-l" }, "nos últimos 7 dias"))),
-        +l.semana ? h("p", { class: "rel-nota" }, `${l.semana_anuncio || 0} dos ${l.semana} da semana vieram de anúncio.`) : null),
+        +l.semana ? h("p", { class: "rel-nota" }, `${l.semana_anuncio || 0} dos ${l.semana} leads criados nos últimos 7 dias vieram de anúncio. É contagem do CRM, não conversões informadas pelo Meta/Google.`) : null,
+        atalhosLeadsInicio({ crm: podeCrm, ads: podeAds }).length ? h("div", { class: "rel-cartao-rodape" },
+          atalhosLeadsInicio({ crm: podeCrm, ads: podeAds }).map(a => h("a", { class: "rel-link", href: a.href }, a.rotulo))) : null),
 
       vendas: () => {
         const mv = L.mesVsAnterior(n);
