@@ -155,13 +155,18 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
       h("button", { type: "button", class: "bt-icone", "aria-label": `Excluir a tarefa ${t.titulo}`, on: { click: () => executar("excluir") } }, ui.icone("lixeira")),
       mais) : h("span"));
 
+  let ocupada = false;         // um toque por vez (o ✓ de sucesso segura a linha por ~1 s antes de ela mudar de lugar)
   /** Concluir/reabrir: o círculo e o deslizar chamam esta. Concluiu → Desfazer reabre. */
   async function alternar(quer) {
+    if (ocupada) { check.checked = !quer; return; }
+    ocupada = true;
     check.checked = quer;
     el.classList.toggle("feita", quer);
     try {
       const nova = await k.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: quer });
-      ui.anunciar(quer ? "Tarefa concluída." : "Tarefa reaberta.");
+      // C5: concluiu → o ✓ de sucesso (ui.checkSucesso) cobre a linha e só então ela desce para as concluídas; reabrir não comemora
+      if (quer && typeof ui.checkSucesso === "function") await ui.checkSucesso(el, { texto: "Tarefa concluída." });
+      else ui.anunciar(quer ? "Tarefa concluída." : "Tarefa reaberta.");
       aoMudar && aoMudar({ tipo: "salva", tarefa: nova });
       if (quer) ui.acaoComDesfazer({ texto: "Tarefa concluída", reverter: async () => {
         const r = await k.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: false });
@@ -170,7 +175,7 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
     } catch (e) {
       check.checked = !quer; el.classList.toggle("feita", !quer);
       k.toastErro(e);
-    }
+    } finally { ocupada = false; }
   }
   /** Adiar para amanhã (mesma hora; L.adiarParaAmanha): grava já e o Desfazer devolve o vencimento de antes. */
   async function adiar() {
@@ -442,7 +447,7 @@ export async function montarTarefas(k, el, rota) {
       corpo.removeAttribute("aria-busy");
       ui.limpar(corpo);
       const itens = r.itens.filter(t => !ocultas.has(t.id));
-      if (!itens.length) { corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], icone: "tarefa" })); return; }
+      if (!itens.length) { corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], tema: "crm" })); return; }
       // agrupadas por dia de vencimento («Hoje», «Amanhã», «Qui, 09/10»…; concluídas do mais recente para o mais antigo)
       const hoje = hojeISO(ui);
       const grupos = L.agruparPorDia(itens, { instanteDe: t => t.vence_em, diaDe: iso => diaSP(ui, iso), hoje, ordem: aba === "concluidas" ? "desc" : "asc" });
@@ -456,7 +461,7 @@ export async function montarTarefas(k, el, rota) {
             if (ev && ev.tipo === "excluida") {
               ocultas.add(t.id); item.remove(); restantes--;
               if (!grupo.querySelector(".tf-li")) grupo.remove();
-              if (restantes <= 0) { ui.limpar(corpo); corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], icone: "tarefa" })); }
+              if (restantes <= 0) { ui.limpar(corpo); corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], tema: "crm" })); }
             } else { if (ev && ev.tarefa) ocultas.delete(ev.tarefa.id); carregar(true); }
           } });
           grupo.appendChild(item);

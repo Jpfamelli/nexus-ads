@@ -401,13 +401,15 @@ begin
   r := public.nx_codewords_origem(kA, ts, 'instagram');
   perform pg_temp.ok((r ->> 'aplicado')::boolean and (select origem = 'organico' from public.nx_leads where id = pg_temp.neg(cA, ts)), 'sem anúncio, o que a cliente conta vale');
 
-  -- fbclid sozinho não é anúncio (link de post orgânico também leva fbclid)
+  -- fbclid sozinho não é anúncio (link de post orgânico também leva fbclid). Regra de 20261008a (contrato 1, S-B2 [A20]):
+  -- fbclid sem medium pago = tráfego ORGÂNICO da Meta → origem 'organico', plataforma 'meta' (antes: 'site' sem plataforma)
   r := public.nx_rastreio_registrar(chave, '{"fbclid":"IwAR-orgânico"}');
   c5 := r ->> 'codigo';
   perform public.nx_lead_webhook(cA, tfb, array[tfb], 'Flávia Face', null, v_hoje, 30);
   r := public.nx_rastreio_atribuir(kA, tfb, c5);
-  perform pg_temp.ok((r ->> 'aplicado')::boolean and r ->> 'origem' = 'site' and r ->> 'plataforma' is null
-    and (select rastreio ->> 'fbclid' = 'IwAR-orgnico' from public.nx_leads where id = pg_temp.neg(cA, tfb)), 'fbclid sem utm nem campanha: não conta como anúncio, mas fica guardado');
+  perform pg_temp.ok((r ->> 'aplicado')::boolean and r ->> 'origem' = 'organico' and r ->> 'plataforma' = 'meta' and r ->> 'campanha_ext' is null
+    and (select rastreio ->> 'fbclid' = 'IwAR-orgnico' and origem = 'organico' and anuncio_ext is null from public.nx_leads where id = pg_temp.neg(cA, tfb)),
+    'fbclid sem utm nem campanha: orgânico da Meta (não conta como anúncio), e o fbclid fica guardado');
 
   -- campanha que ainda não está nas métricas: guarda o texto da utm
   r := public.nx_rastreio_registrar(chave, '{"utm_source":"google","utm_medium":"cpc","utm_campaign":"Nova Campanha","utm_content":"criativo-x"}');
@@ -439,10 +441,10 @@ begin
   perform pg_temp.ok((public.nx_rastreio_atribuir(kA, '5512955550000', r ->> 'codigo') ->> 'motivo') = 'sem_negocio'
     and (select usado_em is null from public.nx_rastreio where cliente_id = cA and codigo = r ->> 'codigo'), 'telefone sem negócio: código continua livre');
 
-  -- limite de taxa: 30 por minuto por cliente
+  -- limite de taxa por cliente: 120 por minuto (regra de 20261008a, contrato 1 / S-B2 [A21]; antes eram 30)
   delete from public.nx_rastreio where cliente_id = cA;
-  for n in 1..30 loop r := public.nx_rastreio_registrar(chave, '{"utm_source":"x"}'); end loop;
-  perform pg_temp.ok(pg_temp.erro(format('select public.nx_rastreio_registrar(%L,%L)', chave, '{"utm_source":"x"}')) = 'limite_taxa', 'mais de 30 por minuto → limite_taxa');
+  for n in 1..120 loop r := public.nx_rastreio_registrar(chave, '{"utm_source":"x"}'); end loop;
+  perform pg_temp.ok(pg_temp.erro(format('select public.nx_rastreio_registrar(%L,%L)', chave, '{"utm_source":"x"}')) = 'limite_taxa', 'mais de 120 por minuto → limite_taxa');
   perform pg_temp.ok(r ->> 'codigo' ~ '^[A-HJKMNP-Z2-9]{5}$', 'até o limite tudo passou');
   -- o limite de A não atrapalha B
   perform pg_temp.ok((public.nx_rastreio_registrar((public.nx_entrada_chave(tB, cB, false) ->> 'chave'), '{}') ->> 'codigo') ~ '^[A-HJKMNP-Z2-9]{5}$', 'limite é por cliente');

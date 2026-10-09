@@ -112,6 +112,8 @@ export function criarChat(A) {
     ui.limpar(topoHist);
     trilho.appendChild(ui.esqueleto("lista", 5));
     cache.clear();
+    players.clear();                    // D9: os áudios da conversa anterior não ficam presos na memória
+    sigCab = null;
     modo("carregando");
   }
 
@@ -122,17 +124,39 @@ export function criarChat(A) {
     modo("vazio");
   }
 
-  /* ---------------- cabeçalho */
+  /* ---------------- cabeçalho
+     Plano 100 · D4: o pulso chama isto a cada mudança na empresa; só redesenha quando o que ele mostra muda (assinatura), e quem
+     estava num botão do cabeçalho (Tab, leitor de tela) volta para o botão da MESMA ação (data-acao). */
+  let sigCab = null, acertarCab = null;
+  const naZonaCab = n => !!n && (cab.contains(n) || faixa.contains(n));
   function renderCabecalho() {
     if (!A.ver || !A.ver.conversa) return;
     const conv = A.ver.conversa, ct = A.ver.contato || conv.contato || {};
     const nome = A.acoes.nomeContato(ct);
     const eu = A.eu && A.eu.id;
     const jan = L.janela(conv);
+    const provedorCanal = (conv.canal && conv.canal.provedor) || ((A.base && A.base.canais) || []).find(k => k.id === conv.canal_id)?.provedor || "meta";
+    const codeWords = provedorCanal === "codewords";
+    const ia = codeWords ? A.iaEstado : null;
+    const flash = Date.now() < iaFlashAte;
+    const caido = typeof A.acoes.canalCaido === "function" ? A.acoes.canalCaido(conv.canal_id) : null;
+    const s = JSON.stringify([conv.id, conv.status, conv.atribuida_a, conv.atribuida && conv.atribuida.nome, conv.atribuida_nome, conv.departamento && conv.departamento.nome,
+      conv.oculta, conv.protocolo, conv.canal && conv.canal.nome, conv.canal_id, provedorCanal, jan.texto, jan.nivel, L.janelaCurta(jan), Math.round(L.fracaoJanela(jan) * 1000), jan.ate,
+      ct.id, nome, ct.telefone, ct.optin_marketing, ia && [ia.disponivel, ia.ia_ligada, ia.pausada, ia.pausada_ate, ia.so_manual, ia.pausada_por, ia.pausada_por_nome, ia.respondendo, ia.erro],
+      flash, A.podeEscrever, eu, A.raiz && A.raiz.dataset.lateral, caido && [caido.nome, caido.desde]]);
+    const ativo = typeof document !== "undefined" ? document.activeElement : null;
+    if (s === sigCab && cab.firstChild) {
+      // nada mudou: o cabeçalho e o foco ficam; sem ninguém na barra, o ponto de Tab volta ao 1º botão visível (o CSS pode ter escondido botões)
+      if (acertarCab && !naZonaCab(ativo)) acertarCab(true);
+      return;
+    }
+    const comFoco = naZonaCab(ativo) && ativo.closest ? ativo.closest("[data-acao]") : null;
+    const focoAcao = comFoco ? comFoco.dataset.acao : null;
+    sigCab = s;
     ui.limpar(cab);
-    const voltar = h("button", { type: "button", class: "bt-icone cvc-voltar", "aria-label": "Voltar à lista", on: { click: () => A.acoes.voltar() } }, ui.icone("seta-esq"));
+    const voltar = h("button", { type: "button", class: "bt-icone cvc-voltar", "aria-label": "Voltar à lista", dataset: { acao: "voltar" }, on: { click: () => A.acoes.voltar() } }, ui.icone("seta-esq"));
     const canal = conv.canal ? `via ${conv.canal.nome}` : "número removido";
-    const quem = h("button", { type: "button", class: "cvc-quem", title: "Abrir a ficha", on: { click: () => A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }) } },
+    const quem = h("button", { type: "button", class: "cvc-quem", title: "Abrir a ficha", dataset: { acao: "quem" }, on: { click: () => A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }) } },
       ui.avatar(nome, ct.id),
       h("span", { class: "cvc-quem-txt" },
         h("span", { class: "cvc-nome" }, nome),
@@ -143,10 +167,7 @@ export function criarChat(A) {
 
     // faixa de situação: UMA pílula com dono + departamento; janela e IA ao lado; avisos só quando existem
     ui.limpar(faixa);
-    const provedorCanal = (conv.canal && conv.canal.provedor) || ((A.base && A.base.canais) || []).find(k => k.id === conv.canal_id)?.provedor || "meta";
-    const codeWords = provedorCanal === "codewords";
-    const ia = codeWords ? A.iaEstado : null;
-    const dono = conv.atribuida ? `Com ${conv.atribuida.nome}` : conv.atribuida_nome ? `Com ${conv.atribuida_nome}` : "Sem dono";
+    const dono =conv.atribuida ? `Com ${conv.atribuida.nome}` : conv.atribuida_nome ? `Com ${conv.atribuida_nome}` : "Sem dono";
     const semDono = dono === "Sem dono";
     faixa.appendChild(ui.pilula(conv.departamento ? `${dono} · ${conv.departamento.nome}` : dono, semDono && conv.status !== "resolvida" ? "aten" : "neutra",
       { icone: "usuario", class: "cv-pil-status", title: conv.departamento ? `${dono} · departamento ${conv.departamento.nome}` : dono }));
@@ -158,10 +179,13 @@ export function criarChat(A) {
       // plano 50: barrinha com o que resta das 24 h (a cor acompanha a pílula)
       pj.appendChild(h("i", { class: "cv-janela-barra", "aria-hidden": "true", style: { "--pct": String(Math.round(L.fracaoJanela(jan) * 1000) / 1000) } }));
       faixa.appendChild(pj);
-    } else if (conv.status === "resolvida") faixa.appendChild(ui.pilula("Resolvida", "neutra", { icone: "check" }));
+    } else if (conv.status === "resolvida") faixa.appendChild(ui.pilula("Resolvida", "neutra", { icone: "check", class: "cv-pil-resolvida" }));
     if (conv.status === "pendente") faixa.appendChild(ui.pilula("Pendente", "aten"));
     if (conv.oculta) faixa.appendChild(ui.pilula("Oculta · contato bloqueado", "ruim", { icone: "alerta" }));
     if (ct.optin_marketing === false) faixa.appendChild(ui.pilula("Não quer marketing", "aten", { title: "Pediu para não receber mensagens de marketing" }));
+    // D18: o número desta conversa caiu — nada chega nem sai por ele até reconectar
+    if (caido) faixa.appendChild(ui.pilula("Número desconectado", "ruim", { icone: "alerta", class: "cv-pil-caido",
+      title: `${caido.nome || "O número"} está desconectado${caido.desde ? ` desde ${ui.dataHoraBR(caido.desde)}` : ""}: as mensagens não chegam nem saem até reconectar.` }));
     if (codeWords) {
       let rotuloIA = "Verificando IA…", curtoIA = "", corIA = "neutra", dicaIA = "";
       if (ia && !ia.ia_ligada) {
@@ -184,7 +208,7 @@ export function criarChat(A) {
       const iaViva = !!(ia && ia.disponivel !== false && ia.ia_ligada);
       const alternavel = iaViva && A.podeEscrever && conv.status !== "resolvida";
       const pia = alternavel
-        ? h("button", { type: "button", class: ["pilula", `pilula-${corIA}`, "cv-pil-ia", "cv-pil-ia-bt"], "aria-pressed": String(!ia.pausada),
+        ? h("button", { type: "button", class: ["pilula", `pilula-${corIA}`, "cv-pil-ia", "cv-pil-ia-bt"], "aria-pressed": String(!ia.pausada), dataset: { acao: "ia" },
           title: `${[rotuloIA, dicaIA].filter(Boolean).join(". ")}. Toque para ${ia.pausada ? "retomar a IA" : "pausar a IA e assumir"}`,
           "aria-label": `${rotuloIA}. ${ia.pausada ? "Retomar a IA" : "Pausar a IA e assumir"}` }, ui.icone("ia"))
         : ui.pilula("", corIA, { icone: "ia", title: [rotuloIA, dicaIA].filter(Boolean).join(". "), class: "cv-pil-ia" });
@@ -196,7 +220,7 @@ export function criarChat(A) {
           iaFlashAte = Date.now() + 1400;          // confirmação visual: a pílula nova «pisca» verde/âmbar por 1,4 s
           if (ia.pausada) A.acoes.devolverIA(pia); else A.acoes.assumirIA(pia);
         });
-        if (Date.now() < iaFlashAte) pia.classList.add("cv-pil-ia-feito");
+        if (flash) pia.classList.add("cv-pil-ia-feito");
       }
       faixa.appendChild(pia);
     }
@@ -209,37 +233,37 @@ export function criarChat(A) {
     const acoes = h("div", { class: "cvc-acoes", role: "toolbar", "aria-label": "Ações do atendimento" });
     // o botão entra na barra ANTES de ganhar o atalho: a descrição da dica (sr-only) fica como irmã, não dentro do nome do botão
     if (est.primaria === "assumir_ia") {
-      const b = h("button", { type: "button", class: "bt bt-prim bt-p cvc-ia-acao", title: "Pausar a IA e assumir esta conversa" }, ui.icone("usuario"), "Assumir");
+      const b = h("button", { type: "button", class: "bt bt-prim bt-p cvc-ia-acao", title: "Pausar a IA e assumir esta conversa", dataset: { acao: "assumir" } }, ui.icone("usuario"), "Assumir");
       b.addEventListener("click", () => A.acoes.assumirIA(b));
       acoes.appendChild(b); comAtalho(b, "assumir");
     } else if (est.primaria === "assumir") {
-      const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("usuario"), "Assumir");
+      const b = h("button", { type: "button", class: "bt bt-prim bt-p", dataset: { acao: "assumir" } }, ui.icone("usuario"), "Assumir");
       b.addEventListener("click", () => A.acoes.assumir(b));
       acoes.appendChild(b); comAtalho(b, "assumir");
     } else if (est.primaria === "resolver") {
-      const b = h("button", { type: "button", class: "bt bt-p bt-resolver", "aria-label": "Resolver atendimento" }, ui.icone("check"), h("span", { class: "rot-longo" }, "Resolver"));
+      const b = h("button", { type: "button", class: "bt bt-p bt-resolver", "aria-label": "Resolver atendimento", dataset: { acao: "resolver" } }, ui.icone("check"), h("span", { class: "rot-longo" }, "Resolver"));
       b.addEventListener("click", () => A.acoes.resolver(b));
       acoes.appendChild(b); comAtalho(b, "resolver");
     } else if (est.primaria === "reabrir") {
-      const b = h("button", { type: "button", class: "bt bt-sec bt-p" }, A.icone("reabrir"), "Reabrir");
+      const b = h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { acao: "reabrir" } }, A.icone("reabrir"), "Reabrir");
       b.addEventListener("click", () => A.acoes.status("aberta", b));
       acoes.appendChild(b);
     }
     if (pode && est.primaria !== "assumir_ia") {
-      const b = h("button", { type: "button", class: "bt-icone so-largo cvc-transferir", "aria-label": "Transferir", title: "Transferir",
+      const b = h("button", { type: "button", class: "bt-icone so-largo cvc-transferir", "aria-label": "Transferir", title: "Transferir", dataset: { acao: "transferir" },
         on: { click: () => A.acoes.transferir() } }, A.icone("transferir"));
       acoes.appendChild(b); comAtalho(b, "transferir");
     }
     if (est.resolverIcone) {
-      const b = h("button", { type: "button", class: "bt-icone so-largo cvc-resolver-ic", "aria-label": "Resolver atendimento", title: "Resolver" }, ui.icone("check"));
+      const b = h("button", { type: "button", class: "bt-icone so-largo cvc-resolver-ic", "aria-label": "Resolver atendimento", title: "Resolver", dataset: { acao: "resolver" } }, ui.icone("check"));
       b.addEventListener("click", () => A.acoes.resolver(b));
       acoes.appendChild(b); comAtalho(b, "resolver");
     }
     if (A.raiz && A.raiz.dataset.lateral === "gaveta") {
-      acoes.appendChild(h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Detalhes do contato", title: "Detalhes",
+      acoes.appendChild(h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Detalhes do contato", title: "Detalhes", dataset: { acao: "detalhes" },
         on: { click: () => A.acoes.abrirDetalhes() } }, A.icone("lateral")));
     }
-    const mais = h("button", { type: "button", class: "bt-icone cvc-mais", "aria-label": "Mais ações", title: "Mais ações" }, ui.icone("opcoes"));
+    const mais = h("button", { type: "button", class: "bt-icone cvc-mais", "aria-label": "Mais ações", title: "Mais ações", dataset: { acao: "mais" } }, ui.icone("opcoes"));
     mais.addEventListener("click", () => {
       const itens = [];
       if (pode && conv.status !== "resolvida" && est.primaria !== "resolver") itens.push({ rotulo: "Resolver atendimento", icone: "check", fn: () => A.acoes.resolver() });
@@ -270,8 +294,14 @@ export function criarChat(A) {
     });
     acoes.appendChild(mais);
     const acertarBarra = ligarBarra(acoes);
+    acertarCab = acertarBarra;
     cab.append(voltar, quem, acoes);
     acertarBarra();                     // só com a barra na tela dá para saber quais botões o CSS escondeu (.so-largo no celular)
+    // D4: o foco volta ao botão da mesma ação (a ação pode ter mudado — Assumir virou Resolver: aí vai para «Mais ações»)
+    if (focoAcao) {
+      const alvoF = (cab.querySelector(`[data-acao="${focoAcao}"]`) || faixa.querySelector(`[data-acao="${focoAcao}"]`) || cab.querySelector(".cvc-mais"));
+      if (alvoF) try { alvoF.focus({ preventScroll: true }); } catch { try { alvoF.focus(); } catch { /* ok */ } }
+    }
   }
 
   /** Atalho da ação na barra (38): aria-keyshortcuts + etiqueta <kbd> que aparece no hover/foco (ui.dica quando a frente A oferecer). */
@@ -299,13 +329,14 @@ export function criarChat(A) {
     const botoes = () => todos().filter(naTela);
     const marcar = ativo => { for (const b of todos()) b.tabIndex = b === ativo ? 0 : -1; };
     let adiado = false;
-    const acertar = () => {
+    /** inicio: o ponto de Tab volta ao 1º botão visível (cabeçalho sem mudança e ninguém na barra). */
+    const acertar = (inicio = false) => {
       if (!barra.isConnected) {           // o cabeçalho ainda não entrou na página: confere no próximo quadro
         if (!adiado && typeof requestAnimationFrame === "function") { adiado = true; requestAnimationFrame(() => { if (barra.isConnected) acertar(); }); }
         return;
       }
       const vis = botoes();
-      marcar(vis.find(b => b.tabIndex === 0) || vis[0] || null);
+      marcar((inicio ? null : vis.find(b => b.tabIndex === 0)) || vis[0] || null);
     };
     marcar(botoes()[0] || null);
     barra.addEventListener("focusin", ev => { const b = ev.target && ev.target.closest ? ev.target.closest("button") : null; if (b && barra.contains(b)) marcar(b); });
@@ -339,12 +370,19 @@ export function criarChat(A) {
   function abrirEtiquetas() {
     const conv = A.ver && A.ver.conversa;
     if (!conv) return;
-    let atuais = conv.etiquetas || [];
-    const sel = ui.seletorEtiquetas({ todas: A.base.etiquetas || [], marcadas: atuais, rotulo: "Etiquetas da conversa",
-      aoMudar: ids => { atuais = ids; A.acoes.etiquetas(ids); },
+    // D20: debounce e sequência do seletor (frente A): a resposta de um pedido antigo nunca desfaz a marcação mais nova
+    const sel = ui.seletorEtiquetas({ todas: A.base.etiquetas || [], marcadas: conv.etiquetas || [], rotulo: "Etiquetas da conversa",
+      aoMudar: async (ids, info) => {
+        const seq = info && info.seq;
+        const atual = () => seq === undefined || typeof sel.seqAtual !== "function" || seq === sel.seqAtual();
+        const r = await A.acoes.etiquetas(ids, { atual });
+        if (r && atual() && typeof sel.definir === "function") sel.definir(r.etiquetas || ids);
+      },
       podeCriar: A.acoes.pode("atendente") ? nome => A.acoes.criarEtiqueta(nome) : false });
-    ui.modal({ titulo: "Etiquetas da conversa", corpo: h("div", { class: "pilha" }, h("p", { class: "sub" }, "Marque para organizar e filtrar a lista."), sel),
+    const r = ui.modal({ titulo: "Etiquetas da conversa", corpo: h("div", { class: "pilha" }, h("p", { class: "sub" }, "Marque para organizar e filtrar a lista."), sel),
       largura: "p", acoes: [{ rotulo: "Pronto", tipo: "primario", valor: true }] });
+    // «Pronto» (ou fechar) com a mudança ainda no debounce: ela sai na hora
+    if (r && typeof r.then === "function") r.then(() => { if (typeof sel.emitirAgora === "function") sel.emitirAgora(); }, () => {});
   }
 
   /* ---------------- mensagens */
@@ -643,11 +681,24 @@ export function criarChat(A) {
   }
 
   function rodape(m) {
-    const st = m.direcao === "out" && m.tipo !== "nota" ? L.iconeStatus(m.status) : null;
-    return h("div", { class: "cv-rodape" },
-      h("time", { datetime: m.criado_em }, L.horaMsg(m.criado_em)),
-      st ? h("span", { class: `cv-st ${st.classe}`, title: st.rotulo, "aria-label": st.rotulo }, st.simbolo) : null,
-      st && st.texto ? h("span", { class: "cv-st-txt" }, st.texto) : null);
+    const r = h("div", { class: "cv-rodape" }, h("time", { datetime: m.criado_em }, L.horaMsg(m.criado_em)));
+    if (m.direcao === "out" && m.tipo !== "nota") { r.append(h("span", { class: "cv-st" }), h("span", { class: "cv-st-txt" })); pintarStatus(r, m); }
+    return r;
+  }
+  /** D9: o status (◷ ✓ ✓✓ lida) muda NO LUGAR — atributos e texto do selo, sem trocar a bolha: a região de mensagens (role=log, só
+      adições) não relê a bolha inteira a cada recibo. false = esta bolha não tem o selo (quem chama redesenha). */
+  function pintarStatus(r, m) {
+    const sp = r && r.querySelector(".cv-st"), tx = r && r.querySelector(".cv-st-txt");
+    if (!sp || !tx) return false;
+    const st = L.iconeStatus(m.status);
+    sp.setAttribute("class", st ? `cv-st ${st.classe}` : "cv-st");
+    sp.hidden = !st;
+    if (st) { sp.title = st.rotulo; sp.setAttribute("aria-label", st.rotulo); } else { sp.removeAttribute("title"); sp.removeAttribute("aria-label"); }
+    if (sp.textContent !== (st ? st.simbolo : "")) sp.textContent = st ? st.simbolo : "";
+    const t = st && st.texto ? st.texto : "";
+    if (tx.textContent !== t) tx.textContent = t;
+    tx.hidden = !t;
+    return true;
   }
 
   function quemEnviou(m) {
@@ -727,8 +778,14 @@ export function criarChat(A) {
       const fila = h("div", { class: "cv-fila", role: "status" },
         h("span", { class: "cv-fila-t" }, ui.icone("relogio"), L.textoFila({ estado: m.filaEstado, motivo: m.erro, proxima: m.filaProxima })));
       if (m.filaEstado === "fila" && A.podeEscrever) {
-        fila.append(h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.enviarAgora(m) } }, "Enviar agora"),
-          h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.cancelarFila(m) } }, "Cancelar"));
+        // D10: sem internet ou dentro dos 90 s do último pedido, «Enviar agora» fica desligado e diz por quê (antes o clique não fazia nada)
+        const est = typeof A.acoes.estadoEnviarAgora === "function" ? A.acoes.estadoEnviarAgora(m) : { motivo: "", espera: 0 };
+        const idMot = `cv-fila-mot-${String(m.id).replace(/[^\w-]/g, "")}`;
+        fila.append(...[h("button", { type: "button", class: "bt bt-fant bt-p cv-fila-agora", disabled: !!est.motivo, "aria-describedby": est.motivo ? idMot : null, title: est.motivo || null,
+          on: { click: () => A.acoes.enviarAgora(m) } }, "Enviar agora"),
+          h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.cancelarFila(m) } }, "Cancelar"),
+          est.motivo ? h("span", { class: "cv-fila-motivo", id: idMot }, est.motivo) : null].filter(Boolean));
+        if (est.espera > 0) agendarLiberacao(est.espera);
       }
       box.appendChild(fila);
     }
@@ -744,6 +801,10 @@ export function criarChat(A) {
         // item da fila em dúvida (o servidor não tem a mensagem gravada): nunca sai sozinho; depois de conferir no WhatsApp, a pessoa decide
         if (m.local && m.ref && m.filaEstado === "ambigua" && A.podeEscrever) {
           falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarLocal(m) } }, "Enviar de novo"),
+            h("button", { type: "button", class: "bt bt-fant", on: { click: () => A.acoes.descartarLocal(m) } }, "Descartar"));
+        } else if (m.local && m.pedido && m.pedido.client_ref && A.podeEscrever) {
+          // D8: modelo ou arquivo com client_ref — repetir usa o MESMO ref: se o primeiro saiu, o servidor devolve o que gravou (nada sai em dobro)
+          falha.append(h("button", { type: "button", class: "bt bt-sec", title: "Se a primeira tentativa saiu, nada é enviado de novo", on: { click: () => A.acoes.reenviarLocal(m) } }, "Enviar de novo"),
             h("button", { type: "button", class: "bt bt-fant", on: { click: () => A.acoes.descartarLocal(m) } }, "Descartar"));
         }
       } else if (m.falhaLocal && m.pedido) {
@@ -762,7 +823,8 @@ export function criarChat(A) {
     const m = ln.msg;
     const md = m.midia || {};
     const urlOk = md.path ? A.acoes.estadoMidia(md.path) : "";
-    return [m.atualizado_em, m.status, m.erro, m.ambigua, m.filaEstado, m.filaProxima, !m.local && m.status === "falhou" && A.acoes.foiReenviada(m) ? 1 : 0, m.origem, m.reacao, ln.junta, md.estado, md.progresso, md.fase, m.local && A.acoes.podeCancelarEnvio(m) ? 1 : 0, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
+    const fila = m.local && m.filaEstado === "fila" && typeof A.acoes.estadoEnviarAgora === "function" ? A.acoes.estadoEnviarAgora(m).motivo : "";
+    return [m.status === "falhou" ? "falhou" : "-", m.erro, m.ambigua, fila, m.local && m.pedido && m.pedido.client_ref ? 1 : 0, m.filaEstado, m.filaProxima, !m.local && m.status === "falhou" && A.acoes.foiReenviada(m) ? 1 : 0, m.origem, m.reacao, ln.junta, md.estado, md.progresso, md.fase, m.local && A.acoes.podeCancelarEnvio(m) ? 1 : 0, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
       m.responde_a && m.responde_a.id, m.enviado_por && m.enviado_por.nome].join("|");
   }
 
@@ -811,12 +873,15 @@ export function criarChat(A) {
     for (const ln of linhas) {
       const chave = ln.tipo === "msg" ? `m-${ln.msg.id}` : ln.chave;
       const sig = assinaturaLinha(ln);
+      const est = ln.tipo === "msg" ? `${ln.msg.status}|${ln.msg.atualizado_em}` : "";
       let x = cache.get(chave);
-      if (!x || x.sig !== sig) {
+      // D9: só o status mudou (◷ → ✓ → ✓✓): o selo muda no lugar e a bolha continua a mesma
+      if (x && x.sig === sig && x.est !== est && pintarStatus(x.el.querySelector(".cv-rodape"), ln.msg)) x.est = est;
+      else if (!x || x.sig !== sig || x.est !== est) {
         const novo = construirLinha(ln);
         if (!x && ultimoRenderId !== null && (ln.tipo === "msg" || ln.tipo === "grade")) novo.classList.add("entra");
         if (x && x.el.isConnected) x.el.replaceWith(novo);
-        x = { el: novo, sig };
+        x = { el: novo, sig, est };
         cache.set(chave, x);
       }
       vivos.add(chave);
@@ -827,7 +892,7 @@ export function criarChat(A) {
     ordem.forEach((node, i) => { if (trilho.children[i] !== node) trilho.insertBefore(node, trilho.children[i] || null); });
     if (!linhas.length) {
       ui.limpar(trilho);
-      trilho.appendChild(h("div", { class: "cv-sis" }, h("span", null, "Nenhuma mensagem ainda neste atendimento.")));
+      trilho.appendChild(h("div", { class: "cvc-trilho-vazio" }, ui.vazio({ titulo: "Nenhuma mensagem ainda neste atendimento.", texto: "O que o cliente mandar e o que a equipe responder aparece aqui.", icone: "chat", tema: "conversas" })));
     }
     renderTopo();
     const ult = A.L.ultimoId(A.msgs);
@@ -849,6 +914,21 @@ export function criarChat(A) {
   }
   let novasDesde = null;
 
+  /* D10: «Enviar agora» que esperava os 90 s volta a valer sozinho (um redesenho quando o prazo vence) */
+  let tLiberarEnvio = null, liberarEm = 0;
+  function agendarLiberacao(espera) {
+    const em = Date.now() + Math.max(0, Number(espera) || 0) + 150;
+    if (tLiberarEnvio && liberarEm <= em) return;
+    clearTimeout(tLiberarEnvio); tLiberarEnvio = null; liberarEm = 0;
+    liberarEm = em;
+    tLiberarEnvio = setTimeout(() => { tLiberarEnvio = null; liberarEm = 0; if (!A.destruido) renderMensagens({ rolar: "manter" }); }, em - Date.now());
+  }
+  /** D20: ✓ de sucesso na pílula «Resolvida» (ui.checkSucesso da frente A, por detecção). */
+  function sucesso(texto) {
+    const alvoOk = faixa.querySelector(".cv-pil-resolvida") || faixa.querySelector(".cv-pil-status");
+    if (alvoOk && typeof ui.checkSucesso === "function") { try { ui.checkSucesso(alvoOk, { texto }); } catch { /* sem o ✓, o aviso continua */ } }
+  }
+
   function destacar(id) {
     const direto = trilho.querySelector(`.cv-msg[data-id="${escaparSel(id)}"]`);
     const naGrade = !direto && trilho.querySelector(`.cv-grade-bt[data-id="${escaparSel(id)}"]`);
@@ -861,6 +941,9 @@ export function criarChat(A) {
 
   function renderTudo({ rolar = "fim" } = {}) {
     cache.clear();
+    players.clear();
+    clearTimeout(tLiberarEnvio); tLiberarEnvio = null; liberarEm = 0;
+    sigCab = null;
     ui.limpar(trilho);
     ultimoRenderId = null;
     novas.hidden = true; novasDesde = null;
@@ -876,7 +959,10 @@ export function criarChat(A) {
 
   return {
     el, mostrarVazio, mostrarCarregando, mostrarErro, renderCabecalho, renderMensagens, renderTudo, renderTopo, destacar,
-    noFim, rolarFim, estadoAcoes, abrirVisualizador,
+    noFim, rolarFim, estadoAcoes, abrirVisualizador, sucesso,
+    /** D9: quantos players de áudio a tela segura (testes: a troca de conversa solta os da anterior). */
+    contarPlayers: () => players.size,
+    desmontar() { clearTimeout(tLiberarEnvio); tLiberarEnvio = null; liberarEm = 0; players.clear(); if (visualizador) { try { visualizador.fechar(); } catch { /* ok */ } } },
     get visualizador() { return visualizador; },
     focarMensagens() { try { msgs.focus({ preventScroll: true }); } catch { /* ok */ } },
   };

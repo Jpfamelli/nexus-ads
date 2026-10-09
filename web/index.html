@@ -2,8 +2,12 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
+  <!-- CSP do clássico (o GitHub Pages não manda cabeçalhos): script só daqui, rede só o Supabase do projeto, imagem do logo
+       por data:/https, fontes locais + a reserva da Fontshare/Google. frame-ancestors só vale em cabeçalho. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://api.fontshare.com https://fonts.googleapis.com; font-src 'self' https://cdn.fontshare.com https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://dtjznipitihnwmcgpzqh.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="theme-color" content="#07090C">
   <meta name="color-scheme" content="dark">
   <title>Nexus Ads · Central de tráfego</title>
@@ -424,7 +428,7 @@
           <header class="card-h">
             <div>
               <h2>Tratamentos fechados</h2>
-              <p class="sub" id="donut-sub">Estimativa pelo valor de cada tratamento.</p>
+              <p class="sub" id="donut-sub">Pacientes dos anúncios no período.</p>
             </div>
           </header>
           <div class="donut-wrap" id="donut"></div>
@@ -609,7 +613,7 @@
           </div>
         </div>
 
-        <article class="card">
+        <article class="card" id="card-exec">
           <header class="card-h">
             <div>
               <h2>Fazer agora</h2>
@@ -625,17 +629,18 @@
           <p class="aj-st" id="exec-status" role="status"></p>
         </article>
 
-        <article class="card">
+        <article class="card" id="card-contas">
           <header class="card-h">
             <div>
               <h2>Contas de acesso</h2>
-              <p class="sub">Quem criou conta aparece aqui. Libere o acesso e escolha quais clientes cada pessoa vê.</p>
+              <p class="sub">Contas da plataforma: quem criou conta aqui aparece nesta lista. Libere o acesso e escolha quais clientes cada pessoa vê. Usuários convidados pelos clientes (papéis e departamentos do Órbita) ficam em <a class="link-b" href="https://orbita-nexus-ads.netlify.app/app/#/admin/clientes" rel="noopener">Admin → Clientes → Usuários</a>.</p>
             </div>
           </header>
+          <p class="nota-sm" id="contas-orbita" role="status"></p>
           <ul class="contas" id="aj-contas"></ul>
         </article>
 
-        <article class="card">
+        <article class="card" id="card-config">
           <header class="card-h">
             <div>
               <h2>Configuração da Nexus</h2>
@@ -786,6 +791,6 @@
     <div class="folha-mesa" id="folha-mesa"><article class="folha" id="folha" hidden></article></div>
   </div>
 
-  <script type="module" src="painel.js?v=5"></script>
+  <script type="module" src="painel.js?v=6"></script>
 </body>
 </html>

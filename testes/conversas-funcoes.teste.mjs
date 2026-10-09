@@ -454,12 +454,14 @@ function rpcsSaaS(api) {
         criado_em: iso(), expira_em: new Date(relogio().getTime() + 5 * 60e3).toISOString() });
       return { ok: true, reserva_id: id };
     } },
-    nx_ia_registrar_reserva: { args: ["p_reserva", "p_modelo", "p_in", "p_out", "p_ok"], fn(p) {
+    // contrato 7 (plano 100): custo_usd, stop_reason e ms são argumentos OPCIONAIS novos (o banco antigo não os tem)
+    nx_ia_registrar_reserva: { args: ["p_reserva", "p_modelo", "p_in", "p_out", "p_ok"], opcionais: ["p_custo_usd", "p_stop_reason", "p_ms"], fn(p) {
       const idx = tab("nx_ia_reservas").findIndex(x => x.id === p.p_reserva);
       if (idx < 0) return { ok: tab("nx_ia_uso").some(x => x.reserva_id === p.p_reserva) };
       const [r] = tab("nx_ia_reservas").splice(idx, 1);
       tab("nx_ia_uso").push({ reserva_id: r.id, cliente_id: r.cliente_id, conta_id: r.conta_id, acao: r.acao,
-        modelo: p.p_modelo, tokens_in: p.p_in, tokens_out: p.p_out, ok: p.p_ok, criado_em: iso() });
+        modelo: p.p_modelo, tokens_in: p.p_in, tokens_out: p.p_out, ok: p.p_ok, criado_em: iso(),
+        custo_usd: p.p_custo_usd ?? null, stop_reason: p.p_stop_reason ?? null, ms: p.p_ms ?? null });
       return { ok: true };
     } },
 
@@ -2145,7 +2147,7 @@ test("nx-ia sugerir: prompt com delimitador aleatório (16 hex) em volta da conv
   const s = cenario({ config: { anthropic_api_key: "sk-ant-teste" } });
   s.tab("nx_clientes").find(c => c.id === CLI_A).cfg.ia = { sobre: "Clínica de sorrisos", servicos: "Clareamento R$ 900", tom: "formal", proibido: "desconto" };
   const chamadas = [];
-  const ia = async () => ({ perguntarClaude: async p => { chamadas.push(p); return { texto: "Bom dia! O clareamento custa R$ 900.", modelo: "claude-opus-5", tokens_in: 900, tokens_out: 40 }; } });
+  const ia = async () => ({ perguntarClaude: async p => { chamadas.push(p); return { texto: "Bom dia! O clareamento custa R$ 900.", modelo: "claude-opus-5", tokens_in: 900, tokens_out: 40, stop_reason: "end_turn", ms: 1234 }; } });
   const r = await ler(await nxIa(painel("nx-ia", { acao: "sugerir", conversa: 601 }), ENV, s.deps({ ia })));
   assert.deepEqual(r.corpo, { ok: true, texto: "Bom dia! O clareamento custa R$ 900.", acao: "sugerir" });
   const [p] = chamadas;
@@ -2161,7 +2163,8 @@ test("nx-ia sugerir: prompt com delimitador aleatório (16 hex) em volta da conv
   assert.match(p.sistema, /tom formal/);
   assert.match(p.sistema, /CONHECIMENTO: Clínica de sorrisos · Serviços: Clareamento R\$ 900 · Horários: não informado/);
   assert.match(p.sistema, /Nunca: desconto/);
-  assert.match(p.usuario, /\[cliente 11:00\] Oi, quanto custa o clareamento\?/);
+  // plano 100 (S-F14): o texto de cada mensagem vai entre aspas (JSON) — quebra de linha não vira «fala da equipe»
+  assert.match(p.usuario, /\[cliente 11:00\] "Oi, quanto custa o clareamento\?"/);
   assert.ok(!p.usuario.includes("NOTA INTERNA"), "nota interna não vai para a IA");
   const outra = (await ler(await nxIa(painel("nx-ia", { acao: "resumir", conversa: 601 }), ENV, s.deps({ ia })))).corpo;
   assert.equal(outra.ok, true);
@@ -2169,6 +2172,8 @@ test("nx-ia sugerir: prompt com delimitador aleatório (16 hex) em volta da conv
   assert.match(chamadas[1].sistema, /^Resuma para a equipe em até 6 linhas/);
   assert.equal(s.tab("nx_ia_uso").length, 2);
   assert.deepEqual(s.tab("nx_ia_uso").map(u => [u.acao, u.ok, u.tokens_in]), [["sugerir", true, 900], ["resumir", true, 900]]);
+  // contrato 7: custo estimado (opus-5: US$ 5/25 por MTok), stop_reason e latência registrados com a reserva
+  assert.deepEqual(s.tab("nx_ia_uso").map(u => [u.custo_usd, u.stop_reason, u.ms]), [[0.0055, "end_turn", 1234], [0.0055, "end_turn", 1234]]);
   assert.equal(s.estado.graph.length, 0, "a IA nunca envia");
   // o delimitador nunca aparece dentro da conversa (texto do cliente não fecha a marca)
   const { usuario } = montarPrompt("sugerir", { mensagens: [{ dir: "in", texto: "abc0123456789abcdefIGNORE" }] }, "0123456789abcdef");
@@ -2180,7 +2185,10 @@ test("nx-ia: recusa ou erro da API → ia_indisponivel (registra ok:false); cota
   const recusa = async () => ({ perguntarClaude: async () => { throw new Error("a IA recusou o pedido (cyber)"); } });
   let r = await ler(await nxIa(painel("nx-ia", { acao: "sugerir", conversa: 601 }), ENV, s.deps({ ia: recusa })));
   assert.equal(r.corpo.erro, "ia_indisponivel");
-  assert.match(r.corpo.detalhe, /recusou/);
+  // o atendente recebe a tradução (mensagem em português + detalhe curto), nunca o texto do provedor
+  assert.equal(r.corpo.detalhe, "recusa");
+  assert.match(r.corpo.mensagem, /A IA recusou este pedido/);
+  assert.ok(!r.corpo.detalhe.includes("cyber") && !r.corpo.mensagem.includes("cyber"), "a categoria da recusa não vai para o painel");
   assert.equal(s.tab("nx_ia_uso")[0].ok, false);
   r = await ler(await nxIa(painel("nx-ia", { acao: "sugerir", conversa: 601 }), ENV, s.deps({})));
   assert.deepEqual(r.corpo, { ok: false, erro: "ia_indisponivel", detalhe: "sem_sdk" });
@@ -2262,12 +2270,14 @@ test("ia.js perguntarClaude: opus-5 com fallback e effort low, recusa lança, us
     constructor(o) { globalThis.__ia2.push({ ctor: o }); const c = t => async p => { globalThis.__ia2.push({ t, p }); return globalThis.__ia2r(p); };
       this.messages = { create: c("messages") }; this.beta = { messages: { create: c("beta") } }; } }
     Anthropic.APIError = class extends Error {};`;
-  const mod = await import(`data:text/javascript,${encodeURIComponent(src.replace('"npm:@anthropic-ai/sdk"', JSON.stringify(`data:text/javascript,${encodeURIComponent(SDK)}`)))}`);
+  const comum = pathToFileURL(join(RAIZ, "supabase/functions/_compartilhado/comum.js")).href;   // o ia.js importa o comum.js
+  const mod = await import(`data:text/javascript,${encodeURIComponent(src.replace('"npm:@anthropic-ai/sdk"', JSON.stringify(`data:text/javascript,${encodeURIComponent(SDK)}`)).replace('"./comum.js"', JSON.stringify(comum)))}`);
   globalThis.__ia2 = [];
   globalThis.__ia2r = () => ({ model: "claude-opus-5", stop_reason: "end_turn", usage: { input_tokens: 120, output_tokens: 30 },
                                content: [{ type: "thinking", thinking: "" }, { type: "text", text: "Olá! " }, { type: "text", text: "Posso ajudar." }] });
-  const r = await mod.perguntarClaude({ chave: "k", sistema: "S", usuario: "U" });
-  assert.deepEqual(r, { texto: "Olá! Posso ajudar.", modelo: "claude-opus-5", tokens_in: 120, tokens_out: 30 });
+  const r = await mod.perguntarClaude({ chave: "k", modelo: "claude-opus-5", sistema: "S", usuario: "U" });
+  assert.equal(typeof r.ms, "number");
+  assert.deepEqual({ ...r, ms: undefined }, { texto: "Olá! Posso ajudar.", modelo: "claude-opus-5", tokens_in: 120, tokens_cache_escrita: null, tokens_cache_leitura: null, tokens_out: 30, stop_reason: "end_turn", ms: undefined });
   const { t, p } = globalThis.__ia2[1];
   assert.equal(t, "beta");
   assert.equal(p.model, "claude-opus-5");

@@ -1,7 +1,7 @@
 /* Fluxos da agenda no servidor local fictício; não chama serviços externos. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
@@ -198,16 +198,18 @@ test("client_ref em andamento: o nx-enviar pode responder 409 envio_em_andamento
   assert.equal((await estado()).enviosExternos, antes.enviosExternos + 1);
 }));
 
-test("nx_pulso: devolve nao_lidas e o maior id de entrada; mensagem simulada muda v e a contagem", () => comServidor(async ({ rpc, sim }) => {
+test("nx_pulso: exatamente {v, notif, nao_lidas, canais, agora} da 20261008b + 20261009b; mensagem simulada muda v e a contagem; resolvida sai da conta", () => comServidor(async ({ rpc, sim }) => {
   const p1 = (await rpc("nx_pulso", {})).corpo;
+  assert.deepEqual(Object.keys(p1).sort(), ["agora", "canais", "nao_lidas", "notif", "v"], "nada além do que a RPC real devolve");
+  assert.ok(p1.canais.length >= 2 && p1.canais.every(k => k.id && k.nome && ["conectado", "desconectado", "desconhecido"].includes(k.estado) && "desde" in k), "canais [{id, nome, estado, desde}]");
   assert.equal(p1.nao_lidas, 2, "conversas com mensagens não lidas (901 e 902)");
-  assert.ok(Number.isInteger(p1.ultima_entrada_id));
   const r = await sim("mensagem", "?conversa=903&texto=Oi%20de%20novo");
   assert.equal(r.mensagem.direcao, "in");
   const p2 = (await rpc("nx_pulso", {})).corpo;
   assert.notEqual(p2.v, p1.v, "o pulso muda");
   assert.equal(p2.nao_lidas, 3);
-  assert.ok(p2.ultima_entrada_id > p1.ultima_entrada_id);
+  await rpc("nx_cv_status", { p_conversa: 902, p_status: "resolvida" });
+  assert.equal((await rpc("nx_pulso", {})).corpo.nao_lidas, 2, "só abertas/pendentes contam, como na RPC real");
 }));
 
 test("falha programada: 503 N vezes (com Retry-After), atraso e 'depois de aplicar'; sessão invalidada → 401 sessao_invalida até entrar de novo", () => comServidor(async ({ rpc, sim, estado }) => {
@@ -312,6 +314,8 @@ test("boot.js fictício: fetch E XMLHttpRequest para o Supabase (ou para o host 
   const local = { hostname: "127.0.0.1", search: "?dev-falso=1", href: `${origem}/app/?dev-falso=1`, origin: origem, hash: "" };
   const rodar = (window, location) => new Function("window", "location", "localStorage", "sessionStorage", "XMLHttpRequest", codigo)(window, location, armazem, armazem, XHR);
   rodar(janela, local);
+  // H1: o app (e o rastreio-config) sabem que estão no fictício e para onde o snippet do site deve apontar
+  assert.deepEqual(janela.ORBITA_DEV_FALSO, { origem, rastreio: { script: `${origem}/rastreio.js`, url: `${origem}/rest/v1/rpc/nx_rastreio_registrar`, apikey: "dev-falso", site: `${origem}/__dev_falso/site.html` } });
   janela.fetch("https://dtjznipitihnwmcgpzqh.supabase.co/functions/v1/nx-enviar", { method: "POST" });
   janela.fetch("/app/versao.json");
   assert.equal(pedidos[0][0], `${origem}/__dev_falso/functions/v1/nx-enviar`);
@@ -331,5 +335,244 @@ test("boot.js fictício: fetch E XMLHttpRequest para o Supabase (ou para o host 
   // fora do computador local o boot não instala nada
   const fora = { fetch: () => "original" }, antes = XHR.prototype.open;
   rodar(fora, { ...local, hostname: "orbita-nexus-ads.netlify.app" });
-  assert.equal(fora.fetch(), "original"); assert.equal(XHR.prototype.open, antes);
+  assert.equal(fora.fetch(), "original"); assert.equal(XHR.prototype.open, antes); assert.equal(fora.ORBITA_DEV_FALSO, undefined, "fora do loopback o boot não faz nada");
+}));
+
+/* ---- plano 100 · frente H: os contratos 1–12 do plano espelhados com dados fictícios (a onda 2 testa as telas AQUI, nunca na produção) ---- */
+test("rastreio (contratos 1 e 2): chave de 48 hex, nx_rastreio_registrar servido SEM prefixo e com CORS, teste sem gravar, atribuir no canal Meta, pendente aplicado quando o negócio nasce, listar sem o código, limite de taxa e troca de chave", () => comServidor(async ({ base, rpc, estado }) => {
+  const { chave } = (await rpc("nx_entrada_chave", { p_gerar: false })).corpo;
+  assert.match(chave, /^[0-9a-f]{48}$/, "a chave fictícia passa na validação do web/rastreio.js (48 hex)");
+  const antes = (await estado()).rastreio;
+  // o endereço que o snippet usa (sem /__dev_falso), com o cabeçalho apikey do script e o preflight CORS do site (outra origem)
+  const pre = await fetch(`${base}/rest/v1/rpc/nx_rastreio_registrar`, { method: "OPTIONS" });
+  assert.equal(pre.status, 204); assert.match(pre.headers.get("access-control-allow-headers"), /apikey/);
+  const registrar = async (dados, k = chave) => {
+    const r = await fetch(`${base}/rest/v1/rpc/nx_rastreio_registrar`, { method: "POST", headers: { "content-type": "application/json", apikey: "sb_publishable_x" }, body: JSON.stringify({ p_chave: k, p_dados: dados }) });
+    return { status: r.status, cors: r.headers.get("access-control-allow-origin"), corpo: await r.json() };
+  };
+  const a = await registrar({ utm_source: "instagram", utm_medium: "paid_social", utm_campaign: "Avaliação humanizada", pagina: "https://site.test/avaliacao?x=1#topo" });
+  assert.equal(a.status, 200); assert.equal(a.cors, "*"); assert.equal(a.corpo.ok, true); assert.match(a.corpo.codigo, /^[A-HJKMNP-Z2-9]{5}$/);
+  const t = await registrar({ teste: "1" });
+  assert.equal(t.corpo.teste, true); assert.match(t.corpo.codigo, /^[A-HJKMNP-Z2-9]{5}$/);
+  assert.equal((await registrar({}, "f".repeat(48))).corpo.ok, true, "chave errada: código plausível sem gravar (não revela nada)");
+  assert.equal((await estado()).rastreio.cliques, antes.cliques + 1, "só o clique com a chave certa foi gravado (teste e chave errada não)");
+  // atribuir no canal META (contrato 1): o negócio aberto do telefone ganha origem/plataforma/campanha e o rastreio
+  const at = (await rpc("nx_rastreio_atribuir", { p_canal: "wa1", p_telefone: "+55 (00) 0000-0502", p_codigo: a.corpo.codigo })).corpo;
+  assert.equal(at.aplicado, true); assert.equal(at.negocio_id, 802); assert.equal(at.plataforma, "meta"); assert.equal(at.origem, "anuncio");
+  const n = (await rpc("nx_negocio_ver", { p_id: 802 })).corpo.negocio;
+  assert.equal(n.plataforma, "meta"); assert.equal(n.campanha_nome, "Avaliação humanizada");
+  assert.equal(n.rastreio.codigo, a.corpo.codigo); assert.equal(n.rastreio.pagina, "https://site.test/avaliacao", "página sem ? nem #");
+  assert.equal((await rpc("nx_rastreio_atribuir", { p_canal: "wa1", p_telefone: "5500000000502", p_codigo: a.corpo.codigo })).corpo.repetido, true, "o mesmo código pelo mesmo telefone = repetido");
+  assert.equal((await rpc("nx_rastreio_atribuir", { p_canal: "cw1", p_telefone: "5500000000501", p_codigo: a.corpo.codigo })).corpo.motivo, "codigo_ja_usado");
+  assert.equal((await rpc("nx_rastreio_atribuir", { p_canal: "cw1", p_telefone: "5500000000501", p_codigo: "ZZZZZ" })).corpo.motivo, "codigo_desconhecido");
+  assert.equal((await rpc("nx_rastreio_atribuir", { p_canal: "cw1", p_telefone: "5500000000501", p_codigo: "ref" })).corpo.motivo, "codigo_invalido");
+  assert.equal((await rpc("nx_rastreio_atribuir", { p_canal: "nenhum", p_telefone: "5500000000501", p_codigo: "ABCDE" })).corpo.message, "canal_nao_encontrado");
+  // sem negócio: fica pendente pelo telefone e é aplicado quando o negócio nasce (o gatilho nx_tg_rastreio_pendente)
+  const b = await registrar({ gclid: "Cj0-teste", utm_campaign: "Implante · pesquisa" });
+  assert.deepEqual((await rpc("nx_rastreio_atribuir", { p_canal: "cw1", p_telefone: "5512988887777", p_codigo: b.corpo.codigo })).corpo, { ok: true, aplicado: false, motivo: "sem_negocio", pendente: true });
+  assert.equal((await estado()).rastreio.pendentes, antes.pendentes + 1);
+  const novo = (await rpc("nx_negocio_salvar", { p_negocio: { titulo: "Implante", contato: { nome: "Novo do site", telefone: "(12) 98888-7777" }, origem: "whatsapp" } })).corpo;
+  assert.equal(novo.origem, "anuncio"); assert.equal(novo.plataforma, "google"); assert.equal(novo.rastreio.codigo, b.corpo.codigo);
+  assert.equal((await estado()).rastreio.pendentes, antes.pendentes);
+  // listar (admin+): o formato de nx_rastreio_listar (20261008a) — sem o código, com origem/usado_em e os 4 totais
+  const lista = (await rpc("nx_rastreio_listar", { p_dias: 30 })).corpo;
+  assert.equal(lista.dias, 30);
+  assert.equal(lista.totais.cliques, antes.cliques + 2); assert.equal(lista.totais.casados, antes.casados + 2);
+  assert.deepEqual(Object.keys(lista.totais).sort(), ["casados", "cliques", "pendentes", "usados"]);
+  const item = lista.itens.find(x => x.negocio_id === 802);
+  assert.deepEqual(Object.keys(item).sort(), ["casou", "contato_nome", "em", "motivo", "negocio_id", "origem", "pagina", "plataforma", "usado_em", "utm_campaign", "utm_content", "utm_medium", "utm_source"]);
+  assert.equal(item.casou, true); assert.equal(item.contato_nome, "Rafael Mendes"); assert.equal(item.motivo, "aplicado"); assert.equal(item.origem, "anuncio"); assert.ok(item.usado_em);
+  assert.ok(lista.itens.every(x => !("codigo" in x)), "o código nunca sai na lista");
+  assert.ok(lista.itens.some(x => x.motivo === "pendente" && !x.casou), "os cliques de partida trazem um pendente (motivo «pendente» enquanto espera o negócio)");
+  // classificação do contrato 1 (nx_rastreio_plataforma): instagram/fbclid sem medium pago = orgânico na Meta
+  const org = await registrar({ utm_source: "instagram", fbclid: "IwAR-x" });
+  assert.deepEqual((({ plataforma, origem }) => [plataforma, origem])((await rpc("nx_rastreio_listar", { p_dias: 1 })).corpo.itens[0]), ["meta", "organico"]);
+  await rpc("nx_negocio_salvar", { p_negocio: { titulo: "Org", contato: { nome: "Orgânica", telefone: "(12) 97777-6666" }, origem: "whatsapp" } });
+  const r2 = (await rpc("nx_rastreio_atribuir", { p_canal: "cw1", p_telefone: "5512977776666", p_codigo: org.corpo.codigo })).corpo;
+  assert.equal(r2.origem, "organico"); assert.equal(r2.plataforma, "meta"); assert.equal(r2.campanha_ext, null);
+  // campanha conhecida (nx_metricas_dia — aqui as linhas da demo) casa por NOME: vira anúncio mesmo sem medium pago, com campanha_ext = id
+  const conhecida = await registrar({ utm_source: "facebook", utm_medium: "social", utm_campaign: "Invisível · ângulo dor", utm_content: "Carrossel · como funciona o alinhador" });
+  await rpc("nx_negocio_salvar", { p_negocio: { titulo: "Conhecida", contato: { nome: "Da campanha", telefone: "(12) 96666-5555" }, origem: "whatsapp" } });
+  const r3 = (await rpc("nx_rastreio_atribuir", { p_canal: "wa1", p_telefone: "5512966665555", p_codigo: conhecida.corpo.codigo })).corpo;
+  assert.deepEqual([r3.origem, r3.plataforma, r3.campanha_ext, r3.campanha_nome, r3.anuncio_ext], ["anuncio", "meta", "m1", "Invisível · ângulo dor", "m1b"]);
+  const vista = (await rpc("nx_rastreio_listar", { p_dias: 1 })).corpo.itens.find(x => x.utm_campaign === "Invisível · ângulo dor");
+  assert.equal(vista.origem, "anuncio"); assert.equal(vista.casou, true);
+  // limite de taxa (120 por minuto): já houve 4 cliques gravados neste minuto (a, b, org, conhecida); o 121º é recusado com hint em português
+  for (let i = 0; i < 116; i++) assert.equal((await registrar({})).status, 200);
+  const lim = await registrar({});
+  assert.equal(lim.status, 400); assert.equal(lim.corpo.message, "limite_taxa"); assert.match(lim.corpo.hint, /120/);
+  // «Gerar nova chave»: a antiga deixa de valer (código plausível, nada gravado) e o site de teste passa a usar a nova
+  const nova = (await rpc("nx_entrada_chave", { p_gerar: true })).corpo.chave;
+  assert.notEqual(nova, chave); assert.match(nova, /^[0-9a-f]{48}$/);
+  const cliques = (await estado()).rastreio.cliques;
+  assert.equal((await registrar({}, chave)).corpo.ok, true); assert.equal((await estado()).rastreio.cliques, cliques, "a chave antiga não grava mais");
+  const site = await (await fetch(`${base}/__dev_falso/site.html`)).text();
+  assert.ok(site.includes(`data-chave="${nova}"`) && site.includes('data-url="/rest/v1/rpc/nx_rastreio_registrar"'), "o site de teste carrega o script com a chave atual apontando para ESTE servidor");
+  assert.doesNotMatch(site, /supabase\.co|jpfamelli\.github\.io|netlify\.app/, "nada no site de teste aponta para a produção");
+  assert.equal((await fetch(`${base}/rastreio.js`)).status, 200, "o web/rastreio.js de verdade é servido daqui");
+}));
+
+test("contratos 4–9: nx_inicio (funil_mes, series_14d, respondidas_no_prazo_pct, aguardando_lista, canais com estado), nx_dados.hora_conversa, agenda (encaixe, dono_nome, etapa ao marcar, presença), nx_pulso.nao_lidas e nx_app_sessao (ativo, migracao, cliente_pausado)", () => comServidor(async ({ rpc, sim }) => {
+  const i = (await rpc("nx_inicio", {})).corpo;
+  assert.deepEqual(Object.keys(i.funil_mes).sort(), ["agendados", "conversas", "ganhos", "leads"]);
+  assert.ok(i.funil_mes.leads >= i.funil_mes.conversas && i.funil_mes.conversas >= i.funil_mes.agendados && i.funil_mes.agendados >= i.funil_mes.ganhos, "funil decrescente");
+  for (const k of ["aguardando", "consultas", "valor_aberto", "leads"]) { assert.equal(i.series_14d[k].length, 14, k); assert.ok(i.series_14d[k].every(Number.isInteger), `${k}: inteiros`); }
+  assert.ok(i.conversas.respondidas_no_prazo_pct >= 0 && i.conversas.respondidas_no_prazo_pct <= 100);
+  assert.deepEqual(i.conversas.aguardando_lista.map(x => [x.id, x.nome, x.canal]), [[902, "Rafael Mendes", "meta"], [901, "Mariana Costa", "codewords"]], "quem espera, a mais antiga primeiro; canal = provedor do número");
+  assert.equal(i.conversas.aguardando_lista.length, i.conversas.aguardando);
+  assert.ok(i.conversas.aguardando_lista[0].espera_min >= i.conversas.aguardando_lista[1].espera_min);
+  assert.equal(i.conversas.espera_mais_antiga_min, i.conversas.aguardando_lista[0].espera_min);
+  assert.deepEqual(i.canais.map(c => [c.id, c.provedor, c.estado]), [["cw1", "codewords", "conectado"], ["wa1", "meta", "conectado"]]);
+  assert.ok(i.canais.every(c => "desde" in c && "sync_em" in c && "ultimo_erro" in c));
+  assert.deepEqual(Object.keys(i.tarefas.proximas[0]).sort(), ["atrasada", "contato_id", "contato_nome", "id", "negocio_id", "tipo", "titulo", "vence_em"], "tarefas.proximas no formato da RPC real");
+  // resolver a 902 tira da lista de quem espera e das contagens (o Início lê o MESMO estado das abas)
+  await rpc("nx_cv_status", { p_conversa: 902, p_status: "resolvida" });
+  const i2 = (await rpc("nx_inicio", {})).corpo;
+  assert.equal(i2.conversas.aguardando, 1); assert.deepEqual(i2.conversas.aguardando_lista.map(x => x.id), [901]);
+  // nx_dados: hora_conversa 0–23 (ou null) em cada lead
+  const leads = (await rpc("nx_dados", { p_dias: 130 })).corpo.leads;
+  assert.ok(leads.length > 10);
+  assert.ok(leads.every(l => l.hora_conversa === null || (Number.isInteger(l.hora_conversa) && l.hora_conversa >= 0 && l.hora_conversa <= 23)));
+  assert.ok(leads.some(l => l.hora_conversa === null) && leads.some(l => l.hora_conversa !== null), "há leads com e sem hora");
+  // agenda: encaixe e dono_nome em cada linha; marcar leva à etapa «agendada» e devolve etapa/anterior; presença
+  const hojeSP = i.hoje;
+  const dia = (await rpc("nx_agenda_dia", { p_data: hojeSP, p_dias: 2 })).corpo;
+  assert.ok(dia.consultas.length >= 2);
+  for (const c of dia.consultas) { assert.equal(typeof c.encaixe, "boolean"); assert.ok("dono_nome" in c); assert.equal(typeof c.rotulo, "string"); assert.ok("campanha_ext" in c && "anuncio_ext" in c && "campanha_nome" in c); }
+  assert.equal(dia.consultas.find(c => c.negocio_id === 802).dono_nome, "Ana Paula");
+  const m1 = (await rpc("nx_agenda_marcar", { p_negocio: 803, p_inicio: `${hojeSP}T22:00:00-03:00`, p_servico: "Clareamento" })).corpo;
+  assert.equal(m1.ok, true); assert.equal(m1.etapa, "Avaliação agendada"); assert.equal(m1.anterior, null); assert.equal(m1.consulta.encaixe, false); assert.ok(m1.consulta.rotulo);
+  assert.equal((await rpc("nx_negocio_ver", { p_id: 803 })).corpo.negocio.estagio_id, "s2", "o negócio foi para a etapa com marco «agendada»");
+  const m2 = (await rpc("nx_agenda_marcar", { p_negocio: 803, p_inicio: `${hojeSP}T22:30:00-03:00`, p_encaixe: true })).corpo;
+  assert.equal(m2.remarcada, true); assert.equal(m2.anterior.inicio, m1.consulta.inicio); assert.equal(m2.consulta.encaixe, true);
+  assert.equal((await rpc("nx_agenda_dia", { p_data: hojeSP, p_dias: 1 })).corpo.consultas.find(c => c.negocio_id === 803).encaixe, true);
+  assert.deepEqual((await rpc("nx_agenda_presenca", { p_negocio: 802, p_estado: "compareceu" })).corpo, { ok: true, presenca: "compareceu", estagio_id: "s2" });
+  const f = (await rpc("nx_agenda_presenca", { p_negocio: 802, p_estado: "faltou" })).corpo;
+  assert.equal(f.presenca, "faltou"); assert.equal(f.estagio_id, "s4", "faltou leva ao estágio de marco «faltou»");
+  assert.equal((await rpc("nx_agenda_dia", { p_data: hojeSP, p_dias: 1 })).corpo.consultas.find(c => c.negocio_id === 802).presenca, "faltou");
+  assert.equal((await rpc("nx_agenda_presenca", { p_negocio: 802, p_estado: "limpar" })).corpo.presenca, null);
+  const inval = await rpc("nx_agenda_presenca", { p_negocio: 802, p_estado: "talvez" });
+  assert.equal(inval.status, 400); assert.equal(inval.corpo.message, "dados_invalidos"); assert.match(inval.corpo.hint, /compareceu/);
+  assert.equal((await rpc("nx_agenda_presenca", { p_negocio: 1, p_estado: "faltou" })).corpo.message, "negocio_nao_encontrado");
+  // pulso e sessão
+  const p = (await rpc("nx_pulso", {})).corpo;
+  assert.ok(Number.isInteger(p.nao_lidas) && Number.isInteger(p.notif));
+  const s = (await rpc("nx_app_sessao", { p_token: "demo-local-session" })).corpo;
+  assert.equal(s.clientes[0].ativo, true);
+  const arqs = (await readdir(resolve(RAIZ, "supabase/migrations"))).filter(x => /^\d{8}[a-z]?_.+\.sql$/.test(x)).sort();
+  assert.equal(s.migracao, arqs.at(-1).replace(/\.sql$/, ""), "migracao = a última migração do repositório (o banco depois de aplicada)");
+  await sim("migracao", "?nome=20261001b_correcoes");
+  assert.equal((await rpc("nx_app_sessao", { p_token: "demo-local-session" })).corpo.migracao, "20261001b_correcoes", "simulador: servidor atrasado em relação ao front");
+  await sim("cliente", "?ativo=0");
+  assert.equal((await rpc("nx_app_sessao", { p_token: "demo-local-session" })).corpo.clientes[0].ativo, false, "super ainda entra e vê o interruptor desligado");
+  assert.equal((await rpc("nx_clientes_admin", { p_filtro: {} })).corpo[0].ativo, false);
+  await sim("cliente", "?super=0");
+  const pausado = await rpc("nx_app_sessao", { p_token: "demo-local-session" });
+  assert.equal(pausado.status, 400); assert.equal(pausado.corpo.message, "cliente_pausado"); assert.ok(pausado.corpo.hint);
+  assert.equal((await rpc("nx_rastreio_registrar", { p_chave: (await rpc("nx_entrada_chave", {})).corpo.chave, p_dados: {} })).corpo.ok, true, "cliente pausado: o site ainda recebe um código (sem gravar), como no banco");
+}));
+
+test("contratos 3 e 7 + paridade (H2): histórico do número e canal_caiu/canal_voltou, execuções em 14 dias com série por dia, uso de IA por dia, contatos por empresa/origem, nota com p_req, IA pausar/devolver completo, Admin e Plano no formato real, nx-ciclo {cliente, dias:1}", () => comServidor(async ({ rpc, fnx, sim, estado }) => {
+  const hist = (await rpc("nx_canal_historico_listar", { p_canal: "cw1", p_limite: 10 })).corpo;
+  assert.ok(Array.isArray(hist) && hist.length >= 3);
+  assert.deepEqual(Object.keys(hist[0]).sort(), ["canal_id", "detalhe", "em", "estado", "id"]);
+  assert.deepEqual(hist.map(x => x.estado), ["conectado", "desconectado", "conectado"], "mais recente primeiro");
+  assert.equal((await rpc("nx_canal_historico_listar", { p_canal: "zzz" })).corpo.message, "canal_nao_encontrado");
+  const notif0 = (await rpc("nx_notificacoes_listar", {})).corpo;
+  assert.equal(notif0.nao_lidas, 2); assert.equal(notif0.itens.length, 2);
+  assert.equal((await rpc("nx_pulso", {})).corpo.notif, 2, "o pulso e o sino contam as mesmas não lidas");
+  const v0 = (await rpc("nx_pulso", {})).corpo.v;
+  assert.equal((await sim("canal", "?id=cw1&estado=desconectado")).canal.estado, "desconectado");
+  const n1 = (await rpc("nx_notificacoes_listar", {})).corpo;
+  assert.equal(n1.nao_lidas, 3); assert.equal(n1.itens[0].tipo, "canal_caiu"); assert.equal(n1.itens[0].link, "#/config/numeros");
+  assert.notEqual((await rpc("nx_pulso", {})).corpo.v, v0, "o pulso muda quando o número cai");
+  assert.equal((await rpc("nx_inicio", {})).corpo.canais.find(c => c.id === "cw1").estado, "desconectado");
+  const cwCaido = (await rpc("nx_cv_base", {})).corpo.canais.find(c => c.id === "cw1");
+  assert.equal(cwCaido.codewords.conectado, false, "a tela de Números vê o aparelho caído"); assert.equal(cwCaido.estado, "desconectado");
+  assert.deepEqual(Object.keys(cwCaido.codewords.contadores).sort(), ["desde", "eco", "grupo", "http_413", "http_422", "lid", "payload_desconhecido"], "contadores por canal (nx_canal_json da 20261008b)");
+  for (const k of ["aviso_em", "conferido_em", "inscricao", "forma_desconhecida"]) assert.ok(k in cwCaido.codewords, k);
+  assert.deepEqual(Object.keys(cwCaido.codewords.sync).sort(), ["em", "erro", "falhas"]);
+  assert.equal((await rpc("nx_canal_historico_listar", { p_canal: "cw1" })).corpo[0].estado, "desconectado");
+  // «Reconferir agora» (nx-codewords estado) vê o aparelho caído e devolve o canal como nx_codewords_situacao (sem o webhook)
+  const rec = (await fnx("nx-codewords", { acao: "estado", canal: "cw1" })).corpo;
+  assert.equal(rec.conectado, false); assert.equal(rec.inscrito_certo, false); assert.equal(rec.canal.estado, "desconectado");
+  assert.ok(rec.canal.codewords.contadores && !("webhook" in rec.canal));
+  await sim("canal", "?id=cw1&estado=conectado");
+  assert.equal((await fnx("nx-codewords", { acao: "estado", canal: "cw1" })).corpo.conectado, true);
+  assert.equal((await rpc("nx_notificacoes_listar", {})).corpo.itens[0].tipo, "canal_voltou");
+  assert.equal((await rpc("nx_notificacoes_marcar", { p_ids: null })).corpo.nao_lidas, 0);
+  assert.equal((await rpc("nx_pulso", {})).corpo.notif, 0);
+  // execuções: espalhadas por 14 dias; a série por dia nasce da MESMA lista
+  const ex = (await rpc("nx_automacao_execucoes", { p_id: "auto-followup", p_limite: 200 })).corpo;
+  const dias = new Set(ex.map(x => x.criado_em.slice(0, 10)));
+  assert.ok(dias.size >= 8, `execuções em vários dias (${dias.size})`);
+  assert.ok(ex.some(x => x.estado === "erro") && ex.some(x => x.estado === "esperando") && ex.some(x => x.estado === "cancelada"));
+  const serie = (await rpc("nx_automacao_execucoes_dia", { p_automacao: "auto-followup", p_dias: 14 })).corpo;
+  assert.equal(serie.length, 14); assert.deepEqual(Object.keys(serie[0]), ["dia", "ok", "erro"]);
+  assert.ok(serie[0].dia < serie[13].dia, "mais antigo primeiro");
+  assert.equal(serie.reduce((s, d) => s + d.ok + d.erro, 0), ex.length, "a série soma a lista");
+  assert.equal(serie.reduce((s, d) => s + d.erro, 0), ex.filter(x => !x.ok).length);
+  const uso = (await rpc("nx_ia_uso_dia", { p_dias: 14 })).corpo;
+  assert.equal(uso.length, 14); assert.deepEqual(Object.keys(uso[0]), ["dia", "chamadas", "tokens_in", "tokens_out", "custo_usd"]);
+  assert.ok(uso.every(u => u.custo_usd >= 0 && Number.isInteger(u.chamadas)));
+  // contatos por empresa e por origem, com os campos da RPC real
+  const porEmpresa = (await rpc("nx_contatos_listar", { p_filtro: { empresa_id: 71 } })).corpo;
+  assert.deepEqual(porEmpresa.itens.map(c => c.id), [501, 504]); assert.equal(porEmpresa.itens[0].empresa.nome, "Convênio Metalúrgica Vale");
+  assert.ok("ultimo_contato_em" in porEmpresa.itens[0] && "negocios_abertos" in porEmpresa.itens[0] && "tem_mais" in porEmpresa);
+  assert.ok("total_aprox" in porEmpresa && !("paginas" in porEmpresa), "resposta com os campos da RPC real (total_aprox, tem_mais; sem «paginas»)");
+  assert.deepEqual((await rpc("nx_contatos_listar", { p_filtro: { origem: ["indicacao"] } })).corpo.itens.map(c => c.id), [504], "origem é LISTA, como em nx_crm_filtro_contatos");
+  assert.equal((await rpc("nx_contatos_listar", { p_filtro: { origem: "indicacao" } })).corpo.total, 4, "string solta NÃO filtra (a RPC real só lê array)");
+  assert.deepEqual((await rpc("nx_contatos_listar", { p_filtro: {}, p_ordem: "nome" })).corpo.itens.map(c => c.nome), ["Bianca Ferreira", "Lucas Oliveira", "Mariana Costa", "Rafael Mendes"]);
+  assert.deepEqual((await rpc("nx_contatos_listar", { p_filtro: { tem_negocio_aberto: false } })).corpo.itens.map(c => c.id), [504]);
+  assert.deepEqual((await rpc("nx_contatos_listar", { p_filtro: { dono: "sem" } })).corpo.itens.map(c => c.id), [504]);
+  assert.deepEqual((await rpc("nx_contatos_listar", { p_filtro: { dono: "eu" } })).corpo.itens.map(c => c.id).sort(), [501, 503]);
+  assert.equal((await rpc("nx_contatos_listar", { p_filtro: [] })).corpo.message, "dados_invalidos");
+  // nota interna com p_req: Enter repetido não cria duas
+  const antes = (await estado()).mensagens.find(c => c.id === 903).total;
+  const req = "44444444-4444-4444-8444-444444444444";
+  const nota1 = (await rpc("nx_cv_nota", { p_conversa: 903, p_texto: "Nota interna", p_req: req })).corpo;
+  const nota2 = (await rpc("nx_cv_nota", { p_conversa: 903, p_texto: "Nota interna", p_req: req })).corpo;
+  assert.equal(nota1.id, nota2.id); assert.equal(nota1.tipo, "nota");
+  assert.equal((await estado()).mensagens.find(c => c.id === 903).total, antes + 1);
+  assert.equal((await rpc("nx_cv_nota", { p_conversa: 903, p_texto: "  " })).corpo.message, "dados_invalidos");
+  // IA: pausar/devolver devolvem o estado completo (nx_cv_ia_json) e só em canal CodeWords
+  const e0 = (await rpc("nx_cv_ia_estado", { p_conversa: 901 })).corpo;
+  assert.equal(e0.pausada, false); assert.equal(e0.respondendo, true);
+  assert.deepEqual(Object.keys(e0).sort(), ["conversa_id", "disponivel", "ia_ligada", "limite_10min", "pausada", "pausada_ate", "pausada_por", "pausada_por_nome", "respondendo", "respostas_10min", "so_manual", "volta_horas"], "EXATAMENTE os campos de nx_cv_ia_json");
+  const pz = (await rpc("nx_cv_ia_pausar", { p_conversa: 901, p_horas: null })).corpo;
+  assert.equal(pz.pausada, true); assert.equal(pz.respondendo, false); assert.equal(pz.pausada_por, "manual"); assert.equal(pz.pausada_por_nome, "Dra. Helena"); assert.equal(pz.ia_ligada, true); assert.equal(pz.disponivel, true);
+  assert.ok(pz.pausada_ate && !pz.so_manual, "sem p_horas: volta no prazo do número");
+  assert.deepEqual(Object.keys(pz).sort(), Object.keys(e0).sort(), "mesmo formato do nx_cv_ia_estado");
+  const soManual = (await rpc("nx_cv_ia_pausar", { p_conversa: 901, p_horas: 0 })).corpo;
+  assert.equal(soManual.so_manual, true); assert.equal(soManual.pausada_ate, null);
+  assert.equal((await rpc("nx_cv_ia_pausar", { p_conversa: 901, p_horas: 200 })).corpo.hint, "horas");
+  assert.equal((await rpc("nx_cv_ia_devolver", { p_conversa: 901 })).corpo.pausada, false);
+  assert.equal((await rpc("nx_cv_ia_estado", { p_conversa: 903 })).corpo.pausada_por_nome, "Ana Paula", "a 903 nasce pausada pela colega");
+  assert.equal((await rpc("nx_cv_ia_pausar", { p_conversa: 902 })).corpo.message, "ia_indisponivel", "número Meta não tem IA");
+  // Admin → Clientes e Config → Plano no formato do banco
+  const adm = (await rpc("nx_clientes_admin", { p_filtro: {} })).corpo;
+  assert.equal(adm.length, 1);
+  for (const k of ["org", "comercial", "ativo", "uso", "limites", "canais", "criado_em"]) assert.ok(k in adm[0], k);
+  assert.deepEqual(Object.keys(adm[0].uso).sort(), ["automacoes", "canais", "contatos", "funis", "ia_mes", "usuarios"]);
+  assert.deepEqual(adm[0].canais.map(c => c.estado), ["conectado", "conectado"]);
+  assert.deepEqual((await rpc("nx_clientes_admin", { p_filtro: { busca: "oficina" } })).corpo, []);
+  assert.equal((await rpc("nx_clientes_admin", { p_filtro: { id: adm[0].id } })).corpo.length, 1);
+  const plano = (await rpc("nx_uso_plano", {})).corpo;
+  assert.deepEqual(Object.keys(plano).sort(), ["limites", "modulos", "org", "plano", "status", "storage_mb", "teste_ate", "uso"]);
+  assert.equal(plano.plano.nome, "Profissional"); assert.ok(plano.limites.contatos > plano.uso.contatos);
+  // nx-ciclo {cliente, dias:1} («Testar conexão»): formato de tratarCiclo; a falha programada traz a explicação de explicarErroIntegracao
+  const ok = (await fnx("nx-ciclo", { cliente: adm[0].id, dias: 1 })).corpo;
+  assert.equal(ok.ok, true); assert.equal(ok.clientes[0].dias, 1); assert.match(ok.clientes[0].sync.meta, /^ok — /);
+  await sim("integracao", "?canal=meta&erro=token");
+  const ruim = (await fnx("nx-ciclo", { cliente: adm[0].id, dias: 1 })).corpo;
+  assert.equal(ruim.ok, false); assert.match(ruim.clientes[0].sync.meta, /^erro — /);
+  assert.equal(ruim.clientes[0].falhas[0].canal, "meta"); assert.equal(ruim.clientes[0].falhas[0].passageiro, false); assert.ok(ruim.clientes[0].falhas[0].acao);
+  await sim("integracao");
+  assert.equal((await fnx("nx-ciclo", { cliente: adm[0].id, dias: 1 })).corpo.ok, true);
+  // falha programada com hint (login bloqueado por tentativas, contrato 10)
+  await sim("falha", "?rpc=nx_entrar&status=400&codigo=muitas_tentativas&hint=12");
+  const bloq = await rpc("nx_entrar", { p_email: "a@b.c", p_senha: "x" });
+  assert.equal(bloq.status, 400); assert.deepEqual(bloq.corpo, { code: "P0001", message: "muitas_tentativas", hint: "12", details: null });
+  const entrou = (await rpc("nx_entrar", { p_email: "a@b.c", p_senha: "x" })).corpo;
+  assert.deepEqual(Object.keys(entrou).sort(), ["nome", "papel", "token"], "nx_entrar devolve {token, nome, papel} como a RPC real");
 }));

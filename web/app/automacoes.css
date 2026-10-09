@@ -735,6 +735,36 @@ html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h
   .au-gd-pilha { height: 72px; }
 }
 @media (max-width: 420px) { .au-resumo { gap: .5rem; } .au-kpi-aj { display: none; } }
+/* ================================================================ plano 100 (frente G) */
+/* esqueleto da lista: KPIs + cartões, no mesmo ritmo da tela que vem */
+.au-esq { display: flex; flex-direction: column; gap: var(--esp-3); margin-top: var(--esp-5); }
+
+/* G3: o que a IA decidiu numa execução (etapa, nota, resumo, ou por que não rodou) */
+.au-ex-ia {
+  display: flex; align-items: flex-start; gap: var(--esp-2); margin-top: var(--esp-2); padding: var(--esp-2) var(--esp-3);
+  border-radius: var(--r-p); background: var(--c-prim-suave); border: 1px solid var(--c-borda); min-width: 0;
+}
+.au-ex-ia-pulado { background: var(--c-aten-suave); }
+.au-ex-ia-erro { background: var(--c-ruim-suave); }
+.au-ex-ia-pedida { background: var(--c-info-suave); }
+.au-ex-ia .pilula { flex: none; }
+.au-ex-ia-txt { display: flex; flex-direction: column; gap: var(--esp-1); min-width: 0; }
+.au-ex-ia-frase { display: flex; align-items: baseline; gap: var(--esp-2); font-size: var(--fs-14); font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.au-ex-ia-nota { flex: none; font-size: var(--fs-17); font-weight: 500; color: var(--c-prim-luz); font-variant-numeric: tabular-nums; }
+.au-ex-ia-motivo { font-family: var(--f-narr); font-style: italic; font-size: var(--fs-13); color: var(--c-texto-2); line-height: 1.45; overflow-wrap: anywhere; }
+
+/* G4: dúvidas da IA como perguntas respondíveis; montagem reprovada */
+.au-ia-reprovada { margin: 0; }
+.au-ia-perg-caixa { display: flex; flex-direction: column; gap: var(--esp-2); padding: var(--esp-3); border-radius: var(--r-p); background: var(--c-tinta); border: 1px solid var(--c-borda); min-width: 0; }
+.au-ia-perg { list-style: none; display: flex; flex-direction: column; gap: var(--esp-3); padding: 0; margin: 0; }
+.au-ia-perg-item { display: flex; flex-direction: column; gap: var(--esp-2); min-width: 0; }
+.au-ia-perg-txt { display: flex; gap: var(--esp-2); align-items: flex-start; font-size: var(--fs-13); font-weight: 600; color: var(--c-texto); line-height: 1.45; overflow-wrap: anywhere; }
+.au-ia-perg-txt .ic { flex: none; width: 15px; height: 15px; margin-top: .15em; color: var(--c-aten); }
+.au-ia-perg-chips .au-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.au-ia-resp { width: 100%; min-width: 0; min-height: 44px; }
+.au-ia-perg-rod { justify-content: flex-start; }
+.au-ia-perg-nota:empty { display: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .au-item, .au-ex, .au-dg-anim .au-dg-no, .au-gd-anim .au-gd-pilha, .au-foco-brilho { animation: none !important; }
   .au-ponto-on::after { animation: none; display: none; }

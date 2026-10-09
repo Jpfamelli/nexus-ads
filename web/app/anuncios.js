@@ -25,7 +25,7 @@ let N = null, L = null, G = null;    // nucleo.js, rel-logica.js, graficos.js
 const cache = new Map();             // clienteId → {dados, M, em}
 const S = { dias: 30, plat: "", ordem: { chave: "gasto", dir: -1 }, rel: null, rank: null,
   buscaCamp: "", resultadoCamp: "todos", comparacaoCamp: [], filtroRadar: "todos" };
-let graficos = [], tPilula = 0, montagem = 0;
+let graficos = [], tPilula = 0, montagem = 0, soltarAparelho = null;
 
 const centavos = n => Math.round((Number(n) || 0) * 100);
 const nomeNormalizado = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
@@ -470,7 +470,7 @@ const eGestor = ctx => ctx.papel === "gestor" || ctx.papel === "super";
 
 function soltarGraficos() { for (const g of graficos) { try { g.destruir(); } catch { /* já foi */ } } graficos = []; }
 
-export function desmontar() { soltarGraficos(); clearInterval(tPilula); tPilula = 0; montagem++; }
+export function desmontar() { soltarGraficos(); clearInterval(tPilula); tPilula = 0; montagem++; if (soltarAparelho) { soltarAparelho(); soltarAparelho = null; } }
 
 export async function montar(ctx) {
   const minha = ++montagem;
@@ -545,13 +545,16 @@ export async function montar(ctx) {
     const id = ctx.cliente.id;
     let item = cache.get(id);
     if (forcar || !item || Date.now() - item.em > VALIDADE_MS) {
-      if (!item) { ui.limpar(corpo); corpo.append(ui.esqueleto(aba === "campanhas" ? "tabela" : aba ? "lista" : "cartoes", aba ? 6 : 4)); }
+      // F13: o esqueleto tem a forma da aba (KPIs + gráfico na Visão geral; tabela nas Campanhas; lista no Radar/Relatórios)
+      if (!item) { ui.limpar(corpo); corpo.append(aba === "campanhas" ? ui.esqueleto("tabela", 6) : aba ? ui.esqueleto("lista", 6) : h("div", { class: "ads-sk" }, ui.esqueleto("kpi", { n: 4 }), ui.esqueleto("grafico"))); }
       corpo.setAttribute("aria-busy", "true");
       btnAtualizar.disabled = true;
       try {
         const dados = await ctx.api.rpcC("nx_dados", { p_dias: DIAS_JANELA }) || {};
+        // a vertical vem do nx_dados (20261008c); sem ela, a da sessão — escolhe o vocabulário das prévias do WhatsApp
+        const cli = dados.cliente || { nome: ctx.cliente.nome, cfg: {} };
         const M = N.montar(N.datasetDeLinhas({ metricas: dados.metricas || [], leads: dados.leads || [],
-          cliente: dados.cliente || { nome: ctx.cliente.nome, cfg: {} }, hoje: dados.hoje || N.hojeSP(), dias: DIAS_JANELA }));
+          cliente: { ...cli, vertical: cli.vertical || ctx.cliente.vertical }, hoje: dados.hoje || N.hojeSP(), dias: DIAS_JANELA }));
         item = { dados, M, em: Date.now() };
         cache.set(id, item);
         if (forcar) ui.toast("Números atualizados.", { tipo: "ok", ms: 2500 });
@@ -578,7 +581,7 @@ export async function montar(ctx) {
       pilula.hidden = e.nivel === "nenhuma";
       pilula.className = `ads-pilula ads-p-${e.nivel}`;
       pilula.textContent = L.textoPilula(e);
-      pilula.title = e.canais.map(c => `${L.nomePlat(c.canal)}: ${c.sync ? `lida ${L.quandoSP(c.sync)}` : "ainda não leu"}`).join(" · ");
+      pilula.title = e.canais.map(c => `${L.nomePlat(c.canal)}: ${c.sync ? `lida ${L.quandoSP(c.sync)}` : "ainda não leu"}${c.estado === "parcial" ? ` · ${c.status.replace(/^parcial\s*—\s*/i, "")}` : ""}`).join(" · ");
       faixa.hidden = !e.erros.length;
       ui.limpar(faixa);
       if (e.erros.length) {
@@ -652,8 +655,8 @@ export async function montar(ctx) {
 
   function vazioAds() {
     return eGestor(ctx)
-      ? ui.vazio({ titulo: "Nenhum número de anúncio ainda", texto: "Conecte o Meta/Google em Configurações → Anúncios.", acao: { rotulo: "Abrir Ajustes de anúncios", fn: () => ctx.navegar("#/config/anuncios") } })
-      : ui.vazio({ titulo: "Nenhum número de anúncio ainda", texto: "Os números aparecem aqui assim que os anúncios começarem a rodar." });
+      ? ui.vazio({ tema: "ads", titulo: "Nenhum número de anúncio ainda", texto: "Conecte o Meta/Google em Configurações → Anúncios.", acao: { rotulo: "Abrir Ajustes de anúncios", fn: () => ctx.navegar("#/config/anuncios") } })
+      : ui.vazio({ tema: "ads", titulo: "Nenhum número de anúncio ainda", texto: "Os números aparecem aqui assim que os anúncios começarem a rodar." });
   }
 
   const num = (valor, fmt, cls = "") => {
@@ -691,15 +694,25 @@ export async function montar(ctx) {
     const frase = h("p", { class: "ads-frase" }, "No CRM, com origem atribuída a anúncios, registramos ", num(c.conversas, N.int), ` ${c.conversas === 1 ? "conversa" : "conversas"}, `,
       num(c.agendadas, N.int), ` ${c.agendadas === 1 ? "agendamento" : "agendamentos"} e `, num(c.fecharam, N.int),
       ` ${c.fecharam === 1 ? `novo ${umContato}` : `novos ${contatos}`}.`);
+    // F1 (decisão 5): «Retorno total … (anúncios + gestão)» só com fee configurado — e então a nota «inclui R$ X de gestão» aparece
+    // para todos; sem fee é «Retorno sobre anúncios». Receita estimada pelo ticket configurado leva «estimativa» escrito.
+    const rot = L.rotulosRetorno(P, N.brl0);
+    const est = P.estimada;
     const conta = h("div", { class: "ads-conta" },
-      h("p", { class: "rel-olho" }, S.plat ? `Retorno sobre ${L.nomePlat(S.plat)}` : "Retorno total"),
+      h("p", { class: "rel-olho" }, rot.olho),
       Number.isFinite(P.retorno)
-        ? h("p", { class: "ads-retorno" }, `Cada R$ 1 ${S.plat ? "em anúncio" : "investido"} virou `, num(P.retorno, N.brl, "ads-retorno-n"))
+        ? h("p", { class: "ads-retorno" }, `Cada R$ 1 ${rot.frase} virou `, num(P.retorno, N.brl, "ads-retorno-n"), est ? h("span", { class: "ads-est" }, " estimado") : null)
         : h("p", { class: "ads-retorno" }, "Sem investimento no período"),
-      h("p", { class: "rel-nota" }, S.plat ? "receita ÷ investimento em anúncios" : "receita ÷ (anúncios + gestão)"),
-      h("p", { class: "ads-receita" }, num(c.receita, N.brl0), h("span", {}, " em receita fechada")));
+      h("p", { class: "rel-nota" }, rot.nota),
+      rot.gestao ? h("p", { class: "rel-nota ads-gestao" }, rot.gestao) : null,
+      h("p", { class: "ads-receita" }, num(c.receita, N.brl0), h("span", {}, est ? " em receita fechada (inclui estimativa)" : " em receita fechada")),
+      c.semValor > 0 ? h("p", { class: "rel-nota" }, `${c.semValor === 1 ? "1 fechamento" : `${N.int(c.semValor)} fechamentos`} sem valor informado (fora da conta)`) : null);
+    const balde = L.semCampanhaTot(M, P.de, P.ate, { plat: S.plat });
+    const notaBalde = balde.conversas > 0 || balde.agendadas > 0 || balde.fecharam > 0
+      ? h("p", { class: "rel-nota ads-balde" }, `Inclui ${N.int(balde.conversas)} ${balde.conversas === 1 ? "conversa" : "conversas"} de anúncio sem campanha identificada (a métrica ainda não chegou ou o negócio foi marcado como anúncio à mão).`)
+      : null;
     corpo.append(h("div", { class: "ads-heroi rel-cartao rel-entra" },
-      h("div", { class: "ads-heroi-t" }, h("p", { class: "rel-olho" }, periodoTexto), frase), conta));
+      h("div", { class: "ads-heroi-t" }, h("p", { class: "rel-olho" }, periodoTexto), frase, notaBalde), conta));
 
     // trilha do funil: conversas → agendaram → compareceram → fecharam
     const passos = [
@@ -716,33 +729,29 @@ export async function montar(ctx) {
 
     // régua de 4 KPIs
     const meta = M.CFG.cpaAlvo, dif = Number.isFinite(t.cpa) ? Math.abs(t.cpa - meta) / meta * 100 : null;
-    const kpis = [
-      { l: "Investido em anúncios", v: t.gasto, a: ta.gasto, f: N.brl0, s: "neutro", extra: Number.isFinite(P.fee) && P.fee > 0 && eGestor(ctx) ? `+ ${N.brl0(P.fee)} de gestão no período` : "" },
-      { l: "Custo por conversão da plataforma", v: t.cpa, a: ta.cpa, f: N.brl, s: "baixo", medidor: true,
-        extra: !Number.isFinite(t.cpa) ? `meta ${N.brl(meta)}` : `meta ${N.brl(meta)} · ${N.pc(dif, 0)} ${t.cpa <= meta ? "abaixo" : "acima"}` },
-      { l: "Conversões registradas pela plataforma", v: t.conversoes, a: ta.conversoes, f: N.int, s: "cima", extra: "Meta/Google; denominador do custo por conversão" },
-      { l: "Receita fechada", v: c.receita, a: ca.receita, f: N.brl0, s: "cima",
-        extra: eGestor(ctx) && Number.isFinite(P.roas) ? `${N.dec(P.roas, 1)}x o investido em anúncios` : "valor informado nos negócios ganhos do CRM" },
-    ];
+    // F4: o Google conta conversões (às vezes 1,5); só Meta = conversas no WhatsApp
+    // (revisão: por GASTO ou conversão — Google que gastou sem registrar conversão também mistura o custo e não é «(Meta)»)
+    const temG = !S.plat ? M.linhasDe(P.de, P.ate, { plat: "google" }).some(l => (+l.gasto || 0) > 0 || (+l.conversoes || 0) > 0) : S.plat === "google";
+    const fmtConv = v => (Number.isInteger(v) ? N.int(v) : N.dec(v, 1));
+    const kpis = L.kpisAnuncios(P, { meta, dif, temGoogle: temG, gestor: eGestor(ctx), brl0: N.brl0, brl: N.brl, dec: N.dec, pc: N.pc, int: N.int });
     // item 49 (Ads): cada KPI com a sparkline dos dias do período (o CPA não tem série diária honesta: fica sem)
     const tend = L.serieTendencia(M, { dias: S.dias, plat: S.plat });
     const sparkDe = campo => (campo ? tend.map(d => d[campo]) : []);
-    kpis[0].spark = sparkDe("gasto"); kpis[2].spark = sparkDe("convAds"); kpis[3].spark = sparkDe("receita");
-    const regua = h("div", { class: "rel-kpis rel-kpis-4" });
+    // plano 100 (A12/F1): os 4 cartões são ui.kpi — a receita estimada pelo ticket configurado sai com estimativa:true (selo «estimado», «≈»)
+    const regua = h("div", { class: "rel-kpis rel-kpis-4 ads-kpis" });
     kpis.forEach((k, n) => {
-      const cel = h("div", { class: "rel-kpi rel-cartao rel-entra", style: `--i:${n + 2}` },
-        h("span", { class: "rel-kpi-l" }, k.l),
-        Number.isFinite(k.v) ? num(k.v, k.f, "rel-kpi-v") : h("b", { class: "rel-num rel-kpi-v" }, "—"),
-        h("span", { class: "rel-kpi-linha" }, chip(k.v, k.a, k.s), h("span", { class: "rel-nota" }, `vs. ${S.dias} dias antes`)));
+      const v = L.variacao(k.v, k.a);
+      const cel = ui.kpi({ rotulo: k.l, valor: Number.isFinite(k.v) ? k.v : null, formato: k.f === "conv" ? fmtConv : k.f, serie: k.serie ? sparkDe(k.serie) : null,
+        variacao: v == null ? null : { valor: v / 100, invertido: k.s === "baixo", sr: `${v >= 0 ? "subiu" : "caiu"} ${N.pc(Math.abs(v), 0)} em relação aos ${S.dias} dias antes` },
+        ajuda: k.ajuda, estimativa: !!k.estimativa });
+      cel.classList.add("rel-entra", ...(k.s === "neutro" ? ["ads-kpi-neutro"] : []));
+      cel.style.setProperty("--i", String(n + 2));
+      cel.dataset.kpi = k.id;
       if (k.medidor) {
         const w = Number.isFinite(t.cpa) ? Math.min(t.cpa / (meta * 2), 1) * 100 : 0;
         const med = h("span", { class: `rel-medidor rel-m-${L.nivelCpa(t.cpa, meta)}`, "aria-hidden": "true" }, h("i"), h("b", { title: "meta" }));
         med.style.setProperty("--w", `${w.toFixed(1)}%`);
         cel.append(med);
-      }
-      if (k.spark && k.spark.length > 1 && k.spark.some(v => v > 0)) {
-        const sp = h("span", { class: "rel-kpi-spark", "aria-hidden": "true" });
-        if (desenharSparkline({ G, L, alvo: sp, valores: k.spark, rotulo: `${k.l}: dia a dia` })) cel.append(sp);
       }
       if (k.extra) cel.append(h("span", { class: "rel-kpi-extra" }, k.extra));
       regua.append(cel);
@@ -807,7 +816,7 @@ export async function montar(ctx) {
         const maxG = Math.max(1, ...pl.map(x => x.t.gasto));
         // item 48: rosca da divisão do investimento (ordem fixa Meta → Google: as cores das fatias casam com as marcas)
         const alvoD = h("div", { class: "ads-donut-plat" });
-        const fatias = ["meta", "google"].map(p => { const x = pl.find(y => y.p === p); return { rotulo: L.nomePlat(p), valor: x ? x.t.gasto : 0, extra: x ? `${N.int(x.t.conversoes)} conversões · CPA ${N.brl(x.t.cpa)}` : "sem investimento" }; });
+        const fatias = ["meta", "google"].map(p => { const x = pl.find(y => y.p === p); return { rotulo: L.nomePlat(p), valor: x ? x.t.gasto : 0, extra: x ? L.textoConvPlat(p, x.t, { int: N.int, dec: N.dec, brl: N.brl }) : "sem investimento" }; });
         const totalD = fatias.reduce((s, f) => s + f.valor, 0);
         const donut = typeof G.donut === "function" ? G.donut : G.rosca;
         if (totalD > 0) graficos.push(donut(alvoD, { resumo: `Divisão do investimento: ${fatias.map(f => `${f.rotulo} ${N.brl0(f.valor)}`).join(", ")}`, fatias, fmt: N.brl0,
@@ -821,7 +830,7 @@ export async function montar(ctx) {
             return h("li", {},
               h("span", { class: "ads-plat-nome" }, h("i", { class: `g-marca g-${x.p}` }), L.nomePlat(x.p)),
               h("span", { class: "ads-plat-trilho" }, barra),
-              h("span", { class: "ads-plat-num" }, `${N.brl0(x.t.gasto)} · ${N.int(x.t.conversoes)} conversões da plataforma · CPA ${N.brl(x.t.cpa)} · CRM: ${N.int(x.c.conversas)} conversas registradas, ${N.int(x.c.agendadas)} agendamentos, ${N.int(x.c.fecharam)} fechamentos`));
+              h("span", { class: "ads-plat-num" }, `${N.brl0(x.t.gasto)} · ${L.textoConvPlat(x.p, x.t, { int: N.int, dec: N.dec, brl: N.brl })} · CRM: ${N.int(x.c.conversas)} conversas registradas, ${N.int(x.c.agendadas)} agendamentos, ${N.int(x.c.fecharam)} fechamentos`));
           }))));
       }
     }
@@ -855,13 +864,16 @@ export async function montar(ctx) {
     if (fp.length) cartaoF.append(h("div", { class: "rel-cartao-rodape" }, botaoCsv("funil-plataformas", ["Plataforma", "Investimento", "Conversões do anúncio", "Conversas CRM", "Agendaram", "Fecharam", "Receita"],
       () => fp.map(p => [p.nome, Math.round(p.gasto * 100) / 100, ...p.etapas.map(e => e.v), Math.round(p.receita * 100) / 100]), "Do anúncio à venda, por plataforma")));
 
-    // item 47: calor dia da semana × semana das conversas de anúncio (nx_dados não traz a hora: a leitura é por dia)
+    // F3: calor dia × HORA quando o nx_dados manda hora_conversa (contrato 5); RPC antiga → calor dia × semana (item 47)
+    const ch = L.calorHora(M, { dias: S.dias, plat: S.plat });
+    // 7 × 24 pede a largura toda: funil e calor um embaixo do outro
+    if (ch.disponivel) { corpo.append(cartaoF, cartaoCalorHora(ch, periodoTexto)); return; }
     const cal = L.calorSemanal(M, { dias: S.dias, plat: S.plat, campo: "conversas" });
     const resumoC = cal.melhorDow == null ? "Nenhuma conversa de anúncio no período." : `Conversas de anúncio por dia da semana e semana; ${L.SEMANA[cal.melhorDow]} é o dia mais forte (${N.int(cal.porDow[cal.melhorDow])} no período).`;
     const alvoC = h("div", { class: "rel-grafico" }), rodapeC = h("div", { class: "rel-cartao-rodape" });
     const cartaoC = h("section", { class: "rel-cartao rel-entra ads-cartao-cal", "aria-labelledby": "ads-cal-h" },
       h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ads-cal-h", class: "rel-h2" }, "Em que dias as conversas chegam"),
-        h("p", { class: "rel-nota" }, cal.melhorDow == null ? "Sem conversas atribuídas a anúncios neste período." : `${resumoC} A hora da conversa não vem com os dados de anúncios; por isso a leitura é por dia.`)),
+        h("p", { class: "rel-nota" }, cal.melhorDow == null ? "Sem conversas atribuídas a anúncios neste período." : `${resumoC} O servidor ainda não manda a hora da conversa; por isso a leitura é por dia.`)),
       alvoC, rodapeC);
     if (cal.max > 0) {
       alvoC.append(criarCalorSemanal({ h, calor: cal, dias: L.SEMANA, fmt: v => `${N.int(v)} ${v === 1 ? "conversa" : "conversas"}`, nivel: G.nivelCalor, resumo: resumoC }));
@@ -871,16 +883,37 @@ export async function montar(ctx) {
     corpo.append(h("div", { class: "ads-grade-2" }, cartaoF, cartaoC));
   }
 
+  /** F3: «Quando as conversas de anúncio chegam» — dia da semana × hora (São Paulo), G.calor com rótulo de 1 h no desktop e 3 h no celular. */
+  function cartaoCalorHora(ch, periodoTexto) {
+    const pico = L.picoCalor(ch.matriz), fx = L.faixasCalor(ch.matriz);
+    const resumo = pico ? `Conversas de anúncio por dia e hora; o pico é ${L.SEMANA[pico.dow]} às ${String(pico.hora).padStart(2, "0")}h (${N.int(pico.qtd)} no período).` : "Nenhuma conversa de anúncio com hora no período.";
+    const alvo = h("div", { class: "rel-grafico" }), rodape = h("div", { class: "rel-cartao-rodape" });
+    const sub = pico ? `${periodoTexto}. Pela hora da 1ª mensagem (São Paulo).${ch.semHora ? ` ${N.int(ch.semHora)} sem mensagem registrada ficam de fora.` : ""}` : "Sem conversas atribuídas a anúncios neste período.";
+    const cartao = h("section", { class: "rel-cartao rel-entra ads-cartao-cal", "aria-labelledby": "ads-cal-h" },
+      h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ads-cal-h", class: "rel-h2" }, "Quando as conversas de anúncio chegam"), h("p", { class: "rel-nota" }, sub)),
+      alvo, rodape);
+    if (ch.total > 0) {
+      graficos.push(G.calor(alvo, { matriz: ch.matriz, dias: L.SEMANA, fmt: v => `${N.int(v)} ${v === 1 ? "conversa" : "conversas"}`, resumo }));
+      const forte = fx.forte ? fx.faixas.find(x => x.nome === fx.forte.nome) : null;   // a % mora em fx.faixas (fx.forte é a soma crua)
+      if (forte) alvo.append(h("p", { class: "rel-nota ads-cal-forte" }, `Faixa mais forte: ${forte.nome} (${forte.pct}% das conversas).`));
+      G.alternarTabela(rodape, alvo.querySelector(".g-cal-rolagem") || alvo, { legenda: "Conversas de anúncio por dia da semana e faixa do dia",
+        colunas: ["Dia", "Madrugada (0–5h)", "Manhã (6–11h)", "Tarde (12–17h)", "Noite (18–23h)"],
+        linhas: [1, 2, 3, 4, 5, 6, 0].map(d => [L.SEMANA[d], ...[0, 6, 12, 18].map(i => N.int(ch.matriz[d].slice(i, i + 6).reduce((a, x) => a + x, 0)))]) });
+      rodape.append(botaoCsv("conversas-por-hora", ["Dia", ...Array.from({ length: 24 }, (_, i) => `${i}h`)], () => [1, 2, 3, 4, 5, 6, 0].map(d => [L.SEMANA[d], ...ch.matriz[d]]), "Quando as conversas de anúncio chegam"));
+    } else alvo.append(h("p", { class: "rel-vazio-txt" }, "Quando as primeiras conversas chegarem, o mapa mostra os horários mais fortes."));
+    return cartao;
+  }
+
   /* ---------------- CAMPANHAS ---------------- */
   function abaCampanhas(M) {
     const P = L.numerosPeriodo(M, { dias: S.dias, plat: S.plat });
-    const { linhas, total, outras } = L.linhasCampanhas(M, { dias: S.dias, plat: S.plat });
+    const { linhas, total, outras, semCampanha, pausadas } = L.linhasCampanhas(M, { dias: S.dias, plat: S.plat });
     const COLS = [["nome", "Campanha"], ["gasto", "Investimento Ads"], ["conv", "Conversões Ads"], ["cpa", "CPA Ads"],
       ["ag", "Agendamentos CRM"], ["fe", "Fechamentos CRM"], ["rec", "Receita CRM"], ["roas", "Retorno", "Receita do CRM ÷ investimento em anúncios desta campanha (sem a gestão)."]];
     const cartao = h("div", { class: "rel-cartao rel-entra ads-camp" });
     corpo.append(cartao);
     if (!linhas.length) {
-      cartao.append(ui.vazio({ titulo: "Nenhuma campanha no período", texto: `Nenhuma campanha com investimento nos últimos ${S.dias} dias${S.plat ? ` no ${L.nomePlat(S.plat)}` : ""}.` }));
+      cartao.append(ui.vazio({ tema: "ads", titulo: "Nenhuma campanha no período", texto: `Nenhuma campanha com investimento nos últimos ${S.dias} dias${S.plat ? ` no ${L.nomePlat(S.plat)}` : ""}.` }));
       return;
     }
     const desenharTabela = () => {
@@ -924,13 +957,18 @@ export async function montar(ctx) {
       const T = total.t;
       // negócios de anúncio sem investimento na janela (pausada, sem campanha identificada): contam na Visão geral e ficam fora do Total
       const temOutras = !!outras && (outras.ag > 0 || outras.fe > 0 || outras.rec > 0);
+      const temBalde = !!semCampanha && (semCampanha.agendadas > 0 || semCampanha.fecharam > 0 || semCampanha.receita > 0 || semCampanha.conversas > 0);
+      const temPausadas = !!pausadas && (pausadas.ag > 0 || pausadas.fe > 0 || pausadas.rec > 0);
       const tfoot = h("tfoot", {}, h("tr", {}, h("td", {}, ""), h("th", { scope: "row" }, "Total"),
         td("gasto", N.brl0(T.gasto), "Investimento Ads"), td("conv", N.int(T.conversoes), "Conversões Ads"), td("cpa", N.brl(T.cpa), "CPA Ads"),
         td("ag", N.int(total.ag), "Agendamentos CRM"), td("fe", N.int(total.fe), "Fechamentos CRM"), td("rec", N.brl0(total.rec), "Receita CRM"),
         td("roas", Number.isFinite(total.roas) ? `${N.dec(total.roas, 1)}x` : "—", "Retorno")),
-        temOutras ? h("tr", { class: "ads-camp-outras" }, h("td", {}, ""), h("th", { scope: "row", title: "Negócios de anúncio sem investimento nestes dias (campanha pausada ou sem campanha identificada). Entram na Visão geral." }, "Sem investimento no período"),
+        temOutras && temBalde ? h("tr", { class: "ads-camp-outras ads-camp-balde" }, h("td", {}, ""), h("th", { scope: "row", title: "Negócios com origem de anúncio cuja campanha/anúncio não foi reconhecido (a métrica ainda não chegou, importação sem ids ou utm sem casamento). Entram na Visão geral." }, "Anúncio sem campanha identificada"),
           td("gasto", "—", "Investimento Ads"), td("conv", "—", "Conversões Ads"), td("cpa", "—", "CPA Ads"),
-          td("ag", N.int(outras.ag), "Agendamentos CRM"), td("fe", N.int(outras.fe), "Fechamentos CRM"), td("rec", N.brl0(outras.rec), "Receita CRM"), td("roas", "—", "Retorno")) : null);
+          td("ag", N.int(semCampanha.agendadas), "Agendamentos CRM"), td("fe", N.int(semCampanha.fecharam), "Fechamentos CRM"), td("rec", N.brl0(semCampanha.receita), "Receita CRM"), td("roas", "—", "Retorno")) : null,
+        temOutras && (temPausadas || !temBalde) ? h("tr", { class: "ads-camp-outras" }, h("td", {}, ""), h("th", { scope: "row", title: "Negócios de campanhas sem investimento nestes dias (pausadas). Entram na Visão geral." }, "Sem investimento no período"),
+          td("gasto", "—", "Investimento Ads"), td("conv", "—", "Conversões Ads"), td("cpa", "—", "CPA Ads"),
+          td("ag", N.int(temBalde ? pausadas.ag : outras.ag), "Agendamentos CRM"), td("fe", N.int(temBalde ? pausadas.fe : outras.fe), "Fechamentos CRM"), td("rec", N.brl0(temBalde ? pausadas.rec : outras.rec), "Receita CRM"), td("roas", "—", "Retorno")) : null);
       const periodo = `${M.dataBR(P.de)} a ${M.dataBR(P.ate)}${S.plat ? ` · ${L.nomePlat(S.plat)}` : " · todas as plataformas"}`;
       // filtro e «Limpar» mexem nas MESMAS linhas; o «Total» é das N campanhas do período, então some quando há recorte
       const aplicarVisibilidade = f => {
@@ -1091,9 +1129,32 @@ export async function montar(ctx) {
     corpo.append(h("div", { class: "ads-radar-grade" },
       h("div", { class: "rel-cartao rel-entra" }, h("h2", { class: "rel-h2" }, "Alertas dos últimos 14 dias"), lista),
       h("div", { class: "ads-radar-lado" },
+        cartaoAparelho(),
         h("div", { class: "rel-cartao rel-entra" }, h("h2", { class: "rel-h2" }, "Avisos enviados no WhatsApp"), log),
         h("div", { class: "rel-cartao rel-entra" }, h("h2", { class: "rel-h2" }, "Regras do radar"), regras,
           h("p", { class: "rel-nota" }, eGestor(ctx) ? "Metas e regras são ajustadas em Ajustes de anúncios." : "As metas e as regras são definidas pela equipe de gestão.")))));
+  }
+  /** F14: «Aparelho de WhatsApp» — o que o shell sabe dos números caídos (ctx.canais, contrato A4); repinta quando o pulso muda. */
+  function cartaoAparelho() {
+    if (!ctx.canais || typeof ctx.canais.caidos !== "function") return null;
+    const caixa = h("section", { class: "rel-cartao rel-entra ads-aparelho", "aria-labelledby": "ads-ap-h", "aria-live": "polite" });
+    const pintar = () => {
+      let lista = null;
+      try { lista = ctx.canais.caidos(); } catch { lista = null; }
+      const a = L.aparelhoRadar(lista);
+      ui.limpar(caixa);
+      caixa.hidden = !a;
+      if (!a) return;
+      caixa.className = `rel-cartao rel-entra ads-aparelho ads-aparelho-${a.nivel}`;
+      caixa.append(...[h("p", { class: "rel-olho" }, "Aparelho de WhatsApp"),
+        h("h2", { id: "ads-ap-h", class: "rel-h2" }, h("span", { class: "ads-ap-luz", "aria-hidden": "true" }), a.titulo),
+        ...a.linhas.map(t => h("p", { class: "rel-nota" }, t)),
+        a.nivel === "ruim" && ctx.pode && ctx.pode("admin") ? h("button", { type: "button", class: "rel-btn rel-btn-sec ads-ap-ver", on: { click: () => (typeof ctx.canais.verNumero === "function" ? ctx.canais.verNumero() : ctx.navegar("#/config/numeros")) } }, "Ver número") : null].filter(Boolean));
+    };
+    pintar();
+    if (soltarAparelho) soltarAparelho();
+    soltarAparelho = typeof ctx.canais.assinar === "function" ? ctx.canais.assinar(() => { if (caixa.isConnected) pintar(); }) : null;
+    return caixa;
   }
   /** Marca de gravidade: ícone + rótulo escrito (nunca só cor), na cor --c-sev-*; a barra de 3 px fica no <li> (data-sev). */
   function marcaSev(sev) {

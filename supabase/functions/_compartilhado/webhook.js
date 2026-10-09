@@ -16,10 +16,16 @@ import { enviarTemplate, foraDaJanela } from "./whatsapp.js";
 import { processarCanal } from "./conversas.js";
 import {
   json, agoraDe, soDigitos, iguaisSeguro, limparErro, lerConfig, comPrazo,
-  nomeCurto, tituloRadar, tituloRelatorio, lerCorpoLimitado, soltandoCorpo, CorpoGrande, semNul,
+  nomeCurto, tituloRadar, tituloRelatorio, lerCorpoLimitado, soltandoCorpo, CorpoGrande, semNul, variantesTelefone,
 } from "./comum.js";
 
+// a regra de variantes do telefone mora no comum.js (a mesma do CodeWords); continua exportada daqui
+export { variantesTelefone };
+
 const DIAS_MESMA_CONVERSA = 30;
+// o webhook lê a configuração ANTES de conferir a assinatura (1 SELECT por requisição anônima): só as colunas que usa,
+// nunca «select *» com todos os segredos da plataforma em memória
+const COLUNAS_CONFIG = ["meta_app_secret", "wa_verify_token", "wa_phone_number_id", "wa_access_token", "wa_template", "painel_url"];
 const RESULTADOS_LEAD = new Set(["criado", "atribuido", "existente"]);
 // O recibo pode chegar antes de o nx-ciclo/nx-relatorio gravar o wamid (a Meta avisa em
 // ~1 s; com vários destinos, o primeiro recibo chega enquanto o segundo ainda está saindo).
@@ -50,27 +56,15 @@ export async function assinaturaValida(segredo, bytes, cabecalho) {
   return iguaisSeguro(String(cabecalho).trim().toLowerCase(), esperado);
 }
 
-/** Formas do mesmo celular: com/sem 55 e com/sem o 9 (o WhatsApp às vezes
-    manda números antigos sem o 9, e o cadastro manual costuma vir sem o 55). */
-export function variantesTelefone(tel) {
-  const d = soDigitos(tel);
-  const v = new Set(d ? [d] : []);
-  const nac = d.startsWith("55") && d.length >= 12 ? d.slice(2) : d.length >= 10 && d.length <= 11 ? d : null;
-  if (nac) {
-    const com9 = nac.length === 10 && /[6-9]/.test(nac[2]) ? `${nac.slice(0, 2)}9${nac.slice(2)}` : null;
-    const sem9 = nac.length === 11 && nac[2] === "9" ? `${nac.slice(0, 2)}${nac.slice(3)}` : null;
-    for (const n of [nac, com9, sem9]) if (n) { v.add(n); v.add(`55${n}`); }
-  }
-  return [...v];
-}
-
 /* ------------------------------------------------------------
    Número da clínica → leads
    ------------------------------------------------------------ */
 
+/** Atribuição do referral. Post/página (source_type ≠ 'ad') NÃO vira anuncio_ext: o id do post na coluna de anúncio
+    bloqueava para sempre a origem real (ja_tem_anuncio) — fica só no referral da mensagem. */
 async function atribuicao(db, clienteId, ref) {
   const ad = ref.source_type === "ad";
-  const anuncio = ref.source_id != null && ref.source_id !== "" ? String(ref.source_id) : null;
+  const anuncio = ad && ref.source_id != null && ref.source_id !== "" ? String(ref.source_id) : null;
   let campanha = null;
   if (ad && anuncio) {
     const [m] = await db.select("nx_metricas_dia", {
@@ -254,10 +248,14 @@ async function processarStatuses(db, cfg, lista, cont, ctx) {
 /** Canal pelo phone_number_id de um evento JÁ autenticado com o segredo global (cache por requisição). */
 async function canalDoPid(db, pid, cache, ctx) {
   if (!cache.has(pid)) {
-    let c = null;
-    try { c = await db.rpc("nx_wa_canal", { p_phone_number_id: String(pid) }); }
-    catch (e) { ctx.falhou(e); }
-    cache.set(pid, c && c.canal_id ? c : null);
+    try {
+      const c = await db.rpc("nx_wa_canal", { p_phone_number_id: String(pid) });
+      cache.set(pid, c && c.canal_id ? c : null);
+    } catch (e) {
+      // banco falhou: NÃO cai no caminho antigo (criaria lead sem conversa) — o retry da Meta (503) refaz este evento
+      ctx.falhou(e);
+      cache.set(pid, { erro: true });
+    }
   }
   return cache.get(pid);
 }
@@ -306,6 +304,7 @@ async function processar(db, cfg, corpo, ctx) {
         continue;
       }
       const canal = await canalDoPid(db, pid, canais, ctx);
+      if (canal?.erro) continue;   // sem saber se há canal, nada é gravado por este evento
       if (canal) {
         try { await processarCanal(db, canal, v, ctx, cont); }
         catch (e) { ctx.falhou(e); }
@@ -362,7 +361,7 @@ async function tratarWebhook(req, env, deps) {
       const url = await canalDaUrl(db, u);
       let esperado;
       if (url.tem) esperado = url.canal?.verify_token;
-      else esperado = (await lerConfig(db))?.wa_verify_token;
+      else esperado = (await lerConfig(db, COLUNAS_CONFIG))?.wa_verify_token;
       const ok = u.searchParams.get("hub.mode") === "subscribe" && esperado && iguaisSeguro(u.searchParams.get("hub.verify_token"), esperado);
       return ok ? texto(u.searchParams.get("hub.challenge") ?? "", 200) : texto("proibido", 403);
     }
@@ -375,7 +374,7 @@ async function tratarWebhook(req, env, deps) {
     catch (e) { return e instanceof CorpoGrande ? texto("corpo grande demais", 413) : texto("corpo inválido", 400); }
     const url = await canalDaUrl(db, u);
     if (url.tem && !url.canal) return texto("canal desconhecido", 401);
-    const cfg = await lerConfig(db);
+    const cfg = await lerConfig(db, COLUNAS_CONFIG);
     const segredo = (url.canal && url.canal.app_secret) || cfg?.meta_app_secret;
     if (!cfg || !segredo || !(await assinaturaValida(segredo, cru, req.headers.get("x-hub-signature-256")))) {
       return texto("assinatura inválida", 401);

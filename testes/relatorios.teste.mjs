@@ -224,7 +224,15 @@ await teste("cliente sem anúncios: nada quebra e nada é inventado", () => {
   assert.ok(L.semAnuncios(M0));
   const P = L.numerosPeriodo(M0, { dias: 30 });
   assert.equal(P.c.conversas + P.c.fecharam + P.c.receita + P.t.gasto, 0);
-  assert.equal(P.retorno, 0, "sem gasto mas com gestão: 0 ÷ gestão = 0 (igual ao painel)");
+  // plano 100 (decisão 5): o núcleo deixou de inventar o fee de R$ 997 — sem gasto e sem gestão configurada não há base
+  // para o retorno (null, «Sem investimento no período»); com fee configurado vale a regra antiga: 0 ÷ gestão = 0 (igual ao painel)
+  assert.equal(P.fee, 0, "fee padrão 0");
+  assert.equal(P.gestao, false);
+  assert.equal(P.retorno, null, "sem gasto e sem gestão: sem base, nada inventado");
+  const Mfee = mDeDados({ hoje: HOJE, cliente: { nome: "Nova", cfg: { fee: 600 } }, metricas: [], leads: [] });
+  const Pf = L.numerosPeriodo(Mfee, { dias: 30 });
+  assert.equal(Pf.retorno, 0, "sem gasto mas com gestão configurada: 0 ÷ gestão = 0 (igual ao painel)");
+  assert.equal(Pf.gestao, true);
   assert.equal(L.linhasCampanhas(M0).linhas.length, 0);
   const R = L.montarRadar(M0, {});
   assert.deepEqual([R.ativos, R.episodios.length, R.registro.length], [0, 0, 0]);
@@ -232,10 +240,13 @@ await teste("cliente sem anúncios: nada quebra e nada é inventado", () => {
 });
 
 await teste("interface de Ads explica a origem do retorno e distingue relatórios enviados de prévias", () => {
-  const src = ler("web/app/anuncios.js");
-  assert.match(src, /"Retorno total"/);
-  assert.match(src, /receita ÷ \(anúncios \+ gestão\)/);
-  assert.match(src, /valor informado nos negócios ganhos do CRM/);
+  const src = ler("web/app/anuncios.js"), logica = ler("web/app/rel-logica.js");
+  // plano 100 (F1): os rótulos do retorno e dos KPIs moram em rel-logica (rotulosRetorno/kpisAnuncios, testados no plano100-ads)
+  assert.match(src, /L\.rotulosRetorno\(P, N\.brl0\)/);
+  assert.match(src, /L\.kpisAnuncios\(P, /);
+  assert.match(logica, /"Retorno total"/);
+  assert.match(logica, /receita ÷ \(anúncios \+ gestão\)/);
+  assert.match(logica, /valor informado nos negócios ganhos do CRM/);
   assert.match(src, /"Relatórios e prévias"/);
   assert.match(src, /ainda não enviado · prévia/);
 });
@@ -945,11 +956,20 @@ await teste("R119: os filtros do checklist são os declarados nas seções das C
   assert.match(ini, /L\.filtroSecoesOnboarding\(\{ temModulo: ctx\.temModulo, pode: ctx\.pode, configPronta: ctx\.configPronta \}\)/);
 });
 
-await teste("R119: «Sim, chegou» no teste do assistente marca «Mensagem de teste enviada» neste aparelho (a mesma chave do «Já está bom»)", () => {
+await teste("R119: «Sim, chegou» no teste do assistente marca «Mensagem de teste enviada» neste aparelho (a mesma chave do «Já está bom»)", async () => {
   const cw = ler("web/app/cv-config.js"), ini = ler("web/app/inicio.js"), cfg = ler("web/app/config.js");
   const chave = "`nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || \"-\"}`";
-  for (const [nome, src] of [["cv-config", cw], ["inicio", ini], ["config", cfg]]) assert.ok(src.includes(chave), `${nome}: a mesma chave local`);
-  assert.match(cw, /p\.pulados = \[\.\.\.new Set\(\[\.\.\.\(Array\.isArray\(p\.pulados\) \? p\.pulados : \[\]\), "mensagem_teste"\]\)\];\s*localStorage\.setItem\(chave, JSON\.stringify\(p\)\);/, "acrescenta sem apagar o resto (dispensadoAte, outros pulados)");
+  for (const [nome, src] of [["inicio", ini], ["config", cfg]]) assert.ok(src.includes(chave), `${nome}: a mesma chave local`);
+  // plano 100 (frente G): o cv-config passou a marcar por uma função pura (marcarTesteLocal) — o teste agora é de comportamento
+  const CW = await import("../web/app/cv-config.js");
+  const loja = new Map([["nx-onb:c1:u1", JSON.stringify({ dispensadoAte: 99, pulados: ["colega_convidado"] })]]);
+  const arm = { getItem: k => (loja.has(k) ? loja.get(k) : null), setItem: (k, v) => loja.set(k, v) };
+  assert.equal(CW.marcarTesteLocal(arm, "c1", "u1"), true);
+  const p = JSON.parse(loja.get("nx-onb:c1:u1"));
+  assert.deepEqual([p.dispensadoAte, p.pulados], [99, ["colega_convidado", "mensagem_teste"]], "acrescenta sem apagar o resto (dispensadoAte, outros pulados) — na MESMA chave do Início");
+  CW.marcarTesteLocal(arm, "c1", null);
+  assert.ok(loja.has("nx-onb:c1:-"), "sem conta: o mesmo «-» do Início");
+  assert.match(cw, /marcarTesteLocal\(localStorage, ctx\.cliente\.id, ctx\.sessao && ctx\.sessao\.conta && ctx\.sessao\.conta\.id\)/);
   assert.match(cw, /chegou\.addEventListener\("click", \(\) => \{ testeChegou = true; marcarTesteNoChecklist\(\);/);
   assert.ok(L.ONBOARDING_ITENS.some(i => i.id === "mensagem_teste"), "o id marcado existe no checklist");
   // e o Início conta esse item como feito

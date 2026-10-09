@@ -1,0 +1,15 @@
+{
+  "name": "nexus-ads",
+  "private": true,
+  "type": "module",
+  "description": "Nexus Ads + Órbita — front sem build, Edge Functions Deno e testes em Node. Só dependências de desenvolvimento (nada vai para produção).",
+  "scripts": {
+    "test": "node testes/rodar-tudo.mjs",
+    "test:rapido": "node testes/rodar-tudo.mjs --rapido",
+    "smokes": "node scripts/rodar-local.mjs",
+    "dev-falso": "node scripts/dev-falso.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
+  }
+}

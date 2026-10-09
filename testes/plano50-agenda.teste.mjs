@@ -219,8 +219,8 @@ test("41: o arrasto grava pelo mesmo caminho da janela (escreverComReq + p_req) 
   const js = ler("agenda.js");
   assert.equal((js.match(/Lg\.escreverComReq\(api, "nx_agenda_marcar"/g) || []).length, 2, "janela + arrasto");
   assert.ok(/const req = Lg\.novaReq\(\);/.test(js) && /\{ req, aoStatus:/.test(js), "o p_req é fixo durante a confirmação do arrasto (repetir não marca duas vezes)");
-  assert.equal((js.match(/api\.rpcC\("nx_agenda_marcar", \{[^}]*p_encaixe: true \}\)/g) || []).length, 2, "voltarAoHorario + desmarcar: os únicos que marcam de volta");
-  assert.equal((js.match(/await voltarAoHorario\(api,/g) || []).length, 2, "o Desfazer da janela e o do arrasto usam a mesma volta");
+  assert.equal((js.match(/api\.rpcC\("nx_agenda_marcar", \{[^}]*p_encaixe: true \}\)/g) || []).length, 1, "só voltarAoHorario marca de volta como encaixe");
+  assert.equal((js.match(/await voltarAoHorario\(api,/g) || []).length, 3, "o Desfazer da janela, o do arrasto e o de desmarcar usam a mesma volta");
   assert.ok(/ev\.pointerType/.test(js) && /setPointerCapture/.test(js) && /elementFromPoint/.test(js), "arrasto por pointer events com captura");
   assert.ok(/ev\.key === "Escape" && arrasto/.test(js), "Esc cancela o arrasto");
   assert.ok(/ignorarClique = true/.test(js), "o clique que fecha o arrasto não abre o detalhe");
@@ -382,7 +382,8 @@ test("44: o painel na tela — quatro números, lista em ordem com selos, toque 
   vazio.querySelector(".ag-painel-vazio button").click();
   assert.deepEqual(marcados, ["2026-10-06"]);
   assert.equal(A.montarPainelDia({ h, iso: "2026-10-06", consultas: [], pode: false }).querySelector(".ag-painel-vazio button"), null, "quem só lê não vê «Marcar consulta»");
-  assert.doesNotMatch(ler("agenda.js"), /Confirmar presença/, "sem RPC de presença, o painel é só leitura (não promete o botão)");
+  assert.doesNotMatch(ler("agenda.js"), /Confirmar presença/, "sem o parâmetro `presenca` o painel é só leitura (plano 100 · E1 liga «Compareceu / Faltou»)");
+  assert.equal(el.querySelector(".ag-pres"), null, "sem `presenca`, nenhum botão de presença");
 });
 
 /* ============================================================ extras: prévia da semana na configuração; CSS; mobile */
@@ -584,7 +585,9 @@ test("revisão · Desfazer da remarcação por arrasto devolve o horário (encai
 
 test("revisão · «Próxima consulta» sem próxima no período diz o período olhado («nesta semana», «neste dia»), sem prometer além dele", async () => {
   const passada = A.segundaDe(A.diaISO(hojeSPReal(), -21));
-  const quando = async (modo, consultas) => { const T = await montarAgenda({ data: passada, modo, consultas }); try { return T.alvo.querySelector(".agenda-proxima").textContent; } finally { T.sair(); } };
+  // plano 100 · E3: a leitura dos 7 dias seguintes completa o texto (testes/plano100-agenda); aqui ela falha e fica o texto do período
+  const semFora = async (nome, p) => (nome === "nx_agenda_dia" && p.p_data !== passada ? Promise.reject(Object.assign(new Error("rede"), { codigo: "sem_conexao" })) : undefined);
+  const quando = async (modo, consultas) => { const T = await montarAgenda({ data: passada, modo, consultas, rpc: semFora }); try { for (let i = 0; i < 6; i++) await tique(); return T.alvo.querySelector(".agenda-proxima").textContent; } finally { T.sair(); } };
   assert.equal(await quando("semana", [consultaEm(passada, "10:00")]), "Nenhuma consulta por vir nesta semana.");
   assert.equal(await quando("semana", []), "Semana livre — nenhuma consulta marcada.");
   assert.equal(await quando("dia", [consultaEm(passada, "10:00")]), "Nenhuma consulta por vir neste dia.");

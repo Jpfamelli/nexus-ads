@@ -169,7 +169,8 @@ export function criarRede(o = {}) {
    Abertura que não desiste (M15). Não depende de criarRede: serve ao boot, que roda antes da faixa de conexão existir.
    ============================================================ */
 export const ESPERAS_ABERTURA = Object.freeze([2000, 4000, 8000, 16000]);
-const CODIGOS_DE_CONTA = new Set(["sessao_invalida", "conta_pendente", "conta_suspensa", "credenciais_invalidas", "sem_acesso", "teste_expirado"]);
+// cliente_pausado (empresa pausada pela Nexus): repetir não adianta — sem ele o app tentava 12 vezes (~2,5 min) e não oferecia «Sair»
+const CODIGOS_DE_CONTA = new Set(["sessao_invalida", "conta_pendente", "conta_suspensa", "credenciais_invalidas", "sem_acesso", "teste_expirado", "cliente_pausado"]);
 
 /** Erro da CONTA ou da sessão (repetir não adianta; só aqui «Sair» faz sentido). Rede e servidor NÃO são erro de conta. */
 export function erroDeConta(e) { return CODIGOS_DE_CONTA.has(String((e && (e.codigo || e.message)) || "")); }

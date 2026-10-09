@@ -67,6 +67,10 @@ export async function montar(ctx) {
     marcaNovas: null,               // plano 50 · 31: id da 1ª mensagem não lida ao abrir (separador «Mensagens novas»)
     velocidadeAudio: L.velocidadeValida(lerPreferencia("audio-vel", "1")),   // plano 50 · 32: 1× · 1,5× · 2×, lembrada por navegador
     densidade: lerPreferencia("densidade", "confortavel") === "compacta" ? "compacta" : "confortavel",   // plano 50 · 34: linhas da lista
+    // plano 100
+    etiquetasEmVoo: 0, etqFila: Promise.resolve(),   // D20: pedidos de etiqueta em ordem, um por vez
+    notaSemReq: false,                               // D2: banco sem o nx_cv_nota com p_req (S-B13): a nota sai sem ele
+    canaisCaidosShell: null,                         // D18: números caídos que o shell conhece (ctx.canais); null = o shell não oferece
   };
   { const daRota = abaDaRota(ctx.rota); if (daRota) A.aba = daRota; }
   if (!A.podeEscrever && A.aba === "minhas") A.aba = "abertas";
@@ -119,6 +123,25 @@ export async function montar(ctx) {
   const destravar = () => desbloquearAudio();
   document.addEventListener("pointerdown", destravar, { once: true, capture: true });
   A.limpar.push(() => document.removeEventListener("pointerdown", destravar, { capture: true }));
+  // D18: número de WhatsApp caído — o shell (ctx.canais) avisa quando muda; sem ele vale o estado de nx_cv_base.canais
+  if (ctx.canais && typeof ctx.canais.caidos === "function") {
+    try { A.canaisCaidosShell = ctx.canais.caidos() || []; } catch { A.canaisCaidosShell = null; }
+    if (typeof ctx.canais.assinar === "function") {
+      try {
+        const cancelar = ctx.canais.assinar(lista => { if (!A) return; A.canaisCaidosShell = Array.isArray(lista) ? lista : []; A.lista.render(); A.chat.renderCabecalho(); });
+        if (typeof cancelar === "function") A.limpar.push(cancelar);
+      } catch { /* sem a assinatura, a faixa segue o nx_cv_base */ }
+    }
+  }
+  // D3: voltar à aba com a conversa aberta marca como lida o que chegou enquanto ela estava escondida
+  const aoVisivel = () => { if (A && !document.hidden && A.ver) marcarLida(); };
+  document.addEventListener("visibilitychange", aoVisivel);
+  A.limpar.push(() => document.removeEventListener("visibilitychange", aoVisivel));
+  // D10: «Enviar agora» acompanha a conexão (desligado sem internet, com o motivo)
+  const aoRede = () => { if (A && A.ver) A.chat.renderMensagens({ rolar: "manter" }); };
+  window.addEventListener("online", aoRede);
+  window.addEventListener("offline", aoRede);
+  A.limpar.push(() => { window.removeEventListener("online", aoRede); window.removeEventListener("offline", aoRede); });
   A.timers.push(setInterval(() => { if (!document.hidden) { A.lista.render(); A.chat.renderCabecalho(); A.composer.atualizar(); } }, 60000));
   A.timers.push(setInterval(() => { if (Date.now() - (A.baseEm || 0) > 5 * 60000) carregarBase().catch(() => {}); }, 60000));
 
@@ -129,6 +152,11 @@ export async function montar(ctx) {
 export function desmontar() {
   if (!A) return;
   A.destruido = true;
+  // D9: timers do módulo (pulso, nx_cv_ver, mídia, rascunho) não podem rodar contra a tela que montar em seguida
+  clearTimeout(_pulsoT); clearTimeout(_verT); clearTimeout(_midiaT); clearTimeout(_rascT);
+  _pulsoT = _verT = _midiaT = _rascT = null;
+  _lida = { id: null, em: 0 };
+  if (A.chat && typeof A.chat.desmontar === "function") A.chat.desmontar();
   if (A.composer && typeof A.composer.desmontar === "function") A.composer.desmontar();
   for (const t of A.timers) clearInterval(t);
   for (const f of A.limpar) try { f(); } catch { /* ok */ }
@@ -212,6 +240,7 @@ async function carregarBase() {
   A.baseEm = Date.now();
   A.eu = A.base.eu || { id: A.ctx.sessao.conta.id, nome: A.ctx.sessao.conta.nome, papel: A.ctx.papel };
   if (A.lista && A.lista.el.isConnected) A.lista.render();
+  if (A.chat && A.ver) A.chat.renderCabecalho();
 }
 
 function filtroAtual() {
@@ -234,16 +263,23 @@ async function carregarLista({ reset = false, mais = false } = {}) {
   A.carregandoLista = true;
   if (reset) A.lista.mostrarCarregando();
   try {
-    const r = await A.api.rpcC("nx_cv_listar", { p_filtro: filtroAtual(), p_limite: limite, p_antes: antes });
+    const filtro = filtroAtual(), chave = JSON.stringify(filtro);
+    const r = await A.api.rpcC("nx_cv_listar", { p_filtro: filtro, p_limite: limite, p_antes: antes });
     if (!A || seq !== A.seqLista) return;
-    if (!reset && !mais) {
+    // revisão: o que está na tela é de OUTRO filtro (trocou de aba e um pulso descartou a leitura da troca)? então nada de mesclar
+    // nem de somar «carregar mais» — a lista vira só a página que chegou (antes: conversas abertas penduradas em «Resolvidas»)
+    const mesmoFiltro = A.itensChave === chave;
+    if (!reset && !mais && mesmoFiltro) {
       avisarNovidades(A.itens, r.itens || [], A.contagens && A.contagens.nao_lidas, r.contagens && r.contagens.nao_lidas);
       // leitor de tela: a lista anuncia a conversa nova (a que está aberta e à vista não: quem a lê já viu)
       const novas = A.L.novasEntradas(A.itens, r.itens || [], { ignorar: A.selId && !document.hidden ? A.selId : null });
       if (novas.length) A.lista.anunciar(A.L.textoNovaMensagem(novas));
     }
-    A.itens = itensComPendencia(mais ? [...A.itens, ...(r.itens || []).filter(n => !A.itens.some(x => x.id === n.id))] : (r.itens || []));
-    A.temMais = !!r.tem_mais;
+    // D6: o pulso relê a 1ª página e o que «Carregar mais» já trouxe DEPOIS dela fica (antes a lista voltava a 100 e conversas sumiam)
+    const pulso = !reset && !mais && mesmoFiltro ? A.L.mesclarPaginaLista(A.itens, r.itens || [], { temMais: !!r.tem_mais, aguardando: A.aba === "aguardando" && !filtroAtual().busca }) : null;
+    A.itens = itensComPendencia(mais && mesmoFiltro ? [...A.itens, ...(r.itens || []).filter(n => !A.itens.some(x => x.id === n.id))] : pulso ? pulso.itens : (r.itens || []));
+    A.temMais = pulso && pulso.preservadas ? A.temMais : !!r.tem_mais;
+    A.itensChave = chave;
     A.contagens = r.contagens || {};
     A.ctx.badge("conversas", A.contagens.nao_lidas || 0);
     A.erroLista = null;
@@ -563,7 +599,9 @@ async function delta() {
     A.ultimoId = r.ultimo_id ?? A.L.ultimoId(A.msgs, A.ultimoId);
     const chegouDoCliente = (r.itens || []).some(m => m.direcao === "in" && Number(m.id) > Number(tinhaUlt || 0));
     if ((r.itens || []).length || A.msgs.length !== antes) A.chat.renderMensagens({ rolar: "novas" });
-    if (chegouDoCliente && !document.hidden) marcarLida();
+    // D3: chegou mensagem do cliente na conversa aberta e à vista — marca como lida já (uma RPC por lote), sem esperar a lista e o
+    // nx_cv_ver trazerem nao_lidas (antes a conversa ficava «1 não lida» com o atendente olhando para ela)
+    if (chegouDoCliente && !document.hidden) marcarLida({ forcar: true });
   } catch { /* o próximo pulso tenta de novo */ }
 }
 
@@ -581,24 +619,28 @@ function aoPulso() {
 }
 
 let _lida = { id: null, em: 0 };
-async function marcarLida() {
+/** Marca a conversa aberta como lida. Sem nada novo (nao_lidas 0 na conversa e na lista) não chama nada — nem o recibo ao cliente (D9).
+    forcar (D3): o delta acabou de trazer mensagem do cliente com a conversa à vista; os contadores ainda são os antigos. */
+async function marcarLida({ forcar = false } = {}) {
   if (!A || !A.selId || !A.ver) return;
   const id = A.selId;
   const agora = Date.now();
-  if (_lida.id === id && agora - _lida.em < 1500) return;
-  _lida = { id, em: agora };
+  if (!forcar && _lida.id === id && agora - _lida.em < 1500) return;
   const conv = A.ver.conversa;
+  const itemTinha = A.itens.some(x => x.id === id && x.nao_lidas > 0);
+  if (!forcar && !(conv.nao_lidas > 0) && !itemTinha) return;
+  _lida = { id, em: agora };
   try {
-    if (conv.nao_lidas > 0 || A.itens.some(x => x.id === id && x.nao_lidas > 0)) {
-      await A.api.rpcC("nx_cv_marcar_lida", { p_conversa: id });
-      if (!A) return;
-      conv.nao_lidas = 0;
-      const it = A.itens.find(x => x.id === id);
-      if (it) { it.nao_lidas = 0; A.lista.render(); }
+    await A.api.rpcC("nx_cv_marcar_lida", { p_conversa: id });
+    if (!A || A.selId !== id || !A.ver) return;
+    A.ver.conversa.nao_lidas = 0;
+    const it = A.itens.find(x => x.id === id);
+    if (it && it.nao_lidas > 0) {
+      it.nao_lidas = 0; A.lista.render();
       if (A.contagens.nao_lidas > 0) { A.contagens.nao_lidas--; A.ctx.badge("conversas", A.contagens.nao_lidas); }
     }
-    // confirmação de leitura para o cliente (opcional por empresa; a função confere janela e token)
-    if (A.podeEscrever && A.base && A.base.cfg && A.base.cfg.recibo_leitura && A.L.janela(conv).aberta && conv.canal_id)
+    // confirmação de leitura para o cliente (opcional por empresa; a função confere janela e token) — só quando havia mensagem nova
+    if (A.podeEscrever && A.base && A.base.cfg && A.base.cfg.recibo_leitura && A.L.janela(A.ver.conversa).aberta && A.ver.conversa.canal_id)
       A.api.fn("nx-enviar", { acao: "lido", conversa: id }).catch(() => {});
   } catch { /* não bloqueia nada */ }
 }
@@ -756,31 +798,7 @@ const acoes = {
     }
   },
   atualizarIA: () => carregarEstadoIA(),
-  async transferir() {
-    const ui = A.ui;
-    const conv = A.ver.conversa;
-    const pessoas = (A.base.usuarios || []).filter(u => u.papel !== "leitura" && u.aprovado !== false);
-    const deps = A.base.departamentos || [];
-    let conta = conv.atribuida_a || "", dep = conv.departamento_id || "";
-    const sPessoa = ui.h("select", { class: "sel", id: "cv-tr-pessoa", "aria-label": "Pessoa" },
-      ui.h("option", { value: "" }, "Sem responsável (fila do departamento)"),
-      pessoas.map(u => ui.h("option", { value: u.id, selected: u.id === conta }, u.id === A.eu.id ? `${u.nome} (você)` : u.nome)));
-    const sDep = ui.h("select", { class: "sel", id: "cv-tr-dep", "aria-label": "Departamento" },
-      deps.map(d => ui.h("option", { value: d.id, selected: d.id === dep }, d.nome)));
-    const corpo = ui.h("div", { class: "pilha" },
-      ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-pessoa" }, "Pessoa"), sPessoa),
-      deps.length ? ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-dep" }, "Departamento"), sDep) : null,
-      ui.h("p", { class: "sub" }, "Quem recebe é avisado no sino. Fica registrado no histórico da conversa."));
-    const r = await ui.modal({
-      titulo: "Transferir conversa", corpo, largura: "p",
-      acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Transferir", tipo: "primario", fn: async () => {
-        const novaConta = sPessoa.value || null;
-        const novoDep = deps.length && sDep.value && sDep.value !== conv.departamento_id ? sDep.value : null;
-        return A.api.rpcC("nx_cv_atribuir", { p_conversa: A.selId, p_conta: novaConta, p_departamento: novoDep });
-      } }],
-    });
-    if (r && r.id) { trocarConversa(r); ui.toast("Conversa transferida.", { tipo: "ok" }); delta(); recarregarVer(); carregarLista({}); }
-  },
+  transferir: () => transferir(),
   resolver: botao => resolverComDesfazer(botao),
   atenderProximo: botao => atenderProximo(botao),
   focarLista: () => focarListaOuVazio(),
@@ -820,9 +838,21 @@ const acoes = {
     trocarConversa(r); delta(); recarregarVer(); carregarLista({});
     if (sim) A.ctx.navegar("#/conversas");
   },
-  async etiquetas(ids) {
-    const r = await executar(A.api.rpcC("nx_cv_etiquetas", { p_conversa: A.selId, p_etiquetas: ids }));
-    if (r) trocarConversa(r);
+  /** D20: um pedido de etiqueta por vez, na ordem; a resposta só vale para a tela se ainda é a última intenção (atual()):
+      marcar A e B rápido nunca termina com [A] na tela nem no servidor. */
+  etiquetas(ids, { atual = () => true } = {}) {
+    const E = A, conv = A.selId;
+    E.etiquetasEmVoo++;
+    const vez = E.etqFila.then(async () => {
+      try {
+        const r = await E.api.rpcC("nx_cv_etiquetas", { p_conversa: conv, p_etiquetas: ids });
+        if (A === E && r && atual() && A.selId === conv) trocarConversa(r);
+        return r;
+      } catch (e) { if (A === E && atual()) tratarErro(e); return null; }
+      finally { E.etiquetasEmVoo = Math.max(0, E.etiquetasEmVoo - 1); }
+    });
+    E.etqFila = vez.catch(() => null);
+    return vez;
   },
   async criarEtiqueta(nome) {
     const cores = A.ctx.paleta || [];
@@ -844,12 +874,44 @@ const acoes = {
     if (m && m.ref) { filaRemover(m.ref); }
     A.msgs = A.msgs.filter(x => x.id !== m.id); A.chat.renderMensagens({ rolar: "manter" });
   },
-  async nota(texto) {
-    const r = await A.api.rpcC("nx_cv_nota", { p_conversa: A.selId, p_texto: texto });
+  /** Nota interna (D2): com p_req da intenção (S-B13) — a repetição pela rede não grava outra; banco sem a função nova
+      (404 PGRST202) cai na de sempre, uma vez por montagem. */
+  async nota(texto, { req = null, conversa = A.selId } = {}) {
+    const E = A, p = { p_conversa: conversa, p_texto: texto };
+    let r = null;
+    if (req && !E.notaSemReq) {
+      try { r = await E.api.rpcC("nx_cv_nota", { ...p, p_req: req }); }
+      catch (e) { if (!E.L.rpcAusente(e)) throw e; E.notaSemReq = true; }
+    }
+    if (!r) r = await E.api.rpcC("nx_cv_nota", p);
+    if (A !== E || A.selId !== conversa) return r;
     A.msgs = A.L.mesclarDelta(A.msgs, [r]);
     A.ultimoId = A.L.ultimoId(A.msgs, A.ultimoId);
     A.chat.renderMensagens({ rolar: "fim" });
     return r;
+  },
+  /** D11: atalho «Agenda» da lateral — marcar consulta (agenda.js) já com o negócio da conversa; sem a agenda, abre a tela. */
+  async agendar(negocio = null) {
+    const E = A;
+    try {
+      const m = await import(`./agenda.js?v=${encodeURIComponent(E.ctx.versao || "dev")}`);
+      if (!m || typeof m.marcarConsulta !== "function") throw new Error("agenda_ausente");
+      await m.marcarConsulta(E.ctx, { negocio: negocio || null, aoMudar: () => { if (A === E) recarregarVer(); } });
+      if (A === E) recarregarVer();
+    } catch (e) {
+      console.error("conversas: marcar consulta", e);
+      if (A === E) E.ctx.navegar("#/agenda");
+    }
+  },
+  /** D18: números de WhatsApp desconectados agora (shell → ctx.canais; sem ele, nx_cv_base.canais[].estado). */
+  canaisCaidos: () => canaisCaidos(),
+  canalCaido: id => (id ? canaisCaidos().find(c => String(c.id) === String(id)) || null : null),
+  verNumero() { if (A.ctx.canais && typeof A.ctx.canais.verNumero === "function") A.ctx.canais.verNumero(); else A.ctx.navegar("#/config/numeros"); },
+  /** D10: «Enviar agora» de uma bolha da fila: {motivo, espera} — motivo vazio = pode. */
+  estadoEnviarAgora(m) {
+    const it = m && m.ref && A ? A.fila.itens.get(m.ref) : null;
+    const espera = it ? A.L.esperaReenvioFila(it) : 0;
+    return { motivo: A ? A.L.motivoEnviarAgora({ offline: estaOffline(), espera }) : "", espera };
   },
   async sugerirIA() {
     const r = await A.api.fn("nx-ia", { acao: "sugerir", conversa: A.selId });
@@ -876,6 +938,108 @@ const acoes = {
   filaResumo: id => filaResumo(id),
   reenviarGravada: m => reenviarGravada(m), foiReenviada: m => !!(A && m && A.reenviadas.has(m.id)),
 };
+
+/** Sem internet agora (o shell sabe melhor; sem ele, o navigator). */
+function estaOffline() {
+  if (A && A.ctx.rede && typeof A.ctx.rede.estado === "string") return A.ctx.rede.estado === "offline";
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+/** D18: números caídos — o que o shell conhece (ctx.canais) ou, sem ele, nx_cv_base.canais[].estado === "desconectado". */
+function canaisCaidos() {
+  if (!A) return [];
+  const base = (A.base && A.base.canais) || [];
+  // o nome que a tela conhece (o do shell pode vir do título da notificação: «Recepção: número desconectado»)
+  if (Array.isArray(A.canaisCaidosShell)) return A.canaisCaidosShell.map(c => { const k = base.find(x => c && String(x.id) === String(c.id)); return k && k.nome ? { ...c, nome: k.nome } : c; });
+  return base.filter(c => c && c.estado === "desconectado")
+    .map(c => ({ id: c.id, nome: c.nome || "WhatsApp", desde: c.estado_desde || c.desde || null }));
+}
+
+/**
+ * D12: Transferir com Desfazer. O modal escolhe pessoa/departamento; a tela muda na hora e o nx_cv_atribuir só vai quando o aviso
+ * «Transferida para Ana · Mariana» fecha (como o Resolver): o Desfazer sempre funciona — mesmo quando, depois de transferida, a conversa
+ * sairia do alcance de quem transferiu. Tirar a conversa das MINHAS pede confirmação no próprio modal (o aviso diz que ela sai da aba).
+ */
+async function transferir() {
+  const ui = A.ui;
+  const conv = A.ver && A.ver.conversa;
+  if (!conv) return;
+  const pessoas = (A.base.usuarios || []).filter(u => u.papel !== "leitura" && u.aprovado !== false);
+  const deps = A.base.departamentos || [];
+  const eu = A.eu && A.eu.id;
+  const conta = conv.atribuida_a || "", dep = conv.departamento_id || "";
+  const sPessoa = ui.h("select", { class: "sel", id: "cv-tr-pessoa", "aria-label": "Pessoa" },
+    ui.h("option", { value: "" }, "Sem responsável (fila do departamento)"),
+    pessoas.map(u => ui.h("option", { value: u.id, selected: u.id === conta }, u.id === eu ? `${u.nome} (você)` : u.nome)));
+  const sDep = ui.h("select", { class: "sel", id: "cv-tr-dep", "aria-label": "Departamento" },
+    deps.map(d => ui.h("option", { value: d.id, selected: d.id === dep }, d.nome)));
+  const avisoMinhas = ui.h("p", { class: "aviso aviso-aten cv-tr-aviso", role: "status", hidden: true }, ui.icone("info"),
+    ui.h("span", null, "A conversa sai da sua aba Minhas. Por 7 segundos dá para desfazer no aviso."));
+  const conferir = () => { avisoMinhas.hidden = !(conta && conta === eu && (sPessoa.value || "") !== eu); };
+  sPessoa.addEventListener("change", conferir);
+  conferir();
+  const corpo = ui.h("div", { class: "pilha" },
+    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-pessoa" }, "Pessoa"), sPessoa),
+    deps.length ? ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-dep" }, "Departamento"), sDep) : null,
+    avisoMinhas,
+    ui.h("p", { class: "sub" }, "Quem recebe é avisado no sino. Fica registrado no histórico da conversa."));
+  const escolha = await ui.modal({
+    titulo: "Transferir conversa", corpo, largura: "p",
+    acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Transferir", tipo: "primario", fn: () => ({
+      conta: sPessoa.value || null,
+      dep: deps.length && sDep.value && sDep.value !== conv.departamento_id ? sDep.value : null,
+    }) }],
+  });
+  if (!escolha || !A || !A.ver || A.ver.conversa.id !== conv.id) return;
+  if ((escolha.conta || null) === (conv.atribuida_a || null) && !escolha.dep) { ui.toast("Nada mudou: a conversa já está com quem você escolheu.", { tipo: "info" }); return; }
+  await transferirComDesfazer(conv, escolha);
+}
+async function transferirComDesfazer(conv, { conta, dep }) {
+  const id = conv.id;
+  const u = conta ? (A.base.usuarios || []).find(x => x.id === conta) : null;
+  const d = dep ? (A.base.departamentos || []).find(x => x.id === dep) : null;
+  const antes = { atribuida_a: conv.atribuida_a || null, atribuida_nome: conv.atribuida_nome || (conv.atribuida && conv.atribuida.nome) || null,
+    atribuida: conv.atribuida || null, departamento_id: conv.departamento_id || null, departamento: conv.departamento || null };
+  const depois = { atribuida_a: conta, atribuida_nome: u ? u.nome : null, atribuida: u ? { id: u.id, nome: u.nome } : null,
+    ...(d ? { departamento_id: d.id, departamento: { id: d.id, nome: d.nome } } : {}) };
+  const pend = { depois, cancelado: false };
+  const nome = nomeContato(A.ver.contato || conv.contato) || "Conversa";
+  const para = u ? (u.id === (A.eu && A.eu.id) ? "você" : u.nome) : d ? `a fila de ${d.nome}` : "a fila";
+  const api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id;
+  const naMesmaEmpresa = () => !!A && (A.ctx.cliente && A.ctx.cliente.id) === cliente;
+  const voltarTela = () => {
+    if (pend.cancelado) return;
+    pend.cancelado = true;
+    if (_pendTransferir.get(id) === pend) _pendTransferir.delete(id);
+    if (!naMesmaEmpresa()) return;
+    if (A.selId === id) trocarConversa({ id, ...antes }); else atualizarItemLista({ id, ...antes });
+    carregarLista({});
+    if (A.selId === id) recarregarVer();
+  };
+  await A.ui.acaoComDesfazer({
+    texto: `Transferida para ${para} · ${nome}`,
+    // só a tela: nada vai ao servidor antes de o aviso fechar
+    aplicar: () => {
+      _pendTransferir.set(id, pend);
+      if (A.selId === id) trocarConversa({ id, ...depois }); else atualizarItemLista({ id, ...depois });
+      A.itens = itensComPendencia(A.itens);
+      A.lista.render();
+    },
+    firmar: async ({ saindo = false } = {}) => {
+      if (pend.cancelado) return;
+      pend.firmando = true;
+      let r;
+      try { r = await api.rpc("nx_cv_atribuir", { p_cliente: cliente, p_conversa: id, p_conta: conta, p_departamento: dep }, saindo ? { keepalive: true } : {}); }
+      catch (e) { if (saindo) voltarTela(); throw e; }      // fora do «saindo» quem devolve a tela é o próprio aviso (reverter)
+      if (_pendTransferir.get(id) === pend) _pendTransferir.delete(id);
+      pend.cancelado = true;
+      if (!naMesmaEmpresa()) return;
+      if (r && r.id) { if (A.selId === id) { trocarConversa(r); delta(); recarregarVer(); } else atualizarItemLista(r); }
+      carregarLista({});
+    },
+    reverter: voltarTela,
+  });
+}
 
 /* ============================================================ teclado da central (M35)
    Acordes com Alt valem até dentro do campo de mensagem (Alt+Shift+letra evita o AltGr do ABNT2); as letras soltas (j, k, /, ?) só fora dos
@@ -984,16 +1148,22 @@ async function atenderProximo(botao) {
 /* Resolver adiado: enquanto o «Desfazer» está na tela, NADA foi ao servidor (como Ganho/Perdido no CRM). Fica no módulo, e não no A, para
    valer também se a pessoa sair de Conversas e voltar nesses 7 s. id da conversa → { antes: {status, aguardando, nao_lidas}, cancelado }. */
 const _pendResolver = new Map();
+/* D12: Transferir adiado, pelo mesmo caminho (nada vai ao servidor antes de o «Desfazer» fechar): id → { depois: {campos da tela}, cancelado } */
+const _pendTransferir = new Map();
 
 /** A conversa como a tela deve mostrá-la: resolvida, se o «Resolver» dela ainda espera o fim do Desfazer (o servidor ainda a tem aberta). */
 function comPendencia(conv) {
-  return conv && _pendResolver.has(conv.id) ? { ...conv, status: "resolvida", aguardando: false, nao_lidas: 0 } : conv;
+  if (!conv) return conv;
+  let c = _pendResolver.has(conv.id) ? { ...conv, status: "resolvida", aguardando: false, nao_lidas: 0 } : conv;
+  const t = _pendTransferir.get(c.id);
+  if (t && !t.cancelado) c = { ...c, ...t.depois };
+  return c;
 }
 /** A lista com os «Resolver» pendentes aplicados: a conversa sai das abas de abertas (como o servidor fará) e continua visível na busca. */
 function itensComPendencia(itens) {
-  if (!_pendResolver.size) return itens;
+  if (!_pendResolver.size && !_pendTransferir.size) return itens;
   const eu = A.eu && A.eu.id, busca = !!filtroAtual().busca;
-  return itens.map(comPendencia).filter(c => !_pendResolver.has(c.id) || busca || A.L.pertenceAba(c, A.aba, eu));
+  return itens.map(comPendencia).filter(c => (!_pendResolver.has(c.id) && !_pendTransferir.has(c.id)) || busca || A.L.pertenceAba(c, A.aba, eu));
 }
 
 /**
@@ -1036,7 +1206,7 @@ async function resolverComDesfazer() {
       // só a tela: nada vai ao servidor antes de o aviso fechar
       aplicar: () => {
         _pendResolver.set(id, pend);
-        if (A.selId === id) trocarConversa({ id, status: "resolvida" }); else atualizarItemLista({ id, status: "resolvida" });
+        if (A.selId === id) { trocarConversa({ id, status: "resolvida" }); A.chat.sucesso("Atendimento resolvido."); } else atualizarItemLista({ id, status: "resolvida" });
         A.itens = itensComPendencia(A.itens);
         if (A.avancar && A.selId === id) {
           avancou = true;
@@ -1160,17 +1330,31 @@ async function enviarPedido(tmp, o) {
   const para = nomeContato(A.ver && (A.ver.contato || (A.ver.conversa && A.ver.conversa.contato))) || "um contato";
   try {
     let r;
+    // D8: client_ref por INTENÇÃO também no modelo (a Meta cobra cada modelo entregue): «Enviar de novo» repete o MESMO
+    o.client_ref = o.client_ref || L.novoClientRef();
     if (o.tipo === "midia") {
-      o.client_ref = o.client_ref || L.novoClientRef();
       // o arquivo já subiu numa tentativa anterior (a nx-enviar é que falhou): "Tentar de novo" não sobe tudo outra vez
       if (!o.path) {
         definirProgresso(tmp, 0, "subindo", convId);
         const s = await A.api.fn("nx-midia", { acao: "subir", nome: o.arquivo.name, mime: o.validacao.mime, tamanho: o.arquivo.size });
         if (!s || !s.path || !/^https:\/\//.test(String(s.upload_url || ""))) throw Object.assign(new Error("envio_falhou"), { codigo: "envio_falhou", detalhe_texto: "o servidor não liberou o envio do arquivo" });
+        const subir = () => subirArquivo(s.upload_url, o.arquivo, o.validacao.mime, {
+          aoProgresso: (env, total) => definirProgresso(tmp, L.progressoEnvio(env, total).pct, "subindo", convId),
+          registrar: cancelar => { A.envios.set(tmp.id, cancelar); if (A.selId === convId) A.chat.renderMensagens({ rolar: "manter" }); } });
         try {
-          await subirArquivo(s.upload_url, o.arquivo, o.validacao.mime, {
-            aoProgresso: (env, total) => definirProgresso(tmp, L.progressoEnvio(env, total).pct, "subindo", convId),
-            registrar: cancelar => { A.envios.set(tmp.id, cancelar); if (A.selId === convId) A.chat.renderMensagens({ rolar: "manter" }); } });
+          try { await subir(); }
+          catch (e) {
+            // D15: a conexão piscou no meio do PUT (rede/tempo, não recusa do servidor): mais UMA tentativa sozinha, com o mesmo path
+            if (!(e && e.codigo === "upload_falhou" && e.rede) || !A) throw e;
+            // revisão: na espera o «Cancelar» à vista apontava para o PUT que já falhou (abort() num pedido encerrado não faz nada)
+            // e a 2ª tentativa subia e enviava o arquivo mesmo assim — na espera, cancelar marca a desistência
+            let desistiu = false;
+            A.envios.set(tmp.id, () => { desistiu = true; });
+            await new Promise(ok => setTimeout(ok, SUBIR_ESPERA_MS));
+            if (!A || desistiu) throw Object.assign(new Error("upload_cancelado"), { codigo: "upload_cancelado" });
+            definirProgresso(tmp, 0, "subindo", convId);
+            await subir();
+          }
         } finally { if (A) A.envios.delete(tmp.id); }
         o.path = s.path;
       }
@@ -1178,7 +1362,7 @@ async function enviarPedido(tmp, o) {
       // sem responde_a: mídia nunca vai como citação (e o aparelho do CodeWords nem tem citação)
       r = await A.api.fn("nx-enviar", { acao: "midia", conversa: convId, path: o.path, mime: o.validacao.mime, nome: o.arquivo.name, legenda: o.legenda || undefined, tamanho: o.arquivo.size, client_ref: o.client_ref });
     } else {
-      r = await A.api.fn("nx-enviar", { acao: "template", conversa: convId, template_id: o.template.id, parametros: o.parametros || [] });
+      r = await A.api.fn("nx-enviar", { acao: "template", conversa: convId, template_id: o.template.id, parametros: o.parametros || [], client_ref: o.client_ref });
     }
     if (!A || A.selId !== convId) return;
     const msg = r && r.mensagem ? { ...r.mensagem, ...(r.ambigua === true ? { ambigua: true } : {}) } : null;
@@ -1199,10 +1383,26 @@ async function enviarPedido(tmp, o) {
         if (!A) ui.toast(`O envio do arquivo para ${para} foi interrompido porque você saiu de Conversas. Nada foi enviado.`, { tipo: "info", ms: 8000 });
       } else {
         const oQue = o.tipo === "midia" ? "O arquivo" : "O modelo";
-        const duvida = e?.resposta?.ambigua === true || ["sem_conexao", "tempo_rede"].includes(codigo) || Number(e?.status) === 504;
+        const duvida = e?.resposta?.ambigua === true || ["sem_conexao", "tempo_rede", "envio_em_andamento"].includes(codigo) || Number(e?.status) === 504;
         const motivo = (typeof e?.resposta?.detalhe === "string" && e.resposta.detalhe) || L.dicaErroEnvio(codigo) || ui.mensagemErro(e);
         toastAbrir(ui, ctx, duvida ? `${oQue} para ${para} pode ter saído — confira no WhatsApp antes de reenviar.`
           : `${oQue} para ${para} não foi enviado: ${motivo}`, convId);
+      }
+      return;
+    }
+    // D8: outro pedido com o MESMO client_ref ainda está enviando (409): não é falha — confere de novo em ~20 s com o mesmo ref
+    if (codigo === "envio_em_andamento") {
+      const vezes = (tmp.andamento || 0) + 1;
+      A.msgs = A.msgs.map(m => m.id === tmp.id ? { ...m, status: "pendente", andamento: vezes, erro: null, falhaLocal: false } : m);
+      A.chat.renderMensagens({ rolar: "manter" });
+      if (vezes <= 3) A.timers.push(setTimeout(() => {      // vai junto com os timers da tela (desmontar limpa)
+        if (!A || A.selId !== convId) return;
+        const atual = A.msgs.find(m => m.id === tmp.id);
+        if (atual) enviarPedido(atual, o);
+      }, L.FILA_EM_ANDAMENTO_MS + 250));
+      else {
+        A.msgs = A.msgs.map(m => m.id === tmp.id ? { ...m, ambigua: true, erro: "Pode ter saído — confira no WhatsApp antes de reenviar." } : m);
+        A.chat.renderMensagens({ rolar: "manter" });
       }
       return;
     }
@@ -1246,6 +1446,7 @@ async function enviarPedido(tmp, o) {
   }
 }
 
+const SUBIR_ESPERA_MS = 1500;      // D15: espera antes da nova tentativa automática do PUT
 /** PUT com progresso: o fetch não diz quanto já subiu. Rejeita com codigo "upload_falhou" (rede/HTTP) ou "upload_cancelado". */
 function subirArquivo(url, arquivo, mime, { aoProgresso, registrar } = {}) {
   return new Promise((resolve, reject) => {
@@ -1264,8 +1465,9 @@ function subirArquivo(url, arquivo, mime, { aoProgresso, registrar } = {}) {
       aoProgresso(ev.loaded, ev.total);
     });
     x.addEventListener("load", () => (x.status >= 200 && x.status < 300 ? resolve() : falha("upload_falhou", `não foi possível subir o arquivo (${x.status})`)));
-    x.addEventListener("error", () => falha("upload_falhou", "a conexão caiu durante o envio"));
-    x.addEventListener("timeout", () => falha("upload_falhou", "o envio demorou demais"));
+    // rede: true — a conexão caiu ou o prazo estourou (vale uma nova tentativa sozinha, D15); status HTTP é recusa e não repete
+    x.addEventListener("error", () => reject(Object.assign(new Error("upload_falhou"), { codigo: "upload_falhou", detalhe_texto: "a conexão caiu durante o envio", rede: true })));
+    x.addEventListener("timeout", () => reject(Object.assign(new Error("upload_falhou"), { codigo: "upload_falhou", detalhe_texto: "o envio demorou demais", rede: true })));
     x.addEventListener("abort", () => falha("upload_cancelado", "envio cancelado"));
     if (registrar) registrar(() => x.abort());
     x.send(arquivo);
@@ -1301,7 +1503,7 @@ async function reenviarLocal(m) {
       respondeA: velho.respondeA ? { id: velho.respondeA.id, wamid: velho.respondeA.wamid, direcao: velho.respondeA.direcao } : null });
   }
   if (!m || !m.pedido) return;
-  A.msgs = A.msgs.map(x => x.id === m.id ? { ...x, status: "pendente", erro: null, falhaLocal: false, ...(x.midia && x.midia.local_url ? { midia: { ...x.midia, progresso: 0, fase: x.pedido && x.pedido.path ? "entregando" : "subindo" } } : {}) } : x);
+  A.msgs = A.msgs.map(x => x.id === m.id ? { ...x, status: "pendente", erro: null, falhaLocal: false, ambigua: false, andamento: 0, ...(x.midia && x.midia.local_url ? { midia: { ...x.midia, progresso: 0, fase: x.pedido && x.pedido.path ? "entregando" : "subindo" } } : {}) } : x);
   A.chat.renderMensagens({ rolar: "manter" });
   await enviarPedido(m, m.pedido);
 }
@@ -1532,7 +1734,45 @@ async function transmitir(it) {
   // NUNCA antes de 90 s do último pedido do mesmo item (nem «Enviar agora», nem remontar a tela, nem a internet voltar): o primeiro ainda pode estar a caminho
   if (L.esperaReenvioFila(it) > 0) return "espera";
   const fila = A.fila, ui = A.ui, ctx = A.ctx;      // seguem valendo se a pessoa sair de Conversas com o pedido a caminho
-  fila.emVoo.add(it.id);
+  // D19: duas abas abertas leem a mesma fila do IndexedDB — só a que pegar a trava do item (Web Locks) transmite; sem a API, o que está
+  // GUARDADO decide (outra aba já concluiu ou pediu há menos de 90 s)
+  const travas = typeof navigator !== "undefined" && navigator.locks && typeof navigator.locks.request === "function" ? navigator.locks : null;
+  if (travas) {
+    fila.emVoo.add(it.id);
+    try {
+      return await travas.request(`orbita-fila:${it.id}`, { ifAvailable: true }, async trava => {
+        if (!trava) return "espera";                                // outra aba está mandando este item agora
+        const conferido = await conferirGuardado(fila, it);
+        if (conferido !== "ok") return conferido;
+        return await transmitirAgora(it, { L, fila, ui, ctx, comTrava: true });
+      });
+    } catch { return "espera"; }
+    finally { fila.emVoo.delete(it.id); if (A && A.fila !== fila) A.fila.emVoo.delete(it.id); }
+  }
+  const conferido = await conferirGuardado(fila, it);
+  if (conferido !== "ok") return conferido;
+  return transmitirAgora(it, { L, fila, ui, ctx });
+}
+/** D19: o item ainda é para sair daqui? "ok" | "espera" (outra aba pediu agora) | "ok" sem banco. Sumiu do banco: outra aba concluiu — a bolha sai. */
+async function conferirGuardado(fila, it) {
+  if (!fila.db) return "ok";
+  let guardado;
+  try { guardado = await reqIdb(lojaFila(fila.db, "readonly").get(it.id)); } catch { return "ok"; }
+  const d = A ? A.L.filaConferirGuardado(guardado, it, Date.now()) : "ok";
+  if (d === "ok") return "ok";
+  if (d === "sumiu" && A && A.fila === fila) {
+    fila.itens.delete(it.id);
+    A.msgs = A.msgs.filter(m => m.ref !== it.id);
+    if (A.selId === it.conversa) { A.chat.renderMensagens({ rolar: "manter" }); delta(); }
+    filaNaLista();
+  } else if (d === "outra_aba" && guardado && A && A.fila === fila) {
+    Object.assign(it, { enviada_em: guardado.enviada_em || it.enviada_em, estado: guardado.estado === "enviando" ? "incerto" : guardado.estado, motivo: guardado.motivo || it.motivo });
+    atualizarBolha(it);
+  }
+  return "espera";
+}
+async function transmitirAgora(it, { L, fila, ui, ctx, comTrava = false }) {
+  if (!comTrava) fila.emVoo.add(it.id);
   try {
     it.estado = "enviando"; it.motivo = null; it.enviada_em = Date.now();
     atualizarBolha(it);
@@ -1558,7 +1798,7 @@ async function transmitir(it) {
     concluirBolha(it, msg);
     if (duvida) avisarFalhaFora(duvida);
     return "ok";
-  } finally { fila.emVoo.delete(it.id); if (A && A.fila !== fila) A.fila.emVoo.delete(it.id); }
+  } finally { if (!comTrava) { fila.emVoo.delete(it.id); if (A && A.fila !== fila) A.fila.emVoo.delete(it.id); } }
 }
 
 /** O pedido de envio falhou: decide o destino do item (volta à fila, "Não enviada", "pode ter saído") e avisa quem não está vendo a bolha. */
@@ -1666,11 +1906,27 @@ async function novaConversa({ contato = null } = {}) {
   const resultados = ui.h("div", { class: "cv-busca-contato", role: "list", "aria-live": "polite" });
   const blocoBusca = ui.h("div", { class: "pilha-p" },
     ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-nv-busca" }, A.ctx.vocab.contato || "Contato"), busca), resultados);
-  const tel = ui.h("input", { type: "tel", id: "cv-nv-tel", placeholder: "(12) 99999-9999", inputmode: "tel", autocomplete: "off" });
+  const tel = ui.h("input", { type: "tel", id: "cv-nv-tel", placeholder: "(12) 99999-9999", inputmode: "tel", autocomplete: "off", "aria-describedby": "cv-nv-tel-ajuda" });
   const nome = ui.h("input", { type: "text", id: "cv-nv-nome", placeholder: "Opcional", maxlength: 160, autocomplete: "off" });
+  // D13: máscara enquanto digita (só número do Brasil; «+» fica como foi digitado) e o erro no próprio campo ao sair dele
+  const telErro = ui.h("small", { class: "campo-erro cv-nv-tel-erro", id: "cv-nv-tel-erro", role: "alert", hidden: true });
+  let telTocado = false;
+  const mostrarErroTel = () => {
+    const msg = telTocado ? L.erroTelefone(tel.value) : "";
+    telErro.textContent = msg; telErro.hidden = !msg;
+    if (msg) { tel.setAttribute("aria-invalid", "true"); tel.setAttribute("aria-describedby", "cv-nv-tel-erro cv-nv-tel-ajuda"); }
+    else { tel.removeAttribute("aria-invalid"); tel.setAttribute("aria-describedby", "cv-nv-tel-ajuda"); }
+    return msg;
+  };
+  tel.addEventListener("input", () => {
+    const fim = tel.selectionStart == null || tel.selectionStart >= String(tel.value).length;   // só mexe com o cursor no fim (não pula o cursor)
+    if (fim) { const m = L.mascaraTelefone(tel.value); if (m !== tel.value) tel.value = m; }
+    if (telTocado) mostrarErroTel();
+  });
+  tel.addEventListener("blur", () => { if (String(tel.value).trim()) { telTocado = true; tel.value = L.mascaraTelefone(tel.value); } mostrarErroTel(); });
   const blocoDigitar = ui.h("div", { class: "pilha-p", hidden: true },
-    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-nv-tel" }, "Telefone com DDD"), tel,
-      ui.h("small", { class: "campo-ajuda" }, "Número do Brasil ganha o 55 sozinho. Outro país: comece com o código dele (ex.: +1).")),
+    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-nv-tel" }, "Telefone com DDD"), tel, telErro,
+      ui.h("small", { class: "campo-ajuda", id: "cv-nv-tel-ajuda" }, "Número do Brasil ganha o 55 sozinho. Outro país: comece com + e o código dele (ex.: +1 415 555 1234).")),
     ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-nv-nome" }, "Nome"), nome));
   const blocoEscolhido = ui.h("div", { class: "aviso", hidden: true });
 
@@ -1736,7 +1992,9 @@ async function novaConversa({ contato = null } = {}) {
     acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Abrir conversa", tipo: "primario", fn: async api => {
       const params = { p_canal: canais.length > 1 ? sCanal.value : canais[0].id };
       if (modo === "digitar") {
-        if (!L.normalizarTelefone(tel.value)) { api.erro("Digite o telefone com DDD (10 ou 11 números)."); tel.focus(); return false; }
+        telTocado = true;
+        const errTel = mostrarErroTel();
+        if (errTel || !L.normalizarTelefone(tel.value)) { api.erro(errTel || "Digite o telefone com DDD (10 ou 11 números)."); tel.focus(); return false; }
         params.p_telefone = tel.value; params.p_nome = nome.value.trim() || null;
       } else {
         if (!escolhido || !escolhido.id) { api.erro("Escolha alguém da lista ou use “Digitar telefone”."); return false; }

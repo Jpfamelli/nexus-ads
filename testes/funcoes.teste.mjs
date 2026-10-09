@@ -37,7 +37,7 @@ const GESTOR_B = "5512999998888";
    ------------------------------------------------------------ */
 const COLUNAS = {
   nx_config: "id cron_token codigo_gestor funcoes_url painel_url wa_access_token wa_phone_number_id wa_template wa_verify_token meta_app_secret anthropic_api_key modelo_ia google_api_versao",
-  nx_clientes: "id slug nome ativo cfg wa_phone_number_id criado_em",
+  nx_clientes: "id slug nome ativo status teste_ate cfg vertical wa_phone_number_id criado_em",   // status/teste_ate: listarClientes (plano 100, S-F16); vertical: vocabulário (com P)
   nx_integracoes: "id cliente_id canal ativo cred ultimo_sync status",
   nx_metricas_dia: "cliente_id plataforma nivel data campanha_ext anuncio_ext campanha_nome anuncio_nome impressoes alcance frequencia cliques gasto conversoes valor_conversao atualizado_em",
   nx_leads: "id cliente_id telefone nome origem plataforma campanha_ext anuncio_ext ctwa_clid servico etapa data_conversa data_agenda data_consulta valor obs criado_em atualizado_em",
@@ -238,10 +238,10 @@ function cenario({ config = {}, tabelas = {} } = {}) {
                   wa_access_token: "wa-token", wa_phone_number_id: "900900", wa_template: "nexus_aviso", wa_verify_token: "verifica-123",
                   meta_app_secret: "segredo-do-app", anthropic_api_key: null, modelo_ia: "claude-opus-5", google_api_versao: null, ...config }],
     nx_clientes: [
-      { id: CLI_A, slug: "clinica-a", nome: "Clínica Alfa", ativo: true, cfg: { waGestor: ["12911112222"] }, wa_phone_number_id: "111" },
-      { id: CLI_B, slug: "kamiguchi", nome: "Kamiguchi Odontologia", ativo: true, wa_phone_number_id: "222",
+      { id: CLI_A, slug: "clinica-a", nome: "Clínica Alfa", ativo: true, status: "ativo", teste_ate: null, cfg: { waGestor: ["12911112222"] }, wa_phone_number_id: "111" },
+      { id: CLI_B, slug: "kamiguchi", nome: "Kamiguchi Odontologia", ativo: true, status: "ativo", teste_ate: null, wa_phone_number_id: "222",
         cfg: { nomeCurto: "Kamiguchi", cpaAlvo: 15, waGestor: [GESTOR_B], waCliente: ["12997552370"] } },
-      { id: CLI_C, slug: "inativa", nome: "Clínica Parada", ativo: false, cfg: {}, wa_phone_number_id: "333" },
+      { id: CLI_C, slug: "inativa", nome: "Clínica Parada", ativo: false, status: "ativo", teste_ate: null, cfg: {}, wa_phone_number_id: "333" },
     ],
     nx_integracoes: [
       { id: 1, cliente_id: CLI_A, canal: "meta", ativo: true, cred: { meta_access_token: "EAAtokenA", meta_ad_account_id: "act_999" }, ultimo_sync: null, status: null },
@@ -496,7 +496,12 @@ test("nx-relatorio diário: IA falha → leitura por regras + erro gravado; não
   assert.equal(rel.tipo, "diario");
   assert.equal(rel.referencia, "2026-09-26");
   assert.equal(rel.leitura_ia, null);
-  assert.equal(rel.erro, "IA: Anthropic sem resposta: Connection error.");
+  // plano 100 (S-F16): a falha da IA não suja um relatório ENTREGUE — fica no resumo da execução, nunca em nx_relatorios.erro
+  assert.equal(rel.erro, null);
+  assert.equal(corpo.clientes[0].ok, true);
+  assert.equal(corpo.clientes[0].ia, "falhou");
+  assert.equal(corpo.clientes[0].ia_erro, "Anthropic sem resposta: Connection error.");
+  assert.equal(corpo.clientes[0].ia_motivo, "sem_conexao");
   assert.equal(rel.enviado_em, AGORA.toISOString());
   assert.deepEqual(rel.destinos, [GESTOR_B]);
   assert.match(rel.texto, /^📊 \*Kamiguchi · Tráfego pago\* — 26\/09\/2026/);
@@ -539,8 +544,10 @@ test("nx-relatorio: IA que não responde é cortada no prazo e o relatório sai 
   assert.ok(Date.now() - t < 3000);
   assert.equal(corpo.clientes[0].enviado, true);
   assert.equal(corpo.clientes[0].ia, "falhou");
+  assert.equal(corpo.clientes[0].ia_erro, "tempo esgotado");
+  assert.equal(corpo.clientes[0].ok, true, "relatório entregue: ok, mesmo sem a leitura da IA");
   const [rel] = s.banco.tab("nx_relatorios");
-  assert.equal(rel.erro, "IA: tempo esgotado");
+  assert.equal(rel.erro, null, "a falha da IA não vai para nx_relatorios.erro");
   assert.equal(rel.leitura_ia, null);
   assert.match(rel.texto, /\*Leitura do dia\*\n• Prioridade:/, "leitura por regras");
   assert.equal(s.estado.wa.length, 1);
@@ -1180,7 +1187,9 @@ test("D integração: instabilidade só avisa depois de 3 h sem atualizar; radar
   await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, deps);
   const al = s.banco.tab("nx_alertas").filter(a => a.regra === "integracao");
   assert.equal(al.length, 1);
-  assert.equal(al[0].mensagem, "A conexão com o Meta da Kamiguchi parou: o Meta não está respondendo (sem atualizar há mais de 3 h). Abra Ajustes → Integrações.");
+  // passageira é «instável» (não «parou»), severidade alerta e sem mandar abrir Ajustes: a ação já diz que não há o que fazer
+  assert.equal(al[0].mensagem, "A conexão com o Meta da Kamiguchi está instável: o Meta não está respondendo (sem atualizar há mais de 3 h).");
+  assert.equal(al[0].severidade, "alerta");
   assert.match(al[0].acao, /^Nada a fazer agora/);
   assert.equal(s.estado.wa.length, 1);
   assert.equal(s.estado.wa[0].to, GESTOR_B);
@@ -1325,8 +1334,10 @@ Anthropic.APIError = class APIError extends Error { constructor(status, msg) { s
 async function carregarIA() {
   const src = readFileSync(join(RAIZ, "supabase/functions/_compartilhado/ia.js"), "utf8");
   const sdk = `data:text/javascript,${encodeURIComponent(SDK_FALSO)}`;
+  // o ia.js importa o comum.js (modelo padrão, reserva de modelo): num módulo data: o import relativo precisa virar URL de arquivo
+  const comum = pathToFileURL(join(RAIZ, "supabase/functions/_compartilhado/comum.js")).href;
   assert.ok(src.includes('"npm:@anthropic-ai/sdk"'));
-  return import(`data:text/javascript,${encodeURIComponent(src.replace('"npm:@anthropic-ai/sdk"', JSON.stringify(sdk)))}`);
+  return import(`data:text/javascript,${encodeURIComponent(src.replace('"npm:@anthropic-ai/sdk"', JSON.stringify(sdk)).replace('"./comum.js"', JSON.stringify(comum)))}`);
 }
 
 test("ia.js: pedido do contrato (opus-5 com fallback), recusa e erro da API", async () => {

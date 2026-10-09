@@ -426,7 +426,9 @@ begin
   perform set_config('nx.sem_historico', '1', true);
   insert into public.nx_contatos (cliente_id, nome, telefone, email, etiquetas, dono_id, criado_em)
   select cT, 'Contato Teste ' || g || case when g % 7 = 0 then ' Araújo' else '' end,
-         '55129' || lpad(g::text, 8, '0'), 'c' || g || '@teste.local', array[eX] || case when g % 3 = 0 then array[eT] else '{}'::uuid[] end,
+         -- celular de verdade (9 seguido de 6–9): a regra de 20261008a (S-B5 [C6]) só tira o 9 de celular; '55129' || 8 dígitos
+         -- começando em 0 é um número de 9 dígitos que NÃO é celular e deixou de casar com a forma sem o 9
+         '551299' || lpad(g::text, 7, '0'), 'c' || g || '@teste.local', array[eX] || case when g % 3 = 0 then array[eT] else '{}'::uuid[] end,
          case when g % 2 = 0 then k_adm end, now() - make_interval(mins => g)
     from generate_series(1, 5000) g;
   insert into public.nx_leads (cliente_id, contato_id, estagio_id, valor_previsto, dono_id, titulo, etiquetas)
@@ -464,7 +466,7 @@ begin
   -- importação: 5 lotes de 100 com duplicados por telefone (com e sem 55/9) num cliente com 5.000 contatos
   for lote in 1 .. 5 loop
     select jsonb_agg(case
-             when g % 10 = 0 then jsonb_build_object('nome', 'Dup ' || g, 'telefone', '12' || lpad((g * 7)::text, 8, '0'))   -- sem 55 e sem 9 → já existe (55129…)
+             when g % 10 = 0 then jsonb_build_object('nome', 'Dup ' || g, 'telefone', '129' || lpad((g * 7)::text, 7, '0'))   -- sem 55 e sem o 9 extra → já existe (551299…)
              else jsonb_build_object('nome', 'Imp ' || lote || '-' || g, 'telefone', '(11) 9' || lpad((lote * 1000 + g)::text, 8, '0'),
                                      'email', 'imp' || lote || '-' || g || '@teste.local', 'etiquetas', 'Lote ' || lote || ';Importados',
                                      'empresa', 'Empresa ' || (g % 5), 'cidade', 'Taubaté') end order by g)

@@ -531,7 +531,7 @@ function relogio() {
     proximo() { fila.sort((a, b) => a.em - b.em); return fila[0] ? fila[0].em - t : null; },
   };
 }
-await teste("intervalos: 10 s normal, 3 s em Conversas, 60 s com a aba escondida; avisa só quando v muda", async () => {
+await teste("intervalos: 10 s normal, 3 s em Conversas, 15 s com a aba escondida (plano 100 · A2; era 60 s); avisa só quando v muda", async () => {
   const rel = relogio();
   const doc = { visibilityState: "visible", addEventListener() {}, removeEventListener() {} };
   let v = 1, leituras = 0, notif = null;
@@ -553,7 +553,7 @@ await teste("intervalos: 10 s normal, 3 s em Conversas, 60 s com a aba escondida
   assert.equal(rel.proximo(), 3000);
   doc.visibilityState = "hidden";
   await rel.andar(3000);
-  assert.equal(rel.proximo(), 60000);
+  assert.equal(rel.proximo(), 15000, "escondida: 15 s (o som e o aviso de área de trabalho dependem deste pulso)");
   p.parar();
   assert.equal(rel.proximo(), null);
 });
@@ -1605,7 +1605,7 @@ await teste("app.css :root traz os tokens do contrato (escala --fs-*, --f-narr, 
 });
 await teste("Zodiak itálica: arquivo em web/fonts, @font-face com swap em app.css, --f-narr só em .narr (nada de requisição no login)", () => {
   assert.ok(existsSync(join(RAIZ, "web", "fonts", "zodiak-variable-italic.woff2")), "arquivo da fonte");
-  assert.match(CSS_APP, /@font-face \{ font-family: "Nx Zodiak"; src: url\("\.\.\/fonts\/zodiak-variable-italic\.woff2"\)[^}]*font-style: italic; font-display: swap;/);
+  assert.match(CSS_APP, /@font-face \{ font-family: "Nx Zodiak"; src: url\("\.\.\/fonts\/zodiak-variable-italic\.woff2(\?v=\d+)?"\)[^}]*font-style: italic; font-display: swap;/);
   const usos = [...CSS_APP.matchAll(/([^{}]+)\{[^}]*font-family:\s*var\(--f-narr\)[^}]*\}/g)].map(m => m[1].trim());
   assert.ok(usos.length >= 1 && usos.every(s => /^\.narr$/.test(s)), `--f-narr só pode estar em .narr: ${usos.join(" | ")}`);
   const html = ler("index.html");
@@ -2238,7 +2238,7 @@ await teste("ui.acaoComDesfazer (M07): aplica na hora, Desfazer reverte, Ctrl/�
     const z4 = new d.Evento("keydown", { key: "z", ctrlKey: true }); d.doc.body.dispatchEvent(z4); assert.equal(z4.defaultPrevented, false, "nada pendente");
   } finally { d.fim(); }
   const src = ler("ui.js");
-  assert.match(src, /export async function acaoComDesfazer\(\{ texto, aplicar, reverter, firmar, ms = 7000 \} = \{\}\)/, "assinatura do contrato ({texto, aplicar, reverter, ms = 7000}) + o opcional `firmar`");
+  assert.match(src, /export async function acaoComDesfazer\(\{ texto, aplicar, reverter, firmar, ms = 7000, aoCriar \} = \{\}\)/, "assinatura do contrato ({texto, aplicar, reverter, ms = 7000}) + os opcionais `firmar` e `aoCriar`");
 });
 
 /* ---------- modal e gaveta que protegem o texto digitado ---------- */
@@ -3042,6 +3042,29 @@ await teste("M36/M40: o contexto expõe leitura de rascunhos ao módulo Conversa
   assert.match(rascunho, /existe\(chave\) \{ const d = ler\(chaveDe\(chave\)\)/);
   assert.match(rascunho, /texto\(chave\) \{ const d = ler\(chaveDe\(chave\)\)/);
   assert.match(cv, /const r = A\.ctx\.rascunho;[\s\S]*?r\.texto\(`conversa:\$\{id\}`\)/);
+});
+
+/* ---------- revisão 09/10: firmarAgora (a gaveta do negócio fechou com o movimento no prazo do «Desfazer») ---------- */
+await teste("acaoComDesfazer({aoCriar}) → firmarAgora firma na hora (uma vez), fecha o «Desfazer» e resolve «mantida»; depois de desfeita não firma", async () => {
+  const d = comDom();
+  const vivos = () => d.doc.querySelectorAll(".toast").filter(t => !t.classList.contains("saindo"));
+  try {
+    let firmou = 0, h = null;
+    const p = U.acaoComDesfazer({ texto: "Ganhou", reverter() {}, firmar: async () => { firmou++; }, ms: 5000, aoCriar: x => { h = x; } });
+    await esperar(5);
+    assert.equal(typeof h.firmarAgora, "function"); assert.equal(firmou, 0, "nada gravado antes");
+    h.firmarAgora(); h.firmarAgora();
+    const r = await p;
+    assert.equal(r.estado, "mantida"); assert.equal(firmou, 1, "firmou uma vez só");
+    let firmou2 = 0, h2 = null;
+    const p2 = U.acaoComDesfazer({ texto: "Perdeu", reverter() {}, firmar: async () => { firmou2++; }, ms: 5000, aoCriar: x => { h2 = x; } });
+    await esperar(5);
+    achar(vivos().find(t => /Perdeu/.test(t.textContent)), ".toast-acao").click();
+    assert.equal((await p2).estado, "desfeita");
+    h2.firmarAgora();
+    assert.equal(firmou2, 0, "depois de desfeita, firmarAgora não grava nada");
+  } finally { d.fim(); }
+  assert.match(ler("crm-negocio.js"), /aoFechar: \(\) => \{ fechada = true; if \(pend && !pend\.efetivado && pend\.firmarAgora\) pend\.firmarAgora\(\);/, "a gaveta firma o pendente ao fechar");
 });
 
 console.log(`\n${ok} ok · ${falhas} falha(s)${avisos ? ` · ${avisos} aviso(s)` : ""}\n`);

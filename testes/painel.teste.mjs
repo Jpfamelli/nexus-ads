@@ -602,7 +602,8 @@ await teste("o curta: 7 cenas, créditos em ≤ 50 s, mesmos números do herói 
   assert.ok(ct.ATE_CREDITOS <= 50000 && ct.ATE_CREDITOS >= 35000, `créditos em ${ct.ATE_CREDITOS} ms`);
   // P = a mesma conta do numerosPeriodo() do painel (herói/régua): tratamentos ÷ (anúncios + gestão)
   assert.match(JS, /const custoTotal = t\.gasto \+ fee;\s*const retorno = S\.plat \? roas : \(custoTotal \? c\.receita \/ custoTotal : null\);/);
-  assert.match(JS, /const \{ de, t, ta, c, ca, roas, retorno \} = numerosPeriodo\(\);/, "o herói usa numerosPeriodo()");
+  // (plano 100: o herói também lê `fee` — com fee 0 o rótulo vira «÷ investimento em anúncios»)
+  assert.match(JS, /const \{ de, t, ta, c, ca, roas, retorno, fee \} = numerosPeriodo\(\);/, "o herói usa numerosPeriodo()");
   const de = MD.R - 29, t = MD.consolidar(MD.linhasDe(de, MD.R)), c = MD.crmTot(de, MD.R);
   const custoTotal = t.gasto + MD.CFG.fee * 30 / 30;
   const P2 = { de, ate: MD.R, t, c, custoTotal, retorno: c.receita / custoTotal, dias: 30, plat: "" };
@@ -697,7 +698,8 @@ await teste("simulador só na demo, em faixa de ±20% com as taxas do período, 
 await teste("gaveta: cartão do anúncio de origem e fita de 4 fotogramas; marcos (claquetes) no gráfico; 'desde a última visita'", () => {
   assert.ok(idsHtml.has("gv-fita") && idsHtml.has("gv-origem-info") && idsHtml.has("marco-form") && idsHtml.has("desde-visita"));
   assert.match(JS, /\{ t: "Chamou", q: dia\(L\.i\)/);
-  assert.match(JS, /\{ t: "Fechou", q: fechou \? brl0\(M\.valorLead\(L\)\) : null/);
+  // fechou sem valor e sem tabela configurada: a fita diz "sem valor" (nunca R$ 0 inventado)
+  assert.match(JS, /\{ t: "Fechou", q: fechou \? \(M\.valorDe\(L\)\.semValor \? "sem valor" : brl0\(M\.valorLead\(L\)\)\) : null/);
   assert.match(JS, /const MARCOS_DEMO = \[/);
   assert.match(JS, /await salvarCfgCliente\(\{ marcos: lista\.slice\(-40\) \}\);/);
   assert.match(JS, /maxlength="60"/);

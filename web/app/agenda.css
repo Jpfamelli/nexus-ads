@@ -308,6 +308,37 @@ button.agenda-proxima:focus-visible { outline: 2px solid var(--c-foco); outline-
 .ag-painel-sum:focus-visible { outline: 2px solid var(--c-foco); outline-offset: -2px; border-radius: var(--r); }
 .agenda-mes-bt { display: none; }   /* no desktop, «Mês» é a 3ª aba do segmentado; no celular vira este botão (regra do @media abaixo) */
 
+/* ---------------- plano 100 (E): presença, próxima fora do período, legenda com avatar, vazio do painel ---------------- */
+/* E1: «Compareceu / Faltou» abaixo da consulta que já passou (painel do dia e detalhe); pressionado = a marca gravada */
+.ag-painel-li { display: grid; gap: .2rem; min-width: 0; }
+.ag-painel-li.com-presenca { padding-bottom: .35rem; border-bottom: 1px solid var(--c-borda); }
+.ag-painel-li.com-presenca:last-child { border-bottom: 0; }
+.ag-painel-li .ag-pres { padding-inline: .6rem; }
+.ag-pres { display: flex; flex-wrap: wrap; gap: .35rem; min-width: 0; }
+.ag-pres-bt {
+  display: inline-flex; align-items: center; gap: .3rem; min-height: 36px; padding: .2rem .7rem; border-radius: 999px;
+  border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 600;
+  transition: border-color var(--t-micro) var(--e-out), background-color var(--t-micro) var(--e-out), color var(--t-micro) var(--e-out);
+}
+.ag-pres-bt .ic { width: 14px; height: 14px; }
+.ag-pres-bt:hover:not(:disabled) { border-color: var(--c-texto-3); color: var(--c-texto); }
+.ag-pres-bt:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.ag-pres-bt:disabled { opacity: .55; cursor: not-allowed; }
+.ag-pres-compareceu[aria-pressed="true"] { border-color: var(--c-ok); background: var(--c-ok-suave); color: var(--c-ok); }
+.ag-pres-faltou[aria-pressed="true"] { border-color: var(--c-ruim); background: var(--c-ruim-suave); color: var(--c-ruim); }
+.ag-det .ag-pres { margin-top: .35rem; }
+/* E3: o chip da próxima troca sem mexer no resumo (a caixa não ocupa lugar próprio) */
+.agenda-proxima-caixa { display: contents; }
+/* E7: profissional na legenda com as iniciais na cor dos blocos dele */
+.ag-leg-chip.ag-leg-pessoa { padding-left: .25rem; }
+.ag-leg-av { flex: none; }
+/* E5: dia sem consulta no painel — a ilustração da agenda, empilhada (o painel tem 250–300 px) */
+.ag-painel-vazio-tema { padding: 0; }
+.ag-painel-vazio-tema .vazio-tema { grid-template-columns: minmax(0, 1fr); justify-items: start; gap: .6rem; padding: .9rem; }
+.ag-painel-vazio-tema .vazio-il { width: 7rem; }
+.ag-painel-vazio-tema .vazio h2 { font-size: var(--fs-17); }
+.ag-painel-vazio-tema .vazio-acoes { margin-top: .6rem; }
+
 /* ---------------- marcar consulta (modal) ---------------- */
 .agenda-form { display: grid; gap: .9rem; }
 .agenda-busca { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .55rem; align-items: end; }
@@ -452,8 +483,15 @@ button.agenda-proxima:focus-visible { outline: 2px solid var(--c-foco); outline-
   .agc-remover { width: 44px; }
   .ag-faixa-d { min-height: 64px; }
   .ag-dia-mais { width: 44px; height: 44px; }
+  .ag-pres-bt { min-height: 44px; }
+}
+/* E4 (com A11): a 360 px o diálogo tem 326 px de miolo — a grade fica nele (sem avançar sobre o respiro) e o vão de 2 px dá 7 dias de 44,8 px */
+@media (width <= 360px) {
+  .ag-mes-compacto { margin-inline: 0; }
+  .ag-mes-compacto .ag-mes-sem, .ag-mes-compacto .ag-mes-grade { gap: 2px; }
+  .ag-mes-compacto .ag-mes-dia { padding-inline: .25rem; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ag-bloco, .ag-item, .ag-anel-valor, .ag-dia-ocup::after, .ag-leg-chip, .ag-painel-item, .ag-mes-dia, .agenda-proxima, .ag-painel-sum::after, .agc-previa-faixa { transition: none; }
+  .ag-bloco, .ag-item, .ag-anel-valor, .ag-dia-ocup::after, .ag-leg-chip, .ag-painel-item, .ag-mes-dia, .agenda-proxima, .ag-painel-sum::after, .agc-previa-faixa, .ag-pres-bt { transition: none; }
   .ag-item:not(.ag-fantasma) { animation: none; }
 }

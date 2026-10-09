@@ -3,7 +3,7 @@
    Peças usadas pelos três handlers: resposta JSON, relógio,
    autenticação do cron, leitura do banco no formato do nx_dados.
    ============================================================ */
-import { datasetDeLinhas, montar, encurtar, MESES } from "./nucleo.js";
+import { datasetDeLinhas, montar, encurtar, MESES, hojeSP } from "./nucleo.js";
 
 export class ErroHttp extends Error {
   constructor(status, mensagem) { super(mensagem); this.status = status; }
@@ -26,6 +26,65 @@ export function somaDias(iso, n) {
 }
 
 export const soDigitos = v => String(v ?? "").replace(/\D/g, "");
+
+/* ------------------------------------------------------------
+   Texto e telefone: UMA regra para as 7 funções (plano 100, S-F5/S-F6/B72)
+   ------------------------------------------------------------ */
+
+/** Corta em `max` unidades UTF-16 sem partir um par de surrogate: um emoji na posição do corte deixava um code unit
+    solto, que o Postgres recusa em jsonb («unsupported Unicode escape sequence») — e a mensagem inteira se perdia.
+    O que sai daqui é sempre bem formado (toWellFormed), venha o texto de onde vier. */
+export function cortarTexto(v, max) {
+  let s = String(v ?? "");
+  if (max != null && s.length > max) {
+    s = s.slice(0, max);
+    const u = s.charCodeAt(s.length - 1);
+    if (u >= 0xd800 && u <= 0xdbff) s = s.slice(0, -1);   // high surrogate no fim: a metade do emoji ficou do outro lado do corte
+  }
+  return typeof s.toWellFormed === "function" && !s.isWellFormed() ? s.toWellFormed() : s;
+}
+
+/** Formas do mesmo celular (com/sem 55, com/sem o 9): o WhatsApp às vezes manda números antigos sem o 9
+    e o cadastro manual costuma vir sem o 55. Usada pelo webhook da Meta e pelo CodeWords (uma cópia só). */
+export function variantesTelefone(tel) {
+  const d = soDigitos(tel);
+  const v = new Set(d ? [d] : []);
+  const nac = d.startsWith("55") && d.length >= 12 ? d.slice(2) : d.length >= 10 && d.length <= 11 ? d : null;
+  if (nac) {
+    const com9 = nac.length === 10 && /[6-9]/.test(nac[2]) ? `${nac.slice(0, 2)}9${nac.slice(2)}` : null;
+    const sem9 = nac.length === 11 && nac[2] === "9" ? `${nac.slice(0, 2)}${nac.slice(3)}` : null;
+    for (const n of [nac, com9, sem9]) if (n) { v.add(n); v.add(`55${n}`); }
+  }
+  return [...v];
+}
+
+// DDDs brasileiros em uso: só com um deles um número de 10–11 dígitos ganha o 55 (a mesma lista do banco, S-B5)
+const DDDS = new Set(("11 12 13 14 15 16 17 18 19 21 22 24 27 28 31 32 33 34 35 37 38 41 42 43 44 45 46 47 48 49 "
+  + "51 53 54 55 61 62 63 64 65 66 67 68 69 71 73 74 75 77 79 81 82 83 84 85 86 87 88 89 91 92 93 94 95 96 97 98 99").split(" "));
+export const dddValido = d => DDDS.has(String(d ?? "").slice(0, 2));
+
+/**
+ * Telefone que chega SEM garantia de DDI (API do agente, payload cru do aparelho) → só dígitos, com o 55 quando é
+ * brasileiro sem DDI. É a regra de nx_tel_normalizar(p, false) do banco, mais estrita: zero de tronco fora
+ * (012 9… → 12 9…); 10–11 dígitos só ganham o 55 com DDD válido E assinante brasileiro (celular 9…, fixo 2–5, celular
+ * antigo de 8 dígitos 6–9); o resto (E.164 de outro país, 12–15 dígitos) fica como veio. Sem isso o banco achava o
+ * contato pela chave e sobrescrevia o wa_id canônico com o número sem 55 (a resposta saía para um jid inexistente).
+ */
+export function telefoneBorda(v) {
+  let d = soDigitos(v);
+  if (d.startsWith("0") && (d.length === 11 || d.length === 12) && d[1] !== "0") d = d.slice(1);
+  if ((d.length === 10 || d.length === 11) && dddValido(d)) {
+    const a = d[2];
+    if ((d.length === 11 && a === "9") || (d.length === 10 && a >= "2" && a <= "9")) return `55${d}`;
+  }
+  return d;
+}
+
+/** Telefone/wamid para o resumo de nx_execucoes e para a resposta do cron (tabela de operação: só o fim do número). */
+export const anonTelefone = t => { const d = soDigitos(t); return d.length > 4 ? `${"*".repeat(d.length - 4)}${d.slice(-4)}` : "****"; };
+export const anonId = id => (id == null ? null : `${String(id).slice(0, 12)}…`);
+/** Lista de enviarParaTodos sem número inteiro nem wamid inteiro (os reais ficam só em wa_ids/wa_ids_template). */
+export const anonimizarEnvio = envio => (envio || []).map(e => ({ ...e, destino: anonTelefone(e.destino), ...(e.id != null ? { id: anonId(e.id) } : {}) }));
 
 /** 16 hex aleatórios por chamada: o texto de terceiros (conversa, cadastro, pedido) fica entre essas marcas
     no prompt — é DADO, nunca instrução — e nenhuma marca igual pode aparecer dentro dele. */
@@ -65,6 +124,93 @@ export function limparErro(msg) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 300);
+}
+
+/* ------------------------------------------------------------
+   IA (Anthropic): um só padrão para Conversas, automações e relatório (plano 100, S-F14)
+   ------------------------------------------------------------ */
+export const MODELO_PADRAO = "claude-opus-5-5";
+// modelos cujos classificadores podem recusar e que aceitam a reserva do servidor (fallbacks: "default")
+export const COM_RESERVA = new Set(["claude-opus-5", "claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]);
+// modelos que NÃO aceitam output_config.effort (dariam 400): anteriores ao Opus 4.5, Sonnet 4.5 e Haiku 4.5 —
+// inclui os apelidos claude-opus-4-0/4-1 e claude-sonnet-4-0; o Haiku 5.5 aceita effort
+export const SEM_EFFORT = /haiku-4-5|haiku-3|sonnet-4-5|sonnet-4-[02]|opus-4-[012]|claude-3/;
+/** US$ por milhão de tokens [entrada, saída] (tabela da Anthropic de 06/10/2026). Modelo fora da tabela → custo null:
+    número que não se sabe não se inventa. */
+export const PRECOS_IA = Object.freeze({
+  "claude-fable-5-1": [10, 50], "claude-fable-5": [10, 50], "claude-opus-5-5": [4, 20], "claude-opus-5": [5, 25],
+  "claude-opus-4-8": [5, 25], "claude-opus-4-7": [5, 25], "claude-opus-4-6": [5, 25], "claude-opus-4-5": [5, 25],
+  "claude-sonnet-5-5": [2, 10], "claude-sonnet-5": [2, 10], "claude-sonnet-4-6": [3, 15], "claude-sonnet-4-5": [3, 15],
+  "claude-haiku-5-5": [0.1, 0.5], "claude-haiku-4-5": [1, 5],
+});
+/** Custo estimado em US$. Com prompt caching o input tem três preços: o normal, a ESCRITA no cache (1,25×) e a LEITURA
+    do cache (0,1×) — usage.input_tokens conta só o primeiro; sem os outros dois o custo e os tokens ficavam abaixo do real. 6 casas; null sem preço conhecido ou sem contagem. */
+export function custoUsd(modelo, tokensIn, tokensOut, cacheEscrita = 0, cacheLeitura = 0) {
+  const chave = Object.keys(PRECOS_IA).find(k => String(modelo ?? "").startsWith(k));
+  // sem contagem (null) não há custo a estimar — Number(null) seria 0 e inventaria um valor
+  if (!chave || tokensIn == null || tokensOut == null || !Number.isFinite(Number(tokensIn)) || !Number.isFinite(Number(tokensOut))) return null;
+  const [pin, pout] = PRECOS_IA[chave];
+  const cw = Number(cacheEscrita) || 0, cr = Number(cacheLeitura) || 0;
+  return Math.round((Number(tokensIn) * pin + cw * pin * 1.25 + cr * pin * 0.1 + Number(tokensOut) * pout) / 1e6 * 1e6) / 1e6;
+}
+
+/**
+ * O erro que o ia.js lança («Anthropic ${status}: mensagem do provedor», que pode citar a chave) vira
+ * {codigo, mensagem, tentarDeNovo, detalhe, plataforma}. A mensagem original NUNCA é devolvida a quem usa o painel;
+ * `detalhe` é só «Anthropic 401», «recusa», «sem_conexao»… `plataforma` = problema da chave/cota da Nexus (não do pedido):
+ * quem chama adia em vez de descartar. Única para sugerir/resumir, automações e relatório.
+ */
+export function traduzirErroIA(e) {
+  const s = Number(e?.status) || null;
+  const detalhe = s ? `Anthropic ${s}` : undefined;
+  const msg = limparErro(e?.message || e);
+  if (e?.recusa || /\ba IA recusou\b/i.test(msg)) return { codigo: "ia_indisponivel", mensagem: "A IA recusou este pedido. Escreva de outro jeito e tente de novo.", tentarDeNovo: false, detalhe: "recusa" };
+  if (e?.incompleta || /max_tokens/.test(msg)) return { codigo: "ia_indisponivel", mensagem: "A resposta da IA veio incompleta. Tente de novo com uma descrição mais curta.", tentarDeNovo: true, detalhe: "incompleta" };
+  if (e?.invalido) return { codigo: "ia_indisponivel", mensagem: "A IA devolveu uma resposta que não consegui ler. Tente de novo.", tentarDeNovo: true, detalhe: "resposta_invalida" };
+  if (s === 401 || s === 403) return { codigo: "ia_indisponivel", mensagem: "A chave da IA não foi aceita. Avise a equipe da Nexus.", tentarDeNovo: false, detalhe, plataforma: true };
+  if (s === 429) return { codigo: "ia_indisponivel", mensagem: "A IA está recebendo pedidos demais agora. Tente de novo em instantes.", tentarDeNovo: true, detalhe };
+  if (s === 529 || (s && s >= 500)) return { codigo: "ia_indisponivel", mensagem: "A IA está fora do ar neste momento. Tente de novo em instantes.", tentarDeNovo: true, detalhe };
+  if (s === 408 || s === 409) return { codigo: "ia_indisponivel", mensagem: "A IA demorou demais. Tente de novo em instantes.", tentarDeNovo: true, detalhe };
+  if (s && s >= 400) return { codigo: "ia_indisponivel", mensagem: "A IA não aceitou este pedido. Tente com uma descrição diferente.", tentarDeNovo: false, detalhe };
+  // «sem resposta» é o prefixo do ia.js quando a API nem respondeu; «Connection error» é o texto do SDK
+  if (e?.conexao || /tempo|timeout|time out|timed out|abort|conex|connect|sem resposta|network|socket|fetch failed|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(msg)) {
+    return { codigo: "ia_indisponivel", mensagem: "Não consegui falar com a IA agora. Tente de novo em instantes.", tentarDeNovo: true, detalhe: "sem_conexao" };
+  }
+  return { codigo: "ia_indisponivel", mensagem: "Não foi possível consultar a IA agora. Tente de novo em instantes.", tentarDeNovo: true };
+}
+
+/** Linha de log por chamada à IA (JSON numa linha, sem chave, sem texto de terceiros): ação, cliente, modelo, tokens, ms, resultado. */
+export function logIA(dados) {
+  try { console.log(JSON.stringify({ ia: true, ...dados })); } catch { /* log nunca derruba a chamada */ }
+}
+
+/** Interna que ainda não existe no banco (migração desta rodada não aplicada): o PostgREST responde 404 citando a função. */
+export const funcaoAusente = (e, nome) => e?.status === 404 && /PGRST202|Could not find the function|schema cache/i.test(String(e?.message ?? ""))
+  && (!nome || String(e?.message ?? "").includes(nome));
+
+// a RPC antiga (5 argumentos) ainda está no ar? depois de um 404 com os argumentos novos não insiste por 10 min
+const REGISTRO_IA = { semArgsNovos: 0 };
+/**
+ * Fecha a reserva de IA (nx_ia_registrar_reserva) com modelo, tokens, ok e — contrato 7 — custo_usd, stop_reason e ms.
+ * Manda SEMPRE as 8 chaves (null no que não sabe): a sobrecarga de 8 da 20261008c não tem default, então 8 chaves só casam
+ * com ela e 5 só com a antiga. Banco sem a sobrecarga (404) → cai na assinatura de 5 argumentos.
+ * Nunca lança (o uso não registrado expira com a reserva em 5 min).
+ */
+export async function registrarUsoIA(db, { reserva, modelo, tokensIn, tokensOut, ok, stopReason, ms, cacheEscrita = 0, cacheLeitura = 0 }) {
+  // tokens de entrada = todos os processados (normal + escrita e leitura do cache)
+  const inTotal = tokensIn == null ? null : Number(tokensIn) + (Number(cacheEscrita) || 0) + (Number(cacheLeitura) || 0);
+  const base = { p_reserva: reserva, p_modelo: modelo, p_in: inTotal, p_out: tokensOut ?? null, p_ok: !!ok };
+  const extra = { p_custo_usd: custoUsd(modelo, tokensIn, tokensOut, cacheEscrita, cacheLeitura), p_stop_reason: stopReason ?? null, p_ms: Number.isFinite(ms) ? Math.round(ms) : null };
+  try {
+    if (Date.now() >= REGISTRO_IA.semArgsNovos) {
+      try { return await db.rpc("nx_ia_registrar_reserva", { ...base, ...extra }); }
+      catch (e) { if (!funcaoAusente(e, "nx_ia_registrar_reserva")) throw e; REGISTRO_IA.semArgsNovos = Date.now() + 10 * 60_000; }
+    }
+    return await db.rpc("nx_ia_registrar_reserva", base);
+  } catch (e) {
+    console.error("nx_ia_registrar_reserva:", limparErro(e?.message || e));
+    return null;
+  }
 }
 
 export const PRAZO_REDE_MS = 30_000;
@@ -229,8 +375,11 @@ export async function lerCorpo(req, limite = MAX_CORPO_CRON, drenagem = {}) {
   try { const c = JSON.parse(new TextDecoder().decode(bytes), semNul); return c && typeof c === "object" ? c : {}; } catch { return {}; }
 }
 
-export async function lerConfig(db) {
-  return (await db.select("nx_config", { id: "eq.1", select: "*", limit: 1 }))[0] || null;
+/** nx_config inteira (cron) ou só as colunas pedidas (`colunas`: lista de nomes) — o webhook da Meta, que lê a
+    configuração ANTES de conferir a assinatura, pede só o que usa: menos segredo em memória por requisição anônima. */
+export async function lerConfig(db, colunas = null) {
+  const select = Array.isArray(colunas) && colunas.length ? colunas.join(",") : "*";
+  return (await db.select("nx_config", { id: "eq.1", select, limit: 1 }))[0] || null;
 }
 
 /** Lê nx_config e confere o header x-nx-cron. Devolve a config ou lança 401. */
@@ -244,16 +393,22 @@ export async function autenticarCron(req, db) {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Clientes ativos; com id explícito (botão do painel), aquele cliente mesmo se inativo. */
-export async function listarClientes(db, clienteId) {
-  const cols = "id,slug,nome,ativo,cfg";
+/** Clientes que o cron processa: ativos E com status ativo ou em teste dentro do prazo (suspenso, cancelado e teste
+    vencido ficam de fora — não gastam Meta/Google, IA nem WhatsApp). Com id explícito (botão do painel), aquele
+    cliente mesmo se inativo. */
+export async function listarClientes(db, clienteId, hoje = hojeSP()) {
+  // vertical: o vocabulário dos textos do WhatsApp (paciente × cliente, tratamento × serviço) é o do painel (nucleo.js)
+  const cols = "id,slug,nome,ativo,cfg,vertical";
   if (clienteId != null && clienteId !== "") {
     if (!UUID.test(String(clienteId))) throw new ErroHttp(400, "cliente inválido");
     const r = await db.select("nx_clientes", { id: `eq.${clienteId}`, select: cols, limit: 1 });
     if (!r.length) throw new ErroHttp(404, "cliente_nao_encontrado");
     return r;
   }
-  return db.select("nx_clientes", { ativo: "eq.true", select: cols, order: "nome.asc" });
+  return db.select("nx_clientes", {
+    ativo: "eq.true", select: cols, order: "nome.asc",
+    and: `(status.in.(ativo,teste),or(status.neq.teste,teste_ate.is.null,teste_ate.gte.${hoje}))`,
+  });
 }
 
 const COLS_METRICAS = "plataforma,nivel,data,campanha_ext,campanha_nome,anuncio_ext,anuncio_nome,impressoes,alcance,frequencia,cliques,gasto,conversoes";
@@ -275,6 +430,10 @@ export function filtroFunisAds(idsFunis) {
   return ids.length ? `or(funil_id.is.null,funil_id.in.(${ids.join(",")}))` : "funil_id.is.null";
 }
 
+/** Janela de leads do Ads — a MESMA do nx_dados (20261001b §19): data_conversa >= de OR data_consulta >= de OR
+    etapa in (nova, agendada). Painel e WhatsApp têm de carregar os mesmos negócios. */
+export const filtroLeadsAds = de => `or(data_conversa.gte.${de},data_consulta.gte.${de},etapa.in.(nova,agendada))`;
+
 /** Mesmo dataset que o painel monta a partir do nx_dados. */
 export async function carregarModelo(db, cliente, hoje, dias) {
   const de = somaDias(hoje, -dias);
@@ -287,16 +446,17 @@ export async function carregarModelo(db, cliente, hoje, dias) {
       const funis = await db.select("nx_funis", {
         cliente_id: `eq.${cliente.id}`, conta_no_ads: "is.true", select: "id", order: "id.asc",
       });
-      // lead que conversou antes da janela mas agendou/veio dentro dela ainda conta no funil
+      // o MESMO filtro do nx_dados (painel): conversou ou veio dentro da janela, ou ainda está em nova/agendada —
+      // senão o WhatsApp e a tela contariam leads diferentes
       return db.select("nx_leads", {
         cliente_id: `eq.${cliente.id}`, select: COLS_LEADS, order: "id.asc",
-        and: `(or(data_conversa.gte.${de},data_agenda.gte.${de},data_consulta.gte.${de}),${filtroFunisAds(funis.map(f => f.id))})`,
+        and: `(${filtroLeadsAds(de)},${filtroFunisAds(funis.map(f => f.id))})`,
       });
     })(),
   ]);
   const ds = datasetDeLinhas({
     metricas: metricas.map(metricaCurta), leads,
-    cliente: { id: cliente.id, slug: cliente.slug, nome: cliente.nome, cfg: cliente.cfg || {} },
+    cliente: { id: cliente.id, slug: cliente.slug, nome: cliente.nome, cfg: cliente.cfg || {}, vertical: cliente.vertical },
     hoje, dias,
   });
   return montar(ds);

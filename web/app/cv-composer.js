@@ -18,6 +18,8 @@ export function criarComposer(A) {
 
   let modoNota = false;
   let respondendo = null;       // mensagem citada
+  let notaEmVoo = false, notaReq = null;   // D2: nota interna a caminho (Enter repetido não grava duas) e o p_req da intenção
+  let pedindoIA = false;                   // D7: «Sugerir com IA» a caminho (botão e menu «+» não pedem de novo)
   let rrAberto = false, rrItens = [], rrSel = 0;
 
   const ta = h("textarea", { rows: 1, placeholder: "Mensagem  ·  / para respostas rápidas", "aria-label": "Mensagem", maxlength: 4096 });
@@ -80,6 +82,7 @@ export function criarComposer(A) {
     if (!c) return "sem";
     if (!A.podeEscrever) return "leitura";
     if (c.status === "resolvida") return "resolvida";
+    if (contato().bloqueado === true) return "bloqueado";      // D14: o servidor recusa (contato_bloqueado): a tela explica antes
     if (!c.canal_id) return "sem_canal";
     if (L.canalTemJanela(provedorCanal()) && !L.janela(c).aberta) return "janela";   // CodeWords não tem janela de 24 h
     if (!usaCodeWords() && c.canal && c.canal.tem_token === false) return "sem_token";
@@ -130,6 +133,14 @@ export function criarComposer(A) {
       b.addEventListener("click", () => A.acoes.status("aberta", b));
       trava.append(ui.icone("check"), h("p", null, "Atendimento resolvido. Reabra para responder."), b,
         h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => alternarNota(true) } }, ui.icone("nota"), "Nota interna"));
+    } else if (s === "bloqueado") {
+      // D14: nada sai para contato bloqueado — quem pode desbloqueia aqui mesmo; a nota interna continua valendo
+      trava.hidden = false; linha.hidden = !modoNota; dica.hidden = true;
+      const sup = A.acoes.pode("supervisor");
+      const bDesb = sup ? h("button", { type: "button", class: "bt bt-sec bt-p cvx-desbloquear", on: { click: () => A.acoes.ocultar(false) } }, ui.icone("check"), "Desbloquear") : null;
+      trava.append(...[ui.icone("cadeado"), h("p", null, sup ? "Este contato está bloqueado: nada é enviado para ele. Desbloqueie para responder."
+        : "Este contato está bloqueado: nada é enviado para ele. Peça a um supervisor para desbloquear (menu ⋮ da conversa)."), bDesb,
+        h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => alternarNota(true) } }, ui.icone("nota"), "Nota interna")].filter(Boolean));
     } else if (s === "sem_canal") {
       trava.hidden = false; dica.hidden = true;
       trava.append(ui.icone("alerta"), h("p", null, "O número deste atendimento foi removido. Comece uma nova conversa por outro número."),
@@ -181,7 +192,7 @@ export function criarComposer(A) {
     capInfo.textContent = codeWords
       ? "Este navegador não grava áudio. Você ainda pode anexar um áudio salvo (MP3, OGG, AAC, M4A ou WAV)."
       : "Este navegador não grava áudio em formato aceito. Você ainda pode anexar um áudio MP3, OGG, AAC ou M4A.";
-    btIA.disabled = modoNota || s !== "ok";
+    btIA.disabled = modoNota || s !== "ok" || pedindoIA;
     btRR.disabled = modoNota || s !== "ok";
     btRR.setAttribute("aria-expanded", String(rrAberto));
     btModelos.disabled = codeWords || modoNota || !(s === "ok" || s === "janela");
@@ -206,6 +217,12 @@ export function criarComposer(A) {
   /** Apaga o rascunho guardado — só depois de o servidor/fila terem a mensagem (e se a pessoa já não digitou outra coisa). */
   function apagarRascunho() { if (rasc && !ta.value.trim()) { try { rasc.apagar(); } catch { /* ok */ } } }
 
+  /** Texto guardado no aparelho para uma chave de rascunho (ctx.rascunho), sem ligar nada. */
+  function guardadoEm(chave) {
+    const r = A.ctx && A.ctx.rascunho;
+    if (!r || typeof r.texto !== "function") return "";
+    try { const t = r.texto(chave); return t && t.trim() ? t : ""; } catch { return ""; }
+  }
   function definirConversa() {
     if (gravacao) pararGravacao(true);
     // o rascunho da conversa ANTERIOR sai antes de o campo mudar: desligado depois, ele gravaria o texto da conversa nova na chave da antiga
@@ -216,7 +233,14 @@ export function criarComposer(A) {
     esconderSeloIA();                                // o selo fala do texto da conversa anterior: na nova ele seria falso
     desenharResposta();
     idDoCampo = A.selId || null;
-    ta.value = (idDoCampo && A.rascunhos.get(idDoCampo)) || "";
+    const daSessao = (idDoCampo && A.rascunhos.get(idDoCampo)) || "";
+    // D5: o texto ficou guardado como NOTA interna (e não há rascunho de mensagem): o campo volta no modo nota com ele — antes abria em
+    // mensagem, vazio, e o texto só reaparecia ligando «Nota interna» de novo
+    if (!daSessao.trim() && idDoCampo && A.podeEscrever && guardadoEm(`conversa:${idDoCampo}:nota`) && !guardadoEm(`conversa:${idDoCampo}`)) {
+      modoNota = true;
+      ui.anunciar("Rascunho de nota interna restaurado.");
+    }
+    ta.value = modoNota ? "" : daSessao;
     atualizarContador();
     ligarRascunho();
     atualizar();
@@ -230,16 +254,27 @@ export function criarComposer(A) {
     ta.style.height = `${Math.min(ta.scrollHeight, 400)}px`;
   }
   let faixaContador = "normal";
+  /** D14: o teto que vale: 4096 menos a assinatura «*Nome:*» que o servidor põe na frente (nota interna não leva assinatura). */
+  function teto() {
+    if (modoNota) return L.LIMITE_TEXTO;
+    return L.tetoTexto({ assinatura: !!(A.base && A.base.cfg && A.base.cfg.assinatura), nome: (A.eu && A.eu.nome) || "" });
+  }
   function atualizarContador() {
-    const restantes = Math.max(0, 4096 - String(ta.value || "").length);
+    const t = teto();
+    if (String(ta.getAttribute("maxlength")) !== String(t)) ta.setAttribute("maxlength", t);
+    const valor = String(ta.value || "");
+    const restantes = Math.max(0, t - valor.length);
+    const duplos = restantes <= 200 ? L.contarDuplos(valor) : 0;      // emoji conta 2 (unidades UTF-16): a conta é a do WhatsApp
     contador.hidden = restantes > 200;
-    contador.textContent = `${restantes} caractere${restantes === 1 ? "" : "s"} restante${restantes === 1 ? "" : "s"}`;
+    contador.textContent = L.textoContador(restantes, duplos);
+    contador.title = t < L.LIMITE_TEXTO ? `Limite de ${t.toLocaleString("pt-BR")} caracteres: a assinatura com o seu nome entra na frente da mensagem.` : "";
     contador.dataset.alerta = restantes <= 50 ? "1" : "0";
     const faixa = restantes === 0 ? "limite" : restantes <= 50 ? "critico" : restantes <= 200 ? "perto" : "normal";
     if (faixa !== faixaContador) {
-      contadorAnuncio.textContent = faixa === "limite" ? "Limite de 4.096 caracteres atingido."
+      const tt = t.toLocaleString("pt-BR");
+      contadorAnuncio.textContent = faixa === "limite" ? `Limite de ${tt} caracteres atingido.`
         : faixa === "critico" ? "Restam 50 caracteres ou menos."
-        : faixa === "perto" ? "A mensagem está perto do limite de 4.096 caracteres."
+        : faixa === "perto" ? `A mensagem está perto do limite de ${tt} caracteres${t < L.LIMITE_TEXTO ? " (a assinatura conta)" : ""}.`
         : "Há espaço para continuar a mensagem.";
       faixaContador = faixa;
     }
@@ -425,16 +460,34 @@ export function criarComposer(A) {
     if (!texto || !podeTexto()) return;
     // o texto do campo é de uma conversa só: enquanto a aberta não for ela (troca em andamento), Enter não manda nada para ninguém
     if (!idDoCampo || idDoCampo !== A.selId || !conv() || conv().id !== idDoCampo) return;
-    if (texto.length > 4096) { ui.toast("A mensagem passou de 4.096 caracteres. Divida em duas.", { tipo: "erro" }); return; }
+    const limite = teto();
+    if (texto.length > limite) {
+      ui.toast(limite < L.LIMITE_TEXTO ? `A mensagem passou de ${limite.toLocaleString("pt-BR")} caracteres (a assinatura conta). Divida em duas.`
+        : `A mensagem passou de ${limite.toLocaleString("pt-BR")} caracteres. Divida em duas.`, { tipo: "erro" });
+      return;
+    }
     if (modoNota) {
+      // D2: Enter repetido com a nota a caminho não grava outra; a mesma nota (depois de uma falha) repete o MESMO p_req
+      if (notaEmVoo) return;
+      notaEmVoo = true;
       btEnviar.disabled = true;
+      const conversaNota = idDoCampo;
+      if (!notaReq || notaReq.conversa !== conversaNota || notaReq.texto !== texto) notaReq = { conversa: conversaNota, texto, req: L.novoUuid() };
       try {
-        await A.acoes.nota(texto);
-        ta.value = ""; autoAltura(); atualizarContador();
-        apagarRascunho();
-        alternarNota(false);
+        await A.acoes.nota(texto, { req: notaReq.req, conversa: conversaNota });
+        notaReq = null;
+        // só limpa se o campo ainda é desta nota (a pessoa pode ter trocado de conversa ou escrito outra coisa enquanto ela ia)
+        if (idDoCampo === conversaNota && ta.value.trim() === texto) {
+          ta.value = ""; autoAltura(); atualizarContador();
+          apagarRascunho();
+          if (modoNota) alternarNota(false);
+        } else if (idDoCampo !== conversaNota && guardadoEm(`conversa:${conversaNota}:nota`).trim() === texto) {
+          // revisão: trocou de conversa com a nota a caminho — a troca guardou o texto como rascunho de nota daquela conversa; gravada a
+          // nota, o rascunho igual a ela sai (senão voltava em modo nota, «restaurado», convidando a gravar em dobro com outro p_req)
+          try { A.ctx.rascunho.apagar(`conversa:${conversaNota}:nota`); } catch { /* ok */ }
+        }
       } catch (e) { A.acoes.tratarErro(e); }
-      finally { btEnviar.disabled = !podeTexto(); }
+      finally { notaEmVoo = false; btEnviar.disabled = !podeTexto(); }
       return;
     }
     const citada = respondendo;
@@ -736,7 +789,7 @@ export function criarComposer(A) {
       if (campos[0]) setTimeout(() => campos[0].focus(), 30);
     }
     if (!todos.length) {
-      lista.appendChild(ui.vazio({ titulo: "Nenhum modelo neste número.", icone: "alerta",
+      lista.appendChild(ui.vazio({ titulo: "Nenhum modelo neste número.", icone: "alerta", tema: "conversas",
         texto: A.acoes.pode("admin") ? "Crie e aprove modelos no WhatsApp Manager da Meta e depois use “Sincronizar modelos” em Configurações → Números de WhatsApp."
           : "Peça ao administrador para sincronizar os modelos aprovados do número." }));
     }
@@ -744,7 +797,8 @@ export function criarComposer(A) {
       const disp = L.modeloDisponivel(t, { optin: ct.optin_marketing });
       const cat = String(t.categoria || "").toUpperCase();
       const b = h("button", { type: "button", class: "cv-modelo", role: "option", "aria-pressed": "false", disabled: !disp.ok },
-        h("span", { class: "cv-modelo-l1" }, h("span", { class: "mono" }, t.nome), ui.pilula(cat === "MARKETING" ? "Marketing" : cat === "UTILITY" ? "Utilidade" : cat === "AUTHENTICATION" ? "Autenticação" : (cat || "Modelo"), cat === "MARKETING" ? "aten" : "neutra"),
+        h("span", { class: "cv-modelo-l1" }, h("span", { class: "mono" }, t.nome), ui.pilula(cat === "MARKETING" ? "Marketing" : cat === "UTILITY" ? "Utilidade" : cat === "AUTHENTICATION" ? "Autenticação" : (cat || "Modelo"), cat === "MARKETING" ? "aten" : "neutra",
+            cat === "MARKETING" ? { title: L.dicaModeloMarketing(ct.optin_marketing) } : {}),
           h("span", { class: "fraco mono" }, t.idioma || "")),
         h("p", null, t.corpo || "(sem texto)"),
         disp.ok ? null : h("small", null, disp.motivo));
@@ -752,7 +806,7 @@ export function criarComposer(A) {
       lista.appendChild(b);
     }
     const corpo = h("div", { class: "pilha" },
-      h("p", { class: "sub" }, "Modelos aprovados pela Meta abrem ou retomam a conversa fora da janela de 24 h. A Meta cobra por modelo entregue."),
+      h("p", { class: "sub" }, "Modelos aprovados pela Meta abrem ou retomam a conversa fora da janela de 24 h. A Meta cobra por modelo entregue. Marketing só não vai para quem pediu para sair."),
       lista, params, previa);
     await ui.modal({ titulo: `Enviar modelo para ${nomeDestino()}`, corpo, largura: "m",
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Enviar modelo", tipo: "primario", fn: api => {
@@ -766,7 +820,8 @@ export function criarComposer(A) {
         const vals = campos.map(x => x.value.trim());
         const falta = vals.findIndex(v => !v);
         if (falta >= 0) { api.erro(`Preencha o parâmetro {{${falta + 1}}}.`); campos[falta].focus(); return false; }
-        A.acoes.enviar({ tipo: "template", conversa: idInicio, template: escolhido, parametros: vals });
+        // D8: client_ref por intenção, como o texto e a mídia — «Enviar de novo» repete o MESMO (a Meta cobra cada modelo entregue)
+        A.acoes.enviar({ tipo: "template", conversa: idInicio, template: escolhido, parametros: vals, client_ref: L.novoClientRef() });
         return true;
       } }] });
   }
@@ -774,12 +829,13 @@ export function criarComposer(A) {
 
   /* ---------------- IA (sugere; nunca envia) */
   async function sugerir() {
-    if (situacao() !== "ok") return;
+    if (pedindoIA || situacao() !== "ok") return;      // D7: um pedido por vez (botão, menu «+» do celular e atalho)
     // honesto e sem chamada: sem chave da IA ou cota do mês gasta, avisa na hora
     const ia = A.base && A.base.ia;
     if (ia && ia.ligada === false) { ui.toast("A IA não está disponível agora.", { tipo: "info" }); return; }
     const cota = ia && ia.cota;
     if (cota && cota.limite != null && Number(cota.usadas) >= Number(cota.limite)) { ui.toast("A cota de IA do mês acabou.", { tipo: "info" }); return; }
+    pedindoIA = true;
     iaTrab.hidden = false;
     btIA.disabled = true;
     const idPedido = idDoCampo;                       // a sugestão é para ESTA conversa
@@ -795,7 +851,7 @@ export function criarComposer(A) {
       if (ta.value.trim()) {
         // o campo já tem texto da pessoa: a sugestão entra ABAIXO (e só ela fica selecionada), nunca por cima do que foi digitado
         const base = `${ta.value.replace(/\s+$/, "")}\n\n`;
-        ta.value = (base + texto).slice(0, 4096); atualizarContador();
+        ta.value = (base + texto).slice(0, teto()); atualizarContador();
         autoAltura();
         ta.focus();
         ta.setSelectionRange(Math.min(base.length, ta.value.length), ta.value.length);
@@ -814,8 +870,9 @@ export function criarComposer(A) {
       const c = e && e.codigo;
       ui.toast(c === "ia_cota" ? "A cota de IA do mês acabou." : c === "muitos_pedidos" ? "Muitos pedidos seguidos; espere um minuto." : "A IA não está disponível agora.", { tipo: c === "ia_cota" || c === "muitos_pedidos" ? "info" : "erro" });
     } finally {
+      pedindoIA = false;
       iaTrab.hidden = true;
-      btIA.disabled = situacao() !== "ok";
+      btIA.disabled = modoNota || situacao() !== "ok";
     }
   }
   btIA.addEventListener("click", () => sugerir());
@@ -833,7 +890,7 @@ export function criarComposer(A) {
     ui.menu(btMaisM, [
       !usaCodeWords() ? { rotulo: "Modelos aprovados", icone: "camadas", fn: () => abrirModelos(), desabilitado: !(s === "ok" || s === "janela") } : null,
       { rotulo: modoNota ? "Voltar para mensagem" : "Nota interna", icone: "nota", fn: () => alternarNota() },
-      A.base && A.base.ia ? { rotulo: "Sugerir com IA", icone: "ia", fn: () => sugerir(), desabilitado: s !== "ok" } : null,
+      A.base && A.base.ia ? { rotulo: pedindoIA ? "Sugerindo com IA…" : "Sugerir com IA", icone: "ia", fn: () => sugerir(), desabilitado: s !== "ok" || pedindoIA } : null,
     ].filter(Boolean));
   });
 

@@ -241,7 +241,8 @@ export async function montarImportar(k, el) {
       ajuda: "Ligado: quando o telefone ou o e-mail já estiverem cadastrados, completamos o cadastro com os dados da planilha (nome, cidade, etiquetas…). Desligado: a linha é pulada." });
     atualizar.querySelector("input").addEventListener("change", ev => { o.atualizar = ev.target.checked; });
 
-    const etiquetas = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas: o.etiquetas, rotulo: "Etiquetas para todos",
+    // só guarda o valor para o «Continuar»: emite na hora (debounceMs: 0) — a pausa de 300 ms perdia a última etiqueta marcada
+    const etiquetas = ui.seletorEtiquetas({ debounceMs: 0, todas: k.base.etiquetas, marcadas: o.etiquetas, rotulo: "Etiquetas para todos",
       aoMudar: ids => { o.etiquetas = ids; }, podeCriar: k.pode("atendente") ? nome => k.criarEtiqueta(nome) : false });
 
     const dono = ui.seletorPessoa({ usuarios: k.base.usuarios, valor: o.dono_id, rotulo: "Responsável", aoMudar: id => { o.dono_id = id; } });
@@ -282,7 +283,8 @@ export async function montarImportar(k, el) {
     const rot = { nome: "Nome", telefone: "Telefone", email: "E-mail", empresa: "Empresa", cidade: "Cidade", uf: "UF", etiquetas: "Etiquetas", negocio_valor: "Valor", estagio: "Etapa" };
     for (const dest of ["nome", "telefone", "email", "empresa", "cidade", "uf", "etiquetas", "negocio_valor", "estagio"]) {
       if (!vistos.includes(dest)) continue;
-      cols.push({ chave: dest, rotulo: rot[dest], render: l => dest === "telefone" && l.telefone ? (L.normalizarTelefone(l.telefone) ? ui.telBR(L.normalizarTelefone(l.telefone)) : l.telefone) : l[dest] || null });
+      // C7: telefone de fora com «+» aparece como «+1 2125551234» (não no formato brasileiro); sem DDD brasileiro e sem «+», como foi digitado (com o aviso)
+      cols.push({ chave: dest, rotulo: rot[dest], render: l => dest === "telefone" && l.telefone ? L.telefoneImportado(l.telefone, { fmtBR: ui.telBR }).texto : l[dest] || null });
     }
     cols.push({ chave: "_sit", rotulo: "Situação", render: l => l._erros.length
       ? h("span", { class: "imp-erro-txt" }, l._erros.join(" · "))
@@ -296,6 +298,14 @@ export async function montarImportar(k, el) {
       h("span", null, comProblema || vazias
         ? `Das ${ui.num(linhasMontadas.length)} linhas, ${comProblema ? `${ui.num(comProblema)} ${comProblema === 1 ? "tem" : "têm"} algum dado com problema (a linha entra sem esse dado)` : ""}${comProblema && vazias ? " e " : ""}${vazias ? `${ui.num(vazias)} não ${vazias === 1 ? "tem" : "têm"} nome, telefone nem e-mail (${vazias === 1 ? "será pulada" : "serão puladas"})` : ""}.`
         : `As ${ui.num(linhasMontadas.length)} linhas estão prontas para entrar.`));
+    // C7: número de outro país sem o «+» (DDD que não existe no Brasil) ganharia 55 e viraria um número inexistente — avisa quantas são e como corrigir
+    const tels = linhasMontadas.map(l => L.telefoneImportado(l.telefone).tipo);
+    const semPais = tels.filter(t => t === "sem_pais").length, exterior = tels.filter(t => t === "exterior").length;
+    const avisoTel = semPais || exterior ? h("p", { class: ["aviso", semPais ? "aviso-aten" : "aviso-ok", "imp-aviso-tel"] }, ui.icone(semPais ? "alerta" : "globo"),
+      h("span", null, [
+        semPais ? `${ui.num(semPais)} ${semPais === 1 ? "linha tem" : "linhas têm"} telefone sem DDD brasileiro: se ${semPais === 1 ? "for" : "forem"} de fora do Brasil, escreva com + e o código do país na planilha (ex.: +1 212 555 1234). Como está, ${semPais === 1 ? "entra" : "entram"} sem telefone.` : null,
+        exterior ? `${ui.num(exterior)} ${exterior === 1 ? "telefone de outro país (com +) entra" : "telefones de outros países (com +) entram"} como ${exterior === 1 ? "está" : "estão"}, sem o 55.` : null,
+      ].filter(Boolean).join(" "))) : null;
 
     corpo.append(
       h("h2", { class: "imp-tit" }, "Como importar"),
@@ -305,7 +315,7 @@ export async function montarImportar(k, el) {
           h("div", { class: "imp-grupo" }, h("span", { class: "rotulo" }, "Responsável"), dono,
             h("small", { class: "campo-ajuda" }, `Sem responsável: todo mundo da equipe vê ${k.v.art("contato") === "a" ? "as novas" : "os novos"} ${k.v.min("contatos")}.`))),
         h("div", { class: "pilha" }, neg, blocoNeg)),
-      h("h3", { class: "imp-sub" }, "Prévia"), resumoPrevia, previa.el);
+      ...[h("h3", { class: "imp-sub" }, "Prévia"), resumoPrevia, avisoTel, previa.el].filter(Boolean));
     rodape.append(botao("Voltar", "sec", () => ir(2)), botao("Continuar", "prim", () => ir(4)));
   }
 

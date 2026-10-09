@@ -1157,7 +1157,12 @@ await teste("R119 rascunho: nota interna nunca vira rascunho de mensagem para o 
   assert.equal(t.A.rascunhos.get(7), undefined, "trocar de conversa não guarda a nota como mensagem");
   assert.equal(t.guardadoEm("conversa:7"), null); assert.equal(t.guardadoEm("conversa:7:nota"), "cliente inadimplente, cobrar antes de marcar");
   t.selecionar(7);
-  assert.equal(t.ta.value, "", "ao voltar, o campo de MENSAGEM não traz o texto da nota");
+  // plano 100 · D5: ao voltar, o texto volta NO MODO NOTA (antes o campo abria vazio em mensagem e a nota parecia perdida) — nunca como mensagem
+  assert.equal(t.comp.emNota, true, "o campo volta em nota interna");
+  assert.equal(t.ta.value, "cliente inadimplente, cobrar antes de marcar");
+  assert.equal(t.comp.textoDe(7), "", "e a lista continua sem mostrar a nota como «Rascunho:»");
+  assert.equal(t.A.rascunhos.get(7), undefined);
+  t.digitar(""); t.comp.alternarNota(false);
   // texto de mensagem que a pessoa leva para a nota deixa de ser rascunho de mensagem
   t.digitar("anotar isto"); assert.equal(t.A.rascunhos.get(7), "anotar isto");
   t.comp.alternarNota(true);
@@ -1210,7 +1215,7 @@ await teste("R119 anexo e modelo: o modal diz para quem vai e, se a conversa mud
   const comp = ler("cv-composer.js"), conv = ler("conversas.js");
   assert.match(comp, /titulo: `Enviar modelo para \$\{nomeDestino\(\)\}`/);
   assert.match(comp, /if \(!mesmaConversa\(idInicio\)\) \{ api\.erro\("A conversa aberta mudou\./);
-  assert.match(comp, /A\.acoes\.enviar\(\{ tipo: "template", conversa: idInicio, template: escolhido, parametros: vals \}\)/);
+  assert.match(comp, /A\.acoes\.enviar\(\{ tipo: "template", conversa: idInicio, template: escolhido, parametros: vals, client_ref: L\.novoClientRef\(\) \}\)/, "plano 100 · D8: o modelo leva client_ref como o texto e a mídia");
   assert.match(comp, /if \(!mesmaConversa\(idInicio\)\) \{ ui\.toast\("Você trocou de conversa enquanto a foto era preparada/, "depois de otimizar a foto também");
   assert.match(conv, /if \(o\.conversa != null && \(o\.conversa !== conv\.id \|\| A\.selId !== conv\.id\)\) \{/, "e o próprio envio confere a conversa");
 });
@@ -1813,7 +1818,7 @@ assert.match(f, /const antes = conv\.status;/);
   assert.match(volta, /if \(!naMesmaEmpresa\(\)\) return;/, "Desfazer depois de sair de Conversas não quebra (A nulo)");
   assert.match(f, /reverter: voltarTela,/);
   assert.match(cv, /const _pendResolver = new Map\(\);/, "o Resolver pendente sobrevive a sair de Conversas e voltar");
-  assert.match(cv, /A\.itens = itensComPendencia\(mais \?/, "o pulso não desfaz na tela o Resolver que ainda espera o Desfazer");
+  assert.match(cv, /A\.itens = itensComPendencia\(mais && mesmoFiltro \?/, "o pulso não desfaz na tela o Resolver que ainda espera o Desfazer");
   assert.match(cv, /const pend = _pendResolver\.get\(A\.selId\);\s*if \(pend && !pend\.firmando\) \{[\s\S]{0,220}pend\.cancelado = true; _pendResolver\.delete\(id\); A\.resolvendo\.delete\(id\);/, "«Reabrir» durante o Desfazer cancela o Resolver pendente e libera o próximo Resolver");
   assert.match(cv, /const entradaAntes = Date\.parse\(conv\.ultima_entrada_em \|\| ""\) \|\| 0;/, "o Resolver guarda a última mensagem do cliente vista no clique");
   assert.match(cv, /if \(c && \(Date\.parse\(c\.ultima_entrada_em \|\| ""\) \|\| 0\) > entradaAntes\) \{/, "cliente escreveu durante o aviso: não resolve por cima");
@@ -1841,7 +1846,7 @@ await teste("M35: o leitor de tela ouve a lista (role=status aria-live=polite), 
   assert.match(lista, /L\.esperaAnuncio\(ultimoAnuncio, Date\.now\(\)\)/);
   assert.match(lista, /textoPendente = texto;/);
   assert.match(cv, /const novas = A\.L\.novasEntradas\(A\.itens, r\.itens \|\| \[\], \{ ignorar: A\.selId && !document\.hidden \? A\.selId : null \}\);\s*if \(novas\.length\) A\.lista\.anunciar\(A\.L\.textoNovaMensagem\(novas\)\);/);
-  assert.match(cv, /if \(!reset && !mais\) \{\s*avisarNovidades/, "só nos pulsos, nunca na 1ª página nem em «carregar mais»");
+  assert.match(cv, /if \(!reset && !mais && mesmoFiltro\) \{\s*avisarNovidades/, "só nos pulsos, nunca na 1ª página nem em «carregar mais»");
 });
 
 await teste("M35 (navegador): 3 conversas resolvidas sem mouse no dev-falso (atender, nota, resolver que avança, fila zerada, anúncio, Desfazer) — roda com ORBITA_QA_NAVEGADOR=1", async () => {

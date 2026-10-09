@@ -105,6 +105,60 @@ a.ini-kpi:active { transform: scale(.985); }
 .ini-prox-nome { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .ini-prox-acoes { display: flex; gap: var(--esp-1); }
 
+/* ---------- plano 100 · B4: «Agora» com a linha inteira e quem espera, com «Assumir» ---------- */
+/* o «Agora» é o bloco que pede ação: no topo da grade ocupa a linha inteira e as duas colunas internas ganham largura (a 1366 px
+   ficavam espremidas em meia grade); em qualquer outra posição, as colunas empilham quando o cartão fica estreito (container query) */
+.ini-agora { container-type: inline-size; }
+.ini-grade > .ini-agora:first-child:not(.ini-rec) { grid-column: 1 / -1; }
+/* com o «Agora» na linha inteira, quem sobra sozinho na última linha é o filho par (a regra do relatorios.css conta o ímpar) */
+.ini-grade > .ini-agora:first-child:not(.ini-rec) ~ :last-child:nth-child(odd) { grid-column: auto; }
+.ini-grade > .ini-agora:first-child:not(.ini-rec) ~ :last-child:nth-child(even) { grid-column: 1 / -1; }
+@container (max-width: 40rem) {
+  .ini-agora-grade { grid-template-columns: minmax(0, 1fr); }
+  .ini-agora-cv { padding-right: 0; padding-bottom: var(--esp-4); border-right: 0; border-bottom: 1px solid var(--c-borda); }
+}
+.ini-espera-lista { list-style: none; margin: var(--esp-1) 0 0; padding: 0; display: flex; flex-direction: column; }
+.ini-espera-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--esp-1) var(--esp-3); align-items: center; padding: var(--esp-2) 0; border-top: 1px solid var(--c-borda); }
+.ini-espera-item:first-child { border-top: 0; }
+.ini-espera-txt { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ini-espera-nome { margin: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ini-espera-meta { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-1) var(--esp-2); min-width: 0; }
+.ini-espera-t { font: 500 var(--fs-12)/1.3 var(--f-mono); }
+.ini-espera-longa .ini-espera-t { color: var(--c-aten); }
+.ini-espera-acoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--esp-1); }
+.ini-espera-acoes .bt { min-height: 40px; }
+@container (max-width: 26rem) {
+  .ini-espera-item { grid-template-columns: auto minmax(0, 1fr); }
+  .ini-espera-acoes { grid-column: 2; justify-content: flex-start; }
+}
+
+/* ---------- plano 100 · B5: número desconectado (faixa) e o ponto verde discreto no cabeçalho ---------- */
+.ini-faixa-canal {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2) var(--esp-3); padding: var(--esp-3) var(--esp-4);
+  border-radius: var(--r); border: 1px solid color-mix(in srgb, var(--c-ruim) 40%, var(--c-borda)); background: color-mix(in srgb, var(--c-ruim) 9%, var(--c-sup)); color: var(--c-texto);
+}
+.ini-faixa-ic { display: inline-grid; place-items: center; flex: none; color: var(--c-ruim); }
+.ini-faixa-ic .ic { width: 18px; height: 18px; }
+.ini-faixa-txt { flex: 1 1 16rem; min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.ini-faixa-canal .bt { margin-left: auto; min-height: 40px; }
+.ini-wa-ok { display: inline-flex; align-items: center; gap: var(--esp-1); font-size: var(--fs-12); color: var(--c-texto-3); }
+.ini-wa-ponto { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--c-ok); }
+
+/* ---------- plano 100 · B1: funil do mês ---------- */
+.ini-funil-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--esp-3); margin-bottom: var(--esp-4); }
+.ini-funil-nota { margin: var(--esp-3) 0 0; }
+/* «Oportunidades ganhas» não cabe nos 10rem da coluna do funil: quebra a linha em vez de cortar com reticências */
+.ini-funil .g-fnome span { white-space: normal; text-overflow: clip; overflow-wrap: anywhere; }
+
+/* ---------- plano 100: R$ longo no cartão estreito vira a forma curta (o número inteiro continua para o leitor de tela) ---------- */
+.ini-kpi-vs { display: contents; }
+.ini-kpi-v-curto { display: none; }
+@container (max-width: 12rem) {
+  .ini-kpi-v-longo { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .ini-kpi-v-curto { display: inline; }
+}
+.ini-tf-vazio { list-style: none; }
+
 /* ---------- agenda em barras ---------- */
 .ini-horas-topo { align-items: center; }
 .ini-horas-topo .seg { margin-left: auto; }
@@ -185,6 +239,7 @@ a.ini-kpi:active { transform: scale(.985); }
   .ini-bl-barra { gap: 0; top: var(--esp-2); right: var(--esp-2); }
   .ini [data-bloco] > .rel-cartao-topo { padding-right: 8.4rem; }
   .ini-agora-acoes .bt, .ini-prox-acoes .bt, .ini-metas-acoes .bt, .ini-blocos-rodape .bt, .ini-metas .rel-cartao-rodape .bt { min-height: 44px; }
+  .ini-espera-acoes .bt, .ini-faixa-canal .bt { min-height: 44px; }
   .ini-bv { min-height: 44px; }
 }
 @media (max-width: 400px) {

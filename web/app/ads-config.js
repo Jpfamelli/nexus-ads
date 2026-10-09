@@ -6,7 +6,9 @@
    · Metas e avisos: custo por conversa, orçamento, gestão, valor por
      serviço, destinos de WhatsApp, assinatura e regras do radar
      (nx_cliente_salvar — o servidor MESCLA o cfg);
-   · "Atualizar dados agora" e envio manual de relatório (nx_executar).
+   · "Atualizar dados agora" e envio manual de relatório (nx_executar);
+   · plano 100: fee de gestão padrão 0 (decisão 5) e «Testar conexão» por plataforma
+     (nx-ciclo {cliente, dias:1} pelo painel: lê 1 dia, sem radar, e explica o erro).
    Mesmas regras do painel clássico (Ajustes), no visual do app.
    ============================================================ */
 
@@ -24,7 +26,8 @@ const CANAIS = {
   },
 };
 const REGRAS = [["r1", "Custo por conversa alto"], ["r2", "Campanha sem conversa"], ["r3", "Criativo com CTR baixo"], ["r4", "Fadiga de criativo"]];
-const PADRAO = { cpaAlvo: 15, orcamento: 1500, fee: 997, assinatura: "" };
+// plano 100 (decisão 5): nada de fee inventado — gestão 0 até a Nexus preencher (igual ao CFG_PADRAO do núcleo)
+const PADRAO = { cpaAlvo: 15, orcamento: 1500, fee: 0, assinatura: "" };
 const soDigitos = s => String(s || "").replace(/\D/g, "");
 /** Valor em reais digitado do jeito brasileiro: "1.500" → 1500 · "1.500,50" → 1500.5 · "15,5" → 15.5 ·
     "15.5" → 15.5 · "" → null. (O ui.lerMoeda leria "1.500" como 1,5 — orçamento de R$ 2.000 viraria R$ 2.) */
@@ -35,6 +38,24 @@ export function lerReais(s) {
     : /^\d{1,3}(\.\d{3})+$/.test(t) ? Number(t.replace(/\./g, "")) : Number(t);
   return Number.isFinite(n) ? n : null;
 }
+
+/**
+ * F6: texto do resultado de «Testar conexão» para UMA plataforma, a partir de L.resultadoTesteConexao(resposta).
+ * → {tom: "ok"|"aten"|"ruim", texto}. Sem a plataforma na resposta = integração não salva ou desligada.
+ */
+export function textoTesteConexao(lista, canal, nome = canal) {
+  const x = (Array.isArray(lista) ? lista : []).find(i => i && i.canal === canal);
+  if (!x && lista && lista.motivo === "ocupado") return { tom: "aten", texto: `Já há uma leitura dos anúncios em andamento para esta empresa. Tente testar o ${nome} de novo em 1 ou 2 minutos.` };
+  if (!x && lista && lista.motivo === "erro") return { tom: "ruim", texto: `Não foi possível testar o ${nome} agora (o Órbita não concluiu a leitura). Tente de novo em instantes.` };
+  if (!x) return { tom: "aten", texto: `O ${nome} não foi testado: salve as credenciais e deixe a integração ligada antes de testar.` };
+  if (x.ok && x.parcial) return { tom: "aten", texto: `O ${nome} respondeu, mas a leitura veio parcial: ${x.status.replace(/^parcial\s*—\s*/i, "")}.` };
+  if (x.ok) return { tom: "ok", texto: `Conexão com o ${nome} funcionando${x.linhas != null ? ` — ${x.linhas} ${x.linhas === 1 ? "linha lida" : "linhas lidas"} do último dia` : ""}.` };
+  const curto = x.curto ? x.curto.charAt(0).toUpperCase() + x.curto.slice(1) : `O ${nome} recusou a leitura`;
+  return { tom: x.passageiro ? "aten" : "ruim", texto: `${curto}. ${x.acao || "Confira os dados da conexão e salve de novo."}${x.passageiro ? " (Costuma ser passageiro.)" : ""}` };
+}
+
+/** nx_integracoes_status devolve a lista; aceita também {integracoes:[…]} (o servidor falso responde assim) — senão o painel some com as integrações. */
+export const listaIntegracoes = (r, padrao = []) => (Array.isArray(r) ? r : r && Array.isArray(r.integracoes) ? r.integracoes : padrao);
 
 export const secoesConfig = [
   { id: "anuncios", titulo: "Anúncios", desc: "Contas da Meta e do Google ligadas aqui", grupo: "Anúncios", papelMin: "gestor", modulo: "ads", icone: "anuncio", montar: secaoAnuncios },
@@ -231,9 +252,9 @@ async function secaoAnuncios(ctx, alvo) {
   ui.carregarCss("relatorios.css");
   ui.limpar(alvo);
   alvo.append(ui.esqueleto("cartoes", 3));
-  let integ, dados;
+  let integ, dados, L;
   try {
-    [integ, dados] = await Promise.all([api.rpcC("nx_integracoes_status", {}), api.rpcC("nx_dados", { p_dias: 7 })]);
+    [integ, dados, L] = await Promise.all([api.rpcC("nx_integracoes_status", {}), api.rpcC("nx_dados", { p_dias: 7 }), import(`./rel-logica.js?v=${ctx.versao}`)]);
   } catch (e) {
     ui.limpar(alvo);
     alvo.append(ui.erroCartao(e, () => secaoAnuncios(ctx, alvo)));
@@ -242,7 +263,7 @@ async function secaoAnuncios(ctx, alvo) {
   ui.limpar(alvo);
   const cliente = (dados && dados.cliente) || { id: ctx.cliente.id, slug: ctx.cliente.slug, nome: ctx.cliente.nome, cfg: {} };
   let cfg = cliente.cfg || {};
-  integ = Array.isArray(integ) ? integ : [];
+  integ = listaIntegracoes(integ);
   const refsStatus = new Map();
 
   alvo.append(
@@ -272,7 +293,7 @@ async function secaoAnuncios(ctx, alvo) {
         : !st.ativo ? "Integração pausada. Ligue a chave e salve para retomar as leituras."
         : erro ? "A última leitura falhou. Revise permissões, validade do acesso e IDs da conta; depois teste novamente."
         : ok ? "A última leitura foi concluída sem erro."
-        : "Salve os dados e use “Testar conexão e sincronizar” para fazer a primeira leitura.";
+        : "Salve os dados e use “Testar conexão” para fazer a primeira leitura.";
     }
   }
   const pintarInteg = () => {
@@ -283,7 +304,7 @@ async function secaoAnuncios(ctx, alvo) {
   btStatus.addEventListener("click", async () => {
     try {
       const nova = await ui.carregando(btStatus, api.rpcC("nx_integracoes_status", {}));
-      integ = Array.isArray(nova) ? nova : [];
+      integ = listaIntegracoes(nova);
       pintarStatusIntegracoes();
       const hh = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date());
       statusLeitura.textContent = `Situação consultada às ${hh}. Os campos ainda não salvos foram preservados.`;
@@ -297,6 +318,8 @@ async function secaoAnuncios(ctx, alvo) {
       : st.ultimo_sync ? `Última leitura ${quandoSP(st.ultimo_sync)}${st.status ? ` · ${st.status}` : ""}` : (st.status || "Ainda não leu os anúncios.");
     const statusEl = h("p", { class: ["cfga-st", erro && "cfga-st-ruim", ok && "cfga-st-ok"], role: "status" }, statusTxt);
     const dicaEl = h("small", { class: "campo-ajuda cfga-st-dica" });
+    const testar = h("button", { type: "button", class: "bt bt-sec", disabled: !st.canal, title: st.canal ? "Lê o último dia com os dados salvos e explica o erro, se houver" : "Salve as credenciais primeiro" }, ui.icone("raio"), " Testar conexão");
+    const resultado = h("p", { class: "cfga-teste", role: "status", "aria-live": "polite", hidden: true });
     refsStatus.set(canal, { status: statusEl, dica: dicaEl });
     const form = h("form", { class: "cfga-canal pilha", novalidate: true, dataset: { canal } },
       h("div", { class: "linha cfga-canal-cab" }, h("h4", { class: "cfga-canal-t" }, d.nome),
@@ -306,8 +329,23 @@ async function secaoAnuncios(ctx, alvo) {
         nome: k, rotulo: pre.has(k) ? `${rot} · ✓ preenchido` : rot, tipo: secreto ? "senha" : "texto",
         placeholder: pre.has(k) ? "em branco = mantém o atual" : (ph || ""), autocomplete: secreto ? "new-password" : "off",
       }))),
-      h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, `Salvar ${d.curto}`)));
+      h("div", { class: "linha linha-fim cfga-canal-acoes" }, testar, h("button", { type: "submit", class: "bt bt-prim" }, `Salvar ${d.curto}`)),
+      resultado);
     for (const i of form.querySelectorAll("input:not([type=checkbox])")) { i.spellcheck = false; i.setAttribute("autocapitalize", "off"); }
+    // F6: «Testar conexão» lê 1 dia com os dados SALVOS (nx-ciclo pelo painel, sem radar) e explica o erro na hora — sem esperar a próxima hora
+    testar.addEventListener("click", async () => {
+      resultado.hidden = false; resultado.className = "cfga-teste";
+      const v = ui.lerForm(form);
+      if (d.campos.some(([k]) => v[k])) { resultado.classList.add("cfga-teste-aten"); resultado.textContent = `Há campos digitados e não salvos: salve o ${d.curto} antes de testar (o teste usa os dados salvos).`; return; }
+      resultado.textContent = `Lendo o último dia do ${d.curto}…`;
+      try {
+        const r = await ui.carregando(testar, api.fn("nx-ciclo", { dias: 1 }));
+        const t = textoTesteConexao(L.resultadoTesteConexao(r), canal, d.curto);
+        resultado.classList.add(`cfga-teste-${t.tom}`);
+        resultado.textContent = t.texto;
+        try { const nova = await api.rpcC("nx_integracoes_status", {}); integ = listaIntegracoes(nova, integ); pintarStatusIntegracoes(); } catch { /* a situação antiga continua */ }
+      } catch (e) { resultado.classList.add("cfga-teste-ruim"); resultado.textContent = api.mensagemErro(e); }
+    });
     form.addEventListener("submit", async ev => {
       ev.preventDefault();
       const v = ui.lerForm(form), cred = {};
@@ -350,12 +388,12 @@ async function secaoAnuncios(ctx, alvo) {
       ui.campo({ nome: "assinatura", rotulo: "Assinatura do resumo do mês", valor: cfg.assinatura || PADRAO.assinatura, max: 120 }),
       ui.campo({ nome: "cpaAlvo", rotulo: "Meta de custo por conversa (R$)", tipo: "moeda", valor: +(cfg.cpaAlvo ?? PADRAO.cpaAlvo), ajuda: "O radar avisa quando passa de 35% acima." }),
       ui.campo({ nome: "orcamento", rotulo: "Orçamento de anúncios do mês (R$)", tipo: "moeda", valor: +(cfg.orcamento ?? PADRAO.orcamento) }),
-      ui.campo({ nome: "fee", rotulo: "Gestão mensal (R$)", tipo: "moeda", valor: +(cfg.fee ?? PADRAO.fee), ajuda: "Entra no “Cada R$ 1 investido virou”." })),
+      ui.campo({ nome: "fee", rotulo: "Gestão mensal (R$)", tipo: "moeda", valor: +(cfg.fee ?? PADRAO.fee), ajuda: "Deixe 0 se o cliente não paga gestão: o retorno conta só os anúncios. Com valor, vira “Retorno total” (anúncios + gestão) e o painel mostra quanto é gestão." })),
     h("div", { class: "pilha" }, h("p", { class: "rotulo" }, `Valor de cada ${servicoRot.toLowerCase()}`),
-      h("p", { class: "sub" }, "Estima a receita quando o valor fechado não foi informado."), tickets, h("div", {}, addTk)),
+      h("p", { class: "sub" }, "Opcional. Sem valor aqui, a receita conta só o valor informado em cada negócio — nada é estimado. Com valor, o fechamento sem valor entra como estimativa (marcada como estimada)."), tickets, h("div", {}, addTk)),
     h("div", { class: "form-grade" },
       ui.campo({ nome: "waGestor", rotulo: "WhatsApp da gestão (avisos e diário)", tipo: "textarea", linhas: 2, valor: lista(cfg.waGestor), placeholder: "5512999998888", ajuda: "Um número por linha, com DDD." }),
-      ui.campo({ nome: "waCliente", rotulo: "WhatsApp do cliente (resumo do mês)", tipo: "textarea", linhas: 2, valor: lista(cfg.waCliente), placeholder: "5512997552370", ajuda: "Um número por linha, com DDD." })),
+      ui.campo({ nome: "waCliente", rotulo: "WhatsApp do cliente (resumo do mês)", tipo: "textarea", linhas: 2, valor: lista(cfg.waCliente), placeholder: "5511900000000", ajuda: "Um número por linha, com DDD." })),
     h("fieldset", { class: "pilha cfga-regras" }, h("legend", { class: "rotulo" }, "Regras do radar"),
       REGRAS.map(([id, n]) => ui.campo({ tipo: "interruptor", nome: `rg_${id}`, rotulo: n, valor: !off.has(id) }))),
     h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, "Salvar metas e avisos")));
@@ -396,7 +434,7 @@ async function secaoAnuncios(ctx, alvo) {
 
   /* ---------- atualizar agora ---------- */
   const st = h("p", { class: "sub", role: "status" });
-  const bCiclo = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("raio"), " Testar conexão e sincronizar");
+  const bCiclo = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("raio"), " Sincronizar agora");
   const bDia = h("button", { type: "button", class: "bt bt-fant" }, "Enviar o relatório do dia");
   const bMes = h("button", { type: "button", class: "bt bt-fant" }, "Enviar o resumo do mês");
   const executar = async (tipo, btn) => {
@@ -421,7 +459,7 @@ async function secaoAnuncios(ctx, alvo) {
   bMes.addEventListener("click", () => executar("mensal", bMes));
   alvo.append(h("section", { class: "cartao pilha", "aria-labelledby": "cfga-x" },
     h("h3", { id: "cfga-x", class: "titulo-sec" }, "Atualizar agora"),
-    h("p", { class: "sub" }, "O sistema lê os anúncios de hora em hora e manda o relatório do dia às 8h. Use o teste acima para conferir a conexão; estes botões antecipam relatórios."),
+    h("p", { class: "sub" }, "O sistema lê os anúncios de hora em hora e manda o relatório do dia às 8h. Para conferir a conexão, use “Testar conexão” em cada plataforma; estes botões antecipam a leitura completa (com o radar) e os relatórios."),
     h("div", { class: "linha cfga-exec" }, bCiclo, bDia, bMes), st,
     h("a", { class: "rel-link", href: "#/anuncios" }, "Abrir o Anúncios")));
 }

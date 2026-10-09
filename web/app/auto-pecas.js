@@ -300,13 +300,15 @@ export function pecas(ui, L) {
    * `serie` vem de L.execucoesPorDia. Tem título, unidade, estado vazio e «Ver como tabela» (a versão acessível).
    * `carregadas` (número): a série saiu só das últimas N execuções carregadas (janela recortada) e o subtítulo diz isso.
    */
-  function graficoDias({ serie, dias, n, titulo = "Execuções por dia", unidade = "execuções", carregadas = null }) {
+  /** servidor: a série veio de nx_automacao_execucoes_dia (conta todas as execuções da janela, mas só separa «sem erro» × «com erro»). */
+  function graficoDias({ serie, dias, n, titulo = "Execuções por dia", unidade = "execuções", carregadas = null, servidor = false }) {
     const lista = Array.isArray(serie) ? serie : [];
-    const raiz = h("div", { class: "au-gd" });
+    const raiz = h("div", { class: ["au-gd", servidor && "au-gd-servidor"], dataset: { fonte: servidor ? "servidor" : "local" } });
     const nd = dias || lista.length;
     const janela = nd === 1 ? "Hoje" : `Últimos ${nd} dias`;
     const sub = carregadas ? `${janela} · nas últimas ${carregadas} ${carregadas === 1 ? "execução carregada" : "execuções carregadas"}`
-      : `${janela} · ${n || 0} ${n === 1 ? "execução registrada" : "execuções registradas"}`;
+      : servidor ? `${janela} · ${n || 0} ${n === 1 ? "execução" : "execuções"}, contadas no servidor`
+        : `${janela} · ${n || 0} ${n === 1 ? "execução registrada" : "execuções registradas"}`;
     const cab = h("div", { class: "au-gd-cab" },
       h("div", null, h("p", { class: "rotulo" }, titulo), h("p", { class: "sub au-gd-sub" }, sub)));
     raiz.appendChild(cab);
@@ -316,7 +318,8 @@ export function pecas(ui, L) {
       return raiz;
     }
     // barras em CSS (grade de colunas): escalam com a largura sem esticar o texto, como um SVG «none» faria
-    const ORDEM = [["ok", "deram certo"], ["espera", "em espera"], ["pulado", "puladas"], ["erro", "com erro"]];
+    // o servidor não separa espera/pulada de «deu certo»: o rótulo diz só o que ele sabe («sem erro»)
+    const ORDEM = servidor ? [["ok", "sem erro"], ["erro", "com erro"]] : [["ok", "deram certo"], ["espera", "em espera"], ["pulado", "puladas"], ["erro", "com erro"]];
     const n0 = lista.length, cada = n0 > 10 ? Math.ceil(n0 / 7) : 1;
     const barras = h("div", { class: ["au-gd-barras", !reduzido() && "au-gd-anim"], role: "img", style: { "--n": String(n0) },
       "aria-label": `${titulo}: ${n} ${unidade} em ${nd} ${nd === 1 ? "dia" : "dias"}${carregadas ? `, contando só as últimas ${carregadas} carregadas` : ""}; pico de ${max} em um dia.` },

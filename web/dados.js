@@ -34,11 +34,40 @@ export const MENSAGENS = {
   nao_pode_rebaixar_a_si: "Você não pode tirar o seu próprio acesso de gestor.",
   papel_invalido: "Tipo de conta inválido.",
   sem_conexao: "Sem conexão com o servidor. Confira a internet e tente de novo.",
+  // códigos do Órbita (ESPEC, Apêndice B) que as mesmas RPCs devolvem ao clássico
+  sem_permissao: "Seu acesso não permite fazer isso. Fale com o administrador.",
+  conta_suspensa: "O acesso desta empresa está suspenso. Fale com o suporte.",
+  teste_expirado: "O período de teste terminou. Para continuar, fale com o suporte.",
+  modulo_desligado: "Esta área não faz parte do seu plano.",
+  so_plataforma: "Só a equipe da plataforma pode fazer essa alteração.",
+  cliente_pausado: "Este cliente está pausado pela Nexus. Fale com o suporte para reativar.",
+  slug_em_uso: "Esse identificador já está em uso. Escolha outro.",
+  numero_em_uso: "Esse número de WhatsApp já está ligado a outro cliente.",
+  dominio_em_uso: "Esse domínio já está em uso.",
+  limite_atingido: "O plano chegou ao limite. Para aumentar, fale com o suporte.",
+  limite_plano: "O plano chegou ao limite. Para aumentar, fale com o suporte.",
+  funcao_invalida: "Essa tarefa não pode ser executada daqui.",
+  dados_invalidos: "Confira os dados informados.",
+  telefone_invalido: "Confira o telefone informado.",
+  telefone_em_uso: "Já existe um cadastro com esse telefone.",
+  valor_obrigatorio: "Informe o valor para marcar como fechado.",
+  tempo_esgotado: "Operação grande demais; tente um período menor.",
+  periodo_grande: "Escolha um período de até 1 ano.",
+  muitas_tentativas: "Muitas tentativas de entrada. Aguarde alguns minutos e tente de novo.",
+};
+
+/** Alguns códigos vêm com `hint` do servidor que completa a frase (minutos do bloqueio, chave do limite). */
+const COM_HINT = {
+  muitas_tentativas: h => (/^\d+$/.test(h) ? `Muitas tentativas de entrada. Tente de novo em ${h} min.` : `Muitas tentativas de entrada. ${h}`),
+  limite_plano: h => { const m = /^(\w+):(\d+)$/.exec(h); return m ? `Seu plano permite até ${m[2]} ${m[1].replace(/^org_/, "")}. Para aumentar, fale com o suporte.` : null; },
+  limite_atingido: h => { const m = /^(\w+):(\d+)$/.exec(h); return m ? `Seu plano permite até ${m[2]} ${m[1].replace(/^org_/, "")}. Para aumentar, fale com o suporte.` : null; },
 };
 
 /** Texto amigável para um erro lançado por rpc(). */
 export function mensagemErro(e) {
   const c = e && (e.codigo || e.message);
+  const hint = e && e.detalhe && typeof e.detalhe === "object" && e.detalhe.hint ? String(e.detalhe.hint).trim() : "";
+  if (hint && COM_HINT[c]) { const t = COM_HINT[c](hint); if (t) return t; }
   return MENSAGENS[c] || `Não deu certo agora${c ? ` (${String(c).slice(0, 80)})` : ""}. Tente de novo em instantes.`;
 }
 

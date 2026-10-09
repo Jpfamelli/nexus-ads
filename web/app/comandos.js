@@ -76,8 +76,20 @@ export function partesDeRealce(texto, termo) {
 /* ---------- registro de comandos das telas ---------- */
 
 /**
- * criarComandos() → registro. `registrar({ id, rotulo, palavras?, atalho?, icone?, fazer })` devolve cancelar(): a tela chama ao sair
+ * Plano 100 · A13: comandos que as telas desta rodada registram e a paleta já conhece — rótulo, grupo, ícone e palavras padrão.
+ * A tela só manda `{ id, fazer }` (pode trocar o rótulo ou acrescentar palavras); ids: Configurações › Números registra
+ * "config.reconferir-numero" (G1), o painel do rastreio "rastreio.painel" (F10) e a Agenda "agenda.presenca" (E1).
+ */
+export const COMANDOS_CONHECIDOS = Object.freeze({
+  "config.reconferir-numero": Object.freeze({ rotulo: "Reconferir o número", grupo: "Nesta tela", icone: "whatsapp", palavras: "reconferir numero whatsapp aparelho conexao codewords estado conectado desconectado sincronizar" }),
+  "rastreio.painel": Object.freeze({ rotulo: "Rastreio do site", grupo: "Ir e ver", icone: "globo", palavras: "rastreio site cliques utm campanha origem codigo visitas chave" }),
+  "agenda.presenca": Object.freeze({ rotulo: "Presença da consulta", grupo: "Nesta tela", icone: "check", palavras: "presenca compareceu faltou consulta falta comparecimento" }),
+});
+
+/**
+ * criarComandos() → registro. `registrar({ id, rotulo, palavras?, atalho?, icone?, grupo?, fazer })` devolve cancelar(): a tela chama ao sair
  * (o shell também cancela sozinho ao trocar de tela). Comando inválido não lança erro (não pode derrubar a tela): devolve um cancelar vazio.
+ * Id de COMANDOS_CONHECIDOS completa o que a tela não mandou (rótulo, grupo, ícone, palavras).
  */
 export function criarComandos() {
   const itens = new Map();
@@ -85,11 +97,14 @@ export function criarComandos() {
   const avisar = () => { for (const f of [...ouvintes]) { try { f(); } catch { /* ouvinte não derruba o registro */ } } };
   return {
     registrar(cmd) {
-      if (!cmd || typeof cmd.fazer !== "function" || !String(cmd.rotulo || "").trim()) return () => {};
+      const base = cmd && Object.hasOwn(COMANDOS_CONHECIDOS, String(cmd.id || "")) ? COMANDOS_CONHECIDOS[cmd.id] : null;
+      const rotulo = String((cmd && cmd.rotulo) || (base && base.rotulo) || "").trim();
+      if (!cmd || typeof cmd.fazer !== "function" || !rotulo) return () => {};
+      const palavras = [base && base.palavras, cmd.palavras].filter(Boolean).join(" ");
       const item = {
-        id: String(cmd.id || cmd.rotulo).slice(0, 80), rotulo: String(cmd.rotulo).trim().slice(0, 80), palavras: String(cmd.palavras || "").slice(0, 240),
-        atalho: cmd.atalho ? String(cmd.atalho).slice(0, 40) : "", icone: /^[a-z0-9-]{1,24}$/.test(cmd.icone || "") ? cmd.icone : "raio", fazer: cmd.fazer, origem: "tela",
-        grupo: GRUPOS_ACAO.includes(cmd.grupo) ? cmd.grupo : "Nesta tela",
+        id: String(cmd.id || rotulo).slice(0, 80), rotulo: rotulo.slice(0, 80), palavras: palavras.slice(0, 240),
+        atalho: cmd.atalho ? String(cmd.atalho).slice(0, 40) : "", icone: /^[a-z0-9-]{1,24}$/.test(cmd.icone || "") ? cmd.icone : (base ? base.icone : "raio"), fazer: cmd.fazer, origem: "tela",
+        grupo: GRUPOS_ACAO.includes(cmd.grupo) ? cmd.grupo : (base ? base.grupo : "Nesta tela"),
       };
       itens.set(item.id, item);
       avisar();

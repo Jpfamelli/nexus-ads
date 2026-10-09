@@ -175,6 +175,14 @@ async function secaoFunis(ctx, alvo) {
     const cab = h("div", { class: ["fe-cab", !f.conta_no_ads && "sem-marco"], "aria-hidden": "true" },
       h("span"), h("span"), h("span", null, "Etapa"), h("span", null, "Tipo"), h("span", { class: "fe-marco-cab" }, "Marco (anúncios)"), h("span", null, "Chance"), h("span", null, "Prazo (h)"), h("span"));
     const notaMover = h("div", { class: "fe-mover", hidden: true });
+    // C8: funil dos anúncios sem etapa para um marco que o Órbita usa sozinho (Ganho/Perdido/Faltou/Agendou) — aviso inline, não bloqueia salvar
+    const avisoMarcos = h("p", { class: "aviso aviso-aten fe-marcos", role: "status", "aria-live": "polite", hidden: true });
+    function atualizarMarcos() {
+      const txt = L.textoMarcosFaltando(L.marcosFaltando(f, etapas));
+      ui.limpar(avisoMarcos);
+      avisoMarcos.hidden = !txt;
+      if (txt) avisoMarcos.append(ui.icone("alerta"), h("span", null, txt));
+    }
     const erros = h("div", { class: "aviso aviso-ruim", role: "alert", hidden: true });
     const btSalvar = btn(k, "Salvar funil", { tipo: "prim", fn: () => salvar() });
 
@@ -190,6 +198,7 @@ async function secaoFunis(ctx, alvo) {
       cab.classList.toggle("sem-marco", !f.conta_no_ads);
       etapas.forEach((e, i) => listaEl.appendChild(linhaEtapa(e, i)));
       desenharMover();
+      atualizarMarcos();
       if (focar) {
         const alvoFoco = listaEl.querySelector(`[data-k="${focar.k}"] ${focar.sel}`);
         if (alvoFoco) try { alvoFoco.focus(); } catch { /* ok */ }
@@ -231,7 +240,7 @@ async function secaoFunis(ctx, alvo) {
         f.conta_no_ads ? [h("option", { value: "" }, "Escolha…"), ...L.marcosDoTipo(e.tipo).map(m => h("option", { value: m.id, selected: m.id === e.marco }, m.rotulo))]
           : [h("option", { value: "" }, "—")]);
       if (e.id && e._n && f.conta_no_ads) marcoSel.title = "Etapa com negócios não muda de marco";
-      marcoSel.addEventListener("change", () => { e.marco = marcoSel.value || null; });
+      marcoSel.addEventListener("change", () => { e.marco = marcoSel.value || null; atualizarMarcos(); });
       const prob = h("input", { type: "number", class: "fe-prob", min: 0, max: 100, step: 1, value: e.probabilidade ?? "", inputmode: "numeric", "aria-label": `Chance de fechar (%) da etapa ${e.nome || i + 1}` });
       prob.addEventListener("input", () => { e.probabilidade = prob.value === "" ? null : Number(prob.value); });
       const sla = h("input", { type: "number", class: "fe-sla", min: 1, max: 2160, step: 1, value: e.sla_horas ?? "", placeholder: "prazo (h)", inputmode: "numeric", "aria-label": `Prazo em horas na etapa ${e.nome || i + 1} (o cartão fica âmbar depois dele)` });
@@ -384,7 +393,7 @@ async function secaoFunis(ctx, alvo) {
     },
     h("div", { class: "fe-props" }, nome, h("div", { class: "fe-switches" }, ads, ativo)),
     h("div", { class: "fe-bloco" }, h("div", { class: "fe-tit" }, h("h3", null, "Etapas"), h("small", { class: "sub" }, "De 1 a 25. O cartão fica âmbar depois do prazo.")), cab, listaEl,
-      h("div", { class: "linha" }, btn(k, "Etapa", { icone: "mais", fn: novaEtapa }))),
+      h("div", { class: "linha" }, btn(k, "Etapa", { icone: "mais", fn: novaEtapa })), avisoMarcos),
     notaMover, erros,
     h("div", { class: "fe-rod" }, btn(k, "Cancelar", { tipo: "sec", fn: () => lista() }), btSalvar)));
     desenharEtapas();

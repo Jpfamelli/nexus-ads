@@ -40,6 +40,17 @@ export function swPermitido({ nav, loc }) {
   return true;
 }
 
+/** Plano 100 · A4: nome de migração → chave comparável («20261008c_canais» → "20261008c"); sem data no começo → null. */
+export function chaveMigracao(nome) {
+  const m = /^(\d{8})([a-z]?)/.exec(String(nome ?? "").trim());
+  return m ? m[1] + (m[2] || "") : null;
+}
+/** O banco (última migração aplicada, nx_app_sessao.migracao) está atrás do que este front exige (versao.json.min_migracao)? Sem um dos dois lados: false. */
+export function migracaoPendente(banco, minima) {
+  const b = chaveMigracao(banco), m = chaveMigracao(minima);
+  return !!(b && m && b < m);
+}
+
 /** ?v= de uma URL de service worker (ou de qualquer arquivo versionado). */
 export function versaoDaUrl(url) {
   try { return new URL(String(url), "http://x/").searchParams.get("v"); } catch { return null; }

@@ -1,10 +1,15 @@
-# Publica só a pasta web/ (o painel) no GitHub Pages a cada push na main.
+# Publica no GitHub Pages SÓ o painel clássico (Nexus Ads) a cada push na main.
+# O Órbita (web/app, web/crm, web/ads, web/atendimento, web/workspace.js) mora no Netlify — publicá-lo aqui
+# deixava uma segunda cópia no ar, automática, sem os cabeçalhos do netlify.toml e à frente das migrações.
+# A pasta de publicação é montada sem essas entradas; em app/ fica um redirecionador para o Netlify e um
+# sw.js que se desregistra e apaga os caches de quem um dia instalou o Órbita a partir do Pages.
 name: Painel no GitHub Pages
 
 on:
   push:
     branches: [main]
-    paths: ["web/**", ".github/workflows/pages.yml"]
+    # só o que vai para o Pages: mudança só no Órbita (web/app etc.) não republica o clássico
+    paths: ["web/**", "!web/app/**", "!web/crm/**", "!web/ads/**", "!web/atendimento/**", "!web/workspace.js", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -16,6 +21,9 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
+env:
+  ORBITA_URL: https://orbita-nexus-ads.netlify.app/app/
+
 jobs:
   publicar:
     runs-on: ubuntu-latest
@@ -23,10 +31,64 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      # actions fixadas pelo SHA do commit da versão (tag pode ser movida; SHA não). Para atualizar:
+      #   gh api repos/<dono>/<repo>/git/matching-refs/tags/v<versão>  (tag anotada: resolver o objeto em git/tags/<sha>)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          path: web
+          persist-credentials: false
+
+      - name: Montar a pasta de publicação (só o clássico + rastreio.js)
+        run: |
+          set -euo pipefail
+          pub="${RUNNER_TEMP}/pages"
+          mkdir -p "${pub}"
+          cp -R web/. "${pub}/"
+          # fora: o Órbita inteiro (app/), as entradas por produto e o script que as redireciona
+          rm -rf "${pub}/app" "${pub}/crm" "${pub}/ads" "${pub}/atendimento" "${pub}/workspace.js"
+          for proibido in app crm ads atendimento workspace.js; do
+            if [ -e "${pub}/${proibido}" ]; then echo "::error::${proibido} não podia estar na publicação"; exit 1; fi
+          done
+          for exigido in index.html painel.js painel.css dados.js nucleo.js rastreio.js fonts; do
+            if [ ! -e "${pub}/${exigido}" ]; then echo "::error::falta ${exigido} na publicação"; exit 1; fi
+          done
+          # /app/ do Pages: quem ainda tem o link antigo (ou um PWA instalado daqui) vai para o Órbita de verdade
+          mkdir -p "${pub}/app"
+          cat > "${pub}/app/index.html" <<HTML
+          <!DOCTYPE html>
+          <html lang="pt-BR">
+          <head>
+            <meta charset="UTF-8">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta name="robots" content="noindex, nofollow">
+            <meta http-equiv="refresh" content="0; url=${ORBITA_URL}">
+            <title>Órbita mudou de endereço</title>
+            <style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:16px/1.5 system-ui,sans-serif;background:#07090C;color:#F2E8D8;padding:24px}main{max-width:36rem;text-align:center}a{color:#E2B066}</style>
+          </head>
+          <body>
+            <main>
+              <h1>O Órbita mudou de endereço</h1>
+              <p>Este endereço não serve mais o aplicativo. Continue em <a href="${ORBITA_URL}">${ORBITA_URL}</a> e, se tiver o atalho instalado, instale de novo a partir de lá.</p>
+            </main>
+          </body>
+          </html>
+          HTML
+          # service worker que se desinstala: apaga os caches do escopo /app/ e manda as abas para o endereço novo
+          cat > "${pub}/app/sw.js" <<SW
+          "use strict";
+          self.addEventListener("install", () => self.skipWaiting());
+          self.addEventListener("activate", ev => ev.waitUntil((async () => {
+            for (const n of await caches.keys()) await caches.delete(n);
+            await self.registration.unregister();
+            for (const c of await self.clients.matchAll({ type: "window" })) c.navigate("${ORBITA_URL}");
+          })()));
+          SW
+          echo "publicação montada em ${pub}:"; ls -la "${pub}" "${pub}/app"
+          echo "pub=${pub}" >> "${GITHUB_ENV}"
+
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: ${{ env.pub }}
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

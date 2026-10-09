@@ -1,8 +1,14 @@
 # Funções publicadas pela tag funcoes-* (uma por linha; ver docs/orbita/DEPLOY-FUNCOES.md).
-# Rodada de 02/10/2026 (tag funcoes-20261002-1): PR #5 revisado. nx-enviar volta à regra de consentimento que estava no ar (só quem pediu
-# SAIR é bloqueado) e codewords.js explica o HTTP 400 do aparelho («número sem WhatsApp»). Migração 20261003a (gêmea de mídia) já aplicada
-# em 02/10 22:09 UTC. As 7 vão juntas (todas carregam codewords.js/enviar.js/comum.js).
-# NÃO publicar nx-ciclo/nx-relatorio no dia 1º perto das 12:00 UTC (relatório mensal). Depois de publicar: conferir o ciclo das :07 e o relatório das 8h.
+# Rodada de 09/10/2026 (tag funcoes-20261009-1, plano 100 de 08/10 — frente S-F): as 7 vão JUNTAS. Todas carregam comum.js (que
+# ganhou cortarTexto/telefoneBorda/variantesTelefone única, traduzirErroIA/MODELO_PADRAO/registrarUsoIA, listarClientes por status
+# e com a vertical) e web/nucleo.js mudou na frente P (fee 0, receita só real, balde «sem campanha», vocabulário por vertical) —
+# nx-ciclo, nx-relatorio e nx-whatsapp têm de ir junto. Antes da tag: migrações 20261008a e 20261008b APLICADAS (o vigia e os
+# contadores do nx-codewords dependem da b); a 20261008c é tolerada se faltar (custo da IA cai nos 5 argumentos; adiamento da IA
+# volta como 'pendente' em vez de 'adiado'), mas vai antes de preferência. A coluna nx_config.meta_api_versao (ainda sem migração)
+# também é tolerada: sem ela a versão da Graph que respondeu só não é lembrada (log).
+# NÃO publicar nx-ciclo/nx-relatorio no dia 1º perto das 12:00 UTC (relatório mensal). Depois de publicar: conferir o ciclo das :07
+# (a rodada das 03:07 UTC agora sincroniza 28 dias, lê fuso/moeda e reescreve nomes antigos), o relatório das 8h e a sincronização
+# do CodeWords de 2 em 2 min (o vigia do aparelho roda junto; sem alvos responde vigia:{canais:0}).
 nx-ia
 nx-codewords
 nx-enviar

@@ -224,16 +224,24 @@ const telaPequena = () => { try { return !!(globalThis.matchMedia && globalThis.
 export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
   const { ui, h, L } = k;
   let fechada = false;
-  const g = ui.gaveta({ titulo: k.v.negocio, largura: "g", aoFechar: () => { fechada = true; if (aoFechar) aoFechar(); } });
+  // revisão: fechar a gaveta com Ganhou/Perdeu/Reabrir ainda no prazo do «Desfazer» grava NA HORA — antes o movimento ficava solto: a
+  // gaveta reaberta deixava fazer outro por cima e o arrasto no Kanban era sobrescrito 7 s depois pelo firmar desta gaveta
+  const g = ui.gaveta({ titulo: k.v.negocio, largura: "g", aoFechar: () => { fechada = true; if (pend && !pend.efetivado && pend.firmarAgora) pend.firmarAgora(); if (aoFechar) aoFechar(); } });
   const corpo = g.corpo;
-  corpo.appendChild(ui.esqueleto("lista", 5));
+  corpo.appendChild(ui.esqueleto("cartao"));
   let abaAtual = "resumo";
+  // plano 100 · C1: Ganhou/Perdeu/Reabrir pela gaveta = o MESMO movimento adiado do Kanban (a tela muda já; o servidor — e as automações — só depois
+  // dos 7 s do «Desfazer»). `pend` = o movimento que ainda pode ser desfeito ou está gravando; enquanto existe, a gaveta não aceita outro por cima.
+  let pend = null;
+  let ultimo = null;          // a última resposta de nx_negocio_ver (o «Desfazer» antes do servidor redesenha com ela)
 
   async function carregar() {
     try {
       const d = await k.api.rpcC("nx_negocio_ver", { p_id: id });
       if (fechada) return;
-      desenhar(d);
+      ultimo = d;
+      // chegou uma leitura no meio dos 7 s (outra aba, o pulso): a tela continua mostrando o destino pedido
+      desenhar(pend && !pend.efetivado ? comPendente(d, pend) : d);
     } catch (e) {
       if (fechada) return;
       ui.limpar(corpo);
@@ -243,10 +251,63 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
 
   function avisar(n) { if (aoMudar && n) try { aoMudar(n); } catch (e) { console.error(e); } }
 
+  /** A resposta do servidor com o movimento pendente aplicado na tela (etapa, status, valor final, data da consulta). */
+  function comPendente(d, p) {
+    return { ...d, negocio: { ...d.negocio, estagio_id: p.destino.id, ...L.patchMovimento(p.destino, p.extra) } };
+  }
+
+  /** Erro ambíguo (prazo, conexão): o servidor pode ter gravado. → a etapa em que o negócio está de verdade, ou null se não deu para saber. */
+  async function etapaReal() {
+    try { const r = await k.api.rpcC("nx_negocio_ver", { p_id: id }); return r && r.negocio ? r.negocio.estagio_id : null; }
+    catch { return null; }
+  }
+
+  /**
+   * C1: movimento que muda a natureza do negócio (aberto ↔ ganho/perdido). A gaveta já mostra o destino; `firmar` (a gravação de verdade) roda
+   * quando o aviso fecha sem «Desfazer» — ou na hora, com keepalive, se a página sair/ficar oculta (ui.acaoComDesfazer cuida disso).
+   * «Desfazer» antes disso = nada foi ao servidor, nenhuma automação disparou.
+   */
+  async function moverAdiado(n, destino, extra, dAntes) {
+    const mov = { destino, extra, efetivado: false, promessa: null };
+    pend = mov;
+    if (!fechada) desenhar(comPendente(dAntes, mov));
+    const titulo = L.tituloCard(n);
+    const valor = destino.tipo === "ganho" ? (extra.valor ?? n.valor_previsto ?? null) : null;
+    const texto = L.textoMovimento({ titulo, destino, valor, ganhar: k.v.ganhar, artigo: k.v.art("negocio"), brl: v => ui.brl(v) });
+    ui.anunciar(`${titulo}: ${destino.nome}. Dá para desfazer por 7 segundos.`);
+    const firmar = (o = null) => {
+      if (mov.promessa) return mov.promessa;
+      mov.efetivado = true;
+      mov.promessa = (async () => {
+        let card;
+        try { card = await moverNegocio(k, n, destino, { extra, keepalive: !!(o && o.saindo) }); }
+        catch (e) {
+          // o servidor pode ter aplicado mesmo com o erro: confere ANTES de dizer que não foi
+          if (!(L.erroAmbiguo(e) && (await etapaReal()) === destino.id)) { if (pend === mov) pend = null; throw e; }
+          card = { id: n.id, estagio_id: destino.id };
+        }
+        if (pend === mov) pend = null;
+        avisar(card);
+        if (!fechada) await carregar();
+        return card;
+      })();
+      return mov.promessa;
+    };
+    const reverter = async () => {
+      const foi = mov.efetivado;
+      if (pend === mov) pend = null;
+      if (fechada) return;
+      if (foi) await carregar();                       // a gravação falhou: a tela volta ao que o servidor tem
+      else { desenhar(ultimo || dAntes); ui.anunciar("Movimento desfeito."); }
+    };
+    await ui.acaoComDesfazer({ texto, reverter, firmar, aoCriar: h => { mov.firmarAgora = h.firmarAgora; } });
+  }
+
   function desenhar(d) {
     const n = d.negocio;
-    const funil = k.funil(n.funil_id) || d.funil;
+    const funil = k.funil(n.funil_id) || d.funil || (k.funilDoEstagio ? k.funilDoEstagio(n.estagio_id) : null);   // sem funil_id na resposta: o funil da etapa
     const estagio = k.estagio(n.estagio_id) || d.estagio;
+    if (!n.status) n.status = n.estagio_tipo || (estagio && estagio.tipo) || "aberto";   // o status acompanha o tipo da etapa
     const podeEditar = k.pode("atendente");
     ui.limpar(corpo);
     g.trocarTitulo(`${k.v.negocio}${funil ? ` · ${funil.nome}` : ""}`);
@@ -258,27 +319,81 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       return r;
     }
     async function mover(e) {
+      if (pend) {
+        ui.toast(pend.efetivado ? "Ainda estamos gravando a última mudança. Tente de novo em instantes."
+          : "A última mudança ainda pode ser desfeita. Toque em «Desfazer» ou espere alguns segundos.", { tipo: "info" });
+        return;
+      }
       // o que era antes: o «Desfazer» devolve a etapa (e, se for o caso, o valor final, o motivo da perda ou a data da consulta)
       const antes = { estagio: k.estagio(n.estagio_id), ordem: n.ordem ?? null, valor: n.valor, valor_previsto: n.valor_previsto, consulta_em: n.consulta_em ?? null,
         motivo_perda_id: n.motivo_perda_id, motivo_perda_txt: n.motivo_perda_txt };
       try {
         const extra = await prepararMovimento(k, n, e);
         if (extra === null) return;
+        // ganho/perdido/reabrir: o mesmo movimento adiado do Kanban (as automações só disparam depois dos 7 s)
+        if (L.movimentoAdiado(antes.estagio && antes.estagio.tipo, e.tipo)) { await moverAdiado(n, e, extra, d); return; }
         const card = await moverNegocio(k, n, e, { extra });
         avisar(card);
         ui.anunciar(`Movido para ${e.nome}.`);
         await carregar();
-        const quando = e.tipo === "ganho" ? `${k.v.ganhar}! Registrado.` : e.tipo === "perdido" ? "Registrado como perdido." : `Movido para «${e.nome}».`;
-        const aviso = e.tipo !== "aberto" || (antes.estagio && antes.estagio.tipo !== "aberto") ? " Mensagens automáticas já enviadas não voltam." : "";
-        if (antes.estagio) ui.acaoComDesfazer({ texto: quando + aviso, reverter: async () => {
-          const extraVolta = antes.estagio.tipo === "ganho" ? { valor: antes.valor ?? antes.valor_previsto ?? 0 }
-            : antes.estagio.tipo === "perdido" ? { ...(antes.motivo_perda_id ? { motivo_perda_id: antes.motivo_perda_id } : {}), ...(antes.motivo_perda_txt ? { motivo_perda_txt: antes.motivo_perda_txt } : {}) } : {};
-          const volta = await moverNegocio(k, { id: n.id }, antes.estagio, { ordem: antes.ordem, extra: extraVolta });
+        if (antes.estagio) ui.acaoComDesfazer({ texto: `Movido para «${e.nome}».${e.tipo !== "aberto" ? " Mensagens automáticas já enviadas não voltam." : ""}`, reverter: async () => {
+          const volta = await moverNegocio(k, { id: n.id }, antes.estagio, { ordem: antes.ordem, extra: L.extraDeVolta(antes) });
           if (extra && extra.consulta_em && antes.consulta_em !== extra.consulta_em) await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: n.id, consulta_em: antes.consulta_em } });
           avisar(volta);
           if (!fechada) await carregar();
         } });
       } catch (err) { k.toastErro(err); }
+    }
+    const pendente = !!pend;
+
+    /* C6: presença na consulta que já passou («Compareceu / Faltou», nx_agenda_presenca). Tocar de novo no marcado limpa; «Desfazer» devolve o de antes.
+       Servidor sem a função (migração ainda não aplicada) → a gaveta esconde o bloco nesta sessão. */
+    function blocoPresenca() {
+      const atual = L.presencaDe(n);
+      if (k.__semPresenca || !n.consulta_em || !L.consultaPassou(n) || (n.status !== "aberto" && !atual)) return null;
+      const nome = nomeCompromisso(k);
+      const fechado = n.status !== "aberto";
+      return h("div", { class: "ng-presenca", role: "group", "aria-label": `Presença na ${nome}` },
+        h("span", { class: "ng-presenca-txt" }, ui.icone("calendario"),
+          h("span", null, `${nome[0].toUpperCase()}${nome.slice(1)} de ${ui.dataCurtaBR ? ui.dataCurtaBR(n.consulta_em) : ui.dataBR(n.consulta_em)} às ${ui.horaBR(n.consulta_em)}`)),
+        h("div", { class: "ng-presenca-bts" }, ["compareceu", "faltou"].map(est => {
+          const P = L.PRESENCAS[est];
+          const b = h("button", { type: "button", class: ["bt", "bt-sec", "bt-p", "ng-pres", `ng-pres-${est}`], dataset: { estado: est }, "aria-pressed": String(atual === est),
+            disabled: !podeEditar || pendente || fechado, title: atual === est ? "Tocar de novo limpa a marcação" : null }, ui.icone(P.icone), P.rotulo);
+          b.addEventListener("click", () => marcarPresenca(est, b));
+          return b;
+        })));
+    }
+    async function marcarPresenca(est, botao) {
+      const anterior = L.presencaDe(n);
+      const pedido = L.proximaPresenca(anterior, est);
+      const etapaAntes = { estagio: k.estagio(n.estagio_id), ordem: n.ordem ?? null };
+      let r;
+      try { r = await ui.carregando(botao, k.api.rpcC("nx_agenda_presenca", { p_negocio: n.id, p_estado: pedido })); }
+      catch (e) {
+        if (L.rpcAusente(e)) {
+          k.__semPresenca = true;
+          ui.toast("O servidor ainda não registra a presença da consulta. Assim que a atualização estiver no ar, os botões voltam.", { tipo: "info" });
+          if (!fechada) desenhar(ultimo || d);
+          return;
+        }
+        k.toastErro(e); return;
+      }
+      const estagioDepois = (r && r.estagio_id) || n.estagio_id;
+      const moveu = !!(etapaAntes.estagio && estagioDepois !== etapaAntes.estagio.id);
+      const destino = moveu ? k.estagio(estagioDepois) : null;
+      avisar({ ...n, estagio_id: estagioDepois, campos: { ...(n.campos || {}), presenca: r && "presenca" in r ? r.presenca : (pedido === "limpar" ? null : pedido) } });
+      if (!fechada) await carregar();
+      const nome = nomeCompromisso(k);
+      const texto = pedido === "limpar" ? "Presença limpa"
+        : `${pedido === "faltou" ? `Faltou à ${nome}` : `Compareceu à ${nome}`}${destino ? ` · movid${k.v.art("negocio")} para «${destino.nome}»` : ""}`;
+      ui.acaoComDesfazer({ texto, reverter: async () => {
+        await k.api.rpcC("nx_agenda_presenca", { p_negocio: n.id, p_estado: L.voltaPresenca(anterior) });
+        // «faltou» levou à etapa de marco «faltou»: o Desfazer devolve a etapa de antes (aberta → aberta: sem perguntas)
+        if (moveu && etapaAntes.estagio) await moverNegocio(k, { id: n.id }, etapaAntes.estagio, { ordem: etapaAntes.ordem, extra: L.extraDeVolta(etapaAntes) });
+        avisar({ ...n });
+        if (!fechada) await carregar();
+      } });
     }
 
     /* ---------- topo ---------- */
@@ -324,14 +439,14 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       } } }, ui.icone("calendario"), remarcar ? "Remarcar consulta" : "Marcar consulta"));
     }
     if (podeEditar && n.status === "aberto") {
-      if (estGanho) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-ganhou", on: { click: () => mover(estGanho) } }, ui.icone("check"), k.v.ganhar));
-      if (estPerda) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-perdeu", on: { click: () => mover(estPerda) } }, ui.icone("fechar"), k.v.perder));
+      if (estGanho) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-ganhou", disabled: pendente, on: { click: () => mover(estGanho) } }, ui.icone("check"), k.v.ganhar));
+      if (estPerda) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-perdeu", disabled: pendente, on: { click: () => mover(estPerda) } }, ui.icone("fechar"), k.v.perder));
     }
     if (podeEditar && n.status !== "aberto" && funil) {
       const primeira = funil.estagios.find(e => e.tipo === "aberto");
-      if (primeira) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec", on: { click: () => mover(primeira) } }, ui.icone("relogio"), "Reabrir"));
+      if (primeira) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-reabrir", disabled: pendente, on: { click: () => mover(primeira) } }, ui.icone("relogio"), "Reabrir"));
     }
-    if (podeEditar && n.status === "ganho" && d.contato) {
+    if (podeEditar && n.status === "ganho" && d.contato && !pendente) {
       acoes.appendChild(h("button", { type: "button", class: "bt bt-prim", on: { click: () => iniciarPosVenda(k, n, d.contato, { aoCriar: nv => { avisar({ ...nv, criado: true }); } }) } },
         ui.icone("mais"), "Iniciar pós-venda"));
     }
@@ -357,7 +472,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
     for (const e of (funil ? funil.estagios : [])) {
       const atual = e.id === n.estagio_id;
       const b = h("button", { type: "button", role: "listitem", class: ["ng-etapa", e.tipo === "aberto" && e.ordem < ordemAtual && n.status === "aberto" && "feita"],
-        style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, "aria-current": atual ? "step" : null, disabled: atual || !podeEditar,
+        style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, "aria-current": atual ? "step" : null, disabled: atual || !podeEditar || pendente,
         title: atual ? `Etapa atual: ${e.nome}` : `Mover para ${e.nome}` }, h("span", null, e.nome));
       if (!atual && podeEditar) b.addEventListener("click", () => mover(e));
       fita.appendChild(b);
@@ -366,15 +481,19 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
     // tempo na etapa atual com a mesma escala do cartão (verde→âmbar→vermelho pelo prazo da etapa ou 3/7 dias); só quando o servidor manda estagio_em
     const faixa = n.status === "aberto" && estagio && n.estagio_em ? L.faixaTempoEtapa(n.estagio_em, estagio.sla_horas) : null;
     const movel = telaPequena();
+    // C4: a origem com a pílula padrão (anúncio com a plataforma; cadastro manual não ganha pílula)
+    const orig = L.origemPilula(n, { manual: false });
     const topo = h("div", { class: "ng-topo" },
       h("div", { class: "ng-status" }, statusPil,
+        pendente ? ui.pilula("Confirmando…", "neutra", { icone: "relogio", class: "ng-confirmando", title: "Dá para desfazer pelo aviso por alguns segundos" }) : null,
         faixa ? ui.pilula(L.textoDiasEtapa(n.estagio_em), faixa.nivel === "ruim" ? "ruim" : faixa.nivel === "aten" ? "aten" : "neutra", { icone: "relogio", title: faixa.texto, class: "ng-tempo" }) : null,
-        n.anuncio ? ui.pilula(n.plataforma === "google" ? "Google Ads" : "Anúncio Meta", n.plataforma === "google" ? "google" : "meta", { icone: "anuncio" }) : null,
+        orig ? ui.pilula(null, orig.chave, { variante: "origem", plataforma: orig.plataforma, class: "ng-origem" }) : null,
         funil && funil.conta_no_ads ? ui.pilula("Conta no retorno do anúncio", "neutra", { title: "Este funil entra nos números de Anúncios" }) : null,
         dono ? ui.pilula(dono.nome, "neutra", { icone: "usuario" }) : null),
       caixaTitulo,
       h("div", { class: "ng-linha1" }, valorEl, movel ? null : acoes),
       fita,
+      blocoPresenca(),
       n.status === "perdido" && (n.motivo_perda_id || n.motivo_perda_txt)
         ? h("p", { class: "aviso aviso-ruim" }, ui.icone("info"), h("span", null, `Motivo: ${k.motivosPorId()[n.motivo_perda_id] || "—"}${n.motivo_perda_txt ? ` — ${n.motivo_perda_txt}` : ""}`)) : null);
 
@@ -423,24 +542,13 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       } else {
         el.appendChild(h("p", { class: "aviso" }, ui.icone("info"), h("span", null, `Sem ${k.v.min("contato")} ligado (o cadastro foi removido). Os números do negócio continuam no retorno do anúncio.`)));
       }
-      /* origem da oportunidade e campanha */
-      const rastreio = n.rastreio && typeof n.rastreio === "object" ? n.rastreio : {};
-      const an = d.anuncio || {};
-      const campanha = an.campanha_nome || n.campanha_nome || n.campanha_ext || rastreio.utm_campaign;
-      const anuncio = an.anuncio_nome || n.anuncio_nome || n.anuncio_ext;
-      const plataforma = n.plataforma === "google" ? "Google Ads" : n.plataforma === "meta" ? "Meta Ads" : null;
-      const origem = n.origem ? (L.ROTULO_ORIGEM[n.origem] || n.origem) : null;
-      const tagsUtm = [rastreio.utm_source, rastreio.utm_medium].filter(Boolean).join(" · ");
-      if (plataforma || origem || campanha || anuncio || tagsUtm) {
-        const detalhesOrigem = h("div", { class: "ng-origem-detalhes" },
-          h("b", null, plataforma || origem || "Origem do contato"),
-          campanha || anuncio ? h("span", null,
-            anuncio ? ["Anúncio ", h("b", null, `«${anuncio}»`)] : null,
-            campanha ? [anuncio ? " · campanha " : "Campanha ", h("b", null, `«${campanha}»`)] : null) : null,
-          origem && plataforma ? h("small", null, `Origem do cadastro: ${origem}`) : null,
-          tagsUtm ? h("small", null, `Parâmetros do site: ${tagsUtm}`) : null,
-          rastreio.pagina ? h("small", null, `Página: ${rastreio.pagina}`) : null);
-        el.appendChild(h("div", { class: ["ng-anuncio", n.plataforma === "google" && "google"] }, ui.icone("anuncio"), detalhesOrigem));
+      /* C3: de onde veio — «Veio do site · campanha X · página Y · clique em 06/10 10:12», «Veio do anúncio «nome» · campanha …» (rastreio,
+         campanha_ext/anuncio_ext, plataforma e campanha_nome de nx_negocio_ver; o bloco d.anuncio traz os nomes da métrica quando há) */
+      const rs = L.resumoRastreio(n, { anuncio: d.anuncio, fmtData: iso => `${ui.dataCurtaBR ? ui.dataCurtaBR(iso) : ui.dataBR(iso)} ${ui.horaBR(iso)}` });
+      if (rs) {
+        el.appendChild(h("section", { class: ["ng-anuncio", "ng-rastreio", rs.plataforma === "google" && "google"], "aria-label": "De onde veio" },
+          rs.chave ? ui.pilula(null, rs.chave, { variante: "origem", plataforma: rs.plataforma }) : ui.icone("anuncio"),
+          h("div", { class: "ng-origem-detalhes" }, h("b", { class: "ng-rastreio-frase" }, rs.frase), ...rs.detalhes.map(t => h("small", null, t)))));
       }
       /* dados */
       const dl = h("dl", { class: "ng-kv" });
@@ -452,7 +560,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
         controle: h("input", { type: "text", inputmode: "decimal", value: n.valor_previsto != null ? Number(n.valor_previsto).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "", placeholder: "R$ 0,00" }),
         ler: c => k.L.lerNumero(c.value), validar: c => k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null,
         salvar: v => salvar({ valor_previsto: v }) }));
-      if (n.status === "ganho") dl.append(...linhaEd(k, { rotulo: "Valor final", desabilitado: !podeEditar,
+      if (n.status === "ganho") dl.append(...linhaEd(k, { rotulo: "Valor final", desabilitado: !podeEditar || pendente,
         controle: h("input", { type: "text", inputmode: "decimal", value: n.valor != null ? Number(n.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "" }),
         ler: c => k.L.lerNumero(c.value), validar: c => k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null,
         salvar: v => salvar({ valor: v }) }));
@@ -558,7 +666,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
     }
 
     // no celular as ações ficam num rodapé fixo (sticky no fim da gaveta): sempre à mão, sem rolar de volta ao topo
-    corpo.append(h("div", { class: ["ng", movel && "ng-com-rodape"] }, topo, abasEl.el, conteudo, movel ? h("div", { class: "ng-acoes-rodape" }, acoes) : null));
+    corpo.append(h("div", { class: ["ng", movel && "ng-com-rodape"], "aria-busy": pendente ? "true" : null }, topo, abasEl.el, conteudo, movel ? h("div", { class: "ng-acoes-rodape" }, acoes) : null));
     mostrar();
   }
 
@@ -754,7 +862,8 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
     ui.seletorPessoa({ usuarios: k.base.usuarios, valor: k.eu(), rotulo: "Responsável" }));
   dono.querySelector("select").name = "dono_id";
   let etiquetas = [];
-  const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas: [], podeCriar: nome => k.criarEtiqueta(nome), aoMudar: ids => { etiquetas = ids; } });
+  // formulário que só GUARDA o valor (grava no «Criar»): emite na hora — com a pausa de 300 ms a etiqueta marcada logo antes do «Criar» ficava fora
+  const etq = ui.seletorEtiquetas({ todas: k.base.etiquetas, marcadas: [], podeCriar: nome => k.criarEtiqueta(nome), aoMudar: ids => { etiquetas = ids; }, debounceMs: 0 });
   const erro = h("p", { class: "modal-erro", role: "alert", hidden: true });
   // M25: uma chave por intenção. Erro ambíguo (prazo estourado depois de o servidor aplicar) repete com a MESMA chave; mudou o conteúdo, chave nova.
   const status = h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true });
@@ -795,10 +904,13 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
         k.escrever("nx_negocio_salvar", { p_negocio: p }, { req: reqAtual, aoStatus: t => { status.textContent = t; status.hidden = false; } }));
       status.hidden = true;
       for (const rc of rascunhos) rc.apagar();
-      ui.toast(`${k.v.negocio} criad${k.v.art("negocio")}.`, { tipo: "ok" });
+      const abrirCriado = () => abrirNegocio(k, n.id, { aoMudar: aoCriar ? c => aoCriar({ ...c, atualizado: true }) : null });
+      // C2: criado pela conversa, a pessoa continua no atendimento — a gaveta não abre por cima; o aviso traz «Abrir»
+      if (dados.conversa_id) ui.toast(`${k.v.negocio} criad${k.v.art("negocio")} e ligad${k.v.art("negocio")} a este atendimento.`, { tipo: "ok", acao: { rotulo: "Abrir", fn: abrirCriado } });
+      else ui.toast(`${k.v.negocio} criad${k.v.art("negocio")}.`, { tipo: "ok" });
       if (aoCriar) try { aoCriar(n); } catch (e2) { console.error(e2); }
       g.fechar();
-      setTimeout(() => abrirNegocio(k, n.id, { aoMudar: aoCriar ? c => aoCriar({ ...c, atualizado: true }) : null }), 260);
+      if (!dados.conversa_id) setTimeout(abrirCriado, 260);
     } catch (e) {
       status.hidden = true;
       if (e && e.ambigua) { erro.textContent = "Não foi possível confirmar se foi salvo. Toque em «Criar» de novo: é seguro, não duplica."; erro.hidden = false; }

@@ -150,3 +150,49 @@ sondas de autenticação. As sete ficaram `ACTIVE`, `verify_jwt=false`: nx-whats
 nx-ciclo v6, nx-enviar v8, nx-midia v5, nx-ia v6 e nx-codewords v7. Sondas: WhatsApp 401/403, CodeWords
 401/405 e nx-enviar 401; os dois testes de corpo 413 responderam em 0,186 s e 0,157 s. A tela do app
 continua na versão `20261001e` até a etapa seguinte de publicação do front.
+
+## Plano 100 — frente S-F (08–09/10/2026) — tag `funcoes-20261009-1`
+
+As **sete** funções vão juntas, numa tag só (`funcoes-20261009-1`; o plano previa `funcoes-20261008-1`):
+todas carregam `comum.js`, que ganhou `cortarTexto`, `telefoneBorda`, a `variantesTelefone` única, `traduzirErroIA`/
+`MODELO_PADRAO`/`registrarUsoIA` e o `listarClientes` por status e com a `vertical`; e `web/nucleo.js` mudou na frente P.
+**Nunca publicar perto do dia 1º às 12:00 UTC** (nx-ciclo/nx-relatorio: relatório mensal).
+Portões do workflow nesta rodada: `rodar-tudo` (inclui `plano100-funcoes`), montagem, `deno check --node-modules-dir=none` dos
+7 entrypoints e `git diff --check`.
+
+O que muda em cada função (detalhe em `docs/orbita/PLANO-100-20261008.md`, itens S-F1…S-F17; testes em
+`testes/plano100-funcoes.teste.mjs`, `codewords`, `funcoes`, `conversas-funcoes`, `automacoes-ia`; o caso «contrato: TODA RPC…»
+confere que cada chamada das 7 funções casa com UMA assinatura viva das migrações, pelos nomes dos parâmetros):
+
+| Função | Mudança |
+|---|---|
+| nx-codewords | `[ref]`/frase do botão também na reentrega e na sincronização; `duplicada` ainda decide quando a mensagem ficou sem resposta; sync avisa «mensagem recuperada sem resposta»; telefone normalizado na borda; grupo só por sinal confiável; saída `{from, to, from_me}` vira «celular»; ack numérico; `codewords_forma` 1×/h; `message_id` ou `timestamp` obrigatórios (422); 404 do aparelho reconfere o número; **vigia do aparelho** no cron da sync (aviso ao gestor com `codewords_aviso_em`) e contadores por canal (`nx_codewords_contar`); referral de post não vira `anuncio_ext` |
+| nx-whatsapp | `request_welcome`/`order` da Meta; `[ref]` do site pelo canal Meta; reentrega reagenda mídia «baixando»; `nx_config` só com as colunas usadas; `nx_wa_canal` falhando por banco não cai no caminho antigo (503, retry) |
+| nx-enviar | `texto_longo` com teto efetivo (assinatura); `contato_bloqueado`; fila nunca rebaixa envio feito (`enviado_sem_confirmacao`); wamid provisório só CodeWords; tamanho e MIME no caminho Meta; `baixarMidia` com teto do tipo; saídas Meta ambíguas > 24 h → `sem_confirmacao`; reserva presa repete `marcar` e devolve a última saída; resumo em `nx_execucoes`; `{ids}`+`{fila:true}` somados; `testar_canal` devolve `app_secret_global` |
+| nx-midia | `subir` valida nome (≤ 200, sem controle) e legenda (≤ 1024); Content-Type normalizado |
+| nx-ia | texto de terceiros entre aspas (JSON) nos prompts; `traduzirErroIA` único (nada do provedor chega ao painel); modelo padrão `claude-opus-5-5`; custo/`stop_reason`/ms registrados; pré-checagens antes de reservar cota; **pausa por plataforma** (401/403 e cota: `nx_auto_ia_falhar` com a assinatura de sempre, `p_tentar` + `p_conta=false` + `p_em=1800` → `adiado` na 20261008c, que avisa os admins 1×/24 h; com o banco antigo a função avisa); limites iguais no prompt e no schema do montar; automação reprovada volta para o editor; prompt caching no catálogo; 35 s sem retentativa por decisão |
+| nx-ciclo | janela 7 d por hora e 28 d às 03:07 UTC; tolerância de 3 h também na 1ª leitura (memória em `nx_travas`); erro passageiro = «instável» (alerta) sem «Abra Ajustes»; mapa de erros Meta (2635 versão desligada, 100 campo); fallback de versão da Graph com memória; nomes antigos reescritos na rodada diária; fuso/moeda da conta no status (+ aviso único); status `parcial`; `nx_atribuicao_completar` depois do sync; telefones/wamids anonimizados no resumo; textos do radar no vocabulário da `vertical` do cliente; **modo painel** `{token, cliente, dias:1}` («Testar conexão», admin + módulo `ads`, sem radar) |
+| nx-relatorio | prazo de IA por cliente (25 s); falha de IA fora de `nx_relatorios.erro` (vai para `ia_erro` no resumo); sem destino = pulado + aviso semanal ao admin; `listarClientes` ignora suspenso/cancelado/teste vencido; mesmo filtro de leads do `nx_dados`; vocabulário da `vertical` do cliente (oficina: «visitas», «Na oficina»); envio anonimizado no resumo |
+
+**Banco necessário ANTES da tag:** migrações `20261008a` (rastreio pendente, `nx_lead_webhook` v2, `nx_wa_entrada` com
+horário, `nx_atribuicao_completar`) e `20261008b` (contrato 3: `nx_codewords_vigia_alvos`, `nx_codewords_contar`,
+`nx_canal_historico`, `nx_canais.codewords_aviso_em`/`codewords_contadores`, `nx_fila_concluir` com backoff).
+**Recomendada antes, tolerada se faltar:** `20261008c` (contrato 7) — `nx_ia_registrar_reserva(…, p_custo_usd, p_stop_reason,
+p_ms)` (sem ela o registro cai nos 5 argumentos e lembra por 10 min) e o estado `adiado` de `nx_auto_ia_falhar` (MESMA
+assinatura `p_pedido, p_erro, p_tentar, p_em, p_conta`; sem a c o pedido volta como `pendente` no mesmo prazo, sem contar a
+tentativa, e o aviso sai da própria função). **Ainda sem migração (pedido à S-B), tolerado:** a coluna
+`nx_config.meta_api_versao` (sem ela a versão da Graph que respondeu não é lembrada — só log) e o status `sem_confirmacao` no
+CHECK de `nx_mensagens.status` (sem ele a varredura horária das saídas Meta ambíguas > 24 h é recusada pelo banco — só log; as
+mensagens continuam `pendente`).
+
+**Depois de publicar:** o ciclo das :07 (HTTP 200, `ok:true`; a rodada das 03:07 UTC traz `diaria:true` e `janela:28`), o
+relatório das 8h (`ia_erro` no resumo não é falha), a sincronização do CodeWords de 2 em 2 min (`vigia:{canais, caidos, avisos}`;
+`pulado:"rpc ausente"` só sem a migração b) e as sondas de autenticação do workflow. Nunca perto do dia 1º às 12:00 UTC.
+
+**Fica para depois (S-F17, [B65]):** coexistência Meta — gravar `smb_message_echoes` (mensagem enviada pelo app do celular num
+número Cloud API) como saída «celular». Exige RPC nova (`nx_wa_eco`) e um ramo no webhook para `field = 'smb_message_echoes'`;
+hoje o campo é ignorado e a tela manda falar com o suporte. Pedido de banco registrado para a próxima rodada.
+
+**Também fica para o banco ([A29]):** `nx_codewords_origem` ainda grava a origem contada (e a frase «Vim pelo anúncio
+(instagram)» do botão do site) como `organico` sem `plataforma`; a função já manda a fonte (`instagram`/`facebook`/`google`),
+falta a RPC guardar a plataforma quando o negócio não tem anúncio.

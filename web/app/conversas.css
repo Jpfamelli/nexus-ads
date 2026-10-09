@@ -995,3 +995,50 @@ mark.cvx-pend { background: var(--c-aten-suave); color: var(--c-texto); border-r
 .cv-doc-ic[data-doc="planilha"] { color: var(--c-ok); background: var(--c-ok-suave); }
 .cv-doc-ic[data-doc="slides"] { color: var(--c-aten); background: var(--c-aten-suave); }
 .cv-doc-ic[data-doc="texto"] { color: var(--c-info); background: var(--c-info-suave); }
+
+/* ============================================================
+   Plano 100 (08/10/2026) — frente D · Conversas
+   Nome editável com Salvar/Cancelar, rastreio na lateral, faixa de número desconectado, «Enviar agora» com motivo,
+   aviso do transferir, telefone com erro no campo, chat vazio. Tokens; movimento só fora de prefers-reduced-motion; 44 px no toque.
+   ============================================================ */
+.cvt-nome-ed[hidden], .cvl-caido[hidden], .cv-fila-motivo[hidden], .cv-tr-aviso[hidden], .cv-nv-tel-erro[hidden] { display: none !important; }
+
+/* D1: o nome só grava por Enter ou «Salvar»; o campo ocupa a largura do cartão e os botões ficam embaixo */
+.cvt-nome-ed { flex-direction: column; align-items: stretch; width: 100%; gap: .45rem; }
+.cvt-nome-ed input { min-height: 44px; }
+.cvt-nome-bts { display: flex; justify-content: center; gap: .5rem; flex-wrap: wrap; }
+.cvt-nome-bts .bt { min-height: 44px; }
+.cvt-nome-erro { margin: 0; font-size: var(--fs-13); font-weight: 600; color: var(--c-ruim); }
+.cvt-nome-ed input[aria-invalid="true"] { border-color: var(--c-ruim); }
+
+/* D17: veio do site (rastreio) — mesmo bloco do anúncio, na cor da marca */
+.cvt-rastreio { background: color-mix(in srgb, var(--c-prim) 10%, var(--c-sup)); border-color: color-mix(in srgb, var(--c-prim) 28%, transparent); }
+.cvt-rastreio .ic { color: var(--c-prim-luz); }
+.cvt-rastreio-det { margin-top: .2rem; color: var(--c-texto-2); font-size: var(--fs-12); overflow-wrap: anywhere; }
+
+/* D18: número de WhatsApp desconectado — faixa na central (com «Ver número» para o admin) e pílula no cabeçalho da conversa */
+.cvl-caido { margin: .7rem 1rem 0; }
+.cvl-caido-in { align-items: flex-start; }
+.cvl-caido-in p { margin: 0; font-size: var(--fs-13); line-height: 1.45; }
+.cvl-caido-in .bt { min-height: 44px; }
+.cv-pil-caido { white-space: nowrap; }
+
+/* D10: «Enviar agora» desligado diz por quê (sem internet / 90 s) */
+.cv-fila:has(.cv-fila-motivo) { flex-wrap: wrap; white-space: normal; }
+.cv-fila-motivo { flex: 1 1 100%; text-align: right; font-size: var(--fs-12); color: var(--c-texto-3); white-space: normal; }
+.cv-fila .bt:disabled { opacity: .55; cursor: not-allowed; }
+
+/* D12: transferir tira a conversa das Minhas — o aviso fica no modal */
+.cv-tr-aviso { margin: 0; align-items: center; }
+.cv-tr-aviso .ic { flex: none; width: 16px; height: 16px; }
+
+/* D13: telefone da «Nova conversa» com o erro no próprio campo */
+.campo input[aria-invalid="true"] { border-color: var(--c-ruim); }
+
+/* D14: contato bloqueado — «Desbloquear» com alvo de toque */
+.cvx-desbloquear { min-height: 44px; }
+.cvx-trava .bt { min-height: 44px; }
+
+/* D21: chat sem mensagens usa o vazio da frente A */
+.cvc-trilho-vazio { display: grid; place-items: center; padding: 2rem 1rem; }
+.cvc-trilho-vazio .vazio { max-width: 26rem; }

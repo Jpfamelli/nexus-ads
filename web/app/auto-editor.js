@@ -160,6 +160,9 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           // o foco não pode cair no <body>: segue para o primeiro controle do que vem depois da caixa
           if (tinhaFoco) { const prox = raiz.querySelector(".au-abas [role=tab][aria-selected=true], .au-nome-inp:not(:disabled), .au-painel select:not(:disabled)"); if (prox) prox.focus({ preventScroll: true }); }
         } } }, ui.icone("fechar"))),
+      // plano 100 · G4 [E167]: a conferência do servidor reprovou, mas a montagem (cota já gasta) abre aqui para completar
+      rascunho.reprovada ? h("p", { class: "aviso aviso-ruim au-ia-reprovada", role: "alert" }, ui.icone("alerta"),
+        h("span", null, `A conferência reprovou esta montagem: ${rascunho.reprovada.motivo}. Complete o que falta abaixo antes de salvar.`)) : null,
       rascunho.explicacao ? h("p", { class: "au-ia-ped-txt" }, rascunho.explicacao) : null,
       avisosIA.length ? h("ul", { class: "au-ia-ped-avisos", role: "list" }, avisosIA.map(t => h("li", null, ui.icone("alerta"), h("span", null, t)))) : null,
       h("p", { class: "sub" }, "Nada foi salvo ainda. Ajuste o que quiser abaixo e toque em «Criar automação». A IA só escolhe entre as etapas, etiquetas e pessoas que já existem no seu sistema."));
@@ -811,6 +814,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       if (rasc) rasc.apagar(idRasc);            // salvo: o rascunho (inclusive um antigo ainda oferecido) perde o sentido
       if (amb.limparRascunho) amb.limparRascunho();
       ui.toast(salvo.ativo ? `«${salvo.nome}» salva e ligada.` : `«${salvo.nome}» salva (desligada).`, { tipo: "ok" });
+      // G9: o ✓ de sucesso no próprio botão antes de voltar à lista (o toast já anuncia; sem texto para não falar duas vezes)
+      if (typeof ui.checkSucesso === "function") { try { await ui.checkSucesso(botao, { ms: 500 }); } catch { /* sem o ✓, segue */ } }
       ctx.navegar("#/automacoes");
     })();
     ui.carregando(botao, p).finally(() => { salvando = false; }).catch(e => {
@@ -919,7 +924,11 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     ui.limpar(painelExec);
     painelExec.appendChild(ui.esqueleto("lista", 5));
     try {
-      const lista = await ctx.api.rpcC("nx_automacao_execucoes", { p_id: item.id, p_limite: execLimite });
+      // série por dia do servidor (contrato 7) junto com a lista; banco antigo (sem a RPC) ou resposta estranha → o gráfico é calculado aqui
+      const [lista, porDiaServidor] = await Promise.all([
+        ctx.api.rpcC("nx_automacao_execucoes", { p_id: item.id, p_limite: execLimite }),
+        ctx.api.rpcC("nx_automacao_execucoes_dia", { p_automacao: item.id, p_dias: 14 }).then(r => L.serieExecucoesServidor(r), () => null),
+      ]);
       ui.limpar(painelExec);
       const arr = Array.isArray(lista) ? lista : (lista && Array.isArray(lista.itens) ? lista.itens : []);
       const contagem = { todas: arr.length, ok: 0, erro: 0, pulado: 0, espera: 0 };
@@ -932,7 +941,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         ui.limpar(corpoLista);
         const vis = arr.filter(x => execFiltro === "todas" || L.situacaoExecucao(x) === execFiltro);
         if (!vis.length) {
-          corpoLista.appendChild(ui.vazio({ titulo: arr.length ? "Nada nesta situação" : "Ainda não rodou", icone: "relogio",
+          corpoLista.appendChild(ui.vazio({ titulo: arr.length ? "Nada nesta situação" : "Ainda não rodou", icone: "relogio", tema: "automacoes",
             texto: arr.length ? "Tente outro filtro." : item.ativo ? "Assim que o gatilho acontecer, cada execução aparece aqui, com o que foi feito." : "Ela está desligada. Ligue para começar a rodar." }));
           return;
         }
@@ -959,7 +968,10 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       // gráfico de execuções por dia (item 54): calculado aqui a partir da lista, com estado vazio e versão em tabela.
       // A lista é só as últimas `execLimite`: cheia, pode faltar execução dentro dos 14 dias — a janela recorta no dia da mais
       // antiga carregada e o subtítulo avisa «nas últimas N execuções carregadas» (sem série do servidor, é o honesto).
-      if (arr.length) {
+      // Com a série do servidor (contrato 7) a janela de 14 dias é inteira e conta tudo, não só as carregadas.
+      if (porDiaServidor && porDiaServidor.n > 0) {
+        painelExec.appendChild(h("div", { class: "cartao au-ex-graf" }, P.graficoDias({ serie: porDiaServidor.serie, dias: porDiaServidor.dias, n: porDiaServidor.n, servidor: true })));
+      } else if (arr.length) {
         const truncada = arr.length >= execLimite;
         const porDia = L.execucoesPorDia(arr, { dias: 14, recortar: truncada });
         painelExec.appendChild(h("div", { class: "cartao au-ex-graf" }, P.graficoDias({ serie: porDia.serie, dias: porDia.dias, n: porDia.n,
@@ -1006,7 +1018,14 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const rotuloSit = sit === "ok" ? "Deu certo: " : sit === "espera" ? "Em espera: " : sit === "pulado" ? "Pulada ou parada: " : "Erro: ";
     const estadoTxt = L.estadoExecucaoTexto(x);
     const retoma = sit === "espera" && x.continua_em ? ` · continua ${ui.dataHoraBR(x.continua_em)}` : "";
-    const abrir = x.link && /^#\//.test(String(x.link)) ? h("a", { class: "bt bt-fant bt-p au-ex-abrir", href: x.link }, "Abrir", ui.icone("seta-dir")) : null;
+    const abrir = x.link && /^#\//.test(String(x.link)) ? h("a", { class: "bt bt-fant bt-p au-ex-abrir", href: x.link }, L.rotuloLinkExecucao(x.link, vv), ui.icone("seta-dir")) : null;
+    // o que a IA decidiu (etapa, nota, resumo, ou por que não rodou), em destaque e com o motivo dela — antes ficava só no detalhe em texto
+    const ia = L.decisaoIA(x.detalhe);
+    const blocoIA = ia ? h("div", { class: ["au-ex-ia", `au-ex-ia-${ia.tipo}`], dataset: { tipo: ia.tipo } },
+      ui.pilula("IA", ia.tipo === "erro" ? "ruim" : ia.tipo === "pulado" ? "aten" : ia.tipo === "pedida" ? "info" : "prim", { icone: "ia" }),
+      h("div", { class: "au-ex-ia-txt" },
+        h("p", { class: "au-ex-ia-frase" }, ia.tipo === "nota" ? h("span", { class: "au-ex-ia-nota mono" }, String(ia.score)) : null, ia.frase),
+        ia.motivo && ia.tipo !== "pulado" && ia.tipo !== "erro" && ia.tipo !== "pedida" ? h("p", { class: "au-ex-ia-motivo" }, h("span", { class: "sr-only" }, "Motivo da IA: "), `«${ia.motivo}»`) : null)) : null;
     const btParar = podeEditar && sit === "espera" && x.chave ? h("button", { type: "button", class: "bt bt-sec bt-p", "aria-label": "Cancelar esta espera" }, "Cancelar") : null;
     if (btParar) btParar.addEventListener("click", () => cancelarEspera(x, btParar));
     // detalhe expansível (item 54): tudo o que o servidor mandou sobre esta execução, em palavras
@@ -1029,6 +1048,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         passoTxt ? h("p", { class: "au-ex-passo mono" }, passoTxt) : null,
         estadoTxt ? h("p", { class: "au-ex-estado" }, `${estadoTxt}${retoma}`) : null,
         h("p", { class: "au-ex-det" }, h("span", { class: "sr-only" }, rotuloSit), detalhe),
+        blocoIA,
         h("p", { class: "au-ex-quando mono", title: ui.dataHoraBR(x.criado_em) }, `${ui.horaBR(x.criado_em)} · ${ui.relativo(x.criado_em)}`),
         det),
       h("div", { class: "au-ex-acoes" }, btParar, abrir, btDet));
@@ -1066,6 +1086,13 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   pintarQuando(); pintarSe(); pintarEntao(); atualizarPrevia();
   if (salvoJson === null && item) salvoJson = JSON.stringify(L.limpar(auto));
   if (item && q.aba === "execucoes") mostrarAba("execucoes");
+  // montagem reprovada: o problema já aparece no lugar dele (o da conferência local; se só o servidor viu, o motivo dele no bloco apontado)
+  if (rascunho && rascunho.reprovada && podeEditar) {
+    const r = L.validar(auto, { base, ligar: false });
+    const rv = rascunho.reprovada;
+    if (!r.ok) setTimeout(() => mostrarErro(r), 80);
+    else if (["nome", "quando", "se", "entao"].includes(rv.onde)) setTimeout(() => mostrarErro({ motivo: rv.motivo, onde: rv.onde, indice: rv.indice }), 80);
+  }
   if (!item && podeEditar && origem === "branco") setTimeout(() => { if (!auto.nome) inpNome.focus({ preventScroll: true }); }, 60);
   if (podeEditar && (amb.testarAoAbrir || q.testar === "1")) setTimeout(() => testar(btTestarLado), 120);
 }

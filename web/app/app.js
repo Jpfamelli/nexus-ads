@@ -73,6 +73,11 @@ const E = {
   montando: 0,
   naoLidasEm: 0,
   temaAviso: false,
+  naoLidasAnterior: null,  // A2: última contagem de não lidas vista pelo shell (null = sem referência: a 1ª leitura não avisa)
+  pulsoTemNaoLidas: false, // A3: nx_pulso já mandou nao_lidas (contrato 8): o nx_cv_listar de reserva deixa de ser consultado
+  somEm: 0,                // A2: último som de mensagem nova (no máximo um a cada 10 s)
+  canais: { lista: [], fonte: null, assinantes: new Set(), toast: null, toastAssinatura: "", dispensado: "", avisouQueda: false, conferiuEm: 0 },   // A10: números caídos
+  versaoRemotaP: null,     // A4: leitura única do versao.json (min_migracao)
 };
 
 /* ============================================================
@@ -135,6 +140,9 @@ async function iniciar() {
   // a pessoa mexeu num formulário: a atualização automática não recarrega por cima (ocupadoParaAtualizar)
   document.addEventListener("input", marcarEdicao, true);
   document.addEventListener("change", marcarEdicao, true);
+  // A2: o som de mensagem nova (Web Audio) só pode nascer depois de um gesto da pessoa
+  document.addEventListener("pointerdown", desbloquearAudio, { once: true, passive: true });
+  document.addEventListener("keydown", desbloquearAudio, { once: true });
   // M11: tudo o que o boot precisa começa AGORA, junto (o index.html já pré-carrega estes arquivos com <link rel="modulepreload">)
   const prontosP = arq("prontos.js");
   prontosP.catch(() => { /* tratado abaixo; aqui só evita o aviso de promessa sem dono */ });
@@ -185,13 +193,16 @@ async function iniciar() {
     aoSessaoInvalida: () => sessaoCaiu(),
     rede: E.rede, contexto: true, retentar: true,
     cache: E.cache, conta: () => (E.sessao ? E.sessao.conta.id : LS.lerTxt(CHAVE_CONTA)), aoCache: ev => aoCacheEvento(ev),
+    aoErro: e => aoErroApi(e),   // A4: cliente_pausado vira bloqueio honesto
   });
   // M17: rascunhos por conta + empresa (localStorage, 7 dias, ~200 KB, nunca senha); somem no logout
   E.rascunhos = E.M.rascunho.criarRascunhos({ conta: () => (E.sessao ? E.sessao.conta.id : null), cliente: () => (E.cliente ? E.cliente.id : null) });
   E.pulso = E.M.pulso.criarPulso({
     ler: () => (E.cliente ? E.api.rpcC("nx_pulso") : Promise.resolve(null)),
     aoNotif: n => atualizarSino(n),
-    aoNaoLidas: n => { E.naoLidasPulsoEm = Date.now(); definirBadge("conversas", n); },
+    // A3: nx_pulso.nao_lidas (contrato 8) é a fonte do badge; o nx_cv_listar de atualizarNaoLidas fica só como reserva da RPC antiga
+    aoNaoLidas: n => { E.naoLidasPulsoEm = Date.now(); E.pulsoTemNaoLidas = true; definirBadge("conversas", n); avisarNaoLidas(n); },
+    aoCanais: lista => atualizarCanais({ canais: lista }, "pulso"),   // A10: estado dos números quando o servidor manda
     escopo: () => E.cliente && E.cliente.id,
   });
   E.pulso.assinar(() => { atualizarNaoLidas(); });
@@ -490,6 +501,7 @@ function iniciarPwa() {
       E.pwaMod = pwa;
       E.pwa = pwa.iniciar({ versao: VERSAO, ui: E.ui, alvo: $("faixas-sistema"), produto: () => E.produto || "Órbita", ocupado: ocupadoParaAtualizar, urlsPrecache });
       agendarManifesto();
+      conferirMigracao();   // A4: a sessão pode ter chegado antes do pwa.js (que tem a comparação de migrações)
     } catch (e) { console.warn("pwa indisponível", e && e.message); }
     // M18: a paleta abre sem esperar a rede na primeira vez que alguém aperta Ctrl/⌘+K
     try { if (!E.paleta.mod) E.paleta.mod = await arq("paleta.js"); } catch { /* abre sob demanda */ }
@@ -529,7 +541,7 @@ async function carregarMarcaPublica({ pintar = true } = {}) {
 /** Cache da marca da tela de entrada (antes.js pinta com ele antes do primeiro quadro). */
 function guardarMarcaPublica(m) {
   const t = E.M.tema.derivarTema(E.M.tema.coresNoEsquema(m.cores, esquemaPreferido()));
-  LS.gravar("nx-app-marca", { host: location.host, org: E.marcaPublica ? E.marcaPublica.org.slug : null, vars: t.vars, produto: m.produto, favicon: m.favicon });
+  LS.gravar("nx-app-marca", { host: location.host, org: E.marcaPublica ? E.marcaPublica.org.slug : null, vars: t.vars, produto: m.produto, favicon: m.favicon, hash: E.M.tema.hashCurto(t.vars) });
 }
 
 function esquemaPreferido() {
@@ -617,9 +629,10 @@ function pintarMarca(m, { guardar = false, cacheCliente = null, respeitarEsquema
   pintarLogoShell();
   atualizarBotaoTema();
   atualizarTitulo();
-  if (guardar) LS.gravar("nx-app-marca", { host: location.host, org: E.marcaPublica ? E.marcaPublica.org.slug : null, vars: t.vars, produto: m.produto, favicon: m.favicon });
+  // A5: o hash das vars gravadas acompanha o cache; o antes.js só pinta o tema da empresa quando ele bate (entrada velha ou mexida é ignorada)
+  if (guardar) LS.gravar("nx-app-marca", { host: location.host, org: E.marcaPublica ? E.marcaPublica.org.slug : null, vars: t.vars, produto: m.produto, favicon: m.favicon, hash: tema.hashCurto(t.vars) });
   agendarManifesto();
-  if (cacheCliente) LS.gravar(`nx-app-tema-${cacheCliente.id}`, { ...cacheCliente.dados, vars: t.vars });
+  if (cacheCliente) LS.gravar(`nx-app-tema-${cacheCliente.id}`, { ...cacheCliente.dados, vars: t.vars, hash: tema.hashCurto(t.vars), host: location.host });
   return t;
 }
 
@@ -805,6 +818,7 @@ function sessaoCaiuTotal() {
   E.sessao = null; E.cliente = null;
   atualizarSeloDoApp();
   if (E.pulso) E.pulso.parar();
+  reiniciarCanais();                             // revisão: o aviso fixo de número caído não fica na tela de login
   desmontarAtual();
   if (!_avisouSessao) { _avisouSessao = true; E.ui.toast("Sua sessão expirou. Entre de novo.", { tipo: "info" }); setTimeout(() => { _avisouSessao = false; }, 4000); }
   const r = E.M.rotas.rotear(location.hash);
@@ -829,7 +843,10 @@ async function lerSessao() {
     c.modulos = Array.isArray(c.modulos) ? c.modulos : (Array.isArray(porPlano[c.plano]) ? porPlano[c.plano].slice() : []);
     c.tem_tema = !!c.tem_tema;
     c.suporte = (c.papel === "gestor" || c.papel === "super") && !c.proprio;
+    c.ativo = c.ativo !== false;                                  // contrato 9 (A4): «Cliente ativo» do painel; a RPC antiga não manda = ativo
+    c.canais = Array.isArray(c.canais) ? c.canais : null;         // A10: estado dos números, se a sessão trouxer
   }
+  s.migracao = typeof s.migracao === "string" ? s.migracao : null;   // contrato 9 (A4): última migração aplicada no banco
   // M16: a sessão já normalizada fica no aparelho (a próxima abertura pinta menu, empresa e marca sem esperar a rede).
   // Só se o token ainda é o desta leitura: um login ou um Sair no meio do caminho não deixa a sessão da conta anterior para a próxima abertura
   if (E.M.dados.lerToken() === token) {
@@ -843,7 +860,7 @@ async function lerSessao() {
 function fotoDoAcesso(sessao, cli) {
   const c = sessao && sessao.conta;
   return JSON.stringify([c ? [c.papel, !!c.super, !!c.trocar_senha] : null,
-    cli ? [cli.id, cli.papel, [...(cli.modulos || [])].sort(), cli.status, cli.teste_ate || null, cli.plano || null, cli.vertical || null] : null]);
+    cli ? [cli.id, cli.papel, [...(cli.modulos || [])].sort(), cli.status, cli.teste_ate || null, cli.plano || null, cli.vertical || null, cli.ativo !== false] : null]);
 }
 
 /** M16: depois de pintar com a sessão guardada, a leitura da rede confirma. Mudou algo (empresas, módulos, papel) → repinta o shell; se o que
@@ -872,12 +889,20 @@ function revalidarSessao() {
       await aoMudarRota(false);
       E.ui.toast("Seu acesso foi alterado. A tela foi atualizada.", { tipo: "info" });
     }
-  }).catch(() => { /* ver acima */ });
+  }).catch(e => {
+    // revisão: a sessão guardada pintou a empresa como ativa, mas a rede diz que ela foi PAUSADA — o erro era engolido e o app seguia
+    // aberto com a cópia antiga. Agora: bloqueio honesto na hora e a cópia da sessão deixa de valer (a próxima abertura lê a rede)
+    if (e && e.codigo === "cliente_pausado") {
+      LS.apagar(CHAVE_CONTA);
+      if (E.cliente) aoErroApi(e);
+    }
+  });
 }
 
 /** Adota a sessão lida e busca as imagens da org (depende da marca pública já resolvida). */
 async function adotarSessao(s, { forcarImagens = false } = {}) {
   E.sessao = s;
+  conferirMigracao();   // A4: front novo × banco velho (sem await: a faixa chega quando o versao.json responder)
   pedirArmazenamentoPersistente();
   await carregarImagensOrg({ forcar: forcarImagens });
   return s;
@@ -902,6 +927,7 @@ async function sair() {
   E.sessao = null; E.cliente = null; E.imgOrg = null; E.notif = 0;
   atualizarSeloDoApp();
   if (E.pulso) E.pulso.parar();
+  reiniciarCanais();                             // revisão: o aviso fixo de número caído não fica na tela de login
   desmontarAtual();
   apagarFilaDeSaida();                           // depois de desmontar: Conversas já largou a fila
   const m = E.M.tema.marcaEfetiva(E.marcaPublica ? E.marcaPublica.marca : {}, {});
@@ -928,6 +954,9 @@ async function escolherCliente(id, { remontar = true } = {}) {
   const novo = lista.find(c => c.id === id) || null;
   const mudou = (E.cliente && E.cliente.id) !== (novo && novo.id);
   E.cliente = novo;
+  if (mudou) { E.naoLidasAnterior = null; reiniciarCanais(); }                              // A2/A10: a referência é por empresa
+  if (novo && Array.isArray(novo.canais)) atualizarCanais({ canais: novo.canais }, "sessao");   // A10: a sessão já diz o estado dos números
+  conferirMigracao();   // A4: a sessão revalidada pela rede pode trazer outra migração do banco (a guardada é de antes)
   if (novo) LS.gravar(CHAVE_CLIENTE, novo.id);
   await aplicarMarcaCliente();
   desenharShell();
@@ -1101,11 +1130,11 @@ function construirCtx(r, alvo) {
     alvo,
     versao: VERSAO,
     rota: r,
-    sessao: { conta: E.sessao.conta, org: E.sessao.org },
+    sessao: { conta: E.sessao.conta, org: E.sessao.org, migracao: E.sessao.migracao || null },
     cliente: cli ? {
       id: cli.id, slug: cli.slug, nome: cli.nome, status: cli.status, teste_ate: cli.teste_ate || null, plano: cli.plano,
       modulos: cli.modulos.slice(), vertical: cli.vertical, papel: cli.papel, tem_tema: !!cli.tem_tema,
-      link_base: cli.link_base || null, tema: cli.tema || {}, suporte: !!cli.suporte,
+      link_base: cli.link_base || null, tema: cli.tema || {}, suporte: !!cli.suporte, ativo: cli.ativo !== false,
     } : null,
     papel,
     pode: min => rotas.podePapel(papel, min),
@@ -1169,6 +1198,18 @@ function construirCtx(r, alvo) {
     },
     titulo: definirTitulo,
     badge: definirBadge,
+    /** A10: números de WhatsApp caídos que o shell conhece (`canais` do nx_pulso/nx_app_sessao ou notificações canal_caiu/canal_voltou):
+        caidos() → [{id, nome, desde, fonte}], assinar(fn(lista)) → cancelar() (some ao sair da tela), verNumero() abre Configurações › Números. */
+    canais: {
+      caidos: () => E.canais.lista.slice(),
+      assinar(fn) {
+        E.canais.assinantes.add(fn);
+        const cancelar = () => { E.canais.assinantes.delete(fn); };
+        E.assinaturas.add(cancelar);
+        return () => { cancelar(); E.assinaturas.delete(cancelar); };
+      },
+      verNumero: () => navegar("#/config/numeros"),
+    },
     // extras do shell (usados pelas telas da F3: config, admin)
     shell: { recarregarSessao, recarregarMarca, escolherCliente, sair, pintarMarca, marcaEfetiva: () => E.marca, marcaOrg: marcaOrgSessao,
       aplicarMarcaCliente, tema, dev: devLigado(), prontos: E.prontos, clientes: () => (E.sessao ? E.sessao.clientes : []),
@@ -1209,6 +1250,10 @@ function cartaoBloqueio(tipo) {
     sem_cliente: E.sessao && E.sessao.conta.papel === "gestor"
       ? { titulo: "Nenhum cliente por aqui ainda.", texto: "Crie o primeiro em Admin → Clientes.", icone: "empresa", acao: { rotulo: "Ir para Admin", fn: () => navegar("#/admin/clientes") } }
       : { titulo: "Sua conta ainda não tem acesso a nenhuma empresa.", texto: "Peça ao administrador um convite.", icone: "empresa" },
+    // A4 (contrato 9): «Cliente ativo» desligado no painel — nada de erro cru por RPC: a tela diz o que está parado e com quem falar
+    pausado: { titulo: "Esta empresa está pausada.", texto: "A plataforma pausou o acesso: o atendimento, a leitura de anúncios e o rastreio do site ficam parados até ela voltar. Fale com o suporte para reativar.", icone: "pausa",
+      acao: E.marca && E.marca.suporte_wa ? { rotulo: "Falar com o suporte", icone: "whatsapp",
+        fn: () => window.open(E.ui.linkWhatsApp(`Olá! O acesso da ${E.cliente ? E.cliente.nome : "minha empresa"} está pausado.`, E.marca.suporte_wa), "_blank", "noopener,noreferrer") } : null },
   }[tipo];
   const acao = tx.acao || (tipo === "inexistente" || tipo === "sem_acesso" || tipo === "em_breve" || tipo === "fora_do_plano"
     ? { rotulo: "Ir para o início", fn: () => navegar("#/") } : null);
@@ -1218,8 +1263,11 @@ function cartaoBloqueio(tipo) {
 async function montarNoShell(r, seq, doUsuario) {
   const { rotas, ui } = E.M;
   const vista = $("vista");
-  const acesso = rotas.acessoRota(r.modulo, opcoesAcesso());
+  const acessoDaRota = rotas.acessoRota(r.modulo, opcoesAcesso());
   const def = rotas.rotaDe(r.modulo);
+  // A4 (contrato 9): empresa pausada — quem não é da plataforma vê o bloqueio honesto em vez de cada RPC falhar com cliente_pausado
+  const equipe = !!(E.sessao && E.sessao.conta && (E.sessao.conta.super || E.sessao.conta.papel === "gestor"));
+  const acesso = acessoDaRota === "ok" && E.cliente && E.cliente.ativo === false && !equipe && !(def && def.semCliente) ? "pausado" : acessoDaRota;
   E.ultimaRota = r;
   reiniciarSelo();
   marcarMenu(r.modulo);
@@ -1234,7 +1282,7 @@ async function montarNoShell(r, seq, doUsuario) {
     ui.limpar(vista);
     if (bloqueioNovo) transicaoRota(vista);
     vista.appendChild(cartaoBloqueio(acesso));
-    definirTitulo({ em_breve: "Em breve", fora_do_plano: "Fora do plano", sem_acesso: "Sem acesso", inexistente: "Página não encontrada", sem_cliente: "Início" }[acesso]);
+    definirTitulo({ em_breve: "Em breve", fora_do_plano: "Fora do plano", sem_acesso: "Sem acesso", inexistente: "Página não encontrada", sem_cliente: "Início", pausado: "Empresa pausada" }[acesso]);
     desenharRegioes();
     if (doUsuario) focarTitulo(seq);
     return;
@@ -1885,7 +1933,9 @@ function abrirMenuAjuda(ancora) {
    SINO — nx_notificacoes_listar / nx_notificacoes_marcar
    ============================================================ */
 const ICONE_NOTIF = { atribuida: "chat", sem_resposta: "relogio", tarefa: "tarefa", sla_etapa: "alerta", automacao: "raio",
-  lead_anuncio: "anuncio", mencao: "usuario", sistema: "info" };
+  lead_anuncio: "anuncio", mencao: "usuario", sistema: "info", canal_caiu: "alerta", canal_voltou: "check" };
+/** A10 (S-B11): notificação de número caído/voltou sem `link` do servidor abre Configurações › Números. */
+const LINK_NOTIF = { canal_caiu: "#/config/numeros", canal_voltou: "#/config/numeros" };
 
 function atualizarSinoUI() {
   const n = Math.max(0, Number(E.notif) || 0);
@@ -1922,6 +1972,7 @@ function abrirSino(ancora) {
       if (n !== seq || !lista.isConnected) return;
       ui.limpar(lista);
       E.notif = r.nao_lidas || 0; atualizarSinoUI();
+      atualizarCanais({ notificacoes: r.itens }, "notificacao");   // A10: canal_caiu/canal_voltou na lista alimentam o aviso de número caído
       btTodas.hidden = !(r.nao_lidas > 0);
       if (!r.itens || !r.itens.length) {
         lista.appendChild(ui.h("div", { class: "notif-vazio" }, ui.icone("sino"),
@@ -1938,7 +1989,8 @@ function abrirSino(ancora) {
           lida ? null : ui.h("span", { class: "sr-only" }, "(não lida)"));
         b.addEventListener("click", async () => {
           if (!lida) marcar([it.id]);
-          if (typeof it.link === "string" && /^#\//.test(it.link)) { f.fechar(); navegar(it.link); }
+          const link = typeof it.link === "string" && /^#\//.test(it.link) ? it.link : (LINK_NOTIF[it.tipo] || null);
+          if (link) { f.fechar(); navegar(link); }
           else { b.classList.add("lida"); }
         });
         lista.appendChild(b);
@@ -1967,6 +2019,7 @@ function desenharFaixas() {
   const suporteWa = E.marca && E.marca.suporte_wa;
   const btWa = texto => suporteWa ? ui.h("a", { class: "bt bt-sec", href: ui.linkWhatsApp(texto, suporteWa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Falar com o suporte") : null;
   const equipe = cli.papel === "gestor" || cli.papel === "super";
+  const plataforma = !!(E.sessao.conta.super || E.sessao.conta.papel === "gestor");   // quem a tela pausada deixa entrar (montarNoShell) só vê a faixa
   if (cli.suporte && equipe) {
     const sair = ui.h("button", { type: "button", class: "bt bt-sec" }, "Sair");
     sair.addEventListener("click", () => navegar("#/admin/clientes"));
@@ -1983,6 +2036,10 @@ function desenharFaixas() {
     alvo.appendChild(ui.h("div", { class: "faixa faixa-bloqueio", role: "status" }, ui.icone("cadeado"),
       ui.h("p", null, equipe ? `Este cliente está ${cli.status}. A equipe dele não entra; só a gestão (${E.sessao.conta.super ? "plataforma" : "agência"}) enxerga os dados.` : "O acesso desta empresa está suspenso. Fale com o suporte."),
       equipe ? null : btWa(`Olá! O acesso da ${cli.nome} está suspenso.`)));
+  } else if (cli.ativo === false && (equipe || plataforma)) {
+    // A4 (contrato 9): quem é da plataforma continua vendo as telas, mas sabe que o cliente está pausado (quem não é vê o cartão de bloqueio)
+    alvo.appendChild(ui.h("div", { class: "faixa faixa-bloqueio", role: "status" }, ui.icone("pausa"),
+      ui.h("p", null, "Este cliente está pausado («Cliente ativo» desligado no painel): a equipe dele não entra, e a leitura de anúncios, os relatórios e o rastreio do site ficam parados até religar.")));
   }
 }
 
@@ -2033,6 +2090,7 @@ async function atualizarNaoLidas() {
   const cli = E.cliente;
   if (!cli || !cli.modulos.includes("conversas") || !pronto("conversas")) return;
   if (E.atual && E.atual.arquivo === "conversas.js") return; // a própria tela chama ctx.badge
+  if (E.pulsoTemNaoLidas) return; // A3 (contrato 8): o servidor manda nao_lidas no pulso; a lista é reserva só da RPC antiga
   if (Date.now() - (E.naoLidasPulsoEm || 0) < 10000) return; // nx_pulso já trouxe a contagem: não consulta a lista de novo
   const agora = Date.now();
   if (agora - E.naoLidasEm < 10000) return;
@@ -2054,6 +2112,176 @@ function atualizarSino(n) {
     if (b) { b.classList.remove("pulsa"); void b.offsetWidth; b.classList.add("pulsa"); }
   }
   if (E.sinoAberto && E.notif !== antes) E.sinoAberto.recarregar();
+  if (E.notif > antes) conferirNotificacoesDeCanal();   // A10: chegou notificação — pode ser canal_caiu/canal_voltou
+}
+
+/* ============================================================
+   PLANO 100 · A2 — aviso de mensagem nova fora de Conversas (o pulso traz nao_lidas e, com a aba escondida, lê a cada 15 s).
+   Dentro de Conversas a própria tela avisa (conversas.js); aqui vale para as outras telas e para a aba escondida em outra tela.
+   Mesmas preferências do menu «Avisos» de Conversas (localStorage nx-cv-avisos: som ligado por padrão, aviso de tela só se a pessoa ligou).
+   ============================================================ */
+let _audio = null;
+function desbloquearAudio() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    _audio = _audio || new AC();
+    if (_audio.state === "suspended") _audio.resume().catch(() => {});
+  } catch { /* sem áudio */ }
+}
+/** O mesmo toque curto de conversas.js (duas notas, sem arquivo), no máximo um a cada 10 s. */
+function tocarSomNaoLidas() {
+  const agora = Date.now();
+  if (agora - E.somEm < 10000) return;
+  try {
+    desbloquearAudio();
+    if (!_audio || _audio.state !== "running") return;
+    E.somEm = agora;
+    const t0 = _audio.currentTime + 0.02;
+    for (const [freq, atraso] of [[880, 0], [1318.5, 0.13]]) {
+      const osc = _audio.createOscillator(), g = _audio.createGain();
+      osc.type = "sine"; osc.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t0 + atraso);
+      g.gain.exponentialRampToValueAtTime(0.07, t0 + atraso + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + atraso + 0.38);
+      osc.connect(g); g.connect(_audio.destination);
+      osc.start(t0 + atraso); osc.stop(t0 + atraso + 0.42);
+    }
+  } catch { /* sem áudio */ }
+}
+function lerAvisosConversas() {
+  const p = LS.ler("nx-cv-avisos") || {};
+  return { som: p.som !== false, tela: p.tela === true };
+}
+function notificarNaoLidas(novas, total) {
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    const n = new Notification(novas === 1 ? "Mensagem nova" : `${novas} mensagens novas`, {
+      body: total === 1 ? "1 conversa aguarda resposta." : `${total} conversas aguardam resposta.`, tag: "nx-cv-shell", silent: true });
+    n.addEventListener("click", () => { try { window.focus(); } catch { /* ok */ } navegar("#/conversas?aba=aguardando"); n.close(); });
+  } catch { /* navegador sem suporte */ }
+}
+/** nao_lidas subiu e a pessoa está em outra tela (ou com a aba escondida): som e, se permitido, aviso na área de trabalho. */
+function avisarNaoLidas(n) {
+  const antes = E.naoLidasAnterior;
+  E.naoLidasAnterior = n;
+  if (!E.cliente || !E.cliente.modulos.includes("conversas") || !pronto("conversas")) return;
+  const a = E.M.pulso.avisoDeNaoLidas({ antes, depois: n, emConversas: !!(E.atual && E.atual.arquivo === "conversas.js"), escondida: !!document.hidden, pref: lerAvisosConversas() });
+  // revisão: toda aba recebe o resultado do pulso — o som (que é do aparelho, não da aba) toca só na líder (ou na aba sozinha): um som por mensagem
+  const papel = E.pulso && E.pulso.estado ? E.pulso.estado.papel : "solo";
+  if (a.som && (papel === "lider" || papel === "solo")) tocarSomNaoLidas();
+  if (a.tela) notificarNaoLidas(a.novas, n);
+}
+
+/* ============================================================
+   PLANO 100 · A10 — número de WhatsApp caído: toast fixo enquanto durar, «Ver número» (#/config/numeros) e o estado para as telas (ctx.canais).
+   Fontes, por detecção: `canais` do nx_pulso ou do nx_app_sessao (quando o servidor mandar) vencem; sem elas, as notificações do sino
+   (canal_caiu / canal_voltou — S-B11), conferidas quando o sino sobe (no máximo a cada 30 s) e sempre que a lista do sino é lida.
+   ============================================================ */
+const PESO_FONTE_CANAIS = { pulso: 3, sessao: 2, notificacao: 1 };
+function reiniciarCanais() {
+  const c = E.canais;
+  c.lista = []; c.fonte = null; c.dispensado = ""; c.avisouQueda = false; c.conferiuEm = 0; c.toastAssinatura = "";
+  if (c.toast) { c.toast.fechar("sistema"); c.toast = null; }
+}
+/** Recebe a matéria-prima de uma fonte; uma fonte mais fraca nunca sobrescreve uma mais forte já vista nesta empresa. */
+function atualizarCanais({ canais = null, notificacoes = null } = {}, fonte) {
+  const c = E.canais;
+  if (!E.cliente || !PESO_FONTE_CANAIS[fonte]) return;
+  if (c.fonte && PESO_FONTE_CANAIS[c.fonte] > PESO_FONTE_CANAIS[fonte]) return;
+  if (fonte === "notificacao" && !(Array.isArray(notificacoes) && notificacoes.some(n => n && (n.tipo === "canal_caiu" || n.tipo === "canal_voltou")))) return;
+  const lista = E.M.pulso.canaisCaidosDe(Array.isArray(canais) ? { canais } : { notificacoes });
+  c.fonte = fonte;
+  const chaveDe = l => l.map(x => String(x.id ?? x.nome)).sort().join("|");
+  const assinatura = chaveDe(lista), mudou = assinatura !== chaveDe(c.lista);
+  c.lista = lista;
+  if (mudou) for (const fn of [...c.assinantes]) { try { fn(lista.slice()); } catch (e) { console.error("canais: assinante falhou", e); } }
+  renderNumeroCaido(assinatura);
+}
+/** O sino subiu e não há fonte forte: olha as últimas notificações à procura de canal_caiu/canal_voltou. */
+async function conferirNotificacoesDeCanal() {
+  const c = E.canais;
+  if (!E.cliente || (c.fonte && c.fonte !== "notificacao")) return;
+  const agora = Date.now();
+  if (agora - c.conferiuEm < 30000) return;
+  c.conferiuEm = agora;
+  const cli = E.cliente.id;
+  try {
+    const r = await E.api.rpcC("nx_notificacoes_listar", { p_limite: 10 });
+    if (!E.cliente || E.cliente.id !== cli) return;
+    atualizarCanais({ notificacoes: r && r.itens }, "notificacao");
+  } catch { /* o sino mostra a lista quando aberto */ }
+}
+function renderNumeroCaido(assinatura) {
+  const { ui } = E;
+  const c = E.canais;
+  if (!c.lista.length) {
+    if (c.toast) { c.toast.fechar("sistema"); c.toast = null; }
+    if (c.avisouQueda) ui.toast("Número de WhatsApp reconectado.", { tipo: "ok" });
+    c.avisouQueda = false; c.dispensado = ""; c.toastAssinatura = "";
+    return;
+  }
+  if (c.dispensado === assinatura || (c.toast && c.toastAssinatura === assinatura)) return;
+  if (c.toast) c.toast.fechar("sistema");
+  const nomes = c.lista.map(x => x.nome).join(", ");
+  const texto = c.lista.length === 1 ? `Número de WhatsApp desconectado: ${nomes}. As mensagens não chegam até reconectar.`
+    : `${c.lista.length} números de WhatsApp desconectados: ${nomes}. As mensagens não chegam até reconectar.`;
+  const admin = E.M.rotas.podePapel(papelAtual(), "admin");
+  c.toastAssinatura = assinatura; c.avisouQueda = true;
+  c.toast = ui.toast(texto, { tipo: "aten", ms: 0, fixo: true, acao: admin ? { rotulo: "Ver número", fn: () => navegar("#/config/numeros") } : null,
+    aoFechar: motivo => { if (c.toastAssinatura !== assinatura) return; c.toast = null; if (motivo === "fechado") c.dispensado = assinatura; } });
+}
+
+/* ============================================================
+   PLANO 100 · A4 — front novo × banco velho (nx_app_sessao.migracao contra versao.json.min_migracao) e empresa pausada (cliente_pausado)
+   ============================================================ */
+function versaoRemota() {
+  if (!E.versaoRemotaP) {
+    E.versaoRemotaP = (async () => {
+      try {
+        const ctl = typeof AbortController === "function" ? new AbortController() : null;
+        const t = setTimeout(() => ctl && ctl.abort(), 5000);
+        try {
+          const r = await fetch(new URL(`versao.json?t=${Date.now()}`, location.href).href, { cache: "no-store", ...(ctl ? { signal: ctl.signal } : {}) });
+          return r.ok ? await r.json() : null;
+        } finally { clearTimeout(t); }
+      } catch { return null; }
+    })();
+  }
+  return E.versaoRemotaP;
+}
+let faixaMigracao = null;
+/** Sem `migracao` na sessão (RPC antiga) ou sem `min_migracao` no versao.json nada é dito; com os dois e o banco atrás, a faixa avisa (sem travar o app). */
+async function conferirMigracao() {
+  const s = E.sessao;
+  if (!s || typeof s.migracao !== "string" || !E.pwaMod || typeof E.pwaMod.migracaoPendente !== "function") return;
+  const remoto = await versaoRemota();
+  if (E.sessao !== s) return;   // a sessão mudou enquanto o versao.json chegava: a próxima conferência decide
+  const minima = remoto && typeof remoto.min_migracao === "string" ? remoto.min_migracao : null;
+  desenharFaixaMigracao(E.pwaMod.migracaoPendente(s.migracao, minima) ? { banco: s.migracao, minima } : null);
+}
+function desenharFaixaMigracao(info) {
+  const { ui } = E;
+  if (!info) { if (faixaMigracao) { faixaMigracao.remove(); faixaMigracao = null; } return; }
+  const P = E.pwaMod;
+  const texto = `O servidor ainda não recebeu a atualização desta versão do app (banco em «${P.chaveMigracao(info.banco) || info.banco}», esta versão precisa de «${P.chaveMigracao(info.minima) || info.minima}»). Algumas telas podem falhar até a equipe aplicar a atualização.`;
+  if (!faixaMigracao) {
+    faixaMigracao = ui.h("div", { class: "faixa faixa-migracao", role: "status" }, ui.icone("alerta"), ui.h("p", null));
+    $("faixas-sistema").appendChild(faixaMigracao);
+    ui.anunciar("Atualização do servidor pendente.");
+  }
+  const p = faixaMigracao.querySelector("p");
+  if (p.textContent !== texto) p.textContent = texto;
+}
+/** O servidor recusou com cliente_pausado (contrato 9): marca a empresa como pausada e troca a tela pelo bloqueio honesto (a plataforma só vê a faixa). */
+function aoErroApi(e) {
+  if (!e || e.codigo !== "cliente_pausado") return;
+  const cli = E.cliente;
+  if (!cli || cli.ativo === false) return;
+  cli.ativo = false;
+  desenharFaixas();
+  const equipe = !!(E.sessao && E.sessao.conta && (E.sessao.conta.super || E.sessao.conta.papel === "gestor"));
+  if (!equipe && E.ultimaRota) { desmontarAtual(); aoMudarRota(false); }
 }
 
 // M13: o Chrome/Edge/Android avisam que o app é instalável; guardamos o evento para o botão «Instalar o app» e escondemos o aviso automático

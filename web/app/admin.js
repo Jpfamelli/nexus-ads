@@ -66,6 +66,7 @@ function campoPacoteComercial(ui, selecionado = null, { obrigatorio = false, com
     h("small", { class: "campo-ajuda" }, "O pacote registra o escopo contratado. O acesso aos recursos do Órbita segue a configuração técnica da empresa."), erro);
 }
 
+const comClasse = (el, cls) => { el.classList.add(cls); return el; };
 function rotuloPacote(id) { return PACOTES_COMERCIAIS.find(p => p.id === id)?.nome || "Sem pacote comercial"; }
 
 let _planos = null;
@@ -93,6 +94,73 @@ export function resumoClientes(itens) {
     if (Object.keys(lim).some(k => Number(lim[k]) > 0 && (Number(u[k]) || 0) / Number(lim[k]) >= .8)) r.perto_limite++;
   }
   return r;
+}
+
+/* ------------------------------------------------------------ plano 100 (frente G): uso de IA por dia, números, pacote, convite */
+
+/**
+ * nx_ia_uso_dia → [{dia, chamadas, tokens_in, tokens_out, custo_usd}] (mais antigo primeiro). Resumo para o Admin: totais, as séries
+ * do sparkline e `custoIncompleto` (dia com chamada e custo zero = chamada registrada antes do custo existir; o total fica por baixo).
+ * null quando a resposta não é a série (banco antigo).
+ */
+export function resumoUsoIA(lista) {
+  if (!Array.isArray(lista) || !lista.length) return null;
+  const linhas = [];
+  for (const x of lista) {
+    if (!x || !/^\d{4}-\d{2}-\d{2}$/.test(String(x.dia || ""))) return null;
+    const n = v => Math.max(0, Number(v) || 0);
+    linhas.push({ dia: x.dia, chamadas: Math.floor(n(x.chamadas)), tokens_in: Math.floor(n(x.tokens_in)), tokens_out: Math.floor(n(x.tokens_out)), custo_usd: n(x.custo_usd) });
+  }
+  linhas.sort((a, b) => (a.dia < b.dia ? -1 : a.dia > b.dia ? 1 : 0));
+  const soma = k => linhas.reduce((s, x) => s + x[k], 0);
+  return { dias: linhas.length, linhas, chamadas: soma("chamadas"), tokens_in: soma("tokens_in"), tokens_out: soma("tokens_out"),
+    custo_usd: Math.round(soma("custo_usd") * 1e4) / 1e4, serieChamadas: linhas.map(x => x.chamadas), serieCusto: linhas.map(x => x.custo_usd),
+    custoIncompleto: linhas.some(x => x.chamadas > 0 && !(x.custo_usd > 0)) };
+}
+
+/** US$ com 2 casas (4 abaixo de 1 dólar: o custo por dia de IA costuma ser de centavos). */
+export function dolar(v) {
+  const n = Number(v) || 0;
+  return `US$ ${n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: n > 0 && n < 1 ? 4 : 2 })}`;
+}
+
+/**
+ * Situação dos números de WhatsApp de um cliente (G10): `canais` do nx_clientes_admin quando vier; null quando o servidor não manda
+ * (a coluna some). → {total, conectados, caidos, rotulo, tom}.
+ */
+export function estadoNumerosCliente(canais) {
+  if (!Array.isArray(canais)) return null;
+  const total = canais.length;
+  const conectados = canais.filter(c => c && c.estado === "conectado").length;
+  const caidos = canais.filter(c => c && c.estado === "desconectado").length;
+  if (!total) return { total, conectados, caidos, rotulo: "Sem número", tom: "neutra" };
+  if (caidos) return { total, conectados, caidos, rotulo: caidos === 1 ? "1 desconectado" : `${caidos} desconectados`, tom: "ruim" };
+  if (conectados === total) return { total, conectados, caidos, rotulo: total === 1 ? "Conectado" : `${total} conectados`, tom: "ok" };
+  return { total, conectados, caidos, rotulo: "Sem confirmação", tom: "neutra" };
+}
+
+/** Cliente sem pacote comercial registrado (criado pelo painel clássico ou antes das ofertas): pílula «Sem pacote» e aviso para completar. */
+export const semPacote = it => !!it && !(it.comercial && it.comercial.pacote);
+
+/** O app pode ser servido deste host? (Netlify ou domínio próprio sim; GitHub Pages, localhost e .test/.localhost não.) */
+export function hostServeApp(host) {
+  const x = String(host || "").toLowerCase();
+  if (/\.netlify\.app$/.test(x)) return true;
+  return x.includes(".") && !/(^|\.)github\.io$/.test(x) && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(x) && !/\.(localhost|test)$/.test(x);
+}
+
+/**
+ * Link de convite seguro (H305): o servidor manda absoluto quando tem o endereço do Órbita (saas_url/domínio); relativo («#/convite/…»)
+ * vira absoluto com o endereço desta tela SÓ se ela estiver num host que serve o app. Senão → {link:null, motivo}: o link sairia quebrado.
+ */
+export function linkConvite(link, loc) {
+  const l = String(link || "");
+  if (/^https?:\/\//i.test(l)) return { link: l, motivo: null };
+  if (!l.startsWith("#")) return { link: null, motivo: "O servidor não devolveu um link de convite válido." };
+  const host = loc && loc.hostname;
+  if (!hostServeApp(host)) return { link: null,
+    motivo: `Esta tela está aberta em ${host || "um endereço local"}, que não abre o Órbita para o cliente, e a plataforma ainda não tem o «Endereço do Órbita» cadastrado: o link sairia quebrado. Abra o Admin pelo endereço oficial (ou cadastre o endereço do Órbita) e gere o convite de novo — este expira sozinho.` };
+  return { link: new URL("./", loc.href).href.split("#")[0] + l, motivo: null };
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -239,21 +307,32 @@ async function telaClientes(ctx, corpo) {
         const u = it.uso ? it.uso[k] : null, l = it.limites ? it.limites[k] : null;
         return h("span", { class: "adm-uso-mini" }, ui.barraUso(rot, u ?? 0, l));
       };
+      // G10: a coluna do número só existe quando o servidor manda `canais` (senão não há o que mostrar com honestidade)
+      const comNumeros = itens.some(it => Array.isArray(it.canais));
       const tab = ui.tabela({
         rotulo: "Clientes",
         colunas: [
           { chave: "nome", rotulo: "Cliente", ordenavel: true, principal: true, render: it => h("div", { class: "cel-nome" }, ui.avatar(it.nome, it.id),
             h("div", null, h("b", null, it.nome), h("small", null, it.slug))) },
           ...(superConta ? [{ chave: "org_nome", rotulo: "Org", ordenavel: true, render: it => it.org ? it.org.nome : "—" }] : []),
-          { chave: "plano", rotulo: "Plano", ordenavel: true, render: it => ui.pilula(nomePlano(it.plano), it.plano === "interno" ? "sec" : "prim") },
-          { chave: "status", rotulo: "Situação", ordenavel: true, render: it => ui.pilula(statusDe(it.status).rotulo, statusDe(it.status).cor) },
+          // G5 [H306]: sem pacote comercial registrado (criado pelo clássico) → pílula; o detalhe ensina a completar
+          { chave: "plano", rotulo: "Plano", ordenavel: true, render: it => h("span", { class: "adm-pilulas" }, ui.pilula(nomePlano(it.plano), it.plano === "interno" ? "sec" : "prim"),
+            semPacote(it) ? ui.pilula("Sem pacote", "aten", { title: "Sem pacote comercial registrado. Abra o cliente para escolher um." }) : null) },
+          { chave: "status", rotulo: "Situação", ordenavel: true, render: it => h("span", { class: "adm-pilulas" }, ui.pilula(statusDe(it.status).rotulo, statusDe(it.status).cor),
+            it.ativo === false ? ui.pilula("Pausado", "ruim", { icone: "cadeado", title: "Pausado pela Nexus: a equipe do cliente não entra." }) : null) },
+          ...(comNumeros ? [{ chave: "n_numeros", rotulo: "Número", ordenavel: true, render: it => {
+            const e = estadoNumerosCliente(it.canais);
+            return e ? h("span", { class: "adm-numero", dataset: { tom: e.tom } }, ui.pilula(e.rotulo, e.tom, { icone: e.tom === "ok" ? "check" : e.tom === "ruim" ? "alerta" : "whatsapp" })) : "—";
+          } }] : []),
           { chave: "teste_ate", rotulo: "Fim do teste", ordenavel: true, render: it => it.status === "teste" && it.teste_ate ? ui.dataBR(it.teste_ate) : "—" },
           { chave: "u_usuarios", rotulo: "Usuários", render: it => uso(it, "usuarios", "Usuários") },
           { chave: "u_canais", rotulo: "Números", render: it => uso(it, "canais", "Números de WhatsApp") },
           { chave: "u_contatos", rotulo: "Contatos", render: it => uso(it, "contatos", "Contatos") },
           { chave: "criado_em", rotulo: "Criado em", ordenavel: true, render: it => ui.dataBR(it.criado_em) },
         ],
-        linhas: itens.map(it => ({ ...it, org_nome: it.org ? it.org.nome : "", u_usuarios: it.uso && it.uso.usuarios })),
+        // ordenar «Número»: desconectados primeiro (o que precisa de atenção), depois sem confirmação, depois conectados
+        linhas: itens.map(it => { const e = estadoNumerosCliente(it.canais);
+          return { ...it, org_nome: it.org ? it.org.nome : "", u_usuarios: it.uso && it.uso.usuarios, n_numeros: e ? (e.caidos ? 0 : e.tom === "ok" ? 2 : 1) : null }; }),
         aoClicar: it => ctx.navegar(`#/admin/clientes/${it.id}`),
         vazio: "Nenhum cliente com esse filtro.",
       });
@@ -396,12 +475,14 @@ async function telaCliente(ctx, corpo, id) {
   btConvite.addEventListener("click", async () => {
     try {
       const r = await ui.carregando(btConvite, api.rpc("nx_convite_criar", { p_cliente: cli.id, p_dados: { papel: "admin", dias: 7 }, p_org: null }));
-      const link = String(r.link).startsWith("#") ? new URL("./", location.href).href.split("#")[0] + r.link : r.link;
+      // G5 [H305]: link relativo aberto num host que não serve o app (Pages, localhost) sairia quebrado → aviso no lugar do link
+      const lc = linkConvite(r.link, location);
       await ui.modal({
         titulo: "Convite do administrador", largura: "m",
         corpo: h("div", { class: "pilha" },
           h("p", null, `Envie para quem vai administrar a ${cli.nome}. O link cria a conta de administrador (ou acrescenta o acesso, se a pessoa já usa o sistema).`),
-          ui.blocoLink(link, { rotulo: "Link do convite", textoWhats: `Olá! Aqui está o acesso de administrador da ${cli.nome} no ${ctx.shell.marcaEfetiva().produto}. Crie sua conta por este link:` }),
+          lc.link ? ui.blocoLink(lc.link, { rotulo: "Link do convite", textoWhats: `Olá! Aqui está o acesso de administrador da ${cli.nome} no ${ctx.shell.marcaEfetiva().produto}. Crie sua conta por este link:` })
+            : h("div", { class: "aviso aviso-ruim adm-link-ruim", role: "alert" }, ui.icone("alerta"), h("p", null, lc.motivo)),
           h("p", { class: "fraco" }, `Vale até ${ui.dataHoraBR(r.expira_em)} e só uma vez.`)),
         acoes: [{ rotulo: "Concluir", tipo: "primario", valor: true }],
       });
@@ -428,6 +509,9 @@ async function telaCliente(ctx, corpo, id) {
       ui.campo({ rotulo: "Fim do teste", nome: "teste_ate", tipo: "data", valor: cli.teste_ate || "" }),
       segmento, especificacoes),
     campoPacoteComercial(ui, comercial.pacote || null, { comercial }),
+    // G5 (contrato 9): o interruptor da Nexus. Só aparece quando o servidor diz o estado (cli.ativo) e só a plataforma muda
+    superConta && typeof cli.ativo === "boolean" ? comClasse(ui.campo({ rotulo: "Cliente ativo", nome: "ativo", tipo: "interruptor", valor: cli.ativo,
+        ajuda: "Desligado = pausado pela Nexus: o Órbita para de ler os anúncios e de mandar relatórios e alertas deste cliente, o rastreio do site e a vigia do número param, e a equipe dele passa a ver «conta pausada» ao abrir o app (quem já está com ele aberto é bloqueado na próxima leitura da sessão). Os dados ficam guardados; dá para religar a qualquer momento. A situação (ativo, teste, suspenso) é outra coisa: é a do contrato." }), "adm-ativo") : null,
     h("div", { class: "campo-modulos" }),
     superConta ? h("fieldset", { class: "campo" }, h("legend", null, "Limites extras (só a plataforma)"),
       h("p", { class: "campo-ajuda" }, "Em branco = o limite do plano."),
@@ -472,6 +556,12 @@ async function telaCliente(ctx, corpo, id) {
       for (const k of CHAVES_LIMITE) { const v = d[`lim_${k.chave}`]; if (v !== null && v !== undefined && v !== "" && Number.isFinite(v)) lim[k.chave] = Math.max(0, Math.floor(v)); }
       p.limites = lim;
     }
+    const pedeAtivo = superConta && typeof cli.ativo === "boolean" && typeof d.ativo === "boolean" && d.ativo !== cli.ativo ? d.ativo : null;
+    if (pedeAtivo !== null) {
+      p.ativo = pedeAtivo;
+      if (!pedeAtivo && !(await ui.confirmar({ titulo: `Pausar ${cli.nome}?`, rotulo: "Pausar cliente", perigo: true,
+        texto: "O Órbita para de ler os anúncios e de mandar relatórios e alertas deste cliente, o rastreio do site e a vigia do número param, e a equipe dele passa a ver «conta pausada» ao abrir o app. Os dados continuam guardados e dá para religar aqui." }))) return;
+    }
     if ((d.status === "suspenso" || d.status === "cancelado") && d.status !== cli.status) {
       const ok = await ui.confirmar({ titulo: d.status === "suspenso" ? "Suspender o cliente?" : "Cancelar o cliente?",
         texto: "A equipe do cliente deixa de acessar na hora. Os dados continuam guardados e a situação pode voltar a Ativo.", rotulo: d.status === "suspenso" ? "Suspender" : "Cancelar cliente", perigo: true });
@@ -480,7 +570,10 @@ async function telaCliente(ctx, corpo, id) {
     try {
       const r = await ui.carregando(form.querySelector("[type=submit]"), api.rpc("nx_cliente_admin_salvar", { p_cliente: p }));
       cli = r;
-      ui.toast("Cliente atualizado.", { tipo: "ok" });
+      // por detecção: o servidor que ainda não grava «ativo» devolve o valor antigo — a tela diz a verdade em vez de fingir que pausou
+      if (pedeAtivo !== null && r && r.ativo !== pedeAtivo) {
+        ui.toast(`Os outros dados foram salvos, mas o servidor ainda não grava ${pedeAtivo ? "a religação" : "a pausa"} por aqui. Use o painel clássico (cadastro do cliente → «Cliente ativo») por enquanto.`, { tipo: "info", ms: 9000 });
+      } else ui.toast(pedeAtivo === false ? "Cliente pausado." : pedeAtivo === true ? "Cliente religado." : "Cliente atualizado.", { tipo: "ok" });
       try { await ctx.shell.recarregarSessao(); } catch { /* ok */ }
       ctx.navegar(`#/admin/clientes/${cli.id}`, { substituir: true });
     } catch (e) {
@@ -504,29 +597,84 @@ async function telaCliente(ctx, corpo, id) {
     if ((r.convites || []).length) usuariosEl.appendChild(h("p", { class: "fraco" }, `${r.convites.length} convite(s) aguardando.`));
   }).catch(e => { ui.limpar(usuariosEl); usuariosEl.appendChild(h("p", { class: "fraco" }, ui.mensagemErro(e))); });
 
-  corpo.append(
+  /** G5 [H306]: cliente sem pacote comercial (criado pelo clássico): diz o que falta e leva ao campo. */
+  function avisoSemPacote() {
+    const ir = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Escolher o pacote");
+    ir.addEventListener("click", () => {
+      const campo = form.querySelector("[data-campo=pacote_comercial]");
+      if (!campo) return;
+      campo.scrollIntoView({ block: "center", behavior: ui.comportamentoRolagem() });
+      const r = campo.querySelector("input[type=radio]");
+      if (r) r.focus({ preventScroll: true });
+    });
+    return h("div", { class: "aviso aviso-aten adm-sem-pacote", role: "note" }, ui.icone("alerta"),
+      h("div", { class: "pilha-p" }, h("p", null, "Este cliente não tem pacote comercial registrado (provavelmente criado pelo painel clássico). Escolha um dos três em «Plano e situação» e salve: o registro comercial do cliente fica completo."),
+        h("div", { class: "linha" }, ir)));
+  }
+
+  corpo.append(...[
     h("div", { class: "cartao" },
       h("div", { class: "cartao-cab" },
         h("div", { class: "cel-nome" }, ui.avatar(cli.nome, cli.id), h("div", null,
           h("h1", { class: "titulo-sec" }, cli.nome),
           h("div", { class: "linha" }, ui.pilula(st.rotulo, st.cor), ui.pilula(nomePlano(cli.plano), cli.plano === "interno" ? "sec" : "prim"),
-            cli.comercial && cli.comercial.pacote ? ui.pilula(rotuloPacote(cli.comercial.pacote), "info") : null,
+            cli.comercial && cli.comercial.pacote ? ui.pilula(rotuloPacote(cli.comercial.pacote), "info") : ui.pilula("Sem pacote", "aten"),
+            cli.ativo === false ? ui.pilula("Pausado pela Nexus", "ruim", { icone: "cadeado" }) : null,
             h("span", { class: "fraco" }, `${cli.org ? cli.org.nome : ""} · desde ${ui.dataBR(cli.criado_em)}`)))),
         h("div", { class: "linha" }, btConvite, btEntrar))),
+    semPacote(cli) ? avisoSemPacote() : null,
     h("div", { class: "adm-det" },
       h("div", { class: "pilha" },
         h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Plano e situação"),
           h("p", { class: "sub" }, superConta ? "Como plataforma, você também define limites extras." : "O plano Interno e os limites extras são só da plataforma."))), form)),
       h("div", { class: "pilha" },
-        // uso de IA do mês em anel (item 58): o servidor devolve só o total do mês e o limite; a evolução por dia fica para quando houver série
+        // uso de IA do mês em anel (item 58) + a série por dia do servidor (G2, nx_ia_uso_dia) com o custo estimado
         h("div", { class: "cartao adm-ia" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "IA neste mês"), h("p", { class: "sub" }, "Sugestões da IA usadas no mês corrente. Zera todo dia 1."))),
-          anelUso(ui, { uso: cli.uso ? cli.uso.ia_mes : 0, limite: cli.limites ? cli.limites.ia_mes : null, rotulo: "Sugestões de IA" })),
+          anelUso(ui, { uso: cli.uso ? cli.uso.ia_mes : 0, limite: cli.limites ? cli.limites.ia_mes : null, rotulo: "Sugestões de IA" }),
+          usoIAPorDia(ctx, cli)),
         h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Uso do plano"), h("p", { class: "sub" }, "Contagem de agora; sugestões de IA no mês corrente."))), usoEl),
         h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Usuários com acesso"))), usuariosEl),
-        EXTRAS.dominiosCliente ? EXTRAS.dominiosCliente(ctx, cli) : null)));
+        EXTRAS.dominiosCliente ? EXTRAS.dominiosCliente(ctx, cli) : null))].filter(Boolean));
 }
 
 export function barraUso(ui, rotulo, uso, limite) { return ui.barraUso(rotulo, uso, limite); }
+
+/**
+ * G2 (contrato 7): uso de IA por dia do cliente (nx_ia_uso_dia, 14 dias) — chamadas e custo com sparkline (ui.kpi) e a tabela por dia.
+ * O custo é ESTIMADO (calculado pelos tokens no momento da chamada) e aparece como estimativa. Banco antigo: uma nota, nada inventado.
+ */
+export function usoIAPorDia(ctx, cli, { dias = 14 } = {}) {
+  const { ui, api } = ctx;
+  const h = ui.h;
+  const caixa = h("div", { class: "adm-ia-dia", "aria-live": "polite" }, ui.esqueleto("kpi", 2));
+  const pronto = (async () => {
+    let r = null, falha = null;
+    try { r = resumoUsoIA(await api.rpc("nx_ia_uso_dia", { p_cliente: cli.id, p_dias: dias })); } catch (e) { falha = e; }
+    ui.limpar(caixa);
+    if (!r) {
+      const semRpc = !falha || /pgrst202|could not find the function|http_404/i.test(String((falha && (falha.codigo || falha.message)) || ""));
+      caixa.appendChild(h("p", { class: "fraco adm-ia-dia-nota" }, ui.icone("info"),
+        h("span", null, semRpc ? "O uso de IA por dia ainda não vem deste servidor." : `Não deu para ler o uso por dia: ${api.mensagemErro(falha)}`)));
+      return false;
+    }
+    const kpis = h("div", { class: "adm-ia-kpis" },
+      ui.kpi({ rotulo: `Chamadas · ${r.dias} dias`, valor: r.chamadas, serie: r.serieChamadas, ajuda: "Chamadas à IA feitas por este cliente (sugestões, resumos, automações), por dia." }),
+      ui.kpi({ rotulo: `Custo · ${r.dias} dias`, valor: r.custo_usd, formato: dolar, serie: r.serieCusto, estimativa: true,
+        ajuda: `Estimado pelos tokens de cada chamada (${ui.num(r.tokens_in)} de entrada e ${ui.num(r.tokens_out)} de saída), em dólares.` }));
+    const tab = h("table", { class: "adm-ia-tab" },
+      h("caption", { class: "sr-only" }, `Uso de IA por dia, últimos ${r.dias} dias`),
+      h("thead", null, h("tr", null, h("th", { scope: "col" }, "Dia"), h("th", { scope: "col", class: "num" }, "Chamadas"), h("th", { scope: "col", class: "num" }, "Tokens"), h("th", { scope: "col", class: "num" }, "Custo estimado"))),
+      h("tbody", null, r.linhas.filter(x => x.chamadas).reverse().map(x => h("tr", null,
+        h("th", { scope: "row" }, `${x.dia.slice(8, 10)}/${x.dia.slice(5, 7)}`), h("td", { class: "num mono" }, ui.num(x.chamadas)),
+        h("td", { class: "num mono" }, ui.num(x.tokens_in + x.tokens_out)), h("td", { class: "num mono" }, x.custo_usd > 0 ? dolar(x.custo_usd) : "—")))));
+    caixa.append(...[kpis,
+      r.custoIncompleto ? h("p", { class: "fraco adm-ia-dia-nota" }, ui.icone("info"), h("span", null, "Há dias com chamadas sem custo registrado (feitas antes de o custo ser gravado): o custo total está por baixo.")) : null,
+      r.chamadas ? h("details", { class: "adm-ia-det" }, h("summary", null, "Ver por dia"), tab) : h("p", { class: "fraco" }, `Nenhuma chamada de IA nos últimos ${r.dias} dias.`)].filter(Boolean));
+    return true;
+  })();
+  caixa.pronto = pronto;
+  return caixa;
+}
 
 /* ============================================================
    P0-B: revendas, planos, domínios
@@ -535,7 +683,6 @@ const EXTRAS = { revendas: telaRevendas, planos: telaPlanos, dominios: telaDomin
 
 /** config.js tem o editor de marca e o cartão de domínio: carregado com o MESMO ?v= do roteador. */
 function modConfig(ctx) { return import(`./config.js?v=${encodeURIComponent(ctx.versao)}`); }
-function linkAbsoluto(link) { return String(link || "").startsWith("#") ? new URL("./", location.href).href.split("#")[0] + link : link; }
 const LIMITES_ORG = [{ chave: "empresas", rotulo: "Clientes" }, { chave: "usuarios", rotulo: "Usuários (soma)" }, { chave: "canais", rotulo: "Números de WhatsApp (soma)" }];
 
 /* ---------------- REVENDAS (super) ---------------- */
@@ -706,12 +853,13 @@ async function convidarGestor(ctx, o, botao) {
         const r = await (botao ? ui.carregando(botao, api.rpc("nx_convite_criar", { p_cliente: null, p_dados: { papel: "gestor", dias: 7, nome: d.nome || null, email: d.email || null }, p_org: o.id }))
           : api.rpc("nx_convite_criar", { p_cliente: null, p_dados: { papel: "gestor", dias: 7, nome: d.nome || null, email: d.email || null }, p_org: o.id }));
         feito = r;
-        const link = linkAbsoluto(r.link);
+        const lc = linkConvite(r.link, location);
         ui.limpar(m.corpo);
-        m.corpo.append(
-          h("div", { class: "aviso aviso-ok" }, ui.icone("check"), h("p", null, "Convite de gestor criado. Envie o link — ele não chega por e-mail.")),
-          ui.blocoLink(link, { rotulo: "Link do convite de gestor", textoWhats: `Olá${d.nome ? `, ${d.nome.split(" ")[0]}` : ""}! Aqui está o seu acesso de gestor da ${o.nome}. Crie sua conta por este link:` }),
-          h("p", { class: "fraco" }, `Vale até ${ui.dataHoraBR(r.expira_em)}, uma vez só, e apenas para conta nova.`));
+        m.corpo.append(...[
+          lc.link ? h("div", { class: "aviso aviso-ok" }, ui.icone("check"), h("p", null, "Convite de gestor criado. Envie o link — ele não chega por e-mail.")) : null,
+          lc.link ? ui.blocoLink(lc.link, { rotulo: "Link do convite de gestor", textoWhats: `Olá${d.nome ? `, ${d.nome.split(" ")[0]}` : ""}! Aqui está o seu acesso de gestor da ${o.nome}. Crie sua conta por este link:` })
+            : h("div", { class: "aviso aviso-ruim adm-link-ruim", role: "alert" }, ui.icone("alerta"), h("p", null, lc.motivo)),
+          h("p", { class: "fraco" }, `Vale até ${ui.dataHoraBR(r.expira_em)}, uma vez só, e apenas para conta nova.`)].filter(Boolean));
         const bt = m.el.querySelector(".modal-rod [data-tipo=primario]"); if (bt) bt.textContent = "Concluir";
         const cancelar = m.el.querySelector(".modal-rod [data-tipo=neutro]"); if (cancelar) cancelar.hidden = true;
         return false;

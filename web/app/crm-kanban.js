@@ -262,7 +262,7 @@ export async function montarKanban(k, el, rota) {
 
   function mostrarSemFunil() {
     ui.limpar(quadro);
-    quadro.appendChild(ui.vazio({ titulo: "Nenhum funil ativo.", texto: "Crie um funil em Configurações → Funis e etapas.", icone: "funil",
+    quadro.appendChild(ui.vazio({ titulo: "Nenhum funil ativo.", texto: "Crie um funil em Configurações → Funis e etapas.", tema: "crm",
       acao: k.pode("admin") ? { rotulo: "Abrir configurações", fn: () => ctx.navegar("#/config/funis") } : null }));
   }
 
@@ -284,7 +284,7 @@ export async function montarKanban(k, el, rota) {
       areaVazia.appendChild(ui.vazio({
         titulo: `${k.v.nenhum("negocio")} aqui ainda.`,
         texto: `${fem ? "Elas aparecem sozinhas" : "Eles aparecem sozinhos"} quando alguém chama no WhatsApp — ou ${fem ? "crie uma" : "crie um"} agora.`,
-        icone: "funil", acao: podeMover ? { rotulo: k.v.novo("negocio"), fn: () => novo({}) } : null }));
+        tema: "crm", acao: podeMover ? { rotulo: k.v.novo("negocio"), fn: () => novo({}) } : null }));
     }
     for (const e of S.funil.estagios) {
       const col = colunaDe(e.id) || { estagio_id: e.id, total: 0, soma_previsto: 0, soma_valor: 0, itens: [] };
@@ -360,13 +360,14 @@ export async function montarKanban(k, el, rota) {
     // plano 50 (item 23): mini-barra de participação — quanto desta etapa há no funil (abertas: entre as abertas; fechadas: no quadro todo)
     const prop = h("span", { class: "kb-col-prop", role: "img" }, h("i"));
     const pct = h("span", { class: "kb-col-pct dado" });
+    const anun = h("span", { class: "kb-col-anuncio", hidden: true });      // C10: «2 de anúncio» quando a coluna tem cartão vindo de anúncio
     const sec = h("section", { class: "kb-col", dataset: { estagio: e.id, tipo: e.tipo }, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, "aria-labelledby": idNome },
       h("header", { class: "kb-col-cab" },
         h("div", { class: "kb-col-l1" }, h("i", { "aria-hidden": "true" }), h("h2", { class: "kb-col-nome", id: idNome }, e.nome), n, mais),
         h("div", { class: "kb-col-l2" }, soma, h("span", { class: "kb-col-tipo" }, tipoTxt)),
-        h("div", { class: "kb-col-l3" }, prop, pct)),
+        h("div", { class: "kb-col-l3" }, prop, pct, anun)),
       lista, extra);
-    colEls.set(e.id, { sec, lista, n, soma, extra, e, prop, pct });
+    colEls.set(e.id, { sec, lista, n, soma, extra, e, prop, pct, anun });
     preencherColuna(e.id, col);
     return sec;
   }
@@ -427,6 +428,12 @@ export async function montarKanban(k, el, rota) {
     c.n.textContent = String(col.total || 0);
     const valorSoma = e.tipo === "ganho" ? col.soma_valor : col.soma_previsto;
     c.soma.textContent = Number(valorSoma) ? ui.brl(valorSoma, { centavos: false }) : "R$ 0";
+    // C10: quantos cartões da coluna vieram de anúncio (dos carregados; com «Ver mais» pendente, «2+ de anúncio»)
+    const anuncio = L.contarDeAnuncio(col);
+    ui.limpar(c.anun);
+    c.anun.hidden = !anuncio.n;
+    if (anuncio.n) c.anun.appendChild(ui.pilula(anuncio.texto, "anuncio", { variante: "origem", tamanho: "p",
+      title: `${anuncio.texto}${anuncio.parcial ? " (entre os cartões carregados)" : ""} nesta etapa` }));
     ui.limpar(c.lista);
     for (const it of col.itens) c.lista.appendChild(criarCartao(it, e));
     if (!col.itens.length) c.lista.appendChild(h("div", { class: "kb-vazia", role: "listitem" }, ui.vazio({ tipo: "sem_resultado", titulo: podeMover
@@ -496,8 +503,12 @@ export async function montarKanban(k, el, rota) {
     const faixa = e.tipo === "aberto" ? L.faixaTempoEtapa(c.estagio_em, e.sla_horas) : null;
     const nomeAvatar = (c.contato && (c.contato.nome || c.contato.telefone)) || c.nome || c.telefone || titulo;
     const idAvatar = c.contato && c.contato.id != null ? c.contato.id : nomeAvatar;
-    const ICONE_ORIGEM = { whatsapp: "whatsapp", site: "globo", indicacao: "usuario", organico: "busca", importacao: "camadas" };
-    const seloOrigem = !c.plataforma && c.origem && c.origem !== "manual" && ICONE_ORIGEM[c.origem] ? ICONE_ORIGEM[c.origem] : null;
+    // plano 100 · C4: a origem é a pílula padrão (ui.pilula variante «origem», pequena): anúncio com a plataforma (símbolo i-meta/i-google, ou o
+    // megafone se o sprite ainda não tem), site, orgânico, WhatsApp, indicação, importação… Cadastro manual não ganha pílula.
+    const orig = L.origemPilula(c, { manual: false });
+    const pilOrigem = orig ? ui.pilula(null, orig.chave, { variante: "origem", plataforma: orig.plataforma, tamanho: "p", title: origemTxt || null,
+      class: orig.chave === "anuncio" ? "kc-origem" : "kc-origem kc-origem-outra",
+      icone: orig.plataforma ? simbolo(c.plataforma === "google" ? "google" : "meta", "anuncio") : null }) : null;
     const rotulo = `${titulo}${valor != null ? `, ${ui.brl(valor)}` : ""}${sub ? `, ${sub}` : ""}${faixa ? `, ${faixa.texto.toLowerCase()}` : ""}${consultaTxt ? `, consulta ${consultaTxt}` : ""}${tarefaTxt ? `, ${tarefaTxt.toLowerCase()}` : ""}${origemTxt ? `, origem ${origemTxt}` : ""}${etqs.length ? `, etiquetas ${etqs.map(x => x.nome).join(", ")}` : ""}${pont ? `, pontuação ${pont.score} de 100` : ""}${dono ? `, responsável ${dono.nome}` : ""}${c.nao_lidas ? `, ${c.nao_lidas} mensagens não lidas` : ""}`;
     const art = h("article", { class: ["kc", S.pend.has(c.id) && "confirmando salvando", faixa && `kc-prazo-${faixa.nivel}`], role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
       "aria-label": rotulo, "aria-describedby": instr.id, "aria-busy": S.pend.has(c.id) ? "true" : null, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
@@ -514,8 +525,7 @@ export async function montarKanban(k, el, rota) {
         tarefa ? h("span", { class: ["kc-tarefa", tarefa.atrasada && "atrasada"], title: tarefaTxt }, tarefa.atrasada ? h("i", { class: "kc-ponto-ruim", "aria-hidden": "true" }) : ui.icone("tarefa"),
           h("span", { class: "kc-tarefa-txt" }, tarefa.atrasada ? "atrasada" : tarefa.vence_em ? ui.relativo(tarefa.vence_em) : "")) : null,
         pont ? h("span", { class: ["kc-score", pont.faixa], title: `Pontuação do lead: ${pont.score} de 100${pont.motivo ? ` — ${pont.motivo}` : ""}` }, String(pont.score)) : null,
-        c.plataforma ? h("span", { class: ["kc-origem", c.plataforma], title: origemTxt }, ui.icone(simbolo(c.plataforma === "google" ? "google" : "meta", "anuncio"))) : null,
-        seloOrigem ? h("span", { class: "kc-origem kc-origem-outra", title: origemTxt || L.ROTULO_ORIGEM[c.origem] }, ui.icone(seloOrigem)) : null,
+        pilOrigem,
         etqs.length ? h("span", { class: "kc-pontos", title: etqs.map(x => x.nome).join(", ") },
           etqs.slice(0, 3).map(x => h("i", { class: "kc-ponto", "aria-hidden": "true", style: k.cor(x.cor) ? { "--cor": k.cor(x.cor) } : null })),
           etqs.length > 3 ? h("small", null, `+${etqs.length - 3}`) : null) : null,
@@ -548,6 +558,11 @@ export async function montarKanban(k, el, rota) {
 
   async function verMais(estagioId, botao) {
     const col = colunaDe(estagioId);
+    // C5: enquanto a página seguinte chega, um cartão-esqueleto no fim da coluna (o mesmo formato do cartão; some quando a coluna é refeita)
+    const c = colEls.get(estagioId);
+    const sk = h("div", { class: "kb-sk", role: "listitem" }, ui.esqueleto("cartao"));
+    const itemMais = botao && botao.parentElement;
+    if (c && itemMais && itemMais.parentElement === c.lista) c.lista.insertBefore(sk, itemMais);
     try {
       const r = await ui.carregando(botao, k.api.rpcC("nx_negocios_coluna", { p_estagio: estagioId, p_filtro: filtroServidor(), p_offset: col.itens.length }));
       const ids = new Set(col.itens.map(x => x.id));
@@ -555,6 +570,7 @@ export async function montarKanban(k, el, rota) {
       if (!r.tem_mais) col.total = Math.max(col.total, col.itens.length);
       preencherColuna(estagioId, col);
     } catch (e) { k.toastErro(e); }
+    finally { sk.remove(); }
   }
 
   /* ============================================================ mover (comum a mouse e teclado) */
@@ -608,7 +624,7 @@ export async function montarKanban(k, el, rota) {
     catch (e) { extra = null; k.toastErro(e); }
     if (extra === null) { preencherColuna(origemCol.estagio_id); if (destCol !== origemCol) preencherColuna(estagioId); focarCartao(id); ui.anunciar("Movimento cancelado."); return; }
     // otimista: a tela já mostra o cartão no destino
-    const patch = { status: destino.tipo, ...(extra.valor != null ? { valor: extra.valor } : {}), ...(extra.consulta_em ? { consulta_em: extra.consulta_em } : {}) };
+    const patch = L.patchMovimento(destino, extra);       // o mesmo que a gaveta do negócio aplica (C1)
     S.dados.colunas = L.moverLocal(S.dados.colunas, id, estagioId, pos, ordem, patch);
     preencherColuna(origemCol.estagio_id); if (destCol !== origemCol) preencherColuna(estagioId);
     desenharTotais();
@@ -624,9 +640,9 @@ export async function montarKanban(k, el, rota) {
       mov.pendente = true;
       S.pend.set(id, mov);
       marcarConfirmando(id, true);
-      const valorTxt = patch.valor != null || card.valor_previsto != null ? ` · ${ui.brl(patch.valor ?? card.valor_previsto)}` : "";
-      const texto = destino.tipo === "ganho" ? `${k.v.ganhar}! «${titulo}»${valorTxt}`
-        : destino.tipo === "perdido" ? `«${titulo}» registrad${k.v.art("negocio")} como «${destino.nome}»` : `«${titulo}» reaberto em «${destino.nome}»`;
+      // o mesmo texto da gaveta (C1): «Fechou! «Ana» · R$ 900», «… registrada como «Perdido»», «… reaberta em «Nova»»
+      const texto = L.textoMovimento({ titulo, destino, valor: destino.tipo === "ganho" ? (patch.valor ?? card.valor_previsto ?? null) : null,
+        ganhar: k.v.ganhar, artigo: k.v.art("negocio"), brl: v => ui.brl(v) });
       ui.anunciar(`${titulo}: ${destino.nome}. Dá para desfazer por 7 segundos.`);
       // firmar = a gravação adiada. Se a página sair ou ficar oculta antes dos 7 s, o aviso chama firmar({ saindo: true }) e o pedido vai com keepalive
       const res = await ui.acaoComDesfazer({ texto, reverter: () => desfazerMovimento(mov), firmar: o => efetivar(mov, { saindo: !!(o && o.saindo) }) });
@@ -731,7 +747,9 @@ export async function montarKanban(k, el, rota) {
     const volta = k.estagio(mov.origemEstagioId);
     if (!volta) throw new Error("estagio_invalido");
     const atual = cardDe(mov.id) || mov.card;
-    await N.moverNegocio(k, atual, volta, { ordem: mov.origem.ordem, extra: {} });
+    // voltar a uma etapa de ganho exige o valor; a de perda leva o motivo de volta (L.extraDeVolta, o mesmo da gaveta)
+    await N.moverNegocio(k, atual, volta, { ordem: mov.origem.ordem, extra: L.extraDeVolta({ estagio: volta, valor: mov.card.valor, valor_previsto: mov.card.valor_previsto,
+      motivo_perda_id: mov.card.motivo_perda_id, motivo_perda_txt: mov.card.motivo_perda_txt }) });
     if (mov.extra && mov.extra.consulta_em && mov.origem.consulta_em !== mov.extra.consulta_em) {
       await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: mov.id, consulta_em: mov.origem.consulta_em || null } });
     }

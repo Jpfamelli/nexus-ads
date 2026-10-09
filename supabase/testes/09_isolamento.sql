@@ -487,6 +487,33 @@ begin
     and not has_function_privilege('authenticated', 'public.nx_disparar(text,jsonb)', 'execute'),
     'nx_ctx e nx_disparar não são executáveis pelo navegador'
   );
+
+  -- Plano 100 · S-B17 [C106]: a rede de proteção varre pg_class/pg_proc, não uma lista escrita à mão.
+  -- (a) TODA tabela nx_% tem RLS ligada e nenhum privilégio (select/insert/update/delete) para anon ou authenticated;
+  -- (b) NENHUMA função nx_% é executável por authenticated (o painel usa só a chave anon; a service_role é das Edge Functions);
+  -- (c) toda função nx_% SECURITY DEFINER fixa o search_path (nenhuma herda o do chamador).
+  for r in
+    select c.relname
+      from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind in ('r','p') and c.relname like 'nx\_%' escape '\'
+     order by c.relname
+  loop
+    perform pg_temp.ok(
+      not has_table_privilege('anon', 'public.' || r.relname, 'select, insert, update, delete')
+      and not has_table_privilege('authenticated', 'public.' || r.relname, 'select, insert, update, delete')
+      and not has_any_column_privilege('anon', 'public.' || r.relname, 'select')
+      and not has_any_column_privilege('authenticated', 'public.' || r.relname, 'select'),
+      'nenhum privilégio de anon/authenticated em public.' || r.relname);
+  end loop;
+  for r in
+    select p.oid, p.proname, p.oid::regprocedure as fn, p.prosecdef, coalesce(array_to_string(p.proconfig, ','), '') as cfg
+      from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.proname like 'nx\_%' escape '\' and p.prokind = 'f'
+     order by p.proname
+  loop
+    perform pg_temp.ok(not has_function_privilege('authenticated', r.oid, 'execute'), 'authenticated não executa ' || r.fn::text);
+    perform pg_temp.ok(not r.prosecdef or r.cfg like '%search_path=%', 'security definer com search_path fixo: ' || r.fn::text);
+  end loop;
   v_erro := pg_temp.erro(format('select public.nx_executar(%L,%L,%L)', token_super, 'nx-enviar', '{}'));
   perform pg_temp.ok(v_erro = 'funcao_invalida', 'painel não dispara nx-enviar via nx_executar: ' || v_erro);
 

@@ -14,6 +14,8 @@ let _externas = null;      // cache das seções das outras frentes (por versão
 let _versaoExt = null;
 let _limpeza = [];
 let _montagemCfg = 0;
+/** Teto de espera pela folha config.css antes do 1º desenho (G7). */
+export const ESPERA_CSS_MS = 1500;
 
 /**
  * Aviso para um logo muito estreito/alto (largura < metade da altura): no menu (caixa de 36 px) e no login (44 px) o logo é desenhado
@@ -87,9 +89,14 @@ export async function montar(ctx) {
   desmontar();
   const { ui } = ctx;
   const h = ui.h;
-  ui.carregarCss("config");
   ctx.titulo("Configurações");
-  const todas = [...secoesProprias(), ...(await secoesExternas(ctx))];
+  // G7: a folha da tela chega ANTES do 1º desenho (sem o salto de layout da lista e dos cartões); com teto de espera, para uma rede
+  // ruim não prender a tela — passado o teto, desenha assim mesmo e a folha se aplica quando chegar
+  const css = Promise.resolve(typeof ui.carregarCss === "function" ? ui.carregarCss("config") : true).catch(() => false);
+  let relogio = null;
+  const teto = new Promise(r => { relogio = setTimeout(r, ESPERA_CSS_MS); });
+  const [, externas] = await Promise.all([Promise.race([css, teto]).finally(() => clearTimeout(relogio)), secoesExternas(ctx)]);
+  const todas = [...secoesProprias(), ...externas];
   const grupos = agruparSecoes(todas.filter(s => visivel(ctx, s)));
   const vistas = grupos.flatMap(g => g.itens);
   const pedida = ctx.rota.partes[0] || null;

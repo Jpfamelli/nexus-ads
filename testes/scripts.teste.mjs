@@ -3,13 +3,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 import { obterRefreshToken, lerArgumentos, ErroAmigavel, ESCOPO } from "../scripts/google-refresh-token.mjs";
 import { montarSeed, conferir, gerarSql, contagens, SLUG } from "../scripts/popular-demo.mjs";
+import { COMANDOS, selecionar } from "./rodar-tudo.mjs";
+import { temPglite, MENSAGEM_SEM_PGLITE, STUBS, normalizarLf, passou, lerArgs, selecionarMigracoes, selecionarSmokes, rodar } from "../scripts/rodar-local.mjs";
 
 const RAIZ = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT_GOOGLE = resolve(RAIZ, "scripts/google-refresh-token.mjs");
@@ -345,4 +347,93 @@ test("workflow de funções: sondas de autenticação (401/403/405) são fatais;
   const usos = sondas.match(/^\s+avisa413 "nx-whatsapp [^"]+" "\$\(head -c \d+ \/dev\/zero \| curl [^\n]+-w '%\{http_code\} %\{time_total\}s'[^\n]+\|\| true\)"$/gm) || [];
   assert.equal(usos.length, 2, "2 MiB + 1 com Content-Length e 2,4 MB em pedaços");
   assert.ok(usos.some(l => l.includes("head -c 2097153")) && usos.some(l => l.includes("Transfer-Encoding: chunked")));
+});
+
+/* ============================================================
+   testes/rodar-tudo.mjs — seleção da suíte (--rapido, --so, --exigir e os plano100-* opcionais)
+   ============================================================ */
+const FRENTES_PLANO100 = ["banco", "funcoes", "painel", "sistema", "inicio", "crm", "conversas", "agenda", "ads", "automacoes"];
+
+test("rodar-tudo: lista sem repetição, plano100-* das 10 frentes opcionais enquanto não existem, --rapido pula só os lentos, --so filtra, --exigir cobra os ausentes", () => {
+  const arquivos = COMANDOS.map(c => c.args.at(-1));
+  assert.equal(new Set(arquivos).size, arquivos.length, "sem repetição");
+  for (const f of FRENTES_PLANO100) {
+    const c = COMANDOS.find(x => x.args.at(-1) === `testes/plano100-${f}.teste.mjs`);
+    assert.ok(c && c.opcional && c.args[0] === "--test", `plano100-${f} entra como opcional (node --test)`);
+  }
+  for (const c of COMANDOS) if (!c.opcional) assert.ok(existsSync(resolve(RAIZ, c.args.at(-1))), `obrigatório existe: ${c.args.at(-1)}`);
+  const tudo = selecionar([], () => true);
+  assert.equal(tudo.rodar.length, COMANDOS.length); assert.deepEqual(tudo.pulados, []); assert.deepEqual(tudo.ausentes, []);
+  const semNada = selecionar([], () => false);
+  assert.equal(semNada.ausentes.length, FRENTES_PLANO100.length); assert.equal(semNada.rodar.length, COMANDOS.length - FRENTES_PLANO100.length);
+  assert.equal(selecionar(["--exigir"], () => false).rodar.length, COMANDOS.length, "--exigir não pula os ausentes (o node falha ao não achar o arquivo)");
+  const lentos = COMANDOS.filter(c => c.lento).map(c => c.args.at(-1));
+  for (const f of ["testes/app.teste.mjs", "testes/dev-falso.teste.mjs", "testes/plano50-sistema.teste.mjs"]) assert.ok(lentos.includes(f), `${f} é lento`);
+  const rapido = selecionar(["--rapido"], () => true);
+  assert.deepEqual(rapido.pulados, lentos); assert.equal(rapido.rodar.length, COMANDOS.length - lentos.length);
+  assert.ok(rapido.rodar.some(a => a.at(-1) === "testes/scripts.teste.mjs"), "este arquivo roda no modo rápido");
+  const so = selecionar(["--so", "plano100", "--exigir"], () => true);
+  assert.equal(so.rodar.length, FRENTES_PLANO100.length); assert.ok(so.rodar.every(a => a.at(-1).includes("plano100")));
+  assert.deepEqual(selecionar(["--so", "nao-existe-nada"], () => true).rodar, []);
+  // a ordem continua a de antes: painel primeiro, isolamento (e o banco do plano 100) por último
+  assert.equal(arquivos[0], "testes/painel.teste.mjs");
+  assert.deepEqual(arquivos.slice(-2), ["testes/isolamento.teste.mjs", "testes/plano100-banco.teste.mjs"]);
+});
+
+test("rodar-tudo pela linha de comando: --so roda só o que casa e resume; filtro sem arquivo sai com código 1 e explica", () => {
+  const r = spawnSync(process.execPath, ["testes/rodar-tudo.mjs", "--so", "isolamento"], { cwd: RAIZ, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /=== OK · --test testes\/isolamento\.teste\.mjs/);
+  assert.match(r.stdout, /Suíte final: 1\/1 arquivos passaram\./);
+  const nada = spawnSync(process.execPath, ["testes/rodar-tudo.mjs", "--so", "xyz-nao-existe"], { cwd: RAIZ, encoding: "utf8" });
+  assert.equal(nada.status, 1);
+  assert.match(nada.stderr, /nenhum arquivo casa com --so xyz-nao-existe/);
+});
+
+/* ============================================================
+   scripts/rodar-local.mjs — smokes SQL no PGlite (H4): runner próprio (SQL em LF, stubs, --ate/--sem); sem a dependência só explica
+   ============================================================ */
+test("rodar-local: detecta o PGlite, lê o SQL em LF (a 20261003a casa a âncora com \\n), conta OK…/VERDE… como passou, --ate/--sem/--sem-b e prefixos; sem o PGlite explica (código 2)", () => {
+  assert.equal(temPglite(() => "file:///x/node_modules/@electric-sql/pglite/dist/index.js"), true);
+  assert.equal(temPglite(() => { throw new Error("Cannot find package"); }), false);
+  assert.equal(temPglite(), existsSync(resolve(RAIZ, "node_modules/@electric-sql/pglite/package.json")), "a detecção real bate com o que está em node_modules");
+  assert.match(MENSAGEM_SEM_PGLITE, /npm install/);
+  assert.doesNotMatch(MENSAGEM_SEM_PGLITE, /--no-save/, "a instalação é a do package.json (devDependencies), não um --no-save avulso");
+  assert.equal(normalizarLf("a\r\nb\rc\n"), "a\nb\nc\n");
+  for (const m of ["OK_19_ENTRADA_LEAD_RASTREIO — telefone…", "VERDE 03_plataforma: 169 casos", "07_relatorios: VERDE · nx_rel_vendas", "OK 09_isolamento — org Nexus", "todos os casos passaram"]) assert.ok(passou(m), m);
+  for (const m of ["FALHOU: existe o gestor atual", "nx_codewords_sync_gravar: âncora encontrada 0 vez(es), esperava 1", ""]) assert.equal(passou(m), false, m || "(vazio)");
+  assert.deepEqual(lerArgs(["18", "19", "--ate", "20261008a", "--sem", "20261003a", "--sem", "20261004a"]), { prefixos: ["18", "19"], ate: "20261008a", sem: ["20261003a", "20261004a"] });
+  assert.deepEqual(lerArgs(["--sem-b", "13"]), { prefixos: ["13"], ate: "20261001b", sem: [] });
+  assert.throws(() => lerArgs(["--xyz"]), /opção desconhecida/);
+  const arqs = ["20261002b_z.sql", "LEIA.md", "20261001a_x.sql", "20261001b_y.sql"];
+  assert.deepEqual(selecionarMigracoes(arqs, { ate: "20261002b", sem: ["20261001b"] }), [{ arquivo: "20261001a_x.sql", pulada: false }, { arquivo: "20261001b_y.sql", pulada: true }], "--ate para antes do prefixo; --sem só marca");
+  assert.deepEqual(selecionarMigracoes(arqs).map(m => m.arquivo), ["20261001a_x.sql", "20261001b_y.sql", "20261002b_z.sql"], "em ordem, só .sql");
+  assert.deepEqual(selecionarSmokes(["19_a.sql", "02_b.sql", "rodar-local.mjs", "18_c.sql"], ["18", "19"]), ["18_c.sql", "19_a.sql"]);
+  assert.equal(selecionarSmokes(["19_a.sql", "02_b.sql"]).length, 2, "sem prefixos, todos");
+  for (const s of [/create table cron\.job\b/, /cron\.job_run_details/, /net\.http_post/, /vault\.decrypted_secrets/, /storage\.objects/, /create role service_role/]) assert.match(STUBS, s);
+  const pkg = JSON.parse(readFileSync(resolve(RAIZ, "package.json"), "utf8"));
+  assert.ok(pkg.devDependencies && pkg.devDependencies["@electric-sql/pglite"], "PGlite em devDependencies");
+  assert.equal(pkg.dependencies, undefined, "nada de dependência de produção: o front não tem build e as funções são Deno");
+  assert.equal(pkg.private, true);
+  assert.equal(pkg.scripts.smokes, "node scripts/rodar-local.mjs");
+  assert.equal(pkg.scripts.test, "node testes/rodar-tudo.mjs");
+  const script = readFileSync(resolve(RAIZ, "scripts/rodar-local.mjs"), "utf8");
+  assert.match(script, /chamadoDireto/, "importável sem rodar");
+  assert.doesNotMatch(script, /supabase\.co|cron_token|sb_secret|eyJ/, "nunca toca o banco real nem carrega segredo");
+  // opção desconhecida sai com 2 antes de carregar o PGlite (barato)
+  const r = spawnSync(process.execPath, ["scripts/rodar-local.mjs", "--xyz"], { cwd: RAIZ, encoding: "utf8" });
+  assert.equal(r.status, 2); assert.match(r.stderr, /opção desconhecida: --xyz/);
+});
+
+test("rodar-local no PGlite de verdade: TODAS as migrações do repositório aplicam (a 20261003a inclusive, graças ao LF) e os smokes 18 e 19 passam", { skip: !temPglite() && "PGlite não instalado (npm install)" }, async () => {
+  const linhas = [];
+  const r = await rodar({ prefixos: ["18", "19"], log: l => linhas.push(l), erro: l => linhas.push(l) });
+  assert.equal(r.codigo, 0, linhas.join("\n"));
+  const migs = readdirSync(resolve(RAIZ, "supabase/migrations")).filter(f => f.endsWith(".sql")).sort();
+  assert.deepEqual(r.migracoes.map(m => m.arquivo), migs, "todas as migrações, em ordem, nenhuma pulada");
+  assert.ok(r.migracoes.every(m => !m.pulada));
+  assert.ok(r.migracoes.some(m => m.arquivo.startsWith("20261003a")), "a migração que casa a âncora por texto aplicou");
+  assert.deepEqual(r.smokes.map(s => [s.arquivo.slice(0, 2), s.ok]), [["18", true], ["19", true]]);
+  assert.match(r.smokes[0].mensagem, /^OK_18_/); assert.match(r.smokes[1].mensagem, /^OK_19_/);
+  assert.match(linhas.at(-1), /^todos ok$/);
 });

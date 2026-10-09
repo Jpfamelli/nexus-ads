@@ -1702,7 +1702,7 @@ await teste("ícones empacotados: PNG 192, 512, 512 maskable e apple-touch 180; 
   assert.ok(por("192x192", "any") && por("512x512", "any") && por("512x512", "maskable"), "192 e 512 (qualquer) e 512 maskable");
   for (const i of m.icons) if (i.type === "image/png") assert.ok(existsSync(join(APP, i.src)), `${i.src} existe`);
   assert.equal(m.scope, "/app/"); assert.equal(m.start_url, "/app/");
-  assert.match(HTML, /<link rel="apple-touch-icon" id="apple-icone" href="icones\/apple-touch-icon\.png">/);
+  assert.match(HTML, /<link rel="apple-touch-icon" id="apple-icone" href="icones\/apple-touch-icon\.png\?v=[A-Za-z0-9._-]+">/, "plano 100 · A1: ícone do iPhone versionado");
   for (const n of ["mobile-web-app-capable", "apple-mobile-web-app-capable", "apple-mobile-web-app-title", "apple-mobile-web-app-status-bar-style"]) assert.match(HTML, new RegExp(`<meta name="${n}"`), n);
 });
 

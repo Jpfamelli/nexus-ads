@@ -296,7 +296,7 @@ test("50 · PNG (DOM): o rótulo leva o nome do gráfico (dois gráficos na tela
   const ads = ler("anuncios.js"), rel = ler("relatorios.js");
   assert.match(ads, /botaoPng\(\{ h, alvo: alvoT, [^\n]{0,200}?titulo: "Tendência"/); assert.match(ads, /botaoPng\(\{ h, alvo: alvoG, [^\n]{0,200}?titulo: "Investimento diário"/);
   assert.match(rel, /X\.botaoPng\(\{ h, alvo, L, titulo,/);
-  assert.equal((ads.match(/botaoCsv\("[^"]+", \[/g) || []).length, (ads.match(/\), "(Tendência|Investimento diário|Do anúncio à venda, por plataforma)"\)/g) || []).length, "cada CSV com o nome do bloco");
+  assert.equal((ads.match(/botaoCsv\("[^"]+", \[/g) || []).length, (ads.match(/\), "(Tendência|Investimento diário|Do anúncio à venda, por plataforma|Quando as conversas de anúncio chegam)"\)/g) || []).length, "cada CSV com o nome do bloco");
 });
 
 test("48 · barras por campanha (DOM): ordenadas pelo investimento, no máximo 8, destaque pela comparação, realce ao passar e clique que escolhe", () => {
@@ -319,8 +319,9 @@ test("48 · barras por campanha (DOM): ordenadas pelo investimento, no máximo 8
 
 /* ============================================================ amarras na tela (complemento) */
 test("as telas usam as peças novas e a folha de estilo cobre celular, movimento reduzido e impressão", () => {
+  // plano 100: os KPIs do Anúncios passaram para ui.kpi (a sparkline vem por `serie`); o desenharSparkline segue nos Relatórios
   const ads = ler("anuncios.js"), rel = ler("relatorios.js"), css = ler("relatorios.css");
-  for (const re of [/L\.serieTendencia\(M/, /criarGraficoTendencia\(alvoT/, /L\.funilPorPlataforma\(M/, /L\.calorSemanal\(M/, /typeof G\.donut === "function" \? G\.donut : G\.rosca/, /criarBarrasCampanhas\(\{ h, linhas/, /L\.semaforoRadar\(R, \{ semDados \}\)/, /const semDados = L\.semAnuncios\(M\);/, /L\.explicarRegra\(/, /botaoPng\(\{ h, alvo: alvoT/, /desenharSparkline\(\{ G, L, alvo: sp/]) assert.match(ads, re, String(re));
+  for (const re of [/L\.serieTendencia\(M/, /criarGraficoTendencia\(alvoT/, /L\.funilPorPlataforma\(M/, /L\.calorSemanal\(M/, /typeof G\.donut === "function" \? G\.donut : G\.rosca/, /criarBarrasCampanhas\(\{ h, linhas/, /L\.semaforoRadar\(R, \{ semDados \}\)/, /const semDados = L\.semAnuncios\(M\);/, /L\.explicarRegra\(/, /botaoPng\(\{ h, alvo: alvoT/, /serie: k\.serie \? sparkDe\(k\.serie\)/]) assert.match(ads, re, String(re));
   for (const re of [/import\(`\.\/anuncios\.js\?v=\$\{ctx\.versao\}`\)/, /X\.desenharSparkline\(/, /png: "vendas-dia-a-dia"/, /png: "atendimento-dia-a-dia"/, /L\.melhorDia\(serie/, /L\.faixasCalor\(m\)/, /window\.print\(\)/]) assert.match(rel, re, String(re));
   assert.match(css, /@media print \{[\s\S]*\.rel-filtros, \.rel-topo-acoes[\s\S]*display: none !important/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.rel \*, \.rel \*::before, \.rel \*::after \{ animation: none !important; transition: none !important; \}/);

@@ -854,7 +854,9 @@ await teste("M28: deslizar e botão chamam a MESMA ação — contatos (Tarefa/O
   const { itemTarefa } = await import("../web/app/crm-tarefas.js");
   const chamadas = [], gestos = [], menus = [], desfazeres = [];
   const ui = {
-    icone: n => ({ tag: "ic", attrs: { n }, filhos: [] }), avatar: () => h("span"), pilula: t => h("span", { class: "pilula" }, t), etiqueta: e => h("span", { class: "etiq" }, e.nome),
+    icone: n => ({ tag: "ic", attrs: { n }, filhos: [] }), avatar: () => h("span"),
+    // plano 100 · C4: a pílula de origem vem com texto nulo e a chave/plataforma (o rótulo real sai da tabela do ui.pilula)
+    pilula: (t, cor, x = {}) => h("span", { class: "pilula" }, t ?? `${cor}${x.plataforma ? ` · ${x.plataforma}` : ""}`), etiqueta: e => h("span", { class: "etiq" }, e.nome),
     vazio: o => h("div", { class: "vazio" }, o.titulo), telBR: t => String(t), limpar: el => { el.filhos = []; return el; }, anunciar() {}, toast() {}, horaBR: () => "09:00", dataCurtaBR: () => "02/10", relativo: () => "ontem", hojeSP: () => "2026-10-01",
     deslizar: (el, o) => { gestos.push({ el, o }); return () => {}; },
     menu: (ancora, itens) => { menus.push({ ancora, itens }); return { fechar() {} }; },
@@ -880,7 +882,7 @@ await teste("M28: deslizar e botão chamam a MESMA ação — contatos (Tarefa/O
   const conv = achar(li, x => x.tag === "a" && /conversas\?contato=501/.test(x.attrs.href || ""));
   assert.ok(conv && /Abrir conversa/.test(conv.attrs["aria-label"]), "Abrir conversa");
   assert.equal(achar(li, x => classe(x) === "ct-abrir").attrs.href, "#/contatos/501", "tocar na linha abre a ficha");
-  assert.equal(achar(li, x => classe(x) === "pilula").filhos[0], "Google", "uma pílula só: a origem do anúncio");
+  assert.equal(achar(li, x => classe(x) === "pilula").filhos[0], "anuncio · google", "uma pílula só: a origem do anúncio (variante origem com a plataforma)");
   assert.equal(gestos.length, 1, "a linha desliza");
   const g = gestos[0].o;
   assert.equal(typeof g.direita, "function"); assert.equal(typeof g.esquerda, "function");
@@ -1034,7 +1036,9 @@ await teste("telefone com «+» (outro país): 8 a 15 dígitos, nunca ganha 55 �
   assert.equal(L.normalizarTelefone("+12345678"), "12345678", "8 dígitos com + valem");
   assert.equal(L.normalizarTelefone("+1234567"), null, "menos de 8");
   assert.equal(L.normalizarTelefone("+1234567890123456"), null, "mais de 15");
-  assert.equal(L.normalizarTelefone("14155552671"), "5514155552671", "sem o +, 11 dígitos continuam sendo DDD + número (regra do banco)");
+  // plano 100 · S-B5/C7 (20261008a): sem o «+», 10–11 dígitos só ganham 55 quando parecem brasileiros (DDD válido; com 11, o 3º é o 9)
+  assert.equal(L.normalizarTelefone("14155552671"), null, "sem o +, 11 dígitos sem o 9 do celular não viram número brasileiro (regra do banco)");
+  assert.equal(L.normalizarTelefone("12997773031"), "5512997773031", "sem o +, celular brasileiro de 11 dígitos ganha 55");
   assert.deepEqual(L.checarLinha({ nome: "Ana", telefone: "+1 415 555 2671" }), []);
   assert.equal(L.validarCampo({ tipo: "telefone" }, "+12345678"), null);
   assert.equal(L.normalizarCampo({ tipo: "telefone" }, "+1 415 555 2671"), "14155552671");
@@ -1241,8 +1245,9 @@ await teste("Agenda: Desfazer remarca como encaixe e devolve a etapa; aviso de o
   try { assert.equal(await AG.devolverEtapa({ rpcC: async () => { throw new Error("estagio_invalido"); } }, 42, { estagio_id: "x" }), false); }
   finally { console.error = erroCalado; }
   const js = ler("agenda.js"), neg = ler("crm-negocio.js");
-  // os dois Desfazer que marcam de volta mandam p_encaixe: true (a regra de antecedência não vale para devolver o que já existia)
-  assert.equal((js.match(/api\.rpcC\("nx_agenda_marcar", \{[^}]*p_encaixe: true \}\)/g) || []).length, 2);
+  // os Desfazer que marcam de volta passam por voltarAoHorario: no mesmo estado (encaixe ou não) e, se a regra de antecedência
+  // recusar, como encaixe — a única chamada com p_encaixe: true (revisão 09/10: antes TODA volta virava encaixe)
+  assert.equal((js.match(/api\.rpcC\("nx_agenda_marcar", \{[^}]*p_encaixe: true \}\)/g) || []).length, 1);
   assert.ok(!/api\.rpcC\("nx_agenda_marcar", \{(?![^}]*p_encaixe)[^}]*\}\)/.test(js), "nenhum reverter marca de volta sem encaixe");
   // consulta nova desfeita: a etapa lida ANTES de marcar volta (a gaveta informa; a busca e a grade leem a ficha)
   assert.ok(/sel\.antes = \{ estagio_id: d\.negocio\.estagio_id, ordem: d\.negocio\.ordem \?\? null \}/.test(js) && /if \(!sel\.antes\) lerFicha\(\);/.test(js));

@@ -8,14 +8,14 @@
    ============================================================ */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   tratar, lerPayload, idEstavel, formaDoPayload, enviarTextoCodeWords, traduzirErroCW, avaliarAparelho,
   classificarDestino, itemDoAparelho, montarContexto, rotuloHorario, textoHorario, dataIso, variantesTelefone,
   CW_BASE, tipoDaMidia, rotuloMidia, extrairCodigoRastreio, ehJidLid, mensagensDoAparelho,
-  enviarMidiaCodeWords, nomeDoArquivo, PRAZOS, MAX_MIDIA,
+  enviarMidiaCodeWords, nomeDoArquivo, PRAZOS, MAX_MIDIA, esquecerFormas,
 } from "../supabase/functions/_compartilhado/codewords.js";
 import {
   montarInstrucoes, montarReceita, ACOES_AGENTE, EXEMPLOS_AGENTE, EXEMPLOS_LEGADOS, VERSAO_PROMPT, RESUMO_VERSAO,
@@ -69,6 +69,11 @@ const ASSINATURAS = {
   nx_rastreio_atribuir: ["p_canal", "p_telefone", "p_codigo"],
   nx_fn_ctx: ["p_token", "p_cliente", "p_min"],
   nx_exigir_modulo: ["p_cliente", "p_modulo"],
+  // plano 100 (S-B11 / contrato 3): contadores por canal e alvos do vigia; notificação e destinos já existem no banco
+  nx_codewords_contar: ["p_canal", "p_chave"],
+  nx_codewords_vigia_alvos: ["p_limite"],
+  nx_notificar: ["p_cliente", "p_conta", "p_tipo", "p_titulo", "p_corpo", "p_link"],
+  nx_alerta_destinos: ["p_cliente"],
 };
 
 const DADOS = {
@@ -95,7 +100,7 @@ const DADOS = {
  * Cenário: banco falso (RPCs por nome, parâmetros conferidos) + device manager falso.
  * `rpc` sobrescreve respostas; `cw` sobrescreve rotas do CodeWords.
  */
-function cenario({ rpc = {}, cw = {}, credB = false } = {}) {
+function cenario({ rpc = {}, cw = {}, credB = false, mensagens = [], canais = [], semAvisoEm = false } = {}) {
   const chamadas = [], cwChamadas = [];
   const cred = {
     canal_id: K_A, cliente_id: CLI_A, nome: "WhatsApp A", provedor: "codewords", codewords_numero: NUM_A, codewords_phone_id: "dev-a-1",
@@ -119,6 +124,9 @@ function cenario({ rpc = {}, cw = {}, credB = false } = {}) {
     nx_codewords_etapa: ({ p_etapa }) => (["orcamento", "perdida"].includes(p_etapa) ? { ok: true, negocio_id: 901, etapa: "Orçamento", mudou: true } : { ok: false, erro: "etapa_invalida" }),
     nx_codewords_origem: () => ({ ok: true, aplicado: true, origem: "organico", negocio_id: 901 }),
     nx_rastreio_atribuir: () => ({ ok: true, aplicado: false, motivo: "codigo_desconhecido" }),
+    nx_codewords_contar: () => null,
+    nx_notificar: () => 1,
+    nx_alerta_destinos: () => ({ destinos: ["5512999998888"] }),
     nx_codewords_situacao: ({ p_dados }) => ({ id: K_A, status: p_dados.conectado && p_dados.numero_conferido ? "ativo" : "pendente", codewords: p_dados }),
     nx_codewords_sync_alvos: () => [{ canal_id: K_A, cliente_id: CLI_A, conversa_id: 601, telefone: TEL }],
     nx_codewords_sync_gravar: ({ p_itens }) => ({ ja_tinha: 0, adotadas: 0, entradas: p_itens.filter(i => !i.de_mim).length,
@@ -159,9 +167,26 @@ function cenario({ rpc = {}, cw = {}, credB = false } = {}) {
         return resp({ code: "XX000", message: `boom ${CHAVE} ?ch=${SEG_A}` }, 500);
       }
     }
-    if (u.origin === SUPA && u.pathname === "/rest/v1/nx_config") return resp([{ id: 1, cron_token: "cron-secreto" }]);
+    if (u.origin === SUPA && u.pathname === "/rest/v1/nx_config") {
+      return resp([{ id: 1, cron_token: "cron-secreto", wa_access_token: "wa-token-nexus", wa_phone_number_id: "900900", wa_template: "nexus_aviso", painel_url: null }]);
+    }
     if (u.origin === SUPA && u.pathname === "/rest/v1/nx_clientes") return resp([{ nome: "Clínica Alfa", cfg: { ia: { assistente_nome: "Sofia" } } }]);
     if (u.origin === SUPA && u.pathname === "/rest/v1/nx_metricas_dia") return resp([{ campanha_ext: "CAMP-7" }]);
+    // consultas diretas do nx-codewords: saídas depois da mensagem repetida (reentrega) e estado do canal (vigia)
+    if (u.origin === SUPA && u.pathname === "/rest/v1/nx_mensagens") { chamadas.push({ nome: "SELECT nx_mensagens", corpo: Object.fromEntries(u.searchParams) }); return resp(mensagens); }
+    if (u.origin === SUPA && u.pathname === "/rest/v1/nx_canais") {
+      const q = Object.fromEntries(u.searchParams);
+      chamadas.push({ nome: `${req.method} nx_canais`, corpo: req.method === "PATCH" ? JSON.parse(await req.text()) : q });
+      if (semAvisoEm && /codewords_aviso_em/.test(req.method === "PATCH" ? JSON.stringify(chamadas.at(-1).corpo) : String(q.select))) {
+        return resp({ code: "42703", message: "Could not find the 'codewords_aviso_em' column of 'nx_canais' in the schema cache" }, 400);
+      }
+      return req.method === "PATCH" ? new Response(null, { status: 204 }) : resp(canais);
+    }
+    if (u.host === "graph.facebook.com" && u.pathname.endsWith("/messages")) {
+      const corpo = JSON.parse(await req.text());
+      cwChamadas.push({ metodo: "WHATSAPP-NEXUS", para: corpo.to, texto: corpo.text?.body ?? null, tipo: corpo.type });
+      return resp({ messaging_product: "whatsapp", messages: [{ id: `wamid.${cwChamadas.length}` }] });
+    }
     if (u.host === "runtime.codewords.ai") {
       const caminho = u.pathname.replace("/run/whatsapp_device_manager", "");
       const tipo = req.headers.get("content-type");
@@ -479,15 +504,17 @@ test("agente mensagem: resposta curta quando NÃO responde (pausada, limite, IA 
   assert.deepEqual(r.corpo, { ok: true, conversa_id: 601, registrada: false, responder: false, motivo: "duplicada" });
   assert.equal(s.rpcsDe("nx_codewords_decidir").length, 0); assert.equal(s.rpcsDe("nx_lead_webhook").length, 1, "a repetição ainda tenta reparar o lead");
   s = cenario({ rpc: { nx_wa_entrada: () => ({ mensagem_id: 9, conversa_id: 605, bloqueado: true }) } });
-  r = await ler(await agente(s, { telefone: TEL, texto: "oi" }));
+  r = await ler(await agente(s, { telefone: TEL, texto: "oi", message_id: "M2" }));
   assert.equal(r.corpo.motivo, "bloqueado"); assert.equal(s.rpcsDe("nx_lead_webhook").length, 0, "bloqueado não vira lead");
   s = cenario({ rpc: { nx_wa_entrada: () => ({ mensagem_id: 9, conversa_id: 601, optout: true }) } });
-  r = await ler(await agente(s, { telefone: TEL, texto: "SAIR" }));
+  r = await ler(await agente(s, { telefone: TEL, texto: "SAIR", message_id: "M3" }));
   assert.equal(r.corpo.motivo, "optout"); assert.equal(r.corpo.responder, false);
   s = cenario();
   r = await ler(await agente(s, { phone: "120363040000000000@g.us", text: "promo" }));
   assert.deepEqual(r.corpo, { ok: true, conversa_id: null, registrada: false, responder: false, motivo: "grupo" });
-  assert.equal(s.chamadas.filter(c => c.nome !== "nx_codewords_canal").length, 0, "grupo não grava nada");
+  // grupo não grava nada (só o contador por canal, que não é dado da conversa)
+  assert.deepEqual(s.chamadas.filter(c => c.nome !== "nx_codewords_canal").map(c => c.nome), ["nx_codewords_contar"]);
+  assert.deepEqual(s.rpcsDe("nx_codewords_contar")[0].corpo, { p_canal: K_A, p_chave: "grupo" });
 });
 
 test("agente mensagem: entrada direta (payload cru do aparelho, sem acao) e mídia sem texto", async () => {
@@ -497,8 +524,9 @@ test("agente mensagem: entrada direta (payload cru do aparelho, sem acao) e míd
   assert.equal(r.corpo.responder, true);
   const m = s.rpcsDe("nx_wa_entrada")[0].corpo.p_msg;
   assert.equal(m.wamid, `cw:${K_A}:3EB0IMG`); assert.equal(m.tipo, "imagem"); assert.equal(m.corpo, null); assert.deepEqual(m.midia, { nome: "carro.jpg" });
+  // sem message_id mas com timestamp: o id estável continua valendo (e inclui o horário)
   const s2 = cenario();
-  await agente(s2, { phone: TEL, message: "", media_type: "hologram" });
+  await agente(s2, { phone: TEL, message: "", media_type: "hologram", timestamp: 1790000000 });
   const m2 = s2.rpcsDe("nx_wa_entrada")[0].corpo.p_msg;
   assert.equal(m2.tipo, "texto"); assert.equal(m2.corpo, "📦 hologram"); assert.match(m2.wamid, new RegExp(`^cw:${K_A}:orbita-h-[0-9a-f]{32}$`));
 });
@@ -705,12 +733,12 @@ test("agente agenda: sem as funções da próxima etapa → agenda_indisponivel;
 
 test("agente: falha técnica do banco → 500 falha_temporaria sem chave, segredo ou corpo na resposta", async () => {
   const s = cenario({ rpc: { nx_wa_entrada: () => { throw new Error("pane"); } } });
-  const r = await agente(s, { telefone: TEL, texto: "oi" });
+  const r = await agente(s, { telefone: TEL, texto: "oi", message_id: "F1" });
   const txt = await r.text();
   assert.equal(r.status, 500); assert.deepEqual(JSON.parse(txt), { ok: false, erro: "falha_temporaria" });
   assert.ok(!txt.includes(CHAVE) && !txt.includes(SEG_A));
   const s2 = cenario({ rpc: { nx_codewords_saida: () => { throw Object.assign(new Error("dados_invalidos"), { pg: true }); } } });
-  assert.equal((await agente(s2, { acao: "mensagem", direcao: "saida", telefone: TEL, texto: "x" })).status, 400);
+  assert.equal((await agente(s2, { acao: "mensagem", direcao: "saida", telefone: TEL, texto: "x", message_id: "F2" })).status, 400);
 });
 
 /* ============================================================
@@ -1132,10 +1160,9 @@ test("sincronização: conversa com telefone @lid/impossível é PULADA (sem con
    ============================================================ */
 test("contrato: as internas chamadas existem na migração com os MESMOS parâmetros; grants e segredos", () => {
   const sql = readFileSync(join(RAIZ, "supabase/migrations/20260929a_codewords.sql"), "utf8");
-  const f = readFileSync(join(RAIZ, "supabase/migrations/20260928f_funcoes.sql"), "utf8");
-  const todas = sql + f + readFileSync(join(RAIZ, "supabase/migrations/20260927_melhorias.sql"), "utf8")
-    + readFileSync(join(RAIZ, "supabase/migrations/20260928a_saas_base.sql"), "utf8")
-    + readFileSync(join(RAIZ, "supabase/migrations/20260929b_agenda_rastreio.sql"), "utf8");
+  // TODAS as migrações, em ordem: vale a última definição de cada interna (as do plano 100 vêm na 20261008b da S-B)
+  const dir = join(RAIZ, "supabase/migrations");
+  const todas = readdirSync(dir).filter(n => n.endsWith(".sql")).sort().map(n => readFileSync(join(dir, n), "utf8")).join("\n");
   for (const [nome, args] of Object.entries(ASSINATURAS)) {
     const m = [...todas.matchAll(new RegExp(`create or replace function public\\.${nome}\\(([\\s\\S]*?)\\)\\s*returns`, "g"))].at(-1);
     assert.ok(m, `${nome} existe`);
@@ -1495,8 +1522,9 @@ test("prompt v2: o fluxo faz SÓ conversa (com a origem que o cliente contar), a
   for (const t of ["Nada de preço inventado", "Nunca peça CPF, cartão, senha nem dados de saúde", "Nunca repita o envio sozinho", "responder:false, NÃO responda", "SECRETA"]) {
     assert.ok(rec.includes(t), t);
   }
-  // mais curto que a versão 1 (11.667 caracteres com a mesma URL-marcador)
-  assert.ok(montarReceita({ url: "{{URL_DO_ORBITA}}" }).length < 11_667, "o prompt da v2 é menor que o da v1");
+  // continua curto: a v1 tinha 11.667 caracteres com a mesma URL-marcador; a v2 de 01/10 ficou em ~11.640 e em 08/10 ganhou só
+  // o message_id obrigatório, o timestamp nos exemplos e a orientação do 413 (plano 100, S-F10) — nada de ferramenta nova
+  assert.ok(montarReceita({ url: "{{URL_DO_ORBITA}}" }).length < 12_300, "o prompt da v2 não cresce além do necessário");
 });
 
 test("instruções da IA (contexto.instrucoes): divisão de trabalho — a IA registra só a origem que o cliente contar; etapa, nota e resumo são do Órbita (se ligado)", () => {

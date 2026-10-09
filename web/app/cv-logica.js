@@ -468,7 +468,8 @@ export function preencherModelo(corpo, params = []) {
     return v !== undefined && v !== null && String(v).trim() !== "" ? String(v) : `{{${n}}}`;
   });
 }
-/** Modelo pode ser usado agora? (aprovado; marketing bloqueado para quem pediu para sair). */
+/** Modelo pode ser usado agora? (aprovado; marketing bloqueado SÓ para quem pediu para sair — decisão 3 do plano 100: opt-in
+    desconhecido (null) passa, é a regra do nx-enviar). */
 export function modeloDisponivel(t, { optin = null } = {}) {
   if (!t) return { ok: false, motivo: "Modelo inexistente." };
   if (String(t.status || "").toUpperCase() !== "APPROVED") return { ok: false, motivo: "Ainda não aprovado pela Meta." };
@@ -614,7 +615,7 @@ export function partesDestaque(texto, termo) {
  * estadoCabecalho({conv, eu, pode, codeWords, ia}) → {primaria, estilo, resolverIcone, resolverNoMenu, devolverIA}
  *  - sem permissão para escrever → nada;
  *  - resolvida → "reabrir" (secundário);
- *  - IA atendendo (CodeWords, IA ligada e viva) → "assumir_ia" (primário) e o resto no ⋮;
+ *  - IA atendendo (CodeWords, IA ligada e viva) → "assumir_ia" (primário), Resolver em ícone (plano 100 · D12) e o resto no ⋮;
  *  - minha → "resolver" em contorno de `--c-ok` (sem primário);
  *  - sem dono ou com colega → "assumir" (primário) e Resolver vira ícone neutro.
  * Nunca há mais de um primário; "devolverIA" liga a entrada no ⋮ quando a IA está pausada.
@@ -626,7 +627,8 @@ export function estadoCabecalho({ conv, eu = null, pode: podeEscrever = true, co
   const iaViva = !!(codeWords && ia && ia.disponivel !== false && ia.ia_ligada);
   const minha = !!(eu && conv.atribuida_a && conv.atribuida_a === eu);
   const devolverIA = iaViva && !!ia.pausada;
-  if (iaViva && !ia.pausada) return { ...base, primaria: "assumir_ia", estilo: "prim", resolverNoMenu: true };
+  // plano 100 · D12: com a IA atendendo, o Resolver continua à vista como ícone (e também no ⋮)
+  if (iaViva && !ia.pausada) return { ...base, primaria: "assumir_ia", estilo: "prim", resolverIcone: true, resolverNoMenu: true };
   if (minha) return { ...base, primaria: "resolver", estilo: "contorno", devolverIA };
   return { ...base, primaria: "assumir", estilo: "prim", resolverIcone: true, devolverIA };
 }
@@ -1237,4 +1239,160 @@ export function atalhoDe(id) { const a = ACORDES.find(x => x.id === id); return 
 /** "Alt+Shift+A" → "Alt+Shift+A" (aria-keyshortcuts usa os nomes das teclas: ↓/↑ viram ArrowDown/ArrowUp). */
 export function ariaKeyshortcuts(teclas) {
   return String(teclas || "").split("+").map(t => ({ "↓": "ArrowDown", "↑": "ArrowUp", Esc: "Escape" }[t] || t)).join("+");
+}
+
+/* ============================================================ Plano 100 (08/10/2026) — frente D · Conversas
+   Regras puras da rodada: RPC nova por detecção, páginas da lista no pulso, teto do texto com assinatura, telefone da «Nova
+   conversa», fila entre abas, rastreio na lateral, «Enviar agora» com motivo e a pílula do modelo de marketing. */
+
+/** O servidor ainda não conhece a função COM estes parâmetros (PostgREST 404 · PGRST202): a migração nova não está no ar. */
+export function rpcAusente(e) {
+  if (!e) return false;
+  const c = String(e.codigo || e.code || e.message || "");
+  const r = e.resposta && typeof e.resposta === "object" ? e.resposta : null;
+  return Number(e.status) === 404 || /PGRST202|could not find the function|function .* does not exist/i.test(c)
+    || String((r && r.code) || "").toUpperCase() === "PGRST202";
+}
+
+/* ---------- D6. lista: o pulso relê a 1ª página e as páginas seguintes já carregadas ficam ---------- */
+/** A ordem do nx_cv_listar: Aguardando sem busca = quem espera há mais tempo primeiro (nulos no fim); senão a mais recente primeiro
+    (no Postgres, «desc» põe os nulos na frente) e, no empate, o id maior. */
+export function compararLista(a, b, { aguardando = false } = {}) {
+  if (aguardando) {
+    const ta = ms(a && a.ultima_entrada_em), tb = ms(b && b.ultima_entrada_em);
+    const fa = Number.isFinite(ta), fb = Number.isFinite(tb);
+    if (fa !== fb) return fa ? -1 : 1;
+    if (fa && ta !== tb) return ta - tb;
+  }
+  const ma = ms(a && a.ultima_msg_em), mb = ms(b && b.ultima_msg_em);
+  const va = Number.isFinite(ma) ? ma : Infinity, vb = Number.isFinite(mb) ? mb : Infinity;
+  if (va !== vb) return vb > va ? 1 : -1;
+  return (Number(b && b.id) || 0) - (Number(a && a.id) || 0);
+}
+/** Página nova (1ª) + o que já estava carregado DEPOIS dela: «Carregar mais» não é desfeito pelo pulso. Sem `temMais` a 1ª página é a
+    lista inteira (o resto sumiu de verdade). Devolve {itens, preservadas}. */
+export function mesclarPaginaLista(antigos, frescos, { temMais = false, aguardando = false } = {}) {
+  const novos = (frescos || []).filter(Boolean);
+  if (!temMais || !novos.length) return { itens: novos, preservadas: 0 };
+  const ids = new Set(novos.map(c => c.id));
+  const ultima = novos[novos.length - 1];
+  const resto = (antigos || []).filter(c => c && !ids.has(c.id) && compararLista(c, ultima, { aguardando }) > 0);
+  return { itens: [...novos, ...resto], preservadas: resto.length };
+}
+
+/* ---------- D14. texto com assinatura: o teto efetivo é o do nx-enviar ---------- */
+export const LIMITE_TEXTO = 4096;
+/** Quanto texto cabe: 4096 menos a assinatura «*Nome:*\n» que o servidor põe na frente quando a empresa liga (cfg.assinatura) — a
+    MESMA conta do nx-enviar (1ª palavra do nome de quem envia). */
+export function tetoTexto({ assinatura = false, nome = "" } = {}) {
+  const p = String(nome ?? "").trim().split(/\s+/)[0] || "";
+  return assinatura && p ? LIMITE_TEXTO - `*${p}:*\n`.length : LIMITE_TEXTO;
+}
+/** Emoji e alguns símbolos contam 2 no limite do WhatsApp (unidades UTF-16): quantos o texto tem. */
+export function contarDuplos(texto) { return (String(texto ?? "").match(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g) || []).length; }
+/** «86 caracteres restantes» (+ «· emoji conta 2» quando há emoji no texto). */
+export function textoContador(restantes, duplos = 0) {
+  const r = Math.max(0, Number(restantes) || 0);
+  return `${r} caractere${r === 1 ? "" : "s"} restante${r === 1 ? "" : "s"}${duplos > 0 ? " · emoji conta 2" : ""}`;
+}
+
+/* ---------- D13. telefone digitado em «Nova conversa» ---------- */
+const DDD_VALIDO = /^(1[1-9]|2[124789]|3[1-578]|4[1-9]|5[13-5]|6[1-9]|7[13-579]|8[1-9]|9[1-9])$/;   // nx_ddd_valido (20261008a)
+/** Máscara: número do Brasil vira «(12) 99999-9999» enquanto a pessoa digita; com «+» ou «00» (outro país), com zero na frente e com
+    mais de 11 dígitos (já com o 55) fica como foi digitado — a máscara nunca muda o número. */
+export function mascaraTelefone(txt) {
+  const s = String(txt ?? "");
+  if (/^\s*(\+|00)/.test(s)) return s;
+  const d = soDigitos(s);
+  if (!d || d.length > 11 || d[0] === "0") return s;
+  if (d.length <= 2) return `(${d}`;
+  const local = d.slice(2);
+  const corte = d.length === 11 ? 5 : 4;
+  return local.length <= corte ? `(${d.slice(0, 2)}) ${local}` : `(${d.slice(0, 2)}) ${local.slice(0, corte)}-${local.slice(corte)}`;
+}
+/** Erro do telefone (texto para o campo) ou "" quando vale — a regra do nx_tel_normalizar (20261008a): «+»/«00» = 8–15 dígitos como
+    está; sem «+», zero de tronco sai e 10–11 dígitos só valem com DDD do Brasil (11 dígitos: o 3º é o 9 do celular); 12–15 como está. */
+export function erroTelefone(txt) {
+  const s = String(txt ?? "").trim();
+  if (!s) return "Digite o telefone com DDD.";
+  if (/^(\+|00)/.test(s)) {
+    const d = soDigitos(s.replace(/^(\+|00)/, ""));
+    return d.length >= 8 && d.length <= 15 ? "" : "Número de outro país: código do país e o número, de 8 a 15 dígitos (ex.: +1 415 555 1234).";
+  }
+  let d = soDigitos(s);
+  if (d[0] === "0" && (d.length === 11 || d.length === 12) && d[1] !== "0") d = d.slice(1);
+  if (d.length < 10) return `Faltam números: o DDD e o telefone têm 10 ou 11 dígitos (você digitou ${d.length}).`;
+  if (d.length <= 11) {
+    if (!DDD_VALIDO.test(d.slice(0, 2))) return `DDD ${d.slice(0, 2)} não existe no Brasil. Número de outro país: comece com + e o código do país.`;
+    if (d.length === 11 && d[2] !== "9") return "Celular com 11 dígitos começa com 9 depois do DDD. Confira o número.";
+    if (d.length === 10 && d[2] < "2") return "Telefone fixo começa com 2 a 9 depois do DDD. Confira o número.";
+    return "";
+  }
+  return d.length <= 15 ? "" : "Número longo demais: no máximo 15 dígitos com o código do país.";
+}
+
+/* ---------- D19. fila de saída entre abas ---------- */
+/** Antes de transmitir, o que está GUARDADO no IndexedDB manda (outra aba pode ter mandado ou concluído o mesmo item):
+    "sumiu" (outra aba concluiu ou cancelou: só tira a bolha), "outra_aba" (outra aba pediu há menos de 90 s, ou o item já espera a
+    pessoa lá) ou "ok". */
+export function filaConferirGuardado(guardado, local, agora = Date.now()) {
+  if (!guardado) return "sumiu";
+  const em = Number(guardado.enviada_em) || 0;
+  if (em && em !== (Number(local && local.enviada_em) || 0) && agora - em < FILA_ESPERA_REENVIO_MS) return "outra_aba";
+  const esperaPessoa = x => !!x && (x.estado === "falhou" || x.estado === "ambigua");
+  if (esperaPessoa(guardado) && !esperaPessoa(local)) return "outra_aba";
+  return "ok";
+}
+
+/* ---------- D10. «Enviar agora» com motivo ---------- */
+/** Por que «Enviar agora» está desligado (texto) ou "" quando pode: sem internet, ou dentro dos 90 s do último pedido do item. */
+export function motivoEnviarAgora({ offline = false, espera = 0, agora = Date.now() } = {}) {
+  if (offline) return "Sem internet agora: sai sozinha quando a conexão voltar.";
+  if (Number(espera) > 0) return `A última tentativa ainda pode estar a caminho: pode sair às ${horaMsg(agora + Number(espera))}.`;
+  return "";
+}
+
+/* ---------- D17. de onde a pessoa veio (lateral) ---------- */
+function paginaCurta(p) {
+  const s = String(p ?? "").trim().replace(/^https?:\/\/[^/?#]+/i, "").split(/[?#]/)[0] || "/";
+  return s.length > 40 ? `${s.slice(0, 39)}…` : s;
+}
+/** O que o negócio sabe de onde a pessoa veio (nx_negocio_ver: origem, campanha_nome, rastreio{utm_*, pagina, clique_em}):
+    {titulo, detalhe} ou null sem rastreio. «Veio do site» · «campanha «x» · página /y · clique em 08/10 14:02». */
+export function linhaRastreio(n) {
+  if (!n || typeof n !== "object") return null;
+  const r = n.rastreio && typeof n.rastreio === "object" ? n.rastreio : null;
+  if (!r && n.origem !== "site") return null;
+  const partes = [];
+  const camp = n.campanha_nome || (r && r.utm_campaign) || null;
+  if (camp) partes.push(`campanha «${camp}»`);
+  if (r && r.pagina) partes.push(`página ${paginaCurta(r.pagina)}`);
+  const em = r ? ms(r.clique_em) : NaN;
+  if (Number.isFinite(em)) partes.push(`clique em ${_fmtCurta.format(new Date(em))} ${_fmtHora.format(new Date(em))}`);
+  const titulo = n.origem === "anuncio" ? "Veio do anúncio" : n.origem === "organico" ? "Veio de um post (orgânico)" : "Veio do site";
+  return { titulo, detalhe: partes.join(" · ") };
+}
+
+/** D11: o negócio que o atalho «Agenda» da lateral leva para marcar consulta: o ligado à conversa; sem ele, o único aberto do contato. */
+export function negocioParaAgenda(ver) {
+  const negs = ((ver && ver.negocios) || []).filter(n => n && (!n.status || n.status === "aberto"));
+  const ligado = ver && ver.conversa && ver.conversa.negocio && ver.conversa.negocio.id;
+  return (ligado && negs.find(n => n.id === ligado)) || (negs.length === 1 ? negs[0] : null);
+}
+
+/** D16: dica da pílula «Marketing» dos modelos (decisão 3): só não vai para quem pediu para sair. */
+export function dicaModeloMarketing(optin) {
+  return optin === false ? "O contato pediu para não receber marketing: este modelo não vai para ele."
+    : "Marketing: vai para todos os contatos, menos para quem pediu para sair.";
+}
+
+/** D2: uuid v4 da INTENÇÃO de uma escrita (p_req do nx_cv_nota): o mesmo valor em toda repetição dela. */
+export function novoUuid() {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  const b = new Uint8Array(16);
+  if (c && typeof c.getRandomValues === "function") c.getRandomValues(b); else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const x = [...b].map(v => v.toString(16).padStart(2, "0")).join("");
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
 }

@@ -88,13 +88,23 @@ export function numerosPeriodo(M, { dias = 30, plat = "" } = {}) {
   const fee = plat ? 0 : (M.CFG.fee || 0) * dias / 30;
   const custoTotal = t.gasto + fee;
   const retorno = plat ? roas : (custoTotal ? c.receita / custoTotal : null);
-  return { de, ate, deA, ateA, f, t, ta, c, ca, roas, fee, custoTotal, retorno, dias, plat };
+  // plano 100 (F1, decisão 5): fee padrão 0 — «gestão» só entra na conta e no rótulo quando o cliente tem fee configurado
+  const gestao = fee > 0, estimada = (+c.receitaEstimada || 0) > 0;
+  return { de, ate, deA, ateA, f, t, ta, c, ca, roas, fee, custoTotal, retorno, dias, plat, gestao, estimada };
+}
+
+/** Rótulos do herói (F1): com fee configurado, «Retorno total» = receita ÷ (anúncios + gestão) e a nota «inclui R$ X de gestão»
+    (para todos: o cliente vê de onde vem a diferença); sem fee, «Retorno sobre anúncios» = receita ÷ investimento em anúncios. */
+export function rotulosRetorno(P, brl0 = v => String(Math.round(v))) {
+  if (P && P.plat) return { olho: `Retorno sobre ${nomePlat(P.plat)}`, nota: "receita ÷ investimento em anúncios", gestao: null, frase: "em anúncio" };
+  if (P && P.gestao) return { olho: "Retorno total", nota: "receita ÷ (anúncios + gestão)", gestao: `inclui ${brl0(P.fee)} de gestão no período`, frase: "investido" };
+  return { olho: "Retorno sobre anúncios", nota: "receita ÷ investimento em anúncios", gestao: null, frase: "em anúncio" };
 }
 
 /** Campanhas com investimento no período (cópia do linhasCamp do painel) + totais do rodapé. */
 export function linhasCampanhas(M, { dias = 30, plat = "" } = {}) {
   const { de, ate } = janela(M, dias);
-  const linhas = Object.values(M.CAMP).filter(c => c.plat && (!plat || c.plat === plat)).map(c => {
+  const linhas = Object.values(M.CAMP).filter(c => c.plat && !c.semCampanha && (!plat || c.plat === plat)).map(c => {
     const t = M.consolidar(M.linhasDe(de, ate, { camp: c.id }));
     if (!t.gasto) return null;
     const k = M.crmTot(de, ate, { camp: c.id });
@@ -111,7 +121,59 @@ export function linhasCampanhas(M, { dias = 30, plat = "" } = {}) {
   // entra no herói da Visão geral (crmTot da plataforma inteira) e fica fora do «Total» — esta sobra explica a diferença
   const todos = M.crmTot(de, ate, { plat });
   const outras = { ag: Math.max(0, (todos.agendadas || 0) - K.ag), fe: Math.max(0, (todos.fecharam || 0) - K.fe), rec: Math.max(0, (todos.receita || 0) - K.rec) };
-  return { linhas, total: { t: T, ag: K.ag, fe: K.fe, rec: K.rec, roas: T.gasto ? K.rec / T.gasto : null }, outras };
+  // F2: a sobra se divide em «Anúncio sem campanha identificada» (o balde do núcleo) e campanhas sem investimento na janela
+  const sem = semCampanhaTot(M, de, ate, { plat });
+  const pausadas = { ag: Math.max(0, outras.ag - sem.agendadas), fe: Math.max(0, outras.fe - sem.fecharam), rec: Math.max(0, outras.rec - sem.receita) };
+  return { linhas, total: { t: T, ag: K.ag, fe: K.fe, rec: K.rec, roas: T.gasto ? K.rec / T.gasto : null }, outras, semCampanha: sem, pausadas };
+}
+
+/** F4: conversões por plataforma com o rótulo certo — o Meta conta conversas no WhatsApp; o Google conta conversões (às vezes 1,5). */
+export function textoConvPlat(plat, t, { int = v => String(Math.round(v)), dec = (v, c) => v.toFixed(c), brl = v => String(v) } = {}) {
+  const n = +(t && t.conversoes) || 0, cpa = t && t.cpa;
+  if (plat === "google") {
+    const q = Number.isInteger(n) ? int(n) : dec(n, 1);
+    return `${q} ${n === 1 ? "conversão" : "conversões"} (Google) · custo por conversão ${fin(cpa) ? brl(cpa) : "—"}`;
+  }
+  return `${int(n)} ${Math.round(n) === 1 ? "conversa" : "conversas"} no WhatsApp · custo por conversa ${fin(cpa) ? brl(cpa) : "—"}`;
+}
+
+/**
+ * Os 4 KPIs da Visão geral do Anúncios (desenhados com ui.kpi). F1: «+ R$ X de gestão» para todos quando há fee configurado; a receita
+ * estimada pelo ticket configurado sai com `estimativa: true` e a ajuda separa o estimado do informado; fechamento sem valor é dito, não somado.
+ * `f` é o formato do ui.kpi ("moeda" | "moeda2" | "conv" = inteiro ou 1 casa); `serie` é o campo de serieTendencia que vira a sparkline.
+ */
+export function kpisAnuncios(P, { meta = 0, dif = null, temGoogle = false, gestor = false, brl0 = v => String(v), brl = v => String(v), dec = (v, c) => v.toFixed(c), pc = v => `${v}%`, int = v => String(v) } = {}) {
+  const { t, ta, c, ca } = P;
+  const est = (+c.receitaEstimada || 0) > 0;
+  const semValor = +c.semValor || 0;
+  return [
+    { id: "gasto", l: "Investido em anúncios", v: t.gasto, a: ta.gasto, f: "moeda", s: "neutro", serie: "gasto",
+      extra: P.gestao ? `+ ${brl0(P.fee)} de gestão no período` : "", ajuda: "Soma do que o Meta e o Google cobraram no período (dias fechados até ontem)." },
+    { id: "cpa", l: temGoogle ? "Custo por conversão da plataforma" : "Custo por conversa (Meta)", v: t.cpa, a: ta.cpa, f: "moeda2", s: "baixo", medidor: true,
+      extra: !fin(t.cpa) ? `meta ${brl(meta)}` : `meta ${brl(meta)} · ${pc(dif, 0)} ${t.cpa <= meta ? "abaixo" : "acima"}`,
+      ajuda: "Investimento ÷ conversões contadas pela própria plataforma." },
+    { id: "conv", l: "Conversões registradas pela plataforma", v: t.conversoes, a: ta.conversoes, f: "conv", s: "cima", serie: "convAds",
+      extra: temGoogle ? "o Google conta conversões (pode ter fração); o Meta, conversas no WhatsApp" : "conversas no WhatsApp contadas pelo Meta",
+      ajuda: "Meta/Google; é o denominador do custo por conversão." },
+    { id: "receita", l: "Receita fechada", v: c.receita, a: ca.receita, f: "moeda", s: "cima", serie: "receita", estimativa: est,
+      ajuda: est ? `${brl0(c.receitaEstimada)} estimados pelo valor de cada serviço configurado em Ajustes de anúncios; ${brl0(c.receitaReal)} informados nos negócios.`
+        : "Valor informado nos negócios ganhos do CRM.",
+      extra: semValor ? `${semValor === 1 ? "1 fechamento" : `${int(semValor)} fechamentos`} sem valor informado`
+        : gestor && fin(P.roas) ? `${dec(P.roas, 1)}x o investido em anúncios`
+        : est ? "inclui estimativa pelo valor de cada serviço" : "valor informado nos negócios ganhos do CRM" },
+  ];
+}
+
+/** F2: o que o CRM atribuiu a anúncio sem campanha/anúncio reconhecido (métrica ainda não sincronizada, importação sem ids,
+    utm sem casamento) — soma dos baldes `<plat>:nao_identificada` do núcleo. Entra no funil e no herói; nunca no ranking. */
+export function semCampanhaTot(M, de, ate, { plat = "" } = {}) {
+  const z = { conversas: 0, agendadas: 0, compareceram: 0, fecharam: 0, receita: 0, ids: [] };
+  for (const c of Object.values((M && M.CAMP) || {})) {
+    if (!c.semCampanha || (plat && c.plat !== plat)) continue;
+    const k = M.crmTot(de, ate, { camp: c.id });
+    z.conversas += k.conversas; z.agendadas += k.agendadas; z.compareceram += k.compareceram; z.fecharam += k.fecharam; z.receita += k.receita; z.ids.push(c.id);
+  }
+  return z;
 }
 export const VAL_CAMP = {
   nome: r => r.c.nome, plat: r => r.c.plat, gasto: r => r.t.gasto, conv: r => r.t.conversoes, cpa: r => r.t.cpa, ctr: r => r.t.ctr,
@@ -227,7 +289,8 @@ export function canalDe(a) {
   const s = `${(a && a.chave) || ""} ${(a && a.mensagem) || ""}`.toLowerCase();
   return /\|meta\b|\bmeta\b/.test(s) ? "meta" : /\|google\b|\bgoogle\b/.test(s) ? "google" : null;
 }
-export const nomePlat = p => (p === "meta" ? "Meta" : p === "google" ? "Google" : "Sem anúncio");
+// plataforma desconhecida mas presente (lead marcado como anúncio sem dizer de onde) ainda é anúncio — igual ao nucleo.nomePlat
+export const nomePlat = p => (p === "meta" ? "Meta" : p === "google" ? "Google" : p ? "Anúncio" : "Sem anúncio");
 export function nomeRegraSrv(a, regras = []) {
   if (a.regra === "integracao") { const c = canalDe(a); return c ? `Conexão com ${nomePlat(c)}` : "Conexão com os anúncios"; }
   const r = regras.find(x => x.id === a.regra);
@@ -235,14 +298,15 @@ export function nomeRegraSrv(a, regras = []) {
 }
 /** Estado das leituras (cópia do painel): erro · atrasado (> 2 h) · aguardando (nunca leu) · ok · nenhuma. */
 export function estadoIntegracao(integs = [], alertas = [], agora = Date.now()) {
-  const H = 36e5, ORD_E = { erro: 3, atrasado: 2, aguardando: 1, ok: 0 };
+  const H = 36e5, ORD_E = { erro: 4, atrasado: 3, parcial: 2, aguardando: 1, ok: 0 };
   const canais = (integs || []).filter(i => i && i.ativo).map(i => {
     const sync = i.ultimo_sync ? Date.parse(i.ultimo_sync) : NaN;
     const al = (alertas || []).filter(a => a && a.regra === "integracao" && canalDe(a) === i.canal && agora - Date.parse(a.criado_em) <= 24 * H)
       .sort((x, y) => String(y.criado_em).localeCompare(String(x.criado_em)))[0] || null;
     const statusErro = /^erro/i.test(i.status || "");
     const alAtivo = !!al && (statusErro || !(Number.isFinite(sync) && sync > Date.parse(al.criado_em)));
-    const estado = statusErro || alAtivo ? "erro" : !Number.isFinite(sync) ? "aguardando" : agora - sync > 2 * H ? "atrasado" : "ok";
+    // F5: «parcial» = a leitura rodou mas pode estar incompleta (teto de páginas do Meta, 0 linhas há dias) — não é «Atualizado»
+    const estado = statusErro || alAtivo ? "erro" : !Number.isFinite(sync) ? "aguardando" : agora - sync > 2 * H ? "atrasado" : /^parcial/i.test(i.status || "") ? "parcial" : "ok";
     return { canal: i.canal, estado, sync: Number.isFinite(sync) ? sync : null, status: i.status || "", alerta: alAtivo ? al : null };
   });
   const nivel = canais.reduce((n, c) => (ORD_E[c.estado] > ORD_E[n] ? c.estado : n), canais.length ? "ok" : "nenhuma");
@@ -253,6 +317,7 @@ export function estadoIntegracao(integs = [], alertas = [], agora = Date.now()) 
 export function textoPilula(e, agora = Date.now()) {
   if (e.nivel === "erro") { const n = e.erros.map(x => nomePlat(x.canal)); return `${n.join(" e ")} ${n.length > 1 ? "desconectados" : "desconectado"}`; }
   if (e.nivel === "atrasado") return "Leitura atrasada";
+  if (e.nivel === "parcial") { const n = e.canais.filter(c => c.estado === "parcial").map(c => nomePlat(c.canal)); return `Leitura parcial · ${n.join(" e ")}`; }
   if (e.nivel === "aguardando") return "Aguardando a 1ª leitura";
   if (e.nivel === "ok") return `Atualizado ${minutosAtras(e.ultimo, agora)}`;
   return "";
@@ -268,10 +333,20 @@ export function alertasPorChave(alertas = []) {
   return m;
 }
 /** Tudo que a aba Radar mostra, já decidido: conexões no topo, episódios dos últimos 14 dias, registro de avisos. */
+/** F4: a conta Google gastou na janela inteira e não registrou NENHUMA conversão — o acompanhamento de conversões não está
+    ligado; «Campanha sem conversa» (r2) ali é ruído diário, não diagnóstico. */
+export function googleSemConversao(M) {
+  if (!M || !M.LINHAS) return false;
+  let gasto = 0, conv = 0;
+  for (const l of M.LINHAS) if (l.plat === "google") { gasto += +l.gasto || 0; conv += +l.conversoes || 0; }
+  return gasto > 0 && conv === 0;
+}
+const r2Google = (M, a) => !!a && !!a.regra && a.regra.id === "r2" && !!M.CAMP[String(a.chave).slice(3)] && M.CAMP[String(a.chave).slice(3)].plat === "google";
 export function montarRadar(M, dados = {}, agora = Date.now()) {
   const vazio = semAnuncios(M);
-  const atuais = vazio ? [] : M.avaliar(M.R, true);
-  const hist = vazio ? [] : M.historico();
+  const semConvG = !vazio && googleSemConversao(M);
+  const atuais = vazio ? [] : M.avaliar(M.R, true).filter(a => !(semConvG && r2Google(M, a)));
+  const hist = vazio ? [] : M.historico().filter(e => !(semConvG && r2Google(M, e.a)));
   const srv = alertasPorChave(dados.alertas);
   const est = estadoIntegracao(dados.integracoes || [], dados.alertas || [], agora);
   const conexoes = [...srv.values()].filter(a => a.regra === "integracao")
@@ -284,10 +359,14 @@ export function montarRadar(M, dados = {}, agora = Date.now()) {
     return { chave: a.chave, regra: a.regra.id, nome: a.regra.nome, sev: a.sev, msg: a.msg, acao: a.acao, ativo, desde,
              envio: s && (s.enviado_em || s.entregue_em) ? statusEnvio(s) : null };
   });
+  // no lugar dos r2 do Google: um aviso informativo, ativo, que diz o que ligar
+  if (semConvG) episodios.unshift({ chave: "google_sem_conversao", regra: "google_sem_conversao", nome: "Google sem acompanhamento de conversões", sev: "info",
+    msg: "O Google Ads gastou no período e não registrou nenhuma conversão: o acompanhamento de conversões da conta não está ligado. Enquanto isso, «Campanha sem conversa» fica desligada para o Google.",
+    acao: "Ligue o acompanhamento de conversões (clique no WhatsApp ou formulário) na conta do Google Ads.", ativo: true, desde: "agora", envio: null });
   const SEV_OK = new Set(["critico", "alerta", "info"]);
   const registro = (dados.alertas || []).slice().sort((a, b) => String(b.criado_em).localeCompare(String(a.criado_em))).slice(0, 10)
     .map(a => ({ a, sev: SEV_OK.has(a.severidade) ? a.severidade : "alerta", nome: nomeRegraSrv(a, M ? M.REGRAS : []), quando: quandoSP(a.criado_em, new Date(agora)), envio: statusEnvio(a) }));
-  return { atuais, ativos: atuais.length + est.erros.length, conexoes, episodios, registro, estado: est };
+  return { atuais, ativos: atuais.length + est.erros.length + (semConvG ? 1 : 0), conexoes, episodios, registro, estado: est, googleSemConversao: semConvG };
 }
 
 /* ---------- relatórios enviados ---------- */
@@ -371,7 +450,7 @@ export function diaLongoIso(iso) {
 }
 /** "Anúncio · Meta" / "WhatsApp" / "Indicação"… */
 export function nomeOrigem(origem, plataforma) {
-  const O = { anuncio: "Anúncio", whatsapp: "WhatsApp", indicacao: "Indicação", organico: "Orgânico", manual: "Cadastro manual", site: "Site", importacao: "Importação" };
+  const O = { anuncio: "Anúncio", whatsapp: "WhatsApp", indicacao: "Indicação", organico: "Orgânico", manual: "Cadastro manual", site: "Site", importacao: "Importação", formulario: "Formulário do site" };
   const base = O[origem] || (origem ? String(origem) : "Sem origem");
   return plataforma ? `${base} · ${nomePlat(plataforma)}` : base;
 }
@@ -455,6 +534,11 @@ export function saudacao(agora = new Date()) {
 /** Situação de um número de WhatsApp para o bloco "Números". */
 export function estadoCanal(k, agora = Date.now()) {
   if (!k) return { nivel: "ruim", texto: "—" };
+  // plano 100: o estado ao vivo do aparelho (conectado | desconectado | desconhecido) vem antes do status de cadastro
+  if (k.estado === "desconectado") {
+    const t = k.desde ? Date.parse(k.desde) : NaN;
+    return { nivel: "ruim", texto: Number.isFinite(t) && agora >= t ? `Desconectado ${minutosAtras(t, agora)}` : "Desconectado" };
+  }
   if (k.status === "erro") return { nivel: "ruim", texto: "Com erro" };
   if (k.status === "pendente") return { nivel: "aten", texto: k.app_inscrito === false ? "App não inscrito na WABA" : "Aguardando o teste de conexão" };
   const ult = k.ultima_entrada_em ? Date.parse(k.ultima_entrada_em) : NaN;
@@ -787,7 +871,7 @@ export function serieTendencia(M, { dias = 30, plat = "" } = {}) {
 export function funilPorPlataforma(M, { dias = 30 } = {}) {
   const { de, ate } = janela(M, dias);
   const taxa = (n, d) => (d > 0 ? Math.round(n / d * 1000) / 10 : null);
-  return ["meta", "google"].map(p => {
+  return ["meta", "google", "anuncio"].map(p => {
     const t = M.consolidar(M.linhasDe(de, ate, { plat: p })), c = M.crmTot(de, ate, { plat: p });
     const etapas = [
       { id: "convAds", rotulo: "Conversões do anúncio", v: Number(t.conversoes) || 0 },
@@ -869,6 +953,7 @@ export function explicarRegra(id) {
     r3: { oQue: "Poucas pessoas clicam neste criativo em relação a quantas o veem.", porque: "A imagem ou o texto não chamam a atenção; o Meta cobra mais caro por isso.", acao: "Troque a imagem ou a primeira frase e compare com o criativo que vai melhor." },
     r4: { oQue: "As mesmas pessoas já viram este criativo muitas vezes.", porque: "Anúncio repetido cansa e passa a ser ignorado — e o custo sobe.", acao: "Publique uma variação nova e deixe esta descansar." },
     ritmo: { oQue: "No ritmo atual o mês fecha fora do orçamento combinado.", porque: "Gastar além do planejado no começo deixa o fim do mês sem verba.", acao: "Ajuste o orçamento diário das campanhas para voltar ao ritmo." },
+    google_sem_conversao: { oQue: "O Google gasta, mas a conta não conta conversões.", porque: "Sem conversão registrada não dá para saber o custo por contato nem avisar campanha ruim.", acao: "Peça a quem cuida do Google Ads para ligar o acompanhamento de conversões (clique no WhatsApp)." },
     integracao: { oQue: "O Órbita parou de conseguir ler os números desta plataforma.", porque: "Sem leitura, os relatórios e o radar ficam cegos a partir daquela hora.", acao: "Refaça a conexão em Ajustes de anúncios." },
   };
   return E[id] || { oQue: "O radar encontrou algo fora do combinado.", porque: "Vale olhar antes que vire custo.", acao: "Abra a campanha e confira os números." };
@@ -903,4 +988,93 @@ export function semaforoRadar(R, { semDados = false } = {}) {
 /** Filtro da lista do Radar: "todos" | "ativos" | "resolvidos". */
 export function filtrarRadar(itens = [], filtro = "todos") {
   return filtro === "ativos" ? itens.filter(x => x.ativo) : filtro === "resolvidos" ? itens.filter(x => !x.ativo) : itens.slice();
+}
+
+/* ============================================================ 11. PLANO 100 (frente F) — origem igual nas duas telas, calor por hora,
+   teste de conexão. Tudo PURO. */
+
+/** F2/F12: a MESMA régua de «veio de anúncio» do núcleo (datasetDeLinhas): origem «anuncio» OU plataforma conhecida — exceto o
+    orgânico, que o rastreio classifica com plataforma (link da bio do Instagram) e não é anúncio. */
+export const ehOrigemAnuncio = (origem, plataforma) => origem === "anuncio" || (!!plataforma && origem !== "organico");
+
+/** Relatórios → Vendas «por origem» (nx_rel_vendas.por_origem) com o critério do Ads: linhas de anúncio da mesma plataforma
+    juntam (WhatsApp + Meta vira «Anúncio · Meta»), as outras ficam como vieram; conversão = ganhos ÷ (ganhos + perdidos).
+    Guarda campanha_nome/campanhas quando o servidor mandar (detecção: o RPC atual não manda). */
+export function origensVendas(lista = []) {
+  const grupos = new Map();
+  for (const o of Array.isArray(lista) ? lista : []) {
+    if (!o || typeof o !== "object") continue;
+    const anuncio = ehOrigemAnuncio(o.origem, o.plataforma);
+    const origem = anuncio ? "anuncio" : (o.origem || "manual"), plataforma = anuncio || o.origem === "organico" ? (o.plataforma || null) : null;
+    const chave = `${origem}|${plataforma || ""}`;
+    const g = grupos.get(chave) || { origem, plataforma, rotulo: nomeOrigem(origem, plataforma), anuncio, criados: 0, ganhos: 0, perdidos: 0, receita: 0, campanhas: [] };
+    g.criados += +o.criados || 0; g.ganhos += +o.ganhos || 0; g.perdidos += +o.perdidos || 0; g.receita += +o.receita || 0;
+    const camps = [o.campanha_nome, ...(Array.isArray(o.campanhas) ? o.campanhas.map(c => (c && typeof c === "object" ? c.nome || c.campanha_nome : c)) : [])];
+    for (const c of camps) if (c && typeof c === "string" && !g.campanhas.includes(c)) g.campanhas.push(c);
+    grupos.set(chave, g);
+  }
+  return [...grupos.values()].map(g => ({ ...g, conversao_pct: g.ganhos + g.perdidos > 0 ? Math.round(g.ganhos / (g.ganhos + g.perdidos) * 1000) / 10 : null }))
+    .sort((a, b) => b.criados - a.criados || b.ganhos - a.ganhos);
+}
+/** Totais de anúncio × resto da lista de origensVendas (a frase «de anúncio: X criados, Y ganhos»). */
+export function totalAnuncioVendas(origens = []) {
+  return origens.reduce((t, o) => (o.anuncio ? { criados: t.criados + o.criados, ganhos: t.ganhos + o.ganhos, receita: t.receita + o.receita } : t), { criados: 0, ganhos: 0, receita: 0 });
+}
+
+/**
+ * F3: calor dia da semana × HORA das conversas de anúncio (nx_dados.leads[].hora_conversa, contrato 5) na janela do período.
+ * → {matriz[7][24], total, semHora, disponivel}. `disponivel` = o servidor manda o campo (RPC nova); sem ele a tela volta ao calor por semana.
+ */
+export function calorHora(M, { dias = 30, plat = "" } = {}) {
+  const matriz = Array.from({ length: 7 }, () => new Array(24).fill(0));
+  const { de, ate } = janela(M, dias);
+  let total = 0, semHora = 0, disponivel = false;
+  for (const Ld of (M && M.LEADS) || []) {
+    const b = Ld.bruto || {};
+    if (Object.prototype.hasOwnProperty.call(b, "hora_conversa")) disponivel = true;
+    if (!Ld.plat || (plat && Ld.plat !== plat) || Ld.i < de || Ld.i > ate) continue;
+    const hh = b.hora_conversa;
+    if (hh === null || hh === undefined || hh === "" || !Number.isInteger(+hh) || +hh < 0 || +hh > 23) { semHora++; continue; }
+    matriz[M.dataDe(Ld.i).getDay()][+hh]++;
+    total++;
+  }
+  return { matriz, total, semHora, disponivel };
+}
+
+/**
+ * F14: o cartão «Aparelho de WhatsApp» do Radar — só informativo (conversa de anúncio não chega com o aparelho caído).
+ * `caidos` = ctx.canais.caidos() ([{id, nome, desde}]); null quando o shell não sabe (cartão some).
+ * → {nivel: "ok"|"ruim", titulo, linhas:[texto]} ou null.
+ */
+export function aparelhoRadar(caidos, agora = Date.now()) {
+  if (!Array.isArray(caidos)) return null;
+  if (!caidos.length) return { nivel: "ok", titulo: "Números de WhatsApp conectados", linhas: ["Nenhum número desconectado agora: as conversas dos anúncios estão chegando."] };
+  const linhas = caidos.map(k => {
+    const t = k && k.desde ? Date.parse(k.desde) : NaN;
+    return `${(k && k.nome) || "Número"} — desconectado ${Number.isFinite(t) ? minutosAtras(t, agora) : "agora"}`;
+  });
+  return { nivel: "ruim", titulo: caidos.length === 1 ? "Um número de WhatsApp está desconectado" : `${caidos.length} números de WhatsApp desconectados`,
+    linhas: [...linhas, "Enquanto o aparelho estiver fora, quem clica no anúncio não aparece nas Conversas nem no CRM."] };
+}
+
+/**
+ * F6: resposta do «Testar conexão» (nx-ciclo {cliente, dias:1} pelo painel) → [{canal, ok, parcial, status, curto, acao, passageiro, linhas}].
+ * Aceita o formato real (`cliente.integracoes[]` com `explicacao`) e o do servidor falso (`clientes[0].sync` + `falhas[]`).
+ */
+export function resultadoTesteConexao(resp) {
+  const r = resp && typeof resp === "object" ? resp : {};
+  const cli = r.cliente && typeof r.cliente === "object" ? r.cliente : Array.isArray(r.clientes) ? r.clientes[0] || {} : {};
+  const linhasDe = st => { const m = /(\d+)\s+linhas?/.exec(String(st || "")); return m ? +m[1] : null; };
+  const um = (canal, ok, status, ex = {}) => ({ canal, ok: !!ok, parcial: /^parcial/i.test(String(status || "")), status: String(status || ""),
+    curto: ex.curto || null, acao: ex.acao || null, passageiro: !!ex.passageiro, linhas: linhasDe(status) });
+  if (Array.isArray(cli.integracoes)) return cli.integracoes.filter(Boolean).map(i => um(i.canal, i.ok, i.status, i.explicacao || {}));
+  // revisão: o teste lê a EMPRESA inteira — com outra leitura em andamento (o ciclo da hora ou o «Testar» da outra plataforma) o
+  // servidor responde {cliente:{pulado:"já em execução"}}; falha geral vem {ok:false, erro}. Sem isso a tela mandava «salvar as credenciais».
+  if (cli.pulado) return Object.assign([], { motivo: "ocupado" });
+  if ((r.ok === false && r.erro) || cli.erro) return Object.assign([], { motivo: "erro" });
+  const falhas = Array.isArray(cli.falhas) ? cli.falhas : [];
+  return Object.entries(cli.sync || {}).map(([canal, status]) => {
+    const fx = falhas.find(x => x && x.canal === canal);
+    return um(canal, !fx && !/^erro/i.test(String(status)), status, fx || {});
+  });
 }
