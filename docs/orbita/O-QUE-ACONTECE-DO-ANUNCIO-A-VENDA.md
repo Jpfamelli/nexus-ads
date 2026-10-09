@@ -1,4 +1,4 @@
-# O que acontece desde o clique no anúncio até a venda — Órbita, 08/10/2026
+# O que acontece desde o clique no anúncio até a venda — Órbita, 08–09/10/2026
 
 Escrito para o João, em linguagem de dono. A versão técnica (arquivo, função, linha) está em
 `docs/orbita/FLUXO-ANUNCIO-AO-CRM.md`. Tudo aqui foi lido no código e conferido com testes; os números da
@@ -113,9 +113,9 @@ Numa única transação, travada por empresa + telefone (duas mensagens ao mesmo
 
 | Situação | Hoje | Nesta rodada |
 |---|---|---|
-| Pessoa apaga o código ou manda áudio primeiro | Origem vira «WhatsApp» | Reconhece «Vim pelo site/anúncio» e «[site · …]» como origem site/anúncio + plataforma; sem texto nenhum continua «WhatsApp» (não há como saber) |
+| Pessoa apaga o código ou manda áudio primeiro | Origem vira «WhatsApp» | «Vim pelo site» → origem site; «Vim pelo anúncio (Instagram)» → origem **anúncio** + Meta (entra no funil de anúncios, balde «sem campanha identificada»), também em número da API da Meta; repetir a mensagem não duplica a nota; sem texto nenhum continua «WhatsApp» |
 | Anúncio «Enviar mensagem» (clique-para-WhatsApp) | Origem anúncio/Meta com id do criativo; campanha só quando o ciclo já sincronizou aquele anúncio | Campanha completada depois pelo ciclo (reconciliação diária); referral de post/página não é mais tratado como anúncio |
-| Link da bio, contato salvo, indicação | «WhatsApp» (a IA do fluxo pode perguntar e registrar) | Igual; a origem contada à IA preserva a plataforma (Instagram ≠ Google) |
+| Link da bio, contato salvo, indicação | «WhatsApp» (a IA do fluxo pode perguntar e registrar) | Link da bio com o script do site = **orgânico · Meta** (fora do funil e da receita de anúncios, mesmo com utm_campaign); a origem contada à IA preserva a plataforma |
 | Aviso do aparelho falhou e a mensagem veio pela conferência de 2 min | Mensagem e lead entram, **mas o código do site é ignorado** e ninguém sabe que ficou sem resposta | Código aplicado também nesse caminho; notificação «mensagem recuperada sem resposta» |
 | Número na API da Meta (outro cliente) | Código do site **nunca** é lido | Lido também no canal Meta |
 | Anúncio Meta sem UTM (só `fbclid`) | «site», sem plataforma | Meta orgânico/social; exemplos de UTM com macros na tela |
@@ -141,3 +141,15 @@ Numa única transação, travada por empresa + telefone (duas mensagens ao mesmo
 enviadas), 1 oportunidade aberta; aparelho «conectado» desde 01/10 17:14, sem nenhuma reconferência desde então
 (por isso o vigia); 0 códigos do site casados até hoje (os 6 cliques de rastreio existentes eram de teste local, de
 04/10, e foram apagados). Crons sem falha nas últimas 24 h. Nenhum erro nas funções.
+
+## O que mudou depois da revisão adversarial (09/10)
+- Mensagem recebida nunca mais vira contato com o **número da própria clínica** (aparelho que manda o `to` sem o 9).
+- O aparelho que reentrega a mesma mensagem quase junto **não gera duas respostas da IA**.
+- Conta Google que não registra conversões: sem alerta diário «campanha sem conversa» no WhatsApp (aviso único na tela).
+- Número de WhatsApp caído aparece em até 15 s (pulso) para todos da equipe; o aviso some ao sair e não cobre a conversa no celular.
+- Empresa pausada pela Nexus (Admin → «Cliente ativo», agora gravado e auditado): a equipe vê «conta pausada» com «Sair».
+
+## Estado da publicação (09/10, 13:30)
+Banco e telas **no ar**. As 7 funções **ainda nas versões de 02/10**: a publicação automática falhou porque o token do Supabase
+guardado no GitHub expirou. Enquanto isso, o que depende das funções novas (vigia do aparelho, código do site no webhook da Meta e na
+sincronização, resposta dupla da IA, aviso de fuso, «Testar conexão» do Ads) ainda roda do jeito de antes.
