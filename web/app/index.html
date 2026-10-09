@@ -12,33 +12,33 @@
   <title>Órbita</title>
   <meta name="description" content="Anúncio, conversa e venda na mesma órbita: CRM, central de WhatsApp oficial e retorno do anúncio.">
   <link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%23FAFAF8'/%3E%3Ccircle cx='24' cy='24' r='8.5' fill='%23B0761F'/%3E%3Cellipse cx='24' cy='24' rx='18' ry='7.5' transform='rotate(-24 24 24)' fill='none' stroke='%230B1B2B' stroke-width='2.2'/%3E%3Ccircle cx='37.3' cy='14' r='3' fill='%236FA3CF'/%3E%3C/svg%3E">
-  <link rel="preload" href="antes.js?v=20261004a" as="script" fetchpriority="high">
+  <link rel="preload" href="antes.js?v=20261009a" as="script" fetchpriority="high">
   <!-- o app.js e os módulos base baixam JUNTOS, sem esperar o app.js executar (mesmo ?v= do app.js; o shell testa a igualdade) -->
-  <link rel="modulepreload" href="app.js?v=20261004a">
-  <link rel="modulepreload" href="../dados.js?v=20261004a">
-  <link rel="modulepreload" href="api.js?v=20261004a">
-  <link rel="modulepreload" href="ui.js?v=20261004a">
-  <link rel="modulepreload" href="tema.js?v=20261004a">
-  <link rel="modulepreload" href="vocab.js?v=20261004a">
-  <link rel="modulepreload" href="rotas.js?v=20261004a">
-  <link rel="modulepreload" href="pulso.js?v=20261004a">
-  <link rel="modulepreload" href="rede.js?v=20261004a">
-  <link rel="modulepreload" href="rascunho.js?v=20261004a">
-  <link rel="modulepreload" href="cache.js?v=20261004a">
-  <link rel="modulepreload" href="comandos.js?v=20261004a">
-  <link rel="modulepreload" href="prontos.js?v=20261004a">
-  <link rel="stylesheet" href="app.css?v=20261004a">
-  <link rel="stylesheet" href="shell.css?v=20261004a">
+  <link rel="modulepreload" href="app.js?v=20261009a">
+  <link rel="modulepreload" href="../dados.js?v=20261009a">
+  <link rel="modulepreload" href="api.js?v=20261009a">
+  <link rel="modulepreload" href="ui.js?v=20261009a">
+  <link rel="modulepreload" href="tema.js?v=20261009a">
+  <link rel="modulepreload" href="vocab.js?v=20261009a">
+  <link rel="modulepreload" href="rotas.js?v=20261009a">
+  <link rel="modulepreload" href="pulso.js?v=20261009a">
+  <link rel="modulepreload" href="rede.js?v=20261009a">
+  <link rel="modulepreload" href="rascunho.js?v=20261009a">
+  <link rel="modulepreload" href="cache.js?v=20261009a">
+  <link rel="modulepreload" href="comandos.js?v=20261009a">
+  <link rel="modulepreload" href="prontos.js?v=20261009a">
+  <link rel="stylesheet" href="app.css?v=20261009a">
+  <link rel="stylesheet" href="shell.css?v=20261009a">
   <link rel="manifest" id="manifest" href="manifest.webmanifest">
   <!-- instalar no iPhone/iPad (o iOS ignora o manifesto para o ícone): valores padrão; o shell troca pelos da marca do cliente -->
-  <link rel="apple-touch-icon" id="apple-icone" href="icones/apple-touch-icon.png">
+  <link rel="apple-touch-icon" id="apple-icone" href="icones/apple-touch-icon.png?v=20261009a">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Órbita">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <!-- pinta a marca guardada antes da primeira pintura (a CSP proíbe script inline). Fica por ÚLTIMO no <head>: um script síncrono
        segura o que vem depois dele, e os preloads acima precisam sair junto com o pedido dele, não depois -->
-  <script src="antes.js?v=20261004a"></script>
+  <script src="antes.js?v=20261009a"></script>
 </head>
 <body>
   <!-- ícones (ESPEC §7.3) + marca padrão; tudo em currentColor ou tokens -->
@@ -119,6 +119,8 @@
       <symbol id="i-baixar" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M4.5 19.5h15"/></symbol>
       <symbol id="i-modelo" viewBox="0 0 24 24"><path d="M6.5 3.5h8l4 4v13h-12zM14.5 3.5v4h4M9.5 12.5h6M9.5 16h6"/></symbol>
       <symbol id="i-responder" viewBox="0 0 24 24"><path d="M9.5 7 4 12l5.5 5M4.5 12H14a6 6 0 0 1 6 6v1"/></symbol>
+      <!-- plano 100 · A8: origem orgânica (folha) -->
+      <symbol id="i-folha" viewBox="0 0 24 24"><path d="M19.5 4.5c-8 0-13.5 3.6-13.5 10.2a5.3 5.3 0 0 0 5.3 5.3c6.6 0 9.2-6.5 9.2-14.5-.3-.4-.6-.7-1-1z"/><path d="M5 20.5c2.2-4.6 5.3-8.1 10-11"/></symbol>
     </defs>
   </svg>
 
@@ -175,6 +177,6 @@
   <div class="toasts" id="toasts" popover="manual" aria-live="polite"></div>
   <div class="sr-only" id="anuncio" aria-live="polite"></div>
 
-  <script type="module" src="app.js?v=20261004a"></script>
+  <script type="module" src="app.js?v=20261009a"></script>
 </body>
 </html>

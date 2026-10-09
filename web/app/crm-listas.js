@@ -88,25 +88,46 @@ export async function montarContatos(k, el, rota) {
   // «último contato» relativo com a data completa na dica e para o leitor de tela (item 27)
   const quando = iso => iso ? h("time", { class: "ct-rel", datetime: iso, title: ui.dataHoraBR(iso), "aria-label": `Último contato em ${ui.dataHoraBR(iso)}` }, ui.relativo(iso)) : null;
 
+  const colunas = [
+    { chave: "nome", rotulo: "Nome", principal: true, render: c => h("div", { class: "cel-nome" }, ui.avatar(c.nome || c.telefone, c.id),
+      h("div", null, h("b", null, L.nomeContato(c)), h("small", null, c.cidade || (c.optin_marketing === false ? "Não quer marketing" : L.ROTULO_ORIGEM[c.origem] || "")))) },
+    { chave: "telefone", rotulo: "Telefone", render: c => c.telefone ? h("span", { class: "mono" }, ui.telBR(c.telefone)) : null },
+    { chave: "email", rotulo: "E-mail" },
+    { chave: "empresa", rotulo: "Empresa", render: c => c.empresa ? c.empresa.nome : null },
+    { chave: "etiquetas", rotulo: "Etiquetas", render: c => {
+      const e = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean);
+      return e.length ? h("div", { class: "ct-etqs" }, e.slice(0, 3).map(x => ui.etiqueta(x)), e.length > 3 ? h("span", { class: "kc-mais-etq" }, `+${e.length - 3}`) : null) : null;
+    } },
+    // C4: a origem com a pílula padrão (anúncio com a plataforma; site, orgânico, WhatsApp, manual…)
+    { chave: "origem", rotulo: "Origem", render: c => { const o = L.origemPilula(c); return o ? ui.pilula(null, o.chave, { variante: "origem", plataforma: o.plataforma, tamanho: "p" }) : (c.origem || null); } },
+    { chave: "negocios_abertos", rotulo: `${k.v.negocios} abert${k.v.art("negocio")}s`, alinhar: "dir", render: c => h("span", { class: ["ct-nneg", c.negocios_abertos > 0 && "tem"] }, String(c.negocios_abertos || 0)) },
+    { chave: "ultimo_contato_em", rotulo: "Último contato", render: c => quando(c.ultimo_contato_em) },
+  ];
   const tab = ui.tabela({
     rotulo: k.v.contatos,
-    colunas: [
-      { chave: "nome", rotulo: "Nome", principal: true, render: c => h("div", { class: "cel-nome" }, ui.avatar(c.nome || c.telefone, c.id),
-        h("div", null, h("b", null, L.nomeContato(c)), h("small", null, c.cidade || (c.optin_marketing === false ? "Não quer marketing" : L.ROTULO_ORIGEM[c.origem] || "")))) },
-      { chave: "telefone", rotulo: "Telefone", render: c => c.telefone ? h("span", { class: "mono" }, ui.telBR(c.telefone)) : null },
-      { chave: "email", rotulo: "E-mail" },
-      { chave: "empresa", rotulo: "Empresa", render: c => c.empresa ? c.empresa.nome : null },
-      { chave: "etiquetas", rotulo: "Etiquetas", render: c => {
-        const e = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean);
-        return e.length ? h("div", { class: "ct-etqs" }, e.slice(0, 3).map(x => ui.etiqueta(x)), e.length > 3 ? h("span", { class: "kc-mais-etq" }, `+${e.length - 3}`) : null) : null;
-      } },
-      { chave: "origem", rotulo: "Origem", render: c => c.plataforma ? ui.pilula(c.plataforma === "google" ? "Google" : "Anúncio", c.plataforma === "google" ? "google" : "meta") : (L.ROTULO_ORIGEM[c.origem] || c.origem) },
-      { chave: "negocios_abertos", rotulo: `${k.v.negocios} abert${k.v.art("negocio")}s`, alinhar: "dir", render: c => h("span", { class: ["ct-nneg", c.negocios_abertos > 0 && "tem"] }, String(c.negocios_abertos || 0)) },
-      { chave: "ultimo_contato_em", rotulo: "Último contato", render: c => quando(c.ultimo_contato_em) },
-    ],
+    colunas,
     aoClicar: c => ctx.navegar(`#/contatos/${c.id}`),
     vazio: "Nada encontrado com esses filtros.",
   });
+  // C9: «Nome» e «Último contato» ordenam no SERVIDOR (p_ordem — a lista é paginada; ordenar só a página na tela mentiria). Clicar de novo volta a «Recentes».
+  const ths = tab.el.querySelectorAll("thead th");
+  const cabsOrd = [];
+  ["nome", "ultimo_contato_em"].forEach(chave => {
+    const th = ths[colunas.findIndex(x => x.chave === chave)];
+    if (!th) return;
+    const rot = th.textContent;
+    const b = h("button", { type: "button", class: "th-ord ct-ord", title: chave === "nome" ? "Ordenar por nome (A–Z)" : "Ordenar pelo último contato (mais recente primeiro)" }, rot, ui.icone("ordenar"));
+    b.addEventListener("click", () => {
+      S.ordem = L.ordemAoClicar(chave, S.ordem);
+      selOrdem.value = S.ordem; S.pagina = 1; gravar(); marcarOrdem(); carregar();
+      ui.anunciar(S.ordem === "recentes" ? "Ordenado pelos cadastros mais recentes." : `Ordenado por ${chave === "nome" ? "nome, de A a Z" : "último contato, do mais recente"}.`);
+    });
+    ui.limpar(th); th.appendChild(b);
+    cabsOrd.push({ chave, th });
+  });
+  function marcarOrdem() { for (const { chave, th } of cabsOrd) th.setAttribute("aria-sort", L.ariaSortDe(chave, S.ordem)); }
+  marcarOrdem();
+  selOrdem.addEventListener("change", marcarOrdem);
   const listaM = listaCompacta(k, { aoMudar: () => carregar() });
 
   async function carregar() {
@@ -124,7 +145,7 @@ export async function montarContatos(k, el, rota) {
       ui.limpar(corpo);
       if (!r.itens.length && L.filtroVazio(S.filtro) && S.pagina === 1) {
         const fem = k.v.art("contato") === "a";
-        corpo.appendChild(ui.vazio({ titulo: `${k.v.nenhum("contato")} ainda.`, icone: "contato",
+        corpo.appendChild(ui.vazio({ titulo: `${k.v.nenhum("contato")} ainda.`, tema: "crm",
           texto: `${fem ? "Elas entram sozinhas" : "Eles entram sozinhos"} pelo WhatsApp ou pela importação de planilha.`,
           acao: k.pode("atendente") ? { rotulo: k.v.novo("contato"), fn: novoContato } : null,
           acoes: k.pode("supervisor") ? [{ rotulo: "Importar planilha", fn: () => ctx.navegar("#/contatos/importar") }] : [] }));
@@ -329,9 +350,10 @@ export function listaCompacta(k, { aoMudar }) {
     const sub = [c.telefone ? ui.telBR(c.telefone) : null, c.cidade, c.ultimo_contato_em ? ui.relativo(c.ultimo_contato_em) : null].filter(Boolean).join(" · ")
       || (c.optin_marketing === false ? "Não quer marketing" : L.ROTULO_ORIGEM[c.origem] || "");
     const etq = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean)[0];
-    const pil = c.plataforma ? ui.pilula(c.plataforma === "google" ? "Google" : "Anúncio", c.plataforma === "google" ? "google" : "meta")
-      : etq ? ui.etiqueta(etq)
-      : c.origem && c.origem !== "manual" && L.ROTULO_ORIGEM[c.origem] ? ui.pilula(L.ROTULO_ORIGEM[c.origem], "neutra") : null;
+    // C4: anúncio (com a plataforma) vence; depois a 1ª etiqueta; senão a origem — sempre a pílula padrão de origem
+    const orig = L.origemPilula(c, { manual: false });
+    const pilOrig = orig ? ui.pilula(null, orig.chave, { variante: "origem", plataforma: orig.plataforma, tamanho: "p" }) : null;
+    const pil = orig && orig.chave === "anuncio" ? pilOrig : etq ? ui.etiqueta(etq) : pilOrig;
     const A = L.acoesDoContato({ pode, conversas: comConversas, telefone: !!L.hrefTel(c.telefone) });
     const mais = h("button", { type: "button", class: "bt-icone ct-bt", "aria-label": `Mais ações para ${nome}`, title: "Mais ações" }, ui.icone("opcoes"));
     mais.addEventListener("click", () => ui.menu(mais, A.menu.map(id => ({ rotulo: ROT[id][0], icone: ROT[id][1], fn: () => executar(id, c) }))));

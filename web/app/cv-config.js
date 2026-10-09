@@ -23,6 +23,72 @@ export function atualizarHistorico(lista, { rotulo, tom, em = Date.now() } = {},
   return [{ rotulo: String(rotulo).slice(0, 60), tom: /^(ok|aten|ruim|neutra|info)$/.test(tom) ? tom : "neutra", em: Number(em) || Date.now() }, ...l].slice(0, max);
 }
 export const chaveHistorico = (clienteId, canalId) => `nx-canal-hist:${clienteId || "-"}:${canalId || "-"}`;
+
+/* ------------------------------------------------------------ plano 100 · G1: histórico do SERVIDOR, contadores e avisos do número */
+const ESTADO_CANAL = { conectado: ["Conectado", "ok"], desconectado: ["Desconectado", "ruim"], desconhecido: ["Sem confirmação", "neutra"] };
+
+/**
+ * nx_canal_historico_listar → [{id, canal_id, estado, detalhe, em}] (mais recente primeiro) no formato do bloco de histórico:
+ * [{rotulo, tom, em (ms), detalhe}]. null quando a resposta não é a lista do servidor (banco antigo): a tela usa o histórico local.
+ */
+export function historicoDoServidor(lista, max = 8) {
+  if (!Array.isArray(lista)) return null;
+  const out = [];
+  for (const x of lista) {
+    const e = x && ESTADO_CANAL[x.estado];
+    const em = x ? Date.parse(x.em) : NaN;
+    if (!e || !Number.isFinite(em)) continue;
+    out.push({ rotulo: e[0], tom: e[1], em, detalhe: x.detalhe ? String(x.detalhe).slice(0, 200) : "" });
+  }
+  out.sort((a, b) => b.em - a.em);
+  return out.slice(0, max);
+}
+
+/** Desde quando o número está na situação de agora (1ª linha do histórico do servidor com o mesmo estado), em ms; null sem dado. */
+export function desdeQuando(historico, estado) {
+  const e = ESTADO_CANAL[estado];
+  const l = Array.isArray(historico) ? historico : [];
+  if (!e || !l.length || l[0].rotulo !== e[0]) return null;
+  return l[0].em;
+}
+
+/** O que o número ignorou, com explicação (nx_canal_json → codewords.contadores {eco, grupo, lid, payload_desconhecido, http_422, http_413, desde}). */
+export const CONTADORES_CANAL = Object.freeze([
+  ["eco", "Ecos das próprias mensagens", "Cópias do que o próprio número enviou que o CodeWords devolveu. Ignoradas para não duplicar a conversa."],
+  ["grupo", "Mensagens de grupo", "Conversas em grupo do WhatsApp não entram no Órbita: só conversas individuais."],
+  ["lid", "Contatos sem número (LID)", "O WhatsApp escondeu o número do contato (identificador LID). Sem o número não dá para ligar ao contato."],
+  ["payload_desconhecido", "Formato não reconhecido", "Chegou algo num formato que o Órbita ainda não lê. Se crescer, avise a equipe da Nexus."],
+  ["http_422", "Pedidos recusados (422)", "O CodeWords mandou dados incompletos ou inválidos e a entrada foi recusada."],
+  ["http_413", "Pedidos grandes demais (413)", "Uma entrada passou do tamanho máximo aceito (anexos muito grandes)."],
+]);
+export function contadoresDoCanal(contadores) {
+  const c = contadores && typeof contadores === "object" ? contadores : {};
+  const itens = CONTADORES_CANAL.map(([chave, rotulo, explicacao]) => ({ chave, rotulo, explicacao, n: Math.max(0, Math.floor(Number(c[chave]) || 0)) })).filter(x => x.n > 0);
+  const desde = c.desde && Number.isFinite(Date.parse(c.desde)) ? c.desde : null;
+  return { itens, total: itens.reduce((s, x) => s + x.n, 0), desde };
+}
+
+/**
+ * Aviso do número da Meta sem app secret próprio (S-F10): o «Testar conexão» devolve `app_secret_global: true` — o webhook só aceita a
+ * assinatura do app da plataforma. Quem cadastrou a URL com «?c=» no app da própria empresa tem as mensagens recusadas.
+ */
+export function avisoAppSecret(canal, teste) {
+  if (!canal || canal.provedor === "codewords" || canal.tem_app_secret) return null;
+  if (!teste || teste.app_secret_global !== true) return null;
+  return "Este número não tem app secret próprio: o webhook aceita só a assinatura do app da plataforma. Se a URL com «?c=» está cadastrada no app da sua empresa na Meta, as mensagens são recusadas — preencha o app secret em «Editar dados» ou peça ao suporte para inscrever o app da plataforma.";
+}
+
+/** O teste do assistente («Sim, chegou») conta no checklist do Início NESTE aparelho (marca local honesta: o servidor não vê o teste). */
+export function marcarTesteLocal(armazenamento, clienteId, contaId) {
+  try {
+    const chave = `nx-onb:${clienteId}:${contaId || "-"}`;
+    const p = JSON.parse(armazenamento.getItem(chave) || "{}") || {};
+    p.pulados = [...new Set([...(Array.isArray(p.pulados) ? p.pulados : []), "mensagem_teste"])];
+    p.teste_local_em = Date.now();
+    armazenamento.setItem(chave, JSON.stringify(p));
+    return true;
+  } catch { return false; }
+}
 function historicoCanal(ctx, canalId) {
   const chave = chaveHistorico(ctx.cliente && ctx.cliente.id, canalId);
   const ler = () => { try { return atualizarHistorico(JSON.parse(localStorage.getItem(chave) || "[]")); } catch { return []; } };
@@ -52,15 +118,58 @@ async function montarNumeros(ctx, alvo) {
       h("span", { class: "cfg-progresso-segs", "aria-hidden": "true" }, passos.map(p => h("i", { class: p.feito ? "feito" : null, title: p.rotulo }))),
       h("span", { class: "cfg-progresso-txt" }, feitos === total ? "Tudo pronto" : `${feitos} de ${total} passos`));
   }
-  /** O histórico observado neste aparelho, recolhido num <details>. */
-  function blocoHistorico(lista) {
-    if (!lista.length) return null;
+  /** O histórico de conexão recolhido num <details>: o do SERVIDOR (G1, nx_canal_historico_listar) ou, no banco antigo, o observado neste aparelho. */
+  function blocoHistorico(lista, { servidor = false } = {}) {
+    if (!lista || !lista.length) return null;
     const iso = x => new Date(Number(x.em) || 0).toISOString();
-    return h("details", { class: "cfg-hist" },
-      h("summary", null, ui.icone("relogio"), h("span", null, `Histórico de conexão neste aparelho · ${lista.length}`)),
+    return h("details", { class: "cfg-hist", dataset: { fonte: servidor ? "servidor" : "local" } },
+      h("summary", null, ui.icone("relogio"), h("span", null, `${servidor ? "Histórico de conexão" : "Histórico de conexão neste aparelho"} · ${lista.length}`)),
       h("ol", { class: "cfg-hist-lista" }, lista.map(x => h("li", { class: "cfg-hist-item", dataset: { tom: x.tom } }, h("i", { "aria-hidden": "true" }),
-        h("span", null, x.rotulo), h("time", { class: "mono", datetime: iso(x), title: ui.dataHoraBR(iso(x)) }, ui.relativo(iso(x)))))),
-      h("p", { class: "sub" }, "Anotado cada vez que esta tela viu a situação mudar; não é o histórico do servidor."));
+        h("span", { class: "cfg-hist-txt" }, x.rotulo, x.detalhe ? h("small", null, ` · ${x.detalhe}`) : null),
+        h("time", { class: "mono", datetime: iso(x), title: ui.dataHoraBR(iso(x)) }, ui.relativo(iso(x)))))),
+      h("p", { class: "sub" }, servidor ? "Registrado pelo servidor a cada mudança de situação do número."
+        : "Anotado cada vez que esta tela viu a situação mudar; não é o histórico do servidor."));
+  }
+  /** «Conectado desde …» / «Desconectado desde …» a partir do histórico do servidor (sem histórico, nada: não inventamos o «desde»). */
+  function linhaDesde(c, hist) {
+    const em = desdeQuando(hist, c.estado);
+    if (!em) return null;
+    const iso = new Date(em).toISOString();
+    return h("p", { class: "sub cfg-desde", dataset: { estado: c.estado } }, `${(ESTADO_CANAL[c.estado] || ["Situação"])[0]} desde `,
+      h("time", { class: "mono", datetime: iso, title: ui.dataHoraBR(iso) }, `${ui.dataHoraBR(iso)} (${ui.relativo(iso)})`));
+  }
+  /** O que o número ignorou (eco, grupo, LID, 422, 413…) com a explicação de cada um — só quando há algo a contar. */
+  function blocoContadores(c) {
+    const r = contadoresDoCanal(c.codewords && c.codewords.contadores);
+    if (!r.itens.length) return null;
+    return h("details", { class: "cfg-hist cfg-contadores" },
+      h("summary", null, ui.icone("info"), h("span", null, `Mensagens ignoradas · ${ui.num(r.total)}${r.desde ? ` desde ${ui.dataBR(r.desde)}` : ""}`)),
+      h("dl", { class: "cfg-ign-lista" }, r.itens.flatMap(x => [
+        h("dt", null, h("span", null, x.rotulo), h("b", { class: "mono" }, ui.num(x.n))),
+        h("dd", { class: "sub" }, x.explicacao)])),
+      h("p", { class: "sub" }, "Contado pelo servidor. Nada disso é erro do aparelho; números altos de «formato não reconhecido» ou 422 valem um aviso à Nexus."));
+  }
+  // G1: histórico do servidor por número (null = o banco ainda não tem a RPC → histórico local) e o último «Testar conexão» da Meta
+  const histServidor = new Map();
+  let histDisponivel = null;
+  const testesMeta = new Map();
+  async function carregarHistoricos() {
+    if (histDisponivel === false) return;
+    await Promise.all((canais || []).map(async c => {
+      try {
+        const l = historicoDoServidor(await ctx.api.rpcC("nx_canal_historico_listar", { p_canal: c.id, p_limite: 8 }));
+        if (l) { histServidor.set(c.id, l); histDisponivel = true; }
+      } catch (e) {
+        if (/pgrst202|could not find the function|http_404|funcao_invalida/i.test(String((e && (e.codigo || e.message)) || ""))) histDisponivel = false;
+      }
+    }));
+  }
+  /** Histórico a mostrar no cartão: o do servidor quando existe; senão o anotado neste aparelho (e marcado como tal). */
+  function historicoDoCartao(c, rotulo, tom) {
+    const local = historicoCanal(ctx, c.id).registrar({ rotulo, tom });
+    const srv = histServidor.get(c.id);
+    // revisão: lista VAZIA do servidor (número Meta — só o aparelho grava histórico — ou aparelho ainda sem troca) não apaga o anotado aqui
+    return srv && srv.length ? { lista: srv, servidor: true } : { lista: local, servidor: false };
   }
 
   const lista = h("div", { class: "cfg-canais" });
@@ -68,23 +177,58 @@ async function montarNumeros(ctx, alvo) {
   novo.addEventListener("click", () => assistente(null));
   const novoCodeWords = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("chat"), "Adicionar WhatsApp pelo CodeWords");
   novoCodeWords.addEventListener("click", () => assistenteCodeWords(null));
+  // G1: «Reconferir agora» pergunta a cada número como ele está (aparelho no CodeWords, Graph API na Meta) e redesenha com o resultado
+  const bReconferir = h("button", { type: "button", class: "bt bt-fant cfg-reconferir" }, ui.icone("reabrir"), "Reconferir agora");
+  bReconferir.addEventListener("click", () => reconferirTodos(bReconferir));
   ui.limpar(alvo);
   alvo.append(
     ui.cabecalho({ rotulo: "Atendimento", titulo: "Números de WhatsApp", nivel: 2,
       sub: "Conecte pela API oficial da Meta ou pelo CodeWords. As conversas, respostas e confirmações aparecem nesta central.",
-      acoes: [novo, novoCodeWords] }),
+      acoes: [novo, novoCodeWords, bReconferir] }),
     lista);
 
-  async function carregar() {
-    ui.limpar(lista);
-    lista.appendChild(ui.esqueleto("cartoes", 2));
+  let seqCarga = 0;
+  /** suave: sem o esqueleto (atualização ao vivo: a lista não pisca); a resposta de uma carga antiga é descartada. */
+  async function carregar({ suave = false } = {}) {
+    const n = ++seqCarga;
+    if (!suave || !lista.childNodes.length) { ui.limpar(lista); lista.appendChild(ui.esqueleto("cartoes", 2)); }
     try {
-      [canais, base] = await Promise.all([ctx.api.rpcC("nx_canais_listar"), ctx.api.rpcC("nx_cv_base")]);
+      const [cs, b] = await Promise.all([ctx.api.rpcC("nx_canais_listar"), ctx.api.rpcC("nx_cv_base")]);
+      if (n !== seqCarga) return;
+      canais = cs; base = b;
+      await carregarHistoricos();
+      if (n !== seqCarga) return;
       desenhar();
     } catch (e) {
+      if (n !== seqCarga) return;
+      if (suave && canais && canais.length) return;      // ao vivo: falhou agora, a lista que está na tela continua valendo
       ui.limpar(lista);
       lista.appendChild(ui.erroCartao(e, carregar));
     }
+  }
+
+  let reconferindo = false;
+  /** Reconfere todos os números, um por vez (sem disparar vários pedidos à Meta/CodeWords juntos), e recarrega a lista. */
+  async function reconferirTodos(botao) {
+    if (reconferindo) return;
+    if (!canais || !canais.length) { ui.toast("Nenhum número para reconferir ainda.", { tipo: "info" }); return; }
+    reconferindo = true;
+    let falhas = 0, semConfig = 0;
+    const tarefa = (async () => {
+      for (const c of canais) {
+        // revisão: número ainda sem token/chave não é testado — o teste da Meta gravava status «erro» e o número «caía» sem nunca ter conectado
+        if (c.tem_token === false) { semConfig++; continue; }
+        try {
+          if (c.provedor === "codewords") estadosCodeWords.set(c.id, (await ctx.api.fn("nx-codewords", { acao: "estado", canal: c.id })) || {});
+          else testesMeta.set(c.id, (await ctx.api.fn("nx-enviar", { acao: "testar_canal", canal: c.id })) || {});
+        } catch { falhas++; }
+      }
+    })();
+    try { await (botao ? ui.carregando(botao, tarefa) : tarefa); } finally { reconferindo = false; }
+    await carregar({ suave: true });
+    const nota = semConfig ? ` ${semConfig === 1 ? "1 número ainda não está configurado" : `${semConfig} números ainda não estão configurados`} e ficou de fora.` : "";
+    ui.toast((falhas ? `Reconferido, mas ${falhas === 1 ? "1 número não respondeu" : `${falhas} números não responderam`}. Tente de novo em instantes.` : "Números reconferidos agora.") + nota,
+      { tipo: falhas ? "info" : "ok" });
   }
 
   function depNome(id) { const d = ((base && base.departamentos) || []).find(x => x.id === id); return d ? d.nome : "—"; }
@@ -120,7 +264,8 @@ async function montarNumeros(ctx, alvo) {
         { rotulo: "Excluir número", icone: "lixeira", perigo: true, fn: () => excluir(c) },
       ]));
       const marcos = L.marcosMeta(c, ((base && base.templates) || []).filter(t => t.canal_id === c.id).length);
-      const hist = historicoCanal(ctx, c.id).registrar({ rotulo: rot, tom: cor });
+      const hist = historicoDoCartao(c, rot, cor);
+      const avisoSecret = avisoAppSecret(c, testesMeta.get(c.id));
       lista.appendChild(h("article", { class: "cartao cfg-canal", dataset: { tom: cor } },
         h("div", null,
           h("h3", { class: "titulo-sec" }, c.nome, statusVivo(rot, cor)),
@@ -137,8 +282,10 @@ async function montarNumeros(ctx, alvo) {
               ui.pilula(m.rotulo, m.feito ? "ok" : "neutra", { icone: m.feito ? "check" : "relogio" }))),
             c.tem_app_secret ? ui.pilula("Webhook próprio", "info") : ui.pilula("Webhook do app da plataforma", "neutra"),
             c.app_inscrito === false ? ui.pilula("App NÃO inscrito: nenhuma mensagem chega", "ruim", { icone: "alerta" }) : null),
+          linhaDesde(c, hist.servidor ? hist.lista : null),
           c.ultimo_erro ? h("div", { class: "aviso aviso-ruim cfg-erro" }, ui.icone("alerta"), h("p", null, c.ultimo_erro)) : null,
-          blocoHistorico(hist)),
+          avisoSecret ? h("div", { class: "aviso aviso-aten cfg-erro cfg-aviso-secret", role: "note" }, ui.icone("cadeado"), h("p", null, avisoSecret)) : null,
+          blocoHistorico(hist.lista, { servidor: hist.servidor })),
         h("div", { class: "cfg-canal-acoes" }, bTestar, bInscr, bSync, bMais)));
     }
   }
@@ -154,17 +301,14 @@ async function montarNumeros(ctx, alvo) {
   /** O teste confirmado no assistente («Sim, chegou») conta no checklist do Início neste aparelho — a mesma chave local do «Já está bom».
       O servidor só enxerga mensagens de conversas; o teste vai direto ao próprio número e não entra lá. */
   function marcarTesteNoChecklist() {
-    try {
-      const chave = `nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`;
-      const p = JSON.parse(localStorage.getItem(chave) || "{}") || {};
-      p.pulados = [...new Set([...(Array.isArray(p.pulados) ? p.pulados : []), "mensagem_teste"])];
-      localStorage.setItem(chave, JSON.stringify(p));
-    } catch { /* sem storage: o item segue pendente até a primeira mensagem de verdade */ }
+    // sem storage: o item segue pendente até a primeira mensagem de verdade
+    try { marcarTesteLocal(localStorage, ctx.cliente.id, ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id); } catch { /* idem */ }
   }
 
   async function testar(c, botao) {
     try {
       const r = await ui.carregando(botao, ctx.api.fn("nx-enviar", { acao: "testar_canal", canal: c.id }));
+      testesMeta.set(c.id, r || {});
       ui.toast(`Número ${r && r.numero ? r.numero : ""} ✓ · App inscrito ${r && r.app_inscrito ? "✓" : "✗"}`, { tipo: r && r.app_inscrito ? "ok" : "info" });
     } catch (e) { ui.toast(erroFuncao(e), { tipo: "erro" }); }
     carregar();
@@ -210,7 +354,7 @@ async function montarNumeros(ctx, alvo) {
   function cartaoCodeWords(c) {
     const cw = c.codewords || {};
     const [rotulo, cor] = estadoVisualCodeWords(c);
-    const atualizar = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Atualizar");
+    const atualizar = h("button", { type: "button", class: "bt bt-sec bt-p", "aria-label": `Reconferir agora o número ${c.nome}` }, ui.icone("reabrir"), "Reconferir agora");
     atualizar.addEventListener("click", () => consultarEstadoCodeWords(c, atualizar));
     const pr = L.passosCodeWords({ canal: c, estado: estadosCodeWords.get(c.id) });
     const pronto = pr.atual >= 5;            // 5 = só falta a mensagem de teste (recomendada, não obrigatória)
@@ -227,12 +371,12 @@ async function montarNumeros(ctx, alvo) {
       : cw.ia_ligada && rotulo === "Conectado" ? ui.pilula("IA 24h ativa", "ok", { icone: "ia" })
         : cw.ia_ligada ? ui.pilula("IA ainda não validada", "aten", { icone: "ia" }) : ui.pilula("IA desligada", "neutra", { icone: "ia" });
     const explicacao = ultimo?.motivo || (cw.sync?.erro ? `Última sincronização: ${cw.sync.erro}` :
-      rotulo === "Aguardando confirmação" ? "Toque em Atualizar para conferir se o aparelho está pareado e recebendo mensagens." :
+      rotulo === "Aguardando confirmação" ? "Toque em «Reconferir agora» para conferir se o aparelho está pareado e recebendo mensagens." :
       rotulo === "Conectado mas sem receber" ? "O aparelho está ligado, mas o destino das mensagens precisa ser corrigido." :
       rotulo === "Desconectado" ? "Pareie ou reconecte este número pelo WhatsApp no celular." : "O aparelho e o destino foram conferidos.");
     const aviso = c.ultimo_erro && /^status incerto/i.test(String(c.ultimo_erro)) ? null : c.ultimo_erro;
-    const hist = historicoCanal(ctx, c.id).registrar({ rotulo, tom: cor });
-    return h("article", { class: "cartao cfg-canal cfg-cw-card", dataset: { tom: cor } },
+    const hist = historicoDoCartao(c, rotulo, cor);
+    return h("article", { class: "cartao cfg-canal cfg-cw-card", dataset: { tom: cor, estado: c.estado || null } },
       h("div", { class: "cfg-cw-main" },
         h("div", { class: "cfg-cw-titulo" }, h("h3", { class: "titulo-sec" }, c.nome), statusVivo(rotulo, cor), ui.pilula("CodeWords", "info")),
         progresso(pr.passos),
@@ -245,8 +389,10 @@ async function montarNumeros(ctx, alvo) {
           resumoRota,
           cw.sync?.em ? ui.pilula(`Sincronizado ${ui.relativo(cw.sync.em)}`, cw.sync.erro ? "aten" : "neutra") : null),
         h("p", { class: "sub cfg-cw-status-text", role: "status" }, explicacao),
+        linhaDesde(c, hist.servidor ? hist.lista : null),
         aviso ? h("div", { class: "aviso aviso-aten cfg-erro" }, ui.icone("info"), h("p", null, aviso)) : null,
-        blocoHistorico(hist)),
+        blocoContadores(c),
+        blocoHistorico(hist.lista, { servidor: hist.servidor })),
       h("div", { class: "cfg-canal-acoes cfg-cw-card-actions" }, conectar, atualizar, mais));
   }
 
@@ -744,8 +890,11 @@ async function montarNumeros(ctx, alvo) {
           ui.limpar(res);
           try {
             const r = await ui.carregando(bT, ctx.api.fn("nx-enviar", { acao: "testar_canal", canal: atual.id }));
+            testesMeta.set(atual.id, r || {});
+            const avisoSecret = avisoAppSecret(atual, r);
             res.append(...[ui.pilula(`Número ${r && r.numero ? r.numero : ""} ✓`, "ok"), ui.pilula(r && r.app_inscrito ? "App inscrito ✓" : "App inscrito ✗", r && r.app_inscrito ? "ok" : "ruim"),
-              r && r.qualidade ? ui.pilula(`Qualidade ${r.qualidade}`, "neutra") : null].filter(Boolean));
+              r && r.qualidade ? ui.pilula(`Qualidade ${r.qualidade}`, "neutra") : null,
+              avisoSecret ? h("p", { class: "aviso aviso-aten cfg-aviso-secret" }, ui.icone("cadeado"), h("span", null, avisoSecret)) : null].filter(Boolean));
           } catch (e) { res.appendChild(h("p", { class: "sub" }, erroFuncao(e))); }
         });
         bS.addEventListener("click", async () => {
@@ -805,6 +954,39 @@ async function montarNumeros(ctx, alvo) {
   }
 
   await carregar();
+  // G1 · estado ao vivo: o shell avisa quando um número cai ou volta (pulso/notificação) → a lista se refaz sem piscar
+  const limpezas = [];
+  if (ctx.canais && typeof ctx.canais.assinar === "function") {
+    let assinatura = "";
+    const chave = l => (Array.isArray(l) ? l : []).map(x => `${x && x.id}:${x && x.desde}`).sort().join("|");
+    try { assinatura = chave(ctx.canais.caidos ? ctx.canais.caidos() : []); } catch { /* sem a lista inicial */ }
+    try {
+      const cancelar = ctx.canais.assinar(l => {
+        const k = chave(l);
+        if (k === assinatura || !lista.isConnected) return;
+        assinatura = k;
+        carregar({ suave: true });
+      });
+      if (typeof cancelar === "function") limpezas.push(cancelar);
+    } catch { /* sem o aviso ao vivo: «Reconferir agora» continua */ }
+  }
+  // e o pulso do cliente (o servidor bate o pulso quando grava o histórico do número): no máx. 1 recarga suave a cada 30 s
+  if (ctx.pulso && typeof ctx.pulso.assinar === "function") {
+    let ultimo = Date.now();
+    try {
+      const cancelar = ctx.pulso.assinar(() => {
+        if (!lista.isConnected || reconferindo || Date.now() - ultimo < 30000) return;
+        ultimo = Date.now();
+        carregar({ suave: true });
+      });
+      if (typeof cancelar === "function") limpezas.push(cancelar);
+    } catch { /* idem */ }
+  }
+  // paleta Ctrl/⌘+K: «Reconferir o número» (rótulo/grupo vêm de comandos.COMANDOS_CONHECIDOS)
+  if (ctx.comandos && typeof ctx.comandos.registrar === "function") {
+    try { const c = ctx.comandos.registrar({ id: "config.reconferir-numero", fazer: () => reconferirTodos(bReconferir) }); if (typeof c === "function") limpezas.push(c); }
+    catch { /* a paleta é um extra */ }
+  }
   // M32: o checklist do Início manda para cá com #/config/numeros?assistente=<id do número|novo>: abre o assistente certo e limpa o endereço
   const pedido = ctx.rota && ctx.rota.query && ctx.rota.query.assistente;
   // só enquanto esta lista ainda é a da tela (a pessoa pode ter saído durante a leitura dos números)
@@ -817,6 +999,8 @@ async function montarNumeros(ctx, alvo) {
     if (c) (c.provedor === "codewords" ? assistenteCodeWords(c) : assistente(c));
     else if (!canais.length) assistenteCodeWords(null);
   }
+  // config.js guarda a função devolvida e a chama ao trocar de seção (o shell também cancela as assinaturas ao sair da tela)
+  return () => { seqCarga++; for (const f of limpezas.splice(0)) { try { f(); } catch { /* ok */ } } };
 }
 
 /* ============================================================ RESPOSTAS RÁPIDAS */

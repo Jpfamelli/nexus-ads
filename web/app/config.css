@@ -100,6 +100,33 @@
   .adm-uso-mini { min-width: 6rem; }
 }
 
+/* ---------------------------------------------------------------- plano 100 (frente G): Números ao vivo, contadores, Admin */
+.cfg-desde { margin-top: var(--esp-2); font-size: var(--fs-13); }
+.cfg-desde time { color: var(--c-texto); }
+.cfg-canal[data-estado="desconectado"] .cfg-desde time { color: var(--c-ruim); }
+.cfg-hist-txt { min-width: 0; overflow-wrap: anywhere; }
+.cfg-hist-txt small { color: var(--c-texto-3); font-size: var(--fs-12); }
+.cfg-ign-lista { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--esp-1); margin: var(--esp-2) 0; }
+.cfg-ign-lista dt { display: flex; justify-content: space-between; gap: var(--esp-3); font-size: var(--fs-13); font-weight: 600; }
+.cfg-ign-lista dt b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.cfg-ign-lista dd { margin: 0 0 var(--esp-2); font-size: var(--fs-12); }
+.cfg-aviso-secret { margin-top: var(--esp-2); }
+.cfg-reconferir { min-height: 44px; }
+
+.adm-pilulas { display: inline-flex; flex-wrap: wrap; gap: var(--esp-1); align-items: center; }
+.adm-sem-pacote, .adm-link-ruim { margin: 0; }
+.adm-ativo { padding-top: var(--esp-2); border-top: 1px solid var(--c-borda); }
+.adm-ia-dia { display: flex; flex-direction: column; gap: var(--esp-3); margin-top: var(--esp-4); padding-top: var(--esp-3); border-top: 1px solid var(--c-borda); min-width: 0; }
+.adm-ia-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--esp-3); }
+.adm-ia-dia-nota { display: flex; gap: var(--esp-2); align-items: flex-start; font-size: var(--fs-12); }
+.adm-ia-dia-nota .ic { flex: none; width: 14px; height: 14px; margin-top: .15em; }
+.adm-ia-det summary { display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; font-size: var(--fs-13); font-weight: 600; color: var(--c-prim-luz); }
+.adm-ia-det summary:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; border-radius: var(--r-pp); }
+.adm-ia-tab { width: 100%; border-collapse: collapse; font-size: var(--fs-13); }
+.adm-ia-tab th, .adm-ia-tab td { padding: var(--esp-1) var(--esp-2); text-align: left; border-bottom: 1px solid var(--c-borda); }
+.adm-ia-tab .num { text-align: right; }
+@media (max-width: 420px) { .adm-ia-kpis { grid-template-columns: minmax(0, 1fr); } }
+
 /* ---------------------------------------------------------------- movimento reduzido e alto contraste */
 @media (prefers-reduced-motion: reduce) {
   .cfg-status-dot::after { animation: none !important; display: none; }

@@ -689,7 +689,9 @@ function fraseCondicao(cd, ix) {
     const n = aspas(nomeDe(ix, "etiquetas", cd.valor, "escolhida") || "escolhida");
     return cd.op === "diferente" || cd.op === "nao_contem" ? `não tiver a etiqueta ${n}` : `tiver a etiqueta ${n}`;
   }
-  return `${rot} ${op.frase} ${aspas(valorLegivel(cd.campo, cd.valor, ix))}`;
+  // condição ainda sem valor (receita cuja etapa não existe neste funil): «(a escolher)», nunca «null» na frase
+  const v = valorLegivel(cd.campo, cd.valor, ix);
+  return `${rot} ${op.frase} ${aspas(v == null || v === "" ? "(a escolher)" : v)}`;
 }
 
 function valorLegivel(campo, valor, ix) {
@@ -930,6 +932,22 @@ export const MODELOS = Object.freeze([
     texto: () => "Ninguém respondeu o cliente em 15 minutos (contando só no horário de atendimento)? O responsável recebe um aviso no sino.",
     auto: { nome: "Sem resposta há 15 min", gatilho: "sem_resposta", config: { minutos: 15, so_no_horario: true }, condicoes: [],
       acoes: [{ tipo: "notificar", para: "responsavel", titulo: "{nome} está esperando resposta", texto: "Atendimento {protocolo} sem resposta há 15 min." }],
+      respeitar_horario: false } },
+  // plano 100 · G8: lead que veio do site (rastreio) esfria rápido; e a equipe confere a agenda do dia seguinte sem depender de modelo da Meta
+  { id: "site_sem_resposta", categoria: "equipe", icone: "sino", destaque: [], ocultar: [],
+    titulo: () => "Lead do site sem resposta em 10 min → avisar o responsável",
+    texto: () => "Quem chegou pelo site e ficou 10 minutos sem resposta (contando só no horário de atendimento) gera um aviso no sino do responsável.",
+    aviso: "Só reconhece quem veio do site com o rastreio instalado (Configurações → Rastreio do site). Não manda nada ao cliente.",
+    auto: { nome: "Lead do site sem resposta há 10 min", gatilho: "sem_resposta", config: { minutos: 10, so_no_horario: true },
+      condicoes: [{ campo: "origem", op: "igual", valor: "site" }],
+      acoes: [{ tipo: "notificar", para: "responsavel", titulo: "{nome} veio do site e está esperando", texto: "Lead do site sem resposta há 10 min (atendimento {protocolo})." }],
+      respeitar_horario: false } },
+  { id: "lembrete_equipe_consulta", categoria: "equipe", icone: "calendario", destaque: [], ocultar: [],
+    titulo: vv => `${palavraConsulta(vv.vertical).charAt(0).toUpperCase()}${palavraConsulta(vv.vertical).slice(1)} marcada → lembrar a equipe 24 h antes`,
+    texto: vv => `24 h antes da ${palavraConsulta(vv.vertical)} marcada, o responsável ganha uma tarefa para confirmar com o cliente. Nada sai sozinho para o cliente.`,
+    aviso: "Para o cliente receber o lembrete sozinho, use «Lembrete 24 h antes» (texto pelo CodeWords ou, no WhatsApp oficial, um modelo aprovado na Meta).",
+    auto: { nome: "Lembrar a equipe 24 h antes da consulta", gatilho: "antes_da_data", config: { campo: "consulta", horas: 24 }, condicoes: [],
+      acoes: [{ tipo: "criar_tarefa", titulo: "Confirmar a consulta de {primeiro_nome}: {data_consulta} às {hora_consulta}", tipo_tarefa: "whatsapp", vence_em_horas: 2, dono: "responsavel" }],
       respeitar_horario: false } },
   { id: "orcamento", categoria: "equipe", icone: "tarefa", destaque: [], ocultar: [],
     titulo: vv => orcamentoDaVertical(vv.vertical).titulo,
@@ -1674,4 +1692,158 @@ export function exemplosIA(vocab) {
     "Quando chegar mensagem com a palavra preço, põe a etiqueta Orçamento e avisa a equipe",
     `No dia seguinte à ${c}, manda uma mensagem pedindo uma avaliação`,
   ];
+}
+
+/* ================================================================== plano 100 (frente G): séries do servidor, decisão da IA, perguntas */
+
+const RE_DIA = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Série por dia vinda do servidor (nx_automacao_execucoes_dia → [{dia:"AAAA-MM-DD", ok, erro}], mais antigo primeiro, dias sem
+ * execução com zeros). Devolve o mesmo formato de execucoesPorDia ({serie, n, dias, maximo, recortado:false}) com `servidor: true`,
+ * ou null quando a resposta não é a série (RPC antiga, objeto de erro, dia inválido): aí a tela calcula no navegador.
+ * O servidor só separa «sem erro» de «com erro» (esperas, puladas e paradas contam como sem erro); espera/pulado ficam em zero.
+ */
+export function serieExecucoesServidor(lista) {
+  if (!Array.isArray(lista) || !lista.length) return null;
+  const serie = [];
+  for (const x of lista) {
+    if (!x || typeof x !== "object" || !RE_DIA.test(texto(x.dia))) return null;
+    const ok = nat(x.ok), erro = nat(x.erro);
+    serie.push({ dia: x.dia, rotulo: ddmm(x.dia), semana: DIAS_CURTOS[diaSemanaDe(x.dia)], ok, erro, espera: 0, pulado: 0, total: ok + erro });
+  }
+  serie.sort((a, b) => (a.dia < b.dia ? -1 : a.dia > b.dia ? 1 : 0));
+  const n = serie.reduce((s, p) => s + p.total, 0);
+  return { serie, n, dias: serie.length, maximo: Math.max(0, ...serie.map(p => p.total)), recortado: false, servidor: true };
+}
+
+/**
+ * O que a IA decidiu numa execução, lido do detalhe que o servidor grava (nx_auto_ia_resolver / nx_auto_rodar):
+ *   «… · IA: movido para «X» (motivo)» · «IA: já estava em «X» (motivo)» · «IA: lead com nota 72 (motivo)» ·
+ *   «IA: resumo da conversa gravado como nota» · «IA: pulado (motivo)» · «IA pedida: …» (aguardando) · «IA: <erro>».
+ * → null (execução sem passo de IA) ou {tipo: "etapa"|"nota"|"resumo"|"pedida"|"pulado"|"erro", etapa?, funil?, score?, motivo, jaEstava?, frase}.
+ * Nada é inventado: o que não casar com as frases conhecidas vira {tipo:"erro"} com o texto do servidor.
+ */
+export function decisaoIA(detalhe) {
+  const d = texto(detalhe).trim();
+  if (!d) return null;
+  const partes = d.split(" · ");
+  let i = -1;
+  for (let k = partes.length - 1; k >= 0; k--) if (/^IA( pedida)?:/.test(partes[k].trim())) { i = k; break; }
+  if (i < 0) return null;
+  const seg = partes.slice(i).join(" · ").trim();
+  // revisão: o servidor continua escrevendo depois da IA («… (motivo) · tarefa criada») e corta o detalhe em 280 caracteres — o motivo é o
+  // parêntese que ABRE logo depois da etapa/nota, até o «)» que o fecha (com parênteses dentro); cortado no fim, vale o que veio
+  const motivoDe = s => {
+    const x = texto(s).trim();
+    if (x[0] !== "(") return "";
+    let n = 0;
+    for (let k = 0; k < x.length; k++) {
+      if (x[k] === "(") n++;
+      else if (x[k] === ")" && --n === 0) return x.slice(1, k).trim();
+    }
+    return x.slice(1).trim();
+  };
+  if (/^IA pedida:/.test(seg)) {
+    const o = seg.replace(/^IA pedida:\s*/, "");
+    return { tipo: "pedida", motivo: o, frase: `Aguardando a decisão da IA${o ? ` (${o})` : ""}.` };
+  }
+  const r = seg.replace(/^IA:\s*/, "");
+  let m = /^(movido para|já estava em) «([^»]+)»(?: no funil «([^»]+)»)?\s*([\s\S]*)$/.exec(r);
+  if (m) {
+    const jaEstava = m[1] !== "movido para";
+    const motivo = motivoDe(m[4]);
+    return { tipo: "etapa", etapa: m[2], funil: m[3] || null, jaEstava, motivo,
+      frase: jaEstava ? `A IA manteve em «${m[2]}»${m[3] ? ` (funil «${m[3]}»)` : ""}.` : `A IA moveu para «${m[2]}»${m[3] ? ` no funil «${m[3]}»` : ""}.` };
+  }
+  m = /^lead com nota (\d{1,3})\s*([\s\S]*)$/.exec(r);
+  if (m) {
+    const score = Math.max(0, Math.min(100, Number(m[1])));
+    return { tipo: "nota", score, motivo: motivoDe(m[2]), frase: `A IA deu nota ${score} de 100 ao interesse do cliente.` };
+  }
+  if (/^resumo da conversa gravado como nota/.test(r)) return { tipo: "resumo", motivo: "", frase: "A IA resumiu a conversa numa nota do histórico." };
+  m = /^pulado\s*([\s\S]*)$/.exec(r);
+  if (m) { const motivo = motivoDe(m[1]) || m[1].split(" · ")[0].trim(); return { tipo: "pulado", motivo, frase: `A IA não rodou${motivo ? `: ${motivo}` : ""}.` }; }
+  return { tipo: "erro", motivo: r, frase: `A IA não conseguiu decidir${r ? `: ${r}` : ""}.` };
+}
+
+/** Rótulo do link de uma execução: «Abrir a conversa» · «Abrir o negócio» (vocabulário) · «Abrir o contato» · «Ver tarefas» · «Abrir». */
+export function rotuloLinkExecucao(link, vocab) {
+  const l = texto(link);
+  const vv = voc(vocab);
+  if (/^#\/conversas\//.test(l)) return "Abrir a conversa";
+  if (/^#\/crm\/negocio\//.test(l)) return `Abrir ${vv.art("negocio")} ${vv.min("negocio")}`;
+  if (/^#\/contatos\//.test(l)) return `Abrir ${vv.art("contato")} ${vv.min("contato")}`;
+  if (/^#\/tarefas/.test(l)) return "Ver tarefas";
+  return "Abrir";
+}
+
+/**
+ * Avisos do «Criar com IA» como perguntas respondíveis (chips + resposta livre): cada aviso vira {id, pergunta, opcoes:[texto]}.
+ * As opções saem do que existe no sistema e combina com o assunto do aviso (etapas, etiquetas, pessoas, números, departamentos);
+ * sem assunto reconhecido, «Sim» / «Não». No máximo 8 perguntas e 6 opções cada (a tela continua curta no celular).
+ */
+export function perguntasDosAvisos(avisos, base) {
+  const b = base || {};
+  const nomes = lista => [...new Set((lista || []).map(x => texto(x && x.nome).trim()).filter(Boolean))];
+  const etapas = [...new Set((b.funis || []).flatMap(f => nomes(f && f.estagios)))];
+  const regras = [
+    [/\b(etapa|etapas|estagio|estagios|funil)\b/, etapas],
+    [/\betiquetas?\b/, nomes(b.etiquetas)],
+    [/\b(pessoa|responsavel|atendente|usuario|equipe)\b/, nomes(b.usuarios)],
+    [/\b(numero|canal|whatsapp)\b/, nomes(b.canais)],
+    [/\bdepartamentos?\b/, nomes(b.departamentos)],
+  ];
+  const out = [];
+  for (const a of Array.isArray(avisos) ? avisos : []) {
+    const p = texto(a).trim();
+    if (!p || out.length >= 8) continue;
+    const n = normalizar(p);
+    const r = regras.find(([re, ops]) => re.test(n) && ops.length);
+    out.push({ id: `p${out.length}`, pergunta: p.slice(0, 240), opcoes: (r ? r[1] : ["Sim", "Não"]).slice(0, 6) });
+  }
+  return out;
+}
+
+/**
+ * Novo pedido para a IA = o pedido original + as respostas («Respostas às dúvidas da IA: …»), dentro do limite de caracteres.
+ * respostas: {id: texto} (só as preenchidas entram). Devolve {texto, usadas, cortado}: o que não cabe fica de fora (e a tela avisa).
+ * Um bloco de respostas anterior no pedido é trocado (responder duas vezes não empilha).
+ */
+export function descricaoComRespostas(descricao, perguntas, respostas, max = LIMITES.descricao_ia) {
+  const bruto = texto(descricao);
+  const base = bruto.replace(/\s*Respostas às dúvidas da IA:[\s\S]*$/, "").trim();
+  const novas = [];
+  for (const p of Array.isArray(perguntas) ? perguntas : []) {
+    const r = texto(respostas && respostas[p.id]).trim();
+    if (r) novas.push(`- ${cortar(p.pergunta, 140)} → ${r.slice(0, 200)}`);
+  }
+  // revisão: as respostas das rodadas ANTERIORES continuam (a IA não pergunta de novo o que já foi respondido); a mesma pergunta respondida
+  // de novo vale a resposta nova; no limite, as novas entram primeiro
+  const blocoAntigo = /Respostas às dúvidas da IA:([\s\S]*)$/.exec(bruto);
+  const pergDe = l => l.split(" → ")[0];
+  const antigas = blocoAntigo ? blocoAntigo[1].split("\n").map(s => s.trim()).filter(s => s.startsWith("- ") && !novas.some(n => pergDe(n) === pergDe(s))) : [];
+  const linhas = [...novas, ...antigas];
+  if (!linhas.length) return { texto: base.slice(0, max), usadas: 0, cortado: false };
+  let t = `${base}\n\nRespostas às dúvidas da IA:`;
+  let usadas = 0, cortado = false;
+  for (const l of linhas) { if ((`${t}\n${l}`).length > max) { cortado = true; break; } t += `\n${l}`; usadas++; }
+  if (!usadas) return { texto: base.slice(0, max), usadas: 0, cortado: true };
+  return { texto: t, usadas, cortado };
+}
+
+/**
+ * A IA montou, mas a conferência do servidor reprovou (nx-ia → {ok:false, erro:"automacao_invalida", automacao, detalhe, onde, indice,
+ * explicacao, avisos}): a cota já foi gasta, então a montagem ainda serve — abre no editor com o motivo. null quando o erro é outro
+ * ou o servidor (versão antiga) não devolveu a automação.
+ */
+export function montagemReprovada(e, base) {
+  const cod = texto(e && (e.codigo || e.message));
+  const r = e && e.resposta;
+  if (cod !== "automacao_invalida" || !r || typeof r.automacao !== "object" || !r.automacao) return null;
+  const conv = deFormatoIA(r.automacao, base);
+  const motivo = texto(r.detalhe || (e && e.detalhe_texto) || (e && e.hint)).trim().slice(0, 300);
+  const avisos = [...(Array.isArray(r.avisos) ? r.avisos : []).map(String), ...conv.avisos].filter(Boolean).slice(0, 12);
+  return { auto: conv.auto, explicacao: typeof r.explicacao === "string" ? r.explicacao.trim().slice(0, 1500) : "", avisos,
+    reprovada: { motivo: motivo || "a automação não passou na conferência", onde: texto(r.onde) || null, indice: Number.isInteger(r.indice) ? r.indice : null } };
 }

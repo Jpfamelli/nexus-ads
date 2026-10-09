@@ -34,6 +34,7 @@ import { criarDb } from "./db.js";
 import {
   lerCorpo, autenticarCron, limparErro, comPrazo, ErroHttp, json,
   ErroApi, respostaPainel, tratarPainel, lerCorpoPainel, autenticarPainel, interna, soltandoCorpo,
+  cortarTexto, funcaoAusente, registrarExecucao, agoraDe,
 } from "./comum.js";
 import {
   enviarTextoCanal, enviarMidiaCanal, enviarTemplateCanal, marcarLido, infoNumero, appsInscritos,
@@ -56,6 +57,10 @@ const FILA_LIMITE_MS = 140_000;
 const RESERVA_ENVIO_MS = { codewords: 62_000, meta: 22_000 };
 const FILA_MAX_ITENS = 100;
 const FILA_MAX_MS = 110_000;
+// saída da Meta em dúvida (timeout/5xx, sem wamid) que ficou 'pendente' por mais que isso nunca mais recebe recibo:
+// vira 'sem_confirmacao' (uma varredura por hora, nx_travas)
+const AMBIGUA_LIMITE_MS = 24 * 3600e3;
+const LIMITE_TEXTO = 4096;
 
 const REF_CLIENTE = /^[A-Za-z0-9:_.-]{8,80}$/;
 /** client_ref do painel: ausente = comportamento de sempre; malformado = 400 dados_invalidos (hint client_ref). */
@@ -75,9 +80,6 @@ function respostaDaGravada(m) {
   if (m.status === "falhou") return respostaPainel({ ok: false, erro: "envio_falhou", detalhe: m.erro || "O canal não aceitou a mensagem.", mensagem: m, repetida: true });
   return respostaPainel({ ok: true, mensagem: m, repetida: true, ...(m.status === "pendente" ? { ambigua: true, aviso: m.erro || null } : {}) });
 }
-
-/** Função interna que ainda não existe no banco (migração não aplicada): o PostgREST responde 404 citando o nome dela. */
-const funcaoAusente = (e, nome) => e?.status === 404 && String(e?.message).includes(nome);
 
 /**
  * Conferência antiga (sem reserva): o mesmo client_ref já gravou uma saída nesta conversa? Devolve a resposta do painel SEM
@@ -115,14 +117,30 @@ async function reservarRef(db, cliente, conversa, ref) {
   if (r?.estado === "gravada" && r.mensagem) return { resposta: respostaDaGravada(r.mensagem) };
   // outro pedido com este ref está enviando agora: o painel espera e tenta depois (não é falha)
   if (r?.estado === "em_andamento") return { resposta: respostaPainel({ ok: false, erro: "envio_em_andamento" }, 409) };
-  // reservado há mais tempo do que uma função vive e sem saída gravada: pode ter saído; reenviar daria mensagem em dobro
+  // reservado há mais tempo do que uma função vive e sem saída gravada: pode ter saído; reenviar daria mensagem em dobro.
+  // Se a saída existe (o marcar falhou depois de gravar), a última saída recente da conversa volta junto para o painel mostrar.
   if (r?.estado === "antiga") {
+    const ultima = await ultimaSaidaRecente(db, cliente, conversa);
     return { resposta: respostaPainel({
-      ok: false, erro: "envio_falhou", ambigua: true,
+      ok: false, erro: "envio_falhou", ambigua: true, antiga: true,
       detalhe: "A mensagem pode ter saído, mas o Órbita não conseguiu confirmar. Confira no WhatsApp antes de mandar de novo.",
+      ...(ultima ? { mensagem: ultima } : {}),
     }, 502) };
   }
   throw new Error("nx_cv_ref_reservar devolveu um estado desconhecido");   // sem saber o estado, não envia
+}
+
+/** Última saída da conversa nos últimos 5 min (no formato do painel, nx_wa_msg_json); nada ou falha → null. */
+async function ultimaSaidaRecente(db, cliente, conversa) {
+  try {
+    const desde = new Date(Date.now() - 5 * 60_000).toISOString();
+    const [m] = await db.select("nx_mensagens", {
+      cliente_id: `eq.${cliente}`, conversa_id: `eq.${idConversa(conversa)}`, direcao: "eq.out", tipo: "not.in.(nota,sistema)",
+      criado_em: `gte.${desde}`, select: "id", order: "id.desc", limit: 1,
+    });
+    if (!m) return null;
+    return (await db.rpc("nx_wa_msg_json", { p_id: m.id })) || null;
+  } catch (e) { console.error("nx-enviar última saída:", limparErro(e?.message || e)); return null; }
 }
 
 /** Solta a reserva de quem a segura (erro em que com certeza nada saiu). Nunca lança: se falhar, o ref fica "em andamento" e depois ambíguo. */
@@ -189,9 +207,11 @@ const textoFalha = r => {
 /** Id provisório do envio ambíguo: a sincronização troca pelo id do aparelho (gêmea: mesmo texto, ±5 min). */
 const wamidProvisorio = canal => `cw:${canal}:orbita-p-${crypto.randomUUID().replace(/-/g, "")}`;
 
-/** Envio pela conversa: resolvida e janela fechada barram ANTES da Graph. */
+/** Envio pela conversa: resolvida, contato bloqueado e janela fechada barram ANTES da Graph (a fila já pulava o bloqueado;
+    o painel deixava supervisor+ mandar para quem a empresa bloqueou). */
 function exigirConversaAberta(cx, { exigeJanela = true } = {}) {
   if (cx?.conversa?.status === "resolvida") throw new ErroApi("conversa_resolvida", 400);
+  if (cx?.contato?.bloqueado === true) throw new ErroApi("contato_bloqueado", 400);
   if (exigeJanela && !cx?.janela_aberta) throw new ErroApi("fora_da_janela", 400);
   if (!destino(cx)) throw new ErroApi("contato_nao_encontrado", 404);
 }
@@ -225,7 +245,8 @@ async function gravarSaida(db, ctx, cliente, conversa, msg, r, canal, ref = null
       p_conta: ctx.conta_id, p_cliente: cliente, p_conversa: conversa,
       p_msg: {
         origem: "painel", ...msg,
-        wamid: r.wamid || (duvida ? wamidProvisorio(canal) : null),
+        // id provisório só com canal (CodeWords): a Meta em dúvida fica sem wamid — «cw:null:…» nunca seria adotado por ninguém
+        wamid: r.wamid || (duvida && canal ? wamidProvisorio(canal) : null),
         status: r.ok ? "enviada" : duvida ? "pendente" : "falhou", erro,
       },
     });
@@ -243,10 +264,13 @@ async function gravarSaida(db, ctx, cliente, conversa, msg, r, canal, ref = null
     throw e;
   }
   // grava o client_ref na saída e aponta a reserva para ela: daqui em diante a repetição devolve esta mensagem.
-  // Se o marcar falhar, a reserva fica sem mensagem e a repetição responde "pode ter saído" — nunca reenvia.
+  // Falhou (banco piscou)? repete UMA vez; se falhar de novo, a reserva fica sem mensagem e a repetição responde
+  // «pode ter saído» com a última saída recente — nunca reenvia.
   if (ref && mensagem?.id) {
-    try { await interna(db, "nx_cv_ref_marcar", { p_cliente: cliente, p_mensagem: mensagem.id, p_ref: ref }); }
-    catch (e) { console.error("nx-enviar marcar client_ref:", limparErro(e?.message || e)); }
+    for (let tentativa = 1; tentativa <= 2; tentativa++) {
+      try { await interna(db, "nx_cv_ref_marcar", { p_cliente: cliente, p_mensagem: mensagem.id, p_ref: ref }); break; }
+      catch (e) { if (tentativa === 2) console.error("nx-enviar marcar client_ref:", limparErro(e?.message || e)); }
+    }
   }
   await pausarIA();
   if (duvida) return respostaPainel({ ok: true, mensagem, ambigua: true, aviso: erro });
@@ -259,30 +283,39 @@ async function gravarSaida(db, ctx, cliente, conversa, msg, r, canal, ref = null
 async function acaoTexto(db, ctx, corpo, deps, { conversa, texto, respondeA, assinar = true } = {}) {
   const cliente = String(corpo.cliente);
   const cx = await contextoConversa(db, ctx, cliente, conversa ?? corpo.conversa);
-  const bruto = String(texto ?? corpo.texto ?? "").trim();
-  if (!bruto || bruto.length > 4096) throw new ErroApi("dados_invalidos", 400, "texto");
+  const bruto = cortarTexto(String(texto ?? corpo.texto ?? "").trim());
+  if (!bruto || bruto.length > LIMITE_TEXTO) throw new ErroApi("dados_invalidos", 400, "texto");
+  // o texto FINAL (com a assinatura «*Nome:*») é o que a API limita: antes o fim da mensagem era cortado em silêncio.
+  // teto = o que sobra para o texto — o composer mostra o limite efetivo (frente D)
+  const nome = primeiroNome(cx.atendente_nome);
+  const prefixo = assinar && cx.cfg_cv?.assinatura && nome ? `*${nome}:*\n` : "";
+  if (prefixo.length + bruto.length > LIMITE_TEXTO) {
+    const teto = LIMITE_TEXTO - prefixo.length;
+    return respostaPainel({ ok: false, erro: "texto_longo", teto, detalhe: `com a assinatura o limite é ${teto} caracteres` }, 400);
+  }
+  const final = prefixo + bruto;
   // M36: o mesmo client_ref não envia de novo (vale até para conversa resolvida/janela fechada depois: a saída já existe)
   const reserva = await reservarRef(db, cliente, cx.conversa.id, clientRefDe(corpo));
   if (reserva.resposta) return reserva.resposta;
-  const { cred, citacao, final } = await antesDoCanal(db, cliente, reserva, async () => {
+  const { cred, citacao } = await antesDoCanal(db, cliente, reserva, async () => {
     // o aparelho do CodeWords não tem janela de 24 h (é um WhatsApp comum)
     exigirConversaAberta(cx, { exigeJanela: cx.canal?.provedor !== "codewords" });
     const cred = await credencial(db, cx.canal_id, cliente);
     // citação (resposta a uma mensagem) só existe na Graph
     const citacao = ehCodeWords(cred) ? null : await citacaoValida(db, cliente, cx.contato?.id, respondeA ?? corpo.responde_a);
-    const nome = primeiroNome(cx.atendente_nome);
-    const final = (assinar && cx.cfg_cv?.assinatura && nome ? `*${nome}:*\n${bruto}` : bruto).slice(0, 4096);
-    return { cred, citacao, final };
+    return { cred, citacao };
   });
   const r = await enviarTextoPeloCanal(cred, destino(cx), final, { respondeA: citacao, fetch: deps.rede, fetchCru: deps.fetch, db });
-  return gravarSaida(db, ctx, cliente, cx.conversa.id, { tipo: "texto", corpo: final, responde_a_wamid: citacao }, r, cx.canal_id, reserva.ref);
+  // id provisório (cw:…:orbita-p-…) só no aparelho: a Meta em dúvida fica sem wamid (o id «cw:» num canal Meta nunca é adotado)
+  return gravarSaida(db, ctx, cliente, cx.conversa.id, { tipo: "texto", corpo: final, responde_a_wamid: citacao }, r, ehCodeWords(cred) ? cx.canal_id : null, reserva.ref);
 }
 
 /**
  * Bytes do arquivo no Storage (pela URL assinada): o proxy do aparelho recebe o ARQUIVO, não um link.
- * Não baixou ou veio vazio → 404 midia_nao_encontrada; acima de 16 MB (declarado ou real) → 400 midia_grande.
+ * Não baixou ou veio vazio → 404 midia_nao_encontrada; acima do teto do TIPO (declarado ou real; foto 5 MB, o resto 16 MB)
+ * → 400 midia_grande sem baixar o resto (uma foto de 10 MB era baixada inteira para só então ser recusada).
  */
-async function baixarMidia(link, f) {
+async function baixarMidia(link, f, max = MAX_MIDIA) {
   const ctl = new AbortController();
   let r = null, leitor = null, timer;
   const prazo = new Promise((_, rejeita) => {
@@ -305,7 +338,7 @@ async function baixarMidia(link, f) {
       throw new ErroApi("midia_nao_encontrada", 404);
     }
     const declarado = Number(r.headers.get("content-length"));
-    if (Number.isFinite(declarado) && declarado > MAX_MIDIA) throw new ErroApi("midia_grande", 400);
+    if (Number.isFinite(declarado) && declarado > max) throw new ErroApi("midia_grande", 400);
     if (!r.body) throw new ErroApi("midia_nao_encontrada", 404);
     leitor = r.body.getReader();
     const partes = [];
@@ -315,7 +348,7 @@ async function baixarMidia(link, f) {
       if (item.done) break;
       const parte = item.value instanceof Uint8Array ? item.value : new Uint8Array(item.value);
       // O teto vale enquanto o corpo chega, inclusive sem Content-Length ou com cabeçalho incorreto.
-      if (parte.byteLength > MAX_MIDIA - total) throw new ErroApi("midia_grande", 400);
+      if (parte.byteLength > max - total) throw new ErroApi("midia_grande", 400);
       if (parte.byteLength) { partes.push(parte.slice()); total += parte.byteLength; }
     }
     if (!total) throw new ErroApi("midia_nao_encontrada", 404);
@@ -343,10 +376,12 @@ async function acaoMidia(db, ctx, corpo, deps, env) {
   // WAV só sai pelo aparelho do CodeWords: a Graph da Meta não aceita (recusa antes de reservar o client_ref)
   const wav = soAparelho(corpo.mime);
   if (wav && cx.canal?.provedor !== "codewords") throw new ErroApi("midia_tipo", 400);
+  // tamanho declarado acima do teto do tipo: recusa antes de reservar — na Meta o arquivo ia à Graph e só falhava lá (131053)
+  if (Number(corpo.tamanho) > tipo.max) throw new ErroApi("midia_grande", 400);
   const reserva = await reservarRef(db, cliente, cx.conversa.id, clientRefDe(corpo));
   if (reserva.resposta) return reserva.resposta;
-  const legenda = String(corpo.legenda ?? "").trim().slice(0, 1024) || null;
-  const nome = String(corpo.nome ?? "").trim().slice(0, 200) || null;
+  const legenda = cortarTexto(String(corpo.legenda ?? "").trim(), 1024) || null;
+  const nome = cortarTexto(String(corpo.nome ?? "").trim(), 200) || null;
   const { cred, link, citacao, bytes } = await antesDoCanal(db, cliente, reserva, async () => {
     // o aparelho do CodeWords não tem janela de 24 h (é um WhatsApp comum)
     exigirConversaAberta(cx, { exigeJanela: cx.canal?.provedor !== "codewords" });
@@ -358,15 +393,14 @@ async function acaoMidia(db, ctx, corpo, deps, env) {
     if (!link) throw new ErroApi("midia_nao_encontrada", 404);
     // aparelho: o arquivo vai em bytes (baixado aqui, antes do canal: se falhar, nada saiu) e não há citação
     if (ehCodeWords(cred)) {
-      const bytes = await baixarMidia(link, deps.fetch);
-      if (bytes.byteLength > tipo.max) throw new ErroApi("midia_grande", 400);
+      const bytes = await baixarMidia(link, deps.fetch, tipo.max);
       return { cred, link, citacao: null, bytes };
     }
     const citacao = await citacaoValida(db, cliente, cx.contato?.id, corpo.responde_a);
     return { cred, link, citacao };
   });
   const cw = ehCodeWords(cred);
-  const mime = wav ? mimeBase(corpo.mime) : String(corpo.mime).split(";")[0].trim();
+  const mime = mimeBase(corpo.mime);   // sempre normalizado ('IMAGE/JPEG' ficava gravado em maiúsculas; o front compara 'image/')
   const r = cw
     ? await enviarMidiaCodeWords(cred, destino(cx), { grupo: tipo.grupo, bytes, mime, nome, legenda }, { fetch: deps.fetch, db })
     : await enviarMidiaCanal(cred, destino(cx), { tipo: tipo.grupo, link, legenda, nome }, { respondeA: citacao, fetch: deps.rede });
@@ -401,7 +435,7 @@ async function acaoTemplate(db, ctx, corpo, deps) {
   });
   const r = await enviarTemplateCanal(cred, destino(cx), { nome: tpl.nome, idioma: tpl.idioma, corpo: tpl.corpo, parametros }, { fetch: deps.rede });
   return gravarSaida(db, ctx, cliente, cx.conversa.id, {
-    tipo: "template", corpo: aplicarParametros(tpl.corpo, parametros).slice(0, 4096),
+    tipo: "template", corpo: cortarTexto(aplicarParametros(tpl.corpo, parametros), LIMITE_TEXTO),
     template: { id: tpl.id, nome: tpl.nome, idioma: tpl.idioma, categoria: tpl.categoria, parametros },
   }, r, null, reserva.ref);
 }
@@ -448,6 +482,8 @@ async function testarCanal(db, cliente, canal, deps) {
   return {
     ok: true, numero: info.numero, nome_verificado: info.nome_verificado, qualidade: info.qualidade,
     app_inscrito: inscrito, status: v?.status || (inscrito ? "ativo" : "pendente"), ...(aviso ? { aviso } : {}),
+    // sem app secret próprio o webhook deste número aceita a assinatura do app da plataforma (a tela avisa quando a URL ?c= está em uso)
+    app_secret_global: !cred.app_secret,
   };
 }
 
@@ -537,20 +573,19 @@ async function enviarItem(db, item, creds, rede, prazo = {}) {
     if (item.tipo === "texto") {
       // o aparelho do CodeWords não tem janela de 24 h
       if (!cw && !item.janela_aberta) { await concluir("pulado", "fora da janela de 24 h"); return "pulado"; }
-      corpoMsg = String(item.texto ?? "").trim().slice(0, 4096);
+      corpoMsg = cortarTexto(String(item.texto ?? "").trim(), LIMITE_TEXTO);
       if (!corpoMsg) { await concluir("falhou", "texto vazio"); return "falhou"; }
     } else {
       const modelo = item.modelo;
       if (!modelo || modelo.status !== "APPROVED") { await concluir("falhou", "modelo não aprovado ou não encontrado neste número"); return "falhou"; }
+      // decisão 3 do plano 100: modelo MARKETING só é barrado por quem pediu SAIR (optin_marketing = false); consentimento
+      // desconhecido (null) passa — a mesma regra do painel e da tela
       if (item.contato?.optin_marketing === false && String(modelo.categoria).toUpperCase() === "MARKETING") {
-        const motivo = item.contato?.optin_marketing === false
-          ? "contato pediu para não receber mensagens de marketing"
-          : "consentimento de marketing não confirmado";
-        await concluir("pulado", motivo); return "pulado";
+        await concluir("pulado", "contato pediu para não receber mensagens de marketing"); return "pulado";
       }
       const parametros = (Array.isArray(item.template?.parametros) ? item.template.parametros : []).map(p => String(p ?? ""));
       if (parametros.length !== Number(modelo.num_parametros || 0)) { await concluir("falhou", "número de parâmetros não bate com o modelo"); return "falhou"; }
-      corpoMsg = aplicarParametros(modelo.corpo, parametros).slice(0, 4096);
+      corpoMsg = cortarTexto(aplicarParametros(modelo.corpo, parametros), LIMITE_TEXTO);
       envio = { nome: modelo.nome, idioma: modelo.idioma, corpo: modelo.corpo, parametros };
     }
     if (cw && item.tipo !== "texto") {
@@ -590,8 +625,16 @@ async function enviarItem(db, item, creds, rede, prazo = {}) {
       },
     }).catch(() => null);
     // envio em dúvida (timeout/5xx do CodeWords) NUNCA volta para a fila: pode ter saído
-    await concluir(r.ok ? "enviado" : "falhou", duvida ? `${erro} (não reenviado automaticamente)` : erro, msg?.id);
-    return r.ok ? "enviado" : "falhou";
+    const erroFila = duvida ? `${erro} (não reenviado automaticamente)` : erro;
+    if (!r.ok) { await concluir("falhou", erroFila, msg?.id); return "falhou"; }
+    // a mensagem SAIU: o item nunca é rebaixado para 'falhou' por uma falha do banco ao concluir (a tela diria «falhou»
+    // onde houve entrega e induziria reenvio manual). Repete 1×; se falhar de novo, fica 'enviando' para a faxina da fila.
+    for (let tentativa = 1; ; tentativa++) {
+      try { await concluir("enviado", null, msg?.id); return "enviado"; }
+      catch (e2) {
+        if (tentativa >= 2) { console.error("nx-enviar concluir enviado:", limparErro(e2?.message || e2)); return "enviado_sem_confirmacao"; }
+      }
+    }
   } catch (e) {
     try { await concluir("falhou", e?.message || e); } catch { /* o item volta pela faxina da fila (F7) */ }
     return "falhou";
@@ -643,6 +686,7 @@ export async function enviarFila(db, { ids } = {}, ctx = {}) {
     for (const item of lote) {
       const r = await enviarItem(db, item, creds, rede, prazo);
       if (r === "adiado") { res.adiado = (res.adiado || 0) + 1; continue; }
+      if (r === "enviado_sem_confirmacao") { res.enviado_sem_confirmacao = (res.enviado_sem_confirmacao || 0) + 1; res.total++; continue; }
       res[r]++; res.total++;
     }
     if (res.adiado) break;
@@ -685,6 +729,37 @@ export async function limparMidia(db, env, f) {
   return res;
 }
 
+/**
+ * Saídas da Meta em dúvida (timeout/5xx: 'pendente', sem wamid — o recibo nunca vai casar) com mais de 24 h viram
+ * 'sem_confirmacao' (contrato D144; o status novo entra no CHECK pela migração desta rodada — antes dela o banco recusa e
+ * só fica o log). Uma varredura por hora, pela trava nx-enviar:reconciliar. Nunca lança.
+ */
+export async function reconciliarAmbiguas(db, agora = new Date()) {
+  let pegou = false;
+  try { pegou = await db.rpc("nx_trava_pegar", { p_nome: "nx-enviar:reconciliar", p_segundos: 3600, p_dono: "nx-enviar" }); }
+  catch { return null; }
+  if (pegou !== true) return null;
+  try {
+    const limite = new Date(agora.getTime() - AMBIGUA_LIMITE_MS).toISOString();
+    const linhas = await db.update("nx_mensagens", { direcao: "eq.out", status: "eq.pendente", wamid: "is.null", criado_em: `lt.${limite}` }, {
+      status: "sem_confirmacao", atualizado_em: agora.toISOString(),
+      erro: "Sem confirmação da Meta em 24 h: a mensagem pode ter sido entregue. Confira no WhatsApp antes de reenviar.",
+    }, { retornar: true });
+    return { marcadas: linhas.length };
+  } catch (e) {
+    console.error("nx-enviar reconciliar ambíguas:", limparErro(e?.message || e));
+    return { erro: limparErro(e?.message || e) };
+  }
+}
+
+/** Soma dos resumos da fila quando {ids} e {fila:true} vêm na mesma chamada (antes o segundo apagava o primeiro). */
+const somarFila = (a, b) => {
+  if (!a) return b;
+  const out = { ...a };
+  for (const [k, v] of Object.entries(b || {})) out[k] = (Number(out[k]) || 0) + (Number(v) || 0);
+  return out;
+};
+
 /* ------------------------------------------------------------
    Handler
    ------------------------------------------------------------ */
@@ -692,6 +767,7 @@ const CHAVES_CRON = new Set(["fila", "alerta", "ids"]);
 
 async function modoCron(req, env, deps, f) {
   const db = criarDb(env, f);
+  const t0 = Date.now();
   // corpo antes do banco: teto de 64 KiB (resto drenado, 413 sem tocar no banco); ilegível → {}
   const corpo = await lerCorpo(req, undefined, deps.drenagem);
   const cfg = await autenticarCron(req, db);   // 401 sem o cron_token
@@ -703,8 +779,16 @@ async function modoCron(req, env, deps, f) {
   const out = { ok: true };
   if (Array.isArray(corpo.ids)) out.fila = await enviarFila(db, { ids: corpo.ids }, ctx);
   if (corpo.fila === true) {
-    out.fila = await enviarFila(db, {}, ctx);
+    out.fila = somarFila(out.fila, await enviarFila(db, {}, ctx));
     out.midia = await limparMidia(db, env, f);
+    const agora = agoraDe(deps);
+    const reconciliacao = await reconciliarAmbiguas(db, agora);
+    if (reconciliacao) out.reconciliacao = reconciliacao;
+    // rastro por rodada em nx_execucoes só quando houve trabalho (o cron roda a cada minuto)
+    const f0 = out.fila || {};
+    if ((f0.total || 0) + (f0.adiado || 0) + (out.midia.apagados || 0) + (out.midia.erros || 0) + (reconciliacao?.marcadas || 0) > 0) {
+      await registrarExecucao(db, { tarefa: "nx-enviar", inicio: agora, ms: Date.now() - t0, ok: !out.midia.erro, resumo: { fila: out.fila, midia: out.midia, ...(reconciliacao ? { reconciliacao } : {}) } });
+    }
   }
   if (corpo.alerta != null) {
     const a = corpo.alerta && typeof corpo.alerta === "object" ? corpo.alerta : {};

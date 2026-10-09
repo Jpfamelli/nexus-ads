@@ -237,12 +237,59 @@ const eixoTopo = (v, n = 4) => {
     agendou não "faltou" (isso inventaria uma consulta), e quem avaliou não "deixou de agendar". */
 const MOTIVOS_PAROU = { faltou: "Faltou à consulta", nao_fechou: "Avaliou e não fechou", perdida: "Não agendou" };
 const PAROU_DE = { nova: ["perdida"], agendada: ["faltou", "perdida"], orcamento: ["nao_fechou"], fechou: ["nao_fechou"] };
+
+/* Órbita (o app novo): para onde o clássico manda quem está fora do plano, com teste vencido ou sem permissão.
+   É o mesmo endereço do redirecionador que o GitHub Pages serve em /app/. */
+const ORBITA_URL = "https://orbita-nexus-ads.netlify.app/app/";
+/** Estados de tela por código do Órbita (nx_ctx/nx_exigir_modulo): o que aconteceu e para onde ir — em vez do código cru. */
+const ESTADOS_ORBITA = {
+  modulo_desligado: { titulo: "Os anúncios não fazem parte do seu plano", texto: "Esta empresa não tem o módulo de anúncios ligado. Conversas, agenda e CRM continuam no Órbita; para ligar os anúncios, fale com a Nexus.", orbita: true, erro: false },
+  teste_expirado: { titulo: "O período de teste terminou", texto: "Para continuar acompanhando os anúncios, fale com a Nexus. O Órbita segue aberto só para leitura.", orbita: true, erro: false },
+  conta_suspensa: { titulo: "Acesso suspenso", texto: "O acesso desta empresa está suspenso. Fale com a Nexus para reativar.", orbita: false, erro: true },
+  cliente_pausado: { titulo: "Cliente pausado", texto: "A Nexus pausou este cliente: o servidor não lê os anúncios nem envia relatórios até reativar.", orbita: false, erro: false },
+  sem_permissao: { titulo: "Seu acesso não permite ver os anúncios", texto: "Peça ao administrador da empresa para liberar o módulo de anúncios para a sua conta.", orbita: true, erro: false },
+  sem_acesso: { titulo: "Sem acesso a esta clínica", texto: "", orbita: false, erro: true },
+};
+function estadoDeErro(codigo, mensagem = "") {
+  const e = ESTADOS_ORBITA[codigo];
+  return e ? { ...e, texto: e.texto || mensagem, codigo } : { titulo: "Não deu para carregar os números", texto: mensagem, orbita: false, erro: true, codigo };
+}
+/** nx_config.saas_url: https completo, sem ?parâmetro nem #rota, terminando em "/" (o banco concatena "#/convite/…" direto;
+    só o host vira "https://host/app/"). Vazio é permitido (apaga). */
+function normalizarSaasUrl(v) {
+  const s = String(v || "").trim();
+  if (!s) return { ok: true, valor: "" };
+  let u;
+  try { u = new URL(s); } catch { return { ok: false, erro: "Endereço inválido. Use algo como https://orbita-nexus-ads.netlify.app/app/" }; }
+  if (u.protocol !== "https:" || u.search || u.hash || u.username || !u.hostname.includes(".")) return { ok: false, erro: "Use um endereço https completo, sem ?parâmetros nem #rota." };
+  const caminho = u.pathname === "/" ? "/app/" : (u.pathname.endsWith("/") ? u.pathname : u.pathname + "/");
+  return { ok: true, valor: `${u.origin}${caminho}` };
+}
+/** Nota honesta sobre a receita de um crmTot do núcleo (herói, régua, donut): o que é real, o que é estimado, o que falta. */
+function notaReceita(c, servico = "tratamento") {
+  if (!c) return "";
+  const base = c.receitaEstimada > 0 ? (c.receitaReal > 0 ? `parte estimada pelo valor de cada ${servico}` : `estimativa pelo valor de cada ${servico}`)
+    : c.receita > 0 ? "valores informados na ficha" : "";
+  // quem fechou sem valor não entra na soma: a nota diz quantos ficaram de fora (mesmo quando há receita)
+  const falta = c.semValor > 0 ? `${c.semValor === 1 ? "1 fechamento" : `${c.semValor} fechamentos`} sem valor informado` : "";
+  return base && falta ? `${base} · ${falta}` : base || falta;
+}
+/** «Fazer agora» com retorno real: acha, nas últimas execuções do servidor, a que atendeu ao pedido feito em `desde`. */
+function execucaoDoPedido(execucoes, tarefa, desde) {
+  const lista = (execucoes || []).filter(e => e && e.tarefa === tarefa && Date.parse(e.inicio) >= desde - 60000)
+    .sort((a, b) => Date.parse(b.inicio) - Date.parse(a.inicio));
+  const e = lista[0];
+  if (!e) return { k: "nada", rotulo: "O servidor ainda não registrou o pedido. Confira em Configuração da Nexus o endereço das funções e o token do cron." };
+  if (e.ok === false) return { k: "erro", rotulo: `Deu erro no servidor${e.resumo ? `: ${typeof e.resumo === "string" ? e.resumo.slice(0, 160) : JSON.stringify(e.resumo).slice(0, 160)}` : ""}.`, e };
+  if (e.ok === true) return { k: "ok", rotulo: `Rodou no servidor${e.fim ? ` às ${horaSP(e.fim)}` : ""} ✓`, e };
+  return { k: "rodando", rotulo: "Começou no servidor e ainda está rodando.", e };
+}
 /* ==== PURO: fim ==== */
 
 /* ============================================================
    1. ESTADO
    ============================================================ */
-const novoAj = () => ({ carregado: false, integ: null, contas: null, config: null, novoCliente: false, tRecarga: 0 });
+const novoAj = () => ({ carregado: false, integ: null, contas: null, config: null, novoCliente: false, tRecarga: 0, tConfere: 0 });
 const S = {
   aba: "geral", dias: 30, plat: "", sort: { key: "gasto", dir: -1 }, varridoEm: null,
   demo: DEMO, token: null, conta: null, clientes: [], clienteId: null, dados: null, estado: null,
@@ -534,7 +581,8 @@ function renderGeral() {
   $("#corpo-geral").hidden = vazio;
   if (vazio) { $("#vazio-geral").innerHTML = htmlSemAnuncios(); renderSimulador(); return; }
 
-  const { de, t, ta, c, ca, roas, retorno } = numerosPeriodo();
+  // fee = gestão do período (0 quando o cliente não configurou: a conta e o rótulo passam a ser só anúncios)
+  const { de, t, ta, c, ca, roas, retorno, fee } = numerosPeriodo();
   const CFG = M.CFG;
   renderDesdeVisita();
 
@@ -556,14 +604,14 @@ function renderGeral() {
     passo(c.agendadas, "h-ag", c.agendadas === 1 ? "avaliação agendada" : "avaliações agendadas", fin(tx1) ? tx1 : 0) +
     passo(c.fecharam, "h-fe", c.fecharam === 1 ? "paciente novo" : "pacientes novos", fin(tx2) ? tx2 : 0);
 
-  // a conta em linguagem de consultório (o MESMO retorno de sempre, só reescrito)
+  // a conta em linguagem de consultório (o MESMO retorno de sempre, só reescrito); a nota diz o que é real e o que é estimado
   $("#hero-conta").innerHTML = `
     <div class="hc"><span class="hc-l">No consultório</span>
       <p class="hc-f"><b data-n="${c.receita}" data-f="brl0" data-k="h-rec">${brl0(c.receita)}</b> em tratamentos</p>
-      <small>estimativa pelo valor de cada tratamento</small></div>
-    <div class="hc hc-x"><span class="hc-l">${rotT(S.plat ? "hero.retornoPlat" : "hero.retorno")}${gestor() && fin(retorno) ? ` · ${dec(retorno, 1)}x` : ""}</span>
+      <small>${esc(notaReceita(c))}</small></div>
+    <div class="hc hc-x"><span class="hc-l">${rotT(S.plat || !fee ? "hero.retornoPlat" : "hero.retorno")}${gestor() && fin(retorno) ? ` · ${dec(retorno, 1)}x` : ""}</span>
       <p class="hc-f">${fin(retorno) ? `Cada R$ 1 ${S.plat ? "em anúncio" : "investido"} virou <b>${brl(retorno)}</b>` : "Sem investimento no período"}</p>
-      <small>${S.plat ? "tratamentos ÷ investimento em anúncios" : "tratamentos ÷ (anúncios + gestão)"}</small></div>`;
+      <small>${S.plat || !fee ? "tratamentos ÷ investimento em anúncios" : "tratamentos ÷ (anúncios + gestão)"}</small></div>`;
 
   // o celular de verdade: tela bloqueada recebendo as conversas vindas de anúncio
   const hoje = M.dataDe(M.R + 1);
@@ -602,7 +650,7 @@ function renderGeral() {
     { k: "k-fe", l: "Pacientes novos", v: c.fecharam, a: ca.fecharam, f: "int", s: "cima", sp: par(m7(sd.fe)) },
     { k: "k-rec", l: "Tratamentos fechados", v: c.receita, a: ca.receita, f: "brl0", s: "cima",
       // a clínica lê a conta do herói (com a gestão); o "x" só anúncios fica para o gestor
-      extra: !gestor() ? "estimativa pelo valor de cada tratamento" : fin(roas) ? `${dec(roas, 1)}x o investido em anúncios` : "", sp: [acum(idx), acum(idxA)] },
+      extra: !gestor() ? esc(notaReceita(c)) : fin(roas) ? `${dec(roas, 1)}x o investido em anúncios` : esc(notaReceita(c)), sp: [acum(idx), acum(idxA)] },
   ];
   // conexão parada: as células que dependem da leitura dos anúncios avisam de que dia é o número
   const parada = estadoInteg().erros.filter(e => !S.plat || e.canal === S.plat);
@@ -1058,7 +1106,9 @@ function cardLead(L, col, n) {
     : `<span class="chip chip-neutro">${esc(camp ? camp.curto : "Sem anúncio")}</span>`;
   // em "Não seguiu" a etapa já está escrita na linha de baixo (faltou / não agendou / não fechou): só marca a falta
   const etq = col === "parou" && e === "faltou" ? `<span class="chip chip-bad">${NOME_ETAPA[e]}</span>` : "";
-  const val = e === "fechou" ? `<span class="val">${brl0(M.valorLead(L))}</span>` : "";
+  // fechou sem valor e sem tabela: a ficha diz "sem valor" em vez de inventar R$ 0
+  const vd = e === "fechou" ? M.valorDe(L) : null;
+  const val = vd ? `<span class="val">${vd.semValor ? "sem valor" : brl0(vd.valor)}</span>` : "";
   return `<button type="button" class="lead${S.destacar.has(String(L.id)) ? " destaque" : ""}" data-lead="${esc(String(L.id))}" data-col="${col}" style="--i:${n}" aria-haspopup="dialog" aria-describedby="k-dica">
     <span class="av" style="--c:${AVC[hash(L.nome) % AVC.length]}" aria-hidden="true">${esc(ini)}</span>
     <span class="l-txt"><span class="l-nome"><strong>${esc(L.nome)}</strong>${etq}${val}</span><span class="lp${q.atraso ? " atrasada" : ""}">${esc(L.servico)} · ${esc(q.txt)}</span></span>
@@ -1098,16 +1148,24 @@ function renderPacientes() {
 
   // anúncio × consultório (+ quem chegou sem anúncio, para o dono ver o todo)
   const { de } = janela(), rows = linhasCamp().sort((a, b) => b.k.receita - a.k.receita);
+  // anúncio sem campanha identificada (e campanha sem gasto no período): sem custo, mas o paciente existe
+  const comRow = new Set(rows.map(r => r.c.id));
+  const semGasto = campanhas().filter(c => !comRow.has(c.id))
+    .map(c => ({ c, k: M.crmTot(de, M.R, { camp: c.id }) }))
+    .filter(x => x.k.conversas || x.k.agendadas || x.k.fecharam);
   const orgs = S.plat ? [] : Object.values(M.CAMP).filter(c => !c.plat)
     .map(c => ({ c, k: M.crmTot(de, M.R, { camp: c.id, organicos: true }) }))
     .filter(x => x.k.conversas || x.k.agendadas || x.k.fecharam);
-  $("#tbl-origem").innerHTML = rows.length || orgs.length ? `<table>
+  $("#tbl-origem").innerHTML = rows.length || semGasto.length || orgs.length ? `<table>
     <caption class="sr-only">Resultado de cada campanha no consultório, últimos ${S.dias} dias</caption>
     <thead><tr><th scope="col">Origem</th><th scope="col">Conversas</th><th scope="col">Agendaram</th><th scope="col">Vieram</th><th scope="col">Pacientes</th><th scope="col">Tratamentos</th><th scope="col">Custo/paciente</th></tr></thead>
     <tbody>${rows.map((r, i) => `<tr style="--i:${i}">
       <td><div class="nm-t"><span>${esc(r.c.nome)}</span><small><span class="chip chip-${classePlat(r.c.plat)}">${nomePlat(r.c.plat)}</span></small></div></td>
       <td>${r.k.conversas}</td><td>${r.k.agendadas}</td><td>${r.k.compareceram}</td><td>${r.k.fecharam}</td><td>${brl0(r.k.receita)}</td><td>${brl0(r.cpp)}</td>
-    </tr>`).join("")}${orgs.map(({ c, k }, i) => `<tr class="org" style="--i:${rows.length + i}">
+    </tr>`).join("")}${semGasto.map(({ c, k }, i) => `<tr style="--i:${rows.length + i}">
+      <td><div class="nm-t"><span>${esc(c.nome)}</span><small><span class="chip chip-${classePlat(c.plat)}">${nomePlat(c.plat)}</span>${c.semCampanha ? ` <span class="chip chip-neutro" title="o anúncio ainda não apareceu na leitura do Meta/Google (ou chegou sem identificação)">sem campanha</span>` : ""}</small></div></td>
+      <td>${k.conversas}</td><td>${k.agendadas}</td><td>${k.compareceram}</td><td>${k.fecharam}</td><td>${brl0(k.receita)}</td><td>—</td>
+    </tr>`).join("")}${orgs.map(({ c, k }, i) => `<tr class="org" style="--i:${rows.length + semGasto.length + i}">
       <td><div class="nm-t"><span>${esc(c.nome)}</span><small><span class="chip chip-neutro">sem anúncio</span></small></div></td>
       <td>${k.conversas}</td><td>${k.agendadas}</td><td>${k.compareceram}</td><td>${k.fecharam}</td><td>${brl0(k.receita)}</td><td>—</td>
     </tr>`).join("")}</tbody>
@@ -1115,9 +1173,14 @@ function renderPacientes() {
 
   // tratamentos fechados (donut)
   const c = M.crmTot(de, M.R, { plat: S.plat });
-  const segs = Object.entries(c.serv).sort((a, b) => b[1].v - a[1].v).map(([nome, s], n) => ({ nome, ...s, cor: corServ(nome, n) }));
-  $("#donut-sub").textContent = `Pacientes dos anúncios, últimos ${S.dias} dias · estimativa pelo valor de cada tratamento.`;
-  if (!c.receita) { $("#donut").innerHTML = `<p class="vazio">Nenhum tratamento fechado no período.</p>`; return; }
+  const segs = Object.entries(c.serv).filter(([, s]) => s.v > 0).sort((a, b) => b[1].v - a[1].v).map(([nome, s], n) => ({ nome, ...s, cor: corServ(nome, n) }));
+  const nota = notaReceita(c);
+  $("#donut-sub").textContent = `Pacientes dos anúncios, últimos ${S.dias} dias${nota ? ` · ${nota}` : ""}.`;
+  if (!c.receita) {
+    $("#donut").innerHTML = `<p class="vazio">${c.semValor > 0
+      ? `${esc(notaReceita(c))}. Abra a ficha e registre o valor para ele entrar na conta.` : "Nenhum tratamento fechado no período."}</p>`;
+    return;
+  }
   let acc = 0;
   const arcs = segs.map(s => {
     const p = s.v / c.receita * 100, gap = segs.length > 1 ? .8 : 0;
@@ -1136,7 +1199,8 @@ const gvEtapa = () => { const r = $('input[name="lf-etapa"]:checked'); return r 
 const hojeDados = () => (S.dados && S.dados.hoje) || hojeSP();
 
 function opcoesOrigem() {
-  const camps = Object.values(M.CAMP).filter(c => c.plat).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  // o balde "sem campanha identificada" não é uma campanha que se escolha: quem está nele fica travado na origem
+  const camps = Object.values(M.CAMP).filter(c => c.plat && !c.semCampanha).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
   return `<optgroup label="Sem anúncio">${ORIGENS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</optgroup>` +
     (camps.length ? `<optgroup label="Veio de um anúncio">${camps.map(c => `<option value="camp:${esc(c.id)}">${esc(c.nome)} (${nomePlat(c.plat)})</option>`).join("")}</optgroup>` : "");
 }
@@ -1167,7 +1231,7 @@ function fitaHtml(L) {
     { t: "Agendou", q: dia(L.iAgenda), on: L.iAgenda != null && e !== "nova" && e !== "perdida", d: entre(L.i, L.iAgenda, "até agendar") },
     { t: "Consulta", q: dia(L.iConsulta), on: L.iConsulta != null && ETAPAS_VEIO.has(e), marcado: L.iConsulta != null && e === "agendada",
       falta: e === "faltou", d: entre(L.iAgenda, L.iConsulta, "até a consulta") },
-    { t: "Fechou", q: fechou ? brl0(M.valorLead(L)) : null, on: fechou, v: fechou ? L.servico : "" },
+    { t: "Fechou", q: fechou ? (M.valorDe(L).semValor ? "sem valor" : brl0(M.valorLead(L))) : null, on: fechou, v: fechou ? L.servico : "" },
   ];
   return quadros.map((f, n) => `<li class="ft${f.on ? " on" : ""}${f.marcado && !f.on ? " marcado" : ""}${f.falta ? " falta" : ""}" style="--i:${n}">
       <span class="ft-t">${f.t}</span><b class="ft-q">${f.falta ? "faltou" : f.q && (f.on || f.marcado) ? esc(f.q) : "—"}</b>
@@ -1191,11 +1255,12 @@ function abrirGaveta(L, o = {}) {
   $("#gv-fita").hidden = !L;
 
   // quem veio de anúncio identificado pelo WhatsApp não muda de origem na mão: vira o cartão de referência do anúncio
-  const travado = !!(L && L.plat && (S.demo || b.anuncio_ext));
+  // (vale também para o anúncio ainda sem campanha identificada — senão qualquer edição apagaria a origem)
+  const travado = !!(L && L.plat && (S.demo || b.anuncio_ext || (M.CAMP[L.camp] && M.CAMP[L.camp].semCampanha)));
   if (travado) {
     const k = L.cri && M.CRI[L.cri], c = M.CAMP[L.camp];
     $("#gv-origem-info").innerHTML = `<span class="ref-mini ref-${classePlat(L.plat)}" aria-hidden="true"><svg><use href="#ic-wa"/></svg></span>
-      <span class="ref-q"><small>Anúncio · ${nomePlat(L.plat)}</small><b>${esc(k ? k.nome : "anúncio da campanha")}</b><span>${esc(c ? c.nome : "—")}</span></span>`;
+      <span class="ref-q"><small>Anúncio · ${nomePlat(L.plat)}</small><b>${esc(k ? k.nome : c && c.semCampanha ? "anúncio ainda não identificado" : "anúncio da campanha")}</b><span>${esc(c ? c.nome : "—")}</span></span>`;
   } else {
     $("#lf-origem").innerHTML = opcoesOrigem();
     const v = L && L.plat && M.CAMP[L.camp] ? "camp:" + L.camp : (b.origem && b.origem !== "anuncio" ? b.origem : (L && L.origem && L.origem !== "anuncio" ? L.origem : L ? "whatsapp" : "indicacao"));
@@ -1205,8 +1270,9 @@ function abrirGaveta(L, o = {}) {
   $("#gv-origem-info").hidden = !travado;
   $("#lf-box-origem").hidden = travado;
 
-  const servs = Object.keys(M.CFG.ticket);
-  const sv = L ? L.servico : (servs.includes("Clínica geral") ? "Clínica geral" : servs[0]);
+  // sem tabela de valores configurada, a lista ainda oferece o serviço padrão da vertical
+  const servs = Object.keys(M.CFG.ticket), padrao = M.VOC.servicoPadrao;
+  const sv = L ? L.servico : (servs.includes(padrao) ? padrao : servs[0] || padrao);
   if (sv && !servs.includes(sv)) servs.push(sv);
   $("#lf-servico").innerHTML = servs.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
   $("#lf-servico").value = sv || "";
@@ -1355,11 +1421,11 @@ function menuParou(L, x, y) {
 /* ---------- o momento "Fechou": luz bronze curta, uma vez por evento (≤ 1,4 s) ---------- */
 function celebrar(L) {
   if (!L || !M) return;
-  const v = M.valorLead(L), d = M.dataDe(M.R), ini = Math.max(0, M.R - (d.getDate() - 1));
+  const vd = M.valorDe(L), d = M.dataDe(M.R), ini = Math.max(0, M.R - (d.getDate() - 1));
   const soma = M.crmTot(ini, M.R).receita, mes = MESES[d.getMonth()];
   const el = $("#celebra");
-  el.innerHTML = `<p class="cb-t">Paciente novo!</p><p class="cb-l">${esc(nomeCurto(L.nome))} fechou ${esc(L.servico)} · <b>${brl0(v)}</b></p>` +
-    `<p class="cb-s">${mes.charAt(0).toUpperCase() + mes.slice(1)} agora soma <b>${brl0(soma)}</b></p>`;
+  el.innerHTML = `<p class="cb-t">Paciente novo!</p><p class="cb-l">${esc(nomeCurto(L.nome))} fechou ${esc(L.servico)}${vd.semValor ? "" : ` · <b>${brl0(vd.valor)}</b>`}</p>` +
+    (soma > 0 ? `<p class="cb-s">${mes.charAt(0).toUpperCase() + mes.slice(1)} agora soma <b>${brl0(soma)}</b></p>` : "");
   clearTimeout(el._t);
   el.hidden = false;
   el.classList.remove("on"); void el.offsetWidth; el.classList.add("on");
@@ -1896,6 +1962,15 @@ const CANAIS = {
 };
 const REGRAS_NOMES = [["r1", "Custo por conversa alto"], ["r2", "Campanha sem conversa"], ["r3", "Criativo com CTR baixo"], ["r4", "Fadiga de criativo"]];
 
+/** Configuração da Nexus e «Fazer agora» são só do super: nx_sessao passa a dizer `super`; sem o campo, o
+    so_plataforma do nx_config_ver denuncia um gestor de revenda (antes o cartão ficava na tela sempre falhando). */
+const vedadoSuper = () => !!(S.conta && S.conta.super === false) || !!(S.aj.config && S.aj.config.erro && S.aj.config.erro.codigo === "so_plataforma");
+function aplicarVedados() {
+  const v = vedadoSuper();
+  $("#card-config").hidden = v;
+  $("#card-exec").hidden = v;
+}
+
 function renderAjustes() {
   if (!gestor()) return;
   if (!S.aj.carregado) carregarAjustes();
@@ -2008,6 +2083,7 @@ async function carregarAjustes() {
   const val = r => (r.status === "fulfilled" ? r.value : { erro: r.reason });
   S.aj.integ = val(integ); S.aj.contas = val(contas); S.aj.config = val(config);
   if (S.aba === "ajustes") { renderIntegracoes(); renderContas(); renderConfig(); }
+  else aplicarVedados();
   atualizarBadgeContas();
 }
 
@@ -2040,7 +2116,7 @@ function renderFormCliente() {
       <label class="campo"><span>Gestão mensal (R$)</span><input type="number" id="cl-fee" min="0" step="1" inputmode="decimal" value="${esc(cfg.fee)}"></label>
     </div>
     <h3>Valor de cada tratamento</h3>
-    <p class="nota-sm">Estima o resultado quando a clínica não informa o valor fechado.</p>
+    <p class="nota-sm">Estima o resultado quando a clínica não informa o valor fechado — e só para os tratamentos desta lista. Sem a lista, entra na conta apenas o valor informado em cada ficha.</p>
     <div class="tickets" id="cl-tickets">${Object.entries(cfg.ticket).map(([s, v]) => linhaTicket(s, v)).join("")}</div>
     <p><button class="link-b" type="button" id="cl-tk-add">+ tratamento</button></p>
     <h3>WhatsApp</h3>
@@ -2159,16 +2235,32 @@ async function executarTarefa(tipo, btn) {
   const [tarefa, corpo] = tipo === "ciclo" ? ["nx-ciclo", { cliente: cid }] : ["nx-relatorio", { tipo, cliente: cid, forcar: true }];
   ocupado(btn, true);
   try {
-    await api.executar(S.token, tarefa, corpo);
+    const desde = Date.now();
+    const r = await api.executar(S.token, tarefa, corpo);
     const h = FMT_HORA.format(new Date());
     avisoForm(st, tipo === "ciclo"
-      ? `Pedido enviado às ${h}. Os números novos aparecem em 1 ou 2 minutos — o painel recarrega sozinho.`
-      : `Pedido enviado às ${h}. O ${tipo === "mensal" ? "resumo do mês" : "relatório do dia"} chega no WhatsApp dos destinos em instantes.`, false);
+      ? `Pedido enviado às ${h}. Os números novos aparecem em 1 ou 2 minutos — o painel recarrega sozinho. Em 30 s confiro se o servidor começou.`
+      : `Pedido enviado às ${h}. O ${tipo === "mensal" ? "resumo do mês" : "relatório do dia"} chega no WhatsApp dos destinos em instantes. Em 30 s confiro se o servidor começou.`, false);
     clearTimeout(S.aj.tRecarga);
     S.aj.tRecarga = setTimeout(() => { if (S.clienteId === cid) carregarDados({ entrada: false }); }, tipo === "ciclo" ? 90000 : 45000);
+    // retorno real: 30 s depois, lê as últimas execuções do servidor e diz se o pedido rodou (ou se nada aconteceu)
+    clearTimeout(S.aj.tConfere);
+    S.aj.tConfere = setTimeout(() => conferirPedido(tarefa, desde, r && r.pedido), 30000);
   } catch (err) {
     if (err.codigo !== "sessao_invalida") avisoForm(st, api.mensagemErro(err), true);
   } finally { ocupado(btn, false); }
+}
+async function conferirPedido(tarefa, desde, pedido) {
+  const st = $("#exec-status");
+  if (!st || S.aba !== "ajustes") return;
+  try {
+    const c = await api.configVer(S.token);
+    if (c && typeof c === "object" && !Array.isArray(c)) { S.aj.config = c; renderExecucoes(c); }
+    const r = execucaoDoPedido(c && c.ultimas_execucoes, tarefa, desde);
+    avisoForm(st, `${nomeTarefa(tarefa)}${pedido ? ` (pedido ${pedido})` : ""}: ${r.rotulo}`, r.k === "erro" || r.k === "nada");
+  } catch (err) {
+    if (err.codigo !== "sessao_invalida") avisoForm(st, `Não consegui conferir no servidor agora (${api.mensagemErro(err)}).`, true);
+  }
 }
 
 function htmlConta(c) {
@@ -2191,16 +2283,23 @@ function htmlConta(c) {
     </div></li>`;
 }
 
+/** Só as contas da plataforma (gestor da Nexus e "clínica" do clássico). Usuário do Órbita (convidado pelo cliente)
+    tem papel e departamentos que esta tela não conhece: quando o servidor marcar `origem: 'orbita'`, ele sai daqui
+    e o cartão aponta para Admin → Clientes → Usuários. */
+const contaDaPlataforma = c => !c || !c.origem || c.origem !== "orbita";
 function renderContas() {
   const ul = $("#aj-contas"), L = S.aj.contas;
   if (L == null) { ul.innerHTML = `<li>${carregandoHtml("Lendo as contas…")}</li>`; return; }
   if (L.erro) { ul.innerHTML = `<li class="vazio">${esc(api.mensagemErro(L.erro))}</li>`; return; }
-  if (!L.length) { ul.innerHTML = `<li class="vazio">Nenhuma conta ainda.</li>`; return; }
-  ul.innerHTML = L.slice().sort((a, b) => (!!a.aprovado - !!b.aprovado) || String(b.criado_em).localeCompare(String(a.criado_em))).map(htmlConta).join("");
+  const lista = L.filter(contaDaPlataforma), orbita = L.length - lista.length;
+  const nota = $("#contas-orbita");
+  if (nota) nota.textContent = orbita ? `${orbita === 1 ? "1 usuário do Órbita não aparece" : `${orbita} usuários do Órbita não aparecem`} aqui: papel e departamentos deles se ajustam em Admin → Clientes → Usuários.` : "";
+  if (!lista.length) { ul.innerHTML = `<li class="vazio">Nenhuma conta ainda.</li>`; return; }
+  ul.innerHTML = lista.slice().sort((a, b) => (!!a.aprovado - !!b.aprovado) || String(b.criado_em).localeCompare(String(a.criado_em))).map(htmlConta).join("");
 }
 
 function atualizarBadgeContas() {
-  const n = Array.isArray(S.aj.contas) ? S.aj.contas.filter(c => !c.aprovado).length : 0;
+  const n = Array.isArray(S.aj.contas) ? S.aj.contas.filter(c => !c.aprovado && contaDaPlataforma(c)).length : 0;
   $$("[data-badge-aj]").forEach(b => { b.textContent = n; b.hidden = !n; });
 }
 
@@ -2227,50 +2326,95 @@ async function salvarConta(li, aprovar, btn) {
 const nomeTarefa = t => ({ "nx-ciclo": "Leitura dos anúncios + radar", "nx-relatorio": "Relatório", "nx-whatsapp": "Webhook do WhatsApp" }[t] || t || "Tarefa");
 const resumoTxt = r => !r ? "" : typeof r === "string" ? r.slice(0, 180) : JSON.stringify(r).slice(0, 180);
 
-function renderConfig() {
-  const c = S.aj.config, f = $("#form-config"), ex = $("#aj-execucoes");
-  if (c == null) { f.innerHTML = carregandoHtml("Lendo a configuração…"); ex.innerHTML = ""; return; }
-  if (c.erro) { f.innerHTML = `<p class="vazio">${esc(api.mensagemErro(c.erro))}</p>`; ex.innerHTML = ""; return; }
-  $("#cfg-webhook").textContent = c.webhook_url || "—";
-  $("#cfg-verify").textContent = c.wa_verify_token || "—";
-  const sec = (k, rot, tem, dica) => `<label class="campo"><span>${rot}${tem ? `<b class="ok-preenchido">✓ preenchido</b>` : ""}</span>` +
-    `<input type="password" name="${k}" id="cf-${k}" autocomplete="new-password" spellcheck="false" placeholder="${tem ? "em branco = mantém o atual" : ""}">${dica ? `<small>${dica}</small>` : ""}</label>`;
-  const txt = (k, rot, dica = "", ph = "") => `<label class="campo"><span>${rot}</span>` +
-    `<input type="text" name="${k}" id="cf-${k}" value="${esc(c[k] ?? "")}" spellcheck="false" autocapitalize="off" placeholder="${esc(ph)}"${k === "modelo_ia" ? ` list="cf-modelos"` : ""}>${dica ? `<small>${dica}</small>` : ""}</label>`;
-  f.innerHTML = `
-    <h3>WhatsApp da Nexus (quem envia os avisos)</h3>
-    <div class="form-2">${txt("wa_phone_number_id", "ID do número (phone_number_id)")}${sec("wa_access_token", "Token de acesso", c.tem_wa_token)}</div>
-    <div class="form-2">${txt("wa_template", "Modelo aprovado (fora da janela de 24h)", "Parâmetros do modelo: título curto e link do painel.")}${sec("meta_app_secret", "App secret (confere o webhook)", c.tem_app_secret)}</div>
-    <h3>Leitura por IA</h3>
-    <div class="form-2">${sec("anthropic_api_key", "Chave da API", c.tem_ia, "Sem chave, a leitura sai por regras fixas.")}${txt("modelo_ia", "Modelo", "", "claude-opus-5")}</div>
-    <datalist id="cf-modelos"><option value="claude-opus-5"></option><option value="claude-fable-5-1"></option></datalist>
-    <h3>Outros</h3>
-    <div class="form-2">${txt("painel_url", "Endereço do painel", "Vai como link no modelo de WhatsApp.")}${txt("google_api_versao", "Versão da API do Google", "Em branco: o servidor descobre sozinho.", "automático")}</div>
-    <div class="aj-pe"><button class="pill pill-bronze" type="submit" id="cf-salvar">Salvar configuração</button></div>
-    <p class="aj-st" id="cf-status" role="status"></p>`;
-  const L = c.ultimas_execucoes || [];
+// segredos (só escrita) e a flag que o nx_config_ver devolve para cada um
+const SEGREDOS = { wa_access_token: "tem_wa_token", meta_app_secret: "tem_app_secret", anthropic_api_key: "tem_ia" };
+// texto em branco só é mandado quando "vazio" tem sentido (o servidor apaga a coluna); os três últimos pedem confirmação
+const LIMPAVEIS = new Set(["wa_template", "google_api_versao", "painel_url", "wa_phone_number_id", "saas_url"]);
+const ROTULO_CFG = { wa_template: "o modelo aprovado", google_api_versao: "a versão da API do Google", painel_url: "o endereço do painel",
+  wa_phone_number_id: "o ID do número da Nexus", saas_url: "o endereço do Órbita" };
+
+function renderExecucoes(c) {
+  const ex = $("#aj-execucoes"), L = (c && c.ultimas_execucoes) || [];
   ex.innerHTML = `<h3>Últimas execuções do servidor</h3>` + (L.length
     ? `<ul>${L.slice(0, 8).map(e => `<li><span aria-hidden="true">${e.ok === false ? "✗" : e.ok ? "✓" : "…"}</span><div><b>${esc(nomeTarefa(e.tarefa))}</b> · ${quandoSP(e.inicio)}` +
         `<span class="sr-only">${e.ok === false ? " — deu erro" : e.ok ? " — deu certo" : " — em andamento"}</span>${e.ok === false ? ` <span class="chip chip-bad">erro</span>` : ""}<small>${esc(resumoTxt(e.resumo))}</small></div></li>`).join("")}</ul>`
     : `<p class="vazio">Nenhuma execução registrada ainda.</p>`);
 }
 
+function renderConfig() {
+  const c = S.aj.config, f = $("#form-config"), ex = $("#aj-execucoes");
+  aplicarVedados();
+  if (c == null) { f.innerHTML = carregandoHtml("Lendo a configuração…"); ex.innerHTML = ""; return; }
+  if (c.erro) { f.innerHTML = `<p class="vazio">${esc(api.mensagemErro(c.erro))}</p>`; ex.innerHTML = ""; return; }
+  $("#cfg-webhook").textContent = c.webhook_url || "—";
+  $("#cfg-verify").textContent = c.wa_verify_token || "—";
+  // segredo preenchido ganha «Remover» (null explícito no nx_config_salvar, com confirmação)
+  const sec = (k, rot, tem, dica) => `<label class="campo"><span>${rot}${tem ? `<b class="ok-preenchido">✓ preenchido</b> <button class="link-b" type="button" data-rm-segredo="${k}" aria-label="Remover ${rot}">Remover</button>` : ""}</span>` +
+    `<input type="password" name="${k}" id="cf-${k}" autocomplete="new-password" spellcheck="false" placeholder="${tem ? "em branco = mantém o atual" : ""}">${dica ? `<small>${dica}</small>` : ""}</label>`;
+  const txt = (k, rot, dica = "", ph = "") => `<label class="campo"><span>${rot}</span>` +
+    `<input type="text" name="${k}" id="cf-${k}" value="${esc(c[k] ?? "")}" spellcheck="false" autocapitalize="off" placeholder="${esc(ph)}"${k === "modelo_ia" ? ` list="cf-modelos"` : ""}>${dica ? `<small>${dica}</small>` : ""}</label>`;
+  f.innerHTML = `
+    <h3>WhatsApp da Nexus (quem envia os avisos)</h3>
+    <div class="form-2">${txt("wa_phone_number_id", "ID do número (phone_number_id)", "Em branco: apaga (com confirmação).")}${sec("wa_access_token", "Token de acesso", c.tem_wa_token)}</div>
+    <div class="form-2">${txt("wa_template", "Modelo aprovado (fora da janela de 24h)", "Parâmetros do modelo: título curto e link do painel.")}${sec("meta_app_secret", "App secret (confere o webhook)", c.tem_app_secret)}</div>
+    <h3>Leitura por IA</h3>
+    <div class="form-2">${sec("anthropic_api_key", "Chave da API", c.tem_ia, "Sem chave, a leitura sai por regras fixas.")}${txt("modelo_ia", "Modelo", "", "claude-opus-5")}</div>
+    <datalist id="cf-modelos"><option value="claude-opus-5"></option><option value="claude-fable-5-1"></option></datalist>
+    <h3>Endereços</h3>
+    <div class="form-2">${txt("saas_url", "Endereço do Órbita (link base)", "Base dos convites e dos domínios dos clientes, terminando em /app/. Sem ele, o convite sai com o endereço de onde o admin estava.", "https://orbita-nexus-ads.netlify.app/app/")}${txt("painel_url", "Endereço do painel clássico", "Vai como link no modelo de WhatsApp. Em branco: apaga.")}</div>
+    <h3>Outros</h3>
+    <div class="form-2">${txt("google_api_versao", "Versão da API do Google", "Em branco: o servidor descobre sozinho.", "automático")}</div>
+    <div class="aj-pe"><button class="pill pill-bronze" type="submit" id="cf-salvar">Salvar configuração</button></div>
+    <p class="aj-st" id="cf-status" role="status"></p>`;
+  renderExecucoes(c);
+}
+
 async function salvarConfig(ev) {
   ev.preventDefault();
-  const f = $("#form-config"), st = $("#cf-status"), btn = $("#cf-salvar");
-  // segredo em branco = mantém; texto em branco só é mandado quando "vazio" tem sentido
-  const LIMPAVEIS = new Set(["wa_template", "google_api_versao"]);
+  const f = $("#form-config"), st = $("#cf-status"), btn = $("#cf-salvar"), atual = S.aj.config || {};
+  // segredo em branco = mantém; texto em branco só vai quando o campo é limpável
   const cfg = {};
   $$("input[name]", f).forEach(i => {
     const v = i.value.trim();
     if (v || (i.type !== "password" && LIMPAVEIS.has(i.name))) cfg[i.name] = v;
   });
+  if ("saas_url" in cfg) {
+    const n = normalizarSaasUrl(cfg.saas_url);
+    if (!n.ok) { f.elements.saas_url.focus(); return avisoForm(st, n.erro, true); }
+    cfg.saas_url = n.valor;
+    if (n.valor && n.valor !== String(f.elements.saas_url.value).trim()) f.elements.saas_url.value = n.valor;
+  }
+  // apagar o que estava preenchido só com confirmação (painel_url, número da Nexus, endereço do Órbita)
+  const apagando = ["painel_url", "wa_phone_number_id", "saas_url"].filter(k => k in cfg && !cfg[k] && String(atual[k] || "").trim());
+  if (apagando.length && !confirm(`Apagar ${apagando.map(k => ROTULO_CFG[k]).join(", ")}? O servidor fica sem esse valor até você preencher de novo.`)) {
+    return avisoForm(st, "Nada foi salvo.", false);
+  }
   ocupado(btn, true);
   try {
     const r = await api.configSalvar(S.token, cfg);
     if (r && typeof r === "object" && !Array.isArray(r)) S.aj.config = r;
     renderConfig();
     avisoForm($("#cf-status"), "Configuração salva ✓", false);
+  } catch (err) {
+    if (err.codigo !== "sessao_invalida") avisoForm(st, api.mensagemErro(err), true);
+    ocupado(btn, false);
+  }
+}
+
+/** «Remover» um segredo: manda null explícito (nx_config_salvar apaga e audita). Se o servidor ainda for o antigo
+    (null = mantém), a flag volta preenchida e a tela diz isso em vez de fingir que removeu. */
+async function removerSegredo(k, btn) {
+  const st = $("#cf-status"), flag = SEGREDOS[k];
+  if (!flag) return;
+  const rot = (btn.getAttribute("aria-label") || "Remover segredo").replace(/^Remover /, "");
+  if (!confirm(`Remover ${rot} do servidor? O que depende dele para de funcionar até você gravar um novo.`)) return;
+  ocupado(btn, true);
+  try {
+    const r = await api.configSalvar(S.token, { [k]: null });
+    if (r && typeof r === "object" && !Array.isArray(r)) S.aj.config = r;
+    renderConfig();
+    const ainda = S.aj.config && S.aj.config[flag];
+    avisoForm($("#cf-status"), ainda ? "O servidor ainda não aceita remover esse segredo (atualização do banco pendente) — nada mudou." : `${rot}: removido ✓`, !!ainda);
   } catch (err) {
     if (err.codigo !== "sessao_invalida") avisoForm(st, api.mensagemErro(err), true);
     ocupado(btn, false);
@@ -2468,8 +2612,8 @@ function renderDesdeVisita() {
   if (!novos.length) { box.hidden = true; return; }
   const total = novos.reduce((s, L) => s + M.valorLead(L), 0);
   box.innerHTML = `<div class="desde-q"><p class="eyebrow">Desde a sua última visita</p>
-      <h2 id="desde-h"><b>${plural(novos.length, "paciente novo", "pacientes novos")}</b> · ${brl0(total)}</h2>
-      <ul class="desde-l">${novos.slice(0, 5).map(L => `<li><b>${esc(nomeCurto(L.nome))}</b><span>${esc(L.servico)} · ${brl0(M.valorLead(L))}</span></li>`).join("")}${novos.length > 5 ? `<li><span>e mais ${novos.length - 5}</span></li>` : ""}</ul></div>
+      <h2 id="desde-h"><b>${plural(novos.length, "paciente novo", "pacientes novos")}</b>${total > 0 ? ` · ${brl0(total)}` : ""}</h2>
+      <ul class="desde-l">${novos.slice(0, 5).map(L => `<li><b>${esc(nomeCurto(L.nome))}</b><span>${esc(L.servico)} · ${M.valorDe(L).semValor ? "sem valor" : brl0(M.valorLead(L))}</span></li>`).join("")}${novos.length > 5 ? `<li><span>e mais ${novos.length - 5}</span></li>` : ""}</ul></div>
     <div class="acoes"><button class="pill pill-bronze" type="button" data-desde="ver">Ver no quadro</button><button class="pill pill-ghost" type="button" data-desde="ok">Ok</button></div>`;
   box.setAttribute("aria-labelledby", "desde-h");
   box._ids = ids; box._novos = novos.map(L => String(L.id));
@@ -2495,7 +2639,7 @@ async function abrirPaleta() {
   m.abrir({
     abas: Object.entries(ABAS).filter(([k]) => k !== "ajustes" || gestor()).map(([k, v]) => ({ k, nome: v[0] })),
     leads: M ? M.LEADS.filter(L => colunaDe(L) || M.etapa(L) === "nova").sort((a, b) => b.i - a.i).map(L => ({ id: String(L.id), nome: nomeCurto(L.nome), sub: `${L.servico} · ${NOME_ETAPA[M.etapa(L)] || ""}` })) : [],
-    campanhas: M ? Object.values(M.CAMP).filter(c => c.plat).map(c => ({ id: c.id, nome: c.nome, sub: nomePlat(c.plat) })) : [],
+    campanhas: M ? Object.values(M.CAMP).filter(c => c.plat && !c.semCampanha).map(c => ({ id: c.id, nome: c.nome, sub: nomePlat(c.plat) })) : [],
     acoes: [
       ...[7, 30, 60].map(d => ({ k: `d${d}`, nome: `${d} dias`, sub: "período", fn: () => $(`#seg-periodo [data-v="${d}"]`).click() })),
       ...[["", "Tudo"], ["meta", "Meta"], ["google", "Google"]].map(([v, n]) => ({ k: `p${v}`, nome: n, sub: "plataforma", fn: () => $(`#seg-plat [data-v="${v}"]`).click() })),
@@ -2848,7 +2992,7 @@ function sessaoExpirou() {
   api.apagarToken();
   S.token = null; S.conta = null;
   // a recarga agendada pelo "Fazer agora" viraria outra chamada sem token e roubaria o foco do login
-  clearTimeout(S.aj.tRecarga);
+  clearTimeout(S.aj.tRecarga); clearTimeout(S.aj.tConfere);
   fecharGaveta(true); tourFim();
   mostrarTela("auth");
   authModo("entrar", api.MENSAGENS.sessao_invalida);
@@ -2979,8 +3123,11 @@ async function carregarDados(o = {}) {
   } catch (e) {
     if (n !== cargaN || e.codigo === "sessao_invalida") return;
     if (primeira) {
-      estadoApp("erro", { erro: true, titulo: e.codigo === "sem_acesso" ? "Sem acesso a esta clínica" : "Não deu para carregar os números",
-        texto: esc(api.mensagemErro(e)), botoes: `<button class="pill pill-ink" type="button" data-acao="recarregar">Tentar de novo</button>` });
+      // módulo desligado, teste vencido, suspenso, sem permissão: estado próprio, com o caminho para o Órbita quando faz sentido
+      const est = estadoDeErro(e.codigo, api.mensagemErro(e));
+      estadoApp("erro", { erro: est.erro, titulo: esc(est.titulo), texto: esc(est.texto),
+        botoes: (est.orbita ? `<a class="pill pill-bronze" href="${ORBITA_URL}" rel="noopener">Abrir no Órbita</a>` : "")
+          + `<button class="pill pill-ink" type="button" data-acao="recarregar">Tentar de novo</button>` });
     } else toast(api.mensagemErro(e), "erro");
   } finally {
     if (n === cargaN) $("#main").classList.remove("recarregando");
@@ -2994,7 +3141,7 @@ function trocarCliente(id) {
   preencherSeletor();
   DS = null; M = null; S.dados = null; relDe = null;
   S.kVer = {}; S.busca = ""; $("#k-busca").value = ""; S.varridoEm = null; ULT.clear();
-  clearTimeout(S.aj.tRecarga);
+  clearTimeout(S.aj.tRecarga); clearTimeout(S.aj.tConfere);
   S.aj.carregado = false; S.aj.novoCliente = false;
   tourFim(); fecharGaveta(true); fecharMarco(false);
   aplicarMarca({});
@@ -3281,6 +3428,10 @@ function ligarEventos() {
     if (sel) $("[data-ct-clis]", sel.closest("[data-conta]")).hidden = sel.value === "gestor";
   });
   $("#form-config").addEventListener("submit", salvarConfig);
+  $("#form-config").addEventListener("click", e => {
+    const b = e.target.closest("[data-rm-segredo]");
+    if (b) { e.preventDefault(); removerSegredo(b.dataset.rmSegredo, b); }
+  });
   $$("[data-copiar-el]").forEach(b => b.addEventListener("click", () => {
     const t = $("#" + b.dataset.copiarEl).textContent.trim();
     if (t && t !== "—") copiar(t, b);

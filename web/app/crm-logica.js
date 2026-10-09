@@ -25,29 +25,70 @@ export function iniciais(nome) {
 }
 
 /* ------------------------------------------------------------ telefone */
+/** DDDs em uso no Brasil (Anatel) — a mesma lista de public.nx_ddd_valido (migração 20261008a). */
+export const RE_DDD = /^(1[1-9]|2[124789]|3[1-578]|4[1-9]|5[13-5]|6[1-9]|7[13-579]|8[1-9]|9[1-9])$/;
+export function dddValido(ddd) { return RE_DDD.test(String(ddd ?? "")); }
+
+/** Zero de tronco fora (DDD nunca começa com 0): 012997773031 → 12997773031. */
+function semZeroDeTronco(d) {
+  return d[0] === "0" && (d.length === 11 || d.length === 12) && d[1] !== "0" ? d.slice(1) : d;
+}
+/** 10–11 dígitos sem DDI que formam um número brasileiro: DDD válido e, com 11, o 3º dígito é o 9 do celular; com 10, o 3º vai de 2 a 9. */
+function pareceBrasileiro(d) {
+  return dddValido(d.slice(0, 2)) && ((d.length === 11 && d[2] === "9") || (d.length === 10 && d[2] >= "2" && d[2] <= "9"));
+}
+
 /**
- * Igual a public.nx_tel_normalizar: só dígitos. comDdi (número do WhatsApp) OU texto começando com «+» (a pessoa informou o país):
- * 8–15 dígitos como está, nunca ganha 55. Digitado/importado: 10–11 → prefixa 55; 12–15 como está. Fora disso → null.
+ * Igual a public.nx_tel_normalizar (S-B5): só dígitos. comDdi (número do WhatsApp) OU texto começando com «+» (a pessoa informou o país):
+ * 8–15 dígitos como está, nunca ganha 55. Digitado/importado: zero de tronco fora; 10–11 dígitos SÓ ganham 55 quando parecem brasileiros
+ * (DDD válido e 3º dígito certo) — «1 212 555 1234» sem «+» → null (o servidor responde dados_invalidos|telefone); 12–15 como está.
  */
 export function normalizarTelefone(p, comDdi = false) {
   const txt = String(p ?? "");
-  const d = txt.replace(/\D/g, "");
+  let d = txt.replace(/\D/g, "");
   if (comDdi || txt.trim().startsWith("+")) return d.length >= 8 && d.length <= 15 ? d : null;
-  if (d.length >= 10 && d.length <= 11) return "55" + d;
+  d = semZeroDeTronco(d);
+  if (d.length >= 10 && d.length <= 11) return pareceBrasileiro(d) ? "55" + d : null;
   if (d.length >= 12 && d.length <= 15) return d;
   return null;
 }
 
 /**
- * Igual a public.nx_tel_chave: recebe o telefone JÁ normalizado. 12–13 dígitos começando
- * com 55 → tira o 55 e, se sobrar 11 com o 3º = 9, tira esse 9. Nunca acrescenta 55.
+ * Telefone digitado/importado SEM «+» com 10–11 dígitos que não formam um número brasileiro (DDD inexistente ou 3º dígito errado):
+ * quase sempre um número de outro país sem o código — antes ganhava 55 na frente e virava um número inexistente (C7).
+ */
+export function telefoneSemPais(p) {
+  const txt = String(p ?? "");
+  if (txt.trim().startsWith("+")) return false;
+  const d = semZeroDeTronco(txt.replace(/\D/g, ""));
+  return d.length >= 10 && d.length <= 11 && !pareceBrasileiro(d);
+}
+
+/**
+ * C7: como o telefone de uma linha da planilha vai entrar → {tipo, texto}. «br» (ganha 55; texto no formato brasileiro), «exterior» (veio com «+»
+ * de outro país: fica como está, texto «+1 2125551234»), «sem_pais» (10–11 dígitos sem DDD brasileiro: entraria como número inexistente — a linha
+ * entra sem telefone), «invalido» e «vazio». O texto do «br» é montado por `fmtBR` (ui.telBR) quando dado.
+ */
+export function telefoneImportado(p, { fmtBR = null } = {}) {
+  const txt = String(p ?? "").trim();
+  if (!txt.replace(/\D/g, "")) return { tipo: "vazio", texto: "" };
+  const n = normalizarTelefone(txt);
+  if (!n) return { tipo: telefoneSemPais(txt) ? "sem_pais" : "invalido", texto: txt };
+  if (n.startsWith("55") && (n.length === 12 || n.length === 13)) return { tipo: "br", texto: fmtBR ? fmtBR(n) : n };
+  const ddi = /^(1|7|2[07]|3[0-469]|4[013-9]|5[1-8]|6[0-6]|8[1246]|9[0-58])/.exec(n);
+  return { tipo: "exterior", texto: ddi ? `+${ddi[1]} ${n.slice(ddi[1].length)}` : `+${n}` };
+}
+
+/**
+ * Igual a public.nx_tel_chave (S-B5): recebe o telefone JÁ normalizado. 12–13 dígitos começando com 55 → tira o 55 e, se sobrar 11 com
+ * o 3º = 9 e o 4º de 6 a 9 (o 9 do celular), tira esse 9 — o fixo 551233334444 e o 5512933334444 ficam separados. Nunca acrescenta 55.
  */
 export function telChave(p) {
   if (p === null || p === undefined) return null;
   const s0 = String(p);
   if (s0.length >= 12 && s0.length <= 13 && s0.startsWith("55")) {
     let s = s0.slice(2);
-    if (s.length === 11 && s[2] === "9") s = s.slice(0, 2) + s.slice(3);
+    if (s.length === 11 && s[2] === "9" && s[3] >= "6" && s[3] <= "9") s = s.slice(0, 2) + s.slice(3);
     return s;
   }
   return s0;
@@ -260,7 +301,8 @@ export function montarLinhas(linhas, mapa) {
 export function checarLinha(o) {
   const erros = [];
   if (!o.nome && !o.telefone && !o.email) return ["Linha sem nome, telefone e e-mail — será ignorada"];
-  if (o.telefone && !normalizarTelefone(o.telefone)) erros.push("Telefone inválido");
+  // C7: número de outro país digitado sem o «+» não vira número brasileiro — a linha entra sem telefone e a pessoa sabe como corrigir
+  if (o.telefone && !normalizarTelefone(o.telefone)) erros.push(telefoneSemPais(o.telefone) ? "Telefone sem DDD brasileiro: se for de fora do Brasil, escreva com +código do país" : "Telefone inválido");
   if (o.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(o.email)) erros.push("E-mail inválido");
   if (o.uf && !/^[A-Za-z]{2}$/.test(o.uf)) erros.push("UF deve ter 2 letras");
   if (o.nascimento && !lerData(o.nascimento)) erros.push("Nascimento: use DD/MM/AAAA");
@@ -468,6 +510,13 @@ export function novaReq(c = globalThis.crypto) {
  * O erro deixa dúvida se o servidor JÁ aplicou? Prazo estourado, conexão que caiu no meio, resposta ilegível e 502/503/504 (o pedido pode ter chegado
  * e sido gravado). Recusa do servidor (código do CRM, 4xx, 500 do banco) NÃO é ambígua: nada foi gravado.
  */
+/** A função ainda não existe no servidor (PostgREST 404 · PGRST202 — a migração nova não foi aplicada): a tela esconde a novidade em vez de insistir. */
+export function rpcAusente(e) {
+  if (!e) return false;
+  const c = String(e.codigo || e.message || "");
+  return Number(e.status) === 404 || /PGRST202|Could not find the function|function .* does not exist/i.test(c);
+}
+
 export function erroAmbiguo(e) {
   const c = String((e && (e.codigo || e.message)) || "");
   if (/^(tempo_rede|tempo_esgotado|sem_conexao|resposta_invalida|servico_indisponivel)$/.test(c)) return true;   // tempo_esgotado também vem de 504 do gateway (pode ter aplicado)
@@ -536,6 +585,128 @@ export function desfazerEtiquetas(atual, mais = [], menos = []) {
 /** Mover entre etapas de TIPO diferente (aberto ↔ ganho/perdido) dispara automações (mensagens, tarefas): essas só se efetivam depois dos 7 s do «Desfazer». */
 export function movimentoAdiado(tipoOrigem, tipoDestino) {
   return !!tipoOrigem && !!tipoDestino && tipoOrigem !== tipoDestino;
+}
+
+/* plano 100 · C1: o movimento adiado é o MESMO no Kanban e na gaveta — texto do aviso, o que a tela mostra antes do servidor e o que devolve */
+/** Texto do aviso «Desfazer» de um movimento que muda a natureza do negócio: «Fechou! «Ana» · R$ 900», «registrada como «Perdido»», «reaberta em «Nova»». */
+export function textoMovimento({ titulo, destino, valor, ganhar = "Ganhou", artigo = "o", brl = v => `R$ ${v}` } = {}) {
+  const d = destino || {};
+  const a = artigo === "a" ? "a" : "o";
+  const valorTxt = valor !== null && valor !== undefined && valor !== "" ? ` · ${brl(valor)}` : "";
+  if (d.tipo === "ganho") return `${ganhar}! «${titulo}»${valorTxt}`;
+  if (d.tipo === "perdido") return `«${titulo}» registrad${a} como «${d.nome}»`;
+  return `«${titulo}» reabert${a} em «${d.nome}»`;
+}
+
+/** O que a tela aplica ao cartão/negócio ANTES de o servidor gravar: status do destino, valor final (ganho) e a data da consulta (agendada). */
+export function patchMovimento(destino, extra = {}) {
+  const e = extra && typeof extra === "object" ? extra : {};
+  return { status: (destino || {}).tipo, ...(e.valor !== null && e.valor !== undefined ? { valor: e.valor } : {}), ...(e.consulta_em ? { consulta_em: e.consulta_em } : {}) };
+}
+
+/** O que mandar a nx_negocio_mover para DEVOLVER o negócio à etapa de antes: ganho exige o valor; perdido leva o motivo de volta. */
+export function extraDeVolta(antes) {
+  const a = antes || {};
+  const tipo = a.estagio && typeof a.estagio === "object" ? a.estagio.tipo : a.tipo;
+  if (tipo === "ganho") return { valor: a.valor ?? a.valor_previsto ?? 0 };
+  if (tipo === "perdido") return { ...(a.motivo_perda_id ? { motivo_perda_id: a.motivo_perda_id } : {}), ...(a.motivo_perda_txt ? { motivo_perda_txt: a.motivo_perda_txt } : {}) };
+  return {};
+}
+
+/* plano 100 · C6: presença na consulta (nx_agenda_presenca grava nx_leads.campos.presenca) */
+export const PRESENCAS = Object.freeze({
+  compareceu: Object.freeze({ rotulo: "Compareceu", tok: "ok", icone: "check" }),
+  faltou: Object.freeze({ rotulo: "Faltou", tok: "ruim", icone: "fechar" }),
+});
+/** Estado gravado: `presenca` solto (nx_agenda_dia) ou dentro de `campos` (nx_negocio_ver). → "compareceu" | "faltou" | null. */
+export function presencaDe(n) {
+  const v = n && (n.presenca ?? (n.campos && typeof n.campos === "object" ? n.campos.presenca : null));
+  return v === "compareceu" || v === "faltou" ? v : null;
+}
+/** A consulta já aconteceu? (hora marcada no passado — só então faz sentido perguntar se a pessoa veio). */
+export function consultaPassou(n, agora = Date.now()) {
+  const t = n && n.consulta_em ? Date.parse(n.consulta_em) : NaN;
+  const a = agora instanceof Date ? agora.getTime() : Number(agora);
+  return Number.isFinite(t) && Number.isFinite(a) && t <= a;
+}
+/** Tocar de novo no estado já marcado limpa; senão marca o pedido. */
+export function proximaPresenca(atual, pedido) { return atual === pedido ? "limpar" : pedido; }
+/** O que o «Desfazer» manda: o estado de antes ou «limpar» se não havia marca. */
+export function voltaPresenca(anterior) { return anterior === "compareceu" || anterior === "faltou" ? anterior : "limpar"; }
+
+/* plano 100 · C3/C4: origem e rastreio na tela */
+/** Chave para ui.pilula({variante: "origem"}): anúncio quando há plataforma (ou o selo de anúncio), senão a origem do cadastro. `manual: false` esconde o cadastro manual. */
+export function origemPilula(c, { manual = true } = {}) {
+  if (!c || typeof c !== "object") return null;
+  const plataforma = c.plataforma === "google" || c.plataforma === "meta" || c.plataforma === "instagram" || c.plataforma === "facebook" ? c.plataforma : null;
+  const chave = plataforma || c.anuncio === true ? "anuncio" : (c.origem && ROTULO_ORIGEM[c.origem] ? c.origem : null);
+  if (!chave || (chave === "manual" && !manual)) return null;
+  return { chave, plataforma };
+}
+
+const capitalizar = s => { const t = String(s || "").trim(); return t ? t[0].toUpperCase() + t.slice(1) : ""; };
+/**
+ * De onde veio o negócio, numa frase para a gaveta (C3): «Veio do anúncio «X» · campanha «Y»», «Veio do site · campanha X · página Y · clique em
+ * 06/10 10:12», «Veio do Instagram (orgânico)», «Chamou no WhatsApp»… Campos de nx_negocio_ver: origem, plataforma, campanha_nome/campanha_ext,
+ * anuncio_nome/anuncio_ext e rastreio {codigo, utm_*, pagina, clique_em}; `anuncio` = o bloco d.anuncio da RPC. `fmtData(iso)` formata o clique.
+ * → {chave (para a pílula), plataforma, frase, detalhes: [texto]} | null (sem origem e sem rastreio).
+ */
+export function resumoRastreio(n, { anuncio = {}, fmtData = iso => String(iso || "") } = {}) {
+  if (!n || typeof n !== "object") return null;
+  const r = n.rastreio && typeof n.rastreio === "object" ? n.rastreio : {};
+  const an = anuncio && typeof anuncio === "object" ? anuncio : {};
+  const plataforma = n.plataforma === "google" ? "google" : n.plataforma === "meta" ? "meta" : null;
+  const campanha = an.campanha_nome || n.campanha_nome || n.campanha_ext || r.utm_campaign || null;
+  const nomeAnuncio = an.anuncio_nome || n.anuncio_nome || n.anuncio_ext || null;
+  const pagina = r.pagina || null;
+  const utm = [r.utm_source, r.utm_medium].filter(Boolean).join(" / ") || null;
+  const origem = n.origem && ROTULO_ORIGEM[n.origem] ? n.origem : null;
+  const partes = [];
+  let chave, cabeca;
+  if (plataforma || origem === "anuncio" || nomeAnuncio) {
+    chave = "anuncio";
+    cabeca = nomeAnuncio ? `Veio do anúncio «${nomeAnuncio}»` : `Veio do anúncio${plataforma ? ` (${plataforma === "google" ? "Google" : "Meta"})` : ""}`;
+    if (campanha) partes.push(`campanha «${campanha}»`);
+  } else if (origem === "site" || r.codigo || pagina) {
+    chave = "site";
+    cabeca = "Veio do site";
+    if (campanha) partes.push(`campanha «${campanha}»`);
+    if (pagina) partes.push(`página ${pagina}`);
+  } else if (origem === "organico") {
+    chave = "organico";
+    cabeca = `Veio ${r.utm_source ? `do ${capitalizar(r.utm_source)}` : "de busca ou rede social"} (orgânico)`;
+    if (campanha) partes.push(`campanha «${campanha}»`);
+  } else if (origem === "whatsapp") { chave = origem; cabeca = "Chamou no WhatsApp"; }
+  else if (origem === "indicacao") { chave = origem; cabeca = "Veio por indicação"; }
+  else if (origem === "importacao") { chave = origem; cabeca = "Veio da importação de planilha"; }
+  else if (origem === "manual") { chave = origem; cabeca = "Cadastro manual"; }
+  else if (campanha || pagina || utm) { chave = null; cabeca = "Origem do contato"; if (campanha) partes.push(`campanha «${campanha}»`); }
+  else return null;
+  if (r.clique_em) { const q = fmtData(r.clique_em); if (q) partes.push(`clique em ${q}`); }
+  const detalhes = [];
+  if (utm) detalhes.push(`Parâmetros do site: ${utm}`);   // o código do rastreio não aparece (como em nx_rastreio_listar): só diz que houve clique
+  return { chave, plataforma, frase: [cabeca, ...partes].join(" · "), detalhes };
+}
+
+/* plano 100 · C10: quantos cartões da coluna vieram de anúncio (só os carregados: com «Ver mais» pendente o número ganha «+») */
+export function contarDeAnuncio(col) {
+  const itens = col && Array.isArray(col.itens) ? col.itens : [];
+  const n = itens.filter(c => c && (c.plataforma || c.origem === "anuncio" || c.anuncio === true)).length;
+  const parcial = (Number(col && col.total) || 0) > itens.length;
+  return { n, parcial, texto: n ? `${n}${parcial ? "+" : ""} de anúncio` : "" };
+}
+
+/* plano 100 · C9: clique no cabeçalho da lista de contatos ↔ p_ordem do servidor (nome A–Z; último contato do mais recente; de novo = recentes) */
+export const ORDEM_COLUNA = Object.freeze({ nome: "nome", ultimo_contato_em: "ultimo_contato" });
+export function ordemAoClicar(chave, atual) {
+  const alvo = ORDEM_COLUNA[chave];
+  if (!alvo) return atual;
+  return atual === alvo ? "recentes" : alvo;
+}
+export function ariaSortDe(chave, ordem) {
+  const alvo = ORDEM_COLUNA[chave];
+  if (!alvo || ordem !== alvo) return "none";
+  return alvo === "nome" ? "ascending" : "descending";
 }
 
 /** Texto curto dos totais no celular: «3 abertas · R$ 12.950 · previsão R$ 4.735». artigo = "a" | "o". */
@@ -1035,6 +1206,8 @@ export function textoTempo(it, { nomes = {}, vocab, brl = v => `R$ ${v}`, motivo
     case "importado": return "Veio da importação de planilha";
     case "automacao": return `Automação${d.nome ? ` «${d.nome}»` : ""} executada`;
     case "contato_mesclado": return "Cadastros duplicados foram unidos";
+    // plano 100 · C6: nx_agenda_presenca grava {presenca, consulta_em, estagio_id}
+    case "presenca": return d.presenca === "faltou" ? "Faltou à consulta" : d.presenca === "compareceu" ? "Compareceu à consulta" : "Presença da consulta limpa";
     default: return String(it.tipo || "Registro").replace(/_/g, " ");
   }
 }
@@ -1043,6 +1216,7 @@ export function textoTempo(it, { nomes = {}, vocab, brl = v => `R$ ${v}`, motivo
 export function iconeTempo(it) {
   if (it.fonte === "nota") return "nota";
   if (it.fonte === "tarefa") return it.tipo === "tarefa_concluida" ? "check" : "tarefa";
+  if (it.tipo === "presenca") return it.dados && it.dados.presenca === "faltou" ? "fechar" : "check";
   return ({ negocio_criado: "mais", estagio: "seta-dir", ganho: "check", perdido: "fechar", reaberto: "relogio", dono: "usuario",
     conversa_aberta: "chat", conversa_resolvida: "checks", atribuida: "usuario", importado: "camadas", automacao: "raio",
     etiqueta: "etiqueta", contato_mesclado: "camadas" })[it.tipo] || "info";
@@ -1105,6 +1279,29 @@ export function validarFunil(f) {
   if (f && f.conta_no_ads && est.length && !erros.some(x => x.hint === "marco_obrigatorio" || x.hint === "marco_tipo")
       && (!marcos.has("nova") || !marcos.has("fechou"))) add(null, "estagios", "marcos");
   return erros;
+}
+
+/**
+ * plano 100 · C8: marcos que o Órbita usa para mover o negócio sozinho e que o funil (dos anúncios) não tem em etapa nenhuma — aviso do editor.
+ * Sem «fechou»/«nao_fechou|perdida» a automação «marcar como ganho/perdido» não acha a etapa; sem «faltou» a presença «Faltou» não move;
+ * sem «agendada» marcar a consulta não muda a etapa. Funil fora dos anúncios não usa marcos: nada a avisar.
+ * → [{marco, rotulo, efeito}]
+ */
+export function marcosFaltando(f, etapas) {
+  if (!f || !f.conta_no_ads) return [];
+  const tem = new Set((etapas || []).map(e => e && e.marco).filter(Boolean));
+  const faltam = [];
+  if (!tem.has("fechou")) faltam.push({ marco: "fechou", rotulo: "Ganho", efeito: "a automação não vai conseguir mover para «ganho»" });
+  if (!tem.has("nao_fechou") && !tem.has("perdida")) faltam.push({ marco: "nao_fechou", rotulo: "Perdido", efeito: "a automação não vai conseguir mover para «perdido»" });
+  if (!tem.has("faltou")) faltam.push({ marco: "faltou", rotulo: "Faltou", efeito: "a presença «Faltou» da consulta não vai mover o negócio" });
+  if (!tem.has("agendada")) faltam.push({ marco: "agendada", rotulo: "Agendou", efeito: "marcar a consulta não vai mudar a etapa" });
+  return faltam;
+}
+/** Frase do aviso inline: «Ganho/Perdido/Faltou sem etapa: a automação não vai conseguir mover …». "" quando não falta nada. */
+export function textoMarcosFaltando(lista) {
+  const l = Array.isArray(lista) ? lista : [];
+  if (!l.length) return "";
+  return `${l.map(x => x.rotulo).join("/")} sem etapa: ${l.map(x => x.efeito).join("; ")}. Dê o marco a uma etapa para a automação, a agenda e a presença saberem para onde mover.`;
 }
 
 /** Etapas que existiam (com id) e saíram da lista editada. */

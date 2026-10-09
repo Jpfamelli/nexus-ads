@@ -658,8 +658,10 @@ test("38 (DOM) · barra de ações no celular: o ponto de Tab e as setas pulam o
     const leitura = achar(chat.el, ".cvc-acoes").querySelectorAll("button");
     assert.deepEqual(leitura.map(b => b.getAttribute("aria-label")), ["Detalhes do contato", "Mais ações"]);
     assert.deepEqual(leitura.map(b => b.getAttribute("tabindex")), ["-1", "0"], "a barra continua na ordem do Tab");
-    // na tela larga (nada escondido) a regra antiga continua: o 1º botão é o ponto de Tab
+    // na tela larga (nada escondido) a regra antiga continua: o 1º botão é o ponto de Tab — com o foco FORA da barra
+    // (plano 100 · D4: com o foco num botão do cabeçalho, o redesenho sem mudança não mexe no ponto de Tab de quem está ali)
     proto.getClientRects = function () { return [1]; };
+    d.doc.activeElement = d.doc.body;
     chat.renderCabecalho();
     assert.deepEqual(achar(chat.el, ".cvc-acoes").querySelectorAll("button").map(b => b.getAttribute("tabindex")), ["0", "-1"]);
   } finally { proto.getClientRects = original; d.fim(); }

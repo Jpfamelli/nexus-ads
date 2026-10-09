@@ -11,9 +11,12 @@
      LEADS   um paciente por conversa
              { id, i, iAgenda, iConsulta, camp, cri, plat, servico, nome, telefone,
                compareceu, fechou, valor?, fator?, etapaReal?, obs? }
-     CAMP    { [id]: { id, plat, nome, curto } }
-     CRI     { [id]: { id, camp, plat, nome, curto } }
+     CAMP    { [id]: { id, plat, nome, curto, nomeEm?, semCampanha? } }
+             · "<plat>:nao_identificada" = lead de anúncio sem campanha/anúncio reconhecido (fica DENTRO do funil)
+     CRI     { [id]: { id, camp, plat, nome, curto, nomeEm? } }
      CFG     { cpaAlvo, orcamento, fee, ticket{}, regrasOff[], assinatura, proximos{} }
+             · fee padrão 0 e ticket vazio: receita só com valor real, estimativa SÓ pelo que o cliente configurou
+     vertical  'odonto' | 'oficina' | 'loja' | 'generico' — escolhe o vocabulário dos textos (VOCABULARIO)
      REF     Date (meio-dia de ONTEM no fuso do cliente) · DIAS = tamanho da janela
    Índice i: 0 … DIAS-1, onde DIAS-1 = ontem (sempre dia fechado).
    ============================================================ */
@@ -35,7 +38,10 @@ export const variacao = (a, b) => (!fin(a) || !fin(b)) ? null : b === 0 ? (a ===
 export const seta = v => (v == null ? "" : v > .5 ? " ↑" : v < -.5 ? " ↓" : " →");
 export const varTxt = (a, b) => { const v = variacao(a, b); return v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(0)}%${seta(v)}`; };
 export const plural = (n, um, varios) => `${int(n)} ${Math.round(n) === 1 ? um : varios}`;
-export const nomePlat = p => (p === "meta" ? "Meta" : p === "google" ? "Google" : "Sem anúncio");
+/** Como plural(), mas sem arredondar: o Google manda 1,5 conversão e o texto não pode esconder isso. */
+export const pluralDec = (n, um, varios) => `${Number.isInteger(n) ? int(n) : dec(n, 1)} ${n === 1 ? um : varios}`;
+// plataforma desconhecida mas presente (lead marcado como anúncio sem dizer de onde) ainda é anúncio
+export const nomePlat = p => (p === "meta" ? "Meta" : p === "google" ? "Google" : p ? "Anúncio" : "Sem anúncio");
 
 /** *negrito* e _itálico_ do WhatsApp → HTML (texto escapado antes). */
 export const waHtml = txt => esc(txt)
@@ -66,28 +72,54 @@ export function encurtar(nome, max = 30) {
 }
 
 /* ============================================================
-   2. CONFIGURAÇÃO PADRÃO (clínica odontológica)
+   2. CONFIGURAÇÃO PADRÃO (neutra — plano 100, decisão 5)
+   Nada de inventar dinheiro: sem fee de gestão e sem tabela de valores por
+   padrão. Receita entra só com o valor real do negócio; a estimativa por
+   ticket existe só para o serviço que o cliente configurou em cfg.ticket.
+   (A demo odontológica carrega a própria tabela em demo.js.)
    ============================================================ */
 export const CFG_PADRAO = {
   cpaAlvo: 15,
   orcamento: 1500,
-  fee: 997,
-  ticket: { "Aparelho invisível": 5500, "Implante": 3500, "Clareamento": 1100, "Clínica geral": 420, "Limpeza": 250, "Canal / urgência": 850 },
+  fee: 0,
+  ticket: {},
   regrasOff: [],
   assinatura: "Equipe Nexus · gestão de tráfego",
-  proximos: {
-    "Aparelho invisível": "• Aumentar em 20% a verba do aparelho invisível — é o tratamento que mais rende.",
-    "Canal / urgência": "• Manter a campanha de urgência ligada: quem resolve a dor costuma voltar para o tratamento completo.",
-    "Clínica geral": "• Oferecer a avaliação completa a quem veio pela clínica geral — é a porta para os tratamentos maiores.",
-    "Implante": "• Gravar um vídeo explicando o implante passo a passo: quem pesquisa implante quer segurança.",
-  },
+  proximos: {},
 };
 export const cfgCom = cfg => ({
   ...CFG_PADRAO, ...(cfg || {}),
-  ticket: { ...CFG_PADRAO.ticket, ...((cfg && cfg.ticket) || {}) },
-  proximos: { ...CFG_PADRAO.proximos, ...((cfg && cfg.proximos) || {}) },
+  ticket: { ...((cfg && cfg.ticket) || {}) },
+  proximos: { ...((cfg && cfg.proximos) || {}) },
   regrasOff: (cfg && cfg.regrasOff) || [],
 });
+
+/* ============================================================
+   2½. VOCABULÁRIO POR VERTICAL — textos do WhatsApp e do painel
+   nx_clientes.vertical nasce 'odonto' (default da coluna); quem monta o
+   dataset passa cliente.vertical. Sem o campo fica o vocabulário de sempre.
+   ============================================================ */
+export const VERTICAL_PADRAO = "odonto";
+export const VOCABULARIO = {
+  odonto: { emoji: "🦷", pessoa: ["paciente", "pacientes"], novo: ["paciente novo", "pacientes novos"],
+    agendada: ["avaliação agendada", "avaliações agendadas"], compareceu: ["compareceu", "compareceram"],
+    fechou: ["paciente fechou tratamento", "pacientes fecharam tratamento"], receita: "Tratamentos fechados", receitaEm: "em tratamentos",
+    local: "No consultório", servico: "tratamento", servicoPadrao: "Clínica geral" },
+  oficina: { emoji: "🔧", pessoa: ["cliente", "clientes"], novo: ["cliente novo", "clientes novos"],
+    agendada: ["visita agendada", "visitas agendadas"], compareceu: ["veio", "vieram"],
+    fechou: ["cliente aprovou o orçamento", "clientes aprovaram o orçamento"], receita: "Serviços aprovados", receitaEm: "em serviços",
+    local: "Na oficina", servico: "serviço", servicoPadrao: "Não informado" },
+  loja: { emoji: "🛍️", pessoa: ["cliente", "clientes"], novo: ["cliente novo", "clientes novos"],
+    agendada: ["visita agendada", "visitas agendadas"], compareceu: ["veio", "vieram"],
+    fechou: ["cliente comprou", "clientes compraram"], receita: "Vendas fechadas", receitaEm: "em vendas",
+    local: "Na loja", servico: "produto", servicoPadrao: "Não informado" },
+  generico: { emoji: "📈", pessoa: ["cliente", "clientes"], novo: ["cliente novo", "clientes novos"],
+    agendada: ["agendamento", "agendamentos"], compareceu: ["compareceu", "compareceram"],
+    fechou: ["cliente fechou", "clientes fecharam"], receita: "Vendas fechadas", receitaEm: "em vendas",
+    local: "No atendimento", servico: "serviço", servicoPadrao: "Não informado" },
+};
+export const verticalDe = cliente => (cliente && VOCABULARIO[cliente.vertical] ? cliente.vertical : VERTICAL_PADRAO);
+export const vocabulario = vertical => VOCABULARIO[vertical] || VOCABULARIO[VERTICAL_PADRAO];
 
 /* ============================================================
    3. DO BANCO PARA O DATASET
@@ -103,11 +135,18 @@ export function datasetDeLinhas({ metricas = [], leads = [], cliente = {}, hoje 
 
   const CAMP = {}, CRI = {}, LINHAS = [];
   const somaAd = new Map();   // "camp|i" → soma dos anúncios, p/ achar o resíduo da campanha
+  const vertical = verticalDe(cliente), VOC = vocabulario(vertical);
 
-  const campDe = (plat, c, nome) => {
+  // O nome que vale é o da linha mais RECENTE: o sync só reescreve 7 dias, então o banco guarda a
+  // campanha renomeada com dois nomes, e o antigo não pode ganhar só porque veio primeiro.
+  const nomear = (alvo, nome, d, max) => {
+    if (!nome || (alvo.nomeEm && String(d) < alvo.nomeEm)) return;
+    alvo.nome = nome; alvo.curto = encurtar(nome, max); alvo.nomeEm = String(d || "");
+  };
+  const campDe = (plat, c, nome, d) => {
     const id = `${plat}:${c}`;
-    if (!CAMP[id]) CAMP[id] = { id, plat, nome: nome || `Campanha ${c}`, curto: encurtar(nome || `Campanha ${c}`, 26) };
-    else if (nome && CAMP[id].nome.startsWith("Campanha ")) { CAMP[id].nome = nome; CAMP[id].curto = encurtar(nome, 26); }
+    if (!CAMP[id]) CAMP[id] = { id, plat, nome: `Campanha ${c}`, curto: encurtar(`Campanha ${c}`, 26), nomeEm: "" };
+    nomear(CAMP[id], nome, d, 26);
     return id;
   };
 
@@ -115,9 +154,10 @@ export function datasetDeLinhas({ metricas = [], leads = [], cliente = {}, hoje 
     if (m.n !== "anuncio") continue;
     const i = idx(m.d);
     if (i == null || i < 0 || i > R) continue;
-    const camp = campDe(m.p, m.c, m.cn);
+    const camp = campDe(m.p, m.c, m.cn, m.d);
     const cri = `${m.p}:${m.a || "?"}`;
-    if (!CRI[cri]) CRI[cri] = { id: cri, camp, plat: m.p, nome: m.an || `Anúncio ${m.a}`, curto: encurtar(m.an || `Anúncio ${m.a}`, 28) };
+    if (!CRI[cri]) CRI[cri] = { id: cri, camp, plat: m.p, nome: `Anúncio ${m.a}`, curto: encurtar(`Anúncio ${m.a}`, 28), nomeEm: "" };
+    nomear(CRI[cri], m.an, m.d, 28);
     const l = { i, plat: m.p, camp, cri, gasto: +m.g || 0, impressoes: +m.imp || 0, alcance: +m.alc || 0,
                 cliques: +m.cli || 0, conversoes: +m.conv || 0, freq: +m.freq > 0 ? +m.freq : null };
     LINHAS.push(l);
@@ -132,7 +172,7 @@ export function datasetDeLinhas({ metricas = [], leads = [], cliente = {}, hoje 
     if (m.n !== "campanha") continue;
     const i = idx(m.d);
     if (i == null || i < 0 || i > R) continue;
-    const camp = campDe(m.p, m.c, m.cn);
+    const camp = campDe(m.p, m.c, m.cn, m.d);
     const s = somaAd.get(`${camp}|${i}`) || { g: 0, imp: 0, cli: 0, conv: 0 };
     const g = (+m.g || 0) - s.g, conv = Math.max(0, (+m.conv || 0) - s.conv);
     if (g <= 0.01 && conv < 1) continue;
@@ -148,13 +188,25 @@ export function datasetDeLinhas({ metricas = [], leads = [], cliente = {}, hoje 
     const i = idx(L.data_conversa);
     if (i == null) continue;
     let camp = null, cri = null, plat = L.plataforma || null;
-    if (L.anuncio_ext && plat) {
+    // orgânico (link da bio com utm_campaign=bio, «vi no Instagram») guarda plataforma e às vezes o texto da campanha, mas
+    // NÃO é anúncio: nada de campanha/criativo — senão a venda orgânica virava receita de anúncio (mesma régua de Vendas)
+    const organico = L.origem === "organico";
+    if (L.anuncio_ext && plat && !organico) {
       cri = `${plat}:${L.anuncio_ext}`;
       if (CRI[cri]) camp = CRI[cri].camp;
     }
-    if (!camp && L.campanha_ext && plat) camp = campDe(plat, L.campanha_ext, null);
+    if (!camp && L.campanha_ext && plat && !organico) camp = campDe(plat, L.campanha_ext, null, "");
+    if (!camp && L.origem === "anuncio") {
+      // veio de anúncio, mas nem campanha nem anúncio foram reconhecidos (métrica ainda não sincronizada,
+      // importação sem ids, utm sem casamento): balde próprio DENTRO do funil — a coluna origem manda.
+      // Só a origem «anuncio» entra aqui: plataforma sozinha NÃO é anúncio (link da bio do Instagram e «vi no Instagram»
+      // gravam origem «organico» com plataforma «meta» — esses ficam fora do funil, em org:organico)
+      plat = plat || "anuncio";
+      camp = `${plat}:nao_identificada`;
+      if (!CAMP[camp]) CAMP[camp] = { id: camp, plat, nome: "Anúncio sem campanha identificada", curto: "Sem campanha identificada", semCampanha: true };
+    }
     if (!camp) {
-      // sem anúncio identificado: vira uma "campanha" de origem, fora do funil de anúncios
+      // sem anúncio: vira uma "campanha" de origem, fora do funil de anúncios
       const o = L.origem || "whatsapp";
       camp = `org:${o}`;
       if (!CAMP[camp]) CAMP[camp] = { id: camp, plat: null, nome: ORIGEM[o] || o, curto: ORIGEM[o] || o };
@@ -164,7 +216,7 @@ export function datasetDeLinhas({ metricas = [], leads = [], cliente = {}, hoje 
     const iConsulta = idx(L.data_consulta);
     const temAvaliacao = ETAPAS_COM_AVALIACAO.has(etapa) || etapa === "faltou";
     LEADS.push({
-      id: L.id, i, camp, cri, plat, servico: L.servico || "Clínica geral", nome: L.nome || "Sem nome", telefone: L.telefone || "",
+      id: L.id, i, camp, cri, plat, servico: L.servico || VOC.servicoPadrao, nome: L.nome || "Sem nome", telefone: L.telefone || "",
       obs: L.obs || "", origem: L.origem, etapaReal: etapa,
       iAgenda: L.data_agenda ? idx(L.data_agenda) : (etapa !== "nova" && etapa !== "perdida" ? i : null),
       // marcou "veio/fechou" sem dizer quando: conta no dia do agendamento (ou da conversa)
@@ -175,7 +227,7 @@ export function datasetDeLinhas({ metricas = [], leads = [], cliente = {}, hoje 
       bruto: L,
     });
   }
-  return { LINHAS, LEADS, CAMP, CRI, CFG: cfgCom(cliente.cfg), REF, DIAS, nome: cliente.nome || "", curto: (cliente.cfg && cliente.cfg.nomeCurto) || encurtar(cliente.nome || "Cliente", 22) };
+  return { LINHAS, LEADS, CAMP, CRI, CFG: cfgCom(cliente.cfg), REF, DIAS, vertical, nome: cliente.nome || "", curto: (cliente.cfg && cliente.cfg.nomeCurto) || encurtar(cliente.nome || "Cliente", 22) };
 }
 
 /* ============================================================
@@ -186,6 +238,7 @@ export function montar(ds) {
   const CFG = cfgCom(ds.CFG);
   const R = DIAS - 1;
   const NOME = ds.curto || ds.nome || "Cliente";
+  const vertical = VOCABULARIO[ds.vertical] ? ds.vertical : VERTICAL_PADRAO, VOC = vocabulario(vertical);
 
   const dataDe = i => { const d = new Date(REF); d.setDate(d.getDate() + (i - R)); return d; };
   const ddmm = i => { const d = dataDe(i); return `${p2(d.getDate())}/${p2(d.getMonth() + 1)}`; };
@@ -213,7 +266,15 @@ export function montar(ds) {
   const linhasDe = (de, ate, f = {}) => LINHAS.filter(l =>
     l.i >= de && l.i <= ate && (!f.plat || l.plat === f.plat) && (!f.camp || l.camp === f.camp) && (!f.cri || l.cri === f.cri));
 
-  const valorLead = L => (L.valor != null ? L.valor : Math.round((CFG.ticket[L.servico] || 0) * (L.fator || 1) / 10) * 10);
+  /** Quanto vale o negócio: o valor informado; senão a estimativa pelo ticket que o CLIENTE configurou para o
+      serviço; senão nada (semValor) — nunca um número inventado por tabela padrão. */
+  const valorDe = L => {
+    if (L.valor != null) return { valor: L.valor, estimado: false, semValor: false };
+    const t = CFG.ticket[L.servico];
+    if (!(t > 0)) return { valor: 0, estimado: false, semValor: true };
+    return { valor: Math.round(t * (L.fator || 1) / 10) * 10, estimado: true, semValor: false };
+  };
+  const valorLead = L => valorDe(L).valor;
 
   /** Em que pé cada paciente está HOJE. */
   function etapa(L) {
@@ -229,7 +290,8 @@ export function montar(ds) {
   /** O que o consultório viu no período, pela data de cada evento. Orgânicos ficam de fora
       por padrão: o funil é dos ANÚNCIOS (f.organicos = true inclui). */
   function crmTot(de, ate, f = {}) {
-    const c = { conversas: 0, agendadas: 0, compareceram: 0, faltaram: 0, fecharam: 0, receita: 0, serv: {} };
+    // receita = receitaReal + receitaEstimada; semValor = fechamentos que não entram em nenhuma das duas
+    const c = { conversas: 0, agendadas: 0, compareceram: 0, faltaram: 0, fecharam: 0, receita: 0, receitaReal: 0, receitaEstimada: 0, semValor: 0, serv: {} };
     for (const L of LEADS) {
       if (!L.plat && !f.organicos) continue;
       if (f.plat && L.plat !== f.plat) continue;
@@ -240,8 +302,10 @@ export function montar(ds) {
         if (!L.compareceu) { if (etapa(L) === "faltou" || !L.etapaReal) c.faltaram++; continue; }
         c.compareceram++;
         if (L.fechou) {
-          const v = valorLead(L);
+          const { valor: v, estimado, semValor } = valorDe(L);
           c.fecharam++; c.receita += v;
+          if (estimado) c.receitaEstimada += v; else c.receitaReal += v;
+          if (semValor) c.semValor++;
           const s = c.serv[L.servico] || (c.serv[L.servico] = { n: 0, v: 0 });
           s.n++; s.v += v;
         }
@@ -249,6 +313,10 @@ export function montar(ds) {
     }
     return c;
   }
+  /** Trecho de texto honesto sobre a receita de um crmTot: valor, "(estimativa)" ou "sem valor informado". */
+  const receitaTxt = c => c.receita > 0
+    ? `${brl0(c.receita)} ${VOC.receitaEm}${c.receitaEstimada > 0 ? " (estimativa)" : ""}`
+    : c.semValor > 0 ? `${c.semValor === 1 ? "1 fechamento" : `${c.semValor} fechamentos`} sem valor informado` : "";
 
   const _serie = {};
   function porDia(plat) {
@@ -301,10 +369,13 @@ export function montar(ds) {
       janela: 14, minGasto: 60, minImpr: 0, sev: "alerta",
       msg: "{entidade} está pagando {valor} por conversa nos últimos {janela} dias (limite {limite}).",
       acao: n => `Reduzir a verba de “${n}” até o custo por conversa voltar para perto de ${brl(CFG.cpaAlvo)}.` },
+    // {conv}: o Meta conta conversas no WhatsApp; o Google conta conversões (acompanhamento configurado na conta)
     { id: "r2", nome: "Campanha sem conversa", nivel: "campanha", metrica: "conversoes", op: "<=", limite: () => 0,
       janela: 3, minGasto: 22, minImpr: 0, sev: "critico",
-      msg: "{entidade} gastou {gasto} em {janela} dias sem nenhuma conversa no WhatsApp.",
-      acao: n => `Checar “${n}”: gastou sem trazer conversa (anúncio reprovado? link do WhatsApp?).` },
+      msg: "{entidade} gastou {gasto} em {janela} dias sem nenhuma {conv}.",
+      acao: (n, plat) => (plat === "google"
+        ? `Checar “${n}”: gastou sem registrar conversão (acompanhamento de conversões ligado? link do WhatsApp?).`
+        : `Checar “${n}”: gastou sem trazer conversa (anúncio reprovado? link do WhatsApp?).`) },
     { id: "r3", nome: "Criativo com CTR baixo", nivel: "anuncio", plat: "meta", metrica: "ctr", op: "<", limite: () => .9,
       janela: 3, minGasto: 0, minImpr: 300, sev: "alerta",
       msg: "O criativo {entidade} está com CTR de {valor} — pouca gente clicando (limite {limite}).",
@@ -317,6 +388,13 @@ export function montar(ds) {
   const RITMO = { id: "ritmo", nome: "Ritmo do orçamento" };
   const ORD = { critico: 0, alerta: 1, info: 2 };
   const ICONE = { critico: "🔴", alerta: "🟠", info: "🔵" };
+
+  // conta Google que gastou e não registrou NENHUMA conversão no período carregado: o acompanhamento de conversões não está
+  // ligado — «Campanha sem conversa» de cada campanha Google seria um alarme falso por dia (a tela mostra um aviso único;
+  // a mesma régua de rel-logica.googleSemConversao, e agora o WhatsApp do nx-ciclo também para de mandar)
+  let gG = 0, cG = 0;
+  for (const l of LINHAS) if (l.plat === "google") { gG += +l.gasto || 0; cG += +l.conversoes || 0; }
+  const GOOGLE_SEM_CONVERSAO = gG > 0 && cG === 0;
 
   function avaliar(ref, comRitmo = false) {
     const out = [];
@@ -339,14 +417,16 @@ export function montar(ds) {
         const lim = r.limite();
         if (!CMP[r.op](v, lim)) continue;
         const camp = r.nivel === "campanha" ? CAMP[k] : CAMP[CRI[k].camp];
+        if (r.id === "r2" && GOOGLE_SEM_CONVERSAO && camp.plat === "google") continue;
         // um criativo pode rodar em várias campanhas: a campanha vai junto no aviso
         const nome = r.nivel === "campanha" ? camp.nome : `${CRI[k].nome} (em ${camp.curto})`;
         const f = FMT_MET[r.metrica];
         out.push({
           regra: r, chave: `${r.id}|${k}`, sev: r.sev, valor: v,
           msg: r.msg.replace("{entidade}", nome).replace("{valor}", f(v)).replace("{limite}", f(lim))
-            .replace("{janela}", r.janela).replace("{gasto}", brl(t.gasto)),
-          acao: r.acao(r.nivel === "campanha" ? camp.curto : CRI[k].curto),
+            .replace("{janela}", r.janela).replace("{gasto}", brl(t.gasto))
+            .replace("{conv}", camp.plat === "google" ? "conversão registrada" : "conversa no WhatsApp"),
+          acao: r.acao(r.nivel === "campanha" ? camp.curto : CRI[k].curto, camp.plat),
         });
       }
     }
@@ -405,36 +485,45 @@ export function montar(ds) {
     return out;
   }
 
+  /* ---------- rótulo honesto das conversões: o Meta conta conversas no WhatsApp; o Google conta conversões (às vezes 1,5) ---------- */
+  const temGoogle = ls => ls.some(l => l.plat === "google"), temMeta = ls => ls.some(l => l.plat === "meta");
+  const tituloConv = ls => (temGoogle(ls) ? (temMeta(ls) ? "Conversas e conversões" : "Conversões (Google)") : "Conversas no WhatsApp");
+  const numConv = n => (Number.isInteger(n) ? int(n) : dec(n, 1));
+  const convTxt = (ls, n) => (temGoogle(ls) ? pluralDec(n, temMeta(ls) ? "conversa ou conversão" : "conversão", temMeta(ls) ? "conversas e conversões" : "conversões") : plural(n, "conversa", "conversas"));
+
   /** @param leituraIA texto opcional escrito pela IA — substitui a leitura por regras */
   function relDiario(ref, leituraIA = null) {
-    const dia = consolidar(linhasDe(ref, ref)), ant = consolidar(linhasDe(ref - 1, ref - 1)), sem = consolidar(linhasDe(ref - 6, ref));
+    const lDia = linhasDe(ref, ref), lSem = linhasDe(ref - 6, ref);
+    const dia = consolidar(lDia), ant = consolidar(linhasDe(ref - 1, ref - 1)), sem = consolidar(lSem);
     const L = [`📊 *${NOME} · Tráfego pago* — ${dataBR(ref)}`, "", "*No dia*"];
     L.push(`• Investido: ${brl(dia.gasto)} (${varTxt(dia.gasto, ant.gasto)} vs. dia anterior)`);
-    L.push(`• Conversas no WhatsApp: ${int(dia.conversoes)} (${varTxt(dia.conversoes, ant.conversoes)})`);
+    L.push(`• ${tituloConv(lDia)}: ${numConv(dia.conversoes)} (${varTxt(dia.conversoes, ant.conversoes)})`);
     L.push(`• Custo por conversa: ${brl(dia.cpa)} · meta ${brl(CFG.cpaAlvo)}`);
 
     const plats = ["meta", "google"].map(p => ({ p, t: consolidar(linhasDe(ref, ref, { plat: p })) })).filter(x => x.t.gasto > 0);
     if (plats.length) {
       L.push("", "*Por plataforma*");
-      for (const { p, t } of plats) L.push(`• ${nomePlat(p)}: ${brl(t.gasto)} → ${plural(t.conversoes, "conversa", "conversas")} · CTR ${pc(t.ctr, 2)}`);
+      for (const { p, t } of plats) L.push(`• ${nomePlat(p)}: ${brl(t.gasto)} → ${p === "google" ? pluralDec(t.conversoes, "conversão", "conversões") : plural(t.conversoes, "conversa", "conversas")} · CTR ${pc(t.ctr, 2)}`);
     }
 
     L.push("", "*Últimos 7 dias*");
-    L.push(`• ${brl(sem.gasto)} investidos · ${plural(sem.conversoes, "conversa", "conversas")} · ${brl(sem.cpa)} por conversa`);
-    // melhor e pior da semana, com piso para não eleger campanha de R$ 5
+    L.push(`• ${brl(sem.gasto)} investidos · ${convTxt(lSem, sem.conversoes)} · ${brl(sem.cpa)} por conversa`);
+    // melhor e pior da semana, com piso para não eleger campanha de R$ 5; com uma só, o custo dela em destaque
     const el = Object.values(CAMP).filter(c => c.plat).map(c => ({ c, t: consolidar(linhasDe(ref - 6, ref, { camp: c.id })) }))
       .filter(x => x.t.gasto >= 20 && x.t.conversoes > 0).sort((a, b) => a.t.cpa - b.t.cpa);
     if (el.length >= 2) {
       L.push(`• 🟢 Melhor: ${el[0].c.nome} — ${brl(el[0].t.cpa)}`);
       L.push(`• 🔴 Pior: ${el[el.length - 1].c.nome} — ${brl(el[el.length - 1].t.cpa)}`);
+    } else if (el.length === 1) {
+      L.push(`• ${el[0].c.nome} — ${brl(el[0].t.cpa)} por conversa (única campanha com conversa na semana)`);
     }
 
     const m = ritmoMes(ref);
     L.push("", "*Mês*", `• ${brl0(m.gasto)} de ${brl0(CFG.orcamento)} · projeção ${brl0(m.proj)} (${situacaoOrc(m.proj)})`);
 
-    const c7 = crmTot(ref - 6, ref);
-    L.push("", "*No consultório (7 dias)*",
-      `• ${plural(c7.agendadas, "avaliação agendada", "avaliações agendadas")} · ${int(c7.compareceram)} ${c7.compareceram === 1 ? "compareceu" : "compareceram"} · ${int(c7.fecharam)} ${c7.fecharam === 1 ? "fechou" : "fecharam"} · ${brl0(c7.receita)} em tratamentos`);
+    const c7 = crmTot(ref - 6, ref), r7 = receitaTxt(c7);
+    L.push("", `*${VOC.local} (7 dias)*`,
+      `• ${plural(c7.agendadas, VOC.agendada[0], VOC.agendada[1])} · ${int(c7.compareceram)} ${c7.compareceram === 1 ? VOC.compareceu[0] : VOC.compareceu[1]} · ${int(c7.fecharam)} ${c7.fecharam === 1 ? "fechou" : "fecharam"}${r7 ? ` · ${r7}` : ""}`);
 
     const al = avaliar(ref);
     if (al.length) { L.push("", "*Alertas*"); al.slice(0, 4).forEach(a => L.push(`${ICONE[a.sev]} ${a.msg}`)); }
@@ -443,31 +532,35 @@ export function montar(ds) {
   }
 
   function relMensal(m, leituraIA = null) {
-    const t = consolidar(linhasDe(m.de, m.ate)), c = crmTot(m.de, m.ate);
+    const lMes = linhasDe(m.de, m.ate), t = consolidar(lMes), c = crmTot(m.de, m.ate);
     const lista = mesesDados(), idx = lista.findIndex(x => x.de === m.de), prev = idx > 0 ? lista[idx - 1] : null;
     const roas = t.gasto ? c.receita / t.gasto : null;
+    const est = c.receitaEstimada > 0;
     const L = [
-      `🦷 *${NOME} · Resultados de ${MESES[m.mes]}*`, "",
+      `${VOC.emoji} *${NOME} · Resultados de ${MESES[m.mes]}*`, "",
       `👁 Anúncios vistos ${int(t.impressoes)} vezes`,
-      `💬 ${plural(t.conversoes, "conversa", "conversas")} no WhatsApp (custo médio ${brl(t.cpa)})`,
-      `📅 ${plural(c.agendadas, "avaliação agendada", "avaliações agendadas")}`,
-      `✅ ${int(c.compareceram)} ${c.compareceram === 1 ? "compareceu" : "compareceram"}`,
-      `🦷 *${plural(c.fecharam, "paciente fechou", "pacientes fecharam")} tratamento*`, "",
+      temGoogle(lMes) ? `💬 ${convTxt(lMes, t.conversoes)} (custo médio ${brl(t.cpa)})` : `💬 ${plural(t.conversoes, "conversa", "conversas")} no WhatsApp (custo médio ${brl(t.cpa)})`,
+      `📅 ${plural(c.agendadas, VOC.agendada[0], VOC.agendada[1])}`,
+      `✅ ${int(c.compareceram)} ${c.compareceram === 1 ? VOC.compareceu[0] : VOC.compareceu[1]}`,
+      `${VOC.emoji} *${int(c.fecharam)} ${c.fecharam === 1 ? VOC.fechou[0] : VOC.fechou[1]}*`, "",
       `💰 Investido em anúncios: ${brl0(t.gasto)}`,
-      `📈 Tratamentos fechados: ${brl0(c.receita)} _(estimativa pelo valor de cada tratamento)_`,
     ];
-    if (fin(roas) && c.receita > 0) L.push(`Cada R$ 1 em anúncio virou *R$ ${dec(roas, 1)}* em tratamentos.`);
+    // dinheiro só quando existe de verdade: valor informado ou estimativa pelo ticket que o cliente configurou
+    if (c.receita > 0) L.push(`📈 ${VOC.receita}: ${brl0(c.receita)}${est ? ` _(estimativa pelo valor de cada ${VOC.servico})_` : ""}`);
+    if (c.semValor > 0) L.push(`📝 ${c.semValor === 1 ? "1 fechamento" : `${c.semValor} fechamentos`} sem valor informado — registre o valor no painel para entrar na conta.`);
+    if (fin(roas) && c.receita > 0) L.push(`Cada R$ 1 em anúncio virou *R$ ${dec(roas, 1)}* ${VOC.receitaEm}${est ? " _(estimativa)_" : ""}.`);
     if (prev && prev.ate - prev.de >= 19) {
       const cp = crmTot(prev.de, prev.ate), v = variacao(c.fecharam, cp.fecharam);
-      // sem paciente fechado nos dois meses a comparação seria ruído («+0% (0 → 0)») no WhatsApp do cliente
-      if (v != null && (c.fecharam > 0 || cp.fecharam > 0)) L.push("", `Em relação a ${MESES[prev.mes]}: ${v >= 0 ? "+" : ""}${v.toFixed(0)}% em pacientes novos (${cp.fecharam} → ${c.fecharam}).`);
+      // sem fechamento nos dois meses a comparação seria ruído («+0% (0 → 0)») no WhatsApp do cliente
+      if (v != null && (c.fecharam > 0 || cp.fecharam > 0)) L.push("", `Em relação a ${MESES[prev.mes]}: ${v >= 0 ? "+" : ""}${v.toFixed(0)}% em ${VOC.novo[1]} (${cp.fecharam} → ${c.fecharam}).`);
     }
-    const top = Object.entries(c.serv).sort((a, b) => b[1].v - a[1].v)[0];
-    const campTop = Object.values(CAMP).filter(cc => cc.plat).map(cc => ({ cc, k: crmTot(m.de, m.ate, { camp: cc.id }) }))
+    // destaque por serviço só com receita de verdade (0 ÷ 0 virava «— do resultado do mês»)
+    const top = c.receita > 0 ? Object.entries(c.serv).filter(([, s]) => s.v > 0).sort((a, b) => b[1].v - a[1].v)[0] : null;
+    const campTop = Object.values(CAMP).filter(cc => cc.plat && !cc.semCampanha).map(cc => ({ cc, k: crmTot(m.de, m.ate, { camp: cc.id }) }))
       .sort((a, b) => b.k.receita - a.k.receita)[0];
     if (top || (campTop && campTop.k.receita)) {
       L.push("", "*Destaques*");
-      if (top) L.push(`• ${plural(top[1].n, "paciente", "pacientes")} de ${top[0].toLowerCase()} — ${pc(top[1].v / c.receita * 100, 0)} do resultado do mês`);
+      if (top) L.push(`• ${plural(top[1].n, VOC.pessoa[0], VOC.pessoa[1])} de ${top[0].toLowerCase()} — ${pc(top[1].v / c.receita * 100, 0)} do resultado do mês`);
       if (campTop && campTop.k.receita) L.push(`• Anúncio que mais trouxe resultado: _${campTop.cc.nome}_`);
     }
 
@@ -480,7 +573,7 @@ export function montar(ds) {
       L.push(cansados.length
         ? "• Gravar 2 vídeos novos — alguns anúncios já foram vistos muitas vezes pelas mesmas pessoas."
         : "• Gravar 1 vídeo novo — anúncio com rosto de quem atende é o que mais traz conversa.");
-      L.push("• Pedir avaliação no Google aos pacientes satisfeitos: mais avaliações deixam os anúncios mais baratos.");
+      L.push(`• Pedir avaliação no Google aos ${VOC.pessoa[1]} satisfeitos: mais avaliações deixam os anúncios mais baratos.`);
     }
     L.push("", "_Qualquer dúvida, é só responder aqui._", CFG.assinatura);
     return L.join("\n");
@@ -498,15 +591,16 @@ export function montar(ds) {
       mes: (m => ({ gasto: r2(m.gasto), projecao: r2(m.proj), dias_restantes: m.restam }))(ritmoMes(ref)),
       campanhas_7d: Object.values(CAMP).filter(c => c.plat).map(c => ({ nome: c.nome, plataforma: c.plat, ...enx(consolidar(linhasDe(ref - 6, ref, { camp: c.id }))) }))
         .filter(c => c.gasto > 0),
-      consultorio_7d: (c => ({ agendadas: c.agendadas, compareceram: c.compareceram, fecharam: c.fecharam, receita: r2(c.receita) }))(crmTot(ref - 6, ref)),
+      consultorio_7d: (c => ({ agendadas: c.agendadas, compareceram: c.compareceram, fecharam: c.fecharam, receita: r2(c.receita),
+        receita_estimada: c.receitaEstimada > 0, fechamentos_sem_valor: c.semValor }))(crmTot(ref - 6, ref)),
       alertas: avaliar(ref, true).map(a => a.msg),
     };
   }
 
   return {
-    CFG, R, DIAS, DATAS, REF, NOME, LINHAS, LEADS, CAMP, CRI, REGRAS, ICONE, ORD, FMT_MET,
+    CFG, R, DIAS, DATAS, REF, NOME, LINHAS, LEADS, CAMP, CRI, REGRAS, ICONE, ORD, FMT_MET, VOC, vertical,
     dataDe, ddmm, dataBR, dMes,
-    consolidar, linhasDe, crmTot, porDia, soma7, media7, valorLead, etapa,
+    consolidar, linhasDe, crmTot, porDia, soma7, media7, valorLead, valorDe, receitaTxt, etapa,
     situacaoOrc, ritmoMes, mesesDados, avaliar, historico, textoAlerta, leituraDia, relDiario, relMensal, contextoIA,
   };
 }

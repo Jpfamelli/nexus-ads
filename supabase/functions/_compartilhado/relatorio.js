@@ -1,7 +1,11 @@
 /* ============================================================
    NEXUS ADS — relatorio.js (nx-relatorio: 8h diário / dia 1º mensal)
    Texto do núcleo (+ leitura por IA quando houver chave) →
-   nx_relatorios → WhatsApp. A IA nunca impede o relatório.
+   nx_relatorios → WhatsApp. A IA nunca impede o relatório: a falha dela
+   vai só para o resumo da execução (ia_erro), nunca para nx_relatorios.erro
+   de um relatório entregue. Prazo da IA por cliente (a IA lenta de um não
+   come o tempo dos outros). Sem destino cadastrado o relatório é pulado
+   (não é erro de todo dia) e o admin do cliente recebe UM aviso por semana.
    ============================================================ */
 import { criarDb } from "./db.js";
 import { enviarParaTodos, normalizarTelefone, idsDoEnvio } from "./whatsapp.js";
@@ -9,16 +13,20 @@ import { hojeSP, MESES } from "./nucleo.js";
 import {
   ErroHttp, json, agoraDe, somaDias, limparErro, lerCorpo, autenticarCron, listarClientes,
   carregarModelo, emLotes, erroDeEnvio, registrarExecucao, listaDestinos, comPrazo, PRAZO_REDE_MS,
-  tituloRelatorio, comTravaDoCliente, todosPulados, EM_EXECUCAO, soltandoCorpo,
+  tituloRelatorio, comTravaDoCliente, todosPulados, EM_EXECUCAO, soltandoCorpo, anonimizarEnvio,
+  traduzirErroIA, MODELO_PADRAO,
 } from "./comum.js";
 
 const JANELA = 130;         // a mesma do painel (nx_dados p_dias padrão): os números batem
 const CLIENTES_JUNTOS = 3;
 // trava por tipo e cliente ('nx-relatorio:diario:<id>'); vence sozinha se a função for cortada (150 s)
 export const TRAVA_S = 170;
-// A Edge Function corta a requisição em 150 s. O SDK sozinho pode levar 2 × 60 s por
-// cliente: sem um teto para a execução toda, IA lenta impediria o envio dos lotes seguintes.
+// A Edge Function corta a requisição em 150 s: teto da execução inteira para a IA…
 const PRAZO_IA_MS = 90_000;
+// …e teto POR cliente: com vários clientes, o último não pode ficar sem leitura porque os primeiros demoraram
+export const PRAZO_IA_CLIENTE_MS = 25_000;
+// aviso «sem destino» ao admin do cliente: no máximo um por semana (trava em nx_travas)
+const AVISO_SEM_DESTINO_S = 7 * 86400;
 
 function noPrazo(p, ms) {
   let t;
@@ -39,6 +47,21 @@ function mesDoRelatorio(M, m) {
     mes: `${MESES[m.mes]} de ${m.ano}`, gasto: r2(t.gasto), conversas: Math.round(t.conversoes), custo_conversa: r2(t.cpa),
     agendadas: c.agendadas, compareceram: c.compareceram, fecharam: c.fecharam, receita: r2(c.receita),
   };
+}
+
+/** Sem número cadastrado: um aviso por semana aos admins do cliente (nx_notificar). Devolve true quando avisou. Nunca lança. */
+async function avisarSemDestino(db, cliente, tipo) {
+  try {
+    const pegou = await db.rpc("nx_trava_pegar", { p_nome: `nx-relatorio:sem-destino:${cliente.id}`, p_segundos: AVISO_SEM_DESTINO_S, p_dono: "nx-relatorio" });
+    if (pegou !== true) return false;
+    const n = await db.rpc("nx_notificar", {
+      p_cliente: cliente.id, p_conta: null, p_tipo: "sistema",
+      p_titulo: tipo === "mensal" ? "Resumo mensal sem destino" : "Relatório diário sem destino",
+      p_corpo: "Nenhum número de WhatsApp cadastrado para receber o relatório. Cadastre o número do gestor em Anúncios → Ajustes → Integrações.",
+      p_link: "#/anuncios",
+    });
+    return Number(n) > 0;
+  } catch (e) { console.error("nx-relatorio aviso sem destino:", limparErro(e?.message || e)); return false; }
 }
 
 async function gerar(db, cfg, cliente, ctx) {
@@ -67,25 +90,29 @@ async function gerar(db, cfg, cliente, ctx) {
   if (existente?.enviado_em && !ctx.forcar) return { ...base, ok: true, pulado: "já enviado" };
   // cliente sem anúncio rodando no período: relatório zerado no WhatsApp é só ruído
   if (!ctx.forcar && !(periodo.gasto > 0)) return { ...base, ok: true, pulado: "sem investimento no período" };
+  // sem número cadastrado não é erro de todo dia (decisão 4): pula, e o admin do cliente é avisado uma vez por semana
+  if (!destinos.length) return { ...base, ok: true, pulado: "sem destino cadastrado", aviso_admin: await avisarSemDestino(db, cliente, ctx.tipo) };
 
-  let leitura = null, erroIA = null;
+  let leitura = null, iaErro = null, iaMotivo = null;
   if (ctx.ia) {
     try {
-      const resta = ctx.prazoIA - Date.now();
+      const resta = Math.min(ctx.prazoIACliente, ctx.prazoIA - Date.now());
       if (resta <= 0) throw new Error("tempo esgotado");
       const contexto = ctx.tipo === "diario" ? M.contextoIA(M.R) : { ...M.contextoIA(M.R), mes_do_relatorio: mesDoRelatorio(M, mes) };
-      leitura = limparLeitura(await noPrazo(ctx.ia({ chave: cfg.anthropic_api_key, modelo: cfg.modelo_ia || "claude-opus-5", tipo: ctx.tipo, contexto }), resta)) || null;
+      leitura = limparLeitura(await noPrazo(ctx.ia({ chave: cfg.anthropic_api_key, modelo: cfg.modelo_ia || MODELO_PADRAO, tipo: ctx.tipo, contexto, prazoMs: resta }), resta)) || null;
       if (!leitura) throw new Error("a IA não devolveu texto");
     } catch (e) {
       leitura = null;
-      erroIA = `IA: ${limparErro(e?.message || e)}`;
+      iaErro = limparErro(e?.message || e);
+      iaMotivo = traduzirErroIA(e).detalhe || null;
     }
   }
 
   const texto = ctx.tipo === "diario" ? M.relDiario(M.R, leitura) : M.relMensal(mes, leitura);
   const titulo = tituloRelatorio(ctx.tipo, M.NOME, ref);
-  const envio = destinos.length ? await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo }) : [];
-  const erro = [erroIA, erroDeEnvio(destinos, envio)].filter(Boolean).join(" · ") || null;
+  const envio = await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo });
+  // só o envio decide `erro` e `ok`: a leitura da IA é opcional, e a falha dela não é falha de um relatório entregue
+  const erro = erroDeEnvio(destinos, envio);
   const enviado = envio.some(e => e.ok);
 
   const linha = { cliente_id: cliente.id, tipo: ctx.tipo, referencia: ref, texto, leitura_ia: leitura, destinos, erro };
@@ -94,12 +121,16 @@ async function gerar(db, cfg, cliente, ctx) {
   if (enviado) Object.assign(linha, { enviado_em: ctx.agora.toISOString(), entregue_em: null, ...idsDoEnvio(envio) });
   await db.upsert("nx_relatorios", linha, "cliente_id,tipo,referencia");
 
-  return { ...base, ok: !erro, enviado, ia: leitura ? "ok" : ctx.ia ? "falhou" : "sem chave", envio, ...(erro ? { erro } : {}) };
+  return {
+    ...base, ok: !erro, enviado, ia: leitura ? "ok" : ctx.ia ? "falhou" : "sem chave",
+    ...(iaErro ? { ia_erro: iaErro, ...(iaMotivo ? { ia_motivo: iaMotivo } : {}) } : {}),
+    envio: anonimizarEnvio(envio), ...(erro ? { erro } : {}),
+  };
 }
 
 /**
  * POST com header x-nx-cron. Corpo { tipo: "diario"|"mensal", cliente?: uuid, forcar?: bool }.
- * @param {{fetch?: Function, agora?: Date|Function, ia?: Function, prazoIA?: number, prazoRede?: number}} [deps]
+ * @param {{fetch?: Function, agora?: Date|Function, ia?: Function, prazoIA?: number, prazoIACliente?: number, prazoRede?: number}} [deps]
  *   ia({chave, modelo, tipo, contexto}) → texto; padrão: ./ia.js (SDK oficial)
  */
 export function tratar(req, env, deps = {}) {
@@ -127,6 +158,7 @@ async function tratarRelatorio(req, env, deps) {
       tipo, forcar: corpo.forcar === true, hoje: hojeSP(agora), agora, fetch: rede,
       ia: cfg.anthropic_api_key ? (deps.ia || iaPadrao) : null,
       prazoIA: t0 + (deps.prazoIA ?? PRAZO_IA_MS),
+      prazoIACliente: deps.prazoIACliente ?? PRAZO_IA_CLIENTE_MS,
     };
     // trava por tipo E cliente: o botão de uma clínica às 8h não faz o cron do dia pular as outras
     const resumo = await emLotes(clientes, CLIENTES_JUNTOS, c =>

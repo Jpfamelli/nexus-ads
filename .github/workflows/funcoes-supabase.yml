@@ -51,6 +51,15 @@ jobs:
       - name: Montar supabase/dist
         run: node scripts/montar-funcoes.mjs
 
+      # os dois gates do AGENTS.md que faltavam aqui: erro de tipo/import aparecia só no bundle do servidor, no meio da
+      # publicação das 7 funções (sem volta automática). O Deno vem do npm (versão fixa), sem action nova.
+      - name: Portão — deno check nos entrypoints montados
+        # --node-modules-dir=none: o package.json da raiz (PGlite dos smokes locais) faria o Deno procurar npm:@anthropic-ai/sdk em node_modules
+        run: npx --yes deno@2.6.0 check --node-modules-dir=none supabase/dist/*/index.ts
+
+      - name: Portão — git diff --check no que vai para o servidor (espaço sobrando, marcador de conflito)
+        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD -- supabase/functions web/nucleo.js web/app/auto-catalogo.js scripts supabase/deploy-lista.txt .github
+
       - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb # v1.7.3
         with:
           version: 2.118.0

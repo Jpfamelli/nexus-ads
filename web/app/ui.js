@@ -191,11 +191,13 @@ function caixaToasts() {
   return _toasts;
 }
 
-/** toast(texto, {tipo:'ok'|'erro'|'info', desfazer:fn, ms:5000, aoFechar(motivo)}) → {fechar, el}
-    motivo de aoFechar: "tempo" | "fechado" | "desfazer" | "fila". Todo toast é anunciado ao leitor de tela (erro, de forma urgente). */
-export function toast(texto, { tipo = "info", desfazer = null, ms, aoFechar = null } = {}) {
+/** toast(texto, {tipo:'ok'|'erro'|'info'|'aten', desfazer:fn, acao:{rotulo, fn}, ms:5000, fixo, aoFechar(motivo)}) → {fechar(motivo?), el}
+    motivo de aoFechar: "tempo" | "fechado" | "desfazer" | "acao" | "fila" | o que fechar(motivo) receber. Todo toast é anunciado ao leitor de tela
+    (erro, de forma urgente). Plano 100 · A10: `ms: 0` não fecha sozinho; `fixo: true` também não sai da fila quando chegam outros (avisos de
+    estado que duram enquanto o problema durar: número de WhatsApp caído); `acao` é um botão próprio («Ver número»). */
+export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, fixo = false, aoFechar = null } = {}) {
   const caixa = caixaToasts();
-  const dur = ms ?? (tipo === "erro" ? 7000 : desfazer ? 7000 : 4500);
+  const dur = ms ?? (tipo === "erro" ? 7000 : desfazer || acao ? 7000 : 4500);
   let timer = null, fechado = false;
   const fechar = (motivo = "fechado") => {
     if (fechado) return; fechado = true;
@@ -204,14 +206,17 @@ export function toast(texto, { tipo = "info", desfazer = null, ms, aoFechar = nu
     setTimeout(() => { el.remove(); if (!caixa.children.length && caixa.hidePopover) try { caixa.hidePopover(); } catch { /* ok */ } }, 180);
     if (aoFechar) try { aoFechar(motivo); } catch (e) { console.error(e); }
   };
-  const el = h("div", { class: ["toast", `toast-${tipo}`] },
-    icone(tipo === "ok" ? "check" : tipo === "erro" ? "alerta" : "info"),
+  const temAcao = !!(acao && typeof acao.fn === "function" && String(acao.rotulo || "").trim());
+  const el = h("div", { class: ["toast", `toast-${tipo}`, fixo && "toast-fixo"], role: fixo ? "status" : null },
+    icone(tipo === "ok" ? "check" : tipo === "erro" || tipo === "aten" ? "alerta" : "info"),
     h("p", null, String(texto)),
     desfazer ? h("button", { type: "button", class: "toast-acao", title: "Desfazer (Ctrl ou ⌘ + Z)", on: { click: () => { fechar("desfazer"); desfazer(); } } }, "Desfazer") : null,
+    temAcao ? h("button", { type: "button", class: "toast-acao", on: { click: () => { fechar("acao"); try { acao.fn(); } catch (e) { console.error(e); } } } }, String(acao.rotulo).trim()) : null,
     h("button", { type: "button", class: "toast-x", "aria-label": "Fechar aviso", on: { click: () => fechar("fechado") } }, icone("fechar")));
   el.__fechar = fechar;
   caixa.appendChild(el);
-  const vivos = [...caixa.children].filter(c => !c.classList.contains("saindo"));
+  // fila de 4: os mais antigos saem; um toast fixo não conta nem sai (ele dura enquanto o estado durar)
+  const vivos = [...caixa.children].filter(c => !c.classList.contains("saindo") && !c.classList.contains("toast-fixo"));
   for (const c of vivos.slice(0, Math.max(0, vivos.length - 4))) { if (c.__fechar) c.__fechar("fila"); else c.remove(); }
   mostrarNoTopo(caixa);
   if (dur > 0) {
@@ -220,7 +225,7 @@ export function toast(texto, { tipo = "info", desfazer = null, ms, aoFechar = nu
     el.addEventListener("mouseleave", () => { if (!fechado) timer = setTimeout(() => fechar("tempo"), 2500); });
   }
   anunciar(String(texto), { urgente: tipo === "erro" });
-  return { fechar: () => fechar("fechado"), el };
+  return { fechar: (motivo = "fechado") => fechar(typeof motivo === "string" && motivo ? motivo : "fechado"), el };
 }
 
 /** Anúncio só para leitor de tela (aria-live). `urgente` usa a região assertiva (erros). */
@@ -1250,7 +1255,18 @@ export const PILULA_CANAIS = Object.freeze({
   facebook: { tok: "meta", icone: "meta", rotulo: "Facebook" }, google: { tok: "google", icone: "google", rotulo: "Google" }, site: { tok: "info", icone: "globo", rotulo: "Site" },
   indicacao: { tok: "prim", icone: "usuario", rotulo: "Indicação" }, telefone: { tok: "neutra", icone: "telefone", rotulo: "Telefone" }, manual: { tok: "neutra", icone: "editar", rotulo: "Manual" },
   anuncio: { tok: "sec", icone: "anuncio", rotulo: "Anúncio" }, importacao: { tok: "neutra", icone: "baixar", rotulo: "Importação" },
+  // plano 100 · A8: provedores dos números (nx_canais.provedor) e a origem orgânica do rastreio
+  codewords: { tok: "ok", icone: "whatsapp", rotulo: "WhatsApp · CodeWords" }, organico: { tok: "ok", icone: "folha", rotulo: "Orgânico" },
 });
+/** Origem do contato/negócio (nx_contatos.origem + o que o rastreio classifica): pilula(null, "site", {variante: "origem"}) → «Site» com globo.
+    `plataforma` ("meta" | "instagram" | "facebook" | "google") completa o anúncio: «Anúncio · Meta» com o símbolo e a cor da plataforma. */
+export const PILULA_ORIGENS = Object.freeze({
+  anuncio: { tok: "sec", icone: "anuncio", rotulo: "Anúncio" }, site: { tok: "info", icone: "globo", rotulo: "Site" }, organico: { tok: "ok", icone: "folha", rotulo: "Orgânico" },
+  whatsapp: { tok: "ok", icone: "whatsapp", rotulo: "WhatsApp" }, manual: { tok: "neutra", icone: "editar", rotulo: "Manual" }, importacao: { tok: "neutra", icone: "baixar", rotulo: "Importação" },
+  formulario: { tok: "prim", icone: "modelo", rotulo: "Formulário" }, indicacao: { tok: "prim", icone: "usuario", rotulo: "Indicação" },
+});
+const ALIAS_ORIGEM = Object.freeze({ ads: "anuncio", anuncios: "anuncio", lead_anuncio: "anuncio", import: "importacao", importado: "importacao", form: "formulario", lead_form: "formulario", organic: "organico", web: "site" });
+const PILULA_PLATAFORMAS = Object.freeze({ meta: { tok: "meta", icone: "meta", rotulo: "Meta" }, instagram: { tok: "meta", icone: "meta", rotulo: "Instagram" }, facebook: { tok: "meta", icone: "meta", rotulo: "Facebook" }, google: { tok: "google", icone: "google", rotulo: "Google" } });
 export const PILULA_PRIORIDADES = Object.freeze({
   urgente: { tok: "ruim", rotulo: "Urgente", n: 3 }, alta: { tok: "ruim", rotulo: "Alta", n: 3 }, media: { tok: "aten", rotulo: "Média", n: 2 }, normal: { tok: "neutra", rotulo: "Normal", n: 1 }, baixa: { tok: "neutra", rotulo: "Baixa", n: 1 },
 });
@@ -1261,8 +1277,8 @@ export const PILULA_STATUS = Object.freeze({
   novo: "info", aberto: "info", andamento: "info", info: "info",
 });
 const chaveDe = v => String(v ?? "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[\s-]+/g, "_");
-/** pilula(texto, cor, {icone, title, class, variante: "status"|"prioridade"|"canal", tamanho: "p"}) — cor = token ('ok','ruim','aten','info','prim','sec','neutra') ou #RRGGBB do banco;
-    com `variante`, `cor` é a chave semântica (ex.: "whatsapp", "alta", "pausado") e a cor sai da tabela. */
+/** pilula(texto, cor, {icone, title, class, variante: "status"|"prioridade"|"canal"|"origem", plataforma, tamanho: "p"}) — cor = token ('ok','ruim','aten','info','prim','sec','neutra') ou #RRGGBB do banco;
+    com `variante`, `cor` é a chave semântica (ex.: "whatsapp", "alta", "pausado", "site") e a cor sai da tabela; texto nulo usa o rótulo da tabela. */
 export function pilula(texto, cor = "neutra", extra = {}) {
   let tok = TOKENS_COR.has(cor) ? cor : null;
   let hex = !tok ? corOk(cor) : null;
@@ -1281,6 +1297,16 @@ export function pilula(texto, cor = "neutra", extra = {}) {
     const st = PILULA_STATUS[chaveDe(cor)];
     if (st) { tok = st; hex = null; }
     classes.push("pilula-status");
+  } else if (v === "origem") {
+    const chave = chaveDe(cor), base = PILULA_ORIGENS[ALIAS_ORIGEM[chave] || chave] || PILULA_ORIGENS[chaveDe(texto)];
+    const plat = extra.plataforma ? PILULA_PLATAFORMAS[chaveDe(extra.plataforma)] : null;
+    if (base) {
+      const anuncioDaPlataforma = !!plat && base === PILULA_ORIGENS.anuncio;   // só o anúncio herda símbolo e cor da plataforma
+      tok = anuncioDaPlataforma ? plat.tok : base.tok; hex = null;
+      ic = ic || (anuncioDaPlataforma ? plat.icone : base.icone);
+      if (texto === null || texto === undefined) texto = plat ? `${base.rotulo} · ${plat.rotulo}` : base.rotulo;
+    }
+    classes.push("pilula-origem");
   }
   classes.push(tok ? `pilula-${tok}` : hex ? "pilula-cor" : "pilula-neutra");
   if (extra.tamanho === "p") classes.push("pilula-p");
@@ -1326,13 +1352,34 @@ export function avatar(nome, id, img, { tamanho, estado } = {}) {
 /* ============================================================
    Seletores
    ============================================================ */
-/** seletorEtiquetas({todas:[{id,nome,cor}], marcadas:[id], aoMudar(ids), podeCriar: async nome→{id,nome,cor} | false, rotulo}) → Node */
-export function seletorEtiquetas({ todas = [], marcadas = [], aoMudar, podeCriar = false, rotulo = "Etiquetas" } = {}) {
+/** seletorEtiquetas({todas:[{id,nome,cor}], marcadas:[id], aoMudar(ids, {seq}), podeCriar: async nome→{id,nome,cor} | false, rotulo, debounceMs = 300}) → Node
+    Plano 100 · A7 [G261]: a tela responde na hora (a etiqueta entra/sai do DOM) e `aoMudar` sai UMA vez depois de `debounceMs` sem toques, com
+    `seq` crescente (1, 2, …). Quem salva no servidor guarda o seq do pedido e ignora a resposta cujo seq for menor que `raiz.seqAtual()`
+    (resposta antiga não sobrescreve a nova). `raiz.definir(ids)` sincroniza a seleção com o que o servidor devolveu, sem emitir;
+    `raiz.marcadas()` lê a seleção; `raiz.emitirAgora()` dispara o que está na pausa (ex.: ao fechar o painel). debounceMs: 0 = emite na hora. */
+export function seletorEtiquetas({ todas = [], marcadas = [], aoMudar, podeCriar = false, rotulo = "Etiquetas", debounceMs = 300 } = {}) {
   let catalogo = todas.slice();
   const sel = new Set(marcadas);
+  let seq = 0, timer = null;
   const raiz = h("div", { class: "sel-etiq", role: "group", "aria-label": rotulo });
   const botao = h("button", { type: "button", class: "bt bt-fant bt-p sel-etiq-mais" }, icone("etiqueta"), "Etiqueta");
-  function mudou() { if (aoMudar) aoMudar([...sel]); desenhar(); }
+  function emitir() {
+    timer = null;
+    seq += 1;
+    raiz.dataset.seq = String(seq);
+    if (aoMudar) aoMudar([...sel], { seq });
+  }
+  function mudou() {
+    desenhar();
+    if (!(debounceMs > 0)) { emitir(); return; }
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(emitir, debounceMs);
+  }
+  raiz.seqAtual = () => seq;
+  raiz.marcadas = () => [...sel];
+  raiz.pendente = () => timer !== null;
+  raiz.emitirAgora = () => { if (timer !== null) { clearTimeout(timer); emitir(); } };
+  raiz.definir = ids => { sel.clear(); for (const id of Array.isArray(ids) ? ids : []) sel.add(id); desenhar(); };
   function desenhar() {
     limpar(raiz);
     for (const id of sel) {
@@ -1976,7 +2023,7 @@ function aoOcultar() { if (typeof document !== "undefined" && document.hidden) a
     desfazer e nunca roda se a pessoa desfizer; se falhar, a tela volta (reverter) e o estado é "falhou". Se a página for fechada (pagehide) ou for para
     segundo plano (visibilitychange com document.hidden) com a ação pendente, `firmar({ saindo: true })` roda na hora: use o `saindo` para mandar a
     escrita com {keepalive: true}. Quando o aviso fecha normalmente, `firmar()` é chamada sem argumento. */
-export async function acaoComDesfazer({ texto, aplicar, reverter, firmar, ms = 7000 } = {}) {
+export async function acaoComDesfazer({ texto, aplicar, reverter, firmar, ms = 7000, aoCriar } = {}) {
   if (typeof document !== "undefined" && _ouvindoZ !== document) { document.addEventListener("keydown", aoTeclaZ); _ouvindoZ = document; }
   if (typeof addEventListener === "function" && _ouvindoSaida !== addEventListener) { addEventListener("pagehide", aoSair); _ouvindoSaida = addEventListener; }
   if (typeof document !== "undefined" && _ouvindoOculta !== document) { document.addEventListener("visibilitychange", aoOcultar); _ouvindoOculta = document; }
@@ -1992,6 +2039,11 @@ export async function acaoComDesfazer({ texto, aplicar, reverter, firmar, ms = 7
   while (_desfazer.length >= 3) { const velho = _desfazer[0]; manterItem(velho); if (velho.t) velho.t.fechar(); }
   _desfazer.push(item);
   item.t = toast(texto, { tipo: "info", ms, desfazer: () => desfazerItem(item), aoFechar: motivo => { if (motivo !== "desfazer") manterItem(item); } });
+  // aoCriar({firmarAgora}): quem chama pode encerrar o prazo antes (ex.: a gaveta que mostrava o movimento fechou) — firma na hora e o
+  // aviso «Desfazer» sai, como quando a página sai (nunca fica um «Desfazer» à vista de algo que já valeu)
+  if (typeof aoCriar === "function") {
+    try { aoCriar({ firmarAgora: () => { if (item.fim) return; manterItem(item); if (item.t) try { item.t.fechar(); } catch { /* ok */ } } }); } catch { /* ok */ }
+  }
   return fim;
 }
 
@@ -2025,7 +2077,9 @@ export function variacaoKpi(v, invertido = false) {
   const sr = x.sr || (sinal === "igual" ? "sem mudança em relação ao período anterior" : `${sinal === "sobe" ? "subiu" : "caiu"} ${pct(Math.abs(n), casas)} em relação ao período anterior`);
   return { sinal, tom, texto, sr, seta: sinal === "sobe" ? "↑" : sinal === "desce" ? "↓" : "→" };
 }
-/** kpi({rotulo, valor, formato, variacao, serie, ajuda, invertido, aoClicar, destaque}) → <article class="kpi"> (ou <button> com aoClicar).
+/** kpi({rotulo, valor, formato, variacao, serie, ajuda, invertido, aoClicar, destaque, estimativa}) → <article class="kpi"> (ou <button> com aoClicar).
+    Plano 100 · A12 (decisão 5): `estimativa: true` marca o cartão (.kpi-estimado, data-estimativa), põe o selo «estimado» no rótulo, «≈» antes do
+    número (CSS) e completa a ajuda com «Valor estimado, não medido.» (a ajuda nasce mesmo sem texto próprio).
     formato: "int" (padrão) | "num" | "moeda" | "moeda2" | "pct" | "pct1" | "compacto" | "minutos" | fn(valor) → texto.
     Número grande em Plex (contado com G.contar quando o tema anima), seta ↑↓ com cor semântica (invertido = subir é ruim), sparkline opcional
     (`serie`, desenhada por G.sparkline) e `ajuda` na dica do «i» (sem title: o tooltip nativo repetia o mesmo texto por cima). No cartão comum
@@ -2033,7 +2087,8 @@ export function variacaoKpi(v, invertido = false) {
     outro controle dentro: a dica é do botão e a ajuda vira a descrição dele. Valor nulo mostra «—» (nunca inventa zero). `el.pronto` resolve
     quando a sparkline e a contagem terminaram de montar (os gráficos carregam sob demanda). */
 export function kpi(o = {}) {
-  const { rotulo, valor, formato = "int", variacao, serie, ajuda, invertido = false, aoClicar, destaque } = o;
+  const { rotulo, valor, formato = "int", variacao, serie, ajuda: ajudaDada, invertido = false, aoClicar, destaque, estimativa = false } = o;
+  const ajuda = estimativa ? [ajudaDada ? String(ajudaDada).trim() : "", "Valor estimado, não medido."].filter(Boolean).join(" ") : ajudaDada;
   const fmt = typeof formato === "function" ? formato : (FORMATOS_KPI[formato] || FORMATOS_KPI.int);
   const n = Number(valor);
   const temValor = valor !== null && valor !== undefined && valor !== "" && Number.isFinite(n);
@@ -2052,10 +2107,10 @@ export function kpi(o = {}) {
     ajudaEl.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); mostrarDica(ajudaEl, String(ajuda)); } });
   } else if (ajuda) ajudaEl = h("span", { class: "kpi-ajuda", "aria-hidden": "true" }, icone("info"));
   const el = h(aoClicar ? "button" : "article", {
-    class: ["kpi", !temValor && "kpi-vazio", aoClicar && "kpi-clicavel", destaque && "kpi-destaque", temSerie && "kpi-com-serie"], type: aoClicar ? "button" : null,
-    "aria-describedby": idAj, dataset: { formato: typeof formato === "string" ? formato : "fn", dica: idAj ? ajuda : null },
+    class: ["kpi", !temValor && "kpi-vazio", aoClicar && "kpi-clicavel", destaque && "kpi-destaque", temSerie && "kpi-com-serie", estimativa && "kpi-estimado"], type: aoClicar ? "button" : null,
+    "aria-describedby": idAj, dataset: { formato: typeof formato === "string" ? formato : "fn", dica: idAj ? ajuda : null, estimativa: estimativa ? "1" : null },
   },
-    h("p", { class: "kpi-rot rotulo" }, rotulo ?? "", ajudaEl),
+    h("p", { class: "kpi-rot rotulo" }, rotulo ?? "", estimativa ? h("span", { class: "kpi-est selo-caps" }, "estimado") : null, ajudaEl),
     h("div", { class: "kpi-corpo" }, h("div", { class: "kpi-num" }, valorEl, varEl), sparkEl),
     // aria-hidden: entra só como descrição do botão, não no nome dele (senão o leitor de tela lia a ajuda duas vezes)
     idAj ? h("span", { class: "sr-only", id: idAj, "aria-hidden": "true" }, ajuda) : null);

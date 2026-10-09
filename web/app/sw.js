@@ -4,8 +4,11 @@
    Regras (nada de exceção):
    - NUNCA intercepta outro domínio (o banco e as funções são de outro endereço) nem o que não é GET: pedidos de dados passam direto.
    - Navegação (abrir o app, recarregar): rede primeiro, com 3 s de prazo; estourou ou está offline, entrega o index.html guardado.
-   - Arquivo do próprio site com ?v= (módulos, CSS, ícones) e /fonts/*: cache primeiro, chave = URL completa. Como cada versão tem URLs
-     próprias, uma aba antiga continua achando os arquivos da versão dela (não mistura agenda.js novo com ui.js antigo).
+   - Arquivo do próprio site com ?v= (módulos, CSS, ícones, fontes): cache primeiro, chave = URL completa, e pode vir de uma versão
+     anterior. Como cada versão tem URLs próprias, uma aba antiga continua achando os arquivos da versão dela (não mistura agenda.js novo
+     com ui.js antigo).
+   - Fonte ou ícone SEM ?v= (/fonts/*, /app/icones/*): cache primeiro só no cache DESTA versão, nunca de uma anterior (plano 100 · A1: a
+     URL igual era achada no cache da versão passada e a fonte trocada só chegava quando as duas anteriores fossem descartadas).
    - O cache tem o nome da versão (orbita-shell-<v>); a versão vem do ?v= do próprio sw.js. Mantém a atual + 2 anteriores para abas antigas.
    - Instalação: o index.html do ar diz quais arquivos formam o shell (links e scripts dele); não há lista para esquecer de atualizar.
      A página manda o resto por mensagem ({tipo:"precache", urls:[…]}): telas e CSS que ainda não foram abertas.
@@ -45,14 +48,19 @@ async function fetchComPrazo(recurso, ms, opcoes = {}) {
   try { return await Promise.race([fetch(recurso, { ...opcoes, signal: ctl.signal }), limite]); }
   finally { clearTimeout(timer); if (expirou) { try { ctl.abort(); } catch { /* já cancelado */ } } }
 }
-/** O que vale guardar para sempre sob a URL completa: arquivos versionados, fontes e ícones. */
-function versionado(url) {
+/** Arquivo versionado pelo endereço (?v=): vale para sempre sob a URL completa, mesmo vindo do cache de uma versão anterior. */
+function comVersao(url) {
   if (!mesmoSite(url)) return false;
   if (/\/versao\.json$/.test(url.pathname) || /\/sw\.js$/.test(url.pathname)) return false;
-  if (url.pathname.startsWith("/fonts/")) return true;
-  if (url.pathname.startsWith(ESCOPO.pathname + "icones/")) return true;
   return url.searchParams.has("v") && /\.(js|css|svg|png|webp|woff2|webmanifest)$/.test(url.pathname);
 }
+/** Fonte ou ícone sem ?v=: guardado por versão (só no cache desta), nunca servido do cache de uma versão anterior. */
+function estatico(url) {
+  if (!mesmoSite(url) || url.searchParams.has("v")) return false;
+  return url.pathname.startsWith("/fonts/") || url.pathname.startsWith(ESCOPO.pathname + "icones/");
+}
+/** O que vale guardar no cache (instalação e precache): o versionado e o estático. */
+function versionado(url) { return comVersao(url) || estatico(url); }
 
 /** Arquivos do shell = os links e scripts do index.html que está no ar agora. */
 async function urlsDoShell() {
@@ -128,10 +136,11 @@ async function acharEmVersoesAnteriores(url) {
   return undefined;
 }
 
-async function cachePrimeiro(ev) {
+/** `anteriores`: só o arquivo com ?v= pode vir do cache de outra versão; fonte/ícone sem ?v= fica preso a esta (A1). */
+async function cachePrimeiro(ev, { anteriores = true } = {}) {
   const cache = await caches.open(NOME_CACHE);
   const url = ev.request.url;
-  const achado = await cache.match(url) || await acharEmVersoesAnteriores(url);
+  const achado = await cache.match(url) || (anteriores ? await acharEmVersoesAnteriores(url) : undefined);
   if (achado) return achado;
   let r;
   try { r = await fetchComPrazo(ev.request, PRAZO_ARQUIVO_MS); }
@@ -148,7 +157,8 @@ self.addEventListener("fetch", ev => {
   if (!mesmoSite(url)) return;                                // nunca o endereço do banco nem qualquer outro domínio
   if (url.pathname.startsWith("/__dev_falso/")) return;       // ambiente fictício local
   if (req.mode === "navigate") { if (dentroDoEscopo(url)) ev.respondWith(navegacao(ev)); return; }
-  if (versionado(url)) ev.respondWith(cachePrimeiro(ev));
+  if (comVersao(url)) ev.respondWith(cachePrimeiro(ev));
+  else if (estatico(url)) ev.respondWith(cachePrimeiro(ev, { anteriores: false }));
 });
 
 /** Mensagens da página: pular (aplicar a versão nova) e precache (telas que ainda não foram abertas). */

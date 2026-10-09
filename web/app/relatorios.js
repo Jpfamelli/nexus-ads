@@ -213,7 +213,7 @@ export async function montar(ctx) {
     soltar();
     corpo.setAttribute("aria-busy", "true");
     ui.limpar(corpo);
-    corpo.append(ui.esqueleto("cartoes", 6));
+    corpo.append(h("div", { class: "relat-sk" }, ui.esqueleto("kpi", { n: 6 }), ui.esqueleto("grafico")));
     const { de, ate } = periodo();
     const j = janelaComparacao(de, ate);
     legenda.textContent = j
@@ -299,9 +299,9 @@ export async function montar(ctx) {
   }
   function semDados(msg = "Sem dados no período.") {
     const filtrado = P.preset !== 30 || (P.preset === "per" && (P.de || P.ate)) || !!P.funil || !!P.dep;
-    return h("div", { class: "rel-cartao relat-vazio rel-entra" }, ui.vazio({ titulo: msg,
+    return h("div", { class: "rel-cartao relat-vazio rel-entra" }, ui.vazio({ titulo: msg, tema: aba === "vendas" ? "crm" : "conversas",
       texto: filtrado ? "Não há dados com este recorte. Limpe os filtros para voltar ao período padrão." : "Escolha outro período ou outro filtro.",
-      icone: "grafico", acao: filtrado ? { rotulo: "Limpar período e filtros", fn: limparFiltrosAtuais } : null }));
+      acao: filtrado ? { rotulo: "Limpar período e filtros", fn: limparFiltrosAtuais } : null }));
   }
 
   // ---------- VENDAS
@@ -350,21 +350,26 @@ export async function montar(ctx) {
     G.alternarTabela(bs.rodape, bs.alvo, { legenda: "Criados e ganhos por dia", colunas: ["Dia", "Criados", "Ganhos", "Receita"],
       linhas: serie.map(d => [L.dataIsoBR(d.d), int(d.criados), int(d.ganhos), brl0(d.receita)]) });
 
-    // por origem
-    const orig = r.por_origem || [];
-    const bo = cartao("Por origem", { sub: "Quem chegou × quem fechou, por canal de entrada.",
-      csv: { nome: "vendas-por-origem", colunas: ["Origem", "Criados", "Ganhos", "Perdidos", "Receita", "Conversão %"],
-        linhas: () => orig.map(o => [L.nomeOrigem(o.origem, o.plataforma), o.criados, o.ganhos, o.perdidos, o.receita, o.conversao_pct ?? ""]) } });
+    // por origem (F2/F12): a MESMA régua de «veio de anúncio» do Anúncios (L.origensVendas) — site e orgânico do rastreio com nome
+    // próprio, a campanha quando o servidor mandar; rosca com legenda (toque esconde a fatia) + tabela/CSV com criados × ganhos
+    const orig = L.origensVendas(r.por_origem || []);
+    const tA = L.totalAnuncioVendas(orig);
+    const bo = cartao("Por origem", { sub: `Quem chegou, por canal de entrada (criados no período).${tA.criados ? ` De anúncio: ${int(tA.criados)} ${tA.criados === 1 ? "criado" : "criados"} e ${int(tA.ganhos)} ${tA.ganhos === 1 ? "ganho" : "ganhos"} — a mesma régua do Anúncios.` : ""}`, png: orig.length ? "vendas-por-origem" : null,
+      csv: { nome: "vendas-por-origem", colunas: ["Origem", "Criados", "Ganhos", "Perdidos", "Receita", "Conversão %", "Campanhas"],
+        linhas: () => orig.map(o => [o.rotulo, o.criados, o.ganhos, o.perdidos, o.receita, o.conversao_pct ?? "", o.campanhas.join(" | ")]) } });
     grade.append(bo.c);
-    if (orig.length) {
-      graficos.push(G.barras(bo.alvo, {
-        resumo: `Por origem: ${orig.map(o => `${L.nomeOrigem(o.origem, o.plataforma)} ${o.criados} criados e ${o.ganhos} ganhos`).join("; ")}`,
-        itens: orig.map(o => ({ rotulo: L.nomeOrigem(o.origem, o.plataforma), extra: `${brl0(o.receita)}${o.conversao_pct != null ? ` · ${pctTxt(o.conversao_pct)} conversão` : ""}`, valores: [+o.criados || 0, +o.ganhos || 0] })),
-        series: [{ nome: "Criados", classe: "g-s1" }, { nome: "Ganhos", classe: "g-s0" }], fmt: int,
-      }));
+    if (orig.some(o => o.criados > 0)) {
+      const donut = typeof G.donut === "function" ? G.donut : G.rosca;
+      const tot = orig.reduce((a, o) => a + o.criados, 0);
+      graficos.push(donut(bo.alvo, {
+        resumo: `Por origem: ${orig.map(o => `${o.rotulo} ${o.criados} criados e ${o.ganhos} ganhos`).join("; ")}`,
+        fatias: orig.map(o => ({ rotulo: o.rotulo, valor: o.criados, extra: `${int(o.ganhos)} ${o.ganhos === 1 ? "ganho" : "ganhos"} · ${brl0(o.receita)}${o.conversao_pct != null ? ` · ${pctTxt(o.conversao_pct)} conversão` : ""}${o.campanhas.length ? ` · ${o.campanhas.slice(0, 2).join(", ")}` : ""}` })),
+        fmt: int, centro: { valor: int(tot), rotulo: tot === 1 ? "criado" : "criados" } }));
+      const comCamp = orig.filter(o => o.campanhas.length);
+      if (comCamp.length) bo.alvo.append(h("ul", { class: "relat-orig-camp" }, comCamp.map(o => h("li", {}, h("b", {}, o.rotulo), ` · ${o.campanhas.slice(0, 3).join(", ")}${o.campanhas.length > 3 ? ` e mais ${o.campanhas.length - 3}` : ""}`))));
       G.alternarTabela(bo.rodape, bo.alvo, { legenda: "Por origem", colunas: ["Origem", "Criados", "Ganhos", "Receita", "Conversão"],
-        linhas: orig.map(o => [L.nomeOrigem(o.origem, o.plataforma), int(o.criados), int(o.ganhos), brl0(o.receita), pctTxt(o.conversao_pct)]) });
-    } else bo.alvo.append(h("p", { class: "rel-vazio-txt" }, "Sem negócios no período."));
+        linhas: orig.map(o => [o.rotulo, int(o.criados), int(o.ganhos), brl0(o.receita), pctTxt(o.conversao_pct)]) });
+    } else bo.alvo.append(h("p", { class: "rel-vazio-txt" }, orig.length ? "Nenhum negócio criado no período (só fechamentos de antes)." : "Sem negócios no período."));
 
     // motivos de perda
     const mot = r.motivos_perda || [];

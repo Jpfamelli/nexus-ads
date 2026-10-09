@@ -232,7 +232,7 @@ function uiDeMentira(h, registro = {}) {
     brl: (v, o) => `R$ ${o && o.centavos === false ? Math.round(Number(v)) : Number(v).toFixed(2)}`, num: v => String(v), pct: v => `${Math.round(v * 100)}%`,
     relativo: isoT => (Date.parse(isoT) < Date.now() ? "há 2 dias" : "amanhã"), hojeSP: d => (d ? new Date(d) : new Date()).toISOString().slice(0, 10),
     dataBR: () => "04/10/2026", dataCurtaBR: () => "04/10", horaBR: isoT => String(isoT || "").slice(11, 16), dataHoraBR: isoT => `04/10/2026 ${String(isoT || "").slice(11, 16)}`, telBR: t => `(${String(t).slice(2, 4)}) …`,
-    avatar: (nome, id) => h("span", { class: "avatar", dataset: { id: String(id) }, title: nome }), pilula: (t, cor, x = {}) => h("span", { class: ["pilula", `pilula-${cor}`, x.class], title: x.title || null }, String(t)),
+    avatar: (nome, id) => h("span", { class: "avatar", dataset: { id: String(id) }, title: nome }), pilula: (t, cor, x = {}) => h("span", { class: ["pilula", `pilula-${cor}`, x.class], title: x.title || null, dataset: x.variante ? { variante: x.variante, chave: cor } : null }, String(t ?? cor)),
     etiqueta: e => h("span", { class: "etiq" }, e.nome),
     tabela: o => {
       const el = h("div", { class: "tabela-env" }, h("table", { class: "tabela" }, h("tbody")));
@@ -299,7 +299,9 @@ test("Kanban (DOM): cartão com avatar, barra de tempo na etapa pelo prazo (ok/a
     assert.match(cartao(1).attrs["aria-label"], /passou do prazo/i, "o leitor de tela ouve o prazo");
     // próxima tarefa com o prazo relativo; selo da origem (WhatsApp) quando não é anúncio; cadastro manual não ganha selo
     assert.equal(cartao(1).querySelector(".kc-tarefa-txt").textContent, "amanhã");
-    assert.equal(cartao(1).querySelector(".kc-origem-outra .ic").dataset.n, "whatsapp");
+    // plano 100 · C4: o selo virou a pílula padrão de origem (ui.pilula variante «origem»)
+    assert.equal(cartao(1).querySelector(".kc-origem-outra").dataset.chave, "whatsapp");
+    assert.equal(cartao(1).querySelector(".kc-origem-outra").dataset.variante, "origem");
     assert.equal(cartao(2).querySelector(".kc-origem-outra"), null);
     api.desmontar();
   } finally { D.desfazer(); }

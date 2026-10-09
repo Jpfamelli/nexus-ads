@@ -932,3 +932,76 @@ a.ini-numero:active { transform: scale(.98); }
   .g-dica { display: none !important; }
   .rel-h1, .rel-h2, .ads-sem-frase { color: CanvasText; }
 }
+
+/* ============================================================
+   PLANO 100 — frente F: KPIs do Anúncios em ui.kpi (receita estimada), gestão e balde «sem campanha», leitura parcial,
+   calor por hora, aparelho no Radar, rastreio do site (painel de cliques) e «Testar conexão» nos Ajustes de anúncios.
+   Só tokens; movimento só fora de prefers-reduced-motion; alvos de 44 px no toque.
+   ============================================================ */
+.ads-sk, .relat-sk { display: grid; gap: var(--esp-4); }
+.ads-kpis > .kpi { min-width: 0; }
+/* 4 cartões lado a lado: o número não quebra («R$ 1.5 / 12») — sparkline embaixo do número e corpo de número médio */
+.ads-kpis .kpi-com-serie .kpi-corpo { grid-template-columns: minmax(0, 1fr); }
+.ads-kpis .kpi-valor { font-size: var(--fs-num-m); white-space: nowrap; overflow-wrap: normal; }
+.ads-kpis .rel-kpi-extra { display: block; margin-top: var(--esp-1); }
+.ads-kpis .rel-medidor { margin-top: var(--esp-2); }
+.ads-kpi-neutro .kpi-var, .ads-kpi-neutro .kpi-var-bom, .ads-kpi-neutro .kpi-var-ruim { color: var(--c-texto-3); }   /* investir mais não é bom nem ruim */
+.ads-kpis .kpi.ads-kpi-neutro .g-spark { --g: var(--c-prim-luz); }   /* vence o .kpi:has(.kpi-var-bom) do app.css */
+.ads-est { font-size: var(--fs-12); font-weight: 600; color: var(--c-aten); }
+.ads-gestao { margin-top: calc(var(--esp-1) * -1); }
+.ads-balde { margin-top: var(--esp-2); }
+.ads-p-parcial::before { background: var(--c-aten); }
+.ads-p-parcial { color: var(--c-aten); border-color: color-mix(in srgb, var(--c-aten) 45%, transparent); }
+.ads-camp-balde th { color: var(--c-texto-2); font-style: italic; }
+.rel-chip-anuncio { color: var(--c-prim-luz); border-color: color-mix(in srgb, var(--c-prim) 45%, transparent); }
+.g-anuncio { fill: var(--c-prim); background: var(--c-prim); }
+.ads-fp-anuncio { border-top-color: var(--c-prim); }
+.ads-cal-forte { margin: var(--esp-3) 0 0; }
+
+/* Radar: aparelho de WhatsApp (só informativo) */
+.ads-aparelho { display: grid; gap: var(--esp-2); border-left: 3px solid var(--c-ok); }
+.ads-aparelho-ruim { border-left-color: var(--c-ruim); }
+.ads-aparelho .rel-h2 { display: flex; align-items: center; gap: var(--esp-2); }
+.ads-ap-luz { width: .6rem; height: .6rem; flex: none; border-radius: 50%; background: var(--c-ok); }
+.ads-aparelho-ruim .ads-ap-luz { background: var(--c-ruim); }
+.ads-aparelho .rel-nota { margin: 0; }
+.ads-ap-ver { justify-self: start; min-height: var(--alvo-toque); }
+
+/* Relatórios → Vendas: campanhas por origem (quando o servidor manda) */
+.relat-orig-camp { list-style: none; margin: var(--esp-3) 0 0; padding: 0; display: grid; gap: var(--esp-1); font-size: var(--fs-13); color: var(--c-texto-2); overflow-wrap: anywhere; }
+
+/* Configurações › Site e anúncios: painel «Cliques do site» */
+.ads-rastreio-det summary { cursor: pointer; min-height: var(--alvo-toque); display: flex; align-items: center; font-weight: 600; color: var(--c-texto-2); }
+.ads-rastreio-det[open] summary { color: var(--c-texto); }
+.ads-rastreio-det > * + * { margin-top: var(--esp-2); }
+.ads-rastreio-politica { margin: 0; padding: var(--esp-3) var(--esp-4); border-left: 3px solid var(--c-prim); border-radius: var(--r-m); background: var(--c-sup-2); color: var(--c-texto-2); font-size: var(--fs-13); line-height: 1.6; overflow-wrap: anywhere; }
+.ads-rastreio-corpo { display: grid; gap: var(--esp-4); min-width: 0; }
+.ads-rastreio-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ads-rastreio-bloco { display: grid; gap: var(--esp-2); min-width: 0; }
+.ads-rastreio-bloco > .rotulo { margin: 0; }
+.ads-rastreio-motivos, .ads-rastreio-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--esp-2); }
+.ads-rastreio-motivos li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 30%) auto; gap: var(--esp-3); align-items: center; font-size: var(--fs-13); }
+.ads-rastreio-barra { display: block; height: 6px; border-radius: 999px; background: var(--c-sup-3); overflow: hidden; }
+.ads-rastreio-barra i { display: block; height: 100%; width: var(--w); border-radius: inherit; background: var(--c-prim); }
+.ads-rastreio-lista li { display: grid; gap: var(--esp-1); padding: var(--esp-2) var(--esp-3); border: 1px solid var(--c-borda); border-radius: var(--r-m); background: var(--c-sup); min-width: 0; }
+.ads-rastreio-lista li.ok { border-left: 3px solid var(--c-ok); }
+.ads-rastreio-lista .campo-ajuda { margin: 0; overflow-wrap: anywhere; }
+.ads-rastreio-l1 { display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2); min-width: 0; }
+.ads-rastreio-camp { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.ads-rastreio-st { min-height: 1.3em; margin: 0; }
+.ads-rastreio-troca { margin: 0; padding-left: 1.2rem; display: grid; gap: var(--esp-2); }
+.ads-rastreio-local { color: var(--c-aten); }
+
+/* Ajustes de anúncios: resultado do «Testar conexão» */
+.cfga-canal-acoes { flex-wrap: wrap; gap: var(--esp-2); }
+.cfga-teste { margin: 0; padding: var(--esp-2) var(--esp-3); border-radius: var(--r-m); background: var(--c-sup); border: 1px solid var(--c-borda); font-size: var(--fs-13); line-height: 1.5; overflow-wrap: anywhere; }
+.cfga-teste-ok { color: var(--c-ok); border-color: color-mix(in srgb, var(--c-ok) 40%, transparent); }
+.cfga-teste-aten { color: var(--c-aten); border-color: color-mix(in srgb, var(--c-aten) 40%, transparent); }
+.cfga-teste-ruim { color: var(--c-ruim); border-color: color-mix(in srgb, var(--c-ruim) 40%, transparent); }
+
+@media (max-width: 760px) {
+  .ads-rastreio-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ads-rastreio-motivos li { grid-template-columns: minmax(0, 1fr) auto; }
+  .ads-rastreio-barra { grid-column: 1 / -1; grid-row: 2; }
+}
+@media (pointer: coarse), (max-width: 760px) { .cfga-canal-acoes .bt { min-height: var(--alvo-toque); } }

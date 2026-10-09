@@ -50,10 +50,10 @@ Corpo JSON de até 64 KB; toda resposta tem ok:true ou ok:false. "telefone" é s
 Para cada mensagem recebida, chame o Órbita ANTES de qualquer resposta:
 {"acao":"mensagem","direcao":"entrada","telefone":"5512999990000","nome":"Nome no perfil do cliente","texto":"texto recebido","message_id":"id da mensagem no WhatsApp","timestamp":"2026-09-29T12:00:00Z"}
 - Sem texto? Mande midia.tipo (imagem, audio, video, documento, sticker, localizacao ou contato) e midia.nome (se houver):
-{"acao":"mensagem","direcao":"entrada","telefone":"5512999990000","message_id":"id da mensagem no WhatsApp","midia":{"tipo":"imagem","nome":"foto.jpg"}}
+{"acao":"mensagem","direcao":"entrada","telefone":"5512999990000","message_id":"id da mensagem no WhatsApp","timestamp":"2026-09-29T12:00:00Z","midia":{"tipo":"imagem","nome":"foto.jpg"}}
 - Clique em anúncio para WhatsApp (referral / externalAdReply): mande também referral, para o Órbita atribuir o anúncio:
-{"acao":"mensagem","direcao":"entrada","telefone":"5512999990000","texto":"texto recebido","message_id":"id da mensagem no WhatsApp","referral":{"source_type":"ad","source_id":"id do anúncio","ctwa_clid":"clique do anúncio"}}
-- message_id é o id da mensagem no WhatsApp; timestamp, o horário original (ISO ou segundos). Repetir a mesma mensagem é seguro: o Órbita não duplica e devolve motivo "duplicada".
+{"acao":"mensagem","direcao":"entrada","telefone":"5512999990000","texto":"texto recebido","message_id":"id da mensagem no WhatsApp","timestamp":"2026-09-29T12:00:00Z","referral":{"source_type":"ad","source_id":"id do anúncio","ctwa_clid":"clique do anúncio"}}
+- message_id (o id da mensagem no WhatsApp) é OBRIGATÓRIO; timestamp é o horário original (ISO ou segundos). Sem message_id mande ao menos o timestamp; sem os dois o Órbita responde 422 e não grava. Repetir a mesma mensagem é seguro: o Órbita não duplica e devolve motivo "duplicada".
 - Código do site no texto, como [ref K7Q2P]: deixe-o no texto (o Órbita lê e atribui a campanha) e não o repita ao cliente.
 Resposta do Órbita: {ok:true, registrada, responder, motivo?, conversa_id, contexto?}.
 - Se responder:false, NÃO responda o cliente (motivos: pausada, ia_desligada, grupo, duplicada, bloqueado, optout, limite, eco, saida, lid_sem_numero). Encerre a execução sem erro.
@@ -92,11 +92,11 @@ Se uma ferramenta responder ok:false, o modelo não insiste: explica com calma a
 - O phone_id é o do aparelho cujo phone_number é o número do canal: descubra-o listando as conexões do whatsapp_device_manager e guarde-o como configuração do fluxo.
 - HTTP 200 NÃO significa entregue: só vale com code SUCCESS e message_id. Guarde esse message_id por uns 10 minutos para reconhecer o eco.
 - Logo depois de cada envio com sucesso, informe o Órbita (uma chamada por mensagem enviada; sem isso a sincronização acha que foi uma pessoa no celular e pausa a IA):
-{"acao":"mensagem","direcao":"saida","autor":"ia","telefone":"5512999990000","texto":"texto enviado","message_id":"id devolvido pelo envio"}
+{"acao":"mensagem","direcao":"saida","autor":"ia","telefone":"5512999990000","texto":"texto enviado","message_id":"id devolvido pelo envio","timestamp":"2026-09-29T12:00:05Z"}
 
 7) ECOS DO APARELHO E RECIBOS
 - Mensagem enviada pelo aparelho (from_me / is_from_me verdadeiro): espere 5 segundos e confira se o message_id está entre os enviados pelo fluxo. Se estiver, é o eco da IA: ignore. Se NÃO estiver, informe ao Órbita com autor "celular" e não responda:
-{"acao":"mensagem","direcao":"saida","autor":"celular","telefone":"5512999990000","texto":"texto","message_id":"id"}
+{"acao":"mensagem","direcao":"saida","autor":"celular","telefone":"5512999990000","texto":"texto","message_id":"id","timestamp":"2026-09-29T12:01:00Z"}
   Vale também para o que o próprio Órbita envia pelo aparelho (follow-ups, lembretes, resposta da equipe pelo painel): repasse igual, sem decidir nada. O Órbita reconhece o que ele mesmo enviou e só pausa a IA quando foi uma pessoa no celular.
 - Recibos (entregue, lido, falha), se o whatsapp_device_manager avisar (evento ack/receipt/status): repasse com status sent, delivered, read ou failed. Sem recibo, não invente:
 {"acao":"status","message_id":"id","status":"delivered"}
@@ -104,6 +104,7 @@ Se uma ferramenta responder ok:false, o modelo não insiste: explica com calma a
 8) FALHAS: SEM TRAVAR E SEM INVENTAR
 - Órbita com erro de rede, timeout, HTTP 429 ou 5xx (ex.: {ok:false, erro:"falha_temporaria"}): tente de novo até 3 vezes (espere 2 s, 5 s e 10 s; no 429 respeite retry-after), com o MESMO message_id (é seguro repetir). Continuou falhando? NÃO responda o cliente, não invente resposta: registre o erro e encerre; a próxima mensagem do cliente reinicia o atendimento.
 - HTTP 400, 401, 404 ou 422 (dados_invalidos, canal_invalido, payload_desconhecido): não repita; registre o erro no log do fluxo (sem a URL e sem chaves) e encerre sem responder.
+- HTTP 413 (corpo_grande): mais de 64 KB. Mande só os campos do contrato (nunca o payload cru do aparelho nem base64/miniatura de mídia) e corte o texto em 4096 caracteres; não repita o mesmo corpo.
 - Nunca repita o envio sozinho depois de erro ou demora do whatsapp_device_manager (timeout/5xx pode ter entregado): não reenvie e não informe saída ao Órbita. Cada mensagem é uma execução independente.
 
 9) LIMITES

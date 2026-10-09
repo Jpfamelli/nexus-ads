@@ -71,7 +71,8 @@ export async function montar(ctx) {
   const parte = ctx.rota.partes[0] || null;
   const raiz = ui.h("div", { class: ["au", parte ? "au-pag-editor" : "au-pag-lista"] });
   ctx.alvo.appendChild(raiz);
-  raiz.appendChild(ui.esqueleto(parte ? "lista" : "cartoes", parte ? 5 : 4));
+  // G9: a forma da tela que vem (números do topo + cartões) em vez do esqueleto genérico
+  raiz.appendChild(parte ? ui.esqueleto("lista", 5) : ui.h("div", { class: "au-esq" }, ui.esqueleto("kpi", 4), ui.esqueleto("cartao"), ui.esqueleto("cartao")));
   let dados, pecas;
   try {
     const r = await Promise.all([modulos(ctx, !!parte), ctx.api.rpcC("nx_automacoes_listar")]);
@@ -111,7 +112,7 @@ export async function montar(ctx) {
   const item = dados.itens.find(x => x.id === parte);
   if (!item) {
     ctx.titulo("Automação não encontrada");
-    raiz.appendChild(ui.vazio({ titulo: "Não encontramos essa automação", texto: "Ela pode ter sido excluída. Volte para a lista.", icone: "raio",
+    raiz.appendChild(ui.vazio({ titulo: "Não encontramos essa automação", texto: "Ela pode ter sido excluída. Volte para a lista.", icone: "raio", tema: "automacoes",
       acao: { rotulo: "Ver automações", fn: () => ctx.navegar("#/automacoes") } }));
     return;
   }
@@ -183,7 +184,7 @@ function telaLista(ctx, raiz, dados, P) {
   if (itens.length) { pintarResumo(); raiz.appendChild(faixaResumo); }
 
   // ------------------------------------------------ criar com IA
-  if (podeEditar) raiz.appendChild(cartaoIA(ctx, dados, noLimite));
+  if (podeEditar) raiz.appendChild(cartaoIA(ctx, dados, noLimite, P));
 
   // ------------------------------------------------ as do cliente
   const metas = new Map();
@@ -194,7 +195,7 @@ function telaLista(ctx, raiz, dados, P) {
     const suas = secaoSuas(ctx, dados, itens, metas, P, aoMudarEstado);
     recontarSuas = suas.recontar;
     raiz.appendChild(suas.el);
-  } else raiz.appendChild(h("div", { class: "au-vazio" }, ui.vazio({
+  } else raiz.appendChild(h("div", { class: "au-vazio" }, ui.vazio({ tema: "automacoes",
     titulo: "Automações fazem o trabalho repetitivo.", texto: podeEditar ? "Descreva o que você quer na caixa acima, ou comece por uma receita pronta." : "Ainda não há automações criadas.", icone: "raio" })));
 
   // ------------------------------------------------ receitas prontas
@@ -253,7 +254,7 @@ function registrarComandos(ctx, lista) {
 
 /* ------------------------------------------------------------------ Criar com IA */
 
-function cartaoIA(ctx, dados, noLimite) {
+function cartaoIA(ctx, dados, noLimite, P) {
   const { ui } = ctx;
   const h = ui.h;
   const EXEMPLOS_IA = L.exemplosIA(ctx.vocab);     // 5 pedidos do dia a dia, no vocabulário da vertical (item 55)
@@ -314,6 +315,8 @@ function cartaoIA(ctx, dados, noLimite) {
     if (pedindo || btCriar.disabled) return;
     const descricao = area.value.trim();
     pedindo = true;
+    // revisão: a montagem anterior (já paga) volta à tela se a nova chamada falhar (cota, rede) — antes ela sumia de vez
+    const anteriores = [...estado.childNodes].filter(n => !(n.classList && (n.classList.contains("au-ia-erro") || n.classList.contains("au-ia-carregando"))));
     ui.limpar(estado);
     const txtCarregando = h("span", null, "A IA está montando a automação… isso leva alguns segundos.");
     estado.appendChild(h("p", { class: "au-ia-carregando", role: "status" }, h("span", { class: "au-giro", "aria-hidden": "true" }), txtCarregando));
@@ -325,11 +328,14 @@ function cartaoIA(ctx, dados, noLimite) {
       if (!r || !r.automacao || typeof r.automacao !== "object") throw Object.assign(new Error("ia_resposta_invalida"), { codigo: "ia_resposta_invalida" });
       const conv = L.deFormatoIA(r.automacao, dados.base);
       const avisos = [...(Array.isArray(r.avisos) ? r.avisos : []).map(String), ...conv.avisos].filter(Boolean).slice(0, 12);
-      const montagemIA = { auto: conv.auto, explicacao: typeof r.explicacao === "string" ? r.explicacao.trim().slice(0, 1500) : "", avisos };
+      const montagemIA = { auto: conv.auto, explicacao: typeof r.explicacao === "string" ? r.explicacao.trim().slice(0, 1500) : "", avisos, descricao };
       ui.limpar(estado);
-      estado.appendChild(resultadoIA(ctx, dados, montagemIA, () => { area.focus(); }));
+      estado.appendChild(resultadoIA(ctx, dados, montagemIA, () => { area.focus(); }, reenviar, P));
     } catch (e) {
       ui.limpar(estado);
+      // G4 [E167]: reprovada na conferência, mas a montagem voltou (a cota já foi gasta) → abre no editor com o motivo
+      const rep = L.montagemReprovada(e, dados.base);
+      if (rep) { estado.appendChild(resultadoIA(ctx, dados, { ...rep, descricao }, () => { area.focus(); }, reenviar, P)); return; }
       const x = L.erroDaIA(e, ctx.api.mensagemErro(e));
       estado.appendChild(h("div", { class: ["aviso", x.tipo === "cota" || x.tipo === "chave" || x.tipo === "desligada" ? "aviso-aten" : "aviso-ruim", "au-ia-erro"], role: "alert" },
         ui.icone(x.tipo === "rede" ? "alerta" : "ia"),
@@ -337,6 +343,8 @@ function cartaoIA(ctx, dados, noLimite) {
           x.tipo === "cota" || x.tipo === "chave" || x.tipo === "desligada"
             ? h("div", { class: "linha" }, h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => ctx.navegar("#/automacoes/nova") } }, ui.icone("mais"), "Criar do zero"))
             : null)));
+      if (anteriores.length) estado.append(...anteriores);   // a montagem de antes continua usável
+
     } finally {
       clearTimeout(lento);
       pedindo = false;
@@ -344,15 +352,23 @@ function cartaoIA(ctx, dados, noLimite) {
       pintarBotao();
     }
   });
+  /** G4: as respostas às dúvidas da IA viram um pedido novo (o texto vai para a caixa, à vista) e a IA monta de novo. */
+  function reenviar(novoTexto) {
+    area.value = novoTexto;
+    pintarBotao();
+    if (btCriar.disabled) { area.focus(); return; }
+    btCriar.click();
+  }
   return cartao;
 }
 
 /** A montagem da IA: explicação, avisos, a frase da automação e o botão que abre o editor. */
-function resultadoIA(ctx, dados, m, tentarOutra) {
+function resultadoIA(ctx, dados, m, tentarOutra, reenviar, P) {
   const { ui } = ctx;
   const h = ui.h;
   const frase = L.descrever(m.auto, dados.base, ctx.vocab);
   const problema = L.validar(m.auto, { base: dados.base, ligar: false });
+  m.avisos = Array.isArray(m.avisos) ? m.avisos : [];
   const abrir = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("seta-dir"), "Conferir e ajustar no editor");
   abrir.addEventListener("click", () => {
     rascunhoIA = m;
@@ -362,14 +378,67 @@ function resultadoIA(ctx, dados, m, tentarOutra) {
   const outra = h("button", { type: "button", class: "bt bt-fant" }, "Pedir de outro jeito");
   outra.addEventListener("click", tentarOutra);
   return h("div", { class: "au-ia-res", role: "status" },
-    h("p", { class: "rotulo" }, "A IA montou"),
+    h("p", { class: "rotulo" }, m.reprovada ? "A IA montou, mas falta completar" : "A IA montou"),
     h("p", { class: "au-ia-res-nome" }, m.auto.nome || "Automação sem nome"),
     h("p", { class: "au-ia-res-frase" }, frase),
     m.explicacao ? h("p", { class: "au-ia-res-exp" }, m.explicacao) : null,
-    m.avisos.length ? h("ul", { class: "au-ia-ped-avisos", role: "list" }, m.avisos.map(t => h("li", null, ui.icone("alerta"), h("span", null, t)))) : null,
-    !problema.ok ? h("p", { class: "aviso aviso-aten" }, ui.icone("info"), h("span", null, `Falta completar no editor: ${problema.motivo}.`)) : null,
+    m.reprovada ? h("p", { class: "aviso aviso-ruim au-ia-reprovada" }, ui.icone("alerta"),
+      h("span", null, `A conferência reprovou: ${m.reprovada.motivo}. A montagem não se perdeu — abra no editor e complete o que falta.`)) : null,
+    m.avisos.length ? perguntasIA(ctx, dados, m, reenviar, P) : null,
+    !m.reprovada && !problema.ok ? h("p", { class: "aviso aviso-aten" }, ui.icone("info"), h("span", null, `Falta completar no editor: ${problema.motivo}.`)) : null,
     h("div", { class: "linha au-ia-res-acoes" }, abrir, outra),
     h("p", { class: "sub" }, "Nada foi salvo ainda. No editor você confere cada passo e decide se liga."));
+}
+
+/**
+ * G4 [E179]: as dúvidas da IA (avisos) como perguntas respondíveis — chips com o que existe no sistema (etapas, pessoas, etiquetas,
+ * números) ou «Sim / Não», e um campo livre. «Montar de novo com as respostas» junta tudo ao pedido e chama a IA outra vez.
+ */
+function perguntasIA(ctx, dados, m, reenviar, P) {
+  const { ui } = ctx;
+  const h = ui.h;
+  const perguntas = L.perguntasDosAvisos(m.avisos, dados.base);
+  const respostas = {};
+  const bt = h("button", { type: "button", class: "bt bt-sec au-ia-perg-bt", disabled: true }, ui.icone("ia"), "Montar de novo com as respostas");
+  const nota = h("p", { class: "sub au-ia-perg-nota", "aria-live": "polite" });
+  const atualizar = () => {
+    const n = perguntas.filter(p => String(respostas[p.id] || "").trim()).length;
+    bt.disabled = !n || typeof reenviar !== "function" || !m.descricao;
+    nota.textContent = n ? `${n} ${n === 1 ? "resposta" : "respostas"} para mandar à IA (usa mais uma montagem da cota).` : "";
+  };
+  const lista = h("ol", { class: "au-ia-perg", role: "list" }, perguntas.map(p => {
+    const idCampo = `au-ia-resp-${p.id}-${Math.random().toString(36).slice(2, 6)}`;
+    const campo = h("input", { id: idCampo, type: "text", class: "au-ia-resp", maxlength: 200, autocomplete: "off", placeholder: "Sua resposta (opcional)" });
+    const chips = h("div", { class: "au-chips au-ia-perg-chips", role: "group", "aria-label": `Respostas rápidas: ${p.pergunta}` }, p.opcoes.map(op => {
+      const c = P ? P.chip({ rotulo: op, ligado: false, aoClicar: b => {
+        const ligar = b.getAttribute("aria-pressed") !== "true";
+        chips.querySelectorAll(".au-chip").forEach(x => x.setAttribute("aria-pressed", String(x === b && ligar)));
+        campo.value = ligar ? op : "";
+        respostas[p.id] = campo.value;
+        atualizar();
+      } }) : h("button", { type: "button", class: "au-chip" }, op);
+      return c;
+    }));
+    campo.addEventListener("input", () => {
+      respostas[p.id] = campo.value;
+      chips.querySelectorAll(".au-chip").forEach(x => x.setAttribute("aria-pressed", String(x.textContent === campo.value)));
+      atualizar();
+    });
+    return h("li", { class: "au-ia-perg-item", dataset: { pergunta: p.id } },
+      h("label", { class: "au-ia-perg-txt", for: idCampo }, ui.icone("alerta"), h("span", null, p.pergunta)),
+      chips, campo);
+  }));
+  bt.addEventListener("click", () => {
+    if (bt.disabled) return;
+    const r = L.descricaoComRespostas(m.descricao, perguntas, respostas);
+    if (r.cortado) ui.toast(`Nem todas as respostas couberam no limite de ${L.LIMITES.descricao_ia} caracteres do pedido; mandamos as primeiras.`, { tipo: "info" });
+    reenviar(r.texto);
+  });
+  atualizar();
+  return h("div", { class: "au-ia-perg-caixa" },
+    h("p", { class: "rotulo" }, perguntas.length === 1 ? "Um ponto para conferir" : "Pontos para conferir"),
+    h("p", { class: "sub" }, "Responda o que quiser (é opcional) e a IA monta de novo com isso — ou ajuste direto no editor."),
+    lista, h("div", { class: "linha au-ia-perg-rod" }, bt), nota);
 }
 
 /* ------------------------------------------------------------------ Suas automações */
@@ -471,6 +540,8 @@ function itemLista(ctx, dados, it, metas, P, posicao = 0, aoMudarEstado = () => 
         li.classList.toggle("au-desligada", !it.ativo);
         pintar(it);
         ui.toast(v ? `«${it.nome}» ligada.` : `«${it.nome}» desligada.`, { tipo: "ok" });
+        // G9: ligou de verdade (o servidor aceitou) → o ✓ de sucesso no lugar do interruptor; desligar não comemora
+        if (v && it.ativo && typeof ui.checkSucesso === "function") { try { ui.checkSucesso(caixaSw); } catch { /* sem o ✓, o toast basta */ } }
       } catch (e) {
         b.definir(!v);
         ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e)), { tipo: "erro" });
@@ -480,6 +551,7 @@ function itemLista(ctx, dados, it, metas, P, posicao = 0, aoMudarEstado = () => 
       }
     },
   });
+  const caixaSw = h("div", { class: "au-item-sw" }, sw);
   metas.set(it.id, x => { Object.assign(it, x); pintar(it); sw.definir(it.ativo); li.classList.toggle("au-desligada", !it.ativo); });
 
   const btMais = h("button", { type: "button", class: "bt-icone au-item-mais", "aria-label": `Opções de ${it.nome}`, "aria-haspopup": "menu" }, ui.icone("opcoes"));
@@ -497,7 +569,7 @@ function itemLista(ctx, dados, it, metas, P, posicao = 0, aoMudarEstado = () => 
   if (L.enviaMensagem(it)) etiquetas.push(ui.pilula("WhatsApp", "ok", { icone: "whatsapp" }));
 
   li.append(
-    h("div", { class: "au-item-sw" }, sw),
+    caixaSw,
     h("a", { class: "au-item-corpo", href: `#/automacoes/${it.id}` },
       h("span", { class: "au-item-topo" }, ponto, h("span", { class: "au-item-nome" }, it.nome), estadoTxt),
       h("span", { class: "au-item-frase" }, frase),
@@ -593,7 +665,7 @@ function secaoReceitas(ctx, dados, vertical, vv, noLimite, qtdItens, P) {
     grade.classList.toggle("au-modelos-filtrada", categoria !== "todas" || !!termo);
     vazioBusca.hidden = vis.length > 0;
     ui.limpar(vazioBusca);
-    if (!vis.length) vazioBusca.appendChild(ui.vazio({ tipo: "sem_resultado", titulo: "Nenhuma receita com essas palavras.", texto: "Tente «mensagem», «tarefa», «IA» ou «orçamento».",
+    if (!vis.length) vazioBusca.appendChild(ui.vazio({ tipo: "sem_resultado", tema: "busca", titulo: "Nenhuma receita com essas palavras.", texto: "Tente «mensagem», «tarefa», «IA» ou «orçamento».",
       acao: { rotulo: "Limpar busca", fn: () => { campoBusca.value = ""; termo = ""; desenhar(); campoBusca.focus(); } } }));
     statusBusca.textContent = termo ? `${vis.length} ${vis.length === 1 ? "receita encontrada" : "receitas encontradas"}.` : "";
   };

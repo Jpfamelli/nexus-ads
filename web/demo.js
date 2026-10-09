@@ -60,6 +60,18 @@ const TAXAS = {
   fechar: { "Aparelho invisível": .18, "Implante": .25, "Clareamento": .33, "Clínica geral": .42, "Limpeza": .52, "Canal / urgência": .55 },
   comparecer: .66, comparecerUrgencia: .88,
 };
+// A clínica fictícia tem gestão da Nexus (R$ 997) e a tabela de valores configurada: é o que o núcleo
+// precisa para estimar o resultado (o padrão do núcleo é neutro — fee 0 e sem tabela, plano 100).
+export const CFG_DEMO = {
+  fee: 997,
+  ticket: { "Aparelho invisível": 5500, "Implante": 3500, "Clareamento": 1100, "Clínica geral": 420, "Limpeza": 250, "Canal / urgência": 850 },
+  proximos: {
+    "Aparelho invisível": "• Aumentar em 20% a verba do aparelho invisível — é o tratamento que mais rende.",
+    "Canal / urgência": "• Manter a campanha de urgência ligada: quem resolve a dor costuma voltar para o tratamento completo.",
+    "Clínica geral": "• Oferecer a avaliação completa a quem veio pela clínica geral — é a porta para os tratamentos maiores.",
+    "Implante": "• Gravar um vídeo explicando o implante passo a passo: quem pesquisa implante quer segurança.",
+  },
+};
 const NOMES_F = ["Ana", "Beatriz", "Camila", "Daniela", "Eduarda", "Fernanda", "Gabriela", "Helena", "Isabela", "Juliana", "Larissa", "Luana", "Mariana", "Natália", "Patrícia", "Renata", "Sabrina", "Tatiane", "Vanessa", "Yasmin", "Carolina", "Letícia", "Priscila", "Aline", "Bianca", "Débora"];
 const NOMES_M = ["André", "Bruno", "Carlos", "Diego", "Eduardo", "Felipe", "Gustavo", "Henrique", "Igor", "João", "Lucas", "Marcelo", "Rafael", "Rodrigo", "Thiago", "Vinícius", "Paulo", "Renan", "Otávio", "Leandro"];
 const INICIAIS = "ABCDFGLMNOPRSTV";
@@ -163,5 +175,6 @@ export function gerarDemo({ sal = "pdz", hoje = hojeSP(), nome = "Clínica Demon
     }
   }
 
-  return { LINHAS, LEADS, CAMP, CRI, CFG: cfgCom(cfg), REF, DIAS, nome, curto: nome.split(" ")[0], demo: true };
+  const cfgDemo = { ...CFG_DEMO, ...cfg, ticket: { ...CFG_DEMO.ticket, ...(cfg.ticket || {}) }, proximos: { ...CFG_DEMO.proximos, ...(cfg.proximos || {}) } };
+  return { LINHAS, LEADS, CAMP, CRI, CFG: cfgCom(cfgDemo), REF, DIAS, vertical: "odonto", nome, curto: nome.split(" ")[0], demo: true };
 }

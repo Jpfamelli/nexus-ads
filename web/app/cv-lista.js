@@ -114,6 +114,9 @@ export function criarLista(A) {
   montarAbas();
 
   const avisoCanal = h("div", { class: "cvl-aviso", hidden: true });
+  // D18: número de WhatsApp desconectado (ctx.canais do shell ou nx_cv_base.canais[].estado): faixa na central com «Ver número»
+  const avisoCaido = h("div", { class: "cvl-caido", role: "status", hidden: true });
+  let sigCaido = "";
   const infoBusca = h("div", { class: "cvl-busca-info", hidden: true });
   const filtrosEl = h("div", { class: "cvl-filtros-ativos", role: "group", hidden: true, "aria-label": "Filtros aplicados" });
   const lista = h("div", { class: "cvl-lista", id: "cvl-lista", role: "tabpanel" });
@@ -126,7 +129,7 @@ export function criarLista(A) {
     h("header", { class: "cvl-cab" }, titulo, btNova, btAtender),
     leitor,
     h("div", { class: "cvl-busca" }, h("label", { class: "busca" }, ui.icone("busca"), busca), btFiltro, btAvisos),
-    buscaAjuda, infoBusca, filtrosEl, abasEl, avisoCanal, lista);
+    buscaAjuda, infoBusca, filtrosEl, abasEl, avisoCanal, avisoCaido, lista);
 
   /* ---------------- filtros (popover) */
   function filtrosAtivos() {
@@ -227,6 +230,7 @@ export function criarLista(A) {
   // plano 50 · 34: ícone do tipo da última mensagem (o servidor manda só o resumo: «Foto», «Áudio: …») e selo do canal quando há mais de um número
   const ICONE_TIPO = Object.freeze({ imagem: "imagem", sticker: "imagem", audio: "microfone", video: "video", documento: "documento", template: "modelo", localizacao: "globo", contato: "contato" });
   const ROTULO_TIPO = Object.freeze({ imagem: "Foto", sticker: "Figurinha", audio: "Áudio", video: "Vídeo", documento: "Documento", template: "Modelo", localizacao: "Localização", contato: "Contato" });
+  const ORIGEM_LISTA = Object.freeze({ anuncio: "Anúncio", site: "Site", organico: "Orgânico", indicacao: "Indicação", formulario: "Formulário" });
   function multiCanal() { return ((A.base && A.base.canais) || []).length > 1; }
   function avatarComCanal(c, nome) {
     const av = ui.avatar(nome, c.contato && c.contato.id);
@@ -239,7 +243,7 @@ export function criarLista(A) {
 
   function assinatura(c, sel, minuto) {
     return JSON.stringify([A.acoes.rascunhoDe(c.id), A.acoes.filaResumo(c.id), c.contato && c.contato.nome, c.contato && c.contato.telefone, c.ultima_msg_em, c.ultima_msg_resumo, c.ultima_msg_dir,
-      c.nao_lidas, c.status, c.atribuida_a, c.atribuida_nome, c.aguardando, c.ultima_entrada_em, c.etiquetas, c.negocio, sel, minuto, A.aba, !!A.busca,
+      c.nao_lidas, c.status, c.atribuida_a, c.atribuida_nome, c.aguardando, c.ultima_entrada_em, c.etiquetas, c.negocio, sel, minuto, A.aba, !!A.busca, c.contato && c.contato.origem,
       (A.base && A.base.etiquetas || []).length]);
   }
 
@@ -269,6 +273,9 @@ export function criarLista(A) {
       meta.push(h("span", { class: "cvl-espera", dataset: { sla: sla.nivel }, title: `${rotSla}: ${L.tempoEspera(c.ultima_entrada_em)}` }, ui.icone("relogio"), L.tempoEspera(c.ultima_entrada_em)));
     }
     if (A.busca && c.status !== "aberta") meta.push(ui.pilula(c.status === "resolvida" ? "Resolvida" : "Pendente", c.status === "resolvida" ? "neutra" : "aten"));
+    // D17: de onde o contato veio (pílula de origem da frente A), por detecção — o nx_cv_listar de hoje ainda não manda contato.origem
+    const origem = c.contato && c.contato.origem;
+    if (origem && ORIGEM_LISTA[origem]) meta.push(ui.pilula(ORIGEM_LISTA[origem], origem, { variante: "origem", tamanho: "p", title: `Veio de: ${ORIGEM_LISTA[origem]}` }));
     const etqs = (c.etiquetas || []).map(etiquetaDe).filter(Boolean);
     for (const e of etqs.slice(0, 3)) {
       const cor = ui.corOk(e.cor);
@@ -463,6 +470,7 @@ export function criarLista(A) {
           h("p", null, admin ? "Conecte o WhatsApp da empresa para receber conversas aqui." : "Peça ao administrador para conectar o WhatsApp."),
           admin ? h("div", null, h("a", { class: "bt bt-prim bt-p", href: "#/config/numeros" }, "Conectar número")) : null)));
     }
+    desenharCaido();
     // busca ativa
     const q = (A.busca || "").trim();
     infoBusca.hidden = q.length < 2;
@@ -471,6 +479,27 @@ export function criarLista(A) {
       infoBusca.append(h("span", null, `Resultados para «${q}» em todas as abas`),
         h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { busca.value = ""; A.acoes.mudarLista({ busca: "" }); } } }, "Limpar"));
     }
+  }
+
+  /** D18: «Número «Recepção» desconectado desde 14:02 — as mensagens não chegam nem saem» + «Ver número» (admin). Só redesenha quando muda. */
+  function desenharCaido() {
+    const caidos = typeof A.acoes.canaisCaidos === "function" ? A.acoes.canaisCaidos() : [];
+    const s = JSON.stringify(caidos.map(c => [c.id, c.nome, c.desde]));
+    if (s === sigCaido) return;
+    sigCaido = s;
+    ui.limpar(avisoCaido);
+    avisoCaido.hidden = !caidos.length;
+    if (!caidos.length) return;
+    const admin = A.acoes.pode("admin");
+    const um = caidos[0];
+    const desde = um.desde ? ` desde ${L.horaLista(um.desde)}` : "";
+    const texto = caidos.length === 1
+      ? `Número «${um.nome || "WhatsApp"}» desconectado${desde}: as mensagens não chegam nem saem por ele até reconectar.`
+      : `${caidos.length} números desconectados: as mensagens não chegam nem saem por eles até reconectar.`;
+    avisoCaido.append(h("div", { class: "aviso aviso-ruim cvl-caido-in" }, ui.icone("alerta"),
+      h("div", { class: "pilha-p" }, h("p", null, texto),
+        admin ? h("div", null, h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => A.acoes.verNumero() } }, "Ver número"))
+          : h("p", { class: "sub" }, "Avise o administrador da empresa."))));
   }
 
   function render(o = {}) {

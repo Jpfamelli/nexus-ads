@@ -164,9 +164,8 @@
 .kc-score { display: inline-grid; place-items: center; min-width: 1.6rem; height: 1.3rem; padding: 0 .35rem; border-radius: 999px; background: var(--c-sup-3); color: var(--c-texto); font-size: var(--fs-12); font-weight: 700; font-variant-numeric: tabular-nums; }
 .kc-score.alta { background: var(--c-ok-suave); }
 .kc-score.media { background: var(--c-aten-suave); }
-.kc-origem { display: inline-grid; place-items: center; color: var(--c-meta); }
-.kc-origem.google { color: var(--c-google); }
-.kc-origem .ic { width: 15px; height: 15px; }
+/* plano 100 · C4: a origem é a pílula padrão (variante «origem»), pequena — mas nunca abaixo de 12 px no cartão */
+.kc-origem.pilula { font-size: var(--fs-12); min-height: 20px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kc-pontos { display: inline-flex; align-items: center; gap: .25rem; }
 .kc-ponto { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--cor, var(--c-texto-3)); box-shadow: 0 0 0 1px var(--c-borda-2); }
 .kc-fim { margin-left: auto; display: inline-flex; align-items: center; gap: .35rem; }
@@ -294,8 +293,8 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .ng-lapis .ic { width: 16px; height: 16px; }
 .ed-salvo { color: var(--c-ok); font-size: var(--fs-12); }
 .ng-anuncio { display: flex; gap: .7rem; align-items: flex-start; padding: .75rem .9rem; border-radius: var(--r-p); background: var(--c-sec-suave); border: 1px solid var(--c-borda); font-size: var(--fs-13); }
-.ng-anuncio .ic { color: var(--c-meta); margin-top: .1rem; }
-.ng-anuncio.google .ic { color: var(--c-google); }
+.ng-anuncio > .ic { color: var(--c-meta); margin-top: .1rem; }
+.ng-anuncio.google > .ic { color: var(--c-google); }
 .ng-anuncio b { font-weight: 700; }
 .ng-origem-detalhes { min-width: 0; display: grid; gap: .2rem; overflow-wrap: anywhere; }
 .ng-origem-detalhes small { color: var(--c-texto-3); font-size: var(--fs-12); }
@@ -750,7 +749,6 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .kc-tarefa-txt { white-space: nowrap; }
 .kc-tarefa-txt:empty { display: none; }
 .kc-tarefa.atrasada .kc-tarefa-txt { color: var(--c-ruim); font-weight: 700; }
-.kc-origem.kc-origem-outra { color: var(--c-texto-3); }
 .kc-prazo-ruim { border-color: color-mix(in srgb, var(--c-ruim) 40%, var(--c-borda)); }
 
 /* ---------- cabeçalho da coluna (item 23): mini-barra de participação + % ---------- */
@@ -972,4 +970,45 @@ select.ed { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .kc-tempo i, .kb-col-prop i, .crm-fr-cab .ic, .emp-cartao, .tf, .tfp-pn { transition: none !important; }
   .emp-cartao:hover { transform: none; }
   .kc-fantasma { transform: translate(var(--x, 0), var(--y, 0)); }
+}
+
+/* ============================================================
+   Plano 100 (08/10/2026) — frente C
+   C1 movimento pendente na gaveta · C3 de onde veio · C6 presença na consulta ·
+   C10 «x de anúncio» na coluna · C5 cartão-esqueleto no «Ver mais» · C8 aviso de marcos
+   ============================================================ */
+/* C10: a pílula «2 de anúncio» fica no fim da linha da participação (não empurra a barra para fora) */
+.kb-col-anuncio { flex: none; display: inline-flex; }
+.kb-col-anuncio .pilula { font-size: var(--fs-12); }
+/* C5: cartão-esqueleto enquanto a próxima página da coluna chega */
+.kb-sk .esqueleto-cartao .sk-cartao { min-height: 0; padding: .75rem .85rem; }
+/* C1: enquanto o «Desfazer» vale, a gaveta mostra o destino com o selo «Confirmando…» */
+.ng-confirmando .ic { width: 13px; height: 13px; }
+.ng[aria-busy="true"] .ng-fita { opacity: .7; }
+/* C3: o bloco «de onde veio» abre com a pílula de origem */
+.ng-rastreio { align-items: center; }
+.ng-rastreio > .pilula { flex: none; }
+.ng-rastreio-frase { font-weight: 700; color: var(--c-texto); }
+/* C6: presença na consulta que já passou */
+.ng-presenca { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .8rem; padding: .6rem .75rem;
+  border-radius: var(--r-p); background: var(--c-sup-2); border: 1px solid var(--c-borda); }
+.ng-presenca-txt { display: inline-flex; align-items: center; gap: .45rem; min-width: 0; color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 600; }
+.ng-presenca-txt .ic { width: 15px; height: 15px; flex: none; color: var(--c-texto-3); }
+.ng-presenca-bts { display: flex; gap: .4rem; flex-wrap: wrap; }
+.ng-pres { min-height: 36px; }
+.ng-pres .ic { width: 14px; height: 14px; }
+.ng-pres-compareceu[aria-pressed="true"] { background: var(--c-ok-suave); color: var(--c-ok); border-color: color-mix(in srgb, var(--c-ok) 55%, transparent); }
+.ng-pres-faltou[aria-pressed="true"] { background: var(--c-ruim-suave); color: var(--c-ruim); border-color: color-mix(in srgb, var(--c-ruim) 55%, transparent); }
+/* C8: aviso dos marcos sem etapa, logo abaixo da lista de etapas */
+.fe-marcos { margin-top: .6rem; }
+/* C7: aviso dos telefones sem país na prévia da importação */
+.imp-aviso-tel { margin-top: .4rem; }
+@media (max-width: 760px), (pointer: coarse) {
+  .ng-pres { min-height: 44px; }
+  .ng-presenca-bts { width: 100%; }
+  .ng-presenca-bts .ng-pres { flex: 1; justify-content: center; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ng-confirmando { animation: ng-pulsar 1.4s var(--e-out) infinite alternate; }
+  @keyframes ng-pulsar { from { opacity: 1; } to { opacity: .55; } }
 }

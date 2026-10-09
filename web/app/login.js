@@ -6,6 +6,7 @@
    ============================================================ */
 
 let _ctx = null;
+const _relogios = new Set();   // contagem regressiva do bloqueio (A9): some ao desmontar
 
 export async function montar(ctx) {
   _ctx = ctx;
@@ -16,7 +17,18 @@ export async function montar(ctx) {
   return telaEntrar(ctx);
 }
 
-export function desmontar() { _ctx = null; }
+export function desmontar() { _ctx = null; for (const t of _relogios) clearInterval(t); _relogios.clear(); }
+
+/** Plano 100 · A9 (contrato 10): `muitas_tentativas` chega com o hint em minutos → segundos de bloqueio (padrão 15 min). */
+export function segundosDeBloqueio(e, minutosDoHint) {
+  const min = typeof minutosDoHint === "function" ? minutosDoHint(e && e.hint) : null;
+  return (min || 15) * 60;
+}
+/** «14:59» para a contagem regressiva. */
+export function formatarContagem(segundos) {
+  const s = Math.max(0, Math.round(segundos));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 
 /* ---------------- moldura: arte editorial + cartão ---------------- */
 function moldura(ctx, { titulo, sub, cartao, marca }) {
@@ -72,9 +84,35 @@ function telaEntrar(ctx) {
       h("p", null, "Peça ao administrador da sua empresa um link para criar uma senha nova."),
       m.suporte_wa ? h("a", { class: "bt bt-sec bt-p", href: ui.linkWhatsApp("Olá! Preciso de ajuda para entrar no sistema.", m.suporte_wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Falar com o suporte") : null));
   esqueci.addEventListener("click", () => { ajuda.hidden = !ajuda.hidden; esqueci.setAttribute("aria-expanded", String(!ajuda.hidden)); });
+  // plano 100 · A9: depois da 3ª senha errada o caminho de recuperação fica em destaque e já aberto (quem erra 3 vezes não lembra a senha)
+  let falhas = 0;
+  const destacarEsqueci = () => {
+    esqueci.classList.add("entrar-destaque");
+    if (ajuda.hidden) { ajuda.hidden = false; esqueci.setAttribute("aria-expanded", "true"); }
+  };
+  // bloqueio por tentativas (contrato 10): o botão espera o prazo com a contagem visível; o leitor de tela ouve a frase uma vez (a contagem é aria-hidden)
+  const contagem = h("span", { class: "entrar-contagem dado", "aria-hidden": "true" });
+  const bloquear = e => {
+    let restam = segundosDeBloqueio(e, api.minutosDoHint);
+    botao.disabled = true;
+    mostrar(erro, api.mensagemErro(e));
+    erro.append(" ", contagem);
+    const pintar = () => { contagem.textContent = `(${formatarContagem(restam)})`; };
+    pintar();
+    const t = setInterval(() => {
+      restam -= 1;
+      if (restam > 0) { pintar(); return; }
+      clearInterval(t); _relogios.delete(t);
+      botao.disabled = false;
+      mostrar(erro, "Pode tentar de novo.");
+    }, 1000);
+    _relogios.add(t);
+    destacarEsqueci();
+  };
 
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
+    if (botao.disabled) return;
     mostrar(erro, "");
     ui.marcarErro(form, null);
     const d = ui.lerForm(form);
@@ -93,7 +131,9 @@ function telaEntrar(ctx) {
       const s = form.querySelector("input[name=senha]"); if (s) s.value = "";
       // senha ou e-mail errados: o erro fica colado no campo de senha (inline) e o foco volta para lá; erro de rede/servidor usa a caixa
       if (e && e.codigo === "credenciais_invalidas") ui.marcarErro(form, "senha", msg);
+      else if (e && e.codigo === "muitas_tentativas") bloquear(e);
       else { mostrar(erro, msg); if (s) s.focus(); }
+      if (e && e.codigo === "credenciais_invalidas" && ++falhas >= 3) destacarEsqueci();
     }
   });
 

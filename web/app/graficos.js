@@ -506,14 +506,22 @@ export function funil(alvo, o) {
 }
 
 /* ---------- 2.6 Mapa de calor 7 × 24 ---------- */
-/** @param o {matriz:[7][24] números (0 = domingo), dias:['dom',…], fmt(v), resumo}
-    Dica (plano 50 · A2): mouse sobre a célula ou teclado — ← → mudam a hora, ↑ ↓ o dia, Home/End as pontas, Esc fecha — com aria-live. */
+/** Plano 100 · A12: de quantas em quantas horas o eixo mostra rótulo — 1 quando há espaço (≥ 22 px por coluna: desktop), 3 no celular. `largura` em px (0 = desconhecida). */
+export function passoHorasCalor(largura, celular = false) {
+  if (largura > 0) return largura >= 24 * 22 ? 1 : 3;
+  return celular ? 3 : 1;
+}
+/** @param o {matriz:[7][24] números (0 = domingo), dias:['dom',…], fmt(v), resumo, passoHoras?: 1 | 3}
+    Dica (plano 50 · A2): mouse sobre a célula ou teclado — ← → mudam a hora, ↑ ↓ o dia, Home/End as pontas, Esc fecha — com aria-live.
+    Rótulos de hora (plano 100 · A12): `passoHoras` 1 ou 3; sem ele, decide pela largura do alvo (1 h no desktop, 3 h no celular). */
 export function calor(alvo, o) {
   limpar(alvo);
   const max = Math.max(0, ...o.matriz.flat());
-  const grade = h("div", { class: `g-calor${reduzido() ? "" : " g-anim"}`, role: "img", "aria-label": o.resumo });
+  const celular = typeof matchMedia === "function" && matchMedia("(max-width: 760px)").matches;
+  const passo = o.passoHoras === 1 || o.passoHoras === 3 ? o.passoHoras : passoHorasCalor(Number(alvo && alvo.clientWidth) || 0, celular);
+  const grade = h("div", { class: `g-calor${reduzido() ? "" : " g-anim"}`, role: "img", "aria-label": o.resumo, "data-passo-horas": passo });
   grade.append(h("span", { class: "g-cal-canto", "aria-hidden": "true" }));
-  for (let hr = 0; hr < 24; hr++) grade.append(h("span", { class: "g-cal-h", "aria-hidden": "true", texto: hr % 3 === 0 ? String(hr).padStart(2, "0") : "" }));
+  for (let hr = 0; hr < 24; hr++) grade.append(h("span", { class: "g-cal-h", "aria-hidden": "true", texto: hr % passo === 0 ? String(hr).padStart(2, "0") : "" }));
   const ordem = [1, 2, 3, 4, 5, 6, 0];   // semana começando na segunda
   const celulas = [];                      // [linha][hora] → célula (linha 0 = segunda)
   ordem.forEach((d, lin) => {
@@ -620,9 +628,11 @@ export function animarValor(el, valor, pintar, acessivel = String(valor)) {
   const t0 = performance.now();
   const passo = t => {
     if (!ativo) return;
-    if (!el.isConnected) { limpar(); return; }
+    // fora da página (montado antes de entrar no DOM, ou já removido): termina no valor final — nunca fica «0»
+    if (!el.isConnected) { if (limpar()) final(); return; }
     const p = Math.min(1, Math.max(0, (t - t0) / dur)), e = 1 - Math.pow(1 - p, 3);   // o 1º quadro pode vir com t < t0: nada de «-0»
-    pintar(p < 1 ? valor * e : valor);
+    const v = p < 1 ? valor * e : valor;
+    pintar(Number.isInteger(valor) ? Math.round(v) : v);   // inteiro conta em inteiros (sem «15,305» no meio)
     if (p < 1) frame = requestAnimationFrame(passo);
     else { limpar(); final(); }
   };

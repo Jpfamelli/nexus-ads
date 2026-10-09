@@ -132,8 +132,16 @@ export function criarGoogle({ fetch: f = globalThis.fetch, versao = null } = {})
     }).filter(l => l.data && l.campanha_ext && (nivel === "campanha" || l.anuncio_ext));
   }
 
+  /** Fuso e moeda da conta (uma vez por dia, plano 100 F217): {timezone, moeda}. Erro sobe para quem chamou. */
+  async function conta(cred) {
+    const r = await consultar(cred || {}, "SELECT customer.time_zone, customer.currency_code FROM customer");
+    const c = r?.[0]?.customer || {};
+    return { timezone: c.timeZone || null, moeda: c.currencyCode || null };
+  }
+
   return {
     buscar,
+    conta,
     /** Os dois níveis do período. */
     periodo: async (cred, de, ate) => [...await buscar(cred, "campanha", de, ate), ...await buscar(cred, "anuncio", de, ate)],
     /** Versão que respondeu nesta execução (null se nenhuma consulta rodou). */

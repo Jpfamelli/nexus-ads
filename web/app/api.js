@@ -112,6 +112,12 @@ export const MENSAGENS = {
   automacao_invalida: "A automação tem um problema.",
   limite_taxa: "Muitos envios em pouco tempo. Tente mais tarde.",
   envio_em_andamento: "A mensagem ainda está sendo enviada. Aguarde um instante.",
+  // plano 100 · contratos 9 e 10: empresa pausada no painel e bloqueio de login por tentativas (o hint traz os minutos)
+  cliente_pausado: "O acesso desta empresa está pausado pela plataforma. Fale com o suporte para reativar.",
+  muitas_tentativas: "Muitas tentativas de entrar. Espere alguns minutos e tente de novo.",
+  // nx-enviar (S-F13): texto final (com assinatura) acima do teto e contato bloqueado
+  texto_longo: "A mensagem passou do tamanho que o WhatsApp aceita (a assinatura conta). Encurte o texto.",
+  contato_bloqueado: "Este contato está bloqueado: nada é enviado até um administrador desbloquear (menu da conversa).",
   // agenda (nx_agenda_checar): sem estes textos a tela mostrava o código cru («antecedencia»)
   antecedencia: "Esse horário está muito em cima da hora. Escolha um horário mais à frente.",
   fora_do_horario: "Esse horário está fora do funcionamento da agenda. Escolha outro horário.",
@@ -155,6 +161,14 @@ const CAMPO_MARCA = {
   cores: "cores", "cores.primaria": "cor primária", "cores.secundaria": "cor secundária", "cores.fundo": "cor de fundo",
   login_titulo: "título do login", login_texto: "texto do login", suporte_wa: "WhatsApp de suporte", assinatura: "assinatura",
 };
+
+/** Minutos do `hint` de muitas_tentativas (contrato 10: «15», «15 min», «em 15 minutos»); sem número → null. */
+export function minutosDoHint(hint) {
+  const m = /(\d+(?:[.,]\d+)?)/.exec(String(hint ?? ""));
+  if (!m) return null;
+  const n = Number(m[1].replace(",", "."));
+  return Number.isFinite(n) && n > 0 ? Math.ceil(n) : null;
+}
 
 /** Texto para o usuário a partir de um erro da API (usa .codigo, .hint e .detalhe quando o Apêndice B pede). */
 export function mensagemErro(e) {
@@ -204,6 +218,16 @@ export function mensagemErro(e) {
     case "automacao_invalida":
       if (hint) return `A automação tem um problema: ${hint}.`;
       break;
+    case "muitas_tentativas": {
+      const min = minutosDoHint(hint);
+      if (min) return `Muitas tentativas de entrar. Tente de novo em ${min} minuto${min === 1 ? "" : "s"}.`;
+      break;
+    }
+    case "texto_longo": {   // o nx-enviar devolve o teto efetivo ({teto}) — com assinatura ele é menor que o do WhatsApp
+      const teto = Number(e && e.resposta && e.resposta.teto);
+      if (Number.isFinite(teto) && teto > 0) return `A mensagem passou do limite: no máximo ${teto} caracteres, contando a assinatura. Encurte o texto.`;
+      break;
+    }
     case "ia_indisponivel": {   // o nx-ia manda o motivo em .detalhe: sem_chave, sem_sdk, conversa_vazia
       const d = e && (e.detalhe_texto || (typeof e.detalhe === "string" ? e.detalhe : "") || hint);
       if (d === "sem_chave") return MENSAGENS.sem_chave;
@@ -251,7 +275,7 @@ export const TETO_PRAZO_FN_MS = 145_000;
  */
 export const PRAZO_FN_LENTA_MS = 100_000;
 const FN_LENTAS = new Set(["nx-ia:sugerir", "nx-ia:resumir", "nx-codewords:parear", "nx-codewords:ligar_fluxo", "nx-codewords:receber_aqui", "nx-codewords:enviar_teste",
-  "nx-enviar:texto", "nx-enviar:midia", "nx-enviar:template"]);
+  "nx-enviar:texto", "nx-enviar:midia", "nx-enviar:template", "nx-enviar:reenviar"]);   // reenviar refaz um envio pelo mesmo caminho (plano 100 · A5 [D132])
 
 /** Retentativas das LEITURAS (e das escritas com {req:true}): até 2 repetições, 400 ms e 1,2 s (±25 % de jitter), orçamento de ~8 s por chamada. */
 export const RETENTAR_PADRAO = Object.freeze({ tentativas: 2, esperasMs: Object.freeze([400, 1200]), orcamentoMs: 8000, jitter: 0.25 });
@@ -297,6 +321,8 @@ export function lerRetryAfter(v, agora = Date.now()) {
  *   cache                 — o cache.js do shell ({cacheavel, chaveDe, ler, gravar}): liga rpcC(nome, params, {cache: true, aoCache(dados, em)}) (stale-while-revalidate)
  *   conta()               — id da conta (a chave do cache leva conta + empresa)
  *   aoCache(evento)       — {fase: "servido", em} / {fase: "fim", ok, em}: o shell mostra «Mostrando dados de 14:02 · atualizando…»
+ *   aoErro(e, meta)       — todo erro FINAL de uma chamada (depois das repetições), antes de subir para quem chamou: o shell reage a
+ *                           cliente_pausado (plano 100 · A4). Nunca impede o erro de subir; exceção dentro dele é engolida.
  *   agora, esperar(ms), aleatorio(), online() — relógio, espera, sorteio e "tem internet?" (testes)
  *   fetch                 — opcional (testes)
  */
@@ -438,6 +464,7 @@ export function criarApi(o) {
           if (repeticoes) e.tentativas = repeticoes + 1;
           if (meta.req) e.req = meta.req;
           relatarErro(e);
+          if (typeof o.aoErro === "function") { try { o.aoErro(e, meta); } catch { /* o shell decide; o erro sobe do mesmo jeito */ } }
           throw e;
         }
       }
@@ -526,6 +553,7 @@ export function criarApi(o) {
       return chamar(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }), prazoDaChamada(opcoes, `${funcao}:${corpo && corpo.acao}`), { leitura: false, keepalive: saindo(opcoes) });
     },
     mensagemErro,
+    minutosDoHint,   // o login lê os minutos do bloqueio por tentativas (A9)
   };
   return api;
 }

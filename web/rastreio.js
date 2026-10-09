@@ -4,15 +4,19 @@
 
      <script src="https://jpfamelli.github.io/nexus-ads/rastreio.js" data-chave="SUA_CHAVE_DO_FORMULARIO" defer></script>
 
-   A chave é a "Chave do formulário" (Órbita › Configurações › Formulário do site). Ela só identifica a
-   empresa: o mais que alguém faz com ela é registrar cliques de rastreio (até 30 por minuto).
+   A chave é a mesma do formulário do site (Órbita › Configurações › Site e anúncios / Formulário do site). Ela é
+   pública e identifica a empresa: com ela dá para registrar cliques de rastreio (com limite por minuto e por hora) e
+   também mandar contatos pelo formulário do site. Se vazar, gere outra no Órbita e atualize o script E o formulário.
 
    O que faz:
-   1. Guarda no navegador (localStorage do próprio site, 30 dias, SEM cookies e sem terceiros) os parâmetros
-      da URL: utm_source, utm_medium, utm_campaign, utm_content, utm_term, gclid, gbraid, wbraid e fbclid.
-      Visita sem parâmetros mantém os últimos; parâmetros novos substituem os antigos.
+   1. Guarda no navegador (localStorage do próprio site, 30 dias, SEM cookies) os parâmetros da URL: utm_source,
+      utm_medium, utm_campaign, utm_content, utm_term, gclid, gbraid, wbraid e fbclid (a chave em qualquer caixa:
+      UTM_Source vale). Visita sem parâmetros mantém os últimos; parâmetros novos substituem os antigos.
    2. Quando a pessoa clica num botão/link do WhatsApp (wa.me, api.whatsapp.com, web.whatsapp.com, whatsapp://send),
-      pede ao Órbita um código curto e distinto (ex.: K7Q2P) e o coloca no final do texto da mensagem: "[ref K7Q2P]".
+      envia ao Órbita esses parâmetros e o endereço da página (sem a consulta), recebe um código curto e distinto
+      (ex.: K7Q2P) e o coloca no final do texto da mensagem: "[ref K7Q2P]". O Órbita guarda o clique por até 45 dias.
+      Link de mensagem curta (wa.me/message/…) usa o texto definido no WhatsApp Business: não é alterado (aviso no console).
+      Com o código já pronto, o href também é reescrito no botão direito e no clique do meio (copiar link / nova aba).
       Na primeira mensagem, o Órbita lê o código e grava no negócio a origem: plataforma, campanha, anúncio e gclid.
       O atendente vê o código no texto; a IA é instruída a ignorá-lo.
    3. NUNCA quebra o link: se o Órbita estiver fora, sem internet, lento (mais de ~1,5 s) ou a chave estiver errada,
@@ -22,13 +26,14 @@
      data-chave    chave do formulário (obrigatória, 48 caracteres)
      data-url      endereço do registro (padrão: o Supabase do Órbita, função nx_rastreio_registrar)
      data-apikey   chave pública do Supabase (padrão: a do Órbita)
-     data-dias     validade dos parâmetros guardados (padrão 30)
+     data-dias     validade dos parâmetros guardados, em dias (padrão 30; 0 = só esta visita)
      data-texto    texto da mensagem quando o link não tem um (padrão "Olá! Vim pelo site.")
-     data-espera   milissegundos que o clique espera pelo código (padrão 1500)
+     data-espera   milissegundos que o clique espera pelo código (padrão 1500; 0 = não espera)
      data-gpc      "ignorar" para NÃO respeitar o sinal Global Privacy Control do navegador (padrão: respeita e não rastreia)
 
    API opcional: window.OrbitaRastreio.link(url) devolve (Promise) o link com o código, ou o original; .codigo() e .dados().
-   Aviso de privacidade: cite na política do site que guardamos, no navegador, a origem da visita (utm/click id), sem dados pessoais.
+   Aviso de privacidade: cite na política do site que o script guarda no navegador a origem da visita (utm/ids de clique, 30 dias)
+   e que, no toque no WhatsApp, esses parâmetros e a página vão ao Órbita (até 45 dias). O Órbita mostra um parágrafo modelo.
    ============================================================ */
 (function (janela) {
   "use strict";
@@ -47,13 +52,20 @@
   var atual = doc && doc.currentScript;
   var cfgJanela = janela.ORBITA_RASTREIO || {};
   function attr(nome) { return atual && atual.getAttribute ? atual.getAttribute("data-" + nome) : null; }
+  /** Número ≥ 0 da configuração: 0 é um valor válido (antes «|| padrão» o transformava no padrão). */
+  function numero(nome, padrao) {
+    var bruto = cfgJanela[nome] != null && cfgJanela[nome] !== "" ? cfgJanela[nome] : attr(nome);
+    if (bruto == null || String(bruto).trim() === "") return padrao;
+    var n = Number(bruto);
+    return isFinite(n) && n >= 0 ? n : padrao;
+  }
   var cfg = {
     chave: String(cfgJanela.chave || attr("chave") || "").trim(),
     url: String(cfgJanela.url || attr("url") || PADRAO_URL),
     apikey: String(cfgJanela.apikey || attr("apikey") || PADRAO_APIKEY),
-    dias: Number(cfgJanela.dias || attr("dias")) || 30,
+    dias: numero("dias", 30),
     texto: String(cfgJanela.texto || attr("texto") || "Olá! Vim pelo site."),
-    espera: Number(cfgJanela.espera || attr("espera")) || 1500,
+    espera: numero("espera", 1500),
     gpc: String(cfgJanela.gpc || attr("gpc") || "")
   };
 
@@ -62,15 +74,18 @@
   if (ativo && cfg.gpc !== "ignorar" && janela.navigator && janela.navigator.globalPrivacyControl === true) ativo = false;
 
   /* ---------------- armazenamento (nunca lança) ---------------- */
+  // data-dias="0" («só esta visita»): a origem vive no sessionStorage — vale nas páginas seguintes da MESMA visita (a pessoa entra
+  // pela página da campanha e vai para «/contato» antes do WhatsApp) e some na próxima visita. Antes: qualquer página sem parâmetros apagava
+  var loja = cfg.dias === 0 ? "sessionStorage" : "localStorage";
   function ler() {
     try {
-      var bruto = janela.localStorage.getItem(CHAVE_LS);
+      var bruto = janela[loja].getItem(CHAVE_LS);
       var o = bruto ? JSON.parse(bruto) : null;
       if (!o || o.v !== VERSAO || typeof o !== "object") return null;
       return o;
     } catch (e) { return null; }
   }
-  function gravar(o) { try { janela.localStorage.setItem(CHAVE_LS, JSON.stringify(o)); } catch (e) { /* sem storage: segue só em memória */ } }
+  function gravar(o) { try { janela[loja].setItem(CHAVE_LS, JSON.stringify(o)); } catch (e) { /* sem storage: segue só em memória */ } }
   var memoria = null;   // espelho para quando o localStorage não existe
   function estado() { return ler() || memoria || { v: VERSAO, t: 0, d: {}, c: null }; }
   function salvar(o) { memoria = o; gravar(o); }
@@ -87,6 +102,8 @@
     for (var i = 0; i < partes.length; i++) {
       var kv = partes[i].split("=");
       var k = kv[0];
+      try { k = decodeURIComponent(k.replace(/\+/g, " ")); } catch (e) { /* mantém cru */ }
+      k = String(k).trim().toLowerCase();
       if (PARAMS.indexOf(k) < 0) continue;
       var v = kv.slice(1).join("=");
       try { v = decodeURIComponent(v.replace(/\+/g, " ")); } catch (e) { /* mantém cru */ }
@@ -98,7 +115,7 @@
   function registrarVisita() {
     var agora = Date.now();
     var e = estado();
-    var vencido = !e.t || agora - e.t > cfg.dias * 86400000;
+    var vencido = !e.t || (cfg.dias > 0 && agora - e.t > cfg.dias * 86400000);
     var novos = capturar(janela.location && janela.location.search);
     var temNovos = false; for (var k in novos) { if (Object.prototype.hasOwnProperty.call(novos, k)) { temNovos = true; break; } }
     if (temNovos) e = { v: VERSAO, t: agora, d: novos, c: null };     // parâmetros novos: nova origem, novo código
@@ -158,10 +175,18 @@
     if (!HOSTS_WA[host]) return false;
     return host === "wa.me" || /^\/send(\/|$)/i.test(caminho);
   }
+  /** wa.me/message/<código>: link de mensagem curta do WhatsApp Business — o texto vem do próprio WhatsApp e o ?text= é ignorado. */
+  function ehMensagemCurta(href) { return /^https?:\/\/wa\.me\/message\//i.test(String(href == null ? "" : href).trim()); }
+  var avisouCurta = false;
+  function avisarCurta() {
+    if (avisouCurta || !janela.console || !janela.console.warn) return;
+    avisouCurta = true;
+    janela.console.warn("[Órbita rastreio] link wa.me/message/… usa a mensagem definida no WhatsApp Business: o código [ref] não pode ser acrescentado. Use wa.me/<número>?text=… para rastrear a campanha.");
+  }
   /** Devolve o link com "[ref CODIGO]" no fim do parâmetro text (cria o parâmetro se faltar). Puro: só texto. */
   function reescrever(href, codigo, textoPadrao) {
     var s = String(href == null ? "" : href);
-    if (!ehLinkWhatsapp(s) || !RE_CODIGO.test(String(codigo || ""))) return s;
+    if (!ehLinkWhatsapp(s) || ehMensagemCurta(s) || !RE_CODIGO.test(String(codigo || ""))) return s;
     var hash = "", i = s.indexOf("#");
     if (i >= 0) { hash = s.slice(i); s = s.slice(0, i); }
     var busca = "", j = s.indexOf("?");
@@ -205,7 +230,19 @@
 
   function aoInteragir(ev) {   // intenção: aquece o código antes do clique
     var a = ancoraDe(ev.target);
-    if (a && ehLinkWhatsapp(a.getAttribute("href"))) registrar();
+    if (a && ehLinkWhatsapp(a.getAttribute("href")) && !ehMensagemCurta(a.getAttribute("href"))) registrar();
+  }
+  /** Botão direito («copiar link»), clique do meio e toque longo: o navegador usa o href SEM passar pelo click — com o código já
+      em cache, o href é reescrito aqui (síncrono); sem código, aquece para a próxima vez e o link original segue. */
+  function aoApontar(ev) {
+    if (!ativo) return;
+    var a = ancoraDe(ev.target);
+    if (!a) return;
+    var original = a.getAttribute("data-orbita-original") != null ? a.getAttribute("data-orbita-original") : a.getAttribute("href");
+    if (!ehLinkWhatsapp(original) || ehMensagemCurta(original)) return;
+    var pronto = codigoGuardado();
+    if (pronto) { a.setAttribute("href", reescrever(originalDe(a), pronto)); return; }
+    registrar();
   }
   function aoClicar(ev) {
     if (!ativo || ev.defaultPrevented) return;
@@ -213,6 +250,7 @@
     if (!a) return;
     var original = a.getAttribute("data-orbita-original") != null ? a.getAttribute("data-orbita-original") : a.getAttribute("href");
     if (!ehLinkWhatsapp(original)) return;
+    if (ehMensagemCurta(original)) { avisarCurta(); return; }                       // segue o link do WhatsApp Business como está
     original = originalDe(a);
     var pronto = codigoGuardado();
     if (pronto) { a.setAttribute("href", reescrever(original, pronto)); return; }   // síncrono: o clique segue normalmente
@@ -248,6 +286,7 @@
     },
     reescrever: reescrever,
     ehLinkWhatsapp: ehLinkWhatsapp,
+    ehMensagemCurta: ehMensagemCurta,
     capturar: capturar
   };
   janela.OrbitaRastreio = api;
@@ -258,5 +297,7 @@
     doc.addEventListener("touchstart", aoInteragir, { capture: true, passive: true });
     doc.addEventListener("focusin", aoInteragir, true);
     doc.addEventListener("click", function (ev) { try { aoClicar(ev); } catch (e) { /* nunca quebra o link */ } }, true);
+    doc.addEventListener("contextmenu", function (ev) { try { aoApontar(ev); } catch (e) { /* nunca quebra o link */ } }, true);
+    doc.addEventListener("pointerdown", function (ev) { try { aoApontar(ev); } catch (e) { /* nunca quebra o link */ } }, true);
   }
 })(typeof window !== "undefined" ? window : this);

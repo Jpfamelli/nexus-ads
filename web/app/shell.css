@@ -27,6 +27,10 @@
 .faixa-rede { padding-block: .4rem; row-gap: .15rem; }
 .faixa-rede .bt { min-height: 44px; padding: .35rem .85rem; }
 
+/* ---- plano 100 · A4: front novo com banco velho (nx_app_sessao.migracao < versao.json.min_migracao) ---- */
+.faixa-migracao { background: var(--c-aten-suave); }
+.faixa-migracao .ic { color: var(--c-aten); }
+
 /* ---- dados guardados (M16): selo único «Mostrando dados de 14:02 · atualizando…» ---- */
 .faixa-cache { background: var(--c-sup-2); }
 .faixa-cache .ic { color: var(--c-texto-2); }

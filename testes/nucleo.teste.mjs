@@ -4,7 +4,8 @@ const ds = gerarDemo({ nome: 'Kamiguchi Odontologia' });
 const M = N.montar(ds);
 const de = M.R - 29, t = M.consolidar(M.linhasDe(de, M.R)), c = M.crmTot(de, M.R);
 console.log('30 dias:', { conversas: c.conversas, agendadas: c.agendadas, pacientes: c.fecharam, receita: c.receita, cpa: +t.cpa.toFixed(2), gasto: +t.gasto.toFixed(0) });
-console.log('retorno total:', (c.receita / (t.gasto + 997)).toFixed(1) + 'x');
+// o fee vem da configuração do cliente (a demo carrega 997; o padrão do núcleo é 0)
+console.log('retorno total:', (c.receita / (t.gasto + (M.CFG.fee || 0))).toFixed(1) + 'x', '· fee', M.CFG.fee, '· vertical', M.vertical);
 console.log('meses:', M.mesesDados().filter(m => m.ate - m.de >= 9 || m.ate === M.R).map(m => M.crmTot(m.de, m.ate).fecharam).join('/'));
 console.log('radar agora:', M.avaliar(M.R, true).map(a => a.regra.id + ':' + a.chave.split('|')[1]).join(', '));
 console.log('episodios:', M.historico().map(e => `${e.a.regra.id}${e.ate === M.R ? '(ativo)' : ''}`).join(' '));

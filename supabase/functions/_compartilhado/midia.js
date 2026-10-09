@@ -10,6 +10,11 @@ import {
   agoraDe, limparErro, ErroApi, respostaPainel, tratarPainel, lerCorpoPainel, autenticarPainel, interna,
 } from "./comum.js";
 
+// nome e legenda do arquivo são validados já no upload (antes só o enviar cortava): nome até 200 caracteres sem controle,
+// legenda até 1024 — o que não cabe é recusado, não truncado em silêncio
+const NOME_MAX = 200, LEGENDA_MAX = 1024;
+const CONTROLE = /[\u0000-\u001f\u007f]/;
+
 export const BUCKET = "nx-midia";
 const MB = 1024 * 1024;
 
@@ -172,6 +177,8 @@ export async function tratar(req, env, deps = {}) {
     if (acao === "subir" || acao === "subir_direto") {
       const tipo = tipoAceito(corpo.mime);
       if (!tipo) throw new ErroApi("midia_tipo", 400);
+      if (corpo.nome != null && (typeof corpo.nome !== "string" || corpo.nome.length > NOME_MAX || CONTROLE.test(corpo.nome))) throw new ErroApi("dados_invalidos", 400, "nome");
+      if (corpo.legenda != null && (typeof corpo.legenda !== "string" || corpo.legenda.length > LEGENDA_MAX)) throw new ErroApi("dados_invalidos", 400, "legenda");
       let bytes = null, tamanho = Number(corpo.tamanho);
       if (acao === "subir_direto") {
         const b64 = String(corpo.base64 ?? "").replace(/^data:[^,]*,/, "");
@@ -187,7 +194,7 @@ export async function tratar(req, env, deps = {}) {
       if (tamanho > tipo.max) throw new ErroApi("midia_grande", 400);
       const path = caminhoMidia(cliente, "out", agoraDe(deps), tipo.ext === "bin" ? extensaoDe(corpo.mime, corpo.nome) : tipo.ext);
       if (bytes) {
-        const up = await st.subir(path, bytes, String(corpo.mime).split(";")[0].trim());
+        const up = await st.subir(path, bytes, mimeBase(corpo.mime));   // Content-Type normalizado (nunca 'IMAGE/PNG')
         if (!up.ok) throw new ErroApi("erro_interno", 502, `Storage: ${up.erro}`);
         return respostaPainel({ ok: true, path });
       }

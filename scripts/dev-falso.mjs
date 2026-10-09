@@ -3,7 +3,8 @@
 // Não lê credenciais, não chama serviços externos e nunca altera prontos.js.
 import http from "node:http";
 import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +14,7 @@ import * as N from "../web/nucleo.js";
 import { tipoAceito, caminhoMidia, pathDoCliente, mimeBase } from "../supabase/functions/_compartilhado/midia.js";
 
 const ROOT = resolve(fileURLToPath(new URL("../web/", import.meta.url)));
+const MIGRACOES = resolve(fileURLToPath(new URL("../supabase/migrations/", import.meta.url)));
 const HOST = "127.0.0.1";
 const PORT = Math.max(1024, Number(process.env.ORBITA_DEV_FALSO_PORT) || 4173);
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
@@ -44,10 +46,10 @@ const funis = [
   ] },
 ];
 const contatos = [
-  { id: 501, nome: "Mariana Costa", telefone: "5500000000501", email: "mariana@example.test", origem: "anuncio", plataforma: "google", campanha_nome: "Aparelho invisível · pesquisa", cidade: "Taubaté", uf: "SP", etiquetas: ["e1"] },
-  { id: 502, nome: "Rafael Mendes", telefone: "5500000000502", email: "rafael@example.test", origem: "whatsapp", plataforma: null, campanha_nome: null, cidade: "Taubaté", uf: "SP", etiquetas: ["e2"] },
-  { id: 503, nome: "Bianca Ferreira", telefone: "5500000000503", email: "bianca@example.test", origem: "anuncio", plataforma: "meta", campanha_nome: "Avaliação humanizada", cidade: "Pindamonhangaba", uf: "SP", etiquetas: ["e3"] },
-  { id: 504, nome: "Lucas Oliveira", telefone: "5500000000504", email: "lucas@example.test", origem: "indicacao", plataforma: null, campanha_nome: null, cidade: "Taubaté", uf: "SP", etiquetas: [] },
+  { id: 501, nome: "Mariana Costa", telefone: "5500000000501", email: "mariana@example.test", origem: "anuncio", plataforma: "google", campanha_nome: "Aparelho invisível · pesquisa", cidade: "Taubaté", uf: "SP", etiquetas: ["e1"], dono_id: ID.eu },
+  { id: 502, nome: "Rafael Mendes", telefone: "5500000000502", email: "rafael@example.test", origem: "whatsapp", plataforma: null, campanha_nome: null, cidade: "Taubaté", uf: "SP", etiquetas: ["e2"], dono_id: ID.ana },
+  { id: 503, nome: "Bianca Ferreira", telefone: "5500000000503", email: "bianca@example.test", origem: "anuncio", plataforma: "meta", campanha_nome: "Avaliação humanizada", cidade: "Pindamonhangaba", uf: "SP", etiquetas: ["e3"], dono_id: ID.eu },
+  { id: 504, nome: "Lucas Oliveira", telefone: "5500000000504", email: "lucas@example.test", origem: "indicacao", plataforma: null, campanha_nome: null, cidade: "Taubaté", uf: "SP", etiquetas: [], dono_id: null },
 ];
 const negocios = [
   { id: 801, contato_id: 501, titulo: "Aparelho invisível", servico: "Alinhador transparente", estagio_id: "s3", valor_previsto: 5200, dono_id: ID.eu, consulta_offset: 1, origem: "anuncio", plataforma: "google", campanha_nome: "Aparelho invisível · pesquisa" },
@@ -73,10 +75,19 @@ const usuarios = [
 const etiquetas = [{ id: "e1", nome: "Aparelho invisível", cor: "#A98BD6" }, { id: "e2", nome: "Implante", cor: "#6FA3CF" }, { id: "e3", nome: "Clareamento", cor: "#E5B35C" }];
 const departamentos = [{ id: ID.dep, nome: "Recepção", cor: "#6FA3CF", padrao: true, distribuicao: "rodizio", ativo: true,
   horario: { 0: [], 1: [["08:00", "18:00"]], 2: [["08:00", "18:00"]], 3: [["08:00", "18:00"]], 4: [["08:00", "18:00"]], 5: [["08:00", "18:00"]], 6: [["08:00", "12:00"]] } }];
+// estado do número (contratos 3 e 4): `estado` conectado | desconectado | desconhecido, desde quando e a última sincronização;
+// simular/canal?id=cw1&estado=desconectado derruba o aparelho (histórico + notificação canal_caiu) e ...&estado=conectado traz de volta
+const DESDE_CANAL = new Date(Date.now() - 2 * 86400e3 + 12 * 60000).toISOString();
 const canais = [
   { id: ID.canal, nome: "Recepção · CodeWords", provedor: "codewords", numero_exibicao: "+55 00 00000-0001", status: "ativo", departamento_id: ID.dep,
-    codewords: { tem_api_key: true, service_id: "cw-demo-fluxo", ia_ligada: true, ia_volta_horas: 6, rota: "fluxo", numero: "+55 00 00000-0001", sync: { em: isoAgora() } } },
+    estado: "conectado", estado_desde: DESDE_CANAL, sync_em: isoAgora(),
+    // o bloco «codewords» de nx_canal_json (20261008b): conferido_em, estado do aparelho, sync {em, erro, falhas}, forma, contadores (S-B11) e aviso_em
+    codewords: { tem_api_key: true, service_id: "cw-demo-fluxo", ia_ligada: true, ia_volta_horas: 6, rota: "fluxo", numero: "+55 00 00000-0001",
+      sync: { em: isoAgora(), erro: null, falhas: 0 }, phone_id: "cw-phone-demo", conectado: true, numero_conferido: true, conferido_em: isoAgora(), estado: "open",
+      inscricao: "cw-demo-fluxo/webhook", forma_desconhecida: null, forma_em: null,
+      contadores: { eco: 3, grupo: 1, lid: 0, payload_desconhecido: 2, http_422: 1, http_413: 0, desde: new Date(Date.now() - 3 * 86400e3).toISOString() }, aviso_em: null } },
   { id: ID.meta, nome: "WhatsApp oficial · Meta", provedor: "meta", numero_exibicao: "+55 12 99123-4567", status: "ativo", departamento_id: ID.dep,
+    estado: "conectado", estado_desde: DESDE_CANAL, sync_em: null,
     tem_token: true, tem_app_secret: false, app_inscrito: true, qualidade: "GREEN", phone_number_id: "demo-phone-id", waba_id: "demo-waba-id", verificado_em: isoAgora() },
 ];
 const respostas = [
@@ -95,20 +106,72 @@ const agendamentos = negocios.filter(n => n.consulta_offset != null).map(n => {
   const end = new Date(`${dia}T${h}:00-03:00`); end.setMinutes(end.getMinutes() + 45);
   return { negocio_id: n.id, contato_id: c.id, nome: c.nome, telefone: c.telefone, inicio: hora(dia, String(hh).padStart(2,"0"), String(mm).padStart(2,"0")), fim: end.toISOString(), servico: n.servico,
     status: "aberto", etapa: nomesEtapas.find(e => e.id === n.estagio_id)?.nome, marco: n.estagio_id === "s2" ? "agendada" : null, dono_id: n.dono_id || null, titulo: n.titulo,
-    origem: n.origem, plataforma: n.plataforma || null, campanha_nome: n.campanha_nome || null, anuncio_nome: null, rastreio: null };
+    origem: n.origem, plataforma: n.plataforma || null, campanha_nome: n.campanha_nome || null, anuncio_nome: null, rastreio: null, encaixe: n.id === 804 };
 });
 const bloqueios = [{ id: "b1", inicio: hora(somaDia(hoje, 2), "12", "00"), fim: hora(somaDia(hoje, 2), "13", "00"), motivo: "Intervalo da equipe" }];
 /* ---------- estado mutável do ambiente fictício (reinicia junto com o servidor) ----------
    Serve às quatro frentes do plano de 01/10: contadores por RPC (conferir quantas chamadas uma tela fez),
    falhas programadas (503, atraso), sessão invalidada, mensagem de entrada simulada, idempotência por p_req /
    client_ref e o estado do onboarding. Nada daqui sai do computador. */
+/** Chave de instalação do rastreio: 48 hex como a do banco (nx_entrada_chave), estável por número de troca. */
+const chaveDev = n => createHash("sha256").update(`dev-falso-chave-${n}`).digest("hex").slice(0, 48);
 const dev = {
   chamadas: {}, enviosExternos: 0, falhas: [], verificarToken: false,
   tokens: new Set(["demo-local-session", "demo-local-token"]), seqToken: 0,
   reqs: new Map(), refs: new Map(), arquivos: new Map(), pulsoV: 1, seqMsg: 100000, seqNegocio: 900, seqContato: 600, seqTarefa: 100,
   empresas: 1, teste: null,    // simular/clientes?n=2 e simular/teste?dias=2|nenhum&status=ativo
+  /* plano 100 (frente H): o que as frentes da onda 2 precisam ver sem a produção —
+     chave do rastreio e cliques do site (contratos 1 e 2), histórico/estado dos números e notificações (3), pausa da IA por
+     conversa, cliente ativo/pausado e versão do banco anunciada em nx_app_sessao (9), falha programada de integração (nx-ciclo). */
+  chave: chaveDev(0), seqChave: 0, rastreio: [], seqRastreio: 0,
+  notificacoes: [], seqNotif: 0, historicoCanais: [], seqHist: 0,
+  iaPausada: new Map([["903", { quem: "Ana Paula", ate: new Date(Date.now() + 5 * 3600e3).toISOString(), so_manual: false }]]),
+  cliente: { ativo: true, super: true }, migracao: null, integracaoFalha: null,
 };
 const bater = () => { dev.pulsoV += 1; };
+/** Nome da última migração do repositório (o que nx_app_sessao.migracao devolve depois de aplicada); simular/migracao?nome= sobrepõe. */
+function ultimaMigracao() {
+  if (dev.migracao) return dev.migracao;
+  try { return readdirSync(MIGRACOES).filter(f => /^\d{8}[a-z]?_.+\.sql$/.test(f)).sort().at(-1)?.replace(/\.sql$/, "") || null; }
+  catch { return null; }
+}
+const naoLidasNotif = () => dev.notificacoes.filter(n => !n.lida_em).length;
+/** Notificação para a conta (mesmo formato de nx_notificacoes_listar): o sino e o pulso (notif) a enxergam. */
+function notificar(tipo, titulo, corpo, link = null, dados = null) {
+  const n = { id: ++dev.seqNotif, tipo, titulo, corpo, link, dados, lida_em: null, criado_em: isoAgora() };
+  dev.notificacoes.push(n); bater();
+  return n;
+}
+/** Linha de nx_canal_historico (contrato 3): o número mudou de estado. */
+function historicoCanal(canalId, estado, detalhe, em = isoAgora()) {
+  const x = { id: ++dev.seqHist, canal_id: canalId, estado, detalhe, em };
+  dev.historicoCanais.push(x);
+  return x;
+}
+const canalPorId = id => canais.find(k => k.id === String(id) || uuidDe(k.id) === String(id));
+/** Troca o estado do número como nx_codewords_situacao faria: histórico + notificação canal_caiu/canal_voltou para os admins. */
+function canalEstado(canal, estado, detalhe = null) {
+  if (!["conectado", "desconectado", "desconhecido"].includes(estado) || canal.estado === estado) return canal;
+  canal.estado = estado; canal.estado_desde = isoAgora();
+  if (canal.codewords) canal.codewords.conectado = estado === "conectado";
+  historicoCanal(canal.id, estado, detalhe || (estado === "desconectado" ? "aparelho sem conexão" : estado === "conectado" ? "aparelho voltou" : "sem resposta do CodeWords"));
+  // dados {canal_id, canal_nome, estado}: o MESMO contrato da 20261008b — sem eles o shell nunca dava o número por reconectado
+  const dados = { canal_id: canal.id, canal_nome: canal.nome, estado };
+  if (estado === "desconectado") notificar("canal_caiu", `${canal.nome}: número desconectado`, "O aparelho perdeu a conexão com o WhatsApp. Pareie ou reconecte pelo celular.", "#/config/numeros", dados);
+  if (estado === "conectado") notificar("canal_voltou", `${canal.nome}: número voltou`, "O aparelho reconectou e já recebe mensagens.", "#/config/numeros", dados);
+  bater();
+  return canal;
+}
+// histórico de partida: cada número conectou há 3 dias, caiu anteontem às 14:00 e voltou 12 min depois
+for (const k of canais) {
+  const base = Date.now() - 2 * 86400e3;
+  historicoCanal(k.id, "conectado", "aparelho pareado", new Date(base - 86400e3).toISOString());
+  historicoCanal(k.id, "desconectado", "aparelho sem conexão", new Date(base).toISOString());
+  historicoCanal(k.id, "conectado", "aparelho voltou", DESDE_CANAL);
+}
+// o sino nasce com duas não lidas (antes o pulso dizia 2 e a lista vinha vazia)
+notificar("lead_anuncio", "Novo contato do anúncio: Bianca Ferreira", "Avaliação humanizada · Meta", "#/conversas/903");
+notificar("tarefa", "Tarefa para hoje: Confirmar avaliação", "Mariana Costa", "#/tarefas");
 // mensagens ganham id estável (a mesma regra de antes: conversa × 10 + posição); as novas continuam a contar de 100000
 const conversas = [
   { id: 901, contato_id: 501, canal_id: ID.canal, status: "aberta", aguardando: true, atribuida_a: ID.eu, atribuida_nome: "Dra. Helena", nao_lidas: 2, protocolo: "ORB-2026-00901", minutos: 3,
@@ -156,11 +219,15 @@ const marcarOnb = (...ids) => { for (const id of ids) onb.feitos.add(id); };
 const RESUMO_MIDIA = { imagem: "Foto", audio: "Áudio", video: "Vídeo", documento: "Documento" };   // mídia sem legenda na lista (como o banco)
 const dataConv = c => {
   const ct = contatos.find(x => x.id === c.contato_id), canal = canais.find(x => x.id === c.canal_id);
-  const when = new Date(Date.now() - c.minutos * 60000).toISOString();
-  return { id: c.id, contato: { id: ct.id, nome: ct.nome, telefone: ct.telefone, optin_marketing: true, bloqueado: false }, canal_id: c.canal_id, departamento_id: ID.dep,
+  // horários FIXOS pelas mensagens (antes: «agora − minutos» a cada leitura — a última entrada «andava» e todo Resolver caía em
+  // «escreveu de novo»); a janela de 24 h conta da última mensagem RECEBIDA
+  const ult = c.mensagens.at(-1), ultIn = [...c.mensagens].reverse().find(m => m.direcao === "in" && !m.nota);
+  const when = new Date(ult && ult.criada ? ult.criada : Date.now() - c.minutos * 60000).toISOString();
+  const entrada = ultIn && ultIn.criada ? ultIn.criada : null;
+  return { id: c.id, contato: { id: ct.id, nome: ct.nome, telefone: ct.telefone, optin_marketing: true, bloqueado: false, origem: ct.origem || "whatsapp", plataforma: ct.plataforma || null }, canal_id: c.canal_id, departamento_id: ID.dep,
     atribuida_a: c.atribuida_a, atribuida_nome: c.atribuida_nome, status: c.status, aguardando: c.aguardando, nao_lidas: c.nao_lidas,
-    ultima_msg_em: when, ultima_msg_resumo: c.mensagens.at(-1).corpo ?? RESUMO_MIDIA[c.mensagens.at(-1).tipo], ultima_msg_dir: c.mensagens.at(-1).direcao, ultima_entrada_em: when,
-    janela_ate: new Date(Date.now() + (24 * 60 - c.minutos) * 60000).toISOString(), etiquetas: ct.etiquetas, protocolo: c.protocolo, oculta: false,
+    ultima_msg_em: when, ultima_msg_resumo: c.mensagens.at(-1).corpo ?? RESUMO_MIDIA[c.mensagens.at(-1).tipo], ultima_msg_dir: c.mensagens.at(-1).direcao, ultima_entrada_em: entrada ? new Date(entrada).toISOString() : null,
+    janela_ate: entrada ? new Date(entrada + 24 * 3600e3).toISOString() : null, etiquetas: ct.etiquetas, protocolo: c.protocolo, oculta: false,
     negocio: negocios.filter(n => n.contato_id === ct.id).map(n => ({ id: n.id, titulo: n.titulo, status: "aberto", estagio_nome: nomesEtapas.find(e => e.id === n.estagio_id)?.nome, estagio_cor: "#6FA3CF" }))[0] || null,
     canal: canal ? { id: canal.id, nome: canal.nome, numero_exibicao: canal.numero_exibicao, status: canal.status, provedor: canal.provedor, tem_token: true } : null,
     departamento: departamentos[0] };
@@ -172,22 +239,39 @@ const demoAds = (() => {
   return { hoje, cliente: { id: ID.cliente, slug: "sorriso-vivo", nome: "Clínica Sorriso Vivo", cfg: {} }, demo: true,
     metricas: ds.LINHAS.map(l => ({ p: l.plat, d: data(l.i), n: "anuncio", c: l.camp, cn: ds.CAMP[l.camp].nome, a: l.cri, an: ds.CRI[l.cri].nome,
       imp: l.impressoes, alc: l.alcance, freq: l.freq || 0, cli: l.cliques, g: l.gasto, conv: l.conversoes })),
-    leads: ds.LEADS.filter(L => L.i <= M.R).map(L => ({ id: L.id, nome: L.nome, telefone: "", origem: "anuncio", plataforma: L.plat, campanha_ext: L.camp,
+    // contrato 5: hora_conversa = hora (0–23, São Paulo) da 1ª mensagem; null quando não houve mensagem (1 em cada 7)
+    leads: ds.LEADS.filter(L => L.i <= M.R).map((L, k) => ({ id: L.id, nome: L.nome, telefone: "", origem: "anuncio", plataforma: L.plat, campanha_ext: L.camp,
       anuncio_ext: L.cri, servico: L.servico, etapa: M.etapa(L), data_conversa: data(L.i), data_agenda: L.iAgenda != null ? data(L.iAgenda) : null,
-      data_consulta: L.iConsulta != null ? data(L.iConsulta) : null, valor: L.fechou ? M.valorLead(L) : null, obs: "" })),
+      data_consulta: L.iConsulta != null ? data(L.iConsulta) : null, valor: L.fechou ? M.valorLead(L) : null, obs: "",
+      hora_conversa: k % 7 === 6 ? null : 8 + ((k * 7 + L.i) % 12) })),
     alertas: M.avaliar(M.R, true).map((a, i) => ({ regra: a.regra.id, chave: a.chave, severidade: a.sev, mensagem: a.msg, acao: a.acao, referencia: data(M.R), criado_em: hora(data(M.R + 1), "08", `0${i}`), enviado_em: hora(data(M.R + 1), "08", `0${i}`), entregue_em: hora(data(M.R + 1), "08", `1${i}`) })),
     relatorios: [], integracoes: [{ canal: "meta", ativo: true, ultimo_sync: new Date(Date.now() - 18 * 60000).toISOString(), status: "ok — 58 linhas" },
       { canal: "google", ativo: true, ultimo_sync: new Date(Date.now() - 18 * 60000).toISOString(), status: "ok — 31 linhas" }] };
 })();
 
+/* nx_app_sessao com os campos do contrato 9: clientes[].ativo (interruptor da Nexus) e migracao (última migração aplicada,
+   aqui a última do repositório). simular/cliente?ativo=0&super=0 reproduz a conta comum em cliente pausado (erro cliente_pausado). */
 function sessao(token = "") {
   const outra = String(token).includes("outra");
-  return { conta: { id: outra ? ID.ana : ID.eu, nome: outra ? "Ana Paula" : "Dra. Helena", email: "demo@example.test", papel: "gestor", super: true, telefone: null },
+  const sup = dev.cliente.super !== false;
+  return { conta: { id: outra ? ID.ana : ID.eu, nome: outra ? "Ana Paula" : "Dra. Helena", email: "demo@example.test", papel: sup ? "gestor" : "admin", super: sup, telefone: null },
     org: { id: ID.org, nome: "Nexus", slug: "nexus", marca: { produto: (dev.marca && dev.marca.produto) || "Órbita", cores: { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" } }, img_hash: dev.marca ? `dev-${Object.keys(dev.marca).join("")}` : "dev-falso" },
-    super: true, link_base_padrao: null, modulos_plano: {}, clientes: [{ id: ID.cliente, slug: "sorriso-vivo", nome: "Clínica Sorriso Vivo", plano: "completo", status: dev.teste ? dev.teste.status : "teste", vertical: dev.vertical || "odonto", papel: "admin", proprio: true,
+    super: sup, link_base_padrao: null, modulos_plano: {}, migracao: ultimaMigracao(),
+    clientes: [{ id: ID.cliente, slug: "sorriso-vivo", nome: "Clínica Sorriso Vivo", plano: "completo", status: dev.teste ? dev.teste.status : "teste", vertical: dev.vertical || "odonto", papel: "admin", proprio: true,
+      ativo: dev.cliente.ativo !== false,
       modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"], teste_ate: dev.teste ? (dev.teste.dias === null ? null : somaDia(hoje, dev.teste.dias)) : somaDia(hoje, 14), tem_tema: false, cfg: {} },
-      ...(dev.empresas > 1 ? [{ id: "00000000-0000-4000-8000-0000000000c2", slug: "oficina-central", nome: "Oficina Central", plano: "completo", status: "ativo", vertical: "oficina", papel: "admin", proprio: false,
+      ...(dev.empresas > 1 ? [{ id: "00000000-0000-4000-8000-0000000000c2", slug: "oficina-central", nome: "Oficina Central", plano: "completo", status: "ativo", vertical: "oficina", papel: "admin", proprio: false, ativo: true,
         modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"], teste_ate: null, tem_tema: false, cfg: {} }] : [])] };
+}
+/* Admin → Clientes: o mesmo item de nx_cliente_admin_item (org, comercial, ativo, uso × limites) + canais com estado (G10). */
+function clienteAdminItem(c) {
+  const proprio = c.id === ID.cliente;
+  return { ...c, status: c.status || "ativo", org: { id: ID.org, slug: "nexus", nome: "Nexus", tipo: "plataforma" },
+    comercial: proprio ? { segmento: "Clínica odontológica", especificacoes: "Avaliação e aparelho invisível; relatório diário para a dona.", pacote: "completo" } : null,
+    criado_em: "2026-09-02T13:00:00Z", ativo: proprio ? dev.cliente.ativo !== false : true,
+    uso: { usuarios: usuarios.length, canais: proprio ? canais.length : 1, funis: proprio ? funis.length : 1, automacoes: proprio ? 4 : 0, contatos: proprio ? contatos.length : 12, ia_mes: proprio ? 42 : 0 },
+    limites: { usuarios: 5, canais: 2, funis: 3, automacoes: 8, contatos: 2000, ia_mes: 300 }, limites_extra: {},
+    canais: proprio ? canais.map(k => ({ id: k.id, nome: k.nome, provedor: k.provedor, estado: k.estado })) : [] };
 }
 const marcaPublica = { org: { id: ID.org, nome: "Nexus", slug: "nexus" }, marca: { produto: "Órbita", cores: { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" }, login_titulo: "Seu atendimento em movimento", login_texto: "Entre para acompanhar conversas, pacientes e campanhas.", suporte_wa: "5500000000000" } };
 /** Marca da org, com as sobreposições de simular/marca (nome do produto e logo): o manifesto instalável nasce delas. */
@@ -300,15 +384,40 @@ function agendaMarcar(p) {
   if (conflito) return { ok: false, erro: "horario_ocupado" };
   const c = contatos.find(x => x.id === n.contato_id);
   const idx = agendamentos.findIndex(a => String(a.negocio_id) === negocioId);
+  // como nx_agenda_marcar_core: a consulta leva o negócio à etapa com marco «agendada» do funil e a resposta diz a etapa e a anterior
+  const anterior = idx >= 0 ? { inicio: agendamentos[idx].inicio, rotulo: rotuloAgenda(agendamentos[idx].inicio) } : null;
+  const etapaAg = nomesEtapas.find(e => e.marco === "agendada");
+  if (etapaAg && n.estagio_id !== etapaAg.id) n.estagio_id = etapaAg.id;
   const item = { negocio_id: n.id, contato_id: c.id, nome: c.nome, telefone: c.telefone, inicio, fim,
     servico: String(p.p_servico || n.servico || "").slice(0, 80), status: "aberto",
     etapa: nomesEtapas.find(e => e.id === n.estagio_id)?.nome, marco: "agendada", dono_id: n.dono_id || null, titulo: n.titulo,
-    origem: n.origem, plataforma: n.plataforma || null, campanha_nome: n.campanha_nome || null, anuncio_nome: null, rastreio: null };
+    origem: n.origem, plataforma: n.plataforma || null, campanha_nome: n.campanha_nome || null, anuncio_nome: null, rastreio: n.rastreio || null,
+    encaixe: !!p.p_encaixe };
   if (idx >= 0) agendamentos[idx] = item; else agendamentos.push(item);
   n.consulta_inicio = inicio;
   n.consulta_offset = Math.round((Date.parse(inicio.slice(0, 10)) - Date.parse(`${hoje}T00:00:00Z`)) / 86400000);
   n.servico = item.servico;
-  return { ok: true, remarcada: idx >= 0, consulta: item };
+  bater();
+  return { ok: true, mudou: true, remarcada: idx >= 0, negocio_id: n.id, contato_id: c.id,
+    consulta: { ...item, rotulo: rotuloAgenda(inicio), duracao_min: duracao }, anterior, etapa: etapaAg ? etapaAg.nome : null };
+}
+/** «seg., 06/10, 10:00» em São Paulo (o nx_agenda_rotulo do banco). */
+function rotuloAgenda(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? String(iso) : new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(d);
+}
+const donoNome = id => (usuarios.find(u => u.id === id) || {}).nome || null;
+/** Linha de nx_agenda_dia (20260929c: rotulo, campanha_ext/anuncio_ext, campanha_nome da métrica ou do utm) + contrato 6 (encaixe,
+    dono_nome) + a etapa atual do negócio. `presenca` é o que nx_agenda_presenca gravou em nx_leads.campos (a tela mostra o estado). */
+function consultaDia(a) {
+  const n = negocios.find(x => x.id === a.negocio_id);
+  const e = n && nomesEtapas.find(x => x.id === n.estagio_id);
+  const rastreio = n && n.rastreio ? n.rastreio : a.rastreio || null;
+  return { ...a, rotulo: rotuloAgenda(a.inicio), encaixe: !!a.encaixe, dono_nome: donoNome(a.dono_id), etapa: e ? e.nome : a.etapa, marco: e ? e.marco || null : a.marco,
+    status: e && e.tipo !== "aberto" ? e.tipo : a.status, plataforma: (n && n.plataforma) || a.plataforma || null,
+    campanha_ext: (n && n.campanha_ext) || null, anuncio_ext: (n && n.anuncio_ext) || null,
+    campanha_nome: (n && n.campanha_nome) || (rastreio && rastreio.utm_campaign) || a.campanha_nome || null, rastreio,
+    presenca: n && n.campos && n.campos.presenca ? n.campos.presenca : null };
 }
 
 function agendaDesmarcar(p) {
@@ -339,6 +448,196 @@ function comReq(nome, p, criar) {
 }
 const notas = [];
 const soDigitos = s => String(s ?? "").replace(/\D/g, "");
+const semNulos = o => Object.fromEntries(Object.entries(o).filter(([, v]) => v != null));
+
+/* ---------- rastreio do site (contratos 1 e 2) ----------
+   nx_rastreio_registrar é o que o script do site (web/rastreio.js) chama no clique do WhatsApp; aqui ele é servido também em
+   /rest/v1/rpc/nx_rastreio_registrar (sem o prefixo) com CORS, para o snippet gerado em ?dev-falso=1 e a página /__dev_falso/site.html
+   baterem SÓ neste servidor. nx_rastreio_atribuir aplica o código ao negócio aberto do telefone (canal codewords OU meta); sem negócio o
+   código fica pendente e é aplicado quando o negócio nasce (o gatilho nx_tg_rastreio_pendente do banco). */
+const ALFABETO_REF = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const RE_REF = /^[A-HJKMNP-Z2-9]{5}$/;
+// as MESMAS listas de nx_rastreio_plataforma (20261008a): fontes Meta/Google, mediums pagos e orgânicos
+const SRC_META = ["facebook", "fb", "instagram", "ig", "meta", "facebook_ads", "meta_ads", "fb_ads", "instagram_ads", "ig_ads"];
+const SRC_GOOGLE = ["google", "adwords", "googleads", "google_ads", "google-ads", "gads", "youtube"];
+const MEDIUM_PAGO = ["cpc", "ppc", "paid", "paidsocial", "paid_social", "paid-social", "social_paid", "social-paid", "display", "cpm", "ads", "ad",
+  "pmax", "performance_max", "video", "remarketing", "retargeting", "cpv", "cpa"];
+const MEDIUM_ORGANICO = ["organic", "organico", "orgânico", "seo", "social", "bio"];
+function codigoRef() {
+  let c;
+  do { c = ""; for (let i = 0; i < 5; i++) c += ALFABETO_REF[Math.floor(Math.random() * ALFABETO_REF.length)]; } while (dev.rastreio.some(r => r.codigo === c));
+  return c;
+}
+const txtRastreio = (d, k, max) => { const s = String(d[k] ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, max); return s || null; };
+/** {plataforma, origem, pago} do clique — a MESMA regra de nx_rastreio_plataforma (20261008a): gclid/gbraid/wbraid → google;
+    utm_source google* com medium pago ou campanha → google; fonte Meta ou fbclid → meta (medium pago = anúncio, senão orgânico:
+    link da bio, post); fora disso medium pago → anúncio, organic/seo/social/bio → orgânico, senão site. */
+function classificarRastreio(r) {
+  const src = String(r.utm_source || "").toLowerCase(), med = String(r.utm_medium || "").toLowerCase();
+  const pago = MEDIUM_PAGO.includes(med);
+  const plataforma = r.gclid || r.gbraid || r.wbraid ? "google"
+    : SRC_GOOGLE.includes(src) && (pago || r.utm_campaign) ? "google"
+    : SRC_META.includes(src) || r.fbclid ? "meta" : null;
+  const origem = plataforma === "google" ? "anuncio" : plataforma === "meta" ? (pago ? "anuncio" : "organico")
+    : pago ? "anuncio" : MEDIUM_ORGANICO.includes(med) ? "organico" : "site";
+  return { plataforma, origem, pago };
+}
+/** Casa utm_campaign / utm_content com as campanhas e anúncios que o nx-ciclo leu (nx_metricas_dia — aqui, as linhas da demo), por id
+    OU nome, como nx_rastreio_aplicar: campanha conhecida vira anúncio mesmo sem medium pago; sem par, fica o texto cru (≤ 100). */
+function casarCampanha(plataforma, campanha, anuncio) {
+  const linhas = plataforma ? demoAds.metricas.filter(m => m.p === plataforma) : [];
+  const igual = (a, b) => a != null && b != null && String(a).toLowerCase() === String(b).toLowerCase();
+  const mc = campanha ? linhas.find(m => m.c === campanha) || linhas.find(m => igual(m.cn, campanha)) : null;
+  const ma = anuncio ? linhas.find(m => (m.a === anuncio || igual(m.an, anuncio)) && (!mc || m.c === mc.c)) : null;
+  return { casou: !!mc, campanha_ext: mc ? mc.c : campanha ? campanha.slice(0, 100) : null, campanha_nome: mc ? mc.cn : null,
+    anuncio_ext: ma ? ma.a : anuncio ? anuncio.slice(0, 100) : null };
+}
+function rastreioRegistrar(p) {
+  const d = p.p_dados && typeof p.p_dados === "object" && !Array.isArray(p.p_dados) ? p.p_dados : {};
+  const chave = String(p.p_chave || "");
+  // chave errada ou cliente pausado: código plausível SEM gravar (não revela nada), como o banco
+  if (!/^[0-9a-f]{48}$/.test(chave) || chave !== dev.chave || dev.cliente.ativo === false) return { ok: true, codigo: codigoRef() };
+  if (String(d.teste) === "1") return { ok: true, codigo: codigoRef(), teste: true };
+  const agora = Date.now();
+  const hora = dev.rastreio.filter(r => !r.semente && agora - r.criado < 3600e3);
+  if (hora.filter(r => agora - r.criado < 60e3).length >= 120 || hora.length >= 1000) {
+    throw new ErroDev("limite_taxa", "Muitos cliques registrados em pouco tempo (120 por minuto, 1.000 por hora). Tente de novo em instantes.");
+  }
+  const pagina = String(d.pagina || "").split("#")[0].split("?")[0].slice(0, 300);
+  const r = { id: ++dev.seqRastreio, codigo: codigoRef(), criado: agora, pagina: /^https?:\/\//i.test(pagina) ? pagina : null,
+    utm_source: txtRastreio(d, "utm_source", 100), utm_medium: txtRastreio(d, "utm_medium", 100), utm_campaign: txtRastreio(d, "utm_campaign", 150),
+    utm_content: txtRastreio(d, "utm_content", 150), utm_term: txtRastreio(d, "utm_term", 150),
+    gclid: txtRastreio(d, "gclid", 250), gbraid: txtRastreio(d, "gbraid", 250), wbraid: txtRastreio(d, "wbraid", 250), fbclid: txtRastreio(d, "fbclid", 250),
+    telefone: null, negocio_id: null, usado_em: null, resultado: null, pendente: false };
+  dev.rastreio.push(r);
+  return { ok: true, codigo: r.codigo };
+}
+const negocioAberto = contatoId => negocios.find(x => x.contato_id === contatoId && (nomesEtapas.find(e => e.id === x.estagio_id) || {}).tipo === "aberto");
+/** nx_rastreio_aplicar: o código vai para o negócio (nunca sobrescreve anúncio), o contato recebe o 1º toque e nx_rastreio.resultado
+    guarda {aplicado, motivo, em, negocio_id, plataforma, origem, campanha_ext}; a resposta é a da RPC real. */
+function aplicarRastreio(r, n, tel) {
+  r.usado_em = r.usado_em || isoAgora(); r.telefone = r.telefone || tel; r.negocio_id = n.id; r.pendente = false;
+  if (n.rastreio && n.rastreio.codigo === r.codigo) {
+    return { ok: true, aplicado: true, repetido: true, negocio_id: n.id, origem: n.origem, plataforma: n.plataforma || null,
+      campanha_ext: n.campanha_ext || null, anuncio_ext: n.anuncio_ext || null, gclid: !!n.gclid };
+  }
+  const motivo = n.plataforma || n.anuncio_ext || n.gclid || n.origem === "anuncio" ? "ja_tem_anuncio" : !["whatsapp", "site"].includes(n.origem) ? "origem_definida" : null;
+  if (motivo) { r.resultado = { aplicado: false, motivo, em: isoAgora(), negocio_id: n.id }; return { ok: true, aplicado: false, motivo, negocio_id: n.id }; }
+  const cls = classificarRastreio(r), plataforma = cls.plataforma;
+  const casado = plataforma ? casarCampanha(plataforma, r.utm_campaign, r.utm_content) : { casou: false, campanha_ext: null, campanha_nome: null, anuncio_ext: null };
+  const origem = casado.casou ? "anuncio" : cls.origem;   // utm_campaign que casa com uma campanha conhecida é anúncio, mesmo sem medium pago
+  n.origem = origem; n.plataforma = plataforma; n.gclid = r.gclid || n.gclid || null;
+  n.campanha_ext = casado.campanha_ext || n.campanha_ext || null; n.anuncio_ext = casado.anuncio_ext || n.anuncio_ext || null;
+  if (casado.campanha_nome || r.utm_campaign) n.campanha_nome = casado.campanha_nome || r.utm_campaign;   // o que nx_agenda_dia/kanban mostram (métrica, senão o utm cru)
+  n.rastreio = semNulos({ codigo: r.codigo, utm_source: r.utm_source, utm_medium: r.utm_medium, utm_campaign: r.utm_campaign, utm_content: r.utm_content,
+    utm_term: r.utm_term, gbraid: r.gbraid, wbraid: r.wbraid, fbclid: r.fbclid, pagina: r.pagina, clique_em: new Date(r.criado).toISOString() });
+  const c = contatos.find(x => x.id === n.contato_id);
+  if (c) {   // 1º toque do contato: só preenche o vazio; a origem padrão «whatsapp» vira a real
+    if (c.origem === "whatsapp") c.origem = origem;
+    c.plataforma = c.plataforma || plataforma; c.campanha_ext = c.campanha_ext || casado.campanha_ext; c.anuncio_ext = c.anuncio_ext || casado.anuncio_ext;
+    c.campanha_nome = c.campanha_nome || casado.campanha_nome || r.utm_campaign || null;
+  }
+  r.resultado = semNulos({ aplicado: true, motivo: "aplicado", em: isoAgora(), negocio_id: n.id, plataforma, origem, campanha_ext: casado.campanha_ext });
+  marcarOnb("script_site");
+  bater();
+  return { ok: true, aplicado: true, negocio_id: n.id, origem, plataforma, campanha_ext: casado.campanha_ext, campanha_nome: casado.campanha_nome,
+    anuncio_ext: casado.anuncio_ext, gclid: !!r.gclid };
+}
+function rastreioAtribuir(p) {
+  const canal = canalPorId(p.p_canal);
+  if (!canal || !["codewords", "meta"].includes(canal.provedor)) throw new ErroDev("canal_nao_encontrado");
+  const cod = String(p.p_codigo || "").trim().toUpperCase();
+  if (!RE_REF.test(cod)) return { ok: true, aplicado: false, motivo: "codigo_invalido" };
+  const tel = soDigitos(p.p_telefone);
+  if (tel.length < 8 || tel.length > 15) throw new ErroDev("dados_invalidos", "telefone");
+  const r = dev.rastreio.find(x => x.codigo === cod && Date.now() - x.criado < 30 * 86400e3);
+  if (!r) return { ok: true, aplicado: false, motivo: "codigo_desconhecido" };
+  if (r.telefone && r.telefone.slice(-8) !== tel.slice(-8)) return { ok: true, aplicado: false, motivo: "codigo_ja_usado" };
+  const contato = contatos.find(c => soDigitos(c.telefone).slice(-8) === tel.slice(-8));
+  const n = contato && negocioAberto(contato.id);
+  r.telefone = tel;   // o código passa a valer só para este telefone (também quando ainda não há negócio)
+  if (!n) {
+    Object.assign(r, { pendente: true, resultado: { aplicado: false, motivo: "sem_negocio", em: isoAgora(), pendente: true } });
+    return { ok: true, aplicado: false, motivo: "sem_negocio", pendente: true };
+  }
+  return aplicarRastreio(r, n, tel);
+}
+/** O gatilho do banco: negócio novo de um telefone com código pendente (30 dias) recebe a origem do clique. */
+function aplicarRastreioPendente(contato, n) {
+  const tel = soDigitos(contato && contato.telefone);
+  if (!tel) return null;
+  const r = dev.rastreio.find(x => x.pendente && x.telefone && x.telefone.slice(-8) === tel.slice(-8) && Date.now() - x.criado < 30 * 86400e3);
+  return r ? aplicarRastreio(r, n, tel) : null;
+}
+/** nx_rastreio_listar (20261008a): {dias, itens ≤ 500 sem o código, totais {cliques, casados, usados, pendentes}}; plataforma/origem vêm do
+    resultado gravado (senão da classificação) e motivo é «pendente» enquanto o código espera o negócio nascer. */
+function rastreioListar(p) {
+  const dias = Math.max(1, Math.min(90, Number(p.p_dias) || 30)), desde = Date.now() - dias * 86400e3;
+  const janela = dev.rastreio.filter(r => r.criado >= desde).sort((a, b) => b.criado - a.criado);
+  const itens = janela.slice(0, 500).map(r => {
+    const n = r.negocio_id ? negocios.find(x => x.id === r.negocio_id) : null, c = n && contatos.find(x => x.id === n.contato_id);
+    const res = r.resultado || {}, cls = classificarRastreio(r);
+    return { em: new Date(r.criado).toISOString(), pagina: r.pagina, utm_source: r.utm_source, utm_medium: r.utm_medium, utm_campaign: r.utm_campaign,
+      utm_content: r.utm_content, plataforma: res.plataforma || cls.plataforma, origem: res.origem || cls.origem, casou: !!res.aplicado,
+      motivo: r.pendente ? "pendente" : res.motivo || null, usado_em: r.usado_em, negocio_id: r.negocio_id, contato_nome: c ? c.nome : n ? n.titulo : null };
+  });
+  return { dias, itens, totais: { cliques: janela.length, casados: janela.filter(r => r.resultado && r.resultado.aplicado).length,
+    usados: janela.filter(r => r.usado_em).length, pendentes: janela.filter(r => r.pendente).length } };
+}
+// cliques de partida (últimos 10 dias): dois casaram, um ficou pendente, um é orgânico do Instagram e um nunca foi usado
+(function semearRastreio() {
+  const dia = n => Date.now() - n * 86400e3;
+  const semente = (o, extra = {}) => dev.rastreio.push({ id: ++dev.seqRastreio, codigo: codigoRef(), semente: true, telefone: null, negocio_id: null, usado_em: null,
+    resultado: null, pendente: false, utm_source: null, utm_medium: null, utm_campaign: null, utm_content: null, utm_term: null, gclid: null, gbraid: null, wbraid: null, fbclid: null, ...o, ...extra });
+  const pag = "https://sorrisovivo.example.test/";
+  semente({ criado: dia(9), pagina: pag, utm_source: "google", utm_medium: "cpc", utm_campaign: "Aparelho invisível · pesquisa", utm_content: "Vídeo de apresentação", gclid: "Cj0KCQ-demo-1" },
+    { telefone: "5500000000501", negocio_id: 801, usado_em: new Date(dia(9) + 600e3).toISOString(),
+      resultado: { aplicado: true, motivo: "aplicado", em: new Date(dia(9) + 600e3).toISOString(), negocio_id: 801, plataforma: "google", origem: "anuncio", campanha_ext: "Aparelho invisível · pesquisa" } });
+  semente({ criado: dia(6), pagina: `${pag}avaliacao`, utm_source: "instagram", utm_medium: "paid_social", utm_campaign: "Avaliação humanizada", utm_content: "Carrossel sorriso", fbclid: "IwAR-demo-2" },
+    { telefone: "5500000000503", negocio_id: 803, usado_em: new Date(dia(6) + 300e3).toISOString(),
+      resultado: { aplicado: true, motivo: "aplicado", em: new Date(dia(6) + 300e3).toISOString(), negocio_id: 803, plataforma: "meta", origem: "anuncio", campanha_ext: "Avaliação humanizada" } });
+  semente({ criado: dia(3), pagina: pag, utm_source: "instagram", utm_medium: "social", utm_campaign: null, fbclid: "IwAR-demo-3" });
+  semente({ criado: dia(2), pagina: `${pag}implante`, utm_source: "google", utm_medium: "cpc", utm_campaign: "Implante · pesquisa", gclid: "Cj0KCQ-demo-4" },
+    { telefone: "5500000000999", pendente: true, resultado: { aplicado: false, motivo: "sem_negocio", em: new Date(dia(2) + 120e3).toISOString(), pendente: true } });
+  semente({ criado: dia(1), pagina: pag, utm_source: "facebook", utm_medium: "paid_social", utm_campaign: "Avaliação humanizada", utm_content: "Vídeo depoimento" });
+})();
+
+/* execuções fictícias por automação, espalhadas por 14 dias (contrato 7): a lista (nx_automacao_execucoes) e a série
+   (nx_automacao_execucoes_dia) nascem da MESMA fonte, então os números batem na tela. */
+function execucoesDe(autoId) {
+  const semente = [...String(autoId || "x")].reduce((s, ch) => s + ch.charCodeAt(0), 0);
+  const lista = [];
+  for (let d = 13; d >= 0; d--) {
+    const n = (semente + d * 7) % 4;
+    for (let i = 0; i < n; i++) {
+      const k = (semente + d * 3 + i) % 9;
+      const estado = k === 0 ? "erro" : k === 1 ? "esperando" : k === 2 ? "cancelada" : "concluida";
+      const em = new Date(Date.now() - d * 86400e3 - (i * 3 + 1) * 3600e3).toISOString();
+      const detalhe = estado === "erro" ? "codewords_sem_aparelho" : estado === "esperando" ? "Mensagem na fila para Mariana Costa"
+        : estado === "cancelada" ? "O cliente respondeu · cancelada: o cliente respondeu" : k % 2 ? "Tarefa criada para Dra. Helena" : "Pulada: contato pediu para não receber";
+      lista.push({ criado_em: em, ok: estado !== "erro", detalhe, chave: `ev:${d}${i}`, estado, passo: estado === "concluida" ? 4 : estado === "erro" ? 1 : 2, total_passos: 4,
+        continua_em: estado === "esperando" ? new Date(Date.now() + 86400e3).toISOString() : null, link: k % 2 ? "#/crm/negocio/801" : "#/conversas/901", atualizado_em: em });
+    }
+  }
+  return lista.sort((a, b) => b.criado_em.localeCompare(a.criado_em));
+}
+function execucoesPorDia(autoId, dias) {
+  const n = Math.max(1, Math.min(60, Number(dias) || 14));
+  const mapa = new Map(Array.from({ length: n }, (_, i) => { const d = somaDia(hoje, i - n + 1); return [d, { dia: d, ok: 0, erro: 0 }]; }));
+  for (const x of execucoesDe(autoId)) { const p = mapa.get(spData(new Date(x.criado_em))); if (p) p[x.ok ? "ok" : "erro"]++; }
+  return [...mapa.values()];
+}
+/** Estado da IA numa conversa: EXATAMENTE os campos de nx_cv_ia_json (20260929a); nx_cv_ia_estado/pausar/devolver devolvem este objeto.
+    (A cota do mês e «ligada» que o composer lê vêm de nx_cv_base.ia, não daqui — como no banco.) */
+function iaEstadoDe(convId) {
+  const c = conversaPorId(convId), canal = c && canais.find(k => k.id === c.canal_id);
+  const cw = !!canal && canal.provedor === "codewords";
+  const pausa = dev.iaPausada.get(String(convId)) || null, pausada = !!pausa;
+  return { conversa_id: Number(convId), disponivel: cw, ia_ligada: cw, pausada,
+    pausada_ate: pausada && !pausa.so_manual ? pausa.ate : null, so_manual: pausada && !!pausa.so_manual,
+    pausada_por: pausada ? "manual" : null, pausada_por_nome: pausada ? pausa.quem : null,
+    volta_horas: cw ? 6 : null, respostas_10min: 1, limite_10min: 8, respondendo: cw && !pausada };
+}
 function cardNegocio(n) { return crmNegocio(n.id).negocio; }
 function negocioSalvar(d) {
   if (d.id) {
@@ -354,6 +653,7 @@ function negocioSalvar(d) {
   const n = { id: ++dev.seqNegocio, contato_id: contato.id, titulo: d.titulo || "Nova oportunidade", servico: d.servico || "Avaliação", estagio_id: "s1",
     valor_previsto: Number(d.valor_previsto) || 0, dono_id: ID.eu, origem: d.origem || "manual" };
   negocios.push(n);
+  aplicarRastreioPendente(contato, n);   // código do site que chegou antes do negócio (gatilho nx_tg_rastreio_pendente)
   bater();
   return cardNegocio(n);
 }
@@ -463,22 +763,61 @@ function enviarMidia(p) {
 function rpc(nome, p = {}) {
   switch (nome) {
     case "nx_marca_publica": return marcaAtual();
-    case "nx_entrar": { const token = `demo-local-${dev.proximaContaOutra ? "outra" : "token"}-${++dev.seqToken}`; dev.tokens.add(token); return { token }; }
+    case "nx_entrar": {   // {token, nome, papel} como a RPC real
+      const token = `demo-local-${dev.proximaContaOutra ? "outra" : "token"}-${++dev.seqToken}`; dev.tokens.add(token);
+      return { token, nome: dev.proximaContaOutra ? "Ana Paula" : "Dra. Helena", papel: dev.cliente.super !== false ? "gestor" : "admin" };
+    }
     case "nx_sair": dev.tokens.clear(); return { ok: true };
-    case "nx_app_sessao": return sessao(p.p_token);
+    case "nx_app_sessao": {
+      // contrato 9: conta comum em cliente pausado pela Nexus não entra
+      if (dev.cliente.ativo === false && dev.cliente.super === false) throw new ErroDev("cliente_pausado", "A conta desta empresa está pausada pela Nexus. Fale com o suporte.");
+      return sessao(p.p_token);
+    }
     case "nx_cliente_tema": return { tema: {}, marca_cliente: {}, atualizado: "dev-falso" };
     case "nx_pulso": {
-      const vis = conversas.filter(c => !c.oculta);
-      const entradas = vis.flatMap(c => c.mensagens.filter(m => m.direcao === "in").map(m => m.id));
-      return { v: dev.pulsoV, notif: 2, agora: isoAgora(), nao_lidas: vis.filter(c => c.nao_lidas > 0).length, ultima_entrada_id: entradas.length ? Math.max(...entradas) : null };
+      // EXATAMENTE os campos da RPC (20261008b + 20261009b): v, notif (não lidas do sino), nao_lidas (conversas abertas/pendentes visíveis
+      // com não lidas), canais [{id, nome, estado, desde}] (o número caído aparece no próximo pulso) e agora
+      const vis = conversas.filter(c => !c.oculta && ["aberta", "pendente"].includes(c.status));
+      const desde = id => { const h = dev.historicoCanais.filter(x => x.canal_id === id).sort((a, b) => String(b.em).localeCompare(String(a.em)))[0]; return h ? h.em : null; };
+      return { v: dev.pulsoV, notif: naoLidasNotif(), nao_lidas: vis.filter(c => c.nao_lidas > 0).length,
+        canais: canais.map(k => ({ id: k.id, nome: k.nome, estado: k.estado || "desconhecido", desde: desde(k.id) })), agora: isoAgora() };
     }
     case "nx_onboarding_estado": return onboardingEstado();
-    case "nx_notificacoes_listar": return { itens: [], nao_lidas: 0 };
-    case "nx_inicio": return { hoje, agora: isoAgora(), conversas: { aguardando: 2, sem_dono: 1, minhas: 1, abertas: 3, espera_mais_antiga_min: 15 },
-      leads: { hoje: 4, hoje_anuncio: 2, semana: 23, semana_anuncio: 14 },
-      negocios: { ganhos_mes: 9, abertos: 18, valor_aberto: 67400, previsao_ponderada: 26200, receita_mes: 28400, receita_mes_anterior: 20300, ganhos_mes_anterior: 7, receita_mes_anterior_parcial: 20300, dia_do_mes: Number(hoje.slice(-2)) },
-      tarefas: { hoje: 4, atrasadas: 1, abertas: 7, proximas: [{ id: 71, tipo: "ligacao", titulo: "Confirmar avaliação com Mariana", vence_em: isoAgora(), atrasada: false, contato_id: 501, dono: { id: ID.eu, nome: "Dra. Helena" } }] },
-      canais: canais.map(c => ({ nome: c.nome, numero_exibicao: c.numero_exibicao, status: c.status, provedor: c.provedor, app_inscrito: true, verificado_em: isoAgora(), ultima_entrada_em: isoAgora() })) };
+    case "nx_notificacoes_listar": {
+      const lim = Math.max(1, Math.min(100, Number(p.p_limite) || 30));
+      const itens = [...dev.notificacoes].sort((a, b) => b.id - a.id).slice(0, lim).map(n => ({ ...n }));
+      return { itens, nao_lidas: naoLidasNotif() };
+    }
+    case "nx_notificacoes_marcar": {
+      const ids = Array.isArray(p.p_ids) ? p.p_ids.map(String) : null;
+      for (const n of dev.notificacoes) if (!n.lida_em && (!ids || ids.includes(String(n.id)))) n.lida_em = isoAgora();
+      return { ok: true, nao_lidas: naoLidasNotif() };
+    }
+    case "nx_inicio": {
+      // as contagens de conversas saem do MESMO estado das abas (como a RPC real); o resto é fixo
+      const vis = conversas.filter(c => !c.oculta), ativas = vis.filter(c => ["aberta", "pendente"].includes(c.status));
+      const aguard = vis.filter(c => c.status === "aberta" && c.aguardando);
+      const esperaMin = c => Math.max(0, Math.round((Date.now() - ((c.mensagens.filter(m => m.direcao === "in").at(-1) || {}).criada || Date.now())) / 60000));
+      const d14 = (base, passo) => Array.from({ length: 14 }, (_, i) => Math.max(0, Math.round(base + Math.sin(i / 2) * passo + (i % 3))));
+      return { hoje, agora: isoAgora(),
+        conversas: { aguardando: aguard.length, sem_dono: ativas.filter(c => !c.atribuida_a).length, minhas: ativas.filter(c => c.atribuida_a === ID.eu).length,
+          abertas: vis.filter(c => c.status === "aberta").length, pendentes: vis.filter(c => c.status === "pendente").length,
+          espera_mais_antiga_min: aguard.length ? Math.max(...aguard.map(esperaMin)) : null,
+          // contrato 4: 1ª resposta em até 15 min (7 dias) e quem espera agora (≤ 5, a mais antiga primeiro; canal = provedor do número)
+          respondidas_no_prazo_pct: 78,
+          aguardando_lista: aguard.map(c => ({ id: c.id, nome: (contatos.find(x => x.id === c.contato_id) || {}).nome || null, espera_min: esperaMin(c),
+            canal: (canais.find(k => k.id === c.canal_id) || {}).provedor || null })).sort((a, b) => b.espera_min - a.espera_min).slice(0, 5) },
+        leads: { hoje: 4, hoje_anuncio: 2, semana: 23, semana_anuncio: 14 },
+        negocios: { ganhos_mes: 9, abertos: 18, valor_aberto: 67400, previsao_ponderada: 26200, receita_mes: 28400, receita_mes_anterior: 20300, ganhos_mes_anterior: 7, receita_mes_anterior_parcial: 20300, dia_do_mes: Number(hoje.slice(-2)) },
+        // tarefas.proximas no formato da RPC real (id, titulo, tipo, vence_em, atrasada, contato_nome, contato_id, negocio_id)
+        tarefas: { hoje: 4, atrasadas: 1, abertas: 7, proximas: [{ id: 71, titulo: "Confirmar avaliação com Mariana", tipo: "ligacao", vence_em: isoAgora(), atrasada: false, contato_nome: "Mariana Costa", contato_id: 501, negocio_id: 801 }] },
+        // contrato 4: funil do mês até hoje e séries de 14 dias (mais antigo primeiro)
+        funil_mes: { leads: 23, conversas: 19, agendados: 11, ganhos: 9 },
+        series_14d: { aguardando: d14(2, 1), consultas: d14(3, 2), valor_aberto: d14(60000, 8000), leads: d14(3, 2) },
+        canais: canais.map(c => ({ id: c.id, nome: c.nome, numero_exibicao: c.numero_exibicao, status: c.status, provedor: c.provedor, ultimo_erro: null,
+          estado: c.estado, desde: c.estado_desde, sync_em: c.sync_em, app_inscrito: true, verificado_em: isoAgora(), ultima_entrada_em: isoAgora() })),
+        notificacoes_nao_lidas: naoLidasNotif() };
+    }
     case "nx_crm_base": return baseCrm;
     case "nx_negocios_kanban": return colunaFunil(p.p_funil);
     case "nx_negocios_coluna": return { itens: [] };
@@ -497,11 +836,28 @@ function rpc(nome, p = {}) {
       };
     }
     case "nx_contatos_listar": {
-      const busca = String((p.p_filtro && p.p_filtro.busca) || "").trim();
+      // os filtros de nx_crm_filtro_contatos (20260928d) que as telas usam: busca, dono (eu | sem | id), origem (LISTA \u2014 string solta n\u00e3o filtra,
+      // como no banco), empresa_id e tem_negocio_aberto; p_ordem nome | ultimo_contato | recentes; resposta no formato da RPC real
+      if (p.p_filtro != null && (typeof p.p_filtro !== "object" || Array.isArray(p.p_filtro))) throw new ErroDev("dados_invalidos", "filtro");
+      const f = p.p_filtro || {}, busca = String(f.busca || "").trim();
       const dig = soDigitos(busca), norm = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-      const achados = contatos.filter(c => !busca || norm(c.nome).includes(norm(busca)) || (dig.length >= 4 && soDigitos(c.telefone).includes(dig)));
-      const por = Math.max(1, Math.min(100, Number(p.p_por_pagina) || 50));
-      return { itens: achados.slice(0, por).map(c => ({ ...c })), total: achados.length, pagina: 1, paginas: Math.max(1, Math.ceil(achados.length / por)) };
+      const abertos = c => negocios.filter(n => n.contato_id === c.id && (nomesEtapas.find(e => e.id === n.estagio_id) || {}).tipo === "aberto").length;
+      const ultimo = c => { const m = conversas.filter(v => v.contato_id === c.id).flatMap(v => v.mensagens.map(x => x.criada)); return m.length ? new Date(Math.max(...m)).toISOString() : null; };
+      const criadoEm = c => new Date(Date.now() - 86400000 * (c.id % 11 + 2)).toISOString();
+      const origens = Array.isArray(f.origem) && f.origem.length ? f.origem.map(String) : null;
+      const achados = contatos.filter(c => (!busca || norm(c.nome).includes(norm(busca)) || (dig.length >= 4 && soDigitos(c.telefone).includes(dig)))
+        && (f.dono === "eu" ? c.dono_id === ID.eu : f.dono === "sem" ? !c.dono_id : f.dono ? c.dono_id === f.dono : true)
+        && (!origens || origens.includes(c.origem))
+        && (!f.empresa_id || String(empresaDoContato[c.id] || "") === String(f.empresa_id))
+        && (typeof f.tem_negocio_aberto !== "boolean" || (abertos(c) > 0) === f.tem_negocio_aberto));
+      const ordem = p.p_ordem === "nome" ? (a, b) => String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR") || a.id - b.id
+        : p.p_ordem === "ultimo_contato" ? (a, b) => String(ultimo(b) || "").localeCompare(String(ultimo(a) || "")) || b.id - a.id
+        : (a, b) => criadoEm(b).localeCompare(criadoEm(a)) || b.id - a.id;
+      const por = Math.max(1, Math.min(100, Number(p.p_por_pagina) || 50)), pg = Math.max(1, Number(p.p_pagina) || 1);
+      const itens = [...achados].sort(ordem).slice((pg - 1) * por, pg * por).map(c => ({ ...c, dono_id: c.dono_id || null,
+        empresa: empresaDoContato[c.id] ? { id: empresaDoContato[c.id], nome: (empresas.find(e => e.id === empresaDoContato[c.id]) || {}).nome } : null,
+        negocios_abertos: abertos(c), ultimo_contato_em: ultimo(c), criado_em: criadoEm(c), optin_marketing: true }));
+      return { itens, total: achados.length, total_aprox: null, pagina: pg, por_pagina: por, tem_mais: pg * por < achados.length };
     }
     case "nx_contato_salvar": return comReq(nome, p, () => ({ ...contatoSalvar(p.p_contato || {}) }));
     case "nx_negocio_salvar": return comReq(nome, p, () => negocioSalvar(p.p_negocio || {}));
@@ -541,12 +897,14 @@ function rpc(nome, p = {}) {
       bater();
       return dataConv(c);
     }
-    case "nx_cv_nota": {
+    case "nx_cv_nota": return comReq(nome, p, () => {   // p_req (S-B13): Enter repetido não cria a nota duas vezes
       const c = conversaPorId(p.p_conversa); if (!c) throw new ErroDev("conversa_nao_encontrada");
-      const m = { id: ++dev.seqMsg, direcao: "out", nota: true, corpo: String(p.p_texto || ""), minutos: 0, criada: Date.now() };
+      const texto = String(p.p_texto || "").trim();
+      if (!texto || texto.length > 4096) throw new ErroDev("dados_invalidos", "texto");
+      const m = { id: ++dev.seqMsg, direcao: "out", nota: true, corpo: texto, minutos: 0, criada: Date.now() };
       c.mensagens.push(m); bater();
       return mensagemDe(c, m);
-    }
+    });
     case "nx_cv_marcar_lida": { const c = conversaPorId(p.p_conversa); if (c) { c.nao_lidas = 0; bater(); } return { ok: true }; }
     case "nx_contato_ver": { const c = contatos.find(x => String(x.id) === String(p.p_id)) || contatos[0]; return { contato: { ...c }, negocios: negocios.filter(n => n.contato_id === c.id), conversas: conversas.filter(v => v.contato_id === c.id).map(v => dataConv(v)), tarefas: [], notas: [] }; }
     // empresas: mesmo formato de nx_empresas_listar / nx_empresa_ver (20260928d_crm_b.sql) — contagens de contatos e de negócios abertos por empresa
@@ -631,11 +989,18 @@ function rpc(nome, p = {}) {
           enviado_por: m.direcao === "out" ? { id: ID.eu, nome: "Dra. Helena" } : null, referral: null, ...(m.midia ? { midia: m.midia } : {}),
           ...(m.client_ref ? { client_ref: m.client_ref } : {}) }; });
       return { itens, tem_mais: false, conversas: [{ id: c.id, protocolo: c.protocolo, aberta_em: when(c.minutos + 40), status: c.status, canal_id: c.canal_id }], agora: isoAgora(), ultimo_id: itens.at(-1)?.id || null }; }
-    case "nx_cv_ia_estado": {
-      const pausada = String(p.p_conversa) === "903";
-      return { disponivel: true, modo: pausada ? "pausada" : "ativa", pausada, ligada: true, ia_ligada: true,
-        respondendo: !pausada, pausada_por: pausada ? "atendente" : null, pausada_por_nome: pausada ? "Ana Paula" : null,
-        pausada_ate: pausada ? hora(hoje, "23", "59") : null, so_manual: false, cota: { usadas: 42, limite: 300 } };
+    case "nx_cv_ia_estado": return iaEstadoDe(p.p_conversa);
+    // pausar/devolver devolvem o estado COMPLETO (nx_cv_ia_json), como o banco; só em canal CodeWords
+    case "nx_cv_ia_pausar": case "nx_cv_ia_devolver": {
+      const c = conversaPorId(p.p_conversa); if (!c) throw new ErroDev("conversa_nao_encontrada");
+      const horas = p.p_horas == null ? null : Number(p.p_horas);
+      if (horas != null && !(Number.isInteger(horas) && horas >= 0 && horas <= 168)) throw new ErroDev("dados_invalidos", "horas");
+      if ((canais.find(k => k.id === c.canal_id) || {}).provedor !== "codewords") throw new ErroDev("ia_indisponivel", "canal");
+      // p_horas 0 = só manual (sem volta); null = volta no prazo do número (ia_volta_horas); N = volta em N horas
+      if (nome === "nx_cv_ia_pausar") dev.iaPausada.set(String(c.id), { quem: "Dra. Helena", so_manual: horas === 0, ate: new Date(Date.now() + (horas || 6) * 3600e3).toISOString() });
+      else dev.iaPausada.delete(String(c.id));
+      bater();
+      return iaEstadoDe(c.id);
     }
     case "nx_rel_vendas": return relVendas();
     case "nx_rel_atendimento": return relAtendimento();
@@ -661,20 +1026,49 @@ function rpc(nome, p = {}) {
         campos_negocio: [{ chave: "origem_detalhe", rotulo: "Detalhe da origem", tipo: "texto" }] },
       ia: { disponivel: true, usadas: 42, limite: 300 }, sistema: [{ nome: "Nova conversa → oportunidade", descricao: "Cada novo atendimento entra no funil automaticamente." }, { nome: "Atribuição de campanha", descricao: "Origem e anúncio acompanham o contato." }] });
     case "nx_agenda_dia": { const de = p.p_data || hoje, ate = somaDia(de, Number(p.p_dias || 1)); return { data: de, dias: Number(p.p_dias || 1), fuso: "America/Sao_Paulo", config: { horario_fonte: "agenda", duracao_min: 30, capacidade: 1 },
-      consultas: agendamentos.filter(a => a.inicio.slice(0,10) >= de && a.inicio.slice(0,10) < ate), bloqueios: bloqueios.filter(b => b.inicio.slice(0,10) < ate && b.fim.slice(0,10) >= de) }; }
+      // o dia da consulta é o de São Paulo (como consulta_em no banco): 22:00 em SP ainda é hoje, mesmo gravada em UTC
+      consultas: agendamentos.filter(a => { const d = spData(new Date(a.inicio)); return d >= de && d < ate; }).map(consultaDia), bloqueios: bloqueios.filter(b => b.inicio.slice(0,10) < ate && b.fim.slice(0,10) >= de) }; }
+    // contrato 6: presença da consulta; «faltou» leva ao estágio de marco «faltou» do funil
+    case "nx_agenda_presenca": {
+      const n = negocios.find(x => String(x.id) === String(p.p_negocio));
+      if (!n) throw new ErroDev("negocio_nao_encontrado");
+      const estado = String(p.p_estado || "");
+      if (!["compareceu", "faltou", "limpar"].includes(estado)) throw new ErroDev("dados_invalidos", "presença: compareceu, faltou ou limpar");
+      n.campos = { ...(n.campos || {}) };
+      if (estado === "limpar") delete n.campos.presenca; else n.campos.presenca = estado;
+      const faltou = nomesEtapas.find(e => e.marco === "faltou");
+      if (estado === "faltou" && faltou) n.estagio_id = faltou.id;
+      bater();
+      return { ok: true, presenca: n.campos.presenca || null, estagio_id: n.estagio_id };
+    }
     case "nx_agenda_config_ver": return { config: { horario_fonte: "agenda", horario: horarioDefault, intervalos: [["12:00", "13:00"]], duracao_min: 30, capacidade: 1, antecedencia_horas: 2, dias_a_frente: 30, passo_min: 30,
       duracoes: { "Avaliação": 30, "Implante": 60, "Limpeza": 45 } }, bloqueios };
     case "nx_agenda_livres": return agendaLivres(p);
     case "nx_agenda_marcar": return comReq(nome, p, () => agendaMarcar(p));
     case "nx_agenda_desmarcar": return agendaDesmarcar(p);
-    case "nx_entrada_chave": return { chave: "FALSO-CHAVE-LOCAL" };
-    case "nx_integracoes_status": return { integracoes: demoAds.integracoes, preenchidos: ["meta", "google"] };
-    case "nx_automacao_execucoes": return [
-      { criado_em: isoAgora(), ok: true, detalhe: "Mensagem na fila para Mariana Costa", chave: "ev:1", estado: "esperando", passo: 2, total_passos: 4, continua_em: new Date(Date.now() + 86400e3).toISOString(), link: "#/crm" },
-      { criado_em: new Date(Date.now() - 3600e3).toISOString(), ok: false, detalhe: "codewords_sem_aparelho", chave: "ev:2", estado: "erro", passo: 1, total_passos: 4 },
-      { criado_em: new Date(Date.now() - 7200e3).toISOString(), ok: true, detalhe: "Pulada: contato pediu para não receber", chave: "ev:3", estado: "concluida", passo: 4, total_passos: 4 },
-      { criado_em: new Date(Date.now() - 20000e3 / 4).toISOString(), ok: true, detalhe: "O cliente respondeu: sequência cancelada", chave: "ev:5", estado: "cancelada", passo: 2, total_passos: 4 },
-      { criado_em: new Date(Date.now() - 86400e3).toISOString(), ok: true, detalhe: "Tarefa criada para Dra. Helena", chave: "ev:4", estado: "concluida", passo: 4, total_passos: 4 }];
+    // chave de instalação do rastreio: 48 hex como a real; p_gerar troca (a antiga deixa de valer no nx_rastreio_registrar daqui)
+    case "nx_entrada_chave": { if (p.p_gerar) dev.chave = chaveDev(++dev.seqChave); return { chave: dev.chave }; }
+    case "nx_rastreio_registrar": return rastreioRegistrar(p);
+    case "nx_rastreio_atribuir": return rastreioAtribuir(p);
+    case "nx_rastreio_listar": return rastreioListar(p);
+    case "nx_canal_historico_listar": {
+      const canal = canalPorId(p.p_canal);
+      if (!canal) throw new ErroDev("canal_nao_encontrado");
+      const lim = Math.max(1, Math.min(200, Number(p.p_limite) || 50));
+      return dev.historicoCanais.filter(x => x.canal_id === canal.id).sort((a, b) => b.id - a.id).slice(0, lim).map(x => ({ ...x }));
+    }
+    // o MESMO formato do banco (20260928b): uma LISTA, cada integração com os nomes das credenciais preenchidas (nunca os valores)
+    case "nx_integracoes_status": return demoAds.integracoes.map(i => ({ ...i, preenchidos: i.canal === "meta" ? ["meta_access_token", "meta_ad_account_id"]
+      : ["google_developer_token", "google_customer_id", "google_client_id", "google_client_secret", "google_refresh_token"] }));
+    case "nx_automacao_execucoes": return execucoesDe(p.p_id).slice(0, Math.max(1, Math.min(200, Number(p.p_limite) || 50)));
+    case "nx_automacao_execucoes_dia": return execucoesPorDia(p.p_automacao, p.p_dias);
+    case "nx_ia_uso_dia": {
+      const dias = Math.max(1, Math.min(90, Number(p.p_dias) || 14));
+      return Array.from({ length: dias }, (_, i) => {
+        const chamadas = (i * 5 + 3) % 9, tokens_in = chamadas * 5200, tokens_out = chamadas * 310;
+        return { dia: somaDia(hoje, i - dias + 1), chamadas, tokens_in, tokens_out, custo_usd: Math.round((tokens_in * 4 + tokens_out * 20) / 1e6 * 1e4) / 1e4 };
+      });
+    }
     case "nx_auto_simular": return { ok: true, automacao: p.p_automacao || {}, tamanho_amostra: 5, amostra: [
       { rotulo: "Mariana Costa", negocio_id: 801, contato_id: 501, link: "#/crm/negocio/801", casa_gatilho: true, passa_condicoes: true, erro: null, parou: false, passos: [
         { n: 0, tipo: "esperar", texto: "esperaria 1 dia (parando se o cliente responder)", pulado: false, depois_min: 0 },
@@ -687,12 +1081,19 @@ function rpc(nome, p = {}) {
     case "nx_tarefas_listar": return { itens: tarefas.map(x => ({ ...x })), hoje: tarefas.filter(x => !x.concluida).length, atrasadas: 0 };
     case "nx_planos_listar": return [{ id: "essencial", nome: "Essencial", ativo: true, modulos: ["crm", "conversas"] }, { id: "profissional", nome: "Profissional", ativo: true, modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"] }];
     case "nx_orgs_listar": return [{ id: ID.org, nome: "Nexus", slug: "nexus", ativa: true }];
-    case "nx_clientes_admin": return [sessao().clientes[0]];
+    case "nx_clientes_admin": {
+      const f = p.p_filtro || {}, norm = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+      return sessao().clientes.map(clienteAdminItem).filter(c => (!f.id || c.id === f.id) && (!f.status || c.status === f.status)
+        && (!f.org_id || c.org.id === f.org_id) && (!f.busca || norm(`${c.nome} ${c.slug}`).includes(norm(f.busca))));
+    }
     case "nx_usuarios_listar": return { itens: usuarios, total: usuarios.length };
     case "nx_config": return { codigo_gestor: null };
-    case "nx_uso_plano": return { clientes: 1, usuarios: 2, canais: 2, automacoes: 2 };
+    // mesmo formato da RPC real (20261001b): plano, status, uso × limites, storage e (só revenda) a soma da agência
+    case "nx_uso_plano": { const c = sessao().clientes[0]; return { plano: { id: "profissional", nome: "Profissional", preco_mensal: 497 }, status: c.status, teste_ate: c.teste_ate, modulos: c.modulos,
+      uso: { usuarios: usuarios.length, canais: canais.length, funis: funis.length, automacoes: 4, contatos: contatos.length, ia_mes: 42 },
+      limites: { usuarios: 5, canais: 2, funis: 3, automacoes: 8, contatos: 2000, ia_mes: 300 }, org: null, storage_mb: 12.4 }; }
     case "nx_relatorios": return { itens: [] };
-    case "nx_dominio_status": case "nx_notificacoes_marcar": return { ok: true };
+    case "nx_dominio_status": return { ok: true };
     // como o real (nx_auto_item): o item volta com id e ativo, para a lista recontar «Ligadas de N»
     case "nx_automacao_ativar": return { id: p.p_id, ativo: !!p.p_ativo };
     case "nx_codewords_canal_salvar": marcarOnb("chave_codewords"); return { ok: true, codewords: { tem_api_key: true } };
@@ -708,7 +1109,15 @@ function rpc(nome, p = {}) {
 function fn(nome, p = {}) {
   if (nome === "nx-codewords" && /teste/i.test(String(p.acao || ""))) marcarOnb("mensagem_teste");
   if (nome === "nx-codewords" && p.acao === "receita") return { ok: true, url: "https://exemplo.invalid/functions/v1/nx-codewords?ch=DEMO", cabecalhos: {}, prompt: "PROMPT DE DEMONSTRAÇÃO (ambiente fictício local)\n\nVocê é a assistente da clínica. Converse, veja horários e agende.\nURL: https://exemplo.invalid/functions/v1/nx-codewords?ch=DEMO\n" + "Linha de exemplo do prompt.\n".repeat(30) };
-  if (nome === "nx-codewords") return { ok: true, inscrito_certo: true, conectado: true, numero_confere: true, rota: "fluxo", service_id: "cw-demo-fluxo", motivo: "Ambiente fictício local — nenhuma chamada saiu do computador." };
+  if (nome === "nx-codewords") {
+    // «estado» (Reconferir agora) e as outras ações do painel: formato de estadoCanalCodeWords (codewords.js), com o aparelho no estado
+    // simulado (simular/canal) e `canal` como nx_codewords_situacao devolve (nx_canal_json sem o webhook: contadores, aviso_em, histórico à parte)
+    const k = canalPorId(p.canal) || canais[0], ligado = k.estado === "conectado";
+    const { webhook, ...canal } = k;   // eslint-disable-line no-unused-vars
+    return { ok: true, achado: true, conectado: ligado, numero_confere: true, estado: ligado ? "open" : "close", rota_atual: "fluxo", rota_esperada: "fluxo",
+      inscrito_certo: ligado, rota: "fluxo", service_id: "cw-demo-fluxo",
+      motivo: ligado ? "Ambiente fictício local — nenhuma chamada saiu do computador." : "Aparelho desconectado (simulação local: simular/canal?estado=conectado traz de volta).", canal };
+  }
   if (nome === "nx-enviar") return p.acao === "texto" ? enviarTexto(p) : p.acao === "midia" ? enviarMidia(p) : { ok: true, app_inscrito: true, total: 1, numero: "+55 00 00000-0001" };
   if (nome === "nx-midia") return p.acao === "subir" ? subirMidia(p) : { ok: true, url: null };
   if (nome === "nx-ia" && p.acao === "automacao_montar") {
@@ -723,13 +1132,54 @@ function fn(nome, p = {}) {
   }
   // mesmo formato de _compartilhado/ia_conversas.js (sugerir e resumir devolvem { ok, texto, acao })
   if (nome === "nx-ia") return { ok: true, texto: p.acao === "resumir" ? "Resumo fictício: a pessoa quer saber o preço e horários da avaliação." : "Resposta fictícia de demonstração. Revise antes de enviar.", acao: p.acao || "sugerir" };
+  // nx-ciclo {cliente, dias:1} = «Testar conexão» (F6): mesmo formato de tratarCiclo ({ok, hoje, clientes:[{cliente, ok, sync, ...}]});
+  // simular/integracao?canal=meta&erro=token|rede faz a plataforma falhar com a explicação de explicarErroIntegracao
+  if (nome === "nx-ciclo") {
+    const dias = Math.max(1, Math.min(28, Number(p.dias) || 7)), f = dev.integracaoFalha;
+    const sync = { meta: "ok — 58 linhas", google: "ok — 31 linhas" };
+    const cli = { cliente: "sorriso-vivo", ok: true, dias, sync, alertas_ativos: 1, alertas_novos: 0 };
+    if (f) {
+      const plat = f.canal === "google" ? "Google" : "Meta";
+      const expl = f.erro === "rede" ? { curto: `o ${plat} não está respondendo`, acao: "Nada a fazer agora: a leitura tenta de novo na próxima hora.", passageiro: true }
+        : { curto: `o ${plat} recusou o token de acesso`, acao: "Gere um token novo e salve em Ajustes → Integrações.", passageiro: false };
+      sync[f.canal] = `erro — ${f.erro === "rede" ? "fetch failed" : `${plat} 401 token inválido`}`;
+      Object.assign(cli, { ok: false, falhas: [{ canal: f.canal, ultimo_sync: demoAds.integracoes.find(x => x.canal === f.canal)?.ultimo_sync || null, ...expl }] });
+    }
+    return { ok: cli.ok, hoje, dias, clientes: [cli] };
+  }
   return { ok: true, simulado: true };
 }
+
+/* «Site» de mentira para provar o rastreio de ponta a ponta sem sair do computador: carrega o web/rastreio.js de verdade com a chave desta
+   empresa e data-url apontando para ESTE servidor; o link do WhatsApp recebe o [ref] no clique (com ?sem_navegar=1 o clique não sai da página). */
+const SITE_TESTE = () => `<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="data:,">
+<title>Site de teste · rastreio do Órbita (local)</title>
+<style>:root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem}code{font-family:ui-monospace,monospace}a.wa{display:inline-block;padding:.75rem 1.25rem;border:2px solid currentColor;border-radius:999px;font-weight:700;min-height:44px;box-sizing:border-box}</style>
+</head><body>
+<h1>Site de teste (local)</h1>
+<p>Abra com parâmetros, por exemplo <code>?utm_source=instagram&amp;utm_medium=paid_social&amp;utm_campaign=Avaliação humanizada</code>, passe o mouse no botão e clique.</p>
+<p><a class="wa" id="wa" href="https://wa.me/5500000000001?text=Ol%C3%A1!%20Vim%20pelo%20site." target="_blank" rel="noopener">Falar no WhatsApp</a></p>
+<p>Parâmetros guardados: <code id="dados">—</code><br>Código: <code id="codigo">—</code><br>Link final: <code id="link">—</code></p>
+<script>
+  document.getElementById("wa").addEventListener("click", e => { if (new URLSearchParams(location.search).get("sem_navegar") === "1") e.preventDefault(); });
+  function mostrar() {
+    var R = window.OrbitaRastreio; if (!R) return;
+    document.getElementById("dados").textContent = JSON.stringify(R.dados());
+    document.getElementById("link").textContent = document.getElementById("wa").getAttribute("href");
+    R.codigo().then(function (c) { document.getElementById("codigo").textContent = c || "(sem código)"; mostrar2(); });
+  }
+  function mostrar2() { document.getElementById("link").textContent = document.getElementById("wa").getAttribute("href"); }
+  window.addEventListener("load", mostrar);
+  document.addEventListener("click", function () { setTimeout(mostrar2, 50); }, true);
+</script>
+<script src="/rastreio.js" data-chave="${dev.chave}" data-url="/rest/v1/rpc/nx_rastreio_registrar" data-apikey="dev-falso" defer></script>
+</body></html>`;
 
 // Boot do modo fictício: ARQUIVO (não inline) — o index.html traz a mesma CSP do Netlify em <meta>
 // (script-src 'self'), então um <script> inline injetado seria bloqueado.
 // Além do fetch, troca o destino do XMLHttpRequest (o upload de mídia usa XHR, pela barra de progresso): nada vai ao Supabase.
-const BOOT = `(function(){if(location.hostname!=="127.0.0.1"&&location.hostname!=="localhost")return;var q=new URLSearchParams(location.search);try{if(q.has("login")){localStorage.removeItem("nx-token");location.hash="#/login";}else if(!localStorage.getItem("nx-token")){localStorage.setItem("nx-token","demo-local-session");}sessionStorage.setItem("nx-app-dev","1");}catch(e){}var falso=function(h){return h==="dtjznipitihnwmcgpzqh.supabase.co"||h==="${HOST_UPLOAD}";};var original=window.fetch.bind(window);window.fetch=function(input,init){var u;try{u=new URL(typeof input==="string"?input:input.url,location.href);}catch(e){return original(input,init);}if(falso(u.hostname)){u=new URL("/__dev_falso"+u.pathname+u.search,location.origin);return original(u,init);}return original(input,init);};var abrir=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(){var a=Array.prototype.slice.call(arguments);try{var x=new URL(String(a[1]),location.href);if(falso(x.hostname))a[1]=new URL("/__dev_falso"+x.pathname+x.search,location.origin).href;}catch(e){}return abrir.apply(this,a);};})();`;
+const BOOT = `(function(){if(location.hostname!=="127.0.0.1"&&location.hostname!=="localhost")return;var q=new URLSearchParams(location.search);try{if(q.has("login")){localStorage.removeItem("nx-token");location.hash="#/login";}else if(!localStorage.getItem("nx-token")){localStorage.setItem("nx-token","demo-local-session");}sessionStorage.setItem("nx-app-dev","1");}catch(e){}window.ORBITA_DEV_FALSO={origem:location.origin,rastreio:{script:location.origin+"/rastreio.js",url:location.origin+"/rest/v1/rpc/nx_rastreio_registrar",apikey:"dev-falso",site:location.origin+"/__dev_falso/site.html"}};var falso=function(h){return h==="dtjznipitihnwmcgpzqh.supabase.co"||h==="${HOST_UPLOAD}";};var original=window.fetch.bind(window);window.fetch=function(input,init){var u;try{u=new URL(typeof input==="string"?input:input.url,location.href);}catch(e){return original(input,init);}if(falso(u.hostname)){u=new URL("/__dev_falso"+u.pathname+u.search,location.origin);return original(u,init);}return original(input,init);};var abrir=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(){var a=Array.prototype.slice.call(arguments);try{var x=new URL(String(a[1]),location.href);if(falso(x.hostname))a[1]=new URL("/__dev_falso"+x.pathname+x.search,location.origin).href;}catch(e){}return abrir.apply(this,a);};})();`;
 
 const dormir = ms => new Promise(r => setTimeout(r, ms));
 const ROTAS_SEM_SESSAO = new Set(["nx_marca_publica", "nx_entrar", "nx_convite_ver", "nx_convite_aceitar", "nx_senha_redefinir"]);
@@ -755,11 +1205,11 @@ async function atender(tipo, nome, corpo, json, res) {
   const executar = () => (tipo === "rpc" ? rpc(nome, corpo) : fn(nome, corpo));
   if (f && f.status) {
     if (f.depois) { try { executar(); } catch { /* o servidor aplicou ou falhou; a resposta já está decidida */ } }
-    const cab = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
+    const cab = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...CORS };
     if (f.retryAfter) cab["retry-after"] = String(f.retryAfter);
     res.writeHead(f.status, cab);
-    // Edge Function responde {ok:false, erro}; RPC responde {message} (PostgREST)
-    const c = f.codigo ? (tipo === "fn" ? { ok: false, erro: f.codigo } : { message: f.codigo }) : CORPO_FALHA[f.status] || null;
+    // Edge Function responde {ok:false, erro}; RPC responde {message, hint} (PostgREST)
+    const c = f.codigo ? (tipo === "fn" ? { ok: false, erro: f.codigo, ...(f.hint ? { detalhe: f.hint } : {}) } : { code: "P0001", message: f.codigo, hint: f.hint || null, details: null }) : CORPO_FALHA[f.status] || null;
     return res.end(c ? JSON.stringify(c) : "");
   }
   try { return json(200, executar()); }
@@ -773,9 +1223,38 @@ function simular(acao, q) {
   const n = chave => Number(q.get(chave));
   switch (acao) {
     case "falha": {
+      // hint: texto que o PostgREST devolveria em `hint` (ex.: muitas_tentativas com os minutos de bloqueio)
       dev.falhas.push({ rpc: q.get("rpc") || "*", status: n("status") || 0, restam: n("vezes") || 1, atraso: n("atraso") || 0, depois: q.get("depois") === "1",
-        codigo: q.get("codigo") || null, retryAfter: n("retryAfter") || 0 });
+        codigo: q.get("codigo") || null, hint: q.get("hint") || null, retryAfter: n("retryAfter") || 0 });
       return { ok: true, falhas: dev.falhas.length };
+    }
+    // número caiu/voltou (contrato 3): histórico + notificação canal_caiu/canal_voltou; nx_inicio.canais e nx_cv_base.canais refletem
+    case "canal": {
+      const canal = canalPorId(q.get("id") || ID.canal);
+      if (!canal) return { ok: false, erro: "canal_nao_encontrado" };
+      canalEstado(canal, q.get("estado") || "desconectado", q.get("detalhe"));
+      return { ok: true, canal: { id: canal.id, estado: canal.estado, desde: canal.estado_desde }, notificacoes: naoLidasNotif() };
+    }
+    // rastreio: ?chave=0 apaga a chave (tela «Gerar chave»), ?chave=1 restaura; ?limpar=1 descarta os cliques registrados ao vivo
+    case "rastreio": {
+      if (q.get("chave") === "0") dev.chave = null;
+      if (q.get("chave") === "1" && !dev.chave) dev.chave = chaveDev(++dev.seqChave);
+      if (q.get("limpar") === "1") dev.rastreio = dev.rastreio.filter(r => r.semente);
+      return { ok: true, chave: !!dev.chave, cliques: dev.rastreio.length };
+    }
+    // cliente pausado pela Nexus (contrato 9): ?ativo=0 derruba o interruptor; com &super=0 a conta deixa de ser super e nx_app_sessao recusa
+    case "cliente": {
+      if (q.has("ativo")) dev.cliente.ativo = q.get("ativo") !== "0";
+      if (q.has("super")) dev.cliente.super = q.get("super") !== "0";
+      return { ok: true, cliente: { ...dev.cliente } };
+    }
+    // versão do banco anunciada em nx_app_sessao.migracao (vazio = a última migração do repositório)
+    case "migracao": dev.migracao = q.get("nome") || null; return { ok: true, migracao: ultimaMigracao() };
+    // integração de anúncios com falha no «Testar conexão» (nx-ciclo): ?canal=meta|google&erro=token|rede; sem parâmetros limpa
+    case "integracao": {
+      const canal = q.get("canal");
+      dev.integracaoFalha = ["meta", "google"].includes(canal) ? { canal, erro: q.get("erro") === "rede" ? "rede" : "token" } : null;
+      return { ok: true, integracao: dev.integracaoFalha };
     }
     case "sessao-invalida": dev.tokens.clear(); dev.verificarToken = true; dev.proximaContaOutra = q.get("outra") === "1"; return { ok: true };
     case "sessao-valida": dev.verificarToken = false; return { ok: true };
@@ -795,25 +1274,37 @@ function simular(acao, q) {
     case "clientes": dev.empresas = Math.max(1, Math.min(2, Number(q.get("n")) || 1)); return { ok: true, empresas: dev.empresas };
     case "teste": dev.teste = q.get("status") || q.get("dias") ? { status: q.get("status") || "teste", dias: q.get("dias") === "nenhum" ? null : Number(q.get("dias") ?? 14) } : null; return { ok: true, teste: dev.teste };
     case "vertical": dev.vertical = ["odonto", "oficina", "loja", "generico"].includes(q.get("v")) ? q.get("v") : null; return { ok: true, vertical: dev.vertical };
-    case "zerar": dev.chamadas = {}; dev.falhas = []; dev.enviosExternos = 0; dev.reqs.clear(); dev.refs.clear(); dev.arquivos.clear(); return { ok: true };
+    case "zerar": dev.chamadas = {}; dev.falhas = []; dev.enviosExternos = 0; dev.reqs.clear(); dev.refs.clear(); dev.arquivos.clear(); dev.integracaoFalha = null; return { ok: true };
     default: return { ok: false, erro: "acao_desconhecida" };
   }
 }
 const estadoDev = () => ({ chamadas: dev.chamadas, enviosExternos: dev.enviosExternos, pulsoV: dev.pulsoV, falhas: dev.falhas.length, tokensValidos: dev.tokens.size,
   verificarToken: dev.verificarToken, onboarding: onboardingEstado(), versao: dev.versao || null, uploads: dev.arquivos.size,
-  mensagens: conversas.map(c => ({ id: c.id, status: c.status, nao_lidas: c.nao_lidas, total: c.mensagens.length })), tarefas: tarefas.length, negocios: negocios.length, contatos: contatos.length });
+  mensagens: conversas.map(c => ({ id: c.id, status: c.status, nao_lidas: c.nao_lidas, total: c.mensagens.length })), tarefas: tarefas.length, negocios: negocios.length, contatos: contatos.length,
+  rastreio: { cliques: dev.rastreio.length, casados: dev.rastreio.filter(r => r.resultado && r.resultado.aplicado).length, pendentes: dev.rastreio.filter(r => r.pendente).length, chave: !!dev.chave },
+  notificacoes: { total: dev.notificacoes.length, nao_lidas: naoLidasNotif() }, canais: canais.map(k => ({ id: k.id, estado: k.estado })),
+  cliente: { ...dev.cliente }, migracao: ultimaMigracao(), integracaoFalha: dev.integracaoFalha });
+// CORS: o script do site roda em OUTRA origem (o site da clínica) e manda o cabeçalho apikey — o preflight precisa passar aqui também
+const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "apikey, authorization, content-type, prefer, x-client-info", "access-control-allow-methods": "GET, POST, OPTIONS" };
 
 const servidor = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${HOST}:${PORT}`);
-  const json = (status, body) => { res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" }); res.end(JSON.stringify(body)); };
+  const json = (status, body) => { res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", ...CORS }); res.end(JSON.stringify(body)); };
   if (url.pathname === "/__dev_falso/estado") return json(200, estadoDev());
   if (url.pathname.startsWith("/__dev_falso/simular/")) return json(200, simular(url.pathname.split("/").at(-1), url.searchParams));
   if (url.pathname === "/app/versao.json" && dev.versao) return json(200, { versao: dev.versao });
-  if (req.method === "OPTIONS") { res.writeHead(204, { "cache-control": "no-store" }); return res.end(); }
+  if (req.method === "OPTIONS") { res.writeHead(204, { "cache-control": "no-store", ...CORS }); return res.end(); }
   if (url.pathname === "/__dev_falso/boot.js") {
     res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
     return res.end(BOOT);
   }
+  if (url.pathname === "/__dev_falso/site.html") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+    return res.end(SITE_TESTE());
+  }
+  // as RPCs e funções também SEM o prefixo (/rest/v1/rpc/…, /functions/v1/…): é o endereço que o snippet do rastreio e o
+  // site de teste usam — o que o navegador manda para cá nunca chega ao Supabase
+  const rota = url.pathname.replace(/^\/__dev_falso(?=\/)/, "");
   if (req.method === "PUT" && url.pathname.startsWith(ROTA_UPLOAD)) {
     // upload fictício da mídia: conta os bytes e descarta (nada vai para o disco); só aceita o caminho que o "subir" devolveu
     let path = ""; try { path = decodeURIComponent(url.pathname.slice(ROTA_UPLOAD.length)); } catch { /* fica inválido */ }
@@ -823,14 +1314,14 @@ const servidor = http.createServer(async (req, res) => {
     dev.arquivos.set(path, { tamanho, mime: String(req.headers["content-type"] || "") });
     return json(200, { Key: `nx-midia/${path}` });
   }
-  if (url.pathname.startsWith("/__dev_falso/rest/v1/rpc/")) {
-    const name = url.pathname.split("/").at(-1);
+  if (rota.startsWith("/rest/v1/rpc/")) {
+    const name = rota.split("/").at(-1);
     let raw = ""; for await (const chunk of req) raw += chunk;
     let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch { return json(400, { message: "dados_invalidos" }); }
     return atender("rpc", name, body, json, res);
   }
-  if (url.pathname.startsWith("/__dev_falso/functions/v1/")) {
-    const name = url.pathname.split("/").at(-1);
+  if (rota.startsWith("/functions/v1/")) {
+    const name = rota.split("/").at(-1);
     let raw = ""; for await (const chunk of req) raw += chunk;
     let body = {}; try { body = raw ? JSON.parse(raw) : {}; } catch { return json(400, { ok: false, erro: "dados_invalidos" }); }
     return atender("fn", name, body, json, res);

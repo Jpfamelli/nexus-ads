@@ -10,6 +10,11 @@
    dia livre vira uma linha «Livre · Marcar». Dados: nx_agenda_dia
    (sem RPC nova). As contas de posição são puras e exportadas
    (testes/crm.teste.mjs).
+   Plano 100 (E): presença «Compareceu / Faltou» (nx_agenda_presenca,
+   com Desfazer), encaixe e dono_nome do servidor, a próxima consulta
+   fora do período (uma leitura de 7 dias), «Lembrar» que deixa o texto
+   pronto na conversa (sem enviar) e a legenda por profissional com
+   avatar (testes/plano100-agenda.teste.mjs).
    ============================================================ */
 
 const FUSO = "America/Sao_Paulo";
@@ -226,7 +231,7 @@ export function corDoResponsavel(id) {
 export function corDaConsulta(c, por = "servico", nomes = {}) {
   if (por === "profissional") {
     const id = c && c.dono_id ? String(c.dono_id) : "";
-    return { chave: `p:${id || "sem"}`, cor: corDoResponsavel(id), rotulo: id ? (nomes[id] || "Responsável") : "Sem responsável" };
+    return { chave: `p:${id || "sem"}`, cor: corDoResponsavel(id), rotulo: id ? (nomes[id] || (typeof c.dono_nome === "string" && c.dono_nome.trim()) || "Responsável") : "Sem responsável" };
   }
   const s = String((c && c.servico) || "").trim();
   return { chave: `s:${s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()}`, cor: corDoProcedimento(s), rotulo: s || "Sem serviço" };
@@ -370,13 +375,15 @@ export function destinoMudou(c, iso, hora) {
 }
 
 /* ---------- painel do dia ---------- */
-/** O que a consulta é: concluída (status ganho), falta (etapa com marco «faltou») e encaixe (fora do horário de atendimento ou
-    acima dos atendimentos simultâneos configurados). O servidor não manda um sinal de encaixe: isto é derivado da configuração. */
+/** O que a consulta é: concluída (status ganho), falta (etapa com marco «faltou» ou presença «faltou») e encaixe. Encaixe: o que o
+    servidor diz (`encaixe` boolean, contrato 6: marcada como encaixe); servidor antigo sem o campo → derivado da configuração (fora do
+    horário de atendimento ou acima dos atendimentos simultâneos). */
 export function classificarConsulta(c, config, { iso = null, vizinhas = [] } = {}) {
   const p = partesSP(c && c.inicio);
   const dia = iso || (p && p.dia);
   const feita = !!c && c.status === "ganho";
-  const falta = !!c && c.marco === "faltou";
+  const falta = !!c && (c.marco === "faltou" || c.presenca === "faltou" || !!(c.campos && c.campos.presenca === "faltou"));
+  if (c && typeof c.encaixe === "boolean") return { feita, falta, encaixe: c.encaixe };
   const dur = Number(config && config.duracao_min) || 30;
   const foraDoHorario = !!(p && dia && horarioAberto(config, dia, p.min) === false);
   let acimaDaCapacidade = false;
@@ -413,15 +420,24 @@ export function anelOcupacao(h, oc, { tamanho = 30, texto = "" } = {}) {
     texto ? h("text", { class: "ag-anel-txt", x: "15", y: "15", "text-anchor": "middle", "dominant-baseline": "central" }, texto) : null);
 }
 
-/** Legenda das cores (serviço ou profissional): tocar um item destaca só aquelas consultas (aria-pressed); «Mostrar todas» limpa. */
-export function montarLegenda({ h, itens = [], ativos = new Set(), aoAlternar, num = String } = {}) {
+/** Legenda das cores (serviço ou profissional): tocar um item destaca só aquelas consultas (aria-pressed); «Mostrar todas» limpa.
+    E7: com `avatar` (o ui.avatar), cada profissional aparece com as iniciais do nome na MESMA cor dos blocos dele (corDoResponsavel, estável
+    pelo id); «Sem responsável» e «Outros» ficam com a amostra de cor. */
+export function montarLegenda({ h, itens = [], ativos = new Set(), aoAlternar, num = String, avatar = null } = {}) {
   const el = h("div", { class: "ag-legenda", role: "group", "aria-label": "Legenda das cores" });
   for (const it of itens) {
     const on = (it.chaves || [it.chave]).every(k => ativos.has(k));
-    el.appendChild(h("button", { type: "button", class: ["ag-leg-chip", on && "ativo"], "aria-pressed": String(on), dataset: { chave: it.chave },
+    const pessoa = typeof avatar === "function" && /^p:./.test(it.chave) && it.chave !== "p:sem" ? it.chave.slice(2) : null;
+    let marca = null;
+    if (pessoa) {
+      try { marca = avatar(it.rotulo, pessoa, null, { tamanho: "p" }); } catch { marca = null; }
+      if (marca && marca.style && it.cor !== null && it.cor !== undefined) marca.style.setProperty("--cor", `var(--pal-${it.cor})`);
+      if (marca && marca.classList) marca.classList.add("ag-leg-av");
+    }
+    el.appendChild(h("button", { type: "button", class: ["ag-leg-chip", on && "ativo", marca && "ag-leg-pessoa"], "aria-pressed": String(on), dataset: { chave: it.chave },
       title: `${it.rotulo}: ${num(it.n)} ${it.n === 1 ? "consulta" : "consultas"}`,
       on: { click: () => aoAlternar && aoAlternar(it) } },
-      h("i", { class: "ag-leg-cor", "aria-hidden": "true", style: it.cor === null || it.cor === undefined ? null : { "--cor-bloco": `var(--pal-${it.cor})` } }),
+      marca || h("i", { class: "ag-leg-cor", "aria-hidden": "true", style: it.cor === null || it.cor === undefined ? null : { "--cor-bloco": `var(--pal-${it.cor})` } }),
       h("span", { class: "ag-leg-nome" }, it.rotulo), h("b", { class: "ag-leg-n dado" }, num(it.n))));
   }
   if (ativos.size) el.appendChild(h("button", { type: "button", class: "ag-leg-chip ag-leg-limpar", on: { click: () => aoAlternar && aoAlternar(null) } }, "Mostrar todas"));
@@ -475,9 +491,10 @@ export function montarMiniCalendario({ h, mes, consultas = [], bloqueios = [], c
   return el;
 }
 
-/** Painel do dia: 4 números (consultas, concluídas, faltas, encaixes) e a lista em ordem de horário; tocar abre o detalhe. Só leitura:
-    «confirmar presença» depende de uma RPC que ainda não existe. */
-export function montarPainelDia({ h, iso, consultas = [], config = null, hoje, aoAbrir, aoMarcar, horaBR = x => x, num = String, pode = false, titulo = null } = {}) {
+/** Painel do dia: 4 números (consultas, concluídas, faltas, encaixes) e a lista em ordem de horário; tocar abre o detalhe.
+    E1: com `presenca` ({L: crm-logica, aoMarcar(c, estado, botao), icone?, agora?}) cada consulta que já passou ganha «Compareceu / Faltou»
+    (botões com aria-pressed; tocar de novo no marcado limpa). E5: com `vazio` (o ui.vazio) o dia sem consulta usa a ilustração da agenda. */
+export function montarPainelDia({ h, iso, consultas = [], config = null, hoje, aoAbrir, aoMarcar, horaBR = x => x, num = String, pode = false, titulo = null, presenca = null, vazio = null } = {}) {
   const r = resumoDoDia(consultas, iso, config);
   const el = h("aside", { class: "ag-painel", "aria-label": "Resumo do dia" });
   el.appendChild(h("header", { class: "ag-painel-cab" }, h("h2", { class: "ag-painel-titulo" }, titulo || (iso === hoje ? "Hoje" : nomeDia(iso, true))),
@@ -487,22 +504,113 @@ export function montarPainelDia({ h, iso, consultas = [], config = null, hoje, a
     kpi(r.total, r.total === 1 ? "consulta" : "consultas"), kpi(r.feitas, r.feitas === 1 ? "concluída" : "concluídas", r.feitas && "ok"),
     kpi(r.faltas, r.faltas === 1 ? "falta" : "faltas", r.faltas && "ruim"), kpi(r.encaixes, r.encaixes === 1 ? "encaixe" : "encaixes", r.encaixes && "aten")));
   if (!r.itens.length) {
-    el.appendChild(h("div", { class: "ag-painel-vazio" }, h("p", { class: "narr" }, "Nenhuma consulta neste dia."),
-      pode && aoMarcar ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => aoMarcar(iso) } }, "Marcar consulta") : null));
+    const acao = pode && aoMarcar ? { rotulo: "Marcar consulta", icone: "mais", fn: () => aoMarcar(iso) } : null;
+    let v = null;
+    if (typeof vazio === "function") try { v = vazio({ tema: "agenda", titulo: "Nenhuma consulta neste dia.", acao }); } catch { v = null; }
+    el.appendChild(v ? h("div", { class: "ag-painel-vazio ag-painel-vazio-tema" }, v)
+      : h("div", { class: "ag-painel-vazio" }, h("p", { class: "narr" }, "Nenhuma consulta neste dia."),
+        acao ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: acao.fn } }, "Marcar consulta") : null));
     return el;
   }
   const lista = h("ol", { class: "ag-painel-lista" });
   for (const it of r.itens) {
     const c = it.c, nome = c.nome || c.titulo || "Consulta sem nome";
-    const selos = [it.feita ? ["Concluída", "pilula-ok"] : null, it.falta ? ["Faltou", "pilula-ruim"] : null, it.encaixe ? ["Encaixe", "pilula-aten"] : null].filter(Boolean);
+    const pr = presenca && presenca.L ? presencaDaConsulta(c, presenca.L, presenca.agora) : null;
+    const grupo = pr && pr.possivel && typeof presenca.aoMarcar === "function"
+      ? montarPresenca({ h, c, estado: pr.estado, aoMarcar: presenca.aoMarcar, icone: presenca.icone, rotulos: presenca.L.PRESENCAS, desabilitado: !pode }) : null;
+    // a presença marcada já aparece no botão pressionado: o selo «Faltou» fica só para a falta pela etapa
+    const selos = [it.feita ? ["Concluída", "pilula-ok"] : null, it.falta && !(grupo && pr.estado === "faltou") ? ["Faltou", "pilula-ruim"] : null, it.encaixe ? ["Encaixe", "pilula-aten"] : null].filter(Boolean);
     const bt = h("button", { type: "button", class: ["ag-painel-item", it.feita && "feita"], "aria-haspopup": "dialog", on: { click: () => aoAbrir && aoAbrir(c, bt) } },
       h("span", { class: "ag-painel-hora dado" }, horaBR(c.inicio)),
       h("span", { class: "ag-painel-txt" }, h("b", null, nome), c.servico ? h("small", null, c.servico) : null),
       selos.length ? h("span", { class: "ag-painel-selos" }, selos.map(([t, cls]) => h("span", { class: ["pilula", cls] }, t))) : null);
-    lista.appendChild(h("li", null, bt));
+    lista.appendChild(h("li", { class: ["ag-painel-li", grupo && "com-presenca"], dataset: { negocio: c.negocio_id ?? null } }, bt, grupo));
   }
   el.appendChild(lista);
   return el;
+}
+
+/* ============================================================ plano 100 (E): presença, servidor no lugar da inferência, próxima fora do período, lembrete */
+/** E1: presença da consulta pelas regras do CRM (crm-logica: presencaDe/consultaPassou) → {estado, possivel, conhecida}.
+    possivel = a hora já passou e (está aberta ou já tem marca); conhecida = a linha trouxe `presenca` (contrato 6) — senão a tela lê a ficha. */
+export function presencaDaConsulta(c, L, agora = Date.now()) {
+  if (!c || !L || typeof L.presencaDe !== "function") return { estado: null, possivel: false, conhecida: false };
+  const estado = L.presencaDe(c);
+  const passou = typeof L.consultaPassou === "function" && L.consultaPassou({ consulta_em: c.inicio }, agora ?? Date.now());
+  return { estado, possivel: !!passou && (!c.status || c.status === "aberto" || !!estado), conhecida: Object.hasOwn(c, "presenca") };
+}
+/** E1: «Compareceu / Faltou» de uma consulta (grupo de dois botões com aria-pressed). `rotulos` = crm-logica PRESENCAS ({rotulo, icone}). */
+export function montarPresenca({ h, c, estado = null, aoMarcar, icone = null, rotulos = null, desabilitado = false } = {}) {
+  const nome = (c && (c.nome || c.titulo)) || "consulta";
+  const P = rotulos || { compareceu: { rotulo: "Compareceu", icone: "check" }, faltou: { rotulo: "Faltou", icone: "fechar" } };
+  const el = h("div", { class: "ag-pres", role: "group", "aria-label": `Presença de ${nome}`, dataset: { negocio: c && c.negocio_id != null ? String(c.negocio_id) : null } });
+  for (const est of ["compareceu", "faltou"]) {
+    const on = estado === est;
+    const b = h("button", { type: "button", class: ["ag-pres-bt", `ag-pres-${est}`], dataset: { estado: est }, "aria-pressed": String(on), disabled: desabilitado,
+      title: on ? "Tocar de novo limpa a marcação" : null },
+      typeof icone === "function" ? icone(P[est].icone) : null, P[est].rotulo);
+    b.addEventListener("click", () => { if (aoMarcar) aoMarcar(c, est, b); });
+    el.appendChild(b);
+  }
+  return el;
+}
+/** E2: nomes dos responsáveis que o servidor mandou nas linhas (`dono_nome`, contrato 6) → {dono_id: nome}. */
+export function nomesDasConsultas(consultas) {
+  const r = {};
+  for (const c of consultas || []) if (c && c.dono_id && typeof c.dono_nome === "string" && c.dono_nome.trim()) r[String(c.dono_id)] = c.dono_nome.trim();
+  return r;
+}
+/** E2: a base do CRM só é lida para os nomes quando alguma linha com responsável veio SEM o campo `dono_nome` (servidor antigo). */
+export function faltamNomes(consultas) { return (consultas || []).some(c => c && c.dono_id && !Object.hasOwn(c, "dono_nome")); }
+/** E3: o 1º dia da busca da próxima consulta FORA do período (null = não buscar). Só com o período já começado (hoje ou antes): o dia
+    seguinte ao fim dele, ou hoje se o período inteiro já passou. Período no futuro não busca (a próxima de verdade pode vir antes dele). */
+export function inicioBuscaProxima(de, dias, hojeISO) {
+  if (!dataAgendaValida(de) || !dataAgendaValida(hojeISO) || de > hojeISO) return null;
+  const seguinte = diaISO(de, Math.max(1, Math.floor(Number(dias)) || 1));
+  return seguinte > hojeISO ? seguinte : hojeISO;
+}
+const semanaLonga = iso => new Intl.DateTimeFormat("pt-BR", { weekday: "long", timeZone: FUSO }).format(new Date(`${iso}T12:00:00-03:00`)).replace(/-feira$/, "");
+/** E3: «amanhã às 10:00», «sexta às 14:00» (até 6 dias à frente), senão «sex 24/10 às 14:00»; hoje continua «em 25 min · 10:25». */
+export function rotuloProximaFora(c, agora = Date.now(), hojeISO = null) {
+  const p = c && partesSP(c.inicio);
+  if (!p) return "";
+  const hoje = hojeISO || (partesSP(new Date(agora)) || {}).dia;
+  const dist = Math.round((Date.parse(`${p.dia}T12:00:00Z`) - Date.parse(`${hoje}T12:00:00Z`)) / 864e5);
+  if (dist >= 2 && dist <= 6) return `${semanaLonga(p.dia)} às ${horaTxt(p.min)}`;
+  return rotuloProxima(c, agora, hoje);
+}
+/** E3: o texto quando não há próxima nem no período nem nos 7 dias buscados. */
+export function textoSemProxima({ umDia = false, desde = null, hojeISO = null } = {}) {
+  return desde && desde === hojeISO ? "Nenhuma consulta nos próximos 7 dias." : `Nenhuma consulta por vir ${umDia ? "neste dia" : "nesta semana"} nem nos 7 dias seguintes.`;
+}
+/** E6: texto curto do lembrete (a pessoa confere e envia): «Olá, Mariana! Passando para lembrar da sua consulta (Avaliação) amanhã às 10:00. Podemos confirmar?» */
+export function textoLembrete(c, hojeISO) {
+  const p = c && partesSP(c.inicio);
+  if (!p) return "";
+  const primeiro = String((c && c.nome) || "").trim().split(/\s+/)[0] || "";
+  const quando = p.dia === hojeISO ? "hoje" : p.dia === diaISO(hojeISO, 1) ? "amanhã" : `dia ${p.dia.slice(8, 10)}/${p.dia.slice(5, 7)} (${semanaLonga(p.dia)})`;
+  const servico = String((c && c.servico) || "").trim();
+  return `Olá${primeiro ? `, ${primeiro}` : ""}! Passando para lembrar da sua consulta${servico ? ` (${servico})` : ""} ${quando} às ${horaTxt(p.min)}. Podemos confirmar?`;
+}
+/** E6: a conversa do contato onde o lembrete entra: a aberta; sem aberta, a mais recente (a mesma regra de #/conversas?contato=). */
+export function conversaDoContato(conversas) {
+  const lista = Array.isArray(conversas) ? conversas.filter(c => c && c.id != null) : [];
+  return lista.find(c => c.status !== "resolvida") || lista.slice().sort((a, b) => String(b.aberta_em || "").localeCompare(String(a.aberta_em || "")))[0] || null;
+}
+/** E6: deixa `texto` como rascunho da conversa pelo ctx.rascunho (o composer o devolve ao abrir, com «Rascunho restaurado») — nada é enviado.
+    Nunca passa por cima de um rascunho que a pessoa já tem. → true se ficou guardado. */
+export function prepararRascunho(rascunho, chave, texto, criarCampo = () => document.createElement("textarea")) {
+  if (!rascunho || typeof rascunho.ligar !== "function" || !chave || !texto) return false;
+  try {
+    if (typeof rascunho.existe === "function" && rascunho.existe(chave)) return false;
+    const campo = criarCampo();
+    campo.value = texto;
+    const ctl = rascunho.ligar(campo, chave);
+    if (!ctl || typeof ctl.salvarAgora !== "function") return false;
+    ctl.salvarAgora();
+    if (typeof ctl.desligar === "function") ctl.desligar();
+    return typeof rascunho.texto === "function" ? rascunho.texto(chave) === texto : true;
+  } catch { return false; }
 }
 
 /* ============================================================ textos */
@@ -600,10 +708,16 @@ export async function lerEtapa(api, negocioId) {
   } catch { return null; }
 }
 
-/** Devolve a consulta ao horário anterior como ENCAIXE (o Desfazer de uma remarcação, pela janela ou pelo arrasto): devolver o que já estava
-    marcado não passa pela regra de antecedência nem de horário de atendimento (senão desfazer em cima da hora era recusado). */
-export async function voltarAoHorario(api, negocioId, inicio, servico) {
-  return erroResposta(await api.rpcC("nx_agenda_marcar", { p_negocio: negocioId, p_inicio: inicio, p_servico: servico || null, p_encaixe: true }));
+/** Devolve a consulta ao horário anterior (o Desfazer de uma remarcação, pela janela ou pelo arrasto, e o de desmarcar). Consulta que NÃO era
+    encaixe volta como normal; se o servidor recusar (antecedência, horário de atendimento, ou o horário já cheio por um encaixe
+    marcado depois), volta como ENCAIXE — devolver o que já estava marcado nunca é barrado. Sem saber (`encaixe` ausente) vai direto como encaixe. */
+export async function voltarAoHorario(api, negocioId, inicio, servico, encaixe) {
+  const args = { p_negocio: negocioId, p_inicio: inicio, p_servico: servico || null };
+  if (encaixe === false) {
+    const r = await api.rpcC("nx_agenda_marcar", { ...args, p_encaixe: false });
+    if (!(r && r.ok === false)) return r;
+  }
+  return erroResposta(await api.rpcC("nx_agenda_marcar", { ...args, p_encaixe: true }));
 }
 
 /** Oportunidades ABERTAS que casam com a busca (uma chamada: nx_buscar). Servidor sem a busca → cai no quadro do funil (mais lento). */
@@ -860,6 +974,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   if (!(resultado && resultado.ok)) return null;
   const rotulo = (resultado.consulta && resultado.consulta.rotulo) || ui.dataHoraBR(slotSel && slotSel.inicio);
   const anterior = resultado.remarcada && resultado.anterior ? resultado.anterior.inicio : null;
+  const encaixeAntes = resultado.anterior && typeof resultado.anterior.encaixe === "boolean" ? resultado.anterior.encaixe : undefined;
   const servicoMarcado = servicoValor() || null;
   const marcada = { id: sel.id, antes: sel.antes || null, servicoAntes: sel.servico || null };      // o que valia ANTES de marcar
   if (aoMudar) try { aoMudar(resultado); } catch (e) { console.error(e); }
@@ -867,7 +982,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
     texto: `${resultado.remarcada ? "Remarcada" : "Marcada"} para ${rotulo}`,
     reverter: async () => {
       // remarcação volta ao horário (e ao serviço) anterior, como ENCAIXE (voltarAoHorario); consulta nova some
-      if (anterior) await voltarAoHorario(api, marcada.id, anterior, marcada.servicoAntes || servicoMarcado);
+      if (anterior) await voltarAoHorario(api, marcada.id, anterior, marcada.servicoAntes || servicoMarcado, encaixeAntes);
       else erroResposta(await api.rpcC("nx_agenda_desmarcar", { p_negocio: marcada.id, p_motivo: "Desfeito logo depois de marcar" }));
       // marcar levou o cartão para «Agendada» (e desmarcar o leva para «Nova»): volta para a etapa em que estava
       if (resultado.etapa && !(await devolverEtapa(api, marcada.id, marcada.antes)))
@@ -906,8 +1021,8 @@ export async function desmarcarConsulta(ctx, c, { aoMudar = null } = {}) {
         try { const d = await api.rpcC("nx_negocio_ver", { p_id: c.negocio_id }); if (d && d.negocio && d.negocio.estagio_id) antes = { estagio_id: d.negocio.estagio_id, ordem: d.negocio.ordem ?? null }; }
         catch { /* sem a ficha: a consulta volta, a etapa fica a que o servidor escolher */ }
       }
-      // marca de volta como ENCAIXE: devolver a consulta que já existia não passa pela regra de antecedência (desfazer às 14h a consulta das 15h era recusado)
-      const volta = erroResposta(await api.rpcC("nx_agenda_marcar", { p_negocio: c.negocio_id, p_inicio: c.inicio, p_servico: c.servico || null, p_encaixe: true }));
+      // marca de volta no MESMO estado (encaixe ou não); se a regra de antecedência recusar (desfazer às 14h a consulta das 15h), volta como encaixe
+      const volta = await voltarAoHorario(api, c.negocio_id, c.inicio, c.servico, typeof c.encaixe === "boolean" ? c.encaixe : undefined);
       if (antes && volta && volta.etapa) await devolverEtapa(api, c.negocio_id, antes);
       if (aoMudar) try { aoMudar(null); } catch (e) { console.error(e); }
     },
@@ -952,8 +1067,14 @@ export async function montar(ctx) {
   let proximaAtual = null;                 // a próxima consulta do período carregado (destacada na grade e no resumo)
   let seqBloco = 0;                        // ordem de entrada dos blocos (animação em escada)
   let ignorarClique = false;               // o clique que vem logo depois de soltar um arrasto não abre o detalhe
-  let Lg = null;                    // crm-logica.js (hrefTel do balão da consulta): chega em paralelo, a tela não espera por ele
-  logicaDe(ctx).then(m => { Lg = m; }).catch(() => { /* sem ele o telefone aparece como texto */ });
+  let Lg = null;                    // crm-logica.js (hrefTel do balão, presença): chega em paralelo com a 1ª leitura; o desenho da rede espera por ele
+  const lgPronto = logicaDe(ctx).then(m => { Lg = m; }).catch(() => { /* sem ele o telefone aparece como texto e a presença não aparece */ });
+  let semPresenca = false;          // o servidor ainda não tem nx_agenda_presenca: os botões somem nesta tela
+  const presencasLidas = new Map(); // «negocio|inicio» → presença lida da ficha (linha de servidor antigo, sem o campo `presenca`)
+  const lendoPresenca = new Set();
+  const proximasFora = new Map();   // E3: dia de início da busca → {p, pronto, valor} (uma leitura de 7 dias por período, guardada)
+  let nomesAtuais = {};             // E2: dono_id → nome (dono_nome do servidor; a base do CRM só se faltar)
+  let consultaSelecionada = null, desregistrarPresenca = null;   // a consulta do último detalhe aberto (comando «Presença da consulta» da paleta)
   let G = null;                     // graficos.js (números que contam): opcional, a tela não espera por ele
   import(`./graficos.js?v=${encodeURIComponent(ctx.versao)}`).then(m => { G = m; }).catch(() => { /* sem ele os números aparecem prontos */ });
 
@@ -1063,18 +1184,24 @@ export async function montar(ctx) {
     montarCabecalho();
     if (!forcar && atual && chave === chaveAtual) { desenhar(); return true; }   // mesmo período já em mãos (ex.: outro dia da mesma semana)
     const minha = ++sequencia;
+    if (forcar) proximasFora.clear();      // marcou, remarcou ou «Atualizar»: a próxima fora do período pode ter mudado
     if (!silencioso || !atual) {
       ui.limpar(conteudo);
-      conteudo.appendChild(ui.esqueleto("agenda", { cabecalho: false }));
+      // E5: a forma do que vem — a grade e, no «Dia» (e no celular), o cartão do painel do dia
+      const grade = ui.esqueleto("agenda", { cabecalho: false });
+      if (!movel && modo === "dia") conteudo.appendChild(h("div", { class: "ag-dia-layout" }, grade, ui.esqueleto("cartao")));
+      else conteudo.append(...[grade, movel ? ui.esqueleto("cartao") : null].filter(Boolean));
     }
     try {
       let doCache = false;
       const r = await api.rpcC("nx_agenda_dia", { p_data: iv.de, p_dias: iv.dias }, { cache: true, aoCache: dc => {
         // M16/M30: a 1ª pintura é a última agenda guardada para este período; a rede atualiza em seguida
         if (!vivo || minha !== sequencia || atual || !dc || typeof dc !== "object") return;
-        atual = dc; chaveAtual = chave; doCache = true;
+        atual = dc; chaveAtual = chave; doCache = !!Lg;      // desenhado sem a crm-logica (sem presença): a rede redesenha mesmo igual
         desenhar();
       } });
+      if (!vivo || minha !== sequencia) return false;
+      await lgPronto;                                                          // a presença (E1) precisa da crm-logica: já veio em paralelo
       if (!vivo || minha !== sequencia) return false;
       const igual = doCache && JSON.stringify(atual) === JSON.stringify(r);     // nada mudou desde o guardado: não refaz a grade
       atual = r || { consultas: [], bloqueios: [] };
@@ -1115,7 +1242,8 @@ export async function montar(ctx) {
   function desenhar() {
     ui.limpar(conteudo);
     seqBloco = 0;
-    const consultas = Array.isArray(atual.consultas) ? atual.consultas : [];
+    // linhas de servidor antigo (sem `presenca`): vale o que já foi lido da ficha (E1)
+    const consultas = (Array.isArray(atual.consultas) ? atual.consultas : []).map(comPresencaLida);
     const bloqueios = Array.isArray(atual.bloqueios) ? atual.bloqueios : [];
     const config = atual.config || {};
     const iv = intervalo();
@@ -1150,11 +1278,15 @@ export async function montar(ctx) {
     const donos = new Set(consultasDoDia(consultas, data).map(c => c.dono_id || "sem"));
     const porDono = !movel && modo === "dia" && donos.size >= 2;
     const temResponsaveis = consultas.some(c => c.dono_id);
-    if (temResponsaveis && !nomesDonos) carregarNomes().then(() => { if (vivo && atual) desenhar(); });   // os nomes chegam uma vez; a legenda redesenha com eles
+    // E2: os nomes vêm nas linhas (dono_nome); a base do CRM só é lida se alguma linha não trouxer o campo (servidor antigo)
+    const precisaNomes = faltamNomes(consultas);
+    nomesAtuais = { ...(nomesDonos || {}), ...nomesDasConsultas(consultas) };
+    if (precisaNomes && !nomesDonos) carregarNomes().then(() => { if (vivo && atual) desenhar(); });   // os nomes chegam uma vez; a legenda redesenha com eles
     const ocup = ocupacaoDoPeriodo(visiveis, mostrados, config);
 
     // próxima consulta: do período carregado (pode ser em outro dia da semana); tocar leva até ela. Sem próxima, o texto diz o período que de fato
-    // foi olhado — a semana carregada (semana e celular) ou o dia («Dia» no desktop) —, sem prometer nada além dele (a de amanhã pode estar na semana seguinte)
+    // foi olhado — a semana carregada (semana e celular) ou o dia («Dia» no desktop) — e, com o período já começado, UMA leitura dos 7 dias
+    // seguintes (E3, guardada por período) completa: «amanhã às 10:00», «sexta às 14:00» ou «nenhuma nos 7 dias seguintes»
     const proxima = proximaAtual;
     const umDia = iv.dias === 1;
     const chipProxima = proxima
@@ -1163,6 +1295,8 @@ export async function montar(ctx) {
       : h("span", { class: "agenda-proxima agenda-proxima-vazia narr" }, consultas.length
         ? `Nenhuma consulta por vir ${umDia ? "neste dia" : "nesta semana"}.`
         : `${umDia ? "Dia livre" : "Semana livre"} — nenhuma consulta marcada.`);
+    const caixaProxima = h("span", { class: "agenda-proxima-caixa" }, chipProxima);
+    if (!proxima) completarProxima(caixaProxima, { de: inicioBuscaProxima(iv.de, iv.dias, hoje), umDia, hoje, chave: chaveAtual });
 
     const resumo = h("section", { class: "agenda-resumo", "aria-label": "Resumo do período" },
       h("div", { class: "agenda-resumo-data" },
@@ -1174,17 +1308,22 @@ export async function montar(ctx) {
         h("span", null, h("b", { class: "dado", dataset: { valor: String(nBloq) } }, ui.num(nBloq)), ` ${nBloq === 1 ? "bloqueio" : "bloqueios"}`),
         ocup === null ? null : h("span", { class: "agenda-resumo-ocup", title: "Horas marcadas sobre o expediente dos dias mostrados" },
           anelOcupacao(h, { pct: ocup }, { tamanho: 22 }), h("b", { class: "dado" }, `${Math.round(ocup * 100)}%`), " ocupado")),
-      chipProxima);
+      caixaProxima);
 
     // legenda das cores: por serviço ou por profissional (a troca só aparece quando há responsáveis nas consultas)
-    const itensLegenda = legendaDe(visiveis, { por: corPor, nomes: nomesDonos || {} });
+    const itensLegenda = legendaDe(visiveis, { por: corPor, nomes: nomesAtuais });
     const legenda = itensLegenda.length >= 2 || legendaAtivos.size ? h("div", { class: "ag-legenda-linha" },
       temResponsaveis ? ui.segmentado({ opcoes: [{ valor: "servico", rotulo: "Por serviço" }, { valor: "profissional", rotulo: "Por profissional" }], valor: corPor, tipo: "filtro", rotulo: "Cor dos blocos", classe: "ag-legenda-por",
         aoMudar: v => { corPor = v; legendaAtivos = new Set(); gravarPreferencias(); desenhar(); } }) : null,
-      montarLegenda({ h, itens: itensLegenda, ativos: legendaAtivos, num: ui.num, aoAlternar: it => { legendaAtivos = it ? alternarLegenda(legendaAtivos, it) : new Set(); desenhar(); } })) : null;
+      montarLegenda({ h, itens: itensLegenda, ativos: legendaAtivos, num: ui.num, avatar: corPor === "profissional" && typeof ui.avatar === "function" ? ui.avatar : null,
+        aoAlternar: it => { legendaAtivos = it ? alternarLegenda(legendaAtivos, it) : new Set(); desenhar(); } })) : null;
 
+    // E1: «Compareceu / Faltou» nas consultas que já passaram (servidor sem nx_agenda_presenca → some); E5: vazio com a ilustração da agenda
+    const presencaPainel = Lg && !semPresenca ? { L: Lg, aoMarcar: marcarPresenca, icone: ui.icone } : null;
     const painel = () => montarPainelDia({ h, iso: data, consultas, config, hoje, horaBR: ui.horaBR, num: ui.num, pode: ctx.pode("atendente"),
+      presenca: presencaPainel, vazio: typeof ui.vazio === "function" ? ui.vazio : null,
       aoAbrir: (c, bt) => abrirDetalhe(c, bt), aoMarcar: iso => abrirAgendamento(null, { dia: iso }) });
+    if (presencaPainel) lerPresencasQueFaltam(consultasDoDia(consultas, data));
 
     if (movel) {
       const r = resumoDoDia(consultas, data, config);
@@ -1195,9 +1334,9 @@ export async function montar(ctx) {
       let colunas;
       if (modo === "dia" && porDono && agrupar === "responsavel") {
         const ordem = [...donos].sort((a, b) => (a === "sem") - (b === "sem") || String(a).localeCompare(String(b)));
-        colunas = ordem.map(d => ({ iso: data, chave: String(d), dono: d, rotulo: d === "sem" ? "Sem responsável" : "Responsável", titulo: d === "sem" ? "Sem responsável" : "…",
+        colunas = ordem.map(d => ({ iso: data, chave: String(d), dono: d, rotulo: d === "sem" ? "Sem responsável" : (nomesAtuais[d] || "Responsável"), titulo: d === "sem" ? "Sem responsável" : (nomesAtuais[d] || "…"),
           consultas: consultasDoDia(consultas, data).filter(c => (c.dono_id || "sem") === d), bloqueios: bloqueiosDoDia(bloqueios, data), hoje: data === hoje }));
-        carregarNomes().then(n => { if (!vivo) return; for (const t of conteudo.querySelectorAll("[data-dono]")) { const id = t.dataset.dono; if (id !== "sem") t.textContent = n[id] || "Responsável"; } });
+        if (precisaNomes) carregarNomes().then(n => { if (!vivo) return; for (const t of conteudo.querySelectorAll("[data-dono]")) { const id = t.dataset.dono; if (id !== "sem") t.textContent = nomesAtuais[id] || n[id] || "Responsável"; } });
       } else {
         colunas = mostrados.map(iso => ({ iso, chave: iso, rotulo: `${nomeDia(iso, true)} ${ui.dataBR(iso)}`, consultas: consultasDoDia(consultas, iso),
           bloqueios: bloqueiosDoDia(bloqueios, iso), hoje: iso === hoje }));
@@ -1361,14 +1500,14 @@ export async function montar(ctx) {
     const nome = c.nome || c.titulo || "Consulta sem nome";
     const inicio = ui.horaBR(c.inicio), fim = c.fim ? ui.horaBR(c.fim) : "";
     const curto = b.altura <= 0.6;          // até ~35 min: uma linha só (hora + nome); acima, o procedimento vem numa 2ª linha
-    const k = corDaConsulta(c, corPor, nomesDonos || {});
+    const k = corDaConsulta(c, corPor, nomesAtuais);
     const cor = k.cor;
     const feita = c.status === "ganho";
     const ehProxima = !!proximaAtual && proximaAtual === c;
     const arrastavel = podeArrastar({ pointerType: "mouse", movel, pode: ctx.pode("atendente"), consulta: c });
     const apagado = legendaAtivos.size > 0 && !legendaAtivos.has(k.chave);
     const bt = h("button", { type: "button", class: ["ag-bloco", curto && "curto", feita && "feita", arrastavel && "ag-arrastavel"], "aria-haspopup": "dialog",
-      "aria-label": `${inicio}${fim ? ` às ${fim}` : ""}, ${nome}${c.servico ? `, ${c.servico}` : ""}${feita ? ", concluída" : ""}${ehProxima ? ", próxima consulta" : ""}`,
+      "aria-label": `${inicio}${fim ? ` às ${fim}` : ""}, ${nome}${c.servico ? `, ${c.servico}` : ""}${feita ? ", concluída" : ""}${c.presenca === "compareceu" ? ", compareceu" : c.presenca === "faltou" ? ", faltou" : ""}${ehProxima ? ", próxima consulta" : ""}`,
       title: [`${inicio}${fim ? `–${fim}` : ""}`, nome, c.servico, corPor === "profissional" ? k.rotulo : null, arrastavel ? "Arraste para remarcar" : null].filter(Boolean).join(" · ") },
       h("span", { class: "ag-bloco-l1" }, h("span", { class: "ag-bloco-hora dado" }, inicio), h("b", { class: "ag-bloco-nome" }, nome)),
       c.servico ? h("span", { class: "ag-bloco-serv" }, c.servico) : null,
@@ -1378,7 +1517,7 @@ export async function montar(ctx) {
       if (ignorarClique) { ignorarClique = false; return; }   // o clique que fecha um arrasto não abre o detalhe
       abrirDetalhe(c, bt);
     });
-    const item = h("li", { class: ["ag-item", ehProxima && "ag-proxima", apagado && "apagado"], dataset: { cols: b.cols, chave: k.chave },
+    const item = h("li", { class: ["ag-item", ehProxima && "ag-proxima", apagado && "apagado"], dataset: { cols: b.cols, chave: k.chave, negocio: c.negocio_id ?? null },
       style: { "--t": String(b.topo), "--d": String(b.altura), "--col": String(b.col), "--cols": String(b.cols), "--cor-bloco": `var(--pal-${cor})`, "--i": String(seqBloco++) } },
       ehProxima ? h("span", { class: "ag-proxima-selo", "aria-hidden": "true" }, "Próxima") : null, bt);
     if (arrastavel) bt.addEventListener("pointerdown", ev => iniciarArrasto(ev, bt, item, c, col));
@@ -1538,12 +1677,12 @@ export async function montar(ctx) {
       } },
     ] });
     if (!(r && r.ok)) return;
-    const anterior = c.inicio, servico = c.servico || null, negocioId = c.negocio_id, etapaAntes = antes;
-    recarregar();
+    const anterior = c.inicio, servico = c.servico || null, negocioId = c.negocio_id, etapaAntes = antes, encaixeAntes = typeof c.encaixe === "boolean" ? c.encaixe : undefined;
+    recarregar().then(() => { if (vivo) confirmarNoBloco(negocioId, "Consulta remarcada"); });   // E5: o bloco no horário novo confirma
     ui.acaoComDesfazer({
       texto: `Remarcada para ${rotuloDoDia(d.iso, hoje)} às ${d.hora}`,
       reverter: async () => {
-        await voltarAoHorario(api, negocioId, anterior, servico);
+        await voltarAoHorario(api, negocioId, anterior, servico, encaixeAntes);
         // remarcar levou o cartão para «Agendada» (resposta com «etapa»): volta para a etapa em que estava, com a mesma rotina da janela
         if (r.etapa && !(await devolverEtapa(api, negocioId, etapaAntes)))
           ui.toast("A consulta voltou ao horário, mas o cartão não voltou para a etapa em que estava. Confira no CRM.", { tipo: "info" });
@@ -1583,17 +1722,189 @@ export async function montar(ctx) {
   }
   const relogio = setInterval(posicionarAgora, 60_000);
 
-  /** Detalhe da consulta ao tocar no bloco: quem, quando, telefone (toque para ligar), origem e as ações (Abrir conversa, Abrir negócio, Remarcar, Desmarcar). */
+  /* ============================================================ E1 · presença (nx_agenda_presenca, contrato 6) */
+  const chavePresenca = c => `${c.negocio_id}|${c.inicio}`;
+  /** Linha sem o campo `presenca` (servidor antigo): uma cópia com o que já foi lido da ficha; com o campo, a própria linha. */
+  function comPresencaLida(c) {
+    if (!c || Object.hasOwn(c, "presenca") || !presencasLidas.has(chavePresenca(c))) return c;
+    return { ...c, presenca: presencasLidas.get(chavePresenca(c)) };
+  }
+  /** Servidor antigo: a presença das consultas passadas vem da ficha (nx_negocio_ver.campos.presenca), uma leitura por consulta (até 12 por vez). */
+  function lerPresencasQueFaltam(lista) {
+    if (!Lg || semPresenca) return Promise.resolve(false);
+    const faltam = (lista || []).filter(c => { const p = presencaDaConsulta(c, Lg); return p.possivel && !p.conhecida && !lendoPresenca.has(chavePresenca(c)); }).slice(0, 12);
+    if (!faltam.length) return Promise.resolve(false);
+    for (const c of faltam) lendoPresenca.add(chavePresenca(c));
+    return Promise.all(faltam.map(c => api.rpcC("nx_negocio_ver", { p_id: c.negocio_id })
+      .then(d => { presencasLidas.set(chavePresenca(c), Lg.presencaDe(d && d.negocio)); })
+      .catch(() => { presencasLidas.set(chavePresenca(c), null); })))
+      .then(() => { if (vivo && atual) desenhar(); return true; });
+  }
+  /** Grava a presença na linha em mãos (o redesenho já mostra) e na memória das linhas de servidor antigo. */
+  function guardarPresenca(c, estado) {
+    presencasLidas.set(chavePresenca(c), estado);
+    const linha = atual && Array.isArray(atual.consultas) ? atual.consultas.find(x => x && x.negocio_id === c.negocio_id && x.inicio === c.inicio) : null;
+    if (linha && Object.hasOwn(linha, "presenca")) linha.presenca = estado;
+  }
+  /** «Compareceu / Faltou»: tocar de novo no marcado limpa; «Desfazer» devolve a marca de antes («limpar» se não havia) e, se «faltou» levou o
+      negócio à etapa de faltas, a etapa de antes (lida da ficha ANTES de gravar). Servidor sem a função → os botões somem nesta tela. */
+  async function marcarPresenca(c, est, botao) {
+    if (!Lg || semPresenca || !ctx.pode("atendente") || !c) return;
+    const anterior = Lg.presencaDe(c);
+    const pedido = Lg.proximaPresenca(anterior, est);
+    const nome = c.nome || c.titulo || "Consulta";
+    let etapaAntes = null, r;
+    try {
+      r = await ui.carregando(botao, async () => {
+        if (pedido === "faltou" && c.marco !== "faltou") etapaAntes = await lerEtapa(api, c.negocio_id);
+        return api.rpcC("nx_agenda_presenca", { p_negocio: c.negocio_id, p_estado: pedido });
+      });
+    } catch (e) {
+      if (Lg.rpcAusente(e)) {
+        semPresenca = true; limparComandoPresenca();
+        ui.toast("O servidor ainda não registra a presença da consulta. Assim que a atualização estiver no ar, os botões voltam.", { tipo: "info" });
+        if (vivo && atual) desenhar();
+        return;
+      }
+      ui.toast(api.mensagemErro(e), { tipo: "erro" });
+      return;
+    }
+    const novo = r && Object.hasOwn(r, "presenca") ? Lg.presencaDe(r) : (pedido === "limpar" ? null : pedido);
+    guardarPresenca(c, novo);
+    const moveu = !!(etapaAntes && r && r.estagio_id != null && String(r.estagio_id) !== String(etapaAntes.estagio_id));
+    if (vivo && atual) { desenhar(); recarregar(); }
+    const texto = pedido === "limpar" ? `Presença de ${nome} limpa`
+      : `${nome} · ${pedido === "faltou" ? "faltou" : "compareceu"}${moveu ? " · foi para a etapa de faltas" : ""}`;
+    ui.acaoComDesfazer({ texto, reverter: async () => {
+      await api.rpcC("nx_agenda_presenca", { p_negocio: c.negocio_id, p_estado: Lg.voltaPresenca(anterior) });
+      guardarPresenca(c, anterior);
+      if (moveu && !(await devolverEtapa(api, c.negocio_id, etapaAntes)))
+        ui.toast("A presença voltou, mas o negócio não voltou para a etapa em que estava. Confira no CRM.", { tipo: "info" });
+      if (vivo && atual) { desenhar(); recarregar(); }
+    } });
+  }
+  function limparComandoPresenca() {
+    if (typeof desregistrarPresenca === "function") try { desregistrarPresenca(); } catch { /* ok */ }
+    desregistrarPresenca = null;
+  }
+  /** A consulta do detalhe aberto é a «selecionada»: se cabe presença, a paleta (Ctrl/⌘+K) ganha «Presença da consulta» (A13); senão sai. */
+  function selecionarConsulta(c) {
+    consultaSelecionada = c;
+    const p = Lg && !semPresenca && ctx.pode("atendente") ? presencaDaConsulta(c, Lg) : null;
+    if (!p || !p.possivel) { limparComandoPresenca(); return; }
+    if (!desregistrarPresenca && ctx.comandos && typeof ctx.comandos.registrar === "function")
+      desregistrarPresenca = ctx.comandos.registrar({ id: "agenda.presenca", fazer: () => perguntarPresenca(consultaSelecionada) });
+  }
+  /** O comando da paleta: janela curta com «Compareceu», «Faltou» e, se já marcada, «Limpar marcação». */
+  async function perguntarPresenca(c) {
+    if (!c || !Lg || !vivo) return;
+    const viva = (atual && Array.isArray(atual.consultas) ? atual.consultas.map(comPresencaLida).find(x => x && x.negocio_id === c.negocio_id && x.inicio === c.inicio) : null) || c;
+    const estado = Lg.presencaDe(viva);
+    const nome = viva.nome || viva.titulo || "Consulta";
+    const escolha = await ui.modal({ titulo: "Presença da consulta", largura: "p", protegerTexto: false,
+      corpo: h("p", null, `${nome} · ${ui.dataHoraBR(viva.inicio)}${estado ? ` · marcada como «${Lg.PRESENCAS[estado].rotulo}»` : ""}`),
+      acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: null },
+        estado ? { rotulo: "Limpar marcação", tipo: "neutro", valor: "limpar" } : null,
+        { rotulo: Lg.PRESENCAS.faltou.rotulo, tipo: "neutro", valor: "faltou" },
+        { rotulo: Lg.PRESENCAS.compareceu.rotulo, tipo: "primario", valor: "compareceu" }].filter(Boolean) });
+    if (!escolha || !vivo || escolha === estado) return;
+    await marcarPresenca(viva, escolha === "limpar" ? estado : escolha, null);
+  }
+
+  /* ============================================================ E3 · próxima consulta fora do período; E5 · confirmação no bloco */
+  /** Sem próxima no período: UMA leitura dos 7 dias seguintes (nx_agenda_dia, guardada por período) troca o texto pelo chip da próxima
+      («amanhã às 10:00», «sexta às 14:00») ou por «nenhuma nos 7 dias seguintes». Falha de leitura: fica o texto do período. */
+  function completarProxima(caixa, { de, umDia, hoje, chave }) {
+    if (!de || (!movel && modo === "mes")) return;
+    let e = proximasFora.get(de);
+    if (!e) {
+      e = { pronto: false, valor: null, p: null };
+      const meu = e;
+      e.p = api.rpcC("nx_agenda_dia", { p_data: de, p_dias: 7 })
+        .then(r => { meu.valor = proximaConsulta(Array.isArray(r && r.consultas) ? r.consultas : []); meu.pronto = true; })
+        .catch(() => { if (proximasFora.get(de) === meu) proximasFora.delete(de); });
+      proximasFora.set(de, e);
+    }
+    const pintar = sincrono => {
+      if (!vivo || !e.pronto || chaveAtual !== chave || (!sincrono && !caixa.isConnected)) return;
+      const px = e.valor;
+      ui.limpar(caixa);
+      caixa.appendChild(px
+        ? h("button", { type: "button", class: "agenda-proxima agenda-proxima-fora", on: { click: () => irParaConsultaFora(px) } },
+          h("span", { class: "agenda-proxima-rot" }, "Próxima"), h("b", null, px.nome || px.titulo || "Consulta"), h("span", { class: "dado agenda-proxima-quando" }, rotuloProximaFora(px, Date.now(), hoje)))
+        : h("span", { class: "agenda-proxima agenda-proxima-vazia narr" }, textoSemProxima({ umDia, desde: de, hojeISO: hoje })));
+    };
+    if (e.pronto) pintar(true); else e.p.then(() => pintar(false));
+  }
+  /** Leva a tela ao dia da próxima consulta (outro período: uma leitura nova) e põe o foco no bloco dela. */
+  async function irParaConsultaFora(c) {
+    const p = partesSP(c && c.inicio);
+    if (!p || !vivo) return;
+    data = p.dia; gravarPreferencias();
+    if (!(await carregar()) || !vivo) return;
+    const alvo = blocoDaTela(c.negocio_id);
+    if (!alvo) return;
+    try { alvo.scrollIntoView({ block: "center", behavior: ui.comportamentoRolagem() }); } catch { /* ok */ }
+    try { alvo.focus({ preventScroll: true }); } catch { alvo.focus(); }
+  }
+  /** O bloco (ou o item do painel) da consulta deste negócio na tela, ou null. */
+  function blocoDaTela(id) {
+    if (id === null || id === undefined) return null;
+    const v = String(id).replace(/["\\]/g, "");
+    return conteudo.querySelector(`.ag-item[data-negocio="${v}"] .ag-bloco`) || conteudo.querySelector(`.ag-painel-li[data-negocio="${v}"] .ag-painel-item`);
+  }
+  /** E5: marcou ou remarcou — o bloco da consulta, já no lugar novo, confirma com o check (ui.checkSucesso). */
+  function confirmarNoBloco(id, texto) {
+    const alvo = blocoDaTela(id);
+    if (alvo && typeof ui.checkSucesso === "function") ui.checkSucesso(alvo, { texto });
+    return !!alvo;
+  }
+
+  /* ============================================================ E6 · «Lembrar» */
+  const copiarSemAviso = async t => { try { return typeof ui.copiar === "function" ? !!(await ui.copiar(t, { aviso: null })) : false; } catch { return false; } };
+  /** Abre a conversa do contato com o lembrete pronto no campo (rascunho da conversa; o composer mostra «Rascunho restaurado»). Nada é enviado
+      sozinho. Sem conversa, ou com um rascunho da pessoa lá, o texto vai para a área de transferência (o rascunho dela nunca é sobrescrito). */
+  async function lembrar(c) {
+    const texto = textoLembrete(c, ui.hojeSP());
+    if (!texto || !c || !c.contato_id) return;
+    let conv = null;
+    try { const r = await api.rpcC("nx_contato_ver", { p_id: c.contato_id }); conv = conversaDoContato(r && r.conversas); }
+    catch { /* sem a ficha: a rota por contato escolhe a conversa */ }
+    if (!vivo) return;
+    const chave = conv ? `conversa:${conv.id}` : null;
+    const jaTinha = !!(chave && ctx.rascunho && typeof ctx.rascunho.existe === "function" && ctx.rascunho.existe(chave));
+    const pronto = chave && !jaTinha ? prepararRascunho(ctx.rascunho, chave, texto) : false;
+    const copiado = pronto ? false : await copiarSemAviso(texto);
+    ctx.navegar(conv ? `#/conversas/${encodeURIComponent(conv.id)}` : `#/conversas?contato=${encodeURIComponent(c.contato_id)}`);
+    ui.toast(pronto ? "Lembrete pronto no campo da conversa — confira e envie."
+      : jaTinha ? (copiado ? "A conversa já tinha um rascunho: o lembrete foi copiado para você colar." : `A conversa já tinha um rascunho. Lembrete: ${texto}`)
+        : copiado ? "Lembrete copiado — cole na conversa e envie." : `Lembrete: ${texto}`, { tipo: "info", ms: 7000 });
+  }
+
+  /** Detalhe da consulta ao tocar no bloco: quem, quando, telefone (toque para ligar), origem, presença (E1, consulta que já passou) e as ações
+      (Abrir conversa, Lembrar, Abrir negócio, Remarcar, Desmarcar). Abrir o detalhe «seleciona» a consulta para a paleta. */
   function abrirDetalhe(c, ancora) {
     const nome = c.nome || c.titulo || "Consulta sem nome";
     const p = partesSP(c.inicio);
     const hrefTel = c.telefone && Lg ? Lg.hrefTel(c.telefone) : null;
     const comConversas = !!(c.contato_id && ctx.temModulo && ctx.temModulo("conversas"));
+    const pode = ctx.pode("atendente");
+    const futura = Date.parse(c.inicio) > Date.now() && c.status !== "ganho";
+    selecionarConsulta(c);
+    const pr = Lg && !semPresenca ? presencaDaConsulta(c, Lg) : null;
+    const presencaEl = pr && pr.possivel ? montarPresenca({ h, c, estado: pr.estado, icone: ui.icone, rotulos: Lg.PRESENCAS, desabilitado: !pode,
+      aoMarcar: (cc, est, b) => { pop.fechar(); marcarPresenca(cc, est, b); } }) : null;
+    if (presencaEl && !pr.conhecida) lerPresencasQueFaltam([c]).then(() => {
+      const est = presencasLidas.get(chavePresenca(c)) || null;
+      for (const b of presencaEl.querySelectorAll(".ag-pres-bt")) b.setAttribute("aria-pressed", String(b.dataset.estado === est));
+    });
     const acoes = h("div", { class: "ag-det-acoes" },
       comConversas ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { pop.fechar(); ctx.navegar(`#/conversas?contato=${encodeURIComponent(c.contato_id)}`); } } }, ui.icone("whatsapp"), "Abrir conversa") : null,
+      comConversas && pode && futura ? h("button", { type: "button", class: "bt bt-sec bt-p ag-det-lembrar", title: "Abre a conversa com o lembrete pronto no campo: você confere e envia",
+        on: { click: () => { pop.fechar(); lembrar(c); } } }, ui.icone("sino"), "Lembrar") : null,
       h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { pop.fechar(); ctx.navegar(`#/crm/negocio/${encodeURIComponent(c.negocio_id)}`); } } }, "Abrir negócio"),
-      ctx.pode("atendente") ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { pop.fechar(); abrirAgendamento(c); } } }, "Remarcar") : null,
-      ctx.pode("atendente") ? h("button", { type: "button", class: "bt bt-contorno-perigo bt-p", on: { click: () => { pop.fechar(); desmarcar(c); } } }, "Desmarcar") : null);
+      pode ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { pop.fechar(); abrirAgendamento(c); } } }, "Remarcar") : null,
+      pode ? h("button", { type: "button", class: "bt bt-contorno-perigo bt-p", on: { click: () => { pop.fechar(); desmarcar(c); } } }, "Desmarcar") : null);
     const corpo = h("div", { class: "ag-det" },
       h("b", { class: "ag-det-nome" }, nome),
       h("span", { class: "ag-det-quando dado" }, `${p ? nomeDia(p.dia) : ""} · ${ui.horaBR(c.inicio)}${c.fim ? `–${ui.horaBR(c.fim)}` : ""}`),
@@ -1602,6 +1913,7 @@ export async function montar(ctx) {
         ? h("a", { class: "dado ag-det-tel", href: hrefTel, "aria-label": `Ligar para ${nome}, ${ui.telBR(c.telefone)}` }, ui.icone("telefone"), ui.telBR(c.telefone))
         : h("span", { class: "dado" }, ui.telBR(c.telefone))) : null,
       h("span", { class: "ag-det-origem" }, [origemDo(c), c.etapa || (c.marco === "agendada" ? "Agendada" : null)].filter(Boolean).join(" · ")),
+      presencaEl,
       acoes);
     const pop = ui.flutuante(ancora, corpo, { classe: "flut-ag" });
     return pop;
@@ -1610,7 +1922,11 @@ export async function montar(ctx) {
   /* ============================================================ marcar / remarcar / desmarcar (as janelas são marcarConsulta e desmarcarConsulta) */
   const recarregar = () => carregar({ silencioso: true, forcar: true });
   /** pre = consulta a remarcar (ou null); quando = {dia, hora} do clique na grade ou do «+» do dia */
-  const abrirAgendamento = (pre = null, quando = null) => marcarConsulta(ctx, { negocio: pre, dia: quando && quando.dia, hora: quando && quando.hora, base: data, aoMudar: recarregar });
+  /** Marcou/remarcou pela janela: relê o período e o bloco da consulta confirma com o check (E5); o Desfazer (aoMudar(null)) só relê. */
+  const aoMarcado = r => recarregar().then(() => {
+    if (vivo && r && r.ok) confirmarNoBloco(r.negocio_id ?? (r.consulta && r.consulta.negocio_id), r.remarcada ? "Consulta remarcada" : "Consulta marcada");
+  });
+  const abrirAgendamento = (pre = null, quando = null) => marcarConsulta(ctx, { negocio: pre, dia: quando && quando.dia, hora: quando && quando.hora, base: data, aoMudar: aoMarcado });
   const desmarcar = c => desmarcarConsulta(ctx, c, { aoMudar: recarregar });
 
   // atravessar os 760 px (girar o aparelho, redimensionar a janela) troca de visão
@@ -1632,6 +1948,7 @@ export async function montar(ctx) {
     document.removeEventListener("keydown", aoTeclaAgenda);
     if (desarmarEngolir) desarmarEngolir();
     if (typeof desregistrar === "function") try { desregistrar(); } catch { /* ok */ }
+    limparComandoPresenca();
     clearInterval(relogio);
     if (mq.removeEventListener) mq.removeEventListener("change", aoMudarLargura);
   };

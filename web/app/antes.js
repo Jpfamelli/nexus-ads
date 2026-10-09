@@ -13,6 +13,20 @@
   var raiz = document.documentElement;
   function ler(k) { try { var s = window.localStorage.getItem(k); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
   function esquema() { try { return window.localStorage.getItem("nx-app-esquema") || "claro"; } catch (e) { return "claro"; } }
+  // o mesmo hashCurto do tema.js (FNV-1a sobre o JSON): o app.js grava `hash` junto com as vars; só o que bate é pintado (plano 100 · A5)
+  function hashCurto(obj) {
+    var s = JSON.stringify(obj || {}), h = 2166136261;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return (h >>> 0).toString(36);
+  }
+  function hashBate(entrada) { return !!(entrada && entrada.vars && typeof entrada.hash === "string" && entrada.hash === hashCurto(entrada.vars)); }
+  // favicon guardado: só imagem embutida (data:) ou endereço https do PRÓPRIO host (a marca do cliente mora no mesmo domínio que serve o app)
+  function faviconSeguro(u) {
+    if (typeof u !== "string") return false;
+    if (/^data:image\/(png|jpeg|webp);base64,/.test(u)) return true;
+    if (!/^https:\/\//.test(u) || typeof URL !== "function") return false;
+    try { return new URL(u).host === location.host; } catch (e) { return false; }
+  }
   // M13: o produto aberto (?produto=crm|ads|atendimento) marca o <html> antes da primeira pintura: o acento do produto não pisca
   try {
     var produtoAberto = new URLSearchParams(location.search).get("produto");
@@ -41,10 +55,11 @@
     var m = ler("nx-app-marca");
     var orgUrl = null;
     try { orgUrl = new URLSearchParams(location.search).get("org"); } catch (e) { orgUrl = null; }
-    if (m && (!m.host || m.host === location.host) && (!orgUrl || m.org === orgUrl)) {
+    // marca da org: entrada com hash só vale se ele bater; entrada antiga (sem hash) ainda é aceita até o app.js regravá-la
+    if (m && (!m.host || m.host === location.host) && (!orgUrl || m.org === orgUrl) && (m.hash === undefined || hashBate(m))) {
       aplicar(m.vars);
       if (typeof m.produto === "string" && m.produto) document.title = m.produto;
-      if (typeof m.favicon === "string" && /^(data:image\/(png|jpeg|webp);base64,|https:\/\/)/.test(m.favicon)) {
+      if (faviconSeguro(m.favicon)) {
         var l = document.getElementById("favicon");
         if (l) l.setAttribute("href", m.favicon);
       }
@@ -56,7 +71,8 @@
       try { cli = window.localStorage.getItem("nx-app-cliente"); } catch (e) { cli = null; }
       if (cli && /^[0-9a-f-]{36}$/.test(cli)) {
         var t = ler("nx-app-tema-" + cli);
-        if (t && t.vars) aplicar(t.vars);
+        // só com o hash batendo (e, se gravado, o mesmo host): entrada velha, de outro endereço ou mexida não pinta nada
+        if (t && hashBate(t) && (!t.host || t.host === location.host)) aplicar(t.vars);
       }
     }
   } catch (e) { /* sem cache: o app.js pinta */ }
