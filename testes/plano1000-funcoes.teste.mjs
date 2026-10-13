@@ -652,7 +652,19 @@ test("SV-017/018/019/038 vigia: número trocado avisa; pareamento abandonado nã
   assert.equal((await rodar({ alvos: [alvo({ conectado: true, caiu_em: null, inscricao: "svc_ia/webhook" })], lista: listaDestino })).zaps.length, 0);
   // SV-019: a Graph nunca responde → o aviso tem prazo próprio
   const t0 = Date.now();
-  const preso = await rodar({ prazoAvisoMs: 40, graph: (req, u) => (u.pathname.endsWith("/messages") ? new Promise((_, rej) => req.signal.addEventListener("abort", () => rej(req.signal.reason))) : null) });
+  // (CI 13/10: no Linux o teste ficava preso 30 min — a «Graph presa» agora também desiste sozinha em 5 s, com relógio REAL
+  //  e timer que segura o processo; se o prazo do envio não cortar, o teste REPROVA no assert abaixo em vez de travar o CI)
+  let abortou = false;
+  const presa = req => new Promise((_, rej) => {
+    const sinal = req.signal;
+    const fim = motivo => { clearTimeout(segura); rej(motivo); };
+    const segura = setTimeout(() => fim(new Error("graph presa: o prazo do envio não cortou")), 5000);
+    if (!sinal) return;
+    if (sinal.aborted) { abortou = true; return fim(sinal.reason); }
+    sinal.addEventListener("abort", () => { abortou = true; fim(sinal.reason); }, { once: true });
+  });
+  const preso = await rodar({ prazoAvisoMs: 40, graph: (req, u) => (u.pathname.endsWith("/messages") ? presa(req) : null) });
+  assert.ok(abortou, "o prazo do aviso (comPrazo) cancelou o envio preso");
   assert.ok(Date.now() - t0 < 3000); assert.equal(preso.r.avisos, 0);
   // SV-018: nada saiu → aviso_em recuado para tentar em ~1 h + notificação no painel
   assert.equal(preso.r.avisos_falhos, 1);
