@@ -83,6 +83,15 @@ async function guardar(cache, url) {
   return false;
 }
 
+/** Plano 1000 (AS-208): o precache baixa 4 arquivos por vez (um por vez levava minutos em rede lenta; todos de uma vez disputariam a banda
+    com a tela que a pessoa está usando). */
+const CONCORRENCIA_PRECACHE = 4;
+async function guardarEmLotes(cache, urls, n = CONCORRENCIA_PRECACHE) {
+  const fila = urls.slice();
+  const trabalhador = async () => { while (fila.length) await guardar(cache, fila.shift()); };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(n, fila.length)) }, trabalhador));
+}
+
 self.addEventListener("install", ev => {
   ev.waitUntil((async () => {
     const cache = await caches.open(NOME_CACHE);
@@ -106,9 +115,17 @@ self.addEventListener("activate", ev => {
   })());
 });
 
-const PAGINA_OFFLINE = "<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Sem conexão</title>"
-  + "<body style=\"font-family:system-ui,sans-serif;display:grid;place-content:center;min-height:100vh;margin:0;padding:2rem;text-align:center\">"
-  + "<h1 style=\"font-size:1.25rem\">Sem conexão</h1><p>Confira a internet e tente de novo.</p><p><a href=\"\">Tentar de novo</a></p>";
+/* Plano 1000 (AS-204): idioma, claro/escuro do aparelho e um «Tentar de novo» de 44 px. Estilo num <style> da própria resposta: esta página não
+   passa pela CSP do app (é gerada aqui, sem cabeçalho) e não carrega nada de fora. */
+const PAGINA_OFFLINE = "<!doctype html><html lang=\"pt-BR\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+  + "<meta name=\"color-scheme\" content=\"light dark\"><title>Sem conexão</title>"
+  // cores do SISTEMA (Canvas/CanvasText): com color-scheme light dark elas seguem o claro/escuro do aparelho, sem cor escrita aqui
+  + "<style>:root{color-scheme:light dark}"
+  + "body{font-family:system-ui,sans-serif;display:grid;place-content:center;min-height:100vh;margin:0;padding:2rem;text-align:center;background:Canvas;color:CanvasText}"
+  + "h1{font-size:1.25rem;margin:0 0 .5rem}p{opacity:.8;margin:0 0 1.25rem}"
+  + "a{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;padding:0 1.25rem;border-radius:999px;background:CanvasText;color:Canvas;font-weight:600;text-decoration:none}"
+  + "a:focus-visible{outline:3px solid Highlight;outline-offset:3px}</style>"
+  + "<body><main><h1>Sem conexão</h1><p>Confira a internet e tente de novo.</p><a href=\"\">Tentar de novo</a></main></body></html>";
 
 async function navegacao(ev) {
   const cache = await caches.open(NOME_CACHE);
@@ -172,7 +189,7 @@ self.addEventListener("message", ev => {
       for (const bruto of d.urls.slice(0, MAX_PRECACHE)) {
         try { const u = new URL(String(bruto), URL_INDEX); if (versionado(u)) lista.push(u.href); } catch (e) { /* ignora */ }
       }
-      for (const u of lista) await guardar(cache, u);
+      await guardarEmLotes(cache, lista);
     })());
   }
 });

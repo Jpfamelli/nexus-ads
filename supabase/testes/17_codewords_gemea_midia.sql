@@ -45,8 +45,8 @@ begin
 
   -- (2) sincronização: foto sem legenda (de_mim) → adota a gêmea de imagem; vídeo chega do aparelho como documento → adota a gêmea de vídeo
   j := public.nx_codewords_sync_gravar(k, cv, jsonb_build_array(
-         jsonb_build_object('id', 'REAL17F' || sfx, 'de_mim', true, 'tipo', 'imagem', 'texto', null, 'em', to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')),
-         jsonb_build_object('id', 'REAL17V' || sfx, 'de_mim', true, 'tipo', 'documento', 'texto', null, 'em', to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))));
+         jsonb_build_object('id', 'REAL17F' || sfx, 'de_mim', true, 'tipo', 'imagem', 'texto', null, 'em', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')),
+         jsonb_build_object('id', 'REAL17V' || sfx, 'de_mim', true, 'tipo', 'documento', 'texto', null, 'em', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))));
   perform pg_temp.ok((select wamid from public.nx_mensagens where id = m_foto) = 'cw:' || k::text || ':REAL17F' || sfx, 'sync: foto adotou o id real ' || j::text);
   perform pg_temp.ok((select status from public.nx_mensagens where id = m_foto) = 'enviada', 'sync: foto pendente virou enviada');
   perform pg_temp.ok((select wamid from public.nx_mensagens where id = m_video) = 'cw:' || k::text || ':REAL17V' || sfx, 'sync: vídeo (documento no aparelho) adotou o id real');

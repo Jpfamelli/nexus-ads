@@ -43,7 +43,7 @@ export const MENU = Object.freeze([
   { id: "automacoes", rota: "automacoes", rotulo: "Automações", icone: "raio" },
   { id: "relatorios", rota: "relatorios/vendas", rotulo: "Relatórios", icone: "grafico" },
   { id: "config", rota: "config", rotulo: "Configurações", icone: "engrenagem", fixo: true },
-  { id: "admin", rota: "admin/clientes", rotulo: "Admin", icone: "usuario", fixo: true },
+  { id: "admin", rota: "admin/clientes", rotulo: "Admin", icone: "escudo", fixo: true },   // plano 1000 (AS-172): «usuario» já é Usuários/Pacientes
 ]);
 
 /** Áreas com entrada própria e sessão compartilhada. A filtragem é só navegação;

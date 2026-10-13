@@ -43,15 +43,58 @@ function conversoesDe(acoes) {
 }
 const comprasDe = v => Math.max(v("omni_purchase"), v("purchase"), v("offsite_conversion.fb_pixel_purchase") + v("onsite_conversion.purchase"));
 
-async function pedir(f, url) {
-  const r = await f(url, { headers: { Accept: "application/json" } });
+// plano 1000 (SV-082): erro passageiro (5xx, limite 4/17/32/341/613, 429, «unknown error» 1/2) repete até 2× com 2 s e 8 s
+export const ESPERAS_META_MS = [2_000, 8_000];
+const CODIGOS_PASSAGEIROS = new Set([1, 2, 4, 17, 32, 341, 613]);
+const esperaPadrao = ms => new Promise(r => setTimeout(r, ms));
+
+/** «Please reduce the amount of data you're asking for» (código 1, subcódigo 1487534): a janela é grande demais para a conta. */
+export const pedidoGrandeDemais = e => e?.subcodigo === 1487534 || /reduce the amount of data/i.test(String(e?.message ?? ""));
+const passageiro = e => !pedidoGrandeDemais(e) && (e?.status >= 500 || e?.status === 429 || CODIGOS_PASSAGEIROS.has(Number(e?.codigo))
+  || /resposta ilegível/.test(String(e?.message ?? "")));
+
+/** Plano 1000 (SV-083): appsecret_proof = HMAC-SHA256(access token, app secret) em hex. Com ele (e «Exigir appsecret_proof»
+    ligado no app da Meta) um token vazado não funciona de outro servidor. Só quando a integração tem o segredo do app DONO do
+    token (cred.meta_app_secret): o segredo de outro app faria a Graph recusar toda chamada. Sem segredo → null. */
+export async function provaSegredo(token, segredo) {
+  if (!token || !segredo) return null;
+  const enc = new TextEncoder();
+  const k = await crypto.subtle.importKey("raw", enc.encode(String(segredo)), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", k, enc.encode(String(token))));
+  return Array.from(sig, b => b.toString(16).padStart(2, "0")).join("");
+}
+const comProva = (url, prova) => {
+  if (!prova) return url;
+  try { const u = new URL(url); u.searchParams.set("appsecret_proof", prova); return u.toString(); } catch { return url; }
+};
+
+/** URL sem access_token (o paging.next da Meta devolve o token na URL): o token vai só no cabeçalho. */
+export function semToken(url) {
+  try { const u = new URL(url); u.searchParams.delete("access_token"); return u.toString(); } catch { return url; }
+}
+
+/** Plano 1000 (SV-085): o token vai no cabeçalho Authorization, nunca na URL (que aparece em erros de rede, logs de proxy e
+    mensagens; o limparErro mascarava, mas era defesa tardia). */
+async function pedirUmaVez(f, url, token, prova = null) {
+  const r = await f(comProva(semToken(url), prova), { headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
   // 200 com corpo ilegível (cortado, prazo estourado) é erro, não "página vazia" com status ok
-  const corpo = await r.json().catch(e => { if (r.ok) throw new Error(`Meta API: resposta ilegível (${e?.message || e})`); return {}; });
+  const corpo = await r.json().catch(e => { if (r.ok) throw Object.assign(new Error(`Meta API: resposta ilegível (${e?.message || e})`), { status: r.status }); return {}; });
   if (!r.ok || corpo?.error) {
     const e = corpo?.error || {};
-    throw new Error(`Meta API ${r.status}: ${e.message || "erro desconhecido"}${e.code ? ` (código ${e.code})` : ""}`);
+    throw Object.assign(new Error(`Meta API ${r.status}: ${e.message || "erro desconhecido"}${e.code ? ` (código ${e.code})` : ""}`),
+      { status: r.status, codigo: e.code ?? null, subcodigo: e.error_subcode ?? null });
   }
   return corpo;
+}
+
+async function pedir(f, url, token, esperar = esperaPadrao, prova = null) {
+  for (let i = 0; ; i++) {
+    try { return await pedirUmaVez(f, url, token, prova); }
+    catch (e) {
+      if (i >= ESPERAS_META_MS.length || !passageiro(e)) throw e;
+      await esperar(ESPERAS_META_MS[i]);
+    }
+  }
 }
 
 /** A Meta desligou (2635) ou não conhece (2500 «Unknown path components», «unknown version») esta versão da Graph? */
@@ -70,7 +113,7 @@ const ordemDeVersoes = versao => [...new Set([versao, ...VERSOES_META].filter(Bo
  * @param {"campanha"|"anuncio"} nivel
  * @param {{fetch?: Function, versao?: string|null, estado?: object}} [o]  estado recebe {versao, parcial}
  */
-export async function buscarMeta(cred, nivel, de, ate, { fetch: f = globalThis.fetch, versao = null, estado = null } = {}) {
+export async function buscarMeta(cred, nivel, de, ate, { fetch: f = globalThis.fetch, versao = null, estado = null, esperar = esperaPadrao } = {}) {
   const conta = String(cred?.meta_ad_account_id || "").trim().replace(/^act_/, "");
   if (!conta) throw new Error("meta_ad_account_id não configurado");
   if (!cred.meta_access_token) throw new Error("meta_access_token não configurado");
@@ -81,16 +124,19 @@ export async function buscarMeta(cred, nivel, de, ate, { fetch: f = globalThis.f
     time_range: JSON.stringify({ since: de, until: ate }),
     time_increment: "1",
     limit: "500",
-    access_token: cred.meta_access_token,
   });
+  const token = cred.meta_access_token;
+  const prova = await provaSegredo(token, cred.meta_app_secret);
 
-  let ultimo = null;
-  for (const v of ordemDeVersoes(versao)) {
+  /** Um período numa versão: {linhas, sobrou} (sobrou = parou no teto de páginas). Plano 1000 (SV-087): «reduce the amount of
+      data» divide o período ao meio (até 1 dia) e junta as linhas — antes a rodada de 28 dias de uma conta grande falhava todo dia. */
+  async function periodo(v, de1, ate1) {
     const linhas = [];
+    params.set("time_range", JSON.stringify({ since: de1, until: ate1 }));
     let url = `${GRAPH}/${v}/act_${conta}/insights?${params}`;
     try {
       for (let paginas = 0; url && paginas < TETO_PAGINAS; paginas++) {
-        const resp = await pedir(f, url);
+        const resp = await pedir(f, url, token, esperar, prova);
         for (const d of resp.data || []) {
           if (!d.date_start || !d.campaign_id) continue;
           linhas.push({
@@ -110,18 +156,35 @@ export async function buscarMeta(cred, nivel, de, ate, { fetch: f = globalThis.f
             valor_conversao: r2(comprasDe(porTipo(d.action_values))),
           });
         }
-        url = resp.paging?.next || null;
+        url = resp.paging?.next ? semToken(resp.paging.next) : null;
       }
     } catch (e) {
+      if (pedidoGrandeDemais(e) && de1 < ate1) {
+        const dias = Math.round((Date.parse(`${ate1}T12:00:00Z`) - Date.parse(`${de1}T12:00:00Z`)) / 86400e3);
+        const meio = new Date(Date.parse(`${de1}T12:00:00Z`) + Math.floor(dias / 2) * 86400e3).toISOString().slice(0, 10);
+        const proximo = new Date(Date.parse(`${meio}T12:00:00Z`) + 86400e3).toISOString().slice(0, 10);
+        const a = await periodo(v, de1, meio), b = await periodo(v, proximo, ate1);
+        return { linhas: [...a.linhas, ...b.linhas], sobrou: a.sobrou || b.sobrou };
+      }
+      throw e;
+    }
+    return { linhas, sobrou: !!url };
+  }
+
+  let ultimo = null;
+  for (const v of ordemDeVersoes(versao)) {
+    let r;
+    try { r = await periodo(v, de, ate); }
+    catch (e) {
       // versão desligada/desconhecida: a próxima da lista; token, permissão e conta são erro da conta (sobe)
       if (versaoMetaIndisponivel(e)) { ultimo = e; continue; }
       throw e;
     }
     if (estado) {
       estado.versao = v;
-      if (url) estado.parcial = true;   // sobrou página além do teto: os dias mais recentes podem estar incompletos
+      if (r.sobrou) estado.parcial = true;   // sobrou página além do teto: os dias mais recentes podem estar incompletos
     }
-    return linhas;
+    return r.linhas;
   }
   throw ultimo || new Error("Meta API: nenhuma versão da Graph respondeu");
 }
@@ -132,14 +195,15 @@ export async function sincronizarMeta(cred, de, ate, opcoes = {}) {
 }
 
 /** Fuso, moeda e nome da conta de anúncios (uma vez por dia): {timezone, moeda, nome}. Erro sobe para quem chamou. */
-export async function contaMeta(cred, { fetch: f = globalThis.fetch, versao = null } = {}) {
+export async function contaMeta(cred, { fetch: f = globalThis.fetch, versao = null, esperar = esperaPadrao } = {}) {
   const conta = String(cred?.meta_ad_account_id || "").trim().replace(/^act_/, "");
   if (!conta || !cred?.meta_access_token) throw new Error("meta_ad_account_id ou meta_access_token não configurado");
-  const params = new URLSearchParams({ fields: "name,timezone_name,currency", access_token: cred.meta_access_token });
+  const params = new URLSearchParams({ fields: "name,timezone_name,currency" });
+  const prova = await provaSegredo(cred.meta_access_token, cred.meta_app_secret);
   let ultimo = null;
   for (const v of ordemDeVersoes(versao)) {
     try {
-      const d = await pedir(f, `${GRAPH}/${v}/act_${conta}?${params}`);
+      const d = await pedir(f, `${GRAPH}/${v}/act_${conta}?${params}`, cred.meta_access_token, esperar, prova);
       return { nome: d.name || null, timezone: d.timezone_name || null, moeda: d.currency || null };
     } catch (e) {
       if (versaoMetaIndisponivel(e)) { ultimo = e; continue; }

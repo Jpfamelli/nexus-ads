@@ -11,10 +11,10 @@ import { criarDb } from "./db.js";
 import { enviarParaTodos, normalizarTelefone, idsDoEnvio } from "./whatsapp.js";
 import { hojeSP, MESES } from "./nucleo.js";
 import {
-  ErroHttp, json, agoraDe, somaDias, limparErro, lerCorpo, autenticarCron, listarClientes,
+  ErroHttp, json, agoraDe, somaDias, limparErro, lerCorpo, exigirCorpoValido, autenticarCron, listarClientes,
   carregarModelo, emLotes, erroDeEnvio, registrarExecucao, listaDestinos, comPrazo, PRAZO_REDE_MS,
   tituloRelatorio, comTravaDoCliente, todosPulados, EM_EXECUCAO, soltandoCorpo, anonimizarEnvio,
-  traduzirErroIA, MODELO_PADRAO,
+  traduzirErroIA, registrarUsoIA, funcaoAusente, comPainelUrl, modeloIA,
 } from "./comum.js";
 
 const JANELA = 130;         // a mesma do painel (nx_dados p_dias padrão): os números batem
@@ -36,8 +36,23 @@ function noPrazo(p, ms) {
 const p2 = n => String(n).padStart(2, "0");
 const r2 = v => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 
-/** IA padrão: o SDK só é carregado aqui, e só quando há chave. */
-const iaPadrao = async opcoes => (await import("./ia.js")).leituraIA(opcoes);
+/** IA padrão: o SDK só é carregado aqui, e só quando há chave. Plano 1000 (SV-063): a versão que devolve o uso (tokens). */
+const iaPadrao = async opcoes => (await import("./ia.js")).leituraIACompleta(opcoes);
+
+/** Reserva de IA do relatório (nx_ia_reservar, acao 'relatorio', sem conta): {id} | {recusada: código} | {} (banco antigo).
+    Nunca lança: falha do banco não tira a leitura do relatório (como antes do plano 1000). */
+export async function reservarIA(db, cliente) {
+  try {
+    const r = await db.rpc("nx_ia_reservar", { p_cliente: cliente, p_conta: null, p_acao: "relatorio" });
+    if (r?.ok && r.reserva_id) return { id: r.reserva_id };
+    // 'dados_invalidos' = banco sem a ação 'relatorio' (20261013c não aplicada): segue sem reserva, como antes
+    if (!r || r.erro === "dados_invalidos") return {};
+    return { recusada: String(r.erro || "ia_indisponivel") };
+  } catch (e) {
+    if (!funcaoAusente(e)) console.error("nx-relatorio reserva de IA:", limparErro(e?.message || e));
+    return {};
+  }
+}
 
 const limparLeitura = t => String(t ?? "").replace(/\*\*/g, "*").replace(/\n{3,}/g, "\n\n").trim();
 
@@ -65,7 +80,8 @@ async function avisarSemDestino(db, cliente, tipo) {
 }
 
 async function gerar(db, cfg, cliente, ctx) {
-  const M = await carregarModelo(db, cliente, ctx.hoje, JANELA);
+  // plano 1000 (AD-020): o texto termina com o link do painel (nx_config.saas_url) quando o cliente não tem um próprio
+  const M = await carregarModelo(db, comPainelUrl(cliente, cfg), ctx.hoje, JANELA);
   const base = { cliente: cliente.slug, tipo: ctx.tipo };
   let ref, destinos, mes = null, periodo;
 
@@ -84,10 +100,18 @@ async function gerar(db, cfg, cliente, ctx) {
   }
   base.referencia = ref;
 
-  const [existente] = await db.select("nx_relatorios", {
-    cliente_id: `eq.${cliente.id}`, tipo: `eq.${ctx.tipo}`, referencia: `eq.${ref}`, select: "id,enviado_em", limit: 1,
-  });
+  const filtro = { cliente_id: `eq.${cliente.id}`, tipo: `eq.${ctx.tipo}`, referencia: `eq.${ref}`, limit: 1 };
+  let existente;
+  // enviando_em é da migração 20261013a: sem ela o PostgREST recusa a coluna (400) e vale a leitura de antes
+  try { [existente] = await db.select("nx_relatorios", { ...filtro, select: "id,enviado_em,enviando_em" }); }
+  catch (e) {
+    if (e?.status !== 400 || !/enviando_em/.test(String(e?.message ?? ""))) throw e;
+    [existente] = await db.select("nx_relatorios", { ...filtro, select: "id,enviado_em" });
+  }
   if (existente?.enviado_em && !ctx.forcar) return { ...base, ok: true, pulado: "já enviado" };
+  // plano 1000 (SV-091): reservado (enviando_em) e sem envio confirmado = a execução anterior pode ter mandado e não conseguiu
+  // registrar; nunca reenvia sozinho (só o botão com forcar)
+  if (existente?.enviando_em && !ctx.forcar) return { ...base, ok: true, pulado: "envio sem confirmação (use forçar para mandar de novo)" };
   // cliente sem anúncio rodando no período: relatório zerado no WhatsApp é só ruído
   if (!ctx.forcar && !(periodo.gasto > 0)) return { ...base, ok: true, pulado: "sem investimento no período" };
   // sem número cadastrado não é erro de todo dia (decisão 4): pula, e o admin do cliente é avisado uma vez por semana
@@ -95,27 +119,48 @@ async function gerar(db, cfg, cliente, ctx) {
 
   let leitura = null, iaErro = null, iaMotivo = null;
   if (ctx.ia) {
+    // plano 1000 (SV-063): a leitura passa pela cota do cliente e fica em nx_ia_uso (acao 'relatorio', sem conta). Sem reserva
+    // (cota do mês acabou) o relatório sai sem a leitura; banco sem a ação nova (20261013c não aplicada) segue como antes.
+    const reserva = await reservarIA(db, cliente.id);
+    const modelo = modeloIA(cfg.modelo_ia);   // plano 1000 (SV-073): modelo desconhecido → o padrão
+    const t0 = Date.now();
+    let uso = null;
     try {
+      if (reserva.recusada) throw Object.assign(new Error(`IA sem cota (${reserva.recusada})`), { semCota: true });
       const resta = Math.min(ctx.prazoIACliente, ctx.prazoIA - Date.now());
       if (resta <= 0) throw new Error("tempo esgotado");
       const contexto = ctx.tipo === "diario" ? M.contextoIA(M.R) : { ...M.contextoIA(M.R), mes_do_relatorio: mesDoRelatorio(M, mes) };
-      leitura = limparLeitura(await noPrazo(ctx.ia({ chave: cfg.anthropic_api_key, modelo: cfg.modelo_ia || MODELO_PADRAO, tipo: ctx.tipo, contexto, prazoMs: resta }), resta)) || null;
+      const r = await noPrazo(ctx.ia({ chave: cfg.anthropic_api_key, modelo, tipo: ctx.tipo, contexto, prazoMs: resta }), resta);
+      // a IA injetada pode devolver só o texto (testes, versões antigas) ou o objeto com o uso (leituraIACompleta)
+      uso = r && typeof r === "object" ? r : null;
+      leitura = limparLeitura(uso ? uso.texto : r) || null;
       if (!leitura) throw new Error("a IA não devolveu texto");
     } catch (e) {
       leitura = null;
       iaErro = limparErro(e?.message || e);
-      iaMotivo = traduzirErroIA(e).detalhe || null;
+      iaMotivo = e?.semCota ? reserva.recusada : traduzirErroIA(e).detalhe || null;
+    }
+    if (reserva.id) {
+      await registrarUsoIA(db, { reserva: reserva.id, modelo: uso?.modelo || modelo, tokensIn: uso?.tokens_in, tokensOut: uso?.tokens_out, ok: !!leitura,
+        stopReason: uso?.stop_reason, ms: uso?.ms ?? Date.now() - t0, cacheEscrita: uso?.tokens_cache_escrita, cacheLeitura: uso?.tokens_cache_leitura });
     }
   }
 
   const texto = ctx.tipo === "diario" ? M.relDiario(M.R, leitura) : M.relMensal(mes, leitura);
   const titulo = tituloRelatorio(ctx.tipo, M.NOME, ref);
+  // plano 1000 (SV-091): RESERVA a linha antes de mandar (enviando_em, coluna da 20261013a). Se o registro final falhar (banco
+  // piscou), a próxima execução acha a reserva e não manda de novo. Sem a coluna (migração não aplicada) segue como antes.
+  let reservou = false;
+  try {
+    await db.upsert("nx_relatorios", { cliente_id: cliente.id, tipo: ctx.tipo, referencia: ref, texto, destinos, enviando_em: ctx.agora.toISOString() }, "cliente_id,tipo,referencia");
+    reservou = true;
+  } catch (e) { console.error("nx-relatorio reserva:", limparErro(e?.message || e)); }
   const envio = await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo });
   // só o envio decide `erro` e `ok`: a leitura da IA é opcional, e a falha dela não é falha de um relatório entregue
   const erro = erroDeEnvio(destinos, envio);
   const enviado = envio.some(e => e.ok);
 
-  const linha = { cliente_id: cliente.id, tipo: ctx.tipo, referencia: ref, texto, leitura_ia: leitura, destinos, erro };
+  const linha = { cliente_id: cliente.id, tipo: ctx.tipo, referencia: ref, texto, leitura_ia: leitura, destinos, erro, ...(reservou ? { enviando_em: null } : {}) };
   // envio que falhou não apaga o horário (nem os wamids e a entrega) de um envio anterior que deu certo;
   // envio novo troca os wamids e zera entregue_em até o webhook confirmar a entrega deste
   if (enviado) Object.assign(linha, { enviado_em: ctx.agora.toISOString(), entregue_em: null, ...idsDoEnvio(envio) });
@@ -150,6 +195,7 @@ async function tratarRelatorio(req, env, deps) {
     // corpo antes do banco: teto de 64 KiB (resto drenado, 413 sem tocar no banco)
     const corpo = await lerCorpo(req, undefined, deps.drenagem);
     const cfg = await autenticarCron(req, db);
+    exigirCorpoValido(corpo);   // plano 1000 (SV-100): corpo ilegível nunca vira «todos os clientes»
     const tipo = corpo.tipo ?? "diario";
     if (tipo !== "diario" && tipo !== "mensal") throw new ErroHttp(400, "tipo deve ser diario ou mensal");
     const clientes = await listarClientes(db, corpo.cliente);

@@ -25,10 +25,59 @@ const CANAIS = {
       ["google_client_secret", "OAuth client secret", true], ["google_refresh_token", "Refresh token", true]],
   },
 };
-const REGRAS = [["r1", "Custo por conversa alto"], ["r2", "Campanha sem conversa"], ["r3", "Criativo com CTR baixo"], ["r4", "Fadiga de criativo"]];
+// plano 1000 (AD-235/AD-237): r5 e r6 são regras da conta inteira, desligáveis como as outras (o regrasOff salvo só guarda ids desta lista)
+// plano 1000 (AD-008, lote ads-3): o informativo de ritmo também se desliga (o núcleo checa regrasOff «ritmo»)
+export const REGRAS = [["r1", "Custo por conversa alto"], ["r2", "Campanha sem conversa"], ["r3", "Criativo com CTR baixo"], ["r4", "Fadiga de criativo"],
+  ["r5", "Investimento parou de repente"], ["r6", "CRM parou de receber as conversas do Meta"], ["ritmo", "Ritmo do orçamento"]];
 // plano 100 (decisão 5): nada de fee inventado — gestão 0 até a Nexus preencher (igual ao CFG_PADRAO do núcleo)
-const PADRAO = { cpaAlvo: 15, orcamento: 1500, fee: 0, assinatura: "" };
+// plano 1000 (AD-001/AD-072): metas também não — sem valor salvo o campo fica VAZIO (com placeholder) e salvar não grava 15/1500 inventados
+export const PADRAO = { cpaAlvo: null, orcamento: null, fee: 0, assinatura: "" };
 const soDigitos = s => String(s || "").replace(/\D/g, "");
+/** Plano 1000 (AD-074): destino de WhatsApp com DDD (10–11 dígitos) ou com DDI (12–13). */
+export const numeroWaValido = s => { const d = soDigitos(s); return d.length >= 10 && d.length <= 13; };
+/** Plano 1000 (AD-074): o número salvo exibido legível — «5512999998888» → «+55 (12) 99999-8888»; «12999998888» → «(12) 99999-8888». */
+export function formatarWa(s) {
+  const d = soDigitos(s);
+  const local = x => (x.length === 11 ? `(${x.slice(0, 2)}) ${x.slice(2, 7)}-${x.slice(7)}` : x.length === 10 ? `(${x.slice(0, 2)}) ${x.slice(2, 6)}-${x.slice(6)}` : x);
+  if (d.length === 12 || d.length === 13) return `+${d.slice(0, 2)} ${local(d.slice(2))}`;
+  return d.length === 10 || d.length === 11 ? local(d) : String(s || "");
+}
+/** Plano 1000 (AD-068): formato das credenciais antes de salvar (o erro aparecia só na próxima leitura) → texto do erro ou "". */
+export function erroCredencial(campo, valor) {
+  const v = String(valor ?? "").trim();
+  if (!v) return "";                                     // em branco = mantém o salvo
+  if (campo === "meta_ad_account_id") return /^(act_)?\d{6,20}$/.test(v) ? "" : "Use o ID da conta de anúncios: act_ seguido só de números (ex.: act_1234567890).";
+  if (campo === "meta_access_token") return /\s/.test(v) ? "O token não tem espaços: copie de novo, inteiro." : v.length < 40 ? "Token curto demais: copie o token de acesso inteiro (costuma começar com EAA)." : "";
+  if (campo === "google_customer_id" || campo === "google_login_customer_id") return soDigitos(v).length === 10 && /^[\d\s-]+$/.test(v) ? "" : "O ID do Google Ads tem 10 números (ex.: 123-456-7890).";
+  if (campo === "google_developer_token") return /\s/.test(v) || v.length < 15 ? "Developer token inválido: copie o token inteiro, sem espaços." : "";
+  if (campo === "google_client_id") return /\.apps\.googleusercontent\.com$/.test(v) ? "" : "O client ID termina em .apps.googleusercontent.com.";
+  if (campo === "google_client_secret" || campo === "google_refresh_token") return /\s/.test(v) || v.length < 10 ? "Valor inválido: copie de novo, inteiro e sem espaços." : "";
+  return "";
+}
+/** Plano 1000 (AD-246/AD-245/AD-247): o que acontece ao pedir um envio manual. → {bloqueio: texto} ou {titulo, texto}.
+    · metas e avisos editados e não salvos: bloqueia (a contagem e os números seriam os antigos);
+    · mensal: «mesmo que o resumo deste mês já tenha sido enviado» (antes «hoje»);
+    · diário sem investimento no dia: avisa que vai sair um relatório de R$ 0. */
+export function confirmacaoEnvio({ tipo, cfg = {}, sujo = false, gastoDia = null, dataDia = "" } = {}) {
+  if (sujo) return { bloqueio: "Você mudou Metas e avisos e ainda não salvou: salve antes de enviar (o envio usa os números de WhatsApp salvos)." };
+  const dest = (tipo === "mensal" ? [...(cfg.waCliente || []), ...(cfg.waGestor || [])] : (cfg.waGestor || [])).length;
+  if (!dest) return { bloqueio: "Cadastre um WhatsApp de destino em Metas e avisos antes de enviar." };
+  const onde = `no WhatsApp de ${dest} ${dest === 1 ? "destino" : "destinos"}`;
+  if (tipo === "mensal") return { titulo: "Enviar o resumo do mês?", texto: `Ele sai agora ${onde}, mesmo que o resumo deste mês já tenha sido enviado.` };
+  const zerado = gastoDia != null && !(gastoDia > 0);
+  return { titulo: "Enviar o relatório do dia?", texto: `Ele sai agora ${onde}, mesmo que já tenha sido enviado hoje.` +
+    (zerado ? ` Atenção: ${dataDia ? `em ${dataDia} ` : "no dia "}não houve investimento em anúncios — o relatório vai sair zerado (R$ 0).` : "") };
+}
+/** Plano 1000 (AD-073): serviços já usados no CRM (dados.leads[].servico), sem repetir grafia — sugestões para o valor por serviço. */
+export function servicosUsados(leads = [], max = 40) {
+  const vistos = new Map();
+  for (const l of leads || []) {
+    const s = String((l && l.servico) || "").trim();
+    const k = s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    if (s && !vistos.has(k)) vistos.set(k, s);
+  }
+  return [...vistos.values()].sort((a, b) => a.localeCompare(b, "pt-BR")).slice(0, max);
+}
 /** Valor em reais digitado do jeito brasileiro: "1.500" → 1500 · "1.500,50" → 1500.5 · "15,5" → 15.5 ·
     "15.5" → 15.5 · "" → null. (O ui.lerMoeda leria "1.500" como 1,5 — orçamento de R$ 2.000 viraria R$ 2.) */
 export function lerReais(s) {
@@ -58,7 +107,9 @@ export function textoTesteConexao(lista, canal, nome = canal) {
 export const listaIntegracoes = (r, padrao = []) => (Array.isArray(r) ? r : r && Array.isArray(r.integracoes) ? r.integracoes : padrao);
 
 export const secoesConfig = [
-  { id: "anuncios", titulo: "Anúncios", desc: "Contas da Meta e do Google ligadas aqui", grupo: "Anúncios", papelMin: "gestor", modulo: "ads", icone: "anuncio", montar: secaoAnuncios },
+  // plano 1000 (AD-070): `semAcesso` é o texto para quem chega aqui sem o papel (admin vindo de um link ou aviso) — no lugar do genérico
+  { id: "anuncios", titulo: "Anúncios", desc: "Contas da Meta e do Google ligadas aqui", grupo: "Anúncios", papelMin: "gestor", modulo: "ads", icone: "anuncio", montar: secaoAnuncios,
+    semAcesso: "As metas e as conexões de anúncios (Meta e Google) são cuidadas pela equipe de gestão que acompanha os seus anúncios. Para mudar uma meta, o orçamento ou os números que recebem os avisos, fale com essa equipe — os resultados continuam em Anúncios." },
   { id: "formulario", titulo: "Formulário do site", desc: "O formulário do site cai direto no funil", grupo: "Anúncios", papelMin: "admin", modulo: "crm", icone: "contato", montar: secaoFormulario },
 ];
 
@@ -69,18 +120,25 @@ export const secoesConfig = [
    (origem "site"), a mensagem vira nota e os admins são avisados.
    ============================================================ */
 /** Código de exemplo para colar no site (texto puro — a tela mostra por textContent). */
-export function codigoExemplo({ url, apikey, chave }) {
+/** Plano 1000 (AD-173): a origem vem do rastreio do site quando ele está instalado (window.OrbitaRastreio.dados(): utm_*, gclid,
+    fbclid… guardados na 1ª página — quem foi para /contato não perde a campanha); sem ele, da URL atual.
+    AD-176: aceite obrigatório da política de privacidade (LGPD). AD-177: telefone com teclado numérico e formato mínimo. */
+export function codigoExemplo({ url, apikey, chave, politica = "/politica-de-privacidade" }) {
   return `<form id="form-contato">
-  <input name="nome" placeholder="Seu nome" required>
-  <input name="telefone" placeholder="WhatsApp com DDD" required>
+  <input name="nome" placeholder="Seu nome" autocomplete="name" required>
+  <input name="telefone" type="tel" inputmode="tel" autocomplete="tel" placeholder="WhatsApp com DDD" pattern="[0-9()+ .-]{10,20}" title="WhatsApp com DDD, só números (ex.: 12 99999-8888)" required>
   <input name="email" type="email" placeholder="E-mail (opcional)">
   <textarea name="mensagem" placeholder="Como podemos ajudar?"></textarea>
+  <label><input name="aceite" type="checkbox" required> Li e aceito a <a href="${politica}" target="_blank" rel="noopener">política de privacidade</a>.</label>
   <button type="submit">Enviar</button>
 </form>
 <script>
 document.getElementById("form-contato").addEventListener("submit", async (e) => {
   e.preventDefault();
   const form = e.target, f = new FormData(form), u = new URLSearchParams(location.search);
+  const rastreio = (window.OrbitaRastreio && typeof window.OrbitaRastreio.dados === "function" && window.OrbitaRastreio.dados()) || {};
+  const origem = {};
+  for (const k of ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "gclid", "fbclid"]) origem[k] = rastreio[k] || u.get(k) || null;
   form.querySelector("button").disabled = true;
   let ok = false;
   try {
@@ -89,8 +147,7 @@ document.getElementById("form-contato").addEventListener("submit", async (e) => 
       headers: { "Content-Type": "application/json", apikey: "${apikey}" },
       body: JSON.stringify({ p_chave: "${chave}", p_dados: {
         nome: f.get("nome"), telefone: f.get("telefone"), email: f.get("email"),
-        mensagem: f.get("mensagem"), servico: f.get("servico"),
-        utm_source: u.get("utm_source"), utm_campaign: u.get("utm_campaign") } })
+        mensagem: f.get("mensagem"), servico: f.get("servico"), aceite_privacidade: f.get("aceite") === "on", ...origem } })
     });
     ok = r.ok;
   } catch (erro) { ok = false; }
@@ -252,9 +309,10 @@ async function secaoAnuncios(ctx, alvo) {
   ui.carregarCss("relatorios.css");
   ui.limpar(alvo);
   alvo.append(ui.esqueleto("cartoes", 3));
-  let integ, dados, L;
+  let integ, dados, L, N;
   try {
-    [integ, dados, L] = await Promise.all([api.rpcC("nx_integracoes_status", {}), api.rpcC("nx_dados", { p_dias: 7 }), import(`./rel-logica.js?v=${ctx.versao}`)]);
+    [integ, dados, L, N] = await Promise.all([api.rpcC("nx_integracoes_status", {}), api.rpcC("nx_dados", { p_dias: 7 }), import(`./rel-logica.js?v=${ctx.versao}`),
+      import(`../nucleo.js?v=${ctx.versao}`)]);
   } catch (e) {
     ui.limpar(alvo);
     alvo.append(ui.erroCartao(e, () => secaoAnuncios(ctx, alvo)));
@@ -328,6 +386,7 @@ async function secaoAnuncios(ctx, alvo) {
       h("div", { class: "form-grade" }, d.campos.map(([k, rot, secreto, ph]) => ui.campo({
         nome: k, rotulo: pre.has(k) ? `${rot} · ✓ preenchido` : rot, tipo: secreto ? "senha" : "texto",
         placeholder: pre.has(k) ? "em branco = mantém o atual" : (ph || ""), autocomplete: secreto ? "new-password" : "off",
+        validar: v => erroCredencial(k, v),            // plano 1000 (AD-068): formato conferido ao sair do campo e ao salvar
       }))),
       h("div", { class: "linha linha-fim cfga-canal-acoes" }, testar, h("button", { type: "submit", class: "bt bt-prim" }, `Salvar ${d.curto}`)),
       resultado);
@@ -348,7 +407,16 @@ async function secaoAnuncios(ctx, alvo) {
     });
     form.addEventListener("submit", async ev => {
       ev.preventDefault();
+      // AD-068: credencial com formato errado para aqui, no campo (antes o erro só aparecia na próxima leitura)
+      if (typeof ui.validarForm === "function" && !ui.validarForm(form)) return;
       const v = ui.lerForm(form), cred = {};
+      for (const [k] of d.campos) { const msg = erroCredencial(k, v[k]); if (msg) return ui.marcarErro(form, k, msg); }
+      // AD-085: desligar para as leituras e o radar desta plataforma — pergunta antes
+      if (st.ativo && !v._ativo) {
+        const ok = await ui.confirmar({ titulo: `Desligar a integração do ${d.curto}?`, perigo: true, rotulo: "Desligar",
+          texto: `As leituras de hora em hora e o radar do ${d.curto} param até você ligar de novo. Os números já lidos continuam no Anúncios.` });
+        if (!ok) return;
+      }
       for (const [k] of d.campos) if (v[k]) cred[k] = v[k];
       if (canal === "google" && cred.google_customer_id) cred.google_customer_id = soDigitos(cred.google_customer_id);
       if (canal === "google" && cred.google_login_customer_id) cred.google_login_customer_id = soDigitos(cred.google_login_customer_id);
@@ -368,81 +436,124 @@ async function secaoAnuncios(ctx, alvo) {
   /* ---------- metas e avisos ---------- */
   const V = ctx.vocab || {};
   const servicoRot = (V.servico || "Serviço");
+  // plano 1000 (AD-073): os serviços já usados no CRM viram sugestões (datalist) — «implante» × «Implante» deixa de ser um tropeço
+  const idSug = "cfga-tk-sug";
+  const sugestoes = h("datalist", { id: idSug }, servicosUsados((dados && dados.leads) || []).map(s => h("option", { value: s })));
   const tickets = h("div", { class: "cfga-tickets pilha" });
   const linhaTicket = (s = "", val = "") => {
-    const nome = h("input", { type: "text", class: "cfga-tk-s", value: s, placeholder: servicoRot, "aria-label": servicoRot, maxlength: 60 });
+    const nome = h("input", { type: "text", class: "cfga-tk-s", value: s, placeholder: servicoRot, "aria-label": servicoRot, maxlength: 60, list: idSug });
     const valor = h("input", { type: "text", class: "cfga-tk-v", value: val === "" ? "" : String(val).replace(".", ","), inputmode: "decimal", placeholder: "R$", "aria-label": `Valor de ${s || servicoRot.toLowerCase()} em reais` });
     const x = h("button", { type: "button", class: "bt-icone", "aria-label": `Remover ${s || servicoRot.toLowerCase()}` }, ui.icone("fechar"));
     const linha = h("div", { class: "cfga-tk" }, nome, valor, x);
-    x.addEventListener("click", () => { linha.remove(); (tickets.querySelector("input") || addTk).focus(); });
+    x.addEventListener("click", () => { linha.remove(); sujo = true; (tickets.querySelector("input") || addTk).focus(); });
     return linha;
   };
   const addTk = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("mais"), ` ${servicoRot}`);
   addTk.addEventListener("click", () => { const l = linhaTicket(); tickets.append(l); l.querySelector("input").focus(); });
 
   const off = new Set(cfg.regrasOff || []);
-  const lista = v => [].concat(v || []).join("\n");
+  // AD-074: os destinos salvos aparecem formatados («+55 (12) 99999-8888»); ao salvar, só os dígitos
+  const lista = v => [].concat(v || []).map(formatarWa).join("\n");
+  const reaisOuVazio = v => (Number(v) > 0 ? Number(v) : null);      // AD-001/AD-072: sem valor salvo = campo vazio, nunca 15/1500
+  const rad = (cfg.radar && typeof cfg.radar === "object") ? cfg.radar : {};
   const form = h("form", { class: "pilha", novalidate: true },
     h("div", { class: "form-grade" },
-      ui.campo({ nome: "nomeCurto", rotulo: "Nome curto (relatórios)", valor: cfg.nomeCurto || "", placeholder: `ex.: ${String(cliente.nome || "").split(" ")[0]}`, max: 40 }),
+      // AD-248: o nome curto vai no título de cada relatório — 22 letras, com contador perto do limite
+      ui.campo({ nome: "nomeCurto", rotulo: "Nome curto (relatórios)", valor: cfg.nomeCurto || "", placeholder: `ex.: ${String(cliente.nome || "").split(" ")[0]}`, max: 22,
+        ajuda: "Aparece no título de cada relatório do WhatsApp. Até 22 letras." }),
       ui.campo({ nome: "assinatura", rotulo: "Assinatura do resumo do mês", valor: cfg.assinatura || PADRAO.assinatura, max: 120 }),
-      ui.campo({ nome: "cpaAlvo", rotulo: "Meta de custo por conversa (R$)", tipo: "moeda", valor: +(cfg.cpaAlvo ?? PADRAO.cpaAlvo), ajuda: "O radar avisa quando passa de 35% acima." }),
-      ui.campo({ nome: "orcamento", rotulo: "Orçamento de anúncios do mês (R$)", tipo: "moeda", valor: +(cfg.orcamento ?? PADRAO.orcamento) }),
+      ui.campo({ nome: "cpaAlvo", rotulo: "Meta de custo por conversa (R$)", tipo: "moeda", valor: reaisOuVazio(cfg.cpaAlvo), placeholder: "sem meta",
+        ajuda: "Conversa no WhatsApp (Meta). O radar avisa quando passa de 35% acima. Vazio: sem meta e sem esse aviso." }),
+      // AD-010: a conversão do Google costuma custar 2–3× a conversa — meta própria, opcional
+      ui.campo({ nome: "cpaAlvoGoogle", rotulo: "Meta de custo por conversão no Google (R$)", tipo: "moeda", valor: reaisOuVazio(cfg.cpaAlvoGoogle), placeholder: "opcional",
+        ajuda: "Opcional. Vazio: as campanhas do Google ficam fora do aviso de custo alto." }),
+      ui.campo({ nome: "orcamento", rotulo: "Orçamento de anúncios do mês (R$)", tipo: "moeda", valor: reaisOuVazio(cfg.orcamento), placeholder: "não definido",
+        ajuda: "Vazio ou zero: sem projeção contra o orçamento e sem aviso de ritmo." }),
       ui.campo({ nome: "fee", rotulo: "Gestão mensal (R$)", tipo: "moeda", valor: +(cfg.fee ?? PADRAO.fee), ajuda: "Deixe 0 se o cliente não paga gestão: o retorno conta só os anúncios. Com valor, vira “Retorno total” (anúncios + gestão) e o painel mostra quanto é gestão." })),
     h("div", { class: "pilha" }, h("p", { class: "rotulo" }, `Valor de cada ${servicoRot.toLowerCase()}`),
-      h("p", { class: "sub" }, "Opcional. Sem valor aqui, a receita conta só o valor informado em cada negócio — nada é estimado. Com valor, o fechamento sem valor entra como estimativa (marcada como estimada)."), tickets, h("div", {}, addTk)),
+      h("p", { class: "sub" }, "Opcional. Sem valor aqui, a receita conta só o valor informado em cada negócio — nada é estimado. Com valor, o fechamento sem valor entra como estimativa (marcada como estimada). O nome casa sem diferenciar maiúsculas e acentos."),
+      tickets, sugestoes, h("div", {}, addTk)),
     h("div", { class: "form-grade" },
-      ui.campo({ nome: "waGestor", rotulo: "WhatsApp da gestão (avisos e diário)", tipo: "textarea", linhas: 2, valor: lista(cfg.waGestor), placeholder: "5512999998888", ajuda: "Um número por linha, com DDD." }),
-      ui.campo({ nome: "waCliente", rotulo: "WhatsApp do cliente (resumo do mês)", tipo: "textarea", linhas: 2, valor: lista(cfg.waCliente), placeholder: "5511900000000", ajuda: "Um número por linha, com DDD." })),
+      ui.campo({ nome: "waGestor", rotulo: "WhatsApp da gestão (avisos e diário)", tipo: "textarea", linhas: 2, valor: lista(cfg.waGestor), placeholder: "+55 (12) 99999-8888", ajuda: "Um número por linha, com DDD (e DDI, se for de fora)." }),
+      ui.campo({ nome: "waCliente", rotulo: "WhatsApp do cliente (resumo do mês)", tipo: "textarea", linhas: 2, valor: lista(cfg.waCliente), placeholder: "+55 (11) 90000-0000", ajuda: "Um número por linha, com DDD (e DDI, se for de fora)." })),
     h("fieldset", { class: "pilha cfga-regras" }, h("legend", { class: "rotulo" }, "Regras do radar"),
       REGRAS.map(([id, n]) => ui.campo({ tipo: "interruptor", nome: `rg_${id}`, rotulo: n, valor: !off.has(id) }))),
+    // AD-054: os limites fixos (CTR 0,9%, frequência 3, gasto mínimo R$ 22) ajustáveis por cliente; vazio = o padrão
+    h("details", { class: "cfga-avancado" }, h("summary", {}, "Limites do radar (avançado)"),
+      h("p", { class: "sub" }, "Vazio = o padrão. Ajuste quando a vertical tem outra régua (ex.: remarketing com frequência alta)."),
+      h("div", { class: "form-grade" },
+        ui.campo({ nome: "rd_ctrMin", rotulo: "CTR mínimo do criativo (%)", valor: rad.ctrMin != null ? String(rad.ctrMin).replace(".", ",") : "", placeholder: "0,9", inputmode: "decimal" }),
+        ui.campo({ nome: "rd_freqMax", rotulo: "Frequência máxima (vezes)", valor: rad.freqMax != null ? String(rad.freqMax).replace(".", ",") : "", placeholder: "3", inputmode: "decimal" }),
+        ui.campo({ nome: "rd_r2MinGasto", rotulo: "Gasto mínimo para «sem conversa» (R$)", valor: rad.r2MinGasto != null ? String(rad.r2MinGasto).replace(".", ",") : "", placeholder: "22", inputmode: "decimal" }))),
     h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, "Salvar metas e avisos")));
   const tk = cfg.ticket && typeof cfg.ticket === "object" ? cfg.ticket : {};
   for (const [s, v] of Object.entries(tk)) tickets.append(linhaTicket(s, v));
   if (!Object.keys(tk).length) tickets.append(linhaTicket());
   alvo.append(h("section", { class: "cartao pilha", "aria-labelledby": "cfga-m" }, h("h3", { id: "cfga-m", class: "titulo-sec" }, "Metas e avisos"), form));
+  // AD-246: editou e não salvou? o envio manual espera (a contagem e os números seriam os antigos)
+  let sujo = false;
+  form.addEventListener("input", () => { sujo = true; });
+  form.addEventListener("change", () => { sujo = true; });
 
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     ui.marcarErro(form, null);
     const v = ui.lerForm(form);
     const reais = n => lerReais((form.querySelector(`[name="${n}"]`) || {}).value);
-    const cpa = reais("cpaAlvo"), orc = reais("orcamento"), fee = reais("fee");
-    if (!(cpa > 0)) return ui.marcarErro(form, "cpaAlvo", "Informe a meta de custo por conversa (maior que zero).");
-    if (!(orc >= 0)) return ui.marcarErro(form, "orcamento", "Informe o orçamento do mês.");
+    const cpa = reais("cpaAlvo"), cpaG = reais("cpaAlvoGoogle"), orc = reais("orcamento"), fee = reais("fee");
+    // AD-072: valida só o que foi preenchido — metas vazias ficam null (sem meta), não 15/1500
+    if (cpa != null && !(cpa > 0)) return ui.marcarErro(form, "cpaAlvo", "A meta de custo por conversa precisa ser maior que zero (ou deixe vazio: sem meta).");
+    if (cpaG != null && !(cpaG > 0)) return ui.marcarErro(form, "cpaAlvoGoogle", "A meta do Google precisa ser maior que zero (ou deixe vazio).");
+    if (orc != null && !(orc >= 0)) return ui.marcarErro(form, "orcamento", "O orçamento não pode ser negativo (vazio = não definido).");
     if (!(fee >= 0)) return ui.marcarErro(form, "fee", "Informe o valor da gestão (pode ser zero).");
-    const numeros = s => [...new Set(String(s || "").split(/[\n,;]+/).map(soDigitos).filter(n => n.length >= 10))];
+    const numeros = s => [...new Set(String(s || "").split(/[\n,;]+/).map(soDigitos).filter(n => n.length >= 10 && n.length <= 13))];
     for (const campo of ["waGestor", "waCliente"]) {
       const brutos = String(v[campo] || "").split(/[\n,;]+/).map(x => x.trim()).filter(Boolean);
-      if (brutos.some(b => soDigitos(b).length < 10)) return ui.marcarErro(form, campo, "Cada número precisa de DDD (10 ou mais dígitos).");
+      const ruim = brutos.find(b => !numeroWaValido(b));
+      if (ruim) return ui.marcarErro(form, campo, `«${ruim}» não parece um WhatsApp: use DDD + número (10 ou 11 dígitos), com DDI na frente se for preciso (até 13).`);
     }
     const ticket = {};
     for (const l of tickets.querySelectorAll(".cfga-tk")) {
       const s = l.querySelector(".cfga-tk-s").value.trim(), val = lerReais(l.querySelector(".cfga-tk-v").value);
       if (s && val != null && val >= 0) ticket[s] = val;
     }
+    const radar = {};
+    for (const [k, min, max, rot] of [["ctrMin", 0.05, 10, "O CTR mínimo vai de 0,05% a 10%."], ["freqMax", 1.5, 20, "A frequência máxima vai de 1,5 a 20."], ["r2MinGasto", 1, 10000, "O gasto mínimo vai de R$ 1 a R$ 10.000."]]) {
+      const n = lerReais(v[`rd_${k}`]);
+      if (n == null) continue;
+      if (!(n >= min && n <= max)) return ui.marcarErro(form, `rd_${k}`, rot);
+      radar[k] = n;
+    }
     const regrasOff = REGRAS.map(([id]) => id).filter(id => !v[`rg_${id}`]);
-    const novo = { nomeCurto: v.nomeCurto || "", assinatura: v.assinatura || "", cpaAlvo: cpa, orcamento: orc, fee,
-                   ticket, waGestor: numeros(v.waGestor), waCliente: numeros(v.waCliente), regrasOff };
+    const novo = { nomeCurto: v.nomeCurto || "", assinatura: v.assinatura || "", cpaAlvo: cpa, cpaAlvoGoogle: cpaG, orcamento: orc, fee,
+                   ticket, waGestor: numeros(v.waGestor), waCliente: numeros(v.waCliente), regrasOff, radar };
     try {
       const r = await ui.carregando(form.querySelector("[type=submit]"),
         api.rpc("nx_cliente_salvar", { p_cliente: { id: cliente.id, slug: cliente.slug || ctx.cliente.slug, nome: cliente.nome || ctx.cliente.nome, cfg: novo } }));
       cfg = (r && r.cfg) || { ...cfg, ...novo };
-      ui.toast("Metas e avisos salvos. Os números do Anúncios usam as metas novas na próxima abertura.", { tipo: "ok" });
+      sujo = false;
+      // AD-133: o Anúncios joga fora o cache deste cliente — a próxima abertura já usa as metas novas (antes até 5 min com as antigas)
+      try { globalThis.dispatchEvent(new CustomEvent("orbita:ads-cfg-salva", { detail: { clienteId: ctx.cliente.id } })); } catch { /* sem eventos */ }
+      ui.toast("Metas e avisos salvos. O Anúncios já usa as metas novas.", { tipo: "ok" });
     } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
   });
 
   /* ---------- atualizar agora ---------- */
+  // AD-247: quanto foi investido ontem (o «relatório do dia» é de ontem) — envio manual de um dia sem anúncio avisa que sai zerado
+  let gastoOntem = null, dataOntem = "";
+  try {
+    const M7 = N.montar(N.datasetDeLinhas({ metricas: (dados && dados.metricas) || [], leads: [], cliente: { nome: cliente.nome, cfg: {} }, hoje: (dados && dados.hoje) || N.hojeSP(), dias: 7 }));
+    gastoOntem = M7.consolidar(M7.linhasDe(M7.R, M7.R)).gasto; dataOntem = M7.dataBR(M7.R);
+  } catch { gastoOntem = null; }
   const st = h("p", { class: "sub", role: "status" });
   const bCiclo = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("raio"), " Sincronizar agora");
   const bDia = h("button", { type: "button", class: "bt bt-fant" }, "Enviar o relatório do dia");
   const bMes = h("button", { type: "button", class: "bt bt-fant" }, "Enviar o resumo do mês");
   const executar = async (tipo, btn) => {
     if (tipo !== "ciclo") {
-      const dest = (tipo === "mensal" ? [...(cfg.waCliente || []), ...(cfg.waGestor || [])] : (cfg.waGestor || [])).length;
-      if (!dest) { st.textContent = "Cadastre um WhatsApp de destino em Metas e avisos antes de enviar."; return; }
-      const ok = await ui.confirmar({ titulo: tipo === "mensal" ? "Enviar o resumo do mês?" : "Enviar o relatório do dia?",
-        texto: `Ele sai agora no WhatsApp de ${dest} ${dest === 1 ? "destino" : "destinos"}, mesmo que já tenha sido enviado hoje.`, rotulo: "Enviar" });
+      const c = confirmacaoEnvio({ tipo, cfg, sujo, gastoDia: tipo === "diario" ? gastoOntem : null, dataDia: dataOntem });
+      if (c.bloqueio) { st.textContent = c.bloqueio; return; }
+      const ok = await ui.confirmar({ titulo: c.titulo, texto: c.texto, rotulo: "Enviar" });
       if (!ok) return;
     }
     const [tarefa, corpo] = tipo === "ciclo" ? ["nx-ciclo", { cliente: cliente.id }] : ["nx-relatorio", { tipo, cliente: cliente.id, forcar: true }];

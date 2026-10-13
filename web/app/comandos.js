@@ -105,6 +105,9 @@ export function criarComandos() {
         id: String(cmd.id || rotulo).slice(0, 80), rotulo: rotulo.slice(0, 80), palavras: palavras.slice(0, 240),
         atalho: cmd.atalho ? String(cmd.atalho).slice(0, 40) : "", icone: /^[a-z0-9-]{1,24}$/.test(cmd.icone || "") ? cmd.icone : (base ? base.icone : "raio"), fazer: cmd.fazer, origem: "tela",
         grupo: GRUPOS_ACAO.includes(cmd.grupo) ? cmd.grupo : (base ? base.grupo : "Nesta tela"),
+        // plano 1000 (CR-187): o comando que sabe criar algo com o texto digitado («Cadastrar «Mariana» como paciente») quando a busca não acha nada
+        comTermo: typeof cmd.comTermo === "function" ? cmd.comTermo : null,
+        rotuloTermo: typeof cmd.rotuloTermo === "function" ? cmd.rotuloTermo : null,
       };
       itens.set(item.id, item);
       avisar();

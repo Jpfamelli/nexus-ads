@@ -150,12 +150,12 @@ test("blocos: a ordem guardada vale primeiro e o resto segue o padrão; mover pa
 test("meta de consultas: realizado = o que já aconteceu até agora (sem canceladas nem faltas); as futuras do mês ficam à parte", () => {
   const as10h20 = Date.parse(SP(HOJE, "10", "20"));
   const mes = agendaDe([...AGENDA.consultas, { nome: "Faltou", status: "aberto", marco: "faltou", inicio: SP("2026-10-02", "09") }, { nome: "Fim do mês", status: "aberto", inicio: SP("2026-10-30", "09") }]);
-  assert.deepEqual(I.contagemConsultasMes(mes, { agora: as10h20 }), { realizadas: 1, marcadas: 4, faltas: 1 }, "só a das 09:00 de hoje já aconteceu");
+  assert.deepEqual(I.contagemConsultasMes(mes, { agora: as10h20 }), { realizadas: 1, marcadas: 4, faltas: 1, compareceu: 0 }, "só a das 09:00 de hoje já aconteceu");   // plano 1000 (CR-157): + «compareceu» à parte
   assert.equal(I.contagemConsultasMes(null), null); assert.equal(I.contagemConsultasMes({}), null);
   // agenda cheia no fim do mês não é «à frente do ritmo» no dia 4
   const cheia = agendaDe(Array.from({ length: 12 }, (_, i) => ({ status: "aberto", inicio: SP(`2026-10-${String(5 + i * 2).padStart(2, "0")}`, "10") })));
   const c = I.contagemConsultasMes(cheia, { agora: as10h20 });
-  assert.deepEqual(c, { realizadas: 0, marcadas: 12, faltas: 0 });
+  assert.deepEqual(c, { realizadas: 0, marcadas: 12, faltas: 0, compareceu: 0 });   // plano 1000 (CR-157)
   assert.equal(I.progressoMeta({ meta: 30, realizado: c.realizadas, dia: 4, diasNoMes: 31 }).estado, "atras");
 });
 

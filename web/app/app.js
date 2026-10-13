@@ -181,9 +181,11 @@ async function iniciar() {
 
   const { dados, api, ui } = E.M;
   E.ui = ui;
-  ui.configurar({ mensagemErro: api.mensagemErro });
-  // M16: última resposta de leituras seguras no aparelho (IndexedDB, 12 h, lista branca): a tela abre com o que havia e revalida
-  E.cache = E.M.cache.criarCache();
+  // plano 1000 (AS-296): com a faixa de conexão à vista, os erros de rede das telas não viram uma cascata de toasts
+  ui.configurar({ mensagemErro: api.mensagemErro, suprimirToast: toastRepetidoDeRede });
+  // M16: última resposta de leituras seguras no aparelho (IndexedDB, 12 h, lista branca): a tela abre com o que havia e revalida.
+  // Plano 1000 (AS-185): aparelho compartilhado («Lembrar neste aparelho» desmarcado no login) → só na memória da aba
+  E.cache = E.M.cache.criarCache(aparelhoCompartilhado() ? { disco: false } : {});
   // M14: estado de conexão (online · lento · offline · servidor fora) alimentado por cada chamada do api.js
   E.rede = E.M.rede.criarRede({ ping: pingDoSite, sondar: sondarServidor });
   E.api = api.criarApi({
@@ -204,11 +206,15 @@ async function iniciar() {
     aoNaoLidas: n => { E.naoLidasPulsoEm = Date.now(); E.pulsoTemNaoLidas = true; definirBadge("conversas", n); avisarNaoLidas(n); },
     aoCanais: lista => atualizarCanais({ canais: lista }, "pulso"),   // A10: estado dos números quando o servidor manda
     escopo: () => E.cliente && E.cliente.id,
+    avisoTela: () => lerAvisosConversas().tela,   // AS-188: quem ligou o aviso de área de trabalho continua a 15 s com a aba escondida
   });
   E.pulso.assinar(() => { atualizarNaoLidas(); });
   E.rede.aoVoltar(() => { if (E.pulso) E.pulso.agora(); });   // reconectou: o pulso lê agora (e as telas pelo orbita:online / ctx.rede.aoVoltar)
   montarIndicadoresRede();
   montarSeloCache();
+  marcarSemInternet();
+  seguirEsquemaDoSistema();
+  ouvirOutrasAbas();
 
   if (LS.lerTxt("nx-app-menu") === "1") document.documentElement.classList.add("menu-recolhido");
   const dev = new URLSearchParams(location.search).get("dev");
@@ -384,6 +390,92 @@ function montarIndicadoresRede() {
   atualizarFaixaRede = () => render(E.rede.foto());
 }
 
+/* ---- plano 1000 (AS-296): uma faixa só — sem internet (ou servidor fora), os erros de conexão das telas não viram toast ---- */
+let frasesDeRede = null;
+const RE_ESTADO_FALHA = /^(offline|servidor_fora)$/;
+function toastRepetidoDeRede(texto, { tipo } = {}) {
+  if (tipo !== "erro" || !E.rede || !RE_ESTADO_FALHA.test(E.rede.estado)) return false;
+  if (!frasesDeRede) {
+    const api = E.M.api, ui = E.M.ui;
+    const f = new Set();
+    for (const codigo of ["sem_conexao", "tempo_rede", "servico_indisponivel", "http_502", "http_503", "http_504"]) {
+      for (const leitura of [true, false]) { try { f.add(api.mensagemErro({ codigo, contexto: { leitura } })); } catch { /* ok */ } }
+      try { f.add(api.mensagemErro({ codigo })); } catch { /* ok */ }
+      try { if (ui && ui.fraseDeErro) f.add(ui.fraseDeErro(codigo)); } catch { /* ok */ }
+    }
+    frasesDeRede = [...f].filter(x => typeof x === "string" && x.length > 12);
+  }
+  const t = String(texto || "");
+  return frasesDeRede.some(fr => t.includes(fr));
+}
+
+/* ---- plano 1000 (AS-209): sem internet, os botões de salvar avisam ANTES do clique (classe no <html> + aria-disabled + dica) ---- */
+const SEL_ESCRITA = "form button[type=submit], .modal-rod .bt-prim, [data-escrita]";
+function marcarSemInternet() {
+  let obs = null;
+  const marcarBotoes = sem => {
+    if (sem) {
+      for (const b of document.querySelectorAll(SEL_ESCRITA)) {
+        if (b.dataset.semRede || b.closest("#publico")) continue;      // a tela de entrada tem a própria mensagem
+        b.dataset.semRede = "1";
+        b.setAttribute("aria-disabled", "true");
+        if (!b.hasAttribute("title")) { b.setAttribute("title", "Sem internet: salve quando a conexão voltar"); b.dataset.semRedeTitle = "1"; }
+      }
+    } else {
+      for (const b of document.querySelectorAll("[data-sem-rede]")) {
+        delete b.dataset.semRede;
+        b.removeAttribute("aria-disabled");
+        if (b.dataset.semRedeTitle) { b.removeAttribute("title"); delete b.dataset.semRedeTitle; }
+      }
+    }
+  };
+  const aplicar = f => {
+    const sem = !!f && RE_ESTADO_FALHA.test(f.estado);
+    document.documentElement.classList.toggle("sem-internet", sem);
+    marcarBotoes(sem);
+    if (sem && !obs && typeof MutationObserver === "function") {
+      let agendado = false;
+      obs = new MutationObserver(() => { if (agendado) return; agendado = true; requestAnimationFrame(() => { agendado = false; marcarBotoes(true); }); });
+      obs.observe(document.body, { childList: true, subtree: true });
+    } else if (!sem && obs) { obs.disconnect(); obs = null; }
+  };
+  E.rede.assinar(aplicar);
+  aplicar(E.rede.foto());
+}
+
+/* ---- plano 1000 (AS-174): Sair numa aba fecha as outras (computador compartilhado); entrar com outra conta noutra aba recarrega esta ---- */
+function ouvirOutrasAbas() {
+  addEventListener("storage", ev => {
+    if (!ev || (ev.key !== "nx-token" && ev.key !== null)) return;
+    if (ev.key === null && E.M.dados.lerToken()) return;            // localStorage.clear() de outra coisa, com o token ainda lá
+    if (ev.oldValue === ev.newValue && ev.key !== null) return;
+    if (!E.sessao && !ev.newValue) return;                          // já está na entrada e o token sumiu: nada a fazer
+    if (E.sessao && ev.newValue) {
+      // token novo com esta aba aberta: a MESMA conta renovou a sessão noutra aba (segue igual, as chamadas já leem o token novo);
+      // OUTRA conta entrou → nada da anterior pode ficar na tela
+      const antes = E.sessao.conta.id;
+      lerSessao().then(s => { if (E.sessao && s.conta.id !== antes) limparERecarregar(); }).catch(() => { /* sessão inválida: o api.js já cuida */ });
+      return;
+    }
+    if (!ev.newValue) {
+      // a outra aba saiu: nada desta conta fica na tela (o aparelho já foi limpo por quem saiu) e a recarga abre a entrada
+      E.sessao = null; E.cliente = null;
+      if (E.pulso) E.pulso.parar();
+      try { E.ui.limpar($("vista")); } catch { /* recarrega do mesmo jeito */ }
+      try { history.replaceState(null, "", location.pathname + location.search + "#/login"); } catch { /* ok */ }
+    }
+    location.reload();
+  });
+}
+
+/** Plano 1000 (AS-185): o login marcou «aparelho compartilhado» (Lembrar neste aparelho desmarcado). */
+const CHAVE_COMPARTILHADO = "nx-app-compartilhado";
+function aparelhoCompartilhado() { return LS.lerTxt(CHAVE_COMPARTILHADO) === "1"; }
+function definirAparelhoCompartilhado(sim) {
+  if (sim) { LS.gravar(CHAVE_COMPARTILHADO, "1"); if (E.cache && typeof E.cache.desligarDisco === "function") E.cache.desligarDisco().catch(() => {}); }
+  else LS.apagar(CHAVE_COMPARTILHADO);
+}
+
 /* ============================================================
    INSTALÁVEL COM A MARCA (M13): manifesto dinâmico em blob:, apple-touch-icon e «Instalar o app»
    ============================================================ */
@@ -435,6 +527,24 @@ async function instalarApp() {
   }
 }
 
+/** Plano 1000 (AS-262): no celular, quem não abre o menu da conta não descobre que dá para instalar. Na 3ª abertura (com sessão) o app sugere UMA
+    vez, num aviso com «Instalar» que some sozinho; fechar no X (ou instalar) encerra a sugestão para sempre neste aparelho. */
+const CHAVE_ABERTURAS = "nx-app-aberturas", CHAVE_SUGESTAO_INSTALAR = "nx-app-sugeriu-instalar";
+function deveSugerirInstalacao({ aberturas, jaSugeriu, toque, modo }) { return !!modo && toque && !jaSugeriu && aberturas >= 3; }
+function sugerirInstalacao() {
+  let toque = false;
+  try { toque = typeof matchMedia === "function" && !!matchMedia("(pointer: coarse)").matches; } catch { toque = false; }
+  if (!toque || !E.sessao) return;
+  const aberturas = (Number(LS.lerTxt(CHAVE_ABERTURAS)) || 0) + 1;
+  LS.gravar(CHAVE_ABERTURAS, String(Math.min(aberturas, 99)));
+  // o beforeinstallprompt pode chegar depois do boot: confere de novo em alguns segundos
+  setTimeout(() => {
+    if (!deveSugerirInstalacao({ aberturas, jaSugeriu: !!LS.lerTxt(CHAVE_SUGESTAO_INSTALAR), toque, modo: modoInstalacao() }) || !E.sessao) return;
+    LS.gravar(CHAVE_SUGESTAO_INSTALAR, "1");
+    E.ui.toast("Use como app: instale na tela do celular para abrir com um toque.", { tipo: "info", ms: 12000, acao: { rotulo: "Instalar", fn: () => instalarApp() } });
+  }, 8000);
+}
+
 /* ============================================================
    PWA (M12): service worker, versão nova sem aba quebrada — depois do boot, nada disto atrasa a primeira pintura
    ============================================================ */
@@ -461,6 +571,35 @@ function urlsPrecache() {
   return [...ARQUIVOS_DO_APP.map(urlArq), ...ARQUIVOS_DA_RAIZ.map(urlArqRaiz)];
 }
 
+/** Plano 1000 (AS-177): os pedaços de cada tela (o resto do app vai sempre). Uma tela que a pessoa não pode abrir (papel, plano, prontos.js) não
+    é baixada para o aparelho dela: o atendente não leva admin.js nem o editor de automações. Configurações vão para todos (o hub abre para todos). */
+const ARQUIVOS_POR_TELA = Object.freeze({
+  admin: ["admin.js"],
+  automacoes: ["automacoes.js", "auto-logica.js", "auto-catalogo.js", "auto-pecas.js", "auto-editor.js", "automacoes.css"],
+  anuncios: ["anuncios.js"],
+  conversas: ["conversas.js", "cv-logica.js", "cv-lista.js", "cv-chat.js", "cv-composer.js", "cv-lateral.js", "conversas.css"],
+  crm: ["crm.js", "crm-kanban.js", "crm-listas.js", "crm-visoes.js", "crm-negocio.js", "crm-tarefas.js", "crm-importar.js", "crm.css"],
+  agenda: ["agenda.js", "agenda.css"],
+  relatorios: ["relatorios.js"],
+});
+const RAIZ_POR_TELA = Object.freeze({ anuncios: ["nucleo.js"] });
+/** urlsPrecache() filtrada para ESTA pessoa; com «economia de dados» ligada (navigator.connection.saveData) nada além do que a página já usou. */
+function urlsPrecacheDoAparelho() {
+  try {
+    const con = navigator.connection;
+    if (con && con.saveData) return [];
+    if (!E.sessao || !E.M.rotas) return urlsPrecache();
+    const op = opcoesAcesso();
+    const fora = new Set(), foraRaiz = new Set();
+    for (const [tela, arquivos] of Object.entries(ARQUIVOS_POR_TELA)) {
+      if (E.M.rotas.acessoRota(tela, op) === "ok") continue;
+      for (const a of arquivos) fora.add(a);
+      for (const a of RAIZ_POR_TELA[tela] || []) foraRaiz.add(a);
+    }
+    return [...ARQUIVOS_DO_APP.filter(a => !fora.has(a)).map(urlArq), ...ARQUIVOS_DA_RAIZ.filter(a => !foraRaiz.has(a)).map(urlArqRaiz)];
+  } catch { return urlsPrecache(); }
+}
+
 /** import() que falhou por arquivo que não existe mais naquela URL (a versão mudou por baixo da aba). */
 function ehFalhaDeImport(e) { return /dynamically imported module|importing a module script|module script failed|error loading dynamically/i.test(String((e && e.message) || "")); }
 
@@ -482,6 +621,8 @@ function marcarEdicao(ev) {
   const alvo = ev && ev.target;
   if (!alvo || alvo.type === "search") return;
   E.editouEm = Date.now();
+  // AS-191: o pedido de armazenamento persistente (o Firefox pergunta à pessoa) sai na 1ª vez que um texto longo — rascunho — é escrito, não no login
+  if (E.sessao && (alvo.tagName === "TEXTAREA" || alvo.isContentEditable)) pedirArmazenamentoPersistente();
 }
 
 /** Trabalho que uma atualização automática não pode interromper (o módulo ativo registra por ctx.naoAtualizar). */
@@ -499,9 +640,10 @@ function iniciarPwa() {
     try {
       const pwa = await arq("pwa.js");
       E.pwaMod = pwa;
-      E.pwa = pwa.iniciar({ versao: VERSAO, ui: E.ui, alvo: $("faixas-sistema"), produto: () => E.produto || "Órbita", ocupado: ocupadoParaAtualizar, urlsPrecache });
+      E.pwa = pwa.iniciar({ versao: VERSAO, ui: E.ui, alvo: $("faixas-sistema"), produto: () => E.produto || "Órbita", ocupado: ocupadoParaAtualizar, urlsPrecache: urlsPrecacheDoAparelho });
       agendarManifesto();
       conferirMigracao();   // A4: a sessão pode ter chegado antes do pwa.js (que tem a comparação de migrações)
+      sugerirInstalacao();
     } catch (e) { console.warn("pwa indisponível", e && e.message); }
     // M18: a paleta abre sem esperar a rede na primeira vez que alguém aperta Ctrl/⌘+K
     try { if (!E.paleta.mod) E.paleta.mod = await arq("paleta.js"); } catch { /* abre sob demanda */ }
@@ -544,18 +686,40 @@ function guardarMarcaPublica(m) {
   LS.gravar("nx-app-marca", { host: location.host, org: E.marcaPublica ? E.marcaPublica.org.slug : null, vars: t.vars, produto: m.produto, favicon: m.favicon, hash: E.M.tema.hashCurto(t.vars) });
 }
 
-function esquemaPreferido() {
+/** O aparelho está no modo escuro? (prefers-color-scheme) */
+function sistemaEscuro() {
+  try { return typeof matchMedia === "function" && !!matchMedia("(prefers-color-scheme: dark)").matches; } catch { return false; }
+}
+/** O que a pessoa ESCOLHEU: "auto" (padrão de quem nunca escolheu — plano 1000 · AS-189), "claro", "escuro" ou "marca". */
+function esquemaEscolhido() {
   const t = E.M.tema;
   const salvo = LS.lerTxt(CHAVE_ESQUEMA);
-  return t && t.ESQUEMAS && Object.hasOwn(t.ESQUEMAS, salvo) ? salvo : "claro";
+  return t && t.ESQUEMAS && Object.hasOwn(t.ESQUEMAS, salvo) ? salvo : "auto";
+}
+/** O esquema que vale agora: o escolhido, ou o do aparelho quando é «Automático». */
+function esquemaPreferido() {
+  const e = esquemaEscolhido();
+  return e === "auto" ? (sistemaEscuro() ? "escuro" : "claro") : e;
+}
+/** «Automático»: o aparelho trocou de claro para escuro (fim de tarde, modo noturno) → o app acompanha sem recarregar. */
+function seguirEsquemaDoSistema() {
+  try {
+    const mq = typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : null;
+    if (!mq || typeof mq.addEventListener !== "function") return;
+    mq.addEventListener("change", () => {
+      if (esquemaEscolhido() !== "auto" || !E.M.tema) return;
+      const m = E.marca || E.M.tema.marcaEfetiva(marcaOrgSessao(), {}, {});
+      pintarMarca(m, { guardar: true });
+    });
+  } catch { /* navegador antigo: vale o esquema da abertura */ }
 }
 
 function atualizarBotaoTema() {
   const b = $("bt-tema");
   if (!b || !E.M.tema) return;
-  const modo = esquemaPreferido();
+  const escolhido = esquemaEscolhido(), modo = esquemaPreferido();
   const nomes = { claro: "claro", escuro: "escuro", marca: "da marca" };
-  const rotulo = `Aparência ${nomes[modo]}. Escolher tema`;
+  const rotulo = escolhido === "auto" ? `Aparência automática (${nomes[modo]}, como o aparelho). Escolher tema` : `Aparência ${nomes[modo]}. Escolher tema`;
   b.setAttribute("aria-label", rotulo);
   b.title = rotulo;
   const use = b.querySelector("use");
@@ -564,8 +728,8 @@ function atualizarBotaoTema() {
 
 function abrirMenuTema(ancora) {
   if (!E.ui || !E.M.tema) return;
-  const modo = esquemaPreferido();
-  const opcoes = [["claro", "Tema claro", "sol"], ["escuro", "Tema escuro", "lua"], ["marca", "Tema da empresa", "pincel"]];
+  const modo = esquemaEscolhido();
+  const opcoes = [["auto", "Automático (do aparelho)", "reabrir"], ["claro", "Tema claro", "sol"], ["escuro", "Tema escuro", "lua"], ["marca", "Tema da empresa", "pincel"]];
   E.ui.menu(ancora, opcoes.map(([id, rotulo, icone]) => ({
     rotulo: modo === id ? `${rotulo} · atual` : rotulo,
     icone: modo === id ? "check" : icone,
@@ -574,12 +738,12 @@ function abrirMenuTema(ancora) {
 }
 
 function definirEsquema(modo) {
-  if (!E.M.tema || !Object.hasOwn(E.M.tema.ESQUEMAS, modo)) return;
+  if (!E.M.tema || !(modo === "auto" || Object.hasOwn(E.M.tema.ESQUEMAS, modo))) return;
   LS.gravar(CHAVE_ESQUEMA, modo);
   const m = E.marca || E.M.tema.marcaEfetiva(marcaOrgSessao(), {}, {});
   pintarMarca(m, { guardar: true });
   atualizarBotaoTema();
-  const nome = { claro: "claro", escuro: "escuro", marca: "da empresa" }[modo];
+  const nome = { auto: "automático (segue o aparelho)", claro: "claro", escuro: "escuro", marca: "da empresa" }[modo];
   E.ui && E.ui.toast(`Tema ${nome} aplicado neste navegador.`, { tipo: "ok" });
 }
 
@@ -721,15 +885,22 @@ let loginPendente = null;
     Devolve a promessa da limpeza do IndexedDB (quem vai recarregar a página espera por ela: limparComPrazo). */
 function limparDadosDoAparelho() {
   const feito = E.cache ? E.cache.limpar().catch(() => {}) : Promise.resolve();
-  // M18: os «Recentes» da paleta têm nomes de pessoas: saem com a sessão
+  // M18: os «Recentes» da paleta têm nomes de pessoas: saem com a sessão. Plano 1000 (pedido de CRM/Início/Conversas/Automações): também os
+  // filtros e buscas guardados por conta (podem ter nome e telefone digitados), o histórico dos números do Início, os últimos comandos e os
+  // rascunhos/pedidos de IA das Automações. Preferência de aparência (tema, menu recolhido, densidade) fica: não é dado de ninguém.
   try {
-    const pref = E.M.comandos ? E.M.comandos.PREFIXO_RECENTES : "nx-rec:";
-    for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.startsWith(pref)) localStorage.removeItem(k); }
+    // AS-192: «Sair» da janela de sessão expirada guarda os rascunhos (inclusive os das Automações) para a MESMA conta
+    const manter = E.manterRascunhos || !!LS.lerTxt(CHAVE_RASCUNHOS_DE);   // o próximo login decide (adotarSessao): mesma conta fica, outra apaga
+    const prefixos = [E.M.comandos ? E.M.comandos.PREFIXO_RECENTES : "nx-rec:", ...PREFIXOS_DA_CONTA].filter(p => !(manter && p === "nx-au-rasc:"));
+    for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && prefixos.some(p => k.startsWith(p))) localStorage.removeItem(k); }
   } catch { /* sem armazenamento: nada a apagar */ }
   LS.apagar(CHAVE_CONTA);
   E.sessaoGuardada = null;
   return feito;
 }
+/** Chaves do localStorage com dado da conta que saem no logout, na queda de sessão e na troca de conta (plano 1000, pedido das frentes). */
+const PREFIXOS_DA_CONTA = Object.freeze(["nx-app-crm-kb-", "nx-app-crm-ct-", "nx-app-crm-fr-", "nx-app-visoes-v1:", "nx-ini-hist:", "nx-ini-kpis:", "nx-ini-blocos:",
+  "nx-cv-filtro:", "nx-cmd:", "nx-au-rasc:", "nx-au-ia-recentes:", "nx-canal-hist:"]);
 /** Limpa o aparelho e espera a limpeza assentar (no máximo 0,8 s): um location.reload() logo em seguida cortaria a transação do IndexedDB. */
 function limparComPrazo() {
   return Promise.race([limparDadosDoAparelho(), new Promise(r => setTimeout(r, 800))]);
@@ -746,10 +917,12 @@ function apagarFilaDeSaida() {
 }
 
 /** A fila de saída e os rascunhos vivem no aparelho: sem este pedido o navegador pode despejá-los quando falta espaço (o Safari, depois de dias sem
-    uso). Uma vez por aparelho, depois do login (o Firefox pergunta à pessoa; pedir a cada abertura seria um incômodo). */
+    uso). Uma vez por aparelho, na 1ª vez que a fila ou um rascunho é usado (plano 1000 · AS-191: logo depois do login o Firefox perguntava sem
+    contexto) — marcarEdicao (texto longo digitado) e ctx.armazenamentoPersistente() (Conversas, ao pôr a 1ª mensagem na fila). Aparelho
+    compartilhado nunca pede. */
 function pedirArmazenamentoPersistente() {
   try {
-    if (LS.lerTxt("nx-app-persistir") || !navigator.storage || typeof navigator.storage.persist !== "function") return;
+    if (aparelhoCompartilhado() || LS.lerTxt("nx-app-persistir") || !navigator.storage || typeof navigator.storage.persist !== "function") return;
     LS.gravar("nx-app-persistir", "1");
     Promise.resolve(navigator.storage.persist()).catch(() => {});
   } catch { /* sem suporte: fica como está */ }
@@ -805,7 +978,8 @@ async function pedirLoginNaTela() {
       location.reload();
       return false;
     }
-    if (r === "sair") { await sair(); return false; }
+    // AS-192: a janela prometeu guardar o que foi digitado — os rascunhos ficam para a mesma conta (somem se outra conta entrar)
+    if (r === "sair") { if (await sair({ manterRascunhos: true })) return false; continue; }
     // Esc ou Voltar: a janela é obrigatória, pergunta de novo
   }
 }
@@ -902,8 +1076,16 @@ function revalidarSessao() {
 /** Adota a sessão lida e busca as imagens da org (depende da marca pública já resolvida). */
 async function adotarSessao(s, { forcarImagens = false } = {}) {
   E.sessao = s;
+  // AS-255: só a conta da plataforma vê o código técnico de um erro desconhecido
+  try { if (E.M.api && typeof E.M.api.mostrarCodigoTecnico === "function") E.M.api.mostrarCodigoTecnico(!!(s.conta && s.conta.super)); } catch { /* ok */ }
+  // AS-192: rascunhos guardados por um «Sair» da sessão expirada são de outra conta → saem antes de a tela nascer
+  const donoRascunhos = LS.lerTxt(CHAVE_RASCUNHOS_DE);
+  if (donoRascunhos && s.conta && donoRascunhos !== s.conta.id) {
+    if (E.rascunhos) E.rascunhos.apagarTudo();
+    try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.startsWith("nx-au-rasc:")) localStorage.removeItem(k); } } catch { /* ok */ }
+  }
+  if (donoRascunhos) LS.apagar(CHAVE_RASCUNHOS_DE);
   conferirMigracao();   // A4: front novo × banco velho (sem await: a faixa chega quando o versao.json responder)
-  pedirArmazenamentoPersistente();
   await carregarImagensOrg({ forcar: forcarImagens });
   return s;
 }
@@ -919,10 +1101,52 @@ async function recarregarSessao() {
   await escolherCliente(novo ? novo.id : null, { remontar: true });
 }
 
-async function sair() {
+/** Plano 1000 (AS-173): quantas mensagens a fila de saída das Conversas (IndexedDB «orbita-fila», loja «saida») ainda guarda sem confirmação.
+    Nunca cria o banco (quem nunca abriu Conversas não ganha um banco vazio) e nunca espera mais de 1,5 s: na dúvida, 0. */
+async function contarFilaDeSaida() {
+  try {
+    if (typeof indexedDB === "undefined" || !indexedDB || typeof indexedDB.open !== "function") return 0;
+    if (typeof indexedDB.databases === "function") {
+      const l = await indexedDB.databases();
+      if (Array.isArray(l) && !l.some(d => d && d.name === "orbita-fila")) return 0;
+    }
+    return await new Promise(resolve => {
+      let novo = false, fim = false;
+      const acabar = n => { if (fim) return; fim = true; clearTimeout(t); resolve(n); };
+      const t = setTimeout(() => acabar(0), 1500);
+      const req = indexedDB.open("orbita-fila");
+      req.onupgradeneeded = () => { novo = true; try { req.transaction.abort(); } catch { /* o onerror responde */ } };
+      req.onerror = req.onblocked = () => acabar(0);
+      req.onsuccess = () => {
+        const db = req.result;
+        try {
+          if (novo || !db.objectStoreNames.contains("saida")) { db.close(); acabar(0); return; }
+          const c = db.transaction("saida", "readonly").objectStore("saida").count();
+          c.onsuccess = () => { db.close(); acabar(Number(c.result) || 0); };
+          c.onerror = () => { db.close(); acabar(0); };
+        } catch { try { db.close(); } catch { /* ok */ } acabar(0); }
+      };
+    });
+  } catch { return 0; }
+}
+
+/** Sair pelo menu, pela paleta ou pela janela de sessão expirada.
+    perguntar (padrão): guarda de rota (formulário sem salvar) e fila de saída com mensagem ainda não enviada pedem confirmação (AS-173).
+    manterRascunhos (AS-192): a janela «Sua sessão expirou» prometeu guardar o que foi digitado — os rascunhos ficam no aparelho e só saem
+    quando OUTRA conta entrar (adotarSessao confere). */
+async function sair({ perguntar = true, manterRascunhos = false } = {}) {
+  if (perguntar) {
+    if (!(await podeSairDaRota({ motivo: "sair" }))) return false;
+    const n = await contarFilaDeSaida();
+    if (n > 0 && !(await E.ui.confirmar({ titulo: "Mensagens não enviadas", perigo: true, rotulo: "Sair e descartar", icone: "alerta",
+      texto: `${n === 1 ? "1 mensagem ainda não foi enviada" : `${n} mensagens ainda não foram enviadas`} (sem internet ou com falha). Se sair agora, ${n === 1 ? "ela é descartada" : "elas são descartadas"} deste aparelho.` }))) return false;
+  }
   try { await E.api.rpc("nx_sair"); } catch { /* sai do mesmo jeito */ }
-  if (E.rascunhos) E.rascunhos.apagarTudo();     // logout: nenhum rascunho fica no aparelho
+  E.manterRascunhos = !!manterRascunhos;
+  if (manterRascunhos && E.sessao) { if (E.rascunhos) E.rascunhos.salvarTudo(); LS.gravar(CHAVE_RASCUNHOS_DE, E.sessao.conta.id); }
+  else { LS.apagar(CHAVE_RASCUNHOS_DE); if (E.rascunhos) E.rascunhos.apagarTudo(); }   // logout: nenhum rascunho fica no aparelho
   limparDadosDoAparelho();
+  E.manterRascunhos = false;
   E.M.dados.apagarToken();
   E.sessao = null; E.cliente = null; E.imgOrg = null; E.notif = 0;
   atualizarSeloDoApp();
@@ -933,7 +1157,10 @@ async function sair() {
   const m = E.M.tema.marcaEfetiva(E.marcaPublica ? E.marcaPublica.marca : {}, {});
   pintarMarca(m);
   navegar("#/login", { substituir: true });
+  return true;
 }
+/** AS-192: de quem são os rascunhos que ficaram no aparelho depois de um «Sair» da janela de sessão expirada. */
+const CHAVE_RASCUNHOS_DE = "nx-app-rascunhos-de";
 
 /* ============================================================
    EMPRESA ATIVA
@@ -1020,10 +1247,43 @@ function navegar(hash, { substituir = false } = {}) {
 function linkPublico(caminhoHash) {
   const base = (E.cliente && E.cliente.link_base) || new URL("./", location.href).href.split("#")[0];
   const h = String(caminhoHash || "");
-  return base.replace(/\/?$/, "/") + (h.startsWith("#") ? h : "#/" + h.replace(/^\/+/, ""));
+  return base.replace(/\/?$/, "/") + comEmpresa(h.startsWith("#") ? h : "#/" + h.replace(/^\/+/, ""));
+}
+/** Plano 1000 (AS-190): link de uma tela interna leva a empresa (?c=<slug> no hash; o roteador troca a empresa e tira o parâmetro). Quem tem várias
+    empresas abria o link do colega na empresa guardada no aparelho. Rotas públicas (convite, nova senha) e hash que já tem ?c= ficam como estão. */
+function comEmpresa(hash, slug = E.cliente && E.cliente.slug) {
+  const h = String(hash || "");
+  if (!slug || !/^[a-z0-9_-]{1,80}$/.test(slug) || /^#\/?(login|convite|senha)(\/|\?|$)/.test(h) || /[?&]c=/.test(h)) return h;
+  return `${h}${h.includes("?") ? "&" : "?"}c=${encodeURIComponent(slug)}`;
+}
+
+/* ---- plano 1000 (pedido das frentes): guarda de rota. A tela registra ctx.aoSairDaRota(fn) e o shell pergunta ANTES de trocar de tela, de
+   empresa ou de sair. Contrato: fn({ destino, motivo }) → boolean | Promise<boolean>; false = fica (a tela já perguntou/avisou a pessoa).
+   destino = rotas.rotear(hash) do endereço pedido (null na troca de empresa e no Sair); motivo = "rota" | "empresa" | "sair". Some sozinha ao
+   desmontar a tela (como as outras assinaturas do ctx). Uma guarda que lança erro não segura ninguém (o erro vai para o console). ---- */
+const guardasDeRota = new Set();
+async function podeSairDaRota({ destino = null, motivo = "rota" } = {}) {
+  for (const fn of [...guardasDeRota]) {
+    let ok = true;
+    try { ok = (await fn({ destino, motivo })) !== false; } catch (e) { console.error("guarda de rota falhou", e); ok = true; }
+    if (!ok) return false;
+  }
+  return true;
 }
 
 async function aoMudarRota(doUsuario) {
+  // guarda de rota: outro endereço com uma tela que tem trabalho pendente → pergunta antes; «ficar» devolve o endereço anterior
+  if (guardasDeRota.size && E.hashAtual != null && location.hash !== E.hashAtual) {
+    if (E.guardando) return;                       // a pergunta já está na tela: a resposta decide pelo endereço que estiver valendo
+    E.guardando = true;
+    let ok = true;
+    try { ok = await podeSairDaRota({ destino: E.M.rotas.rotear(location.hash), motivo: "rota" }); } finally { E.guardando = false; }
+    if (!ok) {
+      try { history.replaceState(history.state, "", location.pathname + location.search + E.hashAtual); } catch { /* ok */ }
+      return;
+    }
+  }
+  E.hashAtual = location.hash;
   const seq = ++E.montando;
   const { rotas, dados } = E.M;
   const r = rotas.rotear(location.hash);
@@ -1188,6 +1448,18 @@ function construirCtx(r, alvo) {
       E.assinaturas.add(cancelar);
       return () => { cancelar(); E.assinaturas.delete(cancelar); };
     },
+    /** Plano 1000 · guarda de rota: fn({ destino, motivo: "rota"|"empresa"|"sair" }) → boolean | Promise<boolean> (false = fica). O shell consulta
+        antes de trocar de endereço, de empresa ou de sair; a tela pergunta à pessoa do jeito dela (ui.confirmar) e devolve a resposta.
+        Devolve cancelar(); some sozinha quando a tela é desmontada. */
+    aoSairDaRota(fn) {
+      if (typeof fn !== "function") return () => {};
+      guardasDeRota.add(fn);
+      const cancelar = () => { guardasDeRota.delete(fn); };
+      E.assinaturas.add(cancelar);
+      return () => { cancelar(); E.assinaturas.delete(cancelar); };
+    },
+    /** AS-191: a tela começou a guardar algo que não pode se perder (fila de saída): pede ao navegador armazenamento persistente (uma vez). */
+    armazenamentoPersistente: () => pedirArmazenamentoPersistente(),
     /** Comandos desta tela na paleta Ctrl/⌘+K (M18): registrar({ id, rotulo, palavras?, atalho?, icone?, fazer }) → cancelar(). Somem sozinhos ao sair da tela. */
     comandos: {
       registrar(cmd) {
@@ -1230,6 +1502,34 @@ function construirCtx(r, alvo) {
   ctx.abrirNegocio = ponte("abrirNegocio");
   ctx.novoNegocio = ponte("novoNegocio");
   ctx.abrirContato = ponte("abrirContato");
+  /** Plano 1000 (pedido de Conversas): moverNegocio(id, {tipo: "ganho"|"perdido"} | {estagio_id}, {aoMudar}) → negócio movido | null (cancelado,
+      sem etapa desse tipo no funil ou CRM indisponível). Usa o MESMO fluxo do quadro do CRM (crm-negocio.moverComPerguntas: valor do ganho,
+      motivo da perda, campos obrigatórios). Erro do servidor vira toast com a frase do CRM. */
+  ctx.moverNegocio = async (id, alvo = {}, { aoMudar } = {}) => {
+    if (!cli || !cli.modulos.includes("crm") || !pronto("crm")) { E.ui.toast("O CRM não está disponível.", { tipo: "info" }); return null; }
+    let k = null;
+    try {
+      const m = await carregar("crm");
+      k = await m.kit(ctx);
+      const N = await k.mod("negocio");
+      const r = await ctx.api.rpcC("nx_negocio_ver", { p_id: id });
+      const card = r && r.negocio;
+      if (!card) throw Object.assign(new Error("negocio_nao_encontrado"), { codigo: "negocio_nao_encontrado" });
+      const funil = k.funilDoEstagio(card.estagio_id);
+      const estagio = alvo && alvo.estagio_id ? k.estagio(alvo.estagio_id) : (funil ? funil.estagios.find(e => e.tipo === (alvo && alvo.tipo)) : null);
+      if (!estagio) { E.ui.toast(`Este funil não tem uma etapa de ${alvo && alvo.tipo === "perdido" ? "perda" : "ganho"}. Ajuste em Configurações › Funis.`, { tipo: "info" }); return null; }
+      if (estagio.id === card.estagio_id) return card;
+      const novo = await N.moverComPerguntas(k, card, estagio);
+      if (!novo) return null;
+      if (typeof aoMudar === "function") try { aoMudar(novo); } catch (e) { console.error(e); }
+      E.ui.toast(estagio.tipo === "ganho" ? "Venda registrada como ganha." : estagio.tipo === "perdido" ? "Registrado como perdido." : `Movido para «${estagio.nome}».`, { tipo: "ok" });
+      return novo;
+    } catch (e) {
+      console.error(e);
+      E.ui.toast(k && typeof k.erro === "function" ? k.erro(e) : E.api.mensagemErro(e), { tipo: "erro" });
+      return null;
+    }
+  };
   return ctx;
 }
 
@@ -1441,8 +1741,11 @@ async function montarPublico(r, seq) {
     pintarMarcaOrg(marcaOrg) { pintarMarca(E.M.tema.marcaEfetiva(marcaOrg || {}, {}), { respeitarEsquema: false }); },
     restaurarMarca() { pintarMarca(E.M.tema.marcaEfetiva(E.marcaPublica ? E.marcaPublica.marca : {}, {})); },
     titulo: definirTitulo,
-    /** depois de entrar/aceitar convite: guarda o token e abre o app. */
-    async aoEntrar(token, { cliente_id } = {}) {
+    /** AS-185: o aparelho está marcado como compartilhado? (o login mostra «Lembrar neste aparelho» desmarcado) */
+    aparelhoCompartilhado,
+    /** depois de entrar/aceitar convite: guarda o token e abre o app. `compartilhado` (login): true = nada vai para o disco do aparelho. */
+    async aoEntrar(token, { cliente_id, compartilhado } = {}) {
+      if (typeof compartilhado === "boolean") definirAparelhoCompartilhado(compartilhado);
       // outra conta podia estar aberta neste navegador (o admin testando o convite que acabou de criar): a sessão lida com o token antigo e o
       // que o aparelho guardava dela (sessão, respostas, Recentes) não podem ser adotados por quem entrou agora
       E.sessaoPromessa = null; E.sessaoGuardada = null;
@@ -1514,7 +1817,8 @@ function desenharMenu() {
       ui.icone(it.icone), ui.h("span", { class: "nav-txt" }, it.rotulo),
       it.emConstrucao ? ui.h("span", { class: "nav-selo" }, "obra") : null,
       ui.h("span", { class: "badge", hidden: true, dataset: { badge: it.id } }),
-      ui.h("span", { class: "badge-ponto", hidden: true, dataset: { ponto: it.id } })));
+      ui.h("span", { class: "badge-ponto", hidden: true, dataset: { ponto: it.id } }),
+      it.id === "conversas" ? pontoCanal() : null));
   }
   // barra inferior: até 4 + Mais
   const prefer = E.M.rotas.BARRA.map(id => itens.find(i => i.id === id)).filter(Boolean);
@@ -1522,14 +1826,28 @@ function desenharMenu() {
   const resto = itens.filter(i => !prefer.includes(i));
   for (const it of prefer) {
     barra.appendChild(ui.h("a", { class: "barra-b", href: `#/${it.rota}`, dataset: { id: it.id } },
-      ui.icone(it.icone), ui.h("span", null, it.rotulo), ui.h("span", { class: "badge", hidden: true, dataset: { badge: it.id } })));
+      ui.icone(it.icone), ui.h("span", null, it.rotulo), ui.h("span", { class: "badge", hidden: true, dataset: { badge: it.id } }),
+      it.id === "conversas" ? pontoCanal() : null));
   }
+  atualizarPontoCanal();
   if (resto.length) {
     const mais = ui.h("button", { type: "button", class: "barra-b", dataset: { id: "mais" } }, ui.icone("menu"), ui.h("span", null, "Mais"));
     mais.addEventListener("click", () => abrirFolhaMais(resto));
     barra.appendChild(mais);
   }
   atualizarBadges();
+}
+
+/** Plano 1000 (AS-243): ponto de saúde no item Conversas do menu e da barra — vermelho enquanto algum número de WhatsApp estiver desconectado. */
+function pontoCanal() {
+  return E.ui.h("span", { class: "canal-ponto", hidden: true, dataset: { canal: "1" } }, E.ui.h("span", { class: "sr-only" }, "(número de WhatsApp desconectado)"));
+}
+function atualizarPontoCanal() {
+  const caidos = E.canais.lista.length;
+  for (const el of document.querySelectorAll("[data-canal]")) {
+    el.hidden = !caidos;
+    el.title = caidos ? (caidos === 1 ? "Um número de WhatsApp está desconectado" : `${caidos} números de WhatsApp desconectados`) : "";
+  }
 }
 
 function abrirFolhaMais(itens) {
@@ -1615,6 +1933,22 @@ function desenharEmpresa() {
   if (pilula) { alvo.appendChild(pilula); if (topo) topo.classList.add("topo-pilula-on"); }
 }
 
+/** Plano 1000 (AS-254): o que a lista de empresas sinaliza quando a sessão traz — número de WhatsApp caído, teste acabando (≤ 3 dias) ou vencido,
+    empresa pausada. → [{texto, cor, icone}] (vazio quando está tudo bem ou a sessão não diz). */
+function sinaisDaEmpresa(c, hoje = E.ui.hojeSP()) {
+  const s = [];
+  if (!c) return s;
+  const caidos = Array.isArray(c.canais) ? c.canais.filter(x => x && x.estado === "desconectado").length : 0;
+  if (caidos) s.push({ texto: caidos === 1 ? "número caído" : `${caidos} números caídos`, cor: "ruim", icone: "alerta" });
+  if (c.status === "teste" && c.teste_ate) {
+    const dias = Math.round((Date.parse(`${c.teste_ate}T12:00:00Z`) - Date.parse(`${hoje}T12:00:00Z`)) / DIA_MS);
+    if (Number.isFinite(dias) && dias < 0) s.push({ texto: "teste vencido", cor: "ruim", icone: "cadeado" });
+    else if (Number.isFinite(dias) && dias <= 3) s.push({ texto: dias === 0 ? "teste acaba hoje" : `teste: ${dias} dia${dias === 1 ? "" : "s"}`, cor: "aten", icone: "relogio" });
+  }
+  if (c.ativo === false) s.push({ texto: "pausada", cor: "aten", icone: "pausa" });
+  return s;
+}
+
 function abrirSeletorEmpresa(ancora) {
   const { ui } = E;
   const lista = E.sessao.clientes;
@@ -1627,10 +1961,18 @@ function abrirSeletorEmpresa(ancora) {
     const q = busca ? norm(busca.value) : "";
     const achados = lista.filter(c => !q || norm(c.nome).includes(q) || norm(c.slug).includes(q));
     for (const c of achados.slice(0, 200)) {
+      const sinais = sinaisDaEmpresa(c);
       const b = ui.h("button", { type: "button", class: "empresa-op", role: "option", "aria-current": String(E.cliente && c.id === E.cliente.id) },
         ui.avatar(c.nome, c.id),
-        ui.h("span", null, ui.h("b", null, c.nome), ui.h("small", null, [c.org_nome, c.suporte ? "suporte" : E.M.vocab.ROTULO_PAPEL[c.papel], c.status !== "ativo" ? E.M.vocab.ROTULO_STATUS[c.status] : null].filter(Boolean).join(" · "))));
-      b.addEventListener("click", async () => { if (flut) flut.fechar(); if (!E.cliente || c.id !== E.cliente.id) await escolherCliente(c.id); });
+        ui.h("span", null, ui.h("b", null, c.nome), ui.h("small", null, [c.org_nome, c.suporte ? "suporte" : E.M.vocab.ROTULO_PAPEL[c.papel], c.status !== "ativo" ? E.M.vocab.ROTULO_STATUS[c.status] : null].filter(Boolean).join(" · ")),
+          sinais.length ? ui.h("span", { class: "empresa-sinais" }, sinais.map(s => ui.pilula(s.texto, s.cor, { icone: s.icone, tamanho: "p" }))) : null));
+      // AS-175: trocar de empresa desmonta a tela — a guarda de rota (formulário sem salvar) pergunta antes
+      b.addEventListener("click", async () => {
+        if (flut) flut.fechar();
+        if (E.cliente && c.id === E.cliente.id) return;
+        if (!(await podeSairDaRota({ motivo: "empresa" }))) return;
+        await escolherCliente(c.id);
+      });
       caixa.appendChild(b);
     }
     if (!achados.length) caixa.appendChild(ui.h("p", { class: "flut-vazio" }, "Nenhuma empresa com esse nome."));
@@ -1744,9 +2086,17 @@ function teclaMod() {
    ============================================================ */
 
 /** Contatos e negócios (CRM) só existem no Órbita completo ou no CRM; Atendimento busca só conversas; Anúncios não busca dados. */
+/** CR-186: a busca de dados respondeu 404 há menos de 10 min (E.buscaFora guarda o instante; true de versões antigas vale como «agora»). */
+const BUSCA_FORA_MS = 10 * 60 * 1000;
+function buscaForaAgora(agora = Date.now()) {
+  const t = E.buscaFora === true ? agora : Number(E.buscaFora) || 0;
+  if (t && agora - t < BUSCA_FORA_MS) return true;
+  E.buscaFora = 0;
+  return false;
+}
 function gruposDeDados() {
   const c = E.cliente;
-  if (!c || E.buscaFora || !c.modulos.includes("crm") || !pronto("crm")) return [];
+  if (!c || buscaForaAgora() || !c.modulos.includes("crm") || !pronto("crm")) return [];
   const g = [];
   if (E.workspace === null || E.workspace === "crm") g.push("contatos", "negocios");
   if ((E.workspace === null || E.workspace === "atendimento") && c.modulos.includes("conversas") && pronto("conversas")) g.push("conversas");
@@ -1819,6 +2169,28 @@ function acoesDoShell() {
   };
 }
 
+/** Plano 1000 (pedido do CRM): «Novo paciente» e «Cadastrar «x» como paciente» na paleta de QUALQUER tela (antes só dentro do CRM). Quando o CRM
+    está aberto ele registra o próprio comando com o mesmo rótulo e o juntarAcoes tira este. A ficha abre por cima da tela atual (crm-listas.formContato)
+    e o aviso traz «Abrir». */
+function acaoNovoContato(a) {
+  if (!a.rotaOk("crm") || !a.pode("atendente")) return null;
+  const v = a.vocab;
+  const cadastrar = async (pre = {}) => {
+    try {
+      const m = await carregar("crm");
+      const k = await m.kit(ctxDaAcao());
+      const L = await k.mod("listas");
+      const c = await L.formContato(k, pre);
+      if (!c) return;
+      E.ui.toast(`${v.contato} cadastrad${v.art("contato")}.`, { tipo: "ok", ms: 6000, acao: { rotulo: "Abrir", fn: () => navegar(`#/contatos/${encodeURIComponent(c.id)}`) } });
+    } catch (e) { console.error(e); E.ui.toast("Não foi possível abrir o cadastro.", { tipo: "erro" }); }
+  };
+  return { id: "novo-contato", rotulo: v.novo("contato"), palavras: "paciente contato cliente cadastrar criar novo pessoa", icone: "contato", atalho: "", origem: "shell", grupo: "Criar",
+    fazer: () => cadastrar(),
+    rotuloTermo: t => `Cadastrar «${t}» como ${v.min("contato")}`,
+    comTermo: t => cadastrar(/^[+\d\s().-]{8,}$/.test(t) && t.replace(/\D/g, "").length >= 8 ? { telefone: t } : { nome: t }) };
+}
+
 function destinosDaPaleta() {
   const v = E.M.vocab.vocab(E.cliente ? E.cliente.vertical : "generico");
   return E.M.comandos.destinos(E.M.rotas.itensDoMenu({ op: opcoesAcesso(), vocab: v, workspace: E.workspace, prontos: E.prontos.MODULOS_PRONTOS, dev: devLigado() }));
@@ -1847,7 +2219,8 @@ async function buscarNaPaleta(q, modo) {
   let r;
   try { r = await E.api.rpcC("nx_buscar", { p_q: q }); }
   catch (e) {
-    if (e && (e.status === 404 || /could not find the function/i.test(String(e.codigo)))) { E.buscaFora = true; return { grupos: [], aviso: "A busca de dados chega em breve." }; }
+    // CR-186: busca ausente (404) desliga por 10 min, não pela sessão inteira — a migração pode entrar com o app aberto
+    if (e && (e.status === 404 || /could not find the function/i.test(String(e.codigo)))) { E.buscaFora = Date.now(); return { grupos: [], aviso: "A busca de dados chega em breve." }; }
     throw e;
   }
   const def = {
@@ -1864,7 +2237,8 @@ async function buscarNaPaleta(q, modo) {
 function ambientePaleta(inicial) {
   const C = E.M.comandos;
   const a = ambienteComandos();
-  const { daTela, geral } = C.juntarAcoes(C.acoesPadrao(a, acoesDoShell()), E.comandos.listar());
+  const novoContato = acaoNovoContato(a);
+  const { daTela, geral } = C.juntarAcoes([...C.acoesPadrao(a, acoesDoShell()), ...(novoContato ? [novoContato] : [])], E.comandos.listar());
   const gs = gruposDeDados();
   const v = a.vocab;
   const rec = recentesDaEmpresa();
@@ -1926,7 +2300,30 @@ function abrirMenuAjuda(ancora) {
     "-",
     // o suporte pergunta «qual versão aparece aí?»: fica à vista e um toque copia
     { rotulo: `Versão ${VERSAO}`, icone: "info", fn: () => E.ui.copiar(VERSAO, { aviso: "Versão copiada." }) },
+    { rotulo: "Sobre este app", icone: "ajuda", fn: () => abrirSobre() },
   ].filter(Boolean));
+}
+
+/** Plano 1000 (AS-292): o que o suporte precisa saber, num texto só (sem dado pessoal: nada de e-mail, token ou telefone). */
+function textoSobre() {
+  const nav = typeof navigator !== "undefined" ? navigator : {};
+  const app = E.M.rotas ? E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace }).name : (E.produto || "Órbita");
+  return [
+    `${app} · versão do app ${VERSAO}`,
+    `Banco: ${(E.sessao && E.sessao.migracao) || "não informado"}`,
+    E.cliente ? `Empresa: ${E.cliente.nome}${E.cliente.slug ? ` (${E.cliente.slug})` : ""}` : null,
+    E.titulo ? `Tela: ${E.titulo}` : null,
+    `Conexão: ${E.rede ? E.rede.estado : "—"}`,
+    `Aparelho: ${String((nav.userAgentData && nav.userAgentData.platform) || nav.platform || "—").slice(0, 40)} · ${typeof innerWidth === "number" ? `${innerWidth} px` : "—"}`,
+  ].filter(Boolean).join("\n");
+}
+function abrirSobre() {
+  const { ui } = E;
+  const linhas = textoSobre().split("\n");
+  ui.modal({ titulo: "Sobre este app", largura: "p", protegerTexto: false,
+    corpo: ui.h("div", { class: "pilha-p" }, ui.h("p", { class: "sub" }, "Se o suporte pedir, copie e cole estas informações na conversa."),
+      ui.h("pre", { class: "sobre-app dado" }, linhas.join("\n"))),
+    acoes: [{ rotulo: "Fechar", tipo: "neutro" }, { rotulo: "Copiar para o suporte", tipo: "primario", icone: "copiar", fn: async () => { await ui.copiar(textoSobre(), { aviso: "Informações copiadas." }); return true; } }] });
 }
 
 /* ============================================================
@@ -1936,6 +2333,29 @@ const ICONE_NOTIF = { atribuida: "chat", sem_resposta: "relogio", tarefa: "taref
   lead_anuncio: "anuncio", mencao: "usuario", sistema: "info", canal_caiu: "alerta", canal_voltou: "check" };
 /** A10 (S-B11): notificação de número caído/voltou sem `link` do servidor abre Configurações › Números. */
 const LINK_NOTIF = { canal_caiu: "#/config/numeros", canal_voltou: "#/config/numeros" };
+/** AS-186: o sino lê de 30 em 30, até o teto do servidor (100). */
+const NOTIF_PAGINA = 30, NOTIF_MAXIMO = 100;
+/** Destino de uma notificação: o `link` do servidor (só #/…), o fixo do tipo (LINK_NOTIF) ou, na automação (AS-187), as execuções dela. null = sem destino. */
+function linkDaNotificacao(it) {
+  if (!it) return null;
+  if (typeof it.link === "string" && /^#\//.test(it.link)) return it.link;
+  if (LINK_NOTIF[it.tipo]) return LINK_NOTIF[it.tipo];
+  if (it.tipo === "automacao") {
+    const d = it.dados && typeof it.dados === "object" ? it.dados : {};
+    const id = d.automacao_id ?? d.automacao ?? it.automacao_id ?? null;
+    return id != null && /^[\w-]{1,64}$/.test(String(id)) ? `#/automacoes/${encodeURIComponent(String(id))}?aba=execucoes` : "#/automacoes";
+  }
+  return null;
+}
+/** «Hoje», «Ontem» ou a data (dd/mm/aaaa) do dia em São Paulo. */
+function rotuloDoDia(iso, agora = new Date()) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return "Antes";
+  const hoje = E.ui.hojeSP(agora), dia = E.ui.hojeSP(d);
+  if (dia === hoje) return "Hoje";
+  if (dia === E.ui.hojeSP(new Date(agora.getTime() - DIA_MS))) return "Ontem";
+  return E.ui.dataBR(dia);
+}
 
 function atualizarSinoUI() {
   const n = Math.max(0, Number(E.notif) || 0);
@@ -1954,8 +2374,14 @@ function abrirSino(ancora) {
   if (E.sinoAberto) { E.sinoAberto.fechar(); return; }   // segundo clique no sino fecha a lista
   const lista = ui.h("div", { class: "notif-lista", "aria-live": "polite" }, ui.esqueleto("lista", 3));
   const btTodas = ui.h("button", { type: "button", class: "bt bt-fant bt-p", hidden: true }, ui.icone("checks"), "Marcar todas como lidas");
+  // AS-186: «Não lidas» (filtro na lista que já veio), cabeçalhos Hoje/Ontem/data e «Carregar mais» (o servidor devolve até 100)
+  let soNaoLidas = false, limite = NOTIF_PAGINA, ultimo = null;
+  const filtro = ui.segmentado({ opcoes: [{ valor: "todas", rotulo: "Todas" }, { valor: "nao_lidas", rotulo: "Não lidas" }], valor: "todas", tipo: "filtro", rotulo: "Mostrar",
+    aoMudar: v => { soNaoLidas = v === "nao_lidas"; if (ultimo) desenhar(ultimo); } });
+  const mais = ui.h("button", { type: "button", class: "bt bt-sec bt-p notif-mais", hidden: true }, "Carregar mais");
+  mais.addEventListener("click", () => { limite = Math.min(NOTIF_MAXIMO, limite + NOTIF_PAGINA); ui.carregando(mais, recarregar()); });
   const conteudo = ui.h("div", { class: "pilha-p" },
-    ui.h("div", { class: "linha linha-entre notif-cab" }, ui.h("h2", { class: "rotulo" }, "Notificações"), btTodas), lista);
+    ui.h("div", { class: "linha linha-entre notif-cab" }, ui.h("h2", { class: "rotulo" }, "Notificações"), btTodas), filtro, lista, mais);
   let seq = 0;
   const f = ui.flutuante(ancora, conteudo, { classe: "notifs", aoFechar: () => { E.sinoAberto = null; } });
 
@@ -1965,36 +2391,51 @@ function abrirSino(ancora) {
       if (r && typeof r.nao_lidas === "number") { E.notif = r.nao_lidas; atualizarSinoUI(); }
     } catch (e) { ui.toast(E.api.mensagemErro(e), { tipo: "erro" }); }
   }
+  function desenhar(r) {
+    ui.limpar(lista);
+    const todos = Array.isArray(r.itens) ? r.itens : [];
+    const itens = soNaoLidas ? todos.filter(it => !it.lida_em) : todos;
+    mais.hidden = !(todos.length >= limite && limite < NOTIF_MAXIMO);
+    if (!itens.length) {
+      lista.appendChild(soNaoLidas && todos.length
+        ? ui.h("p", { class: "flut-vazio" }, "Nenhuma notificação não lida.")
+        : ui.h("div", { class: "notif-vazio" }, ui.icone("sino"),
+          ui.h("p", null, ui.h("b", null, "Nenhuma notificação por aqui."), ui.h("br"), "Conversas atribuídas a você, tarefas e avisos das automações aparecem aqui.")));
+      return;
+    }
+    let dia = null;
+    for (const it of itens) {
+      const rot = rotuloDoDia(it.criado_em);
+      if (rot !== dia) { dia = rot; lista.appendChild(ui.h("p", { class: "notif-dia rotulo" }, rot)); }
+      const lida = !!it.lida_em;
+      const link = linkDaNotificacao(it);
+      const corpo = it.corpo ? ui.h("p", null, it.corpo) : null;
+      const b = ui.h("button", { type: "button", class: ["notif-item", lida && "lida"], "aria-expanded": !link && corpo ? "false" : null },
+        ui.h("span", { class: "notif-ic" }, ui.icone(ICONE_NOTIF[it.tipo] || "info")),
+        ui.h("span", null, ui.h("b", null, it.titulo), corpo,
+          ui.h("small", { title: ui.dataHoraBR(it.criado_em) }, ui.relativo(it.criado_em))),
+        ui.h("i", { "aria-hidden": "true" }),
+        lida ? null : ui.h("span", { class: "sr-only" }, "(não lida)"));
+      b.addEventListener("click", async () => {
+        if (!it.lida_em) { it.lida_em = new Date().toISOString(); marcar([it.id]); }
+        if (link) { f.fechar(); navegar(link); return; }
+        // AS-187: sem destino, o toque abre o texto inteiro no próprio item (antes ficava cortado e nada acontecia)
+        b.classList.add("lida");
+        if (corpo) { const aberto = b.classList.toggle("notif-aberta"); b.setAttribute("aria-expanded", String(aberto)); }
+      });
+      lista.appendChild(b);
+    }
+  }
   async function recarregar() {
     const n = ++seq;
     try {
-      const r = await E.api.rpcC("nx_notificacoes_listar", { p_limite: 30 });
+      const r = await E.api.rpcC("nx_notificacoes_listar", { p_limite: limite });
       if (n !== seq || !lista.isConnected) return;
-      ui.limpar(lista);
       E.notif = r.nao_lidas || 0; atualizarSinoUI();
       atualizarCanais({ notificacoes: r.itens }, "notificacao");   // A10: canal_caiu/canal_voltou na lista alimentam o aviso de número caído
       btTodas.hidden = !(r.nao_lidas > 0);
-      if (!r.itens || !r.itens.length) {
-        lista.appendChild(ui.h("div", { class: "notif-vazio" }, ui.icone("sino"),
-          ui.h("p", null, ui.h("b", null, "Nenhuma notificação por aqui."), ui.h("br"), "Conversas atribuídas a você, tarefas e avisos das automações aparecem aqui.")));
-        return;
-      }
-      for (const it of r.itens) {
-        const lida = !!it.lida_em;
-        const b = ui.h("button", { type: "button", class: ["notif-item", lida && "lida"] },
-          ui.h("span", { class: "notif-ic" }, ui.icone(ICONE_NOTIF[it.tipo] || "info")),
-          ui.h("span", null, ui.h("b", null, it.titulo), it.corpo ? ui.h("p", null, it.corpo) : null,
-            ui.h("small", { title: ui.dataHoraBR(it.criado_em) }, ui.relativo(it.criado_em))),
-          ui.h("i", { "aria-hidden": "true" }),
-          lida ? null : ui.h("span", { class: "sr-only" }, "(não lida)"));
-        b.addEventListener("click", async () => {
-          if (!lida) marcar([it.id]);
-          const link = typeof it.link === "string" && /^#\//.test(it.link) ? it.link : (LINK_NOTIF[it.tipo] || null);
-          if (link) { f.fechar(); navegar(link); }
-          else { b.classList.add("lida"); }
-        });
-        lista.appendChild(b);
-      }
+      ultimo = r;
+      desenhar(r);
     } catch (e) {
       if (n !== seq) return;
       ui.limpar(lista);
@@ -2011,8 +2452,10 @@ function desenharFaixas() {
   const alvo = $("faixas");
   ui.limpar(alvo);
   if ((location.hostname === "127.0.0.1" || location.hostname === "localhost") && new URLSearchParams(location.search).get("dev-falso") === "1") {
+    // AS-274: no celular, uma linha só («Demo local · dados fictícios»); o texto inteiro continua para o leitor de tela e no desktop
     alvo.appendChild(ui.h("div", { class: "faixa faixa-demo-local", role: "status" }, ui.icone("info"),
-      ui.h("p", null, "DEMO LOCAL · dados fictícios; mensagens e integrações não são reais.")));
+      ui.h("p", null, ui.h("span", { class: "demo-longo" }, "DEMO LOCAL · dados fictícios; mensagens e integrações não são reais."),
+        ui.h("span", { class: "demo-curto", "aria-hidden": "true" }, "Demo local · dados fictícios"))));
   }
   const cli = E.cliente;
   if (!cli || !E.sessao) return;
@@ -2022,7 +2465,13 @@ function desenharFaixas() {
   const plataforma = !!(E.sessao.conta.super || E.sessao.conta.papel === "gestor");   // quem a tela pausada deixa entrar (montarNoShell) só vê a faixa
   if (cli.suporte && equipe) {
     const sair = ui.h("button", { type: "button", class: "bt bt-sec" }, "Sair");
-    sair.addEventListener("click", () => navegar("#/admin/clientes"));
+    // plano 1000 · AS-248: volta para onde o «Entrar» foi clicado (o detalhe do cliente), guardado pelo Admin em nx-admin-volta;
+    // só endereços do próprio Admin valem (nada de redirecionar para fora)
+    sair.addEventListener("click", () => {
+      let volta = null;
+      try { volta = sessionStorage.getItem("nx-admin-volta"); } catch { /* sem storage */ }
+      navegar(volta && /^#\/admin\//.test(volta) ? volta : "#/admin/clientes");
+    });
     alvo.appendChild(ui.h("div", { class: "faixa faixa-suporte", role: "status" }, ui.icone("escudo"),
       ui.h("p", null, "Você está no ambiente de ", ui.h("b", null, cli.nome), ` como suporte da ${E.sessao.org ? E.sessao.org.nome : "plataforma"}.`), sair));
   }
@@ -2183,6 +2632,7 @@ function reiniciarCanais() {
   const c = E.canais;
   c.lista = []; c.fonte = null; c.dispensado = ""; c.avisouQueda = false; c.conferiuEm = 0; c.toastAssinatura = "";
   if (c.toast) { c.toast.fechar("sistema"); c.toast = null; }
+  atualizarPontoCanal();
 }
 /** Recebe a matéria-prima de uma fonte; uma fonte mais fraca nunca sobrescreve uma mais forte já vista nesta empresa. */
 function atualizarCanais({ canais = null, notificacoes = null } = {}, fonte) {
@@ -2212,9 +2662,20 @@ async function conferirNotificacoesDeCanal() {
     atualizarCanais({ notificacoes: r && r.itens }, "notificacao");
   } catch { /* o sino mostra a lista quando aberto */ }
 }
+/** Plano 1000 (AS-244): «há 25 min» / «desde 13/10 14:02» de quando o número caiu (o `desde` da lista); sem data, nada. */
+function desdeQuando(iso, agora = new Date()) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime()) || d > agora) return "";
+  const min = Math.round((agora.getTime() - d.getTime()) / 60000);
+  if (min < 1) return "agora há pouco";
+  if (min < 60) return `há ${min} min`;
+  if (min < 24 * 60) { const h = Math.round(min / 60); return `há ${h} h`; }
+  return `desde ${E.ui.dataCurtaBR(d.toISOString())} ${E.ui.horaBR(d.toISOString())}`;
+}
 function renderNumeroCaido(assinatura) {
   const { ui } = E;
   const c = E.canais;
+  atualizarPontoCanal();
   if (!c.lista.length) {
     if (c.toast) { c.toast.fechar("sistema"); c.toast = null; }
     if (c.avisouQueda) ui.toast("Número de WhatsApp reconectado.", { tipo: "ok" });
@@ -2223,7 +2684,7 @@ function renderNumeroCaido(assinatura) {
   }
   if (c.dispensado === assinatura || (c.toast && c.toastAssinatura === assinatura)) return;
   if (c.toast) c.toast.fechar("sistema");
-  const nomes = c.lista.map(x => x.nome).join(", ");
+  const nomes = c.lista.map(x => { const q = desdeQuando(x.desde); return q ? `${x.nome} (${q})` : x.nome; }).join(", ");
   const texto = c.lista.length === 1 ? `Número de WhatsApp desconectado: ${nomes}. As mensagens não chegam até reconectar.`
     : `${c.lista.length} números de WhatsApp desconectados: ${nomes}. As mensagens não chegam até reconectar.`;
   const admin = E.M.rotas.podePapel(papelAtual(), "admin");
@@ -2264,7 +2725,11 @@ function desenharFaixaMigracao(info) {
   const { ui } = E;
   if (!info) { if (faixaMigracao) { faixaMigracao.remove(); faixaMigracao = null; } return; }
   const P = E.pwaMod;
-  const texto = `O servidor ainda não recebeu a atualização desta versão do app (banco em «${P.chaveMigracao(info.banco) || info.banco}», esta versão precisa de «${P.chaveMigracao(info.minima) || info.minima}»). Algumas telas podem falhar até a equipe aplicar a atualização.`;
+  // plano 1000 (AS-176): frase simples para todos; o detalhe técnico (nome das migrações) só para a conta da plataforma
+  const superConta = !!(E.sessao && E.sessao.conta && E.sessao.conta.super);
+  const texto = superConta
+    ? `O servidor ainda não recebeu a atualização desta versão do app (banco em «${P.chaveMigracao(info.banco) || info.banco}», esta versão precisa de «${P.chaveMigracao(info.minima) || info.minima}»). Algumas telas podem falhar até a equipe aplicar a atualização.`
+    : "Algumas telas podem falhar até a atualização do servidor, que a equipe já está fazendo.";
   if (!faixaMigracao) {
     faixaMigracao = ui.h("div", { class: "faixa faixa-migracao", role: "status" }, ui.icone("alerta"), ui.h("p", null));
     $("faixas-sistema").appendChild(faixaMigracao);

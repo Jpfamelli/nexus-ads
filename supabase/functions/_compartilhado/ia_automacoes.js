@@ -22,7 +22,7 @@
 import { criarDb } from "./db.js";
 import {
   lerConfig, limparErro, ErroApi, ErroHttp, respostaPainel, respostaErro, autenticarPainel, autenticarCron,
-  interna, novoDelimitador, emLotes, traduzirErroIA, MODELO_PADRAO, registrarUsoIA, logIA,
+  interna, novoDelimitador, emLotes, traduzirErroIA, MODELO_PADRAO, registrarUsoIA, logIA, registrarExecucao, modeloIA,
 } from "./comum.js";
 import {
   GATILHOS, GATILHO, ACOES, ACAO, LIMITES, TAREFAS_IA, ORIGENS, CAMPOS_CONDICAO, OPERADORES, VARIAVEIS,
@@ -627,7 +627,7 @@ export async function montarAutomacao(corpo, env, deps = {}) {
   const { base: baseIA, avisos: cortes } = recortarBase(base);
 
   // 3. chave e SDK
-  const cfg = await lerConfig(db);
+  const cfg = await lerConfig(db, ["anthropic_api_key", "modelo_ia"]);   // plano 1000 (SV-065): só o que a IA usa
   if (!cfg?.anthropic_api_key) return respostaIA("ia_indisponivel", "A IA ainda não está configurada. Avise a equipe da Nexus.", 200, "sem_chave");
   let mod = null;
   try { mod = deps.ia ? await deps.ia() : null; } catch (e) { console.error("ia.js:", limparErro(e?.message || e)); }
@@ -639,7 +639,7 @@ export async function montarAutomacao(corpo, env, deps = {}) {
     const cod = reserva?.erro || "ia_indisponivel";
     return respostaIA(cod, MENSAGEM_RESERVA[cod] || "A IA não está disponível agora.", 200);
   }
-  const modelo = cfg.modelo_ia || MODELO_PADRAO;
+  const modelo = modeloIA(cfg.modelo_ia);   // plano 1000 (SV-073)
   const t0 = Date.now();
   // fecha a reserva (custo, stop_reason e latência — contrato 7) e deixa uma linha de log por chamada
   const registrar = async (ok, r, detalhe) => {
@@ -647,7 +647,7 @@ export async function montarAutomacao(corpo, env, deps = {}) {
     const salvo = await registrarUsoIA(db, { reserva: reserva.reserva_id, modelo: r?.modelo || modelo, tokensIn: r?.tokens_in, tokensOut: r?.tokens_out, ok, stopReason: r?.stop_reason, ms,
       cacheEscrita: r?.tokens_cache_escrita, cacheLeitura: r?.tokens_cache_leitura });
     if (salvo && salvo.ok === false) console.error("nx_ia_registrar_reserva: reserva não foi finalizada");
-    logIA({ acao: "automacao_montar", cliente, modelo: r?.modelo || modelo, tokens_in: r?.tokens_in ?? null, tokens_out: r?.tokens_out ?? null, ms, ok, ...(detalhe ? { detalhe } : {}) });
+    logIA({ acao: "automacao_montar", cliente, reserva: reserva.reserva_id, modelo: r?.modelo || modelo, tokens_in: r?.tokens_in ?? null, tokens_out: r?.tokens_out ?? null, ms, ok, ...(detalhe ? { detalhe } : {}) });
   };
 
   // 5. IA (saída estruturada); o bloco fixo do system (regras + catálogo) vai com cache_control
@@ -735,6 +735,10 @@ export function schemaDecisao(tarefa, contexto) {
   };
 }
 
+export const MAX_MSG_DECISAO = 1000;
+export const MAX_CONVERSA_DECISAO = 12000;
+export const MAX_NEGOCIO_DECISAO = 4096;
+
 /** Prompt da decisão: o negócio e a conversa REAIS ficam entre marcas aleatórias (dado, nunca instrução). */
 export function montarPromptDecisao({ tarefa, instrucao, contexto }, delim) {
   const cx = contexto && typeof contexto === "object" ? contexto : {};
@@ -752,13 +756,28 @@ export function montarPromptDecisao({ tarefa, instrucao, contexto }, delim) {
     const d = new Date(iso);
     return Number.isNaN(d.getTime()) ? "--:--" : new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(d);
   };
-  const linhas = (Array.isArray(cx.mensagens) ? cx.mensagens : []).map(m => {
+  // plano 1000 (SV-069): teto do contexto — cada mensagem em 1.000 caracteres e a conversa em 12.000 (ficam as mais recentes);
+  // o negócio em 4 KB. Antes, negócio com campos grandes ou conversa longa inflava o custo e podia passar do limite.
+  const todas = Array.isArray(cx.mensagens) ? cx.mensagens : [];
+  const cabem = [];
+  let total = 0, cortou = false;
+  for (let i = todas.length - 1; i >= 0; i--) {
+    const m = todas[i] || {};
+    let t = semMarca(m.texto, delim);
+    if (t.length > MAX_MSG_DECISAO) { t = `${t.slice(0, MAX_MSG_DECISAO)} [cortado]`; cortou = true; }
+    if (cabem.length && total + t.length > MAX_CONVERSA_DECISAO) { cortou = true; break; }
+    total += t.length;
+    cabem.unshift({ ...m, texto: t });
+  }
+  const linhas = cabem.map(m => {
     // o primeiro nome de quem da equipe respondeu também é texto de terceiro: sem a marca e numa linha só
     const quem = m.dir === "in" ? "cliente" : cortar(semMarca(m.quem, delim).replace(/[\r\n]+/g, " "), 30) || "equipe";
     // o texto vai como JSON (aspas, \n escapado): uma quebra de linha no texto do cliente não vira «fala da equipe»
-    return `[${quem} ${hora(m.em)}] ${JSON.stringify(semMarca(m.texto, delim))}`;
+    return `[${quem} ${hora(m.em)}] ${JSON.stringify(m.texto)}`;
   });
-  const neg = cx.negocio ? semMarca(JSON.stringify(cx.negocio), delim) : "sem negócio";
+  if (cortou) linhas.unshift(`[cortado] (conversa longa: ${todas.length - cabem.length ? `${todas.length - cabem.length} mensagens mais antigas ficaram de fora; ` : ""}textos longos foram cortados)`);
+  let neg = cx.negocio ? semMarca(JSON.stringify(cx.negocio), delim) : "sem negócio";
+  if (neg.length > MAX_NEGOCIO_DECISAO) neg = `${neg.slice(0, MAX_NEGOCIO_DECISAO)} [cortado: negócio com dados demais]`;
   const etapas = tarefa === "classificar_etapa" ? `\nOPÇÕES DE ETAPA (use o id exato): ${semMarca(JSON.stringify(cx.etapas || []), delim)}` : "";
   const usuario = [
     delim,
@@ -831,12 +850,20 @@ async function avisarPausa(db, cliente, chave, titulo, corpo) {
   } catch (e) { console.error("nx-ia aviso de pausa:", limparErro(e?.message || e)); return false; }
 }
 
+/** Plano 1000 (SV-074): segundos até a próxima tentativa de uma decisão que falhou de forma passageira — 120 × 2^(tentativas−1),
+    no máximo 1 h. Sem a contagem (banco antigo) → 120, como antes. */
+export function recuoIA(tentativas) {
+  const n = Number(tentativas);
+  if (!Number.isInteger(n) || n < 1) return 120;
+  return Math.min(120 * 2 ** Math.min(n - 1, 10), 3600);
+}
+
 /** Cron → nx-ia. Só com o x-nx-cron (autenticarCron); nunca por token de painel. */
 export async function decidirAutomacoes(req, corpo, env, deps = {}) {
   const f = deps.fetch || globalThis.fetch;
   const db = criarDb(env, f);
   let cfg;
-  try { cfg = await autenticarCron(req, db); }
+  try { cfg = await autenticarCron(req, db, ["anthropic_api_key", "modelo_ia", "modelo_ia_automacao"]); }
   catch (e) { if (e instanceof ErroHttp) throw new ErroApi("nao_autorizado", 401); throw e; }
   if (!cfg.anthropic_api_key) return respostaErro("ia_indisponivel", 200, "sem_chave");
   let mod = null;
@@ -847,7 +874,10 @@ export async function decidirAutomacoes(req, corpo, env, deps = {}) {
   const pedido = inteiro(corpo.pedido);
   const itens = await interna(db, "nx_auto_ia_pegar", { p_pedido: pedido && pedido > 0 ? pedido : null, p_max: max });
   const lista = Array.isArray(itens) ? itens : [];
-  const modelo = cfg.modelo_ia || MODELO_PADRAO;
+  // plano 1000 (SV-274): nx_config.modelo_ia_automacao (20261013c) escolhe o modelo das DECISÕES do motor (etapa, pontuação, nota);
+  // vazio = o padrão único de sempre (decisão do plano 100). O «montar automação» continua no modelo_ia.
+  const modelo = modeloIA(cfg.modelo_ia_automacao, cfg.modelo_ia);
+  const t0Lote = Date.now();
   const agora = deps.agoraMs || (() => Date.now());
   const inicio = agora();
   const falhar = (id, erro, tentar, em = 120, conta = true) =>
@@ -888,7 +918,7 @@ export async function decidirAutomacoes(req, corpo, env, deps = {}) {
         const ms = r?.ms ?? Date.now() - t0;
         await registrarUsoIA(db, { reserva: reserva.reserva_id, modelo: r?.modelo || modelo, tokensIn: r?.tokens_in, tokensOut: r?.tokens_out, ok, stopReason: r?.stop_reason, ms,
       cacheEscrita: r?.tokens_cache_escrita, cacheLeitura: r?.tokens_cache_leitura });
-        logIA({ acao: "automacao_decidir", cliente: p.cliente_id, pedido: id, tarefa: p.tarefa, modelo: r?.modelo || modelo,
+        logIA({ acao: "automacao_decidir", cliente: p.cliente_id, reserva: reserva.reserva_id, pedido: id, tarefa: p.tarefa, modelo: r?.modelo || modelo,
           tokens_in: r?.tokens_in ?? null, tokens_out: r?.tokens_out ?? null, ms, ok, ...(detalhe ? { detalhe } : {}) });
       };
       const delim = novoDelimitador();
@@ -907,7 +937,9 @@ export async function decidirAutomacoes(req, corpo, env, deps = {}) {
           return adiado(id, t.mensagem, [p.cliente_id, "chave", "IA pausada: a chave da Anthropic foi recusada",
             "As decisões por IA das automações estão esperando (nada foi perdido). Avise a equipe da Nexus para conferir a chave; os pedidos voltam sozinhos."]);
         }
-        await falhar(id, t.mensagem, t.tentarDeNovo, 120);
+        // plano 1000 (SV-074): recuo crescente pela tentativa do pedido (120 s, 240 s, 480 s… até 1 h) — um 429 persistente não
+        // volta a cada 2 min até esgotar
+        await falhar(id, t.mensagem, t.tentarDeNovo, recuoIA(p.tentativas));
         return { id, estado: t.tentarDeNovo ? "adiado" : "erro", erro: t.detalhe || t.codigo };
       }
       await registrar(true, r);
@@ -920,13 +952,19 @@ export async function decidirAutomacoes(req, corpo, env, deps = {}) {
       return res?.ok ? { id, estado: res.cancelado ? "cancelado" : "aplicado" } : { id, estado: "erro", erro: res?.erro || "resultado_invalido" };
     } catch (e) {
       console.error("automacao_decidir (pedido):", limparErro(e?.message || e));
-      await falhar(id, "erro inesperado ao decidir", true, 120);
+      await falhar(id, "erro inesperado ao decidir", true, recuoIA(p.tentativas));
       return { id, estado: "adiado", erro: "erro_interno" };
     }
   };
 
   const resultados = await emLotes(lista, SIMULTANEAS, processar);
   const conta = e => resultados.filter(x => x.estado === e).length;
+  // plano 1000 (SV-077): rastro em nx_execucoes quando houve trabalho — pausas por chave/cota e erros sumiam com o net._http_response
+  if (resultados.length) {
+    await registrarExecucao(db, { tarefa: "nx-ia", inicio: new Date(t0Lote), ms: Date.now() - t0Lote, ok: conta("erro") === 0 && !pausa.chave,
+      resumo: { acao: "automacao_decidir", processados: resultados.length, aplicados: conta("aplicado"), erros: conta("erro"), adiados: conta("adiado"),
+        cancelados: conta("cancelado"), modelo, ...(pausa.chave ? { pausa: "chave" } : pausa.cota.size ? { pausa: "cota", clientes_sem_cota: pausa.cota.size } : {}) } });
+  }
   return respostaPainel({
     ok: true, processados: resultados.length, aplicados: conta("aplicado"), erros: conta("erro"), adiados: conta("adiado"), cancelados: conta("cancelado"),
     ...(pausa.chave ? { pausa: "chave" } : pausa.cota.size ? { pausa: "cota" } : {}),

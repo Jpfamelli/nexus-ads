@@ -7,7 +7,7 @@
    ============================================================ */
 import { criarDb } from "./db.js";
 import {
-  agoraDe, limparErro, ErroApi, respostaPainel, tratarPainel, lerCorpoPainel, autenticarPainel, interna,
+  agoraDe, limparErro, ErroApi, respostaPainel, tratarPainel, lerCorpoPainel, autenticarPainel, interna, comPrazo, funcaoAusente, auditar,
 } from "./comum.js";
 
 // nome e legenda do arquivo são validados já no upload (antes só o enviar cortava): nome até 200 caracteres sem controle,
@@ -65,6 +65,37 @@ export function extensaoDe(mime, nome) {
 /** Tipo da Graph (image|video|audio|document) de um mime já aceito; null = a Graph não envia (WAV é só do aparelho). */
 export const tipoGraph = mime => (soAparelho(mime) ? null : tipoAceito(mime)?.grupo || "document");
 
+/* Plano 1000 (SV-219): assinatura dos primeiros bytes por tipo. O mime vem do navegador; um .exe/.zip renomeado para
+   image/jpeg ia ao aparelho como foto. Tipo sem assinatura conhecida (text/plain) passa. */
+const comeca = (b, ...x) => x.every((v, i) => v == null || b[i] === v);
+const ascii = (b, ini, t) => [...t].every((c, i) => b[ini + i] === c.charCodeAt(0));
+const OLE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+const ZIP = b => ascii(b, 0, "PK") && b[2] === 3 && b[3] === 4;
+const MP4 = b => ascii(b, 4, "ftyp");
+const ASSINATURAS = {
+  "image/jpeg": b => comeca(b, 0xff, 0xd8, 0xff),
+  "image/png": b => comeca(b, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a),
+  "image/webp": b => ascii(b, 0, "RIFF") && ascii(b, 8, "WEBP"),
+  "video/mp4": MP4, "audio/mp4": MP4, "video/3gpp": MP4,
+  "audio/ogg": b => ascii(b, 0, "OggS"),
+  "audio/wav": b => ascii(b, 0, "RIFF") && ascii(b, 8, "WAVE"),
+  "audio/mpeg": b => ascii(b, 0, "ID3") || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0),
+  "audio/aac": b => ascii(b, 0, "ADIF") || (b[0] === 0xff && (b[1] & 0xf6) === 0xf0),
+  "audio/amr": b => ascii(b, 0, "#!AMR"),
+  "application/pdf": b => ascii(b, 0, "%PDF"),
+  "application/msword": b => comeca(b, ...OLE), "application/vnd.ms-excel": b => comeca(b, ...OLE),
+  "application/vnd.ms-powerpoint": b => comeca(b, ...OLE),
+};
+
+/** Os bytes batem com o tipo declarado? Tipo sem assinatura conhecida → true; office moderno (openxmlformats) = ZIP. */
+export function confereAssinatura(bytes, mime) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  const m = mimeBase(mime);
+  if (/^application\/vnd\.openxmlformats-officedocument\./.test(m)) return ZIP(b);
+  const f = ASSINATURAS[m];
+  return f ? b.length >= 4 && f(b) : true;
+}
+
 /** <cliente>/<in|out>/<AAAA-MM>/<uuid>.<ext> (mês em São Paulo). */
 export function caminhoMidia(cliente, sentido, quando, ext) {
   const sp = new Date(new Date(quando).getTime() - 3 * 3600e3);   // SP sem horário de verão (desde 2019)
@@ -80,23 +111,27 @@ export function pathDoCliente(path, cliente, sentido) {
   return p.startsWith(`${cliente}/${sentido ? `${sentido}/` : ""}`);
 }
 
-/** Storage do Supabase com a chave da service_role (sem SDK). */
-export function criarStorage({ url, chave } = {}, f = globalThis.fetch) {
+export const PRAZO_STORAGE_MS = 20_000;
+export const PRAZO_STORAGE_SUBIR_MS = 60_000;
+
+/** Storage do Supabase com a chave da service_role (sem SDK). Plano 1000 (SV-055): toda chamada tem prazo (20 s; 60 s para
+    subir arquivo) — um Storage lento segurava a nx-midia, a nx-enviar e o download de mídia do webhook até o corte de 150 s. */
+export function criarStorage({ url, chave } = {}, f = globalThis.fetch, { prazoMs = PRAZO_STORAGE_MS, prazoSubirMs = PRAZO_STORAGE_SUBIR_MS } = {}) {
   const base = `${String(url ?? "").replace(/\/+$/, "")}/storage/v1`;
   const cab = { apikey: chave };
   if (!String(chave ?? "").startsWith("sb_")) cab.Authorization = `Bearer ${chave}`;
   const codificar = p => String(p).split("/").map(encodeURIComponent).join("/");
 
-  async function pedir(metodo, caminho, { corpo, cabecalhos = {}, cru = false } = {}) {
-    let r;
+  async function pedir(metodo, caminho, { corpo, cabecalhos = {}, cru = false, ms = prazoMs } = {}) {
+    let r, txt;
     try {
-      r = await f(`${base}/${caminho}`, {
+      r = await comPrazo(f, ms)(`${base}/${caminho}`, {
         method: metodo,
         headers: { ...cab, ...(cru ? {} : corpo !== undefined ? { "Content-Type": "application/json" } : {}), ...cabecalhos },
         body: corpo === undefined ? undefined : cru ? corpo : JSON.stringify(corpo),
       });
+      txt = await r.text();
     } catch (e) { return { ok: false, status: 0, erro: limparErro(e?.message || e) }; }
-    const txt = await r.text();
     let dados = null;
     try { dados = txt ? JSON.parse(txt) : null; } catch { dados = txt; }
     if (!r.ok) {
@@ -110,7 +145,7 @@ export function criarStorage({ url, chave } = {}, f = globalThis.fetch) {
     base,
     /** Grava bytes (x-upsert). */
     subir: (path, bytes, mime) => pedir("POST", `object/${BUCKET}/${codificar(path)}`,
-      { corpo: bytes, cru: true, cabecalhos: { "Content-Type": mime || "application/octet-stream", "x-upsert": "true" } }),
+      { corpo: bytes, cru: true, ms: prazoSubirMs, cabecalhos: { "Content-Type": mime || "application/octet-stream", "x-upsert": "true" } }),
     /** URL de upload assinada (o navegador faz PUT nela). */
     async assinarUpload(path) {
       const r = await pedir("POST", `object/upload/sign/${BUCKET}/${codificar(path)}`, { corpo: {} });
@@ -154,6 +189,30 @@ export async function arquivosDaPasta(st, pasta, max = 1000) {
   return { arquivos: out, completo: !fila.length && out.length < max };
 }
 
+/** Paths que a conta enxerga (nx_midia_visiveis, migração 20261013b). Banco sem a RPC → todos (comportamento anterior). */
+async function pathsVisiveis(db, ctx, cliente, paths) {
+  try {
+    const r = await db.rpc("nx_midia_visiveis", { p_ctx: ctx, p_cliente: cliente, p_paths: paths });
+    const ok = new Set(Array.isArray(r) ? r.map(String) : []);
+    return paths.filter(p => ok.has(p));
+  } catch (e) {
+    if (funcaoAusente(e, "nx_midia_visiveis")) return paths;
+    throw e;
+  }
+}
+
+/** Plano 1000 (SV-220): validade da URL assinada de LEITURA pedida pelo painel. */
+export const PRAZO_VER_S = 600;
+/** Plano 1000 (SV-060): uploads por conta numa janela (nx_taxa_usar da 20261013a). */
+export const UPLOADS_POR_JANELA = 60;
+export const JANELA_UPLOAD_S = 600;
+async function limiteUpload(db, ctx) {
+  let r;
+  try { r = await db.rpc("nx_taxa_usar", { p_chave: `midia:${ctx.conta_id}`, p_limite: UPLOADS_POR_JANELA, p_janela_s: JANELA_UPLOAD_S }); }
+  catch (e) { if (funcaoAusente(e, "nx_taxa_usar")) return; throw e; }
+  if (r && r.ok === false) throw new ErroApi("limite_taxa", 429);
+}
+
 /* ------------------------------------------------------------
    Handler da nx-midia
    ------------------------------------------------------------ */
@@ -169,12 +228,14 @@ export async function tratar(req, env, deps = {}) {
     // só as chaves próprias ("constructor", "__proto__"… não são ações)
     if (!Object.hasOwn(PAPEL, acao)) throw new ErroApi("dados_invalidos", 400, "acao");
     const db = criarDb(env, f);
-    await autenticarPainel(db, corpo, PAPEL[acao]);
+    const ctx = await autenticarPainel(db, corpo, PAPEL[acao]);
     const cliente = String(corpo.cliente);
     await interna(db, "nx_exigir_modulo", { p_cliente: cliente, p_modulo: "conversas" });
     const st = criarStorage(env, f);
 
     if (acao === "subir" || acao === "subir_direto") {
+      // plano 1000 (SV-060): teto de uploads por conta (60 em 10 min) — um script com um token válido enchia o bucket
+      await limiteUpload(db, ctx);
       const tipo = tipoAceito(corpo.mime);
       if (!tipo) throw new ErroApi("midia_tipo", 400);
       if (corpo.nome != null && (typeof corpo.nome !== "string" || corpo.nome.length > NOME_MAX || CONTROLE.test(corpo.nome))) throw new ErroApi("dados_invalidos", 400, "nome");
@@ -209,13 +270,24 @@ export async function tratar(req, env, deps = {}) {
     if (!paths.every(p => pathDoCliente(p, cliente))) throw new ErroApi("midia_nao_encontrada", 404);
 
     if (acao === "ver") {
-      const r = await st.assinar([...new Set(paths)], 3600);
+      // plano 1000 (SV-058): só assina o que esta conta VÊ (mídia de conversa visível — departamento, atribuição — ou upload
+      // próprio ainda sem mensagem); o resto fica fora de urls, como um path que não existe
+      const visiveis = await pathsVisiveis(db, ctx, cliente, [...new Set(paths)]);
+      if (!visiveis.length) return respostaPainel({ ok: true, urls: {} });
+      // plano 1000 (SV-220): o link de leitura vale 10 min (o painel reassina ao abrir de novo); 1 h só no envio (a Graph busca)
+      const r = await st.assinar(visiveis, PRAZO_VER_S);
       if (!r.ok) throw new ErroApi("erro_interno", 502, `Storage: ${r.erro}`);
       return respostaPainel({ ok: true, urls: r.urls });
     }
     // apagar (uso manual; a exclusão de contato usa a fila nx_midia_lixo)
     const r = await st.apagar(paths);
     if (!r.ok) throw new ErroApi("erro_interno", 502, `Storage: ${r.erro}`);
-    return respostaPainel({ ok: true });
+    // plano 1000 (SV-057): as mensagens do cliente com esses arquivos ficam «apagada» (sem path) — a bolha não tenta abrir um
+    // arquivo que não existe mais (404). Banco sem a RPC → como antes.
+    let mensagens = null;
+    try { mensagens = await db.rpc("nx_midia_apagada", { p_cliente: cliente, p_paths: [...new Set(paths)] }); }
+    catch (e) { if (!funcaoAusente(e, "nx_midia_apagada")) throw e; }
+    await auditar(db, ctx, cliente, "midia_apagada", { arquivos: paths.length });
+    return respostaPainel({ ok: true, ...(Number.isFinite(Number(mensagens)) && mensagens != null ? { mensagens: Number(mensagens) } : {}) });
   }, deps.drenagem);
 }

@@ -75,8 +75,45 @@ export function criarLista(A) {
   const ponto = h("span", { class: "cvl-ponto", hidden: true });
   const btFiltro = h("button", { type: "button", class: "bt-icone cvl-filtro", "aria-label": "Filtros", title: "Filtros" }, ui.icone("filtro"), ponto);
   btFiltro.addEventListener("click", () => abrirFiltros());
-  const btAvisos = h("button", { type: "button", class: "bt-icone cvl-avisos", "aria-label": "Avisos de mensagem nova", title: "Avisos de mensagem nova" }, ui.icone("sino"));
+  const btAvisos = h("button", { type: "button", class: "bt-icone cvl-avisos", "aria-label": "Avisos e aparência da lista", title: "Avisos de mensagem nova e aparência da lista" }, ui.icone("sino"));
   btAvisos.addEventListener("click", () => A.acoes.menuAvisos(btAvisos));
+
+  /* ---------------- CA-046: ações em lote — modo seleção (toque/clique marca a conversa) e a barra «Marcar como lida · Resolver» */
+  let selecionando = false;
+  const selecao = new Set();
+  const nSel = h("span", { class: "cvl-lote-n", role: "status", "aria-live": "polite" }, "");
+  const btLoteLida = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("check"), "Marcar como lida");
+  const btLoteResolver = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("check"), "Resolver");
+  // plano 1000 · CA-046 (conv-2): também Transferir e Etiquetar as marcadas de uma vez (antes só lida e resolver)
+  const btLoteTransferir = typeof A.acoes.transferirLote === "function" ? h("button", { type: "button", class: "bt bt-sec bt-p cvl-lote-transf" }, ui.icone("transferir"), "Transferir") : null;
+  const btLoteEtiquetar = typeof A.acoes.etiquetarLote === "function" ? h("button", { type: "button", class: "bt bt-sec bt-p cvl-lote-etq" }, ui.icone("etiqueta"), "Etiquetar") : null;
+  const btLoteSair = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Cancelar");
+  const barraLote = h("div", { class: "cvl-lote", role: "toolbar", "aria-label": "Ações nas conversas selecionadas", hidden: true }, nSel, btLoteLida, btLoteResolver, btLoteTransferir, btLoteEtiquetar, btLoteSair);
+  const btSelecionar = A.podeEscrever && typeof A.acoes.resolverLote === "function"
+    ? h("button", { type: "button", class: "bt-icone cvl-sel-bt", "aria-label": "Selecionar várias conversas", "aria-pressed": "false", title: "Selecionar várias (resolver ou marcar como lidas de uma vez)" }, ui.icone("check"))
+    : null;
+  function modoSelecao(sim) {
+    selecionando = !!sim;
+    if (!selecionando) selecao.clear();
+    if (btSelecionar) btSelecionar.setAttribute("aria-pressed", String(selecionando));
+    pintarLote();
+    renderItens();
+  }
+  function pintarLote() {
+    barraLote.hidden = !selecionando;
+    const n = selecao.size;
+    nSel.textContent = n ? `${n} ${n === 1 ? "selecionada" : "selecionadas"}` : "Toque nas conversas para selecionar";
+    btLoteLida.disabled = btLoteResolver.disabled = !n;
+    if (btLoteTransferir) btLoteTransferir.disabled = !n;
+    if (btLoteEtiquetar) btLoteEtiquetar.disabled = !n;
+  }
+  if (btSelecionar) btSelecionar.addEventListener("click", () => modoSelecao(!selecionando));
+  btLoteSair.addEventListener("click", () => modoSelecao(false));
+  btLoteLida.addEventListener("click", async () => { const ids = [...selecao]; modoSelecao(false); await A.acoes.lidaLote(ids); });
+  btLoteResolver.addEventListener("click", async () => { const ids = [...selecao]; modoSelecao(false); await A.acoes.resolverLote(ids); });
+  // transferir/etiquetar perguntam antes (modal): a seleção só sai quando a ação foi confirmada
+  if (btLoteTransferir) btLoteTransferir.addEventListener("click", async () => { const ids = [...selecao]; if (await A.acoes.transferirLote(ids)) modoSelecao(false); });
+  if (btLoteEtiquetar) btLoteEtiquetar.addEventListener("click", async () => { const ids = [...selecao]; if (await A.acoes.etiquetarLote(ids)) modoSelecao(false); });
 
   /* ---------------- abas: uma linha só — Minhas · Sem dono · Aguardando (ui.segmentado) + botão "Mais situações ▾" */
   const abasEl = h("div", { class: "cvl-abas" });
@@ -114,6 +151,8 @@ export function criarLista(A) {
   montarAbas();
 
   const avisoCanal = h("div", { class: "cvl-aviso", hidden: true });
+  // plano 1000 · CA-103: sem conexão, a lista que aparece é a última guardada no aparelho — a faixa diz de quando ela é
+  const avisoCache = h("p", { class: "cvl-cache", role: "status", hidden: true });
   // D18: número de WhatsApp desconectado (ctx.canais do shell ou nx_cv_base.canais[].estado): faixa na central com «Ver número»
   const avisoCaido = h("div", { class: "cvl-caido", role: "status", hidden: true });
   let sigCaido = "";
@@ -122,14 +161,39 @@ export function criarLista(A) {
   const lista = h("div", { class: "cvl-lista", id: "cvl-lista", role: "tabpanel" });
   const maisBox = h("div", { class: "cvl-mais", hidden: true });
   const btMais = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Carregar mais");
-  btMais.addEventListener("click", () => ui.carregando(btMais, A.acoes.carregarLista({ mais: true })));
+  // CA-050: a próxima página também chega sozinha quando o fim da lista aparece (IntersectionObserver, com trava); o botão continua
+  let carregandoMais = false;
+  function carregarMais() {
+    if (carregandoMais || !A.temMais) return null;
+    carregandoMais = true;
+    return Promise.resolve(ui.carregando(btMais, A.acoes.carregarLista({ mais: true }))).finally(() => { carregandoMais = false; });
+  }
+  btMais.addEventListener("click", () => carregarMais());
   maisBox.appendChild(btMais);
+  let observador = null;
+  if (typeof IntersectionObserver === "function") {
+    try {
+      observador = new IntersectionObserver(ents => { if (ents.some(e => e.isIntersecting) && A.temMais && !A.carregandoLista && !A.busca) carregarMais(); }, { root: lista, rootMargin: "160px 0px" });
+      observador.observe(maisBox);
+    } catch { observador = null; }
+  }
 
   const el = h("div", { class: "cvl" },
     h("header", { class: "cvl-cab" }, titulo, btNova, btAtender),
     leitor,
-    h("div", { class: "cvl-busca" }, h("label", { class: "busca" }, ui.icone("busca"), busca), btFiltro, btAvisos),
-    buscaAjuda, infoBusca, filtrosEl, abasEl, avisoCanal, avisoCaido, lista);
+    h("div", { class: "cvl-busca" }, h("label", { class: "busca" }, ui.icone("busca"), busca), btFiltro, btSelecionar, btAvisos),
+    buscaAjuda, infoBusca, filtrosEl, abasEl, avisoCanal, avisoCaido, avisoCache, lista, barraLote);
+  // CA-046: no modo seleção, tocar na linha marca/desmarca (não abre a conversa)
+  lista.addEventListener("click", ev => {
+    if (!selecionando) return;
+    const a = ev.target && ev.target.closest ? ev.target.closest(".cvl-item") : null;
+    if (!a) return;
+    ev.preventDefault();
+    const id = Number(a.dataset.id);
+    if (selecao.has(id)) selecao.delete(id); else selecao.add(id);
+    pintarLote();
+    renderItens();
+  });
 
   /* ---------------- filtros (popover) */
   function filtrosAtivos() {
@@ -197,15 +261,11 @@ export function criarLista(A) {
         return h("label", { class: "chip-check", for: idc }, h("input", { type: "checkbox", id: idc, value: e.id, checked: marcadas.has(e.id) }), ui.etiqueta(e));
       }))) : null;
     const cNl = ui.campo({ tipo: "interruptor", nome: "nao_lidas", rotulo: "Só não lidas", valor: !!f.nao_lidas });
-    // plano 50 · 34: densidade das linhas (lembrada por navegador); vale na hora, sem «Aplicar»
-    const compacta = !!(A.acoes.densidade && A.acoes.densidade() === "compacta");
-    const cDens = A.acoes.definirDensidade ? ui.campo({ tipo: "interruptor", nome: "densidade", rotulo: "Linhas compactas", valor: compacta }) : null;
-    if (cDens) { const sw = cDens.querySelector("input[name=densidade]"); if (sw) sw.addEventListener("change", () => A.acoes.definirDensidade(sw.checked ? "compacta" : "confortavel")); }
+    // plano 1000 · CA-228: «Linhas compactas» não é filtro — mudou para o menu do sino (preferências da central, junto de som e avisos)
     const aplicar = h("button", { type: "button", class: "bt bt-prim bt-p" }, "Aplicar");
     const limparB = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Limpar");
     const corpo = h("div", { class: "pilha cvf" },
       h("p", { class: "rotulo" }, "Filtrar a lista"), cDep, cCanal, cAt, cEtq, cNl,
-      cDens ? h("div", { class: "cvf-pref" }, h("p", { class: "rotulo" }, "Aparência"), cDens) : null,
       h("div", { class: "linha linha-fim" }, limparB, aplicar));
     const pop = ui.flutuante(btFiltro, corpo, { largura: 300 });
     const ler = () => {
@@ -238,13 +298,31 @@ export function criarLista(A) {
     if (!multiCanal() || !canal) return av;
     const prov = canal.provedor === "codewords" ? "codewords" : "meta";
     return h("span", { class: "cvl-av", "aria-hidden": "true" }, av,
-      h("i", { class: "cvl-canal", dataset: { provedor: prov }, title: `via ${canal.nome || (prov === "codewords" ? "CodeWords" : "WhatsApp oficial")}` }, ui.icone("whatsapp")));
+      // plano 1000 · CA-090: o title diz que é o NÚMERO por onde a conversa chegou (antes «via Recepção», sem dizer o quê)
+      h("i", { class: "cvl-canal", dataset: { provedor: prov }, title: `Chegou pelo número ${canal.nome || (prov === "codewords" ? "CodeWords" : "WhatsApp oficial")}` }, ui.icone("whatsapp")));
   }
 
-  function assinatura(c, sel, minuto) {
+  /** CA-052: o horário de atendimento que vale para a conversa (departamento dela ou o padrão), quando a tela o conhece
+      (hoje só o admin recebe base.config.departamentos[].horario); undefined = a espera conta minutos corridos. */
+  function horarioDe(c) {
+    const deps = (A.base && A.base.config && A.base.config.departamentos) || [];
+    const d = deps.find(x => x && x.id === c.departamento_id) || deps.find(x => x && x.padrao);
+    return d && Object.prototype.hasOwnProperty.call(d, "horario") ? d.horario : undefined;
+  }
+  /** A espera da linha (SLA), nos minutos de atendimento quando o horário é conhecido. */
+  function esperaDe(c) {
+    if (!(c.status === "aberta" && c.aguardando && c.ultima_entrada_em)) return null;
+    const hor = horarioDe(c);
+    return hor === undefined ? { ...L.nivelEspera(c.ultima_entrada_em), uteis: false, chegouFechado: false } : L.nivelEsperaUtil(c.ultima_entrada_em, new Date(), hor);
+  }
+  /** CA-092: só a linha com SLA (aguardando) muda a cada minuto; as outras só na virada do dia (a hora «14:05» vira «Ontem»). */
+  function assinatura(c, sel, minuto, dia) {
+    const comSla = c.status === "aberta" && c.aguardando && c.ultima_entrada_em;
     return JSON.stringify([A.acoes.rascunhoDe(c.id), A.acoes.filaResumo(c.id), c.contato && c.contato.nome, c.contato && c.contato.telefone, c.ultima_msg_em, c.ultima_msg_resumo, c.ultima_msg_dir,
-      c.nao_lidas, c.status, c.atribuida_a, c.atribuida_nome, c.aguardando, c.ultima_entrada_em, c.etiquetas, c.negocio, sel, minuto, A.aba, !!A.busca, c.contato && c.contato.origem,
-      (A.base && A.base.etiquetas || []).length]);
+      c.nao_lidas, c.status, c.atribuida_a, c.atribuida_nome, c.aguardando, c.ultima_entrada_em, c.etiquetas, c.negocio, sel, comSla ? minuto : dia, A.aba, !!A.busca, c.contato && c.contato.origem,
+      (A.base && A.base.etiquetas || []).length, c.departamento_id, selecionando ? (selecao.has(c.id) ? 2 : 1) : 0,
+      c.oculta, c.ultima_msg_origem, c.ultima_msg_por, c.ultima_msg_por_nome,
+      comSla ? (horarioDe(c) === undefined ? "-" : horarioDe(c)) : 0]);
   }
 
   function criarItem(c, sel) {
@@ -254,6 +332,8 @@ export function criarLista(A) {
     const rascunho = L.textoRascunhoLista(A.acoes.rascunhoDe(c.id));       // M36: o que foi digitado e não enviado aparece na linha, em itálico
     // com mensagem nova do cliente, a linha mostra a mensagem DELE (é o que precisa ser lido) e o rascunho vira um selo pequeno
     const rascunhoNaLinha = !!rascunho && !nl;
+    // plano 1000 · CA-247: «Você:» só quando foi a própria pessoa — IA, automação ou colega têm o nome deles (por detecção: o servidor ainda não manda a origem)
+    const prefixo = L.prefixoResumoLista(c, A.eu && A.eu.id);
     const meta = [];
     // fila de saída: mensagem desta conversa que não saiu ("!") ou que ainda espera na fila (relógio) — visível sem abrir a conversa
     const fila = A.acoes.filaResumo(c.id);
@@ -266,12 +346,19 @@ export function criarLista(A) {
       const cor = ui.corOk(c.negocio.estagio_cor);
       meta.push(h("span", { class: "cvl-dot cvl-dot-etapa", style: cor ? { "--cor": cor } : null, title: `Etapa: ${c.negocio.estagio_nome}`, role: "img", "aria-label": `Etapa: ${c.negocio.estagio_nome}` }));
     }
-    // SLA visual (34): a espera muda de cor aos 15, 30 e 60 min; a linha ganha a mesma marca na borda
-    const sla = c.status === "aberta" && c.aguardando && c.ultima_entrada_em ? L.nivelEspera(c.ultima_entrada_em) : null;
+    // SLA visual (34): a espera muda de cor aos 15, 30 e 60 min; a linha ganha a mesma marca na borda.
+    // CA-052: com o horário de atendimento conhecido, só conta o tempo com a empresa aberta (sábado 20h → segunda 9h15 = 75 min, não 37 h)
+    const sla = esperaDe(c);
+    const esperaTxt = sla ? (sla.uteis ? L.textoMinutos(sla.minutos) : L.tempoEspera(c.ultima_entrada_em)) : "";
     if (sla) {
-      const rotSla = { ok: "Esperando resposta há", aten: "Esperando há mais de 15 min", ruim: "Esperando há mais de 30 min", critico: "Esperando há mais de 1 h" }[sla.nivel];
-      meta.push(h("span", { class: "cvl-espera", dataset: { sla: sla.nivel }, title: `${rotSla}: ${L.tempoEspera(c.ultima_entrada_em)}` }, ui.icone("relogio"), L.tempoEspera(c.ultima_entrada_em)));
+      // CA-090: «Esperando resposta há 4 min» (sem o dois-pontos sobrando); nas faixas longas, a faixa e o tempo exato
+      const rotSla = { aten: "Esperando há mais de 15 min", ruim: "Esperando há mais de 30 min", critico: "Esperando há mais de 1 h" }[sla.nivel];
+      const util = sla.uteis ? ` de atendimento${sla.chegouFechado ? " (chegou fora do horário)" : ""}` : "";
+      meta.push(h("span", { class: "cvl-espera", dataset: { sla: sla.nivel, uteis: sla.uteis ? "1" : null },
+        title: rotSla ? `${rotSla} (${esperaTxt}${util})` : `Esperando resposta há ${esperaTxt}${util}` }, ui.icone("relogio"), esperaTxt));
     }
+    // CA-235: na aba Ocultas e na busca, a linha diz que o contato está bloqueado
+    if (c.oculta) meta.push(ui.pilula("Bloqueado", "ruim", { class: "cvl-bloq", title: "Contato bloqueado: o que ele manda fica guardado aqui, sem avisar ninguém" }));
     if (A.busca && c.status !== "aberta") meta.push(ui.pilula(c.status === "resolvida" ? "Resolvida" : "Pendente", c.status === "resolvida" ? "neutra" : "aten"));
     // D17: de onde o contato veio (pílula de origem da frente A), por detecção — o nx_cv_listar de hoje ainda não manda contato.origem
     const origem = c.contato && c.contato.origem;
@@ -282,6 +369,9 @@ export function criarLista(A) {
       meta.push(h("span", { class: "cvl-dot", style: cor ? { "--cor": cor } : null, title: `Etiqueta: ${e.nome}`, role: "img", "aria-label": `Etiqueta: ${e.nome}` }));
     }
     if (etqs.length > 3) meta.push(h("span", { class: "cvl-mais-etq", title: etqs.slice(3).map(e => e.nome).join(", ") }, `+${etqs.length - 3}`));
+    // CA-043: no toque ninguém vê o title dos pontos — no celular a etapa e a 1ª etiqueta aparecem por extenso («Avaliação · Urgente +1»)
+    const metaTxt = L.textoMetaLista(c.negocio && c.negocio.estagio_nome, etqs);
+    if (metaTxt) meta.push(h("span", { class: "cvl-meta-txt" }, metaTxt));
     if (c.atribuida_a) {
       const av = ui.avatar(c.atribuida_nome || "?", c.atribuida_a);
       av.classList.add("cvl-dono");
@@ -290,22 +380,34 @@ export function criarLista(A) {
     }
     const rotuloA11y = [nome, c.negocio && c.negocio.estagio_nome ? `etapa ${c.negocio.estagio_nome}` : null, etqs.length ? `etiquetas ${etqs.map(e => e.nome).join(", ")}` : null, nl ? `${nl} não ${nl === 1 ? "lida" : "lidas"}` : null,
       filaTxt || null,
-      rascunhoNaLinha ? `Rascunho: ${rascunho}` : resumo ? `${c.ultima_msg_dir === "out" ? "Você: " : ""}${resumo}` : null,
+      rascunhoNaLinha ? `Rascunho: ${rascunho}` : resumo ? `${prefixo}${resumo}` : null,
       rascunho && !rascunhoNaLinha ? "tem rascunho" : null, L.horaLista(c.ultima_msg_em),
-      sla ? `esperando há ${L.tempoEspera(c.ultima_entrada_em)}${sla.nivel === "critico" || sla.nivel === "ruim" ? ", espera longa" : ""}` : null,
+      sla ? `esperando há ${esperaTxt}${sla.uteis ? " de atendimento" : ""}${sla.nivel === "critico" || sla.nivel === "ruim" ? ", espera longa" : ""}` : null,
       multiCanal() && c.canal ? `via ${c.canal.nome}` : null,
       c.atribuida_nome ? `com ${c.atribuida_nome}` : "sem dono"].filter(Boolean).join(", ");
     const tipoUlt = rascunhoNaLinha ? null : L.tipoDoResumo(resumo);
-    const a = h("a", { class: "cvl-item", href: `#/conversas/${c.id}`, "aria-current": sel ? "true" : null, "aria-label": rotuloA11y,
-      dataset: { id: c.id, naoLida: nl ? "1" : "0", sla: sla ? sla.nivel : null } },
-      avatarComCanal(c, nome),
+    const marcada = selecionando && selecao.has(c.id);
+    const a = h("a", { class: "cvl-item", href: `#/conversas/${c.id}`, "aria-current": sel && !selecionando ? "true" : null, "aria-label": rotuloA11y,
+      role: selecionando ? "checkbox" : null, "aria-checked": selecionando ? String(marcada) : null,
+      dataset: { id: c.id, naoLida: nl ? "1" : "0", sla: sla ? sla.nivel : null, sel: selecionando ? (marcada ? "1" : "0") : null } },
+      selecionando ? h("span", { class: "cvl-check", "aria-hidden": "true" }, marcada ? ui.icone("check") : null) : avatarComCanal(c, nome),
       h("span", { class: "cvl-nome" }, nome),
       h("span", { class: "cvl-hora" }, L.horaLista(c.ultima_msg_em)),
       rascunhoNaLinha ? h("span", { class: "cvl-resumo cvl-rascunho" }, h("em", null, "Rascunho: "), rascunho)
-        : h("span", { class: "cvl-resumo", dataset: { tipo: tipoUlt || "texto" } }, c.ultima_msg_dir === "out" && resumo ? h("b", null, "Você: ") : null,
+        : h("span", { class: "cvl-resumo", dataset: { tipo: tipoUlt || "texto" } }, prefixo && resumo ? h("b", null, prefixo) : null,
           tipoUlt ? h("span", { class: "cvl-tipo", title: ROTULO_TIPO[tipoUlt] || "" }, A.icone(ICONE_TIPO[tipoUlt] || "clipe", "cvl-tipo-ic")) : null, resumo),
       nl ? h("span", { class: "cvl-badge", "aria-hidden": "true" }, nl > 99 ? "99+" : String(nl)) : h("span", { "aria-hidden": "true" }),
       meta.length ? h("span", { class: "cvl-meta", "aria-hidden": "true" }, meta) : null);
+    // plano 1000 · CA-109: no celular, deslizar a linha para a esquerda resolve e para a direita marca como lida — sempre com Desfazer
+    if (!selecionando && A.podeEscrever && L.aparelhoDeToque() && typeof ui.deslizar === "function") {
+      const esq = c.status !== "resolvida" && typeof A.acoes.resolverLote === "function" ? () => A.acoes.resolverLote([c.id]) : null;
+      const dir = nl > 0 && typeof A.acoes.lidaComDesfazer === "function" ? () => A.acoes.lidaComDesfazer(c.id) : null;
+      if (esq || dir) {
+        a.dataset.gestoE = esq ? "Resolver" : "";
+        a.dataset.gestoD = dir ? "Marcar como lida" : "";
+        try { ui.deslizar(a, { esquerda: esq, direita: dir }); } catch { /* sem gesto: o ⋮ da conversa continua */ }
+      }
+    }
     return a;
   }
 
@@ -359,7 +461,8 @@ export function criarLista(A) {
       const aba = L.ABAS.find(x => x.id === A.aba);
       const semCanal = A.base && !(A.base.canais || []).length;
       const bm = A.buscaMsgs;
-      const chave = `${A.aba}|${A.busca}|${semCanal}|${filtrosAtivos()}|${bm ? `${bm.q}:${bm.carregando}:${bm.itens.length}:${!!bm.erro}` : "-"}`;
+      const cont = A.contagens || {};
+      const chave = `${A.aba}|${A.busca}|${semCanal}|${filtrosAtivos()}|${bm ? `${bm.q}:${bm.carregando}:${bm.itens.length}:${!!bm.erro}` : "-"}|${Number(cont.aguardando) || 0}:${Number(cont.sem_dono) || 0}`;
       if (ultimoVazio === chave && (lista.querySelector(".vazio") || lista.contains(blocoMsgs))) return;
       ultimoVazio = chave;
       ui.limpar(lista);
@@ -367,15 +470,33 @@ export function criarLista(A) {
         const temMsgs = renderBlocoMsgs();
         if (temMsgs) lista.appendChild(h("p", { class: "sub cvl-msgs-info", role: "status" }, "Nenhum contato ou protocolo com esse termo."));
         else lista.appendChild(ui.vazio({ titulo: "Nada encontrado.", texto: "Confira o nome, o telefone, o protocolo ou um trecho da mensagem.", icone: "busca", tema: "busca" }));   // `tema`: ilustração da frente A (ignorado onde não existe)
+        // plano 1000 · CA-091: a busca é um telefone válido e ninguém tem esse número — o próximo passo é falar com ele
+        const q = String(A.busca || "").trim();
+        if (A.podeEscrever && /^[\d\s()+.-]{8,}$/.test(q) && !L.erroTelefone(q)) {
+          lista.appendChild(h("div", { class: "linha cvl-vazio-acoes cvl-nova-tel" },
+            h("button", { type: "button", class: "bt bt-prim bt-p", on: { click: () => A.acoes.novaConversa({ telefone: q }) } }, ui.icone("mais"), `Nova conversa com ${L.mascaraTelefone(q)}`)));
+        }
         if (!blocoMsgs.hidden) lista.appendChild(blocoMsgs);
       }
       else if (filtrosAtivos()) lista.appendChild(ui.vazio({ titulo: "Nenhuma conversa com esses filtros.", icone: "filtro", tema: "busca", acao: { rotulo: "Limpar filtros", fn: () => A.acoes.mudarLista({ filtro: {} }) } }));
+      else if (A.aba === "minhas" && A.podeEscrever && ((Number(cont.aguardando) || 0) > 0 || (Number(cont.sem_dono) || 0) > 0)) {
+        // CA-049: «Minhas» vazia com gente esperando — o próximo passo está no próprio vazio
+        const ag = Number(cont.aguardando) || 0, sd = Number(cont.sem_dono) || 0;
+        const caixa = h("div", { class: "cvl-vazio-minhas" }, ui.vazio({ titulo: aba ? aba.vazio : "Nada por aqui.", icone: "chat", tema: "conversas",
+          texto: ag ? `${ag} ${ag === 1 ? "cliente espera" : "clientes esperam"} resposta.` : `${sd} ${sd === 1 ? "conversa está" : "conversas estão"} sem dono.` }));
+        const acoesVazio = h("div", { class: "linha cvl-vazio-acoes" },
+          ag ? h("button", { type: "button", class: "bt bt-prim bt-p cvl-vazio-atender", on: { click: ev => A.acoes.atenderProximo(ev.currentTarget) } }, ui.icone("seta-dir"), `Atender o próximo (${ag} esperando)`) : null,
+          sd ? h("button", { type: "button", class: "bt bt-fant bt-p cvl-vazio-semdono", on: { click: () => escolherAba("sem_dono") } }, `Ver Sem dono (${sd})`) : null);
+        caixa.appendChild(acoesVazio);
+        lista.appendChild(caixa);
+      }
       else lista.appendChild(ui.vazio({ titulo: aba ? aba.vazio : "Nada por aqui.", icone: "chat", tema: "conversas" }));
       maisBox.hidden = true;
       return;
     }
     ultimoVazio = null;
     const minuto = Math.floor(Date.now() / 60000);
+    const dia = L.diaSP(Date.now());
     // j/k: a linha com o foco pode ser recriada neste desenho (vira o minuto, chega mensagem); o foco volta para a MESMA conversa no fim
     const focada = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".cvl-item") : null;
     const idFocado = focada && lista.contains(focada) ? focada.dataset.id : null;
@@ -383,7 +504,7 @@ export function criarLista(A) {
     const ordem = [];
     for (const c of A.itens) {
       const sel = c.id === A.selId;
-      const sig = assinatura(c, sel, minuto);
+      const sig = assinatura(c, sel, minuto, dia);
       let x = cache.get(c.id);
       if (!x || x.sig !== sig) {
         const novo = criarItem(c, sel);
@@ -398,6 +519,12 @@ export function criarLista(A) {
     for (const n of [...lista.children]) if (!n.classList.contains("cvl-item") && n !== maisBox && n !== blocoMsgs) n.remove();
     ordem.forEach((node, i) => { if (lista.children[i] !== node) lista.insertBefore(node, lista.children[i] || null); });
     maisBox.hidden = !A.temMais;
+    if (A.temMais) {
+      // CA-050: quantas faltam, quando a contagem da aba vale para o que está na tela (sem busca nem filtro)
+      const total = !A.busca && !filtrosAtivos() ? (A.contagens || {})[A.aba] : undefined;
+      const rot = L.textoCarregarMais(total, A.itens.length);
+      if (!carregandoMais && btMais.textContent !== rot) btMais.textContent = rot;
+    }
     if (!A.temMais) maisBox.remove(); else lista.appendChild(maisBox);
     renderBlocoMsgs();
     if (blocoMsgs.hidden) blocoMsgs.remove(); else if (blocoMsgs.parentNode !== lista || lista.lastElementChild !== blocoMsgs) lista.appendChild(blocoMsgs);
@@ -451,11 +578,12 @@ export function criarLista(A) {
     }
     const ag = Number(cont.aguardando) || 0, nl = Number(cont.nao_lidas) || 0;
     sub.textContent = extra && !A.busca ? `${extra.rotulo}${contadoresAba.get(extra.id) ? ` · ${contadoresAba.get(extra.id)}` : ""}`
-      : ag ? `${ag} esperando resposta` : nl ? `${nl} com mensagens novas` : "Tudo respondido";
+      // plano 1000 · CA-125: conta CONVERSAS (o selo do menu tem o mesmo número e era lido como «3 mensagens»)
+      : ag ? `${ag} esperando resposta` : nl ? `${nl} ${nl === 1 ? "conversa com mensagens novas" : "conversas com mensagens novas"}` : "Tudo respondido";
     if (btAtender) { btAtender.hidden = !(ag > 0); nAtender.textContent = ag > 99 ? "99+" : String(ag); btAtender.setAttribute("aria-label", `Atender o próximo (${ag} esperando)`); }
     ponto.hidden = !filtrosAtivos();
     { const p = A.acoes.lerAvisos(); btAvisos.dataset.ligado = p.som || p.tela ? "1" : "0";
-      btAvisos.setAttribute("aria-label", `Avisos de mensagem nova (${p.som ? "som ligado" : "som desligado"}${p.tela ? ", área de trabalho ligada" : ""})`); }
+      btAvisos.setAttribute("aria-label", `Avisos e aparência da lista (${p.som ? "som ligado" : "som desligado"}${p.tela ? ", área de trabalho ligada" : ""})`); }
     const nFiltros = contarFiltrosAtivos();
     btFiltro.setAttribute("aria-pressed", String(nFiltros > 0));
     btFiltro.setAttribute("aria-label", nFiltros ? `Filtros (${nFiltros} ativo${nFiltros === 1 ? "" : "s"})` : "Filtros");
@@ -471,6 +599,9 @@ export function criarLista(A) {
           admin ? h("div", null, h("a", { class: "bt bt-prim bt-p", href: "#/config/numeros" }, "Conectar número")) : null)));
     }
     desenharCaido();
+    const soCache = !!(A.listaSoCache && A.listaCacheEm);
+    avisoCache.hidden = !soCache;
+    if (soCache) { const t = `Sem conexão · lista de ${L.horaMsg(A.listaCacheEm)}. Atualiza sozinha quando a internet voltar.`; if (avisoCache.textContent !== t) avisoCache.textContent = t; }
     // busca ativa
     const q = (A.busca || "").trim();
     infoBusca.hidden = q.length < 2;
@@ -492,7 +623,8 @@ export function criarLista(A) {
     if (!caidos.length) return;
     const admin = A.acoes.pode("admin");
     const um = caidos[0];
-    const desde = um.desde ? ` desde ${L.horaLista(um.desde)}` : "";
+    // plano 1000 · CA-007: «desde 14:02» · «desde ontem às 14:02» · «desde 25/09 às 14:02» (antes: «desde Ontem», com maiúscula no meio)
+    const desde = um.desde ? ` ${L.desdeTexto(um.desde)}` : "";
     const texto = caidos.length === 1
       ? `Número «${um.nome || "WhatsApp"}» desconectado${desde}: as mensagens não chegam nem saem por ele até reconectar.`
       : `${caidos.length} números desconectados: as mensagens não chegam nem saem por eles até reconectar.`;

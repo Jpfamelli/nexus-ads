@@ -90,7 +90,8 @@ await teste("demo, 30 dias: 106 conversas, 44 agendadas, 13 fechados, R$ 13.550 
 });
 
 const { metricas, leads } = demoParaLinhas(dsDemo, MD);
-const dadosFalsos = { hoje: HOJE, cliente: { id: "c1", slug: "demo", nome: "Clínica Demonstração", cfg: {} }, metricas, leads, alertas: [], relatorios: [], integracoes: [] };
+// plano 1000 (AD-001): metas explícitas no cfg (o núcleo não inventa mais R$ 15 / R$ 1.500); AD-010: a meta do Google é própria
+const dadosFalsos = { hoje: HOJE, cliente: { id: "c1", slug: "demo", nome: "Clínica Demonstração", cfg: { cpaAlvo: 15, cpaAlvoGoogle: 18, orcamento: 1500 } }, metricas, leads, alertas: [], relatorios: [], integracoes: [] };
 const MR = mDeDados(dadosFalsos);
 
 await teste("caminho real (nx_dados → datasetDeLinhas 130 dias) = painel clássico em 7/30/60 dias × Tudo/Meta/Google", () => {
@@ -525,7 +526,10 @@ await teste("formulário do site: código de exemplo manda p_chave/p_dados certo
   const url = "https://x.supabase.co/rest/v1/rpc/nx_lead_entrada", chave = "ab".repeat(24);
   const cod = A.codigoExemplo({ url, apikey: "sb_publishable_abc", chave });
   assert.ok(cod.includes(`fetch("${url}"`) && cod.includes('apikey: "sb_publishable_abc"') && cod.includes(`p_chave: "${chave}"`));
-  for (const campo of ["nome", "telefone", "email", "mensagem", "servico", "utm_source", "utm_campaign"]) assert.ok(cod.includes(`${campo}:`), `campo ${campo}`);
+  // plano 1000 (AD-173): a origem (utm_*, gclid, fbclid) vai num laço sobre a lista de parâmetros e entra por «...origem»
+  for (const campo of ["nome", "telefone", "email", "mensagem", "servico"]) assert.ok(cod.includes(`${campo}:`), `campo ${campo}`);
+  for (const campo of ["utm_source", "utm_campaign"]) assert.ok(cod.includes(`"${campo}"`), `campo ${campo}`);
+  assert.ok(cod.includes("...origem"), "a origem entra no p_dados");
   for (const nome of ["nome", "telefone", "email", "mensagem"]) assert.ok(cod.includes(`name="${nome}"`), `input ${nome}`);
   assert.ok(!/innerHTML|Authorization|Bearer/.test(cod), "sem innerHTML e sem mandar a chave como JWT");
   const js = cod.slice(cod.indexOf("<script>") + 8, cod.indexOf("</script>"));
@@ -1118,13 +1122,15 @@ await teste("M39: Anúncios e Relatórios — abas por ui.segmentado, chip-resum
     assert.match(src, /class: "rel-filtros-lg"/, `${nome}: segmentos largos preservados`);
     assert.match(src, /ui\.modal\(\{ titulo: "Período e (plataforma|filtros)"[^]*?protegerTexto: false/, `${nome}: a folha`);
     assert.match(src, /rel-btn rel-btn-sec rel-btn-ic/, `${nome}: Atualizar também como botão-ícone`);
-    assert.match(src, /ui\.icone\("reabrir"\), h\("span", \{ class: "rel-rot" \}, "Atualizar"\)/, `${nome}: o nome acessível continua «Atualizar»`);
+    // plano 1000 (AD-127): no Anúncios o botão só recarrega do banco — o nome virou «Recarregar» (quem lê o Meta/Google é o ciclo)
+    assert.match(src, nome === "anuncios" ? /ui\.icone\("reabrir"\), h\("span", \{ class: "rel-rot" \}, "Recarregar"\)/ : /ui\.icone\("reabrir"\), h\("span", \{ class: "rel-rot" \}, "Atualizar"\)/, `${nome}: o nome acessível do botão`);
     assert.doesNotMatch(src, /innerHTML/);
   }
   assert.match(ads, /L\.textoChipAnuncios\(S\.dias, S\.plat\)/); assert.match(rel, /L\.textoChipRelatorios\(\{ preset: P\.preset, de: P\.de, ate: P\.ate, aba, nome \}\)/);
   assert.match(ads, /rel-so-largo[^]*?Ajustes de anúncios/, "os atalhos do gestor ficam para telas largas…");
   assert.match(ads, /Mais ações[^]*?rotulo: "Ajustes de anúncios", icone: "engrenagem"/, "…e no ⋮ do celular");
-  assert.match(rel, /const v = L\.validarPeriodo\(de, ate\);\s*if \(!v\.ok\) \{ api\.erro\(v\.texto\); return false; \}/, "a folha valida o período antes de aplicar");
+  // plano 1000 (AD-140): a validação recebe «hoje» (data final no futuro é recusada)
+  assert.match(rel, /const v = L\.validarPeriodo\(de, ate, L\.hojeSP\(\)\);\s*if \(!v\.ok\) \{ api\.erro\(v\.texto\); return false; \}/, "a folha valida o período antes de aplicar");
   assert.match(ads, /abaRadar|L\.ordenarRadar\(R\)\.forEach/, "o Radar usa a ordenação por gravidade");
   // CSS: o celular mostra o chip e esconde os segmentos; as regras que a frente A trava seguem no arquivo
   assert.match(css, /\.rel-resumo, \.rel-so-movel \{ display: none; \}/);
@@ -1138,7 +1144,7 @@ await teste("M39: Radar — cada alerta com barra lateral de 3 px, ícone e rót
   const ads = ler("web/app/anuncios.js"), css = ler("web/app/relatorios.css");
   // plano 50 (item 51): a lista passa pelo filtro do semáforo (todos/ativos/resolvidos), mas continua na ordem de L.ordenarRadar
   assert.match(ads, /const ordenados = L\.ordenarRadar\(R\);/);
-  assert.match(ads, /const itens = L\.filtrarRadar\(ordenados, filtro\);\s*itens\.forEach\(\(it, n\) => lista\.append\(it\.tipo === "conexao" \? alertaConexao\(it, n\) : alertaEpisodio\(it, n\)\)\)/);
+  assert.match(ads, /const itens = L\.filtrarRadar\(ordenados, filtro\);\s*itens\.forEach\(\(it, n\) => lista\.append\(it\.tipo === "conexao" \? alertaConexao\(it, n\) : alertaEpisodio\(it, n, M, dados\)\)\)/);   // plano 1000 (AD-059): o episódio recebe M para «Ver campanha»; AD-046: e os dados para «Silenciar 7 dias»
   assert.match(ads, /dataset: \{ sev \}/, "o <li> leva data-sev");
   assert.match(ads, /h\("span", \{ class: "ads-sev-marca" \}, ui\.icone\(L\.SEV_ICONE\[sev\]\), h\("span", \{ class: "ads-sev-rot" \}, L\.SEV_ROTULO\[sev\]\)\)/, "ícone + rótulo escrito");
   assert.match(css, /\.ads-al\[data-sev="critico"\] \{ --sev: var\(--c-sev-crit\); \}/);
@@ -1214,7 +1220,8 @@ await teste("M39 (navegador): a manchete de Anúncios fica em y ≤ 300 a 390×8
 await teste("A11Y: tabelas com rolagem horizontal têm região nomeada, foco de teclado visível", () => {
   const rel = ler("web/app/relatorios.js"), ads = ler("web/app/anuncios.js"), css = ler("web/app/relatorios.css");
   assert.match(rel, /class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": leg/);
-  assert.match(ads, /class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": `Campanhas nos últimos/);
+  // plano 1000 (AD-097): o rótulo segue o período escolhido («nos últimos 30 dias», «neste mês», «no mês passado»)
+  assert.match(ads, /class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": `Campanhas \$\{L\.rotuloPeriodo\(S\.dias\)\.nos\}`/);
   assert.match(css, /\.rel-tabela-rolagem:focus-visible \{[^}]*outline: 2px solid var\(--c-prim\)/);
 });
 

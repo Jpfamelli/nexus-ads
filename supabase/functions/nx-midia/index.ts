@@ -1,5 +1,6 @@
 // nx-midia — upload assinado, URL assinada de leitura e remoção no bucket privado nx-midia. Deploy a partir de supabase/dist/nx-midia (scripts/montar-funcoes.mjs), verify_jwt: false.
 import { tratar } from "./midia.js";
+import { comVersao } from "./comum.js";
 
 function envObrigatorio(nome: string): string {
   const valor = Deno.env.get(nome);
@@ -11,4 +12,5 @@ const env = { url: envObrigatorio("SUPABASE_URL"), chave: envObrigatorio("SUPABA
 // deno-lint-ignore no-explicit-any
 const emSegundoPlano = (p: Promise<unknown>) => (globalThis as any).EdgeRuntime?.waitUntil(p) ?? p;
 
-Deno.serve((req) => tratar(req, env, { emSegundoPlano }));
+// plano 1000 (SV-164): toda resposta diz a versão que está no ar (x-orbita-versao)
+Deno.serve(async (req) => comVersao(await tratar(req, env, { emSegundoPlano })));

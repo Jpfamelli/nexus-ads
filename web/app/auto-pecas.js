@@ -152,7 +152,9 @@ export function pecas(ui, L) {
       btOutro.marcar(outro);
       linhaOutro.hidden = !outro;
       const ok = atual != null && atual >= min && atual <= max;
-      resumo.textContent = atual == null ? (outro ? "Digite um tempo." : "") : ok ? `Esperar ${L.formatarDuracao(atual)}.` : "Use de 1 minuto a 30 dias.";
+      // plano 1000 · AS-223: «Esperar 2 dias. Exemplo: se começar agora, continua qui, 16/10 às 10:00.»
+      const ex = ok && typeof L.exemploContinuacao === "function" ? L.exemploContinuacao(atual) : "";
+      resumo.textContent = atual == null ? (outro ? "Digite um tempo." : "") : ok ? `Esperar ${L.formatarDuracao(atual)}.${ex ? ` ${ex}` : ""}` : "Use de 1 minuto a 30 dias.";
       resumo.classList.toggle("campo-erro", atual != null && !ok || (atual == null && outro));
     };
     const define = m => { atual = m; aoMudar(atual != null && atual >= min && atual <= max ? atual : null); pintar(); };
@@ -196,12 +198,21 @@ export function pecas(ui, L) {
   }
 
   /** Opções vindas da base do editor. */
-  function opcoesBase(dados, tipo, { funil } = {}) {
+  function opcoesBase(dados, tipo, { funil, atual } = {}) {
     const b = dados.base || {};
     switch (tipo) {
       case "funil": return (b.funis || []).filter(f => f.ativo !== false).map(f => ({ valor: f.id, rotulo: f.nome + (f.padrao ? " (padrão)" : "") }));
-      case "estagio": return (b.funis || []).filter(f => f.ativo !== false && (!funil || f.id === funil))
-        .map(f => ({ grupo: f.nome, opcoes: (f.estagios || []).map(e => ({ valor: e.id, rotulo: e.nome })) }));
+      case "estagio": {
+        const grupos = (b.funis || []).filter(f => f.ativo !== false && (!funil || f.id === funil))
+          .map(f => ({ grupo: f.nome, opcoes: (f.estagios || []).map(e => ({ valor: e.id, rotulo: e.nome })) }));
+        // plano 1000 · AS-040: a etapa JÁ escolhida de um funil desligado continua no seletor (rotulada) — antes sumia e a tela mentia «Escolha a etapa…»
+        if (atual) for (const f of b.funis || []) {
+          if (f.ativo !== false) continue;
+          const e = (f.estagios || []).find(x => x.id === atual);
+          if (e) grupos.push({ grupo: `${f.nome} (funil desligado)`, opcoes: [{ valor: e.id, rotulo: `${e.nome} (funil desligado)` }] });
+        }
+        return grupos;
+      }
       case "canal": return (b.canais || []).map(c => ({ valor: c.id, rotulo: c.nome + (c.numero_exibicao ? ` · ${c.numero_exibicao}` : "") }));
       case "departamento": return (b.departamentos || []).map(d => ({ valor: d.id, rotulo: d.nome + (d.padrao ? " (padrão)" : "") }));
       case "etiqueta": return (b.etiquetas || []).map(e => ({ valor: e.id, rotulo: e.nome }));
@@ -301,7 +312,7 @@ export function pecas(ui, L) {
    * `carregadas` (número): a série saiu só das últimas N execuções carregadas (janela recortada) e o subtítulo diz isso.
    */
   /** servidor: a série veio de nx_automacao_execucoes_dia (conta todas as execuções da janela, mas só separa «sem erro» × «com erro»). */
-  function graficoDias({ serie, dias, n, titulo = "Execuções por dia", unidade = "execuções", carregadas = null, servidor = false }) {
+  function graficoDias({ serie, dias, n, titulo = "Execuções por dia", unidade = "execuções", carregadas = null, servidor = false, aoEscolherDia = null }) {
     const lista = Array.isArray(serie) ? serie : [];
     const raiz = h("div", { class: ["au-gd", servidor && "au-gd-servidor"], dataset: { fonte: servidor ? "servidor" : "local" } });
     const nd = dias || lista.length;
@@ -321,7 +332,9 @@ export function pecas(ui, L) {
     // o servidor não separa espera/pulada de «deu certo»: o rótulo diz só o que ele sabe («sem erro»)
     const ORDEM = servidor ? [["ok", "sem erro"], ["erro", "com erro"]] : [["ok", "deram certo"], ["espera", "em espera"], ["pulado", "puladas"], ["erro", "com erro"]];
     const n0 = lista.length, cada = n0 > 10 ? Math.ceil(n0 / 7) : 1;
-    const barras = h("div", { class: ["au-gd-barras", !reduzido() && "au-gd-anim"], role: "img", style: { "--n": String(n0) },
+    // plano 1000 · AS-227: com aoEscolherDia, cada dia com execução é um botão que filtra a lista (o grupo deixa de ser uma imagem)
+    const clicavel = typeof aoEscolherDia === "function";
+    const barras = h("div", { class: ["au-gd-barras", !reduzido() && "au-gd-anim", clicavel && "au-gd-clicavel"], role: clicavel ? "group" : "img", style: { "--n": String(n0) },
       "aria-label": `${titulo}: ${n} ${unidade} em ${nd} ${nd === 1 ? "dia" : "dias"}${carregadas ? `, contando só as últimas ${carregadas} carregadas` : ""}; pico de ${max} em um dia.` },
       h("span", { class: "au-gd-eixo au-gd-eixo-max mono", "aria-hidden": "true" }, String(max)),
       h("span", { class: "au-gd-eixo au-gd-eixo-zero mono", "aria-hidden": "true" }, "0"));
@@ -331,8 +344,12 @@ export function pecas(ui, L) {
       for (const [k] of ORDEM) if (p[k]) pilha.appendChild(h("i", { class: `au-gd-seg au-gd-${k}`, style: { "--h": `${((p[k] / max) * 100).toFixed(2)}%` } }));
       if (!p.total) pilha.appendChild(h("i", { class: "au-gd-seg au-gd-zero" }));
       // todo dia leva o rótulo; o CSS mostra 1 a cada 2 (ou 1 a cada 4 no celular) para as datas não se encavalarem
-      barras.appendChild(h("div", { class: ["au-gd-col", p.total && "au-gd-col-tem", (i % cada === 0 || i === n0 - 1) && "au-gd-col-rot"], style: { "--i": String(i) }, title: titulo2 },
-        pilha, h("span", { class: "au-gd-x mono", "aria-hidden": "true" }, p.rotulo)));
+      const botao = clicavel && p.total && p.dia;
+      const col = h(botao ? "button" : "div", { type: botao ? "button" : null, class: ["au-gd-col", p.total && "au-gd-col-tem", (i % cada === 0 || i === n0 - 1) && "au-gd-col-rot"],
+        style: { "--i": String(i) }, title: titulo2, "aria-label": botao ? `${titulo2}. Ver só este dia na lista.` : null, dataset: p.dia ? { dia: p.dia } : null },
+        pilha, h("span", { class: "au-gd-x mono", "aria-hidden": "true" }, p.rotulo));
+      if (botao) col.addEventListener("click", () => aoEscolherDia(p.dia));
+      barras.appendChild(col);
     });
     const caixaG = h("div", { class: "au-gd-caixa" }, barras,
       h("ul", { class: "au-gd-leg", "aria-hidden": "true" }, ORDEM.filter(([k]) => lista.some(p => p[k])).map(([k, r]) => h("li", null, h("i", { class: `au-gd-marca au-gd-${k}` }), r))));
@@ -353,5 +370,55 @@ export function pecas(ui, L) {
     return raiz;
   }
 
-  return { interruptor, seletor, entrada, chip, setas, campoDias, campoDuracao, escolhaCartoes, opcoesBase, novoId, barraTaxa, pontoEstado, kpi, diagrama, graficoDias };
+  /**
+   * plano 1000 · AS-038: tempo em HORAS digitado como horas ou dias (número + unidade). valor = horas | undefined;
+   * aoMudar(horas | null) — null = vazio ou fora de min…max (o resumo diz o porquê).
+   */
+  function campoHoras({ rotulo, valor, aoMudar, desabilitado, min = 1, max = 2160, obrigatorio }) {
+    const dec = L.decomporHoras(valor);
+    const num = entrada({ rotulo, valor: dec.n, tipo: "number", min: 1, passo: 1, desabilitado, obrigatorio, classe: "au-hr-num" });
+    const un = seletor({ rotulo: "Unidade", valor: dec.un, desabilitado, classe: "au-dur-un",
+      opcoes: [{ valor: "horas", rotulo: "horas" }, { valor: "dias", rotulo: "dias" }] });
+    un.querySelector("label").classList.add("sr-only");
+    const resumo = h("small", { class: "campo-ajuda au-hr-resumo" });
+    const ler = () => {
+      const hh = L.comporHoras(num.querySelector("input").value, un.querySelector("select").value);
+      const ok = hh != null && hh >= min && hh <= max;
+      resumo.textContent = hh == null ? `De ${min} h a ${max >= 48 ? `${max / 24} dias` : `${max} h`}.` : ok ? `= ${hh} ${hh === 1 ? "hora" : "horas"}` : `Use de ${min} h a ${max >= 48 ? `${max / 24} dias` : `${max} h`}.`;
+      resumo.classList.toggle("campo-erro", hh != null && !ok);
+      return ok ? hh : null;
+    };
+    num.querySelector("input").addEventListener("input", () => aoMudar(ler()));
+    un.querySelector("select").addEventListener("change", () => aoMudar(ler()));
+    ler();
+    return h("div", { class: "campo au-campo-hr" }, h("div", { class: "au-dur-outro" }, num, un), resumo);
+  }
+
+  /**
+   * plano 1000 · AS-039: tempo em MINUTOS digitado como minutos ou horas («4 horas» em vez de fazer a conta de 240). valor = minutos;
+   * aoMudar(minutos | null) — null = vazio ou fora de min…max.
+   */
+  function campoMinutos({ rotulo, valor, aoMudar, desabilitado, min = 1, max = 1440, obrigatorio }) {
+    const m0 = Math.round(Number(valor) || 0);
+    const dec = m0 > 0 && m0 % 60 === 0 ? { n: m0 / 60, un: "horas" } : { n: m0 || "", un: "min" };
+    const num = entrada({ rotulo, valor: dec.n, tipo: "number", min: 1, passo: 1, desabilitado, obrigatorio, classe: "au-hr-num" });
+    const un = seletor({ rotulo: "Unidade", valor: dec.un, desabilitado, classe: "au-dur-un",
+      opcoes: [{ valor: "min", rotulo: "minutos" }, { valor: "horas", rotulo: "horas" }] });
+    un.querySelector("label").classList.add("sr-only");
+    const resumo = h("small", { class: "campo-ajuda au-hr-resumo" });
+    const faixa = `De ${L.formatarMinutos(min)} a ${L.formatarMinutos(max)}.`;
+    const ler = () => {
+      const mm = L.comporDuracao(num.querySelector("input").value, un.querySelector("select").value);
+      const ok = mm != null && mm >= min && mm <= max;
+      resumo.textContent = mm == null ? faixa : ok ? `= ${mm} ${mm === 1 ? "minuto" : "minutos"}` : `Use ${faixa.charAt(0).toLowerCase()}${faixa.slice(1)}`;
+      resumo.classList.toggle("campo-erro", mm != null && !ok);
+      return ok ? mm : null;
+    };
+    num.querySelector("input").addEventListener("input", () => aoMudar(ler()));
+    un.querySelector("select").addEventListener("change", () => aoMudar(ler()));
+    ler();
+    return h("div", { class: "campo au-campo-hr au-campo-min" }, h("div", { class: "au-dur-outro" }, num, un), resumo);
+  }
+
+  return { interruptor, seletor, entrada, chip, setas, campoDias, campoDuracao, campoHoras, campoMinutos, escolhaCartoes, opcoesBase, novoId, barraTaxa, pontoEstado, kpi, diagrama, graficoDias };
 }

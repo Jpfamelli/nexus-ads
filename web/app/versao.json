@@ -1,1 +1,1 @@
-{ "versao": "20261009a", "sw": true, "min_migracao": "20261008c" }
+{ "versao": "20261013a", "sw": true, "min_migracao": "20261013h", "notas": ["Conversas, CRM, Ads e Automações mais rápidos e seguros (mais de mil ajustes).", "Avisos de WhatsApp sem repetição e com motivo claro quando algo falha.", "Configurações perguntam antes de descartar o que não foi salvo."] }

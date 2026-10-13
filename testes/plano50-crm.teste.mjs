@@ -385,7 +385,8 @@ test("Kanban (DOM): totais contam ao entrar (G.contar) e acendem ao mudar (G.des
     const contados = [], destacados = [];
     const G = { contar: (el, v, fmt) => { contados.push(v); el.textContent = fmt(v); return el; }, destacar: el => { destacados.push(el.textContent); return el; } };
     const { tela, api, reg } = await montarKanbanDeMentira(D, { G });
-    assert.deepEqual(contados, [3, 350, 55], "abertos, soma em aberto e previsão ponderada contam na 1ª pintura");
+    // plano 1000 (CR-032): o 4º número (ganhos do período) também conta na 1ª pintura
+    assert.deepEqual(contados, [3, 350, 55, 900], "abertos, soma em aberto, previsão ponderada e ganhos contam na 1ª pintura");
     assert.equal(destacados.length, 0);
     // arrasta o cartão 3 (Orçamento, R$ 50) para Nova: os totais mudam → acendem (abertos continua 3: não acende)
     const art = tela.querySelector('.kc[data-id="3"]');
@@ -400,7 +401,7 @@ test("Kanban (DOM): totais contam ao entrar (G.contar) e acendem ao mudar (G.des
     assert.ok(solto.classList.contains("kc-solto") && solto.classList.contains("assenta"), "o cartão solto assenta com a animação");
     assert.deepEqual(reg.movidos, [{ id: 3, para: "s1" }]);
     assert.ok(destacados.includes("R$ 55") || destacados.includes("R$ 35"), "a previsão ponderada mudou (50 × 50% → 50 × 10%) e acendeu");
-    assert.equal(contados.length, 3, "depois da 1ª pintura não conta de novo");
+    assert.equal(contados.length, 4, "depois da 1ª pintura não conta de novo");   // plano 1000 (CR-032): 4 números no topo
     // «/» fora de campo foca a busca; dentro de um campo não
     D.documento("keydown", { key: "/", target: D.doc.body });
     assert.equal(D.ativo().attrs.type, "search");
@@ -543,7 +544,8 @@ test("Tarefas (DOM): painel do dia lê as contagens soltas ou em r.contagens, gr
     assert.ok(painel.querySelector(".tfp-pn-proximas").classList.contains("zero"));
     assert.equal(painel.querySelector(".tfp-pn-hoje").attrs["aria-pressed"], "true");
     const grupos = tela.querySelectorAll(".tfp-grupo");
-    assert.deepEqual(grupos.map(g => g.querySelector(".tfp-grupo-t span").textContent), ["Ontem", "Hoje", "Amanhã", "Sem data"]);
+    // plano 1000 (CR-138): nas tarefas o grupo sem data chama-se «Sem prazo»
+    assert.deepEqual(grupos.map(g => g.querySelector(".tfp-grupo-t span").textContent), ["Ontem", "Hoje", "Amanhã", "Sem prazo"]);
     assert.ok(grupos[0].classList.contains("passado"), "dia que já passou fica marcado");
     assert.ok(!grupos[1].classList.contains("passado"));
     assert.deepEqual(grupos.map(g => g.querySelectorAll(".tf-li").length), [1, 1, 1, 1]);
@@ -616,7 +618,7 @@ async function montarContatosDeMentira(D, { rota = { query: {} }, cli = "cli-c" 
 test("Contatos (DOM): densidade compacta/confortável lembrada por empresa, «último contato» com a data na dica e filtro de empresa pela rota", async () => {
   const D = domDeMentira();
   try {
-    const { tela, api, reg } = await montarContatosDeMentira(D);
+    const { tela, api, reg, k: kCt } = await montarContatosDeMentira(D);
     assert.equal(tela.dataset.densidade, "confortavel");
     const seg = tela.querySelector(".crm-dens");
     seg.__mudar("compacta");
@@ -627,8 +629,12 @@ test("Contatos (DOM): densidade compacta/confortável lembrada por empresa, «ú
     const t = col.render({ ultimo_contato_em: "2026-10-02T14:30:00Z" });
     assert.equal(t.tagName, "TIME"); assert.equal(t.attrs.datetime, "2026-10-02T14:30:00Z"); assert.match(t.attrs.title, /02\/10|04\/10\/2026 14:30/); assert.match(t.attrs["aria-label"], /Último contato em/);
     assert.equal(col.render({}), null);
-    // a lista compacta do celular mostra o relativo na 2ª linha
-    assert.match(tela.querySelector(".ct-sub").textContent, /há 2 dias/);
+    // a lista compacta do celular mostra o relativo na 2ª linha — plano 1000 (CR-092): no desktop ela nem é desenhada; testa a lista sozinha
+    assert.equal(tela.querySelector(".ct-sub"), null, "desktop: só a tabela");
+    const { listaCompacta } = await import("../web/app/crm-listas.js");
+    const lm = listaCompacta(kCt, { aoMudar() {} });
+    lm.atualizar([{ id: 1, nome: "Ana", ultimo_contato_em: "2026-10-02T14:30:00Z" }]);
+    assert.match(lm.el.querySelector(".ct-sub").textContent, /há 2 dias/);
     api.desmontar();
     // remonta: a densidade guardada volta aplicada; a rota com empresa já filtra e mostra o chip removível
     const seg2 = await montarContatosDeMentira(D, { rota: { query: { empresa: "77", empresa_nome: "Clínica Vida" } } });

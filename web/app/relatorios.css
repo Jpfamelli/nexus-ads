@@ -1005,3 +1005,127 @@ a.ini-numero:active { transform: scale(.98); }
   .ads-rastreio-barra { grid-column: 1 / -1; grid-row: 2; }
 }
 @media (pointer: coarse), (max-width: 760px) { .cfga-canal-acoes .bt { min-height: var(--alvo-toque); } }
+
+/* ============================================================
+   PLANO 1000 — frente ads (lote ads-1): semáforo âmbar, selo do Radar pela gravidade, rosca nas cores das plataformas,
+   período abaixo do chip no celular, calor por faixa no celular, tabelas de Relatórios em cartões, cabeçalho de impressão.
+   Só tokens; alvos de 44 px no toque.
+   ============================================================ */
+/* AD-044: a luz do meio (atenção) é âmbar — o verde-oliva do --c-aten era lido como «tudo bem» */
+.ads-sem-alerta { --luz: var(--pal-2); }
+.ads-sem-luz.ads-sem-alerta.acesa { color: var(--c-prim-txt); }
+/* AD-045: o selo da aba Radar na cor da maior gravidade ativa */
+.rel-badge-alerta { background: var(--pal-2); color: var(--c-prim-txt); }
+.rel-badge-critico { background: var(--c-ruim); color: var(--c-fundo); }
+/* AD-091/AD-092: rosca do G.donut (fatias g-d0/g-d1) nas MESMAS cores de Meta/Google das barras e do funil; legenda embaixo, sem cortar o nome */
+.ads-donut-plat .g-d0 { --g: var(--c-meta); }
+.ads-donut-plat .g-d1 { --g: var(--c-google); }
+.ads-donut-plat .g-donut-env { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+.ads-donut-plat .g-donut-env .g-donut-leg { width: 100%; }
+.ads-donut-plat .g-donut-op .g-rl-nome { overflow: visible; text-overflow: clip; white-space: normal; }
+/* AD-058: gravidade dos avisos enviados com ícone e rótulo (a marca usa --sev) */
+.ads-log li.ads-log-item { grid-template-columns: minmax(0, 1fr); }
+.ads-log-item[data-sev="critico"] { --sev: var(--c-sev-crit); }
+.ads-log-item[data-sev="alerta"] { --sev: var(--c-sev-aten); }
+.ads-log-item[data-sev="info"] { --sev: var(--c-sev-info); }
+/* AD-032: envio parcial (saiu para um número e falhou para outro) */
+.ads-env-parcial { color: var(--c-aten); }
+/* AD-108/AD-094/AD-022: selos pequenos */
+.ads-camp-pausada { margin-left: var(--esp-1); }
+.ads-fp-taxa-acima { color: var(--c-texto-2); }
+.ads-sem-presenca { display: block; margin-top: var(--esp-1); font-size: var(--fs-12); }
+.ads-balde-conv { color: var(--c-texto-3); font-weight: 400; font-style: normal; }
+.ads-custos, .ads-organicos { margin-top: var(--esp-1); }
+/* AD-131/AD-153: por que os números diferem */
+.ads-por-que summary { cursor: pointer; min-height: var(--alvo-toque); display: flex; align-items: center; font-weight: 600; color: var(--c-texto-2); }
+.ads-por-que[open] summary { color: var(--c-texto); margin-bottom: var(--esp-2); }
+.ads-por-que-lista { margin: 0; padding-left: 1.2rem; display: grid; gap: var(--esp-2); font-size: var(--fs-13); color: var(--c-texto-2); line-height: 1.5; }
+.relat-por-que { margin: var(--esp-3) 0 0; }
+/* AD-041: copiar o texto do relatório */
+.ads-rel-acoes { display: flex; justify-content: flex-end; margin-top: var(--esp-2); }
+.ads-rel-copiar { min-height: var(--alvo-toque); }
+/* AD-118: calor por faixa do dia × por hora (o botão do rodapé troca) */
+.ads-cal-modo-faixas .ads-cal-hora, .ads-cal-modo-hora .ads-cal-faixas { display: none; }
+.ads-cal-faixas .ads-cal { min-width: 0; }
+/* AD-144 / AD-122: cabeçalho que só existe no papel (marca, período e quando foi gerado) */
+.rel-impressao-cab { display: none; }
+@media (max-width: 760px) {
+  /* AD-096: a descrição do período vai para baixo do chip, na largura toda (antes espremida à direita em 5 linhas) */
+  .ads-filtros { flex-wrap: wrap; }
+  .ads-filtros > .rel-ate { flex-basis: 100%; margin-left: 0; text-align: left; }
+}
+@media (max-width: 480px) {
+  /* AD-148: «Por responsável» e «Por atendente» viram cartões (rótulo de cada número vem do data-l) */
+  .relat-tabela thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .relat-tabela, .relat-tabela tbody { display: block; }
+  .relat-tabela tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--esp-2) var(--esp-3); padding: var(--esp-3) 0; border-bottom: 1px solid var(--c-borda); }
+  .relat-tabela th, .relat-tabela td, .relat-tabela td.num { display: block; padding: 0; border: 0; text-align: left; white-space: normal; }
+  .relat-tabela tbody th { grid-column: 1 / -1; font-weight: 600; }
+  .relat-tabela td.num::before { content: attr(data-l); display: block; font: 500 var(--fs-11)/1.3 var(--f-mono); color: var(--c-texto-3); text-transform: uppercase; letter-spacing: .05em; }
+}
+@media print {
+  .rel-impressao-cab { display: block; margin: 0 0 .4rem; font-size: .8125rem; color: CanvasText; }
+  .ads-cal-modo, .ads-rel-acoes, .ads-imprimir { display: none !important; }
+}
+
+/* ============================================================
+   PLANO 1000 · lote ads-2 (Anúncios e Relatórios)
+   ============================================================ */
+/* AD-110/AD-116: sem base ou sem meta, o ponto e o medidor ficam neutros */
+.rel-ponto-neutro { background: var(--c-texto-3); }
+.rel-m-neutro i { background: var(--c-texto-3); }
+/* AD-081/AD-082: a pílula é botão e abre o detalhe por plataforma */
+.ads-pilula-caixa { position: relative; display: inline-flex; min-width: 0; }
+button.ads-pilula { font-family: inherit; cursor: pointer; }
+button.ads-pilula:hover { background: var(--c-hover); }
+button.ads-pilula:focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 2px; }
+.ads-pilula-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ads-pilula-pop { position: absolute; top: calc(100% + var(--esp-2)); right: 0; z-index: 5; width: min(20rem, calc(100vw - 2rem)); padding: var(--esp-3) var(--esp-4);
+  border: 1px solid var(--c-borda-2); border-radius: var(--r); background: var(--c-pop); color: var(--c-texto); box-shadow: 0 8px 24px var(--c-sombra); font-size: var(--fs-13); }
+.ads-pilula-lista { margin: 0 0 var(--esp-2); padding: 0; list-style: none; display: grid; gap: var(--esp-1); }
+@media (max-width: 760px) {
+  button.ads-pilula { min-height: var(--alvo-toque, 44px); }
+  .ads-pilula-pop { width: min(18rem, calc(100vw - 4rem)); }
+}
+/* AD-119: célula do calor escolhida pelo toque ou pelas setas */
+.ads-cal:focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 3px; border-radius: 6px; }
+.ads-cal .g-cal-c { cursor: pointer; }
+.ads-cal .ads-cal-sel { box-shadow: inset 0 0 0 2px var(--c-foco); }
+.ads-cal-dica { margin: var(--esp-2) 0 0; min-height: 1.3em; }
+/* AD-231/AD-107: a barra abre os criativos; a marcada para comparação continua em destaque; «Mostrar todas» */
+.ads-cb-item.ads-cb-dest { background: var(--c-prim-suave); border-color: var(--c-borda-2); }
+.ads-cb-item.ads-cb-dest .ads-cb-barra { opacity: 1; }
+.ads-cb-todas { margin-top: var(--esp-2); min-height: var(--alvo-toque, 44px); }
+/* AD-259: CTR some no celular (a linha vira cartão) */
+@media (max-width: 760px) { .ads-tabela td.c-ctr, .ads-tabela th.c-ctr { display: none; } }
+/* AD-059/AD-057/AD-230: «Ver campanha», «e mais N», limite visível */
+.ads-al-ver { margin-top: var(--esp-2); min-height: var(--alvo-toque, 44px); }
+.ads-al-mais { list-style: none; padding: var(--esp-2) 0 0; }
+.ads-regra-limite { margin: var(--esp-1) 0 0; }
+/* AD-135/AD-023/AD-117/AD-112 */
+.ads-retorno-em { display: block; margin-top: var(--esp-1); font-size: var(--fs-13); color: var(--c-texto-2); }
+.ads-agenda-sem-data, .ads-rank-auto { display: block; }
+/* Relatórios: AD-254 hora da carga, AD-255 atalho do KPI */
+.relat-hora { align-self: center; white-space: nowrap; }
+.relat-kpi-link { align-self: flex-start; min-height: var(--alvo-toque, 44px); display: inline-flex; align-items: center; }
+@media (max-width: 760px) { .relat-hora { display: none; } }
+@media print { .ads-pilula-pop, .ads-cb-todas, .ads-al-ver, .relat-kpi-link { display: none !important; } }
+/* plano 1000 · lote ads-3 — AD-046 silenciar, AD-001 sem orçamento, AD-054 limites, AD-179/180/181/182/250 rastreio */
+.ads-al-botoes { display: flex; flex-wrap: wrap; gap: var(--esp-2); margin-top: var(--esp-2); }
+.ads-al-botoes .rel-btn { min-height: var(--alvo-toque, 44px); }
+.ads-orc-sem .ads-orc-msg { margin: 0; }
+.cfga-avancado summary { cursor: pointer; min-height: var(--alvo-toque, 44px); display: flex; align-items: center; font-weight: 600; color: var(--c-texto-2); }
+.cfga-avancado[open] summary { color: var(--c-texto); }
+.cfga-avancado > * + * { margin-top: var(--esp-2); }
+.ads-rastreio-onde { margin: 0; padding-left: 1.2rem; display: grid; gap: var(--esp-2); font-size: var(--fs-13); line-height: 1.55; overflow-wrap: anywhere; }
+.ads-rastreio-ultimo { margin: 0; overflow-wrap: anywhere; }
+.ads-rastreio-pct { display: block; margin-top: var(--esp-1); color: var(--c-texto-3); font-size: var(--fs-13); }
+.ads-rastreio-hosts { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--esp-2); }
+.ads-rastreio-hosts li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--esp-2); min-width: 0; overflow-wrap: anywhere; }
+.ads-rastreio-hosts .campo-ajuda { margin: 0; }
+.ads-rastreio-cab { justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--esp-2); }
+.ads-rastreio-cab .rotulo { margin: 0; }
+.ads-rastreio-filtro { min-height: var(--alvo-toque, 44px); max-width: 100%; padding: .4rem .7rem; border-radius: var(--r-m); border: 1px solid var(--c-borda-2); background: var(--c-sup); color: var(--c-texto); font: inherit; font-size: var(--fs-13); }
+.ads-rastreio-filtro:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 1px; }
+.ads-rastreio-mais { justify-self: start; min-height: var(--alvo-toque, 44px); }
+@media print { .ads-al-botoes { display: none !important; } }

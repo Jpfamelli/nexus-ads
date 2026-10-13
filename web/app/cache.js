@@ -16,7 +16,11 @@
 export const NOME_BANCO = "orbita-cache";
 export const VERSAO_FORMATO = 1;
 export const TTL_MS = 12 * 3600 * 1000;
-export const TETO_ENTRADA_BYTES = 1024 * 1024;     // resposta maior que 1 MB não fica
+export const TETO_ENTRADA_BYTES = 1024 * 1024;     // resposta maior que 1 MB não fica (padrão)
+/** Plano 1000 (pedido de Anúncios): respostas que costumam passar de 1 MB têm teto próprio. O total (TETO_TOTAL_BYTES, 20 MB) continua
+    valendo na varredura, e nenhuma entrada pode passar de 1/4 dele: uma conta grande não expulsa o resto do cache de uma vez. */
+export const TETOS_POR_NOME = Object.freeze({ nx_dados: 4 * 1024 * 1024, nx_rel_vendas: 2 * 1024 * 1024, nx_rel_atendimento: 2 * 1024 * 1024, nx_negocios_kanban: 2 * 1024 * 1024 });
+export function tetoDaEntrada(nome) { return Math.min(TETOS_POR_NOME[nome] || TETO_ENTRADA_BYTES, Math.floor(TETO_TOTAL_BYTES / 4)); }
 export const TETO_ENTRADAS = 200;                  // cada filtro do Kanban e cada semana da agenda viram uma entrada: sem teto o banco só cresce
 export const TETO_TOTAL_BYTES = 20 * 1024 * 1024;
 export const VARRER_A_CADA_MS = 3600 * 1000;
@@ -28,12 +32,20 @@ export const CACHEAVEIS = Object.freeze(new Set([
   "nx_app_sessao", "nx_marca_publica",
   "nx_inicio", "nx_crm_base", "nx_negocios_kanban", "nx_negocios_coluna", "nx_contatos_listar", "nx_empresas_listar", "nx_tarefas_listar",
   "nx_agenda_dia", "nx_rel_vendas", "nx_rel_atendimento", "nx_dados", "nx_cv_listar",
+  "nx_cv_base",   // plano 1000 (pedido de Conversas): SÓ a versão reduzida (REDUTORES.nx_cv_base), para a tela abrir sem internet
 ]));
 
 /** Mesmo na lista branca, nada com cara de segredo, configuração ou conteúdo de mensagem (defesa em profundidade: um nome novo descuidado não entra). */
 export const PROIBIDO = /config|admin|senha|chave|token|convite|dominio|plano|usuario|mensagens|msgs|canais|integracao|entrada|segredo|notificacoes|cv_ver|cv_base|buscar/i;
+/** Nomes que o PROIBIDO barraria mas que entram porque têm redutor próprio (só o recorte seguro vai para o aparelho). */
+const LIBERADOS_COM_REDUTOR = new Set(["nx_cv_base"]);
 
-export function cacheavel(nome) { return CACHEAVEIS.has(String(nome || "")) && !PROIBIDO.test(String(nome)); }
+export function cacheavel(nome) {
+  const n = String(nome || "");
+  if (!CACHEAVEIS.has(n)) return false;
+  if (LIBERADOS_COM_REDUTOR.has(n)) return typeof REDUTORES[n] === "function";
+  return !PROIBIDO.test(n);
+}
 
 /** JSON com chaves em ordem: o mesmo parâmetro, na ordem que vier, dá a mesma chave. */
 export function estavel(v) {
@@ -61,6 +73,35 @@ const REDUTORES = {
     if (!dados || typeof dados !== "object" || !Array.isArray(dados.itens)) return dados;
     const corta = s => (typeof s === "string" ? (s.length > 80 ? `${s.slice(0, 79)}…` : s) : s);
     return { ...dados, itens: dados.itens.map(c => ({ ...c, ultima_msg_resumo: corta(c && c.ultima_msg_resumo), mensagens: undefined, ultimas_mensagens: undefined })) };
+  },
+  /** Plano 1000: o apoio de Conversas sem nada sensível — fica o que a lista e o composer precisam para abrir offline (quem sou eu, nomes dos
+      números e departamentos, respostas prontas, etiquetas, nomes da equipe, modelos e o estado da IA). Sai `config` (departamentos completos e o
+      prompt/memória da IA, só de admin), e de cada item só passam campos conhecidos: token, telefone, e-mail ou qualquer campo novo nunca entram. */
+  nx_cv_base(dados) {
+    if (!dados || typeof dados !== "object" || Array.isArray(dados)) return null;
+    const so = (o, campos) => {
+      if (!o || typeof o !== "object") return null;
+      const r = {};
+      for (const k of campos) if (o[k] !== undefined) r[k] = o[k];
+      return r;
+    };
+    const lista = (l, campos) => (Array.isArray(l) ? l.map(x => so(x, campos)).filter(Boolean) : undefined);
+    const ia = dados.ia && typeof dados.ia === "object"
+      ? { ligada: !!dados.ia.ligada, cota: dados.ia.cota && typeof dados.ia.cota === "object" ? so(dados.ia.cota, ["usadas", "limite"]) : null } : undefined;
+    const r = {
+      eu: so(dados.eu, ["id", "nome", "papel", "departamentos", "ver_todas"]),
+      canais: lista(dados.canais, ["id", "nome", "provedor", "estado", "desde", "departamento_id", "padrao", "ativo"]),
+      departamentos: lista(dados.departamentos, ["id", "nome", "cor", "padrao", "ativo", "ordem"]),
+      respostas: lista(dados.respostas, ["id", "atalho", "titulo", "texto", "departamento_id", "ordem"]),
+      etiquetas: lista(dados.etiquetas, ["id", "nome", "cor"]),
+      usuarios: lista(dados.usuarios, ["id", "nome", "papel", "departamentos", "ativo"]),
+      templates: lista(dados.templates, ["id", "nome", "idioma", "categoria", "status", "corpo", "parametros", "canal_id"]),
+      cfg: so(dados.cfg, ["recibo_leitura", "assinatura"]),
+      ia,
+      reduzido: true,   // a tela sabe que é o recorte do aparelho (sem `config`): telas de configuração nunca usam o cache
+    };
+    for (const k of Object.keys(r)) if (r[k] === undefined) delete r[k];
+    return r;
   },
 };
 export function reduzir(nome, dados) { const f = REDUTORES[nome]; return f ? f(dados) : dados; }
@@ -138,10 +179,12 @@ export function criarArmazemIDB(idb = globalThis.indexedDB, { prazoMs = PRAZO_ID
  *   armazem — {ler(k), gravar(k, v), apagar(k), limpar(), listar()?} assíncrono (padrão: IndexedDB; testes passam um de mentira)
  *   agora()
  *   varrer — false desliga a varredura automática (ao abrir e a cada hora); varrer() continua disponível
+ *   disco — false: nada vai para o IndexedDB (aparelho compartilhado); a memória da aba continua servindo a tela
  * → {ativo, ler(chave), gravar(chave, nome, dados), apagar(chave), apagarEmpresa({conta, cliente}), varrer(), limpar(), cacheavel, chaveDe}
  */
 export function criarCache(o = {}) {
-  const armazem = o.armazem !== undefined ? o.armazem : criarArmazemIDB();
+  // plano 1000 (AS-185): aparelho compartilhado («não guardar dados neste aparelho» no login) → disco: false, o cache fica só na memória desta aba
+  let armazem = o.disco === false ? null : o.armazem !== undefined ? o.armazem : criarArmazemIDB();
   const agora = o.agora || (() => Date.now());
   const memoria = new Map();            // o que foi lido/gravado nesta aba (e o único cache se o IndexedDB não abrir)
   const noPrazo = v => !!v && v.v === VERSAO_FORMATO && Number.isFinite(v.em) && agora() - v.em <= TTL_MS;
@@ -170,7 +213,7 @@ export function criarCache(o = {}) {
       if (!cacheavel(nome)) return false;
       let texto;
       try { texto = JSON.stringify(reduzir(nome, dados)); } catch { return false; }
-      if (!texto || texto.length * 2 > TETO_ENTRADA_BYTES) return false;
+      if (!texto || texto.length * 2 > tetoDaEntrada(nome)) return false;
       const v = { v: VERSAO_FORMATO, em: agora(), nome, b: texto.length * 2, dados: JSON.parse(texto) };
       memoria.set(chave, v);
       if (armazem) { try { await armazem.gravar(chave, v); } catch { /* sem IndexedDB: fica na memória */ } }
@@ -197,6 +240,15 @@ export function criarCache(o = {}) {
     },
     /** nx_sair, queda de sessão e troca de conta: não sobra nada. */
     async limpar() { memoria.clear(); if (armazem) try { await armazem.limpar(); } catch { /* ok */ } return true; },
+    /** O disco está em uso? (false: aparelho compartilhado ou sem IndexedDB) */
+    get emDisco() { return !!armazem; },
+    /** Plano 1000 (AS-185): a pessoa marcou «aparelho compartilhado» depois de o app abrir — apaga o que havia no disco e passa a usar só a memória. */
+    async desligarDisco() {
+      const velho = armazem;
+      armazem = null;
+      if (velho) try { await velho.limpar(); } catch { /* ok */ }
+      return true;
+    },
   };
   // quem nunca clica em Sair acumulava uma cópia por filtro, para sempre: a varredura roda sozinha, sem atrasar a abertura nem prender o processo (testes)
   if (o.varrer !== false && armazem && typeof armazem.listar === "function" && typeof setTimeout === "function") {

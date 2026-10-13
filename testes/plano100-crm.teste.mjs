@@ -8,7 +8,11 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fixarRelogio } from "./apoio/relogio.mjs";
 
+// SV-158 (plano 1000): agora FIXO ao meio-dia de São Paulo (quarta) — iso(dias, hora) e os módulos testados leem o mesmo relógio;
+// entre 21h e 0h de SP «hoje»/«amanhã» trocavam de dia e os casos de prazo mudavam (vale também sob o ORBITA_AGORA da matriz do CI)
+fixarRelogio("2026-10-14T12:00:00-03:00");
 const raiz = dirname(fileURLToPath(import.meta.url));
 const ler = nome => readFileSync(join(raiz, "..", "web", "app", nome), "utf8");
 const L = await import("../web/app/crm-logica.js");
@@ -344,7 +348,8 @@ test("C1 gaveta (DOM): «Fechou» é adiado como no Kanban — a tela muda já, 
     assert.equal(t.corpo().querySelector(".ng").attrs["aria-busy"], "true");
     assert.equal(t.corpo().querySelector(".ng-ganhou"), null, "status já é ganho");
     assert.ok(t.corpo().querySelector(".ng-reabrir").disabled, "não aceita outro movimento por cima");
-    assert.ok(t.corpo().querySelectorAll(".ng-etapa").every(b => b.disabled), "fita travada");
+    // plano 1000: a etapa atual fica focável (aria-disabled) para o leitor de tela; as outras, desabilitadas
+    assert.ok(t.corpo().querySelectorAll(".ng-etapa").every(b => b.disabled || b.attrs["aria-disabled"] === "true"), "fita travada");
     assert.match(t.corpo().querySelector(".ng-valor").textContent, /900.*valor final/);
     // Desfazer antes dos 7 s: só a tela volta
     await av.reverter(); av.res({ estado: "desfeita" }); await tique();
@@ -614,11 +619,12 @@ test("C4/C9 Contatos (DOM): pílula de origem na coluna; «Nome» e «Último co
     // cabeçalhos ordenáveis no servidor
     const ths = tela.querySelectorAll("thead th");
     const thNome = ths[reg.colunas.findIndex(c => c.chave === "nome")], thUlt = ths[reg.colunas.findIndex(c => c.chave === "ultimo_contato_em")];
-    assert.deepEqual([thNome.attrs["aria-sort"], thUlt.attrs["aria-sort"]], ["none", "none"]);
+    // plano 1000 (CR-294): a lista abre por «Último contato» (antes «Recentes», que era a data do cadastro)
+    assert.deepEqual([thNome.attrs["aria-sort"], thUlt.attrs["aria-sort"]], ["none", "descending"]);
     assert.ok(thNome.querySelector("button.th-ord") && thUlt.querySelector("button.th-ord"));
     assert.equal(ths[reg.colunas.findIndex(c => c.chave === "email")].querySelector("button"), null, "e-mail não ordena (o servidor não sabe)");
     const ordem = () => reg.chamadas.filter(c => c.nome === "nx_contatos_listar").at(-1).p.p_ordem;
-    assert.equal(ordem(), "recentes");
+    assert.equal(ordem(), "ultimo_contato");
     thNome.querySelector("button").clique(); await tique();
     assert.equal(ordem(), "nome"); assert.equal(thNome.attrs["aria-sort"], "ascending");
     assert.equal(tela.querySelector("select.sel").value, "nome", "o seletor «Ordenar» acompanha");

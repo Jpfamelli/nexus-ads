@@ -3,14 +3,19 @@
    Peças usadas pelos três handlers: resposta JSON, relógio,
    autenticação do cron, leitura do banco no formato do nx_dados.
    ============================================================ */
-import { datasetDeLinhas, montar, encurtar, MESES, hojeSP } from "./nucleo.js";
+import { datasetDeLinhas, montar, MESES, hojeSP, nomeCurtoEmpresa } from "./nucleo.js";
+import { VERSAO } from "./versao.js";
 
 export class ErroHttp extends Error {
   constructor(status, mensagem) { super(mensagem); this.status = status; }
 }
 
+/** Plano 1000 (SV-257): toda resposta JSON das funções sai com «no-store» (resposta com contexto de conversa não fica em cache de
+    proxy) e «nosniff» (o navegador não reinterpreta o tipo). */
+export const CAB_SEGURANCA = Object.freeze({ "cache-control": "no-store", "x-content-type-options": "nosniff" });
+
 export const json = (dados, status = 200) => new Response(JSON.stringify(dados), {
-  status, headers: { "content-type": "application/json; charset=utf-8" },
+  status, headers: { "content-type": "application/json; charset=utf-8", ...CAB_SEGURANCA },
 });
 
 export function agoraDe(deps) {
@@ -121,6 +126,16 @@ export function limparErro(msg) {
     .replace(/(x-api-key["']?\s*[=:]\s*["']?)[^&\s)"',]+/gi, "$1***")
     .replace(/\bcw(?:k|otk)-[A-Za-z0-9_-]{4,}/g, "cwk-***")   // chave do CodeWords
     .replace(/([?&]ch=)[0-9a-f]{8,}/gi, "$1***")              // segredo da URL do canal CodeWords
+    // plano 1000 (SV-099): chave do Google (AIza…), token de acesso do Supabase (sbp_…), app secret da Meta escrito no texto
+    // («secret: 0123…», 32 hex) e «apikey: …» de cabeçalho copiado
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, "AIza***")
+    .replace(/\bsbp_[0-9A-Za-z]{16,}/g, "sbp_***")
+    .replace(/(secret["']?\s*[=:]?\s*["']?)[0-9a-f]{32}\b/gi, "$1***")
+    .replace(/(\bapikey["']?\s*[=:]\s*["']?)[^&\s)"',]+/gi, "$1***")
+    // plano 1000 (SV-098): telefone (10–15 dígitos seguidos, fica o fim) e e-mail (a***@dominio) — «Key (telefone)=(5512…)»
+    // do Postgres e erros de envio com o número iam inteiros para nx_integracoes.status / nx_relatorios.erro (a clínica vê)
+    .replace(/(?<![\w.])\d{10,15}(?!\d)/g, d => `${"*".repeat(d.length - 4)}${d.slice(-4)}`)
+    .replace(/\b([A-Za-z0-9])[A-Za-z0-9._%+-]*@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})\b/g, "$1***@$2")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 300);
@@ -143,10 +158,39 @@ export const PRECOS_IA = Object.freeze({
   "claude-sonnet-5-5": [2, 10], "claude-sonnet-5": [2, 10], "claude-sonnet-4-6": [3, 15], "claude-sonnet-4-5": [3, 15],
   "claude-haiku-5-5": [0.1, 0.5], "claude-haiku-4-5": [1, 5],
 });
+const chavePreco = modelo => Object.keys(PRECOS_IA).find(k => String(modelo ?? "").startsWith(k));
+const SEM_PRECO_AVISADO = new Set();
+function avisarSemPreco(modelo) {
+  if (SEM_PRECO_AVISADO.has(modelo) || SEM_PRECO_AVISADO.size > 50) return;
+  SEM_PRECO_AVISADO.add(modelo);
+  log("aviso", "ia_modelo_sem_preco", { modelo: modelo.slice(0, 80) });
+}
+/** Só os testes: esquece os avisos já dados. */
+export const esquecerAvisosIA = () => SEM_PRECO_AVISADO.clear();
+
+/** Plano 1000 (SV-073): o modelo configurado (nx_config.modelo_ia / modelo_ia_automacao) só vale se for um claude-* com preço
+    conhecido; erro de digitação ou modelo que não existe cai no MODELO_PADRAO (com um aviso no log) em vez de fazer TODA chamada
+    de IA dar 404 até alguém olhar. Vazio → o padrão, sem aviso. */
+export function modeloIA(...candidatos) {
+  for (const c of candidatos) {
+    const m = String(c ?? "").trim();
+    if (!m) continue;
+    if (/^claude-[a-z0-9.-]{2,60}$/.test(m) && chavePreco(m)) return m;
+    if (!SEM_PRECO_AVISADO.has(`modelo:${m}`) && SEM_PRECO_AVISADO.size <= 50) {
+      SEM_PRECO_AVISADO.add(`modelo:${m}`);
+      log("aviso", "ia_modelo_desconhecido", { modelo: m.slice(0, 80), usado: MODELO_PADRAO });
+    }
+  }
+  return MODELO_PADRAO;
+}
+
 /** Custo estimado em US$. Com prompt caching o input tem três preços: o normal, a ESCRITA no cache (1,25×) e a LEITURA
     do cache (0,1×) — usage.input_tokens conta só o primeiro; sem os outros dois o custo e os tokens ficavam abaixo do real. 6 casas; null sem preço conhecido ou sem contagem. */
 export function custoUsd(modelo, tokensIn, tokensOut, cacheEscrita = 0, cacheLeitura = 0) {
-  const chave = Object.keys(PRECOS_IA).find(k => String(modelo ?? "").startsWith(k));
+  const chave = chavePreco(modelo);
+  // plano 1000 (SV-072): modelo preenchido sem preço na tabela → custo null e UM aviso por isolate (os gráficos de custo zeravam
+  // em silêncio)
+  if (!chave && String(modelo ?? "").trim()) avisarSemPreco(String(modelo));
   // sem contagem (null) não há custo a estimar — Number(null) seria 0 e inventaria um valor
   if (!chave || tokensIn == null || tokensOut == null || !Number.isFinite(Number(tokensIn)) || !Number.isFinite(Number(tokensOut))) return null;
   const [pin, pout] = PRECOS_IA[chave];
@@ -177,6 +221,33 @@ export function traduzirErroIA(e) {
     return { codigo: "ia_indisponivel", mensagem: "Não consegui falar com a IA agora. Tente de novo em instantes.", tentarDeNovo: true, detalhe: "sem_conexao" };
   }
   return { codigo: "ia_indisponivel", mensagem: "Não foi possível consultar a IA agora. Tente de novo em instantes.", tentarDeNovo: true };
+}
+
+export const CAB_VERSAO = "x-orbita-versao";
+/** Plano 1000 (SV-164): a resposta leva o cabeçalho x-orbita-versao (tag + commit gravados pelo montar-funcoes). Resposta com
+    cabeçalhos imutáveis vira uma cópia com o mesmo corpo e status. Nunca lança. */
+export function comVersao(r, versao = VERSAO) {
+  if (!(r instanceof Response)) return r;
+  try { r.headers.set(CAB_VERSAO, versao); return r; }
+  catch {
+    try { const h = new Headers(r.headers); h.set(CAB_VERSAO, versao); return new Response(r.body, { status: r.status, statusText: r.statusText, headers: h }); }
+    catch { return r; }
+  }
+}
+
+/** Plano 1000 (SV-106): log estruturado — UMA linha JSON {nivel, fn, evento, cliente, req_id, ms, codigo, erro, …} que o Logs
+    Explorer filtra por campo (antes: console.error com texto livre e prefixos diferentes). O texto de erro passa pelo limparErro
+    (sem token, telefone ou e-mail); dados com valor null/undefined ficam fora. Nunca lança. */
+export function log(nivel, evento, dados = {}) {
+  try {
+    const linha = { nivel: nivel === "erro" || nivel === "aviso" ? nivel : "info", evento: String(evento || "evento") };
+    for (const [k, v] of Object.entries(dados || {})) {
+      if (v == null) continue;
+      linha[k] = k === "erro" ? limparErro(v?.message || v) : v;
+    }
+    const txt = JSON.stringify(linha);
+    if (linha.nivel === "erro") console.error(txt); else if (linha.nivel === "aviso") console.warn(txt); else console.log(txt);
+  } catch { /* log nunca derruba a função */ }
 }
 
 /** Linha de log por chamada à IA (JSON numa linha, sem chave, sem texto de terceiros): ação, cliente, modelo, tokens, ms, resultado. */
@@ -364,7 +435,14 @@ export const semNul = (_chave, valor) => {
   return v;
 };
 
-/** Corpo JSON do cron (pequeno: {cliente}, {tipo}, {ids:[≤100]}). Acima do teto → 413; ilegível → {}. */
+/** Marca (não enumerável) do corpo de cron que veio NÃO vazio e ilegível: lerCorpo devolve {} com ela e o handler, DEPOIS de
+    autenticar (sem o token continua 401), recusa com exigirCorpoValido. */
+const CORPO_INVALIDO = Symbol("corpo_invalido");
+const corpoInvalido = () => Object.defineProperty({}, CORPO_INVALIDO, { value: true, enumerable: false });
+
+/** Corpo JSON do cron (pequeno: {cliente}, {tipo}, {ids:[≤100]}). Acima do teto → 413; vazio → {}; não vazio e ilegível (ou
+    que não é objeto) → {} MARCADO, que exigirCorpoValido transforma em 400 (plano 1000, SV-100: no nx-ciclo/nx-relatorio {}
+    significa «todos os clientes» — um disparo para UM cliente com o corpo corrompido processava a plataforma inteira). */
 export async function lerCorpo(req, limite = MAX_CORPO_CRON, drenagem = {}) {
   let bytes;
   try { bytes = await lerCorpoLimitado(req, limite, drenagem); }
@@ -372,7 +450,17 @@ export async function lerCorpo(req, limite = MAX_CORPO_CRON, drenagem = {}) {
     if (e instanceof CorpoGrande) throw new ErroHttp(413, "corpo grande demais");
     return {};
   }
-  try { const c = JSON.parse(new TextDecoder().decode(bytes), semNul); return c && typeof c === "object" ? c : {}; } catch { return {}; }
+  const txt = new TextDecoder().decode(bytes);
+  if (!txt.trim()) return {};
+  let c;
+  try { c = JSON.parse(txt, semNul); } catch { return corpoInvalido(); }
+  return c && typeof c === "object" && !Array.isArray(c) ? c : corpoInvalido();
+}
+
+/** Corpo de cron ilegível (marcado por lerCorpo) → 400 dados_invalidos. Chamar DEPOIS do autenticarCron. */
+export function exigirCorpoValido(corpo) {
+  if (corpo && corpo[CORPO_INVALIDO]) throw new ErroHttp(400, "dados_invalidos");
+  return corpo;
 }
 
 /** nx_config inteira (cron) ou só as colunas pedidas (`colunas`: lista de nomes) — o webhook da Meta, que lê a
@@ -382,13 +470,15 @@ export async function lerConfig(db, colunas = null) {
   return (await db.select("nx_config", { id: "eq.1", select, limit: 1 }))[0] || null;
 }
 
-/** Lê nx_config e confere o header x-nx-cron. Devolve a config ou lança 401. */
-export async function autenticarCron(req, db) {
+/** Confere o header x-nx-cron e devolve a nx_config (ou lança 401). Plano 1000 (SV-102): a conferência lê SÓ o cron_token —
+    um POST com token errado nunca carrega os segredos da plataforma; depois de autenticado, lê as `colunas` pedidas (todas, sem
+    lista). */
+export async function autenticarCron(req, db, colunas = null) {
   const recebido = req.headers.get("x-nx-cron");
   if (!recebido) throw new ErroHttp(401, "não autorizado");
-  const cfg = await lerConfig(db);
-  if (!cfg || !cfg.cron_token || !iguaisSeguro(recebido, cfg.cron_token)) throw new ErroHttp(401, "não autorizado");
-  return cfg;
+  const tok = await lerConfig(db, ["cron_token"]);
+  if (!tok || !tok.cron_token || !iguaisSeguro(recebido, tok.cron_token)) throw new ErroHttp(401, "não autorizado");
+  return (await lerConfig(db, colunas)) || tok;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -405,10 +495,29 @@ export async function listarClientes(db, clienteId, hoje = hojeSP()) {
     if (!r.length) throw new ErroHttp(404, "cliente_nao_encontrado");
     return r;
   }
-  return db.select("nx_clientes", {
+  const lista = await db.select("nx_clientes", {
     ativo: "eq.true", select: cols, order: "nome.asc",
     and: `(status.in.(ativo,teste),or(status.neq.teste,teste_ate.is.null,teste_ate.gte.${hoje}))`,
   });
+  return semOrgParada(db, lista);
+}
+
+/** plano 1000 (SV-205): cliente de revenda (org) suspensa ou cancelada fica fora do cron — o nx_ctx e o formulário já o
+    barravam, mas o ciclo/relatório seguiam gastando Meta/Google/IA e mandando WhatsApp. Consulta à parte (o select dos clientes
+    fica igual); se ela falhar, a lista segue inteira (melhor processar a mais que deixar todo mundo sem dado). */
+async function semOrgParada(db, lista) {
+  if (!lista.length) return lista;
+  try {
+    const paradas = await db.select("nx_orgs", { status: "in.(suspenso,cancelado)", select: "id", order: "id.asc" });
+    if (!paradas.length) return lista;
+    const fora = new Set((await db.select("nx_clientes", {
+      org_id: `in.(${paradas.map(o => o.id).join(",")})`, select: "id", order: "id.asc",
+    })).map(c => c.id));
+    return lista.filter(c => !fora.has(c.id));
+  } catch (e) {
+    console.error("listarClientes (org parada):", limparErro(e?.message || e));
+    return lista;
+  }
 }
 
 const COLS_METRICAS = "plataforma,nivel,data,campanha_ext,campanha_nome,anuncio_ext,anuncio_nome,impressoes,alcance,frequencia,cliques,gasto,conversoes";
@@ -486,8 +595,23 @@ export function erroDeEnvio(destinos, envio) {
   return falhas.map(e => `${e.destino}: ${e.erro}`).join("; ");
 }
 
-/** Nome curto do cliente, igual ao M.NOME do núcleo (cfg.nomeCurto ou o nome encurtado). */
-export const nomeCurto = c => (c?.cfg && c.cfg.nomeCurto) || encurtar(c?.nome || "Cliente", 22) || c?.nome || "Cliente";
+/** Nome curto do cliente, igual ao M.NOME do núcleo (cfg.nomeCurto ou o nome da empresa cortado em palavra inteira).
+    Plano 1000: usa o nomeCurtoEmpresa do núcleo (antes o encurtar de campanha: «Clínica Odontológica Sorr…» no título do
+    template e «Clínica Odontológica» no corpo do mesmo aviso). */
+export const nomeCurto = c => (c?.cfg && c.cfg.nomeCurto) || nomeCurtoEmpresa(c?.nome || "Cliente", 22);
+
+/** Plano 1000 (AD-020, servidor): endereço do radar no painel (nx_config.saas_url + «#/anuncios/radar») para o fim dos textos do
+    WhatsApp — o núcleo só usa https completo (urlPainel). Sem saas_url, nada muda. */
+export function painelRadarUrl(cfg) {
+  const base = String(cfg?.saas_url ?? "").trim().replace(/#.*$/, "");
+  return /^https:\/\/[^\s<>"']+$/i.test(base) ? `${base}#/anuncios/radar` : "";
+}
+/** O cliente com cfg.painelUrl preenchido a partir da nx_config (o que o cliente já tem configurado vence). */
+export function comPainelUrl(cliente, cfg) {
+  const url = painelRadarUrl(cfg);
+  if (!url || !cliente || (cliente.cfg && (cliente.cfg.painelUrl || cliente.cfg.painel_url))) return cliente;
+  return { ...cliente, cfg: { ...(cliente.cfg || {}), painelUrl: url } };
+}
 
 /** Título curto dos avisos (vai no template quando a janela de 24h está fechada).
     Ficam aqui porque o webhook precisa refazer o MESMO título ao reenviar como template. */
@@ -543,11 +667,37 @@ export async function comTravaDoCliente(db, nome, segundos, base, fn) {
 /** Nenhum cliente processado (todos já estavam com outra execução): não é execução de verdade. */
 export const todosPulados = resumo => resumo.length > 0 && resumo.every(x => x.pulado === EM_EXECUCAO);
 
+/** Plano 1000 (SV-101): teto do resumo gravado em nx_execucoes (a tabela de operação não incha com dezenas de clientes por hora). */
+export const TETO_RESUMO = 64 * 1024;
+const tamanhoJson = v => new TextEncoder().encode(JSON.stringify(v ?? null)).length;
+/** Resumo dentro do teto: inteiro quando cabe; senão os campos simples + contagens da lista de clientes, com o detalhe SÓ dos que
+    falharam (até caber) e `cortado: true`. */
+export function resumoComTeto(resumo, teto = TETO_RESUMO) {
+  if (!resumo || typeof resumo !== "object" || tamanhoJson(resumo) <= teto) return resumo;
+  const out = { cortado: true, bytes_original: tamanhoJson(resumo) };
+  for (const [k, v] of Object.entries(resumo)) {
+    if (Array.isArray(v)) {
+      const falhos = v.filter(x => x && typeof x === "object" && x.ok === false);
+      out[`${k}_total`] = v.length;
+      out[`${k}_ok`] = v.filter(x => x && x.ok !== false).length;
+      out[`${k}_falhos`] = [];
+      for (const x of falhos) {
+        const curto = { ...x };
+        for (const [ck, cv] of Object.entries(curto)) if (cv && typeof cv === "object" && tamanhoJson(cv) > 2000) curto[ck] = "(cortado)";
+        if (tamanhoJson(out) + tamanhoJson(curto) > teto - 512) { out[`${k}_falhos_omitidos`] = falhos.length - out[`${k}_falhos`].length; break; }
+        out[`${k}_falhos`].push(curto);
+      }
+    } else if (v == null || typeof v !== "object" || tamanhoJson(v) <= 4000) out[k] = v;
+    else out[k] = "(cortado)";
+  }
+  return out;
+}
+
 /** @param ms duração medida no relógio real (o `inicio` pode vir do relógio injetado nos testes) */
 export async function registrarExecucao(db, { tarefa, inicio, ms, ok, resumo }) {
   try {
     const fim = new Date(inicio.getTime() + ms);
-    await db.insert("nx_execucoes", { tarefa, inicio: inicio.toISOString(), fim: fim.toISOString(), ok, resumo }, { retornar: false });
+    await db.insert("nx_execucoes", { tarefa, inicio: inicio.toISOString(), fim: fim.toISOString(), ok, resumo: resumoComTeto(resumo) }, { retornar: false });
   } catch (e) {
     console.error(`nx_execucoes (${tarefa}):`, limparErro(e.message));
   }
@@ -562,11 +712,12 @@ export const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "content-type, apikey, x-client-info",
+  "Access-Control-Expose-Headers": "x-orbita-req",
   "Access-Control-Max-Age": "86400",
 };
 
 export const respostaPainel = (dados, status = 200) => new Response(JSON.stringify(dados), {
-  status, headers: { "content-type": "application/json; charset=utf-8", ...CORS },
+  status, headers: { "content-type": "application/json; charset=utf-8", ...CORS, ...CAB_SEGURANCA },
 });
 
 /** OPTIONS (preflight do navegador). */
@@ -582,13 +733,21 @@ export function respostaErro(codigo, status = 400, detalhe) {
   return respostaPainel({ ok: false, erro: codigo, ...(detalhe ? { detalhe: limparErro(detalhe).slice(0, 200) } : {}) }, status);
 }
 
-const ACESSO = new Set(["sem_acesso", "sem_permissao", "conta_suspensa", "teste_expirado", "modulo_desligado", "so_plataforma"]);
-const SESSAO = new Set(["sessao_invalida", "conta_pendente"]);
+/** Id curto de correlação (plano 1000, SV-050): vai no corpo do erro interno, no cabeçalho x-orbita-req de toda resposta do
+    painel e na linha de log — o suporte acha no log a falha que o cliente viu. */
+export const novoReqId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+export const CAB_REQ = "x-orbita-req";
 
-/** HTTP do código: sessão 401 · acesso 403 · *_nao_encontrad[oa] 404 · resto (dados) 400. */
+// cliente_pausado (plano 1000, SV-127): o nx_ctx barra a equipe de um cliente pausado como barra o suspenso
+const ACESSO = new Set(["sem_acesso", "sem_permissao", "conta_suspensa", "teste_expirado", "modulo_desligado", "so_plataforma", "cliente_pausado"]);
+const SESSAO = new Set(["sessao_invalida", "conta_pendente"]);
+// plano 1000 (SV-104): limites de taxa → 429 (antes 400: o painel tratava como dado inválido e não esperava para tentar de novo)
+const LIMITE = new Set(["muitas_tentativas", "limite_taxa", "muitos_pedidos", "aguarde"]);
+/** HTTP do código: sessão 401 · acesso 403 · limite 429 · *_nao_encontrad[oa] 404 · resto (dados) 400. */
 export function statusDoCodigo(codigo) {
   if (SESSAO.has(codigo)) return 401;
   if (ACESSO.has(codigo)) return 403;
+  if (LIMITE.has(codigo)) return 429;
   if (/_nao_encontrad[oa]$/.test(codigo)) return 404;
   return 400;
 }
@@ -604,6 +763,19 @@ export function erroApiDoBanco(e) {
   if (e instanceof ErroApi) return e;
   const c = codigoBanco(e);
   return c ? new ErroApi(c, statusDoCodigo(c)) : e;
+}
+
+/** Plano 1000 (SV-230): ação de plataforma feita por uma função (testar conexão, parear aparelho, inscrever app, enviar teste…)
+    deixa linha em nx_auditoria com a conta do ctx (nx_auditar, a mesma das RPCs). Nunca lança: auditoria não derruba a ação. */
+export async function auditar(db, ctx, cliente, acao, dados = {}) {
+  try {
+    await db.rpc("nx_auditar", { p_org: ctx?.org_id ?? null, p_cliente: cliente ?? null, p_conta: ctx?.conta_id ?? null,
+      p_acao: String(acao).slice(0, 60), p_dados: dados || {} });
+    return true;
+  } catch (e) {
+    if (!funcaoAusente(e, "nx_auditar")) log("aviso", "auditoria_falhou", { acao, erro: e });
+    return false;
+  }
 }
 
 /** Interna do banco chamada por handler de painel: erro com código vira ErroApi. */
@@ -645,20 +817,24 @@ export async function lerCorpoPainel(req, max = 64_000, drenagem = {}) {
 /** Envolve um handler de painel: OPTIONS, método, erros → {ok:false, erro}. O corpo que
     não foi lido (OPTIONS, 405, falha antes da leitura) é drenado antes da resposta. */
 export async function tratarPainel(req, fn, drenagem = {}) {
+  const reqId = novoReqId();
+  const marcar = r => { try { r?.headers?.set?.(CAB_REQ, reqId); } catch { /* resposta imutável: fica sem o cabeçalho */ } return r; };
   return soltandoCorpo(req, async () => {
     if (req.method === "OPTIONS") return preflight();
-    if (req.method !== "POST") return respostaErro("metodo_invalido", 405);
+    if (req.method !== "POST") return marcar(respostaErro("metodo_invalido", 405));
     try {
-      return await fn();
+      return marcar(await fn());
     } catch (e) {
       const x = erroApiDoBanco(e);
-      if (x instanceof ErroApi) return respostaErro(x.codigo, x.status, x.detalhe);
+      if (x instanceof ErroApi) return marcar(respostaErro(x.codigo, x.status, x.detalhe));
       const msg = limparErro(e?.message || e);
-      console.error("painel:", msg);
+      log("erro", "painel_erro_interno", { req_id: reqId, codigo: e?.codigo || null, status: e?.status || null, erro: msg });
       // 400 permanente do banco sem código conhecido (texto que ele recusa, uuid mal formado...): dado ruim de quem
       // chamou, não falha nossa; e a resposta nunca carrega o nome da RPC interna
-      if (e?.status === 400 && e?.banco === false) return respostaErro("dados_invalidos", 400);
-      return respostaErro("erro_interno", 500, msg.replace(/\brpc\/[A-Za-z0-9_]+/g, "banco"));
+      if (e?.status === 400 && e?.banco === false) return marcar(respostaErro("dados_invalidos", 400));
+      // plano 1000 (SV-097): o erro interno não leva detalhe técnico (tabela, coluna, SQL) ao navegador — só o req_id, que
+      // está na mesma linha do log
+      return marcar(respostaPainel({ ok: false, erro: "erro_interno", req_id: reqId }, 500));
     }
   }, drenagem);
 }

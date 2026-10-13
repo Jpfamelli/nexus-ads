@@ -30,7 +30,7 @@ import { tratar as nxIa } from "../supabase/functions/_compartilhado/ia_conversa
 import { tratar as ciclo } from "../supabase/functions/_compartilhado/ciclo.js";
 import { tratar as relatorio } from "../supabase/functions/_compartilhado/relatorio.js";
 import {
-  lerCorpoLimitado, lerCorpo, CorpoGrande, soltarCorpo, soltandoCorpo, drenarCorpo, tamanhoDeclarado,
+  lerCorpoLimitado, lerCorpo, exigirCorpoValido, CorpoGrande, soltarCorpo, soltandoCorpo, drenarCorpo, tamanhoDeclarado,
   MAX_CORPO_CRON, PRAZO_DRENAR_MS, TETO_DRENAR,
 } from "../supabase/functions/_compartilhado/comum.js";
 
@@ -293,9 +293,15 @@ test("soltandoCorpo: o corpo que ninguém leu é drenado ANTES de a resposta sai
   cortadoNoPrazo(parado.st, ms);
 });
 
-test("lerCorpo (cron): pequeno → objeto; ilegível → {}; acima de 64 KiB → drena tudo e 413", async () => {
+test("lerCorpo (cron): pequeno → objeto; vazio → {}; ilegível → 400; acima de 64 KiB → drena tudo e 413", async () => {
   assert.deepEqual(await lerCorpo(pedido(`${FN}/x`, { corpo: '{"cliente":"x"}' })), { cliente: "x" });
-  assert.deepEqual(await lerCorpo(pedido(`${FN}/x`, { corpo: "nao-json" })), {});
+  assert.deepEqual(await lerCorpo(pedido(`${FN}/x`, { corpo: "" })), {});
+  // plano 1000 (SV-100): corpo NÃO vazio e ilegível era {} = «todos os clientes» no nx-ciclo/nx-relatorio; agora volta {} MARCADO
+  // e o handler, depois de autenticar, recusa com 400 (exigirCorpoValido)
+  const ruim = await lerCorpo(pedido(`${FN}/x`, { corpo: "nao-json" }));
+  assert.deepEqual(Object.keys(ruim), []);
+  assert.equal((() => { try { exigirCorpoValido(ruim); return null; } catch (e) { return e.status; } })(), 400);
+  assert.deepEqual(exigirCorpoValido({ cliente: "x" }), { cliente: "x" });
   const { stream, st } = corpoEmPedacos({ total: MAX_CORPO_CRON + 1, pedaco: 4096 });
   const e = await lerCorpo(pedido(`${FN}/x`, { corpo: stream })).catch(x => x);
   assert.equal(e.status, 413);
@@ -336,7 +342,7 @@ test("nx-whatsapp: EXATAMENTE 2 MiB em pedaços, sem Content-Length, também pas
 test("nx-whatsapp: 2 MiB + 1 com Content-Length → corpo DRENADO até o fim e só então 413, rápido e sem banco", async () => {
   const b = bancoFalso();
   const { stream, st } = corpoEmPedacos({ total: MAX_CORPO_WEBHOOK + 1, pedaco: 64 * 1024 });
-  const { valor: r, ms } = await cronometro(aTempo(webhook(pedido(`${FN}/nx-whatsapp?c=aaaa1111aaaa1111`, {
+  const { valor: r, ms } = await cronometro(aTempo(webhook(pedido(`${FN}/nx-whatsapp?c=aaaa1111aaaa1111aaaa1111`, {
     corpo: stream, cab: { "content-length": String(MAX_CORPO_WEBHOOK + 1), "x-hub-signature-256": "sha256=qualquer" },
   }), ENV, { fetch: b.fetch })));
   assert.equal(r.status, 413);

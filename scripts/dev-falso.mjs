@@ -127,7 +127,16 @@ const dev = {
   notificacoes: [], seqNotif: 0, historicoCanais: [], seqHist: 0,
   iaPausada: new Map([["903", { quem: "Ana Paula", ate: new Date(Date.now() + 5 * 3600e3).toISOString(), so_manual: false }]]),
   cliente: { ativo: true, super: true }, migracao: null, integracaoFalha: null,
+  // plano 1000 (srv-3): papel da conta falsa (simular/papel), cfg salvo pelo nx_cliente_salvar e a última troca de etapa por negócio
+  papel: "gestor", cfgCliente: {}, movidos: new Map([[801, { por: "Ana Paula", por_id: ID.ana, em: new Date(Date.now() - 26 * 3600e3).toISOString() }]]),
 };
+/** Papel no cliente (gestor da plataforma = admin no cliente, com super). */
+const papelNoCliente = () => (dev.papel === "gestor" ? "admin" : dev.papel);
+/** CR-204: quem moveu o negócio de etapa por último ({movido_por, movido_por_id, movido_em}; nulos sem troca registrada). */
+function movido(n) {
+  const m = dev.movidos.get(Number(n.id));
+  return { movido_por: m ? m.por : null, movido_por_id: m ? m.por_id : null, movido_em: m ? m.em : null };
+}
 const bater = () => { dev.pulsoV += 1; };
 /** Nome da última migração do repositório (o que nx_app_sessao.migracao devolve depois de aplicada); simular/migracao?nome= sobrepõe. */
 function ultimaMigracao() {
@@ -257,9 +266,9 @@ function sessao(token = "") {
   return { conta: { id: outra ? ID.ana : ID.eu, nome: outra ? "Ana Paula" : "Dra. Helena", email: "demo@example.test", papel: sup ? "gestor" : "admin", super: sup, telefone: null },
     org: { id: ID.org, nome: "Nexus", slug: "nexus", marca: { produto: (dev.marca && dev.marca.produto) || "Órbita", cores: { primaria: "#B0761F", secundaria: "#6FA3CF", fundo: "#07090C" } }, img_hash: dev.marca ? `dev-${Object.keys(dev.marca).join("")}` : "dev-falso" },
     super: sup, link_base_padrao: null, modulos_plano: {}, migracao: ultimaMigracao(),
-    clientes: [{ id: ID.cliente, slug: "sorriso-vivo", nome: "Clínica Sorriso Vivo", plano: "completo", status: dev.teste ? dev.teste.status : "teste", vertical: dev.vertical || "odonto", papel: "admin", proprio: true,
+    clientes: [{ id: ID.cliente, slug: "sorriso-vivo", nome: "Clínica Sorriso Vivo", plano: "completo", status: dev.teste ? dev.teste.status : "teste", vertical: dev.vertical || "odonto", papel: papelNoCliente(), proprio: true,
       ativo: dev.cliente.ativo !== false,
-      modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"], teste_ate: dev.teste ? (dev.teste.dias === null ? null : somaDia(hoje, dev.teste.dias)) : somaDia(hoje, 14), tem_tema: false, cfg: {} },
+      modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"], teste_ate: dev.teste ? (dev.teste.dias === null ? null : somaDia(hoje, dev.teste.dias)) : somaDia(hoje, 14), tem_tema: false, cfg: { ...dev.cfgCliente } },
       ...(dev.empresas > 1 ? [{ id: "00000000-0000-4000-8000-0000000000c2", slug: "oficina-central", nome: "Oficina Central", plano: "completo", status: "ativo", vertical: "oficina", papel: "admin", proprio: false, ativo: true,
         modulos: ["crm", "conversas", "relatorios", "ads", "automacoes"], teste_ate: null, tem_tema: false, cfg: {} }] : [])] };
 }
@@ -323,7 +332,7 @@ function colunaFunil(funilId) {
       const quando = n.consulta_inicio || (n.consulta_offset == null ? null : hora(somaDia(hoje, n.consulta_offset), n.id === 802 ? "14" : "10", n.id === 802 ? "30" : "00"));
       return { ...n, titulo: n.titulo, contato: { ...c }, funil_id: f.id, funil_nome: f.nome, estagio_nome: e.nome, estagio_cor: e.cor, estagio_tipo: e.tipo,
         status: e.tipo, valor: n.valor || null, ordem: 0, criado_em: new Date(Date.now() - 86400000 * (n.id % 9 + 1)).toISOString(), estagio_em: isoAgora(),
-        anuncio: n.origem === "anuncio", campanha_nome: n.campanha_nome || null, consulta_em: quando, nao_lidas: n.id === 801 ? 2 : 0, tarefa: null };
+        anuncio: n.origem === "anuncio", campanha_nome: n.campanha_nome || null, consulta_em: quando, nao_lidas: n.id === 801 ? 2 : 0, tarefa: null, ...movido(n) };
     });
     return { estagio_id: e.id, total: itens.length, soma_previsto: itens.reduce((s,n)=>s+(+n.valor_previsto||0),0), soma_valor: itens.reduce((s,n)=>s+(+n.valor||0),0), itens };
   }) };
@@ -334,7 +343,7 @@ function crmNegocio(id) {
   if (!n) return { negocio: null };
   const c = contatos.find(x => x.id === n.contato_id), e = nomesEtapas.find(x => x.id === n.estagio_id);
   return { contato: { ...c }, conversas: conversas.filter(v => v.contato_id === c.id).map(dataConv),
-    negocio: { ...n, contato: { ...c }, funil_nome: "Pacientes", estagio_nome: e?.nome, estagio_cor: e?.cor, estagio_tipo: e?.tipo,
+    negocio: { ...n, contato: { ...c }, funil_id: n.funil_id || ID.funil, funil_nome: "Pacientes", estagio_nome: e?.nome, estagio_cor: e?.cor, estagio_tipo: e?.tipo, ...movido(n),
     criado_em: new Date(Date.now() - 86400000 * 4).toISOString(), atualizado_em: isoAgora(), tarefas: tarefas.filter(x => x.negocio_id === n.id).map(x => ({ ...x })), notas: notas.filter(x => x.negocio_id === n.id).map(x => ({ ...x })), historico: [],
     anuncio: n.origem === "anuncio", campanha_nome: n.campanha_nome || null,
     consulta_em: n.consulta_inicio || (n.consulta_offset == null ? null : hora(somaDia(hoje, n.consulta_offset), "10")) } };
@@ -612,7 +621,9 @@ function execucoesDe(autoId) {
     for (let i = 0; i < n; i++) {
       const k = (semente + d * 3 + i) % 9;
       const estado = k === 0 ? "erro" : k === 1 ? "esperando" : k === 2 ? "cancelada" : "concluida";
-      const em = new Date(Date.now() - d * 86400e3 - (i * 3 + 1) * 3600e3).toISOString();
+      // presa ao DIA de São Paulo (d dias atrás, das 9h em diante): «agora − d dias − horas» caía fora da janela de 14 dias
+      // logo depois da meia-noite e a lista deixava de bater com a série (o teste falhava conforme a hora)
+      const em = new Date(Math.min(Date.parse(`${somaDia(hoje, -d)}T${String(9 + i * 3).padStart(2, "0")}:00:00-03:00`), Date.now() - (i + 1) * 30e3)).toISOString();
       const detalhe = estado === "erro" ? "codewords_sem_aparelho" : estado === "esperando" ? "Mensagem na fila para Mariana Costa"
         : estado === "cancelada" ? "O cliente respondeu · cancelada: o cliente respondeu" : k % 2 ? "Tarefa criada para Dra. Helena" : "Pulada: contato pediu para não receber";
       lista.push({ criado_em: em, ok: estado !== "erro", detalhe, chave: `ev:${d}${i}`, estado, passo: estado === "concluida" ? 4 : estado === "erro" ? 1 : 2, total_passos: 4,
@@ -765,7 +776,7 @@ function rpc(nome, p = {}) {
     case "nx_marca_publica": return marcaAtual();
     case "nx_entrar": {   // {token, nome, papel} como a RPC real
       const token = `demo-local-${dev.proximaContaOutra ? "outra" : "token"}-${++dev.seqToken}`; dev.tokens.add(token);
-      return { token, nome: dev.proximaContaOutra ? "Ana Paula" : "Dra. Helena", papel: dev.cliente.super !== false ? "gestor" : "admin" };
+      return { token, nome: dev.proximaContaOutra ? "Ana Paula" : "Dra. Helena", papel: dev.cliente.super !== false ? "gestor" : papelNoCliente() };
     }
     case "nx_sair": dev.tokens.clear(); return { ok: true };
     case "nx_app_sessao": {
@@ -816,12 +827,37 @@ function rpc(nome, p = {}) {
         series_14d: { aguardando: d14(2, 1), consultas: d14(3, 2), valor_aberto: d14(60000, 8000), leads: d14(3, 2) },
         canais: canais.map(c => ({ id: c.id, nome: c.nome, numero_exibicao: c.numero_exibicao, status: c.status, provedor: c.provedor, ultimo_erro: null,
           estado: c.estado, desde: c.estado_desde, sync_em: c.sync_em, app_inscrito: true, verificado_em: isoAgora(), ultima_entrada_em: isoAgora() })),
-        notificacoes_nao_lidas: naoLidasNotif() };
+        notificacoes_nao_lidas: naoLidasNotif(),
+        // CR-217 (20261013d): negócio aberto em etapa de marco «agendada» SEM data de consulta — {total, itens ≤ 5 (mais antigo primeiro)}
+        agendados_sem_data: (() => {
+          const sem = negocios.filter(n => { const e = nomesEtapas.find(x => x.id === n.estagio_id); return e && e.tipo === "aberto" && e.marco === "agendada" && !n.consulta_inicio && n.consulta_offset == null; })
+            .map(n => ({ id: n.id, titulo: n.titulo, contato_nome: (contatos.find(c => c.id === n.contato_id) || {}).nome || null,
+              estagio_nome: (nomesEtapas.find(x => x.id === n.estagio_id) || {}).nome || null,
+              desde: (dev.movidos.get(Number(n.id)) || {}).em || new Date(Date.now() - 86400000 * (n.id % 9 + 1)).toISOString() }))
+            .sort((a, b) => String(a.desde).localeCompare(String(b.desde)) || a.id - b.id);
+          return { total: sem.length, itens: sem.slice(0, 5) };
+        })() };
     }
     case "nx_crm_base": return baseCrm;
     case "nx_negocios_kanban": return colunaFunil(p.p_funil);
     case "nx_negocios_coluna": return { itens: [] };
     case "nx_negocio_ver": return crmNegocio(p.p_id);
+    // página seguinte da linha do tempo (20261013b): {itens, tem_mais}; itens {fonte, id, tipo, em, autor, dados, negocio_id, conversa_id}
+    case "nx_crm_tempo_pagina": {
+      const neg = p.p_negocio != null ? negocios.find(x => String(x.id) === String(p.p_negocio)) : null;
+      if (p.p_negocio != null && !neg) throw new ErroDev("negocio_nao_encontrado");
+      const ct = neg ? neg.contato_id : p.p_contato != null ? Number(p.p_contato) : null;
+      if (ct == null || !contatos.some(c => c.id === ct)) throw new ErroDev(p.p_contato != null ? "contato_nao_encontrado" : "dados_invalidos");
+      const antes = p.p_antes ? Date.parse(p.p_antes) : Infinity;
+      const autor = { id: ID.eu, nome: "Dra. Helena" };
+      const itens = [
+        ...notas.filter(x => (neg ? x.negocio_id === neg.id : x.contato_id === ct)).map(x => ({ fonte: "nota", id: x.id, tipo: "nota", em: x.criado_em || isoAgora(), autor, dados: { texto: x.texto, fixada: !!x.fixada }, negocio_id: x.negocio_id || null, conversa_id: null })),
+        ...tarefas.filter(x => (neg ? x.negocio_id === neg.id : x.contato_id === ct)).map(x => ({ fonte: "tarefa", id: x.id, tipo: x.concluida ? "tarefa_concluida" : "tarefa", em: x.vence_em, autor, dados: { titulo: x.titulo, tipo: x.tipo, vence_em: x.vence_em, concluida_em: null }, negocio_id: x.negocio_id || null, conversa_id: null })),
+        ...Array.from({ length: 6 }, (_, i) => ({ fonte: "historico", id: 9000 + i + (neg ? neg.id : ct) * 10, tipo: i % 2 ? "etapa" : "mensagem", em: new Date(Date.now() - (i + 2) * 86400e3).toISOString(), autor: i % 2 ? autor : null,
+          dados: i % 2 ? { de: "Nova conversa", para: "Avaliação agendada" } : { resumo: "Mensagem antiga do histórico" }, negocio_id: neg ? neg.id : null, conversa_id: null })),
+      ].filter(x => Date.parse(x.em) < antes).sort((a, b) => String(b.em).localeCompare(String(a.em)) || b.id - a.id).slice(0, 80);
+      return { itens, tem_mais: itens.length >= 80 };
+    }
     case "nx_buscar": {
       const norm = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
       const q = norm(String(p.p_q || "").trim());
@@ -861,16 +897,17 @@ function rpc(nome, p = {}) {
     }
     case "nx_contato_salvar": return comReq(nome, p, () => ({ ...contatoSalvar(p.p_contato || {}) }));
     case "nx_negocio_salvar": return comReq(nome, p, () => negocioSalvar(p.p_negocio || {}));
-    case "nx_negocio_mover": {
+    case "nx_negocio_mover": return comReq(nome, p, () => {   // p_req (20261013f): a mesma intenção em 24 h não move de novo
       const n = negocios.find(x => String(x.id) === String(p.p_id));
       const e = nomesEtapas.find(x => x.id === p.p_estagio);
       if (!n) throw new ErroDev("negocio_nao_encontrado");
       if (!e) throw new ErroDev("estagio_invalido");
+      if (n.estagio_id !== e.id) dev.movidos.set(Number(n.id), { por: "Dra. Helena", por_id: ID.eu, em: isoAgora() });
       n.estagio_id = e.id;
       if (e.tipo === "ganho") n.valor = Number((p.p_extra && p.p_extra.valor) ?? n.valor_previsto) || 0;
       bater();
       return { ...cardNegocio(n), estagio_id: e.id };
-    }
+    });
     case "nx_negocio_excluir": { const i = negocios.findIndex(x => String(x.id) === String(p.p_id)); if (i >= 0) negocios.splice(i, 1); bater(); return { ok: true }; }
     case "nx_tarefa_salvar": return comReq(nome, p, () => tarefaSalvar(p.p_tarefa || {}));
     case "nx_tarefa_concluir": { const x = tarefas.find(y => String(y.id) === String(p.p_id)); if (!x) throw new ErroDev("tarefa_nao_encontrada"); x.concluida = p.p_concluida !== false; bater(); return { ...x }; }
@@ -981,14 +1018,16 @@ function rpc(nome, p = {}) {
     }
     case "nx_cv_ver": { const c = conversas.find(x => String(x.id) === String(p.p_id)) || conversas[0], ct = contatos.find(x => x.id === c.contato_id);
       return { conversa: dataConv(c), contato: { ...ct }, anuncio: ct.plataforma ? { plataforma: ct.plataforma, campanha_nome: ct.campanha_nome, anuncio_nome: "Vídeo de apresentação" } : null,
-        negocios: negocios.filter(n => n.contato_id === ct.id), atendimentos: [{ id: c.id, protocolo: c.protocolo, status: c.status, aberta_em: isoAgora(), canal_id: c.canal_id, atribuida_nome: c.atribuida_nome }], tarefas: [] }; }
+        negocios: negocios.filter(n => n.contato_id === ct.id).map(cardNegocio), atendimentos: [{ id: c.id, protocolo: c.protocolo, status: c.status, aberta_em: isoAgora(), canal_id: c.canal_id, atribuida_nome: c.atribuida_nome }], tarefas: [] }; }
     case "nx_cv_mensagens": { const c = conversas.find(x => String(x.id) === String(p.p_conversa)) || conversas[0], when = i => new Date(Date.now() - i * 60000).toISOString();
       const itens = c.mensagens.map((m, i) => { const em = m.criada ? new Date(m.criada).toISOString() : when(m.minutos);
         return { id: m.id, conversa_id: c.id, direcao: m.direcao, tipo: m.nota ? "nota" : m.tipo || "texto", wamid: `wamid.demo.${c.id}.${i}`, corpo: m.corpo,
           status: m.direcao === "in" ? "recebida" : "entregue", criado_em: em, atualizado_em: em, origem: m.direcao === "out" ? "painel" : null,
           enviado_por: m.direcao === "out" ? { id: ID.eu, nome: "Dra. Helena" } : null, referral: null, ...(m.midia ? { midia: m.midia } : {}),
           ...(m.client_ref ? { client_ref: m.client_ref } : {}) }; });
-      return { itens, tem_mais: false, conversas: [{ id: c.id, protocolo: c.protocolo, aberta_em: when(c.minutos + 40), status: c.status, canal_id: c.canal_id }], agora: isoAgora(), ultimo_id: itens.at(-1)?.id || null }; }
+      // SV-139 (20261013f): a lista de atendimentos só na 1ª página (o delta e a página anterior não a levam)
+      const primeira = p.p_antes_id == null && p.p_depois_id == null && p.p_desde == null;
+      return { itens, tem_mais: false, ...(primeira ? { conversas: [{ id: c.id, protocolo: c.protocolo, aberta_em: when(c.minutos + 40), status: c.status, canal_id: c.canal_id }] } : {}), agora: isoAgora(), ultimo_id: itens.at(-1)?.id || null }; }
     case "nx_cv_ia_estado": return iaEstadoDe(p.p_conversa);
     // pausar/devolver devolvem o estado COMPLETO (nx_cv_ia_json), como o banco; só em canal CodeWords
     case "nx_cv_ia_pausar": case "nx_cv_ia_devolver": {
@@ -1086,7 +1125,15 @@ function rpc(nome, p = {}) {
       return sessao().clientes.map(clienteAdminItem).filter(c => (!f.id || c.id === f.id) && (!f.status || c.status === f.status)
         && (!f.org_id || c.org.id === f.org_id) && (!f.busca || norm(`${c.nome} ${c.slug}`).includes(norm(f.busca))));
     }
-    case "nx_usuarios_listar": return { itens: usuarios, total: usuarios.length };
+    // o formato REAL (20260928c_plataforma + 20261013f): {usuarios, convites, departamentos, eu, limite, uso}
+    case "nx_usuarios_listar": return {
+      usuarios: usuarios.map(u => ({ conta_id: u.id, nome: u.nome, email: `${String(u.nome).split(" ")[0].toLowerCase()}@example.test`, telefone: null,
+        papel: u.id === ID.eu ? papelNoCliente() : u.papel, departamentos: u.departamentos || [], ver_todas: u.id === ID.eu, recebe_conversas: !!u.recebe_conversas,
+        aprovado: u.aprovado !== false, ultimo_acesso: isoAgora(), editavel: u.id !== ID.eu, eu: u.id === ID.eu, gestor: u.id === ID.eu && dev.papel === "gestor" })),
+      convites: [{ id: "00000000-0000-4000-8000-00000000c0e1", papel: "atendente", email: "nova@example.test", nome: "Nova Atendente",
+        expira_em: new Date(Date.now() + 5 * 86400e3).toISOString(), criado_em: new Date(Date.now() - 86400e3).toISOString(), departamentos: [ID.dep] }],
+      departamentos: departamentos.map(d => ({ id: d.id, nome: d.nome, cor: d.cor || null })),
+      eu: { id: ID.eu, papel: papelNoCliente() }, limite: 5, uso: usuarios.length };
     case "nx_config": return { codigo_gestor: null };
     // mesmo formato da RPC real (20261001b): plano, status, uso × limites, storage e (só revenda) a soma da agência
     case "nx_uso_plano": { const c = sessao().clientes[0]; return { plano: { id: "profissional", nome: "Profissional", preco_mensal: 497 }, status: c.status, teste_ate: c.teste_ate, modulos: c.modulos,
@@ -1101,7 +1148,14 @@ function rpc(nome, p = {}) {
     case "nx_convite_criar": marcarOnb("colega_convidado"); return { ok: true, link: "http://127.0.0.1/app/#/convite/" + "0".repeat(64) };
     case "nx_funil_salvar": marcarOnb("funil_ajustado"); return { ...(p.p_funil || {}), ok: true };
     case "nx_integracao_salvar": marcarOnb("anuncios_ligados"); return { ok: true };
-    case "nx_perfil_salvar": case "nx_tema_salvar": case "nx_cliente_salvar": case "nx_agenda_config_salvar": if (nome === "nx_agenda_config_salvar") marcarOnb("agenda_faixas"); return { ...p.p_cfg, config: p.p_cfg || {}, ok: true };
+    // nx_cliente_salvar(p_token, p_cliente {id, nome, cfg…}): o cfg fica guardado e volta em nx_app_sessao.clientes[].cfg
+    case "nx_cliente_salvar": {
+      const d = p.p_cliente && typeof p.p_cliente === "object" ? p.p_cliente : {};
+      if (d.cfg && typeof d.cfg === "object" && !Array.isArray(d.cfg)) dev.cfgCliente = { ...dev.cfgCliente, ...d.cfg };
+      bater();
+      return { ...sessao().clientes[0], ...(d.nome ? { nome: d.nome } : {}), cfg: { ...dev.cfgCliente }, ok: true };
+    }
+    case "nx_perfil_salvar": case "nx_tema_salvar": case "nx_agenda_config_salvar": if (nome === "nx_agenda_config_salvar") marcarOnb("agenda_faixas"); return { ...p.p_cfg, config: p.p_cfg || {}, ok: true };
     default: return {};
   }
 }
@@ -1218,6 +1272,26 @@ async function atender(tipo, nome, corpo, json, res) {
     throw e;
   }
 }
+/** Plano 1000 (srv-3): N conversas fictícias (contato + 1–3 mensagens cada) para medir a lista com volume — simular/volume?n=5000 ou
+    /app/?dev-falso=1&volume=5000. Idempotente: completa até N (as já geradas ficam). Teto 20.000. */
+function gerarVolume(n) {
+  const alvo = Math.max(0, Math.min(20000, Math.floor(n)));
+  const ja = conversas.filter(c => c.volume).length;
+  const status = ["aberta", "aberta", "pendente", "resolvida"];
+  for (let i = ja; i < alvo; i++) {
+    const idC = 700000 + i, idV = 800000 + i, min = 5 + (i * 7) % (60 * 24 * 20);
+    contatos.push({ id: idC, nome: `Contato volume ${i + 1}`, telefone: `55129${String(70000000 + i).padStart(8, "0")}`, email: null, origem: i % 3 ? "whatsapp" : "anuncio",
+      plataforma: i % 3 ? null : "meta", campanha_nome: null, cidade: "Taubaté", uf: "SP", etiquetas: [], dono_id: null });
+    const c = { id: idV, contato_id: idC, canal_id: i % 2 ? ID.meta : ID.canal, status: status[i % 4], aguardando: i % 5 === 0, atribuida_a: i % 4 === 1 ? ID.eu : null,
+      atribuida_nome: i % 4 === 1 ? "Dra. Helena" : null, nao_lidas: i % 6 === 0 ? 1 : 0, protocolo: `ORB-VOL-${String(i + 1).padStart(5, "0")}`, minutos: min, volume: true,
+      mensagens: Array.from({ length: 1 + i % 3 }, (_, k) => ({ direcao: k % 2 ? "out" : "in", corpo: `Mensagem ${k + 1} da conversa ${i + 1}`, minutos: min + (2 - k) })) };
+    c.mensagens.forEach((m, k) => { m.id = idV * 10 + k; m.criada = Date.now() - m.minutos * 60000; });
+    conversas.push(c);
+  }
+  if (alvo > ja) bater();
+  return { conversas: conversas.filter(c => c.volume).length, total: conversas.length };
+}
+
 /** /__dev_falso/simular/<acao>?...  e  /__dev_falso/estado — só para testes locais (o servidor escuta apenas em loopback). */
 function simular(acao, q) {
   const n = chave => Number(q.get(chave));
@@ -1271,6 +1345,17 @@ function simular(acao, q) {
       dev.marca = { ...(q.get("produto") ? { produto: q.get("produto") } : {}), ...(Object.keys(cores).length ? { cores } : {}), ...(logo ? { logo, logo_claro: logo, favicon: logo } : {}) };
       return { ok: true, marca: Object.keys(dev.marca) };
     }
+    // plano 1000 (srv-3): papel da conta falsa — gestor (plataforma, super) | admin | atendente | leitura
+    case "papel": {
+      const v = q.get("valor");
+      if (!["gestor", "admin", "atendente", "leitura"].includes(v)) return { ok: false, erro: "dados_invalidos", detalhe: "valor=gestor|admin|atendente|leitura" };
+      dev.papel = v; dev.cliente.super = v === "gestor";
+      baseCrm.eu.papel = papelNoCliente(); baseConversas.eu.papel = papelNoCliente();
+      const eu = usuarios.find(u => u.id === ID.eu); if (eu) eu.papel = papelNoCliente();
+      bater();
+      return { ok: true, papel: dev.papel, papel_no_cliente: papelNoCliente(), super: dev.cliente.super };
+    }
+    case "volume": return { ok: true, ...gerarVolume(Number(q.get("n")) || 5000) };
     case "clientes": dev.empresas = Math.max(1, Math.min(2, Number(q.get("n")) || 1)); return { ok: true, empresas: dev.empresas };
     case "teste": dev.teste = q.get("status") || q.get("dias") ? { status: q.get("status") || "teste", dias: q.get("dias") === "nenhum" ? null : Number(q.get("dias") ?? 14) } : null; return { ok: true, teste: dev.teste };
     case "vertical": dev.vertical = ["odonto", "oficina", "loja", "generico"].includes(q.get("v")) ? q.get("v") : null; return { ok: true, vertical: dev.vertical };
@@ -1336,6 +1421,7 @@ const servidor = http.createServer(async (req, res) => {
     if (decoded === "/app/prontos.js" && /dev-falso=1/.test(req.headers.referer || "")) {
       arquivo = Buffer.from('export const MODULOS_PRONTOS = ["inicio","conversas","crm","empresas","tarefas","ads","automacoes","relatorios","admin"];\nexport const CONFIG_PRONTAS = ["perfil","usuarios","marca","dominio","plano","numeros","respostas","atendimento","ia","departamentos","funis","campos","etiquetas","motivos","anuncios","formulario","agenda","rastreio"];\n');
     }
+    if (caminho === "/app/index.html" && url.searchParams.get("dev-falso") === "1" && Number(url.searchParams.get("volume")) > 0) gerarVolume(Number(url.searchParams.get("volume")));
     if (caminho === "/app/index.html" && url.searchParams.get("dev-falso") === "1" && url.searchParams.get("boot") !== "0") {
       const boot = `<script src="/__dev_falso/boot.js"></script>`;
       // no fim do <head> (depois do antes.js): o pedido sai junto com os outros em vez de esperar o <body> — como na produção, sem um salto a mais

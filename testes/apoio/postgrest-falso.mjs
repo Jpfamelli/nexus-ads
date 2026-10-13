@@ -12,7 +12,7 @@
      seq,                   // primeiro id gerado (padrão 1000)
    }) → { t, tab, responder, api }
 
-   Filtros suportados: eq neq is in gte gt lte lt cs, e as árvores lógicas
+   Filtros suportados: eq neq is in gte gt lte lt cs ov, e as árvores lógicas
    or=(…) / and=(…) com or(…)/and(…) aninhados (como o PostgREST), onde a
    vírgula dentro de (), {} ou "" não separa.
    Erro de RPC: a fn lança Error com .message = código (e .hint opcional)
@@ -105,6 +105,7 @@ export function criarBanco(inicial, relogio, { esquema, rpcs, chave, seq: seqIni
       case "lte": return a != null && cmp() <= 0;
       case "lt": return a != null && cmp() < 0;
       case "cs": return Array.isArray(a) && arrayPg(val).every(x => a.includes(x));   // @> (contém)
+      case "ov": return Array.isArray(a) && arrayPg(val).some(x => a.includes(x));    // && (sobreposição; plano 1000)
       default: throw new Error(`operador não suportado no banco falso: ${op}`);
     }
   }

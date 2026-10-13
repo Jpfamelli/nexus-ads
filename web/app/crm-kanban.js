@@ -28,6 +28,11 @@
 const LIMIAR_ARRASTO = 6;           // px antes de virar arrasto
 const BORDA_ROLAGEM = 70;           // px da borda que começam a rolar
 const PULSO_MIN_MS = 8000;          // recarga silenciosa no máximo a cada 8 s
+const LIMITE_NA_TELA = 300;         // plano 1000 (CR-028): acima disso a rolagem não traz mais cartões sozinha (o botão continua)
+const CONFERIR_MS = [15000, 60000]; // plano 1000 (CR-003): reconferência de um movimento sem confirmação (a internet pode nem ter caído)
+/** JSON com as chaves em ordem (o filtro guardado e o montado no popover podem ter a mesma coisa em outra ordem). */
+const canonico = v => (Array.isArray(v) ? `[${v.map(canonico).join(",")}]` : v && typeof v === "object" ? `{${Object.keys(v).filter(x => v[x] !== undefined).sort().map(x => `${JSON.stringify(x)}:${canonico(v[x])}`).join(",")}}` : JSON.stringify(v));
+const OUTRO_FUNIL = "__outro_funil__";  // plano 1000 (CR-044): escolha «Outro funil…» da folha «Mover para…»
 const agora = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
 
 export async function montarKanban(k, el, rota) {
@@ -35,11 +40,24 @@ export async function montarKanban(k, el, rota) {
   const N = await k.mod("negocio");
   const Vis = await k.mod("visoes");
   const cli = ctx.cliente.id;
-  const chaveLocal = `nx-app-crm-kb-${cli}`;
-  const lerLocal = () => { try { return JSON.parse(localStorage.getItem(chaveLocal) || "{}") || {}; } catch { return {}; } };
+  // plano 1000 (CR-024): a preferência é da CONTA (aparelho compartilhado: a próxima pessoa não herda «dono: eu») e a busca digitada
+  // (nome/telefone de paciente) não fica gravada no aparelho. A chave antiga (só da empresa) é lida uma vez, sem a busca, e apagada.
+  const conta = (typeof k.eu === "function" && k.eu()) || "-";
+  const chaveLocal = `nx-app-crm-kb-${cli}-${conta}`;
+  const chaveAntiga = `nx-app-crm-kb-${cli}`;
+  const lerLocal = () => {
+    try {
+      let bruto = localStorage.getItem(chaveLocal);
+      if (bruto === null && (bruto = localStorage.getItem(chaveAntiga)) !== null) localStorage.removeItem(chaveAntiga);
+      const o = JSON.parse(bruto || "{}") || {};
+      if (o.filtro && typeof o.filtro === "object") delete o.filtro.busca;
+      return o;
+    } catch { return {}; }
+  };
   let controlesVisoes = null;
   const gravarLocal = () => {
-    try { localStorage.setItem(chaveLocal, JSON.stringify({ funil: S.funil && S.funil.id, filtro: S.filtro, todosFechados: S.todosFechados })); } catch { /* ok */ }
+    const { busca: _b, ...semBusca } = S.filtro || {};
+    try { localStorage.setItem(chaveLocal, JSON.stringify({ funil: S.funil && S.funil.id, filtro: semBusca, todosFechados: S.todosFechados, fechadosDias: S.fechadosDias })); } catch { /* ok */ }
     if (controlesVisoes) controlesVisoes.atualizar();
     atualizarAtalhos();
   };
@@ -50,6 +68,8 @@ export async function montarKanban(k, el, rota) {
     funil: k.funil(rota.query && rota.query.funil) || k.funil(salvo.funil) || k.funilPadrao(),
     filtro: salvo.filtro && typeof salvo.filtro === "object" ? salvo.filtro : {},
     todosFechados: salvo.todosFechados === true,
+    // plano 1000 (CR-215): quantos dias de fechados o quadro mostra (30 · 90 · 0 = todos) — escolhido nos Filtros, lembrado no aparelho
+    fechadosDias: [30, 90, 0].includes(salvo.fechadosDias) ? salvo.fechadosDias : (salvo.todosFechados === true ? 0 : 30),
     dados: null,
     seq: 0,
     arrasto: null,
@@ -58,10 +78,29 @@ export async function montarKanban(k, el, rota) {
     vivo: true,
     pend: new Map(),      // M25: movimentos que ainda não chegaram ao servidor (adiados pelos 7 s do Desfazer) ou à espera de confirmação
     adiado: null,         // redesenho que chegou no meio de um arrasto: {dados?} — feito quando o gesto termina (aplicarAdiado)
+    conferencias: new Set(),   // plano 1000 (CR-003): reconferências agendadas (canceladas ao sair da tela)
+    meus: new Set(),      // plano 1000 (CR-204): cartões que esta tela (ou a gaveta aberta daqui) acabou de mudar — não acendem como «movido por outra pessoa»
+    estadoVazio: "",
+    sel: new Set(),       // plano 1000 (CR-035): cartões selecionados (Shift/Ctrl + clique) para mover de uma vez
   };
+  let obsMais = null;     // plano 1000 (CR-028): observa o «Ver mais» de cada coluna para carregar a próxima página ao rolar até ele
   delete S.filtro.fechados_dias;
+  definirFechados(S.fechadosDias);
+  // plano 1000 (CR-185): «Ver todos com “mar”» da paleta abre o quadro com a busca preenchida (vale só nesta visita: a busca não é gravada)
+  if (rota.query && typeof rota.query.busca === "string" && rota.query.busca.trim()) S.filtro.busca = rota.query.busca.trim().slice(0, 120);
+  // plano 1000 (CR-246): «revisar as paradas» (vazio de Tarefas) abre o quadro já no atalho «Parados há 7+ dias»
+  if (rota.query && /^(3|7|15|30)$/.test(String(rota.query.parados || ""))) S.filtro.parado_dias = Number(rota.query.parados);
   const podeMover = k.pode("atendente");
+  const comConversas = !!(ctx.temModulo && ctx.temModulo("conversas"));
   ctx.titulo(k.v.crm);
+  /** CR-030: «Tarefa» do cartão — o formulário de sempre, já ligado ao negócio (e ao contato). */
+  async function novaTarefa(c, idContato) {
+    try {
+      const T = await k.mod("tarefas");
+      const t = await T.formTarefa(k, null, { negocio_id: c.id, contato_id: idContato ?? null });
+      if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); S.meus.add(c.id); carregar({ silencioso: true }); }
+    } catch (e) { k.toastErro(e); }
+  }
 
   /* ============================================================ estrutura */
   // troca de funil (M30): ui.segmentado com até 5 funis; no celular (e com mais de 5) um seletor no cabeçalho
@@ -95,7 +134,14 @@ export async function montarKanban(k, el, rota) {
   }
 
   const busca = h("input", { type: "search", placeholder: `Buscar ${k.v.min("negocios")}, nome ou telefone`, "aria-label": `Buscar ${k.v.min("negocios")}`, value: S.filtro.busca || "" });
-  const aoBuscar = ui.debounce(() => { const q = busca.value.trim(); if (q) S.filtro.busca = q; else delete S.filtro.busca; gravarLocal(); carregar({ silencioso: true }); }, 320);
+  // plano 1000 (CR-031): depois de buscar, o leitor de tela ouve quantos cartões sobraram (o quadro muda em silêncio)
+  const aoBuscar = ui.debounce(async () => {
+    const q = busca.value.trim(); if (q) S.filtro.busca = q; else delete S.filtro.busca; gravarLocal();
+    await carregar({ silencioso: true });
+    if (!S.vivo || !S.dados || (S.filtro.busca || "") !== q) return;
+    const n = S.dados.colunas.reduce((s, c) => s + (Number(c.total) || 0), 0);
+    ui.anunciar(q ? `${ui.num(n)} ${n === 1 ? "cartão encontrado" : "cartões encontrados"} para «${q}».` : `Busca limpa: ${ui.num(n)} ${n === 1 ? "cartão" : "cartões"} no quadro.`);
+  }, 320);
   busca.addEventListener("input", aoBuscar);
   busca.addEventListener("keydown", ev => { if (ev.key === "Escape" && busca.value) { busca.value = ""; aoBuscar(); } });
 
@@ -106,12 +152,35 @@ export async function montarKanban(k, el, rota) {
   const btMeus = h("button", { type: "button", class: "bt bt-fant bt-p crm-atalho", "aria-pressed": String(S.filtro.dono === "eu"), on: { click: () => {
     S.filtro.dono = S.filtro.dono === "eu" ? undefined : "eu"; if (!S.filtro.dono) delete S.filtro.dono;
     gravarLocal(); carregar({ silencioso: true });
-  } } }, "Meus negócios");
+  } } }, `${k.v.art("negocio") === "a" ? "Minhas" : "Meus"} ${k.v.min("negocios")}`);       // plano 1000 (CR-006): o termo da vertical
   const btParados = h("button", { type: "button", class: "bt bt-fant bt-p crm-atalho", "aria-pressed": String(Number(S.filtro.parado_dias) === 7), on: { click: () => {
     if (Number(S.filtro.parado_dias) === 7) delete S.filtro.parado_dias; else S.filtro.parado_dias = 7;
     gravarLocal(); carregar({ silencioso: true });
-  } } }, "Parados · 7 dias+");
-  const atalhos = h("div", { class: "crm-atalhos", "aria-label": "Filtros rápidos" }, btMeus, btParados);
+  } }, title: "Sem mudar de etapa há 7 dias ou mais" }, "Parados há 7+ dias");      // plano 1000 (CR-205): o rótulo diz o que é
+  // plano 1000 (CR-036): «Recolher vazias» — coluna sem cartão vira uma faixa estreita (continua destino do arrasto); lembrado por empresa no aparelho
+  const chaveRecolher = `nx-app-crm-kb-recolher-${cli}`;
+  S.recolher = (() => { try { return localStorage.getItem(chaveRecolher) === "1"; } catch { return false; } })();
+  const btRecolher = h("button", { type: "button", class: "bt bt-fant bt-p crm-atalho crm-recolher", "aria-pressed": String(S.recolher), title: "Colunas sem cartão viram uma faixa estreita",
+    on: { click: () => {
+      S.recolher = !S.recolher;
+      btRecolher.setAttribute("aria-pressed", String(S.recolher));
+      try { localStorage.setItem(chaveRecolher, S.recolher ? "1" : "0"); } catch { /* ok */ }
+      for (const [id, c] of colEls) marcarRecolhida(c, colunaDe(id));
+      ui.anunciar(S.recolher ? "Colunas vazias recolhidas." : "Todas as colunas abertas.");
+    } } }, "Recolher vazias");
+  // plano 1000 (CR-296): «atualizado às 14:02» discreto; passa de 2 min sem recarga (pulso parado, rede caída) e fica âmbar
+  const idade = h("small", { class: "crm-kb-idade", hidden: true });
+  function pintarIdade() {
+    if (!S.ultimaRecarga) { idade.hidden = true; return; }
+    const min = Math.floor((Date.now() - S.ultimaRecarga) / 60000);
+    idade.hidden = false;
+    idade.textContent = `atualizado às ${ui.horaBR(new Date(S.ultimaRecarga).toISOString())}`;
+    idade.classList.toggle("velho", min >= 2);
+    if (min >= 2) idade.setAttribute("title", `Sem atualizar há ${min} min. Confira a internet ou recarregue a página.`); else idade.removeAttribute("title");
+  }
+  const tIdade = setInterval(() => { if (S.vivo) pintarIdade(); }, 30000);
+  if (tIdade && typeof tIdade.unref === "function") tIdade.unref();     // (no Node dos testes o relógio não segura o processo)
+  const atalhos = h("div", { class: "crm-atalhos", "aria-label": "Filtros rápidos" }, btMeus, btParados, btRecolher, idade);
   function atualizarAtalhos() {
     if (!btMeus || !btParados) return;
     btMeus.setAttribute("aria-pressed", String(S.filtro.dono === "eu"));
@@ -122,21 +191,30 @@ export async function montarKanban(k, el, rota) {
     obterDados: () => ({ funil: S.funil && String(S.funil.id), filtro: S.filtro, todosFechados: S.todosFechados }),
     aplicar: async dados => {
       const funil = k.funil(dados.funil);
-      if (!funil || funil.ativo === false) throw new Error("O funil desta visão não está disponível.");
-      S.funil = funil; S.filtro = dados.filtro || {}; S.todosFechados = dados.todosFechados === true;
+      if (!funil || funil.ativo === false) throw new Error("O funil deste filtro salvo não está disponível.");
+      S.funil = funil; S.filtro = dados.filtro || {}; S.todosFechados = dados.todosFechados === true; S.fechadosDias = S.todosFechados ? 0 : 30;
+      // plano 1000: escolhido dentro da folha de Filtros (celular), a escolha já resolveu — a folha fecha sem reler o formulário antigo por cima
+      if (S.fecharFiltros) S.fecharFiltros();
       busca.value = S.filtro.busca || "";
       history.replaceState(history.state, "", `${location.pathname}${location.search}#/crm?funil=${encodeURIComponent(funil.id)}`);
       desenharSelFunil(); gravarLocal(); await carregar({ silencioso: true });
-      ui.toast("Visão aplicada.", { tipo: "ok", ms: 1600 });
+      ui.toast("Filtro salvo aplicado.", { tipo: "ok", ms: 1600 });
     } });
 
-  const totAbertos = h("b", null, "—"), totSoma = h("b", null, "—"), totPrev = h("b", null, "—");
+  const totAbertos = h("b", null, "—"), totSoma = h("b", null, "—"), totPrev = h("b", null, "—"), totGanho = h("b", null, "—");
   const distBarra = h("div", { class: "crm-dist-barra", role: "img" });
   const distLeg = h("div", { class: "crm-dist-leg" });
+  // plano 1000 (CR-018): com filtro ou busca ativos os números são do RECORTE — a legenda e um ponto no cartão dizem isso
+  const legTot = [h("small", null, "no funil agora"), h("small", null, "soma dos valores previstos"), h("small", null, "valor × chance de cada etapa")];
+  const LEG_TOT = ["no funil agora", "soma dos valores previstos", "valor × chance de cada etapa"];
+  // plano 1000 (CR-032): 4º número — o que foi ganho no período do quadro (a soma da coluna de ganho, a mesma conta do servidor)
+  const rotGanho = h("span", { class: "rotulo" }, `${k.v.ganhar} · 30 dias`);
+  const legGanho = h("small", null, "valor final dos ganhos");
   const totais = h("section", { class: "crm-totais", "aria-label": "Totais do funil" },
-    h("div", { class: "crm-tot" }, h("span", { class: "rotulo" }, `${k.v.negocios} abert${k.v.art("negocio")}s`), totAbertos, h("small", null, "no funil agora")),
-    h("div", { class: "crm-tot" }, h("span", { class: "rotulo" }, "Em aberto"), totSoma, h("small", null, "soma dos valores previstos")),
-    h("div", { class: "crm-tot crm-tot-prev" }, h("span", { class: "rotulo" }, "Previsão ponderada"), totPrev, h("small", null, "valor × chance de cada etapa")),
+    h("div", { class: "crm-tot" }, h("span", { class: "rotulo" }, `${k.v.negocios} abert${k.v.art("negocio")}s`), totAbertos, legTot[0]),
+    h("div", { class: "crm-tot" }, h("span", { class: "rotulo" }, "Em aberto"), totSoma, legTot[1]),
+    h("div", { class: "crm-tot crm-tot-prev" }, h("span", { class: "rotulo" }, "Previsão (pela chance de cada etapa)"), totPrev, legTot[2]),
+    h("div", { class: "crm-tot crm-tot-ganho" }, rotGanho, totGanho, legGanho),
     h("div", { class: "crm-dist" }, h("span", { class: "rotulo" }, "Distribuição por etapa"), distBarra, distLeg));
   const reduzido = () => { try { return !!(matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches); } catch { return false; } };
   const telaPequena = () => { try { return !!(matchMedia && matchMedia("(max-width: 760px)").matches); } catch { return false; } };
@@ -148,7 +226,8 @@ export async function montarKanban(k, el, rota) {
     if (alvo === txt || (alvo === null && el.textContent === txt)) return;
     const primeira = el.textContent === "—";
     const G = k.G;
-    if (primeira && G && typeof G.contar === "function") { G.contar(el, valor, fmt); return; }
+    // plano 1000 (CR-211): com movimento reduzido o número entra direto, sem contar até o valor
+    if (primeira && G && typeof G.contar === "function" && !reduzido()) { G.contar(el, valor, fmt); return; }
     if (typeof el.__pararContagem === "function") el.__pararContagem();
     el.textContent = txt;
     el.setAttribute("aria-label", txt);
@@ -183,7 +262,7 @@ export async function montarKanban(k, el, rota) {
 
   const quadro = h("div", { class: "kb", role: "region", "aria-label": `Quadro de ${k.v.min("negocios")}`, tabindex: "-1" });
   const instr = h("p", { id: `kb-instr-${cli}`, class: "sr-only" },
-    podeMover ? "Enter abre. Espaço pega o cartão para mover: setas esquerda e direita trocam de etapa, cima e baixo mudam a posição, Enter solta, Esc cancela. A tecla M abre a lista de etapas para mover o cartão." : "Enter abre.");
+    podeMover ? "Enter abre. Espaço pega o cartão para mover: setas esquerda e direita trocam de etapa, cima e baixo mudam a posição, Enter solta, Esc cancela. A tecla M abre a lista de etapas para mover o cartão. A tecla N cria um cartão novo. Shift com clique seleciona vários para mover de uma vez; Ctrl com clique abre numa nova aba." : "Enter abre.");
   const areaVazia = h("div", { hidden: true });
   const corpoQuadro = h("div", { class: "kb-env" }, quadro);
 
@@ -195,6 +274,11 @@ export async function montarKanban(k, el, rota) {
     on: { click: () => { const aberto = totais.classList.toggle("aberto"); resumoLinha.setAttribute("aria-expanded", String(aberto)); } } });
   const resumoTxt = h("span", null, "—");
   resumoLinha.append(resumoTxt, ui.icone("seta-baixo"));
+  // plano 1000 (CR-299): o KPI «Em aberto» do Início chega com ?resumo=1 — os totais (celular) e o resumo do funil já abertos (só nesta visita)
+  if (rota.query && rota.query.resumo === "1") {
+    totais.classList.add("aberto"); resumoLinha.setAttribute("aria-expanded", "true");
+    resumoAberto = true; aplicarResumoAberto();
+  }
 
   const btNovo = podeMover ? h("button", { type: "button", class: "bt bt-prim crm-novo", on: { click: () => novo({}) } }, ui.icone("mais"), k.v.novo("negocio")) : null;
   // botão flutuante do celular: irmão direto do .crm (um ancestral com transform prenderia o position:fixed)
@@ -207,10 +291,50 @@ export async function montarKanban(k, el, rota) {
     fitaEtapas, resumoLinha, totais, resumoFunil, areaVazia, corpoQuadro, instr, fab].filter(Boolean));
   desenharSelFunil();
 
+  // plano 1000 (CR-035): barra da seleção — «3 selecionados · Mover para… · Limpar»
+  const selTxt = h("b", { class: "crm-sel-n", role: "status" });
+  const barraSel = h("div", { class: "crm-sel", role: "group", "aria-label": "Cartões selecionados", hidden: true }, selTxt,
+    h("button", { type: "button", class: "bt bt-prim bt-p crm-sel-mover", on: { click: () => moverSelecionados() } }, "Mover para…"),
+    h("button", { type: "button", class: "bt bt-fant bt-p crm-sel-limpar", on: { click: () => limparSel() } }, "Limpar seleção"));
+  el.insertBefore(barraSel, corpoQuadro);
+  function pintarSel() {
+    for (const x of S.sel) if (!cardDe(x)) S.sel.delete(x);
+    barraSel.hidden = !S.sel.size;
+    selTxt.textContent = `${S.sel.size} ${S.sel.size === 1 ? "selecionado" : "selecionados"}`;
+    for (const art of quadro.querySelectorAll(".kc")) art.classList.toggle("kc-sel", S.sel.has(Number(art.dataset.id)) || S.sel.has(art.dataset.id));
+  }
+  function alternarSel(id) {
+    if (S.sel.has(id)) S.sel.delete(id); else S.sel.add(id);
+    pintarSel();
+    ui.anunciar(`${S.sel.size} ${S.sel.size === 1 ? "cartão selecionado" : "cartões selecionados"}.`);
+  }
+  function limparSel() { S.sel.clear(); pintarSel(); }
+
+  // plano 1000 (CR-270): no toque, uma dica única («Segure o cartão para mover») — some no primeiro arrasto (ou no «Entendi») e não volta neste aparelho
+  const CHAVE_DICA_SEGURAR = "nx-app-crm-dica-segurar";
+  let dicaSegurar = null;
+  const fecharDicaSegurar = () => {
+    if (!dicaSegurar) return;
+    dicaSegurar.remove(); dicaSegurar = null;
+    try { localStorage.setItem(CHAVE_DICA_SEGURAR, "1"); } catch { /* ok */ }
+  };
+  try {
+    const toqueAqui = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+    if (podeMover && toqueAqui && localStorage.getItem(CHAVE_DICA_SEGURAR) !== "1") {
+      dicaSegurar = h("p", { class: "aviso crm-dica-segurar", role: "note" }, ui.icone("arrastar"),
+        h("span", null, "Segure o cartão por um instante para movê-lo de etapa."),
+        h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: fecharDicaSegurar } }, "Entendi"));
+      el.insertBefore(dicaSegurar, corpoQuadro);
+    }
+  } catch { /* sem armazenamento: sem dica */ }
+
+  /** plano 1000 (CR-215): 30 · 90 · 0 (todos) — «todosFechados» continua para os filtros salvos e o rodapé das colunas fechadas. */
+  function definirFechados(d) { S.fechadosDias = [30, 90, 0].includes(d) ? d : 30; S.todosFechados = S.fechadosDias === 0; }
+
   /* ============================================================ dados */
   function filtroServidor() {
     const f = { ...S.filtro };
-    if (S.todosFechados) f.fechados_dias = 0;
+    if (S.fechadosDias !== 30) f.fechados_dias = S.fechadosDias;      // plano 1000 (CR-215): 90 dias ou todos (0)
     return f;
   }
 
@@ -244,13 +368,16 @@ export async function montarKanban(k, el, rota) {
       if (minha !== S.seq || !S.vivo) return;
       const igual = doCache && JSON.stringify(S.dados) === JSON.stringify(d);     // nada mudou desde o guardado: não refaz o quadro
       S.ultimaRecarga = Date.now();
+      pintarIdade();
       // a resposta chegou com um cartão sendo arrastado: redesenhar agora apagaria o cartão e o marcador do gesto (no celular o arrasto cairia) — fica para o fim do gesto
       if (!igual && !trocouTudo && emGesto()) { S.adiado = { dados: d }; return; }
       S.adiado = null;
+      const antes = !trocouTudo && S.dados ? etapasNaTela() : null;
       S.dados = d;
       if (igual) return;
       reaplicarPendentes();
-      desenharQuadro();
+      // plano 1000 (CR-023): recarga silenciosa (pulso, busca) refaz SÓ as colunas que mudaram — o resto mantém os nós (hover, foco, animação)
+      if (antes) atualizarQuadro(antes); else desenharQuadro();
     } catch (e) {
       if (minha !== S.seq || !S.vivo) return;
       if (e && e.comCache) return;      // a rede falhou depois de pintar o último quadro: a tela fica com o que mostra (o selo do shell avisa)
@@ -270,21 +397,29 @@ export async function montarKanban(k, el, rota) {
   const colEls = new Map();    // estagio_id → {sec, lista, n, soma, extra}
 
   function colunaDe(id) { return S.dados.colunas.find(c => c.estagio_id === id); }
+  /** O que a coluna desenhou (CR-023); nas fechadas entra também o período dos fechados (CR-215: o rodapé «últimos 90 dias» muda sem a resposta mudar). */
+  const jsonColuna = (e, col) => JSON.stringify(col) + (e && e.tipo !== "aberto" ? `|${S.fechadosDias}` : "");
 
   function desenharQuadro() {
     // a recarga silenciosa (pulso, busca) refaz as colunas: guarda a rolagem para o quadro não voltar à 1ª coluna no celular
     const rolagem = colEls.size ? { x: quadro.scrollLeft, y: new Map([...colEls].map(([id, c]) => [id, c.lista.scrollTop])) } : null;
     colEls.clear();
+    if (obsMais) obsMais.disconnect();
     ui.limpar(quadro);
-    const vazioTotal = S.dados.colunas.every(c => !c.total) && L.filtroVazio(S.filtro);
-    areaVazia.hidden = !vazioTotal;
+    S.estadoVazio = estadoVazioAgora();
+    areaVazia.hidden = !S.estadoVazio;
     ui.limpar(areaVazia);
-    if (vazioTotal) {
+    if (S.estadoVazio === "total") {
       const fem = k.v.art("negocio") === "a";
       areaVazia.appendChild(ui.vazio({
         titulo: `${k.v.nenhum("negocio")} aqui ainda.`,
         texto: `${fem ? "Elas aparecem sozinhas" : "Eles aparecem sozinhos"} quando alguém chama no WhatsApp — ou ${fem ? "crie uma" : "crie um"} agora.`,
         tema: "crm", acao: podeMover ? { rotulo: k.v.novo("negocio"), fn: () => novo({}) } : null }));
+    } else if (S.estadoVazio === "filtro") {
+      // plano 1000 (CR-200): a busca e os filtros valem para todos os funis — trocar para um funil sem nada que passe neles não pode parecer «quadro vazio»
+      areaVazia.appendChild(ui.vazio({ tipo: "sem_resultado", tema: "crm", titulo: "Nada com estes filtros neste funil.",
+        texto: S.filtro.busca ? `A busca «${S.filtro.busca}» e os filtros ativos valem para todos os funis.` : "Os filtros ativos valem para todos os funis.",
+        acao: { rotulo: "Limpar filtros", fn: limparTudo } }));
     }
     for (const e of S.funil.estagios) {
       const col = colunaDe(e.id) || { estagio_id: e.id, total: 0, soma_previsto: 0, soma_valor: 0, itens: [] };
@@ -300,6 +435,77 @@ export async function montarKanban(k, el, rota) {
     desenharFita();
   }
 
+  /** «» (há cartões) · «total» (funil vazio de verdade) · «filtro» (nada passa na busca/filtros neste funil). */
+  function estadoVazioAgora() {
+    if (!S.dados.colunas.every(c => !c.total)) return "";
+    return L.filtroVazio(S.filtro) ? "total" : "filtro";
+  }
+  /** «Limpar filtros» do quadro vazio por filtro: tira também a busca. */
+  function limparTudo() { S.filtro = {}; busca.value = ""; gravarLocal(); carregar({ silencioso: true }); }
+
+  /** id do cartão → etapa em que ele está NA TELA agora (para notar o que outra pessoa moveu). */
+  function etapasNaTela() {
+    const m = new Map();
+    for (const c of (S.dados && S.dados.colunas) || []) for (const x of c.itens || []) m.set(x.id, c.estagio_id);
+    return m;
+  }
+
+  /**
+   * plano 1000 (CR-023): a recarga silenciosa compara coluna a coluna (o JSON que a coluna desenhou) e só refaz as que mudaram; os totais
+   * uma vez. Funil/etapas diferentes do que está desenhado, ou o quadro passou a (ou deixou de) estar vazio → desenha tudo.
+   */
+  function atualizarQuadro(antes) {
+    const ids = S.funil.estagios.map(e => e.id), naTela = [...colEls.keys()];
+    if (ids.length !== naTela.length || ids.some((id, i) => naTela[i] !== id) || estadoVazioAgora() !== (S.estadoVazio || "")) { desenharQuadro(); destacarMovidos(antes); return; }
+    for (const e of S.funil.estagios) {
+      const col = colunaDe(e.id) || { estagio_id: e.id, total: 0, soma_previsto: 0, soma_valor: 0, itens: [] };
+      const c = colEls.get(e.id);
+      if (jsonColuna(e, col) === c.json) continue;
+      const y = c.lista.scrollTop;
+      preencherColuna(e.id, col);
+      c.lista.scrollTop = y;
+    }
+    desenharTotais();
+    destacarMovidos(antes);
+  }
+
+  /**
+   * plano 1000 (CR-204): o cartão que chegou de outra etapa numa recarga — e não foi esta tela nem a gaveta aberta daqui que moveu — acende por
+   * 2 s com «Mudou de etapa agora (outra pessoa da equipe)»: dois atendentes no mesmo quadro percebem o movimento do colega.
+   */
+  function quemMoveu(x) {
+    if (!x || !("movido_por" in x || "movido_por_id" in x)) return null;
+    if (x.movido_por_id === null || x.movido_por_id === undefined) return x.movido_em ? "por uma automação" : null;
+    if (typeof k.eu === "function" && String(x.movido_por_id) === String(k.eu())) return "por você, em outra tela";
+    const nome = String(x.movido_por || (typeof k.usuario === "function" && (k.usuario(x.movido_por_id) || {}).nome) || "").trim();
+    return nome ? `por ${nome}` : null;
+  }
+  function destacarMovidos(antes) {
+    if (!antes) return;
+    const movidos = [];
+    for (const col of S.dados.colunas) for (const x of col.itens || []) {
+      const era = antes.get(x.id);
+      if (era === undefined || era === col.estagio_id || S.pend.has(x.id) || S.meus.has(x.id)) continue;
+      const el = quadro.querySelector(`.kc[data-id="${x.id}"]`);
+      if (!el) continue;
+      el.classList.add("kc-movido");
+      const tituloAntes = el.getAttribute("title");      // CR-271: a dica «Entrou em…» volta depois do aviso
+      // contrato 20261013d (CR-204): o cartão diz QUEM moveu (movido_por); sem autor = automação; servidor antigo (sem o campo) = «outra pessoa da equipe»
+      const quem = quemMoveu(x);
+      el.setAttribute("title", `Mudou de etapa agora (${quem || "outra pessoa da equipe"})`);
+      if (quem) {
+        // o nome fica à vista por 4 s no canto do cartão (o leitor de tela ouve pelo anúncio abaixo)
+        const selo = h("span", { class: "kc-movido-por", "aria-hidden": "true" }, `Movido ${quem}`);
+        el.appendChild(selo);
+        setTimeout(() => selo.remove(), 4000);
+      }
+      setTimeout(() => { el.classList.remove("kc-movido"); if (tituloAntes) el.setAttribute("title", tituloAntes); else el.removeAttribute("title"); }, 2000);
+      movidos.push(`«${L.tituloCard(x)}» foi para ${(k.estagio(col.estagio_id) || {}).nome || "outra etapa"}${quem ? ` (${quem})` : ""}`);
+    }
+    S.meus.clear();
+    if (movidos.length && movidos.length <= 2) ui.anunciar(`${movidos.join("; ")}.`);
+  }
+
   /* ---------- fita de etapas (celular): atalho para cada coluna + destino do arrasto ---------- */
   function desenharFita() {
     ui.limpar(fitaEtapas);
@@ -309,7 +515,10 @@ export async function montarKanban(k, el, rota) {
       const n = col ? Number(col.total) || 0 : 0;
       const b = h("button", { type: "button", class: "kb-fita-b", dataset: { estagio: e.id }, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null,
         "aria-label": `${e.nome}, ${n} ${n === 1 ? "cartão" : "cartões"}`, on: { click: () => irParaColuna(e.id) } },
-        h("i", { "aria-hidden": "true" }), h("span", null, e.nome), h("b", { class: "dado" }, ui.num(n)));
+        // plano 1000 (CR-269): Ganho/Perdido com ✓/✕ — na fita as etapas fechadas não parecem abertas
+        e.tipo === "ganho" || e.tipo === "perdido" ? h("span", { class: `kb-fita-ic kb-fita-${e.tipo}`, "aria-hidden": "true" }, ui.icone(e.tipo === "ganho" ? "check" : "fechar")) : h("i", { "aria-hidden": "true" }),
+        h("span", null, e.nome), h("b", { class: "dado" }, ui.num(n)));
+      if (e.tipo !== "aberto") b.setAttribute("aria-label", `${e.nome} (${e.tipo === "ganho" ? "fechada, ganho" : "fechada, perda"}), ${n} ${n === 1 ? "cartão" : "cartões"}`);
       fitaEtapas.appendChild(b);
     }
     marcarColunaAtual();
@@ -441,37 +650,73 @@ export async function montarKanban(k, el, rota) {
       : "Nada nesta etapa" })));
     ui.limpar(c.extra);
     const faltam = (col.total || 0) - col.itens.length;
+    if (c.itemMais && obsMais) obsMais.unobserve(c.itemMais);
+    c.itemMais = null;
     if (faltam > 0) {
       const b = h("button", { type: "button", class: "bt bt-fant bt-p kb-mais" }, `Ver mais (${ui.num(faltam)})`);
       b.addEventListener("click", () => verMais(estagioId, b));
-      c.lista.appendChild(h("div", { class: "kb-mais-item", role: "listitem" }, b));
+      const noLimite = col.itens.length >= LIMITE_NA_TELA;
+      c.itemMais = h("div", { class: "kb-mais-item", role: "listitem", dataset: { estagio: estagioId } }, b,
+        // plano 1000 (CR-028): passou de 300 cartões na coluna, a rolagem para de trazer sozinha — a busca acha mais rápido
+        noLimite ? h("small", { class: "kb-mais-aviso" }, `Mostrando ${ui.num(col.itens.length)} de ${ui.num(col.total)}. Use a busca ou os filtros para achar o resto.`) : null);
+      c.lista.appendChild(c.itemMais);
+      if (!noLimite) observarMais(c.itemMais);
     }
+    marcarRecolhida(c, col);
+    c.json = jsonColuna(e, col);       // o que esta coluna desenhou: a recarga silenciosa só refaz a coluna se a resposta for diferente (CR-023)
     if (e.tipo !== "aberto") {
       c.extra.appendChild(h("div", { class: "kb-antigos" },
-        S.todosFechados ? "Mostrando todos os fechados." : "Fechados nos últimos 30 dias.",
-        h("button", { type: "button", class: "link", on: { click: () => { S.todosFechados = !S.todosFechados; carregar({ silencioso: true }); } } },
-          S.todosFechados ? "Só os recentes" : "Ver mais antigos")));
+        S.fechadosDias === 0 ? "Mostrando todos os fechados." : `Fechados nos últimos ${S.fechadosDias} dias (mude em Filtros).`,
+        // plano 1000 (CR-005): a escolha fica gravada (ao voltar ao CRM continua «todos os fechados») e o seletor de visões a reconhece
+        h("button", { type: "button", class: "link", on: { click: () => { definirFechados(S.fechadosDias === 0 ? 30 : 0); gravarLocal(); carregar({ silencioso: true }); } } },
+          S.fechadosDias === 0 ? "Só os recentes" : "Ver mais antigos")));
     }
   }
 
+  /** CR-036: a coluna vazia recolhida (faixa estreita com o nome na vertical); o arrasto continua achando a coluna (.kb-col). */
+  function marcarRecolhida(c, col) {
+    if (!c || !c.sec) return;
+    c.sec.classList.toggle("kb-col-recolhida", !!S.recolher && !(Number(col && col.total) > 0));
+  }
+
   function desenharTotais() {
+    if (S.sel.size) pintarSel();
     const t = L.previsao(S.dados.colunas, S.funil.estagios);
     pintarNumero(totAbertos, t.abertos, v => ui.num(Math.round(v)));
     pintarNumero(totSoma, t.soma_aberto, v => ui.brl(v, { centavos: false }));
     pintarNumero(totPrev, t.previsao_ponderada, v => ui.brl(v, { centavos: false }));
-    resumoTxt.textContent = L.resumoDoFunil({ abertos: t.abertos, soma: ui.brl(t.soma_aberto, { centavos: false }), previsao: ui.brl(t.previsao_ponderada, { centavos: false }) }, k.v.art("negocio"));
+    const gq = L.ganhosDoQuadro(S.dados.colunas, S.funil.estagios);
+    pintarNumero(totGanho, gq.valor, v => ui.brl(v, { centavos: false }));
+    rotGanho.textContent = `${k.v.ganhar} · ${S.fechadosDias === 0 ? "todos" : `${S.fechadosDias} dias`}`;
+    legGanho.textContent = `${ui.num(gq.n)} ${gq.n === 1 ? k.v.min("negocio") : k.v.min("negocios")} · valor final`;
+    const filtrado = contarFiltros() > 0 || !!S.filtro.busca;
+    totais.classList.toggle("crm-totais-filtrado", filtrado);
+    legTot.forEach((s, i) => { s.textContent = filtrado ? (i === 0 ? "com os filtros" : `${LEG_TOT[i]} · com os filtros`) : LEG_TOT[i]; });
+    totais.setAttribute("aria-label", filtrado ? "Totais do funil com os filtros ativos" : "Totais do funil");
+    resumoTxt.textContent = L.resumoDoFunil({ abertos: t.abertos, soma: ui.brl(t.soma_aberto, { centavos: false }), previsao: ui.brl(t.previsao_ponderada, { centavos: false }) }, k.v.art("negocio"))
+      + (filtrado ? " · com filtros" : "");
     contarFita();
     ui.limpar(distBarra); ui.limpar(distLeg);
     const totalGeral = S.dados.colunas.reduce((s, c) => s + (Number(c.total) || 0), 0);
     const partes = [];
+    const legenda = e => {
+      const col = colunaDe(e.id), n = col ? Number(col.total) || 0 : 0;
+      // a legenda leva à coluna (plano 50): mesmo atalho da fita de etapas do celular
+      return h("button", { type: "button", class: ["crm-dist-leg-b", !n && "crm-dist-leg-vazia"], style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, title: `Ir para a coluna ${e.nome}`,
+        on: { click: () => irParaColuna(e.id) } }, h("i", { "aria-hidden": "true" }), `${e.nome} `, h("b", { class: "dado" }, ui.num(n)));
+    };
     for (const e of S.funil.estagios) {
       const col = colunaDe(e.id);
       const n = col ? Number(col.total) || 0 : 0;
       partes.push(`${e.nome}: ${n}`);
       if (n > 0) distBarra.appendChild(h("i", { style: { "flex-grow": String(n), ...(k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : {}) }, title: `${e.nome}: ${n}` }));
-      // a legenda leva à coluna (plano 50): mesmo atalho da fita de etapas do celular
-      distLeg.appendChild(h("button", { type: "button", class: "crm-dist-leg-b", style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, title: `Ir para a coluna ${e.nome}`,
-        on: { click: () => irParaColuna(e.id) } }, h("i", { "aria-hidden": "true" }), `${e.nome} `, h("b", { class: "dado" }, ui.num(n))));
+    }
+    // plano 1000 (CR-019): a legenda mostra só as etapas com cartões; as vazias viram «+3 vazias» (que abre a lista esmaecida)
+    const dist = L.partesDistribuicao(S.dados.colunas, S.funil.estagios);
+    for (const x of (S.legVazias || !dist.cheias.length ? S.funil.estagios.map(e => ({ e })) : dist.cheias)) distLeg.appendChild(legenda(x.e));
+    if (dist.vazias.length && dist.cheias.length) {
+      distLeg.appendChild(h("button", { type: "button", class: "crm-dist-leg-b crm-dist-mais", "aria-expanded": String(!!S.legVazias), on: { click: () => { S.legVazias = !S.legVazias; desenharTotais(); const b = distLeg.querySelector(".crm-dist-mais"); if (b) b.focus(); } } },
+        S.legVazias ? "Esconder vazias" : `+${dist.vazias.length} ${dist.vazias.length === 1 ? "vazia" : "vazias"}`));
     }
     if (!totalGeral) distBarra.appendChild(h("i", { style: { "flex-grow": "1" } }));
     distBarra.setAttribute("aria-label", `Distribuição por etapa — ${partes.join(", ")}`);
@@ -494,6 +739,8 @@ export async function montarKanban(k, el, rota) {
     const sla = e.tipo === "aberto" && L.slaEstourado(c.estagio_em, e.sla_horas);
     const dono = k.usuario(c.dono_id);
     const etqs = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean);
+    // plano 1000 (CR-038): etiqueta ou responsável que a base em memória (5 min) ainda não conhece — criados agora por outra pessoa: relê a base
+    if ((c.dono_id && !dono) || etqs.length < (c.etiquetas || []).length) pedirBaseNova();
     const pont = L.pontuacao(c);
     const origemTxt = L.descricaoOrigem(c);
     const tarefa = c.tarefa && typeof c.tarefa === "object" ? c.tarefa : null;
@@ -503,15 +750,28 @@ export async function montarKanban(k, el, rota) {
     const faixa = e.tipo === "aberto" ? L.faixaTempoEtapa(c.estagio_em, e.sla_horas) : null;
     const nomeAvatar = (c.contato && (c.contato.nome || c.contato.telefone)) || c.nome || c.telefone || titulo;
     const idAvatar = c.contato && c.contato.id != null ? c.contato.id : nomeAvatar;
+    const idContato = c.contato && c.contato.id != null ? c.contato.id : (c.contato_id ?? null);
     // plano 100 · C4: a origem é a pílula padrão (ui.pilula variante «origem», pequena): anúncio com a plataforma (símbolo i-meta/i-google, ou o
     // megafone se o sprite ainda não tem), site, orgânico, WhatsApp, indicação, importação… Cadastro manual não ganha pílula.
     const orig = L.origemPilula(c, { manual: false });
     const pilOrigem = orig ? ui.pilula(null, orig.chave, { variante: "origem", plataforma: orig.plataforma, tamanho: "p", title: origemTxt || null,
       class: orig.chave === "anuncio" ? "kc-origem" : "kc-origem kc-origem-outra",
       icone: orig.plataforma ? simbolo(c.plataforma === "google" ? "google" : "meta", "anuncio") : null }) : null;
-    const rotulo = `${titulo}${valor != null ? `, ${ui.brl(valor)}` : ""}${sub ? `, ${sub}` : ""}${faixa ? `, ${faixa.texto.toLowerCase()}` : ""}${consultaTxt ? `, consulta ${consultaTxt}` : ""}${tarefaTxt ? `, ${tarefaTxt.toLowerCase()}` : ""}${origemTxt ? `, origem ${origemTxt}` : ""}${etqs.length ? `, etiquetas ${etqs.map(x => x.nome).join(", ")}` : ""}${pont ? `, pontuação ${pont.score} de 100` : ""}${dono ? `, responsável ${dono.nome}` : ""}${c.nao_lidas ? `, ${c.nao_lidas} mensagens não lidas` : ""}`;
-    const art = h("article", { class: ["kc", S.pend.has(c.id) && "confirmando salvando", faixa && `kc-prazo-${faixa.nivel}`], role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
-      "aria-label": rotulo, "aria-describedby": instr.id, "aria-busy": S.pend.has(c.id) ? "true" : null, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
+    // plano 1000 (CR-027): a consulta já passou e ninguém marcou Compareceu/Faltou — um ponto âmbar no rodapé leva direto à gaveta (bloco da presença)
+    const semPresenca = e.tipo === "aberto" && !!c.consulta_em && L.consultaPassou(c) && !L.presencaDe(c);
+    // plano 1000 (CR-217): na etapa «Agendou» sem data, a agenda e o lembrete não sabem de nada — o cartão diz isso
+    const semData = e.tipo === "aberto" && e.marco === "agendada" && !c.consulta_em;
+    // plano 1000 (CR-021): o leitor de tela ouve o essencial a cada seta (título, valor, tempo na etapa); o resto fica num texto ligado por
+    // aria-describedby, lido sob demanda
+    const tituloCurto = titulo.length > 48 ? `${titulo.slice(0, 47)}…` : titulo;
+    const rotulo = `${tituloCurto}${valor != null ? `, ${ui.brl(valor, { centavos: false })}` : ""}${faixa ? `, ${faixa.texto.toLowerCase()}` : ""}`;
+    const detalhes = [sub, consultaTxt ? `consulta ${consultaTxt}` : "", semPresenca ? "presença da consulta não marcada" : "", semData ? "agendado sem data" : "",
+      tarefaTxt.toLowerCase(), origemTxt ? `origem ${origemTxt}` : "", etqs.length ? `etiquetas ${etqs.map(x => x.nome).join(", ")}` : "",
+      pont ? `pontuação ${pont.score} de 100` : "", dono ? `responsável ${dono.nome}` : "", c.nao_lidas ? `${c.nao_lidas} mensagens não lidas` : ""].filter(Boolean).join(", ");
+    const idDet = `kc-d-${cli}-${c.id}`;
+    const art = h("article", { class: ["kc", S.sel.has(c.id) && "kc-sel", S.pend.has(c.id) && "confirmando salvando", faixa && `kc-prazo-${faixa.nivel}`], role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
+      "aria-label": rotulo, "aria-describedby": detalhes ? `${idDet} ${instr.id}` : instr.id, "aria-busy": S.pend.has(c.id) ? "true" : null, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
+      detalhes ? h("span", { class: "sr-only", id: idDet }, detalhes) : null,
       h("div", { class: "kc-l1" }, ui.avatar(nomeAvatar, idAvatar), h("span", { class: "kc-t" }, titulo)),
       h("div", { class: "kc-l2" },
         valor != null ? h("b", { class: "kc-valor" }, ui.brl(valor, { centavos: false })) : h("span", { class: ["kc-valor", "sem"] }, "sem valor"),
@@ -522,25 +782,50 @@ export async function montarKanban(k, el, rota) {
         h("span", { class: ["kc-dias", sla && "sla", faixa && faixa.nivel !== "ok" && faixa.nivel], title: e.tipo === "aberto" ? `${L.textoDiasEtapa(c.estagio_em)}${sla ? ` — passou do prazo da etapa (${e.sla_horas} h)` : faixa ? ` · ${faixa.texto}` : ""}` : null },
           e.tipo === "aberto" ? L.textoDiasEtapa(c.estagio_em).replace(" na etapa", "") : c.fechado_em ? `${e.tipo === "ganho" ? k.v.ganhar.toLowerCase() : "fechado"} ${ui.relativo(c.fechado_em)}` : ""),
         consultaTxt ? h("span", { class: "kc-consulta", title: "Consulta/visita marcada" }, ui.icone("relogio"), consultaTxt) : null,
+        semPresenca ? h("button", { type: "button", class: "kc-presenca", title: "A consulta já passou: confirme se compareceu ou faltou",
+          "aria-label": `Confirmar a presença de «${tituloCurto}» na consulta`, on: { click: ev => { ev.stopPropagation(); abrir(c.id); } } },
+          h("i", { class: "kc-ponto-aten", "aria-hidden": "true" }), h("span", null, "presença")) : null,
+        semData ? h("span", { class: "kc-semdata", title: "Está em «Agendou» sem data: a agenda e o lembrete não sabem dessa consulta" }, ui.icone("calendario"), "sem data") : null,
         tarefa ? h("span", { class: ["kc-tarefa", tarefa.atrasada && "atrasada"], title: tarefaTxt }, tarefa.atrasada ? h("i", { class: "kc-ponto-ruim", "aria-hidden": "true" }) : ui.icone("tarefa"),
           h("span", { class: "kc-tarefa-txt" }, tarefa.atrasada ? "atrasada" : tarefa.vence_em ? ui.relativo(tarefa.vence_em) : "")) : null,
         pont ? h("span", { class: ["kc-score", pont.faixa], title: `Pontuação do lead: ${pont.score} de 100${pont.motivo ? ` — ${pont.motivo}` : ""}` }, String(pont.score)) : null,
         pilOrigem,
+        // plano 1000 (CR-212): no desktop a 1ª etiqueta aparece com o NOME (pílula pequena) e as outras como pontos — a cor não é a única pista
         etqs.length ? h("span", { class: "kc-pontos", title: etqs.map(x => x.nome).join(", ") },
-          etqs.slice(0, 3).map(x => h("i", { class: "kc-ponto", "aria-hidden": "true", style: k.cor(x.cor) ? { "--cor": k.cor(x.cor) } : null })),
+          h("span", { class: "kc-etq1", style: k.cor(etqs[0].cor) ? { "--cor": k.cor(etqs[0].cor) } : null }, etqs[0].nome),
+          etqs.slice(0, 3).map((x, i) => h("i", { class: ["kc-ponto", i === 0 && "kc-ponto-1"], "aria-hidden": "true", style: k.cor(x.cor) ? { "--cor": k.cor(x.cor) } : null })),
           etqs.length > 3 ? h("small", null, `+${etqs.length - 3}`) : null) : null,
         h("span", { class: "kc-fim" },
-          dono ? ui.avatar(dono.nome, dono.id) : h("span", { class: "kc-avatar-vazio", title: "Sem responsável" }, ui.icone("usuario")),
+          // plano 1000 (CR-213): tocar no avatar filtra o quadro por esse responsável (chip «Responsável: Ana», removível)
+          dono ? h("button", { type: "button", class: "kc-dono", title: `Responsável: ${dono.nome} — ver só os cartões dele(a)`, "aria-label": `Ver só os cartões de ${dono.nome}`,
+            on: { click: ev => { ev.stopPropagation(); filtrarDono(dono); } } }, ui.avatar(dono.nome, dono.id)) : h("span", { class: "kc-avatar-vazio", title: "Sem responsável" }, ui.icone("usuario")),
           // alternativa ao arrastar (toque, leitor de tela): a mesma folha «Mover para…» do toque longo
           podeMover ? h("button", { type: "button", class: "bt-icone kc-mover", "aria-label": `Mover «${titulo}» para outra etapa`, title: "Mover para…",
             on: { click: ev => { ev.stopPropagation(); abrirMoverPara(c.id); } } }, ui.icone("opcoes")) : null)),
-      c.nao_lidas ? h("span", { class: "kc-naolidas", title: `${c.nao_lidas} não lidas` }, String(c.nao_lidas > 99 ? "99+" : c.nao_lidas)) : null);
+      // plano 1000 (CR-029): o selo de não lidas leva direto à conversa do contato (antes era só informativo)
+      c.nao_lidas ? (idContato != null && comConversas
+        ? h("button", { type: "button", class: "kc-naolidas", title: `Abrir conversa (${c.nao_lidas} não lidas)`, "aria-label": `Abrir conversa de «${tituloCurto}» (${c.nao_lidas} não lidas)`,
+          on: { click: ev => { ev.stopPropagation(); ctx.navegar(`#/conversas?contato=${encodeURIComponent(idContato)}`); } } }, String(c.nao_lidas > 99 ? "99+" : c.nao_lidas))
+        : h("span", { class: "kc-naolidas", title: `${c.nao_lidas} não lidas` }, String(c.nao_lidas > 99 ? "99+" : c.nao_lidas))) : null,
+      // plano 1000 (CR-030): no desktop, ao passar o mouse (ou com o foco no cartão), «Conversa» e «Tarefa» sem abrir a gaveta
+      podeMover ? h("span", { class: "kc-rapidas" },
+        idContato != null && comConversas ? h("button", { type: "button", class: "bt-icone kc-rapida", dataset: { acao: "conversa" }, "aria-label": `Abrir conversa de «${tituloCurto}»`, title: "Abrir conversa",
+          on: { click: ev => { ev.stopPropagation(); ctx.navegar(`#/conversas?contato=${encodeURIComponent(idContato)}`); } } }, ui.icone("whatsapp")) : null,
+        h("button", { type: "button", class: "bt-icone kc-rapida", dataset: { acao: "tarefa" }, "aria-label": `Nova tarefa para «${tituloCurto}»`, title: "Nova tarefa",
+          on: { click: ev => { ev.stopPropagation(); novaTarefa(c, idContato); } } }, ui.icone("tarefa"))) : null);
+    // plano 1000 (CR-271): quando o lead entrou, na dica do cartão (sem abrir a gaveta)
+    if (c.criado_em) { const dt = ui.dataCurtaBR ? ui.dataCurtaBR(c.criado_em) : ui.dataBR(c.criado_em); if (dt) art.setAttribute("title", `Entrou em ${dt}`); }
     art.addEventListener("click", ev => {
       if (S.arrasto && (S.arrasto.moveu || S.arrasto.engoleClique)) return;
       if (S.teclado) return;
       if (ev.target.closest("a, button")) return;
+      // plano 1000 (CR-281): Ctrl/⌘ + clique abre o negócio numa nova aba (como um link); (CR-035) Shift + clique seleciona vários para mover
+      if (ev.ctrlKey || ev.metaKey) { abrirEmNovaAba(c.id); return; }
+      if (podeMover && ev.shiftKey) { alternarSel(c.id); return; }
       abrir(c.id);
     });
+    // botão do meio do mouse: nova aba também
+    art.addEventListener("auxclick", ev => { if (ev.button === 1 && !(ev.target && ev.target.closest && ev.target.closest("a, button"))) { ev.preventDefault(); abrirEmNovaAba(c.id); } });
     art.addEventListener("keydown", ev => teclaCartao(ev, c.id));
     // o toque longo do celular não pode abrir o menu do sistema (copiar/colar, imagem) em cima do cartão
     art.addEventListener("contextmenu", ev => { if (S.arrasto && S.arrasto.toque) ev.preventDefault(); });
@@ -548,29 +833,94 @@ export async function montarKanban(k, el, rota) {
     return art;
   }
 
+  /** CR-038: no máximo 1× por minuto relê a base (k.recarregarBase) e redesenha os cartões com os nomes/cores novos. */
+  let ultimaBaseNova = 0;
+  function pedirBaseNova() {
+    if (typeof k.recarregarBase !== "function" || Date.now() - ultimaBaseNova < 60000) return;
+    ultimaBaseNova = Date.now();
+    Promise.resolve().then(() => k.recarregarBase()).then(() => { if (S.vivo && S.dados && !emGesto()) desenharQuadro(); }, () => { /* fica como está; tenta de novo em 1 min */ });
+  }
+
   /* ============================================================ gaveta e novo */
+  /** Os cartões da coluna do negócio, na ordem da tela (CR-072: ‹ › e J/K na gaveta seguem esta ordem). */
+  function vizinhosDe(id) {
+    const col = colunaDeCard(id);
+    if (!col) return { anterior: null, proximo: null };
+    const i = col.itens.findIndex(x => x.id === id);
+    return { anterior: i > 0 ? col.itens[i - 1].id : null, proximo: i >= 0 && i < col.itens.length - 1 ? col.itens[i + 1].id : null };
+  }
+  /** CR-188: o negócio aberto pelo quadro entra em «Recentes» da paleta (abrir pelo cartão não muda o endereço). */
+  function lembrar(id) {
+    const c = cardDe(id);
+    if (c && typeof k.lembrarRecente === "function") k.lembrarRecente({ hash: `#/crm/negocio/${id}`, titulo: L.tituloCard(c), tipo: "negocio" });
+  }
   function abrir(id) {
-    N.abrirNegocio(k, id, { aoMudar: () => carregar({ silencioso: true }) });
+    lembrar(id);
+    N.abrirNegocio(k, id, { aoMudar: c => { S.meus.add((c && c.id) ?? id); carregar({ silencioso: true }); }, vizinhos: vizinhosDe, aoNavegar: lembrar });
+  }
+  /** CR-281: o link do negócio numa aba nova (noopener: a aba nova não mexe nesta). */
+  function abrirEmNovaAba(id) {
+    try { if (typeof window !== "undefined" && typeof window.open === "function") window.open(`#/crm/negocio/${encodeURIComponent(id)}`, "_blank", "noopener"); } catch { /* bloqueado: nada */ }
+  }
+  /** CR-213: filtra o quadro pelo responsável do cartão (o mesmo filtro do popover; o chip mostra o nome). */
+  function filtrarDono(dono) {
+    if (!dono || dono.id == null) return;
+    S.filtro.dono = dono.id; gravarLocal(); carregar({ silencioso: true });
+    ui.anunciar(`Mostrando só os cartões de ${dono.nome}.`);
   }
   function novo(extra) {
     N.novoNegocio(k, { funil_id: S.funil.id, ...extra }, { aoCriar: () => carregar({ silencioso: true }) });
   }
 
-  async function verMais(estagioId, botao) {
-    const col = colunaDe(estagioId);
-    // C5: enquanto a página seguinte chega, um cartão-esqueleto no fim da coluna (o mesmo formato do cartão; some quando a coluna é refeita)
+  function observarMais(item) {
+    if (typeof IntersectionObserver !== "function") return;
+    if (!obsMais) obsMais = new IntersectionObserver(ents => {
+      for (const en of ents) {
+        if (!en.isIntersecting) continue;
+        const b = en.target.querySelector(".kb-mais");
+        if (b && !b.disabled) verMais(en.target.dataset.estagio, b, { auto: true });
+      }
+    }, { rootMargin: "0px 0px 160px 0px" });
+    obsMais.observe(item);
+  }
+
+  async function verMais(estagioId, botao, { auto = false } = {}) {
     const c = colEls.get(estagioId);
+    if (!c || c.carregandoMais) return;
+    const col0 = colunaDe(estagioId);
+    if (!col0) return;
+    // plano 1000 (CR-004): a resposta só vale para o MESMO funil e o MESMO filtro; o quadro pode ter sido recarregado no meio (a coluna é relida depois)
+    const funil0 = S.funil && S.funil.id, filtro0 = JSON.stringify(filtroServidor()), vistos0 = col0.itens.length;
+    const focoNoBotao = !auto && (document.activeElement === botao || document.activeElement === document.body);
+    // C5: enquanto a página seguinte chega, um cartão-esqueleto no fim da coluna (o mesmo formato do cartão; some quando a coluna é refeita)
     const sk = h("div", { class: "kb-sk", role: "listitem" }, ui.esqueleto("cartao"));
     const itemMais = botao && botao.parentElement;
-    if (c && itemMais && itemMais.parentElement === c.lista) c.lista.insertBefore(sk, itemMais);
+    if (itemMais && itemMais.parentElement === c.lista) c.lista.insertBefore(sk, itemMais);
+    c.carregandoMais = true;
     try {
-      const r = await ui.carregando(botao, k.api.rpcC("nx_negocios_coluna", { p_estagio: estagioId, p_filtro: filtroServidor(), p_offset: col.itens.length }));
+      const r = await ui.carregando(botao, k.api.rpcC("nx_negocios_coluna", { p_estagio: estagioId, p_filtro: JSON.parse(filtro0), p_offset: vistos0 }));
+      if (!S.vivo || !S.funil || S.funil.id !== funil0 || JSON.stringify(filtroServidor()) !== filtro0) return;   // outra busca/filtro/funil: a página velha não entra
+      const col = colunaDe(estagioId);
+      if (!col) return;
       const ids = new Set(col.itens.map(x => x.id));
-      col.itens = col.itens.concat(r.itens.filter(x => !ids.has(x.id)));
-      if (!r.tem_mais) col.total = Math.max(col.total, col.itens.length);
+      const novos = ((r && r.itens) || []).filter(x => !ids.has(x.id));
+      const antes = col.itens.length;
+      col.itens = col.itens.concat(novos);
+      // plano 1000 (CR-272): sem «tem_mais», o servidor não tem mais nada — o total é o que está carregado (cartões que saíram da etapa
+      // depois da carga deixavam «Ver mais (10)» preso para sempre)
+      if (!r.tem_mais) col.total = col.itens.length;
+      else col.total = Math.max(Number(col.total) || 0, col.itens.length);
       preencherColuna(estagioId, col);
+      desenharTotais();
+      // plano 1000 (CR-022): o botão some quando a coluna é refeita — o foco vai para o 1º cartão novo e o leitor ouve quantos chegaram
+      if (novos.length) {
+        const lista = (colEls.get(estagioId) || c).lista;
+        const primeiro = lista.querySelector(`.kc[data-id="${novos[0].id}"]`) || lista.querySelectorAll(".kc")[antes];
+        if (focoNoBotao && primeiro) { try { primeiro.focus({ preventScroll: false }); } catch { primeiro.focus(); } }
+        ui.anunciar(`${novos.length} ${novos.length === 1 ? "cartão carregado" : "cartões carregados"} em ${c.e.nome}.`);
+      }
     } catch (e) { k.toastErro(e); }
-    finally { sk.remove(); }
+    finally { c.carregandoMais = false; sk.remove(); }
   }
 
   /* ============================================================ mover (comum a mouse e teclado) */
@@ -599,6 +949,15 @@ export async function montarKanban(k, el, rota) {
     const origemCol = S.dados.colunas.find(c => c.itens.some(x => x.id === id));
     if (!origemCol) return;
     if (recusarSePendente(id)) { preencherColunaDoCartao(id); focarCartao(id); return; }
+    // plano 1000 (CR-025): sem internet o movimento não iria ao servidor — recusa ANTES das perguntas (valor, motivo, data) e devolve o cartão
+    if (typeof navigator !== "undefined" && navigator && navigator.onLine === false) {
+      preencherColunaDoCartao(id);
+      if (estagioId !== origemCol.estagio_id && colEls.has(estagioId)) preencherColuna(estagioId);     // o teclado já tinha levado o cartão até lá
+      focarCartao(id);
+      const msg = "Sem internet: o cartão não foi movido. Tente de novo quando a conexão voltar.";
+      ui.toast(msg, { tipo: "erro" }); ui.anunciar(msg);
+      return;
+    }
     const card = origemCol.itens.find(x => x.id === id);
     const posOrig = origemCol.itens.indexOf(card);
     const destino = k.estagio(estagioId);
@@ -628,6 +987,7 @@ export async function montarKanban(k, el, rota) {
     S.dados.colunas = L.moverLocal(S.dados.colunas, id, estagioId, pos, ordem, patch);
     preencherColuna(origemCol.estagio_id); if (destCol !== origemCol) preencherColuna(estagioId);
     desenharTotais();
+    if (destCol !== origemCol) destacarColunas(origemCol.estagio_id, estagioId);
     focarCartao(id);
     assentar(id);
     const tipoOrigem = (k.estagio(origemCol.estagio_id) || {}).tipo;
@@ -647,13 +1007,38 @@ export async function montarKanban(k, el, rota) {
       // firmar = a gravação adiada. Se a página sair ou ficar oculta antes dos 7 s, o aviso chama firmar({ saindo: true }) e o pedido vai com keepalive
       const res = await ui.acaoComDesfazer({ texto, reverter: () => desfazerMovimento(mov), firmar: o => efetivar(mov, { saindo: !!(o && o.saindo) }) });
       if (res.estado === "desfeita") return;
-      await efetivar(mov);       // «mantida» (o aviso acabou) ou a tela saiu: agora vai ao servidor
+      const ok = await efetivar(mov);       // «mantida» (o aviso acabou) ou a tela saiu: agora vai ao servidor
+      if (ok && destino.tipo === "ganho" && S.vivo) ofertarPosVenda(cardDe(id) || card);
       return;
     }
     // mesma natureza (aberto → aberto): grava já; o «Desfazer» move de volta
     const ok = await efetivar(mov);
     if (!ok || origemCol === destCol) return;       // só reordenar dentro da etapa não pede «Desfazer»
     ui.acaoComDesfazer({ texto: `«${titulo}» movido para ${destino.nome}`, reverter: () => desfazerMovimento(mov) });
+  }
+
+  /**
+   * plano 1000 (CR-297): depois do ganho confirmado, o próximo passo — «Iniciar pós-venda» (o mesmo da gaveta) quando há funil fora dos anúncios
+   * e o cartão tem contato. Sem isso o fluxo terminava no «Fechou» e o retorno ficava esquecido.
+   */
+  function ofertarPosVenda(card) {
+    const contato = card && card.contato && card.contato.id != null ? card.contato : (card && card.contato_id != null ? { id: card.contato_id, nome: card.nome || null } : null);
+    if (!contato || !podeMover || typeof N.iniciarPosVenda !== "function") return;
+    if (!k.base.funis.some(f => !f.conta_no_ads && f.ativo !== false)) return;
+    ui.toast(`${L.tituloCard(card)}: ${k.v.ganhar.toLowerCase()}. Próximo passo?`, { tipo: "ok", ms: 9000,
+      acao: { rotulo: "Iniciar pós-venda", fn: () => N.iniciarPosVenda(k, { ...card, funil_id: S.funil && S.funil.id, status: "ganho" }, contato, { aoCriar: () => carregar({ silencioso: true }) }) } });
+  }
+
+  /** plano 1000 (CR-203): depois de soltar em outra etapa, a contagem das duas colunas acende por um instante (G.destacar) — dá para ver o que mudou. */
+  function destacarColunas(...ids) {
+    const G = k.G;
+    if (!G || typeof G.destacar !== "function") return;
+    for (const id of ids) { const c = colEls.get(id); if (c && c.n) { try { G.destacar(c.n); } catch { /* sem destaque */ } } }
+  }
+  /** plano 1000 (CR-268): o total novo das duas colunas depois de mover — dito ao leitor de tela junto com a confirmação. */
+  function totaisDoMovimento(mov) {
+    const t = id => { const col = colunaDe(id), e = k.estagio(id); const n = col ? Number(col.total) || 0 : 0; return `«${e ? e.nome : "etapa"}» com ${n} ${n === 1 ? "cartão" : "cartões"}`; };
+    return mov.estagioId === mov.origemEstagioId ? "" : ` Agora ${t(mov.estagioId)} e ${t(mov.origemEstagioId)}.`;
   }
 
   /** O cartão solto «assenta» no lugar (M10: .assenta = escala 1,015 → 1; sem movimento reduzido o CSS zera a animação). */
@@ -703,7 +1088,7 @@ export async function montarKanban(k, el, rota) {
         const el = quadro.querySelector(`.kc[data-id="${mov.id}"]`);
         if (el) { el.classList.add("chegou"); el.classList.add("assenta"); el.classList.add("kc-solto"); }   // a coluna foi redesenhada: a entrada animada continua no cartão novo
         marcarConfirmando(mov.id, false);
-        ui.anunciar(`${L.tituloCard(mov.card)} movido para ${mov.destino.nome}.`);
+        ui.anunciar(`${L.tituloCard(mov.card)} movido para ${mov.destino.nome}.${totaisDoMovimento(mov)}`);
         return true;
       };
       try {
@@ -712,10 +1097,9 @@ export async function montarKanban(k, el, rota) {
         if (L.erroAmbiguo(e)) {
           const real = await consultarEtapa(mov.id);
           if (real === mov.destino.id) return chegou({});     // o servidor já tinha aplicado: o cartão fica onde está
-          if (real === null) {                                 // sem resposta: mostra o que se sabe e confere quando a internet voltar
-            ui.toast("Não deu para confirmar a mudança de etapa. Vamos conferir com o servidor quando a conexão voltar.", { tipo: "info", ms: 6000 });
-            const conferir = () => { soltarPendente(mov); if (S.vivo) carregar({ silencioso: true }); };
-            if (typeof addEventListener === "function") addEventListener("orbita:online", conferir, { once: true });
+          if (real === null) {                                 // sem resposta: mostra o que se sabe e confere de novo (internet voltando, ou em 15 s e 60 s)
+            ui.toast("Não deu para confirmar a mudança de etapa. Vamos conferir com o servidor de novo em instantes.", { tipo: "info", ms: 6000 });
+            agendarConferencia(mov);
             return false;
           }
           // o servidor está em OUTRA etapa: não foi aplicado → volta o cartão
@@ -732,6 +1116,34 @@ export async function montarKanban(k, el, rota) {
     return mov.promessa;
   }
 
+  /**
+   * plano 1000 (CR-003): resposta ambígua E conferência sem resposta. Antes só o evento «orbita:online» destravava — com o servidor lento (504) a
+   * internet não «volta» e o cartão ficava «confirmando» para sempre (o pulso nem recarregava). Agora reconfere em 15 s e 60 s (ou na volta da
+   * conexão); com a etapa real em mãos — ou depois da última tentativa — solta o pendente e recarrega o quadro do servidor.
+   */
+  function agendarConferencia(mov) {
+    let feito = false, timer = 0, tentativa = 0;
+    const encerrar = () => {
+      feito = true; clearTimeout(timer);
+      if (typeof removeEventListener === "function") removeEventListener("orbita:online", aoOnline);
+      S.conferencias.delete(encerrar);
+    };
+    const resolver = () => { encerrar(); soltarPendente(mov); marcarConfirmando(mov.id, false); if (S.vivo) carregar({ silencioso: true }); };
+    async function conferir(ultima) {
+      if (feito) return;
+      if (!S.vivo) { encerrar(); return; }
+      const real = await consultarEtapa(mov.id);
+      if (feito) return;
+      if (real === null && !ultima && tentativa < CONFERIR_MS.length) { proxima(); return; }
+      resolver();
+    }
+    function proxima() { const ms = CONFERIR_MS[tentativa++]; timer = setTimeout(() => conferir(tentativa >= CONFERIR_MS.length), ms); }
+    function aoOnline() { clearTimeout(timer); conferir(true); }
+    if (typeof addEventListener === "function") addEventListener("orbita:online", aoOnline, { once: true });
+    S.conferencias.add(encerrar);
+    proxima();
+  }
+
   /** Volta o cartão para onde estava, só na tela (sem mexer nos outros cartões que também estejam esperando). */
   function reverterNaTela(mov) {
     S.dados.colunas = L.moverLocal(S.dados.colunas, mov.id, mov.origemEstagioId, mov.origemPos, mov.origem.ordem, mov.origemPatch);
@@ -742,7 +1154,13 @@ export async function montarKanban(k, el, rota) {
   }
 
   /** «Desfazer» (botão do aviso ou Ctrl/⌘+Z). Ainda não foi ao servidor → só a tela; já foi → move de volta (e devolve a data da consulta, se esta mudou). */
-  async function desfazerMovimento(mov) {
+  function desfazerMovimento(mov) {
+    // plano 1000 (CR-026): clique duplo no «Desfazer» ou Ctrl+Z repetido não dispara duas reversões — a 2ª recebe a mesma promessa
+    if (mov.revertendo) return mov.revertendo;
+    mov.revertendo = reverterMovimento(mov).catch(e => { mov.revertendo = null; throw e; });   // falhou: dá para tentar de novo
+    return mov.revertendo;
+  }
+  async function reverterMovimento(mov) {
     if (!mov.efetivado) { soltarPendente(mov); reverterNaTela(mov); ui.anunciar("Movimento desfeito."); return; }
     const volta = k.estagio(mov.origemEstagioId);
     if (!volta) throw new Error("estagio_invalido");
@@ -817,6 +1235,9 @@ export async function montarKanban(k, el, rota) {
       const indice = cards.indexOf(art);
       art.classList.remove("pego"); art.removeAttribute("aria-pressed");
       S.teclado = null;
+      // plano 1000 (CR-202): o leitor ouve onde soltou na hora — a gravação (e o anúncio dela) pode demorar
+      const etapaSolta = k.estagio(destino);
+      ui.anunciar(`Soltou em «${etapaSolta ? etapaSolta.nome : "etapa"}», posição ${indice + 1}. Gravando…`);
       aplicarAdiado();
       soltar(id, destino, indice);
       return;
@@ -842,7 +1263,10 @@ export async function montarKanban(k, el, rota) {
       const cards = [...alvo.lista.querySelectorAll(".kc")];
       const pos = Math.min([...lista.querySelectorAll(".kc")].indexOf(art), cards.length);
       const vazia = alvo.lista.querySelector(".kb-vazia"); if (vazia) vazia.hidden = true;
-      alvo.lista.insertBefore(art, cards[pos] || alvo.lista.querySelector(".kb-mais") || null);
+      // plano 1000 (CR-002): a referência do insertBefore é o FILHO da lista (.kb-mais-item), não o botão (neto) — com o botão o navegador
+      // lançava NotFoundError e o cartão ficava preso no modo «pego»
+      try { alvo.lista.insertBefore(art, cards[pos] || alvo.lista.querySelector(".kb-mais-item") || null); }
+      catch { cancelarTeclado(false); ui.toast("Não deu para levar o cartão até essa etapa pelo teclado. Use a tecla M (Mover para…).", { tipo: "erro" }); return; }
       art.style.setProperty("--cor", k.cor(alvo.e.cor) || "");
       t.estagio = ids[j];
       art.focus();
@@ -900,9 +1324,64 @@ export async function montarKanban(k, el, rota) {
         h("i", { "aria-hidden": "true" }), h("span", { class: "kb-mover-nome" }, e.nome),
         h("small", null, atual ? "etapa atual" : `${n} ${n === 1 ? "cartão" : "cartões"}`));
     }));
+    // plano 1000 (CR-044): trocar de funil daqui mesmo (antes só pela gaveta → ⋮), com a mesma trava do funil de anúncios
+    if (funis().length > 1 && typeof N.moverDeFunil === "function") {
+      corpo.appendChild(h("button", { type: "button", role: "listitem", class: "kb-mover-op kb-mover-funil", on: { click: () => modalApi && modalApi.fechar(OUTRO_FUNIL) } },
+        ui.icone("funil"), h("span", { class: "kb-mover-nome" }, "Outro funil…"), h("small", null, "escolher funil e etapa")));
+    }
     const escolhida = await ui.modal({ titulo: "Mover para…", descricao: L.tituloCard(card), corpo, largura: "p", protegerTexto: false,
       acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: null }], aoAbrir: a => { modalApi = a; } });
+    if (escolhida === OUTRO_FUNIL && S.vivo) {
+      const status = (k.estagio(atualId) || {}).tipo || card.status || "aberto";
+      await N.moverDeFunil(k, { ...card, funil_id: S.funil.id, status }, { aoMover: () => { S.meus.add(id); carregar({ silencioso: true }); } });
+      return;
+    }
     if (escolhida && S.vivo) soltar(id, escolhida, 0);
+  }
+  /**
+   * plano 1000 (CR-035): mover os selecionados de uma vez — a etapa uma vez, o motivo da perda uma vez, as gravações em fila (com o progresso para o
+   * leitor de tela) e UM aviso com «Desfazer». Ganho fica de fora (cada um tem o seu valor final); etapa com data vai sem data (cada um tem a sua).
+   */
+  async function moverSelecionados() {
+    const cards = [...S.sel].map(cardDe).filter(c => c && !S.pend.has(c.id));
+    if (!cards.length || !podeMover) { limparSel(); return; }
+    if (typeof navigator !== "undefined" && navigator && navigator.onLine === false) { ui.toast("Sem internet: nada foi movido. Tente de novo quando a conexão voltar.", { tipo: "erro" }); return; }
+    let modalApi = null;
+    const corpo = h("div", { class: "kb-mover", role: "list" }, S.funil.estagios.map(e =>
+      h("button", { type: "button", role: "listitem", class: "kb-mover-op", style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, on: { click: () => modalApi && modalApi.fechar(e.id) } },
+        h("i", { "aria-hidden": "true" }), h("span", { class: "kb-mover-nome" }, e.nome), h("small", null, e.tipo === "ganho" ? "um por vez (valor de cada)" : ""))));
+    const destinoId = await ui.modal({ titulo: `Mover ${cards.length} ${cards.length === 1 ? "cartão" : "cartões"} para…`, corpo, largura: "p", protegerTexto: false,
+      acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: null }], aoAbrir: a => { modalApi = a; } });
+    const destino = destinoId && k.estagio(destinoId);
+    if (!destino || !S.vivo) return;
+    if (destino.tipo === "ganho") { ui.toast(`Para marcar como «${destino.nome}», mova um por vez: cada um tem o seu valor final.`, { tipo: "info" }); return; }
+    const mover = cards.filter(c => (colunaDeCard(c.id) || {}).estagio_id !== destino.id);
+    if (!mover.length) { limparSel(); return; }
+    let extra = {};
+    if (L.pedidoAoMover(destino, k.estagio(colunaDeCard(mover[0].id).estagio_id)) === "perdido") {
+      try { extra = await N.prepararMovimento(k, mover[0], destino); } catch (e) { k.toastErro(e); return; }
+      if (extra === null) { ui.anunciar("Movimento cancelado."); return; }
+    }
+    const feitos = [], falhas = [];
+    for (let i = 0; i < mover.length; i++) {
+      const c = mover[i], origem = k.estagio(colunaDeCard(c.id).estagio_id);
+      try { await N.moverNegocio(k, c, destino, { extra }); feitos.push({ c, origem }); S.meus.add(c.id); }
+      catch (e) { falhas.push(e); }
+      ui.anunciar(`Movendo ${i + 1} de ${mover.length}…`);
+    }
+    limparSel();
+    if (S.vivo) await carregar({ silencioso: true });
+    if (falhas.length) ui.toast(`${falhas.length} não ${falhas.length === 1 ? "foi movido" : "foram movidos"}: ${k.erro(falhas[0])}`, { tipo: "erro" });
+    if (!feitos.length) return;
+    ui.acaoComDesfazer({ texto: `${feitos.length} ${feitos.length === 1 ? "cartão movido" : "cartões movidos"} para «${destino.nome}».${destino.tipo !== "aberto" ? " Mensagens automáticas já enviadas não voltam." : ""}`,
+      reverter: async () => {
+        for (const f of feitos) {
+          if (!f.origem) continue;
+          await N.moverNegocio(k, { id: f.c.id }, f.origem, { ordem: f.c.ordem ?? null, extra: L.extraDeVolta({ estagio: f.origem, valor: f.c.valor, valor_previsto: f.c.valor_previsto,
+            motivo_perda_id: f.c.motivo_perda_id, motivo_perda_txt: f.c.motivo_perda_txt }) });
+        }
+        if (S.vivo) await carregar({ silencioso: true });
+      } });
   }
   function colunaDeCard(id) { return S.dados.colunas.find(c => c.itens.some(x => x.id === id)) || null; }
 
@@ -933,6 +1412,7 @@ export async function montarKanban(k, el, rota) {
     if (a.levantado) return;
     a.levantado = true;
     a.engoleClique = true;
+    fecharDicaSegurar();           // CR-270: aprendeu o gesto — a dica não volta
     try { if (navigator.vibrate) navigator.vibrate(10); } catch { /* sem vibração */ }
     a.art.classList.add("kc-pega-toque");
     document.body.style.userSelect = "none";
@@ -1018,7 +1498,9 @@ export async function montarKanban(k, el, rota) {
     let antesDe = null;
     for (const c of cards) { const r = c.getBoundingClientRect(); if (y < r.top + r.height / 2) { antesDe = c; break; } }
     const vazia = info.lista.querySelector(".kb-vazia"); if (vazia) vazia.hidden = true;
-    const ref = antesDe || info.lista.querySelector(".kb-mais") || null;
+    // plano 1000 (CR-001): o «Ver mais» é um botão DENTRO de .kb-mais-item — a referência tem de ser o filho direto da lista (com o botão,
+    // cada pointermove lançava NotFoundError, o marcador sumia e o soltar usava o alvo anterior)
+    const ref = antesDe || info.lista.querySelector(".kb-mais-item") || null;
     if (a.lugar.parentElement !== info.lista || a.lugar.nextSibling !== ref) info.lista.insertBefore(a.lugar, ref);
     a.alvo = { estagio: info.e.id, indice: [...info.lista.querySelectorAll(".kc:not([hidden]), .kb-lugar")].indexOf(a.lugar) };
   }
@@ -1123,6 +1605,24 @@ export async function montarKanban(k, el, rota) {
 
   const aoTeclaGlobal = ev => {
     if (ev.key === "Escape" && S.arrasto && S.arrasto.moveu) { ev.preventDefault(); cancelarPonteiro(); ui.anunciar("Movimento cancelado."); return; }
+    if (ev.key === "Escape" && S.sel.size && !(ev.target && ev.target.closest && ev.target.closest("[role=dialog],dialog"))) { limparSel(); ui.anunciar("Seleção limpa."); return; }
+    // plano 1000 (CR-037): Alt+1…5 troca de funil (a ordem do seletor). Pelo código da tecla: no Mac Alt+1 escreve «¡»
+    const dig = /^Digit([1-9])$/.exec(ev.code || "") || (/^[1-9]$/.test(ev.key || "") ? [null, ev.key] : null);
+    if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && dig && !S.arrasto && !S.teclado) {
+      const lista = funis(), alvo = lista[Number(dig[1]) - 1];
+      if (alvo && Number(dig[1]) <= 5) {
+        ev.preventDefault();
+        if (!S.funil || alvo.id !== S.funil.id) { trocarFunil(alvo.id); desenharSelFunil(); }
+        ui.anunciar(`Funil «${alvo.nome}».`);
+      }
+      return;
+    }
+    // plano 1000 (CR-267): N (fora de campos e diálogos) abre um cartão novo — o mesmo «+» do cabeçalho; aparece na folha «?» pelo comando registrado
+    if ((ev.key === "n" || ev.key === "N") && !ev.altKey && !ev.ctrlKey && !ev.metaKey && podeMover && !S.arrasto && !S.teclado) {
+      const a = ev.target;
+      const editando = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || "") || (a.closest && a.closest("[role=dialog],dialog")));
+      if (!editando && !(typeof document !== "undefined" && document.querySelector && document.querySelector("dialog[open]"))) { ev.preventDefault(); novo({}); return; }
+    }
     // «/» foca a busca (como em Pacientes), fora de campos e diálogos
     if (ev.key === "/" && !ev.altKey && !ev.ctrlKey && !ev.metaKey) {
       const a = ev.target;
@@ -1142,6 +1642,7 @@ export async function montarKanban(k, el, rota) {
     if (f.valor_min != null || f.valor_max != null) n++;
     if (f.parado_dias) n++;
     if (f.criado_de || f.criado_ate) n++;
+    if (f.campo) n++;
     return n;
   }
 
@@ -1159,6 +1660,7 @@ export async function montarKanban(k, el, rota) {
     if (f.valor_min != null || f.valor_max != null) add(`Valor ${f.valor_min != null ? `≥ ${ui.brl(f.valor_min, { centavos: false })}` : ""}${f.valor_min != null && f.valor_max != null ? " e " : ""}${f.valor_max != null ? `≤ ${ui.brl(f.valor_max, { centavos: false })}` : ""}`, () => { delete f.valor_min; delete f.valor_max; });
     if (f.parado_dias) add(`Parados há ${f.parado_dias}+ dias`, () => delete f.parado_dias);
     if (f.criado_de || f.criado_ate) add(`Criados ${f.criado_de ? `de ${ui.dataBR(f.criado_de)} ` : ""}${f.criado_ate ? `até ${ui.dataBR(f.criado_ate)}` : ""}`.trim(), () => { delete f.criado_de; delete f.criado_ate; });
+    if (f.campo) add(L.textoFiltroCampo(f.campo, k.base.campos), () => delete f.campo);
     const n = contarFiltros();
     if (n > 0) chips.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p crm-chips-limpar", on: { click: () => {
       const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; gravarLocal(); carregar({ silencioso: true });
@@ -1173,16 +1675,19 @@ export async function montarKanban(k, el, rota) {
     const seg = (itens, atual, aoMudar, rotulo) => {
       const g = h("div", { class: "crm-seg", role: "group", "aria-label": rotulo });
       for (const [v, t] of itens) {
-        const b = h("button", { type: "button", "aria-pressed": String((atual || "") === v) }, t);
+        const b = h("button", { type: "button", "aria-pressed": String(atual !== null && (atual || "") === v) }, t);
         b.addEventListener("click", () => { for (const x of g.children) x.setAttribute("aria-pressed", "false"); b.setAttribute("aria-pressed", "true"); aoMudar(v); });
         g.appendChild(b);
       }
       return g;
     };
     // responsável
+    // plano 1000 (CR-011): pessoa escolhida no seletor desmarca o segmentado (nada de «Todos» marcado com «Ana» escolhida); o segmentado limpa o seletor
+    let segDono = null;
     const selPessoa = ui.seletorPessoa({ usuarios: k.base.usuarios, valor: f.dono && !["eu", "sem"].includes(f.dono) ? f.dono : null, vazio: "Qualquer pessoa", rotulo: "Responsável",
-      aoMudar: id => { f.dono = id || undefined; } });
-    const segDono = seg([["", "Todos"], ["eu", "Meus"], ["sem", "Sem responsável"]], ["eu", "sem"].includes(f.dono) ? f.dono : "", v => { f.dono = v || undefined; selPessoa.value = ""; }, "Responsável");
+      aoMudar: id => { f.dono = id || undefined; marcarSegDono(id ? null : ""); } });
+    segDono = seg([["", "Todos"], ["eu", "Meus"], ["sem", "Sem responsável"]], ["eu", "sem"].includes(f.dono) ? f.dono : (f.dono ? null : ""), v => { f.dono = v || undefined; selPessoa.value = ""; }, "Responsável");
+    function marcarSegDono(v) { if (segDono) for (const b of segDono.children) b.setAttribute("aria-pressed", String(v !== null && b.textContent === { "": "Todos", eu: "Meus", sem: "Sem responsável" }[v])); }
     // etiquetas
     const et = f.etiquetas || { op: "alguma", ids: [] };
     const segEt = seg([["alguma", "Alguma"], ["todas", "Todas"], ["nenhuma", "Nenhuma"]], et.op || "alguma", v => { et.op = v; }, "Como combinar as etiquetas");
@@ -1200,42 +1705,103 @@ export async function montarKanban(k, el, rota) {
     }));
     const vMin = h("input", { type: "number", min: "0", step: "50", placeholder: "Mínimo", "aria-label": "Valor mínimo", value: f.valor_min ?? "" });
     const vMax = h("input", { type: "number", min: "0", step: "50", placeholder: "Máximo", "aria-label": "Valor máximo", value: f.valor_max ?? "" });
+    // plano 1000 (CR-010): erro de valor aparece junto do campo (e o popover continua aberto)
+    const erroValor = h("small", { class: "ed-erro crm-filtros-erro", role: "alert", id: `crm-fv-${cli}`, hidden: true });
     const parado = h("select", { "aria-label": "Parados há" }, [["", "Qualquer tempo"], ["3", "3 dias ou mais"], ["7", "7 dias ou mais"], ["15", "15 dias ou mais"], ["30", "30 dias ou mais"]]
       .map(([v, t]) => h("option", { value: v, selected: String(f.parado_dias || "") === v }, t)));
     const de = h("input", { type: "date", "aria-label": "Criados de", value: f.criado_de || "" });
     const ate = h("input", { type: "date", "aria-label": "Criados até", value: f.criado_ate || "" });
     const aplicar = h("button", { type: "button", class: "bt bt-prim bt-p" }, "Aplicar");
     const limpar = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Limpar");
-    const corpo = h("div", { class: "crm-filtros" },
-      h("div", { class: "crm-filtros-grupo" }, h("span", { class: "rotulo" }, "Responsável"), segDono, selPessoa),
-      k.base.etiquetas.length ? h("div", { class: "crm-filtros-grupo" }, h("span", { class: "rotulo" }, "Etiquetas"), segEt, opsEt) : null,
-      h("div", { class: "crm-filtros-grupo" }, h("span", { class: "rotulo" }, "Origem"), opsOrig),
-      h("div", { class: "crm-filtros-grupo" }, h("span", { class: "rotulo" }, "Valor (R$)"), h("div", { class: "crm-filtros-linha" }, vMin, vMax)),
-      h("div", { class: "crm-filtros-grupo" }, h("span", { class: "rotulo" }, "Parados na etapa"), parado),
-      h("div", { class: "crm-filtros-grupo" }, h("span", { class: "rotulo" }, "Criados entre"), h("div", { class: "crm-filtros-linha" }, de, ate)),
-      h("div", { class: "crm-filtros-rod" }, limpar, aplicar));
-    const pop = ui.flutuante(btFiltros, corpo, { classe: "flut-crm", largura: "auto" });
-    limpar.addEventListener("click", () => { const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; gravarLocal(); pop.fechar(); carregar({ silencioso: true }); });
-    aplicar.addEventListener("click", () => {
+    const grupoCampo = Vis.grupoFiltroCampo ? Vis.grupoFiltroCampo(k, { entidade: "negocio", funilId: S.funil && S.funil.id, atual: f.campo }) : null;
+    // plano 1000 (CR-012): o que foi marcado e não aplicado aparece no rodapé — e fechar o popover (fora, Esc) aplica sozinho
+    const pendTxt = h("small", { class: "crm-filtros-pend", "aria-live": "polite", hidden: true });
+    // plano 1000 (CR-008): no celular as visões salvas moram aqui dentro (a linha delas empurrava o quadro para baixo da 1ª tela)
+    const casaVisoes = telaPequena() && controlesVisoes ? controlesVisoes.el.parentElement : null;
+    const grupoVisoes = casaVisoes ? h("fieldset", { class: "crm-filtros-grupo crm-filtros-visoes" }, h("legend", { class: "rotulo" }, "Filtros salvos"), controlesVisoes.el) : null;
+    // plano 1000 (CR-277): no celular os filtros abrem como folha inferior — título fixo em cima e «Limpar · Aplicar» fixos embaixo (o CSS faz a folha)
+    const cabFolha = telaPequena() ? h("div", { class: "crm-filtros-cab" }, h("b", null, "Filtros"),
+      h("button", { type: "button", class: "bt-icone", "aria-label": "Fechar os filtros", on: { click: () => pop && pop.fechar() } }, ui.icone("fechar"))) : null;
+    let pop = null;
+    // plano 1000 (CR-215): quantos dias de fechados aparecem — antes só no rodapé de cada coluna fechada, fácil de perder
+    let fechSel = S.fechadosDias;
+    const segFech = seg([["30", "30 dias"], ["90", "90 dias"], ["0", "Todos"]], String(S.fechadosDias), v => { fechSel = Number(v); }, "Fechados no quadro");
+    // plano 1000 (CR-210): cada grupo é um fieldset com legend — o leitor de tela diz «Origem, grupo» ao entrar nas caixas
+    const corpo = h("div", { class: ["crm-filtros", cabFolha && "crm-filtros-folha"] },
+      cabFolha,
+      grupoVisoes,
+      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Responsável"), segDono, selPessoa),
+      k.base.etiquetas.length ? h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Etiquetas"), segEt, opsEt) : null,
+      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Origem"), opsOrig),
+      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Valor (R$)"), h("div", { class: "crm-filtros-linha" }, vMin, vMax), erroValor),
+      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Parados na etapa"), parado),
+      h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Criados entre"), h("div", { class: "crm-filtros-linha" }, de, ate)),
+      grupoCampo ? grupoCampo.el : null,
+      h("fieldset", { class: "crm-filtros-grupo crm-filtros-fech" }, h("legend", { class: "rotulo" }, "Fechados no quadro"), segFech),
+      h("div", { class: "crm-filtros-rod" }, pendTxt, limpar, aplicar));
+    let resolvido = false;      // Aplicar/Limpar já trataram: o fechar que vem depois não aplica de novo
+    /** O filtro novo do formulário → {nf} | {erro, foco} (sem tocar no estado). */
+    function lerNovo() {
       const nf = { ...(S.filtro.busca ? { busca: S.filtro.busca } : {}) };
       if (f.dono) nf.dono = f.dono;
       if (et.ids && et.ids.length) nf.etiquetas = { op: et.op || "alguma", ids: et.ids };
       if (orig.size) nf.origem = [...orig];
       const mn = vMin.value === "" ? null : Number(vMin.value), mx = vMax.value === "" ? null : Number(vMax.value);
-      if (mn != null && mx != null && mn > mx) { ui.toast("O valor mínimo precisa ser menor ou igual ao máximo.", { tipo: "erro" }); vMin.focus(); return; }
-      if (de.value && ate.value && de.value > ate.value) { ui.toast("A data inicial precisa ser anterior ou igual à final.", { tipo: "erro" }); de.focus(); return; }
+      if (mn != null && !(mn >= 0)) return { erro: "Valor mínimo inválido: use 0 ou mais.", foco: vMin, valor: true };
+      if (mx != null && !(mx >= 0)) return { erro: "Valor máximo inválido: use 0 ou mais.", foco: vMax, valor: true };
+      if (mn != null && mx != null && mn > mx) return { erro: "O valor mínimo precisa ser menor ou igual ao máximo.", foco: vMin, valor: true };
+      if (de.value && ate.value && de.value > ate.value) return { erro: "A data inicial precisa ser anterior ou igual à final.", foco: de };
       if (mn != null && mn >= 0) nf.valor_min = mn;
       if (mx != null && mx >= 0) nf.valor_max = mx;
       if (parado.value) nf.parado_dias = Number(parado.value);
       if (de.value) nf.criado_de = de.value;
       if (ate.value) nf.criado_ate = ate.value;
-      S.filtro = nf; gravarLocal(); pop.fechar(); carregar({ silencioso: true });
+      if (grupoCampo) { const c = grupoCampo.ler(); if (c.erro) return { erro: c.erro, foco: null }; if (c.campo) nf.campo = c.campo; }
+      else if (S.filtro.campo) nf.campo = S.filtro.campo;
+      return { nf };
+    }
+    const mudancas = () => { const r = lerNovo(); return r.nf ? canonico(r.nf) !== canonico(S.filtro) || fechSel !== S.fechadosDias : true; };
+    /** CR-215: a escolha dos fechados vale junto com os filtros (Aplicar ou fechar o popover). → mudou? */
+    const aplicarFech = () => { if (fechSel === S.fechadosDias) return false; definirFechados(fechSel); return true; };
+    const contarPend = () => { const m = mudancas(); pendTxt.hidden = !m; pendTxt.textContent = m ? "Mudanças ainda não aplicadas" : ""; };
+    corpo.addEventListener("change", contarPend);
+    corpo.addEventListener("click", ev => { if (ev.target && ev.target.closest && ev.target.closest(".crm-seg")) contarPend(); });
+    const fecharResolvido = () => { resolvido = true; if (pop) pop.fechar(); };
+    S.fecharFiltros = fecharResolvido;
+    pop = ui.flutuante(btFiltros, corpo, { classe: ["flut-crm", cabFolha && "flut-crm-folha"].filter(Boolean).join(" "), largura: "auto", aoFechar: () => {
+      if (S.fecharFiltros === fecharResolvido) S.fecharFiltros = null;
+      if (grupoVisoes && casaVisoes) casaVisoes.appendChild(controlesVisoes.el);      // as visões voltam para a linha de ferramentas (escondida no celular)
+      if (resolvido || !S.vivo) return;
+      resolvido = true;
+      const r = lerNovo();
+      if (!r.nf) { ui.toast(`Os filtros não foram aplicados: ${r.erro}`, { tipo: "erro" }); return; }
+      const mudouFech = aplicarFech();
+      if (canonico(r.nf) === canonico(S.filtro) && !mudouFech) return;
+      S.filtro = r.nf; gravarLocal(); carregar({ silencioso: true });
+      ui.anunciar("Filtros aplicados.");
+    } });
+    limpar.addEventListener("click", () => { resolvido = true; const b = S.filtro.busca; S.filtro = b ? { busca: b } : {}; gravarLocal(); pop.fechar(); carregar({ silencioso: true }); });
+    aplicar.addEventListener("click", () => {
+      const r = lerNovo();
+      for (const x of [vMin, vMax]) x.removeAttribute("aria-invalid");
+      erroValor.hidden = true; erroValor.textContent = "";
+      if (!r.nf) {
+        if (r.valor) { erroValor.textContent = r.erro; erroValor.hidden = false; r.foco.setAttribute("aria-invalid", "true"); r.foco.setAttribute("aria-describedby", erroValor.id); }
+        else ui.toast(r.erro, { tipo: "erro" });
+        if (r.foco) r.foco.focus();
+        return;
+      }
+      resolvido = true;
+      aplicarFech();
+      S.filtro = r.nf; gravarLocal(); pop.fechar(); carregar({ silencioso: true });
     });
   }
 
   /* ============================================================ tempo real */
   const cancelarPulso = ctx.pulso && ctx.pulso.assinar ? ctx.pulso.assinar(() => {
-    if (!S.vivo || S.arrasto || S.teclado || document.hidden || S.pend.size) return;
+    // plano 1000 (CR-003): só os movimentos ainda NÃO enviados (os 7 s do «Desfazer») seguram o pulso; um já enviado e sem confirmação não pode
+    // travar a atualização do quadro (a recarga reaplica o cartão no destino enquanto a conferência roda)
+    if (!S.vivo || S.arrasto || S.teclado || document.hidden || [...S.pend.values()].some(m => !m.efetivado)) return;
     if (Date.now() - S.ultimaRecarga < PULSO_MIN_MS) return;
     if (document.querySelector("dialog[open]")) return;
     carregar({ silencioso: true });
@@ -1255,9 +1821,20 @@ export async function montarKanban(k, el, rota) {
   carregar().finally(() => S.pronta());
   await pronta;
   return {
-    aoMudarNegocio: () => carregar({ silencioso: true }),
+    aoMudarNegocio: c => { if (c && c.id != null) S.meus.add(c.id); carregar({ silencioso: true }); },
+    /** plano 1000 (CR-039): o link direto abriu um negócio de OUTRO funil — o quadro por baixo passa a mostrar esse funil (sem mexer no endereço da gaveta). */
+    mostrarFunil(id) {
+      const f = k.funil(id);
+      if (!S.vivo || !f || f.ativo === false || (S.funil && S.funil.id === f.id)) return false;
+      S.funil = f; gravarLocal(); desenharSelFunil(); carregar();
+      return true;
+    },
+    funilAtual: () => (S.funil ? S.funil.id : null),
     desmontar() {
       S.vivo = false; S.seq++;
+      clearInterval(tIdade);
+      for (const f of [...S.conferencias]) f();
+      if (obsMais) obsMais.disconnect();
       if (S.arrasto) cancelarPonteiro();
       efetivarPendentes();
       document.removeEventListener("visibilitychange", aoEsconder);

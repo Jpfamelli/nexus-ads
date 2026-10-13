@@ -287,7 +287,8 @@ await teste("normalizarTelefone = nx_tel_normalizar(p, false)", () => {
   assert.equal(L.normalizarTelefone("(12) 99830-3030"), "5512998303030");
   assert.equal(L.normalizarTelefone("12 9830-3030"), "551298303030");
   assert.equal(L.normalizarTelefone("+55 12 99830-3030"), "5512998303030");
-  assert.equal(L.normalizarTelefone("14155551234"), "5514155551234", "11 dígitos sem DDI viram BR (regra do banco)");
+  // plano 1000 · CA-024: uma regra só (a do erroTelefone/nx_tel_normalizar de 20261008a) — 11 dígitos sem o 9 do celular não viram número BR
+  assert.equal(L.normalizarTelefone("14155551234"), null, "11 dígitos sem o 9 depois do DDD não são celular brasileiro (antes virava 5514155551234)");
   assert.equal(L.normalizarTelefone("+1 415 555 1234 00"), "1415555123400");
   assert.equal(L.normalizarTelefone("9830"), null);
   assert.equal(L.normalizarTelefone(""), null);
@@ -519,7 +520,8 @@ await teste("M34: o cabeçalho usa um primário por estado, uma linha no celular
   assert.match(comp, /const btInfo = h\("button"[^;]*"aria-expanded": "false"/, "botão ⓘ ao lado do clipe");
   assert.match(comp, /capInfo\.hidden = !temAviso \|\| !infoAberta/, "faixa escondida até a pessoa pedir");
   assert.match(comp, /const temAviso = !gravavel;/, "o ⓘ só existe quando o navegador não grava (o CodeWords deixou de ser «só texto»)");
-  assert.match(comp, /btClipe\.setAttribute\("aria-disabled", String\(modoNota \|\| s !== "ok"\)\)/, "o clipe não fica bloqueado por ser CodeWords");
+  // plano 1000 · CA-106: o clipe também fica desligado sem internet (com o motivo) — e continua sem depender do provedor
+  assert.match(comp, /btClipe\.setAttribute\("aria-disabled", String\(modoNota \|\| s !== "ok" \|\| offline\)\)/, "o clipe não fica bloqueado por ser CodeWords");
 });
 
 /* ============================================================ M37 — fotos do celular sem rejeição */
@@ -659,8 +661,10 @@ await teste("M36: filaDevidos (ordem em que a pessoa mandou, só o que já vence
   assert.equal(L.filaDestino(ok, { conta: "u2", cliente: "c1", agora: AG }), "pular", "item de outra conta: fica onde está");
   assert.equal(L.filaDestino(ok, { conta: "u1", cliente: "c2", agora: AG }), "pular", "item de outra empresa da mesma conta: NUNCA é apagado");
   assert.equal(L.filaDestino({ ...ok, criada_em: AG - L.FILA_TTL_MS - 1 }, { conta: "u1", cliente: "c1", agora: AG }), "apagar", "mais de 7 dias, do próprio escopo");
-  assert.equal(L.filaDestino({ ...ok, criada_em: AG - L.FILA_TTL_MS - 1 }, { conta: "u1", cliente: "c2", agora: AG }), "pular", "vencido de OUTRA empresa: quem apaga é a sessão dela");
-  assert.equal(L.filaDestino({ ...ok, criada_em: AG - L.FILA_TTL_MS - 1 }, { conta: "u9", cliente: "c1", agora: AG }), "pular", "vencido de OUTRA conta também fica");
+  // plano 1000 · CA-127: o VENCIDO (mais de 7 dias) de outra empresa/conta também sai — ele nunca mais seria enviado (a fila para em 15 min)
+  // e era texto de paciente esquecido no aparelho; o que ainda está nos 7 dias continua intocado (acima)
+  assert.equal(L.filaDestino({ ...ok, criada_em: AG - L.FILA_TTL_MS - 1 }, { conta: "u1", cliente: "c2", agora: AG }), "apagar", "vencido de OUTRA empresa sai depois dos 7 dias");
+  assert.equal(L.filaDestino({ ...ok, criada_em: AG - L.FILA_TTL_MS - 1 }, { conta: "u9", cliente: "c1", agora: AG }), "apagar", "vencido de OUTRA conta também sai");
   assert.equal(L.filaDestino(null, {}), "pular");
   assert.equal(L.filaDestino(ok, {}), "pular", "sem escopo conhecido não se mexe em nada");
   assert.equal(typeof L.filaDescartavel, "undefined", "a regra antiga (que apagava o item de outra empresa) saiu");
@@ -700,7 +704,9 @@ assert.match(conv, /const p = L\.aposFalhaFila\(it, c, \{[^}]*textoErro: ui\.men
   assert.match(conv, /ctx\.naoAtualizar\(\(\) => filaPendentes\(\) > 0\)|A\.ctx\.naoAtualizar\(\(\) => filaPendentes\(\) > 0\)/, "fila pendente segura a atualização automática do app");
 assert.match(conv, /const destino = A\.L\.filaDestino\(it, \{ conta, cliente, agora \}\);\s*if \(destino === "pular"\) continue;/, "item de outra conta ou empresa é só pulado");
   assert.match(conv, /if \(destino === "apagar"\) \{ if \(fila\.db\) reqIdb\(lojaFila\(fila\.db, "readwrite"\)\.delete\(it\.id\)\)/, "só o vencido do próprio escopo é apagado");
-  assert.equal((conv.match(/\.delete\(it\.id\)\)/g) || []).length, 1, "nenhum outro delete na leitura da fila");
+  // plano 1000 · CA-127: o 2º delete é o «Apagar» do aviso ao admin (mensagens de outra conta guardadas no navegador) — só por clique
+  assert.equal((conv.match(/\.delete\(it\.id\)\)/g) || []).length, 2, "nenhum outro delete na leitura da fila");
+  assert.match(conv, /on: \{ click: \(\) => \{[\s\S]{0,80}if \(fila\.db\) for \(const it of deOutros\) reqIdb\(lojaFila\(fila\.db, "readwrite"\)\.delete\(it\.id\)\)/, "o outro delete só roda no clique do admin");
   assert.match(chat, /L\.textoFila\(\{ estado: m\.filaEstado, motivo: m\.erro, proxima: m\.filaProxima \}\)/, "a bolha da fila diz o motivo real e a próxima tentativa");
   assert.match(ler("cv-logica.js"), /Na fila · envia quando a internet voltar/);
   assert.match(chat, /A\.acoes\.enviarAgora\(m\)/); assert.match(chat, /A\.acoes\.cancelarFila\(m\)/);
@@ -830,7 +836,8 @@ await teste("R119: «Tentar de novo» de falha gravada pelo servidor pede o reen
   const conv = ler("conversas.js"), chat = ler("cv-chat.js");
   const srv = readFileSync(join(AQUI, "..", "supabase", "functions", "_compartilhado", "enviar.js"), "utf8");
   // o contrato do servidor: ação "reenviar" com `mensagem` (id) e o client_ref no corpo, reenviando sem assinar
-  assert.match(srv, /case "reenviar": return acaoReenviar\(db, ctx, corpo, d\);/);
+  // plano 1000 (SV-049): o reenvio também de mídia (precisa do env do Storage) e modelo
+  assert.match(srv, /case "reenviar": return acaoReenviar\(db, ctx, corpo, d, env\);/);
   assert.match(srv, /const id = Number\(corpo\.mensagem\);/);
   assert.match(srv, /assinar: false/);
   assert.match(conv, /\{ acao: "reenviar", mensagem: it\.reenvio, client_ref: it\.id \}/);
@@ -1440,7 +1447,7 @@ await teste("CodeWords gravação: grava no formato padrão do navegador (mesmo 
     t.abrirCodeWords(91);
     const btAudio = acharClasse(t.comp.el, "cvx-audio");
     assert.equal(btAudio.disabled, false, "no CodeWords o microfone vale mesmo onde o navegador não grava ogg nem mp4");
-    assert.equal(btAudio.attrs["aria-label"], "Gravar áudio para enviar (até 1 minuto)");
+    assert.equal(btAudio.attrs["aria-label"], "Gravar áudio para enviar (até 5 minutos)", "plano 1000 · CA-029: até 5 minutos (antes 1)");
     assert.equal(acharClasse(t.comp.el, "cvx-info").hidden, true, "sem aviso de «não dá para gravar»");
     btAudio.dispatchEvent({ type: "click" }); await tique();
     assert.equal(reg.gravadores.length, 1);
@@ -1551,8 +1558,9 @@ await teste("CodeWords tela: nenhum texto diz mais que o canal é «só texto»;
   assert.match(chat, /corpo\.addEventListener\("dragenter", ev => \{ if \(!temArquivo\(ev\) \|\| !A\.composer\.aceitaAnexo\(\)\) return;/);
   assert.match(chat, /if \(f\) A\.composer\.anexar\(f\);/);
   const colagem = comp.slice(comp.indexOf('ta.addEventListener("paste"'), comp.indexOf('/* ---------------- fotos: otimiza'));
-  assert.match(colagem, /const imagens = itens\.filter\(i => i\.kind === "file" && \/\^image\\\/\/\.test\(i\.type\)\)/);
-  assert.match(colagem, /imagens\[0\]/, "a colagem só anexa a primeira imagem da área de transferência");
+  // plano 1000 · CA-013: qualquer arquivo copiado (PDF do Explorer…) vai pelo anexar(); o validarArquivo recusa o que o WhatsApp não aceita
+  assert.match(colagem, /const arquivos = itens\.filter\(i => i\.kind === "file"\);/);
+  assert.match(colagem, /arquivos\[0\]\.getAsFile\(\)/, "a colagem só anexa o primeiro arquivo da área de transferência");
   assert.match(colagem, /getAsFile\(\)[\s\S]*new File\(/);
   assert.match(colagem, /somente a primeira será anexada/);
   // resposta ambígua (timeout/5xx do aparelho): a mensagem gravada entra marcada e a bolha avisa, sem reenviar sozinha
@@ -1638,7 +1646,9 @@ await teste("M33: o assistente do CodeWords tem UM primário por passo, desenha 
   assert.match(bloco, /\(passoAtual === 2 && aguardandoCodigo\) \|\| passoAtual === 3/, "só os passos 2 e 3 consultam sozinhos");
   assert.match(bloco, /\}, 5000\);/, "a cada ~5 s");
   assert.match(bloco, /5 \* 60000/, "e para depois de 5 minutos");
-  assert.match(bloco, /acoes: \[\{ rotulo: "Fechar", tipo: "neutro" \}\]/, "o rodapé só fecha: sem «Salvar configuração» competindo com o passo");
+  // (plano 1000 · AS-245: o «Fechar» ganhou fn que pergunta antes de descartar campos editados — continua a única ação)
+  assert.match(bloco, /acoes: \[\{ rotulo: "Fechar", tipo: "neutro"(?: \}\]|, fn: )/, "o rodapé só fecha: sem «Salvar configuração» competindo com o passo");
+  assert.doesNotMatch(bloco, /acoes: \[[^\]]*Salvar configuração/, "nada de «Salvar configuração» no rodapé");
   assert.equal((bloco.match(/class: "bt bt-prim"/g) || []).length, 6, "salvar, gerar código, conferir, ligar na IA, enviar teste e o «copiar prompt» que só nasce depois de pedir o prompt: um por passo");
   assert.match(bloco, /pararPolling\(\);\s*\}\s*$/, "fechar o modal para a consulta");
   assert.match(s, /ui\.cabecalho\(\{ rotulo: "Atendimento", titulo: "Números de WhatsApp", nivel: 2/, "fim do H1 duplicado na seção");

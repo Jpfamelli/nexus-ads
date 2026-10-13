@@ -3,23 +3,41 @@
    Envio pela WhatsApp Cloud API com o número da NEXUS
    (nx_config.wa_access_token + wa_phone_number_id).
    ============================================================ */
-import { limparErro } from "./comum.js";
+import { limparErro, cortarTexto, telefoneBorda } from "./comum.js";
 
 export const VERSAO_WA = "v23.0";
 const PAINEL_PADRAO = "https://jpfamelli.github.io/nexus-ads/";
 const LIMITE = 4096;   // limite de caracteres do texto livre na API
 
-/** 5512977771234 — só dígitos, com país. Sem isso a API recusa o número. */
+/** 5512977771234 — só dígitos, com país. Sem isso a API recusa o número. Plano 1000 (SV-052): o 55 só entra em número
+    BRASILEIRO sem DDI (telefoneBorda: 10–11 dígitos com DDD válido e assinante brasileiro) — gestor nos EUA (+1 415 555 1234,
+    11 dígitos) recebia em 5514155551234, número que não existe. */
 export function normalizarTelefone(t) {
-  let n = String(t ?? "").replace(/\D/g, "");
-  if (!n) return "";
-  if (n.length <= 11) n = `55${n}`;
-  return n;
+  return telefoneBorda(t);
 }
 
-const cortar = t => { const s = String(t ?? ""); return s.length > LIMITE ? `${s.slice(0, LIMITE - 1)}…` : s; };
+// plano 1000 (SV-053): cortes sem partir emoji (cortarTexto) — um surrogate solto no corte deixava o JSON malformado, a Graph
+// recusava e o relatório/alerta não saía
+const cortar = t => { const s = cortarTexto(t); return s.length > LIMITE ? `${cortarTexto(s, LIMITE - 1)}…` : s; };
 // parâmetro de template não aceita quebra de linha, tab nem 4+ espaços seguidos
-const paramTemplate = (t, max) => String(t ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+export const paramTemplate = (t, max) => cortarTexto(String(t ?? "").replace(/\s+/g, " ").trim(), max);
+
+/** Plano 1000 (SV-054): partes de no máximo `max` caracteres, cortadas na última quebra de linha (ou espaço) antes do limite;
+    sem emoji partido (cortarTexto). Texto curto → [texto]. */
+export const BLOCO = 4000;
+export function dividirTexto(texto, max = BLOCO) {
+  let resto = cortarTexto(texto);
+  const out = [];
+  while (resto.length > max) {
+    let corte = resto.lastIndexOf("\n", max);
+    if (corte < max / 2) corte = resto.lastIndexOf(" ", max);
+    if (corte < max / 2) corte = cortarTexto(resto, max).length;
+    out.push(resto.slice(0, corte).trimEnd());
+    resto = resto.slice(corte).replace(/^\s+/, "");
+  }
+  if (resto || !out.length) out.push(resto);
+  return out;
+}
 
 /** Fora da janela de 24h a API só aceita template (erro 131047 / "re-engagement").
     Vale para o erro síncrono do envio e para o `errors[]` do recibo "failed" do webhook. */
@@ -86,11 +104,22 @@ export async function enviarWhatsApp(cfg, destino, texto, { fetch: f = globalThi
   const para = normalizarTelefone(destino);
   if (!para) throw new Error("número de destino vazio");
 
+  // plano 1000 (SV-054): texto acima do limite vai em várias mensagens (cortadas em quebra de linha), em ordem — antes o fim
+  // (link do painel, leitura da IA) sumia num «…»
+  const blocos = dividirTexto(texto, BLOCO);
   const r1 = await postar(f, cfg, {
     messaging_product: "whatsapp", to: para, type: "text",
-    text: { body: cortar(texto), preview_url: false },
+    text: { body: cortar(blocos[0]), preview_url: false },
   });
-  if (r1.ok) return { via: "texto", id: wamid(r1) };
+  if (r1.ok) {
+    const ids = [wamid(r1)];
+    for (let i = 1; i < blocos.length; i++) {
+      const r = await postar(f, cfg, { messaging_product: "whatsapp", to: para, type: "text", text: { body: cortar(blocos[i]), preview_url: false } });
+      if (!r.ok) return { via: "texto", id: ids[0], ids: ids.filter(Boolean), parcial: `parte ${i + 1} de ${blocos.length} não saiu: ${limparErro(descrever(r))}` };
+      ids.push(wamid(r));
+    }
+    return blocos.length > 1 ? { via: "texto", id: ids[0], ids: ids.filter(Boolean) } : { via: "texto", id: ids[0] };
+  }
   if (!foraDaJanela(r1.dados?.error) || !cfg.wa_template) throw new Error(descrever(r1));
 
   try { return await enviarTemplate(cfg, para, titulo, { fetch: f }); }
@@ -105,7 +134,10 @@ export async function enviarParaTodos(cfg, destinos, texto, opcoes = {}) {
     const n = normalizarTelefone(d);
     if (!n || vistos.has(n)) continue;
     vistos.add(n);
-    try { const r = await enviarWhatsApp(cfg, n, texto, opcoes); saida.push({ destino: n, ok: true, via: r.via, id: r.id }); }
+    try {
+      const r = await enviarWhatsApp(cfg, n, texto, opcoes);
+      saida.push({ destino: n, ok: true, via: r.via, id: r.id, ...(r.ids ? { ids: r.ids } : {}), ...(r.parcial ? { parcial: r.parcial } : {}) });
+    }
     // o erro vai para erro_envio / nx_relatorios.erro (a clínica vê este): sem o token da Nexus,
     // que a Meta devolve inteiro em "Malformed access token EAA…"
     catch (e) { saida.push({ destino: n, ok: false, erro: limparErro(e?.message || e) }); }
@@ -116,7 +148,8 @@ export async function enviarParaTodos(cfg, destinos, texto, opcoes = {}) {
 /** wamids de um envio, separados como o banco guarda: texto → wa_ids, template → wa_ids_template
     (o webhook nunca reenvia o que já saiu como template: é isso que impede laço). */
 export function idsDoEnvio(envio) {
-  const de = via => (envio || []).filter(e => e.ok && e.via === via && e.id).map(e => String(e.id));
+  // plano 1000 (SV-054): texto em várias partes guarda TODOS os wamids (o recibo de qualquer parte é achado)
+  const de = via => (envio || []).filter(e => e.ok && e.via === via && e.id).flatMap(e => (Array.isArray(e.ids) && e.ids.length ? e.ids : [e.id]).map(String));
   return { wa_ids: de("texto"), wa_ids_template: de("template") };
 }
 
@@ -212,8 +245,8 @@ export function enviarTextoCanal(cred, para, texto, { respondeA, fetch } = {}) {
 /** tipo = image|video|audio|document; áudio não aceita legenda. */
 export function enviarMidiaCanal(cred, para, { tipo, link, legenda, nome }, { respondeA, fetch } = {}) {
   const m = { link };
-  if (legenda && tipo !== "audio") m.caption = String(legenda).slice(0, 1024);
-  if (tipo === "document" && nome) m.filename = String(nome).slice(0, 240);
+  if (legenda && tipo !== "audio") m.caption = cortarTexto(legenda, 1024);
+  if (tipo === "document" && nome) m.filename = cortarTexto(nome, 240);
   return enviarGraph(cred, { to: String(para), type: tipo, [tipo]: m, ...contexto(respondeA) }, { fetch });
 }
 
@@ -225,10 +258,12 @@ export function parametrosDoCorpo(corpo) {
   return pos.length ? pos.map(String) : vistos;
 }
 
-/** Corpo do modelo com os parâmetros aplicados (é o texto gravado na conversa). */
+/** Corpo do modelo com os parâmetros aplicados (é o texto gravado na conversa). Plano 1000 (SV-210): cada parâmetro com a MESMA
+    normalização do envio (paramTemplate: sem quebra de linha nem espaços repetidos; vazio → «-») — a conversa mostra o que o
+    cliente recebeu. */
 export function aplicarParametros(corpo, parametros) {
   const nomes = parametrosDoCorpo(corpo);
-  const valor = new Map(nomes.map((n, i) => [n, String(parametros?.[i] ?? "")]));
+  const valor = new Map(nomes.map((n, i) => [n, paramTemplate(parametros?.[i], 1000) || "-"]));
   return String(corpo ?? "").replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (m, n) => (valor.has(n) ? valor.get(n) : m));
 }
 
@@ -291,5 +326,5 @@ export async function listarTemplates(cred, { fetch: f = globalThis.fetch, pagin
 /** GET /{media_id} → {url, mime, tamanho} (mídia recebida). */
 export async function infoMidia(cred, mediaId, { fetch: f = globalThis.fetch } = {}) {
   const r = await pedirGraph(f, cred, "GET", encodeURIComponent(mediaId));
-  return r.ok ? { ok: true, url: r.dados?.url, mime: r.dados?.mime_type, tamanho: Number(r.dados?.file_size) || null } : { ok: false, erro: r.erro };
+  return r.ok ? { ok: true, url: r.dados?.url, mime: r.dados?.mime_type, tamanho: Number(r.dados?.file_size) || null, sha256: r.dados?.sha256 || null } : { ok: false, erro: r.erro };
 }

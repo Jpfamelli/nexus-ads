@@ -63,6 +63,9 @@ const TAXAS = {
 // A clínica fictícia tem gestão da Nexus (R$ 997) e a tabela de valores configurada: é o que o núcleo
 // precisa para estimar o resultado (o padrão do núcleo é neutro — fee 0 e sem tabela, plano 100).
 export const CFG_DEMO = {
+  // plano 1000 (AD-001): o núcleo não inventa mais metas — a demonstração (fictícia) traz as suas
+  // AD-010: a meta de conversa (WhatsApp) não vale para o Google — a demo tem a dela (a «Urgência» do Google passa do limite)
+  cpaAlvo: 15, cpaAlvoGoogle: 18, orcamento: 1500,
   fee: 997,
   ticket: { "Aparelho invisível": 5500, "Implante": 3500, "Clareamento": 1100, "Clínica geral": 420, "Limpeza": 250, "Canal / urgência": 850 },
   proximos: {

@@ -11,6 +11,7 @@ import { readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 
 const RAIZ = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FUNCOES = join(RAIZ, "supabase", "functions");
@@ -28,6 +29,24 @@ const HANDLER = {
 };
 
 const sha = b => createHash("sha256").update(b).digest("hex").slice(0, 12);
+
+/** Plano 1000 (SV-164): a versão gravada em versao.js de cada função (cabeçalho x-orbita-versao): ORBITA_VERSAO; no Actions,
+    GITHUB_REF_NAME (a tag funcoes-*) + os 7 primeiros do GITHUB_SHA; fora dele, o commit local (+ «-alterado» com mudança não
+    commitada); sem git, «local». Só [A-Za-z0-9._+-], até 80 caracteres. */
+export function versaoDoDeploy(env = process.env, git = args => execFileSync("git", args, { cwd: RAIZ, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()) {
+  const limpar = v => String(v || "").replace(/[^A-Za-z0-9._+-]/g, "").slice(0, 80);
+  if (env.ORBITA_VERSAO) return limpar(env.ORBITA_VERSAO) || "local";
+  if (env.GITHUB_SHA) return limpar(`${env.GITHUB_REF_NAME ? `${env.GITHUB_REF_NAME}+` : ""}${env.GITHUB_SHA.slice(0, 7)}`);
+  try {
+    const commit = git(["rev-parse", "--short=7", "HEAD"]);
+    let sujo = false;
+    try { sujo = git(["status", "--porcelain", "--", "supabase/functions", "web/nucleo.js", "web/app/auto-catalogo.js"]) !== ""; } catch { /* sem status */ }
+    return limpar(`${commit}${sujo ? "-alterado" : ""}`) || "local";
+  } catch { return "local"; }
+}
+export const textoVersao = v => `// gerado por scripts/montar-funcoes.mjs (plano 1000, SV-164) — não editar
+export const VERSAO = ${JSON.stringify(v)};
+`;
 const falhar = msg => { console.error(`ERRO: ${msg}`); process.exit(1); };
 
 if (!existsSync(NUCLEO)) falhar(`não achei ${NUCLEO}`);
@@ -51,9 +70,15 @@ function conferirImports(pasta) {
     }
     if (arq !== "index.ts" && /\bDeno\./.test(txt)) falhar(`${arq}: usa Deno.* fora do index.ts`);
     if (arq !== "ia.js" && /["']npm:/.test(txt)) falhar(`${arq}: importa npm: fora do ia.js`);
+    // plano 1000 (SV-062): import npm: sem versão exata resolve a última publicada a cada deploy (e a cada deno check do CI)
+    for (const x of txt.matchAll(/["']npm:((?:@[^/"']+\/)?[^@"']+)(?:@([^"']*))?["']/g)) {
+      if (!/^\d+\.\d+\.\d+$/.test(x[2] || "")) falhar(`${arq}: import "npm:${x[1]}" sem versão exata (use npm:${x[1]}@x.y.z)`);
+    }
   }
 }
 
+const VERSAO = versaoDoDeploy();
+console.log(`versão     ${VERSAO}  (x-orbita-versao)`);
 console.log(`nucleo.js  sha256 ${sha(nucleo)}  (${nucleo.length} bytes)`);
 console.log(`auto-catalogo.js  sha256 ${sha(catalogo)}  (${catalogo.length} bytes)\n`);
 for (const fn of LISTA) {
@@ -67,6 +92,7 @@ for (const fn of LISTA) {
   for (const m of modulos) writeFileSync(join(destino, m), readFileSync(join(COMPARTILHADO, m)));
   writeFileSync(join(destino, "nucleo.js"), nucleo);
   writeFileSync(join(destino, "auto-catalogo.js"), catalogo);
+  writeFileSync(join(destino, "versao.js"), textoVersao(VERSAO));
 
   if (sha(readFileSync(join(destino, "nucleo.js"))) !== sha(nucleo)) falhar(`${fn}: nucleo.js diferente do original`);
   if (sha(readFileSync(join(destino, "auto-catalogo.js"))) !== sha(catalogo)) falhar(`${fn}: auto-catalogo.js diferente do original`);

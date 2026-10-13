@@ -504,7 +504,8 @@ test("nx-relatorio diário: IA falha → leitura por regras + erro gravado; não
   assert.equal(corpo.clientes[0].ia_motivo, "sem_conexao");
   assert.equal(rel.enviado_em, AGORA.toISOString());
   assert.deepEqual(rel.destinos, [GESTOR_B]);
-  assert.match(rel.texto, /^📊 \*Kamiguchi · Tráfego pago\* — 26\/09\/2026/);
+  // plano 1000 (AD-217, frente ads): o cabeçalho do diário leva o dia da semana
+  assert.match(rel.texto, /^📊 \*Kamiguchi · Tráfego pago\* — sábado, 26\/09\/2026/);
   assert.match(rel.texto, /\*Leitura do dia\*\n• Prioridade: Checar “Campanha sem conversa”/, "leitura por regras no lugar da IA");
   assert.equal(s.estado.wa.length, 1);
   assert.equal(s.estado.wa[0].to, GESTOR_B);
@@ -749,10 +750,10 @@ test("WhatsApp: erro de janela de 24h cai no template; destino quebrado não imp
   const nada = await enviarParaTodos({ ...cfg, wa_access_token: "" }, [GESTOR_B], "oi", { fetch: s.fetch });
   assert.deepEqual(nada, [{ destino: GESTOR_B, ok: false, erro: "whatsapp não configurado" }]);
 
-  // texto acima do limite da API é cortado
+  // texto acima do limite da API — plano 1000 (SV-054): vai em partes de até 4.000 (antes cortado em 4.096 com «…»)
   s.estado.wa.length = 0;
   await enviarParaTodos(cfg, [GESTOR_B], "x".repeat(5000), { fetch: s.fetch });
-  assert.equal(s.estado.wa[0].text.body.length, 4096);
+  assert.deepEqual(s.estado.wa.map(m => m.text.body.length), [4000, 1000]);
 });
 
 /* ------------------------------------------------------------
@@ -887,6 +888,17 @@ test("A entrega: failed 131047 → reenvia como template UMA vez; recibo repetid
   assert.ok(s.banco.tab("nx_alertas").every(a => a.wa_ids_template.length === 1));
 });
 
+test("revisão 13/10 · aviso longo em 3 partes, as 3 falham por janela → UM template (trava pela linha + destinatário, não por wamid)", async () => {
+  const s = cenario();
+  await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps());
+  const idTexto = s.estado.wa[0].id, partes = [idTexto, `${idTexto}.p2`, `${idTexto}.p3`];
+  for (const a of s.banco.tab("nx_alertas")) a.wa_ids = [...partes];
+  s.estado.wa.length = 0;
+  const r = await lerJson(await webhook(recibos(partes.map(id => recibo(id, "failed", AGORA, { errors: [ERRO_JANELA] }))), ENV, s.deps()));
+  assert.deepEqual(r.corpo.recibos, { reenviado: 1, repetido: 2 });
+  assert.equal(s.estado.wa.filter(m => m.type === "template").length, 1, "antes: um template por parte");
+});
+
 test("A entrega: relatório reenviado com o mesmo título; template entregue grava entregue_em; outros códigos e falta de template só viram erro legível", async () => {
   const s = cenario();
   await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s.deps());
@@ -950,12 +962,14 @@ test("A entrega: recibo que chega antes do wamid ser gravado espera e confere de
   assert.deepEqual(esperas, []);
   assert.deepEqual(r.corpo.recibos, { sem_registro: 1 });
 
-  // um recibo que quebra (banco falhando só para ele) não impede os outros do lote
+  // plano 1000 (SV-002): os recibos do lote são buscados numa consulta só — se ELA falha, o lote inteiro volta para a Meta
+  // (503, reentrega idempotente); na reentrega tudo é processado
   const s2 = cenario();
   await ciclo(pedirCron("nx-ciclo", { cliente: CLI_B }), ENV, s2.deps());
+  // plano 1000 (SV-096): o GET repete 1× depois de 300 ms — a falha precisa durar as duas tentativas para virar 503
   let falhaRecibo = true;
   const fetch = (url, init) => (String(url).includes("quebra") && falhaRecibo
-    ? (falhaRecibo = false, Promise.reject(new TypeError("fetch failed")))
+    ? Promise.reject(new TypeError("fetch failed"))
     : s2.fetch(url, init));
   r = await lerJson(await webhook(recibos([recibo("wamid.quebra", "delivered", t), recibo(s2.estado.wa[0].id, "delivered", t)]), ENV,
     { fetch, agora: () => s2.estado.agora, esperar: async () => {} }));
@@ -963,8 +977,8 @@ test("A entrega: recibo que chega antes do wamid ser gravado espera e confere de
   assert.equal(r.corpo.retry, true);
   assert.equal(r.corpo.erros, 1);
   assert.match(r.corpo.erro, /fetch failed/);
-  assert.deepEqual(r.corpo.recibos, { entregue: 1 });
-  assert.ok(s2.banco.tab("nx_alertas").every(a => a.entregue_em === t.toISOString()));
+  assert.deepEqual(r.corpo.recibos, {});
+  falhaRecibo = false;
   r = await lerJson(await webhook(recibos([recibo("wamid.quebra", "delivered", t), recibo(s2.estado.wa[0].id, "delivered", t)]), ENV,
     { fetch, agora: () => s2.estado.agora, esperar: async () => {} }));
   assert.equal(r.status, 200, "reentrega conclui depois da indisponibilidade transitória");
@@ -1147,7 +1161,7 @@ test("D integração: token vencido → 1 alerta 'integracao' e 1 WhatsApp em 24
   }
   assert.equal(integ().length, 1);
   const [al] = integ();
-  assert.equal(al.chave, "integracao|meta");
+  assert.equal(al.chave, "integracao|meta|parou");   // plano 1000 (SV-089): a severidade entra na chave
   assert.equal(al.severidade, "critico");
   assert.equal(al.mensagem, "A conexão com o Meta da Clínica Alfa parou: o token de acesso venceu ou foi desativado. Abra Ajustes → Integrações.");
   assert.match(al.acao, /token novo/);
@@ -1200,7 +1214,7 @@ test("D integração: instabilidade só avisa depois de 3 h sem atualizar; radar
   const { corpo } = await lerJson(await ciclo(pedirCron("nx-ciclo", { cliente: CLI_A }), ENV, { fetch: fetch2, agora: () => s2.estado.agora }));
   assert.equal(corpo.clientes[0].ok, false);
   assert.match(corpo.clientes[0].erro_radar, /statement timeout/);
-  assert.deepEqual(s2.banco.tab("nx_alertas").map(a => a.chave), ["integracao|meta"]);
+  assert.deepEqual(s2.banco.tab("nx_alertas").map(a => a.chave), ["integracao|meta|parou"]);   // plano 1000 (SV-089)
   assert.equal(s2.estado.wa.length, 1);
   assert.match(s2.estado.wa[0].text.body, /Clínica Alfa · Radar de tráfego\* — 1 item crítico/);
   assert.match(s2.estado.wa[0].text.body, /A conexão com o Meta da Clínica Alfa parou/);
@@ -1336,8 +1350,8 @@ async function carregarIA() {
   const sdk = `data:text/javascript,${encodeURIComponent(SDK_FALSO)}`;
   // o ia.js importa o comum.js (modelo padrão, reserva de modelo): num módulo data: o import relativo precisa virar URL de arquivo
   const comum = pathToFileURL(join(RAIZ, "supabase/functions/_compartilhado/comum.js")).href;
-  assert.ok(src.includes('"npm:@anthropic-ai/sdk"'));
-  return import(`data:text/javascript,${encodeURIComponent(src.replace('"npm:@anthropic-ai/sdk"', JSON.stringify(sdk)).replace('"./comum.js"', JSON.stringify(comum)))}`);
+  assert.match(src, /"npm:@anthropic-ai\/sdk@\d+\.\d+\.\d+"/);   // plano 1000 (SV-062): versão exata do SDK
+  return import(`data:text/javascript,${encodeURIComponent(src.replace(/"npm:@anthropic-ai\/sdk@\d+\.\d+\.\d+"/, () => JSON.stringify(sdk)).replace('"./comum.js"', JSON.stringify(comum)))}`);
 }
 
 test("ia.js: pedido do contrato (opus-5 com fallback), recusa e erro da API", async () => {
@@ -1355,8 +1369,8 @@ test("ia.js: pedido do contrato (opus-5 com fallback), recusa e erro da API", as
   assert.equal(ctor.apiKey, "sk-ant-x");
   assert.equal(tipo, "beta");
   assert.equal(p.model, "claude-opus-5");
-  assert.equal(p.max_tokens, 16000);
-  assert.deepEqual(p.output_config, { effort: "medium" });
+  assert.equal(p.max_tokens, 1500);   // plano 1000 (SV-064): antes 16000 para 4 linhas
+  assert.deepEqual(p.output_config, { effort: "low" });   // plano 1000 (SV-064): diário em «low» (o mensal segue «medium»)
   assert.deepEqual(p.betas, ["server-side-fallback-2026-07-01"]);
   assert.equal(p.fallbacks, "default");
   assert.equal(p.messages[0].content, JSON.stringify(ctx));
@@ -1379,7 +1393,7 @@ test("ia.js: pedido do contrato (opus-5 com fallback), recusa e erro da API", as
   }
   globalThis.__ia = [];
   await leituraIA({ chave: "k", modelo: "claude-opus-4-5", tipo: "diario", contexto: ctx });
-  assert.deepEqual(globalThis.__ia[1].p.output_config, { effort: "medium" }, "opus 4.5 aceita effort");
+  assert.deepEqual(globalThis.__ia[1].p.output_config, { effort: "low" }, "opus 4.5 aceita effort (plano 1000: diário em low)");
 
   globalThis.__iaResp = () => ({ stop_reason: "refusal", stop_details: { type: "refusal", category: "cyber" }, content: [{ type: "text", text: "parcial" }] });
   await assert.rejects(leituraIA({ chave: "k", tipo: "diario", contexto: ctx }), /recusou o pedido \(cyber\)/);
@@ -1423,7 +1437,7 @@ test("só o ia.js importa o SDK e ninguém fora dos index.ts usa Deno.*", () => 
   for (const n of readdirSync(dir).filter(x => x.endsWith(".js"))) {
     const txt = readFileSync(join(dir, n), "utf8");
     assert.ok(!/\bDeno\./.test(txt), `${n} usa Deno.*`);
-    if (n === "ia.js") assert.match(txt, /from "npm:@anthropic-ai\/sdk"/);
+    if (n === "ia.js") assert.match(txt, /from "npm:@anthropic-ai\/sdk@\d+\.\d+\.\d+"/);   // plano 1000 (SV-062): versão exata
     else assert.ok(!/["']npm:/.test(txt), `${n} importa npm:`);
     if (n !== "relatorio.js") assert.ok(!/["']\.\/ia\.js["']/.test(txt), `${n} carrega ia.js`);
   }

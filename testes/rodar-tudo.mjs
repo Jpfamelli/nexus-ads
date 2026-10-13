@@ -3,20 +3,21 @@
      --rapido   pula os arquivos marcados como lentos (app, plano50-sistema/inicio, dev-falso, corpo-limite, conversas-funcoes):
                 ~25 s em vez de ~80 s — para iterar; antes de integrar roda-se tudo.
      --so x     só os arquivos cujo caminho contém x (ex.: --so plano100, --so crm).
-     --exigir   arquivo opcional ausente (plano100-* de frente que ainda não entregou) FALHA em vez de ser pulado.
+     --exigir   arquivo opcional ausente (plano1000-* de frente que ainda não entregou) FALHA em vez de ser pulado (o deploy usa).
    ORBITA_COMPLETO=1 faz a suíte falhar se faltar arquivo de qualquer frente (os testes leem essa variável). */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const raiz = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /* {args, lento?: true (fica fora do --rapido), opcional?: true (pulado enquanto o arquivo não existe)}.
-   Os plano100-* entram já aqui, opcionais: cada frente cria o seu e ele passa a rodar sozinho. */
+   Os plano100-* já existem todos e deixaram de ser opcionais (SV-160: um apagado/renomeado FALHA, não some do portão em silêncio);
+   os plano1000-* seguem opcionais até a frente entregar — o deploy roda com --exigir. */
 export const COMANDOS = [
   { args: ["testes/painel.teste.mjs"] },
   { args: ["testes/nucleo.teste.mjs"] },
-  { args: ["--test", "testes/plano100-painel.teste.mjs"], opcional: true },        // P
+  { args: ["--test", "testes/plano100-painel.teste.mjs"] },        // P
   { args: ["testes/app.teste.mjs"], lento: true },
   { args: ["testes/crm.teste.mjs"] },
   { args: ["testes/conversas.teste.mjs"] },
@@ -26,22 +27,22 @@ export const COMANDOS = [
   { args: ["--test", "testes/melhorias-20261003-ads.teste.mjs"] },
   { args: ["--test", "testes/melhorias-20261003-visual.teste.mjs"] },
   { args: ["--test", "testes/plano50-sistema.teste.mjs"], lento: true },
-  { args: ["--test", "testes/plano100-sistema.teste.mjs"], opcional: true },       // A
+  { args: ["--test", "testes/plano100-sistema.teste.mjs"] },       // A
   { args: ["--test", "testes/plano50-inicio.teste.mjs"], lento: true },
-  { args: ["--test", "testes/plano100-inicio.teste.mjs"], opcional: true },        // B (onda 2)
+  { args: ["--test", "testes/plano100-inicio.teste.mjs"] },        // B (onda 2)
   { args: ["--test", "testes/plano50-crm.teste.mjs"] },
-  { args: ["--test", "testes/plano100-crm.teste.mjs"], opcional: true },           // C (onda 2)
+  { args: ["--test", "testes/plano100-crm.teste.mjs"] },           // C (onda 2)
   { args: ["--test", "testes/plano50-conversas.teste.mjs"] },
-  { args: ["--test", "testes/plano100-conversas.teste.mjs"], opcional: true },     // D (onda 2)
+  { args: ["--test", "testes/plano100-conversas.teste.mjs"] },     // D (onda 2)
   { args: ["--test", "testes/plano50-agenda.teste.mjs"] },
-  { args: ["--test", "testes/plano100-agenda.teste.mjs"], opcional: true },        // E (onda 2)
+  { args: ["--test", "testes/plano100-agenda.teste.mjs"] },        // E (onda 2)
   { args: ["--test", "testes/plano50-ads.teste.mjs"] },
-  { args: ["--test", "testes/plano100-ads.teste.mjs"], opcional: true },           // F (onda 2)
+  { args: ["--test", "testes/plano100-ads.teste.mjs"] },           // F (onda 2)
   { args: ["--test", "testes/plano50-automacoes.teste.mjs"] },
-  { args: ["--test", "testes/plano100-automacoes.teste.mjs"], opcional: true },    // G (onda 2)
+  { args: ["--test", "testes/plano100-automacoes.teste.mjs"] },    // G (onda 2)
   { args: ["testes/shell.teste.mjs"] },
   { args: ["--test", "testes/funcoes.teste.mjs"] },
-  { args: ["--test", "testes/plano100-funcoes.teste.mjs"], opcional: true },       // S-F
+  { args: ["--test", "testes/plano100-funcoes.teste.mjs"] },       // S-F
   { args: ["--test", "testes/scripts.teste.mjs"] },
   { args: ["--test", "testes/dev-falso.teste.mjs"], lento: true },
   { args: ["--test", "testes/conversas-funcoes.teste.mjs"], lento: true },
@@ -52,9 +53,30 @@ export const COMANDOS = [
   { args: ["--test", "testes/automacoes-catalogo.teste.mjs"] },
   { args: ["--test", "testes/automacoes-ia.teste.mjs"] },
   { args: ["--test", "testes/correcoes-backend.teste.mjs"] },
+  // plano 1000 (13/10): um por frente, opcionais até a frente entregar (antes do isolamento e do banco, que fecham a lista)
+  { args: ["--test", "testes/plano1000-conversas.teste.mjs"], opcional: true },
+  { args: ["--test", "testes/plano1000-crm.teste.mjs"], opcional: true },
+  { args: ["--test", "testes/plano1000-ads.teste.mjs"], opcional: true },
+  { args: ["--test", "testes/plano1000-automacoes.teste.mjs"], opcional: true },
+  { args: ["--test", "testes/plano1000-agenda.teste.mjs"], opcional: true },
+  { args: ["--test", "testes/plano1000-sistema.teste.mjs"], opcional: true },
+  { args: ["--test", "testes/plano1000-funcoes.teste.mjs"], opcional: true },
+  { args: ["--test", "testes/plano1000-banco.teste.mjs"], opcional: true },
+  { args: ["--test", "testes/plano1000-ci.teste.mjs"], opcional: true },
   { args: ["--test", "testes/isolamento.teste.mjs"] },
-  { args: ["--test", "testes/plano100-banco.teste.mjs"], opcional: true },         // S-B
+  { args: ["--test", "testes/plano100-banco.teste.mjs"] },         // S-B
 ];
+
+/** SV-157: com ORBITA_AGORA no ambiente, todo processo de teste (e os filhos do node --test) carrega testes/apoio/relogio.mjs
+    antes de tudo (NODE_OPTIONS --import): o relógio fica fixado nesse instante. Sem ORBITA_AGORA, o ambiente não muda. */
+export function ambienteDaSuite(base = process.env) {
+  const env = { ...base, ORBITA_COMPLETO: "1" };
+  if (base.ORBITA_AGORA) {
+    const imp = `--import=${pathToFileURL(resolve(raiz, "testes/apoio/relogio.mjs")).href}`;
+    if (!String(base.NODE_OPTIONS || "").includes(imp)) env.NODE_OPTIONS = [base.NODE_OPTIONS, imp].filter(Boolean).join(" ");
+  }
+  return env;
+}
 
 /** O que roda com estes argumentos: {rodar: [args], pulados (lentos fora do --rapido), ausentes (opcionais que ainda não existem)}. */
 export function selecionar(argv = [], existe = f => existsSync(resolve(raiz, f))) {
@@ -78,7 +100,8 @@ function principal() {
     process.exitCode = 1;
     return;
   }
-  const env = { ...process.env, ORBITA_COMPLETO: "1" };
+  const env = ambienteDaSuite();
+  if (env.ORBITA_AGORA) console.log(`relógio fixado: ORBITA_AGORA=${env.ORBITA_AGORA} · TZ=${env.TZ || "(do sistema)"}`);
   const resultados = [];
   for (const args of sel.rodar) {
     const nome = args.join(" ");

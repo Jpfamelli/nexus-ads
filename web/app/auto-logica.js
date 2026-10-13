@@ -233,6 +233,10 @@ export function problemas(auto, opcoes = {}) {
     }
   }
 
+  // plano 1000 · AS-040: o gatilho preso a uma etapa de funil desligado não liga (o seletor mostra a etapa com «(funil desligado)»)
+  if (ligar && opcoes.base && !out.some(x => x.onde === "quando")) for (const x of etapasDeFunilDesligado(a, opcoes.base)) if (x.onde === "quando")
+    falha(`a etapa «${x.etapa}» é do funil «${x.funil}», que está desligado`, "quando");
+
   const acoes = a.acoes == null ? [] : a.acoes;
   if (!Array.isArray(acoes) || acoes.length === 0) falha("acrescente pelo menos uma ação em «Então»", "entao");
   else {
@@ -245,6 +249,11 @@ export function problemas(auto, opcoes = {}) {
     }
     if (acoes.every(x => x && ACAO[x.tipo] && ACAO[x.tipo].sequencia))
       falha("acrescente pelo menos um passo que faça algo, além de esperar ou parar", "entao");
+    // plano 1000 · AS-035: variável digitada errada ({primeironome}) chegaria crua ao cliente — salva desligada, mas não liga
+    if (ligar && opcoes.base) for (const x of etapasDeFunilDesligado(a, opcoes.base)) if (x.onde === "entao" && !out.some(y => y.onde === "entao" && y.indice === x.indice))
+      falha(`ação ${x.indice + 1}: a etapa «${x.etapa}» é do funil «${x.funil}», que está desligado`, "entao", x.indice);
+    if (ligar) for (const v of variaveisDosPassos(a)) if (!out.some(x => x.onde === "entao" && x.indice === v.indice))
+      falha(`ação ${v.indice + 1}: ${fraseVariaveis(v)}`, "entao", v.indice);
   }
   return out;
 }
@@ -484,13 +493,23 @@ export const semPrefixo = motivo => texto(motivo).replace(/^(?:ação|condição
  * Para cada passo: quando ele roda (tempo acumulado das esperas anteriores) e se ainda dá para chegar nele.
  * [{i, tipo, antes, depois, quando, inalcancavel}] — `antes`/`depois` em minutos.
  */
-export function linhaDoTempo(acoes) {
+export function linhaDoTempo(acoes, { inicio = null, horario } = {}) {
   let acum = 0, parou = false;
   const out = [];
+  // plano 1000 · AS-224: com o horário de atendimento (respeitar horário), a mensagem que cairia fora dele sai na próxima abertura
+  const t0 = inicio == null ? null : (inicio instanceof Date ? inicio.getTime() : Number(inicio));
+  const comHorario = horario !== undefined && Number.isFinite(t0);
   (acoes || []).forEach((a, i) => {
     const tipo = a && a.tipo;
     const m = tipo === "esperar" ? (inteiro(a.minutos) || 0) : 0;
-    out.push({ i, tipo, antes: acum, depois: acum + m, quando: acum === 0 ? "Na hora" : `Depois de ${formatarDuracao(acum)}`, inalcancavel: parou });
+    const x = { i, tipo, antes: acum, depois: acum + m, quando: acum === 0 ? "Na hora" : `Depois de ${formatarDuracao(acum)}`, inalcancavel: parou };
+    if (comHorario && tipo && (ACAO[tipo] || {}).mensagem) {
+      const previsto = t0 + acum * 60000;
+      const envio = proximaAbertura(horario, previsto);
+      x.envio = envio;
+      x.adiada = envio != null && envio > previsto;
+    }
+    out.push(x);
     acum += m;
     if (tipo === "parar") parou = true;
   });
@@ -606,7 +625,8 @@ export function descrever(auto, base, vocab) {
   const passos = (a.acoes || []).map(ac => ({ tipo: ac && ac.tipo, frase: fraseAcao(ac, ix, vv) })).filter(x => x.frase);
   let f = quando;
   if (conds.length) f += `, se ${listaFrase(conds)}`;
-  f += `, ${passos.length ? juntarPassos(passos) : "(nenhuma ação)"}`;
+  // plano 1000 · AS-029: sem passos, a frase diz o que falta (antes: «(nenhuma ação)» cru)
+  f += `, ${passos.length ? juntarPassos(passos) : "ainda sem passos — acrescente o que fazer em «Então»"}`;
   if (a.respeitar_horario && (a.acoes || []).some(ac => (ACAO[ac.tipo] || {}).mensagem)) f += " (mensagens só no horário de atendimento)";
   f = f.charAt(0).toUpperCase() + f.slice(1);
   return f + ".";
@@ -1119,7 +1139,8 @@ export function novaAutomacao(gatilho = "negocio_estagio") {
   const g = GATILHO[gatilho] || GATILHOS[0];
   const config = {};
   for (const f of g.campos) if (f.padrao !== undefined) config[f.nome] = copia(f.padrao);
-  return { nome: "", gatilho: g.id, config, condicoes: [], acoes: [], respeitar_horario: false, ativo: true };
+  // plano 1000 · AS-024: nasce DESLIGADA — ligar é uma escolha (na lista e no editor ligar o que manda mensagem pede confirmação)
+  return { nome: "", gatilho: g.id, config, condicoes: [], acoes: [], respeitar_horario: false, ativo: false };
 }
 
 /** Ação nova com os valores padrão do catálogo. */
@@ -1135,13 +1156,18 @@ export function novaAcao(tipo) {
 }
 
 /** Ao trocar o gatilho, mantém o que ainda vale do config e põe os padrões do novo. */
-export function trocarGatilho(auto, gatilho) {
+export function trocarGatilho(auto, gatilho, memoria = null) {
   const g = GATILHO[gatilho];
   if (!g) return auto;
   const antigo = auto.config || {};
+  // plano 1000 · AS-219: `memoria` ({gatilho: config}) guarda o config de cada gatilho visitado — «Tempo na etapa» → «Etapa» → volta e as horas
+  // continuam; o campo com o mesmo nome no gatilho de agora (a etapa) vence a memória (é a escolha mais recente)
+  if (memoria && typeof memoria === "object" && auto.gatilho) memoria[auto.gatilho] = copia(antigo);
+  const lembrado = memoria && memoria[gatilho] && typeof memoria[gatilho] === "object" ? memoria[gatilho] : {};
   const config = {};
   for (const f of g.campos) {
     if (antigo[f.nome] !== undefined) config[f.nome] = antigo[f.nome];
+    else if (lembrado[f.nome] !== undefined) config[f.nome] = copia(lembrado[f.nome]);
     else if (f.padrao !== undefined) config[f.nome] = copia(f.padrao);
   }
   return Object.assign({}, auto, { gatilho, config });
@@ -1261,6 +1287,7 @@ export function normalizarSimulacao(r, auto, base, vocab) {
     return {
       rotulo: cortar(nome, 200), estado: est, motivo: cortar(q.motivo || (q.detalhe && q.detalhe !== nome ? q.detalhe : "") || "", 200),
       quando: Number.isFinite(depois) && depois > 0 ? `depois de ${formatarDuracao(depois)}` : "",
+      tipo: tipo || (auto && Array.isArray(auto.acoes) && auto.acoes[i] && ACAO[auto.acoes[i].tipo] ? auto.acoes[i].tipo : null),
     };
   };
   const alvos = lista.slice(0, 25).map((a, i) => {
@@ -1470,8 +1497,8 @@ export function seloModelo(m, vertical) {
   return { odonto: "Recomendado para clínicas", oficina: "Recomendado para oficinas", loja: "Recomendado para lojas" }[vertical] || "Recomendado";
 }
 /** Opções de campo de condição: os fixos + os campos personalizados do contato. */
-export function camposCondicao(base) {
-  const fixos = CAMPOS_CONDICAO.map(c => ({ valor: c.id, rotulo: c.rotulo }));
+export function camposCondicao(base, vocab = null) {
+  const fixos = CAMPOS_CONDICAO.map(c => ({ valor: c.id, rotulo: c.id === "valor" ? rotuloValorNegocio(vocab) : c.rotulo }));
   const extras = ((base && base.campos) || []).map(c => ({ valor: `contato.${c.chave}`, rotulo: `Campo: ${c.rotulo}` }));
   return fixos.concat(extras);
 }
@@ -1527,9 +1554,10 @@ export function nivelTaxa(pct) {
 export function resumoAutomacoes(itens) {
   const l = Array.isArray(itens) ? itens : [];
   const r = { total: l.length, ligadas: 0, execucoes: 0, erros: 0, em_espera: 0, com_erro: 0, pct: null };
+  const de30 = periodoDoResumo(l) === "30d";     // plano 1000 · AS-014
   for (const it of l) {
     if (it && it.ativo) r.ligadas++;
-    const t = taxaSucesso(it);
+    const t = de30 ? { total: nat(it.ok_30d) + nat(it.erro_30d), erros: nat(it.erro_30d) } : taxaSucesso(it);
     r.execucoes += t.total; r.erros += t.erros;
     if (t.erros) r.com_erro++;
     r.em_espera += nat(it && it.em_espera);
@@ -1846,4 +1874,386 @@ export function montagemReprovada(e, base) {
   const avisos = [...(Array.isArray(r.avisos) ? r.avisos : []).map(String), ...conv.avisos].filter(Boolean).slice(0, 12);
   return { auto: conv.auto, explicacao: typeof r.explicacao === "string" ? r.explicacao.trim().slice(0, 1500) : "", avisos,
     reprovada: { motivo: motivo || "a automação não passou na conferência", onde: texto(r.onde) || null, indice: Number.isInteger(r.indice) ? r.indice : null } };
+}
+
+/* ================================================================== plano 1000 (13/10/2026) · frente auto */
+
+/** Distância de edição (Levenshtein) curta — para sugerir a variável certa quando a pessoa digita errado. */
+function distancia(a, b) {
+  const m = a.length, n = b.length;
+  let ant = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(ant[j] + 1, cur[j - 1] + 1, ant[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    ant = cur;
+  }
+  return ant[n];
+}
+
+/** AS-035: a variável conhecida mais parecida com a digitada ({primeironome} → primeiro_nome); null se nenhuma chega perto. */
+export function sugestaoVariavel(nome) {
+  const alvo = texto(nome).toLowerCase();
+  const semTraco = alvo.replace(/_/g, "");
+  let melhor = null, dist = Infinity;
+  for (const [k] of VARIAVEIS) {
+    const d = Math.min(distancia(alvo, k), distancia(semTraco, k.replace(/_/g, "")));
+    if (d < dist) { dist = d; melhor = k; }
+  }
+  return melhor && dist <= Math.max(2, Math.floor(melhor.length / 3)) ? melhor : null;
+}
+
+/** AS-035: por passo, as variáveis que não existem nos textos com variáveis (mensagem, título, nota, parâmetros do modelo). */
+export function variaveisDosPassos(auto) {
+  const out = [];
+  ((auto && auto.acoes) || []).forEach((ac, indice) => {
+    const d = ac && ACAO[ac.tipo];
+    if (!d) return;
+    const textos = d.campos.filter(f => f.variaveis).map(f => ac[f.nome]);
+    if (ac.tipo === "enviar_template") textos.push(...(Array.isArray(ac.parametros) ? ac.parametros : []));
+    const desconhecidas = variaveisDesconhecidas(textos.filter(x => typeof x === "string").join("\n"));
+    if (desconhecidas.length) out.push({ indice, desconhecidas, sugestoes: desconhecidas.map(sugestaoVariavel) });
+  });
+  return out;
+}
+
+/** «variável desconhecida {primeironome} (use {primeiro_nome})» — o mesmo texto no aviso do passo e no bloqueio ao ligar. */
+export function fraseVariaveis(v) {
+  const partes = v.desconhecidas.map((k, i) => (v.sugestoes[i] ? `{${k}} (use {${v.sugestoes[i]}})` : `{${k}}`));
+  return `${partes.length === 1 ? "variável desconhecida" : "variáveis desconhecidas"} ${listaFrase(partes)}`;
+}
+
+/** AS-267: chave do rascunho por ORIGEM — rascunho em branco não aparece ao abrir uma receita (e vice-versa). */
+export function idRascunho({ item = null, origem = "branco", modelo = null } = {}) {
+  if (item && item.id) return String(item.id);
+  if (origem === "modelo" && modelo) return `nova:modelo:${modelo}`;
+  if (origem === "ia") return "nova:ia";
+  return "nova";
+}
+
+/**
+ * AS-278: cadeias com OUTRAS automações ligadas — um passo desta automação (mover de etapa, pôr etiqueta) dispara o gatilho de outra.
+ * Devolve [{indice, outra: {id, nome}, por, laco}]; `laco` = a outra também dispara esta de volta (ping-pong que enche as execuções de erro).
+ */
+export function cadeiasDeAutomacao(auto, itens, base) {
+  const ix = indexarBase(base);
+  const efeitos = a => {
+    const ef = [];
+    ((a && a.acoes) || []).forEach((ac, i) => {
+      if (!ac) return;
+      if (["mover_estagio", "mover_funil", "criar_negocio"].includes(ac.tipo) && ac.estagio_id) ef.push({ i, tipo: "estagio", id: ac.estagio_id });
+      if ((ac.tipo === "etiqueta_adicionar" || (ac.tipo === "etiquetar" && !ac.remover)) && ac.etiqueta_id) ef.push({ i, tipo: "etiqueta", id: ac.etiqueta_id });
+    });
+    return ef;
+  };
+  const dispara = (ef, a) => {
+    const c = (a && a.config) || {};
+    if (ef.tipo === "estagio") return a.gatilho === "negocio_estagio" && c.estagio_id === ef.id;
+    return a.gatilho === "etiqueta_adicionada" && c.etiqueta_id === ef.id;
+  };
+  const meus = efeitos(auto);
+  const out = [];
+  for (const outra of Array.isArray(itens) ? itens : []) {
+    if (!outra || !outra.ativo || (auto && auto.id && outra.id === auto.id)) continue;
+    for (const ef of meus) {
+      if (!dispara(ef, outra)) continue;
+      const nome = ef.tipo === "estagio" ? nomeDe(ix, "estagios", ef.id, "etapa removida") : nomeDe(ix, "etiquetas", ef.id, "etiqueta removida");
+      const laco = efeitos(outra).some(e2 => dispara(e2, auto || {}));
+      out.push({ indice: ef.i, outra: { id: outra.id, nome: texto(outra.nome) || "Automação sem nome" }, por: ef.tipo === "estagio" ? `a etapa «${nome}»` : `a etiqueta «${nome}»`, laco });
+    }
+  }
+  return out;
+}
+
+/** AS-277: texto da confirmação ao desligar com gente no meio da sequência; null quando ninguém está esperando. */
+export function avisoDesligarEspera(item) {
+  const n = nat(item && item.em_espera);
+  if (!n) return null;
+  return n === 1 ? "1 pessoa está no meio da sequência e não vai receber os próximos passos."
+    : `${n} pessoas estão no meio da sequência e não vão receber os próximos passos.`;
+}
+
+/** AS-016: as automações LIGADAS que mandam mensagem ao cliente (o botão de emergência desliga só essas). */
+export const ligadasQueEnviam = itens => (Array.isArray(itens) ? itens : []).filter(x => x && x.ativo && enviaMensagem(x));
+
+/** AS-070: a cota de IA do mês em uma linha + o tom (aten a partir de 80 %); null sem cota conhecida. */
+export function linhaCotaIA(cota) {
+  if (!cota || cota.limite == null || !Number.isFinite(Number(cota.limite)) || Number(cota.limite) <= 0) return null;
+  const usadas = nat(cota.usadas), limite = nat(cota.limite);
+  const pct = usadas / limite;
+  return { texto: `${usadas} de ${limite} montagens de IA usadas este mês`, tom: pct >= 1 ? "ruim" : pct >= 0.8 ? "aten" : "neutra", esgotada: usadas >= limite };
+}
+
+/** AS-037: contador do texto do passo — «1.234 / 4.096», amarelo a partir de 90 % e vermelho acima do teto. */
+export function contadorTexto(valor, max) {
+  const n = texto(valor).length, m = nat(max);
+  const fmt = x => x.toLocaleString("pt-BR");
+  return { n, texto: `${fmt(n)} / ${fmt(m)}`, tom: m && n > m ? "ruim" : m && n >= m * 0.9 ? "aten" : "neutra" };
+}
+
+/** AS-038: horas ↔ {n, un: "horas"|"dias"} (dias quando é múltiplo de 24). */
+export function decomporHoras(horas) {
+  const hh = nat(horas);
+  if (hh >= 24 && hh % 24 === 0) return { n: hh / 24, un: "dias" };
+  return { n: hh || "", un: "horas" };
+}
+export function comporHoras(n, un) {
+  const x = Number(String(n).replace(",", "."));
+  if (!Number.isFinite(x) || x <= 0) return null;
+  const hh = un === "dias" ? x * 24 : x;
+  return Number.isInteger(hh) ? hh : Math.round(hh);
+}
+
+/** AS-040: etapas presas a um funil DESLIGADO (o seletor esconde o funil; ligar a automação assim não faz sentido). */
+export function etapasDeFunilDesligado(auto, base) {
+  const ix = indexarBase(base);
+  const out = [];
+  const conferir = (id, onde, indice) => {
+    if (vazio(id)) return;
+    const e = ix.estagios.get(id);
+    const f = e && ix.funis.get(e.funil_id);
+    if (f && f.ativo === false) out.push({ onde, indice, etapa: e.nome, funil: f.nome });
+  };
+  conferir(auto && auto.config && auto.config.estagio_id, "quando", null);
+  ((auto && auto.acoes) || []).forEach((ac, i) => conferir(ac && ac.estagio_id, "entao", i));
+  return out;
+}
+
+/* ------------------------------------------------------------------ plano 1000 · lote auto-2 */
+
+/** AS-018: por onde as automações mandam WhatsApp, pelos provedores dos números (base.canais[].provedor). */
+export function viaWhatsApp(canais) {
+  const l = Array.isArray(canais) ? canais : [];
+  if (!l.length) return "manda mensagem pelo WhatsApp (assim que houver um número conectado)";
+  const p = new Set(l.map(c => c && c.provedor).filter(Boolean));
+  if (p.has("codewords") && p.has("meta")) return "manda mensagem pelo WhatsApp (pelo CodeWords ou pela API oficial da Meta, com modelo aprovado)";
+  if (p.has("codewords")) return "manda mensagem pelo WhatsApp (pelo CodeWords)";
+  if (p.has("meta")) return "manda mensagem pelo WhatsApp (pela API oficial da Meta, com modelo aprovado)";
+  return "manda mensagem pelo WhatsApp";
+}
+
+/** AS-071: telefone, CPF ou e-mail colados no pedido à IA (o texto vai para a Anthropic) → [{tipo, trecho}] (no máx. 3). */
+export function dadosPessoaisNoPedido(txt) {
+  const t = texto(txt);
+  const regras = [
+    ["CPF", /\b\d{3}\.\d{3}\.\d{3}-\d{2}\b|\b\d{11}\b/g],
+    ["e-mail", /[^\s@<>()«»]+@[^\s@<>()«»]+\.[a-z]{2,}/gi],
+    ["telefone", /(?:\+?55\s?)?\(?\b[1-9]{2}\)?\s?9?\d{4}[-\s]?\d{4}\b/g],
+  ];
+  const out = [], vistos = [];
+  for (const [tipo, re] of regras) for (const m of t.matchAll(re)) {
+    if (vistos.some(v => v.includes(m[0]) || m[0].includes(v))) continue;
+    vistos.push(m[0]); out.push({ tipo, trecho: m[0] });
+  }
+  return out.slice(0, 3);
+}
+
+/** AS-072: os últimos pedidos à IA (o mais novo primeiro, sem repetir, no máx. `max`). */
+export function juntarPedidoRecente(lista, pedido, max = 5) {
+  const p = texto(pedido).trim().slice(0, LIMITES.descricao_ia);
+  const l = (Array.isArray(lista) ? lista : []).map(x => texto(x).trim()).filter(Boolean);
+  if (!p) return l.slice(0, max);
+  return [p, ...l.filter(x => normalizar(x) !== normalizar(p))].slice(0, max);
+}
+
+/** Gatilhos conferidos pelo relógio (rodada a cada 15 s), não por um evento. */
+export const GATILHOS_TEMPO = Object.freeze(["sem_resposta", "tempo_no_estagio", "tarefa_vencida", "antes_da_data", "apos_data"]);
+
+/** AS-030: o que «Pronta» promete ao salvar ligada, pelo tipo de gatilho. */
+export function textoProntaLigada(gatilho) {
+  if (gatilho === "agendado") return "Pronta. Ao salvar, roda no próximo dia e horário escolhidos.";
+  if (GATILHOS_TEMPO.includes(gatilho)) return "Pronta. Ao salvar, o relógio confere a cada 15 segundos e ela age quando o tempo escolhido passar.";
+  return "Pronta. Ao salvar, cada novo gatilho é atendido em até 15 segundos.";
+}
+
+/** AS-052: nome sugerido a partir do gatilho e do 1º passo («Etapa Avaliação → criar tarefa»); "" sem o que sugerir. */
+export function sugestaoNome(auto, base, vocab) {
+  const a = auto || {};
+  if (!GATILHO[a.gatilho]) return "";
+  const ix = indexarBase(base);
+  const c = a.config || {};
+  const etapa = c.estagio_id && ix.estagios.get(c.estagio_id) ? ix.estagios.get(c.estagio_id).nome : null;
+  let ini = a.gatilho === "negocio_estagio" && etapa ? `Etapa ${etapa}`
+    : a.gatilho === "tempo_no_estagio" && etapa ? `Parado em ${etapa}`
+      : rotuloGatilho(a.gatilho, vocab);
+  const ac = (a.acoes || []).find(x => x && x.tipo && x.tipo !== "esperar" && x.tipo !== "parar");
+  if (!ac && !etapa) return "";
+  if (ac) { const r = rotuloAcao(ac.tipo, vocab); ini += ` → ${r.charAt(0).toLowerCase()}${r.slice(1)}`; }
+  return ini.length > 80 ? ini.slice(0, 79).trimEnd() + "…" : ini;
+}
+
+/** AS-023: outra automação (não esta) com o mesmo nome, sem diferença de acento/maiúscula; null quando não há. */
+export function nomeRepetido(nome, itens, idProprio = null) {
+  const n = normalizar(nome);
+  if (!n) return null;
+  return (Array.isArray(itens) ? itens : []).find(x => x && x.id !== idProprio && normalizar(x.nome) === n) || null;
+}
+
+/** AS-015: busca por nome (sem acento) e ordem da lista. ordem: "criacao" | "nome" | "recente" | "erros". */
+export const ORDENS_AUTOMACAO = Object.freeze([["criacao", "Ordem de criação"], ["recente", "Rodou por último"], ["erros", "Com erro primeiro"], ["nome", "Nome (A–Z)"]]);
+export function listaAutomacoes(itens, { termo = "", ordem = "criacao" } = {}) {
+  const t = normalizar(termo);
+  const l = (Array.isArray(itens) ? itens : []).filter(x => !t || normalizar(x && x.nome).includes(t));
+  const quando = x => { const d = x && x.ultima_execucao_em ? Date.parse(x.ultima_execucao_em) : NaN; return Number.isFinite(d) ? d : -Infinity; };
+  if (ordem === "nome") return [...l].sort((a, b) => texto(a.nome).localeCompare(texto(b.nome), "pt-BR", { sensitivity: "base" }));
+  if (ordem === "recente") return [...l].sort((a, b) => quando(b) - quando(a));
+  if (ordem === "erros") return [...l].sort((a, b) => nat(b.erros) - nat(a.erros) || quando(b) - quando(a));
+  return l;
+}
+
+/** AS-042: passos da paleta que casam com a busca (rótulo e descrição, sem acento). */
+export function acoesDaBusca(termo, vocab) {
+  const t = normalizar(termo);
+  return ACOES.filter(a => a.disponivel !== false && a.menu !== false)
+    .filter(a => !t || normalizar(`${rotuloAcao(a.id, vocab)} ${a.descricao || ""} ${a.id.replace(/_/g, " ")}`).includes(t))
+    .map(a => a.id);
+}
+
+/** AS-014: de que período são os números do topo — "30d" quando o servidor manda ok_30d/erro_30d em todas; senão "total" (desde a criação). */
+export function periodoDoResumo(itens) {
+  const l = Array.isArray(itens) ? itens : [];
+  return l.length > 0 && l.every(it => it && it.ok_30d != null && it.erro_30d != null) ? "30d" : "total";
+}
+
+/** AS-017: onde se ajusta uma regra fixa «Do sistema» (pelo nome que o servidor manda); null quando não há o que ajustar. */
+export function ajusteDaRegraSistema(nome) {
+  const n = normalizar(nome);
+  if (/fora do horario/.test(n)) return { href: "#/config/departamentos", rotulo: "Configurar horários" };
+  if (/rodizio/.test(n)) return { href: "#/config/usuarios", rotulo: "Configurar quem recebe" };
+  return null;
+}
+
+/* ================================================================== plano 1000 · lote auto-3 */
+
+/** AS-222: o campo «valor» da condição é o valor do negócio, no vocabulário da vertical («Valor da oportunidade (R$)»). */
+export function rotuloValorNegocio(vocab = null) {
+  const vv = voc(vocab);
+  return `Valor d${vv.art("negocio")} ${vv.min("negocio")} (R$)`;
+}
+
+const _fmtSP = new Intl.DateTimeFormat("en-GB", { timeZone: "America/Sao_Paulo", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const _DOW_SP = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+/** Mesma leitura do nx_horario_aberto (fuso de SP; faixa com fim antes do início passa da meia-noite; null = 24 h). */
+export function abertoNoHorario(horario, t) {
+  if (horario === null || horario === undefined) return true;
+  const p = Object.fromEntries(_fmtSP.formatToParts(new Date(t)).map(x => [x.type, x.value]));
+  const dow = _DOW_SP[p.weekday], hm = `${p.hour}:${p.minute}`;
+  const dia = d => { const fx = horario[d] ?? horario[String(d)]; return Array.isArray(fx) ? fx : []; };
+  if (dia(dow).some(f => Array.isArray(f) && (f[1] > f[0] ? hm >= f[0] && hm < f[1] : hm >= f[0]))) return true;
+  return dia((dow + 6) % 7).some(f => Array.isArray(f) && f[1] <= f[0] && hm < f[1]);
+}
+/** AS-224: o primeiro instante (de 5 em 5 min, até 8 dias) em que o horário está aberto, a partir de `t` (ms). null = nunca abre. */
+export function proximaAbertura(horario, t) {
+  if (horario === null || horario === undefined) return t;
+  if (abertoNoHorario(horario, t)) return t;
+  let x = Math.ceil(t / 300000) * 300000;
+  for (let i = 0; i < 8 * 288; i++, x += 300000) if (abertoNoHorario(horario, x)) return x;
+  return null;
+}
+
+const _fmtCurto = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+/** «qui., 16/10 às 10:00» (fuso de SP). */
+export function dataHoraCurtaSP(t) {
+  const p = Object.fromEntries(_fmtCurto.formatToParts(new Date(t)).map(x => [x.type, x.value]));
+  return `${String(p.weekday || "").replace(/\.$/, "")}, ${p.day}/${p.month} às ${p.hour}:${p.minute}`;
+}
+/** AS-223: «Exemplo: se começar agora, continua qui, 16/10 às 10:00.» para o passo «Esperar». */
+export function exemploContinuacao(minutos, agora = Date.now()) {
+  const m = inteiro(minutos);
+  if (!m || m <= 0) return "";
+  const t = (agora instanceof Date ? agora.getTime() : Number(agora)) + m * 60000;
+  return `Exemplo: se começar agora, continua ${dataHoraCurtaSP(t)}.`;
+}
+
+/** AS-284: com qual palavra-chave a frase casa (a mesma regra do servidor: minúsculas, sem acento, trecho contido). null = nenhuma. */
+export function casaPalavras(frase, palavras) {
+  const f = normalizar(frase);
+  if (!f) return null;
+  for (const w of Array.isArray(palavras) ? palavras : []) { const n = normalizar(w); if (n && f.includes(n)) return String(w).trim(); }
+  return null;
+}
+
+/** AS-270: o que sairia AGORA na simulação (passos «Faria»), por tipo → {mensagens, tarefas, outros, texto}. */
+export function resumoSaidasSimulacao(sim) {
+  const r = { mensagens: 0, tarefas: 0, outros: 0 };
+  for (const a of (sim && Array.isArray(sim.alvos) ? sim.alvos : [])) {
+    if (a.ignorado) continue;
+    for (const p of a.passos || []) {
+      if (p.estado !== "faria") continue;
+      if (p.tipo && (ACAO[p.tipo] || {}).mensagem) r.mensagens++;
+      else if (p.tipo === "criar_tarefa") r.tarefas++;
+      else r.outros++;
+    }
+  }
+  const partes = [];
+  if (r.mensagens) partes.push(`${r.mensagens} ${r.mensagens === 1 ? "mensagem de WhatsApp" : "mensagens de WhatsApp"}`);
+  if (r.tarefas) partes.push(`${r.tarefas} ${r.tarefas === 1 ? "tarefa" : "tarefas"}`);
+  if (r.outros) partes.push(`${r.outros} ${r.outros === 1 ? "outro passo" : "outros passos"}`);
+  const mostrados = sim && sim.alvos ? sim.alvos.length : 0;
+  const parcial = sim && !sim.ehAmostra && sim.total > mostrados ? ` (nos ${mostrados} mostrados)` : "";
+  r.texto = partes.length ? `Agora sairiam: ${partes.join(", ").replace(/, ([^,]*)$/, " e $1")}${parcial}.` : "";
+  return r;
+}
+
+/** AS-298: erro comum de execução/simulação → o que fazer (e para onde ir). null quando não reconhece. */
+export function dicaDoErro(texto) {
+  const t = normalizar(texto);
+  if (!t) return null;
+  const regras = [
+    [/hora d[ao] (consulta|avaliacao|servico|visita)|sem a hora|so a data/, "Abra o registro e preencha a data e a hora; depois ele entra sozinho na próxima rodada.", null, null],
+    [/modelo|template/, "Escolha um modelo aprovado pela Meta no passo «Enviar modelo» (ou sincronize os modelos do número).", "#/config/numeros", "Ver os números"],
+    [/sem (numero|canal)|numero (desconectado|caiu)|canal (desconectado|inativo)|nenhum numero|aparelho/, "Confira o número de WhatsApp: ele precisa estar conectado para a mensagem sair.", "#/config/numeros", "Ver os números"],
+    [/telefone|sem whatsapp|numero invalido/, "O contato está sem telefone válido: corrija o cadastro e a próxima execução sai.", null, null],
+    [/cota|limite.*ia|ia.*limite/, "A cota de IA do mês acabou: veja o uso em Plano e uso.", "#/config/plano", "Plano e uso"],
+    [/fora do horario/, "A mensagem esperou o horário de atendimento. Ajuste os horários se precisar.", "#/config/departamentos", "Horários"],
+    [/janela|24 ?h/, "Fora da janela de 24 h da Meta só sai modelo aprovado: troque o passo por «Enviar modelo».", null, null],
+    [/etapa .*nao existe|etiqueta .*nao existe|nao existe mais/, "Algo escolhido no passo foi apagado: abra a automação e escolha de novo.", null, null],
+  ];
+  for (const [re, dica, href, rotulo] of regras) if (re.test(t)) return { dica, href, rotulo };
+  return null;
+}
+
+/** AS-228: «Peça a Bruno Reis ou Ana Lima (administradores).» a partir de base.usuarios. */
+export function frasePedirAdmin(usuarios) {
+  const admins = (Array.isArray(usuarios) ? usuarios : []).filter(u => u && u.papel === "admin" && u.nome).map(u => String(u.nome).trim()).slice(0, 3);
+  if (!admins.length) return "Peça a um administrador da sua empresa.";
+  const lista = admins.length === 1 ? admins[0] : `${admins.slice(0, -1).join(", ")} ou ${admins[admins.length - 1]}`;
+  return `Peça a ${lista} (${admins.length === 1 ? "administrador" : "administradores"} da empresa).`;
+}
+
+/** AS-232: há número da Meta? true/false quando os canais dizem o provedor; sem essa informação, os modelos (só da Meta) contam; senão null. */
+export function temCanalMeta(base) {
+  const cs = (base && Array.isArray(base.canais)) ? base.canais : [];
+  if (cs.some(c => c && c.provedor)) return cs.some(c => c && c.provedor && c.provedor !== "codewords");
+  if (base && Array.isArray(base.templates) && base.templates.length) return true;
+  return null;
+}
+
+/** AS-230: o resumo do fluxo (recolhido no celular): «Etapa X → 3 passos (1 espera)». */
+export function resumoFluxo(auto, base, vocab) {
+  const a = auto || {};
+  const nos = nosDoDiagrama(a, base, vocab);
+  const g = nos.find(x => x.tipo === "gatilho");
+  const acoes = Array.isArray(a.acoes) ? a.acoes : [];
+  const esperas = acoes.filter(x => x && x.tipo === "esperar").length;
+  const nc = (a.condicoes || []).length;
+  const passos = acoes.length ? `${acoes.length} ${acoes.length === 1 ? "passo" : "passos"}${esperas ? ` (${esperas} ${esperas === 1 ? "espera" : "esperas"})` : ""}` : "nenhum passo ainda";
+  const quando = g && g.sub ? g.sub : g ? g.rotulo : "";
+  return `${quando ? `${cortar(quando, 48)} → ` : ""}${nc ? `${nc} ${nc === 1 ? "condição" : "condições"} → ` : ""}${passos}`;
+}
+/** AS-227: o dia (AAAA-MM-DD, fuso de SP) de uma execução — o mesmo dia das barras do gráfico. */
+export const diaDaExecucao = x => (x ? diaSP(x.criado_em) : null);
+
+/** AS-229: os comandos da paleta por automação (até 40): «Ligar/Desligar «X»» (quem edita) e «Abrir automação «X»». */
+export function comandosDasAutomacoes(itens, { podeEditar = false, max = 40 } = {}) {
+  const out = [];
+  for (const it of (Array.isArray(itens) ? itens : []).slice(0, max)) {
+    if (!it || it.id == null || !it.nome) continue;
+    const nome = cortar(it.nome, 60);
+    // `ligar` guarda o estado PEDIDO (o rótulo pode ficar velho se a lista mudar depois): quem executa só alterna se ainda não estiver assim
+    if (podeEditar) out.push({ id: `automacoes.alternar.${it.id}`, automacao: it.id, acao: "alternar", icone: "raio", ligar: !it.ativo, nome,
+      rotulo: `${it.ativo ? "Desligar" : "Ligar"} a automação «${nome}»`, palavras: `ligar desligar automacao ${normalizar(it.nome)}` });
+    out.push({ id: `automacoes.abrir.${it.id}`, automacao: it.id, acao: "abrir", icone: "editar",
+      rotulo: `Abrir a automação «${nome}»`, palavras: `abrir editar automacao ${normalizar(it.nome)}` });
+  }
+  return out;
 }

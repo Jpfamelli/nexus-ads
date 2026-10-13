@@ -452,6 +452,11 @@ begin
   delete from public.nx_rastreio where cliente_id = cB;
   insert into public.nx_rastreio (cliente_id, codigo, criado_em) values (cB, 'AAAAA', now() - interval '50 days');
   perform public.nx_rastreio_registrar((public.nx_entrada_chave(tB, cB, false) ->> 'chave'), '{}');
+  -- plano 1000 (SV-109, 20261013c): a purga saiu do registro (um DELETE por clique) e foi para a faxina diária, em lotes
+  if exists (select 1 from public.nx_versao_banco where nome = '20261013c_operacao_indices') then
+    perform pg_temp.ok(exists (select 1 from public.nx_rastreio where cliente_id = cB and codigo = 'AAAAA'), 'o registro não apaga mais (plano 1000, SV-109)');
+    perform public.nx_saas_faxina();
+  end if;
   perform pg_temp.ok(not exists (select 1 from public.nx_rastreio where cliente_id = cB and codigo = 'AAAAA'), 'códigos com mais de 45 dias são apagados');
 
   -- ---------------------------------------------------------- 9. permissões

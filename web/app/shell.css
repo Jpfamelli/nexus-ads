@@ -11,6 +11,9 @@
 .faixas-sistema { position: relative; z-index: 2; }
 .faixa-versao { background: var(--c-prim-suave); }
 .faixa-versao .ic { color: var(--c-prim-luz); }
+/* plano 1000 (AS-205): «o que mudou» (até 3 linhas) e o «Depois» ao lado do «Atualizar» */
+.faixa-versao-txt { flex: 1 1 16rem; min-width: 0; display: flex; flex-direction: column; gap: var(--esp-1); }
+.faixa-versao-notas { margin: 0; padding-left: 1.1em; color: var(--c-texto-2); font-size: var(--fs-13); }
 
 /* ---- conexão (M14): faixa de estado e ponto junto ao sino ---- */
 .faixa-rede { background: var(--c-ruim-suave); }

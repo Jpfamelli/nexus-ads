@@ -32,16 +32,29 @@
    ============================================================ */
 import { criarDb } from "./db.js";
 import {
-  lerCorpo, autenticarCron, limparErro, comPrazo, ErroHttp, json,
+  lerCorpo, exigirCorpoValido, autenticarCron, limparErro, comPrazo, ErroHttp, json,
   ErroApi, respostaPainel, tratarPainel, lerCorpoPainel, autenticarPainel, interna, soltandoCorpo,
-  cortarTexto, funcaoAusente, registrarExecucao, agoraDe,
+  cortarTexto, funcaoAusente, registrarExecucao, agoraDe, anonimizarEnvio, emLotes, auditar, erroApiDoBanco,
 } from "./comum.js";
 import {
   enviarTextoCanal, enviarMidiaCanal, enviarTemplateCanal, marcarLido, infoNumero, appsInscritos,
   inscreverApp, listarTemplates, textoFalhaCanal, aplicarParametros, enviarParaTodos,
 } from "./whatsapp.js";
-import { criarStorage, pathDoCliente, tipoAceito, arquivosDaPasta, soAparelho, mimeBase } from "./midia.js";
+import { criarStorage, pathDoCliente, tipoAceito, arquivosDaPasta, soAparelho, mimeBase, confereAssinatura } from "./midia.js";
 import { enviarTextoCodeWords, enviarMidiaCodeWords, estadoCanalCodeWords, MAX_MIDIA } from "./codewords.js";
+import { baixarMidia as baixarMidiaRecebida } from "./conversas.js";
+
+// plano 1000 (SV-047): o que manda mensagem pelo número do cliente passa pelo limite por conta (nx_envio_vez)
+const ENVIOS = new Set(["texto", "midia", "template", "reenviar"]);
+
+/** Limite de envios por conta (30/min, 600/h): token vazado ou script no navegador não manda centenas por minuto pelo número
+    do cliente. Passou → 429 limite_taxa (o código que o painel já explica: «Muitos envios em pouco tempo»), antes de qualquer rede. Banco sem a RPC → segue (como antes). */
+async function vezDaConta(db, ctx, cliente) {
+  let r;
+  try { r = await db.rpc("nx_envio_vez", { p_conta: ctx.conta_id, p_cliente: cliente }); }
+  catch (e) { if (funcaoAusente(e, "nx_envio_vez")) return; throw e; }
+  if (r && r.ok === false) throw new ErroApi("limite_taxa", 429);
+}
 
 const PAPEL = {
   texto: "atendente", midia: "atendente", template: "atendente", reenviar: "atendente", lido: "leitura",
@@ -57,10 +70,23 @@ const FILA_LIMITE_MS = 140_000;
 const RESERVA_ENVIO_MS = { codewords: 62_000, meta: 22_000 };
 const FILA_MAX_ITENS = 100;
 const FILA_MAX_MS = 110_000;
+// plano 1000 (SV-043): canais diferentes enviados ao mesmo tempo numa rodada da fila
+export const FILA_CANAIS_JUNTOS = 3;
 // saída da Meta em dúvida (timeout/5xx, sem wamid) que ficou 'pendente' por mais que isso nunca mais recebe recibo:
 // vira 'sem_confirmacao' (uma varredura por hora, nx_travas)
 const AMBIGUA_LIMITE_MS = 24 * 3600e3;
 const LIMITE_TEXTO = 4096;
+// plano 1000 (SV-007): mídia recebida presa em «baixando» (o 2º plano do webhook morreu) — até 10 por rodada do cron da fila,
+// enquanto sobrar tempo na função
+const MIDIA_PRESA_LIMITE = 10;
+const MIDIA_PRESA_ORCAMENTO_MS = 100_000;
+// plano 1000 (SV-045): aviso de automação ao gestor — o mesmo texto no máximo 1× a cada 10 min e 30 por dia por cliente
+const ALERTA_REPETIDO_S = 600;
+const ALERTA_TETO_DIA = 30;
+// plano 1000 (SV-048): HEAD no arquivo antes de mandar à Graph
+const PRAZO_TAMANHO_MS = 8_000;
+// plano 1000 (SV-026): a vez do aparelho que chega em até 8 s é esperada dentro da rodada
+const RITMO_ESPERA_MS = 8_000;
 
 const REF_CLIENTE = /^[A-Za-z0-9:_.-]{8,80}$/;
 /** client_ref do painel: ausente = comportamento de sempre; malformado = 400 dados_invalidos (hint client_ref). */
@@ -365,6 +391,24 @@ async function baixarMidia(link, f, max = MAX_MIDIA) {
   }
 }
 
+/** Content-Length real do arquivo pela URL assinada (HEAD, 8 s); sem resposta/cabeçalho → null (segue como antes). */
+async function tamanhoReal(link, f) {
+  try {
+    const r = await comPrazo(f, PRAZO_TAMANHO_MS)(link, { method: "HEAD" });
+    try { const x = r.body?.cancel?.(); if (x?.catch) x.catch(() => null); } catch { /* sem corpo */ }
+    if (!r.ok) return null;
+    const n = Number(r.headers.get("content-length"));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch { return null; }
+}
+
+/** {largura, altura} do corpo do pedido (inteiros 1–20.000, os dois) ou {}. */
+export function dimensoesMidia(corpo) {
+  const w = Number(corpo?.largura), a = Number(corpo?.altura);
+  const ok = n => Number.isInteger(n) && n >= 1 && n <= 20000;
+  return ok(w) && ok(a) ? { largura: w, altura: a } : {};
+}
+
 async function acaoMidia(db, ctx, corpo, deps, env) {
   const cliente = String(corpo.cliente);
   const cx = await contextoConversa(db, ctx, cliente, corpo.conversa);
@@ -394,8 +438,15 @@ async function acaoMidia(db, ctx, corpo, deps, env) {
     // aparelho: o arquivo vai em bytes (baixado aqui, antes do canal: se falhar, nada saiu) e não há citação
     if (ehCodeWords(cred)) {
       const bytes = await baixarMidia(link, deps.fetch, tipo.max);
+      // plano 1000 (SV-219): o tipo vem do navegador; um .exe renomeado para image/jpeg ia ao aparelho como foto. Os primeiros
+      // bytes têm de bater com o tipo declarado (JPEG/PNG/WEBP/MP4/OGG/PDF/WAV…; tipo sem assinatura conhecida passa)
+      if (!confereAssinatura(bytes, corpo.mime)) throw new ErroApi("midia_tipo", 400);
       return { cred, link, citacao: null, bytes };
     }
+    // plano 1000 (SV-048): o tamanho declarado é do navegador e o upload assinado aceita qualquer arquivo — o tamanho REAL do
+    // objeto (HEAD na URL assinada) acima do teto do tipo é recusado aqui, antes da Graph (que só falhava com 131053)
+    const real = await tamanhoReal(link, deps.fetch);
+    if (real != null && real > tipo.max) throw new ErroApi("midia_grande", 400);
     const citacao = await citacaoValida(db, cliente, cx.contato?.id, corpo.responde_a);
     return { cred, link, citacao };
   });
@@ -405,10 +456,13 @@ async function acaoMidia(db, ctx, corpo, deps, env) {
     ? await enviarMidiaCodeWords(cred, destino(cx), { grupo: tipo.grupo, bytes, mime, nome, legenda }, { fetch: deps.fetch, db })
     : await enviarMidiaCanal(cred, destino(cx), { tipo: tipo.grupo, link, legenda, nome }, { respondeA: citacao, fetch: deps.rede });
   const tamanho = Number(corpo.tamanho) > 0 ? Number(corpo.tamanho) : null;
+  // plano 1000 (CA-086, servidor): largura/altura da foto/vídeo enviados (o composer mede antes de subir) ficam na mídia — a conversa
+  // reserva o espaço certo enquanto a imagem carrega. Só inteiros de 1 a 20.000, e os dois juntos.
+  const dims = dimensoesMidia(corpo);
   // com o canal, a saída em dúvida do aparelho ganha o id provisório (igual ao texto)
   return gravarSaida(db, ctx, cliente, cx.conversa.id, {
     tipo: TIPO_MSG[tipo.grupo], corpo: tipo.grupo === "audio" ? null : legenda, responde_a_wamid: citacao,
-    midia: { path, mime, nome, ...(tamanho ? { tamanho } : {}), estado: "ok" },
+    midia: { path, mime, nome, ...(tamanho ? { tamanho } : {}), ...dims, estado: "ok" },
   }, r, cw ? cx.canal_id : null, reserva.ref);
 }
 
@@ -489,6 +543,8 @@ async function testarCanal(db, cliente, canal, deps) {
 
 async function acaoTestarCanal(db, ctx, corpo, deps) {
   const t = await testarCanal(db, String(corpo.cliente), idCanal(corpo.canal), deps);
+  // plano 1000 (SV-230): ação de plataforma com a conta, em nx_auditoria
+  await auditar(db, ctx, String(corpo.cliente), "canal_testar", { canal: idCanal(corpo.canal), ok: !!t?.ok });
   return respostaPainel(t);
 }
 
@@ -509,6 +565,7 @@ async function acaoInscreverApp(db, ctx, corpo, deps) {
   if (cred.provedor === "codewords") throw new ErroApi("canal_nao_encontrado", 404);
   if (!cred.waba_id) throw new ErroApi("dados_invalidos", 400, "waba_id");
   const r = await inscreverApp(cred, { fetch: deps.rede });
+  await auditar(db, ctx, cliente, "canal_inscrever_app", { canal, ok: !!r.ok });   // plano 1000 (SV-230)
   if (!r.ok) {
     const perm = [10, 200, 190, 100].includes(Number(r.erro?.code));
     return respostaPainel({
@@ -531,10 +588,30 @@ async function acaoSincronizar(db, ctx, corpo, deps) {
   return respostaPainel({ ok: true, total: Number(g?.total) || 0, completo: r.completo });
 }
 
-async function acaoReenviar(db, ctx, corpo, deps) {
+async function acaoReenviar(db, ctx, corpo, deps, env) {
   const id = Number(corpo.mensagem);
   if (!Number.isSafeInteger(id) || id <= 0) throw new ErroApi("mensagem_nao_encontrada", 404);
-  const m = await interna(db, "nx_cv_msg_reenvio", { p_ctx: ctx, p_cliente: String(corpo.cliente), p_mensagem: id });
+  const cliente = String(corpo.cliente);
+  // plano 1000 (SV-049): «Reenviar» também para mídia (o arquivo ainda está no Storage) e modelo (mesmos parâmetros), sempre com
+  // o client_ref NOVO que o painel manda. Banco sem a nx_cv_msg_reenvio_v2 (20261013e) → só texto, como antes.
+  let m;
+  try { m = await db.rpc("nx_cv_msg_reenvio_v2", { p_ctx: ctx, p_cliente: cliente, p_mensagem: id }); }
+  catch (e) {
+    if (!funcaoAusente(e, "nx_cv_msg_reenvio_v2")) throw erroApiDoBanco(e);
+    m = await interna(db, "nx_cv_msg_reenvio", { p_ctx: ctx, p_cliente: cliente, p_mensagem: id });
+  }
+  const tipo = m?.tipo || "texto";
+  if (tipo === "template") {
+    const t = m.template || {};
+    return acaoTemplate(db, ctx, { ...corpo, conversa: m.conversa_id, template_id: t.id, parametros: Array.isArray(t.parametros) ? t.parametros : [] }, deps);
+  }
+  if (tipo !== "texto") {
+    const md = m.midia || {};
+    if (!md.path) throw new ErroApi("midia_nao_encontrada", 404);
+    return acaoMidia(db, ctx, { ...corpo, conversa: m.conversa_id, path: md.path, mime: md.mime, nome: md.nome ?? null,
+      legenda: tipo === "audio" ? null : m.corpo ?? null, tamanho: md.tamanho, largura: md.largura, altura: md.altura,
+      responde_a: m.responde_a_wamid ?? undefined }, deps, env);
+  }
   // o corpo gravado já é o texto que saiu (com a assinatura, se estava ligada): reenviar igual, sem assinar de novo
   return acaoTexto(db, ctx, corpo, deps, { conversa: m.conversa_id, texto: m.corpo, respondeA: m.responde_a_wamid, assinar: false });
 }
@@ -543,14 +620,56 @@ async function acaoReenviar(db, ctx, corpo, deps) {
    Fila (automações, fora do horário, agendadas) — modo cron e webhook
    ------------------------------------------------------------ */
 
-/** Um item da fila: pula/falha com motivo ou envia e grava por nx_cv_saida. Nunca lança. */
+/** Plano 1000 (SV-061): automação que NÃO saiu (janela de 24 h fechada, contato bloqueado) deixa uma linha de sistema na
+    conversa — antes só o item da fila mudava e o atendente achava que a automação tinha respondido. Nunca lança. */
+async function avisarNaConversa(db, item, texto) {
+  if (!item?.conversa_id) return;
+  try { await db.rpc("nx_auto_sistema", { p_conversa: item.conversa_id, p_texto: texto }); }
+  catch (e) { console.error("nx-enviar aviso na conversa:", limparErro(e?.message || e)); }
+}
+
+/** Plano 1000 (SV-026): ritmo do aparelho (CodeWords). Rajada de mensagens de um WhatsApp comum é o gatilho clássico de bloqueio do
+    número: ≥ 4 s entre envios, ≤ 30/min e ≤ 300/h por canal (nx_codewords_envio_vez). Devolve o ISO de quando pode (adiar) ou
+    null (pode agora; banco sem a RPC ou com erro também = pode, como antes). */
+async function vezDoAparelho(db, canal) {
+  try {
+    const r = await db.rpc("nx_codewords_envio_vez", { p_canal: canal });
+    return r && r.ok === false && r.vez ? String(r.vez) : null;
+  } catch (e) {
+    if (!funcaoAusente(e, "nx_codewords_envio_vez")) console.error("nx-enviar ritmo do aparelho:", limparErro(e?.message || e));
+    return null;
+  }
+}
+
+/** Volta o item para a fila para `ate` SEM gastar tentativa (nx_fila_adiar); banco sem a RPC → concluir('pendente') (recuo). */
+async function adiarItem(db, item, ate, concluir) {
+  try { await db.rpc("nx_fila_adiar", { p_id: item.id, p_ate: ate }); }
+  catch (e) { if (!funcaoAusente(e, "nx_fila_adiar")) throw e; await concluir("pendente", null); }
+}
+
+/** Um item da fila: pula/falha com motivo ou envia e grava por nx_cv_saida. Nunca lança.
+    Devolve enviado | pulado | falhou | enviado_sem_confirmacao | adiado (credencial ou ritmo: o lote segue) | adiado_prazo
+    (sem tempo na função: a rodada para). */
 async function enviarItem(db, item, creds, rede, prazo = {}) {
   const concluir = (status, erro, msgId) => db.rpc("nx_fila_concluir", {
     p_id: item.id, p_status: status, p_erro: erro ? limparErro(erro).slice(0, 500) : null, p_mensagem: msgId ?? null,
   });
   try {
+    // plano 1000 (SV-264): conversa removida (resolvida e apagada, contato mesclado) com contato e número conhecidos → a conversa
+    // aberta do contato naquele número é achada (ou aberta) e o envio segue; sem isso, falha como antes
+    if ((!item.conversa_id || !item.conversa) && item.contato_id && item.canal_id && item.contato) {
+      try {
+        const nova = await db.rpc("nx_auto_abrir_conversa", { p_cliente: item.cliente_id, p_contato: item.contato_id, p_canal: item.canal_id,
+          p_negocio: null, p_auto_nome: item.origem === "agendada" ? "Mensagem agendada" : "Fila de envio" });
+        if (Number(nova) > 0) item = { ...item, conversa_id: Number(nova), conversa: { id: Number(nova), status: "aberta" } };
+      } catch (e) { console.error("nx-enviar conversa do item:", limparErro(e?.message || e)); }
+    }
     if (!item.conversa_id || !item.conversa) { await concluir("falhou", "item sem conversa"); return "falhou"; }
-    if (item.contato?.bloqueado) { await concluir("pulado", "contato bloqueado"); return "pulado"; }
+    if (item.contato?.bloqueado) {
+      await concluir("pulado", "contato bloqueado");
+      await avisarNaConversa(db, item, "Mensagem automática não enviada: o contato está bloqueado.");
+      return "pulado";
+    }
     const para = item.contato?.wa_id || item.contato?.telefone;
     if (!para) { await concluir("falhou", "contato sem telefone"); return "falhou"; }
     let corpoMsg, envio;
@@ -572,7 +691,11 @@ async function enviarItem(db, item, creds, rede, prazo = {}) {
     const cw = ehCodeWords(cred);
     if (item.tipo === "texto") {
       // o aparelho do CodeWords não tem janela de 24 h
-      if (!cw && !item.janela_aberta) { await concluir("pulado", "fora da janela de 24 h"); return "pulado"; }
+      if (!cw && !item.janela_aberta) {
+        await concluir("pulado", "fora da janela de 24 h");
+        await avisarNaConversa(db, item, "Mensagem automática não enviada: passaram mais de 24 h desde a última mensagem do cliente. Para retomar a conversa, use um modelo aprovado.");
+        return "pulado";
+      }
       corpoMsg = cortarTexto(String(item.texto ?? "").trim(), LIMITE_TEXTO);
       if (!corpoMsg) { await concluir("falhou", "texto vazio"); return "falhou"; }
     } else {
@@ -605,32 +728,57 @@ async function enviarItem(db, item, creds, rede, prazo = {}) {
       }).catch(() => null);
       await concluir("falhou", motivo, msg?.id); return "falhou";
     }
-    // não começa um envio que não cabe no tempo da função: volta para a fila SEM ter saído
+    // não começa um envio que não cabe no tempo da função: volta para a fila SEM ter saído (e a rodada para)
     if (prazo.fim && Date.now() + (cw ? RESERVA_ENVIO_MS.codewords : RESERVA_ENVIO_MS.meta) > prazo.fim) {
-      await concluir("pendente", null); return "adiado";
+      await concluir("pendente", null); return "adiado_prazo";
+    }
+    // ritmo do aparelho: a vez que chega em poucos segundos é esperada aqui (os envios saem espaçados na mesma rodada); mais
+    // longe que isso, o item volta para a fila na hora certa sem gastar tentativa (e os outros itens seguem)
+    if (cw) {
+      let vez = await vezDoAparelho(db, item.canal_id);
+      const falta = vez ? Date.parse(vez) - Date.now() : 0;
+      if (vez && falta <= RITMO_ESPERA_MS && (!prazo.fim || Date.now() + falta + RESERVA_ENVIO_MS.codewords < prazo.fim)) {
+        await (creds.esperar || (ms => new Promise(res => setTimeout(res, ms))))(Math.max(0, falta));
+        vez = await vezDoAparelho(db, item.canal_id);
+      }
+      if (vez) { await adiarItem(db, item, vez, concluir); return "adiado"; }
     }
     const r = item.tipo === "texto"
       ? await enviarTextoPeloCanal(cred, para, corpoMsg, { fetch: rede, fetchCru: creds.fetchCru, db })
       : await enviarTemplateCanal(cred, para, envio, { fetch: rede });
     const erro = textoFalha(r);
     const duvida = !r.ok && r.ambigua;
-    const msg = await db.rpc("nx_cv_saida", {
-      p_conta: item.origem === "agendada" ? (item.criado_por ?? null) : null,
-      p_cliente: item.cliente_id, p_conversa: item.conversa_id,
-      p_msg: {
-        tipo: item.tipo === "texto" ? "texto" : "template", corpo: corpoMsg, origem: item.origem,
-        ...(envio ? { template: { id: item.modelo.id, nome: envio.nome, idioma: envio.idioma, categoria: item.modelo.categoria, parametros: envio.parametros } } : {}),
-        wamid: r.wamid || (duvida && cw ? wamidProvisorio(item.canal_id) : null),
-        status: r.ok ? "enviada" : duvida ? "pendente" : "falhou", erro,
-      },
-    }).catch(() => null);
+    const msgFila = {
+      tipo: item.tipo === "texto" ? "texto" : "template", corpo: corpoMsg, origem: item.origem,
+      ...(envio ? { template: { id: item.modelo.id, nome: envio.nome, idioma: envio.idioma, categoria: item.modelo.categoria, parametros: envio.parametros } } : {}),
+      wamid: r.wamid || (duvida && cw ? wamidProvisorio(item.canal_id) : null),
+      status: r.ok ? "enviada" : duvida ? "pendente" : "falhou", erro,
+    };
+    // plano 1000 (SV-039): a saída gravada na conversa repete UMA vez se o banco piscar; se falhar de novo, uma linha de sistema
+    // avisa o atendente (a mensagem saiu e ele não a via — podia mandar de novo) e o item leva o erro informativo
+    let msg = null, registrada = false;
+    for (let tentativa = 1; tentativa <= 2 && !registrada; tentativa++) {
+      try {
+        msg = await db.rpc("nx_cv_saida", {
+          p_conta: item.origem === "agendada" ? (item.criado_por ?? null) : null,
+          p_cliente: item.cliente_id, p_conversa: item.conversa_id, p_msg: msgFila,
+        });
+        registrada = true;
+      }
+      catch (e) { if (tentativa === 2) console.error("nx-enviar gravar saída da fila:", limparErro(e?.message || e)); }
+    }
+    let avisoSaida = null;
+    if (!registrada && (r.ok || duvida)) {
+      avisoSaida = "a mensagem saiu, mas não foi registrada na conversa";
+      await avisarNaConversa(db, item, `Uma mensagem automática ${r.ok ? "saiu" : "pode ter saído"}, mas não foi registrada aqui: «${cortarTexto(corpoMsg, 300)}». Confira no WhatsApp antes de mandar de novo.`);
+    }
     // envio em dúvida (timeout/5xx do CodeWords) NUNCA volta para a fila: pode ter saído
     const erroFila = duvida ? `${erro} (não reenviado automaticamente)` : erro;
     if (!r.ok) { await concluir("falhou", erroFila, msg?.id); return "falhou"; }
     // a mensagem SAIU: o item nunca é rebaixado para 'falhou' por uma falha do banco ao concluir (a tela diria «falhou»
     // onde houve entrega e induziria reenvio manual). Repete 1×; se falhar de novo, fica 'enviando' para a faxina da fila.
     for (let tentativa = 1; ; tentativa++) {
-      try { await concluir("enviado", null, msg?.id); return "enviado"; }
+      try { await concluir("enviado", avisoSaida, msg?.id); return "enviado"; }
       catch (e2) {
         if (tentativa >= 2) { console.error("nx-enviar concluir enviado:", limparErro(e2?.message || e2)); return "enviado_sem_confirmacao"; }
       }
@@ -676,6 +824,7 @@ export async function enviarFila(db, { ids } = {}, ctx = {}) {
   const res = { total: 0, enviado: 0, pulado: 0, falhou: 0 };
   const creds = new Map();
   creds.fetchCru = fetchCru;   // o CodeWords usa o próprio prazo (60 s)
+  if (ctx.esperarRitmo) creds.esperar = ctx.esperarRitmo;   // testes: sem esperar de verdade o ritmo do aparelho
   const inicio = Date.now();
   const prazo = { fim: inicio + (ctx.limiteMs ?? FILA_LIMITE_MS) };
   const lista = Array.isArray(ids) ? ids.map(Number).filter(n => Number.isSafeInteger(n) && n > 0).slice(0, 100) : null;
@@ -683,16 +832,91 @@ export async function enviarFila(db, { ids } = {}, ctx = {}) {
   for (;;) {
     const lote = await pegarLote(db, lista, ctx);
     if (!Array.isArray(lote) || !lote.length) break;
+    let semTempo = false;
+    // plano 1000 (SV-043): canais DIFERENTES saem em paralelo (até FILA_CANAIS_JUNTOS); dentro do mesmo canal a ordem e o ritmo do
+    // aparelho continuam (um item por vez) — 100 itens de 1–2 s cada já não comem o orçamento inteiro
+    const porCanal = new Map();
     for (const item of lote) {
-      const r = await enviarItem(db, item, creds, rede, prazo);
-      if (r === "adiado") { res.adiado = (res.adiado || 0) + 1; continue; }
-      if (r === "enviado_sem_confirmacao") { res.enviado_sem_confirmacao = (res.enviado_sem_confirmacao || 0) + 1; res.total++; continue; }
-      res[r]++; res.total++;
+      const k = String(item?.canal_id ?? "");
+      if (!porCanal.has(k)) porCanal.set(k, []);
+      porCanal.get(k).push(item);
     }
-    if (res.adiado) break;
+    await emLotes([...porCanal.values()], FILA_CANAIS_JUNTOS, async itens => {
+      for (const item of itens) {
+        const r = await enviarItem(db, item, creds, rede, prazo);
+        // plano 1000 (SV-044): só a falta de TEMPO encerra a rodada; credencial ilegível de UM cliente (ou o ritmo de um aparelho)
+        // adia só aquele item — antes um adiamento fazia os itens de todos os outros clientes esperarem a próxima rodada
+        if (r === "adiado" || r === "adiado_prazo") { res.adiado = (res.adiado || 0) + 1; if (r === "adiado_prazo") semTempo = true; continue; }
+        if (r === "enviado_sem_confirmacao") { res.enviado_sem_confirmacao = (res.enviado_sem_confirmacao || 0) + 1; res.total++; continue; }
+        res[r]++; res.total++;
+      }
+    });
+    if (semTempo) break;
     if (lista || res.total >= FILA_MAX_ITENS || Date.now() - inicio > FILA_MAX_MS) break;
   }
   return res;
+}
+
+/**
+ * Plano 1000 (SV-007): mídia RECEBIDA presa em «baixando» — o download roda em EdgeRuntime.waitUntil e, se o worker é cortado
+ * (150 s, deploy, falta de memória), nada a reagenda (o webhook já respondeu 200 e a Meta não reentrega). nx_midia_presas devolve
+ * as de 5 min a 7 dias (o media_id da Meta vale 30 dias); uma trava por mensagem impede dois downloads iguais. Nunca lança.
+ */
+export async function midiasPresas(db, env, f, { inicio = Date.now(), orcamentoMs = MIDIA_PRESA_ORCAMENTO_MS, agora } = {}) {
+  let itens;
+  try { itens = await db.rpc("nx_midia_presas", { p_limite: MIDIA_PRESA_LIMITE }); }
+  catch (e) {
+    if (funcaoAusente(e, "nx_midia_presas")) return null;
+    return { erro: limparErro(e?.message || e) };
+  }
+  const res = { total: 0, ok: 0, falhou: 0 };
+  const ctx = { env, fetch: f, redeMidia: comPrazo(f, 60_000), agora, falhou: e => console.error("nx-enviar mídia presa:", limparErro(e?.message || e)) };
+  for (const it of Array.isArray(itens) ? itens : []) {
+    if (Date.now() - inicio > orcamentoMs) break;
+    if (!it?.mensagem_id || !it?.canal_id || !it?.cliente_id || !it?.midia?.media_id) continue;
+    let pegou = false;
+    try { pegou = await db.rpc("nx_trava_pegar", { p_nome: `nx-midia-presa:${it.mensagem_id}`, p_segundos: 600, p_dono: "nx-enviar" }); }
+    catch { continue; }
+    if (pegou !== true) continue;
+    res.total++;
+    const r = await baixarMidiaRecebida(db, { canal_id: it.canal_id, cliente_id: it.cliente_id }, it.mensagem_id, it.midia, ctx);
+    if (r?.ok) res.ok++; else res.falhou++;
+  }
+  return res;
+}
+
+/** SHA-256 curto (16 hex) do texto do alerta: a chave da trava de repetição (o texto não vai para o banco). */
+async function hashCurto(t) {
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(t))));
+  return Array.from(d.slice(0, 8), b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Plano 1000 (SV-045): aviso de automação ao gestor pelo número da Nexus com freio — o MESMO texto do mesmo cliente no máximo
+ * 1× a cada 10 min (trava) e no máximo 30 avisos por dia por cliente (nx_taxa_usar); passou do teto, os admins do cliente
+ * recebem UMA notificação no painel por dia e nada sai. Uma automação em laço não queima mais a reputação do número da Nexus.
+ * Devolve null (pode enviar) ou o motivo de não enviar.
+ */
+async function freioDoAlerta(db, cliente, texto, agora) {
+  try {
+    const pegou = await db.rpc("nx_trava_pegar", { p_nome: `nx-enviar:alerta:${cliente}:${await hashCurto(texto)}`, p_segundos: ALERTA_REPETIDO_S, p_dono: "nx-enviar" });
+    if (pegou !== true) return "repetido";
+  } catch (e) { console.error("nx-enviar alerta (trava):", limparErro(e?.message || e)); }
+  let r = null;
+  try { r = await db.rpc("nx_taxa_usar", { p_chave: `alerta:${cliente}`, p_limite: ALERTA_TETO_DIA, p_janela_s: 86400 }); }
+  catch (e) { if (!funcaoAusente(e, "nx_taxa_usar")) console.error("nx-enviar alerta (teto):", limparErro(e?.message || e)); return null; }
+  if (r?.ok !== false) return null;
+  try {
+    const dia = new Date(agora.getTime() - 3 * 3600e3).toISOString().slice(0, 10);
+    if (await db.rpc("nx_trava_pegar", { p_nome: `nx-enviar:alerta-teto:${cliente}:${dia}`, p_segundos: 26 * 3600, p_dono: "nx-enviar" }) === true) {
+      await db.rpc("nx_notificar", {
+        p_cliente: cliente, p_conta: null, p_tipo: "sistema", p_titulo: "Avisos de automação no limite do dia",
+        p_corpo: `As automações deste cliente pediram mais de ${ALERTA_TETO_DIA} avisos por WhatsApp hoje. Os próximos ficam só aqui até amanhã — confira se alguma automação está em laço.`,
+        p_link: "#/automacoes",
+      });
+    }
+  } catch (e) { console.error("nx-enviar alerta (aviso do teto):", limparErro(e?.message || e)); }
+  return "teto_do_dia";
 }
 
 /** Lixo de mídia (contato/cliente excluído): apaga do Storage no servidor. Nunca lança. */
@@ -727,6 +951,60 @@ export async function limparMidia(db, env, f) {
     } catch (e) { await concluir([p.id], limparErro(e?.message || e)); res.erros++; }
   }
   return res;
+}
+
+/* ------------------------------------------------------------
+   Plano 1000 (SV-056): faxina dos uploads que nunca viraram mensagem
+   ------------------------------------------------------------ */
+export const ORFAO_IDADE_MS = 7 * 86400e3;
+const ORFAOS_MAX = 1000, ORFAOS_ORCAMENTO_MS = 20_000;
+const UUID_PASTA = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const mesSP = ms => new Date(ms - 3 * 3600e3).toISOString().slice(0, 7);
+
+/** Uma vez por dia (trava 'nx-enviar:orfaos:<dia SP>'): em <cliente>/out/<mês anterior e atual>, arquivo com mais de 7 dias sem
+    nenhuma mensagem que o cite (nx_midia_referenciadas, 20261013e) é apagado do Storage — o atendente subiu e desistiu. Teto de
+    1.000 arquivos e 20 s por rodada. Banco sem a RPC → nada é apagado. Nunca lança. */
+export async function faxinaOrfaos(db, env, f, agora = new Date(), { orcamentoMs = ORFAOS_ORCAMENTO_MS } = {}) {
+  const inicio = Date.now();
+  const dia = new Date(agora.getTime() - 3 * 3600e3).toISOString().slice(0, 10);
+  try {
+    if (await db.rpc("nx_trava_pegar", { p_nome: `nx-enviar:orfaos:${dia}`, p_segundos: 26 * 3600, p_dono: "nx-enviar" }) !== true) return null;
+  } catch { return null; }
+  const res = { vistos: 0, apagados: 0, erros: 0 };
+  const st = criarStorage(env, f);
+  try {
+    const raiz = await st.listar("", { limit: 1000 });
+    if (!raiz.ok) return { ...res, erro: raiz.erro };
+    const clientes = (Array.isArray(raiz.dados) ? raiz.dados : []).filter(x => x?.id == null && UUID_PASTA.test(String(x?.name ?? ""))).map(x => x.name);
+    const limite = agora.getTime() - ORFAO_IDADE_MS;
+    const meses = [...new Set([mesSP(agora.getTime() - 32 * 86400e3), mesSP(agora.getTime())])];
+    for (const cli of clientes) {
+      for (const mes of meses) {
+        if (res.vistos >= ORFAOS_MAX || Date.now() - inicio > orcamentoMs) return { ...res, cortado: true };
+        const l = await st.listar(`${cli}/out/${mes}`, { limit: 1000 });
+        if (!l.ok) { res.erros++; continue; }
+        const velhos = (Array.isArray(l.dados) ? l.dados : [])
+          .filter(x => x?.id != null && x.name && Date.parse(x.created_at || x.updated_at || "") < limite)
+          .map(x => `${cli}/out/${mes}/${x.name}`)
+          .filter(p => pathDoCliente(p, cli, "out"))
+          .slice(0, ORFAOS_MAX - res.vistos);
+        res.vistos += velhos.length;
+        for (let i = 0; i < velhos.length; i += 100) {
+          const parte = velhos.slice(i, i + 100);
+          const usados = await db.rpc("nx_midia_referenciadas", { p_cliente: cli, p_paths: parte });
+          const ref = new Set(Array.isArray(usados) ? usados.map(String) : parte);   // resposta estranha: nada é apagado
+          const apagar = parte.filter(p => !ref.has(p));
+          if (!apagar.length) continue;
+          const r = await st.apagar(apagar);
+          if (r.ok) res.apagados += apagar.length; else res.erros++;
+        }
+      }
+    }
+    return res;
+  } catch (e) {
+    if (funcaoAusente(e, "nx_midia_referenciadas")) return { ...res, pulado: "rpc ausente" };
+    return { ...res, erro: limparErro(e?.message || e) };
+  }
 }
 
 /**
@@ -771,6 +1049,7 @@ async function modoCron(req, env, deps, f) {
   // corpo antes do banco: teto de 64 KiB (resto drenado, 413 sem tocar no banco); ilegível → {}
   const corpo = await lerCorpo(req, undefined, deps.drenagem);
   const cfg = await autenticarCron(req, db);   // 401 sem o cron_token
+  exigirCorpoValido(corpo);   // plano 1000 (SV-100)
   const chaves = Object.keys(corpo);
   // só o nx_disparar chama este modo; qualquer chave desconhecida é recusada (nunca repassa nada)
   if (!chaves.length || chaves.some(k => !CHAVES_CRON.has(k))) return json({ ok: false, erro: "dados_invalidos" }, 400);
@@ -784,10 +1063,14 @@ async function modoCron(req, env, deps, f) {
     const agora = agoraDe(deps);
     const reconciliacao = await reconciliarAmbiguas(db, agora);
     if (reconciliacao) out.reconciliacao = reconciliacao;
+    const presas = await midiasPresas(db, env, f, { inicio: t0, agora });
+    if (presas) out.midia_presa = presas;
+    const orfaos = await faxinaOrfaos(db, env, f, agora);   // plano 1000 (SV-056): uma vez por dia
+    if (orfaos) out.orfaos = orfaos;
     // rastro por rodada em nx_execucoes só quando houve trabalho (o cron roda a cada minuto)
     const f0 = out.fila || {};
-    if ((f0.total || 0) + (f0.adiado || 0) + (out.midia.apagados || 0) + (out.midia.erros || 0) + (reconciliacao?.marcadas || 0) > 0) {
-      await registrarExecucao(db, { tarefa: "nx-enviar", inicio: agora, ms: Date.now() - t0, ok: !out.midia.erro, resumo: { fila: out.fila, midia: out.midia, ...(reconciliacao ? { reconciliacao } : {}) } });
+    if ((f0.total || 0) + (f0.adiado || 0) + (out.midia.apagados || 0) + (out.midia.erros || 0) + (reconciliacao?.marcadas || 0) + (presas?.total || 0) + (orfaos?.apagados || 0) > 0) {
+      await registrarExecucao(db, { tarefa: "nx-enviar", inicio: agora, ms: Date.now() - t0, ok: !out.midia.erro, resumo: { fila: out.fila, midia: out.midia, ...(reconciliacao ? { reconciliacao } : {}), ...(presas ? { midia_presa: presas } : {}), ...(orfaos ? { orfaos } : {}) } });
     }
   }
   if (corpo.alerta != null) {
@@ -802,8 +1085,15 @@ async function modoCron(req, env, deps, f) {
       out.alerta = { enviados: 0, erro: "cliente_nao_encontrado" };
     }
     if (!out.alerta) {
-      const envio = texto && destinos.length ? await enviarParaTodos(cfg, destinos, texto, { fetch: rede, titulo: "Aviso da automação" }) : [];
-      out.alerta = { enviados: envio.filter(e => e.ok).length, falhas: envio.filter(e => !e.ok).length };
+      const agora = agoraDe(deps);
+      const freio = texto && destinos.length ? await freioDoAlerta(db, String(a.cliente), texto, agora) : null;
+      const envio = texto && destinos.length && !freio ? await enviarParaTodos(cfg, destinos, texto, { fetch: rede, titulo: "Aviso da automação" }) : [];
+      out.alerta = { enviados: envio.filter(e => e.ok).length, falhas: envio.filter(e => !e.ok).length, ...(freio ? { pulado: freio } : {}) };
+      // plano 1000 (SV-046, parte): o aviso deixa rastro em nx_execucoes (destino e wamid anonimizados)
+      if (envio.length) {
+        await registrarExecucao(db, { tarefa: "nx-enviar", inicio: agora, ms: Date.now() - t0, ok: envio.every(e => e.ok),
+          resumo: { alerta: { cliente: String(a.cliente), enviados: out.alerta.enviados, falhas: out.alerta.falhas, envio: anonimizarEnvio(envio) } } });
+      }
     }
   }
   return json(out);
@@ -838,6 +1128,7 @@ async function tratarEnviar(req, env, deps) {
     const ctx = await autenticarPainel(db, corpo, PAPEL[acao]);
     const d = { ...deps, fetch: f, rede: comPrazo(f, deps.prazoRede ?? PRAZO_GRAPH_MS) };
     if (PAPEL[acao] === "admin") await interna(db, "nx_exigir_modulo", { p_cliente: String(corpo.cliente), p_modulo: "conversas" });
+    if (ENVIOS.has(acao)) await vezDaConta(db, ctx, String(corpo.cliente));
     switch (acao) {
       case "texto": return acaoTexto(db, ctx, corpo, d);
       case "midia": return acaoMidia(db, ctx, corpo, d, env);
@@ -847,7 +1138,7 @@ async function tratarEnviar(req, env, deps) {
       case "testar_codewords": return acaoTestarCodeWords(db, ctx, corpo, d);
       case "inscrever_app": return acaoInscreverApp(db, ctx, corpo, d);
       case "sincronizar_templates": return acaoSincronizar(db, ctx, corpo, d);
-      case "reenviar": return acaoReenviar(db, ctx, corpo, d);
+      case "reenviar": return acaoReenviar(db, ctx, corpo, d, env);
     }
     throw new ErroApi("dados_invalidos", 400, "acao");
   }, deps.drenagem);

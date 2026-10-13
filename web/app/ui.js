@@ -43,11 +43,15 @@ const RE_HEX = /^#[0-9a-fA-F]{6}$/;
 const RE_URL_OK = /^(https?:|mailto:|tel:|#|\/|\.\/|\.\.\/|[a-z0-9-]+\.html)/i;
 
 let _mensagemErro = e => (e && (e.codigo || e.message)) ? String(e.codigo || e.message) : "Não deu certo agora. Tente de novo.";
+let _suprimirToast = null;   // plano 1000 (AS-296): (texto, {tipo}) → true quando o shell já diz isso numa faixa
 let _seq = 0;
 const novoId = p => `${p || "u"}-${++_seq}`;
 
-/** O shell liga o tradutor de erros (api.mensagemErro). */
-export function configurar({ mensagemErro } = {}) { if (typeof mensagemErro === "function") _mensagemErro = mensagemErro; }
+/** O shell liga o tradutor de erros (api.mensagemErro) e, opcionalmente, quem decide calar um toast repetido (`suprimirToast`, null desliga). */
+export function configurar({ mensagemErro, suprimirToast } = {}) {
+  if (typeof mensagemErro === "function") _mensagemErro = mensagemErro;
+  if (suprimirToast === null || typeof suprimirToast === "function") _suprimirToast = suprimirToast;
+}
 
 const RE_ERRO_IMPORT = /dynamically imported module|importing a module script|module script failed|error loading dynamically/i;
 const RE_ERRO_REDE = /failed to fetch|networkerror|load failed|network request failed|fetch failed|err_internet|err_network/i;
@@ -196,8 +200,15 @@ function caixaToasts() {
     (erro, de forma urgente). Plano 100 · A10: `ms: 0` não fecha sozinho; `fixo: true` também não sai da fila quando chegam outros (avisos de
     estado que duram enquanto o problema durar: número de WhatsApp caído); `acao` é um botão próprio («Ver número»). */
 export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, fixo = false, aoFechar = null } = {}) {
+  // plano 1000 (AS-296): com a faixa de conexão à vista, o erro «sem internet»/«servidor demorou» de cada tela não vira um toast a mais (o shell decide)
+  if (_suprimirToast && !desfazer && !fixo) {
+    let suprimir = false;
+    try { suprimir = !!_suprimirToast(String(texto), { tipo }); } catch { suprimir = false; }
+    if (suprimir) { if (aoFechar) try { aoFechar("suprimido"); } catch (e) { console.error(e); } return { fechar() {}, el: h("div", { class: "toast", hidden: true }), suprimido: true }; }
+  }
   const caixa = caixaToasts();
-  const dur = ms ?? (tipo === "erro" ? 7000 : desfazer || acao ? 7000 : 4500);
+  // plano 1000 (AS-211): erro fica 12 s (WCAG 2.2.1: tempo para ler e alcançar o botão); os demais como antes
+  const dur = ms ?? (tipo === "erro" ? 12000 : desfazer || acao ? 7000 : 4500);
   let timer = null, fechado = false;
   const fechar = (motivo = "fechado") => {
     if (fechado) return; fechado = true;
@@ -221,8 +232,14 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
   mostrarNoTopo(caixa);
   if (dur > 0) {
     timer = setTimeout(() => fechar("tempo"), dur);
-    el.addEventListener("mouseenter", () => clearTimeout(timer));
-    el.addEventListener("mouseleave", () => { if (!fechado) timer = setTimeout(() => fechar("tempo"), 2500); });
+    // o relógio para com o mouse em cima E com o foco do teclado dentro (AS-211: quem navega por Tab ou leitor de tela alcança o botão)
+    let mouse = false, foco = false;
+    const pausar = () => clearTimeout(timer);
+    const retomar = () => { if (!fechado && !mouse && !foco) { clearTimeout(timer); timer = setTimeout(() => fechar("tempo"), 2500); } };
+    el.addEventListener("mouseenter", () => { mouse = true; pausar(); });
+    el.addEventListener("mouseleave", () => { mouse = false; retomar(); });
+    el.addEventListener("focusin", () => { foco = true; pausar(); });
+    el.addEventListener("focusout", ev => { if (ev && ev.relatedTarget && el.contains(ev.relatedTarget)) return; foco = false; retomar(); });
   }
   anunciar(String(texto), { urgente: tipo === "erro" });
   return { fechar: (motivo = "fechado") => fechar(typeof motivo === "string" && motivo ? motivo : "fechado"), el };
@@ -378,7 +395,7 @@ function criarFaixaDescartar(aoDescartar, aoContinuar) {
 /** modal({titulo, corpo, acoes:[{rotulo, tipo, fn, valor, icone?}], largura:'p'|'m'|'g', aoAbrir, protegerTexto = true}) → Promise<valor>.
     tipo "perigo" é CONTORNO (nunca preenchido, M04) e deve levar `icone` (confirmar() já põe a lixeira).
     fn(api) pode ser async; devolver false mantém aberto; erro lançado aparece dentro do modal. Esc/fechar → null.
-    protegerTexto: Esc, clique fora e Voltar com texto digitado pedem confirmação (X e botões do rodapé fecham direto). */
+    protegerTexto: Esc, clique fora, o X do cabeçalho e Voltar com texto digitado pedem confirmação (os botões do rodapé fecham direto). */
 export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora = true, descricao, protegerTexto = true } = {}) {
   return new Promise(resolve => {
     const anterior = document.activeElement;
@@ -443,7 +460,8 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
     dlg.append(
       h("header", { class: "modal-cab" },
         h("h2", { id: idT }, titulo || ""),
-        h("button", { type: "button", class: "bt-icone modal-x", "aria-label": "Fechar", on: { click: () => api.fechar(null) } }, icone("fechar"))),
+        // plano 1000 (AS-210): o X passa pela mesma proteção do Esc (com texto digitado pergunta «Descartar?»); os botões do rodapé fecham direto
+        h("button", { type: "button", class: "bt-icone modal-x", "aria-label": "Fechar", on: { click: () => tentarFechar() } }, icone("fechar"))),
       faixa.el,
       corpoEl,
       h("footer", { class: "modal-rod" }, botoes));
@@ -460,8 +478,14 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
   });
 }
 
-/** confirmar({titulo, texto, perigo, digitar:'excluir'|null, rotulo}) → Promise<boolean> */
-export async function confirmar({ titulo = "Confirmar", texto = "", perigo = false, digitar = null, rotulo } = {}) {
+/** Ícone do botão de perigo do confirmar() (plano 1000 · AS-212): a lixeira só quando o rótulo é de exclusão («Excluir», «Apagar», «Remover»);
+    «Sair sem salvar», «Pausar cliente», «Cancelar espera» levam o alerta. `icone` explícito sempre vence. */
+export function iconeDoPerigo(rotulo, icone) {
+  if (icone) return icone;
+  return /^(excluir|apagar|remover|descartar)\b/i.test(String(rotulo || "Excluir").trim()) ? "lixeira" : "alerta";
+}
+/** confirmar({titulo, texto, perigo, digitar:'excluir'|null, rotulo, icone}) → Promise<boolean> */
+export async function confirmar({ titulo = "Confirmar", texto = "", perigo = false, digitar = null, rotulo, icone: iconeDado } = {}) {
   let campoDig = null;
   const corpo = h("div", { class: "pilha" },
     texto ? h("p", { class: "confirma-txt" }, texto) : null,
@@ -470,7 +494,7 @@ export async function confirmar({ titulo = "Confirmar", texto = "", perigo = fal
     titulo, corpo, largura: "p", protegerTexto: false,
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: false },
-      { rotulo: rotulo || (perigo ? "Excluir" : "Confirmar"), tipo: perigo ? "perigo" : "primario", icone: perigo ? "lixeira" : undefined,
+      { rotulo: rotulo || (perigo ? "Excluir" : "Confirmar"), tipo: perigo ? "perigo" : "primario", icone: perigo ? iconeDoPerigo(rotulo, iconeDado) : (iconeDado || undefined),
         fn: api => {
           if (!digitar) return true;
           const v = campoDig.querySelector("input").value.trim().toLowerCase();
@@ -482,7 +506,7 @@ export async function confirmar({ titulo = "Confirmar", texto = "", perigo = fal
   return r === true;
 }
 
-/** gaveta({titulo, corpo, largura:'m'|'g', aoFechar, acoes:Node, protegerTexto = true}) → {el, corpo, fechar, trocarTitulo, estaSujo}
+/** gaveta({titulo, corpo, largura:'m'|'g', aoFechar, acoes:Node, protegerTexto = true}) → {el, corpo, fechar, trocarTitulo, estaSujo, zerar}
     Esc e clique fora com texto digitado pedem confirmação; fechar() (botões, código) fecha direto. */
 export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes, protegerTexto = true } = {}) {
   const anterior = document.activeElement;
@@ -495,6 +519,8 @@ export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes, pro
   const g = {
     el: dlg, corpo: corpoEl,
     estaSujo: () => prot.sujo(),
+    /** o conteúdo foi trocado ou gravado pelo código (outro registro, pulso, campo salvo): o que está na tela vira a nova base */
+    zerar() { prot.zerar(); faixa.el.hidden = true; },
     fechar() {
       if (fechada) return; fechada = true;
       dlg.classList.add("saindo");
@@ -545,8 +571,11 @@ export function menu(ancora, itens) {
   const pop = h("div", { class: "menu-pop", role: "menu", popover: "manual" });
   for (const it of itens.filter(Boolean)) {
     if (it === "-") { pop.appendChild(h("hr", { class: "menu-sep" })); continue; }
-    const b = h("button", { type: "button", role: "menuitem", class: ["menu-item", it.perigo && "perigo"], disabled: !!it.desabilitado, tabindex: "-1" },
-      it.icone ? icone(it.icone) : null, h("span", null, it.rotulo));
+    // plano 1000 · AS-288: item desligado com `motivo` mostra o porquê (linha pequena + nome acessível), em vez de só ficar cinza
+    const motivo = it.desabilitado && it.motivo ? String(it.motivo) : "";
+    const b = h("button", { type: "button", role: "menuitem", class: ["menu-item", it.perigo && "perigo"], disabled: !!it.desabilitado, tabindex: "-1",
+      title: motivo || null, "aria-description": motivo || null },
+      it.icone ? icone(it.icone) : null, h("span", null, it.rotulo, motivo ? h("small", { class: "menu-motivo" }, motivo) : null));
     b.addEventListener("click", () => { fechar(); if (it.fn) it.fn(); });
     botoes.push(b); pop.appendChild(b);
   }
@@ -960,6 +989,23 @@ function ligarMascara(entrada, mascara) {
   });
 }
 
+/** Plano 1000 (AS-194): «Caps Lock ligado» junto ao campo de senha enquanto a tecla estiver travada (login, sessão expirada, troca, convite):
+    senha errada por Caps Lock contava tentativa e aproximava o bloqueio. Some ao sair do campo. */
+function ligarCapsLock(w, entrada, erroEl) {
+  if (!entrada || typeof entrada.addEventListener !== "function") return;
+  const aviso = h("small", { class: "campo-caps", role: "status", hidden: true }, icone("alerta"), "Caps Lock ligado");
+  w.insertBefore(aviso, erroEl);
+  const conferir = ev => {
+    if (!ev || typeof ev.getModifierState !== "function") return;
+    let ligado = false;
+    try { ligado = !!ev.getModifierState("CapsLock"); } catch { ligado = false; }
+    if (aviso.hidden === ligado) aviso.hidden = !ligado;
+  };
+  entrada.addEventListener("keydown", conferir);
+  entrada.addEventListener("keyup", conferir);
+  entrada.addEventListener("blur", () => { aviso.hidden = true; });
+}
+
 function ligarContador(w, entrada, max) {
   const c = h("small", { class: "campo-contador", hidden: true });
   w.appendChild(c);
@@ -1048,9 +1094,11 @@ export function campo(o = {}) {
   const aj = ajuda ? h("small", { class: "campo-ajuda", id: idAj }, ajuda) : null;
 
   if (tipo === "interruptor" || tipo === "checkbox") {
-    const inp = h("input", { type: "checkbox", id, name: nome, role: tipo === "interruptor" ? "switch" : null, checked: !!valor, disabled: !!desabilitado, "aria-describedby": desc });
+    // plano 1000 · AS-265: o nome acessível vem de UM elemento só (aria-labelledby → o texto), não do <label> que envolve o controle e também aponta por for
+    const idRot = `${id}-rot`;
+    const inp = h("input", { type: "checkbox", id, name: nome, role: tipo === "interruptor" ? "switch" : null, checked: !!valor, disabled: !!desabilitado, "aria-describedby": desc, "aria-labelledby": idRot });
     return h("div", { class: ["campo", "campo-check", tipo === "interruptor" && "campo-switch"], dataset: { campo: nome } },
-      h("label", { for: id }, inp, h("span", { class: "check-marca", "aria-hidden": "true" }), h("span", { class: "check-txt" }, rotulo)), aj, erro);
+      h("label", { for: id }, inp, h("span", { class: "check-marca", "aria-hidden": "true" }), h("span", { class: "check-txt", id: idRot }, rotulo)), aj, erro);
   }
   if (tipo === "multipla") {
     const sel = new Set(Array.isArray(valor) ? valor.map(String) : []);
@@ -1103,6 +1151,7 @@ export function campo(o = {}) {
   const w = h("div", { class: ["campo", `campo-${tipo}`], dataset: { campo: nome } },
     h("label", { for: id }, rotulo, obrigatorio ? h("span", { class: "obrig", "aria-hidden": "true" }, " *") : null), ctl, aj, erro);
   entrada = entrada || ctl;
+  if (tipo === "senha") ligarCapsLock(w, entrada, erro);
   const mascara = tipo === "moeda" || validar === "moeda" ? "moeda" : validar === "telefone" ? "telefone" : null;
   if (mascara && entrada.addEventListener) ligarMascara(entrada, mascara);
   if (validar !== undefined && validar !== null && validar !== false) ligarValidacao(w, entrada, { validar, obrigatorio, tipo, erroEl: erro });
@@ -1700,9 +1749,11 @@ export function linkWhatsApp(texto, numero) {
   return `https://wa.me/${n}?text=${encodeURIComponent(String(texto))}`;
 }
 
-/** Bloco de link gerado (convite / nova senha): campo só leitura + Copiar + WhatsApp. */
-export function blocoLink(link, { rotulo = "Link", textoWhats } = {}) {
+/** Bloco de link gerado (convite / nova senha): campo só leitura + Copiar + WhatsApp.
+    AS-272: `central(texto)` (opcional) acrescenta «Enviar pela central» — quem chama abre as Conversas com o texto pronto (nunca envia sozinho). */
+export function blocoLink(link, { rotulo = "Link", textoWhats, central } = {}) {
   const id = novoId("lnk");
+  const textoCompleto = textoWhats ? `${textoWhats}\n${link}` : link;
   const inp = h("input", { id, type: "text", class: "mono", readonly: true, value: link });
   inp.addEventListener("focus", () => inp.select());
   return h("div", { class: "bloco-link" },
@@ -1710,7 +1761,8 @@ export function blocoLink(link, { rotulo = "Link", textoWhats } = {}) {
     inp,
     h("div", { class: "linha" },
       h("button", { type: "button", class: "bt bt-prim", on: { click: () => copiar(link, { aviso: "Link copiado." }) } }, icone("copiar"), "Copiar"),
-      h("a", { class: "bt bt-sec", href: linkWhatsApp(textoWhats ? `${textoWhats}\n${link}` : link), target: "_blank", rel: "noopener noreferrer" }, icone("whatsapp"), "Enviar pelo WhatsApp")));
+      h("a", { class: "bt bt-sec", href: linkWhatsApp(textoCompleto), target: "_blank", rel: "noopener noreferrer" }, icone("whatsapp"), "Enviar pelo WhatsApp"),
+      typeof central === "function" ? h("button", { type: "button", class: "bt bt-sec bloco-link-central", on: { click: () => central(textoCompleto) } }, icone("chat"), "Enviar pela central") : null));
 }
 
 /** Barra de uso × limite (Plano e uso, Admin). limite null = sem limite. */
@@ -1821,10 +1873,29 @@ export function segmentado({ opcoes = [], valor, tipo = "abas", aoMudar, rotulo 
     el.style.setProperty("--seg-x", `${esq}px`);
     el.style.setProperty("--seg-w", `${w}px`);
     if (!el.classList.contains("seg-pronto")) {
+      mostrarAtivo(esq, w);   // plano 1000 (AS-214): a 360 px a opção ativa pode nascer fora da vista (Admin: «Planos», «Domínios»)
       el.classList.add("seg-pronto");
       if (!movimentoReduzido()) proximoQuadro(() => el.classList.add("seg-anima"));   // a 1ª colocação não desliza desde o zero
     }
   }
+  /** Plano 1000 (AS-214): opções cortadas pela largura ganham a borda esmaecida do lado que continua (data-corte = esq | dir | ambos). */
+  function bordas() {
+    const vis = Number(el.clientWidth) || 0, total = Number(el.scrollWidth) || 0, x = Number(el.scrollLeft) || 0;
+    const esq = x > 2, dir = total - vis - x > 2;
+    const v = esq && dir ? "ambos" : esq ? "esq" : dir ? "dir" : "";
+    if (v) el.dataset.corte = v; else delete el.dataset.corte;
+    return v;
+  }
+  /** Rola a faixa (só ela, nunca a página) até a opção ativa ficar inteira à vista. */
+  function mostrarAtivo(esq, w) {
+    const vis = Number(el.clientWidth) || 0, x = Number(el.scrollLeft) || 0;
+    if (!vis || !(Number(el.scrollWidth) > vis)) { bordas(); return; }
+    const folga = 24;
+    if (esq < x) el.scrollLeft = Math.max(0, esq - folga);
+    else if (esq + w > x + vis) el.scrollLeft = esq + w - vis + folga;
+    bordas();
+  }
+  el.addEventListener("scroll", () => bordas(), { passive: true });
   function marcar() {
     for (const [k, { b }] of mapa) { const on = k === atual; b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1; }
     posicionar();
@@ -1850,7 +1921,8 @@ export function segmentado({ opcoes = [], valor, tipo = "abas", aoMudar, rotulo 
     if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); escolher(chaves[i], true); }
   });
   marcar();
-  if (typeof ResizeObserver === "function") { try { new ResizeObserver(() => posicionar()).observe(el); } catch { /* ok */ } }
+  if (typeof ResizeObserver === "function") { try { new ResizeObserver(() => { posicionar(); bordas(); }).observe(el); } catch { /* ok */ } }
+  el.bordas = bordas;
   try { if (typeof document !== "undefined" && document.fonts && document.fonts.ready) document.fonts.ready.then(posicionar); } catch { /* ok */ }
   proximoQuadro(posicionar);
   el.ativar = v => escolher(v, false);
@@ -2015,7 +2087,7 @@ function aoSair() {
   }
 }
 function aoOcultar() { if (typeof document !== "undefined" && document.hidden) aoSair(); }
-/** acaoComDesfazer({texto, aplicar, reverter, firmar?, ms = 7000}) → Promise<{estado: "mantida"|"desfeita"|"falhou", desfeita, erro?}>.
+/** acaoComDesfazer({texto, aplicar, reverter, firmar?, ms = 7000, acao?: {rotulo, fn}, aoCriar?}) → Promise<{estado: "mantida"|"desfeita"|"falhou", desfeita, erro?}>.
     Roda `aplicar()` na hora (UI otimista), mostra o toast com "Desfazer" por `ms` e liga Ctrl/⌘+Z (fora de campo de texto) ao mais recente
     (até 3 pendentes: o 4º firma o mais antigo). A promessa só resolve quando o toast fecha (mantida), a pessoa desfaz (desfeita) ou algo falha.
     `aplicar` que falha → toast de erro e estado "falhou" (nada fica pendente); `reverter` que falha → toast de erro dizendo que o estado real é o aplicado.
@@ -2023,7 +2095,7 @@ function aoOcultar() { if (typeof document !== "undefined" && document.hidden) a
     desfazer e nunca roda se a pessoa desfizer; se falhar, a tela volta (reverter) e o estado é "falhou". Se a página for fechada (pagehide) ou for para
     segundo plano (visibilitychange com document.hidden) com a ação pendente, `firmar({ saindo: true })` roda na hora: use o `saindo` para mandar a
     escrita com {keepalive: true}. Quando o aviso fecha normalmente, `firmar()` é chamada sem argumento. */
-export async function acaoComDesfazer({ texto, aplicar, reverter, firmar, ms = 7000, aoCriar } = {}) {
+export async function acaoComDesfazer({ texto, aplicar, reverter, firmar, ms = 7000, aoCriar, acao = null } = {}) {
   if (typeof document !== "undefined" && _ouvindoZ !== document) { document.addEventListener("keydown", aoTeclaZ); _ouvindoZ = document; }
   if (typeof addEventListener === "function" && _ouvindoSaida !== addEventListener) { addEventListener("pagehide", aoSair); _ouvindoSaida = addEventListener; }
   if (typeof document !== "undefined" && _ouvindoOculta !== document) { document.addEventListener("visibilitychange", aoOcultar); _ouvindoOculta = document; }
@@ -2038,7 +2110,10 @@ export async function acaoComDesfazer({ texto, aplicar, reverter, firmar, ms = 7
   }
   while (_desfazer.length >= 3) { const velho = _desfazer[0]; manterItem(velho); if (velho.t) velho.t.fechar(); }
   _desfazer.push(item);
-  item.t = toast(texto, { tipo: "info", ms, desfazer: () => desfazerItem(item), aoFechar: motivo => { if (motivo !== "desfazer") manterItem(item); } });
+  // plano 1000 (pedido da Agenda): `acao` ({rotulo, fn}) é um 2º botão no mesmo aviso («Avisar paciente», «Abrir negócio»). Tocar nele mantém a
+  // ação (firma o que estava adiado) e só então roda acao.fn — nunca roda sobre algo que acabou de ser desfeito
+  const acaoOk = acao && typeof acao.fn === "function" && String(acao.rotulo || "").trim() ? acao : null;
+  item.t = toast(texto, { tipo: "info", ms, desfazer: () => desfazerItem(item), acao: acaoOk, aoFechar: motivo => { if (motivo !== "desfazer") manterItem(item); } });
   // aoCriar({firmarAgora}): quem chama pode encerrar o prazo antes (ex.: a gaveta que mostrava o movimento fechou) — firma na hora e o
   // aviso «Desfazer» sai, como quando a página sai (nunca fica um «Desfazer» à vista de algo que já valeu)
   if (typeof aoCriar === "function") {

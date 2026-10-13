@@ -505,7 +505,8 @@ test("lista: resumo em números, cartões com taxa e estado, busca nas receitas,
     ex[2].dispatchEvent(new d.Evento("click"));
     assert.match(raiz.querySelector(".au-ia-txt").value, /consulta/);
     // comandos desta tela na paleta, cancelados ao desmontar
-    assert.deepEqual(registrados.map(c => c.id), ["automacoes.nova", "automacoes.ia", "automacoes.receitas"]);
+    // plano 1000 · AS-229: além destes, cada automação entra na paleta (automacoes.alternar.<id> / automacoes.abrir.<id>)
+    assert.deepEqual(registrados.map(c => c.id).filter(id => !/^automacoes.(alternar|abrir)./.test(id)), ["automacoes.nova", "automacoes.ia", "automacoes.receitas"]);
     A.desmontar();
     assert.equal(registrados.length, 0);
   } finally { d.fim(); }
@@ -519,7 +520,9 @@ test("lista: ligar uma automação que manda mensagem pede confirmação; «não
     const chamadas = [];
     let resposta = false, pedidos = 0;
     const ctx = ctxFalso(ui, {
-      confirmar: async o => { pedidos++; assert.match(o.titulo, /^Ligar «Lembrete por mensagem»\?/); return resposta; },
+      // plano 1000 · AS-277: desligar quem tem gente em espera (a2: em_espera 1) também pergunta — as esperas são canceladas
+      confirmar: async o => { pedidos++; if (/^Desligar/.test(o.titulo)) { assert.match(o.titulo, /^Desligar «Tarefa de orçamento»\?/); assert.match(o.texto, /1 pessoa está no meio da sequência/); return true; }
+        assert.match(o.titulo, /^Ligar «Lembrete por mensagem»\?/); return resposta; },
       rpc: async (nome, p) => { chamadas.push(nome); if (nome === "nx_automacoes_listar") return dadosLista(); if (nome === "nx_automacao_ativar") return { ...dadosLista().itens[0], ativo: p.p_ativo }; return {}; },
       comandos: () => () => {},
     });
@@ -543,7 +546,7 @@ test("lista: ligar uma automação que manda mensagem pede confirmação; «não
     assert.equal(sw2.getAttribute("aria-checked"), "true");
     sw2.dispatchEvent(new d.Evento("click"));
     await tique(4);
-    assert.equal(pedidos, 2, "desligar nunca pergunta");
+    assert.equal(pedidos, 3, "desligar com 1 em espera pergunta uma vez (plano 1000 · AS-277)");
     assert.equal(chamadas.filter(n => n === "nx_automacao_ativar").length, 2);
     A.desmontar();
   } finally { d.fim(); }

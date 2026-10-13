@@ -30,6 +30,23 @@ export function formatarContagem(segundos) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+/** Plano 1000 (AS-202): a marca é a padrão da plataforma (produto «Órbita» ou sem nome próprio)? Revenda com nome próprio → false. */
+export function marcaPadrao(m) {
+  const p = String((m && m.produto) || "").trim();
+  return !p || p === "Órbita";
+}
+/** Plano 1000 (AS-291): o e-mail como o servidor compara — sem espaços nas pontas (autopreenchimento) e em minúsculas. */
+export function normalizarEmail(v) { return String(v ?? "").trim().toLowerCase(); }
+/** Plano 1000 (AS-195): formato mínimo de e-mail antes de gastar uma tentativa no servidor («ana@» não sai daqui). */
+export function emailValido(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v ?? "")); }
+/** Toque (celular/tablet): o foco automático abriria o teclado por cima da marca (AS-203). */
+function toque() { try { return typeof matchMedia === "function" && !!matchMedia("(pointer: coarse)").matches; } catch { return false; } }
+/** Foca o campo só com mouse/teclado (AS-203). */
+function focarDepois(ctx, seletor) {
+  if (toque()) return;
+  setTimeout(() => { const i = ctx.alvo && ctx.alvo.querySelector(seletor); if (i) i.focus(); }, 60);
+}
+
 /* ---------------- moldura: arte editorial + cartão ---------------- */
 function moldura(ctx, { titulo, sub, cartao, marca }) {
   const { ui } = ctx;
@@ -49,19 +66,31 @@ function moldura(ctx, { titulo, sub, cartao, marca }) {
   const t = String(titulo || "").trim();
   const i = t.lastIndexOf(" ");
   const tituloEl = h("p", { class: "entrar-titulo" }, i > 0 ? [t.slice(0, i + 1), h("em", null, t.slice(i + 1))] : t);
+  // plano 1000 (AS-202): a régua «Anúncio · Conversa · Venda» e as pílulas são o discurso da Órbita — numa marca de revenda não aparecem
+  const padrao = marcaPadrao(m);
   const arte = h("section", { class: "entrar-arte", "aria-label": m.produto || "Órbita" },
     marcaEl,
-    h("p", { class: "entrar-regua", "aria-hidden": "true" }, h("i"), h("span", { class: "selo-caps" }, "Anúncio · Conversa · Venda")),   // régua editorial acima da manchete (plano 50 · A14)
+    padrao ? h("p", { class: "entrar-regua", "aria-hidden": "true" }, h("i"), h("span", { class: "selo-caps" }, "Anúncio · Conversa · Venda")) : null,   // régua editorial acima da manchete (plano 50 · A14)
     tituloEl,
     sub ? h("p", { class: "entrar-sub" }, sub) : null,
     h("div", { class: "entrar-orbita", "aria-hidden": "true" }, h("i", { class: "o1" }), h("i", { class: "o2" }), h("i", { class: "p" }), h("i", { class: "l l1" }), h("i", { class: "l l2" }), h("i", { class: "l l3" })),
-    h("div", { class: "entrar-pontos", "aria-hidden": "true" },
-      ui.pilula("WhatsApp oficial", "prim", { icone: "whatsapp" }), ui.pilula("Funil de vendas", "sec", { icone: "funil" }), ui.pilula("Retorno do anúncio", "neutra", { icone: "anuncio" })));
+    padrao ? h("div", { class: "entrar-pontos", "aria-hidden": "true" },
+      ui.pilula("WhatsApp oficial", "prim", { icone: "whatsapp" }), ui.pilula("Funil de vendas", "sec", { icone: "funil" }), ui.pilula("Retorno do anúncio", "neutra", { icone: "anuncio" })) : null);
   return h("main", { class: "entrar", id: "vista-publica" }, arte, cartao);
 }
 
 function caixaMsg(ui) { return ui.h("p", { class: "entrar-erro", role: "alert", hidden: true }); }
 function mostrar(el, texto) { el.textContent = texto || ""; el.hidden = !texto; }
+
+/** Plano 1000 (AS-201): o caminho de «Esqueci a senha». Sem WhatsApp de suporte na marca, quem é o único administrador não fica sem saída:
+    a frase aponta para quem fornece o sistema (a revenda/plataforma da marca deste endereço). */
+export function textosEsqueci(ctx, m) {
+  const base = "Peça ao administrador da sua empresa um link para criar uma senha nova.";
+  if (m && m.suporte_wa) return [base];
+  const org = ctx && ctx.marcaPublica && ctx.marcaPublica.org && ctx.marcaPublica.org.nome;
+  const quem = org ? `a equipe da ${String(org).slice(0, 80)}` : `quem fornece o ${(m && m.produto) || "Órbita"} para a sua empresa`;
+  return [base, `Se você é o administrador, fale com ${quem}: só a plataforma gera um link novo para o administrador.`];
+}
 
 /* ---------------- #/login ---------------- */
 function telaEntrar(ctx) {
@@ -73,15 +102,20 @@ function telaEntrar(ctx) {
   // o botão mostra o que está acontecendo («Entrando…» com o giro ao lado) em vez de sumir o texto (plano 50 · A14)
   const rotuloBt = h("span", { class: "bt-rotulo" }, "Entrar");
   const botao = h("button", { type: "submit", class: "bt bt-prim bt-g bt-bloco bt-carrega" }, rotuloBt);
+  // plano 1000 (AS-185): «Lembrar neste aparelho» desmarcado = aparelho compartilhado — as respostas guardadas (contatos, telefones) ficam só na
+  // memória da aba, nunca no disco do aparelho
+  const lembrar = typeof ctx.aparelhoCompartilhado === "function"
+    ? ui.campo({ rotulo: "Lembrar neste aparelho", nome: "lembrar", tipo: "checkbox", valor: !ctx.aparelhoCompartilhado(),
+      ajuda: "Desmarque em computador compartilhado: os dados da tela não ficam guardados aqui." }) : null;
   const form = h("form", { class: "entrar-form", novalidate: true },
     ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", autocomplete: "username", obrigatorio: true, inputmode: "email" }),
     ui.campo({ rotulo: "Senha", nome: "senha", tipo: "senha", autocomplete: "current-password", obrigatorio: true }),
+    lembrar,
     erro,
     botao);
   const esqueci = h("button", { type: "button", class: "link", "aria-expanded": "false" }, "Esqueci a senha");
   const ajuda = h("div", { class: "aviso", hidden: true, role: "status" }, ui.icone("info"),
-    h("div", { class: "pilha-p" },
-      h("p", null, "Peça ao administrador da sua empresa um link para criar uma senha nova."),
+    h("div", { class: "pilha-p" }, textosEsqueci(ctx, m).map(t => h("p", null, t)),
       m.suporte_wa ? h("a", { class: "bt bt-sec bt-p", href: ui.linkWhatsApp("Olá! Preciso de ajuda para entrar no sistema.", m.suporte_wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Falar com o suporte") : null));
   esqueci.addEventListener("click", () => { ajuda.hidden = !ajuda.hidden; esqueci.setAttribute("aria-expanded", String(!ajuda.hidden)); });
   // plano 100 · A9: depois da 3ª senha errada o caminho de recuperação fica em destaque e já aberto (quem erra 3 vezes não lembra a senha)
@@ -105,6 +139,10 @@ function telaEntrar(ctx) {
       clearInterval(t); _relogios.delete(t);
       botao.disabled = false;
       mostrar(erro, "Pode tentar de novo.");
+      // plano 1000 (AS-200): o foco volta ao campo de senha e o leitor de tela ouve que já pode tentar
+      const s = form.querySelector("input[name=senha]");
+      if (s && s.isConnected) try { s.focus({ preventScroll: true }); } catch { s.focus(); }
+      if (typeof ui.anunciar === "function") ui.anunciar("Pode tentar de novo.");
     }, 1000);
     _relogios.add(t);
     destacarEsqueci();
@@ -116,15 +154,18 @@ function telaEntrar(ctx) {
     mostrar(erro, "");
     ui.marcarErro(form, null);
     const d = ui.lerForm(form);
-    if (!d.email) return ui.marcarErro(form, "email", "Informe o e-mail.");
+    const email = normalizarEmail(d.email);
+    if (!email) return ui.marcarErro(form, "email", "Informe o e-mail.");
+    // AS-195: «ana@» não vai ao servidor (não conta tentativa nem aproxima o bloqueio)
+    if (!emailValido(email)) return ui.marcarErro(form, "email", "Confira o e-mail (exemplo: nome@empresa.com.br).");
     if (!d.senha) return ui.marcarErro(form, "senha", "Informe a senha.");
     const bt = form.querySelector("button[type=submit]");
     rotuloBt.textContent = "Entrando…";
     try {
-      const r = await ui.carregando(bt, api.publica("nx_entrar", { p_email: d.email, p_senha: d.senha }));
+      const r = await ui.carregando(bt, api.publica("nx_entrar", { p_email: email, p_senha: d.senha }));
       if (!r || !r.token) throw Object.assign(new Error("credenciais_invalidas"), { codigo: "credenciais_invalidas" });
       rotuloBt.textContent = "Abrindo…";
-      await ctx.aoEntrar(r.token);
+      await ctx.aoEntrar(r.token, lembrar ? { compartilhado: d.lembrar === false } : {});
     } catch (e) {
       rotuloBt.textContent = "Entrar";
       const msg = api.mensagemErro(e);
@@ -148,7 +189,7 @@ function telaEntrar(ctx) {
     ajuda);
   ui.limpar(ctx.alvo);
   ctx.alvo.appendChild(moldura(ctx, { titulo: m.login_titulo, sub: null, cartao }));
-  setTimeout(() => { const i = ctx.alvo.querySelector("input[name=email]"); if (i) i.focus(); }, 60);
+  focarDepois(ctx, "input[name=email]");
 }
 
 /* ---------------- #/convite/<token> ---------------- */
@@ -184,7 +225,9 @@ async function telaConvite(ctx, token) {
   const form = h("form", { class: "entrar-form", novalidate: true },
     ui.campo({ rotulo: "Seu nome", nome: "nome", valor: cv.nome || "", autocomplete: "name", obrigatorio: true, max: 80 }),
     ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", valor: cv.email || "", autocomplete: "username", obrigatorio: true }),
-    ui.campo({ rotulo: "Senha", nome: "senha", tipo: "senha", autocomplete: "new-password", obrigatorio: true, ajuda: "Pelo menos 8 caracteres." }),
+    // plano 1000 (AS-197): medidor de força e «Repita a senha» — um erro de digitação ao criar a conta deixava a pessoa trancada
+    ui.campo({ rotulo: "Senha", nome: "senha", tipo: "senha", autocomplete: "new-password", obrigatorio: true, ajuda: "Pelo menos 8 caracteres.", validar: "senha" }),
+    ui.campo({ rotulo: "Repita a senha", nome: "senha2", tipo: "senha", autocomplete: "new-password", obrigatorio: true }),
     erro,
     h("button", { type: "submit", class: "bt bt-prim bt-g bt-bloco" }, "Criar acesso"),
     cv.papel === "gestor"
@@ -197,11 +240,13 @@ async function telaConvite(ctx, token) {
     ui.marcarErro(form, null);
     const d = ui.lerForm(form);
     if (!d.nome || d.nome.length < 2) return ui.marcarErro(form, "nome", "Informe o seu nome.");
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.email || "")) return ui.marcarErro(form, "email", "Esse e-mail não parece válido.");
+    const email = normalizarEmail(d.email);
+    if (!emailValido(email)) return ui.marcarErro(form, "email", "Esse e-mail não parece válido.");
     if (!d.senha || d.senha.length < 8) return ui.marcarErro(form, "senha", "A senha precisa ter pelo menos 8 caracteres.");
+    if (d.senha !== d.senha2) return ui.marcarErro(form, "senha2", "As duas senhas não são iguais.");
     const bt = form.querySelector("button[type=submit]");
     try {
-      const r = await ui.carregando(bt, api.publica("nx_convite_aceitar", { p_convite: token, p_nome: d.nome, p_email: d.email, p_senha: d.senha }));
+      const r = await ui.carregando(bt, api.publica("nx_convite_aceitar", { p_convite: token, p_nome: d.nome, p_email: email, p_senha: d.senha }));
       await ctx.aoEntrar(r.token, { cliente_id: r.cliente_id || null });
     } catch (e) {
       mostrar(erro, api.mensagemErro(e));
@@ -217,7 +262,7 @@ async function telaConvite(ctx, token) {
     form);
   ui.limpar(ctx.alvo);
   ctx.alvo.appendChild(moldura(ctx, { titulo: marca.login_titulo, cartao, marca }));
-  setTimeout(() => { const i = ctx.alvo.querySelector(cv.nome ? "input[name=senha]" : "input[name=nome]"); if (i) i.focus(); }, 60);
+  focarDepois(ctx, cv.nome ? "input[name=senha]" : "input[name=nome]");
 }
 
 /* ---------------- #/senha/<token> ---------------- */
@@ -258,7 +303,7 @@ function telaSenha(ctx, token) {
   });
   ui.limpar(ctx.alvo);
   ctx.alvo.appendChild(moldura(ctx, { titulo: m.login_titulo, cartao }));
-  setTimeout(() => { const i = ctx.alvo.querySelector("input[name=senha]"); if (i) i.focus(); }, 60);
+  focarDepois(ctx, "input[name=senha]");
 }
 
 /* ---------------- troca obrigatória (conta.trocar_senha) ---------------- */
@@ -292,9 +337,10 @@ function telaTrocar(ctx) {
   });
   const cartao = h("section", { class: "entrar-cartao", "aria-labelledby": "t-trocar" },
     h("h1", { id: "t-trocar" }, "Troque a sua senha"),
-    h("p", { class: "sub" }, "Por segurança, crie uma senha só sua antes de continuar."),
+    // plano 1000 (AS-263): diz o motivo — a senha atual foi criada por outra pessoa
+    h("p", { class: "sub" }, "Sua senha foi criada por um administrador. Crie uma que só você saiba."),
     form, h("div", { class: "entrar-rodape" }, sair));
   ui.limpar(ctx.alvo);
   ctx.alvo.appendChild(moldura(ctx, { titulo: m.login_titulo, cartao }));
-  setTimeout(() => { const i = ctx.alvo.querySelector("input[name=atual]"); if (i) i.focus(); }, 60);
+  focarDepois(ctx, "input[name=atual]");
 }

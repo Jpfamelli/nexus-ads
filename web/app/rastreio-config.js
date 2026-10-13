@@ -12,6 +12,12 @@ export const secoesConfig = [
 
 /** Onde o script é servido em produção (GitHub Pages do Nexus Ads: endereço estável, sem depender do domínio do painel). */
 export const URL_SCRIPT = "https://jpfamelli.github.io/nexus-ads/rastreio.js";
+/** Plano 1000 (AD-168): o snippet novo aponta para a versão FIXA (rastreio.v1.js) com Subresource Integrity — um push no repositório
+    não muda o JS que roda no site dos clientes; o navegador recusa um arquivo diferente do conferido. NUNCA editar o rastreio.v1.js
+    depois de publicado: correção = rastreio.v2.js + hash novo aqui (testes/plano1000-ads confere o hash com o arquivo).
+    O rastreio.js sem versão continua no ar para os sites que já o instalaram. */
+export const URL_SCRIPT_V1 = "https://jpfamelli.github.io/nexus-ads/rastreio.v1.js";
+export const SRI_V1 = "sha384-5seekIDmBnVMEmAI/uZoEKAyr41xbFHY+KxEYM2sHNNVw/ef9D4mvmaNjOnDCkpv";
 const HOSTS_LOCAIS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 /** O servidor falso anuncia para onde o snippet deve apontar (window.ORBITA_DEV_FALSO.rastreio); só vale se for local. */
@@ -29,30 +35,40 @@ const aspas = v => String(v ?? "").replace(/[<>"&]/g, "");   // a chave é hex; 
 /** Snippet de instalação (F9): produção → script do Pages sem data-url (o padrão do script é o Órbita); servidor falso → o local, com data-url e data-apikey. */
 export function snippetRastreio(chave, local = null) {
   if (local) return `<script src="${aspas(local.script)}" data-chave="${aspas(chave)}" data-url="${aspas(local.url)}" data-apikey="${aspas(local.apikey)}" defer></script>`;
-  return `<script src="${URL_SCRIPT}" data-chave="${aspas(chave)}" defer></script>`;
+  return `<script src="${URL_SCRIPT_V1}" integrity="${SRI_V1}" crossorigin="anonymous" data-chave="${aspas(chave)}" defer></script>`;
 }
 /** Variante para gerenciador de tags (GTM, Wix, Webflow): a configuração vai em window.ORBITA_RASTREIO, porque ali o
     document.currentScript pode vir nulo e os atributos data- se perdem. */
 export function snippetGerenciador(chave, local = null) {
   const cfg = local ? `{ chave: "${aspas(chave)}", url: "${aspas(local.url)}", apikey: "${aspas(local.apikey)}" }` : `{ chave: "${aspas(chave)}" }`;
-  return `<script>window.ORBITA_RASTREIO = ${cfg};</script>\n<script src="${aspas(local ? local.script : URL_SCRIPT)}" defer></script>`;
+  return `<script>window.ORBITA_RASTREIO = ${cfg};</script>\n<script src="${local ? aspas(local.script) : `${URL_SCRIPT_V1}" integrity="${SRI_V1}" crossorigin="anonymous`}" defer></script>`;
 }
 
 /** Parâmetros de URL dos anúncios (F9): macros de ID de cada plataforma — o ID casa direto com a campanha que o Órbita lê do
     Meta/Google; o nome digitado à mão (reserva) só casa se for idêntico. */
+// plano 1000 (AD-184): o Meta não é só Instagram — utm_source=meta (o servidor reconhece meta/fb/ig) e, em utm_term, onde o anúncio
+// apareceu ({{site_source_name}}: fb, ig, msg, an · {{placement}}: feed, stories…); antes um anúncio no Facebook ficava «instagram»
 export const UTM = Object.freeze({
   google: "utm_source=google&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}&utm_term={keyword}",
-  meta: "utm_source=instagram&utm_medium=paid_social&utm_campaign={{campaign.id}}&utm_content={{ad.id}}",
-  reserva: "utm_source=instagram&utm_medium=paid_social&utm_campaign=nome-da-campanha&utm_content=nome-do-anuncio",
+  meta: "utm_source=meta&utm_medium=paid_social&utm_campaign={{campaign.id}}&utm_content={{ad.id}}&utm_term={{site_source_name}}-{{placement}}",
+  reserva: "utm_source=meta&utm_medium=paid_social&utm_campaign=nome-da-campanha&utm_content=nome-do-anuncio",
 });
 
-/** Aviso de privacidade (F8): o que fica no navegador, o que vai ao Órbita e por quanto tempo. */
-export const TEXTO_PRIVACIDADE = "O script guarda no navegador do visitante (armazenamento local, sem cookies), por até 30 dias, de onde veio a visita: os parâmetros utm_* e os identificadores de clique dos anúncios (gclid, gbraid, wbraid, fbclid). Quando a pessoa toca no botão do WhatsApp, esses parâmetros e o endereço da página vão para o Órbita, que devolve um código curto (ex.: [ref K7Q2P]) e guarda o clique por até 45 dias para ligar a conversa à campanha. O script não coleta nome, telefone nem e-mail, e respeita o sinal Global Privacy Control do navegador (com ele, nada é guardado nem enviado).";
+/** Plano 1000 (AD-167): os textos de privacidade seguem as opções do script — data-dias (0 = só a visita) e data-gpc="ignorar" (sem a
+    frase do GPC). O painel gera o snippet padrão (30 dias, respeita o GPC), então mostra o texto padrão; quem mudar as opções no site
+    gera o texto com elas (cabeçalho do rastreio.js). */
+const periodoPriv = dias => { const n = Number(dias); return n === 0 ? "só durante a visita" : `por até ${Number.isFinite(n) && n > 0 ? Math.round(n) : 30} dias`; };
+export function textoPrivacidade({ dias = 30, gpc = true } = {}) {
+  return `O script guarda no navegador do visitante (armazenamento local, sem cookies), ${periodoPriv(dias)}, de onde veio a visita: os parâmetros utm_* e os identificadores de clique dos anúncios (gclid, gbraid, wbraid, fbclid). Quando a pessoa toca no botão do WhatsApp, esses parâmetros e o endereço da página vão para o Órbita, que devolve um código curto (ex.: [ref K7Q2P]) e guarda o clique por até 45 dias para ligar a conversa à campanha. O script não coleta nome, telefone nem e-mail${gpc ? ", e respeita o sinal Global Privacy Control do navegador (com ele, nada é guardado nem enviado)" : ""}.`;
+}
+/** Aviso de privacidade (F8): o que fica no navegador, o que vai ao Órbita e por quanto tempo (snippet padrão). */
+export const TEXTO_PRIVACIDADE = textoPrivacidade();
 
-/** Parágrafo modelo para a política de privacidade do site (F8), com o nome da empresa. */
-export function textoPolitica(empresa) {
+/** Parágrafo modelo para a política de privacidade do site (F8), com o nome da empresa (AD-167: e as opções do script). */
+export function textoPolitica(empresa, { dias = 30, gpc = true } = {}) {
   const nome = String(empresa || "").trim() || "nossa empresa";
-  return `Origem das visitas. Este site usa um pequeno script do Órbita, o sistema de atendimento de ${nome}, para saber de qual anúncio ou campanha veio cada contato. O script guarda no seu navegador, por até 30 dias e sem cookies, os parâmetros de campanha do endereço da página (utm_source, utm_medium, utm_campaign, utm_content e utm_term) e os identificadores de clique de anúncios (gclid, gbraid, wbraid e fbclid). Quando você toca no botão do WhatsApp, essas informações e o endereço da página são enviados ao Órbita, que acrescenta à mensagem um código curto (por exemplo, [ref K7Q2P]) e guarda o clique por até 45 dias para associar a conversa à campanha. O script não coleta nome, telefone nem e-mail. Se o seu navegador enviar o sinal Global Privacy Control, nada é guardado nem enviado. Usamos essas informações com base no legítimo interesse de medir os resultados dos nossos anúncios (LGPD, art. 7º, IX); você pode apagá-las a qualquer momento limpando os dados deste site no seu navegador.`;
+  const periodo = periodoPriv(dias);
+  return `Origem das visitas. Este site usa um pequeno script do Órbita, o sistema de atendimento de ${nome}, para saber de qual anúncio ou campanha veio cada contato. O script guarda no seu navegador, ${periodo} e sem cookies, os parâmetros de campanha do endereço da página (utm_source, utm_medium, utm_campaign, utm_content e utm_term) e os identificadores de clique de anúncios (gclid, gbraid, wbraid e fbclid). Quando você toca no botão do WhatsApp, essas informações e o endereço da página são enviados ao Órbita, que acrescenta à mensagem um código curto (por exemplo, [ref K7Q2P]) e guarda o clique por até 45 dias para associar a conversa à campanha. O script não coleta nome, telefone nem e-mail.${gpc ? " Se o seu navegador enviar o sinal Global Privacy Control, nada é guardado nem enviado." : ""} Usamos essas informações com base no legítimo interesse de medir os resultados dos nossos anúncios (LGPD, art. 7º, IX); você pode apagá-las a qualquer momento limpando os dados deste site no seu navegador.`;
 }
 
 /** O que a troca de chave desliga (F7): os DOIS lugares que usam a chave. */
@@ -76,14 +92,29 @@ const MOTIVOS = {
   codigo_desconhecido: "código não reconhecido",
   codigo_invalido: "código inválido",
 };
-/** Rótulo do motivo de um clique (F10); clique sem motivo e sem casar = a mensagem nunca chegou com o código. */
-export const rotuloMotivo = (motivo, casou = false) => (casou ? MOTIVOS.aplicado : MOTIVOS[motivo] || (motivo ? String(motivo).replace(/_/g, " ") : "a mensagem não chegou com o código"));
+/** Rótulo do motivo de um clique (F10); clique sem motivo e sem casar = a mensagem nunca chegou com o código.
+    Plano 1000 (AD-183): clique de menos de 1 h sem motivo ainda está «aguardando a mensagem» (a pessoa pode estar escrevendo). */
+export const AGUARDANDO_MS = 3600e3;
+export const rotuloMotivo = (motivo, casou = false, { em = null, agora = Date.now() } = {}) => {
+  if (casou) return MOTIVOS.aplicado;
+  if (MOTIVOS[motivo]) return MOTIVOS[motivo];
+  if (motivo) return String(motivo).replace(/_/g, " ");
+  const t = em ? Date.parse(em) : NaN;
+  return Number.isFinite(t) && agora - t >= 0 && agora - t < AGUARDANDO_MS ? "aguardando a mensagem" : "a mensagem não chegou com o código";
+};
+/** Plano 1000 (AD-181): o domínio da página do clique («www.clinica.com.br» → «clinica.com.br»); null se não for URL. */
+export function hostDe(url) {
+  try { const u = new URL(String(url)); return /^https?:$/.test(u.protocol) ? u.hostname.replace(/^www\./, "").toLowerCase() : null; } catch { return null; }
+}
+/** Plano 1000 (AD-182): filtro da lista de cliques pelo rótulo do motivo ("" = todos). */
+export const filtrarCliques = (itens = [], motivo = "", agora = Date.now()) =>
+  (motivo ? itens.filter(x => rotuloMotivo(x.motivo, !!x.casou, { em: x.em, agora }) === motivo) : itens.slice());
 
 /**
  * nx_rastreio_listar → o que o painel «Cliques do site» desenha (F10): totais (do servidor; senão contados), motivos, campanhas e os últimos cliques.
  * Formato: {dias, itens:[{em, pagina, utm_*, plataforma, origem, casou, motivo, usado_em, negocio_id, contato_nome}], totais:{cliques, casados, usados?, pendentes?}}.
  */
-export function resumoRastreio(resp, { ultimos = 10 } = {}) {
+export function resumoRastreio(resp, { ultimos = 10, agora = Date.now() } = {}) {
   const itens = Array.isArray(resp && resp.itens) ? resp.itens.filter(x => x && typeof x === "object") : [];
   const t = (resp && resp.totais) || {};
   const num = (v, alt) => (Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : alt);
@@ -91,7 +122,24 @@ export function resumoRastreio(resp, { ultimos = 10 } = {}) {
   const pendentes = num(t.pendentes, itens.some(x => x.motivo === "pendente") ? itens.filter(x => x.motivo === "pendente").length : null);
   const usados = num(t.usados, null);
   const motivos = new Map();
-  for (const x of itens) { const r = rotuloMotivo(x.motivo, !!x.casou); motivos.set(r, (motivos.get(r) || 0) + 1); }
+  for (const x of itens) { const r = rotuloMotivo(x.motivo, !!x.casou, { em: x.em, agora }); motivos.set(r, (motivos.get(r) || 0) + 1); }
+  // AD-180: o último clique REAL (fora o «Testar» do painel) — prova de que o site instalado manda cliques
+  const ordenados = itens.slice().sort((a, b) => String(b.em || "").localeCompare(String(a.em || "")));
+  const real = ordenados.find(x => x.pagina && x.pagina !== "teste-do-painel" && hostDe(x.pagina));
+  // AD-181: por domínio da página; «novo» = primeiro clique nos últimos 7 dias quando já havia clique de outro domínio antes
+  const hostsM = new Map();
+  for (const x of ordenados) {
+    const host = hostDe(x.pagina);
+    if (!host) continue;
+    const g = hostsM.get(host) || { host, cliques: 0, primeiro: x.em, ultimo: x.em };
+    g.cliques++;
+    if (String(x.em || "") < String(g.primeiro || "")) g.primeiro = x.em;
+    if (String(x.em || "") > String(g.ultimo || "")) g.ultimo = x.em;
+    hostsM.set(host, g);
+  }
+  const hostsL = [...hostsM.values()];
+  const antigoDe = g => hostsL.some(o => o.host !== g.host && String(o.primeiro || "") < String(g.primeiro || ""));
+  for (const g of hostsL) { const t = Date.parse(g.primeiro); g.novo = Number.isFinite(t) && agora - t <= 7 * 864e5 && antigoDe(g); }
   const camp = new Map();
   for (const x of itens) {
     const nome = String(x.utm_campaign || "").trim() || "(sem campanha)";
@@ -102,9 +150,13 @@ export function resumoRastreio(resp, { ultimos = 10 } = {}) {
   return {
     dias: num(resp && resp.dias, 30),
     totais: { cliques, casados, pendentes, usados, pct: cliques > 0 ? Math.round(casados / cliques * 100) : null },
-    motivos: [...motivos.entries()].map(([rotulo, n]) => ({ rotulo, n })).sort((a, b) => b.n - a.n),
+    // AD-189: cada motivo também em porcentagem dos cliques listados («12 (40%)»)
+    motivos: [...motivos.entries()].map(([rotulo, n]) => ({ rotulo, n, pct: itens.length ? Math.round(n / itens.length * 100) : null })).sort((a, b) => b.n - a.n),
     campanhas: [...camp.values()].sort((a, b) => b.cliques - a.cliques || b.casados - a.casados),
-    ultimos: itens.slice().sort((a, b) => String(b.em || "").localeCompare(String(a.em || ""))).slice(0, ultimos),
+    ultimos: ordenados.slice(0, ultimos),
+    todos: ordenados,                                    // AD-182: «Mostrar mais» e o filtro por motivo trabalham sobre a lista inteira
+    ultimoReal: real ? { em: real.em, host: hostDe(real.pagina) } : null,
+    hosts: hostsL.sort((a, b) => b.cliques - a.cliques || a.host.localeCompare(b.host)),
     vazio: !itens.length && !cliques,
   };
 }
@@ -145,7 +197,18 @@ async function secaoRastreio(ctx, alvo) {
     const instalacao = h("section", { class: "cartao pilha", "aria-labelledby": "rastc-instala" },
       h("div", { class: "cartao-cab" }, h("div", null,
         h("h3", { id: "rastc-instala", class: "titulo-sec" }, "Código de instalação"),
-        h("p", { class: "sub" }, "Cole uma vez no site, antes do fechamento da tag `</body>`. Funciona em HTML, WordPress, Wix e Webflow."))));
+        h("p", { class: "sub" }, "Cole uma vez no site, antes do fechamento da tag `</body>`. Funciona em HTML, WordPress, Wix e Webflow."))),
+      // plano 1000 (AD-179): onde colar em cada plataforma (antes só «antes de </body>», que não ajuda quem usa um construtor de site)
+      h("details", { class: "ads-rastreio-det" }, h("summary", null, "Onde colar em cada plataforma"),
+        h("ul", { class: "ads-rastreio-onde" },
+          h("li", null, h("b", null, "WordPress: "), "plugin «WPCode» (ou «Insert Headers and Footers») › Rodapé (Footer) › cole e salve. Tema com campo de scripts no rodapé também serve."),
+          h("li", null, h("b", null, "Wix: "), "Configurações do site › Avançado › Código personalizado › Adicionar código › «Corpo — fim», em todas as páginas. Use a versão para gerenciador de tags (abaixo)."),
+          h("li", null, h("b", null, "Webflow: "), "Project settings › Custom code › Footer code › cole e publique o site de novo."),
+          h("li", null, h("b", null, "Shopify: "), "Loja virtual › Temas › Editar código › theme.liquid › cole logo antes de </body>."),
+          h("li", null, h("b", null, "Google Tag Manager: "), "nova tag «HTML personalizado» com a versão para gerenciador, acionador «All Pages»."),
+          h("li", null, h("b", null, "HTML próprio: "), "em cada página, logo antes de </body> (ou no rodapé comum do site)."))),
+      // AD-172: www × sem www — a origem guardada é por endereço; redirecionar sem levar a consulta (?utm_…) perde a campanha
+      h("p", { class: "campo-ajuda ads-rastreio-www" }, "Atenção ao endereço: o navegador guarda a origem separada para «www.seusite.com.br» e «seusite.com.br». Se o site redireciona de um para o outro, o redirecionamento precisa manter a parte depois do «?» (utm_…, gclid, fbclid) — senão a campanha se perde. Use nos anúncios o endereço final, o mesmo que aparece no navegador."));
 
     if (!chave) {
       const gerar = h("button", { type: "button", class: "bt bt-prim", on: { click: async () => {
@@ -175,7 +238,8 @@ async function secaoRastreio(ctx, alvo) {
     const ondeServe = local
       ? h("p", { class: "campo-ajuda ads-rastreio-local" }, "Servidor de teste: o código acima aponta para este computador (nunca para a produção). ",
         local.site ? h("a", { class: "rel-link", href: local.site, target: "_blank", rel: "noopener noreferrer" }, "Abrir o site de teste ↗") : null)
-      : h("p", { class: "campo-ajuda" }, "O script é servido por jpfamelli.github.io (endereço fixo); os cliques vão direto para o servidor do Órbita.");
+      // plano 1000 (AD-137/AD-168): sem o endereço pessoal no texto; a versão é fixa e conferida pelo navegador (integrity)
+      : h("p", { class: "campo-ajuda" }, "O script vem de um endereço fixo do Órbita, numa versão que não muda sozinha (o navegador confere a assinatura do arquivo); os cliques vão direto para o servidor do Órbita.");
     instalacao.append(pre, h("div", { class: "linha rastc-acoes" }, copiar), ondeServe, detalheGtm,
       h("div", { class: "campo rastc-chave" }, h("label", null, "Chave desta empresa"), campoChave),
       h("div", { class: "linha rastc-acoes" }, copiarChave, trocar),
@@ -192,6 +256,8 @@ async function secaoRastreio(ctx, alvo) {
       h("details", { class: "ads-rastreio-det" }, h("summary", null, "Prefere escrever o nome da campanha?"),
         h("p", { class: "sub" }, "Funciona, mas o nome precisa ser idêntico ao da campanha no Meta/Google; com o ID não há erro de digitação."),
         h("div", { class: "rastc-plataformas" }, blocoExemplo("Com nomes (reserva)", UTM.reserva))),
+      // AD-185: no Google, a marcação automática (gclid) é o que liga o clique à campanha mesmo sem utm
+      h("p", { class: "campo-ajuda" }, "No Google Ads, deixe ligada a «Marcação automática» (Configurações da conta): ela acrescenta o gclid, que o Órbita usa mesmo quando os parâmetros acima faltam. No Meta, {{site_source_name}} e {{placement}} dizem se o anúncio rodou no Facebook ou no Instagram e em qual posição."),
       h("p", { class: "campo-ajuda" }, "O script também reconhece sozinho gclid, gbraid, wbraid e fbclid. O código [ref] é lido quando a mensagem chega pelo número conectado ao Órbita."));
 
     const politica = textoPolitica(ctx.cliente && ctx.cliente.nome);
@@ -214,6 +280,7 @@ async function secaoRastreio(ctx, alvo) {
   }
 
   /* ---------- F10: «Cliques do site» — o que o script registrou, quantos casaram e por quê ---------- */
+  let tCliques = 0;
   function painelCliques() {
     const corpo = h("div", { class: "ads-rastreio-corpo", "aria-busy": "true" }, ui.esqueleto("kpi", { n: 3 }));
     const status = h("p", { class: "sub ads-rastreio-st", role: "status", "aria-live": "polite" });
@@ -222,21 +289,34 @@ async function secaoRastreio(ctx, alvo) {
     const sec = h("section", { class: "cartao pilha ads-rastreio", id: "rastc-painel", "aria-labelledby": "rastc-painel-h" },
       h("div", { class: "cartao-cab" }, h("div", null,
         h("h3", { id: "rastc-painel-h", class: "titulo-sec", tabindex: "-1" }, "Cliques do site"),
-        h("p", { class: "sub" }, "Cada toque no botão do WhatsApp do site, nos últimos 30 dias: quantos viraram negócio com a campanha certa e, quando não, por quê."))),
+        h("p", { class: "sub" }, "Cada toque no botão do WhatsApp do site, nos últimos 30 dias: quantos viraram negócio com a campanha certa e, quando não, por quê. Atualiza sozinho a cada 30 segundos enquanto esta tela está aberta."))),
       corpo, h("div", { class: "linha rastc-acoes" }, testar, atualizar), status);
     carregarCliques(corpo, atualizar);
+    // plano 1000 (AD-249): durante o teste no site, o clique aparece sem precisar de «Atualizar» — a cada 30 s, só com a aba visível
+    // e a seção na tela; para sozinho quando a seção sai do DOM (troca de seção, repintura)
+    clearInterval(tCliques);
+    tCliques = setInterval(() => {
+      if (!sec.isConnected) { clearInterval(tCliques); return; }
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (corpo.getAttribute("aria-busy") === "true") return;
+      carregarCliques(corpo, atualizar, { silencioso: true });
+    }, 30000);
+    if (tCliques && typeof tCliques.unref === "function") tCliques.unref();   // fora do navegador (testes) o relógio não segura o processo
     return sec;
   }
 
-  async function carregarCliques(corpo, botao) {
-    corpo.setAttribute("aria-busy", "true");
-    if (botao) botao.disabled = true;
+  async function carregarCliques(corpo, botao, { silencioso = false } = {}) {
+    if (!silencioso) corpo.setAttribute("aria-busy", "true");
+    if (botao && !silencioso) botao.disabled = true;
     try {
       const r = await api.rpcC("nx_rastreio_listar", { p_dias: 30 });
       if (corpo.isConnected === false) return;   // a tela foi redesenhada enquanto a resposta vinha
+      // a lista aberta (filtro e «mostrar mais») sobrevive à atualização automática
+      const antes = { filtro: corpo.dataset.filtro || "", qtd: Number(corpo.dataset.qtd) || 10 };
       ui.limpar(corpo);
-      desenharCliques(corpo, resumoRastreio(r));
+      desenharCliques(corpo, resumoRastreio(r, { ultimos: 10 }), antes);
     } catch (e) {
+      if (silencioso) return;                    // a atualização automática que falha não apaga o que está na tela
       ui.limpar(corpo);
       // servidor antigo (sem a RPC): fallback honesto, sem inventar número
       const antigo = !!e && (Number(e.status) === 404 || /PGRST202|could not find the function/i.test(String(e.codigo || e.message || "")));
@@ -248,21 +328,42 @@ async function secaoRastreio(ctx, alvo) {
     }
   }
 
-  function desenharCliques(corpo, R) {
+  function desenharCliques(corpo, R, { filtro = "", qtd = 10 } = {}) {
     if (R.vazio) {
       corpo.append(ui.vazio({ tema: "ads", titulo: "Nenhum clique nos últimos 30 dias", texto: "Depois de instalar o script, toque no botão do WhatsApp do site (ou use «Testar») para conferir." }));
       return;
     }
     const T = R.totais;
+    // plano 1000 (AD-180): a prova da instalação — quando e de qual site veio o último clique de verdade (o «Testar» só prova a chave)
+    corpo.append(R.ultimoReal
+      ? h("p", { class: "aviso aviso-ok ads-rastreio-ultimo", role: "note" }, ui.icone("check"),
+        h("span", null, "O site está mandando cliques: o último foi ", h("b", null, quandoCurto(R.ultimoReal.em)), " em ", h("b", null, R.ultimoReal.host), "."))
+      : h("p", { class: "aviso aviso-aten ads-rastreio-ultimo", role: "note" }, ui.icone("info"),
+        h("span", null, "Ainda não chegou nenhum clique de um site de verdade (só testes). Abra o site, toque no botão do WhatsApp e volte aqui.")));
+    // AD-250: a porcentagem que casou fica no próprio cartão (antes só na ajuda)
+    const kCasou = ui.kpi({ rotulo: "Casaram com um negócio", valor: T.casados, ajuda: "Cliques cujo código chegou na conversa e foi aplicado ao negócio." });
+    if (T.pct != null) kCasou.append(h("small", { class: "kpi-sub ads-rastreio-pct" }, `${T.pct}% dos cliques`));
     corpo.append(h("div", { class: "rel-kpis ads-rastreio-kpis" },
       ui.kpi({ rotulo: "Cliques no WhatsApp", valor: T.cliques, ajuda: "Toques no botão do WhatsApp do site com o script ativo." }),
-      ui.kpi({ rotulo: "Casaram com um negócio", valor: T.casados, ajuda: T.pct == null ? "Cliques cujo código chegou na conversa e foi aplicado ao negócio." : `${T.pct}% dos cliques: o código chegou na conversa e foi aplicado ao negócio.` }),
+      kCasou,
       T.pendentes == null ? null : ui.kpi({ rotulo: "Esperando o negócio", valor: T.pendentes, ajuda: "O código chegou antes de o negócio existir; ele é aplicado sozinho quando o negócio nascer (até 30 dias)." })));
+    // AD-181: de quais sites vieram os cliques — domínio novo em destaque (a chave é pública: usada em outro site, aparece aqui)
+    if (R.hosts.length) {
+      const novos = R.hosts.filter(x => x.novo);
+      corpo.append(h("div", { class: "ads-rastreio-bloco" }, h("h4", { class: "rotulo" }, "Sites que mandaram cliques"),
+        novos.length ? h("p", { class: "aviso aviso-aten", role: "note" }, ui.icone("alerta"),
+          h("span", null, `${novos.length === 1 ? "Um site novo começou" : `${novos.length} sites novos começaram`} a mandar cliques com a sua chave nesta semana: ${novos.map(x => x.host).join(", ")}. Se não for seu, gere uma chave nova e atualize o seu site.`)) : null,
+        h("ul", { class: "ads-rastreio-hosts" }, R.hosts.map(x => h("li", null, h("span", { class: "mono" }, x.host),
+          x.novo ? h("span", { class: "pilula pilula-p pilula-aten" }, "novo") : null,
+          h("small", { class: "campo-ajuda" }, `${x.cliques} ${x.cliques === 1 ? "clique" : "cliques"} · último ${quandoCurto(x.ultimo)}`))))));
+    }
     if (R.motivos.length) {
       const max = Math.max(...R.motivos.map(m => m.n));
       corpo.append(h("div", { class: "ads-rastreio-bloco" }, h("h4", { class: "rotulo" }, "O que aconteceu com cada clique"),
+        // AD-189: o número e a porcentagem («12 (40%)») — a barra sozinha não diz a proporção
         h("ul", { class: "ads-rastreio-motivos" }, R.motivos.map(m => h("li", null, h("span", null, m.rotulo),
-          h("span", { class: "ads-rastreio-barra", "aria-hidden": "true" }, h("i", { style: { "--w": `${Math.round(m.n / max * 100)}%` } })), h("b", { class: "rel-num" }, String(m.n)))))));
+          h("span", { class: "ads-rastreio-barra", "aria-hidden": "true" }, h("i", { style: { "--w": `${Math.round(m.n / max * 100)}%` } })),
+          h("b", { class: "rel-num" }, m.pct == null ? String(m.n) : `${m.n} (${m.pct}%)`))))));
     }
     if (R.campanhas.length) {
       corpo.append(h("div", { class: "ads-rastreio-bloco" }, h("h4", { class: "rotulo" }, "Por campanha"),
@@ -271,14 +372,35 @@ async function secaoRastreio(ctx, alvo) {
             h("thead", null, h("tr", null, h("th", { scope: "col" }, "Campanha"), h("th", { scope: "col", class: "num" }, "Cliques"), h("th", { scope: "col", class: "num" }, "Casaram"))),
             h("tbody", null, R.campanhas.slice(0, 12).map(c => h("tr", null, h("th", { scope: "row" }, c.nome), h("td", { class: "num", dataset: { l: "Cliques" } }, String(c.cliques)), h("td", { class: "num", dataset: { l: "Casaram" } }, String(c.casados)))))))));
     }
-    if (R.ultimos.length) {
-      corpo.append(h("div", { class: "ads-rastreio-bloco" }, h("h4", { class: "rotulo" }, "Últimos cliques"),
-        h("ul", { class: "ads-rastreio-lista" }, R.ultimos.map(x => h("li", { class: x.casou ? "ok" : "" },
-          h("div", { class: "ads-rastreio-l1" },
-            ui.pilula(null, x.origem || (x.plataforma ? "anuncio" : "site"), { variante: "origem", plataforma: x.plataforma || undefined, tamanho: "p" }),
-            h("span", { class: "ads-rastreio-camp" }, x.utm_campaign || "sem campanha"),
-            h("span", { class: `pilula pilula-p ${x.casou ? "pilula-ok" : x.motivo === "pendente" ? "pilula-aten" : "pilula-neutra"}` }, rotuloMotivo(x.motivo, !!x.casou))),
-          h("p", { class: "campo-ajuda" }, `${quandoCurto(x.em)} · ${paginaCurta(x.pagina)}${x.contato_nome ? ` · ${x.contato_nome}` : ""}`))))));
+    if (R.todos.length) {
+      // AD-182: filtro por motivo e «Mostrar mais» (antes 10 fixos) — o estado fica no corpo e sobrevive à atualização automática
+      const agora = Date.now();
+      const lista = h("ul", { class: "ads-rastreio-lista" });
+      const mais = h("button", { type: "button", class: "bt bt-fant bt-p ads-rastreio-mais" });
+      const sel = h("select", { class: "ads-rastreio-filtro", "aria-label": "Filtrar os últimos cliques pelo que aconteceu" },
+        h("option", { value: "" }, "Todos os cliques"), R.motivos.map(m => h("option", { value: m.rotulo, selected: m.rotulo === filtro }, `${m.rotulo} (${m.n})`)));
+      const pintarLista = () => {
+        const f = sel.value, base = filtrarCliques(R.todos, f, agora), n = Math.max(10, Number(corpo.dataset.qtd) || 10);
+        corpo.dataset.filtro = f;
+        ui.limpar(lista);
+        for (const x of base.slice(0, n)) {
+          const rot = rotuloMotivo(x.motivo, !!x.casou, { em: x.em, agora });
+          lista.append(h("li", { class: x.casou ? "ok" : "" },
+            h("div", { class: "ads-rastreio-l1" },
+              ui.pilula(null, x.origem || (x.plataforma ? "anuncio" : "site"), { variante: "origem", plataforma: x.plataforma || undefined, tamanho: "p" }),
+              h("span", { class: "ads-rastreio-camp" }, x.utm_campaign || "sem campanha"),
+              h("span", { class: `pilula pilula-p ${x.casou ? "pilula-ok" : x.motivo === "pendente" || rot === "aguardando a mensagem" ? "pilula-aten" : "pilula-neutra"}` }, rot)),
+            h("p", { class: "campo-ajuda" }, `${quandoCurto(x.em)} · ${paginaCurta(x.pagina)}${x.contato_nome ? ` · ${x.contato_nome}` : ""}`)));
+        }
+        if (!base.length) lista.append(h("li", { class: "campo-ajuda" }, "Nenhum clique com esse resultado."));
+        mais.hidden = base.length <= n;
+        mais.textContent = `Mostrar mais (${base.length - Math.min(n, base.length)})`;
+      };
+      corpo.dataset.qtd = String(Math.max(10, qtd));
+      sel.addEventListener("change", () => { corpo.dataset.qtd = "10"; pintarLista(); });
+      mais.addEventListener("click", () => { corpo.dataset.qtd = String((Number(corpo.dataset.qtd) || 10) + 20); pintarLista(); });
+      corpo.append(h("div", { class: "ads-rastreio-bloco" }, h("div", { class: "linha ads-rastreio-cab" }, h("h4", { class: "rotulo" }, "Últimos cliques"), sel), lista, mais));
+      pintarLista();
     }
   }
 

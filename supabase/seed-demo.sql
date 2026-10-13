@@ -10,7 +10,7 @@ begin;
 
 -- 1. cliente (cria ou reaproveita; cfg é mesclado)
 insert into public.nx_clientes as cl (slug, nome, cfg)
-values ('demo-clinica', 'Clínica Demonstração', '{"cpaAlvo":15,"orcamento":1500}'::jsonb)
+values ('demo-clinica', 'Clínica Demonstração', '{"cpaAlvo":15,"cpaAlvoGoogle":18,"orcamento":1500}'::jsonb)
 on conflict (slug) do update set nome = excluded.nome, cfg = cl.cfg || excluded.cfg;
 
 -- 2. limpa os dados anteriores deste cliente (só dele)

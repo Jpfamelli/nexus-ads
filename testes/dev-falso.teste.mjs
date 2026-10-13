@@ -576,3 +576,61 @@ test("contratos 3 e 7 + paridade (H2): histórico do número e canal_caiu/canal_
   const entrou = (await rpc("nx_entrar", { p_email: "a@b.c", p_senha: "x" })).corpo;
   assert.deepEqual(Object.keys(entrou).sort(), ["nome", "papel", "token"], "nx_entrar devolve {token, nome, papel} como a RPC real");
 }));
+
+/* plano 1000 (srv-3): o falso espelha os contratos aplicados — papel da conta, cfg do cliente, nx_usuarios_listar real, cards com
+   funil/etapa/movido_*, agendados sem data, linha do tempo paginada, p_req no mover, conversas só na 1ª página e volume de conversas. */
+test("srv-3: simular/papel, nx_cliente_salvar guarda o cfg, nx_usuarios_listar real, cards (funil_id, estagio_tipo, movido_*), agendados_sem_data, nx_crm_tempo_pagina, mover com p_req, SV-139 e ?volume", () => comServidor(async ({ base, rpc, sim }) => {
+  // papel
+  assert.equal((await sim("papel", "?valor=chefe")).ok, false);
+  for (const v of ["atendente", "leitura", "admin", "gestor"]) {
+    const r = await sim("papel", `?valor=${v}`);
+    assert.equal(r.papel, v);
+    const s = (await rpc("nx_app_sessao", {})).corpo;
+    assert.equal(s.clientes[0].papel, v === "gestor" ? "admin" : v, `papel no cliente (${v})`);
+    assert.equal(s.super, v === "gestor");
+    assert.equal((await rpc("nx_usuarios_listar", {})).corpo.eu.papel, v === "gestor" ? "admin" : v);
+  }
+  // cfg do cliente
+  await rpc("nx_cliente_salvar", { p_cliente: { id: "x", cfg: { nomeCurto: "Sorriso", waGestor: ["5500000000001"] } } });
+  assert.deepEqual((await rpc("nx_app_sessao", {})).corpo.clientes[0].cfg, { nomeCurto: "Sorriso", waGestor: ["5500000000001"] }, "o cfg salvo volta na sessão");
+  // nx_usuarios_listar no formato real
+  const ul = (await rpc("nx_usuarios_listar", {})).corpo;
+  assert.deepEqual(Object.keys(ul).sort(), ["convites", "departamentos", "eu", "limite", "uso", "usuarios"]);
+  for (const k of ["conta_id", "nome", "email", "papel", "departamentos", "ver_todas", "recebe_conversas", "aprovado", "editavel", "eu", "gestor"]) assert.ok(k in ul.usuarios[0], k);
+  assert.ok(Array.isArray(ul.convites[0].departamentos), "convites[].departamentos (20261013f)");
+  // cards: nx_cv_ver negócios como cards, kanban e negócio com movido_*
+  const ver = (await rpc("nx_cv_ver", { p_id: 901 })).corpo;
+  assert.ok(ver.negocios.length && ver.negocios.every(n => n.funil_id && n.estagio_tipo && "movido_por" in n), "nx_cv_ver: negócios com funil_id/estagio_tipo/movido_*");
+  const kb = (await rpc("nx_negocios_kanban", {})).corpo;
+  const card801 = kb.colunas.flatMap(c => c.itens).find(n => n.id === 801);
+  assert.equal(card801.movido_por, "Ana Paula"); assert.ok(card801.movido_em);
+  // mover com p_req: a mesma intenção não move de novo; movido_por vira quem moveu
+  const req = "11111111-2222-4333-8444-555555555555";
+  const m1 = (await rpc("nx_negocio_mover", { p_id: 803, p_estagio: "s2", p_ordem: null, p_extra: {}, p_req: req })).corpo;
+  assert.equal(m1.estagio_id, "s2"); assert.equal(m1.movido_por, "Dra. Helena");
+  await rpc("nx_negocio_mover", { p_id: 803, p_estagio: "s1" });
+  assert.equal((await rpc("nx_negocio_mover", { p_id: 803, p_estagio: "s2", p_ordem: null, p_extra: {}, p_req: req })).corpo.estagio_id, "s2", "o mesmo p_req devolve o resultado guardado");
+  assert.equal((await rpc("nx_negocio_ver", { p_id: 803 })).corpo.negocio.estagio_id, "s1", "…sem mover de novo");
+  // agendados sem data (CR-217): 803 em «Avaliação agendada» sem consulta
+  await rpc("nx_negocio_mover", { p_id: 803, p_estagio: "s2" });
+  const ini = (await rpc("nx_inicio", {})).corpo;
+  assert.ok(ini.agendados_sem_data.total >= 1 && ini.agendados_sem_data.itens.length <= 5);
+  assert.deepEqual(Object.keys(ini.agendados_sem_data.itens[0]).sort(), ["contato_nome", "desde", "estagio_nome", "id", "titulo"]);
+  // linha do tempo paginada
+  const t1 = (await rpc("nx_crm_tempo_pagina", { p_negocio: 801 })).corpo;
+  assert.ok(Array.isArray(t1.itens) && typeof t1.tem_mais === "boolean" && t1.itens.length > 0);
+  for (const k of ["fonte", "id", "tipo", "em", "autor", "dados", "negocio_id", "conversa_id"]) assert.ok(k in t1.itens[0], k);
+  const t2 = (await rpc("nx_crm_tempo_pagina", { p_negocio: 801, p_antes: t1.itens.at(-1).em })).corpo;
+  assert.ok(t2.itens.every(x => x.em < t1.itens.at(-1).em), "p_antes: só o que é mais antigo");
+  assert.equal((await rpc("nx_crm_tempo_pagina", { p_negocio: 999999 })).status, 400);
+  // SV-139: conversas só na 1ª página
+  assert.ok("conversas" in (await rpc("nx_cv_mensagens", { p_conversa: 901 })).corpo);
+  assert.ok(!("conversas" in (await rpc("nx_cv_mensagens", { p_conversa: 901, p_depois_id: 1 })).corpo));
+  // volume
+  const vol = await sim("volume", "?n=5000");
+  assert.equal(vol.conversas, 5000);
+  const lista = (await rpc("nx_cv_listar", { p_filtro: { aba: "abertas" }, p_limite: 50 })).corpo;
+  assert.equal(lista.itens.length, 50); assert.ok(lista.contagens.abertas > 2000);
+  await fetch(`${base}/app/?dev-falso=1&volume=5000`);
+  assert.equal((await sim("volume", "?n=5000")).conversas, 5000, "idempotente");
+}));

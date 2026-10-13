@@ -15,6 +15,11 @@
 
 export const PREFIXO = "nx-rasc:";
 export const TTL_MS = 7 * 24 * 3600 * 1000;
+/* plano 1000 · CA-122: o texto para o paciente (chave «conversa:…») fica no máximo 24 h no aparelho — computador da recepção é
+   compartilhado; as notas do CRM seguem com os 7 dias */
+export const TTL_CONVERSA_MS = 24 * 3600 * 1000;
+/* plano 1000 · CA-100: a varredura (JSON.parse de todas as chaves) roda no máximo 1 vez por minuto — antes, a cada gravação (400 ms digitando) */
+export const VARRER_INTERVALO_MS = 60 * 1000;
 export const TETO_TOTAL_BYTES = 200 * 1024;
 export const TETO_UM_BYTES = 100 * 1024;
 export const DEBOUNCE_MS = 400;
@@ -52,35 +57,51 @@ export function criarRascunhos(o = {}) {
   const cancelar = o.cancelar || (t => clearTimeout(t));
   const doc = o.doc !== undefined ? o.doc : globalThis.document;
   const jan = o.janela !== undefined ? o.janela : globalThis.window;
-  const ttl = o.ttlMs || TTL_MS, tetoTotal = o.tetoTotal || TETO_TOTAL_BYTES, tetoUm = o.tetoUm || TETO_UM_BYTES, debounce = o.debounceMs ?? DEBOUNCE_MS;
+  const ttlPadrao = o.ttlMs || TTL_MS, tetoTotal = o.tetoTotal || TETO_TOTAL_BYTES, tetoUm = o.tetoUm || TETO_UM_BYTES, debounce = o.debounceMs ?? DEBOUNCE_MS;
+  const ttlConversa = Math.min(ttlPadrao, o.ttlConversaMs || TTL_CONVERSA_MS);
+  const intervaloVarrer = o.varrerMs ?? VARRER_INTERVALO_MS;
   const ativos = new Set();     // controladores ligados (para o flush)
 
   const seguro = (fn, padrao = null) => { try { return fn(); } catch { return padrao; } };
   const chaveDe = chave => `${PREFIXO}${o.conta ? o.conta() || "-" : "-"}:${o.cliente ? o.cliente() || "-" : "-"}:${chave}`;
+  /** CA-122: o prazo de cada chave — «conversa:…» (texto para o cliente) 24 h; o resto, 7 dias. `k` é a chave inteira do storage. */
+  const ttlDe = k => (String(k).slice(PREFIXO.length).split(":").slice(2).join(":").startsWith("conversa:") ? ttlConversa : ttlPadrao);
+  const venceu = (k, d) => agora() - d.em > ttlDe(k);
   const lerBruto = k => seguro(() => (storage ? storage.getItem(k) : null));
   const ler = k => {
     const bruto = lerBruto(k);
     if (!bruto) return null;
     try { const d = JSON.parse(bruto); return d && typeof d.t === "string" && Number.isFinite(d.em) ? d : null; } catch { return null; }
   };
-  const apagarChave = k => { seguro(() => storage && storage.removeItem(k)); };
+  const apagarChave = k => { seguro(() => storage && storage.removeItem(k)); indice.delete(k); };
   const todasChaves = () => {
     if (!storage) return [];
     return seguro(() => { const ks = []; for (let i = 0; i < storage.length; i++) { const k = storage.key(i); if (k && k.startsWith(PREFIXO)) ks.push(k); } return ks; }, []);
   };
 
+  /* CA-100: índice em memória (chave → {em, bytes}) montado pela varredura — entre uma varredura e outra o teto total é mantido por ele,
+     sem ler e decodificar todas as chaves a cada gravação */
+  let indice = new Map(), ultimaVarredura = 0;
   /** Tira o que venceu e mantém o total abaixo do teto (o mais antigo sai primeiro). */
   function varrer() {
     const itens = [];
     for (const k of todasChaves()) {
       const d = ler(k);
-      if (!d || agora() - d.em > ttl) { apagarChave(k); continue; }
+      if (!d || venceu(k, d)) { apagarChave(k); continue; }
       itens.push({ k, em: d.em, bytes: (k.length + (lerBruto(k) || "").length) * 2 });
     }
-    let total = itens.reduce((s, x) => s + x.bytes, 0);
-    itens.sort((a, b) => a.em - b.em);
-    while (total > tetoTotal && itens.length) { const x = itens.shift(); apagarChave(x.k); total -= x.bytes; }
-    return itens.length;
+    indice = new Map(itens.map(x => [x.k, { em: x.em, bytes: x.bytes }]));
+    aparar();
+    ultimaVarredura = agora();
+    return indice.size;
+  }
+  /** O total passou do teto: sai o mais antigo (pelo índice), até caber. */
+  function aparar() {
+    let total = 0;
+    for (const x of indice.values()) total += x.bytes;
+    if (total <= tetoTotal) return;
+    const velhos = [...indice.entries()].sort((a, b) => a[1].em - b[1].em);
+    while (total > tetoTotal && velhos.length) { const [k, x] = velhos.shift(); apagarChave(k); total -= x.bytes; }
   }
   varrer();
 
@@ -88,9 +109,14 @@ export function criarRascunhos(o = {}) {
     if (!storage) return false;
     if (!texto || !texto.trim()) { apagarChave(k); return true; }
     if (texto.length * 2 > tetoUm) { apagarChave(k); return false; }
-    const ok = seguro(() => { storage.setItem(k, JSON.stringify({ t: texto, em: agora() })); return true; }, false);
-    if (ok) varrer();
-    else { varrer(); seguro(() => storage.setItem(k, JSON.stringify({ t: texto, em: agora() }))); }   // cota cheia: limpa o mais velho e tenta uma vez
+    const bruto = JSON.stringify({ t: texto, em: agora() });
+    const ok = seguro(() => { storage.setItem(k, bruto); return true; }, false);
+    // CA-100: gravou bem — a varredura completa só se já faz 1 min da última (senão o índice cuida do teto); a cota cheia (setItem falhou)
+    // varre na hora e tenta uma vez
+    if (ok) {
+      indice.set(k, { em: agora(), bytes: (k.length + bruto.length) * 2 });
+      if (agora() - ultimaVarredura >= intervaloVarrer) varrer(); else aparar();
+    } else { varrer(); seguro(() => storage.setItem(k, bruto)); }
     return ok;
   }
 
@@ -128,7 +154,7 @@ export function criarRascunhos(o = {}) {
         timer = agendar(() => { timer = null; gravar(k, valor()); }, debounce);
       };
       const guardado = ler(k);
-      if (guardado && agora() - guardado.em > ttl) apagarChave(k);
+      if (guardado && venceu(k, guardado)) apagarChave(k);
       else if (guardado && !valor().trim()) {
         campo.value = guardado.t;
         restaurado = true;
@@ -157,8 +183,8 @@ export function criarRascunhos(o = {}) {
     },
     /** Apaga o rascunho de uma chave (o servidor confirmou o envio). */
     apagar(chave) { apagarChave(chaveDe(chave)); },
-    existe(chave) { const d = ler(chaveDe(chave)); return !!d && agora() - d.em <= ttl; },
-    texto(chave) { const d = ler(chaveDe(chave)); return d && agora() - d.em <= ttl ? d.t : null; },
+    existe(chave) { const d = ler(chaveDe(chave)); return !!d && !venceu(chaveDe(chave), d); },
+    texto(chave) { const d = ler(chaveDe(chave)); return d && !venceu(chaveDe(chave), d) ? d.t : null; },
     /** Logout: some tudo (de qualquer conta) deste aparelho. */
     apagarTudo() { for (const c of [...ativos]) c.parar(); for (const k of todasChaves()) apagarChave(k); },
     /** Escreve o que está pendente no debounce (antes de sair da tela, esconder a aba…). */

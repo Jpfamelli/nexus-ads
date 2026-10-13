@@ -66,7 +66,8 @@ for (const [nome, sql, versao] of [["a", A, "20261008a_entrada_lead_rastreio"], 
     assert.ok(!/\btruncate\b/i.test(s), "nada de truncate");
     assert.ok(!/\bdelete\s+from\s+public\.nx_(clientes|contatos|leads|mensagens|historico|auditoria|notas|conversas)\b/i.test(s), "nenhuma tabela de dado do cliente é apagada");
     // nx_config: nenhuma escrita de DADO pela migração (a única escrita é o corpo da RPC nx_config_salvar, que é o que ela faz)
-    const fora = semComentario(sql.replace(ultimaDef("nx_config_salvar").texto, ""));
+    // plano 1000 (srv-3): a última nx_config_salvar passou para a 20261013e — tira o corpo da definição QUE ESTÁ NESTA migração
+    const fora = semComentario(sql.replace(/create or replace function public\.nx_config_salvar\([\s\S]*?as \$(\w*)\$[\s\S]*?\$\1\$;/i, ""));
     assert.ok(!/\b(update|insert\s+into|delete\s+from)\s+public\.nx_config\b/i.test(fora), "nada escreve em nx_config fora de nx_config_salvar");
     // o único drop: constraint de CHECK trocada dentro de do $ … $ (nx_mensagens.status / nx_notificacoes.tipo / nx_auto_ia_pedidos.status).
     // Nada de drop function: assinatura que existe no banco não sai nem muda (sobrecarga nova só sem default — PGRST203)
@@ -137,15 +138,26 @@ test("contratos 3, 6, 7, 10, 11: assinaturas exatas das RPCs novas e das reescri
   assert.deepEqual(params("nx_codewords_origem"), ["p_canal", "p_telefone", "p_origem", "p_detalhe"]); assert.deepEqual(obrigatorios("nx_codewords_origem"), ["p_canal", "p_telefone", "p_origem"]);
   assert.deepEqual(params("nx_notificacoes_listar"), ["p_token", "p_cliente", "p_limite"]); assert.deepEqual(obrigatorios("nx_notificacoes_listar"), ["p_token", "p_cliente"]);
   // nx_pulso ganhou canais na 20261009b (integração): a última definição passou para lá — conferido no teste das migrações de 09/10
-  assert.ok(ultimaDef("nx_pulso").arquivo.startsWith("20261009b"), `nx_pulso: última definição na 20261009b (${ultimaDef("nx_pulso").arquivo})`);
+  // plano 1000 (SV-114, srv-3): reescrita de novo na 20261013f (desde pela coluna estado_desde; mesma assinatura e mesmo JSON)
+  assert.ok(/^20261009b|^20261013f/.test(ultimaDef("nx_pulso").arquivo), `nx_pulso: última definição na 20261009b/20261013f (${ultimaDef("nx_pulso").arquivo})`);
   assert.match(ultimaDef("nx_pulso").corpo, /'nao_lidas'/); assert.match(ultimaDef("nx_pulso").corpo, /'canais'/);
-  for (const n of ["nx_entrar", "nx_criar_conta", "nx_sessao", "nx_app_sessao", "nx_conta_definir", "nx_config_salvar", "nx_codewords_situacao", "nx_fila_concluir", "nx_saas_faxina", "nx_hash", "nx_conta_do_token", "nx_exigir_gestor", "nx_canal_json",
+  // plano 1000 (SV-124, srv-2): nx_saas_faxina foi reescrita de novo (mesma assinatura, em lotes) na 20261013c
+  // plano 1000 (SV-123, srv-3): e de novo na 20261013e (+ os transitórios que ficaram de fora)
+  assert.ok(/^20261013[ce]/.test(ultimaDef("nx_saas_faxina").arquivo), `nx_saas_faxina: última definição na 20261013c/e (${ultimaDef("nx_saas_faxina").arquivo})`);
+  // plano 1000 (srv-3): nx_entrar (SV-129/238/239) e nx_config_salvar (SV-073) reescritas na mesma assinatura na 20261013e
+  for (const n of ["nx_entrar", "nx_config_salvar"]) assert.ok(ultimaDef(n).arquivo.startsWith("20261013e"), `${n}: 20261013e (${ultimaDef(n).arquivo})`);
+  for (const n of ["nx_criar_conta", "nx_sessao", "nx_app_sessao", "nx_conta_definir", "nx_codewords_situacao", "nx_hash", "nx_conta_do_token", "nx_exigir_gestor", "nx_canal_json",
                    "nx_contas_listar", "nx_notificacoes_listar", "nx_codewords_origem"]) {
     assert.ok(ultimaDef(n).arquivo.startsWith("20261008b"), `${n}: última definição na b (${ultimaDef(n).arquivo})`);
   }
-  for (const n of ["nx_auto_ia_falhar", "nx_auto_ia_pegar", "nx_auto_ia_chamar", "nx_ia_registrar_reserva", "nx_inicio", "nx_dados", "nx_agenda_marcar_core", "nx_agenda_dia"]) {
+  // plano 1000 (SV-040): nx_fila_concluir foi reescrita de novo (mesma assinatura) na 20261013a — só mexe em item 'enviando'
+  assert.ok(ultimaDef("nx_fila_concluir").arquivo.startsWith("20261013a"), `nx_fila_concluir: última definição na 20261013a (${ultimaDef("nx_fila_concluir").arquivo})`);
+  for (const n of ["nx_auto_ia_falhar", "nx_auto_ia_chamar", "nx_ia_registrar_reserva", "nx_agenda_marcar_core", "nx_agenda_dia"]) {
     assert.ok(ultimaDef(n).arquivo.startsWith("20261008c"), `${n}: última definição na c (${ultimaDef(n).arquivo})`);
   }
+  // plano 1000 (srv-2): nx_auto_ia_pegar (SV-150, 20261013c), nx_inicio e nx_dados (contratos das telas, 20261013d) reescritas na mesma assinatura
+  assert.ok(ultimaDef("nx_auto_ia_pegar").arquivo.startsWith("20261013c"), `nx_auto_ia_pegar: 20261013c (${ultimaDef("nx_auto_ia_pegar").arquivo})`);
+  for (const n of ["nx_inicio", "nx_dados"]) assert.ok(ultimaDef(n).arquivo.startsWith("20261013d"), `${n}: 20261013d (${ultimaDef(n).arquivo})`);
 });
 
 // ------------------------------------------------------------ JS × SQL
@@ -164,13 +176,16 @@ test("as Edge Functions chamam exatamente o que o banco oferece (comum.js, codew
 test("S-B9/S-B10: login com bloqueio, cadastro limitado, sessão renovada, super/migracao/ativo, cliente_pausado", () => {
   const e = ultimaDef("nx_entrar").corpo;
   assert.match(e, /raise exception 'muitas_tentativas' using errcode = '22023', hint = v_min::text/);
-  assert.match(e, /nx_login_bloqueio\('conta:' \|\| v_email, 10, interval '15 minutes'\)/);
+  // plano 1000 (SV-238, 20261013e): por conta 10 só sem IP (SQL); com IP, 10 por (conta, IP) ou por IP e 50 por conta
+  assert.match(e, /nx_login_bloqueio\('conta:' \|\| v_email, case when v_ip is null then 10 else 50 end, interval '15 minutes'\)/);
+  assert.match(e, /nx_login_bloqueio\('contaip:' \|\| v_email \|\| '\|' \|\| v_ip, 10, interval '15 minutes'\)/);
   assert.match(e, /nx_login_bloqueio\('ip:' \|\| v_ip, 10, interval '15 minutes'\)/);
   assert.match(e, /current_setting\('request\.headers', true\)/, "detecta a chamada pelo PostgREST");
   assert.match(e, /set_config\('response\.status', '400', true\)/, "pelo PostgREST a falha vira 400 com a transação commitada");
   assert.match(e, /json_build_object\('code', 'P0001', 'message', 'credenciais_invalidas', 'details', null, 'hint', null\)/, "o MESMO JSON de erro do PostgREST");
   assert.match(e, /raise exception 'credenciais_invalidas'/, "por SQL continua lançando (smokes 03/13)");
-  assert.doesNotMatch(e, /delete from public\.nx_sessoes/, "a purga das vencidas saiu do login (vai para a faxina)");
+  // plano 1000 (SV-129): o login apaga só as sessões ALÉM das 20 mais recentes da própria conta — a purga das vencidas segue na faxina
+  assert.doesNotMatch(e, /delete from public\.nx_sessoes[^;]*expira_em/, "a purga das vencidas saiu do login (vai para a faxina)");
   assert.match(e, /perform pg_sleep\(0\.4\)/);
   const c = ultimaDef("nx_criar_conta").corpo;
   assert.match(c, /nx_login_bloqueio\('cadastro:' \|\| v_ip, 5, interval '1 hour'\)/);
@@ -254,7 +269,8 @@ test("S-B12/S-B13/S-B16/S-B17: fila com recuo, nota com p_req, pulso com nao_lid
   assert.match(fx, /delete from public\.nx_sessoes where expira_em < now\(\) - interval '1 day'/);
   assert.match(fx, /delete from public\.nx_requisicoes where criado_em < now\(\) - interval '7 days'/);
   assert.match(fx, /delete from public\.nx_envio_refs where criado_em < now\(\) - interval '7 days'/);
-  assert.match(fx, /delete from public\.nx_notificacoes where lida_em is not null and criado_em < now\(\) - interval '90 days'/);
+  // plano 1000 (SV-124): as notificações lidas > 90 dias saem em lotes (nx_saas_faxina_lotes), com o mesmo filtro
+  assert.match(fx, /nx_saas_faxina_lotes\('nx_notificacoes', \$w\$lida_em is not null and criado_em < now\(\) - interval '90 days'\$w\$\)/);
   assert.match(fx, /delete from public\.nx_codewords_status_pendentes where expira_em < now\(\)/);
   assert.match(fx, /delete from public\.nx_login_falhas where em < now\(\) - interval '1 day'/);
   assert.match(fx, /delete from cron\.job_run_details where end_time < now\(\) - interval '3 days';/, "histórico do cron de TODOS os jobs");
@@ -307,7 +323,8 @@ test("S-B15 (contratos 4–6): nx_inicio, nx_dados.hora_conversa, agenda com enc
   for (const k of ["'conversas', (j_cv::jsonb", "'tarefas', (j_tf::jsonb", "'negocios', j_ng", "'leads', j_ld", "'canais', j_cn", "'notificacoes_nao_lidas', v_notif"]) assert.ok(i.includes(k), k);
   const d = ultimaDef("nx_dados").corpo;
   assert.match(d, /'nome', nome, 'vertical', vertical, 'cfg'/, "nx_dados.cliente.vertical (pedido da frente P)");
-  assert.match(d, /as hora_conversa/); assert.match(d, /extract\(hour from \(min\(m\.criado_em\) at time zone 'America\/Sao_Paulo'\)\)::int/); assert.match(d, /m\.direcao = 'in' and m\.tipo <> 'sistema'/);
+  // plano 1000 (SV-116): a 1ª entrada vem de nx_conversas.primeira_entrada_em; a subconsulta em nx_mensagens fica só para quem não tem
+  assert.match(d, /as hora_conversa/); assert.match(d, /extract\(hour from \(min\(coalesce\(cv\.primeira_entrada_em,/); assert.match(d, /select min\(m\.criado_em\) from public\.nx_mensagens m/); assert.match(d, /m\.direcao = 'in' and m\.tipo <> 'sistema'/);
   assert.match(d, /perform public\.nx_exigir_modulo\(p_cliente, 'ads'\)/); assert.match(d, /erro_envio\n\s+from public\.nx_alertas/);
   const mc = ultimaDef("nx_agenda_marcar_core").corpo;
   assert.match(mc, /campos = \(coalesce\(x\.campos, '\{\}'::jsonb\) - 'presenca'\) \|\| jsonb_build_object\('encaixe', coalesce\(p_encaixe, false\)\)/);
@@ -344,7 +361,8 @@ test("smokes 19, 20 e 21: begin … rollback, terminam em OK_NN e cobrem os caso
   for (const caso of ["aberto há 45 dias → existente", "último negócio fechado → nasce um novo", "nome do negócio = nome do contato no CRM", "campanha_ext preenchida", "fixo 3333-4444 e «celular» 93333-4444", "canal Meta aceito", "terça 1h aberto"]) assert.ok(S19.includes(caso), `19 cobre: ${caso}`);
   for (const caso of ["por SQL: senha errada lança credenciais_invalidas", "11ª tentativa → muitas_tentativas", "a senha certa também fica bloqueada", "outro e-mail do MESMO IP está bloqueado pelo IP", "recém-bloqueado: 15 min (nunca mais)", "vencido o bloqueio a senha certa entra", "6º cadastro na hora → muitas_tentativas",
                       "nx_sessao renova a sessão", "cliente_pausado", "super entra e vê ativo=false", "acesso que continua mantém o papel", "acesso novo herda o papel", "null explícito apaga SÓ a chave da IA", "nenhum valor de segredo na auditoria",
-                      "caiu: linha desconectado", "admin do cliente recebe canal_caiu", "mesmo estado de novo: nem linha nem notificação", "voltou: linha conectado + canal_voltou", "vigia: aparelho conferido há 30 min é alvo", "com conversa recente a sync já confere: fora", "contadores por canal",
+                      "caiu: linha desconectado", "admin do cliente recebe canal_caiu", "mesmo estado de novo: nem linha nem notificação", "voltou: linha conectado + canal_voltou", "vigia: aparelho conferido há 30 min é alvo", "caído com conversa recente: alvo do vigia",   // plano 1000 (SV-016): era «com conversa recente a sync já confere: fora»
+                       "contadores por canal",
                       "pegar: enviando, pego_em pelo gatilho, lote do cabeçalho", "devolver lote", "concluir(pendente) na 1ª tentativa: volta daqui a 1 min", "4ª em diante: 60 min", "a mesma p_req devolve a MESMA nota", "admin: 2 conversas não lidas", "sessão vencida some", "só notificação LIDA há > 90 d some",
                       "nenhuma nx_* executável por authenticated", "muitas_tentativas sai com errcode 22023", "cliente_pausado sai com errcode 22023", "canal_caiu leva dados.canal_id, dados.canal_nome",
                       "nx_notificacoes_listar devolve dados do canal", "canal_voltou leva o MESMO canal_id", "origem: atendente (papel que o clássico não conhece) = orbita", "origem: conta que entrou por convite = orbita",

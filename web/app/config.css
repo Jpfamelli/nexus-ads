@@ -127,6 +127,33 @@
 .adm-ia-tab .num { text-align: right; }
 @media (max-width: 420px) { .adm-ia-kpis { grid-template-columns: minmax(0, 1fr); } }
 
+/* ---------------------------------------------------------------- plano 1000 (13/10) · frente auto */
+/* AS-081: no celular, dentro de uma seção, o cabeçalho do hub sai da tela (o h1 continua para leitor de tela) */
+@media (max-width: 760px) {
+  .cfg-cab.na-secao { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+}
+/* AS-094: o porquê do «Convidar» desabilitado */
+.cfg-us-limite { margin: 0 0 var(--esp-3); }
+.cfg-us-limite a { color: var(--c-prim-luz); font-weight: 600; }
+/* AS-129: a escolha do caminho ao adicionar um número */
+.cfg-caminhos { gap: var(--esp-3); }
+.cfg-caminho { display: flex; flex-direction: column; align-items: flex-start; gap: var(--esp-1); width: 100%; min-height: 44px; padding: var(--esp-3); text-align: left;
+  border-radius: var(--r-p); border: 1px solid var(--c-borda); background: var(--c-sup); color: var(--c-texto); cursor: pointer;
+  transition: border-color var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out); }
+.cfg-caminho:hover { border-color: var(--c-prim); background: var(--c-sup-2); }
+.cfg-caminho:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.cfg-caminho-tit { display: flex; align-items: center; flex-wrap: wrap; gap: var(--esp-2); }
+/* AS-156: no celular os filtros do Admin empilham (busca, situação que rola na horizontal, revenda, novo) */
+.adm-seg-status { max-width: 100%; }
+@media (max-width: 600px) {
+  .adm-filtros .busca, .adm-filtros .adm-seg-status, .adm-filtros > .sel { flex: 1 1 100%; max-width: 100%; }
+}
+/* AS-161/AS-168/AS-159: módulos que saíram, modelo do segmento e convites pendentes */
+.adm-mod-aviso { margin: 0; }
+.adm-modelo { display: flex; align-items: center; flex-wrap: wrap; gap: var(--esp-2); margin: var(--esp-1) 0 0; }
+.adm-modelo-sel { min-height: 36px; }
+.adm-convites { margin-top: var(--esp-2); }
+
 /* ---------------------------------------------------------------- movimento reduzido e alto contraste */
 @media (prefers-reduced-motion: reduce) {
   .cfg-status-dot::after { animation: none !important; display: none; }
@@ -137,3 +164,102 @@
   .cfg-progresso-segs i.feito { background: Highlight; }
   .cfg-pend { forced-color-adjust: none; background: Highlight; color: HighlightText; }
 }
+
+/* ---------------------------------------------------------------- plano 1000 · lote auto-2 */
+/* AS-083: busca acima do menu das configurações */
+.cfg-busca { display: flex; margin: 0 0 var(--esp-3); }
+.cfg-busca input { width: 100%; min-height: 44px; font-size: var(--fs-16); }
+.cfg-busca-vazio { margin: 0 0 var(--esp-3); font-size: var(--fs-13); }
+/* AS-085 / AS-090: papel na empresa e avisos de mensagem nova */
+.cfg-papel { font-weight: 600; }
+.cfg-papel-outras { margin-top: var(--esp-1); font-size: var(--fs-13); }
+.cfg-avisos .cfg-aviso-op + .cfg-aviso-op { margin-top: var(--esp-3); }
+.cfg-avisos-nota:empty { display: none; }
+/* AS-099 / AS-100: convite com papel em destaque e busca de pessoas */
+.cfg-conv-tit { gap: var(--esp-2); align-items: center; flex-wrap: wrap; }
+.cfg-us-busca { display: flex; max-width: 24rem; margin: 0 0 var(--esp-3); }
+.cfg-us-busca input { width: 100%; min-height: 44px; font-size: var(--fs-16); }
+/* AS-107: «18,4 mil» não quebra na prévia da marca */
+.previa .pv-kpi b { display: block; white-space: nowrap; font-size: clamp(var(--fs-15), 1.4vw, var(--fs-20)); }
+/* AS-109 / AS-110 / AS-112: prévia do WhatsApp de suporte, soltar imagem na amostra, claro/escuro na prévia */
+.cfg-wa-previa { margin: calc(var(--esp-2) * -1) 0 0; font-size: var(--fs-13); overflow-wrap: anywhere; }
+.cfg-wa-previa:empty { display: none; }
+.logo-amostra.logo-alvo { border-color: var(--c-prim); border-style: solid; background: var(--c-prim-suave); }
+.cfg-prev-ctl { gap: var(--esp-2); flex-wrap: wrap; }
+.cfg-esq-prev { gap: var(--esp-1); }
+.cfg-esq-prev .bt[aria-pressed="true"] { background: var(--c-prim-suave); border-color: var(--c-prim); color: var(--c-texto); }
+/* AS-116: domínio pendente há quanto tempo */
+.dom-idade { display: flex; align-items: center; flex-wrap: wrap; gap: var(--esp-2); margin-top: var(--esp-2); font-size: var(--fs-13); }
+.dom-idade .ic { width: 15px; height: 15px; flex: none; }
+.dom-idade-atrasado { color: var(--c-aten); font-weight: 600; }
+@media (max-width: 760px), (pointer: coarse) {
+  .cfg-esq-prev .bt, .dom-avisar { min-height: 44px; }
+}
+
+/* ---------------------------------------------------------------- plano 1000 · lote auto-3 */
+/* AS-131: «Reconferindo 2 de 4…» sem pular a largura do botão */
+.cfg-reconf-txt { font-variant-numeric: tabular-nums; }
+/* AS-134: prompt com a URL secreta borrado até «Mostrar» (copiar e selecionar continuam funcionando) */
+.cfg-cw-prompt[data-oculto="1"] code { filter: blur(5px); }
+.cfg-cw-prompt[data-oculto="1"] { cursor: default; }
+/* AS-135 / AS-136 / AS-247: dados técnicos recolhidos e pílulas com dica */
+.cfg-tecnicos dt b { overflow-wrap: anywhere; }
+.cfg-pil-dica { display: inline-flex; }
+/* AS-285 / AS-286: qualidade da Meta em palavras e modelos por situação */
+.cfg-qualidade[data-tom="aten"] b { color: var(--c-aten); }
+.cfg-qualidade[data-tom="ruim"] b { color: var(--c-ruim); }
+.cfg-qualidade-exp { margin-top: var(--esp-1); font-size: var(--fs-13); }
+.cfg-modelos { display: flex; flex-wrap: wrap; gap: var(--esp-1); margin-top: var(--esp-2); }
+.cfg-onde-meta { margin-top: var(--esp-2); font-size: var(--fs-13); }
+.cfg-onde-meta a { overflow-wrap: anywhere; }
+/* AS-141 / AS-142 / AS-144 / AS-240: respostas rápidas */
+.cfg-resp-acoes { flex-wrap: wrap; gap: var(--esp-2); justify-content: flex-end; }
+.cfg-resp-deps { max-width: 100%; overflow-x: auto; }
+.cfg-atalho-repetido { display: block; }
+/* AS-148 / AS-149 / AS-150 / AS-235 / AS-237 / AS-238: departamentos e horários */
+.cfg-predef { flex-wrap: wrap; gap: var(--esp-1); }
+.cfg-fuso { font-weight: 400; }
+.cfg-dep-pessoas { display: inline-flex; align-items: center; min-height: 32px; text-decoration: none; color: var(--c-texto-2); border-radius: var(--r-pp); }
+.cfg-dep-pessoas .avatar + .avatar { margin-left: -6px; box-shadow: 0 0 0 2px var(--c-sup); }
+.cfg-dep-pessoas:hover, .cfg-dep-pessoas:focus-visible { color: var(--c-texto); }
+.cfg-dep-pessoas:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.cfg-dep-mais { margin-left: var(--esp-1); font-size: var(--fs-12); }
+.cfg-cor-aviso { color: var(--c-aten); }
+/* AS-233: «Salvo» ao lado do interruptor */
+.cfg-pref-estado { display: block; min-height: 1.2em; font-size: var(--fs-12); }
+.cfg-pref-estado[data-estado="salvo"] { color: var(--c-ok); }
+/* AS-241 / AS-242: plano — próximo passo e o que conta em cada limite */
+.cfg-uso-regra { display: block; margin-top: var(--esp-1); font-size: var(--fs-12); color: var(--c-texto-3); }
+/* AS-273: quem está online */
+.cfg-online { display: inline-flex; align-items: center; gap: .3rem; margin-left: var(--esp-2); font-size: var(--fs-12); font-weight: 600; color: var(--c-ok); }
+.cfg-online i { width: 8px; height: 8px; border-radius: 50%; background: var(--c-ok); }
+.cfg-us-dep { gap: var(--esp-2); align-items: center; flex-wrap: wrap; margin: 0 0 var(--esp-3); }
+/* AS-293: visão geral das configurações */
+.cfg-vg-pend:empty { display: none; }
+.cfg-vg-pend { display: flex; flex-direction: column; gap: var(--esp-2); margin-bottom: var(--esp-4); }
+.cfg-vg-grupos { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap: var(--esp-3) var(--esp-4); }
+.cfg-vg-lista { list-style: none; margin: var(--esp-1) 0 0; padding: 0; display: flex; flex-direction: column; gap: .2rem; }
+.cfg-vg-item { display: flex; align-items: flex-start; gap: .6rem; min-height: 44px; padding: .45rem .6rem; border-radius: var(--r-p); color: var(--c-texto-2); text-decoration: none; }
+.cfg-vg-item:hover { background: var(--c-tinta); color: var(--c-texto); }
+.cfg-vg-item:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.cfg-vg-falta { border: 1px solid var(--c-borda); background: var(--c-sup); align-items: center; }
+.cfg-vg-falta > .ic:last-child { margin-left: auto; width: 15px; height: 15px; flex: none; }
+/* AS-297: aviso do convite de 30 dias */
+.cfg-conv-30 { margin-top: var(--esp-2); font-size: var(--fs-13); }
+@media (max-width: 760px), (pointer: coarse) {
+  .cfg-predef .bt, .cfg-resp-acoes .bt, .cfg-mostrar-prompt { min-height: 44px; }
+  .cfg-dep-pessoas { min-height: 44px; }
+}
+/* Admin (lote auto-3): KPIs que filtram (AS-164/165), nome como link (AS-289), saúde e pausa de envios (nx_saude / nx_envios_pausar) */
+.adm-kpis { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); }
+.adm-filtro-local { gap: var(--esp-2); align-items: center; flex-wrap: wrap; margin: 0 0 var(--esp-3); }
+.adm-nome-link { color: inherit; text-decoration: none; }
+.adm-nome-link:hover b, .adm-nome-link:focus-visible b { text-decoration: underline; text-underline-offset: 2px; }
+.adm-nome-link:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; border-radius: var(--r-pp); }
+.adm-saude { margin-bottom: var(--esp-4); }
+.adm-saude-lista { margin: 0; padding-left: 1.1rem; font-size: var(--fs-13); }
+.adm-us-linha { align-items: center; }
+.adm-us-linha > div { flex: 1 1 auto; min-width: 0; }
+.adm-slug-tomado { display: block; }
+.adm-envios-estado { margin-bottom: var(--esp-2); }
+@media (max-width: 760px) { .adm-csv { min-height: 44px; } }

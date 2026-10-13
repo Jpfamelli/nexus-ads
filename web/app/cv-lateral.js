@@ -19,6 +19,8 @@ export function criarLateral(A) {
   const ORIGEM = { anuncio: "Anúncio", whatsapp: "WhatsApp", indicacao: "Indicação", organico: "Orgânico", manual: "Cadastro manual", site: "Site", importacao: "Importação", formulario: "Formulário" };
   const PLATAFORMA = { meta: "Meta", instagram: "Instagram", facebook: "Facebook", google: "Google" };
 
+  const pendentesTarefa = new Set();             // CA-035: tarefas marcadas com o «Desfazer» ainda na tela (o redesenho mantém o risco)
+
   /* ---------------- estado do desenho por seção (D1) */
   let cont = null, contConversa = null;          // .cv-lat da conversa à vista e de qual conversa ela é
   const secoes = new Map();                      // chave → {el, sig}
@@ -29,13 +31,23 @@ export function criarLateral(A) {
   function montarEm(container) { alvo = container; cont = null; contConversa = null; secoes.clear(); seletor = null; render(); }
 
   // rótulos dos campos personalizados (do CRM); sem o CRM, a chave vira rótulo legível
-  let rotulos = null, pedindoRotulos = false;
+  let rotulos = null, pedindoRotulos = false, crmBase = null;
+  /** A base do CRM (uma vez por montagem): rótulos dos campos e — plano 1000 · CA-083 — os funis com as etapas para mover o negócio daqui. */
+  function carregarCrm() {
+    if (rotulos || pedindoRotulos || !(A.ctx.temModulo && A.ctx.temModulo("crm"))) return;
+    pedindoRotulos = true;
+    A.api.rpcC("nx_crm_base").then(b => { crmBase = b || {}; rotulos = {}; for (const c of (b && b.campos) || []) if (c.entidade === "contato") rotulos[c.chave] = c.rotulo; render(); }).catch(() => { rotulos = {}; });
+  }
   function rotuloCampo(k) {
-    if (!rotulos && !pedindoRotulos && A.ctx.temModulo && A.ctx.temModulo("crm")) {
-      pedindoRotulos = true;
-      A.api.rpcC("nx_crm_base").then(b => { rotulos = {}; for (const c of (b && b.campos) || []) if (c.entidade === "contato") rotulos[c.chave] = c.rotulo; render(); }).catch(() => { rotulos = {}; });
-    }
+    carregarCrm();
     return (rotulos && rotulos[k]) || k.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
+  }
+  /** CA-083: as etapas «abertas» do funil do negócio (a agendada pede data e as de fechamento perguntam valor/motivo: essas ficam na ficha). */
+  function etapasDe(n) {
+    const funil = crmBase && Array.isArray(crmBase.funis) ? crmBase.funis.find(f => f && f.id === n.funil_id) : null;
+    if (!funil || !Array.isArray(funil.estagios)) return [];
+    return funil.estagios.filter(e => e && e.ativo !== false && ((e.tipo === "aberto" && e.marco !== "agendada") || e.id === n.estagio_id))
+      .slice().sort((a, b) => (Number(a.ordem) || 0) - (Number(b.ordem) || 0));
   }
 
   /* D17: de onde a pessoa veio (rastreio do site / anúncio), lido do negócio (nx_negocio_ver) uma vez por negócio, por detecção */
@@ -87,9 +99,18 @@ export function criarLateral(A) {
       kpi({ rotulo: r.tarefas === 1 ? "Tarefa" : "Tarefas", valor: r.tarefas, detalhe: r.atrasadas ? `${r.atrasadas} atrasada${r.atrasadas === 1 ? "" : "s"}` : null, ajuda: "Tarefas abertas ligadas ao contato", tom: r.atrasadas ? "ruim" : "neutro" }));
     return h("section", { class: "cvt-resumo-ct" }, kpis, blocoInteracoes(), blocoAtalhos(ver));
   }
+  /* plano 1000 · CA-102: a série dos 7 dias só é recalculada quando as mensagens carregadas mudam (quantas, a 1ª e a última) ou o dia
+     vira — antes, todo pulso (3 s) refazia a série e o JSON da assinatura */
+  let memoSerie = null;
+  function serieDias() {
+    const msgs = A.msgs || [];
+    const chave = `${msgs.length}|${msgs.length ? msgs[0].id : ""}|${msgs.length ? msgs[msgs.length - 1].id : ""}|${L.diaSP(Date.now())}`;
+    if (!memoSerie || memoSerie.chave !== chave) { const v = L.interacoesPorDia(msgs); memoSerie = { chave, v, sig: JSON.stringify(v) }; }
+    return memoSerie;
+  }
   /** Mensagens por dia (últimos 7) a partir do que já está carregado — honesto: o servidor não devolve essa série. */
   function blocoInteracoes() {
-    const dias = L.interacoesPorDia(A.msgs || []);
+    const dias = serieDias().v;
     const total = dias.reduce((s, d) => s + d.entrada + d.saida, 0);
     const resumo = total ? `${total} ${total === 1 ? "mensagem" : "mensagens"} nos últimos 7 dias (nas mensagens carregadas)` : "Sem mensagens nos últimos 7 dias nas mensagens carregadas";
     const caixa = h("div", { class: "cvt-mini-caixa" });
@@ -104,7 +125,8 @@ export function criarLateral(A) {
     const det = h("details", { class: "cvt-mini-det", open: miniAberto }, h("summary", { dataset: { foco: "mini" } }, "Ver números"), tabela);
     det.addEventListener("toggle", () => { miniAberto = det.open; });
     return h("div", { class: "cvt-mini" },
-      h("div", { class: "cvt-mini-cab" }, h("span", { class: "rotulo" }, "Mensagens · 7 dias"), h("span", { class: "cvt-mini-total dado" }, String(total))),
+      // CA-236: o rótulo diz que a conta é das mensagens CARREGADAS na tela (não o total do contato)
+      h("div", { class: "cvt-mini-cab" }, h("span", { class: "rotulo" }, "Mensagens carregadas · 7 dias"), h("span", { class: "cvt-mini-total dado" }, String(total))),
       caixa,
       h("p", { class: "sr-only" }, resumo),
       det);
@@ -129,8 +151,8 @@ export function criarLateral(A) {
       conv.protocolo ? atalho("copiar", "Protocolo", { title: `Copiar o protocolo ${conv.protocolo}`, dataset: { foco: "protocolo" }, on: { click: () => ui.copiar(conv.protocolo, { aviso: "Protocolo copiado." }) } }) : null,
       temCrm ? atalho("calendario", "Agenda", { dataset: { foco: "agenda" },
         title: negAgenda ? `Marcar consulta para «${negAgenda.titulo || "este negócio"}»` : "Marcar consulta",
-        on: { click: () => { if (typeof A.acoes.agendar === "function") A.acoes.agendar(negAgenda); else A.ctx.navegar("#/agenda"); } } }) : null,
-      ct.id ? atalho("contato", "Ficha", { title: "Abrir a ficha completa", dataset: { foco: "ficha" }, on: { click: () => A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }) } }) : null);
+        on: { click: () => { if (typeof A.acoes.agendar === "function") A.acoes.agendar(negAgenda); else A.ctx.navegar("#/agenda"); } } }) : null);
+    // plano 1000 · CA-040: «Ficha» saiu dos atalhos (ficava sozinha na 2ª linha): o «Abrir ficha» do topo do cartão já faz isso
   }
 
   /* ---------------- nome do contato: só grava por Enter ou «Salvar»; Esc e «Cancelar» desistem; sair do campo não grava (D1) */
@@ -192,6 +214,72 @@ export function criarLateral(A) {
       h("div", { class: "cvt-nome-bts" }, cancelar, salvar));
   }
 
+  /* ---------------- plano 1000 · CA-081: e-mail e cidade editáveis na lateral (mesma regra do nome: Enter/«Salvar» gravam, Esc/«Cancelar» desistem) */
+  let editandoCampo = null;                      // {campo: "email"|"cidade", ctId, valor, salvando, erro}
+  const RE_EMAIL = /^[^@\s]+@[^@\s]+[.][^@\s]+$/;
+  function abrirEdicaoCampo(ct, campo) {
+    if (!A.podeEscrever || !ct || !ct.id) return;
+    editandoCampo = { campo, ctId: ct.id, valor: String((campo === "email" ? ct.email : ct.cidade) || ""), salvando: false, erro: "" };
+    redesenhar("dados");
+    const inp = cont && cont.querySelector(".cvt-campo-caixa input");
+    if (inp) { try { inp.focus(); inp.select(); } catch { /* ok */ } }
+  }
+  function fecharEdicaoCampo({ foco = true } = {}) {
+    const campo = editandoCampo && editandoCampo.campo;
+    editandoCampo = null;
+    redesenhar("dados");                         // na marra: o campo que fecha ainda tem o foco (o render() acharia que está em edição)
+    render();
+    if (foco && campo) { const b = cont && cont.querySelector(`[data-foco="editar-${campo}"]`); if (b) try { b.focus({ preventScroll: true }); } catch { /* ok */ } }
+  }
+  async function salvarCampo(ct) {
+    const ed = editandoCampo;
+    if (!ed || ed.salvando || ed.ctId !== ct.id) return;
+    const novo = String(ed.valor || "").trim();
+    if (ed.campo === "email" && novo && !RE_EMAIL.test(novo)) { ed.erro = "Confira o e-mail: algo como nome@exemplo.com."; redesenhar("dados"); focarCampo(); return; }
+    const atual = String((ed.campo === "email" ? ct.email : ct.cidade) || "").trim();
+    if (novo === atual) { fecharEdicaoCampo(); return; }
+    ed.salvando = true; ed.erro = "";
+    redesenhar("dados");
+    try {
+      await A.api.rpcC("nx_contato_salvar", { p_contato: { id: ct.id, [ed.campo]: novo || null } });
+      if (editandoCampo !== ed) return;
+      if (A.ver && A.ver.contato && A.ver.contato.id === ct.id) A.ver.contato = { ...A.ver.contato, [ed.campo]: novo || null };
+      ui.toast(ed.campo === "email" ? "E-mail atualizado." : "Cidade atualizada.", { tipo: "ok" });
+      fecharEdicaoCampo();
+      A.acoes.recarregarVer();
+    } catch (e) {
+      if (editandoCampo !== ed) return;
+      ed.salvando = false;
+      ed.erro = e && e.codigo === "dados_invalidos" && ed.campo === "email" ? "O servidor não aceitou este e-mail. Confira e tente de novo." : "";
+      if (!ed.erro) A.acoes.tratarErro(e);
+      redesenhar("dados");
+      focarCampo();
+    }
+  }
+  function focarCampo() { const inp = cont && cont.querySelector(".cvt-campo-caixa input"); if (inp) try { inp.focus(); } catch { /* ok */ } }
+  function caixaCampo(ct, campo, rotulo) {
+    const ed = editandoCampo;
+    const idErro = `cvt-${campo}-erro-${ct.id}`;
+    const inp = h("input", { type: campo === "email" ? "email" : "text", value: ed.valor, maxlength: campo === "email" ? 160 : 80, "aria-label": `${rotulo} do contato`, disabled: ed.salvando,
+      autocomplete: "off", inputmode: campo === "email" ? "email" : null, "aria-invalid": ed.erro ? "true" : null, "aria-describedby": ed.erro ? idErro : null, dataset: { foco: `${campo}-campo` } });
+    inp.addEventListener("input", () => { if (editandoCampo === ed) ed.valor = inp.value; });
+    inp.addEventListener("keydown", ev => {
+      if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); salvarCampo(ct); }
+      else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); fecharEdicaoCampo(); }
+    });
+    return h("div", { class: "cvt-nome-ed cvt-campo-caixa", role: "group", "aria-label": `Editar ${rotulo.toLowerCase()}` }, inp,
+      ed.erro ? h("p", { class: "cvt-nome-erro", id: idErro, role: "alert" }, ed.erro) : null,
+      h("div", { class: "cvt-nome-bts" },
+        h("button", { type: "button", class: "bt bt-fant bt-p", disabled: ed.salvando, dataset: { foco: `${campo}-cancelar` }, on: { click: () => fecharEdicaoCampo() } }, "Cancelar"),
+        h("button", { type: "button", class: "bt bt-prim bt-p", disabled: ed.salvando, dataset: { foco: `${campo}-salvar` }, on: { click: () => salvarCampo(ct) } }, ui.icone("check"), ed.salvando ? "Salvando…" : "Salvar")));
+  }
+  /** CA-124: o horário de atendimento que vale para a conversa (departamento dela ou o padrão), quando a tela o conhece (admin). */
+  function horarioDe(conv) {
+    const deps = (A.base && A.base.config && A.base.config.departamentos) || [];
+    const d = deps.find(x => x && x.id === conv.departamento_id) || deps.find(x => x && x.padrao);
+    return d && Object.prototype.hasOwnProperty.call(d, "horario") ? d.horario : undefined;
+  }
+
   function rotuloOrigem(origem, plataforma) {
     const base = ORIGEM[origem] || origem;
     return origem === "anuncio" && PLATAFORMA[plataforma] ? `${base} · ${PLATAFORMA[plataforma]}` : base;
@@ -209,8 +297,12 @@ export function criarLateral(A) {
       ct.telefone ? h("div", { class: "cvt-tel" }, ui.telBR(ct.telefone)) : null,
       selos.childNodes.length ? selos : null,
       h("div", { class: "linha" },
-        ct.telefone ? h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { foco: "copiar-tel" }, on: { click: () => ui.copiar(ct.telefone, { aviso: "Telefone copiado." }) } }, ui.icone("copiar"), "Copiar") : null,
-        h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { foco: "abrir-ficha" }, on: { click: () => A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }) } }, ui.icone("contato"), "Abrir ficha")));
+        // plano 1000 · CA-080: o formato internacional (+55…), pronto para o discador e o WhatsApp; o aviso diz qual foi
+        ct.telefone ? h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { foco: "copiar-tel" }, title: `Copiar ${L.telefoneInternacional(ct.telefone)}`,
+          on: { click: () => ui.copiar(L.telefoneInternacional(ct.telefone), { aviso: `Telefone copiado: ${L.telefoneInternacional(ct.telefone)}` }) } }, ui.icone("copiar"), "Copiar") : null,
+        // CA-239: contato removido (sem id) — o botão fica desligado e diz por quê (antes abria uma gaveta de erro)
+        h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { foco: "abrir-ficha" }, disabled: !ct.id, title: ct.id ? null : "Contato removido: não há ficha para abrir",
+          on: { click: () => { if (ct.id) A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }); } } }, ui.icone("contato"), ct.id ? "Abrir ficha" : "Contato removido")));
   }
 
   function blocoDados(ver, rastreio) {
@@ -230,16 +322,36 @@ export function criarLateral(A) {
 
     const dados = h("dl", { class: "cvt-dl" });
     const add = (k, v) => { if (v !== null && v !== undefined && v !== "") dados.append(h("dt", null, k), h("dd", null, v)); };
-    add("E-mail", ct.email);
-    add("Cidade", [ct.cidade, ct.uf].filter(Boolean).join(" · "));
+    // CA-038: e-mail clicável (abre o programa de e-mail) e com «copiar» ao lado
+    // plano 1000 · CA-081: e-mail e cidade se corrigem aqui mesmo (Enter ou «Salvar», como o nome) — sem abrir a ficha
+    const edCampo = editandoCampo && editandoCampo.ctId === ct.id ? editandoCampo : null;
+    const btEditar = (campo, rotulo) => A.podeEscrever && ct.id ? h("button", { type: "button", class: "bt-icone cvt-campo-ed", "aria-label": `Editar ${rotulo.toLowerCase()}`, title: `Editar ${rotulo.toLowerCase()}`,
+      dataset: { foco: `editar-${campo}` }, on: { click: () => abrirEdicaoCampo(ct, campo) } }, ui.icone("editar")) : null;
+    if (edCampo && edCampo.campo === "email") add("E-mail", caixaCampo(ct, "email", "E-mail"));
+    else if (ct.email) add("E-mail", h("span", { class: "cvt-email" }, h("a", { href: `mailto:${String(ct.email).trim()}`, class: "link" }, ct.email),
+      h("button", { type: "button", class: "bt-icone cvt-email-copiar", "aria-label": "Copiar e-mail", title: "Copiar e-mail", dataset: { foco: "copiar-email" },
+        on: { click: () => ui.copiar(String(ct.email).trim(), { aviso: "E-mail copiado." }) } }, ui.icone("copiar")), btEditar("email", "E-mail")));
+    else if (A.podeEscrever && ct.id) add("E-mail", h("button", { type: "button", class: "link cvt-campo-add", dataset: { foco: "editar-email" }, on: { click: () => abrirEdicaoCampo(ct, "email") } }, "Adicionar e-mail"));
+    const cidadeTxt = [ct.cidade, ct.uf].filter(Boolean).join(" · ");
+    if (edCampo && edCampo.campo === "cidade") add("Cidade", caixaCampo(ct, "cidade", "Cidade"));
+    else if (cidadeTxt) add("Cidade", h("span", { class: "cvt-email" }, h("span", null, cidadeTxt), btEditar("cidade", "Cidade")));
+    else if (A.podeEscrever && ct.id) add("Cidade", h("button", { type: "button", class: "link cvt-campo-add", dataset: { foco: "editar-cidade" }, on: { click: () => abrirEdicaoCampo(ct, "cidade") } }, "Adicionar cidade"));
     const campos = ct.campos && typeof ct.campos === "object" ? Object.entries(ct.campos).filter(([, v]) => v !== null && v !== "" && (typeof v !== "object" || Array.isArray(v))).slice(0, 4) : [];
     for (const [k, v] of campos) add(rotuloCampo(k), Array.isArray(v) ? v.join(", ") : typeof v === "boolean" ? (v ? "Sim" : "Não") : String(v));
     add("Atendimento", h("span", { class: "mono" }, conv.protocolo || ""));
     add("Departamento", conv.departamento ? conv.departamento.nome : null);
     add("Com", conv.atribuida ? conv.atribuida.nome : conv.atribuida_nome || "Sem dono");
     if (conv.primeira_resposta_em && conv.aberta_em) {
+      // plano 1000 · CA-124: o tempo é corrido (sexta 20h → segunda 9h = 61 h) — o rótulo diz isso; quando a conversa chegou fora do horário
+      // e a tela conhece o horário de atendimento, mostra também o tempo útil (a mesma regra do SLA da lista)
       const min = Math.max(0, Math.round((Date.parse(conv.primeira_resposta_em) - Date.parse(conv.aberta_em)) / 60000));
-      add("1ª resposta", min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${min % 60} min`);
+      const corrido = L.textoMinutos(min);
+      const hor = horarioDe(conv);
+      const fora = hor !== undefined && hor !== null && !L.horarioAberto(hor, conv.aberta_em);
+      const util = fora ? L.minutosUteis(conv.aberta_em, conv.primeira_resposta_em, hor) : null;
+      add(fora ? "1ª resposta" : "1ª resposta (tempo corrido)", fora
+        ? h("span", { class: "cvt-resp1" }, `${L.textoMinutos(util)} no horário de atendimento`, h("small", { class: "fraco" }, ` · ${corrido} corridos (chegou fora do horário)`))
+        : corrido);
     }
     return secao({ id: "dados", titulo: "Dados" }, origem, origem ? h("div", { class: "cvt-esp" }) : null, dados);
   }
@@ -279,9 +391,40 @@ export function criarLateral(A) {
     if (n) n.textContent = String(ids.length);
   }
 
+  /** CA-083: muda a etapa na tela na hora e só grava (nx_negocio_mover) quando o aviso com Desfazer fecha — o mesmo movimento adiado do Kanban. */
+  async function moverEtapa(n, destino) {
+    const antes = { estagio_id: n.estagio_id, estagio_nome: n.estagio_nome, estagio_cor: n.estagio_cor };
+    const depois = { estagio_id: destino.id, estagio_nome: destino.nome, estagio_cor: destino.cor || null };
+    const aplicarNoVer = patch => {
+      if (!A.ver) return;
+      A.ver = { ...A.ver, negocios: (A.ver.negocios || []).map(x => (x && x.id === n.id ? { ...x, ...patch } : x)) };
+      render();
+    };
+    const api = A.api;
+    const titulo = n.titulo || (A.ctx.vocab && A.ctx.vocab.negocio) || "Negócio";
+    if (typeof ui.acaoComDesfazer !== "function") {
+      try { await api.rpcC("nx_negocio_mover", { p_id: n.id, p_estagio: destino.id, p_ordem: null, p_extra: {} }); aplicarNoVer(depois); A.acoes.recarregarVer(); }
+      catch (e) { aplicarNoVer(antes); A.acoes.tratarErro(e); }
+      return;
+    }
+    const r = await ui.acaoComDesfazer({
+      texto: `«${titulo}» foi para «${destino.nome}»`,
+      aplicar: () => aplicarNoVer(depois),
+      firmar: async ({ saindo = false } = {}) => {
+        try { await api.rpcC("nx_negocio_mover", { p_id: n.id, p_estagio: destino.id, p_ordem: null, p_extra: {} }, saindo ? { keepalive: true } : {}); }
+        catch (e) { aplicarNoVer(antes); throw e; }
+        A.acoes.recarregarVer();
+        A.acoes.carregarLista({});
+      },
+      reverter: () => aplicarNoVer(antes),
+    });
+    if (r && r.estado === "falhou" && r.erro) A.acoes.tratarErro(r.erro);
+  }
+
   function blocoNegocios(ver) {
     const conv = ver.conversa || {};
     const lista = ver.negocios || [];
+    if (lista.length) carregarCrm();
     const neg = A.ctx.vocab.negocio || "Negócio";
     const novo = A.podeEscrever
       ? h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { foco: "novo-negocio" }, on: { click: async () => {
@@ -303,6 +446,23 @@ export function criarLateral(A) {
           ligado ? h("span", { class: "cvt-ligado" }, "Este atendimento") : null,
           n.tarefa && n.tarefa.atrasada ? ui.pilula("Tarefa atrasada", "ruim") : null));
       const wrap = h("div", null, b);
+      const aberto = (n.status || "aberto") === "aberto" && (!n.estagio_tipo || n.estagio_tipo === "aberto");
+      // plano 1000 · CA-083: a etapa muda aqui mesmo (com Desfazer, como no Kanban); as que pedem data/valor/motivo continuam na ficha
+      const etapas = A.podeEscrever && aberto && n.funil_id ? etapasDe(n) : [];
+      if (etapas.length > 1) {
+        const idSel = `cvt-etapa-${n.id}`;
+        const sel = h("select", { class: "sel cvt-etapa-sel", id: idSel, dataset: { foco: `etapa-${n.id}` } },
+          etapas.map(e => h("option", { value: e.id, selected: e.id === n.estagio_id }, e.nome)));
+        sel.addEventListener("change", () => { const e = etapas.find(x => String(x.id) === String(sel.value)); if (e && e.id !== n.estagio_id) moverEtapa(n, e); });
+        wrap.appendChild(h("div", { class: "cvt-etapa" }, h("label", { for: idSel, class: "rotulo" }, "Etapa"), sel));
+      }
+      // CA-242: «Ganhou» / «Perdeu» no cartão — pelo mesmo caminho do CRM (valor, motivo e campos obrigatórios), quando o shell oferece a ponte
+      if (A.podeEscrever && aberto && typeof A.ctx.moverNegocio === "function") {
+        const fechar = tipo => A.ctx.moverNegocio(n.id, { tipo }, { aoMudar: () => A.acoes.recarregarVer() });
+        wrap.appendChild(h("div", { class: "linha cvt-neg-fechar" },
+          h("button", { type: "button", class: "bt bt-sec bt-p cvt-ganhou", dataset: { foco: `ganhou-${n.id}` }, on: { click: () => fechar("ganho") } }, ui.icone("check"), "Ganhou"),
+          h("button", { type: "button", class: "bt bt-fant bt-p cvt-perdeu", dataset: { foco: `perdeu-${n.id}` }, on: { click: () => fechar("perdido") } }, ui.icone("fechar"), "Perdeu")));
+      }
       if (A.podeEscrever && !ligado) {
         wrap.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { foco: `ligar-neg-${n.id}` }, on: { click: () => A.acoes.vincular(n.id) } }, ui.icone("link"), "Ligar a este atendimento"));
       }
@@ -319,34 +479,93 @@ export function criarLateral(A) {
       const idc = `cvt-t-${t.id}`;
       const chk = h("input", { type: "checkbox", id: idc, disabled: !A.podeEscrever, "aria-label": `Concluir: ${t.titulo}` });
       const linha = h("div", { class: "cvt-tar" });
-      chk.addEventListener("change", async () => {
-        linha.dataset.feita = "1";                     // risca na hora (check animado); o servidor confirma em seguida
-        try { await A.api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: true }); ui.toast("Tarefa concluída.", { tipo: "ok" }); A.acoes.recarregarVer(); }
-        catch (e) { chk.checked = false; delete linha.dataset.feita; A.acoes.tratarErro(e); }
+      // plano 1000 · CA-035: concluir tem Desfazer (como Resolver): risca na hora e só grava quando o aviso fecha; Desfazer desmarca
+      chk.addEventListener("change", () => {
+        if (!chk.checked || pendentesTarefa.has(t.id)) return;
+        linha.dataset.feita = "1";
+        pendentesTarefa.add(t.id);
+        const voltar = () => { pendentesTarefa.delete(t.id); chk.checked = false; delete linha.dataset.feita; };
+        const api = A.api;
+        if (typeof ui.acaoComDesfazer !== "function") {      // shell sem o aviso com Desfazer: grava na hora, como antes
+          api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: true })
+            .then(() => { pendentesTarefa.delete(t.id); ui.toast("Tarefa concluída.", { tipo: "ok" }); A.acoes.recarregarVer(); }, e => { voltar(); A.acoes.tratarErro(e); });
+          return;
+        }
+        Promise.resolve(ui.acaoComDesfazer({
+          texto: `Tarefa concluída · ${t.titulo}`,
+          aplicar: () => {},
+          firmar: async ({ saindo = false } = {}) => {
+            try { await api.rpcC("nx_tarefa_concluir", { p_id: t.id, p_concluida: true }, saindo ? { keepalive: true } : {}); }
+            catch (e) { voltar(); throw e; }
+            pendentesTarefa.delete(t.id);
+            A.acoes.recarregarVer();
+          },
+          reverter: voltar,
+        })).then(r => { if (r && r.estado === "falhou" && r.erro) A.acoes.tratarErro(r.erro); }, e => A.acoes.tratarErro(e));
       });
+      if (pendentesTarefa.has(t.id)) { chk.checked = true; linha.dataset.feita = "1"; }
       linha.append(chk, h("label", { for: idc }, h("b", null, t.titulo)),
         h("small", { dataset: { atrasada: t.atrasada ? "1" : "0" } }, t.vence_em ? `${t.atrasada ? "Atrasada · " : ""}${ui.relativo(t.vence_em)}` : "Sem prazo",
           t.dono && t.dono.nome ? ` · ${t.dono.nome}` : ""));
+      // plano 1000 · CA-084: adiar em um toque (amanhã às 9h, mais 1 hora ou escolher) — antes só dava para concluir
+      if (A.podeEscrever) {
+        const bAdiar = h("button", { type: "button", class: "bt-icone cvt-tar-adiar", "aria-label": `Adiar: ${t.titulo}`, title: "Adiar", dataset: { foco: `adiar-${t.id}` } }, ui.icone("relogio"));
+        bAdiar.addEventListener("click", () => ui.menu(bAdiar, [
+          { rotulo: "Amanhã às 9h", icone: "calendario", fn: () => adiarTarefa(t, L.adiarTarefa("amanha9")) },
+          { rotulo: "Mais 1 hora", icone: "relogio", fn: () => adiarTarefa(t, L.adiarTarefa("1h", t.vence_em && Date.parse(t.vence_em) > Date.now() ? new Date(t.vence_em) : new Date())) },
+          { rotulo: "Escolher…", icone: "editar", fn: () => escolherPrazo(t) },
+        ]));
+        linha.appendChild(bAdiar);
+      }
       return linha;
     });
     return secao({ id: "tarefas", titulo: "Tarefas", acao: nova, contador: itens.length || null }, itens.length ? h("div", null, itens) : h("p", { class: "cvt-vazio" }, "Nenhuma tarefa aberta."));
   }
 
+  /** CA-084: novo prazo da tarefa (nx_tarefa_salvar com {id, vence_em} — só o prazo muda). */
+  async function adiarTarefa(t, iso) {
+    if (!iso) return;
+    try {
+      await A.api.rpcC("nx_tarefa_salvar", { p_tarefa: { id: t.id, vence_em: iso } });
+      ui.toast(`Tarefa adiada para ${ui.dataHoraBR(iso)}.`, { tipo: "ok" });
+      A.acoes.recarregarVer();
+    } catch (e) { A.acoes.tratarErro(e); }
+  }
+  async function escolherPrazo(t) {
+    const f = h("form", { class: "pilha", novalidate: true }, ui.campo({ rotulo: "Novo prazo (horário de Brasília)", nome: "vence_em", tipo: "datahora" }));
+    const iso = await ui.modal({ titulo: `Adiar: ${t.titulo}`, corpo: f, largura: "p",
+      acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Adiar", tipo: "primario", fn: () => {
+        const d = ui.lerForm(f);
+        const v = d.vence_em ? L.isoDeSP(d.vence_em) : null;
+        if (!v) { ui.marcarErro(f, "vence_em", "Escolha a data e a hora."); return false; }
+        return v;
+      } }] });
+    if (iso) adiarTarefa(t, iso);
+  }
+
   async function novaTarefa(ver) {
     const ct = ver.contato || {};
     const conv = ver.conversa || {};
+    // CA-037: «Para quem» — a tarefa pode ficar com outra pessoa da equipe (padrão: quem cria)
+    const pessoas = ((A.base && A.base.usuarios) || []).filter(u => u && u.papel !== "leitura" && u.aprovado !== false);
+    const eu = A.eu && A.eu.id;
     const f = h("form", { class: "pilha", novalidate: true },
       ui.campo({ rotulo: "O que fazer", nome: "titulo", obrigatorio: true, max: 160, placeholder: "Ex.: Ligar para confirmar a avaliação" }),
       ui.campo({ rotulo: "Tipo", nome: "tipo", tipo: "select", valor: "tarefa", opcoes: [
         { valor: "tarefa", rotulo: "Tarefa" }, { valor: "ligacao", rotulo: "Ligação" }, { valor: "whatsapp", rotulo: "WhatsApp" },
         { valor: "reuniao", rotulo: "Reunião" }, { valor: "visita", rotulo: "Visita" }, { valor: "email", rotulo: "E-mail" }] }),
-      ui.campo({ rotulo: "Vence em", nome: "vence_em", tipo: "datahora" }));
+      pessoas.length > 1 ? ui.campo({ rotulo: "Para quem", nome: "dono_id", tipo: "select", valor: eu || "",
+        opcoes: pessoas.map(u => ({ valor: u.id, rotulo: u.id === eu ? `${u.nome} (você)` : u.nome })) }) : null,
+      ui.campo({ rotulo: "Vence em (horário de Brasília)", nome: "vence_em", tipo: "datahora" }));
     const r = await ui.modal({ titulo: "Nova tarefa", corpo: f, largura: "p",
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Criar tarefa", tipo: "primario", fn: async () => {
         const d = ui.lerForm(f);
         if (!d.titulo) { ui.marcarErro(f, "titulo", "Escreva o que precisa ser feito."); return false; }
-        const vence = d.vence_em ? new Date(d.vence_em).toISOString() : null;
-        return A.api.rpcC("nx_tarefa_salvar", { p_tarefa: { titulo: d.titulo, tipo: d.tipo, vence_em: vence, contato_id: ct.id, negocio_id: conv.negocio ? conv.negocio.id : null } });
+        // CA-036: o horário digitado é de São Paulo (como o resto do Órbita), nunca o fuso do aparelho
+        const vence = d.vence_em ? L.isoDeSP(d.vence_em) : null;
+        const tarefa = { titulo: d.titulo, tipo: d.tipo, vence_em: vence, contato_id: ct.id, negocio_id: conv.negocio ? conv.negocio.id : null };
+        if (d.dono_id && d.dono_id !== eu) tarefa.dono_id = d.dono_id;
+        return A.api.rpcC("nx_tarefa_salvar", { p_tarefa: tarefa });
       } }] });
     if (r) { ui.toast("Tarefa criada.", { tipo: "ok" }); A.acoes.recarregarVer(); }
   }
@@ -370,22 +589,43 @@ export function criarLateral(A) {
     const conv = ver.conversa || {};
     const r = resumos.get(conv.id);
     const saida = h("div", { class: "cvt-resumo", "aria-live": "polite" });
-    if (r && r.texto) saida.append(h("p", null, r.texto), h("small", null, `Gerado ${ui.relativo(r.em)} pela IA — confira antes de usar.`));
-    else saida.appendChild(h("p", { class: "cvt-vazio" }, "Um parágrafo com o que o cliente quer, o que já foi combinado e o próximo passo."));
-    const b = h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { foco: "resumir" } }, ui.icone("ia"), r ? "Refazer" : "Resumir");
-    b.addEventListener("click", async () => {
+    // CA-004: sem IA configurada a seção diz isso (sem botão que só dá erro); com a cota gasta o botão fica desligado com o motivo
+    const ia0 = A.base && A.base.ia;
+    const semIA = !ia0 || ia0.ligada === false;
+    const cota0 = ia0 && ia0.cota;
+    const semCota = !semIA && !!(cota0 && cota0.limite != null && Number(cota0.usadas) >= Number(cota0.limite));
+    if (r && r.texto) {
+      // CA-039: o resumo vive só na memória desta aba — «Guardar como nota interna» deixa para a equipe (e não paga de novo)
+      const guardar = A.podeEscrever && A.acoes.nota ? h("button", { type: "button", class: "bt bt-fant bt-p cvt-resumo-nota", dataset: { foco: "resumo-nota" }, disabled: !!r.guardado },
+        ui.icone("nota"), r.guardado ? "Guardado como nota" : "Guardar como nota interna") : null;
+      if (guardar && !r.guardado) guardar.addEventListener("click", async () => {
+        try {
+          await ui.carregando(guardar, A.acoes.nota(`Resumo da IA: ${r.texto}`, { req: r.req || (r.req = L.novoUuid()), conversa: conv.id }));
+          r.guardado = true;
+          ui.toast("Resumo guardado como nota interna.", { tipo: "ok" });
+          render();
+        } catch (e) { A.acoes.tratarErro(e); }
+      });
+      saida.append(h("p", null, r.texto), h("small", null, `Gerado ${ui.relativo(r.em)} pela IA — confira antes de usar.`), guardar);
+    }
+    else saida.appendChild(h("p", { class: "cvt-vazio" }, semIA ? "A IA ainda não foi configurada para esta empresa." : "Um parágrafo com o que o cliente quer, o que já foi combinado e o próximo passo."));
+    const b = semIA ? null : h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { foco: "resumir" }, disabled: semCota, title: semCota ? "A cota de IA do mês acabou" : null }, ui.icone("ia"), r ? "Refazer" : "Resumir");
+    if (b) b.addEventListener("click", async () => {
       const ia = A.base && A.base.ia;
-      if (ia && ia.ligada === false) { ui.toast("A IA não está disponível agora.", { tipo: "info" }); return; }
+      if (ia && ia.ligada === false) { ui.toast("A IA ainda não foi configurada para esta empresa.", { tipo: "info" }); return; }
       try {
         const x = await ui.carregando(b, A.api.fn("nx-ia", { acao: "resumir", conversa: conv.id }));
         const texto = x && typeof x.texto === "string" ? x.texto.trim() : "";
         if (!texto) throw Object.assign(new Error("ia_indisponivel"), { codigo: "ia_indisponivel" });
+        // plano 1000 · CA-241: o resumo também gasta a cota — a tela soma (como no «Sugerir»), para não liberar pedidos que o servidor recusa
+        const cota = A.base && A.base.ia && A.base.ia.cota;
+        if (cota) cota.usadas = (Number(cota.usadas) || 0) + 1;
         resumos.set(conv.id, { texto, em: new Date().toISOString() });
         if (A.ver && A.ver.conversa && A.ver.conversa.id === conv.id) render();
       } catch (e) {
-        const c = e && e.codigo;
-        ui.toast(c === "ia_cota" ? "A cota de IA do mês acabou." : c === "muitos_pedidos" ? "Muitos pedidos seguidos; espere um minuto." : "A IA não está disponível agora.",
-          { tipo: c === "ia_cota" || c === "muitos_pedidos" ? "info" : "erro" });
+        // CA-088: o motivo de verdade (sem chave, demorou, conversa sem mensagens…)
+        const er = L.erroIA(e);
+        ui.toast(er.texto, { tipo: er.tipo });
       }
     });
     return secao({ id: "resumo-ia", titulo: "Resumo da conversa", acao: b }, saida);
@@ -403,25 +643,28 @@ export function criarLateral(A) {
     return [
       { chave: "contato", sig: sig([ct.id, ct.nome, ct.telefone, ct.optin_marketing, ct.optin_origem, ct.bloqueado, ct.origem, ct.plataforma, A.podeEscrever, editandoNome && editandoNome.ctId === ct.id ? [editandoNome.salvando, editandoNome.erro] : 0]),
         criar: () => blocoTopo(ver) },
-      { chave: "resumo", sig: sig([L.resumoContato(ver), L.interacoesPorDia(A.msgs || []), ct.id, ct.telefone, conv.protocolo, temCrm, negAgenda && negAgenda.id, !!A.G]),
+      { chave: "resumo", sig: sig([L.resumoContato(ver), serieDias().sig, ct.id, ct.telefone, conv.protocolo, temCrm, negAgenda && negAgenda.id, !!A.G]),
         criar: () => blocoResumoContato(ver) },
       { chave: "dados", sig: sig([ver.anuncio, ct.origem, ct.email, ct.cidade, ct.uf, ct.campos, conv.protocolo, conv.departamento && conv.departamento.nome, conv.atribuida && conv.atribuida.nome, conv.atribuida_nome,
-        conv.primeira_resposta_em, conv.aberta_em, !!rotulos, rastreio]),
+        conv.primeira_resposta_em, conv.aberta_em, !!rotulos, rastreio, A.podeEscrever, conv.departamento_id, horarioDe(conv) === undefined ? "-" : horarioDe(conv),
+        editandoCampo && editandoCampo.ctId === ct.id ? [editandoCampo.campo, editandoCampo.salvando, editandoCampo.erro] : 0]),
         criar: () => blocoDados(ver, rastreio) },
       { chave: "etiquetas", sig: sig([conv.id, A.podeEscrever, ((A.base && A.base.etiquetas) || []).map(e => [e.id, e.nome, e.cor]), A.podeEscrever ? 0 : conv.etiquetas]),
         criar: () => blocoEtiquetas(ver), atualizar: el => atualizarEtiquetas(el, ver) },
-      { chave: "negocios", sig: sig([(ver.negocios || []).map(n => [n.id, n.titulo, n.valor_previsto, n.estagio_nome, n.estagio_cor, n.origem, n.anuncio, n.tarefa && n.tarefa.atrasada]), conv.negocio && conv.negocio.id, A.podeEscrever]),
+      { chave: "negocios", sig: sig([(ver.negocios || []).map(n => [n.id, n.titulo, n.valor_previsto, n.estagio_nome, n.estagio_cor, n.origem, n.anuncio, n.tarefa && n.tarefa.atrasada,
+        n.estagio_id, n.funil_id, n.status, n.estagio_tipo]), conv.negocio && conv.negocio.id, A.podeEscrever, !!crmBase, typeof A.ctx.moverNegocio === "function"]),
         criar: () => blocoNegocios(ver) },
       { chave: "tarefas", sig: sig([(ver.tarefas || []).map(t => [t.id, t.titulo, t.vence_em, t.atrasada, t.dono && t.dono.nome]), A.podeEscrever, minuto, conv.id, conv.negocio && conv.negocio.id]),   // + negócio: a tarefa nova leva o negócio recém-ligado
         criar: () => blocoTarefas(ver) },
       { chave: "atendimentos", sig: sig([(ver.atendimentos || []).map(a => [a.id, a.protocolo, a.status, a.aberta_em, a.atribuida_nome]), A.selId]),
         criar: () => blocoAtendimentos(ver) },
-      { chave: "resumo-ia", sig: sig([conv.id, (resumos.get(conv.id) || {}).em || null]), criar: () => blocoResumo(ver) },
+      { chave: "resumo-ia", sig: sig([conv.id, (resumos.get(conv.id) || {}).em || null, !!(resumos.get(conv.id) || {}).guardado, A.base && A.base.ia ? [A.base.ia.ligada, A.base.ia.cota] : null, A.podeEscrever]), criar: () => blocoResumo(ver) },
     ];
   }
   /** A pessoa está mexendo nesta seção: nome aberto, campo de texto com o foco ou etiqueta a caminho do servidor. */
   function emEdicao(chave, el) {
     if (chave === "contato") return !!editandoNome;      // o único campo de texto do cartão é o do nome
+    if (chave === "dados" && editandoCampo) return true; // CA-081: e-mail/cidade abertos: o pulso não refaz a seção no meio da digitação
     if (chave === "etiquetas" && seletor && ((typeof seletor.pendente === "function" && seletor.pendente()) || A.etiquetasEmVoo > 0)) return true;
     const ativo = typeof document !== "undefined" ? document.activeElement : null;
     if (!ativo || !el.contains(ativo)) return false;
@@ -453,7 +696,7 @@ export function criarLateral(A) {
     if (!alvo) return;
     const ver = A.ver;
     if (!ver) {
-      cont = null; contConversa = null; secoes.clear(); seletor = null; editandoNome = null;
+      cont = null; contConversa = null; secoes.clear(); seletor = null; editandoNome = null; editandoCampo = null;
       ui.limpar(alvo);
       if (A.selId) alvo.appendChild(h("div", { class: "cvt-sec" }, ui.esqueleto("lista", 3)));
       return;
@@ -461,7 +704,7 @@ export function criarLateral(A) {
     const convId = ver.conversa ? ver.conversa.id : null;
     if (!cont || contConversa !== convId || cont.parentNode !== alvo) {
       // outra conversa (ou outro lugar): desenha do zero — a edição de nome da anterior é abandonada SEM gravar
-      secoes.clear(); seletor = null; editandoNome = null;
+      secoes.clear(); seletor = null; editandoNome = null; editandoCampo = null;
       ui.limpar(alvo);
       cont = h("div", { class: "cv-lat", dataset: { conversa: convId ?? "" } });
       contConversa = convId;
@@ -469,7 +712,11 @@ export function criarLateral(A) {
     }
     let anterior = null;
     const vivas = new Set();
-    for (const d of definicoes(ver)) {
+    // plano 1000 · CA-237: com um resumo da IA pronto, a seção sobe para logo depois do cartão do contato (é o que quem pega a conversa no meio lê primeiro)
+    const defs = definicoes(ver);
+    const comResumo = !!(resumos.get(convId) || {}).texto;
+    if (comResumo) { const i = defs.findIndex(x => x.chave === "resumo-ia"); if (i > 1) defs.splice(1, 0, ...defs.splice(i, 1)); }
+    for (const d of defs) {
       vivas.add(d.chave);
       let x = secoes.get(d.chave);
       if (!x) { x = { el: d.criar(), sig: d.sig }; secoes.set(d.chave, x); }

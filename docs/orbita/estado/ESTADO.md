@@ -5,6 +5,18 @@ Follow-up R122: PR [#3](https://github.com/Jpfamelli/nexus-ads/pull/3) mesclado 
 Follow-up R119: `codex/orbita-r119` · PR [#2](https://github.com/Jpfamelli/nexus-ads/pull/2) mesclado
 Base em produção: F8/PR [#1](https://github.com/Jpfamelli/nexus-ads/pull/1) mesclado; https://orbita-nexus-ads.netlify.app
 
+## Pendências de operação — plano 1000 (13/10/2026)
+
+- **Tenant teste-e2e vence 13/10** (criado com teste até 13/10/2026): a partir de 14/10 o `nx_ctx` recusa escrita
+  (`teste_expirado`) e o cron ignora o cliente — as provas em produção do próximo deploy falhariam por isso. **Pedir ao João que
+  prorrogue pelo painel de plataforma antes da próxima prova** e registrar aqui a nova data. Nenhum dado foi alterado (SV-181).
+- Matriz de relógio do CI (SV-157, job `relogio` em `continue-on-error`): no ensaio local de 13/10 falharam, só com o relógio fixado,
+  `plano50-crm` e `plano1000-crm` (02:50Z) e `melhorias-20261003-crm`, `plano50-crm` e `plano50-conversas` (dia 1º 03:05Z).
+  Cada frente corrige os seus; depois disso tirar o `continue-on-error` do job.
+- Backup diário (`.github/workflows/backup.yml`, SV-186): aguarda o João criar o papel somente leitura e os segredos
+  `BACKUP_DB_URL`/`BACKUP_SENHA` (passo a passo em `DEPLOY-FUNCOES.md`, «Backup do banco»). Registrar aqui cada ensaio de restauração.
+- Token do Supabase: ao renovar, anotar aqui a data de expiração (`DEPLOY-FUNCOES.md`, «Renovar o SUPABASE_ACCESS_TOKEN»).
+
 ## Seguimento R122 — mídia CodeWords — 01/10/2026
 
 - **Implementação local na branch `codex/midia-codewords`:** envio de foto, áudio e arquivo pelo aparelho pareado; áudio gravado convertido em WAV 16 kHz mono; `client_ref` na mídia; validação MIME/limites; download do Storage em fluxo com corte efetivo no limite; proteção contra permissão tardia do microfone em outra conversa.

@@ -19,7 +19,8 @@ import { montar, datasetDeLinhas, hojeSP, isoDe } from "../web/nucleo.js";
 
 export const SLUG = "demo-clinica";
 export const NOME = "Clínica Demonstração";
-export const CFG = { cpaAlvo: 15, orcamento: 1500 };
+// plano 1000 (AD-010): a meta do Google é própria (igual ao CFG_DEMO de web/demo.js)
+export const CFG = { cpaAlvo: 15, cpaAlvoGoogle: 18, orcamento: 1500 };
 const PREFIXO = "demo-";
 const LOTE = 400;   // linhas por INSERT: mantém cada comando num tamanho que o editor do Supabase aceita bem
 
