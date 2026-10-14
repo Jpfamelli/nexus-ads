@@ -633,7 +633,7 @@ test("Contatos (DOM): densidade compacta/confortável lembrada por empresa, «ú
     assert.equal(tela.querySelector(".ct-sub"), null, "desktop: só a tabela");
     const { listaCompacta } = await import("../web/app/crm-listas.js");
     const lm = listaCompacta(kCt, { aoMudar() {} });
-    lm.atualizar([{ id: 1, nome: "Ana", ultimo_contato_em: "2026-10-02T14:30:00Z" }]);
+    lm.atualizar([{ id: 1, nome: "Ana", ultimo_contato_em: new Date(Date.now() - 2 * 864e5).toISOString() }]);   // relativo ao relógio (CI com relógio fixado)
     assert.match(lm.el.querySelector(".ct-sub").textContent, /há 2 dias/);
     api.desmontar();
     // remonta: a densidade guardada volta aplicada; a rota com empresa já filtra e mostra o chip removível

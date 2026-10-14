@@ -417,7 +417,7 @@ const foto = (id, dir, min, extra = {}) => ({ id, conversa_id: 9, direcao: dir, 
 test("31 (DOM) · bolhas: data-cauda só na última do grupo, hora fica no DOM, «Mensagens novas» entra onde a leitura parou e o dia de hoje é marcado", async () => {
   const d = comDom();
   try {
-    const msgs = [txt(1, "in", 30), txt(2, "in", 29), txt(3, "out", 20), txt(4, "in", 10), txt(5, "in", 9)];
+    const msgs = [txt(1, "in", 3), txt(2, "in", 2.9), txt(3, "out", 2), txt(4, "in", 1), txt(5, "in", 0.9)];   // minutos curtos: «hoje» mesmo com o relógio às 00:05 de SP (CI)
     const { A, chat } = await montarChat(d, { msgs });
     const caudas = [...chat.el.querySelectorAll(".cv-msg")].map(m => `${m.dataset.id}:${m.dataset.junta}${m.dataset.cauda}`);
     assert.deepEqual(caudas, ["1:00", "2:11", "3:01", "4:00", "5:11"]);
@@ -786,7 +786,7 @@ test("35 (DOM) · lateral: resumo com contadores do nx_cv_ver, mini-gráfico dos
   const d = comDom();
   try {
     const { criarLateral } = await import("../web/app/cv-lateral.js");
-    const msgs = [txt(1, "in", 30), txt(2, "out", 20), txt(3, "in", 60 * 24 * 3)];
+    const msgs = [txt(1, "in", 3), txt(2, "out", 2), txt(3, "in", 60 * 24 * 3)];   // «hoje» mesmo às 00:05 de SP (CI)
     const A = {
       ui: d.ui, L, G: null, podeEscrever: true, selId: 9, msgs, eu: { id: "u1" }, base: { etiquetas: [] },
       ctx: { vocab: { negocios: "Negócios", negocio: "Negócio" }, temModulo: m => m === "crm", abrirContato() {}, novoNegocio() {}, abrirNegocio() {} },

@@ -198,7 +198,7 @@ async function tratarRelatorio(req, env, deps) {
     exigirCorpoValido(corpo);   // plano 1000 (SV-100): corpo ilegível nunca vira «todos os clientes»
     const tipo = corpo.tipo ?? "diario";
     if (tipo !== "diario" && tipo !== "mensal") throw new ErroHttp(400, "tipo deve ser diario ou mensal");
-    const clientes = await listarClientes(db, corpo.cliente);
+    const clientes = await listarClientes(db, corpo.cliente, hojeSP(agora));   // o mesmo «hoje» do relógio injetado (teste vencido)
 
     const ctx = {
       tipo, forcar: corpo.forcar === true, hoje: hojeSP(agora), agora, fetch: rede,

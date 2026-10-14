@@ -574,7 +574,7 @@ async function tratarCiclo(req, env, deps) {
     exigirCorpoValido(corpo);   // plano 1000 (SV-100): corpo ilegível nunca vira «todos os clientes»
     const dias = janelaPedida(corpo.dias);
     if (Number.isNaN(dias)) throw new ErroHttp(400, "dias inválido (1 a 28)");
-    const clientes = await listarClientes(db, corpo.cliente);
+    const clientes = await listarClientes(db, corpo.cliente, hojeSP(agora));
 
     const ctx = montarCtx({ cfg, agora, rede, dias, esperarRede: deps.esperarRede });
     // trava por cliente: o botão de uma clínica não faz o cron pular as outras
