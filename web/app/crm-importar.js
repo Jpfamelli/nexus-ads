@@ -45,17 +45,47 @@ export async function montarImportar(k, el) {
     imp: null,               // importacao_id: "Tentar o restante" continua no MESMO registro
   };
 
+  /** plano 1000 (CR-125): as linhas montadas (e os problemas de cada uma) só são refeitas quando o arquivo ou o mapa mudam — voltar e avançar não recalcula 20.000 linhas. */
+  let memo = { dados: null, mapa: "", linhas: null, problemas: null };
+  function linhasDoMapa() {
+    const chave = JSON.stringify(S.mapa);
+    if (memo.dados !== S.dados || memo.mapa !== chave) memo = { dados: S.dados, mapa: chave, linhas: L.montarLinhas(S.dados.linhas, S.mapa), problemas: null };
+    return memo.linhas;
+  }
+  function problemasDoMapa() {
+    const linhas = linhasDoMapa();
+    if (!memo.problemas) memo.problemas = linhas.map(l => L.checarLinha(l, { campos: k.base.campos }));     // plano 1000 (CR-232): campos personalizados conferidos na prévia
+    return memo.problemas;
+  }
+  // plano 1000 (CR-122): o mapa de colunas é lembrado por planilha (assinatura do cabeçalho) neste aparelho — a planilha de toda semana já vem mapeada
+  const chaveMapas = `nx-app-crm-imp-mapas-${ctx.cliente.id}`;
+  const lerMapas = () => { try { const o = JSON.parse(localStorage.getItem(chaveMapas) || "{}"); return o && typeof o === "object" ? o : {}; } catch { return {}; } };
+  function guardarMapa() {
+    if (!S.dados) return;
+    const o = lerMapas();
+    o[L.assinaturaCabecalho(S.dados.cabecalho)] = { mapa: S.mapa, em: Date.now() };
+    const chaves = Object.keys(o).sort((a, b) => (o[b].em || 0) - (o[a].em || 0)).slice(0, 10);     // só as 10 últimas planilhas
+    try { localStorage.setItem(chaveMapas, JSON.stringify(Object.fromEntries(chaves.map(x => [x, o[x]])))); } catch { /* ok */ }
+  }
+  /** CR-120: os 2 primeiros bytes são «PK» (arquivo zip = .xlsx renomeado)? */
+  async function comecaComPK(f) {
+    try { const b = new Uint8Array(await (f.slice ? f.slice(0, 2) : f).arrayBuffer()); return b[0] === 0x50 && b[1] === 0x4b; } catch { return false; }
+  }
+
   const passosEl = h("ol", { class: "imp-passos", "aria-label": "Passos da importação" });
-  const corpo = h("section", { class: "cartao imp-corpo", "aria-live": "polite" });
+  // plano 1000 (CR-124): o corpo NÃO é aria-live (cada troca de passo era lida inteira); o que precisa ser ouvido vai por ui.anunciar e pelo status do progresso
+  const corpo = h("section", { class: "cartao imp-corpo" });
   const rodape = h("div", { class: "imp-rod" });
   el.append(
-    ui.cabecalho({ titulo: `Importar ${v.min("contatos")}`, sub: "Traga a sua planilha. Quem já existe é reconhecido pelo telefone (com ou sem 55 e 9) ou pelo e-mail.",
+    ui.cabecalho({ titulo: `Importar ${v.min("contatos")}`, sub: "Traga a sua planilha. Quem já existe é reconhecido pelo telefone (com ou sem o código do Brasil e o 9 do celular) ou pelo e-mail.",     // plano 1000 (CR-279)
       acoes: h("a", { class: "bt bt-sec", href: "#/contatos" }, ui.icone("seta-esq"), v.contatos) }),
     passosEl, corpo, rodape);
 
   // não perder uma importação no meio sem aviso
   const antesDeSair = ev => { if (S.rodando) { ev.preventDefault(); ev.returnValue = ""; } };
   addEventListener("beforeunload", antesDeSair);
+  // plano 1000 (CR-117): enquanto importa, a atualização automática do app espera (ela recarregaria a página no meio)
+  const soltarNaoAtualizar = ctx.naoAtualizar ? ctx.naoAtualizar(() => S.rodando) : null;
 
   function desenharPassos() {
     ui.limpar(passosEl);
@@ -103,6 +133,11 @@ export async function montarImportar(k, el) {
 
     async function lerArquivo(f) {
       if (f.size > 25 * 1024 * 1024) { ui.toast("Arquivo grande demais (até 25 MB). Divida a planilha em partes.", { tipo: "erro" }); return; }
+      // plano 1000 (CR-120): planilha do Excel (.xlsx/.xls, ou o «PK» do zip no começo) ganha o passo a passo em vez do «não parece CSV»
+      if (/\.xls[xmb]?$/i.test(f.name || "") || /spreadsheetml|ms-excel/.test(f.type || "") || await comecaComPK(f)) {
+        ui.toast("É uma planilha do Excel. Abra no Excel e use Arquivo → Salvar como → «CSV UTF-8 (separado por vírgulas)» e escolha o arquivo .csv aqui. Ou copie as células e use «Ou cole direto do Excel».", { tipo: "erro", ms: 12000 });
+        return;
+      }
       if (!/\.(csv|txt)$/i.test(f.name) && !/text|csv/.test(f.type || "")) {
         ui.toast("Esse arquivo não parece um CSV. No Excel, use Salvar como → CSV (separado por vírgulas ou ponto e vírgula).", { tipo: "erro", ms: 8000 });
         return;
@@ -117,8 +152,9 @@ export async function montarImportar(k, el) {
       }
     }
 
-    function carregarTexto(texto, info) {
-      const d = L.lerCSV(texto, { limite: LIMITE_LINHAS });
+    function carregarTexto(texto, info, separador = null) {
+      const d = L.lerCSV(texto, { limite: LIMITE_LINHAS, ...(separador ? { separador } : {}) });
+      S.texto = texto; S.separadorEscolhido = separador;
       if (!d.cabecalho.length || !d.linhas.length) {
         S.dados = null; S.arquivo = null;
         mostrarStatus();
@@ -127,6 +163,10 @@ export async function montarImportar(k, el) {
       }
       S.arquivo = info; S.dados = d;
       S.mapa = L.sugerirMapeamento(d.cabecalho, k.base.campos);
+      const lembrado = (lerMapas()[L.assinaturaCabecalho(d.cabecalho)] || {}).mapa;
+      const reaproveitado = L.mapaGuardado(lembrado, d.cabecalho, L.destinosImportacao(k.base.campos));
+      S.mapaLembrado = !!reaproveitado;
+      if (reaproveitado) S.mapa = reaproveitado;
       S.opcoes.criarNegocio = L.mapaTemNegocio(S.mapa);
       S.resumo = null; S.feitas = 0; S.terminou = false; S.erroFatal = null; S.imp = null;
       mostrarStatus();
@@ -145,13 +185,36 @@ export async function montarImportar(k, el) {
           h("b", null, S.arquivo.nome),
           h("small", null, `${ui.num(d.linhas.length)} linha${d.linhas.length === 1 ? "" : "s"} · ${d.cabecalho.length} coluna${d.cabecalho.length === 1 ? "" : "s"} · separador ${sepNome}${S.arquivo.codificacao === "windows-1252" ? " · acentos convertidos do Excel" : ""}`)),
         h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { S.dados = null; S.arquivo = null; entrada.value = ""; mostrarStatus(); } } }, "Trocar"));
+      // plano 1000 (CR-115): o separador escolhido sozinho pode errar (CSV com «;» e vírgula decimal, tudo numa coluna só) — dá para trocar e reler na hora
+      const autoNome = S.separadorEscolhido ? null : sepNome;
+      const selSep = h("select", { class: "sel imp-sep", "aria-label": "Separador das colunas" },
+        h("option", { value: "", selected: !S.separadorEscolhido }, `Automático${autoNome ? ` (${autoNome})` : ""}`),
+        [[";", "Ponto e vírgula (;)"], [",", "Vírgula (,)"], ["\t", "Tabulação"]].map(([v, t]) => h("option", { value: v, selected: S.separadorEscolhido === v }, t)));
+      selSep.addEventListener("change", () => {
+        const info = S.arquivo;
+        carregarTexto(S.texto, info, selSep.value || null);
+        if (S.dados) ui.anunciar(`Separador trocado: ${S.dados.cabecalho.length} coluna${S.dados.cabecalho.length === 1 ? "" : "s"}.`);
+        const novo = status.querySelector(".imp-sep"); if (novo) novo.focus();
+      });
+      status.append(h("label", { class: "imp-sep-l" }, h("span", { class: "rotulo" }, "Separador"), selSep));
       avisoCortado.hidden = !d.cortado;
       avisoCortado.querySelector("span").textContent = d.cortado ? `A planilha tem ${ui.num(d.total)} linhas; vamos importar as primeiras ${ui.num(LIMITE_LINHAS)}. Importe o restante num segundo arquivo.` : "";
       continuar.disabled = false;
     }
 
     const continuar = botao("Continuar", "prim", () => ir(2), { disabled: true });
-    corpo.append(h("h2", { class: "imp-tit" }, "Escolha a planilha"), entrada, solta, status, avisoCortado, colarBloco);
+    // plano 1000 (CR-239): quem não tem planilha pronta baixa o modelo (colunas que a importação reconhece sozinha + 2 linhas de exemplo)
+    const modelo = h("p", { class: "sub imp-modelo" }, "Não tem a planilha pronta? ",
+      h("button", { type: "button", class: "link imp-modelo-bt", on: { click: baixarModelo } }, ui.icone("baixar"), "Baixar modelo (CSV)"),
+      " — preencha no Excel e escolha o arquivo aqui.");
+    function baixarModelo() {
+      const m = L.modeloImportacao(k.base.campos);
+      const url = URL.createObjectURL(new Blob([L.gerarCSV(m.cabecalho, m.linhas)], { type: "text/csv;charset=utf-8" }));
+      const a = h("a", { href: url, download: `modelo-${v.min("contatos")}.csv`, hidden: true });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }
+    corpo.append(h("h2", { class: "imp-tit" }, "Escolha a planilha"), entrada, solta, modelo, status, avisoCortado, colarBloco);
     rodape.append(h("span"), continuar);
     mostrarStatus();
   }
@@ -204,7 +267,7 @@ export async function montarImportar(k, el) {
     const previa = h("div", { class: "imp-previa-env" });
     function desenharPrevia() {
       ui.limpar(previa);
-      subTxt.textContent = `Sugerimos pelo nome do cabeçalho — confira. ${nMap()} de ${d.cabecalho.length} colunas reconhecidas. Colunas ignoradas não entram.`;
+      subTxt.textContent = `${S.mapaLembrado ? "Usamos o mesmo mapa da última vez que esta planilha foi importada — confira." : "Sugerimos pelo nome do cabeçalho — confira."} ${nMap()} de ${d.cabecalho.length} colunas reconhecidas. Colunas ignoradas não entram.`;
       const cab = L.cabecalhoPrevia(d.cabecalho, S.mapa, destinos);
       previa.appendChild(h("div", { class: "tabela-env imp-previa-cx" }, h("table", { class: "tabela imp-previa imp-previa-mapa" },
         h("caption", { class: "sr-only" }, "Prévia das 3 primeiras linhas com o destino de cada coluna"),
@@ -219,7 +282,7 @@ export async function montarImportar(k, el) {
       desenharPrevia();
       return ok;
     }
-    const continuar = botao("Continuar", "prim", () => { if (validar()) { if (L.mapaTemNegocio(S.mapa)) S.opcoes.criarNegocio = true; ir(3); } });
+    const continuar = botao("Continuar", "prim", () => { if (validar()) { if (L.mapaTemNegocio(S.mapa)) S.opcoes.criarNegocio = true; guardarMapa(); ir(3); } });
     corpo.append(
       h("h2", { class: "imp-tit" }, "O que é cada coluna?"),
       subTxt,
@@ -233,12 +296,13 @@ export async function montarImportar(k, el) {
   function passoOpcoes() {
     const o = S.opcoes;
     const d = S.dados;
-    const linhasMontadas = L.montarLinhas(d.linhas, S.mapa);
+    const linhasMontadas = linhasDoMapa();
     const funis = k.base.funis.filter(f => f.ativo !== false);
     if (!o.funil_id || !funis.some(f => f.id === o.funil_id)) o.funil_id = (funis.find(f => !f.conta_no_ads) || k.funilPadrao() || funis[0] || {}).id || null;
 
     const atualizar = ui.campo({ tipo: "interruptor", nome: "atualizar", rotulo: "Atualizar quem já existe", valor: o.atualizar,
-      ajuda: "Ligado: quando o telefone ou o e-mail já estiverem cadastrados, completamos o cadastro com os dados da planilha (nome, cidade, etiquetas…). Desligado: a linha é pulada." });
+      // plano 1000 (CR-240): a regra do servidor (nx_contatos_importar) dita em português — o que é somado, o que é substituído e o que fica
+      ajuda: "Ligado: quando o telefone ou o e-mail já estiverem cadastrados, o cadastro é atualizado. As etiquetas são somadas às que a pessoa já tem; nome, e-mail, cidade, UF, nascimento e documento são substituídos quando vierem preenchidos na planilha (célula vazia não apaga nada); o telefone fica o mesmo e a observação é acrescentada. Desligado: a linha é pulada." });
     atualizar.querySelector("input").addEventListener("change", ev => { o.atualizar = ev.target.checked; });
 
     // só guarda o valor para o «Continuar»: emite na hora (debounceMs: 0) — a pausa de 300 ms perdia a última etiqueta marcada
@@ -269,13 +333,13 @@ export async function montarImportar(k, el) {
       avisoAds.hidden = !(f && f.conta_no_ads);
       blocoNeg.hidden = !o.criarNegocio;
     }
-    selFunil.addEventListener("change", () => { o.funil_id = selFunil.value; o.estagio_id = null; desenharEtapas(); });
-    selEtapa.addEventListener("change", () => { o.estagio_id = selEtapa.value; });
-    neg.querySelector("input").addEventListener("change", ev => { o.criarNegocio = ev.target.checked; desenharEtapas(); });
+    selFunil.addEventListener("change", () => { o.funil_id = selFunil.value; o.estagio_id = null; desenharEtapas(); desenharConferir(); });
+    selEtapa.addEventListener("change", () => { o.estagio_id = selEtapa.value; desenharConferir(); });
+    neg.querySelector("input").addEventListener("change", ev => { o.criarNegocio = ev.target.checked; desenharEtapas(); desenharConferir(); });
     desenharEtapas();
 
     // prévia das 5 primeiras linhas + contagem de problemas
-    const problemas = linhasMontadas.map(l => L.checarLinha(l));
+    const problemas = problemasDoMapa();
     const vazias = problemas.filter(p => p.length && /ignorada/.test(p[0])).length;
     const comProblema = problemas.filter(p => p.length && !/ignorada/.test(p[0])).length;
     const cols = [];
@@ -289,10 +353,50 @@ export async function montarImportar(k, el) {
     cols.push({ chave: "_sit", rotulo: "Situação", render: l => l._erros.length
       ? h("span", { class: "imp-erro-txt" }, l._erros.join(" · "))
       : h("span", { class: "imp-ok-txt" }, ui.icone("check"), "Pronta") });
+    const numeroDa = i => (d.numeros && d.numeros[i]) || i + 2;
+    cols.unshift({ chave: "_linha", rotulo: "Linha", render: l => h("span", { class: "mono" }, String(l._linha)) });
     const previa = ui.tabela({ rotulo: "Prévia das primeiras linhas", colunas: cols, chave: "_n",
-      linhas: linhasMontadas.slice(0, 5).map((l, i) => ({ ...l, _n: i, _erros: problemas[i] })) });
+      linhas: linhasMontadas.slice(0, 5).map((l, i) => ({ ...l, _n: i, _linha: numeroDa(i), _erros: problemas[i] })) });
     previa.el.classList.add("imp-previa");
+    const marcarErros = () => { for (const tr of previa.el.querySelectorAll("tbody tr")) tr.classList.add("tr-erro"); };
     for (const [i, tr] of [...previa.el.querySelectorAll("tbody tr")].entries()) if (problemas[i] && problemas[i].length) tr.classList.add("tr-erro");
+    // plano 1000 (CR-121): com centenas de linhas ruins, ver só as que têm problema (até 100) e baixar a lista inteira ANTES de importar
+    const ruins = linhasMontadas.map((l, i) => ({ ...l, _n: i, _linha: numeroDa(i), _erros: problemas[i] })).filter(l => l._erros.length);
+    let soRuins = false;
+    const btRuins = ruins.length ? botao(`Ver só as linhas com problema (${ui.num(ruins.length)})`, "sec", () => {
+      soRuins = !soRuins;
+      previa.atualizar(soRuins ? ruins.slice(0, 100) : linhasMontadas.slice(0, 5).map((l, i) => ({ ...l, _n: i, _linha: numeroDa(i), _erros: problemas[i] })));
+      if (soRuins) marcarErros(); else for (const [i, tr] of [...previa.el.querySelectorAll("tbody tr")].entries()) tr.classList.toggle("tr-erro", !!(problemas[i] && problemas[i].length));
+      btRuins.textContent = soRuins ? "Ver as primeiras linhas" : `Ver só as linhas com problema (${ui.num(ruins.length)})`;
+      btRuins.setAttribute("aria-pressed", String(soRuins));
+      notaRuins.hidden = !(soRuins && ruins.length > 100);
+    }, { "aria-pressed": "false" }) : null;
+    const notaRuins = h("p", { class: "sub", hidden: true }, `Mostrando 100 de ${ui.num(ruins.length)}. Baixe a lista para ver todas.`);
+    const btBaixarRuins = ruins.length ? botao("Baixar a lista de problemas", "fant", () => {
+      const csv = L.gerarCSV(["linha", "problema"], ruins.map(l => [l._linha, l._erros.join(" · ")]));
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+      const a = h("a", { href: url, download: "problemas-da-planilha.csv", hidden: true });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    }) : null;
+    // plano 1000 (CR-118): a mesma pessoa duas vezes na planilha (telefone com/sem 55 e 9, ou e-mail) — a 2ª linha só atualizaria a 1ª
+    const dups = L.duplicadosPlanilha(linhasMontadas, d.numeros);
+    const avisoDup = dups.length ? h("p", { class: "aviso aviso-aten imp-aviso-dup" }, ui.icone("alerta"), h("span", null,
+      `${ui.num(dups.length)} ${dups.length === 1 ? "contato aparece" : "contatos aparecem"} mais de uma vez na planilha (a linha seguinte atualiza a anterior): `
+      + dups.slice(0, 5).map(g => `${g.tipo === "telefone" ? "telefone" : "e-mail"} ${g.valor} nas linhas ${g.linhas.join(", ")}`).join("; ")
+      + (dups.length > 5 ? `; e mais ${ui.num(dups.length - 5)}.` : "."))) : null;
+    // plano 1000 (CR-123): etapas que não existem no funil escolhido (entram na 1ª etapa) e etiquetas que serão criadas — antes de importar
+    const avisoConferir = h("div", { class: "imp-conferir" });
+    function desenharConferir() {
+      ui.limpar(avisoConferir);
+      const f = k.funil(o.funil_id);
+      const cf = L.conferirPlanilha(linhasMontadas, { estagios: o.criarNegocio && f ? f.estagios : [], etiquetas: k.base.etiquetas });
+      const etapaPadrao = f ? (f.estagios.find(e => e.id === o.estagio_id) || f.estagios.find(e => e.tipo === "aberto") || {}).nome : null;
+      if (o.criarNegocio && cf.etapasDesconhecidas.length) avisoConferir.appendChild(h("p", { class: "aviso aviso-aten imp-aviso-etapa" }, ui.icone("alerta"),
+        h("span", null, `Etapa${cf.etapasDesconhecidas.length === 1 ? "" : "s"} da planilha que não ${cf.etapasDesconhecidas.length === 1 ? "existe" : "existem"} (aberta${cf.etapasDesconhecidas.length === 1 ? "" : "s"}) em «${f ? f.nome : "funil"}»: ${cf.etapasDesconhecidas.map(x => `«${x}»`).join(", ")}. ${cf.etapasDesconhecidas.length === 1 ? "Essa linha entra" : "Essas linhas entram"} em «${etapaPadrao || "1ª etapa"}».`)));
+      if (cf.etiquetasNovas.length) avisoConferir.appendChild(h("p", { class: "aviso imp-aviso-etq" }, ui.icone("etiqueta"),
+        h("span", null, `${cf.etiquetasNovas.length === 1 ? "Etiqueta nova que será criada" : "Etiquetas novas que serão criadas"}: ${cf.etiquetasNovas.slice(0, 12).map(x => `«${x}»`).join(", ")}${cf.etiquetasNovas.length > 12 ? ` e mais ${cf.etiquetasNovas.length - 12}` : ""}.`)));
+    }
 
     const resumoPrevia = h("p", { class: ["aviso", comProblema || vazias ? "aviso-aten" : "aviso-ok"] }, ui.icone(comProblema || vazias ? "info" : "check"),
       h("span", null, comProblema || vazias
@@ -315,7 +419,9 @@ export async function montarImportar(k, el) {
           h("div", { class: "imp-grupo" }, h("span", { class: "rotulo" }, "Responsável"), dono,
             h("small", { class: "campo-ajuda" }, `Sem responsável: todo mundo da equipe vê ${k.v.art("contato") === "a" ? "as novas" : "os novos"} ${k.v.min("contatos")}.`))),
         h("div", { class: "pilha" }, neg, blocoNeg)),
-      ...[h("h3", { class: "imp-sub" }, "Prévia"), resumoPrevia, avisoTel, previa.el].filter(Boolean));
+      ...[h("h3", { class: "imp-sub" }, "Prévia"), resumoPrevia, avisoTel, avisoDup, avisoConferir,
+        btRuins || btBaixarRuins ? h("div", { class: "linha imp-ruins" }, btRuins, btBaixarRuins) : null, previa.el, notaRuins].filter(Boolean));
+    desenharConferir();
     rodape.append(botao("Voltar", "sec", () => ir(2)), botao("Continuar", "prim", () => ir(4)));
   }
 
@@ -377,7 +483,7 @@ export async function montarImportar(k, el) {
       corpo.querySelector(".imp-lista").hidden = true;
       corpo.querySelector(".imp-prog").hidden = false;
       btIniciar.hidden = true; btVoltar.hidden = true; btPausar.hidden = false;
-      const linhas = L.montarLinhas(S.dados.linhas, S.mapa).map((l, i) => ({ ...l, _linha: (S.dados.numeros && S.dados.numeros[i]) || i + 2 }));
+      const linhas = linhasDoMapa().map((l, i) => ({ ...l, _linha: (S.dados.numeros && S.dados.numeros[i]) || i + 2 }));
       const opcoes = { atualizar: !!o.atualizar, etiquetas: o.etiquetas, arquivo: String(S.arquivo.nome || "").slice(0, 200),
         ...(o.dono_id ? { dono_id: o.dono_id } : {}),
         ...(o.criarNegocio && o.funil_id ? { negocio: { funil_id: o.funil_id, ...(o.estagio_id ? { estagio_id: o.estagio_id } : {}) } } : {}) };
@@ -434,10 +540,14 @@ export async function montarImportar(k, el) {
       }
       ui.limpar(rodape);
       rodape.append(
-        botao("Importar outra planilha", "sec", () => { Object.assign(S, { dados: null, arquivo: null, mapa: [], resumo: null, feitas: 0, terminou: false, erroFatal: null, lote: 100, imp: null }); ir(1); }),
+        // plano 1000 (CR-127): a próxima importação começa limpa — etiquetas, responsável e o negócio da anterior não vão junto sem aviso
+        botao("Importar outra planilha", "sec", () => { Object.assign(S, { dados: null, arquivo: null, mapa: [], resumo: null, feitas: 0, terminou: false, erroFatal: null, lote: 100, imp: null,
+          opcoes: { atualizar: false, etiquetas: [], dono_id: null, criarNegocio: false, funil_id: null, estagio_id: null } }); ir(1); }),
         S.erroFatal && S.feitas < total
           ? botao("Tentar o restante", "prim", () => { S.terminou = false; S.erroFatal = null; ir(4); })
-          : h("a", { class: "bt bt-prim", href: "#/contatos" }, `Ver ${k.v.min("contatos")}`));
+          // plano 1000 (CR-126): o atalho abre a lista de QUEM ENTROU (origem importação, cadastrados hoje e a etiqueta escolhida, se for uma só)
+          : h("a", { class: "bt bt-prim imp-ver-quem", href: `#/contatos?origem=importacao&criado_de=${encodeURIComponent(ui.hojeSP())}${o.etiquetas.length === 1 ? `&etiqueta=${encodeURIComponent(o.etiquetas[0])}` : ""}` },
+            `Ver ${k.v.min("contatos")} importad${k.v.art("contato")}s`));
     }
 
     function baixar(problemas) {
@@ -454,8 +564,15 @@ export async function montarImportar(k, el) {
   ir(1);
   return {
     desmontar() {
+      // plano 1000 (CR-117): sair pelo menu no meio da importação não pode parar «em silêncio» — o aviso diz até onde foi e como continuar
+      // (a pergunta ANTES de sair depende de uma guarda de rota do shell: pendência registrada para a frente sis)
+      if (S.rodando && !S.terminou) {
+        const total = S.dados ? S.dados.linhas.length : 0;
+        ui.toast(`Importação parada em ${ui.num(S.feitas)} de ${ui.num(total)} linhas porque você saiu da tela. O que entrou ficou salvo; importe o restante pela planilha.`, { tipo: "aten", ms: 10000 });
+      }
       S.vivo = false; S.cancelado = true;
       removeEventListener("beforeunload", antesDeSair);
+      if (typeof soltarNaoAtualizar === "function") soltarNaoAtualizar();
     },
   };
 }

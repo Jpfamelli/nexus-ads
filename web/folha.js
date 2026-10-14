@@ -22,6 +22,21 @@ export function dadosFolha(M, m) {
   };
 }
 
+/** Plano 1000 (AD-211): as palavras da folha por vertical (M.vertical) — antes a oficina e a loja recebiam «pacientes» e «tratamentos». PURO. */
+export const TEXTOS_FOLHA = {
+  odonto: { pessoa: ["paciente", "pacientes"], novo: ["paciente novo", "pacientes novos"], marcada: ["avaliação marcada", "avaliações marcadas"], marcaram: "marcaram avaliação",
+    vieram: "vieram à clínica", fecharam: "fecharam tratamento", receita: "Tratamentos", receitaEm: "em tratamentos", servico: "tratamento", local: "da clínica" },
+  oficina: { pessoa: ["cliente", "clientes"], novo: ["cliente novo", "clientes novos"], marcada: ["visita marcada", "visitas marcadas"], marcaram: "marcaram visita",
+    vieram: "vieram à oficina", fecharam: "aprovaram o orçamento", receita: "Serviços", receitaEm: "em serviços", servico: "serviço", local: "da oficina" },
+  loja: { pessoa: ["cliente", "clientes"], novo: ["cliente novo", "clientes novos"], marcada: ["visita marcada", "visitas marcadas"], marcaram: "marcaram visita",
+    vieram: "vieram à loja", fecharam: "compraram", receita: "Vendas", receitaEm: "em vendas", servico: "venda", local: "da loja" },
+  generico: { pessoa: ["cliente", "clientes"], novo: ["cliente novo", "clientes novos"], marcada: ["agendamento", "agendamentos"], marcaram: "agendaram",
+    vieram: "compareceram", fecharam: "fecharam", receita: "Vendas", receitaEm: "em vendas", servico: "venda", local: "do negócio" },
+};
+export const textosFolha = vertical => TEXTOS_FOLHA[vertical] || TEXTOS_FOLHA.odonto;
+const cap1 = x => String(x).charAt(0).toUpperCase() + String(x).slice(1);
+let T = TEXTOS_FOLHA.odonto;
+
 let ctx = null, modal = null, folha = null, volta = null, m = null;
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const p2 = n => String(n).padStart(2, "0");
@@ -29,7 +44,7 @@ const p2 = n => String(n).padStart(2, "0");
 function grafMeses(meses) {
   const W = 300, H = 132, base = 104, mx = Math.max(1, ...meses.map(x => x.fecharam));
   const n = meses.length, bw = Math.min(46, W / n * .5);
-  return `<svg class="fl-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Pacientes novos por mês: ${meses.map(x => `${MESES[x.mes]} ${x.fecharam}`).join(", ")}">
+  return `<svg class="fl-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cap1(T.novo[1]))} por mês: ${meses.map(x => `${MESES[x.mes]} ${x.fecharam}`).join(", ")}">
     <line class="fl-eixo" x1="0" x2="${W}" y1="${base}" y2="${base}"/>
     ${meses.map((x, k) => {
       const cx = (k + .5) * W / n, h = Math.max(3, x.fecharam / mx * 80), atual = k === n - 1;
@@ -41,7 +56,7 @@ function grafMeses(meses) {
 /* "O que fechou" em tons da cor da clínica (100 → 25%), não na paleta padrão do painel */
 const TOM_SERV = [100, 75, 55, 40, 25];
 function grafServ(serv, total) {
-  if (!serv.length) return `<p class="fl-vazio">Nenhum tratamento fechado no mês.</p>`;
+  if (!serv.length) return `<p class="fl-vazio">Nenhum ${esc(T.servico)} fechado no mês.</p>`;
   const lin = serv.slice(0, 5), W = 300, L = 26, mx = Math.max(...lin.map(s => s.v), 1);
   return `<svg class="fl-svg" viewBox="0 0 ${W} ${lin.length * L + 4}" role="img" aria-label="O que fechou: ${lin.map(s => `${s.nome} ${brl0(s.v)}`).join(", ")}">
     ${lin.map((s, k) => {
@@ -55,13 +70,15 @@ function grafServ(serv, total) {
 
 function montar() {
   const M = ctx.M, d = dadosFolha(M, m), { t, c, roas, retorno, fee } = d;
+  T = textosFolha(M.vertical);
+  const est = (+c.receitaEstimada || 0) > 0;
   const mesNome = MESES[m.mes], hoje = new Date();
   const cp = ctx.campeao;
   const frase = c.fecharam
-    ? `Em ${mesNome}, os anúncios apareceram ${int(t.impressoes)} vezes, trouxeram <b>${int(t.conversoes)} ${Math.round(t.conversoes) === 1 ? "conversa" : "conversas"}</b> no WhatsApp, <b>${int(c.agendadas)} ${c.agendadas === 1 ? "avaliação marcada" : "avaliações marcadas"}</b> e <b>${int(c.fecharam)} ${c.fecharam === 1 ? "paciente novo" : "pacientes novos"}</b> — ${brl0(c.receita)} em tratamentos.`
-    : `Em ${mesNome}, os anúncios apareceram ${int(t.impressoes)} vezes e trouxeram <b>${int(t.conversoes)} conversas</b> no WhatsApp e <b>${int(c.agendadas)} avaliações marcadas</b>.`;
+    ? `Em ${mesNome}, os anúncios apareceram ${int(t.impressoes)} vezes, trouxeram <b>${int(t.conversoes)} ${Math.round(t.conversoes) === 1 ? "conversa" : "conversas"}</b> no WhatsApp, <b>${int(c.agendadas)} ${c.agendadas === 1 ? T.marcada[0] : T.marcada[1]}</b> e <b>${int(c.fecharam)} ${c.fecharam === 1 ? T.novo[0] : T.novo[1]}</b> — ${brl0(c.receita)} ${T.receitaEm}.`
+    : `Em ${mesNome}, os anúncios apareceram ${int(t.impressoes)} vezes e trouxeram <b>${int(t.conversoes)} conversas</b> no WhatsApp e <b>${int(c.agendadas)} ${c.agendadas === 1 ? T.marcada[0] : T.marcada[1]}</b>.`;
   const etapas = [[t.impressoes, "vezes na tela"], [t.cliques, "tocaram no anúncio"], [t.conversoes, "conversas no WhatsApp"],
-    [c.agendadas, "marcaram avaliação"], [c.compareceram, "vieram à clínica"], [c.fecharam, "fecharam tratamento"]];
+    [c.agendadas, T.marcaram], [c.compareceram, T.vieram], [c.fecharam, T.fecharam]];
   folha.innerHTML = `
     <header class="fl-faixa bloco">
       <div class="fl-cli"><span class="selo-av fl-av" data-av></span><div><b>${esc(ctx.nome)}</b><small>Relatório do mês · tráfego pago</small></div></div>
@@ -71,17 +88,17 @@ function montar() {
     <ol class="fl-trilha bloco">${etapas.map(([v, l], k) => `<li${k === etapas.length - 1 ? ` class="fim"` : ""}><b>${int(v)}</b><span>${l}</span></li>`).join("")}</ol>
     <div class="fl-blocos">
       <div class="bloco"><span class="fl-rot">Investido em anúncios</span><b>${brl0(t.gasto)}</b><small>${int(t.conversoes)} conversas · ${brl(t.cpa)} cada</small></div>
-      <div class="bloco"><span class="fl-rot">Tratamentos (estimativa)</span><b>${brl0(c.receita)}</b><small>${int(c.fecharam)} ${c.fecharam === 1 ? "paciente novo" : "pacientes novos"}</small></div>
-      <div class="bloco fl-ret"><span class="fl-rot">Retorno</span><b>${fin(retorno) && c.receita ? `Cada R$ 1 investido virou ${brl(retorno)}` : "Ainda sem tratamento fechado"}</b><small>${fee ? "tratamentos ÷ (anúncios + gestão)" : "tratamentos ÷ investimento em anúncios"}${fee && fin(roas) && c.receita ? ` · só anúncio: ${brl(roas)}` : ""}</small></div>
+      <div class="bloco"><span class="fl-rot">${esc(T.receita)}${est ? " (estimativa)" : ""}</span><b>${brl0(c.receita)}</b><small>${int(c.fecharam)} ${c.fecharam === 1 ? T.novo[0] : T.novo[1]}</small></div>
+      <div class="bloco fl-ret"><span class="fl-rot">Retorno</span><b>${fin(retorno) && c.receita ? `Cada R$ 1 investido virou ${brl(retorno)}` : `Ainda sem ${T.servico} fechado`}</b><small>${fee ? `${T.receita.toLowerCase()} ÷ (anúncios + gestão)` : `${T.receita.toLowerCase()} ÷ investimento em anúncios`}${fee && fin(roas) && c.receita ? ` · só anúncio: ${brl(roas)}` : ""}</small></div>
     </div>
     <div class="fl-duo">
-      <section class="bloco"><h2 class="fl-h">Pacientes novos por mês</h2>${grafMeses(ctx.meses)}</section>
+      <section class="bloco"><h2 class="fl-h">${esc(cap1(T.novo[1]))} por mês</h2>${grafMeses(ctx.meses)}</section>
       <section class="bloco"><h2 class="fl-h">O que fechou</h2>${grafServ(d.serv, c.receita)}</section>
     </div>
     <div class="fl-duo">
-      <section class="bloco"><h2 class="fl-h">O anúncio que mais trouxe pacientes</h2>
-        ${cp ? `<p class="fl-camp">${esc(cp.camp.nome)}</p><p class="fl-camp-q">${cp.camp.plat === "google" ? "Google" : "Instagram e Facebook"} · ${int(cp.k.conversas)} conversas · ${int(cp.k.fecharam)} ${cp.k.fecharam === 1 ? "paciente" : "pacientes"} · ${brl0(cp.k.receita)} em tratamentos</p>
-          ${cp.cri ? `<p class="fl-mini">Criativo que mais chamou gente: ${esc(cp.cri.nome)}</p>` : ""}` : `<p class="fl-vazio">Sem anúncio com paciente no mês.</p>`}
+      <section class="bloco"><h2 class="fl-h">O anúncio que mais trouxe ${esc(T.pessoa[1])}</h2>
+        ${cp ? `<p class="fl-camp">${esc(cp.camp.nome)}</p><p class="fl-camp-q">${cp.camp.plat === "google" ? "Google" : "Instagram e Facebook"} · ${int(cp.k.conversas)} conversas · ${int(cp.k.fecharam)} ${cp.k.fecharam === 1 ? T.pessoa[0] : T.pessoa[1]} · ${brl0(cp.k.receita)} ${T.receitaEm}</p>
+          ${cp.cri ? `<p class="fl-mini">Criativo que mais chamou gente: ${esc(cp.cri.nome)}</p>` : ""}` : `<p class="fl-vazio">Sem anúncio com ${esc(T.pessoa[0])} no mês.</p>`}
       </section>
       <section class="bloco"><h2 class="fl-h">Para o próximo mês</h2>
         ${ctx.proximos.length ? `<ol class="fl-passos">${ctx.proximos.map(p => `<li>${esc(p)}</li>`).join("")}</ol>` : `<p class="fl-vazio">Seguir como está.</p>`}
@@ -89,7 +106,7 @@ function montar() {
     </div>
     <footer class="fl-pe bloco">
       <p class="fl-assina"><svg class="nx-mono" aria-hidden="true"><use href="#nx-mono"/></svg><span>Preparado pela <b>Nexus</b> · gestão de tráfego · Taubaté-SP</span></p>
-      <p class="fl-meta">Gerado em ${p2(hoje.getDate())}/${p2(hoje.getMonth() + 1)}/${hoje.getFullYear()} · valores de tratamento estimados pela tabela da clínica</p>
+      <p class="fl-meta">Gerado em ${p2(hoje.getDate())}/${p2(hoje.getMonth() + 1)}/${hoje.getFullYear()}${est ? ` · valores de ${esc(T.servico)} estimados pela tabela ${esc(T.local)}` : ""}</p>
     </footer>
     ${ctx.demo ? `<p class="fl-agua" aria-hidden="true">DEMONSTRAÇÃO · números ilustrativos</p>` : ""}`;
   folha.querySelectorAll("[data-av]").forEach(a => ctx.avatarMarca(a, ctx.nome, ctx.marca));

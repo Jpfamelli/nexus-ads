@@ -7,7 +7,11 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fixarRelogio } from "./apoio/relogio.mjs";
 
+// SV-159 (plano 1000): hoje/agora FIXOS (quinta 10:00 de São Paulo) — hojeSP(), «ontem», «já passou» e a tela leem o mesmo relógio;
+// perto da meia-noite de SP o dia virava no meio do arquivo (vale também sob o ORBITA_AGORA da matriz do CI)
+fixarRelogio("2026-10-15T10:00:00-03:00");
 const raiz = dirname(fileURLToPath(import.meta.url));
 const ler = nome => readFileSync(join(raiz, "..", "web", "app", nome), "utf8");
 const A = await import("../web/app/agenda.js");

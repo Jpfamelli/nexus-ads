@@ -1,0 +1,87 @@
+# Backup lógico diário do banco do Órbita / Nexus Ads (plano «1000+ melhorias», SV-186), FORA do Supabase.
+# pg_dump SÓ das tabelas public.nx_* com um papel SOMENTE LEITURA (segredo BACKUP_DB_URL), criptografado com gpg simétrico
+# (segredo BACKUP_SENHA) e guardado como artefato do Actions por 14 dias. Nada é escrito no banco.
+# O papel somente leitura e os dois segredos são criados pelo João (passo a passo e ensaio de restauração em
+# docs/orbita/DEPLOY-FUNCOES.md, «Backup do banco»). Sem os segredos o run falha no 1º passo, com a explicação.
+name: Backup do banco
+
+on:
+  schedule:
+    - cron: "17 6 * * *"   # 03:17 em São Paulo, fora do ciclo das :07 e do relatório das 8h
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-banco
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Sem os segredos o run termina VERDE com um aviso (até o João criá-los) — falhar todo dia só geraria e-mail de erro.
+      # Rodado à mão (workflow_dispatch) sem os segredos, falha: quem pediu o backup precisa saber que ele não saiu.
+      - name: Segredos BACKUP_DB_URL e BACKUP_SENHA presentes
+        id: segredos
+        env:
+          BACKUP_DB_URL: ${{ secrets.BACKUP_DB_URL }}
+          BACKUP_SENHA: ${{ secrets.BACKUP_SENHA }}
+        run: |
+          faltam=""
+          [ -n "${BACKUP_DB_URL}" ] || faltam="${faltam} BACKUP_DB_URL"
+          [ -n "${BACKUP_SENHA}" ] || faltam="${faltam} BACKUP_SENHA"
+          if [ -n "${faltam}" ]; then
+            msg="segredo(s) ausente(s):${faltam} — o backup não roda sem o papel somente leitura e a senha do arquivo (docs/orbita/DEPLOY-FUNCOES.md, «Backup do banco»)"
+            echo "ok=false" >> "${GITHUB_OUTPUT}"
+            if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then echo "::error::${msg}"; exit 1; fi
+            echo "::warning::${msg}"
+            exit 0
+          fi
+          echo "ok=true" >> "${GITHUB_OUTPUT}"
+          echo "segredos presentes (valores não são impressos)"
+
+      # pg_dump precisa ser da versão do servidor ou mais nova: cliente 17 do repositório oficial do PostgreSQL (PGDG)
+      - name: Cliente do PostgreSQL 17
+        if: steps.segredos.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common gnupg
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-17
+          /usr/lib/postgresql/17/bin/pg_dump --version
+
+      - name: pg_dump das tabelas nx_* (somente leitura) e criptografia
+        if: steps.segredos.outputs.ok == 'true'
+        env:
+          BACKUP_DB_URL: ${{ secrets.BACKUP_DB_URL }}
+          BACKUP_SENHA: ${{ secrets.BACKUP_SENHA }}
+        run: |
+          set -euo pipefail
+          umask 077
+          dir="${RUNNER_TEMP}/backup"
+          mkdir -p "${dir}"
+          nome="nexus-ads-$(date -u +%Y%m%dT%H%MZ)"
+          # sessão só de leitura mesmo que o papel aceite escrita; sem dono/privilégios (restaura em qualquer banco de ensaio)
+          PGOPTIONS="-c default_transaction_read_only=on" /usr/lib/postgresql/17/bin/pg_dump "${BACKUP_DB_URL}" \
+            --format=custom --no-owner --no-privileges --table='public.nx_*' --file="${dir}/${nome}.dump"
+          # inventário (lista de objetos, sem dados) para conferir o conteúdo sem abrir o arquivo criptografado
+          /usr/lib/postgresql/17/bin/pg_restore --list "${dir}/${nome}.dump" | grep -c "TABLE DATA" > "${dir}/${nome}.tabelas.txt"
+          # a senha vai por descritor de arquivo (nunca na linha de comando nem no log)
+          gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 --symmetric --cipher-algo AES256 \
+            --output "${dir}/${nome}.dump.gpg" "${dir}/${nome}.dump" 3<<<"${BACKUP_SENHA}"
+          rm -f "${dir}/${nome}.dump"
+          sha256sum "${dir}/${nome}.dump.gpg" | sed "s#${dir}/##" > "${dir}/${nome}.sha256"
+          echo "tabelas com dados: $(cat "${dir}/${nome}.tabelas.txt") · arquivo: $(du -h "${dir}/${nome}.dump.gpg" | cut -f1)"
+
+      # SHA do commit da versão (tag pode ser movida; SHA não). Conferir/atualizar: gh api repos/actions/upload-artifact/git/ref/tags/v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: steps.segredos.outputs.ok == 'true'
+        with:
+          name: backup-nexus-ads
+          path: ${{ runner.temp }}/backup/
+          retention-days: 14
+          if-no-files-found: error

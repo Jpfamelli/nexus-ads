@@ -1042,3 +1042,274 @@ mark.cvx-pend { background: var(--c-aten-suave); color: var(--c-texto); border-r
 /* D21: chat sem mensagens usa o vazio da frente A */
 .cvc-trilho-vazio { display: grid; place-items: center; padding: 2rem 1rem; }
 .cvc-trilho-vazio .vazio { max-width: 26rem; }
+
+/* ============================================================
+   Plano 1000 (13/10/2026) — lote conv-1 · Conversas
+   Faixa «sem atualizar», selos em duas linhas no celular, composer que se ajeita à coluna do chat, protocolo que some antes de
+   cortar, documento de tipo incomum, citação/lista do WhatsApp, medidor do microfone, «Salvar nota» visível, emoji, modelos com
+   busca, lote na lista, texto da etapa/etiqueta no celular. Tokens; movimento só fora de prefers-reduced-motion; 44 px no toque.
+   ============================================================ */
+.cvc-atraso[hidden], .cvl-cache[hidden], .cvl-lote[hidden], .cvx-rec-mudo[hidden], .cvx-rec-fim[hidden], .cv-tr-dep-aviso[hidden],
+.cvx-legenda-n[hidden], .cvx-mod-nada[hidden], .cvx-par-corrigir[hidden], .cvx-ia-outra[hidden], .cvx-emoji-bt[hidden], .cv-modelo[hidden] { display: none !important; }
+
+/* CA-025: a conversa parou de atualizar (3 falhas seguidas) */
+.cvc-atraso { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .4rem 1rem; background: var(--c-aten-suave); border-bottom: 1px solid var(--c-borda); color: var(--c-texto); font-size: var(--fs-13); }
+.cvc-atraso .ic { flex: none; width: 16px; height: 16px; color: var(--c-aten); }
+.cvc-atraso .bt { min-height: 44px; margin-left: auto; }
+
+/* CA-016: no celular os selos quebram em duas linhas (antes uma linha rolável escondia a pílula da IA cortada) */
+@media (max-width: 760px) {
+  .cvc-selos { flex-wrap: wrap; overflow: visible; row-gap: .3rem; }
+  .cvc-selos > * { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+  .cvc-selos .pilula { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+/* CA-041: a coluna do chat é um container — estreita (lista + lateral a 1366 px), o campo ocupa a largura toda e as ferramentas vão
+   para a linha de baixo, como no celular */
+.cv-col-chat { container: cvchat / inline-size; }
+@container cvchat (max-width: 640px) {
+  .cvx-linha { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "campo campo" "ferr enviar"; gap: .3rem .4rem; align-items: center; }
+  .cvx-campo { grid-area: campo; }
+  .cvx-ferr { grid-area: ferr; min-width: 0; flex-wrap: wrap; }
+  .cvx-enviar { grid-area: enviar; }
+}
+
+/* CA-015: o protocolo some do subtítulo antes de ser cortado no meio (ele está na lateral, no atalho «Protocolo» e no title) */
+@container (max-width: 360px) { .cvc-sub .mono, .cvc-sub .cvc-proto-sep { display: none; } }
+
+/* CA-022/CA-023: código em linha, parágrafos, citação «> » e listas do WhatsApp dentro da bolha */
+.cv-texto .cv-code { padding: 0 .3em; border-radius: var(--r-pp); background: var(--c-poco); font-size: .9em; }
+.cv-texto .cv-par { display: block; }
+.cv-texto .cv-citacao { margin: .2rem 0; padding: .1rem 0 .1rem .6rem; border-left: 3px solid var(--c-borda-2); color: var(--c-texto-2); white-space: pre-wrap; }
+.cv-texto .cv-lista { margin: .2rem 0; padding-left: 1.3rem; white-space: normal; }
+.cv-texto .cv-lista li + li { margin-top: .1rem; }
+
+/* CA-119: documento recebido de tipo incomum */
+.cv-doc-cx { display: flex; flex-direction: column; gap: .35rem; }
+.cv-doc-incomum { border-color: color-mix(in srgb, var(--c-aten) 50%, transparent); }
+.cv-doc-aviso { display: flex; align-items: center; gap: .35rem; margin: 0; font-size: var(--fs-12); color: var(--c-aten); }
+.cv-doc-aviso .ic { flex: none; width: 14px; height: 14px; }
+
+/* CA-032: foto ampliada — pinça no celular e arrastar com o zoom ligado */
+.cv-lb-fig img { touch-action: pinch-zoom; }
+.cv-lb[data-zoom="1"] .cv-lb-palco { overflow: auto; touch-action: pan-x pan-y pinch-zoom; }
+
+/* CA-030: medidor do microfone e avisos da gravação (mudo · faltam 30 s) */
+.cvx-gravacao { flex-wrap: wrap; border-radius: var(--r); }
+.cvx-rec-nivel { position: relative; width: 48px; height: 6px; flex: none; border-radius: 999px; background: color-mix(in srgb, var(--c-ruim) 18%, transparent); overflow: hidden; }
+.cvx-rec-nivel i { position: absolute; inset: 0 auto 0 0; width: calc(var(--nivel, 0) * 100%); border-radius: inherit; background: var(--c-ruim); transition: width var(--t-micro) linear; }
+.cvx-rec-mudo, .cvx-rec-fim { flex: 1 1 100%; font-size: var(--fs-12); font-weight: 600; }
+.cvx-rec-mudo { color: var(--c-ruim); }
+.cvx-rec-fim { color: var(--c-aten); }
+.cvx-gravacao .bt { min-height: 44px; }
+
+/* CA-154: no modo nota, o botão diz «Salvar nota» (âmbar, com o rótulo à vista no computador) */
+.cvx-enviar-rot { display: none; }
+@media (min-width: 761px) {
+  .cvx[data-modo="nota"] .cvx-enviar { width: auto; padding: 0 1rem 0 .85rem; gap: .4rem; border-radius: 999px; }
+  .cvx[data-modo="nota"] .cvx-enviar-rot { display: inline; font-size: var(--fs-13); font-weight: 650; }
+}
+
+/* CA-067: emoji (só no computador) */
+.cvx-emoji-ic { font-size: var(--fs-16); line-height: 1; }
+.cvx-emoji-pop { padding: .6rem; }
+.cvx-emojis { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: .15rem; }
+.cvx-emoji { display: grid; place-items: center; min-width: 30px; min-height: 30px; border-radius: var(--r-pp); font-size: var(--fs-16); }
+.cvx-emoji:hover, .cvx-emoji:focus-visible { background: var(--c-tinta); }
+
+/* CA-028/CA-027/CA-069/CA-058: modelos — chip «Usar nome», «Corrigir», busca e categorias, opção marcada */
+.cvx-chip { display: inline-flex; align-items: center; min-height: 34px; padding: .25rem .8rem; border-radius: 999px; border: 1px solid var(--c-borda-2); background: var(--c-sup-2); color: var(--c-texto-2); font-size: var(--fs-13); font-weight: 600; }
+.cvx-chip:hover { border-color: var(--c-texto-3); color: var(--c-texto); }
+.cvx-chip[aria-pressed="true"] { background: var(--c-prim-suave); border-color: var(--c-prim); color: var(--c-texto); }
+.cvx-par-acoes { gap: .4rem; flex-wrap: wrap; margin-top: .3rem; }
+.cvx-par-acoes:empty { display: none; }
+.cvx-mod-filtro .cvx-mod-cats { gap: .35rem; flex-wrap: wrap; }
+.cv-modelo[aria-checked="true"] { border-color: var(--c-prim-luz); background: var(--c-prim-suave); }
+.cv-modelo[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+@media (max-width: 760px), (pointer: coarse) { .cvx-chip, .cvx-emoji, .cvx-par-corrigir { min-height: 44px; } }
+
+/* CA-071: contador da legenda */
+.cvx-legenda-n { align-self: flex-end; color: var(--c-texto-2); font-size: var(--fs-12); }
+/* CA-243: a janela de 24 h fecha em instantes (no modal do anexo) */
+.cv-aviso-janela { margin: 0; align-items: center; }
+.cv-aviso-janela .ic { flex: none; width: 16px; height: 16px; }
+/* CA-060: «Salvar como resposta rápida» */
+.cvx-rr-salvar-previa { margin: 0; padding: .6rem .75rem; border-radius: var(--r-p); background: var(--c-poco); color: var(--c-texto-2); font-size: var(--fs-13); white-space: pre-wrap; max-height: 30vh; overflow: auto; }
+.cvx-rr-n { color: var(--c-texto-3); }
+
+/* CA-043: no celular, a etapa e a 1ª etiqueta por extenso no lugar dos pontos coloridos */
+.cvl-meta-txt { display: none; }
+@media (max-width: 760px), (hover: none) {
+  .cvl-meta .cvl-dot, .cvl-meta .cvl-mais-etq { display: none; }
+  .cvl-meta .cvl-meta-txt { display: inline; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-12); color: var(--c-texto-2); }
+}
+
+/* CA-046: seleção em lote */
+.cvl-check { grid-row: span 3; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; border: 2px solid var(--c-borda-2); color: var(--c-prim-txt); }
+.cvl-item[data-sel="1"] { background: var(--c-prim-suave); }
+.cvl-item[data-sel="1"] .cvl-check { background: var(--c-prim); border-color: var(--c-prim); }
+.cvl-sel-bt[aria-pressed="true"] { background: var(--c-prim-suave); color: var(--c-prim-luz); }
+.cvl-lote { position: sticky; bottom: 0; display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; padding: .55rem 1rem calc(.55rem + env(safe-area-inset-bottom)); background: var(--c-sup); border-top: 1px solid var(--c-borda); box-shadow: 0 -12px 28px -24px var(--c-sombra); }
+.cvl-lote-n { flex: 1 1 100%; font-size: var(--fs-13); color: var(--c-texto-2); }
+.cvl-lote .bt { min-height: 44px; }
+
+/* CA-049: «Minhas» vazia com o próximo passo */
+.cvl-vazio-minhas { display: flex; flex-direction: column; align-items: center; gap: .6rem; }
+.cvl-vazio-acoes { justify-content: center; flex-wrap: wrap; gap: .5rem; }
+.cvl-vazio-acoes .bt { min-height: 44px; }
+
+/* CA-103: lista guardada no aparelho, sem conexão */
+.cvl-cache { margin: .6rem 1rem 0; padding: .4rem .7rem; border-radius: var(--r-p); background: var(--c-aten-suave); color: var(--c-texto); font-size: var(--fs-13); }
+
+/* CA-026/CA-055/CA-057: transferir e nova conversa */
+.cv-tr-dep-aviso { margin: 0; align-items: center; }
+.cv-tr-dep-aviso .ic { flex: none; width: 16px; height: 16px; }
+.cv-tr-busca { margin-bottom: .35rem; }
+.cv-contato-lista { display: flex; flex-direction: column; gap: .35rem; margin: 0; padding: 0; list-style: none; }
+
+/* CA-038: e-mail da lateral clicável, com copiar */
+.cvt-email { display: inline-flex; align-items: center; gap: .25rem; min-width: 0; max-width: 100%; }
+.cvt-email a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cvt-email-copiar { flex: none; }
+.cvt-resumo-nota { margin-top: .4rem; min-height: 44px; }
+
+@media (prefers-reduced-motion: reduce) { .cvx-rec-nivel i { transition: none; } }
+/* CA-042: no celular o botão da IA usa o rótulo curto («Pausar IA» / «Assumir») — o telefone do contato continua inteiro em 360 px */
+.cvc-ia-acao .so-curto-txt { display: none; }
+@media (max-width: 760px) { .cvc-ia-acao .so-largo-txt { display: none; } .cvc-ia-acao .so-curto-txt { display: inline; } }
+@media (max-width: 380px) { .cvc-acoes .cvc-ia-acao .ic { display: none; } }   /* 360 px: sem o ícone o telefone cabe inteiro ao lado do botão */
+
+/* ============================================================
+   Plano 1000 (13/10/2026) — lote conv-2 · Conversas
+   Assinatura e janela no campo, várias fotos, foto com espaço reservado, vídeo com duração, PDF ver/baixar, localização/contato,
+   link com destino, setas de responder fora do toque, folha de ações no celular, esqueleto de bolhas, rede lenta, eventos recolhidos,
+   separador de novas, nota no escuro, pontos com contorno, gesto na linha, lateral editável, atalhos com filtro e impressão.
+   Tokens; movimento só fora de prefers-reduced-motion; 44 px no toque.
+   ============================================================ */
+.cvx-assin[hidden], .cvx-janela-aviso[hidden], .cv-video-selo[hidden], .cv-teclas-item[hidden], .cv-teclas-grupo[hidden], .cv-teclas-nada[hidden], .cv-nv-outro[hidden] { display: none !important; }
+
+/* CA-077: o que vai na frente do texto com a assinatura ligada */
+.cvx-assin { padding: .15rem .1rem .25rem; font-size: var(--fs-12); color: var(--c-texto-3); }
+.cvx-assin b { color: var(--c-texto-2); font-weight: 600; }
+/* CA-074: a janela de 24 h fecha em menos de 30 min */
+.cvx-janela-aviso { display: flex; align-items: center; gap: .4rem; margin: 0 0 .35rem; padding: .35rem .7rem; border-radius: var(--r-p); background: var(--c-aten-suave); color: var(--c-texto); font-size: var(--fs-13); }
+.cvx-janela-aviso .ic { flex: none; width: 15px; height: 15px; color: var(--c-aten); }
+
+/* CA-072: várias fotos de uma vez — miniaturas com a legenda de cada uma */
+.cvx-multi { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 9.5rem), 1fr)); gap: .6rem; margin: 0; padding: 0; list-style: none; max-height: 52vh; overflow: auto; }
+.cvx-multi-item { display: flex; flex-direction: column; gap: .35rem; min-width: 0; }
+.cvx-multi-item img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--r-p); background: var(--c-sup-3); }
+.cvx-multi-sem { display: grid; place-items: center; aspect-ratio: 1; border-radius: var(--r-p); background: var(--c-sup-3); font-size: var(--fs-12); color: var(--c-texto-3); overflow-wrap: anywhere; padding: .4rem; }
+.cvx-multi-leg { min-height: 44px; font-size: var(--fs-13); }
+
+/* CA-086: a foto reserva o espaço enquanto carrega (4:3, ou as dimensões do servidor) — a conversa não pula */
+.cv-midia img:not([data-ok]):not([data-dims]) { aspect-ratio: 4 / 3; }
+.cv-midia img[data-dims] { height: auto; }
+
+/* CA-140: vídeo com ▶ e a duração até tocar */
+.cv-midia.cv-video { position: relative; }
+.cv-video-selo { position: absolute; left: .5rem; bottom: .5rem; padding: .15rem .5rem; border-radius: 999px; background: var(--c-veu); color: var(--c-texto); font-size: var(--fs-12); pointer-events: none; }
+
+/* CA-141: PDF — ver e baixar lado a lado */
+.cv-doc-acoes { display: flex; gap: .35rem; flex-wrap: wrap; }
+.cv-doc-acoes .bt { min-height: 36px; }
+
+/* CA-142: localização e contato recebidos */
+.cv-msg-extra { display: flex; flex-direction: column; gap: .35rem; margin-top: .4rem; }
+.cv-msg-extra .bt { align-self: flex-start; min-height: 36px; }
+.cv-contato-rec { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.cv-contato-rec-nome { flex: 1 1 100%; font-weight: 600; font-size: var(--fs-13); }
+
+/* CA-121: link com o destino; encurtador/endereço com outro alfabeto em atenção */
+.cv-link-ext { margin-left: .15em; font-size: .85em; opacity: .7; }
+.cv-texto a.cv-link-aten { text-decoration-style: dashed; text-decoration-color: var(--c-aten); }
+
+/* CA-110: no toque as setas de responder somem (deslizar a bolha para a direita responde; o toque longo continua) */
+@media (hover: none) { .cv-msg-acoes { display: none; } }
+.cv-bolha.deslizavel { touch-action: pan-y; }
+
+/* CA-111: folha de ações do ⋮ no celular */
+.cv-folha { margin: auto 0 0; width: 100%; max-width: 100%; max-height: 85dvh; padding: .4rem 1rem calc(1rem + env(safe-area-inset-bottom)); border: 0; border-radius: var(--r-g) var(--r-g) 0 0; background: var(--c-sup); color: var(--c-texto); box-shadow: 0 -18px 40px -24px var(--c-sombra); overflow: auto; }
+.cv-folha::backdrop { background: var(--c-veu); }
+.cv-folha-pega { width: 40px; height: 4px; margin: .2rem auto .6rem; border-radius: 999px; background: var(--c-borda-2); }
+.cv-folha-grupo + .cv-folha-grupo { margin-top: .7rem; padding-top: .6rem; border-top: 1px solid var(--c-borda); }
+.cv-folha-grupo h3 { margin: 0 0 .25rem; }
+.cv-folha-item { display: flex; align-items: center; gap: .7rem; width: 100%; min-height: 48px; padding: .35rem .4rem; border-radius: var(--r-p); text-align: left; font-size: var(--fs-15); color: var(--c-texto); }
+.cv-folha-item:hover, .cv-folha-item:focus-visible { background: var(--c-tinta); }
+.cv-folha-item[disabled] { opacity: .55; }
+.cv-folha-item.perigo { color: var(--c-ruim); }
+.cv-folha-item .ic { flex: none; width: 18px; height: 18px; color: var(--c-texto-2); }
+.cv-folha-x { width: 100%; min-height: 48px; margin-top: .8rem; }
+@media (prefers-reduced-motion: no-preference) { .cv-folha[open] { animation: cvFolhaSobe var(--t-ui) var(--e-out); } }
+@keyframes cvFolhaSobe { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* CA-139: o esqueleto da conversa tem forma de bolhas */
+.cvc-sk-bolhas { display: flex; flex-direction: column; gap: .7rem; padding: 1rem 0; }
+.cvc-sk-bolha { display: block; height: 2.6rem; width: min(62%, 22rem); border-radius: 16px; }
+.cvc-sk-bolha[data-dir="out"] { align-self: flex-end; width: min(48%, 18rem); }
+.cvc-sk-bolha[data-i="2"] { height: 3.8rem; }
+
+/* CA-105: a conversa demora a abrir */
+.cvc-lento { display: flex; align-items: center; justify-content: center; gap: .5rem; flex-wrap: wrap; margin: .5rem auto; padding: .5rem .8rem; border-radius: var(--r-p); background: var(--c-aten-suave); font-size: var(--fs-13); color: var(--c-texto); }
+.cvc-lento .ic { width: 16px; height: 16px; color: var(--c-aten); }
+.cvc-lento .bt { min-height: 44px; }
+
+/* CA-231: eventos do sistema recolhidos num traço fino */
+.cv-sis-fino { display: flex; align-items: center; gap: .6rem; margin: .5rem auto; max-width: min(92%, 40rem); color: var(--c-texto-3); }
+.cv-sis-fino::before, .cv-sis-fino::after { content: ""; flex: 1; height: 1px; background: var(--c-borda); }
+.cv-sis-fino-bt { min-height: 32px; padding: 0 .4rem; font-family: var(--f-mono); font-size: var(--fs-11); letter-spacing: .06em; color: var(--c-texto-3); }
+.cv-sis-fino-bt:hover, .cv-sis-fino-bt:focus-visible { color: var(--c-texto); }
+
+/* CA-152: «Mensagens novas» com respiro e a cor do acento; o separador de dia fica neutro (antes os dois eram iguais e colados) */
+.cv-novas-sep { margin: var(--esp-3) 0; color: var(--c-prim); }
+.cv-novas-sep::before, .cv-novas-sep::after { height: 2px; background: color-mix(in srgb, var(--c-prim) 70%, transparent); }
+.cv-dia + .cv-novas-sep, .cv-novas-sep + .cv-dia { margin-top: var(--esp-4); }
+.cv-dia[data-hoje="1"] span { color: var(--c-texto-2); border-color: var(--c-borda); }
+
+/* CA-153: nota interna — borda tracejada, cadeado e «Só a equipe» (no escuro a cor sozinha não bastava) */
+.cv-msg[data-tipo="nota"] .cv-bolha { border-style: dashed; border-left-style: solid; }
+.cv-nota-so { margin-left: auto; padding: .05rem .45rem; border-radius: 999px; border: 1px dashed currentColor; font-size: var(--fs-11); letter-spacing: .04em; }
+.cv-nota-rot:has(.cv-nota-so) { width: 100%; }
+
+/* CA-117: os pontos de etiqueta/etapa com contorno (cores claras como o amarelo somiam no fundo bege) */
+.cvl-dot { outline: 1px solid var(--c-borda-2); outline-offset: 0; }
+
+/* CA-109: gesto na linha (celular) — o que acontece aparece por trás enquanto desliza */
+.cvl-item.deslizavel { touch-action: pan-y; position: relative; }
+.cvl-item[data-deslizando="esquerda"]::after, .cvl-item[data-deslizando="direita"]::after { position: absolute; top: 50%; transform: translateY(-50%); padding: .2rem .55rem; border-radius: 999px; font-size: var(--fs-12); font-weight: 650; pointer-events: none; }
+.cvl-item[data-deslizando="esquerda"]::after { content: attr(data-gesto-e); right: .6rem; background: var(--c-ok-suave); color: var(--c-ok-txt); }
+.cvl-item[data-deslizando="direita"]::after { content: attr(data-gesto-d); left: .6rem; background: var(--c-prim-suave); color: var(--c-texto); }
+.cvl-item[data-armado="1"]::after { outline: 2px solid currentColor; }
+.cvl-nova-tel { margin-top: .5rem; }
+.cvl-nova-tel .bt { min-height: 44px; }
+
+/* CA-083 / CA-242 / CA-084 / CA-081 / CA-124: lateral */
+.cvt-etapa { display: flex; align-items: center; gap: .5rem; margin-top: .4rem; }
+.cvt-etapa .sel { flex: 1 1 auto; min-width: 0; min-height: 36px; }
+.cvt-neg-fechar { gap: .35rem; flex-wrap: wrap; margin-top: .4rem; }
+.cvt-tar { grid-template-columns: auto minmax(0, 1fr) auto; }
+.cvt-tar-adiar { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
+.cvt-campo-ed { flex: none; }
+/* o e-mail ganha espaço: com pouca largura os botões (copiar/editar) descem para a linha de baixo em vez de espremer o endereço */
+.cvt-email { flex-wrap: wrap; row-gap: .1rem; }
+.cvt-email > a, .cvt-email > span { flex: 1 1 9rem; min-width: 0; }
+@media (hover: hover) and (pointer: fine) { .cvt-email .bt-icone { width: 32px; min-width: 32px; height: 32px; min-height: 32px; } }
+.cvt-campo-add { min-height: 32px; font-size: var(--fs-13); }
+.cvt-resp1 small { font-size: var(--fs-12); }
+@media (max-width: 760px), (pointer: coarse) { .cvt-etapa .sel, .cvt-neg-fechar .bt, .cv-doc-acoes .bt, .cv-msg-extra .bt, .cvt-campo-add { min-height: 44px; } }
+
+/* CA-160: atalhos com filtro e impressão; CA-126 diagnóstico */
+.cv-teclas-filtro { min-height: 40px; }
+.cv-teclas-item { display: contents; }
+.cv-teclas-rod { justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
+@media print {
+  html.cv-imprimindo-atalhos body > *:not(dialog[open]) { display: none !important; }
+  html.cv-imprimindo-atalhos dialog[open] { position: static; box-shadow: none; max-height: none; overflow: visible; }
+  html.cv-imprimindo-atalhos .cv-teclas-filtro, html.cv-imprimindo-atalhos .cv-teclas-rod, html.cv-imprimindo-atalhos .modal-rod, html.cv-imprimindo-atalhos .campo { display: none !important; }
+}
+
+/* CA-155 / CA-238: nova conversa */
+.cv-nv-outro { align-items: flex-start; }
+.cv-nv-outro .bt, .cv-nv-mais { min-height: 44px; }
+
+@media (prefers-reduced-motion: reduce) { .cv-folha[open] { animation: none; } .cvl-item.deslizavel, .cv-bolha.deslizavel { transition: none; } }

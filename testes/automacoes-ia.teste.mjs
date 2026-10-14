@@ -164,7 +164,8 @@ test("prazos: o navegador espera mais que o servidor dá à Anthropic, e menos q
   assert.ok(IA.TIMEOUT_MONTAR_MS + 10_000 <= L.PRAZO_MONTAR_IA_MS, "folga para o banco e a rede depois da resposta da IA");
   assert.ok(L.PRAZO_MONTAR_IA_MS <= A.TETO_PRAZO_FN_MS, "a tela não espera além do que a função pode durar");
   assert.ok(L.PRAZO_MONTAR_IA_MS > 75_000, "mais que o prazo padrão das Edge Functions no navegador (75 s)");
-  assert.match(readFileSync(join(RAIZ, "web", "app", "automacoes.js"), "utf8"), /automacao_montar", descricao \}, \{ prazoMs: L\.PRAZO_MONTAR_IA_MS \}/,
+  // plano 1000 · AS-073 (lote auto-2): a chamada também leva o `sinal` do «Parar de esperar»
+  assert.match(readFileSync(join(RAIZ, "web", "app", "automacoes.js"), "utf8"), /automacao_montar", descricao \}, \{ prazoMs: L\.PRAZO_MONTAR_IA_MS[,}]/,
     "a tela que cria com IA passa o prazo maior");
 });
 
@@ -811,7 +812,7 @@ async function carregarIa() {
     Anthropic.APIError = class extends Error { constructor(m, s) { super(m); this.status = s; } };
     globalThis.__ia3Erro = Anthropic.APIError;`;
   const comum = pathToFileURL(join(RAIZ, "supabase/functions/_compartilhado/comum.js")).href;   // o ia.js importa o comum.js
-  const mod = await import(`data:text/javascript,${encodeURIComponent(src.replace('"npm:@anthropic-ai/sdk"', JSON.stringify(`data:text/javascript,${encodeURIComponent(SDK)}`)).replace('"./comum.js"', JSON.stringify(comum)))}`);
+  const mod = await import(`data:text/javascript,${encodeURIComponent(src.replace(/"npm:@anthropic-ai\/sdk@\d+\.\d+\.\d+"/, () => JSON.stringify(`data:text/javascript,${encodeURIComponent(SDK)}`)).replace('"./comum.js"', JSON.stringify(comum)))}`);
   globalThis.__ia3 = [];
   return mod;
 }

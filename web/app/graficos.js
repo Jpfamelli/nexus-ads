@@ -493,12 +493,17 @@ export function funil(alvo, o) {
     const sequencial = ant && (e.tipo || "aberto") === "aberto" && (ant.tipo || "aberto") === "aberto";
     const taxa = e.conversao ? null : (o.taxas !== false && sequencial ? taxaEntreEtapas(e.qtd || 0, ant.qtd || 0) : null);
     const convTxt = e.conversao || (taxa ? taxa.texto : "");
+    // plano 1000 (pedido de Relatórios): `etapa.dica` explica a conversão (ex.: taxa acima de 100 % porque entraram negócios direto na etapa) —
+    // vira a dica do valor (title + data-dica do ui.ligarDicas) e uma descrição para o leitor de tela
+    const dica = typeof e.dica === "string" && e.dica.trim() ? e.dica.trim().slice(0, 240) : null;
     const li = h("li", { class: `g-fetapa g-f-${e.tipo || "aberto"}`, style: { "--i": n } },
       h("span", { class: "g-fnome" }, h("i", { class: "g-fcor", style: cor ? { "--cor": cor } : {} }), h("span", { texto: e.nome })),
       h("span", { class: "g-ftrilho" }, h("span", { class: "g-fbarra", style: { "--w": `${pct.toFixed(2)}%`, ...(cor ? { "--cor": cor } : {}) } }),
         h("span", { class: "g-fqtd", texto: String(e.qtd || 0) })),
       h("span", { class: "g-fvalor", texto: e.valorTxt || "" }),
-      h("span", { class: `g-fconv${taxa ? " g-fconv-taxa" : ""}`, texto: convTxt, ...(taxa ? { "data-taxa": String(Math.round(taxa.pct)) } : {}) }));
+      h("span", { class: `g-fconv${taxa ? " g-fconv-taxa" : ""}${dica ? " g-fconv-dica" : ""}`, texto: convTxt, ...(taxa ? { "data-taxa": String(Math.round(taxa.pct)) } : {}),
+        ...(dica ? { title: dica, "data-dica": dica } : {}) }),
+      dica ? h("span", { class: "sr-only", texto: `(${dica})` }) : null);
     lista.append(li);
   });
   alvo.append(lista);

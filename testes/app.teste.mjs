@@ -375,7 +375,10 @@ await teste("erro do PostgREST → Error com .codigo e .hint; mensagemErro do Ap
   assert.equal(A.mensagemErro({ codigo: "marca_invalida", hint: "cores.primaria" }), "Confira o campo cor primária da marca.");
   assert.equal(A.mensagemErro({ codigo: "credenciais_invalidas" }), "E-mail ou senha não conferem.");
   assert.equal(A.mensagemErro({ codigo: "resposta_invalida" }), "O servidor respondeu em formato inesperado. Atualize os dados; se tentou salvar ou enviar, confira o resultado antes de repetir.");
-  assert.match(A.mensagemErro({ codigo: "codigo_que_nao_existe" }), /^Não deu certo agora \(codigo_que_nao_existe\)/);
+  // plano 1000 (AS-255): o código cru só para a conta da plataforma (o shell liga com mostrarCodigoTecnico); as demais pessoas veem o caminho
+  assert.equal(A.mensagemErro({ codigo: "codigo_que_nao_existe" }), "Não deu certo agora. Tente de novo em instantes; se continuar, fale com o suporte.");
+  A.mostrarCodigoTecnico(true);
+  try { assert.match(A.mensagemErro({ codigo: "codigo_que_nao_existe" }), /^Não deu certo agora \(codigo_que_nao_existe\)/); } finally { A.mostrarCodigoTecnico(false); }
   for (const c of ["sem_permissao", "conta_suspensa", "teste_expirado", "modulo_desligado", "tempo_esgotado", "periodo_grande", "funcao_invalida",
     "so_plataforma", "link_invalido", "ultimo_admin", "nao_pode_alterar_a_si", "slug_em_uso", "dominio_em_uso", "numero_em_uso", "atalho_em_uso",
     "dominio_invalido", "telefone_em_uso", "dados_invalidos", "contato_nao_encontrado", "valor_obrigatorio", "conversa_resolvida", "ja_existe_aberta",
@@ -856,7 +859,8 @@ await teste("index.html: nenhum <script> inline nem atributo on*= (CSP §3.9); u
   }
   assert.doesNotMatch(html, /\son[a-z]+\s*=/i, "atributo on*=");
   assert.doesNotMatch(html, /javascript:/i);
-  const vs = [...html.matchAll(/\?v=([A-Za-z0-9._-]+)/g)].map(m => m[1]);
+  // plano 1000 (AS-257): o preload das fontes repete o endereço do @font-face (versão própria da fonte) e fica fora da conta
+  const vs = [...html.replace(/href="\.\.\/fonts\/[^"]+"/g, "").matchAll(/\?v=([A-Za-z0-9._-]+)/g)].map(m => m[1]);
   assert.ok(vs.length >= 2 && new Set(vs).size === 1, `versões: ${vs.join(", ")}`);
   assert.match(html, /<script type="module" src="app\.js\?v=/);
   assert.match(html, /<script src="antes\.js\?v=[^"]+"><\/script>/, "antes.js síncrono no head");
@@ -1280,7 +1284,7 @@ await teste("netlify.toml: publish web, / e /index.html → /app/ (302 forçado)
   assert.match(t, /from = "\/"\s*\n\s*to = "\/app\/"\s*\n\s*status = 302\s*\n\s*force = true/);
   assert.match(t, /from = "\/index\.html"\s*\n\s*to = "\/app\/"\s*\n\s*status = 302\s*\n\s*force = true/);
   // manifest-src blob: é necessário ao manifesto white-label criado como Blob em M13; nenhuma outra origem foi ampliada.
-  assert.match(t, /Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co; connect-src 'self' https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co; font-src 'self'; manifest-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"/);
+  assert.match(t, /Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co; connect-src 'self' https:\/\/dtjznipitihnwmcgpzqh\.supabase\.co https:\/\/dns\.google; font-src 'self'; manifest-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"/);   // plano 1000 (AS-114): + dns.google para o «Conferir DNS» do domínio próprio
   for (const k of ["Referrer-Policy", "X-Content-Type-Options", "Permissions-Policy"]) assert.match(t, new RegExp(k));
 });
 
@@ -2238,11 +2242,11 @@ await teste("ui.acaoComDesfazer (M07): aplica na hora, Desfazer reverte, Ctrl/�
     const z4 = new d.Evento("keydown", { key: "z", ctrlKey: true }); d.doc.body.dispatchEvent(z4); assert.equal(z4.defaultPrevented, false, "nada pendente");
   } finally { d.fim(); }
   const src = ler("ui.js");
-  assert.match(src, /export async function acaoComDesfazer\(\{ texto, aplicar, reverter, firmar, ms = 7000, aoCriar \} = \{\}\)/, "assinatura do contrato ({texto, aplicar, reverter, ms = 7000}) + os opcionais `firmar` e `aoCriar`");
+  assert.match(src, /export async function acaoComDesfazer\(\{ texto, aplicar, reverter, firmar, ms = 7000, aoCriar, acao = null \} = \{\}\)/, "assinatura do contrato ({texto, aplicar, reverter, ms = 7000}) + os opcionais `firmar`, `aoCriar` e `acao` (plano 1000)");
 });
 
 /* ---------- modal e gaveta que protegem o texto digitado ---------- */
-await teste("ui.modal (M08): Esc/clique fora/Voltar com texto digitado NÃO fecham e perguntam; sem texto fecham; Continuar/Descartar; X e rodapé fecham direto; busca e carga por script não contam", async () => {
+await teste("ui.modal (M08): Esc/clique fora/Voltar com texto digitado NÃO fecham e perguntam; sem texto fecham; Continuar/Descartar; X pergunta como o Esc (plano 1000); rodapé fecha direto; busca e carga por script não contam", async () => {
   const d = comDom();
   try {
     const ultimo = () => { const l = d.doc.querySelectorAll("dialog.modal"); return l[l.length - 1]; };
@@ -2293,8 +2297,11 @@ await teste("ui.modal (M08): Esc/clique fora/Voltar com texto digitado NÃO fech
     // 7c) …e apagar o que digitou, voltando ao original, deixa de ser "sujo"
     m = abrir(); await esperar(5); d.ev(m.input, "keydown", { key: "a" }); m.input.value = "a"; d.ev(m.input, "input"); m.input.value = ""; d.ev(m.input, "input");
     esc(m.dlg); assert.equal(await m.p, null);
-    // 8) o X e os botões do rodapé fecham direto, mesmo sujo
-    m = abrir(); await esperar(5); m.input.value = "x"; d.ev(m.input, "input"); achar(m.dlg, ".modal-x").click(); assert.equal(await m.p, null);
+    // 8) plano 1000 (AS-210): o X passa pela proteção (com texto pergunta; sem texto fecha); os botões do rodapé fecham direto, mesmo sujo
+    m = abrir(); await esperar(5); m.input.value = "x"; d.ev(m.input, "input"); achar(m.dlg, ".modal-x").click();
+    assert.equal(m.faixa.hidden, false, "X com texto: «Descartar?»"); assert.equal(await pendente(m.p), true);
+    m.faixa.querySelectorAll("button")[1].click(); assert.equal(await m.p, null);
+    m = abrir(); await esperar(5); achar(m.dlg, ".modal-x").click(); assert.equal(await m.p, null, "X sem texto fecha");
     m = abrir(); await esperar(5); m.input.value = "x"; d.ev(m.input, "input"); m.dlg.querySelectorAll(".modal-rod button").find(b => b.textContent === "Cancelar").click(); assert.equal(await m.p, false);
     m = abrir(); await esperar(5); m.input.value = "x"; d.ev(m.input, "input"); assert.equal(m.dlg.querySelector(".modal-rod .bt-prim").textContent, "Salvar"); m.dlg.querySelector(".modal-rod .bt-prim").click(); assert.equal(await m.p, true);
     // 9) confirmar() (campo "digitar") nunca pergunta

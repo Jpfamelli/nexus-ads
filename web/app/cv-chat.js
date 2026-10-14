@@ -23,11 +23,17 @@ export function criarChat(A) {
   const semCssEscape = s => String(s).replace(/["\\]/g, "");
   const escaparSel = s => (typeof CSS !== "undefined" && CSS && typeof CSS.escape === "function" ? CSS.escape(String(s)) : semCssEscape(s));
   const arrastar = h("div", { class: "cvc-arrastar", hidden: true }, "Solte para anexar");
+  // plano 1000 · CA-025: a atualização da conversa falhou várias vezes seguidas — «Sem atualizar desde 14:02 · Tentar agora»
+  const atrasoTxt = h("span", null, "");
+  const btAtraso = h("button", { type: "button", class: "bt bt-fant bt-p cvc-atraso-bt" }, "Tentar agora");
+  const atraso = h("div", { class: "cvc-atraso", role: "status", hidden: true }, ui.icone("alerta"), atrasoTxt, btAtraso);
+  let tentarAtraso = null;
+  btAtraso.addEventListener("click", () => { if (typeof tentarAtraso === "function") tentarAtraso(); });
   const corpo = h("div", { class: "cvc-corpo" }, msgs, novas, arrastar);
   const vazio = h("div", { class: "cvc-vazio" });
-  const el = h("div", { class: "cvc" }, vazio, cab, faixa, corpo);
+  const el = h("div", { class: "cvc" }, vazio, cab, faixa, atraso, corpo);
 
-  novas.addEventListener("click", () => { rolarFim(true); novas.hidden = true; });
+  novas.addEventListener("click", () => { rolarFim(true); novas.hidden = true; pararDeVigiar(); });
 
   /* ---------------- rolagem */
   let grudarFimAte = 0;      // até quando uma mídia que termina de carregar deve manter a conversa no fim (a imagem só ganha altura ao carregar)
@@ -37,10 +43,36 @@ export function criarChat(A) {
     if (suave && !matchMedia("(prefers-reduced-motion: reduce)").matches) msgs.scrollTo({ top: msgs.scrollHeight, behavior: "smooth" });
     else msgs.scrollTop = msgs.scrollHeight;
   }
+  // CA-137: a página anterior só é pedida quando a PESSOA rola para cima (o topo baixo de uma conversa curta, ou o ajuste da rolagem
+  // depois de carregar, não dispara outra página) e no mínimo 150 ms depois da última carga
+  let topoAnterior = 0, ultimaCargaEm = 0;
   msgs.addEventListener("scroll", () => {
-    if (msgs.scrollTop < 140 && A.temMaisAntes && !A.carregandoAntes) A.acoes.carregarAntes();
-    if (noFim()) novas.hidden = true;
+    const subindo = msgs.scrollTop < topoAnterior;
+    topoAnterior = msgs.scrollTop;
+    if (subindo && msgs.scrollTop < 140 && A.temMaisAntes && !A.carregandoAntes && Date.now() - ultimaCargaEm >= 150) {
+      ultimaCargaEm = Date.now();
+      A.acoes.carregarAntes();
+    }
+    // (revisão 13/10: a bolha vigiada pode ter sido recriada — mídia «buscando» → «ok» — e o observador ficaria olhando um nó fora da
+    // página; no fim da rolagem com o nó perdido, a pílula sai do mesmo jeito)
+    if (noFim() && (!vigiando || !(vigiado && vigiado.isConnected))) { if (vigiando) pararDeVigiar(); novas.hidden = true; }
   }, { passive: true });
+  /* plano 1000 · CA-138: a pílula «Novas mensagens» só some quando a última mensagem nova ENTRA na tela (IntersectionObserver) — chegar
+     perto do fim (80 px) já não a fecha sem a pessoa ter visto as novas. Sem o observador, vale a regra antiga do fim da rolagem. */
+  let obsNovas = null, vigiando = false, vigiado = null;
+  function vigiarUltima() {
+    if (typeof IntersectionObserver !== "function") return;
+    try {
+      if (!obsNovas) obsNovas = new IntersectionObserver(ents => {
+        if (!ents.some(e => e.isIntersecting)) return;
+        novas.hidden = true; novasDesde = null; vigiando = false; obsNovas.disconnect();
+      }, { root: msgs, threshold: 0.5 });
+      obsNovas.disconnect();
+      const ult = trilho.lastElementChild;
+      if (ult) { obsNovas.observe(ult); vigiando = true; vigiado = ult; }
+    } catch { vigiando = false; }
+  }
+  function pararDeVigiar() { vigiando = false; if (obsNovas) try { obsNovas.disconnect(); } catch { /* ok */ } }
 
   /* ---------------- arrastar arquivo para o chat */
   let contaDrag = 0;
@@ -51,7 +83,10 @@ export function criarChat(A) {
   corpo.addEventListener("drop", ev => {
     if (!temArquivo(ev)) return;
     ev.preventDefault(); contaDrag = 0; arrastar.hidden = true;
-    const f = ev.dataTransfer.files && ev.dataTransfer.files[0];
+    const arquivos = ev.dataTransfer.files ? [...ev.dataTransfer.files] : [];
+    const f = arquivos[0];
+    // CA-012: vários arquivos soltos de uma vez — um envio por vez (cada um com a sua prévia); a pessoa sabe que os outros ficaram
+    if (arquivos.length > 1) ui.toast(`${arquivos.length} arquivos soltos: enviando o primeiro (${f.name}). Solte os outros depois, um por vez.`, { tipo: "info", ms: 8000 });
     if (f) A.composer.anexar(f);
   });
 
@@ -61,6 +96,7 @@ export function criarChat(A) {
     cab.hidden = m === "vazio";
     faixa.hidden = m !== "conversa";
     corpo.hidden = m === "vazio";
+    if (m !== "conversa") atraso.hidden = true;
     if (A.composer && A.composer.el) A.composer.el.hidden = m !== "conversa";
   }
 
@@ -110,12 +146,32 @@ export function criarChat(A) {
       h("div", { class: "sk-item" }, h("span", { class: "sk sk-av" }), h("div", { class: "sk-txt" }, h("span", { class: "sk sk-l1" }), h("span", { class: "sk sk-l2" })))));
     ui.limpar(trilho);
     ui.limpar(topoHist);
-    trilho.appendChild(ui.esqueleto("lista", 5));
+    // CA-006: enquanto a conversa abre, o registro de mensagens não fala (senão o leitor de tela lê o histórico inteiro a cada troca)
+    msgs.setAttribute("aria-busy", "true");
+    // plano 1000 · CA-139: o esqueleto tem a forma de uma conversa (bolhas alternadas), não de lista com avatar
+    trilho.appendChild(h("div", { class: "cvc-sk-bolhas", "aria-hidden": "true" },
+      ["in", "out", "in", "out"].map((d, i) => h("span", { class: "sk cvc-sk-bolha", dataset: { dir: d, i: String(i) } }))));
     cache.clear();
     players.clear();                    // D9: os áudios da conversa anterior não ficam presos na memória
     sigCab = null;
+    esconderAtraso();
     modo("carregando");
   }
+
+  /** plano 1000 · CA-105: a conversa demora a abrir (rede lenta) — o esqueleto ganha «A conexão está lenta… ainda tentando» + «Tentar de novo». */
+  function mostrarLento(tentar) {
+    if (trilho.querySelector(".cvc-lento")) return;
+    trilho.appendChild(h("div", { class: "cvc-lento", role: "status" }, ui.icone("relogio"), h("span", null, "A conexão está lenta… ainda tentando."),
+      h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { if (typeof tentar === "function") tentar(); } } }, "Tentar de novo")));
+  }
+
+  /** CA-025: faixa «Sem atualizar desde 14:02 · Tentar agora» (desde = quando deu certo pela última vez); null esconde. */
+  function mostrarAtraso(desde, tentar) {
+    tentarAtraso = tentar || null;
+    atrasoTxt.textContent = `Sem atualizar ${L.desdeTexto(desde || Date.now())}. Confira a internet.`;
+    atraso.hidden = false;
+  }
+  function esconderAtraso() { atraso.hidden = true; tentarAtraso = null; }
 
   function mostrarErro(e, tentar) {
     ui.limpar(vazio);
@@ -143,7 +199,8 @@ export function criarChat(A) {
     const s = JSON.stringify([conv.id, conv.status, conv.atribuida_a, conv.atribuida && conv.atribuida.nome, conv.atribuida_nome, conv.departamento && conv.departamento.nome,
       conv.oculta, conv.protocolo, conv.canal && conv.canal.nome, conv.canal_id, provedorCanal, jan.texto, jan.nivel, L.janelaCurta(jan), Math.round(L.fracaoJanela(jan) * 1000), jan.ate,
       ct.id, nome, ct.telefone, ct.optin_marketing, ia && [ia.disponivel, ia.ia_ligada, ia.pausada, ia.pausada_ate, ia.so_manual, ia.pausada_por, ia.pausada_por_nome, ia.respondendo, ia.erro],
-      flash, A.podeEscrever, eu, A.raiz && A.raiz.dataset.lateral, caido && [caido.nome, caido.desde]]);
+      flash, A.podeEscrever, eu, A.raiz && A.raiz.dataset.lateral, caido && [caido.nome, caido.desde], (() => { try { return matchMedia("(max-width: 760px)").matches; } catch { return false; } })(),
+      conv.ultima_entrada_em ? 1 : 0]);
     const ativo = typeof document !== "undefined" ? document.activeElement : null;
     if (s === sigCab && cab.firstChild) {
       // nada mudou: o cabeçalho e o foco ficam; sem ninguém na barra, o ponto de Tab volta ao 1º botão visível (o CSS pode ter escondido botões)
@@ -156,7 +213,16 @@ export function criarChat(A) {
     ui.limpar(cab);
     const voltar = h("button", { type: "button", class: "bt-icone cvc-voltar", "aria-label": "Voltar à lista", dataset: { acao: "voltar" }, on: { click: () => A.acoes.voltar() } }, ui.icone("seta-esq"));
     const canal = conv.canal ? `via ${conv.canal.nome}` : "número removido";
-    const quem = h("button", { type: "button", class: "cvc-quem", title: "Abrir a ficha", dataset: { acao: "quem" }, on: { click: () => A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }) } },
+    // CA-239: contato removido (sem id) — a ficha não abre uma gaveta de erro: o botão fica desligado e diz por quê
+    const semFicha = !ct.id;
+    // CA-015: com a coluna estreita o protocolo some do cabeçalho (está na lateral e no atalho «Protocolo»); o title tem a linha inteira
+    const subTitulo = [ct.telefone ? ui.telBR(ct.telefone) : null, canal, conv.protocolo ? `protocolo ${conv.protocolo}` : null].filter(Boolean).join(" · ");
+    // plano 1000 · CA-112: no celular, tocar no nome abre a gaveta de Detalhes (com «Abrir ficha» lá dentro) — antes ia para outra tela
+    const celular = (() => { try { return matchMedia("(max-width: 760px)").matches; } catch { return false; } })();
+    const pelaGaveta = celular && A.raiz && A.raiz.dataset.lateral === "gaveta";
+    const quem = h("button", { type: "button", class: "cvc-quem", title: pelaGaveta ? `Detalhes do contato · ${subTitulo}` : semFicha ? "Contato removido: não há ficha para abrir" : `Abrir a ficha · ${subTitulo}`,
+      disabled: semFicha && !pelaGaveta, "aria-disabled": semFicha && !pelaGaveta ? "true" : null, dataset: { acao: "quem" }, "aria-haspopup": pelaGaveta ? "dialog" : null,
+      on: { click: () => { if (pelaGaveta) A.acoes.abrirDetalhes(); else if (!semFicha) A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }); } } },
       ui.avatar(nome, ct.id),
       h("span", { class: "cvc-quem-txt" },
         h("span", { class: "cvc-nome" }, nome),
@@ -174,7 +240,9 @@ export function criarChat(A) {
     // o aparelho do CodeWords não tem janela de 24 h: nada de «Janela aberta/fechada» nesse canal
     if (conv.status !== "resolvida" && L.canalTemJanela(provedorCanal)) {
       const pj = ui.pilula("", jan.nivel === "aberta" ? "ok" : jan.nivel === "acabando" ? "aten" : "ruim",
-        { icone: "relogio", class: "cv-janela", title: jan.ate ? `${jan.texto}. Até ${ui.dataHoraBR(jan.ate)}` : "O cliente ainda não mandou mensagem neste número" });
+        // plano 1000 · CA-089: fechada, o title explica sem jargão (a pílula continua curta)
+        { icone: "relogio", class: "cv-janela", title: !jan.aberta ? (conv.ultima_entrada_em ? L.JANELA_FECHADA_LONGO : L.JANELA_NUNCA_LONGO)
+          : jan.ate ? `${jan.texto}. Até ${ui.dataHoraBR(jan.ate)}` : "O cliente ainda não mandou mensagem neste número" });
       pj.append(h("span", { class: "so-largo-txt" }, jan.texto), h("span", { class: "so-curto-txt" }, L.janelaCurta(jan)));
       // plano 50: barrinha com o que resta das 24 h (a cor acompanha a pílula)
       pj.appendChild(h("i", { class: "cv-janela-barra", "aria-hidden": "true", style: { "--pct": String(Math.round(L.fracaoJanela(jan) * 1000) / 1000) } }));
@@ -233,7 +301,11 @@ export function criarChat(A) {
     const acoes = h("div", { class: "cvc-acoes", role: "toolbar", "aria-label": "Ações do atendimento" });
     // o botão entra na barra ANTES de ganhar o atalho: a descrição da dica (sr-only) fica como irmã, não dentro do nome do botão
     if (est.primaria === "assumir_ia") {
-      const b = h("button", { type: "button", class: "bt bt-prim bt-p cvc-ia-acao", title: "Pausar a IA e assumir esta conversa", dataset: { acao: "assumir" } }, ui.icone("usuario"), "Assumir");
+      // CA-042: a conversa já é minha — «Assumir» de si mesmo confunde: o botão diz o que faz (pausa a IA para eu responder)
+      const b = h("button", { type: "button", class: "bt bt-prim bt-p cvc-ia-acao", title: minha ? "A conversa já é sua: pausa a IA para você responder" : "Pausar a IA e assumir esta conversa", dataset: { acao: "assumir" } },
+        ui.icone("usuario"), h("span", { class: "so-largo-txt" }, minha ? "Pausar IA e responder" : "Assumir (pausa a IA)"),
+        h("span", { class: "so-curto-txt" }, minha ? "Pausar IA" : "Assumir"));
+      b.setAttribute("aria-label", minha ? "Pausar a IA e responder" : "Assumir (pausa a IA)");
       b.addEventListener("click", () => A.acoes.assumirIA(b));
       acoes.appendChild(b); comAtalho(b, "assumir");
     } else if (est.primaria === "assumir") {
@@ -268,29 +340,41 @@ export function criarChat(A) {
       const itens = [];
       if (pode && conv.status !== "resolvida" && est.primaria !== "resolver") itens.push({ rotulo: "Resolver atendimento", icone: "check", fn: () => A.acoes.resolver() });
       if (pode && conv.status !== "resolvida" && !minha && est.primaria === "assumir_ia") itens.push({ rotulo: "Atribuir a mim (sem pausar a IA)", icone: "usuario", fn: () => A.acoes.assumir() });
+      // CA-227: pausar a IA por um tempo escolhido (o nx_cv_ia_pausar aceita p_horas; 0 = até alguém devolver)
+      if (pode && conv.status !== "resolvida" && est.primaria === "assumir_ia") {
+        itens.push({ rotulo: "Pausar a IA por 1 hora", icone: "relogio", fn: () => A.acoes.assumirIA(null, { horas: 1 }) });
+        itens.push({ rotulo: "Pausar a IA até amanhã às 8h", icone: "relogio", fn: () => A.acoes.assumirIA(null, { horas: L.horasAteAmanha8() }) });
+        itens.push({ rotulo: "Pausar a IA até eu devolver", icone: "relogio", fn: () => A.acoes.assumirIA(null, { horas: 0 }) });
+      }
       if (pode && est.devolverIA) itens.push({ rotulo: "Devolver para a IA", icone: "ia", fn: () => A.acoes.devolverIA() });
       if (pode) itens.push({ rotulo: "Transferir…", icone: "seta-dir", fn: () => A.acoes.transferir() });
       if (pode && conv.status === "aberta") itens.push({ rotulo: "Marcar como pendente", icone: "relogio", fn: () => A.acoes.status("pendente") });
       if (pode && conv.status === "pendente") itens.push({ rotulo: "Retomar (aberta)", icone: "chat", fn: () => A.acoes.status("aberta") });
-      if (pode && conv.atribuida_a) itens.push({ rotulo: "Devolver para a fila", icone: "seta-esq", fn: async () => {
-        try { const r = await A.api.rpcC("nx_cv_atribuir", { p_conversa: conv.id, p_conta: null, p_departamento: null }); if (r) { A.acoes.recarregarVer(); A.acoes.carregarLista({}); ui.toast("Conversa devolvida para a fila.", { tipo: "ok" }); } }
-        catch (e) { A.acoes.tratarErro(e); }
-      } });
+      // CA-008: «Devolver para a fila» tem Desfazer (como Transferir e Resolver): nada vai ao servidor antes de o aviso fechar
+      if (pode && conv.atribuida_a) itens.push({ rotulo: "Devolver para a fila", icone: "seta-esq", fn: () => A.acoes.devolverFila(conv) });
       if (pode) itens.push({ rotulo: "Etiquetas…", icone: "etiqueta", fn: () => abrirEtiquetas() });
       itens.push("-");
-      if (ct.telefone) itens.push({ rotulo: "Copiar telefone", icone: "copiar", fn: () => ui.copiar(ct.telefone, { aviso: "Telefone copiado." }) });
-      itens.push({ rotulo: "Abrir ficha", icone: "contato", fn: () => A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }) });
+      // plano 1000 · CA-080: o telefone vai no formato internacional (+55…), pronto para colar no discador ou no WhatsApp
+      if (ct.telefone) itens.push({ rotulo: "Copiar telefone", icone: "copiar", fn: () => ui.copiar(L.telefoneInternacional(ct.telefone), { aviso: `Telefone copiado: ${L.telefoneInternacional(ct.telefone)}` }) });
+      // CA-082: «Abrir ficha» saiu do ⋮ (o nome no cabeçalho e o botão do cartão já abrem) — fica «Detalhes» no modo gaveta
       if (A.raiz && A.raiz.dataset.lateral === "gaveta") itens.push({ rotulo: "Detalhes e negócios", icone: "info", fn: () => A.acoes.abrirDetalhes() });
+      // CA-231: os eventos do sistema (IA, transferências) podem virar um traço fino com a contagem
+      itens.push({ rotulo: mostrarSistema() ? "Eventos do sistema: à vista" : "Eventos do sistema: recolhidos", icone: "info", fn: () => definirSistema(!mostrarSistema()) });
+      // CA-232: a conversa inteira em texto (prontuário, registro) — sem notas internas
+      if (typeof A.acoes.exportar === "function") itens.push({ rotulo: "Exportar conversa (.txt)", icone: "baixar", fn: () => A.acoes.exportar() });
       if (pode) itens.push({ rotulo: A.acoes.avancarAoResolver() ? "Ao resolver, abrir a próxima: ligado" : "Ao resolver, abrir a próxima: desligado",
         icone: A.acoes.avancarAoResolver() ? "check" : "seta-dir", fn: () => A.acoes.definirAvancar(!A.acoes.avancarAoResolver()) });
-      itens.push({ rotulo: "Atalhos de teclado", icone: "info", fn: () => A.acoes.abrirAjudaTeclado() });
+      // CA-018: no aparelho de toque não há teclado: a folha de atalhos não entra no menu
+      if (!L.aparelhoDeToque()) itens.push({ rotulo: "Atalhos de teclado", icone: "info", fn: () => A.acoes.abrirAjudaTeclado() });
       if (A.acoes.pode("supervisor")) {
         itens.push("-");
         itens.push(conv.oculta
           ? { rotulo: "Desfazer bloqueio", icone: "check", fn: () => A.acoes.ocultar(false) }
           : { rotulo: "Ocultar e bloquear (spam)", icone: "alerta", perigo: true, fn: () => A.acoes.ocultar(true) });
       }
-      ui.menu(mais, itens);
+      // plano 1000 · CA-111: no toque, folha de baixo em grupos («Atendimento» · «Contato») no lugar do popover de 13 itens que encostava no campo
+      if (L.aparelhoDeToque()) abrirFolha(mais, itens, ["Atendimento", "Contato", "Bloqueio"]);
+      else ui.menu(mais, itens);
     });
     acoes.appendChild(mais);
     const acertarBarra = ligarBarra(acoes);
@@ -304,6 +388,43 @@ export function criarChat(A) {
     }
   }
 
+  /** CA-111: folha de baixo (celular) com os itens do ⋮ em grupos; "-" separa os grupos. Esc, tocar fora e Voltar fecham; o foco volta ao ⋮. */
+  let folhaAberta = null;
+  function abrirFolha(ancora, itens, nomes = []) {
+    if (folhaAberta) { try { folhaAberta.fechar(); } catch { /* ok */ } }
+    const grupos = [[]];
+    for (const it of itens.filter(Boolean)) { if (it === "-") grupos.push([]); else grupos[grupos.length - 1].push(it); }
+    let fechado = false, camada = null;
+    const dlg = h("dialog", { class: "cv-folha", "aria-label": "Mais ações" });
+    const fechar = (voltarFoco = true) => {
+      if (fechado) return; fechado = true;
+      if (camada) try { camada.liberar(); } catch { /* ok */ }
+      try { dlg.close(); } catch { /* ok */ }
+      dlg.remove();
+      if (folhaAberta && folhaAberta.el === dlg) folhaAberta = null;
+      if (voltarFoco && ancora && ancora.isConnected) try { ancora.focus({ preventScroll: true }); } catch { /* ok */ }
+    };
+    const corpoF = h("div", { class: "cv-folha-corpo" },
+      grupos.filter(g => g.length).map((g, i) => h("section", { class: "cv-folha-grupo", "aria-label": nomes[i] || "Ações" },
+        h("h3", { class: "rotulo" }, nomes[i] || "Mais"),
+        g.map(it => {
+          const b = h("button", { type: "button", class: ["cv-folha-item", it.perigo && "perigo"], disabled: !!it.desabilitado }, it.icone ? ui.icone(it.icone) : null, h("span", null, it.rotulo));
+          b.addEventListener("click", () => { fechar(false); if (it.fn) it.fn(); });
+          return b;
+        }))));
+    dlg.append(h("div", { class: "cv-folha-pega", "aria-hidden": "true" }), corpoF,
+      h("button", { type: "button", class: "bt bt-sec cv-folha-x", on: { click: () => fechar() } }, "Fechar"));
+    dlg.addEventListener("cancel", ev => { ev.preventDefault(); fechar(); });
+    dlg.addEventListener("click", ev => { if (ev.target === dlg) fechar(); });
+    document.body.appendChild(dlg);
+    try { dlg.showModal(); } catch { dlg.setAttribute("open", ""); }
+    if (ui.camadas && typeof ui.camadas.abrir === "function") { try { camada = ui.camadas.abrir(() => fechar()); } catch { camada = null; } }
+    const primeiro = dlg.querySelector(".cv-folha-item:not([disabled])");
+    if (primeiro) try { primeiro.focus({ preventScroll: true }); } catch { /* ok */ }
+    folhaAberta = { el: dlg, fechar };
+    return folhaAberta;
+  }
+
   /** Atalho da ação na barra (38): aria-keyshortcuts + etiqueta <kbd> que aparece no hover/foco (ui.dica quando a frente A oferecer). */
   function comAtalho(b, comando) {
     const teclas = L.atalhoDe(comando);
@@ -311,7 +432,9 @@ export function criarChat(A) {
     b.setAttribute("aria-keyshortcuts", L.ariaKeyshortcuts(teclas));
     const rot = b.getAttribute("aria-label") || b.title || b.textContent.trim();
     const texto = `${rot} (${teclas})`;
-    // com a dica da frente A o atalho já aparece no tooltip (hover + foco); sem ela, a etiqueta <kbd> sob o botão faz esse papel
+    // com a dica da frente A o atalho já aparece no tooltip (hover + foco); sem ela, a etiqueta <kbd> sob o botão faz esse papel.
+    // CA-017: no toque a dica ficava presa por cima do que abria — lá não há teclado nem hover: nada de tooltip nem <kbd>
+    if (L.aparelhoDeToque()) return b;
     let comDica = false;
     if (typeof ui.dica === "function") { try { ui.dica(b, texto); comDica = true; } catch { comDica = false; } }
     if (!comDica) { b.title = texto; b.appendChild(h("kbd", { class: "cv-kbd", "aria-hidden": "true" }, teclas.replace("Shift", "⇧"))); }
@@ -389,15 +512,38 @@ export function criarChat(A) {
   const cache = new Map();   // chave → {el, sig}
   let ultimoRenderId = null;
 
-  function textoFormatado(s) {
+  /** Segmentos do formatarWhats viram nós (nunca HTML); CA-022: negrito/itálico/riscado com link dentro desenham o link aninhado. */
+  function nosFormatados(segs) {
     const frag = document.createDocumentFragment();
-    for (const seg of L.formatarWhats(s)) {
+    for (const seg of segs) {
+      const dentro = () => (seg.partes ? nosFormatados(seg.partes) : seg.v);
       if (seg.tipo === "texto") frag.appendChild(document.createTextNode(seg.v));
-      else if (seg.tipo === "link") frag.appendChild(h("a", { href: seg.v, target: "_blank", rel: "noopener noreferrer nofollow" }, seg.v));
-      else if (seg.tipo === "negrito") frag.appendChild(h("strong", null, seg.v));
-      else if (seg.tipo === "italico") frag.appendChild(h("em", null, seg.v));
-      else if (seg.tipo === "riscado") frag.appendChild(h("s", null, seg.v));
-      else if (seg.tipo === "mono") frag.appendChild(h("code", { class: "mono" }, seg.v));
+      else if (seg.tipo === "link") frag.appendChild(linkSeguro(seg.v));
+      else if (seg.tipo === "negrito") frag.appendChild(h("strong", null, dentro()));
+      else if (seg.tipo === "italico") frag.appendChild(h("em", null, dentro()));
+      else if (seg.tipo === "riscado") frag.appendChild(h("s", null, dentro()));
+      else if (seg.tipo === "mono") frag.appendChild(h("code", { class: seg.linha ? "mono cv-code" : "mono" }, seg.v));
+    }
+    return frag;
+  }
+  /** plano 1000 · CA-121: o link mostra para onde vai de verdade (o host como o navegador lê — domínio internacional em punycode) e
+      avisa encurtador; o ↗ diz que abre fora do Órbita. */
+  function linkSeguro(url) {
+    const d = L.destinoLink(url);
+    const title = !d ? "Abre fora do Órbita" : d.encurtador ? `Link encurtado (${d.host}): o destino real só aparece depois de abrir. Abra só se confia no remetente.`
+      : d.idn ? `Vai para ${d.host} — endereço com letras de outro alfabeto: confira antes de abrir.` : `Vai para ${d.host}`;
+    return h("a", { href: url, target: "_blank", rel: "noopener noreferrer nofollow", title, class: d && (d.encurtador || d.idn) ? "cv-link-aten" : null, dataset: d ? { host: d.host } : null },
+      url, h("span", { class: "cv-link-ext", "aria-hidden": "true" }, "↗"), d && (d.encurtador || d.idn) ? h("span", { class: "sr-only" }, ` (${title})`) : null);
+  }
+  /** CA-023: blocos de linha do WhatsApp (citação «> », listas «- » e «1. »); texto sem blocos fica como sempre foi. */
+  function textoFormatado(s) {
+    const blocos = L.blocosWhats(s);
+    if (blocos.length === 1 && blocos[0].tipo === "p") return nosFormatados(L.formatarWhats(s));
+    const frag = document.createDocumentFragment();
+    for (const b of blocos) {
+      if (b.tipo === "p") frag.appendChild(h("span", { class: "cv-par" }, nosFormatados(L.formatarWhats(b.texto))));
+      else if (b.tipo === "citacao") frag.appendChild(h("blockquote", { class: "cv-citacao" }, nosFormatados(L.formatarWhats(b.texto))));
+      else if (b.tipo === "lista") frag.appendChild(h(b.ordenada ? "ol" : "ul", { class: "cv-lista" }, b.itens.map(t => h("li", null, nosFormatados(L.formatarWhats(t))))));
     }
     return frag;
   }
@@ -409,10 +555,15 @@ export function criarChat(A) {
   }
 
   /** URL de uma mídia gravada ou local: {url, estado:"ok"|"buscando"|"erro"} (a mesma regra para bolha, grade e visualizador). */
+  /* CA-245: mídia de conversa oculta (contato bloqueado) só é pedida depois do toque em «Mostrar» */
+  const midiaLiberada = new Set();
+  function bloqueada(path) { return !!(A.ver && A.ver.conversa && A.ver.conversa.oculta) && !!path && !midiaLiberada.has(path); }
+  function liberarMidia(path) { if (path) midiaLiberada.add(path); renderMensagens({ rolar: "manter" }); }
   function resolverUrl(md) {
     const local = md && md.local_url && /^blob:/.test(md.local_url) ? md.local_url : null;
     if (local) return { url: local, estado: "ok" };
     if (!md || !md.path) return { url: null, estado: "erro" };
+    if (bloqueada(md.path)) return { url: null, estado: "oculta" };
     const c = A.midia.get(md.path);
     if (c && c.local) return { url: c.local, estado: "ok" };
     const url = A.acoes.urlMidia(md.path);
@@ -599,10 +750,21 @@ export function criarChat(A) {
     const local = md.local_url && /^blob:/.test(md.local_url) ? md.local_url : null;
     const estado = md.estado || (md.path ? "ok" : local ? "ok" : "indisponivel");
     if (!local && (estado === "baixando")) return h("div", { class: "cv-midia-sk", role: "status" }, "Baixando mídia…");
+    // plano 1000 · SV-057: o arquivo foi apagado pelo painel (nx_midia_apagada tira o path) — não é falha do WhatsApp
+    if (!local && estado === "apagada") {
+      return h("div", { class: "cv-midia-off" }, ui.icone("alerta"),
+        h("span", null, h("b", null, "Arquivo apagado. "), "Esta mídia foi apagada do armazenamento da empresa; a mensagem continua no histórico."));
+    }
     if (!local && (estado === "falhou" || estado === "indisponivel" || (!md.path && estado === "ok"))) {
       return h("div", { class: "cv-midia-off" }, ui.icone("alerta"),
         h("span", null, h("b", null, "Mídia indisponível. "),
           estado === "indisponivel" ? "O número ainda não tem acesso para baixar arquivos do WhatsApp." : "O WhatsApp não entregou o arquivo — peça para o cliente reenviar, se precisar."));
+    }
+    // plano 1000 · CA-245: conversa oculta (contato bloqueado, spam): a mídia só é pedida ao servidor quando a pessoa toca em «Mostrar»
+    if (!local && md.path && bloqueada(md.path)) {
+      return h("div", { class: "cv-midia-off cv-midia-oculta" }, ui.icone("alerta"),
+        h("span", null, "Mídia de contato bloqueado: não abre sozinha. ",
+          h("button", { type: "button", class: "link cv-midia-mostrar", on: { click: () => liberarMidia(md.path) } }, "Mostrar mídia de contato bloqueado")));
     }
     let url = local;
     if (!url && md.path) {
@@ -618,17 +780,42 @@ export function criarChat(A) {
       }
     }
     if (m.tipo === "imagem" || m.tipo === "sticker") {
-      const img = h("img", { on: { load: aposMidiaCarregar }, src: url, alt: m.tipo === "sticker" ? "Figurinha" : (m.direcao === "in" ? "Foto recebida" : "Foto enviada"), loading: "lazy", decoding: "async" });
+      // CA-086: espaço reservado enquanto a foto carrega (as dimensões do servidor quando vierem; senão 4:3) — a conversa não pula
+      const w = Number(md.largura), a = Number(md.altura);
+      const dims = w > 0 && a > 0 ? { width: String(w), height: String(a), style: { "aspect-ratio": `${w} / ${a}` } } : {};
+      const img = h("img", { on: { load: ev => { if (ev && ev.currentTarget && ev.currentTarget.dataset) ev.currentTarget.dataset.ok = "1"; aposMidiaCarregar(); } }, src: url,
+        alt: m.tipo === "sticker" ? "Figurinha" : (m.direcao === "in" ? "Foto recebida" : "Foto enviada"), loading: "lazy", decoding: "async", ...dims, dataset: dims.width ? { dims: "1" } : null });
       aoFalharMidia(img, md.path);
       if (m.tipo === "sticker") return h("div", { class: "cv-midia cv-sticker" }, img);
       return h("div", { class: "cv-midia" }, h("button", { type: "button", class: "cv-img-bt", "aria-label": "Ampliar foto", on: { click: () => abrirVisualizador(m) } }, img));
     }
-    if (m.tipo === "video") { const v = h("video", { src: url, controls: true, preload: "metadata", playsinline: true }); aoFalharMidia(v, md.path); return h("div", { class: "cv-midia" }, v); }
+    if (m.tipo === "video") {
+      // CA-140: o vídeo não aparece mais preto e mudo — ▶ e a duração (quando o servidor manda) por cima, até a pessoa tocar
+      const dur = Number(md.duracao) > 0 ? L.formatarDuracao(md.duracao) : "";
+      const v = h("video", { src: url, controls: true, preload: "metadata", playsinline: true, "aria-label": dur ? `Vídeo de ${dur}` : "Vídeo" });
+      aoFalharMidia(v, md.path);
+      const selo = h("span", { class: "cv-video-selo dado", "aria-hidden": "true" }, "▶ ", dur || "Vídeo");
+      v.addEventListener("play", () => { selo.hidden = true; });
+      return h("div", { class: "cv-midia cv-video" }, v, selo);
+    }
     if (m.tipo === "audio") return blocoAudio(m, url, md);
-    const doc = h(local ? "div" : "a", local ? { class: "cv-doc" } : { class: "cv-doc", href: url, target: "_blank", rel: "noopener noreferrer", download: nome || "" },
+    // CA-119: documento recebido de tipo incomum (.apk, .exe, .html, .svg…) nunca abre direto numa aba: aviso e download forçado
+    const incomum = !local && m.direcao === "in" && L.documentoIncomum(nome, md.mime);
+    // CA-141: PDF abre para ver (nova aba, sem baixar) e o «Baixar» fica ao lado
+    const pdf = !local && !incomum && (String(md.mime || "").toLowerCase() === "application/pdf" || /[.]pdf$/i.test(String(nome || "")));
+    const doc = h(local ? "div" : "a", local ? { class: "cv-doc" }
+      : incomum ? { class: "cv-doc cv-doc-incomum", href: url, rel: "noopener noreferrer", download: nome || "arquivo", title: "Arquivo de tipo incomum: baixe só se confia no remetente" }
+        : pdf ? { class: "cv-doc", href: url, target: "_blank", rel: "noopener noreferrer", title: "Ver o PDF numa nova aba" }
+          : { class: "cv-doc", href: url, target: "_blank", rel: "noopener noreferrer", download: nome || "" },
       h("span", { class: "cv-doc-ic", "aria-hidden": "true", dataset: { doc: L.grupoDocumento(nome, md.mime) } }, extensao(nome, md.mime)),
-      h("span", { class: "cv-doc-txt" }, h("b", null, nome || "Documento"), h("small", null, [L.tamanhoLegivel(md.tamanho), local ? "enviando…" : "Baixar"].filter(Boolean).join(" · "))));
-    return doc;
+      h("span", { class: "cv-doc-txt" }, h("b", null, nome || "Documento"), h("small", null, [L.tamanhoLegivel(md.tamanho), local ? "enviando…" : pdf ? "Ver" : "Baixar"].filter(Boolean).join(" · "))));
+    if (pdf) {
+      return h("div", { class: "cv-doc-cx" }, doc, h("div", { class: "cv-doc-acoes" },
+        h("a", { class: "bt bt-fant bt-p cv-doc-ver", href: url, target: "_blank", rel: "noopener noreferrer", "aria-label": `Ver ${nome || "o PDF"}` }, ui.icone("olho"), "Ver"),
+        h("a", { class: "bt bt-fant bt-p cv-doc-baixar", href: url, rel: "noopener noreferrer", download: nome || "documento.pdf", "aria-label": `Baixar ${nome || "o PDF"}` }, A.icone("baixar"), "Baixar")));
+    }
+    if (!incomum) return doc;
+    return h("div", { class: "cv-doc-cx" }, doc, h("p", { class: "cv-doc-aviso", role: "note" }, ui.icone("alerta"), "Arquivo de tipo incomum — baixe só se confia no remetente."));
   }
 
   /* ---------------- grade de fotos (32): várias fotos seguidas do mesmo remetente viram UMA bolha com miniaturas */
@@ -638,6 +825,9 @@ export function criarChat(A) {
     const celulas = lista.map((m, k) => {
       const r = resolverUrl(m.midia || {});
       const rot = `Ampliar foto ${k + 1} de ${lista.length}`;
+      if (r.estado === "oculta") {
+        return h("button", { type: "button", class: "cv-grade-cel cv-midia-sk cv-midia-mostrar", dataset: { id: m.id }, on: { click: () => liberarMidia(m.midia && m.midia.path) } }, "Mostrar");
+      }
       if (!r.url) {
         return h("div", { class: "cv-grade-cel cv-midia-sk", role: "status", dataset: { id: m.id } }, r.estado === "erro" ? "Sem acesso" : "Carregando…");
       }
@@ -654,13 +844,29 @@ export function criarChat(A) {
 
   /* ---------------- linha do tempo do sistema (37): eventos seguidos (IA, transferências, atribuições) num bloco recolhível */
   const gruposAbertos = new Set();
+  /* CA-231: «Eventos do sistema» à vista (padrão) ou recolhidos num traço fino com a contagem — preferência por navegador */
+  function mostrarSistema() { return !(typeof A.acoes.mostrarSistema === "function" && A.acoes.mostrarSistema() === false); }
+  function definirSistema(sim) {
+    if (typeof A.acoes.definirMostrarSistema === "function") A.acoes.definirMostrarSistema(!!sim);
+    renderMensagens({ rolar: "manter" });
+    ui.anunciar(sim ? "Eventos do sistema à vista." : "Eventos do sistema recolhidos.");
+  }
+  /** O traço fino no lugar dos eventos (preferência desligada): tocar mostra de novo. */
+  function linhaSistemaFina(msgsSis) {
+    const n = msgsSis.length;
+    return h("div", { class: "cv-sis-fino", dataset: { id: msgsSis[0].id, n: String(n) } },
+      h("button", { type: "button", class: "cv-sis-fino-bt", title: L.rotuloGrupoSistema(msgsSis), on: { click: () => definirSistema(true) } },
+        `${n} ${n === 1 ? "evento" : "eventos"} do sistema · mostrar`));
+  }
   function construirGrupoSistema(ln) {
     const lista = ln.msgs, ult = lista[lista.length - 1];
+    if (!mostrarSistema()) return linhaSistemaFina(lista);
     const det = h("details", { class: "cv-sis-grupo", dataset: { id: lista[0].id, n: String(lista.length) } });
     if (gruposAbertos.has(ln.chave)) det.open = true;
     det.addEventListener("toggle", () => { if (det.open) gruposAbertos.add(ln.chave); else gruposAbertos.delete(ln.chave); });
     det.append(
-      h("summary", { class: "cv-sis-sum" },
+      // CA-115: o leitor de tela ouve «4 eventos do sistema, último: IA pausada às 14:02» (antes os dois spans colados, sem pausa)
+      h("summary", { class: "cv-sis-sum", "aria-label": L.rotuloGrupoSistema(lista) },
         h("span", { class: "cv-sis-resumo" }, A.icone(L.iconeSistema(ult.corpo)), L.resumoGrupoSistema(lista)),
         h("span", { class: "cv-sis-ult" }, ult.corpo || "", h("time", { datetime: ult.criado_em }, ` · ${L.horaMsg(ult.criado_em)}`))),
       h("ol", { class: "cv-sis-lista", "aria-label": "Eventos do sistema" }, lista.map(m => h("li", { dataset: { id: m.id, icone: L.iconeSistema(m.corpo) } },
@@ -674,14 +880,17 @@ export function criarChat(A) {
     const pct = Math.max(0, Math.min(100, Number(md.progresso) || 0));
     const entregando = md.fase === "entregando";
     const cancelavel = !entregando && A.acoes.podeCancelarEnvio(m);
-    return h("div", { class: "cv-prog", role: "progressbar", "aria-label": "Enviando arquivo", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct) },
+    // plano 1000 · CA-116: a fase vai em aria-valuetext («62 %» / «Entregando ao WhatsApp»)
+    return h("div", { class: "cv-prog", role: "progressbar", "aria-label": "Enviando arquivo", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct),
+      "aria-valuetext": entregando ? "Entregando ao WhatsApp" : `${pct} %` },
       h("span", { class: "cv-prog-barra", "aria-hidden": "true" }, h("i", { style: { width: `${pct}%` } })),
       h("span", { class: "cv-prog-txt dado" }, entregando ? "Entregando…" : `${pct} %`),
       cancelavel ? h("button", { type: "button", class: "bt bt-fant bt-p cv-prog-cancel", on: { click: () => A.acoes.cancelarEnvio(m) } }, "Cancelar") : null);
   }
 
   function rodape(m) {
-    const r = h("div", { class: "cv-rodape" }, h("time", { datetime: m.criado_em }, L.horaMsg(m.criado_em)));
+    // CA-033: a hora curta tem a data por extenso no title (conversas longas, de vários dias)
+    const r = h("div", { class: "cv-rodape" }, h("time", { datetime: m.criado_em, title: L.dataLonga(m.criado_em) || null }, L.horaMsg(m.criado_em)));
     if (m.direcao === "out" && m.tipo !== "nota") { r.append(h("span", { class: "cv-st" }), h("span", { class: "cv-st-txt" })); pintarStatus(r, m); }
     return r;
   }
@@ -701,6 +910,29 @@ export function criarChat(A) {
     return true;
   }
 
+  /** CA-143: mensagem que a API não entrega — no CodeWords dá para ver no aparelho; na Meta não há celular: pedir em texto. */
+  function textoNaoSuportada(corpo) {
+    const cw = A.ver && A.ver.conversa && A.ver.conversa.canal && A.ver.conversa.canal.provedor === "codewords";
+    const padrao = !corpo || /veja no celular/i.test(String(corpo));
+    if (cw) return corpo || "Mensagem não suportada pela API do WhatsApp — veja no celular";
+    return padrao ? "O WhatsApp não entrega este tipo de mensagem (enquete, evento…). Peça ao cliente para mandar em texto." : corpo;
+  }
+  /** CA-142: «Abrir no mapa» (Google Maps com as coordenadas) — sem coordenadas, só o texto que já está na bolha. */
+  function blocoLocalizacao(m) {
+    const loc = L.localizacaoDe(m.corpo);
+    if (!loc) return null;
+    const url = `https://maps.google.com/?q=${encodeURIComponent(`${loc.lat},${loc.lng}`)}`;
+    return h("div", { class: "cv-msg-extra" }, h("a", { class: "bt bt-sec bt-p cv-mapa", href: url, target: "_blank", rel: "noopener noreferrer", "aria-label": `Abrir no mapa${loc.nome ? `: ${loc.nome}` : ""}` }, ui.icone("globo"), "Abrir no mapa"));
+  }
+  function blocoContatos(m) {
+    const lista = L.contatosDe(m.corpo);
+    if (!lista.length) return null;
+    return h("div", { class: "cv-msg-extra" }, lista.slice(0, 3).map(c => h("div", { class: "cv-contato-rec" },
+      h("span", { class: "cv-contato-rec-nome" }, c.nome || ui.telBR(c.telefone)),
+      h("button", { type: "button", class: "bt bt-fant bt-p", "aria-label": `Copiar o telefone de ${c.nome || "contato"}`, on: { click: () => ui.copiar(L.telefoneInternacional(c.telefone), { aviso: `Telefone copiado: ${L.telefoneInternacional(c.telefone)}` }) } }, ui.icone("copiar"), "Copiar telefone"),
+      A.podeEscrever ? h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.novaConversa({ telefone: c.telefone, nome: c.nome }) } }, ui.icone("chat"), "Nova conversa") : null)));
+  }
+
   function quemEnviou(m) {
     if (m.direcao !== "out" || m.tipo === "nota") return null;
     const cw = A.ver?.conversa?.canal?.provedor === "codewords";
@@ -716,13 +948,16 @@ export function criarChat(A) {
   function construirMsg(ln) {
     const m = ln.msg;
     if (m.tipo === "sistema") {
+      if (!mostrarSistema()) return linhaSistemaFina([m]);
       const ic = L.iconeSistema(m.corpo);
       return h("div", { class: "cv-sis", dataset: { id: m.id, icone: ic } }, h("span", null, A.icone(ic, "cv-sis-ic"), m.corpo || "", h("time", { datetime: m.criado_em }, ` · ${L.horaMsg(m.criado_em)}`)));
     }
     const dir = m.direcao === "in" ? "in" : "out";
     const bolha = h("div", { class: "cv-bolha" });
     if (m.tipo === "nota") {
-      bolha.appendChild(h("div", { class: "cv-nota-rot" }, ui.icone("nota"), `Nota interna · ${(m.enviado_por && m.enviado_por.nome) || "equipe"}`));
+      // plano 1000 · CA-153: cadeado e «Só a equipe» à vista (no tema escuro a cor sozinha não bastava para saber que não foi ao cliente)
+      bolha.appendChild(h("div", { class: "cv-nota-rot" }, ui.icone("cadeado"), `Nota interna · ${(m.enviado_por && m.enviado_por.nome) || "equipe"}`,
+        h("span", { class: "cv-nota-so" }, "Só a equipe")));
     }
     if (m.referral && dir === "in") {
       const ref = m.referral;
@@ -734,19 +969,25 @@ export function criarChat(A) {
     }
     if (m.responde_a) {
       const ra = m.responde_a;
-      const cita = h("button", { type: "button", class: "cv-cita", dataset: { dir: ra.direcao === "in" ? "in" : "out" }, on: { click: () => destacar(ra.id) } },
+      // CA-009: citação de mensagem que não está carregada vai buscá-la (páginas anteriores) e só então destaca
+      const cita = h("button", { type: "button", class: "cv-cita", dataset: { dir: ra.direcao === "in" ? "in" : "out" }, on: { click: () => irParaCitada(ra.id) } },
         h("b", null, ra.direcao === "in" ? A.acoes.nomeContato(A.ver && A.ver.contato) || "Cliente" : "Você"), ra.resumo || "Mensagem");
       bolha.appendChild(cita);
     }
     if (["imagem", "video", "audio", "documento", "sticker"].includes(m.tipo)) bolha.appendChild(blocoMidia(m));
     if (m.local && m.status === "pendente" && m.midia && m.midia.estado === "enviando") bolha.appendChild(blocoProgresso(m));
-    const texto = m.tipo === "desconhecido" ? (m.corpo || "Mensagem não suportada pela API do WhatsApp — veja no celular") : m.corpo;
+    // CA-143: «veja no celular» só vale no CodeWords (aparelho); na Meta não há celular — o texto diz o que fazer
+    const texto = m.tipo === "desconhecido" ? textoNaoSuportada(m.corpo) : m.corpo;
     if (texto) {
       const t = h("div", { class: ["cv-texto", m.tipo === "desconhecido" && "cv-texto-fraco"] }, textoFormatado(texto));
       bolha.appendChild(t);
     }
+    // CA-142: localização com «Abrir no mapa»; contato com «Copiar telefone» e «Nova conversa»
+    if (m.tipo === "localizacao") { const x = blocoLocalizacao(m); if (x) bolha.appendChild(x); }
+    if (m.tipo === "contato") { const x = blocoContatos(m); if (x) bolha.appendChild(x); }
     bolha.appendChild(rodape(m));
-    if (m.reacao) bolha.appendChild(h("span", { class: "cv-reacao", title: "Reação do cliente" }, m.reacao));
+    // CA-034: a reação tem nome para o leitor de tela (não só o emoji solto)
+    if (m.reacao) bolha.appendChild(h("span", { class: "cv-reacao", role: "img", title: "Reação do cliente", "aria-label": `Reação do cliente: ${m.reacao}` }, m.reacao));
 
     const quem = !ln.junta ? quemEnviou(m) : null;
     const box = h("div", { class: ["cv-msg", m.local && "cv-local-env"], dataset: { id: m.id, dir, tipo: m.tipo, junta: ln.junta ? "1" : "0", cauda: ln.cauda === false ? "0" : "1" } },
@@ -759,18 +1000,27 @@ export function criarChat(A) {
         on: { click: () => A.composer.responder(m) } }, A.icone("responder")));
       itensMenu.push({ rotulo: "Responder", icone: "responder", fn: () => A.composer.responder(m) });
     }
+    // CA-144: no número do CodeWords (aparelho) não existe responder citando — o menu de toque diz isso em vez de a opção sumir sem explicação
+    const semCitacao = A.podeEscrever && !m.local && m.tipo !== "nota" && !m.wamid && m.tipo !== "sistema" && A.ver && A.ver.conversa && A.ver.conversa.canal && A.ver.conversa.canal.provedor === "codewords";
+    if (semCitacao) itensMenu.push({ rotulo: "Responder citando (este número não envia citação)", icone: "responder", desabilitado: true });
     if (m.corpo && m.tipo !== "desconhecido" && A.acoes.copiarTexto) {
       acoesMsg.appendChild(h("button", { type: "button", class: "bt-icone cv-copiar", "aria-label": "Copiar o texto da mensagem", title: "Copiar texto",
         on: { click: () => A.acoes.copiarTexto(m) } }, ui.icone("copiar")));
       itensMenu.push({ rotulo: "Copiar texto", icone: "copiar", fn: () => A.acoes.copiarTexto(m) });
     }
+    let toque = false;
+    try { toque = matchMedia("(pointer: coarse)").matches; } catch { toque = false; }
     if (acoesMsg.childNodes.length) {
       box.appendChild(acoesMsg);
-      let toque = false;
-      try { toque = matchMedia("(pointer: coarse)").matches; } catch { toque = false; }
       if (toque && typeof ui.toqueLongo === "function" && typeof ui.menu === "function") {
         try { ui.toqueLongo(bolha, () => ui.menu(bolha, itensMenu)); } catch { /* sem toque longo a barra lateral continua valendo */ }
       }
+    } else if (semCitacao && toque && typeof ui.toqueLongo === "function" && typeof ui.menu === "function") {
+      try { ui.toqueLongo(bolha, () => ui.menu(bolha, itensMenu)); } catch { /* ok */ }
+    }
+    // CA-110: no toque as setas somem (CSS) e deslizar a bolha para a direita responde citando, como no WhatsApp
+    if (toque && A.podeEscrever && !m.local && m.tipo !== "nota" && m.wamid && typeof ui.deslizar === "function") {
+      try { ui.deslizar(bolha, { direita: () => A.composer.responder(m) }); } catch { /* sem gesto: o toque longo responde */ }
     }
     // M36: a fila de saída — "Na fila", "tentando de novo" (prazo estourado: o servidor não deixa sair em dobro) e a falha definitiva logo abaixo
     if (m.local && (m.filaEstado === "fila" || m.filaEstado === "incerto")) {
@@ -825,7 +1075,7 @@ export function criarChat(A) {
     const urlOk = md.path ? A.acoes.estadoMidia(md.path) : "";
     const fila = m.local && m.filaEstado === "fila" && typeof A.acoes.estadoEnviarAgora === "function" ? A.acoes.estadoEnviarAgora(m).motivo : "";
     return [m.status === "falhou" ? "falhou" : "-", m.erro, m.ambigua, fila, m.local && m.pedido && m.pedido.client_ref ? 1 : 0, m.filaEstado, m.filaProxima, !m.local && m.status === "falhou" && A.acoes.foiReenviada(m) ? 1 : 0, m.origem, m.reacao, ln.junta, md.estado, md.progresso, md.fase, m.local && A.acoes.podeCancelarEnvio(m) ? 1 : 0, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
-      m.responde_a && m.responde_a.id, m.enviado_por && m.enviado_por.nome].join("|");
+      m.responde_a && m.responde_a.id, m.enviado_por && m.enviado_por.nome, md.path && bloqueada(md.path) ? 1 : 0, m.tipo === "sistema" && !mostrarSistema() ? "fino" : ""].join("|");
   }
 
   function construirLinha(ln) {
@@ -846,8 +1096,8 @@ export function criarChat(A) {
     if (ln.tipo === "msg") return `${assinatura(ln)}|${ln.cauda === false ? 0 : 1}`;
     if (ln.tipo === "dia") return ln.rotulo;
     if (ln.tipo === "atendimento") return `${ln.conversa.protocolo}|${ln.conversa.aberta_em}`;
-    if (ln.tipo === "grade") return `g|${ln.junta ? 1 : 0}|${ln.cauda ? 1 : 0}|${ln.msgs.map(m => `${m.id}:${m.status}:${m.midia && m.midia.path ? A.acoes.estadoMidia(m.midia.path) : "l"}`).join(",")}`;
-    if (ln.tipo === "sistema_grupo") return `s|${ln.msgs.map(m => `${m.id}:${m.corpo}`).join("|")}`;
+    if (ln.tipo === "grade") return `g|${ln.junta ? 1 : 0}|${ln.cauda ? 1 : 0}|${ln.msgs.map(m => `${m.id}:${m.status}:${m.midia && m.midia.path ? `${A.acoes.estadoMidia(m.midia.path)}${bloqueada(m.midia.path) ? "!" : ""}` : "l"}`).join(",")}`;
+    if (ln.tipo === "sistema_grupo") return `s|${mostrarSistema() ? 1 : 0}|${ln.msgs.map(m => `${m.id}:${m.corpo}`).join("|")}`;
     return ln.tipo;
   }
 
@@ -888,8 +1138,13 @@ export function criarChat(A) {
       ordem.push(x.el);
     }
     for (const [k, x] of cache) if (!vivos.has(k)) { x.el.remove(); cache.delete(k); }
-    for (const n of [...trilho.children]) if (!ordem.includes(n)) n.remove();
-    ordem.forEach((node, i) => { if (trilho.children[i] !== node) trilho.insertBefore(node, trilho.children[i] || null); });
+    // CA-095: com 2.000 mensagens a checagem era quadrática (ordem.includes); com o Set é linear, e só reposiciona do 1º nó fora do lugar
+    const naOrdem = new Set(ordem);
+    for (const n of [...trilho.children]) if (!naOrdem.has(n)) n.remove();
+    const filhos = trilho.children;
+    let i0 = 0;
+    while (i0 < ordem.length && filhos[i0] === ordem[i0]) i0++;
+    for (let i = i0; i < ordem.length; i++) { const node = ordem[i]; if (trilho.children[i] !== node) trilho.insertBefore(node, trilho.children[i] || null); }
     if (!linhas.length) {
       ui.limpar(trilho);
       trilho.appendChild(h("div", { class: "cvc-trilho-vazio" }, ui.vazio({ titulo: "Nenhuma mensagem ainda neste atendimento.", texto: "O que o cliente mandar e o que a equipe responder aparece aqui.", icone: "chat", tema: "conversas" })));
@@ -898,6 +1153,18 @@ export function criarChat(A) {
     const ult = A.L.ultimoId(A.msgs);
     if (rolar === "fim" || (rolar === "novas" && estavaNoFim)) grudarFimAte = Date.now() + 2500;
     if (rolar === "fim") requestAnimationFrame(() => rolarFim(false));
+    else if (rolar === "separador") {
+      // CA-087: muitas não lidas — a conversa abre no separador «Mensagens novas» (lendo de cima) e a pílula leva ao fim
+      grudarFimAte = 0;
+      requestAnimationFrame(() => {
+        const sep = trilho.querySelector(".cv-novas-sep");
+        if (!sep) { rolarFim(false); return; }
+        try { sep.scrollIntoView({ block: "start" }); } catch { /* ok */ }
+        novasTxt.textContent = "Ir para o fim";
+        novas.hidden = false;
+        vigiarUltima();
+      });
+    }
     else if (rolar === "anterior") msgs.scrollTop = topoAntes + (msgs.scrollHeight - alturaAntes);
     else if (rolar === "novas") {
       if (estavaNoFim) requestAnimationFrame(() => rolarFim(true));
@@ -907,9 +1174,10 @@ export function criarChat(A) {
         const n = L.contarNovasEntradas(A.msgs, novasDesde);
         novasTxt.textContent = n > 0 ? `${n} ${n === 1 ? "nova mensagem" : "novas mensagens"}` : "Novas mensagens";
         novas.hidden = false;
+        vigiarUltima();
       }
     }
-    if (novas.hidden) novasDesde = null;
+    if (novas.hidden) { novasDesde = null; if (vigiando) pararDeVigiar(); }
     ultimoRenderId = ult;
   }
   let novasDesde = null;
@@ -929,11 +1197,21 @@ export function criarChat(A) {
     if (alvoOk && typeof ui.checkSucesso === "function") { try { ui.checkSucesso(alvoOk, { texto }); } catch { /* sem o ✓, o aviso continua */ } }
   }
 
-  function destacar(id) {
+  function bolhaDe(id) {
     const direto = trilho.querySelector(`.cv-msg[data-id="${escaparSel(id)}"]`);
     const naGrade = !direto && trilho.querySelector(`.cv-grade-bt[data-id="${escaparSel(id)}"]`);
-    const alvo = direto || (naGrade && naGrade.closest ? naGrade.closest(".cv-msg") : null);
-    if (!alvo) { ui.toast("Essa mensagem é mais antiga — role para cima para carregar.", { tipo: "info" }); return; }
+    return direto || (naGrade && naGrade.closest ? naGrade.closest(".cv-msg") : null);
+  }
+  /** CA-009: a citação aponta para uma mensagem já na tela (destaca) ou mais antiga (a central carrega as páginas anteriores até achar). */
+  function irParaCitada(id) {
+    if (bolhaDe(id) || typeof A.acoes.irParaMensagem !== "function") { destacar(id); return; }
+    ui.anunciar("Procurando a mensagem citada…");
+    topoHist.dataset.procurando = "1";
+    Promise.resolve(A.acoes.irParaMensagem(id)).finally(() => { delete topoHist.dataset.procurando; });
+  }
+  function destacar(id) {
+    const alvo = bolhaDe(id);
+    if (!alvo) { ui.toast("Não achamos essa mensagem nas mais recentes. Ela pode ser de um atendimento antigo deste contato.", { tipo: "info" }); return; }
     alvo.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     alvo.dataset.destaque = "1";
     setTimeout(() => { delete alvo.dataset.destaque; }, 1600);
@@ -944,22 +1222,33 @@ export function criarChat(A) {
     players.clear();
     clearTimeout(tLiberarEnvio); tLiberarEnvio = null; liberarEm = 0;
     sigCab = null;
+    // CA-006: o desenho inicial não é «adição» para o leitor de tela — a região fica ocupada e só volta a falar no próximo quadro;
+    // no lugar do histórico inteiro, uma frase curta diz qual conversa abriu
+    msgs.setAttribute("aria-busy", "true");
     ui.limpar(trilho);
     ultimoRenderId = null;
-    novas.hidden = true; novasDesde = null;
+    novas.hidden = true; novasDesde = null; pararDeVigiar();
     gruposAbertos.clear();
     if (visualizador) { try { visualizador.fechar(); } catch { /* ok */ } }
     renderCabecalho();
     if (A.composer.el.parentNode !== el) el.appendChild(A.composer.el);
     modo("conversa");
     renderMensagens({ rolar });
+    requestAnimationFrame(() => { if (!A.destruido) msgs.setAttribute("aria-busy", "false"); });
+    const conv = A.ver && A.ver.conversa;
+    if (conv) {
+      const nome = A.acoes.nomeContato(A.ver.contato || conv.contato) || "contato";
+      const n = Number(conv.nao_lidas) || 0;
+      ui.anunciar(`Conversa com ${nome}${n ? `, ${n} ${n === 1 ? "mensagem nova" : "mensagens novas"}` : ""}.`);
+    }
   }
 
   if (A.composer && A.composer.el) el.appendChild(A.composer.el);
 
   return {
     el, mostrarVazio, mostrarCarregando, mostrarErro, renderCabecalho, renderMensagens, renderTudo, renderTopo, destacar,
-    noFim, rolarFim, estadoAcoes, abrirVisualizador, sucesso,
+    noFim, rolarFim, estadoAcoes, abrirVisualizador, sucesso, mostrarAtraso, esconderAtraso, temBolha: id => !!bolhaDe(id),
+    abrirEtiquetas, mostrarLento, // plano 1000 · CA-158 (Alt+Shift+E) e CA-105 (rede lenta ao abrir)
     /** D9: quantos players de áudio a tela segura (testes: a troca de conversa solta os da anterior). */
     contarPlayers: () => players.size,
     desmontar() { clearTimeout(tLiberarEnvio); tLiberarEnvio = null; liberarEm = 0; players.clear(); if (visualizador) { try { visualizador.fechar(); } catch { /* ok */ } } },

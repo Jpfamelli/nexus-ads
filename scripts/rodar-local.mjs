@@ -16,7 +16,7 @@
    pg_net só grava em net.http_chamadas; Vault e Storage de mentira); migrações em ordem, lidas em LF — o checkout no Windows é CRLF
    e a 20261003a casa a âncora do corpo da função com "\n", como o texto que foi aplicado no banco real; smokes em ordem; smoke que
    termina em exceção «OK…/VERDE…» (para o execute_sql dar rollback) conta como passou.
-   Saída: 0 tudo ok · 1 algum smoke falhou (ou nenhum casou) · 2 PGlite ausente, opção desconhecida ou migração que não aplica.
+   Saída: 0 tudo ok (as ESPERADAS podem falhar) · 1 algum smoke fora de ESPERADAS falhou (ou nenhum casou) · 2 PGlite ausente, opção desconhecida ou migração que não aplica.
    Limites conhecidos (F8.md): pgcrypto/pg_trgm/unaccent são as versões do PGlite; o smoke 02 depende do gestor real do banco e
    falha aqui por desenho; nada disso substitui o ensaio no Postgres/Supabase real.
    Substitui supabase/testes/rodar-local.mjs (01/10), que lia os arquivos crus (CRLF) e parava na 20261003a. */
@@ -48,6 +48,9 @@ do $$ begin
   if not exists (select 1 from pg_roles where rolname='service_role') then create role service_role nologin; end if;
   if not exists (select 1 from pg_roles where rolname='supabase_admin') then create role supabase_admin nologin; end if;
 end $$;
+-- SV-168: como no Supabase, função nova em public nasce executável por anon/authenticated/service_role (default privileges);
+-- sem isto a checagem de permissões dos smokes (09, 20, 27) dava falso verde para função criada sem revoke
+alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;
 create schema if not exists extensions; create schema if not exists vault; create schema if not exists net;
 create schema if not exists cron; create schema if not exists storage;
 create extension if not exists pgcrypto with schema extensions;
@@ -74,6 +77,23 @@ begin update vault.secrets set secret = coalesce(new_secret, secret), name = coa
 create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text, metadata jsonb, created_at timestamptz default now());
 create table storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
 `;
+
+/** SV-153: smokes que falham no PGlite POR DESENHO (arquivo → motivo). Falhar aqui não derruba a saída; passar vira aviso
+    (tire da lista). Qualquer outro smoke que falhe → saída 1. */
+export const ESPERADAS = Object.freeze({
+  "02_acesso.sql": "compara nx_pode/nx_sessao do gestor ATUAL (conta real do painel, org plataforma) com a versão antiga; o PGlite nasce sem essa conta → «existe o gestor atual» falha",
+});
+/** SV-155: ajustes de sessão aplicados ANTES dos smokes — o PGlite (WebAssembly) é mais lento que o Postgres real; o smoke 04_crm_b
+    lê o teto de tempo de nx.teste_lento_ms (padrão 2000 no banco real). */
+export const AJUSTES_SESSAO = "set nx.teste_lento_ms = '6000';";
+
+/** Saída a partir do resultado dos smokes: {codigo, falhas, esperadas, esperadasQuePassaram}. 0 só quando tudo que não é esperado passou. */
+export function resumir(smokes = [], esperadas = ESPERADAS) {
+  const falhas = smokes.filter(x => !x.ok && !esperadas[x.arquivo]).map(x => x.arquivo);
+  const esp = smokes.filter(x => !x.ok && esperadas[x.arquivo]).map(x => x.arquivo);
+  const passaram = smokes.filter(x => x.ok && esperadas[x.arquivo]).map(x => x.arquivo);
+  return { codigo: falhas.length || !smokes.length ? 1 : 0, falhas, esperadas: esp, esperadasQuePassaram: passaram };
+}
 
 /** Texto SQL como o banco real o recebeu: LF puro (o CRLF do checkout no Windows vira \n). */
 export const normalizarLf = s => String(s).replace(/\r\n?/g, "\n");
@@ -135,6 +155,7 @@ export async function rodar({ prefixos = [], ate = null, sem = [], maxMsg = 600,
     log(`migrações aplicadas em ${((Date.now() - t00) / 1000).toFixed(1)} s${ate ? ` (só as anteriores a ${ate})` : ""}`);
     const lista = selecionarSmokes(readdirSync(SMOKES), prefixos);
     if (!lista.length) { erro(`nenhum smoke casa com: ${prefixos.join(" ")}`); return { codigo: 1, migracoes, smokes }; }
+    await db.exec(AJUSTES_SESSAO);
     for (const f of lista) {
       const t0 = Date.now();
       let ok = true, mensagem = "";
@@ -144,16 +165,19 @@ export async function rodar({ prefixos = [], ate = null, sem = [], maxMsg = 600,
         ok = passou(e.message);
         try { await db.exec("rollback"); } catch { /* sem transação aberta */ }
       }
-      smokes.push({ arquivo: f, ok, ms: Date.now() - t0, mensagem });
+      smokes.push({ arquivo: f, ok, ms: Date.now() - t0, mensagem, esperada: ESPERADAS[f] || null });
       log(ok ? `OK      ${f} ${((Date.now() - t0) / 1000).toFixed(1)} s${mensagem ? ` — ${mensagem.slice(0, 160)}` : " (sem exceção)"}`
+        : ESPERADAS[f] ? `ESPERADA ${f} -> ${mensagem.slice(0, 200)} (por desenho: ${ESPERADAS[f]})`
         : `FALHOU  ${f} -> ${mensagem.slice(0, maxMsg)}`);
     }
   } finally {
     try { await db.close(); } catch { /* já fechado */ }
   }
-  const falhas = smokes.filter(s => !s.ok).length;
-  log(falhas ? `${falhas} arquivo(s) com falha` : "todos ok");
-  return { codigo: falhas ? 1 : 0, migracoes, smokes };
+  const res = resumir(smokes);
+  for (const f of res.esperadasQuePassaram) log(`aviso: ${f} está em ESPERADAS mas passou — tire da lista`);
+  log(res.falhas.length ? `${res.falhas.length} arquivo(s) com falha: ${res.falhas.join(", ")}`
+    : `todos ok${res.esperadas.length ? ` (falha esperada, por desenho: ${res.esperadas.join(", ")})` : ""}`);
+  return { codigo: res.codigo, migracoes, smokes, falhas: res.falhas, esperadas: res.esperadas };
 }
 
 async function principal(argv) {

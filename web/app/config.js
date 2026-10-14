@@ -37,7 +37,127 @@ export function validarListaDominios(valor) {
   return valor;
 }
 
-export function desmontar() { for (const f of _limpeza) try { f(); } catch { /* ok */ } _limpeza = []; }
+/** Desfaz só a seção aberta (a navegação do hub continua montada — AS-080). */
+function limparSecao() { for (const f of _limpeza) try { f(); } catch { /* ok */ } _limpeza = []; _podeSair = null; _pendente = null; }
+export function desmontar() {
+  limparSecao();
+  _hub = null;
+  for (const f of _cancelarComandos.splice(0)) try { f(); } catch { /* ok */ }
+}
+
+let _hub = null;                 // plano 1000 · AS-080: {chave, alvo, raiz, lista, sec, cab, busca} — trocar de seção reaproveita a navegação
+let _cancelarComandos = [];      // AS-083: as seções registradas na paleta Ctrl/⌘+K
+const _pendCache = new Map();    // AS-080: nx_onboarding_estado por cliente, por 60 s → {em, est}
+export const PEND_CACHE_MS = 60_000;
+
+/** plano 1000 · AS-083: palavras extras de busca por seção (o título e a descrição já entram). */
+export const PALAVRAS_SECAO = Object.freeze({
+  perfil: "nome celular senha aparelhos sair avisos som notificação conta", usuarios: "equipe convite convidar papel administrador atendente acesso pessoas",
+  departamentos: "horário horario funcionamento expediente fora do horário setor rodízio", numeros: "whatsapp codewords meta api oficial número conectar modelos templates",
+  respostas: "atalho frases prontas barra mensagens", atendimento: "assinatura fila avisos preferências", ia: "inteligência artificial assistente robô bot memória tom",
+  funis: "etapas pipeline kanban vendas", campos: "campos extras cadastro personalizados", etiquetas: "tags marcadores cores", motivos: "perda não fechou",
+  agenda: "horários consultas dias fechados duração", anuncios: "meta google facebook instagram contas campanhas", formulario: "site formulário lead",
+  rastreio: "script utm origem campanha site", marca: "logo cores tema tela de entrada favicon", dominio: "endereço cname dns subdomínio", plano: "limites uso cobrança assinatura",
+});
+const semAcento = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+/** AS-083: ids das seções que casam com a busca (título + descrição + palavras-chave, sem acento; todas as palavras digitadas). */
+export function filtrarSecoes(secoes, termo) {
+  const ps = semAcento(termo).split(/\s+/).filter(Boolean);
+  return (secoes || []).filter(s => {
+    const alvo = semAcento(`${s.titulo} ${s.desc || ""} ${s.grupo || ""} ${PALAVRAS_SECAO[s.id] || ""} ${s.palavras || ""}`);
+    return ps.every(p => alvo.includes(p));
+  }).map(s => s.id);
+}
+
+/** plano 1000 · AS-086: o mesmo critério do ui (VALIDADORES.telefone): 10/11 dígitos com DDD, ou «+» e 8 a 15 dígitos. */
+export function telefoneValido(v) {
+  const t = String(v ?? "").trim(), d = t.replace(/\D/g, "");
+  return d.length === 10 || d.length === 11 || (t.startsWith("+") && d.length >= 8 && d.length <= 15);
+}
+
+/**
+ * plano 1000 · AS-113: domínio RAIZ (suaagencia.com.br, empresa.com) não aceita CNAME. Verdadeiro quando o host é só o domínio registrável:
+ * 2 rótulos, ou 3 com sufixo de dois níveis (.com.br, .net.br, .org.br, .co.uk…).
+ */
+export function ehDominioRaiz(host) {
+  const p = String(host || "").toLowerCase().replace(/\.$/, "").split(".").filter(Boolean);
+  if (p.length < 2) return false;
+  const duplo = /^(com|net|org|gov|edu|art|blog|eco|ind|inf|med|adv|eng|tur|app|dev|co|ac)$/.test(p[p.length - 2]) && p[p.length - 1].length === 2;
+  return p.length === 2 || (p.length === 3 && duplo);
+}
+
+/**
+ * plano 1000 · AS-109: WhatsApp de suporte que o wa.me entende — 55 + DDD + número (12 ou 13 dígitos) ou, para fora do Brasil, «+» e 8 a 15 dígitos.
+ * → {ok, digitos, erro}. Vazio é válido (o campo é opcional).
+ */
+export function suporteWaValido(v) {
+  const t = String(v ?? "").trim(), d = t.replace(/\D/g, "");
+  if (!t) return { ok: true, digitos: "", erro: null };
+  if (d.startsWith("55") && (d.length === 12 || d.length === 13)) return { ok: true, digitos: d, erro: null };
+  if (t.startsWith("+") && !d.startsWith("55") && d.length >= 8 && d.length <= 15) return { ok: true, digitos: d, erro: null };
+  return { ok: false, digitos: d, erro: "Use 55 + DDD + número, ex.: 5512999998888 (ou + e o código do país, se for fora do Brasil)." };
+}
+
+/** plano 1000 · AS-116: dias úteis (seg a sex) completos desde `iso` até `agora` (sexta 10h → segunda 10h = 1). null sem data. Teto de 60. */
+export function diasUteisDesde(iso, agora = new Date()) {
+  const ini = new Date(iso), fim = agora instanceof Date ? agora : new Date(agora);
+  if (isNaN(ini) || isNaN(fim)) return null;
+  let n = 0;
+  const d = new Date(ini.getTime());
+  for (let i = 0; i < 120 && n < 60; i++) {
+    d.setTime(d.getTime() + 86400000);
+    if (d > fim) break;
+    const dia = d.getDay();
+    if (dia !== 0 && dia !== 6) n++;
+  }
+  return n;
+}
+
+/** plano 1000 · AS-117: status do plano para a pílula — «Em teste» com o teste já vencido vira «Teste encerrado». hoje = AAAA-MM-DD. */
+export function statusDoPlano(status, testeAte, hoje) {
+  if (status === "teste" && testeAte && hoje && String(testeAte) < String(hoje)) return ["Teste encerrado", "ruim"];
+  return ROT_STATUS[status] || [status || "—", "neutra"];
+}
+
+/** plano 1000 · AS-100: pessoas cujo nome ou e-mail contém o termo (sem acento, sem maiúsculas). */
+export function filtrarUsuarios(usuarios, termo) {
+  const t = String(termo || "").normalize("NFD").replace(/[^\x00-\x7F]/g, "").toLowerCase().trim();
+  const l = Array.isArray(usuarios) ? usuarios : [];
+  if (!t) return l;
+  return l.filter(u => `${u.nome || ""} ${u.email || ""}`.normalize("NFD").replace(/[^\x00-\x7F]/g, "").toLowerCase().includes(t));
+}
+
+/** plano 1000 · AS-273: «online» = acesso nos últimos 5 minutos. */
+export const ONLINE_MS = 5 * 60_000;
+export function estaOnline(iso, agora = Date.now()) {
+  const t = Date.parse(iso || "");
+  const a = agora instanceof Date ? agora.getTime() : Number(agora);
+  return Number.isFinite(t) && a - t >= -60_000 && a - t < ONLINE_MS;
+}
+
+/** plano 1000 · AS-297: validade do convite — 3 dias por padrão; 30 dias só com aviso (link vazado vale um mês). */
+export const DIAS_CONVITE_PADRAO = "3";
+export function avisoValidadeConvite(dias) {
+  return Number(dias) >= 30 ? "Um link de 30 dias que vazar continua valendo por um mês. Prefira 3 ou 7 dias e gere outro se a pessoa demorar." : "";
+}
+
+/** plano 1000 · AS-242: o que conta em cada limite do plano (a mesma regra do nx_uso no servidor). */
+export const REGRA_USO = Object.freeze({
+  usuarios: "Pessoas com acesso a esta empresa mais os convites ainda válidos (não usados, não revogados e dentro do prazo). Revogar um convite libera a vaga.",
+  canais: "Todos os números cadastrados, conectados ou não. Excluir um número libera a vaga.",
+  funis: "Só os funis ligados. Desligar um funil libera a vaga; os negócios dele continuam guardados.",
+  automacoes: "Todas as automações, ligadas e desligadas. Só excluir libera a vaga.",
+  contatos: "Todos os contatos guardados, de qualquer origem (WhatsApp, anúncios, importação). Só excluir libera a vaga.",
+  ia_mes: "Cada sugestão ou montagem de IA feita pela equipe neste mês. Volta a zero no dia 1º (horário de Brasília).",
+});
+
+/** plano 1000 · AS-275: título da aba numa seção das Configurações (estável, mesmo se a seção falhar e o hub remontar). */
+export const tituloSecao = s => (s && s.titulo ? `${s.titulo} · Configurações` : "Configurações");
+
+/** plano 1000 · AS-093: trocar papel que mexe com Administrador pede confirmação; os demais salvam com «Desfazer». */
+export function trocaDePapelPedeConfirmacao(antes, depois) { return antes !== depois && (antes === "admin" || depois === "admin"); }
+
+let _podeSair = null, _pendente = null;      // plano 1000 · AS-082: a seção aberta diz se pode sair (alteração não salva → pergunta antes de trocar)
 
 async function secoesExternas(ctx) {
   if (_externas && _versaoExt === ctx.versao) return _externas;
@@ -86,7 +206,7 @@ function visivel(ctx, s) {
 }
 
 export async function montar(ctx) {
-  desmontar();
+  limparSecao();
   const { ui } = ctx;
   const h = ui.h;
   ctx.titulo("Configurações");
@@ -100,15 +220,34 @@ export async function montar(ctx) {
   const grupos = agruparSecoes(todas.filter(s => visivel(ctx, s)));
   const vistas = grupos.flatMap(g => g.itens);
   const pedida = ctx.rota.partes[0] || null;
-  const atual = vistas.find(s => s.id === pedida) || (pedida ? null : vistas[0]);
+  const atual = pedida ? vistas.find(s => s.id === pedida) || null : null;
+
+  // plano 1000 · AS-080: trocar de seção (mesmo cliente, mesma pessoa, mesmas seções) não remonta o hub — só o conteúdo da seção muda
+  const chaveHub = `${ctx.cliente ? ctx.cliente.id : "-"}|${ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.id || ctx.sessao.conta.email || "-" : "-"}|${vistas.map(s => s.id).join(",")}`;
+  if (_hub && _hub.chave === chaveHub && _hub.alvo === ctx.alvo && _hub.raiz.isConnected) {
+    const hub = _hub;
+    for (const a of hub.lista.querySelectorAll("a.cfg-nav-item")) {
+      if (atual && a.getAttribute("href") === `#/config/${atual.id}`) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    }
+    hub.raiz.classList.toggle("na-secao", !!pedida);
+    hub.cab.classList.toggle("na-secao", !!pedida);
+    ui.limpar(hub.sec);
+    return montarSecao(ctx, hub.sec, atual, pedida, vistas);
+  }
+  for (const f of _cancelarComandos.splice(0)) try { f(); } catch { /* ok */ }
 
   // navegação lateral (item 56): grupo, ícone, título e uma linha dizendo o que a seção faz; o ponto de pendência entra depois
   const lista = h("nav", { class: "cfg-lista", "aria-label": "Seções das configurações" });
+  // plano 1000 · AS-083: «Buscar ajuste» acima do menu (título, descrição e palavras-chave, sem acento)
+  const campoBusca = vistas.length > 4 ? h("input", { type: "search", class: "cfg-busca-inp", placeholder: "Buscar ajuste: horário, senha, logo…", "aria-label": "Buscar nas configurações", autocomplete: "off" }) : null;
+  const semAchado = h("p", { class: "fraco cfg-busca-vazio", hidden: true }, "Nenhum ajuste com essas palavras.");
+  const statusBusca = h("p", { class: "sr-only", role: "status", "aria-live": "polite" });
+  if (campoBusca) lista.append(h("label", { class: "busca cfg-busca" }, ui.icone("busca"), campoBusca), semAchado, statusBusca);
   for (const g of grupos) {
-    lista.appendChild(h("p", { class: "rotulo cfg-grupo" }, g.grupo));
+    lista.appendChild(h("p", { class: "rotulo cfg-grupo", dataset: { grupo: g.grupo } }, g.grupo));
     for (const s of g.itens) {
       const emObra = !ctx.shell.prontos.CONFIG_PRONTAS.includes(s.id);
-      lista.appendChild(h("a", { class: "cfg-nav-item", href: `#/config/${s.id}`, "aria-current": atual && atual.id === s.id ? "page" : null },
+      lista.appendChild(h("a", { class: "cfg-nav-item", href: `#/config/${s.id}`, "aria-current": atual && atual.id === s.id ? "page" : null, dataset: { secao: s.id, grupo: g.grupo } },
         h("span", { class: "cfg-nav-ic", "aria-hidden": "true" }, ui.icone(s.icone || "engrenagem")),
         h("span", { class: "cfg-nav-txt" }, h("span", { class: "cfg-nav-tit" }, s.titulo), s.desc ? h("small", { class: "cfg-nav-desc" }, s.desc) : null),
         emObra ? h("span", { class: "nav-selo" }, "obra") : null));
@@ -117,11 +256,9 @@ export async function montar(ctx) {
   // M32: o mesmo estado do checklist do Início vira um ponto com o número de passos pendentes ao lado de cada seção (só admin; é um complemento)
   const minhaMontagem = ++_montagemCfg;
   if (ctx.cliente && ctx.pode("admin") && vistas.some(s => ["numeros", "departamentos", "agenda", "rastreio", "usuarios", "funis"].includes(s.id))) {
-    Promise.all([import(`./rel-logica.js?v=${encodeURIComponent(ctx.versao)}`), ctx.api.rpcC("nx_onboarding_estado", {})]).then(([L, est]) => {
+    // AS-080: o estado do checklist vale por 60 s (voltar ao hub ou trocar de empresa e voltar não repete a chamada)
+    pendenciasDoHub(ctx).then(pend => {
       if (minhaMontagem !== _montagemCfg || !lista.isConnected) return;
-      let pulados = [];
-      try { pulados = (JSON.parse(localStorage.getItem(`nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`) || "{}").pulados) || []; } catch { /* sem storage */ }
-      const pend = L.pendenciasConfig(est, { pulados });
       for (const a of lista.querySelectorAll(".cfg-nav-item")) {
         const id = String(a.getAttribute("href") || "").replace("#/config/", "");
         const n = pend[id];
@@ -134,28 +271,127 @@ export async function montar(ctx) {
       }
     }).catch(() => { /* sem o checklist o menu fica como estava */ });
   }
-  const sec = h("section", { class: "cfg-sec", "aria-live": "polite" });
+  if (campoBusca) campoBusca.addEventListener("input", () => {
+    const termo = campoBusca.value.trim();
+    const ok = new Set(filtrarSecoes(vistas, termo));
+    let n = 0;
+    for (const a of lista.querySelectorAll("a.cfg-nav-item")) { const v = !termo || ok.has(a.dataset.secao); a.hidden = !v; if (v) n++; }
+    for (const p of lista.querySelectorAll(".cfg-grupo")) p.hidden = !!termo && !vistas.some(s => s.grupo === p.dataset.grupo && ok.has(s.id));
+    semAchado.hidden = !termo || n > 0;
+    statusBusca.textContent = termo ? `${n} ${n === 1 ? "ajuste encontrado" : "ajustes encontrados"}.` : "";
+  });
+  // AS-083: cada seção também na paleta Ctrl/⌘+K («Configurações: Departamentos e horários»)
+  if (ctx.comandos && typeof ctx.comandos.registrar === "function") {
+    for (const s of vistas) {
+      try {
+        const c = ctx.comandos.registrar({ id: `config.${s.id}`, rotulo: `Configurações: ${s.titulo}`, icone: s.icone || "engrenagem",
+          palavras: `configuracoes ajustes ${s.desc || ""} ${PALAVRAS_SECAO[s.id] || ""}`, fazer: () => ctx.navegar(`#/config/${s.id}`) });
+        if (typeof c === "function") _cancelarComandos.push(c);
+      } catch { /* a paleta é um extra */ }
+    }
+  }
+  // plano 1000 · AS-077: a seção NÃO é região viva (abrir Usuários lia a tabela inteira; Números a cada 30 s) — anuncia só «X aberta»
+  const sec = h("section", { class: "cfg-sec" });
   const raiz = h("div", { class: ["cfg", pedida && "na-secao"] }, lista, sec);
+  // plano 1000 · AS-082: trocar de seção com alteração não salva pergunta antes (links da lista e o «‹ Configurações»)
+  raiz.addEventListener("click", ev => {
+    const a = ev.target && ev.target.closest ? ev.target.closest("a.cfg-nav-item, a.cfg-voltar") : null;
+    if (!a || !_podeSair || (_pendente && !_pendente()) || ev.defaultPrevented || ev.button || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    const destino = a.getAttribute("href");
+    if (!destino || (typeof location !== "undefined" && destino === location.hash)) return;
+    ev.preventDefault();
+    const pergunta = _podeSair;
+    Promise.resolve().then(() => pergunta()).then(ok => { if (ok) { _podeSair = null; _pendente = null; ctx.navegar(destino); } }, () => {});
+  });
   ui.limpar(ctx.alvo);
-  ctx.alvo.append(
-    h("header", { class: "cab-pag" }, h("div", null,
-      h("p", { class: "rotulo" }, ctx.cliente ? ctx.cliente.nome : ctx.sessao.org ? ctx.sessao.org.nome : ""),
-      h("h1", { class: "titulo-pag" }, "Configurações"))),
-    raiz);
+  // plano 1000 · AS-081: no celular, dentro de uma seção, o cabeçalho do hub some da TELA (fica para leitor de tela: o h1 continua)
+  const cab = h("header", { class: ["cab-pag", "cfg-cab", pedida && "na-secao"] }, h("div", null,
+    h("p", { class: "rotulo" }, ctx.cliente ? ctx.cliente.nome : ctx.sessao.org ? ctx.sessao.org.nome : ""),
+    h("h1", { class: "titulo-pag" }, "Configurações")));
+  ctx.alvo.append(cab, raiz);
+  _hub = { chave: chaveHub, alvo: ctx.alvo, raiz, lista, sec, cab };
+  return montarSecao(ctx, sec, atual, pedida, vistas);
+}
 
+/** AS-080/AS-293: {id da seção: nº de passos pendentes} do checklist do Início (nx_onboarding_estado por 60 s, por cliente). */
+function pendenciasDoHub(ctx) {
+  const memo = _pendCache.get(ctx.cliente.id);
+  const estado = memo && Date.now() - memo.em < PEND_CACHE_MS ? Promise.resolve(memo.est)
+    : ctx.api.rpcC("nx_onboarding_estado", {}).then(est => { _pendCache.set(ctx.cliente.id, { em: Date.now(), est }); return est; });
+  return Promise.all([import(`./rel-logica.js?v=${encodeURIComponent(ctx.versao)}`), estado]).then(([L, est]) => {
+    let pulados = [];
+    try { pulados = (JSON.parse(localStorage.getItem(`nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || "-"}`) || "{}").pulados) || []; } catch { /* sem storage */ }
+    return L.pendenciasConfig(est, { pulados }) || {};
+  });
+}
+
+/** plano 1000 · AS-293: a página inicial das Configurações no computador — pendências do checklist e atalhos por grupo. */
+function visaoGeral(ctx, sec, vistas) {
+  const { ui } = ctx;
+  const h = ui.h;
+  const pend = h("div", { class: "cfg-vg-pend", "aria-live": "polite" });
+  const grupos = agruparSecoes(vistas);
+  sec.append(
+    h("section", { class: "cartao cfg-vg" },
+      h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Visão geral"), h("p", { class: "sub" }, "O que ainda falta configurar e o caminho para cada ajuste."))),
+      pend,
+      h("div", { class: "cfg-vg-grupos" }, grupos.map(g => h("div", { class: "cfg-vg-grupo" },
+        h("p", { class: "rotulo" }, g.grupo),
+        h("ul", { class: "cfg-vg-lista" }, g.itens.map(s => h("li", null, h("a", { href: `#/config/${s.id}`, class: "cfg-vg-item" },
+          h("span", { class: "cfg-nav-ic", "aria-hidden": "true" }, ui.icone(s.icone || "engrenagem")),
+          h("span", { class: "cfg-nav-txt" }, h("span", { class: "cfg-nav-tit" }, s.titulo), s.desc ? h("small", { class: "cfg-nav-desc" }, s.desc) : null))))))))));
+  const ids = new Set(vistas.map(s => s.id));
+  if (!ctx.cliente || !ctx.pode("admin") || !["numeros", "departamentos", "agenda", "rastreio", "usuarios", "funis"].some(id => ids.has(id))) { pend.hidden = true; return; }
+  pend.append(h("p", { class: "fraco" }, "Conferindo o que falta…"));
+  return pendenciasDoHub(ctx).then(p => {
+    if (!pend.isConnected) return;
+    ui.limpar(pend);
+    const falta = vistas.filter(s => p[s.id] > 0);
+    if (!falta.length) { pend.append(h("p", { class: "aviso aviso-ok" }, ui.icone("check"), h("span", null, "Tudo o que o checklist pede já está configurado."))); return; }
+    pend.append(h("p", { class: "rotulo" }, "Falta configurar"),
+      h("ul", { class: "cfg-vg-lista cfg-vg-faltam" }, falta.map(s => h("li", null, h("a", { href: `#/config/${s.id}`, class: "cfg-vg-item cfg-vg-falta" },
+        h("span", { class: "cfg-nav-ic", "aria-hidden": "true" }, ui.icone(s.icone || "engrenagem")),
+        h("span", { class: "cfg-nav-txt" }, h("span", { class: "cfg-nav-tit" }, s.titulo), h("small", { class: "cfg-nav-desc" }, `${p[s.id]} ${p[s.id] === 1 ? "passo pendente" : "passos pendentes"}`)),
+        ui.icone("seta-dir"))))));
+  }).catch(() => { pend.hidden = true; });
+}
+
+/** Desenha a seção pedida dentro do hub (montado agora ou reaproveitado — AS-080). */
+async function montarSecao(ctx, sec, atual, pedida, vistas = []) {
+  const { ui } = ctx;
+  const h = ui.h;
+  // plano 1000 · AS-293: #/config sem seção abre a «Visão geral» (o que falta configurar + atalhos), não mais o Perfil
+  if (!pedida && vistas.length) { ctx.titulo("Configurações"); return visaoGeral(ctx, sec, vistas); }
   if (!atual) {
+    ctx.titulo("Configurações");      // AS-275: a seção que não existe não herda o título da anterior
     sec.appendChild(ui.vazio({ titulo: pedida ? "Esta seção não está disponível." : "Nada para configurar por aqui.",
       texto: pedida ? "Ela pode não fazer parte do seu plano ou do seu acesso." : "", icone: "engrenagem",
       acao: pedida ? { rotulo: "Ver as configurações", fn: () => ctx.navegar("#/config") } : null }));
     return;
   }
-  ctx.titulo(atual.titulo);
+  ctx.titulo(tituloSecao(atual));      // plano 1000 · AS-275: «Departamentos e horários · Configurações»
   const voltar = h("a", { class: "voltar-link cfg-voltar", href: "#/config" }, ui.icone("seta-esq"), "Configurações");
   const alvo = h("div", { class: "pilha" });
   sec.append(voltar, alvo);
+  if (pedida && typeof ui.anunciar === "function") ui.anunciar(`${atual.titulo} aberta.`);
   try {
     const r = await atual.montar(ctx, alvo);
+    // a seção devolve a limpeza (função) e/ou {limpar, podeSair}; podeSair() → Promise<boolean> (AS-082)
     if (typeof r === "function") _limpeza.push(r);
+    else if (r && typeof r === "object" && typeof r.limpar === "function") _limpeza.push(r.limpar);
+    const ps = r && typeof r.podeSair === "function" ? r.podeSair : null;
+    if (ps) {
+      _podeSair = ps; _pendente = typeof r.pendente === "function" ? r.pendente : null;
+      // a guarda do shell cobre o resto (menu lateral, paleta, voltar do navegador, troca de empresa, Sair); os links da lista já perguntaram
+      // (zeram _podeSair) e trocar de seção desregistra (limparSecao roda as _limpeza)
+      if (typeof ctx.aoSairDaRota === "function") {
+        const guarda = () => {
+          if (_podeSair !== ps || (_pendente && !_pendente())) return true;
+          return Promise.resolve().then(() => ps()).then(ok => !!ok, () => true);
+        };
+        try { const c = ctx.aoSairDaRota(guarda); if (typeof c === "function") _limpeza.push(c); } catch { /* a guarda é um extra */ }
+      }
+    }
   } catch (e) {
     console.error(`config ${atual.id}`, e);
     ui.limpar(alvo);
@@ -173,7 +409,8 @@ async function secaoPerfil(ctx, alvo) {
   const formDados = h("form", { class: "pilha", novalidate: true },
     h("div", { class: "form-grade" },
       ui.campo({ rotulo: "Nome", nome: "nome", valor: c.nome, obrigatorio: true, autocomplete: "name", max: 80 }),
-      ui.campo({ rotulo: "Celular (WhatsApp)", nome: "telefone", tipo: "tel", valor: c.telefone ? ui.telBR(c.telefone) : "", autocomplete: "tel", ajuda: "Opcional. Usado para avisos." }),
+      // plano 1000 · AS-086: máscara e validação de telefone como no resto do app (antes «1299» só era recusado pelo servidor)
+      ui.campo({ rotulo: "Celular (WhatsApp)", nome: "telefone", tipo: "tel", validar: "telefone", valor: c.telefone ? ui.telBR(c.telefone) : "", autocomplete: "tel", ajuda: "Opcional. Usado para avisos." }),
       ui.campo({ rotulo: "E-mail", nome: "email_ro", valor: c.email, desabilitado: true, ajuda: "O e-mail é o seu login e não muda por aqui." })),
     h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, "Salvar dados")));
   formDados.addEventListener("submit", async ev => {
@@ -181,6 +418,7 @@ async function secaoPerfil(ctx, alvo) {
     ui.marcarErro(formDados, null);
     const d = ui.lerForm(formDados);
     if (!d.nome || d.nome.length < 2) return ui.marcarErro(formDados, "nome", "Informe o seu nome.");
+    if (d.telefone && !telefoneValido(d.telefone)) return ui.marcarErro(formDados, "telefone", "Use DDD + número, ex.: (12) 99830-3030.");
     try {
       await ui.carregando(formDados.querySelector("[type=submit]"), api.rpc("nx_perfil_salvar", { p_dados: { nome: d.nome, telefone: d.telefone || "" } }));
       ui.toast("Dados salvos.", { tipo: "ok" });
@@ -218,19 +456,100 @@ async function secaoPerfil(ctx, alvo) {
 
   const btTodas = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("sair"), "Sair de todos os aparelhos");
   btTodas.addEventListener("click", async () => {
-    const ok = await ui.confirmar({ titulo: "Sair de todos os aparelhos?", texto: "Você e qualquer outro aparelho conectado com a sua conta vão precisar entrar de novo.", rotulo: "Sair de todos" });
+    // plano 1000 · AS-091: desconecta todo mundo da conta — confirmação com destaque de perigo
+    const ok = await ui.confirmar({ titulo: "Sair de todos os aparelhos?", perigo: true, rotulo: "Sair de todos",
+      texto: "Você e qualquer outro aparelho conectado com a sua conta vão precisar entrar de novo, inclusive este." });
     if (!ok) return;
-    try { await ui.carregando(btTodas, api.rpc("nx_sair_todas")); } catch { /* sai do mesmo jeito */ }
+    // SV-128 (20261013e): nx_sessoes_encerrar(p_todas) derruba as OUTRAS sessões; esta sai logo depois pelo shell.sair().
+    // Servidor anterior (sem a função): cai no nx_sair_todas antigo. Erro de verdade: avisa e NÃO sai (os outros aparelhos seguiriam conectados).
+    const semFuncao = e => /pgrst202|could not find the function|http_404|funcao_invalida/i.test(String((e && (e.codigo || e.message)) || ""));
+    const encerrar = async () => {
+      try { return await api.rpc("nx_sessoes_encerrar", { p_todas: true }); }
+      catch (e) { if (!semFuncao(e)) throw e; return api.rpc("nx_sair_todas"); }
+    };
+    try { await ui.carregando(btTodas, encerrar()); }
+    catch (e) {
+      ui.toast(`Não deu para encerrar as sessões dos outros aparelhos: ${api.mensagemErro(e)} Tente de novo.`, { tipo: "erro" });
+      return;
+    }
+    ui.toast("As sessões dos outros aparelhos foram encerradas.", { tipo: "ok" });
     await ctx.shell.sair();
   });
 
+  // plano 1000 · AS-085: o papel na empresa ativa (e nas outras), em vez de «usuário da empresa»
+  const papel = papelNaConta(ctx);
   alvo.append(
     h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Seus dados"),
-      h("p", { class: "sub" }, `Você entra como ${ctx.sessao.conta.super ? "equipe da plataforma" : ctx.sessao.conta.papel === "gestor" ? "gestor" : "usuário da empresa"}.`))), formDados),
+      h("p", { class: "sub cfg-papel" }, papel.frase),
+      papel.outras.length ? h("p", { class: "fraco cfg-papel-outras" }, `Também tem acesso a: ${papel.outras.join(" · ")}.`) : null)), formDados),
+    ...[blocoAvisos(ctx)].filter(Boolean),
     h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Senha"),
       h("p", { class: "sub" }, "Ao trocar, as sessões abertas em outros aparelhos são encerradas."))), formSenha),
     h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Aparelhos conectados"),
       h("p", { class: "sub" }, "Esqueceu a conta aberta num computador da recepção? Encerre todas as sessões de uma vez."))), btTodas));
+}
+
+/**
+ * plano 1000 · AS-085: «Você é Administrador na Clínica X» (papel do cliente ativo) + as outras empresas e papéis.
+ * Exportada para teste. ctx: {sessao:{conta}, cliente, shell:{clientes()}}.
+ */
+export function papelNaConta(ctx) {
+  const conta = (ctx.sessao && ctx.sessao.conta) || {};
+  const rot = p => ({ admin: "Administrador", supervisor: "Supervisor", atendente: "Atendente", leitura: "Somente leitura", gestor: "Gestor" })[p] || p || "usuário";
+  const outras = [];
+  try {
+    const todas = ctx.shell && typeof ctx.shell.clientes === "function" ? ctx.shell.clientes() || [] : [];
+    for (const c of todas) if (c && (!ctx.cliente || c.id !== ctx.cliente.id) && c.nome) outras.push(c.papel ? `${c.nome} (${rot(c.papel)})` : c.nome);
+  } catch { /* sem a lista, só a empresa ativa */ }
+  let frase;
+  if (conta.super) frase = "Você entra como equipe da plataforma.";
+  else if (conta.papel === "gestor") frase = `Você é gestor${ctx.sessao && ctx.sessao.org ? ` da ${ctx.sessao.org.nome}` : ""}${ctx.cliente ? `, vendo a ${ctx.cliente.nome}` : ""}.`;
+  else if (ctx.cliente && ctx.cliente.papel) frase = `Você é ${rot(ctx.cliente.papel)} na ${ctx.cliente.nome}.`;
+  else frase = ctx.cliente ? `Você tem acesso à ${ctx.cliente.nome}.` : "Você entra como usuário da empresa.";
+  return { frase, outras: outras.slice(0, 8) };
+}
+
+/**
+ * plano 1000 · AS-090: os avisos de mensagem nova (som e aviso na área de trabalho) também no Perfil — a MESMA chave do menu «Avisos»
+ * de Conversas (localStorage nx-cv-avisos: som ligado por padrão, aviso de tela só se a pessoa ligou). null sem o módulo Conversas.
+ */
+function blocoAvisos(ctx) {
+  const { ui } = ctx;
+  const h = ui.h;
+  if (!ctx.cliente || (typeof ctx.temModulo === "function" && !ctx.temModulo("conversas"))) return null;
+  const ler = () => { try { const p = JSON.parse(localStorage.getItem("nx-cv-avisos") || "{}"); return p && typeof p === "object" ? p : {}; } catch { return {}; } };
+  const gravar = mud => { try { localStorage.setItem("nx-cv-avisos", JSON.stringify({ ...ler(), ...mud })); return true; } catch { return false; } };
+  const p = ler();
+  const nota = h("p", { class: "fraco cfg-avisos-nota", "aria-live": "polite" });
+  const sw = (id, rotulo, ajuda, ligado, aoMudar) => {
+    // plano 1000 · AS-265: nome acessível de um elemento só (aria-labelledby → o texto do rótulo)
+    const inp = h("input", { type: "checkbox", id, role: "switch", checked: ligado, "aria-labelledby": `${id}-rot` });
+    inp.addEventListener("change", () => aoMudar(inp));
+    return h("div", { class: "campo campo-check campo-switch cfg-aviso-op" },
+      h("label", { for: id }, inp, h("span", { class: "check-marca", "aria-hidden": "true" }), h("span", { id: `${id}-rot` }, rotulo)),
+      ajuda ? h("small", { class: "campo-ajuda" }, ajuda) : null);
+  };
+  const som = sw("cfg-av-som", "Som de mensagem nova", "Toca quando chega mensagem e você está em outra tela.", p.som !== false, inp => {
+    if (!gravar({ som: inp.checked })) { inp.checked = !inp.checked; ui.toast("Este navegador não deixou guardar a preferência.", { tipo: "erro" }); return; }
+    ui.toast(inp.checked ? "Som ligado." : "Som desligado.", { tipo: "ok" });
+  });
+  const tela = sw("cfg-av-tela", "Aviso na área de trabalho", "Mostra um aviso do sistema mesmo com o Órbita em segundo plano.", p.tela === true, async inp => {
+    if (inp.checked) {
+      const N = typeof Notification !== "undefined" ? Notification : null;
+      let perm = N ? N.permission : "denied";
+      if (N && perm === "default" && typeof N.requestPermission === "function") { try { perm = await N.requestPermission(); } catch { perm = "denied"; } }
+      if (perm !== "granted") {
+        inp.checked = false;
+        nota.textContent = N ? "O navegador bloqueou os avisos. Libere em Configurações do site (cadeado ao lado do endereço) e tente de novo." : "Este navegador não mostra avisos na área de trabalho.";
+        return;
+      }
+    }
+    nota.textContent = "";
+    if (!gravar({ tela: inp.checked })) { inp.checked = !inp.checked; return; }
+    ui.toast(inp.checked ? "Aviso na área de trabalho ligado." : "Aviso na área de trabalho desligado.", { tipo: "ok" });
+  });
+  return h("div", { class: "cartao cfg-avisos" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Avisos de mensagem nova"),
+    h("p", { class: "sub" }, "Valem neste aparelho e são os mesmos do menu «Avisos» de Conversas."))), som, tela, nota);
 }
 
 /* ============================================================
@@ -263,10 +582,11 @@ async function secaoUsuarios(ctx, alvo) {
     }
   }
 
-  async function salvar(conta_id, mudanca) {
+  async function salvar(conta_id, mudanca, { desfazer = null, texto = "Acesso atualizado." } = {}) {
     try {
       dados = await api.rpcC("nx_usuario_salvar", { p_usuario: { conta_id, ...mudanca } });
-      ui.toast("Acesso atualizado.", { tipo: "ok" });
+      // plano 1000 · AS-093: troca de papel comum sai com «Desfazer» (volta o papel anterior)
+      ui.toast(texto, { tipo: "ok", acao: desfazer ? { rotulo: "Desfazer", fn: () => salvar(conta_id, desfazer, { texto: "Papel anterior de volta." }) } : null });
     } catch (e) {
       ui.toast(api.mensagemErro(e), { tipo: "erro" });
     }
@@ -293,9 +613,10 @@ async function secaoUsuarios(ctx, alvo) {
 
   function interruptor(u, chave, rotulo) {
     const id = `sw-${chave}-${u.conta_id}`;
-    const inp = h("input", { type: "checkbox", id, role: "switch", checked: !!u[chave], disabled: !u.editavel });
+    // plano 1000 · AS-265: o texto oculto é o ÚNICO nome (aria-labelledby): o <label> que envolve e aponta por for não soma outra leitura
+    const inp = h("input", { type: "checkbox", id, role: "switch", checked: !!u[chave], disabled: !u.editavel, "aria-labelledby": `${id}-rot` });
     inp.addEventListener("change", () => salvar(u.conta_id, { [chave]: inp.checked }));
-    return h("div", { class: "campo campo-check campo-switch" }, h("label", { for: id }, inp, h("span", { class: "check-marca", "aria-hidden": "true" }), h("span", { class: "sr-only" }, `${rotulo}: ${u.nome}`)));
+    return h("div", { class: "campo campo-check campo-switch" }, h("label", { for: id }, inp, h("span", { class: "check-marca", "aria-hidden": "true" }), h("span", { class: "sr-only", id: `${id}-rot` }, `${rotulo}: ${u.nome}`)));
   }
 
   function desenhar() {
@@ -303,21 +624,40 @@ async function secaoUsuarios(ctx, alvo) {
     const us = dados.usuarios || [];
     const lim = dados.limite;
     const usoTxt = lim ? `${dados.uso} de ${lim} usuários do plano (convites pendentes contam).` : `${us.length} ${us.length === 1 ? "pessoa" : "pessoas"} com acesso.`;
-    const btConvidar = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("convidar"), "Convidar");
-    btConvidar.addEventListener("click", () => abrirConvite());
-    if (lim && dados.uso >= lim) btConvidar.title = "O plano chegou ao limite de usuários.";
+    // plano 1000 · AS-094: no limite o «Convidar» nem abre (antes o modal abria, a pessoa preenchia e o servidor recusava)
+    const cheio = !!lim && dados.uso >= lim;
+    const btConvidar = h("button", { type: "button", class: "bt bt-prim", disabled: cheio, "aria-describedby": cheio ? "cfg-us-limite" : null }, ui.icone("convidar"), "Convidar");
+    btConvidar.addEventListener("click", () => { if (!btConvidar.disabled) abrirConvite(); });
+    const avisoLimite = cheio ? h("p", { class: "aviso aviso-aten cfg-us-limite", id: "cfg-us-limite" }, ui.icone("alerta"),
+      h("span", null, `Plano com ${dados.uso} de ${lim} usuários (convites pendentes contam). Revogue um convite, remova alguém ou `,
+        h("a", { href: "#/config/plano" }, "veja o Plano e uso"), ".")) : null;
 
-    const tab = ui.tabela({
+    // plano 1000 · AS-100: com muita gente, busca por nome ou e-mail (sem acento) acima da tabela
+    const montarTabela = linhas => ui.tabela({
       rotulo: "Usuários com acesso",
       chave: "conta_id",
       colunas: [
         { chave: "nome", rotulo: "Pessoa", ordenavel: true, principal: true, render: u => h("div", { class: "cel-nome" }, ui.avatar(u.nome, u.conta_id),
-          h("div", null, h("b", null, u.nome, u.eu ? " (você)" : ""), h("small", null, u.email))) },
+          h("div", null, h("b", null, u.nome, u.eu ? " (você)" : ""),
+            // plano 1000 · AS-273: quem está com o app aberto agora (acesso nos últimos 5 min)
+            estaOnline(u.ultimo_acesso) ? h("span", { class: "cfg-online" }, h("i", { "aria-hidden": "true" }), "online") : null,
+            h("small", null, u.email))) },
         { chave: "papel", rotulo: "Papel", ordenavel: true, render: u => {
           if (!u.editavel) return ui.pilula(u.gestor ? "Gestor" : ROT_PAPEL[u.papel] || u.papel, u.papel === "admin" ? "prim" : "neutra");
           const s = h("select", { class: "sel papel-sel", "aria-label": `Papel de ${u.nome}` },
             PAPEIS_EMPRESA.map(p => h("option", { value: p.valor, selected: p.valor === u.papel }, p.rotulo)));
-          s.addEventListener("change", () => salvar(u.conta_id, { papel: s.value }));
+          s.addEventListener("change", async () => {
+            const antes = u.papel, depois = s.value;
+            // plano 1000 · AS-093: promover a Administrador (acesso total) ou rebaixar um administrador pede confirmação
+            if (trocaDePapelPedeConfirmacao(antes, depois)) {
+              const ok = await ui.confirmar(depois === "admin"
+                ? { titulo: `Tornar ${u.nome} administrador?`, rotulo: "Tornar administrador", texto: "Administradores veem e mudam tudo da empresa, inclusive usuários, números e configurações." }
+                : { titulo: `Tirar ${u.nome} de administrador?`, rotulo: `Mudar para ${ROT_PAPEL[depois] || depois}`, perigo: true, texto: "A pessoa perde o acesso às configurações e aos usuários da empresa." });
+              if (!ok) { s.value = antes; s.focus(); return; }
+              return salvar(u.conta_id, { papel: depois }, { texto: `${u.nome} agora é ${ROT_PAPEL[depois] || depois}.` });
+            }
+            return salvar(u.conta_id, { papel: depois }, { desfazer: { papel: antes }, texto: `${u.nome} agora é ${ROT_PAPEL[depois] || depois}.` });
+          });
           return s;
         } },
         { chave: "departamentos", rotulo: "Departamento", render: seletorDeps },
@@ -335,9 +675,25 @@ async function secaoUsuarios(ctx, alvo) {
           return b;
         } },
       ],
-      linhas: us,
-      vazio: "Ninguém com acesso ainda. Convide a equipe.",
+      linhas,
+      vazio: us.length ? "Ninguém com esse nome ou e-mail." : "Ninguém com acesso ainda. Convide a equipe.",
     });
+    // plano 1000 · AS-235: #/config/usuarios?dep=<id> (o atalho do cartão do departamento) mostra só quem é daquele departamento
+    const depQ = ctx.rota && ctx.rota.query && ctx.rota.query.dep;
+    const depFiltro = depQ ? (dados.departamentos || []).find(d => d.id === depQ) || null : null;
+    const usVis = depFiltro ? us.filter(u => (u.departamentos || []).includes(depFiltro.id)) : us;
+    let tab = montarTabela(usVis);
+    const caixaTab = h("div", { class: "cfg-us-tab" }, tab.el);
+    const chipDep = depFiltro ? h("p", { class: "linha cfg-us-dep" }, ui.pilula(`Departamento ${depFiltro.nome} · ${usVis.length} ${usVis.length === 1 ? "pessoa" : "pessoas"}`, "info"),
+      h("a", { href: "#/config/usuarios", class: "bt bt-fant bt-p" }, ui.icone("fechar"), "Ver todos")) : null;
+    const buscaUs = us.length >= 8 ? h("input", { type: "search", class: "cfg-us-busca-inp", placeholder: "Buscar por nome ou e-mail", "aria-label": "Buscar pessoa por nome ou e-mail", autocomplete: "off" }) : null;
+    const statusUs = h("p", { class: "sr-only", role: "status", "aria-live": "polite" });
+    if (buscaUs) buscaUs.addEventListener("input", ui.debounce(() => {
+      const vis = filtrarUsuarios(usVis, buscaUs.value);
+      tab = montarTabela(vis);
+      ui.limpar(caixaTab); caixaTab.appendChild(tab.el);
+      statusUs.textContent = buscaUs.value.trim() ? `${vis.length} ${vis.length === 1 ? "pessoa encontrada" : "pessoas encontradas"}.` : "";
+    }, 150));
 
     const convites = dados.convites || [];
     const listaConv = convites.length ? h("div", { class: "lista-convites" }, convites.map(cv => {
@@ -347,9 +703,14 @@ async function secaoUsuarios(ctx, alvo) {
         try { await ui.carregando(b, api.rpcC("nx_convite_revogar", { p_convite: cv.id })); ui.toast("Convite revogado.", { tipo: "ok" }); await carregar(); }
         catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
       });
+      // plano 1000 · AS-099: papel em destaque (pílula) e os departamentos escolhidos (quando o servidor manda)
+      const depsCv = (Array.isArray(cv.departamentos) ? cv.departamentos : []).map(id => ((dados.departamentos || []).find(d => d.id === id) || {}).nome).filter(Boolean);
       return h("div", { class: "convite-item" }, ui.icone("link"),
-        h("div", null, h("b", null, cv.nome || cv.email || "Convite sem nome"),
-          h("small", null, [ROT_PAPEL[cv.papel] || cv.papel, cv.email && cv.nome ? cv.email : null, `vence ${ui.relativo(cv.expira_em)}`].filter(Boolean).join(" · "))),
+        h("div", null,
+          h("div", { class: "linha cfg-conv-tit" }, h("b", null, cv.nome || cv.email || "Convite sem nome"),
+            ui.pilula(ROT_PAPEL[cv.papel] || cv.papel || "Papel", cv.papel === "admin" ? "prim" : "neutra", { class: "cfg-conv-papel" })),
+          h("small", null, [cv.email && cv.nome ? cv.email : null, Array.isArray(cv.departamentos) ? (depsCv.length ? `Departamentos: ${depsCv.join(", ")}` : "Todos os departamentos") : null,
+            `vence ${ui.relativo(cv.expira_em)}`].filter(Boolean).join(" · "))),
         b);
     })) : h("p", { class: "fraco" }, "Nenhum convite aguardando.");
 
@@ -357,7 +718,11 @@ async function secaoUsuarios(ctx, alvo) {
       h("div", { class: "cartao" },
         h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Usuários e convites"), h("p", { class: "sub" }, usoTxt),
           h("p", { class: "fraco" }, "Vê colegas: enxerga as conversas atribuídas a outras pessoas. Rodízio: recebe conversas novas automaticamente.")), btConvidar),
-        tab.el),
+        avisoLimite,
+        chipDep,
+        buscaUs ? h("label", { class: "busca cfg-us-busca" }, ui.icone("busca"), buscaUs) : null,
+        statusUs,
+        caixaTab),
       h("div", { class: "cartao" },
         h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Convites pendentes"),
           h("p", { class: "sub" }, "Links gerados que ainda não foram usados. Quem abrir cria a conta; se já usar o sistema, entra com a senha atual."))),
@@ -373,7 +738,12 @@ async function secaoUsuarios(ctx, alvo) {
         ui.campo({ rotulo: "Nome (opcional)", nome: "nome", max: 80, autocomplete: "off" }),
         ui.campo({ rotulo: "E-mail (opcional)", nome: "email", tipo: "email", autocomplete: "off", ajuda: "Já vem preenchido no convite." })),
       deps.length ? ui.campo({ rotulo: "Departamentos", nome: "departamentos", tipo: "multipla", opcoes: deps.map(d => ({ valor: d.id, rotulo: d.nome })), ajuda: "Nenhum marcado = todos." }) : null,
-      ui.campo({ rotulo: "O link vale por", nome: "dias", tipo: "select", valor: "7", opcoes: [["1", "1 dia"], ["3", "3 dias"], ["7", "7 dias"], ["14", "14 dias"], ["30", "30 dias"]].map(([v, r]) => ({ valor: v, rotulo: r })) }));
+      ui.campo({ rotulo: "O link vale por", nome: "dias", tipo: "select", valor: DIAS_CONVITE_PADRAO, opcoes: [["1", "1 dia"], ["3", "3 dias"], ["7", "7 dias"], ["14", "14 dias"], ["30", "30 dias (menos seguro)"]].map(([v, r]) => ({ valor: v, rotulo: r })) }));
+    // plano 1000 · AS-297: 3 dias por padrão; escolher 30 mostra o risco
+    const selDias = form.querySelector("select[name=dias]");
+    const avisoDias = h("p", { class: "aviso aviso-aten cfg-conv-30", role: "status", hidden: true }, ui.icone("alerta"), h("span"));
+    selDias.closest(".campo").appendChild(avisoDias);
+    selDias.addEventListener("change", () => { const t = avisoValidadeConvite(selDias.value); avisoDias.hidden = !t; avisoDias.lastChild.textContent = t; });
     const selPapel = form.querySelector("select[name=papel]");
     selPapel.addEventListener("change", () => { const p = PAPEIS_EMPRESA.find(x => x.valor === selPapel.value); form.querySelector("#ajuda-papel").textContent = p ? p.ajuda : ""; });
     let criado = null;
@@ -386,14 +756,20 @@ async function secaoUsuarios(ctx, alvo) {
           ui.marcarErro(form, null);
           const d = ui.lerForm(form);
           if (d.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.email)) { ui.marcarErro(form, "email", "Esse e-mail não parece válido."); return false; }
-          const r = await api.rpcC("nx_convite_criar", { p_dados: { papel: d.papel, nome: d.nome || null, email: d.email || null, departamentos: d.departamentos || [], dias: Number(d.dias) || 7 }, p_org: null });
+          const r = await api.rpcC("nx_convite_criar", { p_dados: { papel: d.papel, nome: d.nome || null, email: d.email || null, departamentos: d.departamentos || [], dias: Number(d.dias) || Number(DIAS_CONVITE_PADRAO) }, p_org: null });
           criado = r;
           const link = linkCompleto(ctx, r.link);
           const saud = d.nome ? `Olá, ${d.nome.split(" ")[0]}!` : "Olá!";
           ui.limpar(m.corpo);
           m.corpo.append(
             h("div", { class: "aviso aviso-ok" }, ui.icone("check"), h("p", null, "Convite criado. Envie o link para a pessoa — ele não chega por e-mail.")),
-            ui.blocoLink(link, { rotulo: "Link do convite", textoWhats: `${saud} Você foi convidado para acessar a ${ctx.cliente.nome} no ${ctx.shell.marcaEfetiva().produto}. Crie seu acesso por este link:` }),
+            ui.blocoLink(link, { rotulo: "Link do convite", textoWhats: `${saud} Você foi convidado para acessar a ${ctx.cliente.nome} no ${ctx.shell.marcaEfetiva().produto}. Crie seu acesso por este link:`,
+              // plano 1000 · AS-272: abre as Conversas com o texto pronto no campo (não envia sozinho); só com o módulo de Conversas
+              central: typeof ctx.temModulo === "function" && !ctx.temModulo("conversas") ? null : texto => {
+                m.fechar(true);
+                const ir = () => ctx.navegar(`#/conversas?texto=${encodeURIComponent(String(texto).slice(0, 1000))}`);
+                if (ui.camadas && typeof ui.camadas.aposVolta === "function") ui.camadas.aposVolta(ir); else ir();
+              } }),
             h("p", { class: "fraco" }, `Vale até ${ui.dataHoraBR(r.expira_em)} e só uma vez.`));
           const bt = m.el.querySelector(".modal-rod [data-tipo=primario]");
           if (bt) bt.textContent = "Concluir";
@@ -570,25 +946,48 @@ async function secaoMarca(ctx, alvo) {
   ].filter(Boolean);
   let ativa = itens.some(i => i.id === ctx.rota.query.de) ? ctx.rota.query.de : itens[0].id;
   let limpar = null;
+  let montagemMarca = 0;
   const corpo = h("div", { class: "pilha" });
   const explica = h("p", { class: "sub" });
+  const sujoAgora = () => !!(limpar && typeof limpar.sujo === "function" && limpar.sujo());
   function abrir(id) {
     ativa = id;
     if (limpar) try { limpar(); } catch { /* ok */ }
+    limpar = null;
     explica.textContent = id === "tema"
       ? `Logo e cores só desta empresa. Quem entra na ${ctx.cliente.nome} vê o app com elas; o resto segue a marca da ${nomeOrg}.`
       : (ctx.sessao.conta.super
         ? "A marca padrão do produto: nome, logo, cores e a tela de entrada. Vale para os clientes da plataforma sem tema próprio."
         : "O app com a SUA marca para todos os seus clientes: nome do produto, logo, cores, tela de entrada e WhatsApp de suporte.");
-    editorMarca(ctx, corpo, { tipo: id, org }).then(f => { limpar = f; });
+    // plano 1000 · AS-102: cada aba ganha um contêiner próprio e só a última montagem vale — trocar rápido não deixa o editor antigo
+    // terminar depois e pintar por cima do novo (nem devolver a limpeza errada)
+    const eu = ++montagemMarca;
+    const caixa = h("div", { class: "pilha" });
+    ui.limpar(corpo); corpo.appendChild(caixa);
+    editorMarca(ctx, caixa, { tipo: id, org }).then(f => {
+      if (eu !== montagemMarca) { try { if (f) f(); } catch { /* ok */ } return; }
+      limpar = f;
+    });
   }
+  let ab = null;
   if (itens.length > 1) {
-    const ab = ui.abas({ itens, ativo: ativa, rotulo: "O que editar", aoMudar: abrir });
+    ab = ui.abas({ itens, ativo: ativa, rotulo: "O que editar", aoMudar: async id => {
+      if (id === ativa) return;
+      // plano 1000 · AS-103: trocar de aba com cor/logo mexidos e não salvos pergunta antes de descartar
+      if (sujoAgora() && !(await ui.confirmar({ titulo: "Descartar as mudanças da marca?", rotulo: "Descartar", perigo: true,
+        texto: "As mudanças desta aba ainda não foram salvas e serão perdidas." }))) { ab.ativar(ativa); return; }
+      abrir(id);
+    } });
     alvo.append(ab.el);
   }
   alvo.append(explica, corpo);
   abrir(ativa);
-  return () => { if (limpar) limpar(); };
+  return {
+    limpar: () => { montagemMarca++; if (limpar) limpar(); },
+    pendente: sujoAgora,
+    podeSair: async () => !sujoAgora() || ui.confirmar({ titulo: "Sair sem salvar a marca?", rotulo: "Sair sem salvar", perigo: true,
+      texto: "As mudanças de logo e cores ainda não foram salvas e serão perdidas." }),
+  };
 }
 
 /**
@@ -663,15 +1062,24 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     form.append(
       h("div", { class: "form-grade" },
         ui.campo({ rotulo: "Nome do produto", nome: "produto", valor: m.produto, max: T.LIMITES_MARCA.produto, placeholder: T.PADRAO.produto, ajuda: "Aparece no menu, na aba do navegador e na tela de entrada." }),
-        ui.campo({ rotulo: "Assinatura", nome: "assinatura", valor: m.assinatura, max: T.LIMITES_MARCA.assinatura, placeholder: "Ex.: Equipe Conecta", ajuda: "Usada pela IA e nos textos automáticos." })));
+        ui.campo({ rotulo: "Assinatura", nome: "assinatura", valor: m.assinatura, max: T.LIMITES_MARCA.assinatura, placeholder: "Equipe Sorriso", ajuda: "Usada pela IA e nos textos automáticos." })));
   }
   const formEntrada = h("form", { class: "pilha", novalidate: true });
   formEntrada.addEventListener("submit", ev => ev.preventDefault());
+  // plano 1000 · AS-109: prévia do link do «Falar com o suporte» (o número errado abria conversa com outra pessoa)
+  const previaWa = h("p", { class: "fraco cfg-wa-previa", "aria-live": "polite" });
+  const pintarPreviaWa = () => {
+    const v = String(m.suporte_wa || "").trim();
+    const r = suporteWaValido(v);
+    previaWa.textContent = !v ? "" : r.ok ? `O botão de suporte abre: wa.me/${r.digitos}` : r.erro;
+    previaWa.classList.toggle("campo-erro", !!v && !r.ok);
+  };
   if (!soTema) {
     formEntrada.append(
       ui.campo({ rotulo: "Título da tela de entrada", nome: "login_titulo", valor: m.login_titulo, max: T.LIMITES_MARCA.login_titulo, placeholder: "Anúncio, conversa e venda na mesma órbita." }),
       ui.campo({ rotulo: "Texto de apoio", nome: "login_texto", tipo: "textarea", linhas: 2, valor: m.login_texto, max: T.LIMITES_MARCA.login_texto, placeholder: "Entre com o e-mail e a senha que você recebeu." }),
-      ui.campo({ rotulo: "WhatsApp de suporte", nome: "suporte_wa", tipo: "tel", valor: m.suporte_wa, placeholder: "5512999998888", ajuda: "Só números, com 55 e DDD. Aparece em \"Esqueci a senha\" e nos avisos de teste e suspensão." }));
+      ui.campo({ rotulo: "WhatsApp de suporte", nome: "suporte_wa", tipo: "tel", valor: m.suporte_wa, placeholder: "5512999998888", ajuda: "Só números, com 55 e DDD. Aparece em \"Esqueci a senha\" e nos avisos de teste e suspensão." }),
+      previaWa);
   }
   for (const f of [form, formEntrada]) {
     f.addEventListener("input", ev => {
@@ -700,8 +1108,9 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
       sugestoes.append(b);
     }
   }
+  let colarLogo = null;         // AS-110: Ctrl+V de uma imagem no editor vai para o logo
   function controleImagem({ chave, rotulo, ajuda, claro = false, favicon = false }) {
-    const amostra = h("div", { class: ["logo-amostra", claro && "claro", favicon && "favicon"] });
+    const amostra = h("div", { class: ["logo-amostra", claro && "claro", favicon && "favicon"], title: "Arraste uma imagem para cá" });
     const arquivo = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp", class: "sr-only", tabindex: "-1", "aria-hidden": "true" });
     const btEnviar = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("clipe"), "Enviar imagem");
     const btRemover = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("lixeira"), "Remover");
@@ -727,9 +1136,7 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     }
     btEnviar.addEventListener("click", () => arquivo.click());
     btRemover.addEventListener("click", () => { m[chave] = ""; desenhar(); if (chave === "logo") mostrarSugestoes(null); atualizar(); });
-    arquivo.addEventListener("change", async () => {
-      const f = arquivo.files && arquivo.files[0];
-      arquivo.value = "";
+    async function usarArquivo(f) {
       if (!f) return;
       erro.hidden = true;
       try {
@@ -739,16 +1146,35 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
         desenhar(); atualizar();
         ui.anunciar(`${rotulo} atualizado na pré-visualização.`);
       } catch (e) { erro.textContent = textoErroImagem(e); erro.hidden = false; }
+    }
+    arquivo.addEventListener("change", () => {
+      const f = arquivo.files && arquivo.files[0];
+      arquivo.value = "";
+      usarArquivo(f);
     });
+    // plano 1000 · AS-110: arrastar o arquivo para a amostra também troca a imagem (o mesmo processarImagem do botão)
+    amostra.addEventListener("dragover", ev => { if (!ev.dataTransfer || ![...(ev.dataTransfer.types || [])].includes("Files")) return; ev.preventDefault(); amostra.classList.add("logo-alvo"); });
+    amostra.addEventListener("dragleave", () => amostra.classList.remove("logo-alvo"));
+    amostra.addEventListener("drop", ev => {
+      amostra.classList.remove("logo-alvo");
+      const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+      if (!f) return;
+      ev.preventDefault();
+      usarArquivo(f);
+    });
+    if (chave === "logo") colarLogo = usarArquivo;
     if (extra) extra.addEventListener("click", async () => {
       const u = T.imagemSegura(m.logo);
       if (!u) { erro.textContent = "Envie o logo primeiro."; erro.hidden = false; return; }
       try {
-        const img = new Image(); img.src = u; await img.decode();
-        const bmp = await createImageBitmap(img);
-        m.favicon = await desenharReduzido(bmp, 64, 64, { quadrado: true, png: true });
-        if (bmp.close) bmp.close();
+        // plano 1000 · AS-105: decodificar e redesenhar um logo grande demora — o botão mostra que está trabalhando
+        m.favicon = await ui.carregando(extra, (async () => {
+          const img = new Image(); img.src = u; await img.decode();
+          const bmp = await createImageBitmap(img);
+          try { return await desenharReduzido(bmp, 64, 64, { quadrado: true, png: true }); } finally { if (bmp.close) bmp.close(); }
+        })());
         erro.hidden = true; desenhar(); atualizar();
+        ui.anunciar("Ícone da aba gerado a partir do logo.");
       } catch { erro.textContent = "Não foi possível gerar o ícone a partir do logo."; erro.hidden = false; }
     });
     desenhar();
@@ -824,6 +1250,14 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     opcoes: [{ valor: "app", rotulo: "App", icone: "inicio" }, { valor: "entrada", rotulo: "Tela de entrada", icone: "cadeado" }],
     aoMudar: v => { previa.hidden = v !== "app"; pvLogin.el.hidden = v !== "entrada"; } });
   const segPreviaEl = segPrevia && segPrevia.nodeType ? segPrevia : segPrevia.el;     // ui.segmentado devolve o elemento (ou {el}, nas versões anteriores)
+  // AS-112: «Claro / Escuro» na prévia (botões alternáveis; o marcado é o esquema mostrado agora)
+  let esquemaPrevia = null;
+  const segEsquema = T.FUNDOS_ESQUEMA ? h("div", { class: "linha cfg-esq-prev", role: "group", "aria-label": "Ver a prévia em" },
+    [["claro", "Claro"], ["escuro", "Escuro"]].map(([k, rot]) => {
+      const b = h("button", { type: "button", class: "bt bt-fant bt-p", "aria-pressed": "false", dataset: { esq: k } }, rot);
+      b.addEventListener("click", () => { esquemaPrevia = k; atualizar(); });
+      return b;
+    })) : null;
   const avisos = h("div", { class: "avisos-marca", "aria-live": "polite" });
   const estado = h("small", { class: "fraco marca-estado", "aria-live": "polite" });
 
@@ -839,20 +1273,27 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
   function atualizar() {
     const ef = efetiva();
     const t = T.derivarTema(ef.cores);
-    T.aplicarTema(t.vars, previa);
+    // plano 1000 · AS-112: a prévia mostra a mesma marca no outro esquema (fundo claro/escuro padrão), sem mudar o que será salvo
+    const esqMarca = t.escuro ? "escuro" : "claro";
+    const outro = esquemaPrevia && esquemaPrevia !== esqMarca && T.FUNDOS_ESQUEMA ? T.derivarTema({ ...ef.cores, fundo: T.FUNDOS_ESQUEMA[esquemaPrevia] }) : null;
+    const tv = outro || t;
+    T.aplicarTema(tv.vars, previa);
     ui.limpar(pvLogo);
     const lg = logoPrevia(ef);
     pvLogo.append(lg ? h("img", { src: lg, alt: "" }) : h("svg", { class: "pv-marca", viewBox: "0 0 48 48", "aria-hidden": "true" }, h("use", { href: "#marca-orbita" })));
     pvProduto.textContent = ef.produto;
-    pvEsquema.textContent = t.escuro ? "Palco escuro" : "Tema claro";
-    T.aplicarTema(t.vars, pvLogin.el);
+    pvEsquema.textContent = (t.escuro ? "Palco escuro" : "Tema claro") + (outro ? " · prévia no outro esquema" : "");
+    if (segEsquema) for (const b of segEsquema.querySelectorAll("button")) { const on = b.dataset.esq === (esquemaPrevia || esqMarca); b.setAttribute("aria-pressed", String(on)); }
+    T.aplicarTema(tv.vars, pvLogin.el);
     pvLogin.atualizar(ef, { logo: lg });
     ui.limpar(avisos);
     if (t.avisos.length) for (const a of t.avisos) avisos.append(h("div", { class: "aviso aviso-aten" }, ui.icone("alerta"), h("p", null, a.texto)));
     else avisos.append(h("div", { class: "aviso aviso-ok" }, ui.icone("check"), h("p", null, "Contraste conferido: textos, links e botões legíveis.")));
     const s = sujo();
     estado.textContent = s ? "Alterações ainda não salvas." : "Tudo salvo.";
-    btSalvar.disabled = false;
+    // plano 1000 · AS-104: sem mudança não há o que salvar
+    btSalvar.disabled = !s;
+    if (!soTema) pintarPreviaWa();
     if (appInteiro) ctx.shell.pintarMarca(ef);
   }
   btApp.addEventListener("click", () => {
@@ -872,6 +1313,7 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     const p = payload();
     const erros = T.validarMarca(p, soTema);
     if (!soTema && !p.produto) erros.push({ campo: "produto", texto: "Informe o nome do produto." });
+    if (!soTema && m.suporte_wa && !suporteWaValido(m.suporte_wa).ok) erros.push({ campo: "suporte_wa", texto: suporteWaValido(m.suporte_wa).erro });
     if (erros.length) {
       for (const e of erros) {
         if (form.querySelector(`[name="${e.campo}"]`)) ui.marcarErro(form, e.campo, e.texto);
@@ -915,17 +1357,28 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     soTema ? null : cartao("Tela de entrada", h("span", null, "O que aparece antes do login, no seu domínio ou pelo link ", h("span", { class: "mono nowrap" }, "/app/?org=" + (orgInfo ? orgInfo.slug : "")), "."), formEntrada));
   const direita = h("div", { class: "marca-previa-env" },
     h("div", { class: "linha linha-entre" }, h("p", { class: "rotulo" }, "Pré-visualização ao vivo"), pvEsquema),
-    segPreviaEl,
+    h("div", { class: "linha linha-entre cfg-prev-ctl" }, segPreviaEl, segEsquema),
     previa, pvLogin.el, avisos,
     h("div", { class: "linha marca-acoes" }, btApp, btPadrao, h("span", { class: "marca-espaco" }), btSalvar),
     estado);
   ui.limpar(alvo);
-  alvo.append(h("div", { class: "marca-ed" }, esquerda, direita));
+  const editorEl = h("div", { class: "marca-ed" }, esquerda, direita);
+  // AS-110: colar (Ctrl+V) uma imagem com o foco no editor troca o logo — texto colado num campo segue normal
+  editorEl.addEventListener("paste", ev => {
+    const itens = ev.clipboardData ? [...(ev.clipboardData.files || [])] : [];
+    const img = itens.find(f => f && /^image\//.test(f.type));
+    if (!img || !colarLogo) return;
+    ev.preventDefault();
+    colarLogo(img);
+  });
+  alvo.append(editorEl);
   atualizar();
   const lg = T.imagemSegura(m.logo) || (soTema ? T.imagemSegura(reserva.logoUrl) : null);
   if (lg) pxDeUrl(lg).then(px => { if (px && alvo.isConnected) mostrarSugestoes(px); });
 
-  return () => { if (appInteiro) { appInteiro = false; ctx.shell.aplicarMarcaCliente(); } };
+  const fim = () => { if (appInteiro) { appInteiro = false; ctx.shell.aplicarMarcaCliente(); } };
+  fim.sujo = sujo;          // plano 1000 · AS-103/AS-082: quem abriu o editor sabe se há mudança não salva
+  return fim;
 }
 
 /* ---------------- seção: Domínio próprio ---------------- */
@@ -949,6 +1402,12 @@ async function secaoDominio(ctx, alvo) {
     const d = ui.lerForm(form);
     const host = String(d.host || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) return ui.marcarErro(form, "host", "Use algo como crm.suaempresa.com.br.");
+    // plano 1000 · AS-113: domínio raiz não aceita CNAME — a pessoa criava o registro e o domínio nunca ativava
+    if (ehDominioRaiz(host) && !(await ui.confirmar({ titulo: "Isso parece um domínio raiz", rotulo: "Usar mesmo assim",
+      texto: `«${host}» não aceita CNAME na maioria dos provedores, e sem CNAME o domínio não ativa. Prefira um subdomínio, como crm.${host} ou app.${host}.` }))) {
+      ui.marcarErro(form, "host", `Use um subdomínio, como crm.${host}.`);
+      return;
+    }
     try {
       lista = validarListaDominios(await ui.carregando(form.querySelector("[type=submit]"), api.rpc("nx_dominio_salvar", { p_host: host, p_cliente: d.cliente || null })));
       form.reset();
@@ -1000,6 +1459,9 @@ export function cartaoDominio(ctx, d, { aoRemover, aoStatus, mostrarOrg = false 
     const b = h("button", { type: "button", class: ativo ? "bt bt-sec bt-p" : "bt bt-prim bt-p" }, ui.icone(ativo ? "relogio" : "check"), ativo ? "Voltar a pendente" : "Marcar ativo");
     b.addEventListener("click", async () => {
       if (!ativo && !(await ui.confirmar({ titulo: `Ativar ${d.host}?`, texto: "Confirme que o alias já foi adicionado no Netlify e o certificado saiu. A partir daqui, os links desse cliente/agência usam este endereço.", rotulo: "Marcar ativo" }))) return;
+      // plano 1000 · AS-115: voltar a pendente tira o endereço do ar para convites e links — um toque não basta
+      if (ativo && !(await ui.confirmar({ titulo: `Voltar ${d.host} a pendente?`, perigo: true, rotulo: "Voltar a pendente",
+        texto: "Convites, links de nova senha e a tela de entrada deixam de usar este endereço na hora e voltam ao endereço padrão. Quem abrir um link antigo com ele pode cair numa página de erro." }))) return;
       try { await ui.carregando(b, aoStatus(!ativo)); } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
     });
     acoes.append(b);
@@ -1013,6 +1475,14 @@ export function cartaoDominio(ctx, d, { aoRemover, aoStatus, mostrarOrg = false 
     });
     acoes.append(b);
   }
+  // plano 1000 · AS-116: pendente há quanto tempo (a promessa é 1 dia útil); passado o prazo, «Avisar a Nexus» pelo WhatsApp de suporte
+  const idade = !ativo && d.criado_em ? diasUteisDesde(d.criado_em) : null;
+  const wa = (() => { try { const me = ctx.shell && typeof ctx.shell.marcaEfetiva === "function" ? ctx.shell.marcaEfetiva() : null; return me && me.suporte_wa; } catch { return null; } })();
+  const atrasado = idade != null && idade >= 1;
+  const linhaIdade = idade != null ? h("p", { class: ["fraco", "dom-idade", atrasado && "dom-idade-atrasado"] }, ui.icone("relogio"),
+    h("span", null, `Cadastrado ${ui.relativo(d.criado_em)}${atrasado ? " — passou de 1 dia útil." : "."}`),
+    atrasado && wa && !aoStatus ? h("a", { class: "bt bt-sec bt-p dom-avisar", href: ui.linkWhatsApp(`Olá! O domínio ${d.host} está pendente desde ${ui.dataBR(d.criado_em)}. Já criei o CNAME; podem ativar?`, wa), target: "_blank", rel: "noopener noreferrer" },
+      ui.icone("whatsapp"), "Avisar a Nexus") : null) : null;
   return h("article", { class: "cartao dom-item" },
     h("div", { class: "cartao-cab" },
       h("div", { class: "dom-tit" }, ui.icone("globo"),
@@ -1028,6 +1498,7 @@ export function cartaoDominio(ctx, d, { aoRemover, aoStatus, mostrarOrg = false 
       : alvoDns
         ? `Crie o registro CNAME: ${d.host} → ${alvoDns}${semAlvo ? " (o endereço atual do app)" : ""}. A Nexus ativa o domínio em até 1 dia útil.`
         : `Peça à Nexus o destino do registro CNAME de ${d.host} antes de mexer no DNS. A Nexus ativa o domínio em até 1 dia útil.`),
+    linhaIdade,
     acoes.childNodes.length ? acoes : null);
 }
 
@@ -1049,12 +1520,24 @@ async function secaoPlano(ctx, alvo) {
   catch (e) { ui.limpar(alvo); alvo.append(ui.erroCartao(e, () => { ui.limpar(alvo); secaoPlano(ctx, alvo); })); return; }
   ui.limpar(alvo);
   const p = r.plano || {};
-  const [stTxt, stCor] = ROT_STATUS[r.status] || [r.status || "—", "neutra"];
   const wa = ctx.shell.marcaEfetiva() && ctx.shell.marcaEfetiva().suporte_wa;
   const hoje = ui.hojeSP();
+  const [stTxt, stCor] = statusDoPlano(r.status, r.teste_ate, hoje);     // plano 1000 · AS-117
   const fracao = k => (r.limites && r.limites[k] != null ? (r.limites[k] > 0 ? (r.uso[k] || 0) / r.limites[k] : 1) : 0);
   const cheios = USO_ROT.filter(([k]) => fracao(k) >= 1), perto = USO_ROT.filter(([k]) => fracao(k) >= .8 && fracao(k) < 1);
   const lista = xs => xs.map(x => x[2]).join(", ").replace(/, ([^,]*)$/, " e $1");
+  const quem = (r.org && r.org.nome) || (ctx.sessao && ctx.sessao.org && ctx.sessao.org.nome) || null;
+  const bQueroAumentar = wa ? null : h("button", { type: "button", class: "bt bt-prim cfg-quero-aumentar" }, "Quero aumentar");
+  if (bQueroAumentar) bQueroAumentar.addEventListener("click", async () => {
+    const pedido = `Olá! Quero aumentar o plano ${p.nome || ""} da ${ctx.cliente.nome}${cheios.length || perto.length ? `: estamos no limite (ou perto) de ${lista([...cheios, ...perto])}` : ""}.`.replace(/\s+/g, " ");
+    const bCopiar = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("copiar"), "Copiar o pedido");
+    bCopiar.addEventListener("click", () => ui.copiar(pedido, { aviso: "Pedido copiado." }));
+    await ui.modal({ titulo: "Aumentar o plano", largura: "p",
+      corpo: h("div", { class: "pilha" },
+        h("p", null, quem ? `Quem cuida do seu plano é a ${quem}. Mande o pedido por e-mail ou mensagem para quem atende vocês lá.` : "Quem cuida do seu plano é a empresa que contratou o sistema para vocês. Mande o pedido para quem atende vocês."),
+        h("p", { class: "cv-previa" }, pedido), h("div", { class: "linha" }, bCopiar)),
+      acoes: [{ rotulo: "Fechar", tipo: "neutro" }] });
+  });
   const cab = h("div", { class: "cartao plano-cab" },
     h("div", { class: "plano-tit" },
       h("p", { class: "rotulo" }, "Seu plano"),
@@ -1064,8 +1547,17 @@ async function secaoPlano(ctx, alvo) {
       h("div", { class: "linha" }, ui.pilula(stTxt, stCor),
         r.status === "teste" && r.teste_ate ? ui.pilula(r.teste_ate >= hoje ? `Teste até ${ui.dataBR(r.teste_ate)}` : `Teste terminou em ${ui.dataBR(r.teste_ate)}`, r.teste_ate >= hoje ? "info" : "ruim") : null),
       h("div", { class: "linha" }, (r.modulos || []).map(m => ui.pilula(ROT_MOD[m] || m, "neutra"))),
-      wa ? h("a", { class: "bt bt-sec", href: ui.linkWhatsApp(`Olá! Quero falar sobre o plano da ${ctx.cliente.nome}.`, wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Falar com o suporte") : null));
-  const usos = h("div", { class: "adm-uso" }, USO_ROT.map(([k, rot]) => ui.barraUso(rot, r.uso ? r.uso[k] : 0, r.limites ? r.limites[k] : null)));
+      // plano 1000 · AS-241: sempre há um próximo passo para aumentar (WhatsApp da revenda, ou quem procurar quando não há WhatsApp)
+      h("div", { class: "linha" },
+        wa ? h("a", { class: "bt bt-prim cfg-quero-aumentar", href: ui.linkWhatsApp(`Olá! Quero aumentar o plano da ${ctx.cliente.nome}${cheios.length || perto.length ? ` (${lista([...cheios, ...perto])})` : ""}.`, wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Quero aumentar")
+          : bQueroAumentar,
+        wa ? h("a", { class: "bt bt-sec", href: ui.linkWhatsApp(`Olá! Quero falar sobre o plano da ${ctx.cliente.nome}.`, wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Falar com o suporte") : null)));
+  // AS-242: cada barra explica o que conta (convites pendentes, funis desligados, contatos…)
+  const usos = h("div", { class: "adm-uso" }, USO_ROT.map(([k, rot]) => {
+    const b = ui.barraUso(rot, r.uso ? r.uso[k] : 0, r.limites ? r.limites[k] : null);
+    if (REGRA_USO[k]) b.appendChild(h("small", { class: "uso-det cfg-uso-regra" }, REGRA_USO[k]));
+    return b;
+  }));
   // Element.append() transforma null em texto: só entram os blocos que existem
   alvo.append(...[cab,
     cheios.length || perto.length ? h("div", { class: ["aviso", cheios.length ? "aviso-ruim" : "aviso-aten"] }, ui.icone("alerta"), h("p", null,

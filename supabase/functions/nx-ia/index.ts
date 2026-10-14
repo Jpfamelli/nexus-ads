@@ -5,6 +5,7 @@
 // Deploy a partir de supabase/dist/nx-ia (scripts/montar-funcoes.mjs), verify_jwt: false.
 // O SDK da Anthropic só é carregado (ia.js) quando há chave e a conversa já foi conferida.
 import { tratar } from "./ia_conversas.js";
+import { comVersao } from "./comum.js";
 
 function envObrigatorio(nome: string): string {
   const valor = Deno.env.get(nome);
@@ -16,4 +17,5 @@ const env = { url: envObrigatorio("SUPABASE_URL"), chave: envObrigatorio("SUPABA
 // deno-lint-ignore no-explicit-any
 const emSegundoPlano = (p: Promise<unknown>) => (globalThis as any).EdgeRuntime?.waitUntil(p) ?? p;
 
-Deno.serve((req) => tratar(req, env, { emSegundoPlano, ia: () => import("./ia.js") }));
+// plano 1000 (SV-164): toda resposta diz a versão que está no ar (x-orbita-versao)
+Deno.serve(async (req) => comVersao(await tratar(req, env, { emSegundoPlano, ia: () => import("./ia.js") })));

@@ -316,9 +316,12 @@
                   <span><i class="lg lg-line"></i> Conversas</span>
                 </p>
                 <button class="chip-tg" id="btn-comparar" type="button" aria-pressed="true"><i class="lg lg-ant"></i>comparar com o período anterior</button>
+                <!-- plano 1000 (AD-209): o gráfico diário também como tabela (leitor de tela, quem prefere números) -->
+                <button class="chip-tg" id="btn-tabela-dia" type="button" aria-pressed="false" aria-controls="tabela-dia">ver como tabela</button>
               </div>
             </header>
             <div class="chart" id="chart-dia" tabindex="0" role="group" aria-label="Gráfico diário. Use as setas para ler cada dia; Home e End vão às pontas."></div>
+            <div class="tabela-dia" id="tabela-dia" hidden></div>
             <form class="marco-form" id="marco-form" novalidate hidden></form>
           </article>
 

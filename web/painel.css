@@ -1607,3 +1607,24 @@ button.kmore { color: var(--bronze-luz); text-decoration: underline; text-underl
     --t-corte: 0s; --t-dados: 0s; --t-interp: 0s; --t-caneta: 0s; --t-brilho: 0s; --t-notif: 0s;
   }
 }
+
+/* ============================================================
+   PLANO 1000 — frente ads: leitura parcial, tabela do gráfico diário e alvos de 44 px no toque
+   ============================================================ */
+/* AD-208: a pílula da leitura parcial (pode faltar parte dos números) */
+.sp-parcial { color: var(--aten); }
+.sp-parcial .sync-pt { background: var(--aten); }
+/* AD-209: «ver como tabela» do gráfico diário */
+.tabela-dia { margin-top: .8rem; }
+.tabela-dia-rol { max-width: 100%; overflow-x: auto; }
+.tabela-dia-t { width: 100%; border-collapse: collapse; font-size: .875rem; font-variant-numeric: tabular-nums; }
+.tabela-dia-t th, .tabela-dia-t td { padding: .45rem .5rem; text-align: right; border-bottom: 1px solid var(--hair); white-space: nowrap; }
+.tabela-dia-t th[scope="row"], .tabela-dia-t thead th:first-child { text-align: left; }
+.tabela-dia-t thead th { color: var(--fg-mute); font-weight: 500; }
+/* AD-203: no toque e a 360 px, chips e o «Pular para o conteúdo» com alvo de 44 px */
+.skip:focus { min-height: 44px; display: inline-flex; align-items: center; }
+@media (pointer: coarse), (max-width: 480px) {
+  .chip-tg, .seg button, .pill-sm, .link-b { min-height: 44px; }
+}
+/* plano 1000 (AD-116): sem meta de custo (0) o ponto da campanha fica neutro */
+.dot-neutro { background: var(--fg-mute); }

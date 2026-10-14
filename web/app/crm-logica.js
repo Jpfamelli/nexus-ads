@@ -209,6 +209,20 @@ export function gerarCSV(cabecalho, linhas) {
   return "﻿" + [cabecalho, ...linhas].map(l => l.map(csvCampo).join(";")).join("\r\n");
 }
 
+/**
+ * plano 1000 (CR-239): planilha-modelo da importação — os cabeçalhos que sugerirMapeamento reconhece sozinho (reimportar o modelo não pede mapa)
+ * + os campos personalizados de contato (pelo rótulo) e 2 linhas de exemplo. → {cabecalho, linhas}
+ */
+export function modeloImportacao(campos = []) {
+  const extra = (campos || []).filter(c => c && c.entidade === "contato" && c.ativo !== false && c.rotulo);
+  const cabecalho = ["Nome", "Telefone", "E-mail", "Cidade", "UF", "Nascimento", "Origem", "Etiquetas", "Observação", ...extra.map(c => c.rotulo)];
+  const vazio = extra.map(() => "");
+  return { cabecalho, linhas: [
+    ["Ana Souza", "(12) 99830-3030", "ana@exemplo.com.br", "Taubaté", "SP", "02/03/1990", "Indicação", "VIP; Retorno", "Prefere horário de manhã", ...vazio],
+    ["Carlos Lima", "(12) 3456-7890", "", "São José dos Campos", "SP", "", "WhatsApp", "", "", ...vazio],
+  ] };
+}
+
 /* ------------------------------------------------------------ mapeamento da importação */
 /** Destinos fixos da importação (chaves da linha de nx_contatos_importar). */
 export const DESTINOS_IMPORTACAO = Object.freeze([
@@ -291,15 +305,47 @@ export function montarLinhas(linhas, mapa) {
       if (v === "") return;
       if (dest.startsWith("campo:")) { (o.campos || (o.campos = {}))[dest.slice(6)] = v; return; }
       if (o[dest] !== undefined && dest === "obs") { o.obs += " · " + v; return; }
-      if (o[dest] === undefined) o[dest] = v;
+      // plano 1000 (CR-129): «São Paulo» vira SP e «Indicação»/«Whats» viram a origem certa (antes viravam aviso e a linha perdia o dado)
+      if (o[dest] === undefined) o[dest] = dest === "uf" ? ufDaPlanilha(v) : dest === "origem" ? origemDaPlanilha(v) : v;
     });
     return o;
   });
 }
 
+const UF_POR_NOME = Object.freeze({ acre: "AC", alagoas: "AL", amapa: "AP", amazonas: "AM", bahia: "BA", ceara: "CE", "distrito federal": "DF", "espirito santo": "ES",
+  goias: "GO", maranhao: "MA", "mato grosso": "MT", "mato grosso do sul": "MS", "minas gerais": "MG", para: "PA", paraiba: "PB", parana: "PR", pernambuco: "PE",
+  piaui: "PI", "rio de janeiro": "RJ", "rio grande do norte": "RN", "rio grande do sul": "RS", rondonia: "RO", roraima: "RR", "santa catarina": "SC",
+  "sao paulo": "SP", sergipe: "SE", tocantins: "TO" });
+/** plano 1000 (CR-129): UF da planilha — «sp», «São Paulo», «Estado de São Paulo» → «SP»; o resto volta como veio (a checagem avisa). */
+export function ufDaPlanilha(v) {
+  const t = String(v ?? "").trim();
+  if (/^[A-Za-z]{2}$/.test(t)) return t.toUpperCase();
+  const n = semAcento(t).replace(/^estado d[eoa]s?\s+/, "").replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
+  return UF_POR_NOME[n] || t;
+}
+const ORIGEM_POR_TEXTO = Object.freeze({ anuncio: "anuncio", "anuncio pago": "anuncio", trafego: "anuncio", "trafego pago": "anuncio", whatsapp: "whatsapp", whats: "whatsapp",
+  zap: "whatsapp", wpp: "whatsapp", indicacao: "indicacao", indicado: "indicacao", "indicado por": "indicacao", "boca a boca": "indicacao", organico: "organico",
+  manual: "manual", "cadastro manual": "manual", balcao: "manual", recepcao: "manual", site: "site", website: "site", "formulario do site": "site", importacao: "importacao" });
+/**
+ * plano 1000 (CR-129): origem da planilha — o rótulo da tela («Indicação», «Cadastro manual») ou um sinônimo comum («Whats», «boca a boca») vira a chave.
+ * Instagram/Facebook/Google ficam como vieram (o servidor avisa): sem a plataforma e a campanha não dá para saber se foi anúncio ou orgânico, e marcar
+ * «Anúncio» sem plataforma polui os números dos anúncios (CR-094).
+ */
+export function origemDaPlanilha(v) {
+  const t = String(v ?? "").trim();
+  const n = semAcento(t).replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
+  return ORIGEM_POR_TEXTO[n] || t;
+}
+
 /** Problemas de uma linha montada (antes de mandar): [] = ok. Linha sem nome, telefone e e-mail → 'vazia'. */
-export function checarLinha(o) {
+export function checarLinha(o, { campos = [] } = {}) {
   const erros = [];
+  // plano 1000 (CR-232): campo personalizado com valor que o tipo não aceita («x» fora das opções, data inválida) avisa na prévia, linha a linha
+  for (const [chave, v] of Object.entries((o && o.campos) || {})) {
+    const def = (campos || []).find(c => c && c.chave === chave);
+    const er = def ? validarCampo({ ...def, obrigatorio: false }, v) : null;
+    if (er) erros.push(`${def.rotulo || chave}: ${er.replace(/\.$/, "")}`);
+  }
   if (!o.nome && !o.telefone && !o.email) return ["Linha sem nome, telefone e e-mail — será ignorada"];
   // C7: número de outro país digitado sem o «+» não vira número brasileiro — a linha entra sem telefone e a pessoa sabe como corrigir
   if (o.telefone && !normalizarTelefone(o.telefone)) erros.push(telefoneSemPais(o.telefone) ? "Telefone sem DDD brasileiro: se for de fora do Brasil, escreva com +código do país" : "Telefone inválido");
@@ -327,8 +373,11 @@ export function lerNumero(s) {
   if (typeof s === "number") return Number.isFinite(s) ? s : null;
   let t = String(s).replace(/[R$\s ]/g, "");
   if (!t) return null;
-  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
-  else if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, "");
+  // plano 1000 (CR-114): com vírgula E ponto, o separador decimal é o ÚLTIMO dos dois — «1.234,56» (Brasil) e «1,234.56» (planilha em inglês) = 1234,56
+  const ultVirgula = t.lastIndexOf(","), ultPonto = t.lastIndexOf(".");
+  if (ultVirgula >= 0 && ultPonto >= 0) t = ultVirgula > ultPonto ? t.replace(/\./g, "").replace(",", ".") : t.replace(/,/g, "");
+  else if (ultVirgula >= 0) t = /^-?\d{1,3}(,\d{3}){2,}$/.test(t) ? t.replace(/,/g, "") : t.replace(",", ".");
+  else if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, "");
   const n = Number(t);
   return Number.isFinite(n) ? n : null;
 }
@@ -339,14 +388,22 @@ export function dinheiroInvalido(s) {
   return t !== "" && lerNumero(t) === null;
 }
 
-/** "31/12/1990" | "1990-12-31" → "1990-12-31"; inválido → null */
+/**
+ * "31/12/1990" | "1990-12-31" → "1990-12-31"; inválido → null.
+ * plano 1000 (CR-119): também DD-MM-AAAA, DD.MM.AAAA, ano com 2 dígitos (≥ 30 → 19xx, senão 20xx) e o número de série do Excel (20000–80000).
+ */
 export function lerData(s) {
   const t = String(s ?? "").trim();
   let a, m, d;
   let r = /^(\d{4})-(\d{2})-(\d{2})/.exec(t);
   if (r) { a = +r[1]; m = +r[2]; d = +r[3]; }
-  else if ((r = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(t))) { d = +r[1]; m = +r[2]; a = +r[3]; }
-  else return null;
+  else if ((r = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})$/.exec(t))) {
+    d = +r[1]; m = +r[2]; a = +r[3];
+    if (r[3].length === 2) a += a >= 30 ? 1900 : 2000;
+  } else if (/^\d{5}$/.test(t) && +t > 20000 && +t < 80000) {
+    const dt = new Date(Date.UTC(1899, 11, 30) + Number(t) * 86400000);     // série do Excel: dias desde 30/12/1899
+    return dt.toISOString().slice(0, 10);
+  } else return null;
   const dt = new Date(Date.UTC(a, m - 1, d));
   if (dt.getUTCFullYear() !== a || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
   return `${a}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -766,6 +823,13 @@ export function previsao(colunas, estagios) {
   }
   return { abertos, soma_aberto: round2(somaAberto), previsao_ponderada: round2(ponderada) };
 }
+/** plano 1000 (CR-032): o que foi ganho no período do quadro (30 dias, ou todos com «Ver mais antigos») — a soma do servidor das colunas de ganho. */
+export function ganhosDoQuadro(colunas, estagios) {
+  const ganho = new Set((estagios || []).filter(e => e.tipo === "ganho").map(e => e.id));
+  let valor = 0, n = 0;
+  for (const c of colunas || []) if (ganho.has(c.estagio_id)) { valor += Number(c.soma_valor) || 0; n += Number(c.total) || 0; }
+  return { valor: round2(valor), n };
+}
 function round2(n) { return Math.round(n * 100) / 100; }
 
 /**
@@ -855,6 +919,8 @@ function filtroDaVisao(f, tela) {
     if (f.optin_marketing === false) o.optin_marketing = false;
   }
   if (o.criado_de && o.criado_ate && o.criado_de > o.criado_ate) { delete o.criado_de; delete o.criado_ate; }
+  const campo = filtroCampoLimpo(f.campo);          // plano 1000 (CR-013): o filtro por campo personalizado também vai na visão
+  if (campo) o.campo = campo;
   return o;
 }
 
@@ -1051,6 +1117,44 @@ export function camposDe(campos, entidade, funilId) {
     .sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
 }
 
+/* plano 1000 (CR-013): filtro por campo personalizado — o servidor já aplica `filtro.campo = {chave, op, valor}` (nx_crm_filtro_campo) */
+export const OPS_FILTRO_CAMPO = Object.freeze({ igual: "é igual a", contem: "contém", maior: "maior que", menor: "menor que", vazio: "está vazio", preenchido: "está preenchido" });
+/** Operadores que fazem sentido para o tipo do campo (o 1º é o padrão). */
+export function opsDoCampo(tipo) {
+  if (["numero", "moeda", "data"].includes(tipo)) return ["igual", "maior", "menor", "vazio", "preenchido"];
+  if (["opcao", "sim_nao", "multi"].includes(tipo)) return ["igual", "vazio", "preenchido"];
+  return ["igual", "contem", "vazio", "preenchido"];
+}
+/** O filtro de campo pronto para o servidor → {chave, op, valor?} | null (campo inexistente, operador que não serve ou valor que o servidor recusaria). */
+export function filtroCampoLimpo(c, campos = null) {
+  if (!c || typeof c !== "object" || !/^[a-z][a-z0-9_]{1,39}$/.test(String(c.chave || ""))) return null;
+  const def = Array.isArray(campos) ? campos.find(x => x.chave === c.chave) : null;
+  if (Array.isArray(campos) && !def) return null;
+  const op = Object.prototype.hasOwnProperty.call(OPS_FILTRO_CAMPO, c.op) ? c.op : "igual";
+  if (def && !opsDoCampo(def.tipo).includes(op)) return null;
+  if (op === "vazio" || op === "preenchido") return { chave: c.chave, op };
+  let valor = String(c.valor ?? "").trim().slice(0, 120);
+  if (!valor) return null;
+  const tipo = def ? def.tipo : null;
+  if (op === "maior" || op === "menor" || tipo === "numero" || tipo === "moeda" || tipo === "data") {
+    if (tipo === "data" || /^\d{4}-\d{2}-\d{2}$/.test(valor)) { valor = lerData(valor); if (!valor) return null; }
+    else { const n = lerNumero(valor); if (n === null) return null; valor = String(n); }
+  }
+  if (tipo === "sim_nao") valor = valor === "sim" || valor === "true" ? "true" : "false";
+  return { chave: c.chave, op, valor };
+}
+/** O texto do chip: «Convênio: Unimed», «Dentista: vazio», «Idade maior que 40». */
+export function textoFiltroCampo(c, campos = []) {
+  if (!c) return "";
+  const def = (campos || []).find(x => x.chave === c.chave);
+  const rot = def ? def.rotulo : c.chave;
+  if (c.op === "vazio") return `${rot}: vazio`;
+  if (c.op === "preenchido") return `${rot}: preenchido`;
+  const v = def && def.tipo === "sim_nao" ? (c.valor === "true" ? "sim" : "não") : c.valor;
+  if (c.op === "igual") return `${rot}: ${v}`;
+  return `${rot} ${OPS_FILTRO_CAMPO[c.op]} ${v}`;
+}
+
 /** Obrigatórios vazios (bloqueiam GANHAR): [{chave, rotulo}] */
 export function obrigatoriosVazios(campos, entidade, funilId, valores) {
   return camposDe(campos, entidade, funilId).filter(c => c.obrigatorio && vazioCampo((valores || {})[c.chave]));
@@ -1076,14 +1180,46 @@ export function nomeContato(c) {
   return (c.telefone && formatarTel(c.telefone)) || String(c.email || "").trim() || "Sem nome";
 }
 
+/* plano 1000 (CR-225/226): idade e aniversário pela data de nascimento (AAAA-MM-DD) e o dia de hoje em São Paulo (AAAA-MM-DD) */
+const partesIso = v => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || "")); return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null; };
+/** Idade completa em anos; null sem data válida ou com nascimento no futuro. idadeEm("1990-03-02", "2026-10-13") → 36 */
+export function idadeEm(nascimento, hojeIso) {
+  const n = partesIso(nascimento), h = partesIso(hojeIso);
+  if (!n || !h) return null;
+  let anos = h[0] - n[0];
+  if (h[1] < n[1] || (h[1] === n[1] && h[2] < n[2])) anos--;
+  return anos >= 0 && anos < 150 ? anos : null;
+}
+/**
+ * O próximo aniversário a até `janela` dias → {dias, idade (a que fará), texto} | null. 29/02 em ano sem 29 vale 28/02.
+ * aniversario("1990-10-14", "2026-10-13") → {dias: 1, idade: 36, texto: "Aniversário amanhã (36 anos)"}
+ */
+export function aniversario(nascimento, hojeIso, janela = 7) {
+  const n = partesIso(nascimento), h = partesIso(hojeIso);
+  if (!n || !h) return null;
+  const hoje = Date.UTC(h[0], h[1] - 1, h[2]);
+  const naData = ano => { const ult = new Date(Date.UTC(ano, n[1], 0)).getUTCDate(); return Date.UTC(ano, n[1] - 1, Math.min(n[2], ult)); };
+  let ano = h[0], quando = naData(ano);
+  if (quando < hoje) { ano++; quando = naData(ano); }
+  const dias = Math.round((quando - hoje) / 86400000);
+  const idade = ano - n[0];
+  if (dias > janela || idade <= 0) return null;
+  const texto = dias === 0 ? `Faz ${idade} ${idade === 1 ? "ano" : "anos"} hoje` : dias === 1 ? `Aniversário amanhã (${idade} anos)` : `Aniversário em ${dias} dias (${idade} anos)`;
+  return { dias, idade, texto };
+}
+
 /** "5512998303030" → "(12) 99830-3030" (igual ao ui.telBR) */
 export function formatarTel(digitos) {
   let d = String(digitos ?? "").replace(/\D/g, "");
   if (!d) return "";
-  if (d.length >= 12 && d.length <= 13 && d.startsWith("55")) d = d.slice(2);
-  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
-  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
-  return `+${d}`;
+  const br = d.length >= 12 && d.length <= 13 && d.startsWith("55");
+  if (br) d = d.slice(2);
+  // plano 1000 (CR-264): 10–11 dígitos SEM o 55 que não formam um número brasileiro são de outro país — «+1 2125551234», como na importação
+  if ((d.length === 10 || d.length === 11) && (br || pareceBrasileiro(d))) {
+    return d.length === 11 ? `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}` : `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  }
+  const ddi = /^(1|7|2[07]|3[0-469]|4[013-9]|5[1-8]|6[0-6]|8[1246]|9[0-58])/.exec(d);
+  return ddi && d.length > ddi[1].length + 6 ? `+${ddi[1]} ${d.slice(ddi[1].length)}` : `+${d}`;
 }
 
 export const ROTULO_ORIGEM = Object.freeze({
@@ -1124,21 +1260,32 @@ const DICAS_FUNIL = {
   etapa_nome: "Dê um nome a cada etapa.",
   etapa_repetida: "Há duas etapas com o mesmo nome.",
   etapas: "O funil precisa ter de 1 a 25 etapas.",
-  cor: "Cor inválida.", probabilidade: "Probabilidade entre 0 e 100%.", sla: "O prazo (SLA) vai de 1 a 2.160 horas.",
+  cor: "Cor inválida.", probabilidade: "Probabilidade entre 0 e 100%.", sla: "O prazo vai de 1 hora a 90 dias (2.160 horas).",
   padrao_sem_ads: "O funil padrão recebe as conversas do WhatsApp e precisa contar nos anúncios.",
   padrao_inativo: "O funil padrão não pode ficar desativado.",
   precisa_padrao: "Escolha outro funil como padrão antes de tirar este.",
   padrao: "O funil padrão não pode ser excluído. Escolha outro como padrão antes.",
-  entra_no_ads: "Só um funil sem negócios pode passar a contar nos anúncios (ou os negócios dele irem para um que conta).",
-  etapa_com_negocios: "Não dá para mudar o tipo ou o marco de uma etapa que tem negócios. Mova os negócios antes.",
-  tem_fechados: "Este funil tem negócios fechados que contam nos anúncios. Desative-o em vez de excluir.",
   destino: "Escolha uma etapa de destino válida.",
-  destino_tipo: "Os negócios só podem ir para uma etapa do mesmo tipo (aberta, ganho ou perda).",
   destino_sem_fechadas: "O funil de destino precisa ter etapas de ganho e de perda.",
   nao_encontrado: "Esse funil não existe mais. Recarregue a página.",
   funil_sem_etapa: "Esse funil não tem etapa aberta.",
-  mover: "Confira para onde vão os negócios.", formato: "Confira os dados do funil.",
+  formato: "Confira os dados do funil.",
 };
+/** plano 1000 (CR-207): as dicas que falam do registro usam o termo da vertical (t = termosNegocio(vocab)). */
+const DICAS_FUNIL_TERMO = {
+  entra_no_ads: t => `Só um funil sem ${t.ns} pode passar a contar nos anúncios (ou ${t.os} ${t.ns} dele irem para um que conta).`,
+  etapa_com_negocios: t => `Não dá para mudar o tipo ou o marco de uma etapa que tem ${t.ns}. Mova ${t.os} ${t.ns} antes.`,
+  tem_fechados: t => `Este funil tem ${t.ns} fechad${t.a}s que contam nos anúncios. Desative-o em vez de excluir.`,
+  destino_tipo: t => `${t.Os} ${t.ns} só podem ir para uma etapa do mesmo tipo (aberta, ganho ou perda).`,
+  mover: t => `Confira para onde vão ${t.os} ${t.ns}.`,
+};
+/** O termo do registro na vertical: {n, ns, N, a ('o'|'a'), fem, os, Os}. Sem vocab: «negócio». */
+export function termosNegocio(vocab) {
+  const n = vocab && typeof vocab.min === "function" ? vocab.min("negocio") : "negócio";
+  const ns = vocab && typeof vocab.min === "function" ? vocab.min("negocios") : "negócios";
+  const fem = !!(vocab && typeof vocab.art === "function" && vocab.art("negocio") === "a");
+  return { n, ns, N: n ? n[0].toUpperCase() + n.slice(1) : n, a: fem ? "a" : "o", fem, os: fem ? "as" : "os", Os: fem ? "As" : "Os" };
+}
 const DICAS_DADOS = {
   email: "Confira o e-mail.", uf: "UF deve ter 2 letras (ex.: SP).", dono_id: "Esse responsável não tem acesso a esta empresa.",
   valor_previsto: "Confira o valor.", valor: "Confira o valor.", titulo: "Informe o título.", texto: "Escreva o texto.",
@@ -1158,9 +1305,11 @@ const DICAS_DADOS = {
  * textoErro(e, {campos, vocab, padrao}) → texto para o usuário.
  * campo_obrigatorio usa o RÓTULO do campo (o hint é a chave); dados_invalidos usa a dica da chave.
  */
-export function textoErro(e, { campos = [], padrao } = {}) {
+export function textoErro(e, { campos = [], padrao, vocab } = {}) {
   const c = e && (e.codigo || e.message);
   const hint = e && e.hint != null ? String(e.hint) : "";
+  // plano 1000 (CR-207): as frases de funil falam o termo da vertical («oportunidade», «orçamento»), com a concordância certa
+  const t = termosNegocio(vocab);
   if (c === "campo_obrigatorio") {
     const cp = (campos || []).find(x => x.chave === hint);
     return `Preencha o campo "${cp ? cp.rotulo : hint || "obrigatório"}" antes de continuar.`;
@@ -1168,19 +1317,32 @@ export function textoErro(e, { campos = [], padrao } = {}) {
   if (c === "dados_invalidos" && DICAS_DADOS[hint]) return DICAS_DADOS[hint];
   if (c === "motivo_obrigatorio") return `Escolha o motivo da perda${hint === "texto" ? " e escreva a justificativa" : ""}.`;
   if ((c === "funil_invalido" || c === "estagio_invalido") && hint === "fechado_no_ads")
-    return "Negócio fechado no funil de anúncios não muda de funil. Use Iniciar pós-venda.";
+    return `${t.N} fechad${t.a} no funil de anúncios não muda de funil. Use Iniciar pós-venda.`;
   if ((c === "funil_invalido" || c === "estagio_invalido") && hint === "sai_do_ads")
-    return "Esse negócio veio do funil de anúncios e só pode ir para outro funil de anúncios.";
-  if (c === "estagio_invalido" && hint === "fechado") return "Um negócio novo começa numa etapa aberta.";
+    return `${t.fem ? "Essa" : "Esse"} ${t.n} veio do funil de anúncios e só pode ir para outro funil de anúncios.`;
+  if (c === "estagio_invalido" && hint === "fechado") return `${t.fem ? "Uma" : "Um"} ${t.n} nov${t.a} começa numa etapa aberta.`;
+  const dicaComTermo = DICAS_FUNIL_TERMO[hint];
+  if ((c === "funil_invalido" || c === "estagio_invalido") && dicaComTermo) return dicaComTermo(t);
   if ((c === "funil_invalido" || c === "estagio_invalido") && DICAS_FUNIL[hint]) return DICAS_FUNIL[hint];
   if (c === "estagio_com_negocios") {
     const n = Number(hint);
-    return Number.isFinite(n) && n > 0 ? `Essa etapa tem ${n} negócio${n === 1 ? "" : "s"}. Escolha para onde ${n === 1 ? "ele vai" : "eles vão"}.`
-      : "Essa etapa tem negócios. Escolha para onde eles vão.";
+    const eles = um => (t.fem ? (um ? "ela vai" : "elas vão") : (um ? "ele vai" : "eles vão"));
+    return Number.isFinite(n) && n > 0 ? `Essa etapa tem ${n} ${n === 1 ? t.n : t.ns}. Escolha para onde ${eles(n === 1)}.`
+      : `Essa etapa tem ${t.ns}. Escolha para onde ${eles(false)}.`;
   }
   if (ERROS_CRM[c]) return ERROS_CRM[c];
-  if (typeof padrao === "function") return padrao(e);
-  return `Não deu certo agora${c ? ` (${String(c).slice(0, 60)})` : ""}. Tente de novo em instantes.`;
+  // plano 1000 (CR-208): o código técnico («http_500») não entra na frase da pessoa — vai para codigoSuporte(e) (pequeno na tela / no console)
+  if (typeof padrao === "function") return semCodigoTecnico(padrao(e));
+  return "Não deu certo agora. Tente de novo em instantes.";
+}
+/** plano 1000 (CR-208): «Não deu certo agora (http_500). Tente…» → «Não deu certo agora. Tente…» (o resto da frase fica como veio). */
+export function semCodigoTecnico(t) {
+  return String(t ?? "").replace(/^(Não deu certo agora) \([^)]{1,80}\)/, "$1");
+}
+/** plano 1000 (CR-208/266): o código para o suporte («http_500», «sessao_invalida»), sem frase; null quando não há. */
+export function codigoSuporte(e) {
+  const c = e && (e.codigo || (e.status ? `http_${e.status}` : null) || e.message);
+  return c ? String(c).slice(0, 60) : null;
 }
 
 /**
@@ -1237,6 +1399,20 @@ export const TIPOS_ETAPA = Object.freeze({ aberto: "Aberta", ganho: "Ganho", per
 
 /** Marcos que combinam com o tipo da etapa (mesma regra do check nx_estagios_marco_tipo). */
 export function marcosDoTipo(tipo) { return MARCOS.filter(m => m.tipo === tipo); }
+
+/**
+ * plano 1000 (CR-132): o prazo da etapa em horas OU dias (o dono pensa em dias). unidadeSla(horas) → "d" quando é um número
+ * inteiro de dias (24, 72…), senão "h"; valorSla(horas, un) → o número que o campo mostra; horasSla(valor, un) → sla_horas
+ * (null quando vazio; o que não é número volta NaN para a validação recusar).
+ */
+export function unidadeSla(horas) { const n = Number(horas); return horas !== null && horas !== "" && Number.isInteger(n) && n > 0 && n % 24 === 0 ? "d" : "h"; }
+export function valorSla(horas, un) { if (horas === null || horas === undefined || horas === "") return ""; return un === "d" ? Number(horas) / 24 : Number(horas); }
+export function horasSla(valor, un) {
+  if (valor === null || valor === undefined || String(valor).trim() === "") return null;
+  const n = Number(String(valor).replace(",", "."));
+  if (!Number.isFinite(n)) return NaN;
+  return un === "d" ? Math.round(n * 24) : n;
+}
 
 /** Probabilidade padrão por tipo (a mesma do servidor). */
 export function probPadrao(tipo) { return tipo === "ganho" ? 100 : tipo === "perdido" ? 0 : 10; }
@@ -1585,7 +1761,20 @@ export function rotuloDia(dia, hoje) {
  * (a tela passa ui.hojeSP para o dia de São Paulo). Itens sem data vão para o fim como «Sem data». `ordem` "asc" (tarefas) ou "desc" (histórico).
  * → [{dia, rotulo, itens}]
  */
-export function agruparPorDia(itens, { instanteDe, diaDe = iso => String(iso || "").slice(0, 10), hoje, ordem = "asc" } = {}) {
+/**
+ * plano 1000 (CR-244): a visão «Semana» das tarefas — 7 colunas a partir de hoje (as mesmas regras do agruparPorDia), mais quantas ficam
+ * depois da semana e quantas não têm prazo. → {colunas: [{dia, rotulo, itens}], depois, semPrazo, antes}
+ */
+export function colunasDaSemana(itens, { instanteDe, diaDe = iso => String(iso || "").slice(0, 10), hoje, dias = 7 } = {}) {
+  const [y, m, d] = String(hoje || "").split("-").map(Number);
+  const lista = Array.from({ length: dias }, (_, i) => new Date(Date.UTC(y, m - 1, d + i)).toISOString().slice(0, 10));
+  const grupos = new Map(agruparPorDia(itens, { instanteDe, diaDe, hoje }).map(g => [g.dia, g.itens]));
+  const fim = lista[lista.length - 1];
+  let depois = 0, antes = 0;
+  for (const [dia, its] of grupos) { if (dia && dia > fim) depois += its.length; else if (dia && dia < lista[0]) antes += its.length; }
+  return { colunas: lista.map(dia => ({ dia, rotulo: rotuloDia(dia, hoje), itens: grupos.get(dia) || [] })), depois, antes, semPrazo: (grupos.get("") || []).length };
+}
+export function agruparPorDia(itens, { instanteDe, diaDe = iso => String(iso || "").slice(0, 10), hoje, ordem = "asc", semData = "Sem data" } = {}) {
   const grupos = new Map();
   for (const it of itens || []) {
     const iso = instanteDe ? instanteDe(it) : null;
@@ -1596,7 +1785,7 @@ export function agruparPorDia(itens, { instanteDe, diaDe = iso => String(iso || 
   const dias = [...grupos.keys()].filter(Boolean).sort();
   if (ordem === "desc") dias.reverse();
   const out = dias.map(dia => ({ dia, rotulo: rotuloDia(dia, hoje), itens: grupos.get(dia) }));
-  if (grupos.has("")) out.push({ dia: "", rotulo: "Sem data", itens: grupos.get("") });
+  if (grupos.has("")) out.push({ dia: "", rotulo: semData, itens: grupos.get("") });     // plano 1000 (CR-138): as tarefas dizem «Sem prazo»
   return out;
 }
 
@@ -1629,4 +1818,206 @@ export function pctInteiro(fracao) {
   if (fracao === null || fracao === undefined || fracao === "") return "—";
   const n = Number(fracao);
   return Number.isFinite(n) ? `${Math.round(n * 100)}%` : "—";
+}
+
+/* ------------------------------------------------------------ plano 1000 · importação */
+/**
+ * CR-118: linhas da própria planilha que são a MESMA pessoa (telefone com/sem 55 e 9, ou e-mail) — a 2ª vira atualização da 1ª sem aviso.
+ * linhas = montarLinhas(...); numeros[i] = número da linha na planilha (padrão i + 2). → [{tipo: 'telefone'|'email', valor, linhas: [n, …]}]
+ */
+export function duplicadosPlanilha(linhas, numeros = null) {
+  const grupos = new Map();
+  (linhas || []).forEach((l, i) => {
+    const n = (numeros && numeros[i]) || i + 2;
+    const tel = l && l.telefone ? normalizarTelefone(l.telefone) : null;
+    const chaves = [];
+    if (tel) chaves.push(["telefone", telChave(tel), l.telefone]);
+    if (l && l.email && /@/.test(l.email)) chaves.push(["email", String(l.email).trim().toLowerCase(), String(l.email).trim()]);
+    for (const [tipo, k, valor] of chaves) {
+      const id = `${tipo}:${k}`;
+      if (!grupos.has(id)) grupos.set(id, { tipo, valor, linhas: [] });
+      grupos.get(id).linhas.push(n);
+    }
+  });
+  return [...grupos.values()].filter(g => g.linhas.length > 1);
+}
+
+/** CR-123: etapas da planilha que não batem com uma etapa ABERTA do funil (o servidor usaria a 1ª) e etiquetas que ainda não existem (serão criadas). */
+export function conferirPlanilha(linhas, { estagios = [], etiquetas = [] } = {}) {
+  const norm = s => semAcento(String(s || "")).trim().replace(/\s+/g, " ");
+  const abertas = new Set((estagios || []).filter(e => e.tipo === "aberto").map(e => norm(e.nome)));
+  const existentes = new Set((etiquetas || []).map(e => norm(e.nome)));
+  const etapas = new Map(), novas = new Map();
+  for (const l of linhas || []) {
+    if (l && l.estagio && !abertas.has(norm(l.estagio))) etapas.set(norm(l.estagio), String(l.estagio).trim().slice(0, 40));
+    if (l && l.etiquetas) for (const t of String(l.etiquetas).split(/\s*[;|]\s*/)) {
+      const nome = t.trim().slice(0, 40);
+      if (nome && !existentes.has(norm(nome))) novas.set(norm(nome), nome);
+    }
+  }
+  return { etapasDesconhecidas: [...etapas.values()], etiquetasNovas: [...novas.values()] };
+}
+
+/** plano 1000 (CR-052): a data (AAAA-MM-DD, dia inteiro) ou data e hora (datetime-local) já passou? Vazio/inválido → false. Só avisa, não bloqueia. */
+export function dataPassou(v, agora = Date.now()) {
+  const s = String(v ?? "").trim();
+  if (!s) return false;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const d = new Date(agora);
+    const hoje = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return s < hoje;
+  }
+  const t = Date.parse(s);
+  return Number.isFinite(t) && t < agora;
+}
+export const TEXTO_DATA_PASSOU = "Essa data já passou.";
+
+/**
+ * plano 1000 (CR-103): dados do titular (direito de acesso da LGPD) a partir do que nx_contato_ver devolve — só desta pessoa.
+ * → {titular, gerado_em, cadastro, consentimento, empresa, negocios, tarefas, notas, atendimentos, historico} | null
+ */
+export function dadosTitular(d, { geradoEm = null } = {}) {
+  const c = d && d.contato;
+  if (!c || c.id == null) return null;
+  const so = (o, chaves) => Object.fromEntries(chaves.filter(k => o && o[k] !== undefined && o[k] !== null && o[k] !== "").map(k => [k, o[k]]));
+  const lista = x => (Array.isArray(x) ? x : []);
+  return {
+    titular: c.nome || c.telefone || c.email || `Cadastro ${c.id}`,
+    gerado_em: geradoEm,
+    cadastro: so(c, ["id", "nome", "telefone", "email", "documento", "nascimento", "cidade", "uf", "origem", "plataforma", "etiquetas", "campos", "obs", "criado_em", "ultimo_contato_em"]),
+    consentimento: { optin_marketing: c.optin_marketing ?? null, optin_em: c.optin_em ?? null, optin_origem: c.optin_origem ?? null },
+    empresa: d.empresa ? so(d.empresa, ["id", "nome", "cidade", "uf"]) : (c.empresa ? so(c.empresa, ["id", "nome"]) : null),
+    negocios: lista(d.negocios).map(n => so(n, ["id", "titulo", "status", "valor", "valor_previsto", "servico", "consulta_em", "criado_em", "fechado_em"])),
+    tarefas: lista(d.tarefas).map(t => so(t, ["id", "titulo", "tipo", "vence_em", "concluida_em"])),
+    notas: lista(d.notas).map(n => so(n, ["id", "texto", "criado_em"])),
+    atendimentos: lista(d.conversas).map(x => so(x, ["id", "protocolo", "status", "aberta_em"])),
+    historico: lista(d.tempo).map(t => so(t, ["tipo", "fonte", "em", "dados"])),
+  };
+}
+
+/**
+ * plano 1000 (CR-144): atalhos de prazo da tarefa a partir do dia de HOJE em São Paulo (AAAA-MM-DD) → [{rotulo, valor (datetime-local)}].
+ * «Hoje 18h · Amanhã 9h · Em 3 dias (9h) · Próx. segunda (9h)».
+ */
+export function atalhosPrazo(hojeIso) {
+  const [a, m, d] = String(hojeIso || "").slice(0, 10).split("-").map(Number);
+  if (!a || !m || !d) return [];
+  const dia = n => { const x = new Date(Date.UTC(a, m - 1, d + n)); return x.toISOString().slice(0, 10); };
+  const dow = new Date(Date.UTC(a, m - 1, d)).getUTCDay();            // 0 = domingo
+  const ateSegunda = ((8 - dow) % 7) || 7;
+  return [
+    { rotulo: "Hoje 18h", valor: `${dia(0)}T18:00` },
+    { rotulo: "Amanhã 9h", valor: `${dia(1)}T09:00` },
+    { rotulo: "Em 3 dias", valor: `${dia(3)}T09:00` },
+    { rotulo: "Próx. segunda", valor: `${dia(ateSegunda)}T09:00` },
+  ];
+}
+
+/* ------------------------------------------------------------ plano 1000 (13/10/2026) — lote crm-2 */
+/** CR-111: só os dígitos de um CPF/CNPJ. */
+const soDigitos = v => String(v ?? "").replace(/\D/g, "");
+/** CR-111: dígitos verificadores de CPF (11) e CNPJ (14). → "cpf" | "cnpj" | null (tamanho errado, sequência repetida ou dígito que não confere). */
+export function docValido(v) {
+  const d = soDigitos(v);
+  if (d.length === 11) {
+    if (/^(\d)\1{10}$/.test(d)) return null;
+    const dv = n => { let s = 0; for (let i = 0; i < n; i++) s += Number(d[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
+    return dv(9) === Number(d[9]) && dv(10) === Number(d[10]) ? "cpf" : null;
+  }
+  if (d.length === 14) {
+    if (/^(\d)\1{13}$/.test(d)) return null;
+    const dv = n => { const pesos = n === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]; let s = 0; for (let i = 0; i < n; i++) s += Number(d[i]) * pesos[i]; const r = s % 11; return r < 2 ? 0 : 11 - r; };
+    return dv(12) === Number(d[12]) && dv(13) === Number(d[13]) ? "cnpj" : null;
+  }
+  return null;
+}
+/** CR-111: máscara de CPF (000.000.000-00) ou CNPJ (00.000.000/0000-00); outro tamanho (RG, documento de fora) volta como foi digitado. */
+export function formatarDoc(v) {
+  const t = String(v ?? "").trim(), d = soDigitos(t);
+  if (d.length === 11 && /^[\d.\-\s]+$/.test(t)) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+  if (d.length === 14 && /^[\d./\-\s]+$/.test(t)) return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+  return t;
+}
+/** CR-111: aviso (não bloqueia) para o documento digitado: dígito que não confere em CPF/CNPJ. null = ok ou não é CPF/CNPJ. */
+export function avisoDoc(v) {
+  const d = soDigitos(v);
+  if (d.length !== 11 && d.length !== 14) return null;
+  return docValido(d) ? null : `${d.length === 11 ? "CPF" : "CNPJ"} com dígito verificador que não confere. Confira o número.`;
+}
+/** CR-112: site digitado sem protocolo («www.empresa.com») vira link de verdade (https://). Vazio → null; só http(s). */
+export function normalizarSite(v) {
+  const t = String(v ?? "").trim();
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) return t;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(t)) return null;            // javascript:, mailto: … não viram link
+  return `https://${t.replace(/^\/+/, "")}`;
+}
+/**
+ * CR-150: adiar a tarefa — «hora» (+1 h a partir de agora, ou do vencimento se ainda vai vencer), «amanha» (adiarParaAmanha) ou «semana»
+ * (próxima segunda às 9h de São Paulo). → ISO UTC.
+ */
+export function adiarTarefa(venceEm, modo, agora = new Date()) {
+  const ag = new Date(agora).getTime();
+  if (modo === "hora") { const v = venceEm ? Date.parse(venceEm) : NaN; return new Date((Number.isFinite(v) && v > ag ? v : ag) + 3600000).toISOString(); }
+  if (modo === "semana") {
+    const hojeSP = new Date(ag - 3 * 3600000).toISOString().slice(0, 10);
+    const seg = atalhosPrazo(hojeSP)[3];
+    return new Date(Date.parse(`${seg.valor}:00-03:00`)).toISOString();
+  }
+  return adiarParaAmanha(venceEm, agora);
+}
+/**
+ * plano 1000 (CR-298): prazo da tarefa «retomar o contato» depois de uma perda — daqui a `dias` dias, às 9h de São Paulo (ISO UTC).
+ * retomarEm(60, new Date("2026-10-13T15:00:00Z")) → "2026-12-12T12:00:00.000Z"; dias fora de 1–365 → null.
+ */
+export function retomarEm(dias, agora = new Date()) {
+  const n = Math.round(Number(dias));
+  if (!(n >= 1 && n <= 365)) return null;
+  const hojeSP = new Date(new Date(agora).getTime() - 3 * 3600000).toISOString().slice(0, 10);
+  const [a, m, d] = hojeSP.split("-").map(Number);
+  const alvo = new Date(Date.UTC(a, m - 1, d + n)).toISOString().slice(0, 10);
+  return new Date(Date.parse(`${alvo}T09:00:00-03:00`)).toISOString();
+}
+/** CR-019: legenda da distribuição — as etapas com cartões e, à parte, as vazias (que viram «+3 vazias»). */
+export function partesDistribuicao(colunas, estagios) {
+  const n = id => { const c = (colunas || []).find(x => x.estagio_id === id); return c ? Number(c.total) || 0 : 0; };
+  const todas = (estagios || []).map(e => ({ e, n: n(e.id) }));
+  return { cheias: todas.filter(x => x.n > 0), vazias: todas.filter(x => !x.n) };
+}
+/** CR-122: assinatura do cabeçalho da planilha (as colunas, sem acento e na ordem) — a mesma planilha da semana passada reaproveita o mapa. */
+export function assinaturaCabecalho(cab) {
+  return (cab || []).map(c => semAcento(c).replace(/\s+/g, " ").trim()).join("|");
+}
+/** CR-122: o mapa guardado só vale se tiver o mesmo número de colunas e destinos que ainda existem. → mapa | null. */
+export function mapaGuardado(guardado, cabecalho, destinos) {
+  if (!Array.isArray(guardado) || guardado.length !== (cabecalho || []).length) return null;
+  const ok = new Set((destinos || []).map(d => d.valor));
+  const m = guardado.map(x => (x && ok.has(x) ? x : null));
+  return mapaValido(m) ? m : null;
+}
+/** CR-062: linha do atendimento («Aberto · 06/10/2026 · Ana») — sem aberta_em usa a última mensagem (ou a criação) e nunca mostra «—». */
+export function linhaAtendimento(c, fmtData = x => String(x || "").slice(0, 10), { comResponsavel = false } = {}) {
+  if (!c) return "";
+  const st = c.status === "resolvida" ? "Resolvido" : c.status === "pendente" ? "Pendente" : "Aberto";
+  const quando = c.aberta_em || c.ultima_msg_em || c.ultima_mensagem_em || c.criado_em || null;
+  return [st, quando ? fmtData(quando) : null, comResponsavel ? c.atribuida_nome : null].filter(Boolean).join(" · ");
+}
+/**
+ * CR-094: origens que dá para escolher À MÃO → [[chave, rótulo]]. «Anúncio» sem plataforma polui os números dos anúncios e «Importação» só a planilha
+ * marca — as duas só aparecem quando já são a origem gravada (para não sumir da tela).
+ */
+export function origensManuais(atual = null) {
+  return Object.entries(ROTULO_ORIGEM).filter(([v]) => (v !== "anuncio" && v !== "importacao") || v === atual);
+}
+/** CR-074: valores de campos de negócio que NÃO valem no funil atual (o negócio mudou de funil) → [{chave, rotulo, texto}] (só os que têm valor). */
+export function camposDeOutrosFunis(campos, funilId, valores = {}) {
+  const aqui = new Set(camposDe(campos, "negocio", funilId).map(c => c.chave));
+  const out = [];
+  for (const c of campos || []) {
+    if (c.entidade !== "negocio" || aqui.has(c.chave) || out.some(x => x.chave === c.chave)) continue;
+    const v = (valores || {})[c.chave];
+    if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue;
+    out.push({ chave: c.chave, rotulo: c.rotulo || c.chave, texto: Array.isArray(v) ? v.join(", ") : v === true ? "Sim" : v === false ? "Não" : String(v) });
+  }
+  return out;
 }

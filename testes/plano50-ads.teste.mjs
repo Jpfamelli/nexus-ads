@@ -156,7 +156,8 @@ test("50 · exportação: nome de arquivo seguro e SVG serializado com estilos c
   const out = A.svgParaTexto(svg, el => ({ getPropertyValue: k => (estilos[el.tagName] || {})[k] || "" }), ["fill", "stroke", "stroke-width", "font-family", "font-size"], { fundo: "#fff" });
   assert.match(out, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 10 10" style="fill:rgb\(0, 0, 0\);stroke:none"><rect width="100%" height="100%" fill="#fff"\/>/);
   assert.match(out, /<path d="M0 0 L1 1" style="fill:none;stroke:rgb\(1, 2, 3\);stroke-width:2\.5px"><\/path>/);
-  assert.match(out, /<text style="fill:rgb\(9, 9, 9\);stroke:none;font-family:Plex;font-size:11px">R\$ &lt;5&gt;<\/text>/);
+  // plano 1000 (AD-120): a fonte do tema ganha a fonte do sistema como reserva (o <img> do PNG não carrega @font-face)
+  assert.match(out, /<text style="fill:rgb\(9, 9, 9\);stroke:none;font-family:Plex, system-ui, -apple-system, &quot;Segoe UI&quot;, Roboto, sans-serif;font-size:11px">R\$ &lt;5&gt;<\/text>/);
   assert.doesNotMatch(out, /title|class=|onload/);
 });
 
@@ -309,8 +310,10 @@ test("48 · barras por campanha (DOM): ordenadas pelo investimento, no máximo 8
   assert.deepEqual(gastos, gastos.slice().sort((x, y) => y - x));
   assert.equal(itens[0].querySelector(".ads-cb-barra").style.getPropertyValue("--w"), "100.0%");
   b.destacar([linhas[1].c.id]);
-  assert.equal(b.elemento.querySelectorAll('.ads-cb-item[aria-pressed="true"]').length, 1);
-  assert.equal(b.itens.get(String(linhas[1].c.id)).getAttribute("aria-pressed"), "true");
+  // plano 1000 (AD-231): a barra abre os criativos (aria-haspopup); a marcada para comparação fica em destaque por classe, sem aria-pressed
+  assert.equal(b.elemento.querySelectorAll(".ads-cb-item.ads-cb-dest").length, 1);
+  assert.ok(b.itens.get(String(linhas[1].c.id)).classList.contains("ads-cb-dest"));
+  assert.equal(b.itens.get(String(linhas[1].c.id)).getAttribute("aria-pressed"), null);
   b.realcar(linhas[0].c.id); assert.ok(b.itens.get(String(linhas[0].c.id)).classList.contains("ads-cb-hover"));
   b.realcar(null); assert.ok(!b.itens.get(String(linhas[0].c.id)).classList.contains("ads-cb-hover"));
   itens[0].click(); assert.equal(String(escolhidas[0]), itens[0].dataset.campId); assert.equal(escolhidas.length, 1);

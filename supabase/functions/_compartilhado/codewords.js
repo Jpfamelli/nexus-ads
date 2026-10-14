@@ -28,8 +28,9 @@ import { criarDb } from "./db.js";
 import {
   json, limparErro, comPrazo, soDigitos, ErroApi, ErroHttp, respostaPainel, tratarPainel,
   lerCorpoPainel, autenticarPainel, interna, autenticarCron, emLotes,
-  lerCorpo, lerCorpoLimitado, soltandoCorpo, CorpoGrande, semNul,
-  cortarTexto, variantesTelefone, telefoneBorda, funcaoAusente, nomeCurto,
+  lerCorpo, exigirCorpoValido, lerCorpoLimitado, soltandoCorpo, CorpoGrande, semNul,
+  cortarTexto, variantesTelefone, telefoneBorda, funcaoAusente, nomeCurto, registrarExecucao, EM_EXECUCAO,
+  codigoBanco, anonTelefone, auditar,
 } from "./comum.js";
 import { hojeSP } from "./nucleo.js";
 import { enviarParaTodos } from "./whatsapp.js";
@@ -45,9 +46,18 @@ export const ID_OK = /^[A-Za-z0-9._:=+/@-]{1,160}$/;
 // enviarMidia: a tela espera 100 s; conferência do aparelho (15 s) + download do arquivo + envio têm de caber nisso
 export const PRAZOS = { conexoes: 15_000, parear: 90_000, inscrever: 60_000, enviar: 60_000, enviarMidia: 70_000, mensagens: 20_000 };
 export const MAX_MIDIA = 16 * 1024 * 1024;   // teto do WhatsApp (e do bucket nx-midia)
+// plano 1000 (SV-025): resposta do device manager lida com teto — um proxy devolvendo uma página enorme (erro de gateway, laço)
+// ia inteira para a memória a cada envio/consulta
+export const MAX_RESPOSTA_CW = 1024 * 1024;
+// plano 1000 (SV-019): o aviso do vigia ao gestor tem prazo de rede próprio (o mesmo do webhook)
+const PRAZO_AVISO_MS = 10_000;
+// plano 1000 (SV-021): uma sincronização por vez (cron de 2 em 2 min; sync 100 s + vigia 30 s)
+const TRAVA_SYNC_S = 150;
+// plano 1000 (SV-037): «mensagem recuperada sem resposta» no máximo 1× a cada 30 min por conversa
+const RECUPERADA_AVISO_S = 1800;
 const CONFERENCIA_MS = 10 * 60_000;          // número do aparelho conferido vale 10 min
 const ESTADO_CONECTADO = /^(logged_in|connected)$/i;   // exato: "disconnected" contém "connected"
-const MOTIVOS = new Set(["pausada", "ia_desligada", "grupo", "duplicada", "bloqueado", "optout", "limite", "eco", "saida", "lid_sem_numero"]);
+const MOTIVOS = new Set(["pausada", "ia_desligada", "grupo", "duplicada", "bloqueado", "optout", "limite", "eco", "saida", "lid_sem_numero", "suspenso"]);
 const RESULTADOS_LEAD = new Set(["criado", "atribuido", "existente"]);
 const FUSO = "America/Sao_Paulo";
 
@@ -373,7 +383,26 @@ export async function idEstavel(canalId, p, agora = Date.now()) {
    Device manager do CodeWords
    ============================================================ */
 
-/** Chamada ao device manager. Nunca lança: {ok, status, dados, texto, rede}. */
+/** Corpo de texto com teto em bytes: acima dele cancela o leitor e devolve {grande: true} sem acumular o resto. */
+export async function textoComTeto(r, teto) {
+  if (!r.body) { const t = await r.text(); return t.length > teto ? { texto: "", grande: true } : { texto: t, grande: false }; }
+  const leitor = r.body.getReader();
+  const partes = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await leitor.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > teto) { try { const x = leitor.cancel(); if (x?.catch) x.catch(() => null); } catch { /* nada */ } return { texto: "", grande: true, lidos: total }; }
+    partes.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let pos = 0;
+  for (const x of partes) { bytes.set(x, pos); pos += x.byteLength; }
+  return { texto: new TextDecoder().decode(bytes), grande: false, lidos: total };
+}
+
+/** Chamada ao device manager. Nunca lança: {ok, status, dados, texto, rede, grande}. */
 async function chamarCW(cred, caminho, { metodo = "GET", corpo, form, multipart, ms = PRAZOS.conexoes, fetch } = {}) {
   const f = comPrazo(fetch || globalThis.fetch, ms);
   const headers = { Authorization: String(cred?.codewords_api_key ?? "") };   // chave crua, sem "Bearer"
@@ -384,7 +413,9 @@ async function chamarCW(cred, caminho, { metodo = "GET", corpo, form, multipart,
   let r;
   try { r = await f(`${CW_BASE}${caminho}`, { method: metodo, headers, body }); }
   catch (e) { return { ok: false, rede: true, status: 0, texto: erroSeguro(e?.message || e), dados: null }; }
-  const texto = await r.text().catch(() => "");
+  const lido = await textoComTeto(r, MAX_RESPOSTA_CW).catch(() => ({ texto: "", grande: false }));
+  if (lido.grande) return { ok: false, grande: true, status: r.status, texto: "", dados: null };
+  const texto = lido.texto;
   let dados = null;
   try { dados = texto ? JSON.parse(texto) : null; } catch { dados = null; }
   return { ok: r.ok, status: r.status, texto: texto.slice(0, 2000), dados };
@@ -396,6 +427,10 @@ export function traduzirErroCW(r) {
   if (r?.rede) {
     return { tipo: "rede", ambigua: true,
       texto: "O CodeWords não respondeu a tempo. A mensagem pode ter saído: confira no celular antes de mandar de novo." };
+  }
+  if (r?.grande) {
+    return { tipo: "formato", ambigua: true,
+      texto: "O CodeWords respondeu algo grande demais para ler. A mensagem pode ter saído: confira no celular antes de mandar de novo." };
   }
   if (/INVALID_WA_CLI|whatsapp cli is invalid|not[_ ]connected|logged[_ ]out|disconnected/i.test(corpo)) {
     return { tipo: "desconectado", ambigua: false,
@@ -500,10 +535,15 @@ export async function conferirNumero(db, cred, o = {}) {
   if (!l.ok) return null;
   const a = avaliarAparelho(l.lista, cred);
   if (!a.achado) return null;
+  // plano 1000 (SV-032): a conferência vale para o objeto em memória também — a fila reaproveita a mesma credencial (Map) e,
+  // sem isso, 50 itens do mesmo canal com o cache vencido faziam 50 GET /connections
+  cred.codewords_conferido_em = new Date(agora).toISOString();
   if (a.numero_confere === false) {
+    cred.codewords_numero_conferido = false;
     await situacao(db, cred, { numero_conferido: false, erro: textoNumeroDiferente(cred, a) }).catch(() => null);
     return false;
   }
+  cred.codewords_numero_conferido = true;
   await situacao(db, cred, { conectado: a.conectado, numero_conferido: true, phone_id: a.phone_id, estado: a.estado }).catch(() => null);
   if (a.phone_id) cred.codewords_phone_id = a.phone_id;   // repareado: o id muda a cada pareamento
   return true;
@@ -617,7 +657,7 @@ export async function mensagensDoAparelho(cred, telefone, o = {}) {
   const jid = `${digitos}@s.whatsapp.net`;
   const r = await chamarCW(cred, `/proxy/chat/${encodeURIComponent(jid)}/messages?phone_id=${encodeURIComponent(cred.codewords_phone_id)}&limit=30`,
     { ms: PRAZOS.mensagens, fetch: o.fetch });
-  if (!r.ok) return { erro: traduzirErroCW(r).texto, status: r.status };   // status: 404 = aparelho/phone_id não existe mais
+  if (!r.ok) { const t = traduzirErroCW(r); return { erro: t.texto, status: r.status, tipo: t.tipo }; }   // status: 404 = aparelho/phone_id não existe mais
   if (!Array.isArray(r.dados?.results?.data)) return { erro: "O CodeWords mudou o formato das mensagens (esperava results.data).", status: r.status };
   return { lista: r.dados.results.data.filter(OBJ) };
 }
@@ -670,6 +710,12 @@ export function lerOrigemTexto(texto) {
  * conversa nova (fraseDoBotao), a frase do botão pela ação de origem contada (nx_codewords_origem só mexe em quem ainda é
  * «whatsapp»). Serve à API do agente, à reentrega, à sincronização e ao webhook da Meta. Nunca derruba o atendimento.
  */
+/** Algum dos telefones da lista é o mesmo celular de `tel` (com/sem 55, com/sem o 9 — variantesTelefone, nas duas pontas)? */
+export function mesmoTelefone(lista, tel) {
+  const alvo = new Set(variantesTelefone(telefoneBorda(tel)));
+  return (Array.isArray(lista) ? lista : []).some(t => variantesTelefone(telefoneBorda(t)).some(v => alvo.has(v)));
+}
+
 export async function atribuirOrigemDoTexto(db, canal, telefone, texto, { fraseDoBotao = true } = {}) {
   const codigo = extrairCodigoRastreio(texto);
   if (codigo) {
@@ -704,6 +750,9 @@ function textoHistorico(h) {
   return corpo ? `${rot} — ${corpo}` : rot;
 }
 
+/** Plano 1000 (SV-036): teto do histórico que vai ao fluxo externo em cada mensagem. */
+export const MAX_HISTORICO_CONTEXTO = 8000;
+
 /** nx_codewords_dados → contexto {agora, empresa, contato, negocio, historico, instrucoes}. */
 export function montarContexto(d = {}) {
   const agoraIso = dataIso(d.agora) || new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -717,7 +766,8 @@ export function montarContexto(d = {}) {
     endereco: txt(ia.endereco), regras: txt(ia.regras), proibido: txt(ia.proibido), boas_vindas: txt(ia.boas_vindas),
     memoria_aprovada: txt(ia.memoria_aprovada).slice(0, 3000),
   };
-  const contato = { nome: txt(d.contato?.nome) || null, telefone: soDigitos(d.contato?.telefone), primeira_vez: !!d.contato?.primeira_vez };
+  // plano 1000 (SV-036, LGPD): o fluxo já conhece o telefone (ele manda em toda chamada) — no contexto vai só o fim do número
+  const contato = { nome: txt(d.contato?.nome) || null, telefone: d.contato?.telefone ? anonTelefone(d.contato.telefone) : "", primeira_vez: !!d.contato?.primeira_vez };
   const n = OBJ(d.negocio) ? d.negocio : null;
   const negocio = n ? {
     etapa: txt(n.etapa) || null,
@@ -731,9 +781,17 @@ export function montarContexto(d = {}) {
         .map(k => [k, txt(n.rastreio[k]).slice(0, 200)]).filter(([, v]) => v)) : null,
     },
   } : null;
-  const historico = (Array.isArray(d.historico) ? d.historico : []).slice(-20).map(h => ({
-    de: h.dir === "in" ? "cliente" : h.origem === "ia" ? "ia" : "equipe", texto: textoHistorico(h).slice(0, 1500), em: dataIso(h.em, Infinity),
+  const todos = (Array.isArray(d.historico) ? d.historico : []).slice(-20).map(h => ({
+    de: h.dir === "in" ? "cliente" : h.origem === "ia" ? "ia" : "equipe", texto: cortarTexto(textoHistorico(h), 1500), em: dataIso(h.em, Infinity),
   })).filter(h => h.texto);
+  // plano 1000 (SV-036): no máximo MAX_HISTORICO_CONTEXTO caracteres no total — ficam as mensagens mais RECENTES
+  const historico = [];
+  let soma = 0;
+  for (let i = todos.length - 1; i >= 0; i--) {
+    soma += todos[i].texto.length;
+    if (soma > MAX_HISTORICO_CONTEXTO && historico.length) break;
+    historico.unshift(todos[i]);
+  }
   const ctx = { agora: { iso: agoraIso, rotulo: rotuloAgora(agoraIso) }, empresa, contato, negocio, historico };
   ctx.instrucoes = montarInstrucoes(ctx);
   return ctx;
@@ -758,7 +816,7 @@ const exigirTel = v => {
 /** Lead no CRM do cliente DO CANAL, com atribuição de anúncio (CTWA) — igual ao webhook da Meta.
     Referral de post/página (source_type ≠ 'ad') NÃO vira anuncio_ext: o id do post na coluna de anúncio bloqueava para
     sempre a origem real (ja_tem_anuncio no rastreio e na origem contada); fica só no referral da mensagem. */
-async function registrarLead(db, clienteId, telefone, nome, referral) {
+async function registrarLead(db, clienteId, telefone, nome, referral, hoje = hojeSP()) {
   let atr = null;
   if (referral) {
     const ad = referral.source_type === "ad";
@@ -776,7 +834,7 @@ async function registrarLead(db, clienteId, telefone, nome, referral) {
   }
   const r = await db.rpc("nx_lead_webhook", {
     p_cliente: clienteId, p_telefone: telefone, p_variantes: variantesTelefone(telefone),
-    p_nome: nome || null, p_atr: atr, p_hoje: hojeSP(), p_dias: 30,
+    p_nome: nome || null, p_atr: atr, p_hoje: hoje, p_dias: 30,
   });
   if (!RESULTADOS_LEAD.has(r)) throw new Error(`nx_lead_webhook devolveu ${JSON.stringify(r)}`);
   return r;
@@ -833,14 +891,31 @@ async function soltarVez(db, mensagemId, dono) {
   catch (e) { console.error("nx-codewords vez:", erroSeguro(e?.message || e)); }   // vence sozinha em 2 min
 }
 
+/** Plano 1000 (SV-241): ids por recibo processados de uma vez. */
+export const MAX_IDS_RECIBO = 200;
+
 async function acaoMensagem(db, canal, corpo, deps) {
   const p = lerPayload(corpo, { numeroCanal: canal.numero });
   if (p.tipo === "status") {
-    const res = [];
-    for (const id of p.status.ids.slice(0, 20)) {
-      if (ID_OK.test(id)) res.push(await db.rpc("nx_codewords_status", { p_canal: canal.canal_id, p_id: id, p_status: p.status.status, p_erro: null }));
+    // plano 1000 (SV-241): até MAX_IDS_RECIBO ids (antes 20: um recibo de leitura em lote com 40 mensagens deixava 20 sem «lida»),
+    // em lotes de 50 na nx_codewords_status_lote; o excedente é contado em «ignorados»
+    const validos = p.status.ids.filter(id => ID_OK.test(id));
+    const ids = validos.slice(0, MAX_IDS_RECIBO);
+    const extra = validos.length > ids.length ? { ignorados: validos.length - ids.length } : {};
+    // plano 1000 (SV-024): um recibo com 20 ids era 20 chamadas em série (o fluxo do CodeWords espera a resposta); agora uma
+    // transação só (nx_codewords_status_lote). Banco sem a RPC → uma por id (só as 20 primeiras), como antes.
+    if (ids.length > 1) {
+      try {
+        for (let i = 0; i < ids.length; i += 50) {
+          await db.rpc("nx_codewords_status_lote", { p_canal: canal.canal_id, p_ids: ids.slice(i, i + 50), p_status: p.status.status });
+        }
+        return { ok: true, registrada: false, responder: false, motivo: "saida", recibos: ids.length, ...extra };
+      } catch (e) { if (!funcaoAusente(e, "nx_codewords_status_lote")) throw e; }
     }
-    return { ok: true, registrada: false, responder: false, motivo: "saida", recibos: res.length };
+    const res = [];
+    for (const id of ids.slice(0, 20)) res.push(await db.rpc("nx_codewords_status", { p_canal: canal.canal_id, p_id: id, p_status: p.status.status, p_erro: null }));
+    return { ok: true, registrada: false, responder: false, motivo: "saida", recibos: res.length,
+      ...(validos.length > res.length ? { ignorados: validos.length - res.length } : {}) };
   }
   if (p.grupo) { await contar(db, canal, "grupo"); return saidaResp(null, false, "grupo"); }
   if (p.lid) {
@@ -888,7 +963,8 @@ async function acaoMensagem(db, canal, corpo, deps) {
   const conversa = r?.conversa_id ?? null;
   if (r?.bloqueado) return { ok: true, conversa_id: conversa, registrada: !!r?.mensagem_id, responder: false, motivo: "bloqueado" };
   // a conversa pode existir enquanto a gravação do lead falhou em tentativa anterior: o evento repetido refaz o upsert
-  try { await registrarLead(db, canal.cliente_id, p.telefone, p.nome, p.referral); }
+  // plano 1000 (SV-034): o «hoje» do lead vem do relógio injetado (deps.agoraMs) — a virada do dia em São Paulo é testável
+  try { await registrarLead(db, canal.cliente_id, p.telefone, p.nome, p.referral, hojeSP(new Date(deps.agoraMs?.() ?? Date.now()))); }
   catch (e) { console.error("nx-codewords lead:", erroSeguro(e?.message || e)); }   // a conversa já está gravada
   // código do site ([ref K7Q2P]) ou frase do botão: também na reentrega — o negócio pode ter nascido só agora e a RPC é idempotente
   await atribuirOrigemDoTexto(db, canal, p.telefone, p.texto, { fraseDoBotao: r?.nova_conversa === true });
@@ -1003,11 +1079,8 @@ async function despacharAgente(db, canal, corpo, deps) {
   }
 }
 
-/** Código do Apêndice B dentro do erro do banco ("banco 400 em rpc/x: dados_invalidos"). */
-const codigoDoBanco = e => {
-  const m = String(e?.message ?? "").match(/:\s*([a-z][a-z0-9_]{2,60})\s*$/);
-  return m && e?.status >= 400 && e?.status < 500 ? m[1] : null;
-};
+/** Código do Apêndice B dentro do erro do banco — plano 1000 (SV-029): a MESMA tradução do comum.js (antes uma cópia local). */
+const codigoDoBanco = codigoBanco;
 
 export function tratarAgente(req, env, deps = {}) {
   // 405/401 respondem sem ler: o corpo é drenado antes da resposta (senão o runtime espera o envio)
@@ -1022,9 +1095,33 @@ async function contar413(db, chave) {
   } catch { /* contador nunca derruba nada */ }
 }
 
+/** Segredo do canal: cabeçalho x-nx-canal (plano 1000, SV-031 — fora da URL, que aparece em logs de proxy/CDN e no histórico
+    do fluxo) ou, por compatibilidade, ?ch=. A mesma validação (64 hex) nos dois. */
+const segredoDoCanal = req => req.headers.get("x-nx-canal") ?? new URL(req.url).searchParams.get("ch") ?? "";
+
+/** Plano 1000 (SV-268): o teto por minuto do agente conta MENSAGEM separada do resto (recibos, contexto, horários, status) — um
+    número movimentado batia 429 com ~60 mensagens/min e o fluxo perdia mensagens reais. */
+export function tipoTaxa(corpo) {
+  if (!OBJ(corpo)) return "outro";
+  const acao = typeof corpo.acao === "string" ? corpo.acao.trim().toLowerCase() : "";
+  if (acao !== "" && acao !== "mensagem") return "outro";
+  try { return lerPayload(corpo).tipo === "mensagem" ? "mensagem" : "outro"; } catch { return "mensagem"; }
+}
+// banco sem a sobrecarga nova (20261013e): não insiste por 10 min
+const CANAL_TIPO = { ausenteAte: 0 };
+async function canalDoAgente(db, chave, tipo) {
+  if (Date.now() >= CANAL_TIPO.ausenteAte) {
+    try { return await db.rpc("nx_codewords_canal", { p_chave: chave, p_tipo: tipo }); }
+    catch (e) { if (!funcaoAusente(e, "nx_codewords_canal")) throw e; CANAL_TIPO.ausenteAte = Date.now() + 10 * 60_000; }
+  }
+  return db.rpc("nx_codewords_canal", { p_chave: chave });
+}
+/** Só os testes: esquece que a sobrecarga estava ausente. */
+export const esquecerCanalTipo = () => { CANAL_TIPO.ausenteAte = 0; };
+
 async function tratarAgenteCorpo(req, env, deps) {
   if (req.method !== "POST") return respostaAgente({ ok: false, erro: "metodo_invalido" }, 405);
-  const chave = new URL(req.url).searchParams.get("ch") || "";
+  const chave = String(segredoDoCanal(req)).trim();
   if (!/^[0-9a-f]{64}$/.test(chave)) return respostaAgente({ ok: false, erro: "canal_invalido" }, 401);
   const db = criarDb(env, deps.fetch || globalThis.fetch);
   try {
@@ -1040,14 +1137,18 @@ async function tratarAgenteCorpo(req, env, deps) {
       }
       throw e;   // leitura interrompida: falha técnica (o fluxo pode tentar de novo)
     }
-    const canal = await db.rpc("nx_codewords_canal", { p_chave: chave });
+    let corpo, jsonOk = true;
+    try { corpo = JSON.parse(new TextDecoder().decode(bytes), semNul); } catch { jsonOk = false; }
+    const canal = await canalDoAgente(db, chave, tipoTaxa(jsonOk ? corpo : null));
     if (!canal?.canal_id) return respostaAgente({ ok: false, erro: "canal_invalido" }, 401);
     if (canal.excedido) return respostaAgente({ ok: false, erro: "limite_taxa" }, 429, { "retry-after": "60" });
-    let corpo;
-    try { corpo = JSON.parse(new TextDecoder().decode(bytes), semNul); }
-    catch { return respostaAgente({ ok: false, erro: "json_invalido" }, 400); }
+    if (!jsonOk) return respostaAgente({ ok: false, erro: "json_invalido" }, 400);
     if (!OBJ(corpo)) return respostaAgente({ ok: false, erro: "dados_invalidos" }, 400);
     const r = await despacharAgente(db, canal, corpo, deps);
+    // plano 1000 (SV-208): cliente suspenso/cancelado — a mensagem é gravada (nada se perde), mas a IA do fluxo não responde
+    if (canal.suspenso && r && r.responder === true) {
+      return respostaAgente({ ok: true, conversa_id: r.conversa_id ?? null, registrada: !!r.registrada, responder: false, motivo: "suspenso" });
+    }
     return respostaAgente(r);
   } catch (e) {
     if (e instanceof ErroAgente) return respostaAgente({ ok: false, erro: e.codigo, ...e.extra }, e.status);
@@ -1103,7 +1204,17 @@ export async function estadoCanalCodeWords(db, cred, o = {}) {
     ok: true, conectado: a.achado ? a.conectado : false, pareado: a.achado, numero: cred.codewords_numero,
     numero_confere: a.numero_confere, estado: a.estado, rota_atual: destino.rota, rota_esperada: esperado,
     inscrito_certo: a.achado && a.numero_confere === true && a.conectado && destino.rota === esperado, motivo, canal,
+    inscricao: destino.inscricao,
   };
+}
+
+/** Plano 1000 (SV-027/SV-028): intervalo mínimo entre dois «Enviar teste» e entre dois «Parear» do mesmo canal. */
+export const TRAVA_TESTE_S = 30;
+export const TRAVA_PAREAR_S = 90;
+/** Trava que NÃO é solta (vence sozinha no prazo): true = pode seguir. Erro ao gravar a trava → segue (como antes). */
+async function travaPainel(db, nome, segundos) {
+  try { return (await db.rpc("nx_trava_pegar", { p_nome: nome, p_segundos: segundos, p_dono: "nx-codewords:painel" })) === true; }
+  catch (e) { console.error("nx-codewords trava do painel:", erroSeguro(e?.message || e)); return true; }
 }
 
 async function painelParear(db, cred, o) {
@@ -1173,8 +1284,17 @@ async function painelReceita(db, cred, cliente, req) {
   const ia = OBJ(c?.cfg?.ia) ? c.cfg.ia : {};
   // a chave publicável é pública por natureza (a mesma do painel); só entra se vier no formato novo
   const apikey = /^sb_publishable_[A-Za-z0-9_-]{8,}$/.test(String(req.headers.get("apikey") ?? "")) ? req.headers.get("apikey") : null;
+  // plano 1000 (SV-031): a alternativa sem segredo na URL — o fluxo chama url_sem_segredo com o cabeçalho x-nx-canal
+  let urlSemSegredo = null, segredoCanal = null;
+  try {
+    const u = new URL(cred.codewords_url);
+    segredoCanal = u.searchParams.get("ch");
+    u.searchParams.delete("ch");
+    urlSemSegredo = segredoCanal && /^[0-9a-f]{64}$/.test(segredoCanal) ? u.toString() : null;
+  } catch { /* URL antiga: só o formato com ?ch= */ }
   return {
     ok: true, url: cred.codewords_url,
+    ...(urlSemSegredo ? { url_sem_segredo: urlSemSegredo, cabecalho_canal: { "x-nx-canal": segredoCanal } } : {}),
     cabecalhos: { "Content-Type": "application/json", ...(apikey ? { apikey } : {}) },
     prompt: montarReceita({ url: cred.codewords_url, apikey, empresa: c?.nome, assistente: ia.assistente_nome, numero: cred.codewords_numero }),
   };
@@ -1198,7 +1318,7 @@ export async function sincronizar(db, o = {}) {
     if (cred?.provedor !== "codewords" || !cred.codewords_api_key || !cred.codewords_phone_id) continue;
     res.canais++;
     const canal = { canal_id: canalId, cliente_id: g.cliente_id };
-    let tentadas = 0, falhas = 0, ultimoErro = null, reconferido = false;
+    let tentadas = 0, falhas = 0, ultimoErro = null, ultimoTipo = null, reconferido = false;
     await emLotes(g.conversas, 4, async cv => {
       if (Date.now() - inicio > orcamento) return;
       const tel = soDigitos(cv.telefone);
@@ -1210,7 +1330,7 @@ export async function sincronizar(db, o = {}) {
         reconferido = true;
         if (await conferirNumero(db, cred, { ...o, forcar: true }) === true) m = await mensagensDoAparelho(cred, cv.telefone, o);
       }
-      if (m.erro) { falhas++; ultimoErro = m.erro; return; }
+      if (m.erro) { falhas++; ultimoErro = m.erro; ultimoTipo = m.tipo || null; return; }
       const agora = Date.now();
       const itens = m.lista.map(x => itemDoAparelho(x, agora)).filter(Boolean).slice(0, 50);
       if (!itens.length) return;
@@ -1225,7 +1345,10 @@ export async function sincronizar(db, o = {}) {
         if (Number(r?.entradas) > 0) {
           // o fluxo de IA não viu estas entradas: código do site / frase do botão (só na conversa nova) e, se a IA deveria
           // ter respondido, aviso à equipe
-          for (const it of itens) if (!it.de_mim && it.texto) await atribuirOrigemDoTexto(db, canal, tel, it.texto, { fraseDoBotao: leads.includes(tel) });
+          // plano 1000 (SV-023): o telefone da conversa (cadastro manual sem 55, celular antigo sem o 9) e o do lead devolvido pelo banco
+          // são comparados por variantes — antes a frase do botão nunca valia na conversa recuperada se as formas diferiam
+          const nova = mesmoTelefone(leads, tel);
+          for (const it of itens) if (!it.de_mim && it.texto) await atribuirOrigemDoTexto(db, canal, tel, it.texto, { fraseDoBotao: nova });
           if (await avisarRecuperadaSemResposta(db, canal, cv.conversa_id, r.entradas)) res.sem_resposta++;
         }
       } catch (e) { falhas++; ultimoErro = erroSeguro(e?.message || e); }
@@ -1234,6 +1357,12 @@ export async function sincronizar(db, o = {}) {
     // erro só quando NENHUMA conversa deu certo (um chat ruim não é o canal inteiro)
     const tudoFalhou = tentadas > 0 && falhas === tentadas;
     await situacao(db, cred, tudoFalhou ? { sync_erro: ultimoErro } : { sync_ok: true }).catch(() => null);
+    // plano 1000 (SV-033): todas as conversas falhando porque o aparelho caiu → grava o estado REAL do canal (histórico +
+    // notificação pelo banco) — antes o canal seguia «conectado» e fora dos alvos do vigia (que pula canal com conversa recente)
+    if (tudoFalhou && (ultimoTipo === "desconectado" || ultimoTipo === "nao_encontrado")) {
+      try { await estadoCanalCodeWords(db, cred, o); res.reconferidos = (res.reconferidos || 0) + 1; }
+      catch (e) { console.error("nx-codewords sync estado:", erroSeguro(e?.message || e)); }
+    }
   }
   return res;
 }
@@ -1245,6 +1374,11 @@ async function avisarRecuperadaSemResposta(db, canal, conversaId, n) {
   try { d = await db.rpc("nx_codewords_decidir", { p_canal: canal.canal_id, p_conversa: conversaId, p_fila: null }); }
   catch (e) { console.error("nx-codewords sync decidir:", erroSeguro(e?.message || e)); return false; }
   if (!d?.responder) return false;
+  // plano 1000 (SV-037): com o fluxo fora do ar por horas, cada rodada (2 em 2 min) que recuperava entradas da mesma conversa
+  // gerava uma notificação nova — agora no máximo uma a cada 30 min por conversa
+  try {
+    if (await db.rpc("nx_trava_pegar", { p_nome: `nx-codewords:recuperada:${conversaId}`, p_segundos: RECUPERADA_AVISO_S, p_dono: "nx-codewords" }) !== true) return false;
+  } catch (e) { console.error("nx-codewords sync aviso (trava):", erroSeguro(e?.message || e)); }
   const quantas = Number(n) === 1 ? "1 mensagem do cliente chegou" : `${Number(n)} mensagens do cliente chegaram`;
   await db.rpc("nx_notificar", {
     p_cliente: canal.cliente_id, p_conta: null, p_tipo: "sistema", p_titulo: "Mensagem recuperada sem resposta",
@@ -1258,6 +1392,23 @@ async function avisarRecuperadaSemResposta(db, canal, conversaId, n) {
    Vigia do aparelho (cron de 2 em 2 min, depois da sincronização)
    ============================================================ */
 const VIGIA_LIMITE = 10, VIGIA_ORCAMENTO_MS = 30_000, CAIDO_HA_MS = 10 * 60_000, AVISO_CADA_MS = 24 * 3600e3;
+// plano 1000 (SV-035/SV-020): canais conferidos ao mesmo tempo; janela do «reconectado» depois do aviso de queda
+export const VIGIA_JUNTOS = 3;
+const VOLTA_AVISO_MS = 48 * 3600e3;
+
+/** Texto do aviso por problema (plano 1000, SV-017: número trocado e destino errado também deixam o atendimento mudo). */
+const textoProblema = (problema, nome, numero, desde, agora) => {
+  if (problema === "numero_diferente") {
+    return `⚠️ *${nome} · WhatsApp com outro número*\n\nO aparelho conectado ao atendimento não é o número ${numero || "do atendimento"}: nada sai por ele.\n\n`
+      + "Refaça o pareamento em Órbita › Configurações › Números.";
+  }
+  if (problema === "destino") {
+    return `⚠️ *${nome} · Mensagens indo para outro lugar*\n\nO número ${numero || "do atendimento"} está conectado, mas as mensagens não chegam ao atendimento do Órbita.\n\n`
+      + "Em Órbita › Configurações › Números, use «Ligar ao fluxo de IA» ou «Receber aqui».";
+  }
+  return textoAparelhoCaido(nome, numero, desde, agora);
+};
+const TITULO_PROBLEMA = { desconectado: "WhatsApp desconectado", numero_diferente: "WhatsApp com outro número", destino: "mensagens indo para outro lugar" };
 
 const textoAparelhoCaido = (nome, numero, desde, agora) => {
   const min = Math.max(1, Math.round((agora - Date.parse(desde)) / 60_000));
@@ -1290,36 +1441,86 @@ export async function vigiarAparelhos(db, cfg, o = {}) {
     }
     throw e;
   }
-  for (const a of Array.isArray(alvos) ? alvos : []) {
-    if (Date.now() - inicio > VIGIA_ORCAMENTO_MS) { res.pulado = "orçamento"; break; }
+  // plano 1000 (SV-035): até VIGIA_JUNTOS canais conferidos ao mesmo tempo (antes um por vez, até 15 s cada, num orçamento de
+  // 30 s: com 10 canais caídos só 2 eram conferidos por rodada)
+  await emLotes(Array.isArray(alvos) ? alvos : [], VIGIA_JUNTOS, async a => {
+    if (Date.now() - inicio > VIGIA_ORCAMENTO_MS) { res.pulado = "orçamento"; return; }
     try {
       const cred = await db.rpc("nx_canal_credencial", { p_canal: a.canal_id, p_cliente: a.cliente_id });
-      if (cred?.provedor !== "codewords" || !cred.codewords_api_key) continue;
+      if (cred?.provedor !== "codewords" || !cred.codewords_api_key) return;
       res.canais++;
       // a RPC (migração 20261008b) já traz conectado/conferido_em/caiu_em/codewords_aviso_em; linha sem isso → lê o canal
       const antes = "conectado" in a ? { codewords_conectado: a.conectado, codewords_conferido_em: a.conferido_em }
         : (await db.select("nx_canais", { id: `eq.${a.canal_id}`, select: "codewords_conectado,codewords_conferido_em", limit: 1 }).catch(() => []))[0];
       const r = await estadoCanalCodeWords(db, cred, o);
-      if (!r.ok || r.conectado !== false) continue;
+      if (!r.ok) return;
+      // plano 1000 (SV-017): além de desconectado, número trocado e destino errado (conectado, mas as mensagens vão para outro
+      // lugar). Os dois últimos só contam quando a conferência ANTERIOR (≥ 20 min, alvo do vigia) já tinha visto o mesmo problema.
+      const problema = r.conectado === false ? "desconectado"
+        : r.numero_confere === false ? "numero_diferente"
+        : r.pareado && r.conectado && r.rota_atual !== r.rota_esperada ? "destino" : null;
+      if (!problema) {
+        if (r.conectado === true && await avisarVolta(db, cfg, a, cred, agora, o)) res.voltas = (res.voltas || 0) + 1;
+        return;
+      }
       res.caidos++;
+      // plano 1000 (SV-038): canal que NUNCA conectou (pareamento abandonado) não vira aviso eterno a cada 24 h
+      if (a.ja_conectou === false) { res.nunca_conectou = (res.nunca_conectou || 0) + 1; return; }
       // caído há mais de 10 min: desde a última mudança no histórico (caiu_em) ou desde a conferência anterior que já o viu caído
-      const desde = a.caiu_em ?? a.desde ?? (antes?.codewords_conectado === false ? antes.codewords_conferido_em : null);
-      if (!desde || agora - Date.parse(desde) < CAIDO_HA_MS) continue;
+      const desde = problema === "desconectado" ? (a.caiu_em ?? a.desde ?? (antes?.codewords_conectado === false ? antes.codewords_conferido_em : null))
+        : problema === "numero_diferente" ? (a.numero_conferido === false ? a.conferido_em : null)
+        : (a.inscricao !== undefined && a.inscricao === r.inscricao ? a.conferido_em : null);
+      if (!desde || agora - Date.parse(desde) < CAIDO_HA_MS) return;
       const avisoEm = a.codewords_aviso_em ?? a.aviso_em ?? await ultimoAviso(db, a.canal_id);
-      if (avisoEm && agora - Date.parse(avisoEm) < AVISO_CADA_MS) continue;
+      if (avisoEm && agora - Date.parse(avisoEm) < AVISO_CADA_MS) return;
       // marca ANTES de enviar: sem a coluna nova nada sai (nunca um aviso a cada rodada de 2 min)
       try { await db.update("nx_canais", { id: `eq.${a.canal_id}` }, { codewords_aviso_em: new Date(agora).toISOString() }); }
-      catch { console.error("nx-codewords vigia: sem codewords_aviso_em (aplicar a migração 20261008); aviso não enviado"); continue; }
+      catch { console.error("nx-codewords vigia: sem codewords_aviso_em (aplicar a migração 20261008); aviso não enviado"); return; }
       const destinos = (await db.rpc("nx_alerta_destinos", { p_cliente: a.cliente_id }).catch(() => null))?.destinos || [];
-      if (!destinos.length) continue;
       const [c] = await db.select("nx_clientes", { id: `eq.${a.cliente_id}`, select: "nome,cfg", limit: 1 }).catch(() => []);
       const nome = nomeCurto(c || {});
-      const envio = await enviarParaTodos(cfg, destinos, textoAparelhoCaido(nome, cred.codewords_numero, desde, agora),
-        { fetch: o.fetch, titulo: `${nome}: WhatsApp desconectado` });
-      res.avisos += envio.filter(e => e.ok).length;
+      // plano 1000 (SV-019): o envio tem prazo próprio — uma conexão presa com a Graph segurava a função até o corte de 150 s
+      const envio = destinos.length ? await enviarParaTodos(cfg, destinos, textoProblema(problema, nome, cred.codewords_numero, desde, agora),
+        { fetch: comPrazo(o.fetch || globalThis.fetch, o.prazoAvisoMs ?? PRAZO_AVISO_MS), titulo: `${nome}: ${TITULO_PROBLEMA[problema]}` }) : [];
+      const enviados = envio.filter(e => e.ok).length;
+      res.avisos += enviados;
+      if (!enviados) {
+        // plano 1000 (SV-018): nenhum destino recebeu (token da Nexus vencido, número inválido, sem destino): o aviso volta a
+        // ser tentado em ~1 h (aviso_em recuado para 23 h atrás) e os admins do cliente veem o problema no painel
+        res.avisos_falhos = (res.avisos_falhos || 0) + 1;
+        const motivo = destinos.length ? erroSeguro(envio.find(e => !e.ok)?.erro || "o envio falhou") : "nenhum número de gestor cadastrado";
+        try { await db.update("nx_canais", { id: `eq.${a.canal_id}` }, { codewords_aviso_em: new Date(agora - AVISO_CADA_MS + 3600e3).toISOString() }); }
+        catch (e) { console.error("nx-codewords vigia (recuar aviso):", erroSeguro(e?.message || e)); }
+        await db.rpc("nx_notificar", {
+          p_cliente: a.cliente_id, p_conta: null, p_tipo: "sistema", p_titulo: `WhatsApp do atendimento: ${TITULO_PROBLEMA[problema]}`,
+          p_corpo: `O aviso por WhatsApp ao gestor não saiu (${motivo}). Confira o número em Configurações › Números.`.slice(0, 500),
+          p_link: "#/config/numeros",
+        }).catch(e => console.error("nx-codewords vigia (notificar):", erroSeguro(e?.message || e)));
+      }
     } catch (e) { console.error("nx-codewords vigia:", erroSeguro(e?.message || e)); }
-  }
+  });
   return res;
+}
+
+/** Plano 1000 (SV-020): o aparelho voltou (conferência sem problema) e o gestor recebeu o aviso de queda nas últimas 48 h →
+    «WhatsApp reconectado» UMA vez (codewords_aviso_em limpo ANTES de enviar: nunca em dobro). Devolve true quando avisou. */
+async function avisarVolta(db, cfg, a, cred, agora, o) {
+  const avisoEm = "codewords_aviso_em" in a || "aviso_em" in a ? (a.codewords_aviso_em ?? a.aviso_em) : await ultimoAviso(db, a.canal_id);
+  if (!avisoEm || agora - Date.parse(avisoEm) > VOLTA_AVISO_MS) return false;
+  // revisão 13/10: codewords_aviso_em NÃO é mais limpo (limpar desligava o freio de 1 aviso de queda a cada 24 h: aparelho
+  // instável virava «caiu»/«voltou» a cada rodada). Uma volta por aviso de queda: trava com o próprio aviso_em no nome.
+  const pegou = await db.rpc("nx_trava_pegar", {
+    p_nome: `nx-codewords:volta:${a.canal_id}:${avisoEm}`, p_segundos: Math.ceil(VOLTA_AVISO_MS / 1000) + 3600, p_dono: "nx-codewords",
+  }).catch(() => false);
+  if (pegou !== true) return false;
+  const destinos = (await db.rpc("nx_alerta_destinos", { p_cliente: a.cliente_id }).catch(() => null))?.destinos || [];
+  if (!destinos.length) return false;
+  const [c] = await db.select("nx_clientes", { id: `eq.${a.cliente_id}`, select: "nome,cfg", limit: 1 }).catch(() => []);
+  const nome = nomeCurto(c || {});
+  const texto = `✅ *${nome} · WhatsApp reconectado*\n\nO número ${cred.codewords_numero || "do atendimento"} voltou a se conectar: as mensagens já entram e saem normalmente.`;
+  const envio = await enviarParaTodos(cfg, destinos, texto,
+    { fetch: comPrazo(o.fetch || globalThis.fetch, o.prazoAvisoMs ?? PRAZO_AVISO_MS), titulo: `${nome}: WhatsApp reconectado` });
+  return envio.some(e => e.ok);
 }
 
 /* ============================================================
@@ -1330,13 +1531,33 @@ async function modoCron(req, env, deps, f) {
   // corpo antes do banco: teto de 64 KiB (resto drenado, 413 sem tocar no banco); ilegível → {}
   const corpo = await lerCorpo(req, undefined, deps.drenagem);
   const cfg = await autenticarCron(req, db);   // 401 sem o cron_token
+  exigirCorpoValido(corpo);   // plano 1000 (SV-100)
   const chaves = OBJ(corpo) ? Object.keys(corpo) : [];
   if (chaves.length !== 1 || corpo.sincronizar !== true) return json({ ok: false, erro: "dados_invalidos" }, 400);
-  const o = { fetch: f, orcamentoMs: deps.orcamentoMs, agora: deps.agora };
-  const sincronizacao = await sincronizar(db, o);
-  // o vigia nunca derruba a sincronização
-  const vigia = await vigiarAparelhos(db, cfg, o).catch(e => ({ erro: erroSeguro(e?.message || e) }));
-  return json({ ok: true, sincronizacao, vigia });
+  const o = { fetch: f, orcamentoMs: deps.orcamentoMs, agora: deps.agora, prazoAvisoMs: deps.prazoAvisoMs };
+  // plano 1000 (SV-021): uma rodada por vez — rodadas lentas se sobrepunham (aviso «recuperada» em dobro, aparelho consultado
+  // em dobro). Sem a trava (erro do banco) a rodada segue como antes.
+  const dono = crypto.randomUUID();
+  let pegou = null;
+  try { pegou = (await db.rpc("nx_trava_pegar", { p_nome: "nx-codewords:sync", p_segundos: TRAVA_SYNC_S, p_dono: dono })) === true; }
+  catch (e) { console.error("nx-codewords trava:", erroSeguro(e?.message || e)); }
+  if (pegou === false) return json({ ok: true, pulado: EM_EXECUCAO });
+  const t0 = Date.now();
+  const inicio = deps.agora ? new Date(typeof deps.agora === "function" ? deps.agora() : deps.agora) : new Date();
+  try {
+    const sincronizacao = await sincronizar(db, o);
+    // o vigia nunca derruba a sincronização
+    const vigia = await vigiarAparelhos(db, cfg, o).catch(e => ({ erro: erroSeguro(e?.message || e) }));
+    // plano 1000 (SV-030): rastro em nx_execucoes quando houve trabalho (só contagens — nada de telefone)
+    const trabalho = ["entradas", "saidas", "adotadas", "falhas"].reduce((n, k) => n + (Number(sincronizacao[k]) || 0), 0)
+      + (Number(vigia?.avisos) || 0) + (Number(vigia?.avisos_falhos) || 0) + (vigia?.erro ? 1 : 0);
+    if (trabalho > 0) {
+      await registrarExecucao(db, { tarefa: "nx-codewords", inicio, ms: Date.now() - t0, ok: !vigia?.erro && !sincronizacao.falhas, resumo: { sincronizacao, vigia } });
+    }
+    return json({ ok: true, sincronizacao, vigia });
+  } finally {
+    if (pegou) await db.rpc("nx_trava_soltar", { p_nome: "nx-codewords:sync", p_dono: dono }).catch(() => null);
+  }
 }
 
 /**
@@ -1353,7 +1574,7 @@ async function tratarCodeWords(req, env, deps) {
   const f = deps.fetch || globalThis.fetch;
   let u;
   try { u = new URL(req.url); } catch { return json({ ok: false, erro: "dados_invalidos" }, 400); }
-  if (u.searchParams.has("ch")) return tratarAgente(req, env, { ...deps, fetch: f });
+  if (u.searchParams.has("ch") || req.headers.get("x-nx-canal") != null) return tratarAgente(req, env, { ...deps, fetch: f });
   if (req.method === "POST" && req.headers.get("x-nx-cron") != null) {
     try { return await modoCron(req, env, deps, f); }
     catch (e) {
@@ -1367,17 +1588,30 @@ async function tratarCodeWords(req, env, deps) {
     const acao = String(corpo.acao ?? "");
     if (!ACOES_PAINEL.has(acao)) throw new ErroApi("dados_invalidos", 400, "acao");
     const db = criarDb(env, f);
-    await autenticarPainel(db, corpo, "admin");
+    const conta = await autenticarPainel(db, corpo, "admin");
     const cliente = String(corpo.cliente);
     await interna(db, "nx_exigir_modulo", { p_cliente: cliente, p_modulo: "conversas" });
     const cred = await credencialCW(db, cliente, corpo.canal);   // canal de outro cliente → 404 antes de qualquer rede
     const o = { fetch: f };
+    // plano 1000 (SV-230): parear, ligar/receber e enviar teste deixam linha em nx_auditoria com a conta
+    const comAuditoria = async r => { await auditar(db, conta, cliente, `codewords_${acao}`, { canal: cred.canal_id, ok: !!r?.ok }); return respostaPainel(r); };
     switch (acao) {
       case "estado": return respostaPainel(await estadoCanalCodeWords(db, cred, o));
-      case "parear": return respostaPainel(await painelParear(db, cred, o));
-      case "ligar_fluxo": return respostaPainel(await painelInscrever(db, cred, "fluxo", o));
-      case "receber_aqui": return respostaPainel(await painelInscrever(db, cred, "direta", o));
-      case "enviar_teste": return respostaPainel(await painelEnviarTeste(db, cred, corpo, o));
+      case "parear": {
+        // plano 1000 (SV-028): dois admins clicando «Parear» geravam dois códigos (e o primeiro digitado podia não ser o gravado):
+        // um pareamento por canal a cada 90 s
+        if (!(await travaPainel(db, `nx-codewords:parear:${cred.canal_id}`, TRAVA_PAREAR_S))) {
+          return respostaPainel({ ok: false, erro: "aguarde", detalhe: "Um código de pareamento acabou de ser gerado para este número. Use o código mostrado ou espere 90 segundos para gerar outro." });
+        }
+        return comAuditoria(await painelParear(db, cred, o));
+      }
+      case "ligar_fluxo": return comAuditoria(await painelInscrever(db, cred, "fluxo", o));
+      case "receber_aqui": return comAuditoria(await painelInscrever(db, cred, "direta", o));
+      case "enviar_teste": {
+        // plano 1000 (SV-027): cliques repetidos mandavam várias mensagens de teste pelo celular do cliente — uma a cada 30 s
+        if (!(await travaPainel(db, `nx-codewords:teste:${cred.canal_id}`, TRAVA_TESTE_S))) return respostaPainel({ ok: false, erro: "aguarde" });
+        return comAuditoria(await painelEnviarTeste(db, cred, corpo, o));
+      }
       case "receita": return respostaPainel(await painelReceita(db, cred, cliente, req));
     }
     throw new ErroApi("dados_invalidos", 400, "acao");

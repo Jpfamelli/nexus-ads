@@ -488,6 +488,22 @@ begin
     'nx_ctx e nx_disparar não são executáveis pelo navegador'
   );
 
+  -- Plano 1000 · SV-131: sem p_token, anon só executa a LISTA PÚBLICA (entrada, cadastro, convite, senha, formulário/rastreio
+  -- do site, marca). Função interna nova criada sem o bloco de permissões (no Supabase os default privileges dão EXECUTE a anon;
+  -- o rodar-local imita isso desde a SV-168) aparece aqui pelo nome.
+  for r in
+    select p.oid::regprocedure::text as fn
+      from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.prokind = 'f' and p.proname like 'nx\_%' escape '\'
+       and has_function_privilege('anon', p.oid, 'execute')
+       and not ('p_token' = any(coalesce(p.proargnames, '{}'::text[])))
+       and p.proname not in ('nx_entrar', 'nx_criar_conta', 'nx_convite_ver', 'nx_convite_aceitar', 'nx_senha_redefinir',
+                             'nx_lead_entrada', 'nx_rastreio_registrar', 'nx_marca_publica')
+     order by 1
+  loop
+    raise exception 'FALHOU: anon executa função fora da lista pública (sem p_token): %', r.fn;
+  end loop;
+
   -- Plano 100 · S-B17 [C106]: a rede de proteção varre pg_class/pg_proc, não uma lista escrita à mão.
   -- (a) TODA tabela nx_% tem RLS ligada e nenhum privilégio (select/insert/update/delete) para anon ou authenticated;
   -- (b) NENHUMA função nx_% é executável por authenticated (o painel usa só a chave anon; a service_role é das Edge Functions);

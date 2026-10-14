@@ -10,7 +10,10 @@
    `blocos` no lugar de `sistema` liga o prompt caching: o bloco fixo
    (catálogo, regras) ganha cache_control e a parte variável vem depois.
    ============================================================ */
-import Anthropic from "npm:@anthropic-ai/sdk";
+// plano 1000 (SV-062): versão EXATA do SDK (a resolvida pelo deno check desde 05/10/2026) — sem ela cada deploy pegava a última
+// publicada e uma mudança de versão maior quebrava sugerir/resumir/automações sem nenhuma linha do repositório mudar.
+// Trocar a versão = rodar a suíte e o deno check com a nova antes da tag.
+import Anthropic from "npm:@anthropic-ai/sdk@0.131.0";
 import { MODELO_PADRAO, COM_RESERVA, SEM_EFFORT } from "./comum.js";
 
 const BETA_RESERVA = "server-side-fallback-2026-07-01";
@@ -77,9 +80,19 @@ function erroRecusa(resp) {
  * @param {string} [o.modelo]  nx_config.modelo_ia
  * @param {"diario"|"mensal"} o.tipo
  * @param {object} o.contexto  números crus (M.contextoIA)
+ * @param {"low"|"medium"} [o.esforco] plano 1000 (SV-064): padrão «low» no diário (4 linhas) e «medium» no mensal
  * @returns {Promise<string>} texto da leitura — lança erro em falha ou recusa
  */
-export async function leituraIA({ chave, modelo, tipo = "diario", contexto, prazoMs = 60_000 }) {
+export async function leituraIA(o) {
+  return (await leituraIACompleta(o)).texto;
+}
+
+// plano 1000 (SV-064): 4 linhas não pedem 16.000 tokens — com divagação o custo e o prazo de 25 s por cliente disparavam
+export const MAX_TOKENS_LEITURA = 1500;
+
+/** Como leituraIA, mas devolve também o uso — plano 1000 (SV-063): o relatório fecha a reserva de IA com os tokens
+    ({texto, modelo, tokens_in, tokens_out, tokens_cache_escrita, tokens_cache_leitura, stop_reason, ms}). */
+export async function leituraIACompleta({ chave, modelo, tipo = "diario", contexto, prazoMs = 60_000, esforco }) {
   const model = modelo || MODELO_PADRAO;
   // A Edge Function tem teto de tempo de parede: 1 retentativa de 60 s no máximo. Com prazo menor (o relatório dá ~25 s por
   // cliente) a chamada é CORTADA no prazo e sem retentativa: antes o relatório desistia da leitura e o SDK seguia pagando.
@@ -87,16 +100,25 @@ export async function leituraIA({ chave, modelo, tipo = "diario", contexto, praz
   const client = new Anthropic({ apiKey: chave, timeout: curto ? Math.max(1_000, Math.floor(prazoMs)) : 60_000, maxRetries: curto ? 0 : 1 });
   const pedido = {
     model,
-    max_tokens: 16000,
+    max_tokens: MAX_TOKENS_LEITURA,
     system: SISTEMA[tipo] || SISTEMA.diario,
     messages: [{ role: "user", content: JSON.stringify(contexto) }],
   };
-  if (!SEM_EFFORT.test(model)) pedido.output_config = { effort: "medium" };
-  const { resp } = await chamar(client, model, pedido);
+  if (!SEM_EFFORT.test(model)) pedido.output_config = { effort: esforco || (tipo === "mensal" ? "medium" : "low") };
+  const { resp, ms } = await chamar(client, model, pedido);
   if (resp.stop_reason === "refusal") throw erroRecusa(resp);
   const texto = textoDe(resp);
   if (!texto) throw new Error(`a IA não devolveu texto (stop_reason: ${resp.stop_reason})`);
-  return texto;
+  return {
+    texto,
+    modelo: resp.model || model,
+    tokens_in: tokens(resp, "input_tokens"),
+    tokens_cache_escrita: tokens(resp, "cache_creation_input_tokens"),
+    tokens_cache_leitura: tokens(resp, "cache_read_input_tokens"),
+    tokens_out: tokens(resp, "output_tokens"),
+    stop_reason: resp.stop_reason ?? null,
+    ms,
+  };
 }
 
 /**

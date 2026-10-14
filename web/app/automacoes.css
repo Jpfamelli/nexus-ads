@@ -765,7 +765,50 @@ html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h
 .au-ia-perg-rod { justify-content: flex-start; }
 .au-ia-perg-nota:empty { display: none; }
 
+/* ================================================================ plano 1000 (13/10) · frente auto */
+/* AS-012: só o nome é link; o ::after cobre o cartão para o clique, interruptor e menu ficam por cima */
+.au-item-link { color: inherit; text-decoration: none; border-radius: var(--r-pp); }
+.au-item-link::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.au-item-link:focus-visible { outline: none; }
+.au-item:has(.au-item-link:focus-visible) { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; }
+.au-item-sw, .au-item-mais { position: relative; z-index: 1; }
+/* AS-004: o cartão que saiu do filtro esmaece antes de sumir */
+.au-item.au-saindo { opacity: .45; transition: opacity var(--t-ui) var(--e-out); }
+/* AS-070: a cota de IA à vista antes de pedir */
+.au-ia-cota { margin: 0; font-size: var(--fs-12); color: var(--c-texto-3); }
+.au-ia-cota-aten { color: var(--c-aten); font-weight: 600; }
+.au-ia-cota-ruim { color: var(--c-ruim); font-weight: 600; }
+/* AS-016: o botão de emergência não compete com «Criar do zero» */
+.au-pausar { color: var(--c-ruim); }
+/* AS-036/AS-037: prévia da mensagem e contador do texto */
+.au-msg-previa { margin-top: var(--esp-2); }
+.au-msg-previa .au-bolha { white-space: pre-wrap; overflow-wrap: anywhere; }
+.au-cont { display: block; margin-top: var(--esp-1); font-size: var(--fs-12); color: var(--c-texto-3); text-align: right; font-variant-numeric: tabular-nums; }
+.au-cont[data-tom="aten"] { color: var(--c-aten); font-weight: 600; }
+.au-cont[data-tom="ruim"] { color: var(--c-ruim); font-weight: 700; }
+/* AS-035/AS-278: avisos que não impedem salvar, dentro do passo */
+.au-passo-aviso { margin: 0 1rem .85rem; }
+/* AS-044: testar com um registro */
+.au-teste-com { margin-top: var(--esp-2); }
+.au-teste-busca { width: 100%; min-width: 0; min-height: 44px; }
+.au-teste-res { list-style: none; display: flex; flex-direction: column; gap: var(--esp-1); padding: 0; margin: var(--esp-1) 0 0; }
+.au-teste-op { width: 100%; min-height: 44px; flex-direction: column; align-items: flex-start; text-align: left; gap: 0; }
+.au-teste-op small { color: var(--c-texto-3); font-weight: 400; }
+.au-teste-escolhido { display: flex; align-items: center; flex-wrap: wrap; gap: var(--esp-2); margin: var(--esp-2) 0 0; font-size: var(--fs-13); font-weight: 600; }
+/* AS-038: tempo em horas ou dias */
+.au-hr-resumo { font-variant-numeric: tabular-nums; }
+/* AS-031: no celular o cabeçalho do editor é uma linha só (nome + interruptor + «⋯»); Salvar fica no rodapé */
+.au-ed-mais { display: none; }
+@media (max-width: 760px) {
+  .au-ed-largo { display: none; }
+  .au-ed-mais { display: inline-flex; }
+  .au-ed-acoes { width: auto; flex-wrap: nowrap; }
+  .au-ed-linha { flex-wrap: nowrap; align-items: flex-end; }
+  .au-ed-nome { flex: 1 1 auto; }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .au-item.au-saindo { transition: none; }
   .au-item, .au-ex, .au-dg-anim .au-dg-no, .au-gd-anim .au-gd-pilha, .au-foco-brilho { animation: none !important; }
   .au-ponto-on::after { animation: none; display: none; }
   .au-taxa-trilho i, .au-gd-barra, .au-dg-toggle .ic, .au-ex-det-bt .ic { transition: none; }
@@ -782,4 +825,92 @@ html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h
     forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; border-width: 2px;
   }
   .au-chip:disabled, .au-sw:disabled { color: GrayText; border-color: GrayText; }
+}
+
+/* ================================================================ plano 1000 · lote auto-2 */
+/* AS-022: a pílula do uso do plano tem dica (desligadas também contam) */
+.au-uso[tabindex] { cursor: help; }
+.au-uso:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; }
+/* AS-020: etiqueta de tipo (WhatsApp, CodeWords) não usa o verde de estado */
+.au-pil-tipo .ic { color: var(--c-texto-2); }
+/* AS-007 / AS-071 / AS-072 / AS-073: Criar com IA */
+.au-ia-limite { display: flex; align-items: flex-start; gap: .4rem; margin-top: var(--esp-2); color: var(--c-aten); font-weight: 600; }
+.au-ia-limite .ic { flex: none; width: 16px; height: 16px; margin-top: .15rem; }
+.au-ia-recentes { margin-bottom: var(--esp-2); }
+.au-chip-rec .ic { flex: none; width: 14px; height: 14px; }
+.au-ia-carregando { flex-wrap: wrap; }
+.au-ia-parar { margin-left: auto; }
+.au-ia-desistiu { margin-top: var(--esp-2); }
+/* AS-015: busca e ordem da lista */
+.au-lista-ferramentas { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem .9rem; margin: 0 0 .9rem; }
+.au-lista-busca { flex: 1 1 16rem; max-width: 26rem; }
+.au-lista-busca input { min-height: 44px; font-size: var(--fs-16); }
+.au-lista-ordem { min-height: 44px; flex: 0 1 14rem; min-width: 0; }
+/* AS-017: «Do sistema» recolhível, com o atalho para onde se ajusta */
+.au-sis-det > summary { list-style: none; cursor: pointer; align-items: center; border-radius: var(--r-p); }
+.au-sis-det > summary::-webkit-details-marker { display: none; }
+.au-sis-det > summary:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 4px; }
+.au-sis-seta { width: 18px; height: 18px; color: var(--c-texto-2); transition: transform var(--t-micro) var(--e-out); }
+.au-sis-det[open] .au-sis-seta { transform: rotate(180deg); }
+.au-sis-link { display: inline-flex; align-items: center; gap: .3rem; min-height: 44px; margin-top: .2rem; font-size: var(--fs-13); font-weight: 600; }
+.au-sis-link .ic { width: 14px; height: 14px; }
+/* AS-013 / AS-075 / AS-076: receitas */
+.au-mod-limite { margin: 0 0 .9rem; }
+.au-modelo-rod { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.au-modelo-ver .ic { width: 15px; height: 15px; }
+.au-modelo-custo { color: var(--c-texto-2); }
+/* AS-023 / AS-052: nome repetido e sugestão de nome */
+.au-nome-aviso { margin-top: .3rem; font-size: var(--fs-13); color: var(--c-aten); font-weight: 600; text-wrap: pretty; }
+.au-nome-sug { margin-top: .3rem; max-width: 100%; white-space: normal; text-align: left; line-height: 1.25; }
+/* AS-042 / AS-043: busca na paleta e «Outro passo» */
+.au-paleta-busca { margin-bottom: var(--esp-3); }
+.au-paleta-busca .busca { display: flex; max-width: 26rem; }
+.au-paleta-busca input { min-height: 44px; font-size: var(--fs-16); width: 100%; }
+.au-paleta-vazio { margin: var(--esp-2) 0; }
+.au-outro-passo { margin-top: var(--esp-2); }
+/* AS-063 / AS-067: horário que vale e passo que nunca roda */
+.au-horario-qual { margin-top: .2rem; font-size: var(--fs-12); }
+.au-passo-nunca { margin: .4rem 0 .2rem; font-size: var(--fs-13); }
+.au-passo-inalcancavel .au-passo-nunca { opacity: 1; }
+/* AS-053 / AS-054: modelo de outro número e sincronizar sem sair */
+.au-tpl-canal { margin-top: var(--esp-2); }
+.au-tpl-sinc { margin-top: var(--esp-2); }
+/* AS-046 / AS-060: teste na gaveta e teto das execuções */
+.au-sim-gaveta { display: flex; flex-direction: column; gap: var(--esp-3); }
+.au-ex-teto { display: flex; align-items: flex-start; gap: .4rem; margin-top: var(--esp-3); }
+.au-ex-teto .ic { flex: none; width: 15px; height: 15px; margin-top: .15rem; }
+@media (max-width: 760px), (pointer: coarse) {
+  .au-modelo-ver, .au-outro-passo, .au-tpl-sincronizar, .au-ia-parar { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .au-sis-seta { transition: none; }
+}
+
+/* ---------------------------------------------------------------- plano 1000 · lote auto-3 */
+/* AS-268: «Liga ao salvar» ao lado do interruptor do topo */
+.au-sw-caixa { display: inline-flex; align-items: center; gap: .45rem; }
+.au-sw-nota { font-size: var(--fs-12); font-weight: 600; color: var(--c-aten); white-space: nowrap; }
+/* AS-269: erro do servidor fixo no topo do editor */
+.au-erro-salvar { margin: var(--esp-3) 0; }
+.au-erro-salvar .pilha-p { min-width: 0; }
+/* AS-231: reabrir a explicação da IA */
+.au-ver-ia { align-self: flex-start; margin-top: var(--esp-1); }
+/* AS-284: testar uma frase nas palavras-chave */
+.au-frase-teste { display: flex; flex-direction: column; gap: .3rem; margin-top: var(--esp-2); padding-top: var(--esp-2); border-top: 1px dashed var(--c-borda); }
+.au-frase-inp { width: 100%; min-height: 40px; font-size: var(--fs-16); }
+.au-frase-res { font-size: var(--fs-13); }
+.au-frase-res[data-tom="ok"] { color: var(--c-ok); }
+.au-frase-res[data-tom="ruim"] { color: var(--c-aten); }
+/* AS-270 / AS-298: o que sairia agora e a dica de como resolver o erro */
+.au-sim-saidas { display: flex; align-items: center; gap: .45rem; margin: 0; font-weight: 600; font-size: var(--fs-14); }
+.au-sim-saidas .ic { flex: none; width: 16px; height: 16px; }
+.au-dica-erro { display: flex; align-items: flex-start; gap: .4rem; margin: .3rem 0 0; font-size: var(--fs-13); }
+.au-dica-erro .ic { flex: none; width: 14px; height: 14px; margin-top: .15rem; }
+/* AS-227: barra do gráfico que filtra o dia */
+.au-gd-clicavel button.au-gd-col { appearance: none; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; border-radius: var(--r-pp); }
+.au-gd-clicavel button.au-gd-col:hover .au-gd-pilha { filter: brightness(1.15); }
+.au-gd-clicavel button.au-gd-col:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+.au-ex-dia-filtro { gap: var(--esp-2); align-items: center; flex-wrap: wrap; margin: var(--esp-2) 0; }
+@media (max-width: 760px), (pointer: coarse) {
+  .au-ver-ia { min-height: 44px; }
 }

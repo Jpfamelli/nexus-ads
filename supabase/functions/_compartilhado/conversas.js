@@ -120,11 +120,59 @@ export function normalizarMensagem(m, contacts) {
   };
 }
 
+/** Corpo que não vai ser lido: cancela (melhor esforço; nunca lança). */
+const soltar = r => { try { const x = r?.body?.cancel?.(); if (x?.catch) x.catch(() => null); } catch { /* nada */ } };
+
+/** Corpo da resposta com teto (plano 1000, SV-008): soma os pedaços enquanto chegam e para ao passar do teto, sem acumular o
+    resto — sem file_size no GET /{media_id} e sem Content-Length, o arquivo inteiro ia para a memória do isolate antes da
+    conferência. Acima do teto → null (e o leitor é cancelado). */
+export async function lerComTeto(r, teto) {
+  if (!r.body) { const b = new Uint8Array(await r.arrayBuffer()); return b.length > teto ? null : b; }
+  const leitor = r.body.getReader();
+  const partes = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await leitor.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > teto) { try { const x = leitor.cancel(); if (x?.catch) x.catch(() => null); } catch { /* nada */ } return null; }
+    partes.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let pos = 0;
+  for (const x of partes) { bytes.set(x, pos); pos += x.byteLength; }
+  return bytes;
+}
+
 /**
  * Mídia recebida: GET /{media_id} com o token do CANAL → baixa → Storage privado →
  * nx_wa_midia_ok. Canal e cliente vêm do canal resolvido pelo webhook, nunca do corpo.
  * Nunca lança: o resultado vai para a mensagem (estado ok/falhou).
  */
+/** A URL de download da mídia é de um host da Meta (https + *.fbsbx.com, *.facebook.com ou *.whatsapp.net)? */
+export function hostDeMidiaMeta(url) {
+  try {
+    const u = new URL(String(url));
+    const h = u.hostname.toLowerCase();
+    return u.protocol === "https:" && [".fbsbx.com", ".facebook.com", ".whatsapp.net"].some(d => h.endsWith(d) || h === d.slice(1));
+  } catch { return false; }
+}
+
+/** Plano 1000 (SV-010): os bytes batem com o SHA-256 informado pela Meta? Aceita hex (64) ou base64 (44, com ou sem «=»); valor
+    ausente ou em formato desconhecido → true (nada a conferir). */
+export async function confereSha256(bytes, esperado) {
+  const e = String(esperado ?? "").trim();
+  if (!e) return true;
+  const ehHex = /^[0-9a-f]{64}$/i.test(e);
+  const ehB64 = /^[A-Za-z0-9+/_-]{43}=?$/.test(e);
+  if (!ehHex && !ehB64) return true;
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  if (ehHex) return Array.from(d, b => b.toString(16).padStart(2, "0")).join("") === e.toLowerCase();
+  const b64 = btoa(String.fromCharCode(...d));
+  const norm = s => s.replace(/=+$/, "").replace(/-/g, "+").replace(/_/g, "/");
+  return norm(b64) === norm(e);
+}
+
 export async function baixarMidia(db, canal, mensagemId, midia, ctx) {
   const f = ctx.redeMidia || ctx.rede || ctx.fetch;
   const falhou = async motivo => {
@@ -138,12 +186,22 @@ export async function baixarMidia(db, canal, mensagemId, midia, ctx) {
     const info = await infoMidia(cred, midia.media_id, { fetch: f });
     if (!info.ok) return falhou(textoFalhaCanal(info.erro));
     if (info.tamanho && info.tamanho > LIMITES.midia) return falhou("arquivo maior que 16 MB");
+    // plano 1000 (SV-009): o token do canal só vai para host da Meta — resposta adulterada/inesperada da Graph não leva o token embora
+    if (!hostDeMidiaMeta(info.url)) return falhou("url de mídia inesperada");
     let r;
     try { r = await f(info.url, { headers: { Authorization: `Bearer ${cred.token}` } }); }
     catch (e) { return falhou(`download da mídia: ${limparErro(e?.message || e)}`); }
-    if (!r.ok) return falhou(`download da mídia: HTTP ${r.status}`);
-    const bytes = new Uint8Array(await r.arrayBuffer());
-    if (bytes.length > LIMITES.midia) return falhou("arquivo maior que 16 MB");
+    if (!r.ok) { soltar(r); return falhou(`download da mídia: HTTP ${r.status}`); }
+    const declarado = Number(r.headers.get("content-length"));
+    if (Number.isFinite(declarado) && declarado > LIMITES.midia) { soltar(r); return falhou("arquivo maior que 16 MB"); }
+    const bytes = await lerComTeto(r, LIMITES.midia);
+    if (!bytes) return falhou("arquivo maior que 16 MB");
+    // plano 1000 (SV-010): arquivo truncado pela rede virava «ok» e abria corrompido — o tamanho declarado (Content-Length /
+    // file_size) e o SHA-256 que a Meta manda (hex na Graph, base64 no webhook) têm de bater com os bytes recebidos
+    if ((Number.isFinite(declarado) && declarado > 0 && bytes.length !== declarado) || (info.tamanho && bytes.length !== info.tamanho)) {
+      return falhou("arquivo corrompido no download");
+    }
+    if (!(await confereSha256(bytes, info.sha256 || midia.sha256))) return falhou("arquivo corrompido no download");
     const mime = String(info.mime || midia.mime || "application/octet-stream").split(";")[0].trim();
     const path = caminhoMidia(canal.cliente_id, "in", agoraDe(ctx), extensaoDe(mime, midia.nome));
     const st = criarStorage(ctx.env, f);
@@ -218,7 +276,9 @@ export async function processarCanal(db, canal, v, ctx, cont) {
         ctx.emSegundoPlano(baixarMidia(db, canal, r.mensagem_id, msg.midia, ctx));
       }
       if (r?.fila_id) {
-        ctx.emSegundoPlano(enviarFila(db, { ids: [r.fila_id] }, ctx).catch(e => ctx.falhou(e)));
+        // plano 1000 (SV-193): o webhook junta os itens da requisição e chama a fila UMA vez no fim (ctx.filaIds); sem ele, como antes
+        if (Array.isArray(ctx.filaIds)) ctx.filaIds.push(r.fila_id);
+        else ctx.emSegundoPlano(enviarFila(db, { ids: [r.fila_id] }, ctx).catch(e => ctx.falhou(e)));
       }
     } catch (e) { ctx.falhou(e); }   // uma mensagem com erro não derruba as outras do lote
   }

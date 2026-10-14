@@ -89,6 +89,117 @@ export function marcarTesteLocal(armazenamento, clienteId, contaId) {
     return true;
   } catch { return false; }
 }
+/**
+ * plano 1000 · AS-126: número do canal com DDI. «(12) 99999-9999» vira +55; com «+» aceita outro país (8 a 15 dígitos).
+ * → {ok, numero: "+55 12 99999-9999" | "+351…", erro}
+ */
+export function normalizarNumeroCanal(v) {
+  const bruto = String(v ?? "").trim();
+  let d = bruto.replace(/\D/g, "");
+  const comMais = bruto.startsWith("+");
+  const ERRO = "Informe o número com DDI e DDD, ex.: +55 12 99999-9999";
+  const ddd = x => /^[1-9][1-9]$/.test(x);
+  if (!comMais && (d.length === 10 || d.length === 11)) d = `55${d}`;
+  if (d.startsWith("55") && (comMais || d.length === 12 || d.length === 13)) {
+    if (!(d.length === 12 || d.length === 13) || !ddd(d.slice(2, 4))) return { ok: false, numero: null, erro: ERRO };
+    const loc = d.slice(4);
+    return { ok: true, numero: `+55 ${d.slice(2, 4)} ${loc.slice(0, loc.length - 4)}-${loc.slice(-4)}`, erro: null };
+  }
+  if (comMais && d.length >= 8 && d.length <= 15) return { ok: true, numero: `+${d}`, erro: null };
+  return { ok: false, numero: null, erro: ERRO };
+}
+
+/**
+ * plano 1000 · AS-127: chave do CodeWords, token e app secret da Meta não são «senha do site» — o navegador e os gerenciadores
+ * (1Password, LastPass, Dashlane) não devem oferecer salvar nem preencher. Recebe o .campo do ui.campo e devolve o mesmo.
+ */
+export function semGerenciadorDeSenha(wrap) {
+  const inp = wrap && wrap.querySelector ? wrap.querySelector("input") : null;
+  if (inp) {
+    inp.setAttribute("autocomplete", "off");
+    inp.setAttribute("data-1p-ignore", "");
+    inp.setAttribute("data-lpignore", "true");
+    inp.setAttribute("data-form-type", "other");
+    inp.setAttribute("data-bwignore", "");
+  }
+  return wrap;
+}
+
+/** plano 1000 · AS-123: o resultado do «Testar» da Meta em frase (sem ✓/✗ e sem espaço duplo quando a Meta não devolve o número). */
+export function fraseTesteMeta(r) {
+  const num = r && r.numero ? String(r.numero).trim() : "";
+  const n = num ? `O número ${num} respondeu.` : "O número respondeu.";
+  return r && r.app_inscrito ? `${n} O app está inscrito.` : `${n} O app não está inscrito: as mensagens não chegam. Use «Inscrever o app».`;
+}
+
+/** plano 1000 · AS-128: explicação de cada situação do CodeWords (todas as de L.situacaoCodeWords); outra qualquer → frase neutra. */
+export function explicacaoSituacaoCodeWords(rotulo) {
+  return {
+    "Conectado": "O aparelho e o destino foram conferidos.",
+    "Aguardando confirmação": "Toque em «Reconferir agora» para conferir se o aparelho está pareado e recebendo mensagens.",
+    "Conectado mas sem receber": "O aparelho está ligado, mas o destino das mensagens precisa ser corrigido.",
+    "Desconectado": "Pareie ou reconecte este número pelo WhatsApp no celular.",
+  }[rotulo] || "Ainda não sabemos a situação deste número. Toque em «Reconferir agora».";
+}
+
+/** plano 1000 · AS-153: dados pessoais na memória aprovada (CPF, telefone, e-mail, data) → [{tipo, trecho}] (no máx. 5). */
+export function dadosPessoaisNoTexto(texto) {
+  const t = String(texto || "");
+  const achados = [];
+  const regras = [
+    ["CPF", /\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g],
+    ["e-mail", /[^\s@<>()]+@[^\s@<>()]+\.[a-z]{2,}/gi],
+    ["telefone", /(?:\+?55\s?)?\(?\b[1-9]{2}\)?\s?9?\d{4}[-\s]?\d{4}\b/g],
+    ["data", /\b(?:0?[1-9]|[12]\d|3[01])\/(?:0?[1-9]|1[0-2])\/(?:19|20)\d{2}\b/g],
+  ];
+  const vistos = [];
+  for (const [tipo, re] of regras) for (const m of t.matchAll(re)) {
+    const trecho = m[0];
+    if (vistos.some(v => v.includes(trecho) || trecho.includes(v))) continue;
+    vistos.push(trecho);
+    achados.push({ tipo, trecho });
+  }
+  return achados.slice(0, 5);
+}
+
+/** plano 1000 · AS-285: a qualidade do número como a Meta devolve (GREEN/YELLOW/RED) em português, com o que derruba a nota. */
+export function qualidadeMeta(q) {
+  const k = String(q || "").trim().toUpperCase();
+  const t = {
+    GREEN: ["Boa", "ok", "A Meta avalia bem as mensagens deste número."],
+    YELLOW: ["Atenção", "aten", "Muitos clientes bloquearam ou denunciaram mensagens recentes. Mande só para quem pediu e responda rápido, ou o limite de envios cai."],
+    RED: ["Baixa", "ruim", "A Meta está prestes a limitar este número: bloqueios e denúncias demais. Pause campanhas e envie só respostas a quem escreveu."],
+  }[k];
+  if (!t) return k ? { rotulo: k.charAt(0) + k.slice(1).toLowerCase(), tom: "neutra", explicacao: "Situação informada pela Meta." } : null;
+  return { rotulo: t[0], tom: t[1], explicacao: t[2] };
+}
+
+/** plano 1000 · AS-286: os modelos (templates) de UM número por situação → [{chave, n, rotulo, tom}] (só as que têm algum). */
+export function resumoModelos(templates, canalId) {
+  const l = (Array.isArray(templates) ? templates : []).filter(t => t && t.canal_id === canalId);
+  const grupo = st => { const x = String(st || "").toUpperCase(); return x === "APPROVED" ? "aprovado" : /^(PENDING|IN_APPEAL|PENDING_DELETION)$/.test(x) ? "analise" : "recusado"; };
+  const n = { aprovado: 0, analise: 0, recusado: 0 };
+  for (const t of l) n[grupo(t.status)]++;
+  return [["aprovado", "aprovado", "aprovados", "ok"], ["analise", "em análise", "em análise", "aten"], ["recusado", "recusado ou pausado", "recusados ou pausados", "ruim"]]
+    .filter(([k]) => n[k] > 0).map(([k, um, varios, tom]) => ({ chave: k, n: n[k], rotulo: `${n[k]} ${n[k] === 1 ? um : varios}`, tom }));
+}
+
+/** plano 1000 · AS-137: o que perde quem exclui o número → frase (conversas abertas por ele e automações que dependem dele). */
+export function impactoExcluirNumero({ abertas = null, maisDe = false, automacoes = [] } = {}) {
+  const partes = [];
+  if (abertas > 0) partes.push(`${maisDe ? "Mais de " : ""}${abertas} ${abertas === 1 && !maisDe ? "conversa aberta fica" : "conversas abertas ficam"} sem canal para responder.`);
+  else if (abertas === 0) partes.push("Nenhuma conversa aberta usa este número agora.");
+  const a = (automacoes || []).filter(Boolean);
+  if (a.length) partes.push(`${a.length === 1 ? "A automação" : `As ${a.length} automações`} ${a.slice(0, 3).map(x => `«${x}»`).join(", ")}${a.length > 3 ? " e outras" : ""} ${a.length === 1 ? "depende" : "dependem"} dele e ${a.length === 1 ? "para" : "param"} de disparar.`);
+  return partes.join(" ");
+}
+
+/** plano 1000 · AS-131: texto do botão enquanto reconfere vários números. */
+export const rotuloReconferindo = (i, n) => (n > 1 ? `Reconferindo ${i} de ${n}…` : "Reconferindo…");
+
+/** plano 1000 · AS-146: o campo de hora não mostra «24:00» — quem escolhe 23:59 como fim quer «até o fim do dia» (o servidor aceita 24:00). */
+export const fimDaFaixa = v => (v === "23:59" ? "24:00" : v);
+
 function historicoCanal(ctx, canalId) {
   const chave = chaveHistorico(ctx.cliente && ctx.cliente.id, canalId);
   const ler = () => { try { return atualizarHistorico(JSON.parse(localStorage.getItem(chave) || "[]")); } catch { return []; } };
@@ -166,32 +277,48 @@ async function montarNumeros(ctx, alvo) {
   }
   /** Histórico a mostrar no cartão: o do servidor quando existe; senão o anotado neste aparelho (e marcado como tal). */
   function historicoDoCartao(c, rotulo, tom) {
-    const local = historicoCanal(ctx, c.id).registrar({ rotulo, tom });
     const srv = histServidor.get(c.id);
+    // plano 1000 · AS-121: com histórico do servidor, nada é gravado neste aparelho (antes cada redesenho de 30 s escrevia no localStorage)
+    if (srv && srv.length) return { lista: srv, servidor: true };
     // revisão: lista VAZIA do servidor (número Meta — só o aparelho grava histórico — ou aparelho ainda sem troca) não apaga o anotado aqui
-    return srv && srv.length ? { lista: srv, servidor: true } : { lista: local, servidor: false };
+    return { lista: historicoCanal(ctx, c.id).registrar({ rotulo, tom }), servidor: false };
   }
 
   const lista = h("div", { class: "cfg-canais" });
-  const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Conectar número");
-  novo.addEventListener("click", () => assistente(null));
-  const novoCodeWords = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("chat"), "Adicionar WhatsApp pelo CodeWords");
-  novoCodeWords.addEventListener("click", () => assistenteCodeWords(null));
+  // plano 1000 · AS-129: UM botão «Adicionar número» que explica os dois caminhos (antes eram dois botões empilhados sem diferença clara)
+  const novo = h("button", { type: "button", class: "bt bt-prim cfg-add-numero" }, ui.icone("mais"), "Adicionar número");
+  novo.addEventListener("click", () => escolherCaminho());
+  async function escolherCaminho() {
+    let escolha = null;
+    const opcao = (valor, titulo, texto, selo) => h("button", { type: "button", class: "cfg-caminho", dataset: { caminho: valor } },
+      h("span", { class: "cfg-caminho-tit" }, h("b", null, titulo), selo ? ui.pilula(selo, "ok") : null), h("span", { class: "sub" }, texto));
+    const cw = opcao("codewords", "WhatsApp pelo CodeWords", "Usa o WhatsApp do celular da empresa (pareado como aparelho). Manda texto livre a qualquer hora e liga a IA 24h. Leva uns 5 minutos.", "Recomendado");
+    const meta = opcao("meta", "API oficial da Meta", "Para quem já tem conta no WhatsApp Business Platform (token e ID do número). Fora da janela de 24 h só sai modelo aprovado.", null);
+    const corpo = h("div", { class: "pilha cfg-caminhos" }, h("p", { class: "sub" }, "Escolha como este número vai se conectar. Dá para ter números dos dois tipos."), cw, meta);
+    await ui.modal({ titulo: "Adicionar número de WhatsApp", corpo, largura: "m",
+      acoes: [{ rotulo: "Cancelar", tipo: "neutro" }],
+      aoAbrir: api => {
+        for (const b of [cw, meta]) b.addEventListener("click", () => { escolha = b.dataset.caminho; if (api && typeof api.fechar === "function") api.fechar(); });
+      } });
+    if (escolha === "codewords") assistenteCodeWords(null);
+    else if (escolha === "meta") assistente(null);
+  }
   // G1: «Reconferir agora» pergunta a cada número como ele está (aparelho no CodeWords, Graph API na Meta) e redesenha com o resultado
-  const bReconferir = h("button", { type: "button", class: "bt bt-fant cfg-reconferir" }, ui.icone("reabrir"), "Reconferir agora");
+  const txtReconferir = h("span", { class: "cfg-reconf-txt" }, "Reconferir agora");
+  const bReconferir = h("button", { type: "button", class: "bt bt-fant cfg-reconferir" }, ui.icone("reabrir"), txtReconferir);
   bReconferir.addEventListener("click", () => reconferirTodos(bReconferir));
   ui.limpar(alvo);
   alvo.append(
     ui.cabecalho({ rotulo: "Atendimento", titulo: "Números de WhatsApp", nivel: 2,
       sub: "Conecte pela API oficial da Meta ou pelo CodeWords. As conversas, respostas e confirmações aparecem nesta central.",
-      acoes: [novo, novoCodeWords, bReconferir] }),
+      acoes: [novo, bReconferir] }),
     lista);
 
   let seqCarga = 0;
   /** suave: sem o esqueleto (atualização ao vivo: a lista não pisca); a resposta de uma carga antiga é descartada. */
   async function carregar({ suave = false } = {}) {
     const n = ++seqCarga;
-    if (!suave || !lista.childNodes.length) { ui.limpar(lista); lista.appendChild(ui.esqueleto("cartoes", 2)); }
+    if (!suave || !lista.childNodes.length) { ui.limpar(lista); lista.appendChild(ui.esqueleto("cartao")); }     // AS-256: lembra o cartão do número
     try {
       const [cs, b] = await Promise.all([ctx.api.rpcC("nx_canais_listar"), ctx.api.rpcC("nx_cv_base")]);
       if (n !== seqCarga) return;
@@ -214,17 +341,22 @@ async function montarNumeros(ctx, alvo) {
     if (!canais || !canais.length) { ui.toast("Nenhum número para reconferir ainda.", { tipo: "info" }); return; }
     reconferindo = true;
     let falhas = 0, semConfig = 0;
+    // plano 1000 · AS-131: o botão diz em qual está («Reconferindo 2 de 4…») e cada cartão se refaz assim que o número dele responde
+    const totalAlvos = canais.filter(c => c.tem_token !== false).length;
+    let i = 0;
     const tarefa = (async () => {
       for (const c of canais) {
         // revisão: número ainda sem token/chave não é testado — o teste da Meta gravava status «erro» e o número «caía» sem nunca ter conectado
         if (c.tem_token === false) { semConfig++; continue; }
+        txtReconferir.textContent = rotuloReconferindo(++i, totalAlvos);
         try {
           if (c.provedor === "codewords") estadosCodeWords.set(c.id, (await ctx.api.fn("nx-codewords", { acao: "estado", canal: c.id })) || {});
           else testesMeta.set(c.id, (await ctx.api.fn("nx-enviar", { acao: "testar_canal", canal: c.id })) || {});
         } catch { falhas++; }
+        if (lista.isConnected && canais.length) desenhar();
       }
     })();
-    try { await (botao ? ui.carregando(botao, tarefa) : tarefa); } finally { reconferindo = false; }
+    try { await (botao ? ui.carregando(botao, tarefa) : tarefa); } finally { reconferindo = false; txtReconferir.textContent = "Reconferir agora"; }
     await carregar({ suave: true });
     const nota = semConfig ? ` ${semConfig === 1 ? "1 número ainda não está configurado" : `${semConfig} números ainda não estão configurados`} e ficou de fora.` : "";
     ui.toast((falhas ? `Reconferido, mas ${falhas === 1 ? "1 número não respondeu" : `${falhas} números não responderam`}. Tente de novo em instantes.` : "Números reconferidos agora.") + nota,
@@ -232,6 +364,16 @@ async function montarNumeros(ctx, alvo) {
   }
 
   function depNome(id) { const d = ((base && base.departamentos) || []).find(x => x.id === id); return d ? d.nome : "—"; }
+
+  /** plano 1000 · AS-136: «Webhook do app da plataforma» era jargão — diz por onde as mensagens chegam, com a dica de quando usar app próprio. */
+  function pilulaWebhook(c) {
+    const p = c.tem_app_secret ? ui.pilula("Recebe pelo app da sua empresa", "info") : ui.pilula("Recebe pelo app da plataforma", "neutra");
+    const caixa = h("span", { class: "cfg-pil-dica" }, p);
+    if (typeof ui.dica === "function") ui.dica(p, c.tem_app_secret
+      ? "As mensagens chegam pelo app da Meta da sua empresa (com o app secret que você cadastrou)."
+      : "As mensagens chegam pelo app da Meta da plataforma, e o suporte cuida da inscrição. Só use um app próprio se a sua empresa já tem um app na Meta: aí preencha o app secret em «Editar dados».");
+    return caixa;
+  }
 
   function desenhar() {
     ui.limpar(lista);
@@ -266,26 +408,35 @@ async function montarNumeros(ctx, alvo) {
       const marcos = L.marcosMeta(c, ((base && base.templates) || []).filter(t => t.canal_id === c.id).length);
       const hist = historicoDoCartao(c, rot, cor);
       const avisoSecret = avisoAppSecret(c, testesMeta.get(c.id));
+      const qualidade = qualidadeMeta(c.qualidade);
+      const modelos = resumoModelos(base && base.templates, c.id);
       lista.appendChild(h("article", { class: "cartao cfg-canal", dataset: { tom: cor } },
         h("div", null,
           h("h3", { class: "titulo-sec" }, c.nome, statusVivo(rot, cor)),
           progresso(marcos),
           h("div", { class: "cfg-canal-kv" },
             h("span", null, "Número ", h("b", null, c.numero_exibicao || "—")),
-            h("span", null, "Phone number ID ", h("b", null, c.phone_number_id || "—")),
-            h("span", null, "WABA ", h("b", null, c.waba_id || "—")),
             h("span", null, "Departamento ", h("b", null, depNome(c.departamento_id))),
-            c.qualidade ? h("span", null, "Qualidade ", h("b", null, c.qualidade)) : null,
+            qualidade ? h("span", { class: "cfg-qualidade", dataset: { tom: qualidade.tom } }, "Qualidade ", h("b", null, qualidade.rotulo)) : null,
             c.verificado_em ? h("span", null, "Testado ", h("b", null, ui.relativo(c.verificado_em))) : null),
+          qualidade && qualidade.tom !== "ok" ? h("p", { class: "sub cfg-qualidade-exp" }, qualidade.explicacao) : null,
+          // plano 1000 · AS-286: os modelos deste número por situação (de base.templates)
+          modelos.length ? h("div", { class: "cfg-modelos", role: "list", "aria-label": "Modelos da Meta deste número" },
+            modelos.map(m => h("span", { role: "listitem" }, ui.pilula(m.rotulo, m.tom)))) : null,
           h("div", { class: "cfg-checks", role: "list", "aria-label": "Marcos da conexão" },
             marcos.map(m => h("span", { role: "listitem" },
               ui.pilula(m.rotulo, m.feito ? "ok" : "neutra", { icone: m.feito ? "check" : "relogio" }))),
-            c.tem_app_secret ? ui.pilula("Webhook próprio", "info") : ui.pilula("Webhook do app da plataforma", "neutra"),
+            pilulaWebhook(c),
             c.app_inscrito === false ? ui.pilula("App NÃO inscrito: nenhuma mensagem chega", "ruim", { icone: "alerta" }) : null),
           linhaDesde(c, hist.servidor ? hist.lista : null),
           c.ultimo_erro ? h("div", { class: "aviso aviso-ruim cfg-erro" }, ui.icone("alerta"), h("p", null, c.ultimo_erro)) : null,
           avisoSecret ? h("div", { class: "aviso aviso-aten cfg-erro cfg-aviso-secret", role: "note" }, ui.icone("cadeado"), h("p", null, avisoSecret)) : null,
-          blocoHistorico(hist.lista, { servidor: hist.servidor })),
+          blocoHistorico(hist.lista, { servidor: hist.servidor }),
+          // plano 1000 · AS-135: os IDs da Meta só interessam a quem configura — recolhidos
+          h("details", { class: "cfg-hist cfg-tecnicos" }, h("summary", null, ui.icone("info"), h("span", null, "Dados técnicos")),
+            h("dl", { class: "cfg-ign-lista" },
+              h("dt", null, h("span", null, "Phone number ID"), h("b", { class: "mono" }, c.phone_number_id || "—")),
+              h("dt", null, h("span", null, "WhatsApp Business Account (WABA)"), h("b", { class: "mono" }, c.waba_id || "—"))))),
         h("div", { class: "cfg-canal-acoes" }, bTestar, bInscr, bSync, bMais)));
     }
   }
@@ -309,16 +460,17 @@ async function montarNumeros(ctx, alvo) {
     try {
       const r = await ui.carregando(botao, ctx.api.fn("nx-enviar", { acao: "testar_canal", canal: c.id }));
       testesMeta.set(c.id, r || {});
-      ui.toast(`Número ${r && r.numero ? r.numero : ""} ✓ · App inscrito ${r && r.app_inscrito ? "✓" : "✗"}`, { tipo: r && r.app_inscrito ? "ok" : "info" });
+      // plano 1000 · AS-123: frase, sem ✓/✗ nem espaço duplo (o leitor de tela lia «marca de verificação»)
+      ui.toast(fraseTesteMeta(r), { tipo: r && r.app_inscrito ? "ok" : "info" });
     } catch (e) { ui.toast(erroFuncao(e), { tipo: "erro" }); }
-    carregar();
+    carregar({ suave: true });      // plano 1000 · AS-124: sem esqueleto e sem perder a rolagem
   }
   async function inscrever(c, botao) {
     try {
       const r = await ui.carregando(botao, ctx.api.fn("nx-enviar", { acao: "inscrever_app", canal: c.id }));
       ui.toast(r && r.app_inscrito ? "App inscrito na WABA. As mensagens já podem chegar." : "A Meta não confirmou a inscrição. Confira as permissões do token.", { tipo: r && r.app_inscrito ? "ok" : "erro" });
     } catch (e) { ui.toast(erroFuncao(e), { tipo: "erro" }); }
-    carregar();
+    carregar({ suave: true });      // AS-124
   }
   async function sincronizar(c, botao) {
     try {
@@ -326,9 +478,22 @@ async function montarNumeros(ctx, alvo) {
       ui.toast(`${(r && r.total) || 0} modelo(s) sincronizado(s).`, { tipo: "ok" });
     } catch (e) { ui.toast(erroFuncao(e), { tipo: "erro" }); }
   }
+  /** plano 1000 · AS-137: antes de excluir, quantas conversas abertas usam o número e quais automações dependem dele (cada consulta
+      que falhar só some da frase — a exclusão continua possível). */
+  async function impactoDoNumero(c) {
+    const [conv, autos] = await Promise.all([
+      ctx.api.rpcC("nx_cv_listar", { p_filtro: { aba: "abertas", canal_id: c.id }, p_limite: 50 }).catch(() => null),
+      ctx.temModulo("automacoes") ? ctx.api.rpcC("nx_automacoes_listar").catch(() => null) : null,
+    ]);
+    const itens = conv && Array.isArray(conv.itens) ? conv.itens : null;
+    const usa = a => (a.config && a.config.canal_id === c.id) || (Array.isArray(a.condicoes) && a.condicoes.some(x => x && x.campo === "canal_id" && x.valor === c.id));
+    return impactoExcluirNumero({ abertas: itens ? itens.length : null, maisDe: !!(conv && conv.tem_mais),
+      automacoes: autos && Array.isArray(autos.itens) ? autos.itens.filter(usa).map(a => a.nome) : [] });
+  }
   async function excluir(c) {
+    const impacto = await impactoDoNumero(c);
     const ok = await ui.confirmar({ titulo: `Excluir o número ${c.nome}?`, perigo: true, digitar: "excluir",
-      texto: "As conversas e mensagens continuam guardadas, mas deixam de receber e enviar por este número. O token e o app secret são apagados do cofre." });
+      texto: `${impacto ? `${impacto} ` : ""}As conversas e mensagens continuam guardadas, mas deixam de receber e enviar por este número. O token e o app secret são apagados do cofre.` });
     if (!ok) return;
     try {
       await ctx.api.rpcC("nx_canal_excluir", { p_id: c.id, p_confirmacao: "excluir" });
@@ -351,9 +516,21 @@ async function montarNumeros(ctx, alvo) {
     } catch (e) { ui.toast(erroFuncao(e), { tipo: "erro" }); }
   }
 
+  /** plano 1000 · AS-247: «Sincronizado há…» diz o que é — a recuperação periódica das mensagens que o aparelho guardou. */
+  function pilulaSync(sync) {
+    const p = ui.pilula(`Sincronizado ${ui.relativo(sync.em)}`, sync.erro ? "aten" : "neutra");
+    const caixa = h("span", { class: "cfg-pil-dica cfg-sync" }, p);
+    if (typeof ui.dica === "function") ui.dica(p, `Última recuperação de mensagens do aparelho: o Órbita busca no CodeWords as mensagens que possam ter se perdido no caminho.${sync.erro ? ` Deu erro: ${sync.erro}` : ""}`);
+    return caixa;
+  }
+
+  const rotulosVistos = new Map();     // plano 1000 · AS-122: só MUDANÇA de estado é anunciada ao leitor de tela
   function cartaoCodeWords(c) {
     const cw = c.codewords || {};
     const [rotulo, cor] = estadoVisualCodeWords(c);
+    const antes = rotulosVistos.get(c.id);
+    rotulosVistos.set(c.id, rotulo);
+    if (antes && antes !== rotulo && typeof ui.anunciar === "function") ui.anunciar(`${c.nome}: ${rotulo}.`);
     const atualizar = h("button", { type: "button", class: "bt bt-sec bt-p", "aria-label": `Reconferir agora o número ${c.nome}` }, ui.icone("reabrir"), "Reconferir agora");
     atualizar.addEventListener("click", () => consultarEstadoCodeWords(c, atualizar));
     const pr = L.passosCodeWords({ canal: c, estado: estadosCodeWords.get(c.id) });
@@ -370,10 +547,8 @@ async function montarNumeros(ctx, alvo) {
       ? ui.pilula("Recebimento direto no Órbita", "info")
       : cw.ia_ligada && rotulo === "Conectado" ? ui.pilula("IA 24h ativa", "ok", { icone: "ia" })
         : cw.ia_ligada ? ui.pilula("IA ainda não validada", "aten", { icone: "ia" }) : ui.pilula("IA desligada", "neutra", { icone: "ia" });
-    const explicacao = ultimo?.motivo || (cw.sync?.erro ? `Última sincronização: ${cw.sync.erro}` :
-      rotulo === "Aguardando confirmação" ? "Toque em «Reconferir agora» para conferir se o aparelho está pareado e recebendo mensagens." :
-      rotulo === "Conectado mas sem receber" ? "O aparelho está ligado, mas o destino das mensagens precisa ser corrigido." :
-      rotulo === "Desconectado" ? "Pareie ou reconecte este número pelo WhatsApp no celular." : "O aparelho e o destino foram conferidos.");
+    // plano 1000 · AS-128: mapa completo das situações; uma desconhecida não vira «conferidos»
+    const explicacao = ultimo?.motivo || (cw.sync?.erro ? `Última sincronização: ${cw.sync.erro}` : explicacaoSituacaoCodeWords(rotulo));
     const aviso = c.ultimo_erro && /^status incerto/i.test(String(c.ultimo_erro)) ? null : c.ultimo_erro;
     const hist = historicoDoCartao(c, rotulo, cor);
     return h("article", { class: "cartao cfg-canal cfg-cw-card", dataset: { tom: cor, estado: c.estado || null } },
@@ -387,8 +562,8 @@ async function montarNumeros(ctx, alvo) {
         h("div", { class: "cfg-checks" },
           cw.tem_api_key ? ui.pilula("Chave salva", "ok", { icone: "cadeado" }) : ui.pilula("Chave ausente", "ruim"),
           resumoRota,
-          cw.sync?.em ? ui.pilula(`Sincronizado ${ui.relativo(cw.sync.em)}`, cw.sync.erro ? "aten" : "neutra") : null),
-        h("p", { class: "sub cfg-cw-status-text", role: "status" }, explicacao),
+          cw.sync?.em ? pilulaSync(cw.sync) : null),
+        h("p", { class: "sub cfg-cw-status-text" }, explicacao),
         linhaDesde(c, hist.servidor ? hist.lista : null),
         aviso ? h("div", { class: "aviso aviso-aten cfg-erro" }, ui.icone("info"), h("p", null, aviso)) : null,
         blocoContadores(c),
@@ -412,8 +587,8 @@ async function montarNumeros(ctx, alvo) {
     const form = h("form", { class: "pilha", novalidate: true });
 
     /* ---- campos (todos dentro do MESMO form: ui.lerForm enxerga o assistente inteiro) */
-    const chaveWrap = ui.campo({ rotulo: "Chave da API CodeWords", nome: "codewords_api_key", tipo: "senha", autocomplete: "new-password",
-      placeholder: "cwk-…", ajuda: "Chave reutilizável do plano pago. Ela é enviada ao servidor e nunca volta para esta tela." });
+    const chaveWrap = semGerenciadorDeSenha(ui.campo({ rotulo: "Chave da API CodeWords", nome: "codewords_api_key", tipo: "senha", autocomplete: "off",
+      placeholder: "cwk-…", ajuda: "Chave reutilizável do plano pago. Ela é enviada ao servidor e nunca volta para esta tela." }));
     const chave = chaveWrap.querySelector('input[name="codewords_api_key"]');
     const chaveSalva = h("div", { class: "cfg-cw-key-state" },
       atual?.codewords?.tem_api_key ? ui.pilula("Chave salva com segurança", "ok", { icone: "cadeado" }) : ui.pilula("Adicione sua chave para começar", "aten"));
@@ -553,6 +728,14 @@ async function montarNumeros(ctx, alvo) {
         }, 5000);
       } else if (!precisa) pararPolling();
     }
+    /** Depois de «Ligar na IA» / «Receber no Órbita»: a consulta ao aparelho que volta vazia (erro) não deixa a tela presa em «Conferindo…». */
+    async function conferirDepoisDoPedido() {
+      const r = await consultar();
+      if (r || fechado) return r;
+      statusAtual.textContent = "Não deu para conferir o aparelho agora. Toque em «Conferir agora» em instantes.";
+      desenharPassos();
+      return null;
+    }
     async function consultar({ silencioso = false } = {}) {
       const antesSituacao = L.situacaoCodeWords(atual, estadoVivo)[0];
       const r = await acaoCodeWords("estado", {}, { silencioso });
@@ -599,7 +782,9 @@ async function montarNumeros(ctx, alvo) {
     async function salvarConfiguracao({ silencioso = false } = {}) {
       const d = ui.lerForm(form); ui.marcarErro(form, null);
       if (!d.nome) { erroNoCampo("nome", "Informe o nome do canal."); return false; }
-      if (!/^\+?[0-9 ()-]{8,30}$/.test(String(d.numero_exibicao || ""))) { erroNoCampo("numero_exibicao"); return false; }
+      const num = normalizarNumeroCanal(d.numero_exibicao);   // plano 1000 · AS-126: sem DDI o pareamento acusava «número diferente» depois
+      if (!num.ok) { erroNoCampo("numero_exibicao", num.erro); return false; }
+      d.numero_exibicao = num.numero;
       const apiKey = String(d.codewords_api_key || "").trim();
       if (!atual?.id && !apiKey) { erroNoCampo("codewords_api_key", "Cole a chave reutilizável do plano pago."); return false; }
       if (apiKey && (apiKey.length < 20 || !apiKey.startsWith("cwk-") || /\s/.test(apiKey))) { erroNoCampo("codewords_api_key"); return false; }
@@ -683,11 +868,12 @@ async function montarNumeros(ctx, alvo) {
       form.querySelector('[name="ia_ligada"]').checked = true;
       if (!await guardarAntesDaAcao()) return;
       const r = await acaoCodeWords("ligar_fluxo"); if (!r) return;
-      estadoVivo = { ...r, inscrito_certo: true, pareado: true, conectado: true, numero_confere: true, rota_atual: "fluxo", rota_esperada: "fluxo" };
-      estadosCodeWords.set(atual.id, estadoVivo);
+      // plano 1000 · AS-119: o CodeWords aceitou o pedido — mas «Conectado» só depois de perguntar ao aparelho (antes a tela inventava)
       atual = { ...atual, codewords: { ...atual.codewords, rota: "fluxo", service_id: service, ia_ligada: true } };
-      expandido = null; desenharPassos();
-      ui.toast("Fluxo de IA conectado. Confirme o estado do aparelho.", { tipo: "ok" }); carregar();
+      expandido = null;
+      statusAtual.textContent = "Conferindo o aparelho…";
+      ui.toast("O CodeWords aceitou ligar o fluxo de IA. Conferindo o aparelho…", { tipo: "info" });
+      await conferirDepoisDoPedido();
     });
     bDireto.addEventListener("click", async () => {
       const confirmado = await ui.confirmar({ titulo: "Receber mensagens direto no Órbita?", rotulo: "Receber no Órbita",
@@ -696,11 +882,12 @@ async function montarNumeros(ctx, alvo) {
       form.querySelector('[name="ia_ligada"]').checked = false;
       if (!await guardarAntesDaAcao()) return;
       const r = await acaoCodeWords("receber_aqui"); if (!r) return;
-      estadoVivo = { ...r, inscrito_certo: true, pareado: true, conectado: true, numero_confere: true, rota_atual: "direta", rota_esperada: "direta" };
-      estadosCodeWords.set(atual.id, estadoVivo);
+      // plano 1000 · AS-119: o estado real vem do aparelho, não do pedido aceito
       atual = { ...atual, codewords: { ...atual.codewords, rota: "direta", ia_ligada: false } };
-      expandido = null; desenharPassos();
-      ui.toast("Recebimento direto ativado.", { tipo: "ok" }); carregar();
+      expandido = null;
+      statusAtual.textContent = "Conferindo o aparelho…";
+      ui.toast("O CodeWords aceitou o recebimento direto. Conferindo o aparelho…", { tipo: "info" });
+      await conferirDepoisDoPedido();
     });
     bPrefs.addEventListener("click", async () => { await ui.carregando(bPrefs, salvarConfiguracao()); });
     bTeste.addEventListener("click", async () => {
@@ -754,7 +941,16 @@ async function montarNumeros(ctx, alvo) {
 
     /** A caixa do prompt (fica à mão para copiar de novo) com o resultado da 1ª cópia, que já aconteceu no clique. */
     function mostrarPrompt(texto, copiou) {
-      const pre = h("pre", { class: "cfg-codigo cfg-cw-prompt", tabindex: "0", "aria-label": "Prompt de configuração do CodeWords" }, h("code", {}, texto));
+      // plano 1000 · AS-134: o prompt traz a URL secreta — borrado até «Mostrar» (copiar e selecionar funcionam sem revelar)
+      const pre = h("pre", { class: "cfg-codigo cfg-cw-prompt", tabindex: "0", "aria-label": "Prompt de configuração do CodeWords (escondido)", dataset: { oculto: "1" } }, h("code", {}, texto));
+      const mostrar = h("button", { type: "button", class: "bt bt-fant bt-p cfg-mostrar-prompt", "aria-pressed": "false" }, ui.icone("olho"), h("span", null, "Mostrar"));
+      mostrar.addEventListener("click", () => {
+        const ver = pre.dataset.oculto === "1";
+        pre.dataset.oculto = ver ? "0" : "1";
+        mostrar.setAttribute("aria-pressed", String(ver));
+        mostrar.lastChild.textContent = ver ? "Esconder" : "Mostrar";
+        pre.setAttribute("aria-label", `Prompt de configuração do CodeWords${ver ? "" : " (escondido)"}`);
+      });
       // deixa o texto inteiro selecionado: se o navegador bloquear a área de transferência, basta Ctrl+C (ou «Copiar» no menu do celular)
       const selecionarTudo = () => {
         try {
@@ -787,7 +983,7 @@ async function montarNumeros(ctx, alvo) {
       selecionar.addEventListener("click", selecionarTudo);
       ui.limpar(receitaBox); receitaBox.hidden = false;
       receitaBox.append(h("div", { class: "aviso aviso-aten" }, ui.icone("cadeado"), h("p", null, "O prompt contém a URL secreta deste canal. Cole somente no CodeWords e não compartilhe o texto.")),
-        estado, h("div", { class: "linha" }, copiar, selecionar), pre);
+        estado, h("div", { class: "linha" }, copiar, selecionar, mostrar), pre);
       mostrarResultado(copiou);
     }
 
@@ -798,7 +994,12 @@ async function montarNumeros(ctx, alvo) {
     await ui.modal({
       titulo: atual ? `WhatsApp CodeWords · ${atual.nome}` : "Adicionar WhatsApp pelo CodeWords",
       corpo, largura: "g", fecharFora: false, aoAbrir: api => { modalApi = api; },
-      acoes: [{ rotulo: "Fechar", tipo: "neutro" }],
+      // plano 1000 · AS-245: «Fechar» com campos editados e não salvos pergunta antes (o mesmo critério do link «Abrir Automações»)
+      acoes: [{ rotulo: "Fechar", tipo: "neutro", fn: async () => {
+        if (formAlterado() && !await ui.confirmar({ titulo: "Fechar sem salvar?", rotulo: "Fechar sem salvar", perigo: true,
+          texto: "As alterações deste número ainda não foram salvas e vão se perder. Use «Salvar e continuar» ou «Só salvar as preferências» antes, se quiser mantê-las." })) return false;
+        return null;
+      } }],
     });
     fechado = true;
     pararPolling();
@@ -807,6 +1008,7 @@ async function montarNumeros(ctx, alvo) {
   /* ---------------- assistente em 5 passos */
   async function assistente(canal, passoInicial = 1) {
     let passo = passoInicial;
+    let mudou = false;             // plano 1000 · AS-139: a lista de trás só recarrega UMA vez, ao fechar, e só se algo mudou
     let atual = canal;             // canal salvo (depois do passo 2)
     let webhook = canal ? canal.webhook : null;
     const corpo = h("div", { class: "pilha" });
@@ -838,6 +1040,12 @@ async function montarNumeros(ctx, alvo) {
             h("li", null, "Um número dedicado (ou migrado) para a API oficial."),
             h("li", null, "Um token permanente de usuário do sistema com as permissões whatsapp_business_messaging e whatsapp_business_management."),
             h("li", null, "O Phone number ID e o WhatsApp Business Account ID (WABA), que aparecem em WhatsApp → Configuração da API.")),
+          // plano 1000 · AS-287: em qual tela da Meta fica cada dado
+          h("ul", { class: "cfg-lista-req cfg-onde-meta" },
+            h("li", null, h("b", null, "Token: "), h("a", { href: "https://business.facebook.com/settings/system-users", target: "_blank", rel: "noopener noreferrer" }, "business.facebook.com"),
+              " → Configurações do negócio → Usuários → Usuários do sistema → Gerar novo token."),
+            h("li", null, h("b", null, "Phone number ID e WABA: "), h("a", { href: "https://developers.facebook.com/apps/", target: "_blank", rel: "noopener noreferrer" }, "developers.facebook.com"),
+              " → Meus apps → o seu app → WhatsApp → Configuração da API.")),
           h("div", { class: "aviso aviso-aten" }, ui.icone("alerta"),
             h("p", null, h("b", null, "Atenção: "), "o número conectado por este caminho deixa de funcionar no aplicativo WhatsApp do celular. Para usar os dois ao mesmo tempo (coexistência) é preciso outro tipo de conexão — fale com o suporte.")));
       } else if (passo === 2) {
@@ -846,15 +1054,15 @@ async function montarNumeros(ctx, alvo) {
           h("h3", { class: "titulo-sec" }, "2. Dados do número"),
           h("div", { class: "grade-2" },
             ui.campo({ rotulo: "Nome na central", nome: "nome", valor: atual ? atual.nome : "WhatsApp", obrigatorio: true, max: 40, ajuda: "Ex.: Recepção, Comercial" }),
-            ui.campo({ rotulo: "Número (como aparece)", nome: "numero_exibicao", valor: atual ? atual.numero_exibicao : "", max: 30, placeholder: "(12) 99999-9999" }),
+            ui.campo({ rotulo: "Número (como aparece)", nome: "numero_exibicao", valor: atual ? atual.numero_exibicao : "", max: 30, placeholder: "(12) 99999-9999", validar: "telefone" }),
             ui.campo({ rotulo: "Phone number ID", nome: "phone_number_id", valor: atual ? atual.phone_number_id : "", obrigatorio: true, inputmode: "numeric", autocomplete: "off" }),
             ui.campo({ rotulo: "WhatsApp Business Account ID (WABA)", nome: "waba_id", valor: atual ? atual.waba_id : "", obrigatorio: true, inputmode: "numeric", autocomplete: "off" })),
-          ui.campo({ rotulo: "Token permanente", nome: "token", tipo: "senha", autocomplete: "new-password",
+          semGerenciadorDeSenha(ui.campo({ rotulo: "Token permanente", nome: "token", tipo: "senha", autocomplete: "off",
             placeholder: atual && atual.tem_token ? "✓ preenchido — deixe em branco para manter" : "EAAG…",
-            ajuda: "Fica guardado no cofre criptografado. Nunca é mostrado de novo." }),
-          ui.campo({ rotulo: "App secret (opcional)", nome: "app_secret", tipo: "senha", autocomplete: "new-password",
+            ajuda: "Fica guardado no cofre criptografado. Nunca é mostrado de novo." })),
+          semGerenciadorDeSenha(ui.campo({ rotulo: "App secret (opcional)", nome: "app_secret", tipo: "senha", autocomplete: "off",
             placeholder: atual && atual.tem_app_secret ? "✓ preenchido — deixe em branco para manter" : "Só se o app da Meta for da sua empresa",
-            ajuda: "Sem ele, o número usa o app da plataforma e o suporte cuida do webhook." }),
+            ajuda: "Sem ele, o número usa o app da plataforma e o suporte cuida do webhook." })),
           deps.length ? ui.campo({ rotulo: "Conversas novas caem em", nome: "departamento_id", tipo: "select", valor: atual ? atual.departamento_id : (deps.find(d => d.padrao) || deps[0]).id,
             opcoes: deps.map(d => ({ valor: d.id, rotulo: d.nome })) }) : null);
         conteudo.appendChild(form);
@@ -876,6 +1084,7 @@ async function montarNumeros(ctx, alvo) {
           ui.limpar(res);
           try {
             const r = await ui.carregando(b, ctx.api.fn("nx-enviar", { acao: "inscrever_app", canal: atual.id }));
+            mudou = true;
             res.appendChild(r && r.app_inscrito ? ui.pilula("App inscrito ✓", "ok") : ui.pilula("A Meta não confirmou a inscrição", "ruim"));
           } catch (e) { res.appendChild(h("p", { class: "sub" }, erroFuncao(e))); }
         });
@@ -891,14 +1100,18 @@ async function montarNumeros(ctx, alvo) {
           try {
             const r = await ui.carregando(bT, ctx.api.fn("nx-enviar", { acao: "testar_canal", canal: atual.id }));
             testesMeta.set(atual.id, r || {});
+            mudou = true;
             const avisoSecret = avisoAppSecret(atual, r);
-            res.append(...[ui.pilula(`Número ${r && r.numero ? r.numero : ""} ✓`, "ok"), ui.pilula(r && r.app_inscrito ? "App inscrito ✓" : "App inscrito ✗", r && r.app_inscrito ? "ok" : "ruim"),
-              r && r.qualidade ? ui.pilula(`Qualidade ${r.qualidade}`, "neutra") : null,
+            const q = qualidadeMeta(r && r.qualidade);
+            // plano 1000 · AS-123: as pílulas dizem em palavras (a cor e o ícone da pílula já marcam ok/ruim)
+            res.append(...[ui.pilula(r && r.numero ? `Número ${r.numero} respondeu` : "Número respondeu", "ok"),
+              ui.pilula(r && r.app_inscrito ? "App inscrito" : "App não inscrito: as mensagens não chegam", r && r.app_inscrito ? "ok" : "ruim"),
+              q ? ui.pilula(`Qualidade ${q.rotulo.toLowerCase()}`, q.tom) : null,      // AS-285: «Qualidade GREEN» virava código cru
               avisoSecret ? h("p", { class: "aviso aviso-aten cfg-aviso-secret" }, ui.icone("cadeado"), h("span", null, avisoSecret)) : null].filter(Boolean));
           } catch (e) { res.appendChild(h("p", { class: "sub" }, erroFuncao(e))); }
         });
         bS.addEventListener("click", async () => {
-          try { const r = await ui.carregando(bS, ctx.api.fn("nx-enviar", { acao: "sincronizar_templates", canal: atual.id })); res.appendChild(ui.pilula(`${(r && r.total) || 0} modelo(s)`, "info")); }
+          try { const r = await ui.carregando(bS, ctx.api.fn("nx-enviar", { acao: "sincronizar_templates", canal: atual.id })); mudou = true; res.appendChild(ui.pilula(`${(r && r.total) || 0} modelo(s)`, "info")); }
           catch (e) { res.appendChild(h("p", { class: "sub" }, erroFuncao(e))); }
         });
         conteudo.append(h("h3", { class: "titulo-sec" }, "5. Testar"),
@@ -925,7 +1138,14 @@ async function montarNumeros(ctx, alvo) {
             if (!/^\d{5,30}$/.test(String(d.phone_number_id || "").replace(/\s/g, ""))) { ui.marcarErro(form, "phone_number_id", "Só números, como aparece na Meta."); return false; }
             if (!/^\d{5,30}$/.test(String(d.waba_id || "").replace(/\s/g, ""))) { ui.marcarErro(form, "waba_id", "Só números, como aparece na Meta."); return false; }
             if (!atual && !d.token) { ui.marcarErro(form, "token", "Cole o token permanente."); return false; }
-            const payload = { nome: d.nome, phone_number_id: d.phone_number_id, waba_id: d.waba_id, numero_exibicao: d.numero_exibicao || null };
+            // plano 1000 · AS-138: o número de exibição é conferido como telefone (com DDI), igual ao do CodeWords
+            let numeroExib = null;
+            if (String(d.numero_exibicao || "").trim()) {
+              const num = normalizarNumeroCanal(d.numero_exibicao);
+              if (!num.ok) { ui.marcarErro(form, "numero_exibicao", num.erro); return false; }
+              numeroExib = num.numero;
+            }
+            const payload = { nome: d.nome, phone_number_id: d.phone_number_id, waba_id: d.waba_id, numero_exibicao: numeroExib };
             if (atual) payload.id = atual.id;
             if (d.token) payload.token = d.token;
             if (d.app_secret) payload.app_secret = d.app_secret;
@@ -934,13 +1154,13 @@ async function montarNumeros(ctx, alvo) {
               const r = await ctx.api.rpcC("nx_canal_salvar", { p_canal: payload });
               atual = { ...(r.canal || {}), webhook: r.webhook };
               webhook = r.webhook;
+              mudou = true;
             } catch (e) {
               const cod = e && e.codigo, hint = e && e.hint;
               if (cod === "numero_em_uso") { ui.marcarErro(form, "phone_number_id", "Esse número já está conectado em outra empresa ou canal."); return false; }
               if (cod === "dados_invalidos" && hint && form.querySelector(`[data-campo="${hint}"]`)) { ui.marcarErro(form, hint, "Confira este campo."); return false; }
               throw e;
             }
-            carregar();
             if (canal && passoInicial === 2) { ui.toast("Dados salvos.", { tipo: "ok" }); return true; }
           }
           if (passo === 5 || (canal && passoInicial === 3 && passo === 3)) return true;
@@ -950,7 +1170,7 @@ async function montarNumeros(ctx, alvo) {
         } },
       ],
     });
-    carregar();
+    if (mudou) carregar();
   }
 
   await carregar();
@@ -1004,12 +1224,67 @@ async function montarNumeros(ctx, alvo) {
 }
 
 /* ============================================================ RESPOSTAS RÁPIDAS */
+/** plano 1000 · AS-143: nome falado do botão de variável («{primeiro_nome}» era lido «abre chave primeiro sublinhado nome…»). */
+export function rotuloVariavel(v) {
+  const nomes = { primeiro_nome: "primeiro nome", nome: "nome completo", atendente: "nome de quem atende", empresa: "nome da empresa", protocolo: "número do protocolo" };
+  return `Inserir ${nomes[v] || String(v).replace(/_/g, " ")}`;
+}
+/** plano 1000 · AS-142: outra resposta com o mesmo atalho (a própria, em edição, não conta) → a resposta ou null. */
+export function atalhoRepetido(respostas, atalho, idProprio = null) {
+  const a = String(atalho || "").replace(/^\/+/, "").trim().toLowerCase();
+  if (!a) return null;
+  return (Array.isArray(respostas) ? respostas : []).find(r => r && r.id !== idProprio && String(r.atalho || "").toLowerCase() === a) || null;
+}
+/** plano 1000 · AS-141: ordem padrão da tabela — as mais usadas primeiro (empate: atalho). */
+export function ordenarRespostas(respostas) {
+  return (Array.isArray(respostas) ? respostas : []).map(r => ({ ...r, usos: Number(r.usos) || 0 }))
+    .sort((a, b) => b.usos - a.usos || String(a.atalho).localeCompare(String(b.atalho), "pt-BR"));
+}
+/** plano 1000 · AS-240: o arquivo que «Exportar» baixa (sem id, usos nem departamento: o departamento é de cada empresa). */
+export function exportarRespostas(respostas) {
+  return { tipo: "orbita-respostas", versao: 1,
+    respostas: (Array.isArray(respostas) ? respostas : []).map(r => ({ atalho: r.atalho, titulo: r.titulo, corpo: r.corpo, ativo: r.ativo !== false })) };
+}
+/** plano 1000 · AS-240: lê o arquivo importado → {novas, repetidas (atalhos que já existem), invalidas} ou {erro}. */
+export function lerImportacaoRespostas(texto, existentes = []) {
+  let j;
+  try { j = JSON.parse(String(texto || "")); } catch { return { erro: "O arquivo não é um JSON válido." }; }
+  const lista = Array.isArray(j) ? j : j && Array.isArray(j.respostas) ? j.respostas : null;
+  if (!lista) return { erro: "O arquivo não tem a lista de respostas exportada pelo Órbita." };
+  const novas = [], repetidas = [], vistos = new Set();
+  let invalidas = 0;
+  for (const r of lista.slice(0, 500)) {
+    const atalho = String((r && r.atalho) || "").replace(/^\/+/, "").trim().toLowerCase();
+    const titulo = String((r && r.titulo) || "").trim().slice(0, 60), corpo = String((r && r.corpo) || "").trim();
+    if (!/^[a-z0-9_-]{1,30}$/.test(atalho) || !titulo || !corpo || corpo.length > 4096) { invalidas++; continue; }
+    if (vistos.has(atalho) || atalhoRepetido(existentes, atalho)) { repetidas.push(atalho); continue; }
+    vistos.add(atalho);
+    novas.push({ atalho, titulo, corpo, ativo: r.ativo !== false });
+  }
+  return { novas, repetidas, invalidas };
+}
+/** Baixa um texto como arquivo (Exportar). → true quando o navegador aceitou. */
+function baixarTexto(texto, nome, tipo = "application/json") {
+  try {
+    const url = URL.createObjectURL(new Blob([texto], { type: `${tipo};charset=utf-8` }));
+    const a = document.createElement("a"); a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    return true;
+  } catch { return false; }
+}
+
 async function montarRespostas(ctx, alvo) {
   const { ui } = ctx;
   const h = ui.h;
-  const [L] = await Promise.all([logica(ctx), ui.carregarCss("conversas")]);
-  let base = null, respostas = [], filtro = "";
+  const [L] = await Promise.all([logica(ctx), ui.carregarCss("conversas"), ui.carregarCss("config")]);
+  let base = null, respostas = [], filtro = "", filtroDep = "";
   const podeEditar = ctx.pode("supervisor");
+  // plano 1000 · AS-240: exportar/importar (a revenda monta as respostas padrão uma vez e leva para cada cliente)
+  const bExportar = h("button", { type: "button", class: "bt bt-fant cfg-resp-exportar", on: { click: () => exportar() } }, ui.icone("baixar"), "Exportar");
+  const arquivo = h("input", { type: "file", accept: "application/json,.json", hidden: true, "aria-hidden": "true", tabindex: "-1" });
+  const bImportar = podeEditar ? h("button", { type: "button", class: "bt bt-fant cfg-resp-importar", on: { click: () => arquivo.click() } }, ui.icone("folha"), "Importar") : null;
+  arquivo.addEventListener("change", () => { const fl = arquivo.files && arquivo.files[0]; arquivo.value = ""; if (fl) importar(fl); });
+  const chipsDep = h("div", { class: "cfg-resp-deps", hidden: true });
 
   const busca = h("input", { type: "search", placeholder: "Buscar resposta", "aria-label": "Buscar resposta" });
   const caixa = h("div", { class: "pilha" });
@@ -1017,10 +1292,11 @@ async function montarRespostas(ctx, alvo) {
   ui.limpar(alvo);
   alvo.append(
     h("header", { class: "cab-pag" },
-      h("div", null, h("p", { class: "rotulo" }, "Atendimento"), h("h1", { class: "titulo-pag" }, "Respostas rápidas"),
+      h("div", null, h("p", { class: "rotulo" }, "Atendimento"), h("h2", { class: "titulo-pag" }, "Respostas rápidas"),
         h("p", { class: "sub" }, "No chat, digite / e o atalho. As variáveis {primeiro_nome}, {nome}, {atendente}, {empresa} e {protocolo} são trocadas sozinhas.")),
-      nova),
+      h("div", { class: "linha cfg-resp-acoes" }, bExportar, bImportar, arquivo, nova)),
     h("div", { class: "fita" }, h("label", { class: "busca cresce" }, ui.icone("busca"), busca)),
+    chipsDep,
     caixa);
   busca.addEventListener("input", ui.debounce(() => { filtro = busca.value; desenhar(); }, 150));
 
@@ -1032,17 +1308,54 @@ async function montarRespostas(ctx, alvo) {
     caixa.appendChild(ui.esqueleto("tabela", 5));
     try {
       base = await ctx.api.rpcC("nx_cv_base");
-      respostas = (base.respostas || []).slice();
+      respostas = ordenarRespostas(base.respostas || []);
+      desenharChips();
       desenhar();
     } catch (e) { ui.limpar(caixa); caixa.appendChild(ui.erroCartao(e, carregar)); }
   }
 
   function depNome(id) { const d = ((base && base.departamentos) || []).find(x => x.id === id); return d ? d.nome : "Todos"; }
 
+  /** plano 1000 · AS-144: chips de departamento acima da tabela (só com departamento em alguma resposta). */
+  function desenharChips() {
+    ui.limpar(chipsDep);
+    const deps = ((base && base.departamentos) || []).filter(d => respostas.some(r => r.departamento_id === d.id));
+    chipsDep.hidden = !deps.length;
+    if (!deps.length) { filtroDep = ""; return; }
+    if (filtroDep && !deps.some(d => d.id === filtroDep)) filtroDep = "";
+    chipsDep.appendChild(ui.segmentado({ tipo: "filtro", rotulo: "Filtrar por departamento", valor: filtroDep,
+      opcoes: [{ valor: "", rotulo: "Todas" }, ...deps.map(d => ({ valor: d.id, rotulo: d.nome, contador: respostas.filter(r => r.departamento_id === d.id).length }))],
+      aoMudar: v => { filtroDep = v || ""; desenhar(); } }));
+  }
+
+  function exportar() {
+    if (!respostas.length) { ui.toast("Nenhuma resposta para exportar ainda.", { tipo: "info" }); return; }
+    const nome = `respostas-rapidas-${String((ctx.cliente && ctx.cliente.nome) || "empresa").normalize("NFD").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "empresa"}.json`;
+    if (baixarTexto(JSON.stringify(exportarRespostas(respostas), null, 2), nome)) ui.toast(`${respostas.length} ${respostas.length === 1 ? "resposta exportada" : "respostas exportadas"}. Use «Importar» na outra empresa.`, { tipo: "ok" });
+    else ui.toast("O navegador não deixou baixar o arquivo.", { tipo: "erro" });
+  }
+
+  async function importar(arq) {
+    let texto = "";
+    try { texto = await arq.text(); } catch { ui.toast("Não deu para ler o arquivo.", { tipo: "erro" }); return; }
+    const r = lerImportacaoRespostas(texto, respostas);
+    if (r.erro) { ui.toast(r.erro, { tipo: "erro" }); return; }
+    if (!r.novas.length) { ui.toast(r.repetidas.length ? "Todos os atalhos do arquivo já existem aqui." : "Nenhuma resposta válida no arquivo.", { tipo: "info" }); return; }
+    const fora = [r.repetidas.length ? `${r.repetidas.length} com atalho que já existe` : "", r.invalidas ? `${r.invalidas} incompleta(s)` : ""].filter(Boolean).join(" e ");
+    if (!(await ui.confirmar({ titulo: `Importar ${r.novas.length} ${r.novas.length === 1 ? "resposta" : "respostas"}?`, rotulo: "Importar",
+      texto: `Elas valem para todos os departamentos.${fora ? ` Ficam de fora: ${fora}.` : ""}` }))) return;
+    let ok = 0;
+    for (const x of r.novas) {
+      try { await ctx.api.rpcC("nx_resposta_salvar", { p_resposta: { ...x, departamento_id: null } }); ok++; } catch { /* atalho tomado no meio do caminho: segue */ }
+    }
+    ui.toast(ok === r.novas.length ? `${ok} ${ok === 1 ? "resposta importada" : "respostas importadas"}.` : `${ok} de ${r.novas.length} importadas; as outras foram recusadas pelo servidor.`, { tipo: ok ? "ok" : "erro" });
+    carregar();
+  }
+
   function desenhar() {
     ui.limpar(caixa);
     const q = L.semAcento(filtro.trim());
-    const linhas = respostas.filter(r => !q || L.semAcento(`${r.atalho} ${r.titulo} ${r.corpo}`).includes(q));
+    const linhas = respostas.filter(r => (!q || L.semAcento(`${r.atalho} ${r.titulo} ${r.corpo}`).includes(q)) && (!filtroDep || r.departamento_id === filtroDep));
     if (!respostas.length) {
       caixa.appendChild(ui.vazio({ titulo: "Nenhuma resposta ainda.", icone: "chat", texto: "Cadastre as frases que a equipe repete todo dia: saudação, endereço, horários, confirmação.",
         acao: podeEditar ? { rotulo: "Nova resposta", fn: () => editar(null) } : null }));
@@ -1051,14 +1364,14 @@ async function montarRespostas(ctx, alvo) {
     const t = ui.tabela({
       rotulo: "Respostas rápidas",
       colunas: [
-        { chave: "atalho", rotulo: "Atalho", render: r => h("span", { class: "mono" }, `/${r.atalho}`), largura: "9rem" },
-        { chave: "titulo", rotulo: "Título", render: r => h("b", null, r.titulo) },
+        { chave: "atalho", rotulo: "Atalho", render: r => h("span", { class: "mono" }, `/${r.atalho}`), largura: "9rem", ordenavel: true },
+        { chave: "titulo", rotulo: "Título", render: r => h("b", null, r.titulo), ordenavel: true },
         { chave: "corpo", rotulo: "Prévia", render: r => h("span", { class: "cfg-resp-corpo", title: r.corpo }, L.aplicarVariaveis(r.corpo, exemplo())) },
         { chave: "departamento_id", rotulo: "Departamento", render: r => depNome(r.departamento_id) },
-        { chave: "usos", rotulo: "Usos", render: r => h("span", { class: "mono" }, String(r.usos || 0)), alinhar: "dir" },
+        { chave: "usos", rotulo: "Usos", render: r => h("span", { class: "mono" }, String(r.usos || 0)), alinhar: "dir", ordenavel: true },
         { chave: "ativo", rotulo: "Situação", render: r => ui.pilula(r.ativo === false ? "Desligada" : "Ativa", r.ativo === false ? "neutra" : "ok") },
       ],
-      linhas, vazio: "Nenhuma resposta com essa busca.",
+      linhas, vazio: filtroDep ? "Nenhuma resposta deste departamento com essa busca." : "Nenhuma resposta com essa busca.",
       aoClicar: podeEditar ? r => editar(r) : null,
     });
     caixa.appendChild(t.el);
@@ -1068,6 +1381,17 @@ async function montarRespostas(ctx, alvo) {
     const deps = (base && base.departamentos) || [];
     const f = h("form", { class: "pilha", novalidate: true });
     const cAtalho = ui.campo({ rotulo: "Atalho", nome: "atalho", valor: r ? r.atalho : "", obrigatorio: true, max: 31, placeholder: "ola", ajuda: "Letras minúsculas, números, - e _. No chat: /atalho" });
+    // plano 1000 · AS-142: atalho que já existe avisa enquanto digita (antes só o servidor recusava ao salvar)
+    const inpAtalho = cAtalho.querySelector("input");
+    const avisoAtalho = h("small", { class: "campo-erro cfg-atalho-repetido", role: "status", hidden: true });
+    cAtalho.appendChild(avisoAtalho);
+    const conferirAtalho = () => {
+      const outra = atalhoRepetido(respostas, inpAtalho.value, r ? r.id : null);
+      avisoAtalho.hidden = !outra;
+      avisoAtalho.textContent = outra ? `Já existe /${outra.atalho} («${outra.titulo}»). Escolha outro atalho.` : "";
+      if (outra) inpAtalho.setAttribute("aria-invalid", "true"); else inpAtalho.removeAttribute("aria-invalid");
+    };
+    inpAtalho.addEventListener("input", conferirAtalho);
     const cTitulo = ui.campo({ rotulo: "Título", nome: "titulo", valor: r ? r.titulo : "", obrigatorio: true, max: 60 });
     const cCorpo = ui.campo({ rotulo: "Texto", nome: "corpo", tipo: "textarea", valor: r ? r.corpo : "", obrigatorio: true, max: 4096, linhas: 5 });
     const ta = cCorpo.querySelector("textarea");
@@ -1076,7 +1400,7 @@ async function montarRespostas(ctx, alvo) {
         const ini = ta.selectionStart ?? ta.value.length, fim = ta.selectionEnd ?? ini;
         ta.value = ta.value.slice(0, ini) + `{${v}}` + ta.value.slice(fim);
         ta.focus(); ta.setSelectionRange(ini + v.length + 2, ini + v.length + 2); previa();
-      } } }, `{${v}}`)));
+      } }, "aria-label": rotuloVariavel(v), title: rotuloVariavel(v) }, `{${v}}`)));
     const cont = h("div", { class: "cfg-cont" });
     const prev = h("div", { class: "cv-previa", "aria-live": "polite" });
     function previa() {
@@ -1102,6 +1426,7 @@ async function montarRespostas(ctx, alvo) {
       ui.marcarErro(f, null);
       const atalho = String(d.atalho || "").replace(/^\/+/, "").trim().toLowerCase();
       if (!/^[a-z0-9_-]{1,30}$/.test(atalho)) { ui.marcarErro(f, "atalho", "Use só letras minúsculas sem acento, números, - e _ (até 30)."); return false; }
+      if (atalhoRepetido(respostas, atalho, r ? r.id : null)) { avisoAtalho.hidden = true; ui.marcarErro(f, "atalho", "Esse atalho já existe."); return false; }
       if (!d.titulo) { ui.marcarErro(f, "titulo", "Dê um título."); return false; }
       if (!d.corpo) { ui.marcarErro(f, "corpo", "Escreva o texto."); return false; }
       try {
@@ -1123,6 +1448,54 @@ async function montarRespostas(ctx, alvo) {
 }
 
 /* ============================================================ DEPARTAMENTOS E HORÁRIOS (P0-B) */
+/** plano 1000 · AS-150: atalhos de horário. «sabado» mexe só no sábado (soma ao que já existe); os outros trocam a semana. */
+export const PREDEFINICOES_HORARIO = Object.freeze([
+  { id: "comercial", rotulo: "Comercial 8–18" },
+  { id: "almoco", rotulo: "Com almoço" },
+  { id: "sabado", rotulo: "Sábado até 12h" },
+]);
+export function predefinicaoHorario(id, atual = null) {
+  const sem = (fx, extra = {}) => { const r = {}; for (let d = 0; d < 7; d++) r[d] = d >= 1 && d <= 5 ? fx.map(x => [...x]) : []; return { ...r, ...extra }; };
+  if (id === "comercial") return sem([["08:00", "18:00"]]);
+  if (id === "almoco") return sem([["08:00", "12:00"], ["13:00", "18:00"]]);
+  if (id === "sabado") {
+    const base = atual && typeof atual === "object" ? atual : sem([["08:00", "18:00"]]);
+    const r = {}; for (let d = 0; d < 7; d++) r[d] = ((base[d] ?? base[String(d)]) || []).map(x => [...x]);
+    r[6] = [["08:00", "12:00"]];
+    return r;
+  }
+  return null;
+}
+/** plano 1000 · AS-235: quem é do departamento (base.usuarios com o id na lista de departamentos). */
+export function pessoasDoDepartamento(usuarios, depId) {
+  return (Array.isArray(usuarios) ? usuarios : []).filter(u => u && Array.isArray(u.departamentos) && u.departamentos.includes(depId));
+}
+/** Contraste WCAG entre duas cores [r, g, b] (0–255). */
+export function contrasteRgb(a, b) {
+  const lum = c => { const [r, g, bl] = c.map(v => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * bl; };
+  const la = lum(a), lb = lum(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+/** Os fundos dos esquemas claro e escuro do app (os mesmos de tema.FUNDOS_ESQUEMA), em RGB: o shell não é importado aqui. */
+export const FUNDOS_RGB = Object.freeze({ claro: [243, 240, 233], escuro: [7, 9, 12] });
+/** plano 1000 · AS-237: cor do departamento que some no tema claro ou no escuro (contraste < 2 com o fundo). */
+export function avisoCorDepartamento(cor, fundos = FUNDOS_RGB) {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(cor || "").trim());
+  if (!m) return "";
+  const rgb = [m[1], m[2], m[3]].map(x => parseInt(x, 16));
+  if (contrasteRgb(rgb, fundos.claro) < 2) return "Cor clara demais: no tema claro a pílula e a borda do departamento quase somem. Escolha um tom mais forte.";
+  if (contrasteRgb(rgb, fundos.escuro) < 2) return "Cor escura demais: no tema escuro a pílula e a borda do departamento quase somem. Escolha um tom mais claro.";
+  return "";
+}
+/** plano 1000 · AS-288: por que o item do menu do departamento está desabilitado (lido como descrição; o ui.menu mostra quando suportar). */
+export function motivosMenuDepartamento(d) {
+  return {
+    padrao: d.padrao ? "Ele já é o padrão." : !d.ativo ? "Religue o departamento antes de torná-lo padrão." : null,
+    ativo: d.padrao ? "O departamento padrão não pode ser desligado: marque outro como padrão antes." : null,
+    excluir: d.padrao ? "O departamento padrão não pode ser excluído: marque outro como padrão antes." : null,
+  };
+}
+
 const HINT_DEP = {
   nome: ["nome", "Dê um nome de até 40 letras."],
   nome_repetido: ["nome", "Já existe um departamento com esse nome."],
@@ -1137,15 +1510,27 @@ const HINT_DEP = {
 async function montarDepartamentos(ctx, alvo) {
   const { ui } = ctx;
   const h = ui.h;
-  const [L] = await Promise.all([logica(ctx), ui.carregarCss("conversas")]);
+  const [L] = await Promise.all([logica(ctx), ui.carregarCss("conversas"), ui.carregarCss("config")]);
   let base = null, deps = [];
   const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Novo departamento");
   novo.addEventListener("click", () => editar(null));
   const caixa = h("div", { class: "cfg-deps" });
+  // plano 1000 · AS-148: a pílula «Aberto/Fechado agora» é refeita a cada minuto enquanto a seção está na tela (antes congelava no desenho)
+  let pilulasAgora = [];
+  function atualizarAgora(agora = new Date()) {
+    for (const x of pilulasAgora) {
+      if (!x.el.isConnected) continue;
+      const ab = L.horarioAberto(x.d.horario, agora);
+      if (x.el.dataset.aberto === (ab ? "1" : "0")) continue;
+      x.el.dataset.aberto = ab ? "1" : "0";
+      x.el.replaceChildren(ui.pilula(ab ? "Aberto agora" : "Fechado agora", ab ? "ok" : "neutra"));
+    }
+  }
+  const relogioAgora = setInterval(() => { if (!caixa.isConnected) { clearInterval(relogioAgora); return; } atualizarAgora(); }, 60_000);
   ui.limpar(alvo);
   alvo.append(
     h("header", { class: "cab-pag" },
-      h("div", null, h("p", { class: "rotulo" }, "Equipe"), h("h1", { class: "titulo-pag" }, "Departamentos e horários"),
+      h("div", null, h("p", { class: "rotulo" }, "Equipe"), h("h2", { class: "titulo-pag" }, "Departamentos e horários"),
         h("p", { class: "sub" }, "Conversa nova cai no departamento do número (ou no padrão). No rodízio, vai para quem está com menos conversas abertas; fora do horário, o cliente recebe a mensagem automática.")),
       novo),
     caixa);
@@ -1174,6 +1559,7 @@ async function montarDepartamentos(ctx, alvo) {
       return;
     }
     const agora = new Date();
+    pilulasAgora = [];
     for (const d of deps) {
       const cor = ui.corOk(d.cor);
       const aberto = L.horarioAberto(d.horario, agora);
@@ -1181,11 +1567,20 @@ async function montarDepartamentos(ctx, alvo) {
       bEditar.addEventListener("click", () => editar(d));
       const bMais = h("button", { type: "button", class: "bt-icone", "aria-label": `Mais opções de ${d.nome}` }, ui.icone("opcoes"));
       bMais.addEventListener("click", () => ui.menu(bMais, [
-        { rotulo: "Tornar padrão", icone: "check", fn: () => salvarRapido(d, { padrao: true }, `${d.nome} agora recebe as conversas novas.`), desabilitado: d.padrao || !d.ativo },
-        { rotulo: d.ativo ? "Desligar" : "Religar", icone: d.ativo ? "relogio" : "raio", fn: () => salvarRapido(d, { ativo: !d.ativo }, d.ativo ? "Departamento desligado." : "Departamento religado."), desabilitado: d.padrao },
+        { rotulo: "Tornar padrão", icone: "check", fn: () => salvarRapido(d, { padrao: true }, `${d.nome} agora recebe as conversas novas.`), desabilitado: d.padrao || !d.ativo, motivo: motivos.padrao },
+        { rotulo: d.ativo ? "Desligar" : "Religar", icone: d.ativo ? "relogio" : "raio", fn: () => salvarRapido(d, { ativo: !d.ativo }, d.ativo ? "Departamento desligado." : "Departamento religado."), desabilitado: d.padrao, motivo: motivos.ativo },
         "-",
-        { rotulo: "Excluir", icone: "lixeira", perigo: true, fn: () => excluir(d), desabilitado: d.padrao },
+        { rotulo: "Excluir", icone: "lixeira", perigo: true, fn: () => excluir(d), desabilitado: d.padrao, motivo: motivos.excluir },
       ]));
+      const motivos = motivosMenuDepartamento(d);
+      // AS-235: quem é do departamento (até 4 rostos) e o atalho para Usuários já filtrado
+      const pessoas = pessoasDoDepartamento(base.usuarios, d.id);
+      const rostos = pessoas.length ? h("a", { class: "cfg-dep-pessoas", href: `#/config/usuarios?dep=${encodeURIComponent(d.id)}`,
+        "aria-label": `Pessoas do ${d.nome}: ${pessoas.map(p => p.nome).join(", ")}. Abrir em Usuários.` },
+        pessoas.slice(0, 4).map(p => ui.avatar(p.nome, p.id, p.avatar || null, { tamanho: "p" })),
+        pessoas.length > 4 ? h("span", { class: "cfg-dep-mais mono" }, `+${pessoas.length - 4}`) : null) : null;
+      const agoraEl = d.horario ? h("span", { class: "cfg-dep-agora", dataset: { aberto: aberto ? "1" : "0" } }, ui.pilula(aberto ? "Aberto agora" : "Fechado agora", aberto ? "ok" : "neutra")) : null;
+      if (agoraEl) pilulasAgora.push({ d, el: agoraEl });
       const msgInfo = !d.horario ? null
         : d.msg_fora_horario ? h("span", { class: "cfg-dep-msg" }, ui.icone("chat"), "Mensagem fora do horário ligada")
         : h("span", { class: "cfg-dep-msg", dataset: { alerta: "1" } }, ui.icone("alerta"), "Sem mensagem fora do horário");
@@ -1200,10 +1595,10 @@ async function montarDepartamentos(ctx, alvo) {
           d.distribuicao === "rodizio" ? h("b", null, "Rodízio automático") : h("b", null, "Distribuição manual"),
           d.distribuicao === "rodizio" ? " — vai para quem está com menos conversas abertas." : " — fica na fila até alguém assumir.",
           d.manter_atendente ? " Cliente que volta fica com quem atendeu antes." : ""),
-        h("div", { class: "cfg-dep-hor" }, ui.icone("relogio"), h("span", null, L.resumoHorario(d.horario)),
-          d.horario ? ui.pilula(aberto ? "Aberto agora" : "Fechado agora", aberto ? "ok" : "neutra") : null),
+        h("div", { class: "cfg-dep-hor" }, ui.icone("relogio"), h("span", null, L.resumoHorario(d.horario), d.horario ? h("small", { class: "fraco" }, " · horário de Brasília") : null), agoraEl),
         h("div", { class: "cfg-dep-rod" },
           msgInfo,
+          rostos,
           h("span", { class: "mono" }, `${d.conversas_abertas || 0} em aberto · ${d.canais || 0} ${d.canais === 1 ? "número" : "números"} · ${d.pessoas || 0} ${d.pessoas === 1 ? "pessoa" : "pessoas"}`))));
     }
   }
@@ -1240,6 +1635,16 @@ async function montarDepartamentos(ctx, alvo) {
     const f = h("form", { class: "pilha", novalidate: true });
     const cNome = ui.campo({ rotulo: "Nome", nome: "nome", valor: d ? d.nome : "", obrigatorio: true, max: 40, placeholder: "Ex.: Recepção, Comercial, Financeiro" });
     const cCor = ui.campo({ rotulo: "Cor", nome: "cor", tipo: "cor", valor: d ? d.cor : (ctx.paleta || [])[deps.length % Math.max(1, (ctx.paleta || []).length)] || null, paleta: ctx.paleta });
+    // plano 1000 · AS-237: cor que some no tema claro (ou no escuro) avisa — a conta de contraste WCAG da Marca, sem importar o tema.js
+    const avisoCor = h("small", { class: "campo-ajuda cfg-cor-aviso", role: "status", hidden: true });
+    cCor.appendChild(avisoCor);
+    const conferirCor = () => {
+      const v = (cCor.querySelector("input[type=hidden]") || {}).value || "";
+      const t = avisoCorDepartamento(v);
+      avisoCor.hidden = !t; avisoCor.textContent = t;
+    };
+    cCor.addEventListener("change", conferirCor);
+    conferirCor();
 
     // distribuição (dois cartões de escolha)
     const opDist = (valor, titulo, texto) => {
@@ -1270,7 +1675,16 @@ async function montarDepartamentos(ctx, alvo) {
     const erroHor = h("small", { class: "campo-erro", hidden: true });
     const bCopiar = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("copiar"), "Copiar segunda para terça a sexta");
     const blocoGrade = h("div", { class: "pilha-p" }, gradeEl, h("div", { class: "linha" }, bCopiar));
-    const cHorario = h("fieldset", { class: "campo", dataset: { campo: "horario" } }, h("legend", null, "Horário de atendimento"), alterna, blocoGrade, resumo, erroHor);
+    // plano 1000 · AS-150: predefinições de horário (além do «copiar segunda»)
+    const predef = h("div", { class: "linha cfg-predef", role: "group", "aria-label": "Horários prontos" },
+      PREDEFINICOES_HORARIO.map(p => h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { predef: p.id }, on: { click: () => {
+        grade = predefinicaoHorario(p.id, lerGrade()); montarGrade(); atualizarResumo();
+        ui.anunciar(`Horário «${p.rotulo}» aplicado.`);
+      } } }, p.rotulo)));
+    blocoGrade.prepend(predef);
+    // AS-149: a grade vale no horário de Brasília (o servidor confere no fuso de São Paulo)
+    const cHorario = h("fieldset", { class: "campo", dataset: { campo: "horario" } },
+      h("legend", null, "Horário de atendimento ", h("small", { class: "fraco cfg-fuso" }, "· horário de Brasília (São Paulo)")), alterna, blocoGrade, resumo, erroHor);
 
     function clonar(x) { const r = {}; for (let i = 0; i < 7; i++) r[i] = ((x[i] ?? x[String(i)]) || []).map(fx => [fx[0], fx[1] === "24:00" ? "23:59" : fx[1]]); return r; }
     function lerGrade() {
@@ -1282,7 +1696,7 @@ async function montarDepartamentos(ctx, alvo) {
         const faixas = [];
         if (aberto) for (const fx of linha.querySelectorAll(".cfg-faixa")) {
           const [a, b] = fx.querySelectorAll("input[type=time]");
-          faixas.push([a.value, b.value]);
+          faixas.push([a.value, fimDaFaixa(b.value)]);      // plano 1000 · AS-146: 23:59 na tela = 24:00 (o último minuto aberto)
         }
         r[dia] = faixas;
       }
@@ -1290,9 +1704,10 @@ async function montarDepartamentos(ctx, alvo) {
     }
     function atualizarResumo() {
       const g = lerGrade();
-      const v = L.validarHorario(g);
+      const v = L.validarHorario(g, { meiaNoite: true });     // AS-145: o servidor (20261013d) aceita a faixa noturna como a última do dia
       erroHor.hidden = v.ok; erroHor.textContent = v.ok ? "" : v.erro.texto;
-      resumo.textContent = v.ok ? L.resumoHorario(v.horario) : "";
+      const noturna = v.ok && v.horario && Object.values(v.horario).some(fx => fx.some(([a, b]) => b < a));
+      resumo.textContent = v.ok ? `${L.resumoHorario(v.horario)}${noturna ? " · a faixa que termina antes de começar vai até a madrugada do dia seguinte" : ""}` : "";
       atualizarPrevia();
     }
     function faixaEl(dia, fx, podeRemover) {
@@ -1335,19 +1750,22 @@ async function montarDepartamentos(ctx, alvo) {
       for (const dia of [1, 2, 3, 4, 5, 6, 0]) {
         const faixas = (grade && grade[dia]) || [];
         const idc = `cfg-dia-${dia}`;
-        const chk = h("input", { type: "checkbox", id: idc, checked: faixas.length > 0 });
+        const idFech = `${idc}-fechado`, idNome = `${idc}-nome`;
+        const chk = h("input", { type: "checkbox", id: idc, checked: faixas.length > 0, "aria-describedby": faixas.length ? null : idFech });
         const caixaF = h("div", { class: "cfg-faixas" });
-        const fechado = h("span", { class: "sub cfg-fechado", hidden: faixas.length > 0 }, "Fechado");
+        const fechado = h("span", { class: "sub cfg-fechado", id: idFech, hidden: faixas.length > 0 }, "Fechado");
         faixas.forEach((fx, i) => caixaF.appendChild(faixaEl(dia, fx, i > 0)));
         caixaF.appendChild(fechado);
         chk.addEventListener("change", () => {
           if (chk.checked && !caixaF.querySelector(".cfg-faixa")) fechado.before(faixaEl(dia, dia === 6 ? ["08:00", "12:00"] : ["08:00", "18:00"], false));
           if (!chk.checked) for (const x of caixaF.querySelectorAll(".cfg-faixa")) x.remove();
           fechado.hidden = chk.checked;
+          if (chk.checked) chk.removeAttribute("aria-describedby"); else chk.setAttribute("aria-describedby", idFech);
           desenharLinha(dia); atualizarResumo();
         });
-        const linha = h("div", { class: "cfg-dia", dataset: { dia } },
-          h("label", { class: "cfg-dia-nome", for: idc }, chk, h("span", null, L.DIAS_LONGOS[dia])), caixaF);
+        // AS-238: cada dia é um grupo com nome (o leitor diz «Segunda, grupo»); «Fechado» descreve a caixa do dia
+        const linha = h("div", { class: "cfg-dia", dataset: { dia }, role: "group", "aria-labelledby": idNome },
+          h("label", { class: "cfg-dia-nome", for: idc }, chk, h("span", { id: idNome }, L.DIAS_LONGOS[dia])), caixaF);
         gradeEl.appendChild(linha);
         desenharLinha(dia);
       }
@@ -1382,7 +1800,7 @@ async function montarDepartamentos(ctx, alvo) {
         const ini = taMsg.selectionStart ?? taMsg.value.length, fim = taMsg.selectionEnd ?? ini;
         taMsg.value = taMsg.value.slice(0, ini) + `{${v}}` + taMsg.value.slice(fim);
         taMsg.focus(); taMsg.setSelectionRange(ini + v.length + 2, ini + v.length + 2); atualizarPrevia();
-      } } }, `{${v}}`)));
+      } }, "aria-label": rotuloVariavel(v), title: rotuloVariavel(v) }, `{${v}}`)));
     function atualizarPrevia() {
       const txt = taMsg.value.trim();
       prevMsg.hidden = !txt;
@@ -1403,7 +1821,7 @@ async function montarDepartamentos(ctx, alvo) {
       const dados = ui.lerForm(f);
       ui.marcarErro(f, null);
       if (!dados.nome) { ui.marcarErro(f, "nome", HINT_DEP.nome[1]); return false; }
-      const v = L.validarHorario(lerGrade());
+      const v = L.validarHorario(lerGrade(), { meiaNoite: true });
       if (!v.ok) { erroHor.hidden = false; erroHor.textContent = v.erro.texto; gradeEl.querySelector(`[data-dia="${v.erro.dia ?? 1}"] input`)?.focus(); return false; }
       if (String(dados.msg_fora_horario || "").length > 1000) { ui.marcarErro(f, "msg_fora_horario", HINT_DEP.msg_fora_horario[1]); return false; }
       const payload = { nome: dados.nome, cor: dados.cor || null, distribuicao: dados.distribuicao || "rodizio", manter_atendente: !!dados.manter_atendente,
@@ -1425,18 +1843,19 @@ async function montarDepartamentos(ctx, alvo) {
   }
 
   await carregar();
+  return () => clearInterval(relogioAgora);
 }
 
 /* ============================================================ PREFERÊNCIAS DO ATENDIMENTO (P0-B) */
 async function montarAtendimento(ctx, alvo) {
   const { ui } = ctx;
   const h = ui.h;
-  await ui.carregarCss("conversas");
+  await Promise.all([ui.carregarCss("conversas"), ui.carregarCss("config")]);
   const caixa = h("div", { class: "pilha" });
   ui.limpar(alvo);
   alvo.append(
     h("header", { class: "cab-pag" },
-      h("div", null, h("p", { class: "rotulo" }, "Atendimento"), h("h1", { class: "titulo-pag" }, "Preferências do atendimento"),
+      h("div", null, h("p", { class: "rotulo" }, "Atendimento"), h("h2", { class: "titulo-pag" }, "Preferências do atendimento"),
         h("p", { class: "sub" }, "Valem para toda a equipe desta empresa, em todos os números."))),
     caixa);
   let cfg = null;
@@ -1451,16 +1870,24 @@ async function montarAtendimento(ctx, alvo) {
   function opcao(chave, titulo, texto, extra) {
     const c = ui.campo({ rotulo: titulo, nome: chave, tipo: "interruptor", valor: !!cfg[chave] });
     const inp = c.querySelector("input");
+    // plano 1000 · AS-233: o próprio controle diz «Salvando…» e depois «Salvo» por 2 s (o toast solto não dizia qual preferência)
+    const estado = h("span", { class: "cfg-pref-estado fraco", role: "status", "aria-live": "polite" });
+    c.appendChild(estado);
+    let relogio = null;
     inp.addEventListener("change", async () => {
       const valor = inp.checked;
       inp.disabled = true;
+      clearTimeout(relogio);
+      estado.dataset.estado = "salvando"; estado.textContent = "Salvando…";
       try {
         const r = await ctx.api.rpcC("nx_cv_config_salvar", { p_cfg: { [chave]: valor } });
         cfg = { ...cfg, ...(r || {}) };
-        ui.toast("Preferência salva.", { tipo: "ok" });
+        estado.dataset.estado = "salvo"; estado.textContent = "Salvo";
+        relogio = setTimeout(() => { if (estado.dataset.estado === "salvo") { estado.textContent = ""; delete estado.dataset.estado; } }, 2000);
         if (extra) extra.atualizar();
       } catch (e) {
         inp.checked = !valor;
+        estado.textContent = ""; delete estado.dataset.estado;
         ui.toast(ui.mensagemErro(e), { tipo: "erro" });
       } finally { inp.disabled = false; }
     });
@@ -1512,10 +1939,11 @@ async function montarIA(ctx, alvo) {
   const h = ui.h;
   const [L] = await Promise.all([logica(ctx), ui.carregarCss("conversas")]);
   const caixa = h("div", { class: "pilha" });
+  let haAlteracao = () => false;      // plano 1000 · AS-082: o hub pergunta antes de trocar de seção com alteração não salva
   ui.limpar(alvo);
   alvo.append(
     h("header", { class: "cab-pag" },
-      h("div", null, h("p", { class: "rotulo" }, "Atendimento"), h("h1", { class: "titulo-pag" }, "Assistente de IA"),
+      h("div", null, h("p", { class: "rotulo" }, "Atendimento"), h("h2", { class: "titulo-pag" }, "Assistente de IA"),
         h("p", { class: "sub" }, "Defina a personalidade e as informações usadas pelo agente do CodeWords. A equipe pode revisar aprendizados e assumir qualquer conversa. As alterações só valem no fluxo após atualizar o prompt do CodeWords."))),
     caixa);
 
@@ -1548,6 +1976,7 @@ async function montarIA(ctx, alvo) {
     const barra = h("div", { class: "uso-barra" }, h("i"));
     const salvar = h("button", { type: "submit", class: "bt bt-prim" }, "Salvar assistente");
     const sujo = h("span", { class: "sub", hidden: true }, "Alterações não salvas");
+    haAlteracao = () => !sujo.hidden && sujo.isConnected;
     const tas = {};
     for (const [k, rot, ph] of IA_CAMPOS_EXTRA) {
       const c = ui.campo({ rotulo: rot, nome: k, tipo: k === "assistente_nome" ? "texto" : "textarea",
@@ -1575,9 +2004,10 @@ async function montarIA(ctx, alvo) {
     cTom.addEventListener("change", () => { sujo.hidden = false; atualizarPrevia(); });
     const previa = h("pre", { class: "cfg-codigo cfg-ia-previa", tabindex: "0", "aria-label": "Prévia das instruções do assistente" });
     const blocoPrevia = h("section", { class: "cartao cfg-ia-preview" },
-      h("div", { class: "cfg-ia-preview-head" }, h("div", null, h("p", { class: "rotulo" }, "PRÉVIA"), h("h2", { class: "titulo-sec" }, "Prévia das instruções")),
-        ui.pilula("Atualiza enquanto você digita", "neutra")),
-      h("p", { class: "sub" }, "A prévia reúne suas informações e as regras principais. Salve e depois copie o prompt em Configurações → Números para atualizar o agente no CodeWords."), previa);
+      h("div", { class: "cfg-ia-preview-head" }, h("div", null, h("p", { class: "rotulo" }, "PRÉVIA APROXIMADA"), h("h2", { class: "titulo-sec" }, "Prévia das instruções")),
+        ui.pilula("Aproximada · atualiza enquanto você digita", "aten")),
+      // plano 1000 · AS-152: esta prévia é montada no navegador; o prompt REAL sai do servidor (receita do CodeWords) e pode ter mais regras
+      h("p", { class: "sub" }, "Esta prévia é montada aqui na tela e serve para conferir o conteúdo: o texto real que o agente recebe é gerado pelo servidor e tem regras a mais. Para ver e copiar o prompt real, salve e use «Copiar prompt» em Configurações → Números de WhatsApp."), previa);
     f.append(cTom, blocoPrevia,
       h("div", { class: "cfg-ia-rod" }, h("div", { class: "cfg-ia-medidor" }, cont, barra), h("div", { class: "linha" }, sujo, salvar)));
 
@@ -1621,6 +2051,13 @@ async function montarIA(ctx, alvo) {
       ev.preventDefault();
       if (contar() > L.IA_MAX) { ui.toast("Passou de 15.000 caracteres. Resuma algum texto.", { tipo: "erro" }); return; }
       const d = ui.lerForm(f);
+      // plano 1000 · AS-153: a memória aprovada vai para o agente — CPF, telefone, e-mail ou data de nascimento ali pedem confirmação
+      const pessoais = dadosPessoaisNoTexto(d.memoria_aprovada);
+      if (pessoais.length && !(await ui.confirmar({ titulo: "A memória aprovada parece ter dados pessoais", rotulo: "Salvar mesmo assim", perigo: true,
+        texto: `Encontrei ${pessoais.map(p => `${p.tipo} («${p.trecho}»)`).join(", ")}. O assistente usa esse texto com todos os clientes: tire dados pessoais ou de saúde antes de salvar.` }))) {
+        tas.memoria_aprovada && tas.memoria_aprovada.focus();
+        return;
+      }
       const payload = { tom: d.tom === "formal" ? "formal" : "proximo",
         assistente_nome: d.assistente_nome || "", endereco: d.endereco || "", boas_vindas: d.boas_vindas || "" };
       for (const [k] of IA_TEXTOS) payload[k] = d[k] || "";
@@ -1638,6 +2075,11 @@ async function montarIA(ctx, alvo) {
   }
 
   await carregar();
+  return {
+    pendente: () => haAlteracao(),
+    podeSair: async () => !haAlteracao() || ui.confirmar({ titulo: "Sair sem salvar o assistente?", rotulo: "Sair sem salvar", perigo: true,
+      texto: "As alterações do assistente de IA ainda não foram salvas e serão perdidas." }),
+  };
 }
 
 export const secoesConfig = [

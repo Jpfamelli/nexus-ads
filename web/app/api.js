@@ -112,6 +112,8 @@ export const MENSAGENS = {
   automacao_invalida: "A automação tem um problema.",
   limite_taxa: "Muitos envios em pouco tempo. Tente mais tarde.",
   envio_em_andamento: "A mensagem ainda está sendo enviada. Aguarde um instante.",
+  cancelado: "Pedido cancelado.",
+  aguarde: "Isso acabou de ser feito. Espere um pouco antes de tentar de novo.",   // plano 1000: nx-codewords/nx-ciclo (pareamento, teste, «Testar conexão»)
   // plano 100 · contratos 9 e 10: empresa pausada no painel e bloqueio de login por tentativas (o hint traz os minutos)
   cliente_pausado: "O acesso desta empresa está pausado pela plataforma. Fale com o suporte para reativar.",
   muitas_tentativas: "Muitas tentativas de entrar. Espere alguns minutos e tente de novo.",
@@ -238,13 +240,22 @@ export function mensagemErro(e) {
     default: break;
   }
   if (!MENSAGENS[c] && /_nao_encontrad[oa]$/.test(String(c || ""))) return "Não encontramos esse registro — ele pode ter sido removido.";
-  return MENSAGENS[c] ||`Não deu certo agora${c ? ` (${String(c).slice(0, 80)})` : ""}. Tente de novo em instantes.`;
+  if (MENSAGENS[c]) return MENSAGENS[c];
+  // plano 1000 (AS-255): código desconhecido — a equipe da plataforma (super) vê o código cru; as demais pessoas, uma frase com o caminho
+  if (_codigoTecnico) return `Não deu certo agora${c ? ` (${String(c).slice(0, 80)})` : ""}. Tente de novo em instantes.`;
+  return "Não deu certo agora. Tente de novo em instantes; se continuar, fale com o suporte.";
 }
+
+let _codigoTecnico = false;
+/** O shell liga depois de ler a sessão: só a conta da plataforma (super) vê o código técnico nos erros desconhecidos. */
+export function mostrarCodigoTecnico(sim) { _codigoTecnico = !!sim; }
 
 /** RPCs que só LEEM (podem ser repetidas sem efeito colateral). Tudo que não está aqui é tratado como escrita. */
 const LEITURA_SUFIXOS = /_(listar|ver|base|kanban|coluna|buscar)$/;
 const LEITURA_NOMES = new Set(["nx_pulso", "nx_app_sessao", "nx_marca_publica", "nx_inicio", "nx_agenda_dia", "nx_agenda_livres", "nx_dados",
-  "nx_cv_mensagens", "nx_cv_ia_estado", "nx_cv_buscar_msgs", "nx_automacao_execucoes", "nx_cliente_tema", "nx_integracoes_status", "nx_uso_plano"]);
+  "nx_cv_mensagens", "nx_cv_ia_estado", "nx_cv_buscar_msgs", "nx_automacao_execucoes", "nx_cliente_tema", "nx_integracoes_status", "nx_uso_plano",
+  // plano 1000 (AS-181): consultas do Admin, das Automações e do Início que eram tratadas como escrita (offline diziam «nada foi salvo» e não repetiam)
+  "nx_automacao_execucoes_dia", "nx_ia_uso_dia", "nx_onboarding_estado", "nx_clientes_admin"]);
 export function ehLeitura(nome) {
   const n = String(nome || "");
   return LEITURA_NOMES.has(n) || LEITURA_SUFIXOS.test(n) || /^nx_rel_/.test(n);
@@ -276,6 +287,14 @@ export const TETO_PRAZO_FN_MS = 145_000;
 export const PRAZO_FN_LENTA_MS = 100_000;
 const FN_LENTAS = new Set(["nx-ia:sugerir", "nx-ia:resumir", "nx-codewords:parear", "nx-codewords:ligar_fluxo", "nx-codewords:receber_aqui", "nx-codewords:enviar_teste",
   "nx-enviar:texto", "nx-enviar:midia", "nx-enviar:template", "nx-enviar:reenviar"]);   // reenviar refaz um envio pelo mesmo caminho (plano 100 · A5 [D132])
+
+/** Plano 1000 (AS-182): ações de Edge Function que só CONSULTAM (podem repetir; offline dizem «Sem internet», não «nada foi salvo»). */
+export const FN_LEITURA = Object.freeze(new Set(["nx-codewords:estado", "nx-enviar:testar_canal"]));
+/** fn(funcao, {acao}) é leitura? A lista acima ou `opcoes.leitura === true` de quem chama (nunca o contrário: escrita não vira leitura por engano). */
+export function fnLeitura(funcao, corpo, opcoes) {
+  if (opcoes && opcoes.leitura === true) return true;
+  return FN_LEITURA.has(`${funcao}:${corpo && corpo.acao}`);
+}
 
 /** Retentativas das LEITURAS (e das escritas com {req:true}): até 2 repetições, 400 ms e 1,2 s (±25 % de jitter), orçamento de ~8 s por chamada. */
 export const RETENTAR_PADRAO = Object.freeze({ tentativas: 2, esperasMs: Object.freeze([400, 1200]), orcamentoMs: 8000, jitter: 0.25 });
@@ -359,8 +378,13 @@ export function criarApi(o) {
     return Math.min(TETO_PRAZO_FN_MS, extra);
   };
 
-  async function buscarComPrazo(url, init, ms) {
+  async function buscarComPrazo(url, init, ms, sinal = null) {
     const controller = typeof AbortController === "function" ? new AbortController() : null;
+    // plano 1000 (pedido de Automações): quem chamou pode desistir («Parar de esperar») — o sinal dele cancela o fetch na hora
+    if (sinal && controller) {
+      if (sinal.aborted) controller.abort();
+      else if (typeof sinal.addEventListener === "function") sinal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
     let timer, expirou = false;
     const rede = (async () => {
       const r = await f(url, { ...init, ...(controller ? { signal: controller.signal } : {}) });
@@ -387,8 +411,10 @@ export function criarApi(o) {
         headers: { apikey: o.chave, "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify((typeof corpo === "function" ? corpo() : corpo) ?? {}),
         ...(meta.keepalive ? { keepalive: true } : {}),      // a página está saindo: o navegador termina o envio mesmo com a aba fechada
-      }, prazo));
+      }, prazo, meta.sinal));
     } catch (causa) {
+      // cancelado por quem chamou (opcoes.sinal): não é falta de internet, não repete, não mexe no estado da conexão
+      if (meta.sinal && meta.sinal.aborted) throw erroApi("cancelado", { causa });
       const e = causa?.codigo === "tempo_rede" ? causa : erroApi("sem_conexao", { causa });
       if (contexto) e.contexto = { leitura: !!meta.leitura };
       throw e;
@@ -432,6 +458,7 @@ export function criarApi(o) {
 
   /** Resultado FINAL da chamada para o estado de conexão: 502/503/504 e falha de transporte = servidor fora; qualquer outra resposta prova que ele responde. */
   function relatarErro(e) {
+    if (e.codigo === "cancelado") return;                                // quem chamou desistiu: nada se sabe sobre a conexão
     if (e.codigo === "sem_conexao" || e.codigo === "tempo_rede") avisarRede("falha", { codigo: e.codigo });
     else if ([502, 503, 504].includes(Number(e.status)) && e.codigo !== "midia_indisponivel") avisarRede("falha", { codigo: `http_${e.status}`, status: e.status });   // um arquivo que não baixou não é «servidor fora»
     else avisarRede("sucesso");
@@ -550,7 +577,9 @@ export function criarApi(o) {
      */
     fn(funcao, corpo = {}, opcoes = {}) {
       if (!/^nx-[a-z0-9-]+$/.test(funcao)) return Promise.reject(erroApi("funcao_invalida"));
-      return chamar(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }), prazoDaChamada(opcoes, `${funcao}:${corpo && corpo.acao}`), { leitura: false, keepalive: saindo(opcoes) });
+      const chave = `${funcao}:${corpo && corpo.acao}`;
+      return chamar(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }), prazoDaChamada(opcoes, chave),
+        { leitura: fnLeitura(funcao, corpo, opcoes), keepalive: saindo(opcoes), sinal: opcoes && opcoes.sinal ? opcoes.sinal : null });
     },
     mensagemErro,
     minutosDoHint,   // o login lê os minutos do bloqueio por tentativas (A9)

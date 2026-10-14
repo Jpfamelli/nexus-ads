@@ -65,13 +65,15 @@ async function secaoFunis(ctx, alvo) {
     const funis = k.base.funis.slice().sort((a, b) => (a.ordem - b.ordem) || a.nome.localeCompare(b.nome, "pt-BR"));
     const itens = h("div", { class: "crm-cfg-lista", role: "list" }, funis.map(f => {
       const menuBt = btIcone(k, "opcoes", `Mais ações para ${f.nome}`, () => ui.menu(menuBt, [
+        // plano 1000 (CR-133): «Duplicar» abre o editor com as mesmas etapas (sem padrão e fora dos anúncios) — vale também para o funil padrão
+        { rotulo: "Duplicar", icone: "copiar", fn: () => editor(null, { copiaDe: f }) },
+        !f.padrao ? "-" : null,
         !f.padrao && f.conta_no_ads && f.ativo !== false ? { rotulo: "Tornar padrão", icone: "check", fn: () => alterar(f, { padrao: true }, "Agora as conversas novas entram neste funil.") } : null,
         !f.padrao ? { rotulo: f.ativo === false ? "Ativar" : "Desativar", icone: f.ativo === false ? "check" : "relogio",
           fn: () => alterar(f, { ativo: f.ativo === false }, f.ativo === false ? "Funil ativado." : "Funil desativado: some do quadro, os negócios continuam guardados.") } : null,
         !f.padrao ? "-" : null,
         !f.padrao ? { rotulo: "Excluir", icone: "lixeira", perigo: true, fn: () => excluir(f) } : null,
       ].filter(Boolean)));
-      if (f.padrao) menuBt.hidden = true;
       return h("div", { class: ["crm-cfg-item", "crm-cfg-funil", f.ativo === false && "inativo"], role: "listitem" },
         h("i", { class: "bola", style: k.cor((f.estagios[0] || {}).cor) ? { "--cor": k.cor(f.estagios[0].cor) } : null }),
         h("span", null,
@@ -80,7 +82,8 @@ async function secaoFunis(ctx, alvo) {
           h("span", { class: "crm-cfg-etapas", "aria-hidden": "true" }, f.estagios.map(e => h("span", { class: ["crm-cfg-etapa", e.tipo !== "aberto" && `t-${e.tipo}`], style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null }, e.nome)))),
         h("span", { class: "crm-cfg-selos" },
           f.padrao ? ui.pilula("Padrão", "prim", { title: "Recebe as conversas novas do WhatsApp" }) : null,
-          f.conta_no_ads ? ui.pilula("Conta nos anúncios", "meta") : ui.pilula("Fora dos anúncios", "neutra")),
+          // plano 1000 (CR-071): o mesmo nome e a mesma dica da gaveta do negócio
+          f.conta_no_ads ? ui.pilula("Conta nos anúncios", "meta", { title: "Este funil entra nos números de Anúncios" }) : ui.pilula("Fora dos anúncios", "neutra")),
         btn(k, "Editar", { p: true, fn: () => editor(f), rotuloAria: `Editar o funil ${f.nome}` }), menuBt);
     }));
     alvo.append(cartao(k, {
@@ -101,7 +104,9 @@ async function secaoFunis(ctx, alvo) {
 
   async function excluir(f) {
     const cont = await contagens(f.id);
-    const n = cont ? Object.values(cont).reduce((s, x) => s + x, 0) : null;
+    // plano 1000 (CR-291): sem a contagem (rede/servidor) não dá para saber se há negócios a mover — nada de «excluir» às cegas
+    if (cont === null) { ui.toast(`Não consegui contar ${k.v.art("negocio")}s ${k.v.min("negocios")} deste funil agora. Tente excluir de novo em instantes.`, { tipo: "erro", ms: 7000 }); return; }
+    const n = Object.values(cont).reduce((s, x) => s + x, 0);
     let destino = null;
     if (n) {
       const outros = k.base.funis.filter(x => x.id !== f.id && x.ativo !== false && !!x.conta_no_ads === !!f.conta_no_ads);
@@ -138,7 +143,7 @@ async function secaoFunis(ctx, alvo) {
   }
 
   /* ------------------------------------------------------------ editor */
-  async function editor(original) {
+  async function editor(original, { copiaDe = null } = {}) {
     ui.limpar(alvo);
     alvo.appendChild(ui.esqueleto("lista", 5));
     const cont = original ? await contagens(original.id) : {};
@@ -148,9 +153,10 @@ async function secaoFunis(ctx, alvo) {
     const temNegocios = !!(cont && Object.values(cont).some(x => x > 0));
     const f = original
       ? { id: original.id, nome: original.nome, conta_no_ads: !!original.conta_no_ads, ativo: original.ativo !== false, padrao: !!original.padrao }
-      : { nome: "", conta_no_ads: false, ativo: true };
+      : { nome: copiaDe ? `${copiaDe.nome} (cópia)`.slice(0, 60) : "", conta_no_ads: false, ativo: true };
     let etapas = original
       ? original.estagios.map(e => ({ id: e.id, nome: e.nome, tipo: e.tipo, marco: e.marco, cor: e.cor, probabilidade: e.probabilidade, sla_horas: e.sla_horas, _n: cont ? cont[e.id] || 0 : null }))
+      : copiaDe ? (copiaDe.estagios || []).map(e => ({ nome: e.nome, tipo: e.tipo, marco: null, cor: e.cor, probabilidade: e.probabilidade ?? L.probPadrao(e.tipo), sla_horas: e.sla_horas ?? null, _n: 0 }))
       : [["Novo", "aberto"], ["Em andamento", "aberto"], ["Ganho", "ganho"], ["Perdido", "perdido"]].map(([nome, tipo], i) => ({ nome, tipo, marco: null, cor: cor(i), probabilidade: L.probPadrao(tipo), sla_horas: null, _n: 0 }));
     const mover = {};              // etapa removida → destino
     const removidas = [];          // para "desfazer"
@@ -173,7 +179,7 @@ async function secaoFunis(ctx, alvo) {
 
     const listaEl = h("div", { class: ["fe-etapas", !f.conta_no_ads && "sem-marco"], role: "list", "aria-label": "Etapas do funil" });
     const cab = h("div", { class: ["fe-cab", !f.conta_no_ads && "sem-marco"], "aria-hidden": "true" },
-      h("span"), h("span"), h("span", null, "Etapa"), h("span", null, "Tipo"), h("span", { class: "fe-marco-cab" }, "Marco (anúncios)"), h("span", null, "Chance"), h("span", null, "Prazo (h)"), h("span"));
+      h("span"), h("span"), h("span", null, "Etapa"), h("span", null, "Tipo"), h("span", { class: "fe-marco-cab" }, "Marco (anúncios)"), h("span", null, "Chance"), h("span", null, "Prazo"), h("span"));
     const notaMover = h("div", { class: "fe-mover", hidden: true });
     // C8: funil dos anúncios sem etapa para um marco que o Órbita usa sozinho (Ganho/Perdido/Faltou/Agendou) — aviso inline, não bloqueia salvar
     const avisoMarcos = h("p", { class: "aviso aviso-aten fe-marcos", role: "status", "aria-live": "polite", hidden: true });
@@ -243,8 +249,22 @@ async function secaoFunis(ctx, alvo) {
       marcoSel.addEventListener("change", () => { e.marco = marcoSel.value || null; atualizarMarcos(); });
       const prob = h("input", { type: "number", class: "fe-prob", min: 0, max: 100, step: 1, value: e.probabilidade ?? "", inputmode: "numeric", "aria-label": `Chance de fechar (%) da etapa ${e.nome || i + 1}` });
       prob.addEventListener("input", () => { e.probabilidade = prob.value === "" ? null : Number(prob.value); });
-      const sla = h("input", { type: "number", class: "fe-sla", min: 1, max: 2160, step: 1, value: e.sla_horas ?? "", placeholder: "prazo (h)", inputmode: "numeric", "aria-label": `Prazo em horas na etapa ${e.nome || i + 1} (o cartão fica âmbar depois dele)` });
-      sla.addEventListener("input", () => { e.sla_horas = sla.value === "" ? null : Number(sla.value); });
+      // plano 1000 (CR-132): prazo em horas OU dias (o dono pensa em dias) — grava sempre sla_horas (3 dias → 72)
+      if (!e._slaUn) e._slaUn = L.unidadeSla(e.sla_horas);
+      const maxSla = () => (e._slaUn === "d" ? 90 : 2160);
+      const slaN = h("input", { type: "number", class: "fe-sla-n", min: 1, max: maxSla(), step: 1, value: L.valorSla(e.sla_horas, e._slaUn), placeholder: "prazo", inputmode: "numeric",
+        "aria-label": `Prazo na etapa ${e.nome || i + 1}, em ${e._slaUn === "d" ? "dias" : "horas"} (o cartão fica âmbar depois dele)` });
+      const slaUn = h("select", { class: "fe-sla-un", "aria-label": `Unidade do prazo da etapa ${e.nome || i + 1}` },
+        h("option", { value: "h", selected: e._slaUn === "h" }, "horas"), h("option", { value: "d", selected: e._slaUn === "d" }, "dias"));
+      const lerSla = () => { e.sla_horas = L.horasSla(slaN.value, e._slaUn); };
+      slaN.addEventListener("input", lerSla);
+      slaUn.addEventListener("change", () => {
+        e._slaUn = slaUn.value === "d" ? "d" : "h";
+        slaN.setAttribute("max", String(maxSla()));
+        slaN.setAttribute("aria-label", `Prazo na etapa ${e.nome || i + 1}, em ${e._slaUn === "d" ? "dias" : "horas"} (o cartão fica âmbar depois dele)`);
+        lerSla();
+      });
+      const sla = h("div", { class: "fe-sla" }, slaN, slaUn);
       const rem = btIcone(k, "lixeira", `Remover a etapa ${e.nome || i + 1}`, () => remover(e), { class: "fe-rem", desabilitado: etapas.length <= 1 });
       linha.append(alca, corBt,
         h("div", { class: "fe-nome-cel" }, nomeIn, e._n ? h("small", { class: "fe-n" }, `${e._n} ${k.v.min(e._n === 1 ? "negocio" : "negocios")}`) : null),
@@ -345,7 +365,7 @@ async function secaoFunis(ctx, alvo) {
       if (!lista.length) return;
       const textos = [...new Set(lista.map(x => x.indice !== null && x.indice !== undefined ? `Etapa ${x.indice + 1}: ${x.texto}` : x.texto))];
       erros.append(ui.icone("alerta"), h("div", null, textos.map(t => h("p", null, t))));
-      const sel = { nome: ".fe-nome", tipo: ".fe-tipo", marco: ".fe-marco", probabilidade: ".fe-prob", sla_horas: ".fe-sla" };
+      const sel = { nome: ".fe-nome", tipo: ".fe-tipo", marco: ".fe-marco", probabilidade: ".fe-prob", sla_horas: ".fe-sla-n" };
       for (const x of lista) {
         if (x.indice === null || x.indice === undefined) { if (x.campo === "nome") nome.querySelector("input").setAttribute("aria-invalid", "true"); continue; }
         const el = listaEl.children[x.indice] && listaEl.children[x.indice].querySelector(sel[x.campo] || ".fe-nome");
@@ -387,7 +407,7 @@ async function secaoFunis(ctx, alvo) {
 
     ui.limpar(alvo);
     alvo.append(cartao(k, {
-      titulo: original ? `Editar «${original.nome}»` : "Novo funil",
+      titulo: original ? `Editar «${original.nome}»` : copiaDe ? `Cópia de «${copiaDe.nome}»` : "Novo funil",
       sub: "Arraste as etapas pela alça (ou use as setas) para mudar a ordem. As de ganho e perda recebem os negócios fechados.",
       acoes: btn(k, "Voltar", { tipo: "fant", icone: "seta-esq", fn: () => lista() }),
     },

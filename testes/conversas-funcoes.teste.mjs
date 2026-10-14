@@ -610,11 +610,12 @@ function cenario({ config = {}, extra = {} } = {}) {
     ],
     nx_canais: [
       { id: K_A1, cliente_id: CLI_A, nome: "Recepção", phone_number_id: "111", waba_id: "WABA-A", token: "tok-a1", app_secret: "segredo-a1",
-        verify_token: "verifica-a1", chave_publica: "aaaa1111aaaa1111", departamento_id: DEP_A, status: "pendente" },
+        // plano 1000 (SV-015): chave pública do canal com o tamanho que o banco gera (12 bytes = 24 hex); antes 16 hex
+        verify_token: "verifica-a1", chave_publica: "aaaa1111aaaa1111aaaa1111", departamento_id: DEP_A, status: "pendente" },
       { id: K_A2, cliente_id: CLI_A, nome: "Comercial", phone_number_id: "112", waba_id: "WABA-A2", token: "tok-a2", app_secret: null,
-        verify_token: "verifica-a2", chave_publica: "aaaa2222aaaa2222", departamento_id: DEP_A2, status: "pendente" },
+        verify_token: "verifica-a2", chave_publica: "aaaa2222aaaa2222aaaa2222", departamento_id: DEP_A2, status: "pendente" },
       { id: K_B, cliente_id: CLI_B, nome: "Único", phone_number_id: "222", waba_id: "WABA-B", token: "tok-vencido", app_secret: "segredo-b",
-        verify_token: "verifica-b", chave_publica: "bbbb2222bbbb2222", departamento_id: null, status: "ativo" },
+        verify_token: "verifica-b", chave_publica: "bbbb2222bbbb2222bbbb2222", departamento_id: null, status: "ativo" },
     ],
     nx_contas: [{ id: ADM_A, nome: "Ana Admin" }, { id: AT_A, nome: "Beto Atendente" }, { id: LE_A, nome: "Lia Leitura" }, { id: ADM_B, nome: "Caio Admin B" }],
     nx_acessos: [
@@ -749,11 +750,11 @@ const graphMsgs = s => s.estado.enviadas.filter(m => m.status !== "read");
 test("webhook GET ?c=: verify token do CANAL; chave desconhecida 403; sem c continua o global", async () => {
   const s = cenario();
   const get = q => webhook(new Request(`${FN}/nx-whatsapp?${q}`), ENV, s.deps());
-  let r = await get("c=aaaa1111aaaa1111&hub.mode=subscribe&hub.verify_token=verifica-a1&hub.challenge=777");
+  let r = await get("c=aaaa1111aaaa1111aaaa1111&hub.mode=subscribe&hub.verify_token=verifica-a1&hub.challenge=777");
   assert.equal(r.status, 200);
   assert.equal(await r.text(), "777");
-  assert.equal((await get("c=aaaa1111aaaa1111&hub.mode=subscribe&hub.verify_token=verifica-global&hub.challenge=1")).status, 403, "token global não vale na URL do canal");
-  assert.equal((await get("c=aaaa1111aaaa1111&hub.mode=subscribe&hub.verify_token=verifica-a2&hub.challenge=1")).status, 403, "token de outro canal não vale");
+  assert.equal((await get("c=aaaa1111aaaa1111aaaa1111&hub.mode=subscribe&hub.verify_token=verifica-global&hub.challenge=1")).status, 403, "token global não vale na URL do canal");
+  assert.equal((await get("c=aaaa1111aaaa1111aaaa1111&hub.mode=subscribe&hub.verify_token=verifica-a2&hub.challenge=1")).status, 403, "token de outro canal não vale");
   assert.equal((await get("c=ffffffffffff0000&hub.mode=subscribe&hub.verify_token=verifica-a1&hub.challenge=1")).status, 403);
   assert.equal((await get("c=<script>&hub.mode=subscribe&hub.verify_token=verifica-a1&hub.challenge=1")).status, 403);
   r = await get("hub.mode=subscribe&hub.verify_token=verifica-global&hub.challenge=9");
@@ -764,15 +765,15 @@ test("webhook GET ?c=: verify token do CANAL; chave desconhecida 403; sem c cont
 test("webhook POST: assinado com o app secret do canal (?c=) e com o global (sem c) → processa; segredo errado 401", async () => {
   const s = cenario();
   const p = valor("111", { contacts: contato("5512911110000"), messages: [texto("5512911110000", "Oi")] });
-  let r = await ler(await webhook(postWebhook(p, { c: "aaaa1111aaaa1111", segredo: "segredo-a1" }), ENV, s.deps()));
+  let r = await ler(await webhook(postWebhook(p, { c: "aaaa1111aaaa1111aaaa1111", segredo: "segredo-a1" }), ENV, s.deps()));
   assert.equal(r.status, 200);
   assert.equal(r.corpo.mensagens, 1);
   assert.equal(r.corpo.criado, 1, "lead criado no cliente do canal");
   // canal COM app secret próprio: o global não vale na URL dele
-  assert.equal((await webhook(postWebhook(p, { c: "aaaa1111aaaa1111", segredo: "segredo-global" }), ENV, s.deps())).status, 401);
+  assert.equal((await webhook(postWebhook(p, { c: "aaaa1111aaaa1111aaaa1111", segredo: "segredo-global" }), ENV, s.deps())).status, 401);
   // canal SEM app secret (app da Nexus): na URL dele vale o global
   const p2 = valor("112", { contacts: contato("5512911110001"), messages: [texto("5512911110001", "Oi")] });
-  r = await ler(await webhook(postWebhook(p2, { c: "aaaa2222aaaa2222", segredo: "segredo-global" }), ENV, s.deps()));
+  r = await ler(await webhook(postWebhook(p2, { c: "aaaa2222aaaa2222aaaa2222", segredo: "segredo-global" }), ENV, s.deps()));
   assert.equal(r.corpo.mensagens, 1);
   // chave desconhecida → 401 (nem confere assinatura)
   assert.equal((await webhook(postWebhook(p, { c: "ffffffffffff0000", segredo: "segredo-a1" }), ENV, s.deps())).status, 401);
@@ -788,7 +789,7 @@ test("webhook (1) A1: URL ?c= de A com pid de B → 200, canal_divergente: 1 e N
   const s = cenario();
   const p = valor("222", { contacts: contato("5512966665555"), messages: [texto("5512966665555", "forjado", { referral: REFERRAL })],
                            statuses: [{ id: "wamid.OUT-B", status: "delivered", timestamp: "1" }] });
-  const r = await ler(await webhook(postWebhook(p, { c: "aaaa1111aaaa1111", segredo: "segredo-a1" }), ENV, s.deps()));
+  const r = await ler(await webhook(postWebhook(p, { c: "aaaa1111aaaa1111aaaa1111", segredo: "segredo-a1" }), ENV, s.deps()));
   assert.equal(r.status, 200);
   assert.equal(r.corpo.canal_divergente, 1);
   assert.equal(r.corpo.mensagens, 0);
@@ -803,7 +804,7 @@ test("webhook (2) A1: URL ?c= com o pid da NEXUS e recibos → ignorado, nenhum 
   s.tab("nx_canais").find(k => k.id === K_A1).phone_number_id = NEXUS_PID;
   const p = valor(NEXUS_PID, { statuses: [{ id: "wamid.NEXUS-1", status: "failed", timestamp: "1", recipient_id: "5512911112222",
                                             errors: [{ code: 131047, title: "Re-engagement message" }] }] });
-  const r = await ler(await webhook(postWebhook(p, { c: "aaaa1111aaaa1111", segredo: "segredo-a1" }), ENV, s.deps()));
+  const r = await ler(await webhook(postWebhook(p, { c: "aaaa1111aaaa1111aaaa1111", segredo: "segredo-a1" }), ENV, s.deps()));
   assert.equal(r.status, 200);
   assert.equal(r.corpo.canal_divergente, 1);
   assert.equal(r.corpo.recibos, undefined);
@@ -953,7 +954,8 @@ test("webhook: mídia baixada em SEGUNDO PLANO → Storage privado <cliente>/in/
   const r = await ler(await webhook(postWebhook(valor("111", { contacts: contato("5512988887777"), messages: [msg] })), ENV, s.deps()));
   assert.equal(r.status, 200);
   assert.equal(s.estado.segundoPlano.length, 1, "a resposta sai antes do download");
-  assert.equal(s.estado.storage.length, 0);
+  // plano 1000 (SV-012, srv-3): o contador do canal (nx_canal_contar) é aguardado antes da resposta — o download, que já está em
+  // 2º plano, pode ter avançado até o Storage nesse meio tempo; o que importa é ele estar no 2º plano (acima), não o instante
   await esperarFundo(s);
   const m = s.tab("nx_mensagens").find(x => x.wamid === "wamid.IMG-9");
   assert.equal(m.midia.estado, "ok");
@@ -1227,7 +1229,16 @@ test("nx-enviar CodeWords (aparelho): HTTP 408/425 do gateway é AMBÍGUO como o
 const envioMidiaProxy = s => s.estado.codewords.filter(x => /^\/proxy\/send\/(image|audio|file)$/.test(x.caminho));
 const PDF = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55]);   // "%PDF-1.7"
 /** Põe o arquivo no bucket falso (pasta out/ do cliente A) e devolve o path. */
-function arquivoOut(s, ext, mime, bytes = PDF) {
+// plano 1000 (SV-219): os primeiros bytes do arquivo têm de bater com o tipo declarado (assinatura) — cada tipo com a sua amostra
+const asc = t => [...t].map(c => c.charCodeAt(0));
+const AMOSTRAS = {
+  "image/jpeg": [0xff, 0xd8, 0xff, 0xe0, 0, 0x10, ...asc("JF")],
+  "audio/wav": [...asc("RIFF"), 0, 0, 0, 0, ...asc("WAVE")],
+  "audio/ogg": [...asc("OggS"), 0, 2, 0, 0],
+  "video/mp4": [0, 0, 0, 0x18, ...asc("ftypmp42")],
+};
+const amostra = mime => new Uint8Array(AMOSTRAS[mime] || [...PDF]);
+function arquivoOut(s, ext, mime, bytes = amostra(mime)) {
   const path = `${CLI_A}/out/2026-09/${crypto.randomUUID()}.${ext}`;
   s.estado.arquivos.set(path, { bytes, mime });
   return path;
@@ -1261,7 +1272,7 @@ test("nx-enviar mídia CodeWords: baixa do Storage e manda os BYTES pelo proxy c
     assert.deepEqual(x.multipart.campos, corpoMsg ? { phone: "5512988887777", caption: corpoMsg } : { phone: "5512988887777" }, `${ext}: áudio sem legenda`);
     assert.equal(x.multipart.arquivo.campo, campo, ext);
     assert.equal(x.multipart.arquivo.nome, nome); assert.equal(x.multipart.arquivo.mime, mime.split(";")[0]);
-    assert.deepEqual([...x.multipart.arquivo.bytes], [...PDF], "os bytes do Storage chegam inteiros ao aparelho");
+    assert.deepEqual([...x.multipart.arquivo.bytes], [...amostra(mime.split(";")[0])], "os bytes do Storage chegam inteiros ao aparelho");
     assert.equal(s.estado.graph.length, nGraph, "nada vai para a Graph");
     // saída gravada
     const [saida] = s.rpcs("nx_cv_saida");
@@ -2112,15 +2123,15 @@ test("nx-midia subir: tipos e tamanhos do WhatsApp; path <cliente>/out/<mês>/<u
   assert.equal(pathDoCliente(`${CLI_A}/out/../x.pdf`, CLI_A), false);
 });
 
-test("nx-midia ver: URLs assinadas de 1 h só da pasta do cliente; subir_direto (base64 ≤ 5 MB) grava com a service role", async () => {
+test("nx-midia ver: URLs assinadas de 10 min (plano 1000, SV-220) só da pasta do cliente; subir_direto (base64 ≤ 5 MB) grava com a service role", async () => {
   const s = cenario();
   const p1 = `${CLI_A}/in/2026-09/a.jpg`, p2 = `${CLI_A}/out/2026-09/b.pdf`;
   s.estado.arquivos.set(p1, { bytes: new Uint8Array([1]) });
   s.estado.arquivos.set(p2, { bytes: new Uint8Array([1]) });
   const r = await ler(await midia(painel("nx-midia", { acao: "ver", paths: [p1, p2] }, "tok-le-a"), ENV, s.deps()));
   assert.deepEqual(r.corpo.urls, {
-    [p1]: `${SUPA}/storage/v1/object/sign/nx-midia/${p1}?token=ler-3600`,
-    [p2]: `${SUPA}/storage/v1/object/sign/nx-midia/${p2}?token=ler-3600`,
+    [p1]: `${SUPA}/storage/v1/object/sign/nx-midia/${p1}?token=ler-600`,
+    [p2]: `${SUPA}/storage/v1/object/sign/nx-midia/${p2}?token=ler-600`,
   });
   assert.equal((await ler(await midia(painel("nx-midia", { acao: "ver", paths: Array(51).fill(p1) }), ENV, s.deps()))).corpo.erro, "dados_invalidos");
   const d = await ler(await midia(painel("nx-midia", { acao: "subir_direto", mime: "image/png", nome: "x.png", base64: Buffer.from("PNGDATA").toString("base64") }), ENV, s.deps()));
@@ -2271,7 +2282,7 @@ test("ia.js perguntarClaude: opus-5 com fallback e effort low, recusa lança, us
       this.messages = { create: c("messages") }; this.beta = { messages: { create: c("beta") } }; } }
     Anthropic.APIError = class extends Error {};`;
   const comum = pathToFileURL(join(RAIZ, "supabase/functions/_compartilhado/comum.js")).href;   // o ia.js importa o comum.js
-  const mod = await import(`data:text/javascript,${encodeURIComponent(src.replace('"npm:@anthropic-ai/sdk"', JSON.stringify(`data:text/javascript,${encodeURIComponent(SDK)}`)).replace('"./comum.js"', JSON.stringify(comum)))}`);
+  const mod = await import(`data:text/javascript,${encodeURIComponent(src.replace(/"npm:@anthropic-ai\/sdk@\d+\.\d+\.\d+"/, () => JSON.stringify(`data:text/javascript,${encodeURIComponent(SDK)}`)).replace('"./comum.js"', JSON.stringify(comum)))}`);
   globalThis.__ia2 = [];
   globalThis.__ia2r = () => ({ model: "claude-opus-5", stop_reason: "end_turn", usage: { input_tokens: 120, output_tokens: 30 },
                                content: [{ type: "thinking", thinking: "" }, { type: "text", text: "Olá! " }, { type: "text", text: "Posso ajudar." }] });
@@ -2417,7 +2428,7 @@ test("webhook: RPC de resolução de canal permanente não cria retry storm; ind
     const s = cenario();
     const fetch = (url, init) => String(url).includes("/rpc/nx_wa_canal")
       ? Promise.resolve(jsonResp({ message: "falha na resolução do canal" }, status)) : s.fetch(url, init);
-    const req = new Request(`${FN}/nx-whatsapp?c=abcdef12`, { method: "POST", body: "{}",
+    const req = new Request(`${FN}/nx-whatsapp?c=abcdef12abcdef12abcdef12`, { method: "POST", body: "{}",
       headers: { "content-type": "application/json" } });
     const r = await webhook(req, ENV, s.deps({ fetch }));
     const corpo = await r.json();
@@ -2505,16 +2516,16 @@ test("simular-webhook: corpo do Apêndice C assinado; aceito pela nx-whatsapp; -
   // de ponta a ponta contra o handler (fetch que entrega a requisição à nx-whatsapp)
   const s = cenario();
   const viaFuncao = (url, init) => webhook(new Request(url, init), ENV, s.deps());
-  let r = await simular({ url: `${FN}/nx-whatsapp?c=aaaa1111aaaa1111`, segredo: "segredo-a1", pid: "111", nome: "Paciente Teste" }, viaFuncao);
+  let r = await simular({ url: `${FN}/nx-whatsapp?c=aaaa1111aaaa1111aaaa1111`, segredo: "segredo-a1", pid: "111", nome: "Paciente Teste" }, viaFuncao);
   assert.equal(r.status, 200);
   assert.equal(r.resposta.mensagens, 1);
   assert.equal(r.resposta.criado, 1);
-  r = await simular({ url: `${FN}/nx-whatsapp?c=aaaa1111aaaa1111`, segredo: "segredo-a1", pid: "222" }, viaFuncao);
+  r = await simular({ url: `${FN}/nx-whatsapp?c=aaaa1111aaaa1111aaaa1111`, segredo: "segredo-a1", pid: "222" }, viaFuncao);
   assert.equal(r.resposta.canal_divergente, 1);
   assert.equal(r.resposta.mensagens, 0);
-  r = await simular({ url: `${FN}/nx-whatsapp?c=aaaa1111aaaa1111`, segredo: "errado", pid: "111" }, viaFuncao);
+  r = await simular({ url: `${FN}/nx-whatsapp?c=aaaa1111aaaa1111aaaa1111`, segredo: "errado", pid: "111" }, viaFuncao);
   assert.equal(r.status, 401);
-  await assert.rejects(simular({ url: "x", pid: "1" }), /--segredo/);
+  await assert.rejects(simular({ url: "x", pid: "1" }), /NX_SEGREDO/);   // plano 1000 (SV-172): o segredo vem da variável
   // nunca embute segredo no arquivo
   const src = readFileSync(join(RAIZ, "scripts/simular-webhook.mjs"), "utf8");
   assert.ok(!/segredo-|sk-ant|EAA[A-Za-z0-9]{10}/.test(src));

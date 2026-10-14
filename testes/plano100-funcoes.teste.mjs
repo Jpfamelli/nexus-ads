@@ -921,7 +921,7 @@ test("S-F14 ia.js: system em blocos vira cache_control no bloco fixo; modelo pad
       this.messages = { create: c("messages") }; this.beta = { messages: { create: c("beta") } }; } }
     Anthropic.APIError = class extends Error { constructor(m, s) { super(m); this.status = s; } };`;
   const comum = pathToFileURL(join(RAIZ, "supabase/functions/_compartilhado/comum.js")).href;
-  const mod = await import(`data:text/javascript,${encodeURIComponent(src.replace('"npm:@anthropic-ai/sdk"', JSON.stringify(`data:text/javascript,${encodeURIComponent(SDK)}`)).replace('"./comum.js"', JSON.stringify(comum)))}`);
+  const mod = await import(`data:text/javascript,${encodeURIComponent(src.replace(/"npm:@anthropic-ai\/sdk@\d+\.\d+\.\d+"/, () => JSON.stringify(`data:text/javascript,${encodeURIComponent(SDK)}`)).replace('"./comum.js"', JSON.stringify(comum)))}`);
   globalThis.__p100 = [];
   globalThis.__p100r = () => ({ model: "claude-opus-5-5", stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 }, content: [{ type: "text", text: "{\"a\":1}" }] });
   const r = await mod.estruturarClaude({ chave: "k", sistema: "S", blocos: [{ texto: "FIXO", cache: true }, { texto: "VAR" }], usuario: "U", schema: { type: "object" } });
@@ -1039,7 +1039,8 @@ function cenarioCiclo({ config = {}, tabelas = {}, estado: extra = {}, clientes,
     if (u.host === "graph.facebook.com") return metaFalso(u, estado);
     throw new TypeError(`host inesperado ${u.host}`);
   };
-  const deps = extra2 => ({ fetch, agora: () => estado.agora, ...extra2 });
+  // plano 1000 (SV-082): sem esperar de verdade as retentativas da Meta/Google (2 s e 8 s)
+  const deps = extra2 => ({ fetch, agora: () => estado.agora, esperarRede: async () => {}, ...extra2 });
   const cron = (fn, corpo, extra2) => fn(new Request(`${FN}/${fn === ciclo ? "nx-ciclo" : "nx-relatorio"}`, { method: "POST", headers: { "content-type": "application/json", "x-nx-cron": "cron-secreto" }, body: JSON.stringify(corpo ?? {}) }), ENV, deps(extra2));
   return { banco, estado, fetch, deps, cron, tab: banco.tab };
 }
@@ -1449,4 +1450,7 @@ test("revisão · «Testar conexão» (1 dia) de conta com campanhas pausadas h�
   assert.equal(r.corpo.clientes[0].integracoes[0].status, "ok — 0 linhas", "antes: «parcial — 0 linhas (sem dados desde …)»");
   await s.cron(ciclo, {});
   assert.match(String(s.tab("nx_integracoes")[0].status), /^parcial — 0 linhas \(sem dados desde/, "a leitura de 7 dias sem nada continua avisando");
+  // revisão 13/10: a conta RESPONDEU (só não tem dados) — ultimo_sync avança; congelado, o 1º erro passageiro já disparava o radar
+  const integ = s.tab("nx_integracoes")[0];
+  assert.ok(integ.ultimo_sync, "ultimo_sync avançou (começou null)");
 });

@@ -1093,7 +1093,9 @@ test("rascunho: texto vazio, corrompido ou de um gatilho que não existe mais n�
 test("editor: edição pendente segura a atualização automática, o link do topo pergunta como o «Cancelar» e o rascunho é guardado a cada mudança", () => {
   const ed = lerApp("auto-editor.js"), tela = lerApp("automacoes.js");
   // uma régua só para «tem coisa sem salvar»
-  assert.match(ed, /const temPendencia = \(\) => podeEditar && \(salvoJson !== null \? sujo\(\) : !!\(auto\.nome \|\| auto\.acoes\.length\)\);/);
+  // plano 1000 · AS-050 (lote auto-2): nova só é pendência se mudou desde que abriu (receita intocada não pergunta; montagem da IA sempre)
+  assert.match(ed, /const novaPendente = \(\) => !!\(auto\.nome \|\| auto\.acoes\.length\) && \(origem === "ia" \|\| JSON\.stringify\(L\.limpar\(auto\)\) !== inicialJson\);/);
+  assert.match(ed, /const temPendencia = \(\) => podeEditar && \(salvoJson !== null \? sujo\(\) : novaPendente\(\)\);/);
   assert.match(ed, /if \(typeof ctx\.naoAtualizar === "function" && amb\.aoSair\) amb\.aoSair\(ctx\.naoAtualizar\(temPendencia\)\);/, "registra no shell e cancela ao sair da tela");
   // «Cancelar» e «‹ Automações» saem pelo mesmo caminho, com a mesma pergunta
   assert.match(ed, /async function sair\(\) \{[\s\S]*?titulo: "Sair sem salvar\?"[\s\S]*?titulo: "Descartar esta automação\?"[\s\S]*?apagarRascunho\(\);[\s\S]*?ctx\.navegar\("#\/automacoes"\);\s*\}/);
@@ -1105,7 +1107,8 @@ test("editor: edição pendente segura a atualização automática, o link do to
   assert.match(ed, /pintarValidacao\(\);\s*guardarRascunho\(\);\s*\}/, "mudou() guarda o rascunho");
   assert.match(ed, /if \(temPendencia\(\)\) \{ rasc\.guardar\(idRasc, auto\); gravouRascunho = true; \}/);
   assert.match(ed, /salvoJson = JSON\.stringify\(L\.limpar\(salvo\)\);\s*if \(rasc\) rasc\.apagar\(idRasc\);/, "salvou: o rascunho some");
-  assert.match(ed, /const idRasc = item \? item\.id : "nova";/);
+  // plano 1000 · AS-267: a chave do rascunho novo depende da origem (branco/receita/IA) — L.idRascunho, testado em plano1000-automacoes
+  assert.match(ed, /let idRasc = L\.idRascunho\(\{ item, origem, modelo: modelo \? modelo\.id : null \}\);/);     // let: «Salvar e continuar» passa ao id
   assert.match(ed, /"Recuperar rascunho"/); assert.match(ed, /"Descartar rascunho"/);
   assert.match(ed, /JSON\.stringify\(L\.limpar\(guardado\.auto\)\) !== JSON\.stringify\(L\.limpar\(auto\)\)/, "só oferece quando o rascunho difere do que está na tela");
   // o armazenamento fica no módulo da tela, por empresa + conta, sempre em try/catch
@@ -1113,7 +1116,9 @@ test("editor: edição pendente segura a atualização automática, o link do to
   assert.match(tela, /ler\(id\) \{ try \{ return L\.lerRascunho\(sessionStorage\.getItem\(chave\(id\)\)\); \} catch \{ return null; \} \}/);
   assert.match(tela, /guardar\(id, auto, extra\) \{ try \{ sessionStorage\.setItem\(chave\(id\), L\.empacotarRascunho\(auto, extra\)\); return true; \} catch \{ return false; \} \}/);
   assert.match(tela, /apagar\(id\) \{ try \{ sessionStorage\.removeItem\(chave\(id\)\); \} catch/);
-  assert.doesNotMatch(ed + tela, /localStorage/, "rascunho de automação vive só na aba (sessionStorage)");
+  // plano 1000 (lote auto-2): o editor não usa localStorage; a lista guarda só a ordem (AS-015) e os pedidos recentes à IA (AS-072)
+  assert.doesNotMatch(ed, /localStorage/, "rascunho de automação vive só na aba (sessionStorage)");
+  assert.ok((tela.match(/localStorage\.\w+\((\w+)/g) || []).every(u => /\((chaveOrdem|chaveRecentes)$/.test(u)), "na lista, só as duas preferências");
 });
 
 test("Criar com IA: a montagem fica guardada na aba e volta em #/automacoes/nova?ia=1 depois de recarregar; some ao salvar ou descartar", () => {

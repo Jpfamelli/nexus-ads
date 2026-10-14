@@ -8,6 +8,8 @@
    ============================================================ */
 
 let A = null;          // estado do módulo (sobrevive às trocas de rota dentro de Conversas)
+/** plano 1000 · CA-105: depois de quanto tempo a conversa que não abre ganha o aviso de conexão lenta (os testes encurtam). */
+export const CONF = { verLentoMs: 8000 };
 
 const ICONES_LOCAIS = Object.freeze({
   responder: ["M9.5 14.5 4.5 9.5l5-5", "M4.5 9.5h10a5.5 5.5 0 0 1 0 11h-3"],
@@ -53,7 +55,7 @@ export async function montar(ctx) {
   A = {
     ctx, ui, api: ctx.api, L, G, icone: (n, c) => icone(n, c),
     raiz: null, base: null, eu: null, podeEscrever: ctx.pode("atendente"),
-    aba: lerPreferencia("aba", "minhas"), filtro: {}, busca: "",
+    aba: lerPreferencia("aba", "minhas"), filtro: lerFiltroGuardado(ctx.cliente && ctx.cliente.id), busca: "",   // plano 1000 · CA-229: o filtro volta como a pessoa deixou
     itens: [], contagens: {}, temMais: false, carregandoLista: false,
     selId: null, ver: null, msgs: [], conversasContato: [], agora: null, ultimoId: null, temMaisAntes: false,
     iaEstado: null, iaEstadoEm: 0, iaEstadoPendente: false,
@@ -134,7 +136,8 @@ export async function montar(ctx) {
     }
   }
   // D3: voltar à aba com a conversa aberta marca como lida o que chegou enquanto ela estava escondida
-  const aoVisivel = () => { if (A && !document.hidden && A.ver) marcarLida(); };
+  // plano 1000 · CA-244: e a lista/conversa se atualizam NA HORA (antes ficavam velhas até o 1º pulso depois de voltar)
+  const aoVisivel = () => { if (!A || document.hidden) return; if (A.ver) marcarLida(); aoPulso(); };
   document.addEventListener("visibilitychange", aoVisivel);
   A.limpar.push(() => document.removeEventListener("visibilitychange", aoVisivel));
   // D10: «Enviar agora» acompanha a conexão (desligado sem internet, com o motivo)
@@ -170,6 +173,28 @@ export function desmontar() {
 /* ============================================================ preferências (por navegador) */
 function lerPreferencia(k, padrao) { try { return localStorage.getItem(`nx-cv-${k}`) || padrao; } catch { return padrao; } }
 function gravarPreferencia(k, v) { try { localStorage.setItem(`nx-cv-${k}`, v); } catch { /* sem storage */ } }
+/** plano 1000 · CA-229: o filtro da lista lembrado por navegador e por empresa (os ids de departamento/número/etiqueta são dela); só as
+    chaves conhecidas e com o formato certo voltam. */
+const CHAVES_FILTRO = ["departamento_id", "canal_id", "atendente", "etiquetas", "nao_lidas"];
+const chaveFiltro = cliente => `nx-cv-filtro:${cliente || "-"}`;
+function lerFiltroGuardado(cliente) {
+  try {
+    const f = JSON.parse(localStorage.getItem(chaveFiltro(cliente)) || "{}");
+    if (!f || typeof f !== "object" || Array.isArray(f)) return {};
+    const r = {};
+    for (const k of CHAVES_FILTRO) {
+      const v = f[k];
+      if (k === "etiquetas") { if (Array.isArray(v) && v.length) r.etiquetas = v.filter(x => typeof x === "string" || typeof x === "number").slice(0, 20); }
+      else if (k === "nao_lidas") { if (v === true) r.nao_lidas = true; }
+      else if (typeof v === "string" && v) r[k] = v.slice(0, 80);
+    }
+    return r;
+  } catch { return {}; }
+}
+function gravarFiltro(f) {
+  const k = chaveFiltro(A && A.ctx.cliente && A.ctx.cliente.id);
+  try { const vazio = !f || !Object.keys(f).length; if (vazio) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(f)); } catch { /* sem storage */ }
+}
 
 /* ============================================================ layout */
 function ajustarAltura() {
@@ -264,8 +289,16 @@ async function carregarLista({ reset = false, mais = false } = {}) {
   if (reset) A.lista.mostrarCarregando();
   try {
     const filtro = filtroAtual(), chave = JSON.stringify(filtro);
-    const r = await A.api.rpcC("nx_cv_listar", { p_filtro: filtro, p_limite: limite, p_antes: antes });
+    // plano 1000 · CA-103: a 1ª página da aba (troca de aba/abertura) usa a última resposta guardada no aparelho (cache.js) para a 1ª
+    // pintura; se a rede falhar depois, a lista guardada fica com a faixa «Sem conexão · lista de 14:02»
+    const opc = reset && !mais ? { cache: true, aoCache: (dados, em) => {
+      if (!A || seq !== A.seqLista || !dados || !Array.isArray(dados.itens)) return;
+      A.itens = itensComPendencia(dados.itens); A.temMais = !!dados.tem_mais; A.contagens = dados.contagens || {}; A.itensChave = chave;
+      A.listaCacheEm = em || Date.now(); A.carregandoLista = false; A.lista.render({ reset: true }); A.carregandoLista = true;
+    } } : {};
+    const r = await A.api.rpcC("nx_cv_listar", { p_filtro: filtro, p_limite: limite, p_antes: antes }, opc);
     if (!A || seq !== A.seqLista) return;
+    A.listaCacheEm = null; A.listaSoCache = false;
     // revisão: o que está na tela é de OUTRO filtro (trocou de aba e um pulso descartou a leitura da troca)? então nada de mesclar
     // nem de somar «carregar mais» — a lista vira só a página que chegou (antes: conversas abertas penduradas em «Resolvidas»)
     const mesmoFiltro = A.itensChave === chave;
@@ -277,7 +310,8 @@ async function carregarLista({ reset = false, mais = false } = {}) {
     }
     // D6: o pulso relê a 1ª página e o que «Carregar mais» já trouxe DEPOIS dela fica (antes a lista voltava a 100 e conversas sumiam)
     const pulso = !reset && !mais && mesmoFiltro ? A.L.mesclarPaginaLista(A.itens, r.itens || [], { temMais: !!r.tem_mais, aguardando: A.aba === "aguardando" && !filtroAtual().busca }) : null;
-    A.itens = itensComPendencia(mais && mesmoFiltro ? [...A.itens, ...(r.itens || []).filter(n => !A.itens.some(x => x.id === n.id))] : pulso ? pulso.itens : (r.itens || []));
+    // plano 1000 · CA-094: a página seguinte entra por um Set de ids (antes some() dentro de filter: quadrático com listas grandes)
+    A.itens = itensComPendencia(mais && mesmoFiltro ? A.L.juntarPagina(A.itens, r.itens || []) : pulso ? pulso.itens : (r.itens || []));
     A.temMais = pulso && pulso.preservadas ? A.temMais : !!r.tem_mais;
     A.itensChave = chave;
     A.contagens = r.contagens || {};
@@ -285,6 +319,7 @@ async function carregarLista({ reset = false, mais = false } = {}) {
     A.erroLista = null;
   } catch (e) {
     if (!A || seq !== A.seqLista) return;
+    if (e && e.comCache && A.listaCacheEm) { A.erroLista = null; A.listaSoCache = true; return; }   // a lista guardada fica na tela, com a faixa
     A.erroLista = e;
     if (e && e.codigo === "sessao_invalida") return;
   } finally {
@@ -296,8 +331,8 @@ async function carregarLista({ reset = false, mais = false } = {}) {
    Com a aba do navegador escondida: som curto (Web Audio, sem arquivo) e, se a pessoa
    permitiu, aviso na área de trabalho. Preferência por navegador (localStorage). */
 function lerAvisos() {
-  try { const p = JSON.parse(localStorage.getItem("nx-cv-avisos") || "{}"); return { som: p.som !== false, tela: p.tela === true }; }
-  catch { return { som: true, tela: false }; }
+  try { const p = JSON.parse(localStorage.getItem("nx-cv-avisos") || "{}"); return { som: p.som !== false, tela: p.tela === true, texto: p.texto === true }; }
+  catch { return { som: true, tela: false, texto: false }; }
 }
 function gravarAvisos(p) { try { localStorage.setItem("nx-cv-avisos", JSON.stringify(p)); } catch { /* sem storage */ } }
 
@@ -337,8 +372,9 @@ function avisarNovidades(antes, depois, nlAntes, nlDepois) {
   if (pref.tela && "Notification" in window && Notification.permission === "granted") {
     const c = chegaram[0];
     try {
+      // plano 1000 · CA-123: o texto do paciente só vai para a tela bloqueada se a pessoa ligou «Mostrar o texto da mensagem no aviso»
       const n = new Notification(c ? nomeContato(c.contato) : "Mensagem nova", {
-        body: c ? String(c.ultima_msg_resumo || "Mensagem nova").slice(0, 140) : "Chegou mensagem nova na central.",
+        body: c ? (pref.texto ? String(c.ultima_msg_resumo || "Mensagem nova").slice(0, 140) : "Mensagem nova") : "Chegou mensagem nova na central.",
         tag: c ? `nx-cv-${c.id}` : "nx-cv", silent: true });
       n.addEventListener("click", () => { try { window.focus(); } catch { /* ok */ } if (c && A) abrir(c.id); n.close(); });
     } catch { /* navegador sem suporte */ }
@@ -366,14 +402,25 @@ async function menuAvisos(ancora) {
         else ui.toast("O navegador bloqueou os avisos deste site. Libere em Configurações do site (cadeado ao lado do endereço).", { tipo: "info", ms: 8000 });
         if (A) A.lista.render();
       } },
-  ]);
+    // plano 1000 · CA-123: por padrão o aviso só diz o nome (a tela bloqueada não mostra o que o paciente escreveu)
+    pref.tela && perm === "granted" ? { rotulo: pref.texto ? "Mostrar o texto da mensagem no aviso: ligado" : "Mostrar o texto da mensagem no aviso: desligado", icone: "olho", fn: () => {
+      const p = lerAvisos(); p.texto = !p.texto; gravarAvisos(p);
+      ui.toast(p.texto ? "O aviso mostra o começo da mensagem." : "O aviso mostra só o nome de quem escreveu.", { tipo: "info" });
+    } } : null,
+    "-",
+    // CA-228: a densidade das linhas mora aqui (antes ficava escondida dentro de Filtros, e não é filtro)
+    { rotulo: A.densidade === "compacta" ? "Linhas compactas: ligado" : "Linhas compactas: desligado", icone: "menu", fn: () => {
+      acoes.definirDensidade(A.densidade === "compacta" ? "confortavel" : "compacta");
+      ui.toast(A.densidade === "compacta" ? "Linhas compactas: cabem mais conversas na tela." : "Linhas confortáveis.", { tipo: "info" });
+    } },
+  ].filter(Boolean));
 }
 
 /** Mudou a aba, a busca ou os filtros. */
 function mudarLista({ aba, busca, filtro } = {}) {
   if (aba !== undefined && aba !== A.aba) { A.aba = aba; gravarPreferencia("aba", aba); }
   if (busca !== undefined && busca !== A.busca) { A.busca = busca; buscarMensagens(); }
-  if (filtro !== undefined) A.filtro = filtro;
+  if (filtro !== undefined) { A.filtro = filtro; gravarFiltro(filtro); }    // CA-229: «Limpar filtros» apaga também a lembrança
   return carregarLista({ reset: true });
 }
 
@@ -434,12 +481,15 @@ async function aplicarRota(r) {
   A.ctx.titulo("Conversas");
   const abaRota = abaDaRota(r);
   if (abaRota && abaRota !== A.aba) mudarLista({ aba: abaRota });
+  const textoPronto = textoProntoDaRota(query);
   if (id) {
     await selecionar(id);
     if (query.msg && /^\d+$/.test(query.msg)) irParaMensagem(Number(query.msg));
+    if (textoPronto) colocarTextoPronto(id, textoPronto);
     return;
   }
-  if (query.contato && /^\d+$/.test(query.contato)) { await abrirPorContato(Number(query.contato)); return; }
+  if (query.contato && /^\d+$/.test(query.contato)) { await abrirPorContato(Number(query.contato), textoPronto); return; }
+  if (textoPronto) copiarTextoPronto(textoPronto, { limparRota: true });
   A.selId = null; A.ver = null; A.msgs = [];
   A.chat.mostrarVazio();
   A.lateral.render();
@@ -468,11 +518,13 @@ async function selecionar(id) {
   A.iaEstado = null; A.iaEstadoEm = 0; A.iaEstadoPendente = false; A.marcaNovas = null;
   A.chat.mostrarCarregando();
   A.lateral.render();
+  // plano 1000 · CA-105: passou de 8 s sem abrir — «A conexão está lenta… ainda tentando» + «Tentar de novo» (antes o esqueleto ficava mudo)
+  const tLento = setTimeout(() => { if (A && seq === A.seqConversa && !A.ver) A.chat.mostrarLento(() => { if (A && A.selId === id) { A.ver = null; A.selId = null; selecionar(id); } }); }, CONF.verLentoMs);
   try {
     const [ver, pag] = await Promise.all([
       A.api.rpcC("nx_cv_ver", { p_id: id }),
       A.api.rpcC("nx_cv_mensagens", { p_conversa: id, p_limite: 50 }),
-    ]);
+    ]).finally(() => clearTimeout(tLento));
     if (!A || seq !== A.seqConversa) return;
     if (A.fila.pronta) await A.fila.pronta;
     if (!A || seq !== A.seqConversa) return;        // a conversa pode ter mudado enquanto a fila abria
@@ -485,8 +537,10 @@ async function selecionar(id) {
     A.temMaisAntes = !!pag.tem_mais;
     A.marcaNovas = A.L.primeiraNaoLida(A.msgs, ver.conversa && ver.conversa.nao_lidas);   // «Mensagens novas» fica onde a leitura parou
     atualizarItemLista(A.ver.conversa);
-    A.ctx.titulo(nomeContato(ver.contato) || "Conversas");
-    A.chat.renderTudo({ rolar: "fim" });
+    // plano 1000 · CA-240: «Mariana Costa · Conversas» — com várias abas abertas dá para saber que esta é a central
+    A.ctx.titulo(nomeContato(ver.contato) ? `${nomeContato(ver.contato)} · Conversas` : "Conversas");
+    // CA-087: mais de 3 não lidas — abre no separador «Mensagens novas» (lendo de onde parou), com a pílula «Ir para o fim»
+    A.chat.renderTudo({ rolar: A.L.abrirNoSeparador(A.marcaNovas, ver.conversa && ver.conversa.nao_lidas) ? "separador" : "fim" });
     A.composer.definirConversa();
     A.lateral.render();
     if (A.focoAoAbrir === "composer") {            // veio do teclado (próxima, anterior, atender, resolver que avança): o campo já está pronto para digitar
@@ -502,13 +556,39 @@ async function selecionar(id) {
   }
 }
 
-async function abrirPorContato(contatoId) {
+/** plano 1000 · AS-272: `?texto=` (ex.: o convite «Enviar pela central») — no máximo 1000 caracteres, sem \r; vazio → "". */
+export function textoProntoDaRota(query) {
+  const t = query && typeof query.texto === "string" ? query.texto.replace(/\r/g, "").slice(0, 1000) : "";
+  return t.trim() ? t : "";
+}
+
+/** AS-272: o texto pronto só PREENCHE o campo da conversa aberta (a pessoa revisa e envia); nunca envia sozinho. Sem campo para escrever: copia. */
+function colocarTextoPronto(id, texto) {
+  if (!A) return;
+  if (A.selId === id && A.ver && A.podeEscrever && A.composer && typeof A.composer.devolverTexto === "function") {
+    A.composer.devolverTexto(texto);
+    A.ui.toast("Texto pronto no campo da conversa. Revise e envie quando quiser.", { tipo: "info" });
+    A.ctx.navegar(`#/conversas/${id}`, { substituir: true });     // tira o ?texto= do endereço (recarregar não cola de novo)
+  } else copiarTextoPronto(texto, { id });
+}
+
+/** AS-272: sem conversa aberta, o texto vai para a área de transferência e a pessoa é avisada (escolhe a conversa e cola). */
+function copiarTextoPronto(texto, { id = null, limparRota = false } = {}) {
+  if (!A) return;
+  Promise.resolve(A.ui.copiar(texto, { aviso: "Texto copiado. Abra a conversa da pessoa e cole no campo para enviar." })).catch(() => {});
+  if (id) A.ctx.navegar(`#/conversas/${id}`, { substituir: true });
+  else if (limparRota) A.ctx.navegar("#/conversas", { substituir: true });
+}
+
+async function abrirPorContato(contatoId, textoPronto = "") {
   try {
     const r = await A.api.rpcC("nx_contato_ver", { p_id: contatoId });
     const lista = (r && r.conversas) || [];
     const aberta = lista.find(c => c.status !== "resolvida") || lista.slice().sort((a, b) => String(b.aberta_em).localeCompare(String(a.aberta_em)))[0];
-    if (aberta) { A.ctx.navegar(`#/conversas/${aberta.id}`, { substituir: true }); return; }
+    const comTexto = textoPronto ? `?texto=${encodeURIComponent(textoPronto)}` : "";
+    if (aberta) { A.ctx.navegar(`#/conversas/${aberta.id}${comTexto}`, { substituir: true }); return; }
     A.ctx.navegar("#/conversas", { substituir: true });
+    if (textoPronto) copiarTextoPronto(textoPronto);
     novaConversa({ contato: r && r.contato ? r.contato : { id: contatoId } });
   } catch (e) {
     A.ui.toast(A.ui.mensagemErro(e), { tipo: "erro" });
@@ -537,6 +617,7 @@ function pick(o, ks) { const r = {}; for (const k of ks) if (o && k in o) r[k] =
 async function recarregarVer() {
   if (!A || !A.selId) return;
   const id = A.selId;
+  A.verEm = Date.now();                                    // CA-096: sem mudança na linha da lista, o pulso só relê o nx_cv_ver a cada 30 s
   try {
     const ver = await A.api.rpcC("nx_cv_ver", { p_id: id });
     if (!A || A.selId !== id) return;
@@ -584,35 +665,62 @@ function descartarMidiaLocalGravada() {
   const gravados = new Set(A.msgs.filter(m => !m.local && m.midia && m.midia.path).map(m => m.midia.path));
   if (gravados.size) A.msgs = A.msgs.filter(m => !(m.local && m.pedido && m.pedido.path && gravados.has(m.pedido.path)));
 }
-async function delta() {
+/** plano 1000 · CA-025: falhas seguidas do delta — a partir de 3 o chat mostra «Sem atualizar desde 14:02 · Tentar agora». */
+export const DELTA_FALHAS_AVISO = 3;
+/** CA-136: delta com tem_mais (voltou de uma queda com centenas de mensagens) pede o resto na hora, até 5 vezes. */
+const DELTA_REPETIR_MAX = 5;
+async function delta({ repeticao = 0 } = {}) {
   if (!A || !A.selId || !A.ver) return;
   const id = A.selId, seq = A.seqConversa;
+  let r;
   try {
-    const r = await A.api.rpcC("nx_cv_mensagens", { p_conversa: id, p_desde: A.agora, p_depois_id: A.ultimoId });
+    r = await A.api.rpcC("nx_cv_mensagens", { p_conversa: id, p_desde: A.agora, p_depois_id: A.ultimoId });
+  } catch {
+    // o próximo pulso tenta de novo — mas depois de 3 falhas seguidas a pessoa fica sabendo (a conversa parou de atualizar)
     if (!A || seq !== A.seqConversa) return;
-    const antes = A.msgs.length;
-    const tinhaUlt = A.L.ultimoId(A.msgs);
-    A.msgs = A.L.mesclarDelta(A.msgs, r.itens || []);
-    descartarMidiaLocalGravada();
-    A.conversasContato = r.conversas || A.conversasContato;
-    A.agora = r.agora || A.agora;
-    A.ultimoId = r.ultimo_id ?? A.L.ultimoId(A.msgs, A.ultimoId);
-    const chegouDoCliente = (r.itens || []).some(m => m.direcao === "in" && Number(m.id) > Number(tinhaUlt || 0));
-    if ((r.itens || []).length || A.msgs.length !== antes) A.chat.renderMensagens({ rolar: "novas" });
-    // D3: chegou mensagem do cliente na conversa aberta e à vista — marca como lida já (uma RPC por lote), sem esperar a lista e o
-    // nx_cv_ver trazerem nao_lidas (antes a conversa ficava «1 não lida» com o atendente olhando para ela)
-    if (chegouDoCliente && !document.hidden) marcarLida({ forcar: true });
-  } catch { /* o próximo pulso tenta de novo */ }
+    A.deltaFalhas = (A.deltaFalhas || 0) + 1;
+    if (A.deltaFalhas >= DELTA_FALHAS_AVISO) A.chat.mostrarAtraso(A.deltaOkEm || Date.now(), () => { A.chat.esconderAtraso(); aoPulso(); });
+    return;
+  }
+  if (!A || seq !== A.seqConversa) return;
+  if (A.deltaFalhas) { A.deltaFalhas = 0; A.chat.esconderAtraso(); }
+  A.deltaOkEm = Date.now();
+  const antes = A.msgs.length;
+  const tinhaUlt = A.L.ultimoId(A.msgs);
+  A.msgs = A.L.mesclarDelta(A.msgs, r.itens || []);
+  descartarMidiaLocalGravada();
+  A.conversasContato = r.conversas || A.conversasContato;
+  A.agora = r.agora || A.agora;
+  A.ultimoId = r.ultimo_id ?? A.L.ultimoId(A.msgs, A.ultimoId);
+  const chegouDoCliente = (r.itens || []).some(m => m.direcao === "in" && Number(m.id) > Number(tinhaUlt || 0));
+  if ((r.itens || []).length || A.msgs.length !== antes) A.chat.renderMensagens({ rolar: "novas" });
+  // D3: chegou mensagem do cliente na conversa aberta e à vista — marca como lida já (uma RPC por lote), sem esperar a lista e o
+  // nx_cv_ver trazerem nao_lidas (antes a conversa ficava «1 não lida» com o atendente olhando para ela)
+  if (chegouDoCliente && !document.hidden) marcarLida({ forcar: true });
+  if (r.tem_mais && (r.itens || []).length && repeticao < DELTA_REPETIR_MAX) await delta({ repeticao: repeticao + 1 });
 }
 
+/** CA-096: o que da conversa aberta a lista mostra — mudou, o nx_cv_ver relê; senão, só a cada 30 s (antes: a cada pulso de 3 s). */
+const VER_INTERVALO_MS = 30000;
+function marcaDaAberta() {
+  const it = A && A.itens.find(x => x.id === A.selId);
+  return it ? JSON.stringify([it.atualizado_em, it.ultima_msg_em, it.ultima_entrada_em, it.status, it.atribuida_a, it.departamento_id, it.etiquetas, it.negocio, it.nao_lidas, it.oculta]) : null;
+}
 let _pulsoT = null, _verT = null;
 function aoPulso() {
   if (!A) return;
+  A.pulsoEm = Date.now();                       // CA-126: o diagnóstico diz quando foi o último pulso
   if (A.fila.itens.size) esvaziarFila();
   clearTimeout(_pulsoT);
   _pulsoT = setTimeout(async () => {
     if (!A) return;
     await Promise.all([carregarLista({}), delta()]);
+    if (!A || !A.selId) return;
+    // a marca é tirada logo depois de a lista chegar do servidor (o recarregarVer mexe na linha da lista; aqui ela é a do servidor)
+    const marca = marcaDaAberta();
+    const mudou = marca === null || marca !== A.marcaPulso || A.marcaPulsoId !== A.selId;
+    A.marcaPulso = marca; A.marcaPulsoId = A.selId;
+    if (!mudou && Date.now() - (A.verEm || 0) < VER_INTERVALO_MS) return;
     clearTimeout(_verT);
     _verT = setTimeout(() => recarregarVer(), 800);
   }, 250);
@@ -627,6 +735,8 @@ async function marcarLida({ forcar = false } = {}) {
   const agora = Date.now();
   if (!forcar && _lida.id === id && agora - _lida.em < 1500) return;
   const conv = A.ver.conversa;
+  // plano 1000 · CA-132 (parte da tela do CA-001): quem só lê, ou espia a conversa de um colega, não zera as não lidas de quem atende
+  if (!A.podeEscrever || (conv && conv.atribuida_a && A.eu && conv.atribuida_a !== A.eu.id)) return;
   const itemTinha = A.itens.some(x => x.id === id && x.nao_lidas > 0);
   if (!forcar && !(conv.nao_lidas > 0) && !itemTinha) return;
   _lida = { id, em: agora };
@@ -747,6 +857,8 @@ async function executar(promessa, { ok, botao } = {}) {
 
 function tratarErro(e) {
   const ui = A.ui;
+  // CA-126: os últimos erros (só o código e a hora) entram no «Copiar diagnóstico»
+  A.errosRecentes = [...(A.errosRecentes || []), { em: Date.now(), codigo: (e && e.codigo) || "erro" }].slice(-10);
   if (e && e.codigo === "ja_existe_aberta" && e.hint && /^\d+$/.test(String(e.hint))) {
     const outra = Number(e.hint);
     // a aberta pode estar com um colega (invisível para quem pediu — é o caso do nx_cv_nova):
@@ -775,9 +887,10 @@ const acoes = {
     const r = await executar(A.api.rpcC("nx_cv_atribuir", { p_conversa: A.selId, p_conta: A.eu.id }), { botao, ok: "Conversa com você." });
     if (r) { trocarConversa(r); delta(); recarregarVer(); }
   },
-  async assumirIA(botao) {
+  /** horas (CA-227): null = o prazo padrão do canal; 1, até amanhã 8h…; 0 = até alguém devolver (o servidor grava «infinity»). */
+  async assumirIA(botao, { horas = null } = {}) {
     if (!A?.selId || A.ver?.conversa?.canal?.provedor !== "codewords") return;
-    const r = await executar(A.api.rpcC("nx_cv_ia_pausar", { p_conversa: A.selId, p_horas: null }), { botao });
+    const r = await executar(A.api.rpcC("nx_cv_ia_pausar", { p_conversa: A.selId, p_horas: horas }), { botao });
     if (r && A) {
       A.iaEstado = r; A.iaEstadoEm = Date.now(); A.chat.renderCabecalho();
       let atribuida = true;
@@ -786,7 +899,8 @@ const acoes = {
         if (dono) trocarConversa(dono); else atribuida = false;
       }
       delta(); carregarLista({});
-      A.ui.toast(atribuida ? "Você assumiu a conversa. A IA volta conforme o prazo configurado." : "A IA foi pausada; não foi possível atribuir a conversa a você.", { tipo: atribuida ? "ok" : "info" });
+      const prazo = horas === 0 ? "A IA só volta quando alguém devolver." : horas ? `A IA volta em ${horas} ${horas === 1 ? "hora" : "horas"}.` : "A IA volta conforme o prazo configurado.";
+      A.ui.toast(atribuida ? `Você assumiu a conversa. ${prazo}` : "A IA foi pausada; não foi possível atribuir a conversa a você.", { tipo: atribuida ? "ok" : "info" });
     }
   },
   async devolverIA(botao) {
@@ -823,14 +937,28 @@ const acoes = {
         return;
       }
     }
-    const r = await executar(A.api.rpcC("nx_cv_status", { p_conversa: A.selId, p_status: novo }), { botao, ok: textos[novo] });
-    if (r) { trocarConversa(r); delta(); recarregarVer(); carregarLista({}); }
+    // plano 1000 · CA-230: reaberta na aba Resolvidas — a conversa sai da lista; o aviso diz para onde ela foi e leva até lá
+    const daResolvidas = novo === "aberta" && A.aba === "resolvidas";
+    const r = await executar(A.api.rpcC("nx_cv_status", { p_conversa: A.selId, p_status: novo }), { botao, ok: daResolvidas ? null : textos[novo] });
+    if (r) {
+      trocarConversa(r); delta(); recarregarVer(); carregarLista({});
+      if (daResolvidas && A) {
+        const destino = A.L.abaDe({ ...r, status: r.status || "aberta" }, A.eu && A.eu.id);
+        const rot = (A.L.ABAS.find(x => x.id === destino) || {}).rotulo || "Todas abertas";
+        const t = A.ui.toast(`Reaberta: agora está em ${rot}.`, { tipo: "ok", ms: 8000 });
+        try {
+          const b = A.ui.h("button", { type: "button", class: "toast-acao", on: { click: () => { try { t.fechar(); } catch { /* ok */ } if (A) mudarLista({ aba: destino, busca: "" }); } } }, `Ir para ${rot}`);
+          if (t && t.el) t.el.insertBefore(b, t.el.querySelector(".toast-x"));
+        } catch { /* sem o botão o aviso continua valendo */ }
+      }
+    }
   },
   async ocultar(sim) {
     const ui = A.ui;
     if (sim) {
       const ok = await ui.confirmar({ titulo: "Ocultar e bloquear este contato?", perigo: true, rotulo: "Ocultar e bloquear",
-        texto: "O atendimento é resolvido e sai das listas. O que esse contato mandar depois fica guardado na aba Ocultas, sem avisar ninguém. Dá para desfazer." });
+        // plano 1000 · CA-151: diz ONDE se desfaz (antes só «Dá para desfazer»)
+        texto: "O atendimento é resolvido e sai das listas. O que esse contato mandar depois fica guardado na aba Ocultas, sem avisar ninguém. Para desfazer: aba Ocultas (em «Mais situações») → abra a conversa → ⋮ → Desfazer bloqueio." });
       if (!ok || !A) return;
     }
     const r = await executar(A.api.rpcC("nx_cv_ocultar", { p_conversa: A.selId, p_ocultar: !!sim }), { ok: sim ? "Conversa ocultada e contato bloqueado." : "Bloqueio desfeito. O contato volta a aparecer." });
@@ -855,6 +983,9 @@ const acoes = {
     return vez;
   },
   async criarEtiqueta(nome) {
+    // plano 1000 · CA-010: «urgente» com «Urgente» já existente (sem caixa nem acento) usa a que existe — nada de três etiquetas iguais
+    const igual = A.L.etiquetaIgual(A.base.etiquetas || [], nome);
+    if (igual) { A.ui.toast(`Já existia: usei a etiqueta «${igual.nome}».`, { tipo: "info" }); return igual; }
     const cores = A.ctx.paleta || [];
     const cor = cores.length ? cores[(A.base.etiquetas || []).length % cores.length] : null;
     const e = await A.api.rpcC("nx_etiqueta_salvar", { p_etiqueta: { nome, cor } });
@@ -866,6 +997,20 @@ const acoes = {
     if (r) { trocarConversa(r); recarregarVer(); }
   },
   novaConversa: (o) => novaConversa(o),
+  /* plano 1000 — lote conv-1 */
+  irParaMensagem: id => irParaMensagem(Number(id)),                         // CA-009: citação antiga carrega as páginas anteriores
+  devolverFila: conv => devolverFila(conv),                                  // CA-008: com Desfazer
+  offline: () => estaOffline(),                                              // CA-106/CA-107
+  enterQuebra: () => lerPreferencia("enter", "envia") === "quebra",         // CA-068
+  resolverLote: ids => resolverLote(ids),                                    // CA-046
+  lidaLote: ids => lidaLote(ids),
+  /* plano 1000 — lote conv-2 */
+  transferirLote: ids => transferirLote(ids),                                // CA-046 (conv-2): transferir e etiquetar as marcadas
+  etiquetarLote: ids => etiquetarLote(ids),
+  lidaComDesfazer: id => lidaComDesfazer(id),                                // CA-109: deslizar a linha
+  exportar: () => exportarConversa(),                                        // CA-232
+  mostrarSistema: () => lerPreferencia("sistema", "1") !== "0",              // CA-231
+  definirMostrarSistema: sim => gravarPreferencia("sistema", sim ? "1" : "0"),
   enviar: (...a) => enviar(...a),
   reenviarLocal: (m) => reenviarLocal(m),
   podeCancelarEnvio: m => !!(A && m && A.envios.has(m.id)),
@@ -975,26 +1120,277 @@ async function transferir() {
     deps.map(d => ui.h("option", { value: d.id, selected: d.id === dep }, d.nome)));
   const avisoMinhas = ui.h("p", { class: "aviso aviso-aten cv-tr-aviso", role: "status", hidden: true }, ui.icone("info"),
     ui.h("span", null, "A conversa sai da sua aba Minhas. Por 7 segundos dá para desfazer no aviso."));
-  const conferir = () => { avisoMinhas.hidden = !(conta && conta === eu && (sPessoa.value || "") !== eu); };
+  // plano 1000 · CA-026: a pessoa escolhida não atende o departamento escolhido — marca na lista e avisa antes de confirmar
+  const avisoDep = ui.h("p", { class: "aviso aviso-aten cv-tr-dep-aviso", role: "status", hidden: true }, ui.icone("alerta"), ui.h("span", null, ""));
+  const nomeOpcao = u => `${u.id === eu ? `${u.nome} (você)` : u.nome}`;
+  const conferir = () => {
+    avisoMinhas.hidden = !(conta && conta === eu && (sPessoa.value || "") !== eu);
+    const depId = deps.length ? (sDep.value || null) : null;
+    for (const op of sPessoa.querySelectorAll("option")) {
+      const u = pessoas.find(x => String(x.id) === String(op.value));
+      if (u) op.textContent = depId && !A.L.atendeDepartamento(u, depId) ? `${nomeOpcao(u)} (não atende este departamento)` : nomeOpcao(u);
+    }
+    const u = pessoas.find(x => String(x.id) === String(sPessoa.value));
+    const fora = !!(u && depId && !A.L.atendeDepartamento(u, depId));
+    avisoDep.hidden = !fora;
+    if (fora) avisoDep.lastChild.textContent = `${u.nome} não atende ${deps.find(d => d.id === depId)?.nome || "este departamento"}: a conversa vai para ${u.nome} mesmo assim.`;
+  };
   sPessoa.addEventListener("change", conferir);
+  sDep.addEventListener("change", conferir);
+  // CA-055: equipe grande (mais de 10 pessoas) ganha busca acima da lista
+  const buscaPessoa = pessoas.length > 10 ? ui.h("input", { type: "search", id: "cv-tr-busca", class: "cv-tr-busca", placeholder: "Buscar pessoa", "aria-label": "Buscar pessoa", "aria-controls": "cv-tr-pessoa", autocomplete: "off" }) : null;
+  if (buscaPessoa) buscaPessoa.addEventListener("input", () => {
+    const q = A.L.semAcento(buscaPessoa.value.trim());
+    for (const op of sPessoa.querySelectorAll("option")) { if (!op.value) continue; const ok = !q || A.L.semAcento(op.textContent).includes(q); op.hidden = !ok; op.disabled = !ok && op.value !== sPessoa.value; }
+  });
+  // CA-054: recado opcional para quem recebe (vira nota interna «Transferência: …»)
+  const recado = ui.h("textarea", { id: "cv-tr-recado", rows: 2, maxlength: 500, placeholder: "Ex.: quer remarcar para sexta de manhã" });
   conferir();
   const corpo = ui.h("div", { class: "pilha" },
-    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-pessoa" }, "Pessoa"), sPessoa),
+    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-pessoa" }, "Pessoa"), buscaPessoa, sPessoa),
     deps.length ? ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-dep" }, "Departamento"), sDep) : null,
-    avisoMinhas,
+    avisoMinhas, avisoDep,
+    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-tr-recado" }, "Recado para quem recebe (opcional)"), recado),
     ui.h("p", { class: "sub" }, "Quem recebe é avisado no sino. Fica registrado no histórico da conversa."));
   const escolha = await ui.modal({
     titulo: "Transferir conversa", corpo, largura: "p",
     acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Transferir", tipo: "primario", fn: () => ({
       conta: sPessoa.value || null,
       dep: deps.length && sDep.value && sDep.value !== conv.departamento_id ? sDep.value : null,
+      recado: String(recado.value || "").trim(),
     }) }],
   });
   if (!escolha || !A || !A.ver || A.ver.conversa.id !== conv.id) return;
   if ((escolha.conta || null) === (conv.atribuida_a || null) && !escolha.dep) { ui.toast("Nada mudou: a conversa já está com quem você escolheu.", { tipo: "info" }); return; }
   await transferirComDesfazer(conv, escolha);
 }
-async function transferirComDesfazer(conv, { conta, dep }) {
+/** plano 1000 · CA-008: «Devolver para a fila» pelo mesmo caminho do Transferir (Desfazer de 7 s; nada vai ao servidor antes). */
+async function devolverFila(conv) {
+  if (!A || !conv) return;
+  const nome = nomeContato((A.ver && A.ver.contato) || conv.contato) || "Conversa";
+  await transferirComDesfazer(conv, { conta: null, dep: null, texto: `Devolvida para a fila · ${nome}` });
+}
+
+/** CA-046: resolver várias de uma vez — a tela resolve na hora e UM «Desfazer» devolve todas; o servidor só ouve quando o aviso fecha
+    (um nx_cv_status por conversa, em série). A conversa aberta entre elas segue o caminho de sempre. */
+async function resolverLote(ids) {
+  if (!A || !ids || !ids.length) return;
+  const lista = ids.map(id => A.itens.find(x => x.id === id)).filter(c => c && c.status !== "resolvida" && !_pendResolver.has(c.id));
+  if (!lista.length) { aviso("Nada para resolver: as escolhidas já estão resolvidas."); return; }
+  const api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id;
+  const naMesmaEmpresa = () => !!A && (A.ctx.cliente && A.ctx.cliente.id) === cliente;
+  // (revisão 13/10: guarda a última mensagem do cliente vista no clique — quem escrever durante o «Desfazer» não é resolvido por cima,
+  // como no Resolver de uma conversa só; vale também para o deslizar da lista, que passa por aqui)
+  const pends = lista.map(c => [c.id, { antes: { status: c.status, aguardando: !!c.aguardando, nao_lidas: Number(c.nao_lidas) || 0 }, cancelado: false,
+    entradaAntes: Date.parse(c.ultima_entrada_em || "") || 0 }]);
+  const voltar = () => {
+    for (const [id, p] of pends) { if (p.cancelado) continue; p.cancelado = true; if (_pendResolver.get(id) === p) _pendResolver.delete(id); }
+    if (!naMesmaEmpresa()) return;
+    for (const [id, p] of pends) { if (A.selId === id) trocarConversa({ id, ...p.antes }); else atualizarItemLista({ id, ...p.antes }); }
+    carregarLista({});
+  };
+  await A.ui.acaoComDesfazer({
+    texto: `${lista.length} ${lista.length === 1 ? "conversa resolvida" : "conversas resolvidas"}`,
+    aplicar: () => {
+      for (const [id, p] of pends) { _pendResolver.set(id, p); if (A.selId === id) trocarConversa({ id, status: "resolvida" }); else atualizarItemLista({ id, status: "resolvida" }); }
+      A.itens = itensComPendencia(A.itens);
+      A.lista.render();
+    },
+    firmar: async ({ saindo = false } = {}) => {
+      let erro = null;
+      const escreveram = [];
+      for (const [id, p] of pends) {
+        if (p.cancelado) continue;
+        if (!saindo) {
+          let lido = null;
+          try { lido = await api.rpc("nx_cv_ver", { p_cliente: cliente, p_id: id }); } catch { /* sem a leitura, o Resolver vale */ }
+          if (p.cancelado) continue;
+          const c = lido && lido.conversa;
+          if (c && (Date.parse(c.ultima_entrada_em || "") || 0) > p.entradaAntes) {
+            p.cancelado = true;
+            if (_pendResolver.get(id) === p) _pendResolver.delete(id);
+            escreveram.push(nomeContato(c.contato) || "Uma conversa");
+            if (naMesmaEmpresa()) { if (A.selId === id) trocarConversa(c); else atualizarItemLista(c); }
+            continue;
+          }
+        }
+        p.firmando = true;
+        try { await api.rpc("nx_cv_status", { p_cliente: cliente, p_conversa: id, p_status: "resolvida" }, saindo ? { keepalive: true } : {}); }
+        catch (e) { erro = erro || e; p.firmando = false; if (_pendResolver.get(id) === p) _pendResolver.delete(id); p.cancelado = true; if (naMesmaEmpresa()) atualizarItemLista({ id, ...p.antes }); continue; }
+        if (_pendResolver.get(id) === p) _pendResolver.delete(id);
+        p.cancelado = true;
+      }
+      if (escreveram.length && A) A.ui.toast(escreveram.length === 1 ? `${escreveram[0]} escreveu de novo: a conversa continua aberta.`
+        : `${escreveram.length} pessoas escreveram de novo: essas conversas continuam abertas.`, { tipo: "info" });
+      if (naMesmaEmpresa()) { carregarLista({}); if (A.selId && pends.some(([id]) => id === A.selId)) recarregarVer(); }
+      if (erro) throw erro;
+    },
+    reverter: voltar,
+  });
+}
+
+/** CA-046: marcar várias como lidas (nx_cv_marcar_lida, em série; sem recibo ao cliente — ninguém leu de verdade a conversa). */
+async function lidaLote(ids) {
+  if (!A || !ids || !ids.length) return;
+  const E = A;
+  let ok = 0;
+  for (const id of ids) {
+    try { await E.api.rpcC("nx_cv_marcar_lida", { p_conversa: id }); ok++; if (A === E) { const it = A.itens.find(x => x.id === id); if (it) it.nao_lidas = 0; } }
+    catch (e) { if (A === E) tratarErro(e); break; }
+  }
+  if (A !== E) return;
+  A.lista.render();
+  carregarLista({});
+  A.ui.toast(`${ok} ${ok === 1 ? "conversa marcada" : "conversas marcadas"} como lida${ok === 1 ? "" : "s"}.`, { tipo: "ok" });
+}
+
+/** plano 1000 · CA-046 (conv-2): transferir as conversas marcadas de uma vez — escolhe pessoa/departamento, a tela muda na hora e UM
+    «Desfazer» devolve todas; o servidor só ouve (um nx_cv_atribuir por conversa, em série) quando o aviso fecha. → true se confirmou. */
+async function transferirLote(ids) {
+  if (!A || !ids || !ids.length) return false;
+  const ui = A.ui;
+  const lista = ids.map(id => A.itens.find(x => x.id === id)).filter(Boolean);
+  if (!lista.length) return false;
+  const pessoas = (A.base.usuarios || []).filter(u => u.papel !== "leitura" && u.aprovado !== false);
+  const deps = A.base.departamentos || [];
+  const eu = A.eu && A.eu.id;
+  const sPessoa = ui.h("select", { class: "sel", id: "cv-trl-pessoa" }, ui.h("option", { value: "" }, "Sem responsável (fila do departamento)"),
+    pessoas.map(u => ui.h("option", { value: u.id }, u.id === eu ? `${u.nome} (você)` : u.nome)));
+  const sDep = ui.h("select", { class: "sel", id: "cv-trl-dep" }, ui.h("option", { value: "" }, "Manter o departamento de cada uma"), deps.map(d => ui.h("option", { value: d.id }, d.nome)));
+  const corpo = ui.h("div", { class: "pilha" },
+    ui.h("p", { class: "sub" }, `${lista.length} ${lista.length === 1 ? "conversa marcada" : "conversas marcadas"}. Por 7 segundos dá para desfazer no aviso.`),
+    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-trl-pessoa" }, "Pessoa"), sPessoa),
+    deps.length ? ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-trl-dep" }, "Departamento"), sDep) : null);
+  const escolha = await ui.modal({ titulo: `Transferir ${lista.length} ${lista.length === 1 ? "conversa" : "conversas"}`, corpo, largura: "p",
+    acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Transferir", tipo: "primario", fn: () => ({ conta: sPessoa.value || null, dep: deps.length && sDep.value ? sDep.value : null }) }] });
+  if (!escolha || !A) return false;
+  const u = escolha.conta ? pessoas.find(x => x.id === escolha.conta) : null;
+  const d = escolha.dep ? deps.find(x => x.id === escolha.dep) : null;
+  const api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id;
+  const naMesmaEmpresa = () => !!A && (A.ctx.cliente && A.ctx.cliente.id) === cliente;
+  const pends = lista.map(c => [c.id, { antes: { atribuida_a: c.atribuida_a || null, atribuida_nome: c.atribuida_nome || null, departamento_id: c.departamento_id || null },
+    depois: { atribuida_a: escolha.conta, atribuida_nome: u ? u.nome : null, ...(d ? { departamento_id: d.id } : {}) }, cancelado: false }]);
+  const voltar = () => {
+    for (const [id, p] of pends) { if (p.cancelado) continue; p.cancelado = true; if (_pendTransferir.get(id) === p) _pendTransferir.delete(id); }
+    if (!naMesmaEmpresa()) return;
+    for (const [id, p] of pends) { if (A.selId === id) trocarConversa({ id, ...p.antes }); else atualizarItemLista({ id, ...p.antes }); }
+    carregarLista({});
+  };
+  const para = u ? (u.id === eu ? "você" : u.nome) : d ? `a fila de ${d.nome}` : "a fila";
+  // sem await: o aviso com Desfazer dura 7 s e a lista sai do modo seleção já (o resultado chega pelo próprio aviso)
+  Promise.resolve(ui.acaoComDesfazer({
+    texto: `${lista.length} ${lista.length === 1 ? "conversa transferida" : "conversas transferidas"} para ${para}`,
+    aplicar: () => {
+      for (const [id, p] of pends) { _pendTransferir.set(id, p); if (A.selId === id) trocarConversa({ id, ...p.depois }); else atualizarItemLista({ id, ...p.depois }); }
+      A.itens = itensComPendencia(A.itens);
+      A.lista.render();
+    },
+    firmar: async ({ saindo = false } = {}) => {
+      let erro = null;
+      for (const [id, p] of pends) {
+        if (p.cancelado) continue;
+        p.firmando = true;
+        try { await api.rpc("nx_cv_atribuir", { p_cliente: cliente, p_conversa: id, p_conta: escolha.conta, p_departamento: escolha.dep }, saindo ? { keepalive: true } : {}); }
+        catch (e) { erro = erro || e; if (naMesmaEmpresa()) atualizarItemLista({ id, ...p.antes }); }
+        if (_pendTransferir.get(id) === p) _pendTransferir.delete(id);
+        p.cancelado = true;
+      }
+      if (naMesmaEmpresa()) { carregarLista({}); if (A.selId && pends.some(([id]) => id === A.selId)) recarregarVer(); }
+      if (erro) throw erro;
+    },
+    reverter: voltar,
+  })).then(r => { if (r && r.estado === "falhou" && r.erro && A) tratarErro(r.erro); }, e => { if (A) tratarErro(e); });
+  return true;
+}
+
+/** CA-046 (conv-2): acrescentar etiquetas às marcadas (cada uma mantém as que já tinha) — um nx_cv_etiquetas por conversa. → true se confirmou. */
+async function etiquetarLote(ids) {
+  if (!A || !ids || !ids.length) return false;
+  const ui = A.ui;
+  const etqs = A.base.etiquetas || [];
+  if (!etqs.length) { ui.toast("Ainda não há etiquetas. Crie a primeira dentro de uma conversa (⋮ → Etiquetas…).", { tipo: "info" }); return false; }
+  const caixas = etqs.map(e => ({ e, inp: ui.h("input", { type: "checkbox", id: `cv-etl-${e.id}`, value: e.id }) }));
+  const corpo = ui.h("div", { class: "pilha" },
+    ui.h("p", { class: "sub" }, `Marque as etiquetas para acrescentar a ${ids.length} ${ids.length === 1 ? "conversa" : "conversas"} (as que elas já têm continuam).`),
+    ui.h("div", { class: "multi-opcoes" }, caixas.map(({ e, inp }) => ui.h("label", { class: "chip-check", for: `cv-etl-${e.id}` }, inp, ui.etiqueta(e)))));
+  const escolhidas = await ui.modal({ titulo: "Etiquetar as conversas marcadas", corpo, largura: "p",
+    acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Etiquetar", tipo: "primario", fn: api => {
+      const v = caixas.filter(x => x.inp.checked).map(x => x.e.id);
+      if (!v.length) { api.erro("Marque pelo menos uma etiqueta."); return false; }
+      return v;
+    } }] });
+  if (!escolhidas || !A) return false;
+  const E = A;
+  let ok = 0;
+  for (const id of ids) {
+    const it = E.itens.find(x => x.id === id);
+    const atuais = (it && it.etiquetas) || [];
+    const novas = [...new Set([...atuais, ...escolhidas])];
+    if (novas.length === atuais.length) { ok++; continue; }
+    try {
+      const r = await E.api.rpcC("nx_cv_etiquetas", { p_conversa: id, p_etiquetas: novas });
+      ok++;
+      if (A === E) { if (A.selId === id && r) trocarConversa(r); else atualizarItemLista(r && r.id ? r : { id, etiquetas: novas }); }
+    } catch (e) { if (A === E) tratarErro(e); break; }
+  }
+  if (A !== E) return true;
+  carregarLista({});
+  ui.toast(`${ok} ${ok === 1 ? "conversa etiquetada" : "conversas etiquetadas"}.`, { tipo: "ok" });
+  return true;
+}
+
+/** CA-109: marcar como lida pelo gesto, com Desfazer — a tela zera o contador na hora e o nx_cv_marcar_lida só vai quando o aviso fecha
+    (sem recibo ao cliente: ninguém leu a conversa de verdade). */
+async function lidaComDesfazer(id) {
+  if (!A) return;
+  const it = A.itens.find(x => x.id === id);
+  if (!it || !(Number(it.nao_lidas) > 0)) return;
+  const antes = Number(it.nao_lidas) || 0, E = A, api = A.api, cliente = A.ctx.cliente && A.ctx.cliente.id;
+  await A.ui.acaoComDesfazer({
+    texto: `Marcada como lida · ${nomeContato(it.contato) || "Conversa"}`,
+    aplicar: () => { atualizarItemLista({ id, nao_lidas: 0 }); },
+    firmar: async ({ saindo = false } = {}) => {
+      await api.rpc("nx_cv_marcar_lida", { p_cliente: cliente, p_conversa: id }, saindo ? { keepalive: true } : {});
+      if (A === E) carregarLista({});
+    },
+    reverter: () => { if (A === E) { atualizarItemLista({ id, nao_lidas: antes }); carregarLista({}); } },
+  });
+}
+
+/** CA-232: «Exportar conversa (.txt)» — carrega as páginas anteriores (até 40, ~2.000 mensagens) e baixa «data hora · quem: texto», sem notas internas. */
+const EXPORTAR_PAGINAS = 40;
+async function exportarConversa() {
+  if (!A || !A.ver || !A.selId) return;
+  const E = A, id = A.selId;
+  let paginas = 0;
+  if (A.temMaisAntes) A.ui.anunciar("Preparando a exportação: carregando as mensagens anteriores…");
+  while (A === E && A.selId === id && A.temMaisAntes && paginas < EXPORTAR_PAGINAS) {
+    const antes = A.msgs.length;
+    await carregarAntes();
+    paginas++;
+    if (!A || A.msgs.length === antes) break;
+  }
+  if (A !== E || A.selId !== id || !A.ver) return;
+  const nome = nomeContato(A.ver.contato) || "Cliente";
+  const conv = A.ver.conversa || {};
+  const titulo = `Conversa com ${nome}${conv.protocolo ? ` · protocolo ${conv.protocolo}` : ""} · exportada em ${A.ui.dataHoraBR(new Date().toISOString())}`;
+  const texto = A.L.textoExportacao(A.msgs, { contato: nome, titulo });
+  const n = A.msgs.filter(m => m && !m.local && m.tipo !== "nota").length;
+  let url = null;
+  try {
+    url = URL.createObjectURL(new Blob([texto], { type: "text/plain;charset=utf-8" }));
+    const arq = `conversa-${A.L.semAcento(nome).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "cliente"}-${A.L.diaSP(Date.now())}.txt`;
+    const a = A.ui.h("a", { href: url, download: arq, hidden: true });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    A.ui.toast(`Conversa exportada: ${n} ${n === 1 ? "mensagem" : "mensagens"}${A.temMaisAntes ? " (as mais antigas ficaram de fora)" : ""}, sem notas internas.`, { tipo: "ok" });
+  } catch (e) {
+    A.ui.toast("Não foi possível gerar o arquivo neste navegador.", { tipo: "erro" });
+  } finally { if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch { /* ok */ } }, 4000); }
+}
+
+async function transferirComDesfazer(conv, { conta, dep, texto = null, recado = "" }) {
   const id = conv.id;
   const u = conta ? (A.base.usuarios || []).find(x => x.id === conta) : null;
   const d = dep ? (A.base.departamentos || []).find(x => x.id === dep) : null;
@@ -1017,7 +1413,7 @@ async function transferirComDesfazer(conv, { conta, dep }) {
     if (A.selId === id) recarregarVer();
   };
   await A.ui.acaoComDesfazer({
-    texto: `Transferida para ${para} · ${nome}`,
+    texto: texto || `Transferida para ${para} · ${nome}`,
     // só a tela: nada vai ao servidor antes de o aviso fechar
     aplicar: () => {
       _pendTransferir.set(id, pend);
@@ -1028,6 +1424,12 @@ async function transferirComDesfazer(conv, { conta, dep }) {
     firmar: async ({ saindo = false } = {}) => {
       if (pend.cancelado) return;
       pend.firmando = true;
+      // CA-054: o recado para quem recebe vira nota interna «Transferência: …». Gravado ANTES do nx_cv_atribuir (revisão 13/10): depois
+      // da transferência quem transferiu pode deixar de enxergar a conversa (departamento/ver_todas) e a nota falhava, perdendo o recado
+      if (recado) {
+        try { await api.rpc("nx_cv_nota", { p_cliente: cliente, p_conversa: id, p_texto: `Transferência: ${recado}` }, saindo ? { keepalive: true } : {}); }
+        catch (e) { if (naMesmaEmpresa()) A.ui.toast(`O recado não foi gravado (${A.ui.mensagemErro(e)}); a transferência segue.`, { tipo: "erro" }); }
+      }
       let r;
       try { r = await api.rpc("nx_cv_atribuir", { p_cliente: cliente, p_conversa: id, p_conta: conta, p_departamento: dep }, saindo ? { keepalive: true } : {}); }
       catch (e) { if (saindo) voltarTela(); throw e; }      // fora do «saindo» quem devolve a tela é o próprio aviso (reverter)
@@ -1075,6 +1477,8 @@ function executarComando(id) {
     case "resolver": if (conversaParaAgir()) resolverComDesfazer(); break;
     case "nota": if (conversaParaAgir()) A.composer.alternarNota(); break;
     case "transferir": if (conversaParaAgir()) acoes.transferir(); break;
+    case "abrir_negocio": comandoAbrirNegocio(); break;                                // plano 1000 · CA-157
+    case "etiquetas": if (conversaParaAgir()) A.chat.abrirEtiquetas(); break;           // CA-158
     case "mover_baixo": A.lista.moverFoco(1); break;
     case "mover_cima": A.lista.moverFoco(-1); break;
     case "buscar": A.lista.focarBusca(); break;
@@ -1095,6 +1499,16 @@ async function irParaVizinha(dir) {
   if (id == null) { aviso(dir > 0 ? "Esta é a última conversa da lista." : "Esta é a primeira conversa da lista."); return; }
   A.focoAoAbrir = "composer";
   abrir(id);
+}
+
+/** plano 1000 · CA-157: Alt+Shift+O abre o negócio ligado à conversa (a gaveta do CRM); sem negócio ligado, diz isso. */
+function comandoAbrirNegocio() {
+  const conv = A.ver && A.ver.conversa;
+  if (!conv || !A.selId) { aviso("Abra uma conversa para usar este atalho."); return; }
+  const id = conv.negocio && conv.negocio.id;
+  if (!id) { aviso("Esta conversa não tem negócio ligado. Ligue um na lateral («Ligar a este atendimento»)."); return; }
+  if (typeof A.ctx.abrirNegocio !== "function") { aviso("O CRM não está disponível nesta conta."); return; }
+  A.ctx.abrirNegocio(id, { aoMudar: () => recarregarVer() });
 }
 
 /** Alt+Shift+A: a mesma regra do botão principal do cabeçalho (assumir; com a IA atendendo, pausa a IA e assume). */
@@ -1267,13 +1681,58 @@ function abrirAjudaTeclado() {
   const campoAvancar = ui.campo({ tipo: "interruptor", nome: "avancar", rotulo: "Ao resolver, abrir a próxima conversa", valor: A.avancar });
   const entrada = campoAvancar.querySelector("input");
   if (entrada) entrada.addEventListener("change", () => A.acoes.definirAvancar(entrada.checked));
+  // plano 1000 · CA-068: «Ctrl+Enter envia» (Enter quebra a linha) — lembrado por navegador; a dica do campo acompanha
+  const campoEnter = ui.campo({ tipo: "interruptor", nome: "enter_quebra", rotulo: "Enter quebra a linha (Ctrl+Enter envia)", valor: A.acoes.enterQuebra() });
+  const entradaEnter = campoEnter.querySelector("input");
+  if (entradaEnter) entradaEnter.addEventListener("change", () => {
+    gravarPreferencia("enter", entradaEnter.checked ? "quebra" : "envia");
+    if (A && A.composer) A.composer.atualizar();
+    A.ui.toast(entradaEnter.checked ? "Enter quebra a linha; Ctrl+Enter envia." : "Enter envia; Shift+Enter quebra a linha.", { tipo: "info" });
+  });
+  // plano 1000 · CA-160: filtro da folha (a lista cresce) e «Imprimir» (o CSS de impressão mostra só a folha)
+  const filtro = h("input", { type: "search", class: "cv-teclas-filtro", placeholder: "Filtrar atalhos (ex.: nota, resolver)", "aria-label": "Filtrar atalhos", autocomplete: "off" });
+  const nada = h("p", { class: "sub cv-teclas-nada", hidden: true }, "Nenhum atalho com esse termo.");
+  const extras = [
+    { teclas: "Ctrl+/", rotulo: "No campo de mensagem: respostas rápidas no meio do texto" },
+  ];
+  const linhaAtalho = a => h("div", { class: "cv-teclas-item", dataset: { busca: A.L.semAcento(`${a.teclas} ${a.rotulo} ${a.grupo || ""}`) } }, h("dt", null, teclas(a.teclas)), h("dd", null, a.rotulo));
+  const secoes = grupos.map(g => h("section", { class: "cv-teclas-grupo" },
+    h("h3", { class: "rotulo" }, g),
+    h("dl", { class: "cv-teclas-lista" }, A.L.ACORDES.filter(a => a.grupo === g).map(linhaAtalho), g === "Atender" ? extras.map(linhaAtalho) : null)));
+  filtro.addEventListener("input", () => {
+    const q = A.L.semAcento(filtro.value.trim());
+    let n = 0;
+    for (const s of secoes) {
+      let ns = 0;
+      for (const it of s.querySelectorAll(".cv-teclas-item")) { const ok = !q || it.dataset.busca.includes(q); it.hidden = !ok; if (ok) { n++; ns++; } }
+      s.hidden = ns === 0;
+    }
+    nada.hidden = n > 0;
+  });
+  // CA-144: no número do CodeWords (aparelho) não existe «responder citando» — explicado uma vez, aqui
+  const temCw = ((A.base && A.base.canais) || []).some(c => c && c.provedor === "codewords");
+  const notaCw = temCw ? h("p", { class: "sub cv-teclas-cw" }, "Nos números do CodeWords (aparelho) não dá para responder citando: a mensagem vai normal, sem a citação.") : null;
+  // CA-126: «Copiar diagnóstico» para o suporte — estado da tela sem texto de mensagem, token ou telefone
+  const btDiag = h("button", { type: "button", class: "bt bt-fant bt-p cv-diag" }, ui.icone("copiar"), "Copiar diagnóstico para o suporte");
+  btDiag.addEventListener("click", () => { ui.copiar(diagnostico(), { aviso: "Diagnóstico copiado: cole na conversa com o suporte." }); });
+  const btImprimir = h("button", { type: "button", class: "bt bt-fant bt-p cv-imprimir" }, "Imprimir");
+  btImprimir.addEventListener("click", () => { try { document.documentElement.classList.add("cv-imprimindo-atalhos"); window.print(); } catch { /* sem impressão */ } finally { document.documentElement.classList.remove("cv-imprimindo-atalhos"); } });
   const corpo = h("div", { class: "pilha cv-teclas" },
     h("p", { class: "sub" }, "Os acordes com Alt valem também com o cursor no campo de mensagem. As letras soltas só valem fora dos campos de texto."),
-    grupos.map(g => h("section", { class: "cv-teclas-grupo" },
-      h("h3", { class: "rotulo" }, g),
-      h("dl", { class: "cv-teclas-lista" }, A.L.ACORDES.filter(a => a.grupo === g).flatMap(a => [h("dt", null, teclas(a.teclas)), h("dd", null, a.rotulo)])))),
-    campoAvancar);
+    filtro, nada, secoes, notaCw,
+    campoAvancar, campoEnter,
+    h("div", { class: "linha cv-teclas-rod" }, btImprimir, btDiag));
   ui.modal({ titulo: "Atalhos da central de conversas", corpo, largura: "m", acoes: [{ rotulo: "Fechar", tipo: "primario" }] });
+}
+
+/** CA-126: o texto do «Copiar diagnóstico» (cv-logica.textoDiagnostico) com o estado desta tela. */
+function diagnostico() {
+  if (!A) return "";
+  return A.L.textoDiagnostico({
+    versao: A.ctx.versao || "", conta: A.ctx.sessao && A.ctx.sessao.conta && A.ctx.sessao.conta.id, cliente: A.ctx.cliente && A.ctx.cliente.id, aba: A.aba,
+    conversa: A.selId, fila: [...A.fila.itens.values()].map(x => ({ estado: x.estado })), deltaOkEm: A.deltaOkEm || null, deltaFalhas: A.deltaFalhas || 0,
+    pulsoEm: A.pulsoEm || null, erros: A.errosRecentes || [], online: !estaOffline(),
+  });
 }
 
 /** Ações na paleta de comandos (Ctrl/⌘+K) enquanto Conversas está aberta; só se o shell oferecer o registro (ctx.comandos.registrar, M18). */
@@ -1290,7 +1749,9 @@ function registrarComandos() {
     def("resolver", "Resolver a conversa aberta", "conversa resolver encerrar finalizar", () => executarComando("resolver"), "Alt+Shift+R");
     def("nota", "Nota interna na conversa", "conversa nota interna equipe", () => executarComando("nota"), "Alt+Shift+N");
     def("transferir", "Transferir a conversa aberta", "conversa transferir passar atendente departamento", () => executarComando("transferir"), "Alt+Shift+T");
+    def("etiquetas", "Etiquetas da conversa aberta", "conversa etiqueta marcar organizar", () => executarComando("etiquetas"), "Alt+Shift+E");
   }
+  def("negocio", "Abrir o negócio da conversa aberta", "conversa negocio oportunidade crm abrir", () => executarComando("abrir_negocio"), "Alt+Shift+O");
   def("atalhos", "Atalhos da central de conversas", "atalhos teclado ajuda conversas", () => abrirAjudaTeclado(), "?");
 }
 
@@ -1593,6 +2054,21 @@ async function filaIniciar() {
     // saído) — mas só 90 s depois do último pedido (filaDevidos): recarregar a página não pode repetir um envio que ainda está a caminho
     fila.itens.set(it.id, { ...it, estado: it.enviada_em ? "incerto" : "fila", proxima_em: 0 });
   }
+  // plano 1000 · CA-127: mensagens de OUTRA conta/empresa guardadas neste navegador (ninguém as via) — o admin fica sabendo e pode apagar;
+  // passados 7 dias elas saem sozinhas (filaDestino)
+  const deOutros = (guardados || []).filter(it => it && it.id && conta && cliente && (it.conta !== conta || it.cliente !== cliente) && A.L.filaDestino(it, { conta, cliente, agora }) === "pular");
+  if (deOutros.length && A.L.pode(A.ctx.papel, "admin")) {
+    const n = deOutros.length;
+    const t = A.ui.toast(`${n} ${n === 1 ? "mensagem de outra conta guardada" : "mensagens de outra conta guardadas"} neste navegador, esperando quem as escreveu entrar.`, { tipo: "info", ms: 12000 });
+    try {
+      const b = A.ui.h("button", { type: "button", class: "toast-acao", on: { click: () => {
+        try { t.fechar(); } catch { /* ok */ }
+        if (fila.db) for (const it of deOutros) reqIdb(lojaFila(fila.db, "readwrite").delete(it.id)).catch(() => {});
+        A && A.ui.toast(`${n} ${n === 1 ? "mensagem apagada" : "mensagens apagadas"} deste navegador.`, { tipo: "ok" });
+      } } }, "Apagar");
+      if (t && t.el) t.el.insertBefore(b, t.el.querySelector(".toast-x"));
+    } catch { /* sem o botão o aviso continua valendo */ }
+  }
   if (paradas.length) {
     const p = paradas[0];
     toastAbrir(A.ui, A.ctx, paradas.length === 1
@@ -1692,6 +2168,8 @@ function concluirBolha(it, msg) {
     if (msg && msg.id) { A.msgs = L.mesclarDelta(A.msgs, [msg]); A.ultimoId = L.ultimoId(A.msgs, A.ultimoId); }
     A.chat.renderMensagens({ rolar: "fim" });
     delta();
+    // plano 1000 · CA-246: o leitor de tela fica sabendo que saiu (o ✓ sozinho não é anunciado)
+    if (msg && msg.id && !msg.ambigua && msg.status !== "falhou") A.ui.anunciar("Mensagem enviada.");
   }
   carregarLista({});
 }
@@ -1722,6 +2200,7 @@ async function enviarTexto(o) {
       return { persistido: false };
     }
     atualizarBolha(it);
+    A.ui.anunciar("Sem internet: a mensagem ficou na fila e sai quando a conexão voltar.");   // CA-246
   }
   else transmitir(it);          // sem await: a tela não espera o servidor
   return { persistido };
@@ -1884,7 +2363,7 @@ function avisarEsperaReenvio(it) {
 }
 
 /* ============================================================ nova conversa */
-async function novaConversa({ contato = null } = {}) {
+async function novaConversa({ contato = null, telefone: telIni = null, nome: nomeIni = null } = {}) {
   const ui = A.ui, L = A.L;
   const canais = (A.base.canais || []);
   if (!A.podeEscrever) { ui.toast("Seu acesso é só de leitura.", { tipo: "info" }); return; }
@@ -1903,9 +2382,12 @@ async function novaConversa({ contato = null } = {}) {
   const alterna = ui.h("div", { class: "cv-alterna", role: "group", "aria-label": "Como escolher o contato" }, bBuscar, bDigitar);
 
   const busca = ui.h("input", { type: "search", id: "cv-nv-busca", placeholder: "Nome ou telefone", autocomplete: "off" });
-  const resultados = ui.h("div", { class: "cv-busca-contato", role: "list", "aria-live": "polite" });
+  // plano 1000 · CA-057: lista de verdade (<ul><li><button aria-pressed>): o botão continua botão para o leitor de tela
+  // CA-114: sem aria-live no container (cada busca lia os 8 nomes inteiros) — um status à parte diz só quantos vieram
+  const resultados = ui.h("div", { class: "cv-busca-contato" });
+  const statusBusca = ui.h("p", { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
   const blocoBusca = ui.h("div", { class: "pilha-p" },
-    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-nv-busca" }, A.ctx.vocab.contato || "Contato"), busca), resultados);
+    ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-nv-busca" }, A.ctx.vocab.contato || "Contato"), busca), statusBusca, resultados);
   const tel = ui.h("input", { type: "tel", id: "cv-nv-tel", placeholder: "(12) 99999-9999", inputmode: "tel", autocomplete: "off", "aria-describedby": "cv-nv-tel-ajuda" });
   const nome = ui.h("input", { type: "text", id: "cv-nv-nome", placeholder: "Opcional", maxlength: 160, autocomplete: "off" });
   // D13: máscara enquanto digita (só número do Brasil; «+» fica como foi digitado) e o erro no próprio campo ao sair dele
@@ -1949,29 +2431,61 @@ async function novaConversa({ contato = null } = {}) {
   bDigitar.addEventListener("click", () => { escolhido = null; desenharEscolhido(); trocarModo("digitar"); });
 
   let seq = 0;
+  const POR_PAGINA = 8;
+  /** Um contato da busca: o telefone completo ao lado do nome (homônimos «Maria» se distinguem — CA-238). */
+  const opcaoContato = c => {
+    const b = ui.h("button", { type: "button", class: "cv-contato-op", "aria-pressed": "false" },
+      ui.avatar(c.nome || c.telefone, c.id), ui.h("span", null, ui.h("b", null, nomeContato(c)), ui.h("small", { class: "mono" }, c.telefone ? ui.telBR(c.telefone) : "sem telefone")));
+    b.addEventListener("click", () => { escolhido = c; for (const x of resultados.querySelectorAll(".cv-contato-op")) x.setAttribute("aria-pressed", String(x === b)); desenharEscolhido(); });
+    return ui.h("li", null, b);
+  };
   const procurar = ui.debounce(async () => {
     const q = busca.value.trim();
     const meu = ++seq;
     ui.limpar(resultados);
+    statusBusca.textContent = "";
     if (q.length < 2) return;
     resultados.appendChild(ui.h("p", { class: "sub" }, "Procurando…"));
     try {
-      const r = await A.api.rpcC("nx_contatos_listar", { p_filtro: { busca: q }, p_pagina: 1, p_por_pagina: 8 });
+      const r = await A.api.rpcC("nx_contatos_listar", { p_filtro: { busca: q }, p_pagina: 1, p_por_pagina: POR_PAGINA });
       if (meu !== seq) return;
       ui.limpar(resultados);
       const itens = (r && r.itens) || [];
       if (!itens.length) {
+        statusBusca.textContent = "Nenhum contato encontrado.";
         resultados.appendChild(ui.h("p", { class: "sub" }, "Ninguém com esse nome ou telefone. "));
         const dig = L.normalizarTelefone(q);
         resultados.appendChild(ui.h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { tel.value = dig ? q : ""; nome.value = dig ? "" : q; trocarModo("digitar"); } } },
           ui.icone("mais"), "Digitar o telefone"));
         return;
       }
-      for (const c of itens) {
-        const b = ui.h("button", { type: "button", class: "cv-contato-op", role: "listitem", "aria-pressed": "false" },
-          ui.avatar(c.nome || c.telefone, c.id), ui.h("span", null, ui.h("b", null, nomeContato(c)), ui.h("small", null, c.telefone ? ui.telBR(c.telefone) : "sem telefone")));
-        b.addEventListener("click", () => { escolhido = c; for (const x of resultados.querySelectorAll(".cv-contato-op")) x.setAttribute("aria-pressed", String(x === b)); desenharEscolhido(); });
-        resultados.appendChild(b);
+      const ul = ui.h("ul", { class: "cv-contato-lista", "aria-label": "Contatos encontrados" });
+      for (const c of itens) ul.appendChild(opcaoContato(c));
+      resultados.appendChild(ul);
+      const total = Number(r && r.total);
+      const contar = () => { const n = ul.children.length; statusBusca.textContent = Number.isFinite(total) && total > n ? `${n} de ${total} contatos encontrados.` : `${n} ${n === 1 ? "contato encontrado" : "contatos encontrados"}.`; };
+      contar();
+      // CA-238: «Ver mais» traz a página seguinte (antes só os 8 primeiros: homônimos ficavam de fora)
+      let pagina = 1;
+      const temMais = () => (r && r.tem_mais === true) || (Number.isFinite(total) ? total > ul.children.length : itens.length === POR_PAGINA);
+      if (temMais()) {
+        const verMais = ui.h("button", { type: "button", class: "bt bt-fant bt-p cv-nv-mais" }, "Ver mais");
+        verMais.addEventListener("click", async () => {
+          const minha = seq;
+          verMais.disabled = true;
+          try {
+            const r2 = await A.api.rpcC("nx_contatos_listar", { p_filtro: { busca: q }, p_pagina: pagina + 1, p_por_pagina: POR_PAGINA });
+            if (minha !== seq) return;
+            pagina += 1;
+            const vistos = new Set([...ul.querySelectorAll(".cv-contato-op")].map(x => x));
+            const novos = ((r2 && r2.itens) || []);
+            for (const c of novos) ul.appendChild(opcaoContato(c));
+            contar();
+            const acabou = !novos.length || (r2 && r2.tem_mais === false) || (Number.isFinite(total) && ul.children.length >= total) || (!(r2 && "tem_mais" in r2) && novos.length < POR_PAGINA);
+            if (acabou || vistos.size === ul.children.length) verMais.remove(); else verMais.disabled = false;
+          } catch (e) { verMais.disabled = false; ui.toast(ui.mensagemErro(e), { tipo: "erro" }); }
+        });
+        resultados.appendChild(verMais);
       }
     } catch (e) {
       if (meu !== seq) return;
@@ -1981,14 +2495,36 @@ async function novaConversa({ contato = null } = {}) {
   }, 280);
   busca.addEventListener("input", procurar);
 
-  const corpo = ui.h("div", { class: "pilha" }, campoCanal, contato ? null : alterna, blocoEscolhido, blocoBusca, blocoDigitar,
-    ui.h("p", { class: "sub" }, "Em número da Meta (WhatsApp oficial), se o cliente não falou com a empresa nas últimas 24 h só vale um modelo aprovado — o seletor de modelos abre em seguida. Em número do CodeWords não há essa janela."));
+  // CA-056: o texto acompanha o número escolhido — Meta explica a janela e os modelos; CodeWords é um WhatsApp comum
+  const textoCanal = ui.h("p", { class: "sub cv-nv-regra" });
+  const explicarCanal = () => {
+    const k = canais.length > 1 ? canais.find(c => String(c.id) === String(sCanal.value)) : canais[0];
+    textoCanal.textContent = k && k.provedor === "codewords"
+      ? "Este número é um WhatsApp comum (CodeWords): a mensagem sai como texto normal, sem janela de 24 h e sem modelos."
+      : "Número da Meta (WhatsApp oficial): se o cliente não falou com a empresa nas últimas 24 h, só vale um modelo aprovado — o seletor de modelos abre em seguida.";
+  };
+  sCanal.addEventListener("change", explicarCanal);
+  explicarCanal();
+  // plano 1000 · CA-155: o contato já tem atendimento aberto por OUTRO número — aviso com «Abrir aquele» antes de criar a segunda conversa
+  const avisoOutro = ui.h("div", { class: "aviso aviso-aten cv-nv-outro", role: "status", hidden: true });
+  let avisadoOutro = null, apiModal = null;
+  const corpo = ui.h("div", { class: "pilha" }, campoCanal, contato || telIni ? null : alterna, blocoEscolhido, blocoBusca, blocoDigitar, avisoOutro, textoCanal);
   desenharEscolhido();
   if (contato) { blocoBusca.hidden = true; }
+  // CA-091 / CA-142: veio de uma busca por telefone (ou de um contato recebido): o número já entra digitado
+  if (telIni && !contato) { modo = "digitar"; tel.value = L.mascaraTelefone(String(telIni)); if (nomeIni) nome.value = String(nomeIni); blocoBusca.hidden = true; blocoDigitar.hidden = false; bBuscar.setAttribute("aria-pressed", "false"); bDigitar.setAttribute("aria-pressed", "true"); }
+
+  /** O atendimento aberto deste contato por outro número (nx_contato_ver), ou null. */
+  async function abertaEmOutroNumero(contatoId, canalId) {
+    try {
+      const r = await A.api.rpcC("nx_contato_ver", { p_id: contatoId });
+      return ((r && r.conversas) || []).find(c => c && c.status !== "resolvida" && c.canal_id && String(c.canal_id) !== String(canalId)) || null;
+    } catch { return null; }
+  }
 
   const item = await ui.modal({
     titulo: "Nova conversa", corpo, largura: "m",
-    aoAbrir: () => { if (!contato) setTimeout(() => busca.focus(), 40); },
+    aoAbrir: api => { apiModal = api; if (!contato && !telIni) setTimeout(() => busca.focus(), 40); else if (telIni) setTimeout(() => nome.focus(), 40); },
     acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Abrir conversa", tipo: "primario", fn: async api => {
       const params = { p_canal: canais.length > 1 ? sCanal.value : canais[0].id };
       if (modo === "digitar") {
@@ -1999,6 +2535,21 @@ async function novaConversa({ contato = null } = {}) {
       } else {
         if (!escolhido || !escolhido.id) { api.erro("Escolha alguém da lista ou use “Digitar telefone”."); return false; }
         params.p_contato = escolhido.id;
+        const chave = `${escolhido.id}:${params.p_canal}`;
+        if (avisadoOutro !== chave) {
+          const outra = await abertaEmOutroNumero(escolhido.id, params.p_canal);
+          if (outra) {
+            avisadoOutro = chave;
+            const k = canais.find(c => String(c.id) === String(outra.canal_id));
+            ui.limpar(avisoOutro);
+            avisoOutro.append(ui.icone("info"), ui.h("div", { class: "pilha-p" },
+              ui.h("p", null, `Já existe atendimento aberto com ${nomeContato(escolhido)} pelo número ${(k && k.nome) || "de outro canal"}${outra.protocolo ? ` (${outra.protocolo})` : ""}. Abrir aquele?`),
+              ui.h("div", { class: "linha" }, ui.h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { const a = apiModal || api; a.fechar({ abrirExistente: outra.id }); } } }, "Abrir aquele atendimento"))));
+            avisoOutro.hidden = false;
+            api.erro("Para começar outra conversa por este número mesmo assim, toque em «Abrir conversa» de novo.");
+            return false;
+          }
+        }
       }
       try {
         return await A.api.rpcC("nx_cv_nova", params);
@@ -2012,6 +2563,7 @@ async function novaConversa({ contato = null } = {}) {
       }
     } }],
   }).catch(e => { tratarErro(e); return null; });
+  if (item && item.abrirExistente) { abrir(item.abrirExistente); return; }       // CA-155
   if (!item || !item.id) return;
   await carregarLista({});
   abrir(item.id);

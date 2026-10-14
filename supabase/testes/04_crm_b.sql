@@ -6,7 +6,7 @@
 -- empresas, editor de funis (tipos, marcos do Ads, etapa com negócios,
 -- padrão, limite), excluir funil, campos, excluir etiqueta em páginas de
 -- 2.000, motivos, papéis, isolamento por id e TEMPO (5.000 contatos,
--- 5.000 negócios, 2.000 conversas: cada chamada < 2 s).
+-- 5.000 negócios, 2.000 conversas: cada chamada < 2 s; teto em nx.teste_lento_ms).
 -- Roda pelo execute_sql. TUDO em begin … rollback. Falha = 'FALHOU: <caso>'.
 -- O último bloco termina com raise 'OK 04_crm_b — tempos…' (erro = sucesso).
 -- ============================================================
@@ -412,6 +412,8 @@ do $t$
 declare
   cT uuid; k_adm uuid; k_res uuid; fT uuid; st uuid[]; eT uuid; eX uuid; sPos uuid;
   t0 timestamptz; ms numeric; rel text := ''; j jsonb; x jsonb; linhas jsonb; lote int; chamadas int := 0; imp bigint;
+  -- teto de tempo por chamada (SV-155): 2.000 ms no banco real; o rodar-local (PGlite, WebAssembly) define nx.teste_lento_ms = 6000
+  teto numeric := coalesce(nullif(current_setting('nx.teste_lento_ms', true), '')::numeric, 2000);
 begin
   select id into k_adm from public.nx_contas where email = 'teste-f4b-adm@teste.local';
   select id into k_res from public.nx_contas where email = 'teste-f4b-res@teste.local';
@@ -448,20 +450,20 @@ begin
     (public.nx_hash('tok-f4bt-res'), k_res, now() + interval '1 hour');
 
   t0 := clock_timestamp(); j := public.nx_buscar('tok-f4bt-adm', cT, 'araujo')::jsonb;
-  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' buscar=' || round(ms); perform pg_temp.ok(ms < 2000, 'lento nx_buscar ' || round(ms) || ' ms');
+  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' buscar=' || round(ms); perform pg_temp.ok(ms < teto, 'lento nx_buscar ' || round(ms) || ' ms');
   perform pg_temp.ok(jsonb_array_length(j -> 'contatos') = 8 and jsonb_array_length(j -> 'conversas') = 8, 'buscar grande: 8 de cada');
   t0 := clock_timestamp(); j := public.nx_buscar('tok-f4bt-res', cT, '0001234')::jsonb;
-  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' buscar_tel=' || round(ms); perform pg_temp.ok(ms < 2000, 'lento nx_buscar telefone ' || round(ms) || ' ms');
+  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' buscar_tel=' || round(ms); perform pg_temp.ok(ms < teto, 'lento nx_buscar telefone ' || round(ms) || ' ms');
   t0 := clock_timestamp(); j := public.nx_buscar('tok-f4bt-adm', cT, 'negocio 49')::jsonb;
-  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' buscar_neg=' || round(ms); perform pg_temp.ok(ms < 2000, 'lento nx_buscar negócio ' || round(ms) || ' ms');
+  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' buscar_neg=' || round(ms); perform pg_temp.ok(ms < teto, 'lento nx_buscar negócio ' || round(ms) || ' ms');
   perform pg_temp.ok(jsonb_array_length(j -> 'negocios') = 8, 'buscar negócio grande');
   t0 := clock_timestamp(); j := public.nx_tarefas_listar('tok-f4bt-adm', cT, '{"dono":"todos","situacao":"atrasadas"}')::jsonb;
-  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' tarefas=' || round(ms); perform pg_temp.ok(ms < 2000, 'lento nx_tarefas_listar ' || round(ms) || ' ms');
+  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' tarefas=' || round(ms); perform pg_temp.ok(ms < teto, 'lento nx_tarefas_listar ' || round(ms) || ' ms');
   perform pg_temp.ok(jsonb_array_length(j -> 'itens') = 200 and (j ->> 'tem_mais')::boolean, 'tarefas: página de 200');
   t0 := clock_timestamp(); j := public.nx_tarefas_listar('tok-f4bt-res', cT, '{"situacao":"proximas"}')::jsonb;
-  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' tarefas_res=' || round(ms); perform pg_temp.ok(ms < 2000, 'lento nx_tarefas_listar restrito ' || round(ms) || ' ms');
+  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' tarefas_res=' || round(ms); perform pg_temp.ok(ms < teto, 'lento nx_tarefas_listar restrito ' || round(ms) || ' ms');
   t0 := clock_timestamp(); j := public.nx_empresas_listar('tok-f4bt-adm', cT, '{}')::jsonb;
-  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' empresas=' || round(ms); perform pg_temp.ok(ms < 2000, 'lento nx_empresas_listar ' || round(ms) || ' ms');
+  ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' empresas=' || round(ms); perform pg_temp.ok(ms < teto, 'lento nx_empresas_listar ' || round(ms) || ' ms');
 
   -- importação: 5 lotes de 100 com duplicados por telefone (com e sem 55/9) num cliente com 5.000 contatos
   for lote in 1 .. 5 loop
@@ -475,7 +477,7 @@ begin
     j := public.nx_contatos_importar('tok-f4bt-adm', cT, linhas, jsonb_build_object('atualizar', false, 'importacao_id', imp,
            'negocio', jsonb_build_object('funil_id', fT), 'linha_inicial', (lote - 1) * 100))::jsonb;
     ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' importar' || lote || '=' || round(ms);
-    perform pg_temp.ok(ms < 2000, 'lento nx_contatos_importar lote ' || lote || ' ' || round(ms) || ' ms');
+    perform pg_temp.ok(ms < teto, 'lento nx_contatos_importar lote ' || lote || ' ' || round(ms) || ' ms');
     perform pg_temp.ok((j ->> 'criados')::int = 90 and (j ->> 'ignorados')::int = 10 and jsonb_array_length(j -> 'erros') = 0,
                        'importar lote ' || lote || ': 90 criados, 10 duplicados (com/sem 55 e 9)');
     imp := (j ->> 'importacao_id')::bigint;
@@ -487,7 +489,7 @@ begin
   for lote in 1 .. 3 loop
     t0 := clock_timestamp(); j := public.nx_contatos_exportar('tok-f4bt-adm', cT, '{}', lote)::jsonb;
     ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' exportar' || lote || '=' || round(ms);
-    perform pg_temp.ok(ms < 2000, 'lento nx_contatos_exportar página ' || lote || ' ' || round(ms) || ' ms');
+    perform pg_temp.ok(ms < teto, 'lento nx_contatos_exportar página ' || lote || ' ' || round(ms) || ' ms');
     perform pg_temp.ok(jsonb_array_length(j -> 'itens') = case lote when 3 then 1450 else 2000 end and (j ->> 'tem_mais')::boolean = (lote < 3),
                        'exportar página ' || lote);
   end loop;
@@ -497,7 +499,7 @@ begin
     chamadas := chamadas + 1;
     t0 := clock_timestamp(); j := public.nx_etiqueta_excluir('tok-f4bt-adm', cT, eX)::jsonb;
     ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' etq' || chamadas || '=' || round(ms);
-    perform pg_temp.ok(ms < 2000, 'lento nx_etiqueta_excluir chamada ' || chamadas || ' ' || round(ms) || ' ms');
+    perform pg_temp.ok(ms < teto, 'lento nx_etiqueta_excluir chamada ' || chamadas || ' ' || round(ms) || ' ms');
     exit when (j ->> 'restantes')::int = 0 or chamadas > 10;
   end loop;
   perform pg_temp.ok(chamadas = 5 and not exists (select 1 from public.nx_contatos where cliente_id = cT and eX = any(etiquetas))
@@ -516,7 +518,7 @@ begin
               from public.nx_estagios e where e.funil_id = fT and e.id <> st[2]),
            'mover', jsonb_build_object(st[2]::text, st[1]::text)))::jsonb;
     ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' funil_mover' || chamadas || '=' || round(ms);
-    perform pg_temp.ok(ms < 2000, 'lento nx_funil_salvar movendo negócios ' || round(ms) || ' ms');
+    perform pg_temp.ok(ms < teto, 'lento nx_funil_salvar movendo negócios ' || round(ms) || ' ms');
     exit when (j ->> 'restantes')::int = 0 or chamadas > 5;
   end loop;
   perform pg_temp.ok(chamadas = 3 and jsonb_array_length(j -> 'estagios') = 6 and not exists (select 1 from public.nx_estagios where id = st[2])
@@ -535,7 +537,7 @@ begin
     t0 := clock_timestamp();
     x := public.nx_funil_excluir('tok-f4bt-adm', cT, (j ->> 'id')::uuid, sPos)::jsonb;
     ms := extract(epoch from clock_timestamp() - t0) * 1000; rel := rel || ' funil_excluir' || chamadas || '=' || round(ms);
-    perform pg_temp.ok(ms < 2000, 'lento nx_funil_excluir ' || round(ms) || ' ms');
+    perform pg_temp.ok(ms < teto, 'lento nx_funil_excluir ' || round(ms) || ' ms');
     exit when (x ->> 'excluido')::boolean or chamadas > 5;
   end loop;
   perform pg_temp.ok(chamadas = 3 and not exists (select 1 from public.nx_funis where id = (j ->> 'id')::uuid), 'excluir funil grande: 3 chamadas de até 500');

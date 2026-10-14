@@ -111,7 +111,8 @@ test("32 · áudio: duração, velocidades e rótulos", () => {
   assert.equal(L.formatarDuracao(0), "0:00");
   assert.equal(L.formatarDuracao("x"), "–:––");
   assert.equal(L.formatarDuracao(-3), "–:––");
-  assert.deepEqual([1, 1.5, 2, "zz"].map(L.proximaVelocidade), [1.5, 2, 1, 1], "valor desconhecido volta a 1×");
+  // plano 1000 · CA-145: depois do 2× vem 0,75× (áudio rápido ou com ruído) e só então volta a 1×
+  assert.deepEqual([1, 1.5, 2, 0.75, "zz"].map(L.proximaVelocidade), [1.5, 2, 0.75, 1, 1], "valor desconhecido volta a 1×");
   assert.deepEqual([1, 1.5, 2].map(L.rotuloVelocidade), ["1×", "1,5×", "2×"]);
   assert.equal(L.velocidadeValida("1.5"), 1.5);
   assert.equal(L.velocidadeValida("3"), 1);
@@ -416,7 +417,7 @@ const foto = (id, dir, min, extra = {}) => ({ id, conversa_id: 9, direcao: dir, 
 test("31 (DOM) · bolhas: data-cauda só na última do grupo, hora fica no DOM, «Mensagens novas» entra onde a leitura parou e o dia de hoje é marcado", async () => {
   const d = comDom();
   try {
-    const msgs = [txt(1, "in", 30), txt(2, "in", 29), txt(3, "out", 20), txt(4, "in", 10), txt(5, "in", 9)];
+    const msgs = [txt(1, "in", 3), txt(2, "in", 2.9), txt(3, "out", 2), txt(4, "in", 1), txt(5, "in", 0.9)];   // minutos curtos: «hoje» mesmo com o relógio às 00:05 de SP (CI)
     const { A, chat } = await montarChat(d, { msgs });
     const caudas = [...chat.el.querySelectorAll(".cv-msg")].map(m => `${m.dataset.id}:${m.dataset.junta}${m.dataset.cauda}`);
     assert.deepEqual(caudas, ["1:00", "2:11", "3:01", "4:00", "5:11"]);
@@ -566,8 +567,11 @@ test("32 (DOM) · áudio: o <audio> continua a fonte; play/pausa, progresso aces
     assert.equal(c3.querySelector(".cv-au-vel").textContent, "1,5×", "a velocidade vale para todos os áudios da conversa");
     assert.equal(c3.querySelector("audio").playbackRate, 1.5);
     assert.ok(chamadas.some(c => c[0] === "velocidade" && c[1] === 1.5), "a preferência é gravada pelo conversas.js");
+    // plano 1000 · CA-145: o ciclo ganhou o 0,75× depois do 2×
     vel.click(); vel.click();
-    assert.equal(vel.textContent, "1×", "1 → 1,5 → 2 → 1");
+    assert.equal(vel.textContent, "0,75×", "1 → 1,5 → 2 → 0,75");
+    vel.click();
+    assert.equal(vel.textContent, "1×", "… → 1");
     d.ev(c3.querySelector("audio"), "ended", { bubbles: false });
     assert.equal(c3.dataset.estado, "parado");
   } finally { d.fim(); }
@@ -754,12 +758,13 @@ test("34 (DOM) · lista: SLA de espera por faixa (15/30/60 min), ícone do tipo 
     assert.equal(linhas[2].querySelector(".cvl-resumo").dataset.tipo, "imagem");
     assert.equal(linhas[0].querySelector(".cvl-canal").dataset.provedor, "codewords");
     assert.equal(linhas[3].querySelector(".cvl-canal").dataset.provedor, "meta");
-    assert.match(linhas[3].querySelector(".cvl-canal").getAttribute("title"), /via Meta/);
+    // plano 1000 · CA-090: o title diz que é o número por onde a conversa chegou
+    assert.match(linhas[3].querySelector(".cvl-canal").getAttribute("title"), /Chegou pelo número Meta/);
     assert.match(linhas[3].getAttribute("aria-label"), /via Meta/);
   } finally { d.fim(); }
 });
 
-test("34 (DOM) · lista: com um número só não há selo de canal; o filtro expõe «Linhas compactas» e grava a densidade na hora", async () => {
+test("34 (DOM) · lista: com um número só não há selo de canal; «Linhas compactas» mora no menu do sino (plano 1000 · CA-228) e grava a densidade na hora", async () => {
   const d = comDom();
   try {
     const { lista, chamadas } = await montarLista(d, { itens: [convLista(1, 3)] });
@@ -767,11 +772,11 @@ test("34 (DOM) · lista: com um número só não há selo de canal; o filtro exp
     assert.ok(lista.el.querySelector(".cvl-item > .avatar"), "o avatar segue direto na linha");
     const btFiltro = achar(lista.el, ".cvl-filtro");
     btFiltro.click();
-    // o popover é desenhado pelo ui.flutuante falso: pegamos o corpo pelo interruptor de densidade
-    const sw = d.doc.body.querySelector("input[name=densidade]") || null;
-    assert.ok(sw === null || sw.getAttribute("role") === "switch");
-    assert.match(ler("cv-lista.js"), /nome: "densidade", rotulo: "Linhas compactas"/);
-    assert.match(ler("cv-lista.js"), /A\.acoes\.definirDensidade\(sw\.checked \? "compacta" : "confortavel"\)/);
+    // plano 1000 · CA-228: a densidade não é filtro — saiu do popover de filtros e foi para o menu do sino (conversas.js: menuAvisos)
+    assert.equal(d.doc.body.querySelector("input[name=densidade]"), null);
+    assert.doesNotMatch(ler("cv-lista.js"), /nome: "densidade", rotulo: "Linhas compactas"/);
+    assert.match(ler("conversas.js"), /Linhas compactas: ligado/);
+    assert.match(ler("conversas.js"), /acoes\.definirDensidade\(A\.densidade === "compacta" \? "confortavel" : "compacta"\)/);
     assert.equal(chamadas.length, 0);
   } finally { d.fim(); }
 });
@@ -781,7 +786,7 @@ test("35 (DOM) · lateral: resumo com contadores do nx_cv_ver, mini-gráfico dos
   const d = comDom();
   try {
     const { criarLateral } = await import("../web/app/cv-lateral.js");
-    const msgs = [txt(1, "in", 30), txt(2, "out", 20), txt(3, "in", 60 * 24 * 3)];
+    const msgs = [txt(1, "in", 3), txt(2, "out", 2), txt(3, "in", 60 * 24 * 3)];   // «hoje» mesmo às 00:05 de SP (CI)
     const A = {
       ui: d.ui, L, G: null, podeEscrever: true, selId: 9, msgs, eu: { id: "u1" }, base: { etiquetas: [] },
       ctx: { vocab: { negocios: "Negócios", negocio: "Negócio" }, temModulo: m => m === "crm", abrirContato() {}, novoNegocio() {}, abrirNegocio() {} },
@@ -810,7 +815,8 @@ test("35 (DOM) · lateral: resumo com contadores do nx_cv_ver, mini-gráfico dos
     assert.equal(alvo.querySelector(".cvt-mini-total").textContent, "3");
     assert.equal(alvo.querySelectorAll(".cvt-mini-tab tbody tr").length, 7, "a tabela acessível traz os mesmos números");
     const atalhos = alvo.querySelectorAll(".cvt-atalho");
-    assert.deepEqual(atalhos.map(a => a.textContent), ["Ligar", "Protocolo", "Agenda", "Ficha"]);
+    // plano 1000 · CA-040: «Ficha» saiu dos atalhos (ficava sozinha na 2ª linha) — o «Abrir ficha» do topo do cartão faz isso
+    assert.deepEqual(atalhos.map(a => a.textContent), ["Ligar", "Protocolo", "Agenda"]);
     assert.equal(atalhos[0].getAttribute("href"), "tel:+5512999990000");
     atalhos[1].click();
     assert.deepEqual(d.copiados, ["ORB-9"]);
@@ -969,7 +975,8 @@ test("36 (DOM) · selo da IA: trocar de conversa esconde o selo (o campo da outr
 
 test("36 · contrato da sugestão da IA: o nx-ia de verdade responde {texto}; o composer e o resumo leem .texto", () => {
   const srv = readFileSync(join(AQUI, "..", "supabase", "functions", "_compartilhado", "ia_conversas.js"), "utf8");
-  assert.match(srv, /respostaPainel\(\{ ok: true, texto: String\(r\.texto\)\.slice\(0, 4096\), acao \}\)/, "sugerir e resumir devolvem o texto em «texto»");
+  // plano 1000 (SV-068): o corte é o cortarTexto (sem partir emoji)
+  assert.match(srv, /respostaPainel\(\{ ok: true, texto: cortarTexto\(r\.texto, 4096\), acao \}\)/, "sugerir e resumir devolvem o texto em «texto»");
   assert.match(ler("cv-composer.js"), /const texto = r && typeof r\.texto === "string" \? r\.texto\.trim\(\) : "";/);
   assert.match(ler("cv-lateral.js"), /const texto = x && typeof x\.texto === "string" \? x\.texto\.trim\(\) : "";/);
   assert.match(ler("conversas.js"), /if \(cota && r && r\.texto\) cota\.usadas/);

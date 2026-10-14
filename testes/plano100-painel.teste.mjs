@@ -155,7 +155,10 @@ test("P2 · campanha e anúncio renomeados: vale o nome da linha mais RECENTE (e
   // sem nome na linha nova (lead com campanha_ext que o sync ainda não trouxe) o nome conhecido fica
   const M = montarDe({ metricas: antigas, leads: [{ id: 9, origem: "anuncio", plataforma: "meta", campanha_ext: "C1", etapa: "nova", data_conversa: dia(1) }] });
   assert.equal(M.CAMP["meta:C1"].nome, "Nome ANTIGO");
-  assert.equal(montarDe({ leads: [{ id: 9, origem: "anuncio", plataforma: "meta", campanha_ext: "C9", etapa: "nova", data_conversa: dia(1) }] }).CAMP["meta:C9"].nome, "Campanha C9");
+  // plano 1000 (AD-004): campanha que não veio das métricas não vira «Campanha C9» fantasma — vai para o balde, com o texto do utm guardado
+  const Mb = montarDe({ leads: [{ id: 9, origem: "anuncio", plataforma: "meta", campanha_ext: "C9", etapa: "nova", data_conversa: dia(1) }] });
+  assert.equal(Mb.CAMP["meta:C9"], undefined);
+  assert.deepEqual(Mb.CAMP["meta:nao_identificada"].utms, ["C9"]);
 });
 
 test("P3 · diário com UMA campanha elegível destaca o custo dela; com duas, melhor e pior", () => {
@@ -170,11 +173,12 @@ test("P3 · diário com UMA campanha elegível destaca o custo dela; com duas, m
 test("P3 · conversões do Google são «conversões» (com fração), nunca «conversas no WhatsApp»", () => {
   const soMeta = montarDe({ metricas: semanaDeMetricas() }).relDiario(129);
   assert.match(soMeta, /• Conversas no WhatsApp: 2 /);
-  assert.match(soMeta, /• Meta: R\$\s30,00 → 2 conversas · CTR/);
+  // plano 1000 (AD-219): o «CTR» por plataforma virou «1 toque a cada N vezes que o anúncio apareceu» (jargão fora do WhatsApp do cliente)
+  assert.match(soMeta, /• Meta: R\$\s30,00 → 2 conversas · 1 toque a cada/);
   const soGoogle = montarDe({ metricas: semanaDeMetricas({ p: "google", conv: 1.5 }) });
   const dg = soGoogle.relDiario(129);
   assert.match(dg, /• Conversões \(Google\): 1,5 /);
-  assert.match(dg, /• Google: R\$\s30,00 → 1,5 conversões · CTR/);
+  assert.match(dg, /• Google: R\$\s30,00 → 1,5 conversões · 1 toque a cada/);
   assert.match(dg, /investidos · 10,5 conversões · R\$/);
   assert.doesNotMatch(dg, /Conversas no WhatsApp/);
   const ambos = montarDe({ metricas: [...semanaDeMetricas(), ...semanaDeMetricas({ p: "google", c: "G1", a: "GA1", conv: 1 })] }).relDiario(129);
@@ -197,7 +201,8 @@ test("P3 · vocabulário por vertical nos textos: loja/oficina/genérico sem �
   assert.match(loja, /🛍️ \*1 cliente comprou\*/);
   assert.match(loja, /📅 1 visita agendada/);
   assert.match(loja, /Vendas fechadas: R\$\s?1\.200/);
-  assert.match(loja, /aos clientes satisfeitos/);
+  // plano 1000 (AD-015): sem Google no mês, o conselho é de prova social da vertical (não «avaliação no Google»)
+  assert.match(loja, /Pedir aos clientes que compraram/);
   assert.doesNotMatch(loja, /🦷|paciente|tratamento|consultório/i);
   assert.match(mensal("oficina"), /🔧 \*1 cliente aprovou o orçamento\*/);
   assert.match(mensal("generico"), /📈 \*1 cliente fechou\*/);
@@ -356,7 +361,10 @@ test("P4/P5/P8 · Ajustes: cartões do super com id, estados do Órbita com «Ab
   // saas_url editável e validado; limpáveis com confirmação; remover segredo com null explícito e checagem da flag
   assert.match(JS, /txt\("saas_url", "Endereço do Órbita \(link base\)"/);
   assert.match(JS, /const n = normalizarSaasUrl\(cfg\.saas_url\);\s*if \(!n\.ok\)/);
-  assert.match(JS, /const LIMPAVEIS = new Set\(\["wa_template", "google_api_versao", "painel_url", "wa_phone_number_id", "saas_url"\]\);/);
+  assert.match(JS, /const LIMPAVEIS = new Set\(\["wa_template", "google_api_versao", "painel_url", "wa_phone_number_id", "saas_url", "ia_aviso_custo_usd"\]\);/);
+  // plano 1000 · 20261013h: teto do aviso de custo de IA editável no clássico, com vírgula decimal aceita
+  assert.match(JS, /txt\("ia_aviso_custo_usd", /);
+  assert.match(JS, /cfg\.ia_aviso_custo_usd\.replace\(\/\^US\\\$\\s\*\/i, ""\)\.replace\(",", "\."\)/);
   assert.match(JS, /const apagando = \["painel_url", "wa_phone_number_id", "saas_url"\]\.filter\(k => k in cfg && !cfg\[k\] && String\(atual\[k\] \|\| ""\)\.trim\(\)\);/);
   assert.match(JS, /if \(apagando\.length && !confirm\(/);
   assert.match(JS, /data-rm-segredo="\$\{k\}"/);
@@ -374,7 +382,8 @@ test("P4/P5/P8 · Ajustes: cartões do super com id, estados do Órbita com «Ab
 });
 
 test("P1/P2 · painel: herói e régua com a nota honesta; ficha «sem valor»; balde travado na gaveta e fora da paleta; tabela de origem com «sem campanha»", () => {
-  assert.match(JS, /<small>\$\{esc\(notaReceita\(c\)\)\}<\/small><\/div>/);
+  // plano 1000 (AD-194): a nota do herói usa a palavra da vertical («cada serviço» na oficina)
+  assert.match(JS, /<small>\$\{esc\(notaReceita\(c, V\.servico\)\)\}<\/small><\/div>/);
   assert.ok(!/<small>estimativa pelo valor de cada tratamento<\/small>/.test(JS), "a frase fixa de estimativa saiu do herói");
   assert.match(JS, /extra: !gestor\(\) \? esc\(notaReceita\(c\)\)/);
   assert.match(JS, /const vd = e === "fechou" \? M\.valorDe\(L\) : null;\s*const val = vd \? `<span class="val">\$\{vd\.semValor \? "sem valor" : brl0\(vd\.valor\)\}<\/span>` : "";/);
@@ -388,7 +397,8 @@ test("P1/P2 · painel: herói e régua com a nota honesta; ficha «sem valor»; 
   // herói: sem fee configurado, o retorno é «sobre anúncios» e a conta diz «÷ investimento em anúncios» (nada de «+ gestão» fictícia)
   assert.match(JS, /const \{ de, t, ta, c, ca, roas, retorno, fee \} = numerosPeriodo\(\);/);
   assert.match(JS, /rotT\(S\.plat \|\| !fee \? "hero\.retornoPlat" : "hero\.retorno"\)/);
-  assert.match(JS, /<small>\$\{S\.plat \|\| !fee \? "tratamentos ÷ investimento em anúncios" : "tratamentos ÷ \(anúncios \+ gestão\)"\}<\/small>/);
+  // plano 1000 (AD-194): «receita», não «tratamentos» (oficina e loja usam o mesmo painel)
+  assert.match(JS, /<small>\$\{S\.plat \|\| !fee \? "receita ÷ investimento em anúncios" : "receita ÷ \(anúncios \+ gestão\)"\}<\/small>/);
   assert.ok(CSS.includes("[hidden]"), "CSS continua escondendo [hidden]");
 });
 
@@ -527,7 +537,8 @@ test("P6 · pages.yml publica só o clássico: monta a pasta sem app/crm/ads/ate
   assert.match(sem, /cp -R web\/\. "\$\{pub\}\/"/);
   assert.match(sem, /rm -rf "\$\{pub\}\/app" "\$\{pub\}\/crm" "\$\{pub\}\/ads" "\$\{pub\}\/atendimento" "\$\{pub\}\/workspace\.js"/);
   assert.match(sem, /for proibido in app crm ads atendimento workspace\.js; do/);
-  assert.match(sem, /for exigido in index\.html painel\.js painel\.css dados\.js nucleo\.js rastreio\.js fonts; do/, "o clássico e o rastreio.js têm de estar lá");
+  // plano 1000 (srv-3): + rastreio.v1.js (o snippet com SRI aponta para ele)
+  assert.match(sem, /for exigido in index\.html painel\.js painel\.css dados\.js nucleo\.js rastreio\.js rastreio\.v1\.js fonts; do/, "o clássico, o rastreio.js e o rastreio.v1.js têm de estar lá");
   assert.match(sem, /ORBITA_URL: https:\/\/orbita-nexus-ads\.netlify\.app\/app\/\n/);
   assert.match(sem, /<meta http-equiv="refresh" content="0; url=\$\{ORBITA_URL\}">/, "app/index.html redireciona");
   assert.match(sem, /<a href="\$\{ORBITA_URL\}">\$\{ORBITA_URL\}<\/a>/, "e tem o link para quem não segue meta refresh");

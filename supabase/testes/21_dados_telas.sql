@@ -86,6 +86,11 @@ begin
     values (cA, cv, ct, kM, 'in', 'texto', 'oi 21', 'w21a' || sfx, 'recebida', (hoje::timestamp + time '14:37') at time zone 'America/Sao_Paulo');
   insert into public.nx_mensagens (cliente_id, conversa_id, contato_id, canal_id, direcao, tipo, corpo, wamid, status, criado_em)
     values (cA, cv, ct, kM, 'in', 'texto', 'de novo 21', 'w21b' || sfx, 'recebida', (hoje::timestamp + time '16:02') at time zone 'America/Sao_Paulo');
+  -- plano 1000 (SV-116, 20261013c): o fixture grava ultima_entrada_em (há 20 min) fora da hora das mensagens; o gatilho copiou isso
+  -- para primeira_entrada_em. Aqui vale o caminho de quem ainda não foi preenchido (a subconsulta de antes); o 29 prova a coluna.
+  if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'nx_conversas' and column_name = 'primeira_entrada_em') then
+    execute format('update public.nx_conversas set primeira_entrada_em = null where id in (%s, %s)', cv, cv2);
+  end if;
 
   -- ---------------------------------------------------------- versão
   perform pg_temp.ok(exists (select 1 from public.nx_versao_banco where nome = '20261008c_dados_telas'), 'nx_versao_banco registra a migração c');

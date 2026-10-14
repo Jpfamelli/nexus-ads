@@ -617,7 +617,8 @@ test("A10 · pulso.js: aoCanais só quando o servidor manda `canais` e a lista m
   // app.js
   assert.match(APP_JS, /aoCanais: lista => atualizarCanais\(\{ canais: lista \}, "pulso"\)/);
   assert.match(APP_JS, /canal_caiu: "alerta", canal_voltou: "check" \}/); assert.match(APP_JS, /const LINK_NOTIF = \{ canal_caiu: "#\/config\/numeros", canal_voltou: "#\/config\/numeros" \}/);
-  assert.match(APP_JS, /const link = typeof it\.link === "string" && \/\^#\\\/\/\.test\(it\.link\) \? it\.link : \(LINK_NOTIF\[it\.tipo\] \|\| null\);/);
+  // plano 1000 (AS-187): o destino saiu para linkDaNotificacao (link do servidor → LINK_NOTIF → execuções da automação)
+  assert.match(fnDoApp("function linkDaNotificacao(it) {"), /if \(typeof it\.link === "string" && \/\^#\\\/\/\.test\(it\.link\)\) return it\.link;\s*if \(LINK_NOTIF\[it\.tipo\]\) return LINK_NOTIF\[it\.tipo\];/);
   const render = fnDoApp("function renderNumeroCaido(assinatura) {");
   assert.match(render, /ui\.toast\(texto, \{ tipo: "aten", ms: 0, fixo: true, acao: admin \? \{ rotulo: "Ver número", fn: \(\) => navegar\("#\/config\/numeros"\) \} : null,/);
   assert.match(render, /if \(c\.avisouQueda\) ui\.toast\("Número de WhatsApp reconectado\.", \{ tipo: "ok" \}\);/, "quando volta, avisa uma vez");

@@ -142,11 +142,12 @@ test("CRM liga visões salvas às duas telas e apresenta filtro rápido com esta
   const board = ler("crm-kanban.js"), contatos = ler("crm-listas.js"), vistas = ler("crm-visoes.js");
   assert.match(board, /k\.mod\("visoes"\)/);
   assert.match(contatos, /k\.mod\("visoes"\)/);
-  assert.match(vistas, /Fica salva somente neste dispositivo, para esta empresa e sua conta/i);
-  assert.match(vistas, /12 visões salvas/);
+  // plano 1000 (CR-136): na tela, «Filtros salvos» (visão era termo técnico)
+  assert.match(vistas, /Fica salvo somente neste dispositivo, para esta empresa e sua conta/i);
+  assert.match(vistas, /12 filtros salvos/);
   assert.match(vistas, /Isso remove apenas o atalho salvo neste dispositivo/);
-  assert.match(board, /Meus negócios/);
-  assert.match(board, /Parados · 7 dias\+/);
+  assert.match(board, /"Minhas" : "Meus"\} \$\{k\.v\.min\("negocios"\)\}/);   // plano 1000 (CR-006): o atalho usa o termo da vertical
+  assert.match(board, /Parados há 7\+ dias/);   // plano 1000 (CR-205): o rótulo diz o que é («Parados · 7 dias+» era obscuro)
   assert.match(board, /aria-pressed/);
 });
 

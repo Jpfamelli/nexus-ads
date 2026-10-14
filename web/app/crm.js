@@ -90,6 +90,13 @@ function avisarBase(id) {
   for (const fn of [...(ouvintesBase.get(id) || [])]) { try { fn(); } catch (e) { console.error(e); } }
 }
 
+/** comandos.js (recentes da paleta): opcional — sem ele «Recentes» só não ganha o negócio aberto pelo quadro. */
+let promessaC = null;
+function comandos(ctx) {
+  if (!promessaC) promessaC = import(`./comandos.js?v=${encodeURIComponent(ctx.versao)}`).catch(() => { promessaC = null; return null; });
+  return promessaC;
+}
+
 /** Kit compartilhado pelos arquivos do CRM. */
 async function kitDe(ctx) {
   const [Lg, base, Gr] = await Promise.all([logica(ctx), obterBase(ctx), graficos(ctx)]);
@@ -109,8 +116,9 @@ async function kitDe(ctx) {
       return () => { const s = ouvintesBase.get(id); if (s) { s.delete(fn); if (!s.size) ouvintesBase.delete(id); } };
     },
     /** texto do erro (rótulo de campo, trava do Ads, códigos do CRM; o resto pelo api.mensagemErro) */
-    erro: e => Lg.textoErro(e, { campos: k.base.campos, padrao: ctx.api && ctx.api.mensagemErro ? ctx.api.mensagemErro : ui.mensagemErro }),
-    toastErro: e => ui.toast(k.erro(e), { tipo: "erro" }),
+    erro: e => Lg.textoErro(e, { campos: k.base.campos, vocab: ctx.vocab, padrao: ctx.api && ctx.api.mensagemErro ? ctx.api.mensagemErro : ui.mensagemErro }),
+    // plano 1000 (CR-208): a frase sai sem o código técnico; o código vai para o console (o suporte acha lá)
+    toastErro: e => { const c = Lg.codigoSuporte ? Lg.codigoSuporte(e) : null; if (c) console.warn("crm: erro", c); ui.toast(k.erro(e), { tipo: "erro" }); },
     pode: min => ctx.pode(min),
     eu: () => (k.base.eu && k.base.eu.id) || (ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id),
     funil: id => k.base.funis.find(f => f.id === id) || null,
@@ -135,6 +143,18 @@ async function kitDe(ctx) {
     /** M25: escrita com chave de idempotência — em erro ambíguo (prazo, conexão) repete com a MESMA chave e nunca duplica. → {resultado, req} */
     escrever: (nome, params, o) => Lg.escreverComReq(ctx.api, nome, params, o),
     novaReq: () => Lg.novaReq(),
+    /**
+     * plano 1000 (CR-188): entra em «Recentes» da paleta (Ctrl+K) — o negócio aberto pelo cartão do quadro não muda o endereço, então o shell não o
+     * vê. Mesma lista do shell (comandos.js: chave por conta + empresa, no aparelho). Nunca atrapalha a tela.
+     */
+    lembrarRecente(item) {
+      const conta = ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id, cli = ctx.cliente && ctx.cliente.id;
+      if (!conta || !cli || !item) return Promise.resolve(null);
+      return comandos(ctx).then(C => {
+        if (!C) return null;
+        try { return C.criarRecentes({ armazenamento: localStorage, chave: C.chaveRecentes(conta, cli) }).registrar({ sub: ctx.vocab && ctx.vocab.negocio, ...item }); } catch { return null; }
+      });
+    },
     /** M30: guarda o que a pessoa digita neste campo (ctx.rascunho do shell: por conta + empresa, 7 dias) e devolve o controle {apagar()}.
         Chame `.apagar()` só depois que o servidor confirmar. Sem o recurso do shell vira no-op. */
     rascunho: (campo, chave, opcoes) => {
@@ -196,25 +216,94 @@ function esqueletoDe(ctx, tipo) {
 /* ============================================================ paleta de comandos (Ctrl/⌘+K, frente B) */
 let comandosAtivos = [];
 function limparComandos() { for (const f of comandosAtivos) { try { f(); } catch { /* ok */ } } comandosAtivos = []; }
-/** Enquanto o CRM está aberto, a paleta oferece «Nova oportunidade», «Nova tarefa» e «Novo paciente». Sem a paleta (shell antigo) não faz nada. */
+/**
+ * Enquanto o CRM está aberto, a paleta oferece «Nova oportunidade», «Nova tarefa», «Novo paciente», os funis e (plano 1000, CR-189) «Importar planilha»,
+ * «Exportar planilha» e «Nova empresa» conforme o papel. Sem a paleta (shell antigo) não faz nada.
+ */
 function registrarComandos(ctx, k) {
   limparComandos();
   if (!ctx.comandos || typeof ctx.comandos.registrar !== "function" || !k.pode("atendente")) return;
   const reg = c => { try { const d = ctx.comandos.registrar(c); if (typeof d === "function") comandosAtivos.push(d); } catch { /* sem paleta */ } };
-  reg({ id: "crm.novo-negocio", rotulo: k.v.novo("negocio"), palavras: "oportunidade negócio lead cartão criar novo", fazer: () => novoNegocio(ctx, {}) });
+  const tipoTela = telaAtual && telaAtual.tipo;
+  // plano 1000 (CR-267): no quadro a tecla N cria um cartão (o quadro atende a tecla; aqui ela aparece na folha «?»)
+  reg({ id: "crm.novo-negocio", rotulo: k.v.novo("negocio"), palavras: "oportunidade negócio lead cartão criar novo", ...(tipoTela === "kanban" ? { atalho: "N" } : {}), fazer: () => novoNegocio(ctx, {}) });
   reg({ id: "crm.nova-tarefa", rotulo: "Nova tarefa", palavras: "tarefa lembrete ligar retorno criar", fazer: async () => {
     try { const kk = await kitDe(ctx); const T = await kk.mod("tarefas"); const t = await T.formTarefa(kk, null, {}); if (t) ctx.ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); }
     catch (e) { console.error(e); ctx.ui.toast("Não foi possível abrir a tarefa.", { tipo: "erro" }); }
   } });
-  reg({ id: "crm.novo-contato", rotulo: k.v.novo("contato"), palavras: "paciente contato cliente cadastrar criar novo", fazer: async () => {
-    try { const kk = await kitDe(ctx); const M = await kk.mod("listas"); const c = await M.formContato(kk); if (c) ctx.navegar(`#/contatos/${c.id}`); }
-    catch (e) { console.error(e); ctx.ui.toast("Não foi possível abrir o cadastro.", { tipo: "erro" }); }
+  // plano 1000 (CR-037): «Ir para o funil «X»» (com 2 funis ou mais) — o mesmo que Alt+1…5 no quadro
+  const ativos = (k.base.funis || []).filter(f => f.ativo !== false);
+  if (ativos.length > 1) ativos.forEach((f, i) => reg({ id: `crm.funil-${f.id}`, rotulo: `Ir para o funil «${f.nome}»`, palavras: `funil quadro kanban ${f.nome}${i < 5 ? ` alt+${i + 1}` : ""}`,
+    fazer: () => ctx.navegar(`#/crm?funil=${encodeURIComponent(f.id)}`) }));
+  const cadastrar = async (pre = {}) => {
+    try {
+      const kk = await kitDe(ctx); const M = await kk.mod("listas"); const c = await M.formContato(kk, pre);
+      if (!c) return;
+      // plano 1000 (CR-223): só a lista de contatos navega para a ficha nova; nas outras telas a pessoa continua onde estava, com «Abrir» no aviso
+      if (telaAtual && telaAtual.tipo === "contatos") { ctx.navegar(`#/contatos/${c.id}`); return; }
+      ctx.ui.toast(`${k.v.contato} cadastrad${k.v.art("contato")}.`, { tipo: "ok", ms: 6000, acao: { rotulo: "Abrir", fn: () => ctx.navegar(`#/contatos/${c.id}`) } });
+    } catch (e) { console.error(e); ctx.ui.toast("Não foi possível abrir o cadastro.", { tipo: "erro" }); }
+  };
+  reg({ id: "crm.novo-contato", rotulo: k.v.novo("contato"), palavras: "paciente contato cliente cadastrar criar novo", fazer: () => cadastrar(),
+    // plano 1000 (CR-187): a busca da paleta não achou ninguém → «Cadastrar «Mariana» como paciente» já com o nome (ou o telefone) preenchido
+    rotuloTermo: t => `Cadastrar «${t}» como ${k.v.min("contato")}`,
+    comTermo: t => cadastrar(/^[+\d\s().-]{8,}$/.test(t) && t.replace(/\D/g, "").length >= 8 ? { telefone: t } : { nome: t }) });
+  // plano 1000 (CR-189): importar (supervisor+), exportar (admin) e nova empresa — antes só existiam dentro das telas
+  if (k.pode("supervisor")) reg({ id: "crm.importar", rotulo: "Importar planilha", palavras: `importar planilha csv excel ${k.v.min("contatos")}`, icone: "camadas",
+    fazer: () => ctx.navegar("#/contatos/importar") });
+  if (k.pode("admin")) reg({ id: "crm.exportar", rotulo: "Exportar planilha", palavras: `exportar planilha csv excel baixar ${k.v.min("contatos")}`, icone: "baixar",
+    fazer: () => ctx.navegar("#/contatos?exportar=1") });
+  reg({ id: "crm.nova-empresa", rotulo: "Nova empresa", palavras: "empresa convenio frota parceiro cadastrar criar nova", icone: "empresa", fazer: async () => {
+    try {
+      const kk = await kitDe(ctx); const M = await kk.mod("listas"); const e = await M.formEmpresa(kk, null);
+      if (e) ctx.ui.toast(`Empresa «${e.nome || ""}» cadastrada.`, { tipo: "ok", ms: 6000, acao: { rotulo: "Abrir", fn: () => ctx.navegar(`#/empresas/${e.id}`) } });
+    } catch (err) { console.error(err); ctx.ui.toast("Não foi possível abrir o cadastro da empresa.", { tipo: "erro" }); }
   } });
+}
+
+/**
+ * plano 1000 (CR-266): o cartão de erro da tela leva, pequeno, o código e a hora («código http_500 · 14:02») — é o que o suporte pergunta.
+ * A frase continua a do ui.erroCartao.
+ */
+function cartaoErro(ctx, e, tentar) {
+  const card = ctx.ui.erroCartao(e, tentar);
+  const cod = e && (e.codigo || (e.status ? `http_${e.status}` : null) || e.message);
+  let hora = "";
+  try { hora = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" }); } catch { /* sem Intl */ }
+  if (card && typeof card.appendChild === "function" && (cod || hora)) {
+    card.appendChild(ctx.ui.h("small", { class: "crm-erro-cod" }, [cod ? `código ${String(cod).slice(0, 60)}` : null, hora || null].filter(Boolean).join(" · ")));
+  }
+  return card;
+}
+
+/* ============================================================ botão flutuante (CR-009) */
+/**
+ * plano 1000 (CR-009): no celular o «+» flutuante some enquanto a pessoa rola para BAIXO (lendo os cartões, ele cobria o ⋮ «Mover para…» do
+ * último cartão e a paginação) e volta ao rolar para cima ou parar no topo. Vale para o quadro, Pacientes e Tarefas.
+ */
+let soltarFab = null;
+function ligarFab(el) {
+  if (soltarFab) { soltarFab(); soltarFab = null; }
+  if (!el || typeof document === "undefined" || typeof document.addEventListener !== "function") return;
+  const ultimo = new WeakMap();
+  const aoRolar = ev => {
+    const fab = el.querySelector && el.querySelector(".crm-fab");
+    if (!fab) return;
+    const alvo = ev && ev.target && ev.target !== document ? ev.target : (document.scrollingElement || document.documentElement);
+    if (!alvo || (alvo.nodeType === 1 && alvo !== document.scrollingElement && alvo !== document.documentElement && !el.contains(alvo))) return;
+    const y = Number(alvo.scrollTop) || 0, antes = ultimo.has(alvo) ? ultimo.get(alvo) : y;
+    ultimo.set(alvo, y);
+    if (y <= 8 || y < antes - 4) fab.classList.remove("crm-fab-some");
+    else if (y > antes + 4) fab.classList.add("crm-fab-some");
+  };
+  document.addEventListener("scroll", aoRolar, { capture: true, passive: true });
+  soltarFab = () => document.removeEventListener("scroll", aoRolar, { capture: true });
 }
 
 /* ============================================================ montagem */
 export function desmontar() {
   montagem++;
+  if (soltarFab) { soltarFab(); soltarFab = null; }
   limparComandos();
   fecharGavetaAtual();
   if (telaAtual && typeof telaAtual.desmontar === "function") { try { telaAtual.desmontar(); } catch (e) { console.error(e); } }
@@ -231,14 +320,27 @@ export async function montar(ctx) {
 
   // decide a tela
   let tipo, chave;
-  if (modulo === "crm") { tipo = "kanban"; chave = `kanban|${r.query && r.query.funil || ""}`; }
+  if (modulo === "crm") { tipo = "kanban"; chave = `kanban|${r.query && r.query.funil || ""}|${r.query && r.query.busca || ""}`; }   // plano 1000 (CR-185): ?busca nova remonta o quadro
   else if (modulo === "contatos" && partes[0] === "importar") { tipo = "importar"; chave = "importar"; }
   else if (modulo === "contatos" && partes[0]) { tipo = "ficha"; chave = `ficha|${partes[0]}`; }
-  else if (modulo === "contatos") { tipo = "contatos"; chave = "contatos"; }
+  else if (modulo === "contatos") { tipo = "contatos"; chave = `contatos|${JSON.stringify(r.query || {})}`; }   // plano 1000: filtro de link novo (?busca, ?empresa, ?origem) remonta a lista
   else if (modulo === "empresas" && partes[0]) { tipo = "empresa"; chave = `empresa|${partes[0]}`; }
   else if (modulo === "empresas") { tipo = "empresas"; chave = "empresas"; }
   else if (modulo === "tarefas") { tipo = "tarefas"; chave = "tarefas"; }
   else { tipo = "kanban"; chave = "kanban|"; }
+
+  // plano 1000 (CR-040): #/contatos/abc e #/empresas/xyz não viram erro técnico (Number("abc") = null no servidor) — «não encontrado», nenhuma RPC
+  if ((tipo === "ficha" || tipo === "empresa") && !/^\d+$/.test(String(partes[0]))) {
+    fecharGavetaAtual();
+    if (telaAtual && typeof telaAtual.desmontar === "function") { try { telaAtual.desmontar(); } catch (e) { console.error(e); } }
+    telaAtual = null;
+    ui.limpar(ctx.alvo);
+    const lista = tipo === "ficha" ? { hash: "#/contatos", nome: (ctx.vocab && ctx.vocab.contatos) || "Contatos" } : { hash: "#/empresas", nome: "Empresas" };
+    ctx.alvo.appendChild(ui.h("div", { class: "crm", dataset: { tela: tipo } }, ui.vazio({ titulo: tipo === "ficha" ? "Cadastro não encontrado" : "Empresa não encontrada",
+      texto: "O endereço não aponta para um cadastro válido. Ele pode ter sido digitado errado.", icone: tipo === "ficha" ? "contato" : "empresa",
+      acao: { rotulo: `Ver ${lista.nome.toLowerCase()}`, fn: () => ctx.navegar(lista.hash) } })));
+    return;
+  }
 
   // mesma tela ainda na vista (ex.: #/crm/negocio/42 sobre o quadro já aberto): só abre a gaveta
   const reaproveita = telaAtual && telaAtual.chave === chave && telaAtual.el && telaAtual.el.isConnected && ctx.alvo.contains(telaAtual.el);
@@ -258,7 +360,7 @@ export async function montar(ctx) {
   } catch (e) {
     if (minha !== montagem) return;
     ui.limpar(ctx.alvo);
-    ctx.alvo.appendChild(ui.erroCartao(e, () => { cacheBase.delete(ctx.cliente && ctx.cliente.id); montar(ctx); }));
+    ctx.alvo.appendChild(cartaoErro(ctx, e, () => { cacheBase.delete(ctx.cliente && ctx.cliente.id); montar(ctx); }));
     return;
   }
   if (minha !== montagem) return;
@@ -280,6 +382,7 @@ export async function montar(ctx) {
       ui.limpar(ctx.alvo);
       ctx.alvo.appendChild(el);
       telaAtual = { tipo, chave, el, ...(tela || {}) };
+      ligarFab(el);
     }
     registrarComandos(ctx, k);
     // deep link da gaveta: #/crm/negocio/<id>
@@ -290,9 +393,13 @@ export async function montar(ctx) {
       const idNegocio = Number(partes[1]);
       const gaveta = await N.abrirNegocio(k, idNegocio, {
         aoMudar: c => telaAtual && telaAtual.aoMudarNegocio && telaAtual.aoMudarNegocio(c),
+        // plano 1000 (CR-039): o negócio é de outro funil → o quadro por baixo troca para ele (ao fechar a gaveta, o cartão está à vista)
+        aoCarregar: d => { const f = d && d.negocio && d.negocio.funil_id; if (f && telaAtual && typeof telaAtual.mostrarFunil === "function") telaAtual.mostrarFunil(f); },
         aoFechar: () => {
-          // volta o endereço para o quadro sem remontar a tela
-          const q = r.query && r.query.funil ? `?funil=${encodeURIComponent(r.query.funil)}` : "";
+          // volta o endereço para o quadro sem remontar a tela (no funil que o quadro mostra agora)
+          const fAtual = telaAtual && typeof telaAtual.funilAtual === "function" ? telaAtual.funilAtual() : null;
+          const fq = fAtual || (r.query && r.query.funil);
+          const q = fq ? `?funil=${encodeURIComponent(fq)}` : "";
           const prefixo = `#/crm/negocio/${idNegocio}`;
           if (location.hash === prefixo || location.hash.startsWith(prefixo + "?")) history.replaceState(history.state, "", `${location.pathname}${location.search}#/crm${q}`);
         },
@@ -304,6 +411,6 @@ export async function montar(ctx) {
     console.error("crm: montar falhou", e);
     if (minha !== montagem) return;
     ui.limpar(ctx.alvo);
-    ctx.alvo.appendChild(ui.erroCartao(e, () => montar(ctx)));
+    ctx.alvo.appendChild(cartaoErro(ctx, e, () => montar(ctx)));
   }
 }

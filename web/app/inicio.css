@@ -255,3 +255,63 @@ html[data-esquema="escuro"] .ini-sp-ponto { fill: var(--c-sup-2); }
 @media (prefers-reduced-motion: reduce) {
   .ini *, .ini *::before, .ini *::after { animation: none !important; transition: none !important; }
 }
+
+/* ============================================================
+   Plano 1000 (13/10/2026) — frente crm (Início), lote crm-1. Só tokens.
+   ============================================================ */
+/* CR-163: legendas dos KPIs em até 2 linhas nas telas estreitas (antes: «18 oportunidades abe…») */
+@media (max-width: 760px) {
+  .ini-kpi-sub { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; min-height: 2.4em; }
+}
+/* CR-171: ações rápidas sob a manchete */
+.ini-rapidas { display: flex; flex-wrap: wrap; gap: .45rem; min-width: 0; }
+.ini-rapida { min-height: 40px; }
+@media (max-width: 760px), (pointer: coarse) {
+  .ini-rapida { min-height: 44px; flex: 1 1 auto; }
+}
+/* CR-175: o detalhe técnico do número (só admin) fica recolhido */
+details.ini-canal-erro summary { cursor: pointer; color: var(--c-texto-3); font-size: var(--fs-12); }
+details.ini-canal-erro p { margin: .25rem 0 0; font-size: var(--fs-12); color: var(--c-ruim); overflow-wrap: anywhere; }
+
+/* Plano 1000 (13/10/2026) — lote crm-2 */
+/* CR-160: KPI sem série não mostra o tracinho solto (a altura da linha continua, sem desenho) */
+.ini-kpi-sp.ini-kpi-sp-vazia { background: none; }
+/* CR-161: o relativo da consulta («em 13 h») na fonte do corpo, sem caixa alta */
+.ini-prox-selo { font: 500 var(--fs-12)/1.4 var(--f-corpo); letter-spacing: 0; text-transform: none; }
+/* CR-177: «Trocar indicadores» sob a faixa de KPIs */
+.ini-kpis-rod { display: flex; justify-content: flex-end; margin-top: -.5rem; }
+.ini-kpis-escolha { display: grid; gap: .45rem; min-width: min(18rem, calc(100vw - 48px)); }
+.ini-kpis-esc-l { display: grid; grid-template-columns: 2rem minmax(0, 1fr); align-items: center; gap: .4rem; }
+@media (max-width: 760px), (pointer: coarse) { .ini-kpis-trocar, .ini-kpis-escolha .sel, .ini-kpis-escolha .bt { min-height: 44px; } }
+
+/* Plano 1000 (13/10/2026) — lote crm-3 */
+/* CR-180: «Ver relatório», «Ver todas», «Gerenciar» e o título da tarefa com alvo de 32 px (44 no toque) */
+.ini .rel-link { display: inline-flex; align-items: center; min-height: 32px; }
+.ini-tf-abrir { display: flex; align-items: center; min-height: 32px; }
+@media (pointer: coarse) { .ini .rel-link, .ini-tf-abrir { min-height: 44px; } }
+/* CR-254: com gente esperando, a coluna de conversas fica larga e a das consultas não cresce além da tela */
+@media (min-width: 761px) {
+  .ini-agora-grade:has(.ini-espera-lista) { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); align-items: start; }
+  .ini-agora-grade:has(.ini-espera-lista) .ini-agora-ag .ini-prox { max-height: 20rem; overflow-y: auto; overscroll-behavior: contain; }
+}
+/* CR-284: a idade da leitura («· há 12 min»); passou de 10 min, âmbar */
+.ini-idade { margin: 0; }
+.ini-idade.ini-velho { color: var(--c-aten); font-weight: 600; }
+/* CR-257: a meta de vendas dentro do bloco Vendas, numa linha fina */
+.ini-vd-meta { display: grid; gap: .3rem; margin-top: var(--esp-2); }
+.ini-vd-meta p { margin: 0; }
+/* CR-252: «desmarcar» o passo marcado por engano */
+.ini-onb-desmarcar { min-height: 32px; padding: 0 .2rem; }
+@media (pointer: coarse) { .ini-onb-desmarcar { min-height: 44px; } }
+
+/* ---------- plano 1000 · CR-217: agendados sem data (no «Agora», coluna da agenda) ---------- */
+.ini-semdata { margin-top: var(--esp-3); padding: var(--esp-3); border-radius: var(--r-p); background: var(--c-aten-suave); border: 1px solid var(--c-borda); display: flex; flex-direction: column; gap: var(--esp-1); min-width: 0; }
+.ini-semdata-t { margin: 0; display: flex; align-items: center; gap: var(--esp-2); font-weight: 600; }
+.ini-semdata-t .ic { flex: none; color: var(--c-aten); }
+.ini-semdata-lista { list-style: none; margin: var(--esp-1) 0 0; padding: 0; display: flex; flex-direction: column; }
+.ini-semdata-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--esp-1) var(--esp-3); align-items: center; padding: var(--esp-2) 0; border-top: 1px solid var(--c-borda); }
+.ini-semdata-item:first-child { border-top: 0; }
+.ini-semdata-txt { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ini-semdata-nome { margin: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ini-semdata-item .bt { min-height: 40px; }
+@media (pointer: coarse) { .ini-semdata-item .bt { min-height: 44px; } }

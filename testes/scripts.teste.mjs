@@ -331,15 +331,16 @@ test("workflow de funções: sondas de autenticação (401/403/405) são fatais;
   const ini = semComentario.indexOf("- name: Sondas sem segredo");
   assert.ok(ini >= 0, "passo de sondas");
   const sondas = semComentario.slice(ini);
-  // fatal: confere soma em falhas e o passo termina com exit 1
-  assert.match(sondas, /confere\(\) \{[^\n]*\n[^\n]*::error::[^\n]*falhas=\$\(\(falhas \+ 1\)\)/);
+  // fatal: sonda soma em falhas e o passo termina com exit 1
+  // plano 1000 (SV-163/SV-164): a «confere» virou «sonda <código> <descrição> <args do curl>», que também confere o x-orbita-versao
+  assert.match(sondas, /sonda\(\) \{[\s\S]*?::error::[^\n]*falhas=\$\(\(falhas \+ 1\)\)/);
   assert.match(sondas, /if \[ "\$\{falhas\}" -gt 0 \]; then [^\n]*exit 1; fi/);
   for (const [cod, desc] of [[401, "nx-whatsapp POST sem assinatura"], [403, "nx-whatsapp GET com verify token inválido"],
     [401, "nx-codewords ?ch= curto"], [405, "nx-codewords GET"], [401, "nx-enviar ação válida sem sessão"]]) {
-    assert.ok(sondas.includes(`confere ${cod} "${desc}"`), `sonda fatal: ${cod} ${desc}`);
+    assert.ok(sondas.includes(`sonda ${cod} "${desc}"`), `sonda fatal: ${cod} ${desc}`);
   }
-  // 413: nunca pela confere; avisa413 emite ::warning:: e não mexe em falhas nem sai
-  assert.doesNotMatch(sondas, /confere 413/);
+  // 413: nunca pela sonda; avisa413 emite ::warning:: e não mexe em falhas nem sai
+  assert.doesNotMatch(sondas, /sonda 413/);
   const avisa = sondas.match(/avisa413\(\) \{[^\n]*\n([^\n]*)\n\s*\}/);
   assert.ok(avisa, "função avisa413");
   assert.match(avisa[1], /::warning::/);
@@ -354,18 +355,21 @@ test("workflow de funções: sondas de autenticação (401/403/405) são fatais;
    ============================================================ */
 const FRENTES_PLANO100 = ["banco", "funcoes", "painel", "sistema", "inicio", "crm", "conversas", "agenda", "ads", "automacoes"];
 
-test("rodar-tudo: lista sem repetição, plano100-* das 10 frentes opcionais enquanto não existem, --rapido pula só os lentos, --so filtra, --exigir cobra os ausentes", () => {
+test("rodar-tudo: lista sem repetição, plano100-* das 10 frentes obrigatórios (SV-160), --rapido pula só os lentos, --so filtra, --exigir cobra os ausentes", () => {
   const arquivos = COMANDOS.map(c => c.args.at(-1));
   assert.equal(new Set(arquivos).size, arquivos.length, "sem repetição");
   for (const f of FRENTES_PLANO100) {
     const c = COMANDOS.find(x => x.args.at(-1) === `testes/plano100-${f}.teste.mjs`);
-    assert.ok(c && c.opcional && c.args[0] === "--test", `plano100-${f} entra como opcional (node --test)`);
+    // plano 1000 (SV-160): os plano100-* já existem todos — deixaram de ser opcionais (um apagado/renomeado FALHA a suíte)
+    assert.ok(c && !c.opcional && c.args[0] === "--test", `plano100-${f} entra como obrigatório (node --test)`);
   }
   for (const c of COMANDOS) if (!c.opcional) assert.ok(existsSync(resolve(RAIZ, c.args.at(-1))), `obrigatório existe: ${c.args.at(-1)}`);
   const tudo = selecionar([], () => true);
   assert.equal(tudo.rodar.length, COMANDOS.length); assert.deepEqual(tudo.pulados, []); assert.deepEqual(tudo.ausentes, []);
   const semNada = selecionar([], () => false);
-  assert.equal(semNada.ausentes.length, FRENTES_PLANO100.length); assert.equal(semNada.rodar.length, COMANDOS.length - FRENTES_PLANO100.length);
+  const opcionais = COMANDOS.filter(c => c.opcional).length;   // só os plano1000-* (13/10, um por frente) — SV-160
+  assert.ok(opcionais >= 1 && COMANDOS.filter(c => c.opcional).every(c => c.args.at(-1).includes("plano1000-")));
+  assert.equal(semNada.ausentes.length, opcionais); assert.equal(semNada.rodar.length, COMANDOS.length - opcionais);
   assert.equal(selecionar(["--exigir"], () => false).rodar.length, COMANDOS.length, "--exigir não pula os ausentes (o node falha ao não achar o arquivo)");
   const lentos = COMANDOS.filter(c => c.lento).map(c => c.args.at(-1));
   for (const f of ["testes/app.teste.mjs", "testes/dev-falso.teste.mjs", "testes/plano50-sistema.teste.mjs"]) assert.ok(lentos.includes(f), `${f} é lento`);
@@ -373,7 +377,8 @@ test("rodar-tudo: lista sem repetição, plano100-* das 10 frentes opcionais enq
   assert.deepEqual(rapido.pulados, lentos); assert.equal(rapido.rodar.length, COMANDOS.length - lentos.length);
   assert.ok(rapido.rodar.some(a => a.at(-1) === "testes/scripts.teste.mjs"), "este arquivo roda no modo rápido");
   const so = selecionar(["--so", "plano100", "--exigir"], () => true);
-  assert.equal(so.rodar.length, FRENTES_PLANO100.length); assert.ok(so.rodar.every(a => a.at(-1).includes("plano100")));
+  assert.equal(so.rodar.length, COMANDOS.filter(c => c.args.at(-1).includes("plano100")).length, "«plano100» também pega os plano1000-*");
+  assert.ok(so.rodar.length >= FRENTES_PLANO100.length && so.rodar.every(a => a.at(-1).includes("plano100")));
   assert.deepEqual(selecionar(["--so", "nao-existe-nada"], () => true).rodar, []);
   // a ordem continua a de antes: painel primeiro, isolamento (e o banco do plano 100) por último
   assert.equal(arquivos[0], "testes/painel.teste.mjs");

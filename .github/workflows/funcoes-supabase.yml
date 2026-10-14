@@ -21,11 +21,17 @@ jobs:
   publicar:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # plano 1000 (SV-165): o job espera a aprovação de um revisor do environment «producao» (Settings → Environments → producao →
+    # Required reviewers: o João). Um token do GitHub vazado já não basta para publicar código. Sem revisores configurados o
+    # GitHub cria o environment na 1ª execução e segue sem esperar — configurar o revisor é o passo que liga a trava.
+    environment: producao
     env:
       PROJETO: dtjznipitihnwmcgpzqh
       TAG: ${{ github.ref_name }}
     steps:
-      - name: Segredo SUPABASE_ACCESS_TOKEN presente
+      # SV-161: o token é conferido ANTES da suíte (em 09/10 a tag rodou ~2 min de testes e só caiu no deploy com «Invalid access
+      # token»). GET na API de gestão só LÊ o projeto; nada é impresso além do código HTTP.
+      - name: Segredo SUPABASE_ACCESS_TOKEN presente e válido
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
@@ -33,20 +39,54 @@ jobs:
             echo "::error::segredo SUPABASE_ACCESS_TOKEN ausente ou vazio no repositório (nada foi publicado)"
             exit 1
           fi
-          echo "segredo presente (valor não é impresso); tag: ${TAG}"
+          codigo="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" "https://api.supabase.com/v1/projects/${PROJETO}" 2>/dev/null || true)"
+          if [ "${codigo}" != "200" ]; then
+            echo "::error::o token não abre o projeto ${PROJETO} (HTTP ${codigo:-sem resposta}): renove SUPABASE_ACCESS_TOKEN (docs/orbita/DEPLOY-FUNCOES.md, «Renovar o SUPABASE_ACCESS_TOKEN»). Nada foi publicado."
+            exit 1
+          fi
+          echo "token válido para ${PROJETO} (valor não é impresso); tag: ${TAG}"
 
       # actions fixadas pelo SHA do commit da versão (tag pode ser movida; SHA não). Para atualizar:
       #   gh api repos/<dono>/<repo>/git/ref/tags/<versão>  (tag anotada: resolver o objeto em git/tags/<sha>)
+      # fetch-depth 0: traz a main junto (origin/main) para o portão abaixo, sem guardar credencial
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      # SV-277: tag numa branch de trabalho publicaria código não revisado. Só passa commit que JÁ está na main; exceção explícita
+      # para as tags de volta (funcoes-…-volta), que apontam de propósito para um commit antigo.
+      - name: Portão — a tag aponta para um commit da main
+        run: |
+          set -euo pipefail
+          case "${TAG}" in
+            *-volta) echo "tag de volta (${TAG}): exceção do portão da main"; exit 0 ;;
+          esac
+          sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if ! git rev-parse --verify -q origin/main >/dev/null; then echo "::error::origin/main não encontrada no checkout (nada foi publicado)"; exit 1; fi
+          if ! git merge-base --is-ancestor "${sha}" origin/main; then
+            echo "::error::a tag ${TAG} aponta para ${sha}, que NÃO está na main: faça o merge (PR) e crie a tag no commit da main. Nada foi publicado."
+            exit 1
+          fi
+          echo "commit ${sha} está na main"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
 
-      - name: Portão — suíte completa (node testes/rodar-tudo.mjs)
-        run: node testes/rodar-tudo.mjs
+      # SV-160: --exigir — arquivo de teste listado que sumiu (apagado/renomeado) FALHA, não sai do portão em silêncio
+      - name: Portão — suíte completa (node testes/rodar-tudo.mjs --exigir)
+        run: node testes/rodar-tudo.mjs --exigir
+
+      # SV-169 e SV-262: migração nova respeita o lint e aplica no PGlite (com os smokes verdes) ANTES de qualquer ensaio no banco
+      # real; 02_acesso falha por desenho e está em ESPERADAS (scripts/rodar-local.mjs)
+      - name: Portão — lint das migrações novas
+        run: node scripts/lint-migracoes.mjs
+
+      - name: Portão — migrações e smokes SQL no PGlite
+        run: |
+          npm ci --no-audit --no-fund
+          node scripts/rodar-local.mjs
 
       - name: Montar supabase/dist
         run: node scripts/montar-funcoes.mjs
@@ -107,14 +147,31 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: supabase functions list --project-ref "${PROJETO}"
 
-      - name: Sondas sem segredo (401/403/405 fatais; 413 só avisa)
+      # SV-163: sondas nas 7 funções (antes só 3: nx-ciclo/nx-relatorio/nx-midia/nx-ia publicadas quebradas só apareciam na
+      # próxima chamada real). Códigos conferidos no código de supabase/functions/_compartilhado: ciclo.js/relatorio.js → 401 sem
+      # x-nx-cron e 405 «use POST»; midia.js/ia_conversas.js → 401 sessao_invalida (nx_fn_ctx) e 405 metodo_invalido.
+      # SV-164: toda resposta leva x-orbita-versao = <tag>+<sha7> (montar-funcoes); outro valor = o código novo não está no ar.
+      - name: Sondas sem segredo (401/403/405 e versão fatais; 413 só avisa)
         run: |
           set -uo pipefail
           base="https://${PROJETO}.supabase.co/functions/v1"
           falhas=0
-          # FATAL (autenticação 401/403/405): errada → run vermelho → plano de volta
-          confere() {   # confere <esperado> <descrição> <código obtido>
-            if [ "$3" = "$1" ]; then echo "ok   $2 → $3"; else echo "::error::$2 → $3 (esperado $1)"; falhas=$((falhas + 1)); fi
+          cab="$(mktemp)"
+          # FATAL (autenticação 401/403/405 ou versão errada): run vermelho → plano de volta
+          # sonda <esperado> <descrição> <argumentos do curl…>: confere o código e o cabeçalho x-orbita-versao (começa com "<tag>+")
+          sonda() {
+            local esperado="$1" desc="$2" codigo versao
+            shift 2
+            : > "${cab}"
+            codigo="$(curl -sS -o /dev/null -D "${cab}" -w '%{http_code}' --max-time 30 "$@" || true)"
+            versao="$(grep -i '^x-orbita-versao:' "${cab}" | head -n1 | cut -d: -f2- | tr -d ' \r')"
+            if [ "${codigo}" != "${esperado}" ]; then
+              echo "::error::${desc} → ${codigo} (esperado ${esperado})"; falhas=$((falhas + 1))
+            elif [ "${versao#"${TAG}+"}" = "${versao}" ]; then
+              echo "::error::${desc} → ${codigo}, mas x-orbita-versao='${versao:-ausente}' (esperado ${TAG}+<sha>): a versão nova não está no ar"; falhas=$((falhas + 1))
+            else
+              echo "ok   ${desc} → ${codigo} (${versao})"
+            fi
           }
           # NÃO fatal (bug 1 do E2E-meta, correção candidata): só avisa e segue; falha isolada vira
           # pendência, nunca reversão (a versão anterior pendura do mesmo jeito)
@@ -122,18 +179,35 @@ jobs:
             if [ "${2%% *}" = "413" ]; then echo "ok   $1 → $2"; else echo "::warning::$1 → $2 (esperado 413 em menos de 30 s) — pendência do bug 1, NÃO reverter (docs/orbita/DEPLOY-FUNCOES.md)"; fi
           }
           publicada() { grep -qx -- "$1" "${RUNNER_TEMP}/deploy-lista.validada"; }
+          sem_sessao='"token":"sonda-invalida","cliente":"00000000-0000-4000-8000-000000000000"'
           if publicada nx-whatsapp; then
-            confere 401 "nx-whatsapp POST sem assinatura" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H 'content-type: application/json' --data '{}' "${base}/nx-whatsapp" || true)"
-            confere 403 "nx-whatsapp GET com verify token inválido" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "${base}/nx-whatsapp?hub.mode=subscribe&hub.verify_token=sonda-invalida&hub.challenge=1" || true)"
+            sonda 401 "nx-whatsapp POST sem assinatura" -X POST -H 'content-type: application/json' --data '{}' "${base}/nx-whatsapp"
+            sonda 403 "nx-whatsapp GET com verify token inválido" "${base}/nx-whatsapp?hub.mode=subscribe&hub.verify_token=sonda-invalida&hub.challenge=1"
             # bug 1 do E2E-meta: 2 MiB + 1 tem de dar 413 em segundos (antes pendurava ~160 s e o gateway dava 503)
             avisa413 "nx-whatsapp corpo de 2 MiB + 1 (Content-Length)" "$(head -c 2097153 /dev/zero | curl -sS -o /dev/null -w '%{http_code} %{time_total}s' --max-time 30 -X POST -H 'content-type: application/json' --data-binary @- "${base}/nx-whatsapp" || true)"
             avisa413 "nx-whatsapp corpo de 2,4 MB em pedaços (chunked)" "$(head -c 2400000 /dev/zero | curl -sS -o /dev/null -w '%{http_code} %{time_total}s' --max-time 30 -X POST -H 'content-type: application/json' -H 'Transfer-Encoding: chunked' --data-binary @- "${base}/nx-whatsapp" || true)"
           fi
           if publicada nx-codewords; then
-            confere 401 "nx-codewords ?ch= curto" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST --data '{}' "${base}/nx-codewords?ch=abc" || true)"
-            confere 405 "nx-codewords GET" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "${base}/nx-codewords?ch=abc" || true)"
+            sonda 401 "nx-codewords ?ch= curto" -X POST --data '{}' "${base}/nx-codewords?ch=abc"
+            sonda 405 "nx-codewords GET" "${base}/nx-codewords?ch=abc"
           fi
           if publicada nx-enviar; then
-            confere 401 "nx-enviar ação válida sem sessão" "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H 'content-type: application/json' --data '{"acao":"texto","token":"sonda-invalida","cliente":"00000000-0000-4000-8000-000000000000"}' "${base}/nx-enviar" || true)"
+            sonda 401 "nx-enviar ação válida sem sessão" -X POST -H 'content-type: application/json' --data "{\"acao\":\"texto\",${sem_sessao}}" "${base}/nx-enviar"
+            sonda 405 "nx-enviar GET" "${base}/nx-enviar"
           fi
+          for fn in nx-ciclo nx-relatorio; do
+            if publicada "${fn}"; then
+              sonda 401 "${fn} POST sem x-nx-cron" -X POST -H 'content-type: application/json' --data '{}' "${base}/${fn}"
+              sonda 405 "${fn} GET" "${base}/${fn}"
+            fi
+          done
+          if publicada nx-midia; then
+            sonda 401 "nx-midia «ver» sem sessão" -X POST -H 'content-type: application/json' --data "{\"acao\":\"ver\",\"paths\":[\"x\"],${sem_sessao}}" "${base}/nx-midia"
+            sonda 405 "nx-midia GET" "${base}/nx-midia"
+          fi
+          if publicada nx-ia; then
+            sonda 401 "nx-ia «sugerir» sem sessão" -X POST -H 'content-type: application/json' --data "{\"acao\":\"sugerir\",\"conversa\":1,${sem_sessao}}" "${base}/nx-ia"
+            sonda 405 "nx-ia GET" "${base}/nx-ia"
+          fi
+          rm -f "${cab}"
           if [ "${falhas}" -gt 0 ]; then echo "::error::${falhas} sonda(s) falharam — ver docs/orbita/DEPLOY-FUNCOES.md (plano de volta)"; exit 1; fi

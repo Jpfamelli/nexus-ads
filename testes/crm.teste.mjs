@@ -916,8 +916,9 @@ await teste("M28: deslizar e botão chamam a MESMA ação — contatos (Tarefa/O
   assert.equal(gestos[0].el.attrs.class[0], "tf", "o que desliza é a linha .tf (a moldura .tf-li fica parada, com o fundo do gesto)");
   mais.ouvintes.click();
   const mi = menus.at(-1).itens;
-  assert.deepEqual(mi.map(i => i.rotulo), ["Editar", "Adiar para amanhã", "Excluir"]);
-  assert.equal(mi[2].perigo, true);
+  // plano 1000 (CR-150): «Adiar» tem 4 opções no ⋮ (+1 h · amanhã · próxima semana · escolher)
+  assert.deepEqual(mi.map(i => i.rotulo), ["Editar", "Adiar 1 hora", "Adiar para amanhã", "Adiar para a próxima semana", "Adiar para… (escolher)", "Excluir"]);
+  assert.equal(mi.at(-1).perigo, true);   // plano 1000 (CR-150): «Excluir» continua por último (depois das 4 opções de adiar)
   // concluir: o círculo e o deslizar para a direita
   limpa(); k.api.rpcC = async (n, p) => { chamadas.push([n, p]); return { ...t, concluida_em: p.p_concluida ? "2026-10-01T15:00:00Z" : null }; };
   const liA = itemTarefa(k, t, { aoMudar() {} }); const ckA = achar(liA, x => x.tag === "input");
@@ -933,7 +934,7 @@ await teste("M28: deslizar e botão chamam a MESMA ação — contatos (Tarefa/O
   limpa(); k.api.rpcC = async (n, p) => { chamadas.push([n, p]); return { ...t, vence_em: p.p_tarefa.vence_em }; };
   const liC = itemTarefa(k, t, { aoMudar: ev => eventos.push(ev) });
   achar(liC, x => /Mais ações da tarefa/.test(x.attrs["aria-label"] || "")).ouvintes.click();
-  await menus.at(-1).itens[1].fn(); await dormir(); const viaMenuAdiar = JSON.stringify(chamadas); const txtMenu = desfazeres.at(-1).texto;
+  await menus.at(-1).itens.find(i => i.rotulo === "Adiar para amanhã").fn(); await dormir(); const viaMenuAdiar = JSON.stringify(chamadas); const txtMenu = desfazeres.at(-1).texto;
   limpa(); k.api.rpcC = async (n, p) => { chamadas.push([n, p]); return { ...t, vence_em: p.p_tarefa.vence_em }; };
   itemTarefa(k, t, { aoMudar() {} }); await gestos[0].o.esquerda(); await dormir();
   assert.equal(JSON.stringify(chamadas), viaMenuAdiar, "adiar: gesto = ⋮");
@@ -946,7 +947,7 @@ await teste("M28: deslizar e botão chamam a MESMA ação — contatos (Tarefa/O
   achar(liD, x => /Excluir a tarefa/.test(x.attrs["aria-label"] || "")).ouvintes.click();
   const viaLixeira = desfazeres.at(-1); limpa();
   achar(liD, x => /Mais ações da tarefa/.test(x.attrs["aria-label"] || "")).ouvintes.click();
-  await menus.at(-1).itens[2].fn(); const viaMais = desfazeres.at(-1);
+  await menus.at(-1).itens.find(i => i.rotulo === "Excluir").fn(); const viaMais = desfazeres.at(-1);   // plano 1000 (CR-150): o menu ganhou as opções de adiar
   assert.equal(viaLixeira.texto, viaMais.texto); assert.match(viaMais.texto, /excluída/);
   viaMais.aplicar(); assert.equal(ev3.at(-1).tipo, "excluida");
   await viaMais.firmar(); assert.deepEqual(chamadas.at(-1), ["nx_tarefa_excluir", { p_id: 71 }], "a exclusão de verdade só no firmar");
@@ -966,12 +967,13 @@ await teste("M28 (estático): lista compacta só no celular, Exportar/Importar n
   assert.ok(js.includes("href: L.hrefTel(c.telefone)"), "Ligar usa tel:");
   assert.ok(/class:\s*"bt-icone crm-cab-mais"/.test(js) && /Exportar planilha/.test(js) && /Importar planilha/.test(js), "Exportar/Importar no ⋮ do cabeçalho");
   assert.ok(/class:\s*"crm-fab"/.test(js) && /class:\s*"pilha-p crm-fixa"/.test(js), "«Novo» flutuante e busca fixa");
-  assert.ok(/listaM\.atualizar\(r\.itens\)/.test(js) && /tab\.atualizar\(r\.itens\)/.test(js), "a tabela continua (desktop) e a lista compacta é desenhada junto");
+  // plano 1000 (CR-092): só a forma visível é desenhada (tabela no desktop, lista no celular) e ela troca com o media query
+  assert.ok(/f\.atualizar\(r\.itens\)/.test(js) && js.includes('matchMedia("(max-width: 760px)")') && /const listaM = listaCompacta\(/.test(js), "a forma visível (tabela ou lista compacta) é desenhada");
   assert.ok(!/innerHTML/.test(js), "sem innerHTML");
   // tarefas
   assert.ok(/L\.acoesDaTarefa\(/.test(tj) && /ui\.deslizar\(el,\s*\{\s*direita:\s*A\.direita \? \(\) => executar\(A\.direita\)/.test(tj), "o deslizar da tarefa usa executar()");
   assert.ok(/check\.addEventListener\("change",\s*\(\) => alternar\(check\.checked\)\)/.test(tj) && /return alternar\(!check\.checked\)/.test(tj), "círculo e gesto chamam alternar()");
-  assert.ok(/ui\.menu\(mais,\s*A\.menu\.map\(id => \(\{[^}]*fn:\s*\(\) => executar\(id\)/.test(tj), "o ⋮ chama executar()");
+  assert.ok(/ui\.menu\(mais,\s*(?:A\.menu|menuIds)\.map\(id => \(\{[^}]*fn:\s*\(\) => executar\(id\)/.test(tj), "o ⋮ chama executar()");   // plano 1000 (CR-150): menuIds = A.menu com as 4 opções de adiar
   assert.ok(/ocultas\.add\(t\.id\)/.test(tj) && /carregar\(true\)/.test(tj), "recarga quieta e exclusão pendente não volta na recarga");
   // CSS
   assert.ok(/\.ct-lista-env,\s*\.crm-cab-mais,\s*\.tf-mais\s*\{\s*display:\s*none;\s*\}/.test(css), "a lista compacta, o ⋮ do cabeçalho e o ⋮ da tarefa começam escondidos (desktop)");

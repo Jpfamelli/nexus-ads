@@ -9,7 +9,9 @@
    a líder escondida —, desde que seja mais novo que o último visto (`em`).
    ============================================================ */
 
-export const INTERVALOS = Object.freeze({ conversas: 3000, normal: 10000, inativo: 15000, muitoInativo: 30000, escondida: 15000, eleicao: 12000, maximo: 60000 });
+export const INTERVALOS = Object.freeze({ conversas: 3000, normal: 10000, inativo: 15000, muitoInativo: 30000, escondida: 15000, escondidaLonga: 60000, eleicao: 12000, maximo: 60000 });
+/** Plano 1000 (AS-188): depois de 2 h escondida, a aba sem aviso de área de trabalho lê a cada 60 s. */
+export const ESCONDIDA_LONGA_MS = 2 * 3600 * 1000;
 const JITTER = .15;
 
 /**
@@ -17,6 +19,7 @@ const JITTER = .15;
  *   ler(): Promise<{v, notif, nao_lidas, agora, canais?}>
  *   aoNotif(n), aoNaoLidas(n), aoCanais(lista): callbacks opcionais (aoCanais só quando o servidor manda `canais` e a lista muda — A10)
  *   escopo(): id da empresa ativa (para separar abas/empresas)
+ *   avisoTela(): true quando a pessoa ligou o aviso de área de trabalho (a aba escondida há 2 h+ continua a 15 s; sem ele passa a 60 s)
  *   agendar/cancelar/agora/aleatorio/doc/nav/janela: adaptadores para testes
  */
 export function criarPulso(o) {
@@ -36,12 +39,27 @@ export function criarPulso(o) {
   // ultimoVisto: instante (relógio da máquina) do resultado mais novo já processado — uma publicação atrasada não regride o estado
   let geracao = 0, ultimoDeOutra = -Infinity, largada = false, ultimoVisto = -Infinity;
 
-  function escondida() { return !!(doc && doc.visibilityState === "hidden"); }
+  let escondidaDesde = null;     // plano 1000 (AS-188): desde quando a aba está escondida (conferido a cada rodada)
+  function escondida() {
+    const e = !!(doc && doc.visibilityState === "hidden");
+    if (!e) escondidaDesde = null; else if (escondidaDesde === null) escondidaDesde = agora();
+    return e;
+  }
   function offline() { return !!(nav && nav.onLine === false); }
   function inatividade() { return Math.max(0, agora() - ultimaAtividade); }
+  /** Aba esquecida escondida (mais de 2 h) e sem aviso de área de trabalho ligado: 60 s em vez de 15 s. A decisão A2 (15 s) continua valendo
+      no expediente e para quem pediu o aviso de tela (`avisoTela()` → true). ~5.700 leituras por noite viram ~1.500. */
+  function intervaloEscondida() {
+    if (escondidaDesde !== null && agora() - escondidaDesde >= ESCONDIDA_LONGA_MS) {
+      let querAviso = false;
+      try { querAviso = typeof o.avisoTela === "function" && !!o.avisoTela(); } catch { querAviso = false; }
+      if (!querAviso) return INTERVALOS.escondidaLonga;
+    }
+    return INTERVALOS.escondida;
+  }
   function baseIntervalo() {
     if (falhas > 0) return Math.min(INTERVALOS.maximo, INTERVALOS.normal * 2 ** Math.min(falhas - 1, 3));
-    if (escondida()) return INTERVALOS.escondida;
+    if (escondida()) return intervaloEscondida();
     if (modo === "conversas") return INTERVALOS.conversas;   // Conversas aberta e visível: sempre 3 s (o atendente espera a mensagem sem tocar na tela)
     if (inatividade() >= 15 * 60_000) return INTERVALOS.muitoInativo;
     if (inatividade() >= 3 * 60_000) return INTERVALOS.inativo;

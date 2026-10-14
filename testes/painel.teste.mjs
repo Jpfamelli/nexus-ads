@@ -45,7 +45,8 @@ await teste("30 dias: 106 conversas, 44 agendadas, 13 pacientes, R$ 13.550", () 
 await teste("demo com o nome do contrato: 'Clínica Demonstração' e relatório com o nome curto", () => {
   assert.equal(dsDemo.nome, "Clínica Demonstração");
   assert.equal(MD.NOME, "Clínica");
-  assert.match(MD.relDiario(MD.R), /^📊 \*Clínica · Tráfego pago\* — 26\/09\/2026/);
+  // plano 1000 (AD-217): o cabeçalho do diário leva o dia da semana
+  assert.match(MD.relDiario(MD.R), /^📊 \*Clínica · Tráfego pago\* — sábado, 26\/09\/2026/);
 });
 
 await teste("radar da demo acusa os cenários planejados (r1 no Google urgência, r3/r4 no criativo cansado)", () => {
@@ -72,7 +73,8 @@ function demoParaLinhas(ds, M) {
 
 await teste("caminho real (datasetDeLinhas, 130 dias) = mesmos números da demo em 7/30/60 dias", () => {
   const { metricas, leads } = demoParaLinhas(dsDemo, MD);
-  const MR = N.montar(N.datasetDeLinhas({ metricas, leads, cliente: { nome: "Clínica Demonstração", cfg: {} }, hoje: HOJE, dias: 130 }));
+  // plano 1000 (AD-001/AD-010): as metas da demo vão no cfg (o núcleo não inventa mais metas padrão)
+  const MR = N.montar(N.datasetDeLinhas({ metricas, leads, cliente: { nome: "Clínica Demonstração", cfg: { cpaAlvo: 15, cpaAlvoGoogle: 18, orcamento: 1500 } }, hoje: HOJE, dias: 130 }));
   for (const dias of [7, 30, 60]) {
     const a = MD.crmTot(MD.R - dias + 1, MD.R), b = MR.crmTot(MR.R - dias + 1, MR.R);
     const ta = MD.consolidar(MD.linhasDe(MD.R - dias + 1, MD.R)), tb = MR.consolidar(MR.linhasDe(MR.R - dias + 1, MR.R));
@@ -818,7 +820,9 @@ await teste("celular do herói: só notificações INTEIRAS (vão fixo de 8 px) 
   assert.match(JS, /caberNotifs\(\$\("#hero-fone \.bloq"\)\);/);
   assert.match(semComentarios(CSS), /\.bloq \{[^}]*gap: 8px;/);
   assert.ok(!/\.notif \{[^}]*margin-top/.test(semComentarios(CSS)), "sem margem entre notificações");
-  assert.match(JS, /`Ontem: \$\{plural\(ontem\.conversoes, "conversa", "conversas"\)\}/);
+  // plano 1000 (AD-199): a prévia usa pluralDec com o rótulo do Google (1,5 conversão não vira «2 conversas»)
+  assert.match(JS, /`Ontem: \$\{convOntem\}/);
+  assert.match(JS, /pluralDec\(ontem\.conversoes/);
 });
 
 await teste("Clash: todo texto nela tem word-spacing (o espaço dela é estreito) e o tracking nunca passa de −.02em", () => {
@@ -867,7 +871,8 @@ await teste("retorno: a folha usa a MESMA base do herói (anúncios + gestão), 
   const FL = ler("folha.js");
   assert.match(FL, /Cada R\$ 1 investido virou \$\{brl\(retorno\)\}/);
   assert.match(FL, /só anúncio: \$\{brl\(roas\)\}/);
-  assert.match(FL, /Tratamentos \(estimativa\)/, "rótulo de uma linha só");
+  // plano 1000 (AD-211): o rótulo vem do vocabulário da vertical (odonto: «Tratamentos») e «(estimativa)» só quando há estimativa
+  assert.match(FL, /\$\{esc\(T\.receita\)\}\$\{est \? " \(estimativa\)" : ""\}/, "rótulo de uma linha só");
   assert.match(JS, /\["roas", "Retorno do anúncio", "/);
 });
 
@@ -883,7 +888,9 @@ await teste("curta: o número de cada cena é o MESMO da tarja de progresso (02 
 await teste("radar: a conta de alertas soma a conexão caída; a clínica lê regras leigas e a tradução do CTR; parado no celular", () => {
   assert.match(JS, /const nAtivos = atuais\.length \+ conexoesCaidas\(\);/);
   assert.match(JS, /atualizarBadge\(nAtivos\);/);
-  assert.match(JS, /const condR = leigo \? `<span title="\$\{esc\(cond\)\}">\$\{esc\(condLeiga\(r\)\)\}<\/span>` : cond;/);
+  // plano 1000 (AD-235/AD-237): r5/r6 trazem a condição leiga escrita; a condição técnica também sai escapada
+  // plano 1000 (AD-010): a r1 também traz descricaoLeiga do núcleo (régua por plataforma / parada sem meta)
+  assert.match(JS, /const condR = leigo \? `<span title="\$\{esc\(cond\)\}">\$\{esc\(r\.descricaoLeiga \|\| condLeiga\(r\)\)\}<\/span>` : esc\(cond\);/);
   const fonte = JS.match(/function traducaoCTR\(msg, tag = "span"\) \{[\s\S]*?\n\}/);
   assert.ok(fonte, "traducaoCTR");
   const tr = g => runInNewContext(`(${fonte[0]})`, { gestor: () => g, fin: Number.isFinite, parseFloat, String });

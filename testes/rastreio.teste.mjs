@@ -221,7 +221,9 @@ test("sem chave válida ou com Global Privacy Control: o script fica desligado e
   for (const [nome, o] of [["sem chave", { config: {} }], ["chave curta", { config: { chave: "abc" } }], ["GPC", { gpc: true }]]) {
     const m = montar(o);
     assert.equal(m.api.ativo(), false, nome);
-    assert.deepEqual(m.ouvintes, {}, `${nome}: nenhum ouvinte`);
+    // revisão 13/10: só o ouvinte de clique fica (para o <button data-orbita-wa> seguir sem código); nada de aquecer/apontar
+    assert.deepEqual(Object.keys(m.ouvintes), ["click"], `${nome}: só o clique`);
+    assert.equal(m.clicar(el("a", { href: WA })).defaultPrevented, false, `${nome}: <a> intacto`);
     assert.equal(m.loja.size, 0, `${nome}: nada gravado`);
     assert.equal(m.api.reescrever(WA, "K7Q2P").includes("K7Q2P"), true, "a API pura continua disponível");
   }

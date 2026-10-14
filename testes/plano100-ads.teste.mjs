@@ -82,7 +82,8 @@ test("F1 · a tela usa os rótulos e os KPIs da lógica: ui.kpi com estimativa e
   assert.match(a, /ui\.kpi\(\{ rotulo: k\.l, [\s\S]{0,500}?estimativa: !!k\.estimativa \}\)/);
   assert.doesNotMatch(a, /P\.fee > 0 && eGestor\(ctx\)/, "a gestão não fica escondida do cliente");
   const cfg = ler("web/app/ads-config.js");
-  assert.match(cfg, /const PADRAO = \{ cpaAlvo: 15, orcamento: 1500, fee: 0, assinatura: "" \};/, "Ajustes de anúncios: fee padrão 0 (antes 997)");
+  // plano 1000 (AD-001/AD-072): as metas padrão também saíram (null = sem meta); o fee continua 0
+  assert.match(cfg, /const PADRAO = \{ cpaAlvo: null, orcamento: null, fee: 0, assinatura: "" \};/, "Ajustes de anúncios: fee padrão 0 (antes 997)");
   assert.doesNotMatch(cfg, /5512997552370/, "placeholder sem telefone de cliente real");
 });
 
@@ -135,7 +136,8 @@ test("F2/F12 · Relatórios → Vendas «por origem» com a régua do Anúncios:
 test("F2 · a tela mostra o balde: nota no herói e a linha «Anúncio sem campanha identificada» no rodapé das Campanhas", () => {
   const a = ler("web/app/anuncios.js");
   assert.match(a, /L\.semCampanhaTot\(M, P\.de, P\.ate, \{ plat: S\.plat \}\)/);
-  assert.match(a, /"Anúncio sem campanha identificada"\)/);
+  // plano 1000 (AD-109): a linha do balde leva também as conversas do CRM no rótulo
+  assert.match(a, /"Anúncio sem campanha identificada", semCampanha\.conversas \?/);
   assert.match(a, /const \{ linhas, total, outras, semCampanha, pausadas \} = L\.linhasCampanhas/);
 });
 
@@ -155,7 +157,8 @@ test("F3 · calor dia × hora com hora_conversa: célula certa (dia da semana em
   assert.equal(L.calorHora(antigo, { dias: 30 }).disponivel, false, "sem o campo a tela volta ao calor por semana");
   const a = ler("web/app/anuncios.js");
   assert.match(a, /if \(ch\.disponivel\) \{ corpo\.append\(cartaoF, cartaoCalorHora\(ch, periodoTexto\)\); return; \}/);
-  assert.match(a, /G\.calor\(alvo, \{ matriz: ch\.matriz/);
+  // plano 1000 (AD-118): o calor por hora mora numa caixa própria (no celular abre por faixa do dia, com «Ver por hora»)
+  assert.match(a, /G\.calor\(caixaHora, \{ matriz: ch\.matriz/);
   assert.doesNotMatch(a, /A hora da conversa não vem com os dados de anúncios/, "o aviso antigo sumiu");
   // a % da faixa mais forte vem de fx.faixas (fx.forte é a soma crua, sem pct: a tela escrevia «undefined%» — achado no navegador)
   const fx = L.faixasCalor(c.matriz);
@@ -344,7 +347,8 @@ test("F8 · privacidade correta (o que vai ao Órbita e por quanto tempo) e par�
 
 test("F9 · snippet: produção sem data-url no script do Pages; servidor falso aponta SÓ para ele; variante window.ORBITA_RASTREIO; UTMs com macros de ID", async () => {
   const k = "c".repeat(48);
-  assert.equal(RC.snippetRastreio(k), `<script src="https://jpfamelli.github.io/nexus-ads/rastreio.js" data-chave="${k}" defer></script>`);
+  // plano 1000 (AD-168): o snippet de produção aponta para a versão fixa rastreio.v1.js com integrity (SRI) e crossorigin
+  assert.equal(RC.snippetRastreio(k), `<script src="https://jpfamelli.github.io/nexus-ads/rastreio.v1.js" integrity="${RC.SRI_V1}" crossorigin="anonymous" data-chave="${k}" defer></script>`);
   const local = RC.rastreioLocal({ ORBITA_DEV_FALSO: { origem: "http://localhost:4495", rastreio: { script: "http://localhost:4495/rastreio.js", url: "http://localhost:4495/rest/v1/rpc/nx_rastreio_registrar", apikey: "dev-falso", site: "http://localhost:4495/__dev_falso/site.html" } } });
   assert.ok(local);
   const s = RC.snippetRastreio(k, local);
@@ -354,7 +358,8 @@ test("F9 · snippet: produção sem data-url no script do Pages; servidor falso 
   assert.equal(RC.rastreioLocal({}), null); assert.equal(RC.rastreioLocal(null), null);
   const g = RC.snippetGerenciador(k, local);
   assert.match(g, /window\.ORBITA_RASTREIO = \{ chave: "c+", url: "http:\/\/localhost:4495\/rest\/v1\/rpc\/nx_rastreio_registrar", apikey: "dev-falso" \};/);
-  assert.match(RC.snippetGerenciador(k), /<script src="https:\/\/jpfamelli\.github\.io\/nexus-ads\/rastreio\.js" defer><\/script>$/);
+  // plano 1000 (AD-168): a variante para gerenciador também usa a versão fixa com integrity
+  assert.match(RC.snippetGerenciador(k), /<script src="https:\/\/jpfamelli\.github\.io\/nexus-ads\/rastreio\.v1\.js" integrity="sha384-[A-Za-z0-9+/=]+" crossorigin="anonymous" defer><\/script>$/);
   assert.match(RC.UTM.google, /utm_campaign=\{campaignid\}&utm_content=\{creative\}/);
   assert.match(RC.UTM.meta, /utm_campaign=\{\{campaign\.id\}\}&utm_content=\{\{ad\.id\}\}/);
   // na tela com ?dev-falso=1: o snippet local e o link do site de teste

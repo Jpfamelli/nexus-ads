@@ -36,6 +36,9 @@ declare
   cv1 bigint; t1 bigint; nt1 bigint;
   j jsonb; j2 jsonb; r record; x text; n int; rec_antes numeric; rec_depois numeric;
   t0 timestamptz; ms numeric; cols jsonb;
+  -- SV-156: consulta SEMPRE no futuro (era '2026-10-05T14:30' fixo: depois dessa data o nx_negocio_mover passa a gravar a nota
+  -- «a data já passou» e a gaveta deixava de ter 1 nota só)
+  dC date := (now() at time zone 'America/Sao_Paulo')::date + 7;
 begin
   -- ---------------------------------------------------------- cenário
   insert into public.nx_clientes (slug, nome, vertical) values ('teste-f4-a', 'Teste F4 A', 'odonto') returning id into cA;
@@ -151,9 +154,9 @@ begin
   j := public.nx_negocio_mover('tok-f4-at', cA, n1, s_orc)::jsonb;
   perform pg_temp.ok((j ->> 'estagio_id')::uuid = s_orc and (select etapa from public.nx_leads where id = n1) = 'orcamento', 'mover: etapa ↔ marco (orcamento)');
   -- agendada com data e hora
-  j := public.nx_negocio_mover('tok-f4-at', cA, n2, s_agend, null, jsonb_build_object('consulta_em', '2026-10-05T14:30'))::jsonb;
+  j := public.nx_negocio_mover('tok-f4-at', cA, n2, s_agend, null, jsonb_build_object('consulta_em', to_char(dC, 'YYYY-MM-DD') || 'T14:30'))::jsonb;
   select * into r from public.nx_leads where id = n2;
-  perform pg_temp.ok(r.consulta_em = ('2026-10-05 14:30'::timestamp at time zone 'America/Sao_Paulo') and r.data_consulta = '2026-10-05'
+  perform pg_temp.ok(r.consulta_em = ((dC + time '14:30') at time zone 'America/Sao_Paulo') and r.data_consulta = dC
                      and r.data_agenda = (now() at time zone 'America/Sao_Paulo')::date and r.etapa = 'agendada', 'mover p/ agendada: consulta_em, data_consulta (SP) e data_agenda');
   -- ganho sem valor
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_negocio_mover(%L,%L,%s,%L)', 'tok-f4-at', cA, n2, s_fechou)) = 'valor_obrigatorio', 'ganho sem valor → valor_obrigatorio');

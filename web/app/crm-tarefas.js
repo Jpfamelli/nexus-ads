@@ -56,6 +56,11 @@ function diaSP(ui, iso) {
 /** Rótulo do vencimento: "Atrasada · ontem 14:00", "Hoje 15:30", "amanhã", "05/10 09:00". */
 function textoVence(k, t) {
   const { ui } = k;
+  // plano 1000 (CR-247): concluída diz QUANDO foi feita («feita hoje às 14:10», «feita 09/10 às 14:10») — o prazo já não importa
+  if (t.concluida_em && !Number.isNaN(Date.parse(t.concluida_em))) {
+    const dC = diaSP(ui, t.concluida_em), hC = ui.horaBR(t.concluida_em);
+    return { txt: dC === hojeISO(ui) ? `feita hoje às ${hC}` : `feita ${ui.dataCurtaBR ? ui.dataCurtaBR(t.concluida_em) : ui.dataBR(t.concluida_em)} às ${hC}`, cls: "feita" };
+  }
   if (!t.vence_em) return { txt: "Sem prazo", cls: "" };
   const d = new Date(t.vence_em);
   const dia = ui.hojeSP ? ui.hojeSP(d) : d.toISOString().slice(0, 10);
@@ -76,19 +81,61 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
   const t = tarefa || {};
   const amanha = new Date(Date.now() + 24 * 3600000);
   const venceLocal = t.vence_em ? L.paraDataHoraLocal(t.vence_em) : `${ui.hojeSP ? ui.hojeSP(amanha) : amanha.toISOString().slice(0, 10)}T09:00`;
+  // plano 1000 (CR-144): atalhos de prazo (fuso de São Paulo) que preenchem o campo; (CR-052) prazo no passado avisa sem bloquear
+  const avisoPrazo = h("small", { class: "ed-aviso", role: "status", hidden: true });
+  const campoPrazo = () => form.querySelector("[name=vence_em]");
+  const pintarPrazo = () => { const c = campoPrazo(); const passou = !!c && L.dataPassou(c.value); avisoPrazo.hidden = !passou; avisoPrazo.textContent = passou ? `${L.TEXTO_DATA_PASSOU} A tarefa já nasce atrasada.` : ""; };
+  const hojeSPIso = ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10);
+  const atalhosPrazo = h("div", { class: "tf-atalhos", role: "group", "aria-label": "Atalhos de prazo" }, L.atalhosPrazo(hojeSPIso).map(a =>
+    h("button", { type: "button", class: "bt bt-fant bt-p tf-atalho", dataset: { valor: a.valor }, on: { click: () => {
+      const c = campoPrazo(); if (!c) return;
+      c.value = a.valor; pintarPrazo();
+      ui.anunciar(`Prazo: ${a.rotulo}.`);
+    } } }, a.rotulo)));
+  // plano 1000 (CR-245): tarefa nova sem vínculo (#/tarefas, paleta) pode ser ligada a um contato — busca pelo nome ou telefone
+  let ligado = null;
+  const vv = k.v || {};
+  const blocoLigar = !tarefa && !contato_id && !negocio_id ? (() => {
+    const busca = h("input", { type: "search", class: "tf-ligar-busca", placeholder: "Nome ou telefone", "aria-label": `Ligar a tarefa a ${vv.art && vv.art("contato") === "a" ? "uma" : "um"} ${vv.min ? vv.min("contato") : "contato"}`, autocomplete: "off" });
+    const res = h("div", { class: "crm-busca-res", role: "listbox", "aria-label": "Resultados" });
+    const escolhido = h("div", { class: "crm-escolhido", hidden: true });
+    const pintar = () => {
+      ui.limpar(escolhido); escolhido.hidden = !ligado; busca.hidden = !!ligado;
+      if (ligado) escolhido.append(ui.icone("contato"), h("span", null, h("b", null, ligado.nome)),
+        h("button", { type: "button", class: "bt-icone", "aria-label": "Tirar o vínculo", on: { click: () => { ligado = null; pintar(); busca.focus(); } } }, ui.icone("fechar")));
+    };
+    let seqB = 0;
+    busca.addEventListener("input", ui.debounce(async () => {
+      const q = busca.value.trim(), minha = ++seqB;
+      ui.limpar(res);
+      if (q.length < 2) return;
+      try {
+        const r = await k.api.rpcC("nx_contatos_listar", { p_filtro: { busca: q }, p_por_pagina: 6 });
+        if (minha !== seqB) return;
+        const itens = (r && r.itens) || [];
+        if (!itens.length) { res.appendChild(h("p", { class: "fraco" }, "Nada encontrado.")); return; }
+        for (const c of itens) res.appendChild(h("button", { type: "button", role: "option", dataset: { id: c.id }, on: { click: () => { ligado = { id: c.id, nome: L.nomeContato(c) }; busca.value = ""; ui.limpar(res); pintar(); } } },
+          ui.icone("contato"), h("span", null, h("b", null, L.nomeContato(c)), c.telefone ? h("small", null, ui.telBR(c.telefone)) : null)));
+      } catch (e) { if (minha === seqB) res.appendChild(h("p", { class: "fraco" }, k.erro(e))); }
+    }, 250));
+    pintar();
+    return h("div", { class: "campo inteiro tf-ligar" }, h("span", { class: "campo-rot" }, "Ligada a (opcional)"), escolhido, busca, res);
+  })() : null;
   const form = h("form", { class: "crm-form", novalidate: true },
     ui.campo({ rotulo: "O que precisa ser feito", nome: "titulo", valor: t.titulo || tituloSug || "", obrigatorio: true, max: 160,
       placeholder: "Ex.: Ligar para confirmar a avaliação" }),
+    blocoLigar,
     h("div", { class: "crm-form-2" },
       ui.campo({ rotulo: "Tipo", nome: "tipo", tipo: "select", valor: t.tipo || "tarefa",
         opcoes: TIPOS.map(x => ({ valor: x, rotulo: L.ROTULO_TAREFA[x] })) }),
-      ui.campo({ rotulo: "Vence em", nome: "vence_em", tipo: "datahora", valor: venceLocal }),
+      h("div", { class: "pilha-p tf-prazo" }, ui.campo({ rotulo: "Vence em", nome: "vence_em", tipo: "datahora", valor: venceLocal }), atalhosPrazo, avisoPrazo),
       h("div", { class: "campo inteiro" },
         h("label", null, "Responsável"),
         ui.seletorPessoa({ usuarios: k.base.usuarios, valor: t.dono ? t.dono.id : (tarefa ? null : k.eu()), rotulo: "Responsável", vazio: "Sem responsável" }))),
     ui.campo({ rotulo: "Detalhes (opcional)", nome: "descricao", tipo: "textarea", valor: t.descricao || "", max: 5000, linhas: 3 }),
     h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true }));
   form.querySelector(".campo.inteiro select").name = "dono_id";
+  if (campoPrazo()) campoPrazo().addEventListener("change", pintarPrazo);
   const status = form.querySelector(".crm-status");
   // M30: tarefa NOVA guarda título e detalhes enquanto a pessoa digita (volta com «Rascunho restaurado · descartar» se a tela recarregar)
   const rascunhos = tarefa ? [] : ["titulo", "descricao"].map(n => k.rascunho(form.querySelector(`[name=${n}]`), `tarefa:nova:${negocio_id ? `negocio:${negocio_id}` : contato_id ? `contato:${contato_id}` : "avulsa"}:${n}`));
@@ -103,7 +150,7 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
         if (!d.titulo) { ui.marcarErro(form, "titulo", "Escreva o que precisa ser feito."); return false; }
         const p = { titulo: d.titulo, tipo: d.tipo, vence_em: d.vence_em || null, dono_id: d.dono_id || null, descricao: d.descricao || null };
         if (tarefa) p.id = tarefa.id;
-        else { if (contato_id) p.contato_id = contato_id; if (negocio_id) p.negocio_id = negocio_id; }
+        else { if (contato_id) p.contato_id = contato_id; else if (ligado) p.contato_id = ligado.id; if (negocio_id) p.negocio_id = negocio_id; }
         try {
           if (tarefa) return await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: p });
           const conteudo = JSON.stringify(p);
@@ -133,8 +180,14 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
   const pode = k.pode("atendente");
   const v = textoVence(k, t);
   const A = L.acoesDaTarefa({ pode, concluida: !!t.concluida_em });
-  const ROT = { editar: ["Editar", "editar"], adiar: ["Adiar para amanhã", "relogio"], excluir: ["Excluir", "lixeira"] };
-  const check = h("input", { type: "checkbox", checked: !!t.concluida_em, disabled: !pode,
+  const ROT = { editar: ["Editar", "editar"], adiar: ["Adiar para amanhã", "relogio"], excluir: ["Excluir", "lixeira"],
+    adiar_hora: ["Adiar 1 hora", "relogio"], adiar_semana: ["Adiar para a próxima semana", "relogio"], adiar_escolher: ["Adiar para… (escolher)", "calendario"] };
+  // plano 1000 (CR-150): no ⋮, «Adiar» tem 4 opções (+1 h · amanhã · próxima semana · escolher); o deslizar continua «amanhã»
+  const menuIds = A.menu.flatMap(id => (id === "adiar" ? ["adiar_hora", "adiar", "adiar_semana", "adiar_escolher"] : [id]));
+  // plano 1000 (CR-156): sem internet o círculo fica desligado com a dica (antes ia e voltava com o erro do servidor)
+  const offline = typeof navigator !== "undefined" && navigator && navigator.onLine === false;
+  const check = h("input", { type: "checkbox", checked: !!t.concluida_em, disabled: !pode || offline, title: offline ? "Sem internet: conclua quando a conexão voltar" : null,
+    dataset: offline ? { semRede: "1" } : null,
     "aria-label": t.concluida_em ? `Reabrir a tarefa ${t.titulo}` : `Concluir a tarefa ${t.titulo}` });
   const mais = pode ? h("button", { type: "button", class: "bt-icone tf-mais", "aria-label": `Mais ações da tarefa ${t.titulo}`, title: "Mais ações" }, ui.icone("opcoes")) : null;
   const el = h("div", { class: ["tf", t.concluida_em && "feita"], dataset: { id: t.id } },
@@ -149,7 +202,7 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
         mostrarVinculo && t.negocio ? h("a", { href: `#/crm/negocio/${t.negocio.id}`, "aria-label": `${k.v.negocio}: ${t.negocio.titulo || ""}` }, ui.icone("funil"),
           t.negocio.titulo && !(t.contato && t.negocio.titulo === t.contato.nome) ? t.negocio.titulo : k.v.negocio) : null,
         t.automacao ? h("span", null, ui.icone("raio"), "Automação") : null),
-      t.descricao ? h("span", { class: "fraco", style: { "font-size": "var(--fs-13)" } }, t.descricao) : null),
+      t.descricao ? h("span", { class: "fraco tf-desc" }, t.descricao) : null),     // plano 1000 (CR-149): as quebras de linha da descrição continuam (CSS)
     pode ? h("div", { class: "tf-acoes" },
       h("button", { type: "button", class: "bt-icone", "aria-label": `Editar a tarefa ${t.titulo}`, on: { click: () => executar("editar") } }, ui.icone("editar")),
       h("button", { type: "button", class: "bt-icone", "aria-label": `Excluir a tarefa ${t.titulo}`, on: { click: () => executar("excluir") } }, ui.icone("lixeira")),
@@ -159,6 +212,11 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
   /** Concluir/reabrir: o círculo e o deslizar chamam esta. Concluiu → Desfazer reabre. */
   async function alternar(quer) {
     if (ocupada) { check.checked = !quer; return; }
+    if (typeof navigator !== "undefined" && navigator && navigator.onLine === false) {
+      check.checked = !quer;
+      ui.toast("Sem internet: a tarefa não foi alterada. Tente de novo quando a conexão voltar.", { tipo: "erro" });
+      return;
+    }
     ocupada = true;
     check.checked = quer;
     el.classList.toggle("feita", quer);
@@ -178,9 +236,9 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
     } finally { ocupada = false; }
   }
   /** Adiar para amanhã (mesma hora; L.adiarParaAmanha): grava já e o Desfazer devolve o vencimento de antes. */
-  async function adiar() {
+  async function adiar(modo = "amanha") {
     const antes = t.vence_em || null;
-    const novo = L.adiarParaAmanha(antes);
+    const novo = L.adiarTarefa(antes, modo);
     try {
       const nova = await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: { id: t.id, vence_em: novo } });
       ui.anunciar("Tarefa adiada.");
@@ -194,6 +252,9 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
   async function executar(id) {
     if (id === "concluir") return alternar(!check.checked);
     if (id === "adiar") return adiar();
+    if (id === "adiar_hora") return adiar("hora");
+    if (id === "adiar_semana") return adiar("semana");
+    if (id === "adiar_escolher") id = "editar";
     if (id === "editar") {
       const nova = await formTarefa(k, t);
       if (nova) { ui.toast("Tarefa salva.", { tipo: "ok", ms: 1800 }); aoMudar && aoMudar({ tipo: "salva", tarefa: nova }); }
@@ -201,16 +262,20 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
     }
     if (id === "excluir") {
       // M25: sem «tem certeza?». A tarefa some na hora e a exclusão de verdade (firmar) só vai ao servidor depois dos 7 s do «Desfazer»
-      excluirComDesfazer(k, "tarefa", t, { texto: `Tarefa «${t.titulo}» excluída`, rpc: "nx_tarefa_excluir",
+      // plano 1000 (CR-151): tarefa de automação pode voltar — o aviso diz isso (a regra continua ligada)
+      const nomeAuto = t.automacao && typeof t.automacao === "object" && t.automacao.nome ? `«${t.automacao.nome}»` : null;
+      const txtAuto = t.automacao ? `. Criada pela automação${nomeAuto ? ` ${nomeAuto}` : ""}: se a regra continuar valendo, ela cria a tarefa de novo (Automações)` : "";
+      excluirComDesfazer(k, "tarefa", t, { texto: `Tarefa «${t.titulo}» excluída${txtAuto}`, rpc: "nx_tarefa_excluir",
         sumir: () => { aoMudar && aoMudar({ tipo: "excluida", tarefa: t }); },
         voltar: () => { aoMudar && aoMudar({ tipo: "salva", tarefa: t }); } });
     }
   }
   check.addEventListener("change", () => alternar(check.checked));
-  if (mais) mais.addEventListener("click", () => ui.menu(mais, A.menu.map(id => ({ rotulo: ROT[id][0], icone: ROT[id][1], perigo: id === "excluir", fn: () => executar(id) }))));
+  if (mais) mais.addEventListener("click", () => ui.menu(mais, menuIds.map(id => ({ rotulo: ROT[id][0], icone: ROT[id][1], perigo: id === "excluir", fn: () => executar(id) }))));
 
   const fundo = (lado, icone, texto) => h("div", { class: `tf-fundo tf-fundo-${lado}`, "aria-hidden": "true" }, ui.icone(icone), h("span", null, texto));
-  const li = h("div", { class: "tf-li" },
+  // plano 1000 (CR-248): o leitor de tela fica sabendo que a linha desliza — e que o menu ⋮ faz o mesmo
+  const li = h("div", { class: "tf-li", "aria-description": A.direita || A.esquerda ? `Deslize para ${A.direita ? (t.concluida_em ? "reabrir" : "concluir") : ""}${A.direita && A.esquerda ? " ou " : ""}${A.esquerda ? "adiar" : ""}; ou use o menu Mais ações.` : null },
     A.direita ? fundo("d", t.concluida_em ? "reabrir" : "check", t.concluida_em ? "Reabrir" : "Concluir") : null,
     A.esquerda ? fundo("e", "relogio", "Adiar") : null,
     el);
@@ -265,12 +330,14 @@ function itemNota(k, n, { aoMudar }) {
     h("div", { class: "nota-meta" },
       n.fixada ? h("span", { class: "pilula pilula-aten" }, "Fixada") : null,
       h("span", { class: "cresce" }, `${n.autor ? n.autor.nome : "Sistema"} · ${ui.dataHoraBR(n.criado_em)}${n.editado_em ? " · editada" : ""}`),
-      pode ? h("button", { type: "button", class: "bt-icone", "aria-pressed": String(!!n.fixada),
+      pode ? h("button", { type: "button", "aria-pressed": String(!!n.fixada),
         "aria-label": n.fixada ? "Desafixar nota" : "Fixar nota no topo", title: n.fixada ? "Desafixar" : "Fixar no topo",
+        // plano 1000 (CR-065): o ✓ parecia «concluir» — agora o botão diz «Fixar»/«Desafixar» (o sprite não tem alfinete)
+        class: "bt bt-fant bt-p nota-fixar",
         on: { click: async () => {
           try { const r = await k.api.rpcC("nx_nota_salvar", { p_nota: { id: n.id, fixada: !n.fixada } }); aoMudar({ tipo: "salva", nota: r }); }
           catch (e) { k.toastErro(e); }
-        } } }, ui.icone("check")) : null,
+        } } }, n.fixada ? "Desafixar" : "Fixar") : null,
       pode ? h("button", { type: "button", class: "bt-icone", "aria-label": "Editar nota", on: { click: async () => {
         const campoTxt = ui.campo({ rotulo: "Nota", nome: "texto", tipo: "textarea", valor: n.texto, max: 5000, linhas: 5 });
         const r = await ui.modal({ titulo: "Editar nota", corpo: campoTxt, acoes: [
@@ -352,29 +419,87 @@ export function familiaTempo(it) {
   return "";
 }
 
-/** blocoTempo(k, itens, {titulo}) → Node — agrupada por dia («Hoje», «Ontem», «Seg, 29/09»), ícone colorido por tipo de evento, hora de cada item. */
-export function blocoTempo(k, itens = [], { titulo = "Linha do tempo" } = {}) {
+/** blocoTempo(k, itens, {titulo, pagina}) → Node — agrupada por dia («Hoje», «Ontem», «Seg, 29/09»), ícone colorido por tipo de evento, hora de cada item.
+ *  plano 1000 (SV-135, contrato 20261013b): `pagina` = {p_negocio} ou {p_contato}: com a 1ª página cheia (80), «Ver registros mais antigos» chama
+ *  nx_crm_tempo_pagina(p_antes) → {itens, tem_mais}. Servidor sem a RPC: o botão some e fica o comportamento de antes (só os 80). */
+const TEMPO_PAGINA = 80;
+let tempoPaginaAusente = false;
+export function blocoTempo(k, itens = [], { titulo = "Linha do tempo", pagina = null } = {}) {
   const { ui, h, L } = k;
   const nomes = k.nomes();
   const motivos = k.motivosPorId();
   const corpo = h("div", { class: "tempo-dias" });
-  if (!itens.length) corpo.appendChild(h("p", { class: "fraco", style: { "font-size": "var(--fs-14)" } }, "Ainda não há registros."));
-  const grupos = L.agruparPorDia(itens, { instanteDe: it => it.em, diaDe: iso => diaSP(ui, iso), hoje: hojeISO(ui), ordem: "desc" });
-  for (const g of grupos) {
-    const ol = h("ol", { class: "tempo" });
-    for (const it of g.itens) {
-      const cls = familiaTempo(it);
-      const txt = L.textoTempo(it, { nomes, vocab: k.v, brl: v => ui.brl(v), motivos });
-      const link = it.conversa_id ? h("a", { href: `#/conversas/${it.conversa_id}` }, " Abrir conversa") : null;
-      ol.appendChild(h("li", { class: ["tempo-it", cls] },
-        h("span", { class: "tempo-ic", "aria-hidden": "true" }, ui.icone(L.iconeTempo(it))),
-        h("div", { class: "tempo-txt" }, txt, link,
-          h("small", null, h("time", { datetime: it.em || null, title: ui.dataHoraBR(it.em) }, g.dia ? ui.horaBR(it.em) : ui.dataHoraBR(it.em)), `${it.autor ? ` · ${it.autor.nome}` : " · sistema"}`))));
+  let todos = (itens || []).slice();
+  const chave = it => `${it.fonte || it.tipo || ""}:${it.id ?? ""}:${it.em || ""}`;
+  // plano 1000 (CR-063): chips «Tudo · Notas · Etapas · Conversas · Automações» — a nota importante não se perde entre dezenas de eventos
+  let filtro = "tudo";
+  const FILTROS = [["tudo", "Tudo"], ["nota", "Notas"], ["etapas", "Etapas"], ["conversa", "Conversas"], ["automacao", "Automações"]];
+  const daFamilia = (it, v) => { const f = familiaTempo(it); return v === "etapas" ? ["estagio", "ganho", "perdido"].includes(f) : f === v; };
+  const passa = it => filtro === "tudo" || daFamilia(it, filtro);
+  const contar = v => (v === "tudo" ? todos.length : todos.filter(it => daFamilia(it, v)).length);
+  const chips = todos.length > 1 ? h("div", { class: "tempo-filtros crm-seg", role: "group", "aria-label": "Mostrar na linha do tempo" }, FILTROS.map(([v, t]) => {
+    const n = contar(v);
+    return h("button", { type: "button", class: "tempo-filtro", dataset: { filtro: v }, "aria-pressed": String(v === filtro), disabled: !n && v !== "tudo",
+      on: { click: () => { const nn = contar(v); filtro = v; for (const b of chips.querySelectorAll(".tempo-filtro")) b.setAttribute("aria-pressed", String(b.dataset.filtro === v)); desenharDias(); if (ui.anunciar) ui.anunciar(`${t}: ${nn} ${nn === 1 ? "registro" : "registros"}.`); } } },
+      t, h("span", { class: "tempo-filtro-n dado" }, String(n)));
+  })) : null;
+  function contarChips() {
+    if (!chips) return;
+    for (const b of chips.querySelectorAll(".tempo-filtro")) {
+      const n = contar(b.dataset.filtro);
+      b.disabled = !n && b.dataset.filtro !== "tudo";
+      const sp = b.querySelector(".tempo-filtro-n"); if (sp) sp.textContent = String(n);
     }
-    corpo.appendChild(h("section", { class: "tempo-dia", "aria-label": g.rotulo },
-      h("h4", { class: "tempo-dia-t" }, h("span", null, g.rotulo), h("span", { class: "tempo-dia-n dado" }, String(g.itens.length))), ol));
   }
-  return h("section", { class: "ng-bloco", "aria-label": titulo }, h("div", { class: "ng-bloco-cab" }, h("h3", null, titulo)), corpo);
+  function desenharDias() {
+    ui.limpar(corpo);
+    const vis = todos.filter(passa);
+    if (!vis.length) corpo.appendChild(h("p", { class: "fraco", style: { "font-size": "var(--fs-14)" } }, todos.length ? "Nada desse tipo ainda." : "Ainda não há registros."));
+    const grupos = L.agruparPorDia(vis, { instanteDe: it => it.em, diaDe: iso => diaSP(ui, iso), hoje: hojeISO(ui), ordem: "desc" });
+    for (const g of grupos) {
+      const ol = h("ol", { class: "tempo" });
+      for (const it of g.itens) {
+        const cls = familiaTempo(it);
+        const txt = L.textoTempo(it, { nomes, vocab: k.v, brl: v => ui.brl(v), motivos });
+        const link = it.conversa_id ? h("a", { href: `#/conversas/${it.conversa_id}` }, " Abrir conversa") : null;
+        ol.appendChild(h("li", { class: ["tempo-it", cls] },
+          h("span", { class: "tempo-ic", "aria-hidden": "true" }, ui.icone(L.iconeTempo(it))),
+          h("div", { class: "tempo-txt" }, txt, link,
+            h("small", null, h("time", { datetime: it.em || null, title: ui.dataHoraBR(it.em) }, g.dia ? ui.horaBR(it.em) : ui.dataHoraBR(it.em)), `${it.autor ? ` · ${it.autor.nome}` : " · sistema"}`))));
+      }
+      corpo.appendChild(h("section", { class: "tempo-dia", "aria-label": g.rotulo },
+        h("h4", { class: "tempo-dia-t" }, h("span", null, g.rotulo), h("span", { class: "tempo-dia-n dado" }, String(g.itens.length))), ol));
+    }
+  }
+  desenharDias();
+
+  // a página seguinte começa ANTES do registro mais antigo que não seja nota fixada (a fixada vem no topo da 1ª página, mesmo sendo antiga)
+  const maisAntigo = () => todos.filter(it => !(it.fonte === "nota" && it.dados && it.dados.fixada === true) && it.em)
+    .reduce((m, it) => (m === null || Date.parse(it.em) < Date.parse(m) ? it.em : m), null);
+  const alvoPagina = pagina && (pagina.p_negocio != null || pagina.p_contato != null) ? pagina : null;
+  let maisBt = null;
+  if (alvoPagina && !tempoPaginaAusente && todos.length >= TEMPO_PAGINA) {
+    maisBt = h("button", { type: "button", class: "bt bt-fant bt-p tempo-mais" }, "Ver registros mais antigos");
+    maisBt.addEventListener("click", async () => {
+      const antes = maisAntigo();
+      if (!antes || maisBt.disabled) return;
+      maisBt.disabled = true; maisBt.setAttribute("aria-busy", "true");
+      try {
+        const r = await k.api.rpcC("nx_crm_tempo_pagina", { p_negocio: alvoPagina.p_negocio ?? null, p_contato: alvoPagina.p_contato ?? null, p_antes: antes });
+        const vistos = new Set(todos.map(chave));
+        const novos = ((r && r.itens) || []).filter(it => it && !vistos.has(chave(it)));
+        todos = todos.concat(novos);
+        contarChips();
+        desenharDias();
+        if (ui.anunciar) ui.anunciar(novos.length ? `${novos.length} ${novos.length === 1 ? "registro mais antigo" : "registros mais antigos"} na linha do tempo.` : "Não há registros mais antigos.");
+        if (!(r && r.tem_mais) || !novos.length) maisBt.remove();
+      } catch (e) {
+        if (L.rpcAusente && L.rpcAusente(e)) { tempoPaginaAusente = true; maisBt.remove(); return; }
+        if (k.toastErro) k.toastErro(e); else ui.toast(k.erro ? k.erro(e) : "Não consegui carregar agora.", { tipo: "erro" });
+      } finally { maisBt.disabled = false; maisBt.removeAttribute("aria-busy"); }
+    });
+  }
+  return h("section", { class: "ng-bloco", "aria-label": titulo }, h("div", { class: "ng-bloco-cab" }, h("h3", null, titulo)), chips, corpo, maisBt);
 }
 
 /* ============================================================ T9 — Tarefas (#/tarefas) */
@@ -383,7 +508,7 @@ const ABAS_T9 = [
   { id: "proximas", rotulo: "Próximas" }, { id: "concluidas", rotulo: "Concluídas" },
 ];
 const VAZIO_T9 = {
-  hoje: "Nada para hoje.", atrasadas: "Nenhuma tarefa atrasada. Tudo em dia.",
+  hoje: "Nada para hoje. Que tal revisar as oportunidades paradas?", atrasadas: "Nenhuma tarefa atrasada. Tudo em dia.",
   proximas: "Nenhuma tarefa marcada para os próximos dias.", concluidas: "Nenhuma tarefa concluída ainda.",
 };
 
@@ -397,11 +522,15 @@ export async function montarTarefas(k, el, rota) {
   let dono = podeTodas ? lerLocal("nx-app-tarefas-dono", "eu") : "eu";
   let seq = 0;
 
-  const abasEl = ui.segmentado({ opcoes: ABAS_T9.map(a => ({ valor: a.id, rotulo: a.rotulo })), valor: aba, rotulo: "Situação das tarefas",
-    aoMudar: id => { aba = id; gravar("nx-app-tarefas-aba", id); carregar(); } });
+  // plano 1000 (CR-146): o painel do dia É a navegação (antes painel e abas faziam a mesma coisa, uma embaixo da outra); «Concluídas» vira o 4º botão
+  const irAba = id => { if (aba === id) return; aba = id; gravar("nx-app-tarefas-aba", id); marcarAbas(); carregar(); };
   const seg = ui.segmentado({ opcoes: [{ valor: "eu", rotulo: "Minhas" }, { valor: "todos", rotulo: "Todas" }], valor: dono, tipo: "filtro", rotulo: "De quem",
     aoMudar: x => { dono = x; gravar("nx-app-tarefas-dono", x); carregar(); } });
   seg.hidden = !podeTodas;
+  // plano 1000 (CR-244): «Lista · Semana» — a semana mostra hoje e os próximos 6 dias em 7 colunas (Hoje + Próximas juntas); Atrasadas e Concluídas seguem em lista
+  let vista = lerLocal("nx-app-tarefas-vista", "lista") === "semana" ? "semana" : "lista";
+  const segVista = ui.segmentado({ opcoes: [{ valor: "lista", rotulo: "Lista" }, { valor: "semana", rotulo: "Semana" }], valor: vista, tipo: "filtro", rotulo: "Como ver as tarefas", classe: "tfp-vista",
+    aoMudar: x => { vista = x === "semana" ? "semana" : "lista"; gravar("nx-app-tarefas-vista", vista); if (vista === "semana" && !["hoje", "proximas"].includes(aba)) { aba = "hoje"; gravar("nx-app-tarefas-aba", aba); marcarAbas(); } carregar(); } });
   const corpo = h("div", { class: "pilha" });
   const novaTarefa = async () => {
     const t = await formTarefa(k, null, {});
@@ -410,10 +539,14 @@ export async function montarTarefas(k, el, rota) {
   // plano 50 (item 28): painel do dia — Hoje / Atrasadas / Próximas com contagem e cor; tocar leva à aba
   const painelNums = { hoje: h("b", { class: "dado" }, "—"), atrasadas: h("b", { class: "dado" }, "—"), proximas: h("b", { class: "dado" }, "—") };
   const painelItem = (id, rotulo) => h("button", { type: "button", class: ["tfp-pn", `tfp-pn-${id}`], "aria-pressed": String(aba === id), dataset: { aba: id },
-    on: { click: () => { if (aba === id) return; aba = id; gravar("nx-app-tarefas-aba", id); if (typeof abasEl.ativar === "function") abasEl.ativar(id); carregar(); } } },
-    painelNums[id], h("span", null, rotulo));
-  const painel = h("div", { class: "tfp-painel", role: "group", "aria-label": "Resumo das tarefas" },
-    painelItem("hoje", "para hoje"), painelItem("atrasadas", "atrasadas"), painelItem("proximas", "nos próximos dias"));
+    on: { click: () => irAba(id) } }, painelNums[id], h("span", null, rotulo));
+  const btConcl = h("button", { type: "button", class: "tfp-concl", "aria-pressed": String(aba === "concluidas"), dataset: { aba: "concluidas" }, on: { click: () => irAba("concluidas") } },
+    ui.icone("check"), h("span", null, "Concluídas"));
+  const painel = h("div", { class: "tfp-painel", role: "group", "aria-label": "Tarefas por situação" },
+    painelItem("hoje", "para hoje"), painelItem("atrasadas", "atrasadas"), painelItem("proximas", "nos próximos dias"), btConcl);
+  function marcarAbas() {
+    for (const b of painel.querySelectorAll("[data-aba]")) b.setAttribute("aria-pressed", String(b.dataset.aba === aba));
+  }
   function desenharPainel(c) {
     for (const id of ["hoje", "atrasadas", "proximas"]) {
       const n = Number(c[id]) || 0;
@@ -425,12 +558,20 @@ export async function montarTarefas(k, el, rota) {
   el.append(
     ui.cabecalho({ titulo: "Tarefas", acoes: k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novaTarefa } }, ui.icone("mais"), "Tarefa") : null }),
     painel,
-    h("div", { class: "tfp-fita" }, abasEl, seg),
+    h("div", { class: "tfp-fita" }, seg, segVista),
     corpo);
   // M28: no celular «+ Tarefa» sai do cabeçalho e vira o botão flutuante
   if (k.pode("atendente")) el.appendChild(h("button", { type: "button", class: "crm-fab", "aria-label": "Nova tarefa", title: "Nova tarefa", on: { click: novaTarefa } },
     ui.icone("mais"), h("span", { class: "crm-fab-txt" }, "Nova tarefa")));
   const ocultas = new Set();   // excluídas esperando os 7 s do Desfazer: uma recarga no meio não pode trazê-las de volta
+  /** plano 1000 (CR-246): «Nada para hoje» puxa o próximo trabalho — o atalho «Parados há 7+ dias» do quadro. */
+  const vazioDaAba = () => {
+    const ng = k.v.min ? k.v.min("negocios") : "oportunidades";
+    const fem = !k.v.art || k.v.art("negocio") === "a";
+    const paradas = `${fem ? "as" : "os"} ${ng} ${fem ? "paradas" : "parados"}`;
+    const titulo = aba === "hoje" ? `Nada para hoje. Que tal revisar ${paradas}?` : VAZIO_T9[aba];
+    return ui.vazio({ titulo, tema: "crm", acao: aba === "hoje" && (!ctx.temModulo || ctx.temModulo("crm")) ? { rotulo: `Ver ${paradas.replace(/^(as|os) /, "")}`, fn: () => ctx.navegar("#/crm?parados=7") } : null });
+  };
 
   /** quieto = refaz a lista sem trocar tudo pelo esqueleto (depois de concluir/adiar/desfazer a tela não pisca) */
   async function carregar(quieto = false) {
@@ -438,19 +579,22 @@ export async function montarTarefas(k, el, rota) {
     if (quieto && corpo.firstChild) corpo.setAttribute("aria-busy", "true");
     else { ui.limpar(corpo); corpo.appendChild(ui.esqueleto("lista", 5)); }
     try {
-      const r = await k.api.rpcC("nx_tarefas_listar", { p_filtro: { dono, situacao: aba } });
+      const semana = vista === "semana" && (aba === "hoje" || aba === "proximas");
+      const [r, r2] = await Promise.all([k.api.rpcC("nx_tarefas_listar", { p_filtro: { dono, situacao: semana ? "hoje" : aba } }),
+        semana ? k.api.rpcC("nx_tarefas_listar", { p_filtro: { dono, situacao: "proximas" } }) : null]);
       if (minha !== seq) return;
+      if (semana) { desenharSemana(r, r2); return; }
       // as contagens vêm em r.contagens (banco) ou soltas no topo da resposta (servidor fictício): o painel e as abas leem as duas formas
       const c = r.contagens || r || {};
-      abasEl.contar("hoje", c.hoje || null); abasEl.contar("atrasadas", c.atrasadas || null); abasEl.contar("proximas", c.proximas || null);
       desenharPainel(c);
       corpo.removeAttribute("aria-busy");
       ui.limpar(corpo);
       const itens = r.itens.filter(t => !ocultas.has(t.id));
-      if (!itens.length) { corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], tema: "crm" })); return; }
+      if (!itens.length) { corpo.appendChild(vazioDaAba()); return; }
       // agrupadas por dia de vencimento («Hoje», «Amanhã», «Qui, 09/10»…; concluídas do mais recente para o mais antigo)
       const hoje = hojeISO(ui);
-      const grupos = L.agruparPorDia(itens, { instanteDe: t => t.vence_em, diaDe: iso => diaSP(ui, iso), hoje, ordem: aba === "concluidas" ? "desc" : "asc" });
+      // plano 1000 (CR-247): «Concluídas» agrupa pelo dia em que foi FEITA (antes pelo vencimento); as outras abas, pelo vencimento
+      const grupos = L.agruparPorDia(itens, { instanteDe: t => (aba === "concluidas" ? t.concluida_em || t.vence_em : t.vence_em), diaDe: iso => diaSP(ui, iso), hoje, ordem: aba === "concluidas" ? "desc" : "asc", semData: "Sem prazo" });   // plano 1000 (CR-138)
       const lista = h("div", { class: "at-lista tfp-lista" });
       let restantes = itens.length;
       for (const g of grupos) {
@@ -461,7 +605,7 @@ export async function montarTarefas(k, el, rota) {
             if (ev && ev.tipo === "excluida") {
               ocultas.add(t.id); item.remove(); restantes--;
               if (!grupo.querySelector(".tf-li")) grupo.remove();
-              if (restantes <= 0) { ui.limpar(corpo); corpo.appendChild(ui.vazio({ titulo: VAZIO_T9[aba], tema: "crm" })); }
+              if (restantes <= 0) { ui.limpar(corpo); corpo.appendChild(vazioDaAba()); }
             } else { if (ev && ev.tarefa) ocultas.delete(ev.tarefa.id); carregar(true); }
           } });
           grupo.appendChild(item);
@@ -478,7 +622,55 @@ export async function montarTarefas(k, el, rota) {
       corpo.appendChild(ui.erroCartao(e, () => carregar()));
     }
   }
+  /** CR-244: as 7 colunas da semana (as mesmas linhas de tarefa da lista: concluir, adiar, deslizar e ⋮ continuam). */
+  function desenharSemana(r, r2) {
+    const c = r.contagens || r || {};
+    desenharPainel(c);
+    corpo.removeAttribute("aria-busy");
+    ui.limpar(corpo);
+    const vistos = new Set();
+    const itens = [...(r.itens || []), ...((r2 && r2.itens) || [])].filter(t => !ocultas.has(t.id) && !vistos.has(t.id) && vistos.add(t.id));
+    const hoje = hojeISO(ui);
+    const sem = L.colunasDaSemana(itens, { instanteDe: t => t.vence_em, diaDe: iso => diaSP(ui, iso), hoje });
+    const grade = h("div", { class: "tfp-semana", role: "list", "aria-label": "Tarefas da semana" }, sem.colunas.map(col =>
+      h("section", { class: ["tfp-dia", col.dia === hoje && "hoje"], role: "listitem", "aria-label": `${col.rotulo}: ${col.itens.length} ${col.itens.length === 1 ? "tarefa" : "tarefas"}` },
+        h("h3", { class: "tfp-dia-t" }, h("span", null, col.rotulo), h("span", { class: "tfp-grupo-n dado" }, String(col.itens.length))),
+        col.itens.length ? h("div", { class: "at-lista" }, col.itens.map(t => itemTarefa(k, t, { mostrarVinculo: true, aoMudar: ev => {
+          // plano 1000: como na Lista — a excluída sai da grade já (e fica fora até o «Desfazer» acabar); o «Desfazer» devolve e recarrega
+          if (ev && ev.tipo === "excluida") { ocultas.add(t.id); desenharSemana(r, r2); return; }
+          if (ev && ev.tarefa) ocultas.delete(ev.tarefa.id);
+          carregar(true);
+        } })))
+          : h("p", { class: "fraco tfp-dia-vazio" }, "Livre"))));
+    corpo.appendChild(grade);
+    const notas = [sem.depois ? `+${sem.depois} depois desta semana (em «Próximas», na lista)` : null, sem.semPrazo ? `${sem.semPrazo} sem prazo (na lista)` : null].filter(Boolean);
+    if (notas.length) corpo.appendChild(h("p", { class: "sub" }, notas.join(" · ")));
+  }
+
   await carregar();
-  const cancelar = ctx.pulso ? ctx.pulso.assinar(() => { /* tarefas de automação chegam sem pulso próprio; recarrega ao voltar */ }) : null;
-  return { desmontar() { seq++; if (cancelar) cancelar(); } };
+  // plano 1000 (CR-140): tarefas criadas por automação ou por um colega aparecem sozinhas — no pulso (no máximo 1× a cada 30 s) e ao voltar
+  // para a aba; nunca com um formulário/menu aberto ou um campo em edição
+  let ultimaT = Date.now();
+  const recarregarQuieto = () => {
+    if (document.hidden || Date.now() - ultimaT < 30000) return;
+    if (document.querySelector("dialog[open]")) return;
+    const a = document.activeElement;
+    if (a && (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || "") || (a !== document.body && corpo.contains(a)))) return;   // o foco não pode sumir no meio
+    ultimaT = Date.now();
+    carregar(true);
+  };
+  const cancelar = ctx.pulso && typeof ctx.pulso.assinar === "function" ? ctx.pulso.assinar(recarregarQuieto) : null;
+  const aoVoltar = () => { if (!document.hidden) recarregarQuieto(); };
+  document.addEventListener("visibilitychange", aoVoltar);
+  // plano 1000 (CR-156): caiu a internet → os círculos desligam com a dica; voltou → religam (sem recarregar a lista)
+  const aoRede = () => {
+    const off = typeof navigator !== "undefined" && navigator && navigator.onLine === false;
+    for (const x of corpo.querySelectorAll(".tf-check input")) {
+      if (off) { if (!x.disabled) { x.disabled = true; x.dataset.semRede = "1"; x.setAttribute("title", "Sem internet: conclua quando a conexão voltar"); } }
+      else if (x.dataset.semRede) { x.disabled = !k.pode("atendente"); delete x.dataset.semRede; x.removeAttribute("title"); }
+    }
+  };
+  if (typeof addEventListener === "function") { addEventListener("offline", aoRede); addEventListener("online", aoRede); }
+  return { desmontar() { seq++; if (cancelar) cancelar(); document.removeEventListener("visibilitychange", aoVoltar);
+    if (typeof removeEventListener === "function") { removeEventListener("offline", aoRede); removeEventListener("online", aoRede); } } };
 }

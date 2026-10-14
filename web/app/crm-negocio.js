@@ -4,7 +4,7 @@
      editável, valor, fita de etapas clicável, Ganhou/Perdeu/Reabrir,
      "Iniciar pós-venda", ⋮ (mover de funil com a trava do Ads, excluir);
      abas Resumo · Tarefas · Notas · Linha do tempo. Salva por campo.
-   - novoNegocio(k, {contato_id, conversa_id, funil_id, estagio_id}, {aoCriar})
+   - novoNegocio(k, {contato_id, conversa_id, funil_id, estagio_id, nome, telefone}, {aoCriar})
    - abrirContato(k, id, {aoMudar}): ficha 360 numa gaveta larga
    - moverComPerguntas(k, card, estagio, ordem): o MESMO fluxo do
      kanban e da fita (valor ao ganhar, motivo ao perder, data e hora
@@ -28,11 +28,43 @@ export function campoPersonalizado(k, c, valor, { nome } = {}) {
     case "opcao": return ui.campo({ ...base, tipo: "select", valor: valor ?? "", opcoes: [{ valor: "", rotulo: "—" }, ...(c.opcoes || []).map(o => ({ valor: o, rotulo: o }))] });
     case "multi": return ui.campo({ ...base, tipo: "multipla", valor: Array.isArray(valor) ? valor : [], opcoes: (c.opcoes || []).map(o => ({ valor: o, rotulo: o })) });
     case "sim_nao": return ui.campo({ ...base, tipo: "select", valor: valor === true ? "sim" : valor === false ? "nao" : "", opcoes: [{ valor: "", rotulo: "—" }, { valor: "sim", rotulo: "Sim" }, { valor: "nao", rotulo: "Não" }] });
-    case "telefone": return ui.campo({ ...base, tipo: "tel", valor: valor ? L.formatarTel(valor) : "" });
+    case "telefone": return comAtalhos(k, ui.campo({ ...base, tipo: "tel", valor: valor ? L.formatarTel(valor) : "" }), "telefone", c.rotulo);
     case "email": return ui.campo({ ...base, tipo: "email", valor: valor ?? "" });
-    case "url": return ui.campo({ ...base, tipo: "url", valor: valor ?? "", placeholder: "https://" });
+    case "url": return comAtalhos(k, ui.campo({ ...base, tipo: "url", valor: valor ?? "", placeholder: "https://" }), "url", c.rotulo);
     default: return ui.campo({ ...base, tipo: "texto", valor: valor ?? "", max: 500 });
   }
+}
+
+/**
+ * plano 1000 (CR-230/231): ao lado do campo personalizado, as ações do valor — Link: «abrir» em nova aba (só https/http válido, noopener);
+ * Telefone: ligar (tel:) e WhatsApp (wa.me). Os links acompanham o que é digitado e somem com o campo vazio/inválido.
+ */
+export function linksDoCampo(L, tipo, valor) {
+  const v = String(valor ?? "").trim();
+  if (!v) return [];
+  if (tipo === "url") return /^https?:\/\/[^\s.]+\.[^\s]{2,}/i.test(v) ? [{ tipo: "abrir", href: v, rotulo: "Abrir o link em nova aba", icone: "externo", nova: true }] : [];
+  if (tipo === "telefone") {
+    const n = L.normalizarTelefone(v);
+    return n ? [{ tipo: "ligar", href: `tel:+${n}`, rotulo: "Ligar", icone: "telefone" }, { tipo: "whatsapp", href: `https://wa.me/${n}`, rotulo: "Abrir no WhatsApp", icone: "whatsapp", nova: true }] : [];
+  }
+  return [];
+}
+function comAtalhos(k, campo, tipo, rotulo) {
+  const { h, ui, L } = k;
+  const inp = campo && campo.querySelector ? campo.querySelector("input") : null;
+  if (!inp) return campo;
+  const caixa = h("span", { class: "cp-links" });
+  const pintar = () => {
+    ui.limpar(caixa);
+    for (const l of linksDoCampo(L, tipo, inp.value)) caixa.appendChild(h("a", { class: `bt-icone cp-link cp-link-${l.tipo}`, href: l.href, "aria-label": `${l.rotulo}: ${rotulo || ""}`.trim(), title: l.rotulo,
+      ...(l.nova ? { target: "_blank", rel: "noopener noreferrer" } : {}) }, ui.icone(l.icone)));
+    caixa.hidden = !caixa.firstChild;
+  };
+  inp.addEventListener("input", pintar); inp.addEventListener("change", pintar);
+  pintar();
+  campo.classList.add("cp-com-links");
+  campo.appendChild(caixa);
+  return campo;
 }
 
 /** Lê os campos personalizados de um formulário → {chave: valor normalizado} e erros [{nome, texto}]. */
@@ -68,16 +100,26 @@ async function pedirGanho(k, card, estagio, detalhe) {
       ajuda: funil && funil.conta_no_ads ? "Entra na receita do retorno do anúncio (Anúncios e relatórios)." : "O valor que foi fechado de verdade." }),
     faltam.length ? h("p", { class: "sub" }, "Preencha também os campos obrigatórios deste funil:") : null,
     ...faltam.map(c => campoPersonalizado(k, c, null)));
+  let zeroConfirmado = false;
   return ui.modal({
     titulo: `Marcar como «${estagio.nome}»`, corpo: form,
     descricao: `${L.tituloCard(card)}`,
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
-      { rotulo: `Confirmar ${k.v.ganhar.toLowerCase()}`, tipo: "primario", fn: () => {
+      { rotulo: `Confirmar ${k.v.ganhar.toLowerCase()}`, tipo: "primario", fn: api => {
         ui.marcarErro(form, null);
         const d = ui.lerForm(form);
         d.valor = L.lerNumero(form.querySelector('[name="valor"]').value);   // "1.500" = mil e quinhentos
-        if (d.valor === null || d.valor === undefined || !(d.valor >= 0)) { ui.marcarErro(form, "valor", "Informe o valor final."); return false; }
+        if (d.valor === null || d.valor === undefined || !(d.valor >= 0)) { ui.marcarErro(form, "valor", "Informe o valor final."); zeroConfirmado = false; return false; }
+        // plano 1000 (CR-053): R$ 0 pede uma segunda confirmação no próprio modal — num funil dos anúncios derruba o retorno sem a pessoa perceber
+        if (d.valor === 0 && !zeroConfirmado) {
+          zeroConfirmado = true;
+          const txt = funil && funil.conta_no_ads ? "Valor zero não entra na receita do anúncio. Confirmar mesmo assim? Toque em «Confirmar» de novo."
+            : "Valor zero: fica registrado sem valor. Confirmar mesmo assim? Toque em «Confirmar» de novo.";
+          if (api && typeof api.erro === "function") api.erro(txt); else ui.marcarErro(form, "valor", txt);
+          return false;
+        }
+        if (d.valor !== 0) zeroConfirmado = false;
         const { valores, erros } = lerCamposPersonalizados(k, form, faltam);
         if (erros.length) { ui.marcarErro(form, erros[0].nome, erros[0].texto); return false; }
         return { valor: d.valor, ...(faltam.length ? { campos: valores } : {}) };
@@ -95,9 +137,14 @@ async function pedirPerda(k, card, estagio) {
       h("input", { type: "radio", name: nomeRadio, value: m.id, dataset: { texto: m.exige_texto ? "1" : "" } }),
       h("span", null, m.nome, m.exige_texto ? h("small", null, "pede justificativa") : null))));
   const texto = ui.campo({ rotulo: motivos.length ? "Justificativa" : "O que aconteceu? (opcional)", nome: "motivo_perda_txt", tipo: "textarea", max: 500, linhas: 3 });
+  // plano 1000 (CR-298): «Sem dinheiro agora» não some do radar — uma tarefa para retomar o contato daqui a 30/60/90 dias (opcional)
+  const retomar = k.pode("atendente") ? h("select", { name: "retomar_dias", class: "sel", "aria-label": "Retomar o contato" },
+    [["", "Não criar lembrete"], ["30", "Daqui a 30 dias"], ["60", "Daqui a 60 dias"], ["90", "Daqui a 90 dias"]].map(([v, t]) => h("option", { value: v }, t))) : null;
   const form = h("form", { class: "crm-form", novalidate: true },
     motivos.length ? h("div", { class: "pilha-p" }, h("span", { class: "campo-rot" }, "Por que não deu certo?", h("span", { class: "obrig", "aria-hidden": "true" }, " *")), lista) : null,
-    texto);
+    texto,
+    retomar ? h("label", { class: "campo crm-retomar" }, h("span", { class: "campo-rot" }, "Retomar o contato depois?"), retomar,
+      h("small", { class: "campo-ajuda" }, "Cria uma tarefa às 9h do dia escolhido, ligada a esta oportunidade.")) : null);
   return ui.modal({
     titulo: `Marcar como «${estagio.nome}»`, corpo: form, descricao: L.tituloCard(card),
     acoes: [
@@ -107,7 +154,8 @@ async function pedirPerda(k, card, estagio) {
         const t = form.querySelector("textarea").value.trim();
         if (motivos.length && !sel) { api.erro("Escolha o motivo da perda."); return false; }
         if (sel && sel.dataset.texto && !t) { ui.marcarErro(form, "motivo_perda_txt", "Esse motivo pede uma justificativa."); return false; }
-        return { ...(sel ? { motivo_perda_id: sel.value } : {}), ...(t ? { motivo_perda_txt: t } : {}) };
+        const dias = retomar && retomar.value ? Number(retomar.value) : 0;
+        return { ...(sel ? { motivo_perda_id: sel.value } : {}), ...(t ? { motivo_perda_txt: t } : {}), ...(dias ? { retomar_dias: dias } : {}) };
       } },
     ],
   });
@@ -121,14 +169,22 @@ async function pedirAgenda(k, card, estagio) {
   const form = h("form", { class: "crm-form", novalidate: true },
     ui.campo({ rotulo: `Data e hora da ${nome}`, nome: "consulta_em", tipo: "datahora", valor: padrao,
       ajuda: `É esta data que o lembrete automático usa (24 h antes da ${nome}).` }));
+  let confirmadoPassado = null;
   return ui.modal({
     titulo: `Agendar a ${nome}`, corpo: form, descricao: L.tituloCard(card), largura: "p",
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
       { rotulo: "Mover sem data", tipo: "neutro", valor: {} },
-      { rotulo: "Agendar", tipo: "primario", fn: () => {
+      { rotulo: "Agendar", tipo: "primario", fn: api => {
         const d = ui.lerForm(form);
         if (!d.consulta_em) { ui.marcarErro(form, "consulta_em", "Escolha a data e a hora."); return false; }
+        // plano 1000 (CR-052): data no passado pede confirmação (o lembrete de 24 h nunca rodaria) — o 2º «Agendar» com a mesma data confirma
+        if (L.dataPassou(d.consulta_em) && confirmadoPassado !== d.consulta_em) {
+          confirmadoPassado = d.consulta_em;
+          const txt = `${L.TEXTO_DATA_PASSOU} O lembrete automático não vai rodar. Toque em «Agendar» de novo para confirmar.`;
+          if (api && typeof api.erro === "function") api.erro(txt); else ui.marcarErro(form, "consulta_em", txt);
+          return false;
+        }
         return { consulta_em: d.consulta_em };
       } },
     ],
@@ -156,7 +212,27 @@ export async function prepararMovimento(k, card, estagio) {
 
 /** nx_negocio_mover → Card (lança o erro do servidor, com .codigo/.hint). `keepalive`: a página está saindo — o pedido termina mesmo com a aba fechada. */
 export function moverNegocio(k, card, estagio, { ordem = null, extra = {}, keepalive = false } = {}) {
-  return k.api.rpcC("nx_negocio_mover", { p_id: card.id, p_estagio: estagio.id, p_ordem: ordem, p_extra: extra || {} }, keepalive ? { keepalive: true } : {});
+  // plano 1000 (CR-298): «retomar_dias» é da tela (não vai ao servidor) — depois da perda gravada, cria a tarefa de retomada
+  const { retomar_dias: dias, ...resto } = extra || {};
+  const p = k.api.rpcC("nx_negocio_mover", { p_id: card.id, p_estagio: estagio.id, p_ordem: ordem, p_extra: resto }, keepalive ? { keepalive: true } : {});
+  if (!dias) return p;
+  return p.then(r => { criarRetomada(k, card, dias, { keepalive }); return r; });
+}
+/** CR-298: a tarefa «Retomar contato» (às 9h de SP, daqui a N dias), ligada ao negócio e ao contato. Falhar aqui não desfaz a perda: avisa. */
+async function criarRetomada(k, card, dias, { keepalive = false } = {}) {
+  const vence = k.L.retomarEm(dias);
+  if (!vence) return null;
+  const idContato = card.contato && card.contato.id != null ? card.contato.id : (card.contato_id ?? null);
+  const p = { titulo: `Retomar contato — ${k.L.tituloCard(card)}`.slice(0, 160), tipo: "whatsapp", vence_em: vence, negocio_id: card.id,
+    ...(idContato != null ? { contato_id: idContato } : {}), ...(typeof k.eu === "function" && k.eu() ? { dono_id: k.eu() } : {}) };
+  try {
+    const t = await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: p }, keepalive ? { keepalive: true } : {});
+    if (k.ui && k.ui.anunciar) k.ui.anunciar(`Tarefa para retomar o contato em ${dias} dias criada.`);
+    return t;
+  } catch (e) {
+    if (k.ui && k.ui.toast) k.ui.toast(`A perda foi registrada, mas a tarefa de retomada não foi criada: ${k.erro ? k.erro(e) : "tente criar à mão"}.`, { tipo: "erro" });
+    return null;
+  }
 }
 
 /** Pergunta o que for preciso e move. → Card | null (cancelado). Erros sobem. */
@@ -167,16 +243,24 @@ export async function moverComPerguntas(k, card, estagio, ordem = null) {
 }
 
 /* ============================================================ edição por campo */
+/** plano 1000 (CR-097): `salvar` devolve isto quando a pessoa desistiu (ex.: não confirmou) — nada foi gravado e o campo já voltou ao valor de antes. */
+export const CANCELAR_EDICAO = Symbol("cancelar_edicao");
 /** Linha dt/dd com input .ed que salva sozinho (change/blur). aoErro(e, erroEl) personaliza a mensagem. */
-export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro, validar, largo = false }) {
+export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro, validar, aviso, largo = false }) {
   const { ui, h } = k;
   const erro = h("small", { class: "ed-erro", role: "alert", hidden: true });
+  // plano 1000 (CR-052): aviso que NÃO bloqueia (ex.: «Essa data já passou») — `aviso(controle)` → texto | null, conferido a cada mudança
+  const avisoEl = aviso ? h("small", { class: "ed-aviso", role: "status", hidden: true }) : null;
+  const pintarAviso = () => { if (!avisoEl) return; const t = aviso(controle); avisoEl.textContent = t || ""; avisoEl.hidden = !t; };
   const id = `ed-${Math.random().toString(36).slice(2, 9)}`;
   controle.id = id;
   controle.classList.add("ed");
   if (desabilitado) controle.disabled = true;
   let ultimo = ler(controle);
   let salvando = false;
+  let outraMudanca = false;    // plano 1000 (CR-047): mudou de novo enquanto a gravação anterior não voltava — grava o valor novo depois
+  // plano 1000 (CR-057): o Esc devolve o valor como ele aparece (dinheiro com 2 casas: «6.800,00», não «6800»)
+  const exibir = v => (typeof v === "number" ? v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : (v ?? ""));
   /** validar(controle) → texto do erro ou null: texto que não vira valor (ex.: «abc» num campo de dinheiro) NÃO é gravado como se fosse «vazio». */
   const mostrarInvalido = texto => {
     ui.limpar(erro);
@@ -186,17 +270,19 @@ export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro
     controle.setAttribute("aria-describedby", erro.id = `${id}-er`);
   };
   async function aoMudar() {
+    pintarAviso();
     const invalido = validar ? validar(controle) : null;
     if (invalido) { mostrarInvalido(invalido); return; }
     const v = ler(controle);
-    if (JSON.stringify(v) === JSON.stringify(ultimo) || salvando) {
-      if (!salvando) { erro.hidden = true; controle.removeAttribute("aria-invalid"); }   // voltou ao valor que já estava gravado
+    if (salvando) { outraMudanca = true; return; }          // antes: descartado em silêncio (o 2º valor nunca era gravado)
+    if (JSON.stringify(v) === JSON.stringify(ultimo)) {
+      erro.hidden = true; controle.removeAttribute("aria-invalid");   // voltou ao valor que já estava gravado
       return;
     }
     salvando = true;
     erro.hidden = true; controle.removeAttribute("aria-invalid");
     try {
-      await salvar(v);
+      if ((await salvar(v)) === CANCELAR_EDICAO) return;
       ultimo = v;
       ui.toast("Salvo.", { tipo: "ok", ms: 1500 });
     } catch (e) {
@@ -206,27 +292,33 @@ export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro
       erro.hidden = false;
       controle.setAttribute("aria-invalid", "true");
       controle.setAttribute("aria-describedby", erro.id = `${id}-er`);
-    } finally { salvando = false; }
+    } finally {
+      salvando = false;
+      if (outraMudanca) { outraMudanca = false; await aoMudar(); }     // relê o campo: grava o valor novo (se ainda for diferente do gravado)
+    }
   }
   const evento = controle.tagName === "SELECT" || controle.type === "date" || controle.type === "datetime-local" ? "change" : "blur";
   controle.addEventListener(evento, aoMudar);
+  if (avisoEl && evento !== "change") controle.addEventListener("change", pintarAviso);
   if (controle.tagName === "INPUT" && controle.type !== "date" && controle.type !== "datetime-local") {
-    controle.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); controle.blur(); } if (ev.key === "Escape") { controle.value = typeof ultimo === "number" ? String(ultimo) : (ultimo ?? ""); controle.blur(); } });
+    controle.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); controle.blur(); } if (ev.key === "Escape") { controle.value = exibir(ultimo); controle.blur(); } });
   }
   // um bloco por campo (M24): no desktop é «rótulo | valor»; no celular os blocos formam uma grade de 2 colunas (`largo` ocupa a linha toda)
-  return [h("div", { class: ["ng-campo", largo && "ng-campo-largo"] }, h("dt", null, h("label", { for: id }, rotulo)), h("dd", null, controle), erro)];
+  return [h("div", { class: ["ng-campo", largo && "ng-campo-largo"] }, h("dt", null, h("label", { for: id }, rotulo)), h("dd", null, controle, avisoEl), erro)];
 }
 
 /* ============================================================ gaveta do negócio */
 // celular (≤ 760 px): as ações (Marcar consulta, Fechou, Não fechou, ⋮) descem para um rodapé fixo da gaveta (plano 50, item 26)
 const telaPequena = () => { try { return !!(globalThis.matchMedia && globalThis.matchMedia("(max-width: 760px)").matches); } catch { return false; } };
 
-export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
+export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizinhos, aoNavegar } = {}) {
   const { ui, h, L } = k;
   let fechada = false;
   // revisão: fechar a gaveta com Ganhou/Perdeu/Reabrir ainda no prazo do «Desfazer» grava NA HORA — antes o movimento ficava solto: a
   // gaveta reaberta deixava fazer outro por cima e o arrasto no Kanban era sobrescrito 7 s depois pelo firmar desta gaveta
-  const g = ui.gaveta({ titulo: k.v.negocio, largura: "g", aoFechar: () => { fechada = true; if (pend && !pend.efetivado && pend.firmarAgora) pend.firmarAgora(); if (aoFechar) aoFechar(); } });
+  let cancelarPulsoG = null;
+  const soltarPulsoG = () => { if (cancelarPulsoG) { try { cancelarPulsoG(); } catch { /* ok */ } cancelarPulsoG = null; } };   // plano 1000 (CR-067)
+  const g = ui.gaveta({ titulo: k.v.negocio, largura: "g", aoFechar: () => { fechada = true; if (pend && !pend.efetivado && pend.firmarAgora) pend.firmarAgora(); soltarPulsoG(); if (aoFechar) aoFechar(); } });
   const corpo = g.corpo;
   corpo.appendChild(ui.esqueleto("cartao"));
   let abaAtual = "resumo";
@@ -234,20 +326,66 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
   // dos 7 s do «Desfazer»). `pend` = o movimento que ainda pode ser desfeito ou está gravando; enquanto existe, a gaveta não aceita outro por cima.
   let pend = null;
   let ultimo = null;          // a última resposta de nx_negocio_ver (o «Desfazer» antes do servidor redesenha com ela)
+  let focouTitulo = false, ultimaLeitura = 0;
 
-  async function carregar() {
+  // plano 1000: conteúdo trocado pelo código (outro negócio, pulso, campo gravado) vira a base da proteção de texto não salvo — sem isso a
+  // assinatura do 1º clique ficava congelada e o «›» seguinte travava com «Há texto não salvo» sem nada digitado
+  const zerarProt = () => { if (typeof g.zerar === "function") g.zerar(); };
+  async function carregar({ seMudou = false, zerar = false } = {}) {
     try {
       const d = await k.api.rpcC("nx_negocio_ver", { p_id: id });
       if (fechada) return;
+      if (seMudou && JSON.stringify(d) === JSON.stringify(ultimo)) { ultimaLeitura = Date.now(); return; }
       ultimo = d;
+      ultimaLeitura = Date.now();
+      if (aoCarregar) try { aoCarregar(d); } catch (e) { console.error(e); }      // plano 1000 (CR-039)
       // chegou uma leitura no meio dos 7 s (outra aba, o pulso): a tela continua mostrando o destino pedido
       desenhar(pend && !pend.efetivado ? comPendente(d, pend) : d);
+      if (zerar) zerarProt();
+      // plano 1000 (CR-050): ao abrir, o foco vai para o TÍTULO da gaveta — nunca para um controle editável (seta no select «Responsável»
+      // trocava o responsável sem querer). Depois do foco inicial do ui.gaveta (30 ms); não rouba o foco se a pessoa já foi para outro lugar.
+      if (!focouTitulo) {
+        focouTitulo = true;
+        setTimeout(() => {
+          if (typeof document === "undefined") return;
+          const t = corpo.querySelector(".ng-titulo-txt");
+          const a = document.activeElement;
+          const raizG = g.el || corpo;
+          if (t && !fechada && (!a || a === document.body || (raizG.contains && raizG.contains(a)))) { try { t.focus({ preventScroll: true }); } catch { t.focus(); } }
+        }, 60);
+      }
     } catch (e) {
       if (fechada) return;
       ui.limpar(corpo);
       corpo.appendChild(ui.erroCartao(e, carregar));
     }
   }
+
+  /**
+   * plano 1000 (CR-072): aberta pelo quadro, a gaveta anda pelos cartões da MESMA coluna (‹ › e as teclas J/K) sem fechar — a mesma gaveta troca de
+   * negócio. Nada anda com um movimento esperando o «Desfazer» ou com texto não salvo.
+   */
+  function irPara(passo) {
+    if (typeof vizinhos !== "function" || fechada) return false;
+    const v = vizinhos(id) || {};
+    const alvo = passo < 0 ? v.anterior : v.proximo;
+    if (alvo == null) { ui.anunciar(passo < 0 ? "Este é o primeiro cartão da etapa." : "Este é o último cartão da etapa."); return false; }
+    if (pend) { ui.toast("Espere o «Desfazer» terminar para ir a outro cartão.", { tipo: "info" }); return false; }
+    if (typeof g.estaSujo === "function" && g.estaSujo()) { ui.toast("Há texto não salvo nesta gaveta.", { tipo: "info" }); return false; }
+    id = alvo; focouTitulo = false; ultimo = null; abaAtual = "resumo";
+    if (aoNavegar) try { aoNavegar(alvo); } catch (e) { console.error(e); }
+    carregar({ zerar: true });
+    return true;
+  }
+  const aoTeclaNav = ev => {
+    if (fechada || ev.ctrlKey || ev.metaKey || ev.altKey || (ev.key !== "j" && ev.key !== "k" && ev.key !== "J" && ev.key !== "K")) return;
+    const a = ev.target;
+    if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || ""))) return;
+    if (typeof document !== "undefined" && document.querySelector && document.querySelector("dialog[open]") && !(g.el && g.el.contains && g.el.contains(a))) return;
+    ev.preventDefault();
+    irPara(ev.key.toLowerCase() === "j" ? 1 : -1);
+  };
+  if (typeof vizinhos === "function") corpo.addEventListener("keydown", aoTeclaNav);
 
   function avisar(n) { if (aoMudar && n) try { aoMudar(n); } catch (e) { console.error(e); } }
 
@@ -316,6 +454,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       const r = await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: n.id, ...chaves } });
       Object.assign(n, r);
       avisar(r);
+      zerarProt();
       return r;
     }
     async function mover(e) {
@@ -409,7 +548,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       try { await salvar({ titulo: t }); tituloAntes = t; tituloTxt.textContent = t || (d.contato && d.contato.nome) || n.nome || "Sem título"; ui.toast("Salvo.", { tipo: "ok", ms: 1500 }); }
       catch (e) { k.toastErro(e); titulo.value = tituloAntes; }
     });
-    const tituloTxt = h("h3", { class: "ng-titulo ng-titulo-txt" }, n.titulo || (d.contato && d.contato.nome) || n.nome || "Sem título");
+    const tituloTxt = h("h3", { class: "ng-titulo ng-titulo-txt", tabindex: "-1" }, n.titulo || (d.contato && d.contato.nome) || n.nome || "Sem título");
     const caixaTitulo = h("div", { class: "ng-titulo-l" }, tituloTxt);
     const lapis = podeEditar ? h("button", { type: "button", class: "bt-icone ng-lapis", "aria-label": "Editar o título", title: "Editar o título" }, ui.icone("editar")) : null;
     if (lapis) caixaTitulo.appendChild(lapis);
@@ -453,11 +592,15 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
     const menuBt = h("button", { type: "button", class: "bt-icone", "aria-label": "Mais ações" }, ui.icone("opcoes"));
     menuBt.addEventListener("click", () => {
       const itens = [];
-      if (podeEditar) itens.push({ rotulo: "Mover para outro funil…", icone: "funil", fn: () => moverDeFunil(k, n, { aoMover: async card => { avisar(card); await carregar(); } }) });
+      // plano 1000 (CR-048): com «Fechou/Não fechou» ainda no prazo do «Desfazer» (ou gravando), mover de funil gravaria a etapa de ganho do funil
+      // ANTIGO e excluir faria a gravação falhar — os dois ficam travados, com a mesma explicação do quadro
+      const travado = !!pend;
+      const dicaTrava = pend && pend.efetivado ? " (gravando a última mudança…)" : " (espere o «Desfazer» terminar)";
+      if (podeEditar) itens.push({ rotulo: `Mover para outro funil…${travado ? dicaTrava : ""}`, icone: "funil", desabilitado: travado, fn: () => moverDeFunil(k, n, { aoMover: async card => { avisar(card); await carregar(); } }) });
       if (d.contato) itens.push({ rotulo: `Ver ficha d${k.v.art("contato") === "a" ? "a" : "o"} ${k.v.min("contato")}`, icone: "contato", fn: () => abrirContato(k, d.contato.id, {}) });
       itens.push({ rotulo: "Copiar link", icone: "link", fn: () => ui.copiar(k.ctx.linkPublico ? k.ctx.linkPublico(`#/crm/negocio/${n.id}`) : location.href) });
-      if (k.pode("admin")) itens.push("-", { rotulo: "Excluir", icone: "lixeira", perigo: true, fn: async () => {
-        const ok = await ui.confirmar({ titulo: `Excluir ${k.v.min("negocio")}?`, texto: "As tarefas e notas dele também serão apagadas. Não dá para desfazer.", perigo: true, digitar: "excluir" });
+      if (k.pode("admin")) itens.push("-", { rotulo: `Excluir${travado ? dicaTrava : ""}`, icone: "lixeira", perigo: true, desabilitado: travado, fn: async () => {
+        const ok = await ui.confirmar({ titulo: `Excluir ${k.v.min("negocio")}?`, texto: `As tarefas e notas d${k.v.art("negocio") === "a" ? "ela" : "ele"} também serão apagadas. Não dá para desfazer.`, perigo: true, digitar: "excluir" });
         if (!ok) return;
         try { await k.api.rpcC("nx_negocio_excluir", { p_id: n.id }); ui.toast("Excluído.", { tipo: "ok" }); avisar({ id: n.id, excluido: true }); g.fechar(); }
         catch (e) { k.toastErro(e); }
@@ -471,9 +614,11 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
     const ordemAtual = estagio ? estagio.ordem : -1;
     for (const e of (funil ? funil.estagios : [])) {
       const atual = e.id === n.estagio_id;
+      // plano 1000 (CR-069): a etapa atual continua FOCÁVEL (aria-disabled, não disabled) para o leitor de tela ouvir «Etapa atual»
       const b = h("button", { type: "button", role: "listitem", class: ["ng-etapa", e.tipo === "aberto" && e.ordem < ordemAtual && n.status === "aberto" && "feita"],
-        style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, "aria-current": atual ? "step" : null, disabled: atual || !podeEditar || pendente,
-        title: atual ? `Etapa atual: ${e.nome}` : `Mover para ${e.nome}` }, h("span", null, e.nome));
+        style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, "aria-current": atual ? "step" : null, "aria-disabled": atual ? "true" : null,
+        disabled: !atual && (!podeEditar || pendente), title: atual ? `Etapa atual: ${e.nome}` : `Mover para ${e.nome}` },
+        h("span", null, e.nome), atual ? h("span", { class: "sr-only" }, " (etapa atual)") : null);
       if (!atual && podeEditar) b.addEventListener("click", () => mover(e));
       fita.appendChild(b);
     }
@@ -483,13 +628,22 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
     const movel = telaPequena();
     // C4: a origem com a pílula padrão (anúncio com a plataforma; cadastro manual não ganha pílula)
     const orig = L.origemPilula(n, { manual: false });
+    // plano 1000 (CR-070): quem trabalha o cartão vê ANTES de clicar em «Fechou» que faltam campos obrigatórios — a pílula leva até eles
+    const faltamCampos = n.status === "aberto" ? L.obrigatoriosVazios(k.base.campos, "negocio", n.funil_id, n.campos || {}) : [];
+    const pilFaltam = faltamCampos.length ? h("button", { type: "button", class: "pilula pilula-aten ng-faltam", title: faltamCampos.map(c => c.rotulo).join(", "),
+      on: { click: () => irParaCampos() } }, ui.icone("alerta"), `Falta${faltamCampos.length === 1 ? "" : "m"} ${faltamCampos.length} campo${faltamCampos.length === 1 ? "" : "s"}`) : null;
+    const viz = typeof vizinhos === "function" ? (vizinhos(n.id) || {}) : null;
+    const nav = viz ? h("div", { class: "ng-nav", role: "group", "aria-label": "Outros cartões desta etapa" },
+      h("button", { type: "button", class: "bt-icone ng-nav-ant", disabled: viz.anterior == null, "aria-label": "Cartão anterior da etapa (K)", title: "Anterior (K)", on: { click: () => irPara(-1) } }, ui.icone("seta-esq")),
+      h("button", { type: "button", class: "bt-icone ng-nav-prox", disabled: viz.proximo == null, "aria-label": "Próximo cartão da etapa (J)", title: "Próximo (J)", on: { click: () => irPara(1) } }, ui.icone("seta-dir"))) : null;
     const topo = h("div", { class: "ng-topo" },
+      nav,
       h("div", { class: "ng-status" }, statusPil,
         pendente ? ui.pilula("Confirmando…", "neutra", { icone: "relogio", class: "ng-confirmando", title: "Dá para desfazer pelo aviso por alguns segundos" }) : null,
         faixa ? ui.pilula(L.textoDiasEtapa(n.estagio_em), faixa.nivel === "ruim" ? "ruim" : faixa.nivel === "aten" ? "aten" : "neutra", { icone: "relogio", title: faixa.texto, class: "ng-tempo" }) : null,
         orig ? ui.pilula(null, orig.chave, { variante: "origem", plataforma: orig.plataforma, class: "ng-origem" }) : null,
-        funil && funil.conta_no_ads ? ui.pilula("Conta no retorno do anúncio", "neutra", { title: "Este funil entra nos números de Anúncios" }) : null,
-        dono ? ui.pilula(dono.nome, "neutra", { icone: "usuario" }) : null),
+        funil && funil.conta_no_ads ? ui.pilula("Conta nos anúncios", "neutra", { title: "Este funil entra nos números de Anúncios" }) : null,
+        dono ? ui.pilula(dono.nome, "neutra", { icone: "usuario" }) : null, pilFaltam),
       caixaTitulo,
       h("div", { class: "ng-linha1" }, valorEl, movel ? null : acoes),
       fita,
@@ -512,6 +666,15 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
       if (!secoes[abaAtual]) secoes[abaAtual] = criarSecao(abaAtual);
       conteudo.appendChild(secoes[abaAtual]);
     }
+    /** CR-070: abre o Resumo e leva ao bloco «Campos», com o foco no 1º obrigatório vazio. */
+    function irParaCampos() {
+      if (abaAtual !== "resumo") { abaAtual = "resumo"; if (abasEl.ativar) abasEl.ativar("resumo"); mostrar(); }
+      const bloco = conteudo.querySelector('section[aria-label="Campos"]');
+      if (!bloco) return;
+      try { bloco.scrollIntoView({ block: "start", behavior: ui.comportamentoRolagem ? ui.comportamentoRolagem() : "auto" }); } catch { /* ok */ }
+      const alvo = faltamCampos.map(c => bloco.querySelector(`[name="campo__${c.chave}"]`)).find(Boolean);
+      if (alvo) try { alvo.focus({ preventScroll: true }); } catch { alvo.focus(); }
+    }
 
     function criarSecao(qual) {
       const T = k.__tarefas;
@@ -519,7 +682,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
         aoMudar: lista => { d.tarefas = lista; abasEl.contar("tarefas", lista.filter(t => !t.concluida_em).length || null); avisar({ ...n, _tarefas: true }); secoes.tempo = null; } });
       if (qual === "notas") return T.blocoNotas(k, { notas: d.notas || [], negocio_id: n.id,
         aoMudar: lista => { d.notas = lista; abasEl.contar("notas", lista.length || null); secoes.tempo = null; } });
-      if (qual === "tempo") return T.blocoTempo(k, d.tempo || []);
+      if (qual === "tempo") return T.blocoTempo(k, d.tempo || [], { pagina: { p_negocio: n.id } });
       return resumo();
     }
 
@@ -538,7 +701,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
                 g.fechar();
                 k.ctx.navegar(conv ? `#/conversas/${conv.id}` : `#/conversas?contato=${ct.id}`);
               } } }, ui.icone("whatsapp"), "Abrir conversa") : null,
-              h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => abrirContato(k, ct.id, {}) } }, "Ficha")))));
+              h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => abrirContato(k, ct.id, {}) } }, "Ver ficha")))));
       } else {
         el.appendChild(h("p", { class: "aviso" }, ui.icone("info"), h("span", null, `Sem ${k.v.min("contato")} ligado (o cadastro foi removido). Os números do negócio continuam no retorno do anúncio.`)));
       }
@@ -577,15 +740,18 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
           if (extra.valor_previsto != null) ui.toast(`Valor previsto sugerido pelo ticket: ${ui.brl(t)}.`, { tipo: "info" });
         } }));
       if (servicos.length) el.appendChild(h("datalist", { id: idLista }, servicos.map(s => h("option", { value: s }))));
+      // plano 1000 (CR-052): data no passado é aceita (registro tardio), mas avisa — o lembrete automático de 24 h não roda para ela
+      const avisoPassou = c => (L.dataPassou(c.value) ? `${L.TEXTO_DATA_PASSOU} O lembrete automático não vai rodar para ela.` : null);
       dl.append(...linhaEd(k, { rotulo: `Data e hora da ${nomeCompromisso(k)}`, desabilitado: !podeEditar, largo: true,
-        controle: h("input", { type: "datetime-local", value: k.L.paraDataHoraLocal(n.consulta_em) }),
+        controle: h("input", { type: "datetime-local", value: k.L.paraDataHoraLocal(n.consulta_em) }), aviso: avisoPassou,
         ler: c => c.value || null, salvar: v => salvar({ consulta_em: v }) }));
       dl.append(...linhaEd(k, { rotulo: "Previsão de fechamento", desabilitado: !podeEditar,
-        controle: h("input", { type: "date", value: n.previsao_fechamento || "" }),
+        controle: h("input", { type: "date", value: n.previsao_fechamento || "" }), aviso: c => (L.dataPassou(c.value) ? L.TEXTO_DATA_PASSOU : null),
         ler: c => c.value || null, salvar: v => salvar({ previsao_fechamento: v }) }));
+      // plano 1000 (CR-046): origem nula (lead antigo do webhook) não pode aparecer como «Anúncio» (a 1ª opção) — e não grava nada até escolherem
       dl.append(...linhaEd(k, { rotulo: "Origem", desabilitado: !podeEditar || !!n.plataforma,
-        controle: sel(Object.entries(k.L.ROTULO_ORIGEM).map(([valor, rotulo]) => ({ valor, rotulo })), n.origem),
-        ler: c => c.value, salvar: v => salvar({ origem: v }) }));
+        controle: sel([...(n.origem ? [] : [{ valor: "", rotulo: "— não informada —" }]), ...k.L.origensManuais(n.origem).map(([valor, rotulo]) => ({ valor, rotulo }))], n.origem),
+        ler: c => c.value || null, salvar: v => salvar({ origem: v }) }));
       // pontuação do lead (automação «preencher um campo» = score, ou a IA): só leitura, com o motivo e quando foi atribuída
       const pont = k.L.pontuacao(n);
       if (pont) dl.append(h("div", { class: "ng-campo ng-campo-largo" }, h("dt", null, "Pontuação do lead"), h("dd", { class: "ng-pontuacao" },
@@ -637,6 +803,15 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
           campos.some(c => c.obrigatorio) ? h("p", { class: "sub" }, `Campos com * precisam estar preenchidos para marcar como ${k.v.ganhar.toLowerCase()}.`) : null, form));
       }
 
+      /* plano 1000 (CR-074): valores de campos de OUTRO funil (o negócio mudou de funil) continuam no banco — aparecem aqui, só leitura e recolhidos */
+      const outros = L.camposDeOutrosFunis(k.base.campos, n.funil_id, n.campos || {});
+      if (outros.length) {
+        el.appendChild(h("details", { class: "ng-bloco ng-outros-campos" },
+          h("summary", null, `Campos de outros funis (${outros.length})`),
+          h("p", { class: "sub" }, "Preenchidos quando este negócio estava em outro funil. Ficam guardados; voltam a ser editáveis se ele voltar para lá."),
+          h("dl", { class: "ng-kv" }, outros.map(o => h("div", { class: "ng-campo" }, h("dt", null, o.rotulo), h("dd", null, o.texto))))));
+      }
+
       /* observação */
       const obs = h("textarea", { rows: 3, maxlength: 5000, placeholder: "Observações sobre este negócio" }, n.obs || "");
       const dlObs = h("dl", { class: "ng-kv" }, ...linhaEd(k, { rotulo: "Observação", desabilitado: !podeEditar, controle: obs, largo: true,
@@ -657,7 +832,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
         for (const c of d.conversas || []) {
           lst.appendChild(h("a", { class: "fx-proto", href: `#/conversas/${c.id}` }, ui.icone("chat"),
             h("b", { class: "mono" }, c.protocolo),
-            h("span", null, `${c.status === "resolvida" ? "Resolvido" : c.status === "pendente" ? "Pendente" : "Aberto"} · ${ui.dataBR(c.aberta_em)}`)));
+            h("span", null, L.linhaAtendimento(c, ui.dataBR))));
         }
         blk.appendChild(lst);
         el.appendChild(blk);
@@ -672,6 +847,17 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar } = {}) {
 
   if (!k.__tarefas) k.__tarefas = await k.mod("tarefas");
   await carregar();
+  // plano 1000 (CR-067): a gaveta aberta acompanha o que outra pessoa muda (etapa, campos) — no pulso, no máximo a cada 15 s, e nunca com um
+  // campo em edição, texto não salvo ou movimento esperando o «Desfazer»
+  cancelarPulsoG = k.ctx && k.ctx.pulso && typeof k.ctx.pulso.assinar === "function" ? k.ctx.pulso.assinar(() => {
+    if (fechada || pend || (typeof document !== "undefined" && document.hidden)) return;
+    if (Date.now() - ultimaLeitura < 15000) return;
+    const a = typeof document !== "undefined" ? document.activeElement : null;
+    if (a && corpo.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || "")) return;
+    if (typeof g.estaSujo === "function" && g.estaSujo()) return;
+    carregar({ seMudou: true, zerar: true });
+  }) : null;
+  if (fechada && cancelarPulsoG) { cancelarPulsoG(); cancelarPulsoG = null; }
   return g;
 }
 
@@ -681,8 +867,8 @@ export async function moverDeFunil(k, n, { aoMover } = {}) {
   const permitidos = L.funisPermitidos(k.base.funis, n.funil_id, n.status).filter(f => f.id !== n.funil_id);
   if (!permitidos.length) {
     const f = k.funil(n.funil_id);
-    ui.toast(f && f.conta_no_ads && n.status !== "aberto" ? L.textoErro({ codigo: "funil_invalido", hint: "fechado_no_ads" })
-      : f && f.conta_no_ads ? L.textoErro({ codigo: "funil_invalido", hint: "sai_do_ads" }) : "Não há outro funil disponível.", { tipo: "info" });
+    ui.toast(f && f.conta_no_ads && n.status !== "aberto" ? L.textoErro({ codigo: "funil_invalido", hint: "fechado_no_ads" }, { vocab: k.v })
+      : f && f.conta_no_ads ? L.textoErro({ codigo: "funil_invalido", hint: "sai_do_ads" }, { vocab: k.v }) : "Não há outro funil disponível.", { tipo: "info" });
     return;
   }
   const selFunil = ui.campo({ rotulo: "Funil", nome: "funil", tipo: "select", valor: permitidos[0].id, opcoes: permitidos.map(f => ({ valor: f.id, rotulo: f.nome })) });
@@ -696,7 +882,7 @@ export async function moverDeFunil(k, n, { aoMover } = {}) {
   selFunil.querySelector("select").addEventListener("change", preencher);
   preencher();
   const f = k.funil(n.funil_id);
-  const aviso = f && f.conta_no_ads ? h("p", { class: "aviso aviso-aten" }, ui.icone("info"), h("span", null, "Este negócio está no funil de anúncios: ele só pode ir para outro funil de anúncios, para a receita e as conversas do anúncio não sumirem.")) : null;
+  const aviso = f && f.conta_no_ads ? h("p", { class: "aviso aviso-aten" }, ui.icone("info"), h("span", null, `${k.v.art("negocio") === "a" ? "Esta" : "Este"} ${k.v.min("negocio")} está no funil de anúncios: só pode ir para outro funil de anúncios, para a receita e as conversas do anúncio não sumirem.`)) : null;
   const corpo = h("form", { class: "crm-form", novalidate: true }, aviso, selFunil, selEtapa);
   const r = await ui.modal({ titulo: "Mover para outro funil", corpo, largura: "p", acoes: [
     { rotulo: "Cancelar", tipo: "neutro", valor: null },
@@ -716,15 +902,38 @@ export async function iniciarPosVenda(k, n, contato, { aoCriar } = {}) {
   if (!funis.length) { ui.toast("Crie um funil de pós-venda (fora do Ads) em Configurações → Funis e etapas.", { tipo: "info" }); return; }
   const form = h("form", { class: "crm-form", novalidate: true },
     h("p", { class: "sub" }, `Cria ${k.v.art("negocio") === "a" ? "uma nova" : "um novo"} ${k.v.min("negocio")} para ${contato.nome || "este contato"}. ${k.v.art("negocio") === "a" ? "A" : "O"} atual continua ${k.v.ganhar.toLowerCase()} no funil de anúncios — a receita do anúncio não muda.`),
-    ui.campo({ rotulo: "Funil", nome: "funil_id", tipo: "select", valor: funis[0].id, opcoes: funis.map(f => ({ valor: f.id, rotulo: f.nome })) }),
     ui.campo({ rotulo: "Título", nome: "titulo", valor: `Pós-venda — ${contato.nome || k.L.tituloCard(n)}`.slice(0, 120), max: 120 }));
+  // plano 1000 (CR-220): a etapa em que nasce (as abertas do funil escolhido; antes era sempre a 1ª) e (CR-221) o serviço e o responsável do negócio
+  // ganho já preenchidos (dá para trocar) — antes o pós-venda vinha só com o título
+  const selFunil = h("select", { name: "funil_id", class: "sel", "aria-label": "Funil" }, funis.map(f => h("option", { value: f.id }, f.nome)));
+  selFunil.value = funis[0].id;
+  const selEtapa = h("select", { name: "estagio_id", class: "sel", "aria-label": "Etapa" });
+  const pintarEtapas = () => {
+    const f = funis.find(x => String(x.id) === String(selFunil.value)) || funis[0];
+    ui.limpar(selEtapa);
+    const abertas = (f.estagios || []).filter(e => e.tipo === "aberto");
+    for (const e of abertas) selEtapa.appendChild(h("option", { value: e.id }, e.nome));
+    selEtapa.value = abertas[0] ? abertas[0].id : "";
+  };
+  selFunil.addEventListener("change", pintarEtapas);
+  pintarEtapas();
+  const inServico = h("input", { type: "text", name: "servico", maxlength: 120, value: n.servico || "", "aria-label": k.v.servico || "Serviço" });
+  const selDono = h("select", { name: "dono_id", class: "sel", "aria-label": "Responsável" }, h("option", { value: "" }, "Sem responsável"),
+    (k.base.usuarios || []).map(u => h("option", { value: u.id }, u.nome)));
+  selDono.value = n.dono_id && (k.base.usuarios || []).some(u => u.id === n.dono_id) ? n.dono_id : "";
+  form.insertBefore(h("div", { class: "crm-form-2 pv-campos" },
+    h("label", { class: "campo" }, h("span", { class: "campo-rot" }, "Funil"), selFunil),
+    h("label", { class: "campo" }, h("span", { class: "campo-rot" }, "Etapa"), selEtapa),
+    h("label", { class: "campo" }, h("span", { class: "campo-rot" }, k.v.servico || "Serviço"), inServico),
+    h("label", { class: "campo" }, h("span", { class: "campo-rot" }, "Responsável"), selDono)), form.lastChild);
   let reqAtual = null, reqConteudo = "";   // M25: uma chave por intenção
   const r = await ui.modal({ titulo: "Iniciar pós-venda", corpo: form, acoes: [
     { rotulo: "Cancelar", tipo: "neutro", valor: null },
     { rotulo: "Criar", tipo: "primario", fn: async api => {
-      const d = ui.lerForm(form);
+      const titulo = (form.querySelector("[name=titulo]") || {}).value || "";
       try {
-        const p = { contato_id: contato.id, funil_id: d.funil_id, titulo: d.titulo || null, origem: "manual" };
+        const p = { contato_id: contato.id, funil_id: selFunil.value, titulo: titulo.trim() || null, origem: "manual",
+          ...(selEtapa.value ? { estagio_id: selEtapa.value } : {}), ...(inServico.value.trim() ? { servico: inServico.value.trim() } : {}), ...(selDono.value ? { dono_id: selDono.value } : {}) };
         const conteudo = JSON.stringify(p);
         if (conteudo !== reqConteudo) { reqAtual = k.novaReq(); reqConteudo = conteudo; }
         return (await k.escrever("nx_negocio_salvar", { p_negocio: p }, { req: reqAtual })).resultado;
@@ -742,7 +951,7 @@ export async function iniciarPosVenda(k, n, contato, { aoCriar } = {}) {
  * Com 10–13 dígitos no telefone procura o cadastro que já existe e avisa ANTES de criar: «Já existe: Mariana Costa, última conversa há 2 dias · Usar este cadastro».
  * inputTel = o <input> do telefone; aoUsar(contato) = o que fazer ao aceitar; ignorarId = o próprio cadastro (edição). → a caixa (insira no formulário).
  */
-export function avisoDuplicado(k, inputTel, { aoUsar, ignorarId = null } = {}) {
+export function avisoDuplicado(k, inputTel, { aoUsar, ignorarId = null, checarJa = false } = {}) {
   const { ui, h, L } = k;
   const caixa = h("div", { class: "crm-dup", role: "status", "aria-live": "polite", hidden: true });
   let seq = 0;
@@ -764,6 +973,7 @@ export function avisoDuplicado(k, inputTel, { aoUsar, ignorarId = null } = {}) {
     } catch { /* sem a checagem o servidor ainda não duplica: reaproveita o cadastro (nx_negocio_salvar) ou recusa (telefone_em_uso) */ }
   }, 400);
   inputTel.addEventListener("input", checar);
+  if (checarJa && inputTel.value) checar();      // telefone que já veio preenchido (ex.: da Agenda) também é conferido
   return caixa;
 }
 
@@ -772,8 +982,13 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
   const { ui, h, L } = k;
   if (!k.pode("atendente")) { ui.toast("Seu acesso é só de leitura.", { tipo: "info" }); return null; }
   let contato = null;
+  let abertosDoContato = null;      // plano 1000 (CR-061): negócios abertos do contato escolhido (quando nx_contato_ver os traz)
   if (dados.contato_id) {
-    try { contato = (await k.api.rpcC("nx_contato_ver", { p_id: dados.contato_id })).contato; } catch (e) { k.toastErro(e); return null; }
+    try {
+      const r = await k.api.rpcC("nx_contato_ver", { p_id: dados.contato_id });
+      contato = r.contato;
+      if (Array.isArray(r.negocios)) abertosDoContato = r.negocios.filter(x => !x.status || x.status === "aberto");
+    } catch (e) { k.toastErro(e); return null; }
   }
   const g = ui.gaveta({ titulo: k.v.novo ? k.v.novo("negocio") : `Novo ${k.v.min("negocio")}`, largura: "m", aoFechar });
   const funis = k.base.funis.filter(f => f.ativo !== false);
@@ -782,14 +997,34 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
 
   /* contato: escolhido OU busca OU novo */
   const zonaContato = h("div", { class: "pilha-p" });
-  let modoNovo = false;
+  // plano 1000 (pedido da Agenda): sem contato escolhido, o nome ou o telefone que veio (dados.nome / dados.telefone) já abre o cadastro novo preenchido
+  const preNome = !contato && dados.nome ? String(dados.nome).trim().slice(0, 160) : "";
+  const preTel = !contato && dados.telefone ? String(dados.telefone).trim().slice(0, 40) : "";
+  let modoNovo = !!(preNome || preTel);
+  // plano 1000 (CR-059): ir de «cadastrar novo» para «buscar existente» e voltar não apaga o nome/telefone/e-mail já digitados
+  const digitado = { c_nome: preNome, c_telefone: preTel, c_email: "" };
+  let primeiraVez = true;
   function desenharContato() {
+    for (const n of Object.keys(digitado)) { const x = zonaContato.querySelector(`[name=${n}]`); if (x) digitado[n] = x.value; }
+    const veioPronto = primeiraVez && modoNovo;
+    primeiraVez = false;
     ui.limpar(zonaContato);
     zonaContato.appendChild(h("span", { class: "campo-rot" }, k.v.contato, h("span", { class: "obrig", "aria-hidden": "true" }, " *")));
     if (contato) {
       zonaContato.appendChild(h("div", { class: "crm-escolhido" }, ui.avatar(contato.nome || contato.telefone, contato.id),
         h("span", null, h("b", null, L.nomeContato(contato)), h("small", null, contato.telefone ? ui.telBR(contato.telefone) : contato.email || "")),
-        dados.contato_id ? null : h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { contato = null; desenharContato(); } } }, "Trocar")));
+        dados.contato_id ? null : h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { contato = null; abertosDoContato = null; desenharContato(); } } }, "Trocar")));
+      // plano 1000 (CR-061): quem volta continua no MESMO negócio aberto (decisão 1) — criar outro sem querer duplica o funil. Avisa; ainda dá para criar.
+      const lista = abertosDoContato || [];
+      const n = lista.length || Number(contato.negocios_abertos) || 0;
+      if (n > 0) {
+        const t = L.termosNegocio(k.v);
+        const um = lista[0];
+        zonaContato.appendChild(h("p", { class: "aviso aviso-aten crm-ja-aberto", role: "status" }, ui.icone("info"),
+          h("span", null, `Já tem ${n} ${n === 1 ? t.n : t.ns} abert${t.a}${n === 1 ? "" : "s"}${um ? `: «${L.tituloCard(um)}»` : ""}. Criar outr${t.a} só se for mesmo outro assunto.`),
+          um ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { g.fechar(); setTimeout(() => abrirNegocio(k, um.id, {}), 240); } } }, "Abrir")
+            : h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => abrirContato(k, contato.id, {}) } }, "Ver ficha")));
+      }
       return;
     }
     if (modoNovo) {
@@ -798,8 +1033,9 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
         ui.campo({ rotulo: "Telefone / WhatsApp", nome: "c_telefone", tipo: "tel", placeholder: "(12) 99830-3030", autocomplete: "off", validar: "telefone" }),
         h("div", { class: "inteiro" }, ui.campo({ rotulo: "E-mail (opcional)", nome: "c_email", tipo: "email", autocomplete: "off" })));
       // M24: o aviso de cadastro já existente aparece enquanto digita o telefone («Já existe: Mariana Costa, última conversa há 2 dias · Usar este cadastro»)
+      for (const n of Object.keys(digitado)) { const x = grade.querySelector(`[name=${n}]`); if (x && digitado[n]) x.value = digitado[n]; }
       zonaContato.append(grade,
-        avisoDuplicado(k, grade.querySelector("[name=c_telefone]"), { aoUsar: achado => { contato = achado; modoNovo = false; desenharContato(); } }),
+        avisoDuplicado(k, grade.querySelector("[name=c_telefone]"), { aoUsar: achado => { contato = achado; modoNovo = false; desenharContato(); }, checarJa: veioPronto }),
         h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { modoNovo = false; desenharContato(); } } }, "Buscar um cadastro existente"));
       return;
     }
@@ -848,8 +1084,10 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
   const servicos = Object.keys(k.base.ticket || {});
   const inServico = ui.campo({ rotulo: k.v.servico, nome: "servico", max: 120, placeholder: servicos.length ? `Ex.: ${servicos[0]}` : "" });
   if (servicos.length) {
-    const lista = h("datalist", { id: "srv-novo" }, servicos.map(s => h("option", { value: s })));
-    inServico.querySelector("input").setAttribute("list", "srv-novo");
+    // plano 1000 (CR-058): id único — a gaveta e o modal da conversa abertos juntos não disputam o mesmo datalist
+    const idSrv = `srv-novo-${Math.random().toString(36).slice(2, 9)}`;
+    const lista = h("datalist", { id: idSrv }, servicos.map(s => h("option", { value: s })));
+    inServico.querySelector("input").setAttribute("list", idSrv);
     inServico.appendChild(lista);
   }
   const inValor = ui.campo({ rotulo: "Valor previsto", nome: "valor_previsto", tipo: "moeda", placeholder: "R$ 0,00", validar: "moeda" });
@@ -887,6 +1125,8 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
     ui.marcarErro(form, null);
     const d = ui.lerForm(form);
     const campoValor = form.querySelector('[name="valor_previsto"]');
+    // plano 1000 (CR-060): «mil» não vira «sem valor» em silêncio — erro no campo e nada vai ao servidor
+    if (campoValor && L.dinheiroInvalido(campoValor.value)) { ui.marcarErro(form, "valor_previsto", "Valor inválido. Use só números, por exemplo 1.500,00."); return; }
     if (campoValor) d.valor_previsto = k.L.lerNumero(campoValor.value);   // "1.500" = mil e quinhentos
     const p = { funil_id: d.funil_id, estagio_id: d.estagio_id, titulo: d.titulo || null, servico: d.servico || null,
       valor_previsto: d.valor_previsto, consulta_em: d.consulta_em || null, dono_id: d.dono_id || null, etiquetas, origem: "manual" };
@@ -925,10 +1165,13 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
 /* ============================================================ ficha 360 numa gaveta */
 export async function abrirContato(k, id, { aoMudar } = {}) {
   const { ui, h } = k;
-  const g = ui.gaveta({ titulo: k.v.contato, largura: "g" });
+  let tela = null, fechou = false;
+  // plano 1000 (CR-104): a ficha na gaveta assina o pulso — fechar a gaveta desliga
+  const g = ui.gaveta({ titulo: k.v.contato, largura: "g", aoFechar: () => { fechou = true; if (tela && tela.desmontar) tela.desmontar(); } });
   const alvo = h("div", { class: "crm" });
   g.corpo.appendChild(alvo);
   const Lst = await k.mod("listas");
-  await Lst.montarFicha(k, alvo, id, { gaveta: g, aoMudar });
+  tela = await Lst.montarFicha(k, alvo, id, { gaveta: g, aoMudar });
+  if (fechou && tela && tela.desmontar) tela.desmontar();
   return g;
 }

@@ -20,13 +20,26 @@ export const INTERVALO_OCIOSIDADE_MS = 15 * 1000;
 const CHAVE_RECARGA = "nx-versao-recarga";      // sessionStorage: quando a aba recarregou por causa de versão (anti-laço)
 const CHAVE_SW_DESLIGADO = "nx-sw-desligado";   // sessionStorage: o desligamento de emergência já rodou nesta aba
 
+const CHAVE_SW_AVISO = "nx-sw-aviso";           // sessionStorage: a recarga do desligamento de emergência deve ser explicada na volta (AS-295)
+/** Plano 1000 (AS-207): fora do relógio de 10 min, voltar à aba ou reconectar confere o versao.json no máximo uma vez por minuto. */
+export const VERIFICAR_NO_MINIMO_MS = 60 * 1000;
+
+/** Plano 1000 (AS-205): `notas` do versao.json → até 3 linhas curtas de texto puro («o que mudou»); qualquer outra coisa vira []. */
+export function notasDaVersao(remoto) {
+  const n = remoto && remoto.notas;
+  const lista = Array.isArray(n) ? n : typeof n === "string" ? [n] : [];
+  return lista.filter(x => typeof x === "string").map(x => x.replace(/\s+/g, " ").trim()).filter(Boolean).slice(0, 3).map(x => (x.length > 120 ? `${x.slice(0, 119)}…` : x));
+}
+
 /** Compara a versão em uso (?v= do app.js) com a do versao.json. */
 export function decidirVersao(atual, remoto) {
   if (!remoto || typeof remoto !== "object" || Array.isArray(remoto)) return { acao: "nada" };
   if (remoto.sw === false) return { acao: "desligar" };
   const v = typeof remoto.versao === "string" ? remoto.versao.trim() : "";
   if (!/^[A-Za-z0-9._-]{1,40}$/.test(v)) return { acao: "nada" };
-  return v !== atual ? { acao: "nova", versao: v } : { acao: "nada" };
+  if (v === atual) return { acao: "nada" };
+  const notas = notasDaVersao(remoto);
+  return notas.length ? { acao: "nova", versao: v, notas } : { acao: "nova", versao: v };
 }
 
 /** O service worker só vale em https ou localhost (http); no ambiente fictício (?dev-falso=1) só com ?sw=1 (senão ele esconde arquivo editado). */
@@ -64,24 +77,36 @@ export function versaoDaUrl(url) {
 export function criarVersao(o) {
   const agora = o.agora || (() => Date.now());
   const ocioso = o.ociosoMs || OCIOSO_MS;
-  let pronta = null, ultimaAcao = agora(), aplicando = false;
+  let pronta = null, ultimaAcao = agora(), aplicando = false, dispensada = false, verificadaEm = -Infinity;
   const api = {
     get pronta() { return pronta; },
     get aplicando() { return aplicando; },
-    /** Marca "tem versão nova" (idempotente) e avisa a faixa. */
-    marcarPronta(motivo, versao = null) {
+    get dispensada() { return dispensada; },
+    /** Marca "tem versão nova" (idempotente) e avisa a faixa. `notas` (AS-205): o que mudou, do versao.json. */
+    marcarPronta(motivo, versao = null, notas = null) {
       if (pronta) return false;
-      pronta = { motivo, versao };
+      pronta = Array.isArray(notas) && notas.length ? { motivo, versao, notas } : { motivo, versao };
       if (o.aoPronta) try { o.aoPronta(pronta); } catch (e) { console.error(e); }
       return true;
     },
-    /** Consulta o versao.json: versão diferente → pronta; "sw": false → desligar. Falha de rede nunca vira aviso. */
-    async verificar() {
+    /** Plano 1000 (AS-205): «Depois» — a faixa sai e só volta na próxima verificação (10 min, ou ao voltar à aba depois de 1 min). A versão
+        continua pronta: a regra da ociosidade segue podendo aplicá-la sozinha. */
+    dispensar() { if (pronta) dispensada = true; },
+    /** Consulta o versao.json: versão diferente → pronta; "sw": false → desligar. Falha de rede nunca vira aviso.
+        `{ seNaoRecente: true }` (voltar à aba, reconectar): pula se a última consulta foi há menos de 1 min (AS-207). */
+    async verificar({ seNaoRecente = false } = {}) {
+      if (seNaoRecente && agora() - verificadaEm < (o.minimoMs ?? VERIFICAR_NO_MINIMO_MS)) return { acao: "nada", pulada: true };
+      verificadaEm = agora();
       let remoto = null;
       try { remoto = await o.buscar(); } catch { remoto = null; }
       const d = decidirVersao(o.versao, remoto);
       if (d.acao === "desligar") { if (o.aoDesligar) await o.aoDesligar(); }
-      else if (d.acao === "nova") api.marcarPronta("versao", d.versao);
+      else if (d.acao === "nova") {
+        if (!api.marcarPronta("versao", d.versao, d.notas) && dispensada) {
+          dispensada = false;
+          if (o.aoPronta) try { o.aoPronta(pronta); } catch (e) { console.error(e); }
+        }
+      }
       return d;
     },
     interagiu() { ultimaAcao = agora(); },
@@ -107,11 +132,16 @@ export function criarVersao(o) {
 }
 
 /** Faixa «Nova versão do Órbita pronta · Atualizar» (DOM só com ui.h). */
-export function criarFaixaVersao(ui, produto, aoAtualizar) {
+export function criarFaixaVersao(ui, produto, aoAtualizar, { notas = null, aoDepois = null } = {}) {
   const bt = ui.h("button", { type: "button", class: "bt bt-sec" }, "Atualizar");
   bt.addEventListener("click", () => aoAtualizar());
-  return ui.h("div", { class: "faixa faixa-versao", role: "status" }, ui.icone("info"),
-    ui.h("p", null, `Nova versão do ${produto || "Órbita"} pronta.`), bt);
+  // plano 1000 (AS-205): «o que mudou» (até 3 linhas do versao.json) e «Depois», que tira a faixa até a próxima verificação
+  const lista = Array.isArray(notas) ? notas.filter(Boolean).slice(0, 3) : [];
+  const depois = typeof aoDepois === "function" ? ui.h("button", { type: "button", class: "bt bt-fant" }, "Depois") : null;
+  if (depois) depois.addEventListener("click", () => aoDepois());
+  const txt = [ui.h("p", null, `Nova versão do ${produto || "Órbita"} pronta.`)];
+  if (lista.length) txt.push(ui.h("ul", { class: "faixa-versao-notas" }, ...lista.map(t => ui.h("li", null, t))));
+  return ui.h("div", { class: "faixa faixa-versao", role: "status" }, ...[ui.icone("info"), ui.h("div", { class: "faixa-versao-txt" }, ...txt), bt, depois].filter(Boolean));
 }
 
 /**
@@ -133,16 +163,17 @@ export function iniciar(o) {
   const timers = [];
   let reg = null, faixa = null, recarregando = false, tinhaControle = false, trocas = 0, adotandoPropria = false;
 
-  const temDialogo = () => !!(doc.querySelector && doc.querySelector("dialog[open]"));
+  const temDialogo = () => ocupadoNaTela(doc);
   const recarregar = () => {
     if (recarregando) return;
     recarregando = true;
     gravar(CHAVE_RECARGA, Date.now());
     try { loc.reload(); } catch { recarregando = false; }
   };
-  const mostrarFaixa = () => {
+  const mostrarFaixa = pronta => {
     if (!o.alvo || faixa) return;
-    faixa = criarFaixaVersao(o.ui, o.produto ? o.produto() : "Órbita", () => { v.aplicar(); });
+    faixa = criarFaixaVersao(o.ui, o.produto ? o.produto() : "Órbita", () => { v.aplicar(); },
+      { notas: pronta && pronta.notas, aoDepois: () => { v.dispensar(); if (faixa) { faixa.remove(); faixa = null; } } });
     o.alvo.appendChild(faixa);
     if (o.ui && o.ui.anunciar) o.ui.anunciar("Nova versão pronta. Use Atualizar quando quiser.");
   };
@@ -157,6 +188,7 @@ export function iniciar(o) {
   const desligarSW = async () => {
     if (lerNum(CHAVE_SW_DESLIGADO)) return;           // uma vez por aba: sem laço
     gravar(CHAVE_SW_DESLIGADO, 1);
+    gravar(CHAVE_SW_AVISO, 1);                        // AS-295: a página que volta explica a recarga
     try { for (const r of await nav.serviceWorker.getRegistrations()) await r.unregister(); } catch { /* ok */ }
     try { for (const n of await globalThis.caches.keys()) if (n.startsWith("orbita-")) await globalThis.caches.delete(n); } catch { /* ok */ }
     recarregar();
@@ -169,7 +201,7 @@ export function iniciar(o) {
     },
     ocupado: () => temDialogo() || !!(o.ocupado && o.ocupado()),
     recarregou: () => lerNum(CHAVE_RECARGA),
-    aoPronta: () => mostrarFaixa(),
+    aoPronta: pronta => mostrarFaixa(pronta),
     aoAplicar: aplicarNoSW,
     aoDesligar: desligarSW,
   });
@@ -225,21 +257,53 @@ export function iniciar(o) {
   for (const ev of ["pointerdown", "keydown", "touchstart", "wheel"]) ouvir(doc, ev, () => v.interagiu(), { passive: true, capture: true });
   const ocio = setInterval(() => { v.tique(); }, INTERVALO_OCIOSIDADE_MS);
   fins.push(() => clearInterval(ocio));
-  // versão: ao voltar para a aba, ao reconectar e a cada 10 min
-  ouvir(doc, "visibilitychange", () => { if (doc.visibilityState === "visible") v.verificar(); });
-  ouvir(jan, "online", () => { v.verificar(); });
+  // versão: ao voltar para a aba, ao reconectar (no máximo 1 vez por minuto — AS-207) e a cada 10 min
+  ouvir(doc, "visibilitychange", () => { if (doc.visibilityState === "visible") v.verificar({ seNaoRecente: true }); });
+  ouvir(jan, "online", () => { v.verificar({ seNaoRecente: true }); });
   const relogio = setInterval(() => { v.verificar(); }, o.verificarMs || VERIFICAR_A_CADA_MS);
   fins.push(() => clearInterval(relogio));
+
+  // AS-295: o desligamento de emergência recarregou esta aba — diz o porquê uma vez
+  try {
+    if (guarda && guarda.getItem(CHAVE_SW_AVISO)) {
+      guarda.removeItem(CHAVE_SW_AVISO);
+      if (o.ui && typeof o.ui.toast === "function") o.ui.toast("Atualizamos o app para corrigir um problema. Pode continuar de onde parou.", { tipo: "info" });
+    }
+  } catch { /* sem armazenamento: sem aviso */ }
 
   if (swPermitido({ nav, loc })) {
     tinhaControle = !!nav.serviceWorker.controller;
     nav.serviceWorker.register(`sw.js?v=${encodeURIComponent(o.versao)}`, { scope: "./", updateViaCache: "none" }).then(r => {
       reg = r;
       observar();
-      nav.serviceWorker.ready.then(() => api.precache()).catch(() => {});
+      // AS-177: o precache espera o navegador ficar ocioso (não disputa a rede com a tela que está abrindo)
+      nav.serviceWorker.ready.then(() => quandoOcioso(jan, () => api.precache())).catch(() => {});
     }).catch(e => { console.warn("service worker não registrou", e && e.message); });
   }
   return api;
+}
+
+/** Plano 1000 (AS-206): algo aberto que uma recarga automática destruiria — diálogo, menu suspenso ou painel flutuante (sino, seletor de empresa),
+    ou o foco num campo de texto (a pessoa pode estar no meio de uma frase, mesmo sem ter digitado ainda). */
+export function ocupadoNaTela(doc) {
+  if (!doc || typeof doc.querySelector !== "function") return false;
+  try {
+    if (doc.querySelector("dialog[open], .menu-pop, .flut")) return true;
+    const a = doc.activeElement;
+    if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || ""))) {
+      const t = String(a.type || "").toLowerCase();
+      if (!["button", "submit", "checkbox", "radio", "range", "color", "file", "reset", "image"].includes(t)) return true;
+    }
+  } catch { return false; }
+  return false;
+}
+
+/** fn() quando o navegador estiver ocioso (requestIdleCallback, até 5 s de espera); sem suporte (Safari), na próxima volta do laço. */
+export function quandoOcioso(jan, fn, { prazoMs = 5000 } = {}) {
+  try {
+    if (jan && typeof jan.requestIdleCallback === "function") { jan.requestIdleCallback(() => fn(), { timeout: prazoMs }); return; }
+  } catch { /* cai no setTimeout */ }
+  setTimeout(fn, 0);
 }
 
 /* ============================================================

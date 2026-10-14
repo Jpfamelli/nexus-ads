@@ -95,6 +95,10 @@ await teste("antes.js: injeta o modulepreload da tela do endereço (8 telas + lo
     "inicio.js": ["modulepreload:rel-logica.js?v=VTESTE", "modulepreload:graficos.js?v=VTESTE", "preload:relatorios.css?v=VTESTE", "preload:inicio.css?v=VTESTE"],
     "conversas.js": ["modulepreload:cv-logica.js?v=VTESTE", "modulepreload:cv-lista.js?v=VTESTE", "modulepreload:cv-chat.js?v=VTESTE", "modulepreload:cv-composer.js?v=VTESTE", "modulepreload:cv-lateral.js?v=VTESTE", "modulepreload:graficos.js?v=VTESTE", "preload:conversas.css?v=VTESTE"],
     "crm.js": ["modulepreload:crm-logica.js?v=VTESTE", "modulepreload:crm-kanban.js?v=VTESTE", "modulepreload:crm-negocio.js?v=VTESTE", "modulepreload:crm-visoes.js?v=VTESTE", "preload:crm.css?v=VTESTE"],
+    // plano 1000 (AS-178): Automações e Configurações também aquecem o que pedem logo ao abrir
+    "automacoes.js": ["modulepreload:auto-logica.js?v=VTESTE", "modulepreload:auto-pecas.js?v=VTESTE", "preload:automacoes.css?v=VTESTE"],
+    "config.js": ["modulepreload:crm-config.js?v=VTESTE", "modulepreload:cv-config.js?v=VTESTE", "modulepreload:ads-config.js?v=VTESTE", "modulepreload:agenda-config.js?v=VTESTE",
+      "modulepreload:rastreio-config.js?v=VTESTE", "preload:config.css?v=VTESTE"],
   };
   for (const [hash, arq] of casos) assert.deepEqual(rodarAntes({ hash, token: "t" }).preloads, [`modulepreload:${arq}?v=VTESTE`, ...(extras[arq] || [])], hash);
   assert.deepEqual(rodarAntes({ hash: "", token: "t" }).preloads, ["modulepreload:inicio.js?v=VTESTE", ...extras["inicio.js"]], "sem rota: Início");
@@ -138,7 +142,8 @@ await teste("versao.json bate com o ?v= do index.html (o integrador sobe os dois
   const j = JSON.parse(ler("versao.json"));
   assert.equal(j.versao, v, "versao.json × ?v= do index.html");
   assert.equal(j.sw, true, 'versao.json traz "sw": true (false desliga o service worker — chave de emergência)');
-  const vs = [...HTML.matchAll(/\?v=([A-Za-z0-9._-]+)/g)].map(m => m[1]);
+  // plano 1000 (AS-257): o preload das fontes repete o endereço do @font-face (../fonts/…?v=N, versão própria da fonte) e fica fora da conta
+  const vs = [...HTML.replace(/href="\.\.\/fonts\/[^"]+"/g, "").matchAll(/\?v=([A-Za-z0-9._-]+)/g)].map(m => m[1]);
   assert.equal(new Set(vs).size, 1, "um só ?v= no index.html");
 });
 
@@ -1158,7 +1163,7 @@ await teste("app.js (M17): sessão expirada abre a janela sem desmontar a tela; 
   const caiu = /function sessaoCaiu\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
   assert.match(caiu, /if \(!E\.sessao\) \{ sessaoCaiuTotal\(\); return false; \}/, "na abertura (sem sessão) segue o caminho antigo");
   assert.match(caiu, /loginPendente = pedirLoginNaTela\(\)/, "várias leituras que falham dividem UMA janela");
-  assert.match(/async function sair\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0], /E\.rascunhos\.apagarTudo\(\)/);
+  assert.match(fnDoApp("sair"), /E\.rascunhos\.apagarTudo\(\)/);   // plano 1000: sair({ perguntar, manterRascunhos })
   assert.match(APP_JS, /rascunho: \{\s*ligar: \(campo, chave, opcoes\) => E\.rascunhos\.ligar\(campo, chave, opcoes\),\s*apagar: chave => E\.rascunhos\.apagar\(chave\),/);
   assert.match(APP_JS, /if \(E\.rascunhos && E\.rascunhos\.pendentes\(\) > 0\) return true;/, "rascunho recente segura a atualização automática");
   assert.match(APP_JS, /const MODULOS_BASE = \[[^\]]*"rascunho\.js"/);
@@ -1206,7 +1211,8 @@ function armazemFalso({ quebra = false } = {}) {
 await teste("cache.js: lista branca — só leituras seguras; nunca mensagem, configuração, Admin, segredo, convite, domínio, usuário", () => {
   for (const n of ["nx_app_sessao", "nx_inicio", "nx_crm_base", "nx_negocios_kanban", "nx_negocios_coluna", "nx_contatos_listar", "nx_empresas_listar", "nx_tarefas_listar", "nx_agenda_dia",
     "nx_rel_vendas", "nx_rel_atendimento", "nx_dados", "nx_cv_listar", "nx_marca_publica"]) assert.equal(CACHE.cacheavel(n), true, n);
-  for (const n of ["nx_cv_mensagens", "nx_cv_buscar_msgs", "nx_cv_ver", "nx_cv_base", "nx_cv_config_salvar", "nx_ia_config_salvar", "nx_agenda_config_ver", "nx_usuarios_listar", "nx_clientes_admin", "nx_orgs_listar",
+  // plano 1000: nx_cv_base entrou na lista, mas SÓ com o redutor (sem config, só campos conhecidos) — testes/plano1000-sistema.teste.mjs
+  for (const n of ["nx_cv_mensagens", "nx_cv_buscar_msgs", "nx_cv_ver", "nx_cv_config_salvar", "nx_ia_config_salvar", "nx_agenda_config_ver", "nx_usuarios_listar", "nx_clientes_admin", "nx_orgs_listar",
     "nx_dominios_listar", "nx_planos_listar", "nx_canais_listar", "nx_entrada_chave", "nx_integracoes_status", "nx_buscar", "nx_notificacoes_listar", "nx_contato_ver", "nx_negocio_ver", "nx_convite_criar",
     "nx_senha_redefinir", "nx_entrar", "nx_sair", "nx_negocio_salvar", "nx_automacoes_listar", "", undefined]) assert.equal(CACHE.cacheavel(n), false, String(n));
   // defesa em profundidade: mesmo que alguém ponha um nome perigoso na lista, o filtro de palavras segura
@@ -1333,13 +1339,13 @@ await teste("api.js (cache): rede mais rápida que o cache não pinta o velho de
 });
 
 await teste("app.js (M16): sessão guardada pinta o shell e a rede revalida; selo único; limpa no logout, queda e troca de conta; esqueleto com a forma da rota", () => {
-  assert.match(APP_JS, /E\.cache = E\.M\.cache\.criarCache\(\);/);
+  assert.match(APP_JS, /E\.cache = E\.M\.cache\.criarCache\(aparelhoCompartilhado\(\) \? \{ disco: false \} : \{\}\);/);   // plano 1000 (AS-185)
   assert.match(APP_JS, /cache: E\.cache, conta: \(\) => \(E\.sessao \? E\.sessao\.conta\.id : LS\.lerTxt\(CHAVE_CONTA\)\), aoCache: ev => aoCacheEvento\(ev\)/);
   assert.match(APP_JS, /E\.cache\.gravar\(E\.cache\.chaveDe\("nx_app_sessao", \{\}, \{ conta: s\.conta\.id \}\), "nx_app_sessao", s\)/, "a sessão normalizada fica no aparelho");
   assert.match(APP_JS, /!g\.dados\.conta\.trocar_senha/, "troca de senha obrigatória nunca abre pelo cache");
   assert.match(APP_JS, /if \(E\.sessaoGuardada\) carregarMarcaPublica\(\{ pintar: false \}\); else await carregarMarcaPublica\(\);/, "com sessão guardada o shell não espera a marca pública");
   assert.match(APP_JS, /await adotarSessao\(guardada\.dados\);\s*revalidarSessao\(\);/);
-  for (const nome of ["async function sair()", "function sessaoCaiuTotal()"]) {
+  for (const nome of ["async function sair(", "function sessaoCaiuTotal()"]) {   // plano 1000: sair({ perguntar, manterRascunhos })
     const corpo = APP_JS.slice(APP_JS.indexOf(nome), APP_JS.indexOf("\n}\n", APP_JS.indexOf(nome)));
     assert.match(corpo, /limparDadosDoAparelho\(\)/, `${nome} limpa o cache`);
   }
@@ -1530,7 +1536,7 @@ await teste("app.js (revisão R119): empresa removida → cache dela apagado, ou
 });
 
 await teste("app.js (revisão R119): entrar ou aceitar convite com outra conta aberta não adota a sessão antiga; rota pública não dispara a sessão antecipada", () => {
-  const entrar = /async aoEntrar\(token, \{ cliente_id \} = \{\}\) \{[\s\S]*?\n    \},/.exec(APP_JS)[0];
+  const entrar = /async aoEntrar\(token, \{ cliente_id(?:, compartilhado)? \} = \{\}\) \{[\s\S]*?\n    \},/.exec(APP_JS)[0];
   assert.match(entrar, /E\.sessaoPromessa = null; E\.sessaoGuardada = null;\s*limparDadosDoAparelho\(\);\s*E\.M\.dados\.guardarToken\(token\);/, "zera a antecipada e a guardada e limpa o aparelho ANTES de guardar o token e navegar");
   assert.ok(entrar.indexOf("limparDadosDoAparelho()") < entrar.indexOf("navegar(destino"), "limpa antes de navegar");
   const iniciar = /async function iniciar\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0];
@@ -1578,11 +1584,12 @@ await teste("app.js (revisão R119): não lidas no ícone do app, armazenamento 
   // armazenamento persistente: uma vez por aparelho, depois de adotar a sessão
   const guardado = new Map(); let pedidos = 0;
   const LS = { lerTxt: k => guardado.get(k) ?? null, gravar: (k, v) => guardado.set(k, v) };
-  const pedir = runInNewContext(`${fnDoApp("pedirArmazenamentoPersistente")}\npedirArmazenamentoPersistente`, { LS, navigator: { storage: { persist: async () => { pedidos++; return true; } } }, Promise });
+  const pedir = runInNewContext(`${fnDoApp("pedirArmazenamentoPersistente")}\npedirArmazenamentoPersistente`, { LS, aparelhoCompartilhado: () => false, navigator: { storage: { persist: async () => { pedidos++; return true; } } }, Promise });
   pedir(); pedir(); assert.equal(pedidos, 1, "pede uma vez só");
   runInNewContext(`${fnDoApp("pedirArmazenamentoPersistente")}\npedirArmazenamentoPersistente();`, { LS: { lerTxt: () => null, gravar() {} }, navigator: {}, Promise });
   runInNewContext(`${fnDoApp("pedirArmazenamentoPersistente")}\npedirArmazenamentoPersistente();`, { LS: { lerTxt: () => null, gravar() {} }, navigator: { storage: { persist() { throw new Error("negado"); } } }, Promise });
-  assert.match(fnDoApp("adotarSessao"), /pedirArmazenamentoPersistente\(\);/);
+  // plano 1000 (AS-191): o pedido sai na 1ª vez que um texto longo é escrito (marcarEdicao) ou que a fila é usada (ctx), não ao adotar a sessão
+  assert.doesNotMatch(fnDoApp("adotarSessao"), /pedirArmazenamentoPersistente\(\);/); assert.match(fnDoApp("marcarEdicao"), /pedirArmazenamentoPersistente\(\);/);
   // menu da conta e Ajuda
   assert.ok(APP_JS.includes('E.pwaMod && E.pwaMod.emStandalone() ? { rotulo: "Recarregar", icone: "reabrir", fn: () => location.reload() } : null,'), "«Recarregar» só no app instalado");
   assert.ok(fnDoApp("abrirMenuAjuda").includes("{ rotulo: `Versão ${VERSAO}`, icone: \"info\", fn: () => E.ui.copiar(VERSAO, { aviso: \"Versão copiada.\" }) }"), "a versão em uso aparece no menu Ajuda");
@@ -2034,7 +2041,7 @@ await teste("app.js (M18): a paleta abre em todo produto, módulo carregado sob 
   tem(APP_JS, 'ui.atalho("?", ev => {', "folha de atalhos");
   tem(APP_JS, 'E.comandos.temAtalho("?") || document.querySelector("dialog[open]")', "«?» fica com a tela que o registra (Conversas) e não abre sobre outra janela");
   tem(APP_JS, "function definirTitulo(texto) { E.titulo = texto || \"\"; atualizarTitulo(); lembrarRecente(texto); }", "Recentes pelo título da tela de detalhe");
-  tem(APP_JS, "const pref = E.M.comandos ? E.M.comandos.PREFIXO_RECENTES", "Recentes (nomes de pessoas) saem no logout/queda de sessão");
+  tem(APP_JS, "const prefixos = [E.M.comandos ? E.M.comandos.PREFIXO_RECENTES", "Recentes (nomes de pessoas) saem no logout/queda de sessão");
   tem(APP_JS, '{ rotulo: "Aparência", icone:', "tema no menu da conta"); tem(APP_JS, '{ rotulo: "Ajuda", icone: "ajuda", fn: () => abrirMenuAjuda(ancora) }', "Ajuda no menu da conta");
   tem(APP_JS, '"Primeiros passos"', "Ajuda: Primeiros passos"); tem(APP_JS, '"Atalhos de teclado"', "Ajuda: Atalhos"); tem(APP_JS, '"Falar com o suporte"', "Ajuda: suporte");
   tem(APP_JS, "Preciso de ajuda no ${app}${tela}${emp}", "o texto do suporte leva produto, tela e empresa");

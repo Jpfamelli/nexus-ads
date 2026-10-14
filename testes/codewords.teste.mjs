@@ -356,7 +356,8 @@ test("agente mensagem (entrada): grava por nx_wa_entrada no canal DO SEGREDO, cr
   assert.equal(c.empresa.vertical, "odonto");
   assert.equal(c.empresa.memoria_aprovada, "A equipe atende convênio Alfa; confirme cobertura com a recepção.");
   assert.equal(c.empresa.horarios, "seg a sex 08:00–18:00; sáb 08:00–12:00; dom fechado", "sem texto de horários → horário do departamento");
-  assert.deepEqual(c.contato, { nome: "Paula Teste", telefone: TEL, primeira_vez: true });
+  // plano 1000 (SV-036): o contexto leva só o fim do telefone (o fluxo já conhece o número)
+  assert.deepEqual(c.contato, { nome: "Paula Teste", telefone: `${"*".repeat(TEL.length - 4)}${TEL.slice(-4)}`, primeira_vez: true });
   assert.deepEqual(c.negocio, { etapa: "Nova conversa", consulta: { inicio: "2026-10-01T12:00:00Z", rotulo: "qui 01/10 às 09:00" }, servico: "Implante",
     origem: { tipo: null, plataforma: "meta", campanha: "Campanha Implante", anuncio: "AD1", rastreio: null } });
   assert.match(c.instrucoes, /Veio de anúncio \(meta · campanha "Campanha Implante" · anúncio "AD1"\)/);
@@ -1164,10 +1165,13 @@ test("contrato: as internas chamadas existem na migração com os MESMOS parâme
   const dir = join(RAIZ, "supabase/migrations");
   const todas = readdirSync(dir).filter(n => n.endsWith(".sql")).sort().map(n => readFileSync(join(dir, n), "utf8")).join("\n");
   for (const [nome, args] of Object.entries(ASSINATURAS)) {
-    const m = [...todas.matchAll(new RegExp(`create or replace function public\\.${nome}\\(([\\s\\S]*?)\\)\\s*returns`, "g"))].at(-1);
-    assert.ok(m, `${nome} existe`);
-    const params = m[1].split(",").map(a => a.trim().split(/\s+/)[0]).filter(Boolean);
-    assert.deepEqual(params.sort(), [...args].sort(), `${nome}: parâmetros`);
+    // plano 1000 (SV-268, srv-3): sobrecarga NOVA (nx_codewords_canal(p_chave, p_tipo)) convive com a antiga — vale a última
+    // definição de CADA assinatura; a chamada da função tem de casar com uma delas
+    const defs = [...todas.matchAll(new RegExp(`create or replace function public\\.${nome}\\(([\\s\\S]*?)\\)\\s*returns`, "g"))]
+      .map(m => m[1].split(",").map(a => a.trim().split(/\s+/)[0]).filter(Boolean).sort());
+    assert.ok(defs.length, `${nome} existe`);
+    const params = defs.find(p => p.join() === [...args].sort().join()) || defs.at(-1);
+    assert.deepEqual(params, [...args].sort(), `${nome}: parâmetros`);
   }
   assert.ok(!/\b(drop\s+(table|function|column)|truncate)\b/i.test(sql.replace(/--.*$/gm, "")), "nada é apagado");
   assert.ok(!/create\s+function/i.test(sql), "só create or replace");
@@ -1419,7 +1423,7 @@ const ACOES_LEGADAS = ["etapa", "nota"];
 test("prompt: ensina o fluxo a NÃO usar @lid como telefone e lista o motivo lid_sem_numero", () => {
   const r = montarReceita({ url: "{{URL_DO_ORBITA}}" });
   assert.match(r, /jid terminado em @lid/); assert.match(r, /sender_pn, remoteJidAlt, participant_pn/);
-  assert.match(r, /motivo lid_sem_numero/); assert.match(r, /eco, saida, lid_sem_numero\)/);
+  assert.match(r, /motivo lid_sem_numero/); assert.match(r, /eco, saida, lid_sem_numero, suspenso\)/);   // plano 1000 (SV-208): + suspenso
 });
 
 test("prompt: traz as ações do fluxo (versão 2), com o JSON exato, e nenhum segredo", async () => {

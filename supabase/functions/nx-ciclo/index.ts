@@ -1,5 +1,6 @@
 // nx-ciclo — sync Meta/Google + radar. Deploy a partir de supabase/dist/nx-ciclo (scripts/montar-funcoes.mjs).
 import { tratar } from "./ciclo.js";
+import { comVersao } from "./comum.js";
 
 function envObrigatorio(nome: string): string {
   const valor = Deno.env.get(nome);
@@ -8,4 +9,5 @@ function envObrigatorio(nome: string): string {
 }
 
 const env = { url: envObrigatorio("SUPABASE_URL"), chave: envObrigatorio("SUPABASE_SERVICE_ROLE_KEY") };
-Deno.serve((req) => tratar(req, env));
+// plano 1000 (SV-164): toda resposta diz a versão que está no ar (x-orbita-versao)
+Deno.serve(async (req) => comVersao(await tratar(req, env)));

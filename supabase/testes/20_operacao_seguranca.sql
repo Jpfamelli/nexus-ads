@@ -148,7 +148,8 @@ begin
   perform pg_temp.ok(public.nx_login_bloqueio('conta:' || email_l, 10, interval '15 minutes') between 14 and 15, 'recém-bloqueado: 15 min (nunca mais)');
   perform pg_temp.ok(public.nx_login_bloqueio('conta:ninguem-20-' || sfx, 10, interval '15 minutes') = 0, 'chave sem falhas: livre');
   -- vencido o bloqueio (16 min) a senha certa entra; gestor segue a mesma regra (bloqueio ≤ 15 min)
-  update public.nx_login_falhas set em = em - interval '16 minutes' where chave in ('conta:' || email_l, 'ip:' || ip);
+  -- plano 1000 (SV-238, 20261013e): a chave (conta, IP) também vence (antes dela a lista só tinha conta e IP)
+  update public.nx_login_falhas set em = em - interval '16 minutes' where chave in ('conta:' || email_l, 'ip:' || ip, 'contaip:' || email_l || '|' || ip);
   perform set_config('request.headers', json_build_object('x-forwarded-for', ip)::text, true);
   j := public.nx_entrar(email_l, 'senha-20-ok');
   perform pg_temp.ok(length(j ->> 'token') = 64 and (j ->> 'nome') = 'Login 20', 'vencido o bloqueio a senha certa entra');
@@ -297,7 +298,10 @@ begin
     'caído: caiu_em = quando caiu e codewords_aviso_em = último aviso');
   update public.nx_conversas set ultima_msg_em = now() where id = cv;
   update public.nx_conversas set canal_id = kC where id = cv;
-  perform pg_temp.ok(not exists (select 1 from jsonb_array_elements(public.nx_codewords_vigia_alvos(50)::jsonb) x where (x ->> 'canal_id')::uuid = kC), 'com conversa recente a sync já confere: fora');
+  -- plano 1000 (SV-016, 20261013a): canal CAÍDO com conversa recente agora é alvo do vigia (a sincronização pula canal desconectado)
+  perform pg_temp.ok(exists (select 1 from jsonb_array_elements(public.nx_codewords_vigia_alvos(50)::jsonb) x where (x ->> 'canal_id')::uuid = kC)
+                     or not exists (select 1 from public.nx_versao_banco where nome = '20261013a_operacao_fila_codewords'),
+    'caído com conversa recente: alvo do vigia (antes da 20261013a: fora)');
   update public.nx_conversas set canal_id = kM where id = cv;
   update public.nx_clientes set ativo = false where id = cA;
   perform pg_temp.ok(not exists (select 1 from jsonb_array_elements(public.nx_codewords_vigia_alvos(50)::jsonb) x where (x ->> 'canal_id')::uuid = kC), 'cliente pausado: fora');
@@ -326,13 +330,13 @@ begin
   perform pg_temp.ok((j ->> 'ok')::boolean and (select status = 'pendente' and pego_em is null and lote is null and processado_em is null and erro = 'credencial indisponível'
                                                      and enviar_em between now() + interval '50 seconds' and now() + interval '70 seconds' from public.nx_envios_fila where id = f),
     'concluir(pendente) na 1ª tentativa: volta daqui a 1 min, sem lote/pego_em');
-  update public.nx_envios_fila set tentativas = 2 where id = f;
+  update public.nx_envios_fila set tentativas = 2, status = 'enviando' where id = f;   -- plano 1000 (SV-040): concluir só mexe em item 'enviando'
   perform public.nx_fila_concluir(f, 'pendente', null, null);
   perform pg_temp.ok((select enviar_em between now() + interval '4 minutes' and now() + interval '6 minutes' from public.nx_envios_fila where id = f), '2ª tentativa: 5 min');
-  update public.nx_envios_fila set tentativas = 3 where id = f;
+  update public.nx_envios_fila set tentativas = 3, status = 'enviando' where id = f;   -- plano 1000 (SV-040): concluir só mexe em item 'enviando'
   perform public.nx_fila_concluir(f, 'pendente', null, null);
   perform pg_temp.ok((select enviar_em between now() + interval '14 minutes' and now() + interval '16 minutes' from public.nx_envios_fila where id = f), '3ª tentativa: 15 min');
-  update public.nx_envios_fila set tentativas = 4 where id = f;
+  update public.nx_envios_fila set tentativas = 4, status = 'enviando' where id = f;   -- plano 1000 (SV-040): concluir só mexe em item 'enviando'
   perform public.nx_fila_concluir(f, 'pendente', null, null);
   perform pg_temp.ok((select enviar_em between now() + interval '59 minutes' and now() + interval '61 minutes' from public.nx_envios_fila where id = f), '4ª em diante: 60 min');
   perform pg_temp.ok(json_array_length(public.nx_fila_pegar(5, array[f])) = 1, 'por id a fila entrega mesmo antes da hora (o reenvio manual continua possível)');
@@ -386,7 +390,8 @@ begin
                  and exists (select 1 from public.nx_notificacoes n where n.titulo = 'velha NAO lida 20'), 'só notificação LIDA há > 90 d some');
   perform pg_temp.ok((j ->> 'codewords_status_pendentes')::int >= 1 and not exists (select 1 from public.nx_codewords_status_pendentes where provider_id = 'p20-' || sfx), 'recibo pendente vencido some');
   perform pg_temp.ok((j ->> 'login_falhas')::int >= 1 and not exists (select 1 from public.nx_login_falhas where chave = 'conta:velha-20-' || sfx)
-                 and exists (select 1 from public.nx_login_falhas where chave = 'conta:' || email_l), 'falha de login > 1 d some; de hoje fica');
+                 -- plano 1000 (SV-239, 20261013e): o login certo zera as falhas da CONTA; as do IP (de hoje) ficam
+                 and exists (select 1 from public.nx_login_falhas where chave = 'ip:' || ip), 'falha de login > 1 d some; de hoje fica');
   perform pg_temp.ok((select count(*) from public.nx_mensagens m where m.conversa_id = cv) >= 3 and exists (select 1 from public.nx_auditoria a where a.acao = 'conta_definida'), 'mensagens e auditoria não são tocadas');
 
   -- ---------------------------------------------------------- pedidos da S-F: meta_api_versao, 'sem_confirmacao', origem com plataforma

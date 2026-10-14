@@ -1,4 +1,7 @@
 # Funções publicadas pela tag funcoes-* (uma por linha; ver docs/orbita/DEPLOY-FUNCOES.md).
+# Rodada de 13/10/2026 (tag funcoes-20261013-1, plano 1000 — frente srv, lote srv-1): as 7 vão JUNTAS (comum.js, db.js e
+# whatsapp.js mudaram). Antes da tag: migrações 20261013a e 20261013b APLICADAS (as RPCs novas são toleradas se faltarem). O
+# segredo SUPABASE_ACCESS_TOKEN venceu em 09/10: renovar antes (DEPLOY-FUNCOES.md, «Token do Supabase vencido»).
 # Rodada de 09/10/2026 (tag funcoes-20261009-1, plano 100 de 08/10 — frente S-F): as 7 vão JUNTAS. Todas carregam comum.js (que
 # ganhou cortarTexto/telefoneBorda/variantesTelefone única, traduzirErroIA/MODELO_PADRAO/registrarUsoIA, listarClientes por status
 # e com a vertical) e web/nucleo.js mudou na frente P (fee 0, receita só real, balde «sem campanha», vocabulário por vertical) —

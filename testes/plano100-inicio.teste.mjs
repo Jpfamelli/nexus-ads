@@ -94,7 +94,9 @@ test("B1: funil do mês — etapas na ordem, nomes pela vertical, taxa sobre a a
   assert.deepEqual(f.etapas.map(e => [e.nome, e.qtd, e.tipo]), [["Leads", 23, "aberto"], ["Conversas", 19, "aberto"], ["Consultas marcadas", 11, "aberto"], ["Oportunidades ganhas", 9, "ganho"]]);
   assert.deepEqual(f.etapas.map(e => e.conversao), ["", "83 % da anterior", "58 % da anterior", "82 % da anterior"]);
   assert.equal(Math.round(f.geral * 100), 39); assert.equal(f.vazio, false);
-  assert.equal(I.funilMes({ funil_mes: { leads: 2, conversas: 5, agendados: 0, ganhos: 0 } }).etapas[1].conversao, "250 % da anterior");
+  // plano 1000 (CR-168): acima de 100 % o texto não é mais «250 % da anterior» (confundia: não é a mesma turma) — o número fica na dica
+  assert.equal(I.funilMes({ funil_mes: { leads: 2, conversas: 5, agendados: 0, ganhos: 0 } }).etapas[1].conversao, "mais que a etapa anterior");
+  assert.match(I.funilMes({ funil_mes: { leads: 2, conversas: 5, agendados: 0, ganhos: 0 } }).etapas[1].dica, /^250 % da anterior: são contagens do mês/);
   assert.equal(I.funilMes({ funil_mes: { leads: 0, conversas: 0, agendados: 0, ganhos: 0 } }).vazio, true);
   assert.equal(I.funilMes({ funil_mes: { leads: 0, conversas: 0, agendados: 0, ganhos: 0 } }).geral, null, "sem lead não há conversão (nada de 0 %)");
   assert.equal(I.funilMes({ funil_mes: { leads: 0, conversas: 3 } }).etapas[1].conversao, "", "anterior zero: sem taxa");

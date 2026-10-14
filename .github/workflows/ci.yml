@@ -1,0 +1,92 @@
+# CI do Órbita / Nexus Ads (plano «1000+ melhorias», SV-152 e SV-212): a suíte, os smokes SQL locais (PGlite), a montagem e o
+# deno check das 7 funções, o git diff --check e a varredura de segredos em TODO pull request e em todo push para main,
+# codex/* e claude/* — antes o único portão era o da tag de deploy (funcoes-supabase.yml), e a regressão só aparecia na hora
+# de publicar. Nada aqui toca o banco real, a Meta ou o CodeWords; nenhum segredo é usado.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: ["main", "codex/**", "claude/**"]
+
+permissions:
+  contents: read
+
+# um por ramo/PR; o mais novo cancela o anterior (é só verificação, nada é publicado)
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # actions fixadas pelo SHA do commit da versão (as mesmas do funcoes-supabase.yml)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Varredura de segredos (caminho e tipo, nunca o valor)
+        run: node scripts/varrer-segredos.mjs
+
+      - name: Dependências de desenvolvimento (PGlite dos smokes)
+        run: npm ci --no-audit --no-fund
+
+      # sem --exigir: o arquivo plano1000-* de uma frente que ainda não entregou é pulado (aparece como ausente no resumo)
+      - name: Suíte completa (node testes/rodar-tudo.mjs)
+        run: node testes/rodar-tudo.mjs
+
+      # TODOS os smokes (SV-153): o 02 depende do gestor real do banco e está em ESPERADAS (scripts/rodar-local.mjs), que não
+      # derruba a saída; 04 (data fixa da consulta), 04_crm_b (teto de tempo no PGlite) e 17 (fuso) foram corrigidos (SV-154/155/156).
+      # Smoke novo entra sozinho. O ensaio em ROLLBACK no banco real continua sendo o que vale para aplicar.
+      - name: Smokes SQL locais (PGlite)
+        run: node scripts/rodar-local.mjs
+
+      # SV-169: migração nova (>= 20261013c) só aditiva e idempotente, com versão, notify e bloco de permissões
+      - name: Lint das migrações novas
+        run: node scripts/lint-migracoes.mjs
+
+      - name: Montar supabase/dist
+        run: node scripts/montar-funcoes.mjs
+
+      - name: deno check nos entrypoints montados
+        # --node-modules-dir=none: o package.json da raiz (PGlite) faria o Deno procurar npm:@anthropic-ai/sdk em node_modules
+        run: npx --yes deno@2.6.0 check --node-modules-dir=none supabase/dist/*/index.ts
+
+      # HEAD^1 = a base no merge de um PR e o commit anterior num push (fetch-depth 2)
+      - name: git diff --check (espaço sobrando, marcador de conflito)
+        run: git diff --check HEAD^1 HEAD
+
+  # SV-157: a suíte JS com relógio e fuso controlados (testes/apoio/relogio.mjs, carregado pelo rodar-tudo quando ORBITA_AGORA
+  # existe): 02:50Z de hoje = 23:50 da véspera em São Paulo; dia1T03:05Z = virada do mês em SP. Teste que depende da hora em que
+  # roda quebra numa das combinações. continue-on-error enquanto as frentes corrigem os casos achados (lista no ESTADO.md) —
+  # depois disso, tirar a linha e o job vira portão.
+  relogio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        tz: ["UTC", "America/Sao_Paulo"]
+        agora: ["02:50Z", "dia1T03:05Z"]
+    env:
+      TZ: ${{ matrix.tz }}
+      ORBITA_AGORA: ${{ matrix.agora }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Suíte rápida com o relógio fixado (TZ × ORBITA_AGORA)
+        run: node testes/rodar-tudo.mjs --rapido

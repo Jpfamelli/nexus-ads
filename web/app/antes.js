@@ -12,7 +12,15 @@
   "use strict";
   var raiz = document.documentElement;
   function ler(k) { try { var s = window.localStorage.getItem(k); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
-  function esquema() { try { return window.localStorage.getItem("nx-app-esquema") || "claro"; } catch (e) { return "claro"; } }
+  // plano 1000 (AS-189): sem escolha guardada (ou «auto») segue o aparelho — celular no modo escuro abre o app escuro
+  function doSistema() {
+    try { return typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches ? "escuro" : "claro"; } catch (e) { return "claro"; }
+  }
+  function esquema() {
+    var s = null;
+    try { s = window.localStorage.getItem("nx-app-esquema"); } catch (e) { s = null; }
+    return s === "claro" || s === "escuro" || s === "marca" ? s : doSistema();
+  }
   // o mesmo hashCurto do tema.js (FNV-1a sobre o JSON): o app.js grava `hash` junto com as vars; só o que bate é pintado (plano 100 · A5)
   function hashCurto(obj) {
     var s = JSON.stringify(obj || {}), h = 2166136261;
@@ -83,11 +91,15 @@
     if (cs && cs.src) ver = new URL(cs.src, location.href).searchParams.get("v");
     if (ver && /^[A-Za-z0-9._-]+$/.test(ver)) {
       var tela = { inicio: "inicio", conversas: "conversas", crm: "crm", contatos: "crm", empresas: "crm", tarefas: "crm", agenda: "agenda",
-        anuncios: "anuncios", automacoes: "automacoes", relatorios: "relatorios", config: "config" };
+        anuncios: "anuncios", automacoes: "automacoes", relatorios: "relatorios", config: "config", admin: "admin" };
+      // plano 1000 (AS-178): Automações, Configurações e Admin também baixam em paralelo o que a tela pede logo ao abrir (antes: em cascata)
       var aquecer = {
         inicio: { js: ["rel-logica.js", "graficos.js"], css: ["relatorios.css", "inicio.css"] },
         conversas: { js: ["cv-logica.js", "cv-lista.js", "cv-chat.js", "cv-composer.js", "cv-lateral.js", "graficos.js"], css: "conversas.css" },
         crm: { js: ["crm-logica.js", "crm-kanban.js", "crm-negocio.js", "crm-visoes.js"], css: "crm.css" },
+        automacoes: { js: ["auto-logica.js", "auto-pecas.js"], css: "automacoes.css" },
+        config: { js: ["crm-config.js", "cv-config.js", "ads-config.js", "agenda-config.js", "rastreio-config.js"], css: "config.css" },
+        admin: { js: [], css: "config.css" },
       };
       var seg = (location.hash || "").replace(/^#\/?/, "").split(/[\/?]/)[0];
       var logado = false;
@@ -105,6 +117,8 @@
         lk.href = alvo + ".js?v=" + ver;
         document.head.appendChild(lk);
         var extras = aquecer[alvo];
+        // o editor de automação (nova/editar) é o maior pedaço da tela: só quando o endereço já vai direto para ele
+        if (alvo === "automacoes" && /^#\/?automacoes\/[^?]/.test(location.hash || "")) extras = { js: extras.js.concat(["auto-editor.js"]), css: extras.css };
         if (extras) {
           for (var i = 0; i < extras.js.length; i++) {
             var modulo = document.createElement("link");

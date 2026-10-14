@@ -69,6 +69,46 @@ function campoPacoteComercial(ui, selecionado = null, { obrigatorio = false, com
 const comClasse = (el, cls) => { el.classList.add(cls); return el; };
 function rotuloPacote(id) { return PACOTES_COMERCIAIS.find(p => p.id === id)?.nome || "Sem pacote comercial"; }
 
+/** plano 1000 · AS-155: o endereço da lista com os filtros (?busca=&status=&org=) — sobrevive a abrir um cliente e voltar. */
+export function hashClientes(filtro = {}) {
+  const q = new URLSearchParams();
+  if (filtro.busca) q.set("busca", filtro.busca);
+  if (filtro.status) q.set("status", filtro.status);
+  if (filtro.org_id) q.set("org", filtro.org_id);
+  const t = q.toString();
+  return t ? `#/admin/clientes?${t}` : "#/admin/clientes";
+}
+
+/** plano 1000 · AS-168: o nome do modelo que o segmento escrito vai aplicar («Clínica odontológica», «Outro negócio»…). */
+export function rotuloModeloSegmento(segmento) {
+  const v = verticalPorSegmento(segmento);
+  return (VERTICAIS.find(x => x.valor === v) || { rotulo: "Outro negócio" }).rotulo;
+}
+
+/** Edição do cliente: o modelo (vertical) só é recalculado quando o segmento MUDOU — salvar outros dados não desfaz o modelo escolhido. */
+export function verticalAoEditar(segmento, segmentoInicial, verticalAtual) {
+  const norm = s => String(s || "").trim().replace(/\s+/g, " ").toLowerCase();
+  if (!norm(segmento) || norm(segmento) === norm(segmentoInicial)) return verticalAtual;
+  return verticalPorSegmento(segmento);
+}
+
+/**
+ * plano 1000 · AS-161: trocar o plano não zera os módulos ligados à mão. Mantém os marcados que ainda valem (no plano novo; para a
+ * plataforma, também os extras que ela ligou fora do plano antigo) e diz quais saíram.
+ */
+export function modulosAoTrocarPlano({ atuais = [], planoAntigo = [], planoNovo = [], superConta = false } = {}) {
+  const novo = new Set(planoNovo);
+  const marcados = new Set(planoNovo);
+  for (const m of atuais) {
+    const extra = !planoAntigo.includes(m);
+    if (novo.has(m) || (superConta && extra)) marcados.add(m);
+  }
+  const lista = MODULOS.map(m => m.valor).filter(v => marcados.has(v));
+  const sairam = atuais.filter(m => !marcados.has(m));
+  return { marcados: lista, sairam };
+}
+
+let _ultimoHashClientes = "#/admin/clientes";
 let _planos = null;
 let _orgs = null;
 let _limpeza = [];
@@ -84,17 +124,81 @@ export function sugerirSlug(nome) {
 async function planos(ctx) { if (!_planos) _planos = await ctx.api.rpc("nx_planos_listar"); return _planos; }
 async function orgs(ctx) { if (!_orgs) _orgs = await ctx.api.rpc("nx_orgs_listar"); return _orgs; }
 
-/** Resumo da lista de clientes (item 58): por situação e quantos estão perto de algum limite (≥ 80 %). */
+/** Cliente usando 80 % ou mais de algum limite do plano. */
+export const pertoDoLimite = it => { const u = (it && it.uso) || {}, lim = (it && it.limites) || {}; return Object.keys(lim).some(k => Number(lim[k]) > 0 && (Number(u[k]) || 0) / Number(lim[k]) >= .8); };
+
+/** Resumo da lista de clientes (item 58): por situação e quantos estão perto de algum limite (≥ 80 %).
+    plano 1000 · AS-164: «ativo» só conta quem não está pausado pela Nexus (ativo === false vira «pausados», à parte). */
 export function resumoClientes(itens) {
   const l = Array.isArray(itens) ? itens : [];
   const r = { total: l.length, ativo: 0, teste: 0, suspenso: 0, cancelado: 0, perto_limite: 0 };
   for (const it of l) {
-    if (it && Object.hasOwn(r, it.status) && it.status !== "total") r[it.status]++;
-    const u = (it && it.uso) || {}, lim = (it && it.limites) || {};
-    if (Object.keys(lim).some(k => Number(lim[k]) > 0 && (Number(u[k]) || 0) / Number(lim[k]) >= .8)) r.perto_limite++;
+    if (it && it.ativo === false) r.pausados = (r.pausados || 0) + 1;     // só aparece quando há pausado
+    if (it && Object.hasOwn(r, it.status) && it.status !== "total" && !(it.status === "ativo" && it.ativo === false)) r[it.status]++;
+    if (pertoDoLimite(it)) r.perto_limite++;
   }
   return r;
 }
+
+/** plano 1000 · AS-165: filtro local dos KPIs que não são uma situação («perto» do limite, «pausados»).
+    `status` = a situação filtrada no servidor: «ativo» segue a régua do contador (resumoClientes) — pausado pela Nexus não é «Ativo». */
+export function filtrarLocal(itens, local, status = "") {
+  let l = Array.isArray(itens) ? itens : [];
+  if (status === "ativo") l = l.filter(it => !(it && it.ativo === false));
+  if (local === "perto") return l.filter(pertoDoLimite);
+  if (local === "pausados") return l.filter(it => it && it.ativo === false);
+  return l;
+}
+
+/** plano 1000 · AS-158: dias desde o fim do teste (só status «teste» com a data já passada); null quando não venceu. hoje = AAAA-MM-DD. */
+export function testeVencidoHa(it, hoje) {
+  if (!it || it.status !== "teste" || !it.teste_ate || !hoje || String(it.teste_ate) >= String(hoje)) return null;
+  const d = (Date.parse(`${hoje}T12:00:00Z`) - Date.parse(`${String(it.teste_ate).slice(0, 10)}T12:00:00Z`)) / 86400000;
+  return Number.isFinite(d) ? Math.max(1, Math.round(d)) : null;
+}
+export const rotuloTesteVencido = dias => (dias === 1 ? "Teste vencido há 1 dia" : `Teste vencido há ${dias} dias`);
+
+/** plano 1000 · AS-166: CSV da lista de clientes (separador «;» e BOM para o Excel em português). */
+export function csvClientes(itens, nomeDoPlano = id => id) {
+  const esc = v => { const s = v === null || v === undefined ? "" : String(v); return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const cab = ["Cliente", "Endereço", "Revenda", "Plano", "Pacote comercial", "Situação", "Pausado pela Nexus", "Fim do teste", "Criado em",
+    ...CHAVES_LIMITE.flatMap(k => [`${k.rotulo} (uso)`, `${k.rotulo} (limite)`])];
+  const linhas = (Array.isArray(itens) ? itens : []).map(it => [it.nome, it.slug, it.org ? it.org.nome : "", nomeDoPlano(it.plano),
+    it.comercial && it.comercial.pacote ? rotuloPacote(it.comercial.pacote) : "", statusDe(it.status).rotulo, it.ativo === false ? "sim" : "não",
+    it.teste_ate || "", String(it.criado_em || "").slice(0, 10),
+    ...CHAVES_LIMITE.flatMap(k => [it.uso && it.uso[k.chave] != null ? it.uso[k.chave] : "", it.limites && it.limites[k.chave] != null ? it.limites[k.chave] : "sem limite"])]);
+  return "\uFEFF" + [cab, ...linhas].map(l => l.map(esc).join(";")).join("\r\n");
+}
+
+/** plano 1000 · AS-169: o endereço digitado já é de outro cliente? (a busca do servidor acha por trecho; aqui só o slug idêntico). */
+export function slugTomado(itens, slug, idProprio = null) {
+  const s = String(slug || "").trim().toLowerCase();
+  if (!s) return null;
+  return (Array.isArray(itens) ? itens : []).find(it => it && it.id !== idProprio && String(it.slug || "").toLowerCase() === s) || null;
+}
+
+/** plano 1000 · AS-171: domínios por situação e busca (endereço, cliente ou revenda; sem acento). */
+export function filtrarDominios(lista, { status = "", busca = "" } = {}) {
+  const n = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const q = n(busca).trim();
+  return (Array.isArray(lista) ? lista : []).filter(d => (!status || d.status === status)
+    && (!q || n(`${d.host} ${d.cliente ? d.cliente.nome : ""} ${d.org ? d.org.nome : ""}`).includes(q)));
+}
+
+/** plano 1000 · AS-248: o «Entrar» guarda de onde veio (o detalhe do cliente) para o «Sair» da faixa de suporte voltar para lá. */
+export const CHAVE_VOLTA_ADMIN = "nx-admin-volta";
+export function lembrarVoltaAdmin(hash, armazenamento = globalThis.sessionStorage) {
+  try { if (armazenamento && /^#\/admin\//.test(String(hash || ""))) { armazenamento.setItem(CHAVE_VOLTA_ADMIN, String(hash)); return true; } } catch { /* sem storage */ }
+  return false;
+}
+
+/** nx_saude (só plataforma) → {ok, problemas[], pausaGeral, clientesPausados} para o cartão do Admin; null quando a resposta não é a esperada. */
+export function resumoSaude(r) {
+  if (!r || typeof r !== "object" || !Array.isArray(r.problemas)) return null;
+  return { ok: !r.problemas.length, problemas: r.problemas.map(String).slice(0, 12), pausaGeral: r.envios_pausados === true,
+    clientesPausados: Math.max(0, Number(r.clientes_pausados) || 0), em: r.em || null };
+}
+const semFuncao = e => /pgrst202|could not find the function|http_404|funcao_invalida/i.test(String((e && (e.codigo || e.message)) || ""));
 
 /* ------------------------------------------------------------ plano 100 (frente G): uso de IA por dia, números, pacote, convite */
 
@@ -212,7 +316,7 @@ export async function montar(ctx) {
   ui.limpar(ctx.alvo);
   if (id) {
     // detalhe: só o caminho de volta; o cartão do cliente faz o papel de título
-    ctx.alvo.append(h("a", { class: "voltar-link adm-voltar", href: "#/admin/clientes" }, ui.icone("seta-esq"), "Clientes"), corpo);
+    ctx.alvo.append(h("a", { class: "voltar-link adm-voltar", href: _ultimoHashClientes }, ui.icone("seta-esq"), "Clientes"), corpo);
     return telaCliente(ctx, corpo, id);
   }
   ctx.alvo.append(
@@ -240,23 +344,59 @@ async function telaClientes(ctx, corpo) {
   const h = ui.h;
   ctx.titulo("Clientes");
   const superConta = !!ctx.sessao.conta.super;
-  const filtro = { busca: ctx.rota.query.busca || "", status: ctx.rota.query.status || "", org_id: ctx.rota.query.org || "" };
+  const filtro = { busca: ctx.rota.query.busca || "", status: ctx.rota.query.status || "", org_id: ctx.rota.query.org || "", local: "" };
+  // plano 1000 · AS-155: cada mudança de filtro vai para o endereço (replaceState: sem entrada nova no histórico nem nova montagem)
+  const gravarFiltro = () => {
+    _ultimoHashClientes = hashClientes(filtro);
+    try { if (typeof history !== "undefined" && history.replaceState && typeof location !== "undefined" && location.hash !== _ultimoHashClientes) history.replaceState(history.state, "", _ultimoHashClientes); } catch { /* sem histórico: só o link de voltar lembra */ }
+  };
+  _ultimoHashClientes = hashClientes(filtro);
 
   const busca = h("input", { type: "search", value: filtro.busca, placeholder: "Buscar por nome ou endereço", "aria-label": "Buscar cliente" });
   // filtro de situação como segmentado com contagem (item 58); as contagens vêm da lista sem filtro de situação
   const segStatus = ui.segmentado({ tipo: "filtro", rotulo: "Filtrar por situação", classe: "adm-seg-status", valor: filtro.status || "",
     opcoes: [{ valor: "", rotulo: "Todas" }, ...STATUS.map(s => ({ valor: s.valor, rotulo: s.rotulo }))],
-    aoMudar: v => { filtro.status = v; carregar(); } });
+    aoMudar: v => { filtro.status = v; gravarFiltro(); carregar(); } });
   const selOrg = superConta ? h("select", { class: "sel", "aria-label": "Filtrar por revenda" }, h("option", { value: "" }, "Todas as orgs")) : null;
   const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Cliente");
   novo.setAttribute("aria-label", "Novo cliente");
+  // plano 1000 · AS-166: a lista que está na tela (com os filtros) vira CSV para a cobrança e o relatório da revenda
+  const btCsv = h("button", { type: "button", class: "bt bt-fant adm-csv" }, ui.icone("baixar"), "Exportar CSV");
   const segStatusEl = segStatus && segStatus.nodeType ? segStatus : segStatus.el;     // ui.segmentado devolve o elemento (ou {el}, nas versões anteriores)
   const faixa = h("div", { class: "adm-kpis", role: "group", "aria-label": "Resumo dos clientes", hidden: true });
+  const chipLocal = h("p", { class: "linha adm-filtro-local", hidden: true });
+  const saude = superConta ? h("div", { class: "adm-saude", hidden: true }) : null;
   const lista = h("div");
-  corpo.append(faixa, h("div", { class: "adm-filtros" }, h("label", { class: "busca" }, ui.icone("busca"), busca), segStatusEl, selOrg, novo), lista);
+  corpo.append(...[saude, faixa, h("div", { class: "adm-filtros" }, h("label", { class: "busca" }, ui.icone("busca"), busca), segStatusEl, selOrg, btCsv, novo), chipLocal, lista].filter(Boolean));
+  // AS-165: KPI que filtra — situação vai para o segmentado; «perto do limite» e «pausados» são filtro local (com chip removível)
+  let ultimosItens = [];
   const kpi = typeof ui.kpi === "function"
-    ? o => ui.kpi({ rotulo: o.rotulo, valor: o.valor, ajuda: o.ajuda })
+    ? o => ui.kpi({ rotulo: o.rotulo, valor: o.valor, ajuda: o.ajuda, aoClicar: o.aoClicar || null })
     : o => h("div", { class: "adm-kpi", title: o.ajuda || null }, h("span", { class: "adm-kpi-rot" }, o.rotulo), h("span", { class: "adm-kpi-val mono dado" }, ui.num(o.valor)));
+  function aplicarKpi({ status = "", local = "" }) {
+    filtro.local = local;
+    if (status !== undefined && filtro.status !== status) {
+      filtro.status = status;
+      if (typeof segStatus.ativar === "function") segStatus.ativar(status);
+      gravarFiltro();
+    }
+    carregar();
+  }
+  function pintarChipLocal() {
+    ui.limpar(chipLocal);
+    chipLocal.hidden = !filtro.local;
+    if (!filtro.local) return;
+    const tirar = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("fechar"), "Tirar filtro");
+    tirar.addEventListener("click", () => { filtro.local = ""; carregar(); });
+    chipLocal.append(ui.pilula(filtro.local === "perto" ? "Só quem está perto do limite" : "Só os pausados pela Nexus", "info"), tirar);
+  }
+  btCsv.addEventListener("click", () => {
+    if (!ultimosItens.length) { ui.toast("Nenhum cliente na lista para exportar.", { tipo: "info" }); return; }
+    if (baixarArquivoTexto(csvClientes(ultimosItens, nomePlano), `clientes-${ui.hojeSP()}.csv`, "text/csv")) ui.toast(`${ultimosItens.length} ${ultimosItens.length === 1 ? "cliente exportado" : "clientes exportados"}.`, { tipo: "ok" });
+    else ui.toast("O navegador não deixou baixar o arquivo.", { tipo: "erro" });
+  });
+  // nx_saude (20261013c, só plataforma): a saúde da operação no topo da lista; servidor antigo → o cartão nem aparece
+  if (saude) cartaoSaude(ctx, saude);
   // o resumo é sempre da lista SEM situação nem busca (só a revenda do filtro): é o que dá as contagens do segmentado
   let resumoDaOrg = null, seqResumo = 0;          // de qual org_id ("" = todas) é o resumo pintado
   function pintarResumo(itens, orgId) {
@@ -264,11 +404,12 @@ async function telaClientes(ctx, corpo) {
     resumoDaOrg = orgId;
     ui.limpar(faixa);
     const ajudaTotal = orgId ? "Todos os clientes da revenda escolhida no filtro." : superConta ? "Todos os clientes da plataforma." : "Todos os clientes desta revenda.";
-    faixa.append(
-      kpi({ rotulo: "Clientes", valor: r.total, ajuda: ajudaTotal }),
-      kpi({ rotulo: "Ativos", valor: r.ativo, ajuda: "Pagando e com acesso liberado." }),
-      kpi({ rotulo: "Em teste", valor: r.teste, ajuda: "Período de avaliação em andamento." }),
-      kpi({ rotulo: "Perto do limite", valor: r.perto_limite, ajuda: "Usando 80 % ou mais de algum limite do plano." }));
+    faixa.append(...[
+      kpi({ rotulo: "Clientes", valor: r.total, ajuda: ajudaTotal, aoClicar: () => aplicarKpi({ status: "", local: "" }) }),
+      kpi({ rotulo: "Ativos", valor: r.ativo, ajuda: "Pagando e com acesso liberado (sem os pausados pela Nexus).", aoClicar: () => aplicarKpi({ status: "ativo", local: "" }) }),
+      kpi({ rotulo: "Em teste", valor: r.teste, ajuda: "Período de avaliação em andamento.", aoClicar: () => aplicarKpi({ status: "teste", local: "" }) }),
+      kpi({ rotulo: "Perto do limite", valor: r.perto_limite, ajuda: "Usando 80 % ou mais de algum limite do plano.", aoClicar: () => aplicarKpi({ local: "perto" }) }),
+      r.pausados ? kpi({ rotulo: "Pausados", valor: r.pausados, ajuda: "Pausados pela Nexus: a equipe do cliente não entra.", aoClicar: () => aplicarKpi({ local: "pausados" }) }) : null].filter(Boolean));
     faixa.hidden = false;
     if (typeof segStatus.contar === "function") { for (const s of STATUS) segStatus.contar(s.valor, r[s.valor]); segStatus.contar("", r.total); }
   }
@@ -287,17 +428,21 @@ async function telaClientes(ctx, corpo) {
   }
 
   let seq = 0;
+  const hoje = ui.hojeSP();
   async function carregar() {
     const n = ++seq;
     ui.limpar(lista);
     lista.appendChild(ui.esqueleto("tabela", 6));
     try {
-      const itens = await api.rpc("nx_clientes_admin", { p_filtro: { busca: filtro.busca || null, status: filtro.status || null, org_id: filtro.org_id || null } });
+      const todosDoFiltro = await api.rpc("nx_clientes_admin", { p_filtro: { busca: filtro.busca || null, status: filtro.status || null, org_id: filtro.org_id || null } });
       if (n !== seq) return;
+      const itens = filtrarLocal(todosDoFiltro, filtro.local, filtro.status);
+      ultimosItens = itens;
+      pintarChipLocal();
       ui.limpar(lista);
-      if (!filtro.status && !filtro.busca) { seqResumo++; pintarResumo(itens, filtro.org_id || ""); }
+      if (!filtro.status && !filtro.busca) { seqResumo++; pintarResumo(todosDoFiltro, filtro.org_id || ""); }
       else if (resumoDaOrg !== (filtro.org_id || "")) carregarResumo();
-      if (!itens.length && !filtro.busca && !filtro.status && !filtro.org_id) {
+      if (!itens.length && !filtro.busca && !filtro.status && !filtro.org_id && !filtro.local) {
         lista.appendChild(ui.vazio({ titulo: "Nenhum cliente ainda.", texto: "Crie o primeiro — o funil, as etiquetas e as respostas rápidas da área dele entram prontos.",
           icone: "empresa", acao: { rotulo: "Criar o primeiro cliente", fn: () => criarCliente(ctx) } }));
         return;
@@ -312,8 +457,9 @@ async function telaClientes(ctx, corpo) {
       const tab = ui.tabela({
         rotulo: "Clientes",
         colunas: [
+          // plano 1000 · AS-289: o nome é um link de verdade (Ctrl+clique abre em outra aba; dá para copiar o endereço)
           { chave: "nome", rotulo: "Cliente", ordenavel: true, principal: true, render: it => h("div", { class: "cel-nome" }, ui.avatar(it.nome, it.id),
-            h("div", null, h("b", null, it.nome), h("small", null, it.slug))) },
+            h("div", null, h("a", { class: "adm-nome-link", href: `#/admin/clientes/${encodeURIComponent(it.id)}` }, h("b", null, it.nome)), h("small", null, it.slug))) },
           ...(superConta ? [{ chave: "org_nome", rotulo: "Org", ordenavel: true, render: it => it.org ? it.org.nome : "—" }] : []),
           // G5 [H306]: sem pacote comercial registrado (criado pelo clássico) → pílula; o detalhe ensina a completar
           { chave: "plano", rotulo: "Plano", ordenavel: true, render: it => h("span", { class: "adm-pilulas" }, ui.pilula(nomePlano(it.plano), it.plano === "interno" ? "sec" : "prim"),
@@ -324,7 +470,11 @@ async function telaClientes(ctx, corpo) {
             const e = estadoNumerosCliente(it.canais);
             return e ? h("span", { class: "adm-numero", dataset: { tom: e.tom } }, ui.pilula(e.rotulo, e.tom, { icone: e.tom === "ok" ? "check" : e.tom === "ruim" ? "alerta" : "whatsapp" })) : "—";
           } }] : []),
-          { chave: "teste_ate", rotulo: "Fim do teste", ordenavel: true, render: it => it.status === "teste" && it.teste_ate ? ui.dataBR(it.teste_ate) : "—" },
+          { chave: "teste_ate", rotulo: "Fim do teste", ordenavel: true, render: it => {
+            if (!(it.status === "teste" && it.teste_ate)) return "—";
+            const venc = testeVencidoHa(it, hoje);      // plano 1000 · AS-158: data passada não fica muda
+            return venc ? h("span", { class: "adm-pilulas" }, ui.pilula(rotuloTesteVencido(venc), "ruim", { icone: "alerta" }), h("small", { class: "fraco" }, ui.dataBR(it.teste_ate))) : ui.dataBR(it.teste_ate);
+          } },
           { chave: "u_usuarios", rotulo: "Usuários", render: it => uso(it, "usuarios", "Usuários") },
           { chave: "u_canais", rotulo: "Números", render: it => uso(it, "canais", "Números de WhatsApp") },
           { chave: "u_contatos", rotulo: "Contatos", render: it => uso(it, "contatos", "Contatos") },
@@ -343,13 +493,56 @@ async function telaClientes(ctx, corpo) {
       lista.appendChild(ui.erroCartao(e, carregar));
     }
   }
-  const aoBuscar = ui.debounce(() => { filtro.busca = busca.value.trim(); carregar(); }, 300);
+  const aoBuscar = ui.debounce(() => { filtro.busca = busca.value.trim(); gravarFiltro(); carregar(); }, 300);
   busca.addEventListener("input", aoBuscar);
-  if (selOrg) selOrg.addEventListener("change", () => { filtro.org_id = selOrg.value; carregar(); });
+  if (selOrg) selOrg.addEventListener("change", () => { filtro.org_id = selOrg.value; gravarFiltro(); carregar(); });
   novo.addEventListener("click", () => criarCliente(ctx));
   _limpeza.push(() => aoBuscar.cancelar());
   try { await planos(ctx); } catch { /* nomes de plano caem no id */ }
   await carregar();
+}
+
+function baixarArquivoTexto(texto, nome, tipo) {
+  try {
+    const url = URL.createObjectURL(new Blob([texto], { type: `${tipo};charset=utf-8` }));
+    const a = document.createElement("a"); a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    return true;
+  } catch { return false; }
+}
+
+/** Saúde da operação (nx_saude, só plataforma) + pausa de emergência de TODOS os envios (nx_envios_pausar sem cliente). */
+function cartaoSaude(ctx, caixa) {
+  const { ui, api } = ctx;
+  const h = ui.h;
+  async function carregar() {
+    let s = null;
+    try { s = resumoSaude(await api.rpc("nx_saude")); } catch (e) { if (semFuncao(e)) { caixa.hidden = true; return; } }
+    ui.limpar(caixa);
+    if (!s) { caixa.hidden = true; return; }
+    caixa.hidden = false;
+    const bPausa = h("button", { type: "button", class: s.pausaGeral ? "bt bt-prim bt-p" : "bt bt-sec bt-p" }, ui.icone(s.pausaGeral ? "play" : "pausa"), s.pausaGeral ? "Retomar todos os envios" : "Pausar todos os envios");
+    bPausa.addEventListener("click", async () => {
+      const pausar = !s.pausaGeral;
+      if (!(await ui.confirmar(pausar
+        ? { titulo: "Pausar os envios automáticos de TODOS os clientes?", rotulo: "Pausar tudo", perigo: true, digitar: "pausar",
+            texto: "A fila de WhatsApp e as decisões de IA das automações param na plataforma inteira até você retomar. Mensagens digitadas pela equipe nas conversas continuam saindo." }
+        : { titulo: "Retomar os envios automáticos?", rotulo: "Retomar", texto: "A fila volta a andar para os clientes que não estão pausados um a um." }))) return;
+      try {
+        await ui.carregando(bPausa, api.rpc("nx_envios_pausar", { p_cliente: null, p_pausar: pausar, p_motivo: pausar ? "Pausa de emergência pelo Admin" : null }));
+        ui.toast(pausar ? "Envios automáticos pausados na plataforma." : "Envios automáticos retomados.", { tipo: "ok" });
+        carregar();
+      } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+    });
+    caixa.append(h("div", { class: ["aviso", s.pausaGeral ? "aviso-ruim" : s.ok ? "aviso-ok" : "aviso-aten", "adm-saude-cx"] },
+      ui.icone(s.ok ? "check" : "alerta"),
+      h("div", { class: "pilha-p" },
+        h("p", null, h("b", null, s.ok ? "Operação em ordem." : `${s.problemas.length} ${s.problemas.length === 1 ? "ponto de atenção" : "pontos de atenção"} na operação.`),
+          s.clientesPausados ? ` ${s.clientesPausados} ${s.clientesPausados === 1 ? "cliente com envios pausados" : "clientes com envios pausados"}.` : ""),
+        s.problemas.length ? h("ul", { class: "adm-saude-lista" }, s.problemas.map(p => h("li", null, p))) : null,
+        h("div", { class: "linha" }, bPausa))));
+  }
+  carregar();
 }
 
 function nomePlano(id) {
@@ -385,9 +578,18 @@ async function criarCliente(ctx) {
     ui.campo({ rotulo: "Especificações do cliente", nome: "especificacoes", tipo: "textarea", max: 5000, linhas: 4,
       placeholder: "Escreva necessidades, objetivos, entregas combinadas e observações…", ajuda: "Campo livre, sem modelos ou respostas predefinidas." }));
   const nome = form.querySelector("input[name=nome]"), slug = form.querySelector("input[name=slug]");
+  // plano 1000 · AS-168: «Vamos usar o modelo: …» ao digitar o segmento, com opção de trocar
+  const inpSegNovo = form.querySelector("input[name=segmento]");
+  const selModelo = h("select", { class: "sel adm-modelo-sel", "aria-label": "Modelo do cliente" }, VERTICAIS.map(v => h("option", { value: v.valor }, v.rotulo)));
+  const linhaModeloNovo = h("p", { class: "campo-ajuda adm-modelo" }, h("span", null, "Vamos usar o modelo: "), selModelo);
+  let modeloMexido = false;
+  selModelo.addEventListener("change", () => { modeloMexido = true; });
+  const pintarModeloNovo = () => { if (!modeloMexido) selModelo.value = verticalPorSegmento(inpSegNovo.value); };
+  if (inpSegNovo) { inpSegNovo.addEventListener("input", pintarModeloNovo); inpSegNovo.closest("[data-campo]") ? inpSegNovo.closest("[data-campo]").appendChild(linhaModeloNovo) : inpSegNovo.parentNode.appendChild(linhaModeloNovo); pintarModeloNovo(); }
   let slugMexido = false;
-  nome.addEventListener("input", () => { if (!slugMexido) slug.value = sugerirSlug(nome.value); });
-  slug.addEventListener("input", () => { slugMexido = true; });
+  const conferirSlug = conferidorDeSlug(ctx, slug, null);
+  nome.addEventListener("input", () => { if (!slugMexido) { slug.value = sugerirSlug(nome.value); conferirSlug(); } });
+  slug.addEventListener("input", () => { slugMexido = true; conferirSlug(); });
   const selStatus = form.querySelector("select[name=status]");
   const campoDias = form.querySelector("[data-campo=dias]");
   let pacoteCriado = "essencial";
@@ -413,7 +615,7 @@ async function criarCliente(ctx) {
         }
         const dias = Math.max(1, Math.min(90, Number(d.dias) || 14));
         const teste = d.status === "teste" ? isoMais(ui.hojeSP(), dias) : null;
-        const p = { nome: d.nome, slug: d.slug, vertical: verticalPorSegmento(d.segmento), plano: planoAcesso, status: d.status, teste_ate: teste,
+        const p = { nome: d.nome, slug: d.slug, vertical: VERTICAIS.some(v => v.valor === selModelo.value) ? selModelo.value : verticalPorSegmento(d.segmento), plano: planoAcesso, status: d.status, teste_ate: teste,
           comercial: { pacote: oferta.id, segmento: d.segmento || "", especificacoes: d.especificacoes || "" } };
         if (superConta && d.org_id) p.org_id = d.org_id;
         try {
@@ -431,6 +633,25 @@ async function criarCliente(ctx) {
     try { await ctx.shell.recarregarSessao(); } catch { /* o seletor atualiza na próxima entrada */ }
     ctx.navegar(`#/admin/clientes/${r.id}`);
   }
+}
+
+/** plano 1000 · AS-169: confere o endereço enquanto digita (400 ms parado) com nx_clientes_admin {busca: slug} — aviso embaixo do campo. */
+function conferidorDeSlug(ctx, inp, idProprio) {
+  const { ui, api } = ctx;
+  const campo = inp.closest("[data-campo]") || inp.parentNode;
+  const aviso = ui.h("small", { class: "campo-erro adm-slug-tomado", role: "status", hidden: true });
+  campo.appendChild(aviso);
+  let seq = 0;
+  const conferir = ui.debounce(async () => {
+    const n = ++seq, v = inp.value.trim().toLowerCase();
+    if (!/^[a-z0-9-]{2,40}$/.test(v)) { aviso.hidden = true; return; }
+    let achado = null;
+    try { achado = slugTomado(await api.rpc("nx_clientes_admin", { p_filtro: { busca: v } }), v, idProprio); } catch { return; }
+    if (n !== seq) return;
+    aviso.hidden = !achado;
+    aviso.textContent = achado ? `Esse endereço já é de «${achado.nome}». Escolha outro.` : "";
+  }, 400);
+  return conferir;
 }
 
 function isoMais(iso, dias) {
@@ -460,11 +681,28 @@ async function telaCliente(ctx, corpo, id) {
   }
   ctx.titulo(cli.nome);
   ui.limpar(corpo);
-  const st = statusDe(cli.status);
+  const hojeDet = ui.hojeSP();
+  // plano 1000 · AS-162: cabeçalho redesenhável (salvar atualiza nome, situação, plano e pílulas sem remontar a tela)
+  const cabNome = h("h1", { class: "titulo-sec" }, cli.nome);
+  const cabPilulas = h("div", { class: "linha" });
+  const cabAvatar = h("span", { class: "adm-cab-av" }, ui.avatar(cli.nome, cli.id));
+  function pintarCabecalho() {
+    const s = statusDe(cli.status);
+    cabNome.textContent = cli.nome;
+    cabAvatar.replaceChildren(ui.avatar(cli.nome, cli.id));
+    const venc = testeVencidoHa(cli, hojeDet);
+    cabPilulas.replaceChildren(...[ui.pilula(s.rotulo, s.cor), ui.pilula(nomePlano(cli.plano), cli.plano === "interno" ? "sec" : "prim"),
+      cli.comercial && cli.comercial.pacote ? ui.pilula(rotuloPacote(cli.comercial.pacote), "info") : ui.pilula("Sem pacote", "aten"),
+      venc ? ui.pilula(rotuloTesteVencido(venc), "ruim", { icone: "alerta" }) : null,
+      cli.ativo === false ? ui.pilula("Pausado pela Nexus", "ruim", { icone: "cadeado" }) : null,
+      h("span", { class: "fraco" }, `${cli.org ? cli.org.nome : ""} · desde ${ui.dataBR(cli.criado_em)}`)].filter(Boolean));
+  }
+  pintarCabecalho();
 
   // ---- ações de topo
   const btEntrar = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("seta-dir"), "Entrar");
   btEntrar.addEventListener("click", async () => {
+    lembrarVoltaAdmin(`#/admin/clientes/${cli.id}`);      // plano 1000 · AS-248: o «Sair» da faixa de suporte volta para este cliente
     await ui.carregando(btEntrar, async () => {
       if (!ctx.shell.clientes().some(c => c.id === cli.id)) await ctx.shell.recarregarSessao();
       await ctx.shell.escolherCliente(cli.id, { remontar: false });
@@ -472,11 +710,17 @@ async function telaCliente(ctx, corpo, id) {
     ctx.navegar("#/");
   });
   const btConvite = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("convidar"), "Gerar convite do administrador");
+  let convitesPend = [];        // preenchido pela lista de usuários (nx_usuarios_listar → convites)
   btConvite.addEventListener("click", async () => {
+    // plano 1000 · AS-159: cada clique criava mais um convite; com um já aguardando, pergunta antes de gerar outro
+    const admins = convitesPend.filter(c => !c.papel || c.papel === "admin");
+    if (admins.length && !(await ui.confirmar({ titulo: "Já existe um convite aguardando", rotulo: "Gerar outro link",
+      texto: `${admins.length === 1 ? "Há 1 convite de administrador" : `Há ${admins.length} convites de administrador`} ainda não usado${admins.length === 1 ? "" : "s"}. Gerar outro cria um link novo (os anteriores continuam valendo até você revogar em «Usuários com acesso»).` }))) return;
     try {
       const r = await ui.carregando(btConvite, api.rpc("nx_convite_criar", { p_cliente: cli.id, p_dados: { papel: "admin", dias: 7 }, p_org: null }));
       // G5 [H305]: link relativo aberto num host que não serve o app (Pages, localhost) sairia quebrado → aviso no lugar do link
       const lc = linkConvite(r.link, location);
+      convitesPend.push({ id: r.id || null, papel: "admin", expira_em: r.expira_em || null });   // o próximo clique já sabe que há um aguardando
       await ui.modal({
         titulo: "Convite do administrador", largura: "m",
         corpo: h("div", { class: "pilha" },
@@ -493,13 +737,22 @@ async function telaCliente(ctx, corpo, id) {
   const planoAtual = () => ps.find(p => p.id === form.querySelector("select[name=plano]").value) || ps.find(p => p.id === cli.plano) || { modulos: [], limites: {} };
   const opcoesPlano = ps.some(p => p.id === cli.plano) ? ps : [{ id: cli.plano, nome: cli.plano, modulos: cli.modulos, limites: {} }, ...ps];
   const comercial = cli.comercial || {};
-  const segmentoInicial = comercial.segmento || (VERTICAIS.find(v => v.valor === cli.vertical) || {}).rotulo || "";
+  let segmentoInicial = comercial.segmento || (VERTICAIS.find(v => v.valor === cli.vertical) || {}).rotulo || "";
   const segmento = ui.campo({ rotulo: "Segmento do cliente", nome: "segmento", valor: segmentoInicial, max: 120,
     placeholder: "Escreva livremente o ramo de atividade…",
     ajuda: "Sem opções predefinidas. Clínicas odontológicas, oficinas e lojas reconhecidas recebem o modelo correspondente; os demais usam o genérico." });
   const especificacoes = ui.campo({ rotulo: "Especificações do cliente", nome: "especificacoes", tipo: "textarea", valor: comercial.especificacoes || "", max: 5000, linhas: 4,
     placeholder: "Necessidades, objetivos, entregas combinadas e observações…", ajuda: "Texto livre. Até 5.000 caracteres." });
   segmento.classList.add("inteiro"); especificacoes.classList.add("inteiro");
+  // plano 1000 · AS-168: o modelo que o segmento escrito aplica, à vista (antes a escolha odonto/oficina/loja/genérico era silenciosa)
+  const linhaModelo = h("p", { class: "campo-ajuda adm-modelo", "aria-live": "polite" });
+  const inpSeg = segmento.querySelector("input");
+  const pintarModelo = () => {
+    const v = verticalAoEditar(inpSeg.value, segmentoInicial, cli.vertical);
+    const rot = (VERTICAIS.find(x => x.valor === v) || { rotulo: "Outro negócio" }).rotulo;
+    linhaModelo.textContent = v !== cli.vertical ? `Ao salvar, passa a usar o modelo: ${rot}.` : `Modelo em uso: ${rot}.`;
+  };
+  if (inpSeg) { inpSeg.addEventListener("input", pintarModelo); segmento.appendChild(linhaModelo); pintarModelo(); }
   const form = h("form", { class: "pilha", novalidate: true },
     h("div", { class: "form-grade" },
       ui.campo({ rotulo: "Nome", nome: "nome", valor: cli.nome, obrigatorio: true, max: 80 }),
@@ -514,12 +767,14 @@ async function telaCliente(ctx, corpo, id) {
         ajuda: "Desligado = pausado pela Nexus: o Órbita para de ler os anúncios e de mandar relatórios e alertas deste cliente, o rastreio do site e a vigia do número param, e a equipe dele passa a ver «conta pausada» ao abrir o app (quem já está com ele aberto é bloqueado na próxima leitura da sessão). Os dados ficam guardados; dá para religar a qualquer momento. A situação (ativo, teste, suspenso) é outra coisa: é a do contrato." }), "adm-ativo") : null,
     h("div", { class: "campo-modulos" }),
     superConta ? h("fieldset", { class: "campo" }, h("legend", null, "Limites extras (só a plataforma)"),
-      h("p", { class: "campo-ajuda" }, "Em branco = o limite do plano."),
+      h("p", { class: "campo-ajuda" }, "Em branco = o limite do plano. 0 bloqueia o recurso (nenhum permitido)."),
       h("div", { class: "form-grade" }, CHAVES_LIMITE.map(k => ui.campo({ rotulo: k.rotulo, nome: `lim_${k.chave}`, tipo: "numero", min: 0,
         valor: cli.limites_extra && cli.limites_extra[k.chave] != null ? cli.limites_extra[k.chave] : "" })))) : null,
     h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, "Salvar alterações")));
 
   const caixaMod = form.querySelector(".campo-modulos");
+  const inpSlugDet = form.querySelector("input[name=slug]");
+  inpSlugDet.addEventListener("input", conferidorDeSlug(ctx, inpSlugDet, cli.id));      // AS-169
   function desenharModulos(marcados) {
     ui.limpar(caixaMod);
     const doPlano = planoAtual().modulos || [];
@@ -535,7 +790,21 @@ async function telaCliente(ctx, corpo, id) {
     });
   }
   desenharModulos(cli.modulos);
-  form.querySelector("select[name=plano]").addEventListener("change", () => desenharModulos(planoAtual().modulos || []));
+  const selPlano = form.querySelector("select[name=plano]");
+  let planoAntes = (planoAtual().modulos || []).slice();
+  const avisoModulos = h("p", { class: "aviso aviso-aten adm-mod-aviso", role: "status", hidden: true });
+  caixaMod.after(avisoModulos);
+  selPlano.addEventListener("change", () => {
+    // plano 1000 · AS-161: os módulos que a plataforma ligou à mão continuam; os que saíram são ditos (antes o plano novo zerava tudo)
+    const atuais = [...caixaMod.querySelectorAll("input[type=checkbox]")].filter(x => x.checked).map(x => x.value);
+    const r = modulosAoTrocarPlano({ atuais, planoAntigo: planoAntes, planoNovo: planoAtual().modulos || [], superConta });
+    planoAntes = (planoAtual().modulos || []).slice();
+    desenharModulos(r.marcados);
+    ui.limpar(avisoModulos);
+    avisoModulos.hidden = !r.sairam.length;
+    if (r.sairam.length) avisoModulos.append(ui.icone("alerta"), h("span", null,
+      `Fora do plano novo: ${r.sairam.map(v => (MODULOS.find(m => m.valor === v) || { rotulo: v }).rotulo).join(", ")}. Ao salvar, ${r.sairam.length === 1 ? "esse módulo é desligado" : "esses módulos são desligados"}.`));
+  });
   const selSt = form.querySelector("select[name=status]");
   const campoTeste = form.querySelector("[data-campo=teste_ate]");
   const ajustarTeste = () => { campoTeste.hidden = selSt.value !== "teste"; };
@@ -548,7 +817,7 @@ async function telaCliente(ctx, corpo, id) {
     if (!d.nome || d.nome.length < 2) return ui.marcarErro(form, "nome", "Informe o nome.");
     if (!/^[a-z0-9-]{2,40}$/.test(d.slug || "")) return ui.marcarErro(form, "slug", "Use de 2 a 40 letras minúsculas, números ou hífen.");
     const p = { id: cli.id, nome: d.nome, slug: d.slug, plano: d.plano, status: d.status,
-      vertical: d.segmento ? verticalPorSegmento(d.segmento) : cli.vertical,
+      vertical: verticalAoEditar(d.segmento, segmentoInicial, cli.vertical),      // segmento igual: mantém o modelo escolhido
       teste_ate: d.status === "teste" ? (d.teste_ate || null) : cli.teste_ate, modulos: d.modulos || [],
       comercial: { pacote: d.pacote_comercial || null, segmento: d.segmento || "", especificacoes: d.especificacoes || "" } };
     if (superConta) {
@@ -570,12 +839,16 @@ async function telaCliente(ctx, corpo, id) {
     try {
       const r = await ui.carregando(form.querySelector("[type=submit]"), api.rpc("nx_cliente_admin_salvar", { p_cliente: p }));
       cli = r;
+      segmentoInicial = d.segmento || segmentoInicial;     // o segmento salvo vira a referência (o modelo só muda se mudar de novo)
+      if (inpSeg) pintarModelo();
       // por detecção: o servidor que ainda não grava «ativo» devolve o valor antigo — a tela diz a verdade em vez de fingir que pausou
       if (pedeAtivo !== null && r && r.ativo !== pedeAtivo) {
         ui.toast(`Os outros dados foram salvos, mas o servidor ainda não grava ${pedeAtivo ? "a religação" : "a pausa"} por aqui. Use o painel clássico (cadastro do cliente → «Cliente ativo») por enquanto.`, { tipo: "info", ms: 9000 });
       } else ui.toast(pedeAtivo === false ? "Cliente pausado." : pedeAtivo === true ? "Cliente religado." : "Cliente atualizado.", { tipo: "ok" });
       try { await ctx.shell.recarregarSessao(); } catch { /* ok */ }
-      ctx.navegar(`#/admin/clientes/${cli.id}`, { substituir: true });
+      // plano 1000 · AS-162: o cabeçalho e as pílulas se atualizam no lugar — a tela não remonta nem volta ao topo
+      pintarCabecalho();
+      ctx.titulo(cli.nome);
     } catch (e) {
       if (e.codigo === "slug_em_uso") return ui.marcarErro(form, "slug", "Esse endereço já está em uso.");
       if (e.codigo === "dados_invalidos" && e.hint === "comercial") return ui.marcarErro(form, "especificacoes", "Revise as especificações informadas.");
@@ -592,10 +865,86 @@ async function telaCliente(ctx, corpo, id) {
     ui.limpar(usuariosEl);
     const us = r.usuarios || [];
     if (!us.length) usuariosEl.appendChild(h("p", { class: "fraco" }, "Ninguém com acesso ainda. Gere o convite do administrador."));
-    for (const u of us) usuariosEl.appendChild(h("div", { class: "cel-nome" }, ui.avatar(u.nome, u.conta_id),
-      h("div", null, h("b", null, u.nome), h("small", null, `${({ admin: "Administrador", supervisor: "Supervisor", atendente: "Atendente", leitura: "Somente leitura" })[u.papel] || u.papel} · ${u.email}`))));
-    if ((r.convites || []).length) usuariosEl.appendChild(h("p", { class: "fraco" }, `${r.convites.length} convite(s) aguardando.`));
+    // plano 1000 · AS-160: ações de suporte por pessoa (link de nova senha) sem precisar «Entrar» no cliente
+    for (const u of us) {
+      const b = h("button", { type: "button", class: "bt-icone adm-us-acoes", "aria-label": `Ações de suporte para ${u.nome}` }, ui.icone("opcoes"));
+      b.addEventListener("click", () => ui.menu(b, [{ rotulo: "Gerar link de nova senha", icone: "cadeado", fn: () => linkSenhaSuporte(u) }]));
+      usuariosEl.appendChild(h("div", { class: "cel-nome adm-us-linha" }, ui.avatar(u.nome, u.conta_id),
+        h("div", null, h("b", null, u.nome), h("small", null, `${({ admin: "Administrador", supervisor: "Supervisor", atendente: "Atendente", leitura: "Somente leitura" })[u.papel] || u.papel} · ${u.email}`)),
+        u.editavel === false ? null : b));
+    }
+    convitesPend = Array.isArray(r.convites) ? r.convites : [];
+    if (convitesPend.length) usuariosEl.appendChild(listaConvitesAdmin());
   }).catch(e => { ui.limpar(usuariosEl); usuariosEl.appendChild(h("p", { class: "fraco" }, ui.mensagemErro(e))); });
+
+  async function linkSenhaSuporte(u) {
+    try {
+      const r = await api.rpc("nx_senha_link_criar", { p_cliente: cli.id, p_conta: u.conta_id });
+      const lc = linkConvite(r.link, location);
+      await ui.modal({ titulo: `Link de nova senha · ${u.nome}`, largura: "m",
+        corpo: h("div", { class: "pilha" },
+          h("p", null, `Envie para ${u.nome}. Quem abrir cria uma senha nova e todas as sessões abertas dessa conta são encerradas.`),
+          lc.link ? ui.blocoLink(lc.link, { rotulo: "Link de nova senha", textoWhats: `Olá, ${String(u.nome).split(" ")[0]}! Crie sua senha nova por este link:` })
+            : h("div", { class: "aviso aviso-ruim adm-link-ruim", role: "alert" }, ui.icone("alerta"), h("p", null, lc.motivo)),
+          r.expira_em ? h("p", { class: "fraco" }, `Vale até ${ui.dataHoraBR(r.expira_em)} e só uma vez.`) : null),
+        acoes: [{ rotulo: "Concluir", tipo: "primario", valor: true }] });
+    } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+  }
+
+  /** nx_envios_pausar (20261013c, só plataforma): pausa de emergência dos envios automáticos DESTE cliente. */
+  function cartaoEnvios() {
+    if (!superConta) return null;
+    let pausado = typeof cli.envios_pausados === "boolean" ? cli.envios_pausados : null;
+    const estado = h("p", { class: "sub adm-envios-estado" });
+    const bPausar = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("pausa"), "Pausar envios");
+    const bRetomar = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("play"), "Retomar envios");
+    const pintar = () => {
+      estado.textContent = pausado === true ? "Pausados: a fila de WhatsApp e as decisões de IA das automações deste cliente estão paradas."
+        : pausado === false ? "Saindo normalmente." : "A situação atual não vem nesta tela; use os botões para pausar ou retomar.";
+      bPausar.hidden = pausado === true; bRetomar.hidden = pausado === false;
+    };
+    const acao = pausar => async () => {
+      if (pausar && !(await ui.confirmar({ titulo: `Pausar os envios automáticos de ${cli.nome}?`, rotulo: "Pausar envios", perigo: true,
+        texto: "A fila de WhatsApp (lembretes, campanhas, automações) e as decisões de IA deste cliente param até você retomar. As mensagens que a equipe digita nas conversas continuam saindo." }))) return;
+      try {
+        const r = await ui.carregando(pausar ? bPausar : bRetomar, api.rpc("nx_envios_pausar", { p_cliente: cli.id, p_pausar: pausar, p_motivo: pausar ? "Pausa de emergência pelo Admin" : null }));
+        pausado = r && typeof r.pausado === "boolean" ? r.pausado : pausar;
+        pintar();
+        ui.toast(pausado ? "Envios automáticos pausados." : "Envios automáticos retomados.", { tipo: "ok" });
+      } catch (e) {
+        ui.toast(semFuncao(e) ? "Este servidor ainda não tem a pausa de envios." : api.mensagemErro(e), { tipo: "erro" });
+      }
+    };
+    bPausar.addEventListener("click", acao(true));
+    bRetomar.addEventListener("click", acao(false));
+    pintar();
+    return h("div", { class: "cartao adm-envios" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Envios automáticos"),
+      h("p", { class: "sub" }, "Pausa de emergência: para tudo que sai sozinho deste cliente, sem desligar as automações uma a uma."))),
+      estado, h("div", { class: "linha" }, bPausar, bRetomar));
+  }
+
+  /** plano 1000 · AS-159: os convites que aguardam, cada um com «Revogar» (o link deixa de valer na hora). */
+  function listaConvitesAdmin() {
+    const caixa = h("div", { class: "pilha-p adm-convites" }, h("p", { class: "rotulo" }, convitesPend.length === 1 ? "1 convite aguardando" : `${convitesPend.length} convites aguardando`));
+    for (const cv of convitesPend) {
+      const b = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Revogar");
+      b.addEventListener("click", async () => {
+        if (!(await ui.confirmar({ titulo: "Revogar convite?", texto: "O link deixa de funcionar na hora.", rotulo: "Revogar", perigo: true }))) return;
+        try {
+          await ui.carregando(b, api.rpc("nx_convite_revogar", { p_cliente: cli.id, p_convite: cv.id }));
+          convitesPend = convitesPend.filter(x => x.id !== cv.id);
+          const nova = convitesPend.length ? listaConvitesAdmin() : null;
+          if (nova) caixa.replaceWith ? caixa.replaceWith(nova) : (caixa.parentNode.insertBefore(nova, caixa), caixa.remove()); else caixa.remove();
+          ui.toast("Convite revogado.", { tipo: "ok" });
+        } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+      });
+      const papel = ({ admin: "Administrador", supervisor: "Supervisor", atendente: "Atendente", leitura: "Somente leitura" })[cv.papel] || cv.papel || "Administrador";
+      caixa.appendChild(h("div", { class: "convite-item" }, ui.icone("link"),
+        h("div", null, h("b", null, cv.nome || cv.email || "Convite sem nome"),
+          h("small", null, [papel, cv.expira_em ? `vence ${ui.relativo(cv.expira_em)}` : null].filter(Boolean).join(" · "))), b));
+    }
+    return caixa;
+  }
 
   /** G5 [H306]: cliente sem pacote comercial (criado pelo clássico): diz o que falta e leva ao campo. */
   function avisoSemPacote() {
@@ -615,12 +964,7 @@ async function telaCliente(ctx, corpo, id) {
   corpo.append(...[
     h("div", { class: "cartao" },
       h("div", { class: "cartao-cab" },
-        h("div", { class: "cel-nome" }, ui.avatar(cli.nome, cli.id), h("div", null,
-          h("h1", { class: "titulo-sec" }, cli.nome),
-          h("div", { class: "linha" }, ui.pilula(st.rotulo, st.cor), ui.pilula(nomePlano(cli.plano), cli.plano === "interno" ? "sec" : "prim"),
-            cli.comercial && cli.comercial.pacote ? ui.pilula(rotuloPacote(cli.comercial.pacote), "info") : ui.pilula("Sem pacote", "aten"),
-            cli.ativo === false ? ui.pilula("Pausado pela Nexus", "ruim", { icone: "cadeado" }) : null,
-            h("span", { class: "fraco" }, `${cli.org ? cli.org.nome : ""} · desde ${ui.dataBR(cli.criado_em)}`)))),
+        h("div", { class: "cel-nome" }, cabAvatar, h("div", null, cabNome, cabPilulas)),
         h("div", { class: "linha" }, btConvite, btEntrar))),
     semPacote(cli) ? avisoSemPacote() : null,
     h("div", { class: "adm-det" },
@@ -634,6 +978,7 @@ async function telaCliente(ctx, corpo, id) {
           usoIAPorDia(ctx, cli)),
         h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Uso do plano"), h("p", { class: "sub" }, "Contagem de agora; sugestões de IA no mês corrente."))), usoEl),
         h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Usuários com acesso"))), usuariosEl),
+        cartaoEnvios(),
         EXTRAS.dominiosCliente ? EXTRAS.dominiosCliente(ctx, cli) : null))].filter(Boolean));
 }
 
@@ -990,10 +1335,13 @@ async function telaDominios(ctx, corpo) {
     h("option", { value: "" }, "Todos"), h("option", { value: "pendente" }, "Pendentes"), h("option", { value: "ativo" }, "Ativos"));
   const novo = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("mais"), "Domínio");
   novo.setAttribute("aria-label", "Novo domínio");
+  // plano 1000 · AS-171: busca por endereço, cliente ou revenda (além da situação)
+  const buscaDom = h("input", { type: "search", placeholder: "Buscar endereço ou cliente", "aria-label": "Buscar domínio", autocomplete: "off" });
   const lista = h("div", { class: "dom-grade" }, ui.esqueleto("cartoes", 2));
   corpo.append(...[
     superConta ? h("div", { class: "aviso" }, ui.icone("info"), h("p", null, "Para ativar: no Netlify, em Domain management → Add a domain alias, adicione o endereço; espere o certificado HTTPS sair e só então clique em Marcar ativo.")) : null,
-    h("div", { class: "adm-filtros" }, filtro, h("span", { class: "marca-espaco" }), novo), lista].filter(Boolean));
+    h("div", { class: "adm-filtros" }, h("label", { class: "busca" }, ui.icone("busca"), buscaDom), filtro, novo), lista].filter(Boolean));
+  buscaDom.addEventListener("input", ui.debounce(() => desenhar(), 150));
   let dados = [], cfg = null;
   async function carregar() {
     ui.limpar(lista); lista.append(ui.esqueleto("cartoes", 2));
@@ -1007,9 +1355,9 @@ async function telaDominios(ctx, corpo) {
   }
   function desenhar() {
     ui.limpar(lista);
-    const itens = dados.filter(d => !filtro.value || d.status === filtro.value);
+    const itens = filtrarDominios(dados, { status: filtro.value, busca: buscaDom.value });
     if (!itens.length) {
-      lista.append(ui.vazio({ titulo: dados.length ? "Nenhum domínio com esse filtro." : "Nenhum domínio ainda.", icone: "globo",
+      lista.append(ui.vazio({ titulo: dados.length ? "Nenhum domínio com esse filtro ou busca." : "Nenhum domínio ainda.", icone: "globo",
         texto: dados.length ? "" : "Revendas e clientes podem usar o próprio endereço (ex.: crm.agencia.com.br) com a marca deles." }));
       return;
     }

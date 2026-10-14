@@ -883,7 +883,13 @@ test("arquivos da frente G sem «localStorage» no rascunho de automação e sem
   for (const f of ["web/app/automacoes.js", "web/app/auto-editor.js", "web/app/auto-pecas.js", "web/app/admin.js", "web/app/cv-config.js", "web/app/config.js"]) {
     assert.doesNotMatch(ler(f), /^import\s/m, `${f} sem import estático`);
   }
-  assert.doesNotMatch(ler("web/app/automacoes.js") + ler("web/app/auto-editor.js"), /localStorage/);
+  // plano 1000 (lote auto-2): o rascunho continua só na aba (sessionStorage); no aparelho ficam apenas duas preferências da LISTA —
+  // a ordem escolhida (AS-015) e os últimos pedidos à IA sem dado pessoal (AS-072). Nada do editor vai para o localStorage.
+  assert.doesNotMatch(ler("web/app/auto-editor.js"), /localStorage/);
+  const tela = ler("web/app/automacoes.js");
+  const usos = tela.match(/localStorage\.\w+\((\w+)/g) || [];
+  assert.ok(usos.length > 0 && usos.every(u => /\((chaveOrdem|chaveRecentes)$/.test(u)), `só as preferências da lista: ${usos.join(", ")}`);
+  assert.doesNotMatch(tela, /localStorage[^\n]*(rascunho|Rascunho)/);
 });
 
 test("descrever: condição sem valor (receita cuja etapa não existe no funil) diz «(a escolher)», nunca «null»", () => {
@@ -911,7 +917,8 @@ test("revisão · decisaoIA com ações DEPOIS da IA (e motivo com parênteses o
 test("revisão · «Reconferir agora» não testa número sem token/chave (o teste da Meta gravava «erro» e o número «caía» sem nunca ter conectado)", () => {
   const src = readFileSync(new URL("../web/app/cv-config.js", import.meta.url), "utf8");
   assert.match(src, /if \(c\.tem_token === false\) \{ semConfig\+\+; continue; \}/);
-  assert.match(src, /return srv && srv\.length \? \{ lista: srv, servidor: true \} : \{ lista: local, servidor: false \};/);
+  // plano 1000 · AS-121: com lista do servidor não grava o local; lista vazia do servidor continua mostrando (e anotando) o local
+  assert.match(src, /if \(srv && srv\.length\) return \{ lista: srv, servidor: true \};\s*\/\/[^\n]*\n\s*return \{ lista: historicoCanal\(ctx, c\.id\)\.registrar\(\{ rotulo, tom \}\), servidor: false \};/);
 });
 
 test("revisão · «Montar de novo»: respostas da rodada anterior continuam (a mesma pergunta vale a resposta nova); falha da nova chamada não apaga a montagem anterior", async () => {

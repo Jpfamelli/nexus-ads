@@ -6,8 +6,14 @@
 
 const PAGINA = 1000;   // teto padrão de linhas por resposta do PostgREST no Supabase
 const PRAZO_PADRAO_MS = 10_000;
+const REPETIR_GET_MS = 300;
+// plano 1000 (SV-094): teto de segurança do select sem limit — paginar até o fim acumulava tudo em memória (cliente com 100 mil
+// leads num carregarModelo derrubava o isolate). Quem precisa de mais passa {teto} explícito.
+export const TETO_SELECT = 50_000;
+/** Plano 1000 (SV-105): a partir daqui a chamada ao PostgREST é registrada como lenta. */
+export const LENTO_MS = 2_000;
 
-export function criarDb({ url, chave } = {}, f = globalThis.fetch, { prazoMs = PRAZO_PADRAO_MS } = {}) {
+export function criarDb({ url, chave } = {}, f = globalThis.fetch, { prazoMs = PRAZO_PADRAO_MS, repetirMs = REPETIR_GET_MS } = {}) {
   if (!url || !chave) throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes");
   const base = `${String(url).replace(/\/+$/, "")}/rest/v1`;
   const cab = { apikey: chave, "Content-Type": "application/json", Accept: "application/json" };
@@ -15,7 +21,7 @@ export function criarDb({ url, chave } = {}, f = globalThis.fetch, { prazoMs = P
   // Chave nova (sb_secret_…) não é JWT: o gateway recusa se vier no Authorization.
   if (!String(chave).startsWith("sb_")) cab.Authorization = `Bearer ${chave}`;
 
-  async function pedir(metodo, caminho, { params, corpo, prefer, headers } = {}) {
+  async function pedirUmaVez(metodo, caminho, { params, corpo, prefer, headers } = {}) {
     const qs = params && Object.keys(params).length ? `?${new URLSearchParams(params)}` : "";
     const controller = typeof AbortController === "function" ? new AbortController() : null;
     let timer, expirou = false;
@@ -38,6 +44,7 @@ export function criarDb({ url, chave } = {}, f = globalThis.fetch, { prazoMs = P
       }, prazo);
     });
     let r, txt;
+    const t0 = Date.now();
     try {
       ({ r, txt } = await Promise.race([rede.catch(e => {
         if (expirou) {
@@ -47,6 +54,12 @@ export function criarDb({ url, chave } = {}, f = globalThis.fetch, { prazoMs = P
         e.banco = true; e.codigo ||= "sem_conexao"; throw e;
       }), limite]));
     } finally { clearTimeout(timer); }
+    // plano 1000 (SV-105): consulta lenta vira UMA linha JSON no log (só o caminho — nunca parâmetros ou corpo)
+    const ms = Date.now() - t0;
+    if (ms >= LENTO_MS) {
+      try { console.warn(JSON.stringify({ nivel: "aviso", evento: "banco_lento", lento: true, metodo, caminho: caminho.split("?")[0], ms, status: r?.status ?? null })); }
+      catch { /* log nunca derruba */ }
+    }
     let dados = null;
     if (txt) { try { dados = JSON.parse(txt); } catch { dados = txt; } }
     if (!r.ok) {
@@ -61,15 +74,34 @@ export function criarDb({ url, chave } = {}, f = globalThis.fetch, { prazoMs = P
     return dados;
   }
 
+  /** plano 1000 (SV-096): GET (idempotente) repete UMA vez depois de 300 ms quando o PostgREST piscou (502/503/504) ou a conexão
+      caiu — um 503 momentâneo (reinício, pool cheio) virava erro do cliente inteiro no ciclo/relatório. Escrita e RPC nunca repetem
+      (podem ter sido aplicadas); prazo esgotado também não (o prazo já foi gasto). */
+  async function pedir(metodo, caminho, opcoes = {}) {
+    try { return await pedirUmaVez(metodo, caminho, opcoes); }
+    catch (e) {
+      const passageiro = e?.status === 502 || e?.status === 503 || e?.status === 504 || (e?.status == null && e?.codigo === "sem_conexao");
+      if (metodo !== "GET" || !passageiro) throw e;
+      await new Promise(r => setTimeout(r, repetirMs));
+      return pedirUmaVez(metodo, caminho, opcoes);
+    }
+  }
+
   /** GET com filtros no formato do PostgREST ({ coluna: "eq.valor", order, select }).
-      Sem `limit`, pagina até o fim — passe `order` para a paginação ser estável. */
-  async function select(tabela, params = {}) {
+      Sem `limit`, pagina até o fim — passe `order` para a paginação ser estável — e até `teto` linhas (padrão TETO_SELECT):
+      passou disso, erro claro «consulta grande demais» (codigo consulta_grande) em vez de estourar a memória. */
+  async function select(tabela, params = {}, { teto = TETO_SELECT } = {}) {
     if (params.limit != null) return (await pedir("GET", tabela, { params })) || [];
     const out = [];
     for (let offset = 0; ; offset += PAGINA) {
       const pag = (await pedir("GET", tabela, { params: { ...params, limit: PAGINA, offset } })) || [];
       out.push(...pag);
       if (pag.length < PAGINA) return out;
+      if (out.length > teto) {
+        const e = new Error(`consulta grande demais em ${tabela} (mais de ${teto} linhas)`);
+        e.codigo = "consulta_grande";
+        throw e;
+      }
     }
   }
 

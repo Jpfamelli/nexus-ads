@@ -16,10 +16,10 @@ import { criarGoogle } from "./google.js";
 import { enviarParaTodos, idsDoEnvio } from "./whatsapp.js";
 import { hojeSP, nomePlat } from "./nucleo.js";
 import {
-  ErroHttp, ErroApi, json, agoraDe, somaDias, limparErro, lerCorpo, lerConfig, autenticarCron, listarClientes,
+  ErroHttp, ErroApi, json, agoraDe, somaDias, limparErro, lerCorpo, exigirCorpoValido, lerConfig, autenticarCron, listarClientes,
   carregarModelo, emLotes, erroDeEnvio, registrarExecucao, listaDestinos, comPrazo, PRAZO_REDE_MS,
-  nomeCurto, tituloRadar, modeloVazio, comTravaDoCliente, todosPulados, EM_EXECUCAO, soltandoCorpo,
-  funcaoAusente, anonimizarEnvio, tratarPainel, lerCorpoPainel, autenticarPainel, interna, respostaPainel,
+  nomeCurto, tituloRadar, modeloVazio, comPainelUrl, comTravaDoCliente, todosPulados, EM_EXECUCAO, soltandoCorpo,
+  funcaoAusente, anonimizarEnvio, tratarPainel, lerCorpoPainel, autenticarPainel, interna, respostaPainel, auditar,
 } from "./comum.js";
 
 const CONFLITO_METRICAS = "cliente_id,plataforma,nivel,data,campanha_ext,anuncio_ext";
@@ -67,7 +67,7 @@ async function ultimaData(db, cliente, plataforma) {
 async function sincronizar(db, cliente, integ, ctx) {
   const de = somaDias(ctx.hoje, -ctx.janela), ate = ctx.hoje, cred = integ.cred || {};
   const estado = {};   // meta.js anota aqui a versão da Graph que respondeu e se parou no teto de páginas
-  const linhas = integ.canal === "meta" ? await sincronizarMeta(cred, de, ate, { fetch: ctx.fetch, versao: ctx.meta.versao, estado })
+  const linhas = integ.canal === "meta" ? await sincronizarMeta(cred, de, ate, { fetch: ctx.fetch, versao: ctx.meta.versao, estado, esperar: ctx.esperarRede })
     : integ.canal === "google" ? await ctx.google.periodo(cred, de, ate)
     : null;
   if (!linhas) throw new Error(`canal desconhecido: ${integ.canal}`);
@@ -83,29 +83,56 @@ async function sincronizar(db, cliente, integ, ctx) {
   } else if (!prontas.length && !ctx.teste) {
     // (no «Testar conexão» a janela é de 1 dia: campanha pausada há 2 dias não é leitura parcial — a conexão respondeu)
     const ultima = await ultimaData(db, cliente, integ.canal);
-    if (ultima && ultima < de) { r.parcial = true; r.status = `parcial — 0 linhas (sem dados desde ${ultima})`; }
+    if (ultima && ultima < de) { r.parcial = true; r.semDados = true; r.status = `parcial — 0 linhas (sem dados desde ${ultima})`; }
   }
+  // plano 1000 (SV-080): leitura COMPLETA da janela — o que a plataforma deixou de devolver (Google filtra impressões > 0; a Meta
+  // reatribui e some com o dia/anúncio) é zerado no banco, senão ficava com gasto/conversões antigos para sempre. Nunca com
+  // leitura parcial, nunca com 0 linhas (resposta vazia por engano zeraria a janela) e nunca no «Testar conexão».
+  if (!r.parcial && prontas.length && !ctx.teste) r.zeradas = await zerarAusentes(db, cliente, integ.canal, de, ate, prontas);
   return r;
+}
+
+/** Zera (nx_metricas_zerar_ausentes, 20261013c) as linhas da janela [de, ate] da plataforma cujas chaves não vieram nesta leitura.
+    Devolve quantas; banco sem a RPC → null. Nunca lança. */
+export async function zerarAusentes(db, cliente, plataforma, de, ate, prontas) {
+  const chaves = prontas.map(l => ({ nivel: l.nivel, data: l.data, campanha_ext: l.campanha_ext ?? "", anuncio_ext: l.anuncio_ext ?? "" }));
+  try { return await db.rpc("nx_metricas_zerar_ausentes", { p_cliente: cliente.id, p_plataforma: plataforma, p_de: de, p_ate: ate, p_chaves: chaves }); }
+  catch (e) {
+    if (!funcaoAusente(e, "nx_metricas_zerar_ausentes")) console.error("nx-ciclo zerar ausentes:", limparErro(e?.message || e));
+    return null;
+  }
 }
 
 /** Fuso e moeda da conta de anúncios (só na rodada diária); falha aqui nunca é falha do sync. */
 async function lerConta(integ, ctx) {
   try {
-    if (integ.canal === "meta") return await contaMeta(integ.cred || {}, { fetch: ctx.fetch, versao: ctx.meta.versao });
+    if (integ.canal === "meta") return await contaMeta(integ.cred || {}, { fetch: ctx.fetch, versao: ctx.meta.versao, esperar: ctx.esperarRede });
     if (integ.canal === "google") return await ctx.google.conta(integ.cred || {});
   } catch (e) { console.error(`nx-ciclo conta ${integ.canal}:`, limparErro(e?.message || e)); }
   return null;
 }
 
 /** Nome mais recente de campanha/anúncio reescrito nos dias ANTERIORES à janela (só na rodada diária): o painel já
-    prefere o nome mais novo, mas relatórios SQL e exportações leem a coluna. Um PATCH por campanha/anúncio com nome;
-    devolve quantos foram varridos. Nunca lança. */
-async function renomearAntigos(db, cliente, prontas, de) {
+    prefere o nome mais novo, mas relatórios SQL e exportações leem a coluna. Plano 1000 (SV-081): o mapa inteiro numa
+    chamada (nx_metricas_renomear, 20261013c); banco sem a RPC → um PATCH por campanha/anúncio, como antes.
+    Devolve quantos foram varridos. Nunca lança. */
+export async function renomearAntigos(db, cliente, prontas, de) {
   const campanhas = new Map(), anuncios = new Map();
   const guardar = (mapa, chave, item) => { const a = mapa.get(chave); if (!a || item.data > a.data) mapa.set(chave, item); };
   for (const l of prontas) {
     if (l.campanha_nome) guardar(campanhas, `${l.plataforma}|${l.campanha_ext}`, { plataforma: l.plataforma, campanha_ext: l.campanha_ext, nome: l.campanha_nome, data: l.data });
     if (l.nivel === "anuncio" && l.anuncio_ext && l.anuncio_nome) guardar(anuncios, `${l.plataforma}|${l.anuncio_ext}`, { plataforma: l.plataforma, anuncio_ext: l.anuncio_ext, nome: l.anuncio_nome, data: l.data });
+  }
+  if (!campanhas.size && !anuncios.size) return 0;
+  const itens = [
+    ...[...campanhas.values()].map(c => ({ tipo: "campanha", plataforma: c.plataforma, ext: c.campanha_ext, nome: c.nome })),
+    ...[...anuncios.values()].map(a => ({ tipo: "anuncio", plataforma: a.plataforma, ext: a.anuncio_ext, nome: a.nome })),
+  ];
+  try {
+    await db.rpc("nx_metricas_renomear", { p_cliente: cliente.id, p_antes: de, p_itens: itens });
+    return itens.length;
+  } catch (e) {
+    if (!funcaoAusente(e, "nx_metricas_renomear")) { console.error("nx-ciclo renomear:", limparErro(e?.message || e)); return 0; }
   }
   let n = 0;
   try {
@@ -227,13 +254,14 @@ function alertaDeIntegracao(f, nome) {
   const plat = nomePlat(f.canal);
   if (f.passageiro) {
     return {
-      regra: { id: "integracao", nome: "Conexão instável" }, chave: `integracao|${f.canal}`, sev: "alerta", valor: null,
+      // plano 1000 (SV-089): a severidade entra na chave — «instável» de manhã não engole o «parou» (token vencido) do mesmo dia
+      regra: { id: "integracao", nome: "Conexão instável" }, chave: `integracao|${f.canal}|instavel`, sev: "alerta", valor: null,
       msg: `A conexão com o ${plat} da ${nome} está instável: ${f.curto} (sem atualizar há mais de ${TOLERANCIA_PASSAGEIRA_H} h).`,
       acao: f.acao,
     };
   }
   return {
-    regra: { id: "integracao", nome: "Conexão parada" }, chave: `integracao|${f.canal}`, sev: "critico", valor: null,
+    regra: { id: "integracao", nome: "Conexão parada" }, chave: `integracao|${f.canal}|parou`, sev: "critico", valor: null,
     msg: `A conexão com o ${plat} da ${nome} parou: ${f.curto}. Abra Ajustes → Integrações.`,
     acao: f.acao,
   };
@@ -270,11 +298,23 @@ function alertaDeFuso(x, nome) {
 
 /* ---------- radar ---------- */
 
+/** Alertas do cliente que não saíram (enviado_em nulo) nas últimas 6 h com menos de 3 tentativas (coluna tentativas_envio da
+    migração 20261013a; sem ela → nenhum, como antes). Nunca lança. */
+async function alertasNaoEnviados(db, cliente, ctx) {
+  try {
+    return await db.select("nx_alertas", {
+      cliente_id: `eq.${cliente.id}`, enviado_em: "is.null", criado_em: `gte.${new Date(ctx.agora.getTime() - 6 * HORA_MS).toISOString()}`,
+      tentativas_envio: "lt.3", select: "id,chave,severidade,mensagem,acao,tentativas_envio", order: "id.asc", limit: 20,
+    });
+  } catch { return []; }
+}
+
 async function radar(db, cfg, cliente, ctx, falhas, fusos = []) {
   // o radar quebrado não pode engolir o aviso de integração (e vice-versa)
   let M = null, avaliados = [], erroRadar = null;
   try {
-    M = await carregarModelo(db, cliente, ctx.hoje, JANELA_RADAR);
+    // plano 1000 (AD-020): o aviso do radar termina com o link do radar no painel (nx_config.saas_url)
+    M = await carregarModelo(db, comPainelUrl(cliente, cfg), ctx.hoje, JANELA_RADAR);
     avaliados = M.avaliar(M.R, true);
   } catch (e) {
     erroRadar = limparErro(e?.message || e);
@@ -286,49 +326,99 @@ async function radar(db, cfg, cliente, ctx, falhas, fusos = []) {
     ...avaliados,
   ];
   const res = { alertas_ativos: avaliados.length, alertas_novos: 0, ...(erroRadar ? { erro_radar: erroRadar } : {}) };
-  if (!candidatos.length) return res;
+  const base = M || modeloVazio(comPainelUrl(cliente, cfg), ctx.hoje);
+  const destinos = listaDestinos(base.CFG.waGestor);
+  // plano 1000 (SV-084): alerta que NÃO saiu (WhatsApp do gestor falhou) volta na rodada seguinte — até 3 tentativas nas
+  // primeiras 6 h; antes a dedupe de 24 h por chave impedia qualquer novo envio e o gestor nunca recebia
+  const reenviar = destinos.length ? await alertasNaoEnviados(db, cliente, ctx) : [];
+  if (!candidatos.length && !reenviar.length) return res;
 
-  const desde = new Date(ctx.agora.getTime() - 24 * HORA_MS).toISOString();
-  const recentes = await db.select("nx_alertas", { cliente_id: `eq.${cliente.id}`, criado_em: `gte.${desde}`, select: "chave" });
-  const ja = new Set(recentes.map(r => r.chave));
-  const novos = candidatos.filter(a => !ja.has(a.chave));
+  let novos = [];
+  if (candidatos.length) {
+    const desde = new Date(ctx.agora.getTime() - 24 * HORA_MS).toISOString();
+    // plano 1000 (SV-095): com ordem estável — a paginação por offset do db.select (acima de 1.000 linhas) sem order podia pular
+    // chaves e repetir alerta
+    const recentes = await db.select("nx_alertas", { cliente_id: `eq.${cliente.id}`, criado_em: `gte.${desde}`, select: "chave", order: "id.asc" });
+    const ja = new Set(recentes.map(r => r.chave));
+    novos = candidatos.filter(a => !ja.has(a.chave));
+  }
   res.alertas_novos = novos.length;
-  if (!novos.length) return res;
+  if (!novos.length && !reenviar.length) return res;
 
   const quando = ctx.agora.toISOString();
-  const gravados = await db.insert("nx_alertas", novos.map(a => ({
+  const gravados = novos.length ? await db.insert("nx_alertas", novos.map(a => ({
     cliente_id: cliente.id, chave: a.chave, regra: a.regra.id, severidade: a.sev,
     mensagem: a.msg, acao: a.acao, valor: Number.isFinite(a.valor) ? Math.round(a.valor * 1e4) / 1e4 : null,
     referencia: somaDias(ctx.hoje, -1), criado_em: quando,
-  })));
+  }))) : [];
 
-  const base = M || modeloVazio(cliente, ctx.hoje);
-  const destinos = listaDestinos(base.CFG.waGestor);
-  const texto = base.textoAlerta(novos);
-  const envio = destinos.length ? await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo: tituloRadar(nome, novos.length) }) : [];
+  const todos = [...novos, ...reenviar.map(r => ({ sev: r.severidade, msg: r.mensagem, acao: r.acao }))];
+  const texto = base.textoAlerta(todos);
+  const envio = destinos.length ? await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo: tituloRadar(nome, todos.length) }) : [];
   const erro = erroDeEnvio(destinos, envio);
   const ids = gravados.map(g => g.id).filter(id => id != null);
+  const resultado = { enviado_em: envio.some(e => e.ok) ? quando : null, erro_envio: erro, ...idsDoEnvio(envio) };
   if (ids.length) {
     // uma escrita só, depois de todos os envios: antes dela o webhook não acha o wamid
     // (e espera um pouco para conferir de novo), então nunca apaga o que o webhook anotou
-    await db.update("nx_alertas", { id: `in.(${ids.join(",")})` }, {
-      enviado_em: envio.some(e => e.ok) ? quando : null,
-      erro_envio: erro,
-      ...idsDoEnvio(envio),
-    });
+    await db.update("nx_alertas", { id: `in.(${ids.join(",")})` }, resultado);
+  }
+  if (reenviar.length) {
+    res.alertas_reenviados = reenviar.length;
+    const porTentativa = new Map();
+    for (const r of reenviar) { const t = Number(r.tentativas_envio) || 0; porTentativa.set(t, [...(porTentativa.get(t) || []), r.id]); }
+    for (const [t, lista] of porTentativa) {
+      await db.update("nx_alertas", { id: `in.(${lista.join(",")})` }, { ...resultado, tentativas_envio: t + 1 })
+        .catch(e => console.error("nx-ciclo reenvio de alerta:", limparErro(e?.message || e)));
+    }
   }
   // o resumo (nx_execucoes, resposta do cron) não carrega número inteiro nem wamid: os reais ficam em nx_alertas
   return { ...res, envio: anonimizarEnvio(envio), ...(erro ? { erro_envio: erro } : {}) };
 }
 
-async function processarCliente(db, cfg, cliente, ctx) {
-  const res = { cliente: cliente.slug, ok: true, sync: {}, janela: ctx.janela, ...(ctx.teste ? { integracoes: [] } : {}) };
+/** Plano 1000 (SV-079): a rodada diária (28 dias, fuso, nomes) não depende mais de acertar as 03:07 UTC. Entre 03:00 e 08:59
+    UTC (00:00–05:59 em São Paulo), a primeira execução do dia que achar o cliente SEM a trava 'nx-ciclo:diaria:<cliente>:<data SP>'
+    faz a rodada diária; a trava (26 h) só é gravada quando todas as integrações sincronizaram — falhou, a hora seguinte tenta de
+    novo. Erro ao ler a trava → só às 03 h, como antes. */
+export const JANELA_DIARIA_UTC = [HORA_RODADA_DIARIA, 9];
+const nomeDiaria = (cliente, ctx) => `nx-ciclo:diaria:${cliente.id}:${ctx.hoje}`;
+async function precisaDiaria(db, cliente, ctx) {
+  if (ctx.teste) return false;
+  const h = ctx.agora.getUTCHours();
+  if (h < JANELA_DIARIA_UTC[0] || h >= JANELA_DIARIA_UTC[1]) return false;
+  try {
+    const [t] = await db.select("nx_travas", { nome: `eq.${nomeDiaria(cliente, ctx)}`, select: "ate", limit: 1 });
+    return !(t?.ate && Date.parse(t.ate) > ctx.agora.getTime());
+  } catch { return h === HORA_RODADA_DIARIA; }
+}
+
+/** Plano 1000 (SV-195): leitura parcial não conta como sincronização completa — só a completa avança ultimo_sync; a parcial
+    fica em ultimo_sync_parcial (20261013c), e o «sem atualizar há mais de 3 h» do painel não é enganado. Banco sem a coluna → como antes. */
+export async function gravarSync(db, integ, ctx, status, parcial) {
+  const quando = ctx.agora.toISOString();
+  if (!parcial) return db.update("nx_integracoes", { id: `eq.${integ.id}` }, { ultimo_sync: quando, status });
+  try { return await db.update("nx_integracoes", { id: `eq.${integ.id}` }, { ultimo_sync_parcial: quando, status }); }
+  catch (e) {
+    if (e?.status !== 400 || !/ultimo_sync_parcial/.test(String(e?.message ?? ""))) throw e;
+    return db.update("nx_integracoes", { id: `eq.${integ.id}` }, { ultimo_sync: quando, status });
+  }
+}
+
+async function processarCliente(db, cfg, cliente, ctx0) {
+  const diaria = await precisaDiaria(db, cliente, ctx0);
+  const ctx = diaria === ctx0.diaria ? ctx0 : { ...ctx0, diaria, janela: diaria ? JANELA_SYNC_DIARIA : JANELA_SYNC };
+  const res = { cliente: cliente.slug, ok: true, sync: {}, janela: ctx.janela, ...(diaria ? { diaria: true } : {}), ...(ctx.teste ? { integracoes: [] } : {}) };
   const integracoes = await db.select("nx_integracoes", {
     cliente_id: `eq.${cliente.id}`, ativo: "eq.true", select: "id,canal,cred,ultimo_sync,status", order: "canal.asc",
   });
   const falhas = [], fusos = [];
-  // uma plataforma quebrada não derruba a outra nem o próximo cliente
-  for (const integ of integracoes) {
+  const t0Cliente = Date.now();
+  // plano 1000 (SV-086): as integrações do cliente (Meta e Google) sincronizam EM PARALELO — antes a lenta somava com a outra;
+  // cada uma com seu try (uma plataforma quebrada não derruba a outra), e falhas/fusos/resumo na ordem das integrações.
+  // Plano 1000 (SV-090): ms de cada integração e do cliente no resumo (achar quem come os 150 s)
+  const ms = {};
+  const umaIntegracao = async (integ, saida) => {
+    const t0 = Date.now();
     try {
       const r = await sincronizar(db, cliente, integ, ctx);
       let status = r.status;
@@ -338,15 +428,17 @@ async function processarCliente(db, cfg, cliente, ctx) {
         const conta = await lerConta(integ, ctx);
         if (conta?.timezone && conta.timezone !== FUSO_ESPERADO && !fusoEquivalente(conta.timezone, ctx.agora)) {
           status += ` · fuso ${conta.timezone} (≠ São Paulo)`;
-          if (await primeiroAvisoFuso(db, integ, conta.timezone)) fusos.push({ canal: integ.canal, fuso: conta.timezone });
+          if (await primeiroAvisoFuso(db, integ, conta.timezone)) saida.fusos.push({ canal: integ.canal, fuso: conta.timezone });
         }
         if (conta?.moeda && conta.moeda !== "BRL") status += ` · moeda ${conta.moeda}`;
-        if (r.prontas.length) res.renomeados = (res.renomeados || 0) + await renomearAntigos(db, cliente, r.prontas, r.de);
+        if (r.prontas.length) { const n = await renomearAntigos(db, cliente, r.prontas, r.de); res.renomeados = (res.renomeados || 0) + n; }
       }
-      await db.update("nx_integracoes", { id: `eq.${integ.id}` }, { ultimo_sync: ctx.agora.toISOString(), status });
+      // revisão 13/10: «0 linhas, sem dados desde …» é a conta RESPONDENDO (campanhas paradas) — avança ultimo_sync; senão
+      // ultimo_sync congelava e o 1º erro passageiro depois disso já avisava «sem atualizar há mais de 3 h» na hora
+      await gravarSync(db, integ, ctx, status, r.parcial && !r.semDados);
       res.sync[integ.canal] = status;
       if (/^erro — /.test(String(integ.status ?? ""))) await esquecerFalha(db, integ);   // a memória da falha some no sucesso
-      if (ctx.teste) res.integracoes.push({ canal: integ.canal, ok: true, status, linhas: r.linhas });
+      saida.teste = { canal: integ.canal, ok: true, status, linhas: r.linhas };
     } catch (e) {
       const erro = limparErro(e?.message || e);
       const status = `erro — ${erro}`;
@@ -355,12 +447,25 @@ async function processarCliente(db, cfg, cliente, ctx) {
       const explicacao = explicarErroIntegracao(integ.canal, erro);
       // 1ª leitura (sem ultimo_sync) com erro passageiro: a tolerância conta da 1ª falha, não dispara na hora
       const primeira = explicacao.passageiro && !integ.ultimo_sync && !ctx.teste ? await primeiraFalha(db, integ, ctx.agora) : null;
-      falhas.push({ canal: integ.canal, ultimo_sync: integ.ultimo_sync || null, primeira_falha_em: primeira, ...explicacao });
+      saida.falhas.push({ canal: integ.canal, ultimo_sync: integ.ultimo_sync || null, primeira_falha_em: primeira, ...explicacao });
       try { await db.update("nx_integracoes", { id: `eq.${integ.id}` }, { status }); } catch { /* o resumo já registra */ }
-      if (ctx.teste) res.integracoes.push({ canal: integ.canal, ok: false, status, explicacao });
+      saida.teste = { canal: integ.canal, ok: false, status, explicacao };
+    } finally {
+      ms[integ.canal] = Date.now() - t0;
     }
+  };
+  const saidas = integracoes.map(() => ({ falhas: [], fusos: [], teste: null }));
+  await Promise.allSettled(integracoes.map((integ, i) => umaIntegracao(integ, saidas[i])));
+  for (const x of saidas) {
+    falhas.push(...x.falhas); fusos.push(...x.fusos);
+    if (ctx.teste && x.teste) res.integracoes.push(x.teste);
   }
+  if (integracoes.length) res.ms = { ...ms, total: Date.now() - t0Cliente };
   if (ctx.teste) return res;   // «Testar conexão»: sem radar, sem atribuição tardia
+  if (diaria && res.ok && integracoes.length) {
+    await db.rpc("nx_trava_pegar", { p_nome: nomeDiaria(cliente, ctx), p_segundos: 26 * 3600, p_dono: "nx-ciclo" })
+      .catch(e => console.error("nx-ciclo trava diária:", limparErro(e?.message || e)));
+  }
   const atribuicao = await completarAtribuicao(db, cliente);
   if (atribuicao) res.atribuicao = atribuicao;
   try {
@@ -378,12 +483,14 @@ export const janelaPedida = v => {
   return Number.isInteger(n) && n >= 1 && n <= JANELA_SYNC_DIARIA ? n : NaN;
 };
 
-function montarCtx({ cfg, agora, rede, dias }) {
+function montarCtx({ cfg, agora, rede, dias, esperarRede }) {
+  // a decisão da rodada diária é por cliente (precisaDiaria); aqui fica só o valor padrão da hora
   const diaria = dias == null && agora.getUTCHours() === HORA_RODADA_DIARIA;
   return {
     hoje: hojeSP(agora), agora, fetch: rede, teste: dias != null, diaria,
     janela: dias ?? (diaria ? JANELA_SYNC_DIARIA : JANELA_SYNC),
-    google: criarGoogle({ fetch: rede, versao: cfg.google_api_versao || null }),
+    esperarRede,
+    google: criarGoogle({ fetch: rede, versao: cfg.google_api_versao || null, ...(esperarRede ? { esperar: esperarRede } : {}) }),
     meta: { versao: cfg.meta_api_versao || null },
   };
 }
@@ -424,6 +531,36 @@ export function tratar(req, env, deps = {}) {
   }, deps.drenagem);
 }
 
+// plano 1000 (SV-232): aviso de operação à equipe da Nexus — uma conferência por ~hora (o cron dispara uma chamada por cliente) e
+// cada tipo de problema no máximo a cada 6 h
+export const SAUDE_RODADA_S = 50 * 60;
+export const SAUDE_AVISO_S = 6 * 3600;
+
+/** Lê nx_saude_dados (20261013c) e manda um WhatsApp curto ao(s) número(s) de nx_config.wa_equipe SÓ quando há problema novo
+    (trava 'nx-saude:aviso:<tipo>' de 6 h; o tipo é o texto sem os números). Sem wa_equipe, sem a RPC ou no «Testar conexão»: nada.
+    Devolve {problemas, avisados, envio?} ou null. Nunca lança. */
+export async function avisarSaude(db, cfg, ctx) {
+  const destinos = listaDestinos(cfg?.wa_equipe);
+  if (!destinos.length || ctx.teste) return null;
+  try {
+    if (await db.rpc("nx_trava_pegar", { p_nome: "nx-saude:rodada", p_segundos: SAUDE_RODADA_S, p_dono: "nx-ciclo" }) !== true) return null;
+    const s = await db.rpc("nx_saude_dados", {});
+    const problemas = Array.isArray(s?.problemas) ? s.problemas.map(p => String(p)).filter(Boolean) : [];
+    const novos = [];
+    for (const p of problemas) {
+      const tipo = p.replace(/\d+/g, "#").slice(0, 80);
+      if (await db.rpc("nx_trava_pegar", { p_nome: `nx-saude:aviso:${tipo}`, p_segundos: SAUDE_AVISO_S, p_dono: "nx-ciclo" }) === true) novos.push(p);
+    }
+    if (!novos.length) return { problemas: problemas.length, avisados: 0 };
+    const texto = ["⚠️ *Órbita · operação*", "", ...novos.map(p => `• ${p}`), "", "_Detalhes: nx_saude (docs/orbita/OPERACAO.md)._"].join("\n");
+    const envio = await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo: "Órbita: aviso de operação" });
+    return { problemas: problemas.length, avisados: novos.length, envio: anonimizarEnvio(envio) };
+  } catch (e) {
+    if (!funcaoAusente(e)) console.error("nx-ciclo saúde:", limparErro(e?.message || e));
+    return null;
+  }
+}
+
 async function tratarCiclo(req, env, deps) {
   const t0 = Date.now();
   const f = deps.fetch || globalThis.fetch;
@@ -434,11 +571,12 @@ async function tratarCiclo(req, env, deps) {
     // corpo antes do banco: teto de 64 KiB (resto drenado, 413 sem tocar no banco)
     const corpo = await lerCorpo(req, undefined, deps.drenagem);
     const cfg = await autenticarCron(req, db);
+    exigirCorpoValido(corpo);   // plano 1000 (SV-100): corpo ilegível nunca vira «todos os clientes»
     const dias = janelaPedida(corpo.dias);
     if (Number.isNaN(dias)) throw new ErroHttp(400, "dias inválido (1 a 28)");
-    const clientes = await listarClientes(db, corpo.cliente);
+    const clientes = await listarClientes(db, corpo.cliente, hojeSP(agora));
 
-    const ctx = montarCtx({ cfg, agora, rede, dias });
+    const ctx = montarCtx({ cfg, agora, rede, dias, esperarRede: deps.esperarRede });
     // trava por cliente: o botão de uma clínica não faz o cron pular as outras
     const resumo = await emLotes(clientes, CLIENTES_JUNTOS, c =>
       comTravaDoCliente(db, `nx-ciclo:${c.id}`, TRAVA_S, { cliente: c.slug }, () =>
@@ -447,10 +585,13 @@ async function tratarCiclo(req, env, deps) {
     if (todosPulados(resumo)) return json({ ok: true, pulado: EM_EXECUCAO });
 
     await lembrarVersoes(db, cfg, ctx);
+    const saude = await avisarSaude(db, cfg, ctx);
+    const custoIA = await avisarCustoIA(db, cfg, ctx);
     const ok = resumo.every(x => x.ok);
-    const extra = { janela: ctx.janela, ...(ctx.teste ? { teste: true } : {}), ...(ctx.diaria ? { diaria: true } : {}) };
+    const algumaDiaria = resumo.some(x => x.diaria);
+    const extra = { janela: algumaDiaria ? JANELA_SYNC_DIARIA : ctx.janela, ...(ctx.teste ? { teste: true } : {}), ...(ctx.diaria || algumaDiaria ? { diaria: true } : {}) };
     await registrarExecucao(db, { tarefa: "nx-ciclo", inicio: agora, ms: Date.now() - t0, ok,
-      resumo: { hoje: ctx.hoje, ...extra, google_api_versao: ctx.google.versao, meta_api_versao: ctx.meta.versao, clientes: resumo } });
+      resumo: { hoje: ctx.hoje, ...extra, google_api_versao: ctx.google.versao, meta_api_versao: ctx.meta.versao, clientes: resumo, ...(saude ? { saude } : {}), ...(custoIA ? { custo_ia: custoIA } : {}) } });
     return json({ ok, hoje: ctx.hoje, ...extra, clientes: resumo });
   } catch (e) {
     return json({ ok: false, erro: limparErro(e?.message || e) }, e instanceof ErroHttp ? e.status : 500);
@@ -464,17 +605,27 @@ async function tratarPainelCiclo(req, env, deps) {
   return tratarPainel(req, async () => {
     const corpo = await lerCorpoPainel(req, undefined, deps.drenagem);
     const db = criarDb(env, f);
-    await autenticarPainel(db, corpo, "admin");
+    const conta = await autenticarPainel(db, corpo, "admin");
     const cliente = String(corpo.cliente);
     await interna(db, "nx_exigir_modulo", { p_cliente: cliente, p_modulo: "ads" });
     const dias = janelaPedida(corpo.dias ?? 1);
     if (Number.isNaN(dias)) throw new ErroApi("dados_invalidos", 400, "dias");
+    // plano 1000 (SV-088): um «Testar conexão» por cliente a cada 60 s (cada clique é sync na Meta/Google + linha em nx_execucoes);
+    // a repetição dentro do prazo devolve o último resultado guardado. A trava não é solta: vence sozinha.
+    const pegou = await db.rpc("nx_trava_pegar", { p_nome: `nx-ciclo:teste:${cliente}`, p_segundos: TESTE_INTERVALO_S, p_dono: "nx-ciclo" }).catch(() => true);
+    if (pegou !== true) {
+      const ultimo = await ultimoTeste(db, cliente);
+      if (ultimo) return respostaPainel({ ok: true, teste: true, repetido: true, ...ultimo });
+      throw new ErroApi("aguarde", 429);
+    }
+    // plano 1000 (SV-230): ação de plataforma com a conta, em nx_auditoria
+    await auditar(db, conta, cliente, "integracao_testar", { dias });
     let lista;
     try { lista = await listarClientes(db, cliente); }
     catch (e) { if (e instanceof ErroHttp) throw new ErroApi(e.status === 404 ? "cliente_nao_encontrado" : "dados_invalidos", e.status); throw e; }
     const cfg = await lerConfig(db, ["google_api_versao", "meta_api_versao"]).catch(() => lerConfig(db, ["google_api_versao"]));
     const agora = agoraDe(deps);
-    const ctx = montarCtx({ cfg: cfg || {}, agora, rede: comPrazo(f, deps.prazoRede ?? PRAZO_REDE_MS), dias });
+    const ctx = montarCtx({ cfg: cfg || {}, agora, rede: comPrazo(f, deps.prazoRede ?? PRAZO_REDE_MS), dias, esperarRede: deps.esperarRede });
     const [c] = lista;
     const r = await comTravaDoCliente(db, `nx-ciclo:${c.id}`, TRAVA_S, { cliente: c.slug }, () => processarCliente(db, cfg || {}, c, ctx));
     if (r.pulado !== EM_EXECUCAO) {
@@ -483,4 +634,44 @@ async function tratarPainelCiclo(req, env, deps) {
     }
     return respostaPainel({ ok: true, teste: true, hoje: ctx.hoje, janela: dias, cliente: r });
   }, deps.drenagem);
+}
+
+/** Plano 1000 (SV-088): intervalo mínimo entre dois «Testar conexão» do mesmo cliente. */
+export const TESTE_INTERVALO_S = 60;
+/** O último «Testar conexão» deste cliente gravado em nx_execucoes (resumo.painel = true) → {hoje, janela, cliente} ou null. */
+async function ultimoTeste(db, cliente) {
+  try {
+    const [c] = await db.select("nx_clientes", { id: `eq.${cliente}`, select: "slug", limit: 1 });
+    if (!c) return null;
+    const [x] = await db.select("nx_execucoes", { tarefa: "eq.nx-ciclo", "resumo->>painel": "eq.true",
+      "resumo->clientes->0->>cliente": `eq.${c.slug}`, select: "inicio,resumo", order: "id.desc", limit: 1 });
+    const r = x?.resumo;
+    return r && Array.isArray(r.clientes) && r.clientes[0] ? { hoje: r.hoje, janela: r.janela, cliente: r.clientes[0], testado_em: x.inicio } : null;
+  } catch { return null; }
+}
+
+/* ---------- plano 1000 (SV-071): custo de IA fora do normal ---------- */
+/** Teto padrão (US$ por cliente por dia) quando nx_config.ia_aviso_custo_usd está vazio. */
+export const TETO_CUSTO_IA_USD = 10;
+/** Uma vez por dia (trava 'nx-ia-custo:<dia SP>', 26 h), na rodada que passar depois da meia-noite: clientes cujo custo de IA de
+    ONTEM passou do teto (nx_ia_custo_alto, 20261013e) → WhatsApp curto à equipe da plataforma (nx_config.wa_equipe). Sem
+    wa_equipe, sem a RPC ou no «Testar conexão»: nada. Devolve {clientes, envio?} ou null. Nunca lança. */
+export async function avisarCustoIA(db, cfg, ctx) {
+  const destinos = listaDestinos(cfg?.wa_equipe);
+  if (!destinos.length || ctx.teste) return null;
+  try {
+    const teto = Number(cfg?.ia_aviso_custo_usd) > 0 ? Number(cfg.ia_aviso_custo_usd) : TETO_CUSTO_IA_USD;
+    if (await db.rpc("nx_trava_pegar", { p_nome: `nx-ia-custo:${ctx.hoje}`, p_segundos: 26 * 3600, p_dono: "nx-ciclo" }) !== true) return null;
+    const lista = await db.rpc("nx_ia_custo_alto", { p_dia: somaDias(ctx.hoje, -1), p_teto: teto });
+    const altos = Array.isArray(lista) ? lista : [];
+    if (!altos.length) return { clientes: 0 };
+    const linhas = altos.slice(0, 10).map(c => `• ${String(c.nome || c.slug || "cliente").slice(0, 60)}: US$ ${Number(c.custo_usd).toFixed(2)} (${Number(c.chamadas) || 0} chamadas)`);
+    const texto = ["⚠️ *Órbita · custo de IA*", "", `Ontem (${somaDias(ctx.hoje, -1)}) passaram de US$ ${teto.toFixed(2)}:`, ...linhas,
+      ...(altos.length > 10 ? [`… e mais ${altos.length - 10}`] : []), "", "_Confira automações decidindo em laço (Admin → IA)._"].join("\n");
+    const envio = await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo: "Órbita: custo de IA" });
+    return { clientes: altos.length, envio: anonimizarEnvio(envio) };
+  } catch (e) {
+    if (!funcaoAusente(e)) console.error("nx-ciclo custo IA:", limparErro(e?.message || e));
+    return null;
+  }
 }

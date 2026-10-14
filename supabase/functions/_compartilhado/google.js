@@ -44,7 +44,12 @@ function versaoIndisponivel(status, corpo) {
  * @param {object} o
  * @param {string} [o.versao] nx_config.google_api_versao — tentada primeiro
  */
-export function criarGoogle({ fetch: f = globalThis.fetch, versao = null } = {}) {
+// plano 1000 (SV-082): 5xx/429/UNAVAILABLE/INTERNAL repetem até 2× (2 s e 8 s) — uma consulta passageira derrubava o sync da hora
+export const ESPERAS_GOOGLE_MS = [2_000, 8_000];
+export const ESPERA_OAUTH_MS = 1_000;
+const STATUS_PASSAGEIROS = new Set(["UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED"]);
+
+export function criarGoogle({ fetch: f = globalThis.fetch, versao = null, esperar = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
   const tokens = new Map();
   let versaoOk = null;
 
@@ -54,16 +59,21 @@ export function criarGoogle({ fetch: f = globalThis.fetch, versao = null } = {})
     const chave = `${cred.google_client_id}|${cred.google_refresh_token}`;
     const c = tokens.get(chave);
     if (c && Date.now() < c.expira) return c.valor;
-    const r = await f("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: cred.google_client_id,
-        client_secret: cred.google_client_secret,
-        refresh_token: cred.google_refresh_token,
-        grant_type: "refresh_token",
-      }).toString(),
+    const corpoPedido = new URLSearchParams({
+      client_id: cred.google_client_id,
+      client_secret: cred.google_client_secret,
+      refresh_token: cred.google_refresh_token,
+      grant_type: "refresh_token",
+    }).toString();
+    const trocar = () => f("https://oauth2.googleapis.com/token", {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: corpoPedido,
     });
+    // plano 1000 (SV-223): 1 retentativa depois de 1 s para 5xx/429 ou falha de rede no OAuth — um 503 passageiro derrubava o
+    // sync do Google naquela hora (4xx como invalid_grant não repete)
+    let r;
+    try { r = await trocar(); }
+    catch { await esperar(ESPERA_OAUTH_MS); r = await trocar(); }
+    if (r.status >= 500 || r.status === 429) { await r.body?.cancel?.().catch?.(() => null); await esperar(ESPERA_OAUTH_MS); r = await trocar(); }
     const corpo = await r.json().catch(() => ({}));
     if (!r.ok || !corpo.access_token) throw new Error(`OAuth Google ${r.status}: ${corpo.error_description || corpo.error || "falhou"}`);
     tokens.set(chave, { valor: corpo.access_token, expira: Date.now() + ((corpo.expires_in || 3600) - 60) * 1000 });
@@ -87,10 +97,17 @@ export function criarGoogle({ fetch: f = globalThis.fetch, versao = null } = {})
     const ordem = versaoOk ? [versaoOk] : [...new Set([versao, ...VERSOES_GOOGLE].filter(Boolean))];
     const tentadas = [];
     for (const v of ordem) {
-      const r = await f(`https://googleads.googleapis.com/${v}/customers/${cliente}/googleAds:searchStream`, {
-        method: "POST", headers, body: JSON.stringify({ query: gaql }),
-      });
-      const corpo = lerJson(await r.text());
+      let r, corpo;
+      for (let i = 0; ; i++) {
+        r = await f(`https://googleads.googleapis.com/${v}/customers/${cliente}/googleAds:searchStream`, {
+          method: "POST", headers, body: JSON.stringify({ query: gaql }),
+        });
+        corpo = lerJson(await r.text());
+        const st = primeiroErro(corpo)?.status;
+        const passageiro = r.status >= 500 && r.status !== 501 || r.status === 429 || STATUS_PASSAGEIROS.has(st);
+        if (!passageiro || i >= ESPERAS_GOOGLE_MS.length) break;
+        await esperar(ESPERAS_GOOGLE_MS[i]);
+      }
       if (versaoIndisponivel(r.status, corpo)) { tentadas.push(`${v}: ${r.status}`); continue; }
       versaoOk = v;
       const erro = primeiroErro(corpo);

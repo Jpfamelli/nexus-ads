@@ -27,9 +27,24 @@
      data-url      endereço do registro (padrão: o Supabase do Órbita, função nx_rastreio_registrar)
      data-apikey   chave pública do Supabase (padrão: a do Órbita)
      data-dias     validade dos parâmetros guardados, em dias (padrão 30; 0 = só esta visita)
-     data-texto    texto da mensagem quando o link não tem um (padrão "Olá! Vim pelo site.")
+     data-texto    texto da mensagem quando o link não tem um (padrão "Olá! Vim pelo site."); por botão: data-orbita-texto="…" no link
      data-espera   milissegundos que o clique espera pelo código (padrão 1500; 0 = não espera)
      data-gpc      "ignorar" para NÃO respeitar o sinal Global Privacy Control do navegador (padrão: respeita e não rastreia)
+     data-consentimento  "aguardar": nada é guardado nem enviado até o banner de cookies do site chamar OrbitaRastreio.consentir()
+
+   Botão que não é <a> (construtores de site): <button data-orbita-wa="https://wa.me/5512…?text=Olá">; window.open("https://wa.me/…")
+   também recebe o código quando ele já está pronto. Link encurtado (wa.link, bit.ly…) não pode receber o código: o console avisa.
+   Link que o rastreio deve deixar em paz (o site trata sozinho): data-orbita-ignorar no <a> ou num elemento pai.
+   Site de uma página só (Next, Wix, Webflow): troca de endereço por history.pushState/popstate também recaptura utm/gclid.
+   Diagnóstico: abra o site com ?orbita_debug=1 e veja no console do navegador parâmetros, código, links e o que foi reescrito.
+
+   www × sem www (plano 1000, AD-172): o armazenamento do navegador é separado por endereço — «www.site.com.br» e «site.com.br» não
+   enxergam a origem um do outro. Se o site redireciona de um para o outro, o redirecionamento PRECISA manter a consulta (?utm_…,
+   gclid, fbclid); use nos anúncios o endereço final. Mudou data-dias ou data-gpc? Gere o texto da política com as mesmas opções
+   (o Órbita mostra o parágrafo do snippet padrão: 30 dias e respeito ao GPC).
+
+   Versões (AD-168): rastreio.v1.js é uma cópia CONGELADA deste arquivo, servida com integrity (SRI) no snippet novo — nunca é editada
+   depois de publicada; mudança de comportamento vira rastreio.v2.js. Este rastreio.js segue no ar para quem já o instalou.
 
    API opcional: window.OrbitaRastreio.link(url) devolve (Promise) o link com o código, ou o original; .codigo() e .dados().
    Aviso de privacidade: cite na política do site que o script guarda no navegador a origem da visita (utm/ids de clique, 30 dias)
@@ -46,7 +61,9 @@
   var RE_REF = /\s*\[ref [A-HJKMNP-Z2-9]{5}\]/gi;
   var HOSTS_WA = { "wa.me": 1, "api.whatsapp.com": 1, "web.whatsapp.com": 1, "whatsapp.com": 1, "www.whatsapp.com": 1 };
   var VALE_CODIGO_MS = 6 * 3600 * 1000;      // o mesmo código serve para cliques repetidos na mesma visita
-  var PAUSA_FALHA_MS = 60 * 1000;            // depois de uma falha, não insiste por 1 minuto
+  // plano 1000 (AD-188): depois de uma falha, pausa CURTA com recuo (10 s, 20 s, 40 s, teto 60 s) — antes 1 minuto inteiro sem código
+  var PAUSA_FALHA_MS = 10 * 1000, PAUSA_FALHA_MAX_MS = 60 * 1000;
+  var ESPERA_IOS_MS = 700;                   // no iPhone o gesto «esfria» rápido: espera menor antes de seguir sem código
 
   var doc = janela.document;
   var atual = doc && doc.currentScript;
@@ -66,8 +83,17 @@
     dias: numero("dias", 30),
     texto: String(cfgJanela.texto || attr("texto") || "Olá! Vim pelo site."),
     espera: numero("espera", 1500),
-    gpc: String(cfgJanela.gpc || attr("gpc") || "")
+    gpc: String(cfgJanela.gpc || attr("gpc") || ""),
+    consentimento: String(cfgJanela.consentimento || attr("consentimento") || "")
   };
+  // plano 1000 (AD-166): com data-consentimento="aguardar" o script não guarda nem envia nada até o site chamar consentir()
+  var consentido = cfg.consentimento !== "aguardar";
+  // AD-170: ?orbita_debug=1 liga o diagnóstico no console (nada muda no comportamento)
+  var depurar = /[?&]orbita_debug=1(&|$)/.test(String((janela.location && janela.location.search) || ""));
+  function log(rotulo, dado) { try { if (depurar && janela.console && janela.console.info) janela.console.info("[Órbita rastreio] " + rotulo, dado === undefined ? "" : dado); } catch (e) { /* sem console */ } }
+  // AD-160: iPhone/iPad — fora do gesto do clique o iOS não abre o app do WhatsApp (mostra «Continuar para a conversa» ou deixa aba em branco)
+  var nav = janela.navigator || {};
+  var ios = /iPhone|iPad|iPod/i.test(String(nav.userAgent || "")) || (/Macintosh/i.test(String(nav.userAgent || "")) && Number(nav.maxTouchPoints) > 1);
 
   var ativo = /^[0-9a-f]{48}$/.test(cfg.chave);
   if (!ativo && janela.console && janela.console.warn) janela.console.warn("[Órbita rastreio] data-chave ausente ou inválida: o rastreio está desligado e os links não foram alterados.");
@@ -85,7 +111,7 @@
       return o;
     } catch (e) { return null; }
   }
-  function gravar(o) { try { janela[loja].setItem(CHAVE_LS, JSON.stringify(o)); } catch (e) { /* sem storage: segue só em memória */ } }
+  function gravar(o) { if (!consentido) return; try { janela[loja].setItem(CHAVE_LS, JSON.stringify(o)); } catch (e) { /* sem storage: segue só em memória */ } }
   var memoria = null;   // espelho para quando o localStorage não existe
   function estado() { return ler() || memoria || { v: VERSAO, t: 0, d: {}, c: null }; }
   function salvar(o) { memoria = o; gravar(o); }
@@ -125,7 +151,8 @@
 
   /* ---------------- 2) código curto (chamada ao Órbita) ---------------- */
   var voo = null;          // chamada em andamento (uma só por vez)
-  var falhouEm = 0;
+  var falhouEm = 0, falhas = 0;
+  function pausaAtual() { return falhas ? Math.min(PAUSA_FALHA_MAX_MS, PAUSA_FALHA_MS * Math.pow(2, falhas - 1)) : 0; }
   function assinatura(d) { var s = ""; for (var i = 0; i < PARAMS.length; i++) s += (d[PARAMS[i]] || "") + "|"; return s; }
   function paginaAtual() {
     var l = janela.location;
@@ -137,18 +164,19 @@
     return null;
   }
   function registrar() {
-    if (!ativo) return Promise.resolve(null);
+    if (!ativo || !consentido) return Promise.resolve(null);
     var guardado = codigoGuardado();
     if (guardado) return Promise.resolve(guardado);
     if (voo) return voo;
-    if (Date.now() - falhouEm < PAUSA_FALHA_MS) return Promise.resolve(null);
+    if (falhas && Date.now() - falhouEm < pausaAtual()) return Promise.resolve(null);
     var e = estado();
     var dados = {}; for (var k in e.d) { if (Object.prototype.hasOwnProperty.call(e.d, k)) dados[k] = e.d[k]; }
     dados.pagina = paginaAtual();
     var ctl = typeof janela.AbortController === "function" ? new janela.AbortController() : null;
     var timer = janela.setTimeout(function () { if (ctl) ctl.abort(); }, 4000);
+    // AD-187: keepalive — o registro não é cancelado quando o clique já navegou para o WhatsApp
     voo = janela.fetch(cfg.url, {
-      method: "POST", mode: "cors", credentials: "omit", signal: ctl ? ctl.signal : undefined,
+      method: "POST", mode: "cors", credentials: "omit", keepalive: true, signal: ctl ? ctl.signal : undefined,
       headers: { "Content-Type": "application/json", apikey: cfg.apikey },
       body: JSON.stringify({ p_chave: cfg.chave, p_dados: dados })
     }).then(function (r) {
@@ -158,25 +186,44 @@
       var c = j && j.codigo;
       if (!j || j.ok !== true || typeof c !== "string" || !RE_CODIGO.test(c)) throw new Error("formato");
       var est = estado(); est.c = { c: c, t: Date.now(), s: assinatura(est.d) }; salvar(est);
+      falhas = 0;
       return c;
-    }).catch(function () { falhouEm = Date.now(); return null; })
+    }).catch(function () { falhouEm = Date.now(); falhas++; return null; })
       .then(function (c) { janela.clearTimeout(timer); voo = null; return c; });
     return voo;
   }
 
   /* ---------------- 3) reescrita dos links do WhatsApp ---------------- */
+  var abrir = typeof janela.open === "function" ? janela.open : null;   // o original: o script usa este (o window.open do site é envolvido abaixo)
+  function abrirJanela(url, alvo, feat) { return abrir ? abrir.call(janela, url, alvo, feat) : null; }
+  /* AD-161: encurtadores (wa.link, bit.ly…) escondem o wa.me — o código não pode ser acrescentado; avisa uma vez no console */
+  var ENCURTADORES = { "wa.link": 1, "bit.ly": 1, "tinyurl.com": 1, "cutt.ly": 1, "encurtador.com.br": 1, "abre.ai": 1, "is.gd": 1, "rebrand.ly": 1, "t.co": 1, "zapix.me": 1 };
+  function ehEncurtador(href) {
+    var m = /^(?:https?:)?\/\/([^\/?#:]+)/i.exec(String(href == null ? "" : href).trim());
+    return !!(m && ENCURTADORES[m[1].toLowerCase().replace(/^www\./, "")]);
+  }
+  var avisouEncurtador = false;
+  function avisarEncurtador(href) {
+    if (avisouEncurtador || !janela.console || !janela.console.warn) return;
+    avisouEncurtador = true;
+    janela.console.warn("[Órbita rastreio] link encurtado (" + String(href).slice(0, 60) + ") não passa pelo rastreio: o clique vai sem o código [ref]. Use wa.me/<número>?text=… direto no botão.");
+  }
   function ehLinkWhatsapp(href) {
     var s = String(href == null ? "" : href).trim();
     if (!s) return false;
     if (/^whatsapp:\/\/send/i.test(s)) return true;
-    var m = /^https?:\/\/([^\/?#:]+)(?::\d+)?([^?#]*)/i.exec(s);
+    // plano 1000 (AD-162): intent://send…#Intent;scheme=whatsapp;… (Android) e o endereço sem protocolo («//wa.me/…») também
+    if (/^intent:\/\/send/i.test(s)) return /[#;]scheme=whatsapp(;|$)/i.test(s);
+    var m = /^(?:https?:)?\/\/([^\/?#:]+)(?::\d+)?([^?#]*)/i.exec(s);
     if (!m) return false;
     var host = m[1].toLowerCase(), caminho = m[2] || "";
     if (!HOSTS_WA[host]) return false;
-    return host === "wa.me" || /^\/send(\/|$)/i.test(caminho);
+    // AD-252: api.whatsapp.com/message/… é link de WhatsApp (de mensagem curta: avisa e segue, como o wa.me/message)
+    return host === "wa.me" || /^\/(send|message)(\/|$)/i.test(caminho);
   }
-  /** wa.me/message/<código>: link de mensagem curta do WhatsApp Business — o texto vem do próprio WhatsApp e o ?text= é ignorado. */
-  function ehMensagemCurta(href) { return /^https?:\/\/wa\.me\/message\//i.test(String(href == null ? "" : href).trim()); }
+  /** wa.me/message/<código> e api.whatsapp.com/message/<código>: link de mensagem curta do WhatsApp Business — o texto vem do próprio
+      WhatsApp e o ?text= é ignorado. */
+  function ehMensagemCurta(href) { return /^(?:https?:)?\/\/(?:wa\.me|api\.whatsapp\.com|(?:www\.)?whatsapp\.com)\/message\//i.test(String(href == null ? "" : href).trim()); }
   var avisouCurta = false;
   function avisarCurta() {
     if (avisouCurta || !janela.console || !janela.console.warn) return;
@@ -208,21 +255,35 @@
   function ancoraDe(alvo) {
     var el = alvo;
     for (var n = 0; el && n < 12; n++, el = el.parentNode) {
+      // AD-171: data-orbita-ignorar no link (ou num pai) deixa o clique inteiro com o site — o rastreio não toca nele
+      if (el.nodeType === 1 && el.getAttribute && el.getAttribute("data-orbita-ignorar") != null) return null;
       if (el.nodeType === 1 && String(el.tagName).toLowerCase() === "a" && el.getAttribute && el.getAttribute("href")) return el;
+      // AD-163: botão sem <a> marcado com data-orbita-wa="https://wa.me/…" (construtores de site)
+      if (el.nodeType === 1 && el.getAttribute && el.getAttribute("data-orbita-wa")) return el;
     }
     return null;
   }
+  /** O link do WhatsApp de um alvo: href da âncora ou o data-orbita-wa do botão. */
+  function hrefDe(a) {
+    if (a.getAttribute("data-orbita-wa")) return a.getAttribute("data-orbita-wa");
+    return a.getAttribute("data-orbita-original") != null ? a.getAttribute("data-orbita-original") : a.getAttribute("href");
+  }
+  /** AD-251: data-orbita-texto no link/botão = o texto daquele botão quando o link não traz ?text= (o do implante ≠ o da limpeza). */
+  function textoDe(a) { var t = a && a.getAttribute ? a.getAttribute("data-orbita-texto") : null; return t && String(t).trim() ? limpar(t, 300) : null; }
+  function ehBotao(a) { return !!(a && a.getAttribute && a.getAttribute("data-orbita-wa")) && String(a.tagName).toLowerCase() !== "a"; }
   function originalDe(a) {
+    if (ehBotao(a)) return a.getAttribute("data-orbita-wa");
     var o = a.getAttribute("data-orbita-original");
     if (o == null) { o = a.getAttribute("href"); a.setAttribute("data-orbita-original", o); }
     return o;
   }
   function seguir(a, url, novaAba, janelaAberta) {
     try {
-      if (novaAba) {
-        if (janelaAberta && !janelaAberta.closed) { try { janelaAberta.opener = null; } catch (e) { /* ok */ } janelaAberta.location.replace(url); return; }
-        var w = janela.open(url, "_blank", "noopener");
-        if (w) return;
+      if (novaAba && !ios) {
+        // revisão (13/10): window.open(url, "_blank", "noopener") devolve null POR ESPECIFICAÇÃO — o «if (w)» caía no
+        // location.assign e o WhatsApp abria duas vezes. Agora: janela em branco (mesma origem), opener zerado e só então o destino.
+        var w = janelaAberta && !janelaAberta.closed ? janelaAberta : abrirJanela("", "_blank");
+        if (w) { try { w.opener = null; } catch (e) { /* ok */ } w.location.replace(url); return; }
       }
       janela.location.assign(url);
     } catch (e) { janela.location.href = url; }
@@ -230,46 +291,99 @@
 
   function aoInteragir(ev) {   // intenção: aquece o código antes do clique
     var a = ancoraDe(ev.target);
-    if (a && ehLinkWhatsapp(a.getAttribute("href")) && !ehMensagemCurta(a.getAttribute("href"))) registrar();
+    var href = a ? hrefDe(a) : null;
+    if (a && ehLinkWhatsapp(href) && !ehMensagemCurta(href)) registrar();
   }
   /** Botão direito («copiar link»), clique do meio e toque longo: o navegador usa o href SEM passar pelo click — com o código já
       em cache, o href é reescrito aqui (síncrono); sem código, aquece para a próxima vez e o link original segue. */
   function aoApontar(ev) {
-    if (!ativo) return;
+    if (!ativo || !consentido) return;
     var a = ancoraDe(ev.target);
-    if (!a) return;
-    var original = a.getAttribute("data-orbita-original") != null ? a.getAttribute("data-orbita-original") : a.getAttribute("href");
+    if (!a || ehBotao(a)) return;
+    var original = hrefDe(a);
     if (!ehLinkWhatsapp(original) || ehMensagemCurta(original)) return;
     var pronto = codigoGuardado();
-    if (pronto) { a.setAttribute("href", reescrever(originalDe(a), pronto)); return; }
+    if (pronto) { a.setAttribute("href", reescrever(originalDe(a), pronto, textoDe(a))); return; }
     registrar();
   }
+  /** Revisão (13/10): <button data-orbita-wa> não tem navegação própria — com o rastreio desligado (GPC, chave inválida), sem
+      consentimento, com link encurtado ou de mensagem curta, ele segue para o destino original SEM código (antes ficava morto).
+      Um <a> normal navega sozinho e não é tocado. */
+  function seguirSemCodigo(ev, a, original) {
+    if (!ehBotao(a) || !(ehLinkWhatsapp(original) || ehEncurtador(original))) return;
+    var novaAba = a.getAttribute("data-orbita-aba") === "nova";
+    ev.preventDefault(); janela.setTimeout(function () { seguir(a, original, novaAba, null); }, 0);
+  }
   function aoClicar(ev) {
-    if (!ativo || ev.defaultPrevented) return;
+    if (ev.defaultPrevented) return;
     var a = ancoraDe(ev.target);
     if (!a) return;
-    var original = a.getAttribute("data-orbita-original") != null ? a.getAttribute("data-orbita-original") : a.getAttribute("href");
+    var original = hrefDe(a);
+    if (!ativo || !consentido) { seguirSemCodigo(ev, a, original); return; }
+    if (ehEncurtador(original)) { avisarEncurtador(original); log("link encurtado, segue sem código:", original); seguirSemCodigo(ev, a, original); return; }
     if (!ehLinkWhatsapp(original)) return;
-    if (ehMensagemCurta(original)) { avisarCurta(); return; }                       // segue o link do WhatsApp Business como está
+    if (ehMensagemCurta(original)) { avisarCurta(); seguirSemCodigo(ev, a, original); return; }   // segue o link do WhatsApp Business como está
+    var botao = ehBotao(a);
     original = originalDe(a);
+    var novaAba = String(a.getAttribute("target") || "").toLowerCase() === "_blank" || (botao && a.getAttribute("data-orbita-aba") === "nova");
     var pronto = codigoGuardado();
-    if (pronto) { a.setAttribute("href", reescrever(original, pronto)); return; }   // síncrono: o clique segue normalmente
+    if (pronto) {
+      var pr = reescrever(original, pronto, textoDe(a));
+      log("clique com código pronto:", pr);
+      if (!botao) { a.setAttribute("href", pr); return; }                          // síncrono: o clique segue normalmente
+      // AD-171: navega DEPOIS do ciclo do evento — os ouvintes do próprio site (gtag, Pixel) rodam antes de a página sair
+      ev.preventDefault(); janela.setTimeout(function () { seguir(a, pr, novaAba, null); }, 0); return;
+    }
     var modificado = ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey || (typeof ev.button === "number" && ev.button > 0);
     registrar();                                                                    // aquece para o próximo clique
-    if (modificado) return;                                                         // sem esperar: vai o link original
+    if (modificado && !botao) return;                                               // sem esperar: vai o link original
     ev.preventDefault();
-    var novaAba = String(a.getAttribute("target") || "").toLowerCase() === "_blank";
+    // AD-160: no iPhone nunca abre janela vazia (fora do gesto o iOS deixa aba em branco ou pede «Continuar para a conversa»):
+    // vai na MESMA aba e espera menos
     var aberta = null;
-    if (novaAba) { try { aberta = janela.open("", "_blank"); } catch (e) { aberta = null; } }
+    if (novaAba && !ios) { try { aberta = abrirJanela("", "_blank"); } catch (e) { aberta = null; } }
     var terminou = false;
     function ir(c) {
       if (terminou) return; terminou = true;
-      var url = c ? reescrever(original, c) : original;
-      if (c) a.setAttribute("href", url);
+      var url = c ? reescrever(original, c, textoDe(a)) : original;
+      if (c && !botao) a.setAttribute("href", url);
+      log(c ? "clique: código recebido, seguindo para" : "clique: sem código a tempo, link original", url);
       seguir(a, url, novaAba, aberta);
     }
-    var espera = janela.setTimeout(function () { ir(null); }, cfg.espera);     // órbita lento: link original
+    var espera = janela.setTimeout(function () { ir(null); }, ios ? Math.min(cfg.espera, ESPERA_IOS_MS) : cfg.espera);     // órbita lento: link original
     registrar().then(function (c) { janela.clearTimeout(espera); ir(c); }, function () { janela.clearTimeout(espera); ir(null); });
+  }
+
+  /* AD-163: botão do construtor que abre o WhatsApp por window.open("https://wa.me/…"): com o código pronto, vai com o código;
+     sem ele, o link original (nunca espera: o navegador só deixa abrir janela dentro do gesto) e o código esquenta para o próximo. */
+  function envolverOpen() {
+    if (!abrir || janela.open === envolvido) return;
+    janela.open = envolvido;
+  }
+  function envolvido(url, alvo, feat) {
+    var u = url;
+    try {
+      if (ativo && consentido && typeof url === "string" && ehLinkWhatsapp(url) && !ehMensagemCurta(url)) {
+        var c = codigoGuardado();
+        if (c) u = reescrever(url, c); else registrar();
+        log("window.open do site:", u);
+      }
+    } catch (e) { u = url; }
+    return arguments.length > 2 ? abrirJanela(u, alvo, feat) : arguments.length > 1 ? abrirJanela(u, alvo) : abrirJanela(u);
+  }
+
+  /** AD-170: o que o script vê nesta página (só com ?orbita_debug=1, só no console). */
+  function diagnostico() {
+    var e = estado(), links = [];
+    try {
+      var lista = doc && doc.querySelectorAll ? doc.querySelectorAll("a[href], [data-orbita-wa]") : [];
+      for (var i = 0; i < lista.length && links.length < 50; i++) {
+        var h = hrefDe(lista[i]);
+        if (ehLinkWhatsapp(h) || ehEncurtador(h)) links.push({ link: String(h).slice(0, 120), rastreia: ehLinkWhatsapp(h) && !ehMensagemCurta(h), motivo: ehEncurtador(h) ? "encurtado" : ehMensagemCurta(h) ? "mensagem curta do WhatsApp Business" : "" });
+      }
+    } catch (x) { /* sem DOM */ }
+    return { ativo: ativo, motivo: !/^[0-9a-f]{48}$/.test(cfg.chave) ? "data-chave ausente ou inválida" : !ativo ? "Global Privacy Control do navegador" : !consentido ? "aguardando consentimento" : "",
+      ios: ios, parametros: e.d, codigo: codigoGuardado(), links: links };
   }
 
   /* ---------------- API pública ---------------- */
@@ -287,17 +401,60 @@
     reescrever: reescrever,
     ehLinkWhatsapp: ehLinkWhatsapp,
     ehMensagemCurta: ehMensagemCurta,
-    capturar: capturar
+    ehEncurtador: ehEncurtador,
+    capturar: capturar,
+    diagnostico: diagnostico,
+    /** AD-166: o banner de cookies do site chama isto quando a pessoa aceita (com data-consentimento="aguardar"). */
+    consentir: function () {
+      if (consentido) return true;
+      consentido = true;
+      if (ativo) { try { registrarVisita(); preaquecer(); } catch (e) { /* nunca quebra o site */ } }
+      log("consentimento recebido", diagnostico());
+      return true;
+    }
   };
   janela.OrbitaRastreio = api;
 
+  /** AD-160: visita com origem de campanha (utm/ids de clique) e sem código pronto: pede o código já no carregamento — no clique
+      ele está em cache e o link segue síncrono, dentro do gesto (o que o iPhone exige para abrir o app). */
+  function preaquecer() {
+    var e = estado(), tem = false;
+    for (var k in e.d) { if (Object.prototype.hasOwnProperty.call(e.d, k)) { tem = true; break; } }
+    if (tem && !codigoGuardado()) janela.setTimeout(function () { try { registrar(); } catch (x) { /* ok */ } }, 0);
+  }
+
+  /** AD-164: site de uma página só (Next, Wix…) troca o endereço por history.pushState/replaceState ou popstate, sem recarregar —
+      a visita com utm/gclid nova é recapturada na troca (antes só no carregamento). */
+  function aoMudarEndereco() {
+    if (!consentido) return;
+    try { registrarVisita(); preaquecer(); log("endereço mudou (SPA): parâmetros", estado().d); } catch (e) { /* nunca quebra o site */ }
+  }
+  function envolverHistorico() {
+    var hist = janela.history;
+    if (hist) {
+      var nomes = ["pushState", "replaceState"];
+      for (var i = 0; i < nomes.length; i++) (function (nome) {
+        var orig = hist[nome];
+        if (typeof orig !== "function" || orig.__orbita) return;
+        var novo = function () { var r = orig.apply(this, arguments); janela.setTimeout(aoMudarEndereco, 0); return r; };
+        novo.__orbita = true;
+        try { hist[nome] = novo; } catch (e) { /* history congelado: só o popstate */ }
+      })(nomes[i]);
+    }
+    if (typeof janela.addEventListener === "function") janela.addEventListener("popstate", function () { aoMudarEndereco(); });
+  }
+
+  // o ouvinte de clique existe SEMPRE (revisão 13/10): sem ele o <button data-orbita-wa> ficava morto com GPC/chave inválida
+  if (doc && doc.addEventListener) doc.addEventListener("click", function (ev) { try { aoClicar(ev); } catch (e) { /* nunca quebra o link */ } }, true);
   if (ativo && doc && doc.addEventListener) {
-    try { registrarVisita(); } catch (e) { /* nunca quebra o site */ }
+    if (consentido) { try { registrarVisita(); preaquecer(); } catch (e) { /* nunca quebra o site */ } }
+    try { envolverHistorico(); } catch (e) { /* sem history: segue */ }
+    try { envolverOpen(); } catch (e) { /* sem window.open: segue */ }
     doc.addEventListener("pointerover", aoInteragir, true);
     doc.addEventListener("touchstart", aoInteragir, { capture: true, passive: true });
     doc.addEventListener("focusin", aoInteragir, true);
-    doc.addEventListener("click", function (ev) { try { aoClicar(ev); } catch (e) { /* nunca quebra o link */ } }, true);
     doc.addEventListener("contextmenu", function (ev) { try { aoApontar(ev); } catch (e) { /* nunca quebra o link */ } }, true);
     doc.addEventListener("pointerdown", function (ev) { try { aoApontar(ev); } catch (e) { /* nunca quebra o link */ } }, true);
   }
+  if (depurar) { try { log("diagnóstico", diagnostico()); } catch (e) { /* ok */ } }
 })(typeof window !== "undefined" ? window : this);

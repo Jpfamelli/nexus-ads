@@ -86,11 +86,16 @@ begin
   select l.id, l.contato_id into v_neg, v_ct from public.nx_leads l where l.cliente_id = c;
   perform pg_temp.ok(v_neg is not null, 'P1: negócio criado');
   perform pg_temp.ok(exists (select 1 from public.nx_leads l join public.nx_funis f on f.id = l.funil_id join public.nx_estagios e on e.id = l.estagio_id
-                              where l.id = v_neg and f.padrao and l.origem = 'site' and l.status = 'aberto' and l.plataforma is null
+                              -- plano 1000 (SV-137, 20261013f): utm_source=google + campanha → anúncio do Google (a mesma classificação do rastreio)
+                              where l.id = v_neg and f.padrao and l.status = 'aberto'
+                                and (case when exists (select 1 from public.nx_versao_banco where nome = '20261013f_entrada_contratos')
+                                          then l.origem = 'anuncio' and l.plataforma = 'google' and l.campanha_ext = 'implante-set'
+                                          else l.origem = 'site' and l.plataforma is null end)
                                 and l.nome = 'Maria do Site' and l.telefone = '5512998303030' and l.servico = 'Implante'
                                 and l.obs like '%utm_source=google%' and l.obs like '%utm_campaign=implante-set%'),
                      'P1: negócio no funil padrão, etapa aberta, origem site, UTMs na observação, sem atribuição de anúncio');
-  perform pg_temp.ok(exists (select 1 from public.nx_contatos k where k.id = v_ct and k.cliente_id = c and k.origem = 'site'
+  perform pg_temp.ok(exists (select 1 from public.nx_contatos k where k.id = v_ct and k.cliente_id = c
+                              and k.origem = case when exists (select 1 from public.nx_versao_banco where nome = '20261013f_entrada_contratos') then 'anuncio' else 'site' end
                               and k.email = 'maria@exemplo.com' and k.nome = 'Maria do Site'), 'P1: contato criado com e-mail em minúsculas e origem site');
   perform pg_temp.ok(exists (select 1 from public.nx_notas nt where nt.negocio_id = v_neg and nt.contato_id = v_ct and nt.texto like '%Quero avaliar um implante%'),
                      'P1: mensagem virou nota do negócio');
@@ -103,12 +108,17 @@ begin
   perform public.nx_lead_entrada(ch, '{"nome":"Por E-mail","email":"MARIA@exemplo.com"}'::jsonb);
   select count(*) into n from public.nx_contatos where cliente_id = c;
   select count(*) into nl from public.nx_leads where cliente_id = c and contato_id = v_ct;
-  perform pg_temp.ok(n = 1 and nl = 3, 'P1: telefone (com e sem 55) e e-mail acham o mesmo contato (contatos ' || n || ', negócios ' || nl || ')');
+  -- plano 1000 (SV-107, 20261013b): contato com negócio ABERTO → o envio vira nota nele (antes: um negócio por envio)
+  perform pg_temp.ok(n = 1 and (nl = 1 and exists (select 1 from public.nx_versao_banco where nome = '20261013b_seguranca_dados')
+                                or nl = 3 and not exists (select 1 from public.nx_versao_banco where nome = '20261013b_seguranca_dados')),
+    'P1: telefone (com e sem 55) e e-mail acham o mesmo contato (contatos ' || n || ', negócios ' || nl || ')');
   perform pg_temp.ok((select nome from public.nx_contatos where id = v_ct) = 'Maria do Site', 'P1: formulário não sobrescreve o nome do contato');
 
   -- limite de 30 por hora
   insert into public.nx_leads (cliente_id, nome, origem, funil_id, etapa)
-    select c, 'Carga ' || g, 'site', (select id from public.nx_funis where cliente_id = c and padrao), 'nova' from generate_series(1, 27) g;
+    select c, 'Carga ' || g, 'site', (select id from public.nx_funis where cliente_id = c and padrao), 'nova'
+      -- plano 1000 (SV-107): completa até 30 na hora (com a 20261013b os envios repetidos não criam negócio)
+      from generate_series(1, 30 - (select count(*)::int from public.nx_leads where cliente_id = c and origem = 'site' and criado_em > now() - interval '1 hour')) g;
   r := pg_temp.erro(format('select public.nx_lead_entrada(%L, %L::jsonb)', ch, '{"nome":"Trinta e um","telefone":"12997001122"}'));
   perform pg_temp.ok(r like 'limite_taxa%', 'P1: 31ª entrada na hora → limite_taxa (' || r || ')');
 

@@ -505,6 +505,7 @@ dialog { color: var(--c-texto); }
   font-size: var(--fs-14); font-weight: 500; color: var(--c-texto);
 }
 .menu-item .ic { color: var(--c-texto-3); }
+.menu-motivo { display: block; font-size: var(--fs-12); color: var(--c-texto-3); font-weight: 400; line-height: 1.3; margin-top: var(--esp-1); }   /* plano 1000 · AS-288 */
 .menu-item:hover:not(:disabled), .menu-item:focus-visible { background: var(--c-hover); outline: none; }
 .menu-item.perigo, .menu-item.perigo .ic { color: var(--c-ruim); }
 .menu-item:disabled { opacity: .45; }
@@ -1153,7 +1154,8 @@ body.palco-vivo .palco .brilho-b { animation: orbitaBrilhoB 39s cubic-bezier(.45
 .busca-vazio { color: var(--c-texto-3); font-size: var(--fs-14); padding: 1.2rem .4rem; text-align: center; }
 .busca-dica { display: flex; align-items: center; gap: .3rem; flex-wrap: wrap; color: var(--c-texto-3); font-size: var(--fs-12); padding-top: .4rem; border-top: 1px solid var(--c-borda); }
 .busca-dica kbd { font-family: var(--f-mono); font-size: var(--fs-11); min-width: 22px; text-align: center; padding: .05rem .35rem; border-radius: 6px; background: var(--c-sup-2); border: 1px solid var(--c-borda); }
-@media (max-width: 760px) { .busca-dica { display: none; } .busca-g { width: calc(100vw - 16px); } }
+/* plano 1000 (pedido do CRM): no celular some só a dica de TECLADO; a de toque (.busca-dica-toque) continua */
+@media (max-width: 760px) { .busca-dica:not(.busca-dica-toque) { display: none; } .busca-g { width: calc(100vw - 16px); } }
 
 /* sino (complementos) */
 .notif-cab { padding: .1rem .2rem .3rem; }
@@ -1730,3 +1732,44 @@ html[data-esquema="escuro"] .entrar-cartao { box-shadow: 0 0 0 1px var(--c-borda
   .etiq-x { position: relative; }
   .etiq-x::before { content: ""; position: absolute; inset: calc((var(--alvo-toque) - 18px) / -2); }
 }
+
+/* ============================================================
+   Plano 1000 · frente sis (lote sis-1)
+   ============================================================ */
+/* AS-106: amostras de cor com 44 px no toque (eram 28 px); a grade quebra linha */
+@media (any-pointer: coarse) {
+  .cor-paleta { gap: var(--esp-2); }
+  .cor-op { width: var(--alvo-toque); height: var(--alvo-toque); }
+}
+/* AS-213: o «i» de ajuda do KPI com 24 px de área no mouse (o desenho continua com 18 px); no toque já são 44 px (plano 50) */
+.kpi-ajuda[tabindex]::before { content: ""; position: absolute; inset: -3px; }
+/* AS-214: abas e segmentados cortados pela largura esmaecem o lado que continua (data-corte, posto pelo ui.segmentado) */
+.seg[data-corte="dir"] { -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent); mask-image: linear-gradient(to right, black calc(100% - 28px), transparent); }
+.seg[data-corte="esq"] { -webkit-mask-image: linear-gradient(to left, black calc(100% - 28px), transparent); mask-image: linear-gradient(to left, black calc(100% - 28px), transparent); }
+.seg[data-corte="ambos"] { -webkit-mask-image: linear-gradient(to right, transparent, black 28px, black calc(100% - 28px), transparent); mask-image: linear-gradient(to right, transparent, black 28px, black calc(100% - 28px), transparent); }
+/* AS-194: «Caps Lock ligado» junto ao campo de senha */
+.campo-caps { display: inline-flex; align-items: center; gap: var(--esp-1); color: var(--c-aten); font-size: var(--fs-13); font-weight: 600; margin-block-start: var(--esp-1); }
+.campo-caps .ic { width: 14px; height: 14px; }
+/* AS-209: sem internet, os botões de salvar avisam antes do clique (o clique continua dando a frase honesta) */
+html.sem-internet [data-sem-rede] { opacity: .6; cursor: not-allowed; }
+/* AS-243: ponto vermelho em Conversas enquanto um número de WhatsApp estiver desconectado */
+.canal-ponto { position: absolute; top: 6px; left: 26px; width: 9px; height: 9px; border-radius: 50%; background: var(--c-ruim); box-shadow: 0 0 0 2px var(--c-fundo); }
+.barra-b .canal-ponto { top: 6px; left: calc(50% + 6px); }
+/* AS-254: sinais por empresa no seletor (número caído, teste acabando, pausada) */
+.empresa-sinais { display: flex; flex-wrap: wrap; gap: var(--esp-1); margin-top: 2px; }
+/* AS-186/187: sino com filtro, dias e «Carregar mais»; o texto sem destino abre no próprio item */
+.notifs .seg { align-self: flex-start; }
+.notif-dia { padding: var(--esp-1) var(--esp-2) 0; font-size: var(--fs-12); color: var(--c-texto-3); }
+.notif-item[aria-expanded="false"] p { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.notif-mais { align-self: center; }
+/* AS-274: faixa da demonstração local em uma linha no celular */
+.faixa-demo-local .demo-curto { display: none; }
+@media (width <= 760px) {
+  .faixa-demo-local { padding-block: var(--esp-1); }
+  .faixa-demo-local .demo-longo { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+  .faixa-demo-local .demo-curto { display: inline; }
+}
+/* AS-292: «Sobre este app» */
+.sobre-app { margin: 0; padding: var(--esp-3); border-radius: var(--r-p); background: var(--c-poco); border: 1px solid var(--c-borda); font-size: var(--fs-13); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* pedido de Relatórios: a conversão com explicação ganha o sublinhado pontilhado de «tem dica» */
+.g-fconv-dica { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }

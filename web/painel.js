@@ -34,7 +34,7 @@
    ============================================================ */
 import {
   datasetDeLinhas, montar, hojeSP, meioDia, isoDe, fin, brl, brl0, int, pc, dec, esc, waHtml, fmtN,
-  razao, variacao, plural, nomePlat, CFG_PADRAO, cfgCom, MESES, MES3, SEMANA,
+  razao, variacao, plural, pluralDec, nomePlat, CFG_PADRAO, cfgCom, MESES, MES3, SEMANA,
 } from "./nucleo.js";
 import { gerarDemo } from "./demo.js";
 import * as api from "./dados.js";
@@ -45,6 +45,7 @@ import * as api from "./dados.js";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const Q = new URLSearchParams(location.search);
+function lerLocalCedo(k) { try { return localStorage.getItem(k); } catch { return null; } }
 const DEMO = Q.has("demo");
 // ?noanim: tudo estático (capturas de tela e testes)
 const NOANIM = Q.has("noanim");
@@ -53,6 +54,7 @@ const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches || NOANIM;
 const ANIM = !REDUCE;          // a flag única do movimento
 const FINE = matchMedia("(pointer: fine)").matches;
 const DIAS_JANELA = 130;
+const OCULTAR_NOMES = Q.has("apresentar") || lerLocalCedo("nx-ocultar-nomes") === "1";
 const NOME_DEMO = "Clínica Demonstração";
 // demo com a cara da clínica da reunião: ?clinica= (só texto, até 40 letras) e ?cor= (hex de 6 dígitos)
 const CLINICA_Q = DEMO ? String(Q.get("clinica") || "").replace(/[\u0000-\u001f]/g, "").replace(/\s+/g, " ").trim().slice(0, 40) : "";
@@ -133,6 +135,12 @@ function statusEnvio(x) {
   if (!x) return null;
   const erro = String(x.erro || x.erro_envio || "");
   const naoChegou = /não entregou/i.test(erro);
+  // plano 1000 (AD-032): saiu para um número e falhou para outro — «parcial», nunca ✓ limpo (a mesma regra de rel-logica.statusEnvio)
+  if ((x.enviado_em || x.entregue_em) && erro && !naoChegou) {
+    const total = Array.isArray(x.destinos) ? x.destinos.length : 0, falhas = erro.split("; ").filter(t => /^[^:\s]+: /.test(t)).length;
+    const ok = total && falhas && falhas < total ? total - falhas : 0, q = x.entregue_em || x.enviado_em;
+    return { k: "parcial", tique: "✓!", rotulo: ok ? `enviado a ${ok} de ${total} às ${horaSP(q)}` : `enviado em parte às ${horaSP(q)}`, hora: horaSP(q), quando: quandoSP(q), erro: erro.slice(0, 160) };
+  }
   if (x.entregue_em) return { k: "entregue", tique: "✓✓", rotulo: `entregue às ${horaSP(x.entregue_em)}`, hora: horaSP(x.entregue_em), quando: quandoSP(x.entregue_em) };
   if (x.enviado_em && !naoChegou) return { k: "enviado", tique: "✓", rotulo: `enviado às ${horaSP(x.enviado_em)} · entrega ainda não confirmada`, hora: horaSP(x.enviado_em), quando: quandoSP(x.enviado_em) };
   if (erro) return { k: "erro", tique: "!", rotulo: naoChegou ? "não entregue" : "não enviado", hora: x.enviado_em ? horaSP(x.enviado_em) : null, erro: erro.slice(0, 160) };
@@ -165,17 +173,22 @@ function nomeRegraSrv(a, regras = []) {
   return r ? r.nome : a.regra === "ritmo" ? "Ritmo do orçamento" : "Aviso do radar";
 }
 /** Estado das leituras: erro (status "erro…" ou aviso de conexão das últimas 24 h sem leitura boa depois),
-    atrasado (última leitura há mais de 2 h), aguardando (nunca leu) ou ok. */
+    atrasado (última leitura há mais de 2 h), parcial (a leitura rodou mas pode estar incompleta — plano 1000, AD-208,
+    igual ao rel-logica.estadoIntegracao), aguardando (nunca leu) ou ok. */
 function estadoIntegracao(integs = [], alertas = [], agora = Date.now()) {
-  const H = 36e5, ORD_E = { erro: 3, atrasado: 2, aguardando: 1, ok: 0 };
+  const H = 36e5, ORD_E = { erro: 4, atrasado: 3, parcial: 2, aguardando: 1, ok: 0 };
   const canais = (integs || []).filter(i => i && i.ativo).map(i => {
     const sync = i.ultimo_sync ? Date.parse(i.ultimo_sync) : NaN;
     const al = (alertas || []).filter(a => a && a.regra === "integracao" && canalDe(a) === i.canal && agora - Date.parse(a.criado_em) <= 24 * H)
       .sort((x, y) => String(y.criado_em).localeCompare(String(x.criado_em)))[0] || null;
     const statusErro = /^erro/i.test(i.status || "");
     const alAtivo = !!al && (statusErro || !(Number.isFinite(sync) && sync > Date.parse(al.criado_em)));
-    const estado = statusErro || alAtivo ? "erro" : !Number.isFinite(sync) ? "aguardando" : agora - sync > 2 * H ? "atrasado" : "ok";
-    return { canal: i.canal, estado, sync: Number.isFinite(sync) ? sync : null, status: i.status || "", alerta: alAtivo ? al : null };
+    // plano 1000 (AD-138/SV-195): leitura PARCIAL não avança ultimo_sync — fica em ultimo_sync_parcial (servidor novo, por detecção).
+    // Parcial mais nova que a última completa e recente (≤ 2 h) é «parcial», não «atrasado» nem «aguardando»
+    const parc = i.ultimo_sync_parcial ? Date.parse(i.ultimo_sync_parcial) : NaN;
+    const parcRecente = Number.isFinite(parc) && !(parc <= sync) && agora - parc <= 2 * H;
+    const estado = statusErro || alAtivo ? "erro" : parcRecente ? "parcial" : !Number.isFinite(sync) ? "aguardando" : agora - sync > 2 * H ? "atrasado" : /^parcial/i.test(i.status || "") ? "parcial" : "ok";
+    return { canal: i.canal, estado, sync: Number.isFinite(sync) ? sync : null, parcial: Number.isFinite(parc) ? parc : null, status: i.status || "", alerta: alAtivo ? al : null };
   });
   const nivel = canais.reduce((n, c) => (ORD_E[c.estado] > ORD_E[n] ? c.estado : n), canais.length ? "ok" : "nenhuma");
   const syncs = canais.map(c => c.sync).filter(Boolean);
@@ -212,6 +225,8 @@ const LEIGO = {
   r2: ["Campanha sem conversa", "Anúncio sem nenhuma conversa"],
   r3: ["Criativo com CTR baixo", "Anúncio que pouca gente toca"],
   r4: ["Fadiga de criativo", "Anúncio cansado (visto demais)"],
+  r5: ["Investimento parou de repente", "Os anúncios pararam de gastar"],
+  r6: ["CRM parou de receber as conversas do Meta", "Conversas do anúncio não estão chegando"],
   ritmo: ["Ritmo do orçamento", "Orçamento do mês"],
 };
 /** Uma linha leiga por regra, acima da mensagem do núcleo (que não muda). */
@@ -220,6 +235,8 @@ const LEIGO_LINHA = {
   r2: "O anúncio gastou e ninguém chamou no WhatsApp.",
   r3: "Muita gente vê o anúncio, quase ninguém toca.",
   r4: "As mesmas pessoas já viram este anúncio muitas vezes.",
+  r5: "Os anúncios pararam de gastar de um dia para o outro (cartão, saldo ou anúncio reprovado?).",
+  r6: "O Meta conta conversas que não estão chegando ao painel.",
   ritmo: "No ritmo de agora, o mês passa do orçamento.",
   integracao: "O painel parou de receber os números dessa plataforma.",
 };
@@ -284,6 +301,21 @@ function execucaoDoPedido(execucoes, tarefa, desde) {
   if (e.ok === true) return { k: "ok", rotulo: `Rodou no servidor${e.fim ? ` às ${horaSP(e.fim)}` : ""} ✓`, e };
   return { k: "rodando", rotulo: "Começou no servidor e ainda está rodando.", e };
 }
+/** Plano 1000 (AD-195): faixas «normais» do funil e subtítulos por vertical (antes 30–50/60–80/30–50 da odontologia para todos).
+    Referências de mercado aproximadas: oficina e loja agendam mais e fecham mais de quem vem; o genérico usa faixas largas. */
+const FAIXAS_FUNIL = {
+  odonto: { faixas: [[30, 50], [60, 80], [30, 50]], s: ["avaliação", "à consulta", "tratamento"] },
+  oficina: { faixas: [[35, 60], [60, 85], [45, 70]], s: ["visita", "à oficina", "orçamento aprovado"] },
+  loja: { faixas: [[20, 45], [50, 80], [40, 70]], s: ["visita", "à loja", "compra"] },
+  generico: { faixas: [[20, 50], [50, 80], [25, 55]], s: ["agendamento", "ao atendimento", "venda"] },
+};
+const faixasFunil = vertical => FAIXAS_FUNIL[vertical] || FAIXAS_FUNIL.odonto;
+/** Plano 1000 (AD-206): projeção de fechamentos do mês só a partir do 7º dia. */
+const DIAS_PROJECAO_FECHAMENTOS = 7;
+/** Plano 1000 (AD-201): «Ocultar nomes» do modo apresentação — iniciais no lugar do nome («Maria Souza» → «M. S.»). */
+const iniciais = nome => String(nome || "").trim().split(/\s+/).filter(Boolean).slice(0, 3).map(p => `${p.charAt(0).toUpperCase()}.`).join(" ") || "—";
+/** Plano 1000 (AD-202): valor falado dos controles do simulador. */
+const valorFalado = (v, tipo) => (tipo === "brl" ? `${brl0(+v)} por mês` : tipo === "dias" ? `${int(+v)} dias` : String(v));
 /* ==== PURO: fim ==== */
 
 /* ============================================================
@@ -588,10 +620,12 @@ function renderGeral() {
 
   // herói — a frase que a doutora lê em 3 segundos
   $("#hero-periodo").textContent = `Últimos ${S.dias} dias${S.plat ? " · só " + nomePlat(S.plat) : ""}`;
+  // plano 1000 (AD-194): o vocabulário é o da vertical (M.VOC) — oficina e loja não têm «avaliações» nem «pacientes»
+  const V = M.VOC;
   $("#hero-frase").innerHTML =
     `Os anúncios trouxeram <b>${int(c.conversas)}</b> ${c.conversas === 1 ? "conversa" : "conversas"} no WhatsApp, ` +
-    `<b>${int(c.agendadas)}</b> ${c.agendadas === 1 ? "avaliação agendada" : "avaliações agendadas"} e ` +
-    `<b>${int(c.fecharam)}</b> <em>${c.fecharam === 1 ? "paciente novo" : "pacientes novos"}</em>.`;
+    `<b>${int(c.agendadas)}</b> ${esc(c.agendadas === 1 ? V.agendada[0] : V.agendada[1])} e ` +
+    `<b>${int(c.fecharam)}</b> <em>${esc(c.fecharam === 1 ? V.novo[0] : V.novo[1])}</em>.`;
 
   // a trilha 106 → 44 → 13, ligada por um fio de bronze
   const passo = (v, k, rot, taxa) => `<div class="tr-passo">${taxa == null ? `<span class="tr-no" aria-hidden="true"></span>` : `<span class="tr-taxa" title="de uma etapa para a outra">${pc(taxa, 0)}</span>`}` +
@@ -601,17 +635,17 @@ function renderGeral() {
     `<svg class="fio" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path class="fio-h" pathLength="1" d="M0 50H100"/><path class="fio-v" pathLength="1" d="M50 0V100"/></svg>` +
     `<span class="fio-conta" aria-hidden="true"></span>` +
     passo(c.conversas, "h-conv", c.conversas === 1 ? "conversa no WhatsApp" : "conversas no WhatsApp", null) +
-    passo(c.agendadas, "h-ag", c.agendadas === 1 ? "avaliação agendada" : "avaliações agendadas", fin(tx1) ? tx1 : 0) +
-    passo(c.fecharam, "h-fe", c.fecharam === 1 ? "paciente novo" : "pacientes novos", fin(tx2) ? tx2 : 0);
+    passo(c.agendadas, "h-ag", esc(c.agendadas === 1 ? V.agendada[0] : V.agendada[1]), fin(tx1) ? tx1 : 0) +
+    passo(c.fecharam, "h-fe", esc(c.fecharam === 1 ? V.novo[0] : V.novo[1]), fin(tx2) ? tx2 : 0);
 
   // a conta em linguagem de consultório (o MESMO retorno de sempre, só reescrito); a nota diz o que é real e o que é estimado
   $("#hero-conta").innerHTML = `
-    <div class="hc"><span class="hc-l">No consultório</span>
-      <p class="hc-f"><b data-n="${c.receita}" data-f="brl0" data-k="h-rec">${brl0(c.receita)}</b> em tratamentos</p>
-      <small>${esc(notaReceita(c))}</small></div>
+    <div class="hc"><span class="hc-l">${esc(V.local)}</span>
+      <p class="hc-f"><b data-n="${c.receita}" data-f="brl0" data-k="h-rec">${brl0(c.receita)}</b> ${esc(V.receitaEm)}</p>
+      <small>${esc(notaReceita(c, V.servico))}</small></div>
     <div class="hc hc-x"><span class="hc-l">${rotT(S.plat || !fee ? "hero.retornoPlat" : "hero.retorno")}${gestor() && fin(retorno) ? ` · ${dec(retorno, 1)}x` : ""}</span>
       <p class="hc-f">${fin(retorno) ? `Cada R$ 1 ${S.plat ? "em anúncio" : "investido"} virou <b>${brl(retorno)}</b>` : "Sem investimento no período"}</p>
-      <small>${S.plat || !fee ? "tratamentos ÷ investimento em anúncios" : "tratamentos ÷ (anúncios + gestão)"}</small></div>`;
+      <small>${S.plat || !fee ? "receita ÷ investimento em anúncios" : "receita ÷ (anúncios + gestão)"}</small></div>`;
 
   // o celular de verdade: tela bloqueada recebendo as conversas vindas de anúncio
   const hoje = M.dataDe(M.R + 1);
@@ -620,14 +654,18 @@ function renderGeral() {
   const quando = i => { const d = M.R - i; return d <= 0 ? "ontem" : d === 1 ? "anteontem" : `há ${d + 1} dias`; };
   // a prévia da notificação conta o dia (a 1ª linha com números do relatório das 8h), sem emoji
   // (o relatório é da conta inteira, como o do WhatsApp: não segue o filtro de plataforma)
-  const ontem = M.consolidar(M.linhasDe(M.R, M.R));
+  const lOntem = M.linhasDe(M.R, M.R), ontem = M.consolidar(lOntem);
+  // plano 1000 (AD-199): o Google manda 1,5 conversão — a prévia não arredonda e usa a palavra certa; AD-116: meta 0 = sem meta
+  const gOntem = lOntem.some(l => l.plat === "google"), mOntem = lOntem.some(l => l.plat === "meta");
+  const convOntem = gOntem ? pluralDec(ontem.conversoes, mOntem ? "conversa ou conversão" : "conversão", mOntem ? "conversas e conversões" : "conversões") : plural(ontem.conversoes, "conversa", "conversas");
   const previaRel = ontem.gasto > 0
-    ? `Ontem: ${plural(ontem.conversoes, "conversa", "conversas")}${fin(ontem.cpa) ? ` · ${brl(ontem.cpa)} cada` : ""} · meta ${brl(CFG.cpaAlvo)}`
+    ? `Ontem: ${convOntem}${fin(ontem.cpa) ? ` · ${brl(ontem.cpa)} cada` : ""}${CFG.cpaAlvo > 0 ? ` · meta ${brl(CFG.cpaAlvo)}` : ""}`
     : "Ontem: nenhum anúncio no ar";
   const notifs = [{ nx: true, titulo: "Nexus · Tráfego", texto: previaRel, quando: "08:00" }]
     .concat(recentes.map(L => {
       const k = L.cri && M.CRI[L.cri], cp = M.CAMP[L.camp];
-      return { titulo: `${nomeCurto(L.nome)} · via anúncio`, texto: `Chamou pelo anúncio «${(k && k.curto) || (cp && cp.curto) || "anúncio"}»`, quando: quando(L.i) };
+      // AD-201: aberto em modo apresentação (?apresentar) ou com «nx-ocultar-nomes» = 1, o celular do herói mostra só iniciais
+      return { titulo: `${(OCULTAR_NOMES ? iniciais : nomeCurto)(L.nome)} · via anúncio`, texto: `Chamou pelo anúncio «${(k && k.curto) || (cp && cp.curto) || "anúncio"}»`, quando: quando(L.i) };
     }));
   $("#hero-fone").innerHTML = foneHtml(telaBloqueada("08:00", dataLonga(hoje), notifs), "fone-hero", 6);
   caberNotifs($("#hero-fone .bloq"));
@@ -639,16 +677,19 @@ function renderGeral() {
   const m7 = arr => i => (i < 0 ? null : M.media7(arr, i));
   const acum = lista => lista.reduce((acc, i) => (acc.push(i < 0 ? null : (acc[acc.length - 1] || 0) + sd.rec[i]), acc), []);
   const cpa7 = i => { if (i < 0) return null; const g = M.soma7(sd.meta, i) + M.soma7(sd.google, i), n = M.soma7(sd.conv, i); return n ? g / n : null; };
-  const dif = fin(t.cpa) ? Math.abs(t.cpa - meta) / meta * 100 : null;
+  const dif = fin(t.cpa) && meta > 0 ? Math.abs(t.cpa - meta) / meta * 100 : null;   // AD-116: meta 0 não divide (antes «Infinity% abaixo»)
+  const temG = S.plat ? S.plat === "google" : M.linhasDe(de, M.R, { plat: "google" }).some(l => (+l.gasto || 0) > 0 || (+l.conversoes || 0) > 0);
+  const cap = x => String(x).charAt(0).toUpperCase() + String(x).slice(1);
   const K = [
     { k: "k-inv", l: "Investido em anúncios", v: t.gasto, a: ta.gasto, f: "brl0", s: "neutro", sp: par(i => sd.meta[i] + sd.google[i]) },
-    { k: "k-cpa", l: "Custo por conversa", v: t.cpa, a: ta.cpa, f: "brl", s: "baixo", medidor: true,
-      extra: !fin(t.cpa) ? `meta ${brl(meta)}` : t.cpa <= meta ? `meta ${brl(meta)} · ${pc(dif, 0)} abaixo` : `meta ${brl(meta)} · ${pc(dif, 0)} acima`,
+    // AD-196: com Google no período o custo é «por conversão da plataforma» e a meta (de conversa no WhatsApp) não é régua
+    { k: "k-cpa", l: temG ? "Custo por conversão da plataforma" : "Custo por conversa", v: t.cpa, a: ta.cpa, f: "brl", s: "baixo", medidor: !temG && meta > 0,
+      extra: !(meta > 0) ? "sem meta definida" : temG ? `a meta de ${brl(meta)} vale para conversas no WhatsApp (Meta)` : !fin(t.cpa) ? `meta ${brl(meta)}` : t.cpa <= meta ? `meta ${brl(meta)} · ${pc(dif, 0)} abaixo` : `meta ${brl(meta)} · ${pc(dif, 0)} acima`,
       sp: par(cpa7) },
     { k: "k-conv", l: "Conversas no WhatsApp", v: c.conversas, a: ca.conversas, f: "int", s: "cima", sp: par(m7(sd.conv)) },
-    { k: "k-ag", l: "Avaliações agendadas", v: c.agendadas, a: ca.agendadas, f: "int", s: "cima", sp: par(m7(sd.ag)) },
-    { k: "k-fe", l: "Pacientes novos", v: c.fecharam, a: ca.fecharam, f: "int", s: "cima", sp: par(m7(sd.fe)) },
-    { k: "k-rec", l: "Tratamentos fechados", v: c.receita, a: ca.receita, f: "brl0", s: "cima",
+    { k: "k-ag", l: cap(V.agendada[1]), v: c.agendadas, a: ca.agendadas, f: "int", s: "cima", sp: par(m7(sd.ag)) },
+    { k: "k-fe", l: cap(V.novo[1]), v: c.fecharam, a: ca.fecharam, f: "int", s: "cima", sp: par(m7(sd.fe)) },
+    { k: "k-rec", l: V.receita, v: c.receita, a: ca.receita, f: "brl0", s: "cima",
       // a clínica lê a conta do herói (com a gestão); o "x" só anúncios fica para o gestor
       extra: !gestor() ? esc(notaReceita(c)) : fin(roas) ? `${dec(roas, 1)}x o investido em anúncios` : esc(notaReceita(c)), sp: [acum(idx), acum(idxA)] },
   ];
@@ -675,6 +716,7 @@ function renderGeral() {
     </div>`).join("");
 
   desenharChart("troca");
+  renderTabelaDia();
   renderFunil(t, c);
   renderMeses();
   renderLeitura(t, ta, c);
@@ -746,6 +788,17 @@ function desenharChart(modo) {
   el._d = { serie, ant, P, bw, W, yc };
   if (foto) FX.flip(el, ".bars rect", foto, "data-id");
   if (el._canetaPendente) { el._canetaPendente = false; canetaDiario(); }
+}
+/** Plano 1000 (AD-209): tabela do gráfico diário (dia, Meta, Google, conversões da plataforma, custo por conversão). */
+function renderTabelaDia() {
+  const el = $("#tabela-dia");
+  if (!el || el.hidden || !M || semAnuncios()) return;
+  const { de, ate } = janela(), serie = serieDia(de, ate, S.plat).filter(Boolean);
+  el.innerHTML = `<div class="tabela-dia-rol" role="region" tabindex="0" aria-label="Investimento e conversões por dia"><table class="tabela-dia-t">
+    <caption class="sr-only">Investimento e conversões da plataforma por dia, últimos ${int(S.dias)} dias</caption>
+    <thead><tr><th scope="col">Dia</th><th scope="col">Meta</th><th scope="col">Google</th><th scope="col">Conversões</th><th scope="col">Custo por conversão</th></tr></thead>
+    <tbody>${serie.map(d => `<tr><th scope="row">${esc(SEMANA[M.dataDe(d.i).getDay()])} · ${esc(M.ddmm(d.i))}</th><td>${brl(d.meta)}</td><td>${brl(d.google)}</td><td>${Number.isInteger(d.conv) ? int(d.conv) : dec(d.conv, 1)}</td><td>${brl((d.meta + d.google) / d.conv)}</td></tr>`).join("")}</tbody>
+  </table></div>`;
 }
 /** A caneta de luz desenha a linha de conversas quando o gráfico entra em quadro. */
 function canetaDiario() {
@@ -844,6 +897,7 @@ function ligarChart() {
 
 function renderFunil(t, c) {
   const leigo = !gestor();
+  const FUNIL_VERT = faixasFunil(M.vertical);
   const cadaCem = (r, quem, fez) => {
     if (!fin(r)) return "";
     return r >= 1 ? `de cada 100 que ${quem}, ${Math.round(r)} ${fez}` : `de cada 1.000 que ${quem}, ${Math.round(r * 10)} ${fez}`;
@@ -854,9 +908,10 @@ function renderFunil(t, c) {
     { l: rot("funil.cliques"), s: "no anúncio", v: t.cliques, r: t.ctr, rl: leigo ? cadaCem(t.ctr, "viram", "tocaram") : "CTR (Meta e Google juntos)", solto: leigo },
     { l: "Conversas", s: "no WhatsApp", v: c.conversas, r: rConv, solto: leigo,
       rl: leigo ? (fin(rConv) && rConv >= 1 ? `${Math.round(rConv)} de cada 100 que tocaram chamaram` : cadaCem(rConv, "tocaram", "chamaram")) : "dos cliques" },
-    { l: "Agendaram", s: "avaliação", v: c.agendadas, r: razao(c.agendadas, c.conversas), rl: "das conversas", faixa: [30, 50] },
-    { l: "Compareceram", s: "à consulta", v: c.compareceram, r: razao(c.compareceram, c.agendadas), rl: "dos agendados", faixa: [60, 80] },
-    { l: "Fecharam", s: "tratamento", v: c.fecharam, r: razao(c.fecharam, c.compareceram), rl: "de quem veio", faixa: [30, 50] },
+    // plano 1000 (AD-194/AD-195): rótulos e faixas «normais» por vertical (antes as da odontologia para oficina e loja também)
+    { l: "Agendaram", s: FUNIL_VERT.s[0], v: c.agendadas, r: razao(c.agendadas, c.conversas), rl: "das conversas", faixa: FUNIL_VERT.faixas[0] },
+    { l: "Compareceram", s: FUNIL_VERT.s[1], v: c.compareceram, r: razao(c.compareceram, c.agendadas), rl: "dos agendados", faixa: FUNIL_VERT.faixas[1] },
+    { l: "Fecharam", s: FUNIL_VERT.s[2], v: c.fecharam, r: razao(c.fecharam, c.compareceram), rl: "de quem veio", faixa: FUNIL_VERT.faixas[2] },
   ];
   const mx = Math.log10(Math.max(...E.map(e => e.v)) + 1) || 1;
   $("#funil").innerHTML = E.map((e, n) => {
@@ -886,19 +941,20 @@ function renderMeses() {
   const dados = lista.map(m => {
     const c = M.crmTot(m.de, m.ate, fp), atual = m.ate === M.R && !m.completo;
     // projeção do mês corrente (calculada aqui, no painel): fecharam ÷ dias passados × dias do mês
-    const proj = atual && rit.pass > 0 ? Math.round(c.fecharam / rit.pass * rit.diasMes) : null;
+    // plano 1000 (AD-206): no começo do mês 1 fechamento virava «projeção 30» — só a partir do 7º dia
+    const proj = atual && rit.pass >= DIAS_PROJECAO_FECHAMENTOS ? Math.round(c.fecharam / rit.pass * rit.diasMes) : null;
     return { m, t: M.consolidar(M.linhasDe(m.de, m.ate, fp)), c, parcial: !m.completo, atual, proj: proj != null && proj > c.fecharam ? proj : null };
   });
   const el = $("#mes-a-mes");
   if (!dados.length) { el.innerHTML = `<p class="vazio">Ainda não há meses para comparar.</p>`; return; }
   const v0 = dados[0].c.fecharam, ult = dados[dados.length - 1], vN = ult.c.fecharam;
-  const pn = v => (v === 1 ? "paciente novo" : "pacientes novos");
+  const pn = v => (v === 1 ? M.VOC.novo[0] : M.VOC.novo[1]);   // AD-194
   const parc = ult.parcial ? ` <span class="mam-parc">(${MES3[ult.m.mes]}. parcial)</span>` : "";
   $("#mam-titulo").innerHTML = dados.length < 2 ? `${vN} ${pn(vN)} em ${MESES[ult.m.mes]}${parc}`
     : v0 === vN ? `${vN} ${pn(vN)} por mês, estável${parc}`
     : `De ${v0} para ${vN} ${pn(vN)} por mês${parc}`;
   const acum = todos.reduce((s, m) => s + M.crmTot(m.de, m.ate, fp).fecharam, 0);
-  $("#mam-sub").textContent = `${plural(acum, "paciente novo", "pacientes novos")} vindos dos anúncios desde ${MESES[todos[0].mes]}.`;
+  $("#mam-sub").textContent = `${plural(acum, M.VOC.novo[0], M.VOC.novo[1])} vindos dos anúncios desde ${MESES[todos[0].mes]}.`;
 
   const bloco = el.closest("[data-cena]");
   const troca = FX && ANIM && FX.assentado(bloco) && el.querySelector(".mam-bar");
@@ -938,20 +994,30 @@ function linhasCamp() {
 
 function renderLeitura(t, ta, c) {
   const out = [], meta = M.CFG.cpaAlvo;
-  if (fin(t.cpa)) {
-    const v = variacao(t.cpa, ta.cpa);
+  // plano 1000 (AD-197): «Cada conversa no WhatsApp custou» é o CPA do META; o Google ganha frase própria (custo por conversão)
+  const { de: deL } = janela();
+  const tm = S.plat === "google" ? null : M.consolidar(M.linhasDe(deL, M.R, { plat: "meta" })), tmA = S.plat === "google" ? null : M.consolidar(M.linhasDe(deL - S.dias, deL - 1, { plat: "meta" }));
+  const tg = S.plat === "meta" ? null : M.consolidar(M.linhasDe(deL, M.R, { plat: "google" }));
+  if (tm && fin(tm.cpa)) {
+    const v = variacao(tm.cpa, tmA.cpa);
     const vt = v == null ? "" : ` (${v <= 0 ? "caiu" : "subiu"} ${pc(Math.abs(v), 0)} em relação aos ${S.dias} dias anteriores)`;
-    out.push(t.cpa <= meta
-      ? { k: "bom", h: `Cada conversa no WhatsApp custou <b>${brl(t.cpa)}</b>, dentro da meta de ${brl(meta)}${vt}.` }
-      : { k: "aten", h: `Cada conversa no WhatsApp custou <b>${brl(t.cpa)}</b>, acima da meta de ${brl(meta)}${vt}.` });
+    // plano 1000 (AD-001): sem meta definida, a frase diz o custo sem comparar com meta nenhuma
+    out.push(!(meta > 0) ? { k: "bom", h: `Cada conversa no WhatsApp custou <b>${brl(tm.cpa)}</b>${vt} — sem meta de custo definida.` }
+      : tm.cpa <= meta
+      ? { k: "bom", h: `Cada conversa no WhatsApp custou <b>${brl(tm.cpa)}</b>, dentro da meta de ${brl(meta)}${vt}.` }
+      : { k: "aten", h: `Cada conversa no WhatsApp custou <b>${brl(tm.cpa)}</b>, acima da meta de ${brl(meta)}${vt}.` });
   }
+  if (tg && tg.gasto > 0) out.push(fin(tg.cpa)
+    ? { k: "bom", h: `No Google, cada conversão registrada custou <b>${brl(tg.cpa)}</b> (conversão do Google não é conversa no WhatsApp: fica fora da meta).` }
+    : { k: "aten", h: `O Google investiu ${brl0(tg.gasto)} e não registrou conversão no período — confira o acompanhamento de conversões da conta.` });
+  void t; void ta;
   // campanha com alerta ativo não pode ser elogiada nem receber verba
   const comAlerta = new Set(M.avaliar(M.R).filter(a => a.regra.nivel === "campanha").map(a => a.chave.split("|")[1]));
   const rows = linhasCamp().filter(r => r.t.gasto >= 40);
   const efic = rows.filter(r => r.k.fecharam > 0 && !comAlerta.has(r.c.id)).sort((a, b) => a.cpp - b.cpp)[0];
-  if (efic) out.push({ k: "bom", h: `<b>${esc(efic.c.nome)}</b> é a campanha mais eficiente: cada paciente novo custou ${brl0(efic.cpp)} em anúncio.` });
+  if (efic) out.push({ k: "bom", h: `<b>${esc(efic.c.nome)}</b> é a campanha mais eficiente: cada ${esc(M.VOC.novo[0])} custou ${brl0(efic.cpp)} em anúncio.` });
   const serv = Object.entries(c.serv).sort((a, b) => b[1].v - a[1].v)[0];
-  if (serv && c.receita) out.push({ k: "bom", h: `<b>${esc(serv[0])}</b> trouxe ${pc(serv[1].v / c.receita * 100, 0)} do valor em tratamentos fechados (${serv[1].n} de ${c.fecharam} ${c.fecharam === 1 ? "paciente" : "pacientes"}).` });
+  if (serv && c.receita) out.push({ k: "bom", h: `<b>${esc(serv[0])}</b> trouxe ${pc(serv[1].v / c.receita * 100, 0)} do valor ${esc(M.VOC.receitaEm)} (${serv[1].n} de ${c.fecharam} ${esc(c.fecharam === 1 ? M.VOC.pessoa[0] : M.VOC.pessoa[1])}).` });   // AD-194
   const al = M.avaliar(M.R, true)[0];
   // a clínica lê o nome leigo da regra; a mensagem do núcleo só vai quando não tem tecniquês
   if (al) out.push({ k: "aten", h: gestor() ? `Radar: ${esc(al.msg)}`
@@ -976,10 +1042,18 @@ function renderRitmo() {
   const m = M.ritmoMes(M.R), orc = M.CFG.orcamento, escala = Math.max(orc, m.proj, 1) * 1.08;
   $("#ritmo-sub").textContent = `${MESES[m.mes]} · dia ${m.pass} de ${m.diasMes} · todas as plataformas`;
   $("#ritmo-h").innerHTML = rotT("ritmo.titulo");
+  // plano 1000 (AD-001/AD-007): sem orçamento definido (null ou 0) não há barra nem «acima/abaixo» — só o gasto do mês
+  if (!(orc > 0)) {
+    $("#ritmo").innerHTML = `
+    <div class="ritmo-num"><strong data-n="${m.gasto}" data-f="brl0" data-k="rit">${brl0(m.gasto)}</strong><span>investidos no mês</span></div>
+    <p class="ritmo-msg">Orçamento do mês não definido${gestor() ? " — preencha em Ajustes para ver o ritmo e a projeção contra ele" : ""}.</p>`;
+    return;
+  }
   const w = m.gasto / escala * 100, wp = m.proj / escala * 100, mo = orc / escala * 100;
   const acima = m.proj > orc * 1.02, noLimite = !acima && m.proj >= orc * .98;
   const msg = m.restam === 0 ? `Mês fechado em ${brl0(m.gasto)}.`
-    : acima ? `No ritmo atual o mês fecha ${brl0(m.proj - orc)} acima do orçamento. O radar já sugeriu segurar ${brl((m.proj - orc) / m.restam)} por dia.`
+    // plano 1000 (AD-198): frase neutra — o painel não sabe se o aviso do radar saiu (antes «O radar já sugeriu…» sem aviso nenhum)
+    : acima ? `No ritmo atual o mês fecha ${brl0(m.proj - orc)} acima do orçamento. Segurar ${brl((m.proj - orc) / m.restam)} por dia fecha dentro.`
     : noLimite ? `No limite: o mês deve fechar em ${brl0(m.proj)}, praticamente no orçamento.`
     : `Dentro do orçamento: o mês deve fechar em ${brl0(m.proj)} (sobram ${brl0(orc - m.proj)}).`;
   $("#ritmo").innerHTML = `
@@ -1003,7 +1077,8 @@ const VAL_CAMP = {
   ag: r => r.k.agendadas, fe: r => r.k.fecharam, rec: r => r.k.receita, roas: r => r.roas,
 };
 const ROT_CEL = { gasto: "Investido", conv: "Conversas", cpa: "Custo por conversa", fe: "Pacientes novos" };
-const pontoCpa = cpa => !fin(cpa) ? "dot-bad" : cpa <= M.CFG.cpaAlvo ? "dot-ok" : cpa <= M.CFG.cpaAlvo * 1.35 ? "dot-warn" : "dot-bad";
+// AD-116: sem meta (0) o ponto fica neutro (antes toda campanha virava vermelha)
+const pontoCpa = cpa => !(M.CFG.cpaAlvo > 0) ? "dot-neutro" : !fin(cpa) ? "dot-bad" : cpa <= M.CFG.cpaAlvo ? "dot-ok" : cpa <= M.CFG.cpaAlvo * 1.35 ? "dot-warn" : "dot-bad";
 
 function renderCampanhas() {
   const vazio = semAnuncios();
@@ -1600,6 +1675,7 @@ function renderIntegracao() {
     const nomes = e.erros.map(x => nomePlat(x.canal));
     txt = `${nomes.join(" e ")} ${nomes.length > 1 ? "desconectados" : "desconectado"}`;
   } else if (nivel === "atrasado") txt = "Leitura atrasada";
+  else if (nivel === "parcial") txt = `Leitura parcial · ${e.canais.filter(c => c.estado === "parcial").map(c => nomePlat(c.canal)).join(" e ")}`;   // AD-208
   else if (nivel === "aguardando") txt = "Aguardando a 1ª leitura";
   else if (nivel === "ok") txt = `Atualizado ${minutosAtras(e.ultimo)}`;
   pill.hidden = !temApp || nivel === "nenhuma";
@@ -1624,7 +1700,7 @@ function renderSyncPop() {
   const e = estadoInteg(), pop = $("#sync-pop");
   // o popover pode cobrir a faixa de conexão caída: repete o recado dela no topo (nada importante some)
   const queda = !(S.demo && !SIMULAR_INTEG) && e.erros.length ? `<p class="spp-queda">${esc(textoQueda(e.erros))}</p>` : "";
-  const ESTADO = { ok: "lendo normalmente", atrasado: "leitura atrasada", aguardando: "esperando a 1ª leitura", erro: "desconectado" };
+  const ESTADO = { ok: "lendo normalmente", atrasado: "leitura atrasada", parcial: "leitura parcial (pode faltar parte dos números)", aguardando: "esperando a 1ª leitura", erro: "desconectado" };
   const linhas = e.canais.map(c => `<li class="spp-${c.estado}"><b>${nomePlat(c.canal)}</b><span>${c.sync ? `lida às ${FMT_HORA.format(new Date(c.sync))} (${quandoSP(new Date(c.sync).toISOString()).replace(/ às .*/, "")})` : "ainda não leu"} · ${ESTADO[c.estado]}</span></li>`).join("");
   const radarQ = S.varridoEm ? `hoje às ${S.varridoEm}` : e.ultimo ? quandoSP(new Date(e.ultimo).toISOString()) : "—";
   pop.innerHTML = `<p class="spp-h">${S.demo ? "Leitura dos anúncios (exemplo)" : "Leitura dos anúncios"}</p>` + queda +
@@ -1716,26 +1792,38 @@ function renderRadar() {
   }).join("");
   const htmlHist = hist.slice(0, 8).map((e, n) => {
     const ativo = e.ate === M.R, a = e.a, id = a.regra.id;
-    const desde = ativo ? (e.desde === M.R ? "desde ontem · continua" : `desde ${M.dMes(e.desde)} · continua`)
-      : e.desde === e.ate ? `em ${M.dMes(e.desde)}` : `de ${M.dMes(e.desde)} a ${M.dMes(e.ate)}`;
+    // revisão 13/10 (como o Órbita, AD-046): episódio interrompido por «Silenciar 7 dias» é «silenciado», não «resolvido»
+    const silenciado = !ativo && typeof M.silenciadoAte === "function" ? M.silenciadoAte(a.chave) : null;
+    const desde = (ativo ? (e.desde === M.R ? "desde ontem · continua" : `desde ${M.dMes(e.desde)} · continua`)
+      : e.desde === e.ate ? `em ${M.dMes(e.desde)}` : `de ${M.dMes(e.desde)} a ${M.dMes(e.ate)}`)
+      + (silenciado ? esc(` · silenciado até ${silenciado.slice(8, 10)}/${silenciado.slice(5, 7)}`) : "");
     const s = srv.get(a.chave);
     const env = s && (s.enviado_em || s.entregue_em) ? ` · <span class="al-env">aviso ${envLinha(statusEnvio(s))}</span> ${chipExemplo(s)}` : "";
     return `<li style="--i:${n + integs.length}"${ativo ? ` data-chave="${esc(a.chave)}"` : ""}><span class="sev sev-${a.sev}" role="img" aria-label="${SEV_NOME[a.sev]}">${M.ICONE[a.sev]}</span>
-      <div><p class="al-t">${rotT(id)} <span class="chip ${ativo ? (a.sev === "critico" ? "chip-bad" : "chip-warn") : "chip-ok"}">${ativo ? "ativo" : "resolvido"}</span></p>
+      <div><p class="al-t">${rotT(id)} <span class="chip ${ativo ? (a.sev === "critico" ? "chip-bad" : "chip-warn") : !silenciado ? "chip-ok" : "chip-meta"}">${ativo ? "ativo" : !silenciado ? "resolvido" : "silenciado"}</span></p>
       ${!gestor() && LEIGO_LINHA[id] ? `<p class="al-leigo">${esc(LEIGO_LINHA[id])}</p>` : ""}<p class="al-m">${esc(a.msg)}</p>${traducaoCTR(a.msg, "p")}<p class="al-d">${desde}${env}</p></div></li>`;
   }).join("");
-  $("#alerts").innerHTML = htmlInteg + htmlHist || `<li class="vazio">Nenhum alerta nos últimos 14 dias.</li>`;
+  // plano 1000 (AD-052): conta Google sem nenhuma conversão em 30 dias — o r2 dela fica calado; o clássico agora DIZ por quê (como o Órbita)
+  const htmlGoogle = !vazio && M.GOOGLE_SEM_CONVERSAO ? `<li class="al-info-google"><span class="sev sev-info" role="img" aria-label="${esc(SEV_NOME.info)}">${esc(M.ICONE.info)}</span>
+      <div><p class="al-t">Google sem acompanhamento de conversões <span class="chip chip-meta">informativo</span></p>
+      <p class="al-m">O Google Ads gastou nos últimos 30 dias e não registrou nenhuma conversão: o acompanhamento de conversões da conta não está ligado. Enquanto isso, «Campanha sem conversa» fica desligada para o Google.</p>
+      <p class="al-d">Ligue o acompanhamento de conversões (clique no WhatsApp ou formulário) na conta do Google Ads.</p></div></li>` : "";
+  $("#alerts").innerHTML = htmlInteg + htmlGoogle + htmlHist || `<li class="vazio">Nenhum alerta nos últimos 14 dias.</li>`;
 
   const pode = S.demo || gestor();
   $("#rules").innerHTML = M.REGRAS.map(r => {
     const f = M.FMT_MET[r.metrica];
-    const cond = `${ROT_MET[r.metrica]} ${OPS[r.op]} ${f(r.limite())} · ${r.janela} dias · por ${r.nivel === "campanha" ? "campanha" : "criativo"}${r.plat ? " (Meta)" : ""}` +
+    // plano 1000 (AD-235/AD-237): r5/r6 são da conta inteira — sem métrica/limite genéricos, a condição vem escrita do núcleo
+    // plano 1000 (AD-010): a r1 também traz a condição escrita (régua de cada plataforma, ou parada sem meta)
+    const cond = r.descricao ? r.descricao : `${ROT_MET[r.metrica]} ${OPS[r.op]} ${f(r.limite())} · ${r.janela} dias · por ${r.nivel === "campanha" ? "campanha" : "criativo"}${r.plat ? " (Meta)" : ""}` +
       (r.minGasto ? ` · gasto mínimo ${brl0(r.minGasto)}` : "") + (r.minImpr ? ` · mín. ${r.minImpr} impressões` : "");
     const leigo = !gestor() && LEIGO[r.id];
     const nomeR = leigo ? `<span title="${esc(r.nome)}">${esc(LEIGO[r.id][1])}</span>` : esc(r.nome);
-    const condR = leigo ? `<span title="${esc(cond)}">${esc(condLeiga(r))}</span>` : cond;
+    const condR = leigo ? `<span title="${esc(cond)}">${esc(r.descricaoLeiga || condLeiga(r))}</span>` : esc(cond);
+    // revisão 13/10: sem meta a r1 aparece desligada e o clique «ligava» gravando o contrário (r1 em regrasOff) — fica travada
     return `<li><div><p class="rl-t">${nomeR} <span class="chip ${r.sev === "critico" ? "chip-bad" : r.sev === "alerta" ? "chip-warn" : "chip-meta"}">${SEV_NOME[r.sev]}</span></p><p class="rl-c">${condR}</p></div>
-      <button class="sw" type="button" role="switch" aria-checked="${r.ativa}" aria-label="Regra ${esc(!gestor() && LEIGO[r.id] ? LEIGO[r.id][1] : r.nome)}" data-regra="${r.id}"${pode ? "" : ` aria-disabled="true" title="Só a equipe da Nexus liga ou desliga regras"`}></button></li>`;
+      <button class="sw" type="button" role="switch" aria-checked="${r.ativa}" aria-label="Regra ${esc(!gestor() && LEIGO[r.id] ? LEIGO[r.id][1] : r.nome)}" data-regra="${r.id}"${!r.semMeta ? (pode ? "" : ` aria-disabled="true" title="Só a equipe da Nexus liga ou desliga regras"`)
+        : ` aria-disabled="true" data-sem-meta="1" title="${esc(SEM_META_REGRA)}"`}></button></li>`;
   }).join("");
   $("#rules-nota").textContent = S.demo ? "Na demonstração, ligar e desligar regras e mexer nas metas não salva nada — é só para ver o efeito."
     : gestor() ? "Ligar ou desligar uma regra vale na hora para este cliente." : "Só a equipe da Nexus liga ou desliga regras.";
@@ -1746,8 +1834,9 @@ function renderRadar() {
     $("#in-cpa").value = M.CFG.cpaAlvo; $("#out-cpa").textContent = brl(M.CFG.cpaAlvo);
     $("#in-orc").value = M.CFG.orcamento; $("#out-orc").textContent = brl0(M.CFG.orcamento);
   } else {
-    $("#metas-real").innerHTML = `<p class="metas-l"><span>Meta de custo por conversa</span><b>${brl(M.CFG.cpaAlvo)}</b></p>` +
-      `<p class="metas-l"><span>Orçamento de anúncios do mês</span><b>${brl0(M.CFG.orcamento)}</b></p>` +
+    // AD-001: meta/orçamento não configurados aparecem como «não definida(o)», nunca como um número padrão
+    $("#metas-real").innerHTML = `<p class="metas-l"><span>Meta de custo por conversa</span><b>${M.CFG.cpaAlvo > 0 ? brl(M.CFG.cpaAlvo) : "não definida"}</b></p>` +
+      `<p class="metas-l"><span>Orçamento de anúncios do mês</span><b>${M.CFG.orcamento > 0 ? brl0(M.CFG.orcamento) : "não definido"}</b></p>` +
       (gestor() ? `<button class="link-b" type="button" data-ir="ajustes">Alterar metas em Ajustes</button>` : "");
   }
   $("#wa-alerta").innerHTML = `<span class="ph-day">hoje</span><div class="bubble${radarChega && ANIM ? " chega" : ""}">${waHtml(M.textoAlerta(atuais))}<span class="hr">${horaCheia()}</span></div>`;
@@ -1779,6 +1868,8 @@ function atualizarBadge(n) {
   });
 }
 
+/** Revisão 13/10: o interruptor de uma regra parada por falta de meta não liga nada — explica o que fazer. */
+const SEM_META_REGRA = "Esta regra está parada: defina a meta de custo por conversa em Ajustes de anúncios para ligá-la.";
 async function alternarRegra(id) {
   const antes = [...(DS.CFG.regrasOff || [])];
   const off = new Set(antes);
@@ -1960,7 +2051,8 @@ const CANAIS = {
       ["google_client_secret", "OAuth client secret", true], ["google_refresh_token", "Refresh token", true]],
   },
 };
-const REGRAS_NOMES = [["r1", "Custo por conversa alto"], ["r2", "Campanha sem conversa"], ["r3", "Criativo com CTR baixo"], ["r4", "Fadiga de criativo"]];
+const REGRAS_NOMES = [["r1", "Custo por conversa alto"], ["r2", "Campanha sem conversa"], ["r3", "Criativo com CTR baixo"], ["r4", "Fadiga de criativo"],
+  ["r5", "Investimento parou de repente"], ["r6", "CRM parou de receber as conversas do Meta"]];   // plano 1000
 
 /** Configuração da Nexus e «Fazer agora» são só do super: nx_sessao passa a dizer `super`; sem o campo, o
     so_plataforma do nx_config_ver denuncia um gestor de revenda (antes o cartão ficava na tela sempre falhando). */
@@ -2111,8 +2203,8 @@ function renderFormCliente() {
     </div>
     <h3>Metas</h3>
     <div class="form-3">
-      <label class="campo"><span>Custo por conversa (R$)</span><input type="number" id="cl-cpa" min="1" step="0.5" inputmode="decimal" value="${esc(cfg.cpaAlvo)}"></label>
-      <label class="campo"><span>Orçamento do mês (R$)</span><input type="number" id="cl-orc" min="0" step="50" inputmode="decimal" value="${esc(cfg.orcamento)}"></label>
+      <label class="campo"><span>Custo por conversa (R$)</span><input type="number" id="cl-cpa" min="1" step="0.5" inputmode="decimal" value="${esc(cfg.cpaAlvo)}" placeholder="sem meta"></label>
+      <label class="campo"><span>Orçamento do mês (R$)</span><input type="number" id="cl-orc" min="0" step="50" inputmode="decimal" value="${esc(cfg.orcamento)}" placeholder="não definido"></label>
       <label class="campo"><span>Gestão mensal (R$)</span><input type="number" id="cl-fee" min="0" step="1" inputmode="decimal" value="${esc(cfg.fee)}"></label>
     </div>
     <h3>Valor de cada tratamento</h3>
@@ -2329,7 +2421,7 @@ const resumoTxt = r => !r ? "" : typeof r === "string" ? r.slice(0, 180) : JSON.
 // segredos (só escrita) e a flag que o nx_config_ver devolve para cada um
 const SEGREDOS = { wa_access_token: "tem_wa_token", meta_app_secret: "tem_app_secret", anthropic_api_key: "tem_ia" };
 // texto em branco só é mandado quando "vazio" tem sentido (o servidor apaga a coluna); os três últimos pedem confirmação
-const LIMPAVEIS = new Set(["wa_template", "google_api_versao", "painel_url", "wa_phone_number_id", "saas_url"]);
+const LIMPAVEIS = new Set(["wa_template", "google_api_versao", "painel_url", "wa_phone_number_id", "saas_url", "ia_aviso_custo_usd"]);
 const ROTULO_CFG = { wa_template: "o modelo aprovado", google_api_versao: "a versão da API do Google", painel_url: "o endereço do painel",
   wa_phone_number_id: "o ID do número da Nexus", saas_url: "o endereço do Órbita" };
 
@@ -2359,7 +2451,8 @@ function renderConfig() {
     <div class="form-2">${txt("wa_template", "Modelo aprovado (fora da janela de 24h)", "Parâmetros do modelo: título curto e link do painel.")}${sec("meta_app_secret", "App secret (confere o webhook)", c.tem_app_secret)}</div>
     <h3>Leitura por IA</h3>
     <div class="form-2">${sec("anthropic_api_key", "Chave da API", c.tem_ia, "Sem chave, a leitura sai por regras fixas.")}${txt("modelo_ia", "Modelo", "", "claude-opus-5")}</div>
-    <datalist id="cf-modelos"><option value="claude-opus-5"></option><option value="claude-fable-5-1"></option></datalist>
+    <div class="form-2">${txt("ia_aviso_custo_usd", "Avisar quando a IA de um cliente passar de (US$ por dia)", "A equipe recebe um aviso no WhatsApp. Em branco: US$ 10.", "10")}</div>
+    <datalist id="cf-modelos"><option value="claude-opus-5-5"></option><option value="claude-sonnet-5-5"></option><option value="claude-haiku-5-5"></option><option value="claude-fable-5-1"></option></datalist>
     <h3>Endereços</h3>
     <div class="form-2">${txt("saas_url", "Endereço do Órbita (link base)", "Base dos convites e dos domínios dos clientes, terminando em /app/. Sem ele, o convite sai com o endereço de onde o admin estava.", "https://orbita-nexus-ads.netlify.app/app/")}${txt("painel_url", "Endereço do painel clássico", "Vai como link no modelo de WhatsApp. Em branco: apaga.")}</div>
     <h3>Outros</h3>
@@ -2383,6 +2476,14 @@ async function salvarConfig(ev) {
     if (!n.ok) { f.elements.saas_url.focus(); return avisoForm(st, n.erro, true); }
     cfg.saas_url = n.valor;
     if (n.valor && n.valor !== String(f.elements.saas_url.value).trim()) f.elements.saas_url.value = n.valor;
+  }
+  if (cfg.ia_aviso_custo_usd) {   // «12,50» → «12.50»; o servidor só aceita até 10000 com 2 casas
+    const v = cfg.ia_aviso_custo_usd.replace(/^US\$\s*/i, "").replace(",", ".");
+    if (!/^\d{1,5}(\.\d{1,2})?$/.test(v) || Number(v) <= 0 || Number(v) > 10000) {
+      f.elements.ia_aviso_custo_usd.focus();
+      return avisoForm(st, "O teto de custo da IA precisa ser um valor em dólar entre 0,01 e 10.000 (ex.: 10 ou 12,50).", true);
+    }
+    cfg.ia_aviso_custo_usd = v;
   }
   // apagar o que estava preenchido só com confirmação (painel_url, número da Nexus, endereço do Órbita)
   const apagando = ["painel_url", "wa_phone_number_id", "saas_url"].filter(k => k in cfg && !cfg[k] && String(atual[k] || "").trim());
@@ -2450,7 +2551,8 @@ function ctxCurta() {
   return {
     M, P, nome: nomeCliente(), marca: { ...MARCA }, demo: S.demo, gestor: gestor(), anim: ANIM, fino: FINE, FX, CINE,
     campeao: campeao(P.de, P.ate, P.f), proximos: proximosPassos(mesDoPeriodo()),
-    nomeCurto, foneHtml, avatarMarca, simuladorHtml, ligarSimulador, corServ, AVC, hash,
+    // plano 1000 (AD-201): na apresentação (reunião, tela compartilhada) os nomes saem em iniciais por padrão; ?nomes=1 mostra
+    nomeCurto: Q.get("nomes") === "1" ? nomeCurto : iniciais, foneHtml, avatarMarca, simuladorHtml, ligarSimulador, corServ, AVC, hash,
     voltar: () => $("#btn-apresentar"),
     aoFolha: () => abrirFolhaMes(),
     aoSair: () => { if (CINE) CINE.semente(1); },
@@ -2534,6 +2636,9 @@ function ligarSimulador(box) {
     const r = simular(tx, SIM.inv, SIM.tk);
     $(".sim-inv-o", box).textContent = brl0(SIM.inv);
     $(".sim-tk-o", box).textContent = brl0(SIM.tk);
+    // plano 1000 (AD-202): o leitor de tela fala «R$ 2.000 por mês», não «2000»
+    inv.setAttribute("aria-valuetext", valorFalado(SIM.inv, "brl"));
+    tk.setAttribute("aria-valuetext", brl0(SIM.tk));
     por("c0", r.conversas[0], "int"); por("c1", r.conversas[1], "int");
     por("p0", r.pacientes[0], "int"); por("p1", r.pacientes[1], "int");
     por("r0", r.tratamentos[0], "brl0"); por("r1", r.tratamentos[1], "brl0");
@@ -2950,6 +3055,7 @@ async function entrar(ev) {
     const r = await api.entrar(email, senha);
     api.guardarToken(r.token);
     S.token = r.token;
+    vigiarSessao();
     $("#en-senha").value = "";
     await carregarSessao();
   } catch (err) {
@@ -2975,6 +3081,7 @@ async function criarConta(ev) {
       const s = await api.entrar(email, senha);
       api.guardarToken(s.token);
       S.token = s.token;
+      vigiarSessao();
       $("#cr-senha").value = "";
       await carregarSessao();
     } else authModo("pendente");
@@ -2986,6 +3093,20 @@ async function criarConta(ev) {
       erro(semCodigo ? "Esta é a primeira conta do sistema: informe o código de ativação da Nexus." : api.mensagemErro(err), $("#cr-codigo"));
     } else erro(api.mensagemErro(err));
   } finally { ocupado(btn, false); }
+}
+
+/** Plano 1000 (AD-200): em origem compartilhada (GitHub Pages) a sessão do navegador vence por ociosidade/teto (dados.js);
+    a aba aberta confere a cada minuto e, vencida, volta ao login em vez de seguir com o token só na memória.
+    Revisão 13/10: clique/tecla renovam a ociosidade (api.renovarUso, no máx. 1×/min — trocar aba/período não chama RPC) e o
+    conferidor nasce também depois de um login novo (antes só se já havia token ao abrir a página). Idempotente. */
+let vigiaSessao = false;
+function vigiarSessao() {
+  if (vigiaSessao || !api.origemCompartilhada(location.hostname)) return;
+  vigiaSessao = true;
+  const tocar = () => { if (S.token) api.renovarUso(); };
+  document.addEventListener("pointerdown", tocar, { capture: true, passive: true });
+  document.addEventListener("keydown", tocar, true);
+  setInterval(() => { if (S.token && !api.lerToken(Date.now(), { renovar: false })) sessaoExpirou(); }, 60000);
 }
 
 function sessaoExpirou() {
@@ -3210,6 +3331,14 @@ function ligarEventos() {
     $("#btn-comparar").setAttribute("aria-pressed", String(S.comparar));
     if (S.aba === "geral" && M) render(false);
   });
+  // plano 1000 (AD-209): «ver como tabela» — os mesmos números do gráfico diário numa tabela (aberta, segue o período e a plataforma)
+  $("#btn-tabela-dia").addEventListener("click", () => {
+    const b = $("#btn-tabela-dia"), aberta = b.getAttribute("aria-pressed") !== "true";
+    b.setAttribute("aria-pressed", String(aberta));
+    b.textContent = aberta ? "esconder a tabela" : "ver como tabela";
+    $("#tabela-dia").hidden = !aberta;
+    if (aberta) renderTabelaDia();
+  });
   // o dia lido no gráfico ganha um ponto nas 6 sparklines da régua (os números da régua não mudam)
   document.addEventListener("nx:dia", e => {
     const i = e.detail ? e.detail.i : null;
@@ -3299,6 +3428,7 @@ function ligarEventos() {
   $("#rules").addEventListener("click", e => {
     const b = e.target.closest("[data-regra]");
     if (!b) return;
+    if (b.dataset.semMeta) return toast(SEM_META_REGRA);
     if (b.getAttribute("aria-disabled") === "true") return toast("Só a equipe da Nexus liga ou desliga regras.");
     alternarRegra(b.dataset.regra);
   });
@@ -3581,6 +3711,7 @@ async function iniciar() {
   }
   S.token = api.lerToken();
   if (!S.token) { mostrarTela("auth"); authModo("entrar"); return; }
+  vigiarSessao();
   carregarSessao();
 }
 

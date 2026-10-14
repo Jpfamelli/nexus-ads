@@ -240,7 +240,14 @@ begin
   values (cA, cv1, ct1, ch, 'in', 'texto', 'Oi, quero marcar', 'wamid.F5-TESTE-1', 'recebida') returning id into m1;
   insert into public.nx_mensagens (cliente_id, conversa_id, contato_id, canal_id, direcao, tipo, corpo, wamid, status, enviado_por, responde_a_wamid, origem)
   values (cA, cv1, ct1, ch, 'out', 'texto', 'Claro! Qual dia?', 'wamid.F5-TESTE-2', 'entregue', k_a1, 'wamid.F5-TESTE-1', 'painel') returning id into m2;
+  -- plano 1000 (CA-001, 20261013d): papel leitura não zera as não lidas de quem atende ({ignorado:true}); o dono da conversa (a1) zera.
+  -- Antes da 20261013d a leitura zerava (o caso continua válido nas duas versões)
   j := public.nx_cv_marcar_lida('tok-f5-le', cA, cv1);
+  if exists (select 1 from public.nx_versao_banco where nome = '20261013d_contratos_telas') then
+    perform pg_temp.ok(j ->> 'ultimo_wamid_in' = 'wamid.F5-TESTE-1' and (j ->> 'ignorado')::boolean
+                       and (select nao_lidas from public.nx_conversas where id = cv1) > 0, 'leitura: devolve o wamid e NÃO zera (plano 1000, CA-001)');
+    j := public.nx_cv_marcar_lida('tok-f5-a1', cA, cv1);
+  end if;
   perform pg_temp.ok(j ->> 'ultimo_wamid_in' = 'wamid.F5-TESTE-1' and (select nao_lidas from public.nx_conversas where id = cv1) = 0, 'marcar lida zera e devolve o último wamid recebido');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_cv_marcar_lida(%L,%L,%s)', 'tok-f5-adm', cA, cvB)) = 'conversa_nao_encontrada', 'marcar lida de outro cliente');
 
@@ -498,7 +505,8 @@ begin
                      'horário salvo é lido pelo nx_horario_aberto (F1)');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_departamento_salvar(%L,%L,%L)', 'tok-f5-adm', cA, '{"nome":"X1","horario":{"1":[["08:00","12:00"],["11:00","13:00"]]}}')) = 'dados_invalidos|horario', 'faixas sobrepostas → horario');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_departamento_salvar(%L,%L,%L)', 'tok-f5-adm', cA, '{"nome":"X2","horario":{"7":[]}}')) = 'dados_invalidos|horario', 'dia 7 → horario');
-  perform pg_temp.ok(pg_temp.erro(format('select public.nx_departamento_salvar(%L,%L,%L)', 'tok-f5-adm', cA, '{"nome":"X3","horario":{"2":[["18:00","08:00"]]}}')) = 'dados_invalidos|horario', 'início depois do fim → horario');
+  -- plano 1000 (AS-145, 20261013d): fim antes do início só vale como a ÚLTIMA faixa do dia (passa da meia-noite); na 1ª de duas, recusa
+  perform pg_temp.ok(pg_temp.erro(format('select public.nx_departamento_salvar(%L,%L,%L)', 'tok-f5-adm', cA, '{"nome":"X3","horario":{"2":[["18:00","08:00"],["09:00","10:00"]]}}')) = 'dados_invalidos|horario', 'início depois do fim → horario');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_departamento_salvar(%L,%L,%L)', 'tok-f5-adm', cA, '{"nome":"X4","horario":{"2":[["08:00","12:00"],["13:00","14:00"],["15:00","16:00"]]}}')) = 'dados_invalidos|horario', 'mais de 2 faixas → horario');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_departamento_salvar(%L,%L,%L)', 'tok-f5-adm', cA, '{"nome":"X5","cor":"vermelho"}')) = 'dados_invalidos|cor', 'cor inválida');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_departamento_salvar(%L,%L,%L)', 'tok-f5-adm', cA, '{"nome":"financeiro"}')) = 'dados_invalidos|nome_repetido', 'nome repetido (sem caixa)');
