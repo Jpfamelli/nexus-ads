@@ -42,7 +42,11 @@ export function campoPersonalizado(k, c, valor, { nome } = {}) {
 export function linksDoCampo(L, tipo, valor) {
   const v = String(valor ?? "").trim();
   if (!v) return [];
-  if (tipo === "url") return /^https?:\/\/[^\s.]+\.[^\s]{2,}/i.test(v) ? [{ tipo: "abrir", href: v, rotulo: "Abrir o link em nova aba", icone: "externo", nova: true }] : [];
+  if (tipo === "url") {
+    // plano 1000b · RB-076: «www.site.com.br» também ganha «abrir» (o link vai com https://)
+    const u = (typeof L.normalizarSite === "function" ? L.normalizarSite(v) : v) || "";
+    return /^https?:\/\/[^\s.]+\.[^\s]{2,}/i.test(u) ? [{ tipo: "abrir", href: u, rotulo: "Abrir o link em nova aba", icone: "externo", nova: true }] : [];
+  }
   if (tipo === "telefone") {
     const n = L.normalizarTelefone(v);
     return n ? [{ tipo: "ligar", href: `tel:+${n}`, rotulo: "Ligar", icone: "telefone" }, { tipo: "whatsapp", href: `https://wa.me/${n}`, rotulo: "Abrir no WhatsApp", icone: "whatsapp", nova: true }] : [];
@@ -75,7 +79,8 @@ export function lerCamposPersonalizados(k, form, campos) {
   for (const c of campos) {
     const n = `campo__${c.chave}`;
     let v = d[n];
-    // moeda: o texto cru (o ui.lerMoeda leria "1.500" como 1,5); normalizarCampo usa L.lerNumero
+    // moeda: o texto cru — normalizarCampo usa L.lerNumero, o leitor do CRM inteiro (plano 1000b · RB-064: o ui.lerMoeda trata o milhar «1.500», mas lê
+    // «1,234.56» diferente; o CRM fica com um leitor só)
     if (c.tipo === "moeda") { const el = form.querySelector(`[name="${n}"]`); v = el ? el.value : (typeof v === "number" ? String(v) : v); }
     const er = L.validarCampo(c, v);
     if (er) { erros.push({ nome: n, texto: er }); continue; }
@@ -85,20 +90,42 @@ export function lerCamposPersonalizados(k, form, campos) {
 }
 
 /* ============================================================ perguntas ao mover */
+/** plano 1000b · RB-038: sempre um nome FEMININO (como rel-logica.palavraAgenda) — «compromisso» saía «Agendar a compromisso», «Data e hora da compromisso». */
 function nomeCompromisso(k) {
-  return { odonto: "consulta", oficina: "visita" }[k.v.vertical] || "compromisso";
+  return { odonto: "consulta", oficina: "visita", loja: "entrega" }[k.v.vertical] || "consulta";
+}
+
+/**
+ * plano 1000b · RB-063: «Salvo» discreto AO LADO do campo (role=status, some em 2 s) — o toast a cada campo inundava o leitor de tela.
+ * `perto` = o elemento ao qual o selo se junta (o dd do campo, o rótulo do campo personalizado).
+ */
+export function marcarSalvo(k, perto, texto = "Salvo") {
+  if (!perto || typeof perto.appendChild !== "function") return null;
+  let el = [...(perto.children || [])].find(c => c && c.classList && c.classList.contains("ed-ok")) || null;
+  if (!el) { el = k.h("small", { class: "ed-ok", role: "status" }); perto.appendChild(el); }
+  el.textContent = texto;
+  el.hidden = false;
+  clearTimeout(el._salvoTimer);
+  el._salvoTimer = setTimeout(() => { el.hidden = true; el.textContent = ""; }, 2000);
+  return el;
 }
 
 async function pedirGanho(k, card, estagio, detalhe) {
   const { ui, h, L } = k;
   const funil = k.funilDoEstagio(estagio.id);
-  const faltam = L.obrigatoriosVazios(k.base.campos, "negocio", funil && funil.id, (detalhe && detalhe.campos) || card.campos || {});
+  // plano 1000b · RB-058: sem conseguir ler o negócio não dá para saber o que já está preenchido — avisa e os obrigatórios ficam OPCIONAIS no
+  // modal (só vai o que for digitado; o servidor confere o resto). Antes pedia todos como se estivessem vazios.
+  const semConferir = !!(detalhe && detalhe.falhou);
+  const faltam = L.obrigatoriosVazios(k.base.campos, "negocio", funil && funil.id, (detalhe && !semConferir && detalhe.campos) || card.campos || {})
+    .map(c => (semConferir ? { ...c, obrigatorio: false } : c));
   const ticket = card.servico && k.base.ticket ? k.base.ticket[card.servico] : null;
   const sug = card.valor ?? card.valor_previsto ?? (Number.isFinite(Number(ticket)) ? Number(ticket) : null);
   const form = h("form", { class: "crm-form", novalidate: true },
     ui.campo({ rotulo: "Valor final", nome: "valor", tipo: "moeda", valor: sug ?? "", obrigatorio: true,
       ajuda: funil && funil.conta_no_ads ? "Entra na receita do retorno do anúncio (Anúncios e relatórios)." : "O valor que foi fechado de verdade." }),
-    faltam.length ? h("p", { class: "sub" }, "Preencha também os campos obrigatórios deste funil:") : null,
+    semConferir && faltam.length ? h("p", { class: "aviso aviso-aten ng-sem-conferir", role: "note" }, ui.icone("alerta"),
+      h("span", null, "Não consegui conferir os campos agora. Preencha abaixo só os que ainda faltam; os que já estão preenchidos ficam como estão.")) : null,
+    faltam.length && !semConferir ? h("p", { class: "sub" }, "Preencha também os campos obrigatórios deste funil:") : null,
     ...faltam.map(c => campoPersonalizado(k, c, null)));
   let zeroConfirmado = false;
   return ui.modal({
@@ -106,7 +133,8 @@ async function pedirGanho(k, card, estagio, detalhe) {
     descricao: `${L.tituloCard(card)}`,
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
-      { rotulo: `Confirmar ${k.v.ganhar.toLowerCase()}`, tipo: "primario", fn: api => {
+      // plano 1000b · RB-043: só «Confirmar» (o título já diz «Marcar como «Fechou»»; «Confirmar fechou» soava errado)
+      { rotulo: "Confirmar", tipo: "primario", fn: api => {
         ui.marcarErro(form, null);
         const d = ui.lerForm(form);
         d.valor = L.lerNumero(form.querySelector('[name="valor"]').value);   // "1.500" = mil e quinhentos
@@ -122,7 +150,10 @@ async function pedirGanho(k, card, estagio, detalhe) {
         if (d.valor !== 0) zeroConfirmado = false;
         const { valores, erros } = lerCamposPersonalizados(k, form, faltam);
         if (erros.length) { ui.marcarErro(form, erros[0].nome, erros[0].texto); return false; }
-        return { valor: d.valor, ...(faltam.length ? { campos: valores } : {}) };
+        // RB-058: sem a conferência, só os valores digitados (vazio não apaga o que já existe no servidor)
+        const enviar = semConferir ? Object.fromEntries(Object.entries(valores).filter(([, v]) => v !== null && v !== undefined && v !== "" && !(Array.isArray(v) && !v.length))) : valores;
+        if (!faltam.length) return { valor: d.valor };
+        return { valor: d.valor, ...(Object.keys(enviar).length ? { campos: enviar } : {}) };
       } },
     ],
   });
@@ -144,12 +175,13 @@ async function pedirPerda(k, card, estagio) {
     motivos.length ? h("div", { class: "pilha-p" }, h("span", { class: "campo-rot" }, "Por que não deu certo?", h("span", { class: "obrig", "aria-hidden": "true" }, " *")), lista) : null,
     texto,
     retomar ? h("label", { class: "campo crm-retomar" }, h("span", { class: "campo-rot" }, "Retomar o contato depois?"), retomar,
-      h("small", { class: "campo-ajuda" }, "Cria uma tarefa às 9h do dia escolhido, ligada a esta oportunidade.")) : null);
+      // plano 1000b · RB-041: o termo da vertical («a este orçamento», «a esta oportunidade»)
+      h("small", { class: "campo-ajuda" }, `Cria uma tarefa às 9h do dia escolhido, ligada a ${k.v.art("negocio") === "a" ? "esta" : "este"} ${k.v.min("negocio")}.`)) : null);
   return ui.modal({
     titulo: `Marcar como «${estagio.nome}»`, corpo: form, descricao: L.tituloCard(card),
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
-      { rotulo: `Confirmar ${k.v.perder.toLowerCase()}`, tipo: "perigo", fn: api => {
+      { rotulo: "Confirmar", tipo: "perigo", fn: api => {     // plano 1000b · RB-043
         const sel = form.querySelector(`input[name="${nomeRadio}"]:checked`);
         const t = form.querySelector("textarea").value.trim();
         if (motivos.length && !sel) { api.erro("Escolha o motivo da perda."); return false; }
@@ -201,7 +233,7 @@ export async function prepararMovimento(k, card, estagio) {
     const funil = k.funilDoEstagio(estagio.id);
     const obrig = k.L.camposDe(k.base.campos, "negocio", funil && funil.id).some(c => c.obrigatorio);
     if (obrig && !card.campos) {
-      try { detalhe = (await k.api.rpcC("nx_negocio_ver", { p_id: card.id })).negocio; } catch { detalhe = null; }
+      try { detalhe = (await k.api.rpcC("nx_negocio_ver", { p_id: card.id })).negocio; } catch { detalhe = { falhou: true }; }     // plano 1000b · RB-058
     }
     return pedirGanho(k, card, estagio, detalhe);
   }
@@ -284,7 +316,7 @@ export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro
     try {
       if ((await salvar(v)) === CANCELAR_EDICAO) return;
       ultimo = v;
-      ui.toast("Salvo.", { tipo: "ok", ms: 1500 });
+      marcarSalvo(k, controle.parentElement);      // plano 1000b · RB-063: status discreto ao lado do campo (antes: toast a cada campo)
     } catch (e) {
       ui.limpar(erro);
       erro.textContent = k.erro(e);
@@ -301,7 +333,14 @@ export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro
   controle.addEventListener(evento, aoMudar);
   if (avisoEl && evento !== "change") controle.addEventListener("change", pintarAviso);
   if (controle.tagName === "INPUT" && controle.type !== "date" && controle.type !== "datetime-local") {
-    controle.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); controle.blur(); } if (ev.key === "Escape") { controle.value = exibir(ultimo); controle.blur(); } });
+    controle.addEventListener("keydown", ev => {
+      if (ev.key === "Enter") { ev.preventDefault(); controle.blur(); }
+      if (ev.key === "Escape") {
+        // plano 1000b · RB-057: com o valor mudado, o Esc só desfaz a edição — não sobe para o diálogo e não fecha a gaveta (como o título)
+        if (controle.value !== exibir(ultimo)) { ev.preventDefault(); ev.stopPropagation(); }
+        controle.value = exibir(ultimo); controle.blur();
+      }
+    });
   }
   // um bloco por campo (M24): no desktop é «rótulo | valor»; no celular os blocos formam uma grade de 2 colunas (`largo` ocupa a linha toda)
   return [h("div", { class: ["ng-campo", largo && "ng-campo-largo"] }, h("dt", null, h("label", { for: id }, rotulo)), h("dd", null, controle, avisoEl), erro)];
@@ -386,6 +425,17 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
     irPara(ev.key.toLowerCase() === "j" ? 1 : -1);
   };
   if (typeof vizinhos === "function") corpo.addEventListener("keydown", aoTeclaNav);
+
+  /** plano 1000b · RB-061: outro negócio (do mesmo contato) na MESMA gaveta, como o ‹ › — e entra em «Recentes» da paleta. */
+  function trocarPara(alvo, titulo) {
+    if (fechada || alvo == null || alvo === id) return false;
+    if (pend) { ui.toast("Espere o «Desfazer» terminar para abrir outro.", { tipo: "info" }); return false; }
+    if (typeof g.estaSujo === "function" && g.estaSujo()) { ui.toast("Há texto não salvo nesta gaveta.", { tipo: "info" }); return false; }
+    id = alvo; focouTitulo = false; ultimo = null; abaAtual = "resumo";
+    if (typeof k.lembrarRecente === "function") try { k.lembrarRecente({ hash: `#/crm/negocio/${alvo}`, titulo: titulo || k.v.negocio, tipo: "negocio" }); } catch { /* ok */ }
+    carregar({ zerar: true });
+    return true;
+  }
 
   function avisar(n) { if (aoMudar && n) try { aoMudar(n); } catch (e) { console.error(e); } }
 
@@ -473,11 +523,17 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
         if (L.movimentoAdiado(antes.estagio && antes.estagio.tipo, e.tipo)) { await moverAdiado(n, e, extra, d); return; }
         const card = await moverNegocio(k, n, e, { extra });
         avisar(card);
-        ui.anunciar(`Movido para ${e.nome}.`);
+        // plano 1000b · RB-048: «Movida» quando o registro da vertical é feminino (oportunidade), como no quadro
+        const movido = `Movid${k.v.art("negocio") === "a" ? "a" : "o"}`;
+        ui.anunciar(`${movido} para ${e.nome}.`);
         await carregar();
-        if (antes.estagio) ui.acaoComDesfazer({ texto: `Movido para «${e.nome}».${e.tipo !== "aberto" ? " Mensagens automáticas já enviadas não voltam." : ""}`, reverter: async () => {
+        if (antes.estagio) ui.acaoComDesfazer({ texto: `${movido} para «${e.nome}».${e.tipo !== "aberto" ? " Mensagens automáticas já enviadas não voltam." : ""}`, reverter: async () => {
           const volta = await moverNegocio(k, { id: n.id }, antes.estagio, { ordem: antes.ordem, extra: L.extraDeVolta(antes) });
-          if (extra && extra.consulta_em && antes.consulta_em !== extra.consulta_em) await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: n.id, consulta_em: antes.consulta_em } });
+          // plano 1000b · RB-059: a 2ª gravação (a data) falhou — a etapa voltou, mas a data não: aviso específico (não o erro genérico)
+          if (extra && extra.consulta_em && antes.consulta_em !== extra.consulta_em) {
+            try { await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: n.id, consulta_em: antes.consulta_em } }); }
+            catch { ui.toast(L.avisoDataNaoVoltou(k.v.vertical), { tipo: "erro" }); if (!fechada) await carregar(); return; }
+          }
           avisar(volta);
           if (!fechada) await carregar();
         } });
@@ -545,7 +601,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
     titulo.addEventListener("blur", async () => {
       const t = titulo.value.trim();
       if (t === tituloAntes) return;
-      try { await salvar({ titulo: t }); tituloAntes = t; tituloTxt.textContent = t || (d.contato && d.contato.nome) || n.nome || "Sem título"; ui.toast("Salvo.", { tipo: "ok", ms: 1500 }); }
+      try { await salvar({ titulo: t }); tituloAntes = t; tituloTxt.textContent = t || (d.contato && d.contato.nome) || n.nome || "Sem título"; ui.anunciar("Título salvo."); }     // plano 1000b · RB-063
       catch (e) { k.toastErro(e); titulo.value = tituloAntes; }
     });
     const tituloTxt = h("h3", { class: "ng-titulo ng-titulo-txt", tabindex: "-1" }, n.titulo || (d.contato && d.contato.nome) || n.nome || "Sem título");
@@ -575,7 +631,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
           await ag.marcarConsulta(k.ctx, { negocio: { id: n.id, titulo: n.titulo || (d.contato && d.contato.nome) || n.nome, servico: n.servico, funil_nome: funil ? funil.nome : "", inicio: n.consulta_em, estagio_id: n.estagio_id, ordem: n.ordem ?? null },
             aoMudar: () => { if (!fechada) carregar(); } });
         } catch (err) { k.toastErro(err); }
-      } } }, ui.icone("calendario"), remarcar ? "Remarcar consulta" : "Marcar consulta"));
+      } } }, ui.icone("calendario"), remarcar ? `Remarcar ${nomeCompromisso(k)}` : `Marcar ${nomeCompromisso(k)}`));      // plano 1000b · RB-040: «Marcar visita» na oficina
     }
     if (podeEditar && n.status === "aberto") {
       if (estGanho) acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-ganhou", disabled: pendente, on: { click: () => mover(estGanho) } }, ui.icone("check"), k.v.ganhar));
@@ -589,6 +645,16 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
       acoes.appendChild(h("button", { type: "button", class: "bt bt-prim", on: { click: () => iniciarPosVenda(k, n, d.contato, { aoCriar: nv => { avisar({ ...nv, criado: true }); } }) } },
         ui.icone("mais"), "Iniciar pós-venda"));
     }
+    // plano 1000b · RB-264: «Tarefa» nas ações do topo (como na ficha) — antes era preciso ir à aba Tarefas
+    if (podeEditar && !pendente) {
+      acoes.appendChild(h("button", { type: "button", class: "bt bt-sec ng-nova-tarefa", on: { click: async () => {
+        try {
+          const T = await k.mod("tarefas");
+          const t = await T.formTarefa(k, null, { negocio_id: n.id, contato_id: d.contato && d.contato.id != null ? d.contato.id : (n.contato_id ?? null) });
+          if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); if (!fechada) carregar(); }
+        } catch (err) { k.toastErro(err); }
+      } } }, ui.icone("tarefa"), "Tarefa"));
+    }
     const menuBt = h("button", { type: "button", class: "bt-icone", "aria-label": "Mais ações" }, ui.icone("opcoes"));
     menuBt.addEventListener("click", () => {
       const itens = [];
@@ -598,11 +664,13 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
       const dicaTrava = pend && pend.efetivado ? " (gravando a última mudança…)" : " (espere o «Desfazer» terminar)";
       if (podeEditar) itens.push({ rotulo: `Mover para outro funil…${travado ? dicaTrava : ""}`, icone: "funil", desabilitado: travado, fn: () => moverDeFunil(k, n, { aoMover: async card => { avisar(card); await carregar(); } }) });
       if (d.contato) itens.push({ rotulo: `Ver ficha d${k.v.art("contato") === "a" ? "a" : "o"} ${k.v.min("contato")}`, icone: "contato", fn: () => abrirContato(k, d.contato.id, {}) });
-      itens.push({ rotulo: "Copiar link", icone: "link", fn: () => ui.copiar(k.ctx.linkPublico ? k.ctx.linkPublico(`#/crm/negocio/${n.id}`) : location.href) });
+      // plano 1000b · RB-045: sem linkPublico do shell, o endereço DO NEGÓCIO (aberto pelo cartão, location.href era só #/crm)
+      itens.push({ rotulo: "Copiar link", icone: "link", fn: () => ui.copiar(k.ctx.linkPublico ? k.ctx.linkPublico(`#/crm/negocio/${n.id}`) : `${location.origin || ""}${location.pathname || ""}#/crm/negocio/${n.id}`) });
       if (k.pode("admin")) itens.push("-", { rotulo: `Excluir${travado ? dicaTrava : ""}`, icone: "lixeira", perigo: true, desabilitado: travado, fn: async () => {
         const ok = await ui.confirmar({ titulo: `Excluir ${k.v.min("negocio")}?`, texto: `As tarefas e notas d${k.v.art("negocio") === "a" ? "ela" : "ele"} também serão apagadas. Não dá para desfazer.`, perigo: true, digitar: "excluir" });
         if (!ok) return;
-        try { await k.api.rpcC("nx_negocio_excluir", { p_id: n.id }); ui.toast("Excluído.", { tipo: "ok" }); avisar({ id: n.id, excluido: true }); g.fechar(); }
+        // plano 1000b · RB-047: «Excluída.» para oportunidade/venda
+        try { await k.api.rpcC("nx_negocio_excluir", { p_id: n.id }); ui.toast(`Excluíd${k.v.art("negocio") === "a" ? "a" : "o"}.`, { tipo: "ok" }); avisar({ id: n.id, excluido: true }); g.fechar(); }
         catch (e) { k.toastErro(e); }
       } });
       ui.menu(menuBt, itens);
@@ -610,17 +678,18 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
     acoes.appendChild(menuBt);
 
     /* fita de etapas */
-    const fita = h("div", { class: "ng-fita", role: "list", "aria-label": "Etapas do funil" });
+    // plano 1000b · RB-060: <ol> com um <li> por etapa e o BOTÃO dentro (antes <button role=listitem>: o leitor não dizia que era botão)
+    const fita = h("ol", { class: "ng-fita", role: "list", "aria-label": "Etapas do funil" });
     const ordemAtual = estagio ? estagio.ordem : -1;
     for (const e of (funil ? funil.estagios : [])) {
       const atual = e.id === n.estagio_id;
       // plano 1000 (CR-069): a etapa atual continua FOCÁVEL (aria-disabled, não disabled) para o leitor de tela ouvir «Etapa atual»
-      const b = h("button", { type: "button", role: "listitem", class: ["ng-etapa", e.tipo === "aberto" && e.ordem < ordemAtual && n.status === "aberto" && "feita"],
+      const b = h("button", { type: "button", class: ["ng-etapa", e.tipo === "aberto" && e.ordem < ordemAtual && n.status === "aberto" && "feita"],
         style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, "aria-current": atual ? "step" : null, "aria-disabled": atual ? "true" : null,
         disabled: !atual && (!podeEditar || pendente), title: atual ? `Etapa atual: ${e.nome}` : `Mover para ${e.nome}` },
         h("span", null, e.nome), atual ? h("span", { class: "sr-only" }, " (etapa atual)") : null);
       if (!atual && podeEditar) b.addEventListener("click", () => mover(e));
-      fita.appendChild(b);
+      fita.appendChild(h("li", { class: "ng-fita-it" }, b));
     }
 
     // tempo na etapa atual com a mesma escala do cartão (verde→âmbar→vermelho pelo prazo da etapa ou 3/7 dias); só quando o servidor manda estagio_em
@@ -649,7 +718,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
       fita,
       blocoPresenca(),
       n.status === "perdido" && (n.motivo_perda_id || n.motivo_perda_txt)
-        ? h("p", { class: "aviso aviso-ruim" }, ui.icone("info"), h("span", null, `Motivo: ${k.motivosPorId()[n.motivo_perda_id] || "—"}${n.motivo_perda_txt ? ` — ${n.motivo_perda_txt}` : ""}`)) : null);
+        ? h("p", { class: "aviso aviso-ruim" }, ui.icone("info"), h("span", null, L.textoMotivoPerda(k.motivosPorId()[n.motivo_perda_id], n.motivo_perda_txt))) : null);      // plano 1000b · RB-046
 
     /* ---------- abas ---------- */
     const secoes = { resumo: null, tarefas: null, notas: null, tempo: null };
@@ -703,7 +772,7 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
               } } }, ui.icone("whatsapp"), "Abrir conversa") : null,
               h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => abrirContato(k, ct.id, {}) } }, "Ver ficha")))));
       } else {
-        el.appendChild(h("p", { class: "aviso" }, ui.icone("info"), h("span", null, `Sem ${k.v.min("contato")} ligado (o cadastro foi removido). Os números do negócio continuam no retorno do anúncio.`)));
+        el.appendChild(h("p", { class: "aviso" }, ui.icone("info"), h("span", null, `Sem ${k.v.min("contato")} ligado (o cadastro foi removido). Os números d${k.v.art("negocio")} ${k.v.min("negocio")} continuam no retorno do anúncio.`)));   // plano 1000b · RB-049
       }
       /* C3: de onde veio — «Veio do site · campanha X · página Y · clique em 06/10 10:12», «Veio do anúncio «nome» · campanha …» (rastreio,
          campanha_ext/anuncio_ext, plataforma e campanha_nome de nx_negocio_ver; o bloco d.anuncio traz os nomes da métrica quando há) */
@@ -796,7 +865,13 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
           const { valores, erros } = lerCamposPersonalizados(k, form, [c]);
           ui.marcarErro(form, cmp.dataset.campo, "");
           if (erros.length && !(c.obrigatorio && erros[0].texto.startsWith("Preencha"))) { ui.marcarErro(form, erros[0].nome, erros[0].texto); return; }
-          try { await salvar({ campos: { [c.chave]: valores[c.chave] ?? null } }); ui.toast("Salvo.", { tipo: "ok", ms: 1500 }); }
+          // plano 1000b · RB-220: a mesma regra da ficha — obrigatório pode ser limpo, com aviso (cobrado só ao marcar como ganho)
+          const limpouObrig = c.obrigatorio && erros.length > 0;
+          try {
+            await salvar({ campos: { [c.chave]: valores[c.chave] ?? null } });
+            // plano 1000b · RB-063: o «Salvo» fica ao lado do campo; o toast só para o aviso do obrigatório
+            if (limpouObrig) ui.toast(`Salvo. «${c.rotulo}» é obrigatório: preencha antes de marcar como ${k.v.ganhar.toLowerCase()}.`, { tipo: "aten", ms: 5000 }); else marcarSalvo(k, cmp);
+          }
           catch (e) { ui.marcarErro(form, cmp.dataset.campo, k.erro(e)); }
         });
         el.appendChild(h("section", { class: "ng-bloco", "aria-label": "Campos" }, h("div", { class: "ng-bloco-cab" }, h("h3", null, "Campos")),
@@ -808,12 +883,13 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
       if (outros.length) {
         el.appendChild(h("details", { class: "ng-bloco ng-outros-campos" },
           h("summary", null, `Campos de outros funis (${outros.length})`),
-          h("p", { class: "sub" }, "Preenchidos quando este negócio estava em outro funil. Ficam guardados; voltam a ser editáveis se ele voltar para lá."),
+          // plano 1000b · RB-049: o termo da vertical, com o artigo certo
+          h("p", { class: "sub" }, `Preenchidos quando ${k.v.art("negocio") === "a" ? "esta" : "este"} ${k.v.min("negocio")} estava em outro funil. Ficam guardados; voltam a ser editáveis se ${k.v.art("negocio") === "a" ? "ela" : "ele"} voltar para lá.`),
           h("dl", { class: "ng-kv" }, outros.map(o => h("div", { class: "ng-campo" }, h("dt", null, o.rotulo), h("dd", null, o.texto))))));
       }
 
       /* observação */
-      const obs = h("textarea", { rows: 3, maxlength: 5000, placeholder: "Observações sobre este negócio" }, n.obs || "");
+      const obs = h("textarea", { rows: 3, maxlength: 5000, placeholder: `Observações sobre ${k.v.art("negocio") === "a" ? "esta" : "este"} ${k.v.min("negocio")}` /* plano 1000b · RB-049 */ }, n.obs || "");
       const dlObs = h("dl", { class: "ng-kv" }, ...linhaEd(k, { rotulo: "Observação", desabilitado: !podeEditar, controle: obs, largo: true,
         ler: c => c.value.trim() || null, salvar: v => salvar({ obs: v }) }));
       el.appendChild(h("section", { class: "ng-bloco" }, dlObs));
@@ -825,12 +901,15 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
         for (const o of d.outros || []) {
           const e = k.estagio(o.estagio_id);
           lst.appendChild(h("button", { type: "button", class: "ng-mini", style: e && k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null,
-            on: { click: () => { g.fechar(); setTimeout(() => abrirNegocio(k, o.id, { aoMudar }), 240); } } },
+            // plano 1000b · RB-061: troca o negócio NA MESMA gaveta (como o ‹ ›) e entra em «Recentes» — antes fechava e reabria sem ‹ › nem Recentes
+            on: { click: () => { trocarPara(o.id, k.L.tituloCard(o)); } } },
             h("i", { "aria-hidden": "true" }), h("span", null, `${k.L.tituloCard(o)} · ${e ? e.nome : ""}`),
             h("b", null, ui.brl(o.status === "ganho" ? o.valor : o.valor_previsto))));
         }
+        // plano 1000b · RB-051: sem o módulo Conversas o protocolo é só texto (o link levava a uma tela que a conta não tem)
+        const temConversas = !!(k.ctx && typeof k.ctx.temModulo === "function" && k.ctx.temModulo("conversas"));
         for (const c of d.conversas || []) {
-          lst.appendChild(h("a", { class: "fx-proto", href: `#/conversas/${c.id}` }, ui.icone("chat"),
+          lst.appendChild(h(temConversas ? "a" : "span", { class: "fx-proto", href: temConversas ? `#/conversas/${c.id}` : null }, ui.icone("chat"),
             h("b", { class: "mono" }, c.protocolo),
             h("span", null, L.linhaAtendimento(c, ui.dataBR))));
         }
@@ -864,7 +943,8 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
 /* ============================================================ mover de funil */
 export async function moverDeFunil(k, n, { aoMover } = {}) {
   const { ui, h, L } = k;
-  const permitidos = L.funisPermitidos(k.base.funis, n.funil_id, n.status).filter(f => f.id !== n.funil_id);
+  // plano 1000b · RB-255: funil de destino sem etapa ABERTA (só ganho/perda) não entra — o select de etapa ficaria vazio e «Mover» daria erro
+  const permitidos = L.funisPermitidos(k.base.funis, n.funil_id, n.status).filter(f => f.id !== n.funil_id && (f.estagios || []).some(e => e.tipo === "aberto"));
   if (!permitidos.length) {
     const f = k.funil(n.funil_id);
     ui.toast(f && f.conta_no_ads && n.status !== "aberto" ? L.textoErro({ codigo: "funil_invalido", hint: "fechado_no_ads" }, { vocab: k.v })
@@ -883,7 +963,10 @@ export async function moverDeFunil(k, n, { aoMover } = {}) {
   preencher();
   const f = k.funil(n.funil_id);
   const aviso = f && f.conta_no_ads ? h("p", { class: "aviso aviso-aten" }, ui.icone("info"), h("span", null, `${k.v.art("negocio") === "a" ? "Esta" : "Este"} ${k.v.min("negocio")} está no funil de anúncios: só pode ir para outro funil de anúncios, para a receita e as conversas do anúncio não sumirem.`)) : null;
-  const corpo = h("form", { class: "crm-form", novalidate: true }, aviso, selFunil, selEtapa);
+  // plano 1000b · RB-254: de onde o negócio sai
+  const atual = k.estagio(n.estagio_id);
+  const deOnde = h("p", { class: "sub ng-hoje-em" }, `Hoje em: ${f ? f.nome : "—"} → ${atual ? atual.nome : "—"}`);
+  const corpo = h("form", { class: "crm-form", novalidate: true }, deOnde, aviso, selFunil, selEtapa);
   const r = await ui.modal({ titulo: "Mover para outro funil", corpo, largura: "p", acoes: [
     { rotulo: "Cancelar", tipo: "neutro", valor: null },
     { rotulo: "Mover", tipo: "primario", fn: async api => {
@@ -891,7 +974,8 @@ export async function moverDeFunil(k, n, { aoMover } = {}) {
       if (!e) { api.erro("Escolha a etapa."); return false; }
       try { const card = await moverComPerguntas(k, n, e); return card || false; } catch (err) { api.erro(k.erro(err)); return false; }
     } }] });
-  if (r) { ui.toast("Movido.", { tipo: "ok" }); if (aoMover) aoMover(r); }
+  // plano 1000b · RB-047: «Movida para «Funil».» na vertical de termo feminino
+  if (r) { const fd = k.funilDoEstagio && k.funilDoEstagio(r.estagio_id); ui.toast(`Movid${k.v.art("negocio") === "a" ? "a" : "o"}${fd && fd.nome ? ` para «${fd.nome}»` : ""}.`, { tipo: "ok" }); if (aoMover) aoMover(r); }
 }
 
 /* ============================================================ pós-venda */
@@ -899,9 +983,11 @@ export async function moverDeFunil(k, n, { aoMover } = {}) {
 export async function iniciarPosVenda(k, n, contato, { aoCriar } = {}) {
   const { ui, h } = k;
   const funis = k.base.funis.filter(f => !f.conta_no_ads && f.ativo !== false);
-  if (!funis.length) { ui.toast("Crie um funil de pós-venda (fora do Ads) em Configurações → Funis e etapas.", { tipo: "info" }); return; }
+  // plano 1000b · RB-050: sem o jargão «fora do Ads»
+  if (!funis.length) { ui.toast("Crie um funil de pós-venda (que não conta nos anúncios) em Configurações → Funis e etapas.", { tipo: "info" }); return; }
+  const doAds = !!(k.funil(n.funil_id) || {}).conta_no_ads;
   const form = h("form", { class: "crm-form", novalidate: true },
-    h("p", { class: "sub" }, `Cria ${k.v.art("negocio") === "a" ? "uma nova" : "um novo"} ${k.v.min("negocio")} para ${contato.nome || "este contato"}. ${k.v.art("negocio") === "a" ? "A" : "O"} atual continua ${k.v.ganhar.toLowerCase()} no funil de anúncios — a receita do anúncio não muda.`),
+    h("p", { class: "sub" }, `Cria ${k.v.art("negocio") === "a" ? "uma nova" : "um novo"} ${k.v.min("negocio")} para ${contato.nome || "este contato"}. ${k.v.art("negocio") === "a" ? "A" : "O"} atual continua ${k.v.ganhar.toLowerCase()}${doAds ? " no funil de anúncios — a receita do anúncio não muda" : ""}.`),     // plano 1000b · RB-050
     ui.campo({ rotulo: "Título", nome: "titulo", valor: `Pós-venda — ${contato.nome || k.L.tituloCard(n)}`.slice(0, 120), max: 120 }));
   // plano 1000 (CR-220): a etapa em que nasce (as abertas do funil escolhido; antes era sempre a 1ª) e (CR-221) o serviço e o responsável do negócio
   // ganho já preenchidos (dá para trocar) — antes o pós-venda vinha só com o título
@@ -957,13 +1043,14 @@ export function avisoDuplicado(k, inputTel, { aoUsar, ignorarId = null, checarJa
   let seq = 0;
   const checar = ui.debounce(async () => {
     const minha = ++seq;
-    const dig = String(inputTel.value || "").replace(/\D/g, "");
+    // plano 1000b · RB-086: com «+» (número de fora) confere até 15 dígitos — a mesma régua do acharDuplicado
+    const dig = L.digitosDuplicado(inputTel.value);
     ui.limpar(caixa); caixa.hidden = true;
-    if (dig.length < 10 || dig.length > 13) return;
+    if (!dig) return;
     try {
       const r = await k.api.rpcC("nx_contatos_listar", { p_filtro: { busca: dig }, p_por_pagina: 5 });
       if (minha !== seq) return;
-      const achado = L.acharDuplicado(r && r.itens, dig, { ignorarId });
+      const achado = L.acharDuplicado(r && r.itens, inputTel.value, { ignorarId });
       if (!achado) return;
       const quando = achado.ultimo_contato_em ? `última conversa ${ui.relativo(achado.ultimo_contato_em)}` : "ainda sem conversa";
       caixa.append(ui.icone("info"),
@@ -992,6 +1079,14 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
   }
   const g = ui.gaveta({ titulo: k.v.novo ? k.v.novo("negocio") : `Novo ${k.v.min("negocio")}`, largura: "m", aoFechar });
   const funis = k.base.funis.filter(f => f.ativo !== false);
+  // plano 1000b · RB-056: sem funil ativo o formulário mandaria funil vazio (erro técnico do servidor) — a gaveta explica e leva às configurações
+  if (!(dados.funis || funis).length) {
+    const admin = typeof k.pode === "function" && k.pode("admin");
+    g.corpo.appendChild(ui.vazio({ titulo: "Crie um funil antes.", tema: "crm",
+      texto: admin ? `Para criar ${k.v.art("negocio") === "a" ? "uma" : "um"} ${k.v.min("negocio")}, ative ou crie um funil em Configurações → Funis e etapas.` : "Peça ao administrador para criar ou ativar um funil.",
+      acao: admin && k.ctx && typeof k.ctx.navegar === "function" ? { rotulo: "Abrir configurações", fn: () => { g.fechar(); k.ctx.navegar("#/config/funis"); } } : null }));
+    return g;
+  }
   const funilIni = k.funil(dados.funil_id) || k.funilDoEstagio(dados.estagio_id) || k.funilPadrao();
   const form = h("form", { class: "crm-form", novalidate: true });
 
@@ -1022,7 +1117,11 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
         const um = lista[0];
         zonaContato.appendChild(h("p", { class: "aviso aviso-aten crm-ja-aberto", role: "status" }, ui.icone("info"),
           h("span", null, `Já tem ${n} ${n === 1 ? t.n : t.ns} abert${t.a}${n === 1 ? "" : "s"}${um ? `: «${L.tituloCard(um)}»` : ""}. Criar outr${t.a} só se for mesmo outro assunto.`),
-          um ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { g.fechar(); setTimeout(() => abrirNegocio(k, um.id, {}), 240); } } }, "Abrir")
+          // plano 1000b · RB-061: o aberto daqui também entra em «Recentes»
+          um ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => {
+            if (typeof k.lembrarRecente === "function") try { k.lembrarRecente({ hash: `#/crm/negocio/${um.id}`, titulo: L.tituloCard(um), tipo: "negocio" }); } catch { /* ok */ }
+            g.fechar(); setTimeout(() => abrirNegocio(k, um.id, {}), 240);
+          } } }, "Abrir")
             : h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => abrirContato(k, contato.id, {}) } }, "Ver ficha")));
       }
       return;
@@ -1040,7 +1139,7 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
       return;
     }
     const busca = h("input", { type: "search", placeholder: "Buscar por nome ou telefone", "aria-label": `Buscar ${k.v.min("contato")}`, autocomplete: "off" });
-    const res = h("div", { class: "crm-busca-res", role: "listbox", "aria-label": "Resultados" });
+    const res = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Resultados" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
     let seq = 0;
     const buscar = ui.debounce(async () => {
       const q = busca.value.trim();
@@ -1051,7 +1150,7 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
         const r = await k.api.rpcC("nx_contatos_listar", { p_filtro: { busca: q }, p_por_pagina: 8 });
         if (minha !== seq) return;
         if (!r.itens.length) res.appendChild(h("p", { class: "flut-vazio" }, "Nada encontrado. Cadastre como novo."));
-        for (const c of r.itens) res.appendChild(h("button", { type: "button", role: "option", on: { click: () => { contato = c; desenharContato(); } } },
+        for (const c of r.itens) res.appendChild(h("button", { type: "button", on: { click: () => { contato = c; desenharContato(); } } },
           ui.avatar(c.nome || c.telefone, c.id), h("span", null, h("b", null, L.nomeContato(c)), h("small", null, [c.telefone ? ui.telBR(c.telefone) : null, c.email].filter(Boolean).join(" · ")))));
       } catch (e) { if (minha === seq) res.appendChild(h("p", { class: "flut-vazio" }, k.erro(e))); }
     }, 250);
@@ -1096,8 +1195,11 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
     const iv = inValor.querySelector("input");
     if (Number.isFinite(t) && !iv.value) iv.value = t.toLocaleString("pt-BR", { minimumFractionDigits: 2 });
   });
-  const dono = h("div", { class: "campo" }, h("label", null, "Responsável"),
-    ui.seletorPessoa({ usuarios: k.base.usuarios, valor: k.eu(), rotulo: "Responsável" }));
+  // plano 1000b · RB-207: o rótulo aponta para o seletor (clicar em «Responsável» foca o select)
+  const selDonoNovo = ui.seletorPessoa({ usuarios: k.base.usuarios, valor: k.eu(), rotulo: "Responsável" });
+  const idDonoNovo = L.idUnico("ng-dono");
+  (selDonoNovo.tagName === "SELECT" ? selDonoNovo : selDonoNovo.querySelector("select")).id = idDonoNovo;
+  const dono = h("div", { class: "campo" }, h("label", { for: idDonoNovo }, "Responsável"), selDonoNovo);
   dono.querySelector("select").name = "dono_id";
   let etiquetas = [];
   // formulário que só GUARDA o valor (grava no «Criar»): emite na hora — com a pausa de 300 ms a etiqueta marcada logo antes do «Criar» ficava fora
@@ -1106,11 +1208,21 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
   // M25: uma chave por intenção. Erro ambíguo (prazo estourado depois de o servidor aplicar) repete com a MESMA chave; mudou o conteúdo, chave nova.
   const status = h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true });
   let reqAtual = null, reqConteudo = "";
+  // plano 1000b · RB-062: data da consulta no passado avisa aqui também (CR-052 — a gaveta e o modal da agenda já avisavam); não bloqueia
+  const campoConsulta = ui.campo({ rotulo: `Data e hora da ${nomeCompromisso(k)}`, nome: "consulta_em", tipo: "datahora" });
+  const avisoConsulta = h("small", { class: "ed-aviso", role: "status", hidden: true });
+  campoConsulta.appendChild(avisoConsulta);
+  const inConsulta = campoConsulta.querySelector("input");
+  if (inConsulta) inConsulta.addEventListener("change", () => {
+    const passou = !!inConsulta.value && L.dataPassou(inConsulta.value);
+    avisoConsulta.textContent = passou ? `${L.TEXTO_DATA_PASSOU} O lembrete automático não vai rodar para ela.` : "";
+    avisoConsulta.hidden = !passou;
+  });
 
   form.append(zonaContato,
-    ui.campo({ rotulo: "Título (opcional)", nome: "titulo", max: 120, placeholder: `Ex.: ${servicos[0] || "Implante superior"}` }),
-    h("div", { class: "crm-form-2" }, selFunil, selEtapa, inServico, inValor,
-      ui.campo({ rotulo: `Data e hora da ${nomeCompromisso(k)}`, nome: "consulta_em", tipo: "datahora" }), dono),
+    // plano 1000b · RB-042: sem serviços no ticket o exemplo é da vertical (oficina não vê «Implante superior»)
+    ui.campo({ rotulo: "Título (opcional)", nome: "titulo", max: 120, placeholder: `Ex.: ${servicos[0] || L.exemploTituloNegocio(k.v && k.v.vertical)}` }),
+    h("div", { class: "crm-form-2" }, selFunil, selEtapa, inServico, inValor, campoConsulta, dono),
     h("div", { class: "pilha-p" }, h("span", { class: "campo-rot" }, "Etiquetas"), etq),
     status, erro,
     h("div", { class: "linha linha-fim" },
@@ -1135,6 +1247,8 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
     else if (modoNovo) {
       if (!d.c_nome && !d.c_telefone) { ui.marcarErro(form, "c_nome", "Informe o nome ou o telefone."); return; }
       if (d.c_telefone && !L.normalizarTelefone(d.c_telefone)) { ui.marcarErro(form, "c_telefone", "Telefone inválido. Use DDD + número."); return; }
+      // plano 1000b · RB-053: e-mail conferido aqui, no campo (a mesma regra da ficha) — antes o erro voltava genérico do servidor
+      if (d.c_email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(d.c_email).trim())) { ui.marcarErro(form, "c_email", "E-mail inválido. Confira, por exemplo: ana@exemplo.com.br."); return; }
       p.contato = { nome: d.c_nome || null, telefone: d.c_telefone || null, email: d.c_email || null };
     } else { erro.textContent = `Escolha ${k.v.art("contato") === "a" ? "a" : "o"} ${k.v.min("contato")} ou cadastre ${k.v.art("contato") === "a" ? "uma nova" : "um novo"}.`; erro.hidden = false; return; }
     const conteudo = JSON.stringify(p);

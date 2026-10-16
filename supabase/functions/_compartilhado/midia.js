@@ -275,9 +275,15 @@ export async function tratar(req, env, deps = {}) {
       const visiveis = await pathsVisiveis(db, ctx, cliente, [...new Set(paths)]);
       if (!visiveis.length) return respostaPainel({ ok: true, urls: {} });
       // plano 1000 (SV-220): o link de leitura vale 10 min (o painel reassina ao abrir de novo); 1 h só no envio (a Graph busca)
+      // plano 1000b · CB-035: {download: true, nome?} → URL com download= (o Storage manda Content-Disposition: attachment) — o
+      // «Baixar» e os documentos de tipo incomum não abrem inline no navegador
+      const baixar = corpo.download === true;
+      if (baixar && corpo.nome != null && (typeof corpo.nome !== "string" || corpo.nome.length > NOME_MAX || CONTROLE.test(corpo.nome))) throw new ErroApi("dados_invalidos", 400, "nome");
       const r = await st.assinar(visiveis, PRAZO_VER_S);
       if (!r.ok) throw new ErroApi("erro_interno", 502, `Storage: ${r.erro}`);
-      return respostaPainel({ ok: true, urls: r.urls });
+      if (!baixar) return respostaPainel({ ok: true, urls: r.urls });
+      const comDownload = u => `${u}${u.includes("?") ? "&" : "?"}download=${encodeURIComponent(corpo.nome ? String(corpo.nome).trim() : "")}`;
+      return respostaPainel({ ok: true, urls: Object.fromEntries(Object.entries(r.urls).map(([p, u]) => [p, comDownload(u)])) });
     }
     // apagar (uso manual; a exclusão de contato usa a fila nx_midia_lixo)
     const r = await st.apagar(paths);

@@ -152,9 +152,11 @@ test("contratos 3, 6, 7, 10, 11: assinaturas exatas das RPCs novas e das reescri
   }
   // plano 1000 (SV-040): nx_fila_concluir foi reescrita de novo (mesma assinatura) na 20261013a — só mexe em item 'enviando'
   assert.ok(ultimaDef("nx_fila_concluir").arquivo.startsWith("20261013a"), `nx_fila_concluir: última definição na 20261013a (${ultimaDef("nx_fila_concluir").arquivo})`);
-  for (const n of ["nx_auto_ia_falhar", "nx_auto_ia_chamar", "nx_ia_registrar_reserva", "nx_agenda_marcar_core", "nx_agenda_dia"]) {
+  for (const n of ["nx_auto_ia_falhar", "nx_auto_ia_chamar", "nx_ia_registrar_reserva", "nx_agenda_marcar_core"]) {
     assert.ok(ultimaDef(n).arquivo.startsWith("20261008c"), `${n}: última definição na c (${ultimaDef(n).arquivo})`);
   }
+  // plano 1000b (CB-211): nx_agenda_dia reescrita na mesma assinatura na 20261015a (nome da campanha uma vez por campanha)
+  assert.ok(/^20261008c|^20261015a/.test(ultimaDef("nx_agenda_dia").arquivo), `nx_agenda_dia: 20261008c/20261015a (${ultimaDef("nx_agenda_dia").arquivo})`);
   // plano 1000 (srv-2): nx_auto_ia_pegar (SV-150, 20261013c), nx_inicio e nx_dados (contratos das telas, 20261013d) reescritas na mesma assinatura
   assert.ok(ultimaDef("nx_auto_ia_pegar").arquivo.startsWith("20261013c"), `nx_auto_ia_pegar: 20261013c (${ultimaDef("nx_auto_ia_pegar").arquivo})`);
   for (const n of ["nx_inicio", "nx_dados"]) assert.ok(ultimaDef(n).arquivo.startsWith("20261013d"), `${n}: 20261013d (${ultimaDef(n).arquivo})`);

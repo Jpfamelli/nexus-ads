@@ -133,7 +133,7 @@ test("C10 contarDeAnuncio, C9 ordemAoClicar/ariaSortDe e C8 marcosFaltando", () 
   assert.equal(L.contarDeAnuncio({ itens: [{ origem: "site" }] }).texto, "");
   assert.equal(L.contarDeAnuncio(null).n, 0);
   assert.equal(L.ordemAoClicar("nome", "recentes"), "nome");
-  assert.equal(L.ordemAoClicar("nome", "nome"), "recentes", "de novo volta a Recentes");
+  assert.equal(L.ordemAoClicar("nome", "nome"), "nome", "plano 1000b: RB-214 — clicar de novo na ordem ativa não troca para Recentes");
   assert.equal(L.ordemAoClicar("ultimo_contato_em", "nome"), "ultimo_contato");
   assert.equal(L.ordemAoClicar("email", "nome"), "nome", "coluna sem ordem no servidor não muda nada");
   assert.equal(L.ariaSortDe("nome", "nome"), "ascending");
@@ -632,8 +632,9 @@ test("C4/C9 Contatos (DOM): pílula de origem na coluna; «Nome» e «Último co
     assert.equal(ordem(), "ultimo_contato"); assert.deepEqual([thNome.attrs["aria-sort"], thUlt.attrs["aria-sort"]], ["none", "descending"]);
     assert.equal(reg.chamadas.at(-1).p.p_pagina, 1, "volta à 1ª página");
     thUlt.querySelector("button").clique(); await tique();
-    assert.equal(ordem(), "recentes"); assert.equal(thUlt.attrs["aria-sort"], "none");
-    assert.match(reg.avisos.at(-1), /mais recentes/);
+    // plano 1000b: RB-214 — clicar de novo na ordem ativa não troca para «Recentes» (fica como está e só avisa)
+    assert.equal(ordem(), "ultimo_contato"); assert.equal(thUlt.attrs["aria-sort"], "descending");
+    assert.match(reg.avisos.at(-1), /Já está ordenado por último contato/);
     // o seletor também atualiza o aria-sort
     const sel = tela.querySelector("select.sel");
     sel.value = "nome"; sel.dispara("change"); await tique();

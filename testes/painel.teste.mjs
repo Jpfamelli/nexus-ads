@@ -165,7 +165,9 @@ await teste("rede fora → sem_conexao; resposta que não é JSON → http_<stat
   await assert.rejects(api.sessao("tk"), e => e.codigo === "sem_conexao" && /internet/.test(api.mensagemErro(e)));
   api.usarFetch(falso(() => resposta(502, "<html>Bad gateway</html>", "text/html")));
   await assert.rejects(api.sessao("tk"), { codigo: "http_502" });
-  assert.match(api.mensagemErro({ codigo: "coisa_nova" }), /coisa_nova/);
+  // plano 1000b: AB-166 — o código cru não vai mais para a tela (fica no console); http 5xx tem frase própria
+  assert.equal(api.mensagemErro({ codigo: "coisa_nova" }), "Não deu certo agora. Tente de novo em instantes.");
+  assert.match(api.mensagemErro({ codigo: "http_502" }), /servidor está fora agora/);
 });
 
 await teste("cada RPC do contrato §2 com o nome e os parâmetros certos", async () => {
@@ -526,7 +528,8 @@ await teste("conexão com Meta/Google: nome próprio, estado (erro/atrasado/agua
   // topo: pílula viva (30 s, parada com a aba oculta), faixa em todas as abas, "Abrir Ajustes" só para o gestor
   for (const id of ["sync-pill", "sync-pop", "faixa-integ"]) assert.ok(idsHtml.has(id), id);
   assert.match(JS, /setInterval\(\(\) => \{ if \(!document\.hidden\) renderIntegracao\(\); \}, 30000\)/);
-  assert.match(JS, /\(!gestor\(\) \? `<p class="fi-nota">A Nexus já foi avisada e está resolvendo\.<\/p>`/, "a clínica lê que a Nexus já sabe");
+  // plano 1000b: AB-142 — «já foi avisada» só quando o aviso de conexão saiu (equipeAvisada); senão pede para avisar
+  assert.match(JS, /\(!gestor\(\) \? `<p class="fi-nota">\$\{esc\(equipeAvisada\(.*\) \? "A Nexus já foi avisada e está resolvendo\." : "Avise a Nexus para refazer a conexão\."\)\}<\/p>`/, "a clínica lê se a Nexus já sabe");
   assert.match(JS, /: `<button class="pill pill-ink pill-sm" type="button" data-ir="ajustes">Abrir Ajustes<\/button>`\);/, "o gestor ganha o atalho");
   assert.match(JS, /const SIMULAR_INTEG = DEMO && Q\.get\("simular"\) === "integracao";/, "?simular só vale na demo");
 });
@@ -703,7 +706,8 @@ await teste("gaveta: cartão do anúncio de origem e fita de 4 fotogramas; marco
   // fechou sem valor e sem tabela configurada: a fita diz "sem valor" (nunca R$ 0 inventado)
   assert.match(JS, /\{ t: "Fechou", q: fechou \? \(M\.valorDe\(L\)\.semValor \? "sem valor" : brl0\(M\.valorLead\(L\)\)\) : null/);
   assert.match(JS, /const MARCOS_DEMO = \[/);
-  assert.match(JS, /await salvarCfgCliente\(\{ marcos: lista\.slice\(-40\) \}\);/);
+  // plano 1000b: AB-162 — a lista é relida do servidor e mesclada por data (mesclarMarcos corta em 40)
+  assert.match(JS, /await salvarCfgCliente\(\{ marcos: mesclarMarcos\(frescos, d, t\) \}\);/);
   assert.match(JS, /maxlength="60"/);
   assert.match(JS, /if \(!gestor\(\) \|\| i == null\) \{ f\.hidden = true; return; \}/, "clínica só lê os marcos");
   assert.match(JS, /const chaveVistos = \(\) => `nx-fechados-\$\{S\.clienteId\}`;/);
@@ -873,7 +877,8 @@ await teste("retorno: a folha usa a MESMA base do herói (anúncios + gestão), 
   assert.match(FL, /só anúncio: \$\{brl\(roas\)\}/);
   // plano 1000 (AD-211): o rótulo vem do vocabulário da vertical (odonto: «Tratamentos») e «(estimativa)» só quando há estimativa
   assert.match(FL, /\$\{esc\(T\.receita\)\}\$\{est \? " \(estimativa\)" : ""\}/, "rótulo de uma linha só");
-  assert.match(JS, /\["roas", "Retorno do anúncio", "/);
+  // plano 1000b: AB-140 — o tooltip leva o rótulo da receita da vertical (template, não string fixa)
+  assert.match(JS, /\["roas", "Retorno do anúncio", `\$\{V\.receita\} ÷ investimento/);
 });
 
 await teste("curta: o número de cada cena é o MESMO da tarja de progresso (02 … 07); post sem play genérico e com o texto do criativo", () => {

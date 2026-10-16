@@ -629,9 +629,10 @@ html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h
 .au-dg-faixa { fill: var(--c-prim); }
 .au-dg-bola { fill: var(--c-fundo); stroke: var(--c-prim); stroke-width: 1.5; }
 .au-dg-ic { color: var(--c-prim-luz); fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.au-dg-rot { font-size: 12px; font-weight: 700; fill: var(--c-texto); }
-.au-dg-sub { font-size: 11px; fill: var(--c-texto-2); }
-.au-dg-n { font-family: var(--f-mono); font-size: 11px; fill: var(--c-texto-3); }
+/* plano 1000b · UB-079: texto do diagrama por token (rem) — cresce com o tamanho de letra do sistema, nada de px fixo */
+.au-dg-rot { font-size: var(--fs-12); font-weight: 700; fill: var(--c-texto); }
+.au-dg-sub { font-size: var(--fs-12); fill: var(--c-texto-2); }
+.au-dg-n { font-family: var(--f-mono); font-size: var(--fs-12); fill: var(--c-texto-3); }
 .au-dg-condicao .au-dg-ret { stroke-dasharray: 4 3; }
 .au-dg-condicao .au-dg-faixa, .au-dg-condicao .au-dg-bola { fill: var(--c-sec); stroke: var(--c-sec); }
 .au-dg-condicao .au-dg-bola { fill: var(--c-fundo); }
@@ -848,6 +849,8 @@ html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h
 .au-lista-ordem { min-height: 44px; flex: 0 1 14rem; min-width: 0; }
 /* AS-017: «Do sistema» recolhível, com o atalho para onde se ajusta */
 .au-sis-det > summary { list-style: none; cursor: pointer; align-items: center; border-radius: var(--r-p); }
+/* plano 1000b · UB-046: o título saiu do summary — o summary vira uma linha «Ver as N regras ▾» com alvo de 44 px */
+.au-sis-sum { display: inline-flex; gap: .35rem; min-height: 44px; margin-bottom: .4rem; font-size: var(--fs-13); font-weight: 600; color: var(--c-texto-2); }
 .au-sis-det > summary::-webkit-details-marker { display: none; }
 .au-sis-det > summary:focus-visible { outline: 2px solid var(--c-prim-luz); outline-offset: 4px; }
 .au-sis-seta { width: 18px; height: 18px; color: var(--c-texto-2); transition: transform var(--t-micro) var(--e-out); }
@@ -889,7 +892,8 @@ html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h
 /* ---------------------------------------------------------------- plano 1000 · lote auto-3 */
 /* AS-268: «Liga ao salvar» ao lado do interruptor do topo */
 .au-sw-caixa { display: inline-flex; align-items: center; gap: .45rem; }
-.au-sw-nota { font-size: var(--fs-12); font-weight: 600; color: var(--c-aten); white-space: nowrap; }
+/* plano 1000b · UB-080: a nota quebra linha (em 360 px o nowrap empurrava o «⋯» para fora do cabeçalho) */
+.au-sw-nota { font-size: var(--fs-12); font-weight: 600; color: var(--c-aten); white-space: normal; overflow-wrap: anywhere; min-width: 0; }
 /* AS-269: erro do servidor fixo no topo do editor */
 .au-erro-salvar { margin: var(--esp-3) 0; }
 .au-erro-salvar .pilha-p { min-width: 0; }
@@ -914,3 +918,39 @@ html:has(.au-pag-editor) { scroll-padding-top: calc(var(--topo) + var(--au-cab-h
 @media (max-width: 760px), (pointer: coarse) {
   .au-ver-ia { min-height: 44px; }
 }
+
+/* plano 1000b · UB-187: esqueleto do editor com a forma dele (cabeçalho + 3 blocos + lateral; no celular, uma coluna) */
+.au-esq-ed-grade { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--esp-3); }
+.au-esq-ed-fluxo { display: flex; flex-direction: column; gap: var(--esp-3); min-width: 0; }
+@media (min-width: 1081px) { .au-esq-ed-grade { grid-template-columns: minmax(0, 1fr) minmax(0, 320px); } }
+/* plano 1000b · UB-044: faixa «A lista mudou · Atualizar» (o pulso não redesenha sozinho) */
+.au-lista-mudou { display: flex; align-items: center; gap: var(--esp-2); flex-wrap: wrap; margin: var(--esp-3) 0; }
+.au-lista-mudou .bt { margin-left: auto; }
+/* plano 1000b · UB-212: quem mudou por último, discreto sob o nome */
+.au-ed-autor { margin: var(--esp-1) 0 0; }
+/* plano 1000b · UB-045: o nome da montagem virou o título (h3, recebe o foco) — mesma cara do parágrafo de antes */
+h3.au-ia-res-nome { margin: 0; }
+h3.au-ia-res-nome:focus:not(:focus-visible) { outline: none; }
+
+/* ================================================================== plano 1000b · lote auto-2 */
+/* UB-080: a caixa do interruptor encolhe (a nota quebra em vez de empurrar os botões) */
+.au-sw-caixa { min-width: 0; flex-wrap: wrap; }
+/* UB-039: a barra do dia escolhido fica marcada (além do aria-pressed) */
+.au-gd-clicavel button.au-gd-col-ativa .au-gd-pilha { outline: 2px solid var(--c-prim-luz); outline-offset: 2px; border-radius: var(--r-pp); }
+/* UB-056: contador do nome «70/80» */
+.au-nome-cont { display: block; margin-top: .25rem; font-size: var(--fs-12); color: var(--c-texto-3); }
+.au-nome-cont[data-tom="aten"] { color: var(--c-aten); }
+.au-nome-cont[data-tom="ruim"] { color: var(--c-ruim); font-weight: 600; }
+/* UB-064: aviso de palavra-chave curta */
+.au-palavras-curtas { color: var(--c-aten); font-weight: 600; }
+/* UB-253: a instrução da prévia vazia fica fora da bolha */
+.au-bolha-vazia { margin: .2rem 0 0; }
+/* UB-186: a dica do atalho ao lado do contador da caixa de IA (some em tela de toque) */
+.au-ia-atalho { font-size: var(--fs-12); color: var(--c-texto-3); margin-right: auto; }
+@media (hover: none), (pointer: coarse) { .au-ia-atalho { display: none; } }
+/* UB-076: «Há execuções novas · Atualizar» */
+.au-ex-novas { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; }
+.au-ex-novas > span { flex: 1 1 12rem; min-width: 0; }
+/* UB-210: mostrar receitas de outros segmentos */
+.au-modelos-outros { display: inline-flex; align-items: center; gap: .45rem; min-height: 44px; font-size: var(--fs-13); cursor: pointer; }
+.au-modelos-outros input { width: 18px; height: 18px; accent-color: var(--c-prim); }

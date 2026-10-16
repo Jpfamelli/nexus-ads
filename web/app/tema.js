@@ -359,7 +359,9 @@ export function marcaEfetiva(marcaOrg = {}, temaCliente = {}, reserva = {}) {
     logo_cliente: imagemSegura(t.logo) || imagemSegura(r.logoUrl),
     logo_cliente_claro: imagemSegura(t.logo_claro),
     cores: { primaria: cor("primaria"), secundaria: cor("secundaria"), fundo: cor("fundo") },
-    login_titulo: m.login_titulo || "Anúncio, conversa e venda na mesma órbita.",
+    // plano 1000b · UB-179: o slogan da Órbita só na marca padrão; revenda (produto próprio) sem título usa uma frase neutra
+    login_titulo: m.login_titulo || (!(typeof m.produto === "string" && m.produto.trim()) || m.produto.trim() === PADRAO.produto
+      ? "Anúncio, conversa e venda na mesma órbita." : "Entre para continuar"),
     login_texto: m.login_texto || "Entre com o e-mail e a senha que você recebeu.",
     suporte_wa: typeof m.suporte_wa === "string" && /^\d{10,15}$/.test(m.suporte_wa) ? m.suporte_wa : null,
     assinatura: m.assinatura || null,

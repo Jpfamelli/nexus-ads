@@ -63,9 +63,9 @@ test("validar: gatilho desconhecido", () => {
 test("validar: gatilho sem config obrigatória", () => {
   assert.equal(valida(auto({ gatilho: "negocio_estagio", config: {} })).motivo, "escolha a etapa em «Quando»");
   assert.equal(valida(auto({ gatilho: "tempo_no_estagio", config: { horas: 4 } })).motivo, "escolha a etapa em «Quando»");
-  assert.equal(valida(auto({ gatilho: "tempo_no_estagio", config: { estagio_id: U(13) } })).motivo, "o tempo na etapa vai de 1 a 2160 horas");
+  assert.equal(valida(auto({ gatilho: "tempo_no_estagio", config: { estagio_id: U(13) } })).motivo, "o tempo na etapa vai de 1 hora a 90 dias" /* plano 1000b: UB-028 */);
   assert.equal(valida(auto({ gatilho: "etiqueta_adicionada", config: {} })).motivo, "escolha a etiqueta em «Quando»");
-  assert.equal(valida(auto({ gatilho: "sem_resposta", config: {} })).motivo, "o tempo sem resposta vai de 5 a 1440 minutos");
+  assert.equal(valida(auto({ gatilho: "sem_resposta", config: {} })).motivo, "o tempo sem resposta vai de 5 minutos a 24 horas" /* plano 1000b: UB-028 */);
   assert.equal(valida(auto({ gatilho: "sem_resposta", config: { minutos: 4 } })).ok, false);
   assert.equal(valida(auto({ gatilho: "sem_resposta", config: { minutos: 1441 } })).ok, false);
   assert.equal(valida(auto({ gatilho: "sem_resposta", config: { minutos: "15" } })).ok, true);
@@ -106,7 +106,7 @@ test("validar: campos obrigatórios de cada ação", () => {
   assert.equal(m({ tipo: "mover_estagio" }), "ação 1: escolha a etapa");
   assert.equal(m(tarefa({ titulo: "" })), "ação 1: escreva o título da tarefa");
   assert.equal(m(tarefa({ titulo: "x".repeat(161) })), "ação 1: o título pode ter até 160 caracteres");
-  assert.equal(m(tarefa({ vence_em_horas: 2161 })), "ação 1: o prazo vai de 0 a 2160 horas");
+  assert.equal(m(tarefa({ vence_em_horas: 2161 })), "ação 1: o prazo vai até 90 dias (0 = para já)" /* plano 1000b: UB-028 */);
   assert.equal(m(tarefa({ dono: "chefe" })), "ação 1: escolha para quem é a tarefa");
   assert.equal(m(tarefa({ tipo_tarefa: "fax" })), "ação 1: tipo de tarefa inválido");
   assert.equal(m({ tipo: "enviar_mensagem", texto: " " }), "ação 1: escreva a mensagem");
@@ -169,8 +169,8 @@ test("descrever: as 5 automações-modelo", () => {
   assert.ok(lembrete.includes("24 h antes da consulta, enviar o modelo «confirmacao_consulta»"), lembrete);
   assert.equal(lembrete, "24 h antes da consulta, enviar o modelo «confirmacao_consulta».");
   assert.equal(f("sem_resposta"), "Quando uma conversa ficar sem resposta há 15 min (contando só no horário de atendimento), avisar o responsável.");
-  assert.equal(f("orcamento"), "Quando a oportunidade entrar em «Avaliou / orçamento», criar tarefa «Enviar orçamento para {primeiro_nome}» para o responsável em 24 h.");
-  assert.equal(f("pos_venda"), "Quando a oportunidade for marcada como «Fechou», criar tarefa «Pós-venda: falar com {primeiro_nome}» para o responsável em 7 dias.");
+  assert.equal(f("orcamento"), "Quando a oportunidade entrar em «Avaliou / orçamento», criar tarefa «Enviar orçamento para {primeiro_nome}» para o responsável com prazo de 24 h.");
+  assert.equal(f("pos_venda"), "Quando a oportunidade for marcada como «Fechou», criar tarefa «Pós-venda: falar com {primeiro_nome}» para o responsável com prazo de 7 dias.");
   assert.equal(f("preco"), "Quando chegar mensagem com «preço», «valor» ou «quanto custa», pôr a etiqueta «Orçamento» no paciente.");
   // sem vocabulário (genérico) fala em contato; etiqueta na conversa
   assert.equal(L.descrever({ gatilho: "tarefa_vencida", acoes: [{ tipo: "etiquetar", etiqueta_nome: "X", alvo: "contato" },
@@ -348,7 +348,7 @@ test("vocab da F3 (se existir) funciona com descrever", async () => {
   let V;
   try { V = await import("../web/app/vocab.js"); } catch { return; }
   const f = L.descrever(L.aplicarModelo("pos_venda", BASE, V.vocab("loja")), BASE, V.vocab("loja"));
-  assert.equal(f, "Quando a venda for marcada como «Vendido», criar tarefa «Pós-venda: falar com {primeiro_nome}» para o responsável em 7 dias.");
+  assert.equal(f, "Quando a venda for marcada como «Vendido», criar tarefa «Pós-venda: falar com {primeiro_nome}» para o responsável com prazo de 7 dias.");
   const g = L.descrever({ gatilho: "negocio_estagio", config: { estagio_id: U(13) }, acoes: [{ tipo: "criar_negocio" }] }, BASE, V.vocab("oficina"));
   assert.equal(g, "Quando o orçamento entrar em «Avaliou / orçamento», criar um orçamento.");
 });
@@ -475,7 +475,7 @@ test("validar: «apos_data» (1..720 h) e «conversa_resolvida»", () => {
   const a = c => valida(auto({ gatilho: "apos_data", config: c }));
   assert.equal(a({ campo: "consulta", horas: 2 }).ok, true);
   assert.equal(a({ campo: "consulta", horas: 720 }).ok, true);
-  for (const h of [0, 721, 1.5, "x", null]) assert.equal(a({ campo: "consulta", horas: h }).motivo, "o tempo depois da data vai de 1 a 720 horas", String(h));
+  for (const h of [0, 721, 1.5, "x", null]) assert.equal(a({ campo: "consulta", horas: h }).motivo, "o tempo depois da data vai de 1 hora a 30 dias" /* plano 1000b: UB-028 */, String(h));
   assert.equal(a({ horas: 2 }).motivo, "escolha a data em «Quando»");
   assert.equal(valida(auto({ gatilho: "conversa_resolvida", config: {} })).ok, true);
   assert.equal(valida(auto({ gatilho: "conversa_resolvida", config: { departamento_id: U(51), canal_id: U(61) } }), { base: BASE }).ok, true);
@@ -518,7 +518,7 @@ test("validar: passos novos (mover_funil, etiquetas, campo, nota, notificar depa
   assert.equal(ok({ tipo: "notificar", para: "departamento", departamento_id: U(51), titulo: "x" }, { base: BASE }), true);
   // esperar / parar
   const com = (ac, ...resto) => valida(auto({ acoes: [tarefa(), ac, tarefa(), ...resto] }));
-  for (const mi of [0, 43201, 1.5, "x", null, undefined]) assert.equal(com({ tipo: "esperar", minutos: mi }).motivo, "ação 2: a espera vai de 1 minuto a 30 dias (43200 minutos)", String(mi));
+  for (const mi of [0, 43201, 1.5, "x", null, undefined]) assert.equal(com({ tipo: "esperar", minutos: mi }).motivo, "ação 2: a espera vai de 1 minuto a 30 dias" /* plano 1000b: UB-028 */, String(mi));
   for (const mi of [1, 90, 43200, "1440"]) assert.equal(com({ tipo: "esperar", minutos: mi, cancelar_se_cliente_responder: true }).ok, true, String(mi));
   assert.equal(m({ tipo: "esperar", minutos: 60 }), "ação 2: depois de esperar, acrescente outra ação", "esperar no último passo não faz nada");
   assert.equal(valida(auto({ acoes: [tarefa(), { tipo: "esperar", minutos: 60 }, { tipo: "parar" }] })).ok, true, "esperar antes de parar é válido");
@@ -677,7 +677,7 @@ test("frasePeriodo: dias da semana em português", () => {
 test("descrever: gatilhos novos, passos novos e sequência com «e depois»", () => {
   const f = (a, v = VOCAB_ODONTO) => L.descrever(a, BASE, v);
   assert.equal(f({ gatilho: "agendado", config: { horario: "09:00", dias_semana: [1, 2, 3, 4, 5], estagio_id: U(13) }, acoes: [{ tipo: "criar_tarefa", titulo: "Retomar", dono: "responsavel", vence_em_horas: 4 }] }),
-    "De segunda a sexta, às 09:00, para cada oportunidade aberta na etapa «Avaliou / orçamento», criar tarefa «Retomar» para o responsável em 4 h.");
+    "De segunda a sexta, às 09:00, para cada oportunidade aberta na etapa «Avaliou / orçamento», criar tarefa «Retomar» para o responsável com prazo de 4 h.");
   assert.equal(f({ gatilho: "apos_data", config: { campo: "consulta", horas: 2 }, acoes: [{ tipo: "resolver_conversa" }] }), "2 h depois da consulta, resolver a conversa.");
   assert.equal(f({ gatilho: "apos_data", config: { campo: "consulta", horas: 48 }, acoes: [{ tipo: "resolver_conversa" }] }, VOCAB_OFICINA), "2 dias depois da visita, resolver a conversa.");
   assert.equal(f({ gatilho: "conversa_resolvida", config: { departamento_id: U(51) }, acoes: [{ tipo: "ia_decidir", tarefa: "resumir_nota" }] }),
@@ -893,7 +893,7 @@ test("ondeDoHint: o hint do servidor aponta o bloco e o item certos na tela", ()
   o("escolha o horário em «Quando» (de 00:00 a 23:59)", "quando");
   o("escolha pelo menos um dia da semana", "quando");
   o("os dias da semana vão de 0 (domingo) a 6 (sábado)", "quando");
-  o("o tempo depois da data vai de 1 a 720 horas", "quando");
+  o("o tempo depois da data vai de 1 hora a 30 dias" /* plano 1000b: UB-028 */, "quando");
   o("a antecedência vai de 1 a 72 horas", "quando");
   o("o tempo sem resposta vai de 5 a 1440 minutos", "quando");
   o("use até 20 palavras", "quando");
@@ -933,7 +933,9 @@ test("erroAutomacao: o timeout do banco (57014) em Testar/salvar não fala de «
   assert.equal(L.erroAutomacao({ codigo: "sem_permissao" }, "padrão"), "padrão");
   assert.equal(L.erroAutomacao(null, "padrão"), "padrão");
   assert.match(lerApp("auto-editor.js"), /L\.erroAutomacao\(erro, ctx\.api\.mensagemErro\(erro\)\)/, "Testar");
-  assert.match(lerApp("auto-editor.js"), /const msg = L\.erroAutomacao\(e, ctx\.api\.mensagemErro\(e\)\)/, "salvar");
+  // (revisão 1000b · UB-211: o salvar trata antes o edicao_desatualizada; o resto continua no erroAutomacao)
+  assert.match(lerApp("auto-editor.js"), /: L\.erroAutomacao\(e, ctx\.api\.mensagemErro\(e\)\);/, "salvar");
+  assert.match(lerApp("auto-editor.js"), /p_atualizado_em: versao/, "UB-211: manda a versão que estava na tela");
 });
 
 test("Criar com IA: o texto digitado e a montagem da IA não passam para outro cliente nem outra pessoa (esquecerIA / conferirDonoIA)", () => {
@@ -996,7 +998,7 @@ test("erroDaIA: cota, chave, IA desligada, pedidos, rede e formato inválido →
   const k = L.erroDaIA({ codigo: "ia_indisponivel", detalhe: "sem_chave", detalhe_texto: "sem_chave" });
   assert.equal(k.tipo, "chave");
   assert.match(k.texto, /chave da Anthropic/);
-  assert.match(k.texto, /equipe da Nexus/);
+  assert.match(k.texto, /equipe de suporte/);   // plano 1000b: UB-067 — sem a marca fixa (revenda)
   assert.equal(L.erroDaIA({ codigo: "ia_indisponivel", detalhe_texto: "sem_sdk" }).tipo, "indisponivel");
   assert.equal(L.erroDaIA({ codigo: "ia_desligada" }).tipo, "desligada");
   assert.equal(L.erroDaIA({ codigo: "muitos_pedidos" }).tipo, "pedidos");
@@ -1104,7 +1106,8 @@ test("editor: edição pendente segura a atualização automática, o link do to
     "clique simples pergunta; Ctrl/⌘+clique segue abrindo outra aba");
   assert.doesNotMatch(ed, /h\("a", \{ class: "au-voltar", href: "#\/automacoes" \}, ui\.icone\("seta-esq"\), "Automações"\),\s*h\("div", \{ class: "au-ed-linha" \}/, "o link puro, sem guarda, saiu");
   // rascunho: grava em toda mudança, some ao salvar e ao descartar, e é oferecido ao abrir
-  assert.match(ed, /pintarValidacao\(\);\s*guardarRascunho\(\);\s*\}/, "mudou() guarda o rascunho");
+  // plano 1000b: UB-021 — mudou() analisa uma vez e repassa (pintarValidacao(an.ps)); o rascunho continua no fim
+  assert.match(ed, /pintarValidacao\(an\.ps\);\s*pintarTesteCom\(\);\s*guardarRascunho\(\);\s*\}/, "mudou() guarda o rascunho");
   assert.match(ed, /if \(temPendencia\(\)\) \{ rasc\.guardar\(idRasc, auto\); gravouRascunho = true; \}/);
   assert.match(ed, /salvoJson = JSON\.stringify\(L\.limpar\(salvo\)\);\s*if \(rasc\) rasc\.apagar\(idRasc\);/, "salvou: o rascunho some");
   // plano 1000 · AS-267: a chave do rascunho novo depende da origem (branco/receita/IA) — L.idRascunho, testado em plano1000-automacoes
@@ -1118,7 +1121,8 @@ test("editor: edição pendente segura a atualização automática, o link do to
   assert.match(tela, /apagar\(id\) \{ try \{ sessionStorage\.removeItem\(chave\(id\)\); \} catch/);
   // plano 1000 (lote auto-2): o editor não usa localStorage; a lista guarda só a ordem (AS-015) e os pedidos recentes à IA (AS-072)
   assert.doesNotMatch(ed, /localStorage/, "rascunho de automação vive só na aba (sessionStorage)");
-  assert.ok((tela.match(/localStorage\.\w+\((\w+)/g) || []).every(u => /\((chaveOrdem|chaveRecentes)$/.test(u)), "na lista, só as duas preferências");
+  // plano 1000b: UB-078 / UB-210 — mais as preferências de TELA por preferencia(chavePref), só chaves nx-au-* (nunca rascunho)
+  assert.ok((tela.match(/localStorage\.\w+\((\w+)/g) || []).every(u => /\((chaveOrdem|chaveRecentes|chavePref)$/.test(u)), "na lista, só as preferências de tela");
 });
 
 test("Criar com IA: a montagem fica guardada na aba e volta em #/automacoes/nova?ia=1 depois de recarregar; some ao salvar ou descartar", () => {

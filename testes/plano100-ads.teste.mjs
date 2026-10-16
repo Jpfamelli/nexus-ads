@@ -305,7 +305,8 @@ test("F7 · «Gerar chave de instalação» não duplica a tela (um cartão, um 
   assert.equal(t.alvo.querySelectorAll("#rastc-instala").length, 1, "antes: 2 cartões «Código de instalação» e id duplicado (raiz criada fora do pintar)");
   assert.equal(t.alvo.querySelectorAll(".rastc").length, 1);
   assert.equal(t.alvo.querySelectorAll(".rastc-privacidade").length, 1);
-  assert.equal(t.alvo.querySelectorAll("pre").filter(p => p.textContent.includes("data-chave=")).length, 1);
+  // plano 1000b: AB-204 acrescentou a versão para site com banner de cookies (data-consentimento) — o snippet padrão continua único
+  assert.equal(t.alvo.querySelectorAll("pre").filter(p => p.textContent.includes("data-chave=") && !p.textContent.includes("data-consentimento")).length, 1);
 });
 
 test("F7 · «Gerar nova chave» avisa que desliga o script E o formulário; depois só a chave nova aparece (a revogada some da tela)", async () => {
@@ -348,7 +349,8 @@ test("F8 · privacidade correta (o que vai ao Órbita e por quanto tempo) e par�
 test("F9 · snippet: produção sem data-url no script do Pages; servidor falso aponta SÓ para ele; variante window.ORBITA_RASTREIO; UTMs com macros de ID", async () => {
   const k = "c".repeat(48);
   // plano 1000 (AD-168): o snippet de produção aponta para a versão fixa rastreio.v1.js com integrity (SRI) e crossorigin
-  assert.equal(RC.snippetRastreio(k), `<script src="https://jpfamelli.github.io/nexus-ads/rastreio.v1.js" integrity="${RC.SRI_V1}" crossorigin="anonymous" data-chave="${k}" defer></script>`);
+  // plano 1000b: o snippet novo aponta para a rastreio.v2.js (AB-007/122/205/226/127) — a v1 segue congelada para quem já instalou
+  assert.equal(RC.snippetRastreio(k), `<script src="https://jpfamelli.github.io/nexus-ads/rastreio.v2.js" integrity="${RC.SRI_V2}" crossorigin="anonymous" data-chave="${k}" defer></script>`);
   const local = RC.rastreioLocal({ ORBITA_DEV_FALSO: { origem: "http://localhost:4495", rastreio: { script: "http://localhost:4495/rastreio.js", url: "http://localhost:4495/rest/v1/rpc/nx_rastreio_registrar", apikey: "dev-falso", site: "http://localhost:4495/__dev_falso/site.html" } } });
   assert.ok(local);
   const s = RC.snippetRastreio(k, local);
@@ -359,7 +361,8 @@ test("F9 · snippet: produção sem data-url no script do Pages; servidor falso 
   const g = RC.snippetGerenciador(k, local);
   assert.match(g, /window\.ORBITA_RASTREIO = \{ chave: "c+", url: "http:\/\/localhost:4495\/rest\/v1\/rpc\/nx_rastreio_registrar", apikey: "dev-falso" \};/);
   // plano 1000 (AD-168): a variante para gerenciador também usa a versão fixa com integrity
-  assert.match(RC.snippetGerenciador(k), /<script src="https:\/\/jpfamelli\.github\.io\/nexus-ads\/rastreio\.v1\.js" integrity="sha384-[A-Za-z0-9+/=]+" crossorigin="anonymous" defer><\/script>$/);
+  // plano 1000b: v2
+  assert.match(RC.snippetGerenciador(k), /<script src="https:\/\/jpfamelli\.github\.io\/nexus-ads\/rastreio\.v2\.js" integrity="sha384-[A-Za-z0-9+/=]+" crossorigin="anonymous" defer><\/script>$/);
   assert.match(RC.UTM.google, /utm_campaign=\{campaignid\}&utm_content=\{creative\}/);
   assert.match(RC.UTM.meta, /utm_campaign=\{\{campaign\.id\}\}&utm_content=\{\{ad\.id\}\}/);
   // na tela com ?dev-falso=1: o snippet local e o link do site de teste
@@ -381,11 +384,11 @@ test("F10 · painel «Cliques do site»: nx_rastreio_listar (30 dias) vira totai
     { em: "2026-10-05T09:00:00Z", pagina: "https://site.test/", utm_campaign: "Avaliação", plataforma: "meta", origem: "anuncio", casou: false, motivo: "ja_tem_anuncio" },
   ];
   const R = RC.resumoRastreio({ dias: 30, itens, totais: { cliques: 4, casados: 1, usados: 1, pendentes: 1 } });
-  assert.deepEqual(R.totais, { cliques: 4, casados: 1, pendentes: 1, usados: 1, pct: 25 });
+  assert.deepEqual(R.totais, { cliques: 4, casados: 1, pendentes: 1, usados: 1, pct: 25, cliquesReais: null });   // plano 1000b: AB-009 (cliques_reais do servidor)
   assert.deepEqual(R.campanhas.map(c => [c.nome, c.cliques, c.casados]), [["Implante", 2, 1], ["(sem campanha)", 1, 0], ["Avaliação", 1, 0]]);
-  assert.deepEqual(R.motivos.map(m => m.rotulo).sort(), ["a mensagem não chegou com o código", "casou com o negócio", "esperando o negócio nascer", "o negócio já veio de um anúncio"]);
+  assert.deepEqual(R.motivos.map(m => m.rotulo).sort(), ["a conversa chegou; o negócio ainda vai ser criado", "a mensagem não chegou com o código", "casou com o negócio", "o negócio já veio de um anúncio"]);   // plano 1000b: AB-251
   assert.equal(R.ultimos[0].em, "2026-10-08T09:00:00Z", "mais recente primeiro");
-  assert.deepEqual(RC.resumoRastreio({ itens: itens.slice(0, 2) }).totais, { cliques: 2, casados: 1, pendentes: 1, usados: null, pct: 50 }, "formato mínimo do contrato (só cliques/casados): conta pelos itens");
+  assert.deepEqual(RC.resumoRastreio({ itens: itens.slice(0, 2) }).totais, { cliques: 2, casados: 1, pendentes: 1, usados: null, pct: 50, cliquesReais: null }, "formato mínimo do contrato (só cliques/casados): conta pelos itens");
   assert.equal(RC.paginaCurta("https://site.test/implante?x=1"), "/implante"); assert.equal(RC.paginaCurta("https://site.test/"), "site.test");
   const t = telaRastreio({ chaves: ["d".repeat(48)], listar: { dias: 30, itens, totais: { cliques: 4, casados: 1, pendentes: 1 } } });
   await t.montar(); await tique(); await tique();

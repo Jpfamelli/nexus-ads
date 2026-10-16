@@ -42,6 +42,7 @@ export function abrir(amb) {
     const mantido = anterior ? itens.indexOf(anterior) : -1;
     marcar(mantido >= 0 ? mantido : 0);
     vazio.hidden = itens.length > 0 || !vazio.textContent;
+    campo.setAttribute("aria-expanded", String(itens.length > 0));   // plano 1000b · UB-177: sem resultados, a lista não está «expandida»
   }
   function escolher(it) {
     if (!it) return;

@@ -49,7 +49,8 @@ export async function montarImportar(k, el) {
   let memo = { dados: null, mapa: "", linhas: null, problemas: null };
   function linhasDoMapa() {
     const chave = JSON.stringify(S.mapa);
-    if (memo.dados !== S.dados || memo.mapa !== chave) memo = { dados: S.dados, mapa: chave, linhas: L.montarLinhas(S.dados.linhas, S.mapa), problemas: null };
+    // plano 1000b · RB-068: com os campos, a opção da planilha («unimed») vira a oficial («Unimed»)
+    if (memo.dados !== S.dados || memo.mapa !== chave) memo = { dados: S.dados, mapa: chave, linhas: L.montarLinhas(S.dados.linhas, S.mapa, k.base.campos), problemas: null };
     return memo.linhas;
   }
   function problemasDoMapa() {
@@ -94,7 +95,11 @@ export async function montarImportar(k, el) {
     }
   }
 
+  // plano 1000b · RB-126: no passo 1, soltar o arquivo FORA da área não faz o navegador abrir o CSV (e perder a tela) — a janela segura o soltar
+  let soltarJanela = null;
+  function pararJanela() { if (soltarJanela) { soltarJanela(); soltarJanela = null; } }
   function ir(passo) {
+    pararJanela();
     S.passo = passo;
     desenharPassos();
     ui.limpar(corpo); ui.limpar(rodape);
@@ -106,6 +111,15 @@ export async function montarImportar(k, el) {
     if (alvo) { alvo.setAttribute("tabindex", "-1"); try { alvo.focus({ preventScroll: false }); } catch { /* ok */ } }
   }
 
+  /** plano 1000b · RB-129: deixa o navegador pintar (rAF; com teto de 50 ms para aba em segundo plano, onde o rAF não roda). */
+  const cederQuadro = () => new Promise(r => {
+    let feito = false;
+    const f = () => { if (!feito) { feito = true; r(); } };
+    try { if (typeof requestAnimationFrame === "function") requestAnimationFrame(f); } catch { /* sem rAF */ }
+    setTimeout(f, 50);
+  });
+  /** plano 1000b · RB-219: aparelho de toque (sem matchMedia, como no Node, é «não»). */
+  const toque = () => { try { return typeof matchMedia === "function" && !!matchMedia("(pointer: coarse)").matches; } catch { return false; } };
   const botao = (rotulo, tipo, fn, extra = {}) => h("button", { type: "button", class: ["bt", tipo === "prim" ? "bt-prim" : tipo === "fant" ? "bt-fant" : "bt-sec"], on: { click: fn }, ...extra }, rotulo);
 
   /* ------------------------------------------------------------ 1. arquivo */
@@ -113,10 +127,13 @@ export async function montarImportar(k, el) {
     const entrada = h("input", { type: "file", accept: ".csv,.txt,text/csv,text/plain", class: "sr-only", id: "imp-arquivo" });
     const solta = h("label", { class: "imp-solta", for: "imp-arquivo" },
       ui.icone("clipe"),
-      h("b", null, "Arraste o arquivo aqui ou clique para escolher"),
+      // plano 1000b · RB-219: no toque não há arrastar
+      h("b", null, toque() ? "Toque para escolher o arquivo" : "Arraste o arquivo aqui ou clique para escolher"),
       h("p", null, "Aceita .csv (separado por ponto e vírgula, vírgula ou tabulação). No Excel ou no Google Planilhas: Arquivo → Salvar como / Fazer download → CSV. Até 20.000 linhas por arquivo."));
     const status = h("div", { class: "imp-arq", hidden: true });
     const avisoCortado = h("p", { class: "aviso aviso-aten imp-aviso", hidden: true }, ui.icone("alerta"), h("span"));
+    // plano 1000b · RB-070: aspas abertas e nunca fechadas engolem o resto do arquivo numa célula — a tela diz em que linha
+    const avisoAspas = h("p", { class: "aviso aviso-aten imp-aviso-aspas", role: "alert", hidden: true }, ui.icone("alerta"), h("span"));
     const colar = h("textarea", { rows: 6, placeholder: "Nome\tTelefone\tE-mail\nAna Souza\t(12) 99830-3030\tana@exemplo.com.br", "aria-label": "Colar linhas da planilha" });
     const usarColado = botao("Usar o texto colado", "sec", () => {
       if (!colar.value.trim()) { ui.toast("Cole as linhas da planilha, com o cabeçalho na primeira linha.", { tipo: "info" }); colar.focus(); return; }
@@ -130,6 +147,18 @@ export async function montarImportar(k, el) {
     for (const ev of ["dragenter", "dragover"]) solta.addEventListener(ev, e => { e.preventDefault(); solta.classList.add("sobre"); });
     for (const ev of ["dragleave", "drop"]) solta.addEventListener(ev, e => { e.preventDefault(); solta.classList.remove("sobre"); });
     solta.addEventListener("drop", e => { const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) lerArquivo(f); });
+    {
+      const segurar = e => { if (e && typeof e.preventDefault === "function") e.preventDefault(); };
+      const soltouFora = e => {
+        segurar(e);
+        if (e && e.target && typeof solta.contains === "function" && solta.contains(e.target)) return;     // a área já leu
+        const f = e && e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) lerArquivo(f);
+      };
+      addEventListener("dragover", segurar);
+      addEventListener("drop", soltouFora);
+      soltarJanela = () => { removeEventListener("dragover", segurar); removeEventListener("drop", soltouFora); };
+    }
 
     async function lerArquivo(f) {
       if (f.size > 25 * 1024 * 1024) { ui.toast("Arquivo grande demais (até 25 MB). Divida a planilha em partes.", { tipo: "erro" }); return; }
@@ -143,8 +172,14 @@ export async function montarImportar(k, el) {
         return;
       }
       try {
+        // plano 1000b · RB-129: «Lendo a planilha…» aparece ANTES de a leitura ocupar a tela (um quadro cedido antes de decodificar e antes do lerCSV)
+        ui.limpar(status); status.hidden = false;
+        status.append(h("span", { class: "imp-lendo", role: "status" }, `Lendo a planilha «${f.name || "arquivo"}»…`));
+        continuar.disabled = true;
+        await cederQuadro();
         const bytes = new Uint8Array(await f.arrayBuffer());
         const d = L.decodificarArquivo(bytes);
+        await cederQuadro();
         carregarTexto(d.texto, { nome: f.name, tamanho: f.size, codificacao: d.codificacao });
       } catch (e) {
         console.error(e);
@@ -176,7 +211,7 @@ export async function montarImportar(k, el) {
     function mostrarStatus() {
       ui.limpar(status);
       status.hidden = !S.dados;
-      if (!S.dados) { avisoCortado.hidden = true; continuar.disabled = true; return; }
+      if (!S.dados) { avisoCortado.hidden = true; avisoAspas.hidden = true; continuar.disabled = true; return; }
       const d = S.dados;
       const sepNome = { ";": "ponto e vírgula", ",": "vírgula", "\t": "tabulação" }[d.separador] || d.separador;
       status.append(
@@ -197,6 +232,9 @@ export async function montarImportar(k, el) {
         const novo = status.querySelector(".imp-sep"); if (novo) novo.focus();
       });
       status.append(h("label", { class: "imp-sep-l" }, h("span", { class: "rotulo" }, "Separador"), selSep));
+      avisoAspas.hidden = !d.aspasAbertas;
+      avisoAspas.querySelector("span").textContent = d.aspasAbertas
+        ? `Há aspas (") sem fechar na linha ${d.linhaAspas}: dali em diante tudo virou uma célula só e podem faltar linhas. Corrija a planilha e escolha o arquivo de novo.` : "";
       avisoCortado.hidden = !d.cortado;
       avisoCortado.querySelector("span").textContent = d.cortado ? `A planilha tem ${ui.num(d.total)} linhas; vamos importar as primeiras ${ui.num(LIMITE_LINHAS)}. Importe o restante num segundo arquivo.` : "";
       continuar.disabled = false;
@@ -214,7 +252,7 @@ export async function montarImportar(k, el) {
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
     }
-    corpo.append(h("h2", { class: "imp-tit" }, "Escolha a planilha"), entrada, solta, modelo, status, avisoCortado, colarBloco);
+    corpo.append(h("h2", { class: "imp-tit" }, "Escolha a planilha"), entrada, solta, modelo, status, avisoAspas, avisoCortado, colarBloco);
     rodape.append(h("span"), continuar);
     mostrarStatus();
   }
@@ -228,10 +266,14 @@ export async function montarImportar(k, el) {
     const aviso = h("p", { class: "aviso aviso-ruim", role: "alert", hidden: true }, ui.icone("alerta"),
       h("span", null, "Escolha pelo menos a coluna do nome, do telefone ou do e-mail."));
     const selects = [];
+    // plano 1000b · RB-071: cabeçalho repetido («Telefone» duas vezes) ganha «(2ª)» e um aviso — antes eram duas colunas iguais sem dizer qual é qual
+    const { rotulos: rotCol, repetidas } = L.rotulosColunas(d.cabecalho);
+    const avisoRep = repetidas ? h("p", { class: "aviso aviso-aten imp-aviso-rep", role: "note" }, ui.icone("alerta"),
+      h("span", null, "Colunas com o mesmo nome: confira os exemplos de cada uma antes de escolher o destino.")) : null;
 
     d.cabecalho.forEach((col, i) => {
       const exemplos = d.linhas.map(l => l[i]).filter(x => x && x.trim()).slice(0, 3);
-      const sel = h("select", { "aria-label": `Destino da coluna ${col || i + 1}` },
+      const sel = h("select", { class: "sel imp-map-sel", "aria-label": `Destino da coluna ${rotCol[i]}` },   // plano 1000b · RB-131: o select padrão do CRM
         h("option", { value: "" }, "Ignorar coluna"),
         h("optgroup", { label: "Cadastro" }, destinos.filter(x => !x.valor.startsWith("campo:") && !["negocio_titulo", "negocio_valor", "estagio"].includes(x.valor))
           .map(x => h("option", { value: x.valor }, x.rotulo))),
@@ -241,7 +283,7 @@ export async function montarImportar(k, el) {
           : null);
       sel.value = S.mapa[i] || "";
       const linha = h("div", { class: ["imp-mapa-l", !S.mapa[i] && "ignorada"], role: "listitem" },
-        h("div", { class: "imp-mapa-col" }, h("b", null, col || `Coluna ${i + 1}`), h("small", null, exemplos.length ? exemplos.join(" · ") : "(vazia)")),
+        h("div", { class: "imp-mapa-col" }, h("b", null, rotCol[i]), h("small", null, exemplos.length ? exemplos.join(" · ") : "(vazia)")),
         h("span", { class: "imp-mapa-seta", "aria-hidden": "true" }, ui.icone("seta-dir")),
         sel);
       sel.addEventListener("change", () => {
@@ -275,8 +317,18 @@ export async function montarImportar(k, el) {
           h("span", { class: "imp-th-col" }, c.coluna), h("span", { class: "imp-th-dest" }, ui.icone(c.destino ? "seta-dir" : "fechar"), c.rotulo))))),
         h("tbody", null, d.linhas.slice(0, 3).map(l => h("tr", null, cab.map(c => h("td", { class: c.destino ? null : "ignorada" }, (l[c.i] || "").trim() || "—"))))))));
     }
+    // plano 1000b · RB-239: quantas linhas ficariam de fora (sem nome, telefone e e-mail) com o mapa de agora
+    const avisoFora = h("p", { class: "aviso aviso-aten imp-aviso-fora", hidden: true }, ui.icone("info"), h("span"));
+    function contarFora() {
+      const cols = S.mapa.map((x, i) => (x === "nome" || x === "telefone" || x === "email" ? i : -1)).filter(i => i >= 0);
+      if (!cols.length) { avisoFora.hidden = true; return; }
+      const n = d.linhas.filter(l => cols.every(i => !String(l[i] ?? "").trim())).length;
+      avisoFora.hidden = !n;
+      avisoFora.querySelector("span").textContent = n ? `${ui.num(n)} ${n === 1 ? "linha ficaria" : "linhas ficariam"} de fora: ${n === 1 ? "não tem" : "não têm"} nome, telefone nem e-mail nas colunas escolhidas.` : "";
+    }
     function validar() {
       const ok = L.mapaValido(S.mapa);
+      contarFora();
       aviso.hidden = ok;
       continuar.disabled = !ok;
       desenharPrevia();
@@ -286,7 +338,8 @@ export async function montarImportar(k, el) {
     corpo.append(
       h("h2", { class: "imp-tit" }, "O que é cada coluna?"),
       subTxt,
-      lista, aviso,
+      avisoRep,
+      lista, aviso, avisoFora,
       h("h3", { class: "imp-sub" }, "Como vai ficar"), previa);
     rodape.append(botao("Voltar", "sec", () => ir(1)), continuar);
     validar();
@@ -299,6 +352,9 @@ export async function montarImportar(k, el) {
     const linhasMontadas = linhasDoMapa();
     const funis = k.base.funis.filter(f => f.ativo !== false);
     if (!o.funil_id || !funis.some(f => f.id === o.funil_id)) o.funil_id = (funis.find(f => !f.conta_no_ads) || k.funilPadrao() || funis[0] || {}).id || null;
+    // plano 1000b · RB-134: sem nenhum funil ativo não dá para criar negócio — o interruptor fica desligado e explica (antes ligava e o pedido ia sem negócio, calado)
+    const semFunil = !funis.length;
+    if (semFunil) o.criarNegocio = false;
 
     const atualizar = ui.campo({ tipo: "interruptor", nome: "atualizar", rotulo: "Atualizar quem já existe", valor: o.atualizar,
       // plano 1000 (CR-240): a regra do servidor (nx_contatos_importar) dita em português — o que é somado, o que é substituído e o que fica
@@ -313,7 +369,8 @@ export async function montarImportar(k, el) {
 
     // negócio por linha
     const neg = ui.campo({ tipo: "interruptor", nome: "negocio", rotulo: `Criar ${k.v.art("negocio") === "a" ? "uma" : "um"} ${k.v.min("negocio")} para cada linha`, valor: o.criarNegocio,
-      ajuda: L.mapaTemNegocio(S.mapa) ? `Sua planilha tem título, valor ou etapa: eles vão para ${k.v.art("negocio")} ${k.v.min("negocio")}.` : `Útil para trazer uma lista de ${k.v.min("contatos")} já em andamento.` });
+      desabilitado: semFunil,
+      ajuda: semFunil ? `Crie um funil antes (Configurações → Funis e etapas) para criar ${k.v.min("negocios")} na importação.` : L.mapaTemNegocio(S.mapa) ? `Sua planilha tem título, valor ou etapa: eles vão para ${k.v.art("negocio")} ${k.v.min("negocio")}.` : `Útil para trazer uma lista de ${k.v.min("contatos")} já em andamento.` });
     const selFunil = h("select", { class: "sel", "aria-label": "Funil" }, funis.map(f => h("option", { value: f.id, selected: f.id === o.funil_id }, f.nome)));
     const selEtapa = h("select", { class: "sel", "aria-label": "Etapa" });
     const avisoAds = h("p", { class: "aviso aviso-aten" }, ui.icone("alerta"),
@@ -324,7 +381,12 @@ export async function montarImportar(k, el) {
     const blocoNeg = h("div", { class: "imp-neg" },
       h("label", { class: "imp-neg-l" }, h("span", { class: "rotulo" }, "Funil"), selFunil),
       h("label", { class: "imp-neg-l" }, h("span", { class: "rotulo" }, "Etapa"), selEtapa), avisoAds, avisoAuto);
+    // plano 1000b · RB-133: com «Criar …» desligado, as colunas de negócio mapeadas não entram — a tela diz quais (antes: descartadas em silêncio)
+    const colsNeg = L.colunasNegocioMapeadas(S.mapa);
+    const avisoIgnora = h("p", { class: "aviso aviso-aten imp-aviso-ignora", role: "status", hidden: true }, ui.icone("info"),
+      h("span", null, colsNeg.length ? `${colsNeg.length === 1 ? "A coluna" : "As colunas"} ${L.juntarE(colsNeg)} ${colsNeg.length === 1 ? "vai ser ignorada" : "vão ser ignoradas"}: ligue «Criar ${k.v.art("negocio") === "a" ? "uma" : "um"} ${k.v.min("negocio")} para cada linha» para usá-${colsNeg.length === 1 ? "la" : "las"}.` : ""));
     function desenharEtapas() {
+      avisoIgnora.hidden = !!o.criarNegocio || !colsNeg.length;
       const f = funis.find(x => x.id === o.funil_id);
       ui.limpar(selEtapa);
       const abertas = f ? f.estagios.filter(e => e.tipo === "aberto") : [];
@@ -335,13 +397,15 @@ export async function montarImportar(k, el) {
     }
     selFunil.addEventListener("change", () => { o.funil_id = selFunil.value; o.estagio_id = null; desenharEtapas(); desenharConferir(); });
     selEtapa.addEventListener("change", () => { o.estagio_id = selEtapa.value; desenharConferir(); });
-    neg.querySelector("input").addEventListener("change", ev => { o.criarNegocio = ev.target.checked; desenharEtapas(); desenharConferir(); });
+    if (semFunil) { const x = neg.querySelector("input"); if (x) { x.checked = false; x.disabled = true; } }
+    neg.querySelector("input").addEventListener("change", ev => { o.criarNegocio = !semFunil && ev.target.checked; desenharEtapas(); desenharConferir(); });
     desenharEtapas();
 
     // prévia das 5 primeiras linhas + contagem de problemas
     const problemas = problemasDoMapa();
-    const vazias = problemas.filter(p => p.length && /ignorada/.test(p[0])).length;
-    const comProblema = problemas.filter(p => p.length && !/ignorada/.test(p[0])).length;
+    // plano 1000b · RB-087: a linha vazia é reconhecida pela constante da lógica, não por /ignorada/ no texto da mensagem
+    const vazias = problemas.filter(p => L.linhaVazia(p)).length;
+    const comProblema = problemas.filter(p => p.length && !L.linhaVazia(p)).length;
     const cols = [];
     const vistos = S.mapa.filter(Boolean);
     const rot = { nome: "Nome", telefone: "Telefone", email: "E-mail", empresa: "Empresa", cidade: "Cidade", uf: "UF", etiquetas: "Etiquetas", negocio_valor: "Valor", estagio: "Etapa" };
@@ -382,7 +446,8 @@ export async function montarImportar(k, el) {
     // plano 1000 (CR-118): a mesma pessoa duas vezes na planilha (telefone com/sem 55 e 9, ou e-mail) — a 2ª linha só atualizaria a 1ª
     const dups = L.duplicadosPlanilha(linhasMontadas, d.numeros);
     const avisoDup = dups.length ? h("p", { class: "aviso aviso-aten imp-aviso-dup" }, ui.icone("alerta"), h("span", null,
-      `${ui.num(dups.length)} ${dups.length === 1 ? "contato aparece" : "contatos aparecem"} mais de uma vez na planilha (a linha seguinte atualiza a anterior): `
+      // plano 1000b · RB-130: o termo da vertical («pacientes aparecem»)
+      `${ui.num(dups.length)} ${dups.length === 1 ? `${k.v.min("contato")} aparece` : `${k.v.min("contatos")} aparecem`} mais de uma vez na planilha (a linha seguinte atualiza a anterior): `
       + dups.slice(0, 5).map(g => `${g.tipo === "telefone" ? "telefone" : "e-mail"} ${g.valor} nas linhas ${g.linhas.join(", ")}`).join("; ")
       + (dups.length > 5 ? `; e mais ${ui.num(dups.length - 5)}.` : "."))) : null;
     // plano 1000 (CR-123): etapas que não existem no funil escolhido (entram na 1ª etapa) e etiquetas que serão criadas — antes de importar
@@ -394,6 +459,9 @@ export async function montarImportar(k, el) {
       const etapaPadrao = f ? (f.estagios.find(e => e.id === o.estagio_id) || f.estagios.find(e => e.tipo === "aberto") || {}).nome : null;
       if (o.criarNegocio && cf.etapasDesconhecidas.length) avisoConferir.appendChild(h("p", { class: "aviso aviso-aten imp-aviso-etapa" }, ui.icone("alerta"),
         h("span", null, `Etapa${cf.etapasDesconhecidas.length === 1 ? "" : "s"} da planilha que não ${cf.etapasDesconhecidas.length === 1 ? "existe" : "existem"} (aberta${cf.etapasDesconhecidas.length === 1 ? "" : "s"}) em «${f ? f.nome : "funil"}»: ${cf.etapasDesconhecidas.map(x => `«${x}»`).join(", ")}. ${cf.etapasDesconhecidas.length === 1 ? "Essa linha entra" : "Essas linhas entram"} em «${etapaPadrao || "1ª etapa"}».`)));
+      // plano 1000b · RB-250: «VIP, Retorno» viraria UMA etiqueta — avisa para separar com «;»
+      if (cf.etiquetasComVirgula && cf.etiquetasComVirgula.length) avisoConferir.appendChild(h("p", { class: "aviso aviso-aten imp-aviso-virgula" }, ui.icone("alerta"),
+        h("span", null, `Etiquetas separadas por vírgula viram uma etiqueta só (ex.: «${cf.etiquetasComVirgula[0]}»). Para separar, use ; na planilha (VIP; Retorno).`)));
       if (cf.etiquetasNovas.length) avisoConferir.appendChild(h("p", { class: "aviso imp-aviso-etq" }, ui.icone("etiqueta"),
         h("span", null, `${cf.etiquetasNovas.length === 1 ? "Etiqueta nova que será criada" : "Etiquetas novas que serão criadas"}: ${cf.etiquetasNovas.slice(0, 12).map(x => `«${x}»`).join(", ")}${cf.etiquetasNovas.length > 12 ? ` e mais ${cf.etiquetasNovas.length - 12}` : ""}.`)));
     }
@@ -418,7 +486,7 @@ export async function montarImportar(k, el) {
           h("div", { class: "imp-grupo" }, h("span", { class: "rotulo" }, "Etiquetas para todos"), etiquetas),
           h("div", { class: "imp-grupo" }, h("span", { class: "rotulo" }, "Responsável"), dono,
             h("small", { class: "campo-ajuda" }, `Sem responsável: todo mundo da equipe vê ${k.v.art("contato") === "a" ? "as novas" : "os novos"} ${k.v.min("contatos")}.`))),
-        h("div", { class: "pilha" }, neg, blocoNeg)),
+        h("div", { class: "pilha" }, neg, avisoIgnora, blocoNeg)),
       ...[h("h3", { class: "imp-sub" }, "Prévia"), resumoPrevia, avisoTel, avisoDup, avisoConferir,
         btRuins || btBaixarRuins ? h("div", { class: "linha imp-ruins" }, btRuins, btBaixarRuins) : null, previa.el, notaRuins].filter(Boolean));
     desenharConferir();
@@ -438,6 +506,8 @@ export async function montarImportar(k, el) {
       btPausar.textContent = S.pausado ? "Continuar" : "Pausar";
       atualizarBarra();
     }, { hidden: true });
+    // plano 1000b · RB-128: «Parar aqui» — encerra depois do lote em curso e mostra o resumo do que entrou (com «Tentar o restante»)
+    const btParar = botao("Parar aqui", "fant", () => { S.parado = true; S.cancelado = true; S.pausado = false; btParar.disabled = true; atualizarTexto(); }, { hidden: true });
     const faltam = total - S.feitas;
     const btIniciar = botao(S.feitas > 0 ? `Importar ${faltam === 1 ? "a linha que falta" : `as ${ui.num(faltam)} linhas que faltam`}`
       : `Importar ${ui.num(total)} linha${total === 1 ? "" : "s"}`, "prim", () => iniciar());
@@ -458,7 +528,7 @@ export async function montarImportar(k, el) {
       h("ul", { class: "imp-lista", hidden: S.rodando || S.terminou }, lista.map(t => h("li", null, t))),
       h("div", { class: "imp-prog", hidden: !S.rodando && !S.terminou }, barraLinha, texto),
       resultado);
-    rodape.append(btVoltar, h("div", { class: "linha" }, btPausar, btIniciar));
+    rodape.append(btVoltar, h("div", { class: "linha" }, btParar, btPausar, btIniciar));
 
     function atualizarBarra() {
       const p = total ? Math.round((S.feitas / total) * 100) : 100;
@@ -474,15 +544,16 @@ export async function montarImportar(k, el) {
     function atualizarTexto() {
       texto.textContent = S.terminou ? `${ui.num(S.feitas)} de ${ui.num(total)} linhas processadas.`
         : S.pausado ? `Pausado em ${ui.num(S.feitas)} de ${ui.num(total)} linhas. Nada se perde: continue quando quiser.`
-        : `Importando… ${ui.num(S.feitas)} de ${ui.num(total)} linhas (lotes de ${S.lote}).`;
+        : S.parado ? `Parando em ${ui.num(S.feitas)} de ${ui.num(total)} linhas…`
+        : `Importando… ${ui.num(S.feitas)} de ${ui.num(total)} linhas.`;      // plano 1000b · RB-211: sem o jargão «lotes de 100»
     }
 
     async function iniciar() {
       if (S.rodando) return;
-      S.rodando = true; S.pausado = false; S.cancelado = false; S.erroFatal = null;
+      S.rodando = true; S.pausado = false; S.cancelado = false; S.erroFatal = null; S.parado = false; S.loteIncerto = null;
       corpo.querySelector(".imp-lista").hidden = true;
       corpo.querySelector(".imp-prog").hidden = false;
-      btIniciar.hidden = true; btVoltar.hidden = true; btPausar.hidden = false;
+      btIniciar.hidden = true; btVoltar.hidden = true; btPausar.hidden = false; btParar.hidden = false; btParar.disabled = false;
       const linhas = linhasDoMapa().map((l, i) => ({ ...l, _linha: (S.dados.numeros && S.dados.numeros[i]) || i + 2 }));
       const opcoes = { atualizar: !!o.atualizar, etiquetas: o.etiquetas, arquivo: String(S.arquivo.nome || "").slice(0, 200),
         ...(o.dono_id ? { dono_id: o.dono_id } : {}),
@@ -491,7 +562,8 @@ export async function montarImportar(k, el) {
       S.resumo = S.resumo || { criados: 0, atualizados: 0, ignorados: 0, erros: [], avisos: [] };
       atualizarBarra();
       while (i < linhas.length && S.vivo && !S.cancelado) {
-        while (S.pausado && S.vivo) await esperar(200);
+        while (S.pausado && S.vivo && !S.cancelado) await esperar(200);
+        if (S.cancelado) break;
         if (!S.vivo) break;
         const lote = linhas.slice(i, i + S.lote);
         try {
@@ -503,17 +575,19 @@ export async function montarImportar(k, el) {
         } catch (e) {
           if (e && e.codigo === "tempo_esgotado" && S.lote > 10) { S.lote = L.metadeLote(S.lote); atualizarTexto(); continue; }
           S.erroFatal = e;
+          // plano 1000b · RB-127: erro ambíguo (rede caiu, 502–504) — o servidor pode ter aplicado ESTE lote; a tela diz quais linhas conferir
+          if (L.erroAmbiguo(e) && lote.length) S.loteIncerto = { de: lote[0]._linha, ate: lote[lote.length - 1]._linha, linhas: lote };
           break;
         }
       }
       S.rodando = false;
       S.terminou = true;
-      btPausar.hidden = true;
-      corpo.querySelector("h2").textContent = S.erroFatal ? "Importação interrompida" : "Importação concluída";
+      btPausar.hidden = true; btParar.hidden = true;
+      corpo.querySelector("h2").textContent = S.erroFatal ? "Importação interrompida" : S.parado && S.feitas < total ? "Importação parada" : "Importação concluída";
       atualizarBarra();
       if (S.resumo.criados || S.resumo.atualizados) k.recarregarBase().catch(() => {});
       desenharResultado();
-      ui.anunciar(`Importação ${S.erroFatal ? "interrompida" : "concluída"}: ${L.textoResumoImportacao(S.resumo)}.`);
+      ui.anunciar(`Importação ${S.erroFatal ? "interrompida" : S.parado && S.feitas < total ? "parada" : "concluída"}: ${L.textoResumoImportacao(S.resumo)}.`);
     }
 
     function desenharResultado() {
@@ -525,8 +599,16 @@ export async function montarImportar(k, el) {
         h("div", null, h("b", null, ui.num(s.ignorados)), h("span", null, "pulados")),
         h("div", { class: s.erros.length ? "ruim" : null }, h("b", null, ui.num(s.erros.length)), h("span", null, s.erros.length === 1 ? "erro" : "erros"))));
       if (S.erroFatal) {
+        const inc = S.loteIncerto;
         resultado.append(h("p", { class: "aviso aviso-ruim", role: "alert" }, ui.icone("alerta"),
-          h("span", null, `${k.erro(S.erroFatal)} O que já entrou ficou salvo (${ui.num(S.feitas)} de ${ui.num(total)} linhas).`)));
+          h("span", null, inc
+            // plano 1000b · RB-127: com a conexão caindo no meio, o último lote pode ter entrado — reenviar sem conferir duplicaria negócios
+            ? `${k.erro(S.erroFatal)} As linhas ${inc.de}–${inc.ate} podem ter entrado; confira antes de tentar o restante. O que entrou antes delas ficou salvo (${ui.num(S.feitas)} de ${ui.num(total)} linhas).`
+            : `${k.erro(S.erroFatal)} O que já entrou ficou salvo (${ui.num(S.feitas)} de ${ui.num(total)} linhas).`)));
+        if (inc) resultado.append(h("div", { class: "linha imp-incerto" }, botao(`Baixar as linhas ${inc.de}–${inc.ate}`, "sec", () => baixarIncertas(inc))));
+      } else if (S.parado && S.feitas < total) {
+        resultado.append(h("p", { class: "aviso aviso-aten", role: "status" }, ui.icone("info"),
+          h("span", null, `Importação parada em ${ui.num(S.feitas)} de ${ui.num(total)} linhas. O que entrou ficou salvo; o restante pode ser importado depois.`)));      // plano 1000b · RB-128
       }
       const problemas = [...s.erros.map(x => ({ ...x, tipo: "Erro" })), ...s.avisos.map(x => ({ ...x, tipo: "Aviso" }))]
         .sort((a, b) => (a.linha || 0) - (b.linha || 0));
@@ -541,13 +623,27 @@ export async function montarImportar(k, el) {
       ui.limpar(rodape);
       rodape.append(
         // plano 1000 (CR-127): a próxima importação começa limpa — etiquetas, responsável e o negócio da anterior não vão junto sem aviso
-        botao("Importar outra planilha", "sec", () => { Object.assign(S, { dados: null, arquivo: null, mapa: [], resumo: null, feitas: 0, terminou: false, erroFatal: null, lote: 100, imp: null,
+        botao("Importar outra planilha", "sec", () => { Object.assign(S, { dados: null, arquivo: null, mapa: [], resumo: null, feitas: 0, terminou: false, erroFatal: null, lote: 100, imp: null, parado: false, cancelado: false, loteIncerto: null,
           opcoes: { atualizar: false, etiquetas: [], dono_id: null, criarNegocio: false, funil_id: null, estagio_id: null } }); ir(1); }),
-        S.erroFatal && S.feitas < total
-          ? botao("Tentar o restante", "prim", () => { S.terminou = false; S.erroFatal = null; ir(4); })
+        (S.erroFatal || S.parado) && S.feitas < total
+          ? botao("Tentar o restante", "prim", () => { S.terminou = false; S.erroFatal = null; S.parado = false; S.cancelado = false; ir(4); })      // plano 1000b · RB-128: também depois de «Parar aqui»
           // plano 1000 (CR-126): o atalho abre a lista de QUEM ENTROU (origem importação, cadastrados hoje e a etiqueta escolhida, se for uma só)
-          : h("a", { class: "bt bt-prim imp-ver-quem", href: `#/contatos?origem=importacao&criado_de=${encodeURIComponent(ui.hojeSP())}${o.etiquetas.length === 1 ? `&etiqueta=${encodeURIComponent(o.etiquetas[0])}` : ""}` },
-            `Ver ${k.v.min("contatos")} importad${k.v.art("contato")}s`));
+          // plano 1000b · RB-132: o filtro mostra só os NOVOS — o rótulo diz isso («Ver os 3 novos»); sem novos, abre a lista inteira
+          : s.criados ? h("a", { class: "bt bt-prim imp-ver-quem", href: `#/contatos?origem=importacao&criado_de=${encodeURIComponent(ui.hojeSP())}${o.etiquetas.length === 1 ? `&etiqueta=${encodeURIComponent(o.etiquetas[0])}` : ""}` },
+            s.criados === 1 ? `Ver ${k.v.art("contato")} nov${k.v.art("contato")}` : `Ver ${k.v.art("contato")}s ${ui.num(s.criados)} nov${k.v.art("contato")}s`)
+            : h("a", { class: "bt bt-prim imp-ver-quem", href: "#/contatos" }, `Ver ${k.v.min("contatos")}`));
+      if (s.criados && s.atualizados) resultado.append(h("p", { class: "sub imp-nota-atual" },
+        `${s.atualizados === 1 ? `${k.v.art("contato") === "a" ? "A" : "O"} atualizad${k.v.art("contato")} mantém` : `${k.v.art("contato") === "a" ? "As" : "Os"} ${ui.num(s.atualizados)} atualizad${k.v.art("contato")}s mantêm`} a origem de antes e não ${s.atualizados === 1 ? "aparece" : "aparecem"} nessa lista.`));
+    }
+
+    /** plano 1000b · RB-127: as linhas do lote incerto num CSV (para conferir na lista antes de reenviar). */
+    function baixarIncertas(inc) {
+      const cab = ["linha", "nome", "telefone", "email"];
+      const csv = L.gerarCSV(cab, inc.linhas.map(l => [l._linha, l.nome || "", l.telefone || "", l.email || ""]));
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+      const a = h("a", { href: url, download: `linhas-${inc.de}-a-${inc.ate}-para-conferir.csv`, hidden: true });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
     }
 
     function baixar(problemas) {
@@ -571,6 +667,7 @@ export async function montarImportar(k, el) {
         ui.toast(`Importação parada em ${ui.num(S.feitas)} de ${ui.num(total)} linhas porque você saiu da tela. O que entrou ficou salvo; importe o restante pela planilha.`, { tipo: "aten", ms: 10000 });
       }
       S.vivo = false; S.cancelado = true;
+      pararJanela();
       removeEventListener("beforeunload", antesDeSair);
       if (typeof soltarNaoAtualizar === "function") soltarNaoAtualizar();
     },

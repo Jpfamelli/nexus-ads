@@ -91,8 +91,18 @@ export function janela(M, dias = 30) {
   }
   const de = M.R - dias + 1; return { de, ate: M.R, deA: de - dias, ateA: de - 1, n: dias };
 }
-/** Textos do período escolhido: {titulo, nos, antes, curto}. */
-export function rotuloPeriodo(dias) {
+/** Textos do período escolhido: {titulo, nos, antes, curto}.
+    Plano 1000b · AB-082: com `M`, no dia 1º («ontem» foi o último dia do mês anterior) «Este mês» é na verdade o mês de ontem inteiro e
+    «Mês passado» é o anterior a ele — os rótulos dizem o NOME do mês («Setembro (até ontem)» / «Agosto») em vez de «Este mês». */
+export function rotuloPeriodo(dias, M = null) {
+  if ((dias === "mes" || dias === "mes_ant") && M && typeof M.dataDe === "function" && Number.isFinite(M.R)) {
+    const ontem = M.dataDe(M.R), amanha = M.dataDe(M.R + 1);
+    if (amanha.getDate() === 1) {
+      const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+      if (dias === "mes") { const m = MESES[ontem.getMonth()]; return { titulo: `${cap(m)} (até ontem)`, nos: `em ${m}`, antes: "o mês anterior", curto: m }; }
+      const m = MESES[(ontem.getMonth() + 11) % 12]; return { titulo: cap(m), nos: `em ${m}`, antes: "o mês anterior", curto: m };
+    }
+  }
   if (dias === "mes") return { titulo: "Este mês", nos: "neste mês", antes: "o mesmo pedaço do mês anterior", curto: "este mês" };
   if (dias === "mes_ant") return { titulo: "Mês passado", nos: "no mês passado", antes: "o mês anterior", curto: "mês passado" };
   const n = Number(dias) || 30;
@@ -120,7 +130,11 @@ export function numerosPeriodo(M, { dias = 30, plat = "" } = {}) {
   // plano 1000 (AD-128): custo por agendamento e por fechamento do CRM (o «quanto paguei por paciente?»)
   const custoAgendamento = c.agendadas > 0 && t.gasto > 0 ? t.gasto / c.agendadas : null;
   const custoFechamento = c.fecharam > 0 && t.gasto > 0 ? t.gasto / c.fecharam : null;
-  return { de, ate, deA, ateA, f, t, ta, c, ca, roas, fee, custoTotal, retorno, dias: n, periodo: dias, rotulo: rotuloPeriodo(dias), plat, gestao, estimada, custoAgendamento, custoFechamento };
+  // plano 1000b · AB-194: os mesmos custos no período anterior (o chip de variação da linha «R$ X por agendamento»)
+  const custoAgendamentoAnt = ca.agendadas > 0 && ta.gasto > 0 ? ta.gasto / ca.agendadas : null;
+  const custoFechamentoAnt = ca.fecharam > 0 && ta.gasto > 0 ? ta.gasto / ca.fecharam : null;
+  return { de, ate, deA, ateA, f, t, ta, c, ca, roas, fee, custoTotal, retorno, dias: n, periodo: dias, rotulo: rotuloPeriodo(dias, M), plat, gestao, estimada, custoAgendamento, custoFechamento,
+    custoAgendamentoAnt, custoFechamentoAnt };
 }
 
 /** Rótulos do herói (F1): com fee configurado, «Retorno total» = receita ÷ (anúncios + gestão) e a nota «inclui R$ X de gestão»
@@ -275,17 +289,16 @@ export function crmPorCriativo(M, de, ate, { plat = "" } = {}) {
   return out;
 }
 export const RANK_CRI = [["receita", "Mais receita"], ["fechados", "Mais fechados"], ["cpa", "Menor custo por conversa"]];
+/** Plano 1000b · AB-044: com o filtro Google o ranking fala de «conversão» (o Google conta conversões, não conversas no WhatsApp). */
+export const unidadeConv = plat => (plat === "google" ? { um: "conversão", varios: "conversões" } : { um: "conversa", varios: "conversas" });
+export const rankCriPorPlat = plat => RANK_CRI.map(([k, rot]) => [k, k === "cpa" ? `Menor custo por ${unidadeConv(plat).um}` : rot]);
 export const MIN_CONV_CPA = 3;   // custo por conversa só entra no ranking com pelo menos 3 conversas (senão R$ 4 de teste "ganha")
 /** Ranking de criativos do período (P1): investimento do Ads + resultado do CRM por criativo.
     por = 'receita' | 'fechados' | 'cpa'. Criativo sem investimento no período fica de fora. */
 export function rankingCriativos(M, { dias = 30, plat = "", por = "receita", n = 8, reserva = false } = {}) {
   // plano 1000 (AD-112): quem não registra valor abria o ranking em «Mais receita» e via «Nenhum criativo trouxe receita». Com `reserva`
   // (a pessoa não escolheu a ordem), sem receita no período o ranking abre em «Menor custo por conversa» — `automatico: true` avisa a tela
-  if (reserva && (por === "receita" || !por)) {
-    const r = rankingCriativos(M, { dias, plat, por: "receita", n });
-    if (r.lista.length || !r.total) return r;
-    return { ...rankingCriativos(M, { dias, plat, por: "cpa", n }), automatico: true };
-  }
+  // plano 1000b · AB-083: a base (investimento + CRM por criativo) é calculada UMA vez; a reserva só reordena (antes eram dois rankings)
   const { de, ate } = janela(M, dias);
   const crm = crmPorCriativo(M, de, ate, { plat });
   const ZERO = { conversas: 0, agendadas: 0, compareceram: 0, faltaram: 0, fecharam: 0, receita: 0 };
@@ -300,16 +313,21 @@ export function rankingCriativos(M, { dias = 30, plat = "", por = "receita", n =
     fechados: (a, b) => b.c.fecharam - a.c.fecharam || b.c.receita - a.c.receita || cpa(a) - cpa(b),
     cpa: (a, b) => cpa(a) - cpa(b) || b.t.conversoes - a.t.conversoes,
   };
+  const ordenar = chave => {
+    // receita/fechados: só quem trouxe resultado (zero não é ranking); custo por conversa: com volume mínimo
+    const base = chave === "cpa" ? todos.filter(x => x.t.conversoes >= MIN_CONV_CPA)
+      : chave === "fechados" ? todos.filter(x => x.c.fecharam > 0) : todos.filter(x => x.c.receita > 0);
+    const lista = base.slice().sort(ORD[chave]).slice(0, n);
+    const valor = x => (chave === "receita" ? x.c.receita : chave === "fechados" ? x.c.fecharam : x.t.cpa);
+    const topo = lista.length ? Math.max(...lista.map(valor).filter(fin)) : 0;
+    // barra: receita/fechados proporcionais ao 1º; custo por conversa: o MENOR enche a barra
+    const barra = x => { const v = valor(x); if (!fin(v) || !(topo > 0)) return 0; return chave === "cpa" ? Math.min(1, lista[0].t.cpa / v) : v / topo; };
+    return { por: chave, de, ate, total: todos.length, lista: lista.map((x, i) => ({ ...x, pos: i + 1, barra: barra(x) })) };
+  };
   const chave = ORD[por] ? por : "receita";
-  // receita/fechados: só quem trouxe resultado (zero não é ranking); custo por conversa: com volume mínimo
-  const base = chave === "cpa" ? todos.filter(x => x.t.conversoes >= MIN_CONV_CPA)
-    : chave === "fechados" ? todos.filter(x => x.c.fecharam > 0) : todos.filter(x => x.c.receita > 0);
-  const lista = base.slice().sort(ORD[chave]).slice(0, n);
-  const valor = x => (chave === "receita" ? x.c.receita : chave === "fechados" ? x.c.fecharam : x.t.cpa);
-  const topo = lista.length ? Math.max(...lista.map(valor).filter(fin)) : 0;
-  // barra: receita/fechados proporcionais ao 1º; custo por conversa: o MENOR enche a barra
-  const barra = x => { const v = valor(x); if (!fin(v) || !(topo > 0)) return 0; return chave === "cpa" ? Math.min(1, lista[0].t.cpa / v) : v / topo; };
-  return { por: chave, de, ate, total: todos.length, lista: lista.map((x, i) => ({ ...x, pos: i + 1, barra: barra(x) })) };
+  const r = ordenar(chave);
+  if (!(reserva && (por === "receita" || !por)) || r.lista.length || !r.total) return r;
+  return { ...ordenar("cpa"), automatico: true };
 }
 
 /** Série diária do gráfico gasto × conversas (média de 7 dias), igual ao serieDia do painel. */
@@ -333,7 +351,29 @@ export function eixoTopo(v, n = 4) {
 }
 
 /* ---------- envios de WhatsApp: ✓ enviado · ✓✓ entregue · ! não saiu · ◷ pendente (nunca azul) ---------- */
-export function statusEnvio(x) {
+/** Plano 1000b · AB-080: os erros que a Meta devolve em inglês («Re-engagement message», «código 131026 Message undeliverable») viram
+    português claro; o texto original fica em `erroOriginal` (vai no title). Erro sem padrão conhecido passa como veio. */
+const ERROS_ENVIO_PT = [
+  [/131047|re-?engagement/i, "fora da janela de 24 h: só um modelo aprovado pela Meta pode abrir a conversa"],
+  [/131026|undeliverable|not a valid whatsapp user/i, "o número não recebeu a mensagem (pode não ter WhatsApp ou estar com o app desatualizado)"],
+  [/131030|not in (the )?allowed list/i, "o número não está na lista de destinos permitidos do número de teste"],
+  [/131056|pair rate limit/i, "muitas mensagens seguidas para o mesmo número: tente de novo em alguns minutos"],
+  [/130429|131048|rate limit|spam rate/i, "limite de envio da Meta atingido: tente de novo mais tarde"],
+  [/132000|132001|template.*(does not exist|not exist|translation)/i, "o modelo de mensagem não existe ou não foi aprovado neste idioma"],
+  [/access token|oauth|session has expired/i, "o acesso do número ao WhatsApp expirou: conecte o número de novo"],
+  [/131031|account.*(locked|restricted)/i, "a conta do WhatsApp está bloqueada ou restrita pela Meta"],
+  [/timed? ?out|ETIMEDOUT/i, "o WhatsApp demorou demais para responder"],
+];
+export function erroEnvioPt(erro) {
+  const s = String(erro || "");
+  if (!s) return "";
+  const achou = ERROS_ENVIO_PT.find(([re]) => re.test(s));
+  return achou ? achou[1] : s;
+}
+/** Plano 1000b · AB-199: com `agora`, o «enviado» sem confirmação há mais de 24 h vira «enviado · sem confirmação de entrega» (antes um
+    diário de 10 dias atrás dizia «entrega ainda não confirmada» para sempre). Sem `agora`, o texto de sempre (igual ao do clássico). */
+export const SEM_CONFIRMACAO_MS = 24 * 36e5;
+export function statusEnvio(x, agora = null) {
   if (!x) return null;
   const erro = String(x.erro || x.erro_envio || "");
   const naoChegou = /não entregou/i.test(erro);
@@ -342,18 +382,25 @@ export function statusEnvio(x) {
     const total = Array.isArray(x.destinos) ? x.destinos.length : 0, falhas = erro.split("; ").filter(s => /^[^:\s]+: /.test(s)).length;
     const ok = total && falhas && falhas < total ? total - falhas : 0;
     const quando = x.entregue_em || x.enviado_em;
-    return { k: "parcial", tique: "✓!", rotulo: ok ? `enviado a ${ok} de ${total} às ${horaSP(quando)}` : `enviado em parte às ${horaSP(quando)}`, hora: horaSP(quando), erro: erro.slice(0, 160) };
+    return { k: "parcial", tique: "✓!", rotulo: ok ? `enviado a ${ok} de ${total} às ${horaSP(quando)}` : `enviado em parte às ${horaSP(quando)}`, hora: horaSP(quando), erro: erroEnvioPt(erro).slice(0, 160), erroOriginal: erro.slice(0, 300) };   // plano 1000b · AB-080
   }
   if (x.entregue_em) return { k: "entregue", tique: "✓✓", rotulo: `entregue às ${horaSP(x.entregue_em)}`, hora: horaSP(x.entregue_em) };
-  if (x.enviado_em && !naoChegou) return { k: "enviado", tique: "✓", rotulo: `enviado às ${horaSP(x.enviado_em)} · entrega ainda não confirmada`, hora: horaSP(x.enviado_em) };
-  if (erro) return { k: "erro", tique: "!", rotulo: naoChegou ? "não entregue" : "não enviado", hora: x.enviado_em ? horaSP(x.enviado_em) : null, erro: erro.slice(0, 160) };
+  if (x.enviado_em && !naoChegou) {
+    const velho = agora != null && Number.isFinite(+agora) && +agora - Date.parse(x.enviado_em) > SEM_CONFIRMACAO_MS;   // AB-199
+    return { k: "enviado", tique: "✓", rotulo: velho ? "enviado · sem confirmação de entrega" : `enviado às ${horaSP(x.enviado_em)} · entrega ainda não confirmada`, hora: horaSP(x.enviado_em) };
+  }
+  if (erro) return { k: "erro", tique: "!", rotulo: naoChegou ? "não entregue" : "não enviado", hora: x.enviado_em ? horaSP(x.enviado_em) : null, erro: erroEnvioPt(erro).slice(0, 160), erroOriginal: erro.slice(0, 300) };   // plano 1000b · AB-080
   return { k: "pendente", tique: "◷", rotulo: "gerado, ainda não enviado", hora: null };
 }
 
 /* ---------- conexão com Meta/Google (regra "integracao", que só o servidor conhece) ---------- */
+/** Plano 1000b · AB-081: a CHAVE decide primeiro («integracao|google»); a mensagem só quando a chave não diz — e nela «Google» vence
+    «meta», que também é palavra comum («a meta de custo» numa mensagem do Google era atribuída ao Meta). */
 export function canalDe(a) {
-  const s = `${(a && a.chave) || ""} ${(a && a.mensagem) || ""}`.toLowerCase();
-  return /\|meta\b|\bmeta\b/.test(s) ? "meta" : /\|google\b|\bgoogle\b/.test(s) ? "google" : null;
+  const k = String((a && a.chave) || "").toLowerCase(), m = String((a && a.mensagem) || "").toLowerCase();
+  if (/\|meta\b|\bmeta\b/.test(k)) return "meta";
+  if (/\|google\b|\bgoogle\b/.test(k)) return "google";
+  return /\bgoogle\b/.test(m) ? "google" : /\bmeta\b/.test(m) ? "meta" : null;
 }
 // plataforma desconhecida mas presente (lead marcado como anúncio sem dizer de onde) ainda é anúncio — igual ao nucleo.nomePlat
 export const nomePlat = p => (p === "meta" ? "Meta" : p === "google" ? "Google" : p ? "Anúncio" : "Sem anúncio");
@@ -381,7 +428,11 @@ export function estadoIntegracao(integs = [], alertas = [], agora = Date.now()) 
   });
   const nivel = canais.reduce((n, c) => (ORD_E[c.estado] > ORD_E[n] ? c.estado : n), canais.length ? "ok" : "nenhuma");
   const syncs = canais.map(c => c.sync).filter(Boolean);
-  return { nivel, canais, erros: canais.filter(c => c.estado === "erro"), ultimo: syncs.length ? Math.max(...syncs) : null };
+  // plano 1000b · AB-200: integração pausada (ativo=false) não muda o nível, mas aparece no detalhe da pílula («Meta · pausada»)
+  const pausadas = (integs || []).filter(i => i && !i.ativo && i.canal && !canais.some(c => c.canal === i.canal))
+    .map(i => ({ canal: i.canal, estado: "pausada", sync: i.ultimo_sync && Number.isFinite(Date.parse(i.ultimo_sync)) ? Date.parse(i.ultimo_sync) : null, status: i.status || "" }));
+  // (não enumerável: o estado continua igual ao do painel clássico para quem compara campo a campo)
+  return Object.defineProperty({ nivel, canais, erros: canais.filter(c => c.estado === "erro"), ultimo: syncs.length ? Math.max(...syncs) : null }, "pausadas", { value: pausadas, enumerable: false });
 }
 /** Texto da pílula de conexão. */
 export function textoPilula(e, agora = Date.now()) {
@@ -436,14 +487,35 @@ export function montarRadar(M, dados = {}, agora = Date.now()) {
   // no lugar dos r2 do Google: um aviso informativo, ativo, que diz o que ligar
   if (semConvG) episodios.unshift({ chave: "google_sem_conversao", regra: "google_sem_conversao", nome: "Google sem acompanhamento de conversões", sev: "info",
     msg: "O Google Ads gastou no período e não registrou nenhuma conversão: o acompanhamento de conversões da conta não está ligado. Enquanto isso, «Campanha sem conversa» fica desligada para o Google.",
-    acao: "Ligue o acompanhamento de conversões (clique no WhatsApp ou formulário) na conta do Google Ads.", ativo: true, desde: "agora", envio: null });
+    acao: "Ligue o acompanhamento de conversões (clique no WhatsApp ou formulário) na conta do Google Ads.", ativo: true, desde: "nos últimos 30 dias", envio: null });   // plano 1000b · AB-208: a janela da regra (antes «desde agora»)
   const SEV_OK = new Set(["critico", "alerta", "info"]);
+  const registroTotal = (dados.alertas || []).length;   // plano 1000b · AB-077: a tela diz «os 10 mais recentes de N»
   const registro = (dados.alertas || []).slice().sort((a, b) => String(b.criado_em).localeCompare(String(a.criado_em))).slice(0, 10)
-    .map(a => ({ a, sev: SEV_OK.has(a.severidade) ? a.severidade : "alerta", nome: nomeRegraSrv(a, M ? M.REGRAS : []), quando: quandoSP(a.criado_em, new Date(agora)), envio: statusEnvio(a) }));
+    .map(a => ({ a, sev: SEV_OK.has(a.severidade) ? a.severidade : "alerta", nome: nomeRegraSrv(a, M ? M.REGRAS : []), quando: quandoSP(a.criado_em, new Date(agora)), envio: statusEnvio(a, agora) }));   // AB-199
   // plano 1000 (AD-057): a lista mostra 12 episódios — os que ficaram de fora são contados («e mais N nos últimos 14 dias»)
   const ocultos = Math.max(0, hist.length - 12);
-  return { atuais, ativos: atuais.length + est.erros.length + (semConvG ? 1 : 0), conexoes, episodios, ocultos, registro, estado: est, googleSemConversao: semConvG,
-    selo: seloRadar(atuais, est.erros.length) };
+  // plano 1000b · AB-079: plataforma sem leitura (erro ou atrasada) faz r2/r5/r6 dispararem por FALTA de número — o episódio leva a
+  // ressalva e não entra no selo
+  const parados = new Set(est.canais.filter(c => c.estado === "erro" || c.estado === "atrasado").map(c => c.canal));
+  for (const ep of episodios) {
+    const canal = leituraParadaAfeta(M, ep.chave, parados);
+    if (canal) { ep.faltaLeitura = true; ep.ressalva = `Pode ser falta de leitura: ${canal === "conta" ? "uma plataforma" : `o ${nomePlat(canal)}`} está sem leitura nova — confira a conexão antes de mexer na campanha.`; }
+  }
+  const atuaisSelo = atuais.filter(a => !leituraParadaAfeta(M, a.chave, parados));
+  return { atuais, ativos: atuais.length + est.erros.length + (semConvG ? 1 : 0), conexoes, episodios, ocultos, registro, registroTotal, estado: est, googleSemConversao: semConvG,
+    selo: seloRadar(atuaisSelo, est.erros.length) };
+}
+/** Plano 1000b · AB-079: as regras que disparam por FALTA de número (sem conversa, investimento parou, CRM parou) e a plataforma que as
+    afeta, quando ela está sem leitura (parados = Set de canais com erro/atrasado). → "meta" | "google" | "conta" (r5, conta inteira) | null. */
+export const REGRAS_FALTA_LEITURA = Object.freeze(["r2", "r5", "r6"]);
+export function leituraParadaAfeta(M, chave, parados) {
+  if (!parados || !parados.size) return null;
+  const [regra, resto] = String(chave || "").split("|");
+  if (!REGRAS_FALTA_LEITURA.includes(regra)) return null;
+  if (regra === "r5") return "conta";
+  if (regra === "r6") return parados.has(resto || "meta") ? (resto || "meta") : null;
+  const c = M && M.CAMP && M.CAMP[resto];
+  return c && parados.has(c.plat) ? c.plat : null;
 }
 /** Plano 1000 (AD-045): o selo da aba Radar conta só o que pede ação (crítico e atenção) e pinta pela maior gravidade —
     antes «Radar 4» em vermelho só com informativos (ritmo, Google sem acompanhamento). {n, sev: "critico"|"alerta"|null}. */
@@ -470,17 +542,28 @@ export function linhaCampanha(M, campId, { dias = 30 } = {}) {
   return { c, t, k, cpp: k.fecharam ? t.gasto / k.fecharam : null, cpag: k.agendadas ? t.gasto / k.agendadas : null, roas: t.gasto ? k.receita / t.gasto : null };
 }
 
+/** Plano 1000b · AB-261: status «ok — 0 linhas» (anúncios parados) aparece no detalhe da pílula; com linhas, nada muda. */
+const linhasZeradas = status => { const m = /(\d+)\s+linhas?\b/i.exec(String(status || "")); return !!m && Number(m[1]) === 0; };
 /** Plano 1000 (AD-081): o detalhe da pílula de conexão, por plataforma (antes só no title — fora do alcance do toque e do teclado). */
 export function detalhePilula(e, agora = Date.now()) {
   return ((e && e.canais) || []).map(c => ({ canal: c.canal, nome: nomePlat(c.canal), estado: c.estado,
     // AD-138/SV-195: com ultimo_sync_parcial mais novo, o detalhe diz quando foi a leitura parcial e quando foi a última completa
     texto: `${c.parcial && !(c.parcial <= c.sync) ? `leitura parcial ${quandoSP(c.parcial, new Date(agora))} · ${c.sync ? `última completa ${quandoSP(c.sync, new Date(agora))}` : "nenhuma completa ainda"}`
-      : c.sync ? `lida ${quandoSP(c.sync, new Date(agora))}` : "ainda não leu"}${c.estado === "parcial" ? ` · ${String(c.status || "").replace(/^parcial\s*—\s*/i, "")}` : ""}${c.estado === "erro" ? " · desconectado" : c.estado === "atrasado" ? " · leitura atrasada" : ""}` }));
+      : c.sync ? `lida ${quandoSP(c.sync, new Date(agora))}` : "ainda não leu"}${linhasZeradas(c.status) ? " · 0 linhas lidas" : ""}${c.estado === "parcial" ? ` · ${String(c.status || "").replace(/^parcial\s*—\s*/i, "")}` : ""}${c.estado === "erro" ? " · desconectado" : c.estado === "atrasado" ? " · leitura atrasada" : ""}` }))
+    // plano 1000b · AB-200: as pausadas no fim — os números dela pararam porque alguém desligou a integração
+    .concat(((e && e.pausadas) || []).map(c => ({ canal: c.canal, nome: nomePlat(c.canal), estado: "pausada",
+      texto: `pausada — sem leituras até ligar de novo${c.sync ? ` (última ${quandoSP(c.sync, new Date(agora))})` : ""}` })));
 }
 /** Plano 1000 (AD-127): o Órbita lê o Meta/Google de hora em hora — quanto falta para a próxima leitura (o botão só recarrega do banco). */
 export const CICLO_LEITURA_MIN = 60;
+export const ATRASO_LEITURA_MS = 2 * 36e5;   // plano 1000b · AB-155: a mesma régua do «atrasado» do estadoIntegracao
 export function proximaLeitura(ultimo, agora = Date.now()) {
   if (!Number.isFinite(ultimo)) return "";
+  // plano 1000b · AB-155: passou de 2 h sem leitura não é «a qualquer momento» — diz desde quando está atrasada
+  if (agora - ultimo > ATRASO_LEITURA_MS) {
+    const d = new Date(ultimo), mesmoDia = hojeSP(d) === hojeSP(new Date(agora));
+    return `leitura atrasada desde ${mesmoDia ? FMT_HORA.format(d) : `${FMT_DDMM.format(d)} ${FMT_HORA.format(d)}`} — o Órbita tenta de novo a cada hora`;
+  }
   const falta = Math.round((ultimo + CICLO_LEITURA_MIN * 6e4 - agora) / 6e4);
   return falta > 1 ? `próxima leitura em ~${falta} min` : "próxima leitura a qualquer momento";
 }
@@ -522,7 +605,8 @@ export function organicosPeriodo(M, { dias = 30 } = {}) {
 }
 
 /* ---------- relatórios enviados ---------- */
-export function listaRelatorios(relatorios = [], n = 12) {
+// plano 1000b · AB-199: `agora` envelhece o «enviado» sem confirmação (24 h)
+export function listaRelatorios(relatorios = [], n = 12, agora = Date.now()) {
   const validos = Array.isArray(relatorios) ? relatorios.filter(r => {
     if (!r || typeof r !== "object" || !["diario", "mensal"].includes(r.tipo)) return false;
     const ref = typeof r.referencia === "string" ? r.referencia.slice(0, 10) : "";
@@ -530,14 +614,23 @@ export function listaRelatorios(relatorios = [], n = 12) {
     const mes = Number(ref.slice(5, 7));
     return mes >= 1 && mes <= 12;
   }) : [];
-  return validos.slice()
+  // plano 1000b · AB-053: a lista diz quantos válidos havia (`total`, não enumerável) — a tela avisa «os 12 mais recentes de N»
+  const lista = validos.slice()
     .sort((a, b) => String(b.referencia).localeCompare(String(a.referencia)) || Number(b.tipo === "mensal") - Number(a.tipo === "mensal"))
     .slice(0, n)
     .map(r => {
       const ref = String(r.referencia).slice(0, 10);
       const titulo = r.tipo === "mensal" ? `Resumo de ${MESES[+ref.slice(5, 7) - 1]} de ${ref.slice(0, 4)}` : `Diário de ${dataIsoBR(ref)}`;
-      return { chave: `${r.tipo}|${ref}`, tipo: r.tipo, ref, titulo, ia: !!r.leitura_ia, envio: statusEnvio(r), r };
+      return { chave: `${r.tipo}|${ref}`, tipo: r.tipo, ref, titulo, ia: !!r.leitura_ia, envio: statusEnvio(r, agora), r };
     });
+  Object.defineProperty(lista, "total", { value: validos.length, enumerable: false });
+  return lista;
+}
+/** Plano 1000b · AB-053/AB-077: «Mostrando os 12 relatórios mais recentes de 20.» — "" quando nada ficou de fora. */
+export function notaCorte(mostrados, total, { um = "relatório", varios = "relatórios" } = {}) {
+  const m = +mostrados || 0, t = +total || 0;
+  if (!(t > m)) return "";
+  return `Mostrando ${m === 1 ? `o ${um} mais recente` : `os ${m} ${varios} mais recentes`} de ${t.toLocaleString("pt-BR")}.`;
 }
 
 /** *negrito*, _itálico_ e quebras do WhatsApp → tokens (o front monta com textContent, nunca innerHTML). */
@@ -546,16 +639,19 @@ export function tokensWa(txt) {
   const linhas = String(txt ?? "").split("\n");
   linhas.forEach((ln, n) => {
     if (n) out.push({ t: "br" });
-    const re = /\*([^*\n]+)\*|(^|[\s(])_([^_\n]+)_/g;
+    // plano 1000b · AB-198: também ```mono``` (t "code") e ~tachado~ (t "s", como o _itálico_: só no começo de palavra)
+    const re = /```([^`\n]+)```|\*([^*\n]+)\*|(^|[\s(])_([^_\n]+)_|(^|[\s(])~([^~\n]+)~/g;
     let pos = 0, m;
     while ((m = re.exec(ln))) {
-      if (m[1] != null) {
+      const inteiro = m[1] != null ? ["code", m[1]] : m[2] != null ? ["b", m[2]] : null;
+      if (inteiro) {
         if (m.index > pos) out.push({ t: "txt", v: ln.slice(pos, m.index) });
-        out.push({ t: "b", v: m[1] });
+        out.push({ t: inteiro[0], v: inteiro[1] });
       } else {
-        const ini = m.index + m[2].length;
+        const ital = m[4] != null, lado = ital ? m[3] : m[5];
+        const ini = m.index + lado.length;
         if (ini > pos) out.push({ t: "txt", v: ln.slice(pos, ini) });
-        out.push({ t: "i", v: m[3] });
+        out.push({ t: ital ? "i" : "s", v: ital ? m[4] : m[6] });
       }
       pos = re.lastIndex;
     }
@@ -604,8 +700,10 @@ export function diaLongoIso(iso) {
 }
 /** "Anúncio · Meta" / "WhatsApp" / "Indicação"… */
 export function nomeOrigem(origem, plataforma) {
-  const O = { anuncio: "Anúncio", whatsapp: "WhatsApp", indicacao: "Indicação", organico: "Orgânico", manual: "Cadastro manual", site: "Site", importacao: "Importação", formulario: "Formulário do site" };
-  const base = O[origem] || (origem ? String(origem) : "Sem origem");
+  const O = { anuncio: "Anúncio", whatsapp: "WhatsApp", indicacao: "Indicação", organico: "Orgânico", manual: "Cadastro manual", sem_origem: "Sem origem", site: "Site", importacao: "Importação", formulario: "Formulário do site" };
+  // plano 1000b · AB-175: origem fora da tabela («tiktok_ads») sem o código cru — «Tiktok ads»
+  const legivel = o => { const t = String(o).replace(/_+/g, " ").replace(/\s+/g, " ").trim(); return t ? t.charAt(0).toUpperCase() + t.slice(1) : "Sem origem"; };
+  const base = O[origem] || (origem ? legivel(origem) : "Sem origem");
   return plataforma ? `${base} · ${nomePlat(plataforma)}` : base;
 }
 /** Os KPIs da aba Vendas: [{id, rotulo, v, a, fmt, sentido}] (fmt = 'int'|'brl0'|'pct'|'dias'). */
@@ -620,17 +718,20 @@ export function kpisVendas(r, { negocios = "negócios" } = {}) {   // negocios: 
     { id: "ciclo_medio_dias", rotulo: "Ciclo médio", v: k.ciclo_medio_dias, a: a.ciclo_medio_dias, fmt: "dias", sentido: "baixo", extra: "da criação ao ganho" },
   ];
 }
+const milhar = v => Math.round(+v || 0).toLocaleString("pt-BR");
+const qtdTxt = (v, um, varios) => { const n = fin(+v) ? +v : 0; return `${milhar(n)} ${n === 1 ? um : varios}`; };
 /** Os KPIs da aba Atendimento. */
 export function kpisAtendimento(r) {
   const k = (r && r.kpis) || {}, a = (r && r.kpis_anterior) || {};
   return [
-    { id: "novas", rotulo: "Conversas novas", v: k.novas, a: a.novas, fmt: "int", sentido: "neutro", extra: `${fin(+k.msgs_in) ? k.msgs_in : 0} mensagens recebidas` },
-    { id: "resolvidas", rotulo: "Resolvidas", v: k.resolvidas, a: a.resolvidas, fmt: "int", sentido: "cima", extra: `${fin(+k.msgs_out) ? k.msgs_out : 0} mensagens enviadas` },
+    // plano 1000b · AB-015: milhar e plural nos extras («1.234 mensagens recebidas», «1 mensagem recebida»)
+    { id: "novas", rotulo: "Conversas novas", v: k.novas, a: a.novas, fmt: "int", sentido: "neutro", extra: qtdTxt(k.msgs_in, "mensagem recebida", "mensagens recebidas") },
+    { id: "resolvidas", rotulo: "Resolvidas", v: k.resolvidas, a: a.resolvidas, fmt: "int", sentido: "cima", extra: qtdTxt(k.msgs_out, "mensagem enviada", "mensagens enviadas") },
     { id: "tpr_mediana_min", rotulo: "1ª resposta (mediana)", v: k.tpr_mediana_min, a: a.tpr_mediana_min, fmt: "min", sentido: "baixo",
       extra: fin(k.tpr_media_min) ? `média ${duracaoMin(k.tpr_media_min)}` : "" },
     { id: "resolucao_mediana_h", rotulo: "Até resolver (mediana)", v: k.resolucao_mediana_h, a: a.resolucao_mediana_h, fmt: "h", sentido: "baixo" },
     { id: "abertas_agora", rotulo: "Abertas agora", v: k.abertas_agora, a: null, agora: true, fmt: "int", sentido: "neutro",
-      extra: fin(k.aguardando_agora) ? `${k.aguardando_agora} aguardando resposta` : "" },
+      extra: fin(k.aguardando_agora) ? `${milhar(k.aguardando_agora)} aguardando resposta` : "" },
     { id: "sem_resposta", rotulo: "Sem resposta", v: k.sem_resposta, a: a.sem_resposta, fmt: "int", sentido: "baixo", extra: "abertas no período e nunca respondidas" },
   ];
 }
@@ -653,7 +754,9 @@ export const atendimentoVazio = r => !r || (!(+(r.kpis || {}).novas) && !(+(r.kp
 export function textoConversao(e) {
   if (!e || e.tipo !== "aberto") return null;
   if (!(+e.passaram)) return "ninguém entrou no período";
-  return `${e.passaram} ${+e.passaram === 1 ? "entrou" : "entraram"} · ${fin(e.conversao_proxima_pct) ? `${String(e.conversao_proxima_pct).replace(".", ",")}%` : "—"} seguiram`;
+  // plano 1000b · AB-013: 1 casa no máximo («33,3%», não «33,3333%») e milhar nas entradas («1.500 entraram»)
+  const pct = fin(e.conversao_proxima_pct) ? `${Number(e.conversao_proxima_pct).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "—";
+  return `${Number(e.passaram).toLocaleString("pt-BR")} ${+e.passaram === 1 ? "entrou" : "entraram"} · ${pct} seguiram`;
 }
 /** CSV (separador ;, com BOM para o Excel abrir os acentos) — P1 "CSV por bloco".
     · número sai com vírgula decimal (Excel em português: "12.5" viraria a data 12/mai ou texto);
@@ -1049,13 +1152,16 @@ export function taxaFunilTxt(pct, pctTxt = v => `${v}%`) {
 }
 
 /** Plano 1000 (AD-131/AD-153): por que «conversões da plataforma», «conversas no CRM» e os «criados» de Relatórios › Vendas diferem. */
-export const POR_QUE_DIFERE = Object.freeze([
-  "A plataforma (Meta/Google) conta a conversão quando a pessoa toca no anúncio e abre a conversa; o CRM só registra quando a primeira mensagem chega ao Órbita.",
-  "Quem toca no botão e desiste antes de mandar mensagem conta na plataforma e não no CRM.",
-  "O Google conta conversões pelo que estiver configurado na conta (às vezes frações, como 1,5) — não são conversas no WhatsApp.",
-  "Aparelho desconectado ou número diferente no anúncio fazem conversas sumirem do CRM.",
-  "Anúncios conta cada conversa pela data da primeira mensagem; Relatórios › Vendas conta os negócios pela data em que foram criados — um mesmo contato pode cair em dias diferentes.",
-]);
+// plano 1000b · AB-096: cada frase tem um id — Relatórios › Vendas escolhe por id (antes slice(-2), que mudava se a lista mudasse)
+export const POR_QUE_DIFERE_ID = Object.freeze({
+  plataforma: "A plataforma (Meta/Google) conta a conversão quando a pessoa toca no anúncio e abre a conversa; o CRM só registra quando a primeira mensagem chega ao Órbita.",
+  desistiu: "Quem toca no botão e desiste antes de mandar mensagem conta na plataforma e não no CRM.",
+  google: "O Google conta conversões pelo que estiver configurado na conta (às vezes frações, como 1,5) — não são conversas no WhatsApp.",
+  aparelho: "Aparelho desconectado ou número diferente no anúncio fazem conversas sumirem do CRM.",
+  datas: "Anúncios conta cada conversa pela data da primeira mensagem; Relatórios › Vendas conta os negócios pela data em que foram criados — um mesmo contato pode cair em dias diferentes.",
+});
+export const POR_QUE_DIFERE = Object.freeze(Object.values(POR_QUE_DIFERE_ID));
+export const porQueDifere = (...ids) => ids.map(id => POR_QUE_DIFERE_ID[id]).filter(Boolean);
 
 /** Mapa de calor dia da semana × semana (nx_dados não traz a hora da conversa): matriz[dow 0..6][semana], semanas da mais antiga à atual. */
 export function calorSemanal(M, { dias = 30, plat = "", campo = "conversas" } = {}) {
@@ -1153,7 +1259,7 @@ export function explicarRegra(id) {
   const E = {
     r1: { oQue: "Cada conversa vinda desta campanha está custando mais do que a meta.", porque: "O dinheiro rende menos: mais investimento para o mesmo número de pessoas.", acao: "Revise o público e o anúncio; se não melhorar em alguns dias, pause e redistribua a verba." },
     r2: { oQue: "A campanha gastou e ninguém chamou.", porque: "Pode ser anúncio sem botão de WhatsApp, público errado ou link quebrado.", acao: "Abra o anúncio como cliente e teste o caminho até a conversa." },
-    r3: { oQue: "Poucas pessoas clicam neste criativo em relação a quantas o veem.", porque: "A imagem ou o texto não chamam a atenção; o Meta cobra mais caro por isso.", acao: "Troque a imagem ou a primeira frase e compare com o criativo que vai melhor." },
+    r3: { oQue: "Poucas pessoas clicam neste criativo em relação a quantas o veem.", porque: "A imagem ou o texto não chamam a atenção — e anúncio pouco tocado costuma sair mais caro.",   /* plano 1000b · AB-221: sem afirmar como fato o preço do Meta */ acao: "Troque a imagem ou a primeira frase e compare com o criativo que vai melhor." },
     r4: { oQue: "As mesmas pessoas já viram este criativo muitas vezes.", porque: "Anúncio repetido cansa e passa a ser ignorado — e o custo sobe.", acao: "Publique uma variação nova e deixe esta descansar." },
     r5: { oQue: "Os anúncios pararam de gastar de um dia para o outro.", porque: "Quase sempre é cartão recusado, saldo zerado ou anúncio reprovado — e cada dia parado é cliente que não chega.", acao: "Abra o Gerenciador de anúncios e confira pagamento, saldo e anúncios reprovados." },
     r6: { oQue: "O Meta conta conversas que não estão chegando ao CRM.", porque: "Aparelho desconectado ou número trocado no anúncio fazem a conversa sumir do Órbita.", acao: "Confira se o número do anúncio é o conectado ao Órbita e se o aparelho está online." },
@@ -1180,7 +1286,8 @@ export function semaforoRadar(R, { semDados = false } = {}) {
   if (cont.alerta) partes.push(n(cont.alerta, "ponto de atenção", "pontos de atenção"));
   if (cont.info) partes.push(n(cont.info, "aviso informativo", "avisos informativos"));
   const frase = nivel === "neutro" ? "Ainda sem números de anúncio para avaliar."
-    : nivel === "verde" ? "Tudo dentro do combinado: nenhuma campanha precisa de ajuste agora."
+    // plano 1000b · AB-173: o verde cita os informativos ativos listados logo abaixo
+    : nivel === "verde" ? `Tudo dentro do combinado: nenhuma campanha precisa de ajuste agora${cont.info ? ` (${n(cont.info, "aviso informativo abaixo", "avisos informativos abaixo")})` : ""}.`
     : nivel === "vermelho" ? `Precisa de ação hoje: ${partes.join(" e ")}.` : `Vale olhar esta semana: ${partes.join(" e ")}.`;
   const primeiro = ativos[0] || null;
   const acao = nivel === "neutro" ? "O radar começa a vigiar assim que as contas de anúncio estiverem conectadas e a primeira leitura chegar."
@@ -1210,7 +1317,8 @@ export function origensVendas(lista = []) {
   for (const o of Array.isArray(lista) ? lista : []) {
     if (!o || typeof o !== "object") continue;
     const anuncio = ehOrigemAnuncio(o.origem, o.plataforma);
-    const origem = anuncio ? "anuncio" : (o.origem || "manual"), plataforma = anuncio || o.origem === "organico" ? (o.plataforma || null) : null;
+    // plano 1000b · AB-174: linha sem origem é «Sem origem» (antes virava «Cadastro manual», que é outra coisa)
+    const origem = anuncio ? "anuncio" : (String(o.origem ?? "").trim() || "sem_origem"), plataforma = anuncio || o.origem === "organico" ? (o.plataforma || null) : null;
     const chave = `${origem}|${plataforma || ""}`;
     const g = grupos.get(chave) || { origem, plataforma, rotulo: nomeOrigem(origem, plataforma), anuncio, criados: 0, ganhos: 0, perdidos: 0, receita: 0, campanhas: [] };
     g.criados += +o.criados || 0; g.ganhos += +o.ganhos || 0; g.perdidos += +o.perdidos || 0; g.receita += +o.receita || 0;

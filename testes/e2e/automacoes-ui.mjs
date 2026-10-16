@@ -273,7 +273,7 @@ try {
     await clicar(".au-ia-bt");
     await ate(`/chave da Anthropic/.test(document.querySelector(".au-ia-erro")?.textContent || "")`, "erro de chave");
     t = await aval(`document.querySelector(".au-ia-erro").textContent`);
-    assert.match(t, /equipe da Nexus/);
+    assert.match(t, /equipe de suporte/);   // plano 1000b: UB-067 (sem a marca fixa)
   });
 
   await teste("Testar: mostra exemplos reais, o que seria feito (esperaria / faria / pularia) e o passo a passo, sem gravar", async () => {
@@ -397,7 +397,7 @@ try {
     await aval(`document.querySelectorAll(".au-passo .au-x")[2].focus()`);
     await tecla("Enter");
     assert.match(await aval(`document.activeElement.getAttribute("aria-label") || document.activeElement.tagName`), /Tirar o passo/, "remover o passo 3: o foco vai ao «Tirar» do passo que ocupou o lugar");
-    await clicarTexto(".au-mais", "Condição"); await clicarTexto(".au-mais", "Condição");
+    await clicarTexto(".au-mais", "Acrescentar condição"); await clicarTexto(".au-mais", "Acrescentar condição");   // plano 1000b: UB-188
     await aval(`document.querySelectorAll(".au-cond .au-x")[0].focus()`);
     await tecla("Enter");
     assert.match(await aval(`document.activeElement.getAttribute("aria-label") || document.activeElement.tagName`), /Tirar a condição/, "remover a condição: o foco segue para a próxima");

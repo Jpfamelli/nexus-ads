@@ -18,6 +18,11 @@ export const URL_SCRIPT = "https://jpfamelli.github.io/nexus-ads/rastreio.js";
     O rastreio.js sem versão continua no ar para os sites que já o instalaram. */
 export const URL_SCRIPT_V1 = "https://jpfamelli.github.io/nexus-ads/rastreio.v1.js";
 export const SRI_V1 = "sha384-5seekIDmBnVMEmAI/uZoEKAyr41xbFHY+KxEYM2sHNNVw/ef9D4mvmaNjOnDCkpv";
+/** Plano 1000b (AB-007, AB-122, AB-205, AB-226, AB-127): o snippet novo aponta para a rastreio.v2.js, também fixa e com SRI (o hash é
+    conferido com o arquivo em testes/plano1000b-ads). Quem já instalou a v1 continua com ela — nada muda sem trocar o código no site. */
+export const URL_SCRIPT_V2 = "https://jpfamelli.github.io/nexus-ads/rastreio.v2.js";
+export const SRI_V2 = "sha384-kD7YCVtWVAbP21SE+MD3BbT7gP5gGQr4urIMl0cnvj999LQpCQHF3vklYhvMOdPH";   // plano 1000b · ads-3: v2 com AB-121/AB-124/AB-126 (ainda não publicada)
+const SCRIPT_ATUAL = URL_SCRIPT_V2, SRI_ATUAL = SRI_V2;
 const HOSTS_LOCAIS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 /** O servidor falso anuncia para onde o snippet deve apontar (window.ORBITA_DEV_FALSO.rastreio); só vale se for local. */
@@ -35,13 +40,13 @@ const aspas = v => String(v ?? "").replace(/[<>"&]/g, "");   // a chave é hex; 
 /** Snippet de instalação (F9): produção → script do Pages sem data-url (o padrão do script é o Órbita); servidor falso → o local, com data-url e data-apikey. */
 export function snippetRastreio(chave, local = null) {
   if (local) return `<script src="${aspas(local.script)}" data-chave="${aspas(chave)}" data-url="${aspas(local.url)}" data-apikey="${aspas(local.apikey)}" defer></script>`;
-  return `<script src="${URL_SCRIPT_V1}" integrity="${SRI_V1}" crossorigin="anonymous" data-chave="${aspas(chave)}" defer></script>`;
+  return `<script src="${SCRIPT_ATUAL}" integrity="${SRI_ATUAL}" crossorigin="anonymous" data-chave="${aspas(chave)}" defer></script>`;
 }
 /** Variante para gerenciador de tags (GTM, Wix, Webflow): a configuração vai em window.ORBITA_RASTREIO, porque ali o
     document.currentScript pode vir nulo e os atributos data- se perdem. */
 export function snippetGerenciador(chave, local = null) {
   const cfg = local ? `{ chave: "${aspas(chave)}", url: "${aspas(local.url)}", apikey: "${aspas(local.apikey)}" }` : `{ chave: "${aspas(chave)}" }`;
-  return `<script>window.ORBITA_RASTREIO = ${cfg};</script>\n<script src="${local ? aspas(local.script) : `${URL_SCRIPT_V1}" integrity="${SRI_V1}" crossorigin="anonymous`}" defer></script>`;
+  return `<script>window.ORBITA_RASTREIO = ${cfg};</script>\n<script src="${local ? aspas(local.script) : `${SCRIPT_ATUAL}" integrity="${SRI_ATUAL}" crossorigin="anonymous`}" defer></script>`;
 }
 
 /** Parâmetros de URL dos anúncios (F9): macros de ID de cada plataforma — o ID casa direto com a campanha que o Órbita lê do
@@ -57,9 +62,10 @@ export const UTM = Object.freeze({
 /** Plano 1000 (AD-167): os textos de privacidade seguem as opções do script — data-dias (0 = só a visita) e data-gpc="ignorar" (sem a
     frase do GPC). O painel gera o snippet padrão (30 dias, respeita o GPC), então mostra o texto padrão; quem mudar as opções no site
     gera o texto com elas (cabeçalho do rastreio.js). */
+// plano 1000b · AB-121: os textos citam também ttclid, msclkid e utm_id (a v2 passou a guardar os três)
 const periodoPriv = dias => { const n = Number(dias); return n === 0 ? "só durante a visita" : `por até ${Number.isFinite(n) && n > 0 ? Math.round(n) : 30} dias`; };
 export function textoPrivacidade({ dias = 30, gpc = true } = {}) {
-  return `O script guarda no navegador do visitante (armazenamento local, sem cookies), ${periodoPriv(dias)}, de onde veio a visita: os parâmetros utm_* e os identificadores de clique dos anúncios (gclid, gbraid, wbraid, fbclid). Quando a pessoa toca no botão do WhatsApp, esses parâmetros e o endereço da página vão para o Órbita, que devolve um código curto (ex.: [ref K7Q2P]) e guarda o clique por até 45 dias para ligar a conversa à campanha. O script não coleta nome, telefone nem e-mail${gpc ? ", e respeita o sinal Global Privacy Control do navegador (com ele, nada é guardado nem enviado)" : ""}.`;
+  return `O script guarda no navegador do visitante (armazenamento local, sem cookies), ${periodoPriv(dias)}, de onde veio a visita: os parâmetros utm_* e os identificadores de clique dos anúncios (gclid, gbraid, wbraid, fbclid, ttclid, msclkid). Quando a pessoa toca no botão do WhatsApp, esses parâmetros e o endereço da página vão para o Órbita, que devolve um código curto (ex.: [ref K7Q2P]) e guarda o clique por até 45 dias para ligar a conversa à campanha. O script não coleta nome, telefone nem e-mail${gpc ? ", e respeita o sinal Global Privacy Control do navegador (com ele, nada é guardado nem enviado)" : ""}.`;
 }
 /** Aviso de privacidade (F8): o que fica no navegador, o que vai ao Órbita e por quanto tempo (snippet padrão). */
 export const TEXTO_PRIVACIDADE = textoPrivacidade();
@@ -68,7 +74,7 @@ export const TEXTO_PRIVACIDADE = textoPrivacidade();
 export function textoPolitica(empresa, { dias = 30, gpc = true } = {}) {
   const nome = String(empresa || "").trim() || "nossa empresa";
   const periodo = periodoPriv(dias);
-  return `Origem das visitas. Este site usa um pequeno script do Órbita, o sistema de atendimento de ${nome}, para saber de qual anúncio ou campanha veio cada contato. O script guarda no seu navegador, ${periodo} e sem cookies, os parâmetros de campanha do endereço da página (utm_source, utm_medium, utm_campaign, utm_content e utm_term) e os identificadores de clique de anúncios (gclid, gbraid, wbraid e fbclid). Quando você toca no botão do WhatsApp, essas informações e o endereço da página são enviados ao Órbita, que acrescenta à mensagem um código curto (por exemplo, [ref K7Q2P]) e guarda o clique por até 45 dias para associar a conversa à campanha. O script não coleta nome, telefone nem e-mail.${gpc ? " Se o seu navegador enviar o sinal Global Privacy Control, nada é guardado nem enviado." : ""} Usamos essas informações com base no legítimo interesse de medir os resultados dos nossos anúncios (LGPD, art. 7º, IX); você pode apagá-las a qualquer momento limpando os dados deste site no seu navegador.`;
+  return `Origem das visitas. Este site usa um pequeno script do Órbita, o sistema de atendimento de ${nome}, para saber de qual anúncio ou campanha veio cada contato. O script guarda no seu navegador, ${periodo} e sem cookies, os parâmetros de campanha do endereço da página (utm_source, utm_medium, utm_campaign, utm_content, utm_term e utm_id) e os identificadores de clique de anúncios (gclid, gbraid, wbraid, fbclid, ttclid e msclkid). Quando você toca no botão do WhatsApp, essas informações e o endereço da página são enviados ao Órbita, que acrescenta à mensagem um código curto (por exemplo, [ref K7Q2P]) e guarda o clique por até 45 dias para associar a conversa à campanha. O script não coleta nome, telefone nem e-mail.${gpc ? " Se o seu navegador enviar o sinal Global Privacy Control, nada é guardado nem enviado." : ""} Usamos essas informações com base no legítimo interesse de medir os resultados dos nossos anúncios (LGPD, art. 7º, IX); você pode apagá-las a qualquer momento limpando os dados deste site no seu navegador.`;
 }
 
 /** O que a troca de chave desliga (F7): os DOIS lugares que usam a chave. */
@@ -84,8 +90,9 @@ export const AVISO_TROCA = Object.freeze({
 
 const MOTIVOS = {
   aplicado: "casou com o negócio",
-  pendente: "esperando o negócio nascer",
-  sem_negocio: "esperando o negócio nascer",
+  // plano 1000b · AB-251: «esperando o negócio nascer» confundia — a conversa chegou, o negócio é que ainda vai ser criado
+  pendente: "a conversa chegou; o negócio ainda vai ser criado",
+  sem_negocio: "a conversa chegou; o negócio ainda vai ser criado",
   codigo_ja_usado: "código já usado em outra conversa",
   ja_tem_anuncio: "o negócio já veio de um anúncio",
   origem_definida: "o negócio já tinha origem",
@@ -114,8 +121,23 @@ export const filtrarCliques = (itens = [], motivo = "", agora = Date.now()) =>
  * nx_rastreio_listar → o que o painel «Cliques do site» desenha (F10): totais (do servidor; senão contados), motivos, campanhas e os últimos cliques.
  * Formato: {dias, itens:[{em, pagina, utm_*, plataforma, origem, casou, motivo, usado_em, negocio_id, contato_nome}], totais:{cliques, casados, usados?, pendentes?}}.
  */
-export function resumoRastreio(resp, { ultimos = 10, agora = Date.now() } = {}) {
-  const itens = Array.isArray(resp && resp.itens) ? resp.itens.filter(x => x && typeof x === "object") : [];
+/** Plano 1000b · AB-131: os ids de campanha (utm_campaign={campaignid}/{{campaign.id}}) → nome, a partir das métricas do nx_dados
+    (linhas {c: id, cn: nome}). */
+export function nomesCampanhas(dados) {
+  const m = new Map();
+  for (const l of (dados && Array.isArray(dados.metricas) ? dados.metricas : [])) {
+    const id = l && l.c != null ? String(l.c).trim() : "", nome = l && l.cn ? String(l.cn).trim() : "";
+    if (id && nome && !m.has(id)) m.set(id, nome);
+  }
+  return m;
+}
+/** Plano 1000b · AB-132: até 12 linhas na tabela «Por campanha» e quantas ficaram de fora («e mais N campanhas»). */
+export const MAX_CAMP_RASTREIO = 12;
+export function resumoRastreio(resp, { ultimos = 10, agora = Date.now(), nomes = null } = {}) {
+  const todosItens = Array.isArray(resp && resp.itens) ? resp.itens.filter(x => x && typeof x === "object") : [];
+  // revisão 1000b: com a v2 no ar, a lista traz também o «aquecimento» (visita/mouse em cima do botão). Campanhas, domínios, motivos e
+  // «% casou» contam só clique de verdade (evento «clique» ou sem evento — a v1 antiga), igual ao cartão do servidor
+  const itens = todosItens.filter(x => x.evento == null || x.evento === "clique");
   const t = (resp && resp.totais) || {};
   const num = (v, alt) => (Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : alt);
   const cliques = num(t.cliques, itens.length), casados = num(t.casados, itens.filter(x => x.casou).length);
@@ -139,20 +161,29 @@ export function resumoRastreio(resp, { ultimos = 10, agora = Date.now() } = {}) 
   }
   const hostsL = [...hostsM.values()];
   const antigoDe = g => hostsL.some(o => o.host !== g.host && String(o.primeiro || "") < String(g.primeiro || ""));
-  for (const g of hostsL) { const t = Date.parse(g.primeiro); g.novo = Number.isFinite(t) && agora - t <= 7 * 864e5 && antigoDe(g); }
+  // plano 1000b · AB-252: «novo» = primeiro clique nos últimos 7 dias, MESMO sem outro site antes (a 1ª vez que a chave aparece num
+  // site estranho também alerta); g.antigo diz se já havia clique de outro domínio antes (o texto do aviso muda)
+  for (const g of hostsL) { const t = Date.parse(g.primeiro); g.novo = Number.isFinite(t) && agora - t <= 7 * 864e5; g.antigo = antigoDe(g); }
   const camp = new Map();
   for (const x of itens) {
-    const nome = String(x.utm_campaign || "").trim() || "(sem campanha)";
-    const c = camp.get(nome) || { nome, cliques: 0, casados: 0 };
+    const bruto = String(x.utm_campaign || "").trim() || "(sem campanha)";
+    // AB-131: o ID que casa com uma campanha lida do Meta/Google vira o nome (o ID fica em `id`, em texto pequeno na tela)
+    const casado = nomes && typeof nomes.get === "function" ? nomes.get(bruto) : null;
+    const c = camp.get(bruto) || { nome: casado || bruto, id: casado ? bruto : null, cliques: 0, casados: 0 };
     c.cliques++; if (x.casou) c.casados++;
-    camp.set(nome, c);
+    camp.set(bruto, c);
   }
+  // plano 1000b · AB-136: «% casou» de cada campanha (casados ÷ cliques, sem casas) — o dono não precisa fazer a conta
+  for (const c of camp.values()) c.pct = c.cliques > 0 ? Math.round(c.casados / c.cliques * 100) : null;
   return {
     dias: num(resp && resp.dias, 30),
-    totais: { cliques, casados, pendentes, usados, pct: cliques > 0 ? Math.round(casados / cliques * 100) : null },
+    visitas: todosItens.length - itens.length,   // revisão 1000b: «aquecimento» (visitas) que ficaram fora da contagem
+    // plano 1000b · AB-009: cliques_reais = o servidor já separa o toque do «aquecimento» (AB-007/008); sem ele, o total mistura os dois
+    totais: { cliques, casados, pendentes, usados, pct: cliques > 0 ? Math.min(100, Math.round(casados / cliques * 100)) : null, cliquesReais: num(t.cliques_reais, null) },
     // AD-189: cada motivo também em porcentagem dos cliques listados («12 (40%)»)
     motivos: [...motivos.entries()].map(([rotulo, n]) => ({ rotulo, n, pct: itens.length ? Math.round(n / itens.length * 100) : null })).sort((a, b) => b.n - a.n),
     campanhas: [...camp.values()].sort((a, b) => b.cliques - a.cliques || b.casados - a.casados),
+    campanhasOcultas: Math.max(0, camp.size - MAX_CAMP_RASTREIO),   // AB-132
     ultimos: ordenados.slice(0, ultimos),
     todos: ordenados,                                    // AD-182: «Mostrar mais» e o filtro por motivo trabalham sobre a lista inteira
     ultimoReal: real ? { em: real.em, host: hostDe(real.pagina) } : null,
@@ -160,6 +191,24 @@ export function resumoRastreio(resp, { ultimos = 10, agora = Date.now() } = {}) 
     vazio: !itens.length && !cliques,
   };
 }
+/** Plano 1000b · AB-009: o cartão do total. Enquanto o servidor não separa o «aquecimento» (hover/visita de campanha, o código preparado
+    antes do toque) do clique de verdade, o número é «Registros do site»; com totais.cliques_reais, volta a ser «Cliques no WhatsApp». */
+export function kpiCliques(T = {}) {
+  if (T && T.cliquesReais != null) return { rotulo: "Cliques no WhatsApp", valor: T.cliquesReais, ajuda: "Toques no botão do WhatsApp do site com o script ativo." };
+  return { rotulo: "Registros do site", valor: (T && T.cliques) || 0, ajuda: "Toques no botão do WhatsApp e visitas vindas de campanha (o código é preparado antes do toque)." };
+}
+/** Plano 1000b · AB-204: o snippet para site com banner de cookies — o script espera OrbitaRastreio.consentir() (data-consentimento). */
+export function snippetConsentimento(chave, local = null) {
+  return `${snippetRastreio(chave, local).replace(" defer></script>", ' data-consentimento="aguardar" defer></script>')}
+<!-- no botão «Aceitar» do banner de cookies: -->
+<script>window.OrbitaRastreio && window.OrbitaRastreio.consentir();</script>`;
+}
+/** Plano 1000b · AB-224: «Testar» prova só a chave — o caminho inteiro (código na mensagem, casamento no negócio) só se prova pelo site. */
+export const TESTE_COMPLETO = "Para testar tudo: abra o site, toque no WhatsApp e envie a mensagem com o [ref] pelo número conectado ao Órbita — o clique aparece aqui como «casou».";
+/** Plano 1000b · AB-120/AB-133: a atualização automática de 30 s só roda com a aba e a seção visíveis, sem pedido em andamento e SEM o
+    foco dentro da lista (redesenhar tirava o foco do filtro de motivo ou do «Mostrar mais» a cada 30 s). */
+export const podeAtualizarSozinho = ({ visivel = true, oculto = false, ocupado = false, focoDentro = false } = {}) => !!visivel && !oculto && !ocupado && !focoDentro;
+const dentro = (caixa, el) => { for (let n = el, k = 0; n && k < 200; n = n.parentNode, k++) if (n === caixa) return true; return false; };
 /** Caminho curto da página do clique ("/implante" ou "site.com.br"), sem consulta (a página nunca traz a query). */
 export function paginaCurta(url) {
   try { const u = new URL(String(url)); return u.pathname && u.pathname !== "/" ? u.pathname : u.hostname; }
@@ -169,8 +218,8 @@ export function paginaCurta(url) {
 async function secaoRastreio(ctx, alvo) {
   const { ui, api } = ctx;
   const h = ui.h;
-  ui.carregarCss("agenda");
-  ui.carregarCss("relatorios.css");      // painel de cliques (ads-rastreio-*) mora na folha da frente F
+  // plano 1000b · AB-206: as classes rastc-* moram em relatorios.css (antes só em agenda.css — a seção carregava a folha da Agenda à toa)
+  ui.carregarCss("relatorios.css");      // painel de cliques (ads-rastreio-*) e a seção (rastc-*) moram na folha da frente F
   ui.limpar(alvo);
   alvo.appendChild(ui.esqueleto("cartoes", 2));
 
@@ -190,14 +239,14 @@ async function secaoRastreio(ctx, alvo) {
   function pintar() {
     ui.limpar(alvo);
     painel = null;
-    const raiz = h("div", { class: "agc rastc" });
+    const raiz = h("div", { class: "rastc" });
     const intro = h("header", { class: "pilha" },
       h("h2", { class: "titulo-sec" }, "Acompanhe de onde vêm os contatos"),
       h("p", { class: "sub" }, "Instale um pequeno script no site. Ele identifica a campanha quando alguém inicia uma conversa pelo WhatsApp e, com o número conectado ao Órbita (CodeWords ou API oficial da Meta), associa a origem ao negócio no CRM."));
     const instalacao = h("section", { class: "cartao pilha", "aria-labelledby": "rastc-instala" },
       h("div", { class: "cartao-cab" }, h("div", null,
         h("h3", { id: "rastc-instala", class: "titulo-sec" }, "Código de instalação"),
-        h("p", { class: "sub" }, "Cole uma vez no site, antes do fechamento da tag `</body>`. Funciona em HTML, WordPress, Wix e Webflow."))),
+        h("p", { class: "sub" }, "Cole uma vez no site, antes do fechamento da tag ", h("code", null, "</body>"), ". Funciona em HTML, WordPress, Wix e Webflow."   /* plano 1000b · AB-130: sem crases na tela */))),
       // plano 1000 (AD-179): onde colar em cada plataforma (antes só «antes de </body>», que não ajuda quem usa um construtor de site)
       h("details", { class: "ads-rastreio-det" }, h("summary", null, "Onde colar em cada plataforma"),
         h("ul", { class: "ads-rastreio-onde" },
@@ -232,7 +281,8 @@ async function secaoRastreio(ctx, alvo) {
       h("p", { class: "sub" }, "Nesses editores o script às vezes perde os atributos. Use esta versão, com a configuração antes do script:"),
       h("pre", { class: "rastc-codigo", tabindex: "0", "aria-label": "Código alternativo para gerenciador de tags" }, h("code", null, alternativo)),
       h("div", { class: "linha rastc-acoes" }, h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => ui.copiar(alternativo, { aviso: "Código alternativo copiado." }) } }, ui.icone("copiar"), "Copiar esta versão")));
-    const campoChave = h("input", { class: "mono", type: "text", readonly: true, value: chave, "aria-label": "Chave pública de instalação", spellcheck: false });
+    // plano 1000b · AB-129: o rótulo visível aponta para o campo (for/id) — clicar nele foca o campo; sem o aria-label duplicado
+    const campoChave = h("input", { id: "rastc-chave-campo", class: "mono", type: "text", readonly: true, value: chave, spellcheck: false });
     const copiarChave = h("button", { type: "button", class: "bt bt-sec", on: { click: () => ui.copiar(chave, { aviso: "Chave copiada." }) } }, ui.icone("copiar"), "Copiar chave");
     const trocar = h("button", { type: "button", class: "bt bt-fant", on: { click: () => trocarChave(trocar) } }, "Gerar nova chave");
     const ondeServe = local
@@ -240,8 +290,14 @@ async function secaoRastreio(ctx, alvo) {
         local.site ? h("a", { class: "rel-link", href: local.site, target: "_blank", rel: "noopener noreferrer" }, "Abrir o site de teste ↗") : null)
       // plano 1000 (AD-137/AD-168): sem o endereço pessoal no texto; a versão é fixa e conferida pelo navegador (integrity)
       : h("p", { class: "campo-ajuda" }, "O script vem de um endereço fixo do Órbita, numa versão que não muda sozinha (o navegador confere a assinatura do arquivo); os cliques vão direto para o servidor do Órbita.");
-    instalacao.append(pre, h("div", { class: "linha rastc-acoes" }, copiar), ondeServe, detalheGtm,
-      h("div", { class: "campo rastc-chave" }, h("label", null, "Chave desta empresa"), campoChave),
+    // plano 1000b · AB-204: site com banner de cookies — o script espera o «Aceitar» (data-consentimento + OrbitaRastreio.consentir())
+    const consent = snippetConsentimento(chave, local);
+    const detalheCookies = h("details", { class: "ads-rastreio-det" }, h("summary", null, "Seu site tem banner de cookies?"),
+      h("p", { class: "sub" }, "Use esta versão: o script só guarda e envia a origem depois que a pessoa aceitar. Ponha a segunda linha no botão «Aceitar» do banner (a ferramenta de cookies costuma ter um campo para isso)."),
+      h("pre", { class: "rastc-codigo", tabindex: "0", "aria-label": "Código para site com banner de cookies" }, h("code", null, consent)),
+      h("div", { class: "linha rastc-acoes" }, h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => ui.copiar(consent, { aviso: "Código com consentimento copiado." }) } }, ui.icone("copiar"), "Copiar esta versão")));
+    instalacao.append(pre, h("div", { class: "linha rastc-acoes" }, copiar), ondeServe, detalheGtm, detalheCookies,
+      h("div", { class: "campo rastc-chave" }, h("label", { for: "rastc-chave-campo" }, "Chave desta empresa"), campoChave),
       h("div", { class: "linha rastc-acoes" }, copiarChave, trocar),
       h("p", { class: "campo-ajuda" }, "A chave aparece no código instalado no site e é a mesma do formulário do site. Se alguém a usar fora do esperado, gere outra e atualize o script e o formulário."));
     if (trocouAgora) instalacao.append(h("div", { class: "aviso aviso-aten", role: "status" }, ui.icone("alerta"),
@@ -258,7 +314,7 @@ async function secaoRastreio(ctx, alvo) {
         h("div", { class: "rastc-plataformas" }, blocoExemplo("Com nomes (reserva)", UTM.reserva))),
       // AD-185: no Google, a marcação automática (gclid) é o que liga o clique à campanha mesmo sem utm
       h("p", { class: "campo-ajuda" }, "No Google Ads, deixe ligada a «Marcação automática» (Configurações da conta): ela acrescenta o gclid, que o Órbita usa mesmo quando os parâmetros acima faltam. No Meta, {{site_source_name}} e {{placement}} dizem se o anúncio rodou no Facebook ou no Instagram e em qual posição."),
-      h("p", { class: "campo-ajuda" }, "O script também reconhece sozinho gclid, gbraid, wbraid e fbclid. O código [ref] é lido quando a mensagem chega pelo número conectado ao Órbita."));
+      h("p", { class: "campo-ajuda" }, "O script também reconhece sozinho gclid, gbraid, wbraid, fbclid, ttclid (TikTok) e msclkid (Microsoft Ads). O código [ref] é lido quando a mensagem chega pelo número conectado ao Órbita."));
 
     const politica = textoPolitica(ctx.cliente && ctx.cliente.nome);
     const privacidade = h("section", { class: "cartao pilha", "aria-labelledby": "rastc-priv" },
@@ -294,28 +350,43 @@ async function secaoRastreio(ctx, alvo) {
     carregarCliques(corpo, atualizar);
     // plano 1000 (AD-249): durante o teste no site, o clique aparece sem precisar de «Atualizar» — a cada 30 s, só com a aba visível
     // e a seção na tela; para sozinho quando a seção sai do DOM (troca de seção, repintura)
+    // plano 1000b · AB-133: só com a seção VISÍVEL (IntersectionObserver) — lendo a política no fim da página, nada é pedido
+    let visivel = true, io = null;
+    if (typeof IntersectionObserver === "function") {
+      try { io = new IntersectionObserver(es => { visivel = es.some(e => e.isIntersecting); }); io.observe(sec); } catch { io = null; visivel = true; }
+    }
     clearInterval(tCliques);
     tCliques = setInterval(() => {
-      if (!sec.isConnected) { clearInterval(tCliques); return; }
-      if (typeof document !== "undefined" && document.hidden) return;
-      if (corpo.getAttribute("aria-busy") === "true") return;
+      if (!sec.isConnected) { clearInterval(tCliques); if (io) io.disconnect(); return; }
+      if (!podeAtualizarSozinho({ visivel, oculto: typeof document !== "undefined" && document.hidden, ocupado: corpo.getAttribute("aria-busy") === "true",
+        focoDentro: typeof document !== "undefined" && dentro(corpo, document.activeElement) })) return;
       carregarCliques(corpo, atualizar, { silencioso: true });
     }, 30000);
     if (tCliques && typeof tCliques.unref === "function") tCliques.unref();   // fora do navegador (testes) o relógio não segura o processo
     return sec;
   }
 
+  // plano 1000b · AB-131: os nomes das campanhas (nx_dados 30 dias, pelo cache do shell) — pedidos UMA vez por seção; sem Anúncios
+  // ou com falha, a tabela segue com o que veio no utm_campaign
+  let nomesP = null;
+  const nomesDeCampanha = () => (nomesP ||= api.rpcC("nx_dados", { p_dias: 30 }, { cache: true }).then(nomesCampanhas, () => new Map()));
+  // plano 1000b · AB-135: «Atualizar» e o relógio de 30 s numeram o pedido — só o mais recente desenha (antes a resposta que chegasse
+  // por último vencia, mesmo sendo a mais antiga)
+  let pedidoCliques = 0;
   async function carregarCliques(corpo, botao, { silencioso = false } = {}) {
+    const n = ++pedidoCliques;
     if (!silencioso) corpo.setAttribute("aria-busy", "true");
     if (botao && !silencioso) botao.disabled = true;
     try {
-      const r = await api.rpcC("nx_rastreio_listar", { p_dias: 30 });
+      const [r, nomes] = await Promise.all([api.rpcC("nx_rastreio_listar", { p_dias: 30 }), nomesDeCampanha().catch(() => new Map())]);
+      if (n !== pedidoCliques) return;           // AB-135: chegou depois de um pedido mais novo
       if (corpo.isConnected === false) return;   // a tela foi redesenhada enquanto a resposta vinha
       // a lista aberta (filtro e «mostrar mais») sobrevive à atualização automática
       const antes = { filtro: corpo.dataset.filtro || "", qtd: Number(corpo.dataset.qtd) || 10 };
       ui.limpar(corpo);
-      desenharCliques(corpo, resumoRastreio(r, { ultimos: 10 }), antes);
+      desenharCliques(corpo, resumoRastreio(r, { ultimos: 10, nomes }), antes);
     } catch (e) {
+      if (n !== pedidoCliques) return;
       if (silencioso) return;                    // a atualização automática que falha não apaga o que está na tela
       ui.limpar(corpo);
       // servidor antigo (sem a RPC): fallback honesto, sem inventar número
@@ -323,8 +394,10 @@ async function secaoRastreio(ctx, alvo) {
       corpo.append(antigo ? h("p", { class: "sub" }, "O servidor ainda não tem o painel de cliques. O rastreio continua funcionando; os números aparecem aqui depois da atualização.")
         : ui.erroCartao(e, () => carregarCliques(corpo, botao)));
     } finally {
-      corpo.setAttribute("aria-busy", "false");
-      if (botao) botao.disabled = false;
+      if (n === pedidoCliques) {                 // AB-135: o pedido velho não destrava a tela do novo
+        corpo.setAttribute("aria-busy", "false");
+        if (botao) botao.disabled = false;
+      }
     }
   }
 
@@ -344,7 +417,7 @@ async function secaoRastreio(ctx, alvo) {
     const kCasou = ui.kpi({ rotulo: "Casaram com um negócio", valor: T.casados, ajuda: "Cliques cujo código chegou na conversa e foi aplicado ao negócio." });
     if (T.pct != null) kCasou.append(h("small", { class: "kpi-sub ads-rastreio-pct" }, `${T.pct}% dos cliques`));
     corpo.append(h("div", { class: "rel-kpis ads-rastreio-kpis" },
-      ui.kpi({ rotulo: "Cliques no WhatsApp", valor: T.cliques, ajuda: "Toques no botão do WhatsApp do site com o script ativo." }),
+      ui.kpi(kpiCliques(T)),   // plano 1000b · AB-009: «Registros do site» até o servidor separar o aquecimento do clique
       kCasou,
       T.pendentes == null ? null : ui.kpi({ rotulo: "Esperando o negócio", valor: T.pendentes, ajuda: "O código chegou antes de o negócio existir; ele é aplicado sozinho quando o negócio nascer (até 30 dias)." })));
     // AD-181: de quais sites vieram os cliques — domínio novo em destaque (a chave é pública: usada em outro site, aparece aqui)
@@ -352,7 +425,10 @@ async function secaoRastreio(ctx, alvo) {
       const novos = R.hosts.filter(x => x.novo);
       corpo.append(h("div", { class: "ads-rastreio-bloco" }, h("h4", { class: "rotulo" }, "Sites que mandaram cliques"),
         novos.length ? h("p", { class: "aviso aviso-aten", role: "note" }, ui.icone("alerta"),
-          h("span", null, `${novos.length === 1 ? "Um site novo começou" : `${novos.length} sites novos começaram`} a mandar cliques com a sua chave nesta semana: ${novos.map(x => x.host).join(", ")}. Se não for seu, gere uma chave nova e atualize o seu site.`)) : null,
+          // plano 1000b · AB-252: também o PRIMEIRO site (sem outro antes) — com a data do 1º clique; confira se é o seu
+          h("span", null, novos.some(x => x.antigo)
+            ? `${novos.length === 1 ? "Um site novo começou" : `${novos.length} sites novos começaram`} a mandar cliques com a sua chave nesta semana: ${novos.map(x => `${x.host} (1º clique ${quandoCurto(x.primeiro)})`).join(", ")}. Se não for seu, gere uma chave nova e atualize o seu site.`
+            : `Os cliques começaram nesta semana: ${novos.map(x => `${x.host} (1º clique ${quandoCurto(x.primeiro)})`).join(", ")}. Confira se é o seu site — se não for, gere uma chave nova.`)) : null,
         h("ul", { class: "ads-rastreio-hosts" }, R.hosts.map(x => h("li", null, h("span", { class: "mono" }, x.host),
           x.novo ? h("span", { class: "pilula pilula-p pilula-aten" }, "novo") : null,
           h("small", { class: "campo-ajuda" }, `${x.cliques} ${x.cliques === 1 ? "clique" : "cliques"} · último ${quandoCurto(x.ultimo)}`))))));
@@ -369,8 +445,11 @@ async function secaoRastreio(ctx, alvo) {
       corpo.append(h("div", { class: "ads-rastreio-bloco" }, h("h4", { class: "rotulo" }, "Por campanha"),
         h("div", { class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": "Cliques por campanha" },
           h("table", { class: "rel-tabela" }, h("caption", { class: "sr-only" }, "Cliques do site por campanha nos últimos 30 dias"),
-            h("thead", null, h("tr", null, h("th", { scope: "col" }, "Campanha"), h("th", { scope: "col", class: "num" }, "Cliques"), h("th", { scope: "col", class: "num" }, "Casaram"))),
-            h("tbody", null, R.campanhas.slice(0, 12).map(c => h("tr", null, h("th", { scope: "row" }, c.nome), h("td", { class: "num", dataset: { l: "Cliques" } }, String(c.cliques)), h("td", { class: "num", dataset: { l: "Casaram" } }, String(c.casados)))))))));
+            h("thead", null, h("tr", null, h("th", { scope: "col" }, "Campanha"), h("th", { scope: "col", class: "num" }, "Cliques"), h("th", { scope: "col", class: "num" }, "Casaram"), h("th", { scope: "col", class: "num" }, "% casou"))),
+            // plano 1000b · AB-131: o nome da campanha (o ID em texto pequeno); AB-132: «e mais N campanhas» em vez de cortar calado
+            h("tbody", null, R.campanhas.slice(0, MAX_CAMP_RASTREIO).map(c => h("tr", null, h("th", { scope: "row" }, c.nome, c.id ? h("small", { class: "campo-ajuda mono ads-rastreio-id" }, ` ${c.id}`) : null),
+              h("td", { class: "num", dataset: { l: "Cliques" } }, String(c.cliques)), h("td", { class: "num", dataset: { l: "Casaram" } }, String(c.casados)), h("td", { class: "num", dataset: { l: "% casou" } }, c.pct == null ? "—" : `${c.pct}%`)))),   // AB-136
+            R.campanhasOcultas ? h("tfoot", null, h("tr", null, h("td", { colspan: "4", class: "campo-ajuda" }, `e mais ${R.campanhasOcultas} ${R.campanhasOcultas === 1 ? "campanha" : "campanhas"} com menos cliques`))) : null))));
     }
     if (R.todos.length) {
       // AD-182: filtro por motivo e «Mostrar mais» (antes 10 fixos) — o estado fica no corpo e sobrevive à atualização automática
@@ -410,8 +489,8 @@ async function secaoRastreio(ctx, alvo) {
       // o mesmo caminho do script do site (RPC pública com a chave); teste:"1" → o servidor responde sem gravar
       const r = await ui.carregando(botao, api.publica("nx_rastreio_registrar", { p_chave: chave, p_dados: { teste: "1", pagina: "teste-do-painel" } }));
       if (r && r.ok && r.codigo) {
-        status.textContent = r.teste ? `Funcionando: o Órbita respondeu com o código ${r.codigo} (teste — nada foi gravado).`
-          : `Funcionando: o Órbita respondeu com o código ${r.codigo}. Este servidor ainda grava o teste como um clique.`;
+        status.textContent = (r.teste ? `Funcionando: o Órbita respondeu com o código ${r.codigo} (teste — nada foi gravado).`
+          : `Funcionando: o Órbita respondeu com o código ${r.codigo}. Este servidor ainda grava o teste como um clique.`) + ` ${TESTE_COMPLETO}`;   // AB-224
         if (typeof ui.checkSucesso === "function") ui.checkSucesso(botao);
       } else status.textContent = "O Órbita respondeu, mas sem código: confira se a chave do site é a desta tela.";
     } catch (e) {
@@ -446,4 +525,14 @@ async function secaoRastreio(ctx, alvo) {
 }
 
 const FMT_QUANDO = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-function quandoCurto(iso) { const d = new Date(iso); return isNaN(d) ? "—" : FMT_QUANDO.format(d).replace(",", " às"); }
+const FMT_DIA_SP = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" });
+const FMT_HORA_SP = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" });
+/** Plano 1000b · AB-134: «hoje às 09:12» / «ontem às 18:40» / «14/10 às 09:12» (a mesma regra do resto do app; dia de São Paulo). */
+export function quandoCurto(iso, agora = Date.now()) {
+  const d = new Date(iso); if (isNaN(d)) return "—";
+  const hoje = FMT_DIA_SP.format(new Date(agora)), dia = FMT_DIA_SP.format(d);
+  const ontem = new Date(`${hoje}T12:00:00Z`); ontem.setUTCDate(ontem.getUTCDate() - 1);
+  if (dia === hoje) return `hoje às ${FMT_HORA_SP.format(d)}`;
+  if (dia === ontem.toISOString().slice(0, 10)) return `ontem às ${FMT_HORA_SP.format(d)}`;
+  return FMT_QUANDO.format(d).replace(",", " às");
+}

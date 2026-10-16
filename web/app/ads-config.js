@@ -54,29 +54,130 @@ export function erroCredencial(campo, valor) {
   if (campo === "google_client_secret" || campo === "google_refresh_token") return /\s/.test(v) || v.length < 10 ? "Valor inválido: copie de novo, inteiro e sem espaços." : "";
   return "";
 }
+/** Plano 1000b · AB-260: o número sem DDI 55 (para comparar «12999998888» com «5512999998888»). */
+const chaveWa = s => { const d = soDigitos(s); return (d.length === 12 || d.length === 13) && d.startsWith("55") ? d.slice(2) : d; };
+/** Plano 1000b · AB-260: destinos sem repetir o mesmo número (com ou sem DDI). Mantém o primeiro como foi escrito. */
+export function destinosUnicos(lista = []) {
+  const vistos = new Map();
+  for (const n of [].concat(lista || [])) { const k = chaveWa(n); if (k && !vistos.has(k)) vistos.set(k, n); }
+  return [...vistos.values()];
+}
+/** Plano 1000b · AB-260: números que estão nos dois campos (gestão e cliente) — recebem o resumo do mês uma vez só, mas o salvamento avisa. */
+export function waDuplicados(gestor = [], cliente = []) {
+  const g = new Set([].concat(gestor || []).map(chaveWa).filter(Boolean));
+  return destinosUnicos([].concat(cliente || []).filter(n => g.has(chaveWa(n))));
+}
 /** Plano 1000 (AD-246/AD-245/AD-247): o que acontece ao pedir um envio manual. → {bloqueio: texto} ou {titulo, texto}.
     · metas e avisos editados e não salvos: bloqueia (a contagem e os números seriam os antigos);
     · mensal: «mesmo que o resumo deste mês já tenha sido enviado» (antes «hoje»);
     · diário sem investimento no dia: avisa que vai sair um relatório de R$ 0. */
 export function confirmacaoEnvio({ tipo, cfg = {}, sujo = false, gastoDia = null, dataDia = "" } = {}) {
   if (sujo) return { bloqueio: "Você mudou Metas e avisos e ainda não salvou: salve antes de enviar (o envio usa os números de WhatsApp salvos)." };
-  const dest = (tipo === "mensal" ? [...(cfg.waCliente || []), ...(cfg.waGestor || [])] : (cfg.waGestor || [])).length;
+  // plano 1000b · AB-260: o mesmo número na gestão e no cliente conta (e recebe) uma vez só; AB-191: a confirmação diz QUAIS números
+  const nums = destinosUnicos(tipo === "mensal" ? [...(cfg.waCliente || []), ...(cfg.waGestor || [])] : (cfg.waGestor || []));
+  const dest = nums.length;
   if (!dest) return { bloqueio: "Cadastre um WhatsApp de destino em Metas e avisos antes de enviar." };
-  const onde = `no WhatsApp de ${dest} ${dest === 1 ? "destino" : "destinos"}`;
+  const lst = nums.map(formatarWa), quais = lst.length > 1 ? `${lst.slice(0, -1).join(", ")} e ${lst[lst.length - 1]}` : lst[0];
+  const onde = `no WhatsApp de ${dest} ${dest === 1 ? "destino" : "destinos"} (${quais})`;
   if (tipo === "mensal") return { titulo: "Enviar o resumo do mês?", texto: `Ele sai agora ${onde}, mesmo que o resumo deste mês já tenha sido enviado.` };
   const zerado = gastoDia != null && !(gastoDia > 0);
   return { titulo: "Enviar o relatório do dia?", texto: `Ele sai agora ${onde}, mesmo que já tenha sido enviado hoje.` +
     (zerado ? ` Atenção: ${dataDia ? `em ${dataDia} ` : "no dia "}não houve investimento em anúncios — o relatório vai sair zerado (R$ 0).` : "") };
 }
-/** Plano 1000 (AD-073): serviços já usados no CRM (dados.leads[].servico), sem repetir grafia — sugestões para o valor por serviço. */
-export function servicosUsados(leads = [], max = 40) {
+/** Plano 1000 (AD-073): serviços já usados no CRM (dados.leads[].servico), sem repetir grafia — sugestões para o valor por serviço.
+    Plano 1000b · AB-109: unidos aos serviços já salvos no valor por serviço (`salvos` = chaves de cfg.ticket) — o nx_dados desta tela lê
+    só 7 dias, e o serviço vendido há 3 semanas sumia da sugestão. */
+export function servicosUsados(leads = [], max = 40, salvos = []) {
   const vistos = new Map();
-  for (const l of leads || []) {
+  for (const l of [...(leads || []), ...(salvos || []).map(s => ({ servico: s }))]) {
     const s = String((l && l.servico) || "").trim();
     const k = s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
     if (s && !vistos.has(k)) vistos.set(k, s);
   }
   return [...vistos.values()].sort((a, b) => a.localeCompare(b, "pt-BR")).slice(0, max);
+}
+/** Plano 1000b · AB-006: lê e confere as metas do formulário (texto dos campos). Gestão vazia = 0 (antes lerReais("") = null e
+    «null >= 0» é true em JS: o cfg saía com fee:null). → {erro: {campo, msg}} ou {cpa, cpaG, orc, fee}. */
+export function lerMetas({ cpaAlvo = "", cpaAlvoGoogle = "", orcamento = "", fee = "" } = {}) {
+  const cpa = lerReais(cpaAlvo), cpaG = lerReais(cpaAlvoGoogle), orc = lerReais(orcamento);
+  const feeTxt = String(fee ?? "").trim(), feeN = feeTxt ? lerReais(feeTxt) : 0;
+  if (cpa != null && !(cpa > 0)) return { erro: { campo: "cpaAlvo", msg: "A meta de custo por conversa precisa ser maior que zero (ou deixe vazio: sem meta)." } };
+  if (cpaG != null && !(cpaG > 0)) return { erro: { campo: "cpaAlvoGoogle", msg: "A meta do Google precisa ser maior que zero (ou deixe vazio)." } };
+  if (orc != null && !(orc >= 0)) return { erro: { campo: "orcamento", msg: "O orçamento não pode ser negativo (vazio = não definido)." } };
+  if (feeN == null || !(feeN >= 0)) return { erro: { campo: "fee", msg: "Informe o valor da gestão (pode ser zero)." } };
+  return { cpa, cpaG, orc, fee: feeN };
+}
+/** Plano 1000b · AB-103: as linhas do valor por serviço — linha com valor e sem nome, ou nome com valor ilegível/negativo, PARA o
+    salvamento com o erro na linha (antes sumiam em silêncio). Linha toda vazia é ignorada. linhas = [{s, v}] (texto dos campos).
+    → {ticket} ou {erro: {indice, campo: "s"|"v", msg}}. */
+export function lerTickets(linhas = []) {
+  const ticket = {};
+  for (let i = 0; i < (linhas || []).length; i++) {
+    const s = String((linhas[i] && linhas[i].s) || "").trim(), vt = String((linhas[i] && linhas[i].v) || "").trim();
+    if (!s && !vt) continue;
+    if (!s) return { erro: { indice: i, campo: "s", msg: "Dê um nome a este serviço (ou apague o valor)." } };
+    const val = lerReais(vt);
+    if (!vt || val == null || !(val >= 0)) return { erro: { indice: i, campo: "v", msg: `Valor inválido para «${s}»: use só números (ex.: 1.500 ou 1500,50).` } };
+    ticket[s] = val;
+  }
+  return { ticket };
+}
+/** Plano 1000b · AB-102: os rótulos acessíveis de uma linha do valor por serviço (mudam com o nome digitado). */
+export function rotulosTicket(nome, servicoRot = "Serviço") {
+  const s = String(nome || "").trim() || String(servicoRot).toLowerCase();
+  return { valor: `Valor de ${s} em reais`, remover: `Remover ${s}` };
+}
+/** Plano 1000b · AB-104: os limites do radar digitados (texto dos campos rd_*). Vazio = padrão; texto que não é número («abc») PARA o
+    salvamento com o erro no campo (antes virava null e salvava como «padrão» sem avisar). → {radar} ou {erro: {campo, msg}}. */
+export const FAIXAS_RADAR = Object.freeze([["ctrMin", 0.05, 10, "O CTR mínimo vai de 0,05% a 10%."], ["freqMax", 1.5, 20, "A frequência máxima vai de 1,5 a 20."], ["r2MinGasto", 1, 10000, "O gasto mínimo vai de R$ 1 a R$ 10.000."]]);
+export function lerLimitesRadar(v = {}) {
+  const radar = {};
+  for (const [k, min, max, rot] of FAIXAS_RADAR) {
+    const txt = String((v && v[`rd_${k}`]) ?? "").trim();
+    if (!txt) continue;
+    const n = lerReais(txt.replace(/%|vezes?/gi, ""));
+    if (n == null) return { erro: { campo: `rd_${k}`, msg: "Use só números (ex.: 0,9) — ou deixe vazio para o padrão." } };
+    if (!(n >= min && n <= max)) return { erro: { campo: `rd_${k}`, msg: rot } };
+    radar[k] = n;
+  }
+  return { radar };
+}
+/** Plano 1000b · AB-100: «Sincronizar agora» confere sozinho o resultado depois deste tempo (o clássico confere em 30 s; a leitura
+    completa com o radar costuma levar mais). */
+export const CONFERIR_SYNC_MS = 90 * 1000;
+/** Plano 1000b · AB-100: o que a conferência diz, por plataforma ligada: leu depois do pedido, falhou ou ainda não leu. */
+export function resumoAposSync(integ = [], desde = 0, quando = iso => iso) {
+  const nomes = { meta: "Meta", google: "Google" };
+  const partes = (Array.isArray(integ) ? integ : []).filter(i => i && i.ativo && nomes[i.canal]).map(i => {
+    const t = Date.parse(i.ultimo_sync || "");
+    if (/^erro/i.test(i.status || "")) return `${nomes[i.canal]}: a leitura falhou (${String(i.status).replace(/^erro\s*[—:-]?\s*/i, "") || "veja a situação acima"})`;
+    if (Number.isFinite(t) && t >= desde) return `${nomes[i.canal]}: lido ${quando(i.ultimo_sync)}`;
+    return `${nomes[i.canal]}: ainda lendo`;
+  });
+  return partes.length ? `Resultado da sincronização — ${partes.join(" · ")}.` : "Nenhuma plataforma ligada para sincronizar.";
+}
+/** Plano 1000b · AB-216: o que mudou entre duas consultas da situação (antes sempre «Situação consultada às HH:MM», mudando ou não).
+    → «Meta leu às 14:02 (leitura nova) · Google: sem leitura nova.» */
+export function mudancaSituacao(antes = [], depois = [], quando = iso => iso) {
+  const nomes = { meta: "Meta", google: "Google" };
+  const de = l => new Map((Array.isArray(l) ? l : []).filter(i => i && nomes[i.canal]).map(i => [i.canal, i]));
+  const A = de(antes), D = de(depois);
+  const partes = [...D.values()].filter(i => i.ativo).map(i => {
+    const a = A.get(i.canal) || {}, n = nomes[i.canal];
+    const novo = i.ultimo_sync && Date.parse(i.ultimo_sync) > (Date.parse(a.ultimo_sync || "") || 0);
+    if (/^erro/i.test(i.status || "") && (novo || i.status !== a.status)) return `${n}: a leitura falhou${i.ultimo_sync ? ` ${quando(i.ultimo_sync)}` : ""}`;
+    if (novo) return `${n} leu ${quando(i.ultimo_sync)} (leitura nova)`;
+    if ((i.status || "") !== (a.status || "")) return `${n}: a situação mudou`;
+    return `${n}: sem leitura nova`;
+  });
+  return partes.length ? `${partes.join(" · ")}.` : "Nenhuma plataforma ligada.";
+}
+/** Plano 1000b · AB-217: os limites do radar em vigor quando o campo fica vazio (os mesmos do núcleo). */
+export const LIMITES_RADAR_PADRAO = Object.freeze({ ctrMin: "0,9%", freqMax: "3 vezes", r2MinGasto: "R$ 22" });
+/** Plano 1000b · AB-249: a prévia do título dos relatórios no WhatsApp (o mesmo cabeçalho do nucleo.relDiario). */
+export function previaTituloRelatorio(nomeCurto, nomeEmpresa = "", nomeCurtoEmpresa = null) {
+  const nome = String(nomeCurto || "").trim() || (typeof nomeCurtoEmpresa === "function" ? nomeCurtoEmpresa(nomeEmpresa || "Cliente", 22) : String(nomeEmpresa || "Cliente").trim());
+  return `📊 ${nome} · Tráfego pago — dia e data do relatório`;
 }
 /** Valor em reais digitado do jeito brasileiro: "1.500" → 1500 · "1.500,50" → 1500.5 · "15,5" → 15.5 ·
     "15.5" → 15.5 · "" → null. (O ui.lerMoeda leria "1.500" como 1,5 — orçamento de R$ 2.000 viraria R$ 2.) */
@@ -103,6 +204,31 @@ export function textoTesteConexao(lista, canal, nome = canal) {
   return { tom: x.passageiro ? "aten" : "ruim", texto: `${curto}. ${x.acao || "Confira os dados da conexão e salve de novo."}${x.passageiro ? " (Costuma ser passageiro.)" : ""}` };
 }
 
+/** Plano 1000b · AB-106: o status técnico da integração («erro — invalid_grant (Token has been expired or revoked.)») vira uma frase em
+    português com o que fazer; o texto cru fica para os «detalhes». → {texto, tecnico} (tecnico = "" quando não há nada a esconder). */
+export function explicarStatusIntegracao(status) {
+  const s = String(status || "").trim();
+  if (!/^erro/i.test(s)) return { texto: s, tecnico: "" };
+  const cru = s.replace(/^erro\s*[—:-]?\s*/i, "");
+  const regras = [
+    [/invalid_grant|expired|revoked|expirad|revogad|OAuthException|\b190\b|session has/i, "o acesso expirou ou foi revogado — gere um token novo na plataforma e salve aqui"],
+    [/permission|permiss|PERMISSION_DENIED|\b403\b|not authorized|unauthori[sz]ed|\b401\b/i, "a conta não deu permissão para ler os anúncios — confira o acesso do usuário à conta de anúncios"],
+    [/not.?found|\b404\b|CUSTOMER_NOT|does not exist|inexistente|n[ãa]o encontrad/i, "a conta de anúncios não foi encontrada — confira o ID da conta e salve de novo"],
+    [/rate|quota|\b429\b|too many|limite/i, "a plataforma pediu para esperar (limite de leituras) — costuma passar sozinho na próxima hora"],
+    [/timeout|timed out|ETIMEDOUT|ECONN|\b50[234]\b|unavailable|indispon/i, "a plataforma não respondeu a tempo — costuma passar sozinho na próxima hora"],
+    [/developer.?token/i, "o developer token do Google não foi aceito — confira se ele está aprovado e salve de novo"],
+  ];
+  const achou = regras.find(([re]) => re.test(cru));
+  return { texto: `a leitura falhou: ${achou ? achou[1] : "confira os dados da conexão e use «Testar conexão»"}`, tecnico: cru };
+}
+/** Plano 1000b · AB-106: a linha da situação de uma plataforma (a mesma no desenho do formulário e no «Atualizar situação»). */
+export function situacaoIntegracao(st = {}, quando = iso => iso) {
+  if (!st || !st.canal) return { texto: "Ainda não configurada.", tecnico: "" };
+  const ex = explicarStatusIntegracao(st.status);
+  if (st.ultimo_sync) return { texto: `Última leitura ${quando(st.ultimo_sync)}${ex.texto ? ` · ${ex.texto}` : ""}`, tecnico: ex.tecnico };
+  return { texto: ex.texto ? ex.texto.charAt(0).toUpperCase() + ex.texto.slice(1) : "Ainda não leu os anúncios.", tecnico: ex.tecnico };
+}
+
 /** nx_integracoes_status devolve a lista; aceita também {integracoes:[…]} (o servidor falso responde assim) — senão o painel some com as integrações. */
 export const listaIntegracoes = (r, padrao = []) => (Array.isArray(r) ? r : r && Array.isArray(r.integracoes) ? r.integracoes : padrao);
 
@@ -123,37 +249,71 @@ export const secoesConfig = [
 /** Plano 1000 (AD-173): a origem vem do rastreio do site quando ele está instalado (window.OrbitaRastreio.dados(): utm_*, gclid,
     fbclid… guardados na 1ª página — quem foi para /contato não perde a campanha); sem ele, da URL atual.
     AD-176: aceite obrigatório da política de privacidade (LGPD). AD-177: telefone com teclado numérico e formato mínimo. */
+/** Plano 1000b · AB-116: os parâmetros de origem copiados para o formulário — inclui gbraid/wbraid (cliques do Google no iPhone). */
+export const PARAMS_ORIGEM_FORM = Object.freeze(["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "gclid", "gbraid", "wbraid", "fbclid"]);
+/** Plano 1000b · AB-115: o envio do formulário de exemplo desiste em 15 s (rede lenta deixava o botão travado para sempre). */
+export const TEMPO_FORM_MS = 15000;
+/** Plano 1000b · AB-212: armadilha para robôs no formulário de exemplo — campo escondido «site» (pessoa não vê nem preenche) e tempo
+    mínimo entre abrir a página e enviar; robô cai num «Recebemos!» falso e nada chega ao funil. AB-114: o aviso é role=status com foco. */
+export const CAMPO_ARMADILHA = "site";
+export const TEMPO_MIN_FORM_MS = 3000;
 export function codigoExemplo({ url, apikey, chave, politica = "/politica-de-privacidade" }) {
+  // plano 1000b · AB-119: cada campo com <label> visível (antes só placeholder); AB-112: o campo «servico» existe (antes o código
+  // mandava f.get("servico") sempre null) — opcional, ajuste as opções aos serviços do cliente
   return `<form id="form-contato">
-  <input name="nome" placeholder="Seu nome" autocomplete="name" required>
-  <input name="telefone" type="tel" inputmode="tel" autocomplete="tel" placeholder="WhatsApp com DDD" pattern="[0-9()+ .-]{10,20}" title="WhatsApp com DDD, só números (ex.: 12 99999-8888)" required>
-  <input name="email" type="email" placeholder="E-mail (opcional)">
-  <textarea name="mensagem" placeholder="Como podemos ajudar?"></textarea>
+  <label>Nome <input name="nome" placeholder="Seu nome" autocomplete="name" required></label>
+  <label>WhatsApp <input name="telefone" type="tel" inputmode="tel" autocomplete="tel" placeholder="WhatsApp com DDD" pattern="[0-9()+ .-]{10,20}" title="WhatsApp com DDD, só números (ex.: 12 99999-8888)" required></label>
+  <label>E-mail <input name="email" type="email" placeholder="E-mail (opcional)"></label>
+  <label>Serviço de interesse (opcional)
+    <select name="servico">
+      <option value="">Escolha um serviço</option>
+      <option>Avaliação</option>
+      <option>Outro</option>
+    </select>
+  </label>
+  <label>Mensagem <textarea name="mensagem" placeholder="Como podemos ajudar?"></textarea></label>
+  <!-- armadilha para robôs: pessoas não veem nem preenchem este campo (não apague) -->
+  <div aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden"><label>Site <input name="${CAMPO_ARMADILHA}" tabindex="-1" autocomplete="off"></label></div>
+  <!-- troque ${politica} pelo endereço da política de privacidade do SEU site (senão o link dá «página não encontrada») -->
   <label><input name="aceite" type="checkbox" required> Li e aceito a <a href="${politica}" target="_blank" rel="noopener">política de privacidade</a>.</label>
   <button type="submit">Enviar</button>
 </form>
 <script>
+const abertoEm = Date.now();
 document.getElementById("form-contato").addEventListener("submit", async (e) => {
   e.preventDefault();
   const form = e.target, f = new FormData(form), u = new URLSearchParams(location.search);
+  const avisar = (texto) => {
+    const aviso = document.createElement("p");
+    aviso.setAttribute("role", "status"); aviso.tabIndex = -1;
+    aviso.textContent = texto;
+    return aviso;
+  };
+  // robô: preencheu o campo escondido ou enviou em menos de ${TEMPO_MIN_FORM_MS / 1000} s — nada é enviado
+  if (f.get("${CAMPO_ARMADILHA}") || Date.now() - abertoEm < ${TEMPO_MIN_FORM_MS}) { form.replaceWith(avisar("Recebemos! Vamos falar com você em breve.")); return; }
   const rastreio = (window.OrbitaRastreio && typeof window.OrbitaRastreio.dados === "function" && window.OrbitaRastreio.dados()) || {};
   const origem = {};
-  for (const k of ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "gclid", "fbclid"]) origem[k] = rastreio[k] || u.get(k) || null;
+  for (const k of ${JSON.stringify(PARAMS_ORIGEM_FORM).replace(/,/g, ", ")}) origem[k] = rastreio[k] || u.get(k) || null;
   form.querySelector("button").disabled = true;
   let ok = false;
+  // desiste em ${TEMPO_FORM_MS / 1000} s: sem isso, rede lenta deixava o botão travado
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  const limite = ctl ? setTimeout(() => ctl.abort(), ${TEMPO_FORM_MS}) : 0;
   try {
     const r = await fetch("${url}", {
-      method: "POST",
+      method: "POST", signal: ctl ? ctl.signal : undefined,
       headers: { "Content-Type": "application/json", apikey: "${apikey}" },
       body: JSON.stringify({ p_chave: "${chave}", p_dados: {
         nome: f.get("nome"), telefone: f.get("telefone"), email: f.get("email"),
-        mensagem: f.get("mensagem"), servico: f.get("servico"), aceite_privacidade: f.get("aceite") === "on", ...origem } })
+        mensagem: f.get("mensagem"), servico: f.get("servico") || null, aceite_privacidade: f.get("aceite") === "on", ...origem } })
     });
     ok = r.ok;
   } catch (erro) { ok = false; }
-  const aviso = document.createElement("p");
-  aviso.textContent = ok ? "Recebemos! Vamos falar com você em breve." : "Não foi possível enviar agora. Tente de novo ou chame no WhatsApp.";
+  if (ctl) clearTimeout(limite);
+  // o aviso é anunciado (role=status) e recebe o foco: quem usa leitor de tela ouve o resultado
+  const aviso = avisar(ok ? "Recebemos! Vamos falar com você em breve." : "Não foi possível enviar agora. Tente de novo ou chame no WhatsApp.");
   if (ok) form.replaceWith(aviso); else { form.append(aviso); form.querySelector("button").disabled = false; }
+  if (aviso.focus) aviso.focus();
 });
 </script>`;
 }
@@ -187,6 +347,16 @@ export function instrucoesCodeWords({ url, apikey, chave }) {
     "Faça um teste com um contato fictício e confirme no CRM antes de ativar o fluxo.",
     "Limite conhecido: o lead entra no funil como origem ‘Site’, com codewords-whatsapp registrado na observação; esta integração não importa nem sincroniza mensagens na caixa Conversas do Órbita.",
   ].join("\n");
+}
+
+/** Plano 1000b · AB-203: o aviso da troca de chave no Formulário (o AVISO_TROCA do rastreio-config em uma frase só). */
+export const TROCA_CHAVE_FORM = "A chave atual para de funcionar na hora, em dois lugares: o formulário do site (os contatos param de entrar no CRM) e o script de rastreio instalado no site (os links do WhatsApp deixam de ganhar o código da campanha). Os dois só voltam quando o código do site for atualizado com a chave nova.";
+/** Plano 1000b · AB-118: o nome do contato de teste e o link do CRM filtrado por ele (?busca, a mesma do CR-185). */
+export const NOME_TESTE_FORM = "Teste do formulário (pode excluir)";
+export const linkCrmTeste = () => `#/crm?busca=${encodeURIComponent(NOME_TESTE_FORM)}`;
+export function textoTrocaChave(av) {
+  if (!av || !Array.isArray(av.lugares) || !av.intro) return TROCA_CHAVE_FORM;
+  return `${av.intro} ${av.lugares.map((l, i) => `${i + 1}) ${l}`).join(" ")} ${av.fim || ""}`.trim();
 }
 
 async function secaoFormulario(ctx, alvo) {
@@ -233,8 +403,10 @@ async function secaoFormulario(ctx, alvo) {
     copiarK.addEventListener("click", () => ui.copiar(chave, { aviso: "Chave copiada." }));
     const trocar = h("button", { type: "button", class: "bt bt-fant" }, "Gerar nova chave");
     trocar.addEventListener("click", async () => {
-      const ok = await ui.confirmar({ titulo: "Gerar uma chave nova?", perigo: true, rotulo: "Gerar nova chave",
-        texto: "A chave atual para de funcionar na hora: o formulário do site só volta a mandar contatos quando o código for atualizado com a chave nova." });
+      // plano 1000b · AB-203: a mesma chave liga o script de rastreio — o aviso cita os DOIS lugares (o AVISO_TROCA do rastreio-config)
+      let texto = TROCA_CHAVE_FORM;
+      try { const RC = await import(`./rastreio-config.js?v=${ctx.versao}`); texto = textoTrocaChave(RC.AVISO_TROCA); } catch { /* sem o módulo: o texto de reserva já cita os dois */ }
+      const ok = await ui.confirmar({ titulo: "Gerar uma chave nova?", perigo: true, rotulo: "Gerar nova chave", texto });
       if (!ok) return;
       try { chave = (await ui.carregando(trocar, api.rpcC("nx_entrada_chave", { p_gerar: true }))).chave; pintar(); ui.toast("Chave nova gerada. Atualize o código no site.", { tipo: "ok" }); }
       catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
@@ -270,13 +442,14 @@ async function secaoFormulario(ctx, alvo) {
     const idU = "cfgf-url";
     const inpU = h("input", { id: idU, type: "text", class: "mono cfgf-mono", readonly: true, value: url, spellcheck: false });
     inpU.addEventListener("focus", () => inpU.select());
-    const campos = [["nome", "obrigatório"], ["telefone", "WhatsApp com DDD — obrigatório se não houver e-mail"], ["email", "opcional"], ["mensagem", "vira uma nota"],
+    const campos = [["nome", "obrigatório"], ["telefone", "WhatsApp com DDD — obrigatório"]   /* plano 1000b · AB-113: o campo é required no código */, ["email", "opcional"], ["mensagem", "vira uma nota"],
       [`servico`, `${(V.servico || "Serviço").toLowerCase()} de interesse, opcional`], ["utm_source, utm_campaign", "vão para a observação (de onde veio a visita)"]];
     alvo.append(h("section", { class: "cartao pilha", "aria-labelledby": "cfgf-i" },
       h("h3", { id: "cfgf-i", class: "titulo-sec" }, "Como instalar no site"),
       h("ol", { class: "cfgf-passos" },
         h("li", {}, "Copie o código abaixo e cole na página do site onde o formulário deve aparecer (quem cuida do site faz isso em 2 minutos)."),
-        h("li", {}, "Ajuste o visual do formulário como quiser — só mantenha os nomes dos campos."),
+        // plano 1000b · AB-117: o link da política do exemplo é /politica-de-privacidade — muitos sites usam outro endereço (e dá 404)
+        h("li", {}, "Ajuste o visual do formulário como quiser — só mantenha os nomes dos campos. Troque o endereço «/politica-de-privacidade» pelo da política de privacidade do seu site."),
         h("li", {}, "Faça um envio de teste e confira o contato novo no CRM.")),
       pre, h("div", { class: "linha" }, copiarC),
       h("div", { class: "campo" }, h("label", { for: idU }, "Endereço que recebe o formulário (POST, JSON)"), inpU),
@@ -290,8 +463,10 @@ async function secaoFormulario(ctx, alvo) {
         st.textContent = "";
         try {
           await ui.carregando(bt, api.publica("nx_lead_entrada", { p_chave: chave, p_dados: {
-            nome: "Teste do formulário (pode excluir)", email: "teste-formulario@exemplo.com", mensagem: "Envio de teste feito em Configurações → Formulário do site.", utm_source: "teste" } }));
+            nome: NOME_TESTE_FORM, email: "teste-formulario@exemplo.com", mensagem: "Envio de teste feito em Configurações → Formulário do site.", utm_source: "teste" } }));
           st.textContent = `Enviado. O ${negocio} “Teste do formulário (pode excluir)” entra no funil padrão e os administradores recebem o aviso.`;
+          // plano 1000b · AB-118: atalho para conferir (e apagar) o contato de teste — o CRM já filtrado pelo nome
+          if (ctx.temModulo("crm") && ctx.pronto("crm")) st.append(" ", h("a", { class: "rel-link", href: linkCrmTeste() }, "Ver no CRM"));
         } catch (e) { st.textContent = api.mensagemErro(e); }
       });
       alvo.append(h("section", { class: "cartao pilha", "aria-labelledby": "cfgf-t" },
@@ -322,6 +497,16 @@ async function secaoAnuncios(ctx, alvo) {
   const cliente = (dados && dados.cliente) || { id: ctx.cliente.id, slug: ctx.cliente.slug, nome: ctx.cliente.nome, cfg: {} };
   let cfg = cliente.cfg || {};
   integ = listaIntegracoes(integ);
+  // plano 1000b · AB-108: do nx_dados esta tela só precisa das sugestões de serviço e do gasto de ontem — tira os dois logo após a carga e
+  // solta o resto (leads com telefone e observação não ficam presos na memória enquanto a seção está aberta)
+  const servicosSug = servicosUsados((dados && dados.leads) || [], 40, Object.keys((cfg.ticket && typeof cfg.ticket === "object") ? cfg.ticket : {}));
+  // AD-247: quanto foi investido ontem (o «relatório do dia» é de ontem) — envio manual de um dia sem anúncio avisa que sai zerado
+  let gastoOntem = null, dataOntem = "";
+  try {
+    const M7 = N.montar(N.datasetDeLinhas({ metricas: (dados && dados.metricas) || [], leads: [], cliente: { nome: cliente.nome, cfg: {} }, hoje: (dados && dados.hoje) || N.hojeSP(), dias: 7 }));
+    gastoOntem = M7.consolidar(M7.linhasDe(M7.R, M7.R)).gasto; dataOntem = M7.dataBR(M7.R);
+  } catch { gastoOntem = null; }
+  dados = null;
   const refsStatus = new Map();
 
   alvo.append(
@@ -342,9 +527,10 @@ async function secaoAnuncios(ctx, alvo) {
       if (!ref) continue;
       const st = integ.find(i => i.canal === canal) || {};
       const erro = /^erro/i.test(st.status || ""), ok = /^ok/i.test(st.status || "");
-      ref.status.textContent = !st.canal ? "Ainda não configurada."
-        : st.ultimo_sync ? `Última leitura ${quandoSP(st.ultimo_sync)}${st.status ? ` · ${st.status}` : ""}`
-        : (st.status || "Ainda não leu os anúncios.");
+      // plano 1000b · AB-106: frase em português; o status cru fica nos «detalhes técnicos»
+      const sit = situacaoIntegracao(st, iso => L.quandoSP(iso));
+      ref.status.textContent = sit.texto;
+      if (ref.tecnico) { ref.tecnico.hidden = !sit.tecnico; ref.tecnicoTxt.textContent = sit.tecnico; }
       ref.status.classList.toggle("cfga-st-ruim", erro);
       ref.status.classList.toggle("cfga-st-ok", ok);
       ref.dica.textContent = !st.canal ? "Salve as credenciais para ligar esta plataforma."
@@ -362,27 +548,33 @@ async function secaoAnuncios(ctx, alvo) {
   btStatus.addEventListener("click", async () => {
     try {
       const nova = await ui.carregando(btStatus, api.rpcC("nx_integracoes_status", {}));
+      const antes = integ;
       integ = listaIntegracoes(nova);
       pintarStatusIntegracoes();
       const hh = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date());
-      statusLeitura.textContent = `Situação consultada às ${hh}. Os campos ainda não salvos foram preservados.`;
+      // plano 1000b · AB-216: diz o que mudou (leitura nova, falha ou nada) além da hora da consulta
+      statusLeitura.textContent = `Situação consultada às ${hh}: ${mudancaSituacao(antes, integ, iso => L.quandoSP(iso))} Os campos ainda não salvos foram preservados.`;
     } catch (e) { statusLeitura.textContent = api.mensagemErro(e); }
   });
 
   function formCanal(canal) {
     const d = CANAIS[canal], st = integ.find(i => i.canal === canal) || {}, pre = new Set(st.preenchidos || []);
     const erro = /^erro/i.test(st.status || ""), ok = /^ok/i.test(st.status || "");
-    const statusTxt = !st.canal ? "Ainda não configurada."
-      : st.ultimo_sync ? `Última leitura ${quandoSP(st.ultimo_sync)}${st.status ? ` · ${st.status}` : ""}` : (st.status || "Ainda não leu os anúncios.");
-    const statusEl = h("p", { class: ["cfga-st", erro && "cfga-st-ruim", ok && "cfga-st-ok"], role: "status" }, statusTxt);
-    const dicaEl = h("small", { class: "campo-ajuda cfga-st-dica" });
-    const testar = h("button", { type: "button", class: "bt bt-sec", disabled: !st.canal, title: st.canal ? "Lê o último dia com os dados salvos e explica o erro, se houver" : "Salve as credenciais primeiro" }, ui.icone("raio"), " Testar conexão");
+    const sit = situacaoIntegracao(st, iso => L.quandoSP(iso)), statusTxt = sit.texto;   // plano 1000b · AB-106
+    const tecnicoTxt = h("code", { class: "mono" }, sit.tecnico);
+    const tecnico = h("details", { class: "cfga-st-tecnico", hidden: !sit.tecnico }, h("summary", {}, "Detalhes técnicos"), tecnicoTxt);
+    // plano 1000b · AB-110: a situação é um parágrafo comum (era role=status e, ao salvar um canal, os dois formulários recriados eram
+    // anunciados); só o resultado do teste é vivo
+    const statusEl = h("p", { class: ["cfga-st", erro && "cfga-st-ruim", ok && "cfga-st-ok"] }, statusTxt);
+    const dicaEl = h("small", { id: `cfga-dica-${canal}`, class: "campo-ajuda cfga-st-dica" });
+    // plano 1000b · AB-190: desabilitado, o motivo chega ao leitor de tela pela dica do canal («Salve as credenciais…»), não só pelo title
+    const testar = h("button", { type: "button", class: "bt bt-sec cfga-testar", disabled: !st.canal, "aria-describedby": `cfga-dica-${canal}`, title: st.canal ? "Lê o último dia com os dados salvos e explica o erro, se houver" : "Salve as credenciais primeiro" }, ui.icone("raio"), " Testar conexão");
     const resultado = h("p", { class: "cfga-teste", role: "status", "aria-live": "polite", hidden: true });
-    refsStatus.set(canal, { status: statusEl, dica: dicaEl });
+    refsStatus.set(canal, { status: statusEl, dica: dicaEl, tecnico, tecnicoTxt });
     const form = h("form", { class: "cfga-canal pilha", novalidate: true, dataset: { canal } },
       h("div", { class: "linha cfga-canal-cab" }, h("h4", { class: "cfga-canal-t" }, d.nome),
         ui.campo({ tipo: "interruptor", nome: "_ativo", rotulo: "Ligada", valor: !!st.ativo })),
-      statusEl, dicaEl,
+      statusEl, tecnico, dicaEl,
       h("div", { class: "form-grade" }, d.campos.map(([k, rot, secreto, ph]) => ui.campo({
         nome: k, rotulo: pre.has(k) ? `${rot} · ✓ preenchido` : rot, tipo: secreto ? "senha" : "texto",
         placeholder: pre.has(k) ? "em branco = mantém o atual" : (ph || ""), autocomplete: secreto ? "new-password" : "off",
@@ -396,6 +588,8 @@ async function secaoAnuncios(ctx, alvo) {
       resultado.hidden = false; resultado.className = "cfga-teste";
       const v = ui.lerForm(form);
       if (d.campos.some(([k]) => v[k])) { resultado.classList.add("cfga-teste-aten"); resultado.textContent = `Há campos digitados e não salvos: salve o ${d.curto} antes de testar (o teste usa os dados salvos).`; return; }
+      // plano 1000b · AB-107: o interruptor «Ligada» mudado e não salvo também — o teste usaria a situação salva sem avisar
+      if (!!v._ativo !== !!st.ativo) { resultado.classList.add("cfga-teste-aten"); resultado.textContent = `Você ${v._ativo ? "ligou" : "desligou"} o ${d.curto} e ainda não salvou: salve antes de testar (o teste usa a situação salva).`; return; }
       resultado.textContent = `Lendo o último dia do ${d.curto}…`;
       try {
         const r = await ui.carregando(testar, api.fn("nx-ciclo", { dias: 1 }));
@@ -425,8 +619,15 @@ async function secaoAnuncios(ctx, alvo) {
           api.rpcC("nx_integracao_salvar", { p_canal: canal, p_cred: cred, p_ativo: !!v._ativo }));
         if (Array.isArray(r)) integ = r;
         else if (r && r.canal) integ = [...integ.filter(i => i.canal !== r.canal), r];
-        pintarInteg();                                   // redesenha: credencial digitada não fica na tela
-        ui.toast(`${d.curto} salvo. A próxima leitura já usa estes dados.`, { tipo: "ok" });
+        // plano 1000b · AB-003: troca SÓ o formulário salvo (a credencial digitada nele não fica na tela); o da outra plataforma, com o
+        // que já foi digitado e ainda não salvo, continua como está (antes pintarInteg() recriava os dois e apagava o Google ao salvar o Meta)
+        const novoForm = formCanal(canal);
+        form.replaceWith(novoForm);
+        pintarStatusIntegracoes();
+        // plano 1000b · AB-111: o toast oferece testar agora (dispara o «Testar conexão» do formulário novo)
+        const btTestar = novoForm.querySelector(".cfga-testar");
+        ui.toast(`${d.curto} salvo. A próxima leitura já usa estes dados.`, { tipo: "ok",
+          acao: btTestar && !!v._ativo ? { rotulo: "Testar agora", fn: () => { btTestar.focus(); btTestar.click(); } } : null });
       } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
     });
     return form;
@@ -438,12 +639,14 @@ async function secaoAnuncios(ctx, alvo) {
   const servicoRot = (V.servico || "Serviço");
   // plano 1000 (AD-073): os serviços já usados no CRM viram sugestões (datalist) — «implante» × «Implante» deixa de ser um tropeço
   const idSug = "cfga-tk-sug";
-  const sugestoes = h("datalist", { id: idSug }, servicosUsados((dados && dados.leads) || []).map(s => h("option", { value: s })));
+  const sugestoes = h("datalist", { id: idSug }, servicosSug.map(s => h("option", { value: s })));
   const tickets = h("div", { class: "cfga-tickets pilha" });
   const linhaTicket = (s = "", val = "") => {
     const nome = h("input", { type: "text", class: "cfga-tk-s", value: s, placeholder: servicoRot, "aria-label": servicoRot, maxlength: 60, list: idSug });
     const valor = h("input", { type: "text", class: "cfga-tk-v", value: val === "" ? "" : String(val).replace(".", ","), inputmode: "decimal", placeholder: "R$", "aria-label": `Valor de ${s || servicoRot.toLowerCase()} em reais` });
     const x = h("button", { type: "button", class: "bt-icone", "aria-label": `Remover ${s || servicoRot.toLowerCase()}` }, ui.icone("fechar"));
+    // plano 1000b · AB-102: os rótulos do valor e do «Remover» acompanham o nome digitado («Valor de Implante em reais»)
+    nome.addEventListener("input", () => { const r = rotulosTicket(nome.value, servicoRot); valor.setAttribute("aria-label", r.valor); x.setAttribute("aria-label", r.remover); });
     const linha = h("div", { class: "cfga-tk" }, nome, valor, x);
     x.addEventListener("click", () => { linha.remove(); sujo = true; (tickets.querySelector("input") || addTk).focus(); });
     return linha;
@@ -482,10 +685,25 @@ async function secaoAnuncios(ctx, alvo) {
     h("details", { class: "cfga-avancado" }, h("summary", {}, "Limites do radar (avançado)"),
       h("p", { class: "sub" }, "Vazio = o padrão. Ajuste quando a vertical tem outra régua (ex.: remarketing com frequência alta)."),
       h("div", { class: "form-grade" },
-        ui.campo({ nome: "rd_ctrMin", rotulo: "CTR mínimo do criativo (%)", valor: rad.ctrMin != null ? String(rad.ctrMin).replace(".", ",") : "", placeholder: "0,9", inputmode: "decimal" }),
-        ui.campo({ nome: "rd_freqMax", rotulo: "Frequência máxima (vezes)", valor: rad.freqMax != null ? String(rad.freqMax).replace(".", ",") : "", placeholder: "3", inputmode: "decimal" }),
-        ui.campo({ nome: "rd_r2MinGasto", rotulo: "Gasto mínimo para «sem conversa» (R$)", valor: rad.r2MinGasto != null ? String(rad.r2MinGasto).replace(".", ",") : "", placeholder: "22", inputmode: "decimal" }))),
+        // plano 1000b · AB-217: o padrão em vigor escrito em cada campo, e «Voltar ao padrão» limpa os três
+        ui.campo({ nome: "rd_ctrMin", rotulo: "CTR mínimo do criativo (%)", valor: rad.ctrMin != null ? String(rad.ctrMin).replace(".", ",") : "", placeholder: "0,9", inputmode: "decimal", ajuda: `Padrão: ${LIMITES_RADAR_PADRAO.ctrMin}.` }),
+        ui.campo({ nome: "rd_freqMax", rotulo: "Frequência máxima (vezes)", valor: rad.freqMax != null ? String(rad.freqMax).replace(".", ",") : "", placeholder: "3", inputmode: "decimal", ajuda: `Padrão: ${LIMITES_RADAR_PADRAO.freqMax}.` }),
+        ui.campo({ nome: "rd_r2MinGasto", rotulo: "Gasto mínimo para «sem conversa» (R$)", valor: rad.r2MinGasto != null ? String(rad.r2MinGasto).replace(".", ",") : "", placeholder: "22", inputmode: "decimal", ajuda: `Padrão: ${LIMITES_RADAR_PADRAO.r2MinGasto}.` })),
+      h("div", { class: "linha" }, h("button", { type: "button", class: "bt bt-fant bt-p cfga-padrao", on: { click: () => {
+        for (const n of ["rd_ctrMin", "rd_freqMax", "rd_r2MinGasto"]) { const i = form.querySelector(`[name="${n}"]`); if (i) i.value = ""; }
+        sujo = true; ui.toast("Limites de volta ao padrão. Salve para valer.", { tipo: "nota" });
+      } } }, "Voltar ao padrão"))),
     h("div", { class: "linha linha-fim" }, h("button", { type: "submit", class: "bt bt-prim" }, "Salvar metas e avisos")));
+  // plano 1000b · AB-249: prévia ao vivo do título dos relatórios no WhatsApp, logo abaixo do «Nome curto»
+  const inNome = form.querySelector('[name="nomeCurto"]');
+  if (inNome) {
+    const previa = h("p", { class: "campo-ajuda cfga-previa-titulo", "aria-live": "polite" });
+    const pintarPrevia = () => { previa.textContent = `Título: ${previaTituloRelatorio(inNome.value, cliente.nome, N.nomeCurtoEmpresa)}`; };
+    inNome.addEventListener("input", pintarPrevia);
+    pintarPrevia();
+    const caixaNome = inNome.closest ? inNome.closest(".campo") : null;
+    if (caixaNome && typeof caixaNome.after === "function") caixaNome.after(previa); else inNome.parentNode && inNome.parentNode.append(previa);
+  }
   const tk = cfg.ticket && typeof cfg.ticket === "object" ? cfg.ticket : {};
   for (const [s, v] of Object.entries(tk)) tickets.append(linhaTicket(s, v));
   if (!Object.keys(tk).length) tickets.append(linhaTicket());
@@ -499,31 +717,33 @@ async function secaoAnuncios(ctx, alvo) {
     ev.preventDefault();
     ui.marcarErro(form, null);
     const v = ui.lerForm(form);
-    const reais = n => lerReais((form.querySelector(`[name="${n}"]`) || {}).value);
-    const cpa = reais("cpaAlvo"), cpaG = reais("cpaAlvoGoogle"), orc = reais("orcamento"), fee = reais("fee");
+    const reais = n => (form.querySelector(`[name="${n}"]`) || {}).value ?? "";
     // AD-072: valida só o que foi preenchido — metas vazias ficam null (sem meta), não 15/1500
-    if (cpa != null && !(cpa > 0)) return ui.marcarErro(form, "cpaAlvo", "A meta de custo por conversa precisa ser maior que zero (ou deixe vazio: sem meta).");
-    if (cpaG != null && !(cpaG > 0)) return ui.marcarErro(form, "cpaAlvoGoogle", "A meta do Google precisa ser maior que zero (ou deixe vazio).");
-    if (orc != null && !(orc >= 0)) return ui.marcarErro(form, "orcamento", "O orçamento não pode ser negativo (vazio = não definido).");
-    if (!(fee >= 0)) return ui.marcarErro(form, "fee", "Informe o valor da gestão (pode ser zero).");
+    // plano 1000b · AB-006: lerMetas — gestão vazia vira 0 (antes null passava no «!(fee >= 0)» e o cfg saía com fee:null)
+    const metas = lerMetas({ cpaAlvo: reais("cpaAlvo"), cpaAlvoGoogle: reais("cpaAlvoGoogle"), orcamento: reais("orcamento"), fee: reais("fee") });
+    if (metas.erro) return ui.marcarErro(form, metas.erro.campo, metas.erro.msg);
+    const { cpa, cpaG, orc, fee } = metas;
     const numeros = s => [...new Set(String(s || "").split(/[\n,;]+/).map(soDigitos).filter(n => n.length >= 10 && n.length <= 13))];
     for (const campo of ["waGestor", "waCliente"]) {
       const brutos = String(v[campo] || "").split(/[\n,;]+/).map(x => x.trim()).filter(Boolean);
       const ruim = brutos.find(b => !numeroWaValido(b));
       if (ruim) return ui.marcarErro(form, campo, `«${ruim}» não parece um WhatsApp: use DDD + número (10 ou 11 dígitos), com DDI na frente se for preciso (até 13).`);
     }
-    const ticket = {};
-    for (const l of tickets.querySelectorAll(".cfga-tk")) {
-      const s = l.querySelector(".cfga-tk-s").value.trim(), val = lerReais(l.querySelector(".cfga-tk-v").value);
-      if (s && val != null && val >= 0) ticket[s] = val;
+    // plano 1000b · AB-103: linha com valor e sem nome (ou valor ilegível) para o salvamento com o erro NA linha (antes sumia em silêncio)
+    const linhasTk = [...tickets.querySelectorAll(".cfga-tk")];
+    for (const l of linhasTk) for (const i of l.querySelectorAll("input")) i.removeAttribute("aria-invalid");
+    const lt = lerTickets(linhasTk.map(l => ({ s: l.querySelector(".cfga-tk-s").value, v: l.querySelector(".cfga-tk-v").value })));
+    if (lt.erro) {
+      const alvoErr = linhasTk[lt.erro.indice] && linhasTk[lt.erro.indice].querySelector(lt.erro.campo === "s" ? ".cfga-tk-s" : ".cfga-tk-v");
+      if (alvoErr) { alvoErr.setAttribute("aria-invalid", "true"); alvoErr.focus(); }
+      ui.toast(lt.erro.msg, { tipo: "erro" });
+      return;
     }
-    const radar = {};
-    for (const [k, min, max, rot] of [["ctrMin", 0.05, 10, "O CTR mínimo vai de 0,05% a 10%."], ["freqMax", 1.5, 20, "A frequência máxima vai de 1,5 a 20."], ["r2MinGasto", 1, 10000, "O gasto mínimo vai de R$ 1 a R$ 10.000."]]) {
-      const n = lerReais(v[`rd_${k}`]);
-      if (n == null) continue;
-      if (!(n >= min && n <= max)) return ui.marcarErro(form, `rd_${k}`, rot);
-      radar[k] = n;
-    }
+    const ticket = lt.ticket;
+    // plano 1000b · AB-104: «abc» num limite para o salvamento com o erro no campo (antes salvava como «padrão» calado)
+    const lim = lerLimitesRadar(v);
+    if (lim.erro) { const det = form.querySelector(".cfga-avancado"); if (det) det.open = true; return ui.marcarErro(form, lim.erro.campo, lim.erro.msg); }
+    const radar = lim.radar;
     const regrasOff = REGRAS.map(([id]) => id).filter(id => !v[`rg_${id}`]);
     const novo = { nomeCurto: v.nomeCurto || "", assinatura: v.assinatura || "", cpaAlvo: cpa, cpaAlvoGoogle: cpaG, orcamento: orc, fee,
                    ticket, waGestor: numeros(v.waGestor), waCliente: numeros(v.waCliente), regrasOff, radar };
@@ -534,21 +754,32 @@ async function secaoAnuncios(ctx, alvo) {
       sujo = false;
       // AD-133: o Anúncios joga fora o cache deste cliente — a próxima abertura já usa as metas novas (antes até 5 min com as antigas)
       try { globalThis.dispatchEvent(new CustomEvent("orbita:ads-cfg-salva", { detail: { clienteId: ctx.cliente.id } })); } catch { /* sem eventos */ }
-      ui.toast("Metas e avisos salvos. O Anúncios já usa as metas novas.", { tipo: "ok" });
+      // plano 1000b · AB-260: o mesmo número na gestão e no cliente — avisa no mesmo toast (o resumo do mês poderia chegar duas vezes nele)
+      const dups = waDuplicados(novo.waGestor, novo.waCliente);
+      if (dups.length) ui.toast(`Metas e avisos salvos. Atenção: ${dups.map(formatarWa).join(", ")} ${dups.length === 1 ? "está" : "estão"} na gestão e no cliente ao mesmo tempo — deixe em um campo só para não receber o resumo do mês duas vezes.`, { tipo: "aten" });
+      else ui.toast("Metas e avisos salvos. O Anúncios já usa as metas novas.", { tipo: "ok" });
     } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
   });
 
   /* ---------- atualizar agora ---------- */
-  // AD-247: quanto foi investido ontem (o «relatório do dia» é de ontem) — envio manual de um dia sem anúncio avisa que sai zerado
-  let gastoOntem = null, dataOntem = "";
-  try {
-    const M7 = N.montar(N.datasetDeLinhas({ metricas: (dados && dados.metricas) || [], leads: [], cliente: { nome: cliente.nome, cfg: {} }, hoje: (dados && dados.hoje) || N.hojeSP(), dias: 7 }));
-    gastoOntem = M7.consolidar(M7.linhasDe(M7.R, M7.R)).gasto; dataOntem = M7.dataBR(M7.R);
-  } catch { gastoOntem = null; }
   const st = h("p", { class: "sub", role: "status" });
   const bCiclo = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("raio"), " Sincronizar agora");
   const bDia = h("button", { type: "button", class: "bt bt-fant" }, "Enviar o relatório do dia");
   const bMes = h("button", { type: "button", class: "bt bt-fant" }, "Enviar o resumo do mês");
+  // plano 1000b · AB-100: depois de «Sincronizar agora», uma conferência sozinha em 90 s (cancelada se a tela sair ou houver outro pedido)
+  let tConferir = 0;
+  const conferirSync = desde => {
+    clearTimeout(tConferir);
+    tConferir = setTimeout(async () => {
+      if (!alvo.isConnected) return;
+      try {
+        const nova = await api.rpcC("nx_integracoes_status", {});
+        if (!alvo.isConnected) return;
+        integ = listaIntegracoes(nova, integ); pintarStatusIntegracoes();
+        st.textContent = resumoAposSync(integ, desde, iso => L.quandoSP(iso));
+      } catch { /* a conferência é um extra: «Atualizar situação» continua lá */ }
+    }, CONFERIR_SYNC_MS);
+  };
   const executar = async (tipo, btn) => {
     if (tipo !== "ciclo") {
       const c = confirmacaoEnvio({ tipo, cfg, sujo, gastoDia: tipo === "diario" ? gastoOntem : null, dataDia: dataOntem });
@@ -561,8 +792,9 @@ async function secaoAnuncios(ctx, alvo) {
       await ui.carregando(btn, api.rpc("nx_executar", { p_tarefa: tarefa, p_corpo: corpo }));
       const hh = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date());
       st.textContent = tipo === "ciclo"
-        ? `Leitura solicitada às ${hh}. Meta e Google serão consultados em segundo plano; use “Atualizar situação” para conferir o resultado.`
+        ? `Leitura solicitada às ${hh}. Meta e Google serão consultados em segundo plano; o resultado aparece aqui em cerca de 1 minuto e meio.`
         : `Pedido enviado às ${hh}. O ${tipo === "mensal" ? "resumo do mês" : "relatório do dia"} chega no WhatsApp em instantes.`;
+      if (tipo === "ciclo") conferirSync(Date.now() - 5000);   // AB-100
     } catch (e) { st.textContent = api.mensagemErro(e); }
   };
   bCiclo.addEventListener("click", () => executar("ciclo", bCiclo));
@@ -573,12 +805,16 @@ async function secaoAnuncios(ctx, alvo) {
     h("p", { class: "sub" }, "O sistema lê os anúncios de hora em hora e manda o relatório do dia às 8h. Para conferir a conexão, use “Testar conexão” em cada plataforma; estes botões antecipam a leitura completa (com o radar) e os relatórios."),
     h("div", { class: "linha cfga-exec" }, bCiclo, bDia, bMes), st,
     h("a", { class: "rel-link", href: "#/anuncios" }, "Abrir o Anúncios")));
+
+  // plano 1000b · AB-101: Metas e avisos mudados e não salvos — fechar a aba pergunta (beforeunload) e trocar de seção/tela também
+  // (podeSair: a Configuração e a guarda de rota do shell perguntam antes); a limpeza solta o ouvinte e a conferência do «Sincronizar»
+  const antesDeSair = ev => { if (!sujo) return; ev.preventDefault(); ev.returnValue = ""; };
+  if (typeof addEventListener === "function") addEventListener("beforeunload", antesDeSair);
+  return {
+    limpar: () => { if (typeof removeEventListener === "function") removeEventListener("beforeunload", antesDeSair); clearTimeout(tConferir); },
+    pendente: () => sujo,
+    podeSair: () => (!sujo ? true : ui.confirmar({ titulo: "Sair sem salvar?", texto: "As mudanças em Metas e avisos ainda não foram salvas e serão perdidas.", rotulo: "Sair sem salvar", perigo: true })),
+  };
 }
 
-function quandoSP(iso) {
-  const d = new Date(iso);
-  if (isNaN(d)) return "—";
-  const f = o => new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", ...o }).format(d);
-  const dia = f({ day: "2-digit", month: "2-digit", year: "numeric" }), hoje = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date());
-  return `${dia === hoje ? "hoje" : `em ${f({ day: "2-digit", month: "2-digit" })}`} às ${f({ hour: "2-digit", minute: "2-digit" })}`;
-}
+// plano 1000b · AB-105: o quandoSP próprio saiu — a data da última leitura usa L.quandoSP (rel-logica), que diz «ontem às…» como o resto do app

@@ -88,7 +88,8 @@
 .adm-anel-ruim .adm-anel-arco { stroke: var(--c-ruim); }
 .adm-anel-neutra .adm-anel-arco { stroke: var(--c-borda-2); }
 .adm-anel-num { font-family: var(--f-mono); font-weight: 500; font-size: 22px; fill: var(--c-texto); }
-.adm-anel-sub { font-family: var(--f-corpo); font-size: 10px; fill: var(--c-texto-3); }
+/* plano 1000b · UB-182: «do limite» em rem (acompanha o zoom de texto), não 10 px fixos */
+.adm-anel-sub { font-family: var(--f-corpo); font-size: var(--fs-12); fill: var(--c-texto-3); }
 .adm-anel-txt { display: flex; flex-direction: column; gap: .2rem; min-width: 0; font-size: var(--fs-14); color: var(--c-texto-2); }
 .adm-anel-txt b { color: var(--c-texto); }
 .adm-voltar { display: inline-flex; align-items: center; min-height: 44px; padding-inline: .3rem; border-radius: var(--r-pp); }
@@ -151,7 +152,7 @@
 /* AS-161/AS-168/AS-159: módulos que saíram, modelo do segmento e convites pendentes */
 .adm-mod-aviso { margin: 0; }
 .adm-modelo { display: flex; align-items: center; flex-wrap: wrap; gap: var(--esp-2); margin: var(--esp-1) 0 0; }
-.adm-modelo-sel { min-height: 36px; }
+.adm-modelo-sel { min-height: 44px; }      /* plano 1000b · UB-183: alvo de toque de 44 px */
 .adm-convites { margin-top: var(--esp-2); }
 
 /* ---------------------------------------------------------------- movimento reduzido e alto contraste */
@@ -263,3 +264,25 @@
 .adm-slug-tomado { display: block; }
 .adm-envios-estado { margin-bottom: var(--esp-2); }
 @media (max-width: 760px) { .adm-csv { min-height: 44px; } }
+/* plano 1000b (lote config-1) */
+/* UB-086: a célula vazia da grade da senha só existe com duas colunas */
+@media (max-width: 760px) { .form-grade-quebra { display: none; } }
+/* UB-221: no celular, «Vê colegas», «Rodízio» e «Acesso» de cada pessoa ficam num «Mais» recolhido */
+.cfg-us-mais > summary { display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--c-texto-2); }
+.cfg-us-mais > summary:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; border-radius: var(--r-pp); }
+.cfg-us-mais-it { justify-content: space-between; align-items: center; gap: var(--esp-2); }
+/* UB-264: «Gerenciar» em cada barra do Plano e uso; UB-099: recurso fora do plano */
+.cfg-uso-ir { display: inline-flex; align-items: center; gap: .25rem; min-height: 44px; font-size: var(--fs-13); }
+.cfg-uso-ir .ic { width: 14px; height: 14px; }
+.cfg-uso-ir:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; border-radius: var(--r-pp); }
+.uso-fora .uso-l { opacity: .85; }
+/* UB-261: «Salvar marca» sem mudança continua no Tab, mas parece apagado */
+.marca-acoes .bt[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+/* UB-112: data final do teste ao lado dos dias */
+.adm-teste-fim { margin: var(--esp-1) 0 0; }
+/* UB-100: IA por mês no Plano e uso */
+.cfg-ia-meses-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--esp-2); }
+.cfg-ia-meses-lista li { gap: var(--esp-2); flex-wrap: wrap; }
+/* UB-225: «Mostrar mais» da lista de clientes */
+.adm-mais-linha { justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--esp-2); margin-top: var(--esp-3); }
+.adm-mais { min-height: 44px; }

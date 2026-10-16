@@ -91,10 +91,15 @@ export function criarDb({ url, chave } = {}, f = globalThis.fetch, { prazoMs = P
       Sem `limit`, pagina até o fim — passe `order` para a paginação ser estável — e até `teto` linhas (padrão TETO_SELECT):
       passou disso, erro claro «consulta grande demais» (codigo consulta_grande) em vez de estourar a memória. */
   async function select(tabela, params = {}, { teto = TETO_SELECT } = {}) {
-    if (params.limit != null) return (await pedir("GET", tabela, { params })) || [];
+    // plano 1000b · B-005: select sempre devolve lista — um 200 que não é JSON de lista (proxy/gateway devolvendo HTML) virava
+    // centenas de «linhas» letra por letra no out.push(...pag); agora é erro claro (codigo resposta_ilegivel)
+    const lista = d => (Array.isArray(d) ? d : d == null ? [] : (() => {
+      const e = new Error(`banco: resposta ilegível em ${tabela} (não é lista)`); e.codigo = "resposta_ilegivel"; e.banco = true; throw e;
+    })());
+    if (params.limit != null) return lista(await pedir("GET", tabela, { params }));
     const out = [];
     for (let offset = 0; ; offset += PAGINA) {
-      const pag = (await pedir("GET", tabela, { params: { ...params, limit: PAGINA, offset } })) || [];
+      const pag = lista(await pedir("GET", tabela, { params: { ...params, limit: PAGINA, offset } }));
       out.push(...pag);
       if (pag.length < PAGINA) return out;
       if (out.length > teto) {

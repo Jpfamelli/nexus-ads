@@ -63,6 +63,9 @@ export const COMANDOS = [
   { args: ["--test", "testes/plano1000-funcoes.teste.mjs"], opcional: true },
   { args: ["--test", "testes/plano1000-banco.teste.mjs"], opcional: true },
   { args: ["--test", "testes/plano1000-ci.teste.mjs"], opcional: true },
+  // plano 1000b (14–15/10): um arquivo por frente + cobertura
+  ...["conv", "crm", "ads", "auto", "config", "classico", "agenda", "inicio", "sis", "funcoes", "cobertura"]
+    .map(f => ({ args: ["--test", `testes/plano1000b-${f}.teste.mjs`], opcional: true })),
   { args: ["--test", "testes/isolamento.teste.mjs"] },
   { args: ["--test", "testes/plano100-banco.teste.mjs"] },         // S-B
 ];

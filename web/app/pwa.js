@@ -69,6 +69,20 @@ export function versaoDaUrl(url) {
   try { return new URL(String(url), "http://x/").searchParams.get("v"); } catch { return null; }
 }
 
+/** Plano 1000b · UB-171: GET do versao.json com prazo (padrão 5 s): estourou → aborta e devolve null (falha de rede nunca vira aviso). */
+export const PRAZO_VERSAO_MS = 5000;
+export async function buscarVersaoComPrazo(buscarFn, url, prazoMs = PRAZO_VERSAO_MS) {
+  const ms = Number(prazoMs) > 0 ? Number(prazoMs) : PRAZO_VERSAO_MS;
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  let timer = null;
+  const prazo = new Promise(res => { timer = setTimeout(() => { try { if (ctl) ctl.abort(); } catch { /* ok */ } res(null); }, ms); });
+  try {
+    const r = await Promise.race([buscarFn(url, { cache: "no-store", signal: ctl ? ctl.signal : undefined }), prazo]);
+    if (!r) return null;
+    return r.ok ? await Promise.race([r.json(), prazo]) : null;
+  } finally { clearTimeout(timer); }
+}
+
 /**
  * Máquina da faixa de versão (pura: relógio, busca e ações entram por parâmetro).
  *   versao, buscar(): Promise<{versao, sw}|null>, agora(), ocupado(): boolean, recarregou(): number|null (ms da última recarga por versão)
@@ -77,7 +91,7 @@ export function versaoDaUrl(url) {
 export function criarVersao(o) {
   const agora = o.agora || (() => Date.now());
   const ocioso = o.ociosoMs || OCIOSO_MS;
-  let pronta = null, ultimaAcao = agora(), aplicando = false, dispensada = false, verificadaEm = -Infinity;
+  let pronta = null, ultimaAcao = agora(), aplicando = false, dispensada = false, verificadaEm = -Infinity, verificando = false;
   const api = {
     get pronta() { return pronta; },
     get aplicando() { return aplicando; },
@@ -96,9 +110,12 @@ export function criarVersao(o) {
         `{ seNaoRecente: true }` (voltar à aba, reconectar): pula se a última consulta foi há menos de 1 min (AS-207). */
     async verificar({ seNaoRecente = false } = {}) {
       if (seNaoRecente && agora() - verificadaEm < (o.minimoMs ?? VERIFICAR_NO_MINIMO_MS)) return { acao: "nada", pulada: true };
+      // plano 1000b · UB-171: uma consulta por vez — com a anterior ainda no ar, esta não sai
+      if (verificando) return { acao: "nada", emAndamento: true };
       verificadaEm = agora();
       let remoto = null;
-      try { remoto = await o.buscar(); } catch { remoto = null; }
+      verificando = true;
+      try { remoto = await o.buscar(); } catch { remoto = null; } finally { verificando = false; }
       const d = decidirVersao(o.versao, remoto);
       if (d.acao === "desligar") { if (o.aoDesligar) await o.aoDesligar(); }
       else if (d.acao === "nova") {
@@ -129,6 +146,18 @@ export function criarVersao(o) {
     },
   };
   return api;
+}
+
+/** plano 1000b · UB-170: a verificação periódica só roda com a aba à vista. → a promessa do verificar, ou null quando pulou. */
+export function verificarSeVisivel(doc, v) {
+  if (doc && doc.hidden) return null;
+  return v.verificar();
+}
+/** plano 1000b · UB-172: «Atualizar» sem promessa rejeitada sem dono — se aplicar falhar (aoAplicar relança), recarrega mesmo assim. */
+export function aplicarOuRecarregar(v, recarregar) {
+  let p;
+  try { p = Promise.resolve(v.aplicar()); } catch (e) { p = Promise.reject(e); }
+  return p.catch(() => { recarregar(); return false; });
 }
 
 /** Faixa «Nova versão do Órbita pronta · Atualizar» (DOM só com ui.h). */
@@ -172,10 +201,9 @@ export function iniciar(o) {
   };
   const mostrarFaixa = pronta => {
     if (!o.alvo || faixa) return;
-    faixa = criarFaixaVersao(o.ui, o.produto ? o.produto() : "Órbita", () => { v.aplicar(); },
+    faixa = criarFaixaVersao(o.ui, o.produto ? o.produto() : "Órbita", () => { aplicarOuRecarregar(v, recarregar); },   // plano 1000b · UB-172
       { notas: pronta && pronta.notas, aoDepois: () => { v.dispensar(); if (faixa) { faixa.remove(); faixa = null; } } });
-    o.alvo.appendChild(faixa);
-    if (o.ui && o.ui.anunciar) o.ui.anunciar("Nova versão pronta. Use Atualizar quando quiser.");
+    o.alvo.appendChild(faixa);   // plano 1000b · UB-169: a faixa já é role=status — um ui.anunciar a mais fazia o leitor falar duas vezes
   };
   const aplicarNoSW = async () => {
     const espera = reg && reg.waiting;
@@ -195,10 +223,8 @@ export function iniciar(o) {
   };
   const v = criarVersao({
     versao: o.versao,
-    buscar: async () => {
-      const r = await buscarFn(new URL(`versao.json?t=${Date.now()}`, loc.href).href, { cache: "no-store" });
-      return r.ok ? r.json() : null;
-    },
+    // plano 1000b · UB-171: prazo de 5 s (rede presa não acumula consultas penduradas)
+    buscar: () => buscarVersaoComPrazo(buscarFn, new URL(`versao.json?t=${Date.now()}`, loc.href).href, o.prazoVersaoMs),
     ocupado: () => temDialogo() || !!(o.ocupado && o.ocupado()),
     recarregou: () => lerNum(CHAVE_RECARGA),
     aoPronta: pronta => mostrarFaixa(pronta),
@@ -260,7 +286,8 @@ export function iniciar(o) {
   // versão: ao voltar para a aba, ao reconectar (no máximo 1 vez por minuto — AS-207) e a cada 10 min
   ouvir(doc, "visibilitychange", () => { if (doc.visibilityState === "visible") v.verificar({ seNaoRecente: true }); });
   ouvir(jan, "online", () => { v.verificar({ seNaoRecente: true }); });
-  const relogio = setInterval(() => { v.verificar(); }, o.verificarMs || VERIFICAR_A_CADA_MS);
+  // plano 1000b · UB-170: com a aba escondida o relógio não busca o versao.json (a volta à aba já confere)
+  const relogio = setInterval(() => { verificarSeVisivel(doc, v); }, o.verificarMs || VERIFICAR_A_CADA_MS);
   fins.push(() => clearInterval(relogio));
 
   // AS-295: o desligamento de emergência recarregou esta aba — diz o porquê uma vez

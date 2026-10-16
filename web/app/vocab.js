@@ -12,6 +12,8 @@ export const ROTULO_VERTICAL = Object.freeze({
 });
 
 // g_* = gênero da palavra ("a" feminino, "o" masculino) para "Nenhum/Nenhuma", "novo/nova"
+// plano 1000b · RB-039: compromisso/compromissos = o que a Agenda marca na vertical (consulta · visita · entrega), a MESMA palavra de
+// rel-logica.palavraAgenda e crm-negocio.nomeCompromisso — um lugar só para a palavra e o gênero (sempre feminina)
 const BASE = {
   odonto: {
     contato: "Paciente", contatos: "Pacientes", g_contato: "o",
@@ -19,6 +21,7 @@ const BASE = {
     servico: "Procedimento", servicos: "Procedimentos", g_servico: "o",
     ganhar: "Fechou", perder: "Não fechou",
     crm: "Pacientes",
+    compromisso: "Consulta", compromissos: "Consultas", g_compromisso: "a",
   },
   oficina: {
     contato: "Cliente", contatos: "Clientes", g_contato: "o",
@@ -26,6 +29,7 @@ const BASE = {
     servico: "Serviço", servicos: "Serviços", g_servico: "o",
     ganhar: "Aprovado", perder: "Recusado",
     crm: "Orçamentos",
+    compromisso: "Visita", compromissos: "Visitas", g_compromisso: "a",
   },
   loja: {
     contato: "Cliente", contatos: "Clientes", g_contato: "o",
@@ -33,6 +37,7 @@ const BASE = {
     servico: "Produto", servicos: "Produtos", g_servico: "o",
     ganhar: "Vendido", perder: "Não comprou",
     crm: "Vendas",
+    compromisso: "Entrega", compromissos: "Entregas", g_compromisso: "a",
   },
   generico: {
     contato: "Contato", contatos: "Contatos", g_contato: "o",
@@ -40,6 +45,7 @@ const BASE = {
     servico: "Serviço", servicos: "Serviços", g_servico: "o",
     ganhar: "Ganho", perder: "Perdido",
     crm: "CRM",
+    compromisso: "Consulta", compromissos: "Consultas", g_compromisso: "a",
   },
 };
 
@@ -49,16 +55,19 @@ export const CHAVES = Object.freeze(["contato", "contatos", "negocio", "negocios
 export function vocab(vertical) {
   const b = BASE[VERTICAIS.includes(vertical) ? vertical : "generico"];
   const v = { vertical: VERTICAIS.includes(vertical) ? vertical : "generico", ...b };
-  const minusc = s => s.charAt(0).toLowerCase() + s.slice(1);
+  // plano 1000b · RB-188: chave sem palavra não lança (s.charAt de undefined) — cai na própria chave, como v.min sempre fez
+  const minusc = s => { const t = String(s ?? ""); return t.charAt(0).toLowerCase() + t.slice(1); };
+  const palavra = chave => v[chave] ?? chave;
   /** a palavra em minúscula ("pacientes"). */
-  v.min = chave => minusc(String(v[chave] ?? chave));
+  v.min = chave => minusc(palavra(chave));
   /** "Nenhuma oportunidade" / "Nenhum paciente". */
   v.nenhum = chave => {
-    const sing = chave.endsWith("s") && v[chave.slice(0, -1)] ? chave.slice(0, -1) : chave;
-    return (v["g_" + sing] === "a" ? "Nenhuma " : "Nenhum ") + minusc(v[sing]);
+    const k = String(chave ?? "");
+    const sing = k.endsWith("s") && v[k.slice(0, -1)] ? k.slice(0, -1) : k;
+    return (v["g_" + sing] === "a" ? "Nenhuma " : "Nenhum ") + minusc(palavra(sing));
   };
   /** "Nova oportunidade" / "Novo orçamento". */
-  v.novo = chave => (v["g_" + chave] === "a" ? "Nova " : "Novo ") + minusc(v[chave]);
+  v.novo = chave => (v["g_" + chave] === "a" ? "Nova " : "Novo ") + minusc(palavra(chave));
   /** artigo: "a"/"o". */
   v.art = chave => v["g_" + chave] === "a" ? "a" : "o";
   /** ícone do CRM no menu (dente, chave, sacola ou funil) */

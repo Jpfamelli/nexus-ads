@@ -34,28 +34,31 @@ export function pecas(ui, L) {
       if (o.grupo) filhos.push(h("optgroup", { label: o.grupo }, (o.opcoes || []).map(opt)));
       else filhos.push(opt(o));
     }
-    const sel = h("select", { id, disabled: !!desabilitado, required: !!obrigatorio }, filhos);
+    // plano 1000b · UB-015: a ajuda («Vazio = primeira etapa do funil»…) é anunciada junto com o campo (aria-describedby)
+    const sel = h("select", { id, disabled: !!desabilitado, required: !!obrigatorio, "aria-describedby": ajuda ? `${id}-aj` : null }, filhos);
     if (aoMudar) sel.addEventListener("change", () => aoMudar(sel.value, sel));
     return h("div", { class: ["campo", "campo-select", classe] },
       rotulo ? h("label", { for: id }, rotulo, obrigatorio ? h("span", { class: "obrig", "aria-hidden": "true" }, " *") : null) : null,
-      sel, ajuda ? h("small", { class: "campo-ajuda" }, ajuda) : null);
+      sel, ajuda ? h("small", { class: "campo-ajuda", id: `${id}-aj` }, ajuda) : null);
   }
 
   function entrada({ rotulo, valor, tipo = "text", max, min, passo, placeholder, aoMudar, desabilitado, ajuda, sufixo, variaveis, linhas, obrigatorio, rotuloOculto, classe }) {
     const id = novoId("in");
     const attrs = { id, disabled: !!desabilitado, placeholder: placeholder || null, required: !!obrigatorio,
+      "aria-describedby": ajuda ? `${id}-aj` : null,          // plano 1000b · UB-015
       dataset: variaveis ? { variaveis: "1" } : null };
     let ctl;
     if (tipo === "textarea") ctl = h("textarea", { ...attrs, rows: linhas || 3, maxlength: max || null }, valor ?? "");
     else ctl = h("input", { ...attrs, type: tipo, value: valor ?? "", maxlength: tipo !== "number" && tipo !== "time" && max ? max : null,
       max: tipo === "number" && max != null ? max : null, min: tipo === "number" && min != null ? min : null, step: passo || null,
-      inputmode: tipo === "number" ? "decimal" : null });
+      // plano 1000b · UB-016: passo inteiro (horas, minutos, prazo, quantidade) abre o teclado numérico sem vírgula
+      inputmode: tipo === "number" ? (Number.isInteger(Number(passo ?? 1)) ? "numeric" : "decimal") : null });
     if (aoMudar) ctl.addEventListener("input", () => aoMudar(ctl.value, ctl));
     const lab = rotulo ? h("label", { for: id, class: rotuloOculto ? "sr-only" : null }, rotulo,
       obrigatorio ? h("span", { class: "obrig", "aria-hidden": "true" }, " *") : null) : null;
     return h("div", { class: ["campo", tipo === "textarea" ? "campo-textarea" : "campo-texto", sufixo && "au-com-sufixo", classe] },
       lab, sufixo ? h("div", { class: "au-sufixo" }, ctl, h("span", { class: "au-sufixo-txt", "aria-hidden": "true" }, sufixo)) : ctl,
-      ajuda ? h("small", { class: "campo-ajuda" }, ajuda) : null);
+      ajuda ? h("small", { class: "campo-ajuda", id: `${id}-aj` }, ajuda) : null);
   }
 
   /** Botão-chip. `modo`: "radio" (um só) ou "marcar" (vários, aria-pressed). */
@@ -139,10 +142,12 @@ export function pecas(ui, L) {
     const ehPronto = m => L.PRESETS_ESPERA.some(([k]) => k === m);
     let outro = atual != null && !ehPronto(atual);
     const chips = [];
-    const grupo = h("div", { class: "au-chips", role: "radiogroup", "aria-labelledby": id });
-    const resumo = h("small", { class: "au-dur-resumo", "aria-live": "polite" });
+    const grupo = h("div", { class: "au-chips", role: "radiogroup", "aria-labelledby": id, "aria-describedby": `${id}-res` });
+    // plano 1000b · UB-193: o resumo não é região viva (mudava a cada dígito com a data de exemplo) — fica ligado ao campo por aria-describedby
+    const resumo = h("small", { class: "au-dur-resumo", id: `${id}-res` });
     const dec = L.decomporDuracao(atual || 0);
     const num = entrada({ rotulo: "Quantidade", valor: dec.n || "", tipo: "number", min: 1, passo: 1, desabilitado, rotuloOculto: true, classe: "au-dur-num" });
+    num.querySelector("input").setAttribute("aria-describedby", `${id}-res`);
     const un = seletor({ rotulo: "Unidade", valor: dec.un, desabilitado, classe: "au-dur-un",
       opcoes: [{ valor: "min", rotulo: "minutos" }, { valor: "horas", rotulo: "horas" }, { valor: "dias", rotulo: "dias" }] });
     un.querySelector("label").classList.add("sr-only");
@@ -213,7 +218,9 @@ export function pecas(ui, L) {
         }
         return grupos;
       }
-      case "canal": return (b.canais || []).map(c => ({ valor: c.id, rotulo: c.nome + (c.numero_exibicao ? ` · ${c.numero_exibicao}` : "") }));
+      // plano 1000b · UB-194: número que caiu (status «erro» do CodeWords ou estado «desconectado») vem marcado no seletor
+      case "canal": return (b.canais || []).map(c => ({ valor: c.id, rotulo: c.nome + (c.numero_exibicao ? ` · ${c.numero_exibicao}` : "")
+        + (c.estado === "desconectado" || c.status === "erro" ? " (desconectado)" : c.status === "pendente" ? " (aguardando conexão)" : "") }));
       case "departamento": return (b.departamentos || []).map(d => ({ valor: d.id, rotulo: d.nome + (d.padrao ? " (padrão)" : "") }));
       case "etiqueta": return (b.etiquetas || []).map(e => ({ valor: e.id, rotulo: e.nome }));
       case "pessoa": return (b.usuarios || []).map(u => ({ valor: u.id, rotulo: u.nome }));
@@ -277,7 +284,7 @@ export function pecas(ui, L) {
     const H = PX + lista.length * (ALT + GAP) - GAP + PX;
     const alt = L.textoDiagrama(lista);
     const svg = s("svg", { class: "au-dg-svg", viewBox: `0 0 ${W} ${Math.max(ALT + 2 * PX, H)}`, width: "100%", role: "group", "aria-label": `Diagrama do fluxo. ${alt}`, preserveAspectRatio: "xMinYMin meet" });
-    svg.append(s("title", {}, alt));
+    // plano 1000b · UB-195: só o aria-label (um <title> igual fazia o leitor de tela ler o texto inteiro duas vezes)
     // tronco: do centro do 1º nó ao centro do último
     if (lista.length > 1) svg.append(s("line", { class: "au-dg-tronco", x1: TRILHO, x2: TRILHO, y1: PX + ALT / 2, y2: PX + (lista.length - 1) * (ALT + GAP) + ALT / 2, "aria-hidden": "true" }));
     const maxTxt = Math.max(14, Math.floor((W - 64) / 6.6));      // ~6,6 px por letra a 12 px: corta antes de sair do nó
@@ -285,7 +292,8 @@ export function pecas(ui, L) {
     lista.forEach((no, i) => {
       const y = PX + i * (ALT + GAP);
       const g = s("g", { class: ["au-dg-no", `au-dg-${no.tipo}`, `au-dg-tom-${no.tom}`, no.inalcancavel && "au-dg-nunca"].filter(Boolean).join(" "),
-        role: "button", tabindex: "0", "aria-label": `${no.tipo === "mais" ? "" : no.tipo === "gatilho" ? "Gatilho: " : no.tipo === "condicao" ? `Condição ${no.n}: ` : `Passo ${no.n || ""}: `.replace(" :", ":")}${no.rotulo}${no.sub ? `. ${no.sub}` : ""}. Ir até este bloco.`,
+        // plano 1000b · UB-042: roving tabindex — só o 1º nó entra no Tab; setas ↑↓ (Home/End) andam entre os nós; Enter leva ao bloco
+        role: "button", tabindex: i === 0 ? "0" : "-1", "aria-label": `${no.tipo === "mais" ? "" : no.tipo === "gatilho" ? "Gatilho: " : no.tipo === "condicao" ? `Condição ${no.n}: ` : `Passo ${no.n || ""}: `.replace(" :", ":")}${no.rotulo}${no.sub ? `. ${no.sub}` : ""}. Ir até este bloco.`,
         "data-id": no.id, "data-onde": no.onde, "data-indice": no.indice == null ? "" : String(no.indice) });
       g.append(s("rect", { class: "au-dg-ret", x: PX, y, width: W - 2 * PX, height: ALT, rx: no.tipo === "condicao" ? 8 : 12 }));
       g.append(s("rect", { class: "au-dg-faixa", x: PX, y, width: 4, height: ALT, rx: 2 }));
@@ -299,7 +307,17 @@ export function pecas(ui, L) {
       if (no.n != null && no.tipo === "passo") g.append(s("text", { class: "au-dg-n", x: W - PX - 10, y: y + ALT / 2 + 4, "text-anchor": "end" }, String(no.n)));
       const ir = ev => { if (ev) ev.preventDefault(); if (typeof aoFocar === "function") aoFocar(no); };
       g.addEventListener("click", ir);
-      g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") ir(ev); });
+      g.addEventListener("keydown", ev => {
+        if (ev.key === "Enter" || ev.key === " ") { ir(ev); return; }
+        const nosG = [...svg.querySelectorAll(".au-dg-no")];
+        const k = nosG.indexOf(g);
+        const j = ev.key === "ArrowDown" || ev.key === "ArrowRight" ? Math.min(k + 1, nosG.length - 1)
+          : ev.key === "ArrowUp" || ev.key === "ArrowLeft" ? Math.max(k - 1, 0) : ev.key === "Home" ? 0 : ev.key === "End" ? nosG.length - 1 : null;
+        if (j === null || k < 0) return;
+        ev.preventDefault();
+        nosG.forEach((x, n) => x.setAttribute("tabindex", n === j ? "0" : "-1"));
+        nosG[j].focus();
+      });
       svg.append(g);
     });
     if (!reduzido()) svg.classList.add("au-dg-anim");
@@ -312,7 +330,8 @@ export function pecas(ui, L) {
    * `carregadas` (número): a série saiu só das últimas N execuções carregadas (janela recortada) e o subtítulo diz isso.
    */
   /** servidor: a série veio de nx_automacao_execucoes_dia (conta todas as execuções da janela, mas só separa «sem erro» × «com erro»). */
-  function graficoDias({ serie, dias, n, titulo = "Execuções por dia", unidade = "execuções", carregadas = null, servidor = false, aoEscolherDia = null }) {
+  // plano 1000b · UB-039: diaAtivo (AAAA-MM-DD) marca a barra escolhida (aria-pressed + classe); raiz.marcarDia(dia) troca depois
+  function graficoDias({ serie, dias, n, titulo = "Execuções por dia", unidade = "execuções", carregadas = null, servidor = false, aoEscolherDia = null, diaAtivo = null }) {
     const lista = Array.isArray(serie) ? serie : [];
     const raiz = h("div", { class: ["au-gd", servidor && "au-gd-servidor"], dataset: { fonte: servidor ? "servidor" : "local" } });
     const nd = dias || lista.length;
@@ -325,7 +344,9 @@ export function pecas(ui, L) {
     raiz.appendChild(cab);
     const max = Math.max(0, ...lista.map(p => p.total));
     if (!max) {
-      raiz.appendChild(h("p", { class: "au-gd-vazio" }, ui.icone("relogio"), h("span", null, `Nenhuma execução nos últimos ${dias || lista.length} dias. Quando a automação rodar, as barras aparecem aqui.`)));
+      // plano 1000b · UB-041: a mesma janela do subtítulo («hoje» com 1 dia; nada de «nos últimos 1 dias»)
+      raiz.appendChild(h("p", { class: "au-gd-vazio" }, ui.icone("relogio"), h("span", null, `Nenhuma execução ${nd === 1 ? "hoje" : `nos últimos ${nd} dias`}. Quando a automação rodar, as barras aparecem aqui.`)));
+      raiz.marcarDia = () => {};
       return raiz;
     }
     // barras em CSS (grade de colunas): escalam com a largura sem esticar o texto, como um SVG «none» faria
@@ -346,7 +367,8 @@ export function pecas(ui, L) {
       // todo dia leva o rótulo; o CSS mostra 1 a cada 2 (ou 1 a cada 4 no celular) para as datas não se encavalarem
       const botao = clicavel && p.total && p.dia;
       const col = h(botao ? "button" : "div", { type: botao ? "button" : null, class: ["au-gd-col", p.total && "au-gd-col-tem", (i % cada === 0 || i === n0 - 1) && "au-gd-col-rot"],
-        style: { "--i": String(i) }, title: titulo2, "aria-label": botao ? `${titulo2}. Ver só este dia na lista.` : null, dataset: p.dia ? { dia: p.dia } : null },
+        style: { "--i": String(i) }, title: titulo2, "aria-label": botao ? `${titulo2}. Ver só este dia na lista.` : null, dataset: p.dia ? { dia: p.dia } : null,
+        "aria-pressed": botao ? String(p.dia === diaAtivo) : null },
         pilha, h("span", { class: "au-gd-x mono", "aria-hidden": "true" }, p.rotulo));
       if (botao) col.addEventListener("click", () => aoEscolherDia(p.dia));
       barras.appendChild(col);
@@ -362,11 +384,15 @@ export function pecas(ui, L) {
     bt.addEventListener("click", () => {
       const ligar = tabela.hidden;
       tabela.hidden = !ligar; caixaG.hidden = ligar;
+      // plano 1000b · UB-040: o texto fica fixo e o aria-pressed diz o estado («Ver como tabela, pressionado»)
       bt.setAttribute("aria-pressed", String(ligar));
-      bt.textContent = ligar ? "Ver como gráfico" : "Ver como tabela";
     });
     cab.appendChild(bt);
     raiz.append(caixaG, tabela);
+    raiz.marcarDia = dia => {
+      for (const c of barras.querySelectorAll("button.au-gd-col")) { const sim = !!dia && c.dataset.dia === dia; c.setAttribute("aria-pressed", String(sim)); c.classList.toggle("au-gd-col-ativa", sim); }
+    };
+    raiz.marcarDia(diaAtivo);
     return raiz;
   }
 
@@ -374,17 +400,22 @@ export function pecas(ui, L) {
    * plano 1000 · AS-038: tempo em HORAS digitado como horas ou dias (número + unidade). valor = horas | undefined;
    * aoMudar(horas | null) — null = vazio ou fora de min…max (o resumo diz o porquê).
    */
-  function campoHoras({ rotulo, valor, aoMudar, desabilitado, min = 1, max = 2160, obrigatorio }) {
-    const dec = L.decomporHoras(valor);
-    const num = entrada({ rotulo, valor: dec.n, tipo: "number", min: 1, passo: 1, desabilitado, obrigatorio, classe: "au-hr-num" });
+  // plano 1000b · UB-030: min 0 aceita «0» (o prazo da tarefa: «para já») e `ajuda` fica acima da faixa
+  function campoHoras({ rotulo, valor, aoMudar, desabilitado, min = 1, max = 2160, obrigatorio, ajuda = null }) {
+    const zero = min === 0 && valor !== undefined && valor !== null && valor !== "" && Number(valor) === 0;
+    const dec = zero ? { n: 0, un: "horas" } : L.decomporHoras(valor);
+    const num = entrada({ rotulo, valor: dec.n, tipo: "number", min: min === 0 ? 0 : 1, passo: 1, desabilitado, obrigatorio, classe: "au-hr-num" });
     const un = seletor({ rotulo: "Unidade", valor: dec.un, desabilitado, classe: "au-dur-un",
       opcoes: [{ valor: "horas", rotulo: "horas" }, { valor: "dias", rotulo: "dias" }] });
     un.querySelector("label").classList.add("sr-only");
     const resumo = h("small", { class: "campo-ajuda au-hr-resumo" });
     const ler = () => {
-      const hh = L.comporHoras(num.querySelector("input").value, un.querySelector("select").value);
+      const bruto = String(num.querySelector("input").value).trim();
+      const hh = min === 0 && bruto !== "" && Number(bruto) === 0 ? 0 : L.comporHoras(bruto, un.querySelector("select").value);
       const ok = hh != null && hh >= min && hh <= max;
-      resumo.textContent = hh == null ? `De ${min} h a ${max >= 48 ? `${max / 24} dias` : `${max} h`}.` : ok ? `= ${hh} ${hh === 1 ? "hora" : "horas"}` : `Use de ${min} h a ${max >= 48 ? `${max / 24} dias` : `${max} h`}.`;
+      const faixa = min === 0 ? `Até ${max >= 48 ? `${max / 24} dias` : `${max} h`}` : `De ${min} h a ${max >= 48 ? `${max / 24} dias` : `${max} h`}`;
+      const pre = ajuda ? `${ajuda} ` : "";
+      resumo.textContent = hh == null ? `${pre}${faixa}.` : ok ? (hh === 0 && ajuda ? ajuda : `= ${hh} ${hh === 1 ? "hora" : "horas"}`) : `Use ${faixa.charAt(0).toLowerCase()}${faixa.slice(1)}.`;
       resumo.classList.toggle("campo-erro", hh != null && !ok);
       return ok ? hh : null;
     };

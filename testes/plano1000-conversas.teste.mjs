@@ -523,7 +523,8 @@ test("CA-027/CA-119/CA-011/CA-010/CA-026/CA-227 · regras do parâmetro, documen
   assert.equal(L.atendeDepartamento({ papel: "atendente", departamentos: [] }, "dB"), true, "sem departamentos = todos");
   assert.equal(L.atendeDepartamento({ papel: "admin", departamentos: ["dA"] }, "dB"), true);
   assert.equal(L.horasAteAmanha8(new Date("2026-10-13T20:00:00-03:00")), 12);
-  assert.equal(L.horasAteAmanha8(new Date("2026-10-13T07:30:00-03:00")), 25);
+  // plano 1000b: CB-086 — antes das 8h o alvo é hoje às 8h (07:30 → 1 h, não 25)
+  assert.equal(L.horasAteAmanha8(new Date("2026-10-13T07:30:00-03:00")), 1);
 });
 
 test("CA-029/CA-030 · gravação até 5 min com aviso aos 4:30; microfone mudo depois de 3 s de silêncio", () => {
@@ -631,7 +632,7 @@ test("CA-042/CA-227 (DOM) · IA atendendo conversa que já é minha: «Pausar IA
     const itens = d.menus.at(-1).itens.filter(x => x && x.rotulo);
     itens.find(x => x.rotulo === "Pausar a IA por 1 hora").fn();
     itens.find(x => x.rotulo === "Pausar a IA até eu devolver").fn();
-    itens.find(x => x.rotulo === "Pausar a IA até amanhã às 8h").fn();
+    itens.find(x => /^Pausar a IA até (amanhã às|as) 8h$/.test(x.rotulo)).fn();   // plano 1000b: CB-086 — de madrugada o rótulo é «até as 8h»
     assert.equal(pausas[0], 1);
     assert.equal(pausas[1], 0, "0 = até alguém devolver (o servidor grava «infinity»)");
     assert.ok(pausas[2] >= 1 && pausas[2] <= 168);
@@ -1008,7 +1009,7 @@ test("CA-243/CA-071 (DOM) · anexo com a janela fechando avisa no modal; legenda
     let corpo = null;
     d.aoModal(async o => { corpo = o.corpo; return false; });
     await t.comp.anexar(new File(["%PDF"], "orc.pdf", { type: "application/pdf" }));
-    assert.match(achar(corpo, ".cv-aviso-janela").textContent, /A janela de 24 h fecha em 1 min/);
+    assert.match(achar(corpo, ".cv-aviso-janela").textContent, /A janela de 24 h fecha às \d{2}:\d{2} \(em 1 min\)/);   // plano 1000b: CB-120 — a hora em que fecha
     const leg = achar(corpo, "#cvx-legenda");
     const n = achar(corpo, ".cvx-legenda-n");
     assert.equal(n.hidden, true);
@@ -1154,7 +1155,8 @@ test("CA-036/CA-037 (DOM) · nova tarefa: hora em São Paulo e «Para quem» man
     const salvas = [];
     t.A.api.rpcC = async (nome, p) => { if (nome === "nx_tarefa_salvar") salvas.push(p.p_tarefa); return { id: 1 }; };
     d.ui.lerForm = () => ({ titulo: "Ligar para o paciente", tipo: "ligacao", vence_em: "2026-10-13T14:00", dono_id: "u2" });
-    d.aoModal(async o => o.acoes[1].fn());
+    // plano 1000b: CB-061 — prazo no passado avisa no 1º toque e cria no 2º (a data fixa deste teste já passou)
+    d.aoModal(async o => (await o.acoes[1].fn()) || o.acoes[1].fn());
     achar(t.alvo, '[data-foco="nova-tarefa"]').click();
     await esperar(5);
     assert.equal(salvas.length, 1);
@@ -1264,7 +1266,8 @@ test("CA-009 (central) · clicar na citação de uma mensagem antiga carrega as 
     await c.abrir(901);
     assert.equal(c.alvo.querySelector('.cv-msg[data-id="1009"]'), null);
     achar(c.alvo, '.cv-msg[data-id="1119"] .cv-cita').click();
-    await esperar(60);
+    // plano 1000b: espera até a 2ª página chegar (teto 2 s) — os 60 ms fixos falhavam às vezes com a suíte em paralelo
+    for (let t = 0; t < 100 && !(c.alvo.querySelector('.cv-msg[data-id="1009"]') && c.alvo.querySelector('.cv-msg[data-id="1009"]').dataset.destaque === "1"); t++) await esperar(20);
     const alvo = achar(c.alvo, '.cv-msg[data-id="1009"]');
     assert.equal(alvo.dataset.destaque, "1");
     assert.ok(srv.chamadas.filter(x => x[0] === "nx_cv_mensagens" && x[1].p_antes_id != null).length >= 2);
@@ -1401,7 +1404,8 @@ test("CA-103 (central) · sem conexão, a lista guardada no aparelho aparece com
     assert.equal(achar(c.alvo, ".cvl-item").dataset.id, "950");
     const faixa = achar(c.alvo, ".cvl-cache");
     assert.equal(faixa.hidden, false);
-    assert.match(faixa.textContent, /Sem conexão · lista de \d\d:\d\d/);
+    // plano 1000b: CB-016 — guardada 1 h antes da 00:05 de SP (relógio do CI) é «ontem às 23:05»
+    assert.match(faixa.textContent, /Sem conexão · lista de (ontem às )?\d\d:\d\d/);
     assert.equal(c.alvo.querySelector(".cvl-lista .erro"), null, "nada de cartão de erro por cima da lista guardada");
   } finally { c.fim(); d.fim(); }
 });
@@ -1597,7 +1601,7 @@ test("CA-073/CA-074/CA-077/CA-089 (DOM) · trava diz quem resolveu e quando; jan
   await comComposer({ base: { cfg: { assinatura: true } } }, async ({ comp }) => {
     const r = achar(comp.el, ".cvx-assin");
     assert.equal(r.hidden, false);
-    assert.equal(r.textContent, "Sai como: *Helena Souza:* …");
+    assert.equal(r.textContent, "Sai como: *Helena:* …");   // plano 1000b: CB-001 — o servidor assina só com a 1ª palavra
     comp.alternarNota(true);
     assert.equal(r.hidden, true, "nota interna não leva assinatura");
   });

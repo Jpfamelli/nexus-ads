@@ -582,8 +582,8 @@ test("CR-157/168 Início: presença «Faltou» conta como falta (mesmo sem a eta
   assert.deepEqual(I.contagemConsultasMes(ag, { agora }), { realizadas: 2, marcadas: 1, faltas: 1, compareceu: 1 });
   const f = I.funilMes({ funil_mes: { leads: 10, conversas: 13, agendados: 5, ganhos: 2 } });
   assert.equal(f.etapas[1].conversao, "mais que a etapa anterior");
-  assert.match(f.etapas[1].dica, /^130 % da anterior/);
-  assert.equal(f.etapas[2].conversao, "38 % da anterior");
+  assert.match(f.etapas[1].dica, /^130% dos leads/);   // plano 1000b: RB-158/245 «130%» sem espaço e de QUAL etapa
+  assert.equal(f.etapas[2].conversao, "38% das conversas");
 });
 
 test("CR-185 paleta: «Ver tudo em Pacientes com “mar”» leva à lista com a busca; negócios ao quadro; conversas não", () => {
@@ -671,7 +671,7 @@ test("CR-002/202 Kanban (DOM): teclado leva o cartão da posição 36 para a col
     assert.ok(art.nextSibling && art.nextSibling.classList.contains("kb-mais-item"));
     assert.equal(t.reg.avisos.at(-1), "Etapa «Agendada», posição 31 de 31.");
     tecla(art, "Enter");
-    assert.equal(t.reg.avisos.at(-1), "Soltou em «Agendada», posição 31. Gravando…", "CR-202: o leitor ouve onde soltou antes da gravação");
+    assert.equal(t.reg.avisos.at(-1), "Soltou em «Agendada», posição 31.", "CR-202: o leitor ouve onde soltou antes da gravação (plano 1000b: RB-206 — sem «Gravando…» quando vem a pergunta da data)");
     assert.equal(t.reg.movidos.length, 0);
     for (let i = 0; i < 4; i++) await tique();
     soltarPrep({}); for (let i = 0; i < 4; i++) await tique();
@@ -714,7 +714,8 @@ test("CR-272/022 Kanban (DOM): «Ver mais» sem tem_mais fixa o total no que vei
     bt.focus(); bt.clique();
     for (let i = 0; i < 4; i++) await tique();
     assert.equal(t.lista("s1").querySelector(".kb-mais"), null, "10 saíram da etapa depois da carga: «Ver mais (10)» ficava preso");
-    assert.equal(t.tela.querySelector('.kb-col[data-estagio="s1"] .kb-col-n').textContent, "35");
+    // plano 1000b: RB-011 — o número vem com «cartões» só para o leitor de tela (span sr-only)
+    assert.equal(t.tela.querySelector('.kb-col[data-estagio="s1"] .kb-col-n').textContent, "35 cartões");
     assert.equal(D.ativo(), t.cartao(501), "o foco não volta ao topo da página");
     assert.equal(t.reg.avisos.at(-1), "5 cartões carregados em Nova.");
     t.api.desmontar();
@@ -769,7 +770,8 @@ test("CR-021/027/217/006 Kanban (DOM): rótulo curto com detalhes por aria-descr
       usuario: id => (id === "u1" ? { id, nome: "Helena" } : null), etiqueta: id => ({ id, nome: id === "e1" ? "VIP" : "Retorno" }) });
     const c1 = t.cartao(1);
     assert.ok(c1.attrs["aria-label"].length <= 80, `rótulo curto (${c1.attrs["aria-label"].length})`);
-    const [idDet, idInstr] = c1.attrs["aria-describedby"].split(" ");
+    // plano 1000b: RB-034 — a instrução longa saiu do cartão (fica no quadro); o cartão aponta só para os detalhes
+    const [idDet, idInstr] = [c1.attrs["aria-describedby"], t.tela.querySelector(".kb").attrs["aria-describedby"]];
     const det = c1.querySelectorAll(".sr-only").find(x => x.attrs.id === idDet);
     assert.ok(det && /consulta/.test(det.textContent) && /responsável Helena/.test(det.textContent) && /etiquetas VIP, Retorno/.test(det.textContent), "os detalhes ficam no texto ligado");
     assert.match(idInstr, /^kb-instr-/);
@@ -1187,7 +1189,8 @@ test("CR-098/095/106/103/046 ficha (DOM): e-mail e UF conferidos sem ir ao servi
     const lgpd = itensMenu.find(i => i && i.rotulo === "Baixar dados do titular (LGPD)");
     assert.ok(lgpd, "direito de acesso ao lado do «Excluir»");
     lgpd.fn();
-    assert.equal(U.criados.length, 1);
+    // plano 1000b: RB-263 — junto do JSON vai um .txt legível (2 arquivos)
+    assert.equal(U.criados.length, 2);
     const json = JSON.parse(await U.criados[0].text());
     assert.equal(json.cadastro.id, 501); assert.ok("consentimento" in json && Array.isArray(json.negocios));
   } finally { U.desfazer(); D.desfazer(); }
@@ -1276,7 +1279,8 @@ test("CR-118/123/121 Importação (DOM): na prévia, a mesma pessoa repetida, et
     t.botao("Usar o texto colado").clique();
     t.botao("Continuar").clique();
     t.botao("Continuar").clique();
-    assert.match(t.tela.querySelector(".imp-aviso-dup").textContent, /1 contato aparece mais de uma vez.*telefone \(12\) 99830-3030 nas linhas 2, 3/);
+    // plano 1000b: RB-130 — o termo da vertical (odonto: «paciente»)
+    assert.match(t.tela.querySelector(".imp-aviso-dup").textContent, /1 paciente aparece mais de uma vez.*telefone \(12\) 99830-3030 nas linhas 2, 3/);
     assert.match(t.tela.querySelector(".imp-aviso-etapa").textContent, /«Fechado».*entra em «Nova»/);
     assert.match(t.tela.querySelector(".imp-aviso-etq").textContent, /Etiqueta nova que será criada: «VIP»/);
     assert.equal(t.reg.linhas.length, 5, "a prévia mostra as 5 primeiras");
@@ -1384,7 +1388,8 @@ test("CR-158/175 Início (DOM): «paciente esperando há…» pelo vocabulário;
   try {
     const { raiz } = await montarTela(d(), { dom, papel: "atendente" });
     const txt = texto(raiz);
-    assert.ok(txt.includes("paciente esperando há"), "antes: «cliente esperando» fixo");
+    // plano 1000b: RB-160 — com 2 esperando, «A mais antiga espera há…» (antes «paciente esperando há…», minúsculo e no singular)
+    assert.ok(txt.includes("A mais antiga espera há") && txt.includes("pacientes esperando resposta"), "antes: «cliente esperando» fixo");
     assert.ok(!txt.includes("cliente esperando"));
     assert.ok(!txt.includes("Invalid OAuth"), "atendente não vê o texto técnico em inglês");
   } finally { dom.fim(); }
@@ -1630,7 +1635,7 @@ test("CR-029/030 cartão (DOM): o selo de não lidas abre a conversa; ações r�
     selo.clique();
     assert.deepEqual(nav, ["#/conversas?contato=501"]);
     t.cartao(5).querySelector('.kc-rapida[data-acao="tarefa"]').clique(); await varias();
-    assert.deepEqual(tarefas, [{ negocio_id: 5, contato_id: 501 }]);
+    assert.deepEqual(tarefas, [{ negocio_id: 5, contato_id: 501, titulo: "Retomar contato — Ana" }], "plano 1000b: RB-246 — o título vem sugerido");
     t.cartao(5).querySelector('.kc-rapida[data-acao="conversa"]').clique();
     assert.equal(nav.length, 2);
     assert.match(ler("crm.css"), /@media \(hover: hover\) and \(pointer: fine\) \{\s*\.kc:hover \.kc-rapidas, \.kc:focus-within \.kc-rapidas/);
@@ -1665,7 +1670,8 @@ test("CR-036/037/039 Kanban (DOM): recolher vazias; Alt+2 troca de funil; mostra
     t.tela.querySelector(".crm-recolher").clique();
     const sec = id => t.tela.querySelector(`.kb-col[data-estagio="${id}"]`);
     assert.ok(sec("s2").classList.contains("kb-col-recolhida") && !sec("s1").classList.contains("kb-col-recolhida"), "CR-036");
-    assert.equal(D.storage.get("nx-app-crm-kb-recolher-cli-p1000"), "1");
+    // plano 1000b: RB-028 — «Recolher vazias» lembrado por empresa E conta
+    assert.equal(D.storage.get("nx-app-crm-kb-recolher-cli-p1000-u1"), "1");
     D.documento("keydown", { key: "2", code: "Digit2", altKey: true, target: D.doc.body }); await varias();
     assert.equal(t.chamadas("nx_negocios_kanban").at(-1).p.p_funil, "f2", "CR-037");
     assert.equal(t.api.mostrarFunil("f1"), true, "CR-039");
@@ -1875,7 +1881,7 @@ test("CR-097/099/101/102/107/111/227/233/261/104 ficha (DOM)", async () => {
     const pil = el.querySelector(".fx-cab .pilula[data-variante=origem]");
     assert.equal(pil && pil.dataset.chave, "whatsapp", "CR-101: a mesma pílula da lista");
     assert.ok(el.querySelector(".fx-bloqueado"), "CR-261");
-    assert.equal(el.querySelector(".fx-rfm-vazio").textContent, "Ainda sem compras.", "CR-102");
+    assert.equal(el.querySelector(".fx-rfm-vazio").textContent, "Ainda sem tratamentos fechados.", "CR-102 (plano 1000b: RB-210 — o termo da vertical odonto)");
     assert.ok(el.querySelectorAll("button").filter(b => /Nova oportunidade/.test(b.textContent)).length >= 1, "CR-107");
     assert.match(el.querySelector(".fx-b-origem .ng-rastreio-frase").textContent, /campanha «Implantes Out»/, "CR-233");
     assert.ok(el.querySelector(".fx-b-neg") && el.querySelector(".fx-b-dados"), "CR-227 (a ordem é do CSS)");
@@ -2196,7 +2202,8 @@ test("CR-239 modelo da importação: os cabeçalhos são reconhecidos sozinhos (
   const m = L.modeloImportacao(campos);
   assert.equal(m.linhas.length, 2);
   assert.ok(m.linhas.every(l => l.length === m.cabecalho.length));
-  assert.deepEqual(L.sugerirMapeamento(m.cabecalho, campos), ["nome", "telefone", "email", "cidade", "uf", "nascimento", "origem", "etiquetas", "obs", "campo:plano"]);
+  // plano 1000b: o modelo ganhou Empresa, CPF/CNPJ, Título, Valor e Etapa (RB-073)
+  assert.deepEqual(L.sugerirMapeamento(m.cabecalho, campos), ["nome", "telefone", "email", "empresa", "documento", "cidade", "uf", "nascimento", "origem", "etiquetas", "obs", "negocio_titulo", "negocio_valor", "estagio", "campo:plano"]);
   const csv = L.gerarCSV(m.cabecalho, m.linhas);
   assert.equal(csv.codePointAt(0), 0xfeff, "com BOM (acentos no Excel)");
   const lido = L.lerCSV(csv.slice(1));
@@ -2374,7 +2381,7 @@ test("CR-205/206/212/213/269/271/299/246 Kanban (DOM): rótulos claros, 1ª etiq
     assert.ok(t.tela.querySelector(".crm-totais").classList.contains("aberto"), "CR-299: ?resumo=1 abre os totais");
     const c = t.cartao(1);
     assert.equal(c.querySelector(".kc-etq1").textContent, "VIP", "CR-212: o nome, não só a cor");
-    assert.equal(c.attrs.title, "Entrou em 04/10", "CR-271");
+    assert.equal(c.querySelector(".kc-dias").attrs.title, "Entrou em 04/10", "CR-271 (plano 1000b: RB-035 — a dica sai do cartão inteiro e vai para o rodapé)");
     const fita = t.tela.querySelectorAll(".kb-fita-b");
     assert.ok(fita.find(b => b.dataset.estagio === "s5").querySelector(".kb-fita-ganho"), "CR-269: ✓ no ganho");
     assert.ok(fita.find(b => b.dataset.estagio === "s6").querySelector(".kb-fita-perdido"), "✕ na perda");
@@ -2400,7 +2407,8 @@ test("CR-203/268/211 Kanban (DOM): soltar em outra etapa acende as duas contagen
     tecla(art, " "); tecla(art, "ArrowRight"); tecla(art, "Enter"); await varias();
     const nDe = id => t.tela.querySelector(`.kb-col[data-estagio="${id}"] .kb-col-n`);
     assert.ok(destacados.includes(nDe("s1")) && destacados.includes(nDe("s2")), "CR-203: as duas colunas acendem");
-    assert.match(t.reg.avisos.at(-1), /movido para Agendada\. Agora «Agendada» com 1 cartão e «Nova» com 1 cartão\.$/, "CR-268");
+    // plano 1000b: RB-008 — «movida» (oportunidade é feminino na vertical odonto do teste)
+    assert.match(t.reg.avisos.at(-1), /movida para Agendada\. Agora «Agendada» com 1 cartão e «Nova» com 1 cartão\.$/, "CR-268");
     t.api.desmontar();
   } finally { D.desfazer(); }
 });
@@ -2571,7 +2579,9 @@ test("CR-220/221/298/230/231 negócio (DOM): pós-venda com etapa, serviço e re
     assert.match(tf.titulo, /^Retomar contato — Ana Souza$/);
     // CR-230/231
     assert.deepEqual(t.N.linksDoCampo(L, "url", "https://x.com/a").map(l => [l.tipo, l.href, !!l.nova]), [["abrir", "https://x.com/a", true]]);
-    assert.deepEqual(t.N.linksDoCampo(L, "url", "x.com"), [], "link inválido não abre");
+    // plano 1000b: RB-076 — «x.com» sem https:// agora abre (com https://); inválido é o que não tem domínio
+    assert.deepEqual(t.N.linksDoCampo(L, "url", "x.com").map(l => l.href), ["https://x.com"]);
+    assert.deepEqual(t.N.linksDoCampo(L, "url", "abc"), [], "link inválido não abre");
     assert.deepEqual(t.N.linksDoCampo(L, "telefone", "(12) 99830-3030").map(l => l.href), ["tel:+5512998303030", "https://wa.me/5512998303030"]);
     const cUrl = t.N.campoPersonalizado(t.k, { chave: "site", rotulo: "Site", tipo: "url" }, "https://clinica.com.br");
     const link = cUrl.querySelector("a.cp-link-abrir");
@@ -2723,7 +2733,7 @@ test("CR-299/206/285/286/253/257 Início (DOM): KPIs levam ao recorte; «previs�
     assert.ok(ver && /Ver na agenda/.test(ver.textContent), "CR-253");
     const vd = t.raiz.querySelector(".ini-vendas .ini-vd-meta");
     assert.ok(vd, "CR-257");
-    assert.match(texto(vd), /^Meta: 57 % de R\$\s?50\.000 · faltam R\$\s?21\.600$/);
+    assert.match(texto(vd), /^Meta: 57% de R\$\s?50\.000 · faltam R\$\s?21\.600$/);   // plano 1000b: RB-158 «57%» sem espaço
     const bt = t.raiz.querySelector(".ini-horas .g-ver-tabela");
     assert.equal(bt.getAttribute("aria-label"), "Ver a agenda de hoje como tabela", "CR-286");
     bt.click();
@@ -2982,7 +2992,7 @@ test("CR-133 «Duplicar» no ⋮ do funil: editor com as mesmas etapas, nome «(
       [["Novo", "aberto", undefined, null, 10, 72], ["Avaliação", "aberto", undefined, null, 40, 5], ["Fechou", "ganho", undefined, null, 100, null], ["Não fechou", "perdido", undefined, null, 0, null]]);
     // o outro funil: Duplicar + as ações de antes
     t.alvo.querySelectorAll("button").find(b => b.attrs["aria-label"] === "Mais ações para Pós-venda").clique();
-    assert.deepEqual(t.reg.menus["Mais ações para Pós-venda"].filter(x => x && x.rotulo).map(x => x.rotulo), ["Duplicar", "Desativar", "Excluir"]);
+    assert.deepEqual(t.reg.menus["Mais ações para Pós-venda"].filter(x => x && x.rotulo).map(x => x.rotulo), ["Duplicar", "Tornar padrão", "Desativar", "Excluir"]);     // plano 1000b: RB-147 — «Tornar padrão» aparece desligado com o motivo
   } finally { D.desfazer(); }
 });
 
@@ -3047,7 +3057,8 @@ test("SV-135 linha do tempo (DOM): 1ª página cheia ganha «Ver registros mais 
     assert.equal(h0(D, "div", null, T.blocoTempo(k, pag1, { pagina: { p_contato: 4 } })).querySelector(".tempo-mais"), null, "e não volta a oferecer");
   } finally { D.desfazer(); }
   assert.match(ler("crm-negocio.js"), /T\.blocoTempo\(k, d\.tempo \|\| \[\], \{ pagina: \{ p_negocio: n\.id \} \}\)/);
-  assert.match(ler("crm-listas.js"), /T\.blocoTempo\(k, d\.tempo \|\| \[\], \{ pagina: \{ p_contato: c\.id \} \}\)/);
+  // plano 1000b: RB-112 — a ficha passa também o filtro da linha do tempo (sobrevive ao pulso)
+  assert.match(ler("crm-listas.js"), /T\.blocoTempo\(k, d\.tempo \|\| \[\], \{ pagina: \{ p_contato: c\.id \}, filtro: filtroTempo,/);
 });
 
 test("Agenda → novo negócio (DOM): dados.nome / dados.telefone abrem o cadastro novo já preenchido e o telefone é conferido", async () => {

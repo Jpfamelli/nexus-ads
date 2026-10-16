@@ -374,7 +374,8 @@ test("diagrama: um nó por item, botões com nome, clique e Enter chamam aoFocar
     assert.match(svg.getAttribute("aria-label"), /^Diagrama do fluxo\. Fluxo: /);
     const botoes = svg.querySelectorAll("[role=button]");
     assert.equal(botoes.length, nos.length);
-    assert.ok(botoes.every(b => b.getAttribute("tabindex") === "0" && b.getAttribute("aria-label").includes("Ir até este bloco")));
+    // plano 1000b: UB-042 roving tabindex — só o 1º nó no Tab (as setas andam entre os nós)
+    assert.ok(botoes.every((b, i) => b.getAttribute("tabindex") === (i === 0 ? "0" : "-1") && b.getAttribute("aria-label").includes("Ir até este bloco")));
     assert.match(botoes[1].getAttribute("aria-label"), /^Condição 1: Só se a origem/);
     assert.match(botoes[3].getAttribute("aria-label"), /^Passo 2: Criar tarefa/);
     botoes[3].dispatchEvent(new d.Evento("click"));
@@ -382,7 +383,9 @@ test("diagrama: um nó por item, botões com nome, clique e Enter chamam aoFocar
     botoes[4].dispatchEvent(new d.Evento("keydown", { key: " " }));
     botoes[2].dispatchEvent(new d.Evento("keydown", { key: "a" }));
     assert.deepEqual(focados, ["passo-1", "gatilho", "mais"]);
-    assert.equal(svg.querySelector("title").textContent, L.textoDiagrama(nos));
+    // plano 1000b: UB-195 — sem <title> duplicando o aria-label
+    assert.equal(svg.querySelector("title"), null);
+    assert.ok(svg.getAttribute("aria-label").endsWith(L.textoDiagrama(nos)));
   } finally { d.fim(); }
 });
 
@@ -406,7 +409,7 @@ test("graficoDias: estado vazio sem execuções; com dados há uma coluna por di
     const bt = g.querySelector(".au-gd-alt"), tab = g.querySelector(".au-gd-tabela"), caixa = g.querySelector(".au-gd-caixa");
     assert.equal(bt.getAttribute("aria-pressed"), "false"); assert.equal(tab.hidden, true);
     bt.dispatchEvent(new d.Evento("click"));
-    assert.equal(bt.getAttribute("aria-pressed"), "true"); assert.equal(tab.hidden, false); assert.equal(caixa.hidden, true); assert.equal(bt.textContent, "Ver como gráfico");
+    assert.equal(bt.getAttribute("aria-pressed"), "true"); assert.equal(tab.hidden, false); assert.equal(caixa.hidden, true); assert.equal(bt.textContent, "Ver como tabela");   // plano 1000b: UB-040 texto fixo + aria-pressed
     assert.equal(tab.querySelectorAll("tbody tr").length, 2, "só os dias com execução entram na tabela");
     assert.equal(tab.querySelectorAll("thead th").length, 6);
     assert.equal(g.querySelector(".au-gd-sub").textContent, "Últimos 7 dias · 3 execuções registradas");
@@ -506,7 +509,7 @@ test("lista: resumo em números, cartões com taxa e estado, busca nas receitas,
     assert.match(raiz.querySelector(".au-ia-txt").value, /consulta/);
     // comandos desta tela na paleta, cancelados ao desmontar
     // plano 1000 · AS-229: além destes, cada automação entra na paleta (automacoes.alternar.<id> / automacoes.abrir.<id>)
-    assert.deepEqual(registrados.map(c => c.id).filter(id => !/^automacoes.(alternar|abrir)./.test(id)), ["automacoes.nova", "automacoes.ia", "automacoes.receitas"]);
+    assert.deepEqual(registrados.map(c => c.id).filter(id => !/^automacoes.(alternar|abrir)./.test(id)), ["automacoes.nova", "automacoes.ia", "automacoes.ia-enviar", "automacoes.receitas"]);   // plano 1000b: UB-186 (Ctrl+Enter na folha «?»)
     A.desmontar();
     assert.equal(registrados.length, 0);
   } finally { d.fim(); }

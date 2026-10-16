@@ -45,6 +45,10 @@ function excluirComDesfazer(k, tipo, item, { texto, rpc, sumir, voltar }) {
     } });
 }
 
+/** plano 1000b · RB-121: a plataforma do aparelho (Mac/iPhone mostram ⌘). */
+function plataformaAparelho() {
+  try { return (typeof navigator !== "undefined" && navigator && ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform)) || ""; } catch { return ""; }
+}
 function hojeISO(ui) { return ui.hojeSP ? ui.hojeSP() : new Date().toISOString().slice(0, 10); }
 /** Dia civil de São Paulo de um instante ("" se a data for inválida — o Intl lançaria erro). */
 function diaSP(ui, iso) {
@@ -54,6 +58,15 @@ function diaSP(ui, iso) {
 }
 
 /** Rótulo do vencimento: "Atrasada · ontem 14:00", "Hoje 15:30", "amanhã", "05/10 09:00". */
+/** plano 1000b · RB-238: o texto do vencimento (textoVence) dito por extenso para o rótulo do círculo de concluir. */
+function prazoParaLeitor(v) {
+  const txt = String((v && v.txt) || "");
+  if (!txt || txt === "Sem prazo") return "sem prazo";
+  if (v.cls === "atrasada") return txt.replace(/^Atrasada · /, "atrasada, ");
+  const m = /^(Hoje|Amanhã|Ontem|\d{2}\/\d{2}(?:\/\d{4})?) (\d{2}:\d{2})$/.exec(txt);
+  if (m) return /^(Hoje|Amanhã|Ontem)$/.test(m[1]) ? `${m[1] === "Ontem" ? "venceu" : "vence"} ${m[1].toLowerCase()} às ${m[2]}` : `vence em ${m[1]} às ${m[2]}`;
+  return txt.charAt(0).toLowerCase() + txt.slice(1);
+}
 function textoVence(k, t) {
   const { ui } = k;
   // plano 1000 (CR-247): concluída diz QUANDO foi feita («feita hoje às 14:10», «feita 09/10 às 14:10») — o prazo já não importa
@@ -66,8 +79,12 @@ function textoVence(k, t) {
   const dia = ui.hojeSP ? ui.hojeSP(d) : d.toISOString().slice(0, 10);
   const hoje = hojeISO(ui);
   const hora = ui.horaBR(t.vence_em);
-  if (!t.concluida_em && t.atrasada) return { txt: `Atrasada · ${ui.relativo(t.vence_em)}`, cls: "atrasada" };
+  // plano 1000b · RB-117: venceu com a tela aberta também é atrasada (antes dependia só do t.atrasada da última leitura do servidor)
+  if (k.L.tarefaAtrasada(t)) return { txt: `Atrasada · ${ui.relativo(t.vence_em)}`, cls: "atrasada" };
   if (dia === hoje) return { txt: `Hoje ${hora}`, cls: t.concluida_em ? "" : "hoje" };
+  // plano 1000b · RB-116: «Amanhã 09:00» / «Ontem 14:00» (o comentário prometia; antes saía «15/10 09:00»)
+  const rot = k.L && k.L.rotuloDia ? k.L.rotuloDia(dia, hoje) : "";
+  if (rot === "Amanhã" || rot === "Ontem") return { txt: `${rot} ${hora}`, cls: "" };
   return { txt: `${ui.dataCurtaBR ? ui.dataCurtaBR(t.vence_em) : ui.dataBR(t.vence_em)} ${hora}`, cls: "" };
 }
 
@@ -97,12 +114,33 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
   const vv = k.v || {};
   const blocoLigar = !tarefa && !contato_id && !negocio_id ? (() => {
     const busca = h("input", { type: "search", class: "tf-ligar-busca", placeholder: "Nome ou telefone", "aria-label": `Ligar a tarefa a ${vv.art && vv.art("contato") === "a" ? "uma" : "um"} ${vv.min ? vv.min("contato") : "contato"}`, autocomplete: "off" });
-    const res = h("div", { class: "crm-busca-res", role: "listbox", "aria-label": "Resultados" });
+    const res = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Resultados" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
     const escolhido = h("div", { class: "crm-escolhido", hidden: true });
+    // plano 1000b · RB-237: escolhido o contato, os negócios ABERTOS dele (nx_contato_ver) aparecem para ligar a tarefa também ao negócio (opcional)
+    const zonaNeg = h("div", { class: "tf-ligar-neg", hidden: true });
+    let seqN = 0;
+    const pintarNegocios = async () => {
+      const minha = ++seqN;
+      ui.limpar(zonaNeg); zonaNeg.hidden = true;
+      if (!ligado) return;
+      try {
+        const d = await k.api.rpcC("nx_contato_ver", { p_id: ligado.id });
+        if (minha !== seqN || !ligado) return;
+        const abertos = ((d && d.negocios) || []).filter(n => n && n.id != null && (n.status || "aberto") === "aberto");
+        if (!abertos.length) return;
+        const termo = vv.min ? vv.min("negocio") : "negócio";
+        const sel = h("select", { class: "sel tf-ligar-neg-sel", name: "ligar_negocio", "aria-label": `Ligar também a ${vv.art && vv.art("negocio") === "a" ? "uma" : "um"} ${termo}` },
+          h("option", { value: "" }, `Só ${vv.art && vv.art("contato") === "a" ? "à" : "ao"} ${vv.min ? vv.min("contato") : "contato"}`),
+          abertos.map(n => h("option", { value: String(n.id) }, L.tituloCard(n))));
+        zonaNeg.append(h("span", { class: "campo-rot" }, `${vv.negocio || "Negócio"} (opcional)`), sel);
+        zonaNeg.hidden = false;
+      } catch { /* sem a lista: liga só ao contato */ }
+    };
     const pintar = () => {
       ui.limpar(escolhido); escolhido.hidden = !ligado; busca.hidden = !!ligado;
       if (ligado) escolhido.append(ui.icone("contato"), h("span", null, h("b", null, ligado.nome)),
         h("button", { type: "button", class: "bt-icone", "aria-label": "Tirar o vínculo", on: { click: () => { ligado = null; pintar(); busca.focus(); } } }, ui.icone("fechar")));
+      pintarNegocios();
     };
     let seqB = 0;
     busca.addEventListener("input", ui.debounce(async () => {
@@ -114,13 +152,16 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
         if (minha !== seqB) return;
         const itens = (r && r.itens) || [];
         if (!itens.length) { res.appendChild(h("p", { class: "fraco" }, "Nada encontrado.")); return; }
-        for (const c of itens) res.appendChild(h("button", { type: "button", role: "option", dataset: { id: c.id }, on: { click: () => { ligado = { id: c.id, nome: L.nomeContato(c) }; busca.value = ""; ui.limpar(res); pintar(); } } },
+        for (const c of itens) res.appendChild(h("button", { type: "button", dataset: { id: c.id }, on: { click: () => { ligado = { id: c.id, nome: L.nomeContato(c) }; busca.value = ""; ui.limpar(res); pintar(); } } },
           ui.icone("contato"), h("span", null, h("b", null, L.nomeContato(c)), c.telefone ? h("small", null, ui.telBR(c.telefone)) : null)));
       } catch (e) { if (minha === seqB) res.appendChild(h("p", { class: "fraco" }, k.erro(e))); }
     }, 250));
     pintar();
-    return h("div", { class: "campo inteiro tf-ligar" }, h("span", { class: "campo-rot" }, "Ligada a (opcional)"), escolhido, busca, res);
+    return h("div", { class: "campo inteiro tf-ligar" }, h("span", { class: "campo-rot" }, "Ligada a (opcional)"), escolhido, busca, res, zonaNeg);
   })() : null;
+  const selDono = ui.seletorPessoa({ usuarios: k.base.usuarios, valor: t.dono ? t.dono.id : (tarefa ? null : k.eu()), rotulo: "Responsável", vazio: "Sem responsável" });
+  const idDonoTf = L.idUnico("tf-dono");      // plano 1000b · RB-207
+  (selDono.tagName === "SELECT" ? selDono : selDono.querySelector("select") || selDono).id = idDonoTf;
   const form = h("form", { class: "crm-form", novalidate: true },
     ui.campo({ rotulo: "O que precisa ser feito", nome: "titulo", valor: t.titulo || tituloSug || "", obrigatorio: true, max: 160,
       placeholder: "Ex.: Ligar para confirmar a avaliação" }),
@@ -130,11 +171,13 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
         opcoes: TIPOS.map(x => ({ valor: x, rotulo: L.ROTULO_TAREFA[x] })) }),
       h("div", { class: "pilha-p tf-prazo" }, ui.campo({ rotulo: "Vence em", nome: "vence_em", tipo: "datahora", valor: venceLocal }), atalhosPrazo, avisoPrazo),
       h("div", { class: "campo inteiro" },
-        h("label", null, "Responsável"),
-        ui.seletorPessoa({ usuarios: k.base.usuarios, valor: t.dono ? t.dono.id : (tarefa ? null : k.eu()), rotulo: "Responsável", vazio: "Sem responsável" }))),
+        h("label", { for: idDonoTf }, "Responsável"),      // plano 1000b · RB-207: o rótulo aponta para o seletor
+        selDono)),
     ui.campo({ rotulo: "Detalhes (opcional)", nome: "descricao", tipo: "textarea", valor: t.descricao || "", max: 5000, linhas: 3 }),
     h("p", { class: "crm-status", role: "status", "aria-live": "polite", hidden: true }));
-  form.querySelector(".campo.inteiro select").name = "dono_id";
+  // plano 1000b · RB-124: o name vai na referência guardada do seletor (antes: o 1º select de qualquer .campo.inteiro do formulário)
+  const selDonoCampo = selDono.tagName === "SELECT" ? selDono : selDono.querySelector("select");
+  if (selDonoCampo) selDonoCampo.name = "dono_id";
   if (campoPrazo()) campoPrazo().addEventListener("change", pintarPrazo);
   const status = form.querySelector(".crm-status");
   // M30: tarefa NOVA guarda título e detalhes enquanto a pessoa digita (volta com «Rascunho restaurado · descartar» se a tela recarregar)
@@ -150,9 +193,13 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
         if (!d.titulo) { ui.marcarErro(form, "titulo", "Escreva o que precisa ser feito."); return false; }
         const p = { titulo: d.titulo, tipo: d.tipo, vence_em: d.vence_em || null, dono_id: d.dono_id || null, descricao: d.descricao || null };
         if (tarefa) p.id = tarefa.id;
-        else { if (contato_id) p.contato_id = contato_id; else if (ligado) p.contato_id = ligado.id; if (negocio_id) p.negocio_id = negocio_id; }
+        else {
+          if (contato_id) p.contato_id = contato_id; else if (ligado) p.contato_id = ligado.id;
+          if (negocio_id) p.negocio_id = negocio_id;
+          else if (ligado) { const sn = form.querySelector(".tf-ligar-neg-sel"); if (sn && /^\d+$/.test(sn.value)) p.negocio_id = Number(sn.value); }    // plano 1000b · RB-237
+        }
         try {
-          if (tarefa) return await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: p });
+          // plano 1000b · RB-257: a edição também vai com chave de idempotência (k.escrever) — erro ambíguo não mostra falha do que já foi gravado
           const conteudo = JSON.stringify(p);
           if (conteudo !== reqConteudo) { reqAtual = k.novaReq(); reqConteudo = conteudo; }
           const { resultado } = await k.escrever("nx_tarefa_salvar", { p_tarefa: p }, { req: reqAtual, aoStatus: txt => { status.textContent = txt; status.hidden = false; } });
@@ -161,7 +208,7 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
           return resultado;
         } catch (e) {
           status.hidden = true;
-          api.erro(e && e.ambigua ? "Não foi possível confirmar se foi salvo. Toque em «Criar tarefa» de novo: é seguro, não duplica." : k.erro(e));
+          api.erro(e && e.ambigua ? `Não foi possível confirmar se foi salvo. Toque em «${tarefa ? "Salvar" : "Criar tarefa"}» de novo: é seguro, não duplica.` : k.erro(e));
           return false;
         }
       } },
@@ -186,9 +233,11 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
   const menuIds = A.menu.flatMap(id => (id === "adiar" ? ["adiar_hora", "adiar", "adiar_semana", "adiar_escolher"] : [id]));
   // plano 1000 (CR-156): sem internet o círculo fica desligado com a dica (antes ia e voltava com o erro do servidor)
   const offline = typeof navigator !== "undefined" && navigator && navigator.onLine === false;
+  ligarRedeGlobal();       // plano 1000b · RB-115: a gaveta e a ficha também religam o círculo quando a internet volta
   const check = h("input", { type: "checkbox", checked: !!t.concluida_em, disabled: !pode || offline, title: offline ? "Sem internet: conclua quando a conexão voltar" : null,
-    dataset: offline ? { semRede: "1" } : null,
-    "aria-label": t.concluida_em ? `Reabrir a tarefa ${t.titulo}` : `Concluir a tarefa ${t.titulo}` });
+    dataset: offline && pode ? { semRede: "1" } : null,
+    // plano 1000b · RB-238: o leitor ouve o prazo junto («…, sem prazo», «…, atrasada, há 2 dias») sem precisar navegar até o texto
+    "aria-label": t.concluida_em ? `Reabrir a tarefa ${t.titulo}` : `Concluir a tarefa ${t.titulo}, ${prazoParaLeitor(v)}` });
   const mais = pode ? h("button", { type: "button", class: "bt-icone tf-mais", "aria-label": `Mais ações da tarefa ${t.titulo}`, title: "Mais ações" }, ui.icone("opcoes")) : null;
   const el = h("div", { class: ["tf", t.concluida_em && "feita"], dataset: { id: t.id } },
     h("label", { class: "tf-check" }, check, h("span", { "aria-hidden": "true" })),
@@ -243,7 +292,10 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
       const nova = await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: { id: t.id, vence_em: novo } });
       ui.anunciar("Tarefa adiada.");
       aoMudar && aoMudar({ tipo: "salva", tarefa: nova });
-      ui.acaoComDesfazer({ texto: `Tarefa adiada para ${ui.dataCurtaBR(novo)}, ${ui.horaBR(novo)}`, reverter: async () => {
+      // plano 1000b · RB-218: «para amanhã, 09:00» (Hoje/Amanhã/Seg, 20/10) em vez de só a data
+      const rotNovo = k.L && k.L.rotuloDia ? k.L.rotuloDia(diaSP(ui, novo), hojeISO(ui)) : "";
+      const quando = rotNovo && rotNovo !== "Sem data" ? rotNovo.charAt(0).toLowerCase() + rotNovo.slice(1) : ui.dataCurtaBR(novo);
+      ui.acaoComDesfazer({ texto: `Tarefa adiada para ${quando}, ${ui.horaBR(novo)}`, reverter: async () => {
         const r = await k.api.rpcC("nx_tarefa_salvar", { p_tarefa: { id: t.id, vence_em: antes } });
         aoMudar && aoMudar({ tipo: "salva", tarefa: r });
       } });
@@ -284,6 +336,26 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
 }
 
 /**
+ * plano 1000b · RB-115: caiu/voltou a internet → os círculos de concluir desligam/religam em QUALQUER lugar (gaveta, ficha, #/tarefas) —
+ * antes só a tela de Tarefas ouvia. Um ouvinte por janela; `data-sem-rede` só marca quem podia concluir (quem não pode continua desligado).
+ */
+export function varrerChecksRede(raiz) {
+  if (!raiz || typeof raiz.querySelectorAll !== "function") return;
+  const off = typeof navigator !== "undefined" && navigator && navigator.onLine === false;
+  for (const x of raiz.querySelectorAll(".tf-check input")) {
+    if (off) { if (!x.disabled) { x.disabled = true; x.dataset.semRede = "1"; x.setAttribute("title", "Sem internet: conclua quando a conexão voltar"); } }
+    else if (x.dataset.semRede) { x.disabled = false; delete x.dataset.semRede; x.removeAttribute("title"); }
+  }
+}
+let redeLigadaEm = null;
+function ligarRedeGlobal() {
+  if (typeof addEventListener !== "function" || redeLigadaEm === addEventListener) return;
+  redeLigadaEm = addEventListener;
+  const f = () => { if (typeof document !== "undefined" && document && document.body) varrerChecksRede(document.body); };
+  addEventListener("online", f); addEventListener("offline", f);
+}
+
+/**
  * blocoTarefas(k, {tarefas, contato_id, negocio_id, aoMudar, titulo, vazio}) → Node
  * Abertas primeiro (por vencimento), concluídas depois; "+ Tarefa".
  */
@@ -299,7 +371,7 @@ export function blocoTarefas(k, { tarefas = [], contato_id = null, negocio_id = 
     const abertas = lista.filter(t => !t.concluida_em).sort((a, b) => (a.vence_em ? Date.parse(a.vence_em) : Infinity) - (b.vence_em ? Date.parse(b.vence_em) : Infinity));
     const feitas = lista.filter(t => t.concluida_em);
     cont.textContent = abertas.length ? String(abertas.length) : "";
-    if (!lista.length) corpo.appendChild(h("p", { class: "fraco", style: { "font-size": "var(--fs-14)" } }, vazio));
+    if (!lista.length) corpo.appendChild(h("p", { class: "fraco crm-vazio-txt" }, vazio));
     for (const t of [...abertas, ...feitas]) corpo.appendChild(itemTarefa(k, t, { aoMudar: mudou }));
   }
   function mudou(ev) {
@@ -311,7 +383,7 @@ export function blocoTarefas(k, { tarefas = [], contato_id = null, negocio_id = 
   const novo = k.pode("atendente") ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: async () => {
     const t = await formTarefa(k, null, { contato_id, negocio_id });
     if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); mudou({ tipo: "salva", tarefa: t }); }
-  } } }, ui.icone("mais"), "Tarefa") : null;
+  } } }, ui.icone("mais"), "Nova tarefa") : null;      // plano 1000b · RB-123: com verbo, como o FAB
   desenhar();
   const el = h("section", { class: "ng-bloco", "aria-label": titulo },
     h("div", { class: "ng-bloco-cab" }, h("h3", null, titulo, " ", cont), novo), corpo);
@@ -329,7 +401,8 @@ function itemNota(k, n, { aoMudar }) {
     texto,
     h("div", { class: "nota-meta" },
       n.fixada ? h("span", { class: "pilula pilula-aten" }, "Fixada") : null,
-      h("span", { class: "cresce" }, `${n.autor ? n.autor.nome : "Sistema"} · ${ui.dataHoraBR(n.criado_em)}${n.editado_em ? " · editada" : ""}`),
+      // plano 1000b · RB-120: «Automático» aqui e na linha do tempo (antes «Sistema» numa e «sistema» na outra)
+      h("span", { class: "cresce" }, `${n.autor ? n.autor.nome : k.L.AUTOR_AUTOMATICO} · ${ui.dataHoraBR(n.criado_em)}${n.editado_em ? " · editada" : ""}`),
       pode ? h("button", { type: "button", "aria-pressed": String(!!n.fixada),
         "aria-label": n.fixada ? "Desafixar nota" : "Fixar nota no topo", title: n.fixada ? "Desafixar" : "Fixar no topo",
         // plano 1000 (CR-065): o ✓ parecia «concluir» — agora o botão diz «Fixar»/«Desafixar» (o sprite não tem alfinete)
@@ -338,8 +411,10 @@ function itemNota(k, n, { aoMudar }) {
           try { const r = await k.api.rpcC("nx_nota_salvar", { p_nota: { id: n.id, fixada: !n.fixada } }); aoMudar({ tipo: "salva", nota: r }); }
           catch (e) { k.toastErro(e); }
         } } }, n.fixada ? "Desafixar" : "Fixar") : null,
-      pode ? h("button", { type: "button", class: "bt-icone", "aria-label": "Editar nota", on: { click: async () => {
+      pode ? h("button", { type: "button", class: "bt-icone", "aria-label": `Editar a nota «${k.L.resumoTexto(n.texto)}»`, on: {      /* plano 1000b · RB-122: diz QUAL nota */ click: async () => {
         const campoTxt = ui.campo({ rotulo: "Nota", nome: "texto", tipo: "textarea", valor: n.texto, max: 5000, linhas: 5 });
+        // plano 1000b · RB-258: a edição também guarda rascunho (queda de sessão não perde o texto); some quando o servidor confirma ou ao cancelar
+        const rasc = k.rascunho ? k.rascunho(campoTxt.querySelector("textarea"), `nota:${n.id}:editar`) : null;
         const r = await ui.modal({ titulo: "Editar nota", corpo: campoTxt, acoes: [
           { rotulo: "Cancelar", tipo: "neutro", valor: null },
           { rotulo: "Salvar", tipo: "primario", fn: async api => {
@@ -347,9 +422,10 @@ function itemNota(k, n, { aoMudar }) {
             if (!t) { api.erro("Escreva a nota."); return false; }
             try { return await k.api.rpcC("nx_nota_salvar", { p_nota: { id: n.id, texto: t } }); } catch (e) { api.erro(k.erro(e)); return false; }
           } }] });
+        if (rasc && typeof rasc.apagar === "function") rasc.apagar();
         if (r) aoMudar({ tipo: "salva", nota: r });
       } } }, ui.icone("editar")) : null,
-      pode ? h("button", { type: "button", class: "bt-icone", "aria-label": "Excluir nota", on: { click: () => {
+      pode ? h("button", { type: "button", class: "bt-icone", "aria-label": `Excluir a nota «${k.L.resumoTexto(n.texto)}»`, on: {      /* plano 1000b · RB-122 */ click: () => {
         // M25: some na hora; a exclusão de verdade (firmar) só depois dos 7 s do «Desfazer»
         excluirComDesfazer(k, "nota", n, { texto: "Nota excluída", rpc: "nx_nota_excluir",
           sumir: () => { aoMudar({ tipo: "excluida", nota: n }); },
@@ -370,7 +446,7 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
     ui.limpar(corpo);
     lista.sort((a, b) => (b.fixada - a.fixada) || (Date.parse(b.criado_em) - Date.parse(a.criado_em)));
     cont.textContent = lista.length ? String(lista.length) : "";
-    if (!lista.length) corpo.appendChild(h("p", { class: "fraco", style: { "font-size": "var(--fs-14)" } }, "Nenhuma nota ainda. Anote combinados, preferências e objeções — a equipe toda vê."));
+    if (!lista.length) corpo.appendChild(h("p", { class: "fraco crm-vazio-txt" }, "Nenhuma nota ainda. Anote combinados, preferências e objeções — a equipe toda vê."));
     for (const n of lista) corpo.appendChild(itemNota(k, n, { aoMudar: mudou }));
   }
   function mudou(ev) {
@@ -381,11 +457,16 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
   }
   let nova = null, rascunhoNota = null;
   if (k.pode("atendente")) {
-    const ta = h("textarea", { "aria-label": "Nova nota", placeholder: "Escreva uma nota… (Ctrl+Enter salva)", maxlength: 5000, rows: 3 });
+    // plano 1000b · RB-121: no Mac o atalho é ⌘+Enter (o metaKey já era aceito)
+    const ta = h("textarea", { "aria-label": "Nova nota", placeholder: `Escreva uma nota… (${k.L.atalhoSalvar(plataformaAparelho())} salva)`, maxlength: 5000, rows: 3 });
     const bt = h("button", { type: "button", class: "bt bt-prim bt-p" }, ui.icone("nota"), "Salvar nota");
+    // plano 1000b · RB-114: trava — Ctrl+Enter repetido durante a gravação não cria a mesma nota duas vezes (o ui.carregando só desliga o botão)
+    let salvando = false;
     const salvar = async () => {
+      if (salvando) return;
       const t = ta.value.trim();
       if (!t) { ta.focus(); return; }
+      salvando = true;
       try {
         const n = await ui.carregando(bt, k.api.rpcC("nx_nota_salvar", { p_nota: { texto: t, ...(negocio_id ? { negocio_id } : {}), ...(contato_id ? { contato_id } : {}) } }));
         ta.value = "";
@@ -393,6 +474,7 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
         mudou({ tipo: "salva", nota: n });
         ui.anunciar("Nota salva.");
       } catch (e) { k.toastErro(e); }
+      finally { salvando = false; }
     };
     bt.addEventListener("click", salvar);
     ta.addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); salvar(); } });
@@ -424,10 +506,11 @@ export function familiaTempo(it) {
  *  nx_crm_tempo_pagina(p_antes) → {itens, tem_mais}. Servidor sem a RPC: o botão some e fica o comportamento de antes (só os 80). */
 const TEMPO_PAGINA = 80;
 let tempoPaginaAusente = false;
-export function blocoTempo(k, itens = [], { titulo = "Linha do tempo", pagina = null } = {}) {
+export function blocoTempo(k, itens = [], { titulo = "Linha do tempo", pagina = null, filtro: filtroInicial = "tudo", aoFiltrar = null } = {}) {
   const { ui, h, L } = k;
   const nomes = k.nomes();
   const motivos = k.motivosPorId();
+  const temConversas = !!(k.ctx && typeof k.ctx.temModulo === "function" && k.ctx.temModulo("conversas"));      // plano 1000b · RB-051
   const corpo = h("div", { class: "tempo-dias" });
   let todos = (itens || []).slice();
   const chave = it => `${it.fonte || it.tipo || ""}:${it.id ?? ""}:${it.em || ""}`;
@@ -437,10 +520,12 @@ export function blocoTempo(k, itens = [], { titulo = "Linha do tempo", pagina = 
   const daFamilia = (it, v) => { const f = familiaTempo(it); return v === "etapas" ? ["estagio", "ganho", "perdido"].includes(f) : f === v; };
   const passa = it => filtro === "tudo" || daFamilia(it, filtro);
   const contar = v => (v === "tudo" ? todos.length : todos.filter(it => daFamilia(it, v)).length);
+  // plano 1000b · RB-112: a ficha redesenhada pelo pulso volta com o MESMO filtro (antes voltava para «Tudo»)
+  if (filtroInicial !== "tudo" && FILTROS.some(([v]) => v === filtroInicial) && contar(filtroInicial) > 0) filtro = filtroInicial;
   const chips = todos.length > 1 ? h("div", { class: "tempo-filtros crm-seg", role: "group", "aria-label": "Mostrar na linha do tempo" }, FILTROS.map(([v, t]) => {
     const n = contar(v);
     return h("button", { type: "button", class: "tempo-filtro", dataset: { filtro: v }, "aria-pressed": String(v === filtro), disabled: !n && v !== "tudo",
-      on: { click: () => { const nn = contar(v); filtro = v; for (const b of chips.querySelectorAll(".tempo-filtro")) b.setAttribute("aria-pressed", String(b.dataset.filtro === v)); desenharDias(); if (ui.anunciar) ui.anunciar(`${t}: ${nn} ${nn === 1 ? "registro" : "registros"}.`); } } },
+      on: { click: () => { const nn = contar(v); filtro = v; if (aoFiltrar) try { aoFiltrar(v); } catch { /* ok */ } for (const b of chips.querySelectorAll(".tempo-filtro")) b.setAttribute("aria-pressed", String(b.dataset.filtro === v)); desenharDias(); if (ui.anunciar) ui.anunciar(`${t}: ${nn} ${nn === 1 ? "registro" : "registros"}.`); } } },
       t, h("span", { class: "tempo-filtro-n dado" }, String(n)));
   })) : null;
   function contarChips() {
@@ -454,18 +539,19 @@ export function blocoTempo(k, itens = [], { titulo = "Linha do tempo", pagina = 
   function desenharDias() {
     ui.limpar(corpo);
     const vis = todos.filter(passa);
-    if (!vis.length) corpo.appendChild(h("p", { class: "fraco", style: { "font-size": "var(--fs-14)" } }, todos.length ? "Nada desse tipo ainda." : "Ainda não há registros."));
+    if (!vis.length) corpo.appendChild(h("p", { class: "fraco crm-vazio-txt" }, todos.length ? "Nada desse tipo ainda." : "Ainda não há registros."));
     const grupos = L.agruparPorDia(vis, { instanteDe: it => it.em, diaDe: iso => diaSP(ui, iso), hoje: hojeISO(ui), ordem: "desc" });
     for (const g of grupos) {
       const ol = h("ol", { class: "tempo" });
       for (const it of g.itens) {
         const cls = familiaTempo(it);
         const txt = L.textoTempo(it, { nomes, vocab: k.v, brl: v => ui.brl(v), motivos });
-        const link = it.conversa_id ? h("a", { href: `#/conversas/${it.conversa_id}` }, " Abrir conversa") : null;
+        // plano 1000b · RB-051: sem o módulo Conversas não há link para #/conversas
+        const link = it.conversa_id && temConversas ? h("a", { href: `#/conversas/${it.conversa_id}` }, " Abrir conversa") : null;
         ol.appendChild(h("li", { class: ["tempo-it", cls] },
           h("span", { class: "tempo-ic", "aria-hidden": "true" }, ui.icone(L.iconeTempo(it))),
           h("div", { class: "tempo-txt" }, txt, link,
-            h("small", null, h("time", { datetime: it.em || null, title: ui.dataHoraBR(it.em) }, g.dia ? ui.horaBR(it.em) : ui.dataHoraBR(it.em)), `${it.autor ? ` · ${it.autor.nome}` : " · sistema"}`))));
+            h("small", null, h("time", { datetime: it.em || null, title: ui.dataHoraBR(it.em) }, g.dia ? ui.horaBR(it.em) : ui.dataHoraBR(it.em)), `${it.autor ? ` · ${it.autor.nome}` : ` · ${L.AUTOR_AUTOMATICO}`}`))));
       }
       corpo.appendChild(h("section", { class: "tempo-dia", "aria-label": g.rotulo },
         h("h4", { class: "tempo-dia-t" }, h("span", null, g.rotulo), h("span", { class: "tempo-dia-n dado" }, String(g.itens.length))), ol));
@@ -507,6 +593,14 @@ const ABAS_T9 = [
   { id: "hoje", rotulo: "Hoje" }, { id: "atrasadas", rotulo: "Atrasadas" },
   { id: "proximas", rotulo: "Próximas" }, { id: "concluidas", rotulo: "Concluídas" },
 ];
+/** plano 1000b · RB-233: o aviso do limite (o servidor manda no máximo 200) com um conselho que serve para a aba. */
+export function textoTarefasDeMais(aba, n, todas = false) {
+  const minhas = todas ? "«Minhas»" : null;
+  if (aba === "atrasadas") return `Mostrando as ${n} primeiras. Conclua ou adie algumas${minhas ? `, ou veja só as suas em ${minhas},` : ""} para ver as outras.`;
+  if (aba === "concluidas") return `Mostrando as ${n} primeiras.${minhas ? ` Use ${minhas} para ver menos de cada vez.` : ""}`;
+  return `Mostrando as ${n} primeiras. Use ${minhas ? `${minhas} ou ` : ""}a visão Semana para ver menos de cada vez.`;
+}
+
 const VAZIO_T9 = {
   hoje: "Nada para hoje. Que tal revisar as oportunidades paradas?", atrasadas: "Nenhuma tarefa atrasada. Tudo em dia.",
   proximas: "Nenhuma tarefa marcada para os próximos dias.", concluidas: "Nenhuma tarefa concluída ainda.",
@@ -515,22 +609,32 @@ const VAZIO_T9 = {
 export async function montarTarefas(k, el, rota) {
   const { ui, h, ctx, L } = k;
   ctx.titulo("Tarefas");
-  const lerLocal = (c, p) => { try { return localStorage.getItem(c) || p; } catch { return p; } };
-  const gravar = (c, v) => { try { localStorage.setItem(c, v); } catch { /* ok */ } };
-  let aba = ABAS_T9.some(a => a.id === rota.query.aba) ? rota.query.aba : lerLocal("nx-app-tarefas-aba", "hoje");
+  // plano 1000b · RB-119: aba, «Minhas/Todas» e «Lista/Semana» lembradas por empresa E conta (aparelho compartilhado); a chave antiga migra uma vez
+  const sufixo = `${(ctx.cliente && ctx.cliente.id) || "-"}-${(typeof k.eu === "function" && k.eu()) || "-"}`;
+  const ch = nome => `nx-app-tarefas-${nome}-${sufixo}`;
+  const lerLocal = (nome, p) => {
+    try {
+      let v = localStorage.getItem(ch(nome));
+      if (v === null && (v = localStorage.getItem(`nx-app-tarefas-${nome}`)) !== null) { localStorage.setItem(ch(nome), v); localStorage.removeItem(`nx-app-tarefas-${nome}`); }
+      return v || p;
+    } catch { return p; }
+  };
+  const gravar = (nome, v) => { try { localStorage.setItem(ch(nome), v); } catch { /* ok */ } };
+  const q = (rota && rota.query) || {};     // plano 1000b · RB-235: rota sem query não derruba a tela
+  let aba = ABAS_T9.some(a => a.id === q.aba) ? q.aba : lerLocal("aba", "hoje");
   const podeTodas = k.pode("supervisor");
-  let dono = podeTodas ? lerLocal("nx-app-tarefas-dono", "eu") : "eu";
+  let dono = podeTodas ? lerLocal("dono", "eu") : "eu";
   let seq = 0;
 
   // plano 1000 (CR-146): o painel do dia É a navegação (antes painel e abas faziam a mesma coisa, uma embaixo da outra); «Concluídas» vira o 4º botão
-  const irAba = id => { if (aba === id) return; aba = id; gravar("nx-app-tarefas-aba", id); marcarAbas(); carregar(); };
+  const irAba = id => { if (aba === id) return; aba = id; gravar("aba", id); marcarAbas(); carregar(); };
   const seg = ui.segmentado({ opcoes: [{ valor: "eu", rotulo: "Minhas" }, { valor: "todos", rotulo: "Todas" }], valor: dono, tipo: "filtro", rotulo: "De quem",
-    aoMudar: x => { dono = x; gravar("nx-app-tarefas-dono", x); carregar(); } });
+    aoMudar: x => { dono = x; gravar("dono", x); carregar(); } });
   seg.hidden = !podeTodas;
   // plano 1000 (CR-244): «Lista · Semana» — a semana mostra hoje e os próximos 6 dias em 7 colunas (Hoje + Próximas juntas); Atrasadas e Concluídas seguem em lista
-  let vista = lerLocal("nx-app-tarefas-vista", "lista") === "semana" ? "semana" : "lista";
+  let vista = lerLocal("vista", "lista") === "semana" ? "semana" : "lista";
   const segVista = ui.segmentado({ opcoes: [{ valor: "lista", rotulo: "Lista" }, { valor: "semana", rotulo: "Semana" }], valor: vista, tipo: "filtro", rotulo: "Como ver as tarefas", classe: "tfp-vista",
-    aoMudar: x => { vista = x === "semana" ? "semana" : "lista"; gravar("nx-app-tarefas-vista", vista); if (vista === "semana" && !["hoje", "proximas"].includes(aba)) { aba = "hoje"; gravar("nx-app-tarefas-aba", aba); marcarAbas(); } carregar(); } });
+    aoMudar: x => { vista = x === "semana" ? "semana" : "lista"; gravar("vista", vista); if (vista === "semana" && !["hoje", "proximas"].includes(aba)) { aba = "hoje"; gravar("aba", aba); marcarAbas(); } carregar(); } });
   const corpo = h("div", { class: "pilha" });
   const novaTarefa = async () => {
     const t = await formTarefa(k, null, {});
@@ -556,7 +660,7 @@ export async function montarTarefas(k, el, rota) {
     }
   }
   el.append(
-    ui.cabecalho({ titulo: "Tarefas", acoes: k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novaTarefa } }, ui.icone("mais"), "Tarefa") : null }),
+    ui.cabecalho({ titulo: "Tarefas", acoes: k.pode("atendente") ? h("button", { type: "button", class: "bt bt-prim", on: { click: novaTarefa } }, ui.icone("mais"), "Nova tarefa") : null }),     // plano 1000b · RB-123
     painel,
     h("div", { class: "tfp-fita" }, seg, segVista),
     corpo);
@@ -614,7 +718,8 @@ export async function montarTarefas(k, el, rota) {
       }
       corpo.appendChild(lista);
       // o servidor devolve no máximo 200: sem isso a lista parecia completa
-      if (r.tem_mais) corpo.appendChild(h("p", { class: "sub" }, `Mostrando as ${r.itens.length} primeiras. Conclua algumas${podeTodas && dono === "todos" ? " ou veja só as suas" : ""} para ver as outras.`));
+      // plano 1000b · RB-233: o conselho depende da aba («conclua algumas» não faz sentido em Próximas/Concluídas)
+      if (r.tem_mais) corpo.appendChild(h("p", { class: "sub" }, textoTarefasDeMais(aba, r.itens.length, podeTodas && dono === "todos")));
     } catch (e) {
       if (minha !== seq) return;
       corpo.removeAttribute("aria-busy");
@@ -632,8 +737,10 @@ export async function montarTarefas(k, el, rota) {
     const itens = [...(r.itens || []), ...((r2 && r2.itens) || [])].filter(t => !ocultas.has(t.id) && !vistos.has(t.id) && vistos.add(t.id));
     const hoje = hojeISO(ui);
     const sem = L.colunasDaSemana(itens, { instanteDe: t => t.vence_em, diaDe: iso => diaSP(ui, iso), hoje });
+    // plano 1000b · RB-125: no celular os dias livres viram UMA linha («Livres: qua, qui, sáb») em vez de 7 caixas empilhadas (o CSS esconde as vazias)
+    const livres = sem.colunas.filter(col => !col.itens.length && col.dia !== hoje).map(col => L.diaSemanaCurto(col.dia)).filter(Boolean);
     const grade = h("div", { class: "tfp-semana", role: "list", "aria-label": "Tarefas da semana" }, sem.colunas.map(col =>
-      h("section", { class: ["tfp-dia", col.dia === hoje && "hoje"], role: "listitem", "aria-label": `${col.rotulo}: ${col.itens.length} ${col.itens.length === 1 ? "tarefa" : "tarefas"}` },
+      h("section", { class: ["tfp-dia", col.dia === hoje && "hoje", !col.itens.length && col.dia !== hoje && "tfp-dia-livre"], role: "listitem", "aria-label": `${col.rotulo}: ${col.itens.length} ${col.itens.length === 1 ? "tarefa" : "tarefas"}` },
         h("h3", { class: "tfp-dia-t" }, h("span", null, col.rotulo), h("span", { class: "tfp-grupo-n dado" }, String(col.itens.length))),
         col.itens.length ? h("div", { class: "at-lista" }, col.itens.map(t => itemTarefa(k, t, { mostrarVinculo: true, aoMudar: ev => {
           // plano 1000: como na Lista — a excluída sai da grade já (e fica fora até o «Desfazer» acabar); o «Desfazer» devolve e recarrega
@@ -642,9 +749,16 @@ export async function montarTarefas(k, el, rota) {
           carregar(true);
         } })))
           : h("p", { class: "fraco tfp-dia-vazio" }, "Livre"))));
+    if (livres.length) corpo.appendChild(h("p", { class: "sub tfp-livres", "aria-hidden": "true" }, `Livre${livres.length === 1 ? "" : "s"}: ${livres.join(", ")}`));
     corpo.appendChild(grade);
     const notas = [sem.depois ? `+${sem.depois} depois desta semana (em «Próximas», na lista)` : null, sem.semPrazo ? `${sem.semPrazo} sem prazo (na lista)` : null].filter(Boolean);
-    if (notas.length) corpo.appendChild(h("p", { class: "sub" }, notas.join(" · ")));
+    // plano 1000b · RB-118: a semana não mostra as atrasadas — a nota diz quantas são, com um atalho para a aba «Atrasadas» (na lista)
+    const nAtr = Number(c.atrasadas) || 0;
+    const linkAtr = nAtr > 0 ? h("button", { type: "button", class: "link tfp-ver-atrasadas", on: { click: () => {
+      vista = "lista"; gravar("vista", vista); segVista.ativar("lista");
+      aba = "atrasadas"; gravar("aba", aba); marcarAbas(); carregar();
+    } } }, `${nAtr} ${nAtr === 1 ? "atrasada" : "atrasadas"} (na lista)`) : null;
+    if (notas.length || linkAtr) corpo.appendChild(h("p", { class: "sub tfp-semana-nota" }, linkAtr, linkAtr && notas.length ? " · " : null, notas.join(" · ") || null));
   }
 
   await carregar();
@@ -663,13 +777,7 @@ export async function montarTarefas(k, el, rota) {
   const aoVoltar = () => { if (!document.hidden) recarregarQuieto(); };
   document.addEventListener("visibilitychange", aoVoltar);
   // plano 1000 (CR-156): caiu a internet → os círculos desligam com a dica; voltou → religam (sem recarregar a lista)
-  const aoRede = () => {
-    const off = typeof navigator !== "undefined" && navigator && navigator.onLine === false;
-    for (const x of corpo.querySelectorAll(".tf-check input")) {
-      if (off) { if (!x.disabled) { x.disabled = true; x.dataset.semRede = "1"; x.setAttribute("title", "Sem internet: conclua quando a conexão voltar"); } }
-      else if (x.dataset.semRede) { x.disabled = !k.pode("atendente"); delete x.dataset.semRede; x.removeAttribute("title"); }
-    }
-  };
+  const aoRede = () => varrerChecksRede(corpo);      // plano 1000b · RB-115: a mesma varredura do ouvinte global
   if (typeof addEventListener === "function") { addEventListener("offline", aoRede); addEventListener("online", aoRede); }
   return { desmontar() { seq++; if (cancelar) cancelar(); document.removeEventListener("visibilitychange", aoVoltar);
     if (typeof removeEventListener === "function") { removeEventListener("offline", aoRede); removeEventListener("online", aoRede); } } };

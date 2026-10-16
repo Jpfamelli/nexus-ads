@@ -108,6 +108,13 @@ export function modulosAoTrocarPlano({ atuais = [], planoAntigo = [], planoNovo 
   return { marcados: lista, sairam };
 }
 
+/** plano 1000b · UB-116: teto de espera pela config.css antes do 1º desenho (o mesmo ESPERA_CSS_MS do config.js). */
+export const ESPERA_CSS_MS = 1500;
+/** plano 1000b · UB-201: validade do convite do administrador — as mesmas opções do convite em Usuários (config.js), padrão 3 dias. */
+export const DIAS_CONVITE_ADMIN = "3";
+const OPCOES_VALIDADE_CONVITE = [["1", "1 dia"], ["3", "3 dias"], ["7", "7 dias"], ["14", "14 dias"], ["30", "30 dias (menos seguro)"]].map(([valor, rotulo]) => ({ valor, rotulo }));
+/** plano 1000b · UB-225: linhas da lista de clientes por vez («Mostrar mais» acrescenta outras tantas). */
+export const POR_PAGINA_CLIENTES = 50;
 let _ultimoHashClientes = "#/admin/clientes";
 let _planos = null;
 let _orgs = null;
@@ -160,7 +167,8 @@ export const rotuloTesteVencido = dias => (dias === 1 ? "Teste vencido há 1 dia
 
 /** plano 1000 · AS-166: CSV da lista de clientes (separador «;» e BOM para o Excel em português). */
 export function csvClientes(itens, nomeDoPlano = id => id) {
-  const esc = v => { const s = v === null || v === undefined ? "" : String(v); return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  // plano 1000b · UB-103: valor que começa com = + - @ (ou tab/CR) vira fórmula no Excel — sai com apóstrofo na frente (texto puro)
+  const esc = v => { let s = v === null || v === undefined ? "" : String(v); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   const cab = ["Cliente", "Endereço", "Revenda", "Plano", "Pacote comercial", "Situação", "Pausado pela Nexus", "Fim do teste", "Criado em",
     ...CHAVES_LIMITE.flatMap(k => [`${k.rotulo} (uso)`, `${k.rotulo} (limite)`])];
   const linhas = (Array.isArray(itens) ? itens : []).map(it => [it.nome, it.slug, it.org ? it.org.nome : "", nomeDoPlano(it.plano),
@@ -301,7 +309,10 @@ export async function montar(ctx) {
   const id = ctx.rota.partes[1] || null;
   const { ui } = ctx;
   const h = ui.h;
-  ui.carregarCss("config");
+  // plano 1000b · UB-116: a folha config.css chega ANTES do 1º desenho (sem o salto de layout da lista), com o mesmo teto do config.js
+  const css = Promise.resolve(typeof ui.carregarCss === "function" ? ui.carregarCss("config") : true).catch(() => false);
+  let relogioCss = null;
+  await Promise.race([css, new Promise(r => { relogioCss = setTimeout(r, ESPERA_CSS_MS); })]).finally(() => clearTimeout(relogioCss));
   const superConta = !!ctx.sessao.conta.super;
   const extras = ctx.pronto("admin_revendas");
   const abas = [
@@ -414,13 +425,18 @@ async function telaClientes(ctx, corpo) {
     if (typeof segStatus.contar === "function") { for (const s of STATUS) segStatus.contar(s.valor, r[s.valor]); segStatus.contar("", r.total); }
   }
   /** Aberto com ?status= ou ?busca= (ou trocou a revenda com eles ligados): busca à parte a lista sem esses filtros, só para o resumo. */
+  // plano 1000b · UB-118: o resumo de uma org é pedido UMA vez (buscas seguidas, antes de a 1ª resposta chegar, não repetem a lista inteira)
+  let resumoPedido = null;
   async function carregarResumo() {
     const n = ++seqResumo, orgId = filtro.org_id || "";
+    if (resumoPedido === orgId) return;
+    resumoPedido = orgId;
     try {
       const todos = await api.rpc("nx_clientes_admin", { p_filtro: { busca: null, status: null, org_id: orgId || null } });
       if (n !== seqResumo || orgId !== (filtro.org_id || "")) return;
       pintarResumo(Array.isArray(todos) ? todos : [], orgId);
     } catch { /* sem resumo: a lista continua; a faixa só aparece com números de verdade */ }
+    finally { if (resumoPedido === orgId) resumoPedido = null; }
   }
 
   if (superConta) {
@@ -429,13 +445,28 @@ async function telaClientes(ctx, corpo) {
 
   let seq = 0;
   const hoje = ui.hojeSP();
+  let mostrar = POR_PAGINA_CLIENTES, ultimosDoFiltro = [];
   async function carregar() {
     const n = ++seq;
-    ui.limpar(lista);
-    lista.appendChild(ui.esqueleto("tabela", 6));
+    mostrar = POR_PAGINA_CLIENTES;
+    // plano 1000b · UB-117: esqueleto só na 1ª carga — nas buscas seguintes a tabela fica (aria-busy) até a resposta chegar
+    if (!lista.firstChild) lista.appendChild(ui.esqueleto("tabela", 6));
+    lista.setAttribute("aria-busy", "true");
     try {
       const todosDoFiltro = await api.rpc("nx_clientes_admin", { p_filtro: { busca: filtro.busca || null, status: filtro.status || null, org_id: filtro.org_id || null } });
       if (n !== seq) return;
+      lista.removeAttribute("aria-busy");
+      ultimosDoFiltro = todosDoFiltro;
+      pintarLista(todosDoFiltro);
+    } catch (e) {
+      if (n !== seq) return;
+      lista.removeAttribute("aria-busy");
+      ui.limpar(lista);
+      lista.appendChild(ui.erroCartao(e, carregar));
+    }
+  }
+  function pintarLista(todosDoFiltro) {
+    {
       const itens = filtrarLocal(todosDoFiltro, filtro.local, filtro.status);
       ultimosItens = itens;
       pintarChipLocal();
@@ -481,16 +512,18 @@ async function telaClientes(ctx, corpo) {
           { chave: "criado_em", rotulo: "Criado em", ordenavel: true, render: it => ui.dataBR(it.criado_em) },
         ],
         // ordenar «Número»: desconectados primeiro (o que precisa de atenção), depois sem confirmação, depois conectados
-        linhas: itens.map(it => { const e = estadoNumerosCliente(it.canais);
+        // plano 1000b · UB-225: 50 linhas por vez (paginação local) — com 300 clientes a tabela não desenha tudo de uma vez
+        linhas: itens.slice(0, mostrar).map(it => { const e = estadoNumerosCliente(it.canais);
           return { ...it, org_nome: it.org ? it.org.nome : "", u_usuarios: it.uso && it.uso.usuarios, n_numeros: e ? (e.caidos ? 0 : e.tom === "ok" ? 2 : 1) : null }; }),
         aoClicar: it => ctx.navegar(`#/admin/clientes/${it.id}`),
         vazio: "Nenhum cliente com esse filtro.",
       });
       lista.appendChild(tab.el);
-    } catch (e) {
-      if (n !== seq) return;
-      ui.limpar(lista);
-      lista.appendChild(ui.erroCartao(e, carregar));
+      if (itens.length > mostrar) {
+        const mais = h("button", { type: "button", class: "bt bt-sec adm-mais" }, `Mostrar mais (${ui.num(Math.min(POR_PAGINA_CLIENTES, itens.length - mostrar))} de ${ui.num(itens.length - mostrar)} restantes)`);
+        mais.addEventListener("click", () => { mostrar += POR_PAGINA_CLIENTES; pintarLista(ultimosDoFiltro); });
+        lista.appendChild(h("div", { class: "linha adm-mais-linha" }, h("p", { class: "fraco" }, `Mostrando ${ui.num(mostrar)} de ${ui.num(itens.length)} clientes.`), mais));
+      }
     }
   }
   const aoBuscar = ui.debounce(() => { filtro.busca = busca.value.trim(); gravarFiltro(); carregar(); }, 300);
@@ -516,9 +549,18 @@ function cartaoSaude(ctx, caixa) {
   const { ui, api } = ctx;
   const h = ui.h;
   async function carregar() {
-    let s = null;
-    try { s = resumoSaude(await api.rpc("nx_saude")); } catch (e) { if (semFuncao(e)) { caixa.hidden = true; return; } }
+    let s = null, falha = null;
+    try { s = resumoSaude(await api.rpc("nx_saude")); } catch (e) { if (semFuncao(e)) { caixa.hidden = true; return; } falha = e; }
     ui.limpar(caixa);
+    // plano 1000b · UB-104: erro de verdade não esconde o cartão — a plataforma vê que a saúde NÃO foi conferida e pode tentar de novo
+    if (falha) {
+      const tentar = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("reabrir"), "Tentar de novo");
+      tentar.addEventListener("click", () => ui.carregando(tentar, carregar()));
+      caixa.hidden = false;
+      caixa.append(h("div", { class: "aviso aviso-aten adm-saude-cx adm-saude-falha", role: "status" }, ui.icone("alerta"),
+        h("div", { class: "pilha-p" }, h("p", null, h("b", null, "Não deu para conferir a saúde da operação agora."), ` ${api.mensagemErro(falha)}`), h("div", { class: "linha" }, tentar))));
+      return;
+    }
     if (!s) { caixa.hidden = true; return; }
     caixa.hidden = false;
     const bPausa = h("button", { type: "button", class: s.pausaGeral ? "bt bt-prim bt-p" : "bt bt-sec bt-p" }, ui.icone(s.pausaGeral ? "play" : "pausa"), s.pausaGeral ? "Retomar todos os envios" : "Pausar todos os envios");
@@ -574,7 +616,8 @@ async function criarCliente(ctx) {
       ui.campo({ rotulo: "Situação", nome: "status", tipo: "select", valor: "teste", opcoes: STATUS.slice(0, 2) }),
       ui.campo({ rotulo: "Dias de teste", nome: "dias", tipo: "numero", valor: 14, min: 1, max: 90 }),
       superConta && os.length ? ui.campo({ rotulo: "Revenda / plataforma", nome: "org_id", tipo: "select", valor: orgPadrao, opcoes: os.map(o => ({ valor: o.id, rotulo: `${o.nome}${o.tipo === "plataforma" ? " (plataforma)" : ""}` })) }) : null),
-    campoPacoteComercial(ui, "essencial", { obrigatorio: true }),
+    // plano 1000b · UB-113: nenhum pacote vem marcado — a escolha é obrigatória de verdade («Escolha um dos três» aparece se pular)
+    campoPacoteComercial(ui, null, { obrigatorio: true }),
     ui.campo({ rotulo: "Especificações do cliente", nome: "especificacoes", tipo: "textarea", max: 5000, linhas: 4,
       placeholder: "Escreva necessidades, objetivos, entregas combinadas e observações…", ajuda: "Campo livre, sem modelos ou respostas predefinidas." }));
   const nome = form.querySelector("input[name=nome]"), slug = form.querySelector("input[name=slug]");
@@ -595,6 +638,16 @@ async function criarCliente(ctx) {
   let pacoteCriado = "essencial";
   const ajustarDias = () => { campoDias.hidden = selStatus.value !== "teste"; };
   selStatus.addEventListener("change", ajustarDias); ajustarDias();
+  // plano 1000b · UB-112: «Termina em dd/mm/aaaa» ao lado dos dias; fora de 1–90 vira erro na hora (antes era corrigido em silêncio)
+  const inpDias = form.querySelector("input[name=dias]");
+  const fimTeste = h("p", { class: "campo-ajuda adm-teste-fim", "aria-live": "polite" });
+  if (campoDias) campoDias.appendChild(fimTeste);
+  const pintarFimTeste = () => {
+    const n = diasDeTesteValidos(inpDias && inpDias.value);
+    fimTeste.textContent = n ? `Termina em ${ui.dataBR(isoMais(ui.hojeSP(), n))}.` : "";
+    ui.marcarErro(form, "dias", n || !String(inpDias && inpDias.value || "").trim() ? null : "Use de 1 a 90 dias.");
+  };
+  if (inpDias) { inpDias.addEventListener("input", pintarFimTeste); pintarFimTeste(); }
 
   const r = await ui.modal({
     titulo: "Novo cliente", corpo: form, largura: "g",
@@ -613,7 +666,8 @@ async function criarCliente(ctx) {
         if (!ps.some(p => p.id === planoAcesso && (superConta || p.ativo !== false))) {
           ui.marcarErro(form, "pacote_comercial", "O plano de acesso correspondente não está disponível para esta revenda. Fale com a plataforma."); return false;
         }
-        const dias = Math.max(1, Math.min(90, Number(d.dias) || 14));
+        const dias = diasDeTesteValidos(d.dias);
+        if (d.status === "teste" && !dias) { ui.marcarErro(form, "dias", "Use de 1 a 90 dias."); return false; }      // UB-112
         const teste = d.status === "teste" ? isoMais(ui.hojeSP(), dias) : null;
         const p = { nome: d.nome, slug: d.slug, vertical: VERTICAIS.some(v => v.valor === selModelo.value) ? selModelo.value : verticalPorSegmento(d.segmento), plano: planoAcesso, status: d.status, teste_ate: teste,
           comercial: { pacote: oferta.id, segmento: d.segmento || "", especificacoes: d.especificacoes || "" } };
@@ -654,7 +708,13 @@ function conferidorDeSlug(ctx, inp, idProprio) {
   return conferir;
 }
 
-function isoMais(iso, dias) {
+/** plano 1000b · UB-112: dias de teste digitados → inteiro de 1 a 90, ou null (fora da faixa, vazio ou não numérico). */
+export function diasDeTesteValidos(v) {
+  const n = typeof v === "number" ? v : Number(String(v ?? "").trim().replace(",", "."));
+  return String(v ?? "").trim() !== "" && Number.isInteger(n) && n >= 1 && n <= 90 ? n : null;
+}
+
+export function isoMais(iso, dias) {
   const [a, m, d] = iso.split("-").map(Number);
   const dt = new Date(Date.UTC(a, m - 1, d + dias));
   return dt.toISOString().slice(0, 10);
@@ -701,14 +761,25 @@ async function telaCliente(ctx, corpo, id) {
 
   // ---- ações de topo
   const btEntrar = h("button", { type: "button", class: "bt bt-prim" }, ui.icone("seta-dir"), "Entrar");
-  btEntrar.addEventListener("click", async () => {
+  // plano 1000b · UB-102: entrar como suporte com try/catch — falha vira toast e o botão continua utilizável (antes a promessa rejeitava muda)
+  // UB-226: o mesmo caminho serve ao «Ver números» (entra e abre #/config/numeros)
+  async function entrarComo(botao, destino) {
     lembrarVoltaAdmin(`#/admin/clientes/${cli.id}`);      // plano 1000 · AS-248: o «Sair» da faixa de suporte volta para este cliente
-    await ui.carregando(btEntrar, async () => {
-      if (!ctx.shell.clientes().some(c => c.id === cli.id)) await ctx.shell.recarregarSessao();
-      await ctx.shell.escolherCliente(cli.id, { remontar: false });
-    });
-    ctx.navegar("#/");
-  });
+    try {
+      await ui.carregando(botao, (async () => {
+        if (!ctx.shell.clientes().some(c => c.id === cli.id)) await ctx.shell.recarregarSessao();
+        await ctx.shell.escolherCliente(cli.id, { remontar: false });
+      })());
+    } catch (e) {
+      ui.toast(`Não deu para entrar na ${cli.nome}. ${api.mensagemErro(e)}`, { tipo: "erro" });
+      return;
+    }
+    ctx.navegar(destino);
+  }
+  btEntrar.addEventListener("click", () => entrarComo(btEntrar, "#/"));
+  const btNumeros = typeof cli.modulos === "object" && Array.isArray(cli.modulos) && !cli.modulos.includes("conversas") ? null
+    : h("button", { type: "button", class: "bt bt-sec adm-ver-numeros" }, ui.icone("whatsapp"), "Ver números");
+  if (btNumeros) btNumeros.addEventListener("click", () => entrarComo(btNumeros, "#/config/numeros"));
   const btConvite = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("convidar"), "Gerar convite do administrador");
   let convitesPend = [];        // preenchido pela lista de usuários (nx_usuarios_listar → convites)
   btConvite.addEventListener("click", async () => {
@@ -716,21 +787,38 @@ async function telaCliente(ctx, corpo, id) {
     const admins = convitesPend.filter(c => !c.papel || c.papel === "admin");
     if (admins.length && !(await ui.confirmar({ titulo: "Já existe um convite aguardando", rotulo: "Gerar outro link",
       texto: `${admins.length === 1 ? "Há 1 convite de administrador" : `Há ${admins.length} convites de administrador`} ainda não usado${admins.length === 1 ? "" : "s"}. Gerar outro cria um link novo (os anteriores continuam valendo até você revogar em «Usuários com acesso»).` }))) return;
+    // plano 1000b · UB-201: a validade é escolhida antes de gerar (1 a 30 dias, padrão 3) — a mesma régua do convite em Usuários
+    const form = h("form", { class: "pilha", novalidate: true },
+      h("p", null, `Envie para quem vai administrar a ${cli.nome}. O link cria a conta de administrador (ou acrescenta o acesso, se a pessoa já usa o sistema).`),
+      ui.campo({ rotulo: "O link vale por", nome: "dias", tipo: "select", valor: DIAS_CONVITE_ADMIN, opcoes: OPCOES_VALIDADE_CONVITE }));
+    let criado = null;
     try {
-      const r = await ui.carregando(btConvite, api.rpc("nx_convite_criar", { p_cliente: cli.id, p_dados: { papel: "admin", dias: 7 }, p_org: null }));
-      // G5 [H305]: link relativo aberto num host que não serve o app (Pages, localhost) sairia quebrado → aviso no lugar do link
-      const lc = linkConvite(r.link, location);
-      convitesPend.push({ id: r.id || null, papel: "admin", expira_em: r.expira_em || null });   // o próximo clique já sabe que há um aguardando
       await ui.modal({
-        titulo: "Convite do administrador", largura: "m",
-        corpo: h("div", { class: "pilha" },
-          h("p", null, `Envie para quem vai administrar a ${cli.nome}. O link cria a conta de administrador (ou acrescenta o acesso, se a pessoa já usa o sistema).`),
-          lc.link ? ui.blocoLink(lc.link, { rotulo: "Link do convite", textoWhats: `Olá! Aqui está o acesso de administrador da ${cli.nome} no ${ctx.shell.marcaEfetiva().produto}. Crie sua conta por este link:` })
-            : h("div", { class: "aviso aviso-ruim adm-link-ruim", role: "alert" }, ui.icone("alerta"), h("p", null, lc.motivo)),
-          h("p", { class: "fraco" }, `Vale até ${ui.dataHoraBR(r.expira_em)} e só uma vez.`)),
-        acoes: [{ rotulo: "Concluir", tipo: "primario", valor: true }],
+        titulo: "Convite do administrador", corpo: form, largura: "m",
+        acoes: [
+          { rotulo: "Cancelar", tipo: "neutro" },
+          { rotulo: "Gerar link", tipo: "primario", fn: async m => {
+            if (criado) return true;
+            const dias = Number(ui.lerForm(form).dias) || Number(DIAS_CONVITE_ADMIN);
+            const r = await api.rpc("nx_convite_criar", { p_cliente: cli.id, p_dados: { papel: "admin", dias }, p_org: null });
+            criado = r;
+            convitesPend.push({ id: r.id || null, papel: "admin", expira_em: r.expira_em || null });   // o próximo clique já sabe que há um aguardando
+            // G5 [H305]: link relativo aberto num host que não serve o app (Pages, localhost) sairia quebrado → aviso no lugar do link
+            const lc = linkConvite(r.link, typeof location !== "undefined" ? location : null);
+            ui.limpar(m.corpo);
+            m.corpo.append(h("div", { class: "pilha" },
+              lc.link ? ui.blocoLink(lc.link, { rotulo: "Link do convite", textoWhats: `Olá! Aqui está o acesso de administrador da ${cli.nome} no ${ctx.shell.marcaEfetiva().produto}. Crie sua conta por este link:` })
+                : h("div", { class: "aviso aviso-ruim adm-link-ruim", role: "alert" }, ui.icone("alerta"), h("p", null, lc.motivo)),
+              h("p", { class: "fraco" }, `Vale até ${ui.dataHoraBR(r.expira_em)} e só uma vez.`)));
+            const bt = m.el.querySelector(".modal-rod [data-tipo=primario]"); if (bt) bt.textContent = "Concluir";
+            const cancelar = m.el.querySelector(".modal-rod [data-tipo=neutro]"); if (cancelar) cancelar.hidden = true;
+            return false;
+          } },
+        ],
       });
     } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
+    // plano 1000b · UB-202: o convite gerado entra na lista «aguardando» sem recarregar a tela
+    if (criado) pintarConvitesAdmin();
   });
 
   // ---- formulário: acesso ao Órbita, pacote comercial, segmento e especificações
@@ -764,7 +852,8 @@ async function telaCliente(ctx, corpo, id) {
     campoPacoteComercial(ui, comercial.pacote || null, { comercial }),
     // G5 (contrato 9): o interruptor da Nexus. Só aparece quando o servidor diz o estado (cli.ativo) e só a plataforma muda
     superConta && typeof cli.ativo === "boolean" ? comClasse(ui.campo({ rotulo: "Cliente ativo", nome: "ativo", tipo: "interruptor", valor: cli.ativo,
-        ajuda: "Desligado = pausado pela Nexus: o Órbita para de ler os anúncios e de mandar relatórios e alertas deste cliente, o rastreio do site e a vigia do número param, e a equipe dele passa a ver «conta pausada» ao abrir o app (quem já está com ele aberto é bloqueado na próxima leitura da sessão). Os dados ficam guardados; dá para religar a qualquer momento. A situação (ativo, teste, suspenso) é outra coisa: é a do contrato." }), "adm-ativo") : null,
+        // plano 1000b · UB-120: ajuda curta; o detalhe (anúncios, relatórios, rastreio, vigia, sessão aberta) vai no diálogo de confirmação
+        ajuda: "Desligado: a equipe do cliente não entra e as rotinas param. Os dados ficam guardados." }), "adm-ativo") : null,
     h("div", { class: "campo-modulos" }),
     superConta ? h("fieldset", { class: "campo" }, h("legend", null, "Limites extras (só a plataforma)"),
       h("p", { class: "campo-ajuda" }, "Em branco = o limite do plano. 0 bloqueia o recurso (nenhum permitido)."),
@@ -807,7 +896,12 @@ async function telaCliente(ctx, corpo, id) {
   });
   const selSt = form.querySelector("select[name=status]");
   const campoTeste = form.querySelector("[data-campo=teste_ate]");
-  const ajustarTeste = () => { campoTeste.hidden = selSt.value !== "teste"; };
+  const inpTeste = form.querySelector("input[name=teste_ate]");
+  // plano 1000b · UB-109: «Em teste» sempre com data de fim — vazio ganha hoje + 14 dias (e apagar a data vira erro ao salvar)
+  const ajustarTeste = () => {
+    campoTeste.hidden = selSt.value !== "teste";
+    if (selSt.value === "teste" && inpTeste && !inpTeste.value) inpTeste.value = isoMais(ui.hojeSP(), 14);
+  };
   selSt.addEventListener("change", ajustarTeste); ajustarTeste();
 
   form.addEventListener("submit", async ev => {
@@ -816,6 +910,7 @@ async function telaCliente(ctx, corpo, id) {
     const d = ui.lerForm(form);
     if (!d.nome || d.nome.length < 2) return ui.marcarErro(form, "nome", "Informe o nome.");
     if (!/^[a-z0-9-]{2,40}$/.test(d.slug || "")) return ui.marcarErro(form, "slug", "Use de 2 a 40 letras minúsculas, números ou hífen.");
+    if (d.status === "teste" && !d.teste_ate) return ui.marcarErro(form, "teste_ate", "Informe até quando vai o teste.");      // UB-109
     const p = { id: cli.id, nome: d.nome, slug: d.slug, plano: d.plano, status: d.status,
       vertical: verticalAoEditar(d.segmento, segmentoInicial, cli.vertical),      // segmento igual: mantém o modelo escolhido
       teste_ate: d.status === "teste" ? (d.teste_ate || null) : cli.teste_ate, modulos: d.modulos || [],
@@ -829,7 +924,7 @@ async function telaCliente(ctx, corpo, id) {
     if (pedeAtivo !== null) {
       p.ativo = pedeAtivo;
       if (!pedeAtivo && !(await ui.confirmar({ titulo: `Pausar ${cli.nome}?`, rotulo: "Pausar cliente", perigo: true,
-        texto: "O Órbita para de ler os anúncios e de mandar relatórios e alertas deste cliente, o rastreio do site e a vigia do número param, e a equipe dele passa a ver «conta pausada» ao abrir o app. Os dados continuam guardados e dá para religar aqui." }))) return;
+        texto: "O Órbita para de ler os anúncios e de mandar relatórios e alertas deste cliente, o rastreio do site e a vigia do número param, e a equipe dele passa a ver «conta pausada» ao abrir o app (quem já está com ele aberto é bloqueado na próxima leitura da sessão). Os dados continuam guardados e dá para religar aqui. A situação (ativo, teste, suspenso) é outra coisa: é a do contrato." }))) return;
     }
     if ((d.status === "suspenso" || d.status === "cancelado") && d.status !== cli.status) {
       const ok = await ui.confirmar({ titulo: d.status === "suspenso" ? "Suspender o cliente?" : "Cancelar o cliente?",
@@ -838,7 +933,7 @@ async function telaCliente(ctx, corpo, id) {
     }
     try {
       const r = await ui.carregando(form.querySelector("[type=submit]"), api.rpc("nx_cliente_admin_salvar", { p_cliente: p }));
-      cli = r;
+      cli = { ...cli, ...r, uso: r && r.uso ? r.uso : cli.uso };      // UB-111: o uso que a resposta não traz continua o de antes
       segmentoInicial = d.segmento || segmentoInicial;     // o segmento salvo vira a referência (o modelo só muda se mudar de novo)
       if (inpSeg) pintarModelo();
       // por detecção: o servidor que ainda não grava «ativo» devolve o valor antigo — a tela diz a verdade em vez de fingir que pausou
@@ -848,6 +943,8 @@ async function telaCliente(ctx, corpo, id) {
       try { await ctx.shell.recarregarSessao(); } catch { /* ok */ }
       // plano 1000 · AS-162: o cabeçalho e as pílulas se atualizam no lugar — a tela não remonta nem volta ao topo
       pintarCabecalho();
+      pintarUso();          // plano 1000b · UB-111: as barras usam os limites novos (plano ou limites extras) sem recarregar
+      formSalvo = estadoDoForm();      // UB-267: o que está na tela agora é o salvo
       ctx.titulo(cli.nome);
     } catch (e) {
       if (e.codigo === "slug_em_uso") return ui.marcarErro(form, "slug", "Esse endereço já está em uso.");
@@ -857,10 +954,27 @@ async function telaCliente(ctx, corpo, id) {
   });
 
   // ---- uso × limite
-  const usoEl = h("div", { class: "adm-uso" }, CHAVES_LIMITE.map(k => barraUso(ui, k.curto || k.rotulo, cli.uso ? cli.uso[k.chave] : 0, cli.limites ? cli.limites[k.chave] : null)));
+  const usoEl = h("div", { class: "adm-uso" });
+  function pintarUso() { usoEl.replaceChildren(...CHAVES_LIMITE.map(k => barraUso(ui, k.curto || k.rotulo, cli.uso ? cli.uso[k.chave] : 0, cli.limites ? cli.limites[k.chave] : null))); }
+  pintarUso();
+
+  // plano 1000b · UB-267: sair do detalhe («‹ Clientes», menu, voltar do navegador) com o formulário mexido pergunta antes
+  const estadoDoForm = () => { try { return JSON.stringify(ui.lerForm(form)); } catch { return ""; } };
+  let formSalvo = estadoDoForm();
+  if (typeof ctx.aoSairDaRota === "function") {
+    try {
+      const c = ctx.aoSairDaRota(async () => {
+        if (!form.isConnected || estadoDoForm() === formSalvo) return true;
+        return ui.confirmar({ titulo: `Sair sem salvar ${cli.nome}?`, rotulo: "Sair sem salvar", perigo: true,
+          texto: "As mudanças em «Plano e situação» ainda não foram salvas e serão perdidas." });
+      });
+      if (typeof c === "function") _limpeza.push(c);
+    } catch { /* a guarda é um extra */ }
+  }
 
   // ---- usuários com acesso
-  const usuariosEl = h("div", { class: "pilha-p" }, ui.esqueleto("lista", 2));
+  // revisão 1000b · UB-209: esqueleto secundário (o detalhe do cliente já anunciou «Carregando…») — não fala de novo
+  const usuariosEl = h("div", { class: "pilha-p" }, ui.esqueleto("lista", { n: 2, anunciar: false }));
   api.rpc("nx_usuarios_listar", { p_cliente: cli.id }).then(r => {
     ui.limpar(usuariosEl);
     const us = r.usuarios || [];
@@ -874,8 +988,16 @@ async function telaCliente(ctx, corpo, id) {
         u.editavel === false ? null : b));
     }
     convitesPend = Array.isArray(r.convites) ? r.convites : [];
-    if (convitesPend.length) usuariosEl.appendChild(listaConvitesAdmin());
+    usuariosCarregados = true;
+    pintarConvitesAdmin();
   }).catch(e => { ui.limpar(usuariosEl); usuariosEl.appendChild(h("p", { class: "fraco" }, ui.mensagemErro(e))); });
+  /** UB-202: (re)desenha a lista «N convites aguardando» dentro do cartão de usuários. */
+  let usuariosCarregados = false;
+  function pintarConvitesAdmin() {
+    if (!usuariosCarregados) return;          // a lista ainda vai chegar e desenhar com o convite novo (convitesPend já o tem)
+    for (const v of usuariosEl.querySelectorAll(".adm-convites")) v.remove();
+    if (convitesPend.length) usuariosEl.appendChild(listaConvitesAdmin());
+  }
 
   async function linkSenhaSuporte(u) {
     try {
@@ -965,7 +1087,7 @@ async function telaCliente(ctx, corpo, id) {
     h("div", { class: "cartao" },
       h("div", { class: "cartao-cab" },
         h("div", { class: "cel-nome" }, cabAvatar, h("div", null, cabNome, cabPilulas)),
-        h("div", { class: "linha" }, btConvite, btEntrar))),
+        h("div", { class: "linha" }, btConvite, btNumeros, btEntrar))),
     semPacote(cli) ? avisoSemPacote() : null,
     h("div", { class: "adm-det" },
       h("div", { class: "pilha" },
@@ -991,7 +1113,7 @@ export function barraUso(ui, rotulo, uso, limite) { return ui.barraUso(rotulo, u
 export function usoIAPorDia(ctx, cli, { dias = 14 } = {}) {
   const { ui, api } = ctx;
   const h = ui.h;
-  const caixa = h("div", { class: "adm-ia-dia", "aria-live": "polite" }, ui.esqueleto("kpi", 2));
+  const caixa = h("div", { class: "adm-ia-dia", "aria-live": "polite" }, ui.esqueleto("kpi", { n: 2, anunciar: false }));   // revisão 1000b · UB-209
   const pronto = (async () => {
     let r = null, falha = null;
     try { r = resumoUsoIA(await api.rpc("nx_ia_uso_dia", { p_cliente: cli.id, p_dias: dias })); } catch (e) { falha = e; }
@@ -1012,7 +1134,10 @@ export function usoIAPorDia(ctx, cli, { dias = 14 } = {}) {
       h("tbody", null, r.linhas.filter(x => x.chamadas).reverse().map(x => h("tr", null,
         h("th", { scope: "row" }, `${x.dia.slice(8, 10)}/${x.dia.slice(5, 7)}`), h("td", { class: "num mono" }, ui.num(x.chamadas)),
         h("td", { class: "num mono" }, ui.num(x.tokens_in + x.tokens_out)), h("td", { class: "num mono" }, x.custo_usd > 0 ? dolar(x.custo_usd) : "—")))));
-    caixa.append(...[kpis,
+    // plano 1000b · UB-268: a revenda cobra em reais — o custo em dólar diz o que é (estimativa, sem cotação do dia)
+    const notaDolar = ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.super ? null
+      : h("p", { class: "fraco adm-ia-dolar" }, ui.icone("info"), h("span", null, "Custo estimado em dólar (cotação do dia não aplicada)."));
+    caixa.append(...[kpis, notaDolar,
       r.custoIncompleto ? h("p", { class: "fraco adm-ia-dia-nota" }, ui.icone("info"), h("span", null, "Há dias com chamadas sem custo registrado (feitas antes de o custo ser gravado): o custo total está por baixo.")) : null,
       r.chamadas ? h("details", { class: "adm-ia-det" }, h("summary", null, "Ver por dia"), tab) : h("p", { class: "fraco" }, `Nenhuma chamada de IA nos últimos ${r.dias} dias.`)].filter(Boolean));
     return true;
@@ -1053,7 +1178,8 @@ async function telaRevendas(ctx, corpo) {
     if (plat) {
       lista.append(h("div", { class: "cartao rev-plat" },
         h("div", { class: "rev-cab" }, marcaMini(ctx, plat),
-          h("div", { class: "rev-tit" }, h("b", null, plat.nome), h("small", { class: "mono" }, `plataforma · ${plat.empresas} clientes · ${plat.usuarios} usuários`))),
+          h("div", { class: "rev-tit" }, h("b", null, plat.nome), h("small", { class: "mono" },
+            `plataforma · ${contagem(plat.empresas, "cliente", "clientes")} · ${contagem(plat.usuarios, "usuário", "usuários")}`))),      // plano 1000b · UB-105
         h("div", { class: "linha" },
           h("a", { class: "bt bt-sec bt-p", href: "#/config/marca?de=org" }, ui.icone("pincel"), "Marca da plataforma"),
           h("a", { class: "bt bt-fant bt-p", href: `#/admin/clientes?org=${encodeURIComponent(plat.id)}` }, "Ver clientes"))));
@@ -1067,6 +1193,17 @@ async function telaRevendas(ctx, corpo) {
     lista.append(h("div", { class: "rev-grade" }, revs.map(o => cartaoRevenda(ctx, o, carregar))));
   }
   await carregar();
+}
+
+/** plano 1000b · UB-105: «1 cliente», «3 clientes» (sem número vira 0). */
+export function contagem(n, um, varios) { const v = Math.max(0, Number(n) || 0); return `${v} ${v === 1 ? um : varios}`; }
+/** plano 1000b · UB-115: rótulo e cor da situação da revenda (cancelada não é «Suspensa»). */
+export function statusRevenda(status) {
+  return ({ ativo: ["Ativa", "ok"], suspenso: ["Suspensa", "aten"], cancelado: ["Cancelada", "ruim"] })[status] || [status ? String(status) : "—", "neutra"];
+}
+/** plano 1000b · UB-114: as três cores da revenda numa frase para o leitor de tela. */
+export function rotuloCoresRevenda(cores = {}) {
+  return `Cores: primária ${cores.primaria || "padrão"}, secundária ${cores.secundaria || "padrão"}, fundo ${cores.fundo || "padrão"}`;
 }
 
 function marcaMini(ctx, o) {
@@ -1096,9 +1233,10 @@ function cartaoRevenda(ctx, o, recarregar) {
   return h("article", { class: "cartao rev-cartao" },
     h("div", { class: "rev-cab" }, marcaMini(ctx, o),
       h("div", { class: "rev-tit" }, h("b", null, o.nome), h("small", { class: "mono" }, `${ef.produto} · ?org=${o.slug}`)),
-      ui.pilula(o.status === "ativo" ? "Ativa" : "Suspensa", o.status === "ativo" ? "ok" : "aten")),
-    h("div", { class: "rev-cores", "aria-label": "Cores da marca" }, ["primaria", "secundaria", "fundo"].map(k =>
-      h("span", { class: "rev-cor", style: { "--cor": ui.corOk(ef.cores[k]) }, title: `${{ primaria: "Primária", secundaria: "Secundária", fundo: "Fundo" }[k]} ${ef.cores[k]}` }))),
+      ui.pilula(...statusRevenda(o.status))),       // plano 1000b · UB-115
+    // plano 1000b · UB-114: role=img com as três cores no nome (antes aria-label numa div sem papel e cada cor só no title)
+    h("div", { class: "rev-cores", role: "img", "aria-label": rotuloCoresRevenda(ef.cores) }, ["primaria", "secundaria", "fundo"].map(k =>
+      h("span", { class: "rev-cor", "aria-hidden": "true", style: { "--cor": ui.corOk(ef.cores[k]) }, title: `${{ primaria: "Primária", secundaria: "Secundária", fundo: "Fundo" }[k]} ${ef.cores[k]}` }))),
     h("div", { class: "adm-uso" },
       ui.barraUso("Clientes", o.empresas, lim.empresas ?? null),
       ui.barraUso("Usuários", o.usuarios, lim.usuarios ?? null),
@@ -1112,8 +1250,8 @@ async function formRevenda(ctx, o, aoSalvar) {
   const { ui, api } = ctx;
   const h = ui.h;
   const T = ctx.shell.tema;
-  let ps = [];
-  try { ps = (await planos(ctx)).filter(p => p.ativo && p.id !== "interno"); } catch { ps = []; }
+  let ps = [], falhaPlanos = null;
+  try { ps = (await planos(ctx)).filter(p => p.ativo && p.id !== "interno"); } catch (e) { ps = []; falhaPlanos = e; }
   const lim = (o && o.limites) || { empresas: 10, usuarios: 50, canais: 10, plano_padrao: "essencial" };
   const form = h("form", { class: "pilha", novalidate: true },
     h("div", { class: "form-grade" },
@@ -1134,16 +1272,22 @@ async function formRevenda(ctx, o, aoSalvar) {
         ui.campo({ rotulo: "Cor primária", nome: "cor_primaria", tipo: "cor", valor: T.PADRAO.cores.primaria, paleta: ctx.paleta }),
         ui.campo({ rotulo: "Cor secundária", nome: "cor_secundaria", tipo: "cor", valor: T.PADRAO.cores.secundaria, paleta: ctx.paleta }),
         ui.campo({ rotulo: "Cor de fundo", nome: "cor_fundo", tipo: "cor", valor: T.PADRAO.cores.fundo, paleta: T.FUNDOS }))));
+  // plano 1000b · UB-119: sem a lista de planos o «Plano padrão» sairia vazio — o modal diz e não deixa salvar
+  if (falhaPlanos) form.prepend(h("div", { class: "aviso aviso-ruim adm-planos-falha", role: "alert" }, ui.icone("alerta"),
+    h("p", null, `Não deu para carregar os planos: ${api.mensagemErro(falhaPlanos)} Feche e abra de novo para salvar.`)));
   const nome = form.querySelector("input[name=nome]"), slug = form.querySelector("input[name=slug]");
   let slugMexido = !!o;
-  nome.addEventListener("input", () => { if (!slugMexido) slug.value = sugerirSlug(nome.value); });
-  slug.addEventListener("input", () => { slugMexido = true; });
+  // plano 1000b · UB-203: o endereço já usado por outra revenda aparece enquanto digita (a lista nx_orgs_listar já está carregada)
+  const conferirSlug = conferidorSlugRevenda(ctx, slug, o ? o.id : null);
+  nome.addEventListener("input", () => { if (!slugMexido) { slug.value = sugerirSlug(nome.value); conferirSlug(); } });
+  slug.addEventListener("input", () => { slugMexido = true; conferirSlug(); });
 
   const r = await ui.modal({
     titulo: o ? `Editar ${o.nome}` : "Nova revenda", corpo: form, largura: "g",
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro" },
-      { rotulo: o ? "Salvar" : "Criar revenda", tipo: "primario", fn: async () => {
+      { rotulo: o ? "Salvar" : "Criar revenda", tipo: "primario", desabilitado: !!falhaPlanos, fn: async () => {
+        if (falhaPlanos) return false;
         ui.marcarErro(form, null);
         const d = ui.lerForm(form);
         if (!d.nome || d.nome.length < 2) { ui.marcarErro(form, "nome", "Informe o nome."); return false; }
@@ -1176,6 +1320,29 @@ async function formRevenda(ctx, o, aoSalvar) {
     if (aoSalvar) await aoSalvar();
     if (!o) convidarGestor(ctx, r, null);
   }
+}
+
+/** plano 1000b · UB-203: a revenda que já usa o endereço (slug idêntico, sem contar a própria) ou null. */
+export function slugDeRevendaTomado(orgsLista, slug, idProprio = null) {
+  const s = String(slug || "").trim().toLowerCase();
+  if (!s) return null;
+  return (Array.isArray(orgsLista) ? orgsLista : []).find(x => x && x.id !== idProprio && String(x.slug || "").toLowerCase() === s) || null;
+}
+/** UB-203: aviso embaixo do slug da revenda, com 300 ms de pausa, pela lista de orgs em memória (sem nova chamada se já carregou). */
+function conferidorSlugRevenda(ctx, inp, idProprio) {
+  const { ui } = ctx;
+  const campo = inp.closest("[data-campo]") || inp.parentNode;
+  const aviso = ui.h("small", { class: "campo-erro adm-slug-tomado", role: "status", hidden: true });
+  campo.appendChild(aviso);
+  return ui.debounce(async () => {
+    const v = inp.value.trim().toLowerCase();
+    if (!/^[a-z0-9-]{2,40}$/.test(v)) { aviso.hidden = true; return; }
+    let achado = null;
+    try { achado = slugDeRevendaTomado(await orgs(ctx), v, idProprio); } catch { return; }
+    if (inp.value.trim().toLowerCase() !== v) return;
+    aviso.hidden = !achado;
+    aviso.textContent = achado ? `Esse endereço já é da revenda «${achado.nome}». Escolha outro.` : "";
+  }, 300);
 }
 
 async function convidarGestor(ctx, o, botao) {
@@ -1220,6 +1387,32 @@ async function editarMarcaOrg(ctx, o, aoFechar) {
   const corpo = h("div", { class: "pilha" });
   const g = ui.gaveta({ titulo: `Marca · ${o.nome}`, corpo, largura: "g",
     aoFechar: () => { if (limpar) try { limpar(); } catch { /* ok */ } if (aoFechar) aoFechar(); } });
+  // plano 1000b · UB-204: fechar a gaveta (X, voltar, clique fora ou Esc) com cor/logo mexidos e não salvos pergunta antes — editorMarca
+  // expõe .sujo(); a proteção de texto da gaveta não vê troca de cor nem de imagem
+  const sujo = () => !!(limpar && typeof limpar.sujo === "function" && limpar.sujo());
+  let perguntando = false;
+  const perguntarEFechar = async () => {
+    if (perguntando) return;
+    perguntando = true;
+    try {
+      if (await ui.confirmar({ titulo: "Fechar sem salvar a marca?", rotulo: "Fechar sem salvar", perigo: true,
+        texto: `As mudanças da marca da ${o.nome} ainda não foram salvas e serão perdidas.` })) g.fechar();
+    } finally { perguntando = false; }
+  };
+  if (g && g.el && typeof g.el.addEventListener === "function") {
+    g.el.addEventListener("click", ev => {
+      const t = ev.target;
+      const fechar = t === g.el || (t && t.closest && t.closest(".gaveta-x, .gaveta-voltar"));
+      if (!fechar || !sujo()) return;
+      ev.preventDefault(); ev.stopPropagation();
+      perguntarEFechar();
+    }, true);
+    g.el.addEventListener("keydown", ev => {
+      if (ev.key !== "Escape" || !sujo()) return;
+      ev.preventDefault(); ev.stopPropagation();
+      perguntarEFechar();
+    }, true);
+  }
   try {
     const cfg = await modConfig(ctx);
     limpar = await cfg.editorMarca(ctx, corpo, { tipo: "org", org: o });
@@ -1248,6 +1441,7 @@ async function telaPlanos(ctx, corpo) {
     catch (e) { ui.limpar(grade); grade.append(ui.erroCartao(e, carregar)); return; }
     ui.limpar(grade);
     for (const p of ps) grade.append(cartaoPlano(ctx, p, carregar));
+    sujos.clear();
   }
   novo.addEventListener("click", async () => {
     const form = h("form", { class: "pilha", novalidate: true },
@@ -1272,8 +1466,34 @@ async function telaPlanos(ctx, corpo) {
     ] });
     if (r && r.id) { ui.toast("Plano criado desligado. Ajuste preço, limites e módulos e ligue quando estiver pronto.", { tipo: "ok" }); await carregar(); }
   });
+  // plano 1000b · UB-266: cartão de plano mexido e não salvo → sair da tela (Clientes, menu, voltar) pergunta antes
+  const sujos = new Set();
+  grade.addEventListener("input", ev => { const c = ev.target && ev.target.closest ? ev.target.closest(".plano-cartao") : null; if (c) sujos.add(c); });
+  grade.addEventListener("change", ev => { const c = ev.target && ev.target.closest ? ev.target.closest(".plano-cartao") : null; if (c) sujos.add(c); });
+  if (typeof ctx.aoSairDaRota === "function") {
+    try {
+      const c = ctx.aoSairDaRota(async () => {
+        const abertos = [...sujos].filter(x => x.isConnected);
+        if (!abertos.length) return true;
+        return ui.confirmar({ titulo: abertos.length === 1 ? "Sair sem salvar o plano?" : `Sair sem salvar ${abertos.length} planos?`, rotulo: "Sair sem salvar", perigo: true,
+          texto: "Há mudanças de preço, limites ou módulos que ainda não foram salvas e serão perdidas." });
+      });
+      if (typeof c === "function") _limpeza.push(c);
+    } catch { /* a guarda é um extra */ }
+  }
   await carregar();
 }
+
+/** plano 1000b · UB-110: os limites ou os módulos do plano mudaram em relação ao salvo? (sem limite = chave ausente) */
+export function mudouLimitesOuModulos(plano, { limites = {}, modulos = [] } = {}) {
+  const a = (plano && plano.limites) || {};
+  const chaves = new Set([...Object.keys(a), ...Object.keys(limites)]);
+  for (const k of chaves) if ((a[k] ?? null) !== (limites[k] ?? null)) return true;
+  const m1 = [...((plano && plano.modulos) || [])].sort().join(","), m2 = [...modulos].sort().join(",");
+  return m1 !== m2;
+}
+/** UB-110: quantos clientes usam o plano (pela lista do nx_clientes_admin). */
+export function contarClientesDoPlano(itens, planoId) { return (Array.isArray(itens) ? itens : []).filter(it => it && it.plano === planoId).length; }
 
 function cartaoPlano(ctx, p, recarregar) {
   const { ui, api } = ctx;
@@ -1303,6 +1523,14 @@ function cartaoPlano(ctx, p, recarregar) {
     const limites = {};
     for (const k of CHAVES_LIMITE) { const v = d[`lim_${k.chave}`]; if (v !== null && v !== undefined && v !== "" && Number.isFinite(v)) limites[k.chave] = Math.max(0, Math.floor(v)); }
     if (p.id === "interno" && d.ativo === false && !(await ui.confirmar({ titulo: "Desligar o plano Interno?", texto: "Os clientes da plataforma continuam nele; ele só deixa de aparecer para novos clientes.", rotulo: "Desligar" }))) return;
+    // plano 1000b · UB-110: mudar limite ou módulo vale na hora para TODOS os clientes do plano — antes de salvar, diz quantos
+    if (mudouLimitesOuModulos(p, { limites, modulos: d.modulos || [] })) {
+      let n = null;
+      try { n = contarClientesDoPlano(await api.rpc("nx_clientes_admin", { p_filtro: { busca: null, status: null, org_id: null } }), p.id); } catch { /* sem a contagem: pergunta assim mesmo */ }
+      const quem = n === null ? "todos os clientes deste plano" : n === 1 ? "1 cliente" : `${n} clientes`;
+      if (n !== 0 && !(await ui.confirmar({ titulo: n === null ? `Mudar os limites ou módulos do plano ${p.nome}?` : `Afeta ${quem}`, rotulo: "Salvar plano",
+        texto: `A mudança de limites ou módulos vale na hora para ${quem} (exceto os limites extras de cada cliente).` }))) return;
+    }
     try {
       const r = await ui.carregando(form.querySelector("[type=submit]"), api.rpc("nx_plano_salvar", { p_plano: {
         id: p.id, nome: d.nome, preco_mensal: d.preco_mensal, ordem: Number.isFinite(d.ordem) ? Math.max(0, Math.floor(d.ordem)) : 0,
@@ -1325,6 +1553,15 @@ function cartaoPlano(ctx, p, recarregar) {
     form);
 }
 
+/** plano 1000b · UB-265: o endereço da tela de domínios com os filtros. */
+export function hashDominios({ status = "", busca = "" } = {}) {
+  const q = new URLSearchParams();
+  if (status) q.set("status", status);
+  if (busca) q.set("busca", busca);
+  const t = q.toString();
+  return t ? `#/admin/dominios?${t}` : "#/admin/dominios";
+}
+
 /* ---------------- DOMÍNIOS (super: todos, com ativação · gestor: os da org) ---------------- */
 async function telaDominios(ctx, corpo) {
   const { ui, api } = ctx;
@@ -1341,7 +1578,15 @@ async function telaDominios(ctx, corpo) {
   corpo.append(...[
     superConta ? h("div", { class: "aviso" }, ui.icone("info"), h("p", null, "Para ativar: no Netlify, em Domain management → Add a domain alias, adicione o endereço; espere o certificado HTTPS sair e só então clique em Marcar ativo.")) : null,
     h("div", { class: "adm-filtros" }, h("label", { class: "busca" }, ui.icone("busca"), buscaDom), filtro, novo), lista].filter(Boolean));
-  buscaDom.addEventListener("input", ui.debounce(() => desenhar(), 150));
+  // plano 1000b · UB-265: situação e busca vão para o endereço (?status=&busca=, replaceState) — recarregar mantém o filtro
+  const q0 = (ctx.rota && ctx.rota.query) || {};
+  if (["pendente", "ativo"].includes(q0.status)) filtro.value = q0.status;
+  if (q0.busca) buscaDom.value = String(q0.busca);
+  const gravarFiltroDom = () => {
+    const alvoHash = hashDominios({ status: filtro.value, busca: buscaDom.value.trim() });
+    try { if (typeof history !== "undefined" && history.replaceState && typeof location !== "undefined" && location.hash !== alvoHash) history.replaceState(history.state, "", alvoHash); } catch { /* sem histórico */ }
+  };
+  buscaDom.addEventListener("input", ui.debounce(() => { gravarFiltroDom(); desenhar(); }, 150));
   let dados = [], cfg = null;
   async function carregar() {
     ui.limpar(lista); lista.append(ui.esqueleto("cartoes", 2));
@@ -1367,7 +1612,7 @@ async function telaDominios(ctx, corpo) {
       aoStatus: superConta ? async ativo => { dados = cfg.validarListaDominios(await api.rpc("nx_dominio_status", { p_host: d.host, p_ativo: ativo })); ui.toast(ativo ? `${d.host} ativo.` : `${d.host} voltou a pendente.`, { tipo: "ok" }); desenhar(); } : null,
     }));
   }
-  filtro.addEventListener("change", desenhar);
+  filtro.addEventListener("change", () => { gravarFiltroDom(); desenhar(); });
   novo.addEventListener("click", async () => {
     const clientes = ctx.shell.clientes();
     const form = h("form", { class: "pilha", novalidate: true },
@@ -1379,7 +1624,16 @@ async function telaDominios(ctx, corpo) {
       { rotulo: "Cadastrar", tipo: "primario", fn: async () => {
         ui.marcarErro(form, null);
         const d = ui.lerForm(form);
-        try { return await api.rpc("nx_dominio_salvar", { p_host: d.host || "", p_cliente: d.cliente || null }); }
+        // plano 1000b · UB-106/UB-107: a mesma limpeza e as mesmas checagens das Configurações (protocolo, barra, maiúsculas; domínio raiz)
+        const c = cfg || (cfg = await modConfig(ctx));
+        const host = c.normalizarHost(d.host);
+        const erroHost = c.erroHostDominio(host, typeof location !== "undefined" ? location.hostname : "");
+        if (erroHost) { ui.marcarErro(form, "host", erroHost); return false; }
+        if (c.ehDominioRaiz(host) && !(await ui.confirmar({ titulo: "Isso parece um domínio raiz", rotulo: "Usar mesmo assim",
+          texto: `«${host}» não aceita CNAME na maioria dos provedores, e sem CNAME o domínio não ativa. Prefira um subdomínio, como crm.${host} ou app.${host}.` }))) {
+          ui.marcarErro(form, "host", `Use um subdomínio, como crm.${host}.`); return false;
+        }
+        try { return await api.rpc("nx_dominio_salvar", { p_host: host, p_cliente: d.cliente || null }); }
         catch (e) {
           if (e.codigo === "dominio_invalido" || e.codigo === "dominio_em_uso") { ui.marcarErro(form, "host", api.mensagemErro(e)); return false; }
           throw e;
@@ -1399,8 +1653,9 @@ function cartaoDominiosCliente(ctx, cli) {
   if (!ctx.pronto("admin_revendas")) return null;
   const { ui, api } = ctx;
   const h = ui.h;
-  const lista = h("div", { class: "pilha-p" }, ui.esqueleto("lista", 1));
-  const host = h("input", { type: "text", placeholder: `crm.${cli.slug}.com.br`, "aria-label": `Novo domínio para ${cli.nome}`, autocomplete: "off" });
+  const lista = h("div", { class: "pilha-p" }, ui.esqueleto("lista", { n: 1, anunciar: false }));   // revisão 1000b · UB-209: cartão dentro do detalhe
+  // plano 1000b · UB-205: placeholder genérico (o slug do cliente não é um domínio que ele tenha)
+  const host = h("input", { type: "text", placeholder: "crm.empresadocliente.com.br", "aria-label": `Novo domínio para ${cli.nome}`, autocomplete: "off", inputmode: "url" });
   const bt = h("button", { type: "submit", class: "bt bt-sec bt-p" }, ui.icone("mais"), "Adicionar");
   const erro = h("small", { class: "campo-erro", role: "alert", hidden: true });
   const form = h("form", { class: "dom-add", novalidate: true }, host, bt);
@@ -1423,7 +1678,19 @@ function cartaoDominiosCliente(ctx, cli) {
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     erro.hidden = true;
-    try { await ui.carregando(bt, api.rpc("nx_dominio_salvar", { p_host: host.value, p_cliente: cli.id })); host.value = ""; ui.toast("Domínio cadastrado. Veja a instrução de DNS em Admin → Domínios.", { tipo: "ok" }); carregar(); }
+    try {
+      // plano 1000b · UB-108: a mesma limpeza (HTTPS://Crm.X.com.br/ → crm.x.com.br) e a checagem de domínio raiz do UB-106/UB-107
+      const c = await modConfig(ctx);
+      const limpo = c.normalizarHost(host.value);
+      const erroHost = c.erroHostDominio(limpo, typeof location !== "undefined" ? location.hostname : "");
+      if (erroHost) { erro.textContent = erroHost; erro.hidden = false; host.focus(); return; }
+      if (c.ehDominioRaiz(limpo) && !(await ui.confirmar({ titulo: "Isso parece um domínio raiz", rotulo: "Usar mesmo assim",
+        texto: `«${limpo}» não aceita CNAME na maioria dos provedores, e sem CNAME o domínio não ativa. Prefira um subdomínio, como crm.${limpo}.` }))) {
+        erro.textContent = `Use um subdomínio, como crm.${limpo}.`; erro.hidden = false; return;
+      }
+      await ui.carregando(bt, api.rpc("nx_dominio_salvar", { p_host: limpo, p_cliente: cli.id }));
+      host.value = ""; ui.toast("Domínio cadastrado. Veja a instrução de DNS em Admin → Domínios.", { tipo: "ok" }); carregar();
+    }
     catch (e) { erro.textContent = api.mensagemErro(e); erro.hidden = false; }
   });
   carregar();

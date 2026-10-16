@@ -64,10 +64,31 @@ export function faixasSobrepostas(faixas) {
   for (let i = 1; i < ord.length; i++) if (ord[i][0] < ord[i - 1][1]) return [ord[i - 1], ord[i]];
   return null;
 }
+/** Plano 1000b · CB-161: um bloqueio salvo ({inicio, fim, motivo}) → os campos da janela {data, data_fim, das, ate, motivo} no fuso de São Paulo.
+    Dia inteiro (00:00 → 00:00): sem horários; data_fim só quando passa de um dia. */
+export function camposDoBloqueio(b) {
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const partes = ms => { const p = Object.fromEntries(fmt.formatToParts(new Date(ms)).map(x => [x.type, x.value])); return { dia: `${p.year}-${p.month}-${p.day}`, hora: `${p.hour}:${p.minute}` }; };
+  const i = Date.parse(b && b.inicio), f = Date.parse(b && b.fim);
+  if (!Number.isFinite(i) || !Number.isFinite(f) || f <= i) return { data: "", data_fim: "", das: "", ate: "", motivo: (b && b.motivo) || "" };
+  const a = partes(i), z = partes(f), ultimo = partes(f - 1);
+  const diaInteiro = a.hora === "00:00" && z.hora === "00:00";
+  return { data: a.dia, data_fim: diaInteiro && ultimo.dia !== a.dia ? ultimo.dia : "", das: diaInteiro ? "" : a.hora, ate: diaInteiro ? "" : z.hora, motivo: (b && b.motivo) || "" };
+}
 /** CA-211: a data inicial do bloqueio não pode ter passado (o bloqueio de ontem não aparece na lista e confunde). */
 export function dataBloqueioPassada(data, hoje) { return !!data && !!hoje && String(data) < String(hoje); }
+/** Plano 1000b · CB-146: as leituras da agenda para conferir um bloqueio longo — blocos de até 31 dias (o limite da nx_agenda_dia) até a data
+    final, no máximo 6 (≈ 6 meses). → [{p_data, p_dias}] */
+export function blocosDeLeitura(data, dataFim = null, max = 6) {
+  const total = Math.max(1, Math.round((Date.parse(`${dataFim || data}T12:00:00Z`) - Date.parse(`${data}T12:00:00Z`)) / 864e5) + 1);
+  const out = [];
+  for (let feito = 0; feito < total && out.length < max; feito += 31) out.push({ p_data: somarDias(data, feito), p_dias: Math.min(31, total - feito) });
+  return out;
+}
+/** Plano 1000b · CB-160: o nome do serviço sem caixa nem acento (a mesma regra do normServico da agenda.js). */
+export const chaveServico = s => String(s || "").trim().normalize("NFD").replace(/[̀-ͯ]/g, "").toLocaleLowerCase("pt-BR");
 /** CA-210: as consultas que caem no período do bloqueio — dias [data, data_fim] e, com horário, só as que cruzam [das, ate). */
-export function consultasNoBloqueio(consultas, { data, data_fim = null, das = null, ate = null } = {}) {
+export function consultasNoBloqueio(consultas, { data, data_fim = null, das = null, ate = null, duracao = 30 } = {}) {
   const fim = data_fim || data;
   const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   return (Array.isArray(consultas) ? consultas : []).filter(c => {
@@ -78,18 +99,32 @@ export function consultasNoBloqueio(consultas, { data, data_fim = null, das = nu
     if (dia < data || dia > fim) return false;
     if (!das || !ate) return true;
     const tf = Date.parse(c.fim);
-    const horaFim = Number.isFinite(tf) ? (() => { const q = Object.fromEntries(fmt.formatToParts(new Date(tf)).map(x => [x.type, x.value])); return `${q.hour}:${q.minute}`; })() : hora;
+    // plano 1000b · CB-147: consulta sem fim ocupa a duração padrão (antes contava como um instante: 07:30 sem fim «não caía» em 08–10)
+    const fimMs = Number.isFinite(tf) ? tf : t + Math.max(5, Number(duracao) || 30) * 60000;
+    const q = Object.fromEntries(fmt.formatToParts(new Date(fimMs)).map(x => [x.type, x.value]));
+    const horaFim = `${q.year}-${q.month}-${q.day}` > dia ? "24:00" : `${q.hour}:${q.minute}`;
     return hora < ate && (horaFim > das || hora >= das);
   });
 }
 
+/** Plano 1000b · CB-154: tira a linha e leva o foco para o «remover» da linha anterior (ou da seguinte); lista vazia → `reserva()` (o «Adicionar…»). */
+export function removerComFoco(linha, reserva = null) {
+  const pai = linha && linha.parentNode;
+  const irmas = pai ? [...pai.children] : [];
+  const i = irmas.indexOf(linha);
+  const vizinha = irmas[i - 1] || irmas[i + 1] || null;
+  if (linha) linha.remove();
+  const alvo = (vizinha && (vizinha.querySelector(".agc-remover") || vizinha.querySelector("input"))) || (typeof reserva === "function" ? reserva() : null);
+  if (alvo) try { alvo.focus(); } catch { /* ok */ }
+  return alvo;
+}
 function listaFaixas(h, ui, dia, faixas, habilitado) {
   const caixa = h("div", { class: "agc-faixas", hidden: !habilitado });
   const linhas = h("div", { class: "agc-faixas-linhas" });   // as faixas ficam antes dos botões (adicionar não cai depois de «Adicionar horário»)
   function adicionar([de = "08:00", ate = "18:00"] = []) {
     const inicio = h("input", { type: "time", value: de, step: 300, "aria-label": `${dia}: início do horário` });
     const fim = h("input", { type: "time", value: ate, step: 300, "aria-label": `${dia}: fim do horário` });
-    const remover = h("button", { type: "button", class: "bt-icone agc-remover", "aria-label": `Remover faixa de ${dia}`, on: { click: () => linha.remove() } }, ui.icone("fechar"));
+    const remover = h("button", { type: "button", class: "bt-icone agc-remover", "aria-label": `Remover faixa de ${dia}`, on: { click: () => removerComFoco(linha, () => add) } }, ui.icone("fechar"));   // CB-154
     const linha = h("div", { class: "agc-faixa" }, inicio, h("span", null, "até"), fim, remover);
     linhas.appendChild(linha);
   }
@@ -152,11 +187,11 @@ export function feriadosParaBloquear(hoje, bloqueios = []) {
   return [...feriadosNacionais(ano), ...feriadosNacionais(ano + 1)].filter(x => x.data >= hoje && !dias.some(([a, b]) => a <= x.data && x.data <= b));
 }
 
-function linhaIntervalo(h, ui, de = "12:00", ate = "13:00", rotulo = "Intervalo") {
+function linhaIntervalo(h, ui, de = "12:00", ate = "13:00", rotulo = "Intervalo", reserva = null) {
   const inicio = h("input", { type: "time", value: de, step: 300, "aria-label": `${rotulo}: início` });
   const fim = h("input", { type: "time", value: ate, step: 300, "aria-label": `${rotulo}: fim` });
   const linha = h("div", { class: "agc-faixa" }, inicio, h("span", null, "até"), fim,
-    h("button", { type: "button", class: "bt-icone agc-remover", "aria-label": `Remover ${rotulo.toLowerCase()}`, on: { click: () => linha.remove() } }, ui.icone("fechar")));
+    h("button", { type: "button", class: "bt-icone agc-remover", "aria-label": `Remover ${rotulo.toLowerCase()}`, on: { click: () => removerComFoco(linha, reserva) } }, ui.icone("fechar")));   // CB-154
   return linha;
 }
 
@@ -177,11 +212,14 @@ async function secaoAgenda(ctx, alvo) {
     h("p", { class: "sub" }, "Defina quando sua equipe atende, quanto tempo cada serviço ocupa e quando a agenda deve ficar fechada."));
   alvo.replaceChildren(top, raiz);
   // CA-213: mudou algo e ainda não salvou? Trocar de seção ou de tela pergunta antes (config.js lê pendente/podeSair)
-  let sujo = false;
-  const marcarSujo = () => { sujo = true; };
+  let sujo = false, barraSujo = null;
+  const marcarSujo = () => { sujo = true; if (barraSujo) barraSujo.hidden = false; };   // CB-202: a barra fixa aparece
 
-  const usarAgenda = ui.campo({ tipo: "interruptor", nome: "usar_horario", rotulo: "Definir horários nesta agenda", valor: cfg.horario_fonte === "agenda",
-    ajuda: cfg.horario_fonte === "departamento" ? "No momento, os horários vêm do departamento padrão." : cfg.horario_fonte === "padrao" ? "No momento, vale o padrão de segunda a sexta, das 8h às 18h." : "Desligado, a agenda usa o horário do departamento padrão." });
+  const usarAgenda = ui.campo({ tipo: "interruptor", nome: "usar_horario", rotulo: "Definir horários nesta agenda", valor: cfg.horario_fonte === "agenda" });
+  // plano 1000b · CB-180: a ajuda acompanha o interruptor (antes ficava «os horários vêm do departamento» mesmo depois de ligar)
+  const ajudaFonte = h("p", { class: "campo-ajuda agc-fonte-ajuda", id: "agc-fonte-ajuda", "aria-live": "polite" });
+  const textoFonte = ligado => (ligado ? "Os horários abaixo valem para a agenda (e para a IA que marca consultas)."
+    : cfg.horario_fonte === "padrao" ? "Desligado: vale o padrão de segunda a sexta, das 8h às 18h." : "Desligado: a agenda usa o horário do departamento padrão.");
   const gradeDias = h("div", { class: "agc-dias" });
   const controlesDia = [];
   for (const [id, nome] of DIAS) {
@@ -202,6 +240,8 @@ async function secaoAgenda(ctx, alvo) {
   function copiarParaUteis(deId) {
     const origem = controlesDia.find(d => d.id === deId);
     const faixas = origem.linhas.ler();
+    // plano 1000b · CB-158: guarda como estavam os outros dias úteis — o aviso oferece «Desfazer»
+    const antes = controlesDia.filter(d => d.id !== deId && ["1", "2", "3", "4", "5"].includes(d.id)).map(d => ({ d, ligada: d.ligada.checked, faixas: d.linhas.ler() }));
     for (const d of controlesDia) {
       if (d.id === deId || !["1", "2", "3", "4", "5"].includes(d.id)) continue;
       d.ligada.checked = faixas.length > 0;
@@ -211,20 +251,36 @@ async function secaoAgenda(ctx, alvo) {
     }
     marcarSujo();
     pintarPrevia();
-    ui.toast(`Horário de ${origem.nome} copiado para os dias úteis.`, { tipo: "ok" });
+    const texto = `Horário de ${origem.nome} copiado para os dias úteis.`;
+    if (typeof ui.acaoComDesfazer !== "function") { ui.toast(texto, { tipo: "ok" }); return; }
+    ui.acaoComDesfazer({ texto, reverter: () => {
+      for (const x of antes) { x.d.ligada.checked = x.ligada; x.d.linhas.caixa.hidden = !x.ligada; x.d.linhas.definir(x.faixas); x.d.erroDia.hidden = true; }
+      marcarSujo();
+      pintarPrevia();
+    } });
   }
 
   const intervalos = h("div", { class: "agc-intervalos" });
+  // plano 1000b · CB-201: com o horário do departamento a grade some, mas as pausas continuam valendo (e são salvas) — o aviso diz isso
+  const avisoPausas = h("p", { class: "campo-ajuda agc-aviso-pausas", hidden: true }, "As pausas valem também com o horário do departamento.");
   const pausas = Array.isArray(cfg.intervalos) ? cfg.intervalos : [];
-  for (const faixa of pausas) intervalos.appendChild(linhaIntervalo(h, ui, faixa[0], faixa[1]));
-  const addIntervalo = h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => intervalos.appendChild(linhaIntervalo(h, ui)) } }, ui.icone("mais"), "Adicionar intervalo");
+  const reservaPausa = () => addIntervalo;   // CB-154: sem pausa nenhuma, o foco vai para «Adicionar intervalo»
+  for (const faixa of pausas) intervalos.appendChild(linhaIntervalo(h, ui, faixa[0], faixa[1], "Intervalo", reservaPausa));
+  const addIntervalo = h("button", { type: "button", class: "bt bt-fant bt-p agc-add-intervalo", on: { click: () => intervalos.appendChild(linhaIntervalo(h, ui, undefined, undefined, "Intervalo", reservaPausa)) } }, ui.icone("mais"), "Adicionar intervalo");
 
   const duracoes = h("div", { class: "agc-duracoes" });
   function adicionarDuracao(nome = "", minutos = cfg.duracao_min || 30) {
     const servico = h("input", { type: "text", value: nome, maxlength: 60, placeholder: "Nome do serviço", "aria-label": "Nome do serviço" });
-    const tempo = h("input", { type: "number", min: 5, max: 480, step: 5, value: String(minutos), "aria-label": `Duração em minutos para ${nome || "o serviço"}` });
-    const linha = h("div", { class: "agc-duracao" }, servico, h("label", null, "min", tempo),
-      h("button", { type: "button", class: "bt-icone agc-remover", "aria-label": `Remover duração de ${nome || "serviço"}`, on: { click: () => linha.remove() } }, ui.icone("fechar")));
+    const tempo = h("input", { type: "number", min: 5, max: 480, step: 5, value: String(minutos), "aria-label": `Duração em minutos para ${nome || "o serviço"}`,
+      dataset: { inicial: String(minutos) } });   // plano 1000b · CB-145: linha em branco só avisa se a duração foi mexida
+    const remover = h("button", { type: "button", class: "bt-icone agc-remover", "aria-label": `Remover duração de ${nome || "serviço"}`, on: { click: () => removerComFoco(linha, () => addDuracao) } }, ui.icone("fechar"));   // CB-154
+    const linha = h("div", { class: "agc-duracao" }, servico, h("label", null, "min", tempo), remover);
+    // plano 1000b · CB-155: os rótulos acompanham o nome digitado (as linhas novas ficavam «Remover duração de serviço»)
+    servico.addEventListener("input", () => {
+      const n = servico.value.trim();
+      tempo.setAttribute("aria-label", `Duração em minutos para ${n || "o serviço"}`);
+      remover.setAttribute("aria-label", `Remover duração de ${n || "serviço"}`);
+    });
     duracoes.appendChild(linha);
   }
   for (const [nome, minutos] of Object.entries(cfg.duracoes || {})) adicionarDuracao(nome, minutos);
@@ -251,26 +307,38 @@ async function secaoAgenda(ctx, alvo) {
     avisoPasso.hidden = !txt;
   }
   const btSalvar = h("button", { type: "submit", class: "bt bt-prim agc-salvar" }, ui.icone("check"), "Salvar agenda");
+  // plano 1000b · CB-202: o «Salvar agenda» fica no fim de um formulário longo — com mudança não salva, uma barra fixa embaixo leva o salvar junto
+  barraSujo = h("div", { class: "agc-barra-sujo", hidden: true },
+    h("span", { class: "agc-barra-sujo-txt" }, "Alterações não salvas"), h("button", { type: "submit", class: "bt bt-prim bt-p agc-barra-salvar" }, "Salvar"));
   const form = h("form", { class: "pilha agc-form", novalidate: true },
     h("section", { class: "cartao pilha" },
       h("div", { class: "cartao-cab" }, h("div", null, h("h3", { class: "titulo-sec" }, "Disponibilidade"), h("p", { class: "sub" }, "Os horários livres são calculados no fuso de São Paulo."))),
-      usarAgenda, gradeDias, previaCaixa,
-      h("div", { class: "pilha-p" }, h("div", null, h("h4", null, "Pausas e almoço"), h("p", { class: "sub" }, "Intervalos aplicados a todos os dias de atendimento.")), intervalos, addIntervalo)),
+      usarAgenda, ajudaFonte, gradeDias, previaCaixa,
+      h("div", { class: "pilha-p" }, h("div", null, h("h4", null, "Pausas e almoço"), h("p", { class: "sub" }, "Intervalos aplicados a todos os dias de atendimento.")), avisoPausas, intervalos, addIntervalo)),
     h("section", { class: "cartao pilha" },
       h("div", { class: "cartao-cab" }, h("div", null, h("h3", { class: "titulo-sec" }, "Duração e capacidade"), h("p", { class: "sub" }, "Ajuste o tempo por serviço. O padrão é usado quando um serviço não tem duração própria."))),
       h("div", { class: "form-grade" },
         campoDuracao,
-        ui.campo({ rotulo: "Atendimentos no mesmo horário", nome: "capacidade", tipo: "numero", valor: cfg.capacidade || 1, min: 1, max: 50 }),
+        ui.campo({ rotulo: "Atendimentos no mesmo horário", nome: "capacidade", tipo: "numero", valor: cfg.capacidade || 1, min: 1, max: 50,
+          ajuda: "Ex.: 2 = duas cadeiras ou salas atendendo ao mesmo tempo." }),   // plano 1000b · CB-188
         ui.campo({ rotulo: "Antecedência mínima (horas)", nome: "antecedencia_horas", tipo: "numero", valor: cfg.antecedencia_horas ?? 2, min: 0, max: 720,
           ajuda: "Ex.: 2 = ninguém (nem a IA) marca consulta para as próximas 2 horas." }),
-        ui.campo({ rotulo: "Agendamento até (dias à frente)", nome: "dias_a_frente", tipo: "numero", valor: cfg.dias_a_frente || 30, min: 1, max: 180 }),
+        ui.campo({ rotulo: "Agendamento até (dias à frente)", nome: "dias_a_frente", tipo: "numero", valor: cfg.dias_a_frente || 30, min: 1, max: 180,
+          ajuda: "Ex.: 30 = ninguém (nem a IA) marca para depois de 30 dias." }),   // plano 1000b · CB-187
         campoPasso),
       avisoPasso,
       h("div", { class: "pilha-p" }, h("div", null, h("h4", null, "Duração por serviço"), h("p", { class: "sub" }, "Ex.: avaliação 30 min, limpeza 45 min. Até 30 serviços.")), duracoes, addDuracao),
-      h("div", { class: "linha linha-fim" }, btSalvar)));
+      h("div", { class: "linha linha-fim" }, btSalvar)),
+    barraSujo);
 
   const fonteAgenda = usarAgenda.querySelector("input");
-  const fonteToggle = () => { gradeDias.hidden = !fonteAgenda.checked; pintarPrevia(); };
+  fonteAgenda.setAttribute("aria-describedby", [fonteAgenda.getAttribute("aria-describedby"), "agc-fonte-ajuda"].filter(Boolean).join(" "));
+  const fonteToggle = () => {
+    gradeDias.hidden = !fonteAgenda.checked;
+    ajudaFonte.textContent = textoFonte(fonteAgenda.checked);       // CB-180
+    avisoPausas.hidden = fonteAgenda.checked;                        // CB-201
+    pintarPrevia();
+  };
   fonteAgenda.addEventListener("change", fonteToggle);
   fonteToggle();
   conferirPasso();
@@ -296,10 +364,24 @@ async function secaoAgenda(ctx, alvo) {
     const antecedencia = numero("antecedencia_horas");
     const dias = numero("dias_a_frente");
     const passoTxt = dados.passo_min == null || dados.passo_min === "" ? null : Number(dados.passo_min);
-    if (!Number.isInteger(duracao) || duracao < 5 || duracao > 480) return ui.toast("A duração padrão deve ficar entre 5 e 480 minutos.", { tipo: "erro" });
-    if (!Number.isInteger(capacidade) || capacidade < 1 || capacidade > 50) return ui.toast("A capacidade deve ficar entre 1 e 50 atendimentos.", { tipo: "erro" });
-    if (![antecedencia, dias].every(Number.isInteger) || antecedencia < 0 || antecedencia > 720 || dias < 1 || dias > 180) return ui.toast("Confira a antecedência e o limite de dias da agenda.", { tipo: "erro" });
-    if (passoTxt !== null && (!Number.isInteger(passoTxt) || passoTxt < 5 || passoTxt > 480)) return ui.toast("O intervalo entre horários deve ficar entre 5 e 480 minutos.", { tipo: "erro" });
+    // plano 1000b · CB-156: o erro dos números marca o campo (ui.marcarErro: aria-invalid e texto junto dele) e leva o foco até ele
+    const errosNum = [
+      !Number.isInteger(duracao) || duracao < 5 || duracao > 480 ? ["duracao_min", "A duração padrão deve ficar entre 5 e 480 minutos."] : null,
+      !Number.isInteger(capacidade) || capacidade < 1 || capacidade > 50 ? ["capacidade", "A capacidade deve ficar entre 1 e 50 atendimentos."] : null,
+      !Number.isInteger(antecedencia) || antecedencia < 0 || antecedencia > 720 ? ["antecedencia_horas", "A antecedência deve ficar entre 0 e 720 horas."] : null,
+      !Number.isInteger(dias) || dias < 1 || dias > 180 ? ["dias_a_frente", "O limite de dias deve ficar entre 1 e 180."] : null,
+      passoTxt !== null && (!Number.isInteger(passoTxt) || passoTxt < 5 || passoTxt > 480) ? ["passo_min", "O intervalo entre horários deve ficar entre 5 e 480 minutos."] : null,
+    ].filter(Boolean);
+    if (errosNum.length) {
+      for (const [nome, texto] of errosNum) {
+        ui.marcarErro(form, nome, texto);
+        const el = form.querySelector(`[name="${nome}"]`);
+        if (el) el.setAttribute("aria-invalid", "true");
+      }
+      const primeiro = form.querySelector(`[name="${errosNum[0][0]}"]`);
+      if (primeiro) try { primeiro.focus(); } catch { /* ok */ }
+      return ui.toast(errosNum[0][1], { tipo: "erro" });
+    }
 
     const horario = Object.fromEntries(controlesDia.map(d => [d.id, d.ligada.checked ? d.linhas.ler() : []]));
     for (const d of controlesDia) { d.erroDia.hidden = true; d.erroDia.textContent = ""; }
@@ -325,19 +407,34 @@ async function secaoAgenda(ctx, alvo) {
       if (campo) try { campo.focus(); } catch { /* ok */ }
       return ui.toast(`Os horários de ${DIAS[Number(d.id)][1]} se sobrepõem.`, { tipo: "erro" });
     }
-    const pausasSalvas = [...intervalos.querySelectorAll(".agc-faixa")].map(l => [...l.querySelectorAll("input")].map(x => x.value));
-    if (pausasSalvas.some(([a, b]) => !a || !b || a >= b)) return ui.toast("Confira os horários dos intervalos.", { tipo: "erro" });
+    const linhasPausa = [...intervalos.querySelectorAll(".agc-faixa")];
+    const pausasSalvas = linhasPausa.map(l => [...l.querySelectorAll("input")].map(x => x.value));
+    // plano 1000b · CB-157: diz QUAL pausa está errada e marca a linha (aria-invalid no campo, foco nele)
+    const iPausa = pausasSalvas.findIndex(([a, b]) => !a || !b || a >= b);
+    if (iPausa >= 0) {
+      const [a, b] = pausasSalvas[iPausa];
+      const campo = linhasPausa[iPausa].querySelectorAll("input")[!a ? 0 : 1];
+      if (campo) { campo.setAttribute("aria-invalid", "true"); try { campo.focus(); } catch { /* ok */ } }
+      return ui.toast(`Pausa ${iPausa + 1}: ${!a ? "preencha o início." : !b ? "preencha o fim." : "o fim precisa ser depois do início."}`, { tipo: "erro" });
+    }
     const duracoesSalvas = {};
+    const vazias = [];
     for (const linha of duracoes.querySelectorAll(".agc-duracao")) {
       const [campoNome, campoTempo] = linha.querySelectorAll("input");
       const nome = campoNome.value.trim();
-      if (!nome) { if (campoTempo.value) return ui.toast("Informe o nome de cada serviço com duração própria.", { tipo: "erro" }); continue; }
-      const chave = nome.toLocaleLowerCase("pt-BR");
+      // plano 1000b · CB-145: linha em branco (o «Adicionar serviço» sem nome) é ignorada e sai; só avisa se a duração foi mexida
+      if (!nome) {
+        const mexida = campoTempo.value && campoTempo.value !== (campoTempo.dataset.inicial ?? campoTempo.getAttribute("data-inicial"));
+        if (mexida) { campoNome.setAttribute("aria-invalid", "true"); try { campoNome.focus(); } catch { /* ok */ } return ui.toast("Informe o nome de cada serviço com duração própria.", { tipo: "erro" }); }
+        vazias.push(linha); continue;
+      }
+      const chave = chaveServico(nome);     // plano 1000b · CB-160: «Avaliação» e «Avaliacao» são o mesmo serviço
       const minutos = Number(campoTempo.value);
-      if (!Number.isInteger(minutos) || minutos < 5 || minutos > 480) return ui.toast(`A duração de “${nome}” deve ficar entre 5 e 480 minutos.`, { tipo: "erro" });
-      if (Object.keys(duracoesSalvas).some(s => s.toLocaleLowerCase("pt-BR") === chave)) return ui.toast(`O serviço “${nome}” aparece mais de uma vez.`, { tipo: "erro" });
+      if (!Number.isInteger(minutos) || minutos < 5 || minutos > 480) { campoTempo.setAttribute("aria-invalid", "true"); try { campoTempo.focus(); } catch { /* ok */ } return ui.toast(`A duração de “${nome}” deve ficar entre 5 e 480 minutos.`, { tipo: "erro" }); }
+      if (Object.keys(duracoesSalvas).some(s => chaveServico(s) === chave)) { campoNome.setAttribute("aria-invalid", "true"); try { campoNome.focus(); } catch { /* ok */ } return ui.toast(`O serviço “${nome}” aparece mais de uma vez.`, { tipo: "erro" }); }
       duracoesSalvas[nome] = minutos;
     }
+    for (const l of vazias) l.remove();
     if (Object.keys(duracoesSalvas).length > 30) return ui.toast("A agenda aceita até 30 durações por serviço.", { tipo: "erro" });
     const cfgNova = {
       duracao_min: duracao, capacidade, antecedencia_horas: antecedencia, dias_a_frente: dias,
@@ -349,6 +446,7 @@ async function secaoAgenda(ctx, alvo) {
       // CA-212: a seção NÃO é redesenhada (a rolagem e o foco ficavam no topo): o estado é atualizado e o «Salvar» confirma com o check
       if (salvo && typeof salvo === "object" && Array.isArray(salvo.bloqueios)) { estado = salvo; desenharBloqueios(); }
       sujo = false;
+      barraSujo.hidden = true;     // CB-202
       ui.toast("Agenda salva.", { tipo: "ok" });
       try { btSalvar.focus({ preventScroll: true }); } catch { btSalvar.focus(); }
       if (typeof ui.checkSucesso === "function") ui.checkSucesso(btSalvar, { texto: "Agenda salva" });
@@ -367,14 +465,24 @@ async function secaoAgenda(ctx, alvo) {
     if (!futuros.length) listaBloqueios.appendChild(h("p", { class: "sub" }, "Nenhum bloqueio futuro."));
     for (const b of futuros) {
       const excluir = h("button", { type: "button", class: "bt bt-fant bt-p", "aria-label": `Remover bloqueio de ${ui.dataHoraBR(b.inicio)}`, on: { click: () => removerBloqueio(b, excluir) } }, ui.icone("lixeira"), "Remover");
+      // plano 1000b · CB-161: «Editar» abre a mesma janela preenchida (o servidor atualiza pelo id; o aviso de consultas vale igual)
+      const editar = h("button", { type: "button", class: "bt bt-fant bt-p agc-editar-bloqueio", "aria-label": `Editar bloqueio de ${ui.dataHoraBR(b.inicio)}`, on: { click: () => criarBloqueio(b) } }, "Editar");
       listaBloqueios.appendChild(h("article", { class: "agc-bloqueio", role: "listitem", dataset: { id: b.id } },
-        h("div", null, h("b", null, b.motivo || "Bloqueio"), h("small", null, ui.periodoBR(b.inicio, b.fim, " — "))), excluir));
+        h("div", null, h("b", null, b.motivo || "Bloqueio"), h("small", null, ui.periodoBR(b.inicio, b.fim, " — "))), h("div", { class: "linha agc-bloqueio-acoes" }, editar, excluir)));
     }
     if (todos.length > futuros.length) {
       const resto = todos.length - futuros.length;
-      listaBloqueios.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p agc-ver-mais", on: { click: () => { mostrar += POR_PAGINA; desenharBloqueios(); } } },
+      // plano 1000b · CB-198: o botão some ao redesenhar — o foco vai para o 1º bloqueio novo (antes caía no body)
+      listaBloqueios.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p agc-ver-mais", on: { click: () => { const ja = futuros.length; mostrar += POR_PAGINA; desenharBloqueios(); focarBloqueio(ja); } } },
         `Ver mais ${Math.min(resto, POR_PAGINA)} de ${resto}`));
     }
+  }
+  /** CB-198: foco no bloqueio de índice `i` da lista (o botão «Remover» dele); sem ele, o anterior; sem nenhum, o «Bloquear horário». */
+  function focarBloqueio(i) {
+    const itens = listaBloqueios.querySelectorAll(".agc-bloqueio");
+    const alvo = itens[Math.min(i, itens.length - 1)];
+    const bt = alvo ? (alvo.querySelector(".agc-editar-bloqueio") || alvo.querySelector("button")) : btBloqueio;   // (só chamada depois de a seção montar)
+    if (bt) try { bt.focus(); } catch { /* ok */ }
   }
   /** CA-272: remover tem «Desfazer» — some da lista na hora; a exclusão no servidor só vale quando o aviso fecha sem desfazer. */
   async function removerBloqueio(b, botao) {
@@ -390,7 +498,8 @@ async function secaoAgenda(ctx, alvo) {
     }
     await ui.acaoComDesfazer({
       texto: `Bloqueio removido${b.motivo ? ` (${b.motivo})` : ""}`,
-      aplicar: () => { ocultos.add(b.id); desenharBloqueios(); },
+      // plano 1000b · CB-198: o «Remover» some com a linha — o foco vai para o bloqueio seguinte (ou o anterior, ou «Bloquear horário»)
+      aplicar: () => { const i = [...listaBloqueios.querySelectorAll(".agc-bloqueio")].findIndex(x => String(x.dataset.id) === String(b.id)); ocultos.add(b.id); desenharBloqueios(); focarBloqueio(Math.max(0, i)); },
       firmar: excluirAgora,
       reverter: () => { ocultos.delete(b.id); desenharBloqueios(); },
     });
@@ -419,50 +528,65 @@ async function secaoAgenda(ctx, alvo) {
       acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: false }, { rotulo: `Bloquear ${lista.length}`, tipo: "primario", valor: true }] });
     if (!ok) return;
     let feitos = 0;
+    const criados = [];      // plano 1000b · CB-159: os ids criados — o «Desfazer» exclui só eles
     const gravar = async () => {
       for (const f of lista) {
         const r = await api.rpcC("nx_agenda_bloqueio_salvar", { p_bloqueio: { data: f.data, motivo: f.nome } });
         if (r && Array.isArray(r.bloqueios)) estado = r;
+        if (r && r.id != null) criados.push(r.id);
         feitos++;
       }
     };
     try { await ui.carregando(btFeriados, gravar()); }
     catch (e) { ui.toast(`${feitos ? `${feitos} feriado${feitos === 1 ? "" : "s"} bloqueado${feitos === 1 ? "" : "s"}; o resto não foi salvo: ` : ""}${api.mensagemErro(e)}`, { tipo: "erro" }); }
     desenharBloqueios();
-    if (feitos === lista.length) ui.toast(`${feitos} feriado${feitos === 1 ? "" : "s"} bloqueado${feitos === 1 ? "" : "s"}.`, { tipo: "ok" });
+    if (feitos !== lista.length) return;
+    const texto = `${feitos} feriado${feitos === 1 ? "" : "s"} bloqueado${feitos === 1 ? "" : "s"}.`;
+    if (!criados.length || typeof ui.acaoComDesfazer !== "function") { ui.toast(texto, { tipo: "ok" }); return; }
+    ui.acaoComDesfazer({ texto, reverter: async () => {
+      for (const id of criados) { const r = await api.rpcC("nx_agenda_bloqueio_excluir", { p_id: id }); if (r && Array.isArray(r.bloqueios)) estado = r; }
+      desenharBloqueios();
+    } });
   }
 
-  async function criarBloqueio() {
+  async function criarBloqueio(existente = null) {
+    const ed = existente && existente.id != null ? camposDoBloqueio(existente) : null;   // CB-161: editando
+    const campoData = ui.campo({ rotulo: "Data inicial", nome: "data", tipo: "data", valor: ed ? ed.data : ui.hojeSP() });
+    const campoFim = ui.campo({ rotulo: "Data final (opcional)", nome: "data_fim", tipo: "data", valor: ed ? ed.data_fim : undefined });
+    // plano 1000b · CB-181: a data final não oferece dia antes da inicial (min acompanha a inicial)
+    const inData = campoData.querySelector("input"), inFim = campoFim.querySelector("input");
+    const ajustarMin = () => { if (inData.value) inFim.setAttribute("min", inData.value); else inFim.removeAttribute("min"); if (inFim.value && inData.value && inFim.value < inData.value) inFim.value = inData.value; };
+    inData.addEventListener("change", ajustarMin);
+    ajustarMin();
     const corpo = h("div", { class: "pilha agc-form" },
-      h("div", { class: "form-grade" },
-        ui.campo({ rotulo: "Data inicial", nome: "data", tipo: "data", valor: ui.hojeSP() }),
-        ui.campo({ rotulo: "Data final (opcional)", nome: "data_fim", tipo: "data" })),
+      h("div", { class: "form-grade" }, campoData, campoFim),
       h("p", { class: "campo-ajuda" }, "Deixe os horários vazios para bloquear o dia inteiro. Para bloquear algumas horas, preencha início e fim."),
       h("div", { class: "form-grade" },
-        ui.campo({ rotulo: "Das", nome: "das", tipo: "hora" }),
-        ui.campo({ rotulo: "Até", nome: "ate", tipo: "hora" })),
-      ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", max: 120, placeholder: "Ex.: feriado, manutenção" }));
+        ui.campo({ rotulo: "Das", nome: "das", tipo: "hora", valor: ed ? ed.das : undefined }),
+        ui.campo({ rotulo: "Até", nome: "ate", tipo: "hora", valor: ed ? ed.ate : undefined })),
+      ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", max: 120, placeholder: "Ex.: feriado, manutenção", valor: ed ? ed.motivo : undefined }));
     // CA-210: consultas já marcadas no período — avisa antes de salvar (os pacientes continuariam marcados num horário fechado)
     const avisoTxt = h("span");
     const aviso = h("div", { class: "aviso aviso-aten agc-aviso-consultas", role: "alert", hidden: true }, ui.icone("info"),
       h("div", null, avisoTxt, " ", h("a", { href: "#/agenda", class: "agc-ver-agenda", on: { click: ev => { ev.preventDefault(); if (fecharModal) fecharModal(null); if (typeof ctx.navegar === "function") ctx.navegar("#/agenda"); } } }, "Abrir a Agenda")));
     corpo.appendChild(aviso);
     let conferido = "", fecharModal = null;
-    const r = await ui.modal({ titulo: "Bloquear horário", corpo, largura: "p", aoAbrir: a => { fecharModal = v => a.fechar(v); }, acoes: [
+    const r = await ui.modal({ titulo: ed ? "Editar bloqueio" : "Bloquear horário", corpo, largura: "p", aoAbrir: a => { fecharModal = v => a.fechar(v); }, acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: null },
       { rotulo: "Salvar bloqueio", tipo: "primario", fn: async m => {
         const d = ui.lerForm(corpo);
         if (!d.data) { m.erro("Escolha uma data inicial."); return false; }
-        if (dataBloqueioPassada(d.data, ui.hojeSP())) { m.erro("A data inicial já passou. Escolha hoje ou uma data futura."); return false; }   // CA-211
+        if (dataBloqueioPassada(d.data, ui.hojeSP()) && !(ed && d.data === ed.data)) { m.erro("A data inicial já passou. Escolha hoje ou uma data futura."); return false; }   // CA-211 (editar um bloqueio em curso mantém a data)
         if (d.data_fim && d.data_fim < d.data) { m.erro("A data final precisa ser igual ou posterior à data inicial."); return false; }
         if (!!d.das !== !!d.ate) { m.erro("Preencha os dois horários ou deixe os dois vazios."); return false; }
         if (d.das && (!/^([01]\d|2[0-3]):[0-5]\d$/.test(d.das) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(d.ate) || d.das >= d.ate)) { m.erro("Confira o intervalo. O horário final precisa ser posterior ao inicial."); return false; }
         const periodo = JSON.stringify([d.data, d.data_fim || "", d.das || "", d.ate || ""]);
         if (periodo !== conferido) {
           try {
-            const dias = Math.min(31, Math.max(1, Math.round((Date.parse(`${d.data_fim || d.data}T12:00:00Z`) - Date.parse(`${d.data}T12:00:00Z`)) / 864e5) + 1));
-            const ag = await api.rpcC("nx_agenda_dia", { p_data: d.data, p_dias: dias });
-            const caem = consultasNoBloqueio(ag && ag.consultas, { data: d.data, data_fim: d.data_fim || null, das: d.das || null, ate: d.ate || null });
+            // plano 1000b · CB-146: férias de 45 dias liam só 31 — agora em blocos de 31 até a data final (no máximo 6)
+            const lidas = [];
+            for (const p of blocosDeLeitura(d.data, d.data_fim || null)) { const ag = await api.rpcC("nx_agenda_dia", p); if (ag && Array.isArray(ag.consultas)) lidas.push(...ag.consultas); }
+            const caem = consultasNoBloqueio(lidas, { data: d.data, data_fim: d.data_fim || null, das: d.das || null, ate: d.ate || null, duracao: Number(cfg.duracao_min) || 30 });
             conferido = periodo;
             if (caem.length) {
               const nomes = caem.slice(0, 3).map(c => `${c.nome || c.titulo || "consulta"} (${ui.dataHoraBR(c.inicio)})`).join(", ");
@@ -474,12 +598,12 @@ async function secaoAgenda(ctx, alvo) {
           } catch { conferido = periodo; /* sem a leitura da agenda: o servidor decide */ }
         }
         try {
-          const dados = { data: d.data, ...(d.data_fim ? { data_fim: d.data_fim } : {}), ...(d.das ? { das: d.das, ate: d.ate } : {}), motivo: d.motivo || null };
+          const dados = { ...(ed ? { id: existente.id } : {}), data: d.data, ...(d.data_fim ? { data_fim: d.data_fim } : {}), ...(d.das ? { das: d.das, ate: d.ate } : {}), motivo: d.motivo || null };
           return await api.rpcC("nx_agenda_bloqueio_salvar", { p_bloqueio: dados });
         } catch (e) { m.erro(api.mensagemErro(e)); return false; }
       } },
     ] });
-    if (r && r.ok) { estado = r; desenharBloqueios(); ui.toast("Bloqueio salvo.", { tipo: "ok" }); }
+    if (r && r.ok) { estado = r; desenharBloqueios(); ui.toast(ed ? "Bloqueio atualizado." : "Bloqueio salvo.", { tipo: "ok" }); }
   }
   return {
     limpar: () => {},

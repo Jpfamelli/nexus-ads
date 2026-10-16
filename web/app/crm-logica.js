@@ -17,6 +17,27 @@ export function semAcento(s) {
   return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 }
 
+/** plano 1000b · RB-207: id único para ligar um <label for> ao controle (gaveta e modal abertos juntos não disputam o mesmo id). */
+let seqId = 0;
+export function idUnico(prefixo = "crm") {
+  seqId += 1;
+  return `${prefixo}-${seqId.toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** plano 1000b · RB-122: o começo de um texto numa linha (para rótulos de botão): espaços juntados, até `max` caracteres com «…». */
+export function resumoTexto(s, max = 30) {
+  const t = String(s ?? "").replace(/\s+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+}
+
+/** plano 1000b · RB-117: tarefa atrasada = não concluída e (o servidor disse atrasada OU o prazo já passou agora). */
+export function tarefaAtrasada(t, agora = Date.now()) {
+  if (!t || t.concluida_em) return false;
+  if (t.atrasada) return true;
+  const v = Date.parse(t.vence_em);
+  return Number.isFinite(v) && v < Number(agora);
+}
+
 /** "Ana Maria Souza" → "AS"; "" → "?" */
 export function iniciais(nome) {
   const p = String(nome || "").trim().split(/\s+/).filter(Boolean);
@@ -26,7 +47,7 @@ export function iniciais(nome) {
 
 /* ------------------------------------------------------------ telefone */
 /** DDDs em uso no Brasil (Anatel) — a mesma lista de public.nx_ddd_valido (migração 20261008a). */
-export const RE_DDD = /^(1[1-9]|2[124789]|3[1-578]|4[1-9]|5[13-5]|6[1-9]|7[13-579]|8[1-9]|9[1-9])$/;
+export const RE_DDD = /^(1[1-9]|2[12478]|3[1-578]|4[1-9]|5[13-5]|6[1-9]|7[13-579]|8[1-9]|9[1-9])$/;   // plano 1000b · CB-005: sem o DDD 29 (não existe), igual a cv-logica.DDD_VALIDO
 export function dddValido(ddd) { return RE_DDD.test(String(ddd ?? "")); }
 
 /** Zero de tronco fora (DDD nunca começa com 0): 012997773031 → 12997773031. */
@@ -176,6 +197,9 @@ export function lerCSV(texto, { separador, limite = 20000 } = {}) {
     if (c === "\n") { fimLinha(); i++; continue; }
     campo += c; i++;
   }
+  // plano 1000b · RB-070: aspas que nunca fecham engoliam o resto do arquivo em silêncio — agora a tela sabe em que linha começou
+  const aspasAbertas = dentro;
+  const linhaAspas = aspasAbertas ? nReg + 1 : null;
   if (campo !== "" || linha.length) fimLinha();
   const cabecalho = (registros.shift() || []).map(h => h.trim());
   nums.shift();
@@ -187,7 +211,7 @@ export function lerCSV(texto, { separador, limite = 20000 } = {}) {
     while (out.length < larg) out.push("");
     return out;
   });
-  return { separador: sep, cabecalho, linhas, numeros: nums.slice(0, limite), total, cortado };
+  return { separador: sep, cabecalho, linhas, numeros: nums.slice(0, limite), total, cortado, aspasAbertas, linhaAspas };
 }
 
 /**
@@ -215,11 +239,12 @@ export function gerarCSV(cabecalho, linhas) {
  */
 export function modeloImportacao(campos = []) {
   const extra = (campos || []).filter(c => c && c.entidade === "contato" && c.ativo !== false && c.rotulo);
-  const cabecalho = ["Nome", "Telefone", "E-mail", "Cidade", "UF", "Nascimento", "Origem", "Etiquetas", "Observação", ...extra.map(c => c.rotulo)];
+  // plano 1000b · RB-073: também Empresa, CPF/CNPJ e as colunas do negócio (Título, Valor, Etapa) — todas com nome que o mapa reconhece sozinho
+  const cabecalho = ["Nome", "Telefone", "E-mail", "Empresa", "CPF/CNPJ", "Cidade", "UF", "Nascimento", "Origem", "Etiquetas", "Observação", "Título", "Valor", "Etapa", ...extra.map(c => c.rotulo)];
   const vazio = extra.map(() => "");
   return { cabecalho, linhas: [
-    ["Ana Souza", "(12) 99830-3030", "ana@exemplo.com.br", "Taubaté", "SP", "02/03/1990", "Indicação", "VIP; Retorno", "Prefere horário de manhã", ...vazio],
-    ["Carlos Lima", "(12) 3456-7890", "", "São José dos Campos", "SP", "", "WhatsApp", "", "", ...vazio],
+    ["Ana Souza", "(12) 99830-3030", "ana@exemplo.com.br", "", "", "Taubaté", "SP", "02/03/1990", "Indicação", "VIP; Retorno", "Prefere horário de manhã", "", "", "", ...vazio],
+    ["Carlos Lima", "(12) 3456-7890", "", "", "", "São José dos Campos", "SP", "", "WhatsApp", "", "", "", "", "", ...vazio],
   ] };
 }
 
@@ -250,7 +275,8 @@ const SINONIMOS = [
   ["cidade", ["cidade", "municipio", "city"]],
   ["uf", ["uf", "estado", "state"]],
   ["nascimento", ["nascimento", "data de nascimento", "data nascimento", "aniversario", "dt nascimento", "birthday", "nasc"]],
-  ["documento", ["cpf", "cnpj", "cpf/cnpj", "cpf cnpj", "documento", "rg"]],
+  // plano 1000b · RB-072: «RG» não é CPF/CNPJ (entrava como documento e disparava o aviso de dígito) — a coluna fica «Ignorar»
+  ["documento", ["cpf", "cnpj", "cpf/cnpj", "cpf cnpj", "documento"]],
   ["obs", ["observacao", "observacoes", "obs", "nota", "notas", "anotacao", "comentario", "comentarios"]],
   ["origem", ["origem", "fonte", "canal", "source"]],
   ["etiquetas", ["etiquetas", "etiqueta", "tags", "tag", "marcadores", "grupo"]],
@@ -294,8 +320,56 @@ export function sugerirMapeamento(cabecalho, campos = []) {
   });
 }
 
-/** Aplica o mapeamento: linhas do CSV → linhas no formato de nx_contatos_importar. */
-export function montarLinhas(linhas, mapa) {
+/**
+ * plano 1000b · RB-068: a opção oficial que casa com o texto ignorando maiúsculas, acentos e espaços nas pontas («unimed» → «Unimed»).
+ * null quando nenhuma casa.
+ */
+export function opcaoOficial(opcoes, valor) {
+  const lista = Array.isArray(opcoes) ? opcoes : [];
+  const t = String(valor ?? "").trim();
+  if (lista.includes(t)) return t;
+  const n = semAcento(t);
+  const achou = lista.find(o => semAcento(String(o).trim()) === n);
+  return achou === undefined ? null : achou;
+}
+
+/**
+ * plano 1000b · RB-071: rótulos das colunas para o passo 2 — cabeçalho vazio vira «Coluna N» e o repetido ganha «(2ª)», «(3ª)»
+ * (comparando sem maiúsculas/acentos). → {rotulos, repetidas}
+ */
+export function rotulosColunas(cabecalho) {
+  const vistos = new Map();
+  let repetidas = false;
+  const rotulos = (cabecalho || []).map((c, i) => {
+    const t = String(c ?? "").trim();
+    if (!t) return `Coluna ${i + 1}`;
+    const n = semAcento(t);
+    const q = (vistos.get(n) || 0) + 1;
+    vistos.set(n, q);
+    if (q > 1) { repetidas = true; return `${t} (${q}ª)`; }
+    return t;
+  });
+  return { rotulos, repetidas };
+}
+
+/**
+ * plano 1000b · RB-139: opções do campo sem repetidas (ignorando maiúsculas/acentos; fica a 1ª grafia). → {opcoes, unidas}
+ */
+export function opcoesUnicas(lista) {
+  const vistos = new Set(), opcoes = [];
+  for (const x of lista || []) {
+    const t = String(x ?? "").trim();
+    if (!t) continue;
+    const n = semAcento(t);
+    if (vistos.has(n)) continue;
+    vistos.add(n); opcoes.push(t);
+  }
+  const total = (lista || []).filter(x => String(x ?? "").trim()).length;
+  return { opcoes, unidas: total - opcoes.length };
+}
+
+/** Aplica o mapeamento: linhas do CSV → linhas no formato de nx_contatos_importar. `campos` (opcional): opção/multi viram a opção oficial (RB-068). */
+export function montarLinhas(linhas, mapa, campos = null) {
   return (linhas || []).map(l => {
     const o = {};
     (mapa || []).forEach((dest, i) => {
@@ -303,10 +377,20 @@ export function montarLinhas(linhas, mapa) {
       // o ' que o csvCampo põe na frente de "fórmula" sai na volta (exportar → importar sem perda)
       const v = (l[i] ?? "").trim().replace(/^'(?=[=+\-@])/, "");
       if (v === "") return;
-      if (dest.startsWith("campo:")) { (o.campos || (o.campos = {}))[dest.slice(6)] = v; return; }
+      if (dest.startsWith("campo:")) {
+        const chave = dest.slice(6);
+        // plano 1000b · RB-068: «unimed» na planilha grava «Unimed» (a opção como foi cadastrada)
+        const def = Array.isArray(campos) ? campos.find(c => c && c.chave === chave) : null;
+        let val = v;
+        if (def && def.tipo === "opcao") val = opcaoOficial(def.opcoes, v) ?? v;
+        else if (def && def.tipo === "multi") val = v.split(";").map(x => x.trim()).filter(Boolean).map(x => opcaoOficial(def.opcoes, x) ?? x).join(";");
+        (o.campos || (o.campos = {}))[chave] = val;
+        return;
+      }
       if (o[dest] !== undefined && dest === "obs") { o.obs += " · " + v; return; }
       // plano 1000 (CR-129): «São Paulo» vira SP e «Indicação»/«Whats» viram a origem certa (antes viravam aviso e a linha perdia o dado)
-      if (o[dest] === undefined) o[dest] = dest === "uf" ? ufDaPlanilha(v) : dest === "origem" ? origemDaPlanilha(v) : v;
+      // plano 1000b · RB-249: nascimento legível vai em AAAA-MM-DD já com o século certo («05/03/28» → 1928-03-05); ilegível fica como veio (a prévia avisa)
+      if (o[dest] === undefined) o[dest] = dest === "uf" ? ufDaPlanilha(v) : dest === "origem" ? origemDaPlanilha(v) : dest === "nascimento" ? (lerData(v, { passado: true }) || v) : v;
     });
     return o;
   });
@@ -317,6 +401,11 @@ const UF_POR_NOME = Object.freeze({ acre: "AC", alagoas: "AL", amapa: "AP", amaz
   piaui: "PI", "rio de janeiro": "RJ", "rio grande do norte": "RN", "rio grande do sul": "RS", rondonia: "RO", roraima: "RR", "santa catarina": "SC",
   "sao paulo": "SP", sergipe: "SE", tocantins: "TO" });
 /** plano 1000 (CR-129): UF da planilha — «sp», «São Paulo», «Estado de São Paulo» → «SP»; o resto volta como veio (a checagem avisa). */
+/** plano 1000b · RB-055: «SP», «rj» → UF que existe? (o formulário da empresa confere antes de ir ao servidor). */
+export function ufValida(v) {
+  const t = String(v ?? "").trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(t) && Object.values(UF_POR_NOME).includes(t);
+}
 export function ufDaPlanilha(v) {
   const t = String(v ?? "").trim();
   if (/^[A-Za-z]{2}$/.test(t)) return t.toUpperCase();
@@ -337,7 +426,10 @@ export function origemDaPlanilha(v) {
   return ORIGEM_POR_TEXTO[n] || t;
 }
 
-/** Problemas de uma linha montada (antes de mandar): [] = ok. Linha sem nome, telefone e e-mail → 'vazia'. */
+/** plano 1000b · RB-087: a frase da linha vazia é uma constante (a prévia conta por ela, não por /ignorada/ no texto). */
+export const LINHA_VAZIA = "Linha sem nome, telefone e e-mail — será ignorada";
+export const linhaVazia = problemas => Array.isArray(problemas) && problemas.length === 1 && problemas[0] === LINHA_VAZIA;
+/** Problemas de uma linha montada (antes de mandar): [] = ok. Linha sem nome, telefone e e-mail → [LINHA_VAZIA]. */
 export function checarLinha(o, { campos = [] } = {}) {
   const erros = [];
   // plano 1000 (CR-232): campo personalizado com valor que o tipo não aceita («x» fora das opções, data inválida) avisa na prévia, linha a linha
@@ -346,13 +438,20 @@ export function checarLinha(o, { campos = [] } = {}) {
     const er = def ? validarCampo({ ...def, obrigatorio: false }, v) : null;
     if (er) erros.push(`${def.rotulo || chave}: ${er.replace(/\.$/, "")}`);
   }
-  if (!o.nome && !o.telefone && !o.email) return ["Linha sem nome, telefone e e-mail — será ignorada"];
+  if (!o.nome && !o.telefone && !o.email) return [LINHA_VAZIA];
   // C7: número de outro país digitado sem o «+» não vira número brasileiro — a linha entra sem telefone e a pessoa sabe como corrigir
   if (o.telefone && !normalizarTelefone(o.telefone)) erros.push(telefoneSemPais(o.telefone) ? "Telefone sem DDD brasileiro: se for de fora do Brasil, escreva com +código do país" : "Telefone inválido");
   if (o.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(o.email)) erros.push("E-mail inválido");
-  if (o.uf && !/^[A-Za-z]{2}$/.test(o.uf)) erros.push("UF deve ter 2 letras");
-  if (o.nascimento && !lerData(o.nascimento)) erros.push("Nascimento: use DD/MM/AAAA");
+  // plano 1000b · RB-074: «XX» tem 2 letras mas não é estado — confere contra as 27 UFs
+  if (o.uf && !ufValida(o.uf)) erros.push(/^[A-Za-z]{2}$/.test(String(o.uf).trim()) ? "UF não existe: use a sigla do estado (SP, RJ…)" : "UF deve ter 2 letras");
+  if (o.nascimento) {
+    // plano 1000b · RB-249: nascimento no futuro é recusado na prévia (e «05/03/28» é 1928, não 2028)
+    const nasc = lerData(o.nascimento, { passado: true });
+    if (!nasc) erros.push("Nascimento: use DD/MM/AAAA");
+    else if (nasc > new Date().toISOString().slice(0, 10)) erros.push("Nascimento no futuro: confira a data");
+  }
   if (o.negocio_valor && lerNumero(o.negocio_valor) === null) erros.push("Valor inválido");
+  else if (o.negocio_valor && lerNumero(o.negocio_valor) < 0) erros.push("Valor não pode ser negativo");      // plano 1000b · RB-075
   return erros;
 }
 
@@ -392,14 +491,15 @@ export function dinheiroInvalido(s) {
  * "31/12/1990" | "1990-12-31" → "1990-12-31"; inválido → null.
  * plano 1000 (CR-119): também DD-MM-AAAA, DD.MM.AAAA, ano com 2 dígitos (≥ 30 → 19xx, senão 20xx) e o número de série do Excel (20000–80000).
  */
-export function lerData(s) {
+export function lerData(s, { passado = false, agora = new Date() } = {}) {
   const t = String(s ?? "").trim();
   let a, m, d;
   let r = /^(\d{4})-(\d{2})-(\d{2})/.exec(t);
   if (r) { a = +r[1]; m = +r[2]; d = +r[3]; }
   else if ((r = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})$/.exec(t))) {
     d = +r[1]; m = +r[2]; a = +r[3];
-    if (r[3].length === 2) a += a >= 30 ? 1900 : 2000;
+    // plano 1000b · RB-249: data que só pode estar no passado (nascimento): ano de 2 dígitos acima do ano atual é do século passado («05/03/28» → 1928)
+    if (r[3].length === 2) a += passado ? (a > new Date(agora).getUTCFullYear() % 100 ? 1900 : 2000) : (a >= 30 ? 1900 : 2000);
   } else if (/^\d{5}$/.test(t) && +t > 20000 && +t < 80000) {
     const dt = new Date(Date.UTC(1899, 11, 30) + Number(t) * 86400000);     // série do Excel: dias desde 30/12/1899
     return dt.toISOString().slice(0, 10);
@@ -409,11 +509,17 @@ export function lerData(s) {
   return `${a}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
-/** Dias inteiros entre dois instantes (b − a). */
+/**
+ * Dias entre dois instantes (b − a).
+ * plano 1000b · RB-065: dias do CALENDÁRIO de São Paulo (a mesma régua do «relativo»), não blocos de 24 h — quem entrou ontem às 23h está
+ * «há 1 dia na etapa» às 08h de hoje (antes: «hoje na etapa»).
+ */
+const fmtDiaSP = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" });
 export function diasEntre(a, b = new Date()) {
   const x = new Date(a).getTime(), y = new Date(b).getTime();
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  return Math.floor((y - x) / 86400000);
+  const dia = t => Date.parse(`${fmtDiaSP.format(new Date(t))}T00:00:00Z`);
+  return Math.round((dia(y) - dia(x)) / 86400000);
 }
 
 /** "hoje" | "há 1 dia" | "há 12 dias" na etapa */
@@ -548,9 +654,20 @@ export function descricaoOrigem(c) {
  * Só vale com 10–13 dígitos; casa pela MESMA chave do banco (com/sem 55 e 9º dígito). → o contato ou null.
  */
 export function acharDuplicado(itens, digitado, { ignorarId = null } = {}) {
-  const dig = String(digitado ?? "").replace(/\D/g, "");
-  if (dig.length < 10 || dig.length > 13) return null;
-  return (itens || []).find(c => c && c.telefone && c.id !== ignorarId && mesmoTelefone(c.telefone, dig)) || null;
+  const dig = digitosDuplicado(digitado);
+  if (!dig) return null;
+  const comMais = String(digitado ?? "").trim().startsWith("+");
+  return (itens || []).find(c => c && c.telefone && c.id !== ignorarId && mesmoTelefone(c.telefone, comMais ? `+${dig}` : dig)) || null;
+}
+/**
+ * plano 1000b · RB-086: os dígitos do telefone digitado que valem a busca de cadastro repetido, ou null. 10–13 dígitos; começando com «+»
+ * (a pessoa informou o país) até 15 — +351 9xx…, números de 14–15 dígitos.
+ */
+export function digitosDuplicado(digitado) {
+  const txt = String(digitado ?? "");
+  const dig = txt.replace(/\D/g, "");
+  const max = txt.trim().startsWith("+") ? 15 : 13;
+  return dig.length >= 10 && dig.length <= max ? dig : null;
 }
 
 /* ------------------------------------------------------------ escrita segura (M25) */
@@ -571,7 +688,9 @@ export function novaReq(c = globalThis.crypto) {
 export function rpcAusente(e) {
   if (!e) return false;
   const c = String(e.codigo || e.message || "");
-  return Number(e.status) === 404 || /PGRST202|Could not find the function|function .* does not exist/i.test(c);
+  // plano 1000b · RB-085: «function unaccent(text) does not exist» (42883) vem de DENTRO de uma RPC que existe — não é RPC ausente;
+  // só 404 ou PGRST202 («Could not find the function … in the schema cache») escondem o recurso
+  return Number(e.status) === 404 || /PGRST202|Could not find the function/i.test(c);
 }
 
 export function erroAmbiguo(e) {
@@ -655,6 +774,21 @@ export function textoMovimento({ titulo, destino, valor, ganhar = "Ganhou", arti
   return `«${titulo}» reabert${a} em «${d.nome}»`;
 }
 
+/** plano 1000b · RB-059: o «Desfazer» voltou a etapa, mas a 2ª gravação (a data da consulta) falhou. */
+export function avisoDataNaoVoltou(vertical) {
+  return `Voltou de etapa, mas a data da ${nomeCompromisso(vertical)} continua a nova. Ajuste a data na gaveta.`;
+}
+/** plano 1000b · RB-046: «Motivo: X — texto», «Motivo: texto» (sem motivo cadastrado) ou «Motivo: X» — nunca «Motivo: — — texto». */
+export function textoMotivoPerda(nome, texto) {
+  const n = String(nome || "").trim(), t = String(texto || "").trim();
+  if (n && t) return `Motivo: ${n} — ${t}`;
+  return `Motivo: ${n || t || "—"}`;
+}
+/** O compromisso da vertical: consulta (clínica), visita (oficina), entrega (loja). */
+export function nomeCompromisso(vertical) {
+  return { odonto: "consulta", oficina: "visita", loja: "entrega" }[vertical] || "consulta";
+}
+
 /** O que a tela aplica ao cartão/negócio ANTES de o servidor gravar: status do destino, valor final (ganho) e a data da consulta (agendada). */
 export function patchMovimento(destino, extra = {}) {
   const e = extra && typeof extra === "object" ? extra : {};
@@ -702,6 +836,10 @@ export function origemPilula(c, { manual = true } = {}) {
 }
 
 const capitalizar = s => { const t = String(s || "").trim(); return t ? t[0].toUpperCase() + t.slice(1) : ""; };
+/** plano 1000b · RB-083: utm_source abreviado vira o nome da rede («ig» → Instagram, «fb» → Facebook, «yt» → YouTube). */
+const NOME_FONTE = Object.freeze({ ig: "Instagram", insta: "Instagram", instagram: "Instagram", fb: "Facebook", facebook: "Facebook", google: "Google", yt: "YouTube",
+  youtube: "YouTube", tiktok: "TikTok", tt: "TikTok", linkedin: "LinkedIn", kwai: "Kwai", whatsapp: "WhatsApp", wa: "WhatsApp", bing: "Bing" });
+export function nomeFonte(s) { const t = String(s || "").trim(); return NOME_FONTE[t.toLowerCase()] || capitalizar(t); }
 /**
  * De onde veio o negócio, numa frase para a gaveta (C3): «Veio do anúncio «X» · campanha «Y»», «Veio do site · campanha X · página Y · clique em
  * 06/10 10:12», «Veio do Instagram (orgânico)», «Chamou no WhatsApp»… Campos de nx_negocio_ver: origem, plataforma, campanha_nome/campanha_ext,
@@ -712,7 +850,8 @@ export function resumoRastreio(n, { anuncio = {}, fmtData = iso => String(iso ||
   if (!n || typeof n !== "object") return null;
   const r = n.rastreio && typeof n.rastreio === "object" ? n.rastreio : {};
   const an = anuncio && typeof anuncio === "object" ? anuncio : {};
-  const plataforma = n.plataforma === "google" ? "google" : n.plataforma === "meta" ? "meta" : null;
+  // plano 1000b · RB-066: instagram/facebook (a pílula já aceitava) contam como Meta na frase
+  const plataforma = n.plataforma === "google" ? "google" : n.plataforma === "meta" || n.plataforma === "instagram" || n.plataforma === "facebook" ? "meta" : null;
   const campanha = an.campanha_nome || n.campanha_nome || n.campanha_ext || r.utm_campaign || null;
   const nomeAnuncio = an.anuncio_nome || n.anuncio_nome || n.anuncio_ext || null;
   const pagina = r.pagina || null;
@@ -731,7 +870,7 @@ export function resumoRastreio(n, { anuncio = {}, fmtData = iso => String(iso ||
     if (pagina) partes.push(`página ${pagina}`);
   } else if (origem === "organico") {
     chave = "organico";
-    cabeca = `Veio ${r.utm_source ? `do ${capitalizar(r.utm_source)}` : "de busca ou rede social"} (orgânico)`;
+    cabeca = `Veio ${r.utm_source ? `do ${nomeFonte(r.utm_source)}` : "de busca ou rede social"} (orgânico)`;
     if (campanha) partes.push(`campanha «${campanha}»`);
   } else if (origem === "whatsapp") { chave = origem; cabeca = "Chamou no WhatsApp"; }
   else if (origem === "indicacao") { chave = origem; cabeca = "Veio por indicação"; }
@@ -753,12 +892,14 @@ export function contarDeAnuncio(col) {
   return { n, parcial, texto: n ? `${n}${parcial ? "+" : ""} de anúncio` : "" };
 }
 
-/* plano 100 · C9: clique no cabeçalho da lista de contatos ↔ p_ordem do servidor (nome A–Z; último contato do mais recente; de novo = recentes) */
+/* plano 100 · C9: clique no cabeçalho da lista de contatos ↔ p_ordem do servidor (nome A–Z; último contato do mais recente).
+   plano 1000b · RB-214: clicar de novo na ordem que já está ativa NÃO troca para «Cadastrados por último» (com o padrão «último contato», o 1º clique
+   no cabeçalho mudava a ordem sem a pessoa pedir) — fica como está. */
 export const ORDEM_COLUNA = Object.freeze({ nome: "nome", ultimo_contato_em: "ultimo_contato" });
 export function ordemAoClicar(chave, atual) {
   const alvo = ORDEM_COLUNA[chave];
   if (!alvo) return atual;
-  return atual === alvo ? "recentes" : alvo;
+  return alvo;
 }
 export function ariaSortDe(chave, ordem) {
   const alvo = ORDEM_COLUNA[chave];
@@ -895,7 +1036,7 @@ export function chaveVisoesCRM(clienteId, contaId, tela) {
 function filtroDaVisao(f, tela) {
   if (!f || typeof f !== "object" || Array.isArray(f)) return {};
   const o = {};
-  if (typeof f.busca === "string" && f.busca.trim()) o.busca = f.busca.trim().slice(0, 120);
+  // plano 1000b · RB-234: a busca digitada (nome/telefone do paciente) NUNCA vai para a visão guardada no aparelho (regra do CR-024)
   if (f.dono === "eu" || f.dono === "sem" || idVisaoSeguro(f.dono)) o.dono = f.dono;
   if (f.etiquetas && typeof f.etiquetas === "object") {
     const ids = Array.isArray(f.etiquetas.ids) ? [...new Set(f.etiquetas.ids.filter(idVisaoSeguro))].slice(0, 30) : [];
@@ -929,7 +1070,9 @@ function dadosDaVisao(dados, tela) {
   const filtro = filtroDaVisao(dados.filtro, tela);
   if (tela === "kanban") {
     if (!idVisaoSeguro(String(dados.funil || ""))) return null;
-    return { funil: String(dados.funil), filtro, todosFechados: dados.todosFechados === true };
+    // plano 1000b · RB-004: o período dos fechados (30, 90 ou todos = 0) vai junto; visão antiga sem ele vale todos (0) ou 30
+    const fechadosDias = [30, 90, 0].includes(dados.fechadosDias) ? dados.fechadosDias : (dados.todosFechados === true ? 0 : 30);
+    return { funil: String(dados.funil), filtro, todosFechados: fechadosDias === 0, fechadosDias };
   }
   return { filtro, ordem: ORDEM_VISAO_CONTATOS.has(dados.ordem) ? dados.ordem : "recentes" };
 }
@@ -990,8 +1133,22 @@ export function excluirVisaoCRM(visoes, tela, id) {
 export function visaoCorrespondenteCRM(visoes, tela, dados) {
   const atual = dadosDaVisao(dados, tela);
   if (!atual) return "";
+  // plano 1000b · RB-234: a visão nunca guarda a busca — com algo digitado o estado já é outro (o indicador some)
+  if (dados.filtro && typeof dados.filtro.busca === "string" && dados.filtro.busca.trim()) return "";
   const serial = JSON.stringify(atual);
   return normalizarVisoesCRM(visoes, tela).find(v => JSON.stringify(v.dados) === serial)?.id || "";
+}
+
+/**
+ * plano 1000b · RB-199: o estado da tela não tem nada para virar um filtro salvo? (filtro vazio — a busca não conta, ela não vai para a visão —,
+ * fechados em 30 dias e o funil padrão no quadro; ordem «recentes» em Contatos). Dados inválidos também contam como «nada».
+ */
+export function visaoSemFiltroCRM(dados, tela, { funilPadrao = null } = {}) {
+  const d = dadosDaVisao(dados, tela);
+  if (!d) return true;
+  if (!filtroVazio(d.filtro)) return false;
+  if (tela === "kanban") return d.fechadosDias === 30 && (funilPadrao == null || String(funilPadrao) === d.funil);
+  return d.ordem === "recentes";
 }
 
 /**
@@ -1028,7 +1185,8 @@ export function filtrar(cards, filtro = {}, { eu } = {}) {
       if (op === "todas" && n !== ids.length) return false;
       if (op === "nenhuma" && n > 0) return false;
     }
-    if (Array.isArray(f.origem) && f.origem.length && !f.origem.includes(c.origem)) return false;
+    // plano 1000b · RB-082: a mesma regra do servidor — veio de anúncio quem tem plataforma (Meta/Google), mesmo com origem «whatsapp»
+    if (Array.isArray(f.origem) && f.origem.length && !f.origem.includes(c.origem) && !(c.plataforma && f.origem.includes("anuncio"))) return false;
     if (f.status && f.status !== "todos" && c.status !== f.status) return false;
     const v = Number(c.valor ?? c.valor_previsto ?? 0);
     if (f.valor_min !== undefined && f.valor_min !== null && f.valor_min !== "" && v < Number(f.valor_min)) return false;
@@ -1083,18 +1241,33 @@ export function validarCampo(campo, valor) {
     case "moeda": return lerNumero(s) === null || lerNumero(s) < 0 ? "Valor inválido." : null;
     case "data": return lerData(s) ? null : "Data inválida (DD/MM/AAAA).";
     case "email": return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s)) ? null : "E-mail inválido.";
-    case "url": return /^https?:\/\/[^\s.]+\.[^\s]{2,}/i.test(String(s)) ? null : "Link inválido (comece com https://).";
+    // plano 1000b · RB-076: «www.site.com.br» é aceito (grava com https:// pelo normalizarSite, como o site da empresa)
+    case "url": return /^https?:\/\/[^\s.]+\.[^\s]{2,}/i.test(String(normalizarSite(s) || "")) ? null : "Link inválido (ex.: www.site.com.br).";
     case "telefone": return normalizarTelefone(s) ? null : "Telefone inválido.";
-    case "opcao": return (c.opcoes || []).includes(String(s)) ? null : "Escolha uma das opções.";
+    // plano 1000b · RB-068: maiúscula/acento diferentes casam com a opção oficial (normalizarCampo grava a oficial)
+    case "opcao": return opcaoOficial(c.opcoes, s) !== null ? null : "Escolha uma das opções.";
     case "multi": {
       const lista = Array.isArray(s) ? s : String(s).split(";").map(x => x.trim()).filter(Boolean);
-      return lista.every(x => (c.opcoes || []).includes(x)) ? null : "Escolha entre as opções.";
+      return lista.every(x => opcaoOficial(c.opcoes, x) !== null) ? null : "Escolha entre as opções.";
     }
-    case "sim_nao": return s === true || s === false || s === "sim" || s === "nao" || s === "true" || s === "false" ? null : "Escolha sim ou não.";
+    case "sim_nao": return lerSimNao(s) !== null ? null : "Escolha sim ou não.";      // plano 1000b · RB-067: «Sim», «NÃO», «s», «N», 1/0
     case "texto": return String(s).length > 500 ? "Máximo de 500 caracteres." : null;
     case "texto_longo": return String(s).length > 5000 ? "Máximo de 5.000 caracteres." : null;
     default: return null;
   }
+}
+
+/**
+ * plano 1000b · RB-067: o «Sim/Não» da planilha e do formulário — maiúscula, acento e abreviação («Sim», «NÃO», «s», «N», 1/0,
+ * true/false) → true | false; qualquer outra coisa → null.
+ */
+export function lerSimNao(v) {
+  if (v === true || v === false) return v;
+  if (v === 1 || v === 0) return v === 1;
+  const t = semAcento(v).trim();
+  if (["sim", "s", "true", "1", "verdadeiro"].includes(t)) return true;
+  if (["nao", "n", "false", "0", "falso"].includes(t)) return false;
+  return null;
 }
 
 /** Valor normalizado para gravar no JSON `campos` (número como número, data ISO, multi como lista). */
@@ -1103,9 +1276,12 @@ export function normalizarCampo(campo, valor) {
   switch ((campo || {}).tipo) {
     case "numero": case "moeda": return lerNumero(valor);
     case "data": return lerData(valor);
-    case "sim_nao": return valor === true || valor === "sim" || valor === "true";
-    case "multi": return Array.isArray(valor) ? valor : String(valor).split(";").map(x => x.trim()).filter(Boolean);
+    case "sim_nao": return lerSimNao(valor) === true;      // plano 1000b · RB-067
+    // plano 1000b · RB-068: grava a opção como foi cadastrada
+    case "opcao": return opcaoOficial(campo.opcoes, valor) ?? (typeof valor === "string" ? valor.trim() : valor);
+    case "multi": return (Array.isArray(valor) ? valor : String(valor).split(";").map(x => x.trim()).filter(Boolean)).map(x => opcaoOficial(campo.opcoes, x) ?? x);
     case "telefone": return normalizarTelefone(valor) || String(valor).trim();
+    case "url": return normalizarSite(valor) || String(valor).trim();      // plano 1000b · RB-076
     default: return typeof valor === "string" ? valor.trim() : valor;
   }
 }
@@ -1119,6 +1295,10 @@ export function camposDe(campos, entidade, funilId) {
 
 /* plano 1000 (CR-013): filtro por campo personalizado — o servidor já aplica `filtro.campo = {chave, op, valor}` (nx_crm_filtro_campo) */
 export const OPS_FILTRO_CAMPO = Object.freeze({ igual: "é igual a", contem: "contém", maior: "maior que", menor: "menor que", vazio: "está vazio", preenchido: "está preenchido" });
+/** plano 1000b · RB-197: o rótulo do operador para o tipo — no campo de múltipla escolha, «igual» quer dizer «inclui a opção». */
+export function rotuloOpCampo(op, tipo) {
+  return op === "igual" && tipo === "multi" ? "inclui" : OPS_FILTRO_CAMPO[op];
+}
 /** Operadores que fazem sentido para o tipo do campo (o 1º é o padrão). */
 export function opsDoCampo(tipo) {
   if (["numero", "moeda", "data"].includes(tipo)) return ["igual", "maior", "menor", "vazio", "preenchido"];
@@ -1140,7 +1320,7 @@ export function filtroCampoLimpo(c, campos = null) {
     if (tipo === "data" || /^\d{4}-\d{2}-\d{2}$/.test(valor)) { valor = lerData(valor); if (!valor) return null; }
     else { const n = lerNumero(valor); if (n === null) return null; valor = String(n); }
   }
-  if (tipo === "sim_nao") valor = valor === "sim" || valor === "true" ? "true" : "false";
+  if (tipo === "sim_nao") valor = lerSimNao(valor) === true ? "true" : "false";      // plano 1000b · RB-067
   return { chave: c.chave, op, valor };
 }
 /** O texto do chip: «Convênio: Unimed», «Dentista: vazio», «Idade maior que 40». */
@@ -1151,6 +1331,7 @@ export function textoFiltroCampo(c, campos = []) {
   if (c.op === "vazio") return `${rot}: vazio`;
   if (c.op === "preenchido") return `${rot}: preenchido`;
   const v = def && def.tipo === "sim_nao" ? (c.valor === "true" ? "sim" : "não") : c.valor;
+  if (c.op === "igual" && def && def.tipo === "multi") return `${rot} inclui ${v}`;      // plano 1000b · RB-197
   if (c.op === "igual") return `${rot}: ${v}`;
   return `${rot} ${OPS_FILTRO_CAMPO[c.op]} ${v}`;
 }
@@ -1341,7 +1522,8 @@ export function semCodigoTecnico(t) {
 }
 /** plano 1000 (CR-208/266): o código para o suporte («http_500», «sessao_invalida»), sem frase; null quando não há. */
 export function codigoSuporte(e) {
-  const c = e && (e.codigo || (e.status ? `http_${e.status}` : null) || e.message);
+  // plano 1000b · RB-191: a mensagem crua («Failed to fetch») não é código — vai só para o console de quem chama
+  const c = e && (e.codigo || (e.status ? `http_${e.status}` : null));
   return c ? String(c).slice(0, 60) : null;
 }
 
@@ -1353,12 +1535,18 @@ export function textoTempo(it, { nomes = {}, vocab, brl = v => `R$ ${v}`, motivo
   const neg = vocab ? vocab.min("negocio") : "negócio";
   const nomeDe = id => (id && nomes[id]) || (id ? "outra pessoa" : "ninguém");
   if (it.fonte === "nota") return `Nota: ${d.texto || ""}`;
-  if (it.fonte === "tarefa") return it.tipo === "tarefa_concluida" ? `Concluiu a tarefa «${d.titulo || ""}»` : `Criou a tarefa «${d.titulo || ""}»`;
+  // plano 1000b · RB-084: sem título, «Criou uma tarefa» (antes: «Criou a tarefa «»»)
+  if (it.fonte === "tarefa") {
+    const tit = String(d.titulo || "").trim();
+    const fez = it.tipo === "tarefa_concluida" ? "Concluiu" : "Criou";
+    return tit ? `${fez} a tarefa «${tit}»` : `${fez} uma tarefa`;
+  }
   switch (it.tipo) {
     case "negocio_criado": return `Criou ${vocab ? (vocab.art("negocio") === "a" ? "a " : "o ") : "o "}${neg}${d.titulo ? ` «${d.titulo}»` : ""}`;
     case "estagio": return `Moveu de «${d.de_nome || "—"}» para «${d.para_nome || "—"}»`;
-    case "ganho": return `Marcou como ${vocab ? vocab.ganhar.toLowerCase() : "ganho"}${d.valor != null ? ` · ${brl(d.valor)}` : ""}`;
-    case "perdido": return `Marcou como ${vocab ? vocab.perder.toLowerCase() : "perdido"}${d.motivo && motivos[d.motivo] ? ` · ${motivos[d.motivo]}` : ""}${d.texto ? ` — ${d.texto}` : ""}`;
+    // plano 1000b · RB-044: o termo da vertical é o NOME da etapa («Fechou»/«Não fechou»), não adjetivo — vai entre aspas como está
+    case "ganho": return `Marcou como «${vocab ? vocab.ganhar : "Ganho"}»${d.valor != null ? ` · ${brl(d.valor)}` : ""}`;
+    case "perdido": return `Marcou como «${vocab ? vocab.perder : "Perdido"}»${d.motivo && motivos[d.motivo] ? ` · ${motivos[d.motivo]}` : ""}${d.texto ? ` — ${d.texto}` : ""}`;
     case "reaberto": return `Reabriu ${vocab ? (vocab.art("negocio") === "a" ? "a " : "o ") : "o "}${neg}`;
     case "dono": return d.para ? `Responsável: ${nomeDe(d.para)}` : "Ficou sem responsável";
     case "conversa_aberta": return `Atendimento ${d.protocolo || ""} aberto`.replace(/\s+/g, " ").trim();
@@ -1397,6 +1585,85 @@ export const MARCOS = Object.freeze([
 ]);
 export const TIPOS_ETAPA = Object.freeze({ aberto: "Aberta", ganho: "Ganho", perdido: "Perda" });
 
+/**
+ * plano 1000b · RB-019: o texto do chip do filtro por etiquetas sem a chave técnica («(alguma)»). op: alguma | todas | nenhuma.
+ */
+/** plano 1000b · RB-018: os nomes para o chip — id que não existe mais vira «etiqueta removida» (uma vez só), em vez de sumir e deixar o chip vazio. */
+export function nomesEtiquetasChip(ids, etiquetaDe) {
+  const nomes = [];
+  let removida = false;
+  for (const id of ids || []) {
+    const e = typeof etiquetaDe === "function" ? etiquetaDe(id) : null;
+    if (e && e.nome) nomes.push(e.nome); else removida = true;
+  }
+  if (removida) nomes.push("etiqueta removida");
+  return nomes;
+}
+export function textoChipEtiquetas(op, nomes) {
+  const lista = (nomes || []).filter(Boolean).join(", ");
+  if (op === "todas") return `Tem todas: ${lista}`;
+  if (op === "nenhuma") return `Sem nenhuma de: ${lista}`;
+  return `Tem alguma de: ${lista}`;
+}
+
+/**
+ * plano 1000b · RB-042/136: exemplos por vertical — o título do negócio novo, o vazio dos campos de negócio, o placeholder do rótulo do campo e o
+ * vazio das etiquetas (a oficina não vê «Implante superior» nem «dentista responsável»). Vertical desconhecida → genérico.
+ */
+const EXEMPLOS_VERTICAL = Object.freeze({
+  odonto: { titulo: "Implante superior", campos: "dentista responsável, dentes", campo: "Dentista responsável", etiquetas: "Implante, Urgência" },
+  oficina: { titulo: "Troca de embreagem", campos: "placa, quilometragem", campo: "Placa do veículo", etiquetas: "Revisão, Urgente" },
+  loja: { titulo: "Kit presente", campos: "tamanho, forma de entrega", campo: "Tamanho", etiquetas: "Presente, Atacado" },
+  generico: { titulo: "Proposta mensal", campos: "prazo de entrega, plano escolhido", campo: "Plano escolhido", etiquetas: "Prioridade, Retorno" },
+});
+export function exemplosVertical(vertical) { return EXEMPLOS_VERTICAL[vertical] || EXEMPLOS_VERTICAL.generico; }
+export function exemploTituloNegocio(vertical) { return exemplosVertical(vertical).titulo; }
+
+/** plano 1000b · RB-120: quem «escreveu» o que veio sem autor (automação, servidor) — o MESMO nome nas notas e na linha do tempo. */
+export const AUTOR_AUTOMATICO = "Automático";
+
+/** plano 1000b · RB-029: texto do chip do filtro por responsável — pessoa desligada da empresa vira «pessoa removida» (antes: «—»). */
+export function textoChipDono(dono, usuario) {
+  if (dono === "eu") return "Responsável: eu";
+  if (dono === "sem") return "Responsável: sem responsável";
+  return `Responsável: ${(usuario && usuario.nome) || "pessoa removida"}`;
+}
+
+/** plano 1000b · RB-213: o vazio da lista diz o que foi procurado quando só há busca («Nada encontrado para «ana».»). */
+export function textoSemResultado(filtro) {
+  const f = { ...(filtro || {}) };
+  const q = typeof f.busca === "string" ? f.busca.trim() : "";
+  delete f.busca;
+  return q && filtroVazio(f) ? `Nada encontrado para «${q}».` : "Nada encontrado com esses filtros.";
+}
+
+/**
+ * plano 1000b · RB-227 (RB-091): o rótulo do número de ganhos no resumo da empresa, concordando com o registro da vertical
+ * (odonto: «1 fechada · 2 fechadas»; oficina: «aprovado(s)»; loja: «vendida(s)»; genérico: «ganho(s)»). Antes: «fechous».
+ */
+const PARTICIPIO_GANHO = Object.freeze({ odonto: "fechad", oficina: "aprovad", loja: "vendid", generico: "ganh" });
+export function textoGanhosEmpresa(n, vocab) {
+  const v = vocab || {};
+  const raiz = PARTICIPIO_GANHO[v.vertical] || String(v.ganhar || "ganho").toLowerCase().replace(/[oa]$/, "");
+  const fem = typeof v.art === "function" && v.art("negocio") === "a";
+  return `${raiz}${fem ? "a" : "o"}${Number(n) === 1 ? "" : "s"}`;
+}
+
+/**
+ * plano 1000b · RB-210: rótulos do resumo de ganhos da ficha pela vertical — «compras» só na loja; clínica fala de tratamentos fechados, oficina
+ * de serviços aprovados, o genérico de negócios ganhos. → {secao, vazio, total, n, ultima}
+ */
+const ROTULOS_COMPRAS = Object.freeze({
+  odonto: { secao: "Resumo de tratamentos", vazio: "Ainda sem tratamentos fechados.", total: "Total em tratamentos", n: "Tratamentos fechados", ultima: "Último fechamento" },
+  oficina: { secao: "Resumo de serviços", vazio: "Ainda sem serviços aprovados.", total: "Total em serviços", n: "Serviços aprovados", ultima: "Última aprovação" },
+  loja: { secao: "Resumo de compras", vazio: "Ainda sem compras.", total: "Total gasto", n: "Compras", ultima: "Última compra" },
+  generico: { secao: "Resumo de negócios ganhos", vazio: "Ainda sem negócios ganhos.", total: "Total ganho", n: "Negócios ganhos", ultima: "Último ganho" },
+});
+export function rotulosCompras(vocab) {
+  const v = (vocab && vocab.vertical) || "generico";
+  return ROTULOS_COMPRAS[v] || ROTULOS_COMPRAS.generico;
+}
+
 /** Marcos que combinam com o tipo da etapa (mesma regra do check nx_estagios_marco_tipo). */
 export function marcosDoTipo(tipo) { return MARCOS.filter(m => m.tipo === tipo); }
 
@@ -1405,26 +1672,52 @@ export function marcosDoTipo(tipo) { return MARCOS.filter(m => m.tipo === tipo);
  * inteiro de dias (24, 72…), senão "h"; valorSla(horas, un) → o número que o campo mostra; horasSla(valor, un) → sla_horas
  * (null quando vazio; o que não é número volta NaN para a validação recusar).
  */
+/** plano 1000b · RB-080: o prazo da etapa como o dono configurou — 72 → «3 dias», 24 → «1 dia», 5 → «5 h». */
+export function textoPrazoSla(horas) {
+  const n = Number(horas);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (unidadeSla(n) === "d") { const d = n / 24; return `${d} ${d === 1 ? "dia" : "dias"}`; }
+  return `${n} h`;
+}
 export function unidadeSla(horas) { const n = Number(horas); return horas !== null && horas !== "" && Number.isInteger(n) && n > 0 && n % 24 === 0 ? "d" : "h"; }
 export function valorSla(horas, un) { if (horas === null || horas === undefined || horas === "") return ""; return un === "d" ? Number(horas) / 24 : Number(horas); }
 export function horasSla(valor, un) {
   if (valor === null || valor === undefined || String(valor).trim() === "") return null;
   const n = Number(String(valor).replace(",", "."));
   if (!Number.isFinite(n)) return NaN;
-  return un === "d" ? Math.round(n * 24) : n;
+  // plano 1000b · RB-081: «1,5» hora vira 2 h (antes: erro «de 1 hora a 90 dias», que não dizia que o problema era a fração)
+  return un === "d" ? Math.round(n * 24) : Math.round(n);
 }
 
 /** Probabilidade padrão por tipo (a mesma do servidor). */
 export function probPadrao(tipo) { return tipo === "ganho" ? 100 : tipo === "perdido" ? 0 : 10; }
 
 /**
+ * plano 1000b · RB-242: chance sugerida para uma etapa aberta nova na posição `pos` de `etapas`: a média entre a aberta de antes e a de depois;
+ * sem aberta depois (a nova fica logo antes das fechadas), a média entre a anterior e 100 (o fechamento). Sem aberta antes: 10.
+ */
+export function probNovaEtapa(etapas, pos) {
+  const lista = etapas || [];
+  const num = e => (e && e.tipo === "aberto" && e.probabilidade !== null && e.probabilidade !== "" && Number.isFinite(Number(e.probabilidade)) ? Number(e.probabilidade) : null);
+  let antes = null, depois = null;
+  for (let j = Math.min(pos, lista.length) - 1; j >= 0 && antes === null; j--) antes = num(lista[j]);
+  for (let j = pos; j < lista.length && depois === null; j++) depois = num(lista[j]);
+  if (antes === null) return 10;
+  const r = Math.round((antes + (depois === null ? 100 : depois)) / 2);
+  return Math.max(0, Math.min(99, r));
+}
+
+/**
  * validarFunil({nome, conta_no_ads, estagios:[{nome,tipo,marco,probabilidade,sla_horas,cor}]}) →
  * [] (ok) ou [{indice|null, campo, hint, texto}] — mesmas regras de nx_funil_salvar, para avisar antes de salvar.
  */
-export function validarFunil(f) {
+export function validarFunil(f, { outros = [] } = {}) {
   const erros = [];
   const add = (indice, campo, hint) => erros.push({ indice, campo, hint, texto: DICAS_FUNIL[hint] || "Confira os dados." });
-  if (!String(f && f.nome || "").trim()) add(null, "nome", "nome");
+  const nomeFunil = String(f && f.nome || "").trim();
+  if (!nomeFunil) add(null, "nome", "nome");
+  // plano 1000b · RB-146: nome de OUTRO funil (sem acento/maiúscula) é recusado aqui, antes de ir ao servidor
+  else if ((outros || []).some(o => o && o.id !== (f && f.id) && semAcento(String(o.nome || "").trim()) === semAcento(nomeFunil))) add(null, "nome", "nome_em_uso");
   const est = (f && f.estagios) || [];
   if (est.length < 1 || est.length > 25) add(null, "estagios", "etapas");
   const nomes = new Set();
@@ -1551,6 +1844,16 @@ export function mapaValido(mapa) {
 export function mapaTemNegocio(mapa) {
   return (mapa || []).some(d => d === "negocio_titulo" || d === "negocio_valor" || d === "estagio");
 }
+/** plano 1000b · RB-133: os nomes curtos das colunas de negócio mapeadas, na ordem fixa → ["Título", "Valor", "Etapa"] (só as que estão no mapa). */
+export function colunasNegocioMapeadas(mapa) {
+  const m = new Set(mapa || []);
+  return [["negocio_titulo", "Título"], ["negocio_valor", "Valor"], ["estagio", "Etapa"]].filter(([d]) => m.has(d)).map(([, r]) => r);
+}
+/** «A», «A e B», «A, B e C». */
+export function juntarE(lista) {
+  const l = (lista || []).filter(Boolean).map(String);
+  return l.length <= 1 ? (l[0] || "") : `${l.slice(0, -1).join(", ")} e ${l[l.length - 1]}`;
+}
 
 /** Soma o resultado de um lote no acumulado do resumo. */
 export function somarImportacao(acc, r) {
@@ -1575,6 +1878,11 @@ export function textoResumoImportacao(s) {
 export function decodificarArquivo(bytes, Decodificador = globalThis.TextDecoder) {
   const utf = new Decodificador("utf-8").decode(bytes);
   if (!utf.includes("�")) return { texto: utf, codificacao: "utf-8" };
+  // plano 1000b · RB-248: um «�» solto num arquivo UTF-8 de verdade (cheio de acentos que decodificaram bem) não troca tudo para 1252.
+  // Arquivo ANSI quase nunca forma UTF-8 válido: os acentos viram «�» e sobram poucos caracteres não-ASCII bons.
+  let ruins = 0, bons = 0;
+  for (const ch of utf) { if (ch === "�") ruins++; else if (ch.charCodeAt(0) > 127) bons++; }
+  if (bons > 0 && ruins / (ruins + bons) <= 0.1) return { texto: utf, codificacao: "utf-8", substituidos: ruins };
   try { return { texto: new Decodificador("windows-1252").decode(bytes), codificacao: "windows-1252" }; }
   catch { return { texto: utf, codificacao: "utf-8" }; }
 }
@@ -1622,8 +1930,10 @@ export function linhasExportacao(itens, campos = []) {
 /** `tel:+55…` a partir do telefone do cadastro (só dígitos): 10–11 dígitos = DDD + número, ganham o 55; 12–13 já trazem o país; fora disso não dá para ligar → null. */
 export function hrefTel(telefone) {
   let d = String(telefone == null ? "" : telefone).replace(/\D/g, "");
-  if (d.length < 10 || d.length > 13) return null;
-  if (d.length <= 11) d = `55${d}`;
+  // plano 1000b · RB-069: 10–11 dígitos só ganham 55 quando parecem brasileiros (+1 212 555 1234 é guardado 12125551234 e não vira +5512125551234);
+  // número de fora guardado com o DDI vai até 15 dígitos (E.164)
+  if (d.length < 10 || d.length > 15) return null;
+  if (d.length <= 11 && pareceBrasileiro(d)) d = `55${d}`;
   return `tel:+${d}`;
 }
 
@@ -1682,9 +1992,10 @@ export function faixaTempoEtapa(estagioEm, slaHoras, agora = new Date()) {
   const nivel = horas >= limiteRuim ? "ruim" : horas >= limiteAten ? "aten" : "ok";
   const pct = Math.max(0.04, Math.min(1, horas / limiteRuim));   // um fio sempre aparece (cartão de hoje)
   const dias = Math.floor(horas / 24);
-  const texto = nivel === "ruim" ? `Passou do prazo da etapa (${comSla ? `${sla} h` : "7 dias"})`
-    : nivel === "aten" ? `Perto do prazo da etapa (${comSla ? `${sla} h` : "7 dias"})`
-      : dias <= 0 ? "Entrou hoje na etapa" : `Dentro do prazo da etapa (${comSla ? `${sla} h` : "7 dias"})`;
+  const prazo = comSla ? textoPrazoSla(sla) : "7 dias";      // plano 1000b · RB-080: «3 dias», não «72 h»
+  const texto = nivel === "ruim" ? `Passou do prazo da etapa (${prazo})`
+    : nivel === "aten" ? `Perto do prazo da etapa (${prazo})`
+      : dias <= 0 ? "Entrou hoje na etapa" : `Dentro do prazo da etapa (${prazo})`;
   return { horas: Math.round(horas * 10) / 10, pct: Math.round(pct * 1000) / 1000, nivel, limiteHoras: limiteRuim, padrao: !comSla, texto };
 }
 
@@ -1740,6 +2051,25 @@ export function resumoFunil(colunas, estagios) {
   return linhas;
 }
 
+/** plano 1000b · RB-125: «qua», «sáb» para um dia civil (AAAA-MM-DD); inválido → "". */
+export function diaSemanaCurto(dia) {
+  const [y, m, d] = String(dia || "").split("-").map(Number);
+  if (!y || !m || !d) return "";
+  return ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"][new Date(Date.UTC(y, m - 1, d, 12)).getUTCDay()];
+}
+/** plano 1000b · RB-121: o atalho de salvar dito na tela — «⌘+Enter» no Mac/iPhone/iPad, «Ctrl+Enter» nos outros. */
+export function atalhoSalvar(plataforma) {
+  return `${teclaModificadora(plataforma)}+Enter`;
+}
+/** plano 1000b · RB-014: a tecla do «com clique abre numa nova aba» — «⌘» no Mac/iPhone/iPad, «Ctrl» nos outros. */
+export function teclaModificadora(plataforma) {
+  return /mac|iphone|ipad|ipod|ios/i.test(String(plataforma || "")) ? "⌘" : "Ctrl";
+}
+/** plano 1000b · RB-014: a plataforma do aparelho (navigator.userAgentData.platform ou navigator.platform); "" fora do navegador. */
+export function plataformaAparelho() {
+  try { return (typeof navigator !== "undefined" && navigator && ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform)) || ""; } catch { return ""; }
+}
+
 /** «Hoje» / «Ontem» / «Amanhã» / «Seg, 06/10» para um dia civil (AAAA-MM-DD) comparado com `hoje`. */
 export function rotuloDia(dia, hoje) {
   if (!dia) return "Sem data";
@@ -1766,6 +2096,8 @@ export function rotuloDia(dia, hoje) {
  * depois da semana e quantas não têm prazo. → {colunas: [{dia, rotulo, itens}], depois, semPrazo, antes}
  */
 export function colunasDaSemana(itens, { instanteDe, diaDe = iso => String(iso || "").slice(0, 10), hoje, dias = 7 } = {}) {
+  // plano 1000b · RB-078: «hoje» vazio/inválido derrubava a visão Semana (Date.UTC(NaN).toISOString() lança RangeError)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(hoje || "")) || Number.isNaN(Date.parse(`${hoje}T00:00:00Z`))) return { colunas: [], depois: 0, antes: 0, semPrazo: 0 };
   const [y, m, d] = String(hoje || "").split("-").map(Number);
   const lista = Array.from({ length: dias }, (_, i) => new Date(Date.UTC(y, m - 1, d + i)).toISOString().slice(0, 10));
   const grupos = new Map(agruparPorDia(itens, { instanteDe, diaDe, hoje }).map(g => [g.dia, g.itens]));
@@ -1842,20 +2174,22 @@ export function duplicadosPlanilha(linhas, numeros = null) {
   return [...grupos.values()].filter(g => g.linhas.length > 1);
 }
 
-/** CR-123: etapas da planilha que não batem com uma etapa ABERTA do funil (o servidor usaria a 1ª) e etiquetas que ainda não existem (serão criadas). */
+/** CR-123: etapas da planilha que não batem com uma etapa ABERTA do funil (o servidor usaria a 1ª) e etiquetas que ainda não existem (serão criadas).
+ *  plano 1000b · RB-250: `etiquetasComVirgula` = células com vírgula e sem «;»/«|» («VIP, Retorno» viraria UMA etiqueta) — a prévia avisa. */
 export function conferirPlanilha(linhas, { estagios = [], etiquetas = [] } = {}) {
   const norm = s => semAcento(String(s || "")).trim().replace(/\s+/g, " ");
   const abertas = new Set((estagios || []).filter(e => e.tipo === "aberto").map(e => norm(e.nome)));
   const existentes = new Set((etiquetas || []).map(e => norm(e.nome)));
-  const etapas = new Map(), novas = new Map();
+  const etapas = new Map(), novas = new Map(), comVirgula = [];
   for (const l of linhas || []) {
+    if (l && l.etiquetas && /,/.test(String(l.etiquetas)) && !/[;|]/.test(String(l.etiquetas)) && comVirgula.length < 5) comVirgula.push(String(l.etiquetas).trim().slice(0, 60));
     if (l && l.estagio && !abertas.has(norm(l.estagio))) etapas.set(norm(l.estagio), String(l.estagio).trim().slice(0, 40));
     if (l && l.etiquetas) for (const t of String(l.etiquetas).split(/\s*[;|]\s*/)) {
       const nome = t.trim().slice(0, 40);
       if (nome && !existentes.has(norm(nome))) novas.set(norm(nome), nome);
     }
   }
-  return { etapasDesconhecidas: [...etapas.values()], etiquetasNovas: [...novas.values()] };
+  return { etapasDesconhecidas: [...etapas.values()], etiquetasNovas: [...novas.values()], etiquetasComVirgula: comVirgula };
 }
 
 /** plano 1000 (CR-052): a data (AAAA-MM-DD, dia inteiro) ou data e hora (datetime-local) já passou? Vazio/inválido → false. Só avisa, não bloqueia. */
@@ -1863,9 +2197,10 @@ export function dataPassou(v, agora = Date.now()) {
   const s = String(v ?? "").trim();
   if (!s) return false;
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    // plano 1000b · RB-079: «hoje» no calendário de São Paulo (o resto do CRM), não no fuso do aparelho
     const d = new Date(agora);
-    const hoje = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    return s < hoje;
+    if (Number.isNaN(d.getTime())) return false;
+    return s < fmtDiaSP.format(d);
   }
   const t = Date.parse(s);
   return Number.isFinite(t) && t < agora;
@@ -1876,7 +2211,7 @@ export const TEXTO_DATA_PASSOU = "Essa data já passou.";
  * plano 1000 (CR-103): dados do titular (direito de acesso da LGPD) a partir do que nx_contato_ver devolve — só desta pessoa.
  * → {titular, gerado_em, cadastro, consentimento, empresa, negocios, tarefas, notas, atendimentos, historico} | null
  */
-export function dadosTitular(d, { geradoEm = null } = {}) {
+export function dadosTitular(d, { geradoEm = null, vocab = null, brl = v => `R$ ${v}`, motivos = {} } = {}) {
   const c = d && d.contato;
   if (!c || c.id == null) return null;
   const so = (o, chaves) => Object.fromEntries(chaves.filter(k => o && o[k] !== undefined && o[k] !== null && o[k] !== "").map(k => [k, o[k]]));
@@ -1891,8 +2226,35 @@ export function dadosTitular(d, { geradoEm = null } = {}) {
     tarefas: lista(d.tarefas).map(t => so(t, ["id", "titulo", "tipo", "vence_em", "concluida_em"])),
     notas: lista(d.notas).map(n => so(n, ["id", "texto", "criado_em"])),
     atendimentos: lista(d.conversas).map(x => so(x, ["id", "protocolo", "status", "aberta_em"])),
-    historico: lista(d.tempo).map(t => so(t, ["tipo", "fonte", "em", "dados"])),
+    // plano 1000b · RB-111: o histórico vai como frase — os `dados` crus levavam ids de contas da equipe (para, de) e outros dados internos
+    historico: lista(d.tempo).map(t => so({ tipo: t.tipo, quando: t.em, texto: textoTempo(t, { vocab, brl, motivos }) }, ["tipo", "quando", "texto"])),
   };
+}
+
+/**
+ * plano 1000b · RB-263: a versão LEGÍVEL dos dados do titular (vai num .txt junto do JSON) — seções com título, um item por linha, sem chaves técnicas.
+ * `dados` = dadosTitular(...); `fmt` = {data(iso) → texto, brl(v) → texto} (o ui da tela). → texto (linhas com \n).
+ */
+export function textoTitular(dados, { data = v => String(v ?? ""), brl = v => `R$ ${v}`, vocab = null } = {}) {
+  if (!dados || !dados.cadastro) return "";
+  const c = dados.cadastro, sai = [];
+  const sec = (titulo, linhas) => { sai.push("", titulo.toUpperCase(), "-".repeat(Math.min(40, titulo.length))); if (!linhas.length) sai.push("(nada registrado)"); else sai.push(...linhas); };
+  const par = (rot, v) => (v === undefined || v === null || v === "" ? null : `${rot}: ${v}`);
+  sai.push(`Dados de ${dados.titular}`, dados.gerado_em ? `Gerado em ${data(dados.gerado_em)}` : null);
+  sec("Cadastro", [par("Nome", c.nome), par("Telefone", c.telefone), par("E-mail", c.email), par("Documento", c.documento), par("Nascimento", c.nascimento),
+    par("Cidade", [c.cidade, c.uf].filter(Boolean).join("/")), par("Origem", ROTULO_ORIGEM[c.origem] || c.origem), par("Observação", c.obs),
+    par("Cadastrado em", c.criado_em ? data(c.criado_em) : null), par("Último contato", c.ultimo_contato_em ? data(c.ultimo_contato_em) : null),
+    ...Object.entries(c.campos || {}).map(([k, v]) => par(k, Array.isArray(v) ? v.join(", ") : v))].filter(Boolean));
+  const cs = dados.consentimento || {};
+  sec("Consentimento de marketing", [cs.optin_marketing === false ? "Não quer receber marketing" : cs.optin_marketing === true ? "Aceitou receber marketing" : "Sem registro",
+    par("Registrado em", cs.optin_em ? data(cs.optin_em) : null), par("Como", cs.optin_origem)].filter(Boolean));
+  if (dados.empresa) sec("Empresa", [par("Nome", dados.empresa.nome), par("Cidade", [dados.empresa.cidade, dados.empresa.uf].filter(Boolean).join("/"))].filter(Boolean));
+  sec(vocab && vocab.negocios ? vocab.negocios : "Negócios", (dados.negocios || []).map(n => `- ${n.titulo || n.servico || `#${n.id}`}${n.status ? ` (${n.status})` : ""}${(n.valor ?? n.valor_previsto) != null ? ` · ${brl(n.valor ?? n.valor_previsto)}` : ""}${n.criado_em ? ` · ${data(n.criado_em)}` : ""}`));
+  sec("Tarefas", (dados.tarefas || []).map(t => `- ${t.titulo || "Tarefa"}${t.vence_em ? ` · prazo ${data(t.vence_em)}` : ""}${t.concluida_em ? " · concluída" : ""}`));
+  sec("Notas", (dados.notas || []).map(n => `- ${n.criado_em ? `${data(n.criado_em)}: ` : ""}${n.texto || ""}`));
+  sec("Atendimentos", (dados.atendimentos || []).map(a => `- ${a.protocolo ? `Protocolo ${a.protocolo}` : `#${a.id}`}${a.status ? ` (${a.status})` : ""}${a.aberta_em ? ` · ${data(a.aberta_em)}` : ""}`));
+  sec("Histórico", (dados.historico || []).filter(x => x.texto).map(x => `- ${x.quando ? `${data(x.quando)}: ` : ""}${x.texto}`));      // plano 1000b · RB-111
+  return sai.filter(x => x !== null).join("\n") + "\n";
 }
 
 /**
@@ -1917,7 +2279,25 @@ export function atalhosPrazo(hojeIso) {
 /** CR-111: só os dígitos de um CPF/CNPJ. */
 const soDigitos = v => String(v ?? "").replace(/\D/g, "");
 /** CR-111: dígitos verificadores de CPF (11) e CNPJ (14). → "cpf" | "cnpj" | null (tamanho errado, sequência repetida ou dígito que não confere). */
+/**
+ * plano 1000b · RB-093: CNPJ alfanumérico (Receita, a partir de jul/2026) — 12 posições [0-9A-Z] + 2 dígitos verificadores. Devolve os 14 caracteres em
+ * maiúsculas quando o texto (sem . / - e espaços) tem esse formato COM alguma letra; senão null (o CNPJ só de números segue pelo caminho antigo).
+ */
+function cnpjAlfa(v) {
+  const a = String(v ?? "").toUpperCase().replace(/[./\-\s]/g, "");
+  return /^[0-9A-Z]{12}\d{2}$/.test(a) && /[A-Z]/.test(a) ? a : null;
+}
+/** DV do CNPJ (números ou alfanumérico): cada caractere vale o código ASCII − 48 («A» = 17), pesos de 2 a 9 da direita para a esquerda. */
+function dvCnpj(d, n) {
+  const pesos = n === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  let s = 0;
+  for (let i = 0; i < n; i++) s += (d.charCodeAt(i) - 48) * pesos[i];
+  const r = s % 11;
+  return r < 2 ? 0 : 11 - r;
+}
 export function docValido(v) {
+  const alfa = cnpjAlfa(v);
+  if (alfa) return dvCnpj(alfa, 12) === Number(alfa[12]) && dvCnpj(alfa, 13) === Number(alfa[13]) ? "cnpj" : null;
   const d = soDigitos(v);
   if (d.length === 11) {
     if (/^(\d)\1{10}$/.test(d)) return null;
@@ -1926,20 +2306,22 @@ export function docValido(v) {
   }
   if (d.length === 14) {
     if (/^(\d)\1{13}$/.test(d)) return null;
-    const dv = n => { const pesos = n === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]; let s = 0; for (let i = 0; i < n; i++) s += Number(d[i]) * pesos[i]; const r = s % 11; return r < 2 ? 0 : 11 - r; };
-    return dv(12) === Number(d[12]) && dv(13) === Number(d[13]) ? "cnpj" : null;
+    return dvCnpj(d, 12) === Number(d[12]) && dvCnpj(d, 13) === Number(d[13]) ? "cnpj" : null;
   }
   return null;
 }
 /** CR-111: máscara de CPF (000.000.000-00) ou CNPJ (00.000.000/0000-00); outro tamanho (RG, documento de fora) volta como foi digitado. */
 export function formatarDoc(v) {
   const t = String(v ?? "").trim(), d = soDigitos(t);
+  const alfa = cnpjAlfa(t);       // plano 1000b · RB-093: o alfanumérico ganha a mesma máscara, com as letras
+  if (alfa) return `${alfa.slice(0, 2)}.${alfa.slice(2, 5)}.${alfa.slice(5, 8)}/${alfa.slice(8, 12)}-${alfa.slice(12)}`;
   if (d.length === 11 && /^[\d.\-\s]+$/.test(t)) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
   if (d.length === 14 && /^[\d./\-\s]+$/.test(t)) return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
   return t;
 }
 /** CR-111: aviso (não bloqueia) para o documento digitado: dígito que não confere em CPF/CNPJ. null = ok ou não é CPF/CNPJ. */
 export function avisoDoc(v) {
+  if (cnpjAlfa(v)) return docValido(v) ? null : "CNPJ com dígito verificador que não confere. Confira o número.";   // plano 1000b · RB-093
   const d = soDigitos(v);
   if (d.length !== 11 && d.length !== 14) return null;
   return docValido(d) ? null : `${d.length === 11 ? "CPF" : "CNPJ"} com dígito verificador que não confere. Confira o número.`;
@@ -1949,8 +2331,14 @@ export function normalizarSite(v) {
   const t = String(v ?? "").trim();
   if (!t) return null;
   if (/^https?:\/\//i.test(t)) return t;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(t)) return null;            // javascript:, mailto: … não viram link
+  // javascript:, mailto: … não viram link. plano 1000b · RB-077: «site.com.br:8080» (ponto ANTES dos dois-pontos) é host com porta, não esquema
+  if (/^[a-z][a-z0-9+-]*:/i.test(t)) return null;
   return `https://${t.replace(/^\/+/, "")}`;
+}
+/** plano 1000b · RB-105: o endereço só vira link quando parece um site de verdade (host com ponto, sem espaço) — «não tenho» fica texto. */
+export function linkDeSite(v) {
+  const u = normalizarSite(v);
+  return u && /^https?:\/\/[^\s/?#]+\.[^\s/?#]{2,}([/?#]\S*)?$/i.test(u) ? u : null;
 }
 /**
  * CR-150: adiar a tarefa — «hora» (+1 h a partir de agora, ou do vencimento se ainda vai vencer), «amanha» (adiarParaAmanha) ou «semana»
