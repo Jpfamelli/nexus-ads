@@ -343,9 +343,11 @@ export function formatarWhats(texto, nivel = 0) {
   const s = String(texto ?? "");
   const out = [];
   // plano 1000 · CA-023: `código em linha` (crase simples), como o WhatsApp de hoje
-  const re = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])|```([^`]+)```|`([^`\n]+)`|\*([^*\n]+)\*|_([^_\n]+)_|~([^~\n]+)~/g;
+  // plano 1000b · CB-026: «www.clinica.com.br» sem http também vira link (como no WhatsApp do cliente), com href https://
+  const re = /((?:https?:\/\/|www\.(?=[a-zA-Z0-9-]+\.[a-zA-Z]))[^\s<>"']+[^\s<>"'.,;:!?)\]])|```([^`]+)```|`([^`\n]+)`|\*([^*\n]+)\*|_([^_\n]+)_|~([^~\n]+)~/g;
   let i = 0, m;
   const antesOk = pos => pos === 0 || /[\s(["'¡¿]/.test(s[pos - 1]);
+  const depoisOk = pos => pos >= s.length || /[\s.,;:!?)\]"'…*_~-]/.test(s[pos]);   // plano 1000b · CB-027
   // CA-022: dentro de negrito/itálico/riscado o link continua link (e a formatação aninhada vale): `partes` só quando há o que aninhar
   const comPartes = (tipo, v) => {
     const seg = { tipo, v };
@@ -355,14 +357,26 @@ export function formatarWhats(texto, nivel = 0) {
   while ((m = re.exec(s))) {
     const ini = m.index;
     if (!m[1] && !m[2] && !m[3] && !antesOk(ini)) continue;
+    if (m[1] && /^www\./.test(m[1]) && !antesOk(ini)) continue;   // plano 1000b · CB-026: «xwww.a.com» não é link
+    // plano 1000b · CB-027: como no WhatsApp, o marcador de fecho precisa vir seguido de espaço, pontuação ou fim («*promo*valida» e
+    // «2*3*4» não são negrito); senão a busca continua do caractere seguinte
+    if ((m[4] || m[5] || m[6]) && !depoisOk(ini + m[0].length)) { re.lastIndex = ini + 1; continue; }
     if (ini > i) out.push({ tipo: "texto", v: s.slice(i, ini) });
-    if (m[1]) out.push({ tipo: "link", v: m[1] });
+    // plano 1000b · CB-025: «…/Taubaté_(SP)» — o «)» final entra no link quando a URL tem «(» sem par (balanceamento simples)
+    let url = m[1];
+    if (url) {
+      let fimUrl = ini + url.length;
+      const conta = (t, c) => t.split(c).length - 1;
+      while (s[fimUrl] === ")" && conta(url, "(") > conta(url, ")")) { url += ")"; fimUrl++; }
+      if (url.length !== m[1].length) re.lastIndex = fimUrl;
+    }
+    if (m[1]) out.push(/^www\./.test(url) ? { tipo: "link", v: `https://${url}`, texto: url } : { tipo: "link", v: url });   // CB-026: `texto` = como foi escrito
     else if (m[2]) out.push({ tipo: "mono", v: m[2] });
     else if (m[3]) out.push({ tipo: "mono", v: m[3], linha: true });
     else if (m[4]) out.push(comPartes("negrito", m[4]));
     else if (m[5]) out.push(comPartes("italico", m[5]));
     else if (m[6]) out.push(comPartes("riscado", m[6]));
-    i = ini + m[0].length;
+    i = m[1] ? ini + url.length : ini + m[0].length;
   }
   if (i < s.length) out.push({ tipo: "texto", v: s.slice(i) });
   return out;
@@ -404,6 +418,17 @@ export function tempoEspera(desde, agora = new Date()) {
   if (d < 3600000) return `${Math.floor(d / 60000)} min`;
   if (d < 86400000) return `${Math.floor(d / 3600000)} h`;
   return `${Math.floor(d / 86400000)} d`;
+}
+/** plano 1000b · CB-029: a mesma espera por extenso, para frases faladas e title («aguardando há 3 dias», não «há 3 d»);
+    o «3 d» fica só no selo curto. */
+export function tempoEsperaLongo(desde, agora = new Date()) {
+  const d = ms(agora) - ms(desde);
+  if (!Number.isFinite(d)) return "";
+  if (d < 60000) return "agora";
+  const n = (v, um, varios) => `${v} ${v === 1 ? um : varios}`;
+  if (d < 3600000) return `${Math.floor(d / 60000)} min`;   // «min» o leitor já fala «minutos»
+  if (d < 86400000) return n(Math.floor(d / 3600000), "hora", "horas");
+  return n(Math.floor(d / 86400000), "dia", "dias");
 }
 
 /** Hora curta da lista: hoje → "14:05"; ontem → "Ontem"; semana → "seg."; senão "28/09". */
@@ -514,6 +539,36 @@ export function contarParametros(corpo) {
   let mx = 0;
   for (const m of String(corpo ?? "").matchAll(/\{\{\s*(\d+)\s*\}\}/g)) mx = Math.max(mx, Number(m[1]));
   return mx;
+}
+/** plano 1000b · CB-112: onde o {{n}} entra no texto do modelo — «Olá {{1}}, sua consulta…» (até `raio` caracteres de cada lado,
+    reticências quando corta). Sem o {{n}} no corpo → "". */
+export function trechoParametro(corpo, n, raio = 30) {
+  const txt = String(corpo ?? "").replace(/\s+/g, " ");
+  const m = new RegExp(`\\{\\{\\s*${Number(n)}\\s*\\}\\}`).exec(txt);
+  if (!m) return "";
+  const ini = Math.max(0, m.index - raio), fim = Math.min(txt.length, m.index + m[0].length + raio);
+  return `${ini > 0 ? "…" : ""}${txt.slice(ini, fim).trim()}${fim < txt.length ? "…" : ""}`;
+}
+/** plano 1000b · CB-038: o texto do campo vira resposta rápida para TODOS os clientes — nome e primeiro nome do contato, o nome de
+    quem atende e o protocolo voltam a ser {nome}, {primeiro_nome}, {atendente}, {protocolo} (palavra inteira, sem caixa/acento).
+    → { texto, trocas } (trocas = quantas variáveis entraram). */
+export function generalizarResposta(texto, vars = {}) {
+  let t = String(texto ?? "");
+  let trocas = 0;
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const trocar = (valor, chave) => {
+    const v = String(valor ?? "").trim();
+    if (v.length < 2 || /^[\d\s()+-]+$/.test(v) && chave !== "protocolo") return;
+    const re = new RegExp(`(?<![\\p{L}\\p{N}_])${esc(v)}(?![\\p{L}\\p{N}_])`, "giu");
+    t = t.replace(re, () => { trocas++; return `{${chave}}`; });
+  };
+  if (String(vars.nome ?? "").trim().includes(" ")) trocar(vars.nome, "nome");
+  // revisão 1000b · CB-038: o nome COMPLETO de quem atende não vira {atendente} — o aplicarVariaveis preenche só o primeiro nome,
+  // e «Helena Souza» viraria «Ana» para a colega (o sobrenome sumia). Só o primeiro nome é trocado; o resto fica como foi escrito.
+  trocar(vars.primeiro_nome, "primeiro_nome");
+  trocar(vars.atendente, "atendente");
+  trocar(vars.protocolo, "protocolo");
+  return { texto: t, trocas };
 }
 /** preencherModelo("Olá {{1}}", ["Ana"]) → "Olá Ana"; parâmetro vazio mostra «{{n}}». */
 export function preencherModelo(corpo, params = []) {
@@ -809,6 +864,9 @@ export function classificarFalhaEnvio(e) {
   if (e && e.resposta && e.resposta.ambigua === true) return { tipo: "definitiva", codigo: "ambigua", motivo: "Pode ter saído — confira no WhatsApp antes de reenviar.", ambigua: true, salva };
   if (REDE_SEM_CONEXAO.test(cod)) return { tipo: "rede", subtipo: "sem_conexao", codigo: cod, motivo: "Sem internet: a mensagem espera na fila." };
   if (REDE_EM_VOO.test(cod) || status === 504) return { tipo: "rede", subtipo: "em_voo", codigo: cod || "http_504", motivo: "O servidor não respondeu a tempo: tentando de novo sem enviar em dobro." };
+  // plano 1000b · CB-024: limite de envios (nx-enviar: 429 limite_taxa; api: muitos_pedidos/aguarde) não é definitivo — backoff e sai sozinha
+  if ((status === 429 || /^(limite_taxa|muitos_pedidos|aguarde)$/.test(cod)) && !salva)
+    return { tipo: "rede", subtipo: "servidor", codigo: cod || "http_429", motivo: "Muitos envios em pouco tempo: tentando de novo." };
   if (REDE_SERVIDOR.test(cod) || (status >= 500 && !salva)) return { tipo: "rede", subtipo: "servidor", codigo: cod || `http_${status}`, motivo: "O servidor está ocupado: tentando de novo." };
   return { tipo: "definitiva", codigo: cod || "envio_falhou", motivo: dicaErroEnvio(cod) || "", salva };
 }
@@ -1011,11 +1069,39 @@ export function acordeDoEvento(ev, { emCampo = false } = {}) {
     return { a: "assumir", r: "resolver", n: "nota", t: "transferir", p: "atender", o: "abrir_negocio", e: "etiquetas" }[letra] || null;
   }
   if (emCampo) return null;
-  if (k === "j") return "mover_baixo";
-  if (k === "k") return "mover_cima";
+  // plano 1000b · CB-028: com Caps Lock o key vem «J»/«K» (sem Shift) — compara em minúscula; Shift+J continua sem atalho
+  const kl = ev.shiftKey ? k : k.toLowerCase();
+  if (kl === "j") return "mover_baixo";
+  if (kl === "k") return "mover_cima";
   if (k === "/") return "buscar";
   if (k === "?") return "ajuda";
   return null;
+}
+
+/** plano 1000b · CB-045: estado do número para o seletor da «Nova conversa» — "" quando está ativo e conectado; senão «com erro»,
+    «configurando» (pendente) ou «desconectado» (ativo, mas o aparelho/conexão caiu). */
+export function rotuloEstadoCanal(c) {
+  if (!c) return "";
+  const st = String(c.status || "");
+  if (st === "erro") return "com erro";
+  if (st === "pendente" || st === "configurando") return "configurando";
+  if (String(c.estado || "") === "desconectado") return "desconectado";
+  if (st && st !== "ativo") return st;
+  return "";
+}
+
+/** plano 1000b · CB-036: o toast de quando o microfone não abre, pelo e.name do getUserMedia/MediaRecorder (antes: sempre «Libere a permissão»). */
+export function textoErroMicrofone(e) {
+  const n = String((e && e.name) || "");
+  if (n === "NotAllowedError" || n === "SecurityError" || n === "PermissionDeniedError")
+    return "O navegador não deixou usar o microfone. Libere a permissão no cadeado ao lado do endereço e tente de novo.";
+  if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError")
+    return "Nenhum microfone encontrado. Conecte um microfone (ou fone com microfone) e tente de novo.";
+  if (n === "NotReadableError" || n === "TrackStartError" || n === "AbortError")
+    return "O microfone está em uso por outro programa (uma chamada, por exemplo). Feche a chamada e tente de novo.";
+  if (n === "NotSupportedError" || n === "TypeError")
+    return "A gravação não é suportada neste navegador. Anexe um áudio salvo pelo clipe.";
+  return "Não foi possível acessar o microfone. Libere a permissão do navegador e tente de novo.";
 }
 
 /** Id da conversa seguinte (dir > 0) ou anterior (dir < 0) na lista; sem conversa aberta, a primeira (ou a última). null no fim da lista. */
@@ -1057,7 +1143,7 @@ export function textoNovaMensagem(lista, agora = new Date()) {
   if (!lista || !lista.length) return "";
   if (lista.length > 1) return `${lista.length} conversas com mensagem nova, a primeira de ${quem(lista[0])}`;
   const c = lista[0];
-  const espera = c.status === "aberta" && c.aguardando && c.ultima_entrada_em ? tempoEspera(c.ultima_entrada_em, agora) : "";
+  const espera = c.status === "aberta" && c.aguardando && c.ultima_entrada_em ? tempoEsperaLongo(c.ultima_entrada_em, agora) : "";   // plano 1000b · CB-029
   return espera && espera !== "agora" ? `Nova mensagem de ${quem(c)}, aguardando há ${espera}` : `Nova mensagem de ${quem(c)}`;
 }
 
@@ -1179,6 +1265,19 @@ export function grupoDocumento(nome, mime = "") {
   if (["ppt", "pptx"].includes(ext) || /presentation|powerpoint/.test(m)) return "slides";
   if (["doc", "docx", "txt", "rtf"].includes(ext) || /wordprocessing|msword|text\/plain/.test(m)) return "texto";
   return "outro";
+}
+/** plano 1000b · CB-109: a sigla do ícone do documento — a extensão do nome (até 4 letras) ou, sem extensão, a do tipo conhecido
+    (text/plain → TXT, application/pdf → PDF…); nunca um pedaço do nome nem do mime («laudo» text/plain era «PLAI»). */
+const SIGLA_MIME = Object.freeze({ "application/pdf": "PDF", "text/plain": "TXT", "text/csv": "CSV", "application/msword": "DOC", "application/vnd.ms-excel": "XLS",
+  "application/vnd.ms-powerpoint": "PPT", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX", "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PPTX",
+  "application/zip": "ZIP", "application/rtf": "RTF" });
+export function siglaArquivo(nome, mime = "") {
+  const n = String(nome || "");
+  const i = n.lastIndexOf(".");
+  const e = i > 0 ? n.slice(i + 1) : "";
+  if (e && e.length <= 4 && /^[a-z0-9]+$/i.test(e)) return e.toUpperCase();
+  return SIGLA_MIME[String(mime || "").toLowerCase().split(";")[0].trim()] || "ARQ";
 }
 
 /* ---------- 34. lista: tipo da última mensagem · SLA de espera ---------- */
@@ -1378,8 +1477,18 @@ export const LIMITE_TEXTO = 4096;
 /** Quanto texto cabe: 4096 menos a assinatura «*Nome:*\n» que o servidor põe na frente quando a empresa liga (cfg.assinatura) — a
     MESMA conta do nx-enviar (1ª palavra do nome de quem envia). */
 export function tetoTexto({ assinatura = false, nome = "" } = {}) {
-  const p = String(nome ?? "").trim().split(/\s+/)[0] || "";
+  const p = nomeAssinatura(nome);   // plano 1000b · CB-001: a mesma regra do prefixo e do servidor
   return assinatura && p ? LIMITE_TEXTO - `*${p}:*\n`.length : LIMITE_TEXTO;
+}
+/** plano 1000b · CB-001: o nome que o nx-enviar põe na assinatura — a 1ª palavra do nome de quem envia, como está
+    (enviar.js: primeiroNome = split por espaço, [0]). «Helena Souza» → «Helena». */
+/** plano 1000b · CB-003: a MESMA regra do nx-enviar (comum.primeiroNomeSemTratamento) — pula Dr., Dra., Sr., Sra., Prof., Pe.:
+    «Dra. Helena Souza» → «Helena»; nome de uma palavra só fica como está. */
+export function nomeAssinatura(nome) {
+  const partes = String(nome ?? "").trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  while (i < partes.length - 1 && TRATAMENTOS.has(semAcento(partes[i]).replace(/\.$/, ""))) i++;
+  return partes[i] || "";
 }
 /** Emoji e alguns símbolos contam 2 no limite do WhatsApp (unidades UTF-16): quantos o texto tem. */
 export function contarDuplos(texto) { return (String(texto ?? "").match(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g) || []).length; }
@@ -1390,7 +1499,8 @@ export function textoContador(restantes, duplos = 0) {
 }
 
 /* ---------- D13. telefone digitado em «Nova conversa» ---------- */
-const DDD_VALIDO = /^(1[1-9]|2[124789]|3[1-578]|4[1-9]|5[13-5]|6[1-9]|7[13-579]|8[1-9]|9[1-9])$/;   // nx_ddd_valido (20261008a)
+// plano 1000b · CB-004: o DDD 29 não existe (os 2x são 21, 22, 24, 27 e 28). Espelho do nx_ddd_valido, que o banco corrige junto (CB-005).
+export const DDD_VALIDO = /^(1[1-9]|2[12478]|3[1-578]|4[1-9]|5[13-5]|6[1-9]|7[13-579]|8[1-9]|9[1-9])$/;   // nx_ddd_valido (20261008a) · plano 1000b · CB-100: exportado para o cv-config
 /** Máscara: número do Brasil vira «(12) 99999-9999» enquanto a pessoa digita; com «+» ou «00» (outro país), com zero na frente e com
     mais de 11 dígitos (já com o 55) fica como foi digitado — a máscara nunca muda o número. */
 export function mascaraTelefone(txt) {
@@ -1549,6 +1659,19 @@ export function desdeTexto(iso, agora = new Date()) {
   return `desde ${_fmtCurta.format(new Date(t))} às ${hora}`;
 }
 
+/** plano 1000b · CB-013: prazo no futuro com o dia quando não é hoje — «18:00» · «amanhã 08:00» · «sex. 08:00» · «25/10 08:00» (SP).
+    A pausa «até amanhã às 8h» (ou de 24, 48 e 168 h) não parece ser de hoje. */
+export function ateTexto(iso, agora = new Date()) {
+  const t = ms(iso);
+  if (!Number.isFinite(t)) return "";
+  const dif = Math.round((Date.parse(diaSP(t)) - Date.parse(diaSP(agora))) / 86400000);
+  const hora = _fmtHora.format(new Date(t));
+  if (dif <= 0) return hora;
+  if (dif === 1) return `amanhã ${hora}`;
+  if (dif < 7) return `${_fmtSem.format(new Date(t))} ${hora}`;
+  return `${_fmtCurta.format(new Date(t))} ${hora}`;
+}
+
 /** CA-033: "qua., 8 de out. de 2026 às 14:05" (fuso de SP) — o title da hora da bolha. */
 const _fmtDataLonga = new Intl.DateTimeFormat("pt-BR", { timeZone: FUSO, weekday: "short", day: "numeric", month: "short", year: "numeric" });
 export function dataLonga(iso) {
@@ -1563,6 +1686,14 @@ export function isoDeSP(valor) {
   if (!m) return null;
   const t = Date.parse(`${m[1]}T${m[2]}:${m[3]}:00-03:00`);
   return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
+/** plano 1000b · CB-060: o inverso do isoDeSP — ISO → "2026-10-13T14:00" no horário de São Paulo (valor do campo datahora). Inválido → "". */
+const _fmtCampoSP = new Intl.DateTimeFormat("en-CA", { timeZone: FUSO, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+export function datahoraSP(iso) {
+  const t = ms(iso);
+  if (!Number.isFinite(t)) return "";
+  const p = Object.fromEntries(_fmtCampoSP.formatToParts(new Date(t)).map(x => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
 }
 
 /** CA-119: documentos que o WhatsApp entrega e que abrem com segurança no navegador (PDF, Office, texto, imagem, áudio, vídeo).
@@ -1641,8 +1772,21 @@ export function etiquetaIgual(lista, nome) {
 
 /** CA-227: pausar a IA por um tempo escolhido — horas até amanhã às 8h (fuso de SP), no mínimo 1, no máximo 168. */
 export function horasAteAmanha8(agora = new Date()) {
-  const amanha = Date.parse(`${diaSP(ms(agora) + 86400000)}T08:00:00-03:00`);
-  return Math.max(1, Math.min(168, Math.ceil((amanha - ms(agora)) / 3600000)));
+  // plano 1000b · CB-086: de madrugada (antes das 8h de SP) o alvo é hoje às 8h — às 02:00 são 6 h, não 30
+  const hoje8 = Date.parse(`${diaSP(ms(agora))}T08:00:00-03:00`);
+  const alvo = hoje8 > ms(agora) ? hoje8 : Date.parse(`${diaSP(ms(agora) + 86400000)}T08:00:00-03:00`);
+  return Math.max(1, Math.min(168, Math.ceil((alvo - ms(agora)) / 3600000)));
+}
+/** plano 1000b · CB-086: o rótulo do menu acompanha o alvo — «até as 8h» de madrugada, «até amanhã às 8h» no resto do dia. */
+export function rotuloPausa8(agora = new Date()) {
+  return Date.parse(`${diaSP(ms(agora))}T08:00:00-03:00`) > ms(agora) ? "Pausar a IA até as 8h" : "Pausar a IA até amanhã às 8h";
+}
+
+/** plano 1000b · CB-007: a regra do marcarLida (CA-132) num lugar só — quem só lê, ou olha a conversa de um colega, não zera as não lidas
+    de quem atende. Vale para a conversa aberta, o lote e o deslizar da lista. */
+export function podeMarcarLida(conv, eu, podeEscrever) {
+  if (!podeEscrever || !conv) return false;
+  return !conv.atribuida_a || !eu || conv.atribuida_a === eu.id;
 }
 
 /** CA-026: a pessoa atende o departamento? (sem departamentos = todos; admin e acima veem tudo — mesma regra do nx_cv_visivel) */
@@ -1702,7 +1846,7 @@ export function juntarPagina(atuais, novos) {
 
 /** CA-077: o que o cliente vê na frente do texto quando a assinatura está ligada (o servidor põe «*Nome:*» na 1ª linha). */
 export function prefixoAssinatura(nome) {
-  const n = String(nome || "").trim();
+  const n = nomeAssinatura(nome);   // plano 1000b · CB-001: «*Helena:*» — o servidor assina só com a 1ª palavra
   return n ? `*${n}:*` : "";
 }
 
@@ -1716,7 +1860,9 @@ export function textoExportacao(msgs, { contato = "Cliente", notas = false, titu
     const quando = Number.isFinite(t) ? _fmtDataHoraExp.format(new Date(t)).replace(",", "") : "";
     const quem = m.tipo === "sistema" ? "Sistema" : m.tipo === "nota" ? `Nota interna (${(m.enviado_por && m.enviado_por.nome) || "equipe"})`
       : m.direcao === "in" ? contato : (m.enviado_por && m.enviado_por.nome) || (m.origem === "ia" ? "IA" : "Equipe");
-    const corpo = (m.corpo ? String(m.corpo) : resumoMensagem(m, 300) || `[${m.tipo || "mensagem"}]`).split(CR).join("");
+    // plano 1000b · CB-085: foto/documento/vídeo/áudio com legenda não perdem o tipo — «Foto: raio-x» (resumoMensagem), não só a legenda
+    const midia = ["imagem", "video", "audio", "documento", "sticker"].includes(m.tipo);
+    const corpo = (midia ? resumoMensagem(m, 300) || `[${m.tipo}]` : m.corpo ? String(m.corpo) : resumoMensagem(m, 300) || `[${m.tipo || "mensagem"}]`).split(CR).join("");
     return `${quando} · ${quem}: ${corpo.split(NL).join(`${NL}    `)}`;
   });
   return (titulo ? [titulo, "", ...linhas] : linhas).join(NL) + NL;
@@ -1797,6 +1943,33 @@ export function prefixoResumoLista(c, euId = null) {
   if (o === "fora_horario") return "Mensagem automática: ";
   if (c.ultima_msg_por && euId && String(c.ultima_msg_por) !== String(euId) && c.ultima_msg_por_nome) return `${primeiroNome(c.ultima_msg_por_nome) || c.ultima_msg_por_nome}: `;
   return "Você: ";
+}
+
+/** plano 1000b · CB-008: o prefixo do trecho de uma mensagem ENCONTRADA na busca (nx_cv_buscar_msgs) — mesmo critério do CA-247, por
+    detecção: origem 'ia'/'automacao'/… e enviado_por(_id/_nome); saída sem esses campos (servidor antigo) é «Equipe: », nunca «Você: ». */
+export function prefixoMsgBusca(r, euId = null) {
+  if (!r || r.direcao !== "out" || r.tipo === "nota") return "";
+  const o = r.origem;
+  if (o === "ia") return "IA: ";
+  if (o === "automacao") return "Automação: ";
+  if (o === "agendada") return "Agendada: ";
+  if (o === "fora_horario") return "Mensagem automática: ";
+  const porId = r.enviado_por_id ?? (r.enviado_por && typeof r.enviado_por === "object" ? r.enviado_por.id : r.enviado_por) ?? null;
+  const porNome = r.enviado_por_nome ?? (r.enviado_por && typeof r.enviado_por === "object" ? r.enviado_por.nome : null) ?? null;
+  if (porId != null && euId != null && String(porId) === String(euId)) return "Você: ";
+  if (porNome) return `${primeiroNome(porNome) || porNome}: `;
+  return "Equipe: ";
+}
+
+/** plano 1000b · CB-010: a faixa do «responder citando» — «Respondendo a Mariana», «Respondendo à sua mensagem», «Respondendo à IA»,
+    «Respondendo a Ana» (mesma regra de autor do CB-008/CB-009); nunca «Respondendo Você». */
+export function rotuloRespondendo(m, { nomeContato = "", euId = null } = {}) {
+  if (!m) return "";
+  if (m.direcao === "in") { const n = String(nomeContato || "").trim(); return n ? `Respondendo a ${n}` : "Respondendo ao cliente"; }
+  const p = prefixoMsgBusca({ ...m, tipo: m.tipo === "nota" ? "texto" : m.tipo }, euId);
+  const fixo = { "IA: ": "à IA", "Você: ": "à sua mensagem", "Automação: ": "à automação", "Agendada: ": "à mensagem agendada",
+    "Mensagem automática: ": "à mensagem automática", "Equipe: ": "à equipe", "": "à mensagem" };
+  return `Respondendo ${fixo[p] ?? `a ${p.replace(/: $/, "")}`}`;
 }
 
 /** CA-087: a conversa abre no separador «Mensagens novas» quando há mais de 3 não lidas (senão, no fim). */

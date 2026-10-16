@@ -63,7 +63,7 @@ a.ini-kpi:active { transform: scale(.985); }
 .ini [data-bloco] { position: relative; }
 .ini [data-bloco] > .rel-cartao-topo { padding-right: 6.6rem; }
 .ini-bl-barra { position: absolute; top: var(--esp-3); right: var(--esp-3); display: inline-flex; align-items: center; gap: 2px; }
-.ini-bl-bt { width: 32px; height: 32px; border-radius: var(--r-pp); color: var(--c-texto-3); opacity: .55; transition: opacity var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out), color var(--t-ui) var(--e-out); }
+.ini-bl-bt { width: 32px; height: 32px; border-radius: var(--r-pp); color: var(--c-texto-2); opacity: 1; transition: opacity var(--t-ui) var(--e-out), background-color var(--t-ui) var(--e-out), color var(--t-ui) var(--e-out); }
 .ini-bl-bt .ic { width: 15px; height: 15px; }
 .rel-cartao:hover .ini-bl-bt, .ini-bl-bt:focus-visible, .ini-rec .ini-bl-bt { opacity: 1; }
 .ini-bl-bt:disabled { opacity: .2; cursor: default; }
@@ -175,7 +175,7 @@ a.ini-kpi:active { transform: scale(.985); }
 .ini-bv-agora .ini-bv-barra { background: var(--c-prim-luz); }
 .ini-bv-passou .ini-bv-barra { opacity: .55; }
 .ini-bv-n { position: absolute; left: 0; right: 0; bottom: calc(var(--h) + 4px); text-align: center; font: 500 var(--fs-12)/1 var(--f-mono); color: var(--c-texto-2); }
-.ini-bv-r { flex: none; margin-top: var(--esp-1); font: 500 var(--fs-11)/1.2 var(--f-mono); color: var(--c-texto-3); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.ini-bv-r { flex: none; margin-top: var(--esp-1); font: 500 var(--fs-12)/1.2 var(--f-mono); color: var(--c-texto-3); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .ini-bv-agora .ini-bv-r { color: var(--c-prim-luz); font-weight: 600; }
 /* a linha do agora: tracejada atrás da barra da hora corrente (ou do dia de hoje) */
 .ini-bv-agora::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 1.5rem; border-left: 1px dashed var(--c-prim-luz); opacity: .5; pointer-events: none; }
@@ -229,13 +229,13 @@ a.ini-kpi:active { transform: scale(.985); }
   .ini-prox-item { grid-template-columns: minmax(0, 4.6rem) minmax(0, 1fr); }
   .ini-prox-acoes { grid-column: 2; }
   .ini-bv-lista { height: 124px; gap: 2px; }
-  .ini-bv-r { font-size: var(--fs-11); letter-spacing: -.02em; }
+  .ini-bv-r { font-size: var(--fs-12); letter-spacing: -.02em; }
   .ini-horas-topo .seg { margin-left: 0; }
   .ini-metas-campos { grid-template-columns: minmax(0, 1fr); }
 }
 /* toque: alvos de 44 px (no mouse os botões de organizar seguem discretos) */
 @media (pointer: coarse), (max-width: 760px) {
-  .ini-bl-bt { width: 44px; height: 44px; opacity: .8; }
+  .ini-bl-bt { width: 44px; height: 44px; opacity: 1; }     /* plano 1000b · RB-161 */
   .ini-bl-barra { gap: 0; top: var(--esp-2); right: var(--esp-2); }
   .ini [data-bloco] > .rel-cartao-topo { padding-right: 8.4rem; }
   .ini-agora-acoes .bt, .ini-prox-acoes .bt, .ini-metas-acoes .bt, .ini-blocos-rodape .bt, .ini-metas .rel-cartao-rodape .bt { min-height: 44px; }
@@ -315,3 +315,20 @@ details.ini-canal-erro p { margin: .25rem 0 0; font-size: var(--fs-12); color: v
 .ini-semdata-nome { margin: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ini-semdata-item .bt { min-height: 40px; }
 @media (pointer: coarse) { .ini-semdata-item .bt { min-height: 44px; } }
+
+/* Plano 1000b (15/10/2026) — lote inicio-1 */
+/* RB-161: os botões de organizar blocos com contraste de controle em repouso (antes opacity .55 — abaixo de 3:1, WCAG 1.4.11): cor --c-texto-2
+   e opacidade 1 (a regra acima); RB-162: o rótulo das barras com o piso de 12 px (antes --fs-11) */
+/* RB-179: o «i» do KPI é um botão à parte, no canto do cartão (fora do link); o rótulo deixa o lugar dele livre */
+.ini-kpi-env { position: relative; display: grid; min-width: 0; }
+.ini-kpi-env > .ini-kpi .ini-kpi-l { padding-right: 1.75rem; }
+.ini-kpi-ajuda { position: absolute; top: var(--esp-2); right: var(--esp-2); width: 32px; height: 32px; display: inline-grid; place-items: center; border-radius: var(--r-pp); color: var(--c-texto-2); opacity: 1; }
+.ini-kpi-ajuda .ic { width: 14px; height: 14px; }
+.ini-kpi-ajuda:focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 2px; }
+.ini-kpi-ajuda-txt { margin: 0; max-width: min(20rem, calc(100vw - 48px)); font-size: var(--fs-13); line-height: 1.45; }
+@media (pointer: coarse), (max-width: 760px) {
+  .ini-kpi-ajuda { width: 44px; height: 44px; top: 0; right: 0; }
+  .ini-kpi-env > .ini-kpi .ini-kpi-l { padding-right: 2.25rem; }
+}
+/* RB-166/RB-180: «Trocar indicadores» fica aberto; «Voltar ao padrão» e «Pronto» lado a lado, a nota de que fica neste aparelho */
+.ini-kpis-esc-acoes { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--esp-2); }

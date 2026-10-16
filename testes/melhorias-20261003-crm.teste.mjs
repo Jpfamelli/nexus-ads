@@ -42,8 +42,9 @@ test("leitura de visões descarta estrutura não permitida e intervalos inválid
   assert.equal(visoes.length, 1);
   assert.equal(visoes[0].nome, "Parados");
   assert.equal(visoes[0].atualizado_em, 0);
-  assert.deepEqual(visoes[0].dados, { funil: "f-1", todosFechados: true, filtro: {
-    busca: "Ana", dono: "eu", etiquetas: { op: "alguma", ids: ["tag-1"] }, origem: ["whatsapp"], parado_dias: 7,
+  // plano 1000b: RB-234 — a busca não é guardada na visão; RB-004 — o período dos fechados (todos = 0) vai junto
+  assert.deepEqual(visoes[0].dados, { funil: "f-1", todosFechados: true, fechadosDias: 0, filtro: {
+    dono: "eu", etiquetas: { op: "alguma", ids: ["tag-1"] }, origem: ["whatsapp"], parado_dias: 7,
   } });
 });
 
@@ -93,8 +94,10 @@ test("aplicar visão devolve cópia independente; excluir não altera as demais"
 });
 
 test("indicador de visão salva some quando o estado filtrado mudou", () => {
+  // plano 1000b: RB-234 — a busca não vai para a visão; com algo digitado o indicador some
   const salvo = L.salvarVisaoCRM([], "contatos", { nome: "Ativos", dados: { ordem: "nome", filtro: { busca: "mar" } } }, { idNovo: "v1" });
-  assert.equal(L.visaoCorrespondenteCRM(salvo.visoes, "contatos", { ordem: "nome", filtro: { busca: "mar" } }), "v1");
+  assert.equal(L.visaoCorrespondenteCRM(salvo.visoes, "contatos", { ordem: "nome", filtro: {} }), "v1");
+  assert.equal(L.visaoCorrespondenteCRM(salvo.visoes, "contatos", { ordem: "nome", filtro: { busca: "mar" } }), "");
   assert.equal(L.visaoCorrespondenteCRM(salvo.visoes, "contatos", { ordem: "nome", filtro: { busca: "ana" } }), "");
 });
 

@@ -168,33 +168,52 @@ const reduzido = () => typeof matchMedia === "function" && matchMedia("(prefers-
 const corValida = c => (/^#[0-9a-f]{6}$/i.test(String(c || "")) ? c : null);
 
 /** Liga o redesenho por largura (o SVG é medido em px reais: texto nunca estica). */
+/** plano 1000b · RB-182: o gráfico grande segue a largura REAL do contêiner (mínimo 200 px; antes 260 fixo estourava o cartão de 2 colunas a 360 px). */
+export const LARGURA_MIN_GRAFICO = 200;
+export function larguraGrafico(clientWidth) { return Math.max(LARGURA_MIN_GRAFICO, Math.round(clientWidth || 640)); }
+/** Liga o redesenho por largura (o SVG é medido em px reais: texto nunca estica). */
 function responsivo(alvo, desenhar) {
   let w = 0, ro = null;
-  const rodar = anim => { const nw = Math.max(260, Math.round(alvo.clientWidth || 640)); w = nw; desenhar(nw, anim); };
+  const rodar = anim => { const nw = larguraGrafico(alvo.clientWidth); w = nw; desenhar(nw, anim); };
   rodar(true);
   if (typeof ResizeObserver === "function") {
-    ro = new ResizeObserver(() => { const nw = Math.round(alvo.clientWidth || 0); if (nw && Math.abs(nw - w) > 24) rodar(false); });
+    ro = new ResizeObserver(() => {
+      // plano 1000b · RB-167: o gráfico saiu da página (a tela redesenhou): o observador se desliga sozinho e solta os nós antigos
+      if (alvo.isConnected === false) { if (ro) ro.disconnect(); ro = null; return; }
+      const nw = Math.round(alvo.clientWidth || 0); if (nw && Math.abs(nw - w) > 24) rodar(false);
+    });
     ro.observe(alvo);
   }
   return { destruir() { if (ro) ro.disconnect(); ro = null; }, redesenhar() { rodar(false); } };
 }
 
-/** Dica flutuante + região aria-live, compartilhadas pelos gráficos com "trilho" (dia a dia). */
+/** plano 1000b · RB-186: o vazio dos gráficos de lista (funil, barras) — um texto, nunca o cartão em branco. */
+export const TEXTO_SEM_DADOS = "Sem dados no período.";
+function semDados() { return h("p", { class: "g-vazio fraco", role: "status", texto: TEXTO_SEM_DADOS }); }
+
+/** Atraso da leitura em voz da dica (RB-261): segurar a seta não empilha um anúncio por passo. */
+export const ATRASO_DICA_VIVA = 250;
+/** Dica flutuante (visual, muda na hora) + região viva só para o leitor de tela, compartilhadas pelos gráficos com "trilho" (dia a dia).
+    plano 1000b · RB-261: a dica visível deixou de ser role=status — percorrer 24 horas com a seta dava 24 anúncios encavalados; agora a região
+    `.g-dica-viva` (sr-only) recebe o texto 250 ms depois do último passo (só o ponto onde a pessoa parou é lido). */
 function trilho(caixa, { n, texto, aoMostrar, aoEsconder }) {
-  const dica = h("div", { class: "g-dica", role: "status", "aria-live": "polite" });
+  const dica = h("div", { class: "g-dica", "aria-hidden": "true" });
+  const viva = h("div", { class: "g-dica-viva sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
   dica.hidden = true;
-  caixa.append(dica);
-  let atual = -1;
+  caixa.append(dica, viva);
+  let atual = -1, tFala = 0;
+  const falar = t => { clearTimeout(tFala); tFala = setTimeout(() => { tFala = 0; viva.textContent = t; }, ATRASO_DICA_VIVA); };
   const mostrar = (k, x) => {
     k = Math.max(0, Math.min(n() - 1, k));
     atual = k;
     dica.textContent = texto(k);
     dica.hidden = false;
+    falar(dica.textContent);
     const larg = caixa.clientWidth || 1, dw = dica.offsetWidth || 160;
     dica.style.setProperty("--x", `${Math.max(4, Math.min(larg - dw - 4, x - dw / 2))}px`);
     aoMostrar(k);
   };
-  const esconder = () => { atual = -1; dica.hidden = true; aoEsconder(); };
+  const esconder = () => { atual = -1; dica.hidden = true; clearTimeout(tFala); tFala = 0; aoEsconder(); };
   return { mostrar, esconder, get atual() { return atual; } };
 }
 
@@ -238,7 +257,9 @@ export function grafDiario(alvo, o) {
     if (velho) velho.remove();
     const serie = o.serie, n = serie.length;
     const H = W < 560 ? 220 : 280;
-    const P = { l: W < 560 ? 46 : 58, r: 34, t: 14, b: 28 }, iw = W - P.l - P.r, ih = H - P.t - P.b, base = P.t + ih;
+    // plano 1000b · RB-182: abaixo de 260 px as margens encolhem (o eixo da direita ainda cabe) e o eixo X mostra menos rótulos
+    const estreito = W < 260;
+    const P = { l: estreito ? 38 : W < 560 ? 46 : 58, r: estreito ? 26 : 34, t: 14, b: 28 }, iw = W - P.l - P.r, ih = H - P.t - P.b, base = P.t + ih;
     const maxG = topoBonito(Math.max(1, ...serie.map(d => d.gasto)));
     const antes = (o.anterior || []).filter(Boolean);
     const maxC = Math.max(4, Math.ceil(Math.max(0, ...serie.map(d => d.convMedia), ...antes.map(d => d.convMedia)) * 1.1 / 4) * 4);
@@ -269,7 +290,7 @@ export function grafDiario(alvo, o) {
       if (ptsA.length > 1) svg.append(s("path", { class: "g-ant", d: caminhoSuave(ptsA) }, titulo("Conversas no período anterior (média de 7 dias)")));
       svg.append(s("path", { class: "g-linha g-s0", d: caminhoSuave(pts), pathLength: 1 }, titulo("Conversas no WhatsApp (média de 7 dias)")));
     }
-    const passo = passoRotulo(n, W < 560 ? 4 : 7), gX = s("g", { class: "g-eixo-x", "aria-hidden": "true" });
+    const passo = passoRotulo(n, estreito ? 3 : W < 560 ? 4 : 7), gX = s("g", { class: "g-eixo-x", "aria-hidden": "true" });
     serie.forEach((d, k) => { if (k % passo === 0) gX.append(s("text", { x: f1(xc(k)), y: H - 8, "text-anchor": "middle" }, o.rotuloDia(d.i))); });
     svg.append(gX);
     const mira = s("line", { class: "g-mira", x1: 0, x2: 0, y1: P.t, y2: base, visibility: "hidden" });
@@ -334,7 +355,8 @@ export function linha(alvo, o) {
     const velho = caixa.querySelector("svg");
     if (velho) velho.remove();
     const n = o.pontos.length, H = W < 560 ? 200 : 240;
-    const P = { l: W < 560 ? 40 : 52, r: 16, t: 14, b: 28 }, iw = W - P.l - P.r, ih = H - P.t - P.b, base = P.t + ih;
+    const estreito = W < 260;     // plano 1000b · RB-182
+    const P = { l: estreito ? 34 : W < 560 ? 40 : 52, r: estreito ? 10 : 16, t: 14, b: 28 }, iw = W - P.l - P.r, ih = H - P.t - P.b, base = P.t + ih;
     const max = topoBonito(Math.max(1, ...o.pontos.flatMap(p => p.valores.map(v => v || 0))));
     const x = k => P.l + (n > 1 ? k / (n - 1) * iw : iw / 2), y = escala([0, max], [base, P.t]);
     const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": o.resumo, class: anim && !reduzido() ? "g-anim" : "" });
@@ -349,7 +371,7 @@ export function linha(alvo, o) {
       const d = pts.length > 1 ? caminhoReto(pts) : `M${f1(pts[0][0] - 3)} ${f1(pts[0][1])} L${f1(pts[0][0] + 3)} ${f1(pts[0][1])}`;
       svg.append(s("path", { class: `g-linha ${se.classe}`, d, pathLength: 1, style: { "--i": j * 4 } }, titulo(`${se.nome}: ${o.pontos.map(p => `${p.rotulo} ${o.fmt(p.valores[j])}`).slice(0, 60).join(", ")}`)));
     });
-    const passo = passoRotulo(n, W < 560 ? 4 : 7), gX = s("g", { class: "g-eixo-x", "aria-hidden": "true" });
+    const passo = passoRotulo(n, estreito ? 3 : W < 560 ? 4 : 7), gX = s("g", { class: "g-eixo-x", "aria-hidden": "true" });
     for (const k of indicesRotulo(n, passo, x, o.pontos.map(p => p.rotulo))) gX.append(s("text", { x: f1(x(k)), y: H - 8, "text-anchor": k === 0 ? "start" : k === n - 1 ? "end" : "middle" }, o.pontos[k].rotulo));
     svg.append(gX);
     const mira = s("line", { class: "g-mira", x1: 0, x2: 0, y1: P.t, y2: base, visibility: "hidden" });
@@ -402,6 +424,8 @@ function posNaCaixa(caixa, el) {
  */
 export function barras(alvo, o) {
   limpar(alvo);
+  // plano 1000b · RB-186: sem itens, o texto do vazio (antes um <ul> vazio e o cartão em branco)
+  if (!Array.isArray(o.itens) || !o.itens.length) { alvo.append(semDados()); return { destruir() {}, mostrar() {}, esconder() {} }; }
   const max = Math.max(1, ...o.itens.flatMap(it => it.valores.map(v => v || 0)));
   const caixa = h("div", { class: "g-caixa g-hcaixa", tabindex: "0", role: "group", "aria-label": `${o.resumo}. Use as setas para ler linha a linha.` });
   const lista = h("ul", { class: "g-hbarras", role: "list", "aria-label": o.resumo });
@@ -483,6 +507,7 @@ export function taxaEntreEtapas(qtd, anterior) {
     Sem `conversao` na etapa, a taxa entre etapas vizinhas é calculada das próprias quantidades (plano 50 · A3); `taxas: false` desliga. */
 export function funil(alvo, o) {
   limpar(alvo);
+  if (!Array.isArray(o.etapas) || !o.etapas.length) { alvo.append(semDados()); return { destruir() {} }; }     // plano 1000b · RB-186
   const max = Math.max(1, ...o.etapas.map(e => e.qtd || 0));
   const lista = h("ol", { class: `g-funil${reduzido() ? "" : " g-anim"}`, "aria-label": o.resumo });
   o.etapas.forEach((e, n) => {
@@ -493,7 +518,7 @@ export function funil(alvo, o) {
     const sequencial = ant && (e.tipo || "aberto") === "aberto" && (ant.tipo || "aberto") === "aberto";
     const taxa = e.conversao ? null : (o.taxas !== false && sequencial ? taxaEntreEtapas(e.qtd || 0, ant.qtd || 0) : null);
     const convTxt = e.conversao || (taxa ? taxa.texto : "");
-    // plano 1000 (pedido de Relatórios): `etapa.dica` explica a conversão (ex.: taxa acima de 100 % porque entraram negócios direto na etapa) —
+    // plano 1000 (pedido de Relatórios): `etapa.dica` explica a conversão (ex.: taxa acima de 100% porque entraram negócios direto na etapa) —
     // vira a dica do valor (title + data-dica do ui.ligarDicas) e uma descrição para o leitor de tela
     const dica = typeof e.dica === "string" && e.dica.trim() ? e.dica.trim().slice(0, 240) : null;
     const li = h("li", { class: `g-fetapa g-f-${e.tipo || "aberto"}`, style: { "--i": n } },
@@ -521,7 +546,9 @@ export function passoHorasCalor(largura, celular = false) {
     Rótulos de hora (plano 100 · A12): `passoHoras` 1 ou 3; sem ele, decide pela largura do alvo (1 h no desktop, 3 h no celular). */
 export function calor(alvo, o) {
   limpar(alvo);
-  const max = Math.max(0, ...o.matriz.flat());
+  // plano 1000b · RB-184: matriz incompleta (dia faltando, linha curta) conta 0 — antes o[d][hr] de uma linha ausente lançava TypeError
+  const valorCalor = (d, hr) => (Array.isArray(o.matriz) && Array.isArray(o.matriz[d]) ? +o.matriz[d][hr] || 0 : 0);
+  const max = Math.max(0, ...[0, 1, 2, 3, 4, 5, 6].flatMap(d => Array.from({ length: 24 }, (_, hr) => valorCalor(d, hr))));
   const celular = typeof matchMedia === "function" && matchMedia("(max-width: 760px)").matches;
   const passo = o.passoHoras === 1 || o.passoHoras === 3 ? o.passoHoras : passoHorasCalor(Number(alvo && alvo.clientWidth) || 0, celular);
   const grade = h("div", { class: `g-calor${reduzido() ? "" : " g-anim"}`, role: "img", "aria-label": o.resumo, "data-passo-horas": passo });
@@ -533,7 +560,7 @@ export function calor(alvo, o) {
     grade.append(h("span", { class: "g-cal-d", "aria-hidden": "true", texto: o.dias[d] }));
     celulas.push([]);
     for (let hr = 0; hr < 24; hr++) {
-      const v = o.matriz[d][hr] || 0;
+      const v = valorCalor(d, hr);
       const c = h("span", { class: `g-cal-c g-n${nivelCalor(v, max)}`, title: `${o.dias[d]} ${String(hr).padStart(2, "0")}h: ${o.fmt(v)}`, style: { "--i": lin * 3 + Math.floor(hr / 4) }, "data-l": lin, "data-h": hr });
       celulas[lin].push(c);
       grade.append(c);
@@ -546,7 +573,7 @@ export function calor(alvo, o) {
   let atual = -1;   // índice linear lin * 24 + hr
   const tr = trilho(caixa, {
     n: () => 7 * 24,
-    texto: k => { const lin = Math.floor(k / 24), hr = k % 24, d = ordem[lin]; return `${o.dias[d]} ${String(hr).padStart(2, "0")}h: ${o.fmt(o.matriz[d][hr] || 0)}`; },
+    texto: k => { const lin = Math.floor(k / 24), hr = k % 24, d = ordem[lin]; return `${o.dias[d]} ${String(hr).padStart(2, "0")}h: ${o.fmt(valorCalor(d, hr))}`; },
     aoMostrar: k => { if (atual >= 0) celulas[Math.floor(atual / 24)][atual % 24].classList.remove("g-ativa"); atual = k; celulas[Math.floor(k / 24)][k % 24].classList.add("g-ativa"); },
     aoEsconder: () => { if (atual >= 0) celulas[Math.floor(atual / 24)][atual % 24].classList.remove("g-ativa"); atual = -1; },
   });
@@ -584,12 +611,14 @@ export function alternarTabela(rodape, alvoGrafico, o) {
     h("thead", {}, h("tr", {}, o.colunas.map((c, j) => h("th", { scope: "col", class: j ? "num" : "", texto: c })))),
     h("tbody", {}, o.linhas.map(l => h("tr", {}, l.map((c, j) => h(j ? "td" : "th", j ? { class: "num", texto: c } : { scope: "row", texto: c }))))));
   tabela.append(t);
-  const btn = h("button", { type: "button", class: "g-ver-tabela", "aria-pressed": "false" }, "Ver como tabela");
+  // plano 1000b · RB-181: o texto troca («Ver como gráfico») e por isso NÃO há aria-pressed — os dois juntos davam «Ver como gráfico,
+  // pressionado» (estado incoerente). O nome diz a ação seguinte; data-modo guarda o que está à vista para quem precisar ler.
+  const btn = h("button", { type: "button", class: "g-ver-tabela", "data-modo": "grafico" }, "Ver como tabela");
   btn.addEventListener("click", () => {
     const ligado = tabela.hidden;
     tabela.hidden = !ligado;
     alvoGrafico.hidden = ligado;
-    btn.setAttribute("aria-pressed", String(ligado));
+    btn.setAttribute("data-modo", ligado ? "tabela" : "grafico");
     btn.textContent = ligado ? "Ver como gráfico" : "Ver como tabela";
   });
   alvoGrafico.after(tabela);
@@ -601,11 +630,31 @@ export function alternarTabela(rodape, alvoGrafico, o) {
 /** Lê a duração do tema, mas não anima quando a aba está oculta ou o usuário reduz movimento. */
 export function duracaoToken(nome) {
   if (typeof document === "undefined" || document.hidden || typeof getComputedStyle !== "function" || reduzido()) return 0;
-  const bruto = getComputedStyle(document.documentElement).getPropertyValue(nome).trim();
+  // plano 1000b · RB-185: o valor fica guardado — o Início anima dezenas de números por desenho e cada um relia o estilo do documento.
+  // O guardado vale enquanto o tema não muda (mesmo <html>, mesma função de estilo e os mesmos class/style/data-* do <html>).
+  const raizDoc = document.documentElement, assin = assinaturaTema(raizDoc);
+  if (!cacheDuracao || cacheDuracao.raiz !== raizDoc || cacheDuracao.gcs !== getComputedStyle || cacheDuracao.assin !== assin) {
+    cacheDuracao = { raiz: raizDoc, gcs: getComputedStyle, assin, valores: new Map() };
+  }
+  if (cacheDuracao.valores.has(nome)) return cacheDuracao.valores.get(nome);
+  const bruto = String(getComputedStyle(raizDoc).getPropertyValue(nome) || "").trim();
   const m = bruto.match(/^([\d.]+)\s*(ms|s)$/i);
-  if (!m) return 0;
-  const ms = Number(m[1]) * (m[2].toLowerCase() === "s" ? 1000 : 1);
-  return Number.isFinite(ms) ? Math.max(0, Math.min(2000, ms)) : 0;
+  const ms = m ? Number(m[1]) * (m[2].toLowerCase() === "s" ? 1000 : 1) : 0;
+  const v = Number.isFinite(ms) ? Math.max(0, Math.min(2000, ms)) : 0;
+  cacheDuracao.valores.set(nome, v);
+  return v;
+}
+let cacheDuracao = null;
+/** O que muda quando o tema/marca/movimento muda no <html> (sem ler estilo computado). */
+export function assinaturaTema(el) {
+  try {
+    if (!el || typeof el.getAttribute !== "function") return "";
+    const nomes = el.getAttributeNames ? el.getAttributeNames().filter(n => n === "class" || n === "style" || n.startsWith("data-")) : ["class", "style", "data-tema", "data-esquema"];
+    // revisão 1000b · RB-185: a preferência de movimento do sistema muda o token (--t-dados em @media reduce) sem tocar no <html>
+    let menos = "";
+    try { menos = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches ? "1" : "0"; } catch { menos = ""; }
+    return nomes.map(n => `${n}=${el.getAttribute(n) || ""}`).join("|") + `|rm=${menos}`;
+  } catch { return ""; }
 }
 
 /** Anima um valor visível e mantém seu equivalente acessível completo, encerrando no valor exato ao ocultar a aba.
@@ -691,7 +740,11 @@ function responsivoMini(alvo, desenhar, minimo = 48) {
   const rodar = anim => { const nw = Math.max(minimo, Math.round(alvo.clientWidth || 120)); w = nw; desenhar(nw, anim); };
   rodar(true);
   if (typeof ResizeObserver === "function") {
-    ro = new ResizeObserver(() => { const nw = Math.round(alvo.clientWidth || 0); if (nw && Math.abs(nw - w) > 12) rodar(false); });
+    ro = new ResizeObserver(() => {
+      // plano 1000b · RB-167: a linha saiu da página (o Início redesenhou os KPIs): desliga sozinho em vez de segurar os nós antigos
+      if (alvo.isConnected === false) { if (ro) ro.disconnect(); ro = null; return; }
+      const nw = Math.round(alvo.clientWidth || 0); if (nw && Math.abs(nw - w) > 12) rodar(false);
+    });
     ro.observe(alvo);
   }
   return { destruir() { if (ro) ro.disconnect(); ro = null; }, redesenhar() { rodar(false); } };
@@ -750,7 +803,8 @@ export function donut(alvo, o) {
   const centroN = s("text", { class: "g-rosca-n g-donut-n", x: cx, y: cy + 4, "text-anchor": "middle" });
   const centroL = s("text", { class: "g-rosca-l g-donut-l", x: cx, y: cy + 24, "text-anchor": "middle" }, (o.centro && o.centro.rotulo) || "");
   svg.append(s("circle", { class: "g-trilho", cx, cy, r: (r + r0) / 2, "stroke-width": r - r0, fill: "none" }), gFatias, centroN, centroL);
-  const leg = h("ul", { class: "g-donut-leg", "aria-label": "Legenda: toque para esconder ou mostrar uma fatia" });
+  // plano 1000b · RB-183: sem «toque» (vale para mouse e teclado também)
+  const leg = h("ul", { class: "g-donut-leg", "aria-label": "Legenda: escolha uma fatia para esconder ou mostrar" });
   const caixa = h("div", { class: "g-caixa g-donut-caixa" }, svg);
   const itens = new Map();   // i → {bt, valorEl, path}
   const tr = trilho(caixa, {

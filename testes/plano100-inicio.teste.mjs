@@ -92,11 +92,11 @@ test("B2: série de 14 dias do servidor por KPI — mesma medida compara com ont
 test("B1: funil do mês — etapas na ordem, nomes pela vertical, taxa sobre a anterior (pode passar de 100 %), conversão geral; sem funil_mes, null", () => {
   const f = I.funilMes(NOVO(), { voc: { negocios: "oportunidades", consultas: "consultas", feminino: true } });
   assert.deepEqual(f.etapas.map(e => [e.nome, e.qtd, e.tipo]), [["Leads", 23, "aberto"], ["Conversas", 19, "aberto"], ["Consultas marcadas", 11, "aberto"], ["Oportunidades ganhas", 9, "ganho"]]);
-  assert.deepEqual(f.etapas.map(e => e.conversao), ["", "83 % da anterior", "58 % da anterior", "82 % da anterior"]);
+  assert.deepEqual(f.etapas.map(e => e.conversao), ["", "83% dos leads", "58% das conversas", "82% das consultas marcadas"]);   // plano 1000b: RB-158/245 «62%» e de QUAL etapa
   assert.equal(Math.round(f.geral * 100), 39); assert.equal(f.vazio, false);
   // plano 1000 (CR-168): acima de 100 % o texto não é mais «250 % da anterior» (confundia: não é a mesma turma) — o número fica na dica
   assert.equal(I.funilMes({ funil_mes: { leads: 2, conversas: 5, agendados: 0, ganhos: 0 } }).etapas[1].conversao, "mais que a etapa anterior");
-  assert.match(I.funilMes({ funil_mes: { leads: 2, conversas: 5, agendados: 0, ganhos: 0 } }).etapas[1].dica, /^250 % da anterior: são contagens do mês/);
+  assert.match(I.funilMes({ funil_mes: { leads: 2, conversas: 5, agendados: 0, ganhos: 0 } }).etapas[1].dica, /^250% dos leads: são contagens do mês/);
   assert.equal(I.funilMes({ funil_mes: { leads: 0, conversas: 0, agendados: 0, ganhos: 0 } }).vazio, true);
   assert.equal(I.funilMes({ funil_mes: { leads: 0, conversas: 0, agendados: 0, ganhos: 0 } }).geral, null, "sem lead não há conversão (nada de 0 %)");
   assert.equal(I.funilMes({ funil_mes: { leads: 0, conversas: 3 } }).etapas[1].conversao, "", "anterior zero: sem taxa");
@@ -404,7 +404,7 @@ test("B1: bloco «Funil do mês» com graficos.funil (4 etapas, taxa sobre a ant
     const etapas = f.querySelectorAll(".g-funil .g-fetapa");
     assert.equal(etapas.length, 4);
     assert.deepEqual(etapas.map(e => texto(e.querySelector(".g-fnome"))), ["Leads", "Conversas", "Consultas marcadas", "Oportunidades ganhas"]);
-    assert.equal(texto(etapas[1].querySelector(".g-fconv")), "83 % da anterior");
+    assert.equal(texto(etapas[1].querySelector(".g-fconv")), "83% dos leads");   // plano 1000b: RB-158/245
     assert.ok(etapas[3].classList.contains("g-f-ganho"));
     const kpis = f.querySelectorAll(".ini-funil-kpis .kpi");
     assert.equal(kpis.length, 2); assert.equal(kpis[0].dataset.formato, "compacto"); assert.equal(kpis[1].dataset.formato, "pct");

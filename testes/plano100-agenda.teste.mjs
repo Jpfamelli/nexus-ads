@@ -535,7 +535,8 @@ test("E6 · tela: «Lembrar» na consulta futura abre a conversa com o lembrete 
   try {
     await abrirLembrar(T2);
     assert.deepEqual(T2.reg.navegou, ["#/conversas?contato=501"], "sem conversa: a rota do contato (Conversas abre «Nova conversa»)");
-    assert.equal(T2.reg.toasts.at(-1), "Lembrete copiado — cole na conversa e envie.");
+    // plano 1000b: CB-200 — sem conversa aberta o aviso diz o caminho (Nova conversa; no número da Meta, só com modelo)
+    assert.equal(T2.reg.toasts.at(-1), "Sem conversa aberta: comece pela Nova conversa (no número da Meta, só com modelo). O texto foi copiado para você colar.");
   } finally { T2.sair(); }
   // consulta passada, concluída ou sem o módulo Conversas: sem «Lembrar»
   const pas = passadaSeg();

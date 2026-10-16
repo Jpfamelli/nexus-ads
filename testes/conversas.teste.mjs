@@ -412,7 +412,8 @@ await teste("Filtros da inbox ativos ficam visíveis, cada um pode ser removido 
 
 await teste("janela baixa: a central usa a altura disponível sem cortar Enviar", () => {
   const js = ler("conversas.js"), css = ler("conversas.css");
-  assert.match(js, /const onResize = \(\) => \{\s*mostrarPainel\(A\.painel\);/,
+  // plano 1000b: CB-052 — o mesmo trabalho, mas um por quadro (requestAnimationFrame)
+  assert.match(js, /quadro = requestAnimationFrame\(\(\) => \{ quadro = 0; if \(!A\) return; mostrarPainel\(A\.painel\);/,
     "ao mudar o tamanho da janela, o estado de chat em tela cheia acompanha o breakpoint");
   assert.match(js, /Math\.max\(0,\s*Math\.floor\(alturaTela\s*-\s*Math\.max\(0,\s*topo\)/,
     "a altura do chat usa o espaço real abaixo do cabeçalho e das faixas");
@@ -706,7 +707,8 @@ assert.match(conv, /const destino = A\.L\.filaDestino\(it, \{ conta, cliente, ag
   assert.match(conv, /if \(destino === "apagar"\) \{ if \(fila\.db\) reqIdb\(lojaFila\(fila\.db, "readwrite"\)\.delete\(it\.id\)\)/, "só o vencido do próprio escopo é apagado");
   // plano 1000 · CA-127: o 2º delete é o «Apagar» do aviso ao admin (mensagens de outra conta guardadas no navegador) — só por clique
   assert.equal((conv.match(/\.delete\(it\.id\)\)/g) || []).length, 2, "nenhum outro delete na leitura da fila");
-  assert.match(conv, /on: \{ click: \(\) => \{[\s\S]{0,80}if \(fila\.db\) for \(const it of deOutros\) reqIdb\(lojaFila\(fila\.db, "readwrite"\)\.delete\(it\.id\)\)/, "o outro delete só roda no clique do admin");
+  // plano 1000b: CB-113 — o clique pergunta antes (ui.confirmar) e só então apaga
+  assert.match(conv, /on: \{ click: async \(\) => \{[\s\S]{0,700}?await E\.ui\.confirmar\([\s\S]{0,400}?if \(fila\.db\) for \(const it of deOutros\) reqIdb\(lojaFila\(fila\.db, "readwrite"\)\.delete\(it\.id\)\)/, "o outro delete só roda no clique do admin");
   assert.match(chat, /L\.textoFila\(\{ estado: m\.filaEstado, motivo: m\.erro, proxima: m\.filaProxima \}\)/, "a bolha da fila diz o motivo real e a próxima tentativa");
   assert.match(ler("cv-logica.js"), /Na fila · envia quando a internet voltar/);
   assert.match(chat, /A\.acoes\.enviarAgora\(m\)/); assert.match(chat, /A\.acoes\.cancelarFila\(m\)/);
@@ -1470,7 +1472,8 @@ await teste("CodeWords gravação: grava no formato padrão do navegador (mesmo 
     assert.equal(dv.getUint16(22, true), 1); assert.equal(dv.getUint32(24, true), 16000); assert.equal(dv.getInt16(44, true), 8192);
     assert.equal(reg.contextos, 1); assert.equal(reg.fechados, 1, "o AudioContext é fechado");
     assert.equal(reg.faixasParadas, 1, "o microfone é solto");
-    assert.equal(t.modais[0].titulo, "Enviar arquivo para Cliente 91", "a pessoa revisa o áudio antes de mandar");
+    // plano 1000b: CB-142 — o modal diz que é o áudio gravado (com a duração), não «Enviar arquivo»
+    assert.match(t.modais[0].titulo, /^Enviar áudio gravado \(\d+:\d{2}\) para Cliente 91$/, "a pessoa revisa o áudio antes de mandar");
     // Meta, mesmo navegador: sem ogg/mp4 não há gravação (como sempre foi) e o ⓘ explica
     const m = await montarCompositor();
     m.selecionar(92);
@@ -1544,7 +1547,8 @@ await teste("CodeWords tela: nenhum texto diz mais que o canal é «só texto»;
   // modelos seguem bloqueados no CodeWords: botão, função e menu «+» do celular
   assert.match(comp, /btModelos\.hidden = codeWords;/);
   assert.match(comp, /btModelos\.disabled = codeWords \|\| modoNota \|\| !\(s === "ok" \|\| s === "janela"\);/);
-  assert.match(comp, /async function abrirModelos\(\) \{\s*if \(usaCodeWords\(\)\) \{ ui\.toast\("Modelos da Meta não estão disponíveis neste canal CodeWords\."/);
+  // plano 1000b (revisão · CB-132): abrirModelos virou a trava contra toque duplo; a checagem do CodeWords mora em abrirModelosAgora
+  assert.match(comp, /async function abrirModelosAgora\(\) \{\s*if \(usaCodeWords\(\)\) \{ ui\.toast\("Modelos da Meta não estão disponíveis neste canal CodeWords\."/);
   assert.match(comp, /!usaCodeWords\(\) \? \{ rotulo: "Modelos aprovados"/);
   // gravação: na Meta exige ogg/mp4; no CodeWords basta gravador + decodificador, e o WAV sai da função pura
   assert.match(comp, /function podeGravar\(\) \{ return !!globalThis\.isSecureContext && \(usaCodeWords\(\) \? gravaWav\(\) : !!formatoGravacao\(\)\); \}/);
@@ -1555,7 +1559,9 @@ await teste("CodeWords tela: nenhum texto diz mais que o canal é «só texto»;
   assert.match(comp, /audio\/ogg,audio\/wav,application\/pdf/, "o seletor de arquivo oferece .wav");
   assert.match(logica, /if \(provedor !== "codewords"\) return \{ ok: false, erro: "midia_tipo", mime, tipo: null, limite, wav: true \};/);
   // arrastar para o chat e colar imagem passam pelo mesmo aceitaAnexo()/anexar()
-  assert.match(chat, /corpo\.addEventListener\("dragenter", ev => \{ if \(!temArquivo\(ev\) \|\| !A\.composer\.aceitaAnexo\(\)\) return;/);
+  // plano 1000b: CB-006 — o arrasto com arquivo sempre tem preventDefault; o aceitaAnexo() decide o soltar (recusado: toast com o motivo)
+  assert.match(chat, /const motivoSemAnexo = \(\) => \(A\.composer\.aceitaAnexo\(\) \? ""/);
+  assert.match(chat, /const recusa = motivoSemAnexo\(\);\s*if \(recusa\) \{ ui\.toast\(recusa, \{ tipo: "info" \}\); return; \}/);
   assert.match(chat, /if \(f\) A\.composer\.anexar\(f\);/);
   const colagem = comp.slice(comp.indexOf('ta.addEventListener("paste"'), comp.indexOf('/* ---------------- fotos: otimiza'));
   // plano 1000 · CA-013: qualquer arquivo copiado (PDF do Explorer…) vai pelo anexar(); o validarArquivo recusa o que o WhatsApp não aceita
@@ -1798,7 +1804,8 @@ await teste("M35: a tela liga o teclado (um ouvinte que sai ao desmontar, sem se
   assert.match(cv, /"Alt\+Shift\+R"/);
   // Atender o próximo: a fila «aguardando», a regra pura, abre, e assume (a IA do CodeWords pausa pelo mesmo caminho do botão)
   assert.match(cv, /rpcC\("nx_cv_listar", \{ p_filtro: \{ aba: "aguardando" \}/);
-  assert.match(cv, /const esperando = \(\(r && r\.itens\) \|\| \[\]\)\.filter\(x => !_pendResolver\.has\(x\.id\)\);\s*const c = A\.L\.proximaParaAtender\(esperando, A\.eu && A\.eu\.id\);/,
+  // plano 1000b: CB-121 — até 3 páginas da aba Aguardando (a 1ª podia ser toda de colegas); a mesma regra pura e o mesmo filtro do Desfazer
+  assert.match(cv, /c = A\.L\.proximaParaAtender\(itens\.filter\(x => !_pendResolver\.has\(x\.id\)\), A\.eu && A\.eu\.id\);/,
     "a regra pura escolhe; a recém-resolvida (Desfazer ainda na tela) fica de fora");
   assert.match(cv, /est\.primaria === "assumir_ia"\) await acoes\.assumirIA\(\);\s*else if \(est\.primaria === "assumir"\) await acoes\.assumir\(\);/);
   assert.match(lista, /class: "bt bt-sec bt-p cvl-atender", hidden: true/, "no cabeçalho da lista, só quando há fila");

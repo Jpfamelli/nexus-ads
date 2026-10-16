@@ -301,12 +301,45 @@ function alertaDeFuso(x, nome) {
 /** Alertas do cliente que não saíram (enviado_em nulo) nas últimas 6 h com menos de 3 tentativas (coluna tentativas_envio da
     migração 20261013a; sem ela → nenhum, como antes). Nunca lança. */
 async function alertasNaoEnviados(db, cliente, ctx) {
-  try {
-    return await db.select("nx_alertas", {
-      cliente_id: `eq.${cliente.id}`, enviado_em: "is.null", criado_em: `gte.${new Date(ctx.agora.getTime() - 6 * HORA_MS).toISOString()}`,
-      tentativas_envio: "lt.3", select: "id,chave,severidade,mensagem,acao,tentativas_envio", order: "id.asc", limit: 20,
-    });
-  } catch { return []; }
+  const filtro = {
+    cliente_id: `eq.${cliente.id}`, enviado_em: "is.null", criado_em: `gte.${new Date(ctx.agora.getTime() - 6 * HORA_MS).toISOString()}`,
+    tentativas_envio: "lt.3", select: "id,chave,severidade,mensagem,acao,tentativas_envio", order: "id.asc", limit: 20,
+  };
+  // plano 1000b · B-002: alerta RESERVADO (enviando_em) e sem registro do envio pode ter saído — não repete (banco sem a coluna
+  // da 20261015a: como antes). B-025: falha que não é coluna ausente vai para o log (antes sumia em silêncio).
+  try { return await db.select("nx_alertas", { ...filtro, enviando_em: "is.null" }); }
+  catch (e) {
+    if (!(e?.status === 400 && /enviando_em/.test(String(e?.message)))) {
+      if (!(e?.status === 400 && /tentativas_envio/.test(String(e?.message)))) console.error("nx-ciclo alertas não enviados:", limparErro(e?.message || e));
+      return [];
+    }
+  }
+  try { return await db.select("nx_alertas", filtro); }
+  catch (e) {
+    if (!(e?.status === 400 && /tentativas_envio/.test(String(e?.message)))) console.error("nx-ciclo alertas não enviados:", limparErro(e?.message || e));
+    return [];
+  }
+}
+
+/** plano 1000b · B-002: reserva os alertas antes do envio (enviando_em). true = reservou; false = banco sem a coluna (segue como
+    antes). Outra falha sobe: sem reserva não manda (o alerta fica não enviado e a rodada seguinte tenta). */
+async function reservarAlertas(db, ids, quando) {
+  if (!ids.length) return false;
+  try { await db.update("nx_alertas", { id: `in.(${ids.join(",")})` }, { enviando_em: quando }); return true; }
+  catch (e) {
+    if (e?.status === 400 && /enviando_em/.test(String(e?.message))) return false;
+    throw e;
+  }
+}
+
+/** Grava o resultado do envio; banco sem tentativas_envio/enviando_em (400 citando a coluna) → grava sem elas. */
+async function gravarResultadoAlertas(db, ids, dados) {
+  try { await db.update("nx_alertas", { id: `in.(${ids.join(",")})` }, dados); }
+  catch (e) {
+    if (!(e?.status === 400 && /tentativas_envio|enviando_em/.test(String(e?.message)))) throw e;
+    const { tentativas_envio: _t, enviando_em: _e, ...resto } = dados;
+    await db.update("nx_alertas", { id: `in.(${ids.join(",")})` }, resto);
+  }
 }
 
 async function radar(db, cfg, cliente, ctx, falhas, fusos = []) {
@@ -352,23 +385,34 @@ async function radar(db, cfg, cliente, ctx, falhas, fusos = []) {
     referencia: somaDias(ctx.hoje, -1), criado_em: quando,
   }))) : [];
 
+  const ids = gravados.map(g => g.id).filter(id => id != null);
+  // plano 1000b · B-002: reserva (enviando_em) ANTES de mandar — se a gravação depois do envio falhar, a rodada seguinte não
+  // reenvia o que já saiu (o mesmo padrão do relatório, SV-091)
+  const reservou = destinos.length ? await reservarAlertas(db, [...ids, ...reenviar.map(r => r.id)], quando) : false;
   const todos = [...novos, ...reenviar.map(r => ({ sev: r.severidade, msg: r.mensagem, acao: r.acao }))];
   const texto = base.textoAlerta(todos);
   const envio = destinos.length ? await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo: tituloRadar(nome, todos.length) }) : [];
   const erro = erroDeEnvio(destinos, envio);
-  const ids = gravados.map(g => g.id).filter(id => id != null);
-  const resultado = { enviado_em: envio.some(e => e.ok) ? quando : null, erro_envio: erro, ...idsDoEnvio(envio) };
+  const saiu = envio.some(e => e.ok);
+  // não saiu: a reserva é desfeita (o reenvio da próxima rodada pode tentar); saiu: fica (com enviado_em)
+  const resultado = { enviado_em: saiu ? quando : null, erro_envio: erro, ...idsDoEnvio(envio), ...(reservou && !saiu ? { enviando_em: null } : {}) };
   if (ids.length) {
     // uma escrita só, depois de todos os envios: antes dela o webhook não acha o wamid
-    // (e espera um pouco para conferir de novo), então nunca apaga o que o webhook anotou
-    await db.update("nx_alertas", { id: `in.(${ids.join(",")})` }, resultado);
+    // (e espera um pouco para conferir de novo), então nunca apaga o que o webhook anotou.
+    // plano 1000b · B-001: o envio original CONTA como tentativa (1) — com o filtro lt.3 são 3 envios no total, não 4.
+    // B-010: falha ao gravar depois de um envio não derruba o radar (o gestor recebeu; a reserva segura o reenvio)
+    try { await gravarResultadoAlertas(db, ids, { ...resultado, tentativas_envio: 1 }); }
+    catch (e) {
+      console.error("nx-ciclo registro do alerta:", limparErro(e?.message || e));
+      res.erro_registro = saiu ? "alertas enviados sem confirmação no banco" : "alertas não enviados e sem registro no banco";
+    }
   }
   if (reenviar.length) {
     res.alertas_reenviados = reenviar.length;
     const porTentativa = new Map();
     for (const r of reenviar) { const t = Number(r.tentativas_envio) || 0; porTentativa.set(t, [...(porTentativa.get(t) || []), r.id]); }
     for (const [t, lista] of porTentativa) {
-      await db.update("nx_alertas", { id: `in.(${lista.join(",")})` }, { ...resultado, tentativas_envio: t + 1 })
+      await gravarResultadoAlertas(db, lista, { ...resultado, tentativas_envio: t + 1 })
         .catch(e => console.error("nx-ciclo reenvio de alerta:", limparErro(e?.message || e)));
     }
   }

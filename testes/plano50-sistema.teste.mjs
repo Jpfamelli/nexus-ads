@@ -220,7 +220,9 @@ test("A2 · G.barras: caixa focável; ↓ ↑ Home End leem linha a linha na dic
   const caixa = alvo.querySelector(".g-caixa.g-hcaixa");
   assert.ok(caixa); assert.equal(caixa.getAttribute("tabindex"), "0"); assert.equal(caixa.getAttribute("role"), "group"); assert.match(caixa.getAttribute("aria-label"), /setas/);
   const dica = caixa.querySelector(".g-dica");
-  assert.ok(dica && dica.hidden, "dica existe e começa escondida"); assert.equal(dica.getAttribute("aria-live"), "polite");
+  // plano 1000b: RB-261 — a dica visível não é mais região viva (24 anúncios encavalados ao segurar a seta); quem fala é .g-dica-viva, com atraso
+  assert.ok(dica && dica.hidden, "dica existe e começa escondida"); assert.equal(dica.getAttribute("aria-live"), null);
+  assert.equal(caixa.querySelector(".g-dica-viva").getAttribute("aria-live"), "polite");
   ev(caixa, "keydown", { key: "ArrowDown" });
   assert.equal(dica.hidden, false); assert.equal(dica.textContent, "Google — Criados: 10 · Ganhos: 4");
   assert.ok(caixa.querySelectorAll(".g-hitem")[0].classList.contains("g-ativa"));

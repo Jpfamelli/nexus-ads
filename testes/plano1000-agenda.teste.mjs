@@ -670,7 +670,7 @@ test("CA-176 / CA-178 · «Avisar paciente» depois de remarcar e de desmarcar d
     await esperar(16);
     const aviso = T.reg.desfazer.at(-1);
     assert.match(aviso.texto, /^Remarcada/);
-    assert.equal(aviso.acao.rotulo, "Avisar paciente");
+    assert.equal(aviso.acao.rotulo, "Escrever confirmação");   // plano 1000b: CB-123 — o botão escreve no campo, não envia
     T.reg.chamadas.length = 0;
     aviso.acao.fn();
     await esperar(10);
@@ -685,7 +685,7 @@ test("CA-176 / CA-178 · «Avisar paciente» depois de remarcar e de desmarcar d
     porTexto(T.reg.pops.at(-1), "button", "Desmarcar").click();
     await esperar(10);
     const av2 = T.reg.desfazer.at(-1);
-    assert.equal(av2.acao.rotulo, "Avisar paciente");
+    assert.equal(av2.acao.rotulo, "Escrever aviso ao paciente");   // plano 1000b: CB-123
     av2.acao.fn();
     await esperar(10);
     assert.equal(T.rascunho.texto("conversa:901"), texto, "o rascunho que já estava não é trocado");
@@ -978,7 +978,7 @@ test("CA-200 · celular: as abas da faixa de dias controlam o painel do dia (ari
 });
 
 test("CA-203 · celular: a lista do dia abre com uma linha («2 consultas · 1 falta · 1 encaixe») e sem os 4 cartões", async () => {
-  assert.equal(A.textoResumoDia({ total: 1, feitas: 0, faltas: 0, encaixes: 0 }, { futuro: true }), "1 consulta · 0 encaixes", "dia por vir: sem as faltas (CA-190)");
+  assert.equal(A.textoResumoDia({ total: 1, feitas: 0, faltas: 0, encaixes: 0 }, { futuro: true }), "1 consulta", "dia por vir: sem as faltas (CA-190); plano 1000b: CB-178 — sem «0 encaixes»");
   assert.equal(A.textoResumoDia({ total: 0 }), "vazio");
   const pas = passadaSeg();
   const T = await montarAgenda({ data: pas, movel: true, consultas: [consultaEm(pas, "09:00", { encaixe: true }), consultaEm(pas, "10:00", { negocio_id: 802, marco: "faltou", encaixe: false })] });

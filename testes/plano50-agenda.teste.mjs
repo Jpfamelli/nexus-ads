@@ -409,7 +409,7 @@ test("extra: prévia da semana na configuração — horas úteis por dia e por 
   assert.deepEqual(el.querySelectorAll(".agc-previa-dia small").map(s => s.textContent), ["9h", "8h", "—", "—", "—", "4h", "—"]);
   const cfgJs = ler("agenda-config.js");
   assert.ok(/form\.addEventListener\("input", pintarPrevia\)/.test(cfgJs) && /form\.addEventListener\("change", pintarPrevia\)/.test(cfgJs), "a prévia acompanha a digitação");
-  assert.ok(/usarAgenda, gradeDias, previaCaixa,/.test(cfgJs), "a prévia fica logo abaixo dos dias");
+  assert.ok(/usarAgenda, ajudaFonte, gradeDias, previaCaixa,/.test(cfgJs), "a prévia fica logo abaixo dos dias");   // plano 1000b: CB-180 — a ajuda do interruptor entre os dois
 });
 
 test("extra: CSS — só tokens, sem transition: all, movimento reduzido cobre as peças novas, alvos de 44 px no toque, tamanhos por token", () => {

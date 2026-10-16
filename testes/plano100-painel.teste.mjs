@@ -81,7 +81,8 @@ test("P1 · textos do WhatsApp: mensal e diário não escrevem dinheiro inventad
   const est = montarDe({ metricas: metAgo, leads: [leadAgo()], cliente: cli({ cfg: { ticket: { "Clínica geral": 420 } } }) });
   const t1 = est.relMensal(mes(est));
   assert.match(t1, /Tratamentos fechados: R\$\s?420 _\(estimativa pelo valor de cada tratamento\)_/);
-  assert.match(t1, /virou \*R\$ [\d,]+\* em tratamentos _\(estimativa\)_/);
+  // plano 1000b: AB-211 — o retorno sai em moeda com 2 casas (brl: «R$ 8,90», com o espaço fixo do Intl)
+  assert.match(t1, /virou \*R\$\s?[\d.]+,\d{2}\* em tratamentos _\(estimativa\)_/);
   // valor real: nada de «estimativa»
   const real = montarDe({ metricas: metAgo, leads: [leadAgo({ valor: 3000 })] });
   const t2 = real.relMensal(mes(real));
@@ -90,10 +91,11 @@ test("P1 · textos do WhatsApp: mensal e diário não escrevem dinheiro inventad
   assert.match(t2, /1 paciente de clínica geral — 100% do resultado do mês/);
   // diário: «No consultório (7 dias)» segue a mesma regra
   const d0 = montarDe({ metricas: semanaDeMetricas(), leads: [leadFechado()] }).relDiario(semValor.R);
-  assert.match(d0, /1 fechou · 1 fechamento sem valor informado/);
+  // plano 1000b: AB-172 — «1 paciente fechou tratamento» (o fechou da vertical) no bloco de 7 dias
+  assert.match(d0, /1 paciente fechou tratamento · 1 fechamento sem valor informado/);
   assert.doesNotMatch(d0, /R\$\s?0 em tratamentos/);
   const d1 = montarDe({ metricas: semanaDeMetricas(), leads: [leadFechado({ valor: 900 })] }).relDiario(semValor.R);
-  assert.match(d1, /1 fechou · R\$\s?900 em tratamentos$/m);
+  assert.match(d1, /1 paciente fechou tratamento · R\$\s?900 em tratamentos$/m);   // plano 1000b: AB-172
   const d2 = montarDe({ metricas: semanaDeMetricas(), leads: [leadFechado()], cliente: cli({ cfg: { ticket: { "Clínica geral": 420 } } }) }).relDiario(semValor.R);
   assert.match(d2, /R\$\s?420 em tratamentos \(estimativa\)/);
   // contexto da IA diz o que é estimado e o que falta
@@ -210,7 +212,8 @@ test("P3 · vocabulário por vertical nos textos: loja/oficina/genérico sem �
   assert.match(mensal("coisa-nova"), /🦷/, "vertical desconhecida cai no padrão, não quebra");
   const diario = montarDe({ metricas: semanaDeMetricas(), leads: [leadFechado({ valor: 500 })], cliente: cli({ vertical: "loja" }) }).relDiario(129);
   assert.match(diario, /\*Na loja \(7 dias\)\*/);
-  assert.match(diario, /1 visita agendada · 1 veio · 1 fechou · R\$\s?500 em vendas/);
+  // plano 1000b: AB-172 — o bloco de 7 dias usa o «fechou» da vertical («cliente comprou» na loja)
+  assert.match(diario, /1 visita agendada · 1 veio · 1 cliente comprou · R\$\s?500 em vendas/);
   assert.equal(montarDe({ cliente: cli({ vertical: "loja" }) }).VOC.servicoPadrao, "Não informado");
   assert.equal(montarDe({ leads: [{ id: 1, origem: "anuncio", plataforma: "meta", etapa: "nova", data_conversa: dia(1) }], cliente: cli({ vertical: "oficina" }) }).LEADS[0].servico, "Não informado");
   assert.equal(montarDe({ leads: [{ id: 1, origem: "anuncio", plataforma: "meta", etapa: "nova", data_conversa: dia(1) }] }).LEADS[0].servico, "Clínica geral");
@@ -249,7 +252,8 @@ test("P4 · códigos do Órbita viram frases (não «(modulo_desligado)»); hint
   assert.match(api.mensagemErro({ codigo: "muitas_tentativas" }), /Aguarde alguns minutos/);
   assert.equal(api.mensagemErro({ codigo: "limite_plano", detalhe: { hint: "contatos:500" } }), "Seu plano permite até 500 contatos. Para aumentar, fale com o suporte.");
   assert.match(api.mensagemErro({ codigo: "limite_plano", detalhe: { hint: "org_usuarios:3" } }), /até 3 usuarios/);
-  assert.match(api.mensagemErro({ codigo: "coisa_nova" }), /coisa_nova/, "código desconhecido continua aparecendo para o suporte");
+  // plano 1000b: AB-166 — o código desconhecido vai para o console (para o suporte), não para a tela
+  assert.doesNotMatch(api.mensagemErro({ codigo: "coisa_nova" }), /coisa_nova|\(/, "código cru fora da tela");
 });
 
 test("P4 · a rpc() entrega o hint do PostgREST em e.detalhe (é dele que a mensagem sai)", async () => {
@@ -385,7 +389,8 @@ test("P1/P2 · painel: herói e régua com a nota honesta; ficha «sem valor»; 
   // plano 1000 (AD-194): a nota do herói usa a palavra da vertical («cada serviço» na oficina)
   assert.match(JS, /<small>\$\{esc\(notaReceita\(c, V\.servico\)\)\}<\/small><\/div>/);
   assert.ok(!/<small>estimativa pelo valor de cada tratamento<\/small>/.test(JS), "a frase fixa de estimativa saiu do herói");
-  assert.match(JS, /extra: !gestor\(\) \? esc\(notaReceita\(c\)\)/);
+  // plano 1000b: AB-151 — a nota da régua também leva o serviço da vertical
+  assert.match(JS, /extra: !gestor\(\) \? esc\(notaReceita\(c, V\.servico\)\)/);
   assert.match(JS, /const vd = e === "fechou" \? M\.valorDe\(L\) : null;\s*const val = vd \? `<span class="val">\$\{vd\.semValor \? "sem valor" : brl0\(vd\.valor\)\}<\/span>` : "";/);
   assert.match(JS, /const travado = !!\(L && L\.plat && \(S\.demo \|\| b\.anuncio_ext \|\| \(M\.CAMP\[L\.camp\] && M\.CAMP\[L\.camp\]\.semCampanha\)\)\);/);
   assert.match(JS, /filter\(c => c\.plat && !c\.semCampanha\)\.sort\(\(a, b\) => a\.nome\.localeCompare/, "opções de origem sem o balde");
@@ -538,7 +543,8 @@ test("P6 · pages.yml publica só o clássico: monta a pasta sem app/crm/ads/ate
   assert.match(sem, /rm -rf "\$\{pub\}\/app" "\$\{pub\}\/crm" "\$\{pub\}\/ads" "\$\{pub\}\/atendimento" "\$\{pub\}\/workspace\.js"/);
   assert.match(sem, /for proibido in app crm ads atendimento workspace\.js; do/);
   // plano 1000 (srv-3): + rastreio.v1.js (o snippet com SRI aponta para ele)
-  assert.match(sem, /for exigido in index\.html painel\.js painel\.css dados\.js nucleo\.js rastreio\.js rastreio\.v1\.js fonts; do/, "o clássico, o rastreio.js e o rastreio.v1.js têm de estar lá");
+  // plano 1000b: + rastreio.v2.js (o snippet novo, com aquecimento/clique)
+  assert.match(sem, /for exigido in index\.html painel\.js painel\.css dados\.js nucleo\.js rastreio\.js rastreio\.v1\.js rastreio\.v2\.js fonts; do/, "o clássico e os rastreio.js/v1/v2 têm de estar lá");
   assert.match(sem, /ORBITA_URL: https:\/\/orbita-nexus-ads\.netlify\.app\/app\/\n/);
   assert.match(sem, /<meta http-equiv="refresh" content="0; url=\$\{ORBITA_URL\}">/, "app/index.html redireciona");
   assert.match(sem, /<a href="\$\{ORBITA_URL\}">\$\{ORBITA_URL\}<\/a>/, "e tem o link para quem não segue meta refresh");

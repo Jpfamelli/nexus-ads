@@ -183,8 +183,18 @@ await teste("statusEnvio, canalDe, nomeRegraSrv e eixoTopo = os do painel", () =
   for (const x of casos) {
     const a = puroPainel.statusEnvio(x), b = L.statusEnvio(x);
     if (a == null) { assert.equal(b, null); continue; }
-    assert.deepEqual([b.k, b.tique, b.rotulo, b.erro], [a.k, a.tique, a.rotulo, a.erro]);
+    // plano 1000b: AB-080 — o clássico (web/painel.js) adotou a mesma tabela de tradução: a paridade volta a ser direta, com o original
+    assert.deepEqual([b.k, b.tique, b.rotulo, b.erro, b.erroOriginal], [a.k, a.tique, a.rotulo, a.erro, a.erroOriginal]);
   }
+  // AB-080/AB-199/AB-081: erro da Meta em inglês, «enviado» velho com `agora` e canal pela chave — iguais nos dois
+  const agora = Date.parse("2026-09-29T12:00:00Z");
+  for (const x of [{ erro: "(#131047) Re-engagement message" }, { enviado_em: "2026-09-27T11:03:00Z", destinos: ["a", "b"], erro: "5511: Message undeliverable" },
+    { enviado_em: "2026-09-27T11:03:00Z" }, { enviado_em: "2026-09-29T11:03:00Z" }]) {
+    const a = puroPainel.statusEnvio(x, agora), b = L.statusEnvio(x, agora);
+    assert.deepEqual([b.k, b.rotulo, b.erro, b.erroOriginal], [a.k, a.rotulo, a.erro, a.erroOriginal]);
+  }
+  for (const a of [{ chave: "integracao|google", mensagem: "bateu a meta" }, { chave: "x", mensagem: "Google: a meta de custo" }, { mensagem: "Conexão com o Meta" }])
+    assert.equal(puroPainel.canalDe(a), L.canalDe(a));
   assert.equal(L.statusEnvio({ entregue_em: "2026-09-27T11:04:00Z" }).rotulo, "entregue às 08:04", "hora no fuso de SP");
   for (const a of [{ chave: "integracao|google" }, { mensagem: "Conexão com o Meta" }, { chave: "r1|x" }])
     assert.equal(L.canalDe(a), puroPainel.canalDe(a));
@@ -423,7 +433,7 @@ await teste("funil: texto da conversão só em etapa aberta; origem com platafor
   assert.equal(L.textoConversao({ tipo: "ganho", passaram: 3 }), null);
   assert.equal(L.textoConversao({ tipo: "aberto", passaram: 2, conversao_proxima_pct: null }), "2 entraram · — seguiram");
   assert.equal(L.nomeOrigem("anuncio", "meta"), "Anúncio · Meta"); assert.equal(L.nomeOrigem("whatsapp", null), "WhatsApp");
-  assert.equal(L.nomeOrigem(null, null), "Sem origem"); assert.equal(L.nomeOrigem("feira", null), "feira", "origem desconhecida aparece como veio");
+  assert.equal(L.nomeOrigem(null, null), "Sem origem"); assert.equal(L.nomeOrigem("feira", null), "Feira", "origem desconhecida aparece legível");   // plano 1000b: AB-175 capitaliza e troca _ por espaço
   assert.equal(L.ddmmIso("2026-09-05"), "05/09"); assert.equal(L.diaLongoIso("2026-09-27"), "dom · 27/09");
 });
 
@@ -1020,10 +1030,12 @@ await teste("R119: manchete e paleta com a palavra da vertical (consulta / visit
 
 await teste("R119: menu das Configurações — o nome acessível do item com pendência não repete o número", () => {
   const cfg = ler("web/app/config.js");
-  // plano 50 · 56: o item do menu ganhou descrição (.cfg-nav-desc); o nome acessível lê SÓ o título (.cfg-nav-tit), antes de o selo entrar
-  assert.match(cfg, /const nome = \(a\.querySelector\("(?:\.cfg-nav-tit|span:not\(\.nav-selo\))"\) \|\| a\)\.textContent\.trim\(\);\s*a\.appendChild\(h\("span", \{ class: "nav-selo cfg-pend"/, "o título é lido antes de o selo entrar");
-  assert.match(cfg, /a\.setAttribute\("aria-label", `\$\{nome\}, \$\{n\} /);
+  // plano 1000b: UB-260 — sem aria-label no link (ele apagava a descrição da seção): o número visível é aria-hidden e o leitor ouve
+  // título + descrição + «, N passos pendentes» (sr-only). O número continua lido uma vez só (teste de comportamento em plano1000b-config)
+  assert.match(cfg, /a\.appendChild\(h\("span", \{ class: "nav-selo cfg-pend", "aria-hidden": "true"/, "o número do selo não é lido");
+  assert.match(cfg, /a\.appendChild\(h\("span", \{ class: "sr-only cfg-pend-sr" \}, `, \$\{frase\}`\)\);/);
   assert.doesNotMatch(cfg, /aria-label", `\$\{a\.textContent/);
+  assert.doesNotMatch(cfg, /a\.setAttribute\("aria-label", `\$\{nome\}, \$\{n\} /, "o link não troca mais o nome inteiro");
 });
 
 await teste("R119: «Copiar prompt para o CodeWords» — trava o botão, copia dentro do toque, nomeia o botão pelo resultado, leva o foco ao Service ID; «Ligar na IA» espera o ID", () => {
@@ -1128,7 +1140,9 @@ await teste("M39: Anúncios e Relatórios — abas por ui.segmentado, chip-resum
   }
   assert.match(ads, /L\.textoChipAnuncios\(S\.dias, S\.plat\)/); assert.match(rel, /L\.textoChipRelatorios\(\{ preset: P\.preset, de: P\.de, ate: P\.ate, aba, nome \}\)/);
   assert.match(ads, /rel-so-largo[^]*?Ajustes de anúncios/, "os atalhos do gestor ficam para telas largas…");
-  assert.match(ads, /Mais ações[^]*?rotulo: "Ajustes de anúncios", icone: "engrenagem"/, "…e no ⋮ do celular");
+  // plano 1000b: AB-033 — o ⋮ do celular vale para todos (com «Imprimir»); os itens de gestor saem de itensMaisAcoes
+  assert.match(ads, /gestor \? \{ rotulo: "Ajustes de anúncios", icone: "engrenagem"/, "…e no ⋮ do celular");
+  assert.match(ads, /Mais ações[^]*?itensMaisAcoes\(\{ gestor: eGestor\(ctx\)/);
   // plano 1000 (AD-140): a validação recebe «hoje» (data final no futuro é recusada)
   assert.match(rel, /const v = L\.validarPeriodo\(de, ate, L\.hojeSP\(\)\);\s*if \(!v\.ok\) \{ api\.erro\(v\.texto\); return false; \}/, "a folha valida o período antes de aplicar");
   assert.match(ads, /abaRadar|L\.ordenarRadar\(R\)\.forEach/, "o Radar usa a ordenação por gravidade");
@@ -1144,7 +1158,8 @@ await teste("M39: Radar — cada alerta com barra lateral de 3 px, ícone e rót
   const ads = ler("web/app/anuncios.js"), css = ler("web/app/relatorios.css");
   // plano 50 (item 51): a lista passa pelo filtro do semáforo (todos/ativos/resolvidos), mas continua na ordem de L.ordenarRadar
   assert.match(ads, /const ordenados = L\.ordenarRadar\(R\);/);
-  assert.match(ads, /const itens = L\.filtrarRadar\(ordenados, filtro\);\s*itens\.forEach\(\(it, n\) => lista\.append\(it\.tipo === "conexao" \? alertaConexao\(it, n\) : alertaEpisodio\(it, n, M, dados\)\)\)/);   // plano 1000 (AD-059): o episódio recebe M para «Ver campanha»; AD-046: e os dados para «Silenciar 7 dias»
+  // plano 1000b: AB-177 — entre as duas linhas, o anúncio de quantos alertas ficaram depois do filtro
+  assert.match(ads, /const itens = L\.filtrarRadar\(ordenados, filtro\);\s*(if \(anunciar\) statusFiltro\.textContent = textoFiltroRadar\(itens\.length, filtro\);\s*)?itens\.forEach\(\(it, n\) => lista\.append\(it\.tipo === "conexao" \? alertaConexao\(it, n\) : alertaEpisodio\(it, n, M, dados\)\)\)/);   // plano 1000 (AD-059): o episódio recebe M para «Ver campanha»; AD-046: e os dados para «Silenciar 7 dias»
   assert.match(ads, /dataset: \{ sev \}/, "o <li> leva data-sev");
   assert.match(ads, /h\("span", \{ class: "ads-sev-marca" \}, ui\.icone\(L\.SEV_ICONE\[sev\]\), h\("span", \{ class: "ads-sev-rot" \}, L\.SEV_ROTULO\[sev\]\)\)/, "ícone + rótulo escrito");
   assert.match(css, /\.ads-al\[data-sev="critico"\] \{ --sev: var\(--c-sev-crit\); \}/);

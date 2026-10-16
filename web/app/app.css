@@ -420,7 +420,7 @@ html[data-esquema="claro"] input[type="date"]::-webkit-calendar-picker-indicator
 .vazio-sem-ic { grid-template-columns: minmax(0, 1fr); }
 .vazio-ic { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; color: var(--c-prim-luz); box-shadow: inset 0 0 0 1.5px var(--c-prim-luz); background: var(--c-prim-suave); }
 .vazio-erro .vazio-ic { color: var(--c-ruim); box-shadow: inset 0 0 0 1.5px var(--c-ruim); background: var(--c-ruim-suave); }
-.vazio h2 { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-20); letter-spacing: -.01em; line-height: 1.2; }
+.vazio h2, .vazio .vazio-tit { font-family: var(--f-titulo); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-20); letter-spacing: -.01em; line-height: 1.2; }
 .vazio p { color: var(--c-texto-2); margin-top: .35rem; max-width: 62ch; }
 .vazio-acoes { margin-top: 1rem; }
 .esqueleto { animation: aparece var(--t-ui) var(--e-out) both; }
@@ -701,6 +701,10 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 .barra-b[aria-current="page"] { color: var(--c-texto); }
 .barra-b[aria-current="page"] .ic { color: var(--c-prod); }
 .barra-b .badge { position: absolute; top: 4px; left: calc(50% + 4px); min-width: 18px; height: 18px; font-size: var(--fs-12); }
+/* plano 1000b · UB-271: ponto no «Mais» e contador nos itens da folha */
+.barra-ponto { position: absolute; top: 6px; left: calc(50% + 8px); width: 8px; height: 8px; border-radius: 50%; background: var(--c-prim); box-shadow: 0 0 0 2px var(--c-fundo); }
+.folha-mais a { position: relative; }
+.folha-mais .badge { position: absolute; top: 6px; right: 6px; min-width: 18px; height: 18px; font-size: var(--fs-12); }
 .folha-mais { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
 .folha-mais a { display: flex; flex-direction: column; align-items: center; gap: .4rem; padding: 1rem .25rem; min-width: 0; overflow-wrap: anywhere; border-radius: var(--r); background: var(--c-sup-2); border: 1px solid var(--c-borda); text-decoration: none; font-size: var(--fs-12); font-weight: 600; text-align: center; }
 .folha-mais a .ic { width: 22px; height: 22px; color: var(--c-prim-luz); }
@@ -1103,6 +1107,11 @@ body.palco-vivo .palco .brilho-b { animation: orbitaBrilhoB 39s cubic-bezier(.45
 .dns-val .mono { overflow-wrap: anywhere; }
 .bt-icone-p { width: 30px; height: 30px; }
 .bt-icone-p .ic { width: 15px; height: 15px; }
+@media (pointer: coarse) { .bt-icone-p { width: 44px; height: 44px; } }   /* plano 1000b · UB-152: a regra de 30 px vinha depois da de toque e a vencia */
+/* plano 1000b · UB-149 + UB-151: o X do aviso (32 px) e os selects .sel (40 px) também chegam a 44 px no toque */
+@media (pointer: coarse) { .toast-x { width: 44px; height: 44px; } .sel { min-height: 44px; } }
+/* plano 1000b · UB-146: a explicação da cor digitada errada fica embaixo da linha da cor */
+.seletor-cor .cor-erro { display: block; }
 .dom-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 1rem; align-items: start; }
 .dom-add { display: flex; gap: .5rem; flex-wrap: wrap; }
 .dom-add input { flex: 1 1 12rem; min-width: 0; min-height: 36px; border-radius: 999px; padding: .35rem .9rem; border: 1px solid var(--c-borda-2); background: var(--c-tinta); font-family: var(--f-mono); font-size: var(--fs-13); }

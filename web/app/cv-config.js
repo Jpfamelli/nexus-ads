@@ -89,6 +89,9 @@ export function marcarTesteLocal(armazenamento, clienteId, contaId) {
     return true;
   } catch { return false; }
 }
+/** plano 1000b · CB-100: a MESMA lista do DDD_VALIDO do cv-logica (nx_ddd_valido). Cópia porque este export é síncrono e o cv-logica
+    entra por import() com ?v=; o teste plano1000b-conv confere que as duas fontes são iguais. plano 1000b · CB-004: sem o DDD 29. */
+export const DDD_CANAL = /^(1[1-9]|2[12478]|3[1-578]|4[1-9]|5[13-5]|6[1-9]|7[13-579]|8[1-9]|9[1-9])$/;
 /**
  * plano 1000 · AS-126: número do canal com DDI. «(12) 99999-9999» vira +55; com «+» aceita outro país (8 a 15 dígitos).
  * → {ok, numero: "+55 12 99999-9999" | "+351…", erro}
@@ -98,7 +101,7 @@ export function normalizarNumeroCanal(v) {
   let d = bruto.replace(/\D/g, "");
   const comMais = bruto.startsWith("+");
   const ERRO = "Informe o número com DDI e DDD, ex.: +55 12 99999-9999";
-  const ddd = x => /^[1-9][1-9]$/.test(x);
+  const ddd = x => DDD_CANAL.test(x);   // plano 1000b · CB-100: só DDD que existe (20, 23, 26… recusados), como o erroTelefone da central
   if (!comMais && (d.length === 10 || d.length === 11)) d = `55${d}`;
   if (d.startsWith("55") && (comMais || d.length === 12 || d.length === 13)) {
     if (!(d.length === 12 || d.length === 13) || !ddd(d.slice(2, 4))) return { ok: false, numero: null, erro: ERRO };
@@ -155,11 +158,20 @@ export function dadosPessoaisNoTexto(texto) {
   const vistos = [];
   for (const [tipo, re] of regras) for (const m of t.matchAll(re)) {
     const trecho = m[0];
+    // plano 1000b (como o UB-026): celular de 11 dígitos sem máscara («12991234567») casa com o CPF, que é testado antes — fica para a
+    // regra do telefone (CPF formatado com ponto continua CPF)
+    if (tipo === "CPF" && !trecho.includes(".") && /^[1-9]{2}9\d{8}$/.test(trecho.replace(/\D/g, ""))) continue;
     if (vistos.some(v => v.includes(trecho) || trecho.includes(v))) continue;
     vistos.push(trecho);
     achados.push({ tipo, trecho });
   }
   return achados.slice(0, 5);
+}
+
+/** plano 1000b · CB-098: «1 modelo sincronizado» · «5 modelos sincronizados» (sem o plural com parênteses). */
+export function textoModelosSincronizados(total) {
+  const n = Math.max(0, Number(total) || 0);
+  return n === 1 ? "1 modelo sincronizado" : `${n} modelos sincronizados`;
 }
 
 /** plano 1000 · AS-285: a qualidade do número como a Meta devolve (GREEN/YELLOW/RED) em português, com o que derruba a nota. */
@@ -475,7 +487,7 @@ async function montarNumeros(ctx, alvo) {
   async function sincronizar(c, botao) {
     try {
       const r = await ui.carregando(botao, ctx.api.fn("nx-enviar", { acao: "sincronizar_templates", canal: c.id }));
-      ui.toast(`${(r && r.total) || 0} modelo(s) sincronizado(s).`, { tipo: "ok" });
+      ui.toast(textoModelosSincronizados(r && r.total), { tipo: "ok" });   // plano 1000b · CB-098
     } catch (e) { ui.toast(erroFuncao(e), { tipo: "erro" }); }
   }
   /** plano 1000 · AS-137: antes de excluir, quantas conversas abertas usam o número e quais automações dependem dele (cada consulta
@@ -512,7 +524,7 @@ async function montarNumeros(ctx, alvo) {
       estadosCodeWords.set(c.id, r || {});
       if (r?.ok && r.inscrito_certo) ui.toast("WhatsApp conectado e recebendo pelo destino configurado.", { tipo: "ok" });
       else ui.toast(r?.motivo || r?.detalhe || "Situação atualizada. Confira o estado do número.", { tipo: r?.ok ? "info" : "erro" });
-      await carregar();
+      await carregar({ suave: true });   // plano 1000b · CB-097: «Reconferir agora» sem esqueleto e sem perder a rolagem (como o AS-124)
     } catch (e) { ui.toast(erroFuncao(e), { tipo: "erro" }); }
   }
 
@@ -557,7 +569,8 @@ async function montarNumeros(ctx, alvo) {
         progresso(pr.passos),
         h("div", { class: "cfg-canal-kv" },
           h("span", null, "Número ", h("b", null, c.numero_exibicao || cw.numero || "—")),
-          h("span", null, "Fluxo de IA ", h("b", { class: "mono" }, cw.service_id || "Ainda não configurado")),
+          // plano 1000b · CB-103: «Configurado» em português; o id cru do fluxo fica no title (dado técnico)
+          h("span", null, "Fluxo de IA ", h("b", { title: cw.service_id ? `Fluxo: ${cw.service_id}` : null }, cw.service_id ? "Configurado" : "Ainda não configurado")),
           h("span", null, "Departamento ", h("b", null, depNome(c.departamento_id)))),
         h("div", { class: "cfg-checks" },
           cw.tem_api_key ? ui.pilula("Chave salva", "ok", { icone: "cadeado" }) : ui.pilula("Chave ausente", "ruim"),
@@ -847,6 +860,16 @@ async function montarNumeros(ctx, alvo) {
     });
     bConferir.addEventListener("click", async () => { await ui.carregando(bConferir, consultar()); });
     bJaPareei.addEventListener("click", async () => { await ui.carregando(bJaPareei, consultar()); });
+    let relogioParear = null;
+    const rotuloParear = bParear.lastChild && bParear.lastChild.nodeType === 3 ? bParear.lastChild : null;
+    function esperarNovoCodigo(seg) {   // CB-101: «Gerar outro código em 90 s» no botão até o servidor deixar
+      clearInterval(relogioParear);
+      let resta = seg;
+      const pintar = () => { if (rotuloParear) rotuloParear.textContent = resta > 0 ? `Gerar outro código em ${resta} s` : "Gerar outro código"; bParear.disabled = resta > 0; };
+      pintar();
+      relogioParear = setInterval(() => { resta--; if (!bParear.isConnected || resta <= 0) { clearInterval(relogioParear); resta = Math.max(0, resta); } pintar(); }, 1000);
+      if (relogioParear && typeof relogioParear.unref === "function") relogioParear.unref();   // (node dos testes: não segura o processo)
+    }
     bParear.addEventListener("click", async () => {
       if (!await guardarAntesDaAcao()) return;
       const r = await acaoCodeWords("parear"); if (!r) return;
@@ -855,7 +878,10 @@ async function montarNumeros(ctx, alvo) {
       ui.limpar(codigoPareamento); codigoPareamento.hidden = false;
       codigoPareamento.append(h("p", { class: "rotulo" }, "Pareamento do WhatsApp"),
         h("p", { class: "cfg-cw-code", "aria-label": `Código de pareamento ${r.codigo}` }, r.codigo),
-        h("p", { class: "sub" }, r.instrucoes || "No WhatsApp do celular, abra Aparelhos conectados, escolha Conectar aparelho e depois Conectar com número de telefone."), copiarCodigo);
+        h("p", { class: "sub" }, r.instrucoes || "No WhatsApp do celular, abra Aparelhos conectados, escolha Conectar aparelho e depois Conectar com número de telefone."),
+        // plano 1000b · CB-101: o código expira em poucos minutos e o servidor só gera outro depois de 90 s — a tela diz e conta
+        h("p", { class: "sub cfg-cw-prazo" }, "O código vale por poucos minutos; se expirar, gere outro."), copiarCodigo);
+      esperarNovoCodigo(90);
       aguardandoCodigo = true;
       desenharPassos();
     });
@@ -901,7 +927,7 @@ async function montarNumeros(ctx, alvo) {
       const naoChegou = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Ainda não chegou");
       chegou.addEventListener("click", () => { testeChegou = true; marcarTesteNoChecklist(); ui.limpar(resultadoTeste); desenharPassos(); ui.toast("Tudo pronto: o número está recebendo e enviando.", { tipo: "ok" }); });
       naoChegou.addEventListener("click", () => { ui.limpar(resultadoTeste); resultadoTeste.append(h("p", { class: "sub" }, "Confira se o celular do número está com internet e o WhatsApp aberto, depois envie de novo. Se continuar, volte ao passo 3 e toque em «Conferir agora».")); });
-      resultadoTeste.append(ui.pilula("Enviada ✓", "ok"), h("span", { class: "sub" }, "Chegou no WhatsApp do número conectado?"), chegou, naoChegou);
+      resultadoTeste.append(ui.pilula("Enviada", "ok", { icone: "check" }) /* plano 1000b · CB-099: sem ✓ no texto (o leitor lia «marca de verificação») */, h("span", { class: "sub" }, "Chegou no WhatsApp do número conectado?"), chegou, naoChegou);
       desenharPassos();
       ui.toast("O CodeWords aceitou o teste. Confira o WhatsApp do número conectado.", { tipo: "ok" });
     });
@@ -1018,6 +1044,15 @@ async function montarNumeros(ctx, alvo) {
     let form = null;
 
     function marcarTrilha() { [...trilha.children].forEach((s, i) => { s.dataset.feito = i < passo ? "1" : "0"; }); }
+    // plano 1000b · CB-102: a trilha é aria-hidden — o título diz «Passo 2 de 5 · Dados do número» e a troca de passo é anunciada
+    const NOMES_PASSO = ["O que é preciso", "Dados do número", "Webhook", "Inscrever o app", "Testar"];
+    const tituloPasso = (n, nome) => `Passo ${n} de 5 · ${nome}`;
+    let passoAnunciado = passoInicial;
+    function anunciarPasso() {
+      if (passo === passoAnunciado) return;
+      passoAnunciado = passo;
+      if (typeof ui.anunciar === "function") ui.anunciar(tituloPasso(passo, NOMES_PASSO[passo - 1] || ""));
+    }
 
     function copia(rot, valor, id) {
       const inp = h("input", { id, type: "text", readonly: true, value: valor || "", class: "mono" });
@@ -1028,13 +1063,14 @@ async function montarNumeros(ctx, alvo) {
 
     function desenharPasso(api) {
       marcarTrilha();
+      anunciarPasso();
       ui.limpar(conteudo);
       const prim = api && api.el.querySelector(".modal-rod [data-tipo=primario]");
       const volta = api && api.el.querySelector(".modal-rod [data-tipo=neutro]");
       if (prim) prim.textContent = passo === 2 ? (canal && passoInicial === 2 ? "Salvar" : "Salvar e continuar") : passo === 5 || (canal && passoInicial === 3 && passo === 3) ? "Concluir" : "Continuar";
       if (volta) volta.textContent = passo > 1 && !(canal && passo === passoInicial) ? "Voltar" : "Fechar";
       if (passo === 1) {
-        conteudo.append(h("h3", { class: "titulo-sec" }, "1. O que é preciso"),
+        conteudo.append(h("h3", { class: "titulo-sec" }, tituloPasso(1, "O que é preciso")),
           h("ol", { class: "cfg-lista-req" },
             h("li", null, "Acesso ao Meta Business da empresa, com um app que tenha o produto WhatsApp."),
             h("li", null, "Um número dedicado (ou migrado) para a API oficial."),
@@ -1051,7 +1087,7 @@ async function montarNumeros(ctx, alvo) {
       } else if (passo === 2) {
         const deps = (base && base.departamentos) || [];
         form = h("form", { class: "pilha", novalidate: true },
-          h("h3", { class: "titulo-sec" }, "2. Dados do número"),
+          h("h3", { class: "titulo-sec" }, tituloPasso(2, "Dados do número")),
           h("div", { class: "grade-2" },
             ui.campo({ rotulo: "Nome na central", nome: "nome", valor: atual ? atual.nome : "WhatsApp", obrigatorio: true, max: 40, ajuda: "Ex.: Recepção, Comercial" }),
             ui.campo({ rotulo: "Número (como aparece)", nome: "numero_exibicao", valor: atual ? atual.numero_exibicao : "", max: 30, placeholder: "(12) 99999-9999", validar: "telefone" }),
@@ -1068,7 +1104,7 @@ async function montarNumeros(ctx, alvo) {
         conteudo.appendChild(form);
       } else if (passo === 3) {
         const w = webhook || {};
-        conteudo.append(h("h3", { class: "titulo-sec" }, "3. Webhook"));
+        conteudo.append(h("h3", { class: "titulo-sec" }, tituloPasso(3, "Webhook")));
         if (w.modo === "proprio") {
           conteudo.append(h("p", { class: "sub" }, "No Meta Developers, abra o app → WhatsApp → Configuração → Webhook. Cole a URL e o token abaixo, clique em Verificar e salvar e assine o campo «messages»."),
             h("div", { class: "cfg-webhook" }, copia("URL de retorno", w.url, "cfg-wh-url"), copia("Token de verificação", w.verify_token, "cfg-wh-tok")));
@@ -1085,10 +1121,10 @@ async function montarNumeros(ctx, alvo) {
           try {
             const r = await ui.carregando(b, ctx.api.fn("nx-enviar", { acao: "inscrever_app", canal: atual.id }));
             mudou = true;
-            res.appendChild(r && r.app_inscrito ? ui.pilula("App inscrito ✓", "ok") : ui.pilula("A Meta não confirmou a inscrição", "ruim"));
+            res.appendChild(r && r.app_inscrito ? ui.pilula("App inscrito", "ok", { icone: "check" }) /* plano 1000b · CB-099 */ : ui.pilula("A Meta não confirmou a inscrição", "ruim"));
           } catch (e) { res.appendChild(h("p", { class: "sub" }, erroFuncao(e))); }
         });
-        conteudo.append(h("h3", { class: "titulo-sec" }, "4. Inscrever o app"),
+        conteudo.append(h("h3", { class: "titulo-sec" }, tituloPasso(4, "Inscrever o app")),
           h("p", { class: "sub" }, "Sem a inscrição do app na conta do WhatsApp (WABA), a Meta não manda nenhuma mensagem para cá. Um clique resolve."),
           h("div", { class: "linha" }, b), res);
       } else if (passo === 5) {
@@ -1111,10 +1147,10 @@ async function montarNumeros(ctx, alvo) {
           } catch (e) { res.appendChild(h("p", { class: "sub" }, erroFuncao(e))); }
         });
         bS.addEventListener("click", async () => {
-          try { const r = await ui.carregando(bS, ctx.api.fn("nx-enviar", { acao: "sincronizar_templates", canal: atual.id })); mudou = true; res.appendChild(ui.pilula(`${(r && r.total) || 0} modelo(s)`, "info")); }
+          try { const r = await ui.carregando(bS, ctx.api.fn("nx-enviar", { acao: "sincronizar_templates", canal: atual.id })); mudou = true; res.appendChild(ui.pilula(textoModelosSincronizados(r && r.total), "info")); }   // plano 1000b · CB-098
           catch (e) { res.appendChild(h("p", { class: "sub" }, erroFuncao(e))); }
         });
-        conteudo.append(h("h3", { class: "titulo-sec" }, "5. Testar"),
+        conteudo.append(h("h3", { class: "titulo-sec" }, tituloPasso(5, "Testar")),
           h("p", { class: "sub" }, "O número só fica «Ativo» quando responde à Meta E o app está inscrito. Depois, mande um «oi» de outro celular para ver a conversa chegar."),
           h("div", { class: "linha" }, bT, bS), res);
       }
@@ -1345,10 +1381,19 @@ async function montarRespostas(ctx, alvo) {
     if (!(await ui.confirmar({ titulo: `Importar ${r.novas.length} ${r.novas.length === 1 ? "resposta" : "respostas"}?`, rotulo: "Importar",
       texto: `Elas valem para todos os departamentos.${fora ? ` Ficam de fora: ${fora}.` : ""}` }))) return;
     let ok = 0;
+    // plano 1000b · CB-104: progresso «Importando 12 de 40» e, no fim, QUAIS atalhos o servidor recusou
+    const recusados = [];
+    const prog = r.novas.length > 3 ? ui.toast(`Importando 0 de ${r.novas.length}…`, { tipo: "info", fixo: true, ms: 0 }) : null;
+    const pintar = i => { const p = prog && prog.el && prog.el.querySelector && prog.el.querySelector("p"); if (p) p.textContent = `Importando ${i} de ${r.novas.length}…`; };
+    let i = 0;
     for (const x of r.novas) {
-      try { await ctx.api.rpcC("nx_resposta_salvar", { p_resposta: { ...x, departamento_id: null } }); ok++; } catch { /* atalho tomado no meio do caminho: segue */ }
+      pintar(++i);
+      try { await ctx.api.rpcC("nx_resposta_salvar", { p_resposta: { ...x, departamento_id: null } }); ok++; } catch { recusados.push(`/${x.atalho}`); /* atalho tomado no meio do caminho: segue */ }
     }
-    ui.toast(ok === r.novas.length ? `${ok} ${ok === 1 ? "resposta importada" : "respostas importadas"}.` : `${ok} de ${r.novas.length} importadas; as outras foram recusadas pelo servidor.`, { tipo: ok ? "ok" : "erro" });
+    if (prog && typeof prog.fechar === "function") try { prog.fechar("pronto"); } catch { /* ok */ }
+    const lista = recusados.length > 6 ? `${recusados.slice(0, 6).join(", ")} e mais ${recusados.length - 6}` : recusados.join(", ");
+    ui.toast(ok === r.novas.length ? `${ok} ${ok === 1 ? "resposta importada" : "respostas importadas"}.`
+      : `${ok} de ${r.novas.length} importadas. Recusadas pelo servidor: ${lista}.`, { tipo: ok ? "ok" : "erro", ms: recusados.length ? 12000 : undefined });
     carregar();
   }
 
@@ -1678,8 +1723,12 @@ async function montarDepartamentos(ctx, alvo) {
     // plano 1000 · AS-150: predefinições de horário (além do «copiar segunda»)
     const predef = h("div", { class: "linha cfg-predef", role: "group", "aria-label": "Horários prontos" },
       PREDEFINICOES_HORARIO.map(p => h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { predef: p.id }, on: { click: () => {
-        grade = predefinicaoHorario(p.id, lerGrade()); montarGrade(); atualizarResumo();
-        ui.anunciar(`Horário «${p.rotulo}» aplicado.`);
+        const antes = lerGrade();   // plano 1000b · CB-138: a grade anterior volta pelo «Desfazer» do aviso
+        grade = predefinicaoHorario(p.id, antes); montarGrade(); atualizarResumo();
+        ui.toast(`Horário «${p.rotulo}» aplicado.`, { tipo: "ok", desfazer: () => {
+          grade = antes ? clonar(antes) : null; montarGrade(); atualizarResumo();
+          ui.anunciar("Horário anterior de volta.");
+        } });
       } } }, p.rotulo)));
     blocoGrade.prepend(predef);
     // AS-149: a grade vale no horário de Brasília (o servidor confere no fuso de São Paulo)
@@ -1708,7 +1757,17 @@ async function montarDepartamentos(ctx, alvo) {
       erroHor.hidden = v.ok; erroHor.textContent = v.ok ? "" : v.erro.texto;
       const noturna = v.ok && v.horario && Object.values(v.horario).some(fx => fx.some(([a, b]) => b < a));
       resumo.textContent = v.ok ? `${L.resumoHorario(v.horario)}${noturna ? " · a faixa que termina antes de começar vai até a madrugada do dia seguinte" : ""}` : "";
+      pintarCopiar();
       atualizarPrevia();
+    }
+    /** plano 1000b · CB-137: «Copiar segunda para terça a sexta» com a segunda fechada fecharia a semana calada — desligado, com o motivo. */
+    function pintarCopiar() {
+      const seg = gradeEl.querySelector('[data-dia="1"] input[type=checkbox]');
+      const fechada = !!seg && !seg.checked;
+      bCopiar.disabled = fechada;
+      const motivo = "A segunda está fechada: marque a segunda (com o horário) para copiar.";
+      if (fechada) { bCopiar.setAttribute("title", motivo); bCopiar.setAttribute("aria-description", motivo); }
+      else { bCopiar.removeAttribute("title"); bCopiar.removeAttribute("aria-description"); }
     }
     function faixaEl(dia, fx, podeRemover) {
       const a = h("input", { type: "time", value: fx[0] || "08:00", step: 300, "aria-label": `${L.DIAS_LONGOS[dia]}: início` });
@@ -1716,7 +1775,13 @@ async function montarDepartamentos(ctx, alvo) {
       a.addEventListener("change", atualizarResumo); b.addEventListener("change", atualizarResumo);
       const x = podeRemover ? h("button", { type: "button", class: "bt-icone", "aria-label": `Tirar o intervalo de ${L.DIAS_LONGOS[dia]}` }, ui.icone("fechar")) : null;
       const el = h("span", { class: "cfg-faixa" }, a, h("span", { "aria-hidden": "true" }, "às"), b, x);
-      if (x) x.addEventListener("click", () => { el.remove(); desenharLinha(dia); atualizarResumo(); });
+      if (x) x.addEventListener("click", () => {
+        // plano 1000b · CB-105: o botão focado some com a faixa — o foco vai ao «Intervalo» da linha (ou ao fim da faixa que ficou)
+        const linha = el.closest(".cfg-dia");
+        el.remove(); desenharLinha(dia); atualizarResumo();
+        const alvo = linha && (linha.querySelector(".cfg-mais-faixa") || [...linha.querySelectorAll(".cfg-faixa input[type=time]")].pop());
+        try { if (alvo) alvo.focus(); } catch { /* ok */ }
+      });
       return el;
     }
     function desenharLinha(dia) {
@@ -1726,7 +1791,9 @@ async function montarDepartamentos(ctx, alvo) {
       const mais = caixaF.querySelector(".cfg-mais-faixa");
       if (mais) mais.remove();
       if (faixas.length < 2 && linha.querySelector("input[type=checkbox]").checked) {
-        const bm = h("button", { type: "button", class: "bt bt-fant bt-p cfg-mais-faixa" }, ui.icone("mais"), "Intervalo");
+        // plano 1000b · CB-143: o nome diz que o botão divide o dia (08–18 vira 08–12 e 13–18)
+        const bm = h("button", { type: "button", class: "bt bt-fant bt-p cfg-mais-faixa", "aria-label": `Intervalo de almoço em ${L.DIAS_LONGOS[dia]}`,
+          title: "Divide o horário em duas faixas para o almoço (ex.: 08:00–18:00 vira 08:00–12:00 e 13:00–18:00)" }, ui.icone("mais"), "Intervalo (almoço)");
         bm.addEventListener("click", () => {
           // intervalo de almoço: 08:00–18:00 vira 08:00–12:00 e 13:00–18:00; senão abre uma faixa depois da última
           const ult = faixas[faixas.length - 1];
@@ -1783,6 +1850,7 @@ async function montarDepartamentos(ctx, alvo) {
     bDef.addEventListener("click", () => modoHorario(true));
     bCopiar.addEventListener("click", () => {
       const g = lerGrade(); if (!g) return;
+      if (!(g[1] && g[1].length)) { pintarCopiar(); return; }   // plano 1000b · CB-137: segunda fechada não fecha a semana
       for (const dia of [2, 3, 4, 5]) g[dia] = g[1].map(x => [...x]);
       grade = g; montarGrade(); atualizarResumo();
       ui.anunciar("Horário de segunda copiado para terça a sexta.");
@@ -1850,7 +1918,7 @@ async function montarDepartamentos(ctx, alvo) {
 async function montarAtendimento(ctx, alvo) {
   const { ui } = ctx;
   const h = ui.h;
-  await Promise.all([ui.carregarCss("conversas"), ui.carregarCss("config")]);
+  const [L] = await Promise.all([logica(ctx), ui.carregarCss("conversas"), ui.carregarCss("config")]);   // plano 1000b · CB-003: L.nomeAssinatura na prévia
   const caixa = h("div", { class: "pilha" });
   ui.limpar(alvo);
   alvo.append(
@@ -1895,7 +1963,9 @@ async function montarAtendimento(ctx, alvo) {
   }
 
   function previaAssinatura() {
-    const nome = String((ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.nome) || "Ana").trim().split(/\s+/)[0];
+    // plano 1000b · CB-003: a mesma regra do teto e do «Sai como» do composer (L.nomeAssinatura = a do nx-enviar no ar); quando o CB-002
+    // levar o servidor ao primeiroNome (sem o «Dra.»), muda só o nomeAssinatura e os três continuam iguais ao que sai
+    const nome = L.nomeAssinatura((ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.nome) || "Ana") || "Ana";
     const el = h("div", { class: "cv-previa cfg-previa-ass" });
     return { el, atualizar() {
       ui.limpar(el);
@@ -1972,7 +2042,10 @@ async function montarIA(ctx, alvo) {
           h("p", null, h("b", null, "Sugestões de IA do Órbita indisponíveis. "), "Estas informações ainda podem ser preparadas para o agente CodeWords; a ativação depende do canal.")));
 
     const f = h("form", { class: "pilha cartao cfg-ia", novalidate: true });
-    const cont = h("div", { class: "cfg-ia-cont", "aria-live": "polite" });
+    // plano 1000b · CB-082: o contador não é região viva (era lido a cada tecla); o leitor de tela ouve só ao cruzar 80% e 100% (como o composer)
+    const cont = h("div", { class: "cfg-ia-cont" });
+    const contAnuncio = h("span", { class: "sr-only cfg-ia-cont-anuncio", role: "status", "aria-live": "polite", "aria-atomic": "true" }, "");
+    let faixaAnunciada = null;
     const barra = h("div", { class: "uso-barra" }, h("i"));
     const salvar = h("button", { type: "submit", class: "bt bt-prim" }, "Salvar assistente");
     const sujo = h("span", { class: "sub", hidden: true }, "Alterações não salvas");
@@ -2009,7 +2082,7 @@ async function montarIA(ctx, alvo) {
       // plano 1000 · AS-152: esta prévia é montada no navegador; o prompt REAL sai do servidor (receita do CodeWords) e pode ter mais regras
       h("p", { class: "sub" }, "Esta prévia é montada aqui na tela e serve para conferir o conteúdo: o texto real que o agente recebe é gerado pelo servidor e tem regras a mais. Para ver e copiar o prompt real, salve e use «Copiar prompt» em Configurações → Números de WhatsApp."), previa);
     f.append(cTom, blocoPrevia,
-      h("div", { class: "cfg-ia-rod" }, h("div", { class: "cfg-ia-medidor" }, cont, barra), h("div", { class: "linha" }, sujo, salvar)));
+      h("div", { class: "cfg-ia-rod" }, h("div", { class: "cfg-ia-medidor" }, cont, contAnuncio, barra), h("div", { class: "linha" }, sujo, salvar)));
 
     function atualizarPrevia() {
       const d = ui.lerForm(f);
@@ -2041,6 +2114,10 @@ async function montarIA(ctx, alvo) {
       barra.classList.toggle("cheia", n > L.IA_MAX);
       cont.dataset.alerta = n > L.IA_MAX ? "1" : "0";
       salvar.disabled = n > L.IA_MAX;
+      const faixa = n > L.IA_MAX ? 2 : p >= 80 ? 1 : 0;   // CB-082
+      if (faixaAnunciada !== null && faixa !== faixaAnunciada && faixa > 0)
+        contAnuncio.textContent = faixa === 2 ? `Passou do limite: ${cont.textContent}.` : `Perto do limite: ${cont.textContent}.`;
+      faixaAnunciada = faixa;
       sujo.hidden = false;
       return n;
     }
@@ -2085,7 +2162,7 @@ async function montarIA(ctx, alvo) {
 export const secoesConfig = [
   { id: "numeros", titulo: "Números de WhatsApp", desc: "Conecte o WhatsApp pelo CodeWords ou pela Meta", grupo: "Atendimento", papelMin: "admin", modulo: "conversas", icone: "whatsapp", montar: montarNumeros },
   { id: "respostas", titulo: "Respostas rápidas", desc: "Frases prontas que a equipe usa com /", grupo: "Atendimento", papelMin: "supervisor", modulo: "conversas", icone: "chat", montar: montarRespostas },
-  { id: "atendimento", titulo: "Preferências do atendimento", desc: "Assinatura, fila e avisos das conversas", grupo: "Atendimento", papelMin: "admin", modulo: "conversas", icone: "engrenagem", montar: montarAtendimento },
+  { id: "atendimento", titulo: "Preferências do atendimento", desc: "Confirmação de leitura e assinatura", grupo: "Atendimento", papelMin: "admin", modulo: "conversas", icone: "engrenagem", montar: montarAtendimento },
   { id: "ia", titulo: "Assistente de IA", desc: "O que a IA sabe e como ela fala", grupo: "Atendimento", papelMin: "admin", modulo: "conversas", icone: "ia", montar: montarIA },
   { id: "departamentos", titulo: "Departamentos e horários", desc: "Quem atende o quê e em qual horário", grupo: "Equipe", papelMin: "admin", modulo: "conversas", icone: "usuario", montar: montarDepartamentos },
 ];

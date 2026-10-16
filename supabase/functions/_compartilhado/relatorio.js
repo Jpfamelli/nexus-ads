@@ -154,7 +154,12 @@ async function gerar(db, cfg, cliente, ctx) {
   try {
     await db.upsert("nx_relatorios", { cliente_id: cliente.id, tipo: ctx.tipo, referencia: ref, texto, destinos, enviando_em: ctx.agora.toISOString() }, "cliente_id,tipo,referencia");
     reservou = true;
-  } catch (e) { console.error("nx-relatorio reserva:", limparErro(e?.message || e)); }
+  } catch (e) {
+    // plano 1000b · B-037: só segue SEM reserva quando o banco não tem a coluna (400 citando enviando_em). Outra falha (503,
+    // tempo esgotado) sobe: mandar sem reserva podia repetir o relatório se o registro final também falhasse.
+    if (!(e?.status === 400 && /enviando_em/.test(String(e?.message)))) throw e;
+    console.error("nx-relatorio reserva:", limparErro(e?.message || e));
+  }
   const envio = await enviarParaTodos(cfg, destinos, texto, { fetch: ctx.fetch, titulo });
   // só o envio decide `erro` e `ok`: a leitura da IA é opcional, e a falha dela não é falha de um relatório entregue
   const erro = erroDeEnvio(destinos, envio);

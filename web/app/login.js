@@ -169,7 +169,8 @@ function telaEntrar(ctx) {
     } catch (e) {
       rotuloBt.textContent = "Entrar";
       const msg = api.mensagemErro(e);
-      const s = form.querySelector("input[name=senha]"); if (s) s.value = "";
+      // plano 1000b · UB-157: a senha só é apagada quando o problema é ELA (credenciais/tentativas); sem internet ou servidor lento ela fica no campo
+      const s = form.querySelector("input[name=senha]"); if (s && e && (e.codigo === "credenciais_invalidas" || e.codigo === "muitas_tentativas")) s.value = "";
       // senha ou e-mail errados: o erro fica colado no campo de senha (inline) e o foco volta para lá; erro de rede/servidor usa a caixa
       if (e && e.codigo === "credenciais_invalidas") ui.marcarErro(form, "senha", msg);
       else if (e && e.codigo === "muitas_tentativas") bloquear(e);
@@ -192,6 +193,16 @@ function telaEntrar(ctx) {
   focarDepois(ctx, "input[name=email]");
 }
 
+/** Plano 1000b · UB-162: convite feito para um e-mail → o campo vem somente leitura (o servidor aceita só esse); sem e-mail, campo livre. */
+export function campoEmailDoConvite(ui, email) {
+  const fixo = !!String(email || "").trim();
+  const c = ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", valor: email || "", autocomplete: "username", obrigatorio: true,
+    ajuda: fixo ? "O convite é para este e-mail." : undefined });
+  const inp = c.querySelector("input");
+  if (fixo && inp) { inp.setAttribute("readonly", ""); inp.readOnly = true; }
+  return c;
+}
+
 /* ---------------- #/convite/<token> ---------------- */
 async function telaConvite(ctx, token) {
   const { ui, api } = ctx;
@@ -208,9 +219,12 @@ async function telaConvite(ctx, token) {
   } catch (e) {
     ui.limpar(ctx.alvo);
     const ir = h("a", { class: "bt bt-prim", href: "#/login" }, "Ir para a entrada");
+    // plano 1000b · UB-166: com WhatsApp de suporte na marca, um caminho para pedir um convite novo
+    const wa = ctx.marca && ctx.marca.suporte_wa;
+    const suporte = wa ? h("a", { class: "bt bt-sec", href: ui.linkWhatsApp("Olá! Meu convite para o sistema não abre. Pode me mandar um novo?", wa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Falar com o suporte") : null;
     ctx.alvo.appendChild(moldura(ctx, {
       titulo: (ctx.marca && ctx.marca.login_titulo) || "", cartao: h("section", { class: "entrar-cartao" },
-        h("h1", null, "Convite indisponível"), h("p", { class: "sub" }, api.mensagemErro(e)), h("div", { class: "entrar-form" }, ir)),
+        h("h1", null, "Convite indisponível"), h("p", { class: "sub" }, api.mensagemErro(e)), h("div", { class: "entrar-form" }, ir, suporte)),
     }));
     return;
   }
@@ -224,7 +238,7 @@ async function telaConvite(ctx, token) {
   const erro = caixaMsg(ui);
   const form = h("form", { class: "entrar-form", novalidate: true },
     ui.campo({ rotulo: "Seu nome", nome: "nome", valor: cv.nome || "", autocomplete: "name", obrigatorio: true, max: 80 }),
-    ui.campo({ rotulo: "E-mail", nome: "email", tipo: "email", valor: cv.email || "", autocomplete: "username", obrigatorio: true }),
+    campoEmailDoConvite(ui, cv.email),
     // plano 1000 (AS-197): medidor de força e «Repita a senha» — um erro de digitação ao criar a conta deixava a pessoa trancada
     ui.campo({ rotulo: "Senha", nome: "senha", tipo: "senha", autocomplete: "new-password", obrigatorio: true, ajuda: "Pelo menos 8 caracteres.", validar: "senha" }),
     ui.campo({ rotulo: "Repita a senha", nome: "senha2", tipo: "senha", autocomplete: "new-password", obrigatorio: true }),
@@ -249,20 +263,38 @@ async function telaConvite(ctx, token) {
       const r = await ui.carregando(bt, api.publica("nx_convite_aceitar", { p_convite: token, p_nome: d.nome, p_email: email, p_senha: d.senha }));
       await ctx.aoEntrar(r.token, { cliente_id: r.cliente_id || null });
     } catch (e) {
+      // plano 1000b · UB-165: o convite deixou de valer (vencido, já usado, cancelado) → o formulário morto dá lugar ao motivo e ao caminho
+      if (e && e.codigo === "convite_invalido" && e.hint !== "conta_existente") {
+        const novo = cartaoLinkMorto(ui, "t-convite", "Este convite não vale mais", `${api.mensagemErro(e)} Peça um convite novo a quem convidou você.`);
+        const pai = cartao.parentNode; if (pai) { pai.insertBefore(novo, cartao); cartao.remove(); }
+        const ir = novo.querySelector("a.bt-prim"); if (ir) ir.focus();
+        return;
+      }
       mostrar(erro, api.mensagemErro(e));
       if (e.codigo === "credenciais_invalidas") { const s = form.querySelector("input[name=senha]"); if (s) { s.value = ""; s.focus(); } }
-      if (e.codigo === "convite_invalido" && e.hint !== "conta_existente") bt.disabled = true;
     }
   });
 
+  // plano 1000b · UB-163: o servidor que mandar a validade (expira_em) mostra até quando o convite vale (o atual não manda: nada aparece)
+  const expira = cv && typeof cv.expira_em === "string" && !Number.isNaN(Date.parse(cv.expira_em)) ? cv.expira_em : null;
   const cartao = h("section", { class: "entrar-cartao", "aria-labelledby": "t-convite" },
     h("h1", { id: "t-convite" }, "Você foi convidado"),
     h("div", { class: "entrar-convite" }, ui.icone("convidar"),
-      h("p", null, cv.papel === "gestor" ? "Para gerenciar " : "Para ", h("b", null, destinoTxt), " como ", h("b", null, papelTxt), ".")),
+      h("p", null, cv.papel === "gestor" ? "Para gerenciar " : "Para ", h("b", null, destinoTxt), " como ", h("b", null, papelTxt), "."),
+      expira ? h("p", { class: "fraco entrar-validade" }, `Vale até ${ui.dataCurtaBR(expira)} ${ui.horaBR(expira)}.`) : null),
     form);
   ui.limpar(ctx.alvo);
   ctx.alvo.appendChild(moldura(ctx, { titulo: marca.login_titulo, cartao, marca }));
   focarDepois(ctx, cv.nome ? "input[name=senha]" : "input[name=nome]");
+}
+
+/** plano 1000b · UB-159/UB-165: cartão de link/convite que não vale mais — o motivo e o caminho para a entrada (nada de formulário morto). */
+function cartaoLinkMorto(ui, idTitulo, titulo, texto, extra = null) {
+  const h = ui.h;
+  return h("section", { class: "entrar-cartao", "aria-labelledby": idTitulo },
+    h("h1", { id: idTitulo }, titulo),
+    h("p", { class: "sub" }, texto),
+    h("div", { class: "entrar-form" }, h("a", { class: "bt bt-prim bt-g bt-bloco", href: "#/login" }, "Ir para a entrada"), extra));
 }
 
 /* ---------------- #/senha/<token> ---------------- */
@@ -271,9 +303,18 @@ function telaSenha(ctx, token) {
   const h = ui.h;
   const m = ctx.marca || {};
   ctx.titulo("Nova senha");
+  // plano 1000b · UB-159: link com formato que nunca valeria (#/senha/abc) não mostra formulário para digitar duas vezes à toa
+  if (!/^[0-9a-f]{64}$/i.test(String(token || ""))) {
+    ui.limpar(ctx.alvo);
+    ctx.alvo.appendChild(moldura(ctx, { titulo: m.login_titulo, cartao: cartaoLinkMorto(ui, "t-senha", "Este link não vale mais",
+      "O link de nova senha está incompleto ou já foi usado. Peça outro ao administrador da sua empresa.") }));
+    focarDepois(ctx, "a.bt-prim");
+    return;
+  }
   const erro = caixaMsg(ui);
   const form = h("form", { class: "entrar-form", novalidate: true },
-    ui.campo({ rotulo: "Senha nova", nome: "senha", tipo: "senha", autocomplete: "new-password", obrigatorio: true, ajuda: "Pelo menos 8 caracteres." }),
+    // plano 1000b · UB-158: o mesmo medidor de força do convite
+    ui.campo({ rotulo: "Senha nova", nome: "senha", tipo: "senha", autocomplete: "new-password", obrigatorio: true, ajuda: "Pelo menos 8 caracteres.", validar: "senha" }),
     ui.campo({ rotulo: "Repita a senha nova", nome: "senha2", tipo: "senha", autocomplete: "new-password", obrigatorio: true }),
     erro,
     h("button", { type: "submit", class: "bt bt-prim bt-g bt-bloco" }, "Salvar senha"));
@@ -291,7 +332,9 @@ function telaSenha(ctx, token) {
     const bt = form.querySelector("button[type=submit]");
     try {
       if (!/^[0-9a-f]{64}$/i.test(token)) throw Object.assign(new Error("link_invalido"), { codigo: "link_invalido" });
-      await ui.carregando(bt, api.publica("nx_senha_redefinir", { p_link: token, p_senha: d.senha }));
+      const r = await ui.carregando(bt, api.publica("nx_senha_redefinir", { p_link: token, p_senha: d.senha }));
+      // plano 1000b · UB-164: o servidor que devolver uma sessão nova já entra direto (por detecção; o atual não devolve e cai no «Entrar»)
+      if (r && typeof r === "object" && typeof r.token === "string" && r.token && typeof ctx.aoEntrar === "function") { await ctx.aoEntrar(r.token, {}); return; }
       ui.limpar(cartao);
       cartao.append(
         h("h1", null, "Senha criada"),
@@ -315,7 +358,7 @@ function telaTrocar(ctx) {
   const erro = caixaMsg(ui);
   const form = h("form", { class: "entrar-form", novalidate: true },
     ui.campo({ rotulo: "Senha atual", nome: "atual", tipo: "senha", autocomplete: "current-password", obrigatorio: true }),
-    ui.campo({ rotulo: "Senha nova", nome: "nova", tipo: "senha", autocomplete: "new-password", obrigatorio: true, ajuda: "Pelo menos 8 caracteres." }),
+    ui.campo({ rotulo: "Senha nova", nome: "nova", tipo: "senha", autocomplete: "new-password", obrigatorio: true, ajuda: "Pelo menos 8 caracteres.", validar: "senha" }),   // plano 1000b · UB-158
     ui.campo({ rotulo: "Repita a senha nova", nome: "nova2", tipo: "senha", autocomplete: "new-password", obrigatorio: true }),
     erro,
     h("button", { type: "submit", class: "bt bt-prim bt-g bt-bloco" }, "Salvar e entrar"));
@@ -329,11 +372,19 @@ function telaTrocar(ctx) {
     if (!d.atual) return ui.marcarErro(form, "atual", "Informe a senha atual.");
     if (!d.nova || d.nova.length < 8) return ui.marcarErro(form, "nova", "A senha precisa ter pelo menos 8 caracteres.");
     if (d.nova !== d.nova2) return ui.marcarErro(form, "nova2", "As duas senhas não são iguais.");
+    // plano 1000b · UB-160: repetir a senha que o administrador criou não protege nada — erro aqui, sem gastar chamada
+    if (d.nova === d.atual) return ui.marcarErro(form, "nova", "Use uma senha diferente da que o administrador criou.");
     const bt = form.querySelector("button[type=submit]");
     try {
       await ui.carregando(bt, api.rpc("nx_senha_trocar", { p_atual: d.atual, p_nova: d.nova }));
       await ctx.aoTrocarSenha();
-    } catch (e) { mostrar(erro, api.mensagemErro(e)); }
+    } catch (e) {
+      // plano 1000b · UB-161: senha atual errada fica colada no campo «Senha atual» (como no Perfil), com o foco nele
+      if (e && e.codigo === "credenciais_invalidas") {
+        ui.marcarErro(form, "atual", "A senha atual não confere.");
+        const a = form.querySelector("input[name=atual]"); if (a) { a.value = ""; a.focus(); }
+      } else mostrar(erro, api.mensagemErro(e));
+    }
   });
   const cartao = h("section", { class: "entrar-cartao", "aria-labelledby": "t-trocar" },
     h("h1", { id: "t-trocar" }, "Troque a sua senha"),

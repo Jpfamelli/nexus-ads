@@ -131,7 +131,29 @@ const ddmmHora = iso => { const d = quando(iso); return d ? `${FMT_DDMM.format(d
 /** Status de um envio de WhatsApp (relatório ou aviso), honesto como o próprio WhatsApp:
     ✓ = a API aceitou (enviado) · ✓✓ = chegou no celular (entregue) · "!" = não saiu.
     Nunca azul: no WhatsApp azul é "lido", e o servidor não sabe disso. */
-function statusEnvio(x) {
+/** plano 1000b · AB-080: os erros que a Meta devolve em inglês viram português claro (a MESMA tabela do rel-logica.erroEnvioPt);
+    o texto original fica em `erroOriginal` (vai no title). Erro sem padrão conhecido passa como veio. */
+const ERROS_ENVIO_PT = [
+  [/131047|re-?engagement/i, "fora da janela de 24 h: só um modelo aprovado pela Meta pode abrir a conversa"],
+  [/131026|undeliverable|not a valid whatsapp user/i, "o número não recebeu a mensagem (pode não ter WhatsApp ou estar com o app desatualizado)"],
+  [/131030|not in (the )?allowed list/i, "o número não está na lista de destinos permitidos do número de teste"],
+  [/131056|pair rate limit/i, "muitas mensagens seguidas para o mesmo número: tente de novo em alguns minutos"],
+  [/130429|131048|rate limit|spam rate/i, "limite de envio da Meta atingido: tente de novo mais tarde"],
+  [/132000|132001|template.*(does not exist|not exist|translation)/i, "o modelo de mensagem não existe ou não foi aprovado neste idioma"],
+  [/access token|oauth|session has expired/i, "o acesso do número ao WhatsApp expirou: conecte o número de novo"],
+  [/131031|account.*(locked|restricted)/i, "a conta do WhatsApp está bloqueada ou restrita pela Meta"],
+  [/timed? ?out|ETIMEDOUT/i, "o WhatsApp demorou demais para responder"],
+];
+function erroEnvioPt(erro) {
+  const s = String(erro || "");
+  if (!s) return "";
+  const achou = ERROS_ENVIO_PT.find(([re]) => re.test(s));
+  return achou ? achou[1] : s;
+}
+/** plano 1000b · AB-199: com `agora`, o «enviado» sem confirmação há mais de 24 h vira «enviado · sem confirmação de entrega»
+    (antes um diário de 10 dias atrás dizia «entrega ainda não confirmada» para sempre). Sem `agora`, o texto de sempre. */
+const SEM_CONFIRMACAO_MS = 24 * 36e5;
+function statusEnvio(x, agora = null) {
   if (!x) return null;
   const erro = String(x.erro || x.erro_envio || "");
   const naoChegou = /não entregou/i.test(erro);
@@ -139,11 +161,14 @@ function statusEnvio(x) {
   if ((x.enviado_em || x.entregue_em) && erro && !naoChegou) {
     const total = Array.isArray(x.destinos) ? x.destinos.length : 0, falhas = erro.split("; ").filter(t => /^[^:\s]+: /.test(t)).length;
     const ok = total && falhas && falhas < total ? total - falhas : 0, q = x.entregue_em || x.enviado_em;
-    return { k: "parcial", tique: "✓!", rotulo: ok ? `enviado a ${ok} de ${total} às ${horaSP(q)}` : `enviado em parte às ${horaSP(q)}`, hora: horaSP(q), quando: quandoSP(q), erro: erro.slice(0, 160) };
+    return { k: "parcial", tique: "✓!", rotulo: ok ? `enviado a ${ok} de ${total} às ${horaSP(q)}` : `enviado em parte às ${horaSP(q)}`, hora: horaSP(q), quando: quandoSP(q), erro: erroEnvioPt(erro).slice(0, 160), erroOriginal: erro.slice(0, 300) };   // plano 1000b · AB-080
   }
   if (x.entregue_em) return { k: "entregue", tique: "✓✓", rotulo: `entregue às ${horaSP(x.entregue_em)}`, hora: horaSP(x.entregue_em), quando: quandoSP(x.entregue_em) };
-  if (x.enviado_em && !naoChegou) return { k: "enviado", tique: "✓", rotulo: `enviado às ${horaSP(x.enviado_em)} · entrega ainda não confirmada`, hora: horaSP(x.enviado_em), quando: quandoSP(x.enviado_em) };
-  if (erro) return { k: "erro", tique: "!", rotulo: naoChegou ? "não entregue" : "não enviado", hora: x.enviado_em ? horaSP(x.enviado_em) : null, erro: erro.slice(0, 160) };
+  if (x.enviado_em && !naoChegou) {
+    const velho = agora != null && Number.isFinite(+agora) && +agora - Date.parse(x.enviado_em) > SEM_CONFIRMACAO_MS;   // plano 1000b · AB-199
+    return { k: "enviado", tique: "✓", rotulo: velho ? "enviado · sem confirmação de entrega" : `enviado às ${horaSP(x.enviado_em)} · entrega ainda não confirmada`, hora: horaSP(x.enviado_em), quando: quandoSP(x.enviado_em) };
+  }
+  if (erro) return { k: "erro", tique: "!", rotulo: naoChegou ? "não entregue" : "não enviado", hora: x.enviado_em ? horaSP(x.enviado_em) : null, erro: erroEnvioPt(erro).slice(0, 160), erroOriginal: erro.slice(0, 300) };   // plano 1000b · AB-080
   return { k: "pendente", tique: "◷", rotulo: "gerado, ainda não enviado", hora: null };
 }
 
@@ -163,9 +188,26 @@ const logoValido = u => typeof u === "string" && u.length <= 120000
   && (/^data:image\/(png|jpeg|webp);base64,[a-z0-9+/]+=*$/i.test(u) || /^https:\/\/[^\s"'<>()\\]+$/i.test(u));
 
 /* conexão com Meta/Google (regra "integracao", que só o servidor conhece) */
+/** plano 1000b · AB-081: a CHAVE decide primeiro («integracao|google»); a mensagem só quando a chave não diz — e nela «Google» vence
+    «meta», que também é palavra comum («a meta de custo» numa mensagem do Google ia para o Meta). Igual ao rel-logica.canalDe. */
 function canalDe(a) {
-  const s = `${(a && a.chave) || ""} ${(a && a.mensagem) || ""}`.toLowerCase();
-  return /\|meta\b|\bmeta\b/.test(s) ? "meta" : /\|google\b|\bgoogle\b/.test(s) ? "google" : null;
+  const k = String((a && a.chave) || "").toLowerCase(), m = String((a && a.mensagem) || "").toLowerCase();
+  if (/\|meta\b|\bmeta\b/.test(k)) return "meta";
+  if (/\|google\b|\bgoogle\b/.test(k)) return "google";
+  return /\bgoogle\b/.test(m) ? "google" : /\bmeta\b/.test(m) ? "meta" : null;
+}
+/** plano 1000b · AB-076: a última leitura dos anúncios pelo MAIOR instante (antes .sort() no texto: «…Z» × «…-03:00» saía fora de ordem). */
+function ultimaLeitura(integracoes = []) {
+  let melhor = null, t0 = -Infinity;
+  for (const i of integracoes || []) { const t = Date.parse(i && i.ultimo_sync); if (Number.isFinite(t) && t > t0) { t0 = t; melhor = i.ultimo_sync; } }
+  return melhor;
+}
+/** plano 1000b · AB-142: «A Nexus já foi avisada» só quando um aviso de conexão desta plataforma SAIU (enviado_em) nas últimas 24 h
+    (a mesma regra do anuncios.equipeAvisada do Órbita). */
+function equipeAvisada(alertas = [], erros = [], agora = Date.now()) {
+  const canais = new Set((erros || []).map(e => e && e.canal));
+  return (alertas || []).some(a => a && a.regra === "integracao" && (a.enviado_em || a.entregue_em) && agora - Date.parse(a.criado_em) <= 24 * 36e5
+    && canais.has(canalDe(a)));
 }
 function nomeRegraSrv(a, regras = []) {
   if (a.regra === "integracao") { const c = canalDe(a); return c ? `Conexão com ${c === "meta" ? "Meta" : "Google"}` : "Conexão com os anúncios"; }
@@ -196,10 +238,30 @@ function estadoIntegracao(integs = [], alertas = [], agora = Date.now()) {
 }
 /** Quando vem a próxima leitura: o ciclo roda de hora em hora, então ~1 h depois da ÚLTIMA leitura
     (e não na "hora cheia", que erraria por até 59 min conforme o minuto em que o ciclo roda). */
+const ATRASO_LEITURA_MS = 2 * 36e5;   // plano 1000b · AB-155: a mesma régua do «atrasado» do estadoIntegracao
 function proximaLeitura(ultimo, agora = Date.now()) {
   if (!ultimo) return "em até 1 h";
+  // plano 1000b · AB-155: passou de 2 h sem leitura não é «em instantes» — diz desde quando está atrasada
+  if (agora - ultimo > ATRASO_LEITURA_MS) {
+    const iso = new Date(ultimo).toISOString();
+    const desde = agora - ultimo < 20 * 36e5 ? horaSP(iso) : String(quandoSP(iso)).replace(/^em /, "");
+    return `leitura atrasada desde ${desde} — tenta de novo a cada hora`;
+  }
   const falta = Math.ceil((ultimo + 36e5 - agora) / 6e4);
   return falta >= 1 && falta <= 60 ? `em ~${falta} min` : "em instantes";
+}
+/** plano 1000b · AB-225: o orçamento diário que fecha o mês no orçamento — (orçamento − gasto) ÷ dias que restam (igual ao
+    anuncios.diarioSugerido do Órbita). null sem dias ou sem orçamento; 0 quando o orçamento já foi todo usado. */
+function diarioSugerido(orc, gasto, restam) {
+  if (!(+restam > 0) || !(+orc > 0)) return null;
+  const saldo = +orc - (+gasto || 0);
+  return saldo > 0 ? saldo / +restam : 0;
+}
+/** plano 1000b · AB-053/AB-143: «Mostrando os 12 relatórios mais recentes de 20.» — "" quando nada ficou de fora (rel-logica.notaCorte). */
+function notaCorte(mostrados, total, { um = "relatório", varios = "relatórios" } = {}) {
+  const m = +mostrados || 0, t = +total || 0;
+  if (!(t > m)) return "";
+  return `Mostrando ${m === 1 ? `o ${um} mais recente` : `os ${m} ${varios} mais recentes`} de ${t.toLocaleString("pt-BR")}.`;
 }
 
 /** Simulador da demo: as MESMAS taxas do período, resultado em faixa de ±20% (estimativa, nunca promessa). */
@@ -297,7 +359,7 @@ function execucaoDoPedido(execucoes, tarefa, desde) {
     .sort((a, b) => Date.parse(b.inicio) - Date.parse(a.inicio));
   const e = lista[0];
   if (!e) return { k: "nada", rotulo: "O servidor ainda não registrou o pedido. Confira em Configuração da Nexus o endereço das funções e o token do cron." };
-  if (e.ok === false) return { k: "erro", rotulo: `Deu erro no servidor${e.resumo ? `: ${typeof e.resumo === "string" ? e.resumo.slice(0, 160) : JSON.stringify(e.resumo).slice(0, 160)}` : ""}.`, e };
+  if (e.ok === false) return { k: "erro", rotulo: `Deu erro no servidor${e.resumo ? `: ${mascararSegredos(typeof e.resumo === "string" ? e.resumo : JSON.stringify(e.resumo)).slice(0, 160)}` : ""}.`, e };   // plano 1000b · AB-161
   if (e.ok === true) return { k: "ok", rotulo: `Rodou no servidor${e.fim ? ` às ${horaSP(e.fim)}` : ""} ✓`, e };
   return { k: "rodando", rotulo: "Começou no servidor e ainda está rodando.", e };
 }
@@ -316,6 +378,118 @@ const DIAS_PROJECAO_FECHAMENTOS = 7;
 const iniciais = nome => String(nome || "").trim().split(/\s+/).filter(Boolean).slice(0, 3).map(p => `${p.charAt(0).toUpperCase()}.`).join(" ") || "—";
 /** Plano 1000 (AD-202): valor falado dos controles do simulador. */
 const valorFalado = (v, tipo) => (tipo === "brl" ? `${brl0(+v)} por mês` : tipo === "dias" ? `${int(+v)} dias` : String(v));
+
+/** plano 1000b · AB-161: o resumo das execuções vem cru do servidor — trechos com cara de segredo (token do Meta EAA…, do Google ya29.,
+    chave sb_secret_, sequência longa de letras e números) são mascarados antes de ir para a tela. */
+function mascararSegredos(txt) {
+  return String(txt ?? "")
+    .replace(/\b(EAA)[A-Za-z0-9]{6,}/g, "$1•••")
+    .replace(/\b(ya29\.)[A-Za-z0-9._-]{6,}/g, "$1•••")
+    .replace(/\b(sb_secret_)[A-Za-z0-9_-]{4,}/g, "$1•••")
+    .replace(/\b(sk-ant-)[A-Za-z0-9_-]{4,}/g, "$1•••")
+    .replace(/\b[A-Za-z0-9_]{31,}\b/g, m => `${m.slice(0, 4)}•••`);
+}
+/** plano 1000b · AB-138: conversões da plataforma com fração (1,5 do Google não vira 2): inteiro quando inteiro, 1 casa quando não. */
+const fmtConv = v => (v != null && v !== "" && Number.isFinite(+v) && !Number.isInteger(+v) ? dec(+v, 1) : int(v));
+/** plano 1000b · AB-139: a leitura de um dia do gráfico — com Google no dia, conversão fracionada e a palavra «conversão». */
+function convDiaTxt(p) {
+  if (!(p && p.google > 0)) return plural(p ? p.conv : 0, "conversa", "conversas");
+  return p.meta > 0 ? pluralDec(p.conv, "conversa ou conversão", "conversas e conversões") : pluralDec(p.conv, "conversão", "conversões");
+}
+/** plano 1000b · AB-148: a linha de cada mês do «Mês a mês» — conversões sem arredondar e sem «— cada» quando não houve conversão. */
+const subMes = t => `${pluralDec(t.conversoes, "conversa", "conversas")}${Number.isFinite(t.cpa) ? ` · ${brl(t.cpa)} cada` : ""}`;
+/** plano 1000b · AB-150: a seta do chip de variação — «→» abaixo de 1% (mesma regra do rel-logica.chipVar). */
+const setaVar = v => (Math.abs(v) < 1 ? "→" : v >= 0 ? "▲" : "▼");
+/** plano 1000b · AB-140/AB-213: rótulos das tabelas e do quadro com o vocabulário da vertical (M.VOC), não «Pacientes/Tratamentos» fixos. */
+const capt = x => String(x || "").charAt(0).toUpperCase() + String(x || "").slice(1);
+function colunasCamp(V) {
+  return [
+    ["nome", "Campanha"], ["gasto", "Investido"], ["conv", "Conversas"], ["cpa", "Custo/conversa"], ["ctr", "CTR"],
+    ["ag", "Agendadas"], ["fe", capt(V.novo[1])], ["rec", V.receita],
+    // só anúncio (sem a gestão): o "Cada R$ 1 virou" do herói, do curta e da folha soma a gestão
+    ["roas", "Retorno do anúncio", `${V.receita} ÷ investimento em anúncios desta campanha (sem a gestão da Nexus). O “Cada R$ 1 investido virou” da Visão geral inclui a gestão.`],
+  ];
+}
+const rotuloCelula = V => ({ gasto: "Investido", conv: "Conversas", cpa: "Custo por conversa", fe: capt(V.novo[1]) });
+/** plano 1000b · AB-164: as cores das colunas vêm dos tokens do painel.css (--etapa-*), não de hex solto. */
+function colunasKanban(V, vertical = "odonto") {
+  return [
+    ["nova", "Nova conversa", "var(--etapa-nova)"],
+    ["agendada", capt(V.agendada[0]), "var(--etapa-agendada)"],
+    ["orcamento", vertical === "odonto" ? "Avaliou · orçamento" : `${capt(V.compareceu[0])} · orçamento`, "var(--etapa-orcamento)"],
+    ["fechou", "Fechou (30 dias)", "var(--etapa-fechou)"],
+    ["parou", "Não seguiu (30 dias)", "var(--etapa-parou)"],
+  ];
+}
+/** plano 1000b · AB-010/AB-231: regrasOff do formulário clássico — os interruptores que a tela mostra decidem os seus ids; ids que a
+    tela não conhece (o «ritmo» desligado no Órbita, regra nova) ficam como estavam. `estados` = {id: ligada}. */
+function regrasOffDoForm(atual = [], estados = {}) {
+  const conhecidas = new Set(Object.keys(estados || {}));
+  const fica = [].concat(atual || []).filter(id => typeof id === "string" && !conhecidas.has(id));
+  const desligadas = Object.entries(estados || {}).filter(([, ligada]) => !ligada).map(([id]) => id);
+  return [...new Set([...fica, ...desligadas])];
+}
+/** plano 1000b · AB-144: destinos de WhatsApp do formulário clássico — 10 a 13 dígitos (DDD + número, com ou sem 55), como no Órbita.
+    Separa por linha, vírgula ou ponto e vírgula (espaço faz parte de «(12) 99999-8888"). → {ok: [...], invalidos: [...]} */
+function numerosWa(texto) {
+  const ok = [], invalidos = [];
+  for (const parte of String(texto || "").split(/[\n,;]+/)) {
+    const d = parte.replace(/\D/g, "");
+    if (!parte.trim()) continue;
+    if (d.length >= 10 && d.length <= 13) { if (!ok.includes(d)) ok.push(d); } else invalidos.push(parte.trim());
+  }
+  return { ok, invalidos };
+}
+/** plano 1000b · AB-145: formato das credenciais antes de salvar (cópia do ads-config.erroCredencial do Órbita, AD-068) → texto do erro ou "". */
+function erroCredencial(campo, valor) {
+  const v = String(valor ?? "").trim(), dig = v.replace(/\D/g, "");
+  if (!v) return "";                                     // em branco = mantém o salvo
+  if (campo === "meta_ad_account_id") return /^(act_)?\d{6,20}$/.test(v) ? "" : "Use o ID da conta de anúncios: act_ seguido só de números (ex.: act_1234567890).";
+  if (campo === "meta_access_token") return /\s/.test(v) ? "O token não tem espaços: copie de novo, inteiro." : v.length < 40 ? "Token curto demais: copie o token de acesso inteiro (costuma começar com EAA)." : "";
+  if (campo === "google_customer_id" || campo === "google_login_customer_id") return dig.length === 10 && /^[\d\s-]+$/.test(v) ? "" : "O ID do Google Ads tem 10 números (ex.: 123-456-7890).";
+  if (campo === "google_developer_token") return /\s/.test(v) || v.length < 15 ? "Developer token inválido: copie o token inteiro, sem espaços." : "";
+  if (campo === "google_client_id") return /\.apps\.googleusercontent\.com$/.test(v) ? "" : "O client ID termina em .apps.googleusercontent.com.";
+  if (campo === "google_client_secret" || campo === "google_refresh_token") return /\s/.test(v) || v.length < 10 ? "Valor inválido: copie de novo, inteiro e sem espaços." : "";
+  return "";
+}
+/** plano 1000b · AB-147: meta/orçamento do formulário — vazio = sem valor (null); negativo ou texto = erro (antes −15 apagava a meta calado). */
+function valorMeta(texto) {
+  const s = String(texto ?? "").trim();
+  if (!s) return { ok: true, valor: null };
+  const v = parseFloat(s.replace(",", "."));
+  if (!Number.isFinite(v)) return { ok: false, erro: "use só números" };
+  if (v < 0) return { ok: false, erro: "não pode ser negativo" };
+  return { ok: true, valor: v };
+}
+/** plano 1000b · AB-141: último dia com gasto de cada campanha (até ontem, R) — «pausada» quando não gasta há 3 dias ou mais
+    (mesma regra do rel-logica.linhasCampanhas, AD-108). */
+const DIAS_PAUSADA = 3;
+function ultimoGastoCamp(linhas = [], R = 0) {
+  const ult = new Map();
+  for (const l of linhas || []) if ((+l.gasto || 0) > 0 && l.i <= R && (!ult.has(l.camp) || l.i > ult.get(l.camp))) ult.set(l.camp, l.i);
+  return ult;
+}
+/** plano 1000b · AB-162: o marco salvo é mesclado na lista RELIDA do servidor (antes a lista inteira do carregamento sobrescrevia o marco
+    que outro gestor gravou nesse meio-tempo). `t` vazio remove o marco do dia `d`. */
+function mesclarMarcos(frescos = [], d, t) {
+  const lista = (Array.isArray(frescos) ? frescos : []).filter(m => m && /^\d{4}-\d{2}-\d{2}$/.test(m.d) && typeof m.t === "string" && m.t.trim() && m.d !== d)
+    .map(m => ({ d: m.d, t: m.t }));
+  if (t) lista.push({ d, t });
+  return lista.sort((a, b) => a.d.localeCompare(b.d)).slice(-40);
+}
+/** plano 1000b · AB-154: período, plataforma e ordem da tabela guardados por cliente (como o Órbita, AD-098/AD-260). */
+const chaveFiltros = clienteId => `nx-filtros:${clienteId || "?"}`;
+const COLS_ORDEM = ["nome", "gasto", "conv", "cpa", "ctr", "ag", "fe", "rec", "roas"];
+function lerFiltros(bruto) {
+  const o = { dias: 30, plat: "", sort: { key: "gasto", dir: -1 } };
+  let x = null;
+  try { x = JSON.parse(bruto || "null"); } catch { x = null; }
+  if (!x || typeof x !== "object") return o;
+  if ([7, 30, 60].includes(+x.dias)) o.dias = +x.dias;
+  if (["", "meta", "google"].includes(x.plat)) o.plat = x.plat;
+  if (x.sort && COLS_ORDEM.includes(x.sort.key) && (x.sort.dir === 1 || x.sort.dir === -1)) o.sort = { key: x.sort.key, dir: x.sort.dir };
+  return o;
+}
 /* ==== PURO: fim ==== */
 
 /* ============================================================
@@ -635,8 +809,9 @@ function renderGeral() {
     `<svg class="fio" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path class="fio-h" pathLength="1" d="M0 50H100"/><path class="fio-v" pathLength="1" d="M50 0V100"/></svg>` +
     `<span class="fio-conta" aria-hidden="true"></span>` +
     passo(c.conversas, "h-conv", c.conversas === 1 ? "conversa no WhatsApp" : "conversas no WhatsApp", null) +
-    passo(c.agendadas, "h-ag", esc(c.agendadas === 1 ? V.agendada[0] : V.agendada[1]), fin(tx1) ? tx1 : 0) +
-    passo(c.fecharam, "h-fe", esc(c.fecharam === 1 ? V.novo[0] : V.novo[1]), fin(tx2) ? tx2 : 0);
+    // plano 1000b · AB-012: sem base (nenhuma conversa/agendamento) a taxa é null — o passo desenha o marcador vazio, nunca «0%»
+    passo(c.agendadas, "h-ag", esc(c.agendadas === 1 ? V.agendada[0] : V.agendada[1]), fin(tx1) ? tx1 : null) +
+    passo(c.fecharam, "h-fe", esc(c.fecharam === 1 ? V.novo[0] : V.novo[1]), fin(tx2) ? tx2 : null);
 
   // a conta em linguagem de consultório (o MESMO retorno de sempre, só reescrito); a nota diz o que é real e o que é estimado
   $("#hero-conta").innerHTML = `
@@ -691,7 +866,8 @@ function renderGeral() {
     { k: "k-fe", l: cap(V.novo[1]), v: c.fecharam, a: ca.fecharam, f: "int", s: "cima", sp: par(m7(sd.fe)) },
     { k: "k-rec", l: V.receita, v: c.receita, a: ca.receita, f: "brl0", s: "cima",
       // a clínica lê a conta do herói (com a gestão); o "x" só anúncios fica para o gestor
-      extra: !gestor() ? esc(notaReceita(c)) : fin(roas) ? `${dec(roas, 1)}x o investido em anúncios` : esc(notaReceita(c)), sp: [acum(idx), acum(idxA)] },
+      // plano 1000b · AB-151: a nota usa o serviço da vertical («valor de cada serviço/produto»)
+      extra: !gestor() ? esc(notaReceita(c, V.servico)) : fin(roas) ? `${dec(roas, 1)}x o investido em anúncios` : esc(notaReceita(c, V.servico)), sp: [acum(idx), acum(idxA)] },
   ];
   // conexão parada: as células que dependem da leitura dos anúncios avisam de que dia é o número
   const parada = estadoInteg().erros.filter(e => !S.plat || e.canal === S.plat);
@@ -702,7 +878,7 @@ function renderGeral() {
     if (v == null) return `<span class="var var-neutro">sem base</span>`;
     const bom = k.s === "cima" ? v >= 0 : k.s === "baixo" ? v <= 0 : null;
     const cls = bom == null || Math.abs(v) < 1 ? "var-neutro" : bom ? "var-bom" : "var-ruim";
-    return `<span class="var ${cls}">${v >= 0 ? "▲" : "▼"} ${pc(Math.abs(v), 0)}</span>`;
+    return `<span class="var ${cls}">${esc(setaVar(v))} ${pc(Math.abs(v), 0)}</span>`;   // plano 1000b · AB-150: «→» abaixo de 1%
   };
   $("#kpis").innerHTML = K.map(k => `
     <div class="kpi">
@@ -749,7 +925,8 @@ function desenharChart(modo) {
   const troca = modo === "troca" && FX && ANIM && FX.assentado(bloco) && el.querySelector("svg");
   const foto = troca ? FX.fotografar(el, ".bars rect", "data-id") : null;
 
-  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Investimento diário por plataforma e conversas no WhatsApp nos últimos ${S.dias} dias">`;
+  // plano 1000b · AB-158: a linha são as conversões da plataforma (média de 7 dias), não «conversas no WhatsApp»
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Investimento diário por plataforma e conversões da plataforma (média de 7 dias) nos últimos ${S.dias} dias">`;
   for (let k = 0; k <= 4; k++) {
     const yy = y(maxG * k / 4);
     s += `<line class="gl" x1="${P.l}" x2="${W - P.r}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}"/>`;
@@ -845,8 +1022,9 @@ function ligarChart() {
     const dt = M.dataDe(p.i), g = p.meta + p.google, cpc = p.conv ? g / p.conv : null, a = d.ant[k];
     // legenda fixa no cabeçalho: o título do cartão nunca some (Google manda conversão fracionada: plural/int)
     leg.innerHTML = `<b>${SEMANA[dt.getDay()]} · ${M.ddmm(p.i)}</b> — Meta <span class="v">${brl(p.meta)}</span> · Google <span class="v">${brl(p.google)}</span> · ` +
-      `<span class="v">${plural(p.conv, "conversa", "conversas")}</span>${fin(cpc) ? ` · <span class="v">${brl(cpc)}</span> por conversa` : ""}` +
-      `${a ? ` · antes: <span class="v">${int(a.conv)}</span>` : ""}`;
+      // plano 1000b · AB-139: com Google no dia, conversão sem arredondar e «por conversão»
+      `<span class="v">${esc(convDiaTxt(p))}</span>${fin(cpc) ? ` · <span class="v">${brl(cpc)}</span> por ${p.google > 0 ? "conversão" : "conversa"}` : ""}` +
+      `${a ? ` · antes: <span class="v">${esc(fmtConv(a.conv))}</span>` : ""}`;
     const mk = marcoDoDia(p.i);
     if (mk) leg.innerHTML += ` · <span class="marco-leg"><svg aria-hidden="true"><use href="#ic-claq"/></svg>Marco${mk.exemplo ? " (exemplo)" : ""}: ${esc(mk.t)}</span>`;
     clearTimeout(tVivo);
@@ -973,7 +1151,7 @@ function renderMeses() {
       }).join("")}
     </div>
     <div class="mam-rot">${dados.map(d => `<div><span class="mam-m">${MES3[d.m.mes]}${d.parcial ? " · parcial" : ""}</span>
-      <span class="mam-s">${plural(d.t.conversoes, "conversa", "conversas")} · ${brl(d.t.cpa)} cada</span></div>`).join("")}</div>`;
+      <span class="mam-s">${esc(subMes(d.t))}</span></div>`).join("")}</div>`;
   if (foto) FX.flip(el, ".mam-bar", foto, "data-m");
 }
 
@@ -1029,8 +1207,9 @@ function renderLeitura(t, ta, c) {
     if (pm.conversas >= 10 && pg.conversas >= 10) {
       const tm = razao(pm.agendadas, pm.conversas), tg = razao(pg.agendadas, pg.conversas);
       const cm = M.consolidar(M.linhasDe(de, M.R, { plat: "meta" })).cpa, cg = M.consolidar(M.linhasDe(de, M.R, { plat: "google" })).cpa;
-      const [a, b, ta2, tb, ca2, cb] = tg >= tm ? ["Google", "Instagram/Facebook", tg, tm, cg, cm] : ["Instagram/Facebook", "Google", tm, tg, cm, cg];
-      out.push({ k: "acao", h: `No <b>${a}</b>, de cada 100 conversas ${Math.round(ta2)} viram avaliação (contra ${Math.round(tb)} no ${b}). ${ca2 > cb ? `A conversa custa mais (${brl(ca2)} × ${brl(cb)}), mas chega mais decidida.` : "E ainda sai mais barata."}` });
+      // plano 1000b · AB-149: «viram <agendamento da vertical>» e «Meta» (antes «avaliação» e «Instagram/Facebook» fixos)
+      const [a, b, ta2, tb, ca2, cb] = tg >= tm ? [nomePlat("google"), nomePlat("meta"), tg, tm, cg, cm] : [nomePlat("meta"), nomePlat("google"), tm, tg, cm, cg];
+      out.push({ k: "acao", h: `No <b>${a}</b>, de cada 100 conversas ${Math.round(ta2)} viram ${esc(M.VOC.agendada[0])} (contra ${Math.round(tb)} no ${b}). ${ca2 > cb ? `A conversa custa mais (${brl(ca2)} × ${brl(cb)}), mas chega mais decidida.` : "E ainda sai mais barata."}` });
     }
   }
   $("#leitura").innerHTML = out.slice(0, 5).map((x, n) => `<li class="${x.k}" style="--i:${n}"><span class="lt-n" aria-hidden="true">${p2(n + 1)}</span>` +
@@ -1049,36 +1228,36 @@ function renderRitmo() {
     <p class="ritmo-msg">Orçamento do mês não definido${gestor() ? " — preencha em Ajustes para ver o ritmo e a projeção contra ele" : ""}.</p>`;
     return;
   }
+  // plano 1000b · AB-156: na legenda, o glifo «▮» fica aria-hidden (o leitor de tela lê só «orçamento»)
   const w = m.gasto / escala * 100, wp = m.proj / escala * 100, mo = orc / escala * 100;
   const acima = m.proj > orc * 1.02, noLimite = !acima && m.proj >= orc * .98;
+  // plano 1000b · AB-225: quanto investir por dia daqui até o fim do mês para fechar no orçamento — (orçamento − gasto) ÷ dias restantes
+  const sug = diarioSugerido(orc, m.gasto, m.restam);
+  const txtSug = sug == null ? "" : sug > 0 ? ` Orçamento diário sugerido: ${brl(sug)} (somando as plataformas).` : " O orçamento do mês já foi todo usado.";
   const msg = m.restam === 0 ? `Mês fechado em ${brl0(m.gasto)}.`
     // plano 1000 (AD-198): frase neutra — o painel não sabe se o aviso do radar saiu (antes «O radar já sugeriu…» sem aviso nenhum)
-    : acima ? `No ritmo atual o mês fecha ${brl0(m.proj - orc)} acima do orçamento. Segurar ${brl((m.proj - orc) / m.restam)} por dia fecha dentro.`
+    : acima ? `No ritmo atual o mês fecha ${brl0(m.proj - orc)} acima do orçamento. Segurar ${brl((m.proj - orc) / m.restam)} por dia fecha dentro.${txtSug}`
     : noLimite ? `No limite: o mês deve fechar em ${brl0(m.proj)}, praticamente no orçamento.`
     : `Dentro do orçamento: o mês deve fechar em ${brl0(m.proj)} (sobram ${brl0(orc - m.proj)}).`;
   $("#ritmo").innerHTML = `
     <div class="ritmo-num"><strong data-n="${m.gasto}" data-f="brl0" data-k="rit">${brl0(m.gasto)}</strong><span>investidos de ${brl0(orc)}</span></div>
     <div class="pbar" style="--w:${w.toFixed(1)}%;--w0:${w.toFixed(1)}%;--w1:${Math.max(0, wp - w).toFixed(1)}%;--m:${mo.toFixed(1)}%"><i></i><u></u><b title="orçamento"></b></div>
-    <div class="ritmo-leg"><span>gasto até ontem</span><span>projeção ${brl0(m.proj)}</span><span>▮ orçamento</span></div>
+    <div class="ritmo-leg"><span>gasto até ontem</span><span>projeção ${brl0(m.proj)}</span><span><span aria-hidden="true">▮</span> orçamento</span></div>
     <p class="ritmo-msg${acima ? " aten" : ""}">${msg}</p>`;
 }
 
 /* ============================================================
    4. CAMPANHAS
    ============================================================ */
-const COLS_CAMP = [
-  ["nome", "Campanha"], ["gasto", "Investido"], ["conv", "Conversas"], ["cpa", "Custo/conversa"], ["ctr", "CTR"],
-  ["ag", "Agendadas"], ["fe", "Pacientes"], ["rec", "Tratamentos"],
-  // só anúncio (sem a gestão): o "Cada R$ 1 virou" do herói, do curta e da folha soma a gestão
-  ["roas", "Retorno do anúncio", "Tratamentos ÷ investimento em anúncios desta campanha (sem a gestão da Nexus). O “Cada R$ 1 investido virou” da Visão geral inclui a gestão."],
-];
+// plano 1000b · AB-140: as colunas (colunasCamp) e os rótulos do cartão do celular (rotuloCelula) saem do vocabulário da vertical — bloco PURO
 const VAL_CAMP = {
   nome: r => r.c.nome, gasto: r => r.t.gasto, conv: r => r.t.conversoes, cpa: r => r.t.cpa, ctr: r => r.t.ctr,
   ag: r => r.k.agendadas, fe: r => r.k.fecharam, rec: r => r.k.receita, roas: r => r.roas,
 };
-const ROT_CEL = { gasto: "Investido", conv: "Conversas", cpa: "Custo por conversa", fe: "Pacientes novos" };
 // AD-116: sem meta (0) o ponto fica neutro (antes toda campanha virava vermelha)
 const pontoCpa = cpa => !(M.CFG.cpaAlvo > 0) ? "dot-neutro" : !fin(cpa) ? "dot-bad" : cpa <= M.CFG.cpaAlvo ? "dot-ok" : cpa <= M.CFG.cpaAlvo * 1.35 ? "dot-warn" : "dot-bad";
+/** plano 1000b · AB-152: o ponto de cor do CPA também em texto (para leitor de tela). */
+const NIVEL_CPA = { "dot-ok": "dentro da meta", "dot-warn": "um pouco acima da meta", "dot-bad": "acima da meta", "dot-neutro": "sem meta definida" };
 
 function renderCampanhas() {
   const vazio = semAnuncios();
@@ -1095,23 +1274,29 @@ function renderCampanhas() {
   const T = M.consolidar(rows.flatMap(r => M.linhasDe(de, M.R, { camp: r.c.id })));
   const K = rows.reduce((a, r) => ({ ag: a.ag + r.k.agendadas, fe: a.fe + r.k.fecharam, rec: a.rec + r.k.receita }), { ag: 0, fe: 0, rec: 0 });
   // no celular (≤ 700 px) cada linha vira um cartão: nome + 4 números em 2×2 (data-l é o rótulo de cada um)
-  const td = (k, v) => `<td class="c-${k}"${ROT_CEL[k] ? ` data-l="${ROT_CEL[k]}"` : ""}>${v}</td>`;
-  const th = COLS_CAMP.map(([k, l, tt]) => `<th scope="col"${tt ? ` title="${esc(tt)}"` : ""}><button type="button" data-sort="${k}"${k === key ? ` aria-sort="${dir < 0 ? "descending" : "ascending"}"` : ""}>${l}</button></th>`).join("");
+  const ROT_CEL = rotuloCelula(M.VOC);
+  const td = (k, v) => `<td class="c-${k}"${ROT_CEL[k] ? ` data-l="${esc(ROT_CEL[k])}"` : ""}>${v}</td>`;
+  // plano 1000b · AB-011: aria-sort no <th> (cabeçalho de coluna), não no botão — leitor de tela anuncia a ordenação
+  const th = colunasCamp(M.VOC).map(([k, l, tt]) => `<th scope="col"${tt ? ` title="${esc(tt)}"` : ""}${k === key ? ` aria-sort="${dir < 0 ? "descending" : "ascending"}"` : ""}><button type="button" data-sort="${k}">${esc(l)}</button></th>`).join("");
+  // plano 1000b · AB-141: campanha sem gasto há 3 dias ou mais ganha o chip «pausada · último gasto dd/mm» (como o Órbita, AD-108)
+  const ultG = ultimoGastoCamp(M.LINHAS, M.R);
+  rows.forEach(r => { const u = ultG.get(r.c.id); r.pausaDe = u != null && M.R - u >= DIAS_PAUSADA ? u : null; });
   $("#tbl-campanhas").innerHTML = rows.length ? `<table>
     <caption class="sr-only">Campanhas nos últimos ${S.dias} dias</caption>
     <thead><tr>${th}</tr></thead>
     <tbody>${rows.map((r, n) => `<tr style="--i:${n}" data-camp="${esc(r.c.id)}">
-      <td><div class="nm"><span class="dot ${pontoCpa(r.t.cpa)}" title="custo por conversa vs. meta"></span><div class="nm-t"><span>${esc(r.c.nome)}</span><small><span class="chip chip-${classePlat(r.c.plat)}">${nomePlat(r.c.plat)}</span></small></div></div></td>
-      ${td("gasto", brl0(r.t.gasto))}${td("conv", int(r.t.conversoes))}${td("cpa", brl(r.t.cpa))}${td("ctr", pc(r.t.ctr, 2))}
+      <td><div class="nm"><span class="dot ${pontoCpa(r.t.cpa)}" title="custo por conversa vs. meta" aria-hidden="true"></span><span class="sr-only">${esc(NIVEL_CPA[pontoCpa(r.t.cpa)])}: </span><div class="nm-t"><span>${esc(r.c.nome)}</span><small><span class="chip chip-${classePlat(r.c.plat)}">${nomePlat(r.c.plat)}</span>${r.pausaDe !== null ? ` <span class="chip chip-neutro" title="Sem investimento desde ${esc(M.ddmm(r.pausaDe))}">pausada · último gasto ${esc(M.ddmm(r.pausaDe))}</span>` : ""}</small></div></div></td>
+      ${td("gasto", brl0(r.t.gasto))}${td("conv", esc(fmtConv(r.t.conversoes)))}${td("cpa", brl(r.t.cpa))}${td("ctr", pc(r.t.ctr, 2))}
       ${td("ag", r.k.agendadas)}${td("fe", r.k.fecharam)}${td("rec", brl0(r.k.receita))}${td("roas", fin(r.roas) ? dec(r.roas, 1) + "x" : "—")}
     </tr>`).join("")}</tbody>
-    <tfoot><tr><td>Total</td>${td("gasto", brl0(T.gasto))}${td("conv", int(T.conversoes))}${td("cpa", brl(T.cpa))}${td("ctr", pc(T.ctr, 2))}
+    <tfoot><tr><th scope="row">Total</th>${td("gasto", brl0(T.gasto))}${td("conv", esc(fmtConv(T.conversoes)))}${td("cpa", brl(T.cpa))}${td("ctr", pc(T.ctr, 2))}
       ${td("ag", K.ag)}${td("fe", K.fe)}${td("rec", brl0(K.rec))}${td("roas", T.gasto ? dec(K.rec / T.gasto, 1) + "x" : "—")}</tr></tfoot>
   </table>` : `<p class="vazio">Nenhuma campanha com investimento nos últimos ${S.dias} dias${S.plat ? " no " + nomePlat(S.plat) : ""}.</p>`;
 
   // a situação vem do radar (janela recente), não da média do período — senão a
   // tabela diria "ok" para o criativo que o radar acabou de acusar
   const agora = M.avaliar(M.R), sitDe = id => agora.filter(a => a.chave === `r4|${id}` || a.chave === `r3|${id}`);
+  const freqLim = (M.LIM && M.LIM.freqMax > 0) ? M.LIM.freqMax : 3;
   const cris = Object.values(M.CRI).filter(k => k.plat && (!S.plat || k.plat === S.plat)).map(k => ({ k, t: M.consolidar(M.linhasDe(de, M.R, { cri: k.id })) }))
     .filter(x => x.t.gasto > 0).sort((a, b) => b.t.gasto - a.t.gasto);
   $("#tbl-criativos").innerHTML = cris.length ? `<table>
@@ -1122,13 +1307,14 @@ function renderCampanhas() {
       const sit = (a4 ? `<span class="chip chip-bad" title="frequência nos últimos ${a4.regra.janela} dias">fadiga · ${dec(a4.valor, 1)} em ${a4.regra.janela}d</span> ` : "")
         + (a3 ? `<span class="chip chip-warn" title="CTR nos últimos ${a3.regra.janela} dias">CTR ${pc(a3.valor, 2)} em ${a3.regra.janela}d</span>` : "")
         || `<span class="chip chip-ok">ok</span>`;
+      // plano 1000b · AB-157: a barra enche em limite × 1,33 (o limite é configurável, cfg.radar.freqMax) e a marca (a 75%) é o limite
       const fq = fin(t.freq)
-        ? `<span class="fq"><span class="fq-bar${a4 ? " alto" : ""}"><i style="--w:${Math.min(100, t.freq / 4 * 100)}%"></i><b></b></span>${dec(t.freq, 1)}</span>`
+        ? `<span class="fq" title="limite de ${dec(freqLim, 1)} vezes"><span class="fq-bar${a4 ? " alto" : ""}"><i style="--w:${Math.min(100, t.freq / (freqLim * 1.33) * 100)}%"></i><b></b></span>${dec(t.freq, 1)}</span>`
         : "—";
       const camp = M.CAMP[k.camp];
       return `<tr style="--i:${n}">
         <td><div class="nm-t"><span>${esc(k.nome)}</span><small>${esc(camp ? camp.curto : "")} · <span class="chip chip-${classePlat(k.plat)}">${nomePlat(k.plat)}</span></small></div></td>
-        <td>${brl0(t.gasto)}</td><td>${int(t.impressoes)}</td><td>${pc(t.ctr, 2)}</td><td>${fq}</td><td>${int(t.conversoes)}</td><td>${brl(t.cpa)}</td><td class="sit"><span class="sit-chips">${sit}</span></td>
+        <td>${brl0(t.gasto)}</td><td>${int(t.impressoes)}</td><td>${pc(t.ctr, 2)}</td><td>${fq}</td><td>${esc(fmtConv(t.conversoes))}</td><td>${brl(t.cpa)}</td><td class="sit"><span class="sit-chips">${sit}</span></td>
       </tr>`;
     }).join("")}</tbody>
   </table>` : `<p class="vazio">Nenhum criativo com investimento no período.</p>`;
@@ -1137,13 +1323,9 @@ function renderCampanhas() {
 /* ============================================================
    5. PACIENTES — kanban, tabela de origem, donut, gaveta
    ============================================================ */
-const COLS_K = [
-  ["nova", "Nova conversa", "#9FB4C7"],
-  ["agendada", "Avaliação agendada", "#6FA3CF"],
-  ["orcamento", "Avaliou · orçamento", "#CF9540"],
-  ["fechou", "Fechou (30 dias)", "#7FD1A5"],
-  ["parou", "Não seguiu (30 dias)", "#9D9486"],
-];
+// plano 1000b · AB-213/AB-164: rótulos das colunas pelo vocabulário da vertical e cores pelos tokens --etapa-* (colunasKanban, bloco PURO)
+const colsK = () => colunasKanban(M ? M.VOC : { agendada: ["avaliação agendada"], compareceu: ["compareceu"] }, M ? M.vertical : "odonto");
+const COLS_K = colunasKanban({ agendada: ["avaliação agendada"], compareceu: ["compareceu"] });   // só as chaves e a ordem (iguais em toda vertical)
 const K_MAX = 8, K_PASSO = 24;
 const refParou = L => L.iConsulta ?? L.iAgenda ?? L.i;
 
@@ -1206,10 +1388,11 @@ function renderKanban() {
   g.fechou.sort((a, b) => (b.iConsulta ?? b.i) - (a.iConsulta ?? a.i));
   g.parou.sort((a, b) => refParou(b) - refParou(a));
   let n = 0;
-  $("#kanban").innerHTML = COLS_K.map(([k, l, cor]) => {
+  const V = M.VOC;
+  $("#kanban").innerHTML = colsK().map(([k, l, cor]) => {
     const tot = g[k].length, ver = Math.min(tot, S.kVer[k] || K_MAX), resto = tot - ver;
-    return `<section class="kcol" data-col="${k}" aria-label="${l}: ${tot} ${tot === 1 ? "paciente" : "pacientes"}">
-      <header class="kcol-h"><span><i class="kd" style="background:${cor}"></i>${l}</span><b>${tot}</b></header>
+    return `<section class="kcol" data-col="${k}" aria-label="${esc(l)}: ${tot} ${esc(tot === 1 ? V.pessoa[0] : V.pessoa[1])}">
+      <header class="kcol-h"><span><i class="kd" style="background:${cor}"></i>${esc(l)}</span><b>${tot}</b></header>
       ${g[k].slice(0, ver).map(L => cardLead(L, k, n++)).join("")}
       ${resto > 0 ? `<button type="button" class="kmore" data-kmais="${k}">Mostrar mais ${Math.min(resto, K_PASSO)} de ${resto}</button>` : ""}
       ${!tot ? `<p class="kmore">${q ? "nenhum encontrado" : "nenhum no momento"}</p>` : ""}
@@ -1222,6 +1405,8 @@ function renderPacientes() {
   ligarArrasto();
 
   // anúncio × consultório (+ quem chegou sem anúncio, para o dono ver o todo)
+  // plano 1000b · AB-140: cabeçalhos, rosca e legenda com o vocabulário da vertical (antes «Pacientes/Tratamentos» fixos)
+  const V = M.VOC;
   const { de } = janela(), rows = linhasCamp().sort((a, b) => b.k.receita - a.k.receita);
   // anúncio sem campanha identificada (e campanha sem gasto no período): sem custo, mas o paciente existe
   const comRow = new Set(rows.map(r => r.c.id));
@@ -1233,7 +1418,7 @@ function renderPacientes() {
     .filter(x => x.k.conversas || x.k.agendadas || x.k.fecharam);
   $("#tbl-origem").innerHTML = rows.length || semGasto.length || orgs.length ? `<table>
     <caption class="sr-only">Resultado de cada campanha no consultório, últimos ${S.dias} dias</caption>
-    <thead><tr><th scope="col">Origem</th><th scope="col">Conversas</th><th scope="col">Agendaram</th><th scope="col">Vieram</th><th scope="col">Pacientes</th><th scope="col">Tratamentos</th><th scope="col">Custo/paciente</th></tr></thead>
+    <thead><tr><th scope="col">Origem</th><th scope="col">Conversas</th><th scope="col">Agendaram</th><th scope="col">Vieram</th><th scope="col">${esc(capt(V.novo[1]))}</th><th scope="col">${esc(V.receita)}</th><th scope="col">Custo/${esc(V.pessoa[0])}</th></tr></thead>
     <tbody>${rows.map((r, i) => `<tr style="--i:${i}">
       <td><div class="nm-t"><span>${esc(r.c.nome)}</span><small><span class="chip chip-${classePlat(r.c.plat)}">${nomePlat(r.c.plat)}</span></small></div></td>
       <td>${r.k.conversas}</td><td>${r.k.agendadas}</td><td>${r.k.compareceram}</td><td>${r.k.fecharam}</td><td>${brl0(r.k.receita)}</td><td>${brl0(r.cpp)}</td>
@@ -1249,11 +1434,11 @@ function renderPacientes() {
   // tratamentos fechados (donut)
   const c = M.crmTot(de, M.R, { plat: S.plat });
   const segs = Object.entries(c.serv).filter(([, s]) => s.v > 0).sort((a, b) => b[1].v - a[1].v).map(([nome, s], n) => ({ nome, ...s, cor: corServ(nome, n) }));
-  const nota = notaReceita(c);
-  $("#donut-sub").textContent = `Pacientes dos anúncios, últimos ${S.dias} dias${nota ? ` · ${nota}` : ""}.`;
+  const nota = notaReceita(c, V.servico);   // plano 1000b · AB-151
+  $("#donut-sub").textContent = `${capt(V.pessoa[1])} dos anúncios, últimos ${S.dias} dias${nota ? ` · ${nota}` : ""}.`;
   if (!c.receita) {
     $("#donut").innerHTML = `<p class="vazio">${c.semValor > 0
-      ? `${esc(notaReceita(c))}. Abra a ficha e registre o valor para ele entrar na conta.` : "Nenhum tratamento fechado no período."}</p>`;
+      ? `${esc(nota)}. Abra a ficha e registre o valor para ele entrar na conta.` : "Nenhum fechamento no período."}</p>`;
     return;
   }
   let acc = 0;
@@ -1263,8 +1448,8 @@ function renderPacientes() {
     acc += p; return d;
   }).join("");
   $("#donut").innerHTML = `
-    <div class="donut"><svg viewBox="0 0 42 42" aria-hidden="true"><circle cx="21" cy="21" r="15.915" stroke="rgba(245,233,214,.08)"/>${arcs}</svg>
-      <div class="ctr"><b data-n="${c.receita}" data-f="brl0" data-k="donut">${brl0(c.receita)}</b><small>${c.fecharam} ${c.fecharam === 1 ? "paciente" : "pacientes"}</small></div></div>
+    <div class="donut"><svg viewBox="0 0 42 42" aria-hidden="true"><circle class="donut-trilha" cx="21" cy="21" r="15.915"/>${arcs}</svg>
+      <div class="ctr"><b data-n="${c.receita}" data-f="brl0" data-k="donut">${brl0(c.receita)}</b><small>${c.fecharam} ${esc(c.fecharam === 1 ? V.pessoa[0] : V.pessoa[1])}</small></div></div>
     <ul class="dleg">${segs.map(s => `<li><i style="background:${s.cor}"></i>${esc(s.nome)} <span>${s.n} · ${brl0(s.v)}</span></li>`).join("")}</ul>`;
 }
 
@@ -1613,7 +1798,7 @@ function traducaoCTR(msg, tag = "span") {
 const SEV_NOME = { critico: "crítico", alerta: "alerta", info: "informativo" };
 let radarCtl = null, radarChega = false;   // varredura em canvas (cinema.js), se houver
 const horaCheia = () => `${p2(new Date().getHours())}:00`;
-const ultimoSync = () => ((S.dados && S.dados.integracoes) || []).map(i => i.ultimo_sync).filter(Boolean).sort().pop() || null;
+const ultimoSync = () => ultimaLeitura((S.dados && S.dados.integracoes) || []);   // plano 1000b · AB-076: pelo maior instante
 
 function alertasServidor() {
   const m = new Map();
@@ -1630,7 +1815,7 @@ const envLinha = s => (s ? `<span class="env env-${s.k}">${esc(s.rotulo)} ${tiqu
 const chipExemplo = x => (x && x.exemplo ? `<span class="chip chip-exemplo">exemplo</span>` : "");
 /** Linha do tempo de um envio: gerado/registrado → enviado → entregue (só o que o servidor sabe). */
 function linhaTempo(x, tipo) {
-  const s = statusEnvio(x);
+  const s = statusEnvio(x, Date.now());   // plano 1000b · AB-199: «sem confirmação de entrega» depois de 24 h
   const p0 = x.criado_em ? { l: tipo === "alerta" ? "registrado" : "gerado", q: quandoSP(x.criado_em), c: "ok" }
     : x.referencia ? { l: "referente a", q: dataIso(x.referencia), c: "ok" } : null;
   const passos = [p0,
@@ -1639,12 +1824,12 @@ function linhaTempo(x, tipo) {
       c: x.entregue_em ? "ok" : s.k === "erro" && x.enviado_em ? "erro" : "falta" },
   ].filter(Boolean);
   return `<ol class="env-tempo">${passos.map(p => `<li class="et-${p.c}"><b>${p.l}</b><span>${esc(p.q)}</span></li>`).join("")}</ol>` +
-    (s.erro ? `<p class="env-motivo">${esc(s.erro)}</p>` : "");
+    (s.erro ? `<p class="env-motivo" title="${esc(s.erroOriginal || "")}">${esc(s.erro)}</p>` : "");   // AB-080: o texto da Meta fica no title
 }
 let envN = 0;
 /** Item de lista com um envio: título + status (✓/✓✓/!) que abre a linha do tempo. */
 function itemEnvio({ titulo, sub = "", x, tipo, antes = "", depois = "", cls = "" }) {
-  const id = `env-${++envN}`, s = statusEnvio(x);
+  const id = `env-${++envN}`, s = statusEnvio(x, Date.now());   // plano 1000b · AB-199
   return `<li class="env-item ${cls}">${antes}<div class="env-q">
       <button class="env-alt" type="button" aria-expanded="false" aria-controls="${id}">
         <span class="env-t">${titulo}</span>${sub ? `<span class="env-sub">${sub}</span>` : ""}
@@ -1686,7 +1871,8 @@ function renderIntegracao() {
   faixa.hidden = !temApp || !erros.length;
   if (erros.length) {
     faixa.innerHTML = `<svg class="fi-ic" aria-hidden="true"><use href="#ic-sinal"/></svg><p>${esc(textoQueda(erros))}</p>` +
-      (!gestor() ? `<p class="fi-nota">A Nexus já foi avisada e está resolvendo.</p>`
+      // plano 1000b · AB-142: «já foi avisada» só quando o aviso de conexão SAIU nas últimas 24 h (equipeAvisada); senão pede para avisar
+      (!gestor() ? `<p class="fi-nota">${esc(equipeAvisada((S.dados && S.dados.alertas) || [], erros) ? "A Nexus já foi avisada e está resolvendo." : "Avise a Nexus para refazer a conexão.")}</p>`
         : S.aba === "ajustes" ? `<p class="fi-nota">Refaça a conexão no bloco Integrações, aqui em Ajustes.</p>`
         : `<button class="pill pill-ink pill-sm" type="button" data-ir="ajustes">Abrir Ajustes</button>`);
   }
@@ -1705,7 +1891,8 @@ function renderSyncPop() {
   const radarQ = S.varridoEm ? `hoje às ${S.varridoEm}` : e.ultimo ? quandoSP(new Date(e.ultimo).toISOString()) : "—";
   pop.innerHTML = `<p class="spp-h">${S.demo ? "Leitura dos anúncios (exemplo)" : "Leitura dos anúncios"}</p>` + queda +
     (linhas ? `<ul>${linhas}</ul>` : `<p class="spp-v">Nenhuma plataforma conectada.</p>`) +
-    `<p class="spp-v">Próxima leitura ${proximaLeitura(e.ultimo)} · de hora em hora</p><p class="spp-v">Última varredura do radar: ${esc(radarQ)}</p>`;
+    // plano 1000b · AB-155: passou de 2 h sem leitura, a linha diz desde quando está atrasada (não «em instantes»)
+    `<p class="spp-v">${esc(/^leitura atrasada/.test(proximaLeitura(e.ultimo)) ? capt(proximaLeitura(e.ultimo)) : `Próxima leitura ${proximaLeitura(e.ultimo)} · de hora em hora`)}</p><p class="spp-v">Última varredura do radar: ${esc(radarQ)}</p>`;
 }
 function abrirSyncPop(on) {
   const pop = $("#sync-pop"), b = $("#sync-pill");
@@ -1808,7 +1995,9 @@ function renderRadar() {
       <div><p class="al-t">Google sem acompanhamento de conversões <span class="chip chip-meta">informativo</span></p>
       <p class="al-m">O Google Ads gastou nos últimos 30 dias e não registrou nenhuma conversão: o acompanhamento de conversões da conta não está ligado. Enquanto isso, «Campanha sem conversa» fica desligada para o Google.</p>
       <p class="al-d">Ligue o acompanhamento de conversões (clique no WhatsApp ou formulário) na conta do Google Ads.</p></div></li>` : "";
-  $("#alerts").innerHTML = htmlInteg + htmlGoogle + htmlHist || `<li class="vazio">Nenhum alerta nos últimos 14 dias.</li>`;
+  // plano 1000b · AB-143: os 8 episódios mais recentes — o resto é contado em vez de sumir calado
+  const htmlMais = hist.length > 8 ? `<li class="al-mais"><p class="al-d">… e mais ${int(hist.length - 8)} nos últimos 14 dias.</p></li>` : "";
+  $("#alerts").innerHTML = htmlInteg + htmlGoogle + htmlHist + htmlMais || `<li class="vazio">Nenhum alerta nos últimos 14 dias.</li>`;
 
   const pode = S.demo || gestor();
   $("#rules").innerHTML = M.REGRAS.map(r => {
@@ -1822,9 +2011,10 @@ function renderRadar() {
     const condR = leigo ? `<span title="${esc(cond)}">${esc(r.descricaoLeiga || condLeiga(r))}</span>` : esc(cond);
     // revisão 13/10: sem meta a r1 aparece desligada e o clique «ligava» gravando o contrário (r1 em regrasOff) — fica travada
     return `<li><div><p class="rl-t">${nomeR} <span class="chip ${r.sev === "critico" ? "chip-bad" : r.sev === "alerta" ? "chip-warn" : "chip-meta"}">${SEV_NOME[r.sev]}</span></p><p class="rl-c">${condR}</p></div>
-      <button class="sw" type="button" role="switch" aria-checked="${r.ativa}" aria-label="Regra ${esc(!gestor() && LEIGO[r.id] ? LEIGO[r.id][1] : r.nome)}" data-regra="${r.id}"${!r.semMeta ? (pode ? "" : ` aria-disabled="true" title="Só a equipe da Nexus liga ou desliga regras"`)
-        : ` aria-disabled="true" data-sem-meta="1" title="${esc(SEM_META_REGRA)}"`}></button></li>`;
+      <button class="sw" type="button" role="switch" aria-checked="${r.ativa}" aria-label="Regra ${esc(!gestor() && LEIGO[r.id] ? LEIGO[r.id][1] : r.nome)}" data-regra="${r.id}"${!r.semMeta ? (pode ? "" : ` aria-disabled="true" aria-describedby="rl-trava" title="Só a equipe da Nexus liga ou desliga regras"`)
+        : ` aria-disabled="true" aria-describedby="rl-trava-meta" data-sem-meta="1" title="${esc(SEM_META_REGRA)}"`}></button></li>`;
   }).join("");
+  // plano 1000b · AB-163: o motivo do interruptor travado também em texto — #rl-trava/#rl-trava-meta (index.html) via aria-describedby
   $("#rules-nota").textContent = S.demo ? "Na demonstração, ligar e desligar regras e mexer nas metas não salva nada — é só para ver o efeito."
     : gestor() ? "Ligar ou desligar uma regra vale na hora para este cliente." : "Só a equipe da Nexus liga ou desliga regras.";
 
@@ -1929,11 +2119,17 @@ function mostrarRel(tipo, rel, previa, dia, horaPadrao, dBloq) {
   const el = $("#ph-" + tipo), st = $("#st-" + tipo), bloq = $("#bloq-" + tipo);
   let txt, hora = horaPadrao, nao = null;
   if (rel && rel.texto) {
-    const s = statusEnvio(rel);
+    const s = statusEnvio(rel, Date.now());   // plano 1000b · AB-199
     txt = rel.texto; hora = rel.enviado_em ? horaSP(rel.enviado_em) : ""; nao = s;
-    const cls = { entregue: "chip-ok", enviado: "chip-neutro", erro: "chip-bad", pendente: "chip-warn" }[s.k];
+    const cls = { entregue: "chip-ok", enviado: "chip-neutro", erro: "chip-bad", pendente: "chip-warn", parcial: "chip-warn" }[s.k];
+    // plano 1000b · AB-255: relatório que não saiu (ou saiu em parte) ganha «Enviar de novo» para o gestor — só o mais recente de cada tipo,
+    // que é o que o «Fazer agora» do servidor manda (o diário de ontem e o resumo do último mês fechado)
+    const ref = String(rel.referencia || "").slice(0, 10), ultMes = M.mesesDados().filter(m => m.completo).pop();
+    const ehUltimo = tipo === "diario" ? ref === isoI(M.R) : !!ultMes && ref === isoI(ultMes.de);
+    const reenviar = gestor() && !vedadoSuper() && !rel.exemplo && ehUltimo && (s.k === "erro" || s.k === "parcial");
     st.innerHTML = `${chipExemplo(rel)}<span class="chip ${cls}">${esc(s.rotulo)} ${tiqueHtml(s)}</span>` +
-      (s.erro ? ` <span class="rel-erro">${esc(s.erro)}</span>` : "") + (rel.leitura_ia ? ` <span class="chip chip-ia">leitura por IA</span>` : "");
+      (s.erro ? ` <span class="rel-erro" title="${esc(s.erroOriginal || "")}">${esc(s.erro)}</span>` : "") + (rel.leitura_ia ? ` <span class="chip chip-ia">leitura por IA</span>` : "") +
+      (reenviar ? ` <button class="link-b" type="button" data-reenviar="${tipo === "mensal" ? "mensal" : "diario"}">Enviar de novo</button>` : "");
   } else if (semAnuncios() || !previa) {
     clearTimeout(el._t);
     el._texto = ""; el._espera = null;
@@ -2008,8 +2204,11 @@ function renderRelatorios() {
     mostrarRel("mensal", srv.get(`mensal|${isoM}`), m ? () => M.relMensal(m) : null, `1º de ${MESES[mes % 12]}`, "09:00", m ? M.dataDe(m.ate + 1) : null);
   }
 
-  const lista = ((S.dados && S.dados.relatorios) || []).slice()
+  const todosRel = ((S.dados && S.dados.relatorios) || []).slice();
+  const lista = todosRel
     .sort((a, b) => String(b.referencia).localeCompare(String(a.referencia)) || (a.tipo === "mensal" ? -1 : 1)).slice(0, 12);
+  // plano 1000b · AB-053: a lista mostra os 12 mais recentes — e diz quando há mais (antes cortava calada)
+  const corteRel = notaCorte(lista.length, todosRel.length);
   $("#rel-lista").innerHTML = !lista.length
     ? `<li class="vazio">Nenhum relatório enviado ainda. O primeiro diário sai às 8h do dia seguinte à primeira leitura dos anúncios.</li>`
     : lista.map(r => {
@@ -2018,7 +2217,7 @@ function renderRelatorios() {
       return itemEnvio({ titulo: `${esc(tit)}${r.leitura_ia ? ` <span class="chip chip-ia">IA</span>` : ""}`, x: r, tipo: "relatorio",
         cls: r.tipo === "mensal" ? "env-mensal" : "",
         depois: `<button class="pill pill-ghost pill-sm" type="button" data-ver-rel="${esc(r.tipo)}|${esc(ref)}" aria-label="Ver ${esc(tit)} no celular">Ver</button>` });
-    }).join("");
+    }).join("") + (corteRel ? `<li class="rel-corte nota-sm">${esc(corteRel)}</li>` : "");
   $("#rel-nota").textContent = S.demo
     ? "No sistema real, a “leitura do dia” é escrita por IA a partir dos números. Aqui ela sai de regras fixas, só para demonstrar o formato."
     : "Quando o servidor já enviou o relatório do dia escolhido, o celular mostra o texto que foi enviado. Nos outros dias, mostra uma prévia calculada agora.";
@@ -2052,7 +2251,8 @@ const CANAIS = {
   },
 };
 const REGRAS_NOMES = [["r1", "Custo por conversa alto"], ["r2", "Campanha sem conversa"], ["r3", "Criativo com CTR baixo"], ["r4", "Fadiga de criativo"],
-  ["r5", "Investimento parou de repente"], ["r6", "CRM parou de receber as conversas do Meta"]];   // plano 1000
+  ["r5", "Investimento parou de repente"], ["r6", "CRM parou de receber as conversas do Meta"],
+  ["ritmo", "Ritmo do orçamento"]];   // plano 1000 · plano 1000b · AB-010: o «ritmo» também (desligado no Órbita não religa ao salvar aqui)
 
 /** Configuração da Nexus e «Fazer agora» são só do super: nx_sessao passa a dizer `super`; sem o campo, o
     so_plataforma do nx_config_ver denuncia um gestor de revenda (antes o cartão ficava na tela sempre falhando). */
@@ -2218,7 +2418,7 @@ function renderFormCliente() {
     </div>
     <div class="form-2">
       <label class="campo"><span>ID do número da clínica (Cloud API)</span><input type="text" id="cl-waphone" inputmode="numeric" spellcheck="false" autocomplete="off" placeholder="${novo ? "phone_number_id" : "em branco = mantém o atual"}"><small>Liga as conversas que chegam pelo webhook a este cliente.</small></label>
-      <label class="campo"><span>Assinatura do resumo</span><input type="text" id="cl-assinatura" value="${esc(cfg.assinatura)}"></label>
+      <label class="campo"><span>Assinatura do resumo</span><input type="text" id="cl-assinatura" value="${esc(cfg.assinatura)}" placeholder="ex.: Equipe Nexus · gestão de tráfego"><small>Em branco: o resumo sai sem assinatura.</small></label>
     </div>
     <h3>Regras do radar</h3>
     <ul class="regras-aj">${REGRAS_NOMES.map(([id, n]) => `<li><span id="cl-rg-${id}-l">${n}</span><button class="sw" type="button" role="switch" data-rg="${id}" aria-checked="${!off.has(id)}" aria-labelledby="cl-rg-${id}-l"></button></li>`).join("")}</ul>
@@ -2238,19 +2438,32 @@ async function salvarCliente(ev) {
   const slug = $("#cl-slug").value.trim().toLowerCase() || slugDe(nome);
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) { $("#cl-slug").focus(); return avisoForm(st, "Identificador: use só letras minúsculas, números e hífen.", true); }
   const num = (sel, pad) => { const v = parseFloat(String($(sel).value).replace(",", ".")); return Number.isFinite(v) && v >= 0 ? v : pad; };
+  // plano 1000b · AB-147: meta, orçamento ou gestão negativos (ou texto) param o salvamento com aviso — antes −15 apagava a meta calado
+  for (const [sel, rotulo] of [["#cl-cpa", "Custo por conversa"], ["#cl-orc", "Orçamento do mês"], ["#cl-fee", "Gestão mensal"]]) {
+    const v = valorMeta($(sel).value);
+    if (!v.ok) { $(sel).focus(); return avisoForm(st, `${rotulo}: ${v.erro}.`, true); }
+  }
+  // plano 1000b · AB-144: WhatsApp com DDD (10 a 13 dígitos) — número curto ou longo demais avisa em vez de sumir ao salvar
+  const waG = numerosWa($("#cl-wagestor").value), waC = numerosWa($("#cl-wacliente").value);
+  if (waG.invalidos.length || waC.invalidos.length) {
+    const [sel, inv] = waG.invalidos.length ? ["#cl-wagestor", waG.invalidos] : ["#cl-wacliente", waC.invalidos];
+    $(sel).focus();
+    return avisoForm(st, `WhatsApp «${inv[0]}» inválido: use DDD + número (ex.: 12 99999-8888).`, true);
+  }
   const ticket = {};
   $$("#cl-tickets .tk-row").forEach(r => {
     const s = $("[data-tk-s]", r).value.trim(), v = parseFloat(String($("[data-tk-v]", r).value).replace(",", "."));
     if (s && Number.isFinite(v)) ticket[s] = v;
   });
-  // separa por linha, vírgula ou ponto e vírgula — espaço faz parte de "(12) 99999-8888"
-  const numeros = sel => [...new Set($(sel).value.split(/[\n,;]+/).map(soDigitos).filter(n => n.length >= 10))];
+  const cfgAntes = cfgCom((c && !novo && c.cfg) || {});
   const cfg = {
     nomeCurto: $("#cl-curto").value.trim(),
     cpaAlvo: num("#cl-cpa", CFG_PADRAO.cpaAlvo), orcamento: num("#cl-orc", CFG_PADRAO.orcamento), fee: num("#cl-fee", CFG_PADRAO.fee),
-    ticket, waGestor: numeros("#cl-wagestor"), waCliente: numeros("#cl-wacliente"),
-    assinatura: $("#cl-assinatura").value.trim() || CFG_PADRAO.assinatura,
-    regrasOff: $$("#form-cliente [data-rg]").filter(b => b.getAttribute("aria-checked") !== "true").map(b => b.dataset.rg),
+    ticket, waGestor: waG.ok, waCliente: waC.ok,
+    // plano 1000b · AB-022: salva o que foi digitado (vazio = resumo sem assinatura); nada de repor «Equipe Nexus» por conta própria
+    assinatura: $("#cl-assinatura").value.trim(),
+    // plano 1000b · AB-010/AB-231: ids que a tela não mostra continuam em regrasOff (antes o «ritmo» desligado no Órbita era apagado)
+    regrasOff: regrasOffDoForm(cfgAntes.regrasOff, Object.fromEntries($$("#form-cliente [data-rg]").map(b => [b.dataset.rg, b.getAttribute("aria-checked") === "true"]))),
   };
   const p = { slug, nome, ativo: $("#cl-ativo").getAttribute("aria-checked") === "true", cfg };
   if (!novo) p.id = c.id;
@@ -2305,7 +2518,18 @@ async function salvarIntegracao(form) {
   const canal = form.dataset.canal, st = $(".aj-st", form), btn = $('[type="submit"]', form);
   const cred = {};
   $$("input[name]", form).forEach(i => { const v = i.value.trim(); if (v) cred[i.name] = v; });
+  // plano 1000b · AB-145: confere o formato antes de mandar (ID com espaço, token cortado) — o erro antes só aparecia na próxima leitura
+  for (const i of $$("input[name]", form)) {
+    const msg = erroCredencial(i.name, i.value);
+    if (msg) { i.focus(); return avisoForm(st, msg, true); }
+  }
   const ativo = $("[data-ig-ativo]", form).getAttribute("aria-checked") === "true";
+  // plano 1000b · AB-146: desligar uma integração que estava ligada pergunta antes (como o Órbita, AD-085)
+  const antes = (Array.isArray(S.aj.integ) ? S.aj.integ : []).find(i => i.canal === canal) || {};
+  if (antes.ativo && !ativo) {
+    const nomeC = (CANAIS[canal] || {}).curto || canal;
+    if (!confirm(`Desligar a integração do ${nomeC}? As leituras de hora em hora e o radar do ${nomeC} param até você ligar de novo. Os números já lidos continuam no painel.`)) return;
+  }
   ocupado(btn, true);
   try {
     const r = await api.integracaoSalvar(S.token, S.clienteId, canal, cred, ativo);
@@ -2416,7 +2640,8 @@ async function salvarConta(li, aprovar, btn) {
 }
 
 const nomeTarefa = t => ({ "nx-ciclo": "Leitura dos anúncios + radar", "nx-relatorio": "Relatório", "nx-whatsapp": "Webhook do WhatsApp" }[t] || t || "Tarefa");
-const resumoTxt = r => !r ? "" : typeof r === "string" ? r.slice(0, 180) : JSON.stringify(r).slice(0, 180);
+// plano 1000b · AB-161: trechos com cara de segredo saem mascarados (mascararSegredos, bloco PURO)
+const resumoTxt = r => !r ? "" : mascararSegredos(typeof r === "string" ? r : JSON.stringify(r)).slice(0, 180);
 
 // segredos (só escrita) e a flag que o nx_config_ver devolve para cada um
 const SEGREDOS = { wa_access_token: "tem_wa_token", meta_app_secret: "tem_app_secret", anthropic_api_key: "tem_ia" };
@@ -2691,11 +2916,16 @@ async function salvarMarco(remover) {
   const i = S.marcoFixo;
   if (i == null || !gestor()) return;
   const d = isoI(i), t = remover ? "" : ($("#marco-txt").value || "").trim().slice(0, 60);
-  const lista = marcosAtuais().filter(m => m.d !== d).map(({ d: dd, t: tt }) => ({ d: dd, t: tt }));
-  if (t) lista.push({ d, t });
-  lista.sort((a, b) => a.d.localeCompare(b.d));
   try {
-    await salvarCfgCliente({ marcos: lista.slice(-40) });
+    // plano 1000b · AB-162: relê os marcos do servidor e mescla por data antes de gravar — o marco que outro gestor salvou
+    // depois do carregamento não some (se a releitura falhar, vale a lista da tela, como antes)
+    let frescos = marcosAtuais();
+    try {
+      const r = await api.dados(S.token, S.clienteId, 1);
+      const cf = r && r.cliente && r.cliente.cfg;
+      if (cf && Array.isArray(cf.marcos)) { frescos = cf.marcos; const c = clienteAtual(); if (c) c.cfg = { ...(c.cfg || {}), marcos: cf.marcos }; }
+    } catch (e) { if (e && e.codigo === "sessao_invalida") throw e; }
+    await salvarCfgCliente({ marcos: mesclarMarcos(frescos, d, t) });
     toast(remover ? "Marco removido ✓" : t ? "Marco salvo ✓" : "Marco removido ✓");
     fecharMarco(true);
     desenharChart(null);
@@ -2716,8 +2946,9 @@ function renderDesdeVisita() {
   const ja = new Set(vistos.map(String)), novos = fechados.filter(L => !ja.has(String(L.id)));
   if (!novos.length) { box.hidden = true; return; }
   const total = novos.reduce((s, L) => s + M.valorLead(L), 0);
+  // plano 1000b · AB-160: «cliente novo» para oficina e loja (M.VOC.novo), não «paciente novo» fixo
   box.innerHTML = `<div class="desde-q"><p class="eyebrow">Desde a sua última visita</p>
-      <h2 id="desde-h"><b>${plural(novos.length, "paciente novo", "pacientes novos")}</b>${total > 0 ? ` · ${brl0(total)}` : ""}</h2>
+      <h2 id="desde-h"><b>${esc(plural(novos.length, M.VOC.novo[0], M.VOC.novo[1]))}</b>${total > 0 ? ` · ${brl0(total)}` : ""}</h2>
       <ul class="desde-l">${novos.slice(0, 5).map(L => `<li><b>${esc(nomeCurto(L.nome))}</b><span>${esc(L.servico)} · ${M.valorDe(L).semValor ? "sem valor" : brl0(M.valorLead(L))}</span></li>`).join("")}${novos.length > 5 ? `<li><span>e mais ${novos.length - 5}</span></li>` : ""}</ul></div>
     <div class="acoes"><button class="pill pill-bronze" type="button" data-desde="ver">Ver no quadro</button><button class="pill pill-ghost" type="button" data-desde="ok">Ok</button></div>`;
   box.setAttribute("aria-labelledby", "desde-h");
@@ -2760,7 +2991,15 @@ async function abrirPaleta() {
     abrirLead: id => { const L = M.LEADS.find(x => String(x.id) === id); if (L) { if (S.aba !== "pacientes") setAba("pacientes"); abrirGaveta(L); } },
     abrirCampanha: id => {
       setAba("campanhas", { corte: true });
-      setTimeout(() => { const tr = $(`#tbl-campanhas tr[data-camp="${CSS.escape(id)}"]`); if (tr) { tr.classList.add("realce"); tr.scrollIntoView({ block: "center", behavior: REDUCE ? "auto" : "smooth" }); setTimeout(() => tr.classList.remove("realce"), 2400); } }, 80);
+      // plano 1000b · AB-159: a linha recebe o foco (teclado e leitor de tela vão junto); campanha sem gasto no período avisa em vez de nada
+      setTimeout(() => {
+        const tr = $(`#tbl-campanhas tr[data-camp="${CSS.escape(id)}"]`);
+        if (!tr) { toast(`Sem investimento nesta campanha nos últimos ${S.dias} dias${S.plat ? ` no ${nomePlat(S.plat)}` : ""}.`); return; }
+        tr.classList.add("realce"); tr.setAttribute("tabindex", "-1");
+        tr.scrollIntoView({ block: "center", behavior: REDUCE ? "auto" : "smooth" });
+        tr.focus({ preventScroll: true });
+        setTimeout(() => tr.classList.remove("realce"), 2400);
+      }, 80);
     },
     semAcento, anim: ANIM,
   });
@@ -2774,7 +3013,7 @@ function ligarArrasto() {
     m.ligar($("#kanban"), {
       fino: FINE, anim: ANIM, FX,
       colunas: COLS_K.map(c => c[0]),
-      nomeColuna: k => ((COLS_K.find(c => c[0] === k) || [])[1] || k).replace(/\s*\(.*\)$/, ""),
+      nomeColuna: k => ((colsK().find(c => c[0] === k) || [])[1] || k).replace(/\s*\(.*\)$/, ""),
       lead: id => (M ? M.LEADS.find(x => String(x.id) === String(id)) : null),
       nome: L => nomeCurto(L.nome),
       soltar: (L, col, o) => soltarNaColuna(L, col, o),
@@ -2937,9 +3176,14 @@ function ligarSeg(seg, aoMudar) {
     ind.style.setProperty("--sw", on.offsetWidth + "px");
     if (!ind.classList.contains("pronto")) requestAnimationFrame(() => requestAnimationFrame(() => ind.classList.add("pronto")));
   };
-  const sel = b => {
+  // plano 1000b · AB-153: pelas setas o botão muda na hora, mas o redesenho da página espera 150 ms sem tecla (segurar a seta = 1 render)
+  let tTecla = 0;
+  const sel = (b, teclado = false) => {
     btns.forEach(x => { const s = x === b; x.setAttribute("aria-checked", String(s)); x.tabIndex = s ? 0 : -1; });
-    pos(); aoMudar(b.dataset.v);
+    pos();
+    clearTimeout(tTecla);
+    if (teclado) tTecla = setTimeout(() => aoMudar(b.dataset.v), 150);
+    else aoMudar(b.dataset.v);
   };
   btns.forEach((b, n) => {
     b.tabIndex = b.getAttribute("aria-checked") === "true" ? 0 : -1;
@@ -2949,12 +3193,29 @@ function ligarSeg(seg, aoMudar) {
       if (!d) return;
       e.preventDefault();
       const nb = btns[(n + d + btns.length) % btns.length];
-      sel(nb); nb.focus();
+      sel(nb, true); nb.focus();
     });
   });
   seg._pos = pos;
 }
 const posicionarSegs = () => $$(".seg").forEach(s => s._pos && s._pos());
+/* plano 1000b · AB-154: período, plataforma e ordem da tabela ficam guardados por cliente (antes cada F5 voltava a 30 dias e «Tudo») */
+function guardarFiltros() {
+  if (S.demo || !S.clienteId) return;
+  gravarLocal(chaveFiltros(S.clienteId), JSON.stringify({ dias: S.dias, plat: S.plat, sort: S.sort }));
+}
+function aplicarFiltrosSalvos() {
+  if (S.demo || !S.clienteId) return;
+  const f = lerFiltros(lerLocal(chaveFiltros(S.clienteId)));
+  S.dias = f.dias; S.plat = f.plat; S.sort = f.sort;
+  for (const [sel, v] of [["#seg-periodo", String(f.dias)], ["#seg-plat", f.plat]]) {
+    const seg = $(sel);
+    if (!seg) continue;
+    $$("button", seg).forEach(b => { const on = b.dataset.v === v; b.setAttribute("aria-checked", String(on)); b.tabIndex = on ? 0 : -1; });
+    if (seg._pos) seg._pos();
+  }
+  textoFiltros();
+}
 
 const TOUR = [
   { aba: "geral", alvo: '[data-tour="hero"]', txt: "Tudo o que importa, numa frase: quantas pessoas chamaram no WhatsApp, quantas agendaram e quantas viraram pacientes — e quanto isso rendeu." },
@@ -3208,6 +3469,7 @@ async function carregarSessao() {
   const salvo = lerLocal("nx-cliente");
   const escolhido = S.clientes.find(c => c.id === salvo) || S.clientes.find(c => c.ativo !== false) || S.clientes[0];
   S.clienteId = escolhido ? escolhido.id : null;
+  aplicarFiltrosSalvos();   // plano 1000b · AB-154
   prepararApp();
   mostrarTela("app");
   if (S.clienteId) estadoApp("carregando"); else semCliente();
@@ -3259,6 +3521,7 @@ function trocarCliente(id) {
   if (!id || id === S.clienteId) return;
   S.clienteId = id;
   gravarLocal("nx-cliente", id);
+  aplicarFiltrosSalvos();   // plano 1000b · AB-154: cada cliente com o próprio período/plataforma/ordem
   preencherSeletor();
   DS = null; M = null; S.dados = null; relDe = null;
   S.kVer = {}; S.busca = ""; $("#k-busca").value = ""; S.varridoEm = null; ULT.clear();
@@ -3303,8 +3566,8 @@ function ligarEventos() {
 
   /* ---------- navegação ---------- */
   $$("[data-aba]").forEach(b => b.addEventListener("click", () => setAba(b.dataset.aba, { corte: true })));
-  ligarSeg($("#seg-periodo"), v => { S.dias = +v; textoFiltros(); render(false); });
-  ligarSeg($("#seg-plat"), v => { S.plat = v; S.kVer = {}; textoFiltros(); render(false); });
+  ligarSeg($("#seg-periodo"), v => { S.dias = +v; guardarFiltros(); textoFiltros(); render(false); });
+  ligarSeg($("#seg-plat"), v => { S.plat = v; S.kVer = {}; guardarFiltros(); textoFiltros(); render(false); });
   // menu: fantasma que segue o ponteiro (180 ms) atrás do indicador único
   const nav = $("#side-nav"), fant = $(".nav-fantasma", nav);
   nav.addEventListener("pointerover", e => {
@@ -3372,6 +3635,7 @@ function ligarEventos() {
     if (!b) return;
     const k = b.dataset.sort;
     S.sort = { key: k, dir: S.sort.key === k ? -S.sort.dir : (k === "nome" ? 1 : -1) };
+    guardarFiltros();   // plano 1000b · AB-154
     renderCampanhas();
     const nb = $(`#tbl-campanhas [data-sort="${k}"]`);
     if (nb) nb.focus();
@@ -3482,6 +3746,14 @@ function ligarEventos() {
   $("#rel-lista").addEventListener("click", e => {
     const b = e.target.closest("[data-ver-rel]");
     if (b) verRelatorio(b.dataset.verRel);
+  });
+  // plano 1000b · AB-255: «Enviar de novo» no chip do relatório que não saiu — o mesmo «Fazer agora» de Ajustes (nx-relatorio forçado)
+  for (const id of ["#st-diario", "#st-mensal"]) $(id).addEventListener("click", async e => {
+    const b = e.target.closest("[data-reenviar]");
+    if (!b || !gestor()) return;
+    await executarTarefa(b.dataset.reenviar === "mensal" ? "mensal" : "diario", b);
+    const st = $("#exec-status");
+    toast(st && st.classList.contains("erro") ? st.textContent : "Pedido enviado: o relatório sai de novo em instantes.", st && st.classList.contains("erro") ? "erro" : undefined);
   });
   // cada envio abre a linha do tempo (gerado → enviado → entregue)
   const alternarEnv = e => {

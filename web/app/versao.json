@@ -1,1 +1,1 @@
-{ "versao": "20261013a", "sw": true, "min_migracao": "20261013h", "notas": ["Conversas, CRM, Ads e Automações mais rápidos e seguros (mais de mil ajustes).", "Avisos de WhatsApp sem repetição e com motivo claro quando algo falha.", "Configurações perguntam antes de descartar o que não foi salvo."] }
+{ "versao": "20261016a", "sw": true, "min_migracao": "20261015a", "notas": ["Mais de mil ajustes em Conversas, CRM, Agenda, Anúncios e Automações.", "Rastreio do site separa visita de clique no WhatsApp.", "Automações avisam quando outra pessoa salvou antes de você."] }

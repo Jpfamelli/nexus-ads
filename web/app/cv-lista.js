@@ -43,12 +43,14 @@ export function criarLista(A) {
   }
 
   /* ---------------- busca e filtros */
-  const busca = h("input", { type: "search", placeholder: "Nome, telefone, protocolo", "aria-label": "Buscar conversas", autocomplete: "off", value: A.busca || "" });
+  // plano 1000b · CB-069: até 100 caracteres (colar um texto enorme não vai a cada tecla ao nx_cv_listar/nx_cv_buscar_msgs)
+  const BUSCA_MAX = 100;
+  const busca = h("input", { type: "search", placeholder: "Nome, telefone, protocolo", "aria-label": "Buscar conversas", autocomplete: "off", maxlength: BUSCA_MAX, value: String(A.busca || "").slice(0, BUSCA_MAX) });
   const buscaAjuda = h("p", { class: "cvl-busca-ajuda", role: "status", "aria-live": "polite", "aria-atomic": "true", hidden: true });
   let timerBusca = null, compondoBusca = false;
   function cancelarBuscaPendente() { clearTimeout(timerBusca); timerBusca = null; }
   function aplicarBusca() {
-    const q = String(busca.value || "").trim();
+    const q = String(busca.value || "").slice(0, BUSCA_MAX).trim();   // CB-069: o maxlength não vale para valor posto por código
     if (q.length === 1) {
       if (A.busca) A.acoes.mudarLista({ busca: "" });
       buscaAjuda.textContent = "Digite mais 1 caractere para buscar conversas.";
@@ -90,7 +92,7 @@ export function criarLista(A) {
   const btLoteSair = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Cancelar");
   const barraLote = h("div", { class: "cvl-lote", role: "toolbar", "aria-label": "Ações nas conversas selecionadas", hidden: true }, nSel, btLoteLida, btLoteResolver, btLoteTransferir, btLoteEtiquetar, btLoteSair);
   const btSelecionar = A.podeEscrever && typeof A.acoes.resolverLote === "function"
-    ? h("button", { type: "button", class: "bt-icone cvl-sel-bt", "aria-label": "Selecionar várias conversas", "aria-pressed": "false", title: "Selecionar várias (resolver ou marcar como lidas de uma vez)" }, ui.icone("check"))
+    ? h("button", { type: "button", class: "bt-icone cvl-sel-bt", "aria-label": "Selecionar várias conversas", "aria-pressed": "false", title: "Selecionar várias (resolver, marcar como lidas, transferir, etiquetar)"   /* plano 1000b · CB-066 */ }, ui.icone("check"))
     : null;
   function modoSelecao(sim) {
     selecionando = !!sim;
@@ -102,14 +104,24 @@ export function criarLista(A) {
   function pintarLote() {
     barraLote.hidden = !selecionando;
     const n = selecao.size;
-    nSel.textContent = n ? `${n} ${n === 1 ? "selecionada" : "selecionadas"}` : "Toque nas conversas para selecionar";
+    // plano 1000b · CB-067: «Toque» só no aparelho de toque; com mouse, «Clique»
+    nSel.textContent = n ? `${n} ${n === 1 ? "selecionada" : "selecionadas"}` : `${L.aparelhoDeToque() ? "Toque" : "Clique"} nas conversas para selecionar`;
     btLoteLida.disabled = btLoteResolver.disabled = !n;
     if (btLoteTransferir) btLoteTransferir.disabled = !n;
     if (btLoteEtiquetar) btLoteEtiquetar.disabled = !n;
   }
   if (btSelecionar) btSelecionar.addEventListener("click", () => modoSelecao(!selecionando));
   btLoteSair.addEventListener("click", () => modoSelecao(false));
-  btLoteLida.addEventListener("click", async () => { const ids = [...selecao]; modoSelecao(false); await A.acoes.lidaLote(ids); });
+  // plano 1000b · CB-018: se o servidor falhar no meio, as que não foram voltam selecionadas (a pessoa não precisa marcar tudo de novo)
+  btLoteLida.addEventListener("click", async () => {
+    const ids = [...selecao]; modoSelecao(false);
+    // revisão 1000b · CB-018: a falha chega até 7 s depois — só religa a seleção se a pessoa não começou outra seleção
+    // nem trocou de aba/busca desde o clique (senão marcaria conversas de outra lista ou atropelaria a seleção nova)
+    const abaClique = A.aba, buscaClique = String(A.busca || "");
+    const r = await A.acoes.lidaLote(ids);
+    const restantes = (r && Array.isArray(r.restantes) ? r.restantes : []).filter(id => A.itens.some(x => x.id === id));
+    if (restantes.length && !selecionando && A.aba === abaClique && String(A.busca || "") === buscaClique) { for (const id of restantes) selecao.add(id); modoSelecao(true); }
+  });
   btLoteResolver.addEventListener("click", async () => { const ids = [...selecao]; modoSelecao(false); await A.acoes.resolverLote(ids); });
   // transferir/etiquetar perguntam antes (modal): a seleção só sai quando a ação foi confirmada
   if (btLoteTransferir) btLoteTransferir.addEventListener("click", async () => { const ids = [...selecao]; if (await A.acoes.transferirLote(ids)) modoSelecao(false); });
@@ -136,7 +148,8 @@ export function criarLista(A) {
     }, true);
     abasEl.appendChild(seg);
     if (mais.length) {
-      btVisoes = h("button", { type: "button", class: "cvl-visoes", "aria-label": "Mais situações", title: "Mais situações: Todas abertas, Pendentes, Resolvidas" }, ui.icone("seta-baixo"));
+      // plano 1000b · CB-065: o title lista as abas que o menu tem de verdade (o supervisor também tem Ocultas)
+      btVisoes = h("button", { type: "button", class: "cvl-visoes", "aria-label": "Mais situações", title: `Mais situações: ${mais.map(x => x.rotulo).join(", ")}` }, ui.icone("seta-baixo"));
       btVisoes.addEventListener("click", () => {
         ui.menu(btVisoes, abasMais.map(x => {
           const n = contadoresAba.get(x.id);
@@ -153,6 +166,13 @@ export function criarLista(A) {
   const avisoCanal = h("div", { class: "cvl-aviso", hidden: true });
   // plano 1000 · CA-103: sem conexão, a lista que aparece é a última guardada no aparelho — a faixa diz de quando ela é
   const avisoCache = h("p", { class: "cvl-cache", role: "status", hidden: true });
+  // plano 1000b · CB-087: o pulso falhou 3 vezes seguidas com a lista na tela — «Lista sem atualizar desde 14:02 · Tentar agora»
+  const atrasoTxt = h("span", null, "");
+  const btAtraso = h("button", { type: "button", class: "bt bt-fant bt-p cvl-atraso-bt" }, "Tentar agora");
+  const avisoAtraso = h("p", { class: "cvl-cache cvl-atraso", role: "status", hidden: true }, atrasoTxt, " ", btAtraso);
+  btAtraso.addEventListener("click", () => ui.carregando(btAtraso, A.acoes.carregarLista({})));
+  // plano 1000b · CB-070: quantas conversas a busca achou, num aviso só (com espera: não a cada tecla)
+  let sigBuscaAnunciada = "", timerAnuncioBusca = null;
   // D18: número de WhatsApp desconectado (ctx.canais do shell ou nx_cv_base.canais[].estado): faixa na central com «Ver número»
   const avisoCaido = h("div", { class: "cvl-caido", role: "status", hidden: true });
   let sigCaido = "";
@@ -182,17 +202,30 @@ export function criarLista(A) {
     h("header", { class: "cvl-cab" }, titulo, btNova, btAtender),
     leitor,
     h("div", { class: "cvl-busca" }, h("label", { class: "busca" }, ui.icone("busca"), busca), btFiltro, btSelecionar, btAvisos),
-    buscaAjuda, infoBusca, filtrosEl, abasEl, avisoCanal, avisoCaido, avisoCache, lista, barraLote);
+    buscaAjuda, infoBusca, filtrosEl, abasEl, avisoCanal, avisoCaido, avisoCache, avisoAtraso, lista, barraLote);
   // CA-046: no modo seleção, tocar na linha marca/desmarca (não abre a conversa)
+  function alternarItem(a, { focar = false } = {}) {
+    const id = Number(a.dataset.id);
+    if (selecao.has(id)) selecao.delete(id); else selecao.add(id);
+    pintarLote();
+    renderItens();
+    if (focar) { const novo = lista.querySelector(`.cvl-item[data-id="${id}"]`); try { if (novo) novo.focus(); } catch { /* ok */ } }
+  }
   lista.addEventListener("click", ev => {
     if (!selecionando) return;
     const a = ev.target && ev.target.closest ? ev.target.closest(".cvl-item") : null;
     if (!a) return;
     ev.preventDefault();
-    const id = Number(a.dataset.id);
-    if (selecao.has(id)) selecao.delete(id); else selecao.add(id);
-    pintarLote();
-    renderItens();
+    alternarItem(a);
+  });
+  // plano 1000b · CB-017: no modo seleção a linha é role=checkbox — Espaço (e Enter) marcam, como o leitor de tela promete (antes o
+  // Espaço rolava a lista e o Enter abria a conversa)
+  lista.addEventListener("keydown", ev => {
+    if (!selecionando || (ev.key !== " " && ev.key !== "Spacebar" && ev.key !== "Enter")) return;
+    const a = ev.target && ev.target.closest ? ev.target.closest(".cvl-item") : null;
+    if (!a) return;
+    ev.preventDefault();
+    alternarItem(a, { focar: true });
   });
 
   /* ---------------- filtros (popover) */
@@ -224,9 +257,10 @@ export function criarLista(A) {
 
     ui.limpar(filtrosEl);
     filtrosEl.hidden = ativos.length === 0;
-    for (const item of ativos) {
+    for (const [idx, item] of ativos.entries()) {
       const b = h("button", { type: "button", class: "cvl-filtro-chip", "aria-label": `Remover filtro ${item.rotulo}` }, h("span", null, item.rotulo), h("b", { "aria-hidden": "true" }, "×"));
       b.addEventListener("click", () => {
+        focoDepoisDoFiltro(idx);   // plano 1000b · CB-126
         const novo = { ...f };
         if (item.chave === "etiquetas") {
           novo.etiquetas = (f.etiquetas || []).filter(id => id !== item.id);
@@ -238,9 +272,18 @@ export function criarLista(A) {
     }
     if (ativos.length > 1) {
       const limpar = h("button", { type: "button", class: "bt bt-fant bt-p cvl-filtros-limpar" }, "Limpar filtros");
-      limpar.addEventListener("click", () => A.acoes.mudarLista({ filtro: {} }));
+      limpar.addEventListener("click", () => { focoDepoisDoFiltro(-1); A.acoes.mudarLista({ filtro: {} }); });   // CB-126
       filtrosEl.appendChild(limpar);
     }
+  }
+  /** plano 1000b · CB-126: o chip (ou o «Limpar») some ao ser clicado — o foco vai ao chip que ficou no lugar, senão ao botão Filtros. */
+  function focoDepoisDoFiltro(idx) {
+    setTimeout(() => {
+      if (!el.isConnected) return;
+      const chips = filtrosEl.hidden ? [] : [...filtrosEl.querySelectorAll(".cvl-filtro-chip")];
+      const alvo = idx >= 0 && chips.length ? chips[Math.min(idx, chips.length - 1)] : btFiltro;
+      try { alvo.focus(); } catch { /* ok */ }
+    }, 0);
   }
   function abrirFiltros() {
     const f = { ...(A.filtro || {}) };
@@ -252,8 +295,9 @@ export function criarLista(A) {
       h("select", { id, class: "sel cvf-sel" }, ops.map(o => h("option", { value: o.v, selected: String(o.v) === String(valor || "") }, o.r))));
     const cDep = deps.length > 1 ? sel("cvf-dep", "Departamento", [{ v: "", r: "Todos" }, ...deps.map(d => ({ v: d.id, r: d.nome }))], f.departamento_id) : null;
     const cCanal = canais.length > 1 ? sel("cvf-canal", "Número", [{ v: "", r: "Todos" }, ...canais.map(c => ({ v: c.id, r: c.nome }))], f.canal_id) : null;
-    const cAt = sel("cvf-at", "Atendente", [{ v: "", r: "Qualquer um" }, { v: "eu", r: "Comigo" }, { v: "sem", r: "Sem dono" },
-      ...pessoas.filter(p => !A.eu || p.id !== A.eu.id).map(p => ({ v: p.id, r: p.nome }))], f.atendente);
+    // plano 1000b · CB-068: quem só lê nunca tem conversa atribuída — «Comigo» esvaziaria a lista
+    const cAt = sel("cvf-at", "Atendente", [{ v: "", r: "Qualquer um" }, A.podeEscrever ? { v: "eu", r: "Comigo" } : null, { v: "sem", r: "Sem dono" }].filter(Boolean).concat(
+      pessoas.filter(p => !A.eu || p.id !== A.eu.id).map(p => ({ v: p.id, r: p.nome }))), f.atendente);
     const marcadas = new Set(f.etiquetas || []);
     const cEtq = etqs.length ? h("fieldset", { class: "campo" }, h("legend", null, "Etiquetas (qualquer uma)"),
       h("div", { class: "multi-opcoes cvf-etqs" }, etqs.map(e => {
@@ -354,8 +398,9 @@ export function criarLista(A) {
       // CA-090: «Esperando resposta há 4 min» (sem o dois-pontos sobrando); nas faixas longas, a faixa e o tempo exato
       const rotSla = { aten: "Esperando há mais de 15 min", ruim: "Esperando há mais de 30 min", critico: "Esperando há mais de 1 h" }[sla.nivel];
       const util = sla.uteis ? ` de atendimento${sla.chegouFechado ? " (chegou fora do horário)" : ""}` : "";
+      const esperaLonga = sla.uteis ? esperaTxt : L.tempoEsperaLongo(c.ultima_entrada_em);   // plano 1000b · CB-029: title «há 3 dias», selo «3 d»
       meta.push(h("span", { class: "cvl-espera", dataset: { sla: sla.nivel, uteis: sla.uteis ? "1" : null },
-        title: rotSla ? `${rotSla} (${esperaTxt}${util})` : `Esperando resposta há ${esperaTxt}${util}` }, ui.icone("relogio"), esperaTxt));
+        title: rotSla ? `${rotSla} (${esperaLonga}${util})` : `Esperando resposta há ${esperaLonga}${util}` }, ui.icone("relogio"), esperaTxt));
     }
     // CA-235: na aba Ocultas e na busca, a linha diz que o contato está bloqueado
     if (c.oculta) meta.push(ui.pilula("Bloqueado", "ruim", { class: "cvl-bloq", title: "Contato bloqueado: o que ele manda fica guardado aqui, sem avisar ninguém" }));
@@ -401,7 +446,9 @@ export function criarLista(A) {
     // plano 1000 · CA-109: no celular, deslizar a linha para a esquerda resolve e para a direita marca como lida — sempre com Desfazer
     if (!selecionando && A.podeEscrever && L.aparelhoDeToque() && typeof ui.deslizar === "function") {
       const esq = c.status !== "resolvida" && typeof A.acoes.resolverLote === "function" ? () => A.acoes.resolverLote([c.id]) : null;
-      const dir = nl > 0 && typeof A.acoes.lidaComDesfazer === "function" ? () => A.acoes.lidaComDesfazer(c.id) : null;
+      // plano 1000b · CB-007: deslizar para marcar como lida só na conversa que a pessoa pode zerar (sem dono ou dela)
+      const podeLida = typeof A.acoes.podeMarcarLida === "function" ? A.acoes.podeMarcarLida(c) : L.podeMarcarLida(c, A.eu, A.podeEscrever);
+      const dir = nl > 0 && podeLida && typeof A.acoes.lidaComDesfazer === "function" ? () => A.acoes.lidaComDesfazer(c.id) : null;
       if (esq || dir) {
         a.dataset.gestoE = esq ? "Resolver" : "";
         a.dataset.gestoD = dir ? "Marcar como lida" : "";
@@ -442,7 +489,7 @@ export function criarLista(A) {
         h("span", { class: "cvl-msg-l1", "aria-hidden": "true" }, h("b", null, r.contato_nome || "Contato"),
           nota ? ui.pilula("Nota", "aten") : null,
           h("time", { class: "cvl-hora", datetime: r.criado_em }, L.horaLista(r.criado_em))),
-        h("span", { class: "cvl-msg-trecho", "aria-hidden": "true" }, r.direcao === "out" && !nota ? h("b", null, "Você: ") : null, ...partes)));
+        h("span", { class: "cvl-msg-trecho", "aria-hidden": "true" }, (() => { const pre = L.prefixoMsgBusca(r, A.eu && A.eu.id); return pre ? h("b", null, pre) : null; })(), ...partes)));   // plano 1000b · CB-008
     }
     return true;
   }
@@ -579,7 +626,9 @@ export function criarLista(A) {
     const ag = Number(cont.aguardando) || 0, nl = Number(cont.nao_lidas) || 0;
     sub.textContent = extra && !A.busca ? `${extra.rotulo}${contadoresAba.get(extra.id) ? ` · ${contadoresAba.get(extra.id)}` : ""}`
       // plano 1000 · CA-125: conta CONVERSAS (o selo do menu tem o mesmo número e era lido como «3 mensagens»)
-      : ag ? `${ag} esperando resposta` : nl ? `${nl} ${nl === 1 ? "conversa com mensagens novas" : "conversas com mensagens novas"}` : "Tudo respondido";
+      : ag ? `${ag} esperando resposta` : nl ? `${nl} ${nl === 1 ? "conversa com mensagens novas" : "conversas com mensagens novas"}`
+      // plano 1000b · CB-015: «Tudo respondido» só com as contagens lidas e zeradas — antes de chegar, «Carregando…»; com a lista em erro, «Sem atualizar»
+      : A.erroLista ? "Sem atualizar" : !Object.keys(cont).length ? "Carregando…" : "Tudo respondido";
     if (btAtender) { btAtender.hidden = !(ag > 0); nAtender.textContent = ag > 99 ? "99+" : String(ag); btAtender.setAttribute("aria-label", `Atender o próximo (${ag} esperando)`); }
     ponto.hidden = !filtrosAtivos();
     { const p = A.acoes.lerAvisos(); btAvisos.dataset.ligado = p.som || p.tela ? "1" : "0";
@@ -601,14 +650,30 @@ export function criarLista(A) {
     desenharCaido();
     const soCache = !!(A.listaSoCache && A.listaCacheEm);
     avisoCache.hidden = !soCache;
-    if (soCache) { const t = `Sem conexão · lista de ${L.horaMsg(A.listaCacheEm)}. Atualiza sozinha quando a internet voltar.`; if (avisoCache.textContent !== t) avisoCache.textContent = t; }
+    // plano 1000b · CB-016: a lista guardada de ontem diz «lista de ontem às 14:02» (a regra do desdeTexto), não só a hora
+    if (soCache) { const t = `Sem conexão · lista de ${L.desdeTexto(A.listaCacheEm).replace(/^desde /, "")}. Atualiza sozinha quando a internet voltar.`; if (avisoCache.textContent !== t) avisoCache.textContent = t; }
+    const atrasada = !soCache && (Number(A.falhasLista) || 0) >= 3 && A.itens.length > 0;   // plano 1000b · CB-087
+    avisoAtraso.hidden = !atrasada;
+    if (atrasada) { const t = A.listaOkEm ? `Lista sem atualizar ${L.desdeTexto(A.listaOkEm)}.` : "Lista sem atualizar."; if (atrasoTxt.textContent !== t) atrasoTxt.textContent = t; }
     // busca ativa
     const q = (A.busca || "").trim();
     infoBusca.hidden = q.length < 2;
     if (q.length >= 2) {
       ui.limpar(infoBusca);
-      infoBusca.append(h("span", null, `Resultados para «${q}» em todas as abas`),
-        h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { busca.value = ""; A.acoes.mudarLista({ busca: "" }); } } }, "Limpar"));
+      // plano 1000b · CB-070: a contagem vai para o leitor de tela uma vez por resultado (600 ms depois da última mudança)
+      const n = A.itens.length;
+      const sig = A.carregandoLista ? "" : `${q}|${n}|${A.temMais ? 1 : 0}`;
+      if (sig && sig !== sigBuscaAnunciada) {
+        clearTimeout(timerAnuncioBusca);
+        timerAnuncioBusca = setTimeout(() => {
+          if (sigBuscaAnunciada === sig) return;
+          sigBuscaAnunciada = sig;
+          if (typeof ui.anunciar === "function" && el.isConnected) ui.anunciar(n ? `${n}${A.temMais ? " ou mais" : ""} ${n === 1 ? "conversa" : "conversas"} para «${q}»` : `Nenhuma conversa para «${q}»`);
+        }, 600);
+      }
+      // plano 1000b · CB-071: com departamento/etiqueta filtrando, a frase não promete «todas as abas» sem ressalva
+      infoBusca.append(h("span", null, `Resultados para «${q}» em todas as abas${filtrosAtivos() ? ", com os filtros" : ""}`),
+        h("button", { type: "button", class: "bt bt-fant bt-p cvl-busca-limpar", on: { click: () => { busca.value = ""; A.acoes.mudarLista({ busca: "" }); busca.focus(); } } }, "Limpar"));   // CB-126: o foco volta à busca
     }
   }
 
@@ -643,6 +708,8 @@ export function criarLista(A) {
   return {
     el,
     render,
+    /** plano 1000b · CB-072: solta o observador da rolagem infinita (a central chama no desmontar). */
+    desmontar() { clearTimeout(timerAnuncioBusca); if (observador) { try { observador.disconnect(); } catch { /* ok */ } observador = null; } },   // CB-070: e o aviso da busca
     mostrarCarregando() { cache.clear(); lista.setAttribute("aria-busy", "true"); ui.limpar(lista); lista.appendChild(ui.esqueleto("lista", 8)); renderCabecalho(); },
     focarBusca() { busca.focus(); busca.select(); },
     anunciar,

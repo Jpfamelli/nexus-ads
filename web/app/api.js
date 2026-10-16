@@ -50,7 +50,7 @@ export const MENSAGENS = {
   dominio_invalido: "Domínio inválido. Use algo como crm.suaempresa.com.br.",
   marca_invalida: "Confira os campos da marca.",
   telefone_em_uso: "Já existe um cadastro com esse telefone.",
-  telefone_invalido: "Confira os dados informados.",
+  telefone_invalido: "Confira o telefone: DDD + número, ex.: (12) 99830-3030.",   // plano 1000b · UB-155: diz qual campo e como
   dados_invalidos: "Confira os dados informados.",
   contato_nao_encontrado: "Não encontramos esse registro — ele pode ter sido removido.",
   negocio_nao_encontrado: "Não encontramos esse registro — ele pode ter sido removido.",
@@ -109,7 +109,7 @@ export const MENSAGENS = {
   passo_invalido: "Um dos passos não é válido. Confira o passo marcado.",
   simulacao_indisponivel: "O teste não está disponível agora. Você ainda pode salvar a automação desligada e conferir depois.",
   muitos_pedidos: "Muitos pedidos seguidos; espere um minuto.",
-  automacao_invalida: "A automação tem um problema.",
+  automacao_invalida: "A automação tem um problema: confira o que está marcado em vermelho no editor.",   // plano 1000b · UB-156: sem hint, com a pista
   limite_taxa: "Muitos envios em pouco tempo. Tente mais tarde.",
   envio_em_andamento: "A mensagem ainda está sendo enviada. Aguarde um instante.",
   cancelado: "Pedido cancelado.",
@@ -220,6 +220,10 @@ export function mensagemErro(e) {
     case "automacao_invalida":
       if (hint) return `A automação tem um problema: ${hint}.`;
       break;
+    case "sem_permissao":
+      // plano 1000b · UB-277: quem já é o administrador da empresa não tem a quem «falar com o administrador»
+      if (!(e && e.contexto) && papelDasMensagens() === "admin") return "Esta ação é da plataforma; fale com o suporte.";
+      break;
     case "muitas_tentativas": {
       const min = minutosDoHint(hint);
       if (min) return `Muitas tentativas de entrar. Tente de novo em ${min} minuto${min === 1 ? "" : "s"}.`;
@@ -246,6 +250,11 @@ export function mensagemErro(e) {
   return "Não deu certo agora. Tente de novo em instantes; se continuar, fale com o suporte.";
 }
 
+let _papelMensagens = null;
+/** Plano 1000b · UB-277: o shell informa o papel na empresa ativa (fn() → "admin" | "atendente" | …) para o texto do sem_permissao. */
+export function definirPapelDasMensagens(fn) { _papelMensagens = typeof fn === "function" ? fn : null; }
+function papelDasMensagens() { try { return _papelMensagens ? _papelMensagens() : null; } catch { return null; } }
+
 let _codigoTecnico = false;
 /** O shell liga depois de ler a sessão: só a conta da plataforma (super) vê o código técnico nos erros desconhecidos. */
 export function mostrarCodigoTecnico(sim) { _codigoTecnico = !!sim; }
@@ -255,7 +264,9 @@ const LEITURA_SUFIXOS = /_(listar|ver|base|kanban|coluna|buscar)$/;
 const LEITURA_NOMES = new Set(["nx_pulso", "nx_app_sessao", "nx_marca_publica", "nx_inicio", "nx_agenda_dia", "nx_agenda_livres", "nx_dados",
   "nx_cv_mensagens", "nx_cv_ia_estado", "nx_cv_buscar_msgs", "nx_automacao_execucoes", "nx_cliente_tema", "nx_integracoes_status", "nx_uso_plano",
   // plano 1000 (AS-181): consultas do Admin, das Automações e do Início que eram tratadas como escrita (offline diziam «nada foi salvo» e não repetiam)
-  "nx_automacao_execucoes_dia", "nx_ia_uso_dia", "nx_onboarding_estado", "nx_clientes_admin"]);
+  "nx_automacao_execucoes_dia", "nx_ia_uso_dia", "nx_onboarding_estado", "nx_clientes_admin",
+  // plano 1000b · UB-153: a saúde da operação (Admin) e o «Testar» do editor de automação (simula sem gravar) também só leem
+  "nx_saude", "nx_auto_simular"]);
 export function ehLeitura(nome) {
   const n = String(nome || "");
   return LEITURA_NOMES.has(n) || LEITURA_SUFIXOS.test(n) || /^nx_rel_/.test(n);
@@ -578,7 +589,9 @@ export function criarApi(o) {
     fn(funcao, corpo = {}, opcoes = {}) {
       if (!/^nx-[a-z0-9-]+$/.test(funcao)) return Promise.reject(erroApi("funcao_invalida"));
       const chave = `${funcao}:${corpo && corpo.acao}`;
-      return chamar(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: o.cliente ? o.cliente() : null, ...corpo }), prazoDaChamada(opcoes, chave),
+      // plano 1000b · UB-154: a empresa é lida UMA vez (como no rpcC): a repetição não vai para outra empresa se a pessoa trocar no meio
+      const cli = o.cliente ? o.cliente() : null;
+      return chamar(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: cli, ...corpo }), prazoDaChamada(opcoes, chave),
         { leitura: fnLeitura(funcao, corpo, opcoes), keepalive: saindo(opcoes), sinal: opcoes && opcoes.sinal ? opcoes.sinal : null });
     },
     mensagemErro,

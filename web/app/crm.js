@@ -71,7 +71,7 @@ async function obterBase(ctx, { forcar = false } = {}) {
     };
     // forçada: `cache: true` sem `aoCache` — nada é servido do aparelho, mas a resposta nova substitui a cópia guardada (a próxima abertura não mostra etapas antigas)
     ctx.api.rpcC("nx_crm_base", {}, forcar ? { cache: true } : { cache: true, aoCache: dados => {
-      if (servida || !dados || typeof dados !== "object") return;
+      if (servida || !baseValida(dados)) return;          // plano 1000b · RB-189: base guardada em formato antigo/estragado → espera a rede
       servida = (c && c.base) || dados;                            // já havia uma base em memória (vencida)? é ELA que as telas guardam: a rede atualiza esse objeto
       cacheBase.set(id, { base: servida, em: Date.now() - BASE_VALIDADE_MS + 15000, promessa });   // vale por 15 s: a rede atualiza em seguida
       resolve(servida);
@@ -83,6 +83,17 @@ async function obterBase(ctx, { forcar = false } = {}) {
   });
   cacheBase.set(id, { base: c && c.base, em: c ? c.em : 0, promessa });
   return promessa;
+}
+
+/**
+ * plano 1000b · RB-189: a base guardada no aparelho só é servida se tiver as listas que o kit usa (funis com etapas, usuários, etiquetas,
+ * motivos e, quando vier, campos) — um formato antigo ({funis: null}) derrubava o CRM antes de a rede responder.
+ */
+export function baseValida(b) {
+  if (!b || typeof b !== "object") return false;
+  if (!["funis", "usuarios", "etiquetas", "motivos"].every(x => Array.isArray(b[x]))) return false;
+  if (b.campos !== undefined && b.campos !== null && !Array.isArray(b.campos)) return false;
+  return b.funis.every(f => f && typeof f === "object" && Array.isArray(f.estagios));
 }
 
 /** Os funis/etapas da base desta empresa mudaram depois de a tela abrir com o dado guardado: chama quem pediu para saber (o Kanban). */
@@ -106,7 +117,12 @@ async function kitDe(ctx) {
     G: Gr,                                   // graficos.js ou null: as telas conferem `typeof k.G.contar === "function"` antes de usar
     h: ui.h,
     mod: nome => carregarArq(ctx, nome),
-    async recarregarBase() { k.base = await obterBase(ctx, { forcar: true }); return k.base; },
+    async recarregarBase() {
+      k.base = await obterBase(ctx, { forcar: true });
+      // plano 1000b · RB-194: funil criado/renomeado entra já nos «Ir para o funil» da paleta
+      if (comandosDe && comandosDe.ctx.cliente && ctx.cliente && comandosDe.ctx.cliente.id === ctx.cliente.id) registrarComandos(comandosDe.ctx, comandosDe.k);
+      return k.base;
+    },
     /** aoBaseMudar(fn) → cancelar(). `fn` roda quando a rede troca os funis/etapas da base que a tela recebeu do aparelho (a tela refaz o que desenhou com eles). */
     aoBaseMudar(fn) {
       const id = ctx.cliente && ctx.cliente.id;
@@ -118,7 +134,7 @@ async function kitDe(ctx) {
     /** texto do erro (rótulo de campo, trava do Ads, códigos do CRM; o resto pelo api.mensagemErro) */
     erro: e => Lg.textoErro(e, { campos: k.base.campos, vocab: ctx.vocab, padrao: ctx.api && ctx.api.mensagemErro ? ctx.api.mensagemErro : ui.mensagemErro }),
     // plano 1000 (CR-208): a frase sai sem o código técnico; o código vai para o console (o suporte acha lá)
-    toastErro: e => { const c = Lg.codigoSuporte ? Lg.codigoSuporte(e) : null; if (c) console.warn("crm: erro", c); ui.toast(k.erro(e), { tipo: "erro" }); },
+    toastErro: e => { const c = (Lg.codigoSuporte ? Lg.codigoSuporte(e) : null) || (e && e.message); if (c) console.warn("crm: erro", c); ui.toast(k.erro(e), { tipo: "erro" }); },
     pode: min => ctx.pode(min),
     eu: () => (k.base.eu && k.base.eu.id) || (ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id),
     funil: id => k.base.funis.find(f => f.id === id) || null,
@@ -135,7 +151,7 @@ async function kitDe(ctx) {
       const paleta = ctx.paleta || [];
       const cor = paleta.length ? paleta[k.base.etiquetas.length % paleta.length] : null;
       const e = await ctx.api.rpcC("nx_etiqueta_salvar", { p_etiqueta: { nome, ...(ui.corOk(cor) ? { cor } : {}) } });
-      if (e && e.id && !k.base.etiquetas.some(x => x.id === e.id)) k.base.etiquetas = [...k.base.etiquetas, e].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+      if (e && e.id && !k.base.etiquetas.some(x => x.id === e.id)) k.base.etiquetas = [...k.base.etiquetas, e].sort((a, b) => String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR"));   // plano 1000b · RB-192: etiqueta sem nome não quebra
       return e;
     },
     /** valor em reais formatado */
@@ -173,21 +189,32 @@ export function invalidarBase(clienteId) { if (clienteId) cacheBase.delete(clien
 /* ============================================================ pontes (§7.2) */
 /** abrirNegocio(ctx, id, {aoMudar, aoFechar}) — gaveta do negócio por cima de qualquer tela. */
 export async function abrirNegocio(ctx, id, opts = {}) {
-  const k = await kitDe(ctx);
-  const N = await k.mod("negocio");
-  return N.abrirNegocio(k, id, opts);
+  // plano 1000b · RB-195: a ponte não rejeita (o Início chama sem await/catch) — erro de rede vira aviso e o retorno é null
+  try {
+    const k = await kitDe(ctx);
+    const N = await k.mod("negocio");
+    return await N.abrirNegocio(k, id, opts);
+  } catch (e) { erroDaPonte(ctx, e); return null; }
+}
+function erroDaPonte(ctx, e) {
+  console.error(e);
+  try { ctx.ui.toast(L && L.textoErro ? L.textoErro(e, { vocab: ctx.vocab }) : "Não deu certo agora. Tente de novo em instantes.", { tipo: "erro" }); } catch { /* sem ui */ }
 }
 /** novoNegocio(ctx, {contato_id, conversa_id, funil_id, estagio_id}, {aoCriar}) — mesma gaveta em modo criação. */
 export async function novoNegocio(ctx, dados = {}, opts = {}) {
-  const k = await kitDe(ctx);
-  const N = await k.mod("negocio");
-  return N.novoNegocio(k, dados, opts);
+  try {         // plano 1000b · RB-195
+    const k = await kitDe(ctx);
+    const N = await k.mod("negocio");
+    return await N.novoNegocio(k, dados, opts);
+  } catch (e) { erroDaPonte(ctx, e); return null; }
 }
 /** abrirContato(ctx, id, {aoMudar}) — ficha 360 numa gaveta larga (sem sair da tela atual). */
 export async function abrirContato(ctx, id, opts = {}) {
-  const k = await kitDe(ctx);
-  const N = await k.mod("negocio");
-  return N.abrirContato(k, id, opts);
+  try {         // plano 1000b · RB-195
+    const k = await kitDe(ctx);
+    const N = await k.mod("negocio");
+    return await N.abrirContato(k, id, opts);
+  } catch (e) { erroDaPonte(ctx, e); return null; }
 }
 
 function fecharGavetaAtual() {
@@ -199,7 +226,7 @@ function fecharGavetaAtual() {
 
 /* ============================================================ esqueleto */
 /** Forma da tela enquanto carrega (a troca não desloca nada): cabeçalho, e no Kanban também os 3 totais, ou a lista de linhas. Só classes do ui.esqueleto (A). */
-function esqueletoDe(ctx, tipo) {
+export function esqueletoDe(ctx, tipo) {      // plano 1000b · RB-193: exportada para o teste
   const { ui } = ctx;
   if (tipo === "kanban") {
     const sk = ui.esqueleto("kanban", { n: 5, cabecalho: { sub: false, acao: true } });
@@ -210,20 +237,40 @@ function esqueletoDe(ctx, tipo) {
   if (tipo === "contatos" || tipo === "empresas") return ui.esqueleto("lista", { n: 8, cabecalho: { sub: true, acao: true } });
   if (tipo === "tarefas") return ui.esqueleto("lista", { n: 5, cabecalho: { sub: false, acao: true } });
   if (tipo === "ficha" || tipo === "empresa") return ui.esqueleto("cartoes", 4);
+  // plano 1000b · RB-193: a importação abre com a forma da tela final (cabeçalho + passos + o cartão do arquivo), não com uma tabela genérica
+  if (tipo === "importar") return ui.esqueleto("cartao", { cabecalho: { sub: true, acao: true } });
   return ui.esqueleto("tabela", 6);
 }
 
 /* ============================================================ paleta de comandos (Ctrl/⌘+K, frente B) */
 let comandosAtivos = [];
-function limparComandos() { for (const f of comandosAtivos) { try { f(); } catch { /* ok */ } } comandosAtivos = []; }
+let comandosDe = null;                // plano 1000b · RB-194: {ctx, k} dos comandos registrados (refeitos quando a base muda)
+let soltarBaseComandos = null;
+function limparComandos() {
+  for (const f of comandosAtivos) { try { f(); } catch { /* ok */ } }
+  comandosAtivos = [];
+  comandosDe = null;
+  if (soltarBaseComandos) { soltarBaseComandos(); soltarBaseComandos = null; }
+}
 /**
  * Enquanto o CRM está aberto, a paleta oferece «Nova oportunidade», «Nova tarefa», «Novo paciente», os funis e (plano 1000, CR-189) «Importar planilha»,
  * «Exportar planilha» e «Nova empresa» conforme o papel. Sem a paleta (shell antigo) não faz nada.
  */
 function registrarComandos(ctx, k) {
   limparComandos();
-  if (!ctx.comandos || typeof ctx.comandos.registrar !== "function" || !k.pode("atendente")) return;
+  if (!ctx.comandos || typeof ctx.comandos.registrar !== "function") return;
+  comandosDe = { ctx, k };
+  // plano 1000b · RB-194: a rede trocou os funis da base (cache → rede) — os «Ir para o funil» são refeitos
+  if (typeof k.aoBaseMudar === "function") soltarBaseComandos = k.aoBaseMudar(() => { if (comandosDe && comandosDe.k === k) registrarComandos(ctx, k); });
   const reg = c => { try { const d = ctx.comandos.registrar(c); if (typeof d === "function") comandosAtivos.push(d); } catch { /* sem paleta */ } };
+  // plano 1000 (CR-037): «Ir para o funil «X»» (com 2 funis ou mais) — o mesmo que Alt+1…5 no quadro.
+  // plano 1000b · RB-190: registrado ANTES do teste de papel — navegar entre funis não escreve nada (o «somente leitura» também usa);
+  // e com a base mais nova em memória (RB-194: recarregarBase de outro kit troca o objeto)
+  const baseAgora = (ctx.cliente && cacheBase.get(ctx.cliente.id) && cacheBase.get(ctx.cliente.id).base) || k.base;
+  const ativos = ((baseAgora && baseAgora.funis) || []).filter(f => f.ativo !== false);
+  if (ativos.length > 1) ativos.forEach((f, i) => reg({ id: `crm.funil-${f.id}`, rotulo: `Ir para o funil «${f.nome}»`, palavras: `funil quadro kanban ${f.nome}${i < 5 ? ` alt+${i + 1}` : ""}`,
+    fazer: () => ctx.navegar(`#/crm?funil=${encodeURIComponent(f.id)}`) }));
+  if (!k.pode("atendente")) return;
   const tipoTela = telaAtual && telaAtual.tipo;
   // plano 1000 (CR-267): no quadro a tecla N cria um cartão (o quadro atende a tecla; aqui ela aparece na folha «?»)
   reg({ id: "crm.novo-negocio", rotulo: k.v.novo("negocio"), palavras: "oportunidade negócio lead cartão criar novo", ...(tipoTela === "kanban" ? { atalho: "N" } : {}), fazer: () => novoNegocio(ctx, {}) });
@@ -231,10 +278,6 @@ function registrarComandos(ctx, k) {
     try { const kk = await kitDe(ctx); const T = await kk.mod("tarefas"); const t = await T.formTarefa(kk, null, {}); if (t) ctx.ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); }
     catch (e) { console.error(e); ctx.ui.toast("Não foi possível abrir a tarefa.", { tipo: "erro" }); }
   } });
-  // plano 1000 (CR-037): «Ir para o funil «X»» (com 2 funis ou mais) — o mesmo que Alt+1…5 no quadro
-  const ativos = (k.base.funis || []).filter(f => f.ativo !== false);
-  if (ativos.length > 1) ativos.forEach((f, i) => reg({ id: `crm.funil-${f.id}`, rotulo: `Ir para o funil «${f.nome}»`, palavras: `funil quadro kanban ${f.nome}${i < 5 ? ` alt+${i + 1}` : ""}`,
-    fazer: () => ctx.navegar(`#/crm?funil=${encodeURIComponent(f.id)}`) }));
   const cadastrar = async (pre = {}) => {
     try {
       const kk = await kitDe(ctx); const M = await kk.mod("listas"); const c = await M.formContato(kk, pre);
@@ -267,7 +310,9 @@ function registrarComandos(ctx, k) {
  */
 function cartaoErro(ctx, e, tentar) {
   const card = ctx.ui.erroCartao(e, tentar);
-  const cod = e && (e.codigo || (e.status ? `http_${e.status}` : null) || e.message);
+  // plano 1000b · RB-191: só o código (ou o status HTTP) vai para a tela — «código Failed to fetch» confundia; a mensagem crua fica no console
+  const cod = e && (e.codigo || (e.status ? `http_${e.status}` : null));
+  if (!cod && e && e.message) console.warn("crm: erro", e.message);
   let hora = "";
   try { hora = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" }); } catch { /* sem Intl */ }
   if (card && typeof card.appendChild === "function" && (cod || hora)) {

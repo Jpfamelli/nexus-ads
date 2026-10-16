@@ -21,6 +21,7 @@ const FUSO = "America/Sao_Paulo";
 const ORIGENS = {
   anuncio: "Anúncio", whatsapp: "WhatsApp", indicacao: "Indicação",
   organico: "Orgânico", manual: "Manual", site: "Site", importacao: "Importação",
+  formulario: "Formulário",   // plano 1000b · CB-190: a lateral da central já tinha (cv-lateral.js); aqui caía em «Origem não informada»
 };
 
 /* ============================================================ contas puras (testáveis) */
@@ -55,8 +56,17 @@ export function normalizarExtrasAgenda(valor) {
   return {
     prof: typeof v.prof === "string" && v.prof && v.prof.length <= 80 ? v.prof : "todos",   // «todos», «eu» ou o id de um profissional
     fechados: v.fechados === "mostrar" ? "mostrar" : "ocultar",                              // dias fechados sem consulta somem da semana
+    atalhos: v.atalhos === "desligados" ? "desligados" : "ligados",                         // plano 1000b · CB-151: atalhos de uma tecla (WCAG 2.1.4)
   };
 }
+/** Plano 1000b · CB-166: sem internet de verdade? O estado da rede do app (ctx.rede: Wi-Fi sem internet vira «offline» pelas falhas) vale
+    primeiro; sem ele, o navigator.onLine. */
+export function estaOffline(rede, nav = typeof navigator !== "undefined" ? navigator : null) {
+  if (rede && typeof rede.estado === "string") return rede.estado === "offline";
+  return !!nav && nav.onLine === false;
+}
+/** Plano 1000b · CB-160: o nome do serviço sem caixa nem acento («Avaliação» = «avaliacao»), para casar e achar repetidos. */
+export const normServico = s => String(s || "").trim().normalize("NFD").replace(/[̀-ͯ]/g, "").toLocaleLowerCase("pt-BR");
 
 /** CA-187: só as consultas do profissional escolhido («eu» = a conta de quem usa; «todos» = sem filtro). */
 export function filtrarPorProfissional(consultas, filtro = "todos", eu = null) {
@@ -78,6 +88,8 @@ export function textoAnuncioPeriodo({ modo = "semana", de, dias = 7, n = 0 } = {
   if (modo === "mes") return `${nomeDoMes(de)}: ${qtd}`;
   if (dias === 1) return `${nomeDia(de, true)}: ${qtd}`;
   const fim = diaISO(de, dias - 1);
+  // plano 1000b · CB-194: a visão Lista são os 7 dias a partir de qualquer dia (não «a semana»)
+  if (modo === "lista") return `De ${de.slice(5, 7) === fim.slice(5, 7) ? de.slice(8, 10) : dm(de)} a ${dm(fim)}: ${qtd}`;
   return `Semana de ${de.slice(5, 7) === fim.slice(5, 7) ? de.slice(8, 10) : dm(de)} a ${dm(fim)}: ${qtd}`;
 }
 
@@ -196,9 +208,13 @@ export const isoNoFuso = (iso, hhmm, fuso = FUSO) => new Date(instanteNoFuso(iso
 export function faixasDoDia(config, iso) {
   const h = config && config.horario;
   if (!h || typeof h !== "object") return null;
-  const faixas = h[String(diaDaSemana(iso))];
-  if (!Array.isArray(faixas)) return [];
-  return faixas.map(f => [paraMin(f && f[0]), paraMin(f && f[1])]).filter(f => f[0] !== null && f[1] !== null && f[1] > f[0]);
+  // plano 1000b · CB-191: faixa que passa da meia-noite (22:00–02:00) vale até 24:00 no dia e de 00:00 ao fim no dia seguinte
+  // (a mesma regra do horarioAberto do cv-logica); antes ela sumia e o dia parecia fechado
+  const ler = d => (Array.isArray(h[String(d)]) ? h[String(d)] : []).map(f => [paraMin(f && f[0]), paraMin(f && f[1])]).filter(f => f[0] !== null && f[1] !== null && f[1] !== f[0]);
+  const dds = diaDaSemana(iso);
+  const doDia = ler(dds).map(([a, b]) => [a, b > a ? b : 24 * 60]);
+  const daVespera = ler((dds + 6) % 7).filter(([a, b]) => b < a && b > 0).map(([, b]) => [0, b]);
+  return [...daVespera, ...doDia].sort((x, y) => x[0] - y[0]);
 }
 /** Intervalos (almoço…) da configuração em minutos. */
 export function intervalosDaConfig(config) {
@@ -382,20 +398,41 @@ export function corDoResponsavel(id) {
   for (const ch of s) h = (h * 33 + ch.codePointAt(0)) >>> 0;
   return h % 12;
 }
+/** Plano 1000b · CB-175: a cor do profissional pela ORDEM dos profissionais do período (dois nunca dividem a cor, como os serviços no
+    CA-266); o hash (corDoResponsavel) fica de reserva para quem não está na lista. 6 é «sem responsável». */
+export function corDoProfissional(id, ordem = null) {
+  const s = String(id || "").trim();
+  if (!s) return 6;
+  if (Array.isArray(ordem) && ordem.length) {
+    const i = ordem.map(x => String(x)).filter(x => x && x !== "sem").indexOf(s);
+    if (i >= 0) return CORES_PROF[i % CORES_PROF.length];
+  }
+  return corDoResponsavel(s);
+}
+const CORES_PROF = [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11];   // sem o 6 (cinza quente = sem responsável)
+/** Os profissionais em ordem estável (pelo id) — a base das cores por profissional (CB-175).
+    revisão 1000b · CB-175: a ordem vem da EQUIPE (base.usuarios, `equipe` = ids) e não só de quem tem consulta no período — senão a
+    cor de cada um mudava ao trocar de semana (entrou/saiu alguém da lista). Quem tem consulta e não está na equipe vai no fim. */
+export function ordemProfissionais(consultas, equipe = null) {
+  const limpar = l => [...new Set((l || []).filter(x => x != null && x !== "").map(String))].sort();
+  const daEquipe = limpar(Array.isArray(equipe) ? equipe : []);
+  const doPeriodo = limpar((consultas || []).map(c => c && c.dono_id)).filter(id => !daEquipe.includes(id));
+  return [...daEquipe, ...doPeriodo];
+}
 /** Chave, cor e rótulo de uma consulta pelo critério de cor («servico» ou «profissional»). `nomes` = {dono_id: nome}. */
-export function corDaConsulta(c, por = "servico", nomes = {}, ordem = null) {
+export function corDaConsulta(c, por = "servico", nomes = {}, ordem = null, ordemProf = null) {
   if (por === "profissional") {
     const id = c && c.dono_id ? String(c.dono_id) : "";
-    return { chave: `p:${id || "sem"}`, cor: corDoResponsavel(id), rotulo: id ? (nomes[id] || (typeof c.dono_nome === "string" && c.dono_nome.trim()) || "Responsável") : "Sem responsável" };
+    return { chave: `p:${id || "sem"}`, cor: corDoProfissional(id, ordemProf), rotulo: id ? (nomes[id] || (typeof c.dono_nome === "string" && c.dono_nome.trim()) || "Responsável") : "Sem responsável" };
   }
   const s = String((c && c.servico) || "").trim();
   return { chave: `s:${s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()}`, cor: corDoProcedimento(s, ordem), rotulo: s || "Sem serviço" };
 }
 /** Legenda das cores em uso: um item por chave, do mais frequente ao menos; passando de `max`, o resto vira «Outros». */
-export function legendaDe(consultas, { por = "servico", nomes = {}, max = 8, ordem = null } = {}) {
+export function legendaDe(consultas, { por = "servico", nomes = {}, max = 8, ordem = null, ordemProf = null } = {}) {
   const mapa = new Map();
   for (const c of consultas || []) {
-    const k = corDaConsulta(c, por, nomes, ordem);
+    const k = corDaConsulta(c, por, nomes, ordem, ordemProf);
     const it = mapa.get(k.chave) || { ...k, n: 0 };
     it.n++;
     mapa.set(k.chave, it);
@@ -477,8 +514,9 @@ export function indiceCelulaMesTecla(tecla, i, total = 42) {
   return null;
 }
 /** «Outubro de 2026». */
+const _fmtMes = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: FUSO });   // plano 1000b · CB-165
 export function nomeDoMes(iso) {
-  const t = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: FUSO }).format(new Date(`${primeiroDoMes(iso)}T12:00:00-03:00`));
+  const t = _fmtMes.format(new Date(`${primeiroDoMes(iso)}T12:00:00-03:00`));
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
@@ -504,6 +542,7 @@ export function rotuloProxima(c, agora = Date.now(), hojeISO = null) {
   const hora = horaTxt(p.min);
   if (p.dia === hoje) {
     const min = Math.max(0, Math.round((t - agora) / 60000));
+    if (min === 0) return `agora · ${hora}`;   // plano 1000b · CB-177: «em 0 min» na hora em que começa
     if (min < 60) return `em ${min} min · ${hora}`;
     if (min <= 180) { const mm = min % 60; return `em ${Math.floor(min / 60)} h${mm ? ` ${String(mm).padStart(2, "0")}` : ""} · ${hora}`; }
     return `hoje às ${hora}`;
@@ -569,6 +608,15 @@ export function resumoDoDia(consultas, iso, config) {
   return r;
 }
 
+/** Plano 1000b · CB-182: «Bloqueado das 12:00 às 13:00: almoço» (no dia `iso`; o que começa antes ou termina depois do dia conta o dia todo). */
+export function textoBloqueioNoDia(b, iso) {
+  const i = partesSP(b && b.inicio), f = partesSP(b && b.fim);
+  const motivo = String((b && b.motivo) || "").trim();
+  const ini = i && i.dia === iso ? i.min : 0;
+  const fim = f && f.dia === iso ? f.min : 24 * 60;
+  const quando = !i || !f ? "Bloqueado" : ini <= 0 && fim >= 24 * 60 ? "Bloqueado o dia todo" : `Bloqueado das ${horaTxt(ini)} às ${horaTxt(Math.min(fim, 24 * 60 - 1))}`;
+  return `${quando}${motivo ? `: ${motivo}` : ""}`;
+}
 /** CA-198: o que o leitor de tela ouve no bloco: «10:00 às 10:30, Mariana Costa, Avaliação, encaixe, faltou, próxima consulta». */
 export function rotuloDoBloco(c, { inicio = "", fim = "", nome = "", feita = false, falta = false, encaixe = false, proxima = false } = {}) {
   const pres = c && c.presenca === "compareceu" ? "compareceu" : (c && c.presenca === "faltou") || falta ? "faltou" : null;
@@ -626,7 +674,7 @@ export function montarMiniCalendario({ h, mes, consultas = [], bloqueios = [], c
   el.appendChild(h("header", { class: "ag-mes-cab" },
     h("button", { type: "button", class: "bt-icone ag-mes-nav", "aria-label": "Mês anterior", on: { click: () => aoMudarMes && aoMudarMes(-1) } }, h("span", { "aria-hidden": "true" }, "‹")),
     h("div", { class: "ag-mes-tit" }, h("h2", { class: "ag-mes-nome" }, nomeDoMes(mes)),
-      h("p", { class: "ag-mes-resumo", role: "status" }, carregando ? "Carregando…" : `${num(total)} ${total === 1 ? "consulta" : "consultas"}${media === null ? "" : ` · ocupação média ${media > 0 && media < .005 ? "abaixo de 1%" : `${Math.round(media * 100)}%`}`}`)),
+      h("p", { class: "ag-mes-resumo" },   /* plano 1000b · CB-176: sem role=status (um status novo a cada desenho); o anúncio do período (CA-161) já diz */ carregando ? "Carregando…" : `${num(total)} ${total === 1 ? "consulta" : "consultas"}${media === null ? "" : ` · ocupação média ${media > 0 && media < .005 ? "abaixo de 1%" : `${Math.round(media * 100)}%`}`}`)),
     h("button", { type: "button", class: "bt-icone ag-mes-nav", "aria-label": "Próximo mês", on: { click: () => aoMudarMes && aoMudarMes(1) } }, h("span", { "aria-hidden": "true" }, "›"))));
   el.appendChild(h("div", { class: "ag-mes-sem", "aria-hidden": "true" }, comSemanas ? h("span", { class: "ag-mes-sem-n" }, "sem") : null, ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"].map(d => h("span", null, d))));
   const grade = h("div", { class: "ag-mes-grade", role: "group", "aria-label": `Dias de ${nomeDoMes(mes).toLowerCase()}` });
@@ -635,7 +683,8 @@ export function montarMiniCalendario({ h, mes, consultas = [], bloqueios = [], c
   celulas.forEach((cel, i) => {
     if (comSemanas && i % 7 === 0) {
       const fim = diaISO(cel.iso, 6), dm = x => `${x.slice(8, 10)}/${x.slice(5, 7)}`;
-      grade.appendChild(h("button", { type: "button", class: "ag-mes-semana dado", "aria-label": `Abrir a semana de ${dm(cel.iso)} a ${dm(fim)}`, title: `Semana ${semanaISO(cel.iso)} · abrir a semana`,
+      // plano 1000b · CB-193: os números da semana saem da ordem do Tab (eram 6 paradas a mais); pelo teclado, W no dia focado abre a semana
+      grade.appendChild(h("button", { type: "button", class: "ag-mes-semana dado", tabindex: "-1", "aria-label": `Abrir a semana de ${dm(cel.iso)} a ${dm(fim)}`, title: `Semana ${semanaISO(cel.iso)} · abrir a semana (W)`,
         dataset: { iso: cel.iso }, on: { click: () => aoAbrirSemana(cel.iso) } }, String(semanaISO(cel.iso))));
     }
     const oc = cel.foraDoMes || carregando ? null : ocupacaoDoDia(doDia(cel.iso), cel.iso, config, bloqueios);
@@ -644,7 +693,7 @@ export function montarMiniCalendario({ h, mes, consultas = [], bloqueios = [], c
     const nivel = nivelOcupacao(oc && oc.pct);
     const txtOc = textoOcupacao(oc);
     const partes = [nomeDia(cel.iso, true), oc ? `${num(n)} ${n === 1 ? "consulta" : "consultas"}` : null, txtOc || null, diaTodo ? "bloqueado" : null, cel.iso === selecionado ? "selecionado" : null].filter(Boolean);
-    const b = h("button", { type: "button", class: ["ag-mes-dia", `ag-ocup-${nivel}`, cel.foraDoMes && "ag-mes-fora", cel.iso === hoje && "hoje", cel.iso === selecionado && "sel", diaTodo && "ag-mes-bloq", oc && oc.fechado && "ag-mes-fechado", hoje && cel.iso < hoje && "ag-mes-passado"],
+    const b = h("button", { type: "button", "aria-keyshortcuts": comSemanas ? "W" : null, class: ["ag-mes-dia", `ag-ocup-${nivel}`, cel.foraDoMes && "ag-mes-fora", cel.iso === hoje && "hoje", cel.iso === selecionado && "sel", diaTodo && "ag-mes-bloq", oc && oc.fechado && "ag-mes-fechado", hoje && cel.iso < hoje && "ag-mes-passado"],
       "aria-label": partes.join(", "), "aria-current": cel.iso === hoje ? "date" : null, tabindex: cel.iso === foco ? "0" : "-1", dataset: { iso: cel.iso },
       style: { "--p": oc && oc.pct !== null ? oc.pct.toFixed(3) : "0" }, on: { click: () => aoEscolher && aoEscolher(cel.iso) } },
       h("b", { class: "ag-mes-num dado" }, cel.iso.slice(8, 10)),
@@ -657,6 +706,7 @@ export function montarMiniCalendario({ h, mes, consultas = [], bloqueios = [], c
     const i = botoes.indexOf(ev.target);
     if (i < 0) return;
     if (ev.key === "PageUp" || ev.key === "PageDown") { ev.preventDefault(); if (aoMudarMes) aoMudarMes(ev.key === "PageUp" ? -1 : 1); return; }
+    if (comSemanas && (ev.key === "w" || ev.key === "W") && !ev.ctrlKey && !ev.metaKey && !ev.altKey) { ev.preventDefault(); aoAbrirSemana(celulas[i - (i % 7)].iso); return; }   // CB-193
     const j = indiceCelulaMesTecla(ev.key, i, botoes.length);
     if (j === null) return;
     ev.preventDefault();
@@ -715,7 +765,7 @@ export function textoResumoDia(r, { futuro = false, num = String } = {}) {
   if (!r || !r.total) return "vazio";
   const n = (v, um, varios) => `${num(v)} ${v === 1 ? um : varios}`;
   return [n(r.total, "consulta", "consultas"), r.feitas ? n(r.feitas, "concluída", "concluídas") : null, futuro && !r.faltas ? null : n(r.faltas, "falta", "faltas"),
-    n(r.encaixes, "encaixe", "encaixes")].filter(Boolean).join(" · ");
+    r.encaixes ? n(r.encaixes, "encaixe", "encaixes") : null].filter(Boolean).join(" · ");   // plano 1000b · CB-178: sem «0 encaixes»
 }
 /** Uma consulta da lista (painel do dia e visão «Lista»): hora, paciente, serviço, selos e, se já passou, «Compareceu / Faltou». */
 function itemDoPainel({ h, it, presenca = null, pode = false, aoAbrir = null, horaBR = x => x, telBR = String }) {
@@ -797,7 +847,7 @@ export function inicioBuscaProxima(de, dias, hojeISO) {
   const seguinte = diaISO(de, Math.max(1, Math.floor(Number(dias)) || 1));
   return seguinte > hojeISO ? seguinte : hojeISO;
 }
-const semanaLonga = iso => new Intl.DateTimeFormat("pt-BR", { weekday: "long", timeZone: FUSO }).format(new Date(`${iso}T12:00:00-03:00`)).replace(/-feira$/, "");
+const semanaLonga = iso => _fmtSemLonga.format(new Date(`${iso}T12:00:00-03:00`)).replace(/-feira$/, "");   // CB-165: formatador do módulo
 /** E3: «amanhã às 10:00», «sexta às 14:00» (até 6 dias à frente), senão «sex 24/10 às 14:00»; hoje continua «em 25 min · 10:25». */
 export function rotuloProximaFora(c, agora = Date.now(), hojeISO = null) {
   const p = c && partesSP(c.inicio);
@@ -850,6 +900,12 @@ export function conversaDoContato(conversas) {
   const lista = Array.isArray(conversas) ? conversas.filter(c => c && c.id != null) : [];
   return lista.find(c => c.status !== "resolvida") || lista.slice().sort((a, b) => String(b.aberta_em || "").localeCompare(String(a.aberta_em || "")))[0] || null;
 }
+/** Plano 1000b · CB-195 / CB-200: o aviso quando o contato não tem conversa aberta (o rascunho iria para um campo travado). */
+export function avisoSemConversaAberta(resolvida, copiou, texto = "") {
+  const onde = resolvida ? "A conversa está resolvida: reabra a conversa ou comece uma nova (no número da Meta, só com modelo)."
+    : "Sem conversa aberta: comece pela Nova conversa (no número da Meta, só com modelo).";
+  return copiou ? `${onde} O texto foi copiado para você colar.` : `${onde} Texto: ${texto}`;
+}
 /** E6: deixa `texto` como rascunho da conversa pelo ctx.rascunho (o composer o devolve ao abrir, com «Rascunho restaurado») — nada é enviado.
     Nunca passa por cima de um rascunho que a pessoa já tem. → true se ficou guardado. */
 export function prepararRascunho(rascunho, chave, texto, criarCampo = () => document.createElement("textarea")) {
@@ -867,22 +923,26 @@ export function prepararRascunho(rascunho, chave, texto, criarCampo = () => docu
 }
 
 /* ============================================================ textos */
+/* plano 1000b · CB-165: os formatadores de data ficam no módulo (antes um Intl.DateTimeFormat novo a cada rótulo de dia) */
+const _fmtDia = { true: new Intl.DateTimeFormat("pt-BR", { weekday: "long", day: "2-digit", month: "short", timeZone: FUSO }),
+  false: new Intl.DateTimeFormat("pt-BR", { weekday: "short", day: "2-digit", month: "short", timeZone: FUSO }) };
+const _fmtSemLonga = new Intl.DateTimeFormat("pt-BR", { weekday: "long", timeZone: FUSO });
+const _fmtSemCurta = new Intl.DateTimeFormat("pt-BR", { weekday: "short", timeZone: FUSO });
 function nomeDia(iso, longo = false) {
-  const t = new Intl.DateTimeFormat("pt-BR", {
-    weekday: longo ? "long" : "short", day: "2-digit", month: "short", timeZone: FUSO,
-  }).format(new Date(`${iso}T12:00:00-03:00`));
+  const t = _fmtDia[!!longo].format(new Date(`${iso}T12:00:00-03:00`));
   return t.charAt(0).toUpperCase() + t.slice(1); // só a 1ª letra ("Qui., 01 de out."); o CSS capitalize gerava "De Out."
 }
-const semanaCurta = iso => new Intl.DateTimeFormat("pt-BR", { weekday: "short", timeZone: FUSO }).format(new Date(`${iso}T12:00:00-03:00`)).replace(".", "");
+const semanaCurta = iso => _fmtSemCurta.format(new Date(`${iso}T12:00:00-03:00`)).replace(".", "");
 const diaDoMes = iso => iso.slice(8, 10);
 
 /** A origem da consulta em português («Meta Ads · Aparelho invisível · Vídeo 1»). Plano 1000 · CA-280: id cru de campanha/anúncio
     (campanha_ext/anuncio_ext, «120211…») nunca aparece — sem o nome, fica só a plataforma. A etapa vai em outra linha (etapaDo). */
+const SEM_ORIGEM = "Origem não informada";
 export function origemDo(item) {
   const it = item && typeof item === "object" ? item : {};
   const nome = it.plataforma === "google" ? "Google Ads"
     : it.plataforma === "meta" ? "Meta Ads"
-      : ORIGENS[it.origem] || "Origem não informada";
+      : ORIGENS[it.origem] || SEM_ORIGEM;
   const rastreio = it.rastreio && typeof it.rastreio === "object" ? it.rastreio : {};
   const semId = v => (typeof v === "string" && v.trim() && !/^\d{6,}$/.test(v.trim()) ? v.trim() : null);
   const campanha = semId(it.campanha_nome) || semId(it.campanha) || semId(rastreio.utm_campaign);
@@ -1010,17 +1070,27 @@ export function avisoVoltaEncaixe(r) {
 async function procurarNegocios(ctx, q) {
   const { api } = ctx;
   const r = await api.rpcC("nx_buscar", { p_q: q });
-  if (r && Array.isArray(r.negocios)) return r.negocios.filter(n => n.status === "aberto").slice(0, 8);
+  // plano 1000b · CB-170: até 30 (a janela mostra 8 e «Ver mais»; homônimos não ficam de fora)
+  if (r && Array.isArray(r.negocios)) return r.negocios.filter(n => n.status === "aberto").slice(0, 30);
   const crm = await ctx.carregar("crm");
   const k = await crm.kit(ctx);
   const mapa = new Map();
-  for (const funil of (k.base.funis || []).filter(f => f.ativo !== false)) {
-    const rr = await api.rpcC("nx_negocios_kanban", { p_funil: funil.id, p_filtro: { busca: q, status: "aberto" }, p_por_coluna: 30 });
+  // plano 1000b · CB-171: os funis em paralelo (no máximo 4 leituras ao mesmo tempo), não um por um; a ordem dos funis é mantida no resultado
+  const funis = (k.base.funis || []).filter(f => f.ativo !== false);
+  const lidos = new Map();
+  let erroFunil = null;
+  await comLimite(funis, 4, async funil => {
+    try { lidos.set(funil, await api.rpcC("nx_negocios_kanban", { p_funil: funil.id, p_filtro: { busca: q, status: "aberto" }, p_por_coluna: 30 })); }
+    catch (e) { erroFunil = erroFunil || e; }
+  });
+  if (erroFunil && !lidos.size) throw erroFunil;     // nenhum funil respondeu: o erro aparece (não «nenhuma oportunidade»)
+  for (const funil of funis) {
+    const rr = lidos.get(funil) || {};
     for (const coluna of rr.colunas || []) for (const item of coluna.itens || []) {
       if (item.status === "aberto" && !mapa.has(String(item.id))) mapa.set(String(item.id), { id: item.id, titulo: item.titulo || item.nome, contato_nome: item.contato && item.contato.nome, estagio_nome: item.estagio_nome || funil.nome, status: "aberto" });
     }
   }
-  return [...mapa.values()].slice(0, 8);
+  return [...mapa.values()].slice(0, 30);
 }
 
 /** Setas movem e escolhem dentro de um grupo de botões role=radio (só o marcado fica na ordem do Tab). */
@@ -1054,8 +1124,22 @@ function radiosComSetas(grupo) {
  * Plano 1000: soEscolher = true (o modal do CRM) só ESCOLHE o horário e devolve {consulta_em, servico} sem gravar nada.
  */
 let seqJanela = 0;
-const normServico = s => String(s || "").trim().toLocaleLowerCase("pt-BR");
-export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = null, base = null, aoMudar = null, soEscolher = false, config = null, avisar = null, aoBloquear = null } = {}) {
+/** Plano 1000b · CB-189: as palavras da Agenda pelo vocabulário da empresa (ctx.vocab: oportunidade/orçamento/venda/negócio; paciente/cliente).
+    Sem vocabulário, as de sempre (oportunidade, negócio, paciente). */
+export function palavrasAgenda(vocab = null) {
+  const v = vocab && typeof vocab.min === "function" ? vocab : null;
+  const neg = v ? v.min("negocio") : "oportunidade", fem = v ? v.art("negocio") === "a" : true;
+  return {
+    neg, negs: v ? v.min("negocios") : "oportunidades", Negs: v ? v.negocios : "Oportunidades",
+    aberta: fem ? "aberta" : "aberto", a: fem ? "a" : "o", uma: fem ? "uma" : "um", nenhuma: fem ? "Nenhuma" : "Nenhum", esta: fem ? "Esta" : "Este",
+    escolhida: fem ? "escolhida" : "escolhido", abrirNeg: v ? `Abrir ${v.min("negocio")}` : "Abrir negócio",
+    contato: v ? v.min("contato") : "paciente", novoContato: v && typeof v.novo === "function" ? v.novo("contato") : "Novo paciente",
+  };
+}
+/** Plano 1000b · CB-150: a busca roda com 2 caracteres de qualquer tipo («quatro números» não era a regra). */
+export const LIMITE_DIAS_TXT = "A agenda abre até 180 dias à frente.";
+export const TEXTO_BUSCA_CURTA = "Digite pelo menos 2 letras ou números.";
+export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = null, base = null, aoMudar = null, soEscolher = false, config = null, avisar = null, aoBloquear = null, busca = "" } = {}) {
   const { ui, api } = ctx;
   if (!ctx.pode("atendente")) {
     // CA-005: quem só vê a agenda (papel leitura) recebe a explicação — antes o atalho «Agenda» não abria nada nem dizia por quê
@@ -1080,9 +1164,10 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   let cfgAgenda = config && typeof config === "object" ? config : null;
   const preferido = dia && hora ? { dia, hora } : null;
 
-  const campoBusca = ui.campo({ rotulo: "Buscar oportunidade aberta", nome: "busca", tipo: "busca", placeholder: "Nome ou telefone", ajuda: "A consulta fica vinculada à oportunidade escolhida. Setas escolhem na lista." });
+  const P = palavrasAgenda(ctx.vocab);   // plano 1000b · CB-189: vocabulário da empresa
+  const campoBusca = ui.campo({ rotulo: `Buscar ${P.neg} ${P.aberta}`, nome: "busca", tipo: "busca", placeholder: "Nome ou telefone", ajuda: `A consulta fica vinculada ${P.a === "a" ? "à" : "ao"} ${P.neg} ${P.escolhida}. Setas escolhem na lista.` });
   const inputBusca = campoBusca.querySelector("input");
-  const resultados = h("div", { class: "agenda-resultados", role: "listbox", id: `ag-res-${uid}`, "aria-label": "Oportunidades encontradas" });
+  const resultados = h("div", { class: "agenda-resultados", role: "listbox", id: `ag-res-${uid}`, "aria-label": `${P.Negs} encontrad${P.a}s` });
   // CA-282: o campo controla a lista (combobox): setas movem a seleção (aria-activedescendant) e Enter escolhe
   inputBusca.setAttribute("role", "combobox");
   inputBusca.setAttribute("aria-controls", resultados.getAttribute("id"));
@@ -1090,8 +1175,9 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   inputBusca.setAttribute("aria-expanded", "false");
   // CA-170: paciente novo no balcão — cria a oportunidade sem sair da janela (a mesma gaveta do CRM) e ela já fica escolhida
   const btNovo = typeof ctx.novoNegocio === "function" && !soEscolher
-    ? h("button", { type: "button", class: "bt bt-fant bt-p ag-novo-paciente", on: { click: () => novoPaciente() } }, ui.icone("mais"), "Novo paciente") : null;
-  const secBusca = h("section", { class: "agenda-busca" }, campoBusca, resultados, btNovo);
+    ? h("button", { type: "button", class: "bt bt-fant bt-p ag-novo-paciente", on: { click: () => novoPaciente() } }, ui.icone("mais"), P.novoContato) : null;
+  const maisRes = h("div", { class: "agenda-res-mais-caixa" });     // plano 1000b · CB-170: «Ver mais» da busca
+  const secBusca = h("section", { class: "agenda-busca" }, campoBusca, resultados, maisRes, btNovo);
   // plano 1000 · CA-215: o admin que tocou num horário vazio da grade pode FECHAR o horário em vez de marcar (sem ir às Configurações)
   let fecharJanela = null;
   const btBloquear = typeof aoBloquear === "function" && dia && hora && !negocio && !soEscolher && ctx.pode("admin")
@@ -1099,13 +1185,14 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
       ui.icone("fechar"), `Bloquear este horário (${hora})`)
     : null;
   const escolhido = h("div", { class: "agenda-escolhido-l" });
-  const servicoEl = ui.campo({ rotulo: "Serviço", nome: "servico", valor: sel && sel.servico || "", max: 80, placeholder: "Ex.: avaliação, limpeza", ajuda: "Define a duração; vazio = o da oportunidade." });
+  const servicoEl = ui.campo({ rotulo: "Serviço", nome: "servico", valor: sel && sel.servico || "", max: 80, placeholder: "Ex.: avaliação, limpeza", ajuda: `Define a duração; vazio = o d${P.a} ${P.neg}.` });
   const servInput = servicoEl.querySelector("input");
   // CA-169: os serviços com duração própria (configuração da agenda) aparecem como sugestão; nome diferente avisa que vale a duração padrão
   const listaServ = h("datalist", { id: `ag-serv-${uid}` });
   servInput.setAttribute("list", listaServ.getAttribute("id"));
   const avisoServ = h("p", { class: "campo-ajuda ag-serv-aviso", "aria-live": "polite" });
   const outraData = ui.campo({ rotulo: "Ver a partir de", nome: "data", tipo: "data", valor: aPartirInicial });
+  outraData.querySelector("input").setAttribute("min", hoje);   // plano 1000b · CB-169: o seletor não oferece dia passado
   const atalhos = h("div", { class: "ag-atalhos" });
   const diasEl = h("div", { class: "ag-dias", role: "radiogroup", "aria-label": "Dia" });
   const horasEl = h("div", { class: "ag-horas", role: "radiogroup", "aria-label": "Horário" });
@@ -1141,7 +1228,8 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   }
   function pintarServicos() {
     ui.limpar(listaServ);
-    for (const nome of Object.keys((cfgAgenda && cfgAgenda.duracoes) || {})) listaServ.appendChild(h("option", { value: nome }));
+    // plano 1000b · CB-185: a sugestão mostra a duração («Avaliação · 30 min»); o valor continua só o nome
+    for (const [nome, min] of Object.entries((cfgAgenda && cfgAgenda.duracoes) || {})) listaServ.appendChild(h("option", { value: nome, label: Number(min) > 0 ? `${nome} · ${min} min` : nome }));
     avisarServico();
   }
   pintarServicos();
@@ -1153,7 +1241,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
 
   /* ---------- CA-171: «Confirmar» só vale com a oportunidade e o horário ---------- */
   function atualizarConfirmar() {
-    const falta = !sel ? "Escolha a oportunidade." : !slotSel ? "Escolha um dia e um horário livre." : "";
+    const falta = !sel ? `Escolha ${P.a} ${P.neg}.` : !slotSel ? "Escolha um dia e um horário livre." : "";
     faltaEl.textContent = falta;
     if (!btConf) return;
     btConf.setAttribute("aria-disabled", String(!!falta));
@@ -1213,7 +1301,9 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
       const on = slotSel && s.inicio === slotSel.inicio;
       const vagas = (Number(s.capacidade) || 1) - (Number(s.ocupados) || 0);
       horasEl.appendChild(h("button", { type: "button", role: "radio", class: "ag-hora-pill dado", "aria-checked": String(!!on), tabindex: on ? "0" : "-1", title: `${vagas} vaga${vagas === 1 ? "" : "s"}`,
-        "aria-label": `${horaTxt(s.min)}, ${vagas} vaga${vagas === 1 ? "" : "s"}`, on: { click: () => selecionarSlot(s) } }, horaTxt(s.min)));
+        "aria-label": `${horaTxt(s.min)}, ${vagas} vaga${vagas === 1 ? "" : "s"}`, on: { click: () => selecionarSlot(s) } }, horaTxt(s.min),
+        // plano 1000b · CB-184: horário que aceita mais de um mostra as vagas na pílula (no toque ninguém via o title)
+        (Number(s.capacidade) || 1) > 1 ? h("small", { class: "ag-hora-vagas", "aria-hidden": "true" }, `${vagas} ${vagas === 1 ? "vaga" : "vagas"}`) : null));
     }
   }
   const argsLivres = de => ({ p_a_partir: de, p_dias: 14, p_servico: servicoValor() || null, p_negocio: sel ? sel.id : null });
@@ -1248,7 +1338,9 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
       if (minha !== seqH) return;
       info.textContent = "";
       ui.limpar(horasEl);
-      horasEl.appendChild(h("p", { class: "agenda-erro" }, api.mensagemErro(e)));
+      // plano 1000b · CB-167: erro ao buscar os horários tem «Tentar de novo» (antes era trocar a data ou fechar a janela)
+      horasEl.appendChild(h("div", { class: "agenda-erro ag-horas-erro", role: "alert" }, h("p", null, api.mensagemErro(e)),
+        h("button", { type: "button", class: "bt bt-sec bt-p ag-tentar-horarios", on: { click: () => carregarHorarios() } }, "Tentar de novo")));
     }
   }
   /** CA-173: mais 14 dias depois do último pedido, somados ao fim da lista (retornos de 30/60 dias sem trocar a data à mão). */
@@ -1265,16 +1357,25 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
       const novos = agruparLivres(r.horarios).filter(g => !grupos.some(x => x.dia === g.dia));
       grupos = grupos.concat(novos);
       maisEl.hidden = janelaDias >= 180;
-      if (!novos.length) { info.textContent = `Nenhum horário livre até ${ui.dataBR ? ui.dataBR(diaISO(janelaIni, janelaDias - 1)) : diaISO(janelaIni, janelaDias - 1)}.`; return; }
+      // plano 1000b · CB-168: o botão some no limite — o aviso diz por quê
+      const limite = janelaDias >= 180 ? ` ${LIMITE_DIAS_TXT}` : "";
+      if (!novos.length) { info.textContent = `Nenhum horário livre até ${ui.dataBR ? ui.dataBR(diaISO(janelaIni, janelaDias - 1)) : diaISO(janelaIni, janelaDias - 1)}.${limite}`; return; }
       if (slotSel) { desenharAtalhos(); desenharDias(); } else selecionarSlot(primeiroLivre(grupos));
       const primeiroNovo = diasEl.querySelector(`[data-dia="${novos[0].dia}"]`);
       if (primeiroNovo && primeiroNovo.scrollIntoView) try { primeiroNovo.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch { /* ok */ }
-      info.textContent = `${novos.length} ${novos.length === 1 ? "dia novo" : "dias novos"} com horário livre.`;
+      info.textContent = `${novos.length} ${novos.length === 1 ? "dia novo" : "dias novos"} com horário livre.${limite}`;
     } catch (e) { if (minha === seqH) ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
     finally { maisEl.disabled = false; }
   }
   servInput.addEventListener("change", () => { if (sel) carregarHorarios(); });
-  outraData.querySelector("input").addEventListener("change", () => { if (sel) { slotSel = null; carregarHorarios(); } });
+  outraData.querySelector("input").addEventListener("change", () => {
+    // plano 1000b · CB-169: data passada (digitada) vira hoje, com o aviso — o servidor só tem horário de hoje em diante
+    const campo = outraData.querySelector("input");
+    let aviso = "";
+    if (campo.value && campo.value < hoje) { campo.value = hoje; aviso = "Essa data já passou: mostrando a partir de hoje."; }
+    if (sel) { slotSel = null; carregarHorarios().then(() => { if (aviso && !info.textContent.startsWith(aviso)) info.textContent = `${aviso} ${info.textContent}`.trim(); }); }
+    else if (aviso) info.textContent = aviso;
+  });
 
   /* ---------- busca enquanto digita ---------- */
   /** A ficha diz em que etapa a oportunidade está AGORA (o «Desfazer» devolve o cartão a ela) e, na busca, traz o serviço e a consulta atual. */
@@ -1326,22 +1427,34 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   async function buscarAgora() {
     const q = inputBusca.value.trim();
     const minha = ++seqB;
-    ui.limpar(resultados);
+    ui.limpar(resultados); ui.limpar(maisRes);
     achados = []; ativo = -1; inputBusca.removeAttribute("aria-activedescendant"); inputBusca.setAttribute("aria-expanded", "false");
-    if (q.length < 2) { if (q.length) resultados.appendChild(h("p", { class: "campo-ajuda" }, "Digite pelo menos duas letras ou quatro números.")); return; }
+    if (q.length < 2) { if (q.length) resultados.appendChild(h("p", { class: "campo-ajuda" }, TEXTO_BUSCA_CURTA)); return; }
     resultados.setAttribute("aria-busy", "true");
     try {
       const itens = await procurarNegocios(ctx, q);
       if (minha !== seqB) return;
       ui.limpar(resultados);
-      if (!itens.length) { resultados.appendChild(h("p", { class: "campo-ajuda" }, btNovo ? "Nenhuma oportunidade aberta com esse nome. Toque em «Novo paciente» para cadastrar." : "Nenhuma oportunidade aberta com esse nome. Crie ou atualize pelo CRM.")); return; }
-      achados = itens;
-      itens.forEach((item, i) => {
-        resultados.appendChild(h("button", { type: "button", class: "agenda-resultado", role: "option", id: `ag-res-${uid}-${i}`, tabindex: "-1", "aria-selected": "false", on: { click: () => escolher(item) } },
-          h("b", null, item.titulo || item.contato_nome || "Negócio"),
-          h("small", null, [item.contato_nome && item.contato_nome !== item.titulo ? item.contato_nome : null, item.estagio_nome].filter(Boolean).join(" · "))));
-      });
-      resultados.dataset.n = String(itens.length);
+      if (!itens.length) { resultados.appendChild(h("p", { class: "campo-ajuda" }, btNovo ? `${P.nenhuma} ${P.neg} ${P.aberta} com esse nome. Toque em «${P.novoContato}» para cadastrar.` : `${P.nenhuma} ${P.neg} ${P.aberta} com esse nome. Crie ou atualize pelo CRM.`)); return; }
+      const opcao = (item, i) => h("button", { type: "button", class: "agenda-resultado", role: "option", id: `ag-res-${uid}-${i}`, tabindex: "-1", "aria-selected": "false", on: { click: () => escolher(item) } },
+        h("b", null, item.titulo || item.contato_nome || "Negócio"),
+        h("small", null, [item.contato_nome && item.contato_nome !== item.titulo ? item.contato_nome : null, item.estagio_nome].filter(Boolean).join(" · ")));
+      // plano 1000b · CB-170: 8 à vista e «Ver mais» com o resto (as setas andam só nas que aparecem: achados = o que está na lista)
+      achados = itens.slice(0, 8);
+      achados.forEach((item, i) => resultados.appendChild(opcao(item, i)));
+      if (itens.length > achados.length) {
+        const verMais = h("button", { type: "button", class: "bt bt-fant bt-p agenda-res-mais", on: { click: () => {
+          const ja = achados.length;
+          achados = itens.slice();
+          verMais.remove();
+          for (let i = ja; i < itens.length; i++) resultados.appendChild(opcao(itens[i], i));
+          resultados.dataset.n = String(itens.length);
+          marcarAtivo(ja);
+          try { inputBusca.focus(); } catch { /* ok */ }      // o combobox continua no campo; a 1ª nova fica escolhida (aria-activedescendant)
+        } } }, `Ver mais ${itens.length - achados.length}`);
+        maisRes.appendChild(verMais);   // fora do listbox (só opções lá dentro)
+      }
+      resultados.dataset.n = String(achados.length);
       inputBusca.setAttribute("aria-expanded", "true");
     } catch (e) { if (minha === seqB) { ui.limpar(resultados); resultados.appendChild(h("p", { class: "agenda-erro" }, api.mensagemErro(e))); } }
     finally { if (minha === seqB) resultados.removeAttribute("aria-busy"); }
@@ -1367,13 +1480,18 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   const titulo = soEscolher ? "Escolher horário da consulta" : sel && sel.consultaAtual ? "Remarcar consulta" : "Marcar consulta";
   const modal = ui.modal({
     titulo, corpo: formulario, largura: "m",
-    descricao: soEscolher ? "Escolha o dia e o horário. A consulta é gravada junto com a oportunidade." : "Escolha o dia e o horário. A disponibilidade é validada de novo ao salvar.",
+    descricao: soEscolher ? `Escolha o dia e o horário. A consulta é gravada junto com ${P.a} ${P.neg}.` : "Escolha o dia e o horário. A disponibilidade é validada de novo ao salvar.",
     aoAbrir: a => {
       fecharJanela = a && typeof a.fechar === "function" ? v => a.fechar(v) : null;
       btConf = a && a.el ? a.el.querySelector('.modal-rod [data-tipo="primario"]') : null;
       if (btConf) btConf.classList.add("ag-confirmar");
       atualizarConfirmar();
-      if (!sel) return;
+      if (!sel) {
+        // plano 1000b · CB-124: vindo da Conversa sem negócio único, a busca já começa com o nome do contato (a pessoa só escolhe)
+        const q = typeof busca === "string" ? busca.trim().slice(0, 80) : "";
+        if (q && !soEscolher) { inputBusca.value = q; buscarAgora().then(() => { if (achados.length) marcarAtivo(0); }); }
+        return;
+      }
       carregarHorarios({ inicial: true });
       if (!sel.antes) lerFicha();        // quem abriu a janela não disse a etapa: lê agora, enquanto a pessoa escolhe o horário
       // oportunidade já escolhida: o foco vai direto para «Confirmar consulta» (Enter = o 2º toque)
@@ -1382,7 +1500,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
     acoes: [
       { rotulo: "Cancelar", tipo: "neutro", valor: false },
       { rotulo: soEscolher ? "Usar este horário" : "Confirmar consulta", tipo: "primario", fn: async m => {
-        if (!sel) { m.erro("Escolha uma oportunidade aberta para continuar."); return false; }
+        if (!sel) { m.erro(`Escolha ${P.uma} ${P.neg} ${P.aberta} para continuar.`); return false; }
         if (!slotSel) { m.erro("Escolha um dia e um horário livre."); return false; }
         if (soEscolher) return { ok: true, consulta_em: slotSel.inicio, servico: servicoValor() || null };
         try {
@@ -1402,7 +1520,7 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
           m.erro(e && e.ambigua ? "Não foi possível confirmar se foi salvo. Toque em «Confirmar consulta» de novo: é seguro, não marca duas vezes."
             : encaixar ? "Esse horário acabou de lotar. Escolha outro ou marque «Encaixar mesmo assim»."
               : codigo === "horario_ocupado" ? "Esse horário acabou de ser ocupado. Escolha outro (a lista foi atualizada)."
-                : codigo === "ja_agendada" ? "Esta oportunidade já tem uma consulta futura. Atualize a agenda antes de tentar novamente."
+                : codigo === "ja_agendada" ? `${P.esta} ${P.neg} já tem uma consulta futura. Atualize a agenda antes de tentar novamente.`
                   : api.mensagemErro(e));
           if (encaixar) { encaixeEl.hidden = false; return false; }            // o horário continua escolhido: a pessoa decide encaixar
           if (!(e && e.ambigua)) { slotSel = null; carregarHorarios(); }      // recusa: traz os horários de novo; dúvida de conexão: o horário escolhido continua valendo
@@ -1426,7 +1544,8 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   ui.acaoComDesfazer({
     texto: `${resultado.remarcada ? "Remarcada" : "Marcada"} para ${rotulo}`,
     // CA-176: «Avisar paciente» deixa a confirmação pronta na conversa (rascunho; nada sai sozinho)
-    acao: typeof avisar === "function" ? { rotulo: "Avisar paciente", fn: () => avisar(consultaNova, "confirmacao") } : undefined,
+    // plano 1000b · CB-123: o botão ESCREVE a confirmação (no campo da conversa, sem enviar) — o rótulo diz isso
+    acao: typeof avisar === "function" ? { rotulo: rotuloAvisar("confirmacao", ctx.vocab), fn: () => avisar(consultaNova, "confirmacao") } : undefined,
     reverter: async () => {
       // remarcação volta ao horário (e ao serviço) anterior, como ENCAIXE (voltarAoHorario); consulta nova some
       if (anterior) { const av = avisoVoltaEncaixe(await voltarAoHorario(api, marcada.id, anterior, marcada.servicoAntes || servicoMarcado, encaixeAntes)); if (av) ui.toast(av, { tipo: "info" }); }
@@ -1440,6 +1559,14 @@ export async function marcarConsulta(ctx, { negocio = null, dia = null, hora = n
   return resultado;
 }
 
+/** Plano 1000b · CB-123: o rótulo da ação do aviso depois de marcar/desmarcar — o texto vai para o campo da conversa e a pessoa envia:
+    «Escrever confirmação»; desmarcação: «Escrever aviso ao paciente» (cliente/contato pela vertical; sem vocabulário, paciente). */
+export function rotuloAvisar(tipo, vocab = null) {
+  if (tipo === "confirmacao") return "Escrever confirmação";
+  const quem = vocab && typeof vocab.min === "function" ? vocab.min("contato") : "paciente";
+  const art = vocab && typeof vocab.art === "function" ? vocab.art("contato") : "o";
+  return `Escrever aviso ${art === "a" ? "à" : "ao"} ${quem}`;
+}
 /** CA-177: motivos padronizados de desmarcação (viram o começo do p_motivo; o detalhe livre continua opcional). */
 export const MOTIVOS_DESMARCAR = Object.freeze(["Paciente cancelou", "Vai remarcar", "Erro de marcação", "Clínica cancelou"]);
 /** O p_motivo: «Paciente cancelou · viajou» (até 200 caracteres); nada escolhido nem escrito → null. */
@@ -1449,7 +1576,7 @@ export function motivoDesmarcar(chip, texto) {
 }
 
 /** Desmarcar (motivo em chips + detalhe opcional) com «Desfazer»: marcar de volta o mesmo horário. Com `avisar`, «Avisar paciente» (CA-178). */
-export async function desmarcarConsulta(ctx, c, { aoMudar = null, avisar = null } = {}) {
+export async function desmarcarConsulta(ctx, c, { aoMudar = null, avisar = null, aoFaltou = null } = {}) {
   if (!ctx.pode("atendente")) return null;
   const { ui, api } = ctx;
   const h = ui.h;
@@ -1464,9 +1591,16 @@ export async function desmarcarConsulta(ctx, c, { aoMudar = null, avisar = null 
   }
   radiosComSetas(chips);
   const detalhe = ui.campo({ rotulo: "Detalhe (opcional)", nome: "motivo", tipo: "textarea", max: 160, linhas: 2 });
+  // plano 1000b · CB-174: consulta que já passou — o certo costuma ser registrar a falta (desmarcar apaga o histórico do horário)
+  let fecharDesmarcar = null;
+  const passou = Date.parse(c && c.inicio) < Date.now();
+  const avisoPassou = passou ? h("div", { class: "aviso aviso-aten ag-desmarcar-passou", role: "note" }, ui.icone("info"),
+    h("span", null, "Essa consulta já passou: para registrar falta use «Faltou»."),
+    typeof aoFaltou === "function" ? h("button", { type: "button", class: "bt bt-sec bt-p ag-desmarcar-faltou", on: { click: () => { if (fecharDesmarcar) fecharDesmarcar(null); aoFaltou(c); } } }, "Marcar «Faltou»") : null) : null;
   const r = await ui.modal({
     titulo: "Desmarcar consulta", largura: "p",
-    corpo: h("div", { class: "pilha" }, h("p", null, `${c.nome || c.titulo || "Esta consulta"} · ${ui.dataHoraBR(c.inicio)}`),
+    aoAbrir: avisoPassou ? a => { fecharDesmarcar = a && typeof a.fechar === "function" ? v => a.fechar(v) : null; } : undefined,
+    corpo: h("div", { class: "pilha" }, h("p", null, `${c.nome || c.titulo || "Esta consulta"} · ${ui.dataHoraBR(c.inicio)}`), avisoPassou,
       h("div", { class: "pilha-p" }, h("p", { class: "ag-motivos-rot" }, "Motivo"), chips), detalhe),
     acoes: [
       { rotulo: "Voltar", tipo: "neutro", valor: false },
@@ -1479,7 +1613,7 @@ export async function desmarcarConsulta(ctx, c, { aoMudar = null, avisar = null 
   if (aoMudar) try { aoMudar(r); } catch (e) { console.error(e); }
   ui.acaoComDesfazer({
     texto: `Consulta de ${ui.dataHoraBR(c.inicio)} desmarcada`,
-    acao: typeof avisar === "function" && c.contato_id != null ? { rotulo: "Avisar paciente", fn: () => avisar(c, "desmarcacao") } : undefined,
+    acao: typeof avisar === "function" && c.contato_id != null ? { rotulo: rotuloAvisar("desmarcacao", ctx.vocab), fn: () => avisar(c, "desmarcacao") } : undefined,   // plano 1000b · CB-123
     reverter: async () => {
       // a consulta estava numa etapa que não é «Agendada» (e por isso o cartão não saiu dela ao desmarcar)? marcar de volta o levaria para «Agendada»:
       // lê a etapa de agora para devolvê-lo a ela depois
@@ -1530,6 +1664,7 @@ export async function montar(ctx) {
   try { extras = normalizarExtrasAgenda(JSON.parse(localStorage.getItem(chavePreferencias) || "{}")); } catch { /* padrão */ }
   let filtroProf = extras.prof;            // CA-187: «todos», «eu» ou o id de um profissional
   let mostrarFechados = extras.fechados === "mostrar";   // CA-186
+  let atalhosLigados = extras.atalhos !== "desligados";  // plano 1000b · CB-151: T, D, S, M, L, [ e ] podem ser desligados na paleta
   const eu = ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id != null ? String(ctx.sessao.conta.id) : null;
   let atual = null, chaveAtual = "";
   let sequencia = 0;
@@ -1552,6 +1687,7 @@ export async function montar(ctx) {
   const idTela = String(++seqTela);    // CA-200: ids únicos das abas da faixa e do painel do dia
   let cabecalhoFora = false, barraAtual = null, observadorCab = null;   // CA-204: as setas do cabeçalho saíram da tela? (a barra fixa do celular aparece)
   let ordemServicos = [];           // CA-266: os serviços da configuração, na ordem (cada um com a sua cor)
+  let ordemProfAtual = [];          // plano 1000b · CB-175: os profissionais do período, na ordem (cada um com a sua cor)
   let nomesAtuais = {};             // E2: dono_id → nome (dono_nome do servidor; a base do CRM só se faltar)
   let consultaSelecionada = null, desregistrarPresenca = null;   // a consulta do último detalhe aberto (comando «Presença da consulta» da paleta)
   let G = null;                     // graficos.js (números que contam): opcional, a tela não espera por ele
@@ -1585,7 +1721,7 @@ export async function montar(ctx) {
   }
 
   function gravarPreferencias() {
-    try { localStorage.setItem(chavePreferencias, JSON.stringify({ data, modo, agrupar, cor: corPor, em: ui.hojeSP(), prof: filtroProf, fechados: mostrarFechados ? "mostrar" : "ocultar" })); } catch { /* preferências não bloqueiam a Agenda */ }
+    try { localStorage.setItem(chavePreferencias, JSON.stringify({ data, modo, agrupar, cor: corPor, em: ui.hojeSP(), prof: filtroProf, fechados: mostrarFechados ? "mostrar" : "ocultar", atalhos: atalhosLigados ? "ligados" : "desligados" })); } catch { /* preferências não bloqueiam a Agenda */ }
   }
 
   /** O que o servidor precisa devolver: a semana (segunda a domingo) na semana e no celular; o dia só no desktop em «Dia»;
@@ -1659,9 +1795,9 @@ export async function montar(ctx) {
     ctl.carimbo.hidden = false;
     ctl.carimbo.classList.toggle("velha", Date.now() - ultimaLeitura > 5 * 60_000);
   }
-  const offline = () => typeof navigator !== "undefined" && navigator.onLine === false;
+  const offline = () => estaOffline(ctx.rede);   // plano 1000b · CB-166: o estado da rede do app primeiro (Wi-Fi sem internet), o navigator de reserva
   function montarCabecalho() {
-    if (!ctl.anterior) criarControles();
+    if (!ctl.anterior) { criarControles(); aplicarAtalhos(); }   // plano 1000b · CB-151: atalhos e comandos conforme a preferência
     const passo = nomeDoPasso();
     const ehLista = modo === "lista";
     ctl.anterior.setAttribute("aria-label", ehLista ? "7 dias antes" : passo === "dia" ? "Dia anterior" : passo === "mes" ? "Mês anterior" : "Semana anterior");
@@ -1671,7 +1807,7 @@ export async function montar(ctx) {
     const temHoje = movel && modo !== "lista" ? data === hojeAgora : periodoTemHoje(iv.de, iv.dias, hojeAgora);
     if (temHoje) ctl.hoje.setAttribute("aria-current", "date"); else ctl.hoje.removeAttribute("aria-current");
     ctl.hoje.classList.toggle("agenda-hoje-atual", temHoje);
-    ctl.hoje.setAttribute("title", temHoje ? "Você já está vendo hoje" : "Voltar para hoje (T)");
+    ctl.hoje.setAttribute("title", temHoje ? "Você já está vendo hoje" : atalhosLigados ? "Voltar para hoje (T)" : "Voltar para hoje");
     ctl.lista.setAttribute("aria-pressed", String(ehLista));
     // CA-263: sem internet, «Marcar consulta» avisa antes de abrir a janela (os horários vêm do servidor)
     if (ctl.marcar) {
@@ -1739,6 +1875,7 @@ export async function montar(ctx) {
   }
 
   function aoTeclaAgenda(ev) {
+    if (!atalhosLigados) return;      // plano 1000b · CB-151 (WCAG 2.1.4): leitor de tela em modo navegação e comando de voz não trocam a tela sem querer
     const alvo = ev.target;
     const editando = alvo && (alvo.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(alvo.tagName) || alvo.closest?.('[role="dialog"],dialog'));
     if (editando || document.querySelector("dialog[open]")) return;
@@ -1791,7 +1928,7 @@ export async function montar(ctx) {
       if (!vivo || minha !== sequencia) return false;
       if (silencioso && atual && chaveAtual === chave) {
         // «sem conexão» só com evidência de rede: comCache vem em QUALQUER erro quando havia cópia guardada (até HTTP 400)
-        const semRede = typeof navigator !== "undefined" && navigator.onLine === false;
+        const semRede = offline();   // plano 1000b · CB-166
         mensagemAtualizacao = semRede ? "Sem conexão · mostrando a última agenda guardada." : "Não foi possível atualizar · a agenda exibida foi mantida.";
         montarCabecalho();
         return false;
@@ -1843,7 +1980,8 @@ export async function montar(ctx) {
     const y = typeof scrollY === "number" ? scrollY : null;
     desenharAgora();
     if (y !== null && typeof scrollTo === "function" && Math.abs(scrollY - y) > 1) try { scrollTo({ top: y }); } catch { /* ok */ }
-    const alvo = foco ? conteudo.querySelector(foco) : null;
+    // plano 1000b · CB-197: «Mostrar todas» some depois do clique — o foco vai para o 1º chip da legenda (antes caía no body)
+    const alvo = foco ? (conteudo.querySelector(foco) || (foco === ".ag-leg-limpar" ? conteudo.querySelector(".ag-leg-chip") : null)) : null;
     if (alvo) try { alvo.focus({ preventScroll: true }); } catch { alvo.focus(); }
   }
   function desenharAgora() {
@@ -1856,6 +1994,7 @@ export async function montar(ctx) {
     const bloqueios = Array.isArray(atual.bloqueios) ? atual.bloqueios : [];
     const config = atual.config || {};
     ordemServicos = config.duracoes && typeof config.duracoes === "object" ? Object.keys(config.duracoes) : [];   // CA-266
+    ordemProfAtual = ordemProfissionais(todas, nomesDonos ? Object.keys(nomesDonos) : null);   // plano 1000b · CB-175 (revisão: pela equipe)
     const iv = intervalo();
     const carregados = Array.from({ length: iv.dias }, (_, i) => diaISO(iv.de, i));
     const hoje = ui.hojeSP();
@@ -1899,7 +2038,8 @@ export async function montar(ctx) {
     // E2: os nomes vêm nas linhas (dono_nome); a base do CRM só é lida se alguma linha não trouxer o campo (servidor antigo)
     const precisaNomes = faltamNomes(todas);
     nomesAtuais = { ...(nomesDonos || {}), ...nomesDasConsultas(todas) };
-    if (precisaNomes && !nomesDonos) carregarNomes().then(() => { if (vivo && atual) desenhar(); });   // os nomes chegam uma vez; a legenda redesenha com eles
+    // revisão 1000b · CB-175: com «cor por profissional», a equipe (base) é lida uma vez — é ela que fixa a cor de cada um
+    if ((precisaNomes || corPor === "profissional") && !nomesDonos) carregarNomes().then(() => { if (vivo && atual) desenhar(); });   // os nomes chegam uma vez; a legenda redesenha com eles
     const ocup = ocupacaoDoPeriodo(visiveis, mostrados, config, bloqueios);
     // CA-187: «Profissional» — todos, a minha agenda ou a de cada um (lembrado nas preferências)
     let filtroEl = null;
@@ -1909,11 +2049,12 @@ export async function montar(ctx) {
       const nomeDe = id => nomesAtuais[id] || "Profissional";
       const opcoes = [["todos", "Todos os profissionais"], eu ? ["eu", "Minha agenda"] : null,
         ...ids.filter(id => id !== eu).sort((a, b) => nomeDe(a).localeCompare(nomeDe(b), "pt-BR")).map(id => [id, nomeDe(id)])].filter(Boolean);
-      const sel = h("select", { class: "agenda-filtro-prof", "aria-label": "Mostrar a agenda de" },
+      // plano 1000b · CB-173: rótulo visível «Profissional» (o nome acessível é o mesmo texto que se vê)
+      const sel = h("select", { class: "agenda-filtro-prof", id: `ag-prof-${idTela}` },
         opcoes.map(([valor, rotulo]) => h("option", { value: valor, selected: valor === filtroProf }, rotulo)));
       sel.value = filtroProf;
       sel.addEventListener("change", () => { filtroProf = sel.value || "todos"; legendaAtivos = new Set(); gravarPreferencias(); desenhar(); anunciarPeriodo(); });
-      filtroEl = sel;
+      filtroEl = h("label", { class: "agenda-filtro-prof-rot", for: `ag-prof-${idTela}` }, h("span", null, "Profissional"), sel);
     }
     const nOcultos = !movel && modo === "semana" ? fechadosVazios.length : 0;
     const fechadosBt = nOcultos && nOcultos < carregados.length
@@ -1948,12 +2089,14 @@ export async function montar(ctx) {
       h("div", { class: "agenda-resumo-num" },
         h("span", null, h("b", { class: "dado", dataset: { valor: String(nDentro) } }, ui.num(nDentro)), ` ${nDentro === 1 ? "consulta" : "consultas"}`),
         h("span", null, h("b", { class: "dado", dataset: { valor: String(nBloq) } }, ui.num(nBloq)), ` ${nBloq === 1 ? "bloqueio" : "bloqueios"}`),
-        ocup === null ? null : h("span", { class: "agenda-resumo-ocup", title: "Horas marcadas sobre o expediente dos dias mostrados" },
-          anelOcupacao(h, { pct: ocup }, { tamanho: 22 }), h("b", { class: "dado" }, `${Math.round(ocup * 100)}%`), " ocupado")),
+        // plano 1000b · CB-192: com o filtro de profissional a conta é só da agenda filtrada — o rótulo diz isso (a clínica pode estar cheia)
+        ocup === null ? null : h("span", { class: "agenda-resumo-ocup", title: filtroProf === "todos" ? "Horas marcadas sobre o expediente dos dias mostrados"
+          : `Horas marcadas ${filtroProf === "eu" ? "da sua agenda" : `da agenda de ${nomesAtuais[filtroProf] || "quem foi escolhido"}`} sobre o expediente dos dias mostrados (as dos outros profissionais não entram)` },
+          anelOcupacao(h, { pct: ocup }, { tamanho: 22 }), h("b", { class: "dado" }, `${Math.round(ocup * 100)}%`), filtroProf === "todos" ? " ocupado" : filtroProf === "eu" ? " da sua agenda" : " desta agenda")),
       caixaProxima, marcarVazio);
 
     // legenda das cores: por serviço ou por profissional (a troca só aparece quando há responsáveis nas consultas)
-    const itensLegenda = legendaDe(visiveis, { por: corPor, nomes: nomesAtuais, ordem: ordemServicos });
+    const itensLegenda = legendaDe(visiveis, { por: corPor, nomes: nomesAtuais, ordem: ordemServicos, ordemProf: ordemProfAtual });
     const legenda = !emLista && (itensLegenda.length >= 2 || legendaAtivos.size) ? h("div", { class: "ag-legenda-linha" },
       temResponsaveis ? ui.segmentado({ opcoes: [{ valor: "servico", rotulo: "Por serviço" }, { valor: "profissional", rotulo: "Por profissional" }], valor: corPor, tipo: "filtro", rotulo: "Cor dos blocos", classe: "ag-legenda-por",
         aoMudar: v => { corPor = v; legendaAtivos = new Set(); gravarPreferencias(); desenhar(); } }) : null,
@@ -2079,7 +2222,9 @@ export async function montar(ctx) {
       el.appendChild(h("button", { type: "button", role: "tab", class: ["ag-faixa-d", sel && "sel", iso === hoje && "hoje", oc.fechado && "fechado"], "aria-selected": String(sel), tabindex: sel ? "0" : "-1",
         id: `ag-aba-${idTela}-${iso}`, "aria-controls": `ag-dia-painel-${idTela}`,
         "aria-label": `${nomeDia(iso, true)}, ${n} ${n === 1 ? "consulta" : "consultas"}${txtOc ? `, ${txtOc}` : ""}`, dataset: { iso },
-        on: { click: () => { data = iso; gravarPreferencias(); montarCabecalho(); desenhar(); } } },
+        on: { click: () => { const mudou = data !== iso; data = iso; gravarPreferencias(); montarCabecalho(); desenhar();
+          // plano 1000b · CB-172: trocar o dia na faixa redesenha sem dizer nada — o status curto diz o dia e quantas consultas
+          if (mudou) anunciar(`${nomeDia(iso, true)}: ${n} ${n === 1 ? "consulta" : "consultas"}`); } } },
         h("span", { class: "ag-faixa-sem" }, semanaCurta(iso)),
         h("span", { class: "ag-faixa-disco" }, anelOcupacao(h, oc, { tamanho: 36 }), h("b", { class: "dado ag-faixa-num" }, diaDoMes(iso))),
         h("i", { class: ["ag-faixa-n", n && "tem"], "aria-hidden": "true" }, n ? String(n) : "")));
@@ -2101,7 +2246,8 @@ export async function montar(ctx) {
   function visaoDoDiaMovel(iso, consultas, bloqueios, config, eixo, hoje) {
     const itens = consultasDoDia(consultas, iso), travas = bloqueiosDoDia(bloqueios, iso);
     if (!itens.length && !travas.length) {
-      return ctx.pode("atendente")
+      // plano 1000b · CB-148: dia que já passou não oferece «Marcar» (a janela abria a partir de hoje e a pessoa achava que marcou ontem)
+      return ctx.pode("atendente") && !(hoje && iso < hoje)
         ? h("button", { type: "button", class: "ag-livre", on: { click: () => abrirAgendamento(null, { dia: iso }) } }, h("span", null, "Livre"), h("span", { class: "ag-livre-acao" }, ui.icone("mais"), "Marcar"))
         : h("p", { class: "ag-livre ag-livre-leitura" }, "Livre");
     }
@@ -2139,7 +2285,7 @@ export async function montar(ctx) {
     return h("div", { class: ["ag-dia-cab", ehHoje && "hoje"], "aria-current": ehHoje ? "date" : null },
       dataEl,
       h("span", { class: "ag-dia-total", title: `${c.consultas.length} ${c.consultas.length === 1 ? "consulta" : "consultas"}` }, c.consultas.length ? ui.num(c.consultas.length) : ""),
-      ctx.pode("atendente") ? h("button", { type: "button", class: "bt-icone ag-dia-mais", "aria-label": `Marcar consulta em ${nomeDia(c.iso, true)}`, title: "Marcar consulta neste dia",
+      ctx.pode("atendente") && !(c.iso < ui.hojeSP()) ? h("button", { type: "button", class: "bt-icone ag-dia-mais",   // plano 1000b · CB-148: sem «+» em dia passado "aria-label": `Marcar consulta em ${nomeDia(c.iso, true)}`, title: "Marcar consulta neste dia",
         on: { click: () => abrirAgendamento(null, { dia: c.iso }) } }, ui.icone("mais")) : null,
       // barra de ocupação do dia (item 40): largura = fração do expediente marcada; a cor sobe com o nível
       txtOc ? h("i", { class: ["ag-dia-ocup", `ag-ocup-${nivelOcupacao(oc.pct)}`], style: { "--p": oc.pct === null ? "0" : oc.pct.toFixed(3) }, title: txtOc, "aria-hidden": "true" }) : null,
@@ -2165,7 +2311,9 @@ export async function montar(ctx) {
       if (!pos) continue;
       const motivo = [b.motivo, ui.periodoBR(b.inicio, b.fim, " · ")].filter(Boolean).join(" · ") || "Dia indisponível";
       col.appendChild(h("li", { class: "ag-bloq", title: `Horário bloqueado — ${motivo}`, style: { "--t": String(pos.topo), "--d": String(pos.altura) } },
-        h("span", { class: "ag-bloq-rot" }, ui.icone("fechar"), h("span", null, b.motivo || "Bloqueado"))));
+        h("span", { class: "ag-bloq-rot" }, ui.icone("fechar"), h("span", { "aria-hidden": "true" }, b.motivo || "Bloqueado")),
+        // plano 1000b · CB-182: o período do bloqueio em texto (o title não é lido no toque nem pelo leitor de tela)
+        h("span", { class: "sr-only ag-bloq-txt" }, textoBloqueioNoDia(b, c.iso))));
     }
     // consultas, lado a lado quando se sobrepõem
     const blocos = [];
@@ -2188,7 +2336,7 @@ export async function montar(ctx) {
     const nome = c.nome || c.titulo || "Consulta sem nome";
     const inicio = ui.horaBR(c.inicio), fim = c.fim ? ui.horaBR(c.fim) : "";
     const curto = b.altura <= 0.6;          // até ~35 min: uma linha só (hora + nome); acima, o procedimento vem numa 2ª linha
-    const k = corDaConsulta(c, corPor, nomesAtuais, ordemServicos);
+    const k = corDaConsulta(c, corPor, nomesAtuais, ordemServicos, ordemProfAtual);
     const cor = k.cor;
     const feita = c.status === "ganho";
     const ehProxima = !!proximaAtual && proximaAtual === c;
@@ -2429,7 +2577,7 @@ export async function montar(ctx) {
     // CA-164/CA-165: bloqueio e horário cheio avisam já no soltar (antes abria a confirmação e só o servidor recusava)
     if (motivo === "bloqueado") { ui.toast(`Horário bloqueado: ${d.conflito.rotulo}.`, { tipo: "info" }); return false; }
     if (motivo === "lotado" && !ctx.pode("supervisor")) { ui.toast(`Esse horário já está cheio. ${dica}`, { tipo: "info" }); return false; }
-    confirmarRemarcacao(c, d, { encaixe: motivo === "lotado" });
+    confirmarRemarcacao(c, d, { encaixe: motivo === "lotado", dica });   // plano 1000b · CB-149: o erro do servidor usa a dica de quem chamou
     return true;
   }
   /** CA-206: no celular não há arrasto — «Dia seguinte» e «Semana seguinte» (mesmo horário) abrem a mesma confirmação «De → Para». */
@@ -2442,7 +2590,7 @@ export async function montar(ctx) {
   }
   /** Confirmação «De → Para»; confirmar grava com p_req (nx_agenda_marcar, como a janela) e oferece Desfazer (volta como encaixe).
       encaixe = o destino está cheio e quem arrasta é supervisor+: grava como encaixe (p_encaixe), com o aviso na confirmação. */
-  async function confirmarRemarcacao(c, d, { encaixe = false } = {}) {
+  async function confirmarRemarcacao(c, d, { encaixe = false, dica = "Escolha outro horário." } = {}) {
     const nome = c.nome || c.titulo || "Consulta";
     const hoje = ui.hojeSP();
     const de = partesSP(c.inicio);
@@ -2477,7 +2625,7 @@ export async function montar(ctx) {
           statusEl.hidden = true;
           const codigo = e && e.codigo;
           m.erro(e && e.ambigua ? "Não foi possível confirmar se foi salvo. Toque em «Remarcar» de novo: é seguro, não marca duas vezes."
-            : codigo === "horario_ocupado" ? "Esse horário está ocupado. Arraste para outro."
+            : codigo === "horario_ocupado" ? `Esse horário está ocupado. ${dica}`
               : api.mensagemErro(e));
           return false;
         }
@@ -2658,7 +2806,7 @@ export async function montar(ctx) {
       : `${nome} · ${pedido === "faltou" ? "faltou" : "compareceu"}${moveu ? " · foi para a etapa de faltas" : ""}`;
     ui.acaoComDesfazer({ texto,
       // CA-191: compareceu → atalho opcional para o negócio (fechar, próxima etapa); a decisão de etapa continua de quem atende
-      acao: pedido === "compareceu" && c.negocio_id != null ? { rotulo: "Abrir negócio", fn: () => abrirFicha(c.negocio_id) } : undefined,
+      acao: pedido === "compareceu" && c.negocio_id != null ? { rotulo: palavrasAgenda(ctx.vocab).abrirNeg, fn: () => abrirFicha(c.negocio_id) } : undefined,   // CB-189
       reverter: async () => {
         await api.rpcC("nx_agenda_presenca", { p_negocio: c.negocio_id, p_estado: Lg.voltaPresenca(anterior) });
         guardarPresenca(c, anterior);
@@ -2676,12 +2824,13 @@ export async function montar(ctx) {
         h("ul", { class: "ag-lote-lista" }, lista.map(c => h("li", null, h("span", { class: "dado" }, ui.horaBR(c.inicio)), " ", c.nome || c.titulo || "Consulta")))),
       acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: false }, { rotulo: `Marcar ${n}`, tipo: "primario", valor: true }] });
     if (!ok || !vivo) return;
-    const feitas = [];
+    const feitas = [], falharam = [];
     const gravar = async () => {
       for (const c of lista) {
         try { await api.rpcC("nx_agenda_presenca", { p_negocio: c.negocio_id, p_estado: "compareceu" }); feitas.push(c); guardarPresenca(c, "compareceu"); }
         catch (e) {
           if (Lg.rpcAusente(e)) { semPresenca = true; limparComandoPresenca(); break; }
+          falharam.push(c);
           console.error("agenda: presença em lote", e);
         }
       }
@@ -2689,7 +2838,12 @@ export async function montar(ctx) {
     try { if (typeof ui.carregando === "function" && botao) await ui.carregando(botao, gravar); else await gravar(); } catch (e) { ui.toast(api.mensagemErro(e), { tipo: "erro" }); }
     if (vivo && atual) { desenhar(); recarregar(); }
     if (!feitas.length) { ui.toast(semPresenca ? "O servidor ainda não registra a presença da consulta." : "Nenhuma presença foi gravada. Tente de novo.", { tipo: "info" }); return; }
-    ui.acaoComDesfazer({ texto: `${feitas.length} ${feitas.length === 1 ? "consulta marcada" : "consultas marcadas"} como «Compareceu»${feitas.length < n ? ` (${n - feitas.length} não gravaram)` : ""}`,
+    // plano 1000b · CB-186: quem não gravou aparece pelo nome (antes só «(1 não gravou)» e o erro no console)
+    const nomeLote = c => `${c.nome || c.titulo || "Consulta"} (${ui.horaBR(c.inicio)})`;
+    const naoGravou = feitas.length < n ? (falharam.length
+      ? ` · não gravaram: ${falharam.slice(0, 3).map(nomeLote).join(", ")}${falharam.length > 3 ? ` e mais ${falharam.length - 3}` : ""}. Marque essas uma a uma.`
+      : ` (${n - feitas.length} não gravaram)`) : "";
+    ui.acaoComDesfazer({ texto: `${feitas.length} ${feitas.length === 1 ? "consulta marcada" : "consultas marcadas"} como «Compareceu»${naoGravou}`,
       reverter: async () => {
         for (const c of feitas) { await api.rpcC("nx_agenda_presenca", { p_negocio: c.negocio_id, p_estado: "limpar" }); guardarPresenca(c, null); }
         if (vivo && atual) { desenhar(); recarregar(); }
@@ -2737,14 +2891,17 @@ export async function montar(ctx) {
       («amanhã às 10:00», «sexta às 14:00») ou por «nenhuma nos 7 dias seguintes». Falha de leitura: fica o texto do período. */
   function completarProxima(caixa, { de, umDia, hoje, chave }) {
     if (!de || (!movel && modo === "mes")) return;
-    let e = proximasFora.get(de);
+    // plano 1000b · CB-144: a próxima de fora respeita o profissional escolhido («Minha agenda» não mostra paciente de outra pessoa);
+    // o filtro entra na chave da memória (trocar o filtro não reaproveita a próxima de outro)
+    const k = `${de}|${filtroProf}`, filtro = filtroProf;
+    let e = proximasFora.get(k);
     if (!e) {
       e = { pronto: false, valor: null, p: null };
       const meu = e;
       e.p = api.rpcC("nx_agenda_dia", { p_data: de, p_dias: 7 })
-        .then(r => { meu.valor = proximaConsulta(Array.isArray(r && r.consultas) ? r.consultas : []); meu.pronto = true; })
-        .catch(() => { if (proximasFora.get(de) === meu) proximasFora.delete(de); });
-      proximasFora.set(de, e);
+        .then(r => { meu.valor = proximaConsulta(filtrarPorProfissional(Array.isArray(r && r.consultas) ? r.consultas : [], filtro, eu)); meu.pronto = true; })
+        .catch(() => { if (proximasFora.get(k) === meu) proximasFora.delete(k); });
+      proximasFora.set(k, e);
     }
     const pintar = sincrono => {
       if (!vivo || !e.pronto || chaveAtual !== chave || (!sincrono && !caixa.isConnected)) return;
@@ -2789,10 +2946,19 @@ export async function montar(ctx) {
     // CA-176/CA-178: a mesma rotina deixa pronta a confirmação (depois de marcar) e o aviso de desmarcação
     const texto = (tipo === "confirmacao" ? textoConfirmacao : tipo === "desmarcacao" ? textoDesmarcacao : textoLembrete)(c, ui.hojeSP());
     if (!texto || !c || c.contato_id == null) return;
-    let conv = null;
-    try { const r = await api.rpcC("nx_contato_ver", { p_id: c.contato_id }); conv = conversaDoContato(r && r.conversas); }
+    let conv = null, leu = false;
+    try { const r = await api.rpcC("nx_contato_ver", { p_id: c.contato_id }); conv = conversaDoContato(r && r.conversas); leu = !!(r && Array.isArray(r.conversas)); }
     catch { /* sem a ficha: a rota por contato escolhe a conversa */ }
     if (!vivo) return;
+    // plano 1000b · CB-195 / CB-200: sem conversa ABERTA o campo não aceita texto (resolvida = travada; a Nova conversa no número da Meta
+    // só sai com modelo) — o texto vai para a área de transferência e o aviso diz o caminho, sem prometer «confira e envie»
+    if (conv ? conv.status === "resolvida" : leu) {
+      const copiou = await copiarSemAviso(texto);
+      if (!vivo) return;
+      ctx.navegar(conv ? `#/conversas/${encodeURIComponent(conv.id)}` : `#/conversas?contato=${encodeURIComponent(c.contato_id)}`);
+      ui.toast(avisoSemConversaAberta(!!conv, copiou, texto), { tipo: "info", ms: 9000 });
+      return;
+    }
     const chave = conv ? `conversa:${conv.id}` : null;
     const jaTinha = !!(chave && ctx.rascunho && typeof ctx.rascunho.existe === "function" && ctx.rascunho.existe(chave));
     const pronto = chave && !jaTinha ? prepararRascunho(ctx.rascunho, chave, texto) : false;
@@ -2841,13 +3007,13 @@ export async function montar(ctx) {
       comConversas ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { pop.fechar(); ctx.navegar(`#/conversas?contato=${encodeURIComponent(c.contato_id)}`); } } }, ui.icone("whatsapp"), "Abrir conversa") : null,
       comConversas && pode && futura ? h("button", { type: "button", class: "bt bt-sec bt-p ag-det-lembrar", title: "Abre a conversa com o lembrete pronto no campo: você confere e envia",
         on: { click: () => { pop.fechar(); lembrar(c); } } }, ui.icone("sino"), "Lembrar") : null,
-      h("button", { type: "button", class: "bt bt-sec bt-p ag-det-negocio", on: { click: abrirNegocio } }, "Abrir negócio"),
+      h("button", { type: "button", class: "bt bt-sec bt-p ag-det-negocio", on: { click: abrirNegocio } }, palavrasAgenda(ctx.vocab).abrirNeg),   // CB-189
       pode ? h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => { pop.fechar(); abrirAgendamento(c); } } }, "Remarcar") : null,
       pode ? h("button", { type: "button", class: "bt bt-contorno-perigo bt-p", on: { click: () => { pop.fechar(); desmarcar(c); } } }, "Desmarcar") : null);
     // CA-257: a observação/última nota do negócio («trazer exames»), numa linha — lida da ficha uma vez por negócio nesta tela
     const notaEl = h("p", { class: "ag-det-nota", hidden: true });
     lerUltimaNota(c.negocio_id).then(t => { if (t) { notaEl.textContent = t; notaEl.title = t; notaEl.hidden = false; } });
-    const etapa = etapaDo(c);
+    const etapa = etapaDo(c), origemTxt = origemDo(c);
     const corpo = h("div", { class: "ag-det" },
       h("b", { class: "ag-det-nome" }, nome),
       h("span", { class: "ag-det-quando dado" }, `${p ? nomeDia(p.dia) : ""} · ${ui.horaBR(c.inicio)}${c.fim ? `–${ui.horaBR(c.fim)}` : ""}`),
@@ -2856,13 +3022,17 @@ export async function montar(ctx) {
         ? h("a", { class: "dado ag-det-tel", href: hrefTel, "aria-label": `Ligar para ${nome}, ${ui.telBR(c.telefone)}` }, ui.icone("telefone"), ui.telBR(c.telefone))
         : h("span", { class: "dado" }, ui.telBR(c.telefone))) : null,
       // CA-280: origem e etapa em linhas próprias (antes «WhatsApp · Avaliação agendada» parecia uma coisa só)
-      h("span", { class: "ag-det-origem" }, h("span", { class: "ag-det-rot" }, "Origem: "), origemDo(c)),
+      // plano 1000b · CB-164: sem origem conhecida a linha sai («Origem: Origem não informada» não dizia nada)
+      origemTxt !== SEM_ORIGEM ? h("span", { class: "ag-det-origem" }, h("span", { class: "ag-det-rot" }, "Origem: "), origemTxt) : null,
       etapa ? h("span", { class: "ag-det-origem ag-det-etapa" }, h("span", { class: "ag-det-rot" }, "Etapa: "), etapa) : null,
       notaEl,
       presencaEl,
       atalhosRemarcar,
       acoes);
     const pop = ui.flutuante(ancora, corpo, { classe: "flut-ag" });
+    // plano 1000b · CB-163: o diálogo do detalhe ganha nome («Consulta de Mariana Costa, Qui., 02 de out. 10:00»)
+    const rotuloDet = `Consulta de ${nome}${p ? `, ${nomeDia(p.dia)} ${horaTxt(p.min)}` : ""}`;
+    if (pop && pop.el && typeof pop.el.setAttribute === "function") pop.el.setAttribute("aria-label", rotuloDet);
     return pop;
   }
   /** CA-257: o texto da nota mais recente (a fixada primeiro, como a ficha mostra) — "" sem nota ou sem a leitura. */
@@ -2931,10 +3101,15 @@ export async function montar(ctx) {
       } },
     ] });
     if (!(r && r.ok) || !vivo) return;
-    ui.toast(`Horário bloqueado: ${rotuloDoDia(dia, ui.hojeSP())}, ${das.querySelector("input").value}–${ate.querySelector("input").value}.`, { tipo: "ok" });
+    const texto = `Horário bloqueado: ${rotuloDoDia(dia, ui.hojeSP())}, ${das.querySelector("input").value}–${ate.querySelector("input").value}`;
     recarregar();
+    // plano 1000b · CB-199: fechou o horário errado? «Desfazer» exclui o bloqueio criado (sem ir às Configurações)
+    if (r.id != null && typeof ui.acaoComDesfazer === "function") {
+      ui.acaoComDesfazer({ texto, reverter: async () => { erroResposta(await api.rpcC("nx_agenda_bloqueio_excluir", { p_id: r.id })); if (vivo) recarregar(); } });
+    } else ui.toast(`${texto}.`, { tipo: "ok" });
   }
-  const desmarcar = c => desmarcarConsulta(ctx, c, { aoMudar: recarregar, avisar: avisarPaciente });
+  const desmarcar = c => desmarcarConsulta(ctx, c, { aoMudar: recarregar, avisar: avisarPaciente,
+    aoFaltou: Lg && !semPresenca ? cc => marcarPresenca(cc, "faltou", null) : null });   // plano 1000b · CB-174
 
   /** CA-188: «Procurar paciente» — busca as oportunidades (nx_buscar), lê a consulta de cada uma (até 8) e lista as que têm consulta de hoje
       em diante, com «Ir para» (leva a tela ao dia e foca o bloco). */
@@ -2942,32 +3117,45 @@ export async function montar(ctx) {
     const caixa = h("div", { class: "pilha ag-procurar" });
     const campo = ui.campo({ rotulo: "Paciente", nome: "paciente", tipo: "busca", placeholder: "Nome ou telefone", ajuda: "Mostra as próximas consultas de quem tem o nome ou telefone." });
     const input = campo.querySelector("input");
-    const lista = h("div", { class: "ag-procurar-lista", role: "status", "aria-live": "polite" });
-    caixa.append(campo, lista);
+    // plano 1000b · CB-162: a lista NÃO é região viva (cada busca lia todos os nomes e datas); um status curto diz o resultado
+    const lista = h("div", { class: "ag-procurar-lista" });
+    const statusBusca = h("p", { class: "campo-ajuda ag-procurar-status", role: "status", "aria-live": "polite" });
+    const dizer = t => { statusBusca.textContent = t || ""; };
+    caixa.append(campo, statusBusca, lista);
     let fecharCom = null, seq = 0;
+    const fichasLidas = new Map();   // CB-179
     async function buscar() {
       const q = input.value.trim();
       const minha = ++seq;
       ui.limpar(lista);
-      if (q.length < 2) { if (q.length) lista.appendChild(h("p", { class: "campo-ajuda" }, "Digite pelo menos duas letras ou quatro números.")); return; }
-      lista.appendChild(h("p", { class: "campo-ajuda" }, "Procurando…"));
+      dizer("");
+      if (q.length < 2) { if (q.length) dizer(TEXTO_BUSCA_CURTA); return; }
+      dizer("Procurando…");
       try {
         const r = await api.rpcC("nx_buscar", { p_q: q });
         const negocios = (r && Array.isArray(r.negocios) ? r.negocios : []).filter(n => n && (n.status === "aberto" || n.status === "ganho")).slice(0, 8);
-        const fichas = await Promise.all(negocios.map(n => api.rpcC("nx_negocio_ver", { p_id: n.id }).then(d => ({ n, d })).catch(() => ({ n, d: null }))));
+        // plano 1000b · CB-179: a ficha de cada um é lida uma vez por janela (cache por id), no máximo 4 ao mesmo tempo; se a busca já trouxer
+        // consulta_em, nem lê
+        const fichas = [];
+        await comLimite(negocios, 4, async n => {
+          if (Object.hasOwn(n, "consulta_em")) { fichas.push({ n, d: { negocio: { consulta_em: n.consulta_em } } }); return; }
+          if (!fichasLidas.has(n.id)) fichasLidas.set(n.id, api.rpcC("nx_negocio_ver", { p_id: n.id }).catch(() => { fichasLidas.delete(n.id); return null; }));
+          fichas.push({ n, d: await fichasLidas.get(n.id) });
+        });
         if (minha !== seq || !vivo) return;
         const hojeIni = instanteNoFuso(ui.hojeSP());
         const achadas = fichas.map(({ n, d }) => ({ n, em: d && d.negocio ? d.negocio.consulta_em : null, contato: d && d.contato ? d.contato.nome : null }))
           .filter(x => x.em && Date.parse(x.em) >= hojeIni).sort((a, b) => Date.parse(a.em) - Date.parse(b.em));
         ui.limpar(lista);
-        if (!achadas.length) { lista.appendChild(h("p", { class: "campo-ajuda" }, negocios.length ? "Nenhuma consulta de hoje em diante para esse nome." : "Ninguém com esse nome ou telefone.")); return; }
+        if (!achadas.length) { dizer(negocios.length ? "Nenhuma consulta de hoje em diante para esse nome." : "Ninguém com esse nome ou telefone."); return; }
+        dizer(`${achadas.length} ${achadas.length === 1 ? "consulta encontrada" : "consultas encontradas"}.`);
         for (const x of achadas) {
           const nome = x.n.contato_nome || x.contato || x.n.titulo || "Paciente";
           lista.appendChild(h("div", { class: "ag-procurar-item" },
             h("span", { class: "ag-procurar-txt" }, h("b", null, nome), h("small", { class: "dado" }, `${rotuloProximaFora({ inicio: x.em }, Date.now(), ui.hojeSP())}${x.n.titulo && x.n.titulo !== nome ? ` · ${x.n.titulo}` : ""}`)),
             h("button", { type: "button", class: "bt bt-sec bt-p", "aria-label": `Ir para a consulta de ${nome}`, on: { click: () => { if (fecharCom) fecharCom({ negocio_id: x.n.id, inicio: x.em }); } } }, "Ir para")));
         }
-      } catch (e) { if (minha === seq) { ui.limpar(lista); lista.appendChild(h("p", { class: "agenda-erro" }, api.mensagemErro(e))); } }
+      } catch (e) { if (minha === seq) { ui.limpar(lista); dizer(""); lista.appendChild(h("p", { class: "agenda-erro", role: "alert" }, api.mensagemErro(e))); } }
     }
     const depois = ui.debounce(buscar, 300);
     input.addEventListener("input", depois);
@@ -2993,10 +3181,24 @@ export async function montar(ctx) {
   // CA-260: «Ir para a data…» na paleta (Agenda de 25/10 sem clicar semana a semana): abre o seletor de data do cabeçalho
   const desregistrarData = ctx.comandos && typeof ctx.comandos.registrar === "function"
     ? ctx.comandos.registrar({ id: "agenda.data", rotulo: "Ir para a data…", palavras: "agenda data dia ir calendario semana mes pular", icone: "calendario", fazer: irParaData }) : null;
-  // CA-259: os atalhos de visão aparecem na folha «?» (a tela trata as teclas em aoTeclaAgenda)
-  const desregistrarModos = ctx.comandos && typeof ctx.comandos.registrar === "function"
-    ? Object.entries(ATALHO_MODO).map(([m, t]) => ctx.comandos.registrar({ id: `agenda.ver-${m}`, rotulo: `Ver ${m === "mes" ? "o mês" : m === "lista" ? "a lista" : m === "dia" ? "o dia" : "a semana"}`, atalho: t, palavras: "agenda visão", fazer: () => trocarModo(m) }))
-    : [];
+  /* plano 1000b · CB-151: «Desligar/Ligar atalhos de uma tecla» na paleta (lembrado nas preferências); desligados, os botões deixam de
+     anunciar aria-keyshortcuts e a folha «?» não lista D/S/M/L */
+  let desregistrarAtalhos = null, desregistrarModos = [];
+  function aplicarAtalhos() {
+    const pares = [[ctl.anterior, "["], [ctl.proximo, "]"], [ctl.hoje, "T"],
+      ...(ctl.alternador ? [...ctl.alternador.querySelectorAll("[data-valor]")].map(b => [b, ATALHO_MODO[b.dataset.valor]]) : [])];
+    for (const [b, t] of pares) if (b && t) { if (atalhosLigados) b.setAttribute("aria-keyshortcuts", t); else b.removeAttribute("aria-keyshortcuts"); }
+    if (ctl.hoje) ctl.hoje.setAttribute("title", ctl.hoje.classList.contains("agenda-hoje-atual") ? "Você já está vendo hoje" : atalhosLigados ? "Voltar para hoje (T)" : "Voltar para hoje");
+    if (!(ctx.comandos && typeof ctx.comandos.registrar === "function")) return;
+    for (const f of [desregistrarAtalhos, ...desregistrarModos]) if (typeof f === "function") try { f(); } catch { /* ok */ }
+    // CA-259: os atalhos de visão aparecem na folha «?» (a tela trata as teclas em aoTeclaAgenda) — só quando ligados
+    desregistrarModos = atalhosLigados ? Object.entries(ATALHO_MODO).map(([m, t]) => ctx.comandos.registrar({ id: `agenda.ver-${m}`, rotulo: `Ver ${m === "mes" ? "o mês" : m === "lista" ? "a lista" : m === "dia" ? "o dia" : "a semana"}`, atalho: t, palavras: "agenda visão", fazer: () => trocarModo(m) })) : [];
+    desregistrarAtalhos = ctx.comandos.registrar({ id: "agenda.atalhos", rotulo: atalhosLigados ? "Desligar atalhos de uma tecla da Agenda" : "Ligar atalhos de uma tecla da Agenda",
+      palavras: "agenda atalhos teclado tecla acessibilidade leitor voz", fazer: () => {
+        atalhosLigados = !atalhosLigados; gravarPreferencias(); aplicarAtalhos();
+        ui.toast(atalhosLigados ? "Atalhos de uma tecla ligados (T, D, S, M, L, [ e ])." : "Atalhos de uma tecla desligados. Para ligar de novo, use a paleta (Ctrl+K).", { tipo: "info" });
+      } });
+  }
   function irParaData() {
     const s = ctl.seletor;
     if (!s || !vivo) return;
@@ -3006,6 +3208,11 @@ export async function montar(ctx) {
   // CA-263: a conexão caiu ou voltou — o «Marcar consulta» do cabeçalho acompanha
   const aoMudarConexao = () => { if (vivo) montarCabecalho(); };
   if (typeof addEventListener === "function") { addEventListener("online", aoMudarConexao); addEventListener("offline", aoMudarConexao); }
+  // plano 1000b · CB-166: o estado da rede do app (offline por falhas, com o navigator dizendo online) também atualiza o botão
+  let desassinarRede = null;
+  // (ctx.rede.assinar avisa na queda E na volta; shell antigo só tem aoVoltar — «Marcar» confere estaOffline na hora do toque de qualquer jeito)
+  const assinarRede = ctx.rede && (typeof ctx.rede.assinar === "function" ? ctx.rede.assinar : typeof ctx.rede.aoVoltar === "function" ? ctx.rede.aoVoltar : null);
+  if (assinarRede) try { desassinarRede = assinarRede.call(ctx.rede, aoMudarConexao); } catch { desassinarRede = null; }
 
   // a limpeza fica guardada no módulo ANTES de qualquer espera: se a pessoa sair da Agenda com a 1ª carga em andamento, o desmontar() já a encontra
   const limpar = () => {
@@ -3014,8 +3221,9 @@ export async function montar(ctx) {
     document.removeEventListener("keydown", aoTeclaAgenda);
     if (desarmarEngolir) desarmarEngolir();
     if (typeof desregistrar === "function") try { desregistrar(); } catch { /* ok */ }
-    for (const f of [desregistrarData, ...desregistrarModos]) if (typeof f === "function") try { f(); } catch { /* ok */ }
+    for (const f of [desregistrarData, desregistrarAtalhos, ...desregistrarModos]) if (typeof f === "function") try { f(); } catch { /* ok */ }
     if (typeof removeEventListener === "function") { removeEventListener("online", aoMudarConexao); removeEventListener("offline", aoMudarConexao); }
+    if (typeof desassinarRede === "function") try { desassinarRede(); } catch { /* ok */ }
     limparComandoPresenca();
     clearInterval(relogio);
     if (observadorCab) try { observadorCab.disconnect(); } catch { /* ok */ }

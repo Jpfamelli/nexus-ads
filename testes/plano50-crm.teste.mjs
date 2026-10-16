@@ -31,7 +31,7 @@ test("faixaTempoEtapa: sem prazo usa 3/7 dias; com sla_horas usa metade/inteiro;
   // com prazo da etapa (48 h): verde até 24 h, âmbar até 48 h, vermelho depois
   assert.equal(L.faixaTempoEtapa(h(10), 48, agora).nivel, "ok");
   const meio = L.faixaTempoEtapa(h(30), 48, agora);
-  assert.equal(meio.nivel, "aten"); assert.ok(!meio.padrao); assert.equal(meio.limiteHoras, 48); assert.match(meio.texto, /48 h/);
+  assert.equal(meio.nivel, "aten"); assert.ok(!meio.padrao); assert.equal(meio.limiteHoras, 48); assert.match(meio.texto, /2 dias/);      // plano 1000b: RB-080 — prazo em dias quando é múltiplo de 24 h
   assert.equal(L.faixaTempoEtapa(h(49), 48, agora).nivel, "ruim");
   assert.equal(L.faixaTempoEtapa(h(49), "0", agora).limiteHoras, 168, "sla inválido cai no padrão");
   assert.deepEqual(L.PRAZO_ETAPA_PADRAO_H, { aten: 72, ruim: 168 });
@@ -293,7 +293,7 @@ test("Kanban (DOM): cartão com avatar, barra de tempo na etapa pelo prazo (ok/a
     assert.equal(cartao(1).querySelector(".kc-tempo i").style["--w"], "100%");
     assert.ok(cartao(2).querySelector(".kc-tempo.ok"));
     assert.ok(cartao(3).querySelector(".kc-tempo.aten"), "prazo da etapa (sla_horas) manda");
-    assert.match(cartao(3).querySelector(".kc-tempo").attrs.title, /48 h/);
+    assert.match(cartao(3).querySelector(".kc-tempo").attrs.title, /2 dias/);      // plano 1000b: RB-080 («48 h» → «2 dias»)
     assert.equal(cartao(4).querySelector(".kc-tempo"), null, "etapa fechada não tem barra");
     assert.ok(cartao(1).querySelector(".kc-dias.ruim"), "o texto «há 10 dias» fica vermelho junto");
     assert.match(cartao(1).attrs["aria-label"], /passou do prazo/i, "o leitor de tela ouve o prazo");
@@ -343,7 +343,8 @@ test("Kanban (DOM): mini-barra de participação na coluna, resumo do funil com 
     assert.ok(!/null|undefined/.test(fr.querySelector(".crm-fr-mini").textContent), "o append nativo não pode receber null");
     cab.clique();
     assert.equal(cab.attrs["aria-expanded"], "false"); assert.ok(fr.querySelector(".crm-fr-corpo").hidden);
-    assert.equal(D.storage.get("nx-app-crm-fr-cli-50"), "0");
+    // plano 1000b: RB-028 — o «Resumo do funil» é lembrado por empresa E conta (este kit não tem k.eu: a conta vira «-»)
+    assert.equal(D.storage.get("nx-app-crm-fr-cli-50--"), "0");
     cab.clique();
     // versão em tabela com os mesmos números
     const bt = fr.querySelector(".crm-fr-vertabela");
@@ -555,7 +556,8 @@ test("Tarefas (DOM): painel do dia lê as contagens soltas ou em r.contagens, gr
     assert.equal(reg.chamadas.at(-1).p.p_filtro.situacao, "proximas");
     assert.equal(painel.querySelector(".tfp-pn-proximas").attrs["aria-pressed"], "true");
     assert.equal(painel.querySelector(".tfp-pn-hoje").attrs["aria-pressed"], "false");
-    assert.equal(D.storage.get("nx-app-tarefas-aba"), "proximas");
+    // plano 1000b: RB-119 — a aba das tarefas é lembrada por empresa E conta
+    assert.equal(D.storage.get("nx-app-tarefas-aba-cli-t-u1"), "proximas");
     api.desmontar();
     // r.contagens (banco) também vale
     const reg2 = { chamadas: [] };
@@ -578,6 +580,7 @@ test("Linha do tempo (DOM): agrupada por dia, ícone por família do evento, hor
     const reg = { chamadas: [] };
     const k = kitTarefas(D, reg, { itens: () => [], contagens: {} });
     k.ui.hojeSP = d => (d ? new Date(d) : new Date(Date.UTC(2026, 9, 4, 12))).toISOString().slice(0, 10);
+    k.ctx.temModulo = m => m === "conversas";      // plano 1000b: RB-051 — o link «Abrir conversa» só existe com o módulo Conversas
     const { blocoTempo, familiaTempo } = await import("../web/app/crm-tarefas.js");
     const itens = [
       { tipo: "ganho", em: iso(0, 9), dados: { valor: 900 } }, { tipo: "estagio", em: iso(0, 8), dados: { de_nome: "Nova", para_nome: "Orçamento" } },
@@ -622,7 +625,7 @@ test("Contatos (DOM): densidade compacta/confortável lembrada por empresa, «ú
     assert.equal(tela.dataset.densidade, "confortavel");
     const seg = tela.querySelector(".crm-dens");
     seg.__mudar("compacta");
-    assert.ok(tela.classList.contains("crm-dens-compacta")); assert.equal(D.storage.get("nx-app-crm-ct-dens-cli-c"), "compacta");
+    assert.ok(tela.classList.contains("crm-dens-compacta")); /* plano 1000b: RB-108 — a densidade agora é por empresa E conta */ assert.equal([...D.storage].find(([ch]) => ch.startsWith("nx-app-crm-ct-dens-cli-c-"))?.[1], "compacta");
     assert.match(reg.avisos.at(-1), /compacta/);
     // a coluna «Último contato» é um <time> com a data completa na dica e no rótulo acessível
     const col = reg.colunas.find(c => c.chave === "ultimo_contato_em");

@@ -376,7 +376,8 @@ await teste("tituloCard, formatarTel e textoErro (rótulo do campo, trava do Ads
 await teste("textoTempo e iconeTempo", () => {
   const vocab = { min: () => "oportunidade", art: () => "a", ganhar: "Fechou", perder: "Não fechou" };
   assert.equal(L.textoTempo({ fonte: "historico", tipo: "estagio", dados: { de_nome: "Nova conversa", para_nome: "Avaliou" } }), "Moveu de «Nova conversa» para «Avaliou»");
-  assert.equal(L.textoTempo({ fonte: "historico", tipo: "ganho", dados: { valor: 3200 } }, { vocab, brl: v => `R$ ${v}` }), "Marcou como fechou · R$ 3200");
+  // plano 1000b: RB-044 — o termo da vertical vai entre aspas como nome da etapa («Marcou como fechou» não concordava)
+  assert.equal(L.textoTempo({ fonte: "historico", tipo: "ganho", dados: { valor: 3200 } }, { vocab, brl: v => `R$ ${v}` }), "Marcou como «Fechou» · R$ 3200");
   assert.equal(L.textoTempo({ fonte: "historico", tipo: "negocio_criado", dados: { titulo: "Implante" } }, { vocab }), "Criou a oportunidade «Implante»");
   assert.equal(L.textoTempo({ fonte: "historico", tipo: "dono", dados: { para: "u1" } }, { nomes: { u1: "Ana" } }), "Responsável: Ana");
   assert.equal(L.textoTempo({ fonte: "nota", tipo: "nota", dados: { texto: "oi" } }), "Nota: oi");
@@ -939,7 +940,7 @@ await teste("M28: deslizar e botão chamam a MESMA ação — contatos (Tarefa/O
   itemTarefa(k, t, { aoMudar() {} }); await gestos[0].o.esquerda(); await dormir();
   assert.equal(JSON.stringify(chamadas), viaMenuAdiar, "adiar: gesto = ⋮");
   assert.equal(viaMenuAdiar, JSON.stringify([["nx_tarefa_salvar", { p_tarefa: { id: 71, vence_em: "2099-01-11T15:00:00.000Z" } }]]));
-  assert.match(txtMenu, /adiada para 02\/10/);
+  assert.match(txtMenu, /adiada para (hoje|amanhã), 09:00/);     // plano 1000b: RB-218 — o dia relativo (o hojeSP de mentira devolve sempre 01/10)
   await desfazeres.at(-1).reverter(); assert.deepEqual(chamadas.at(-1), ["nx_tarefa_salvar", { p_tarefa: { id: 71, vence_em: "2099-01-10T15:00:00Z" } }], "Desfazer devolve o vencimento anterior");
   // excluir: a lixeira (desktop) e o ⋮ (celular) — a mesma ação com Desfazer; deslizar NÃO exclui
   limpa(); const ev3 = []; k.api.rpcC = async (n, p) => { chamadas.push([n, p]); return {}; };
@@ -1215,14 +1216,14 @@ await teste("excluir tarefa/nota: keepalive ao sair, não reaparece quando a fic
   const notas = el => achar(el, x => classe(x).split(" ").includes("nota"), true).map(x => x.attrs.dataset.id);
   const bn = blocoNotas(k, { notas: [n1], contato_id: 5 });
   assert.deepEqual(notas(bn), [9201]);
-  achar(bn, x => x.attrs["aria-label"] === "Excluir nota").ouvintes.click();
+  achar(bn, x => /^Excluir a nota «Prefere de manhã»/.test(x.attrs["aria-label"] || "")).ouvintes.click();      // plano 1000b: RB-122 — o rótulo diz qual nota
   const dn = desfazeres.at(-1); dn.aplicar();
   assert.deepEqual(notas(bn), []);
   const bn2 = blocoNotas(k, { notas: [n1], contato_id: 5 });
   assert.deepEqual(notas(bn2), [], "a nota em exclusão não reaparece na recarga");
   dn.reverter();
   assert.deepEqual(notas(bn2), [9201], "Desfazer devolve a nota à lista da tela");
-  achar(bn2, x => x.attrs["aria-label"] === "Excluir nota").ouvintes.click();
+  achar(bn2, x => /^Excluir a nota/.test(x.attrs["aria-label"] || "")).ouvintes.click();
   const dn2 = desfazeres.at(-1); dn2.aplicar();
   await dn2.firmar({ saindo: true });
   assert.deepEqual(chamadas.at(-1), ["nx_nota_excluir", { p_id: 9201 }, "keepalive"]);
