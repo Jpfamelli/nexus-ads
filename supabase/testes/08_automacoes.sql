@@ -96,10 +96,10 @@ begin
 
   -- ---------------------------------------------------------- permissões
   perform pg_temp.ok(has_function_privilege('anon', 'public.nx_automacoes_listar(text,uuid)', 'execute')
-                 and has_function_privilege('anon', 'public.nx_automacao_salvar(text,uuid,jsonb)', 'execute')
+                 and has_function_privilege('anon', 'public.nx_automacao_salvar(text,uuid,jsonb,timestamptz)', 'execute')
                  and has_function_privilege('anon', 'public.nx_automacao_ativar(text,uuid,uuid,boolean)', 'execute')
                  and has_function_privilege('anon', 'public.nx_automacao_excluir(text,uuid,uuid)', 'execute')
-                 and has_function_privilege('anon', 'public.nx_automacao_execucoes(text,uuid,uuid,integer)', 'execute'),
+                 and has_function_privilege('anon', 'public.nx_automacao_execucoes(text,uuid,uuid,integer,text,timestamptz,boolean)', 'execute'),   -- plano 1000b: assinaturas novas (UB-211/213/214)
                      'RPCs do painel abertas ao anon');
   perform pg_temp.ok(not has_function_privilege('anon', 'public.nx_auto_lote(integer)', 'execute')
                  and not has_function_privilege('authenticated', 'public.nx_fila_chamar()', 'execute')

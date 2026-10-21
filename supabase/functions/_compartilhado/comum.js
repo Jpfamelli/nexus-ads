@@ -68,6 +68,17 @@ const DDDS = new Set(("11 12 13 14 15 16 17 18 19 21 22 24 27 28 31 32 33 34 35 
   + "51 53 54 55 61 62 63 64 65 66 67 68 69 71 73 74 75 77 79 81 82 83 84 85 86 87 88 89 91 92 93 94 95 96 97 98 99").split(" "));
 export const dddValido = d => DDDS.has(String(d ?? "").slice(0, 2));
 
+/** plano 1000b · CB-002: a 1ª palavra do nome que NÃO é pronome de tratamento — «Dra. Helena Souza» → «Helena» (antes «Dra.»).
+    A mesma lista TRATAMENTOS da tela (web/app/cv-logica.js); nome de uma palavra só fica como está; sem mudar maiúsculas. */
+const TRATAMENTOS = new Set(["dr", "dra", "sr", "sra", "srta", "prof", "profa", "pe"]);
+const semAcento = t => String(t).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+export function primeiroNomeSemTratamento(nome) {
+  const partes = String(nome ?? "").trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  while (i < partes.length - 1 && TRATAMENTOS.has(semAcento(partes[i]).replace(/\.$/, ""))) i++;
+  return partes[i] || "";
+}
+
 /**
  * Telefone que chega SEM garantia de DDI (API do agente, payload cru do aparelho) → só dígitos, com o 55 quando é
  * brasileiro sem DDI. É a regra de nx_tel_normalizar(p, false) do banco, mais estrita: zero de tronco fora
@@ -89,7 +100,9 @@ export function telefoneBorda(v) {
 export const anonTelefone = t => { const d = soDigitos(t); return d.length > 4 ? `${"*".repeat(d.length - 4)}${d.slice(-4)}` : "****"; };
 export const anonId = id => (id == null ? null : `${String(id).slice(0, 12)}…`);
 /** Lista de enviarParaTodos sem número inteiro nem wamid inteiro (os reais ficam só em wa_ids/wa_ids_template). */
-export const anonimizarEnvio = envio => (envio || []).map(e => ({ ...e, destino: anonTelefone(e.destino), ...(e.id != null ? { id: anonId(e.id) } : {}) }));
+// plano 1000b · B-012: ids (os wamids de cada parte do texto) vira só a contagem no resumo — os reais ficam em nx_alertas/nx_relatorios
+export const anonimizarEnvio = envio => (envio || []).map(e => ({ ...e, destino: anonTelefone(e.destino), ...(e.id != null ? { id: anonId(e.id) } : {}),
+  ...(Array.isArray(e.ids) ? { ids: e.ids.length } : {}) }));
 
 /** 16 hex aleatórios por chamada: o texto de terceiros (conversa, cadastro, pedido) fica entre essas marcas
     no prompt — é DADO, nunca instrução — e nenhuma marca igual pode aparecer dentro dele. */
@@ -544,13 +557,17 @@ export function filtroFunisAds(idsFunis) {
 export const filtroLeadsAds = de => `or(data_conversa.gte.${de},data_consulta.gte.${de},etapa.in.(nova,agendada))`;
 
 /** Mesmo dataset que o painel monta a partir do nx_dados. */
+/** plano 1000b · B-003: teto do select de métricas do carregarModelo. */
+export const TETO_METRICAS = 200_000;
 export async function carregarModelo(db, cliente, hoje, dias) {
   const de = somaDias(hoje, -dias);
   const [metricas, leads] = await Promise.all([
     db.select("nx_metricas_dia", {
       cliente_id: `eq.${cliente.id}`, data: `gte.${de}`, select: COLS_METRICAS,
       order: "data.asc,plataforma.asc,nivel.asc,campanha_ext.asc,anuncio_ext.asc",
-    }),
+      // plano 1000b · B-003: 130 dias no nível anúncio de conta grande passam de 50 mil linhas (o teto padrão do select) e o
+      // relatório/radar do cliente caíam com consulta_grande — teto próprio de 200 mil (as colunas curtas cabem na memória)
+    }, { teto: TETO_METRICAS }),
     (async () => {
       const funis = await db.select("nx_funis", {
         cliente_id: `eq.${cliente.id}`, conta_no_ads: "is.true", select: "id", order: "id.asc",
@@ -592,7 +609,8 @@ export function erroDeEnvio(destinos, envio) {
   if (!falhas.length) return null;
   const msgs = [...new Set(falhas.map(e => e.erro))];
   if (msgs.length === 1 && falhas.length === envio.length) return msgs[0];
-  return falhas.map(e => `${e.destino}: ${e.erro}`).join("; ");
+  // plano 1000b · B-011: o número inteiro não vai para nx_alertas.erro_envio, nx_relatorios.erro nem nx_execucoes (só os 4 últimos)
+  return falhas.map(e => `${anonTelefone(e.destino)}: ${e.erro}`).join("; ");
 }
 
 /** Nome curto do cliente, igual ao M.NOME do núcleo (cfg.nomeCurto ou o nome da empresa cortado em palavra inteira).

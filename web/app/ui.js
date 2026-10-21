@@ -155,6 +155,31 @@ export function carregarCss(nome) {
 
 /** Cor vinda do banco (etapa, etiqueta…) só entra se for #RRGGBB. */
 export function corOk(c) { return typeof c === "string" && RE_HEX.test(c) ? c : null; }
+/** Plano 1000b · UB-147: o que a pessoa digita no campo de cor → #RRGGBB maiúsculo («fa0», «#fa0», «ffaa00»); null se não for cor. */
+export function hexDigitado(v) {
+  let s = String(v ?? "").trim();
+  if (s && !s.startsWith("#")) s = "#" + s;
+  if (/^#[0-9a-f]{3}$/i.test(s)) s = "#" + s.slice(1).split("").map(x => x + x).join("");
+  return corOk(s) ? s.toUpperCase() : null;
+}
+/** Plano 1000b · UB-145: nome falado de uma cor (#RRGGBB) pelo matiz — «Âmbar», «Azul claro» — em vez de soletrar o código. */
+export function nomeDaCor(hex) {
+  const c = corOk(hex);
+  if (!c) return null;
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let hue = 0;
+  if (d) hue = max === r ? 60 * (((g - b) / d) % 6) : max === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+  if (hue < 0) hue += 360;
+  const tom = l >= .7 ? " claro" : l <= .3 ? " escuro" : "";
+  if (l >= .95) return "Branco";
+  if (l <= .08) return "Preto";
+  if (s < .18) return l >= .55 ? (r > b ? "Areia" : "Cinza claro") : r > b + .02 ? "Cinza quente" : "Cinza" + tom;
+  const base = hue < 15 || hue >= 345 ? "Vermelho" : hue < 30 ? "Coral" : hue < 50 ? (l < .45 ? "Bronze" : "Âmbar") : hue < 70 ? "Amarelo"
+    : hue < 150 ? "Verde" : hue < 190 ? "Verde-água" : hue < 250 ? "Azul" : hue < 290 ? "Lilás" : "Rosa";
+  return base + (base === "Bronze" ? "" : tom);
+}
 
 /** Olho cortado («senha à mostra»): o único ícone desenhado fora do sprite, com o mesmo traço (.ic). */
 function iconeOlhoCortado() {
@@ -208,7 +233,9 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
   }
   const caixa = caixaToasts();
   // plano 1000 (AS-211): erro fica 12 s (WCAG 2.2.1: tempo para ler e alcançar o botão); os demais como antes
-  const dur = ms ?? (tipo === "erro" ? 12000 : desfazer || acao ? 7000 : 4500);
+  // plano 1000b · UB-274: no toque (sem mouse para pausar nem foco de teclado) o erro COM ação fica até a pessoa fechar no X
+  const comAcao = !!(acao && typeof acao.fn === "function" && String(acao.rotulo || "").trim());
+  const dur = ms ?? (tipo === "erro" ? (comAcao && toqueGrosso() ? 0 : 12000) : desfazer || acao ? 7000 : 4500);
   let timer = null, fechado = false;
   const fechar = (motivo = "fechado") => {
     if (fechado) return; fechado = true;
@@ -217,7 +244,7 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
     setTimeout(() => { el.remove(); if (!caixa.children.length && caixa.hidePopover) try { caixa.hidePopover(); } catch { /* ok */ } }, 180);
     if (aoFechar) try { aoFechar(motivo); } catch (e) { console.error(e); }
   };
-  const temAcao = !!(acao && typeof acao.fn === "function" && String(acao.rotulo || "").trim());
+  const temAcao = comAcao;
   const el = h("div", { class: ["toast", `toast-${tipo}`, fixo && "toast-fixo"], role: fixo ? "status" : null },
     icone(tipo === "ok" ? "check" : tipo === "erro" || tipo === "aten" ? "alerta" : "info"),
     h("p", null, String(texto)),
@@ -403,7 +430,9 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
     const erro = h("p", { class: "modal-erro", role: "alert", hidden: true });
     const corpoEl = h("div", { class: "modal-corpo" }, descricao ? h("p", { class: "sub" }, descricao) : null, corpo, erro);
     const lista = acoes && acoes.length ? acoes : [{ rotulo: "Fechar", tipo: "neutro", valor: null }];
-    let feito = false, camada = null;
+    // plano 1000b · UB-137: ocupado enquanto a fn de um botão roda — Esc, X, clique fora e Voltar esperam (fechar no meio de «Gerar link»
+    // deixava o convite criado sem o link na tela)
+    let feito = false, camada = null, ocupado = false;
     const dlg = h("dialog", { class: ["modal", `modal-${largura}`], "aria-labelledby": idT });
     const prot = criarProtecao(corpoEl, protegerTexto !== false);
     const api = {
@@ -416,12 +445,18 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
         setTimeout(() => { try { dlg.close(); } catch { /* ok */ } dlg.remove(); if (anterior && anterior.focus && anterior.isConnected) try { anterior.focus({ preventScroll: true }); } catch { /* ok */ } }, 160);
         resolve(v);
       },
-      erro(texto) { erro.textContent = texto || ""; erro.hidden = !texto; },
+      erro(texto) {
+        erro.textContent = texto || ""; erro.hidden = !texto;
+        // plano 1000b · UB-273: modal longo (ou com lupa): a mensagem rola para a vista em vez de ficar escondida no topo
+        if (texto && typeof erro.scrollIntoView === "function") try { erro.scrollIntoView({ block: "nearest" }); } catch { /* ok */ }
+      },
+      get ocupado() { return ocupado; },
     };
     const faixa = criarFaixaDescartar(() => api.fechar(null), () => { faixa.el.hidden = true; });
     /** Esc, clique fora e Voltar: com texto digitado mostra a faixa em vez de fechar. Devolve true se fechou. */
     function tentarFechar() {
       if (feito) return true;
+      if (ocupado) { anunciar("Aguarde, ainda salvando…"); return false; }   // UB-137
       if (prot.sujo()) {
         if (faixa.el.hidden) { faixa.el.hidden = false; try { faixa.continuar.focus({ preventScroll: true }); } catch { /* ok */ } }
         else faixa.el.hidden = true;     // 2º Esc: dispensa o aviso e volta a editar
@@ -432,7 +467,7 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
     }
     const abrirCamada = () => camadas.abrir(() => {
       if (feito) return;
-      if (prot.sujo()) {
+      if (ocupado || prot.sujo()) {
         tentarFechar();
         // o Voltar gastou a entrada do histórico: recoloca depois do popstate (dentro dele a pilha ainda está sendo esvaziada)
         setTimeout(() => { if (!feito) camada = abrirCamada(); }, 0);
@@ -445,12 +480,14 @@ export function modal({ titulo, corpo, acoes, largura = "m", aoAbrir, fecharFora
         api.erro("");
         if (!a.fn) { api.fechar(a.valor !== undefined ? a.valor : a.tipo === "neutro" ? null : true); return; }
         b.setAttribute("aria-busy", "true"); botoes.forEach(x => { x.disabled = true; });
+        ocupado = true;
         try {
           const r = await a.fn(api);
           if (r !== false) api.fechar(r === undefined ? true : r);
         } catch (e) {
           api.erro(mensagemErro(e));
         } finally {
+          ocupado = false;
           b.removeAttribute("aria-busy"); botoes.forEach(x => { x.disabled = false; });
         }
       });
@@ -543,11 +580,12 @@ export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes, pro
     }
     g.fechar();
   }
+  // plano 1000b · UB-233: o X e a seta do cabeçalho passam pela mesma proteção do Esc (texto digitado pergunta «Descartar?»), como o modal (AS-210)
   dlg.append(
     h("header", { class: "gaveta-cab" },
-      h("button", { type: "button", class: "bt-icone gaveta-voltar", "aria-label": "Fechar", on: { click: () => g.fechar() } }, icone("seta-esq")),
+      h("button", { type: "button", class: "bt-icone gaveta-voltar", "aria-label": "Fechar", on: { click: () => tentarFechar() } }, icone("seta-esq")),
       tit, acoes || null,
-      h("button", { type: "button", class: "bt-icone gaveta-x", "aria-label": "Fechar", on: { click: () => g.fechar() } }, icone("fechar"))),
+      h("button", { type: "button", class: "bt-icone gaveta-x", "aria-label": "Fechar", on: { click: () => tentarFechar() } }, icone("fechar"))),
     faixa.el,
     corpoEl);
   dlg.addEventListener("cancel", ev => { ev.preventDefault(); tentarFechar(); });
@@ -564,6 +602,15 @@ export function gaveta({ titulo = "", corpo, largura = "m", aoFechar, acoes, pro
    Menu suspenso (popover, teclado ↑↓ Home End Esc)
    ============================================================ */
 let _menuAberto = null;
+/** Plano 1000b · UB-139: índice do próximo rótulo (depois de `atual`, dando a volta) que começa com `letra` (sem acento/caixa); -1 se nenhum. */
+export function proximoPorLetra(rotulos, atual, letra) {
+  const norm = s => String(s || "").trim().normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const l = norm(letra);
+  if (!l) return -1;
+  const n = rotulos.length;
+  for (let k = 1; k <= n; k++) { const j = ((atual < 0 ? -1 : atual) + k) % n; if (norm(rotulos[j]).startsWith(l)) return j; }
+  return -1;
+}
 /** menu(ancora, [{rotulo, icone, fn, perigo, desabilitado} | '-']) → {fechar} */
 export function menu(ancora, itens) {
   if (_menuAberto) _menuAberto.fechar();
@@ -595,6 +642,11 @@ export function menu(ancora, itens) {
     else if (ev.key === "End") { ev.preventDefault(); lista[lista.length - 1]?.focus(); }
     else if (ev.key === "Escape") { ev.preventDefault(); fechar(); ancora.focus(); }
     else if (ev.key === "Tab") fechar();
+    // plano 1000b · UB-139: busca pela 1ª letra do rótulo (a partir do item seguinte ao focado; «E» de novo passa ao próximo com E)
+    else if (typeof ev.key === "string" && ev.key.length === 1 && /\S/.test(ev.key) && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      const alvo = proximoPorLetra(lista.map(b => b.textContent), i, ev.key);
+      if (alvo >= 0) { ev.preventDefault(); lista[alvo].focus(); }
+    }
   }
   function fora(ev) { if (!pop.contains(ev.target) && ev.target !== ancora && !ancora.contains(ev.target)) fechar(); }
   function fechar() {
@@ -622,9 +674,15 @@ export function menu(ancora, itens) {
 }
 
 /** Painel flutuante genérico ancorado (popover): conteúdo livre. → {el, fechar} */
-export function flutuante(ancora, conteudo, { classe = "", aoFechar, largura } = {}) {
+export function flutuante(ancora, conteudo, { classe = "", aoFechar, largura, rotulo } = {}) {
   if (_menuAberto) _menuAberto.fechar();
   const pop = h("div", { class: ["flut", classe], popover: "manual", role: "dialog" }, conteudo);
+  // plano 1000b · UB-138: diálogo com nome — `rotulo` vira aria-label; sem ele, o 1º .rotulo do conteúdo dá o nome (aria-labelledby)
+  if (String(rotulo || "").trim()) pop.setAttribute("aria-label", String(rotulo).trim());
+  else {
+    const tit = pop.querySelector(".rotulo");
+    if (tit) { if (!tit.id) tit.id = novoId("flut-t"); pop.setAttribute("aria-labelledby", tit.id); }
+  }
   if (largura) pop.style.width = typeof largura === "number" ? `${largura}px` : largura;
   function posicionar() {
     const r = ancora.getBoundingClientRect(), vw = innerWidth, vh = innerHeight;
@@ -733,7 +791,9 @@ export const TEMAS_VAZIO = Object.freeze(Object.keys(TEMAS_ILUSTRACAO));
     Sem `tipo` é o vazio genérico (título + texto + ação); só leva o círculo de ícone se `icone` for dado (o "+" que todo vazio sem ícone herdava saiu, M09).
     `tema` ("conversas" | "crm" | "agenda" | "ads" | "automacoes" | "busca") troca o ícone por uma ilustração leve (plano 50 · A5), também no sem_resultado.
     passos: ["texto" | {rotulo, feito}]. */
-export function vazio({ tipo, titulo, texto, acao, icone: ic, acoes, passos, tema } = {}) {
+export function vazio({ tipo, titulo, texto, acao, icone: ic, acoes, passos, tema, nivel = 2 } = {}) {
+  // plano 1000b · UB-208: `nivel` do título (2 a 6, padrão 2) — dentro de uma seção que já tem h2, passe 3
+  const tagTit = `h${Math.min(6, Math.max(2, Math.round(Number(nivel)) || 2))}`;
   const lista = [...(acao ? [acao] : []), ...(acoes || [])];
   const il = tema ? ilustracaoVazio(tema) : null;
   const botao = (a, i, extra) => h("button", { type: "button", class: ["bt", i === 0 ? "bt-prim" : "bt-sec", extra], on: { click: a.fn } },
@@ -757,7 +817,7 @@ export function vazio({ tipo, titulo, texto, acao, icone: ic, acoes, passos, tem
     return h("div", { class: ["vazio", "vazio-primeiro"], dataset: { tipo } },
       orbitaSvg({ total: itens.length || 3, feitos: itens.filter(p => p.feito).length }),
       h("div", { class: "vazio-txt" },
-        titulo ? h("h2", null, titulo) : null,
+        titulo ? h(tagTit, { class: "vazio-tit" }, titulo) : null,
         texto ? h("p", null, texto) : null,
         itens.length ? h("ol", { class: "vazio-passos" }, itens.map(p => h("li", { dataset: { feito: p.feito ? "1" : "0" } }, p.rotulo))) : null,
         lista.length ? h("div", { class: "linha vazio-acoes" }, lista.map((a, i) => botao(a, i))) : null));
@@ -766,7 +826,7 @@ export function vazio({ tipo, titulo, texto, acao, icone: ic, acoes, passos, tem
   return h("div", { class: ["vazio", !ic && !il && "vazio-sem-ic", il && "vazio-tema"], dataset: il ? { tema } : null },
     il || (ic ? h("div", { class: "vazio-ic", "aria-hidden": "true" }, icone(ic)) : null),
     h("div", { class: "vazio-txt" },
-      titulo ? h("h2", null, titulo) : null,
+      titulo ? h(tagTit, { class: "vazio-tit" }, titulo) : null,
       texto ? h("p", null, texto) : null,
       botoes.length ? h("div", { class: "linha vazio-acoes" }, botoes) : null));
 }
@@ -823,8 +883,10 @@ export function esqueleto(tipo = "lista", opcoes = {}) {
     h("div", { class: "sk-agenda-grade" }, Array.from({ length: 7 }, (_, d) =>
       h("div", { class: "sk-agenda-col" }, b("sk-l1"), Array.from({ length: 2 + (d % 3) }, () => b("sk-card"))))));
   else corpo = h("div", { class: "sk-lista" }, itensLista(n));   // "lista" (e qualquer tipo desconhecido)
+  // plano 1000b · UB-209: `anunciar: false` nos esqueletos secundários — só o principal da tela fala «Carregando…» (role=status)
+  const fala = o.anunciar === false ? null : h("span", { class: "sr-only", role: "status" }, "Carregando…");
   const raiz = h("div", { class: ["esqueleto", `esqueleto-${tipo}`], dataset: { tipo }, "aria-busy": "true" },
-    h("span", { class: "sr-only", role: "status" }, "Carregando…"), comCab ? cab() : null, corpo);
+    fala, comCab ? cab() : null, corpo);
   return raiz;
 }
 export const TIPOS_ESQUELETO = Object.freeze(["inicio", "chat", "lista", "kanban", "ads", "tabela", "agenda", "cartoes", "cartao", "grafico", "kpi"]);
@@ -1006,14 +1068,21 @@ function ligarCapsLock(w, entrada, erroEl) {
   entrada.addEventListener("blur", () => { aviso.hidden = true; });
 }
 
+let _seqContador = 0;
 function ligarContador(w, entrada, max) {
-  const c = h("small", { class: "campo-contador", hidden: true });
+  // plano 1000b · UB-142: o contador fica ligado ao campo (aria-describedby) e o leitor de tela ouve UMA vez quando o texto chega ao limite
+  const c = h("small", { class: "campo-contador", hidden: true, id: `cont-${++_seqContador}` });
   w.appendChild(c);
+  const desc = String(entrada.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+  if (!desc.includes(c.id)) entrada.setAttribute("aria-describedby", [...desc, c.id].join(" "));
+  let avisou = String(entrada.value ?? "").length >= max;   // valor que já nasce no limite não é anunciado ao montar
   const atualizar = () => {
     const n = String(entrada.value ?? "").length;
     c.hidden = n < max * 0.8;
     c.textContent = `${n}/${max}`;
     c.dataset.limite = n >= max ? "1" : "0";
+    if (n >= max && !avisou) { avisou = true; anunciar(`Limite de ${max} caracteres.`); }
+    else if (n < max) avisou = false;
   };
   entrada.addEventListener("input", atualizar);
   atualizar();
@@ -1232,11 +1301,14 @@ export function tabela({ colunas, linhas = [], aoClicar, selecao = false, vazio:
     if (c.ordenavel) {
       // aria-sort="none" desde o início: o leitor de tela sabe que a coluna ordena; o ícone vira seta no sentido ativo (CSS por [aria-sort])
       th.setAttribute("aria-sort", "none");
-      const b = h("button", { type: "button", class: "th-ord", title: `Ordenar por ${c.rotulo}` }, c.rotulo, icone("ordenar"));
+      // plano 1000b · UB-275: o próprio botão diz a ordem atual (vários leitores só leem o aria-sort do th navegando pela tabela)
+      const sentido = h("span", { class: "sr-only th-ord-sentido" });
+      const b = h("button", { type: "button", class: "th-ord", title: `Ordenar por ${c.rotulo}` }, c.rotulo, sentido, icone("ordenar"));
       b.addEventListener("click", () => {
         ordem = ordem && ordem.chave === c.chave ? { chave: c.chave, dir: -ordem.dir } : { chave: c.chave, dir: 1 };
-        for (const x of cabs) if (x.hasAttribute("aria-sort")) x.setAttribute("aria-sort", "none");
+        for (const x of cabs) if (x.hasAttribute("aria-sort")) { x.setAttribute("aria-sort", "none"); const s = x.querySelector(".th-ord-sentido"); if (s) s.textContent = ""; }
         th.setAttribute("aria-sort", ordem.dir > 0 ? "ascending" : "descending");
+        sentido.textContent = ordem.dir > 0 ? " (crescente)" : " (decrescente)";
         anunciar(`Ordenado por ${c.rotulo}, ${ordem.dir > 0 ? "crescente" : "decrescente"}.`);
         desenhar();
       });
@@ -1252,12 +1324,23 @@ export function tabela({ colunas, linhas = [], aoClicar, selecao = false, vazio:
   const env = h("div", { class: ["tabela-env", rolagem && "tabela-rolavel"] }, table);
 
   function valorOrd(l, c) { const v = l[c]; return v === null || v === undefined ? "" : v; }
+  // plano 1000b · UB-140: a caixa diz QUAL linha seleciona («Selecionar Maria Souza»), pela coluna principal (ou a 1ª)
+  const colPrincipal = colunas.find(c => c.principal) || colunas[0];
+  function rotuloSelecao(l) {
+    const v = colPrincipal ? l[colPrincipal.chave] : null;
+    const t = typeof v === "string" || typeof v === "number" ? String(v).trim() : "";
+    return t ? `Selecionar ${t}` : "Selecionar";
+  }
+  const vazioOrd = v => v === null || v === undefined || (typeof v === "string" && !v.trim());
   function desenhar() {
     limpar(tbody);
     let lista = dados;
     if (ordem) {
       lista = dados.slice().sort((a, b) => {
         const x = valorOrd(a, ordem.chave), y = valorOrd(b, ordem.chave);
+        // plano 1000b · UB-141: vazios («Nunca entrou») sempre no fim, nos dois sentidos
+        const vx = vazioOrd(x), vy = vazioOrd(y);
+        if (vx || vy) return vx === vy ? 0 : vx ? 1 : -1;
         const r = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "pt-BR", { numeric: true, sensitivity: "base" });
         return r * ordem.dir;
       });
@@ -1269,7 +1352,7 @@ export function tabela({ colunas, linhas = [], aoClicar, selecao = false, vazio:
     for (const l of lista) {
       const tr = h("tr", { tabindex: aoClicar ? "0" : null, dataset: { id: l[chave] } });
       if (selecao) {
-        const cb = h("input", { type: "checkbox", "aria-label": "Selecionar", checked: marcadas.has(l[chave]) });
+        const cb = h("input", { type: "checkbox", "aria-label": rotuloSelecao(l), checked: marcadas.has(l[chave]) });
         cb.addEventListener("change", () => { cb.checked ? marcadas.add(l[chave]) : marcadas.delete(l[chave]); });
         cb.addEventListener("click", ev => ev.stopPropagation());
         tr.appendChild(h("td", { class: "td-sel" }, cb));
@@ -1325,6 +1408,8 @@ export const PILULA_STATUS = Object.freeze({
   erro: "ruim", perdido: "ruim", falhou: "ruim", bloqueado: "ruim", desconectado: "ruim", recusado: "ruim",
   novo: "info", aberto: "info", andamento: "info", info: "info",
 });
+/** plano 1000b · UB-144: texto para busca — sem acento, sem caixa, sem espaço nas pontas. */
+const semAcento = v => String(v ?? "").trim().normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 const chaveDe = v => String(v ?? "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[\s-]+/g, "_");
 /** pilula(texto, cor, {icone, title, class, variante: "status"|"prioridade"|"canal"|"origem", plataforma, tamanho: "p"}) — cor = token ('ok','ruim','aten','info','prim','sec','neutra') ou #RRGGBB do banco;
     com `variante`, `cor` é a chave semântica (ex.: "whatsapp", "alta", "pausado", "site") e a cor sai da tabela; texto nulo usa o rótulo da tabela. */
@@ -1439,18 +1524,20 @@ export function seletorEtiquetas({ todas = [], marcadas = [], aoMudar, podeCriar
   }
   botao.addEventListener("click", () => {
     const busca = h("input", { type: "search", class: "flut-busca", placeholder: "Buscar etiqueta", "aria-label": "Buscar etiqueta" });
-    const lista = h("div", { class: "flut-lista", role: "listbox", "aria-multiselectable": "true" });
+    // plano 1000b · UB-143: grupo de caixas de seleção (listbox exigiria filhos role=option)
+    const lista = h("div", { class: "flut-lista", role: "group", "aria-label": rotulo });
     const desenharLista = () => {
       limpar(lista);
-      const q = busca.value.trim().toLowerCase();
-      const achadas = catalogo.filter(e => !q || e.nome.toLowerCase().includes(q));
+      // plano 1000b · UB-144: sem acento e sem caixa («orcamento» acha «Orçamento»), como as outras buscas
+      const q = semAcento(busca.value);
+      const achadas = catalogo.filter(e => !q || semAcento(e.nome).includes(q));
       for (const e of achadas) {
         const op = h("label", { class: "flut-op" },
           h("input", { type: "checkbox", checked: sel.has(e.id), on: { change: ev => { ev.target.checked ? sel.add(e.id) : sel.delete(e.id); mudou(); } } }),
           etiqueta(e));
         lista.appendChild(op);
       }
-      if (q && podeCriar && !catalogo.some(e => e.nome.toLowerCase() === q)) {
+      if (q && podeCriar && !catalogo.some(e => semAcento(e.nome) === q)) {
         const nomeNovo = busca.value.trim();
         lista.appendChild(h("button", { type: "button", class: "flut-criar", on: { click: async ev => {
           const b = ev.currentTarget;
@@ -1464,7 +1551,7 @@ export function seletorEtiquetas({ todas = [], marcadas = [], aoMudar, podeCriar
     };
     busca.addEventListener("input", desenharLista);
     desenharLista();
-    flutuante(botao, h("div", { class: "pilha-p" }, busca, lista), { classe: "flut-etiq", largura: 260 });
+    flutuante(botao, h("div", { class: "pilha-p" }, busca, lista), { classe: "flut-etiq", largura: 260, rotulo });   // UB-138
   });
   desenhar();
   return raiz;
@@ -1484,12 +1571,17 @@ export function seletorCor({ valor = null, paleta, aoMudar, rotulo = "Cor" } = {
   const cores = (paleta && paleta.length ? paleta : Array.from({ length: 12 }, (_, i) => `var(--pal-${i})`));
   let atual = corOk(valor);
   const nome = novoId("cor");
-  const hex = h("input", { type: "text", class: "cor-hex mono", value: atual || "", maxlength: 7, "aria-label": `${rotulo} em hexadecimal`, placeholder: "#RRGGBB", spellcheck: "false" });
+  // plano 1000b · UB-146: cor digitada errada ganha a explicação (ao sair do campo), não só o vermelho do aria-invalid
+  // o exemplo vem da própria paleta (cor de verdade, nada de hex escrito aqui — as cores moram no tema)
+  const exemploHex = cores.map(c => hexDigitado(c)).find(Boolean);
+  const erroHex = h("small", { class: "campo-erro cor-erro", id: novoId("cor-erro"), hidden: true }, `Use #RRGGBB${exemploHex ? `, por exemplo ${exemploHex}` : ""}.`);
+  const hex = h("input", { type: "text", class: "cor-hex mono", value: atual || "", maxlength: 7, "aria-label": `${rotulo} em hexadecimal`, placeholder: "#RRGGBB", spellcheck: "false", "aria-describedby": erroHex.id });
   const amostra = h("span", { class: "cor-amostra", "aria-hidden": "true", style: atual ? { "--cor": atual } : null });
   const grupo = h("div", { class: "cor-paleta", role: "radiogroup", "aria-label": rotulo });
   const botoes = cores.map((c, i) => {
     const hexC = corOk(c);
-    const b = h("button", { type: "button", role: "radio", class: "cor-op", "aria-label": hexC || `Cor ${i + 1}`,
+    // plano 1000b · UB-145: nome falado («Âmbar») com o código como descrição — antes o leitor soletrava «cerquilha B 0 7…»
+    const b = h("button", { type: "button", role: "radio", class: "cor-op", "aria-label": (hexC && nomeDaCor(hexC)) || `Cor ${i + 1}`, "aria-description": hexC || null,
       "aria-checked": String(!!hexC && hexC.toUpperCase() === (atual || "").toUpperCase()), tabindex: "-1",
       style: { "--cor": hexC || c }, dataset: { cor: hexC || "" } });
     b.addEventListener("click", () => escolher(hexC));
@@ -1513,18 +1605,23 @@ export function seletorCor({ valor = null, paleta, aoMudar, rotulo = "Cor" } = {
   }
   function escolher(c) {
     if (!c) return;
-    atual = c.toUpperCase(); hex.value = atual; hex.removeAttribute("aria-invalid"); marcar();
+    atual = c.toUpperCase(); hex.value = atual; hex.removeAttribute("aria-invalid"); erroHex.hidden = true; marcar();
     if (aoMudar) aoMudar(atual);
   }
   hex.addEventListener("input", () => {
-    let v = hex.value.trim(); if (v && !v.startsWith("#")) v = "#" + v;
-    if (corOk(v)) { atual = v.toUpperCase(); hex.removeAttribute("aria-invalid"); marcar(); if (aoMudar) aoMudar(atual); }
+    // plano 1000b · UB-147: «#fa0» vale (vira os 6 dígitos ao sair do campo), como o tema.normalizarHex
+    const v = hexDigitado(hex.value);
+    if (v) { atual = v; hex.removeAttribute("aria-invalid"); erroHex.hidden = true; marcar(); if (aoMudar) aoMudar(atual); }
     else hex.setAttribute("aria-invalid", "true");
   });
+  hex.addEventListener("blur", () => {
+    if (atual && hexDigitado(hex.value) === atual && hex.value !== atual) hex.value = atual;   // UB-147
+    erroHex.hidden = !(String(hex.value).trim() && !hexDigitado(hex.value));                   // UB-146
+  });
   marcar();
-  const el = h("div", { class: "seletor-cor", dataset: { nome } }, grupo, h("div", { class: "cor-linha" }, amostra, hex));
+  const el = h("div", { class: "seletor-cor", dataset: { nome } }, grupo, h("div", { class: "cor-linha" }, amostra, hex), erroHex);
   el.valor = () => atual;
-  el.definir = c => { const x = corOk(c); if (x) { atual = x.toUpperCase(); hex.value = atual; marcar(); } };
+  el.definir = c => { const x = corOk(c); if (x) { atual = x.toUpperCase(); hex.value = atual; hex.removeAttribute("aria-invalid"); erroHex.hidden = true; marcar(); } };
   return el;
 }
 
@@ -1624,6 +1721,9 @@ export function telBR(digitos) {
   if (d.length >= 12 && d.length <= 13 && d.startsWith("55")) d = d.slice(2);
   if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
   if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  // plano 1000b · UB-241: número sem DDD (8 ou 9 dígitos) é local, não internacional — «99830-3030», não «+998303030»
+  if (d.length === 9) return `${d.slice(0, 5)}-${d.slice(5)}`;
+  if (d.length === 8) return `${d.slice(0, 4)}-${d.slice(4)}`;
   return `+${d}`;
 }
 
@@ -1751,15 +1851,33 @@ export function linkWhatsApp(texto, numero) {
 
 /** Bloco de link gerado (convite / nova senha): campo só leitura + Copiar + WhatsApp.
     AS-272: `central(texto)` (opcional) acrescenta «Enviar pela central» — quem chama abre as Conversas com o texto pronto (nunca envia sozinho). */
+/** plano 1000b · UB-276: linkTruncado("https://x/app/#/senha/9f3a…64") → "…/senha/9f3a…". Último trecho com mais de 12 caracteres
+    (o token) fica com os 4 primeiros; link sem trecho longo volta inteiro. */
+export function linkTruncado(link) {
+  const s = String(link ?? "");
+  const partes = s.split(/[/#?=]+/).filter(Boolean);
+  const ultimo = partes[partes.length - 1] || "";
+  if (ultimo.length <= 12) return s;
+  const antes = partes.length > 1 ? partes[partes.length - 2] : "";
+  return `…/${antes && !/^https?:$/.test(antes) ? `${antes}/` : ""}${ultimo.slice(0, 4)}…`;
+}
 export function blocoLink(link, { rotulo = "Link", textoWhats, central } = {}) {
   const id = novoId("lnk");
   const textoCompleto = textoWhats ? `${textoWhats}\n${link}` : link;
-  const inp = h("input", { id, type: "text", class: "mono", readonly: true, value: link });
-  inp.addEventListener("focus", () => inp.select());
+  // plano 1000b · UB-276: o link (convite, nova senha) carrega um segredo e a tela pode ser compartilhada — nasce truncado («…/senha/9f3a…»);
+  // «Mostrar link» revela o completo e só então o foco seleciona. Copiar e WhatsApp usam sempre o link inteiro.
+  const curto = linkTruncado(link);
+  let visivel = curto === String(link);
+  const inp = h("input", { id, type: "text", class: "mono", readonly: true, value: visivel ? link : curto });
+  inp.addEventListener("focus", () => { if (visivel) inp.select(); });
+  const mostrar = visivel ? null : h("button", { type: "button", class: "bt bt-sec bloco-link-mostrar", "aria-pressed": "false", "aria-controls": id, on: { click: () => {
+    visivel = !visivel; inp.value = visivel ? link : curto;
+    mostrar.setAttribute("aria-pressed", String(visivel)); mostrar.lastChild.textContent = visivel ? "Esconder link" : "Mostrar link";
+  } } }, icone("olho"), h("span", null, "Mostrar link"));
   return h("div", { class: "bloco-link" },
     h("label", { for: id, class: "rotulo" }, rotulo),
     inp,
-    h("div", { class: "linha" },
+    h("div", { class: "linha" }, mostrar,
       h("button", { type: "button", class: "bt bt-prim", on: { click: () => copiar(link, { aviso: "Link copiado." }) } }, icone("copiar"), "Copiar"),
       h("a", { class: "bt bt-sec", href: linkWhatsApp(textoCompleto), target: "_blank", rel: "noopener noreferrer" }, icone("whatsapp"), "Enviar pelo WhatsApp"),
       typeof central === "function" ? h("button", { type: "button", class: "bt bt-sec bloco-link-central", on: { click: () => central(textoCompleto) } }, icone("chat"), "Enviar pela central") : null));
@@ -1768,12 +1886,15 @@ export function blocoLink(link, { rotulo = "Link", textoWhats, central } = {}) {
 /** Barra de uso × limite (Plano e uso, Admin). limite null = sem limite. */
 export function barraUso(rotulo, uso, limite, { detalhe } = {}) {
   const u = Number(uso) || 0;
-  const semLimite = limite === null || limite === undefined;
-  const p = semLimite ? 0 : limite === 0 ? 100 : Math.min(100, Math.round((u / limite) * 100));
-  const txt = semLimite ? `${num(u)} · sem limite` : `${num(u)} / ${num(limite)}`;
-  return h("div", { class: "uso" },
-    h("div", { class: "uso-l" }, h("span", null, rotulo), h("span", null, txt)),
-    h("div", { class: ["uso-barra", p >= 100 ? "cheia" : p >= 80 ? "alta" : null], role: "meter", "aria-valuemin": "0",
+  const semLimite = limite === null || limite === undefined || limite === "";
+  // plano 1000b (pendência da frente config) · limite 0 = o recurso não faz parte do plano: nada de «0 / 0» com a barra cheia e vermelha
+  const foraDoPlano = !semLimite && Number(limite) === 0;
+  const p = semLimite || foraDoPlano ? 0 : Math.min(100, Math.round((u / limite) * 100));
+  const txt = semLimite ? `${num(u)} · sem limite` : foraDoPlano ? (u > 0 ? `não incluído no plano · ${num(u)} em uso` : "não incluído no plano") : `${num(u)} / ${num(limite)}`;
+  return h("div", { class: ["uso", foraDoPlano && "uso-fora"] },
+    h("div", { class: "uso-l" }, h("span", null, rotulo), h("span", { class: foraDoPlano ? "fraco" : null }, txt)),
+    // fora do plano: sem barra (como o «Plano e uso» das Configurações) — não há medida a mostrar
+    foraDoPlano ? null : h("div", { class: ["uso-barra", p >= 100 ? "cheia" : p >= 80 ? "alta" : null], role: "meter", "aria-valuemin": "0",
       "aria-valuemax": String(semLimite ? Math.max(u, 1) : limite), "aria-valuenow": String(u), "aria-label": rotulo, "aria-valuetext": txt },
       h("i", { style: { "--p": `${semLimite ? 0 : p}%` } })),
     detalhe ? h("small", { class: "uso-det" }, detalhe) : null);
@@ -1921,7 +2042,20 @@ export function segmentado({ opcoes = [], valor, tipo = "abas", aoMudar, rotulo 
     if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); escolher(chaves[i], true); }
   });
   marcar();
-  if (typeof ResizeObserver === "function") { try { new ResizeObserver(() => { posicionar(); bordas(); }).observe(el); } catch { /* ok */ } }
+  // plano 1000b · RB-167: o observador se desliga quando o elemento sai do DOM (o navegador avisa a remoção com tamanho 0) ou pelo el.destruir();
+  // antes cada redesenho (as barras do Início) deixava um ResizeObserver vivo para sempre
+  let ro = null, jaNoDom = false;
+  const desligarRO = () => { if (ro) { try { ro.disconnect(); } catch { /* ok */ } ro = null; } };
+  if (typeof ResizeObserver === "function") {
+    try {
+      ro = new ResizeObserver(() => {
+        if (!el.isConnected) { if (jaNoDom) desligarRO(); return; }
+        jaNoDom = true; posicionar(); bordas();
+      });
+      ro.observe(el);
+    } catch { ro = null; }
+  }
+  el.destruir = desligarRO;
   el.bordas = bordas;
   try { if (typeof document !== "undefined" && document.fonts && document.fonts.ready) document.fonts.ready.then(posicionar); } catch { /* ok */ }
   proximoQuadro(posicionar);

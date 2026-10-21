@@ -35,6 +35,7 @@ const PRAZO_REDE_MS = 3000;
 const PRAZO_ARQUIVO_MS = 8000;
 const MAX_PRECACHE = 250;
 const ESCOPO = new URL(self.registration.scope);
+const CAMINHO_FONTES = new URL("../fonts/", ESCOPO).pathname;   // plano 1000b · UB-173
 const URL_INDEX = new URL("index.html", ESCOPO).href;      // a navegação cai aqui, qualquer que seja a query (?produto=, ?org=)
 
 function mesmoSite(url) { return url.origin === self.location.origin; }
@@ -57,7 +58,8 @@ function comVersao(url) {
 /** Fonte ou ícone sem ?v=: guardado por versão (só no cache desta), nunca servido do cache de uma versão anterior. */
 function estatico(url) {
   if (!mesmoSite(url) || url.searchParams.has("v")) return false;
-  return url.pathname.startsWith("/fonts/") || url.pathname.startsWith(ESCOPO.pathname + "icones/");
+  // plano 1000b · UB-173: as fontes moram em ../fonts/ do escopo (/fonts/ no Netlify, /nexus-ads/fonts/ no espelho do GitHub Pages)
+  return url.pathname.startsWith("/fonts/") || url.pathname.startsWith(CAMINHO_FONTES) || url.pathname.startsWith(ESCOPO.pathname + "icones/");
 }
 /** O que vale guardar no cache (instalação e precache): o versionado e o estático. */
 function versionado(url) { return comVersao(url) || estatico(url); }
@@ -102,7 +104,7 @@ self.addEventListener("install", ev => {
     const falhou = [];
     await Promise.all(essenciais.map(async u => { if (!(await guardar(cache, u))) falhou.push(u); }));
     if (falhou.length) throw new Error("shell_incompleto");
-    await Promise.all(urls.filter(u => !essenciais.includes(u)).map(u => guardar(cache, u)));
+    await guardarEmLotes(cache, urls.filter(u => !essenciais.includes(u)));   // plano 1000b · UB-175: 4 por vez, como o precache
   })());
 });
 
@@ -125,7 +127,8 @@ const PAGINA_OFFLINE = "<!doctype html><html lang=\"pt-BR\"><meta charset=\"utf-
   + "h1{font-size:1.25rem;margin:0 0 .5rem}p{opacity:.8;margin:0 0 1.25rem}"
   + "a{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;padding:0 1.25rem;border-radius:999px;background:CanvasText;color:Canvas;font-weight:600;text-decoration:none}"
   + "a:focus-visible{outline:3px solid Highlight;outline-offset:3px}</style>"
-  + "<body><main><h1>Sem conexão</h1><p>Confira a internet e tente de novo.</p><a href=\"\">Tentar de novo</a></main></body></html>";
+  // plano 1000b · UB-174: diz que nada se perdeu e que o app volta quando a internet voltar
+  + "<body><main><h1>Sem conexão</h1><p>Quando a internet voltar, toque em Tentar de novo. Nada do que você salvou se perdeu.</p><a href=\"\">Tentar de novo</a></main></body></html>";
 
 async function navegacao(ev) {
   const cache = await caches.open(NOME_CACHE);

@@ -230,7 +230,8 @@ test("AS-277 / AS-016 / AS-070: aviso de esperas, ligadas que enviam e linha da 
   assert.match(L.avisoDesligarEspera({ em_espera: 1 }), /^1 pessoa está no meio/);
   assert.match(L.avisoDesligarEspera({ em_espera: 3 }), /^3 pessoas estão no meio/);
   assert.deepEqual(L.ligadasQueEnviam(dadosLista().itens).map(x => x.id), ["a3"]);
-  assert.deepEqual(L.linhaCotaIA({ usadas: 12, limite: 300 }), { texto: "12 de 300 montagens de IA usadas este mês", tom: "neutra", esgotada: false });
+  // plano 1000b: UB-062 — a cota soma sugestões, resumos e montagens (o texto diz isso)
+  assert.deepEqual(L.linhaCotaIA({ usadas: 12, limite: 300 }), { texto: "12 de 300 usos de IA este mês (sugestões, resumos e montagens)", tom: "neutra", esgotada: false });
   assert.equal(L.linhaCotaIA({ usadas: 250, limite: 300 }).tom, "aten");
   assert.equal(L.linhaCotaIA({ usadas: 300, limite: 300 }).tom, "ruim");
   assert.equal(L.linhaCotaIA({ usadas: 3, limite: null }), null);
@@ -394,7 +395,7 @@ test("AS-006 + AS-070 «Criar com IA»: sem cota o botão e os exemplos não ace
     const t2 = ctxAuto(ui, { rpc: rpcLista(dadosLista({ ia: { disponivel: true, usadas: 250, limite: 300 } })) });
     await A.montar(t2.ctx); await tique();
     const linha = t2.ctx.alvo.querySelector(".au-ia-cota");
-    assert.equal(textoDe(linha), "250 de 300 montagens de IA usadas este mês");
+    assert.equal(textoDe(linha), "250 de 300 usos de IA este mês (sugestões, resumos e montagens)");   // plano 1000b: UB-062
     assert.equal(linha.dataset.tom, "aten");
     const area2 = t2.ctx.alvo.querySelector(".au-ia-txt");
     area2.value = "Quando o orçamento ficar parado 3 dias, crie uma tarefa"; area2.dispatchEvent(new d.Evento("input"));
@@ -681,8 +682,8 @@ test("AS-035 + AS-036 + AS-037 passo «Enviar mensagem»: aviso de variável err
     assert.equal(textoDe(passo.querySelector(".au-cont")), "21 / 4.096");
     digitar(d, ta, "Oi {primeironome}, tudo bem?");
     assert.match(textoDe(passo.querySelector(".au-passo-aviso")), /variável desconhecida \{primeironome\} \(use \{primeiro_nome\}\)/);
+    await esperar(200);     // plano 1000b: UB-021 — a lateral espera 120 ms sem tecla (dentro do passo continua na hora)
     assert.ok(e.raiz.querySelectorAll(".au-aviso-lat").some(p => /Passo 1: variável desconhecida/.test(p.textContent)));
-    await esperar(200);
     assert.equal(textoDe(passo.querySelector(".au-msg-previa .au-bolha")), "Oi {primeironome}, tudo bem?", "a prévia mostra o buraco");
     digitar(d, ta, "x".repeat(3800));
     assert.equal(passo.querySelector(".au-cont").dataset.tom, "aten");
@@ -1191,11 +1192,13 @@ test("AS-007 + AS-013 + AS-022: no limite, exemplos apagados com a frase do limi
     const raiz = t.ctx.alvo;
     assert.ok(raiz.querySelectorAll(".au-chip-ex").length >= 3);
     assert.ok(raiz.querySelectorAll(".au-chip-ex").every(b => b.disabled), "exemplos não enchem a caixa sem poder pedir");
-    assert.match(textoDe(raiz.querySelector(".au-ia-limite")), /limite de 4 automações: exclua uma \(desligar não libera vaga\)/);
-    assert.match(raiz.querySelector(".au-ia-txt").getAttribute("aria-describedby"), /-lim$/);
+    // plano 1000b: UB-047 — um aviso só (o do topo, #au-limite); a caixa da IA e as receitas apontam para ele
+    assert.match(textoDe(raiz.querySelector("#au-limite")), /limite de 4 automações \(desligadas também contam\)/);
+    assert.equal(raiz.querySelector(".au-ia-limite"), null);
+    assert.match(raiz.querySelector(".au-ia-txt").getAttribute("aria-describedby"), / au-limite$/);
     const usar = raiz.querySelectorAll(".au-modelo-rod button").filter(b => b.textContent === "Usar receita");
-    assert.ok(usar.length && usar.every(b => b.disabled && /permite até 4 automações/.test(b.getAttribute("title") || b.title) && b.getAttribute("aria-describedby") === "au-mod-limite"));
-    const aviso = raiz.querySelector("#au-mod-limite");
+    assert.ok(usar.length && usar.every(b => b.disabled && /permite até 4 automações/.test(b.getAttribute("title") || b.title) && b.getAttribute("aria-describedby") === "au-limite"));
+    const aviso = raiz.querySelector("#au-limite");
     assert.equal(aviso.querySelector("a").getAttribute("href"), "#/config/plano");
     const pil = raiz.querySelector(".au-uso");
     assert.match(pil.getAttribute("title") || pil.title, /Desligadas também contam no plano/);
@@ -1206,7 +1209,7 @@ test("AS-007 + AS-013 + AS-022: no limite, exemplos apagados com a frase do limi
     await A.montar(t2.ctx); await tique();
     assert.ok(t2.ctx.alvo.querySelectorAll(".au-chip-ex").every(b => !b.disabled));
     assert.equal(t2.ctx.alvo.querySelector(".au-ia-limite"), null);
-    assert.equal(t2.ctx.alvo.querySelector("#au-mod-limite"), null);
+    assert.equal(t2.ctx.alvo.querySelector("#au-limite"), null);
     A.desmontar();
   } finally { d.fim(); }
 });
@@ -1285,7 +1288,9 @@ test("AS-017: «Do sistema» recolhível (fechado no celular) e com o atalho par
     const det = t.ctx.alvo.querySelector(".au-sis-det");
     assert.ok(det && det.localName === "details");
     assert.equal(!!(det.open || det.hasAttribute("open")), false, "no celular nasce recolhida");
-    assert.match(textoDe(det.querySelector("summary")), /Do sistema.*3 regras prontas/);
+    // plano 1000b: UB-046 — o título «Do sistema» saiu do summary (fica no cabeçalho da seção); o summary diz «Ver as 3 regras»
+    assert.match(textoDe(det.parentNode.querySelector(".au-sec-cab")), /Do sistema.*3 regras prontas/);
+    assert.equal(textoDe(det.querySelector("summary")), "Ver as 3 regras");
     const links = det.querySelectorAll(".au-sis-link").map(a => a.getAttribute("href"));
     assert.deepEqual(links, ["#/config/departamentos", "#/config/usuarios"]);
     A.desmontar();
@@ -1774,12 +1779,13 @@ test("AS-104 + AS-108 + AS-109 Marca: «Salvar marca» só acende com mudança; 
     const m = await abrirMarcaOrg(d);
     const bt = botaoTexto(m.raiz, /Salvar marca/);
     assert.ok(bt, "o editor abriu");
-    assert.equal(bt.disabled, true, "sem mudança, nada a salvar");
+    // plano 1000b: UB-261 — aria-disabled no lugar de disabled (o Tab alcança o botão e o clique diz «Nada para salvar»)
+    assert.equal(bt.getAttribute("aria-disabled"), "true", "sem mudança, nada a salvar");
     assert.equal(textoDe(m.raiz.querySelector(".marca-estado")), "Tudo salvo.");
     assert.equal(m.raiz.querySelector("[name=assinatura]").placeholder || m.raiz.querySelector("[name=assinatura]").getAttribute("placeholder"), "Equipe Sorriso");
     const wa = m.raiz.querySelector("[name=suporte_wa]");
     digitar(d, wa, "12345");
-    assert.equal(bt.disabled, false);
+    assert.equal(bt.getAttribute("aria-disabled"), "false");
     const prev = m.raiz.querySelector(".cfg-wa-previa");
     assert.match(textoDe(prev), /Use 55 \+ DDD \+ número/);
     assert.ok(prev.classList.contains("campo-erro"));
@@ -1817,7 +1823,7 @@ test("AS-105 + AS-110 + AS-112 Marca: «Gerar do logo» mostra carregando; arras
     assert.equal(previa.dataset.esquema, "claro");
     assert.equal(claro.getAttribute("aria-pressed"), "true");
     assert.match(textoDe(m.raiz.querySelector(".marca-previa-env .pilula")), /Palco escuro · prévia no outro esquema/);
-    assert.equal(botaoTexto(m.raiz, /Salvar marca/).disabled, true, "ver no outro esquema não muda o que será salvo");
+    assert.equal(botaoTexto(m.raiz, /Salvar marca/).getAttribute("aria-disabled"), "true", "ver no outro esquema não muda o que será salvo");   // plano 1000b: UB-261
     assert.match(ler("web/app/config.css"), /\.previa \.pv-kpi b \{ display: block; white-space: nowrap;/, "AS-107: «18,4 mil» não quebra");
     m.cfg.desmontar();
   } finally { if (salvoImg === undefined) delete globalThis.Image; else globalThis.Image = salvoImg; d.fim(); }
@@ -2595,7 +2601,9 @@ test("revisão 9 · AS-272 convite «Enviar pela central»: abre Conversas com ?
   assert.match(conv, /if \(textoPronto\) copiarTextoPronto\(textoPronto, \{ limparRota: true \}\);/, "sem conversa: copia e avisa");
   const fnTexto = conv.slice(conv.indexOf("function colocarTextoPronto("), conv.indexOf("async function abrirPorContato("));
   assert.doesNotMatch(fnTexto, /nx_cv_enviar|rpcC|api\.fn|\.enviar\(/, "nada é enviado");
-  assert.match(ler("web/app/config.js"), /ctx\.navegar\(`#\/conversas\?texto=\$\{encodeURIComponent\(String\(texto\)\.slice\(0, 1000\)\)\}`\)/);
+  // plano 1000b: UB-199 — o convite (com o token) não vai mais no endereço: copia o texto e abre #/conversas (teste em plano1000b-config)
+  assert.doesNotMatch(ler("web/app/config.js"), /#\/conversas\?texto=/);
+  assert.match(ler("web/app/config.js"), /ctx\.navegar\("#\/conversas"\)/);
 });
 
 test("revisão 10 · SV-128 «Sair de todos os aparelhos» chama nx_sessoes_encerrar (com confirmação); erro avisa e não sai; servidor antigo cai no nx_sair_todas", async () => {

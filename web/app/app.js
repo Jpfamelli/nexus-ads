@@ -143,6 +143,8 @@ async function iniciar() {
   // A2: o som de mensagem nova (Web Audio) só pode nascer depois de um gesto da pessoa
   document.addEventListener("pointerdown", desbloquearAudio, { once: true, passive: true });
   document.addEventListener("keydown", desbloquearAudio, { once: true });
+  // plano 1000b · UB-168: em aparelho compartilhado, toque/tecla/rolagem contam como uso (o pulso, que lê sozinho, não conta)
+  for (const t of ["pointerdown", "keydown", "wheel", "touchstart"]) document.addEventListener(t, () => { if (E.ocioso) E.ocioso.tocar(); }, { capture: true, passive: true });
   // M11: tudo o que o boot precisa começa AGORA, junto (o index.html já pré-carrega estes arquivos com <link rel="modulepreload">)
   const prontosP = arq("prontos.js");
   prontosP.catch(() => { /* tratado abaixo; aqui só evita o aviso de promessa sem dono */ });
@@ -207,6 +209,8 @@ async function iniciar() {
     aoCanais: lista => atualizarCanais({ canais: lista }, "pulso"),   // A10: estado dos números quando o servidor manda
     escopo: () => E.cliente && E.cliente.id,
     avisoTela: () => lerAvisosConversas().tela,   // AS-188: quem ligou o aviso de área de trabalho continua a 15 s com a aba escondida
+    // plano 1000b · UB-279: o pulso parou por sessão inválida (aba parada, token vencido): abre a janela de login; o «ok» dela reinicia o pulso
+    aoParar: motivo => { if (motivo === "sessao_invalida" && E.sessao) sessaoCaiu(); },
   });
   E.pulso.assinar(() => { atualizarNaoLidas(); });
   E.rede.aoVoltar(() => { if (E.pulso) E.pulso.agora(); });   // reconectou: o pulso lê agora (e as telas pelo orbita:online / ctx.rede.aoVoltar)
@@ -252,6 +256,7 @@ async function iniciar() {
   });
   ui.atalho("mod+k", ev => {
     if (!E.sessao || $("app").hidden) return;
+    if (outroDialogoAberto(document)) return;   // plano 1000b · UB-127: com «Excluir?» (ou outra janela) aberto, a paleta não empilha por cima
     ev.preventDefault();
     abrirPaleta();
   });
@@ -306,7 +311,32 @@ function montarSeloCache() {
   };
   E.rede.assinar(() => renderSelo());
   // a conexão voltou e a tela está com dado velho: relê a tela (o cartão de erro já refaz sozinho; aqui é a tela pintada do cache)
-  E.rede.aoVoltar(() => { if (selo.falhou) aoMudarRota(false); });
+  E.rede.aoVoltar(() => { releituraAoReconectar(); });
+}
+
+/** Plano 1000b · CB-166: o rede.assinar do rede.js também fala a cada segundo da contagem e no «Reconectado»; os módulos só querem saber
+    quando o ESTADO muda (online ↔ lento ↔ offline ↔ servidor_fora). fn({estado, antes, online}); devolve cancelar(). */
+function assinarMudancaDeRede(rede, fn) {
+  if (!rede || typeof rede.assinar !== "function" || typeof fn !== "function") return () => {};
+  let ultimo = rede.estado;
+  return rede.assinar(f => {
+    const estado = f && f.estado;
+    if (!estado || estado === ultimo) return;
+    const antes = ultimo; ultimo = estado;
+    try { fn({ estado, antes, online: estado === "online" || estado === "lento" }); } catch (e) { console.error("ctx.rede.assinar", e); }
+  });
+}
+
+/** Plano 1000b · UB-009: a conexão voltou com dado velho na tela. Remontar a tela apagaria o que está sendo editado (editor de automação,
+    formulário sem rascunho): com trabalho em curso (ocupadoParaAtualizar ou guarda de rota registrada) só avisa, com «Atualizar» para quem quiser. */
+function releituraAoReconectar() {
+  if (!selo.falhou) return "nada";
+  if (ocupadoParaAtualizar() || guardasDeRota.size > 0) {
+    E.ui.toast("Os dados podem estar desatualizados.", { tipo: "info", acao: { rotulo: "Atualizar", fn: () => aoMudarRota(false) } });
+    return "avisou";
+  }
+  aoMudarRota(false);
+  return "remontou";
 }
 
 /* ============================================================
@@ -366,7 +396,7 @@ function montarIndicadoresRede() {
       const espera = ui.h("span", { class: "rede-espera", "aria-hidden": "true" });
       const bt = ui.h("button", { type: "button", class: "bt bt-sec" }, "Tentar agora");
       bt.addEventListener("click", () => { E.rede.tentarAgora(); });
-      el = ui.h("div", { class: "faixa faixa-rede" }, ui.icone("info"), ui.h("p", { class: "rede-msg", "aria-live": "polite" }), espera, bt);
+      el = ui.h("div", { class: "faixa faixa-rede" }, ui.icone("info"), ui.h("p", { class: "rede-msg" }), espera, bt);   // plano 1000b · UB-121: sem aria-live (o ui.anunciar abaixo já fala; eram duas vezes)
       alvo.insertBefore(el, alvo.firstChild);
     }
     const p = el.querySelector(".rede-msg");
@@ -476,6 +506,53 @@ function definirAparelhoCompartilhado(sim) {
   else LS.apagar(CHAVE_COMPARTILHADO);
 }
 
+/* ---- plano 1000b · UB-168: saída por inatividade em aparelho compartilhado (recepção) — 2 h sem toque nem tecla, com aviso 1 min antes ---- */
+const OCIOSO_MS = 2 * 3600e3, AVISO_OCIOSO_MS = 60e3;
+/** criarVigiaOciosidade({agora, agendar, cancelar, limite, aviso, aoAvisar, aoSair, aoVoltar}) → {ligar, desligar, tocar, estado}.
+    O relógio de verdade (agora) decide: um setTimeout atrasado pela aba em segundo plano não apressa nem adia a saída. */
+function criarVigiaOciosidade({ agora = () => Date.now(), agendar = setTimeout, cancelar = clearTimeout, limite = OCIOSO_MS, aviso = AVISO_OCIOSO_MS, aoAvisar, aoSair, aoVoltar } = {}) {
+  let ultimo = agora(), timer = null, avisado = false, ligado = false;
+  const programar = ms => { cancelar(timer); timer = agendar(passo, Math.max(0, ms)); };
+  function passo() {
+    if (!ligado) return;
+    const parado = agora() - ultimo;
+    if (parado >= limite) { ligado = false; avisado = false; if (aoSair) aoSair(); return; }
+    if (parado >= limite - aviso) { if (!avisado) { avisado = true; if (aoAvisar) aoAvisar(Math.ceil((limite - parado) / 1000)); } programar(limite - parado); return; }
+    programar(limite - aviso - parado);
+  }
+  return {
+    ligar() { ligado = true; avisado = false; ultimo = agora(); programar(limite - aviso); },
+    desligar() { ligado = false; avisado = false; cancelar(timer); timer = null; },
+    tocar() {
+      if (!ligado) return;
+      ultimo = agora();
+      if (avisado) { avisado = false; if (aoVoltar) aoVoltar(); programar(limite - aviso); }
+    },
+    get estado() { return { ligado, avisado, ultimo }; },
+  };
+}
+function ligarOciosidade() {
+  const comp = aparelhoCompartilhado();
+  if (E.ocioso && comp) return;              // sessão revalidada pela rede não é uso: o relógio que já corre continua
+  if (E.ocioso) { E.ocioso.desligar(); E.ocioso = null; }
+  if (!comp) return;
+  let aviso = null;
+  const fecharAviso = () => { if (aviso) { aviso.fechar("acao"); aviso = null; } };
+  E.ocioso = criarVigiaOciosidade({
+    aoAvisar: () => {
+      aviso = E.ui.toast("Por segurança, este aparelho compartilhado sai da conta em 1 minuto por falta de uso.", { tipo: "aten", ms: 0, fixo: true,
+        acao: { rotulo: "Continuar conectado", fn: () => { if (E.ocioso) E.ocioso.tocar(); } }, aoFechar: () => { aviso = null; } });
+    },
+    aoVoltar: fecharAviso,
+    aoSair: async () => {
+      fecharAviso();
+      if (!E.sessao) return;
+      if (await sair({ perguntar: false })) E.ui.toast("Você saiu por inatividade (aparelho compartilhado). Entre de novo para continuar.", { tipo: "info", ms: 0 });
+    },
+  });
+  E.ocioso.ligar();
+}
+
 /* ============================================================
    INSTALÁVEL COM A MARCA (M13): manifesto dinâmico em blob:, apple-touch-icon e «Instalar o app»
    ============================================================ */
@@ -484,6 +561,14 @@ let manifestoTimer = null;
 function agendarManifesto() {
   clearTimeout(manifestoTimer);
   manifestoTimer = setTimeout(atualizarManifestoApp, 350);   // várias pinturas seguidas (marca, tema da empresa) viram uma montagem só
+}
+/** Plano 1000b · UB-126: ícone do aviso de área de trabalho — o da marca já rasterizado, o favicon/logo da marca ou o ícone empacotado do app. */
+function iconeDoAviso() {
+  if (E.iconeAviso) return E.iconeAviso;
+  const m = E.marca || {};
+  const u = m.favicon || m.logo_cliente || m.logo;
+  if (typeof u === "string" && /^(https:|data:image[/])/.test(u)) return u;
+  try { return new URL("icones/icon-192.png", location.href).href; } catch { return undefined; }
 }
 async function atualizarManifestoApp() {
   const P = E.pwaMod;
@@ -501,6 +586,7 @@ async function atualizarManifestoApp() {
     const manifesto = P.construirManifesto({ nome, base, workspace: E.workspace, rota: E.workspace ? E.M.rotas.produtoInicial(E.workspace) : null, fundo,
       icones: raster ? P.iconesDeRaster(raster) : P.iconesPadrao(base) });
     if (!P.aplicarManifesto({ manifesto, estado: manifestoEstado })) throw new Error("manifesto_nao_aplicado");
+    E.iconeAviso = raster ? raster.apple180 : null;   // plano 1000b · UB-126: o aviso de área de trabalho usa o ícone da marca
     P.atualizarMetasApple({ titulo: nome.short_name, icone: raster ? raster.apple180 : null, escuro: document.documentElement.dataset.esquema !== "claro" });
   } catch (e) {
     console.warn("manifesto dinâmico indisponível; fica o estático", e && e.message);
@@ -620,6 +706,8 @@ const EDICAO_RECENTE_MS = 30 * 60 * 1000;
 function marcarEdicao(ev) {
   const alvo = ev && ev.target;
   if (!alvo || alvo.type === "search") return;
+  // plano 1000b · UB-123: interruptor que grava na hora (Usuários, Avisos) não é trabalho a perder — não segura a atualização por 30 min
+  if (alvo.getAttribute && (alvo.getAttribute("role") === "switch" || (alvo.closest && alvo.closest("[data-salva-na-hora]")))) return;
   E.editouEm = Date.now();
   // AS-191: o pedido de armazenamento persistente (o Firefox pergunta à pessoa) sai na 1ª vez que um texto longo — rascunho — é escrito, não no login
   if (E.sessao && (alvo.tagName === "TEXTAREA" || alvo.isContentEditable)) pedirArmazenamentoPersistente();
@@ -643,6 +731,8 @@ function iniciarPwa() {
       E.pwa = pwa.iniciar({ versao: VERSAO, ui: E.ui, alvo: $("faixas-sistema"), produto: () => E.produto || "Órbita", ocupado: ocupadoParaAtualizar, urlsPrecache: urlsPrecacheDoAparelho });
       agendarManifesto();
       conferirMigracao();   // A4: a sessão pode ter chegado antes do pwa.js (que tem a comparação de migrações)
+      // plano 1000b · UB-131: a faixa de migração reconfere a cada 10 min com a aba à vista (some quando o banco for atualizado)
+      setInterval(() => { if (!document.hidden) conferirMigracao(); }, VALIDADE_VERSAO_MS);
       sugerirInstalacao();
     } catch (e) { console.warn("pwa indisponível", e && e.message); }
     // M18: a paleta abre sem esperar a rede na primeira vez que alguém aperta Ctrl/⌘+K
@@ -729,7 +819,7 @@ function atualizarBotaoTema() {
 function abrirMenuTema(ancora) {
   if (!E.ui || !E.M.tema) return;
   const modo = esquemaEscolhido();
-  const opcoes = [["auto", "Automático (do aparelho)", "reabrir"], ["claro", "Tema claro", "sol"], ["escuro", "Tema escuro", "lua"], ["marca", "Tema da empresa", "pincel"]];
+  const opcoes = [["auto", "Automático (do aparelho)", "reabrir"], ["claro", "Tema claro", "sol"], ["escuro", "Tema escuro", "lua"], ["marca", "Cores da empresa (fundo da marca)", "pincel"]];   // plano 1000b · UB-272
   E.ui.menu(ancora, opcoes.map(([id, rotulo, icone]) => ({
     rotulo: modo === id ? `${rotulo} · atual` : rotulo,
     icone: modo === id ? "check" : icone,
@@ -788,8 +878,8 @@ function pintarMarca(m, { guardar = false, cacheCliente = null, respeitarEsquema
   E.marca = m;
   const fav = $("favicon");
   if (fav) fav.setAttribute("href", m.favicon || E.faviconPadrao || "");
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", t.vars["--c-fundo"]);
+  // plano 1000b · UB-181: são duas metas (claro/escuro do aparelho) no index.html — o tema escolhido vale para as duas
+  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.setAttribute("content", t.vars["--c-fundo"]);
   pintarLogoShell();
   atualizarBotaoTema();
   atualizarTitulo();
@@ -893,6 +983,10 @@ function limparDadosDoAparelho() {
     const manter = E.manterRascunhos || !!LS.lerTxt(CHAVE_RASCUNHOS_DE);   // o próximo login decide (adotarSessao): mesma conta fica, outra apaga
     const prefixos = [E.M.comandos ? E.M.comandos.PREFIXO_RECENTES : "nx-rec:", ...PREFIXOS_DA_CONTA].filter(p => !(manter && p === "nx-au-rasc:"));
     for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && prefixos.some(p => k.startsWith(p))) localStorage.removeItem(k); }
+    // plano 1000b · UB-230: os rascunhos das Automações também moram no sessionStorage (nx-au-rasc:*) — o mesmo laço, a mesma regra do «manter»
+    if (typeof sessionStorage !== "undefined" && sessionStorage) {
+      for (let i = sessionStorage.length - 1; i >= 0; i--) { const k = sessionStorage.key(i); if (k && prefixos.some(p => k.startsWith(p))) sessionStorage.removeItem(k); }
+    }
   } catch { /* sem armazenamento: nada a apagar */ }
   LS.apagar(CHAVE_CONTA);
   E.sessaoGuardada = null;
@@ -900,7 +994,9 @@ function limparDadosDoAparelho() {
 }
 /** Chaves do localStorage com dado da conta que saem no logout, na queda de sessão e na troca de conta (plano 1000, pedido das frentes). */
 const PREFIXOS_DA_CONTA = Object.freeze(["nx-app-crm-kb-", "nx-app-crm-ct-", "nx-app-crm-fr-", "nx-app-visoes-v1:", "nx-ini-hist:", "nx-ini-kpis:", "nx-ini-blocos:",
-  "nx-cv-filtro:", "nx-cmd:", "nx-au-rasc:", "nx-au-ia-recentes:", "nx-canal-hist:"]);
+  "nx-cv-filtro:", "nx-cmd:", "nx-au-rasc:", "nx-au-ia-recentes:", "nx-canal-hist:",
+  // plano 1000b · UB-280: ordem das Automações e passos pulados do «Primeiros passos» levam id da conta e da empresa (são só preferências)
+  "nx-au-ordem:", "nx-onb:"]);
 /** Limpa o aparelho e espera a limpeza assentar (no máximo 0,8 s): um location.reload() logo em seguida cortaria a transação do IndexedDB. */
 function limparComPrazo() {
   return Promise.race([limparDadosDoAparelho(), new Promise(r => setTimeout(r, 800))]);
@@ -968,7 +1064,13 @@ async function pedirLoginNaTela() {
         } },
       ],
     });
-    if (r === "ok") { ui.toast("Sessão renovada. Pode continuar.", { tipo: "ok" }); return true; }
+    if (r === "ok") {
+      // plano 1000b · UB-010: o pulso parou no sessao_invalida — sem reiniciar, sino, não lidas e número caído ficavam congelados
+      if (E.pulso && E.cliente) E.pulso.iniciar();
+      atualizarSinoUI();
+      ui.toast("Sessão renovada. Pode continuar.", { tipo: "ok" });
+      return true;
+    }
     if (r === "outra") {
       if (E.rascunhos) E.rascunhos.apagarTudo();
       limparDadosDoAparelho();
@@ -1078,6 +1180,8 @@ async function adotarSessao(s, { forcarImagens = false } = {}) {
   E.sessao = s;
   // AS-255: só a conta da plataforma vê o código técnico de um erro desconhecido
   try { if (E.M.api && typeof E.M.api.mostrarCodigoTecnico === "function") E.M.api.mostrarCodigoTecnico(!!(s.conta && s.conta.super)); } catch { /* ok */ }
+  // plano 1000b · UB-277: o sem_permissao do administrador da empresa manda falar com o suporte (não «com o administrador»)
+  try { if (E.M.api && typeof E.M.api.definirPapelDasMensagens === "function") E.M.api.definirPapelDasMensagens(() => papelAtual()); } catch { /* ok */ }
   // AS-192: rascunhos guardados por um «Sair» da sessão expirada são de outra conta → saem antes de a tela nascer
   const donoRascunhos = LS.lerTxt(CHAVE_RASCUNHOS_DE);
   if (donoRascunhos && s.conta && donoRascunhos !== s.conta.id) {
@@ -1085,6 +1189,7 @@ async function adotarSessao(s, { forcarImagens = false } = {}) {
     try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.startsWith("nx-au-rasc:")) localStorage.removeItem(k); } } catch { /* ok */ }
   }
   if (donoRascunhos) LS.apagar(CHAVE_RASCUNHOS_DE);
+  ligarOciosidade();    // plano 1000b · UB-168: aparelho compartilhado sai sozinho depois de 2 h sem uso
   conferirMigracao();   // A4: front novo × banco velho (sem await: a faixa chega quando o versao.json responder)
   await carregarImagensOrg({ forcar: forcarImagens });
   return s;
@@ -1142,10 +1247,12 @@ async function sair({ perguntar = true, manterRascunhos = false } = {}) {
       texto: `${n === 1 ? "1 mensagem ainda não foi enviada" : `${n} mensagens ainda não foram enviadas`} (sem internet ou com falha). Se sair agora, ${n === 1 ? "ela é descartada" : "elas são descartadas"} deste aparelho.` }))) return false;
   }
   try { await E.api.rpc("nx_sair"); } catch { /* sai do mesmo jeito */ }
+  if (E.ocioso) { E.ocioso.desligar(); E.ocioso = null; }   // UB-168
   E.manterRascunhos = !!manterRascunhos;
   if (manterRascunhos && E.sessao) { if (E.rascunhos) E.rascunhos.salvarTudo(); LS.gravar(CHAVE_RASCUNHOS_DE, E.sessao.conta.id); }
   else { LS.apagar(CHAVE_RASCUNHOS_DE); if (E.rascunhos) E.rascunhos.apagarTudo(); }   // logout: nenhum rascunho fica no aparelho
-  limparDadosDoAparelho();
+  // plano 1000b · UB-135: espera a limpeza do IndexedDB assentar (no máximo 0,8 s) antes de ir ao login — fechar a aba logo depois não corta a transação
+  await limparComPrazo();
   E.manterRascunhos = false;
   E.M.dados.apagarToken();
   E.sessao = null; E.cliente = null; E.imgOrg = null; E.notif = 0;
@@ -1440,6 +1547,12 @@ function construirCtx(r, alvo) {
         E.assinaturas.add(cancelar);
         return () => { cancelar(); E.assinaturas.delete(cancelar); };
       },
+      /** plano 1000b · CB-166: fn({estado, antes, online}) em TODA mudança de estado da conexão (cair e voltar). Devolve cancelar(). */
+      assinar(fn) {
+        const cancelar = assinarMudancaDeRede(E.rede, fn);
+        E.assinaturas.add(cancelar);
+        return () => { cancelar(); E.assinaturas.delete(cancelar); };
+      },
     },
     /** fn() → true enquanto este módulo tem trabalho que uma atualização automática não pode interromper (rascunho enviando, fila de saída…). Devolve cancelar(). */
     naoAtualizar(fn) {
@@ -1540,12 +1653,23 @@ function carregar(modulo) {
   return arq(a);
 }
 
-function cartaoBloqueio(tipo) {
+/** plano 1000b · UB-129: «Sem acesso» diz o papel exigido pela rota e o da pessoa («Esta área é de Supervisor ou acima; seu papel é Atendente.»).
+    Sem papel mínimo ou sem papel conhecido, a frase de antes. */
+function textoSemAcesso(min, papel, rotulos = {}) {
+  const r = p => rotulos[p] || null;
+  const fim = "Fale com o administrador da sua empresa.";
+  if (!r(min)) return fim;
+  const exigido = min === "gestor" || min === "super" ? "Esta área é da equipe da plataforma" : `Esta área é de ${r(min)} ou acima`;
+  return `${exigido}${r(papel) ? `; seu papel é ${r(papel)}` : ""}. ${fim}`;
+}
+
+function cartaoBloqueio(tipo, modulo) {
   const { ui } = E;
+  const rotaB = modulo ? E.M.rotas.rotaDe(modulo) : null;
   const tx = {
     em_breve: { titulo: "Esta área chega em breve.", texto: "Estamos terminando esta parte. Enquanto isso, use as outras áreas do menu.", icone: "relogio" },
     fora_do_plano: { titulo: "Esta área não faz parte do seu plano.", texto: "Para liberar, fale com o suporte.", icone: "cadeado" },
-    sem_acesso: { titulo: "Você não tem acesso a esta área", texto: "Fale com o administrador da sua empresa.", icone: "cadeado" },
+    sem_acesso: { titulo: "Você não tem acesso a esta área", texto: textoSemAcesso(rotaB && rotaB.papel, rotaB && rotaB.conta ? (E.sessao && E.sessao.conta.papel) : papelAtual(), E.M.vocab ? E.M.vocab.ROTULO_PAPEL : {}), icone: "cadeado" },
     inexistente: { titulo: "Página não encontrada", texto: "O endereço pode estar incompleto.", icone: "alerta" },
     sem_cliente: E.sessao && E.sessao.conta.papel === "gestor"
       ? { titulo: "Nenhum cliente por aqui ainda.", texto: "Crie o primeiro em Admin → Clientes.", icone: "empresa", acao: { rotulo: "Ir para Admin", fn: () => navegar("#/admin/clientes") } }
@@ -1557,7 +1681,18 @@ function cartaoBloqueio(tipo) {
   }[tipo];
   const acao = tx.acao || (tipo === "inexistente" || tipo === "sem_acesso" || tipo === "em_breve" || tipo === "fora_do_plano"
     ? { rotulo: "Ir para o início", fn: () => navegar("#/") } : null);
-  return ui.h("div", { class: "area-bloqueada" }, ui.vazio({ titulo: tx.titulo, texto: tx.texto, icone: tx.icone, acao }));
+  const acoes = tipo === "fora_do_plano" ? acoesForaDoPlano() : [];
+  return ui.h("div", { class: "area-bloqueada" }, ui.vazio({ titulo: tx.titulo, texto: tx.texto, icone: tx.icone, acao, acoes }));
+}
+
+/** Plano 1000b · UB-128: «Fora do plano» com caminho — o administrador vê o Plano e uso; havendo WhatsApp de suporte, «Falar com o suporte». */
+function acoesForaDoPlano() {
+  const out = [];
+  if (E.M.rotas.podePapel(papelAtual(), "admin")) out.push({ rotulo: "Ver Plano e uso", icone: "cartao", fn: () => navegar("#/config/plano") });
+  const wa = E.marca && E.marca.suporte_wa;
+  if (wa) out.push({ rotulo: "Falar com o suporte", icone: "whatsapp",
+    fn: () => window.open(E.ui.linkWhatsApp(`Olá! Quero liberar uma área do sistema para a ${E.cliente ? E.cliente.nome : "minha empresa"}.`, wa), "_blank", "noopener,noreferrer") });
+  return out;
 }
 
 async function montarNoShell(r, seq, doUsuario) {
@@ -1581,7 +1716,7 @@ async function montarNoShell(r, seq, doUsuario) {
     desmontarAtual();
     ui.limpar(vista);
     if (bloqueioNovo) transicaoRota(vista);
-    vista.appendChild(cartaoBloqueio(acesso));
+    vista.appendChild(cartaoBloqueio(acesso, r.modulo));
     definirTitulo({ em_breve: "Em breve", fora_do_plano: "Fora do plano", sem_acesso: "Sem acesso", inexistente: "Página não encontrada", sem_cliente: "Início", pausado: "Empresa pausada" }[acesso]);
     desenharRegioes();
     if (doUsuario) focarTitulo(seq);
@@ -1787,7 +1922,9 @@ function montarEsqueletoShell() {
     bt.setAttribute("aria-label", on ? "Expandir menu" : "Recolher menu");
     LS.gravar("nx-app-menu", on ? "1" : "0");
   });
-  bt.setAttribute("aria-pressed", String(document.documentElement.classList.contains("menu-recolhido")));
+  const recolhido = document.documentElement.classList.contains("menu-recolhido");
+  bt.setAttribute("aria-pressed", String(recolhido));
+  bt.setAttribute("aria-label", recolhido ? "Expandir menu" : "Recolher menu");   // plano 1000b · UB-134: aberto já recolhido, o rótulo acompanha
 }
 
 /** Os itens que esta pessoa vê neste produto (papel, plano, prontos): o menu lateral, a barra de baixo e o «Ir para» da paleta leem a mesma lista. */
@@ -1821,8 +1958,8 @@ function desenharMenu() {
       it.id === "conversas" ? pontoCanal() : null));
   }
   // barra inferior: até 4 + Mais
-  const prefer = E.M.rotas.BARRA.map(id => itens.find(i => i.id === id)).filter(Boolean);
-  for (const it of itens) if (prefer.length < 4 && !prefer.includes(it) && !it.fixo) prefer.push(it);
+  // plano 1000b · UB-278: o item mais aberto pelo «Mais» neste aparelho ganha o 4º lugar
+  const prefer = E.M.rotas.itensDaBarra(itens, lerUsosDaBarra());
   const resto = itens.filter(i => !prefer.includes(i));
   for (const it of prefer) {
     barra.appendChild(ui.h("a", { class: "barra-b", href: `#/${it.rota}`, dataset: { id: it.id } },
@@ -1831,7 +1968,9 @@ function desenharMenu() {
   }
   atualizarPontoCanal();
   if (resto.length) {
-    const mais = ui.h("button", { type: "button", class: "barra-b", dataset: { id: "mais" } }, ui.icone("menu"), ui.h("span", null, "Mais"));
+    // plano 1000b · UB-271: um ponto no «Mais» quando algum item escondido nele tem contador
+    const mais = ui.h("button", { type: "button", class: "barra-b", dataset: { id: "mais" } }, ui.icone("menu"), ui.h("span", null, "Mais"),
+      ui.h("span", { class: "barra-ponto", hidden: true, dataset: { pontoMais: resto.map(i => i.id).join(",") } }, ui.h("span", { class: "sr-only" }, "(há novidades)")));
     mais.addEventListener("click", () => abrirFolhaMais(resto));
     barra.appendChild(mais);
   }
@@ -1850,12 +1989,31 @@ function atualizarPontoCanal() {
   }
 }
 
+/** plano 1000b · UB-278: quantas vezes cada área foi aberta pelo «Mais» NESTE aparelho (só ids de módulo — nada da conta). */
+const CHAVE_USOS_BARRA = "nx-app-barra-usos";
+function lerUsosDaBarra() {
+  const o = LS.ler(CHAVE_USOS_BARRA);
+  return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+}
+function contarUsoDaBarra(id) {
+  const usos = lerUsosDaBarra();
+  const n = Math.min(999, (Number(usos[id]) || 0) + 1);
+  usos[id] = n;
+  LS.gravar(CHAVE_USOS_BARRA, usos);
+  return n;
+}
+
 function abrirFolhaMais(itens) {
   const { ui } = E;
   let api = null;
   const grade = ui.h("div", { class: "folha-mais" }, itens.map(it => {
-    const a = ui.h("a", { href: `#/${it.rota}` }, ui.icone(it.icone), it.rotulo);
-    a.addEventListener("click", () => api && api.fechar(null));
+    // plano 1000b · UB-271: o item da folha repete o contador do menu
+    const a = ui.h("a", { href: `#/${it.rota}` }, ui.icone(it.icone), it.rotulo, ui.h("span", { class: "badge", hidden: true, dataset: { badge: it.id } }));
+    a.addEventListener("click", () => {
+      if (api) api.fechar(null);
+      // UB-278: conta a abertura; ao chegar a 3 o menu é redesenhado com o item na barra
+      if (contarUsoDaBarra(it.id) === E.M.rotas.USOS_PARA_BARRA) setTimeout(() => { if (E.sessao) desenharMenu(); }, 0);
+    });
     return a;
   }));
   if (modoInstalacao()) {
@@ -1864,6 +2022,7 @@ function abrirFolhaMais(itens) {
     grade.appendChild(bt);
   }
   ui.modal({ titulo: "Mais", corpo: grade, acoes: [{ rotulo: "Fechar", tipo: "neutro" }], aoAbrir: a => { api = a; } });
+  atualizarBadges();
 }
 
 function marcarMenu(modulo) {
@@ -1953,7 +2112,8 @@ function abrirSeletorEmpresa(ancora) {
   const { ui } = E;
   const lista = E.sessao.clientes;
   const busca = lista.length > 8 ? ui.h("input", { type: "search", class: "flut-busca", placeholder: "Buscar empresa", "aria-label": "Buscar empresa" }) : null;
-  const caixa = ui.h("div", { class: "empresa-lista", role: "listbox", "aria-label": "Empresas" });
+  // plano 1000b · UB-132: grupo de botões com aria-current (listbox exigiria setas e aria-selected; option não pode ser botão)
+  const caixa = ui.h("div", { class: "empresa-lista", role: "group", "aria-label": "Empresas" });
   let flut = null;
   const norm = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   const desenhar = () => {
@@ -1962,7 +2122,7 @@ function abrirSeletorEmpresa(ancora) {
     const achados = lista.filter(c => !q || norm(c.nome).includes(q) || norm(c.slug).includes(q));
     for (const c of achados.slice(0, 200)) {
       const sinais = sinaisDaEmpresa(c);
-      const b = ui.h("button", { type: "button", class: "empresa-op", role: "option", "aria-current": String(E.cliente && c.id === E.cliente.id) },
+      const b = ui.h("button", { type: "button", class: "empresa-op", "aria-current": E.cliente && c.id === E.cliente.id ? "true" : null },
         ui.avatar(c.nome, c.id),
         ui.h("span", null, ui.h("b", null, c.nome), ui.h("small", null, [c.org_nome, c.suporte ? "suporte" : E.M.vocab.ROTULO_PAPEL[c.papel], c.status !== "ativo" ? E.M.vocab.ROTULO_STATUS[c.status] : null].filter(Boolean).join(" · ")),
           sinais.length ? ui.h("span", { class: "empresa-sinais" }, sinais.map(s => ui.pilula(s.texto, s.cor, { icone: s.icone, tamanho: "p" }))) : null));
@@ -1978,8 +2138,16 @@ function abrirSeletorEmpresa(ancora) {
     if (!achados.length) caixa.appendChild(ui.h("p", { class: "flut-vazio" }, "Nenhuma empresa com esse nome."));
   };
   if (busca) busca.addEventListener("input", desenhar);
+  // plano 1000b · UB-133: Enter na busca escolhe o 1º resultado (o único, quando a busca já filtrou)
+  if (busca) busca.addEventListener("keydown", ev => {
+    if (ev.key !== "Enter" || ev.isComposing) return;
+    const primeiro = caixa.querySelector(".empresa-op");
+    if (!primeiro) return;
+    ev.preventDefault();
+    primeiro.click();
+  });
   desenhar();
-  flut = ui.flutuante(ancora, ui.h("div", { class: "pilha-p" }, ui.h("p", { class: "rotulo" }, "Trocar de empresa"), busca, caixa), { largura: 320 });
+  flut = ui.flutuante(ancora, ui.h("div", { class: "pilha-p" }, ui.h("p", { class: "rotulo" }, "Trocar de empresa"), busca, caixa), { largura: 320, rotulo: "Trocar de empresa" });   // UB-138
 }
 
 function desenharConta() {
@@ -2193,7 +2361,51 @@ function acaoNovoContato(a) {
 
 function destinosDaPaleta() {
   const v = E.M.vocab.vocab(E.cliente ? E.cliente.vertical : "generico");
-  return E.M.comandos.destinos(E.M.rotas.itensDoMenu({ op: opcoesAcesso(), vocab: v, workspace: E.workspace, prontos: E.prontos.MODULOS_PRONTOS, dev: devLigado() }));
+  const base = E.M.comandos.destinos(E.M.rotas.itensDoMenu({ op: opcoesAcesso(), vocab: v, workspace: E.workspace, prontos: E.prontos.MODULOS_PRONTOS, dev: devLigado() }));
+  // plano 1000b · UB-101: as seções das Configurações também fora do hub (com o hub aberto, os comandos config.<id> dele já estão lá)
+  let registrados = new Set();
+  try { registrados = new Set((E.comandos ? E.comandos.listar() : []).map(c => c && c.id).filter(Boolean)); } catch { /* ok */ }
+  return [...base, ...destinosDeConfig({
+    pronta: configPronta, pode: min => E.M.rotas.podePapel(papelAtual(), min), gestor: !!(E.sessao && E.sessao.conta && E.sessao.conta.papel === "gestor"),
+    cliente: E.cliente, registrados })];
+}
+
+/** Plano 1000b · UB-101: o catálogo das seções do hub #/config para a paleta do shell (o hub carrega as seções sob demanda; aqui só id, título e
+    quem vê — testes/plano1000b-sis confere cada título contra o config.js e os *-config.js). Regras de visibilidade como o visivel() do config.js. */
+const SECOES_CONFIG_PALETA = Object.freeze([
+  { id: "perfil", titulo: "Perfil", palavras: "senha nome celular conta", semCliente: true },
+  { id: "usuarios", titulo: "Usuários e convites", palavras: "equipe convidar pessoas acesso papel", papelMin: "admin" },
+  { id: "dominio", titulo: "Domínio próprio", palavras: "dns endereco url", conta: "gestor" },
+  { id: "plano", titulo: "Plano e uso", palavras: "limite cota assinatura", papelMin: "admin" },
+  { id: "funis", titulo: "Funis e etapas", palavras: "pipeline funil etapa", papelMin: "admin", modulo: "crm" },
+  { id: "campos", titulo: "Campos personalizados", palavras: "campo cadastro", papelMin: "admin", modulo: "crm" },
+  { id: "etiquetas", titulo: "Etiquetas", palavras: "tag marcador", papelMin: "supervisor", modulo: "crm" },
+  { id: "motivos", titulo: "Motivos de perda", palavras: "perdido perda", papelMin: "admin", modulo: "crm" },
+  { id: "numeros", titulo: "Números de WhatsApp", palavras: "whatsapp numero conectar codewords meta", papelMin: "admin", modulo: "conversas" },
+  { id: "respostas", titulo: "Respostas rápidas", palavras: "atalho frase pronta", papelMin: "supervisor", modulo: "conversas" },
+  { id: "atendimento", titulo: "Preferências do atendimento", palavras: "assinatura leitura", papelMin: "admin", modulo: "conversas" },
+  { id: "ia", titulo: "Assistente de IA", palavras: "ia robo inteligencia", papelMin: "admin", modulo: "conversas" },
+  { id: "departamentos", titulo: "Departamentos e horários", palavras: "horario expediente setor", papelMin: "admin", modulo: "conversas" },
+  { id: "anuncios", titulo: "Anúncios", palavras: "meta google facebook contas", papelMin: "gestor", modulo: "ads" },
+  { id: "formulario", titulo: "Formulário do site", palavras: "site form lead", papelMin: "admin", modulo: "crm" },
+  { id: "agenda", titulo: "Agenda", palavras: "horario duracao feriado", papelMin: "admin", modulo: "crm" },
+  { id: "rastreio", titulo: "Site e anúncios", palavras: "script rastreio utm campanha", papelMin: "admin", modulo: "crm" },
+]);
+function destinosDeConfig({ pronta, pode, gestor, cliente, registrados = new Set() }) {
+  const out = [];
+  for (const s of SECOES_CONFIG_PALETA) {
+    if (registrados.has(`config.${s.id}`)) continue;
+    if (typeof pronta === "function" && !pronta(s.id)) continue;
+    if (s.conta === "gestor") { if (!gestor) continue; }
+    else if (!s.semCliente) {
+      if (!cliente) continue;
+      if (s.modulo && !(Array.isArray(cliente.modulos) && cliente.modulos.includes(s.modulo))) continue;
+      if (s.papelMin && !(typeof pode === "function" && pode(s.papelMin))) continue;
+    }
+    out.push({ id: `config.${s.id}`, rotulo: `Configurações: ${s.titulo}`, hash: `#/config/${s.id}`, icone: "engrenagem",
+      palavras: `configuracoes ajustes ${s.palavras || ""}`, emConstrucao: false });
+  }
+  return out;
 }
 
 /** Os últimos abertos desta empresa neste aparelho (localStorage; some no logout). null sem sessão ou sem armazenamento. */
@@ -2258,6 +2470,11 @@ function ambientePaleta(inicial) {
       if (ult && it.id && typeof it.fazer === "function") ult.registrar(it.id);
     },
   };
+}
+
+/** plano 1000b · UB-127: há uma janela modal aberta que NÃO é a própria paleta (.busca-g)? Então o Ctrl/⌘+K não faz nada. */
+function outroDialogoAberto(doc) {
+  try { return [...doc.querySelectorAll("dialog[open]")].some(d => !d.classList.contains("busca-g")); } catch { return false; }
 }
 
 let paletaAbrindo = false;
@@ -2357,6 +2574,23 @@ function rotuloDoDia(iso, agora = new Date()) {
   return E.ui.dataBR(dia);
 }
 
+/** Plano 1000b · UB-124: a frase única que o leitor de tela ouve ao abrir (e quando muda) a lista do sino. */
+function resumoDoSino(total, naoLidas) {
+  const t = Math.max(0, Number(total) || 0), n = Math.max(0, Number(naoLidas) || 0);
+  if (!t) return "Nenhuma notificação";
+  return `${t} notificaç${t === 1 ? "ão" : "ões"}, ${n} não lida${n === 1 ? "" : "s"}`;
+}
+/** Plano 1000b · UB-269: notificação de automação com o nome dela (dados.automacao_nome) quando o título do servidor é o genérico. */
+function tituloDaNotificacao(it) {
+  const titulo = String((it && it.titulo) || "").trim();
+  if (!it || it.tipo !== "automacao") return titulo;
+  const d = it.dados && typeof it.dados === "object" ? it.dados : {};
+  const nome = String(d.automacao_nome || "").trim().slice(0, 80);
+  if (!nome || titulo.includes(nome)) return titulo || "Automação";
+  if (!titulo || /^automa[çc][ãa]o( com erro)?\.?$/i.test(titulo)) return `Automação «${nome}» com erro`;
+  return titulo;
+}
+
 function atualizarSinoUI() {
   const n = Math.max(0, Number(E.notif) || 0);
   const badge = $("sino-n"), bt = $("bt-sino");
@@ -2372,7 +2606,9 @@ function abrirSino(ancora) {
   const { ui } = E;
   if (!E.cliente) return;
   if (E.sinoAberto) { E.sinoAberto.fechar(); return; }   // segundo clique no sino fecha a lista
-  const lista = ui.h("div", { class: "notif-lista", "aria-live": "polite" }, ui.esqueleto("lista", 3));
+  // plano 1000b · UB-124: a lista não é região viva (cada releitura do pulso lia todas as notificações); um status curto conta o resumo
+  const lista = ui.h("div", { class: "notif-lista" }, ui.esqueleto("lista", 3));
+  const resumo = ui.h("p", { class: "sr-only", role: "status" });
   const btTodas = ui.h("button", { type: "button", class: "bt bt-fant bt-p", hidden: true }, ui.icone("checks"), "Marcar todas como lidas");
   // AS-186: «Não lidas» (filtro na lista que já veio), cabeçalhos Hoje/Ontem/data e «Carregar mais» (o servidor devolve até 100)
   let soNaoLidas = false, limite = NOTIF_PAGINA, ultimo = null;
@@ -2381,9 +2617,9 @@ function abrirSino(ancora) {
   const mais = ui.h("button", { type: "button", class: "bt bt-sec bt-p notif-mais", hidden: true }, "Carregar mais");
   mais.addEventListener("click", () => { limite = Math.min(NOTIF_MAXIMO, limite + NOTIF_PAGINA); ui.carregando(mais, recarregar()); });
   const conteudo = ui.h("div", { class: "pilha-p" },
-    ui.h("div", { class: "linha linha-entre notif-cab" }, ui.h("h2", { class: "rotulo" }, "Notificações"), btTodas), filtro, lista, mais);
+    ui.h("div", { class: "linha linha-entre notif-cab" }, ui.h("h2", { class: "rotulo" }, "Notificações"), btTodas), filtro, resumo, lista, mais);
   let seq = 0;
-  const f = ui.flutuante(ancora, conteudo, { classe: "notifs", aoFechar: () => { E.sinoAberto = null; } });
+  const f = ui.flutuante(ancora, conteudo, { classe: "notifs", rotulo: "Notificações", aoFechar: () => { E.sinoAberto = null; } });   // UB-138
 
   async function marcar(ids) {
     try {
@@ -2412,7 +2648,7 @@ function abrirSino(ancora) {
       const corpo = it.corpo ? ui.h("p", null, it.corpo) : null;
       const b = ui.h("button", { type: "button", class: ["notif-item", lida && "lida"], "aria-expanded": !link && corpo ? "false" : null },
         ui.h("span", { class: "notif-ic" }, ui.icone(ICONE_NOTIF[it.tipo] || "info")),
-        ui.h("span", null, ui.h("b", null, it.titulo), corpo,
+        ui.h("span", null, ui.h("b", null, tituloDaNotificacao(it)), corpo,
           ui.h("small", { title: ui.dataHoraBR(it.criado_em) }, ui.relativo(it.criado_em))),
         ui.h("i", { "aria-hidden": "true" }),
         lida ? null : ui.h("span", { class: "sr-only" }, "(não lida)"));
@@ -2434,31 +2670,67 @@ function abrirSino(ancora) {
       E.notif = r.nao_lidas || 0; atualizarSinoUI();
       atualizarCanais({ notificacoes: r.itens }, "notificacao");   // A10: canal_caiu/canal_voltou na lista alimentam o aviso de número caído
       btTodas.hidden = !(r.nao_lidas > 0);
+      const frase = resumoDoSino(Array.isArray(r.itens) ? r.itens.length : 0, r.nao_lidas);
+      if (resumo.textContent !== frase) resumo.textContent = frase;   // UB-124: só fala quando o resumo muda
       ultimo = r;
       desenhar(r);
     } catch (e) {
       if (n !== seq) return;
       ui.limpar(lista);
-      lista.appendChild(ui.h("p", { class: "flut-vazio" }, E.api.mensagemErro(e)));
+      // plano 1000b · UB-270: o erro não deixa a lista sem saída — «Tentar de novo» relê
+      const tentar = ui.h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("reabrir"), "Tentar de novo");
+      tentar.addEventListener("click", () => { ui.carregando(tentar, recarregar()); });
+      lista.appendChild(ui.h("div", { class: "flut-vazio pilha-p" }, ui.h("p", null, E.api.mensagemErro(e)), tentar));
     }
   }
-  btTodas.addEventListener("click", async () => { await ui.carregando(btTodas, marcar(null)); recarregar(); });
+  // plano 1000b · UB-125: com mais de 10 não lidas, «Marcar todas» pede um 2º toque (a RPC não desfaz); o pedido some sozinho em 6 s
+  const ROTULO_TODAS = "Marcar todas como lidas";
+  let esperaConfirmar = null;
+  const voltarRotuloTodas = () => { clearTimeout(esperaConfirmar); esperaConfirmar = null; delete btTodas.dataset.confirmar; btTodas.lastChild.textContent = ROTULO_TODAS; };
+  btTodas.addEventListener("click", async () => {
+    const n = Math.max(0, Number(E.notif) || 0);
+    if (n > 10 && btTodas.dataset.confirmar !== "1") {
+      btTodas.dataset.confirmar = "1";
+      btTodas.lastChild.textContent = `Confirmar: marcar ${n} como lidas`;
+      ui.anunciar(`Toque de novo para marcar as ${n} notificações como lidas.`);
+      esperaConfirmar = setTimeout(voltarRotuloTodas, 6000);
+      return;
+    }
+    voltarRotuloTodas();
+    await ui.carregando(btTodas, marcar(null)); recarregar();
+  });
   E.sinoAberto = { recarregar, fechar: () => f.fechar() };
   recarregar();
 }
 
 function desenharFaixas() {
-  const { ui } = E;
   const alvo = $("faixas");
-  ui.limpar(alvo);
+  if (alvo) reconciliarFaixas(alvo, faixasDoMomento());
+}
+/** plano 1000b · UB-207: a cada desenharShell as faixas (role=status) eram recriadas e o leitor de tela relia «O teste terminou…» a cada troca de
+    tela. Faixa com a mesma classe e o mesmo texto fica (o MESMO nó: nada é reanunciado); só a que aparece ou muda entra nova. */
+function reconciliarFaixas(alvo, novas) {
+  const chave = n => `${n.className}|${n.textContent}`;
+  const antigas = new Map();
+  for (const n of [...alvo.children]) { const k = chave(n); if (!antigas.has(k)) antigas.set(k, n); }
+  const ficam = novas.map(n => { const k = chave(n); const velha = antigas.get(k); if (velha) { antigas.delete(k); return velha; } return n; });
+  for (const n of antigas.values()) n.remove();
+  for (const n of [...alvo.childNodes]) if (!ficam.includes(n)) n.remove();
+  // só reposiciona o que está fora de ordem (um nó que já está no lugar nem é tocado)
+  ficam.forEach((n, i) => { const atual = alvo.children[i] || null; if (atual !== n) alvo.insertBefore(n, atual); });
+  return ficam;
+}
+function faixasDoMomento() {
+  const { ui } = E;
+  const out = [];
   if ((location.hostname === "127.0.0.1" || location.hostname === "localhost") && new URLSearchParams(location.search).get("dev-falso") === "1") {
     // AS-274: no celular, uma linha só («Demo local · dados fictícios»); o texto inteiro continua para o leitor de tela e no desktop
-    alvo.appendChild(ui.h("div", { class: "faixa faixa-demo-local", role: "status" }, ui.icone("info"),
+    out.push(ui.h("div", { class: "faixa faixa-demo-local", role: "status" }, ui.icone("info"),
       ui.h("p", null, ui.h("span", { class: "demo-longo" }, "DEMO LOCAL · dados fictícios; mensagens e integrações não são reais."),
         ui.h("span", { class: "demo-curto", "aria-hidden": "true" }, "Demo local · dados fictícios"))));
   }
   const cli = E.cliente;
-  if (!cli || !E.sessao) return;
+  if (!cli || !E.sessao) return out;
   const suporteWa = E.marca && E.marca.suporte_wa;
   const btWa = texto => suporteWa ? ui.h("a", { class: "bt bt-sec", href: ui.linkWhatsApp(texto, suporteWa), target: "_blank", rel: "noopener noreferrer" }, ui.icone("whatsapp"), "Falar com o suporte") : null;
   const equipe = cli.papel === "gestor" || cli.papel === "super";
@@ -2472,24 +2744,25 @@ function desenharFaixas() {
       try { volta = sessionStorage.getItem("nx-admin-volta"); } catch { /* sem storage */ }
       navegar(volta && /^#\/admin\//.test(volta) ? volta : "#/admin/clientes");
     });
-    alvo.appendChild(ui.h("div", { class: "faixa faixa-suporte", role: "status" }, ui.icone("escudo"),
+    out.push(ui.h("div", { class: "faixa faixa-suporte", role: "status" }, ui.icone("escudo"),
       ui.h("p", null, "Você está no ambiente de ", ui.h("b", null, cli.nome), ` como suporte da ${E.sessao.org ? E.sessao.org.nome : "plataforma"}.`), sair));
   }
   const hoje = E.ui.hojeSP();
   // teste em andamento: pílula junto à empresa (pilulaDeTeste); só o que BLOQUEIA continua sendo faixa
   if (cli.status === "teste" && cli.teste_ate && cli.teste_ate < hoje) {
-    alvo.appendChild(ui.h("div", { class: "faixa faixa-bloqueio", role: "status" }, ui.icone("cadeado"),
+    out.push(ui.h("div", { class: "faixa faixa-bloqueio", role: "status" }, ui.icone("cadeado"),
       ui.h("p", null, equipe ? "O teste deste cliente terminou. Só a equipe consegue alterar dados." : "O período de teste terminou. Você pode consultar, mas não alterar nada. Para continuar, fale com o suporte."),
       equipe ? null : btWa(`Olá! O teste da ${cli.nome} terminou e quero continuar.`)));
   } else if (cli.status === "suspenso" || cli.status === "cancelado") {
-    alvo.appendChild(ui.h("div", { class: "faixa faixa-bloqueio", role: "status" }, ui.icone("cadeado"),
+    out.push(ui.h("div", { class: "faixa faixa-bloqueio", role: "status" }, ui.icone("cadeado"),
       ui.h("p", null, equipe ? `Este cliente está ${cli.status}. A equipe dele não entra; só a gestão (${E.sessao.conta.super ? "plataforma" : "agência"}) enxerga os dados.` : "O acesso desta empresa está suspenso. Fale com o suporte."),
       equipe ? null : btWa(`Olá! O acesso da ${cli.nome} está suspenso.`)));
   } else if (cli.ativo === false && (equipe || plataforma)) {
     // A4 (contrato 9): quem é da plataforma continua vendo as telas, mas sabe que o cliente está pausado (quem não é vê o cartão de bloqueio)
-    alvo.appendChild(ui.h("div", { class: "faixa faixa-bloqueio", role: "status" }, ui.icone("pausa"),
+    out.push(ui.h("div", { class: "faixa faixa-bloqueio", role: "status" }, ui.icone("pausa"),
       ui.h("p", null, "Este cliente está pausado («Cliente ativo» desligado no painel): a equipe dele não entra, e a leitura de anúncios, os relatórios e o rastreio do site ficam parados até religar.")));
   }
+  return out;
 }
 
 /* ============================================================
@@ -2509,14 +2782,24 @@ function definirBadge(modulo, n) {
   atualizarBadges(E.badges[modulo] > antes ? modulo : null);
   if (modulo === "conversas") atualizarTitulo();
 }
+/** Plano 1000b · UB-206: o contexto falado do número do menu («, 3 não lidas»). */
+function textoDoBadge(modulo, n) {
+  const q = Math.max(0, Number(n) || 0), um = q === 1;
+  if (modulo === "conversas") return `, ${q} não lida${um ? "" : "s"}`;
+  if (modulo === "automacoes") return `, ${q} com erro`;
+  return `, ${q} pendente${um ? "" : "s"}`;
+}
 function atualizarBadges(pulsar) {
   for (const el of document.querySelectorAll("[data-badge]")) {
     const n = E.badges[el.dataset.badge] || 0;
     el.hidden = n <= 0;
     el.textContent = n > 99 ? "99+" : n > 0 ? String(n) : "";
+    // plano 1000b · UB-206: o leitor de tela ouve «Conversas, 3 não lidas», não só «3»
+    if (n > 0) el.appendChild(E.ui.h("span", { class: "sr-only" }, textoDoBadge(el.dataset.badge, n)));
     if (pulsar && el.dataset.badge === pulsar) { el.classList.remove("pulsa"); void el.offsetWidth; el.classList.add("pulsa"); }
   }
   for (const el of document.querySelectorAll("[data-ponto]")) el.hidden = !(E.badges[el.dataset.ponto] > 0);
+  for (const el of document.querySelectorAll("[data-ponto-mais]")) el.hidden = !el.dataset.pontoMais.split(",").some(id => E.badges[id] > 0);   // UB-271
   atualizarSeloDoApp();
 }
 
@@ -2606,7 +2889,7 @@ function notificarNaoLidas(novas, total) {
   try {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
     const n = new Notification(novas === 1 ? "Mensagem nova" : `${novas} mensagens novas`, {
-      body: total === 1 ? "1 conversa aguarda resposta." : `${total} conversas aguardam resposta.`, tag: "nx-cv-shell", silent: true });
+      body: total === 1 ? "1 conversa aguarda resposta." : `${total} conversas aguardam resposta.`, tag: "nx-cv-shell", silent: true, icon: iconeDoAviso() });
     n.addEventListener("click", () => { try { window.focus(); } catch { /* ok */ } navegar("#/conversas?aba=aguardando"); n.close(); });
   } catch { /* navegador sem suporte */ }
 }
@@ -2685,9 +2968,10 @@ function renderNumeroCaido(assinatura) {
   if (c.dispensado === assinatura || (c.toast && c.toastAssinatura === assinatura)) return;
   if (c.toast) c.toast.fechar("sistema");
   const nomes = c.lista.map(x => { const q = desdeQuando(x.desde); return q ? `${x.nome} (${q})` : x.nome; }).join(", ");
-  const texto = c.lista.length === 1 ? `Número de WhatsApp desconectado: ${nomes}. As mensagens não chegam até reconectar.`
-    : `${c.lista.length} números de WhatsApp desconectados: ${nomes}. As mensagens não chegam até reconectar.`;
   const admin = E.M.rotas.podePapel(papelAtual(), "admin");
+  // plano 1000b · UB-130: quem não é admin não tem o «Ver número» — o texto diz o que fazer
+  const texto = (c.lista.length === 1 ? `Número de WhatsApp desconectado: ${nomes}. As mensagens não chegam até reconectar.`
+    : `${c.lista.length} números de WhatsApp desconectados: ${nomes}. As mensagens não chegam até reconectar.`) + (admin ? "" : " Avise o administrador da empresa.");
   c.toastAssinatura = assinatura; c.avisouQueda = true;
   c.toast = ui.toast(texto, { tipo: "aten", ms: 0, fixo: true, acao: admin ? { rotulo: "Ver número", fn: () => navegar("#/config/numeros") } : null,
     aoFechar: motivo => { if (c.toastAssinatura !== assinatura) return; c.toast = null; if (motivo === "fechado") c.dispensado = assinatura; } });
@@ -2696,8 +2980,11 @@ function renderNumeroCaido(assinatura) {
 /* ============================================================
    PLANO 100 · A4 — front novo × banco velho (nx_app_sessao.migracao contra versao.json.min_migracao) e empresa pausada (cliente_pausado)
    ============================================================ */
-function versaoRemota() {
-  if (!E.versaoRemotaP) {
+/** plano 1000b · UB-131: a leitura do versao.json vale 10 min (o ritmo do pwa.js) — min_migracao novo (ou o banco já atualizado) chega sem recarregar. */
+const VALIDADE_VERSAO_MS = 10 * 60000;
+function versaoRemota(agora = Date.now()) {
+  if (!E.versaoRemotaP || !(agora - (E.versaoRemotaEm || 0) < VALIDADE_VERSAO_MS)) {
+    E.versaoRemotaEm = agora;
     E.versaoRemotaP = (async () => {
       try {
         const ctl = typeof AbortController === "function" ? new AbortController() : null;

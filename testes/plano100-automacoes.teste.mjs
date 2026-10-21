@@ -814,7 +814,9 @@ test("G5 Admin → cliente: interruptor «Cliente ativo» (só plataforma), avis
     const sw = t.alvo.querySelector(".adm-ativo input[name=ativo]");
     assert.ok(sw, "a plataforma vê o interruptor");
     assert.equal(sw.checked, false);
-    assert.match(textoDe(t.alvo.querySelector(".adm-ativo")), /o Órbita para de ler os anúncios e de mandar relatórios/);   // revisão: texto fiel ao que o servidor faz
+    // plano 1000b: UB-120 — a ajuda ficou curta; o texto fiel ao que o servidor faz (anúncios, relatórios…) foi para a confirmação de pausar
+    assert.match(textoDe(t.alvo.querySelector(".adm-ativo")), /Desligado: a equipe do cliente não entra e as rotinas param/);
+    assert.match(ler("web/app/admin.js"), /texto: "O Órbita para de ler os anúncios e de mandar relatórios e alertas deste cliente/);
     // religa → o servidor de hoje ignora a chave: a tela não finge
     sw.checked = true;
     const form = t.alvo.querySelector(".adm-det form");
@@ -888,7 +890,9 @@ test("arquivos da frente G sem «localStorage» no rascunho de automação e sem
   assert.doesNotMatch(ler("web/app/auto-editor.js"), /localStorage/);
   const tela = ler("web/app/automacoes.js");
   const usos = tela.match(/localStorage\.\w+\((\w+)/g) || [];
-  assert.ok(usos.length > 0 && usos.every(u => /\((chaveOrdem|chaveRecentes)$/.test(u)), `só as preferências da lista: ${usos.join(", ")}`);
+  // plano 1000b: UB-078 / UB-210 — preferências de TELA (abrir o fluxo, receitas de outros segmentos) por preferencia(chavePref), só chaves nx-au-*
+  assert.ok(usos.length > 0 && usos.every(u => /\((chaveOrdem|chaveRecentes|chavePref)$/.test(u)), `só as preferências da lista: ${usos.join(", ")}`);
+  assert.match(tela, /const ok = \/\^nx-au-\[a-z-\]\+\$\/\.test\(String\(chavePref\)\);/);
   assert.doesNotMatch(tela, /localStorage[^\n]*(rascunho|Rascunho)/);
 });
 

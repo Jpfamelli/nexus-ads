@@ -29,11 +29,19 @@ export function criarChat(A) {
   const atraso = h("div", { class: "cvc-atraso", role: "status", hidden: true }, ui.icone("alerta"), atrasoTxt, btAtraso);
   let tentarAtraso = null;
   btAtraso.addEventListener("click", () => { if (typeof tentarAtraso === "function") tentarAtraso(); });
-  const corpo = h("div", { class: "cvc-corpo" }, msgs, novas, arrastar);
+  // plano 1000b · CB-073: um aviso só (fora do log) quando muitas mídias carregam ao mesmo tempo — as bolhas não têm mais role=status
+  const avisoMidias = h("span", { class: "sr-only cvc-aviso-midias", role: "status" }, "");
+  const esqueletos = new Set();
+  const esqueleto = el => { esqueletos.add(el); return el; };
+  const corpo = h("div", { class: "cvc-corpo" }, msgs, novas, arrastar, avisoMidias);
   const vazio = h("div", { class: "cvc-vazio" });
   const el = h("div", { class: "cvc" }, vazio, cab, faixa, atraso, corpo);
 
-  novas.addEventListener("click", () => { rolarFim(true); novas.hidden = true; pararDeVigiar(); });
+  novas.addEventListener("click", () => {
+    rolarFim(true); novas.hidden = true; pararDeVigiar();
+    // plano 1000b · CB-127: a pílula focada some — o foco vai para a região das mensagens (não cai no body)
+    try { msgs.focus({ preventScroll: true }); } catch { /* ok */ }
+  });
 
   /* ---------------- rolagem */
   let grudarFimAte = 0;      // até quando uma mídia que termina de carregar deve manter a conversa no fim (a imagem só ganha altura ao carregar)
@@ -77,12 +85,27 @@ export function criarChat(A) {
   /* ---------------- arrastar arquivo para o chat */
   let contaDrag = 0;
   const temArquivo = ev => ev.dataTransfer && [...(ev.dataTransfer.types || [])].includes("Files");
-  corpo.addEventListener("dragenter", ev => { if (!temArquivo(ev) || !A.composer.aceitaAnexo()) return; ev.preventDefault(); contaDrag++; arrastar.hidden = false; });
-  corpo.addEventListener("dragover", ev => { if (!temArquivo(ev) || !A.composer.aceitaAnexo()) return; ev.preventDefault(); ev.dataTransfer.dropEffect = "copy"; });
+  /* plano 1000b · CB-006: arrasto com arquivo SEMPRE tem preventDefault (senão o navegador abre o PDF na aba e a central some); quando o
+     anexo não vale (resolvida, janela, nota, leitura…) a faixa diz «Não dá para anexar aqui: motivo» e o soltar é ignorado */
+  const motivoSemAnexo = () => (A.composer.aceitaAnexo() ? ""
+    : (typeof A.composer.motivoSemAnexo === "function" && A.composer.motivoSemAnexo()) || "o atendimento não aceita arquivo agora.");
+  const pintarArrastar = motivo => {
+    const t = motivo ? `Não dá para anexar aqui: ${motivo.charAt(0).toLocaleLowerCase("pt-BR")}${motivo.slice(1)}` : "Solte para anexar";
+    if (arrastar.textContent !== t) arrastar.textContent = t;
+    arrastar.dataset.recusa = motivo ? "1" : "0";
+  };
+  corpo.addEventListener("dragenter", ev => { if (!temArquivo(ev)) return; ev.preventDefault(); contaDrag++; pintarArrastar(motivoSemAnexo()); arrastar.hidden = false; });
+  corpo.addEventListener("dragover", ev => {
+    if (!temArquivo(ev)) return;
+    ev.preventDefault();
+    try { ev.dataTransfer.dropEffect = A.composer.aceitaAnexo() ? "copy" : "none"; } catch { /* ok */ }
+  });
   corpo.addEventListener("dragleave", () => { contaDrag = Math.max(0, contaDrag - 1); if (!contaDrag) arrastar.hidden = true; });
   corpo.addEventListener("drop", ev => {
     if (!temArquivo(ev)) return;
     ev.preventDefault(); contaDrag = 0; arrastar.hidden = true;
+    const recusa = motivoSemAnexo();
+    if (recusa) { ui.toast(recusa, { tipo: "info" }); return; }
     const arquivos = ev.dataTransfer.files ? [...ev.dataTransfer.files] : [];
     const f = arquivos[0];
     // CA-012: vários arquivos soltos de uma vez — um envio por vez (cada um com a sua prévia); a pessoa sabe que os outros ficaram
@@ -116,9 +139,12 @@ export function criarChat(A) {
     const c = A.contagens || {};
     const ag = Number(c.aguardando) || 0;
     const semCanal = A.base && !(A.base.canais || []).length;
+    // plano 1000b · CB-136: «Tudo em dia» só com as contagens lidas (e sem a lista em erro) — antes disso, um título neutro
+    const lidas = !!Object.keys(c).length && !A.erroLista;
     const tit = semCanal
       ? h("h2", null, "Conecte o ", h("em", null, "WhatsApp"), " da empresa.")
       : ag ? h("h2", null, h("em", null, String(ag)), ag === 1 ? " cliente espera resposta." : " clientes esperam resposta.")
+        : !lidas ? h("h2", null, "Escolha uma ", h("em", null, "conversa"), ".")
         : h("h2", null, "Tudo ", h("em", null, "em dia"), ".");
     const txt = semCanal
       ? (A.acoes.pode("admin") ? "As conversas chegam aqui assim que um número estiver conectado." : "Peça ao administrador para conectar o WhatsApp.")
@@ -175,6 +201,13 @@ export function criarChat(A) {
 
   function mostrarErro(e, tentar) {
     ui.limpar(vazio);
+    // plano 1000b · CB-091: conversa fora do alcance (link antigo, transferida para outro departamento) não é «erro» com «Tentar de novo»
+    if (e && e.codigo === "conversa_nao_encontrada") {
+      vazio.appendChild(h("div", { class: "cvc-vazio-in cvc-fora" }, ui.vazio({ titulo: "Esta conversa não está mais com você.", texto: "Ela foi transferida para outra pessoa ou departamento, ou foi removida.", icone: "chat", tema: "conversas" }),
+        h("button", { type: "button", class: "bt bt-sec cvc-fora-voltar", on: { click: () => A.acoes.voltar() } }, "Voltar à lista")));
+      modo("vazio");
+      return;
+    }
     vazio.appendChild(h("div", { class: "cvc-vazio-in" }, ui.erroCartao(e, tentar),
       matchMedia("(max-width: 760px)").matches ? h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.voltar() } }, "Voltar à lista") : null));
     modo("vazio");
@@ -197,7 +230,7 @@ export function criarChat(A) {
     const flash = Date.now() < iaFlashAte;
     const caido = typeof A.acoes.canalCaido === "function" ? A.acoes.canalCaido(conv.canal_id) : null;
     const s = JSON.stringify([conv.id, conv.status, conv.atribuida_a, conv.atribuida && conv.atribuida.nome, conv.atribuida_nome, conv.departamento && conv.departamento.nome,
-      conv.oculta, conv.protocolo, conv.canal && conv.canal.nome, conv.canal_id, provedorCanal, jan.texto, jan.nivel, L.janelaCurta(jan), Math.round(L.fracaoJanela(jan) * 1000), jan.ate,
+      conv.oculta, conv.protocolo, conv.canal && conv.canal.nome, conv.canal_id, ((A.base && A.base.canais) || []).find(k => k.id === conv.canal_id)?.nome, provedorCanal, jan.texto, jan.nivel, L.janelaCurta(jan), Math.round(L.fracaoJanela(jan) * 1000), jan.ate,
       ct.id, nome, ct.telefone, ct.optin_marketing, ia && [ia.disponivel, ia.ia_ligada, ia.pausada, ia.pausada_ate, ia.so_manual, ia.pausada_por, ia.pausada_por_nome, ia.respondendo, ia.erro],
       flash, A.podeEscrever, eu, A.raiz && A.raiz.dataset.lateral, caido && [caido.nome, caido.desde], (() => { try { return matchMedia("(max-width: 760px)").matches; } catch { return false; } })(),
       conv.ultima_entrada_em ? 1 : 0]);
@@ -212,7 +245,9 @@ export function criarChat(A) {
     sigCab = s;
     ui.limpar(cab);
     const voltar = h("button", { type: "button", class: "bt-icone cvc-voltar", "aria-label": "Voltar à lista", dataset: { acao: "voltar" }, on: { click: () => A.acoes.voltar() } }, ui.icone("seta-esq"));
-    const canal = conv.canal ? `via ${conv.canal.nome}` : "número removido";
+    // plano 1000b · CB-075: o ver veio sem o objeto do canal, mas a base conhece o canal_id — «via Recepção», não «número removido»
+    const canalBase = !conv.canal && conv.canal_id ? ((A.base && A.base.canais) || []).find(k => k.id === conv.canal_id) : null;
+    const canal = conv.canal ? `via ${conv.canal.nome}` : canalBase && canalBase.nome ? `via ${canalBase.nome}` : "número removido";
     // CA-239: contato removido (sem id) — a ficha não abre uma gaveta de erro: o botão fica desligado e diz por quê
     const semFicha = !ct.id;
     // CA-015: com a coluna estreita o protocolo some do cabeçalho (está na lateral e no atalho «Protocolo»); o title tem a linha inteira
@@ -226,10 +261,13 @@ export function criarChat(A) {
       ui.avatar(nome, ct.id),
       h("span", { class: "cvc-quem-txt" },
         h("span", { class: "cvc-nome" }, nome),
+        // plano 1000b · CB-012: separador só ENTRE itens — sem telefone não começa com «·», sem protocolo não termina com «·»
+        // (sem telefone, o «·» do protocolo some junto com o «via» quando a coluna estreita esconde o canal)
         h("span", { class: "cvc-sub" },
           ct.telefone ? h("span", null, ui.telBR(ct.telefone)) : null,
-          h("i", { class: "cvc-via-sep" }, "·"), h("span", { class: "cvc-via" }, canal),
-          h("i", { class: "cvc-proto-sep" }, "·"), h("span", { class: "mono" }, conv.protocolo || ""))));
+          ct.telefone ? h("i", { class: "cvc-via-sep" }, "·") : null, h("span", { class: "cvc-via" }, canal),
+          conv.protocolo ? h("i", { class: ct.telefone ? "cvc-proto-sep" : "cvc-proto-sep cvc-via-sep" }, "·") : null,
+          conv.protocolo ? h("span", { class: "mono" }, conv.protocolo) : null)));
 
     // faixa de situação: UMA pílula com dono + departamento; janela e IA ao lado; avisos só quando existem
     ui.limpar(faixa);
@@ -263,12 +301,12 @@ export function criarChat(A) {
       } else if (ia) {
         if (ia.pausada) {
           const autor = ia.pausada_por === "celular" ? "mensagem pelo celular" : `${ia.pausada_por_nome || "você"} assumiu`;
-          let hora = "";
-          if (!ia.so_manual && ia.pausada_ate) {
-            try { hora = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date(ia.pausada_ate)); } catch { /* estado continua legível */ }
-          }
-          rotuloIA = ia.so_manual ? `IA pausada — retorno manual` : `IA pausada até ${hora || "em breve"} — ${autor}`;
-          curtoIA = ia.so_manual ? "IA pausada" : `IA pausada até ${hora || "em breve"}`;
+          // plano 1000b · CB-076: o formatador de hora do módulo (L.horaMsg, fuso de SP) — nada de Intl.DateTimeFormat novo a cada desenho
+          // plano 1000b · CB-013: com o dia quando não é hoje («até amanhã 08:00», «até sex. 08:00») — L.ateTexto, mesmo formatador de SP
+          const hora = !ia.so_manual && ia.pausada_ate ? L.ateTexto(ia.pausada_ate) : "";
+          // plano 1000b · CB-014: sem hora (pausada_ate ausente ou inválido) não diz «até em breve»: «IA pausada (volta sozinha)»
+          rotuloIA = ia.so_manual ? `IA pausada — retorno manual` : hora ? `IA pausada até ${hora} — ${autor}` : `IA pausada (volta sozinha) — ${autor}`;
+          curtoIA = ia.so_manual ? "IA pausada" : hora ? `IA pausada até ${hora}` : "IA pausada (volta sozinha)";
           corIA = "aten";
         } else { rotuloIA = "IA atendendo"; corIA = "ok"; dicaIA = ia.respondendo ? "O CodeWords está respondendo a esta conversa." : "O agente do CodeWords pode responder automaticamente."; }
       }
@@ -343,7 +381,8 @@ export function criarChat(A) {
       // CA-227: pausar a IA por um tempo escolhido (o nx_cv_ia_pausar aceita p_horas; 0 = até alguém devolver)
       if (pode && conv.status !== "resolvida" && est.primaria === "assumir_ia") {
         itens.push({ rotulo: "Pausar a IA por 1 hora", icone: "relogio", fn: () => A.acoes.assumirIA(null, { horas: 1 }) });
-        itens.push({ rotulo: "Pausar a IA até amanhã às 8h", icone: "relogio", fn: () => A.acoes.assumirIA(null, { horas: L.horasAteAmanha8() }) });
+        itens.push({ rotulo: L.rotuloPausa8(), icone: "relogio",   // plano 1000b · CB-086: de madrugada, «até as 8h»
+ fn: () => A.acoes.assumirIA(null, { horas: L.horasAteAmanha8() }) });
         itens.push({ rotulo: "Pausar a IA até eu devolver", icone: "relogio", fn: () => A.acoes.assumirIA(null, { horas: 0 }) });
       }
       if (pode && est.devolverIA) itens.push({ rotulo: "Devolver para a IA", icone: "ia", fn: () => A.acoes.devolverIA() });
@@ -390,11 +429,13 @@ export function criarChat(A) {
 
   /** CA-111: folha de baixo (celular) com os itens do ⋮ em grupos; "-" separa os grupos. Esc, tocar fora e Voltar fecham; o foco volta ao ⋮. */
   let folhaAberta = null;
+  let seqFolha = 0;
   function abrirFolha(ancora, itens, nomes = []) {
     if (folhaAberta) { try { folhaAberta.fechar(); } catch { /* ok */ } }
     const grupos = [[]];
     for (const it of itens.filter(Boolean)) { if (it === "-") grupos.push([]); else grupos[grupos.length - 1].push(it); }
     let fechado = false, camada = null;
+    const folhaSeq = ++seqFolha;   // plano 1000b · CB-088: ids únicos dos títulos dos grupos
     const dlg = h("dialog", { class: "cv-folha", "aria-label": "Mais ações" });
     const fechar = (voltarFoco = true) => {
       if (fechado) return; fechado = true;
@@ -405,8 +446,9 @@ export function criarChat(A) {
       if (voltarFoco && ancora && ancora.isConnected) try { ancora.focus({ preventScroll: true }); } catch { /* ok */ }
     };
     const corpoF = h("div", { class: "cv-folha-corpo" },
-      grupos.filter(g => g.length).map((g, i) => h("section", { class: "cv-folha-grupo", "aria-label": nomes[i] || "Ações" },
-        h("h3", { class: "rotulo" }, nomes[i] || "Mais"),
+      // plano 1000b · CB-088: o grupo é nomeado pelo próprio h3 (aria-labelledby) — antes aria-label + h3 liam o nome duas vezes
+      grupos.filter(g => g.length).map((g, i) => h("section", { class: "cv-folha-grupo", "aria-labelledby": `cv-folha-g${folhaSeq}-${i}` },
+        h("h3", { class: "rotulo", id: `cv-folha-g${folhaSeq}-${i}` }, nomes[i] || "Mais"),
         g.map(it => {
           const b = h("button", { type: "button", class: ["cv-folha-item", it.perigo && "perigo"], disabled: !!it.desabilitado }, it.icone ? ui.icone(it.icone) : null, h("span", null, it.rotulo));
           b.addEventListener("click", () => { fechar(false); if (it.fn) it.fn(); });
@@ -511,6 +553,7 @@ export function criarChat(A) {
   /* ---------------- mensagens */
   const cache = new Map();   // chave → {el, sig}
   let ultimoRenderId = null;
+  const falhasVistas = new Set();   // plano 1000b · CB-021: falhas gravadas já desenhadas nesta conversa (as do 1º desenho são antigas)
 
   /** Segmentos do formatarWhats viram nós (nunca HTML); CA-022: negrito/itálico/riscado com link dentro desenham o link aninhado. */
   function nosFormatados(segs) {
@@ -518,7 +561,7 @@ export function criarChat(A) {
     for (const seg of segs) {
       const dentro = () => (seg.partes ? nosFormatados(seg.partes) : seg.v);
       if (seg.tipo === "texto") frag.appendChild(document.createTextNode(seg.v));
-      else if (seg.tipo === "link") frag.appendChild(linkSeguro(seg.v));
+      else if (seg.tipo === "link") frag.appendChild(linkSeguro(seg.v, seg.texto));
       else if (seg.tipo === "negrito") frag.appendChild(h("strong", null, dentro()));
       else if (seg.tipo === "italico") frag.appendChild(h("em", null, dentro()));
       else if (seg.tipo === "riscado") frag.appendChild(h("s", null, dentro()));
@@ -528,12 +571,12 @@ export function criarChat(A) {
   }
   /** plano 1000 · CA-121: o link mostra para onde vai de verdade (o host como o navegador lê — domínio internacional em punycode) e
       avisa encurtador; o ↗ diz que abre fora do Órbita. */
-  function linkSeguro(url) {
+  function linkSeguro(url, texto = url) {   // plano 1000b · CB-026: «www.…» mostra o que foi escrito; o href leva o https://
     const d = L.destinoLink(url);
     const title = !d ? "Abre fora do Órbita" : d.encurtador ? `Link encurtado (${d.host}): o destino real só aparece depois de abrir. Abra só se confia no remetente.`
       : d.idn ? `Vai para ${d.host} — endereço com letras de outro alfabeto: confira antes de abrir.` : `Vai para ${d.host}`;
     return h("a", { href: url, target: "_blank", rel: "noopener noreferrer nofollow", title, class: d && (d.encurtador || d.idn) ? "cv-link-aten" : null, dataset: d ? { host: d.host } : null },
-      url, h("span", { class: "cv-link-ext", "aria-hidden": "true" }, "↗"), d && (d.encurtador || d.idn) ? h("span", { class: "sr-only" }, ` (${title})`) : null);
+      texto || url, h("span", { class: "cv-link-ext", "aria-hidden": "true" }, "↗"), d && (d.encurtador || d.idn) ? h("span", { class: "sr-only" }, ` (${title})`) : null);
   }
   /** CA-023: blocos de linha do WhatsApp (citação «> », listas «- » e «1. »); texto sem blocos fica como sempre foi. */
   function textoFormatado(s) {
@@ -548,11 +591,39 @@ export function criarChat(A) {
     return frag;
   }
 
-  function extensao(nome, mime) {
-    const e = String(nome || "").split(".").pop();
-    if (e && e.length <= 4 && e !== nome) return e.toUpperCase();
-    return String(mime || "").split("/").pop().slice(0, 4).toUpperCase() || "ARQ";
+  /** plano 1000b · CB-034: <a download> com a URL assinada do Storage (outra origem) é ignorado pelo navegador, que abre o arquivo numa
+      aba (no celular a pessoa sai do Órbita). No clique: fetch → blob → link temporário com download=nome; se o fetch falhar, abre a aba. */
+  function baixarDeVerdade(a) {
+    a.addEventListener("click", async ev => {
+      const url = a.getAttribute("href") || "";
+      if (!url || url === "#" || /^(blob|data):/i.test(url) || typeof globalThis.fetch !== "function") return;
+      ev.preventDefault();
+      const nome = a.getAttribute("download") || "arquivo";
+      try {
+        const r = await globalThis.fetch(url);
+        if (!r || !r.ok) throw new Error("download");
+        const blob = await r.blob();
+        const obj = URL.createObjectURL(blob);
+        const tmp = h("a", { href: obj, download: nome, hidden: true });
+        document.body.appendChild(tmp);
+        tmp.click();
+        tmp.remove();
+        setTimeout(() => { try { URL.revokeObjectURL(obj); } catch { /* ok */ } }, 1000);
+      } catch {
+        // revisão 1000b · CB-034: window.open depois de um await perde o gesto do toque e o bloqueador de pop-up engolia em silêncio —
+        // o aviso traz um link de verdade (o toque nele abre o arquivo)
+        const t = ui.toast("Não deu para baixar aqui: toque no link para abrir o arquivo.", { tipo: "erro" });
+        if (t && t.el && !t.suprimido) {
+          const link = h("a", { href: url, target: "_blank", rel: "noopener noreferrer", class: "toast-acao cvc-baixar-link" }, `Abrir ${nome}`);
+          const p = t.el.querySelector("p");
+          if (p && p.after) p.after(link); else t.el.appendChild(link);
+        }
+      }
+    });
+    return a;
   }
+  // plano 1000b · CB-109: a mesma sigla do composer (L.siglaArquivo) — sem pedaço do mime («PLAI») nem do nome
+  function extensao(nome, mime) { return L.siglaArquivo(nome, mime); }
 
   /** URL de uma mídia gravada ou local: {url, estado:"ok"|"buscando"|"erro"} (a mesma regra para bolha, grade e visualizador). */
   /* CA-245: mídia de conversa oculta (contato bloqueado) só é pedida depois do toque em «Mostrar» */
@@ -586,17 +657,33 @@ export function criarChat(A) {
     const nome = h("span", { class: "cv-lb-nome" });
     const btAnt = h("button", { type: "button", class: "bt-icone cv-lb-ant", "aria-label": "Foto anterior (seta para a esquerda)" }, ui.icone("seta-esq"));
     const btProx = h("button", { type: "button", class: "bt-icone cv-lb-prox", "aria-label": "Próxima foto (seta para a direita)" }, ui.icone("seta-dir"));
-    const btBaixar = h("a", { class: "bt bt-sec bt-p cv-lb-baixar", href: "#", target: "_blank", rel: "noopener noreferrer" }, A.icone("baixar"), h("span", { class: "so-largo-txt" }, "Baixar"));
+    const btBaixar = baixarDeVerdade(h("a", { class: "bt bt-sec bt-p cv-lb-baixar", href: "#", target: "_blank", rel: "noopener noreferrer" }, A.icone("baixar"), h("span", { class: "so-largo-txt" }, "Baixar")));   // plano 1000b · CB-034
     const btZoom = h("button", { type: "button", class: "bt-icone cv-lb-zoom", "aria-label": "Ampliar a foto", "aria-pressed": "false" }, A.icone("ampliar"));
     const btFechar = h("button", { type: "button", class: "bt-icone cv-lb-x", "aria-label": "Fechar (Esc)" }, ui.icone("fechar"));
     const kbd = t => h("kbd", null, t);
+    // plano 1000b · CB-031: aviso quando a URL da foto não vem
+    const btTentar = h("button", { type: "button", class: "bt bt-sec bt-p cv-lb-tentar" }, "Tentar de novo");
+    const falha = h("p", { class: "cv-lb-falha", role: "status", hidden: true }, "Não deu para abrir a foto agora. ", btTentar);
     const dlg = h("dialog", { class: "cv-lb", "aria-label": "Visualizador de fotos", dataset: { carregando: "0", zoom: "0" } },
       h("header", { class: "cv-lb-cab" }, contador, nome, h("div", { class: "cv-lb-acoes" }, btZoom, btBaixar, btFechar)),
-      h("div", { class: "cv-lb-palco" }, btAnt, fig, btProx),
-      h("p", { class: "cv-lb-dica" }, kbd("←"), " ", kbd("→"), " trocam · ", kbd("Esc"), " fecha · no celular, deslize"));
+      h("div", { class: "cv-lb-palco" }, btAnt, fig, btProx), falha,
+      // plano 1000b · CB-074: no toque só «Deslize para trocar»; com teclado, só as teclas
+      L.aparelhoDeToque() ? h("p", { class: "cv-lb-dica" }, "Deslize para trocar")
+        : h("p", { class: "cv-lb-dica" }, kbd("←"), " ", kbd("→"), " trocam · ", kbd("Esc"), " fecha"));
     let fechado = false, timer = null, camada = null, desligarSwipe = null;
+    // plano 1000b · CB-031: no máximo ~20 tentativas (7 s) esperando a URL; depois o aviso com «Tentar de novo» (antes: para sempre)
+    const MAX_TENT = 20;
+    let tentativas = 0, tentIdx = -1;
+    btTentar.addEventListener("click", () => {
+      tentativas = 0; falha.hidden = true;
+      // plano 1000b · CB-032: com a mídia gravada como erro, esquece o erro guardado (A.midia) para a URL ser pedida de novo
+      const it = itens[i];
+      if (it && it.path && A.midia && typeof A.midia.delete === "function") A.midia.delete(it.path);
+      mostrar();
+    });
     function mostrar() {
       clearTimeout(timer);
+      if (tentIdx !== i) { tentIdx = i; tentativas = 0; falha.hidden = true; }
       const it = itens[i];
       contador.textContent = `${i + 1} de ${itens.length}`;
       nome.textContent = it.nome || (it.direcao === "in" ? "Foto recebida" : "Foto enviada");
@@ -605,6 +692,7 @@ export function criarChat(A) {
       dlg.dataset.zoom = "0"; btZoom.setAttribute("aria-pressed", "false");
       const r = resolverUrl(it);
       if (r.url) {
+        falha.hidden = true;
         img.src = r.url; img.alt = it.legenda || it.nome || (it.direcao === "in" ? "Foto recebida" : "Foto enviada");
         btBaixar.href = r.url; btBaixar.setAttribute("download", it.nome || ""); btBaixar.hidden = false;
         dlg.dataset.carregando = "0";
@@ -612,7 +700,8 @@ export function criarChat(A) {
         img.removeAttribute("src"); img.alt = r.estado === "erro" ? "Não foi possível abrir esta foto agora." : "Carregando a foto…";
         btBaixar.hidden = true;
         dlg.dataset.carregando = r.estado === "erro" ? "erro" : "1";
-        if (r.estado !== "erro") timer = setTimeout(() => { if (!fechado) mostrar(); }, 350);   // a URL assinada ainda está vindo
+        if (r.estado !== "erro" && tentativas < MAX_TENT) { tentativas++; timer = setTimeout(() => { if (!fechado) mostrar(); }, 350); }   // a URL assinada ainda está vindo
+        else { dlg.dataset.carregando = "erro"; img.alt = "Não foi possível abrir esta foto agora."; falha.hidden = false; }   // plano 1000b · CB-032: erro também oferece «Tentar de novo»
       }
     }
     const ir = d => { const j = i + d; if (j < 0 || j >= itens.length) return; i = j; mostrar(); };
@@ -668,7 +757,7 @@ export function criarChat(A) {
   let audioTocando = null;            // só um áudio toca por vez (como no WhatsApp)
   const players = new Set();          // para a velocidade escolhida valer em todos os áudios da conversa
   function blocoAudio(m, url, md) {
-    const audio = h("audio", { src: url, preload: "metadata" });
+    const audio = h("audio", { src: url, preload: "none" });   // plano 1000b · CB-134: metadados só quando entra na tela
     aoFalharMidia(audio, md.path);
     let vel = A.acoes.velocidadeAudio ? A.acoes.velocidadeAudio() : 1;
     try { audio.playbackRate = vel; } catch { /* navegador sem suporte: toca a 1× */ }
@@ -679,7 +768,12 @@ export function criarChat(A) {
     const tempo = h("span", { class: "cv-au-tempo dado" }, "0:00");
     const dur = h("span", { class: "cv-au-dur dado" }, L.formatarDuracao(md.duracao));
     const btVel = h("button", { type: "button", class: "cv-au-vel dado", "aria-label": `Velocidade ${L.rotuloVelocidade(vel)}. Toque para mudar` }, L.rotuloVelocidade(vel));
-    const caixa = h("div", { class: "cv-midia cv-audio", dataset: { estado: "parado" } }, audio, btPlay, h("div", { class: "cv-au-meio" }, trilhoAu, h("div", { class: "cv-au-tempos" }, tempo, dur)), btVel);
+    // plano 1000b · CB-089: «Baixar áudio» (prontuário, encaminhar ao profissional) — o mesmo download do CB-034 (fetch → blob → arquivo)
+    const nomeAudio = md.nome || `audio-${m.id}.${/mp4|m4a|aac/i.test(String(md.mime || "")) ? "m4a" : /mpeg|mp3/i.test(String(md.mime || "")) ? "mp3" : /wav/i.test(String(md.mime || "")) ? "wav" : "ogg"}`;
+    const btBaixarAu = /^blob:/i.test(String(url || "")) ? null
+      : baixarDeVerdade(h("a", { class: "bt-icone cv-au-baixar", href: url, download: nomeAudio, target: "_blank", rel: "noopener noreferrer", "aria-label": "Baixar áudio", title: "Baixar áudio" }, A.icone("baixar")));
+    const caixa = h("div", { class: "cv-midia cv-audio", dataset: { estado: "parado" } }, audio, btPlay, h("div", { class: "cv-au-meio" }, trilhoAu, h("div", { class: "cv-au-tempos" }, tempo, dur)), btVel, btBaixarAu);
+    preloadPreguicoso(audio, caixa);   // plano 1000b · CB-134
     const duracao = () => (Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : (Number(md.duracao) > 0 ? Number(md.duracao) : 0));
     const pintar = () => {
       const d = duracao(), t = Number(audio.currentTime) || 0;
@@ -696,9 +790,21 @@ export function criarChat(A) {
       ui.limpar(btPlay); btPlay.appendChild(A.icone(tocando ? "pausa" : "play"));
     };
     const aplicarVel = v => { vel = v; try { audio.playbackRate = v; } catch { /* ok */ } btVel.textContent = L.rotuloVelocidade(v); btVel.setAttribute("aria-label", `Velocidade ${L.rotuloVelocidade(v)}. Toque para mudar`); };
+    // plano 1000b · CB-030: formato que o navegador não toca (OGG/Opus no Safari antigo) — diz por quê e oferece baixar (antes: calado)
+    const naoToca = () => {
+      if (caixa.querySelector(".cv-au-naotoca")) return;
+      caixa.dataset.estado = "naotoca";
+      const baixar = /^blob:/i.test(String(url || "")) ? null
+        : baixarDeVerdade(h("a", { class: "link", href: url, download: nomeAudio, target: "_blank", rel: "noopener noreferrer" }, "Baixar"));
+      caixa.appendChild(h("p", { class: "cv-au-naotoca sub", role: "status" }, "Este navegador não toca este áudio. ", baixar));
+    };
     btPlay.addEventListener("click", () => {
-      if (audio.paused) { const p = audio.play(); if (p && typeof p.catch === "function") p.catch(() => { estado(false); }); }
+      if (audio.paused) { const p = audio.play(); if (p && typeof p.catch === "function") p.catch(e => { estado(false); if (e && e.name === "NotSupportedError") naoToca(); }); }
       else audio.pause();
+    });
+    audio.addEventListener("error", () => {
+      const mime = String(md.mime || "").split(";")[0].trim();
+      try { if (mime && typeof audio.canPlayType === "function" && audio.canPlayType(mime) === "") naoToca(); } catch { /* ok */ }
     });
     audio.addEventListener("play", () => { if (audioTocando && audioTocando !== audio) { try { audioTocando.pause(); } catch { /* ok */ } } audioTocando = audio; estado(true); });
     audio.addEventListener("pause", () => { if (audioTocando === audio) audioTocando = null; estado(false); });
@@ -711,7 +817,22 @@ export function criarChat(A) {
     });
     const irPara = fr => { const d = duracao(); if (!d) return; try { audio.currentTime = Math.max(0, Math.min(d, fr * d)); } catch { /* ok */ } pintar(); };
     const fracaoDoEvento = ev => { const r = trilhoAu.getBoundingClientRect ? trilhoAu.getBoundingClientRect() : null; if (!r || !r.width) return null; return Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)); };
-    trilhoAu.addEventListener("pointerdown", ev => { const f = fracaoDoEvento(ev); if (f !== null) { ev.preventDefault(); irPara(f); } });
+    // plano 1000b · CB-090: arrastar o dedo/mouse no trilho acompanha (captura do ponteiro enquanto pressionado), não só o toque
+    let arrastando = null;
+    trilhoAu.addEventListener("pointerdown", ev => {
+      const f = fracaoDoEvento(ev); if (f === null) return;
+      ev.preventDefault(); irPara(f);
+      arrastando = ev.pointerId ?? 1;
+      try { if (typeof trilhoAu.setPointerCapture === "function" && ev.pointerId != null) trilhoAu.setPointerCapture(ev.pointerId); } catch { /* ok */ }
+    });
+    trilhoAu.addEventListener("pointermove", ev => {
+      if (arrastando === null || (ev.pointerId != null && ev.pointerId !== arrastando)) return;
+      const f = fracaoDoEvento(ev); if (f !== null) { ev.preventDefault(); irPara(f); }
+    });
+    const soltar = () => { arrastando = null; };
+    trilhoAu.addEventListener("pointerup", soltar);
+    trilhoAu.addEventListener("pointercancel", soltar);
+    trilhoAu.addEventListener("lostpointercapture", soltar);
     trilhoAu.addEventListener("keydown", ev => {
       const d = duracao(); if (!d) return;
       const t = Number(audio.currentTime) || 0;
@@ -732,6 +853,35 @@ export function criarChat(A) {
   }
 
   /** URL assinada vencida (1 h) ou quebrada → esquece e mostra "tentar de novo" (no máximo uma vez por minuto). */
+  /** plano 1000b · CB-134: áudio e vídeo nascem com preload="none" e só pedem os metadados ao Storage quando a bolha entra na tela
+      (uma conversa com 50 áudios fazia 50 pedidos ao abrir). Sem IntersectionObserver: «metadata», como antes. */
+  let obsPreload = null;
+  // revisão 1000b · CB-134: as caixas observadas — as que saem do DOM no renderMensagens são «unobserve» (o observador não segura
+  // bolhas mortas nem a mídia delas)
+  const observadasPreload = new Set();
+  function soltarPreloadForaDaTela() {
+    if (!obsPreload) return;
+    for (const c of observadasPreload) {
+      if (c.isConnected) continue;
+      try { obsPreload.unobserve(c); } catch { /* ok */ }
+      c._media = null;
+      observadasPreload.delete(c);
+    }
+  }
+  function preloadPreguicoso(media, caixa) {
+    if (typeof IntersectionObserver !== "function") { media.preload = "metadata"; media.setAttribute("preload", "metadata"); return; }
+    if (!obsPreload) obsPreload = new IntersectionObserver(ents => {
+      for (const e of ents) {
+        if (!e.isIntersecting) continue;
+        const md = e.target._media;
+        if (md && md.getAttribute("preload") === "none") { md.preload = "metadata"; md.setAttribute("preload", "metadata"); }
+        try { obsPreload.unobserve(e.target); } catch { /* ok */ }
+        observadasPreload.delete(e.target);
+      }
+    }, { root: null, rootMargin: "200px 0px" });
+    caixa._media = media;
+    try { obsPreload.observe(caixa); observadasPreload.add(caixa); } catch { /* ok */ }
+  }
   function aoFalharMidia(el, path) {
     if (!path) return;
     el.addEventListener("error", () => {
@@ -749,7 +899,8 @@ export function criarChat(A) {
     const nome = md.nome || null;
     const local = md.local_url && /^blob:/.test(md.local_url) ? md.local_url : null;
     const estado = md.estado || (md.path ? "ok" : local ? "ok" : "indisponivel");
-    if (!local && (estado === "baixando")) return h("div", { class: "cv-midia-sk", role: "status" }, "Baixando mídia…");
+    // plano 1000b · CB-073: sem role=status em cada mídia (30 fotos = 30 «Carregando…» no leitor de tela); o resumo vai num aviso só (avisoMidias)
+    if (!local && (estado === "baixando")) return esqueleto(h("div", { class: "cv-midia-sk" }, "Baixando mídia…"));
     // plano 1000 · SV-057: o arquivo foi apagado pelo painel (nx_midia_apagada tira o path) — não é falha do WhatsApp
     if (!local && estado === "apagada") {
       return h("div", { class: "cv-midia-off" }, ui.icone("alerta"),
@@ -774,9 +925,9 @@ export function criarChat(A) {
       if (!url) {
         if (A.acoes.estadoMidia(md.path) === "erro") {
           return h("div", { class: "cv-midia-off" }, ui.icone("alerta"), h("span", null, "Não foi possível abrir a mídia agora. ",
-            h("button", { type: "button", class: "link", on: { click: () => { A.midia.delete(md.path); renderMensagens({ rolar: "manter" }); } } }, "Tentar de novo")));
+            h("button", { type: "button", class: "link", on: { click: () => { A.midia.delete(md.path); renderMensagens({ rolar: "manter" }); focarBolha(m.id); } } }, "Tentar de novo")));   // CB-128
         }
-        return h("div", { class: "cv-midia-sk", role: "status" }, "Carregando mídia…");
+        return esqueleto(h("div", { class: "cv-midia-sk" }, "Carregando mídia…"));   // plano 1000b · CB-073
       }
     }
     if (m.tipo === "imagem" || m.tipo === "sticker") {
@@ -792,11 +943,13 @@ export function criarChat(A) {
     if (m.tipo === "video") {
       // CA-140: o vídeo não aparece mais preto e mudo — ▶ e a duração (quando o servidor manda) por cima, até a pessoa tocar
       const dur = Number(md.duracao) > 0 ? L.formatarDuracao(md.duracao) : "";
-      const v = h("video", { src: url, controls: true, preload: "metadata", playsinline: true, "aria-label": dur ? `Vídeo de ${dur}` : "Vídeo" });
+      const v = h("video", { src: url, controls: true, preload: "none", playsinline: true, "aria-label": dur ? `Vídeo de ${dur}` : "Vídeo" });   // plano 1000b · CB-134
       aoFalharMidia(v, md.path);
       const selo = h("span", { class: "cv-video-selo dado", "aria-hidden": "true" }, "▶ ", dur || "Vídeo");
       v.addEventListener("play", () => { selo.hidden = true; });
-      return h("div", { class: "cv-midia cv-video" }, v, selo);
+      const cxVideo = h("div", { class: "cv-midia cv-video" }, v, selo);
+      preloadPreguicoso(v, cxVideo);
+      return cxVideo;
     }
     if (m.tipo === "audio") return blocoAudio(m, url, md);
     // CA-119: documento recebido de tipo incomum (.apk, .exe, .html, .svg…) nunca abre direto numa aba: aviso e download forçado
@@ -812,7 +965,7 @@ export function criarChat(A) {
     if (pdf) {
       return h("div", { class: "cv-doc-cx" }, doc, h("div", { class: "cv-doc-acoes" },
         h("a", { class: "bt bt-fant bt-p cv-doc-ver", href: url, target: "_blank", rel: "noopener noreferrer", "aria-label": `Ver ${nome || "o PDF"}` }, ui.icone("olho"), "Ver"),
-        h("a", { class: "bt bt-fant bt-p cv-doc-baixar", href: url, rel: "noopener noreferrer", download: nome || "documento.pdf", "aria-label": `Baixar ${nome || "o PDF"}` }, A.icone("baixar"), "Baixar")));
+        baixarDeVerdade(h("a", { class: "bt bt-fant bt-p cv-doc-baixar", href: url, rel: "noopener noreferrer", download: nome || "documento.pdf", "aria-label": `Baixar ${nome || "o PDF"}` }, A.icone("baixar"), "Baixar"))));   // plano 1000b · CB-034
     }
     if (!incomum) return doc;
     return h("div", { class: "cv-doc-cx" }, doc, h("p", { class: "cv-doc-aviso", role: "note" }, ui.icone("alerta"), "Arquivo de tipo incomum — baixe só se confia no remetente."));
@@ -829,7 +982,13 @@ export function criarChat(A) {
         return h("button", { type: "button", class: "cv-grade-cel cv-midia-sk cv-midia-mostrar", dataset: { id: m.id }, on: { click: () => liberarMidia(m.midia && m.midia.path) } }, "Mostrar");
       }
       if (!r.url) {
-        return h("div", { class: "cv-grade-cel cv-midia-sk", role: "status", dataset: { id: m.id } }, r.estado === "erro" ? "Sem acesso" : "Carregando…");
+        // plano 1000b · CB-033: a foto que não abriu vira botão «Tentar de novo» (como a bolha simples), não um «Sem acesso» sem saída
+        if (r.estado === "erro") {
+          const path = m.midia && m.midia.path;
+          return h("button", { type: "button", class: "cv-grade-cel cv-midia-sk cv-grade-erro", dataset: { id: m.id }, "aria-label": `Foto ${k + 1} de ${lista.length} não abriu. Tentar de novo`,
+            on: { click: () => { if (path) A.midia.delete(path); renderMensagens({ rolar: "manter" }); focarBolha(m.id); } } }, ui.icone("alerta"), "Tentar de novo");
+        }
+        return esqueleto(h("div", { class: "cv-grade-cel cv-midia-sk", dataset: { id: m.id } }, "Carregando…"));   // plano 1000b · CB-073
       }
       const img = h("img", { src: r.url, alt: "", loading: "lazy", decoding: "async", on: { load: aposMidiaCarregar } });
       aoFalharMidia(img, m.midia && m.midia.path);
@@ -945,6 +1104,18 @@ export function criarChat(A) {
     return m.enviado_por ? m.enviado_por.nome : null;
   }
 
+  /** plano 1000b · CB-009: quem escreveu a mensagem citada (saída) — a IA, a automação ou a colega, não «Você» para tudo. A citada é
+      procurada em A.msgs pelo id; não carregada, vale o que o responde_a trouxer (origem/enviado_por) e, sem isso, «Equipe». */
+  function autorCitada(ra) {
+    const orig = (A.msgs || []).find(x => String(x.id) === String(ra.id)) || (ra.origem || ra.enviado_por ? { direcao: "out", ...ra } : null);
+    if (!orig) return "Equipe";
+    const q = quemEnviou(orig);
+    if (q) return q;
+    if (orig.origem === "ia") return "IA";
+    if (orig.enviado_por && A.eu && orig.enviado_por.id === A.eu.id) return "Você";
+    return "Equipe";
+  }
+
   function construirMsg(ln) {
     const m = ln.msg;
     if (m.tipo === "sistema") {
@@ -971,7 +1142,7 @@ export function criarChat(A) {
       const ra = m.responde_a;
       // CA-009: citação de mensagem que não está carregada vai buscá-la (páginas anteriores) e só então destaca
       const cita = h("button", { type: "button", class: "cv-cita", dataset: { dir: ra.direcao === "in" ? "in" : "out" }, on: { click: () => irParaCitada(ra.id) } },
-        h("b", null, ra.direcao === "in" ? A.acoes.nomeContato(A.ver && A.ver.contato) || "Cliente" : "Você"), ra.resumo || "Mensagem");
+        h("b", null, ra.direcao === "in" ? A.acoes.nomeContato(A.ver && A.ver.contato) || "Cliente" : autorCitada(ra)), ra.resumo || "Mensagem");
       bolha.appendChild(cita);
     }
     if (["imagem", "video", "audio", "documento", "sticker"].includes(m.tipo)) bolha.appendChild(blocoMidia(m));
@@ -1026,7 +1197,7 @@ export function criarChat(A) {
     if (m.local && (m.filaEstado === "fila" || m.filaEstado === "incerto")) {
       // o texto diz o motivo REAL (internet, servidor ocupado, sessão) e a hora da próxima tentativa: a pessoa não procura problema no próprio wifi
       const fila = h("div", { class: "cv-fila", role: "status" },
-        h("span", { class: "cv-fila-t" }, ui.icone("relogio"), L.textoFila({ estado: m.filaEstado, motivo: m.erro, proxima: m.filaProxima })));
+        h("span", { class: "cv-fila-t" }, ui.icone("relogio"), h("span", { class: "cv-fila-txt" }, L.textoFila({ estado: m.filaEstado, motivo: m.erro, proxima: m.filaProxima }))));
       if (m.filaEstado === "fila" && A.podeEscrever) {
         // D10: sem internet ou dentro dos 90 s do último pedido, «Enviar agora» fica desligado e diz por quê (antes o clique não fazia nada)
         const est = typeof A.acoes.estadoEnviarAgora === "function" ? A.acoes.estadoEnviarAgora(m) : { motivo: "", espera: 0 };
@@ -1044,7 +1215,11 @@ export function criarChat(A) {
       const erro = ambigua
         ? "Pode ter saído — confira no WhatsApp antes de reenviar."
         : m.erro || "O canal não aceitou a mensagem.";
-      const falha = h("div", { class: "cv-falha", role: "alert" }, h("span", null,
+      // plano 1000b · CB-021: role=alert só para a falha NOVA nesta sessão (bolha local ou falha que surgiu depois de a conversa abrir);
+      // as antigas, desenhadas ao abrir, não disparam 3 alertas seguidos no leitor
+      const nova = m.local || (ultimoRenderId !== null && !falhasVistas.has(String(m.id)));
+      if (!m.local) falhasVistas.add(String(m.id));
+      const falha = h("div", { class: "cv-falha", role: nova ? "alert" : null }, h("span", null,
         h("b", null, ambigua ? "Status incerto: " : "Não enviada: "), erro));
       if (ambigua) {
         falha.classList.add("cv-falha-ambigua");
@@ -1063,6 +1238,11 @@ export function criarChat(A) {
       } else if (A.podeEscrever && m.tipo === "texto" && m.corpo && !A.acoes.foiReenviada(m)) {
         // falha gravada pelo servidor: pede o reenvio da PRÓPRIA mensagem (o texto gravado já tem a assinatura; como texto novo ela sairia em dobro)
         falha.append(h("button", { type: "button", class: "bt bt-sec", on: { click: () => A.acoes.reenviarGravada(m) } }, "Tentar de novo"));
+      } else if (A.podeEscrever && !m.local && ["imagem", "video", "audio", "documento", "sticker"].includes(m.tipo)) {
+        // plano 1000b · CB-078: foto/arquivo que o servidor gravou como falha não tem reenvio pronto (o arquivo não está mais aqui) —
+        // diz o caminho e abre o clipe do composer
+        falha.append(h("span", { class: "cv-falha-dica" }, " Anexe o arquivo de novo."),
+          h("button", { type: "button", class: "bt bt-sec cv-anexar-de-novo", on: { click: () => { if (A.composer && typeof A.composer.escolherArquivo === "function") A.composer.escolherArquivo(); } } }, "Anexar de novo"));
       }
       box.appendChild(falha);
     }
@@ -1074,16 +1254,23 @@ export function criarChat(A) {
     const md = m.midia || {};
     const urlOk = md.path ? A.acoes.estadoMidia(md.path) : "";
     const fila = m.local && m.filaEstado === "fila" && typeof A.acoes.estadoEnviarAgora === "function" ? A.acoes.estadoEnviarAgora(m).motivo : "";
-    return [m.status === "falhou" ? "falhou" : "-", m.erro, m.ambigua, fila, m.local && m.pedido && m.pedido.client_ref ? 1 : 0, m.filaEstado, m.filaProxima, !m.local && m.status === "falhou" && A.acoes.foiReenviada(m) ? 1 : 0, m.origem, m.reacao, ln.junta, md.estado, md.progresso, md.fase, m.local && A.acoes.podeCancelarEnvio(m) ? 1 : 0, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
+    return [m.status === "falhou" ? "falhou" : "-", m.erro, m.ambigua, fila, m.local && m.pedido && m.pedido.client_ref ? 1 : 0, m.filaEstado, /* plano 1000b · CB-022: filaProxima fora — o texto muda no lugar */ !m.local && m.status === "falhou" && A.acoes.foiReenviada(m) ? 1 : 0, m.origem, m.reacao, ln.junta, md.estado, /* plano 1000b · CB-140: progresso fora — muda no lugar (pintarProgresso) */ md.fase, m.local && A.acoes.podeCancelarEnvio(m) ? 1 : 0, urlOk, m.corpo && m.corpo.length, m.local ? 1 : 0,
       m.responde_a && m.responde_a.id, m.enviado_por && m.enviado_por.nome, md.path && bloqueada(md.path) ? 1 : 0, m.tipo === "sistema" && !mostrarSistema() ? "fino" : ""].join("|");
   }
 
   function construirLinha(ln) {
-    if (ln.tipo === "dia") return h("div", { class: "cv-dia", role: "separator", dataset: { hoje: ln.rotulo === "Hoje" ? "1" : "0" } }, h("span", null, ln.rotulo));
+    // plano 1000b · CB-020: separator tem filhos apresentacionais (o texto do span não é lido) — o rótulo vai no aria-label, como o «Mensagens novas»
+    if (ln.tipo === "dia") return h("div", { class: "cv-dia", role: "separator", "aria-label": ln.rotulo, dataset: { hoje: ln.rotulo === "Hoje" ? "1" : "0" } }, h("span", null, ln.rotulo));
     if (ln.tipo === "atendimento") {
       const c = ln.conversa;
-      return h("div", { class: "cv-atend", role: "separator" }, h("span", null, "Atendimento ", h("b", null, c.protocolo || ""),
-        c.aberta_em ? ` · aberto em ${ui.dataHoraBR(c.aberta_em)}` : ""));
+      const quando = c.aberta_em ? `aberto em ${ui.dataHoraBR(c.aberta_em)}` : "";
+      // plano 1000b · CB-077: sem protocolo, «Atendimento de 08/10 14:02» (antes: «Atendimento  · aberto em…», com espaço duplo)
+      if (!c.protocolo) {
+        const rot = c.aberta_em ? `Atendimento de ${ui.dataHoraBR(c.aberta_em)}` : "Atendimento";
+        return h("div", { class: "cv-atend", role: "separator", "aria-label": rot }, h("span", null, rot));
+      }
+      return h("div", { class: "cv-atend", role: "separator", "aria-label": [`Atendimento ${c.protocolo}`, quando].filter(Boolean).join(", ") },
+        h("span", null, "Atendimento ", h("b", null, c.protocolo), quando ? ` · ${quando}` : ""));
     }
     if (ln.tipo === "novas") return h("div", { class: "cv-novas-sep", role: "separator", "aria-label": "Mensagens novas" }, h("span", null, "Mensagens novas"));
     if (ln.tipo === "grade") return construirGrade(ln);
@@ -1102,10 +1289,21 @@ export function criarChat(A) {
   }
 
   function renderTopo() {
+    // plano 1000b · CB-128: o foco que estava no topo (clicou em «Ver mensagens anteriores») continua no topo depois de carregar — antes o
+    // botão virava um status e o foco caía no body
+    const tinhaFoco = topoHist.contains(document.activeElement);
     ui.limpar(topoHist);
-    if (A.carregandoAntes) topoHist.appendChild(h("span", { class: "sub", role: "status" }, "Carregando mensagens anteriores…"));
+    if (A.carregandoAntes) topoHist.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p", "aria-busy": "true", "aria-disabled": "true" }, "Carregando mensagens anteriores…"));
+    // plano 1000b · CB-051: a página anterior falhou — o topo diz e oferece tentar de novo (a rolagem espera 10 s)
+    else if (A.temMaisAntes && A.falhaAntes && A.ver && A.ver.conversa && A.falhaAntes.id === A.ver.conversa.id) topoHist.appendChild(h("span", { class: "cvc-antes-falhou" },
+      h("span", { class: "sub" }, "Não carregou · "), h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.carregarAntes({ forcar: true }) } }, "Tentar de novo")));
     else if (A.temMaisAntes) topoHist.appendChild(h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.carregarAntes() } }, "Ver mensagens anteriores"));
     else if (A.msgs.length) topoHist.appendChild(h("span", { class: "rotulo" }, "Início do histórico"));
+    if (tinhaFoco) {
+      const alvo = topoHist.querySelector("button");
+      if (!alvo) topoHist.setAttribute("tabindex", "-1");
+      try { (alvo || topoHist).focus({ preventScroll: true }); } catch { /* ok */ }
+    }
   }
 
   /** rolar: 'fim' (abrir/enviar) · 'novas' (delta: só desce se já estava no fim) · 'manter' · 'anterior' (mantém a âncora ao inserir acima) */
@@ -1134,6 +1332,11 @@ export function criarChat(A) {
         x = { el: novo, sig, est };
         cache.set(chave, x);
       }
+      // plano 1000b · CB-022: «Na fila · nova tentativa às…» muda no MESMO nó (role=status não é recriado nem relido a cada backoff)
+      if (ln.tipo === "msg" && ln.msg.local) {
+        const ft = x.el.querySelector(".cv-fila-txt");
+        if (ft) { const t = L.textoFila({ estado: ln.msg.filaEstado, motivo: ln.msg.erro, proxima: ln.msg.filaProxima }); if (ft.textContent !== t) ft.textContent = t; }
+      }
       vivos.add(chave);
       ordem.push(x.el);
     }
@@ -1149,6 +1352,11 @@ export function criarChat(A) {
       ui.limpar(trilho);
       trilho.appendChild(h("div", { class: "cvc-trilho-vazio" }, ui.vazio({ titulo: "Nenhuma mensagem ainda neste atendimento.", texto: "O que o cliente mandar e o que a equipe responder aparece aqui.", icone: "chat", tema: "conversas" })));
     }
+    // plano 1000b · CB-073: quantas mídias ainda carregam (o conjunto guarda as que nasceram «carregando»; as que saíram da tela caem)
+    { let nSk = 0; for (const e of esqueletos) { if (e.isConnected) nSk++; else esqueletos.delete(e); }
+      const t = nSk >= 3 ? `Carregando ${nSk} mídias…` : "";
+      if (avisoMidias.textContent !== t) avisoMidias.textContent = t; }
+    soltarPreloadForaDaTela();   // revisão 1000b · CB-134
     renderTopo();
     const ult = A.L.ultimoId(A.msgs);
     if (rolar === "fim" || (rolar === "novas" && estavaNoFim)) grudarFimAte = Date.now() + 2500;
@@ -1197,6 +1405,29 @@ export function criarChat(A) {
     if (alvoOk && typeof ui.checkSucesso === "function") { try { ui.checkSucesso(alvoOk, { texto }); } catch { /* sem o ✓, o aviso continua */ } }
   }
 
+  /** plano 1000b · CB-140: o progresso do envio muda NO LUGAR (largura, texto e aria) — antes cada tique (até 8/s) redesenhava a conversa
+      inteira (montarLinhas). false = a bolha não tem a barra (quem chama redesenha). */
+  function pintarProgresso(id, pct) {
+    const b = bolhaDe(id);
+    const pr = b && b.querySelector(".cv-prog");
+    if (!pr || pr.getAttribute("aria-valuetext") === "Entregando ao WhatsApp") return false;
+    const p = Math.max(0, Math.min(100, Number(pct) || 0));
+    pr.setAttribute("aria-valuenow", String(p));
+    pr.setAttribute("aria-valuetext", `${p} %`);
+    const i = pr.querySelector(".cv-prog-barra i");
+    if (i) i.style.setProperty("width", `${p}%`);
+    const t = pr.querySelector(".cv-prog-txt");
+    if (t) t.textContent = `${p} %`;
+    return true;
+  }
+  /** plano 1000b · CB-128: «Tentar de novo» da mídia recria a bolha — o foco vai para a bolha nova (o botão dela, ou ela mesma), não ao body. */
+  function focarBolha(id) {
+    const b = bolhaDe(id);
+    if (!b) return;
+    const alvo = b.querySelector(`.cv-grade-erro[data-id="${escaparSel(id)}"], .cv-midia-off button`) || null;
+    if (!alvo) b.setAttribute("tabindex", "-1");
+    try { (alvo || b).focus({ preventScroll: true }); } catch { /* ok */ }
+  }
   function bolhaDe(id) {
     const direto = trilho.querySelector(`.cv-msg[data-id="${escaparSel(id)}"]`);
     const naGrade = !direto && trilho.querySelector(`.cv-grade-bt[data-id="${escaparSel(id)}"]`);
@@ -1227,6 +1458,7 @@ export function criarChat(A) {
     msgs.setAttribute("aria-busy", "true");
     ui.limpar(trilho);
     ultimoRenderId = null;
+    falhasVistas.clear();   // plano 1000b · CB-021
     novas.hidden = true; novasDesde = null; pararDeVigiar();
     gruposAbertos.clear();
     if (visualizador) { try { visualizador.fechar(); } catch { /* ok */ } }
@@ -1246,12 +1478,12 @@ export function criarChat(A) {
   if (A.composer && A.composer.el) el.appendChild(A.composer.el);
 
   return {
-    el, mostrarVazio, mostrarCarregando, mostrarErro, renderCabecalho, renderMensagens, renderTudo, renderTopo, destacar,
+    el, mostrarVazio, mostrarCarregando, mostrarErro, renderCabecalho, renderMensagens, renderTudo, renderTopo, destacar, pintarProgresso,   // CB-140
     noFim, rolarFim, estadoAcoes, abrirVisualizador, sucesso, mostrarAtraso, esconderAtraso, temBolha: id => !!bolhaDe(id),
     abrirEtiquetas, mostrarLento, // plano 1000 · CA-158 (Alt+Shift+E) e CA-105 (rede lenta ao abrir)
     /** D9: quantos players de áudio a tela segura (testes: a troca de conversa solta os da anterior). */
     contarPlayers: () => players.size,
-    desmontar() { clearTimeout(tLiberarEnvio); tLiberarEnvio = null; liberarEm = 0; players.clear(); if (visualizador) { try { visualizador.fechar(); } catch { /* ok */ } } },
+    desmontar() { if (obsPreload) { try { obsPreload.disconnect(); } catch { /* ok */ } obsPreload = null; } clearTimeout(tLiberarEnvio); tLiberarEnvio = null; liberarEm = 0; players.clear(); if (visualizador) { try { visualizador.fechar(); } catch { /* ok */ } } },
     get visualizador() { return visualizador; },
     focarMensagens() { try { msgs.focus({ preventScroll: true }); } catch { /* ok */ } },
   };

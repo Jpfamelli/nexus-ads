@@ -783,7 +783,8 @@ await teste("(revisão) cartaoDominio sem saas_url: no GitHub Pages/localhost N�
       globalThis.location = { hostname: host };
       const t = txt(C.cartaoDominio(ctx, d));
       assert.ok(!t.includes(host), `${host} não pode virar destino de CNAME`);
-      assert.ok(/Peça à Nexus o destino/.test(t) && /a Nexus informa/.test(t), `texto honesto em ${host}`);
+      // plano 1000b: UB-096 — o cartão não cita «Nexus» (o gestor da revenda e os clientes dele veem «a plataforma»)
+      assert.ok(/Peça à plataforma o destino/.test(t) && /a plataforma informa/.test(t), `texto honesto em ${host}`);
     }
     globalThis.location = { hostname: "orbita-nexus.netlify.app" };
     assert.ok(txt(C.cartaoDominio(ctx, d)).includes("crm.agencia.com.br → orbita-nexus.netlify.app"), "Netlify: host atual");
@@ -1394,7 +1395,8 @@ await teste("T07: campanhas — o que o CRM atribuiu a anúncios fora das linhas
 await teste("T07: texto do ranking de criativos concorda no singular (O criativo com… / Os 3 criativos com…)", () => {
   const a = ler("anuncios.js");
   assert.match(a, /R\.lista\.length === 1 \? "O criativo com" : `Os \$\{R\.lista\.length\} criativos com`/);
-  assert.match(a, /R\.lista\.length === 1 \? "O criativo com menor custo por conversa" : `Os \$\{R\.lista\.length\} criativos com menor custo por conversa`/);
+  // plano 1000b: com o filtro Google a unidade vira «conversão» (AB-044) — o singular/plural continua
+  assert.match(a, /R\.lista\.length === 1 \? `O criativo com menor custo por \$\{uc\.um\}` : `Os \$\{R\.lista\.length\} criativos com menor custo por \$\{uc\.um\}`/);
 });
 await teste("T07: rótulos do eixo X nunca se sobrepõem (indicesRotulo) — 30 dias a 390 px derrubava o penúltimo", () => {
   const n = 30, iw = 390 - 40 - 16 - 32, x = k => 40 + k / (n - 1) * iw;
@@ -2335,7 +2337,9 @@ await teste("ui.gaveta (M08): Esc/clique fora com texto pergunta; fechar(), o X 
     g3.fechar(); await esperar(260); assert.equal(fechou, 3, "fechar() do código nunca é bloqueado");
     const g4 = U.gaveta({ titulo: "Negócio", corpo: U.h("div", null, U.campo({ rotulo: "Título", nome: "titulo" })), aoFechar: () => { fechou++; } });
     const i4 = g4.corpo.querySelector("input"); await esperar(45); i4.value = "x"; d.ev(i4, "input");
-    achar(g4.el, ".gaveta-x").click(); await esperar(260); assert.equal(fechou, 4, "o X fecha direto");
+    // plano 1000b: UB-233 — com texto digitado o X pergunta como o Esc (antes fechava direto); «Descartar» fecha
+    achar(g4.el, ".gaveta-x").click(); await esperar(260); assert.equal(fechou, 3, "o X com texto pergunta");
+    achar(g4.el, ".protege-faixa").querySelectorAll("button")[1].click(); await esperar(260); assert.equal(fechou, 4, "Descartar fecha");
     const g5 = U.gaveta({ titulo: "N", corpo: U.h("div", null, U.campo({ rotulo: "Título", nome: "titulo" })), protegerTexto: false, aoFechar: () => { fechou++; } });
     const i5 = g5.corpo.querySelector("input"); await esperar(45); i5.value = "x"; d.ev(i5, "input"); d.ev(g5.el, "cancel"); await esperar(260); assert.equal(fechou, 5, "protegerTexto:false");
   } finally { d.fim(); }

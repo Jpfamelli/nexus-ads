@@ -131,8 +131,8 @@ test("metas: progresso contra o ritmo do calendário (dia 4 de 31), estados e te
   const batida = I.progressoMeta({ meta: 10, realizado: 12, dia: 4, diasNoMes: 31 });
   assert.equal(batida.estado, "batida"); assert.equal(batida.pct, 100, "a barra não passa de 100"); assert.equal(batida.pctReal, 120); assert.equal(batida.falta, 0);
   const fmt = v => `R$ ${Math.round(v).toLocaleString("pt-BR")}`;
-  assert.equal(I.textoMeta(frente, { fmt, dia: 4, diasNoMes: 31 }), "R$ 28.400 de R$ 50.000 (57 %). Faltam R$ 21.600 — você está à frente do ritmo; no dia 4 de 31 o esperado seria R$ 6.452.");
-  assert.equal(I.textoMeta(batida), "Meta batida: 12 de 10 (120 %).");
+  assert.equal(I.textoMeta(frente, { fmt, dia: 4, diasNoMes: 31 }), /* plano 1000b: RB-158 «57%» sem espaço */ "R$ 28.400 de R$ 50.000 (57%). Faltam R$ 21.600 — você está à frente do ritmo; no dia 4 de 31 o esperado seria R$ 6.452.");
+  assert.equal(I.textoMeta(batida), "Meta batida: 12 de 10 (120%).");
   assert.match(I.textoMeta(atras, { dia: 20, diasNoMes: 30 }), /está abaixo do ritmo; no dia 20 de 30 o esperado seria 67\./);
   assert.equal(I.textoMeta(null), "");
 });
@@ -586,9 +586,9 @@ test("tela: metas do mês — sem meta o bloco fica em «Mais detalhes» com o f
     const barra = linhas[0].querySelector("[role=progressbar]");
     assert.equal(barra.getAttribute("aria-valuenow"), "57"); assert.equal(barra.querySelector("i").style.getPropertyValue("--w"), "56.8%");
     assert.match(barra.querySelector("b").style.getPropertyValue("--m"), /^12\.9/);
-    assert.equal(texto(linhas[0].querySelector(".ini-meta-txt")), "R$ 28.400 de R$ 50.000 (57 %). Faltam R$ 21.600 — você está à frente do ritmo; no dia 4 de 31 o esperado seria R$ 6.452.");
+    assert.equal(texto(linhas[0].querySelector(".ini-meta-txt")), /* plano 1000b: RB-158 «57%» sem espaço */ "R$ 28.400 de R$ 50.000 (57%). Faltam R$ 21.600 — você está à frente do ritmo; no dia 4 de 31 o esperado seria R$ 6.452.");
     assert.match(texto(linhas[1]), /Consultas realizadas no mês/);
-    assert.equal(texto(linhas[1].querySelector(".ini-meta-txt")), "3 de 12 (25 %). Faltam 9 — você está à frente do ritmo; no dia 4 de 31 o esperado seria 2.",
+    assert.equal(texto(linhas[1].querySelector(".ini-meta-txt")), "3 de 12 (25%). Faltam 9 — você está à frente do ritmo; no dia 4 de 31 o esperado seria 2.",
       "só as que já aconteceram (09:00 de hoje, 01/10 e 02/10): a cancelada, a falta e as marcadas para depois ficam fora");
     assert.equal(texto(linhas[1].querySelector(".ini-meta-extra")), "+3 já marcadas até o fim do mês (contam quando acontecerem) · 1 falta fica fora da conta.");
     assert.ok(linhas[1].classList.contains("ini-meta-frente"));

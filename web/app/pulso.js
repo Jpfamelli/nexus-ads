@@ -19,6 +19,7 @@ const JITTER = .15;
  *   ler(): Promise<{v, notif, nao_lidas, agora, canais?}>
  *   aoNotif(n), aoNaoLidas(n), aoCanais(lista): callbacks opcionais (aoCanais só quando o servidor manda `canais` e a lista muda — A10)
  *   escopo(): id da empresa ativa (para separar abas/empresas)
+ *   aoParar(motivo): plano 1000b · UB-279 — o pulso parou sozinho ("sessao_invalida"); o shell abre a janela de login
  *   avisoTela(): true quando a pessoa ligou o aviso de área de trabalho (a aba escondida há 2 h+ continua a 15 s; sem ele passa a 60 s)
  *   agendar/cancelar/agora/aleatorio/doc/nav/janela: adaptadores para testes
  */
@@ -164,7 +165,8 @@ export function criarPulso(o) {
       publicar(r, em);
     } catch (e) {
       if (g !== geracao) return;
-      if (e && e.codigo === "sessao_invalida") { parar(); return; }
+      // plano 1000b · UB-279: parado por sessão inválida, o shell fica sabendo (abre a janela de login e reinicia o pulso depois)
+      if (e && e.codigo === "sessao_invalida") { parar(); if (typeof o.aoParar === "function") try { o.aoParar("sessao_invalida"); } catch { /* callback isolado */ } return; }
       falhas++;
     }
     lendo = false;

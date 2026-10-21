@@ -34,7 +34,7 @@ import { criarDb } from "./db.js";
 import {
   lerCorpo, exigirCorpoValido, autenticarCron, limparErro, comPrazo, ErroHttp, json,
   ErroApi, respostaPainel, tratarPainel, lerCorpoPainel, autenticarPainel, interna, soltandoCorpo,
-  cortarTexto, funcaoAusente, registrarExecucao, agoraDe, anonimizarEnvio, emLotes, auditar, erroApiDoBanco,
+  cortarTexto, funcaoAusente, registrarExecucao, agoraDe, anonimizarEnvio, emLotes, auditar, erroApiDoBanco, primeiroNomeSemTratamento,
 } from "./comum.js";
 import {
   enviarTextoCanal, enviarMidiaCanal, enviarTemplateCanal, marcarLido, infoNumero, appsInscritos,
@@ -191,7 +191,8 @@ const idCanal = v => {
   if (!UUID.test(String(v ?? ""))) throw new ErroApi("canal_nao_encontrado", 404);
   return String(v);
 };
-const primeiroNome = n => String(n ?? "").trim().split(/\s+/)[0] || "";
+// plano 1000b · CB-002: «Dra. Helena» assina «*Helena:*» (a tela usa a mesma regra no limite e na prévia — CB-003)
+const primeiroNome = n => primeiroNomeSemTratamento(n);
 const destino = cx => cx?.contato?.wa_id || cx?.contato?.telefone || null;
 
 /* ------------------------------------------------------------

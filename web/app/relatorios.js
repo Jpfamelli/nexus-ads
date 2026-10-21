@@ -48,12 +48,54 @@ export function periodoDoCliente(pref = {}, clienteId) {
 }
 /** Plano 1000 (AD-146): «Limpe os filtros» só quando há filtro de verdade — funil/departamento escolhido ou período personalizado
     (7 e 90 dias são atalhos de período, não filtro). */
+/** Plano 1000b · AB-014: «12,3%» / «12,3 dias» (no máximo 1 casa, vírgula); vazio/ilegível → «—». */
+const FMT_1C = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 });
+const numOk = v => v !== null && v !== undefined && v !== "" && Number.isFinite(+v);
+export const fmtPct = v => (numOk(v) ? `${FMT_1C.format(+v)}%` : "—");
+export const fmtDias = v => (numOk(v) ? `${FMT_1C.format(+v)} ${+v === 1 ? "dia" : "dias"}` : "—");
+/** Plano 1000b · AB-088: o texto pequeno do KPI com o valor do período anterior. */
+export const notaAnterior = (a, fmt = v => String(v)) => (a === null || a === undefined || a === "" || !Number.isFinite(+a) ? "vs. período anterior" : `antes: ${fmt(+a)}`);
+/** Plano 1000b · AB-093: o resumo (aria-label) da rosca «Por origem» com plural certo. */
+export function resumoOrigens(orig = [], int = v => String(v)) {
+  const q = (n, um, varios) => `${int(n)} ${+n === 1 ? um : varios}`;
+  return `Por origem: ${(orig || []).map(o => `${o.rotulo} ${q(o.criados, "criado", "criados")} e ${q(o.ganhos, "ganho", "ganhos")}`).join("; ")}`;
+}
 export const recorteFiltrado = P => !!P && (P.preset === "per" || !!P.funil || !!P.dep);
 /** Plano 1000 (AD-150): o título do mapa de calor com a palavra da vertical («Quando os pacientes chamam»). */
 export function tituloQuandoChamam(V = {}) {
   const v = typeof V.min === "function" ? V.min("contatos") : String(V.contatos || "clientes").toLowerCase();
   return `Quando os ${v || "clientes"} chamam`;
 }
+
+/** Plano 1000b · AB-201: «Este mês» (desloc 0: dia 1º até hoje) e «Mês passado» (desloc −1: o mês inteiro) — como os atalhos do
+    Anúncios (AD-097). `hoje` = AAAA-MM-DD (SP). Preenchem de/ate do período personalizado. */
+export function periodoMes(hoje, desloc = 0) {
+  const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(String(hoje || ""));
+  if (!m) return null;
+  const base = new Date(Date.UTC(+m[1], +m[2] - 1 + desloc, 1));
+  const iso = d => d.toISOString().slice(0, 10);
+  const de = iso(base), fim = iso(new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + 1, 0)));
+  return { de, ate: fim < hoje ? fim : hoje };
+}
+export const ATALHOS_MES = Object.freeze([["mes", "Este mês", 0], ["mesant", "Mês passado", -1]]);
+/** Qual atalho de mês corresponde ao período personalizado atual (para o aria-pressed) — "" se nenhum. */
+export function atalhoMesAtivo(P, hoje) {
+  if (!P || P.preset !== "per" || !P.de || !P.ate) return "";
+  const a = ATALHOS_MES.find(([, , d]) => { const p = periodoMes(hoje, d); return p && p.de === P.de && p.ate === P.ate; });
+  return a ? a[0] : "";
+}
+/** Plano 1000b · AB-087: «Até» não oferece data antes de «De» (min) e «De» não passa de «Até» nem de hoje (max). */
+export function limitesDatas(de, ate, hoje) {
+  const ok = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+  return { deMax: ok(ate) && ate < hoje ? ate : hoje, ateMin: ok(de) ? de : "", ateMax: hoje };
+}
+/** Plano 1000b · AB-085/AB-098: «Atualizar» com números do MESMO recorte na tela não apaga nada (nem a rolagem): fica com aria-busy e
+    opacidade até a resposta chegar; se ela falhar, os números ficam e sai um aviso. */
+/** Plano 1000b · AB-086: qual campo de data leva a culpa do erro do período — «De» quando falta ou o período passa de 1 ano; senão «Até». */
+export const campoDataInvalida = (erro, de) => (erro === "periodo_grande" || !/^\d{4}-\d{2}-\d{2}$/.test(String(de || "")) ? "de" : "ate");
+/** Plano 1000b · AB-099: depois disto o «Atualizado às» fica cinza e em itálico (os números podem estar velhos). */
+export const HORA_VELHA_MS = 10 * 60 * 1000;
+export const manterNaTela = (cargaNaTela, cargaNova, temConteudo) => !!temConteudo && !!cargaNaTela && cargaNaTela === cargaNova;
 
 const lerPref = () => { try { return JSON.parse(localStorage.getItem(CHAVE) || "{}") || {}; } catch { return {}; } };
 const gravarPref = p => { try { localStorage.setItem(CHAVE, JSON.stringify(p)); } catch { /* modo privado */ } };
@@ -83,8 +125,8 @@ export async function montar(ctx) {
   const abertosTxt = fem ? "abertas" : "abertos";
   const int = v => (Number.isFinite(+v) && v !== null ? Math.round(+v).toLocaleString("pt-BR") : "—");
   const brl0 = v => ui.brl(v, { centavos: false });
-  const pctTxt = v => (Number.isFinite(+v) && v !== null ? `${String(+v).replace(".", ",")}%` : "—");
-  const FMT = { int, brl0, pct: pctTxt, dias: v => (Number.isFinite(+v) && v !== null ? `${String(+v).replace(".", ",")} dias` : "—"), min: L.duracaoMin, h: L.duracaoH };
+  // plano 1000b · AB-014: porcentagem e dias com no máximo 1 casa (antes «12,345678 dias»)
+  const pctTxt = v => fmtPct(v), FMT = { int, brl0, pct: pctTxt, dias: v => fmtDias(v), min: L.duracaoMin, h: L.duracaoH };
 
   // preferências (período e filtros) por pessoa, neste navegador
   const pref = lerPref();
@@ -127,7 +169,7 @@ export async function montar(ctx) {
   const ateIn = h("input", { type: "date", class: "relat-data", "aria-label": "Até", value: P.ate || "", max: hojeIso });
   // AD-253: Enter num campo de data aplica (o período personalizado é um <form>; o botão é o submit)
   const aplicar = h("button", { type: "submit", class: "rel-btn rel-btn-prim" }, "Aplicar");
-  const erroPer = h("p", { class: "relat-erro", role: "alert" });
+  const erroPer = h("p", { id: "relat-erro-per", class: "relat-erro", role: "alert" });
   erroPer.hidden = true;
   const personal = h("form", { class: "relat-per", "aria-label": "Período personalizado", novalidate: true }, h("label", { class: "relat-per-c" }, h("span", { class: "rel-nota" }, "De"), deIn),
     h("label", { class: "relat-per-c" }, h("span", { class: "rel-nota" }, "Até"), ateIn), aplicar, erroPer);
@@ -153,23 +195,55 @@ export async function montar(ctx) {
           deIn.focus();
           return;
         }
+        if (P.preset === valor) return;            // plano 1000b · AB-084: o período já escolhido não recarrega tudo
         P.preset = valor; personal.hidden = true; salvar(); pintarSeg(); carregar();
         const alvo = seg.querySelector('[aria-pressed="true"]');   // o botão foi recriado: o foco não cai no <body>
         if (alvo) alvo.focus();
       });
       seg.append(b);
     }
+    // plano 1000b · AB-201: «Este mês» e «Mês passado», como no Anúncios — preenchem o período personalizado e aplicam
+    const ativoMes = atalhoMesAtivo(P, L.hojeSP());
+    for (const [id, rot, desloc] of ATALHOS_MES) {
+      const b = h("button", { type: "button", class: "rel-seg-b relat-mes", "aria-pressed": String(ativoMes === id), dataset: { mes: id } }, rot);
+      b.addEventListener("click", () => {
+        const pm = periodoMes(L.hojeSP(), desloc);
+        if (!pm) return;
+        P.preset = "per"; P.de = pm.de; P.ate = pm.ate; deIn.value = pm.de; ateIn.value = pm.ate; ajustarLimites();
+        salvar(); pintarSeg(); pintarChip(); carregar();
+        const alvo = seg.querySelector(`[data-mes="${id}"]`); if (alvo) alvo.focus();
+      });
+      seg.append(b);
+    }
     personal.hidden = P.preset !== "per";
   }
+  // plano 1000b · AB-087: «Até» ganha min = «De» e «De» ganha max = «Até» (barra e folha)
+  function ajustarLimites() {
+    const lim = limitesDatas(deIn.value, ateIn.value, hojeIso);
+    deIn.max = lim.deMax; ateIn.max = lim.ateMax;
+    if (lim.ateMin) ateIn.min = lim.ateMin; else ateIn.removeAttribute("min");
+  }
+  deIn.addEventListener("change", ajustarLimites);
+  ateIn.addEventListener("change", ajustarLimites);
+  function marcarDataInvalida(campo) {
+    for (const i of [deIn, ateIn]) {
+      if (i === campo) { i.setAttribute("aria-invalid", "true"); i.setAttribute("aria-describedby", "relat-erro-per"); }
+      else { i.removeAttribute("aria-invalid"); i.removeAttribute("aria-describedby"); }
+    }
+  }
+  for (const i of [deIn, ateIn]) i.addEventListener("input", () => { if (i.getAttribute("aria-invalid")) { marcarDataInvalida(null); erroPer.hidden = true; erroPer.textContent = ""; } });
+  ajustarLimites();
   personal.addEventListener("submit", ev => {
     ev.preventDefault();
     const v = L.validarPeriodo(deIn.value, ateIn.value, L.hojeSP());
     erroPer.hidden = v.ok;
     erroPer.textContent = v.ok ? "" : v.texto;
+    // plano 1000b · AB-086: o campo culpado ganha aria-invalid e aponta para o erro (aria-describedby); corrigido, os dois saem
+    marcarDataInvalida(v.ok ? null : campoDataInvalida(v.erro, deIn.value) === "de" ? deIn : ateIn);
     if (!v.ok) { (v.erro === "periodo_grande" ? deIn : ateIn).focus(); return; }
     P.de = deIn.value; P.ate = ateIn.value; salvar(); carregar();
   });
-  btnAtualizar.addEventListener("click", () => carregar());
+  btnAtualizar.addEventListener("click", () => carregar({ doBotao: true }));   // AB-202
   pintarSeg();
   pintarChip();
 
@@ -190,8 +264,11 @@ export async function montar(ctx) {
   async function abrirFolha() {
     let preset = P.preset, de = P.de || deIn.value || "", ate = P.ate || ateIn.value || "", extra = filtroExtra ? filtroExtra.atual : "";
     const campoSeg = (rotulo, el) => h("div", { class: "campo" }, h("p", { class: "rotulo" }, rotulo), el);
-    const dataIn = (rotulo, valor, aoMudar) => { const i = h("input", { type: "date", class: "relat-data", "aria-label": rotulo, value: valor, max: hojeIso }); i.addEventListener("change", () => aoMudar(i.value)); return h("label", { class: "relat-per-c" }, h("span", { class: "rel-nota" }, rotulo), i); };
+    const dataIn = (rotulo, valor, aoMudar) => { const i = h("input", { type: "date", class: "relat-data", "aria-label": rotulo, value: valor, max: hojeIso }); i.addEventListener("change", () => { aoMudar(i.value); limites2(); }); return h("label", { class: "relat-per-c" }, h("span", { class: "rel-nota" }, rotulo), i); };
     const personal2 = h("div", { class: "relat-per" }, dataIn("De", de, v => { de = v; }), dataIn("Até", ate, v => { ate = v; }));
+    // AB-087 também na folha
+    function limites2() { const [a, b] = personal2.querySelectorAll("input"); if (!a || !b) return; const lim = limitesDatas(de, ate, hojeIso); a.max = lim.deMax; if (lim.ateMin) b.min = lim.ateMin; else b.removeAttribute("min"); }
+    limites2();
     personal2.hidden = preset !== "per";
     const segPer = ui.segmentado({ tipo: "filtro", rotulo: "Período", valor: preset, opcoes: [[7, "7 dias"], [30, "30 dias"], [90, "90 dias"], ["per", "Personalizado"]]   /* AD-258: o mesmo nome da barra */.map(([v, t]) => ({ valor: v, rotulo: t })),
       aoMudar: v => {
@@ -238,39 +315,75 @@ export async function montar(ctx) {
   }
 
   // ---------- carga
-  let pedido = 0;
-  async function carregar() {
+  let pedido = 0, tVelha = 0;
+  async function carregar({ doBotao = false } = {}) {
     const n = ++pedido;
-    soltar();
-    corpo.setAttribute("aria-busy", "true");
-    ui.limpar(corpo);
-    corpo.append(h("div", { class: "relat-sk" }, ui.esqueleto("kpi", { n: 6 }), ui.esqueleto("grafico")));
     const { de, ate } = periodo();
+    // plano 1000b · AB-085/AB-098: o recorte desenhado na tela; «Atualizar» do MESMO recorte mantém os números (e a rolagem)
+    const carga = JSON.stringify([aba, de, ate, P.funil || "", P.dep || ""]);
+    const manter = manterNaTela(corpo.dataset.carga, carga, corpo.childElementCount > 0 && !corpo.querySelector(".relat-sk"));
+    corpo.setAttribute("aria-busy", "true");
+    if (manter) corpo.classList.add("relat-atualizando");
+    else {
+      soltar();
+      corpo.dataset.carga = "";
+      ui.limpar(corpo);
+      corpo.append(h("div", { class: "relat-sk" }, ui.esqueleto("kpi", { n: 6 }), ui.esqueleto("grafico")));
+    }
     const j = janelaComparacao(de, ate);
     // plano 1000 (AD-139): o período que termina HOJE conta o dia só até agora — a legenda avisa (de manhã os números «caem»)
     const parcial = notaHojeParcial(ate, L.hojeSP());
-    legenda.textContent = (j
+    const textoLegenda = (j
       ? `${L.dataIsoBR(de)} a ${L.dataIsoBR(ate)} · comparado com ${L.dataIsoBR(j.anterior.de)} a ${L.dataIsoBR(j.anterior.ate)} (${j.dias} dias)`
       : `${L.dataIsoBR(de)} a ${L.dataIsoBR(ate)} · comparação anterior indisponível`) + parcial;
+    // plano 1000b · AB-223: a legenda é aria-live — só é reescrita quando o texto muda (o «Atualizar» do mesmo período fica calado)
+    if (legenda.textContent !== textoLegenda) legenda.textContent = textoLegenda;
     cabImpressao.textContent = `${ctx.cliente.nome} · Relatório de ${aba === "vendas" ? "vendas" : "atendimento"} · ${L.dataIsoBR(de)} a ${L.dataIsoBR(ate)}${parcial} · gerado em ${L.dataIsoBR(L.hojeSP())} às ${L.horaSP(new Date().toISOString())}`;
     btnAtualizar.disabled = true;
-    try {
-      const r = aba === "vendas"
-        ? await ctx.api.rpcC("nx_rel_vendas", { p_de: de, p_ate: ate, p_funil: P.funil || null })
-        : await ctx.api.rpcC("nx_rel_atendimento", { p_de: de, p_ate: ate, p_departamento: P.dep || null });
-      if (n !== pedido || minha !== montagem) return;
+    const pintar = r => {
+      soltar();
       ui.limpar(corpo);
+      corpo.classList.remove("relat-atualizando");
       corpo.setAttribute("aria-busy", "false");
       if (aba === "vendas") desenharVendas(r); else desenharAtendimento(r);
+      corpo.dataset.carga = carga;
+    };
+    // plano 1000b · AB-097: cache do shell (como o Anúncios, anuncios.js:rpcC {cache, aoCache}) — Vendas → Atendimento → Vendas abre na hora
+    // com o guardado e a resposta da rede substitui logo depois
+    const opcCache = { cache: true, aoCache: rc => {
+      if (n !== pedido || minha !== montagem || !rc || typeof rc !== "object" || corpo.dataset.carga === carga) return;
+      try { pintar(rc); corpo.setAttribute("aria-busy", "true"); } catch { /* o da rede chega em seguida */ }
+    } };
+    try {
+      const r = aba === "vendas"
+        ? await ctx.api.rpcC("nx_rel_vendas", { p_de: de, p_ate: ate, p_funil: P.funil || null }, opcCache)
+        : await ctx.api.rpcC("nx_rel_atendimento", { p_de: de, p_ate: ate, p_departamento: P.dep || null }, opcCache);
+      if (n !== pedido || minha !== montagem) return;
+      pintar(r);
       horaCarga.hidden = false;
       horaCarga.textContent = `Atualizado às ${L.horaSP(new Date().toISOString())}`;
+      // plano 1000b · AB-099: depois de 10 min a hora «envelhece» (cinza, itálico, com o porquê no title), como na Agenda
+      horaCarga.classList.remove("relat-hora-velha"); horaCarga.removeAttribute("title");
+      clearTimeout(tVelha);
+      tVelha = setTimeout(() => { if (minha === montagem && horaCarga.isConnected) { horaCarga.classList.add("relat-hora-velha"); horaCarga.title = "Faz mais de 10 minutos: toque em «Atualizar» para buscar os números de agora."; } }, HORA_VELHA_MS);
+      if (tVelha && typeof tVelha.unref === "function") tVelha.unref();
+      // plano 1000b · AB-202: o pedido veio do botão — confirma, como o Anúncios («Números atualizados»)
+      if (doBotao) ui.toast("Números atualizados.", { tipo: "ok", ms: 2500 });
     } catch (e) {
       if (n !== pedido || minha !== montagem || (e && e.codigo === "sessao_invalida")) return;
       // filtro que não existe mais (funil/departamento apagado): volta para "todos" e tenta de novo, uma vez
       if (e && e.codigo === "dados_invalidos" && (P.funil || P.dep) && /p_funil|p_departamento/.test(String(e.hint || ""))) {
         P.funil = ""; P.dep = ""; salvar(); return carregar();
       }
+      // AB-098: os números do mesmo recorte continuam na tela; a falha vira aviso (antes o cartão de erro apagava tudo)
+      if (corpo.dataset.carga === carga && corpo.childElementCount > 0) {
+        corpo.classList.remove("relat-atualizando");
+        corpo.setAttribute("aria-busy", "false");
+        ui.toast(`Não foi possível atualizar agora: ${ctx.api.mensagemErro ? ctx.api.mensagemErro(e) : "tente de novo em instantes"}`, { tipo: "erro" });
+        return;
+      }
       ui.limpar(corpo);
+      corpo.classList.remove("relat-atualizando");
       corpo.setAttribute("aria-busy", "false");
       corpo.append(ui.erroCartao(e, () => carregar()));
     } finally { if (n === pedido) btnAtualizar.disabled = false; }
@@ -294,8 +407,9 @@ export async function montar(ctx) {
         h("span", { class: "rel-kpi-l" }, k.rotulo), b,
         k.agora ? h("span", { class: "rel-kpi-linha" }, h("span", { class: "rel-nota" }, "agora"))   // só o estado de agora (abertas agora) não tem período anterior
           : h("span", { class: "rel-kpi-linha" },
-            h("span", { class: `rel-var rel-var-${c.cls}`, title: `antes: ${k.a == null ? "—" : FMT[k.fmt](+k.a)}` }, c.v == null ? c.txt : `${c.seta} ${c.txt}`),
-            h("span", { class: "rel-nota" }, "vs. período anterior")));
+            h("span", { class: `rel-var rel-var-${c.cls}` }, c.v == null ? c.txt : `${c.seta} ${c.txt}`),
+            // plano 1000b · AB-088: o valor do período anterior visível (antes só no title, fora do toque)
+            h("span", { class: "rel-nota" }, notaAnterior(k.a, FMT[k.fmt]))));
       const valores = mapa[k.id] ? L.valoresSerie(serie, mapa[k.id]) : [];
       if (valores.length > 1 && valores.some(v => v > 0)) {
         const sp = h("span", { class: "rel-kpi-spark", "aria-hidden": "true" });
@@ -323,13 +437,15 @@ export async function montar(ctx) {
     // AD-103/AD-120: o cliente no nome do arquivo e o cabeçalho (título, cliente, período) em cima da imagem
     if (png) rodape.append(X.botaoPng({ h, alvo, L, titulo, nome: () => { const { de, ate } = periodo(); return L.nomeArquivoExport(png, de, ate, "png", ctx.cliente.nome); },
       cabecalho: () => { const { de, ate } = periodo(); return L.cabecalhoPng({ titulo, cliente: ctx.cliente.nome, periodo: `${L.dataIsoBR(de)} a ${L.dataIsoBR(ate)}` }); },
-      aoFalhar: t => ui.toast(t, { tipo: "nota" }) }));
+      aoFalhar: t => ui.toast(t, { tipo: "nota" }), aoPronto: t => ui.toast(t, { tipo: "ok", ms: 2000 }) }));   // AB-068
     return { c, alvo, rodape };
   }
   // plano 1000 (AD-143): «orbita-<cliente>-funil-<de>-a-<ate>.csv» (antes sem o cliente); AD-121: folha de compartilhar no app instalado
   function baixarCsv(nome, colunas, linhas) {
     const { de, ate } = periodo();
-    X.baixarArquivo(new Blob([L.csv(colunas, linhas)], { type: "text/csv;charset=utf-8" }), L.nomeArquivoExport(nome, de, ate, "csv", ctx.cliente.nome));
+    // plano 1000b · AB-209: download recusado (sem document.body, bloqueado) avisa em vez de não fazer nada
+    const avisar = r => { if (r === false) ui.toast("Não deu para baixar aqui; use «Ver como tabela» e copie os números.", { tipo: "nota" }); };
+    X.baixarArquivo(new Blob([L.csv(colunas, linhas)], { type: "text/csv;charset=utf-8" }), L.nomeArquivoExport(nome, de, ate, "csv", ctx.cliente.nome)).then(avisar, () => avisar(false));
   }
   function tabelaSimples({ colunas, linhas, legenda: leg }) {
     return h("div", { class: "rel-tabela-rolagem", role: "region", tabindex: "0", "aria-label": leg }, h("table", { class: "rel-tabela relat-tabela" },
@@ -354,7 +470,9 @@ export async function montar(ctx) {
       h("p", {}, h("b", { class: "rel-num" }, int(k.abertos)), ` ${V.min ? V.min("negocios") : "negócios"} ${abertosTxt} · `,
         h("b", { class: "rel-num" }, brl0(k.valor_aberto)), " previstos · ",
         h("b", { class: "rel-num" }, brl0(k.previsao_ponderada)), " na previsão ponderada"),
-      +k.perdidos ? h("p", { class: "rel-nota" }, `${k.perdidos} ${fem ? (+k.perdidos === 1 ? "perdida" : "perdidas") : (+k.perdidos === 1 ? "perdido" : "perdidos")} no período (${brl0(k.valor_perdido)} previstos)`) : null));
+      // plano 1000b · AB-258: o que é «ponderada», visível (sem depender de passar o mouse)
+      h("p", { class: "rel-nota relat-ponderada" }, "Previsão ponderada = valor de cada negócio × chance de fechar da etapa em que ele está."),
+      +k.perdidos ? h("p", { class: "rel-nota" }, `${int(k.perdidos)} ${fem ? (+k.perdidos === 1 ? "perdida" : "perdidas") : (+k.perdidos === 1 ? "perdido" : "perdidos")} no período (${brl0(k.valor_perdido)} previstos)`) : null));   // plano 1000b · AB-089: com milhar (int)
     if (L.vendasVazio(r)) { corpo.append(semDados()); return; }
 
     const grade = h("div", { class: "relat-grade" });
@@ -371,8 +489,9 @@ export async function montar(ctx) {
         resumo: `Funil ${fr ? fr.nome : ""}: ${(r.funil || []).map(e => `${e.nome} ${e.qtd_atual}`).join(", ")}`,
         etapas: (r.funil || []).map(e => ({ nome: e.nome, cor: ui.corOk(e.cor), tipo: e.tipo, qtd: +e.qtd_atual || 0, valorTxt: brl0(e.valor_atual), conversao: L.textoConversao(e) })),
       }));
-      G.alternarTabela(bf.rodape, bf.alvo, { legenda: "Funil por etapa", colunas: ["Etapa", "Agora", "Valor", "Entraram", "Seguiram"],
-        linhas: (r.funil || []).map(e => [e.nome, int(e.qtd_atual), brl0(e.valor_atual), int(e.passaram), e.tipo === "aberto" ? pctTxt(e.conversao_proxima_pct) : "—"]) });
+      // plano 1000b · AB-002: «Seguiram» é o NÚMERO de quem seguiu (avancaram) e o % ganha a própria coluna «Conversão» — iguais ao CSV
+      G.alternarTabela(bf.rodape, bf.alvo, { legenda: "Funil por etapa", colunas: ["Etapa", "Agora", "Valor", "Entraram", "Seguiram", "Conversão"],
+        linhas: (r.funil || []).map(e => [e.nome, int(e.qtd_atual), brl0(e.valor_atual), int(e.passaram), e.tipo === "aberto" ? int(e.avancaram) : "—", e.tipo === "aberto" ? pctTxt(e.conversao_proxima_pct) : "—"]) });
     } else bf.alvo.append(...[h("p", { class: "rel-vazio-txt" }, "Nenhum funil ativo."),
       // plano 1000 (AD-256): funil vazio com o caminho para criar (só quem administra vê)
       ctx.pode && ctx.pode("admin") ? h("a", { class: "rel-link", href: "#/config/funis" }, "Criar ou ativar um funil") : null].filter(Boolean));
@@ -389,7 +508,8 @@ export async function montar(ctx) {
       csv: { nome: "vendas-dia-a-dia", colunas: ["Dia", "Criados", "Ganhos", "Receita"], linhas: () => serie.map(d => [L.dataIsoBR(d.d), d.criados, d.ganhos, d.receita]) } });
     grade.append(bs.c);
     graficos.push(G.linha(bs.alvo, {
-      resumo: `Criados e ganhos por dia: ${serie.reduce((s, d) => s + (+d.criados || 0), 0)} criados e ${serie.reduce((s, d) => s + (+d.ganhos || 0), 0)} ganhos`,
+      // plano 1000b · AB-095: o gráfico agrupa por semana acima de 60 dias — o resumo diz «por semana» (a tabela segue diária)
+      resumo: `Criados e ganhos por ${semanal ? "semana" : "dia"}: ${serie.reduce((s, d) => s + (+d.criados || 0), 0)} criados e ${serie.reduce((s, d) => s + (+d.ganhos || 0), 0)} ganhos`,
       pontos: serieG.map(d => ({ rotulo: rotG(d), longo: `${longoG(d)} · receita ${brl0(d.receita)}`, valores: [+d.criados || 0, +d.ganhos || 0] })),
       series: [{ nome: "Criados", classe: "g-s1" }, { nome: "Ganhos", classe: "g-s0" }],
       fmt: v => int(v), fmtEixo: v => int(v),
@@ -409,7 +529,7 @@ export async function montar(ctx) {
       const donut = typeof G.donut === "function" ? G.donut : G.rosca;
       const tot = orig.reduce((a, o) => a + o.criados, 0);
       graficos.push(donut(bo.alvo, {
-        resumo: `Por origem: ${orig.map(o => `${o.rotulo} ${o.criados} criados e ${o.ganhos} ganhos`).join("; ")}`,
+        resumo: resumoOrigens(orig, int),   // plano 1000b · AB-093: plural pelo número («1 criado e 1 ganho»)
         fatias: orig.map(o => ({ rotulo: o.rotulo, valor: o.criados, extra: `${int(o.ganhos)} ${o.ganhos === 1 ? "ganho" : "ganhos"} · ${brl0(o.receita)}${o.conversao_pct != null ? ` · ${pctTxt(o.conversao_pct)} conversão` : ""}${o.campanhas.length ? ` · ${o.campanhas.slice(0, 2).join(", ")}` : ""}` })),
         fmt: int, centro: { valor: int(tot), rotulo: tot === 1 ? "criado" : "criados" } }));
       const comCamp = orig.filter(o => o.campanhas.length);
@@ -419,7 +539,7 @@ export async function montar(ctx) {
     } else bo.alvo.append(h("p", { class: "rel-vazio-txt" }, orig.length ? "Nenhum negócio criado no período (só fechamentos de antes)." : "Sem negócios no período."));
     // plano 1000 (AD-153): por que os «criados de anúncio» daqui não batem com as conversas do Anúncios
     if (tA.criados) bo.alvo.append(h("details", { class: "ads-por-que relat-por-que" }, h("summary", {}, "Por que difere do Anúncios?"),
-      h("ul", { class: "ads-por-que-lista" }, L.POR_QUE_DIFERE.slice(-2).map(t => h("li", {}, t)))));
+      h("ul", { class: "ads-por-que-lista" }, L.porQueDifere("datas", "aparelho").map(t => h("li", {}, t))   /* plano 1000b · AB-096: por id, não pela posição */)));
 
     // motivos de perda
     const mot = r.motivos_perda || [];
@@ -433,7 +553,8 @@ export async function montar(ctx) {
         // plano 1000 (AD-257): com muitos motivos, os 5 maiores + «Outros (N)» na rosca (a tabela e o CSV seguem com todos)
         fatias: L.agruparOutros(mot, { max: 6, juntar: resto => ({ nome: `Outros (${resto.length})`, qtd: resto.reduce((s, m) => s + (+m.qtd || 0), 0), valor: resto.reduce((s, m) => s + (+m.valor || 0), 0) }) })
           .map(m => ({ rotulo: m.nome, valor: +m.qtd || 0, extra: `${brl0(m.valor)} previstos` })),
-        fmt: int, centro: { valor: tot, rotulo: fem ? (tot === 1 ? "perdida" : "perdidas") : (tot === 1 ? "perdido" : "perdidos") },
+        // plano 1000b · AB-090: o centro da rosca de perdas com milhar («1.500»)
+        fmt: int, centro: { valor: int(tot), rotulo: fem ? (tot === 1 ? "perdida" : "perdidas") : (tot === 1 ? "perdido" : "perdidos") },
       }));
       G.alternarTabela(bm.rodape, bm.alvo, { legenda: "Motivos de perda", colunas: ["Motivo", "Quantidade", "%", "Valor previsto"],
         linhas: mot.map(m => [m.nome, int(m.qtd), tot ? pctTxt(Math.round((+m.qtd || 0) / tot * 1000) / 10) : "—", brl0(m.valor)]) });
@@ -442,7 +563,7 @@ export async function montar(ctx) {
     // por responsável
     const dono = r.por_dono || [];
     const bd = cartao("Por responsável", { largo: true,
-      csv: { nome: "vendas-por-responsavel", colunas: ["Responsável", "Criados", "Ganhos", "Receita", "Ticket médio", "Abertos"],
+      csv: { nome: "vendas-por-responsavel", colunas: ["Responsável", "Criados", "Ganhos", "Receita", "Ticket médio", "Abertos agora"],   // plano 1000b · AB-094: o mesmo rótulo da tabela
         linhas: () => dono.map(d => [d.nome, d.criados, d.ganhos, d.receita, d.ticket_medio ?? "", d.abertos]) } });
     grade.append(bd.c);
     bd.alvo.append(dono.length ? tabelaSimples({ legenda: "Vendas por responsável", colunas: ["Responsável", "Criados", "Ganhos", "Receita", "Ticket médio", "Abertos agora"],
@@ -460,7 +581,9 @@ export async function montar(ctx) {
         ul.append(h("li", {}, h("i", { class: "g-fcor", style: cor ? { "--cor": cor } : null }), h("span", {}, p.nome), h("b", { class: "rel-num" }, int(p.qtd))));
       });
       bp.alvo.append(ul);
-      if (ctx.temModulo("crm") && ctx.pronto("crm") && fr) bp.rodape.append(h("a", { class: "rel-link", href: `#/crm?funil=${encodeURIComponent(fr.id)}` }, "Abrir o funil"));
+      // plano 1000b · AB-259: com «Todos os funis» (sem funil_ref) o caminho é o quadro geral do CRM
+      if (ctx.temModulo("crm") && ctx.pronto("crm")) bp.rodape.append(fr ? h("a", { class: "rel-link", href: `#/crm?funil=${encodeURIComponent(fr.id)}` }, "Abrir o funil")
+        : h("a", { class: "rel-link", href: "#/crm" }, "Abrir o CRM"));
     } else bp.alvo.append(h("p", { class: "rel-vazio-txt" }, "Nada parado. Tudo andando."));
   }
 
@@ -481,7 +604,7 @@ export async function montar(ctx) {
       csv: { nome: "atendimento-dia-a-dia", colunas: ["Dia", "Novas", "Resolvidas"], linhas: () => serie.map(d => [L.dataIsoBR(d.d), d.novas, d.resolvidas]) } });
     grade.append(bs.c);
     graficos.push(G.linha(bs.alvo, {
-      resumo: `Novas e resolvidas por dia: ${serie.reduce((s, d) => s + (+d.novas || 0), 0)} novas e ${serie.reduce((s, d) => s + (+d.resolvidas || 0), 0)} resolvidas`,
+      resumo: `Novas e resolvidas por ${semanal ? "semana" : "dia"}: ${serie.reduce((s, d) => s + (+d.novas || 0), 0)} novas e ${serie.reduce((s, d) => s + (+d.resolvidas || 0), 0)} resolvidas`,
       pontos: serieG.map(d => ({ rotulo: semanal ? `sem. ${L.ddmmIso(d.d)}` : L.ddmmIso(d.d), longo: semanal ? `semana de ${L.dataIsoBR(d.d)} a ${L.dataIsoBR(d.ate)}` : L.diaLongoIso(d.d), valores: [+d.novas || 0, +d.resolvidas || 0] })),
       series: [{ nome: "Novas", classe: "g-s1" }, { nome: "Resolvidas", classe: "g-s2" }], fmt: int, fmtEixo: int,
     }));
@@ -499,8 +622,9 @@ export async function montar(ctx) {
       resumo: pico ? `Mapa de calor das mensagens recebidas; o horário de pico é ${L.SEMANA[pico.dow]} às ${pico.hora} horas` : "Mapa de calor sem mensagens no período" }));
     // faixas do dia (madrugada/manhã/tarde/noite) em chips: a leitura rápida que o dono quer antes de olhar as 168 células
     const fx = L.faixasCalor(m);
+    // plano 1000b · AB-091: «120 mensagens» / «1 mensagem» nos chips (antes «msgs»)
     if (fx.total > 0) bc.alvo.append(h("ul", { class: "relat-faixas", "aria-label": "Mensagens por faixa do dia" }, fx.faixas.map(f => h("li", { class: `relat-faixa${fx.forte && fx.forte.nome === f.nome ? " relat-faixa-forte" : ""}` },
-      h("span", { class: "relat-faixa-n" }, f.nome), h("b", { class: "rel-num" }, `${f.pct}%`), h("small", { class: "rel-nota" }, `${int(f.total)} msgs · ${String(f.ini).padStart(2, "0")}–${String(f.fim).padStart(2, "0")}h`)))));
+      h("span", { class: "relat-faixa-n" }, f.nome), h("b", { class: "rel-num" }, `${f.pct}%`), h("small", { class: "rel-nota" }, `${int(f.total)} ${+f.total === 1 ? "mensagem" : "mensagens"} · ${String(f.ini).padStart(2, "0")}–${String(f.fim).padStart(2, "0")}h`)))));
     G.alternarTabela(bc.rodape, bc.alvo.querySelector(".g-cal-rolagem") || bc.alvo, { legenda: "Mensagens recebidas por dia da semana e hora",
       colunas: ["Dia", "Madrugada (0–5h)", "Manhã (6–11h)", "Tarde (12–17h)", "Noite (18–23h)"],
       linhas: [1, 2, 3, 4, 5, 6, 0].map(d => [L.SEMANA[d], ...[0, 6, 12, 18].map(i => int(m[d].slice(i, i + 6).reduce((s, x) => s + x, 0)))]) });
@@ -522,7 +646,7 @@ export async function montar(ctx) {
     grade.append(bdp.c);
     if (dep.length) {
       graficos.push(G.barras(bdp.alvo, { resumo: `Por departamento: ${dep.map(d => `${d.nome} ${d.novas} novas`).join(", ")}`,
-        itens: dep.map(d => ({ rotulo: d.nome, extra: `1ª resposta ${L.duracaoMin(d.tpr_mediana_min)} · ${d.abertas_agora} abertas agora`, valores: [+d.novas || 0, +d.resolvidas || 0] })),
+        itens: dep.map(d => ({ rotulo: d.nome, extra: `1ª resposta ${L.duracaoMin(d.tpr_mediana_min)} · ${int(d.abertas_agora)} ${+d.abertas_agora === 1 ? "aberta" : "abertas"} agora`,   /* plano 1000b · AB-092 */ valores: [+d.novas || 0, +d.resolvidas || 0] })),
         series: [{ nome: "Novas", classe: "g-s1" }, { nome: "Resolvidas", classe: "g-s2" }], fmt: int }));
       G.alternarTabela(bdp.rodape, bdp.alvo, { legenda: "Atendimento por departamento", colunas: ["Departamento", "Novas", "Resolvidas", "Abertas agora", "1ª resposta"],
         linhas: dep.map(d => [d.nome, int(d.novas), int(d.resolvidas), int(d.abertas_agora), L.duracaoMin(d.tpr_mediana_min)]) });

@@ -795,7 +795,8 @@ await teste("api.ehLeitura: sufixos e nomes de leitura; escritas e desconhecidas
 await teste("app.js: o shell liga rede.js ao api.js, desenha a faixa (aria-live) e o ponto junto ao sino, e expõe ctx.rede.aoVoltar", () => {
   assert.match(APP_JS, /E\.rede = E\.M\.rede\.criarRede\(\{ ping: pingDoSite, sondar: sondarServidor \}\);/);
   assert.match(APP_JS, /rede: E\.rede, contexto: true,/);
-  assert.match(APP_JS, /class: "rede-msg", "aria-live": "polite"/);
+  // plano 1000b: UB-121 — o parágrafo não é mais região viva (o ui.anunciar já fala a mudança; eram duas leituras)
+  assert.match(APP_JS, /class: "rede-msg" \}\)/); assert.match(APP_JS, /if \(mudou\) ui\.anunciar\(msg\);/);
   assert.match(APP_JS, /class: "rede-ponto", id: "rede-ponto"/);
   assert.match(APP_JS, /Tentar agora/);
   assert.match(APP_JS, /rede: \{\s*get estado\(\) \{ return E\.rede\.estado; \},\s*aoVoltar\(fn\)/);
@@ -1347,7 +1348,8 @@ await teste("app.js (M16): sessão guardada pinta o shell e a rede revalida; sel
   assert.match(APP_JS, /await adotarSessao\(guardada\.dados\);\s*revalidarSessao\(\);/);
   for (const nome of ["async function sair(", "function sessaoCaiuTotal()"]) {   // plano 1000: sair({ perguntar, manterRascunhos })
     const corpo = APP_JS.slice(APP_JS.indexOf(nome), APP_JS.indexOf("\n}\n", APP_JS.indexOf(nome)));
-    assert.match(corpo, /limparDadosDoAparelho\(\)/, `${nome} limpa o cache`);
+    // plano 1000b: o sair() espera a limpeza (UB-135: await limparComPrazo(), que chama limparDadosDoAparelho)
+    assert.match(corpo, /limparDadosDoAparelho\(\)|await limparComPrazo\(\)/, `${nome} limpa o cache`);
   }
   assert.match(/async function pedirLoginNaTela\(\) \{[\s\S]*?\n\}\n/.exec(APP_JS)[0], /if \(r === "outra"\) \{[\s\S]*?limparDadosDoAparelho\(\);/, "troca de conta limpa o cache");
   assert.match(APP_JS, /function limparDadosDoAparelho\(\) \{\s*const feito = E\.cache \? E\.cache\.limpar\(\)\.catch\(\(\) => \{\}\) : Promise\.resolve\(\);/);
@@ -1650,7 +1652,8 @@ await teste("rotas.regioesDaRota: lista → conversa → campo de mensagem (o ca
   const c = ROTAS_MOD.regioesDaRota("conversas");
   assert.deepEqual(c.map(r => r.rotulo), ["Ir para a lista de conversas", "Ir para a conversa", "Ir para o campo de mensagem"]);
   assert.deepEqual(ROTAS_MOD.regioesDaRota("crm").map(r => r.rotulo), ["Ir para o quadro"]);
-  for (const m of ["inicio", "agenda", "config", "admin", "qualquer"]) assert.deepEqual(ROTAS_MOD.regioesDaRota(m), [], m);
+  // plano 1000b (UB-176): config e automacoes ganharam atalhos «Ir para…»
+  for (const m of ["inicio", "agenda", "admin", "qualquer"]) assert.deepEqual(ROTAS_MOD.regioesDaRota(m), [], m);
   assert.throws(() => { ROTAS_MOD.REGIOES_DA_ROTA.conversas.push(1); }, TypeError, "tabela congelada");
 });
 

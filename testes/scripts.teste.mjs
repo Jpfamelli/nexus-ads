@@ -367,8 +367,8 @@ test("rodar-tudo: lista sem repetição, plano100-* das 10 frentes obrigatórios
   const tudo = selecionar([], () => true);
   assert.equal(tudo.rodar.length, COMANDOS.length); assert.deepEqual(tudo.pulados, []); assert.deepEqual(tudo.ausentes, []);
   const semNada = selecionar([], () => false);
-  const opcionais = COMANDOS.filter(c => c.opcional).length;   // só os plano1000-* (13/10, um por frente) — SV-160
-  assert.ok(opcionais >= 1 && COMANDOS.filter(c => c.opcional).every(c => c.args.at(-1).includes("plano1000-")));
+  const opcionais = COMANDOS.filter(c => c.opcional).length;   // só os plano1000-* e plano1000b-* (um por frente) — SV-160
+  assert.ok(opcionais >= 1 && COMANDOS.filter(c => c.opcional).every(c => /plano1000b?-/.test(c.args.at(-1))));
   assert.equal(semNada.ausentes.length, opcionais); assert.equal(semNada.rodar.length, COMANDOS.length - opcionais);
   assert.equal(selecionar(["--exigir"], () => false).rodar.length, COMANDOS.length, "--exigir não pula os ausentes (o node falha ao não achar o arquivo)");
   const lentos = COMANDOS.filter(c => c.lento).map(c => c.args.at(-1));

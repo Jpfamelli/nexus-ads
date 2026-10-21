@@ -31,17 +31,18 @@ export function criarComposer(A) {
   const rotAssin = h("div", { class: "cvx-assin", hidden: true, title: "A assinatura com o seu nome entra na 1ª linha da mensagem (Configurações → Conversas)." });
   const campo = h("div", { class: "cvx-campo" }, rotNota, rotAssin, ta, contador, contadorAnuncio);
   // plano 1000 · CA-072: várias fotos de uma vez (até 10) — o seletor aceita mais de um arquivo
-  const arquivo = h("input", { type: "file", hidden: true, multiple: true, accept: "image/jpeg,image/png,image/webp,video/mp4,video/3gpp,audio/aac,audio/mp4,audio/mpeg,audio/amr,audio/ogg,audio/wav,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain" });
+  // plano 1000b · CB-079: HEIC/HEIF no accept — a foto do iPhone aparece no seletor do computador (a tela converte: ehFoto/otimizarFoto)
+  const arquivo = h("input", { type: "file", hidden: true, multiple: true, accept: "image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,video/mp4,video/3gpp,audio/aac,audio/mp4,audio/mpeg,audio/amr,audio/ogg,audio/wav,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain" });
   const btClipe = h("button", { type: "button", class: "bt-icone", "aria-label": "Anexar arquivo", title: "Anexar (foto, vídeo, áudio, documento até 16 MB)" }, ui.icone("clipe"));
   const btAudio = h("button", { type: "button", class: "bt-icone cvx-audio", "aria-label": "Gravar áudio", title: "Gravar áudio para enviar" }, ui.icone("microfone"));
-  const btModelos = h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Enviar modelo aprovado", title: "Modelos aprovados" }, A.icone("modelo"));
+  const btModelos = h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Enviar modelo aprovado", title: "Modelos aprovados", "data-modelos": "" }, A.icone("modelo"));
   const btNota = h("button", { type: "button", class: "bt-icone", "aria-label": "Nota interna", title: "Nota interna (a equipe vê, o cliente não)", "aria-pressed": "false" }, ui.icone("nota"));
   const btIA = h("button", { type: "button", class: "bt-icone so-largo", "aria-label": "Sugerir resposta com IA", title: "Sugerir com IA" }, ui.icone("ia"));
   // CA-060: quem cuida das respostas rápidas (supervisor+) também tem o «Mais» no computador: «Salvar como resposta rápida»
   const supervisor = !!(A.acoes.pode && A.acoes.pode("supervisor"));
   const btMaisM = h("button", { type: "button", class: ["bt-icone", supervisor ? "cvx-mais-sup" : "so-estreito"], "aria-label": "Mais opções", title: "Mais" }, ui.icone("mais"));
   // CA-067: no computador, um seletor curto de emoji (no celular o teclado já tem)
-  const btEmoji = h("button", { type: "button", class: "bt-icone so-largo cvx-emoji-bt", "aria-label": "Inserir emoji", title: "Emoji (Win + . abre todos)", "aria-haspopup": "dialog", hidden: L.aparelhoDeToque() }, h("span", { class: "cvx-emoji-ic", "aria-hidden": "true" }, "😊"));
+  const btEmoji = h("button", { type: "button", class: "bt-icone so-largo cvx-emoji-bt", "aria-label": "Inserir emoji", title: dicaEmojiSistema(), "aria-haspopup": "dialog", hidden: L.aparelhoDeToque() }, h("span", { class: "cvx-emoji-ic", "aria-hidden": "true" }, "😊"));
   // plano 50 · 36: o menu de respostas rápidas também abre por botão (no celular a «/» fica escondida no teclado)
   const btRR = h("button", { type: "button", class: "bt-icone cvx-rr-bt", "aria-label": "Respostas rápidas (/)", title: "Respostas rápidas: digite / ou toque aqui", "aria-expanded": "false", "aria-controls": "cvx-rr" }, ui.icone("raio"));
   const btEnviar = h("button", { type: "button", class: "bt bt-prim cvx-enviar", "aria-label": "Enviar" }, ui.icone("enviar"));
@@ -63,10 +64,13 @@ export function criarComposer(A) {
   const seloRasc = h("div", { class: "cvx-rasc-selo" });       // "Rascunho restaurado · descartar" (o ctx.rascunho põe o selo aqui)
   let rasc = null;                                               // rascunho do campo ligado a esta conversa (ctx.rascunho.ligar)
   let idDoCampo = null;                                          // de QUAL conversa é o texto que está no campo (A.selId muda antes de a conversa nova carregar)
-  const trava = h("div", { class: "cvx-trava", hidden: true });
+  const trava = h("div", { class: "cvx-trava", id: "cvx-trava", hidden: true });   // plano 1000b · CB-139: id para o aria-describedby do Enviar
   // plano 1000 · CA-074: a janela de 24 h fecha em menos de 30 min — a hora aparece no próprio campo (a pílula lá em cima passa despercebida)
   const avisoJanelaTxt = h("span", null, "");
   const avisoJanela = h("p", { class: "cvx-janela-aviso", role: "status", hidden: true }, ui.icone("relogio"), avisoJanelaTxt);
+  // plano 1000b · CB-043: o número da conversa caiu — o aviso fica em cima do campo (a pílula do cabeçalho passa despercebida); o envio continua
+  const avisoCaidoTxt = h("span", null, "");
+  const avisoCaido = h("p", { class: "cvx-janela-aviso cvx-caido-aviso", role: "status", hidden: true }, ui.icone("alerta"), avisoCaidoTxt);
   const iaTrab = h("div", { class: "cvx-ia-trab", hidden: true, role: "status" }, "Escrevendo…");
   const dica = h("p", { class: "cvx-dica" });
   /** CA-068: «Enter envia» (padrão) ou «Ctrl+Enter envia» (Enter quebra a linha) — preferência por navegador; a dica acompanha. */
@@ -79,7 +83,7 @@ export function criarComposer(A) {
   desenharDica();
   const rr = h("div", { class: "cvx-rr", role: "listbox", "aria-label": "Respostas rápidas", hidden: true, id: "cvx-rr" });
   const rrStatus = h("span", { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
-  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, rrStatus, resp, iaTrab, trava, avisoJanela, capInfo, painelGravacao, seloRasc, linha, dica, arquivo);
+  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, rrStatus, resp, iaTrab, trava, avisoJanela, avisoCaido, capInfo, painelGravacao, seloRasc, linha, dica, arquivo);
 
   ta.setAttribute("aria-controls", "cvx-rr");
   ta.setAttribute("aria-autocomplete", "list");
@@ -163,58 +167,75 @@ export function criarComposer(A) {
     const s = situacao();
     const c = conv();
     el.dataset.modo = modoNota ? "nota" : "texto";
-    ui.limpar(trava);
+    // plano 1000b · CB-019: a trava só é refeita quando muda (situação + texto); o relógio de 60 s e o recarregarVer não tiram mais o
+    // foco de quem está no «Reabrir» / «Desbloquear»
+    const assinTrava = [s, modoNota ? 1 : 0, s === "resolvida" ? textoResolvida(c) : "", s === "bloqueado" ? String(!!A.acoes.pode("supervisor")) : "",
+      s === "janela" ? String(!!(c && c.ultima_entrada_em)) : "", s === "sem_token" ? String(!!A.acoes.pode("admin")) : ""].join("|");
+    const refazer = trava.dataset.assin !== assinTrava;
+    if (refazer) { ui.limpar(trava); trava.dataset.assin = assinTrava; }
     trava.hidden = true;
     linha.hidden = false;
     dica.hidden = false;
     if (s === "leitura") {
       trava.hidden = false; linha.hidden = true; dica.hidden = true;
-      trava.append(ui.icone("cadeado"), h("p", null, "Seu acesso é só de leitura. Você acompanha as conversas, mas não responde."));
+      if (refazer) trava.append(ui.icone("cadeado"), h("p", null, "Seu acesso é só de leitura. Você acompanha as conversas, mas não responde."));
     } else if (s === "resolvida") {
       trava.hidden = false; linha.hidden = !modoNota; dica.hidden = true;
-      const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, A.icone("reabrir"), "Reabrir");
-      b.addEventListener("click", () => A.acoes.status("aberta", b));
-      trava.append(ui.icone("check"), h("p", null, textoResolvida(c)), b,
-        h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => alternarNota(true) } }, ui.icone("nota"), "Nota interna"));
+      if (refazer) {
+        const b = h("button", { type: "button", class: "bt bt-prim bt-p", dataset: { acao: "reabrir" } }, A.icone("reabrir"), "Reabrir");
+        b.addEventListener("click", () => A.acoes.status("aberta", b));
+        trava.append(ui.icone("check"), h("p", null, textoResolvida(c)), b,
+          h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => alternarNota(true) } }, ui.icone("nota"), "Nota interna"));
+      }
     } else if (s === "bloqueado") {
       // D14: nada sai para contato bloqueado — quem pode desbloqueia aqui mesmo; a nota interna continua valendo
       trava.hidden = false; linha.hidden = !modoNota; dica.hidden = true;
       const sup = A.acoes.pode("supervisor");
       const bDesb = sup ? h("button", { type: "button", class: "bt bt-sec bt-p cvx-desbloquear", on: { click: () => A.acoes.ocultar(false) } }, ui.icone("check"), "Desbloquear") : null;
-      trava.append(...[ui.icone("cadeado"), h("p", null, sup ? "Este contato está bloqueado: nada é enviado para ele. Desbloqueie para responder."
+      if (refazer) trava.append(...[ui.icone("cadeado"), h("p", null, sup ? "Este contato está bloqueado: nada é enviado para ele. Desbloqueie para responder."
         : "Este contato está bloqueado: nada é enviado para ele. Peça a um supervisor para desbloquear (menu ⋮ da conversa)."), bDesb,
         h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => alternarNota(true) } }, ui.icone("nota"), "Nota interna")].filter(Boolean));
     } else if (s === "sem_canal") {
       trava.hidden = false; dica.hidden = true;
-      trava.append(ui.icone("alerta"), h("p", null, "O número deste atendimento foi removido. Comece uma nova conversa por outro número."),
+      if (refazer) trava.append(ui.icone("alerta"), h("p", null, "O número deste atendimento foi removido. Comece uma nova conversa por outro número."),
         h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => A.acoes.novaConversa({ contato: contato() }) } }, "Nova conversa"));
     } else if (s === "janela" && !modoNota) {
       trava.hidden = false;
       // (só chega aqui em canal da Meta: no CodeWords não existe janela — ver situacao())
-      const b = h("button", { type: "button", class: "bt bt-prim bt-p" }, A.icone("modelo"), "Modelos");
+      const b = h("button", { type: "button", class: "bt bt-prim bt-p", "data-modelos": "" }, A.icone("modelo"), "Modelos");
       b.addEventListener("click", () => abrirModelos());
       // CA-089: sem «janela» nem «modelo» soltos — o que aconteceu e o que dá para fazer
-      trava.append(ui.icone("relogio"), h("p", null, c && c.ultima_entrada_em ? L.JANELA_FECHADA_LONGO : L.JANELA_NUNCA_LONGO), b);
+      if (refazer) trava.append(ui.icone("relogio"), h("p", null, c && c.ultima_entrada_em ? L.JANELA_FECHADA_LONGO : L.JANELA_NUNCA_LONGO), b);
     } else if (s === "sem_token" && !modoNota) {
       trava.hidden = false;
-      trava.append(...[ui.icone("alerta"), h("p", null, "Este número ainda não tem o token da Meta. Configure em Números de WhatsApp."),
+      // plano 1000b · CB-117: só o admin configura o token — atendente e supervisor são mandados ao administrador
+      if (refazer) trava.append(...[ui.icone("alerta"), h("p", null, A.acoes.pode("admin") ? "Este número ainda não tem o token da Meta. Configure em Números de WhatsApp."
+        : "Este número ainda não tem o token da Meta. Peça ao administrador para salvar o token deste número."),
         A.acoes.pode("admin") ? h("a", { class: "bt bt-sec bt-p", href: "#/config/numeros" }, "Números de WhatsApp") : null].filter(Boolean));
     }
     const ok = podeTexto();
     ta.disabled = !ok;
     const estreito = matchMedia("(max-width: 760px)").matches;
     ta.placeholder = modoNota ? (estreito ? "Nota para a equipe" : "Escreva uma nota para a equipe (o cliente não vê)")
-      : s === "janela" ? "Passaram 24 h: só mensagem aprovada (modelo)"
+      // plano 1000b · CB-106: conversa em que o cliente nunca escreveu não «passou 24 h» — o mesmo critério da trava (JANELA_NUNCA_LONGO)
+      : s === "janela" ? (c && c.ultima_entrada_em ? "Passaram 24 h: só mensagem aprovada (modelo)" : "Para começar, só mensagem aprovada (modelo)")
       : estreito ? "Mensagem" : "Mensagem  ·  / para respostas rápidas";
     // CA-074: a janela fecha em menos de 30 min — a hora no próprio campo
     const avisoJ = s === "ok" && !modoNota && c && L.canalTemJanela(provedorCanal()) ? L.avisoJanelaFechando(L.janela(c)) : "";
     avisoJanela.hidden = !avisoJ;
     if (avisoJanelaTxt.textContent !== avisoJ) avisoJanelaTxt.textContent = avisoJ;
+    // plano 1000b · CB-043: número desconectado (A.acoes.canalCaido) — «a mensagem espera até reconectar»; nota interna não depende do número
+    const caido = !modoNota && c && c.canal_id && (s === "ok" || s === "janela") && typeof A.acoes.canalCaido === "function" ? A.acoes.canalCaido(c.canal_id) : null;
+    const avisoC = caido ? `O número ${caido.nome || "desta conversa"} está desconectado: a mensagem espera até reconectar.` : "";
+    avisoCaido.hidden = !avisoC;
+    if (avisoCaidoTxt.textContent !== avisoC) avisoCaidoTxt.textContent = avisoC;
     // CA-077: assinatura ligada — o prefixo que o cliente vai ver
     const pref = !modoNota && s === "ok" && A.base && A.base.cfg && A.base.cfg.assinatura ? L.prefixoAssinatura((A.eu && A.eu.nome) || "") : "";
     rotAssin.hidden = !pref;
     if (pref && rotAssin.dataset.pref !== pref) { ui.limpar(rotAssin); rotAssin.append("Sai como: ", h("b", { class: "mono" }, pref), " …"); rotAssin.dataset.pref = pref; }
     btEnviar.disabled = !ok;
+    // plano 1000b · CB-139: desligado com a trava à vista, o leitor de tela ouve o motivo (aria-describedby → texto da trava)
+    if (!ok && !trava.hidden) btEnviar.setAttribute("aria-describedby", "cvx-trava"); else btEnviar.removeAttribute("aria-describedby");
     btEnviar.setAttribute("aria-label", modoNota ? "Salvar nota" : "Enviar");
     btEnviar.title = modoNota ? "Salvar nota (só a equipe vê)" : "Enviar";
     // CA-154: no modo nota o botão diz «Salvar nota» (no computador, com o rótulo à vista) — Enter não manda nota achando que é mensagem
@@ -375,12 +396,26 @@ export function criarComposer(A) {
     ui.limpar(resp);
     resp.hidden = !respondendo;
     if (!respondendo) return;
-    const quem = respondendo.direcao === "in" ? A.acoes.nomeContato(contato()) || "Cliente" : "Você";
-    resp.append(A.icone("responder"), h("div", null, h("b", null, `Respondendo ${quem}`), L.resumoMensagem(respondendo, 120)),
+    // plano 1000b · CB-010: «Respondendo a Mariana» / «à sua mensagem» / «à IA» / «a Ana» (antes «Respondendo Você» para tudo que saiu)
+    const rot = L.rotuloRespondendo(respondendo, { nomeContato: A.acoes.nomeContato(contato()), euId: A.eu && A.eu.id });
+    resp.append(A.icone("responder"), h("div", null, h("b", null, rot), L.resumoMensagem(respondendo, 120)),
       h("button", { type: "button", class: "bt-icone", "aria-label": "Cancelar resposta", on: { click: () => { respondendo = null; desenharResposta(); ta.focus(); } } }, ui.icone("fechar")));
   }
+  /** plano 1000b · CB-011: por que não dá para responder citando — a janela só quando é a janela. */
+  function motivoSemResposta(sit) {
+    switch (sit) {
+      case "resolvida": return "Este atendimento está resolvido. Reabra para responder citando.";
+      case "bloqueado": return "Este contato está bloqueado. Desbloqueie para responder.";
+      case "sem_token": return "Este número ainda não tem o token da Meta. Configure em Números de WhatsApp para responder.";
+      case "sem_canal": return "O número deste atendimento foi removido. Comece uma nova conversa por outro número.";
+      case "leitura": return "Seu acesso é só de leitura: dá para acompanhar, mas não responder.";
+      case "janela": return "Para responder citando, a janela de 24 h precisa estar aberta.";
+      default: return "Não dá para responder esta conversa agora.";
+    }
+  }
   function responder(m) {
-    if (!m || situacao() !== "ok") { if (situacao() !== "ok") ui.toast("Para responder citando, a janela de 24 h precisa estar aberta.", { tipo: "info" }); return; }
+    const sit = situacao();
+    if (!m || sit !== "ok") { if (sit !== "ok") ui.toast(motivoSemResposta(sit), { tipo: "info" }); return; }
     if (modoNota) alternarNota(false);
     respondendo = m;
     desenharResposta();
@@ -397,14 +432,20 @@ export function criarComposer(A) {
   // CA-059: até 30 opções roláveis (antes 8 e o resto só pelo atalho exato) e o cabeçalho diz quantas há
   const RR_MAX = 30;
   let rrTotal = 0;
+  let rrTermo = "";   // plano 1000b · CB-132: o termo da lista aberta (para refazê-la quando a base chegar)
   function abrirRR(termo) {
+    rrTermo = termo;
     const dep = conv() && conv().departamento_id;
     const todas = L.filtrarRespostas((A.base && A.base.respostas) || [], termo, { departamento: dep, max: Infinity });
     rrTotal = todas.length;
     rrItens = todas.slice(0, RR_MAX);
     rrSel = 0;
+    const abrindo = !rrAberto;
     rrAberto = true;
     desenharRR(termo);
+    // plano 1000b · CB-132: ao abrir o «/», base com mais de 60 s é relida em segundo plano e a lista aberta se refaz
+    const fresca = abrindo && A.acoes.baseFresca ? A.acoes.baseFresca(60000) : null;
+    if (fresca) fresca.then(() => { if (rrAberto) abrirRR(rrTermo); }).catch(() => {});
   }
   /** Trecho com o termo buscado em <mark> (sem acento/caixa): o olho acha o porquê de cada item ter aparecido. */
   function comMarca(texto, termo) {
@@ -470,10 +511,11 @@ export function criarComposer(A) {
     if (rolar && atual && typeof atual.scrollIntoView === "function") atual.scrollIntoView({ block: "nearest" });
   }
   function fecharRR() {
+    const estavaAberto = rrAberto;   // plano 1000b · CB-118: trocar de conversa (ou de nota) não anuncia o fechamento de um menu que nem abriu
     rrAberto = false; rrItens = [];
     rr.hidden = true; ui.limpar(rr);
     btRR.setAttribute("aria-expanded", "false");
-    rrStatus.textContent = "Respostas rápidas fechadas.";
+    if (estavaAberto) rrStatus.textContent = "Respostas rápidas fechadas.";
     ta.removeAttribute("aria-activedescendant");
   }
   function escolherRR(i) {
@@ -548,8 +590,10 @@ export function criarComposer(A) {
     // M35: Esc no campo devolve o foco à lista (o rascunho já está guardado); j/k, / e ? passam a valer fora do campo
     if (ev.key === "Escape" && !ev.isComposing) { ev.preventDefault(); A.acoes.focarLista(); return; }
     // CA-068: com «Ctrl+Enter envia» ligado, Enter só quebra a linha (quem escreve mensagem longa não envia por engano)
-    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && !matchMedia("(pointer: coarse)").matches) {
-      if (ctrlEnter() && !(ev.ctrlKey || ev.metaKey)) return;
+    // plano 1000b · CB-042: Ctrl/⌘+Enter SEMPRE envia (iPad com teclado, Chromebook de toque); no toque só o Enter puro fica desligado
+    const comMod = ev.ctrlKey || ev.metaKey;
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && (comMod || !matchMedia("(pointer: coarse)").matches)) {
+      if (ctrlEnter() && !comMod) return;
       ev.preventDefault(); enviarDoCampo();
     }
   });
@@ -624,6 +668,20 @@ export function criarComposer(A) {
   /* ---------------- anexos */
   /** Anexo e gravação valem nos dois canais (Meta e CodeWords). No CodeWords a situação nunca é "janela" nem "sem_token" (ver situacao()). */
   function aceitaAnexo() { return !modoNota && situacao() === "ok"; }
+  /** plano 1000b · CB-040/CB-006: por que o anexo não vale agora (o mesmo texto no clipe, no colar, no arrastar e no soltar). "" = vale. */
+  function motivoSemAnexo() {
+    if (modoNota && conv()) return "Nota interna não leva anexo: saia do modo nota para anexar.";
+    const s = situacao();
+    return s === "ok" ? ""
+      : s === "sem" ? "Abra uma conversa para anexar."
+      : s === "leitura" ? "Seu acesso é só de leitura: não dá para anexar."
+      : s === "resolvida" ? "Atendimento resolvido: reabra para anexar."
+      : s === "bloqueado" ? "Contato bloqueado: nada é enviado para ele."
+      : s === "sem_canal" ? "O número deste atendimento foi removido: comece uma nova conversa."
+      : s === "janela" ? "Fora da janela de 24 h só vale modelo aprovado."
+      : s === "sem_token" ? "Este número ainda não tem o token da Meta."
+      : "Não dá para anexar agora.";
+  }
   function mostrarInfoCanal(abrir = !infoAberta) {
     clearTimeout(infoTimer);
     infoAberta = abrir;
@@ -697,6 +755,8 @@ export function criarComposer(A) {
           an.fftSize = 512;
           actx.createMediaStreamSource(fluxo).connect(an);
           atual.medidor = { actx, an, buf: new Float32Array(an.fftSize) };
+          // plano 1000b · CB-037: criado depois do await do getUserMedia (fora do gesto) ele nasce «suspended» e o analisador devolve zeros
+          try { if (actx.state === "suspended" && typeof actx.resume === "function") { const p = actx.resume(); if (p && typeof p.catch === "function") p.catch(() => {}); } } catch { /* ok */ }
         }
       } catch { atual.medidor = null; }
       avisoMudo.hidden = true; avisoFimGravacao.hidden = true; pintarNivel(0);
@@ -728,12 +788,12 @@ export function criarComposer(A) {
           }
           // a conversa mudou enquanto o áudio era convertido: ele não segue para outro cliente
           if (!mesmaConversa(idGravacao)) { ui.toast("Você trocou de conversa enquanto o áudio era preparado: nada foi enviado. Grave de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
-          await anexar(new File([wav], `audio-orbita-${Date.now()}.wav`, { type: L.MIME_WAV }));
+          await anexar(new File([wav], `audio-orbita-${Date.now()}.wav`, { type: L.MIME_WAV }), { gravadoS: (Date.now() - atual.inicio) / 1000 });   // plano 1000b · CB-142
           return;
         }
         const ext = mime === "audio/mp4" ? "m4a" : "ogg";
         const arquivoAudio = new File([blob], `audio-orbita-${Date.now()}.${ext}`, { type: mime });
-        await anexar(arquivoAudio);
+        await anexar(arquivoAudio, { gravadoS: (Date.now() - atual.inicio) / 1000 });   // plano 1000b · CB-142: o modal sabe que é o áudio gravado
       }, { once: true });
       rec.start(500);
       painelGravacao.hidden = false;
@@ -743,7 +803,9 @@ export function criarComposer(A) {
       atual.timer = setInterval(() => {
         const segundos = Math.floor((Date.now() - atual.inicio) / 1000);
         tempoGravacao.textContent = tempoGravacaoTexto(segundos);
-        if (atual.medidor) {
+        // plano 1000b · CB-037: enquanto o áudio não está «running», nada de amostras nem do aviso «Não estamos ouvindo nada»
+        if (atual.medidor && atual.medidor.actx.state && atual.medidor.actx.state !== "running") { avisoMudo.hidden = true; atual.amostras = []; }
+        else if (atual.medidor) {
           try {
             atual.medidor.an.getFloatTimeDomainData(atual.medidor.buf);
             let soma = 0; for (const x of atual.medidor.buf) soma += x * x;
@@ -766,12 +828,12 @@ export function criarComposer(A) {
           ui.toast(`Limite de ${L.GRAVACAO_MAX_S / 60} minutos atingido. Revise o áudio antes de enviar.`, { tipo: "info" });
         }
       }, 250);
-    } catch {
+    } catch (e) {
       if (fluxo) fluxo.getTracks().forEach(t => t.stop());
       gravacao = null;
       painelGravacao.hidden = true;
       atualizar();
-      ui.toast("Não foi possível acessar o microfone. Libere a permissão do navegador e tente de novo.", { tipo: "erro" });
+      ui.toast(L.textoErroMicrofone(e), { tipo: "erro", ms: 8000 });   // plano 1000b · CB-036: o motivo pelo e.name (permissão, sem microfone, em uso…)
     }
   }
 
@@ -856,10 +918,16 @@ export function criarComposer(A) {
       : "O atendimento mudou e não está mais disponível para envio. O arquivo não foi enviado.", { tipo: "info", ms: 8000 });
   }
 
-  async function anexar(f) {
+  /** plano 1000b · CB-108: a extensão do arquivo recusado («zip»), em minúsculas; "" sem extensão legível. */
+  function extensaoDe(f) {
+    const m = /\.([a-z0-9]{1,8})$/i.exec(String((f && f.name) || ""));
+    return m ? m[1].toLowerCase() : "";
+  }
+  async function anexar(f, { gravadoS = null } = {}) {
+    const gravado = Number.isFinite(Number(gravadoS)) && gravadoS !== null;   // plano 1000b · CB-142: veio do microfone (não do clipe)
     const idInicio = conv() ? conv().id : null;      // o arquivo foi escolhido para ESTA conversa
     if (!aceitaAnexo()) {
-      ui.toast(situacao() === "janela" ? "Fora da janela de 24 h só vale modelo aprovado." : "Não dá para anexar agora.", { tipo: "info" });
+      ui.toast(motivoSemAnexo() || "Não dá para anexar agora.", { tipo: "info" });   // plano 1000b · CB-040: o motivo, não só «agora não»
       return;
     }
     // CA-106: sem internet o arquivo não sobe — avisa antes (antes ele tentava o nx-midia e caía num erro genérico)
@@ -885,9 +953,10 @@ export function criarComposer(A) {
     const v = L.validarArquivo(escolhidoInicial, { provedor: provedorCanal() });   // WAV só vale em número do CodeWords
     if (!v.ok) {
       ui.toast(v.erro === "midia_grande"
-        ? `Arquivo grande demais: ${L.tamanhoLegivel(escolhidoInicial.size)} (limite ${v.tipo === "imagem" ? "5 MB para fotos" : "16 MB"}).`
+        ? `Arquivo grande demais: ${L.tamanhoLegivel(escolhidoInicial.size)} (limite ${v.tipo === "imagem" ? "5 MB para fotos" : "16 MB"}).${v.tipo === "video" ? " Grave mais curto ou mande um link (Drive, Google Fotos)." : ""}`   // plano 1000b · CB-110
         : v.wav ? "Este número não aceita WAV: use MP3, OGG, AAC ou M4A."
-        : "Tipo de arquivo não aceito pelo WhatsApp. Use foto (JPG, PNG, WEBP), vídeo MP4, áudio (MP3, OGG, AAC), PDF ou Office.", { tipo: "erro" });
+        // plano 1000b · CB-108: diz QUAL arquivo foi recusado («.zip não é aceito…»)
+        : `${extensaoDe(escolhidoInicial) ? `.${extensaoDe(escolhidoInicial)}` : "Este tipo de arquivo"} não é aceito pelo WhatsApp. Use foto (JPG, PNG, WEBP), vídeo MP4, áudio (MP3, OGG, AAC), PDF ou Office.`, { tipo: "erro" });
       return;
     }
     const vOriginal = otim && otim.otimizada ? L.validarArquivo(f) : null;      // "enviar original" só quando o original também cabe (≤ 5 MB)
@@ -896,20 +965,29 @@ export function criarComposer(A) {
     if (v.tipo === "imagem") { url = URL.createObjectURL(escolhidoInicial); previa = h("img", { src: url, alt: "Prévia da foto" }); }
     else if (v.tipo === "video") { url = URL.createObjectURL(f); previa = h("video", { src: url, controls: true, preload: "metadata" }); }
     else if (v.tipo === "audio") { url = URL.createObjectURL(f); previa = h("audio", { src: url, controls: true }); }
-    else previa = h("div", { class: "cv-doc" }, h("span", { class: "cv-doc-ic" }, (f.name.split(".").pop() || "ARQ").slice(0, 4).toUpperCase()),
+    else previa = h("div", { class: "cv-doc" }, h("span", { class: "cv-doc-ic" }, L.siglaArquivo(f.name, L.mimeDe(f))),   // plano 1000b · CB-109
       h("span", { class: "cv-doc-txt" }, h("b", null, f.name), h("small", null, L.tamanhoLegivel(f.size))));
     const leg = h("textarea", { id: "cvx-legenda", rows: 2, maxlength: 1024, placeholder: v.tipo === "audio" ? "Áudio vai sem legenda" : "Legenda (opcional)", disabled: v.tipo === "audio", "aria-describedby": "cvx-legenda-n" });
     // CA-071: a legenda tem 1.024 caracteres — o contador aparece a partir de 900 (como no campo principal)
-    const legN = h("small", { class: "cvx-legenda-n dado", id: "cvx-legenda-n", "aria-live": "polite", hidden: true });
-    leg.addEventListener("input", () => { const n = String(leg.value || "").length; legN.hidden = n < 900; legN.textContent = L.textoContador(1024 - n); });
+    // plano 1000b · CB-111: o contador não é região viva (lia a cada tecla depois de 900); um status à parte fala só ao entrar nas faixas
+    const legN = h("small", { class: "cvx-legenda-n dado", id: "cvx-legenda-n", hidden: true });
+    const legStatus = h("span", { class: "sr-only cvx-legenda-status", role: "status" });
+    let legFaixa = 0;
+    leg.addEventListener("input", () => {
+      const n = String(leg.value || "").length; legN.hidden = n < 900; legN.textContent = L.textoContador(1024 - n);
+      const faixa = n >= 1024 ? 3 : n >= 1000 ? 2 : n >= 900 ? 1 : 0;
+      if (faixa > legFaixa) legStatus.textContent = faixa === 3 ? "Legenda no limite de 1.024 caracteres." : `Legenda: ${L.textoContador(1024 - n)}.`;
+      legFaixa = faixa;
+    });
     // CA-243: número da Meta com a janela de 24 h fechando — o aviso vem no próprio modal, antes de a pessoa escrever a legenda
     const jan = !codeWords && conv() ? L.janela(conv()) : null;
-    const avisoJanela = jan && jan.aberta && jan.restanteMs < 2 * 60000
+    // plano 1000b · CB-120: o mesmo limite de 30 min do campo (CA-074), com a hora em que fecha — a legenda longa não chega tarde
+    const avisoJanela = jan && jan.aberta && jan.restanteMs < 30 * 60000
       ? h("p", { class: "aviso aviso-aten cv-aviso-janela", role: "alert" }, ui.icone("relogio"),
-        h("span", null, `A janela de 24 h fecha em ${Math.max(1, Math.ceil(jan.restanteMs / 60000))} min: envie logo, senão só um modelo aprovado vale.`))
+        h("span", null, `A janela de 24 h fecha às ${L.horaMsg(jan.ate)} (em ${Math.max(1, Math.ceil(jan.restanteMs / 60000))} min): envie logo, senão só um modelo aprovado vale.`))
       : null;
     const resumo = otim && otim.otimizada ? L.resumoOtimizacao(f.size, otim.arquivo.size) : "";
-    const info = h("p", { class: "sub cv-otim-info", role: "status" }, resumo || `${f.name} · ${L.tamanhoLegivel(f.size)}`);
+    const info = h("p", { class: "sub cv-otim-info", role: "status" }, resumo || (gravado ? `Áudio gravado · ${L.formatarDuracao(gravadoS)} · ${L.tamanhoLegivel(f.size)}` : `${f.name} · ${L.tamanhoLegivel(f.size)}`));
     const chkOriginal = vOriginal && vOriginal.ok ? h("input", { type: "checkbox", id: "cvx-original", "data-sem-protecao": "" }) : null;
     if (chkOriginal) chkOriginal.addEventListener("change", () => {
       info.textContent = chkOriginal.checked ? `Vai a foto original (${L.tamanhoLegivel(f.size)}).` : resumo;
@@ -918,10 +996,10 @@ export function criarComposer(A) {
     const avisoVideo = codeWords && v.tipo === "video" ? h("p", { class: "sub cv-aviso-canal" }, "Neste número o vídeo chega como arquivo para baixar.") : null;
     const corpo = h("div", { class: "pilha" }, avisoJanela, h("div", { class: "cv-anexo-previa" }, previa), info, avisoVideo,
       chkOriginal ? h("label", { class: "chip-check cv-original", for: "cvx-original" }, chkOriginal, `Enviar a original (${L.tamanhoLegivel(f.size)})`) : null,
-      h("div", { class: "campo" }, h("label", { for: "cvx-legenda" }, "Legenda"), leg, legN));
+      h("div", { class: "campo" }, h("label", { for: "cvx-legenda" }, "Legenda"), leg, legN, legStatus));
     let ok;
     try {
-      ok = await ui.modal({ titulo: `Enviar arquivo para ${nomeDestino()}`, corpo, largura: "m", aoAbrir: () => setTimeout(() => { if (!leg.disabled) leg.focus(); }, 40),
+      ok = await ui.modal({ titulo: gravado ? `Enviar áudio gravado (${L.formatarDuracao(gravadoS)}) para ${nomeDestino()}` : `Enviar arquivo para ${nomeDestino()}`, corpo, largura: "m", aoAbrir: () => setTimeout(() => { if (!leg.disabled) leg.focus(); }, 40),
         acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Enviar", tipo: "primario", valor: true }] });
     } finally { if (url) { try { URL.revokeObjectURL(url); } catch { /* navegador já descartou a URL */ } } }
     if (!ok) return;
@@ -940,7 +1018,7 @@ export function criarComposer(A) {
   const MAX_FOTOS = 10;
   async function anexarVarios(lista) {
     const idInicio = conv() ? conv().id : null;
-    if (!aceitaAnexo()) { ui.toast(situacao() === "janela" ? "Fora da janela de 24 h só vale mensagem aprovada (modelo)." : "Não dá para anexar agora.", { tipo: "info" }); return; }
+    if (!aceitaAnexo()) { ui.toast(motivoSemAnexo() || "Não dá para anexar agora.", { tipo: "info" }); return; }   // plano 1000b · CB-040
     if (A.acoes.offline && A.acoes.offline()) { ui.toast("Sem internet: arquivos só saem com a conexão de volta. O texto você já pode mandar (ele espera na fila).", { tipo: "info", ms: 8000 }); return; }
     if (!lista.every(f => L.ehFoto(f))) {
       ui.toast(`${lista.length} arquivos escolhidos: vão um de cada vez, cada um com a sua prévia.`, { tipo: "info", ms: 7000 });
@@ -959,27 +1037,57 @@ export function criarComposer(A) {
         const arq = otim ? otim.arquivo : f;
         const v = L.validarArquivo(arq, { provedor: provedorCanal() });
         if (!v.ok) { ui.toast(`«${f.name}» ficou de fora: ${v.erro === "midia_grande" ? `${L.tamanhoLegivel(arq.size)} passa do limite de 5 MB para fotos` : "tipo não aceito pelo WhatsApp"}.`, { tipo: "erro" }); continue; }
-        prontas.push({ arq, v, nome: f.name });
+        prontas.push({ arq, v, nome: f.name, original: f });
       }
     } finally { otimStatus.hidden = true; }
     if (!mesmaConversa(idInicio)) { ui.toast("Você trocou de conversa enquanto as fotos eram preparadas: nada foi enviado. Anexe de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
     if (!prontas.length) return;
+    // plano 1000b · CB-039: sobrou uma só (as outras ficaram de fora) — o fluxo de foto única, com legenda, em vez de «Enviar 1 fotos»
+    if (prontas.length === 1) { await anexar(prontas[0].original); return; }
     const urls = [];
+    // plano 1000b · CB-080: cada miniatura tem «Tirar» — a contagem, o título e o botão acompanham (antes só dava para cancelar tudo)
+    let apiModal = null;
+    const titulo = n => `Enviar ${n} ${n === 1 ? "foto" : "fotos"} para ${nomeDestino()}`;
+    const ordem = h("p", { class: "sub cvx-multi-ordem" });
+    const pintarContagem = () => {
+      const vivas = prontas.filter(p => !p.tirada), n = vivas.length;
+      ordem.textContent = `Saem uma depois da outra, na ordem acima (${n} ${n === 1 ? "foto" : "fotos"}).`;
+      vivas.forEach((p, i) => { p.leg.setAttribute("aria-label", `Legenda da foto ${i + 1} de ${n}`); if (p.img) p.img.setAttribute("alt", `Foto ${i + 1} de ${n}`); p.btTirar.setAttribute("aria-label", `Tirar a foto ${i + 1} de ${n}`); });
+      if (apiModal && apiModal.el) {
+        const t = apiModal.el.querySelector("h2"); if (t) t.textContent = titulo(n);
+        const b = apiModal.el.querySelector('[data-tipo="primario"]'); if (b) b.textContent = `Enviar ${n}`;
+      }
+      return n;
+    };
     const itens = prontas.map((p, i) => {
       let url = null;
       try { url = URL.createObjectURL(p.arq); urls.push(url); } catch { url = null; }
       p.leg = h("input", { type: "text", maxlength: 1024, class: "cvx-multi-leg", placeholder: "Legenda (opcional)", "aria-label": `Legenda da foto ${i + 1} de ${prontas.length}`, autocomplete: "off" });
-      return h("li", { class: "cvx-multi-item" }, url ? h("img", { src: url, alt: `Foto ${i + 1} de ${prontas.length}` }) : h("span", { class: "cvx-multi-sem" }, p.nome), p.leg);
+      p.img = url ? h("img", { src: url, alt: `Foto ${i + 1} de ${prontas.length}` }) : null;
+      p.btTirar = h("button", { type: "button", class: "bt bt-fant bt-p cvx-multi-tirar", "aria-label": `Tirar a foto ${i + 1} de ${prontas.length}` }, ui.icone("fechar"), "Tirar");
+      const li = h("li", { class: "cvx-multi-item" }, p.img || h("span", { class: "cvx-multi-sem" }, p.nome), p.leg, p.btTirar);
+      p.btTirar.addEventListener("click", () => {
+        p.tirada = true;
+        const prox = li.nextSibling || null;
+        li.remove();
+        const n = pintarContagem();
+        ui.anunciar(`Foto tirada. ${n} ${n === 1 ? "foto fica" : "fotos ficam"}.`);
+        if (!n) { if (apiModal) apiModal.fechar(null); return; }
+        const alvo = (prox && prox.querySelector && prox.querySelector(".cvx-multi-tirar")) || (ul.lastElementChild && ul.lastElementChild.querySelector(".cvx-multi-tirar"));
+        try { if (alvo) alvo.focus(); } catch { /* ok */ }
+      });
+      return li;
     });
-    const corpo = h("div", { class: "pilha" }, h("ul", { class: "cvx-multi", "aria-label": "Fotos escolhidas" }, itens),
-      h("p", { class: "sub" }, `Saem uma depois da outra, na ordem acima (${prontas.length} ${prontas.length === 1 ? "foto" : "fotos"}).`));
+    const ul = h("ul", { class: "cvx-multi", "aria-label": "Fotos escolhidas" }, itens);
+    const corpo = h("div", { class: "pilha" }, ul, ordem);
+    pintarContagem();
     let ok;
     try {
-      ok = await ui.modal({ titulo: `Enviar ${prontas.length} fotos para ${nomeDestino()}`, corpo, largura: "m",
+      ok = await ui.modal({ titulo: titulo(prontas.length), corpo, largura: "m", aoAbrir: api => { apiModal = api; },
         acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: `Enviar ${prontas.length}`, tipo: "primario", valor: true }] });
     } finally { for (const u of urls) { try { URL.revokeObjectURL(u); } catch { /* ok */ } } }
     if (!ok) return;
-    for (const p of prontas) {
+    for (const p of prontas.filter(x => !x.tirada)) {
       if (!mesmaConversa(idInicio)) { ui.toast("A conversa aberta mudou no meio do envio: as fotos que faltavam não foram enviadas.", { tipo: "info", ms: 8000 }); return; }
       if (!aceitaAnexo()) { avisarAnexoIndisponivel(); return; }
       await A.acoes.enviar({ tipo: "midia", conversa: idInicio, arquivo: p.arq, validacao: p.v, legenda: String(p.leg.value || "").trim(), client_ref: L.novoClientRef() });
@@ -987,11 +1095,26 @@ export function criarComposer(A) {
   }
 
   /* ---------------- modelos (templates aprovados) */
+  // revisão 1000b · CB-132: toque duplo durante a espera da base (até 1,5 s) abria dois modais — trava até o modal fechar;
+  // os botões «Modelos» ficam aria-busy enquanto a base é relida
+  let abrindoModelos = false;
+  function modelosOcupado(sim) {
+    for (const b of [btModelos, ...el.querySelectorAll("[data-modelos]")]) { if (sim) b.setAttribute("aria-busy", "true"); else b.removeAttribute("aria-busy"); }
+  }
   async function abrirModelos() {
+    if (abrindoModelos) return;
+    abrindoModelos = true;
+    try { await abrirModelosAgora(); } finally { abrindoModelos = false; modelosOcupado(false); }
+  }
+  async function abrirModelosAgora() {
     if (usaCodeWords()) { ui.toast("Modelos da Meta não estão disponíveis neste canal CodeWords.", { tipo: "info" }); return; }
     const c = conv();
     if (!c) return;
     if (!c.canal_id) { ui.toast("Este atendimento não tem mais número para enviar.", { tipo: "erro" }); return; }
+    // plano 1000b · CB-132: base com mais de 60 s é relida antes (modelo recém-aprovado aparece); no máximo 1,5 s de espera
+    const fresca = A.acoes.baseFresca ? A.acoes.baseFresca(60000) : null;
+    if (fresca) { modelosOcupado(true); try { await Promise.race([fresca, new Promise(r => setTimeout(r, 1500))]); } finally { modelosOcupado(false); } }
+    if (!conv() || conv().id !== c.id) return;
     const idInicio = c.id;                            // o modelo é para ESTA conversa
     const ct = contato();
     const todos = ((A.base && A.base.templates) || []).filter(t => t.canal_id === c.canal_id && String(t.status || "").toUpperCase() !== "DELETED");
@@ -1016,7 +1139,11 @@ export function criarComposer(A) {
       for (let i = 1; i <= n; i++) {
         const id = `cvx-par-${i}`;
         // CA-028: nenhum parâmetro vem preenchido (o {{1}} pode ser a data, não o nome): o chip «Usar nome» preenche num toque
-        const inp = h("input", { id, type: "text", maxlength: 300, value: "", placeholder: `Valor de {{${i}}}`, "aria-describedby": `cvx-par-${i}-erro` });
+        // plano 1000b · CB-112: o trecho do texto em volta do {{n}} (o rótulo sozinho não diz o que vai ali)
+        const trecho = L.trechoParametro(t.corpo, i);
+        const ajuda = trecho ? h("small", { class: "sub cvx-par-trecho", id: `cvx-par-${i}-trecho` }, `No texto: «${trecho}»`) : null;
+        // plano 1000b · CB-133: dado de paciente — sem preenchimento automático do navegador (nomes e datas de outros pacientes)
+        const inp = h("input", { id, type: "text", maxlength: 300, value: "", autocomplete: "off", "data-sem-protecao": "", placeholder: `Valor de {{${i}}}`, "aria-describedby": `${ajuda ? `cvx-par-${i}-trecho ` : ""}cvx-par-${i}-erro` });
         const erro = h("small", { class: "campo-erro", id: `cvx-par-${i}-erro`, role: "alert", hidden: true });
         const corrigir = h("button", { type: "button", class: "bt bt-fant bt-p cvx-par-corrigir", hidden: true }, "Corrigir");
         const conferir = () => { const e = L.erroParametroModelo(inp.value, i); erro.textContent = e; erro.hidden = !e; corrigir.hidden = !e; inp.setAttribute("aria-invalid", e ? "true" : "false"); };
@@ -1025,19 +1152,22 @@ export function criarComposer(A) {
         corrigir.addEventListener("click", () => { inp.value = L.corrigirParametroModelo(inp.value); conferir(); atualizarPrevia(); inp.focus(); });
         campos.push(inp);
         const chip = vars.primeiro_nome ? h("button", { type: "button", class: "cvx-chip cvx-par-nome", on: { click: () => { inp.value = vars.primeiro_nome; conferir(); atualizarPrevia(); inp.focus(); } } }, `Usar nome: ${vars.primeiro_nome}`) : null;
-        params.appendChild(h("div", { class: "campo" }, h("label", { for: id }, `Parâmetro {{${i}}}`), inp, erro, h("div", { class: "linha cvx-par-acoes" }, chip, corrigir)));
+        params.appendChild(h("div", { class: "campo" }, h("label", { for: id }, `Parâmetro {{${i}}}`), ajuda, inp, erro, h("div", { class: "linha cvx-par-acoes" }, chip, corrigir)));
       }
       atualizarPrevia();
       if (campos[0]) setTimeout(() => campos[0].focus(), 30);
     }
     lista.addEventListener("keydown", ev => {
       if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(ev.key)) return;
-      const ops = [...lista.querySelectorAll(".cv-modelo")].filter(b => !b.hidden && b.getAttribute("aria-disabled") !== "true");
+      // plano 1000b · CB-081: as setas andam também pelos indisponíveis (o motivo é lido no foco); só o disponível é escolhido
+      const ops = [...lista.querySelectorAll(".cv-modelo")].filter(b => !b.hidden);
       if (!ops.length) return;
       ev.preventDefault();
       const i = ops.indexOf(document.activeElement);
       const j = (i + (ev.key === "ArrowDown" || ev.key === "ArrowRight" ? 1 : -1) + ops.length) % ops.length;
-      ops[j].click(); ops[j].focus();
+      if (ops[j].getAttribute("aria-disabled") !== "true") ops[j].click();
+      else for (const b of ops) b.tabIndex = b === ops[j] ? 0 : -1;
+      ops[j].focus();
     });
     if (!todos.length) {
       lista.appendChild(ui.vazio({ titulo: "Nenhum modelo neste número.", icone: "alerta", tema: "conversas",
@@ -1060,6 +1190,8 @@ export function criarComposer(A) {
       b.addEventListener("click", () => escolher(t, b));
       lista.appendChild(b);
     }
+    // plano 1000b · CB-081: nenhum disponível — o 1º continua no Tab (aria-disabled), senão o motivo nunca é alcançado pelo teclado
+    if (primeiro) { const b0 = lista.querySelector(".cv-modelo"); if (b0) b0.tabIndex = 0; }
     // CA-069: com mais de 8 modelos, busca por nome/texto e chips de categoria
     let filtroBusca = null;
     if (todos.length > 8) {
@@ -1135,6 +1267,8 @@ export function criarComposer(A) {
         // o campo já tem texto da pessoa: a sugestão entra ABAIXO (e só ela fica selecionada), nunca por cima do que foi digitado
         const base = `${ta.value.replace(/\s+$/, "")}\n\n`;
         ta.value = (base + texto).slice(0, teto()); atualizarContador();
+        // plano 1000b · CB-041: a sugestão passou do limite — o fim some, e a pessoa fica sabendo (mesma ideia do aviso de colagem)
+        if ((base + texto).length > teto()) ui.toast("A sugestão passou do limite: o fim ficou de fora. Revise ou divida em duas mensagens.", { tipo: "info", ms: 8000 });
         autoAltura();
         ta.focus();
         ta.setSelectionRange(Math.min(base.length, ta.value.length), ta.value.length);
@@ -1157,7 +1291,7 @@ export function criarComposer(A) {
       pedindoIA = false;
       iaTrab.hidden = true;
       btIA.disabled = modoNota || situacao() !== "ok" || estadoIA() === "cota";
-      btOutraIA.disabled = false;
+      btOutraIA.disabled = estadoIA() !== "ok";   // plano 1000b · CB-107: a cota acabou com esta sugestão — «Outra sugestão» desliga como o btIA
     }
   }
   btIA.addEventListener("click", () => sugerir());
@@ -1175,7 +1309,7 @@ export function criarComposer(A) {
     const s = situacao();
     const iaEst = estadoIA();
     ui.menu(btMaisM, [
-      !usaCodeWords() ? { rotulo: "Modelos aprovados", icone: "camadas", fn: () => abrirModelos(), desabilitado: !(s === "ok" || s === "janela") } : null,
+      !usaCodeWords() ? { rotulo: "Modelos aprovados", icone: "modelo" /* plano 1000b · CB-083: o mesmo ícone do botão do computador */, fn: () => abrirModelos(), desabilitado: !(s === "ok" || s === "janela") } : null,
       { rotulo: modoNota ? "Voltar para mensagem" : "Nota interna", icone: "nota", fn: () => alternarNota() },
       // CA-004: sem IA configurada o item não aparece; com a cota gasta aparece desligado com o motivo no rótulo
       iaEst !== "sem" ? { rotulo: pedindoIA ? "Sugerindo com IA…" : iaEst === "cota" ? "Sugerir com IA (cota do mês acabou)" : "Sugerir com IA", icone: "ia", fn: () => sugerir(), desabilitado: s !== "ok" || pedindoIA || iaEst === "cota" } : null,
@@ -1190,12 +1324,20 @@ export function criarComposer(A) {
     if (!corpoTxt) { ui.toast("Escreva o texto da resposta no campo primeiro.", { tipo: "info" }); return; }
     const sugestao = L.semAcento(corpoTxt.split(/\s+/).slice(0, 2).join("-")).replace(/[^a-z0-9_-]/g, "").slice(0, 30);
     const inAtalho = h("input", { id: "cvx-rr-atalho", type: "text", maxlength: 31, value: sugestao, autocomplete: "off", "aria-describedby": "cvx-rr-atalho-ajuda" });
-    const inTitulo = h("input", { id: "cvx-rr-titulo", type: "text", maxlength: 60, value: corpoTxt.slice(0, 40), autocomplete: "off" });
+    // plano 1000b · CB-038: o nome deste paciente, o de quem atende e o protocolo voltam a ser variáveis (senão a resposta diz «Mariana»
+    // para todos os clientes); a prévia mostra o resultado e «Manter como está» (desmarcar) grava o texto do jeito que foi escrito
+    const gen = L.generalizarResposta(corpoTxt, { ...varsAtuais(), atendente_nome: (A.eu && A.eu.nome) || "" });
+    const chkVars = gen.trocas ? h("input", { type: "checkbox", id: "cvx-rr-vars", checked: true }) : null;
+    const corpoFinal = () => (chkVars && chkVars.checked ? gen.texto : corpoTxt);
+    const previaTxt = h("p", { class: "cvx-rr-salvar-previa" }, corpoFinal());
+    if (chkVars) chkVars.addEventListener("change", () => { previaTxt.textContent = corpoFinal(); });
+    const inTitulo = h("input", { id: "cvx-rr-titulo", type: "text", maxlength: 60, value: corpoFinal().slice(0, 40), autocomplete: "off" });
     const corpo = h("div", { class: "pilha" },
       h("div", { class: "campo" }, h("label", { for: "cvx-rr-atalho" }, "Atalho (depois da /)"), inAtalho,
         h("small", { class: "campo-ajuda", id: "cvx-rr-atalho-ajuda" }, "Letras minúsculas sem acento, números, - e _ (até 30).")),
       h("div", { class: "campo" }, h("label", { for: "cvx-rr-titulo" }, "Título"), inTitulo),
-      h("p", { class: "rotulo" }, "Texto"), h("p", { class: "cvx-rr-salvar-previa" }, corpoTxt));
+      h("p", { class: "rotulo" }, "Texto"), previaTxt,
+      chkVars ? h("label", { class: "chip-check cvx-rr-vars", for: "cvx-rr-vars" }, chkVars, "Trocar nomes e protocolo por variáveis (desmarque para manter como está)") : null);
     const r = await ui.modal({ titulo: "Salvar como resposta rápida", corpo, largura: "p",
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Salvar resposta", tipo: "primario", fn: async api => {
         const atalho = String(inAtalho.value || "").replace(/^\/+/, "").trim().toLowerCase();
@@ -1203,8 +1345,9 @@ export function criarComposer(A) {
         const titulo = String(inTitulo.value || "").trim();
         if (!titulo) { api.erro("Dê um título."); inTitulo.focus(); return false; }
         try {
-          const salva = await A.api.rpcC("nx_resposta_salvar", { p_resposta: { atalho, titulo, corpo: corpoTxt, departamento_id: null, ativo: true } });
-          return salva || { atalho, titulo, corpo: corpoTxt };
+          const texto = corpoFinal();
+          const salva = await A.api.rpcC("nx_resposta_salvar", { p_resposta: { atalho, titulo, corpo: texto, departamento_id: null, ativo: true } });
+          return salva || { atalho, titulo, corpo: texto };
         } catch (e) {
           if (e && e.codigo === "atalho_em_uso") { api.erro(`Já existe a resposta /${atalho}. Escolha outro atalho.`); inAtalho.focus(); return false; }
           throw e;
@@ -1216,11 +1359,30 @@ export function criarComposer(A) {
   }
 
   /* ---------------- emoji (CA-067): só no computador; insere no cursor */
+  function ehMac() { try { const n = globalThis.navigator; return /Mac|iPhone|iPad/i.test(String((n && (n.userAgentData && n.userAgentData.platform)) || (n && n.platform) || "")); } catch { return false; } }
+  function dicaEmojiSistema() { return ehMac() ? "Emoji (Ctrl + ⌘ + Espaço abre todos)" : "Emoji (Win + . abre todos)"; }
   btEmoji.addEventListener("click", () => {
     if (btEmoji.disabled) return;
     const ini = ta.selectionStart ?? ta.value.length, fim = ta.selectionEnd ?? ini;
-    const grade = h("div", { class: "cvx-emojis", role: "group", "aria-label": "Emojis" }, L.EMOJIS_RAPIDOS.map(e => h("button", { type: "button", class: "cvx-emoji", "aria-label": `Inserir ${e}` }, e)));
-    const pop = ui.flutuante(btEmoji, h("div", { class: "pilha-p cvx-emoji-pop" }, grade, h("p", { class: "sub" }, "No Windows, ", h("kbd", null, "Win"), " + ", h("kbd", null, "."), " abre todos.")), { largura: 280 });
+    // plano 1000b · CB-084: um só ponto de Tab na grade (roving tabindex); setas andam (8 por linha), Home e End
+    const grade = h("div", { class: "cvx-emojis", role: "group", "aria-label": "Emojis" }, L.EMOJIS_RAPIDOS.map((e, i) => h("button", { type: "button", class: "cvx-emoji", "aria-label": `Inserir ${e}`, tabindex: i === 0 ? "0" : "-1" }, e)));
+    grade.addEventListener("keydown", ev => {
+      const bts = [...grade.querySelectorAll(".cvx-emoji")];
+      const i = bts.indexOf(document.activeElement);
+      if (i < 0) return;
+      const POR_LINHA = 8;
+      const j = ev.key === "ArrowRight" ? Math.min(bts.length - 1, i + 1) : ev.key === "ArrowLeft" ? Math.max(0, i - 1)
+        : ev.key === "ArrowDown" ? Math.min(bts.length - 1, i + POR_LINHA) : ev.key === "ArrowUp" ? Math.max(0, i - POR_LINHA)
+        : ev.key === "Home" ? 0 : ev.key === "End" ? bts.length - 1 : null;
+      if (j === null) return;
+      ev.preventDefault();
+      for (const b of bts) b.tabIndex = b === bts[j] ? 0 : -1;
+      bts[j].focus();
+    });
+    // plano 1000b · CB-119: no Mac o atalho do sistema é Ctrl + ⌘ + Espaço (o «Win + .» só vale no Windows)
+    const dicaSis = ehMac() ? h("p", { class: "sub" }, "No Mac, ", h("kbd", null, "Ctrl"), " + ", h("kbd", null, "⌘"), " + ", h("kbd", null, "Espaço"), " abre todos.")
+      : h("p", { class: "sub" }, "No Windows, ", h("kbd", null, "Win"), " + ", h("kbd", null, "."), " abre todos.");
+    const pop = ui.flutuante(btEmoji, h("div", { class: "pilha-p cvx-emoji-pop" }, grade, dicaSis), { largura: 280 });
     grade.addEventListener("click", ev => {
       const b = ev.target && ev.target.closest ? ev.target.closest(".cvx-emoji") : null;
       if (!b) return;
@@ -1235,7 +1397,7 @@ export function criarComposer(A) {
   });
 
   return {
-    el, atualizar, definirConversa, responder, anexar, aceitaAnexo, abrirModelos,
+    el, atualizar, definirConversa, responder, anexar, aceitaAnexo, motivoSemAnexo, abrirModelos,
     /** Alt+Shift+N: liga/desliga a nota interna (true/false força; sem argumento alterna). Devolve se o campo está em nota. */
     alternarNota(forcar) { if (el.hidden || !A.podeEscrever) return false; alternarNota(forcar); return modoNota; },
     get emNota() { return modoNota; },
@@ -1257,5 +1419,7 @@ export function criarComposer(A) {
     /** CA-031: há gravação de áudio em andamento (a central pergunta antes de trocar de tela). */
     get gravando() { return !!gravacao; },
     focar() { if (!ta.disabled) ta.focus(); },
+    /** plano 1000b · CB-078: «Anexar de novo» da bolha de mídia que não saiu abre o mesmo seletor do clipe. */
+    escolherArquivo() { if (btClipe.hidden || btClipe.disabled) return false; btClipe.click(); return true; },
   };
 }

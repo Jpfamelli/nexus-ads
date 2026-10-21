@@ -68,6 +68,21 @@ const texto = x => (x == null ? "" : String(x));
 const aspas = s => `«${s}»`;
 const copia = x => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
 
+/**
+ * plano 1000b · UB-061: número digitado do jeito brasileiro (a mesma régua do ui.lerMoeda): «1.500,00» → 1500, «1500,5» → 1500.5,
+ * «1500» → 1500, «1.5» → 1.5 (ponto só decimal quando não forma milhar). Número já em Number passa. Inválido/vazio → null.
+ */
+export function numeroBR(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  let t = texto(v).trim().replace(/^R\$\s*/i, "").replace(/\s/g, "");
+  if (!t) return null;
+  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
+  else if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, "");
+  if (!/^-?\d+(\.\d+)?$/.test(t)) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
 /** 15 → "15 min"; 120 → "2 h" */
 export function formatarMinutos(m) {
   const n = Number(m) || 0;
@@ -303,14 +318,15 @@ function validarConfig(gat, c, ix) {
     case "tempo_no_estagio":
       if (vazio(c.estagio_id)) return "escolha a etapa em «Quando»";
       if (!idOk(ix, "estagios", c.estagio_id)) return "a etapa escolhida em «Quando» não existe mais";
-      if (intFaixa(c.horas, LIMITES.tempo_no_estagio) == null) return "o tempo na etapa vai de 1 a 2160 horas";
+      // plano 1000b · UB-028: as faixas em palavras (os campos já são horas/dias); as frases do SERVIDOR continuam em ondeDoHint
+      if (intFaixa(c.horas, LIMITES.tempo_no_estagio) == null) return "o tempo na etapa vai de 1 hora a 90 dias";
       return null;
     case "etiqueta_adicionada":
       if (vazio(c.etiqueta_id)) return "escolha a etiqueta em «Quando»";
       if (!idOk(ix, "etiquetas", c.etiqueta_id)) return "a etiqueta escolhida em «Quando» não existe mais";
       return null;
     case "sem_resposta":
-      if (intFaixa(c.minutos, LIMITES.sem_resposta) == null) return "o tempo sem resposta vai de 5 a 1440 minutos";
+      if (intFaixa(c.minutos, LIMITES.sem_resposta) == null) return "o tempo sem resposta vai de 5 minutos a 24 horas";   // plano 1000b · UB-028
       if (!opcionalOk("departamentos", c.departamento_id)) return "o departamento escolhido em «Quando» não existe mais";
       return null;
     case "tarefa_vencida":
@@ -322,7 +338,7 @@ function validarConfig(gat, c, ix) {
       return null;
     case "apos_data":
       if (!["consulta", "previsao_fechamento"].includes(c.campo)) return "escolha a data em «Quando»";
-      if (intFaixa(c.horas, LIMITES.apos_data) == null) return "o tempo depois da data vai de 1 a 720 horas";
+      if (intFaixa(c.horas, LIMITES.apos_data) == null) return "o tempo depois da data vai de 1 hora a 30 dias";   // plano 1000b · UB-028
       if (!opcionalOk("funis", c.funil_id)) return "o funil escolhido em «Quando» não existe mais";
       return null;
     case "agendado": {
@@ -352,7 +368,7 @@ function validarCondicao(cd, n, ix) {
     return `condição ${n}: «maior» e «menor» valem só para valor e campos`;
   if (op.semValor) return null;
   if (vazio(cd.valor)) return `condição ${n}: preencha o valor`;
-  if (tipo === "numero" && !Number.isFinite(Number(String(cd.valor).replace(",", "."))))
+  if (tipo === "numero" && numeroBR(cd.valor) == null)      // plano 1000b · UB-061: «1.500,00» é número
     return `condição ${n}: o valor precisa ser um número`;
   const idTipo = { funil: "funis", estagio: "estagios", canal: "canais", departamento: "departamentos", etiqueta: "etiquetas", pessoa: "usuarios" }[tipo];
   if (idTipo && !idOk(ix, idTipo, cd.valor)) return `condição ${n}: o item escolhido não existe mais`;
@@ -390,7 +406,7 @@ function validarAcao(ac, n, ix, ligar, total) {
       if (t.length > LIMITES.titulo_tarefa) return `${p}: o título pode ter até ${LIMITES.titulo_tarefa} caracteres`;
       if (ac.tipo_tarefa != null && !TIPOS_TAREFA.some(([k]) => k === ac.tipo_tarefa)) return `${p}: tipo de tarefa inválido`;
       if (ac.vence_em_horas != null && ac.vence_em_horas !== "" && intFaixa(ac.vence_em_horas, LIMITES.prazo_tarefa) == null)
-        return `${p}: o prazo vai de 0 a 2160 horas`;
+        return `${p}: o prazo vai até 90 dias (0 = para já)`;   // plano 1000b · UB-028
       if (!(ac.dono === "responsavel" || ac.dono === "atendente" || idOk(ix, "usuarios", ac.dono)))
         return `${p}: escolha para quem é a tarefa`;
       return null;
@@ -465,7 +481,7 @@ function validarAcao(ac, n, ix, ligar, total) {
     case "resolver_conversa":
       return null;
     case "esperar":
-      if (intFaixa(ac.minutos, LIMITES.esperar) == null) return `${p}: a espera vai de 1 minuto a 30 dias (43200 minutos)`;
+      if (intFaixa(ac.minutos, LIMITES.esperar) == null) return `${p}: a espera vai de 1 minuto a 30 dias`;   // plano 1000b · UB-028
       if (total != null && n === total) return `${p}: depois de esperar, acrescente outra ação`;
       return null;
     case "parar":
@@ -508,6 +524,8 @@ export function linhaDoTempo(acoes, { inicio = null, horario } = {}) {
       const envio = proximaAbertura(horario, previsto);
       x.envio = envio;
       x.adiada = envio != null && envio > previsto;
+      // plano 1000b · UB-024: o horário não abre em 8 dias (sem faixa nenhuma) → a mensagem nunca sairia: não é «Na hora»
+      if (envio === null) x.semHorario = true;
     }
     out.push(x);
     acum += m;
@@ -578,7 +596,8 @@ export function limpar(auto) {
   }
   for (const cd of a.condicoes || []) {
     const x = { campo: cd.campo, op: cd.op };
-    if (!(OPERADOR[cd.op] || {}).semValor) x.valor = tipoValorCondicao(cd.campo) === "numero" ? Number(String(cd.valor).replace(",", ".")) : cd.valor;
+    // plano 1000b · UB-061: milhar brasileiro («1.500,00») vira 1500, nunca NaN
+    if (!(OPERADOR[cd.op] || {}).semValor) x.valor = tipoValorCondicao(cd.campo) === "numero" ? (numeroBR(cd.valor) ?? cd.valor) : cd.valor;
     out.condicoes.push(x);
   }
   for (const ac of a.acoes || []) {
@@ -659,10 +678,12 @@ function fraseQuando(a, ix, vv) {
     case "conversa_resolvida": return `quando uma conversa for resolvida${noCanal}${noDep}`;
     case "mensagem_recebida": {
       const p = (c.palavras || []).filter(Boolean);
-      return `quando chegar mensagem${p.length ? ` com ${listaFrase(p.slice(0, 4).map(aspas), "ou")}${p.length > 4 ? " (e mais)" : ""}` : ""}${noCanal}`;
+      // plano 1000b · UB-281: «(e mais 3)» — diz quantas ficaram de fora
+      return `quando chegar mensagem${p.length ? ` com ${listaFrase(p.slice(0, 4).map(aspas), "ou")}${p.length > 4 ? ` (e mais ${p.length - 4})` : ""}` : ""}${noCanal}`;
     }
     case "sem_resposta":
-      return `quando uma conversa${noDep} ficar sem resposta há ${formatarMinutos(c.minutos)}${c.so_no_horario ? " (contando só no horário de atendimento)" : ""}`;
+      // plano 1000b · UB-282: sem tempo válido não vira «há 0 min»
+      return `quando uma conversa${noDep} ficar sem resposta há ${Number(c.minutos) > 0 ? formatarMinutos(c.minutos) : "(escolha o tempo)"}${c.so_no_horario ? " (contando só no horário de atendimento)" : ""}`;
     case "negocio_criado": return `quando ${vv.um("negocio")} ${vv.min("negocio")} for criad${vv.art("negocio")}${noFunil}`;
     case "negocio_estagio": return `quando ${neg} entrar em ${etapa(c.estagio_id)}`;
     case "tempo_no_estagio": return `quando ${neg} ficar parad${vv.art("negocio")} em ${etapa(c.estagio_id)} por ${formatarHoras(c.horas)}`;
@@ -740,18 +761,27 @@ function quemTarefa(dono, ix) {
   return aspas(nomeDe(ix, "usuarios", dono, "pessoa escolhida") || "pessoa escolhida");
 }
 
+// plano 1000b · UB-066: «pontuar o interesse do paciente/cliente» no vocabulário da vertical (não «lead» em clínica e oficina)
 const FRASE_IA = {
-  classificar_etapa: "pedir à IA para escolher a etapa certa",
-  resumir_nota: "pedir à IA para resumir a conversa numa nota",
-  pontuar_lead: "pedir à IA para pontuar o lead",
+  classificar_etapa: () => "pedir à IA para escolher a etapa certa",
+  resumir_nota: () => "pedir à IA para resumir a conversa numa nota",
+  pontuar_lead: vv => `pedir à IA para pontuar o interesse d${vv.art("contato")} ${vv.min("contato")}`,
 };
+
+/** plano 1000b · UB-066: as tarefas do passo de IA com o nome no vocabulário da vertical ([id, nome, texto], como TAREFAS_IA). */
+export function tarefasIA(vocab = null) {
+  const vv = voc(vocab);
+  const quem = `d${vv.art("contato")} ${vv.min("contato")}`;
+  return TAREFAS_IA.map(([k, nome, txt]) => (k === "pontuar_lead"
+    ? [k, "Pontuar o interesse", `Dá uma nota de 0 a 100 para o interesse ${quem} e guarda o motivo.`] : [k, nome, txt]));
+}
 
 function fraseAcao(ac, ix, vv) {
   if (!ac || !ACAO[ac.tipo]) return null;
   switch (ac.tipo) {
     case "criar_tarefa": {
       const prazo = Number(ac.vence_em_horas ?? 24);
-      return `criar tarefa ${aspas(cortar(ac.titulo || "sem título", 60))} para ${quemTarefa(ac.dono || "responsavel", ix)}${prazo === 0 ? " para já" : ` em ${formatarHoras(prazo)}`}`;
+      return `criar tarefa ${aspas(cortar(ac.titulo || "sem título", 60))} para ${quemTarefa(ac.dono || "responsavel", ix)}${prazo === 0 ? " para já" : ` com prazo de ${formatarHoras(prazo)}`}`;   // plano 1000b · UB-065: «em 24 h» soava como agendamento
     }
     case "mover_estagio": return `mover para ${aspas(nomeDe(ix, "estagios", ac.estagio_id, "etapa escolhida") || "etapa escolhida")}`;
     case "mover_funil": {
@@ -799,7 +829,7 @@ function fraseAcao(ac, ix, vv) {
     case "resolver_conversa": return "resolver a conversa";
     case "esperar": return `esperar ${formatarDuracao(ac.minutos)}${ac.cancelar_se_cliente_responder ? " (parando se o cliente responder)" : ""}`;
     case "parar": return "parar por aqui";
-    case "ia_decidir": return FRASE_IA[ac.tarefa] || "pedir à IA para decidir";
+    case "ia_decidir": return FRASE_IA[ac.tarefa] ? FRASE_IA[ac.tarefa](vv) : "pedir à IA para decidir";
     case "alerta_whatsapp": return "avisar no WhatsApp do gestor";
     default: return null;
   }
@@ -1304,6 +1334,8 @@ export function normalizarSimulacao(r, auto, base, vocab) {
       erro: cortar(q.erro || "", 300),
       parou: q.parou === true,
       passos: passos.slice(0, 12).map(rotuloPasso),
+      // plano 1000b · UB-074: quantos passos ficaram de fora do corte de 12 (a tela diz «e mais N passos»)
+      passosOcultos: Math.max(0, passos.length - 12),
     };
   });
   const totalN = Number(src.total ?? src.quantidade);
@@ -1420,16 +1452,18 @@ export const temIA = auto => (auto && auto.acoes || []).some(ac => ac && ac.tipo
  * O nx-ia responde {ok:false, erro, mensagem, detalhe}: `erro` é o código estável, `mensagem` já vem em português
  * (usada quando não temos um texto melhor) e `detalhe` explica (sem_chave, sem_sdk, recusa, o motivo da conferência…).
  */
-export function erroDaIA(e, mensagemPadrao) {
+// plano 1000b · UB-067: quem dá suporte (marca de revenda) entra no texto; sem o nome, «a equipe de suporte» — nunca «Nexus» fixo
+export function erroDaIA(e, mensagemPadrao, suporte = null) {
+  const quem = texto(suporte).trim() ? `a equipe de suporte de ${texto(suporte).trim()}` : "a equipe de suporte";
   const cod = texto(e && (e.codigo || e.message));
   const det = normalizar(e && (e.detalhe_texto || (typeof e.detalhe === "string" ? e.detalhe : "") || e.hint));
   const doServidor = texto(e && e.resposta && e.resposta.mensagem).trim();
   if (cod === "ia_cota") return { tipo: "cota", titulo: "A cota de IA deste mês acabou",
-    texto: "Você ainda pode criar a automação pelas receitas prontas ou do zero. A cota volta no começo do próximo mês; para usar mais agora, fale com a equipe da Nexus." };
+    texto: `Você ainda pode criar a automação pelas receitas prontas ou do zero. A cota volta no começo do próximo mês; para usar mais agora, fale com ${quem}.` };
   if (cod === "sem_chave" || det === "sem_chave") return { tipo: "chave", titulo: "A IA ainda não foi ligada",
-    texto: "Falta cadastrar a chave da Anthropic nesta plataforma. Avise a equipe da Nexus para ativar. Enquanto isso, use uma receita pronta abaixo ou crie do zero." };
+    texto: `Falta cadastrar a chave da Anthropic nesta plataforma. Avise ${quem} para ativar. Enquanto isso, use uma receita pronta abaixo ou crie do zero.` };
   if (cod === "ia_desligada") return { tipo: "desligada", titulo: "A IA está desligada",
-    texto: "A IA está desligada nesta plataforma. Avise a equipe da Nexus para ativar; enquanto isso use as receitas prontas ou crie a automação do zero." };
+    texto: `A IA está desligada nesta plataforma. Avise ${quem} para ativar; enquanto isso use as receitas prontas ou crie a automação do zero.` };
   if (cod === "muitos_pedidos" || cod === "limite_taxa") return { tipo: "pedidos", titulo: "Muitos pedidos seguidos",
     texto: "Espere cerca de um minuto e tente de novo." };
   if (cod === "tempo_rede" || cod === "tempo_esgotado") return { tipo: "rede", titulo: "A IA demorou mais do que o esperado",
@@ -1459,7 +1493,8 @@ export function iaDesligada(dados) {
 }
 
 /** Aviso nos passos de IA quando a plataforma ainda não tem a chave: a automação roda, mas o passo é pulado. */
-export const AVISO_IA_DESLIGADA = "A IA ainda não está ligada nesta plataforma: este passo é pulado (nada é decidido) até a equipe da Nexus cadastrar a chave. O resto da automação continua.";
+// plano 1000b · UB-067: sem a marca fixa (o cliente de revenda veria «Nexus»)
+export const AVISO_IA_DESLIGADA = "A IA ainda não está ligada nesta plataforma: este passo é pulado (nada é decidido) até o suporte da plataforma cadastrar a chave. O resto da automação continua.";
 
 /**
  * Erro de uma chamada das Automações → texto para a pessoa. O tempo esgotado do banco (57014) não tem «período» nem «itens» aqui
@@ -1510,11 +1545,47 @@ export function rotuloCampoData(c, vertical) {
 }
 
 /** Dados de exemplo para a prévia das mensagens (consulta amanhã às 14:30 em São Paulo). */
-export function exemploVariaveis({ empresa = "Sua empresa", atendente = "Ana", agora = new Date() } = {}) {
+export function exemploVariaveis({ empresa = "Sua empresa", atendente = "Ana", agora = new Date(), base = null } = {}) {
   const amanha = new Date(agora.getTime() + 24 * 3600 * 1000);
   const dia = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(amanha);
-  return { nome: "Maria Souza", empresa, protocolo: "2026-000123", etapa: "Avaliou / orçamento", valor: 1500,
+  // plano 1000b · UB-073: a etapa do exemplo é a 1ª do funil padrão DESTA empresa (oficina e loja não têm «Avaliou / orçamento»)
+  const funis = base && Array.isArray(base.funis) ? base.funis.filter(f => f && f.ativo !== false) : [];
+  const funil = funis.find(f => f.padrao) || funis[0] || null;
+  const etapaBase = funil && Array.isArray(funil.estagios) && funil.estagios[0] && funil.estagios[0].nome ? String(funil.estagios[0].nome) : "";
+  return { nome: "Maria Souza", empresa, protocolo: "2026-000123", etapa: etapaBase || "Avaliou / orçamento", valor: 1500,
     atendente: String(atendente || "").split(/\s+/)[0] || "Ana", consulta_em: `${dia}T14:30:00-03:00` };
+}
+
+/**
+ * plano 1000b · UB-189: mensagem ao cliente (texto livre ou parâmetro de modelo) com {hora_consulta} ou {data_consulta} pode sair com buraco:
+ * sem hora marcada (só a data) a hora fica em branco; fora dos gatilhos de data, o registro pode nem ter data. → frase do aviso | null.
+ * (O caso «Antes da data» + modelo com {hora_consulta} já tem o aviso próprio no editor.)
+ */
+export function avisoDataHoraConsulta(a, vertical) {
+  const acoes = Array.isArray(a && a.acoes) ? a.acoes : [];
+  const textos = acoes.flatMap(x => (x && x.tipo === "enviar_mensagem" ? [texto(x.texto)] : x && x.tipo === "enviar_template" ? (x.parametros || []).map(texto) : []));
+  const hora = textos.some(t => /\{hora_consulta\}/.test(t));
+  const data = textos.some(t => /\{data_consulta\}/.test(t));
+  if (!hora && !data) return null;
+  const pc = palavraConsulta(vertical);
+  const porData = a.gatilho === "antes_da_data" || a.gatilho === "apos_data";
+  if (!porData) return `A mensagem usa ${hora && data ? "{data_consulta} e {hora_consulta}" : hora ? "{hora_consulta}" : "{data_consulta}"}: quem não tiver ${pc} marcada (ou só a data, sem a hora) recebe o texto com esse trecho em branco. Prefira o gatilho «Antes» ou «Depois» da ${pc} marcada.`;
+  return hora ? `A mensagem usa {hora_consulta}: quem tiver só a data (sem a hora) da ${pc} recebe esse trecho em branco. Confira se a frase faz sentido assim.` : null;
+}
+
+/**
+ * plano 1000b · UB-059: o pedaço do corpo do modelo em volta de {{n}}, com o espaço como «___» e os outros {{k}} também («Olá, ___!»).
+ * Até ~24 letras de cada lado, cortado em palavra inteira. Sem {{n}} no corpo → "".
+ */
+export function trechoParametro(corpo, n) {
+  const c = texto(corpo).replace(/\s+/g, " ");
+  const marca = `{{${n}}}`;
+  const i = c.indexOf(marca);
+  if (i < 0) return "";
+  let antes = c.slice(Math.max(0, i - 24), i), depois = c.slice(i + marca.length, i + marca.length + 24);
+  if (i - 24 > 0) antes = `…${antes.replace(/^\S*\s/, "")}`;
+  if (i + marca.length + 24 < c.length) depois = `${depois.replace(/\s\S*$/, "")}…`;
+  return `${antes}___${depois}`.replace(/\{\{\d+\}\}/g, "___").trim();
 }
 
 /** Texto do modelo da WABA com os parâmetros aplicados ({{1}} → valor). */
@@ -1980,7 +2051,8 @@ export function linhaCotaIA(cota) {
   if (!cota || cota.limite == null || !Number.isFinite(Number(cota.limite)) || Number(cota.limite) <= 0) return null;
   const usadas = nat(cota.usadas), limite = nat(cota.limite);
   const pct = usadas / limite;
-  return { texto: `${usadas} de ${limite} montagens de IA usadas este mês`, tom: pct >= 1 ? "ruim" : pct >= 0.8 ? "aten" : "neutra", esgotada: usadas >= limite };
+  // plano 1000b · UB-062: a cota soma sugestões, resumos e passos de IA — não só as montagens
+  return { texto: `${usadas} de ${limite} usos de IA este mês (sugestões, resumos e montagens)`, tom: pct >= 1 ? "ruim" : pct >= 0.8 ? "aten" : "neutra", esgotada: usadas >= limite };
 }
 
 /** AS-037: contador do texto do passo — «1.234 / 4.096», amarelo a partir de 90 % e vermelho acima do teto. */
@@ -2038,9 +2110,13 @@ export function dadosPessoaisNoPedido(txt) {
     ["CPF", /\b\d{3}\.\d{3}\.\d{3}-\d{2}\b|\b\d{11}\b/g],
     ["e-mail", /[^\s@<>()«»]+@[^\s@<>()«»]+\.[a-z]{2,}/gi],
     ["telefone", /(?:\+?55\s?)?\(?\b[1-9]{2}\)?\s?9?\d{4}[-\s]?\d{4}\b/g],
+    // plano 1000b · UB-027: celular sem DDD («98765-4321», «9 8765 4321») também é telefone (isolado: não pega pedaço de outro número)
+    ["telefone", /(?<![\d(.-])\b9\s?\d{4}[-\s]?\d{4}\b(?![\d.-]\d)/g],
   ];
   const out = [], vistos = [];
   for (const [tipo, re] of regras) for (const m of t.matchAll(re)) {
+    // plano 1000b · UB-026: 11 dígitos colados com DDD válido e 9 na 3ª posição é celular, não CPF (a regra do telefone pega logo depois)
+    if (tipo === "CPF" && /^[1-9]{2}9\d{8}$/.test(m[0])) continue;
     if (vistos.some(v => v.includes(m[0]) || m[0].includes(v))) continue;
     vistos.push(m[0]); out.push({ tipo, trecho: m[0] });
   }
@@ -2090,9 +2166,25 @@ export function nomeRepetido(nome, itens, idProprio = null) {
 
 /** AS-015: busca por nome (sem acento) e ordem da lista. ordem: "criacao" | "nome" | "recente" | "erros". */
 export const ORDENS_AUTOMACAO = Object.freeze([["criacao", "Ordem de criação"], ["recente", "Rodou por último"], ["erros", "Com erro primeiro"], ["nome", "Nome (A–Z)"]]);
-export function listaAutomacoes(itens, { termo = "", ordem = "criacao" } = {}) {
+/**
+ * plano 1000b · UB-044: a lista do servidor tem automação que a tela não tem (criada por outra pessoa) ou falta uma que a tela mostra
+ * (excluída por outra pessoa). `ignorar` = ids no meio do «Desfazer» desta tela (o servidor ainda as tem). Sem a lista nova → false.
+ */
+export function listaMudou(naTela, doServidor, ignorar = null) {
+  if (!Array.isArray(doServidor)) return false;
+  const ign = id => !!(ignorar && typeof ignorar.has === "function" && ignorar.has(id));
+  const tela = new Set((Array.isArray(naTela) ? naTela : []).map(x => x && x.id).filter(x => x != null));
+  const serv = new Set(doServidor.map(x => x && x.id).filter(x => x != null));
+  for (const id of serv) if (!tela.has(id) && !ign(id)) return true;
+  for (const id of tela) if (!serv.has(id)) return true;
+  return false;
+}
+
+// plano 1000b · UB-049: `frase(x)` (opcional, a frase descrever() pré-calculada) também entra na busca — «lembrete» acha «Confirmar consulta de amanhã»
+export function listaAutomacoes(itens, { termo = "", ordem = "criacao", frase = null } = {}) {
   const t = normalizar(termo);
-  const l = (Array.isArray(itens) ? itens : []).filter(x => !t || normalizar(x && x.nome).includes(t));
+  const casa = x => normalizar(x && x.nome).includes(t) || (typeof frase === "function" && normalizar(frase(x)).includes(t));
+  const l = (Array.isArray(itens) ? itens : []).filter(x => !t || casa(x));
   const quando = x => { const d = x && x.ultima_execucao_em ? Date.parse(x.ultima_execucao_em) : NaN; return Number.isFinite(d) ? d : -Infinity; };
   if (ordem === "nome") return [...l].sort((a, b) => texto(a.nome).localeCompare(texto(b.nome), "pt-BR", { sensitivity: "base" }));
   if (ordem === "recente") return [...l].sort((a, b) => quando(b) - quando(a));
@@ -2136,17 +2228,42 @@ const _DOW_SP = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 export function abertoNoHorario(horario, t) {
   if (horario === null || horario === undefined) return true;
   const p = Object.fromEntries(_fmtSP.formatToParts(new Date(t)).map(x => [x.type, x.value]));
-  const dow = _DOW_SP[p.weekday], hm = `${p.hour}:${p.minute}`;
+  return abertoLocal(horario, _DOW_SP[p.weekday], `${p.hour}:${p.minute}`);
+}
+/** A mesma regra do abertoNoHorario, já com o dia da semana e a hora («HH:MM») de SP calculados. */
+function abertoLocal(horario, dow, hm) {
   const dia = d => { const fx = horario[d] ?? horario[String(d)]; return Array.isArray(fx) ? fx : []; };
   if (dia(dow).some(f => Array.isArray(f) && (f[1] > f[0] ? hm >= f[0] && hm < f[1] : hm >= f[0]))) return true;
   return dia((dow + 6) % 7).some(f => Array.isArray(f) && f[1] <= f[0] && hm < f[1]);
 }
-/** AS-224: o primeiro instante (de 5 em 5 min, até 8 dias) em que o horário está aberto, a partir de `t` (ms). null = nunca abre. */
+const _fmtOffSP = new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+/** Diferença (ms) entre a hora de SP e a UTC no instante t (−3 h hoje; lida do Intl, sem supor fuso fixo). */
+function deslocSP(t) {
+  const p = Object.fromEntries(_fmtOffSP.formatToParts(new Date(t)).map(x => [x.type, x.value]));
+  const local = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute));
+  return local - Math.floor(t / 60000) * 60000;
+}
+/**
+ * AS-224: o primeiro instante (de 5 em 5 min, até 8 dias) em que o horário está aberto, a partir de `t` (ms). null = nunca abre.
+ * plano 1000b · UB-025: o deslocamento de SP é lido UMA vez e o laço faz só contas (antes eram até 2.304 Intl.formatToParts por passo);
+ * o instante achado é conferido pelo caminho completo — se o fuso mudou no meio (horário de verão), cai no laço antigo a partir dali.
+ */
 export function proximaAbertura(horario, t) {
   if (horario === null || horario === undefined) return t;
   if (abertoNoHorario(horario, t)) return t;
-  let x = Math.ceil(t / 300000) * 300000;
-  for (let i = 0; i < 8 * 288; i++, x += 300000) if (abertoNoHorario(horario, x)) return x;
+  const ini = Math.ceil(t / 300000) * 300000, fim = ini + 8 * 288 * 300000;
+  const desl = deslocSP(ini);
+  const pad = n => String(n).padStart(2, "0");
+  for (let x = ini; x < fim; x += 300000) {
+    const d = new Date(x + desl);
+    if (!abertoLocal(horario, d.getUTCDay(), `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`)) continue;
+    if (abertoNoHorario(horario, x)) return x;
+    for (let y = x; y < fim; y += 300000) if (abertoNoHorario(horario, y)) return y;     // o fuso mudou: caminho completo
+    return null;
+  }
+  // nenhuma faixa pelas contas: confirma só nas viradas de fuso possíveis (raro); sem faixa nenhuma no horário, nem isso
+  const temFaixa = Object.values(horario || {}).some(fx => Array.isArray(fx) && fx.some(f => Array.isArray(f)));
+  if (temFaixa && deslocSP(fim) !== desl) for (let y = ini; y < fim; y += 300000) if (abertoNoHorario(horario, y)) return y;
   return null;
 }
 
@@ -2246,7 +2363,11 @@ export const diaDaExecucao = x => (x ? diaSP(x.criado_em) : null);
 /** AS-229: os comandos da paleta por automação (até 40): «Ligar/Desligar «X»» (quem edita) e «Abrir automação «X»». */
 export function comandosDasAutomacoes(itens, { podeEditar = false, max = 40 } = {}) {
   const out = [];
-  for (const it of (Array.isArray(itens) ? itens : []).slice(0, max)) {
+  // plano 1000b · UB-063: acima de `max`, entram as que rodaram por último (não as primeiras da ordem de criação)
+  const quando = x => { const d = x && x.ultima_execucao_em ? Date.parse(x.ultima_execucao_em) : NaN; return Number.isFinite(d) ? d : -Infinity; };
+  const todas = Array.isArray(itens) ? itens : [];
+  const escolhidas = todas.length > max ? [...todas].sort((a, b) => quando(b) - quando(a)).slice(0, max) : todas;
+  for (const it of escolhidas) {
     if (!it || it.id == null || !it.nome) continue;
     const nome = cortar(it.nome, 60);
     // `ligar` guarda o estado PEDIDO (o rótulo pode ficar velho se a lista mudar depois): quem executa só alterna se ainda não estiver assim
@@ -2256,4 +2377,68 @@ export function comandosDasAutomacoes(itens, { podeEditar = false, max = 40 } = 
       rotulo: `Abrir a automação «${nome}»`, palavras: `abrir editar automacao ${normalizar(it.nome)}` });
   }
   return out;
+}
+
+/* ================================================================== plano 1000b · lote auto-2 */
+
+/**
+ * plano 1000b · UB-043: nome da cópia sem «(cópia) (cópia)» — «X» → «X (cópia)»; «X (cópia)» → «X (cópia 2)»; «X (cópia 2)» → «X (cópia 3)»,
+ * pulando os nomes que já existem (`existentes`: lista de nomes). Até 80 letras (o corte é na base, o sufixo fica inteiro).
+ */
+export function nomeDaCopia(nome, existentes = []) {
+  const usados = new Set((Array.isArray(existentes) ? existentes : []).map(n => normalizar(n)));
+  const m = /^(.*?)\s*\(cópia(?:\s+(\d+))?\)$/i.exec(texto(nome).trim());
+  const base = (m ? m[1] : texto(nome).trim()) || "Automação";
+  let n = m ? (Number(m[2]) || 1) + 1 : 1;
+  const montar = k => { const suf = k === 1 ? " (cópia)" : ` (cópia ${k})`; return `${base.slice(0, 80 - suf.length).trimEnd()}${suf}`; };
+  while (usados.has(normalizar(montar(n))) && n < 999) n++;
+  return montar(n);
+}
+
+/**
+ * plano 1000b · UB-249: o que um rascunho guardado tem de diferente do que está salvo — «o nome, 2 passos e 1 condição mudaram».
+ * "" quando nada que a pessoa reconheça mudou.
+ */
+export function resumoDiferencas(guardado, atual) {
+  const a = guardado || {}, b = atual || {};
+  const j = x => JSON.stringify(x === undefined ? null : x);
+  const partes = [];
+  if (texto(a.nome).trim() !== texto(b.nome).trim()) partes.push("o nome");
+  if (a.gatilho !== b.gatilho || j(a.config || {}) !== j(b.config || {})) partes.push("o gatilho");
+  const contaDif = (x, y) => { const l1 = Array.isArray(x) ? x : [], l2 = Array.isArray(y) ? y : []; let n = 0; for (let i = 0; i < Math.max(l1.length, l2.length); i++) if (j(l1[i]) !== j(l2[i])) n++; return n; };
+  const np = contaDif(a.acoes, b.acoes), nc = contaDif(a.condicoes, b.condicoes);
+  if (np) partes.push(`${np} ${np === 1 ? "passo" : "passos"}`);
+  if (nc) partes.push(`${nc} ${nc === 1 ? "condição" : "condições"}`);
+  if (!!a.ativo !== !!b.ativo) partes.push("ligada/desligada");
+  if (!!a.respeitar_horario !== !!b.respeitar_horario) partes.push("o horário de funcionamento");
+  if (!partes.length) return "";
+  const umSo = partes.length === 1 && !/^([2-9]|\d{2,})/.test(partes[0]);
+  return `${listaFrase(partes)} ${umSo ? "mudou" : "mudaram"}`;
+}
+
+/**
+ * plano 1000b · UB-031: por onde sai o «Enviar mensagem» (texto livre), pelos provedores dos números — complemento do tile da paleta.
+ * "" quando não se sabe (sem números ou sem o provedor).
+ */
+export function viaTextoLivre(canais) {
+  const l = Array.isArray(canais) ? canais : [];
+  const p = new Set(l.map(c => c && c.provedor).filter(Boolean));
+  if (!l.length || !p.size) return "";
+  if (p.has("codewords") && p.has("meta")) return "Sai pelo número conectado por aparelho (CodeWords); no número oficial (Meta), só até 24 h da última mensagem do cliente.";
+  if (p.has("codewords")) return "Sai pelo número conectado por aparelho (CodeWords), a qualquer hora.";
+  if (p.has("meta")) return "No número oficial (Meta), só sai até 24 h da última mensagem do cliente; fora disso, use um modelo aprovado.";
+  return "";
+}
+
+/**
+ * plano 1000b · UB-029: o rótulo dos campos de tempo em horas que o editor deixa escrever em horas OU dias («Tempo parado na etapa»
+ * com «2 dias» — não «Horas parado na etapa»). O catálogo fica igual (o servidor usa o rótulo dele nas mensagens com o número em horas).
+ */
+export function rotuloCampoTempo(rotulo) {
+  return { "Horas parado na etapa": "Tempo parado na etapa", "Quantas horas antes": "Quanto tempo antes", "Quantas horas depois": "Quanto tempo depois" }[rotulo] || rotulo;
+}
+
+/** plano 1000b · UB-064: palavras-chave curtas demais (menos de 3 letras sem acento): «oi» casa com quase toda mensagem. */
+export function palavrasCurtas(palavras) {
+  return (Array.isArray(palavras) ? palavras : []).map(w => texto(w).trim()).filter(w => w && normalizar(w).replace(/[^a-z0-9]/g, "").length < 3);
 }

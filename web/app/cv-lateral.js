@@ -31,12 +31,14 @@ export function criarLateral(A) {
   function montarEm(container) { alvo = container; cont = null; contConversa = null; secoes.clear(); seletor = null; render(); }
 
   // rótulos dos campos personalizados (do CRM); sem o CRM, a chave vira rótulo legível
-  let rotulos = null, pedindoRotulos = false, crmBase = null;
+  let rotulos = null, pedindoRotulos = false, crmBase = null, crmDeNovoEm = 0;
   /** A base do CRM (uma vez por montagem): rótulos dos campos e — plano 1000 · CA-083 — os funis com as etapas para mover o negócio daqui. */
   function carregarCrm() {
-    if (rotulos || pedindoRotulos || !(A.ctx.temModulo && A.ctx.temModulo("crm"))) return;
+    // plano 1000b · CB-064: a base que falhou é relida — 60 s depois, no próximo desenho (antes: rótulos crus e sem seletor de etapa até recarregar)
+    if (crmBase || pedindoRotulos || Date.now() < crmDeNovoEm || !(A.ctx.temModulo && A.ctx.temModulo("crm"))) return;
     pedindoRotulos = true;
-    A.api.rpcC("nx_crm_base").then(b => { crmBase = b || {}; rotulos = {}; for (const c of (b && b.campos) || []) if (c.entidade === "contato") rotulos[c.chave] = c.rotulo; render(); }).catch(() => { rotulos = {}; });
+    A.api.rpcC("nx_crm_base").then(b => { pedindoRotulos = false; crmBase = b || {}; rotulos = {}; for (const c of (b && b.campos) || []) if (c.entidade === "contato") rotulos[c.chave] = c.rotulo; render(); })
+      .catch(() => { pedindoRotulos = false; rotulos = rotulos || {}; crmDeNovoEm = Date.now() + 60000; });
   }
   function rotuloCampo(k) {
     carregarCrm();
@@ -305,6 +307,10 @@ export function criarLateral(A) {
           on: { click: () => { if (ct.id) A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }); } } }, ui.icone("contato"), ct.id ? "Abrir ficha" : "Contato removido")));
   }
 
+  function rotuloPlataforma(p) {
+    const v = String(p || "").toLowerCase();
+    return v === "google" ? "Google Ads" : v === "meta" || v === "facebook" || v === "instagram" ? "Meta (Facebook/Instagram)" : "Anúncio";
+  }
   function blocoDados(ver, rastreio) {
     const ct = ver.contato || {};
     const conv = ver.conversa || {};
@@ -313,7 +319,8 @@ export function criarLateral(A) {
     const anuncio = an || ct.origem === "anuncio" ? h("div", { class: "cvt-anuncio" }, ui.icone("anuncio"),
       h("div", null, h("b", null, "Veio do anúncio"), an && (an.anuncio_nome || an.campanha_nome)
         ? h("div", null, [an.anuncio_nome ? `«${an.anuncio_nome}»` : null, an.campanha_nome ? `campanha «${an.campanha_nome}»` : null].filter(Boolean).join(" · "))
-        : h("div", { class: "fraco" }, an && an.plataforma === "google" ? "Google Ads" : "Meta (Facebook/Instagram)"),
+        // plano 1000b · CB-057: sem ver.anuncio vale a plataforma do contato; sem nenhuma, só «Anúncio» (antes caía em Meta)
+        : h("div", { class: "fraco" }, rotuloPlataforma((an && an.plataforma) || ct.plataforma)),
         detalheRastreio)) : null;
     // D17: veio pelo site (rastreio): «Veio do site · campanha «x» · página /y · clique em 08/10 14:02»
     const site = !anuncio && rastreio ? h("div", { class: "cvt-anuncio cvt-rastreio" }, ui.icone("globo"),
@@ -336,9 +343,15 @@ export function criarLateral(A) {
     if (edCampo && edCampo.campo === "cidade") add("Cidade", caixaCampo(ct, "cidade", "Cidade"));
     else if (cidadeTxt) add("Cidade", h("span", { class: "cvt-email" }, h("span", null, cidadeTxt), btEditar("cidade", "Cidade")));
     else if (A.podeEscrever && ct.id) add("Cidade", h("button", { type: "button", class: "link cvt-campo-add", dataset: { foco: "editar-cidade" }, on: { click: () => abrirEdicaoCampo(ct, "cidade") } }, "Adicionar cidade"));
-    const campos = ct.campos && typeof ct.campos === "object" ? Object.entries(ct.campos).filter(([, v]) => v !== null && v !== "" && (typeof v !== "object" || Array.isArray(v))).slice(0, 4) : [];
+    const todosCampos = ct.campos && typeof ct.campos === "object" ? Object.entries(ct.campos).filter(([, v]) => v !== null && v !== "" && (typeof v !== "object" || Array.isArray(v))) : [];
+    const campos = todosCampos.slice(0, 4);
     for (const [k, v] of campos) add(rotuloCampo(k), Array.isArray(v) ? v.join(", ") : typeof v === "boolean" ? (v ? "Sim" : "Não") : String(v));
-    add("Atendimento", h("span", { class: "mono" }, conv.protocolo || ""));
+    // plano 1000b · CB-058: os campos além de 4 não somem calados — «+2 campos na ficha» abre a ficha
+    const sobra = todosCampos.length - campos.length;
+    if (sobra > 0) dados.append(h("dt", { class: "sr-only" }, "Outros campos"), h("dd", { class: "cvt-mais-campos" }, ct.id
+      ? h("button", { type: "button", class: "link", dataset: { foco: "mais-campos" }, on: { click: () => A.ctx.abrirContato(ct.id, { aoMudar: () => A.acoes.recarregarVer() }) } }, `+${sobra} ${sobra === 1 ? "campo" : "campos"} na ficha`)
+      : `+${sobra} ${sobra === 1 ? "campo" : "campos"} na ficha`));
+    if (conv.protocolo) add("Atendimento", h("span", { class: "mono" }, conv.protocolo));   // plano 1000b · CB-059: sem protocolo, sem a linha vazia
     add("Departamento", conv.departamento ? conv.departamento.nome : null);
     add("Com", conv.atribuida ? conv.atribuida.nome : conv.atribuida_nome || "Sem dono");
     if (conv.primeira_resposta_em && conv.aberta_em) {
@@ -392,7 +405,7 @@ export function criarLateral(A) {
   }
 
   /** CA-083: muda a etapa na tela na hora e só grava (nx_negocio_mover) quando o aviso com Desfazer fecha — o mesmo movimento adiado do Kanban. */
-  async function moverEtapa(n, destino) {
+  async function moverEtapa(n, destino, sel = null) {
     const antes = { estagio_id: n.estagio_id, estagio_nome: n.estagio_nome, estagio_cor: n.estagio_cor };
     const depois = { estagio_id: destino.id, estagio_nome: destino.nome, estagio_cor: destino.cor || null };
     const aplicarNoVer = patch => {
@@ -400,11 +413,16 @@ export function criarLateral(A) {
       A.ver = { ...A.ver, negocios: (A.ver.negocios || []).map(x => (x && x.id === n.id ? { ...x, ...patch } : x)) };
       render();
     };
+    // plano 1000b · CB-023: o select focado não é redesenhado (emEdicao) — ao voltar (Desfazer ou erro) ele mesmo mostra a etapa anterior
+    const voltar = () => {
+      aplicarNoVer(antes);
+      if (sel && String(sel.value) !== String(antes.estagio_id)) { sel.value = antes.estagio_id ?? ""; if (antes.estagio_nome) ui.anunciar(`Etapa voltou para «${antes.estagio_nome}».`); }
+    };
     const api = A.api;
     const titulo = n.titulo || (A.ctx.vocab && A.ctx.vocab.negocio) || "Negócio";
     if (typeof ui.acaoComDesfazer !== "function") {
       try { await api.rpcC("nx_negocio_mover", { p_id: n.id, p_estagio: destino.id, p_ordem: null, p_extra: {} }); aplicarNoVer(depois); A.acoes.recarregarVer(); }
-      catch (e) { aplicarNoVer(antes); A.acoes.tratarErro(e); }
+      catch (e) { voltar(); A.acoes.tratarErro(e); }
       return;
     }
     const r = await ui.acaoComDesfazer({
@@ -412,11 +430,11 @@ export function criarLateral(A) {
       aplicar: () => aplicarNoVer(depois),
       firmar: async ({ saindo = false } = {}) => {
         try { await api.rpcC("nx_negocio_mover", { p_id: n.id, p_estagio: destino.id, p_ordem: null, p_extra: {} }, saindo ? { keepalive: true } : {}); }
-        catch (e) { aplicarNoVer(antes); throw e; }
+        catch (e) { voltar(); throw e; }
         A.acoes.recarregarVer();
         A.acoes.carregarLista({});
       },
-      reverter: () => aplicarNoVer(antes),
+      reverter: () => voltar(),
     });
     if (r && r.estado === "falhou" && r.erro) A.acoes.tratarErro(r.erro);
   }
@@ -453,7 +471,7 @@ export function criarLateral(A) {
         const idSel = `cvt-etapa-${n.id}`;
         const sel = h("select", { class: "sel cvt-etapa-sel", id: idSel, dataset: { foco: `etapa-${n.id}` } },
           etapas.map(e => h("option", { value: e.id, selected: e.id === n.estagio_id }, e.nome)));
-        sel.addEventListener("change", () => { const e = etapas.find(x => String(x.id) === String(sel.value)); if (e && e.id !== n.estagio_id) moverEtapa(n, e); });
+        sel.addEventListener("change", () => { const e = etapas.find(x => String(x.id) === String(sel.value)); if (e && e.id !== n.estagio_id) moverEtapa(n, e, sel); });
         wrap.appendChild(h("div", { class: "cvt-etapa" }, h("label", { for: idSel, class: "rotulo" }, "Etapa"), sel));
       }
       // CA-242: «Ganhou» / «Perdeu» no cartão — pelo mesmo caminho do CRM (valor, motivo e campos obrigatórios), quando o shell oferece a ponte
@@ -532,7 +550,7 @@ export function criarLateral(A) {
     } catch (e) { A.acoes.tratarErro(e); }
   }
   async function escolherPrazo(t) {
-    const f = h("form", { class: "pilha", novalidate: true }, ui.campo({ rotulo: "Novo prazo (horário de Brasília)", nome: "vence_em", tipo: "datahora" }));
+    const f = h("form", { class: "pilha", novalidate: true }, ui.campo({ rotulo: "Novo prazo (horário de Brasília)", nome: "vence_em", tipo: "datahora", valor: L.datahoraSP(t.vence_em) || undefined }));   // plano 1000b · CB-060: começa no prazo atual
     const iso = await ui.modal({ titulo: `Adiar: ${t.titulo}`, corpo: f, largura: "p",
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Adiar", tipo: "primario", fn: () => {
         const d = ui.lerForm(f);
@@ -557,13 +575,18 @@ export function criarLateral(A) {
       pessoas.length > 1 ? ui.campo({ rotulo: "Para quem", nome: "dono_id", tipo: "select", valor: eu || "",
         opcoes: pessoas.map(u => ({ valor: u.id, rotulo: u.id === eu ? `${u.nome} (você)` : u.nome })) }) : null,
       ui.campo({ rotulo: "Vence em (horário de Brasília)", nome: "vence_em", tipo: "datahora" }));
+    let passadoConfirmado = null;   // CB-061
     const r = await ui.modal({ titulo: "Nova tarefa", corpo: f, largura: "p",
       acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Criar tarefa", tipo: "primario", fn: async () => {
         const d = ui.lerForm(f);
         if (!d.titulo) { ui.marcarErro(f, "titulo", "Escreva o que precisa ser feito."); return false; }
         // CA-036: o horário digitado é de São Paulo (como o resto do Órbita), nunca o fuso do aparelho
         const vence = d.vence_em ? L.isoDeSP(d.vence_em) : null;
-        const tarefa = { titulo: d.titulo, tipo: d.tipo, vence_em: vence, contato_id: ct.id, negocio_id: conv.negocio ? conv.negocio.id : null };
+        // plano 1000b · CB-061: prazo no passado nasce atrasado — avisa no 1º toque; o 2º (com o mesmo horário) cria assim mesmo
+        if (vence && Date.parse(vence) < Date.now() && passadoConfirmado !== vence) { passadoConfirmado = vence; ui.marcarErro(f, "vence_em", "Esse horário já passou. Toque em «Criar tarefa» de novo para criar assim mesmo."); return false; }
+        // plano 1000b · CB-135: a mesma regra do atalho da Agenda — o negócio ligado ou, sem ele, o único aberto do contato
+        const negT = L.negocioParaAgenda(ver);
+        const tarefa = { titulo: d.titulo, tipo: d.tipo, vence_em: vence, contato_id: ct.id, negocio_id: conv.negocio ? conv.negocio.id : negT ? negT.id : null };
         if (d.dono_id && d.dono_id !== eu) tarefa.dono_id = d.dono_id;
         return A.api.rpcC("nx_tarefa_salvar", { p_tarefa: tarefa });
       } }] });
@@ -574,8 +597,9 @@ export function criarLateral(A) {
     const lista = ver.atendimentos || [];
     const itens = lista.map(a => {
       const atual = a.id === A.selId;
-      return h("button", { type: "button", class: "cvt-at", "aria-current": atual ? "true" : null, disabled: atual, dataset: { foco: `at-${a.id}` },
-        on: { click: () => A.acoes.abrir(a.id) } },
+      // plano 1000b · CB-096: o atual fica alcançável pelo Tab e pelo leitor (aria-current + aria-disabled, sem `disabled`)
+      return h("button", { type: "button", class: "cvt-at", "aria-current": atual ? "true" : null, "aria-disabled": atual ? "true" : null, dataset: { foco: `at-${a.id}` },
+        title: atual ? "Este é o atendimento aberto" : null, on: { click: () => { if (!atual) A.acoes.abrir(a.id); } } },
         h("span", { class: "mono" }, a.protocolo || ""),
         ui.pilula(a.status === "resolvida" ? "Resolvido" : a.status === "pendente" ? "Pendente" : "Aberto", a.status === "resolvida" ? "neutra" : a.status === "pendente" ? "aten" : "ok"),
         h("small", null, [ui.dataBR(a.aberta_em), a.atribuida_nome ? `com ${a.atribuida_nome}` : "sem dono"].join(" · ")));
@@ -609,10 +633,19 @@ export function criarLateral(A) {
       saida.append(h("p", null, r.texto), h("small", null, `Gerado ${ui.relativo(r.em)} pela IA — confira antes de usar.`), guardar);
     }
     else saida.appendChild(h("p", { class: "cvt-vazio" }, semIA ? "A IA ainda não foi configurada para esta empresa." : "Um parágrafo com o que o cliente quer, o que já foi combinado e o próximo passo."));
-    const b = semIA ? null : h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { foco: "resumir" }, disabled: semCota, title: semCota ? "A cota de IA do mês acabou" : null }, ui.icone("ia"), r ? "Refazer" : "Resumir");
+    // plano 1000b · CB-062: cada resumo gasta 1 da cota — o botão diz; com menos de 10% da cota sobrando, «Refazer» pergunta antes
+    const restaCota = cota0 && cota0.limite != null ? Number(cota0.limite) - (Number(cota0.usadas) || 0) : null;
+    const tituloB = semCota ? "A cota de IA do mês acabou" : restaCota !== null ? `${r ? "Refazer" : "Resumir"} usa 1 da cota de IA (restam ${restaCota})` : `${r ? "Refazer" : "Resumir"} usa 1 da cota de IA`;
+    const b = semIA ? null : h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { foco: "resumir" }, disabled: semCota, title: tituloB, "aria-label": r && !semCota ? "Refazer o resumo (usa 1 da cota)" : null }, ui.icone("ia"), r ? "Refazer" : "Resumir");
     if (b) b.addEventListener("click", async () => {
       const ia = A.base && A.base.ia;
       if (ia && ia.ligada === false) { ui.toast("A IA ainda não foi configurada para esta empresa.", { tipo: "info" }); return; }
+      const ct = ia && ia.cota;
+      const resta = ct && ct.limite != null && Number(ct.limite) > 0 ? Number(ct.limite) - (Number(ct.usadas) || 0) : null;
+      if (r && resta !== null && resta < Number(ct.limite) * 0.1) {
+        const seguir = await ui.confirmar({ titulo: "Refazer o resumo?", rotulo: "Refazer", texto: `Restam ${resta} usos da cota de IA neste mês e o resumo gasta 1. O resumo atual continua aqui se você não refizer.` });
+        if (!seguir) return;
+      }
       try {
         const x = await ui.carregando(b, A.api.fn("nx-ia", { acao: "resumir", conversa: conv.id }));
         const texto = x && typeof x.texto === "string" ? x.texto.trim() : "";
@@ -636,7 +669,6 @@ export function criarLateral(A) {
   /** As seções da conversa, cada uma com a assinatura do que ela mostra: só a que mudou é refeita. */
   function definicoes(ver) {
     const ct = ver.contato || {}, conv = ver.conversa || {};
-    const minuto = Math.floor(Date.now() / 60000);
     const rastreio = rastreioDe(ver);
     const temCrm = !!(A.ctx.temModulo && A.ctx.temModulo("crm"));
     const negAgenda = L.negocioParaAgenda(ver);
@@ -646,7 +678,7 @@ export function criarLateral(A) {
       { chave: "resumo", sig: sig([L.resumoContato(ver), serieDias().sig, ct.id, ct.telefone, conv.protocolo, temCrm, negAgenda && negAgenda.id, !!A.G]),
         criar: () => blocoResumoContato(ver) },
       { chave: "dados", sig: sig([ver.anuncio, ct.origem, ct.email, ct.cidade, ct.uf, ct.campos, conv.protocolo, conv.departamento && conv.departamento.nome, conv.atribuida && conv.atribuida.nome, conv.atribuida_nome,
-        conv.primeira_resposta_em, conv.aberta_em, !!rotulos, rastreio, A.podeEscrever, conv.departamento_id, horarioDe(conv) === undefined ? "-" : horarioDe(conv),
+        conv.primeira_resposta_em, conv.aberta_em, !!rotulos, !!crmBase /* CB-064: relida depois de falhar */, rastreio, A.podeEscrever, conv.departamento_id, horarioDe(conv) === undefined ? "-" : horarioDe(conv),
         editandoCampo && editandoCampo.ctId === ct.id ? [editandoCampo.campo, editandoCampo.salvando, editandoCampo.erro] : 0]),
         criar: () => blocoDados(ver, rastreio) },
       { chave: "etiquetas", sig: sig([conv.id, A.podeEscrever, ((A.base && A.base.etiquetas) || []).map(e => [e.id, e.nome, e.cor]), A.podeEscrever ? 0 : conv.etiquetas]),
@@ -654,7 +686,9 @@ export function criarLateral(A) {
       { chave: "negocios", sig: sig([(ver.negocios || []).map(n => [n.id, n.titulo, n.valor_previsto, n.estagio_nome, n.estagio_cor, n.origem, n.anuncio, n.tarefa && n.tarefa.atrasada,
         n.estagio_id, n.funil_id, n.status, n.estagio_tipo]), conv.negocio && conv.negocio.id, A.podeEscrever, !!crmBase, typeof A.ctx.moverNegocio === "function"]),
         criar: () => blocoNegocios(ver) },
-      { chave: "tarefas", sig: sig([(ver.tarefas || []).map(t => [t.id, t.titulo, t.vence_em, t.atrasada, t.dono && t.dono.nome]), A.podeEscrever, minuto, conv.id, conv.negocio && conv.negocio.id]),   // + negócio: a tarefa nova leva o negócio recém-ligado
+      // plano 1000b · CB-063: o texto relativo já calculado (ui.relativo) no lugar do minuto — a seção (e o menu «Adiar» aberto) só é refeita
+      // quando «em 5 min» vira «em 4 min», não a cada minuto; + negAgenda: a tarefa nova leva o único negócio aberto (CB-135)
+      { chave: "tarefas", sig: sig([(ver.tarefas || []).map(t => [t.id, t.titulo, t.vence_em, t.atrasada, t.dono && t.dono.nome, t.vence_em ? ui.relativo(t.vence_em) : ""]), A.podeEscrever, conv.id, conv.negocio && conv.negocio.id, negAgenda && negAgenda.id]),   // + negócio: a tarefa nova leva o negócio recém-ligado
         criar: () => blocoTarefas(ver) },
       { chave: "atendimentos", sig: sig([(ver.atendimentos || []).map(a => [a.id, a.protocolo, a.status, a.aberta_em, a.atribuida_nome]), A.selId]),
         criar: () => blocoAtendimentos(ver) },
@@ -694,11 +728,14 @@ export function criarLateral(A) {
 
   function render() {
     if (!alvo) return;
+    carregarCrm();   // plano 1000b · CB-064: a cada desenho (o guarda decide): a base que falhou volta depois de 60 s mesmo sem a seção mudar
     const ver = A.ver;
     if (!ver) {
       cont = null; contConversa = null; secoes.clear(); seletor = null; editandoNome = null; editandoCampo = null;
       ui.limpar(alvo);
-      if (A.selId) alvo.appendChild(h("div", { class: "cvt-sec" }, ui.esqueleto("lista", 3)));
+      // plano 1000b · CB-131: a conversa não abriu (erro) — vazio com o motivo, não o esqueleto para sempre
+      if (A.selId && A.erroVer === A.selId) alvo.appendChild(h("div", { class: "cvt-sec cvt-sem-detalhes" }, h("p", { class: "sub" }, "Sem detalhes: a conversa não abriu.")));
+      else if (A.selId) alvo.appendChild(h("div", { class: "cvt-sec" }, ui.esqueleto("lista", 3)));
       return;
     }
     const convId = ver.conversa ? ver.conversa.id : null;

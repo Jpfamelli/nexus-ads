@@ -10,6 +10,14 @@
 
 /** plano 1000 · AS-028: o diagrama espera a pessoa parar de digitar por este tempo antes de ser redesenhado. */
 export const DIAGRAMA_MS = 150;
+/** plano 1000b · UB-021: os avisos da lateral («Em uma frase») esperam este tempo sem tecla antes de serem refeitos. */
+export const AVISOS_MS = 120;
+/** plano 1000b · UB-024: aviso lateral quando o horário do departamento padrão não abre nunca (a mensagem não sairia). */
+export const AVISO_SEM_HORARIO = "«Respeitar horário» está ligado, mas o departamento padrão não tem horário de atendimento: as mensagens não sairiam. Cadastre o horário em Configurações → Departamentos ou desligue o «Respeitar horário».";
+/** plano 1000b · UB-037: a série de 14 dias (gráfico) só é relida pela recarga automática depois deste tempo — ou quando a lista mudou. */
+export const SERIE_MS = 5 * 60 * 1000;
+/** plano 1000b · UB-078: onde fica lembrado se a pessoa abriu ou recolheu o «Ver o fluxo» (por aparelho). */
+export const CHAVE_FLUXO = "nx-au-fluxo";
 
 export function telaEditor(ctx, raiz, dados, item, amb) {
   const { ui } = ctx;
@@ -45,7 +53,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   let salvoJson = item ? JSON.stringify(L.limpar(auto)) : null;
   const sujo = () => JSON.stringify(L.limpar(auto)) !== salvoJson;
   let ultimoTexto = null;            // último campo com variáveis focado (os chips inserem nele)
-  const exemplo = L.exemploVariaveis({ empresa: ctx.cliente ? ctx.cliente.nome : "", atendente: ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.nome : "Ana" });
+  // plano 1000b · UB-073: a etapa do exemplo vem do funil padrão desta empresa
+  const exemplo = L.exemploVariaveis({ empresa: ctx.cliente ? ctx.cliente.nome : "", atendente: ctx.sessao && ctx.sessao.conta ? ctx.sessao.conta.nome : "Ana", base: dados.base });
   // blocos que já "contam" para a validação ao vivo (um rascunho pronto — receita, IA, automação salva — mostra tudo desde o início)
   const tocado = new Set(origem === "branco" ? [] : ["nome", "quando", "se", "entao"]);
   const frescos = new Set();   // passos recém-adicionados, ainda sem a pessoa ter tido chance de preencher
@@ -67,7 +76,18 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     inpNome.value = s; auto.nome = s; mudou("nome");
     inpNome.focus({ preventScroll: true });
   });
+  // plano 1000b · UB-056: o nome tem teto de 80 — a partir de 64 letras aparece «70/80» (antes o campo só parava de aceitar)
+  const contNome = h("small", { class: "au-nome-cont mono", id: novoId("nomecont"), hidden: true });
+  function pintarContNome() {
+    const n = String(inpNome.value || "").length;
+    const mostra = n >= 64;
+    if (contNome.hidden !== !mostra) contNome.hidden = !mostra;
+    const txt = mostra ? `${n}/80` : "";
+    if (contNome.textContent !== txt) contNome.textContent = txt;
+    contNome.dataset.tom = n >= 80 ? "ruim" : n >= 72 ? "aten" : "neutra";
+  }
   function pintarNome() {
+    pintarContNome();
     const s = L.sugestaoNome(auto, base, vv);
     inpNome.placeholder = s ? `Ex.: ${s}` : "Nome da automação";
     if (btSugestao) {
@@ -77,7 +97,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const rep = L.nomeRepetido(auto.nome, dados.itens || [], item ? item.id : (auto.id || null));
     avisoNome.hidden = !rep;
     avisoNome.textContent = rep ? `Já existe uma automação chamada «${rep.nome}». Dá para salvar, mas um nome diferente ajuda a achar cada uma na lista e nas execuções.` : "";
-    if (rep) inpNome.setAttribute("aria-describedby", avisoNome.id); else inpNome.removeAttribute("aria-describedby");
+    const descr = [rep ? avisoNome.id : null, !contNome.hidden ? contNome.id : null].filter(Boolean).join(" ");
+    if (descr) inpNome.setAttribute("aria-describedby", descr); else inpNome.removeAttribute("aria-describedby");
   }
   // plano 1000 · AS-268: mexer no interruptor do topo não liga nada na hora — o texto ao lado diz que vale ao salvar
   let ativoSalvo = !!(item && item.ativo);
@@ -90,14 +111,21 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   const swAtivo = interruptor({ ligado: !!auto.ativo, rotulo: "Ligada", mostrarTexto: true, desabilitado: !podeEditar,
     aoMudar: v => { auto.ativo = v; pintarNotaAtivo(); mudou(); } });
   swAtivo.setAttribute("aria-describedby", notaAtivo.id);
-  const btSalvar = podeEditar ? h("button", { type: "button", class: "bt bt-prim" }, ui.icone("check"), item ? "Salvar" : "Criar automação") : null;
+  // revisão 1000b · UB-122: data-escrita — sem internet o shell (app.js SEL_ESCRITA) marca este botão aria-disabled com a dica antes do clique
+  const btSalvar = podeEditar ? h("button", { type: "button", class: "bt bt-prim", "data-escrita": "" }, ui.icone("check"), item ? "Salvar" : "Criar automação") : null;
   const btCancelar = h("button", { type: "button", class: "bt bt-sec" }, podeEditar ? "Cancelar" : "Voltar");
   const btTestar = podeEditar ? h("button", { type: "button", class: "bt bt-sec au-ed-largo", title: "Veja o que aconteceria agora, sem enviar nada" }, ui.icone("olho"), "Testar") : null;
   // plano 1000 · AS-005: no limite do plano a cópia seria recusada — o botão já nasce desabilitado com o motivo
   const lim = dados.limite || {};
   const noLimite = lim.limite != null && lim.usadas >= lim.limite;
-  const btDuplicar = podeEditar && item ? h("button", { type: "button", class: "bt bt-fant au-ed-largo", disabled: noLimite,
-    title: noLimite ? `Seu plano permite até ${lim.limite} automações.` : "Cria uma cópia desligada" }, ui.icone("copiar"), h("span", null, "Duplicar")) : null;
+  // plano 1000b · UB-007: criado também depois do 1º «Salvar e continuar» de uma nova (sem recarregar a página)
+  const criarBtDuplicar = () => {
+    const b = h("button", { type: "button", class: "bt bt-fant au-ed-largo au-ed-duplicar", disabled: noLimite,
+      title: noLimite ? `Seu plano permite até ${lim.limite} automações.` : "Cria uma cópia desligada" }, ui.icone("copiar"), h("span", null, "Duplicar"));
+    b.addEventListener("click", () => amb.duplicar(ctx, auto, b));
+    return b;
+  };
+  let btDuplicar = podeEditar && item ? criarBtDuplicar() : null;
   /** plano 1000 · AS-049: com edição não salva, a cópia sai do que está NA TELA — o rótulo diz isso. */
   const rotuloDuplicar = () => (noLimite ? `Duplicar (o plano permite até ${lim.limite})` : salvoJson !== null && sujo() ? "Duplicar como está na tela" : "Duplicar");
   function pintarDuplicar() {
@@ -141,10 +169,10 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     }
     apagarRascunho();
     if (amb.limparRascunho) amb.limparRascunho();
+    saindoPeloEditor = true;          // UB-008: a pessoa já respondeu aqui
     ctx.navegar("#/automacoes");
   }
   btCancelar.addEventListener("click", sair);
-  if (btDuplicar) btDuplicar.addEventListener("click", () => amb.duplicar(ctx, auto, btDuplicar));
   // plano 1000 · AS-032: fechar a aba/o navegador com edição pendente pergunta (o rascunho da aba não sobrevive a fechar)
   const antesDeSair = ev => { if (!temPendencia()) return; ev.preventDefault(); ev.returnValue = ""; return ""; };
   if (typeof addEventListener === "function" && amb.aoSair) { addEventListener("beforeunload", antesDeSair); amb.aoSair(() => removeEventListener("beforeunload", antesDeSair)); }
@@ -157,6 +185,18 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   });
   // a atualização automática do app não recarrega a página com edição pendente
   if (typeof ctx.naoAtualizar === "function" && amb.aoSair) amb.aoSair(ctx.naoAtualizar(temPendencia));
+  // plano 1000b · UB-008: menu lateral, paleta, Voltar do navegador e troca de empresa também perguntam (guarda de rota do shell)
+  let saindoPeloEditor = false;      // «Cancelar»/«‹ Automações» já perguntaram: o shell não pergunta de novo
+  if (typeof ctx.aoSairDaRota === "function" && amb.aoSair) {
+    try {
+      amb.aoSair(ctx.aoSairDaRota(() => {
+        if (saindoPeloEditor || !raiz.isConnected || !temPendencia()) return true;
+        return ui.confirmar(salvoJson !== null
+          ? { titulo: "Sair sem salvar?", texto: "As mudanças desta automação serão perdidas.", rotulo: "Sair sem salvar", perigo: true }
+          : { titulo: "Descartar esta automação?", texto: "Ela ainda não foi salva.", rotulo: "Descartar", perigo: true });
+      }) || (() => {}));
+    } catch { /* sem a guarda do shell, o rascunho da aba continua protegendo */ }
+  }
 
   // plano 1000 · AS-031: no celular Testar/Duplicar/Cancelar moram num menu «⋯» e o Salvar só no rodapé (o cabeçalho cabe numa linha)
   const btMaisEd = h("button", { type: "button", class: "bt-icone au-ed-mais", "aria-label": "Mais ações da automação", "aria-haspopup": "menu" }, ui.icone("opcoes"));
@@ -166,18 +206,29 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     btDuplicar ? { rotulo: rotuloDuplicar(), icone: "copiar", desabilitado: noLimite, fn: () => amb.duplicar(ctx, auto, btDuplicar) } : null,
     { rotulo: podeEditar ? "Cancelar" : "Voltar", icone: "fechar", fn: sair },
   ].filter(Boolean)));
+  /** plano 1000b · UB-212: «Alterada por Ana, há 2 dias» — só quando o servidor mandar atualizado_em (e o autor, se vier); sem isso, nada. */
+  function linhaAutor() {
+    if (!item || !item.atualizado_em) return null;
+    const quem = String(item.atualizado_por_nome || item.atualizado_por || "").trim();
+    const nomeQuem = quem && !/^[0-9a-f-]{36}$/i.test(quem) ? quem.split(/\s+/)[0] : "";
+    const rel = typeof ui.relativo === "function" ? ui.relativo(item.atualizado_em) : "";
+    if (!rel) return null;
+    return h("p", { class: "sub au-ed-autor", title: typeof ui.dataHoraBR === "function" ? ui.dataHoraBR(item.atualizado_em) : null },
+      nomeQuem ? `Alterada por ${nomeQuem}, ${rel}` : `Alterada ${rel}`);
+  }
   const rotuloOrigem = item ? "Automação" : origem === "ia" ? "Nova automação · montada pela IA" : modelo ? "Nova automação · a partir de uma receita" : "Nova automação";
+  // título da página para leitor de tela (o nome visível é um campo editável, não um cabeçalho)
+  const h1Pag = h("h1", { class: "sr-only" }, item ? `Automação: ${item.nome}` : "Nova automação");
   raiz.appendChild(h("header", { class: "au-ed-cab" },
-    // título da página para leitor de tela (o nome visível é um campo editável, não um cabeçalho)
-    h("h1", { class: "sr-only" }, item ? `Automação: ${item.nome}` : "Nova automação"),
+    h1Pag,
     linkVoltar,
     h("div", { class: "au-ed-linha" },
-      h("div", { class: "au-ed-nome" }, h("label", { class: "rotulo", for: nomeId }, rotuloOrigem), inpNome, avisoNome, btSugestao),
+      h("div", { class: "au-ed-nome" }, h("label", { class: "rotulo", for: nomeId }, rotuloOrigem), inpNome, contNome, avisoNome, btSugestao, linhaAutor()),
       h("div", { class: "linha au-ed-acoes" }, h("span", { class: "au-sw-caixa" }, swAtivo, notaAtivo), btTestar, btDuplicar, btCancelar, btSalvarSeguir, btSalvar, btMaisEd))));
   if (!podeEditar) raiz.appendChild(h("p", { class: "aviso au-aviso-papel" }, ui.icone("cadeado"),
     h("span", null, "Somente leitura: administradores editam automações.")));
   // plano 1000 · AS-269: o erro do servidor ao salvar (limite do plano, sem permissão…) fica aqui até a próxima tentativa — o toast sumia
-  const erroSalvar = h("div", { class: "aviso aviso-ruim au-erro-salvar", role: "alert", hidden: true });
+  const erroSalvar = h("div", { class: "aviso aviso-ruim au-erro-salvar", role: "alert", tabindex: "-1", hidden: true });
   raiz.appendChild(erroSalvar);
   const mostrarErroSalvar = msg => {
     ui.limpar(erroSalvar);
@@ -214,9 +265,12 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       ui.toast("Rascunho recuperado. Confira e salve.", { tipo: "ok" });
     });
     btDescartar.addEventListener("click", () => { fecharOferta(); if (!gravouRascunho) rasc.apagar(idRasc); });
-    oferta = h("div", { class: "aviso aviso-aten au-rasc", role: "status" }, ui.icone("relogio"),
+    // plano 1000b · UB-248: só a frase é região viva; os botões ficam fora dela (o leitor não lê «Recuperar… Descartar…» como anúncio)
+    oferta = h("div", { class: "aviso aviso-aten au-rasc" }, ui.icone("relogio"),
       h("div", { class: "pilha-p" },
-        h("p", null, item ? `Há mudanças desta automação que ficaram sem salvar${quandoTxt}.` : `Você deixou uma automação sem salvar${nomeTxt}${quandoTxt}.`),
+        h("p", { role: "status" }, item ? `Há mudanças desta automação que ficaram sem salvar${quandoTxt}.` : `Você deixou uma automação sem salvar${nomeTxt}${quandoTxt}.`,
+          // plano 1000b · UB-249: o que mudou em relação ao que está salvo («o nome, 2 passos e 1 condição mudaram»)
+          item && L.resumoDiferencas(guardado.auto, auto) ? ` ${L.resumoDiferencas(guardado.auto, auto).replace(/^./, c => c.toUpperCase())}.` : ""),
         h("div", { class: "linha" }, btRecuperar, btDescartar)));
     raiz.appendChild(oferta);
   } else if (guardado && salvoJson !== null) rasc.apagar(idRasc);   // igual ao que está salvo: não é mais rascunho
@@ -259,13 +313,17 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   // ------------------------------------------------ abas (regra | execuções)
   const painelRegra = h("div", { class: "au-painel", id: novoId("regra") });
   const painelExec = h("div", { class: "au-painel", id: novoId("exec"), hidden: true });
-  if (item) {
-    const ab = ui.abas({ itens: [{ id: "regra", rotulo: "Regra", icone: "raio", painel: painelRegra }, { id: "execucoes", rotulo: "Execuções", icone: "relogio", n: item.execucoes + item.erros || null, painel: painelExec }],
-      ativo: q.aba === "execucoes" ? "execucoes" : "regra", rotulo: "Partes da automação", classe: "au-abas",
+  // plano 1000b · UB-007: as abas também nascem na hora quando uma nova é salva com «continuar» (antes só depois de recarregar)
+  function montarAbas(ativo) {
+    if (raiz.querySelector(".au-abas")) return;
+    // plano 1000b · UB-003: os erros já fazem parte de `execucoes` (taxaSucesso) — o número é o mesmo do cartão da lista, sem somar em dobro
+    const ab = ui.abas({ itens: [{ id: "regra", rotulo: "Regra", icone: "raio", painel: painelRegra }, { id: "execucoes", rotulo: "Execuções", icone: "relogio", n: Number(item.execucoes) || null, painel: painelExec }],
+      ativo, rotulo: "Partes da automação", classe: "au-abas",
       aoMudar: id => mostrarAba(id) });
-    raiz.appendChild(ab.el);
+    raiz.insertBefore(ab.el, painelRegra);
   }
   raiz.append(painelRegra, painelExec);
+  if (item) montarAbas(q.aba === "execucoes" ? "execucoes" : "regra");
 
   // ------------------------------------------------ regra: fluxo + lateral
   const blocoQuando = h("section", { class: "au-bloco", dataset: { onde: "quando" }, "aria-labelledby": "au-q-t" });
@@ -277,7 +335,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   const estado = h("p", { class: "au-estado" });
   const avisos = h("div", { class: "au-avisos" });
   const chips = h("div", { class: "au-vars-lista" }, L.VARIAVEIS.map(([k, rot]) => {
-    const b = h("button", { type: "button", class: "au-var", title: rot, disabled: !podeEditar }, `{${k}}`);
+    // plano 1000b · UB-013: «Inserir Primeiro nome» em vez de «chave primeiro_nome chave» (o texto visível continua {chave})
+    const b = h("button", { type: "button", class: "au-var", title: rot, "aria-label": `Inserir ${rot}`, disabled: !podeEditar }, `{${k}}`);
     b.addEventListener("mousedown", ev => ev.preventDefault());       // não rouba o foco do campo
     b.addEventListener("click", () => inserirVariavel(`{${k}}`));
     return b;
@@ -287,8 +346,27 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   // plano 1000 · AS-044: «Testar com…» um registro específico (nx_auto_simular aceita p_negocio): «por que não rodou para a Maria?»
   let negocioTeste = null;
   const idBuscaTeste = novoId("tbusca");
-  const buscaTeste = h("input", { id: idBuscaTeste, type: "search", class: "au-teste-busca", autocomplete: "off", placeholder: "Busque pelo nome ou título" });
-  const resTeste = h("ul", { class: "au-teste-res", role: "list", hidden: true });
+  // plano 1000b · UB-057: o placeholder fala a língua da vertical («Busque o paciente ou tratamento»)
+  const vmin = k => (vv && typeof vv.min === "function" ? vv.min(k) : null);
+  const phTeste = vmin("contato") && vmin("negocio") ? `Busque o ${vmin("contato")} ou ${vmin("negocio")}` : "Busque pelo nome ou título";
+  // plano 1000b · UB-034: padrão de combobox — aria-controls/aria-expanded no campo, setas ↓↑ entre os resultados, Esc fecha a lista
+  const idResTeste = novoId("tres");
+  const buscaTeste = h("input", { id: idBuscaTeste, type: "search", class: "au-teste-busca", autocomplete: "off", placeholder: phTeste,
+    "aria-controls": idResTeste, "aria-expanded": "false", "aria-autocomplete": "list" });
+  const resTeste = h("ul", { class: "au-teste-res", id: idResTeste, role: "list", hidden: true });
+  const mostrarResTeste = v => { resTeste.hidden = !v; buscaTeste.setAttribute("aria-expanded", String(!!v)); };
+  const opsTeste = () => [...resTeste.querySelectorAll(".au-teste-op")];
+  buscaTeste.addEventListener("keydown", ev => {
+    if (ev.key === "Escape" && !resTeste.hidden) { ev.preventDefault(); ev.stopPropagation(); mostrarResTeste(false); return; }
+    if (ev.key === "ArrowDown" && !resTeste.hidden) { const o = opsTeste()[0]; if (o) { ev.preventDefault(); o.focus(); } }
+  });
+  resTeste.addEventListener("keydown", ev => {
+    const os = opsTeste(), i = os.indexOf(document.activeElement);
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); mostrarResTeste(false); buscaTeste.focus(); return; }
+    if (i < 0) return;
+    if (ev.key === "ArrowDown") { ev.preventDefault(); os[Math.min(i + 1, os.length - 1)].focus(); }
+    else if (ev.key === "ArrowUp") { ev.preventDefault(); if (i === 0) buscaTeste.focus(); else os[i - 1].focus(); }
+  });
   const escolhidoTeste = h("p", { class: "au-teste-escolhido", hidden: true });
   let seqBuscaTeste = 0;
   const pintarEscolhido = () => {
@@ -299,45 +377,74 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     tirar.addEventListener("click", () => { negocioTeste = null; pintarEscolhido(); buscaTeste.focus({ preventScroll: true }); });
     escolhidoTeste.append(ui.icone("olho"), h("span", null, `Testando só com «${negocioTeste.titulo}».`), tirar);
   };
+  // plano 1000b · UB-192: enquanto a busca não volta (os 300 ms + a chamada), a lista diz «Buscando…» em vez de ficar vazia
+  buscaTeste.addEventListener("input", () => {
+    if (buscaTeste.value.trim().length < 2) return;
+    if (resTeste.querySelector(".au-teste-buscando")) return;
+    ui.limpar(resTeste);
+    resTeste.appendChild(h("li", { class: "sub au-teste-buscando", role: "status" }, "Buscando…"));
+    mostrarResTeste(true);
+  });
   buscaTeste.addEventListener("input", ui.debounce(async () => {
     const q = buscaTeste.value.trim();
     const eu = ++seqBuscaTeste;
-    ui.limpar(resTeste);
-    if (q.length < 2) { resTeste.hidden = true; return; }
+    if (q.length < 2) { ui.limpar(resTeste); mostrarResTeste(false); return; }
     let lista = [];
     try { const r = await ctx.api.rpcC("nx_buscar", { p_q: q }); lista = (r && Array.isArray(r.negocios) ? r.negocios : []).slice(0, 5); }
-    catch { if (eu === seqBuscaTeste) { resTeste.hidden = false; resTeste.appendChild(h("li", { class: "sub" }, "A busca não respondeu agora. Teste pelo gatilho.")); } return; }
+    catch { if (eu === seqBuscaTeste) { ui.limpar(resTeste); mostrarResTeste(true); resTeste.appendChild(h("li", { class: "sub" }, "A busca não respondeu agora. Teste pelo gatilho.")); } return; }
     if (eu !== seqBuscaTeste) return;
-    resTeste.hidden = false;
+    ui.limpar(resTeste);
+    mostrarResTeste(true);
     if (!lista.length) { resTeste.appendChild(h("li", { class: "sub" }, "Nada encontrado com esse nome.")); return; }
     for (const n of lista) {
       const titulo = String(n.titulo || n.contato_nome || `#${n.id}`);
       const b = h("button", { type: "button", class: "bt bt-fant bt-p au-teste-op" }, h("strong", null, titulo),
         h("small", null, [n.contato_nome && n.contato_nome !== titulo ? n.contato_nome : null, n.estagio_nome].filter(Boolean).join(" · ")));
-      b.addEventListener("click", () => { negocioTeste = { id: n.id, titulo }; buscaTeste.value = ""; ui.limpar(resTeste); resTeste.hidden = true; pintarEscolhido(); testar(btTestarLado); });
+      b.addEventListener("click", () => { negocioTeste = { id: n.id, titulo }; buscaTeste.value = ""; ui.limpar(resTeste); mostrarResTeste(false); pintarEscolhido(); testar(btTestarLado); });
       resTeste.appendChild(h("li", null, b));
     }
   }, 300));
+  // plano 1000b · UB-035: nos gatilhos de Conversas o registro do funil não faz sentido — o campo some e a nota explica
+  const campoTesteCom = h("div", { class: "campo au-teste-com" }, h("label", { for: idBuscaTeste }, "Testar com um registro (opcional)"), buscaTeste, resTeste);
+  const notaTesteConversa = h("p", { class: "sub au-teste-conversa", hidden: true }, "Para gatilhos de conversa, o teste usa exemplos recentes de conversas.");
+  function pintarTesteCom() {
+    const conversa = ((L.GATILHO[auto.gatilho] || {}).grupo) === "Conversas";
+    if (campoTesteCom.hidden !== conversa) campoTesteCom.hidden = conversa;
+    if (notaTesteConversa.hidden !== !conversa) notaTesteConversa.hidden = !conversa;
+    if (conversa && negocioTeste) { negocioTeste = null; pintarEscolhido(); }
+  }
   const cartaoTeste = podeEditar ? h("div", { class: "cartao au-teste", id: novoId("teste") },
     h("p", { class: "rotulo" }, "Testar sem risco"),
     h("p", { class: "sub" }, "Veja o que aconteceria agora com o que está na tela. Nada é enviado nem salvo."),
     h("div", { class: "linha" }, btTestarLado),
-    h("div", { class: "campo au-teste-com" }, h("label", { for: idBuscaTeste }, "Testar com um registro (opcional)"), buscaTeste, resTeste),
+    campoTesteCom, notaTesteConversa,
     escolhidoTeste,
     areaSim) : null;
   // diagrama ao vivo do fluxo (item 53): SVG gerado de gatilho/condições/passos, redesenhado a cada mudança; cada nó leva ao bloco
   const caixaDiagrama = h("div", { class: "au-dg-caixa", id: novoId("dg") });
   // no celular a lateral vem depois do formulário: o diagrama sobe para o topo (CSS) e nasce recolhido, para não empurrar os campos
   const estreito = () => { try { return typeof matchMedia === "function" && matchMedia("(max-width: 1080px)").matches; } catch { return false; } };
-  let diagramaAberto = !estreito();
+  // plano 1000b · UB-078: a escolha da pessoa (abrir/recolher) fica lembrada no aparelho; sem escolha, acompanha a largura (girar o tablet)
+  // (a preferência passa pelo amb.preferencia da tela — o editor não toca no armazenamento do aparelho)
+  const prefFluxo = typeof amb.preferencia === "function" ? amb.preferencia(CHAVE_FLUXO) : null;
+  const lerFluxo = () => { const v = prefFluxo ? prefFluxo.ler() : null; return v === "aberto" ? true : v === "fechado" ? false : null; };
+  const escolhaFluxo = lerFluxo();
+  let diagramaAberto = escolhaFluxo !== null ? escolhaFluxo : !estreito();
+  // plano 1000b · UB-077: texto fixo «Ver o fluxo»; o estado é o aria-expanded (e a seta gira pelo CSS)
   const btFluxo = h("button", { type: "button", class: "bt bt-fant bt-p au-dg-toggle", "aria-expanded": String(diagramaAberto), "aria-controls": caixaDiagrama.id },
-    h("span", null, diagramaAberto ? "Esconder" : "Ver o fluxo"), ui.icone("seta-baixo"));
+    h("span", null, "Ver o fluxo"), ui.icone("seta-baixo"));
+  const definirFluxo = v => { diagramaAberto = v; caixaDiagrama.hidden = !v; btFluxo.setAttribute("aria-expanded", String(v)); };
   btFluxo.addEventListener("click", () => {
-    diagramaAberto = !diagramaAberto;
-    caixaDiagrama.hidden = !diagramaAberto;
-    btFluxo.setAttribute("aria-expanded", String(diagramaAberto));
-    btFluxo.firstChild.textContent = diagramaAberto ? "Esconder" : "Ver o fluxo";
+    definirFluxo(!diagramaAberto);
+    if (prefFluxo) prefFluxo.gravar(diagramaAberto ? "aberto" : "fechado");
   });
+  if (escolhaFluxo === null && amb.aoSair) {
+    try {
+      const mq = typeof matchMedia === "function" ? matchMedia("(max-width: 1080px)") : null;
+      const aoGirar = ev => { if (lerFluxo() === null) definirFluxo(!ev.matches); };
+      if (mq && typeof mq.addEventListener === "function") { mq.addEventListener("change", aoGirar); amb.aoSair(() => mq.removeEventListener("change", aoGirar)); }
+    } catch { /* sem matchMedia: fica como nasceu */ }
+  }
   caixaDiagrama.hidden = !diagramaAberto;
   const cartaoDiagrama = h("div", { class: "cartao au-dg" },
     h("div", { class: "au-dg-cab" }, h("div", null, h("p", { class: "rotulo" }, "Fluxo"), h("span", { class: "sub au-dg-dica" }, "Toque num bloco para ir até ele.")), btFluxo),
@@ -449,7 +556,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       }
       case "numero":
         // plano 1000 · AS-038: «7 dias parado» sem fazer conta de 168 horas — horas ou dias, gravado em horas
-        if (f.sufixo === "h") return P.campoHoras({ rotulo: f.rotulo, valor: v, min: f.min, max: f.max, desabilitado: !podeEditar,
+        // plano 1000b · UB-029: o rótulo fala em «tempo» (o campo deixa escolher horas ou dias)
+        if (f.sufixo === "h") return P.campoHoras({ rotulo: L.rotuloCampoTempo(f.rotulo), valor: v, min: f.min, max: f.max, desabilitado: !podeEditar,
           obrigatorio: f.obrigatorio, aoMudar: x => set(x) });
         // plano 1000 · AS-039: «sem resposta há» em minutos ou horas (4 horas sem fazer a conta de 240), gravado em minutos
         if (f.sufixo === "min" && typeof P.campoMinutos === "function") return P.campoMinutos({ rotulo: f.rotulo.replace(/^Minutos sem resposta$/, "Tempo sem resposta"),
@@ -458,8 +566,17 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           obrigatorio: f.obrigatorio, ajuda:`De ${f.min} a ${f.max}.`, aoMudar: x => set(x === "" ? null : Number(x)) });
       case "palavras": {
         // plano 1000 · AS-284: «Testar uma frase» aplica a mesma regra do servidor (sem acento, trecho contido) e diz qual palavra casou
-        const resFrase = h("small", { class: "au-frase-res", role: "status" });
-        const inpFrase = h("input", { type: "text", class: "au-frase-inp", placeholder: "Ex.: Qual o preço do clareamento?", autocomplete: "off", "aria-label": "Testar uma frase do cliente" });
+        // plano 1000b · UB-033: o resultado fica ligado ao campo (voltar ao campo relê «Dispara: casou com…»)
+        const resFrase = h("small", { class: "au-frase-res", role: "status", id: novoId("frres") });
+        const inpFrase = h("input", { type: "text", class: "au-frase-inp", placeholder: "Ex.: Qual o preço do clareamento?", autocomplete: "off", "aria-label": "Testar uma frase do cliente",
+          "aria-describedby": resFrase.id });
+        // plano 1000b · UB-064: «oi», «a»… casam com quase toda mensagem (trecho contido) — o campo avisa
+        const avisoCurtas = h("small", { class: "campo-ajuda au-palavras-curtas", id: novoId("pcurtas"), hidden: true });
+        const pintarCurtas = () => {
+          const c = L.palavrasCurtas(auto.config[f.nome] || []);
+          avisoCurtas.hidden = !c.length;
+          avisoCurtas.textContent = c.length ? `${c.map(w => `«${w}»`).join(", ")}: palavra${c.length > 1 ? "s" : ""} muito curta${c.length > 1 ? "s" : ""} — dispara em quase toda mensagem. Use 3 letras ou mais.` : "";
+        };
         const testarFrase = () => {
           const fr = inpFrase.value.trim();
           const ws = auto.config[f.nome] || [];
@@ -469,7 +586,12 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         };
         inpFrase.addEventListener("input", testarFrase);
         const campoP = entrada({ rotulo: f.rotulo, valor: (v || []).join(", "), placeholder: "preço, valor, quanto custa", ajuda: f.ajuda, desabilitado: !podeEditar,
-          aoMudar: x => { set(x.split(",").map(s => s.trim()).filter(Boolean)); testarFrase(); } });
+          // plano 1000b · UB-032: «preço, Preço, preco» conta UMA do limite (sem acento/caixa; fica a 1ª grafia)
+          aoMudar: x => { const vistas = new Set(); set(x.split(",").map(s => s.trim()).filter(s => { const k = L.normalizar(s); if (!s || vistas.has(k)) return false; vistas.add(k); return true; })); testarFrase(); pintarCurtas(); } });
+        const inpP = campoP.querySelector("input");
+        if (inpP) inpP.setAttribute("aria-describedby", [inpP.getAttribute("aria-describedby"), avisoCurtas.id].filter(Boolean).join(" "));
+        campoP.appendChild(avisoCurtas);
+        pintarCurtas();
         campoP.appendChild(h("div", { class: "au-frase-teste" }, h("span", { class: "rotulo" }, "Testar uma frase"), inpFrase, resFrase));
         return campoP;
       }
@@ -483,7 +605,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           aoMudar: x => set(x) });
       case "hora":
         return entrada({ rotulo: f.rotulo, valor: v ?? "", tipo: "time", desabilitado: !podeEditar, obrigatorio: f.obrigatorio, classe: "au-campo-hora",
-          ajuda: "Horário de São Paulo.", aoMudar: x => set(x || null) });
+          ajuda: "Horário de Brasília." /* plano 1000b · UB-058: quem é de outra cidade entende que é o fuso oficial */, aoMudar: x => set(x || null) });
       case "dias_semana":
         return P.campoDias({ rotulo: f.rotulo, valor: v, desabilitado: !podeEditar, aoMudar: dias => { auto.config[f.nome] = dias; mudou("quando"); } });
       default: return null;
@@ -502,7 +624,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const lista = h("ol", { class: "au-conds", role: "list" });
     auto.condicoes.forEach((cd, i) => lista.appendChild(linhaCondicao(cd, i)));
     const btMais = podeEditar ? h("button", { type: "button", class: "bt bt-sec bt-p au-mais", disabled: auto.condicoes.length >= L.LIMITES.condicoes },
-      ui.icone("mais"), "Condição") : null;
+      ui.icone("mais"), "Acrescentar condição") : null;     // plano 1000b · UB-188: com verbo
     // plano 1000 · AS-220: «+ Condição» abre a lista de campos e a condição já nasce no campo escolhido (antes sempre «Origem»)
     const novaCondicao = campo => {
       auto.condicoes.push({ campo, op: L.operadoresDe(campo)[0] || "igual", valor: "" });
@@ -530,7 +652,17 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const tipo = L.tipoValorCondicao(cd.campo);
     const ops = L.operadoresDe(cd.campo).map(o => ({ valor: o, rotulo: L.rotuloOperador(o) }));
     const selCampo = seletor({ rotulo: "Campo", valor: cd.campo, opcoes: L.camposCondicao(base, vv), desabilitado: !podeEditar, classe: "au-cond-campo",
-      aoMudar: v => { cd.campo = v; cd.op = L.operadoresDe(v)[0]; cd.valor = ""; pintarSe(); mudou("se"); } });
+      aoMudar: v => {
+        // plano 1000b · UB-252: trocar o campo zera comparação e valor — se havia valor, o aviso oferece «Desfazer» (volta o campo e o valor)
+        const antes = { campo: cd.campo, op: cd.op, valor: cd.valor };
+        const tinhaValor = !(cd.valor === "" || cd.valor == null);
+        cd.campo = v; cd.op = L.operadoresDe(v)[0]; cd.valor = ""; pintarSe(); mudou("se");
+        const s = blocoSe.querySelectorAll(".au-cond")[i]; const sc = s && s.querySelector(".au-cond-campo select"); if (sc) sc.focus({ preventScroll: true });
+        if (tinhaValor) ui.toast(`Campo trocado: o valor «${String(antes.valor).slice(0, 40)}» foi limpo.`, { tipo: "info", desfazer: () => {
+          if (!auto.condicoes.includes(cd)) return;
+          Object.assign(cd, antes); pintarSe(); mudou("se");
+        } });
+      } });
     const selOp = seletor({ rotulo: "Comparação", valor: cd.op, opcoes: ops, desabilitado: !podeEditar, classe: "au-cond-op",
       aoMudar: v => { cd.op = v; if (L.operadorSemValor(v)) delete cd.valor; pintarSe(); mudou("se"); } });
     let ctlValor = null;
@@ -552,6 +684,13 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     if (btX) btX.addEventListener("click", () => {
       const tinhaFoco = document.activeElement === btX;
       auto.condicoes.splice(i, 1); pintarSe(); mudou("se");
+      // plano 1000b · UB-023: tirar a condição oferece «Desfazer» (o mesmo objeto volta para o mesmo lugar)
+      ui.toast(`Condição ${i + 1} tirada.`, { tipo: "info", desfazer: () => {
+        if (auto.condicoes.includes(cd) || auto.condicoes.length >= L.LIMITES.condicoes) return;
+        auto.condicoes.splice(Math.min(i, auto.condicoes.length), 0, cd); pintarSe(); mudou("se");
+        const x = blocoSe.querySelectorAll(".au-cond")[Math.min(i, auto.condicoes.length - 1)];
+        const f = x && x.querySelector("select"); if (f) f.focus({ preventScroll: true });
+      } });
       // igual aos passos: o foco vai para o «Tirar a condição» que ocupou o lugar (ou o anterior; sem condições, «Condição»)
       if (tinhaFoco) {
         const xs = blocoSe.querySelectorAll(".au-cond .au-x");
@@ -559,7 +698,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         if (alvo) alvo.focus({ preventScroll: true });
       }
     });
-    return h("li", { class: "au-cond" },
+    // plano 1000b · UB-020: cada condição é um grupo com número e o «e» (os três «Campo» deixam de ser iguais para o leitor de tela)
+    return h("li", { class: "au-cond", role: "group", "aria-label": i === 0 ? `Condição ${i + 1}` : `Condição ${i + 1} (e)` },
       h("span", { class: "au-cond-e", "aria-hidden": "true" }, i === 0 ? "se" : "e"),
       selCampo, selOp, ctlValor || h("span", { class: "au-cond-vazio" }), btX,
       h("p", { class: "au-item-erro", role: "alert", hidden: true }));
@@ -573,6 +713,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   const horarioPadrao = (() => { const d = ((base && base.departamentos) || []).find(x => x && x.padrao) || null; return d && d.horario !== undefined ? d.horario : undefined; })();
   const opcoesTempo = () => (auto.respeitar_horario && horarioPadrao !== undefined ? { inicio: Date.now(), horario: horarioPadrao } : {});
   const textoQuando = t => (t.inalcancavel ? "Nunca roda (depois de «Parar»)"
+    // plano 1000b · UB-024: sem horário de atendimento nenhum no departamento padrão a mensagem não sai — nada de «Na hora»
+    : t.semHorario ? "Não sai: o departamento padrão está sem horário de atendimento"
     : t.adiada && t.envio ? `${t.quando} · se começar agora, sai ${L.dataHoraCurtaSP(t.envio)} (horário de atendimento)` : t.quando);
   function pintarEntao() {
     ui.limpar(blocoEntao);
@@ -584,6 +726,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       ui.icone("mais"), "Adicionar passo") : null;
     const paleta = podeEditar ? montarPaleta() : null;
     if (paleta) paleta.hidden = !paletaAberta;
+    // plano 1000b · UB-055: o botão aponta para a paleta que ele abre
+    if (paleta && btMais) { paleta.id = novoId("paleta"); btMais.setAttribute("aria-controls", paleta.id); }
     if (btMais) btMais.addEventListener("click", () => {
       paletaAberta = !paletaAberta;
       btMais.setAttribute("aria-expanded", String(paletaAberta));
@@ -598,8 +742,11 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       btMais.focus({ preventScroll: true });
     });
     const temMensagem = L.enviaMensagem(auto);
-    const swHorario = interruptor({ ligado: !!auto.respeitar_horario, rotulo: "Respeitar horário de funcionamento", desabilitado: !podeEditar,
+    // plano 1000b · UB-054: sem passo de mensagem o interruptor não vale nada — fica desabilitado (o valor salvo não muda) e diz por quê
+    const swHorario = interruptor({ ligado: !!auto.respeitar_horario, rotulo: "Respeitar horário de funcionamento", desabilitado: !podeEditar || !temMensagem,
       aoMudar: v => { auto.respeitar_horario = v; mudou("entao"); } });
+    const idHorarioSub = novoId("hrsub");
+    swHorario.setAttribute("aria-describedby", idHorarioSub);
     blocoEntao.append(
       noFluxo("check"),
       h("div", { class: "cartao au-bloco-corpo" },
@@ -612,7 +759,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         h("div", { class: ["au-horario", !temMensagem && "au-apagado"] },
           h("div", null,
             h("p", { class: "au-horario-tit" }, "Respeitar horário de funcionamento"),
-            h("p", { class: "sub" }, temMensagem ? "Mensagens fora do horário do departamento esperam a próxima abertura." : "Vale para passos que mandam mensagem."),
+            h("p", { class: "sub", id: idHorarioSub }, temMensagem ? "Mensagens fora do horário do departamento esperam a próxima abertura."
+              : "Só vale para passos que mandam mensagem — acrescente um «Enviar mensagem» para usar."),
             // plano 1000 · AS-063: qual horário vale (o servidor usa o departamento da conversa; sem conversa, o departamento padrão)
             h("p", { class: "sub au-horario-qual" }, textoHorarioQual())),
           swHorario),
@@ -644,7 +792,9 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         h("div", { class: "au-paleta-grade" }, itens.map(a => {
           const b = h("button", { type: "button", class: ["au-tile", a.sequencia && "au-tile-seq", a.ia && "au-tile-ia"], dataset: { acao: a.id } },
             h("span", { class: "au-tile-ic", "aria-hidden": "true" }, ui.icone(a.icone)),
-            h("span", { class: "au-tile-txt" }, h("strong", null, L.rotuloAcao(a.id, vv)), h("small", null, a.descricao || ""),
+            // plano 1000b · UB-031: «Enviar mensagem» diz por onde sai pelos números DESTA empresa (sem prometer CodeWords a quem só tem Meta)
+            h("span", { class: "au-tile-txt" }, h("strong", null, L.rotuloAcao(a.id, vv)),
+              h("small", null, a.id === "enviar_mensagem" && L.viaTextoLivre(base.canais) ? `${a.descricao || ""} ${L.viaTextoLivre(base.canais)}`.trim() : a.descricao || ""),
               iaOff && a.ia ? h("small", { class: "au-tile-off" }, "IA ainda desligada: o passo seria pulado") : null));
           b.addEventListener("click", () => adicionar(a.id));
           return b;
@@ -712,6 +862,13 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     if (btX) btX.addEventListener("click", () => {
       const tinhaFoco = document.activeElement === btX;
       auto.acoes.splice(i, 1); pintarEntao(); mudou("entao");
+      // plano 1000b · UB-022: um toque errado na lixeira não perde a mensagem longa — «Desfazer» devolve o mesmo passo no mesmo lugar
+      ui.toast(`Passo ${i + 1} («${L.rotuloAcao(ac.tipo, vv)}») tirado.`, { tipo: "info", desfazer: () => {
+        if (auto.acoes.includes(ac) || auto.acoes.length >= L.LIMITES.acoes) return;
+        auto.acoes.splice(Math.min(i, auto.acoes.length), 0, ac); pintarEntao(); mudou("entao", { tempo: true });
+        const x = blocoEntao.querySelectorAll(".au-passo")[Math.min(i, auto.acoes.length - 1)];
+        const f = x && x.querySelector("input,select,textarea,button"); if (f) f.focus({ preventScroll: true });
+      } });
       // o botão saiu da tela com o passo: o foco vai para o «Tirar» do passo que ocupou o lugar (ou o anterior; sem passos, «Adicionar passo»)
       if (tinhaFoco) {
         const xs = blocoEntao.querySelectorAll(".au-passo .au-x");
@@ -799,18 +956,28 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         // plano 1000 · AS-037: contador «x / teto» (amarelo a 90 %); AS-036: «Enviar mensagem» mostra como chega, com um exemplo
         const cont = f.max ? h("small", { class: "au-cont mono" }) : null;
         const bolha = ac.tipo === "enviar_mensagem" ? h("div", { class: "au-bolha" }) : null;
-        const previa = bolha ? h("figure", { class: "au-msg-previa" }, h("figcaption", { class: "rotulo" }, "Como chega no WhatsApp (exemplo)"), bolha) : null;
+        const previa = bolha ? h("figure", { class: "au-msg-previa" }, h("figcaption", { class: "rotulo" }, "Como chega no WhatsApp (exemplo)")) : null;
         const pintarCont = val => { if (!cont) return; const c = L.contadorTexto(val, f.max); cont.textContent = c.texto; cont.dataset.tom = c.tom; };
-        const pintarBolha = val => { if (bolha) bolha.textContent = String(val || "").trim() ? L.aplicarVariaveis(val, exemplo) : "Escreva a mensagem para ver a prévia."; };
+        // plano 1000b · UB-253: sem texto, a instrução fica FORA da bolha (a bolha verde não finge ser uma mensagem)
+        const vazioPrevia = bolha ? h("p", { class: "sub au-bolha-vazia" }, "Escreva a mensagem para ver a prévia.") : null;
+        const pintarBolha = val => {
+          if (!bolha) return;
+          const tem = !!String(val || "").trim();
+          bolha.textContent = tem ? L.aplicarVariaveis(val, exemplo) : "";
+          bolha.hidden = !tem; vazioPrevia.hidden = tem;
+        };
         const bolhaDepois = ui.debounce(pintarBolha, 150);
         const el = entrada({ rotulo: f.rotulo, valor: v ?? "", tipo: "textarea", max: f.max, variaveis: f.variaveis, desabilitado: dis, ajuda: f.ajuda,
           obrigatorio: f.obrigatorio, aoMudar: x => { ac[f.nome] = x; pintarCont(x); bolhaDepois(x); mudou("entao"); } });
         if (cont) el.appendChild(cont);
-        if (previa) el.appendChild(previa);
+        if (previa) { previa.append(vazioPrevia, bolha); el.appendChild(previa); }
         pintarCont(v ?? ""); pintarBolha(v ?? "");
         return el;
       }
       case "numero":
+        // plano 1000b · UB-030: prazo da tarefa em horas OU dias (7 dias sem digitar 168), «0 = para já»
+        if (f.sufixo === "h" && typeof P.campoHoras === "function") return P.campoHoras({ rotulo: f.rotulo, valor: v, min: f.min ?? 1, max: f.max, desabilitado: dis,
+          ajuda: f.ajuda || null, aoMudar: x => set(x) });
         return entrada({ rotulo: f.rotulo, valor: v ?? "", tipo: "number", min: f.min, max: f.max, passo: 1, sufixo: f.sufixo, desabilitado: dis,
           aoMudar: x => set(x === "" ? null : Number(x)) });
       case "duracao":
@@ -826,8 +993,14 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       case "funil":
         return seletor({ rotulo: f.rotulo, valor: v, opcoes: opcoesBase(dados, "funil"), vazio: f.semPadrao ? "Escolha o funil…" : "Funil padrão", desabilitado: dis, obrigatorio: f.obrigatorio,
           aoMudar: x => {
+            // plano 1000b · UB-251: a etapa marcada era do funil de antes — sai, mas com aviso (antes sumia em silêncio)
+            const tinhaEtapa = !!ac.estagio_id;
             set(x || null);
-            if (L.ACAO[ac.tipo].campos.some(c => c.filtraPor === f.nome)) { delete ac.estagio_id; pintarEntao(); }
+            if (L.ACAO[ac.tipo].campos.some(c => c.filtraPor === f.nome)) {
+              delete ac.estagio_id; pintarEntao();
+              if (tinhaEtapa) ui.toast("A etapa escolhida era de outro funil e foi limpa. Escolha a etapa deste funil.", { tipo: "info" });
+              const s = blocoEntao.querySelectorAll(".au-passo")[i]; const sf = s && s.querySelectorAll("select")[0]; if (sf) sf.focus({ preventScroll: true });
+            }
           } });
       case "etiqueta": {
         const op = opcoesBase(dados, "etiqueta");
@@ -882,7 +1055,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
             ...(opcoesBase(dados, "departamento").length ? [{ valor: "departamento", rotulo: "Um departamento" }] : [])] });
       case "tarefa_ia":
         return P.escolhaCartoes({ rotulo: f.rotulo, valor: v ?? f.padrao, desabilitado: dis,
-          opcoes: L.TAREFAS_IA.map(([k, nome, texto]) => ({ valor: k, titulo: nome, texto })), aoMudar: x => { ac[f.nome] = x; mudou("entao"); } });
+          // plano 1000b · UB-066: «Pontuar o interesse do paciente» (vocabulário da vertical), não «Pontuar o lead»
+          opcoes: (typeof L.tarefasIA === "function" ? L.tarefasIA(vv) : L.TAREFAS_IA).map(([k, nome, texto]) => ({ valor: k, titulo: nome, texto })), aoMudar: x => { ac[f.nome] = x; mudou("entao"); } });
       case "template": return null;             // desenhado por editorModelo
       default: return null;
     }
@@ -904,7 +1078,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           h("p", null, "Crie e aprove na Meta um modelo de categoria Utilidade, por exemplo:"),
           h("blockquote", { class: "au-tpl-sugerido" }, sugerido),
           h("p", { class: "sub" }, "Depois da aprovação, toque em «Sincronizar agora» aqui mesmo (ou em Configurações → Números de WhatsApp). Enquanto isso, você pode salvar esta automação desligada. Ou use «Enviar mensagem» (texto livre, pelo CodeWords)."),
-          h("div", { class: "linha" }, btCopiar, botaoSincronizar()))));
+          h("div", { class: "linha" }, btCopiar, botaoSincronizar(ac)))));
       if (ac.template_nome) box.appendChild(h("p", { class: "sub" }, `Modelo esperado: «${ac.template_nome}».`));
       return box;
     }
@@ -929,7 +1103,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         pintarEntao(); mudou("entao");
       } }));
     const t = todos.find(y => y.id === ac.template_id);
-    box.appendChild(h("div", { class: "linha au-tpl-sinc" }, botaoSincronizar()));
+    box.appendChild(h("div", { class: "linha au-tpl-sinc" }, botaoSincronizar(ac)));
     if (!t) return box;
     // AS-053: modelo de um número + gatilho de outro → avisa; sem filtro e com vários números, diz por onde sai
     const cT = canal(t.canal_id), cG = canalGatilho ? canal(canalGatilho) : null;
@@ -945,7 +1119,9 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     const prev = h("p", { class: "au-tpl-prev-txt" });
     const pintarPrev = () => { prev.textContent = L.previaModelo(t.corpo || "", pars, exemplo); };
     if (np) box.appendChild(h("div", { class: "au-tpl-pars" }, Array.from({ length: np }, (_, k) =>
-      entrada({ rotulo: `Parâmetro {{${k + 1}}}`, valor: pars[k] ?? "", variaveis: true, max: 200, desabilitado: !podeEditar, obrigatorio: true,
+      // plano 1000b · UB-059: «1º espaço do modelo» + o trecho do corpo em volta de {{1}} («Olá, ___!») em vez do jargão «Parâmetro {{1}}»
+      entrada({ rotulo: `${k + 1}º espaço do modelo`, ajuda: L.trechoParametro(t.corpo, k + 1) ? `No texto: «${L.trechoParametro(t.corpo, k + 1)}»` : null,
+        valor: pars[k] ?? "", variaveis: true, max: 200, desabilitado: !podeEditar, obrigatorio: true,
         placeholder: "{primeiro_nome}", aoMudar: x => { pars[k] = x; pintarPrev(); mudou("entao"); } }))));
     pintarPrev();
     box.appendChild(h("div", { class: "au-tpl-prev" },
@@ -959,7 +1135,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
    * e recarrega a lista de modelos daqui (nx_automacoes_listar), mantendo tudo o que já foi preenchido.
    */
   let sincronizando = false;
-  function botaoSincronizar() {
+  function botaoSincronizar(acDoBotao = null) {
     if (!podeEditar) return null;
     const b = h("button", { type: "button", class: "bt bt-sec bt-p au-tpl-sincronizar" }, ui.icone("relogio"), "Sincronizar agora");
     b.addEventListener("click", async () => {
@@ -982,7 +1158,10 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           : `Modelos sincronizados: ${aprov} ${aprov === 1 ? "aprovado" : "aprovados"}.${r.falhas ? ` ${r.falhas} ${r.falhas === 1 ? "número não respondeu" : "números não responderam"}.` : ""}`,
         { tipo: r.falhas === canais.length ? "erro" : "ok" });
         pintarEntao(); mudou("entao");
-        const novo = blocoEntao.querySelector(".au-passo-enviar_template select, .au-tpl-sincronizar");
+        // plano 1000b · UB-075: o foco volta ao passo do botão clicado (não ao 1º passo de modelo)
+        const idx = acDoBotao ? auto.acoes.indexOf(acDoBotao) : -1;
+        const passoLi = idx >= 0 ? blocoEntao.querySelector(`.au-passo[data-i="${idx}"]`) : null;
+        const novo = (passoLi && passoLi.querySelector("select, .au-tpl-sincronizar")) || blocoEntao.querySelector(".au-passo-enviar_template select, .au-tpl-sincronizar");
         if (novo) novo.focus({ preventScroll: true });
       } catch (e) { ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e)), { tipo: "erro" }); }
       finally { sincronizando = false; }
@@ -1005,7 +1184,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   });
   function inserirVariavel(tok) {
     const t = ultimoTexto && ultimoTexto.isConnected ? ultimoTexto : blocoEntao.querySelector("[data-variaveis='1']");
-    if (!t || t.disabled) { ui.toast("Clique num texto de um passo e depois na variável.", { tipo: "info" }); return; }
+    if (!t || t.disabled) { ui.toast("Toque num texto de um passo e depois na variável.", { tipo: "info" }); return; }   // plano 1000b · UB-060: vale no celular
     const ini = t.selectionStart ?? t.value.length, fim = t.selectionEnd ?? t.value.length;
     t.value = t.value.slice(0, ini) + tok + t.value.slice(fim);
     try { t.setSelectionRange(ini + tok.length, ini + tok.length); } catch { /* ok */ }
@@ -1014,16 +1193,33 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   }
 
   // ------------------------------------------------ prévia, avisos e validação ao vivo
-  function atualizarPrevia(imediato = false) {
+  /**
+   * plano 1000b · UB-021: o que custa indexar a base (problemas, variáveis, cadeias) é calculado UMA vez por mudança e repassado —
+   * antes cada tecla validava duas vezes e refazia as cadeias e as variáveis em três lugares.
+   */
+  function analisar() {
+    const ps = L.problemas(auto, { base, ligar: !!auto.ativo });
+    return { ps, r: ps[0] ? { ok: false, motivo: ps[0].motivo, onde: ps[0].onde, indice: ps[0].indice } : { ok: true },
+      vars: L.variaveisDosPassos(auto), cads: L.cadeiasDeAutomacao(auto, dados.itens || [], base) };
+  }
+  /** Os avisos da lateral esperam a pessoa parar de digitar (120 ms); dentro do passo, na hora. */
+  let tAvisos = null;
+  function agendarAvisos() { clearTimeout(tAvisos); tAvisos = setTimeout(() => { tAvisos = null; if (raiz.isConnected) pintarAvisosLaterais(analisar()); }, AVISOS_MS); }
+  if (amb.aoSair) amb.aoSair(() => clearTimeout(tAvisos));
+  function atualizarPrevia(imediato = false, an = analisar()) {
     frase.textContent = L.descrever(auto, base, vv);
     if (imediato) pintarDiagrama(); else agendarDiagrama();
-    const r = L.validar(auto, { base, ligar: !!auto.ativo });
+    const r = an.r;
     ui.limpar(estado);
     estado.className = ["au-estado", r.ok ? "au-ok" : "au-falta"].join(" ");
     estado.append(ui.icone(r.ok ? "check" : "alerta"), h("span", null, r.ok
       // plano 1000 · AS-030: a promessa depende do gatilho (evento: 15 s; tempo: quando o tempo passar; agendado: no horário)
       ? (auto.ativo ? L.textoProntaLigada(auto.gatilho) : "Pronta. Vai ficar salva e desligada.")
       : `Falta: ${r.motivo}.`));
+    pintarAvisosPassos(an);
+    if (imediato) pintarAvisosLaterais(an); else agendarAvisos();
+  }
+  function pintarAvisosLaterais(an) {
     ui.limpar(avisos);
     const bloqs = [];
     // plano 1000 · AS-232: o trecho das 24 h da Meta só quando há número da Meta (sem saber o provedor dos números, continua o texto completo)
@@ -1035,21 +1231,24 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     if (L.faltaModelo(auto)) bloqs.push("Sem modelo aprovado escolhido: dá para salvar desligada e ligar quando a Meta aprovar.");
     if (auto.gatilho === "antes_da_data" && auto.acoes.some(a => a.tipo === "enviar_template" && (a.parametros || []).some(p => /\{hora_consulta\}/.test(p))))
       bloqs.push(`Quem tiver só a data (sem a hora) da ${L.palavraConsulta(vertical)} aparece nas execuções como erro, para ninguém receber mensagem com buraco.`);
+    // plano 1000b · UB-189: o mesmo cuidado para «Depois da data» e para «Enviar mensagem» com {hora_consulta} / {data_consulta}
+    else { const av = L.avisoDataHoraConsulta(auto, vertical); if (av) bloqs.push(av); }
     if (iaOff && L.temIA(auto)) bloqs.push(L.AVISO_IA_DESLIGADA);
     for (const t of L.avisosEstrutura(auto)) bloqs.push(t);
     // plano 1000 · AS-035: variável escrita errada chega crua ao cliente — avisa (e não deixa LIGAR; salvar desligada pode)
-    for (const v of L.variaveisDosPassos(auto)) bloqs.push(`Passo ${v.indice + 1}: ${L.fraseVariaveis(v)}. Assim o cliente receberia o texto entre chaves.`);
+    for (const v of an.vars) bloqs.push(`Passo ${v.indice + 1}: ${L.fraseVariaveis(v)}. Assim o cliente receberia o texto entre chaves.`);
     // plano 1000 · AS-278: um passo daqui dispara outra automação ligada (e, no pior caso, ela devolve: laço)
-    for (const c of L.cadeiasDeAutomacao(auto, dados.itens || [], base))
+    for (const c of an.cads)
       bloqs.push(c.laco ? `Laço: o passo ${c.indice + 1} usa ${c.por}, que dispara «${c.outra.nome}» — e ela dispara esta de volta. As duas vão se repetir até o limite e encher as execuções de erro.`
         : `O passo ${c.indice + 1} usa ${c.por}, que dispara «${c.outra.nome}» (ligada). Confira se é isso mesmo.`);
+    // plano 1000b · UB-024: com «respeitar horário» e um departamento padrão sem horário nenhum, a mensagem nunca sairia
+    if (L.linhaDoTempo(auto.acoes, opcoesTempo()).some(t => t.semHorario)) bloqs.push(AVISO_SEM_HORARIO);
     for (const t of bloqs) avisos.appendChild(h("p", { class: "au-aviso-lat" }, ui.icone("info"), h("span", null, t)));
-    pintarAvisosPassos();
   }
   /** Os mesmos avisos de variável e de laço, também DENTRO do passo (quem está digitando vê ali). */
-  function pintarAvisosPassos() {
-    const vars = new Map(L.variaveisDosPassos(auto).map(v => [v.indice, v]));
-    const cads = L.cadeiasDeAutomacao(auto, dados.itens || [], base);
+  function pintarAvisosPassos(an = analisar()) {
+    const vars = new Map(an.vars.map(v => [v.indice, v]));
+    const cads = an.cads;
     blocoEntao.querySelectorAll(".au-passo").forEach((li, i) => {
       let el = li.querySelector(".au-passo-aviso");
       const v = vars.get(i), c = cads.find(x => x.indice === i && x.laco) || cads.find(x => x.indice === i);
@@ -1061,15 +1260,22 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   }
 
   /** Mostra os problemas onde eles estão (bloco, condição, passo) — só nas partes que a pessoa já mexeu. */
-  function pintarValidacao() {
-    const ps = L.problemas(auto, { base, ligar: !!auto.ativo })
+  /**
+   * plano 1000b · UB-014: as caixas role=alert só são reescritas quando o texto MUDA (o NVDA repetia «Falta: …» a cada tecla
+   * digitada em outro campo); o hidden também só alterna quando muda.
+   */
+  const escreverAlerta = (e, txt) => {
+    if (e.textContent !== txt) e.textContent = txt;
+    if (e.hidden !== !txt) e.hidden = !txt;
+  };
+  function pintarValidacao(todos = null) {
+    const ps = (todos || L.problemas(auto, { base, ligar: !!auto.ativo }))
       .filter(p => !(p.onde === "entao" && p.indice != null && frescos.has(auto.acoes[p.indice])));
     for (const [onde, bloco] of [["quando", blocoQuando], ["se", blocoSe], ["entao", blocoEntao]]) {
       const e = bloco.querySelector(".au-bloco-erro");
       if (!e) continue;
       const meus = tocado.has(onde) ? ps.filter(p => p.onde === onde && p.indice == null) : [];
-      e.textContent = meus.length ? `Falta: ${meus[0].motivo}.` : "";
-      e.hidden = !meus.length;
+      escreverAlerta(e, meus.length ? `Falta: ${meus[0].motivo}.` : "");
       const itens = tocado.has(onde) ? ps.some(p => p.onde === onde) : false;
       bloco.classList.toggle("au-bloco-com-erro", itens);
     }
@@ -1077,8 +1283,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       const e = li.querySelector(".au-item-erro");
       if (!e) return;
       const p = tocado.has(onde) ? ps.find(x => x.onde === onde && x.indice === i) : null;
-      e.textContent = p ? `Falta: ${L.semPrefixo(p.motivo)}.` : "";
-      e.hidden = !p;
+      escreverAlerta(e, p ? `Falta: ${L.semPrefixo(p.motivo)}.` : "");
       li.classList.toggle("au-tem-erro", !!p);
     });
     marca([...blocoSe.querySelectorAll(".au-cond")], "se");
@@ -1090,9 +1295,11 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   function mudou(onde, opcoes) {
     if (onde) tocado.add(onde);
     pintarNome(); pintarDuplicar();
-    atualizarPrevia();
+    const an = analisar();             // plano 1000b · UB-021: uma análise por mudança
+    atualizarPrevia(false, an);
     if (opcoes && opcoes.tempo) atualizarTempos();
-    pintarValidacao();
+    pintarValidacao(an.ps);
+    pintarTesteCom();
     guardarRascunho();
   }
 
@@ -1130,23 +1337,33 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     mostrarErroSalvar(null);
     if (!r.ok) { mostrarErro(r); return; }
     salvando = true;
-    const p = (async () => {
+    // plano 1000b · UB-053: as confirmações vêm ANTES do «carregando» — o botão não fica ocupado (aria-busy) enquanto a pessoa lê o diálogo
+    const confirmacoes = (async () => {
       // plano 1000 · AS-025: ligar no editor algo que manda WhatsApp (ou gasta IA) pede a MESMA confirmação da lista — só quando estava desligada/nova
       const estavaLigada = !!(salvoItem && salvoItem.ativo);
       if (auto.ativo && !estavaLigada && (L.enviaMensagem(auto) || L.temIA(auto))) {
         const ok = await ui.confirmar({ titulo: `Ligar «${auto.nome}»?`, rotulo: "Salvar e ligar",
           texto: L.enviaMensagem(auto) ? "Esta automação envia mensagens de WhatsApp para clientes. Assim que salvar ligada, quem se encaixar no gatilho começa a receber. Dá para desligar a qualquer momento."
             : "Esta automação usa a IA a cada execução (gasta a cota do mês). Assim que salvar ligada, ela começa a rodar." });
-        if (!ok) throw Object.assign(new Error("cancelado"), { cancelado: true });
+        if (!ok) return false;
       }
       // plano 1000 · AS-277: salvar DESLIGADA o que estava ligado cancela as esperas em andamento — avisa quem perde os próximos passos
       const avisoEspera = !auto.ativo && estavaLigada ? L.avisoDesligarEspera(salvoItem) : null;
       if (avisoEspera) {
         const ok = await ui.confirmar({ titulo: `Desligar «${auto.nome}»?`, rotulo: "Salvar desligada", perigo: true,
           texto: `${avisoEspera} As esperas desta automação são canceladas ao desligar.` });
-        if (!ok) throw Object.assign(new Error("cancelado"), { cancelado: true });
+        if (!ok) return false;
       }
-      const salvo = await ctx.api.rpcC("nx_automacao_salvar", { p_auto: L.limpar(auto) });
+      return true;
+    })();
+    confirmacoes.then(ok => { if (ok) gravar(botao, { continuar }); else salvando = false; }, () => { salvando = false; });
+  };
+  const gravar = (botao, { continuar }) => {
+    const p = (async () => {
+      // revisão 1000b · UB-211: manda a versão que estava na tela; se outra pessoa salvou depois, o servidor recusa
+      // (edicao_desatualizada) em vez de apagar o que ela fez. Nova automação não manda nada.
+      const versao = auto.id != null ? ((salvoItem && salvoItem.atualizado_em) || (item && item.atualizado_em) || null) : null;
+      const salvo = await ctx.api.rpcC("nx_automacao_salvar", versao ? { p_auto: L.limpar(auto), p_atualizado_em: versao } : { p_auto: L.limpar(auto) });
       salvoJson = JSON.stringify(L.limpar(salvo));
       if (rasc) rasc.apagar(idRasc);            // salvo: o rascunho (inclusive um antigo ainda oferecido) perde o sentido
       if (amb.limparRascunho) amb.limparRascunho();
@@ -1164,6 +1381,15 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           if (rasc) rasc.apagar(idRasc);
           idRasc = String(salvo.id);
           try { if (typeof history !== "undefined" && history.replaceState) history.replaceState(history.state, "", `#/automacoes/${encodeURIComponent(salvo.id)}`); } catch { /* o endereço só não muda */ }
+          // plano 1000b · UB-007: a partir daqui ela é uma automação salva — aba «Execuções» e «Duplicar» aparecem sem recarregar
+          item = salvoItem;
+          montarAbas("regra");
+          if (podeEditar && !btDuplicar) {
+            btDuplicar = criarBtDuplicar();
+            const acoesCab = raiz.querySelector(".au-ed-acoes");
+            if (acoesCab) acoesCab.insertBefore(btDuplicar, btCancelar.parentNode === acoesCab ? btCancelar : null);
+          }
+          pintarRotulosSalvar(salvo.nome || auto.nome);
         }
         ctx.titulo(salvo.nome || auto.nome || "Automação");
         mudou();
@@ -1176,10 +1402,17 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     })();
     ui.carregando(botao, p).finally(() => { salvando = false; }).catch(e => {
       if (e && e.cancelado) return;          // a pessoa desistiu na confirmação: nada foi gravado
-      const msg = L.erroAutomacao(e, ctx.api.mensagemErro(e));
+      const msg = e && e.codigo === "edicao_desatualizada"
+        ? "Outra pessoa salvou esta automação enquanto você editava. Para não apagar o que ela fez, nada foi gravado: copie o que precisar, recarregue a página e refaça a sua mudança."
+        : L.erroAutomacao(e, ctx.api.mensagemErro(e));
       const lugar = e && e.codigo === "automacao_invalida" && e.hint ? L.ondeDoHint(e.hint) : null;
       if (lugar && lugar.onde) mostrarErro({ motivo: e.hint, onde: lugar.onde, indice: lugar.indice });
-      else { mostrarErroSalvar(msg); try { erroSalvar.scrollIntoView({ block: "nearest", behavior: ui.comportamentoRolagem() }); } catch { /* ok */ } }
+      else {
+        mostrarErroSalvar(msg);
+        try { erroSalvar.scrollIntoView({ block: "nearest", behavior: ui.comportamentoRolagem() }); } catch { /* ok */ }
+        // plano 1000b · UB-247: sem bloco a apontar, o foco vai à caixa do erro (o teclado e o leitor chegam ao motivo)
+        try { erroSalvar.focus({ preventScroll: true }); } catch { /* ok */ }
+      }
     });
   };
   if (btSalvarSeguir) btSalvarSeguir.addEventListener("click", () => salvar(btSalvarSeguir, { continuar: true }));
@@ -1189,6 +1422,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       amb.aoSair(ui.atalho("mod+s", ev => {
         if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
         if (!raiz.isConnected) return;
+        // plano 1000b · UB-250: com um diálogo (confirmar) ou gaveta aberta, o atalho não salva por baixo dele
+        try { if (document.querySelector("dialog[open]")) return; } catch { /* sem querySelector: segue */ }
         salvar(btSalvar);
       }));
     } catch { /* sem o atalho, o botão basta */ }
@@ -1196,7 +1431,7 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   if (btSalvar) {
     btSalvar.addEventListener("click", () => salvar(btSalvar));
     // no celular o cabeçalho não fica preso no topo: o mesmo "Salvar" também no fim da regra
-    const btSalvar2 = h("button", { type: "button", class: "bt bt-prim bt-g" }, ui.icone("check"), item ? "Salvar" : "Criar automação");
+    const btSalvar2 = h("button", { type: "button", class: "bt bt-prim bt-g", "data-escrita": "" }, ui.icone("check"), item ? "Salvar" : "Criar automação");   // revisão 1000b · UB-122
     btSalvar2.addEventListener("click", () => salvar(btSalvar2));
     painelRegra.appendChild(h("div", { class: "au-rodape-movel" }, btSalvar2));
   }
@@ -1283,12 +1518,15 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           h("div", { class: "au-sim-alvo-cab" },
             h("strong", null, a.titulo),
             a.detalhe ? h("span", { class: "sub" }, a.detalhe) : null,
-            a.link ? h("a", { class: "au-sim-link", href: a.link }, "Abrir") : null),
+            // plano 1000b · UB-019: cada «Abrir» diz o quê (os links eram todos iguais para o leitor de tela)
+            a.link ? h("a", { class: "au-sim-link", href: a.link, "aria-label": `Abrir ${a.titulo}` }, "Abrir") : null),
           a.ignorado ? h("p", { class: "au-sim-nota" }, ui.icone("info"), a.motivoIgnorado) : null,
           a.passos.length ? h("ol", { class: "au-sim-passos", role: "list" }, a.passos.map(p => h("li", { class: ["au-sim-passo", `au-sim-${p.estado}`] },
             ui.pilula({ faria: "Faria", pularia: "Pularia", espera: "Esperaria", erro: "Daria erro" }[p.estado] || "Faria",
               { faria: "ok", pularia: "aten", espera: "info", erro: "ruim" }[p.estado] || "neutra"),
             h("span", { class: "au-sim-passo-txt" }, p.rotulo, p.quando ? h("small", null, ` · ${p.quando}`) : null, p.motivo ? h("small", null, ` — ${p.motivo}`) : null)))) : null,
+          // plano 1000b · UB-074: o resultado mostra até 12 passos — o que passou disso é dito
+          a.passosOcultos > 0 ? h("p", { class: "sub au-sim-mais-passos" }, `e mais ${a.passosOcultos} ${a.passosOcultos === 1 ? "passo" : "passos"}`) : null,
           a.erro ? h("p", { class: "au-sim-erro" }, ui.icone("alerta"), `Com este registro daria erro: ${a.erro}`) : null,
           // AS-298: o erro conhecido vem com o que fazer
           dicaErro(a.erro || (a.passos.find(p => p.estado === "erro") || {}).motivo),
@@ -1324,25 +1562,38 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   let execDia = null;
   let esperasNaTela = 0;        // AS-227: AAAA-MM-DD escolhido no gráfico (null = todos)
   let execSeq = 0;      // plano 1000 · AS-055: só a carga mais nova pinta (Atualizar 2× ou «Carregar mais» + «Atualizar»)
+  let serieGuardada = null;     // plano 1000b · UB-037: {em, valor, assinatura} da última série de 14 dias lida
+  let conferindoNovas = false;  // plano 1000b · UB-076: a conferência silenciosa (foco na lista) em andamento
+  /** Muda quando chega execução nova ou alguma muda de situação (id + estado das primeiras). */
+  const assinaturaExec = l => { const a = Array.isArray(l) ? l : (l && Array.isArray(l.itens) ? l.itens : []); return `${a.length}|${a.slice(0, 20).map(x => `${x.id}:${x.status || x.estado || ""}`).join(",")}`; };
   async function pintarExecucoes(opc = {}) {
     const eu = ++execSeq;
     // a lista é redesenhada (o botão antigo sai da tela): quem usa o teclado continua no mesmo botão
-    const refoco = opc.foco || (painelExec.contains(document.activeElement) ? (document.activeElement.classList.contains("au-mais") ? "mais" : document.activeElement.textContent.trim() === "Atualizar" ? "atualizar" : null) : null);
+    // plano 1000b · UB-190: o botão é achado pelo data-acao (trocar o rótulo não quebra o foco depois da recarga)
+    const ativo = document.activeElement;
+    const refoco = opc.foco || (painelExec.contains(ativo) ? (ativo.classList.contains("au-mais") ? "mais" : ativo.dataset && ativo.dataset.acao === "atualizar" ? "atualizar" : null) : null);
     // AS-056: a recarga automática é suave — sem esqueleto, a lista antiga fica até a nova chegar
     if (!opc.suave) { ui.limpar(painelExec); painelExec.appendChild(ui.esqueleto("lista", 5)); }
     try {
       // série por dia do servidor (contrato 7) junto com a lista; banco antigo (sem a RPC) ou resposta estranha → o gráfico é calculado aqui
-      const [lista, porDiaServidor] = await Promise.all([
-        ctx.api.rpcC("nx_automacao_execucoes", { p_id: item.id, p_limite: execLimite }),
-        ctx.api.rpcC("nx_automacao_execucoes_dia", { p_automacao: item.id, p_dias: 14 }).then(r => L.serieExecucoesServidor(r), () => null),
-      ]);
+      const pedirSerie = () => ctx.api.rpcC("nx_automacao_execucoes_dia", { p_automacao: item.id, p_dias: 14 }).then(r => L.serieExecucoesServidor(r), () => null);
+      let lista, porDiaServidor;
+      if (opc.automatica && serieGuardada && Date.now() - serieGuardada.em < SERIE_MS) {
+        // plano 1000b · UB-037: a recarga automática (20 s) relê só a lista; a série de 14 dias, a cada 5 min ou quando a lista mudou
+        lista = await ctx.api.rpcC("nx_automacao_execucoes", { p_id: item.id, p_limite: execLimite });
+        porDiaServidor = assinaturaExec(lista) === serieGuardada.assinatura ? serieGuardada.valor : await pedirSerie();
+      } else {
+        [lista, porDiaServidor] = await Promise.all([ctx.api.rpcC("nx_automacao_execucoes", { p_id: item.id, p_limite: execLimite }), pedirSerie()]);
+      }
       if (eu !== execSeq) return;           // chegou depois de uma carga mais nova: descarta
+      serieGuardada = { em: serieGuardada && serieGuardada.valor === porDiaServidor ? serieGuardada.em : Date.now(), valor: porDiaServidor, assinatura: assinaturaExec(lista) };
       ui.limpar(painelExec);
       const arr = Array.isArray(lista) ? lista : (lista && Array.isArray(lista.itens) ? lista.itens : []);
       const contagem = { todas: arr.length, ok: 0, erro: 0, pulado: 0, espera: 0 };
       for (const x of arr) contagem[L.situacaoExecucao(x)]++;
-      const btAtualizar = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("relogio"), "Atualizar");
-      btAtualizar.addEventListener("click", () => pintarExecucoes({ foco: "atualizar" }));
+      const btAtualizar = h("button", { type: "button", class: "bt bt-fant bt-p", dataset: { acao: "atualizar" } }, ui.icone("relogio"), "Atualizar");
+      // plano 1000b · UB-191: «Atualizar» gira no próprio botão (aria-busy) e a lista antiga fica até a nova chegar
+      btAtualizar.addEventListener("click", () => { ui.carregando(btAtualizar, pintarExecucoes({ foco: "atualizar", suave: true })).catch(() => {}); });
       const filtro = h("div", { class: "au-chips au-ex-filtro", role: "radiogroup", "aria-label": "Filtrar por situação" });
       const corpoLista = h("div", { class: "au-ex-corpo" });
       // plano 1000 · AS-227: tocar numa barra do gráfico filtra a lista naquele dia (chip removível)
@@ -1356,10 +1607,21 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
         chipDia.append(ui.pilula(`Só ${L.rotuloDia(execDia)}`, "info"), tirar);
       };
       const escolherDia = dia => { execDia = execDia === dia ? null : dia; desenhar(); corpoLista.scrollIntoView && corpoLista.scrollIntoView({ block: "nearest", behavior: ui.comportamentoRolagem() }); };
+      const chipsSit = [];
+      let grafico = null;     // plano 1000b · UB-039: a barra do dia escolhido fica marcada (aria-pressed) a cada filtro
       const desenhar = () => {
         ui.limpar(corpoLista);
+        if (grafico && typeof grafico.marcarDia === "function") grafico.marcarDia(execDia);
         const vis = arr.filter(x => (execFiltro === "todas" || L.situacaoExecucao(x) === execFiltro) && (!execDia || L.diaDaExecucao(x) === execDia));
         pintarChipDia();
+        // plano 1000b · UB-038: com um dia escolhido no gráfico, as contagens dos chips são as DESSE dia (rótulo e aria-label juntos)
+        const doDia = execDia ? arr.filter(x => L.diaDaExecucao(x) === execDia) : arr;
+        const cont = { todas: doDia.length, ok: 0, erro: 0, pulado: 0, espera: 0 };
+        for (const x of doDia) cont[L.situacaoExecucao(x)]++;
+        for (const [k, rot, b] of chipsSit) {
+          b.textContent = `${rot} · ${cont[k]}`;
+          b.setAttribute("aria-label", `${rot}, ${cont[k]} ${cont[k] === 1 ? "execução" : "execuções"}${execDia ? ` em ${L.rotuloDia(execDia)}` : ""}`);
+        }
         if (!vis.length) {
           corpoLista.appendChild(ui.vazio({ titulo: arr.length ? "Nada nesta situação" : "Ainda não rodou", icone: "relogio", tema: "automacoes",
             texto: arr.length ? "Tente outro filtro." : item.ativo ? "Assim que o gatilho acontecer, cada execução aparece aqui, com o que foi feito." : "Ela está desligada. Ligue para começar a rodar." }));
@@ -1379,26 +1641,30 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
           execFiltro = k; filtro.querySelectorAll(".au-chip").forEach(c => c.setAttribute("aria-checked", String(c === b))); desenhar(); } });
         // plano 1000 · AS-226: o leitor de tela ouve «Com erro, 2 execuções» (o «·» era lido de um jeito estranho)
         b.setAttribute("aria-label", `${rot}, ${contagem[k]} ${contagem[k] === 1 ? "execução" : "execuções"}`);
+        chipsSit.push([k, rot, b]);
         filtro.appendChild(b);
       }
       // quem edita pode impedir o que ainda ia sair (antes a única saída era desligar a automação inteira)
+      // plano 1000b · UB-004: item.em_espera é abatido a cada cancelamento (cancelarEspera), então o número do diálogo não fica velho
       esperasNaTela = Number(item.em_espera) > 0 ? Number(item.em_espera) : contagem.espera;
       const btCancelarTodas = podeEditar && contagem.espera > 0 ? h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("parar"), "Cancelar todas as esperas") : null;
       if (btCancelarTodas) btCancelarTodas.addEventListener("click", () => cancelarEspera(null, btCancelarTodas));
       painelExec.appendChild(h("div", { class: "au-ex-cab" },
-        h("p", { class: "sub" }, `As últimas ${Math.min(arr.length, execLimite)} execuções. Erro numa automação não atrapalha as outras.`),
+        // plano 1000b · UB-005: sem execução nenhuma, nada de «As últimas 0 execuções» (o vazio abaixo já explica)
+        h("p", { class: "sub" }, arr.length ? `${arr.length === 1 ? "A última execução" : `As últimas ${Math.min(arr.length, execLimite)} execuções`}. Erro numa automação não atrapalha as outras.`
+          : "Erro numa automação não atrapalha as outras."),
         h("div", { class: "linha" }, btCancelarTodas, btAtualizar)));
       // gráfico de execuções por dia (item 54): calculado aqui a partir da lista, com estado vazio e versão em tabela.
       // A lista é só as últimas `execLimite`: cheia, pode faltar execução dentro dos 14 dias — a janela recorta no dia da mais
       // antiga carregada e o subtítulo avisa «nas últimas N execuções carregadas» (sem série do servidor, é o honesto).
       // Com a série do servidor (contrato 7) a janela de 14 dias é inteira e conta tudo, não só as carregadas.
       if (porDiaServidor && porDiaServidor.n > 0) {
-        painelExec.appendChild(h("div", { class: "cartao au-ex-graf" }, P.graficoDias({ serie: porDiaServidor.serie, dias: porDiaServidor.dias, n: porDiaServidor.n, servidor: true, aoEscolherDia: escolherDia })));
+        painelExec.appendChild(h("div", { class: "cartao au-ex-graf" }, (grafico = P.graficoDias({ serie: porDiaServidor.serie, dias: porDiaServidor.dias, n: porDiaServidor.n, servidor: true, aoEscolherDia: escolherDia, diaAtivo: execDia }))));
       } else if (arr.length) {
         const truncada = arr.length >= execLimite;
         const porDia = L.execucoesPorDia(arr, { dias: 14, recortar: truncada });
-        painelExec.appendChild(h("div", { class: "cartao au-ex-graf" }, P.graficoDias({ serie: porDia.serie, dias: porDia.dias, n: porDia.n,
-          carregadas: porDia.recortado ? arr.length : null, aoEscolherDia: escolherDia })));
+        painelExec.appendChild(h("div", { class: "cartao au-ex-graf" }, (grafico = P.graficoDias({ serie: porDia.serie, dias: porDia.dias, n: porDia.n,
+          carregadas: porDia.recortado ? arr.length : null, aoEscolherDia: escolherDia, diaAtivo: execDia }))));
       }
       P.setas(filtro);
       painelExec.appendChild(filtro);
@@ -1407,7 +1673,12 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       desenhar();
       if (arr.length >= execLimite && execLimite < 200) {
         const mais = h("button", { type: "button", class: "bt bt-sec bt-p au-mais" }, "Carregar mais");
-        mais.addEventListener("click", () => { execLimite = Math.min(200, execLimite + 50); pintarExecucoes({ foco: "mais" }); });
+        // plano 1000b · UB-036: «Carregar mais» é suave (sem esqueleto) e volta à mesma rolagem; o dia e o filtro escolhidos continuam
+        mais.addEventListener("click", () => {
+          execLimite = Math.min(200, execLimite + 50);
+          const y = typeof scrollY === "number" ? scrollY : null;
+          ui.carregando(mais, pintarExecucoes({ foco: "mais", suave: true }).then(() => { if (y != null && typeof scrollTo === "function") try { scrollTo({ top: y }); } catch { /* ok */ } })).catch(() => {});
+        });
         painelExec.appendChild(mais);
       } else if (arr.length >= execLimite && execLimite >= 200) {
         // plano 1000 · AS-060: no teto o botão some — a frase diz que há mais antigas que não aparecem aqui
@@ -1436,6 +1707,8 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     try {
       const r = await ui.carregando(botao, ctx.api.rpcC("nx_automacao_cancelar_espera", { p_id: item.id, p_chave: x ? x.chave : null }));
       const n = Number(r && r.canceladas) || 0;
+      // plano 1000b · UB-004: o próximo diálogo não repete o número velho
+      item.em_espera = Math.max(0, (Number(item.em_espera) || 0) - n);
       ui.toast(n === 0 ? "Não havia espera para cancelar: ela pode ter acabado de rodar." : n === 1 ? "1 espera cancelada." : `${n} esperas canceladas.`, { tipo: n ? "ok" : "info" });
       pintarExecucoes({ foco: "atualizar" });
     } catch (e) { ui.toast(L.erroAutomacao(e, ctx.api.mensagemErro(e)), { tipo: "erro" }); }
@@ -1457,7 +1730,11 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       h("div", { class: "au-ex-ia-txt" },
         h("p", { class: "au-ex-ia-frase" }, ia.tipo === "nota" ? h("span", { class: "au-ex-ia-nota mono" }, String(ia.score)) : null, ia.frase),
         ia.motivo && ia.tipo !== "pulado" && ia.tipo !== "erro" && ia.tipo !== "pedida" ? h("p", { class: "au-ex-ia-motivo" }, h("span", { class: "sr-only" }, "Motivo da IA: "), `«${ia.motivo}»`) : null)) : null;
-    const btParar = podeEditar && sit === "espera" && x.chave ? h("button", { type: "button", class: "bt bt-sec bt-p", "aria-label": "Cancelar esta espera" }, "Cancelar") : null;
+    // plano 1000b · UB-018: «Cancelar a espera de Maria (continua 15/10 10:00)» — duas esperas na lista não têm o mesmo nome
+    const nomeEspera = String(x.contato_nome || x.negocio_titulo || "").trim().slice(0, 60);
+    const quemEspera = nomeEspera || (L.passoDaExecucao(x) ? `«${L.passoDaExecucao(x)}»` : "");
+    const btParar = podeEditar && sit === "espera" && x.chave ? h("button", { type: "button", class: "bt bt-sec bt-p",
+      "aria-label": `Cancelar a espera${quemEspera ? ` de ${quemEspera}` : ""}${x.continua_em ? ` (continua ${ui.dataHoraBR(x.continua_em)})` : ` (de ${ui.horaBR(x.criado_em)})`}` }, "Cancelar") : null;
     if (btParar) btParar.addEventListener("click", () => cancelarEspera(x, btParar));
     // detalhe expansível (item 54): tudo o que o servidor mandou sobre esta execução, em palavras
     const idDet = novoId("exdet");
@@ -1477,7 +1754,10 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
       superConta && x.detalhe && String(x.detalhe) !== detalhe ? ["Detalhe técnico · servidor", String(x.detalhe)] : null,
     ].filter(Boolean);
     const det = h("dl", { class: "au-ex-mais", id: idDet, hidden: true }, linhasDet.flatMap(([k, v]) => [h("dt", null, k), h("dd", { class: /^Detalhe técnico/.test(k) ? "mono" : null }, v)]));
-    const btDet = h("button", { type: "button", class: "bt bt-fant bt-p au-ex-det-bt", "aria-expanded": "false", "aria-controls": idDet }, "Detalhes", ui.icone("seta-baixo"));
+    // plano 1000b · UB-017: «Detalhes da execução de 14:32 (com erro)» — cada botão com o seu contexto
+    const rotSitCurta = { ok: "deu certo", espera: "em espera", pulado: "pulada ou parada", erro: "com erro" }[sit] || "";
+    const btDet = h("button", { type: "button", class: "bt bt-fant bt-p au-ex-det-bt", "aria-expanded": "false", "aria-controls": idDet,
+      "aria-label": `Detalhes da execução de ${ui.horaBR(x.criado_em)}${rotSitCurta ? ` (${rotSitCurta})` : ""}` }, "Detalhes", ui.icone("seta-baixo"));
     btDet.addEventListener("click", () => { const abre = det.hidden; det.hidden = !abre; btDet.setAttribute("aria-expanded", String(abre)); });
     return h("li", { class: ["au-ex", sit === "erro" && "au-ex-erro", sit === "pulado" && "au-ex-pulado", sit === "espera" && "au-ex-espera"] },
       h("span", { class: "au-ex-ic", "aria-hidden": "true" }, ui.icone(icone)),
@@ -1521,9 +1801,28 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
   }
 
   // ------------------------------------------------ paleta Ctrl/⌘+K (item 59): salvar, testar e ver execuções desta automação
+  let cancelarCmdSalvar = null;
+  /** plano 1000b · UB-006: o comando «Salvar/Criar» da paleta acompanha o estado (re-registrado depois do 1º «Salvar e continuar»). */
+  function registrarCmdSalvar() {
+    if (!btSalvar || !ctx.comandos || typeof ctx.comandos.registrar !== "function" || !amb.aoSair) return;
+    if (cancelarCmdSalvar) { try { cancelarCmdSalvar(); } catch { /* ok */ } cancelarCmdSalvar = null; }
+    try {
+      const c = ctx.comandos.registrar({ id: "automacoes.salvar", rotulo: item ? "Salvar automação" : "Criar automação", palavras: "salvar gravar criar", icone: "check", fazer: () => salvar(btSalvar) });
+      if (typeof c === "function") { cancelarCmdSalvar = c; amb.aoSair(() => { if (cancelarCmdSalvar === c) { cancelarCmdSalvar = null; c(); } }); }
+    } catch { /* a paleta é um extra */ }
+  }
+  /**
+   * plano 1000b · UB-006: a nova salva com «Salvar e continuar» passa a ser uma automação salva — os dois botões dizem «Salvar»,
+   * o título da página (leitor de tela) diz «Automação: <nome>» e o comando da paleta deixa de ser «Criar automação».
+   */
+  function pintarRotulosSalvar(nome) {
+    for (const b of [btSalvar, raiz.querySelector(".au-rodape-movel .bt-prim")]) if (b && b.lastChild && b.lastChild.nodeType === 3) b.lastChild.textContent = "Salvar";
+    h1Pag.textContent = `Automação: ${String(nome || "").trim() || "sem nome"}`;
+    registrarCmdSalvar();
+  }
   if (ctx.comandos && typeof ctx.comandos.registrar === "function" && amb.aoSair) {
     const reg = c => { try { const cancelar = ctx.comandos.registrar(c); if (typeof cancelar === "function") amb.aoSair(cancelar); } catch { /* a paleta é um extra */ } };
-    if (btSalvar) reg({ id: "automacoes.salvar", rotulo: item ? "Salvar automação" : "Criar automação", palavras: "salvar gravar criar", icone: "check", fazer: () => salvar(btSalvar) });
+    registrarCmdSalvar();
     if (btTestar) reg({ id: "automacoes.testar", rotulo: "Testar automação (sem enviar nada)", palavras: "testar simular conferir", icone: "olho", fazer: () => testar(btTestarLado) });
     if (item) reg({ id: "automacoes.execucoes", rotulo: "Ver execuções desta automação", palavras: "execucoes historico rodou", icone: "relogio",
       fazer: () => { const aba = raiz.querySelectorAll(".au-abas [role=tab]")[1]; if (aba) aba.click(); else mostrarAba("execucoes"); } });
@@ -1536,16 +1835,29 @@ export function telaEditor(ctx, raiz, dados, item, amb) {
     try {
       amb.aoSair(ctx.pulso.assinar(() => {
         if (painelExec.hidden || !execCarregadas || !raiz.isConnected || Date.now() - ultimoExec < 20000) return;
-        // quem está lendo um «Detalhes» aberto ou com o foco dentro da lista não tem a lista trocada embaixo
-        if ([...painelExec.querySelectorAll(".au-ex-mais")].some(d => !d.hidden) || painelExec.contains(document.activeElement)) return;
         ultimoExec = Date.now();
-        pintarExecucoes({ suave: true });
+        // quem está lendo um «Detalhes» aberto ou com o foco dentro da lista não tem a lista trocada embaixo
+        if ([...painelExec.querySelectorAll(".au-ex-mais")].some(d => !d.hidden) || painelExec.contains(document.activeElement)) {
+          // plano 1000b · UB-076: mas confere em silêncio — se chegou execução nova, a faixa «Há execuções novas · Atualizar» avisa
+          if (painelExec.querySelector(".au-ex-novas") || conferindoNovas) return;
+          conferindoNovas = true;
+          ctx.api.rpcC("nx_automacao_execucoes", { p_id: item.id, p_limite: execLimite }).then(l => {
+            if (!raiz.isConnected || painelExec.querySelector(".au-ex-novas") || !serieGuardada || assinaturaExec(l) === serieGuardada.assinatura) return;
+            const bt = h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { acao: "atualizar" } }, ui.icone("reabrir"), "Atualizar");
+            bt.addEventListener("click", () => { ui.carregando(bt, pintarExecucoes({ foco: "atualizar", suave: true })).catch(() => {}); });
+            const faixa = h("div", { class: "aviso au-ex-novas" }, ui.icone("info"), h("span", { role: "status" }, "Há execuções novas."), bt);
+            const cab = painelExec.querySelector(".au-ex-cab");
+            painelExec.insertBefore(faixa, cab ? cab.nextSibling : painelExec.firstChild);
+          }, () => {}).finally(() => { conferindoNovas = false; });
+          return;
+        }
+        pintarExecucoes({ suave: true, automatica: true });
       }) || (() => {}));
     } catch { /* sem pulso, o «Atualizar» continua */ }
   }
 
   // ------------------------------------------------ primeira pintura
-  pintarQuando(); pintarSe(); pintarEntao(); atualizarPrevia(true); pintarNome();
+  pintarQuando(); pintarSe(); pintarEntao(); atualizarPrevia(true); pintarNome(); pintarTesteCom();
   if (amb.aoSair) amb.aoSair(() => clearTimeout(tDiagrama));
   if (salvoJson === null && item) salvoJson = JSON.stringify(L.limpar(auto));
   if (item && q.aba === "execucoes") mostrarAba("execucoes");

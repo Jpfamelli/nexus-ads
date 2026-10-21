@@ -37,7 +37,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Montar a pasta de publicação (só o clássico + rastreio.js e rastreio.v1.js)
+      - name: Montar a pasta de publicação (só o clássico + rastreio.js, rastreio.v1.js e rastreio.v2.js)
         run: |
           set -euo pipefail
           pub="${RUNNER_TEMP}/pages"
@@ -49,7 +49,8 @@ jobs:
             if [ -e "${pub}/${proibido}" ]; then echo "::error::${proibido} não podia estar na publicação"; exit 1; fi
           done
           # rastreio.v1.js: o snippet do rastreio aponta para ele com SRI (integrity) — sem o arquivo o site do cliente perde o rastreio
-          for exigido in index.html painel.js painel.css dados.js nucleo.js rastreio.js rastreio.v1.js fonts; do
+          # plano 1000b: rastreio.v2.js (o snippet novo, com o aquecimento/clique e ttclid/msclkid) também é exigido
+          for exigido in index.html painel.js painel.css dados.js nucleo.js rastreio.js rastreio.v1.js rastreio.v2.js fonts; do
             if [ ! -e "${pub}/${exigido}" ]; then echo "::error::falta ${exigido} na publicação"; exit 1; fi
           done
           # /app/ do Pages: quem ainda tem o link antigo (ou um PWA instalado daqui) vai para o Órbita de verdade

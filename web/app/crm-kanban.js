@@ -33,6 +33,8 @@ const CONFERIR_MS = [15000, 60000]; // plano 1000 (CR-003): reconferência de um
 /** JSON com as chaves em ordem (o filtro guardado e o montado no popover podem ter a mesma coisa em outra ordem). */
 const canonico = v => (Array.isArray(v) ? `[${v.map(canonico).join(",")}]` : v && typeof v === "object" ? `{${Object.keys(v).filter(x => v[x] !== undefined).sort().map(x => `${JSON.stringify(x)}:${canonico(v[x])}`).join(",")}}` : JSON.stringify(v));
 const OUTRO_FUNIL = "__outro_funil__";  // plano 1000 (CR-044): escolha «Outro funil…» da folha «Mover para…»
+const SELECIONAR = "__selecionar__";     // plano 1000b · RB-205: escolha «Selecionar vários» da folha «Mover para…»
+const TAREFA = "__tarefa__", CONVERSA = "__conversa__";   // plano 1000b · RB-247: «Nova tarefa»/«Abrir conversa» na folha (toque)
 const agora = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
 
 export async function montarKanban(k, el, rota) {
@@ -55,13 +57,24 @@ export async function montarKanban(k, el, rota) {
     } catch { return {}; }
   };
   let controlesVisoes = null;
+  let paradosDaUrl = null;      // plano 1000b · RB-032: o «?parados=N» do link (não é gravado no aparelho)
   const gravarLocal = () => {
     const { busca: _b, ...semBusca } = S.filtro || {};
+    // plano 1000b · RB-032: o «Parados há N dias» que veio do LINK vale só nesta visita — não gruda na preferência enquanto for o do link
+    if (paradosDaUrl != null && semBusca.parado_dias === paradosDaUrl) delete semBusca.parado_dias;
     try { localStorage.setItem(chaveLocal, JSON.stringify({ funil: S.funil && S.funil.id, filtro: semBusca, todosFechados: S.todosFechados, fechadosDias: S.fechadosDias })); } catch { /* ok */ }
     if (controlesVisoes) controlesVisoes.atualizar();
     atualizarAtalhos();
   };
 
+  /** plano 1000b · RB-028: preferência do aparelho por conta; a chave antiga (só da empresa) migra uma vez. */
+  const lerPorConta = (nova, antiga) => {
+    try {
+      let v = localStorage.getItem(nova);
+      if (v === null && (v = localStorage.getItem(antiga)) !== null) { localStorage.setItem(nova, v); localStorage.removeItem(antiga); }
+      return v;
+    } catch { return null; }
+  };
   const salvo = lerLocal();
   const funis = () => k.base.funis.filter(f => f.ativo !== false);
   const S = {
@@ -85,11 +98,13 @@ export async function montarKanban(k, el, rota) {
   };
   let obsMais = null;     // plano 1000 (CR-028): observa o «Ver mais» de cada coluna para carregar a próxima página ao rolar até ele
   delete S.filtro.fechados_dias;
+  // plano 1000b · RB-033: filtro guardado com campo personalizado que foi excluído (ou mudou de tipo) não vai cru ao servidor
+  if (S.filtro.campo) { const fc = L.filtroCampoLimpo(S.filtro.campo, k.base.campos); if (fc) S.filtro.campo = fc; else delete S.filtro.campo; }
   definirFechados(S.fechadosDias);
   // plano 1000 (CR-185): «Ver todos com “mar”» da paleta abre o quadro com a busca preenchida (vale só nesta visita: a busca não é gravada)
   if (rota.query && typeof rota.query.busca === "string" && rota.query.busca.trim()) S.filtro.busca = rota.query.busca.trim().slice(0, 120);
   // plano 1000 (CR-246): «revisar as paradas» (vazio de Tarefas) abre o quadro já no atalho «Parados há 7+ dias»
-  if (rota.query && /^(3|7|15|30)$/.test(String(rota.query.parados || ""))) S.filtro.parado_dias = Number(rota.query.parados);
+  if (rota.query && /^(3|7|15|30)$/.test(String(rota.query.parados || ""))) S.filtro.parado_dias = paradosDaUrl = Number(rota.query.parados);
   const podeMover = k.pode("atendente");
   const comConversas = !!(ctx.temModulo && ctx.temModulo("conversas"));
   ctx.titulo(k.v.crm);
@@ -97,7 +112,8 @@ export async function montarKanban(k, el, rota) {
   async function novaTarefa(c, idContato) {
     try {
       const T = await k.mod("tarefas");
-      const t = await T.formTarefa(k, null, { negocio_id: c.id, contato_id: idContato ?? null });
+      // plano 1000b · RB-246: o título já vem sugerido com o contexto do cartão («Retomar contato — Ana Souza»)
+      const t = await T.formTarefa(k, null, { negocio_id: c.id, contato_id: idContato ?? null, titulo: `Retomar contato — ${L.tituloCard(c)}`.slice(0, 200) });
       if (t) { ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); S.meus.add(c.id); carregar({ silencioso: true }); }
     } catch (e) { k.toastErro(e); }
   }
@@ -108,7 +124,10 @@ export async function montarKanban(k, el, rota) {
   const selFunilM = h("div", { class: "crm-funil-m" });
   function trocarFunil(id) {
     if (S.funil && S.funil.id === id) return;
-    S.funil = k.funil(id);
+    // plano 1000b · RB-003: o funil pode ter sido excluído por outro admin (Alt+N, seletor velho) — avisa em vez de derrubar a tela
+    const f = k.funil(id);
+    if (!f) { ui.toast("Esse funil não existe mais.", { tipo: "aten" }); desenharSelFunil(); return; }
+    S.funil = f;
     gravarLocal();
     history.replaceState(history.state, "", `${location.pathname}${location.search}#/crm?funil=${encodeURIComponent(S.funil.id)}`);
     carregar();
@@ -133,7 +152,8 @@ export async function montarKanban(k, el, rota) {
     }
   }
 
-  const busca = h("input", { type: "search", placeholder: `Buscar ${k.v.min("negocios")}, nome ou telefone`, "aria-label": `Buscar ${k.v.min("negocios")}`, value: S.filtro.busca || "" });
+  // plano 1000b · RB-037: a visão corta a busca em 120 (crm-logica) — o campo também
+  const busca = h("input", { type: "search", maxlength: "120", placeholder: `Buscar ${k.v.min("negocios")}, nome ou telefone`, "aria-label": `Buscar ${k.v.min("negocios")}`, value: S.filtro.busca || "" });
   // plano 1000 (CR-031): depois de buscar, o leitor de tela ouve quantos cartões sobraram (o quadro muda em silêncio)
   const aoBuscar = ui.debounce(async () => {
     const q = busca.value.trim(); if (q) S.filtro.busca = q; else delete S.filtro.busca; gravarLocal();
@@ -143,7 +163,14 @@ export async function montarKanban(k, el, rota) {
     ui.anunciar(q ? `${ui.num(n)} ${n === 1 ? "cartão encontrado" : "cartões encontrados"} para «${q}».` : `Busca limpa: ${ui.num(n)} ${n === 1 ? "cartão" : "cartões"} no quadro.`);
   }, 320);
   busca.addEventListener("input", aoBuscar);
-  busca.addEventListener("keydown", ev => { if (ev.key === "Escape" && busca.value) { busca.value = ""; aoBuscar(); } });
+  busca.addEventListener("keydown", ev => {
+    if (ev.key !== "Escape") return;
+    if (busca.value) { busca.value = ""; aoBuscar(); return; }
+    // plano 1000b · RB-259: Esc com a busca já vazia leva o foco ao 1º cartão (ou ao quadro) — «/», Esc, Esc volta ao quadro pelo teclado
+    if (ev.preventDefault) ev.preventDefault();
+    const alvo = quadro.querySelector(".kc") || quadro;
+    try { alvo.focus({ preventScroll: false }); } catch { alvo.focus(); }
+  });
 
   const nFiltros = h("span", { class: "crm-filtro-n", hidden: true });
   const btFiltros = h("button", { type: "button", class: "bt bt-sec crm-filtro-bt", "aria-haspopup": "dialog" }, ui.icone("filtro"), "Filtros", nFiltros);
@@ -158,8 +185,9 @@ export async function montarKanban(k, el, rota) {
     gravarLocal(); carregar({ silencioso: true });
   } }, title: "Sem mudar de etapa há 7 dias ou mais" }, "Parados há 7+ dias");      // plano 1000 (CR-205): o rótulo diz o que é
   // plano 1000 (CR-036): «Recolher vazias» — coluna sem cartão vira uma faixa estreita (continua destino do arrasto); lembrado por empresa no aparelho
-  const chaveRecolher = `nx-app-crm-kb-recolher-${cli}`;
-  S.recolher = (() => { try { return localStorage.getItem(chaveRecolher) === "1"; } catch { return false; } })();
+  // plano 1000b · RB-028: lembrado por CONTA (como o filtro, CR-024) — a chave antiga (só da empresa) é lida uma vez e apagada
+  const chaveRecolher = `nx-app-crm-kb-recolher-${cli}-${conta}`;
+  S.recolher = lerPorConta(chaveRecolher, `nx-app-crm-kb-recolher-${cli}`) === "1";
   const btRecolher = h("button", { type: "button", class: "bt bt-fant bt-p crm-atalho crm-recolher", "aria-pressed": String(S.recolher), title: "Colunas sem cartão viram uma faixa estreita",
     on: { click: () => {
       S.recolher = !S.recolher;
@@ -174,7 +202,8 @@ export async function montarKanban(k, el, rota) {
     if (!S.ultimaRecarga) { idade.hidden = true; return; }
     const min = Math.floor((Date.now() - S.ultimaRecarga) / 60000);
     idade.hidden = false;
-    idade.textContent = `atualizado às ${ui.horaBR(new Date(S.ultimaRecarga).toISOString())}`;
+    // plano 1000b · RB-015: velho, o texto VISÍVEL diz há quanto tempo (o title some no toque e no leitor de tela)
+    idade.textContent = `atualizado às ${ui.horaBR(new Date(S.ultimaRecarga).toISOString())}${min >= 2 ? ` · há ${min} min` : ""}`;
     idade.classList.toggle("velho", min >= 2);
     if (min >= 2) idade.setAttribute("title", `Sem atualizar há ${min} min. Confira a internet ou recarregue a página.`); else idade.removeAttribute("title");
   }
@@ -188,11 +217,13 @@ export async function montarKanban(k, el, rota) {
   }
   const fitaBusca = h("div", { class: "crm-fita" }, h("div", { class: "busca" }, ui.icone("busca"), busca), btFiltros);
   controlesVisoes = Vis.controlesVisoes(k, { tipo: "kanban",
-    obterDados: () => ({ funil: S.funil && String(S.funil.id), filtro: S.filtro, todosFechados: S.todosFechados }),
+    // plano 1000b · RB-004: o período dos fechados (30/90/todos) vai e volta com a visão
+    obterDados: () => ({ funil: S.funil && String(S.funil.id), filtro: S.filtro, todosFechados: S.todosFechados, fechadosDias: S.fechadosDias }),
     aplicar: async dados => {
       const funil = k.funil(dados.funil);
       if (!funil || funil.ativo === false) throw new Error("O funil deste filtro salvo não está disponível.");
-      S.funil = funil; S.filtro = dados.filtro || {}; S.todosFechados = dados.todosFechados === true; S.fechadosDias = S.todosFechados ? 0 : 30;
+      S.funil = funil; S.filtro = dados.filtro || {};
+      definirFechados([30, 90, 0].includes(dados.fechadosDias) ? dados.fechadosDias : (dados.todosFechados === true ? 0 : 30));
       // plano 1000: escolhido dentro da folha de Filtros (celular), a escolha já resolveu — a folha fecha sem reler o formulário antigo por cima
       if (S.fecharFiltros) S.fecharFiltros();
       busca.value = S.filtro.busca || "";
@@ -218,6 +249,8 @@ export async function montarKanban(k, el, rota) {
     h("div", { class: "crm-dist" }, h("span", { class: "rotulo" }, "Distribuição por etapa"), distBarra, distLeg));
   const reduzido = () => { try { return !!(matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches); } catch { return false; } };
   const telaPequena = () => { try { return !!(matchMedia && matchMedia("(max-width: 760px)").matches); } catch { return false; } };
+  // plano 1000b · RB-022: «toque» calculado UMA vez (e protegido: sem matchMedia, como no Node, não lança) — antes, a cada coluna vazia redesenhada
+  const toqueTela = (() => { try { return typeof matchMedia === "function" && !!matchMedia("(pointer: coarse)").matches; } catch { return false; } })();
   /** Número do topo: na 1ª pintura conta até o valor (G.contar); quando muda depois, troca e acende (G.destacar). Sem graficos.js só troca o texto.
       Compara com o ALVO (o aria-label guarda o valor final durante a contagem), não com o número parcial; a rede que chega no meio da contagem do
       quadro guardado para a contagem e escreve o valor novo no texto e no aria-label. */
@@ -238,8 +271,8 @@ export async function montarKanban(k, el, rota) {
   // Recolhível (estado por empresa no aparelho). Começa aberto só em tela alta (≥ 900 px) e larga: em 768 px de altura e no celular o quadro
   // precisa aparecer na 1ª tela — recolhido, o cabeçalho mostra a faixa compacta (contagem e % entre as etapas). Com versão em tabela.
   const telaAlta = () => { try { return !!(matchMedia && matchMedia("(min-height: 900px)").matches); } catch { return false; } };
-  const chaveResumo = `nx-app-crm-fr-${cli}`;
-  let resumoAberto = (() => { try { const v = localStorage.getItem(chaveResumo); return v === null ? (!telaPequena() && telaAlta()) : v !== "0"; } catch { return false; } })();
+  const chaveResumo = `nx-app-crm-fr-${cli}-${conta}`;      // plano 1000b · RB-028: por conta
+  let resumoAberto = (() => { try { const v = lerPorConta(chaveResumo, `nx-app-crm-fr-${cli}`); return v === null ? (!telaPequena() && telaAlta()) : v !== "0"; } catch { return false; } })();
   const resMini = h("span", { class: "crm-fr-mini", "aria-hidden": "true" });      // «● 4 → 75% ● 3 → 67% …» enquanto recolhido (o texto completo está nas linhas)
   const resLista = h("ol", { class: "crm-fr-lista", "aria-label": "Etapas do funil" });
   const resTabela = h("div", { class: "crm-fr-tabela", hidden: true });
@@ -262,7 +295,9 @@ export async function montarKanban(k, el, rota) {
 
   const quadro = h("div", { class: "kb", role: "region", "aria-label": `Quadro de ${k.v.min("negocios")}`, tabindex: "-1" });
   const instr = h("p", { id: `kb-instr-${cli}`, class: "sr-only" },
-    podeMover ? "Enter abre. Espaço pega o cartão para mover: setas esquerda e direita trocam de etapa, cima e baixo mudam a posição, Enter solta, Esc cancela. A tecla M abre a lista de etapas para mover o cartão. A tecla N cria um cartão novo. Shift com clique seleciona vários para mover de uma vez; Ctrl com clique abre numa nova aba." : "Enter abre.");
+    podeMover ? "Enter abre. Espaço pega o cartão para mover: setas esquerda e direita trocam de etapa, cima e baixo mudam a posição, Enter solta, Esc cancela. A tecla M abre a lista de etapas para mover o cartão. A tecla N cria um cartão novo. Shift com Espaço (ou a tecla X) seleciona o cartão para mover vários de uma vez; Shift com clique também seleciona vários para mover de uma vez; " + L.teclaModificadora(L.plataformaAparelho()) + " com clique abre numa nova aba." : "Enter abre.");      // plano 1000b · RB-014: ⌘ no Mac
+  // plano 1000b · RB-034: a instrução longa fica ligada ao QUADRO (lida ao entrar nele), não a cada cartão focado pelas setas
+  quadro.setAttribute("aria-describedby", instr.id);
   const areaVazia = h("div", { hidden: true });
   const corpoQuadro = h("div", { class: "kb-env" }, quadro);
 
@@ -305,10 +340,11 @@ export async function montarKanban(k, el, rota) {
   }
   function alternarSel(id) {
     if (S.sel.has(id)) S.sel.delete(id); else S.sel.add(id);
+    if (!S.sel.size) S.modoSel = false;
     pintarSel();
     ui.anunciar(`${S.sel.size} ${S.sel.size === 1 ? "cartão selecionado" : "cartões selecionados"}.`);
   }
-  function limparSel() { S.sel.clear(); pintarSel(); }
+  function limparSel() { S.sel.clear(); S.modoSel = false; pintarSel(); }
 
   // plano 1000 (CR-270): no toque, uma dica única («Segure o cartão para mover») — some no primeiro arrasto (ou no «Entendi») e não volta neste aparelho
   const CHAVE_DICA_SEGURAR = "nx-app-crm-dica-segurar";
@@ -353,6 +389,7 @@ export async function montarKanban(k, el, rota) {
   async function carregar({ silencioso = false } = {}) {
     const minha = ++S.seq;
     if (!S.funil) { mostrarSemFunil(); return; }
+    for (const b of [btNovo, fab]) if (b) b.hidden = false;      // plano 1000b · RB-001: voltou a haver funil
     const trocouTudo = !silencioso || !S.dados;
     if (trocouTudo) { S.teclado = null; S.adiado = null; ui.limpar(quadro); quadro.appendChild(ui.esqueleto("kanban", Math.min(6, S.funil.estagios.length || 4))); }   // o cartão pego pelo teclado saiu da tela junto
     desenharChips();
@@ -366,7 +403,7 @@ export async function montarKanban(k, el, rota) {
         if (S.pronta) S.pronta();       // a tela já pode entrar: o quadro guardado está pintado
       } });
       if (minha !== S.seq || !S.vivo) return;
-      const igual = doCache && JSON.stringify(S.dados) === JSON.stringify(d);     // nada mudou desde o guardado: não refaz o quadro
+      const igual = doCache && mesmoQuadro(d);     // nada mudou desde o guardado: não refaz o quadro (plano 1000b · RB-262)
       S.ultimaRecarga = Date.now();
       pintarIdade();
       // a resposta chegou com um cartão sendo arrastado: redesenhar agora apagaria o cartão e o marcador do gesto (no celular o arrasto cairia) — fica para o fim do gesto
@@ -381,15 +418,27 @@ export async function montarKanban(k, el, rota) {
     } catch (e) {
       if (minha !== S.seq || !S.vivo) return;
       if (e && e.comCache) return;      // a rede falhou depois de pintar o último quadro: a tela fica com o que mostra (o selo do shell avisa)
-      if (e && e.codigo === "funil_invalido") { await k.recarregarBase(); S.funil = k.funilPadrao(); desenharSelFunil(); if (S.funil) return carregar(); }
+      // plano 1000b · RB-002: a recarga da base pode falhar (sem rejeição solta) e, sem funil padrão, a tela é a de «Nenhum funil ativo» (não o cartão de erro)
+      if (e && e.codigo === "funil_invalido") {
+        let recarregou = true;
+        try { await k.recarregarBase(); } catch { recarregou = false; }
+        if (minha !== S.seq || !S.vivo) return;
+        if (recarregou) {
+          S.funil = k.funilPadrao(); desenharSelFunil();
+          if (S.funil) return carregar();
+          mostrarSemFunil(); return;
+        }
+      }
       ui.limpar(quadro);
       quadro.appendChild(ui.erroCartao(e, () => carregar()));
     }
   }
 
   function mostrarSemFunil() {
+    for (const b of [btNovo, fab]) if (b) b.hidden = true;      // plano 1000b · RB-001: sem funil não há onde criar
     ui.limpar(quadro);
-    quadro.appendChild(ui.vazio({ titulo: "Nenhum funil ativo.", texto: "Crie um funil em Configurações → Funis e etapas.", tema: "crm",
+    // plano 1000b · RB-017: quem não é admin não tem «Configurações → Funis» — pede ao administrador
+    quadro.appendChild(ui.vazio({ titulo: "Nenhum funil ativo.", texto: k.pode("admin") ? "Crie um funil em Configurações → Funis e etapas." : "Peça ao administrador para criar ou ativar um funil.", tema: "crm",
       acao: k.pode("admin") ? { rotulo: "Abrir configurações", fn: () => ctx.navegar("#/config/funis") } : null }));
   }
 
@@ -397,8 +446,30 @@ export async function montarKanban(k, el, rota) {
   const colEls = new Map();    // estagio_id → {sec, lista, n, soma, extra}
 
   function colunaDe(id) { return S.dados.colunas.find(c => c.estagio_id === id); }
+  /**
+   * plano 1000b · RB-036: o cartão pelo id SEM montar seletor CSS com o id do servidor (aspas ou barra quebravam o seletor com SyntaxError) —
+   * compara o data-id de cada cartão.
+   */
+  function cartaoEl(id, raiz = quadro) {
+    const alvo = String(id);
+    return Array.from(raiz.querySelectorAll(".kc")).find(x => x.dataset && x.dataset.id === alvo) || null;
+  }
   /** O que a coluna desenhou (CR-023); nas fechadas entra também o período dos fechados (CR-215: o rodapé «últimos 90 dias» muda sem a resposta mudar). */
   const jsonColuna = (e, col) => JSON.stringify(col) + (e && e.tipo !== "aberto" ? `|${S.fechadosDias}` : "");
+  /**
+   * plano 1000b · RB-262: a resposta da rede é o mesmo quadro que o cache pintou? Antes: JSON.stringify do quadro INTEIRO duas vezes (milhares
+   * de cartões). Agora coluna a coluna contra o c.json que cada coluna já guardou, parando na 1ª diferença.
+   */
+  function mesmoQuadro(d) {
+    if (!d || !Array.isArray(d.colunas) || !S.dados || !Array.isArray(S.dados.colunas) || d.colunas.length !== S.dados.colunas.length) return false;
+    const { colunas: _a, ...restoNovo } = d, { colunas: _b, ...restoVelho } = S.dados;
+    if (JSON.stringify(restoNovo) !== JSON.stringify(restoVelho)) return false;
+    for (const col of d.colunas) {
+      const c = col && colEls.get(col.estagio_id);
+      if (!c || jsonColuna(c.e, col) !== c.json) return false;
+    }
+    return true;
+  }
 
   function desenharQuadro() {
     // a recarga silenciosa (pulso, busca) refaz as colunas: guarda a rolagem para o quadro não voltar à 1ª coluna no celular
@@ -413,7 +484,9 @@ export async function montarKanban(k, el, rota) {
       const fem = k.v.art("negocio") === "a";
       areaVazia.appendChild(ui.vazio({
         titulo: `${k.v.nenhum("negocio")} aqui ainda.`,
-        texto: `${fem ? "Elas aparecem sozinhas" : "Eles aparecem sozinhos"} quando alguém chama no WhatsApp — ou ${fem ? "crie uma" : "crie um"} agora.`,
+        // plano 1000b · RB-016: sem o módulo Conversas nada chega sozinho pelo WhatsApp — o texto não promete isso
+        texto: comConversas ? `${fem ? "Elas aparecem sozinhas" : "Eles aparecem sozinhos"} quando alguém chama no WhatsApp — ou ${fem ? "crie uma" : "crie um"} agora.`
+          : `${fem ? "Crie a primeira" : "Crie o primeiro"} ou importe uma planilha.`,
         tema: "crm", acao: podeMover ? { rotulo: k.v.novo("negocio"), fn: () => novo({}) } : null }));
     } else if (S.estadoVazio === "filtro") {
       // plano 1000 (CR-200): a busca e os filtros valem para todos os funis — trocar para um funil sem nada que passe neles não pode parecer «quadro vazio»
@@ -480,13 +553,16 @@ export async function montarKanban(k, el, rota) {
     const nome = String(x.movido_por || (typeof k.usuario === "function" && (k.usuario(x.movido_por_id) || {}).nome) || "").trim();
     return nome ? `por ${nome}` : null;
   }
+  // plano 1000b · RB-023: os avisos de «movido» guardam os timers — o desmontar cancela
+  const timers = new Set();
+  const depois = (f, ms) => { const t = setTimeout(() => { timers.delete(t); f(); }, ms); timers.add(t); return t; };
   function destacarMovidos(antes) {
     if (!antes) return;
     const movidos = [];
     for (const col of S.dados.colunas) for (const x of col.itens || []) {
       const era = antes.get(x.id);
       if (era === undefined || era === col.estagio_id || S.pend.has(x.id) || S.meus.has(x.id)) continue;
-      const el = quadro.querySelector(`.kc[data-id="${x.id}"]`);
+      const el = cartaoEl(x.id);
       if (!el) continue;
       el.classList.add("kc-movido");
       const tituloAntes = el.getAttribute("title");      // CR-271: a dica «Entrou em…» volta depois do aviso
@@ -497,9 +573,9 @@ export async function montarKanban(k, el, rota) {
         // o nome fica à vista por 4 s no canto do cartão (o leitor de tela ouve pelo anúncio abaixo)
         const selo = h("span", { class: "kc-movido-por", "aria-hidden": "true" }, `Movido ${quem}`);
         el.appendChild(selo);
-        setTimeout(() => selo.remove(), 4000);
+        depois(() => selo.remove(), 4000);
       }
-      setTimeout(() => { el.classList.remove("kc-movido"); if (tituloAntes) el.setAttribute("title", tituloAntes); else el.removeAttribute("title"); }, 2000);
+      depois(() => { el.classList.remove("kc-movido"); if (tituloAntes) el.setAttribute("title", tituloAntes); else el.removeAttribute("title"); }, 2000);
       movidos.push(`«${L.tituloCard(x)}» foi para ${(k.estagio(col.estagio_id) || {}).nome || "outra etapa"}${quem ? ` (${quem})` : ""}`);
     }
     S.meus.clear();
@@ -507,6 +583,8 @@ export async function montarKanban(k, el, rota) {
   }
 
   /* ---------- fita de etapas (celular): atalho para cada coluna + destino do arrasto ---------- */
+  /** plano 1000b · RB-007: o mesmo rótulo ao desenhar e ao recontar (antes a recontagem perdia «fechada, ganho/perda»). */
+  const rotuloFita = (e, n) => `${e.nome}${e.tipo === "ganho" ? " (fechada, ganho)" : e.tipo === "perdido" ? " (fechada, perda)" : ""}, ${n} ${n === 1 ? "cartão" : "cartões"}`;
   function desenharFita() {
     ui.limpar(fitaEtapas);
     if (!S.dados) return;
@@ -514,11 +592,10 @@ export async function montarKanban(k, el, rota) {
       const col = colunaDe(e.id);
       const n = col ? Number(col.total) || 0 : 0;
       const b = h("button", { type: "button", class: "kb-fita-b", dataset: { estagio: e.id }, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null,
-        "aria-label": `${e.nome}, ${n} ${n === 1 ? "cartão" : "cartões"}`, on: { click: () => irParaColuna(e.id) } },
+        "aria-label": rotuloFita(e, n), on: { click: () => irParaColuna(e.id) } },
         // plano 1000 (CR-269): Ganho/Perdido com ✓/✕ — na fita as etapas fechadas não parecem abertas
         e.tipo === "ganho" || e.tipo === "perdido" ? h("span", { class: `kb-fita-ic kb-fita-${e.tipo}`, "aria-hidden": "true" }, ui.icone(e.tipo === "ganho" ? "check" : "fechar")) : h("i", { "aria-hidden": "true" }),
         h("span", null, e.nome), h("b", { class: "dado" }, ui.num(n)));
-      if (e.tipo !== "aberto") b.setAttribute("aria-label", `${e.nome} (${e.tipo === "ganho" ? "fechada, ganho" : "fechada, perda"}), ${n} ${n === 1 ? "cartão" : "cartões"}`);
       fitaEtapas.appendChild(b);
     }
     marcarColunaAtual();
@@ -529,7 +606,7 @@ export async function montarKanban(k, el, rota) {
     for (const b of fitaEtapas.children) {
       const col = colunaDe(b.dataset.estagio), n = col ? Number(col.total) || 0 : 0;
       if (b.lastChild) b.lastChild.textContent = ui.num(n);
-      b.setAttribute("aria-label", `${(k.estagio(b.dataset.estagio) || {}).nome || ""}, ${n} ${n === 1 ? "cartão" : "cartões"}`);
+      b.setAttribute("aria-label", rotuloFita(k.estagio(b.dataset.estagio) || { nome: "", tipo: "aberto" }, n));      // plano 1000b · RB-007
     }
   }
 
@@ -558,11 +635,13 @@ export async function montarKanban(k, el, rota) {
 
   function criarColuna(e, col) {
     const idNome = `kb-c-${e.id}`;
-    const n = h("span", { class: "kb-col-n", "aria-label": "quantidade" });
+    const n = h("span", { class: "kb-col-n" });      // plano 1000b · RB-011: número visível + «cartões» só para o leitor (aria-label em span era ignorado)
     const soma = h("span", { class: "kb-col-soma" });
     const lista = h("div", { class: "kb-lista", role: "list", dataset: { estagio: e.id }, "aria-labelledby": idNome });
     const extra = h("div");
-    const tipoTxt = e.tipo === "ganho" ? k.v.ganhar : e.tipo === "perdido" ? k.v.perder : `${e.probabilidade}% de chance`;
+    // plano 1000b · RB-005: etapa salva sem chance (null) não mostra «null% de chance» — usa a chance padrão do tipo
+    const probCol = Number.isFinite(Number(e.probabilidade)) && e.probabilidade !== null && e.probabilidade !== "" ? Number(e.probabilidade) : L.probPadrao(e.tipo);
+    const tipoTxt = e.tipo === "ganho" ? k.v.ganhar : e.tipo === "perdido" ? k.v.perder : `${probCol}% de chance`;
     const mais = podeMover && e.tipo === "aberto"
       ? h("button", { type: "button", class: "bt-icone kb-col-mais", "aria-label": `${k.v.novo("negocio")} em ${e.nome}`, title: `${k.v.novo("negocio")} em ${e.nome}`,
         on: { click: () => novo({ estagio_id: e.id }) } }, ui.icone("mais")) : null;
@@ -626,7 +705,11 @@ export async function montarKanban(k, el, rota) {
     const fora = (linhas.fora || []).map(f => `«${f.nome}» (${ui.num(f.n)} agora)`);
     resNota.textContent = `Estimativa pelo quadro de agora: um cartão «chegou» a uma etapa se está nela ou numa etapa à frente (${k.v.art("negocio") === "a" ? "as perdidas" : "os perdidos"} não entram).`
       + (fora.length ? ` ${fora.join(" e ")} ${fora.length === 1 ? "fica" : "ficam"} fora da sequência: é desvio, não passo do funil.` : "");
-    if (!reduzido()) resLista.classList.add("anim");
+    // plano 1000b · RB-030: as barras «crescem» só na 1ª pintura de cada funil — a recarga silenciosa (pulso de 8 s) redesenha sem animar de novo
+    const chaveAnim = String(S.funil && S.funil.id);
+    const animar = !reduzido() && S.resumoAnimado !== chaveAnim;
+    resLista.classList.toggle("anim", animar);
+    S.resumoAnimado = chaveAnim;
   }
 
   function preencherColuna(estagioId, col) {
@@ -634,7 +717,9 @@ export async function montarKanban(k, el, rota) {
     if (!c) return;
     const e = c.e;
     col = col || colunaDe(estagioId);
-    c.n.textContent = String(col.total || 0);
+    const tot = Number(col.total) || 0;
+    c.n.textContent = String(tot);
+    c.n.append(h("span", { class: "sr-only" }, tot === 1 ? " cartão" : " cartões"));      // plano 1000b · RB-011
     const valorSoma = e.tipo === "ganho" ? col.soma_valor : col.soma_previsto;
     c.soma.textContent = Number(valorSoma) ? ui.brl(valorSoma, { centavos: false }) : "R$ 0";
     // C10: quantos cartões da coluna vieram de anúncio (dos carregados; com «Ver mais» pendente, «2+ de anúncio»)
@@ -646,7 +731,7 @@ export async function montarKanban(k, el, rota) {
     ui.limpar(c.lista);
     for (const it of col.itens) c.lista.appendChild(criarCartao(it, e));
     if (!col.itens.length) c.lista.appendChild(h("div", { class: "kb-vazia", role: "listitem" }, ui.vazio({ tipo: "sem_resultado", titulo: podeMover
-      ? (matchMedia("(pointer: coarse)").matches ? "Segure um cartão e arraste até aqui" : "Arraste um cartão para cá")
+      ? (toqueTela ? "Segure um cartão e arraste até aqui" : "Arraste um cartão para cá")      // plano 1000b · RB-022: calculado uma vez, com try
       : "Nada nesta etapa" })));
     ui.limpar(c.extra);
     const faltam = (col.total || 0) - col.itens.length;
@@ -666,7 +751,8 @@ export async function montarKanban(k, el, rota) {
     c.json = jsonColuna(e, col);       // o que esta coluna desenhou: a recarga silenciosa só refaz a coluna se a resposta for diferente (CR-023)
     if (e.tipo !== "aberto") {
       c.extra.appendChild(h("div", { class: "kb-antigos" },
-        S.fechadosDias === 0 ? "Mostrando todos os fechados." : `Fechados nos últimos ${S.fechadosDias} dias (mude em Filtros).`,
+        // plano 1000b · RB-031: sem «(mude em Filtros)» — o botão do lado já muda
+        S.fechadosDias === 0 ? "Mostrando todos os fechados." : `Fechados nos últimos ${S.fechadosDias} dias.`, " ",
         // plano 1000 (CR-005): a escolha fica gravada (ao voltar ao CRM continua «todos os fechados») e o seletor de visões a reconhece
         h("button", { type: "button", class: "link", on: { click: () => { definirFechados(S.fechadosDias === 0 ? 30 : 0); gravarLocal(); carregar({ silencioso: true }); } } },
           S.fechadosDias === 0 ? "Só os recentes" : "Ver mais antigos")));
@@ -740,7 +826,8 @@ export async function montarKanban(k, el, rota) {
     const dono = k.usuario(c.dono_id);
     const etqs = (c.etiquetas || []).map(id => k.etiqueta(id)).filter(Boolean);
     // plano 1000 (CR-038): etiqueta ou responsável que a base em memória (5 min) ainda não conhece — criados agora por outra pessoa: relê a base
-    if ((c.dono_id && !dono) || etqs.length < (c.etiquetas || []).length) pedirBaseNova();
+    if ((c.dono_id && !dono) || etqs.length < (c.etiquetas || []).length)
+      pedirBaseNova([...(c.dono_id && !dono ? [`u:${c.dono_id}`] : []), ...(c.etiquetas || []).filter(id => !k.etiqueta(id)).map(id => `e:${id}`)]);
     const pont = L.pontuacao(c);
     const origemTxt = L.descricaoOrigem(c);
     const tarefa = c.tarefa && typeof c.tarefa === "object" ? c.tarefa : null;
@@ -765,22 +852,24 @@ export async function montarKanban(k, el, rota) {
     // aria-describedby, lido sob demanda
     const tituloCurto = titulo.length > 48 ? `${titulo.slice(0, 47)}…` : titulo;
     const rotulo = `${tituloCurto}${valor != null ? `, ${ui.brl(valor, { centavos: false })}` : ""}${faixa ? `, ${faixa.texto.toLowerCase()}` : ""}`;
-    const detalhes = [sub, consultaTxt ? `consulta ${consultaTxt}` : "", semPresenca ? "presença da consulta não marcada" : "", semData ? "agendado sem data" : "",
+    // plano 1000b · RB-035: «entrou em dd/mm» no detalhe sr-only e na dica do rodapé (não mais no title do cartão inteiro)
+    const entrouEm = c.criado_em ? (ui.dataCurtaBR ? ui.dataCurtaBR(c.criado_em) : ui.dataBR(c.criado_em)) : "";
+    const detalhes = [sub, entrouEm ? `entrou em ${entrouEm}` : "", consultaTxt ? `consulta ${consultaTxt}` : "", semPresenca ? "presença da consulta não marcada" : "", semData ? "agendado sem data" : "",
       tarefaTxt.toLowerCase(), origemTxt ? `origem ${origemTxt}` : "", etqs.length ? `etiquetas ${etqs.map(x => x.nome).join(", ")}` : "",
       pont ? `pontuação ${pont.score} de 100` : "", dono ? `responsável ${dono.nome}` : "", c.nao_lidas ? `${c.nao_lidas} mensagens não lidas` : ""].filter(Boolean).join(", ");
     const idDet = `kc-d-${cli}-${c.id}`;
     const art = h("article", { class: ["kc", S.sel.has(c.id) && "kc-sel", S.pend.has(c.id) && "confirmando salvando", faixa && `kc-prazo-${faixa.nivel}`], role: "listitem", tabindex: "0", dataset: { id: c.id }, "aria-roledescription": "cartão",
-      "aria-label": rotulo, "aria-describedby": detalhes ? `${idDet} ${instr.id}` : instr.id, "aria-busy": S.pend.has(c.id) ? "true" : null, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
+      "aria-label": rotulo, "aria-describedby": detalhes ? idDet : null, "aria-busy": S.pend.has(c.id) ? "true" : null, style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null },
       detalhes ? h("span", { class: "sr-only", id: idDet }, detalhes) : null,
       h("div", { class: "kc-l1" }, ui.avatar(nomeAvatar, idAvatar), h("span", { class: "kc-t" }, titulo)),
       h("div", { class: "kc-l2" },
-        valor != null ? h("b", { class: "kc-valor" }, ui.brl(valor, { centavos: false })) : h("span", { class: ["kc-valor", "sem"] }, "sem valor"),
+        valor != null ? h("b", { class: "kc-valor" }, ui.brl(valor, { centavos: false })) : h("span", { class: ["kc-valor", "sem"] }, "Sem valor"),      // plano 1000b · RB-236: mesma caixa da gaveta
         sub ? h("span", { class: "kc-s", title: sub }, sub) : null),
       faixa ? h("span", { class: ["kc-tempo", faixa.nivel], role: "img", "aria-label": `${L.textoDiasEtapa(c.estagio_em)}: ${faixa.texto.toLowerCase()}`, title: `${L.textoDiasEtapa(c.estagio_em)} · ${faixa.texto}` },
         h("i", { style: { "--w": `${Math.round(faixa.pct * 100)}%` } })) : null,
       h("div", { class: "kc-rod" },
-        h("span", { class: ["kc-dias", sla && "sla", faixa && faixa.nivel !== "ok" && faixa.nivel], title: e.tipo === "aberto" ? `${L.textoDiasEtapa(c.estagio_em)}${sla ? ` — passou do prazo da etapa (${e.sla_horas} h)` : faixa ? ` · ${faixa.texto}` : ""}` : null },
-          e.tipo === "aberto" ? L.textoDiasEtapa(c.estagio_em).replace(" na etapa", "") : c.fechado_em ? `${e.tipo === "ganho" ? k.v.ganhar.toLowerCase() : "fechado"} ${ui.relativo(c.fechado_em)}` : ""),
+        h("span", { class: ["kc-dias", sla && "sla", faixa && faixa.nivel !== "ok" && faixa.nivel], title: e.tipo === "aberto" ? `${L.textoDiasEtapa(c.estagio_em)}${sla ? ` — passou do prazo da etapa (${L.textoPrazoSla(e.sla_horas)})` /* plano 1000b · RB-080 */ : faixa ? ` · ${faixa.texto}` : ""}` : null },
+          e.tipo === "aberto" ? L.textoDiasEtapa(c.estagio_em).replace(" na etapa", "") : c.fechado_em ? `${e.tipo === "ganho" ? k.v.ganhar.toLowerCase() : k.v.perder.toLowerCase()} ${ui.relativo(c.fechado_em)}` : ""),     // plano 1000b · RB-009: perdido usa o termo da vertical
         consultaTxt ? h("span", { class: "kc-consulta", title: "Consulta/visita marcada" }, ui.icone("relogio"), consultaTxt) : null,
         semPresenca ? h("button", { type: "button", class: "kc-presenca", title: "A consulta já passou: confirme se compareceu ou faltou",
           "aria-label": `Confirmar a presença de «${tituloCurto}» na consulta`, on: { click: ev => { ev.stopPropagation(); abrir(c.id); } } },
@@ -813,15 +902,16 @@ export async function montarKanban(k, el, rota) {
           on: { click: ev => { ev.stopPropagation(); ctx.navegar(`#/conversas?contato=${encodeURIComponent(idContato)}`); } } }, ui.icone("whatsapp")) : null,
         h("button", { type: "button", class: "bt-icone kc-rapida", dataset: { acao: "tarefa" }, "aria-label": `Nova tarefa para «${tituloCurto}»`, title: "Nova tarefa",
           on: { click: ev => { ev.stopPropagation(); novaTarefa(c, idContato); } } }, ui.icone("tarefa"))) : null);
-    // plano 1000 (CR-271): quando o lead entrou, na dica do cartão (sem abrir a gaveta)
-    if (c.criado_em) { const dt = ui.dataCurtaBR ? ui.dataCurtaBR(c.criado_em) : ui.dataBR(c.criado_em); if (dt) art.setAttribute("title", `Entrou em ${dt}`); }
+    // plano 1000 (CR-271): quando o lead entrou, sem abrir a gaveta. plano 1000b · RB-035: na dica do rodapé (kc-dias), não no cartão inteiro
+    if (entrouEm) { const dias = art.querySelector(".kc-dias"); if (dias) dias.setAttribute("title", [dias.getAttribute("title"), `Entrou em ${entrouEm}`].filter(Boolean).join(" · ")); }
     art.addEventListener("click", ev => {
       if (S.arrasto && (S.arrasto.moveu || S.arrasto.engoleClique)) return;
       if (S.teclado) return;
       if (ev.target.closest("a, button")) return;
       // plano 1000 (CR-281): Ctrl/⌘ + clique abre o negócio numa nova aba (como um link); (CR-035) Shift + clique seleciona vários para mover
       if (ev.ctrlKey || ev.metaKey) { abrirEmNovaAba(c.id); return; }
-      if (podeMover && ev.shiftKey) { alternarSel(c.id); return; }
+      // plano 1000b · RB-205: no modo seleção (aberto pelo «Selecionar vários» da folha «Mover para…», sem Shift no toque) o toque seleciona
+      if (podeMover && (ev.shiftKey || (S.modoSel && S.sel.size))) { alternarSel(c.id); return; }
       abrir(c.id);
     });
     // botão do meio do mouse: nova aba também
@@ -835,9 +925,15 @@ export async function montarKanban(k, el, rota) {
 
   /** CR-038: no máximo 1× por minuto relê a base (k.recarregarBase) e redesenha os cartões com os nomes/cores novos. */
   let ultimaBaseNova = 0;
-  function pedirBaseNova() {
+  // plano 1000b · RB-012: ids já procurados numa releitura — etiqueta EXCLUÍDA que ficou no cartão continua desconhecida depois de reler,
+  // e não faz o quadro reler a base a cada minuto para sempre (só um id novo pede de novo)
+  const jaProcurados = new Set();
+  function pedirBaseNova(ids = []) {
+    const novos = ids.filter(x => !jaProcurados.has(x));
+    if (ids.length && !novos.length) return;
     if (typeof k.recarregarBase !== "function" || Date.now() - ultimaBaseNova < 60000) return;
     ultimaBaseNova = Date.now();
+    for (const x of novos) jaProcurados.add(x);
     Promise.resolve().then(() => k.recarregarBase()).then(() => { if (S.vivo && S.dados && !emGesto()) desenharQuadro(); }, () => { /* fica como está; tenta de novo em 1 min */ });
   }
 
@@ -869,6 +965,8 @@ export async function montarKanban(k, el, rota) {
     ui.anunciar(`Mostrando só os cartões de ${dono.nome}.`);
   }
   function novo(extra) {
+    // plano 1000b · RB-001: sem funil ativo (S.funil null) o «Novo», o «+» e a tecla N avisam em vez de lançar TypeError
+    if (!S.funil) { ui.toast("Crie um funil antes.", { tipo: "aten" }); return; }
     N.novoNegocio(k, { funil_id: S.funil.id, ...extra }, { aoCriar: () => carregar({ silencioso: true }) });
   }
 
@@ -908,14 +1006,16 @@ export async function montarKanban(k, el, rota) {
       col.itens = col.itens.concat(novos);
       // plano 1000 (CR-272): sem «tem_mais», o servidor não tem mais nada — o total é o que está carregado (cartões que saíram da etapa
       // depois da carga deixavam «Ver mais (10)» preso para sempre)
-      if (!r.tem_mais) col.total = col.itens.length;
+      // plano 1000b · RB-006: resposta vazia (null) não lança — é «não tem mais»
+      const temMais = !!(r && r.tem_mais);
+      if (!temMais) col.total = col.itens.length;
       else col.total = Math.max(Number(col.total) || 0, col.itens.length);
       preencherColuna(estagioId, col);
       desenharTotais();
       // plano 1000 (CR-022): o botão some quando a coluna é refeita — o foco vai para o 1º cartão novo e o leitor ouve quantos chegaram
       if (novos.length) {
         const lista = (colEls.get(estagioId) || c).lista;
-        const primeiro = lista.querySelector(`.kc[data-id="${novos[0].id}"]`) || lista.querySelectorAll(".kc")[antes];
+        const primeiro = cartaoEl(novos[0].id, lista) || lista.querySelectorAll(".kc")[antes];
         if (focoNoBotao && primeiro) { try { primeiro.focus({ preventScroll: false }); } catch { primeiro.focus(); } }
         ui.anunciar(`${novos.length} ${novos.length === 1 ? "cartão carregado" : "cartões carregados"} em ${c.e.nome}.`);
       }
@@ -937,8 +1037,7 @@ export async function montarKanban(k, el, rota) {
     if (!mov) return false;
     const msg = mov.efetivado ? "Ainda estamos gravando a última mudança deste cartão. Tente de novo em instantes."
       : "A última mudança deste cartão ainda pode ser desfeita. Toque em «Desfazer» ou espere alguns segundos para mover de novo.";
-    ui.toast(msg, { tipo: "info" });
-    ui.anunciar(msg);
+    ui.toast(msg, { tipo: "info" });      // plano 1000b · RB-013: o toast já anuncia (ui.toast → anunciar); sem repetir
     return true;
   }
   /** Tira o movimento da lista de pendentes só se ainda for ELE (um movimento antigo não pode apagar o pendente mais novo do mesmo cartão). */
@@ -955,7 +1054,7 @@ export async function montarKanban(k, el, rota) {
       if (estagioId !== origemCol.estagio_id && colEls.has(estagioId)) preencherColuna(estagioId);     // o teclado já tinha levado o cartão até lá
       focarCartao(id);
       const msg = "Sem internet: o cartão não foi movido. Tente de novo quando a conexão voltar.";
-      ui.toast(msg, { tipo: "erro" }); ui.anunciar(msg);
+      ui.toast(msg, { tipo: "erro" });      // plano 1000b · RB-013
       return;
     }
     const card = origemCol.itens.find(x => x.id === id);
@@ -1014,7 +1113,8 @@ export async function montarKanban(k, el, rota) {
     // mesma natureza (aberto → aberto): grava já; o «Desfazer» move de volta
     const ok = await efetivar(mov);
     if (!ok || origemCol === destCol) return;       // só reordenar dentro da etapa não pede «Desfazer»
-    ui.acaoComDesfazer({ texto: `«${titulo}» movido para ${destino.nome}`, reverter: () => desfazerMovimento(mov) });
+    // plano 1000b · RB-008: «movida» quando o registro da vertical é feminino (oportunidade, venda) — também no aviso do leitor
+    ui.acaoComDesfazer({ texto: `«${titulo}» movid${k.v.art("negocio")} para ${destino.nome}`, reverter: () => desfazerMovimento(mov) });
   }
 
   /**
@@ -1043,7 +1143,7 @@ export async function montarKanban(k, el, rota) {
 
   /** O cartão solto «assenta» no lugar (M10: .assenta = escala 1,015 → 1; sem movimento reduzido o CSS zera a animação). */
   function assentar(id) {
-    const el = quadro.querySelector(`.kc[data-id="${id}"]`);
+    const el = cartaoEl(id);
     if (!el) return;
     el.classList.remove("assenta", "kc-solto");
     void el.offsetWidth;
@@ -1052,7 +1152,7 @@ export async function montarKanban(k, el, rota) {
   }
 
   function marcarConfirmando(id, sim) {
-    const el = quadro.querySelector(`.kc[data-id="${id}"]`);
+    const el = cartaoEl(id);
     if (!el) return;
     el.classList.toggle("confirmando", sim);
     el.classList.toggle("salvando", sim);
@@ -1085,10 +1185,10 @@ export async function montarKanban(k, el, rota) {
         // (com o que está em memória: dados que a rede trouxe ANTES desta gravação mostrariam este cartão na etapa antiga)
         if (emGesto()) S.adiado = {};
         else { if (col) preencherColuna(mov.estagioId); desenharTotais(); }
-        const el = quadro.querySelector(`.kc[data-id="${mov.id}"]`);
+        const el = cartaoEl(mov.id);
         if (el) { el.classList.add("chegou"); el.classList.add("assenta"); el.classList.add("kc-solto"); }   // a coluna foi redesenhada: a entrada animada continua no cartão novo
         marcarConfirmando(mov.id, false);
-        ui.anunciar(`${L.tituloCard(mov.card)} movido para ${mov.destino.nome}.${totaisDoMovimento(mov)}`);
+        ui.anunciar(`${L.tituloCard(mov.card)} movid${k.v.art("negocio")} para ${mov.destino.nome}.${totaisDoMovimento(mov)}`);
         return true;
       };
       try {
@@ -1108,8 +1208,7 @@ export async function montarKanban(k, el, rota) {
         reverterNaTela(mov);
         // erro de prazo/conexão com o servidor ainda na etapa antiga: a mudança NÃO foi feita (a mensagem padrão de «tempo esgotado» fala de relatórios)
         const msg = L.erroAmbiguo(e) ? "O servidor não confirmou a mudança de etapa e o cartão voltou para onde estava. Tente de novo." : k.erro(e);
-        ui.toast(msg, { tipo: "erro" });
-        ui.anunciar(`Não foi possível mover: ${msg}`);
+        ui.toast(`Não foi possível mover: ${msg}`, { tipo: "erro" });      // plano 1000b · RB-013: uma mensagem só (o toast anuncia)
         return false;
       }
     })();
@@ -1169,7 +1268,9 @@ export async function montarKanban(k, el, rota) {
     await N.moverNegocio(k, atual, volta, { ordem: mov.origem.ordem, extra: L.extraDeVolta({ estagio: volta, valor: mov.card.valor, valor_previsto: mov.card.valor_previsto,
       motivo_perda_id: mov.card.motivo_perda_id, motivo_perda_txt: mov.card.motivo_perda_txt }) });
     if (mov.extra && mov.extra.consulta_em && mov.origem.consulta_em !== mov.extra.consulta_em) {
-      await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: mov.id, consulta_em: mov.origem.consulta_em || null } });
+      // plano 1000b · RB-059: a etapa já voltou; se a data não voltar, o aviso diz exatamente isso (e o «Desfazer» não é repetido)
+      try { await k.api.rpcC("nx_negocio_salvar", { p_negocio: { id: mov.id, consulta_em: mov.origem.consulta_em || null } }); }
+      catch { ui.toast(L.avisoDataNaoVoltou(k.v.vertical), { tipo: "erro" }); if (S.vivo) await carregar({ silencioso: true }); return; }
     }
     if (S.vivo) await carregar({ silencioso: true });
     ui.anunciar("Movimento desfeito.");
@@ -1194,7 +1295,7 @@ export async function montarKanban(k, el, rota) {
   addEventListener("pagehide", aoSairDaPagina);
 
   function focarCartao(id) {
-    const c = quadro.querySelector(`.kc[data-id="${id}"]`);
+    const c = cartaoEl(id);
     if (c && (S.teclado || document.activeElement === document.body || el.contains(document.activeElement))) {
       try { c.focus({ preventScroll: false }); } catch { c.focus(); }
     }
@@ -1206,6 +1307,10 @@ export async function montarKanban(k, el, rota) {
     const art = ev.currentTarget;
     if (!t) {
       if (ev.key === "Enter") { ev.preventDefault(); abrir(id); return; }
+      // plano 1000b · RB-024: Shift+Espaço (ou X) seleciona pelo teclado — mover vários deixava de ser só do mouse (antes do Espaço que pega)
+      if (podeMover && ((ev.shiftKey && (ev.key === " " || ev.key === "Spacebar")) || ((ev.key === "x" || ev.key === "X") && !ev.ctrlKey && !ev.metaKey && !ev.altKey && ev.target === art))) {
+        ev.preventDefault(); alternarSel(id); return;
+      }
       if ((ev.key === " " || ev.key === "Spacebar") && podeMover) {
         ev.preventDefault();
         if (recusarSePendente(id)) return;
@@ -1237,7 +1342,10 @@ export async function montarKanban(k, el, rota) {
       S.teclado = null;
       // plano 1000 (CR-202): o leitor ouve onde soltou na hora — a gravação (e o anúncio dela) pode demorar
       const etapaSolta = k.estagio(destino);
-      ui.anunciar(`Soltou em «${etapaSolta ? etapaSolta.nome : "etapa"}», posição ${indice + 1}. Gravando…`);
+      // plano 1000b · RB-206: «Gravando…» só quando não vem pergunta (valor, motivo, data) antes de gravar
+      const colOrig = colunaDeCard(id);
+      const pede = L.pedidoAoMover(etapaSolta, colOrig ? k.estagio(colOrig.estagio_id) : null);
+      ui.anunciar(`Soltou em «${etapaSolta ? etapaSolta.nome : "etapa"}», posição ${indice + 1}.${pede ? "" : " Gravando…"}`);
       aplicarAdiado();
       soltar(id, destino, indice);
       return;
@@ -1317,20 +1425,40 @@ export async function montarKanban(k, el, rota) {
     if (!card || !podeMover || recusarSePendente(id)) return;
     const atualId = (colunaDeCard(id) || {}).estagio_id;
     let modalApi = null;
-    const corpo = h("div", { class: "kb-mover", role: "list" }, S.funil.estagios.map(e => {
+    // plano 1000b · RB-010: <ul><li><button> — cada opção é anunciada como BOTÃO dentro de um item de lista (antes: <button role=listitem>)
+    const corpo = h("ul", { class: "kb-mover" }, S.funil.estagios.map(e => {
       const col = colunaDe(e.id), n = col ? Number(col.total) || 0 : 0, atual = e.id === atualId;
-      return h("button", { type: "button", role: "listitem", class: ["kb-mover-op", atual && "atual"], disabled: atual, "aria-current": atual ? "step" : null,
+      return h("li", null, h("button", { type: "button", class: ["kb-mover-op", atual && "atual"], disabled: atual, "aria-current": atual ? "step" : null,
         style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, on: { click: () => modalApi && modalApi.fechar(e.id) } },
         h("i", { "aria-hidden": "true" }), h("span", { class: "kb-mover-nome" }, e.nome),
-        h("small", null, atual ? "etapa atual" : `${n} ${n === 1 ? "cartão" : "cartões"}`));
+        h("small", null, atual ? "etapa atual" : `${n} ${n === 1 ? "cartão" : "cartões"}`)));
     }));
     // plano 1000 (CR-044): trocar de funil daqui mesmo (antes só pela gaveta → ⋮), com a mesma trava do funil de anúncios
     if (funis().length > 1 && typeof N.moverDeFunil === "function") {
-      corpo.appendChild(h("button", { type: "button", role: "listitem", class: "kb-mover-op kb-mover-funil", on: { click: () => modalApi && modalApi.fechar(OUTRO_FUNIL) } },
-        ui.icone("funil"), h("span", { class: "kb-mover-nome" }, "Outro funil…"), h("small", null, "escolher funil e etapa")));
+      corpo.appendChild(h("li", null, h("button", { type: "button", class: "kb-mover-op kb-mover-funil", on: { click: () => modalApi && modalApi.fechar(OUTRO_FUNIL) } },
+        ui.icone("funil"), h("span", { class: "kb-mover-nome" }, "Outro funil…"), h("small", null, "escolher funil e etapa"))));
+    }
+    // plano 1000b · RB-205: no celular não há Shift — «Selecionar vários» liga o modo seleção (a barra «Mover para…» em lote aparece)
+    corpo.appendChild(h("li", null, h("button", { type: "button", class: "kb-mover-op kb-mover-sel", on: { click: () => modalApi && modalApi.fechar(SELECIONAR) } },
+      ui.icone("check"), h("span", { class: "kb-mover-nome" }, "Selecionar vários"), h("small", null, "toque nos outros cartões para juntar"))));
+    // plano 1000b · RB-247: no toque os botões rápidos do cartão (só hover/foco) nunca aparecem — «Nova tarefa» e «Abrir conversa» entram na folha
+    const idContato = card.contato && card.contato.id != null ? card.contato.id : (card.contato_id ?? null);
+    if (toqueTela) {
+      if (idContato != null && comConversas) corpo.appendChild(h("li", null, h("button", { type: "button", class: "kb-mover-op kb-mover-rapida", dataset: { acao: "conversa" }, on: { click: () => modalApi && modalApi.fechar(CONVERSA) } },
+        ui.icone("whatsapp"), h("span", { class: "kb-mover-nome" }, "Abrir conversa"), h("small", null, "no WhatsApp"))));
+      corpo.appendChild(h("li", null, h("button", { type: "button", class: "kb-mover-op kb-mover-rapida", dataset: { acao: "tarefa" }, on: { click: () => modalApi && modalApi.fechar(TAREFA) } },
+        ui.icone("tarefa"), h("span", { class: "kb-mover-nome" }, "Nova tarefa"), h("small", null, "para este cartão"))));
     }
     const escolhida = await ui.modal({ titulo: "Mover para…", descricao: L.tituloCard(card), corpo, largura: "p", protegerTexto: false,
       acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: null }], aoAbrir: a => { modalApi = a; } });
+    if (escolhida === TAREFA && S.vivo) { novaTarefa(card, idContato); return; }
+    if (escolhida === CONVERSA && S.vivo) { ctx.navegar(`#/conversas?contato=${encodeURIComponent(idContato)}`); return; }
+    if (escolhida === SELECIONAR && S.vivo) {
+      S.modoSel = true;
+      if (!S.sel.has(id)) alternarSel(id);
+      ui.anunciar("Modo de seleção: toque nos outros cartões para juntar e use «Mover para…» na barra.");
+      return;
+    }
     if (escolhida === OUTRO_FUNIL && S.vivo) {
       const status = (k.estagio(atualId) || {}).tipo || card.status || "aberto";
       await N.moverDeFunil(k, { ...card, funil_id: S.funil.id, status }, { aoMover: () => { S.meus.add(id); carregar({ silencioso: true }); } });
@@ -1343,14 +1471,18 @@ export async function montarKanban(k, el, rota) {
    * leitor de tela) e UM aviso com «Desfazer». Ganho fica de fora (cada um tem o seu valor final); etapa com data vai sem data (cada um tem a sua).
    */
   async function moverSelecionados() {
-    const cards = [...S.sel].map(cardDe).filter(c => c && !S.pend.has(c.id));
+    const todos = [...S.sel].map(cardDe).filter(Boolean);
+    const cards = todos.filter(c => !S.pend.has(c.id));
+    // plano 1000b · RB-026: os que ainda estão gravando ficam de fora — e o título diz quantos (antes sumiam do lote em silêncio)
+    const foraPend = todos.length - cards.length;
+    if (!cards.length && foraPend) { ui.toast(foraPend === 1 ? "O cartão selecionado ainda está gravando. Tente de novo em instantes." : "Os cartões selecionados ainda estão gravando. Tente de novo em instantes.", { tipo: "info" }); return; }
     if (!cards.length || !podeMover) { limparSel(); return; }
     if (typeof navigator !== "undefined" && navigator && navigator.onLine === false) { ui.toast("Sem internet: nada foi movido. Tente de novo quando a conexão voltar.", { tipo: "erro" }); return; }
     let modalApi = null;
-    const corpo = h("div", { class: "kb-mover", role: "list" }, S.funil.estagios.map(e =>
-      h("button", { type: "button", role: "listitem", class: "kb-mover-op", style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, on: { click: () => modalApi && modalApi.fechar(e.id) } },
-        h("i", { "aria-hidden": "true" }), h("span", { class: "kb-mover-nome" }, e.nome), h("small", null, e.tipo === "ganho" ? "um por vez (valor de cada)" : ""))));
-    const destinoId = await ui.modal({ titulo: `Mover ${cards.length} ${cards.length === 1 ? "cartão" : "cartões"} para…`, corpo, largura: "p", protegerTexto: false,
+    const corpo = h("ul", { class: "kb-mover" }, S.funil.estagios.map(e =>      // plano 1000b · RB-010: <ul><li><button>
+      h("li", null, h("button", { type: "button", class: "kb-mover-op", style: k.cor(e.cor) ? { "--cor": k.cor(e.cor) } : null, on: { click: () => modalApi && modalApi.fechar(e.id) } },
+        h("i", { "aria-hidden": "true" }), h("span", { class: "kb-mover-nome" }, e.nome), h("small", null, e.tipo === "ganho" ? "um por vez (valor de cada)" : "")))));
+    const destinoId = await ui.modal({ titulo: `Mover ${cards.length} ${cards.length === 1 ? "cartão" : "cartões"} para…${foraPend ? ` (${foraPend} ainda gravando, ${foraPend === 1 ? "fica" : "ficam"} de fora)` : ""}`, corpo, largura: "p", protegerTexto: false,
       acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: null }], aoAbrir: a => { modalApi = a; } });
     const destino = destinoId && k.estagio(destinoId);
     if (!destino || !S.vivo) return;
@@ -1367,13 +1499,16 @@ export async function montarKanban(k, el, rota) {
       const c = mover[i], origem = k.estagio(colunaDeCard(c.id).estagio_id);
       try { await N.moverNegocio(k, c, destino, { extra }); feitos.push({ c, origem }); S.meus.add(c.id); }
       catch (e) { falhas.push(e); }
-      ui.anunciar(`Movendo ${i + 1} de ${mover.length}…`);
+      // plano 1000b · RB-027: o leitor ouve o 1º, a cada 5 e o último (antes: um aviso por cartão inundava a fala)
+      if (i === 0 || (i + 1) % 5 === 0 || i === mover.length - 1) ui.anunciar(`Movendo ${i + 1} de ${mover.length}…`);
     }
     limparSel();
     if (S.vivo) await carregar({ silencioso: true });
     if (falhas.length) ui.toast(`${falhas.length} não ${falhas.length === 1 ? "foi movido" : "foram movidos"}: ${k.erro(falhas[0])}`, { tipo: "erro" });
     if (!feitos.length) return;
-    ui.acaoComDesfazer({ texto: `${feitos.length} ${feitos.length === 1 ? "cartão movido" : "cartões movidos"} para «${destino.nome}».${destino.tipo !== "aberto" ? " Mensagens automáticas já enviadas não voltam." : ""}`,
+    // plano 1000b · RB-025: etapa com data (marco «agendada») em lote vai sem data — o aviso diz isso e o que fazer
+    const semData = destino.marco === "agendada" ? ` — sem data marcada: abra cada um para agendar` : "";
+    ui.acaoComDesfazer({ texto: `${feitos.length} ${feitos.length === 1 ? "cartão movido" : "cartões movidos"} para «${destino.nome}»${semData}.${destino.tipo !== "aberto" ? " Mensagens automáticas já enviadas não voltam." : ""}`,
       reverter: async () => {
         for (const f of feitos) {
           if (!f.origem) continue;
@@ -1618,7 +1753,7 @@ export async function montarKanban(k, el, rota) {
       return;
     }
     // plano 1000 (CR-267): N (fora de campos e diálogos) abre um cartão novo — o mesmo «+» do cabeçalho; aparece na folha «?» pelo comando registrado
-    if ((ev.key === "n" || ev.key === "N") && !ev.altKey && !ev.ctrlKey && !ev.metaKey && podeMover && !S.arrasto && !S.teclado) {
+    if ((ev.key === "n" || ev.key === "N") && !ev.altKey && !ev.ctrlKey && !ev.metaKey && podeMover && S.funil && !S.arrasto && !S.teclado) {     // plano 1000b · RB-001: S.funil
       const a = ev.target;
       const editando = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || "") || (a.closest && a.closest("[role=dialog],dialog")));
       if (!editando && !(typeof document !== "undefined" && document.querySelector && document.querySelector("dialog[open]"))) { ev.preventDefault(); novo({}); return; }
@@ -1651,10 +1786,10 @@ export async function montarKanban(k, el, rota) {
     const f = S.filtro;
     const add = (txt, tirar, dica) => chips.appendChild(h("span", { class: "crm-chip" }, h("span", null, txt, dica ? h("small", null, ` ${dica}`) : null),
       h("button", { type: "button", "aria-label": `Tirar o filtro ${txt}`, on: { click: () => { tirar(); gravarLocal(); carregar({ silencioso: true }); } } }, ui.icone("fechar"))));
-    if (f.dono) add(`Responsável: ${f.dono === "eu" ? "eu" : f.dono === "sem" ? "sem responsável" : (k.usuario(f.dono) || {}).nome || "—"}`, () => delete f.dono);
+    if (f.dono) add(L.textoChipDono(f.dono, k.usuario(f.dono)), () => delete f.dono);     // plano 1000b · RB-029: «pessoa removida» em vez de «—»
     if (f.etiquetas && f.etiquetas.ids && f.etiquetas.ids.length) {
-      const nomes = f.etiquetas.ids.map(id => (k.etiqueta(id) || {}).nome).filter(Boolean);
-      add(`Etiquetas: ${nomes.join(", ")}`, () => delete f.etiquetas, `(${{ alguma: "alguma", todas: "todas", nenhuma: "nenhuma" }[f.etiquetas.op || "alguma"]})`);
+      // plano 1000b · RB-018: frase («Tem todas: VIP, Retorno»), sem o código do operador; etiqueta apagada vira «etiqueta removida»
+      add(L.textoChipEtiquetas(f.etiquetas.op, L.nomesEtiquetasChip(f.etiquetas.ids, k.etiqueta)), () => delete f.etiquetas);
     }
     if (Array.isArray(f.origem) && f.origem.length) add(`Origem: ${f.origem.map(o => L.ROTULO_ORIGEM[o] || o).join(", ")}`, () => delete f.origem);
     if (f.valor_min != null || f.valor_max != null) add(`Valor ${f.valor_min != null ? `≥ ${ui.brl(f.valor_min, { centavos: false })}` : ""}${f.valor_min != null && f.valor_max != null ? " e " : ""}${f.valor_max != null ? `≤ ${ui.brl(f.valor_max, { centavos: false })}` : ""}`, () => { delete f.valor_min; delete f.valor_max; });
@@ -1703,8 +1838,9 @@ export async function montarKanban(k, el, rota) {
       inp.addEventListener("change", () => { inp.checked ? orig.add(v) : orig.delete(v); });
       return h("label", { class: "crm-op" }, inp, h("span", null, t));
     }));
-    const vMin = h("input", { type: "number", min: "0", step: "50", placeholder: "Mínimo", "aria-label": "Valor mínimo", value: f.valor_min ?? "" });
-    const vMax = h("input", { type: "number", min: "0", step: "50", placeholder: "Máximo", "aria-label": "Valor máximo", value: f.valor_max ?? "" });
+    // plano 1000b · RB-020: texto com teclado decimal, lido como a gaveta (L.lerNumero) — «1.500,00» funciona e 75 não fica «inválido» pelo passo de 50
+    const vMin = h("input", { type: "text", inputmode: "decimal", autocomplete: "off", placeholder: "Mínimo", "aria-label": "Valor mínimo", value: f.valor_min ?? "" });
+    const vMax = h("input", { type: "text", inputmode: "decimal", autocomplete: "off", placeholder: "Máximo", "aria-label": "Valor máximo", value: f.valor_max ?? "" });
     // plano 1000 (CR-010): erro de valor aparece junto do campo (e o popover continua aberto)
     const erroValor = h("small", { class: "ed-erro crm-filtros-erro", role: "alert", id: `crm-fv-${cli}`, hidden: true });
     const parado = h("select", { "aria-label": "Parados há" }, [["", "Qualquer tempo"], ["3", "3 dias ou mais"], ["7", "7 dias ou mais"], ["15", "15 dias ou mais"], ["30", "30 dias ou mais"]]
@@ -1731,7 +1867,8 @@ export async function montarKanban(k, el, rota) {
       cabFolha,
       grupoVisoes,
       h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Responsável"), segDono, selPessoa),
-      k.base.etiquetas.length ? h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Etiquetas"), segEt, opsEt) : null,
+      k.base.etiquetas.length ? h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Etiquetas"), segEt,
+        Vis.buscaEtiquetas ? Vis.buscaEtiquetas(k, opsEt) : null, opsEt) : null,     // plano 1000b · RB-021: busca com catálogo grande
       h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Origem"), opsOrig),
       h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Valor (R$)"), h("div", { class: "crm-filtros-linha" }, vMin, vMax), erroValor),
       h("fieldset", { class: "crm-filtros-grupo" }, h("legend", { class: "rotulo" }, "Parados na etapa"), parado),
@@ -1746,7 +1883,8 @@ export async function montarKanban(k, el, rota) {
       if (f.dono) nf.dono = f.dono;
       if (et.ids && et.ids.length) nf.etiquetas = { op: et.op || "alguma", ids: et.ids };
       if (orig.size) nf.origem = [...orig];
-      const mn = vMin.value === "" ? null : Number(vMin.value), mx = vMax.value === "" ? null : Number(vMax.value);
+      const lerV = el => { const t = String(el.value ?? "").trim(); if (t === "") return null; const n = L.lerNumero(t); return n === null ? NaN : n; };
+      const mn = lerV(vMin), mx = lerV(vMax);
       if (mn != null && !(mn >= 0)) return { erro: "Valor mínimo inválido: use 0 ou mais.", foco: vMin, valor: true };
       if (mx != null && !(mx >= 0)) return { erro: "Valor máximo inválido: use 0 ou mais.", foco: vMax, valor: true };
       if (mn != null && mx != null && mn > mx) return { erro: "O valor mínimo precisa ser menor ou igual ao máximo.", foco: vMin, valor: true };
@@ -1833,6 +1971,12 @@ export async function montarKanban(k, el, rota) {
     desmontar() {
       S.vivo = false; S.seq++;
       clearInterval(tIdade);
+      // plano 1000b · RB-023: nada do quadro fica vivo depois de sair (rAF da fita, avisos de «movido», ouvintes de rolagem/toque)
+      if (rafFita) { cancelAnimationFrame(rafFita); rafFita = 0; }
+      for (const t of timers) clearTimeout(t);
+      timers.clear();
+      quadro.removeEventListener("scroll", aoRolarQuadro, { passive: true });
+      quadro.removeEventListener("touchmove", aoToqueMover, { passive: false });
       for (const f of [...S.conferencias]) f();
       if (obsMais) obsMais.disconnect();
       if (S.arrasto) cancelarPonteiro();

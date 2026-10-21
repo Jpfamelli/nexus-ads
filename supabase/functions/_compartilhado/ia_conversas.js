@@ -15,6 +15,7 @@ import { criarDb } from "./db.js";
 import {
   lerConfig, limparErro, ErroApi, respostaPainel, respostaErro, tratarPainel, lerCorpoPainel,
   autenticarPainel, interna, novoDelimitador, traduzirErroIA, registrarUsoIA, logIA, cortarTexto, modeloIA, funcaoAusente,
+  primeiroNomeSemTratamento,
 } from "./comum.js";
 import { montarAutomacao, decidirAutomacoes } from "./ia_automacoes.js";
 
@@ -41,7 +42,8 @@ async function gravarCacheIA(db, chave, cliente, texto) {
 }
 
 const nada = v => (String(v ?? "").trim() || "não informado");
-const primeiroNome = n => String(n ?? "").trim().split(/\s+/)[0] || "a equipe";
+// plano 1000b · CB-002: sem o pronome de tratamento («Dra. Helena» → «Helena»), como a assinatura do nx-enviar
+const primeiroNome = n => primeiroNomeSemTratamento(n) || "a equipe";
 
 /** "14:02" no fuso de São Paulo. */
 function horaSP(iso) {

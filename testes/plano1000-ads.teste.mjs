@@ -127,7 +127,8 @@ test("AD-004 · utm_campaign sem métrica vai para o balde (com o texto do utm),
   const set = M.mesesDados().find(m => m.mes === 8);
   assert.doesNotMatch(M.relMensal(set), /Campanha xyz/);
   assert.deepEqual(L.semCampanhaTot(M, set.de, set.ate).utms, ["xyz"]);
-  assert.match(ADS, /campanha no link: \$\{balde\.utms/, "a nota do balde mostra o texto do utm");
+  // plano 1000b: a nota do balde saiu para o textoBalde puro (AB-001) — o texto do utm continua nela
+  assert.match(A.textoBalde({ conversas: 1, utms: ["xyz"] }, N.int), /campanha no link: «xyz»/, "a nota do balde mostra o texto do utm");
 });
 
 test("AD-005 · «Google sem acompanhamento de conversões» em janela fixa de 30 dias: painel (130) e WhatsApp (45) concordam", () => {
@@ -231,7 +232,8 @@ test("AD-235 · radar avisa quando o investimento cai de repente (crítico, desl
   const M = montarDe({ metricas: mets });
   const r5 = M.avaliar(M.R).find(a => a.regra.id === "r5");
   assert.ok(r5, "antes: nenhuma regra percebia o gasto zerado");
-  assert.equal(r5.sev, "critico"); assert.match(r5.msg, /caiu de R\$\s50 por dia/);
+  // plano 1000b: AB-170 — os dois valores na mesma régua (brlW: centavos abaixo de R$ 100)
+  assert.equal(r5.sev, "critico"); assert.match(r5.msg, /caiu de R\$\s50,00 por dia/);
   assert.ok(!montarDe({ metricas: mets, cliente: { cfg: { regrasOff: ["r5"] } } }).avaliar(M.R).some(a => a.regra.id === "r5"), "desligável");
   assert.ok(!montarDe({ metricas: serie(1, 9, { g: 50, conv: 3 }) }).avaliar(M.R).some(a => a.regra.id === "r5"), "gasto normal: nada");
   assert.match(ler("web/app/ads-config.js"), /\["r5", "Investimento parou de repente"\]/, "Ajustes de anúncios liga e desliga");
@@ -369,7 +371,7 @@ test("AD-118 · calor por faixa do dia (padrão no celular) com «Ver por hora»
   const f = A.matrizFaixasCalor(m);
   assert.deepEqual(f.matriz[1], [0, 3, 1, 0]); assert.deepEqual(f.matriz[5], [0, 0, 0, 2]);
   assert.equal(f.max, 3); assert.deepEqual(f.semanas.map(s => s.rotulo), ["madr.", "manhã", "tarde", "noite"]);
-  assert.match(ADS, /let modo = celular \? "faixas" : "hora";/);
+  assert.match(ADS, /let modo = celular \? "faixas" : "hora"(, escolheuModo = false)?;/);   // plano 1000b: AB-061 acrescentou «escolheuModo» (girar a tela troca o modo)
   assert.match(CSS, /\.ads-cal-modo-faixas \.ads-cal-hora, \.ads-cal-modo-hora \.ads-cal-faixas \{ display: none; \}/);
 });
 
@@ -398,13 +400,15 @@ test("AD-131/AD-153/AD-139/AD-144 · por que difere, hoje parcial e cabeçalho d
 });
 
 test("AD-041/AD-044/AD-058/AD-091/AD-092/AD-096/AD-122/AD-148 · tela: copiar, semáforo âmbar, gravidade escrita, rosca, período, imprimir, tabelas em cartão", () => {
-  assert.match(ADS, /ui\.copiar\(texto, \{ aviso: "Texto copiado\. É só colar no WhatsApp\." \}\)/);
+  assert.match(ADS, /copiarTexto\(texto, \{ ui, aviso: "Texto copiado\. É só colar no WhatsApp\."/);   // plano 1000b: AB-049 — ui.copiar por dentro de copiarTexto (com reserva)
   assert.match(CSS, /\.ads-sem-alerta \{ --luz: var\(--pal-2\); \}/, "antes: --c-aten (verde-oliva)");
   assert.match(ADS, /h\("p", \{ class: "ads-al-topo" \}, marcaSev\(x\.sev\)\)/, "antes: bolinha colorida sem texto");
   assert.match(CSS, /\.ads-donut-plat \.g-d0 \{ --g: var\(--c-meta\); \}/);
   assert.match(CSS, /\.ads-donut-plat \.g-donut-env \{ grid-template-columns: minmax\(0, 1fr\);/);
   assert.match(CSS, /\.ads-filtros > \.rel-ate \{ flex-basis: 100%;/);
-  assert.match(ADS, /class: "rel-btn rel-btn-sec rel-btn-ic ads-imprimir rel-so-largo"[\s\S]{0,200}window\.print\(\)/);
+  // plano 1000b: AB-033 — o botão e o ⋮ do celular chamam o mesmo imprimir() (que faz o window.print())
+  assert.match(ADS, /class: "rel-btn rel-btn-sec rel-btn-ic ads-imprimir rel-so-largo"[\s\S]{0,200}imprimir\(\)/);
+  assert.match(ADS, /const imprimir = \(\) => \{ try \{ window\.print\(\); \}/);
   assert.match(CSS, /@media \(max-width: 480px\) \{\n  \/\* AD-148/);
 });
 
@@ -752,7 +756,7 @@ test("AD-093 · centro da rosca mostra a plataforma com mais investimento", () =
 test("AD-103/AD-143 · arquivos exportados com o nome do cliente (Anúncios e Relatórios)", () => {
   assert.equal(L.nomeArquivoExport("funil", "2026-09-14", "2026-10-13", "csv", "Clínica Kamiguchi"), "orbita-clinica-kamiguchi-funil-2026-09-14-a-2026-10-13.csv");
   assert.equal(L.nomeArquivoExport("tendencia", "a", "b"), "orbita-tendencia-a-a-b.png", "sem cliente, o formato de antes");
-  assert.match(ADS2, /"csv", ctx\.cliente\.nome\)\);/);
+  assert.match(ADS2, /"csv", ctx\.cliente\.nome\)\)/);   // plano 1000b: AB-209 encadeia o aviso de download recusado depois do «))»
   assert.match(REL2, /L\.nomeArquivoExport\(nome, de, ate, "csv", ctx\.cliente\.nome\)/, "antes: «funil-2026-09-14-a-2026-10-13.csv»");
   assert.match(REL2, /L\.nomeArquivoExport\(png, de, ate, "png", ctx\.cliente\.nome\)/);
 });
@@ -954,7 +958,8 @@ test("AD-164 · site de uma página só: pushState com utm nova recaptura a orig
   assert.equal(s.chamadas.length, 0, "visita sem origem: nada a pedir");
   s.janela.location.search = "?utm_source=meta&fbclid=F9";
   s.janela.history.pushState({}, "", "/servicos?utm_source=meta&fbclid=F9");
-  await esperar(20);
+  // plano 1000b: espera até o pedido sair (teto 2 s) — os 20 ms fixos falhavam às vezes com a suíte em paralelo
+  for (let t = 0; t < 100 && s.chamadas.length < 1; t++) await esperar(20);
   assert.equal(s.api.dados().fbclid, "F9", "antes: só o carregamento capturava");
   assert.equal(s.chamadas.length, 1);
   assert.equal(typeof ouvJanela.popstate, "function", "popstate também recaptura");
@@ -1114,7 +1119,8 @@ function rodarFormulario({ search = "", rastreio = null, campos = {} } = {}) {
   const form = { addEventListener: (t, fn) => { ouv[t] = fn; }, querySelector: () => botao, append() {}, replaceWith(n) { form.trocado = n; }, valores: campos };
   class FormData { constructor(f) { this.f = f; } get(k) { return k in this.f.valores ? this.f.valores[k] : null; } }
   const janela = { OrbitaRastreio: rastreio };
-  vm.runInNewContext(js, { document: { getElementById: () => form, createElement: () => ({ textContent: "" }) }, FormData, URLSearchParams, location: { search },
+  // plano 1000b: AB-212 pôs um tempo mínimo de 3 s antes do envio (robôs) e AB-114 o role=status no aviso — o relógio falso anda 5 s por leitura
+  vm.runInNewContext(js, { Date: { now: (() => { let t = 0; return () => (t += 5000); })() }, document: { getElementById: () => form, createElement: () => ({ textContent: "", setAttribute() {} }) }, FormData, URLSearchParams, location: { search },
     window: janela, fetch: async (url, init) => { pedidos.push({ url, init, corpo: JSON.parse(init.body) }); return { ok: true }; } });
   return { codigo, pedidos, enviar: () => ouv.submit({ preventDefault() {}, target: form }), form };
 }
@@ -1172,7 +1178,8 @@ test("AD-246/AD-245/AD-247 · envio manual: bloqueia com metas não salvas, mens
   assert.match(AC.confirmacaoEnvio({ tipo: "diario", cfg, sujo: true }).bloqueio, /ainda não salvou/);
   assert.match(AC.confirmacaoEnvio({ tipo: "diario", cfg: {} }).bloqueio, /Cadastre um WhatsApp/);
   const mes = AC.confirmacaoEnvio({ tipo: "mensal", cfg });
-  assert.equal(mes.texto, "Ele sai agora no WhatsApp de 2 destinos, mesmo que o resumo deste mês já tenha sido enviado.", "antes: «…enviado hoje»");
+  // plano 1000b: AB-191 — a confirmação também diz QUAIS números
+  assert.equal(mes.texto, "Ele sai agora no WhatsApp de 2 destinos (+55 (12) 98888-7777 e +55 (12) 99999-8888), mesmo que o resumo deste mês já tenha sido enviado.", "antes: «…enviado hoje»");
   assert.match(AC.confirmacaoEnvio({ tipo: "diario", cfg, gastoDia: 0, dataDia: "12/10/2026" }).texto, /em 12\/10\/2026 não houve investimento .* zerado \(R\$ 0\)/);
   assert.doesNotMatch(AC.confirmacaoEnvio({ tipo: "diario", cfg, gastoDia: 80 }).texto, /zerado/);
   assert.match(ADSCFG, /confirmacaoEnvio\(\{ tipo, cfg, sujo, gastoDia: tipo === "diario" \? gastoOntem : null, dataDia: dataOntem \}\)/);
@@ -1201,7 +1208,8 @@ test("AD-168 · snippet com a versão fixa e integrity — o hash confere com we
   const v1 = readFileSync(join(RAIZ, "web/rastreio.v1.js"), "utf8").replace(/\r\n/g, "\n");
   assert.equal(RC.SRI_V1, `sha384-${createHash("sha384").update(Buffer.from(v1, "utf8")).digest("base64")}`, "rastreio.v1.js mudou: depois de publicado, crie rastreio.v2.js");
   const s = RC.snippetRastreio("a".repeat(48));
-  assert.match(s, /src="https:\/\/jpfamelli\.github\.io\/nexus-ads\/rastreio\.v1\.js" integrity="sha384-[^"]+" crossorigin="anonymous"/);
+  // plano 1000b: o snippet novo usa a rastreio.v2.js (o hash da v2 é conferido em plano1000b-ads); o SRI da v1 acima continua valendo
+  assert.match(s, /src="https:\/\/jpfamelli\.github\.io\/nexus-ads\/rastreio\.v2\.js" integrity="sha384-[^"]+" crossorigin="anonymous"/);
   assert.match(RC.snippetGerenciador("a".repeat(48)), /integrity="sha384-/);
   assert.doesNotMatch(RC.snippetRastreio("a".repeat(48), { script: "http://127.0.0.1:1/rastreio.js", url: "http://127.0.0.1:1/x", apikey: "d" }), /integrity/, "o servidor falso serve o arquivo vivo");
 });
@@ -1251,7 +1259,8 @@ test("AD-182/AD-249/AD-250 · filtro por motivo + «Mostrar mais», atualizaçã
   assert.equal(RC.filtrarCliques(R.todos, "casou com o negócio", agora).length, 5);
   assert.equal(RC.filtrarCliques(R.todos, "", agora).length, 25);
   assert.match(RCFG, /Mostrar mais \(\$\{base\.length - Math\.min\(n, base\.length\)\}\)/);
-  assert.match(RCFG, /tCliques = setInterval\(\(\) => \{\n\s+if \(!sec\.isConnected\) \{ clearInterval\(tCliques\); return; \}\n\s+if \(typeof document !== "undefined" && document\.hidden\) return;/);
+  // plano 1000b: AB-120/AB-133 — as condições (aba visível, seção visível, sem pedido, sem foco dentro) moram em podeAtualizarSozinho
+  assert.match(RCFG, /tCliques = setInterval\(\(\) => \{\n\s+if \(!sec\.isConnected\) \{ clearInterval\(tCliques\); if \(io\) io\.disconnect\(\); return; \}\n\s+if \(!podeAtualizarSozinho\(\{ visivel, oculto: typeof document !== "undefined" && document\.hidden,/);
   assert.match(RCFG, /\}, 30000\);/);
   assert.match(RCFG, /kCasou\.append\(h\("small", \{ class: "kpi-sub ads-rastreio-pct" \}, `\$\{T\.pct\}% dos cliques`\)\)/);
 });
@@ -1310,7 +1319,8 @@ test("revisão · clássico: sem meta o interruptor da r1 fica travado («defina
   const M = montarDe({ metricas: serie(1, 10) });
   const r1 = M.REGRAS.find(r => r.id === "r1");
   assert.equal(r1.semMeta, true); assert.equal(r1.ativa, false);
-  assert.match(PJS, /\$\{!r\.semMeta \? \(pode \? "" : [^\n]*\n\s+: ` aria-disabled="true" data-sem-meta="1" title="\$\{esc\(SEM_META_REGRA\)\}"`/, "antes: aparecia desligado e clicável");
+  // plano 1000b: AB-163 — o interruptor travado ganha aria-describedby com o motivo em texto
+  assert.match(PJS, /\$\{!r\.semMeta \? \(pode \? "" : [^\n]*\n\s+: ` aria-disabled="true" aria-describedby="rl-trava-meta" data-sem-meta="1" title="\$\{esc\(SEM_META_REGRA\)\}"`/, "antes: aparecia desligado e clicável");
   assert.match(PJS, /if \(b\.dataset\.semMeta\) return toast\(SEM_META_REGRA\);\n\s+if \(b\.getAttribute\("aria-disabled"\) === "true"\)[^\n]*\n\s+alternarRegra\(b\.dataset\.regra\);/,
     "antes: o clique punha a r1 em regrasOff (o contrário do que «ligar» promete)");
   assert.match(PJS, /const SEM_META_REGRA = "[^"]*defina a meta[^"]*";/);

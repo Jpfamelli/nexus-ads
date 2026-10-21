@@ -203,7 +203,8 @@ export const ACOES = Object.freeze([
     campos: [
       { nome: "titulo", tipo: "texto", rotulo: "Título da tarefa", obrigatorio: true, max: 160, variaveis: true },
       { nome: "tipo_tarefa", tipo: "opcoes", rotulo: "Tipo", opcoes: TIPOS_TAREFA, padrao: "tarefa" },
-      { nome: "vence_em_horas", tipo: "numero", rotulo: "Prazo (horas depois)", min: 0, max: 2160, padrao: 24, sufixo: "h" },
+      // plano 1000b · UB-030: o editor desenha em horas OU dias (P.campoHoras com mínimo 0); «0 = para já»
+      { nome: "vence_em_horas", tipo: "numero", rotulo: "Prazo da tarefa", min: 0, max: 2160, padrao: 24, sufixo: "h", ajuda: "0 = para já." },
       { nome: "dono", tipo: "dono", rotulo: "Para quem", obrigatorio: true, padrao: "responsavel" },
     ] },
   { id: "mover_estagio", grupo: "CRM", icone: "seta-dir", rotulo: () => "Mover de etapa",
@@ -223,7 +224,8 @@ export const ACOES = Object.freeze([
       { nome: "titulo", tipo: "texto", rotulo: "Título", opcional: true, max: 120, variaveis: true },
     ] },
   { id: "enviar_mensagem", grupo: "Mensagens", icone: "enviar", mensagem: true, rotulo: () => "Enviar mensagem",
-    descricao: "Manda um texto pelo WhatsApp (sai pelo CodeWords).",
+    // plano 1000b · UB-031: descrição neutra (quem só tem número da Meta não lê «CodeWords»); a paleta completa por onde sai
+    descricao: "Manda um texto pelo WhatsApp.",
     campos: [{ nome: "texto", tipo: "texto_longo", rotulo: "Mensagem", obrigatorio: true, max: 4096, variaveis: true,
       ajuda: "No WhatsApp oficial (Meta), só sai dentro da janela de 24 h desde a última mensagem do cliente; fora dela, use um modelo aprovado. No WhatsApp por aparelho (CodeWords), o texto livre sai a qualquer hora." }] },
   { id: "enviar_template", grupo: "Mensagens", icone: "whatsapp", mensagem: true, rotulo: () => "Enviar modelo aprovado",

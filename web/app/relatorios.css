@@ -203,7 +203,8 @@
 .rel-tabela-rolagem:focus-visible { outline: 2px solid var(--c-prim); outline-offset: 2px; border-radius: var(--r-p); }
 .rel-tabela { width: 100%; border-collapse: collapse; font-size: .875rem; font-variant-numeric: tabular-nums; }
 .rel-tabela th, .rel-tabela td { padding: .65rem .6rem; text-align: left; border-bottom: 1px solid var(--c-borda); vertical-align: middle; }
-.rel-tabela thead th { font: 500 .6875rem/1.3 var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--c-texto-3); white-space: nowrap; }
+/* plano 1000b · AB-185: 12 px (antes 11 px) e menos espaçamento — legível para quem tem 50+ */
+.rel-tabela thead th { font: 500 .75rem/1.3 var(--f-mono); letter-spacing: .03em; text-transform: uppercase; color: var(--c-texto-3); white-space: nowrap; }
 .rel-tabela .num { text-align: right; white-space: nowrap; }
 .rel-tabela tbody tr { animation: rel-sobe var(--t-move) var(--e-out) both; animation-delay: calc(var(--i, 0) * var(--escada)); }
 .rel-tabela tbody tr:hover { background: var(--c-sup-2); }
@@ -230,6 +231,8 @@
 .ads-camp-comparacao { min-width: 0; padding: .9rem; border: 1px solid var(--c-borda); border-radius: var(--r-p); background: var(--c-sup-2); }
 .ads-camp-comparacao .rel-cartao-topo { align-items: start; }
 .ads-comparacao-tabela { min-width: 35rem; }
+/* plano 1000b · AB-060: a 360 px a tabela rola — a coluna «Métrica» fica presa à esquerda, com o fundo do cartão */
+.ads-comparacao-tabela tbody th[scope="row"], .ads-comparacao-tabela thead th:first-child { position: sticky; left: 0; z-index: 1; background: var(--c-sup-2); }
 .ads-comp-acoes { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .65rem; }
 .ads-comp-acoes .bt { min-height: 44px; }
 .ads-camp-outras { color: var(--c-texto-3); }
@@ -315,6 +318,8 @@
 .ads-fone-av { display: grid; place-items: center; width: 2.2rem; height: 2.2rem; border-radius: 50%; background: var(--c-prim-suave); color: var(--c-prim-luz); }
 .ads-fone-av svg { width: 1.1rem; height: 1.1rem; fill: currentColor; }
 .ads-fone-corpo { flex: 1; padding: 1rem; max-height: 34rem; overflow-y: auto; }
+/* plano 1000b · AB-183: no celular o mensal não rola dentro da página que já rola */
+@media (max-width: 760px) { .ads-fone-corpo { max-height: none; overflow-y: visible; } }
 .ads-bolha {
   position: relative; max-width: 34rem; padding: .75rem .9rem 1.4rem; border-radius: 4px 16px 16px 16px; background: var(--c-bolha-in);
   font-size: .9rem; line-height: 1.5; color: var(--c-texto); overflow-wrap: anywhere; animation: rel-sobe var(--t-move) var(--e-out) both;
@@ -479,7 +484,7 @@
   .ads-tabela th, .ads-tabela td, .ads-tabela td.num, .ads-tabela tfoot th, .ads-tabela tfoot td { display: block; padding: 0; border: 0; text-align: left; }
   .ads-tabela tfoot tr { border-top: 1px solid var(--c-borda-2); }
   .ads-tabela .c-nome, .ads-tabela tfoot th { grid-column: 1 / -1; }
-  .ads-tabela td.num::before { content: attr(data-l); display: block; font: 500 .6875rem/1.3 var(--f-mono); color: var(--c-texto-3); text-transform: uppercase; letter-spacing: .05em; white-space: normal; overflow-wrap: anywhere; }
+  .ads-tabela td.num::before { content: attr(data-l); display: block; font: 500 .75rem/1.3 var(--f-mono); color: var(--c-texto-3); text-transform: uppercase; letter-spacing: .03em;   /* plano 1000b · AB-185 */ white-space: normal; overflow-wrap: anywhere; }
   .ads-tabela tfoot tr { border-bottom: 0; }
   .ads-tabela td.c-comparar { grid-column: 1 / -1; }   /* no cartão o «Comparar» ganha linha própria, com o rótulo visível */
   .ads-tabela tfoot td:empty { display: none; }
@@ -826,7 +831,7 @@ a.ini-numero:active { transform: scale(.98); }
 .ads-fp-cab { display: flex; flex-direction: column; gap: .3rem; align-items: flex-start; margin-bottom: .8rem; }
 .ads-fp-etapas { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .2rem; }
 .ads-fp-etapa { display: grid; grid-template-columns: minmax(0, 1fr); gap: .25rem; animation: rel-sobe var(--t-move) var(--e-out) both; animation-delay: calc(var(--i, 0) * var(--escada) * 2); }
-.ads-fp-taxa { justify-self: start; display: inline-flex; align-items: center; min-height: 1.35rem; padding: .05rem .5rem; border-radius: 999px; background: var(--c-sup); border: 1px solid var(--c-borda); font: 500 .6875rem/1.4 var(--f-mono); color: var(--c-texto-2); }
+.ads-fp-taxa { justify-self: start; display: inline-flex; align-items: center; min-height: 1.35rem; padding: .05rem .5rem; border-radius: 999px; background: var(--c-sup); border: 1px solid var(--c-borda); font: 600 .75rem/1.4 var(--f-mono); color: var(--c-texto-2); }   /* plano 1000b · AB-186: era 11 px */
 .ads-fp-taxa-0 { visibility: hidden; min-height: .4rem; }
 .ads-fp-trilho { display: block; height: 22px; border-radius: 8px; background: var(--c-sup); overflow: hidden; }
 .ads-fp-barra { display: block; height: 100%; width: var(--w); border-radius: inherit; transform-origin: left; animation: g-cresce-x var(--t-dados) var(--e-out) both; animation-delay: calc(var(--i, 0) * var(--escada) * 2); opacity: .9; }
@@ -922,7 +927,10 @@ a.ini-numero:active { transform: scale(.98); }
 /* impressão limpa: sem filtros, abas e botões; cartões inteiros na página; tabelas abertas */
 @media print {
   .rel { gap: .6rem; padding-bottom: 0; }
-  .rel-filtros, .rel-topo-acoes, .rel-abas-seg, .rel-abas, .g-ver-tabela, .relat-csv, .rel-png, .ads-camp-filtros, .ads-comp-acoes, .g-leg-b.g-leg-off, .rel-faixa { display: none !important; }
+  .rel-filtros, .rel-topo-acoes, .rel-abas-seg, .rel-abas, .g-ver-tabela, .relat-csv, .rel-png, .ads-camp-filtros, .ads-comp-acoes, .g-leg-b.g-leg-off { display: none !important; }
+  /* plano 1000b · AB-069: a faixa de conexão caída sai no papel como nota simples (antes sumia: o PDF não dizia que os números estão velhos) */
+  .rel-faixa:not([hidden]) { display: block !important; border: 1px solid CanvasText; background: Canvas !important; color: CanvasText; padding: .4rem .6rem; border-radius: 0; break-inside: avoid; }
+  .rel-faixa a, .rel-faixa button, .rel-faixa .rel-btn { display: none !important; }
   .rel-cartao, .relat-bloco, .ads-al { break-inside: avoid; page-break-inside: avoid; box-shadow: none; border-color: color-mix(in srgb, CanvasText 25%, Canvas); background: Canvas !important; color: CanvasText; }
   .rel-corpo, .relat-grade, .ads-grade, .ads-grade-2, .rel-kpis { display: block; }
   .rel-kpis .rel-kpi, .relat-grade > *, .ads-grade > *, .ads-grade-2 > * { margin-bottom: .6rem; }
@@ -1061,7 +1069,7 @@ a.ini-numero:active { transform: scale(.98); }
   .relat-tabela tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--esp-2) var(--esp-3); padding: var(--esp-3) 0; border-bottom: 1px solid var(--c-borda); }
   .relat-tabela th, .relat-tabela td, .relat-tabela td.num { display: block; padding: 0; border: 0; text-align: left; white-space: normal; }
   .relat-tabela tbody th { grid-column: 1 / -1; font-weight: 600; }
-  .relat-tabela td.num::before { content: attr(data-l); display: block; font: 500 var(--fs-11)/1.3 var(--f-mono); color: var(--c-texto-3); text-transform: uppercase; letter-spacing: .05em; }
+  .relat-tabela td.num::before { content: attr(data-l); display: block; font: 500 .75rem/1.3 var(--f-mono); color: var(--c-texto-3); text-transform: uppercase; letter-spacing: .03em; }   /* plano 1000b · AB-185 */
 }
 @media print {
   .rel-impressao-cab { display: block; margin: 0 0 .4rem; font-size: .8125rem; color: CanvasText; }
@@ -1086,6 +1094,11 @@ button.ads-pilula:focus-visible { outline: var(--foco-largura, 2px) solid var(--
 @media (max-width: 760px) {
   button.ads-pilula { min-height: var(--alvo-toque, 44px); }
   .ads-pilula-pop { width: min(18rem, calc(100vw - 4rem)); }
+  /* plano 1000b · AB-182: no celular o detalhe se prende à largura do topo (não à pílula): quando ela quebra para a esquerda,
+     o painel de 20rem ancorado em right:0 passava da borda e criava rolagem horizontal a 360 px */
+  .ads .rel-topo { position: relative; }
+  .ads-pilula-caixa { position: static; }
+  .ads-pilula-pop { inset-inline: 0; width: auto; max-width: calc(100vw - 2rem); }
 }
 /* AD-119: célula do calor escolhida pelo toque ou pelas setas */
 .ads-cal:focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 3px; border-radius: 6px; }
@@ -1129,3 +1142,69 @@ button.ads-pilula:focus-visible { outline: var(--foco-largura, 2px) solid var(--
 .ads-rastreio-filtro:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 1px; }
 .ads-rastreio-mais { justify-self: start; min-height: var(--alvo-toque, 44px); }
 @media print { .ads-al-botoes { display: none !important; } }
+
+/* plano 1000b · AB-085: «Atualizar» com os números na tela — ficam visíveis, esmaecidos, até a resposta chegar (sem pular para o topo) */
+.relat-atualizando { opacity: .55; transition: opacity var(--t-ui) var(--e-out); }
+@media (prefers-reduced-motion: reduce) { .relat-atualizando { transition: none; } }
+/* plano 1000b · AB-048: o motivo do aviso que não saiu, abaixo do envio */
+.ads-env-motivo { margin: .15rem 0 0; color: var(--c-ruim); overflow-wrap: anywhere; }
+/* plano 1000b · AB-179: a nota «Pelo menos uma série fica visível» logo abaixo da legenda da tendência */
+.g-td-nota { margin: .25rem 0 0; }
+
+/* ---------------- plano 1000b · ads-2 ---------------- */
+/* AB-099: «Atualizado às» com mais de 10 minutos fica cinza e em itálico (como a Agenda, CA-220) */
+.relat-hora-velha { color: var(--c-texto-3); font-style: italic; }
+/* AB-046: a caixa do aparelho (cartão + status sr-only) não vira um item a mais na grade do lado */
+.ads-aparelho-caixa { display: contents; }
+/* AB-218: o subtítulo da coluna «Anúncio» do funil por plataforma */
+.ads-fp-sub { margin: 0; font-size: var(--fs-12); color: var(--c-texto-3); }
+/* AB-262: a faixa do crítico ativo no topo da Visão geral */
+.ads-faixa-critico { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0 0 var(--esp-3, .75rem); }
+.ads-faixa-critico .ic { width: 16px; height: 16px; flex: none; }
+.ads-faixa-critico .rel-link { min-height: 44px; display: inline-flex; align-items: center; }
+/* AB-196: «Definir a meta» ao lado da regra parada */
+.ads-regra-meta { justify-self: end; font-size: var(--fs-13); }
+@media (pointer: coarse), (max-width: 760px) { .ads-regra-meta { min-height: 44px; display: inline-flex; align-items: center; } }
+/* AB-052: diário sem WhatsApp de destino */
+.ads-rel-sem-destino { margin: 0 0 .5rem; }
+/* AB-256: no celular a linha da campanha é um cartão tocável */
+@media (max-width: 760px) { .ads-tabela tbody tr { cursor: pointer; } }
+
+/* AB-206: a seção «Rastreio do site» (rastc-*) — antes só em agenda.css, que a seção carregava à toa */
+.rastc { min-width: 0; display: grid; gap: .9rem; }
+.rastc-codigo { overflow: auto; max-width: 100%; padding: .9rem 1rem; border: 1px solid var(--c-borda-2); border-radius: var(--r-m); background: var(--c-sup-2); color: var(--c-texto); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rastc-codigo code { font: 500 var(--fs-13) var(--f-dado); }
+.rastc-chave { max-width: 600px; }
+.rastc-chave input { font: 500 var(--fs-13) var(--f-dado); }
+.rastc-acoes { flex-wrap: wrap; }
+.rastc-plataformas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; }
+.rastc-plataforma { min-width: 0; display: grid; align-content: start; gap: .6rem; padding: .8rem; border: 1px solid var(--c-borda); border-radius: var(--r-m); background: var(--c-sup-2); }
+.rastc-plataforma > .linha { justify-content: space-between; }
+.rastc-plataforma > .mono { display: block; overflow-wrap: anywhere; white-space: normal; color: var(--c-texto-2); font-size: var(--fs-12); line-height: 1.6; }
+.rastc-privacidade { max-width: 100%; }
+@media (max-width: 760px) { .rastc-plataformas { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------- plano 1000b · lote ads-3 ---------- */
+/* AB-029: «de Conversas no CRM» ao lado da taxa do funil por plataforma — só no celular (no computador o title e o sr-only bastam) */
+.ads-fp-taxa-de { display: none; margin-left: .3rem; font: 500 .6875rem/1.3 var(--f-texto, inherit); color: var(--c-texto-3); }
+@media (max-width: 760px) { .ads-fp-taxa { flex-wrap: wrap; } .ads-fp-taxa-de { display: inline; } }
+/* AB-038: a taxa da trilha acima de 100% quebra a linha em vez de vazar */
+.ads-taxa.ads-taxa-acima { white-space: normal; }
+/* AB-245: o nome no ranking abre a gaveta da campanha — parece texto, age como botão (alvo de 44 px no toque) */
+.ads-rank-abrir { all: unset; cursor: pointer; font: inherit; color: inherit; text-decoration: underline; text-decoration-color: var(--c-borda-2); text-underline-offset: .2em; overflow-wrap: anywhere; }
+.ads-rank-abrir:hover { text-decoration-color: currentColor; }
+.ads-rank-abrir:focus-visible { outline: 2px solid var(--c-foco, var(--c-prim)); outline-offset: 2px; border-radius: 4px; }
+@media (pointer: coarse) { .ads-rank-abrir { display: inline-block; min-height: 44px; line-height: 44px; } }
+/* AB-257: o estado «ok» do aparelho com regra própria (borda e luz verdes explícitas) */
+.ads-aparelho-ok { border-left-color: var(--c-ok); }
+.ads-aparelho-ok .ads-ap-luz { background: var(--c-ok); }
+/* AB-055: o corpo do celular recebe foco (rola pelo teclado) — foco visível */
+.ads-fone-corpo:focus-visible { outline: 2px solid var(--c-foco, var(--c-prim)); outline-offset: -2px; }
+/* AB-079: ressalva «pode ser falta de leitura» no episódio do radar */
+.ads-al-ressalva { display: flex; gap: .35rem; align-items: flex-start; color: var(--c-aten, var(--c-texto-2)); }
+/* AB-219: seletor de dia da prévia do diário */
+.ads-rel-dia-caixa { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: var(--esp-2, .5rem); }
+.ads-rel-dia { min-height: 44px; max-width: 100%; }
+/* AB-106: o status técnico da integração fica guardado em «Detalhes técnicos» */
+.cfga-st-tecnico { font-size: .75rem; color: var(--c-texto-3); }
+.cfga-st-tecnico code { overflow-wrap: anywhere; white-space: normal; }

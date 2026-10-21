@@ -395,8 +395,10 @@ test("A4 · app.js: sessão normaliza ativo/canais/migracao; faixa de migração
   const erro = fnDoApp("function aoErroApi(e) {");
   assert.match(erro, /e\.codigo !== "cliente_pausado"\) return;/); assert.match(erro, /cli\.ativo = false;\s*desenharFaixas\(\);/); assert.match(erro, /if \(!equipe && E\.ultimaRota\) \{ desmontarAtual\(\); aoMudarRota\(false\); \}/);
   assert.match(APP_JS, /aoErro: e => aoErroApi\(e\),/, "o shell liga o gancho no api.js");
-  assert.match(fnDoApp("function cartaoBloqueio(tipo) {"), /pausado: \{ titulo: "Esta empresa está pausada\."[\s\S]*icone: "pausa"/);
-  assert.match(fnDoApp("function desenharFaixas() {"), /else if \(cli\.ativo === false && \(equipe \|\| plataforma\)\) \{/, "a faixa aparece para quem a tela pausada deixa entrar (conta gestora/super, mesmo com papel admin no cliente)");
+  // plano 1000b: cartaoBloqueio(tipo, modulo) — o «Sem acesso» diz o papel exigido pela rota (UB-129)
+  assert.match(fnDoApp("function cartaoBloqueio(tipo, modulo) {"), /pausado: \{ titulo: "Esta empresa está pausada\."[\s\S]*icone: "pausa"/);
+  // plano 1000b (UB-207): as faixas são montadas em faixasDoMomento(); desenharFaixas só reconcilia
+  assert.match(fnDoApp("function faixasDoMomento() {"), /else if \(cli\.ativo === false && \(equipe \|\| plataforma\)\) \{/, "a faixa aparece para quem a tela pausada deixa entrar (conta gestora/super, mesmo com papel admin no cliente)");
   assert.match(APP_JS, /pausado: "Empresa pausada" \}\[acesso\]/);
   assert.match(APP_JS, /ativo: cli\.ativo !== false,\s*\} : null,/, "ctx.cliente.ativo para as telas");
 });

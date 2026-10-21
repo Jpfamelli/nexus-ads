@@ -73,6 +73,18 @@ export function semToken(url) {
   try { const u = new URL(url); u.searchParams.delete("access_token"); return u.toString(); } catch { return url; }
 }
 
+/** plano 1000b · B-042: só segue paging.next que fica na graph.facebook.com — o token vai no Authorization da próxima página, e
+    uma resposta adulterada com next para outro host o levaria embora. Outro host → false (para a leitura, que fica parcial). */
+export function proximaPagina(next) {
+  let u;
+  try { u = new URL(String(next)); } catch { u = null; }
+  if (!u || u.origin !== GRAPH) {
+    try { console.warn(JSON.stringify({ nivel: "aviso", evento: "paging_next_estranho", host: u ? u.host : null })); } catch { /* log nunca derruba */ }
+    return false;
+  }
+  return semToken(u.toString());
+}
+
 /** Plano 1000 (SV-085): o token vai no cabeçalho Authorization, nunca na URL (que aparece em erros de rede, logs de proxy e
     mensagens; o limparErro mascarava, mas era defesa tardia). */
 async function pedirUmaVez(f, url, token, prova = null) {
@@ -133,7 +145,7 @@ export async function buscarMeta(cred, nivel, de, ate, { fetch: f = globalThis.f
   async function periodo(v, de1, ate1) {
     const linhas = [];
     params.set("time_range", JSON.stringify({ since: de1, until: ate1 }));
-    let url = `${GRAPH}/${v}/act_${conta}/insights?${params}`;
+    let url = `${GRAPH}/${v}/act_${conta}/insights?${params}`, estranho = false;
     try {
       for (let paginas = 0; url && paginas < TETO_PAGINAS; paginas++) {
         const resp = await pedir(f, url, token, esperar, prova);
@@ -156,7 +168,8 @@ export async function buscarMeta(cred, nivel, de, ate, { fetch: f = globalThis.f
             valor_conversao: r2(comprasDe(porTipo(d.action_values))),
           });
         }
-        url = resp.paging?.next ? semToken(resp.paging.next) : null;
+        url = resp.paging?.next ? proximaPagina(resp.paging.next) : null;
+        if (url === false) { url = null; estranho = true; }
       }
     } catch (e) {
       if (pedidoGrandeDemais(e) && de1 < ate1) {
@@ -168,7 +181,7 @@ export async function buscarMeta(cred, nivel, de, ate, { fetch: f = globalThis.f
       }
       throw e;
     }
-    return { linhas, sobrou: !!url };
+    return { linhas, sobrou: !!url || estranho };
   }
 
   let ultimo = null;

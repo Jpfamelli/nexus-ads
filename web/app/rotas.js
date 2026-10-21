@@ -150,6 +150,16 @@ export const REGIOES_DA_ROTA = Object.freeze({
     Object.freeze(["Ir para o campo de mensagem", "textarea[aria-label='Mensagem']"]),
   ]),
   crm: Object.freeze([Object.freeze(["Ir para o quadro", "[role='region'][aria-label^='Quadro de']"])]),
+  // plano 1000b · UB-176: Automações (as duas seções nomeadas pelo título) e Configurações (o menu de seções e a seção aberta;
+  // a seção ainda não tem nome acessível próprio — pendência da frente config — então o alvo é a classe dela)
+  automacoes: Object.freeze([
+    Object.freeze(["Ir para Suas automações", "section[aria-labelledby='au-suas']"]),
+    Object.freeze(["Ir para Receitas", "section[aria-labelledby='au-mod']"]),
+  ]),
+  config: Object.freeze([
+    Object.freeze(["Ir para o menu de seções", "nav[aria-label='Seções das configurações']"]),
+    Object.freeze(["Ir para a seção", "section.cfg-sec"]),
+  ]),
 });
 export function regioesDaRota(modulo) {
   return (Object.hasOwn(REGIOES_DA_ROTA, modulo) ? REGIOES_DA_ROTA[modulo] : []).map(([rotulo, alvo]) => ({ rotulo, alvo }));
@@ -157,6 +167,23 @@ export function regioesDaRota(modulo) {
 
 /** Barra inferior do celular: até 4 itens + "Mais". */
 export const BARRA = Object.freeze(["inicio", "conversas", "crm", "agenda"]);
+/** plano 1000b · UB-278: quantas aberturas pelo «Mais» fazem um item ganhar o 4º lugar da barra. */
+export const USOS_PARA_BARRA = 3;
+/** itensDaBarra(itens, usos, base) → até 4 itens da barra inferior. Os da BARRA que a pessoa vê, completados pela ordem do menu (sem os fixos);
+    o item que mais vezes foi aberto pelo «Mais» (`usos[id]` ≥ USOS_PARA_BARRA) entra no 4º lugar. */
+export function itensDaBarra(itens, usos = {}, base = BARRA) {
+  const lista = Array.isArray(itens) ? itens : [];
+  const prefer = base.map(id => lista.find(i => i.id === id)).filter(Boolean);
+  for (const it of lista) if (prefer.length < 4 && !prefer.includes(it) && !it.fixo) prefer.push(it);
+  let fav = null, max = USOS_PARA_BARRA - 1;
+  for (const it of lista) {
+    if (it.fixo || prefer.includes(it)) continue;
+    const n = Number(usos && Object.hasOwn(usos, it.id) ? usos[it.id] : 0) || 0;
+    if (n > max) { max = n; fav = it; }
+  }
+  if (fav) { if (prefer.length >= 4) prefer[3] = fav; else prefer.push(fav); }
+  return prefer;
+}
 
 export const PAPEIS = Object.freeze(["leitura", "atendente", "supervisor", "admin", "gestor", "super"]);
 export function rank(p) { const i = PAPEIS.indexOf(p); return i < 0 ? -1 : i; }

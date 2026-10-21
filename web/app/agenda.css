@@ -416,17 +416,7 @@ button.agenda-proxima:focus-visible { outline: 2px solid var(--c-foco); outline-
 .agc-aviso-consultas { font-size: var(--fs-13); }
 .agc-aviso-consultas a { color: inherit; font-weight: 600; }
 .agc-previa-total b { color: var(--c-texto); }
-.rastc { gap: .9rem; }
-.rastc-codigo { overflow: auto; max-width: 100%; padding: .9rem 1rem; border: 1px solid var(--c-borda-2); border-radius: var(--r-m); background: var(--c-sup-2); color: var(--c-texto); white-space: pre-wrap; overflow-wrap: anywhere; }
-.rastc-codigo code { font: 500 var(--fs-13) var(--f-dado); }
-.rastc-chave { max-width: 600px; }
-.rastc-chave input { font: 500 var(--fs-13) var(--f-dado); }
-.rastc-acoes { flex-wrap: wrap; }
-.rastc-plataformas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; }
-.rastc-plataforma { min-width: 0; display: grid; align-content: start; gap: .6rem; padding: .8rem; border: 1px solid var(--c-borda); border-radius: var(--r-m); background: var(--c-sup-2); }
-.rastc-plataforma > .linha { justify-content: space-between; }
-.rastc-plataforma > .mono { display: block; overflow-wrap: anywhere; white-space: normal; color: var(--c-texto-2); font-size: var(--fs-12); line-height: 1.6; }
-.rastc-privacidade { max-width: 100%; }
+/* plano 1000b · AB-206: as regras da seção «Rastreio do site» moram em relatorios.css, que a seção carrega */
 .agenda-acoes { min-width: 0; }
 .agenda-atualizar { flex: none; min-height: 40px; }
 .agenda-atualizacao { max-width: 15rem; overflow: hidden; color: var(--c-texto-3); font-size: var(--fs-12); text-overflow: ellipsis; white-space: nowrap; }
@@ -535,9 +525,10 @@ button.agenda-proxima:focus-visible { outline: 2px solid var(--c-foco); outline-
   .ag-hora-pill { flex-basis: calc(25% - .3rem); }
   .agenda-busca { grid-template-columns: minmax(0, 1fr); }
   .agenda-busca > .agenda-resultados { grid-column: auto; }
-  .agc-dias, .rastc-plataformas { grid-template-columns: minmax(0, 1fr); }
-  .agc-faixa { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 36px; }
-  .agc-duracao { grid-template-columns: minmax(0, 1fr) minmax(90px, .4fr) 36px; }
+  .agc-dias { grid-template-columns: minmax(0, 1fr); }
+  /* plano 1000b · CB-153: a trilha do «remover» tem os mesmos 44 px do botão no toque (a 360 px ele passava 8 px da coluna e encostava no campo) */
+  .agc-faixa { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 44px; }
+  .agc-duracao { grid-template-columns: minmax(0, 1fr) minmax(90px, .4fr) 44px; }
   .agc-bloqueio { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 1100px) and (min-width: 761px) {
@@ -553,6 +544,9 @@ button.agenda-proxima:focus-visible { outline: 2px solid var(--c-foco); outline-
   .ag-pres-bt { min-height: 44px; }
   button.agenda-proxima { min-height: 44px; }   /* CA-202: o chip «Próxima» também é alvo de toque */
   .ag-fechados-bt, .ag-pres-lote, .ag-painel-imprimir, .ag-mais-dias, .ag-novo-paciente { min-height: 44px; }
+  .ag-det-tel { min-height: 44px; }                          /* plano 1000b · CB-152: o telefone do detalhe é alvo de toque */
+  .ag-leg-chip, .agenda-filtro-prof { min-height: 44px; }    /* plano 1000b · CB-183: chips da legenda e o filtro no tablet (toque) */
+  .agc-editar-bloqueio, .agc-barra-salvar, .ag-tentar-horarios { min-height: 44px; }
 }
 /* E4 (com A11): a 360 px o diálogo tem 326 px de miolo — a grade fica nele (sem avançar sobre o respiro) e o vão de 2 px dá 7 dias de 44,8 px */
 @media (width <= 360px) {
@@ -653,3 +647,33 @@ button.agenda-proxima:focus-visible { outline: 2px solid var(--c-foco); outline-
 /* CA-203: «Lista do dia» numa linha só; o resumo ao lado quebra se precisar */
 .ag-painel-sum > span:first-child { white-space: nowrap; }
 .ag-painel-sum-n { text-align: right; }
+
+/* plano 1000b · CB-184: horário que aceita mais de um mostra as vagas na pílula */
+.ag-hora-vagas { display: block; color: var(--c-texto-3); font-size: var(--fs-11); font-weight: 500; line-height: 1.1; }
+.ag-hora-pill[aria-checked="true"] .ag-hora-vagas { color: inherit; opacity: .85; }
+/* plano 1000b · CB-170: «Ver mais» da busca de oportunidade */
+.agenda-res-mais-caixa:empty { display: none; }
+.agenda-res-mais-caixa { grid-column: 1 / -1; }
+/* plano 1000b · CB-174: consulta que já passou, no «Desmarcar» */
+.ag-desmarcar-passou { flex-wrap: wrap; align-items: center; gap: .5rem; font-size: var(--fs-13); }
+/* plano 1000b · CB-162: o status da busca de paciente */
+.ag-procurar-status:empty { display: none; }
+@media (max-width: 760px), (pointer: coarse) {
+  .agenda-res-mais-caixa .bt, .ag-desmarcar-faltou { min-height: 44px; }
+}
+/* plano 1000b · CB-173: o filtro de profissional com rótulo visível */
+.agenda-filtro-prof-rot { display: inline-flex; align-items: center; gap: .4rem; color: var(--c-texto-2); font-size: var(--fs-13); }
+/* plano 1000b · CB-167: erro ao buscar horários, com «Tentar de novo» */
+.ag-horas-erro { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.ag-horas-erro p { margin: 0; }
+/* plano 1000b · CB-161: «Editar» e «Remover» lado a lado no bloqueio */
+.agc-bloqueio-acoes { flex-wrap: wrap; gap: .3rem; }
+/* plano 1000b · CB-202: mudança não salva — a barra fixa no pé da tela leva o «Salvar» junto */
+.agc-barra-sujo {
+  position: sticky; bottom: max(.75rem, env(safe-area-inset-bottom)); z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  padding: .55rem .6rem .55rem 1rem; border: 1px solid var(--c-borda-2); border-radius: var(--r-m); background: var(--c-sup); box-shadow: 0 6px 20px -6px var(--c-sombra);
+  font-size: var(--fs-14);
+}
+.agc-barra-sujo[hidden] { display: none; }
+@media (prefers-reduced-motion: no-preference) { .agc-barra-sujo:not([hidden]) { animation: agc-barra-entra var(--t-ui) var(--e-out); } }
+@keyframes agc-barra-entra { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

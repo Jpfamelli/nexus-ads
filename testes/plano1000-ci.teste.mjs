@@ -752,7 +752,8 @@ test("SV-165 deploy de funções com aprovação: o job publicar roda no environ
 
 test("srv-3 pages.yml: rastreio.v1.js (o snippet com SRI aponta para ele) é exigido na publicação do Pages", () => {
   const yml = ler(".github/workflows/pages.yml");
-  assert.match(yml, /for exigido in index\.html painel\.js painel\.css dados\.js nucleo\.js rastreio\.js rastreio\.v1\.js fonts; do/);
+  // plano 1000b: + rastreio.v2.js (o snippet novo)
+  assert.match(yml, /for exigido in index\.html painel\.js painel\.css dados\.js nucleo\.js rastreio\.js rastreio\.v1\.js rastreio\.v2\.js fonts; do/);
   assert.ok(existsSync(join(RAIZ, "web/rastreio.v1.js")), "o arquivo existe no repositório");
 });
 

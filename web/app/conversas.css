@@ -252,6 +252,8 @@
   border: 2px dashed var(--c-prim-luz); background: color-mix(in srgb, var(--c-fundo) 82%, transparent); color: var(--c-texto);
   font-family: var(--f-titulo); font-weight: 600; font-size: var(--fs-25); pointer-events: none;
 }
+/* plano 1000b · CB-006: anexo indisponível — a faixa explica o motivo (texto menor, borda de alerta) */
+.cvc-arrastar[data-recusa="1"] { border-color: var(--c-ruim); font-size: var(--fs-16, 1rem); padding: 1rem; text-align: center; }
 
 /* ============================================================ COMPOSER */
 .cvx { position: relative; padding: .6rem .9rem calc(.7rem + env(safe-area-inset-bottom)); background: var(--c-sup); border-top: 1px solid var(--c-borda); z-index: 2; }
@@ -792,6 +794,11 @@
 .cv-audio[data-estado="tocando"] .cv-au-tempo { color: var(--c-prim-luz); font-weight: 600; }
 .cv-au-vel { min-width: 44px; min-height: 44px; padding: 0 .5rem; border-radius: 999px; font-size: var(--fs-12); font-weight: 600; color: var(--c-texto-2); background: var(--c-tinta); border: 1px solid var(--c-borda); transition: border-color var(--t-micro) var(--e-out), color var(--t-micro) var(--e-out); }
 .cv-au-vel:hover { color: var(--c-texto); border-color: var(--c-texto-3); }
+/* plano 1000b · CB-089: «Baixar áudio» na 4ª coluna da bolha (44 px de alvo) */
+.cv-midia.cv-audio:has(.cv-au-baixar) { grid-template-columns: 44px minmax(0, 1fr) auto auto; }
+.cv-au-baixar { width: 44px; min-width: 44px; height: 44px; min-height: 44px; border-radius: 50%; color: var(--c-texto-2); display: inline-grid; place-items: center; }
+.cv-au-baixar:hover { color: var(--c-texto); background: var(--c-tinta); }
+.cv-au-baixar:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
 @media (max-width: 760px) { .cv-midia.cv-audio { width: min(300px, calc(100vw - 118px)); } }
 /* no toque o trilho é o único jeito de avançar o áudio: 44 px de área, com margem negativa para o desenho (e a bolha) não mudar */
 @media (max-width: 760px), (pointer: coarse) { .cv-au-trilho { height: 44px; margin: -10px 0; } }
@@ -1160,6 +1167,9 @@ mark.cvx-pend { background: var(--c-aten-suave); color: var(--c-texto); border-r
 
 /* CA-103: lista guardada no aparelho, sem conexão */
 .cvl-cache { margin: .6rem 1rem 0; padding: .4rem .7rem; border-radius: var(--r-p); background: var(--c-aten-suave); color: var(--c-texto); font-size: var(--fs-13); }
+/* plano 1000b · CB-087: lista que parou de atualizar — texto e «Tentar agora» na mesma faixa */
+.cvl-atraso { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; }
+.cvl-atraso .bt { min-height: 44px; }
 
 /* CA-026/CA-055/CA-057: transferir e nova conversa */
 .cv-tr-dep-aviso { margin: 0; align-items: center; }
@@ -1313,3 +1323,14 @@ mark.cvx-pend { background: var(--c-aten-suave); color: var(--c-texto); border-r
 .cv-nv-outro .bt, .cv-nv-mais { min-height: 44px; }
 
 @media (prefers-reduced-motion: reduce) { .cv-folha[open] { animation: none; } .cvl-item.deslizavel, .cv-bolha.deslizavel { transition: none; } }
+
+/* plano 1000b · lote conv-3 */
+.cvt-at[aria-disabled="true"] { cursor: default; }                                          /* CB-096: atual alcançável, sem parecer clicável */
+.cv-au-naotoca { grid-column: 1 / -1; margin: .2rem 0 0; font-size: var(--fs-13); }        /* CB-030 */
+.cv-au-naotoca .link { min-height: 44px; display: inline-flex; align-items: center; }
+.cv-grade-erro { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .25rem; cursor: pointer;   /* CB-033 */
+  color: var(--c-texto-2); font-size: var(--fs-12); min-height: 44px; }
+.cv-grade-erro .ic { width: 18px; height: 18px; }
+.cvx-multi-tirar { min-height: 44px; align-self: flex-start; }                                  /* CB-080 */
+.cv-nv-caido { margin: 0; }                                                                 /* CB-044 */
+.cvt-sem-detalhes .sub { margin: 0; }                                                        /* CB-131 */

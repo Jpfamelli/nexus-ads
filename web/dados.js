@@ -27,9 +27,10 @@ export const MENSAGENS = {
   email_em_uso: "Já existe uma conta com esse e-mail. Tente entrar.",
   senha_curta: "A senha precisa ter pelo menos 8 caracteres.",
   nome_invalido: "Informe o nome.",
-  sem_acesso: "Sua conta não tem acesso a esta clínica.",
+  // plano 1000b · AB-167: textos neutros (oficina e loja também usam o clássico)
+  sem_acesso: "Sua conta não tem acesso a esta empresa.",
   so_gestor: "Só a equipe da Nexus pode fazer essa alteração.",
-  lead_nao_encontrado: "Paciente não encontrado — ele pode ter sido removido.",
+  lead_nao_encontrado: "Contato não encontrado — ele pode ter sido removido.",
   cliente_nao_encontrado: "Cliente não encontrado.",
   nao_pode_rebaixar_a_si: "Você não pode tirar o seu próprio acesso de gestor.",
   papel_invalido: "Tipo de conta inválido.",
@@ -63,12 +64,17 @@ const COM_HINT = {
   limite_atingido: h => { const m = /^(\w+):(\d+)$/.exec(h); return m ? `Seu plano permite até ${m[2]} ${m[1].replace(/^org_/, "")}. Para aumentar, fale com o suporte.` : null; },
 };
 
-/** Texto amigável para um erro lançado por rpc(). */
+/** Texto amigável para um erro lançado por rpc().
+    Plano 1000b · AB-166: o código cru («(http_502)», «(PGRST301)») não vai mais para a tela — http 5xx vira «servidor fora agora» e os
+    demais códigos desconhecidos ficam só no console (para quem for depurar). */
 export function mensagemErro(e) {
   const c = e && (e.codigo || e.message);
   const hint = e && e.detalhe && typeof e.detalhe === "object" && e.detalhe.hint ? String(e.detalhe.hint).trim() : "";
   if (hint && COM_HINT[c]) { const t = COM_HINT[c](hint); if (t) return t; }
-  return MENSAGENS[c] || `Não deu certo agora${c ? ` (${String(c).slice(0, 80)})` : ""}. Tente de novo em instantes.`;
+  if (MENSAGENS[c]) return MENSAGENS[c];
+  if (/^http_5\d\d$/.test(String(c || ""))) return "O servidor está fora agora. Tente em instantes.";
+  if (c) { try { console.warn("[nexus] erro sem tradução:", String(c).slice(0, 80)); } catch { /* sem console */ } }
+  return "Não deu certo agora. Tente de novo em instantes.";
 }
 
 function erro(codigo, extra = {}) {
@@ -78,21 +84,38 @@ function erro(codigo, extra = {}) {
   return e;
 }
 
+/** Plano 1000b · AB-165: tempo-limite de cada chamada (rede presa deixava o clássico em «Carregando» para sempre). */
+export const TEMPO_LIMITE_MS = 30e3;
+
 /** POST /rest/v1/rpc/<nome>. Erro do PostgREST → Error com .codigo = message. */
 export async function rpc(nome, params = {}) {
-  let r;
+  let r, txt;
   // AD-200: chamada com o token guardado conta como uso (renova a ociosidade da sessão em origem compartilhada)
-  if (params && params.p_token && origemCompartilhada(hostAtual()) && params.p_token === lerToken(Date.now(), { renovar: false })) lerToken();
+  if (params && params.p_token && modoSessao() && params.p_token === lerToken(Date.now(), { renovar: false })) lerToken();
+  // AB-165: AbortController + corrida com o relógio — mesmo um fetch que ignora o sinal não prende a tela; estoura com «tempo_esgotado»
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  let tLimite = null;
+  const limite = new Promise((_, rej) => { tLimite = setTimeout(() => { try { ctl && ctl.abort(); } catch { /* ok */ } rej(erro("tempo_esgotado")); }, TEMPO_LIMITE_MS); });
+  limite.catch(() => { /* tratado na corrida */ });
   try {
-    r = await _fetch(`${SUPA_URL}/rest/v1/rpc/${nome}`, {
-      method: "POST",
-      headers: { apikey: CHAVE_PUBLICA, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(params),
-    });
-  } catch (causa) {
-    throw erro("sem_conexao", { causa });
-  }
-  const txt = await r.text();
+    try {
+      r = await Promise.race([_fetch(`${SUPA_URL}/rest/v1/rpc/${nome}`, {
+        method: "POST",
+        headers: { apikey: CHAVE_PUBLICA, "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(params),
+        ...(ctl ? { signal: ctl.signal } : {}),
+      }), limite]);
+    } catch (causa) {
+      if (causa && causa.codigo === "tempo_esgotado") throw causa;
+      throw erro("sem_conexao", { causa });
+    }
+    // AB-168: a conexão pode cair no meio da leitura do corpo — também é «sem conexão», nunca um TypeError cru
+    try { txt = await Promise.race([r.text(), limite]); }
+    catch (causa) {
+      if (causa && causa.codigo === "tempo_esgotado") throw causa;
+      throw erro("sem_conexao", { causa });
+    }
+  } finally { clearTimeout(tLimite); }
   let corpo = null;
   try { corpo = txt ? JSON.parse(txt) : null; } catch { corpo = txt; }
   if (!r.ok) {
@@ -143,10 +166,17 @@ export const origemCompartilhada = host => /(^|\.)github\.io$/i.test(String(host
 const hostAtual = () => { try { return globalThis.location ? globalThis.location.hostname : ""; } catch { return ""; } };
 const local = () => { try { return globalThis.localStorage || null; } catch { return null; } };
 const sessao_ = () => { try { return globalThis.sessionStorage || null; } catch { return null; } };
-const armazem = () => (origemCompartilhada(hostAtual()) ? sessao_() : local());
-/** Token velho no localStorage de uma origem compartilhada: some daqui e é encerrado no servidor (pode já ter sido lido). */
+/** Plano 1000b · UB-167: «Lembrar neste aparelho» desmarcado no login do Órbita grava nx-app-compartilhado = "1" (app.js, AS-185) ANTES
+    de guardar o token — aparelho compartilhado (recepção) passa a guardar o token como na origem compartilhada: sessionStorage (some ao
+    fechar o navegador), com a mesma ociosidade e o mesmo teto. Antes só o cache em disco desligava e o token seguia no localStorage. */
+export const CHAVE_COMPARTILHADO = "nx-app-compartilhado";
+export const aparelhoCompartilhado = () => { try { return local()?.getItem(CHAVE_COMPARTILHADO) === "1"; } catch { return false; } };
+const modoSessao = () => origemCompartilhada(hostAtual()) || aparelhoCompartilhado();
+const armazem = () => (modoSessao() ? sessao_() : local());
+/** Token velho no localStorage de uma origem compartilhada (ou de um aparelho que passou a ser compartilhado): some daqui e é encerrado
+    no servidor (pode já ter sido lido). */
 function expulsarLegado() {
-  if (!origemCompartilhada(hostAtual())) return;
+  if (!modoSessao()) return;
   let velho = null;
   try { velho = local()?.getItem(CHAVE_TOKEN) || null; local()?.removeItem(CHAVE_TOKEN); } catch { /* bloqueado */ }
   if (velho) Promise.resolve().then(() => rpc("nx_sair", { p_token: velho })).catch(() => { /* fora do ar: o servidor vence a sessão sozinho */ });
@@ -157,7 +187,7 @@ export function lerToken(agora = Date.now(), { renovar = true } = {}) {
   try {
     const bruto = armazem()?.getItem(CHAVE_TOKEN) || null;
     if (!bruto) return null;
-    if (!origemCompartilhada(hostAtual())) return bruto;
+    if (!modoSessao()) return bruto;
     let o = null;
     try { o = JSON.parse(bruto); } catch { o = null; }
     if (!o || typeof o.t !== "string" || !(o.em > 0) || !(o.uso > 0)) { apagarToken(); return null; }
@@ -176,7 +206,7 @@ export function lerToken(agora = Date.now(), { renovar = true } = {}) {
 export const TOQUE_MIN_MS = 60e3;
 let _ultimoToque = 0;
 export function renovarUso(agora = Date.now()) {
-  if (!origemCompartilhada(hostAtual())) return false;
+  if (!modoSessao()) return false;
   if (agora - _ultimoToque < TOQUE_MIN_MS && agora >= _ultimoToque) return false;
   if (lerToken(agora, { renovar: false }) == null) return false;     // sem sessão (ou vencida): nada a renovar
   _ultimoToque = agora;
@@ -185,8 +215,8 @@ export function renovarUso(agora = Date.now()) {
 export function guardarToken(t, agora = Date.now()) {
   expulsarLegado();
   try {
-    if (origemCompartilhada(hostAtual())) armazem()?.setItem(CHAVE_TOKEN, JSON.stringify({ t: String(t), em: agora, uso: agora }));
-    else armazem()?.setItem(CHAVE_TOKEN, t);
+    if (modoSessao()) armazem()?.setItem(CHAVE_TOKEN, JSON.stringify({ t: String(t), em: agora, uso: agora }));
+    else { armazem()?.setItem(CHAVE_TOKEN, t); try { sessao_()?.removeItem(CHAVE_TOKEN); } catch { /* ok */ } }   // UB-167: voltou a «lembrar»
   } catch { /* modo privado */ }
 }
 export function apagarToken() { try { armazem()?.removeItem(CHAVE_TOKEN); } catch { /* modo privado */ } }

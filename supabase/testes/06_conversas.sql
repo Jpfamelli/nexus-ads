@@ -595,7 +595,7 @@ begin
   perform pg_temp.ok(not (j ->> 'oculta')::boolean and not (select bloqueado from public.nx_contatos where id = ct9), 'desfazer tira o bloqueio');
   perform pg_temp.ok(not has_function_privilege('anon', 'public.nx_cv_json_dep(public.nx_departamentos)', 'execute')
                      and not has_function_privilege('anon', 'public.nx_cv_horario_normalizar(jsonb)', 'execute')
-                     and has_function_privilege('anon', 'public.nx_cv_buscar_msgs(text,uuid,text,integer)', 'execute')
+                     and has_function_privilege('anon', 'public.nx_cv_buscar_msgs(text,uuid,text,integer,bigint)', 'execute')   -- plano 1000b: + p_antes_id (CB-207)
                      and has_function_privilege('anon', 'public.nx_departamento_excluir(text,uuid,uuid)', 'execute'), 'permissões do arquivo e_b');
 
   -- ---------------------------------------------------------- TEMPO (regra 11): 5.000 contatos, 5.000 negócios, 20.000 mensagens

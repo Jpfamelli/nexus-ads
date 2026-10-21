@@ -52,6 +52,12 @@
   --aten: #E5B35C;
   --c-meta: #6FA3CF;
   --c-google: #CF9540;
+  /* plano 1000b · AB-164: cores das colunas do quadro (antes hex solto no painel.js) */
+  --etapa-nova: #9FB4C7;
+  --etapa-agendada: #6FA3CF;
+  --etapa-orcamento: #CF9540;
+  --etapa-fechou: #7FD1A5;
+  --etapa-parou: #9D9486;
 
   /* papel (fichas, WhatsApp, cartão do login) */
   --papel: #F3E9D8;
@@ -956,14 +962,17 @@ th {
 th:first-child, td:first-child { text-align: left; padding-left: .25rem; }
 th:last-child, td:last-child { padding-right: .25rem; }
 th button { font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; display: inline-flex; gap: .3rem; align-items: center; min-height: 28px; border-radius: 6px; }
-th button:hover, th button[aria-sort] { color: var(--fg); }
-th button[aria-sort="descending"]::after { content: "↓"; color: var(--bronze-luz); }
-th button[aria-sort="ascending"]::after { content: "↑"; color: var(--bronze-luz); }
+/* plano 1000b · AB-011: aria-sort mora no <th> (o botão herda a seta) */
+th button:hover, th[aria-sort] button, th button[aria-sort] { color: var(--fg); }
+th[aria-sort="descending"] button::after, th button[aria-sort="descending"]::after { content: "↓"; color: var(--bronze-luz); }
+th[aria-sort="ascending"] button::after, th button[aria-sort="ascending"]::after { content: "↑"; color: var(--bronze-luz); }
 td { padding: .75rem .6rem; border-bottom: 1px solid var(--hair); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 tbody tr { transition: background-color var(--t-ui) var(--e-out); }
 tbody tr:hover { background: rgba(245, 233, 214, .035); }
 .entrando tbody tr { animation: foco var(--t-foco) var(--e-out) both; animation-delay: calc(min(var(--i, 0), 8) * var(--escada) + var(--t-ui)); }
-tfoot td { font-weight: 700; border-bottom: 0; border-top: 1px solid var(--hair-2); }
+tfoot td, tfoot th { font-weight: 700; border-bottom: 0; border-top: 1px solid var(--hair-2); }
+/* plano 1000b · AB-137: «Total» é cabeçalho de linha (<th scope=row>) com a cara da célula */
+tfoot th[scope="row"] { padding: .75rem .6rem .75rem .25rem; text-align: left; font-family: inherit; font-size: inherit; letter-spacing: normal; text-transform: none; color: inherit; white-space: nowrap; }
 tr.org td { color: var(--fg-soft); }
 .nm { display: flex; align-items: center; gap: .6rem; }
 .nm-t { display: flex; flex-direction: column; line-height: 1.3; white-space: normal; min-width: 0; }
@@ -1085,6 +1094,7 @@ button.kmore { color: var(--bronze-luz); text-decoration: underline; text-underl
 .entrando .donut svg { animation: donutIn var(--t-caneta) var(--e-out) both; }
 @keyframes donutIn { from { transform: rotate(-270deg) scale(.82); opacity: 0; } to { transform: rotate(-90deg); opacity: 1; } }
 .donut circle { fill: none; stroke-width: 5.2; }
+.donut .donut-trilha { stroke: var(--tinta); }   /* plano 1000b · AB-164: trilha da rosca pelo token (antes rgba solto no JS) */
 .donut .seg-c { stroke-linecap: butt; }
 .donut .ctr { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
 .donut .ctr b { font-family: var(--fd); word-spacing: var(--ws-d); font-weight: 600; font-size: var(--fs-20); color: var(--fg); }
@@ -1574,7 +1584,8 @@ button.kmore { color: var(--bronze-luz); text-decoration: underline; text-underl
   #tbl-campanhas td[data-l] { font-size: var(--fs-17); font-weight: 600; }
   #tbl-campanhas td[data-l]::before { content: attr(data-l); display: block; margin-bottom: .1rem; font-family: var(--fm); font-size: var(--fs-11); font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-mute); }
   #tbl-campanhas tfoot tr { border-bottom: 0; }
-  #tbl-campanhas tfoot td:first-child { font-family: var(--fm); font-size: var(--fs-11); letter-spacing: .1em; text-transform: uppercase; color: var(--bronze-luz); }
+  #tbl-campanhas tfoot th[scope="row"] { display: block; grid-column: 1 / -1; padding: 0; border: 0; }
+  #tbl-campanhas tfoot td:first-child, #tbl-campanhas tfoot th[scope="row"] { font-family: var(--fm); font-size: var(--fs-11); letter-spacing: .1em; text-transform: uppercase; color: var(--bronze-luz); }
 }
 @media (max-width: 560px) {
   .fun-row { grid-template-columns: 104px minmax(0, 1fr); gap: .3rem .6rem; }

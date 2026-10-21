@@ -823,7 +823,8 @@ test("SV-084 alerta do radar que não saiu é reenviado na rodada seguinte (até
   const r = await s.cron(ciclo, {});
   assert.equal(r.corpo.clientes[0].alertas_reenviados, 1);
   assert.match(s.estado.wa.at(-1).text.body, /parou/);
-  assert.equal(s.tab("nx_alertas")[0].tentativas_envio, 1); assert.ok(s.tab("nx_alertas")[0].enviado_em);
+  // plano 1000b · B-001: o envio original conta como a 1ª tentativa (antes 0 → o reenvio deixava 1 e cabiam 4 envios)
+  assert.equal(s.tab("nx_alertas")[0].tentativas_envio, 2); assert.ok(s.tab("nx_alertas")[0].enviado_em);
   s.estado.agora = new Date("2026-10-13T13:07:00Z");
   const r3 = await s.cron(ciclo, {});
   assert.ok(!r3.corpo.clientes[0].alertas_reenviados, "já saiu: não reenvia");

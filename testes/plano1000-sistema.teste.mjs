@@ -293,7 +293,8 @@ test("AS-211 · ui.toast: o foco do teclado dentro do aviso para o relógio (e o
   await esperar(80);
   assert.ok(t.el.isConnected && !t.el.classList.contains("saindo"), "com o foco dentro, o aviso não some sozinho");
   ev(t.el, "focusout", { relatedTarget: null });
-  assert.match(UI_TXT, /const dur = ms \?\? \(tipo === "erro" \? 12000 :/, "erro: 12 s por padrão");
+  // plano 1000b (UB-274): no toque, erro COM ação fica até fechar; o resto continua com 12 s
+  assert.match(UI_TXT, /const dur = ms \?\? \(tipo === "erro" \? \(comAcao && toqueGrosso\(\) \? 0 : 12000\) :/, "erro: 12 s por padrão");
   t.fechar();
 });
 
@@ -722,7 +723,7 @@ test("pedido (g) · busca-dica: no celular some só a dica de teclado; AS-106/AS
   assert.match(CSS_APP, /\.kpi-ajuda\[tabindex\]::before \{ content: ""; position: absolute; inset: -3px; \}/, "18 + 2 × 3 = 24 px");
 });
 test("AS-274 · faixa DEMO LOCAL: no celular uma linha («Demo local · dados fictícios»), o texto inteiro fica para o leitor de tela", () => {
-  const f = fnDoApp("function desenharFaixas() {");
+  const f = fnDoApp("function faixasDoMomento() {");   // plano 1000b (UB-207): o conteúdo das faixas saiu do desenharFaixas (que só reconcilia)
   assert.match(f, /h\("span", \{ class: "demo-longo" \}, "DEMO LOCAL · dados fictícios; mensagens e integrações não são reais\."\)/);
   assert.match(f, /h\("span", \{ class: "demo-curto", "aria-hidden": "true" \}, "Demo local · dados fictícios"\)/);
   assert.match(CSS_APP, /@media \(width <= 760px\) \{[^}]*\}\s*\.faixa-demo-local \.demo-longo \{ position: absolute !important;/);
