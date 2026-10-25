@@ -26,6 +26,7 @@ begin
       from public.nx_canais k where k.cliente_id = v_cli) s where x is not null;
   select count(*) into n_cv from public.nx_contatos where cliente_id = v_cli;
   delete from vault.secrets where id = any(v_vault);
+  perform set_config('nx.faxina', 'on', true);   -- plano 2000d · DS-153: a auditoria só aceita delete na retenção explícita
   delete from public.nx_auditoria where cliente_id = v_cli or conta_id = any(v_contas);
   get diagnostics n_aud = row_count;
   delete from public.nx_midia_lixo where cliente_id = v_cli;

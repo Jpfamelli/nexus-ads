@@ -1990,3 +1990,590 @@ test("DR-358/367/368/376/377/390 · CSS: colunas em rem no tablet, faixas soltas
   assert.ok(/\.crm\.kb-apresentacao \.kc-s\.dado-pessoal[^{]*\{ filter: blur\(6px\); \}/.test(b), "DR-390");
   assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(b) && !/\brgba?\(/.test(b), "só tokens");
 });
+
+/* ============================================================ plano 2000d · complemento crm (PX-001…) */
+test("PX-001/002/003 · lerNumero: «+1.500», moeda por extenso («1.500,00 reais», «BRL 300») e «,50» sem o zero", () => {
+  assert.equal(L.lerNumero("+1.500"), 1500);
+  assert.equal(L.lerNumero("+R$ 2.000"), 2000);
+  assert.equal(L.lerNumero("1.500,00 reais"), 1500);
+  assert.equal(L.lerNumero("BRL 300"), 300);
+  assert.equal(L.lerNumero("1 real"), 1);
+  assert.equal(L.lerNumero(",50"), 0.5);
+  assert.equal(L.lerNumero("-,5"), -0.5);
+  assert.equal(L.lerNumero("abc"), null, "texto continua não sendo número");
+  assert.equal(L.lerNumero("12,5%"), null);
+});
+
+test("PX-004/005/006/007 · lerData: hora «às 14:30»/«14h30», AAAA.MM.DD, AAAAMMDD e o mês por extenso", () => {
+  assert.equal(L.lerData("31/12/1990 às 14:30"), "1990-12-31");
+  assert.equal(L.lerData("31/12/1990 14h30"), "1990-12-31");
+  assert.equal(L.lerData("31/12/1990 14h"), "1990-12-31");
+  assert.equal(L.lerData("2020.02.01"), "2020-02-01");
+  assert.equal(L.lerData("20200201"), "2020-02-01");
+  assert.equal(L.lerData("12345678"), null, "8 dígitos fora de 1900–2100 não é data");
+  assert.equal(L.lerData("20201301"), null, "mês 13 não existe");
+  assert.equal(L.lerData("31 de dezembro de 1990"), "1990-12-31");
+  assert.equal(L.lerData("1 de março de 2020"), "2020-03-01");
+  assert.equal(L.lerData("31 dez 1990"), "1990-12-31");
+  assert.equal(L.lerData("31/dez/90", { passado: true }), "1990-12-31");
+  assert.equal(L.lerData("31 de fevereiro de 2020"), null, "dia que não existe");
+  assert.equal(L.lerData("31 de abobrinha de 2020"), null);
+});
+
+test("PX-008/019 · telefone da planilha: «0055…» vira +55 e o código da operadora («015 12 …») sai", () => {
+  const a = L.telefoneDaCelula("0055 12 99830 3030");
+  assert.equal(a.telefone, "+55 12 99830 3030");
+  assert.equal(L.normalizarTelefone(a.telefone), "5512998303030");
+  assert.equal(L.telefoneDaCelula("001 415 555 0100").telefone, "+1 415 555 0100");
+  const b = L.telefoneDaCelula("015 12 99830-3030");
+  assert.equal(L.normalizarTelefone(b.telefone), "5512998303030");
+  assert.equal(L.telefoneDaCelula("(12) 99830-3030").telefone, "(12) 99830-3030", "número comum fica como veio");
+});
+
+test("PX-009/053 · e-mail com espaço em volta do @ vale (planilha, campo personalizado)", () => {
+  assert.deepEqual(L.emailDaCelula("Ana @ X.com"), { email: "ana@x.com", extras: [] });
+  assert.equal(L.validarCampo({ tipo: "email", rotulo: "E" }, " Ana @ x.com "), null);
+  assert.equal(L.normalizarCampo({ tipo: "email" }, " Ana @ X.COM "), "ana@x.com");
+  assert.equal(L.validarCampo({ tipo: "email", rotulo: "E" }, "ana x.com"), "E-mail inválido.");
+});
+
+test("PX-010 · sugestaoEmail: letra dobrada e trocada («gmail.comm», «gmali.com», «hotamil.com»)", () => {
+  assert.equal(L.sugestaoEmail("ana@gmail.comm"), "ana@gmail.com");
+  assert.equal(L.sugestaoEmail("ana@gmali.com"), "ana@gmail.com");
+  assert.equal(L.sugestaoEmail("ana@gmaill.com"), "ana@gmail.com");
+  assert.equal(L.sugestaoEmail("ana@hotamil.com"), "ana@hotmail.com");
+  assert.equal(L.sugestaoEmail("ana@outlook.comm"), "ana@outlook.com");
+  assert.equal(L.sugestaoEmail("ana@gmail.com"), null);
+});
+
+test("PX-011 · csvCampo: «-» e «---» (sem valor) não ganham o apóstrofo; fórmula continua protegida", () => {
+  assert.equal(L.csvCampo("-"), "-");
+  assert.equal(L.csvCampo("---"), "---");
+  assert.equal(L.csvCampo("-x"), "'-x");
+  assert.equal(L.csvCampo("=1+1"), "'=1+1");
+});
+
+test("PX-012 · exportação: CPF com máscara (o Excel não come o zero da frente)", () => {
+  const { linhas, cabecalho } = L.linhasExportacao([{ nome: "Ana", documento: "01234567890" }]);
+  assert.equal(linhas[0][cabecalho.indexOf("CPF/CNPJ")], "012.345.678-90");
+  assert.equal(L.linhasExportacao([{ nome: "B", documento: "RG 12.345" }]).linhas[0][7], "RG 12.345", "outro documento fica como veio");
+});
+
+test("PX-013/014 · partesNota: «www.» vira link https e e-mail vira mailto", () => {
+  const p = L.partesNota("veja www.site.com.br, mande p/ ana@x.com. ou ligue (12) 99830-3030");
+  assert.deepEqual(p.find(x => x.tipo === "url"), { tipo: "url", texto: "www.site.com.br", href: "https://www.site.com.br" });
+  assert.deepEqual(p.find(x => x.tipo === "email"), { tipo: "email", texto: "ana@x.com", href: "mailto:ana@x.com" });
+  assert.equal(p.find(x => x.tipo === "tel").href, "tel:+5512998303030");
+  assert.equal(p.map(x => x.texto).join(""), "veja www.site.com.br, mande p/ ana@x.com. ou ligue (12) 99830-3030", "nada do texto se perde");
+  assert.equal(L.partesNota("https://www.x.com/a").length, 1, "o www dentro do http não vira segundo link");
+  assert.equal((ler("crm-tarefas.js").match(/p\.tipo === "email" \? h\("a", \{ href: p\.href/g) || []).length, 2, "nota e detalhes da tarefa desenham o mailto");
+});
+
+test("PX-015/016 · mensagens prontas: «Dr. João» inteiro e sigla do serviço preservada", () => {
+  const m = L.mensagensProntas({ servico: "Freio ABS", status: "ganho" }, { nome: "Dr. João Silva" });
+  assert.match(m[0].texto, /^Oi, Dr\. João! /);
+  assert.match(m[0].texto, /sobre freio ABS\./);
+  assert.match(m.find(x => x.id === "indicacao").texto, /de freio ABS,/);
+  assert.match(L.mensagensProntas({}, { nome: "Ana Souza" })[0].texto, /^Oi, Ana! /);
+  assert.match(L.mensagensProntas({ servico: "Limpeza" }, { nome: "Sra." })[0].texto, /^Oi, Sra\.! .*sobre limpeza\./, "título sozinho fica como nome");
+});
+
+test("PX-017 · linha do tempo: nota vazia diz «Nota sem texto»", () => {
+  assert.equal(L.textoTempo({ fonte: "nota", dados: { texto: "  " } }), "Nota sem texto");
+  assert.equal(L.textoTempo({ fonte: "nota", dados: { texto: "oi" } }), "Nota: oi");
+});
+
+test("PX-018 · origem da planilha: «Google (orgânico)», «Orgânica», «Busca orgânica» = orgânico", () => {
+  for (const t of ["Google (orgânico)", "Orgânica", "Busca orgânica", "Instagram orgânico"]) assert.equal(L.origemDaPlanilha(t), "organico", t);
+  assert.equal(L.origemDaPlanilha("Google"), "Google", "sem o tipo continua como veio");
+});
+
+test("PX-020/021 · formatarTel: 0800 e número dos EUA em grupos", () => {
+  assert.equal(L.formatarTel("08001234567"), "0800 123 4567");
+  assert.equal(L.formatarTel("14155550100"), "+1 415 555 0100");
+  assert.equal(L.formatarTel("5512998303030"), "(12) 99830-3030");
+});
+
+test("PX-022 · normalizarSite: «@loja» e e-mail não viram site", () => {
+  assert.equal(L.normalizarSite("@loja"), null);
+  assert.equal(L.normalizarSite("ana@x.com"), null);
+  assert.equal(L.normalizarSite("www.x.com/@perfil"), "https://www.x.com/@perfil", "@ no caminho é link");
+  assert.equal(L.normalizarSite("x.com.br"), "https://x.com.br");
+});
+
+test("PX-052 · lerSimNao: ✓ ✔ ☑ = sim; ✗ ✘ ☐ = não", () => {
+  for (const s of ["✓", "✔", "☑"]) assert.equal(L.lerSimNao(s), true, s);
+  for (const s of ["✗", "✘", "☐"]) assert.equal(L.lerSimNao(s), false, s);
+});
+
+test("PX-023 · abrirNegocio({aba}) abre direto na seção pedida", async () => {
+  const D = domDeMentira();
+  try {
+    const h = D.h;
+    const G = await montarGaveta(D, { opts: { aba: "tarefas" }, kx: { mod: async () => ({ blocoTarefas: () => h("div", { class: "teste-tarefas" }), blocoNotas: () => h("div", { class: "teste-notas" }), blocoTempo: () => h("div") }) } });
+    await varias(8);
+    assert.ok(G.corpo().querySelector(".teste-tarefas"), "abriu na aba Tarefas");
+    assert.equal(G.corpo().querySelector(".teste-notas"), null);
+    const src = ler("crm-negocio.js");
+    assert.match(src, /let abaAtual = ABAS_NG\.includes\(aba\) \? aba : aba === "presenca" \? "resumo" : abaLembrada\(\);/);
+    assert.match(src, /const pres = focoPresenca \? corpo\.querySelector\("\.ng-presenca \.ng-pres:not\(\[disabled\]\)"\) : null;/, "presença: foco no Compareceu/Faltou");
+  } finally { D.desfazer(); }
+});
+
+test("PX-024 · deep link #/crm/negocio/<id>?aba= passa a aba à gaveta", () => {
+  assert.match(ler("crm.js"), /aba: r\.query && typeof r\.query\.aba === "string" \? r\.query\.aba : null,/);
+});
+
+test("PX-025/026 · funil em edição e importação em andamento usam a guarda de rota do shell (ctx.guardaSaida)", async () => {
+  assert.match(ler("crm-config.js"), /ctx\.guardaSaida\(sujo, \{ texto: "As mudanças neste funil vão ser perdidas\." \}\)/);
+  const D = domDeMentira();
+  try {
+    const guardas = [];
+    let soltou = 0;
+    const imp = await import("../web/app/crm-importar.js");
+    const U = uiDeMentira(D.h, {});
+    const k = { ui: U, h: D.h, L, base: { usuarios: [], etiquetas: [], campos: [], motivos: [], funis: [] }, v: V,
+      ctx: { cliente: { id: "c" }, titulo() {}, navegar() {}, guardaSaida: (fn, o) => { guardas.push({ fn, o }); return () => { soltou++; }; } },
+      api: { rpcC: async () => ({}) }, pode: () => true, erro: () => "", toastErro() {}, cor: () => null, funil: () => null, funilPadrao: () => null, estagio: () => null, etiqueta: () => null, usuario: () => null };
+    const t = await imp.montarImportar(k, h0(D, "div"), {});
+    assert.equal(guardas.length, 1);
+    assert.equal(guardas[0].fn(), false, "parada: não pergunta");
+    assert.match(guardas[0].o.titulo, /Parar a importação/);
+    t.desmontar();
+    assert.equal(soltou, 1, "sair da tela solta a guarda");
+  } finally { D.desfazer(); }
+});
+
+test("PX-027/028 · DA-358: ?etapa=agendou e ?criado_ate entram no filtro da lista, com o chip honesto", async () => {
+  const D = domDeMentira();
+  try {
+    const ct = await montarCt(D);
+    const el = h0(D, "div");
+    await ct.M.montarContatos(ct.k, el, { query: { origem: "anuncio", etapa: "agendou", criado_de: "2026-10-01", criado_ate: "2026-10-31" } });
+    await varias(8);
+    const f = ct.cham("nx_contatos_listar")[0].p.p_filtro;
+    assert.equal(f.marco, "agendou");
+    assert.equal(f.criado_ate, "2026-10-31");
+    const chips = el.querySelectorAll(".crm-chip").map(c => c.textContent);
+    assert.ok(chips.some(t => /Agendaram a consulta \(ainda não separado na lista\)/.test(t)), chips.join(" | "));
+    assert.equal(L.marcoDoLink("Fechou"), "fechou");
+    assert.equal(L.marcoDoLink("veio"), "compareceu");
+    assert.equal(L.marcoDoLink("xyz"), null);
+    assert.equal(L.rotuloMarcoLink("compareceu"), "Compareceram à consulta");
+  } finally { D.desfazer(); }
+});
+
+test("PX-031/032 · fim da importação: rodapé sem «null»; teste A11Y aceita o tabindex roving do quadro", () => {
+  assert.match(ler("crm-importar.js"), /rodape\.append\(\.\.\.\[\n[\s\S]*?"Ver o Início"\) : null\]\.filter\(Boolean\)\);/);
+  assert.match(readFileSync(join(RAIZ, "testes", "app.teste.mjs"), "utf8"), /plano 2000d: PX-032/);
+});
+
+test("PX-033 · ficha na gaveta: falha ao carregar mostra o cartão de erro (não fica vazia)", async () => {
+  const D = domDeMentira();
+  try {
+    const N = await import("../web/app/crm-negocio.js");
+    const U = uiDeMentira(D.h, {});
+    let g = null;
+    U.gaveta = () => (g = { corpo: h0(D, "div"), fechar() {} });
+    let n = 0;
+    const k = { ui: U, h: D.h, L, v: V, mod: async () => { n++; throw Object.assign(new Error("rede"), { codigo: "sem_rede" }); } };
+    await N.abrirContato(k, 9);
+    const e = g.corpo.querySelector(".erro-cartao");
+    assert.ok(e, "cartão de erro");
+    assert.equal(e.textContent, "sem_rede");
+    assert.equal(n, 1);
+  } finally { D.desfazer(); }
+});
+
+test("PX-034/035/054 · ticket do serviço sem olhar maiúscula e responsável do pós-venda com id texto", () => {
+  const src = ler("crm-negocio.js");
+  assert.match(src, /L\.ticketDoServico\(k\.base\.ticket, ev\.target\.value\) \?\? NaN/);
+  assert.match(src, /const ticket = card\.servico && k\.base\.ticket \? \(L\.ticketDoServico \? L\.ticketDoServico\(k\.base\.ticket, card\.servico\)/);
+  assert.match(src, /some\(u => String\(u\.id\) === String\(n\.dono_id\)\) \? String\(n\.dono_id\) : ""/);
+  assert.equal(L.ticketDoServico({ Implante: 3000 }, " implante "), 3000);
+});
+
+test("PX-036/037 · dicaEmail: «Quis dizer …?» ao sair do campo e «Usar este» troca", async () => {
+  const D = domDeMentira();
+  try {
+    const N = await import("../web/app/crm-negocio.js");
+    const U = uiDeMentira(D.h, {});
+    const campo = h0(D, "label", { class: "campo" }, D.h("input", { name: "email" }));
+    N.dicaEmail({ ui: U, h: D.h, L }, campo);
+    const inp = campo.querySelector("input");
+    const dica = campo.querySelector(".crm-dica-email");
+    assert.equal(dica.hidden, true);
+    inp.value = "ana@gmial.com"; inp.dispara("blur");
+    assert.equal(dica.hidden, false);
+    assert.match(dica.textContent, /Quis dizer ana@gmail\.com\?/);
+    dica.querySelector("button").clique();
+    assert.equal(inp.value, "ana@gmail.com");
+    assert.equal(dica.hidden, true);
+    assert.match(ler("crm-listas.js"), /N\.dicaEmail \? N\.dicaEmail\(k, ui\.campo\(\{ rotulo: "E-mail", nome: "email"/);
+    assert.match(ler("crm-negocio.js"), /dicaEmail\(k, ui\.campo\(\{ rotulo: "E-mail \(opcional\)", nome: "c_email"/);
+  } finally { D.desfazer(); }
+});
+
+test("PX-038/039/040/041 · tarefas: Ctrl+Enter salva, ligação com tel:, e-mail com mailto: e N abre «Nova tarefa»", async () => {
+  const src = ler("crm-tarefas.js");
+  assert.match(src, /form\.addEventListener\("keydown", ev => \{\n\s+if \(ev\.key !== "Enter" \|\| !\(ev\.ctrlKey \|\| ev\.metaKey\)/);
+  assert.match(src, /document\.addEventListener\("keydown", aoTeclaN\);/);
+  assert.match(src, /document\.removeEventListener\("keydown", aoTeclaN\);/);
+  assert.match(ler("crm.js"), /id: "crm\.nova-tarefa"[^\n]*\.\.\.\(tipoTela === "tarefas" \? \{ atalho: "N" \} : \{\}\)/);
+  const D = domDeMentira();
+  try {
+    const T = await import("../web/app/crm-tarefas.js");
+    const k = kTarefas2(D);
+    const lig = T.itemTarefa(k, { id: 1, titulo: "Ligar", tipo: "ligacao", contato: { id: 3, nome: "Ana", telefone: "5512998303030" } });
+    const a = lig.querySelector(".tf-ligar");
+    assert.ok(a, "botão Ligar");
+    assert.equal(a.getAttribute("href"), "tel:+5512998303030");
+    const em = T.itemTarefa(k, { id: 2, titulo: "Mandar orçamento", tipo: "email", contato: { id: 3, nome: "Ana", email: "Ana@X.com" } });
+    assert.equal(em.querySelector(".tf-email").getAttribute("href"), "mailto:ana@x.com?subject=Mandar%20or%C3%A7amento");
+    const semEm = T.itemTarefa(k, { id: 3, titulo: "x", tipo: "email", contato: { id: 3, nome: "Ana" } });
+    assert.equal(semEm.querySelector(".tf-email"), null);
+    const feita = T.itemTarefa(k, { id: 4, titulo: "x", tipo: "ligacao", concluida_em: iso(-1), contato: { telefone: "5512998303030" } });
+    assert.equal(feita.querySelector(".tf-ligar"), null, "concluída não mostra");
+  } finally { D.desfazer(); }
+});
+
+test("PX-042/043/044/046/055 · importação: .tsv aceito, aba «parada», «puladas» no gênero, singular e modelo sem acento", () => {
+  const src = ler("crm-importar.js");
+  assert.match(src, /accept: "\.csv,\.tsv,\.txt,text\/csv,text\/tab-separated-values,text\/plain"/);
+  assert.ok(src.includes("if (!/\\.(csv|tsv|txt)$/i.test(f.name)"), ".tsv passa na conferência do nome");
+  assert.match(src, /"‖ Importação parada"/);
+  assert.ok(src.includes('`pulad${k.v.art("contato")}${s.ignorados === 1 ? "" : "s"}`'), "pulados no gênero");
+  assert.ok(src.includes('`criad${k.v.art("contato")}${s.criados === 1 ? "" : "s"}`'), "singular");
+  assert.match(src, /L\.nomeArquivoImportacao\("modelo", v\.min\("contatos"\), ""\)/);
+  assert.equal(L.nomeArquivoImportacao("modelo", "hóspedes", ""), "modelo-hospedes.csv");
+  assert.equal(L.detectarSeparador("nome\ttelefone\nAna\t1"), "\t");
+});
+
+test("PX-045 · exportação de contatos: nome do arquivo sem acento", () => {
+  assert.match(ler("crm-listas.js"), /L\.nomeArquivoImportacao\("", k\.v\.min\("contatos"\), ui\.hojeSP\(\)\)/);
+  assert.equal(L.nomeArquivoImportacao("", "Hóspedes", "2026-10-25"), "hospedes-2026-10-25.csv");
+});
+
+test("PX-047/048/049 · configurações: campo e etiqueta com nome repetido avisam no formulário; Esc limpa a busca de etiquetas", () => {
+  const src = ler("crm-config.js");
+  assert.ok(src.includes("if (igualC) { ui.marcarErro(f, \"rotulo\", `Já existe o campo «${igualC.rotulo}».`); return false; }"));
+  assert.ok(src.includes('String(x.funil_id || "") === String(funilD || "")'), "no negócio, por funil");
+  assert.ok(src.includes("if (igualE) { ui.marcarErro(f, \"nome\", `Já existe a etiqueta «${igualE.nome}».`); return false; }"));
+  assert.ok(src.includes("(!e || String(x.id) !== String(e.id))"), "renomear a própria etiqueta não conta");
+  assert.ok(src.includes('busca.addEventListener("keydown", ev => { if (ev.key === "Escape" && busca.value)'));
+});
+
+test("PX-050/051 · CSS: alto contraste no quadro e avatar pelo .avatar-g (DU-309)", () => {
+  const css = ler("crm.css");
+  const b = css.slice(css.indexOf("plano 2000d · PX-050"));
+  assert.match(b, /@media \(forced-colors: active\) \{[\s\S]*\.kc\.kc-sel, \.kc\.pego \{ outline: 3px solid Highlight;/);
+  assert.match(b, /\.kb-col\.alvo \{ outline: 2px dashed Highlight;/);
+  assert.doesNotMatch(css, /\.ct-abrir \.avatar \{ width: 40px/);
+  assert.doesNotMatch(css, /\.emp-cab \.avatar \{ width: 40px/);
+  assert.equal((ler("crm-listas.js").match(/\{ tamanho: "g" \}\) \/\* plano 2000d · PX-051 \*\//g) || []).length, 2);
+});
+
+test("PX-056/057/058/059/060 · mapeamento: o começo do cabeçalho decide; «Notes»/«Anotações», «Cel» e «Atendente»", () => {
+  const um = c => L.sugerirMapeamento([c])[0];
+  assert.equal(um("E-mail do cliente"), "email", "antes: nome (o fim «cliente»)");
+  assert.equal(um("Valor do orçamento"), "negocio_valor", "antes: título");
+  assert.equal(um("Nome do cliente"), "nome");
+  assert.equal(um("Telefone do paciente"), "telefone");
+  assert.equal(um("Notes"), "obs");
+  assert.equal(um("Anotações"), "obs");
+  assert.equal(um("Cel"), "telefone");
+  assert.equal(um("Atendente"), "responsavel");
+  assert.deepEqual(L.sugerirMapeamento(["Nome", "E-mail do cliente", "Valor do orçamento", "Serviço"]), ["nome", "email", "negocio_valor", "negocio_titulo"]);
+});
+
+test("PX-061 · nomeFonte: «google_ads» → «Google Ads»; fonte desconhecida sem sublinhado", () => {
+  assert.equal(L.nomeFonte("google_ads"), "Google Ads");
+  assert.equal(L.nomeFonte("Google-Ads"), "Google Ads");
+  assert.equal(L.nomeFonte("meta_ads"), "Meta Ads");
+  assert.equal(L.nomeFonte("minha_loja"), "Minha loja");
+  assert.equal(L.nomeFonte("ig"), "Instagram");
+});
+
+test("PX-062/063 · empresas: busca com até 120 letras e «/» foca a busca (solta ao sair)", async () => {
+  const src = ler("crm-listas.js");
+  assert.match(src, /maxlength: "120", placeholder: "Buscar empresa", "aria-label": "Buscar empresa" \}\);/);
+  const D = domDeMentira();
+  try {
+    const ct = await montarCt(D, { rpc: n => (n === "nx_empresas_listar" ? { itens: [], total: 0, tem_mais: false } : undefined) });
+    const el = h0(D, "div");
+    const tela = await ct.M.montarEmpresas(ct.k, el);
+    await varias(6);
+    const busca = el.querySelector('input[type="search"]');
+    D.documento("keydown", { key: "/", target: D.doc.body });
+    assert.equal(D.doc.activeElement, busca, "«/» levou o foco à busca");
+    tela.desmontar();
+    busca.blur();
+    D.documento("keydown", { key: "/", target: D.doc.body });
+    assert.notEqual(D.doc.activeElement, busca, "depois de sair, a tecla não mexe mais");
+  } finally { D.desfazer(); }
+});
+
+test("PX-064 · busca de etiquetas do filtro: Esc com texto limpa e mostra todas, sem fechar o painel", async () => {
+  const D = domDeMentira();
+  try {
+    const h = D.h;
+    const ops = h0(D, "div", null, Array.from({ length: 14 }, (_, i) => h("label", { class: "crm-op" }, h("input", { type: "checkbox" }), `Etiqueta ${i}`)));
+    const caixa = VisReal.buscaEtiquetas({ h, L }, ops);
+    const campo = caixa.querySelector("input");
+    campo.value = "Etiqueta 1"; campo.dispara("input");
+    assert.ok(ops.querySelectorAll(".crm-op").some(x => x.hidden), "a busca escondeu algumas");
+    let parou = false;
+    campo.dispara("keydown", { key: "Escape", stopPropagation() { parou = true; } });
+    assert.equal(campo.value, "");
+    assert.ok(ops.querySelectorAll(".crm-op").every(x => !x.hidden), "todas de volta");
+    assert.ok(parou, "o Esc não chega ao painel");
+  } finally { D.desfazer(); }
+});
+
+test("PX-065 · cartão: «Confirmar a presença» abre a gaveta já na presença", async () => {
+  const D = domDeMentira();
+  try {
+    const abertos = [];
+    const passou = iso(-1, 9);
+    const t = await montarKb(D, { dados: quadroDe({ s2: col("s2", [{ id: 5, titulo: "C5", status: "aberto", estagio_id: "s2", ordem: 10, consulta_em: passou, campos: {} }]) }),
+      N: { abrirNegocio: (k, id, o) => { abertos.push({ id, o }); } } });
+    await varias(8);
+    const bt = t.cartao(5).querySelector(".kc-presenca");
+    assert.ok(bt, "botão de presença no cartão");
+    bt.dispara("click", { stopPropagation() {} });
+    assert.equal(abertos.length, 1);
+    assert.equal(abertos[0].o.aba, "presenca");
+  } finally { D.desfazer(); }
+});
+
+test("PX-066 · prévia da importação: dados do cliente com «dado-pessoal» (o modo apresentação borra)", () => {
+  const src = ler("crm-importar.js");
+  assert.match(src, /h\("td", \{ class: \["dado-pessoal", c\.destino \? null : "ignorada"\]/);
+  assert.match(src, /const pessoal = \["nome", "sobrenome", "telefone", "email", "documento", "nascimento"\]\.includes\(dest\);/);
+  assert.match(src, /pessoal && v != null && v !== "" \? h\("span", \{ class: "dado-pessoal" \}, v\) : v/);
+});
+
+test("PX-067/068 · telefone inválido: número de fora curto e número sem DDD têm frase própria", () => {
+  assert.match(L.textoTelefoneInvalido("+1 415"), /outro país incompleto/);
+  assert.match(L.textoTelefoneInvalido("99830-3030"), /^Falta o DDD\./);
+  assert.match(L.textoTelefoneInvalido("9830-3030"), /^Falta o DDD\./);
+  assert.match(L.textoTelefoneInvalido("12 9830-3030"), /Faltou o 9\?/, "a sugestão do 9 continua");
+  assert.match(L.textoTelefoneInvalido("123"), /^Telefone inválido/);
+});
+
+test("PX-069/070 · tempo longo em meses e anos («há 3 meses na etapa», «há 2 anos»)", () => {
+  const ag = new Date();
+  const antes = d => new Date(ag.getTime() - d * 86400000).toISOString();
+  assert.equal(L.textoDiasEtapa(antes(97), ag), "há 3 meses na etapa");
+  assert.equal(L.textoDiasEtapa(antes(400), ag), "há 1 ano na etapa");
+  assert.equal(L.textoDiasEtapa(antes(10), ag), "há 10 dias na etapa");
+  assert.equal(L.idadeCurta(60 * 24 * 64), "há 2 meses");
+  assert.equal(L.idadeCurta(60 * 24 * 800), "há 2 anos");
+  assert.equal(L.idadeCurta(60 * 24 * 40), "há 40 dias");
+});
+
+test("PX-071/072 · importação: nome em CAIXA ALTA/minúsculas ganha maiúsculas certas; «Minas» e «Brasília» viram UF", () => {
+  assert.equal(L.nomeBonito("MARIA DA SILVA"), "Maria da Silva");
+  assert.equal(L.nomeBonito("joão de souza"), "João de Souza");
+  assert.equal(L.nomeBonito("ana-luiza d'avila"), "Ana-Luiza D'Avila");
+  assert.equal(L.nomeBonito("McDonald"), "McDonald", "misturado fica como veio");
+  assert.equal(L.nomeBonito("DE SOUZA"), "De Souza", "a 1ª palavra sempre maiúscula");
+  assert.deepEqual(L.montarLinhas([["MARIA DA SILVA", "12998303030"]], ["nome", "telefone"]).map(x => x.nome), ["Maria da Silva"]);
+  assert.equal(L.ufDaPlanilha("Minas"), "MG");
+  assert.equal(L.ufDaPlanilha("Brasília"), "DF");
+});
+
+test("PX-073 · nota: contagem aparece perto do limite de 5.000", async () => {
+  const D = domDeMentira();
+  try {
+    const T = await import("../web/app/crm-tarefas.js");
+    const k = kTarefas2(D);
+    k.rascunho = () => ({ apagar() {} });
+    k.L = L;
+    const bl = T.blocoNotas(k, { notas: [], negocio_id: 1, aoMudar() {} });
+    const ta = bl.querySelector("textarea");
+    const conta = bl.querySelector(".nota-conta");
+    assert.equal(conta.hidden, true);
+    ta.value = "x".repeat(4600); ta.dispara("input");
+    assert.equal(conta.hidden, false);
+    assert.match(conta.textContent, /4\.600 de 5\.000 caracteres/);
+    ta.value = "curta"; ta.dispara("input");
+    assert.equal(conta.hidden, true);
+  } finally { D.desfazer(); }
+});
+
+test("PX-074 · tarefa nova: o título escolhe o tipo enquanto a pessoa não mexeu nele", () => {
+  assert.equal(L.tipoDoTitulo("Ligar para a Ana"), "ligacao");
+  assert.equal(L.tipoDoTitulo("Mandar WhatsApp com o orçamento"), "whatsapp");
+  assert.equal(L.tipoDoTitulo("Enviar e-mail da proposta"), "email");
+  assert.equal(L.tipoDoTitulo("Reunião com a Bia"), "reuniao");
+  assert.equal(L.tipoDoTitulo("Visitar a obra"), "visita");
+  assert.equal(L.tipoDoTitulo("Revisar contrato"), null);
+  const src = ler("crm-tarefas.js");
+  assert.match(src, /if \(!tarefa && selTipo && inTit && L\.tipoDoTitulo\) \{/);
+  assert.match(src, /if \(tipoTocado\) return;/);
+});
+
+test("PX-075 · rotuloMes: mês que não existe volta como veio", () => {
+  assert.equal(L.rotuloMes("2026-13"), "2026-13");
+  assert.equal(L.rotuloMes("2026-01"), "jan/2026");
+});
+
+test("PX-076/077 · exportação honesta com a etapa do anúncio e planilha só com cabeçalho", () => {
+  assert.match(ler("crm-listas.js"), /filtro && filtro\.marco && !S\.marcoAplicado \? " A etapa do anúncio ainda não separa a lista/);
+  assert.match(ler("crm-importar.js"), /A planilha só tem o cabeçalho \(/);
+  const d = L.lerCSV("Nome;Telefone\n");
+  assert.equal(d.linhas.length, 0);
+  assert.equal(d.cabecalho.length, 2, "o caso do aviso novo: cabeçalho sem linhas");
+});
+
+test("PX-029/030 · cidade da planilha com maiúsculas certas; mensagem pronta com o nome capitalizado", () => {
+  assert.equal(L.montarLinhas([["SÃO JOSÉ DOS CAMPOS"]], ["cidade"])[0].cidade, "São José dos Campos");
+  assert.equal(L.montarLinhas([["Taubaté"]], ["cidade"])[0].cidade, "Taubaté", "misturada fica como veio");
+  assert.match(L.mensagensProntas({}, { nome: "ana souza" })[0].texto, /^Oi, Ana! /);
+  assert.match(L.mensagensProntas({}, { nome: "dr. joão" })[0].texto, /^Oi, Dr\. João! /);
+});
+
+test("PX-078/079 · buscas e campos de dinheiro com limite de tamanho", () => {
+  const cfg = ler("crm-config.js"), kb = ler("crm-kanban.js"), ls = ler("crm-listas.js"), ng = ler("crm-negocio.js"), tf = ler("crm-tarefas.js"), vs = ler("crm-visoes.js");
+  assert.match(cfg, /maxlength: "60", autocomplete: "off", placeholder: "Buscar etiqueta"/);
+  assert.equal((kb.match(/class: "kb-mover-busca", maxlength: "60"/g) || []).length, 2);
+  assert.match(ls, /const empBusca = h\("input", \{ type: "search", enterkeyhint: "search", maxlength: "120"/);
+  assert.match(ls, /class: "ed fx-emp-busca", maxlength: "120"/);
+  assert.match(ng, /placeholder: "Buscar por nome ou telefone"/);
+  assert.match(ng, /enterkeyhint: "search", maxlength: "120" \/\* plano 2000d · PX-078/);
+  assert.match(tf, /class: "tf-ligar-busca", maxlength: "120"/);
+  assert.match(vs, /class: "crm-fe-busca", maxlength: "60"/);
+  assert.match(kb, /const vMin = h\("input", \{ type: "text", inputmode: "decimal", maxlength: "18"/);
+  assert.match(kb, /const vMax = h\("input", \{ type: "text", inputmode: "decimal", maxlength: "18"/);
+  assert.equal((ng.match(/inputmode: "decimal", maxlength: "18" \/\* plano 2000d · PX-079/g) || []).length, 2, "valor previsto e valor final da gaveta");
+});
+
+test("PX-080/081/082 · planilha: «Sim, aceito»/«Não aceita», «ana@@x.com» e «ana@gmail» sem o .com", () => {
+  assert.equal(L.lerSimNao("Sim, aceito"), true);
+  assert.equal(L.lerSimNao("Aceito"), true);
+  assert.equal(L.lerSimNao("Não aceita"), false);
+  assert.equal(L.lerSimNao("Recusou"), false);
+  assert.equal(L.lerSimNao("talvez"), null);
+  assert.deepEqual(L.emailDaCelula("ana@@x.com"), { email: "ana@x.com", extras: [] });
+  assert.equal(L.sugestaoEmail("ana@gmail"), "ana@gmail.com");
+  assert.equal(L.sugestaoEmail("ana@yahoo"), "ana@yahoo.com.br");
+  assert.equal(L.sugestaoEmail("ana@empresa"), null);
+});
+
+test("PX-083/084/085 · empresa: «@loja» no Site avisa, dica do e-mail e UF por extenso", () => {
+  const src = ler("crm-listas.js");
+  assert.match(src, /if \(!site\) \{ ui\.marcarErro\(form, "site", \/\^@\/\.test/);
+  assert.match(src, /Perfil de rede social\? Use o link inteiro/);
+  assert.match(src, /N\.dicaEmail \? N\.dicaEmail\(k, ui\.campo\(\{ rotulo: "E-mail", nome: "email", tipo: "email", valor: e\.email \|\| "" \}\)\)/);
+  assert.match(src, /if \(dados\.uf && L\.ufDaPlanilha\) dados\.uf = L\.ufDaPlanilha\(dados\.uf\);/);
+  assert.equal(L.ufDaPlanilha("São Paulo"), "SP");
+  assert.equal(L.ufValida(L.ufDaPlanilha("sp")), true);
+});
+
+test("PX-086 · novo negócio: previsão no passado avisa (sem bloquear)", () => {
+  const src = ler("crm-negocio.js");
+  assert.match(src, /function pintarPrevNovo\(\) \{ const passou = !!inPrev\.value && L\.dataPassou\(inPrev\.value\);/);
+  assert.match(src, /inPrev\.addEventListener\("change", pintarPrevNovo\);/);
+  assert.equal(L.dataPassou(new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10)), true);
+});
+
+test("PX-087/088 · «Mover para…»: Esc limpa a busca sem fechar e a seta desce para a 1ª etapa", async () => {
+  const D = domDeMentira();
+  try {
+    let corpoModal = null;
+    const muitos = Array.from({ length: 9 }, (_, i) => ({ id: `e${i}`, nome: `Etapa ${i}`, tipo: "aberto", ordem: i }));
+    const t = await montarKb(D, { dados: { colunas: muitos.map(e => col(e.id, e.id === "e0" ? cartoes(1, "e0") : [])) },
+      base: { funis: [{ id: "f1", nome: "P", padrao: true, ativo: true, estagios: muitos }] },
+      uix: { modal: async o => { corpoModal = o.corpo; return null; } }, kx: { estagio: id => muitos.find(x => x.id === id) || null } });
+    await varias(8);
+    const c = t.tela.querySelector(".kc");
+    tecla(c, "m");
+    await varias(4);
+    assert.ok(corpoModal, "abriu a folha");
+    const busca = corpoModal.querySelector(".kb-mover-busca");
+    busca.value = "Etapa 3"; busca.dispara("input");
+    assert.ok(corpoModal.querySelectorAll("li").some(li => li.hidden));
+    let parou = false;
+    busca.dispara("keydown", { key: "Escape", stopPropagation() { parou = true; } });
+    assert.equal(busca.value, "");
+    assert.ok(parou);
+    assert.ok(corpoModal.querySelectorAll("li").every(li => !li.hidden), "todas de volta");
+    busca.dispara("keydown", { key: "ArrowDown" });
+    const foco = D.doc.activeElement;
+    assert.equal(foco.tagName, "BUTTON");
+    assert.ok(!foco.disabled, "a 1ª etapa que dá para escolher (a atual fica desligada)");
+  } finally { D.desfazer(); }
+});
+
+test("PX-089 · empresas: vazio com o termo buscado e página vazia volta à primeira", async () => {
+  const D = domDeMentira();
+  try {
+    const ct = await montarCt(D, { rpc: (n, p) => (n === "nx_empresas_listar" ? (p.p_filtro && p.p_filtro.busca ? { itens: [], total: 0, tem_mais: false } : { itens: [], total: 0, tem_mais: false }) : undefined) });
+    const vazios = [];
+    ct.ui.vazio = o => { vazios.push(o); return D.h("div", { class: "vazio" }, o.titulo); };
+    const el = h0(D, "div");
+    await ct.M.montarEmpresas(ct.k, el);
+    await varias(4);
+    const busca = el.querySelector('input[type="search"]');
+    busca.value = "Unimed"; busca.dispara("input");
+    await varias(6);
+    assert.ok(vazios.some(v => v.titulo === "Nenhuma empresa para «Unimed»."), vazios.map(v => v.titulo).join(" | "));
+    assert.match(ler("crm-listas.js"), /titulo: "Esta página ficou vazia\.", acao: \{ rotulo: "Voltar à primeira página"/);
+  } finally { D.desfazer(); }
+});
+
+test("PX-090/091 · frases com o termo da vertical (etiqueta excluída e subtítulo de Empresas)", () => {
+  assert.ok(ler("crm-config.js").includes("retirada de tod${k.v.art(\"contato\") === \"a\" ? \"as\" : \"os\"} ${k.v.min(\"contatos\")}, ${k.v.min(\"negocios\")} e conversas."));
+  assert.doesNotMatch(ler("crm-config.js"), /retirada de todos os contatos, negócios e conversas/);
+  assert.ok(ler("crm-listas.js").includes("as organizações por trás d${k.v.art(\"contato\") === \"a\" ? \"as suas\" : \"os seus\"} ${k.v.min(\"contatos\")}."));
+});
+
+test("PX-092/093/094 · telefone com ramal: tel: com pausa, WhatsApp só com o número", async () => {
+  assert.equal(L.hrefTel("(12) 3632-1234 ramal 22"), "tel:+551236321234,22");
+  assert.equal(L.hrefTel("(12) 3632-1234 r. 7"), "tel:+551236321234,7");
+  assert.equal(L.hrefWhatsApp("(12) 99830-3030 ramal 2"), "https://wa.me/5512998303030");
+  assert.equal(L.telInternacional("(12) 3632-1234 ext 22"), "+551236321234");
+  assert.equal(L.hrefTel("5512998303030"), "tel:+5512998303030", "sem ramal como antes");
+  const p = L.partesNota("ligar 12 3632-1234 ramal 22 amanhã");
+  assert.deepEqual(p[1], { tipo: "tel", texto: "12 3632-1234 ramal 22", href: "tel:+551236321234,22" });
+  const N = await import("../web/app/crm-negocio.js");
+  const links = N.linksDoCampo(L, "telefone", "(12) 3632-1234 ramal 22");
+  assert.equal(links[0].href, "tel:+551236321234,22");
+  assert.equal(links[1].href, "https://wa.me/551236321234");
+});
+
+test("PX-095/096 · filtro por campo com limite e a etapa do anúncio sobrevive ao «Aplicar» dos filtros", () => {
+  assert.match(ler("crm-visoes.js"), /maxlength: c\.tipo === "data" \? null : "120"/);
+  assert.match(ler("crm-listas.js"), /if \(S\.filtro\.marco\) nf\.marco = S\.filtro\.marco;/);
+});
+
+test("PX-097/098/099/100 · e-mail com espaço em volta do @ vale nos cadastros (contato, ficha, empresa, negócio novo)", () => {
+  assert.equal(L.emailLimpo(" Ana @@ X.com "), "ana@x.com");
+  assert.equal(L.emailLimpo(""), "");
+  const ls = ler("crm-listas.js"), ng = ler("crm-negocio.js");
+  assert.match(ls, /if \(d\.email && L\.emailLimpo\) d\.email = L\.emailLimpo\(d\.email\);/);
+  assert.match(ls, /ler: x => \(L\.emailLimpo \? L\.emailLimpo\(x\.value\)/);
+  assert.match(ls, /test\(L\.emailLimpo \? L\.emailLimpo\(x\.value\) : x\.value\.trim\(\)\)/);
+  assert.match(ls, /if \(dados\.email && L\.emailLimpo\) dados\.email = L\.emailLimpo\(dados\.email\);/);
+  assert.match(ng, /if \(d\.c_email && L\.emailLimpo\) d\.c_email = L\.emailLimpo\(d\.c_email\);/);
+});
+
+test("PX-101/102/103 · linha do tempo: responsável anterior, mudança sem etapa de origem e o arquivo da importação", () => {
+  const n = { nomes: { u1: "Ana", u2: "Bruno" } };
+  assert.equal(L.textoTempo({ tipo: "dono", dados: { para: "u1", de: "u2" } }, n), "Responsável: Ana (antes: Bruno)");
+  assert.equal(L.textoTempo({ tipo: "dono", dados: { de: "u2" } }, n), "Ficou sem responsável (antes: Bruno)");
+  assert.equal(L.textoTempo({ tipo: "dono", dados: { para: "u1" } }, n), "Responsável: Ana", "sem «de» como antes");
+  assert.equal(L.textoTempo({ tipo: "estagio", dados: { para_nome: "Agendou" } }), "Moveu para «Agendou»");
+  assert.equal(L.textoTempo({ tipo: "estagio", dados: { de_nome: "Nova", para_nome: "Agendou" } }), "Moveu de «Nova» para «Agendou»");
+  assert.equal(L.textoTempo({ tipo: "importado", dados: { arquivo: "clientes.csv" } }), "Veio da importação da planilha «clientes.csv»");
+  assert.equal(L.textoTempo({ tipo: "importado", dados: {} }), "Veio da importação de planilha");
+});
+
+test("PX-073/086 · CSS da contagem da nota e do aviso da previsão (só tokens)", () => {
+  const css = ler("crm.css");
+  const b = css.slice(css.indexOf("plano 2000d · PX-073: a contagem da nota"));
+  assert.match(b, /\.nota-conta\.aten \{ color: var\(--c-aten\);/);
+  assert.match(b, /\.ng-prev-aviso \{ display: block;/);
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(b) && !/\brgba?\(/.test(b), "só tokens");
+});

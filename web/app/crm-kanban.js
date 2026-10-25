@@ -511,7 +511,7 @@ export async function montarKanban(k, el, rota) {
     // plano 1500c · RX-044: mais de 8 opções (etiquetas, equipe grande) → uma busca no topo filtra a lista
     let corpo = lista;
     if (opcoes.length > 8) {
-      const campo = h("input", { type: "search", enterkeyhint: "search", class: "kb-mover-busca", placeholder: "Buscar", "aria-label": "Buscar na lista", autocomplete: "off" });
+      const campo = h("input", { type: "search", enterkeyhint: "search", class: "kb-mover-busca", maxlength: "60" /* plano 2000d · PX-078: busca com limite (colar texto enorme travava a digitação) */, placeholder: "Buscar", "aria-label": "Buscar na lista", autocomplete: "off" });
       const nada = h("p", { class: "fraco", hidden: true }, "Nada encontrado.");
       campo.addEventListener("input", () => {
         const q = L.semAcento(campo.value.trim());
@@ -521,6 +521,9 @@ export async function montarKanban(k, el, rota) {
       });
       // plano 1500c · RX-074: Enter com uma opção só sobrando escolhe ela
       campo.addEventListener("keydown", ev => {
+        // plano 2000d · PX-087/088: Esc com texto limpa (sem fechar); seta para baixo vai à 1ª opção que sobrou
+        if (ev.key === "Escape" && campo.value) { ev.preventDefault(); ev.stopPropagation(); campo.value = ""; for (const li of lista.querySelectorAll("li")) li.hidden = false; nada.hidden = true; return; }
+        if (ev.key === "ArrowDown") { const li1 = [...lista.querySelectorAll("li")].find(li => !li.hidden); const b = li1 && li1.querySelector("button"); if (b) { ev.preventDefault(); b.focus(); } return; }
         if (ev.key !== "Enter") return;
         const sobra = [...lista.querySelectorAll("li")].filter(li => !li.hidden);
         if (sobra.length === 1) { if (ev.preventDefault) ev.preventDefault(); const b = sobra[0].querySelector("button"); if (b) b.click(); }
@@ -1327,7 +1330,7 @@ export async function montarKanban(k, el, rota) {
           e.tipo === "aberto" ? L.textoDiasEtapa(c.estagio_em).replace(" na etapa", "") : c.fechado_em ? `${e.tipo === "ganho" ? k.v.ganhar.toLowerCase() : k.v.perder.toLowerCase()} ${ui.relativo(c.fechado_em)}` : ""),     // plano 1000b · RB-009: perdido usa o termo da vertical
         consultaTxt ? h("span", { class: "kc-consulta", title: `${Cp} marcada` }, ui.icone("relogio"), consultaTxt) : null,
         semPresenca ? h("button", { type: "button", class: "kc-presenca", title: `A ${cp} já passou: confirme se compareceu ou faltou`,
-          "aria-label": `Confirmar a presença de «${tituloCurto}» na ${cp}`, on: { click: ev => { ev.stopPropagation(); abrir(c.id); } } },
+          "aria-label": `Confirmar a presença de «${tituloCurto}» na ${cp}`, on: { click: ev => { ev.stopPropagation(); abrir(c.id, { aba: "presenca" }); } } },      // plano 2000d · PX-065
           h("i", { class: "kc-ponto-aten", "aria-hidden": "true" }), h("span", null, "presença")) : null,
         // plano 1500c · RC-065: previsão de fechamento no rodapé (vermelha quando passou) — aparece quando nx_negocios_kanban mandar o campo
         e.tipo === "aberto" && c.previsao_fechamento ? h("span", { class: ["kc-previsao", L.dataPassou(String(c.previsao_fechamento).slice(0, 10)) && "vencida"],
@@ -1413,10 +1416,11 @@ export async function montarKanban(k, el, rota) {
     const c = cardDe(id);
     if (c && typeof k.lembrarRecente === "function") k.lembrarRecente({ hash: `#/crm/negocio/${id}`, titulo: L.tituloCard(c), tipo: "negocio" });
   }
-  function abrir(id) {
+  // plano 2000d · PX-065: `aba` vai para a gaveta (o «Confirmar a presença» do cartão abre já em Compareceu/Faltou)
+  function abrir(id, { aba = null } = {}) {
     lembrar(id);
     const cPrev = cardDe(id);      // plano 2000d · DR-359: título e valor do cartão aparecem na gaveta antes da leitura
-    N.abrirNegocio(k, id, { aoMudar: c => { S.meus.add((c && c.id) ?? id); carregar({ silencioso: true }); }, vizinhos: vizinhosDe, aoNavegar: lembrar,
+    N.abrirNegocio(k, id, { aba, aoMudar: c => { S.meus.add((c && c.id) ?? id); carregar({ silencioso: true }); }, vizinhos: vizinhosDe, aoNavegar: lembrar,
       previa: cPrev ? { titulo: L.tituloCard(cPrev), valor: cPrev.valor ?? null, valor_previsto: cPrev.valor_previsto ?? null, status: cPrev.status } : null });
   }
   /** CR-281: o link do negócio numa aba nova (noopener: a aba nova não mexe nesta). */
@@ -1938,7 +1942,7 @@ export async function montarKanban(k, el, rota) {
     if (S.funil.estagios.length <= 8) return lista;
     const norm = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     const nada = h("p", { class: "fraco kb-mover-nada", hidden: true }, "Nenhuma etapa com esse nome.");
-    const busca = h("input", { type: "search", enterkeyhint: "search", class: "kb-mover-busca", placeholder: "Buscar etapa", "aria-label": "Buscar etapa", autocomplete: "off" });
+    const busca = h("input", { type: "search", enterkeyhint: "search", class: "kb-mover-busca", maxlength: "60" /* plano 2000d · PX-078: busca com limite (colar texto enorme travava a digitação) */, placeholder: "Buscar etapa", "aria-label": "Buscar etapa", autocomplete: "off" });
     busca.addEventListener("input", () => {
       const q = norm(busca.value.trim());
       let vistos = 0;
@@ -1952,6 +1956,9 @@ export async function montarKanban(k, el, rota) {
     });
     // plano 1500c · RX-074: Enter com UMA etapa sobrando escolhe ela (teclado: digitar «fech» + Enter)
     busca.addEventListener("keydown", ev => {
+      // plano 2000d · PX-087: Esc com texto limpa a busca (e mostra todas) sem fechar a folha · PX-088: seta para baixo vai à 1ª etapa que sobrou
+      if (ev.key === "Escape" && busca.value) { ev.preventDefault(); ev.stopPropagation(); busca.value = ""; for (const li of lista.children) if (li.dataset && li.dataset.etapa) li.hidden = false; nada.hidden = true; return; }
+      if (ev.key === "ArrowDown") { const b = [...lista.children].filter(li => li.dataset && li.dataset.etapa && !li.hidden).map(li => li.querySelector("button")).find(x => x && !x.disabled); if (b) { ev.preventDefault(); b.focus(); } return; }
       if (ev.key !== "Enter") return;
       const sobra = [...lista.children].filter(li => li.dataset && li.dataset.etapa && !li.hidden).map(li => li.querySelector("button")).filter(b => b && !b.disabled);
       if (sobra.length === 1) { if (ev.preventDefault) ev.preventDefault(); sobra[0].click(); }
@@ -2471,8 +2478,8 @@ export async function montarKanban(k, el, rota) {
     // plano 1000b · RB-020: texto com teclado decimal, lido como a gaveta (L.lerNumero) — «1.500,00» funciona e 75 não fica «inválido» pelo passo de 50
     // plano 1500c · RX-048: o valor já aplicado volta escrito como a pessoa digita («1.500», não «1500»)
     const fmtV = v => (v == null || v === "" || !Number.isFinite(Number(v)) ? (v ?? "") : Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 2 }));
-    const vMin = h("input", { type: "text", inputmode: "decimal", enterkeyhint: "done", autocomplete: "off", placeholder: "Mínimo", "aria-label": "Valor mínimo", value: fmtV(f.valor_min) });
-    const vMax = h("input", { type: "text", inputmode: "decimal", enterkeyhint: "done", autocomplete: "off", placeholder: "Máximo", "aria-label": "Valor máximo", value: fmtV(f.valor_max) });
+    const vMin = h("input", { type: "text", inputmode: "decimal", maxlength: "18" /* plano 2000d · PX-079: dinheiro com limite de tamanho (o servidor guarda até 12 dígitos) */, enterkeyhint: "done", autocomplete: "off", placeholder: "Mínimo", "aria-label": "Valor mínimo", value: fmtV(f.valor_min) });
+    const vMax = h("input", { type: "text", inputmode: "decimal", maxlength: "18" /* plano 2000d · PX-079: dinheiro com limite de tamanho (o servidor guarda até 12 dígitos) */, enterkeyhint: "done", autocomplete: "off", placeholder: "Máximo", "aria-label": "Valor máximo", value: fmtV(f.valor_max) });
     // plano 1000 (CR-010): erro de valor aparece junto do campo (e o popover continua aberto)
     const erroValor = h("small", { class: "ed-erro crm-filtros-erro", role: "alert", id: `crm-fv-${cli}`, hidden: true });
     const parado = h("select", { "aria-label": "Parados há" }, [["", "Qualquer tempo"], ["3", "3 dias ou mais"], ["7", "7 dias ou mais"], ["15", "15 dias ou mais"], ["30", "30 dias ou mais"], ["60", "60 dias ou mais"], ["90", "90 dias ou mais"]]     // plano 1500c · RC-324

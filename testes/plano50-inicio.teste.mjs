@@ -470,7 +470,7 @@ test("tela: KPIs no topo (4), «Agora» com quem espera e as consultas de hoje c
     dom.ev(horas.querySelector(".ini-bv-lista"), "keydown", { key: "End" });
     assert.equal(dom.doc.activeElement, barras[6]); assert.equal(barras.filter(b => b.getAttribute("tabindex") === "0").length, 1);
     barras[6].blur();
-    const status = horas.querySelector("[role=status]");
+    const status = horas.querySelector(".ini-horas-dica");     // plano 2000d: IY-060 — a dica é só visual (aria-hidden): a barra com foco já diz o mesmo
     dom.ev(barras[1], "focus", { bubbles: false });
     assert.match(texto(status), /amanhã 05\/10: 1 consulta — Mariana Costa · Alinhador transparente/);
     assert.equal(horas.querySelectorAll(".g-tabela tbody tr").length, 7, "a tabela acompanha o período");

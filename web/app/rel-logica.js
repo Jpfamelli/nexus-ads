@@ -279,11 +279,14 @@ export function ordenarCampanhas(linhas, chave = "gasto", dir = -1) {
     pelo clássico) é «neutro». Sem conversão com gasto de verdade (≥ R$ 20) continua «ruim»; sem saber o gasto, sem conversão é neutro. */
 export const GASTO_MIN_COR = 20;
 // plano 2000d · DA-205: o piso do gasto acompanha o tamanho da conta (`minimo` = gastoMinCor da média diária); sem ele, R$ 20
-export const nivelCpa = (cpa, meta, gasto = null, minimo = GASTO_MIN_COR) => {
+// plano 2000d · NX-070: o «perto do limite» usa a tolerância do cliente (cfg.radar.toleranciaR1, DA-025) — a mesma régua do aviso de custo
+export const tolCpa = cfg => { const n = Number(cfg && cfg.radar && cfg.radar.toleranciaR1); return Number.isFinite(n) && n >= 10 && n <= 100 ? n : 35; };
+export const nivelCpa = (cpa, meta, gasto = null, minimo = GASTO_MIN_COR, tolPc = 35) => {
   if (!(+meta > 0)) return "neutro";
   if (gasto != null && (+gasto || 0) < (Number.isFinite(+minimo) && +minimo >= 0 ? +minimo : GASTO_MIN_COR)) return "neutro";
   if (!fin(cpa)) return gasto != null ? "ruim" : "neutro";
-  return cpa <= meta ? "bom" : cpa <= meta * 1.35 ? "aten" : "ruim";
+  const tol = Number.isFinite(+tolPc) && +tolPc > 0 ? +tolPc : 35;
+  return cpa <= meta ? "bom" : cpa <= meta * (1 + tol / 100) ? "aten" : "ruim";
 };
 
 /** Plano 2000d · DA-205: o gasto mínimo para colorir o custo = um dia médio de investimento da conta, entre R$ 5 e R$ 500
@@ -522,7 +525,8 @@ export function textoPilula(e, agora = Date.now()) {
   if (e.nivel === "ok") return `Atualizado ${minutosAtras(e.ultimo, agora)}`;
   return "";
 }
-export const textoQueda = erros => erros.map(x => `${nomePlat(x.canal)} desconectado · dados até ${x.sync ? `${ddmmSP(x.sync)} ${horaSP(x.sync)}` : "aguardando primeira leitura"}.`).join(" ");
+// plano 2000d · NX-077: «dados até 24/10 às 14:02» (antes «24/10 14:02», lido como um número só) e «hoje às…» quando é de hoje
+export const textoQueda = (erros, agora = Date.now()) => erros.map(x => `${nomePlat(x.canal)} desconectado · dados até ${x.sync ? (hojeSP(new Date(x.sync)) === hojeSP(new Date(agora)) ? `hoje às ${horaSP(x.sync)}` : `${ddmmSP(x.sync)} às ${horaSP(x.sync)}`) : "aguardando primeira leitura"}.`).join(" ");
 
 /* ---------- radar: episódios (núcleo) + registro do servidor ---------- */
 export const SEV_NOME = { critico: "crítico", alerta: "alerta", info: "informativo" };
@@ -662,7 +666,9 @@ export function centroRosca(fatias = []) {
   const tot = fatias.reduce((s, f) => s + (+f.valor || 0), 0);
   if (!(tot > 0)) return { valor: "—", rotulo: "sem investimento" };
   const maior = fatias.reduce((a, b) => ((+b.valor || 0) > (+a.valor || 0) ? b : a));
-  return { valor: `${Math.round((+maior.valor || 0) / tot * 100)}%`, rotulo: `no ${maior.rotulo}` };
+  // plano 2000d · NX-076: a fatia «Outras (TikTok…)» pede «em outras plataformas» (antes «no Outras (TikTok)»)
+  const rot = /^outras?\b/i.test(String(maior.rotulo || "")) ? "em outras plataformas" : `no ${maior.rotulo}`;
+  return { valor: `${Math.round((+maior.valor || 0) / tot * 100)}%`, rotulo: rot };
 }
 
 /** Plano 1000 (AD-080): fuso da conta de anúncios diferente de São Paulo, lido do sufixo «· fuso X» do status da integração. */
@@ -718,10 +724,13 @@ export function perdasPorMotivo(M, { dias = 30, plat = "" } = {}) {
     if (!Ld.plat || (plat && Ld.plat !== plat) || Ld.i < de || Ld.i > ate || Ld.etapaReal !== "perdida") continue;
     const b = Ld.bruto || {}, mot = String(b.motivo_perda || b.motivo_perda_nome || b.motivo || "").trim();
     if (mot) comMotivo++;
-    const k = mot || "sem motivo informado";
-    m.set(k, (m.get(k) || 0) + 1);
+    // plano 2000d · NX-072: «Preço», «preço» e «Preco » são o mesmo motivo (sem caixa, acento e espaço sobrando); vale a 1ª grafia vista
+    const texto = mot ? mot.replace(/\s+/g, " ") : "sem motivo informado";
+    const k = texto.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    const e = m.get(k) || { motivo: texto, n: 0 };
+    e.n++; m.set(k, e);
   }
-  return comMotivo ? [...m.entries()].map(([motivo, n]) => ({ motivo, n })).sort((a, b) => b.n - a.n || a.motivo.localeCompare(b.motivo, "pt-BR")) : [];
+  return comMotivo ? [...m.values()].map(({ motivo, n }) => ({ motivo, n })).sort((a, b) => b.n - a.n || a.motivo.localeCompare(b.motivo, "pt-BR")) : [];
 }
 export function organicosPeriodo(M, { dias = 30 } = {}) {
   const { de, ate } = janela(M, dias);
@@ -860,7 +869,10 @@ export function nomeOrigem(origem, plataforma) {
   // plano 1000b · AB-175: origem fora da tabela («tiktok_ads») sem o código cru — «Tiktok ads»
   const legivel = o => { const t = String(o).replace(/_+/g, " ").replace(/\s+/g, " ").trim(); return t ? t.charAt(0).toUpperCase() + t.slice(1) : "Sem origem"; };
   const base = O[origem] || (origem ? legivel(origem) : "Sem origem");
-  return plataforma ? `${base} · ${nomePlat(plataforma)}` : base;
+  // plano 2000d · NX-078: plataforma fora de Meta/Google («tiktok») sai com o nome dela — antes «Anúncio · Anúncio»
+  const PL = { tiktok: "TikTok", microsoft: "Microsoft Ads", bing: "Microsoft Ads", linkedin: "LinkedIn", pinterest: "Pinterest", kwai: "Kwai", youtube: "YouTube" };
+  const plat = plataforma && nomePlat(plataforma) === "Anúncio" ? PL[String(plataforma).toLowerCase()] || legivel(plataforma) : plataforma ? nomePlat(plataforma) : "";
+  return plat ? `${base} · ${plat}` : base;
 }
 /** Os KPIs da aba Vendas: [{id, rotulo, v, a, fmt, sentido}] (fmt = 'int'|'brl0'|'pct'|'dias'). */
 export function kpisVendas(r, { negocios = "negócios" } = {}) {   // negocios: a palavra do vocabulário ("oportunidades", "orçamentos"…)
@@ -1302,8 +1314,9 @@ export function ordenarRadar(R) {
 }
 
 /** O chip-resumo de Anúncios: "Últimos 30 dias · Tudo" (ou Meta / Google). */
-export function textoChipAnuncios(dias, plat) {
-  return `${rotuloPeriodo(dias).titulo} · ${plat ? nomePlat(plat) : "Tudo"}`;   // plano 1000 (AD-097): «Este mês» / «Mês passado»
+// plano 2000d · NX-075: com `M`, o chip usa o mesmo rótulo dos cartões — no dia 1º «Setembro (até ontem)», não «Este mês» (AB-082)
+export function textoChipAnuncios(dias, plat, M = null) {
+  return `${rotuloPeriodo(dias, M).titulo} · ${plat ? nomePlat(plat) : "Tudo"}`;   // plano 1000 (AD-097): «Este mês» / «Mês passado»
 }
 
 /**
@@ -1336,17 +1349,21 @@ export function serieTendencia(M, { dias = 30, plat = "", anterior = false } = {
 }
 
 /** Funil anúncio → conversa → agenda → venda por plataforma: 4 etapas com a taxa entre cada par (null sem base). Só plataformas com movimento. */
-export function funilPorPlataforma(M, { dias = 30 } = {}) {
+// plano 2000d · NX-073: os rótulos das etapas na língua da vertical (oficina: «Pediram orçamento», loja: «Fizeram pedido») — os mesmos do
+// funil da gaveta e da trilha (anuncios.palavrasFunil)
+const ETAPAS_VERTICAL = Object.freeze({ oficina: ["Pediram orçamento", "Trouxeram o carro"], loja: ["Fizeram pedido", "Retiraram ou receberam"] });
+export function funilPorPlataforma(M, { dias = 30, vertical = "" } = {}) {
   const { de, ate } = janela(M, dias);
+  const [rotAg, rotVieram] = ETAPAS_VERTICAL[vertical] || ["Agendaram", "Compareceram"];
   const taxa = (n, d) => (d > 0 ? Math.round(n / d * 1000) / 10 : null);
   return ["meta", "google", "anuncio"].map(p => {
     const t = M.consolidar(M.linhasDe(de, ate, { plat: p })), c = M.crmTot(de, ate, { plat: p });
     const etapas = [
       { id: "convAds", rotulo: "Conversões do anúncio", v: Number(t.conversoes) || 0 },
       { id: "conversas", rotulo: "Conversas no CRM", v: Number(c.conversas) || 0 },
-      { id: "agendadas", rotulo: "Agendaram", v: Number(c.agendadas) || 0 },
+      { id: "agendadas", rotulo: rotAg, v: Number(c.agendadas) || 0 },
       // plano 1500c · AC-097: a etapa «compareceram» (antes pulava de agendou para fechou, sem ver quem faltou)
-      { id: "compareceram", rotulo: "Compareceram", v: Number(c.compareceram) || 0 },
+      { id: "compareceram", rotulo: rotVieram, v: Number(c.compareceram) || 0 },
       { id: "fecharam", rotulo: "Fecharam", v: Number(c.fecharam) || 0 },
     ];
     const taxas = etapas.slice(1).map((e, k) => ({ de: etapas[k].id, para: e.id, pct: taxa(e.v, etapas[k].v) }));
@@ -1617,7 +1634,8 @@ export function aparelhoRadar(caidos, agora = Date.now()) {
 export function resultadoTesteConexao(resp) {
   const r = resp && typeof resp === "object" ? resp : {};
   const cli = r.cliente && typeof r.cliente === "object" ? r.cliente : Array.isArray(r.clientes) ? r.clientes[0] || {} : {};
-  const linhasDe = st => { const m = /(\d+)\s+linhas?/.exec(String(st || "")); return m ? +m[1] : null; };
+  // plano 2000d · NX-074: «1.234 linhas» (ou «1,234») é mil duzentas e trinta e quatro — antes lia só «234»
+  const linhasDe = st => { const m = /(\d{1,3}(?:[.,]\d{3})+|\d+)\s+linhas?/.exec(String(st || "")); return m ? +m[1].replace(/[.,]/g, "") : null; };
   const um = (canal, ok, status, ex = {}) => ({ canal, ok: !!ok, parcial: /^parcial/i.test(String(status || "")), status: String(status || ""),
     curto: ex.curto || null, acao: ex.acao || null, passageiro: !!ex.passageiro, linhas: linhasDe(status) });
   if (Array.isArray(cli.integracoes)) return cli.integracoes.filter(Boolean).map(i => um(i.canal, i.ok, i.status, i.explicacao || {}));

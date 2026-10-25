@@ -77,7 +77,10 @@ export function criarRede(o = {}) {
   let esperandoVista = false;
   function agendarTentativa() {
     if (timer || !falhando()) return;
-    const espera = ESPERAS_MS[Math.min(tentativa, ESPERAS_MS.length - 1)];
+    // plano 2000d · SX-036: ±20 % de sorteio na espera — quando o servidor volta, os aparelhos da empresa não batem todos no mesmo segundo
+    const base = ESPERAS_MS[Math.min(tentativa, ESPERAS_MS.length - 1)];
+    const sorteio = Math.min(1, Math.max(0, Number((o.aleatorio || Math.random)()) || 0));
+    const espera = Math.round(base * (0.8 + sorteio * 0.4));
     proxima = agora() + espera;
     timer = agendar(async () => {
       timer = null; proxima = null;
@@ -200,8 +203,10 @@ export async function repetirAbertura(fn, { esperas = ESPERAS_ABERTURA, esperar,
     catch (e) {
       if (eConta(e) || i + 1 >= maximo) throw e;
       const s = esperas[Math.min(i, esperas.length - 1)] / 1000;
-      if (aoFalha) aoFalha(e, i, s);
-      await esperar(s);
+      // plano 2000d · SX-037: um aoFalha que falha (a tela de abertura já saiu) não derruba a abertura
+      if (aoFalha) { try { aoFalha(e, i, s); } catch (x) { console.error("repetirAbertura: aoFalha falhou", x); } }
+      // plano 2000d · SX-038: sem `esperar` (quem chama esqueceu) a espera é um setTimeout comum, não um TypeError
+      await (typeof esperar === "function" ? esperar(s) : new Promise(r => setTimeout(r, s * 1000)));
     }
   }
 }

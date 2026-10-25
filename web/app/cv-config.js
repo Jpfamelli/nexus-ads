@@ -2191,7 +2191,38 @@ async function montarIA(ctx, alvo) {
         ui.pilula("Aproximada · atualiza enquanto você digita", "aten")),
       // plano 1000 · AS-152: esta prévia é montada no navegador; o prompt REAL sai do servidor (receita do CodeWords) e pode ter mais regras
       h("p", { class: "sub" }, "Esta prévia é montada aqui na tela e serve para conferir o conteúdo: o texto real que o agente recebe é gerado pelo servidor e tem regras a mais. Para ver e copiar o prompt real, salve e use «Copiar prompt» em Configurações → Números de WhatsApp."), previa);
-    f.append(cTom, blocoPrevia,
+    // plano 2000d · DC-047: «Testar» — uma pergunta de cliente de mentira respondida com o que está NA TELA (ainda não salvo);
+    // nx-ia {acao: "simular"} não grava conversa nem gasta a franquia de sugestões. Servidor sem a ação → o aviso diz isso.
+    const inTeste = h("input", { type: "text", id: "cfg-ia-teste", maxlength: 1000, placeholder: "Ex.: Quanto custa um clareamento?", autocomplete: "off", enterkeyhint: "send" });
+    const btTeste = h("button", { type: "button", class: "bt bt-sec cfg-ia-testar" }, ui.icone("ia"), "Testar");
+    const respTeste = h("div", { class: "cfg-ia-teste-resp", role: "status", "aria-live": "polite" });
+    async function testarAssistente() {
+      const mensagem = inTeste.value.trim();
+      if (!mensagem) { ui.toast("Escreva o que um cliente perguntaria.", { tipo: "info" }); try { inTeste.focus(); } catch { /* ok */ } return; }
+      const d = ui.lerForm(f);
+      const ia = { tom: d.tom === "formal" ? "formal" : "proximo" };
+      for (const [k] of IA_TEXTOS) ia[k] = d[k] || "";
+      ui.limpar(respTeste);
+      respTeste.appendChild(h("p", { class: "sub" }, "Perguntando ao assistente…"));
+      try {
+        const r = await ui.carregando(btTeste, ctx.api.fn("nx-ia", { acao: "simular", mensagem, ia, empresa: String(ctx.cliente?.nome || "").trim() }));
+        ui.limpar(respTeste);
+        if (r && r.texto) {
+          respTeste.append(h("div", { class: "cv-previa cfg-ia-teste-bolha cfg-previa-in" }, h("small", { class: "rotulo" }, "Cliente"), h("p", null, mensagem)),
+            h("div", { class: "cv-previa cfg-ia-teste-bolha cfg-ia-teste-ia" }, h("small", { class: "rotulo" }, "Assistente (teste, nada foi enviado)"), h("p", null, r.texto)));
+        } else respTeste.appendChild(h("p", { class: "sub" }, r && r.erro === "dados_invalidos" ? "Este servidor ainda não testa o assistente por aqui." : "O assistente não respondeu agora. Tente de novo."));
+      } catch (e) {
+        ui.limpar(respTeste);
+        respTeste.appendChild(h("p", { class: "sub" }, e && (e.codigo === "dados_invalidos" || e.status === 404) ? "Este servidor ainda não testa o assistente por aqui." : ui.mensagemErro(e)));
+      }
+    }
+    btTeste.addEventListener("click", testarAssistente);
+    inTeste.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); testarAssistente(); } });
+    const blocoTeste = h("section", { class: "cartao cfg-ia-teste" },
+      h("p", { class: "rotulo" }, "TESTAR"), h("h2", { class: "titulo-sec" }, "Pergunte como um cliente"),
+      h("p", { class: "sub" }, "A resposta usa o que está nesta tela, mesmo sem salvar. Nada é enviado a ninguém."),
+      h("div", { class: "campo" }, h("label", { for: "cfg-ia-teste" }, "Mensagem do cliente"), h("div", { class: "linha" }, inTeste, btTeste)), respTeste);
+    f.append(cTom, blocoPrevia, blocoTeste,
       h("div", { class: "cfg-ia-rod" }, h("div", { class: "cfg-ia-medidor" }, cont, contAnuncio, barra), h("div", { class: "linha" }, sujo, salvar)));
 
     function atualizarPrevia() {
@@ -2241,10 +2272,17 @@ async function montarIA(ctx, alvo) {
       if (contar() > L.IA_MAX) { ui.toast(textoLimite, { tipo: "erro" }); return; }
       const d = ui.lerForm(f);
       // plano 1000 · AS-153: a memória aprovada vai para o agente — CPF, telefone, e-mail ou data de nascimento ali pedem confirmação
-      const pessoais = dadosPessoaisNoTexto(d.memoria_aprovada);
-      if (pessoais.length && !(await ui.confirmar({ titulo: "A memória aprovada parece ter dados pessoais", rotulo: "Salvar mesmo assim", perigo: true,
-        texto: `Encontrei ${pessoais.map(p => `${p.tipo} («${p.trecho}»)`).join(", ")}. O assistente usa esse texto com todos os clientes: tire dados pessoais ou de saúde antes de salvar.` }))) {
-        tas.memoria_aprovada && tas.memoria_aprovada.focus();
+      // plano 2000d · DC-049: todos os textos do assistente (não só a memória) — e o aviso diz em qual campo achou
+      const camposConferir = [...IA_TEXTOS.map(([k, rot]) => [k, rot]), ["boas_vindas", "Mensagem de boas-vindas"]];
+      const achadosPorCampo = camposConferir.map(([k, rot]) => [k, rot, dadosPessoaisNoTexto(d[k])]).filter(([, , a]) => a.length);
+      const pessoais = achadosPorCampo.flatMap(([, , a]) => a);
+      const soMemoria = achadosPorCampo.length === 1 && achadosPorCampo[0][0] === "memoria_aprovada";
+      if (pessoais.length && !(await ui.confirmar({ titulo: soMemoria ? "A memória aprovada parece ter dados pessoais" : "O assistente parece ter dados pessoais", rotulo: "Salvar mesmo assim", perigo: true,
+        texto: soMemoria
+          ? `Encontrei ${pessoais.map(p => `${p.tipo} («${p.trecho}»)`).join(", ")}. O assistente usa esse texto com todos os clientes: tire dados pessoais ou de saúde antes de salvar.`
+          : `Encontrei ${achadosPorCampo.map(([, rot, a]) => `em «${rot}»: ${a.map(p => `${p.tipo} («${p.trecho}»)`).join(", ")}`).join("; ")}. O assistente usa esses textos com todos os clientes: tire dados pessoais ou de saúde antes de salvar.` }))) {
+        const primeiro = achadosPorCampo[0] && tas[achadosPorCampo[0][0]];
+        if (primeiro) primeiro.focus();
         return;
       }
       const payload = { tom: d.tom === "formal" ? "formal" : "proximo",

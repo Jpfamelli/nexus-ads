@@ -488,7 +488,10 @@ test("33 (DOM) · visualizador: abre na foto certa, setas trocam, Home/End, Esc 
     const zoom = dlg.querySelector(".cv-lb-zoom");
     zoom.click();
     assert.equal(dlg.dataset.zoom, "1"); assert.equal(zoom.getAttribute("aria-pressed"), "true");
+    // plano 2000d: DC-100 — com o zoom ligado as setas andam pela foto ampliada; trocar de foto (botão) desfaz o zoom
     d.ev(dlg, "keydown", { key: "ArrowLeft" });
+    assert.equal(dlg.dataset.zoom, "1", "a seta não troca a foto ampliada");
+    dlg.querySelector(".cv-lb-ant").click();
     assert.equal(dlg.dataset.zoom, "0", "trocar de foto desfaz o zoom");
     d.ev(dlg, "keydown", { key: "Escape" });
     assert.equal(d.doc.body.querySelector("dialog.cv-lb"), null, "Esc fecha e remove o diálogo");
@@ -820,10 +823,11 @@ test("35 (DOM) · lateral: resumo com contadores do nx_cv_ver, mini-gráfico dos
     assert.equal(atalhos[0].getAttribute("href"), "tel:+5512999990000");
     atalhos[1].click();
     assert.deepEqual(d.copiados, ["ORB-9"]);
-    const secs = alvo.querySelectorAll("details.cvt-sec");
-    assert.deepEqual(secs.map(s => s.dataset.sec), ["dados", "etiquetas", "negocios", "tarefas", "atendimentos", "resumo-ia"]);
+    const secs = alvo.querySelectorAll("details.cvt-sec").filter(s => s.dataset.sec !== "jornada");   // plano 2000d: a «Jornada» (DC-037) fica de fora da contagem antiga
+    // plano 2000d: DC-037 — com anúncio e mensagens, a «Jornada» entra depois dos dados
+    assert.deepEqual(secs.map(s => s.dataset.sec).filter(s => s !== "jornada"), ["dados", "etiquetas", "negocios", "tarefas", "atendimentos", "resumo-ia"]);
     assert.ok(secs.every(s => s.open), "tudo aberto por padrão");
-    assert.equal(secs[2].querySelector(".cvt-sec-n").textContent, "2", "contador na seção de negócios");
+    assert.equal(secs.find(s => s.dataset.sec === "negocios").querySelector(".cvt-sec-n").textContent, "2", "contador na seção de negócios");   // plano 2000d: pela seção, não pela posição (DC-037)
     assert.ok(secs[2].querySelector(".cvt-sec-acao .bt"), "a ação da seção fica fora do summary");
     secs[2].open = false; d.ev(secs[2], "toggle", { bubbles: false });
     assert.equal(d.mem.get("nx-cv-lat-negocios"), "0");

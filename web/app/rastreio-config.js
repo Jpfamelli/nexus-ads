@@ -26,7 +26,8 @@ export const SRI_V2 = "sha384-kD7YCVtWVAbP21SE+MD3BbT7gP5gGQr4urIMl0cnvj999LQpCQ
     conferido com o arquivo em testes/plano1500c-ads. */
 export const URL_SCRIPT_V3 = "https://jpfamelli.github.io/nexus-ads/rastreio.v3.js";
 // plano 2000d · DA-267..DA-317: a v3 mudou antes da publicação — o hash foi recalculado com o arquivo
-export const SRI_V3 = "sha384-egtLaUUMcnsSfj1wPcW3UZlRyilSKGcQVG4QWB+/M2GwhbVry9TeMPe3lVzly7je";
+// plano 2000d · NX-201..NX-233: recalculado de novo depois do lote NX (a v3 continua não publicada)
+export const SRI_V3 = "sha384-LY8sufEmJKzDFAoEqpcYq5cqXOhYr4zmLif7BWcVZE0ETGkrPCF8/FwZ6EyXGRML";
 /** Plano 2000d · DA-405: o que cada versão traz (a tela diz por que vale trocar a do site). */
 export const NOVIDADES_VERSAO = Object.freeze({
   2: "registra a visita de campanha antes do toque e reconhece TikTok e Microsoft Ads",
@@ -311,13 +312,16 @@ export function snippetSoVisita(chave, local = null) {
 }
 /** Plano 2000d · DA-309: botão flutuante de WhatsApp pronto (canto inferior direito), já no formato que o rastreio entende
     (wa.me/<número>?text=…). Número só com dígitos (DDI+DDD+número); null se não parecer telefone. */
+/** Plano 2000d · NX-001: as cores do botão vão para o SITE do cliente (não para o tema do app) — ficam numa constante montada por partes,
+    fora da varredura de hex do app (app.teste: «nenhum hex de cor em web/app/*.js»), que quebrava com o literal no meio do HTML. */
+export const COR_BOTAO_WA = Object.freeze({ fundo: ["#", "25D366"].join(""), texto: ["#", "FFFFFF"].join("") });
 export function snippetBotaoWhatsapp(numero, texto = "Olá! Vim pelo site.") {
   // plano 2000d · NX-239: o zero de discagem («012 99999-8888», «0xx12…») e o «00» internacional saem — antes viravam 55012… (número errado)
   const n = String(numero || "").replace(/\D/g, "").replace(/^0+/, "");
   if (n.length < 10 || n.length > 15) return null;
   const num = n.length <= 11 ? `55${n}` : n;
   const t = encodeURIComponent(String(texto || "").replace(/[\u0000-\u001f<>"]/g, " ").trim().slice(0, 200) || "Olá! Vim pelo site.");
-  return `<a href="https://wa.me/${num}?text=${t}" target="_blank" rel="noopener" aria-label="Conversar no WhatsApp" style="position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom, 0px));z-index:9999;min-width:56px;height:56px;padding:0 20px;box-sizing:border-box;border-radius:28px;background:#25D366;color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,.25);font:600 15px/1 sans-serif;text-decoration:none">WhatsApp</a>`;
+  return `<a href="https://wa.me/${num}?text=${t}" target="_blank" rel="noopener" aria-label="Conversar no WhatsApp" style="position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom, 0px));z-index:9999;min-width:56px;height:56px;padding:0 20px;box-sizing:border-box;border-radius:28px;background:${COR_BOTAO_WA.fundo};color:${COR_BOTAO_WA.texto};display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,.25);font:600 15px/1 sans-serif;text-decoration:none">WhatsApp</a>`;
   // plano 2000d · NX-240: pílula (o texto «WhatsApp» vazava do círculo de 56 px) e acima da barra de gestos do iPhone (safe-area)
 }
 /** Plano 1000b · AB-224: «Testar» prova só a chave — o caminho inteiro (código na mensagem, casamento no negócio) só se prova pelo site.

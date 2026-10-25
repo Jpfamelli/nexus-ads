@@ -216,7 +216,9 @@ test("plano 1000b · AB-228 · tabela do funil e CSV com as mesmas colunas, na m
   assert.equal(tab.length, csv.length, `tabela ${JSON.stringify(tab)} × CSV ${JSON.stringify(csv)}`);
   tab.forEach((c, i) => assert.ok(csv[i].startsWith(c), `coluna ${i + 1}: tabela «${c}» × CSV «${csv[i]}»`));
   // o mesmo campo em cada posição: o CSV com o valor cru, a tabela formatada
-  const linhaCsv = /linhas: \(\) => \(r\.funil \|\| \[\]\)\.map\(e => \[([^\]]*)\]\)/.exec(bloco)[1];
+  // plano 2000d: as linhas do CSV moram em linhasCsvFunil (NX-313: ganho/perdido sem «Seguiram»/«Conversão», como a tabela)
+  assert.match(bloco, /linhas: \(\) => linhasCsvFunil\(r\.funil\)/);
+  const linhaCsv = /export const linhasCsvFunil = [^\n]*?return \[([^\]]*)\]; \}\);/.exec(REL)[1];
   const linhaTab = /linhas: \(r\.funil \|\| \[\]\)\.map\(e => \[([\s\S]*?)\]\) \}\);/.exec(bloco)[1];
   const campos = s => s.split(/,(?![^(]*\))/).map(p => (p.match(/e\.([a-z_]+)/g) || []).at(-1));
   assert.deepEqual(campos(linhaTab), campos(linhaCsv));

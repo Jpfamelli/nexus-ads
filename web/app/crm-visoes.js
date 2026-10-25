@@ -155,6 +155,7 @@ export function grupoFiltroCampo(k, { entidade, funilId = null, atual = null } =
     else if (c.tipo === "sim_nao") ctlValor = h("select", { class: "sel", "aria-label": `Valor de ${c.rotulo}` }, h("option", { value: "true", selected: v0 !== "false" }, "Sim"), h("option", { value: "false", selected: v0 === "false" }, "Não"));
     // plano 1500c · RC-143: o exemplo segue o tipo («Ex.: 1.500,00» na moeda) — a leitura é a do lerNumero
     else ctlValor = h("input", { type: c.tipo === "data" ? "date" : "text", inputmode: ["numero", "moeda"].includes(c.tipo) ? "decimal" : null, "aria-label": `Valor de ${c.rotulo}`,
+      maxlength: c.tipo === "data" ? null : "120" /* plano 2000d · PX-095: o valor do filtro por campo com limite (o filtro guarda até 120) */,
       placeholder: L.exemploValorFiltro ? L.exemploValorFiltro(c.tipo) : "Valor", value: v0, "aria-invalid": avisoData ? "true" : null });
     caixaValor.appendChild(ctlValor);
     if (avisoData) caixaValor.appendChild(h("small", { class: "ed-erro crm-fc-aviso", role: "alert" }, avisoData));
@@ -184,12 +185,12 @@ export function buscaEtiquetas(k, opsEt, { limite = 12 } = {}) {
   const itens = opsEt ? opsEt.querySelectorAll(".crm-op") : [];
   if (itens.length <= limite) return null;
   const norm = s => (L && L.semAcento ? L.semAcento(String(s || "")) : String(s || "").toLowerCase()).trim();
-  const campo = h("input", { type: "search", enterkeyhint: "search", class: "crm-fe-busca", placeholder: "Buscar etiqueta", "aria-label": "Buscar etiqueta", autocomplete: "off" });
+  const campo = h("input", { type: "search", enterkeyhint: "search", class: "crm-fe-busca", maxlength: "60" /* plano 2000d · PX-078: busca com limite (colar texto enorme travava a digitação) */, placeholder: "Buscar etiqueta", "aria-label": "Buscar etiqueta", autocomplete: "off" });
   const nada = h("small", { class: "crm-fe-nada", hidden: true }, "Nenhuma etiqueta com esse nome.");
   // plano 1500c · RC-144: quantas sobraram, dito ao leitor (com pausa — não a cada letra)
   const contagem = h("small", { class: "sr-only crm-fe-cont", role: "status" });
   let tCont = null;
-  campo.addEventListener("input", () => {
+  const filtrarEt = () => {      // plano 2000d · PX-064: com nome, para o Esc reaproveitar
     const q = norm(campo.value);
     let vis = 0;
     for (const it of itens) {
@@ -201,6 +202,14 @@ export function buscaEtiquetas(k, opsEt, { limite = 12 } = {}) {
     nada.hidden = vis > 0;
     clearTimeout(tCont);
     tCont = setTimeout(() => { contagem.textContent = vis ? `${vis} ${vis === 1 ? "etiqueta" : "etiquetas"}` : ""; }, 400);
+  };
+  campo.addEventListener("input", filtrarEt);
+  // plano 2000d · PX-064: Esc com texto limpa a busca de etiquetas (e mostra todas) sem fechar o painel; vazio, o Esc fecha como sempre
+  campo.addEventListener("keydown", ev => {
+    if (ev.key !== "Escape" || !campo.value) return;
+    ev.preventDefault(); ev.stopPropagation();
+    campo.value = "";
+    filtrarEt();
   });
   return h("div", { class: "crm-fe-buscar" }, campo, nada, contagem);
 }

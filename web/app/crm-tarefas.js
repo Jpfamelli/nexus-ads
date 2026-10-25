@@ -126,7 +126,7 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
   let ligado = null;
   const vv = k.v || {};
   const blocoLigar = !tarefa && !contato_id && !negocio_id ? (() => {
-    const busca = h("input", { type: "search", class: "tf-ligar-busca", placeholder: "Nome ou telefone", enterkeyhint: "search", "aria-label": `Ligar a tarefa a ${vv.art && vv.art("contato") === "a" ? "uma" : "um"} ${vv.min ? vv.min("contato") : "contato"}`, autocomplete: "off" });
+    const busca = h("input", { type: "search", class: "tf-ligar-busca", maxlength: "120" /* plano 2000d · PX-078: busca com limite (colar texto enorme travava a digitação) */, placeholder: "Nome ou telefone", enterkeyhint: "search", "aria-label": `Ligar a tarefa a ${vv.art && vv.art("contato") === "a" ? "uma" : "um"} ${vv.min ? vv.min("contato") : "contato"}`, autocomplete: "off" });
     const res = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Resultados" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
     const escolhido = h("div", { class: "crm-escolhido", hidden: true });
     // plano 1000b · RB-237: escolhido o contato, os negócios ABERTOS dele (nx_contato_ver) aparecem para ligar a tarefa também ao negócio (opcional)
@@ -198,10 +198,27 @@ export async function formTarefa(k, tarefa, { contato_id = null, negocio_id = nu
   // plano 1500c · RC-237: trocar o tipo troca o exemplo do título
   const selTipo = form.querySelector("[name=tipo]"), inTit = form.querySelector("[name=titulo]");
   if (selTipo && inTit && L.exemploTarefa) selTipo.addEventListener("change", () => inTit.setAttribute("placeholder", `Ex.: ${L.exemploTarefa(vv.vertical, selTipo.value)}`));
+  // plano 2000d · PX-074: na tarefa NOVA, o título escolhe o tipo («Ligar para a Ana» → Ligação) enquanto a pessoa não mexeu no tipo
+  if (!tarefa && selTipo && inTit && L.tipoDoTitulo) {
+    let tipoTocado = false;
+    selTipo.addEventListener("change", ev => { if (ev && ev.isTrusted !== false) tipoTocado = true; });
+    inTit.addEventListener("input", () => {
+      if (tipoTocado) return;
+      const tp = L.tipoDoTitulo(inTit.value);
+      if (tp && TIPOS.includes(tp) && selTipo.value !== tp) { selTipo.value = tp; ui.anunciar(`Tipo: ${L.ROTULO_TAREFA[tp]}.`); }
+    });
+  }
   if (campoPrazo()) campoPrazo().addEventListener("change", pintarPrazo);
   const status = form.querySelector(".crm-status");
   // M30: tarefa NOVA guarda título e detalhes enquanto a pessoa digita (volta com «Rascunho restaurado · descartar» se a tela recarregar)
   const rascunhos = tarefa ? [] : ["titulo", "descricao"].map(n => k.rascunho(form.querySelector(`[name=${n}]`), `tarefa:nova:${negocio_id ? `negocio:${negocio_id}` : contato_id ? `contato:${contato_id}` : "avulsa"}:${n}`));
+  // plano 2000d · PX-038: Ctrl/⌘+Enter em qualquer campo cria/salva a tarefa (como já faz a nota) — sem levar a mão ao botão
+  form.addEventListener("keydown", ev => {
+    if (ev.key !== "Enter" || !(ev.ctrlKey || ev.metaKey) || ev.isComposing) return;
+    const dlg = form.closest ? form.closest("dialog") : null;
+    const bt = dlg ? dlg.querySelector(".bt-prim:not([disabled])") : null;
+    if (bt) { ev.preventDefault(); bt.click(); }
+  });
   let reqAtual = null, reqConteudo = "";   // M25: uma chave por intenção; erro ambíguo repete com a MESMA chave
   return ui.modal({
     titulo: tarefa ? "Editar tarefa" : "Nova tarefa", corpo: form,
@@ -252,6 +269,20 @@ function linkWhats(k, t) {
   if (!href) return null;
   return h("a", { class: "bt-icone tf-wa", href, ...(href.startsWith("http") ? { target: "_blank", rel: "noopener noreferrer" } : {}), "aria-label": `Abrir o WhatsApp da tarefa ${t.titulo}`, title: "Abrir conversa" }, ui.icone("whatsapp"));
 }
+/** plano 2000d · PX-039: a tarefa de ligação ganha o «Ligar» (tel:) com o telefone do contato — no celular, um toque disca. */
+function linkLigar(k, t) {
+  const { h, ui, L } = k;
+  const tel = t.contato && t.contato.telefone;
+  const href = tel && L.hrefTel ? L.hrefTel(tel) : null;
+  return href ? h("a", { class: "bt-icone tf-ligar", href, "aria-label": `Ligar para ${L.nomeContato ? L.nomeContato(t.contato) : "o contato"} (tarefa ${t.titulo})`, title: "Ligar" }, ui.icone("telefone")) : null;
+}
+/** plano 2000d · PX-040: a tarefa de e-mail ganha o «Escrever» (mailto:) quando o contato tem e-mail válido. */
+function linkEmail(k, t) {
+  const { h, ui } = k;
+  const em = String((t.contato && t.contato.email) || "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(em)) return null;
+  return h("a", { class: "bt-icone tf-email", href: `mailto:${em}?subject=${encodeURIComponent(t.titulo || "")}`, "aria-label": `Escrever para ${em} (tarefa ${t.titulo})`, title: "Escrever e-mail" }, ui.icone("enviar"));
+}
 export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
   const { ui, h, L } = k;
   const pode = k.pode("atendente");
@@ -291,13 +322,17 @@ export function itemTarefa(k, t, { aoMudar, mostrarVinculo = false } = {}) {
         // plano 1500c · RC-238: qual automação criou a tarefa (o nome, quando o servidor manda)
         t.automacao ? h("span", { class: "tf-auto", title: t.automacao && t.automacao.nome ? `Criada pela automação «${t.automacao.nome}»` : "Criada por uma automação" },
           ui.icone("raio"), t.automacao && t.automacao.nome ? `Automação: ${t.automacao.nome}` : "Automação") : null),
+      // plano 2000d · PX-014: e-mail nos detalhes vira mailto:
       // plano 1500c · RX-075: link e telefone escritos nos detalhes da tarefa viram <a> (como nas notas — sem innerHTML)
       t.descricao ? h("span", { class: "fraco tf-desc" }, ...(L.partesNota ? L.partesNota(t.descricao) : [{ tipo: "texto", texto: t.descricao }]).map(p => (p.tipo === "url"
         ? h("a", { href: p.href, target: "_blank", rel: "noopener noreferrer" }, p.texto)
-        : p.tipo === "tel" ? h("a", { href: p.href, "aria-label": `Ligar para ${p.texto}` }, p.texto) : p.texto))) : null),     // plano 1000 (CR-149): as quebras de linha da descrição continuam (CSS)
+        : p.tipo === "tel" ? h("a", { href: p.href, "aria-label": `Ligar para ${p.texto}` }, p.texto)
+    : p.tipo === "email" ? h("a", { href: p.href, "aria-label": `Escrever para ${p.texto}` }, p.texto) : p.texto))) : null),     // plano 1000 (CR-149): as quebras de linha da descrição continuam (CSS)
     pode ? h("div", { class: "tf-acoes" },
       // plano 2000d · DR-159: tarefa de WhatsApp com contato — um toque abre a conversa (com o módulo) ou o WhatsApp
       t.tipo === "whatsapp" && !t.concluida_em ? linkWhats(k, t) : null,
+      t.tipo === "ligacao" && !t.concluida_em ? linkLigar(k, t) : null,      // plano 2000d · PX-039
+      t.tipo === "email" && !t.concluida_em ? linkEmail(k, t) : null,      // plano 2000d · PX-040
       // plano 1500c · RC-239: dica visual no lápis e na lixeira (no desktop o ícone sozinho não explica)
       h("button", { type: "button", class: "bt-icone", "aria-label": `Editar a tarefa ${tituloLeitor}`, title: "Editar", on: { click: () => executar("editar") } }, ui.icone("editar")),
       h("button", { type: "button", class: "bt-icone", "aria-label": `Excluir a tarefa ${tituloLeitor}`, title: "Excluir", on: { click: () => executar("excluir") } }, ui.icone("lixeira")),
@@ -512,10 +547,12 @@ function itemNota(k, n, { aoMudar }) {
   const pode = n.pode_editar && k.pode("atendente");
   // plano 1500c · RC-130: nota longa nasce recolhida (6 linhas) com «Ver mais/Ver menos» (aria-expanded)
   const longa = k.L.notaLonga(n.texto);
+  // plano 2000d · PX-014: e-mail da nota vira mailto:
   // plano 1500c · RC-131: links e telefones da nota viram <a> (sem innerHTML — cada pedaço com textContent)
   const pedacos = (k.L.partesNota ? k.L.partesNota(n.texto) : [{ tipo: "texto", texto: n.texto }]).map(p => (p.tipo === "url"
     ? h("a", { href: p.href, target: "_blank", rel: "noopener noreferrer" }, p.texto)
-    : p.tipo === "tel" ? h("a", { href: p.href, "aria-label": `Ligar para ${p.texto}` }, p.texto) : p.texto));
+    : p.tipo === "tel" ? h("a", { href: p.href, "aria-label": `Ligar para ${p.texto}` }, p.texto)
+    : p.tipo === "email" ? h("a", { href: p.href, "aria-label": `Escrever para ${p.texto}` }, p.texto) : p.texto));
   const texto = h("p", { class: longa ? "nota-txt nota-recolhida" : "nota-txt", id: longa ? k.L.idUnico("nota-txt") : null }, ...pedacos);
   const verMais = longa ? h("button", { type: "button", class: "link nota-ver-mais", "aria-expanded": "false", "aria-controls": texto.id, on: { click: () => {
     const abrir = verMais.getAttribute("aria-expanded") !== "true";
@@ -596,6 +633,7 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
       try {
         const n = await ui.carregando(bt, k.api.rpcC("nx_nota_salvar", { p_nota: { texto: t, ...(negocio_id ? { negocio_id } : {}), ...(contato_id ? { contato_id } : {}) } }));
         ta.value = "";
+        pintarConta();      // plano 2000d · PX-073
         if (rascunhoNota) rascunhoNota.apagar();      // o servidor confirmou
         mudou({ tipo: "salva", nota: n });
         ui.anunciar("Nota salva.");
@@ -604,7 +642,12 @@ export function blocoNotas(k, { notas = [], contato_id = null, negocio_id = null
     };
     bt.addEventListener("click", salvar);
     ta.addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); salvar(); } });
-    nova = h("div", { class: "nota-nova" }, ta, h("div", { class: "linha linha-fim" }, bt));
+    // plano 2000d · PX-073: perto do limite (4.500+ de 5.000) a contagem aparece — antes o texto parava de entrar sem aviso
+    const contaNota = h("small", { class: "nota-conta fraco", "aria-live": "polite" });
+    contaNota.hidden = true;
+    const pintarConta = () => { const n = [...ta.value].length; contaNota.hidden = n < 4500; contaNota.textContent = n >= 4500 ? `${n.toLocaleString("pt-BR")} de 5.000 caracteres` : ""; contaNota.classList.toggle("aten", n >= 5000); };
+    ta.addEventListener("input", pintarConta);
+    nova = h("div", { class: "nota-nova" }, ta, h("div", { class: "linha linha-fim" }, contaNota, bt));
     rascunhoNota = k.rascunho(ta, negocio_id ? `negocio:${negocio_id}:nota` : contato_id ? `contato:${contato_id}:nota` : "nota");   // M30: a nota digitada sobrevive a recarga/queda de sessão
   }
   desenhar();
@@ -930,9 +973,19 @@ export async function montarTarefas(k, el, rota) {
   const cancelar = ctx.pulso && typeof ctx.pulso.assinar === "function" ? ctx.pulso.assinar(recarregarQuieto) : null;
   const aoVoltar = () => { if (!document.hidden) recarregarQuieto(); };
   document.addEventListener("visibilitychange", aoVoltar);
+  // plano 2000d · PX-041: N (fora de campos e diálogos) abre «Nova tarefa» — o mesmo atalho do quadro; aparece na paleta/folha «?» pelo comando
+  const aoTeclaN = ev => {
+    if ((ev.key !== "n" && ev.key !== "N") || ev.altKey || ev.ctrlKey || ev.metaKey || !k.pode("atendente")) return;
+    const a = ev.target;
+    const editando = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName || "") || (a.closest && a.closest("[role=dialog],dialog")));
+    if (editando || (document.querySelector && document.querySelector("dialog[open]"))) return;
+    ev.preventDefault(); novaTarefa();
+  };
+  document.addEventListener("keydown", aoTeclaN);
   // plano 1000 (CR-156): caiu a internet → os círculos desligam com a dica; voltou → religam (sem recarregar a lista)
   const aoRede = () => varrerChecksRede(corpo);      // plano 1000b · RB-115: a mesma varredura do ouvinte global
   if (typeof addEventListener === "function") { addEventListener("offline", aoRede); addEventListener("online", aoRede); }
   return { desmontar() { seq++; if (cancelar) cancelar(); document.removeEventListener("visibilitychange", aoVoltar);
+    document.removeEventListener("keydown", aoTeclaN);      // plano 2000d · PX-041
     if (typeof removeEventListener === "function") { removeEventListener("offline", aoRede); removeEventListener("online", aoRede); } } };
 }

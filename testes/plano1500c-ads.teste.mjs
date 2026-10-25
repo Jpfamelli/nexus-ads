@@ -213,7 +213,8 @@ test("AC-108 · o redesenho do resize vai para o próximo quadro (no máximo um 
   assert.match(ADS, /ro = new ResizeObserver\(\(\) => \{ if \(quadro\) return; quadro = raf\(/);
 });
 test("AC-079 · tabela da tendência com a receita do CRM", () => {
-  assert.match(ADS, /colunas: \["Dia", "Investimento", "Conversas CRM", "Agendamentos CRM", "Fechamentos CRM", "Receita CRM"\]/);
+  // plano 2000d: NX-021 — as colunas de agendamento/fechamento levam a palavra da vertical (WvT); a receita do CRM continua
+  assert.match(ADS, /colunas: \["Dia", "Investimento", "Conversas CRM", `\$\{capT\(WvT\.ag\[1\]\)\} CRM`, `\$\{capT\(WvT\.fe\[1\]\)\} CRM`, "Receita CRM"\]/);
 });
 
 /* ============================================================ ranking de criativos */
@@ -405,7 +406,9 @@ test("AC-155 · a legenda diz a janela que o servidor comparou (r.anterior)", ()
   assert.match(REL, /if \(r && r\.anterior\) \{ const t = textoLeg\(r\.anterior\);/);
 });
 test("AC-158 · resumo do gráfico com milhar", () => {
-  assert.match(REL, /\$\{int\(serie\.reduce\(\(s, d\) => s \+ \(\+d\.criados \|\| 0\), 0\)\)\} criados/);
+  // plano 2000d: NX-304 — a soma vai para somaC e a palavra concorda pelo vocabulário (flexao)
+  assert.ok(REL.includes("somaC = serie.reduce((s, d) => s + (+d.criados || 0), 0)"));
+  assert.ok(REL.includes("${int(somaC)} ${flexao(\"criado\", somaC, fem)}"));
   assert.match(REL, /\$\{int\(serie\.reduce\(\(s, d\) => s \+ \(\+d\.novas \|\| 0\), 0\)\)\} novas/);
 });
 test("AC-159 · por responsável: ordem por fechamentos e a conversão", () => {

@@ -546,7 +546,9 @@ test("UCB-111 + UCB-112 + UCB-113 + UCB-114 + UCB-050 Perfil", async () => {
     } });
     await cfg.montar(t.ctx); await tique(10);
     const raiz = t.ctx.alvo;
-    const [formDados, formSenha] = raiz.querySelectorAll(".cfg-sec form");
+    // plano 2000d: FX-003 pôs o form do horário silencioso no cartão de avisos — os forms são achados pelo conteúdo
+    const formDados = raiz.querySelectorAll(".cfg-sec form").find(f => f.querySelector("input[name=nome]"));
+    const formSenha = raiz.querySelectorAll(".cfg-sec form").find(f => f.querySelector("input[name=nova]"));
     formSenha.reset = () => {};          // o DOM de mentira não tem form.reset
     digitar(d, formDados.querySelector("input[name=nome]"), "A");
     formDados.dispatchEvent(new d.Evento("submit")); await tique(4);

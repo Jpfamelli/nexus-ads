@@ -59,15 +59,30 @@ export function criarComposer(A) {
   const btCancelarGravacao = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Cancelar");
   // CA-030: barrinha do nível do microfone e o aviso de silêncio (microfone errado ou mudo)
   const nivelMic = h("span", { class: "cvx-rec-nivel", "aria-hidden": "true" }, h("i", null));
-  const avisoMudo = h("span", { class: "cvx-rec-mudo", role: "alert", hidden: true }, "Não estamos ouvindo nada — confira o microfone.");
+  // plano 2000d · DC-107: role=status (não alert) e com histerese no timer — o leitor de tela não repete o aviso a cada oscilação
+  const avisoMudo = h("span", { class: "cvx-rec-mudo", role: "status", hidden: true }, "Não estamos ouvindo nada — confira o microfone.");
   const avisoFimGravacao = h("span", { class: "cvx-rec-fim", hidden: true }, "");
   const pintarNivel = n => { try { nivelMic.style.setProperty("--nivel", Number(n).toFixed(2)); } catch { /* sem estilo: só a barrinha não anda */ } };
   // plano 1500c · CC-095: pausar e continuar a gravação (interrupção no balcão não obriga a regravar); o relógio para junto
   const rotGravando = h("span", { class: "cvx-rec-rot" }, "Gravando");
   const rotPausar = h("span", null, "Pausar");
   const btPausarGravacao = h("button", { type: "button", class: "bt bt-fant bt-p cvx-rec-pausa", "aria-pressed": "false", hidden: true }, ui.icone("pausa"), rotPausar);
-  const painelGravacao = h("div", { class: "cvx-gravacao", role: "status", "aria-live": "polite", hidden: true },
-    h("span", { class: "cvx-rec-ponto", "aria-hidden": "true" }), rotGravando, tempoGravacao, nivelMic, btPausarGravacao, btCancelarGravacao, avisoMudo, avisoFimGravacao);
+  // plano 2000d · DC-136: «Enviar» manda o áudio direto (sem o modal); «Ouvir antes» (o microfone) abre a revisão de sempre
+  const btEnviarGravacao = h("button", { type: "button", class: "bt bt-prim bt-p cvx-rec-enviar", "aria-keyshortcuts": "Enter" }, ui.icone("enviar"), "Enviar");
+  const btRevisarGravacao = h("button", { type: "button", class: "bt bt-fant bt-p cvx-rec-revisar", "aria-keyshortcuts": "Shift+Enter" }, "Ouvir antes");
+  btCancelarGravacao.setAttribute("aria-keyshortcuts", "Escape");   // plano 2000d · DC-135
+  btPausarGravacao.setAttribute("aria-keyshortcuts", "P");
+  // plano 2000d · DC-253: perto dos 5 min, «Continuar em outro áudio» manda este e já começa o próximo
+  const btContinuarGravacao = h("button", { type: "button", class: "link cvx-rec-continuar", hidden: true }, "Continuar em outro áudio");
+  const painelGravacao = h("div", { class: "cvx-gravacao", role: "group", "aria-label": "Gravação de áudio", tabindex: "-1", hidden: true },
+    h("span", { class: "cvx-rec-ponto", "aria-hidden": "true" }), rotGravando, tempoGravacao, nivelMic, btPausarGravacao, btCancelarGravacao, btRevisarGravacao, btEnviarGravacao, avisoMudo, avisoFimGravacao, btContinuarGravacao);
+  // plano 2000d · DC-091/DC-092: o áudio gravado que não pôde sair (sem internet, conversa resolvida, janela fechada) fica guardado aqui
+  const audioGuardadoTxt = h("span", null, "");
+  const btAudioGuardadoEnviar = h("button", { type: "button", class: "bt bt-prim bt-p cvx-ag-enviar" }, "Enviar agora");
+  const btAudioGuardadoBaixar = h("button", { type: "button", class: "bt bt-fant bt-p cvx-ag-baixar" }, A.icone("baixar"), "Baixar");
+  const btAudioGuardadoDescartar = h("button", { type: "button", class: "bt bt-fant bt-p cvx-ag-descartar" }, "Descartar");
+  const faixaAudioGuardado = h("div", { class: "cvx-audio-guardado", role: "status", hidden: true }, ui.icone("microfone"), audioGuardadoTxt,
+    h("div", { class: "linha cvx-ag-bts" }, btAudioGuardadoEnviar, btAudioGuardadoBaixar, btAudioGuardadoDescartar));
   const resp = h("div", { class: "cvx-resp", hidden: true });
   const seloRasc = h("div", { class: "cvx-rasc-selo" });       // "Rascunho restaurado · descartar" (o ctx.rascunho põe o selo aqui)
   let rasc = null;                                               // rascunho do campo ligado a esta conversa (ctx.rascunho.ligar)
@@ -91,7 +106,17 @@ export function criarComposer(A) {
   desenharDica();
   const rr = h("div", { class: "cvx-rr", role: "listbox", "aria-label": "Respostas rápidas", hidden: true, id: "cvx-rr" });
   const rrStatus = h("span", { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
-  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, rrStatus, resp, iaTrab, trava, avisoJanela, avisoCaido, capInfo, painelGravacao, seloRasc, linha, dica, arquivo);
+  // plano 2000d · DC-108: «Ana acabou de responder (14:02): revise antes de enviar · Ver» — o 1º Enter só fecha o aviso
+  const avisoColegaTxt = h("span", null, "");
+  const btVerColega = h("button", { type: "button", class: "link cvx-colega-ver" }, "Ver");
+  const btFecharColega = h("button", { type: "button", class: "bt-icone cvx-colega-x", "aria-label": "Fechar o aviso" }, ui.icone("fechar"));
+  const faixaColega = h("p", { class: "cvx-janela-aviso cvx-colega", role: "alert", hidden: true }, ui.icone("alerta"), avisoColegaTxt, btVerColega, btFecharColega);
+  let avisoColega = null;   // { conversa, id, pendente }
+  // plano 2000d · DC-114: a IA atendendo no CodeWords
+  const btPausarIA = h("button", { type: "button", class: "bt bt-fant bt-p cvx-ia-pausar" }, "Pausar IA e escrever");
+  const faixaIA = h("p", { class: "cvx-janela-aviso cvx-ia-ativa", role: "status", hidden: true }, ui.icone("ia"), h("span", null, "A IA está atendendo esta conversa: se você escrever, o cliente pode receber as duas respostas."), btPausarIA);
+  let perguntouIA = null;
+  const el = h("div", { class: "cvx", hidden: true, dataset: { modo: "texto" } }, rr, rrStatus, resp, iaTrab, trava, avisoJanela, avisoCaido, faixaColega, faixaIA, capInfo, painelGravacao, faixaAudioGuardado, seloRasc, linha, dica, arquivo);
 
   ta.setAttribute("aria-controls", "cvx-rr");
   ta.setAttribute("aria-autocomplete", "list");
@@ -241,6 +266,11 @@ export function criarComposer(A) {
     const avisoC = caido ? `O número ${caido.nome || "desta conversa"} está desconectado: a mensagem espera até reconectar.` : "";
     avisoCaido.hidden = !avisoC;
     if (avisoCaidoTxt.textContent !== avisoC) avisoCaidoTxt.textContent = avisoC;
+    // plano 2000d · DC-114: a IA está atendendo (CodeWords) — a faixa diz que as duas responderiam e oferece pausar
+    faixaIA.hidden = !(s === "ok" && !modoNota && iaAtiva());
+    // plano 2000d · DC-108: o aviso de colega some quando o campo esvazia ou a conversa troca
+    if (avisoColega && (avisoColega.conversa !== (c && c.id) || modoNota)) esconderAvisoColega();
+    if (citaPendente) restaurarCita();   // DC-113: as mensagens chegaram depois do rascunho
     // CA-077: assinatura ligada — o prefixo que o cliente vai ver
     const pref = !modoNota && s === "ok" && A.base && A.base.cfg && A.base.cfg.assinatura ? L.prefixoAssinatura((A.eu && A.eu.nome) || "") : "";
     rotAssin.hidden = !pref;
@@ -311,8 +341,53 @@ export function criarComposer(A) {
     ui.limpar(seloRasc);
     const r = A.ctx && A.ctx.rascunho;
     if (!r || !idDoCampo || typeof r.ligar !== "function") return;
-    rasc = r.ligar(ta, `conversa:${idDoCampo}${modoNota ? ":nota" : ""}`, { seloEm: seloRasc });
+    // plano 2000d · DC-110: o selo diz quantas mensagens a conversa teve DEPOIS do rascunho (um colega pode já ter respondido)
+    const idR = idDoCampo;
+    rasc = r.ligar(ta, `conversa:${idDoCampo}${modoNota ? ":nota" : ""}`, { seloEm: seloRasc,
+      depoisDe: em => (A.selId === idR ? (A.msgs || []).filter(m => m && m.tipo !== "nota" && (Date.parse(m.criado_em || "") || 0) > em).length : 0),
+      aoGrande: () => ui.toast("O texto ficou grande demais para guardar como rascunho neste aparelho: o último rascunho guardado continua valendo.", { tipo: "info", ms: 8000 }) });   // DC-218
     if (rasc && rasc.restaurado) { autoAltura(); A.acoes.rascunhoMudou(); }
+    // plano 2000d · DC-112: há rascunho de mensagem E de nota — o selo oferece abrir a nota (antes ela ficava escondida até vencer)
+    if (!modoNota && idDoCampo && A.podeEscrever && guardadoEm(`conversa:${idDoCampo}:nota`) && String(ta.value || "").trim()) {
+      seloRasc.appendChild(h("p", { class: "rascunho-selo cvx-nota-guardada", role: "status" }, "Também há uma nota interna guardada · ",
+        h("button", { type: "button", class: "link", on: { click: () => abrirNotaGuardada() } }, "abrir")));
+    }
+    // plano 2000d · DC-113: a citação («Respondendo a…») guardada volta junto com o texto
+    citaPendente = null;
+    if (!modoNota && idDoCampo && String(ta.value || "").trim()) {
+      const cid = guardadoEm(`conversa:${idDoCampo}:cita`);
+      if (cid) { citaPendente = { conversa: idDoCampo, id: cid }; restaurarCita(); }
+    }
+  }
+  /** DC-112: guarda o texto da mensagem e abre a nota guardada (a mensagem continua no rascunho dela). */
+  function abrirNotaGuardada() {
+    if (!idDoCampo) return;
+    A.rascunhos.set(idDoCampo, ta.value);
+    desligarRascunho();                         // grava o texto da mensagem na chave dela
+    modoNota = true;
+    ta.value = "";
+    ligarRascunho();                            // o campo vazio recebe a nota guardada
+    atualizar();
+    try { ta.focus(); } catch { /* ok */ }
+  }
+  /* plano 2000d · DC-113: citação guardada ao lado do rascunho */
+  let citaPendente = null;
+  function guardarCita() {
+    const r = A.ctx && A.ctx.rascunho;
+    if (!r || !idDoCampo || modoNota) return;
+    try {
+      if (respondendo && respondendo.id && typeof r.guardar === "function") r.guardar(`conversa:${idDoCampo}:cita`, String(respondendo.id));
+      else r.apagar(`conversa:${idDoCampo}:cita`);
+    } catch { /* ok */ }
+  }
+  function restaurarCita() {
+    const p = citaPendente;
+    if (!p || respondendo || p.conversa !== idDoCampo || modoNota) return;
+    const m = (A.msgs || []).find(x => x && String(x.id) === String(p.id));
+    if (!m) return;
+    citaPendente = null;
+    respondendo = m;
+    desenharResposta();
   }
   /** Apaga o rascunho guardado — só depois de o servidor/fila terem a mensagem (e se a pessoa já não digitou outra coisa). */
   function apagarRascunho() { if (rasc && !ta.value.trim()) { try { rasc.apagar(); } catch { /* ok */ } } }
@@ -390,11 +465,14 @@ export function criarComposer(A) {
   function alternarNota(forcar) {
     const antes = modoNota;
     modoNota = typeof forcar === "boolean" ? forcar : !modoNota;
-    if (modoNota !== antes && rasc) {            // o texto digitado acompanha a pessoa para o outro modo: o rascunho antigo sai e o novo nasce
-      try { rasc.apagar(); if (typeof rasc.parar === "function") rasc.parar(); else rasc.desligar(); } catch { /* ok */ }
+    if (modoNota !== antes && rasc) {            // o texto digitado acompanha a pessoa para o outro modo: o rascunho novo nasce e o antigo sai
+      // plano 2000d · DC-206: grava o novo ANTES de apagar o antigo — com o storage falhando, o texto continua guardado na chave antiga
+      const velho = rasc, chaveVelha = `conversa:${idDoCampo}${antes ? ":nota" : ""}`;
+      try { if (typeof velho.parar === "function") velho.parar(); else velho.desligar(); } catch { /* ok */ }
       rasc = null;
       ligarRascunho();
-      if (rasc && ta.value.trim()) rasc.salvarAgora();
+      const gravou = !ta.value.trim() || !rasc || rasc.salvarAgora() !== false;
+      if (gravou) { try { A.ctx.rascunho.apagar(chaveVelha); } catch { /* ok */ } }
     }
     if (modoNota !== antes && idDoCampo) {       // o rascunho da sessão segue a mesma regra: texto de nota nunca fica guardado como mensagem para o cliente
       if (modoNota) A.rascunhos.delete(idDoCampo); else A.rascunhos.set(idDoCampo, ta.value);
@@ -414,7 +492,7 @@ export function criarComposer(A) {
     // plano 1000b · CB-010: «Respondendo a Mariana» / «à sua mensagem» / «à IA» / «a Ana» (antes «Respondendo Você» para tudo que saiu)
     const rot = L.rotuloRespondendo(respondendo, { nomeContato: A.acoes.nomeContato(contato()), euId: A.eu && A.eu.id });
     resp.append(A.icone("responder"), h("div", null, h("b", null, rot), L.resumoMensagem(respondendo, 120)),
-      h("button", { type: "button", class: "bt-icone", "aria-label": "Cancelar resposta", on: { click: () => { respondendo = null; desenharResposta(); ta.focus(); } } }, ui.icone("fechar")));
+      h("button", { type: "button", class: "bt-icone", "aria-label": "Cancelar resposta", on: { click: () => { respondendo = null; desenharResposta(); guardarCita(); ta.focus(); } } }, ui.icone("fechar")));
   }
   /** plano 1000b · CB-011: por que não dá para responder citando — a janela só quando é a janela. */
   function motivoSemResposta(sit) {
@@ -433,7 +511,9 @@ export function criarComposer(A) {
     if (!m || sit !== "ok") { if (sit !== "ok") ui.toast(motivoSemResposta(sit), { tipo: "info" }); return; }
     if (modoNota) alternarNota(false);
     respondendo = m;
+    citaPendente = null;
     desenharResposta();
+    guardarCita();   // plano 2000d · DC-113
     ta.focus();
   }
 
@@ -622,11 +702,59 @@ export function criarComposer(A) {
   });
   btEnviar.addEventListener("click", () => enviarDoCampo());
 
+  /* ---------------- plano 2000d · DC-108: colega (ou a IA) respondeu enquanto eu escrevia */
+  let campoDesde = 0;   // quando o campo ganhou texto (ms)
+  ta.addEventListener("input", () => {
+    if (String(ta.value || "").trim()) { if (!campoDesde) campoDesde = Date.now(); }
+    else { campoDesde = 0; if (avisoColega) esconderAvisoColega(); }
+  });
+  function esconderAvisoColega() { avisoColega = null; faixaColega.hidden = true; }
+  btFecharColega.addEventListener("click", () => { esconderAvisoColega(); try { ta.focus(); } catch { /* ok */ } });
+  btVerColega.addEventListener("click", () => { const a = avisoColega; if (a && A.chat && typeof A.chat.irPara === "function") A.chat.irPara(a.id); else if (a && A.acoes.irParaMensagem) A.acoes.irParaMensagem(a.id); if (a) a.pendente = false; });
+  /** conversas.js chama com as mensagens que o delta trouxe. */
+  function colegaRespondeu(itens = []) {
+    const c = conv();
+    if (!c || modoNota || !campoDesde || !String(ta.value || "").trim() || idDoCampo !== c.id) return;
+    const eu = A.eu && A.eu.id;
+    const m = (itens || []).filter(x => x && x.direcao === "out" && x.tipo !== "nota" && (x.conversa_id === undefined || x.conversa_id === c.id)
+      && ((x.enviado_por && x.enviado_por.id && x.enviado_por.id !== eu) || (!x.enviado_por && x.origem === "ia"))
+      && (Date.parse(x.criado_em || "") || Date.now()) >= campoDesde - 2000).at(-1);
+    if (!m) return;
+    const quem = m.enviado_por && m.enviado_por.nome ? L.primeiroNome(m.enviado_por.nome) || m.enviado_por.nome : "A IA";
+    avisoColega = { conversa: c.id, id: m.id, pendente: true };
+    avisoColegaTxt.textContent = `${quem} acabou de responder (${L.horaMsg(m.criado_em || new Date().toISOString())}): revise antes de enviar.`;
+    faixaColega.hidden = false;
+  }
+  /** plano 2000d · DC-114: a IA está ligada e atendendo esta conversa do CodeWords. */
+  function iaAtiva() {
+    const ia = usaCodeWords() ? A.iaEstado : null;
+    return !!(ia && ia.disponivel !== false && ia.ia_ligada && !ia.pausada);
+  }
+  btPausarIA.addEventListener("click", async () => { if (A.acoes.assumirIA) await A.acoes.assumirIA(btPausarIA); atualizar(); try { ta.focus(); } catch { /* ok */ } });
+
   async function enviarDoCampo() {
     const texto = ta.value.trim();
     if (!texto || !podeTexto()) return;
     // o texto do campo é de uma conversa só: enquanto a aberta não for ela (troca em andamento), Enter não manda nada para ninguém
     if (!idDoCampo || idDoCampo !== A.selId || !conv() || conv().id !== idDoCampo) return;
+    // plano 2000d · DC-108: o 1º Enter depois do aviso «Ana acabou de responder» só fecha o aviso (a pessoa revisa)
+    if (!modoNota && avisoColega && avisoColega.pendente && avisoColega.conversa === idDoCampo) {
+      avisoColega.pendente = false;
+      faixaColega.hidden = true;
+      ui.anunciar("Aviso fechado. Revise e envie de novo se ainda fizer sentido.");
+      return;
+    }
+    // plano 2000d · DC-114: a IA está atendendo — na 1ª mensagem pergunta (Pausar e enviar · Enviar mesmo assim)
+    if (!modoNota && iaAtiva() && perguntouIA !== idDoCampo) {
+      const id0 = idDoCampo;
+      const r = await ui.modal({ titulo: "A IA está atendendo esta conversa", largura: "p",
+        corpo: h("p", null, "Se você enviar agora, o cliente pode receber a sua resposta e a da IA."),
+        acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Enviar mesmo assim", tipo: "neutro", valor: "enviar" }, { rotulo: "Pausar a IA e enviar", tipo: "primario", valor: "pausar" }] });
+      if (!r || !mesmaConversa(id0)) return;
+      perguntouIA = id0;
+      if (r === "pausar" && A.acoes.assumirIA) await A.acoes.assumirIA();
+      if (!mesmaConversa(id0) || ta.value.trim() !== texto) return;
+    }
     const limite = teto();
     if (texto.length > limite) {
       ui.toast(limite < L.LIMITE_TEXTO ? `A mensagem passou de ${limite.toLocaleString("pt-BR")} caracteres (a assinatura conta). Divida em duas.`
@@ -680,7 +808,7 @@ export function criarComposer(A) {
     const citada = respondendo;
     ta.value = ""; autoAltura(); atualizarContador();
     esconderSeloIA();
-    respondendo = null; desenharResposta();
+    respondendo = null; desenharResposta(); guardarCita();   // DC-113: a citação guardada sai junto
     A.rascunhos.delete(idDoCampo);
     A.acoes.rascunhoMudou();
     ta.focus();
@@ -698,6 +826,11 @@ export function criarComposer(A) {
   btEnviar.addEventListener("contextmenu", ev => {
     if (modoNota || !ta.value.trim() || !podeTexto()) return;
     ev.preventDefault();
+    ui.menu(btEnviar, [{ rotulo: "Enviar e resolver", icone: "check", fn: () => enviarEResolver() }]);
+  });
+  // plano 2000d · DC-099: o Safari do iPhone não dispara contextmenu no toque longo de botão — o toque longo abre o mesmo menu
+  if (typeof ui.toqueLongo === "function") ui.toqueLongo(btEnviar, () => {
+    if (modoNota || !ta.value.trim() || !podeTexto()) return;
     ui.menu(btEnviar, [{ rotulo: "Enviar e resolver", icone: "check", fn: () => enviarEResolver() }]);
   });
 
@@ -734,8 +867,103 @@ export function criarComposer(A) {
     if (lista.length > 1) anexarVarios(lista);       // CA-072
     else if (lista[0]) anexar(lista[0]);
   });
+  // plano 2000d · DC-124: «Câmera» no «+» do celular — abre a câmera de trás direto e a foto entra no mesmo anexar()
+  const camera = h("input", { type: "file", hidden: true, accept: "image/*", capture: "environment", class: "cvx-camera" });
+  el.appendChild(camera);
+  camera.addEventListener("change", () => { const f = camera.files && camera.files[0]; if (f) anexar(f); });
+  function abrirCamera() { if (!aceitaAnexo()) { const m = motivoSemAnexo(); if (m) ui.toast(m, { tipo: "info" }); return; } camera.value = ""; camera.click(); }
   btAudio.addEventListener("click", () => gravacao ? pararGravacao(false) : iniciarGravacao());
   btCancelarGravacao.addEventListener("click", () => pararGravacao(true));
+  // plano 2000d · DC-136: «Enviar» no painel manda direto; «Ouvir antes» abre a revisão
+  btEnviarGravacao.addEventListener("click", () => { if (gravacao) { gravacao.enviarDireto = true; pararGravacao(false); } });
+  btRevisarGravacao.addEventListener("click", () => pararGravacao(false));
+  btContinuarGravacao.addEventListener("click", () => { if (gravacao) { gravacao.enviarDireto = true; gravacao.continuar = true; pararGravacao(false); } });
+  // plano 2000d · DC-135: teclado no painel — Enter envia, Shift+Enter para e revisa, Esc cancela (com mais de 10 s pede confirmação), P pausa
+  painelGravacao.addEventListener("keydown", async ev => {
+    if (!gravacao) return;
+    const alvo = ev.target;
+    const emBotao = alvo && alvo.tagName === "BUTTON" && alvo !== painelGravacao;
+    if (ev.key === "Escape") {
+      ev.preventDefault(); ev.stopPropagation();
+      const atual = gravacao;
+      const seg = (Date.now() - atual.inicio) / 1000;
+      if (seg > 10 && !(await ui.confirmar({ titulo: "Cancelar a gravação?", texto: `O áudio de ${tempoGravacaoTexto(seg)} será descartado.`, rotulo: "Descartar áudio", perigo: true }))) return;
+      if (gravacao === atual) pararGravacao(true);
+    } else if (ev.key === "Enter" && !emBotao) {
+      ev.preventDefault();
+      if (ev.shiftKey) pararGravacao(false); else { gravacao.enviarDireto = true; pararGravacao(false); }
+    } else if ((ev.key === "p" || ev.key === "P") && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      ev.preventDefault();
+      if (!btPausarGravacao.hidden) btPausarGravacao.click();
+    }
+  });
+
+  /* ---------------- plano 2000d · DC-091/DC-092: áudio gravado guardado (sem internet, conversa resolvida ou janela fechada) */
+  let audioGuardado = null;   // { arquivo, gravadoS, conversa, para, client_ref, enviando }
+  function guardarAudio(arquivoAudio, gravadoS, idConv, motivo) {
+    audioGuardado = { arquivo: arquivoAudio, gravadoS, conversa: idConv, para: nomeDestino(), client_ref: L.novoClientRef(), enviando: false };
+    pintarAudioGuardado(motivo);
+    ui.anunciar(`Áudio gravado guardado: ${motivo}`);
+  }
+  function pintarAudioGuardado(motivo) {
+    const g = audioGuardado;
+    faixaAudioGuardado.hidden = !g;
+    if (!g) return;
+    const dur = L.formatarDuracao(g.gravadoS || 0);
+    audioGuardadoTxt.textContent = motivo ? `Áudio gravado (${dur}) para ${g.para}: ${motivo}` : `Áudio gravado (${dur}) para ${g.para} espera para sair.`;
+    const s = mesmaConversa(g.conversa) ? situacao() : null;
+    btAudioGuardadoEnviar.textContent = s === "resolvida" ? "Reabrir e enviar" : "Enviar agora";
+  }
+  async function enviarAudioGuardado({ automatico = false } = {}) {
+    const g = audioGuardado;
+    if (!g || g.enviando) return;
+    if (A.acoes.offline && A.acoes.offline()) { if (!automatico) ui.toast("Ainda sem internet: o áudio sai sozinho quando a conexão voltar.", { tipo: "info" }); return; }
+    if (mesmaConversa(g.conversa) && situacao() === "resolvida" && !automatico) {
+      if (A.acoes.status) await A.acoes.status("aberta");
+    }
+    if (mesmaConversa(g.conversa) && !aceitaAnexo()) { if (!automatico) ui.toast(motivoSemAnexo() || "Esta conversa não aceita áudio agora. Baixe o áudio para não perder.", { tipo: "info", ms: 8000 }); return; }
+    const v = L.validarArquivo(g.arquivo, { provedor: provedorCanal() });
+    if (!v.ok) { ui.toast("O áudio gravado não vale para este número. Baixe para não perder.", { tipo: "erro" }); return; }
+    g.enviando = true;
+    try {
+      await A.acoes.enviar({ tipo: "midia", conversa: g.conversa, arquivo: g.arquivo, validacao: v, legenda: "", client_ref: g.client_ref, segundoPlano: true, para: g.para });
+      if (audioGuardado === g) { audioGuardado = null; pintarAudioGuardado(); }
+    } finally { g.enviando = false; }
+  }
+  btAudioGuardadoEnviar.addEventListener("click", () => enviarAudioGuardado());
+  btAudioGuardadoBaixar.addEventListener("click", () => {
+    const g = audioGuardado;
+    if (!g) return;
+    try {
+      const url = URL.createObjectURL(g.arquivo);
+      const a = h("a", { href: url, download: g.arquivo.name || "audio.ogg", hidden: true });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch { /* ok */ } }, 4000);
+    } catch { ui.toast("Este navegador não deixou baixar o áudio.", { tipo: "erro" }); }
+  });
+  btAudioGuardadoDescartar.addEventListener("click", () => { audioGuardado = null; pintarAudioGuardado(); ui.anunciar("Áudio gravado descartado."); });
+  const aoVoltarInternet = () => { if (audioGuardado && el.isConnected) enviarAudioGuardado({ automatico: true }); };
+  try { globalThis.addEventListener && globalThis.addEventListener("online", aoVoltarInternet); } catch { /* sem window */ }
+  /** Para onde vai o áudio que acabou de ser gravado: direto (Enviar), guardado (não dá para sair agora) ou a revisão de sempre. */
+  async function entregarGravado(arquivoAudio, gravadoS, idConv, atual) {
+    const offline = !!(A.acoes.offline && A.acoes.offline());
+    const mesma = mesmaConversa(idConv);
+    if (offline) { guardarAudio(arquivoAudio, gravadoS, idConv, "sem internet — ele sai sozinho quando a conexão voltar."); return; }
+    if (!mesma) { guardarAudio(arquivoAudio, gravadoS, idConv, "você trocou de conversa durante a gravação."); return; }
+    if (!aceitaAnexo()) {
+      const s = situacao();
+      guardarAudio(arquivoAudio, gravadoS, idConv, s === "resolvida" ? "o atendimento foi resolvido durante a gravação." : s === "janela" ? "a janela de 24 h fechou durante a gravação." : (motivoSemAnexo() || "a conversa não aceita áudio agora."));
+      return;
+    }
+    if (atual && atual.enviarDireto) {
+      const v = L.validarArquivo(arquivoAudio, { provedor: provedorCanal() });
+      if (!v.ok) { await anexar(arquivoAudio, { gravadoS }); return; }
+      await A.acoes.enviar({ tipo: "midia", conversa: idConv, arquivo: arquivoAudio, validacao: v, legenda: "", client_ref: L.novoClientRef() });
+      if (atual.continuar && el.isConnected && mesmaConversa(idConv)) iniciarGravacao();   // DC-253
+      return;
+    }
+    await anexar(arquivoAudio, { gravadoS });
+  }
 
   /** Áudio gravado (no formato que o navegador tiver) → WAV 16 kHz mono 16 bits, que o aparelho do CodeWords entrega como mensagem de voz. */
   async function paraWav(blob) {
@@ -796,7 +1024,8 @@ export function criarComposer(A) {
           try { if (actx.state === "suspended" && typeof actx.resume === "function") { const p = actx.resume(); if (p && typeof p.catch === "function") p.catch(() => {}); } } catch { /* ok */ }
         }
       } catch { atual.medidor = null; }
-      avisoMudo.hidden = true; avisoFimGravacao.hidden = true; pintarNivel(0);
+      avisoMudo.hidden = true; avisoFimGravacao.hidden = true; btContinuarGravacao.hidden = true; pintarNivel(0);
+      try { if (globalThis.navigator && typeof navigator.vibrate === "function") navigator.vibrate(30); } catch { /* ok */ }   // plano 2000d · DC-252
       rec.addEventListener("dataavailable", ev => { if (ev.data && ev.data.size) atual.partes.push(ev.data); });
       rec.addEventListener("error", () => {
         // MediaRecorder ainda pode emitir dataavailable e stop depois do erro; o fragmento fica descartado.
@@ -823,14 +1052,14 @@ export function criarComposer(A) {
             ui.toast("Não foi possível preparar o áudio gravado neste navegador, e ele não foi enviado. Toque no clipe para anexar um áudio salvo (MP3, OGG, AAC, M4A ou WAV).", { tipo: "erro", ms: 10000 });
             return;
           }
-          // a conversa mudou enquanto o áudio era convertido: ele não segue para outro cliente
-          if (!mesmaConversa(idGravacao)) { ui.toast("Você trocou de conversa enquanto o áudio era preparado: nada foi enviado. Grave de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
-          await anexar(new File([wav], `audio-orbita-${Date.now()}.wav`, { type: L.MIME_WAV }), { gravadoS: decorrido() });   // plano 1000b · CB-142 (1500c · CC-095: sem as pausas)
+          // a conversa mudou enquanto o áudio era convertido: ele não segue para o cliente aberto — fica guardado para a conversa de origem
+          // plano 2000d · DC-091/DC-092/DC-136: entregarGravado decide (direto, guardado ou a revisão)
+          await entregarGravado(new File([wav], `audio-orbita-${Date.now()}.wav`, { type: L.MIME_WAV }), decorrido(), idGravacao, atual);   // plano 1000b · CB-142 (1500c · CC-095: sem as pausas)
           return;
         }
         const ext = mime === "audio/mp4" ? "m4a" : "ogg";
         const arquivoAudio = new File([blob], `audio-orbita-${Date.now()}.${ext}`, { type: mime });
-        await anexar(arquivoAudio, { gravadoS: decorrido() });   // plano 1000b · CB-142: o modal sabe que é o áudio gravado (1500c · CC-095: sem as pausas)
+        await entregarGravado(arquivoAudio, decorrido(), idGravacao, atual);   // plano 2000d · DC-091/DC-092/DC-136 (1000b · CB-142; 1500c · CC-095)
       }, { once: true });
       rec.start(500);
       painelGravacao.hidden = false;
@@ -863,7 +1092,8 @@ export function criarComposer(A) {
             atual.amostras.push({ t: agora, nivel });
             while (atual.amostras.length && agora - atual.amostras[0].t > 4000) atual.amostras.shift();
             pintarNivel(Math.min(1, nivel * 8));
-            avisoMudo.hidden = !L.microfoneMudo(atual.amostras);
+            atual.mudo = L.histereseMudo(atual.mudo, L.microfoneMudo(atual.amostras), agora);   // plano 2000d · DC-107
+            avisoMudo.hidden = !atual.mudo.visivel;
           } catch { /* sem medidor: segue gravando */ }
         }
         // CA-029: até 5 minutos (antes 1); 30 s antes do fim o painel avisa
@@ -871,6 +1101,7 @@ export function criarComposer(A) {
           atual.avisou = true;
           avisoFimGravacao.textContent = `Faltam ${L.GRAVACAO_MAX_S - L.GRAVACAO_AVISO_S} s: a gravação para sozinha em ${L.GRAVACAO_MAX_S / 60} minutos.`;
           avisoFimGravacao.hidden = false;
+          btContinuarGravacao.hidden = false;   // plano 2000d · DC-253
         }
         if (segundos >= L.GRAVACAO_MAX_S) {
           pararGravacao(false);
@@ -919,6 +1150,13 @@ export function criarComposer(A) {
   el.insertBefore(otimStatus, linha);
   const audioStatus = h("p", { class: "cvx-otim", role: "status", "aria-live": "polite", hidden: true }, "Preparando o áudio…");   // CodeWords: gravação virando WAV
   el.insertBefore(audioStatus, linha);
+  // plano 2000d · DC-129/DC-131: progresso do lote de fotos
+  const loteTxt = h("span", { class: "cvx-lote-txt" }, "");
+  const loteBt = h("button", { type: "button", class: "bt bt-fant bt-p cvx-lote-parar", hidden: true }, "Parar");
+  const loteStatus = h("p", { class: "cvx-otim cvx-lote", role: "status", "aria-live": "polite", hidden: true }, loteTxt, loteBt);
+  el.insertBefore(loteStatus, linha);
+  let loteAcao = null;
+  loteBt.addEventListener("click", () => { loteBt.disabled = true; const f = loteAcao; if (f) f(); });
 
   /** Decodifica a foto (EXIF corrigido), reduz o lado maior para 1600 px e recodifica em JPEG 0,82 (cai para 0,72 e 0,62 se passar do alvo).
       Devolve {arquivo, original, otimizada}; lança "foto_ilegivel" quando o navegador não decodifica (ex.: HEIC fora do Safari). */
@@ -1085,18 +1323,26 @@ export function criarComposer(A) {
     const escolhidas = lista.slice(0, MAX_FOTOS);
     if (lista.length > MAX_FOTOS) ui.toast(`Até ${MAX_FOTOS} fotos por vez: ${lista.length - MAX_FOTOS} ficaram de fora. Envie as outras em seguida.`, { tipo: "info", ms: 8000 });
     const prontas = [];
-    otimStatus.hidden = false;
+    const recusadas = [];   // plano 2000d · DC-130: as recusadas viram UM aviso no fim, não um por foto
+    const prep = { cancelado: false };
+    // plano 2000d · DC-129: «Preparando 3 de 10 fotos…» com Cancelar, em vez de «Otimizando a foto…» parado
+    mostrarLote(`Preparando 1 de ${escolhidas.length} fotos…`, "Cancelar", () => { prep.cancelado = true; });
     try {
-      for (const f of escolhidas) {
+      for (let i = 0; i < escolhidas.length; i++) {
+        if (prep.cancelado) break;
+        const f = escolhidas[i];
+        mostrarLote(`Preparando ${i + 1} de ${escolhidas.length} fotos…`);
         let otim = null;
         try { otim = await otimizarFoto(f); }
-        catch { if (/^image\/hei[cf]$/.test(L.mimeDe(f))) { ui.toast(`«${f.name}» é HEIC, que este navegador não abre: ficou de fora.`, { tipo: "erro" }); continue; } }
+        catch { if (/^image\/hei[cf]$/.test(L.mimeDe(f))) { recusadas.push(`${f.name} (HEIC, que este navegador não abre)`); continue; } }
         const arq = otim ? otim.arquivo : f;
         const v = L.validarArquivo(arq, { provedor: provedorCanal() });
-        if (!v.ok) { ui.toast(`«${f.name}» ficou de fora: ${v.erro === "midia_grande" ? `${L.tamanhoLegivel(arq.size)} passa do limite de 5 MB para fotos` : v.erro === "midia_vazia" ? "o arquivo está vazio (0 byte)" : "tipo não aceito pelo WhatsApp"}.`, { tipo: "erro" }); continue; }
+        if (!v.ok) { recusadas.push(`${f.name} (${v.erro === "midia_grande" ? `${L.tamanhoLegivel(arq.size)}, passa de 5 MB` : v.erro === "midia_vazia" ? "vazio" : "tipo não aceito"})`); continue; }
         prontas.push({ arq, v, nome: f.name, original: f });
       }
-    } finally { otimStatus.hidden = true; }
+    } finally { esconderLote(); }
+    if (prep.cancelado) { ui.anunciar("Preparação das fotos cancelada. Nada foi enviado."); return; }
+    if (recusadas.length) ui.toast(L.resumoFotosRecusadas(recusadas), { tipo: "erro", ms: 10000 });
     if (!mesmaConversa(idInicio)) { ui.toast("Você trocou de conversa enquanto as fotos eram preparadas: nada foi enviado. Anexe de novo na conversa certa.", { tipo: "info", ms: 8000 }); return; }
     if (!prontas.length) return;
     // plano 1000b · CB-039: sobrou uma só (as outras ficaram de fora) — o fluxo de foto única, com legenda, em vez de «Enviar 1 fotos»
@@ -1163,12 +1409,28 @@ export function criarComposer(A) {
         acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: `Enviar ${prontas.length}`, tipo: "primario", valor: true }] });
     } finally { for (const u of urls) { try { URL.revokeObjectURL(u); } catch { /* ok */ } } }
     if (!ok) return;
-    for (const p of prontas.filter(x => !x.tirada)) {
-      if (!mesmaConversa(idInicio)) { ui.toast("A conversa aberta mudou no meio do envio: as fotos que faltavam não foram enviadas.", { tipo: "info", ms: 8000 }); return; }
-      if (!aceitaAnexo()) { avisarAnexoIndisponivel(); return; }
-      await A.acoes.enviar({ tipo: "midia", conversa: idInicio, arquivo: p.arq, validacao: p.v, legenda: String(p.leg.value || "").trim(), client_ref: L.novoClientRef() });
-    }
+    // plano 2000d · DC-093: o destino vai explícito (conversa: idInicio) — abrir outra conversa no meio NÃO para as fotos que faltam;
+    // só a conversa de origem fechada para envio (conferida enquanto ela é a aberta) interrompe. DC-131: «Enviando fotos: 4 de 10 · Parar»
+    const fila = prontas.filter(x => !x.tirada);
+    const envio = { parar: false };
+    const paraNome = nomeDestino();
+    try {
+      for (let i = 0; i < fila.length; i++) {
+        if (envio.parar) { ui.toast(`Envio parado: ${fila.length - i} ${fila.length - i === 1 ? "foto ficou" : "fotos ficaram"} sem enviar.`, { tipo: "info", ms: 8000 }); return; }
+        if (mesmaConversa(idInicio) && !aceitaAnexo()) { avisarAnexoIndisponivel(); return; }
+        mostrarLote(`Enviando fotos: ${i + 1} de ${fila.length}`, "Parar as que faltam", () => { envio.parar = true; });
+        const p = fila[i];
+        await A.acoes.enviar({ tipo: "midia", conversa: idInicio, arquivo: p.arq, validacao: p.v, legenda: String(p.leg.value || "").trim(), client_ref: L.novoClientRef(), segundoPlano: true, para: paraNome });
+      }
+    } finally { esconderLote(); }
   }
+  /** plano 2000d · DC-129/DC-131: faixa do lote de fotos (preparando/enviando N de M) com um botão de parar. */
+  function mostrarLote(texto, rotulo, fn) {
+    loteTxt.textContent = texto;
+    if (rotulo) { loteBt.textContent = rotulo; loteAcao = fn || null; loteBt.disabled = false; loteBt.hidden = false; }
+    loteStatus.hidden = false;
+  }
+  function esconderLote() { loteStatus.hidden = true; loteBt.hidden = true; loteAcao = null; }
 
   /* ---------------- modelos (templates aprovados) */
   // revisão 1000b · CB-132: toque duplo durante a espera da base (até 1,5 s) abria dois modais — trava até o modal fechar;
@@ -1396,6 +1658,10 @@ export function criarComposer(A) {
       iaEst !== "sem" ? { rotulo: pedindoIA ? "Sugerindo com IA…" : iaEst === "cota" ? "Sugerir com IA (cota do mês acabou)" : "Sugerir com IA", icone: "ia", fn: () => sugerir(), desabilitado: s !== "ok" || pedindoIA || iaEst === "cota" } : null,
       // CA-060: o supervisor guarda uma boa resposta como resposta rápida sem ir a Configurações
       supervisor && !modoNota ? { rotulo: "Salvar como resposta rápida", icone: "raio", fn: () => salvarComoResposta(), desabilitado: !ta.value.trim() } : null,
+      // plano 2000d · DC-124: tirar a foto direto pela câmera (só no toque)
+      !modoNota && L.aparelhoDeToque() ? { rotulo: "Câmera", icone: "clipe", fn: () => abrirCamera(), desabilitado: !aceitaAnexo() } : null,
+      // plano 2000d · DC-099: «Enviar e resolver» também no «+» do celular (sem depender do toque longo)
+      !modoNota && typeof A.acoes.resolver === "function" ? { rotulo: "Enviar e resolver", icone: "check", fn: () => enviarEResolver(), desabilitado: !ta.value.trim() || !podeTexto() } : null,
     ].filter(Boolean));
   });
 
@@ -1489,6 +1755,7 @@ export function criarComposer(A) {
   return {
     el, atualizar, definirConversa, responder, anexar, aceitaAnexo, motivoSemAnexo, abrirModelos,
     anexarVarios,   // plano 1500c · CX-055: o chat solta várias fotos arrastadas pelo mesmo fluxo da colagem
+    colegaRespondeu,   // plano 2000d · DC-108: o delta avisa quando chega resposta de outra pessoa com o campo escrito
     /** Alt+Shift+N: liga/desliga a nota interna (true/false força; sem argumento alterna). Devolve se o campo está em nota. */
     alternarNota(forcar) { if (el.hidden || !A.podeEscrever) return false; alternarNota(forcar); return modoNota; },
     get emNota() { return modoNota; },
@@ -1512,7 +1779,12 @@ export function criarComposer(A) {
       autoAltura(); ta.focus();
       ta.dispatchEvent(new Event("input", { bubbles: true }));
     },
-    desmontar() { if (gravacao) descartarGravacao("você saiu de Conversas"); desligarRascunho(); },
+    desmontar() {
+      if (gravacao) descartarGravacao("você saiu de Conversas"); desligarRascunho();
+      try { globalThis.removeEventListener && globalThis.removeEventListener("online", aoVoltarInternet); } catch { /* ok */ }   // plano 2000d · DC-091
+    },
+    /** plano 2000d · DC-091: há áudio gravado esperando para sair (a central avisa antes de trocar de tela). */
+    get audioGuardado() { return !!audioGuardado; },
     /** CA-031: há gravação de áudio em andamento (a central pergunta antes de trocar de tela). */
     get gravando() { return !!gravacao; },
     focar() { if (!ta.disabled) ta.focus(); },

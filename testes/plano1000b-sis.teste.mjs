@@ -479,6 +479,8 @@ test("UB-139 · menu suspenso: a 1ª letra vai ao item (e repete para o próximo
   const pop = doc.querySelector(".menu-pop"); const itens = pop.querySelectorAll(".menu-item");
   itens[0].focus();
   ev(pop, "keydown", { key: "e" }); assert.equal(doc.activeElement, itens[2]);
+  // plano 2000d: SX-095 — letras em menos de 0,7 s formam um prefixo («ed» → Editar); separadas, cada uma é a 1ª letra
+  await new Promise(r => setTimeout(r, 750));
   ev(pop, "keydown", { key: "d" }); assert.equal(doc.activeElement, itens[1]);
   if (m && m.fechar) m.fechar();
 });

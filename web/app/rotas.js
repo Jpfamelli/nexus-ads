@@ -194,7 +194,8 @@ const PALAVRAS_GENERICAS_EMPRESA = new Set(["clinica", "clínica", "oficina", "l
 export function nomeCurtoEmpresa(nome) {
   const ps = String(nome || "").trim().split(/\s+/).filter(Boolean);
   if (!ps.length) return "";
-  const p = ps.find(x => !PALAVRAS_GENERICAS_EMPRESA.has(x.toLowerCase())) || ps[0];
+  // plano 2000d · SX-083: «de/da/do/e/&» não viram o nome curto («Oficina do João» → «João», não «do»)
+  const p = ps.find(x => !PALAVRAS_GENERICAS_EMPRESA.has(x.toLowerCase()) && !/^(d[aeo]s?|e|&|-|em|na|no)$/i.test(x)) || ps[0];
   return p.length > 12 ? `${p.slice(0, 11)}…` : p;
 }
 export function esqueletoDaRota(modulo, partes = []) {
@@ -288,6 +289,8 @@ export function rotear(hash) {
   const i = s.indexOf("?");
   if (i >= 0) { q = s.slice(i + 1); s = s.slice(0, i); }
   const segs = s.split("/").filter(Boolean).map(dec);
+  // plano 2000d · SX-051: «#/CRM» ou «#/crm » (digitado ou colado com espaço) acha a rota — os módulos são sempre em minúsculas
+  if (segs[0]) segs[0] = segs[0].trim().toLowerCase();
   const query = {};
   for (const par of q.split("&")) {
     if (!par) continue;
@@ -372,13 +375,16 @@ export function textoPilulaTeste(dias, dataCurta) {
   const d = Number(dias);
   if (d <= 0) return { curto: "Teste: termina hoje", longo: "O teste grátis termina hoje." };
   if (d <= 7) return { curto: `Teste: ${d} dia${d === 1 ? "" : "s"}`, longo: `O teste grátis termina em ${d} dia${d === 1 ? "" : "s"}${dataCurta ? `, em ${dataCurta}` : ""}.` };
-  return { curto: `Teste até ${dataCurta || ""}`.trim(), longo: `Teste grátis até ${dataCurta || ""}.` };
+  // plano 2000d · SX-049: sem a data, nada de «Teste até» pela metade
+  if (!dataCurta) return { curto: "Em teste", longo: "Empresa em período de teste." };
+  return { curto: `Teste até ${dataCurta}`, longo: `Teste grátis até ${dataCurta}.` };
 }
 
 /** plano 1500c · UCC-031: a sessão vence em menos de `margemMs` (padrão 10 min)? `expiraEm` é o que o servidor mandar (ISO ou ms); sem ele, false. */
 export function sessaoPertoDeVencer(expiraEm, agoraMs = Date.now(), margemMs = 10 * 60000) {
-  const t = typeof expiraEm === "number" ? expiraEm : Date.parse(String(expiraEm || ""));
+  let t = typeof expiraEm === "number" ? expiraEm : /^\d{9,13}$/.test(String(expiraEm ?? "").trim()) ? Number(expiraEm) : Date.parse(String(expiraEm || ""));
   if (!Number.isFinite(t)) return false;
+  if (t > 0 && t < 1e11) t *= 1000;   // plano 2000d · SX-050: o servidor pode mandar em segundos (época Unix) — antes caía em 1970 e nunca avisava
   return t > agoraMs && t - agoraMs <= margemMs;
 }
 
@@ -416,10 +422,18 @@ export function deveAvisarFimTeste({ cli, dias, papel, visto = false } = {}) {
 /** plano 2000d · DU-233: o tom muda com a proximidade — lembrança (7), aviso (3), urgência (1 e 0). Sempre com «Ver planos». */
 export function avisoFimTeste(dias) {
   const d = Number(dias);
+  // plano 2000d · SX-048: sem o número de dias, um aviso sem conta («faltam NaN dias» nunca)
+  if (dias === null || dias === undefined || dias === "" || !Number.isFinite(d)) return { tom: "aviso", titulo: "Seu teste está acabando", texto: "O teste grátis termina em breve. Veja os planos para continuar sem interrupção." };
   if (d <= 0) return { tom: "urgente", titulo: "Seu teste acaba hoje", texto: "Hoje é o último dia do teste grátis. Escolha um plano para não parar o atendimento amanhã." };
   if (d === 1) return { tom: "urgente", titulo: "Seu teste acaba amanhã", texto: "Falta 1 dia para o teste grátis terminar." };
   if (d <= 3) return { tom: "aviso", titulo: `Seu teste acaba em ${d} dias`, texto: `Faltam ${d} dias para o teste grátis terminar.` };
   return { tom: "lembrete", titulo: `Metade do teste: faltam ${d} dias`, texto: `Você ainda tem ${d} dias de teste grátis. Um bom momento para conectar o que falta e ver os planos.` };
+}
+/** plano 2000d · SX-055 (DU-096): {texto} do tempoEconomizado (auto-logica.js) → a frase do aviso de fim do teste; sem dado, "". */
+export function fraseTempoPoupado(te) {
+  const t = te && typeof te.texto === "string" ? te.texto.trim() : "";
+  if (!t || !(Number(te.minutos) >= 30)) return "";   // menos de meia hora não vale o destaque
+  return `Nos últimos 30 dias, as automações pouparam ≈ ${t} de trabalho da equipe.`;
 }
 /** UC-006: o que acontece quando o teste acaba — o que para e (com marca.retencao_dias) por quanto tempo os dados ficam guardados. */
 export function textoTesteVencido({ equipe = false, retencaoDias = null } = {}) {

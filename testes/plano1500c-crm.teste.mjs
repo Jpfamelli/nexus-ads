@@ -1248,7 +1248,8 @@ test("RC-176/170/178/263 · importação: pausa sem laço de 200 ms, título da 
   const src = ler("crm-importar.js");
   assert.doesNotMatch(src, /await esperar\(200\)/, "RC-176: antes sondava a cada 200 ms");
   assert.match(src, /await esperarRetomar\(\)/);
-  assert.match(src, /document\.title = S\.erroFatal \? "! Importação interrompida" : "✓ Importação concluída"/, "RC-170");
+  // plano 2000d: PX-043 — no meio vem «‖ Importação parada» (Parar aqui); interrompida e concluída continuam
+  assert.match(src, /document\.title = S\.erroFatal \? "! Importação interrompida" : S\.parado && S\.feitas < \(S\.dados \? S\.dados\.linhas\.length : 0\) \? "‖ Importação parada" : "✓ Importação concluída"/, "RC-170");
   assert.match(src, /Não entraram \(\$\{ui\.num\(s\.erros\.length\)\}\)/, "RC-178");
   assert.match(src, /const cf = conferirMemo\(/, "RC-263");
 });
@@ -2153,7 +2154,8 @@ test("RX-076/077/078/079 · e-mail em minúsculas, WhatsApp direto sem Conversas
   assert.equal(L.normalizarSite("HTTPS://WWW.Exemplo.com.br/Promo"), "https://www.exemplo.com.br/Promo", "RX-079");
   assert.equal(L.normalizarSite("WWW.Empresa.COM"), "https://www.empresa.com");
   const listas = ler("crm-listas.js");
-  assert.ok(listas.includes("ler: x => x.value.trim().toLowerCase() || null, salvar: v => salvar({ email: v })") && listas.includes("if (dados.email) dados.email = String(dados.email).trim().toLowerCase();"), "RX-077");
+  // plano 2000d: PX-098 — a ficha lê pelo L.emailLimpo (minúsculas E sem espaço em volta do @); o fallback continua minúsculo
+  assert.ok(listas.includes("ler: x => (L.emailLimpo ? L.emailLimpo(x.value) : x.value.trim().toLowerCase()) || null /* plano 2000d · PX-098 */, salvar: v => salvar({ email: v })") && listas.includes("if (dados.email) dados.email = String(dados.email).trim().toLowerCase();"), "RX-077");
   const css = ler("crm.css");
   assert.match(css, /\.tf-desc \{ overflow-wrap: anywhere; \}/, "RX-076");
   const D = domDeMentira();

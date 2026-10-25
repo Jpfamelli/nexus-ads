@@ -336,8 +336,8 @@
             <article class="card card-funil" data-tour="funil" data-cena>
               <header class="card-h">
                 <div>
-                  <h2>Funil do paciente</h2>
-                  <p class="sub">Do anúncio até a cadeira do consultório.</p>
+                  <h2 id="vx-funil-t">Funil do paciente</h2>
+                  <p class="sub" id="vx-funil-s">Do anúncio até a cadeira do consultório.</p>
                 </div>
               </header>
               <div class="funil" id="funil"></div>
@@ -397,7 +397,7 @@
             <header class="card-h">
               <div>
                 <h2>Criativos</h2>
-                <p class="sub">Frequência acima de 3 = as mesmas pessoas vendo o mesmo anúncio. Hora de trocar.</p>
+                <p class="sub" id="cri-sub">Frequência acima de 3 = as mesmas pessoas vendo o mesmo anúncio. Hora de trocar.</p>
               </div>
               <!-- plano 2000d · KX-087: os criativos em planilha também (o que a tabela mostra: período, plataforma e ordem) -->
               <button class="pill pill-ghost pill-sm" id="btn-csv-cri" type="button">Baixar planilha (CSV)</button>
@@ -419,7 +419,7 @@
               <label class="busca">
                 <span class="sr-only" id="k-busca-l">Buscar paciente por nome, telefone ou tratamento</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
-                <input type="search" id="k-busca" placeholder="Buscar paciente" autocomplete="off">
+                <input type="search" id="k-busca" placeholder="Buscar paciente" autocomplete="off" enterkeyhint="search"><!-- plano 2000d · KX-095: tecla «Buscar» no teclado do celular -->
               </label>
               <button class="pill pill-ink" id="btn-novo-lead" type="button" aria-haspopup="dialog">+ Paciente</button>
             </div>
@@ -432,8 +432,8 @@
         <article class="card" data-cena>
           <header class="card-h">
             <div>
-              <h2>Anúncio × consultório</h2>
-              <p class="sub">A plataforma conta conversas. O consultório conta pacientes. As duas colunas juntas mostram o que dá resultado.</p>
+              <h2 id="vx-origem-t">Anúncio × consultório</h2>
+              <p class="sub" id="vx-origem-s">A plataforma conta conversas. O consultório conta pacientes. As duas colunas juntas mostram o que dá resultado.</p>
             </div>
           </header>
           <div class="tbl-wrap" id="tbl-origem"></div>
@@ -441,7 +441,7 @@
         <article class="card card-donut" data-cena>
           <header class="card-h">
             <div>
-              <h2>Tratamentos fechados</h2>
+              <h2 id="vx-donut-t">Tratamentos fechados</h2>
               <p class="sub" id="donut-sub">Pacientes dos anúncios no período.</p>
             </div>
           </header>
@@ -561,7 +561,7 @@
           <article class="phone-col" data-tour="relatorio" data-cena>
             <header class="phone-head">
               <h2>Resumo do mês</h2>
-              <p class="sub">Todo dia 1º, no WhatsApp da clínica — sem tecniquês.</p>
+              <p class="sub" id="vx-rel-s">Todo dia 1º, no WhatsApp da clínica — sem tecniquês.</p>
               <div class="phone-tools">
                 <label class="sel"><span class="sr-only">Mês do resumo</span><select id="sel-mes"></select></label>
                 <button class="pill pill-ghost" type="button" data-copiar="mensal">Copiar texto</button>
@@ -602,7 +602,7 @@
             <header class="card-h">
               <div>
                 <h2 id="aj-cliente-h">Cliente</h2>
-                <p class="sub">Metas, valor de cada tratamento e quem recebe o WhatsApp.</p>
+                <p class="sub" id="vx-aj-s">Metas, valor de cada tratamento e quem recebe o WhatsApp.</p>
               </div>
               <button class="pill pill-ghost" id="btn-novo-cliente" type="button">+ Novo cliente</button>
             </header>
@@ -613,8 +613,8 @@
           <article class="card card-marca" id="aj-marca-card">
             <header class="card-h">
               <div>
-                <h2>Marca da clínica</h2>
-                <p class="sub">Logo e cor da clínica nos objetos do painel: selo do topo, celular do resumo, apresentação e folha do mês. A Nexus continua assinando.</p>
+                <h2 id="vx-marca-t">Marca da clínica</h2>
+                <p class="sub" id="vx-marca-s">Logo e cor da clínica nos objetos do painel: selo do topo, celular do resumo, apresentação e folha do mês. A Nexus continua assinando.</p>
               </div>
             </header>
             <form class="aj-form" id="form-marca" novalidate></form>
@@ -748,25 +748,26 @@
           </label>
         </div>
         <div class="gv-box" id="lf-box-valor" hidden>
-          <label class="campo"><span>Valor do tratamento fechado (R$)</span>
-            <input type="number" id="lf-valor" min="0" step="10" inputmode="decimal" aria-describedby="lf-valor-dica">
+          <label class="campo"><span id="lf-valor-l">Valor do tratamento fechado (R$)</span>
+            <!-- plano 2000d · KX-072: texto com teclado numérico — no type=number «1.200,50» chegava vazio e o valor sumia calado -->
+            <input type="text" id="lf-valor" inputmode="decimal" autocomplete="off" spellcheck="false" aria-describedby="lf-valor-dica">
             <small id="lf-valor-dica"></small>
           </label>
         </div>
 
         <div class="form-2">
           <label class="campo"><span>Nome</span>
-            <input type="text" id="lf-nome" autocomplete="off">
+            <input type="text" id="lf-nome" autocomplete="off" autocapitalize="words"><!-- plano 2000d · KX-094: nome com maiúscula no teclado do celular -->
           </label>
           <label class="campo"><span>Telefone (WhatsApp)</span>
             <input type="tel" id="lf-tel" autocomplete="off" inputmode="tel">
           </label>
         </div>
-        <label class="campo"><span>Tratamento de interesse</span>
+        <label class="campo"><span id="lf-servico-l">Tratamento de interesse</span>
           <select id="lf-servico"></select>
         </label>
         <div id="lf-box-origem">
-          <label class="campo"><span>Como chegou até a clínica</span>
+          <label class="campo"><span id="lf-origem-l">Como chegou até a clínica</span>
             <select id="lf-origem"></select>
           </label>
         </div>

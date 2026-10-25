@@ -33,10 +33,11 @@
      contraste da marca, estado da integração, simulador, linguagem leiga.
    ============================================================ */
 // plano 1500c · AC-225: DIAS_MIN_PROJECAO (o «cedo para projetar» do Órbita e do WhatsApp) vem do núcleo
+// plano 2000d · KX-036: chaveServico — a mesma chave de serviço do núcleo (ticketDe, ticketRepetido)
 import {
   datasetDeLinhas, montar, hojeSP, meioDia, isoDe, fin, brl, brl0, int, pc, dec, esc, waHtml, fmtN,
   razao, variacao, plural, pluralDec, nomePlat, CFG_PADRAO, cfgCom, MESES, MES3, SEMANA,
-  DIAS_MIN_PROJECAO, chaveServico,   // plano 2000d · KX-036: a mesma chave de serviço do núcleo
+  DIAS_MIN_PROJECAO, chaveServico,
 } from "./nucleo.js";
 import { gerarDemo } from "./demo.js";
 import * as api from "./dados.js";
@@ -675,10 +676,11 @@ function ticketRepetido(linhas = []) {
 }
 /** KX-053: contas aguardando aprovação primeiro; depois a mais nova pelo INSTANTE (o texto «…-03:00» × «…Z» ordenava errado). */
 const ordenarContas = (l = []) => l.slice().sort((a, b) => (!!a.aprovado - !!b.aprovado) || (instante(b && b.criado_em) - instante(a && a.criado_em)));
+/** KX-084: nome do arquivo CSV com o filtro de plataforma («campanhas-clinica-x-2026-10-24-30d-meta.csv») — dois downloads (Meta e Tudo)
+    do mesmo dia não viram «(1)» no Windows sem dizer qual é qual. */
+const nomeCsv = (tipo, nome, iso, dias, plat) => `${tipo}-${slugDe(nome) || "cliente"}-${iso}-${dias}d${plat ? `-${plat}` : ""}.csv`;
 /** KX-066: últimas execuções do servidor da mais nova para a mais velha (o servidor não garante a ordem). */
 const ordenarExecucoes = (l = []) => (Array.isArray(l) ? l : []).slice().sort((a, b) => instante(b && b.inicio) - instante(a && a.inicio));
-/** KX-071: os ids de «já vistos» guardados no aparelho ficam nos 500 mais recentes (antes cresciam para sempre no localStorage). */
-const limitarVistos = (ids = [], max = 500) => { const l = [...new Set((ids || []).map(String))]; return l.length > max ? l.slice(-max) : l; };
 /** KX-076/KX-077: a palavra do atendimento por vertical — «consulta» na clínica, «visita» na oficina e na loja, «atendimento» no resto. */
 const PALAVRA_ATEND = { odonto: "consulta", oficina: "visita", loja: "visita", generico: "atendimento" };
 const palavraAtend = vertical => PALAVRA_ATEND[vertical] || PALAVRA_ATEND.odonto;
@@ -697,7 +699,7 @@ function rotulosEtapas(V, vertical = "odonto") {
 }
 /** KX-055: o tour da demonstração com as palavras da vertical (antes «pacientes», «consultório» e «a senhora» também na oficina). */
 function textosTour(V, vertical = "odonto") {
-  const p = (V && V.pessoa) || ["paciente", "pacientes"], novo = (V && V.novo) || ["paciente novo", "pacientes novos"], od = vertical === "odonto";
+  const p = (V && V.pessoa) || ["paciente", "pacientes"], novo = (V && V.novo) || [`${p[0]} novo`, `${p[1]} novos`], od = vertical === "odonto";
   return [
     `Tudo o que importa, numa frase: quantas pessoas chamaram no WhatsApp, quantas agendaram e quantas viraram ${novo[1]} — e quanto isso rendeu.`,
     `O funil mostra onde cada ${p[0]} entrou e onde parou. Cada etapa é comparada com a meta, para saber exatamente o que melhorar.`,
@@ -736,6 +738,29 @@ const rotuloBadge = n => `${+n} ${+n === 1 ? "alerta ativo" : "alertas ativos"}`
 const dadosVelhos = (carregadoEm, agora = Date.now(), limite = 36e5) => Number.isFinite(+carregadoEm) && +carregadoEm > 0 && agora - carregadoEm > limite;
 /** KX-012: «de cada 1.000 que viram, 0 tocaram» virava zero falso — abaixo de 0,05% é «menos de 1». */
 const cadaMil = (r, quem, fez) => (!Number.isFinite(r) ? "" : r >= 1 ? `de cada 100 que ${quem}, ${Math.round(r)} ${fez}` : Math.round(r * 10) < 1 ? `de cada 1.000 que ${quem}, menos de 1 ${fez}` : `de cada 1.000 que ${quem}, ${Math.round(r * 10)} ${fez}`);
+/** KX-096–KX-106: títulos e rótulos fixos do HTML que ainda falavam de clínica — pela vertical (odonto mantém o texto de sempre). */
+function textosVertical(V, vertical = "odonto", ag = "Nexus") {
+  const od = vertical === "odonto" || !V, um = od ? "paciente" : V.pessoa[0], varios = od ? "pacientes" : V.pessoa[1], serv = od ? "tratamento" : V.servico;
+  const lugar = ({ odonto: "a clínica", oficina: "a oficina", loja: "a loja" })[vertical] || "a empresa";
+  const casa = ({ odonto: "consultório", oficina: "oficina", loja: "loja" })[vertical] || "atendimento";
+  const cap = x => String(x || "").charAt(0).toUpperCase() + String(x || "").slice(1);
+  const fechados = ({ oficina: "Serviços aprovados", loja: "Produtos vendidos", generico: "Serviços fechados" })[vertical] || "Tratamentos fechados";
+  return {
+    funilT: `Funil do ${um}`,
+    funilSub: od ? "Do anúncio até a cadeira do consultório." : ({ oficina: "Do anúncio até o elevador da oficina.", loja: "Do anúncio até o caixa da loja." })[vertical] || "Do anúncio até o atendimento.",
+    origemT: `Anúncio × ${casa}`,
+    origemSub: `A plataforma conta conversas. ${od ? "O consultório" : vertical === "oficina" ? "A oficina" : vertical === "loja" ? "A loja" : "O atendimento"} conta ${varios}. As duas colunas juntas mostram o que dá resultado.`,
+    donutT: fechados,
+    relSub: `Todo dia 1º, no WhatsApp d${lugar} — sem tecniquês.`,
+    ajSub: `Metas, valor de cada ${serv} e quem recebe o WhatsApp.`,
+    marcaT: `Marca d${lugar}`,
+    marcaSub: `Logo e cor d${lugar} nos objetos do painel: selo do topo, celular do resumo, apresentação e folha do mês. A ${ag} continua assinando.`,
+    valorL: `Valor do ${serv} fechado (R$)`,
+    servicoL: `${cap(serv)} de interesse`,
+    origemL: `Como chegou até ${lugar}`,
+    fitaL: `Jornada do ${um}`,
+  };
+}
 /* ==== PURO: fim ==== */
 
 /* ============================================================
@@ -818,7 +843,7 @@ function aplicarAgencia() {
     if (ini) { ini.hidden = nexus; ini.textContent = (Array.from(ag.trim())[0] || "A").toUpperCase(); }
   });
 }
-/** Plano 2000d · KX-082/KX-086/KX-074/KX-080/KX-111: as palavras da aba de contatos pela vertical — «Clientes» na oficina e na loja (menu,
+/** Plano 2000d · KX-082 (menu, abas e título)/KX-086 (busca)/KX-080 (botão +)/KX-107 (subtítulo do quadro): as palavras da aba de contatos pela vertical — «Clientes» na oficina e na loja (menu,
     barra de abas, busca, botão de cadastro e subtítulo do quadro). */
 function aplicarVocabulario() {
   if (!M) return;
@@ -832,6 +857,14 @@ function aplicarVocabulario() {
   const ks = $("#kanban-sub");
   if (ks) ks.textContent = (S.demo ? `Situação de agora. Os nomes são fictícios — toque num cartão para ver a ficha do ${um}.` : `Situação de agora. Toque num cartão para mudar a etapa do ${um}.`) + (FINE ? " Arraste a ficha para outra coluna." : "");
   if (ABAS[S.aba]) { $("#top-h1").textContent = ABAS[S.aba][0]; $("#top-mini").textContent = ABAS[S.aba][0]; $("#top-eyebrow").textContent = ABAS[S.aba][1]; }
+  // plano 2000d · KX-096–KX-106: os títulos fixos do HTML (funil, origem, rosca, resumo, ajustes, marca e a ficha) pela vertical —
+  // e a marca diz a agência do cliente (revenda não lê «A Nexus continua assinando»)
+  const TV = textosVertical(V, M.vertical, agencia());
+  for (const [id, k] of [["vx-funil-t", "funilT"], ["vx-funil-s", "funilSub"], ["vx-origem-t", "origemT"], ["vx-origem-s", "origemSub"], ["vx-donut-t", "donutT"],
+    ["vx-rel-s", "relSub"], ["vx-aj-s", "ajSub"], ["vx-marca-t", "marcaT"], ["vx-marca-s", "marcaSub"], ["lf-valor-l", "valorL"], ["lf-servico-l", "servicoL"], ["lf-origem-l", "origemL"]]) {
+    const el = document.getElementById(id); if (el) el.textContent = TV[k];
+  }
+  const fita = $("#gv-fita"); if (fita) fita.setAttribute("aria-label", TV.fitaL);
 }
 
 // cores dos objetos no palco escuro (claras o bastante para ler sobre --surface)
@@ -1009,8 +1042,10 @@ function htmlSemAnuncios() {
   return gestor()
     ? cartaoVazio({ titulo: "Nenhum anúncio conectado ainda", texto: "Conecte o Meta e/ou o Google deste cliente em Ajustes. A primeira leitura chega em até 1 hora.",
         botoes: `<button class="pill pill-ink" type="button" data-ir="ajustes">Conectar em Ajustes</button>` })
-    : cartaoVazio({ titulo: "Os anúncios ainda não começaram", texto: "Os números aparecem aqui assim que os anúncios começarem a rodar. Enquanto isso, a aba Pacientes já funciona: dá para registrar cada paciente que chegar.",
-        botoes: `<button class="pill pill-ink" type="button" data-ir="pacientes">Ir para Pacientes</button>` });
+    // plano 2000d · KX-079: «Clientes» e «cada cliente» na oficina e na loja (o nome da aba pela vertical)
+    : (() => { const V = M ? M.VOC : { pessoa: ["paciente", "pacientes"] }, aba = capt(V.pessoa[1]);
+      return cartaoVazio({ titulo: "Os anúncios ainda não começaram", texto: `Os números aparecem aqui assim que os anúncios começarem a rodar. Enquanto isso, a aba ${esc(aba)} já funciona: dá para registrar cada ${esc(V.pessoa[0])} que chegar.`,
+        botoes: `<button class="pill pill-ink" type="button" data-ir="pacientes">Ir para ${esc(aba)}</button>` }); })();
 }
 
 /** Aviso rápido. tipo: ok · erro · nota (neutro). acao = { rotulo, fn } vira um botão (ex.: "Desfazer", 5 s). */
@@ -1117,7 +1152,8 @@ function renderGeral() {
   renderDesdeVisita();
 
   // herói — a frase que a doutora lê em 3 segundos
-  $("#hero-periodo").textContent = `Últimos ${S.dias} dias${S.plat ? " · só " + nomePlat(S.plat) : ""}`;
+  // plano 2000d · KX-085: as datas do período ao lado («Últimos 30 dias · 25/09 a 24/10») — «últimos 30» não dizia até quando
+  $("#hero-periodo").textContent = `Últimos ${S.dias} dias · ${M.ddmm(Math.max(0, de))} a ${M.ddmm(M.R)}${S.plat ? " · só " + nomePlat(S.plat) : ""}`;
   // plano 1000 (AD-194): o vocabulário é o da vertical (M.VOC) — oficina e loja não têm «avaliações» nem «pacientes»
   const V = M.VOC;
   $("#hero-frase").innerHTML =
@@ -1257,7 +1293,9 @@ function desenharChart(modo) {
   const foto = troca ? FX.fotografar(el, ".bars rect", "data-id") : null;
 
   // plano 1000b · AB-158: a linha são as conversões da plataforma (média de 7 dias), não «conversas no WhatsApp»
-  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Investimento diário por plataforma e conversões da plataforma (média de 7 dias) nos últimos ${S.dias} dias">`;
+  // plano 2000d · KX-069: o rótulo do gráfico diz os TOTAIS do período (quem usa leitor de tela ouvia só o que o gráfico é, nunca o número)
+  const totG = serie.reduce((a, d) => a + d.meta + d.google + d.outras, 0), totC = serie.reduce((a, d) => a + d.conv, 0);
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Investimento diário por plataforma e conversões da plataforma (média de 7 dias) nos últimos ${S.dias} dias: ${esc(brl0(totG))} investidos e ${esc(fmtConv(totC))} ${Math.abs(totC - 1) < 1e-9 ? "conversão" : "conversões"} no total">`;
   for (let k = 0; k <= 4; k++) {
     const yy = y(maxG * k / 4);
     s += `<line class="gl" x1="${P.l}" x2="${W - P.r}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}"/>`;
@@ -1312,6 +1350,10 @@ function renderTabelaDia() {
     <caption class="sr-only">Investimento e conversões da plataforma por dia, últimos ${int(S.dias)} dias</caption>
     <thead><tr><th scope="col">Dia</th><th scope="col">Meta</th><th scope="col">Google</th>${!temOutras ? "" : `<th scope="col">Outras</th>`}<th scope="col">Conversões</th><th scope="col">Custo por conversão</th></tr></thead>
     <tbody>${serie.map(d => `<tr><th scope="row">${esc(SEMANA[M.dataDe(d.i).getDay()])} · ${esc(M.ddmm(d.i))}</th><td>${brl(d.meta)}</td><td>${brl(d.google)}</td>${!temOutras ? "" : `<td>${brl(d.outras)}</td>`}<td>${Number.isInteger(d.conv) ? int(d.conv) : dec(d.conv, 1)}</td><td>${brl((d.meta + d.google + d.outras) / d.conv)}</td></tr>`).join("")}</tbody>
+    ${(() => {   // plano 2000d · KX-070: linha de total do período no pé da tabela (antes era preciso somar de cabeça)
+      const t = serie.reduce((a, d) => ({ meta: a.meta + d.meta, google: a.google + d.google, outras: a.outras + d.outras, conv: a.conv + d.conv }), { meta: 0, google: 0, outras: 0, conv: 0 });
+      return `<tfoot><tr><th scope="row">Total</th><td>${brl(t.meta)}</td><td>${brl(t.google)}</td>${!temOutras ? "" : `<td>${brl(t.outras)}</td>`}<td>${esc(fmtConv(t.conv))}</td><td>${brl((t.meta + t.google + t.outras) / t.conv)}</td></tr></tfoot>`;
+    })()}
   </table></div>`;
 }
 /** A caneta de luz desenha a linha de conversas quando o gráfico entra em quadro. */
@@ -1415,10 +1457,7 @@ const NOTA_FUNIL = "inclui quem entrou na etapa anterior antes do período";
 function renderFunil(t, c) {
   const leigo = !gestor();
   const FUNIL_VERT = faixasFunil(M.vertical);
-  const cadaCem = (r, quem, fez) => {
-    if (!fin(r)) return "";
-    return r >= 1 ? `de cada 100 que ${quem}, ${Math.round(r)} ${fez}` : `de cada 1.000 que ${quem}, ${Math.round(r * 10)} ${fez}`;
-  };
+  const cadaCem = cadaMil;   // plano 2000d · KX-012: abaixo de 0,05% é «menos de 1» (antes «de cada 1.000 que viram, 0 tocaram»)
   const rConv = razao(c.conversas, t.cliques);
   const E = [
     { l: rot("funil.exibido"), s: "vezes na tela", v: t.impressoes },
@@ -1644,11 +1683,14 @@ function renderCampanhas() {
   // tabela diria "ok" para o criativo que o radar acabou de acusar
   const agora = M.avaliar(M.R), sitDe = id => agora.filter(a => a.chave === `r4|${id}` || a.chave === `r3|${id}`);
   const freqLim = (M.LIM && M.LIM.freqMax > 0) ? M.LIM.freqMax : 3;
+  // plano 2000d · KX-093: o subtítulo usa o limite de frequência DO CLIENTE (cfg.radar.freqMax), não «3» fixo
+  { const cs = $("#cri-sub"); if (cs) cs.textContent = `Frequência acima de ${dec(freqLim, 1).replace(/,0$/, "")} = as mesmas pessoas vendo o mesmo anúncio. Hora de trocar.`; }
   // plano 2000d · DA-095/DA-096: ordenável pelo cabeçalho (aria-sort) e 25 por vez com «Mostrar mais» — 400 anúncios travavam o celular
   const criS = S.criSort || { key: "gasto", dir: -1 };
   const crisTodos = ordenarCriativos(Object.values(M.CRI).filter(k => k.plat && (!S.plat || k.plat === S.plat)).map(k => ({ k, t: M.consolidar(M.linhasDe(de, M.R, { cri: k.id })) }))
     .filter(x => x.t.gasto > 0), criS.key, criS.dir);
   const criMax = Math.max(CRI_PASSO, S.criMax || CRI_PASSO), cris = crisTodos.slice(0, criMax);
+  S.csvCri = crisTodos;   // plano 2000d · KX-087: o CSV leva TODOS os criativos da lista (na ordem da tabela), não só a página aberta
   const thC = (k, rotulo, dica = "") => `<th scope="col"${dica ? ` title="${esc(dica)}"` : ""}${criS.key === k ? ` aria-sort="${criS.dir < 0 ? "descending" : "ascending"}"` : ""}><button type="button" data-cri-sort="${esc(k)}">${esc(rotulo)}</button></th>`;
   const cabCri = thC("nome", "Criativo") + thC("gasto", "Investido") + thC("impressoes", gestor() ? "Impressões" : "Vezes na tela", "Impressões: vezes que o anúncio apareceu") +
     thC("ctr", "CTR") + thC("freq", "Freq.", "Frequência: quantas vezes, em média, a mesma pessoa viu o anúncio") + thC("conv", rotConvCri[0]) + thC("cpa", rotConvCri[1]);
@@ -1695,15 +1737,17 @@ function colunaDe(L) {
 function quandoLead(L, e) {
   const R = M.R, dd = i => M.ddmm(i);
   if (e === "nova") { const d = R - L.i + 1; return { txt: d <= 0 ? "chamou hoje" : d === 1 ? "chamou ontem" : `chamou há ${d} dias` }; }
+  // plano 2000d · KX-077: «visita» na oficina e na loja, «atendimento» no genérico (antes «consulta» em toda ficha)
+  const at = palavraAtend(M.vertical);
   if (e === "agendada") {
-    if (L.iConsulta == null || (!S.demo && !(L.bruto && L.bruto.data_consulta))) return { txt: "sem data da consulta", atraso: true };
+    if (L.iConsulta == null || (!S.demo && !(L.bruto && L.bruto.data_consulta))) return { txt: `sem data da ${at}`, atraso: true };
     const d = L.iConsulta - R;
-    if (d <= 0) return { txt: `consulta era em ${dd(L.iConsulta)} — atualizar`, atraso: true };
-    return { txt: d === 1 ? "consulta hoje" : d === 2 ? "consulta amanhã" : `consulta em ${dd(L.iConsulta)}` };
+    if (d <= 0) return { txt: `${at} era em ${dd(L.iConsulta)} — atualizar`, atraso: true };
+    return { txt: d === 1 ? `${at} hoje` : d === 2 ? `${at} amanhã` : `${at} em ${dd(L.iConsulta)}` };
   }
   if (e === "orcamento") return { txt: L.iConsulta != null ? `avaliou em ${dd(L.iConsulta)} · orçamento enviado` : "orçamento enviado" };
   if (e === "fechou") return { txt: L.iConsulta != null ? `fechou em ${dd(L.iConsulta)}` : "fechou" };
-  if (e === "faltou") return { txt: L.iConsulta != null ? `faltou em ${dd(L.iConsulta)}` : "faltou à consulta" };
+  if (e === "faltou") return { txt: L.iConsulta != null ? `faltou em ${dd(L.iConsulta)}` : `faltou à ${at}` };
   if (e === "nao_fechou") return { txt: "avaliou e não fechou" };
   return { txt: `chamou em ${dd(L.i)} · não agendou` };
 }
@@ -1746,12 +1790,13 @@ function renderKanban() {
   g.parou.sort((a, b) => refParou(b) - refParou(a));
   let n = 0;
   const V = M.VOC;
+  // plano 2000d · KX-089: contagens das colunas e do «Mostrar mais» com separador de milhar (int)
   $("#kanban").innerHTML = colsK().map(([k, l, cor]) => {
     const tot = g[k].length, ver = Math.min(tot, S.kVer[k] || K_MAX), resto = tot - ver;
     return `<section class="kcol" data-col="${k}" aria-label="${esc(l)}: ${tot} ${esc(tot === 1 ? V.pessoa[0] : V.pessoa[1])}">
       <header class="kcol-h"><span><i class="kd" style="background:${cor}"></i>${esc(l)}</span><b>${int(tot)}</b></header>
       ${g[k].slice(0, ver).map(L => cardLead(L, k, n++)).join("")}
-      ${resto > 0 ? `<button type="button" class="kmore" data-kmais="${k}">Mostrar mais ${int(Math.min(resto, K_PASSO))} de ${int(resto)}</button>` : ""}${"" /* plano 2000d · KX-089: contagens com separador de milhar */}
+      ${resto > 0 ? `<button type="button" class="kmore" data-kmais="${k}">Mostrar mais ${int(Math.min(resto, K_PASSO))} de ${int(resto)}</button>` : ""}
       ${!tot ? `<p class="kmore">${q ? "nenhum encontrado" : "nenhum no momento"}</p>` : ""}
     </section>`;
   }).join("");
@@ -1820,7 +1865,9 @@ const hojeDados = () => (S.dados && S.dados.hoje) || hojeSP();
 function opcoesOrigem() {
   // o balde "sem campanha identificada" não é uma campanha que se escolha: quem está nele fica travado na origem
   const camps = Object.values(M.CAMP).filter(c => c.plat && !c.semCampanha).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
-  return `<optgroup label="Sem anúncio">${ORIGENS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</optgroup>` +
+  // plano 2000d · KX-083: «Site da oficina/loja/empresa» (antes «Site da clínica» em todo negócio)
+  const siteDe = ({ oficina: "Site da oficina", loja: "Site da loja", generico: "Site da empresa" })[M.vertical];
+  return `<optgroup label="Sem anúncio">${ORIGENS.map(([v, l]) => `<option value="${v}">${esc(v === "site" && siteDe ? siteDe : l)}</option>`).join("")}</optgroup>` +
     (camps.length ? `<optgroup label="Veio de um anúncio">${camps.map(c => `<option value="camp:${esc(c.id)}">${esc(c.nome)} (${nomePlat(c.plat)})</option>`).join("")}</optgroup>` : "");
 }
 
@@ -2725,10 +2772,13 @@ function corMarcaNova(c) {
   if (document.activeElement !== $("#mk-hex")) $("#mk-hex").value = c.toUpperCase();
   previaMarca();
 }
+const LOGO_MAX_BYTES = 5 * 1048576;   // plano 2000d · KX-068
 async function logoEscolhido(input) {
   const arq = input.files && input.files[0], st = $("#mk-status");
   if (!arq) return;
   if (!/^image\/(png|jpeg|webp)$/.test(arq.type)) { avisoForm(st, "Use PNG, JPG ou WebP (SVG não entra).", true); input.value = ""; return; }
+  // plano 2000d · KX-068: foto de celular de 12 MB travava a tela ao reduzir — acima de 5 MB pede um arquivo menor antes de abrir
+  if (arq.size > LOGO_MAX_BYTES) { avisoForm(st, `Arquivo grande demais (${(arq.size / 1048576).toFixed(1).replace(".", ",")} MB): use um logo de até 5 MB.`, true); input.value = ""; return; }
   const m = await modulo("marca");
   if (!m) return avisoForm(st, "Não deu para ler a imagem agora. Tente de novo.", true);
   avisoForm(st, "Preparando o logo…", false);
@@ -3275,17 +3325,20 @@ function simuladorHtml(curto = false) {
   const inv = SIM.inv ?? Math.min(6000, Math.max(800, Math.round(tx.mensal / 100) * 100));
   const tk = SIM.tk ?? Math.max(300, Math.round(tx.ticket / 10) * 10);
   const res = (k, rot) => `<div class="sim-res-i"><dt>${rot}</dt><dd>entre <b data-sim="${k}0">—</b> e <b data-sim="${k}1">—</b></dd></div>`;
-  return `${curto ? "" : `<header class="card-h"><div><p class="eyebrow">só na demonstração</p><h2>E na sua clínica?</h2>
-      <p class="sub">Mexa no investimento e no valor médio do tratamento. A conta usa as taxas deste período da demonstração.</p></div></header>`}
+  // plano 2000d · KX-081: o simulador da demo de oficina/loja fala de «serviço/produto», «clientes novos» e «sua oficina/loja»
+  const V = M ? M.VOC : { servico: "tratamento", novo: ["paciente", "pacientes"].map((x, i) => `${x} novo${i ? "s" : ""}`), receitaEm: "em tratamentos" };
+  const sua = ({ oficina: "na sua oficina", loja: "na sua loja", generico: "no seu negócio" })[M && M.vertical] || "na sua clínica";
+  return `${curto ? "" : `<header class="card-h"><div><p class="eyebrow">só na demonstração</p><h2>E ${esc(sua)}?</h2>
+      <p class="sub">Mexa no investimento e no valor médio do ${esc(V.servico)}. A conta usa as taxas deste período da demonstração.</p></div></header>`}
     <div class="sim">
       <div class="sim-ctl">
         <label class="sim-r"><span class="sim-l">Investimento em anúncios por mês <output class="sim-inv-o"></output></span>
           <input class="sim-inv" type="range" min="800" max="6000" step="100" value="${inv}"></label>
-        <label class="sim-r"><span class="sim-l">Valor médio do tratamento <output class="sim-tk-o"></output></span>
+        <label class="sim-r"><span class="sim-l">Valor médio do ${esc(V.servico)} <output class="sim-tk-o"></output></span>
           <input class="sim-tk" type="range" min="300" max="6000" step="10" value="${tk}"></label>
       </div>
-      <dl class="sim-res">${res("c", "conversas no WhatsApp por mês")}${res("p", "pacientes novos por mês")}${res("r", "em tratamentos por mês")}</dl>
-      <p class="sim-nota">Estimativa com as taxas desta demonstração. Não é promessa: cada clínica tem o seu ritmo.</p>
+      <dl class="sim-res">${res("c", "conversas no WhatsApp por mês")}${res("p", `${esc(V.novo[1])} por mês`)}${res("r", `${esc(V.receitaEm)} por mês`)}</dl>
+      <p class="sim-nota">Estimativa com as taxas desta demonstração. Não é promessa: cada ${esc(M && M.vertical !== "odonto" ? "negócio" : "clínica")} tem o seu ritmo.</p>
     </div>`;
 }
 function ligarSimulador(box) {
@@ -3371,6 +3424,8 @@ async function salvarMarco(remover, texto) {
   const i = S.marcoFixo;
   if (i == null || !gestor()) return;
   const d = isoI(i), t = remover ? "" : ($("#marco-txt").value || "").trim().slice(0, 60);
+  // plano 2000d · KX-011: «Salvar marco» com o campo vazio APAGAVA os marcos do dia (t vazio = remover todos) — agora pede o texto
+  if (!remover && !t) { const c = $("#marco-txt"); if (c) c.focus(); return toast("Escreva o que mudou nesse dia (ex.: Troca de criativo).", "nota"); }
   try {
     // plano 1000b · AB-162: relê os marcos do servidor e mescla por data antes de gravar — o marco que outro gestor salvou
     // depois do carregamento não some (se a releitura falhar, vale a lista da tela, como antes)
@@ -3402,9 +3457,11 @@ function renderDesdeVisita() {
   const ja = new Set(vistos.map(String)), novos = fechados.filter(L => !ja.has(String(L.id)));
   if (!novos.length) { box.hidden = true; return; }
   const total = novos.reduce((s, L) => s + M.valorLead(L), 0);
+  // plano 2000d · KX-071: o total diz quando tem valor ESTIMADO pela tabela (antes parecia tudo confirmado) — a mesma honestidade do herói
+  const totalEst = novos.some(L => M.valorDe(L).estimado) ? (novos.every(L => M.valorDe(L).estimado || M.valorDe(L).semValor) ? " (estimativa)" : " (parte estimada)") : "";
   // plano 1000b · AB-160: «cliente novo» para oficina e loja (M.VOC.novo), não «paciente novo» fixo
   box.innerHTML = `<div class="desde-q"><p class="eyebrow">Desde a sua última visita</p>
-      <h2 id="desde-h"><b>${esc(plural(novos.length, M.VOC.novo[0], M.VOC.novo[1]))}</b>${total > 0 ? ` · ${brl0(total)}` : ""}</h2>
+      <h2 id="desde-h"><b>${esc(plural(novos.length, M.VOC.novo[0], M.VOC.novo[1]))}</b>${total > 0 ? ` · ${brl0(total)}${esc(totalEst)}` : ""}</h2>
       <ul class="desde-l">${novos.slice(0, 5).map(L => `<li><b>${esc(nomeTela(L.nome))}</b><span>${esc(L.servico)} · ${M.valorDe(L).semValor ? "sem valor" : brl0(M.valorLead(L))}</span></li>`).join("")}${novos.length > 5 ? `<li><span>e mais ${novos.length - 5}</span></li>` : ""}</ul></div>
     <div class="acoes"><button class="pill pill-bronze" type="button" data-desde="ver">Ver no quadro</button><button class="pill pill-ghost" type="button" data-desde="ok">Ok</button></div>`;
   box.setAttribute("aria-labelledby", "desde-h");
@@ -4155,7 +4212,21 @@ function ligarEventos() {
     const csv = csvDe([cab, ...rows.map(r => [r.c.nome, nomePlat(r.c.plat), r.t.gasto, r.t.conversoes, r.t.cpa, r.t.ctr, r.k.agendadas, r.k.fecharam, r.k.receita, r.roas])]);
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    a.download = `campanhas-${slugDe(nomeCliente()) || "cliente"}-${isoI(M.R)}-${S.dias}d.csv`;
+    a.download = nomeCsv("campanhas", nomeCliente(), isoI(M.R), S.dias, S.plat);   // plano 2000d · KX-084: o filtro de plataforma no nome do arquivo
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  });
+
+  // plano 2000d · KX-087: «Baixar planilha» dos criativos (investido, vezes na tela, CTR, frequência, conversões, custo e a campanha)
+  const btnCsvCri = $("#btn-csv-cri");
+  if (btnCsvCri) btnCsvCri.addEventListener("click", () => {
+    const rows = S.csvCri || [];
+    if (!M || !rows.length) return toast("Nenhum criativo com investimento no período para baixar.", "nota");
+    const cab = ["Criativo", "Campanha", "Plataforma", "Investido (R$)", "Impressões", "CTR (%)", "Frequência", "Conversas/conversões", "Custo por contato (R$)"];
+    const csv = csvDe([cab, ...rows.map(({ k, t }) => [k.nome, (M.CAMP[k.camp] || {}).nome || "", nomePlat(k.plat), t.gasto, t.impressoes, t.ctr, t.freq, t.conversoes, t.cpa])]);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    a.download = nomeCsv("criativos", nomeCliente(), isoI(M.R), S.dias, S.plat);
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   });

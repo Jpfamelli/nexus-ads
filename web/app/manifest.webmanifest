@@ -42,15 +42,39 @@
   "shortcuts": [
     {
       "name": "Conversas",
-      "url": "/app/#/conversas"
+      "short_name": "Conversas",
+      "url": "/app/#/conversas",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     },
     {
       "name": "CRM",
-      "url": "/app/#/crm"
+      "short_name": "CRM",
+      "url": "/app/#/crm",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     },
     {
       "name": "Agenda",
-      "url": "/app/#/agenda"
+      "short_name": "Agenda",
+      "url": "/app/#/agenda",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     }
   ],
   "share_target": {
@@ -61,5 +85,11 @@
       "text": "texto",
       "url": "link"
     }
+  },
+  "launch_handler": {
+    "client_mode": [
+      "navigate-existing",
+      "auto"
+    ]
   }
 }

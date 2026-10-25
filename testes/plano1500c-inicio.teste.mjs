@@ -820,7 +820,7 @@ test("RC-219 + RC-325 + RC-338 + RC-339 (DOM): equipe (admin), desde que começo
     const eq = t.raiz.querySelector("details.ini-mais .ini-equipe");
     assert.ok(eq, "equipe recolhida em «Mais detalhes»");
     // plano 2000d: DR-355 — quem não é o 1º vê quanto falta para chegar lá
-    assert.deepEqual(eq.querySelectorAll("tbody th").map(x => texto(x)), ["1º Bia", "Ana · a R$ 6.000 do 1º lugar"]);
+    assert.deepEqual(eq.querySelectorAll("tbody th").map(x => texto(x)), ["1º lugar: Bia", "Ana · a R$ 6.000 do 1º lugar"]);     // plano 2000d: IY-053 — «lugar:» só para o leitor de tela
     assert.match(texto(t.raiz.querySelector(".ini-desde")), /abril de 2026 × agora/);
     assert.match(texto(t.raiz.querySelector(".ini-aniv")), /Faz aniversário hoje.*Lia Prado/);
     // plano 2000d: DR-256 — a conversa abre com os parabéns escritos
@@ -903,8 +903,8 @@ test("RC-278: funilMes com etapa do meio zerada — [10, 0, 3, 1]: marcadas sem 
 test("RC-231: vários números caídos dizem desde quando caiu o primeiro", () => {
   const agora = Date.parse(SP(HOJE, "10", "40"));
   const l = [{ nome: "A", desde: SP(HOJE, "10", "30") }, { nome: "B", desde: SP(HOJE, "10", "00") }];
-  assert.equal(I.textoNumeroCaido(l, agora), "2 números de WhatsApp desconectados (o primeiro há 40 min): A, B.");
-  assert.equal(I.textoNumeroCaido([{ nome: "A" }, { nome: "B" }], agora), "2 números de WhatsApp desconectados: A, B.", "sem data, como antes");
+  assert.equal(I.textoNumeroCaido(l, agora), "2 números de WhatsApp desconectados (o primeiro há 40 min): A e B.");     // plano 2000d: IY-026
+  assert.equal(I.textoNumeroCaido([{ nome: "A" }, { nome: "B" }], agora), "2 números de WhatsApp desconectados: A e B.", "sem data, como antes");     // plano 2000d: IY-026
 });
 
 test("RC-232: sugestaoMetaVendas — o mês passado inteiro e +10% arredondado a R$ 100", () => {
@@ -982,7 +982,7 @@ test("RC-247: eixo de taxas em fração sem dízima — 0,9 vira 0 · 0,25 · 0,
 
 test("RC-248 + RC-251: vocab — gênero de palavras comuns («Nova tarefa», «Nenhuma etiqueta») e CHAVES com a palavra da agenda", () => {
   const v = V.vocab("odonto");
-  assert.equal(v.novo("tarefa"), "Nova tarefa"); assert.equal(v.novo("etiqueta"), "Nova etiqueta"); assert.equal(v.novo("empresa"), "Nova empresa");
+  assert.equal(v.novo("tarefa"), "Nova tarefa"); assert.equal(v.novo("etiqueta"), "Nova etiqueta"); assert.equal(v.novo("empresa"), "Nova empresa parceira");     // plano 2000d: DR-172 — a empresa na clínica é «empresa parceira»
   assert.equal(v.nenhum("tarefas"), "Nenhuma tarefa"); assert.equal(v.nenhum("etiqueta"), "Nenhuma etiqueta");
   assert.equal(v.novo("funil"), "Novo funil"); assert.equal(v.art("nota"), "a");
   assert.equal(V.vocab("oficina").novo("negocio"), "Novo orçamento", "a vertical vence a tabela");

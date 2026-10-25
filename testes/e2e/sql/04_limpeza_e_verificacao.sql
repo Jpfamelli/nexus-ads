@@ -18,6 +18,7 @@ delete from public.nx_metricas_dia m using public.nx_clientes c
 delete from public.nx_alertas a using public.nx_clientes c
  where c.slug = 'teste-e2e' and a.cliente_id = c.id and a.criado_em >= timestamptz '2026-09-30 20:10:00+00';
 -- trilha de auditoria gerada pelo canal de teste (configurado/conectado/excluído) — só as linhas deste teste
+select set_config('nx.faxina', 'on', false);   -- plano 2000d · DS-153: a auditoria só aceita delete na retenção explícita
 delete from public.nx_auditoria a using public.nx_clientes c
  where c.slug = 'teste-e2e' and a.cliente_id = c.id and a.criado_em >= timestamptz '2026-09-30 20:10:00+00'
    and a.acao in ('codewords_conectado', 'codewords_configurado', 'canal_excluido')

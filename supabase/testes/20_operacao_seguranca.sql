@@ -164,7 +164,10 @@ begin
   perform pg_temp.ok(e like 'muitas_tentativas|%' and split_part(e, '|', 2)::int between 1 and 60, '6º cadastro na hora → muitas_tentativas com minutos: ' || e);
   perform set_config('request.headers', '', true);
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_criar_conta(%L,%L,%L)', 'cad-20-7-' || sfx || '@teste.local', 'senha-longa-20', 'Cadastro 20')) = 'ok', 'sem IP (SQL/MCP) o cadastro não tem limite por IP');
-  perform pg_temp.ok(pg_temp.erro(format('select public.nx_criar_conta(%L,%L,%L)', 'cad-20-1-' || sfx || '@teste.local', 'senha-longa-20', 'Cadastro 20')) = 'email_em_uso', 'e-mail repetido continua email_em_uso');
+  -- plano 2000d · DS-128: e-mail repetido não é mais revelado — a resposta é a de um cadastro pendente e nada é criado
+  j := public.nx_criar_conta('cad-20-1-' || sfx || '@teste.local', 'senha-longa-20', 'Cadastro 20');
+  perform pg_temp.ok((j ->> 'ok')::boolean and not (j ->> 'aprovado')::boolean
+                     and (select count(*) from public.nx_contas where email = 'cad-20-1-' || sfx || '@teste.local') = 1, 'e-mail repetido: mesma resposta de cadastro novo, sem conta nova');
 
   -- ---------------------------------------------------------- S-B9 [H7] + S-B10: sessão, super, migracao, ativo, cliente_pausado
   j := public.nx_sessao(t_ren);

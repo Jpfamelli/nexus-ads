@@ -130,6 +130,11 @@ export const MENSAGENS = {
   // erros de servidor/rede (M15): o texto técnico (http_503, servico_indisponivel) nunca chega à tela
   servico_indisponivel: "O servidor está fora do ar neste momento. Tentamos de novo sozinhos; se continuar, avise o suporte.",
   http_429: "Muitos pedidos de uma vez. Espere um instante e tente de novo.",
+  // plano 2000d · SX-096: as respostas HTTP que chegavam como «Não deu certo agora» sem dizer o porquê
+  http_403: "Esta ação não é permitida para o seu acesso. Se precisar, fale com o administrador da empresa.",
+  http_408: "O pedido demorou demais para chegar ao servidor. Confira a conexão e tente de novo.",
+  http_413: "O arquivo ou o texto é grande demais para enviar. Diminua o tamanho e tente de novo.",
+  dono_mudou: "Outra pessoa assumiu esta conversa agora há pouco. Sua mensagem não saiu — confira e envie de novo se ainda fizer sentido.", // plano 2000d · SX-105
   http_500: "O servidor falhou ao concluir o pedido. Tente de novo em instantes; se continuar, fale com o suporte.",
   http_502: "O servidor está fora do ar neste momento. Tentamos de novo sozinhos; se continuar, avise o suporte.",
   http_503: "O servidor está fora do ar neste momento. Tentamos de novo sozinhos; se continuar, avise o suporte.",
@@ -225,6 +230,11 @@ export function semFornecedor(txt) {
     .replace(/\bAnthropic\b/g, "IA").replace(/(?:a )?equipe da Nexus/g, "quem fornece o sistema");
 }
 
+/** plano 2000d · SX-031/SX-032: a frase do servidor ganha o ponto final só quando não termina com pontuação («recusado.» não vira «recusado..»). */
+export function fimDeFrase(t) { const s = String(t ?? "").trim(); return !s ? s : /[.!?…]$/.test(s) ? s : `${s}.`; }
+/** plano 2000d · SX-033: o nome técnico do parâmetro («p_nome_cliente») vira o nome do campo («nome cliente»). */
+export function nomeDoCampo(hint) { return String(hint ?? "").trim().replace(/^p_/, "").replace(/_/g, " ").trim() || String(hint ?? ""); }
+
 /** Texto para o usuário a partir de um erro da API (usa .codigo, .hint e .detalhe quando o Apêndice B pede).
     plano 2000d · DU-157: `vocab` (opcional; sem ele, o do shell) troca {negocios}/{compromisso} pela palavra da vertical. */
 export function mensagemErro(e, vocab = null) {
@@ -248,6 +258,9 @@ function mensagemErroBase(e, vocab) {
     case "convite_invalido":
       if (hint === "conta_existente") return "Este convite é só para uma conta nova. Peça outro convite ou use outro e-mail.";
       break;
+    case "dono_mudou": // plano 2000d · SX-105: o servidor manda no hint o nome de quem assumiu
+      if (hint.trim()) return `${hint.trim().slice(0, 60)} assumiu esta conversa agora há pouco. Sua mensagem não saiu — confira e envie de novo se ainda fizer sentido.`;
+      break;
     case "marca_invalida":
       if (hint) return `Confira o campo ${CAMPO_MARCA[hint] || hint} da marca.`;
       break;
@@ -259,14 +272,14 @@ function mensagemErroBase(e, vocab) {
     case "motivo_obrigatorio":
       return `Escolha o motivo da perda${hint === "texto" ? " e escreva a justificativa" : ""}.`;
     case "campo_obrigatorio":
-      if (hint) return `Preencha o campo "${hint}" antes de continuar.`;
+      if (hint) return `Preencha o campo "${nomeDoCampo(hint)}" antes de continuar.`;   // plano 2000d · SX-033
       break;
     case "estagio_com_negocios":
       if (/^\d+$/.test(hint)) return `Essa etapa tem ${hint} {negocio${hint === "1" ? "" : "s"}}. Escolha para onde ${hint === "1" ? "ele vai" : "eles vão"}.`;   // plano 2000d · DU-157
       break;
     case "envio_falhou": {
       const d = e && (e.detalhe_texto || (typeof e.detalhe === "string" ? e.detalhe : ""));
-      if (d) return `O canal não aceitou a mensagem: ${String(d).slice(0, 160)}.`;
+      if (d) return `O canal não aceitou a mensagem: ${fimDeFrase(String(d).slice(0, 160))}`;   // plano 2000d · SX-031: sem «..»
       break;
     }
     case "codewords_falhou": {   // o servidor já devolve o motivo em português (não repete o código)
@@ -275,7 +288,7 @@ function mensagemErroBase(e, vocab) {
       break;
     }
     case "automacao_invalida":
-      if (hint) return `A automação tem um problema: ${hint}.`;
+      if (hint) return `A automação tem um problema: ${fimDeFrase(hint)}`;   // plano 2000d · SX-032
       break;
     case "sem_permissao":
       // plano 1000b · UB-277: quem já é o administrador da empresa não tem a quem «falar com o administrador»
@@ -348,6 +361,14 @@ export function guardarErroRecente(e, nome = null, agora = Date.now()) {
   if (!e || e.codigo === "cancelado") return;
   const item = { em: new Date(agora).toISOString(), codigo: String(e.codigo || e.message || "erro").slice(0, 60), status: Number(e.status) || null,
     fn: nome ? String(nome).replace(/[^a-z0-9_:-]/gi, "").slice(0, 60) : null };
+  // plano 2000d · SX-090: o mesmo erro da mesma chamada repetido em rajada (pulso sem internet) vira UMA linha com a contagem — antes os 20
+  // lugares do diagnóstico ficavam todos com o mesmo «sem_conexao» e o erro que importava sumia
+  const ult = _erros[_erros.length - 1];
+  if (ult && ult.codigo === item.codigo && ult.fn === item.fn && ult.status === item.status && agora - Date.parse(ult.ate || ult.em) < 60_000) {
+    ult.vezes = (ult.vezes || 1) + 1; ult.ate = item.em;
+    try { if (typeof sessionStorage !== "undefined" && sessionStorage) sessionStorage.setItem(CHAVE_ERROS, JSON.stringify(_erros)); } catch { /* sem storage */ }
+    return;
+  }
   _erros.push(item);
   while (_erros.length > MAX_ERROS_RECENTES) _erros.shift();
   try { if (typeof sessionStorage !== "undefined" && sessionStorage) sessionStorage.setItem(CHAVE_ERROS, JSON.stringify(_erros)); } catch { /* sem storage */ }
@@ -356,7 +377,8 @@ export function errosRecentes() {
   if (!_erros.length) {
     try {
       const v = typeof sessionStorage !== "undefined" && sessionStorage ? JSON.parse(sessionStorage.getItem(CHAVE_ERROS) || "[]") : [];
-      if (Array.isArray(v)) for (const x of v.slice(-MAX_ERROS_RECENTES)) if (x && typeof x.codigo === "string") _erros.push({ em: String(x.em || ""), codigo: x.codigo, status: Number(x.status) || null, fn: x.fn || null });
+      if (Array.isArray(v)) for (const x of v.slice(-MAX_ERROS_RECENTES)) if (x && typeof x.codigo === "string") _erros.push({ em: String(x.em || ""), codigo: x.codigo, status: Number(x.status) || null, fn: x.fn || null,
+        ...(Number(x.vezes) > 1 ? { vezes: Number(x.vezes), ate: String(x.ate || "") } : {}) });   // plano 2000d · SX-090
     } catch { /* ok */ }
   }
   return _erros.map(x => ({ ...x }));
@@ -379,6 +401,19 @@ export function lerRelogioDoServidor(r, agora = Date.now()) {
 }
 export function desvioRelogio() { return _desvioRelogio; }
 export function agoraServidor(agora = Date.now()) { return agora + _desvioRelogio; }
+
+/** plano 2000d · SX-092: os dados de um evento do comercial — só valores simples (texto ≤ 120, número, sim/não), no máximo 20 chaves de nome
+    curto; objeto, lista e texto comprido (que poderiam levar nome, telefone ou mensagem) ficam de fora. */
+export function dadosDoEvento(dados) {
+  const out = {};
+  if (!dados || typeof dados !== "object" || Array.isArray(dados)) return out;
+  for (const [k, v] of Object.entries(dados)) {
+    if (Object.keys(out).length >= 20 || !/^[a-z0-9_]{1,40}$/i.test(k)) continue;
+    if (typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v))) out[k] = v;
+    else if (typeof v === "string" && v.length <= 120) out[k] = v;
+  }
+  return out;
+}
 
 /** Cria um Error no padrão da API. */
 export function erroApi(codigo, extra = {}) {
@@ -440,7 +475,10 @@ export function erroRetentavel(e) {
 export function lerRetryAfter(v, agora = Date.now()) {
   if (v === null || v === undefined || v === "") return null;
   const s = String(v).trim();
-  if (/^\d+$/.test(s)) return Math.min(Number(s), 3600) * 1000;
+  // plano 2000d · SX-030: «1.5» (segundos com fração) vale 1500 ms — antes o Date.parse lia «1.5» como uma data de 2001 e virava 0;
+  // qualquer outro número solto («-5») não é uma data HTTP
+  if (/^\d+(\.\d+)?$/.test(s)) return Math.round(Math.min(Number(s), 3600) * 1000);
+  if (/^[-+]?[\d.]+$/.test(s)) return null;
   const t = Date.parse(s);
   return Number.isFinite(t) ? Math.max(0, Math.min(t - agora, 3600_000)) : null;
 }
@@ -472,6 +510,7 @@ export function criarApi(o) {
   const prazoFn = normalizarPrazo(o.prazoMs ?? o.prazoFnMs, 75_000);
 
   let _semEvento = false, _semErroCliente = false, _errosEnviados = 0;   // plano 1500c · UCC-104/UCC-135
+  const _errosMandados = new Set();   // plano 2000d · SX-091
   const rede = o.rede || null;                 // M14
   const contexto = !!o.contexto;               // M14: mensagens por contexto (leitura × escrita) nos erros de conexão
   const lentoMs = Number.isFinite(Number(o.lentoMs)) && Number(o.lentoMs) > 0 ? Number(o.lentoMs) : 4000;
@@ -703,7 +742,8 @@ export function criarApi(o) {
     /** RPC pública (sem token): nx_marca_publica, nx_convite_ver, nx_convite_aceitar, nx_senha_redefinir, nx_entrar. */
     publica(nome, params = {}, opcoes = {}) {
       if (!/^nx_[a-z0-9_]+$/.test(nome)) return Promise.reject(erroApi("funcao_invalida"));
-      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, params, prazoRpc, { leitura: ehLeitura(nome), nome });
+      // plano 2000d · SX-029: a tela pública (convite, testar) também pode desistir de uma leitura ({sinal}/{signal})
+      const executar = () => chamar(`${base}/rest/v1/rpc/${nome}`, params, prazoRpc, { leitura: ehLeitura(nome), sinal: sinalDe(opcoes), nome });
       // plano 1500c · UCC-008: resposta pública (sem sessão) não é de conta nem de empresa — a chave fica «pub:-:nome:…», a mesma para todos
       return querCache(nome, opcoes) ? comCache(nome, params, opcoes, executar, null, { publica: true }) : executar();
     },
@@ -719,22 +759,27 @@ export function criarApi(o) {
       // plano 1000b · UB-154: a empresa é lida UMA vez (como no rpcC): a repetição não vai para outra empresa se a pessoa trocar no meio
       const cli = o.cliente ? o.cliente() : null;
       return chamar(`${base}/functions/v1/${funcao}`, () => ({ token: o.token ? o.token() : null, cliente: cli, ...corpo }), prazoDaChamada(opcoes, chave),
-        { leitura: fnLeitura(funcao, corpo, opcoes), keepalive: saindo(opcoes), sinal: opcoes && opcoes.sinal ? opcoes.sinal : null, nome: chave });
+        // plano 2000d · SX-028: {signal} (o nome do padrão da web) também cancela uma Edge Function, como já valia no rpc/rpcC
+        { leitura: fnLeitura(funcao, corpo, opcoes), keepalive: saindo(opcoes), sinal: sinalDe(opcoes), nome: chave });
     },
     /** plano 1500c · UCC-104: registra um evento leve para o comercial (clique em «Conhecer», «Ver planos»…) por nx_evento_registrar.
         Melhor esforço: nunca lança, nunca repete, e depois que o servidor disser que a função não existe (404) não tenta mais nesta aba. */
     evento(tipo, dados = {}) {
       if (_semEvento || !/^[a-z0-9_.-]{2,40}$/.test(String(tipo || ""))) return Promise.resolve(false);
-      return api.rpc("nx_evento_registrar", { p_tipo: String(tipo), p_dados: dados && typeof dados === "object" ? dados : {} })
+      return api.rpc("nx_evento_registrar", { p_tipo: String(tipo), p_dados: dadosDoEvento(dados) })   // plano 2000d · SX-092
         .then(() => true, e => { if (ehFuncaoAusente(e) || Number(e && e.status) === 404) _semEvento = true; return false; });
     },
     /** plano 1500c · UCC-135: resumo de um erro do aparelho para o relatório central (nx_erro_cliente_registrar) — só código, tela e versão,
         nada de dado pessoal. Mesmo melhor esforço do evento(); no máximo 10 por aba. */
     erroCliente(resumo = {}) {
       if (_semErroCliente || _errosEnviados >= 10) return Promise.resolve(false);
-      _errosEnviados += 1;
       const limpo = { codigo: String(resumo.codigo || "erro").slice(0, 60), tela: String(resumo.tela || "").replace(/[^a-z0-9/_-]/gi, "").slice(0, 60),
         versao: String(resumo.versao || "").slice(0, 30), navegador: String(resumo.navegador || "").slice(0, 60) };
+      // plano 2000d · SX-091: o mesmo erro na mesma tela vai UMA vez por aba (um erro em laço gastava as 10 vagas e escondia os outros)
+      const chaveErro = `${limpo.codigo}|${limpo.tela}`;
+      if (_errosMandados.has(chaveErro)) return Promise.resolve(false);
+      _errosMandados.add(chaveErro);
+      _errosEnviados += 1;
       return api.rpc("nx_erro_cliente_registrar", { p_erro: limpo }, { keepalive: !!resumo.saindo })
         .then(() => true, e => { if (ehFuncaoAusente(e) || Number(e && e.status) === 404) _semErroCliente = true; return false; });
     },

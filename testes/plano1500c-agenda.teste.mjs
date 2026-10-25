@@ -412,7 +412,8 @@ test("CC-258 · CSV do período com «;», BOM e aspas quando precisa", () => {
   const linhas = csv.slice(1).trim().split("\r\n");
   // plano 1500c: GX-006 acrescentou a coluna «Fim» depois da «Hora»
   // plano 2000d: DC-382 acrescentou «Telefone» e «Observação» no fim
-  assert.equal(linhas[0], "Data;Hora;Fim;Paciente;Serviço;Profissional;Presença;Origem;Telefone;Observação");
+  // plano 2000d · GY-022: a coluna «Confirmada» entrou no fim do cabeçalho
+  assert.equal(linhas[0], "Data;Hora;Fim;Paciente;Serviço;Profissional;Presença;Origem;Telefone;Observação;Confirmada");
   assert.ok(linhas[1].startsWith("20/10/2026;08:00;08:30;Bia;"), "em ordem de horário");
   assert.ok(linhas[2].startsWith('20/10/2026;10:00;10:30;"Ana; Souza";Avaliação;Dra. Helena;Compareceu'));
 });
@@ -1331,7 +1332,10 @@ test("CC-295 / CC-298 · serviço novo nasce com a duração do campo e o contad
   assert.equal(C.alvo.querySelector(".agc-serv-contador").textContent, "2 de 30 serviços");
   for (let i = 0; i < 28; i++) porTexto(C.alvo, "button", "Adicionar serviço").click();
   assert.equal(C.alvo.querySelector(".agc-serv-contador").textContent, "30 de 30 serviços");
-  assert.equal(C.alvo.querySelector(".agc-add-duracao").disabled, true, "no 30 o botão desliga");
+  // plano 2000d · GY-088: no 30 o botão fica aria-disabled (o foco não se perde) e não cria a 31ª
+  assert.equal(C.alvo.querySelector(".agc-add-duracao").getAttribute("aria-disabled"), "true", "no 30 o botão desliga");
+  porTexto(C.alvo, "button", "Adicionar serviço").click();
+  assert.equal(C.alvo.querySelectorAll(".agc-duracao").length, 30);
 });
 
 /* ============================================================ plano 1500c · complemento (GX) — contas puras */

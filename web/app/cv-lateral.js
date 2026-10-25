@@ -160,7 +160,8 @@ export function criarLateral(A) {
   /* ---------------- nome do contato: só grava por Enter ou «Salvar»; Esc e «Cancelar» desistem; sair do campo não grava (D1) */
   function abrirEdicaoNome(ct) {
     if (!A.podeEscrever || !ct || !ct.id) return;
-    editandoNome = { ctId: ct.id, valor: ct.nome || "", salvando: false, erro: "" };
+    // plano 2000d · DC-007: guarda o nome e a versão de quando a edição abriu (para não gravar por cima da correção de um colega)
+    editandoNome = { ctId: ct.id, valor: ct.nome || "", salvando: false, erro: "", nomeAntes: String(ct.nome || "").trim(), versao: ct.atualizado_em || null };
     redesenhar("contato");
     const inp = cont && cont.querySelector(".cvt-nome-ed input");
     if (inp) { try { inp.focus(); inp.select(); } catch { /* ok */ } }
@@ -170,17 +171,32 @@ export function criarLateral(A) {
     render();                                    // a seção do contato volta ao título (e traz o que mudou durante a edição)
     if (foco) { const b = cont && cont.querySelector('[data-foco="editar-nome"]'); if (b) try { b.focus({ preventScroll: true }); } catch { /* ok */ } }
   }
-  async function salvarNome(ct) {
+  /** plano 2000d · DC-007: «Ana mudou para «Maria Souza» agora · Manter o meu / Usar o dela». → "meu" | "dela" | null */
+  async function conflitoNome(deles, meu) {
+    return ui.modal({ titulo: "O nome mudou enquanto você editava", largura: "p",
+      corpo: ui.h("p", null, `Outra pessoa mudou o nome para «${deles}» agora há pouco. Você escreveu «${meu}».`),
+      acoes: [{ rotulo: "Usar o dela", tipo: "neutro", valor: "dela" }, { rotulo: "Manter o meu", tipo: "primario", valor: "meu" }] });
+  }
+  async function salvarNome(ct, { forcar = false } = {}) {
     const ed = editandoNome;
     if (!ed || ed.salvando || ed.ctId !== ct.id) return;
     // plano 1500c · CX-033: espaços repetidos e tabulação do nome colado («Maria   Souza») viram um espaço só
     const novo = String(ed.valor || "").replace(/\s+/g, " ").trim();
     if (!novo) { ed.erro = "O nome não pode ficar vazio."; redesenhar("contato"); focarNome(); return; }
-    if (novo === String(ct.nome || "").trim()) { fecharEdicaoNome(); return; }
+    // plano 2000d · DC-007: o pulso trouxe outro nome (colega ou o CRM corrigiu) enquanto o campo estava aberto — pergunta
+    const agora = String((A.ver && A.ver.contato && A.ver.contato.id === ct.id ? A.ver.contato.nome : ct.nome) || "").trim();
+    if (!forcar && ed.nomeAntes !== undefined && agora !== ed.nomeAntes && agora !== novo) {
+      const r = await conflitoNome(agora, novo);
+      if (editandoNome !== ed) return;
+      if (r !== "meu") { fecharEdicaoNome(); return; }
+      forcar = true;
+    }
+    if (novo === agora) { fecharEdicaoNome(); return; }
     ed.salvando = true; ed.erro = "";
     redesenhar("contato");
     try {
-      await A.api.rpcC("nx_contato_salvar", { p_contato: { id: ct.id, nome: novo } });
+      // DC-007: a versão lida ao abrir vai junto (o servidor novo responde 409 versao_antiga; o de hoje ignora a chave a mais do jsonb)
+      await A.api.rpcC("nx_contato_salvar", { p_contato: { id: ct.id, nome: novo, ...(!forcar && ed.versao ? { versao_esperada: ed.versao } : {}) } });
       if (editandoNome !== ed) return;
       if (A.ver && A.ver.contato && A.ver.contato.id === ct.id) A.ver.contato = { ...A.ver.contato, nome: novo };
       ui.toast("Nome atualizado.", { tipo: "ok" });
@@ -190,6 +206,12 @@ export function criarLateral(A) {
     } catch (e) {
       if (editandoNome !== ed) return;
       ed.salvando = false;
+      if (e && e.codigo === "versao_antiga") {   // plano 2000d · DC-007
+        const r = await conflitoNome(String(e.hint || "outro nome"), novo);
+        if (editandoNome !== ed) return;
+        if (r === "meu") { redesenhar("contato"); return salvarNome(ct, { forcar: true }); }
+        fecharEdicaoNome(); A.acoes.recarregarVer(); return;
+      }
       A.acoes.tratarErro(e);
       redesenhar("contato");
       focarNome();
@@ -368,6 +390,9 @@ export function criarLateral(A) {
         ? h("span", { class: "cvt-resp1" }, `${L.textoMinutos(util)} no horário de atendimento`, h("small", { class: "fraco" }, ` · ${corrido} corridos (chegou fora do horário)`))
         : corrido);
     }
+    // plano 2000d · DC-038: a IA respondeu primeiro — a linha separa a IA da equipe («IA respondeu em 20 s · equipe assumiu 9 h depois»)
+    const respIA = L.textoRespostaIA && conv.aberta_em ? L.textoRespostaIA(A.msgs, conv.aberta_em) : "";
+    if (respIA) add("Atendimento pela IA", h("span", { class: "cvt-resp-ia" }, respIA));
     return secao({ id: "dados", titulo: "Dados" }, origem, origem ? h("div", { class: "cvt-esp" }) : null, dados);
   }
 
@@ -690,6 +715,12 @@ export function criarLateral(A) {
     return secao({ id: "consultas", titulo: "Consultas", contador: proximas.length || null },
       itens.length ? h("div", null, itens) : h("p", { class: "cvt-vazio" }, "Nenhuma consulta marcada."));
   }
+  /** plano 2000d · DC-037: «Jornada» — os marcos do lead numa linha do tempo com hora (só com 2 ou mais marcos). */
+  function blocoJornada(marcos) {
+    const lista = h("ol", { class: "cvt-jornada" }, marcos.map(m => h("li", { class: "cvt-jornada-item", dataset: { tipo: m.tipo } },
+      h("time", { class: "cvt-jornada-hora dado", datetime: new Date(m.em).toISOString() }, ui.dataHoraBR(new Date(m.em).toISOString())), h("span", null, m.texto))));
+    return secao({ id: "jornada", titulo: "Jornada" }, lista);
+  }
   function definicoes(ver) {
     const ct = ver.contato || {}, conv = ver.conversa || {};
     const rastreio = rastreioDe(ver);
@@ -702,8 +733,11 @@ export function criarLateral(A) {
         criar: () => blocoResumoContato(ver) },
       { chave: "dados", sig: sig([ver.anuncio, ct.origem, ct.email, ct.cidade, ct.uf, ct.campos, conv.protocolo, conv.departamento && conv.departamento.nome, conv.atribuida && conv.atribuida.nome, conv.atribuida_nome,
         conv.primeira_resposta_em, conv.aberta_em, !!rotulos, !!crmBase /* CB-064: relida depois de falhar */, rastreio, A.podeEscrever, conv.departamento_id, horarioDe(conv) === undefined ? "-" : horarioDe(conv),
-        editandoCampo && editandoCampo.ctId === ct.id ? [editandoCampo.campo, editandoCampo.salvando, editandoCampo.erro] : 0]),
+        editandoCampo && editandoCampo.ctId === ct.id ? [editandoCampo.campo, editandoCampo.salvando, editandoCampo.erro] : 0,
+        L.textoRespostaIA && conv.aberta_em ? L.textoRespostaIA(A.msgs, conv.aberta_em) : ""   /* plano 2000d · DC-038 */]),
         criar: () => blocoDados(ver, rastreio) },
+      // plano 2000d · DC-037: a história do lead (anúncio → 1ª resposta → consulta → presença → ganho)
+      ...((jor => (jor.length >= 2 ? [{ chave: "jornada", sig: sig(jor.map(m => [m.tipo, m.em, m.texto])), criar: () => blocoJornada(jor) }] : []))(L.jornadaDoContato ? L.jornadaDoContato(ver, A.msgs) : [])),
       // plano 1500c · CC-050: consultas do contato — só quando o nx_cv_ver mandar contato.consultas (servidor novo); sem o campo, nada muda
       ...(Array.isArray(ct.consultas) ? [{ chave: "consultas", sig: sig([ct.consultas.map(c => [c.negocio_id, c.inicio, c.servico, c.presenca]), A.podeEscrever, temCrm]),
         criar: () => blocoConsultas(ver) }] : []),

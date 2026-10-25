@@ -370,7 +370,7 @@ test("DR-249 + DR-269 + DR-270 + DR-328: janela, período, retorno por plataform
   assert.deepEqual(p.map(x => [x.id, x.multiplo, !!x.melhor]), [["meta", 9, true], ["google", 3, false]]);
   assert.equal(I.retornoPorPlataforma({ anuncios: { meta: { gasto: 0 } } }), null, "quem não gastou não entra");
   const v = I.ultimasVendasAnuncio({ ultimas_vendas_anuncio: [{ contato_nome: "Ana", servico: "Implante", valor: 4800, plataforma: "facebook" }, { contato_nome: "" }] });
-  assert.deepEqual(v, [{ nome: "Ana", servico: "Implante", valor: 4800, plataforma: "Meta" }]);
+  assert.deepEqual(v, [{ nome: "Ana", servico: "Implante", valor: 4800, plataforma: "Meta", quando: null }]);     // IY-066: sem ganho_em, sem «há»
   assert.equal(I.ultimasVendasAnuncio({}), null);
 });
 
@@ -381,7 +381,7 @@ test("DR-246 + DR-249 + DR-269 + DR-270 + DR-328 (DOM): o cartão do retorno com
     d.anuncios = { meta: { gasto: 1400, receita: 14000 }, google: { gasto: 600, receita: 4000 } };
     d.ultimas_vendas_anuncio = [{ contato_nome: "Lia Prado", servico: "Implante", valor: 4800, plataforma: "meta" }];
     const t = await montarTela(d, { dom });
-    assert.match(texto(botao(t.raiz, "roi-cpl")), /^Cada lead de anúncio custou R\$\s125,00 este mês\.$/);
+    assert.match(texto(botao(t.raiz, "roi-cpl")), /^Cada lead de anúncio custou R\$\s125 este mês\.$/);     // IY-073: sem centavos a partir de R$ 100
     assert.equal(texto(botao(t.raiz, "roi-periodo")), "outubro, do dia 1 até hoje (04/10)");
     assert.match(texto(botao(t.raiz, "roi-cedo")), /Só 4 dias de dados/);
     assert.match(texto(botao(t.raiz, "roi-plats")), /Meta.*rendeu mais.*Google/);
@@ -971,7 +971,7 @@ test("DR-398: «desde a sua última visita» — a foto deste aparelho contra a 
   try {
     dom.mem.set(`nx-ini-visita:${ID_CLI}:${ID_CONTA}`, JSON.stringify(antes));
     const t = await montarTela(NOVO(), { dom });
-    assert.match(texto(botao(t.raiz, "novidades")), /^Desde a sua última visita \(.+\): 3 leads novos, 1 venda, R\$\s2\.400\.$/);
+    assert.match(texto(botao(t.raiz, "novidades")), /^Desde a sua última visita \(.+\): 3 leads novos, 1 venda e R\$\s2\.400\.$/);     // IY-026: a lista em português
     assert.equal(JSON.parse(dom.mem.get(`nx-ini-visita:${ID_CLI}:${ID_CONTA}`)).leads, 23, "a foto nova fica no lugar");
   } finally { dom.fim(); }
 });
@@ -1137,4 +1137,462 @@ test("DR-404 (DOM): durante a contagem o número é aria-hidden e um texto escon
     assert.equal(el.getAttribute("aria-hidden"), null, "terminou: o número volta a ser lido");
     assert.equal(dom.doc.body.querySelector(".g-contando"), null);
   } finally { Object.assign(globalThis, salvos); dom.fim(); }
+});
+
+/* ============================================================
+   plano 2000d · frente inicio — COMPLEMENTO (IY-001…IY-083) + pendências DR-259, DA-215, DR-125, DR-314, DR-058, DR-172, DR-138
+   ============================================================ */
+const CSS_INI = ler("inicio.css");
+
+/* ---------------- (a) vocabulário ---------------- */
+test("DR-058 + DR-172 + DR-138: funil/funis e empresa/empresas em toda vertical; plural() exportado", () => {
+  for (const vert of V.VERTICAIS) for (const k of ["funil", "funis", "empresa", "empresas"]) assert.equal(typeof V.vocab(vert)[k], "string", `${vert}.${k}`);
+  assert.ok(V.CHAVES.includes("funis") && V.CHAVES.includes("empresas"));
+  assert.equal(V.vocab("oficina").empresas, "Frotas"); assert.equal(V.vocab("oficina").novo("empresa"), "Nova frota");
+  assert.equal(V.vocab("odonto").empresa, "Empresa parceira"); assert.equal(V.vocab("odonto").funil, "Funil", "«Atendimento» já é o nome das conversas");
+  assert.equal(V.plural(1, "tarefa", "tarefas"), "1 tarefa"); assert.equal(V.plural(3, "tarefa", "tarefas"), "3 tarefas");
+});
+
+test("IY-001 + IY-002 + IY-005: v.plural — plural do português, «—» sem número e o singular irregular", () => {
+  const v = V.vocab("odonto");
+  assert.equal(v.plural(2, "Ligação"), "2 ligações", "antes «2 ligaçãos»");
+  assert.equal(v.plural(3, "mensagem"), "3 mensagens");
+  assert.equal(V.pluralPt("canal"), "canais"); assert.equal(V.pluralPt("motor"), "motores"); assert.equal(V.pluralPt("funil"), "funis"); assert.equal(V.pluralPt("lápis"), "lápis");
+  assert.equal(v.plural(null, "contato"), "— pacientes", "antes «0 pacientes»"); assert.equal(v.plural("", "contato"), "— pacientes");
+  assert.equal(v.plural(0, "contato"), "0 pacientes", "zero de verdade continua zero");
+  assert.equal(v.plural(1, "tarefas"), "1 tarefa", "antes «1 tarefas»");
+  assert.equal(V.vocab("generico").nenhum("funis"), "Nenhum funil", "antes «Nenhum funis»");
+});
+
+test("IY-003 + IY-004: a vertical com maiúscula/espaço e o gênero das palavras da agenda soltas", () => {
+  assert.equal(V.vocab(" Odonto ").vertical, "odonto", "antes caía no genérico"); assert.equal(V.vocab("OFICINA").negocio, "Orçamento");
+  assert.equal(V.normalizarVertical("xyz"), null);
+  const v = V.vocab("generico");
+  assert.equal(v.novo("consulta"), "Nova consulta", "antes «Novo consulta»"); assert.equal(v.nenhum("visitas"), "Nenhuma visita");
+  assert.equal(v.novo("atendimento"), "Novo atendimento"); assert.equal(v.novo("sessão"), "Nova sessão");
+});
+
+/* ---------------- (b) gráficos ---------------- */
+test("IY-006 + IY-007 + IY-008 + IY-017: eixo curto na virada da unidade, sem «-0», «—» sem número e topo com Infinity", () => {
+  assert.equal(G.textoEixoCurto(999950), "1 mi", "antes «1.000 mil»");
+  assert.equal(G.textoEixoCurto(999960000, v => `R$ ${v}`), "R$ 1 bi");
+  assert.equal(G.textoEixoCurto(120000), "120 mil");
+  assert.equal(G.fmtInteiro(-0.3), "0", "antes «-0»"); assert.equal(G.fmtNumero(-0.001), "0");
+  assert.equal(G.fmtNumero(null), "—", "antes «0»"); assert.equal(G.fmtNumero(undefined), "—"); assert.equal(G.fmtNumero(""), "—"); assert.equal(G.fmtNumero(2.5), "2,5");
+  assert.equal(G.topoBonito(Infinity), 4, "antes NaN"); assert.deepEqual(G.ticks(Infinity), [0, 1, 2, 3, 4]);
+});
+
+test("IY-009: «Copiar tabela» não leva fórmula para a planilha (=, +, @, - antes de letra)", () => {
+  const tsv = G.tabelaTsv(["Nome", "Valor"], [["=HYPERLINK(\"x\")", "-5"], ["+55 11", "−R$ 800"], ["@ana", "-abc"], ["Ana", "10"]]);
+  const linhas = tsv.split("\n").map(l => l.split("\t"));
+  assert.deepEqual(linhas[1], ["'=HYPERLINK(\"x\")", "-5"]);
+  assert.deepEqual(linhas[2], ["'+55 11", "−R$ 800"]);
+  assert.deepEqual(linhas[3], ["'@ana", "'-abc"]);
+  assert.deepEqual(linhas[4], ["Ana", "10"]);
+});
+
+test("IY-013 + IY-014 (DOM): «Ver como tabela» aponta para a tabela (aria-controls) e a tabela vazia diz «Sem dados»", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const rod = dom.doc.body.appendChild(dom.doc.createElement("div")), graf = dom.doc.body.appendChild(dom.doc.createElement("div"));
+    const bt = G.alternarTabela(rod, graf, { colunas: ["Dia", "Qtd"], linhas: [], legenda: "teste" });
+    const id = bt.getAttribute("aria-controls");
+    assert.ok(id, "antes sem aria-controls"); assert.ok(dom.doc.getElementById(id), "a caixa da tabela tem esse id");
+    const vazia = dom.doc.body.querySelector(".g-tabela-vazia td");
+    assert.ok(vazia, "antes o corpo da tabela ficava vazio"); assert.equal(vazia.getAttribute("colspan"), "2"); assert.equal(texto(vazia), G.TEXTO_SEM_DADOS);
+    const rod2 = dom.doc.body.appendChild(dom.doc.createElement("div"));
+    const bt2 = G.alternarTabela(rod2, dom.doc.body.appendChild(dom.doc.createElement("div")), { colunas: ["A"], linhas: [["1"]] });
+    assert.notEqual(bt2.getAttribute("aria-controls"), id, "cada tabela com o seu id");
+  } finally { dom.fim(); }
+});
+
+test("IY-015 + IY-016 (DOM): o «i» do funil aponta para o texto e Esc fecha sem vazar", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const alvo = dom.doc.body.appendChild(dom.doc.createElement("div"));
+    G.funil(alvo, { resumo: "F", etapas: [{ nome: "Leads", qtd: 10 }, { nome: "Conversas", qtd: 12, conversao: "mais que a etapa anterior", dica: "contagens do mês" }] });
+    const bt = alvo.querySelector(".g-fdica-bt"), txt = alvo.querySelector(".g-fdica-txt");
+    assert.equal(bt.getAttribute("aria-controls"), txt.id, "antes sem aria-controls"); assert.ok(txt.id);
+    bt.click(); assert.equal(txt.hidden, false);
+    const ev = new dom.Evento("keydown", { key: "Escape" });
+    let vazou = false; dom.doc.body.addEventListener("keydown", () => { vazou = true; });
+    bt.dispatchEvent(ev);
+    assert.equal(txt.hidden, true, "antes o Esc não fechava"); assert.equal(bt.getAttribute("aria-expanded"), "false");
+    assert.ok(ev.defaultPrevented); assert.equal(vazou, false, "o Esc não chega à tela (no Início saía do exemplo)");
+  } finally { dom.fim(); }
+});
+
+test("IY-018 (DOM): Esc com a dica do gráfico aberta só fecha a dica; sem dica, o Esc segue", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const alvo = dom.doc.body.appendChild(dom.doc.createElement("div"));
+    G.barras(alvo, { itens: [{ rotulo: "A", valores: [3] }, { rotulo: "B", valores: [5] }], series: [{ nome: "Qtd", classe: "g-c0" }], fmt: v => String(v), resumo: "R" });
+    const caixa = alvo.querySelector(".g-caixa");
+    const esc1 = new dom.Evento("keydown", { key: "Escape" });
+    caixa.dispatchEvent(esc1);
+    assert.equal(esc1.defaultPrevented, false, "sem dica aberta o Esc não é tomado");
+    caixa.dispatchEvent(new dom.Evento("keydown", { key: "ArrowDown" }));
+    const esc2 = new dom.Evento("keydown", { key: "Escape" });
+    caixa.dispatchEvent(esc2);
+    assert.equal(esc2.defaultPrevented, true, "antes vazava para a tela"); assert.equal(esc2._parado, true);
+    assert.equal(G.escFecha({}, { atual: -1, esconder() {} }), false);
+  } finally { dom.fim(); }
+});
+
+test("IY-010 + IY-011 + IY-012 (DOM): copiar — rótulo não fica preso, o leitor ouve o resultado e sem clipboard tenta o copiar clássico", async () => {
+  const dom = comDom({ agora: AGORA });
+  const antes = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { value: { onLine: true }, configurable: true, writable: true });
+  try {
+    let pedidos = 0; dom.doc.execCommand = c => { pedidos++; return c === "copy"; };
+    const bt = dom.doc.body.appendChild(dom.doc.createElement("button"));
+    bt.textContent = "Copiar tabela"; bt.setAttribute("aria-label", "Copiar a tabela: X");
+    const ok = await G.copiarTexto("a\tb", bt, 30);
+    assert.equal(ok, true, "antes, sem navigator.clipboard, sempre «Não deu para copiar»"); assert.equal(pedidos, 1);
+    assert.equal(bt.textContent, "Copiada"); assert.equal(bt.getAttribute("aria-label"), "Copiada", "o nome acessível troca junto");
+    await G.copiarTexto("a\tb", bt, 30);     // 2º clique no meio do aviso
+    await esperar(60);
+    assert.equal(bt.textContent, "Copiar tabela", "antes o 2º clique guardava «Copiada» como rótulo");
+    assert.equal(bt.getAttribute("aria-label"), "Copiar a tabela: X");
+    assert.equal(dom.doc.body.querySelector("textarea"), null, "a área temporária sai");
+  } finally { if (antes) Object.defineProperty(globalThis, "navigator", antes); else delete globalThis.navigator; dom.fim(); }
+});
+
+/* ---------------- (c) Início — funções puras ---------------- */
+test("IY-019 + IY-020: a legenda da receita pelo vocabulário e o KPI de indicação que acende", () => {
+  assert.equal(I.textoGanhosMes(9, { negocio: "oportunidade", negocios: "oportunidades", feminino: true }), "9 oportunidades ganhas no mês");
+  assert.equal(I.textoGanhosMes(1, { negocio: "orçamento", negocios: "orçamentos" }), "1 orçamento ganho no mês");
+  const alt = I.kpisAlternativos(NOVO(), { voc: { negocio: "oportunidade", negocios: "oportunidades", feminino: true } });
+  assert.equal(alt.find(k => k.id === "receita").sub, "9 oportunidades ganhas no mês", "antes «9 fechamentos no mês»");
+  assert.equal(I.chaveDestaqueKpi("indicacao"), "negocios.ganhos_indicacao_mes", "antes null");
+});
+
+test("IY-021 + IY-022: numerosExtrasMudaram — prazo, indicação e as consultas de hoje (da agenda)", () => {
+  const a = NOVO(), b = NOVO();
+  b.conversas.respondidas_no_prazo_pct = 80; a.negocios.ganhos_indicacao_mes = 1; b.negocios.ganhos_indicacao_mes = 2;
+  const ag2 = agendaDe([...AGENDA.consultas, { negocio_id: 803, nome: "Nova", inicio: SP(HOJE, "16"), status: "aberto" }]);
+  assert.deepEqual(I.numerosExtrasMudaram(a, b, { agAntes: AGENDA, agDepois: ag2 }), ["conversas.respondidas_no_prazo_pct", "negocios.ganhos_indicacao_mes", "agenda.consultas"]);
+  assert.deepEqual(I.numerosExtrasMudaram(a, NOVO(), { agAntes: AGENDA, agDepois: AGENDA }), [], "campo que some de um lado não acende");
+  assert.deepEqual(I.numerosExtrasMudaram(null, b), []);
+  assert.match(ler("inicio.js"), /numerosExtrasMudaram\(antes, d, \{ agAntes: agendaAntes, agDepois: agenda \}\)/, "a tela acende também estes");
+});
+
+test("IY-023 + IY-024 + IY-025: espera em horas inteiras; anúncio nunca passa do total; fatias somam 100%", () => {
+  assert.equal(I.duracaoCurta(47 * 60 + 50), "47 h", "antes «48 h», um minuto antes de «2 dias»"); assert.equal(I.duracaoCurta(10 * 60 + 40), "10 h");
+  assert.equal(I.notaLeadsAnuncio(5, 7), "5 dos 5 leads criados nos últimos 7 dias vieram de anúncio.", "antes «7 dos 5»");
+  assert.equal(I.rotuloOrigem(5, 7, 140), "5 de 5 leads vieram de anúncio (100%)");
+  const p = I.partesOrigem({ semana: 10, semana_anuncio: 14, semana_meta: 9, semana_google: 6 });
+  assert.equal(p.pMeta + p.pGoogle + p.pOutras, 100); assert.ok(p.pOutras >= 0); assert.equal(p.anuncio, 10);
+  const q = I.partesOrigem({ semana: 10, semana_anuncio: 12 });
+  assert.deepEqual([q.pAn, q.pOutras], [100, 0], "antes 120% e «outras origens · -20%»");
+});
+
+test("IY-026 + IY-027: lista em português e a faixa de números caídos curta", () => {
+  assert.equal(I.listaPt(["Ana"]), "Ana"); assert.equal(I.listaPt(["Ana", "Bia"]), "Ana e Bia"); assert.equal(I.listaPt(["A", "B", "C"]), "A, B e C");
+  assert.equal(I.listaPt(["A", "B", "C", "D", "E"], 3), "A, B, C e mais 2"); assert.equal(I.listaPt([" ", null]), "");
+  const cinco = ["Recepção", "Vendas", "Pós", "Filial", "Loja 2"].map(nome => ({ nome }));
+  assert.equal(I.textoNumeroCaido(cinco), "5 números de WhatsApp desconectados: Recepção, Vendas, Pós e mais 2.");
+});
+
+test("IY-028: a foto da última visita sai com a empresa que a conta perdeu", () => {
+  const out = I.chavesInicioOrfas(["nx-ini-visita:velha:c1", "nx-ini-visita:ativa:c1", "nx-ini-visita:velha:outra"], { clientes: ["ativa"], conta: "c1" });
+  assert.deepEqual(out, ["nx-ini-visita:velha:c1"]);
+});
+
+test("IY-031 + IY-032: metas — milhar com espaço vale; valor absurdo é avisado no campo", () => {
+  assert.equal(I.validarMetas({ consultas: "1 000" }).consultas, 1000, "antes era erro");
+  assert.equal(I.validarMetas({ leads: "2 500" }).leads, 2500);
+  const r = I.validarMetas({ vendas: "3.000.000.000", consultas: "500000" });
+  assert.match(r.erros.meta_vendas, /alto demais/); assert.match(r.erros.meta_consultas, /alto demais/); assert.equal(r.vendas, null);
+  assert.equal(I.validarMetas({ vendas: "50.000" }).vendas, 50000, "o normal continua");
+  assert.equal(I.LIMITE_META.vendas, 1e9);
+});
+
+test("IY-033: o chip «novo» em palavras para o leitor de tela", () => {
+  assert.equal(I.textoChipAcessivel({ v: null, txt: "novo", novo: true }, "vs. ontem"), "novo: era zero ontem", "antes «novo para comparar com ontem»");
+  assert.equal(I.textoChipAcessivel({ v: null, txt: "novo", novo: true }, "o mesmo período do mês passado"), "novo: era zero no mesmo período do mês passado");
+});
+
+test("IY-034 + IY-035: primeiroNome com hífen e com emoji na frente", () => {
+  assert.equal(I.primeiroNome("maria-clara souza"), "Maria-Clara", "antes «Maria-clara»");
+  assert.equal(I.primeiroNome("🦷 Helena Prado"), "Helena", "antes «🦷»");
+  assert.equal(I.primeiroNome("Dra. 🦷Helena"), "Helena"); assert.equal(I.primeiroNome("- Ana"), "Ana");
+});
+
+test("IY-036 + IY-037: a tecla R/? não dispara dentro de editável vazio nem de campo feito à mão", () => {
+  const el = attrs => ({ nodeType: 1, localName: "div", getAttribute: k => (k in attrs ? attrs[k] : null), closest: () => null });
+  assert.equal(I.teclaLivre(el({ contenteditable: "" }), null), false, "antes só «true» bloqueava");
+  assert.equal(I.teclaLivre(el({ contenteditable: "plaintext-only" }), null), false);
+  assert.equal(I.teclaLivre(el({ contenteditable: "false" }), null), true);
+  assert.equal(I.teclaLivre(el({ role: "combobox" }), null), false); assert.equal(I.teclaLivre(el({ role: "textbox" }), null), false);
+  assert.equal(I.teclaLivre(el({ role: "button" }), null), true);
+});
+
+test("IY-038 + IY-039 + IY-040 + IY-041: a palavra da agenda masculina concorda em todo lugar", () => {
+  assert.equal(I.rotuloAbrirConsulta("Ana", "09:00", "atendimento", { fem: false }), "Abrir o atendimento de Ana, às 09:00", "antes «a atendimento»");
+  assert.equal(I.rotuloAbrirConsulta("Ana", "09:00", "consulta"), "Abrir a consulta de Ana, às 09:00");
+  const f = I.funilMes(NOVO(), { voc: { consultas: "atendimentos", femAgenda: false } });
+  assert.equal(f.etapas[2].nome, "Atendimentos marcados"); assert.match(f.etapas[3].conversao, /dos atendimentos marcados$/);
+  const k = I.kpisInicio(NOVO(), agendaDe([]), { hoje: HOJE, voc: { consultas: "atendimentos", femAgenda: false } });
+  assert.equal(k.find(x => x.id === "consultas").sub, "nenhum marcado", "antes «nenhuma marcada»");
+  assert.deepEqual(I.textosGeneroAgenda(false), { nenhuma: "Nenhum", marcada: "marcado", a: "o", as: "os", proximas: "Próximos", realizadas: "realizados" });
+  assert.equal(I.textosGeneroAgenda().nenhuma, "Nenhuma");
+});
+
+test("IY-042 + IY-056: o checklist pela marca da sessão; «Você está em 1º de 1» não aparece", () => {
+  assert.equal(I.tituloChecklist("Nexus"), "Nexus: deixe tudo pronto"); assert.equal(I.tituloChecklist(""), "Deixe tudo pronto");
+  const eq = I.equipeMes({ equipe: [{ conta_id: ID_CONTA, nome: "Helena", ganhos: 2, valor: 100 }] }, ID_CONTA);
+  assert.equal(I.equipeVisivel(eq, { admin: false }).resumo, null, "antes «Você está em 1º de 1 no mês.»");
+});
+
+test("IY-054 + IY-055: o nome da empresa sem os marcadores do WhatsApp", () => {
+  assert.equal(I.textoResumoMes([], { mes: "outubro", empresa: "Clínica *Sorriso*" }), "*Resumo de outubro* — Clínica Sorriso");
+  const ds = I.desdeInicio({ desde_inicio: { primeiro: { mes: "2026-05", leads: 10 }, atual: { mes: "2026-10", leads: 30 } } });
+  assert.match(I.textoDesde(ds, { empresa: "_Oficina_ ~Zé~" }), /^\*Desde que começamos — Oficina Zé\*/);
+  assert.equal(I.semMarcadores("a*b_c~d`e"), "abcde");
+});
+
+test("IY-057 + IY-058 + IY-059: o resumo do mês leva indicação, dias até a venda e o 1º contato", () => {
+  const d = NOVO(); d.negocios.ganhos_indicacao_mes = 3; d.negocios.receita_indicacao_mes = 6400; d.negocios.dias_ate_ganho = 1; d.leads.primeiro_contato_media_min = 6;
+  const l = I.linhasResumoMes(d, { brl });
+  const v = id => (l.find(x => x.id === id) || {}).valor;
+  assert.equal(v("indicacao"), "3 · R$ 6.400"); assert.equal(v("dias"), "1 dia"); assert.equal(v("contato"), "6 min");
+  const sem = I.linhasResumoMes(NOVO(), { brl });
+  assert.ok(!sem.some(x => ["indicacao", "dias", "contato"].includes(x.id)), "sem os campos, sem as linhas");
+});
+
+test("IY-065 + IY-066: as últimas vendas de anúncio mais novas primeiro, com «há»", () => {
+  const h = n => new Date(AGORA - n * 3600000).toISOString();
+  const v = I.ultimasVendasAnuncio({ ultimas_vendas_anuncio: [{ contato_nome: "Velha", ganho_em: h(80) }, { contato_nome: "Nova", ganho_em: h(1) }, { contato_nome: "Ontem", ganho_em: h(24) }] }, 3, AGORA);
+  assert.deepEqual(v.map(x => x.nome), ["Nova", "Ontem", "Velha"], "antes na ordem do servidor");
+  assert.deepEqual(v.map(x => x.quando), ["hoje", "ontem", "há 3 dias"]);
+  assert.equal(I.haQuanto(AGORA + 86400000, AGORA), "hoje", "data no futuro não vira «há -1 dias»");
+});
+
+test("IY-067 + IY-068 + IY-069: sem repetidos na fila e nos aniversários; corte do texto não quebra emoji", () => {
+  const fila = I.listaEspera({ aguardando_lista: [{ id: 1, nome: "Ana", espera_min: 5 }, { id: 1, nome: "Ana", espera_min: 5 }, { id: 2, nome: "Bia" }] });
+  assert.deepEqual(fila.map(x => x.id), [1, 2], "antes a mesma conversa duas vezes");
+  const an = I.aniversariantesHoje({ aniversariantes: [{ contato_id: 7, nome: "Lia" }, { contato_id: 7, nome: "Lia", conversa_id: 3 }, { nome: "Rui" }, { nome: "rui" }] });
+  assert.deepEqual(an.map(x => x.nome), ["Lia", "Rui"]);
+  const longo = "a".repeat(999) + "🎉fim";
+  assert.doesNotThrow(() => I.hrefComTexto({ contatoId: 1 }, longo), "antes URIError com meio emoji");
+  assert.match(I.hrefComTexto({ contatoId: 1 }, longo), /%F0%9F%8E%89$/);
+});
+
+test("IY-070: placar com empate divide a posição", () => {
+  const pl = I.placarEquipe({ equipe: [{ nome: "Ana", ganhos: 2, valor: 500 }, { nome: "Bia", ganhos: 2, valor: 500 }, { nome: "Caio", ganhos: 1, valor: 100 }] });
+  assert.deepEqual(pl.linhas.map(x => [x.nome, x.pos, x.top]), [["Ana", 1, true], ["Bia", 1, true], ["Caio", 3, false]]);
+});
+
+test("IY-071 + IY-072: o retorno e o custo por lead com os números das plataformas", () => {
+  const d = NOVO(); d.anuncios = { meta: { gasto: 1500, receita: 14400, leads: 41 }, google: { gasto: 900, receita: 7200, leads: 19 } };
+  const r = I.retornoAnuncios(d);
+  assert.ok(r, "antes null: sem gasto_anuncios_mes o cartão sumia"); assert.equal(r.gasto, 2400); assert.equal(r.receita, 21600); assert.equal(r.deAnuncio, true);
+  assert.equal(I.custoPorLead(d), 40);
+  d.anuncios.google.receita = undefined;
+  const r2 = I.retornoAnuncios(d);
+  assert.equal(r2.deAnuncio, false, "receita de uma plataforma faltando: não soma pela metade, usa a receita do mês (e diz)");
+  assert.equal(I.somaPlataformas({}), null);
+});
+
+test("DR-125: tarefas sem prazo — o número do servidor ou as da lista (pelo menos)", () => {
+  assert.deepEqual(I.tarefasSemPrazo({ sem_prazo: 3 }), { n: 3, pelomenos: false });
+  assert.deepEqual(I.tarefasSemPrazo({ abertas: 9, proximas: [{ id: 1 }, { id: 2, vence_em: SP(HOJE, "10") }] }), { n: 1, pelomenos: true });
+  assert.equal(I.tarefasSemPrazo({ proximas: [{ id: 2, vence_em: SP(HOJE, "10") }] }), null);
+  assert.equal(I.tarefasSemPrazo({ sem_prazo: 0 }), null);
+});
+
+/* ---------------- (d) Início — tela ---------------- */
+test("DA-215 (DOM): sem base comparável, nada de chip «novo», barra nem diferença contra o mês passado", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const d = NOVO(); d.negocios.receita_mes_anterior_parcial = 0; d.negocios.receita_mes_anterior = 0;
+    const t = await montarTela(d, { dom });
+    const vd = t.raiz.querySelector(".ini-vendas");
+    assert.equal(vd.querySelector(".ini-mes .rel-var"), null, "antes «novo · vs. R$ 0»");
+    assert.ok(botao(t.raiz, "vd-sem-base")); assert.equal(botao(t.raiz, "vd-dif"), null);
+    assert.equal(vd.querySelectorAll(".ini-barra").length, 1, "só «Este mês»");
+    assert.doesNotMatch(texto(vd), /mês passado inteiro: R\$\s0/);
+    I.desmontar();
+    const t2 = await montarTela(NOVO(), { dom });
+    assert.ok(t2.raiz.querySelector(".ini-vendas .ini-mes .rel-var"), "com base, o chip continua");
+  } finally { dom.fim(); }
+});
+
+test("DR-259 + IY-041 (DOM): a palavra da agenda do vocabulário da empresa, com o gênero dela", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const vocab = { contato: "Paciente", contatos: "Pacientes", negocio: "Oportunidade", negocios: "Oportunidades", g_negocio: "a", vertical: "odonto",
+      compromisso: "Atendimento", compromissos: "Atendimentos", g_compromisso: "o" };
+    const t = await montarTela(NOVO(), { dom, agenda: agendaDe([]), ctxExtra: { vocab } });
+    const k = t.raiz.querySelector('[data-kpi="consultas"]');
+    assert.match(texto(k), /Atendimentos hoje/, "antes «Consultas hoje»: o vocabulário da empresa era ignorado");
+    assert.match(texto(k), /nenhum marcado/);
+    assert.match(texto(t.raiz.querySelector(".ini-agora")), /Nenhum atendimento marcado nos próximos 7 dias\./, "antes «Nenhuma atendimento marcada»");
+  } finally { dom.fim(); }
+});
+
+test("DR-125 (DOM): o bloco de tarefas mostra «Sem prazo (N)»", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const d = NOVO(); d.tarefas.proximas.push({ id: 72, titulo: "Ligar sem pressa", vence_em: null, atrasada: false }); d.tarefas.abertas = 2;
+    const t = await montarTela(d, { dom });
+    assert.equal(texto(botao(t.raiz, "t-semprazo")), "Sem prazo (1)");
+  } finally { dom.fim(); }
+});
+
+test("IY-029 + IY-030 (DOM): o histórico do aparelho guarda o prazo e a indicação (as linhas dos KPIs trocáveis)", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const d = NOVO(); d.negocios.ganhos_indicacao_mes = 2;
+    await montarTela(d, { dom });
+    const dia = JSON.parse(dom.mem.get(CHAVE_HIST)).dias.find(x => x.dia === HOJE);
+    assert.equal(dia.respondidas_pct, 78, "antes não havia ponto"); assert.equal(dia.ganhos_indicacao_mes, 2);
+  } finally { dom.fim(); }
+});
+
+test("IY-042 (DOM): o título do checklist sai com a marca da sessão, nunca «Órbita» fixo", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const t = await montarTela(NOVO(), { dom, onb: ONB_PENDENTE(), marca: { produto: "Nexus" } });
+    assert.equal(texto(t.raiz.querySelector("#ini-ob")), "Nexus: deixe tudo pronto", "antes «Deixe o Órbita pronto»");
+  } finally { dom.fim(); }
+});
+
+test("IY-043 + IY-044 + IY-045 (DOM): o resumo prende o Tab, trava a rolagem de trás e sai com o Início", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const t = await montarTela(NOVO(), { dom });
+    botao(t.raiz, "resumo-mes").click(); await tick();
+    const folha = dom.doc.body.querySelector(".ini-resumo-folha");
+    assert.ok(folha); assert.ok(dom.doc.documentElement.classList.contains("ini-folha-aberta"), "a página de trás não rola");
+    const ult = folha.querySelector('[data-k="rs-fechar"]'), prim = folha.querySelector("button");
+    ult.focus();
+    const tab = new dom.Evento("keydown", { key: "Tab" });
+    folha.dispatchEvent(tab);
+    assert.ok(tab.defaultPrevented, "antes o Tab saía da folha"); assert.equal(dom.doc.activeElement, prim);
+    const volta = new dom.Evento("keydown", { key: "Tab", shiftKey: true });
+    folha.dispatchEvent(volta);
+    assert.equal(dom.doc.activeElement, ult);
+    I.desmontar();
+    assert.equal(dom.doc.body.querySelector(".ini-resumo-folha"), null, "antes a folha ficava por cima da próxima tela");
+    assert.ok(!dom.doc.documentElement.classList.contains("ini-folha-aberta") && !dom.doc.documentElement.classList.contains("ini-imprimindo"));
+  } finally { dom.fim(); }
+});
+
+test("IY-046 + IY-047 + IY-061 (DOM): o «i» da previsão nasce recolhido; conversa já minha sem «Assumir» e com «com você»", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const d = NOVO(); d.conversas.aguardando_lista[0].atribuida_id = ID_CONTA; d.conversas.aguardando_lista[0].atribuida_nome = "Helena";
+    const t = await montarTela(d, { dom });
+    assert.equal(botao(t.raiz, "aj-vd-prev").getAttribute("aria-expanded"), "false");
+    assert.equal(botao(t.raiz, "ag-assumir-901"), null, "antes «Assumir» a própria conversa");
+    assert.ok(botao(t.raiz, "ag-ver-901"), "«Abrir» continua");
+    assert.match(texto(t.raiz.querySelector('[data-conversa="901"]')), /com você/);
+    assert.ok(botao(t.raiz, "ag-assumir-902"), "a de outra pessoa (ou sem dono) mantém «Assumir»");
+  } finally { dom.fim(); }
+});
+
+test("IY-048 + IY-049 + IY-050 + IY-051 (DOM): modo TV — tela ativa, relê sozinho, carimbo da leitura, sai pelo botão ou Esc", async () => {
+  const dom = comDom({ agora: AGORA });
+  const antes = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const trava = { released: false, soltou: 0, release() { this.released = true; this.soltou++; return Promise.resolve(); } };
+  let pedidos = 0;
+  Object.defineProperty(globalThis, "navigator", { value: { onLine: true, wakeLock: { request: async tipo => { pedidos++; assert.equal(tipo, "screen"); return trava; } } }, configurable: true, writable: true });
+  try {
+    const d = NOVO(); d.equipe = [{ conta_id: "a", nome: "Ana", ganhos: 2, valor: 500 }];
+    const t = await montarTela(d, { dom, rota: { query: { tv: "1" } } });
+    await tick();
+    assert.equal(pedidos, 1, "antes a TV apagava sozinha");
+    assert.match(texto(botao(t.raiz, "pl-hora")), /atualizado às 10:20/);
+    const sair = botao(t.raiz, "tv-sair");
+    assert.ok(sair); assert.equal(sair.getAttribute("href"), "#/inicio");
+    const lidas = () => t.chamadas.filter(c => c.nome === "nx_inicio").length;
+    const n0 = lidas();
+    dom.andar(61000); dom.relogio(); await tick(); await tick();
+    assert.equal(lidas(), n0 + 1, "antes, sem pulso, a TV nunca relia");
+    assert.match(texto(botao(t.raiz, "pl-hora")), /atualizado às 10:21/);
+    dom.ev(dom.doc.body, "keydown", { key: "Escape" });
+    assert.deepEqual(t.navegou.slice(-1), ["#/inicio"], "Esc sai do modo TV");
+    I.desmontar();
+    assert.equal(trava.soltou, 1, "ao sair, a tela volta a apagar normalmente");
+  } finally { if (antes) Object.defineProperty(globalThis, "navigator", antes); else delete globalThis.navigator; dom.fim(); }
+});
+
+test("IY-052 + IY-053 + IY-060 + IY-063 (DOM): «antes/agora» lidos em texto, a dica das barras é só visual e o número sem nome tem nome", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const d = NOVO();
+    d.desde_inicio = { primeiro: { mes: "2026-05", leads: 10, tpr_media_min: 90, receita: 1000 }, atual: { mes: "2026-10", leads: 30, tpr_media_min: 8, receita: 9000 } };
+    d.canais.push({ id: "cw2", nome: "", numero_exibicao: "+55 00 00000-0002", status: "ativo" });
+    const t = await montarTela(d, { dom });
+    const v = t.raiz.querySelector(".ini-desde-v");
+    assert.match(texto(v), /^antes: 10, agora: → 30$/);     // a seta é aria-hidden: o leitor ouve «antes: 10, agora: 30»
+    assert.equal(v.querySelector("s").getAttribute("aria-label"), null, "aria-label num <s> era ignorado");
+    const dica = t.raiz.querySelector(".ini-horas-dica");
+    assert.equal(dica.getAttribute("role"), null, "antes role=status repetia o nome da barra"); assert.equal(dica.getAttribute("aria-hidden"), "true");
+    I.desmontar();
+    const d2 = NOVO(); d2.equipe = [{ conta_id: "a", nome: "Ana", ganhos: 2, valor: 500 }, { conta_id: "b", nome: "Bia", ganhos: 1, valor: 100 }];
+    const t2 = await montarTela(d2, { dom });
+    const coroa = t2.raiz.querySelector(".ini-equipe-coroa");     // IY-053: aria-label num <span> sem papel era ignorado
+    assert.equal(coroa.getAttribute("aria-label"), null); assert.equal(texto(coroa), "1º lugar:");
+    I.desmontar();
+    const t3 = await montarTela(d, { dom });
+    const canais = t3.raiz.querySelectorAll(".ini-canal-n").map(texto);
+    assert.ok(canais.some(x => /^Número de WhatsApp · \+55 00 00000-0002$/.test(x)), "antes só « · +55…» sem nome");
+  } finally { dom.fim(); }
+});
+
+test("IY-062 (DOM): «Todos compareceram» manda as marcações juntas", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    const ag = agendaDe([{ negocio_id: 900, nome: "Paula", inicio: SP(HOJE, "08"), fim: SP(HOJE, "08", "40"), status: "aberto" },
+      { negocio_id: 901, nome: "Rui", inicio: SP(HOJE, "09"), fim: SP(HOJE, "09", "30"), status: "aberto" }]);
+    const t = await montarTela(ANTIGO(), { dom, agenda: ag });
+    const orig = t.ctx.api.rpcC, emVoo = []; let soltar; const porta = new Promise(r => { soltar = r; });
+    t.ctx.api.rpcC = async (nome, p, o) => { if (nome === "nx_agenda_presenca") { emVoo.push(p.p_negocio); await porta; return { ok: true }; } return orig(nome, p, o); };
+    botao(t.raiz, "pr-todos").click(); await tick();
+    assert.deepEqual(emVoo, [900, 901], "antes a 2ª só saía depois da 1ª voltar");
+    soltar(); await tick(); await tick();
+    assert.ok(t.toasts.some(x => /Presença marcada em 2\./.test(x.texto)));
+  } finally { dom.fim(); }
+});
+
+test("IY-064 (DOM): o aviso das novidades sai com «Dispensar» e não volta no redesenho", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    dom.mem.set(`nx-ini-visita:${ID_CLI}:${ID_CONTA}`, JSON.stringify({ mes: "2026-10", em: AGORA - 3 * 3600000, leads: 20, ganhos: 8, receita: 26000 }));
+    const t = await montarTela(NOVO(), { dom });
+    const x = botao(t.raiz, "novidades-x");
+    assert.ok(x, "antes não havia como tirar"); x.click();
+    assert.equal(botao(t.raiz, "novidades"), null);
+    t.raiz.querySelector(".rel-btn").click(); await tick(); await tick();
+    assert.equal(botao(t.raiz, "novidades"), null, "o redesenho não traz de volta");
+  } finally { dom.fim(); }
+});
+
+/* ---------------- (e) CSS ---------------- */
+test("DR-314 + IY-074…IY-081: foco, alto contraste, impressão, rolagem até o bloco, manchete, folha, «Mais detalhes» e números", () => {
+  assert.match(CSS_INI, /\.inicio :is\(\.kpi, \.kpi a, button, a\[href\]\):focus-visible/, "DR-314");
+  assert.match(CSS_INI, /@media \(forced-colors: active\) \{[^}]*\.ini-meta-barra i/, "IY-074");
+  assert.match(CSS_INI, /@media print \{\s*html:not\(\.ini-imprimindo\) \.ini :is\(\.ini-bl-barra/, "IY-075");
+  assert.match(CSS_INI, /\.ini \[data-bloco\][^{]*\{ scroll-margin-top:/, "IY-076");
+  assert.match(CSS_INI, /#ini-h \{ text-wrap: balance; \}/, "IY-077");
+  assert.match(CSS_INI, /\.ini-resumo-folha \{ overscroll-behavior: contain; \}/, "IY-078");
+  assert.match(CSS_INI, /html\.ini-folha-aberta, html\.ini-folha-aberta body \{ overflow: hidden; \}/, "IY-045");
+  assert.match(CSS_INI, /\.ini-mais \.ini-grade > \.rel-cartao \{ content-visibility: auto;/, "IY-079");
+  assert.match(CSS_INI, /@media \(prefers-contrast: more\)/, "IY-080");
+  assert.match(CSS_INI, /\.ini-placar-n, \.ini-placar-v[^{]*\{ font-variant-numeric: tabular-nums; \}/, "IY-081");
+  assert.match(CSS_INI, /\.ini-novidades-x \{ width: 44px; height: 44px; \}/, "alvo de 44 px no toque");
+});
+
+test("IY-082 + IY-083 (DOM): as barras de progresso dizem o valor em texto (aria-valuetext)", async () => {
+  const dom = comDom({ agora: AGORA });
+  try {
+    dom.mem.set(`nx-ini-metas:${ID_CLI}`, JSON.stringify({ vendas: 40000 }));
+    const t = await montarTela(NOVO(), { dom, onb: ONB_PENDENTE() });
+    const barra = t.raiz.querySelector(".ini-metas .ini-meta-barra");
+    assert.match(barra.getAttribute("aria-valuetext") || "", /^R\$\s28\.400 de R\$\s40\.000 \(71%\)$/, "antes só «71» (aria-valuenow)");
+    assert.match(t.raiz.querySelector(".ini-onb-barra").getAttribute("aria-valuetext") || "", /^2 de \d+ passos \(\d+%\)$/);
+  } finally { dom.fim(); }
 });

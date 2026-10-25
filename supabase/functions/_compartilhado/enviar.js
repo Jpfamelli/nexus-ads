@@ -213,6 +213,20 @@ const destino = cx => cx?.contato?.wa_id || cx?.contato?.telefone || null;
 const contextoConversa = (db, ctx, cliente, conversa) =>
   interna(db, "nx_cv_contexto_envio", { p_ctx: ctx, p_cliente: cliente, p_conversa: idConversa(conversa) });
 
+/** plano 2000d · DS-021 / DC-109: o painel manda o dono que a tela via (`dono_esperado`, null = sem dono). Se outra pessoa assumiu
+    depois, nada sai: 409 dono_mudou com o nome de quem ficou no detalhe (a tela devolve o texto ao campo e avisa). Sem o campo
+    (painel antigo, reenviar de falha gravada) não confere — como antes. O nome vem de nx_cv_contexto_envio.conversa.atribuida_nome
+    (20261026b); banco sem ele → a tela diz «Outra pessoa». */
+export function conferirDono(cx, corpo) {
+  if (!corpo || typeof corpo !== "object" || !Object.hasOwn(corpo, "dono_esperado")) return;
+  const esperado = corpo.dono_esperado == null || corpo.dono_esperado === "" ? null : String(corpo.dono_esperado);
+  const atual = cx?.conversa?.atribuida_a == null ? null : String(cx.conversa.atribuida_a);
+  // voltou para a fila (sem dono agora): responder não toma a conversa de ninguém — segue
+  if (esperado === atual || atual === null) return;
+  const nome = cx?.conversa?.atribuida_nome ?? cx?.atribuida_nome ?? null;
+  throw new ErroApi("dono_mudou", 409, nome ? String(nome) : undefined);
+}
+
 /** Credencial do canal do cliente (senão 404 canal_nao_encontrado). */
 async function credencial(db, canal, cliente, { exigirToken = true } = {}) {
   if (!canal) throw new ErroApi("canal_nao_encontrado", 404);
@@ -335,6 +349,7 @@ async function acaoTexto(db, ctx, corpo, deps, { conversa, texto, respondeA, ass
   const reserva = await reservarRef(db, cliente, cx.conversa.id, clientRefDe(corpo));
   if (reserva.resposta) return reserva.resposta;
   const { cred, citacao } = await antesDoCanal(db, cliente, reserva, async () => {
+    conferirDono(cx, corpo);   // plano 2000d · DS-021 (depois da reserva: o reenvio de um pedido já gravado devolve a mensagem gravada)
     // o aparelho do CodeWords não tem janela de 24 h (é um WhatsApp comum)
     exigirConversaAberta(cx, { exigeJanela: cx.canal?.provedor !== "codewords" });
     const cred = await credencial(db, cx.canal_id, cliente);
@@ -483,6 +498,7 @@ async function acaoTemplate(db, ctx, corpo, deps) {
   const reserva = await reservarRef(db, cliente, cx.conversa.id, clientRefDe(corpo));
   if (reserva.resposta) return reserva.resposta;
   const { tpl, parametros, cred } = await antesDoCanal(db, cliente, reserva, async () => {
+    conferirDono(cx, corpo);   // plano 2000d · DS-021
     exigirConversaAberta(cx, { exigeJanela: false });   // modelo vale também sem janela ("Nova conversa")
     if (!cx.canal_id) throw new ErroApi("canal_nao_encontrado", 404);
     const tpl = await interna(db, "nx_template_ver", { p_cliente: cliente, p_template: String(corpo.template_id), p_canal: cx.canal_id });

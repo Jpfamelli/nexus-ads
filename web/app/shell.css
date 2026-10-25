@@ -162,3 +162,10 @@ html.menu-recolhido .nav-passos { display: none; }
 /* plano 1500c · UC-003/UC-037 */
 .pedido-contratacao { white-space: pre-wrap; margin: 0; }
 .lista-novidades { margin: 0; padding-inline-start: 1.2em; display: grid; gap: var(--esp-1); }
+/* plano 2000d · SX-079: contraste forçado (Windows) — o ponto da situação dos serviços e o «3/9» dos passos ganham contorno (a cor some nesse modo) */
+@media (forced-colors: active) {
+  .situacao-ponto { forced-color-adjust: none; border: 2px solid CanvasText; }
+  .situacao-it[data-tom="bom"] .situacao-ponto { background: Canvas; }
+  .situacao-it[data-tom="ruim"] .situacao-ponto, .situacao-it[data-tom="aten"] .situacao-ponto { background: CanvasText; }
+  .nav-passos { border: 1px solid CanvasText; }
+}

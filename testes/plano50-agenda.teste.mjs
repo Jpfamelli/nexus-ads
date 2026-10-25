@@ -297,7 +297,8 @@ test("43: o mini-calendário na tela — 42 botões, hoje, selecionado, densidad
   porIso("2026-10-05").click();
   assert.deepEqual(escolhidos, ["2026-10-05"]);
   const navs = el.querySelectorAll(".ag-mes-nav");
-  assert.deepEqual(navs.map(b => b.getAttribute("aria-label")), ["Mês anterior", "Próximo mês"]);
+  // plano 2000d · GY-065: as setas dizem para qual mês vão
+  assert.deepEqual(navs.map(b => b.getAttribute("aria-label").split(":")[0]), ["Mês anterior", "Próximo mês"]);
   navs[1].click(); navs[0].click();
   assert.deepEqual(meses, [1, -1]);
   // teclado: a seta move o foco e o tabindex; PageDown troca o mês

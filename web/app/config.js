@@ -873,6 +873,13 @@ export function fusoDifere(fusoEmpresa, fusoAparelho, agora = new Date()) {
   const a = deslocamentoFuso(fusoEmpresa, agora), b = deslocamentoFuso(fusoAparelho, agora);
   return a !== null && b !== null && a !== b;
 }
+/** plano 2000d · FX-119: o novo prazo de guarda apaga algo? (de «para sempre» para N meses, ou de N para menos) */
+export function prazoEncurta(antes, depois) {
+  const a = Number(antes) || 0, b = Number(depois) || 0;
+  return b > 0 && (a === 0 || b < a);
+}
+/** plano 2000d · FX-112: o perfil do Instagram (para conferir o usuário). */
+export const linkInstagram = v => { const u = normalizarInstagram(v); return /^[a-z0-9._]{1,30}$/i.test(u) ? `https://www.instagram.com/${u}/` : null; };
 /** plano 2000d · FX-093: «Ver no mapa» do endereço. */
 export const linkMapa = endereco => (String(endereco || "").trim() ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(endereco).trim())}` : null);
 /** plano 2000d · FX-019 / DR-333: a chave do checklist (pulados) — sem conta não há chave («nx-onb:<cli>:-» não é mais lida). */
@@ -900,6 +907,8 @@ export function sugestaoEmail(email) {
   if (!m || !DOMINIOS_CERTOS[m[2]]) return null;
   return `${m[1]}@${DOMINIOS_CERTOS[m[2]]}`;
 }
+/** plano 2000d · FX-105: quantos convites de uma vez («Vários e-mails»). */
+export const LIMITE_CONVITES_LOTE = 50;
 /** plano 2000d · FX-036: «4 e-mails · 1 não parece e-mail» enquanto cola a lista. */
 export function resumoEmails(texto) {
   const { validos, invalidos } = separarEmails(texto);
@@ -968,7 +977,7 @@ export function hashCurto(v) {
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
   return h.toString(16).padStart(8, "0");
 }
-/** plano 2000d · FX-055 / DU-322: o nome aproximado da cor («Azul petróleo #2B5A80») para o leitor de tela. */
+/** plano 2000d · FX-055 / DU-322: o nome aproximado da cor («Azul petróleo» seguido do código) para o leitor de tela. */
 export function nomeCor(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
   if (!m) return String(hex || "");
@@ -1061,7 +1070,14 @@ export function erroCancelamento(d) {
 /** plano 2000d · FX-092: o histórico em CSV (auditoria de acesso para a LGPD). */
 export function csvAuditoria(evs) {
   const esc = v => { let s = v === null || v === undefined ? "" : String(v); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const linhas = (Array.isArray(evs) ? evs : []).filter(Boolean).map(e => [String(e.em || "").replace("T", " ").slice(0, 16), e.quem || "", textoEventoAuditoria(e)]);
+  // a hora no fuso de São Paulo (o servidor manda em UTC)
+  const quando = em => {
+    const d = new Date(em || "");
+    if (Number.isNaN(d.getTime())) return String(em || "").replace("T", " ").slice(0, 16);
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(d).map(x => [x.type, x.value]));
+    return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
+  };
+  const linhas = (Array.isArray(evs) ? evs : []).filter(Boolean).map(e => [quando(e.em), e.quem || "", textoEventoAuditoria(e)]);
   return "﻿" + [["Quando", "Quem", "O que aconteceu"], ...linhas].map(l => l.map(esc).join(";")).join("\r\n");
 }
 /** plano 2000d · FX-091: os e-mails da lista (para mandar um comunicado). */
@@ -1634,7 +1650,12 @@ function blocoFoto(ctx) {
     try { const r = await processarImagem(f, { W: 256, H: 256, quadrado: true }); await salvar(r.url, btEnviar); }
     catch (e) { erro.textContent = textoErroImagem(e); erro.hidden = false; }
   });
-  btTirar.addEventListener("click", () => salvar(null, btTirar));
+  // plano 2000d · FX-113: «Tirar foto» com «Desfazer» (a foto antiga volta sem precisar achar o arquivo)
+  btTirar.addEventListener("click", async () => {
+    const antes = c.foto;
+    await salvar(null, btTirar);
+    if (antes && !c.foto) ui.toast("Foto tirada.", { tipo: "ok", acao: { rotulo: "Desfazer", fn: () => salvar(antes, btEnviar) } });
+  });
   pintar();
   return h("div", { class: "linha cfg-foto" }, amostra, h("div", { class: "pilha-p" }, h("b", null, "Foto"), h("small", { class: "fraco" }, "Aparece para a equipe no lugar das iniciais."),
     h("div", { class: "linha" }, btEnviar, btTirar), erro), arquivo);
@@ -1908,6 +1929,9 @@ function blocoAvisos(ctx, { ausente = null } = {}) {
     if (!gravar({ som: inp.checked })) { inp.checked = !inp.checked; ui.toast("Este navegador não deixou guardar a preferência.", { tipo: "erro" }); return; }
     ui.toast(inp.checked ? "Som ligado." : "Som desligado.", { tipo: "ok" });
   });
+  // plano 2000d · FX-118: «Testar o som» toca o aviso aqui (confere o volume antes de precisar)
+  const btSom = h("button", { type: "button", class: "bt bt-fant bt-p cfg-av-testar" }, ui.icone("play"), "Testar o som");
+  btSom.addEventListener("click", () => { if (!tocarAvisoTeste()) ui.toast("Este navegador não tocou o som. Confira o volume e se o site pode tocar áudio.", { tipo: "info" }); });
   const tela = sw("cfg-av-tela", "Aviso na área de trabalho", /* plano 1500c · UCB-005: sem a marca da plataforma (white-label) */ "Mostra um aviso do sistema mesmo com o app em segundo plano.", p.tela === true, async inp => {
     if (inp.checked) {
       const N = typeof Notification !== "undefined" ? Notification : null;
@@ -1953,7 +1977,26 @@ function blocoAvisos(ctx, { ausente = null } = {}) {
     aplicarSil(null, "Horário silencioso desligado.");
   });
   return h("div", { class: "cartao cfg-avisos" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, ausente ? "Avisos e disponibilidade" : "Avisos de mensagem nova"),
-    h("p", { class: "sub" }, "Valem neste aparelho e são os mesmos do menu «Avisos» de Conversas."))), ...[ausente, som, tela, nota, formSil].filter(Boolean));
+    h("p", { class: "sub" }, "Valem neste aparelho e são os mesmos do menu «Avisos» de Conversas."))), ...[ausente, som, h("div", { class: "linha" }, btSom), tela, nota, formSil].filter(Boolean));
+}
+
+/** plano 2000d · FX-118: um toque curto (o mesmo timbre do aviso de mensagem) — true quando o navegador tocou. */
+export function tocarAvisoTeste(AC = typeof AudioContext !== "undefined" ? AudioContext : (typeof webkitAudioContext !== "undefined" ? webkitAudioContext : null)) {
+  if (!AC) return false;
+  try {
+    const a = new AC(), t0 = a.currentTime;
+    for (const [freq, atraso] of [[880, 0], [1320, 0.16]]) {
+      const osc = a.createOscillator(), g = a.createGain();
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t0 + atraso);
+      g.gain.exponentialRampToValueAtTime(0.07, t0 + atraso + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + atraso + 0.38);
+      osc.connect(g); g.connect(a.destination);
+      osc.start(t0 + atraso); osc.stop(t0 + atraso + 0.42);
+    }
+    setTimeout(() => { try { a.close(); } catch { /* ok */ } }, 1200);
+    return true;
+  } catch { return false; }
 }
 
 /** plano 2000d · FX-005 / DU-408: «Neste aparelho» — abrir o app instalado na última tela (padrão) ou sempre no Início. */
@@ -2013,6 +2056,8 @@ async function secaoEmpresa(ctx, alvo) {
   // plano 2000d · FX-093 / FX-094: «Ver no mapa» do endereço e «Testar» o link de avaliação (abrem numa aba nova)
   const mapa = h("a", { class: "bt bt-fant bt-p cfg-empresa-mapa", target: "_blank", rel: "noopener noreferrer", hidden: true }, ui.icone("externo"), "Ver no mapa");
   const testarAval = h("a", { class: "bt bt-fant bt-p cfg-empresa-aval", target: "_blank", rel: "noopener noreferrer", hidden: true }, ui.icone("externo"), "Testar o link de avaliação");
+  // plano 2000d · FX-112: conferir o Instagram digitado
+  const abrirInsta = h("a", { class: "bt bt-fant bt-p cfg-empresa-insta", target: "_blank", rel: "noopener noreferrer", hidden: true }, ui.icone("externo"), "Abrir o Instagram");
   // plano 2000d · FX-027: o fuso da empresa com outra hora que este aparelho avisa (lembretes saem pela hora da empresa)
   const avisoFuso = h("p", { class: "aviso aviso-info cfg-empresa-fuso", role: "status", hidden: true });
   const fusoAparelho = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
@@ -2020,6 +2065,7 @@ async function secaoEmpresa(ctx, alvo) {
     const x = ui.lerForm(form);
     previa.textContent = trocarVariaveisEmpresa("Estamos na {endereco}. Ligue {telefone_empresa} ou veja {instagram}. Avalie: {link_avaliacao}", x);
     const lm = linkMapa(x.endereco); mapa.hidden = !lm; if (lm) mapa.setAttribute("href", lm);
+    const li = x.instagram ? linkInstagram(x.instagram) : null; abrirInsta.hidden = !li; if (li) abrirInsta.setAttribute("href", li);
     const la = completarHttps(x.link_avaliacao); const okA = !!la && linkHttpsValido(la); testarAval.hidden = !okA; if (okA) testarAval.setAttribute("href", la);
     const dif = fusoDifere(x.fuso, fusoAparelho);
     avisoFuso.hidden = !dif;
@@ -2047,7 +2093,8 @@ async function secaoEmpresa(ctx, alvo) {
     if (aval || Object.hasOwn(d, "link_avaliacao")) p.link_avaliacao = aval || null;
     const fer = separarFeriados(x.feriados).lista;
     if (fer.length || Object.hasOwn(d, "feriados")) p.feriados = fer;
-    if (p.retencao_meses && String(p.retencao_meses) !== String(d.retencao_meses || "") && !(await ui.confirmar({ titulo: `Guardar as conversas por ${p.retencao_meses} meses?`, perigo: true, rotulo: "Usar este prazo",
+    // plano 2000d · FX-119: só pergunta quando o prazo ENCURTA (guardar por mais tempo não apaga nada)
+    if (prazoEncurta(d.retencao_meses, p.retencao_meses) && !(await ui.confirmar({ titulo: `Guardar as conversas por ${p.retencao_meses} meses?`, perigo: true, rotulo: "Usar este prazo",
       texto: "As conversas mais antigas que o prazo serão apagadas de vez (com aviso 30 dias antes). Isso não pode ser desfeito." }))) return;
     const bt = form.querySelector("[type=submit]");
     try {
@@ -2069,7 +2116,7 @@ async function secaoEmpresa(ctx, alvo) {
   });
   alvo.append(h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Dados da empresa"),
     h("p", { class: "sub" }, "Usados nas mensagens, na IA e nas automações — escreva uma vez só."))), avisoFuso, form,
-    h("div", { class: "linha" }, mapa, testarAval),
+    h("div", { class: "linha" }, mapa, abrirInsta, testarAval),
     h("p", { class: "rotulo" }, "Como fica numa mensagem"), previa, chips));
   return {
     pendente: () => form.isConnected && estado() !== salvo,
@@ -2316,6 +2363,8 @@ async function secaoUsuarios(ctx, alvo) {
             } },
             // plano 1500c · UCB-037: trocar o e-mail de login (só quando o servidor tem a função — dados.trocar_email)
             dados.trocar_email === true ? { rotulo: "Trocar e-mail", icone: "editar", fn: () => trocarEmail(u) } : null,
+            // plano 2000d · FX-109: o e-mail da pessoa à mão (o celular corta o texto da tabela)
+            u.email ? { rotulo: "Copiar e-mail", icone: "copiar", fn: () => ui.copiar(u.email, { aviso: "E-mail copiado." }) } : null,
             // plano 1500c · UCB-036: tornar dono (só com o servidor que conhece o dono)
             comDono && u.dono !== true ? { rotulo: "Tornar dono", icone: "chave", fn: () => tornarDono(u) } : null,
             // plano 2000d · DU-114: horário de acesso por pessoa (servidor que anuncia dados.horario_acesso)
@@ -2752,7 +2801,8 @@ async function secaoUsuarios(ctx, alvo) {
   }
 
   async function abrirConvite() {
-    const deps = dados.departamentos || [];
+    // plano 2000d · FX-116: os departamentos em ordem alfabética no convite (a ordem do banco era a de criação)
+    const deps = [...(dados.departamentos || [])].sort((a, b) => String(a && a.nome).localeCompare(String(b && b.nome), "pt-BR"));
     const idAjudaPapel = `ajuda-papel-${++_seqAjuda}`;      // plano 1000b · UB-093: id único por abertura
     // plano 1500c · UCB-030: «Vários e-mails» — um convite por e-mail, no limite das vagas do plano
     let varios = false;
@@ -2768,8 +2818,9 @@ async function secaoUsuarios(ctx, alvo) {
     const txtEmails = caixaVarios.querySelector("[name=emails]");
     if (txtEmails) txtEmails.addEventListener("input", () => { contaEmails.textContent = resumoEmails(txtEmails.value); });
     // plano 2000d · FX-029 / DU-249: convidar pela FUNÇÃO (Recepção, Gerente, Sócio…) — o papel vem junto (rotas.FUNCOES_EQUIPE)
-    let funcoes = [], papelDaFuncao = null;
-    try { const R = await import(`./rotas.js?v=${encodeURIComponent(ctx.versao)}`); if (Array.isArray(R.FUNCOES_EQUIPE)) { funcoes = R.FUNCOES_EQUIPE; papelDaFuncao = R.papelDaFuncao; } } catch { /* sem a lista: só o papel */ }
+    // (vem pelo ctx.rotas do shell — os módulos não importam o rotas.js; shell antigo sem ele → só o papel)
+    const R = ctx.rotas && Array.isArray(ctx.rotas.FUNCOES_EQUIPE) && typeof ctx.rotas.papelDaFuncao === "function" ? ctx.rotas : null;
+    const funcoes = R ? R.FUNCOES_EQUIPE : [], papelDaFuncao = R ? R.papelDaFuncao : null;
     const btVarios = h("button", { type: "button", class: "bt bt-fant bt-p cfg-conv-varios", "aria-pressed": "false" }, ui.icone("convidar"), "Convidar várias pessoas de uma vez");
     btVarios.addEventListener("click", () => {
       varios = !varios;
@@ -2878,6 +2929,13 @@ async function secaoUsuarios(ctx, alvo) {
       if (bt) bt.textContent = "Concluir";
       const cancelar = m.el.querySelector(".modal-rod [data-tipo=neutro]");
       if (cancelar) cancelar.hidden = true;
+      // plano 2000d · FX-108: «Convidar outra pessoa» já do sucesso (quem monta a equipe convida em sequência), se ainda há vaga
+      const cheio = !!dados.limite && dados.uso >= dados.limite;
+      if (!cheio && m.corpo && !m.corpo.querySelector(".cfg-conv-outra")) {
+        const outra = h("button", { type: "button", class: "bt bt-sec bt-p cfg-conv-outra" }, ui.icone("convidar"), "Convidar outra pessoa");
+        outra.addEventListener("click", () => { m.fechar(true); const ir = () => abrirConvite(); if (ui.camadas && typeof ui.camadas.aposVolta === "function") ui.camadas.aposVolta(ir); else setTimeout(ir, 0); });
+        m.corpo.append(h("div", { class: "linha" }, outra));
+      }
     }
     /** UCB-030: um convite por e-mail válido (sem repetir quem já tem acesso), dentro das vagas do plano. */
     async function criarVarios(m, form, d, base) {
@@ -2886,6 +2944,8 @@ async function secaoUsuarios(ctx, alvo) {
       const membros = validos.filter(e => conviteDuplicado(dados, e) === "membro");
       const novos = validos.filter(e => !membros.includes(e));
       if (!novos.length) { ui.marcarErro(form, "emails", validos.length ? "Todas essas pessoas já têm acesso." : "Escreva pelo menos um e-mail."); return false; }
+      // plano 2000d · FX-105: até 50 por vez (uma lista colada errada não dispara centenas de convites)
+      if (novos.length > LIMITE_CONVITES_LOTE) { ui.marcarErro(form, "emails", `Até ${LIMITE_CONVITES_LOTE} e-mails por vez (a lista tem ${novos.length}).`); return false; }
       const vagas = dados.limite ? Math.max(0, dados.limite - (dados.uso || 0)) : Infinity;
       if (novos.length > vagas) { ui.marcarErro(form, "emails", `O plano tem ${vagas} ${vagas === 1 ? "vaga" : "vagas"} de usuário e a lista tem ${novos.length} e-mails.`); return false; }
       const feitos = [], falhas = [];
@@ -3308,6 +3368,15 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
         ajuda: "A LGPD pede que a política esteja à vista: aparece no rodapé da tela de entrada e no teste grátis." }),
       ui.campo({ rotulo: "Nome do remetente dos e-mails", nome: "email_remetente", valor: m.email_remetente, max: 60, autocomplete: "off", placeholder: "Equipe Conecta" }),
       ui.campo({ rotulo: "Rodapé dos e-mails", nome: "email_rodape", tipo: "textarea", linhas: 2, valor: m.email_rodape, max: 200, placeholder: "Conecta Marketing · Taubaté/SP" })));
+  // plano 2000d · FX-111: «Abrir» ao lado de site, Termos e Privacidade (confere que o link não dá erro antes de salvar)
+  for (const k of ["site", "termos_url", "privacidade_url"]) {
+    const inp = formLegal.querySelector(`input[name=${k}]`);
+    if (!inp || !inp.closest("[data-campo]")) continue;
+    const a = h("a", { class: "bt bt-fant bt-p cfg-link-abrir", target: "_blank", rel: "noopener noreferrer", hidden: true }, ui.icone("externo"), "Abrir");
+    const pintar = () => { const u = completarHttps(inp.value); const ok = !!u && linkHttpsValido(u); a.hidden = !ok; if (ok) a.setAttribute("href", u); };
+    inp.addEventListener("input", pintar); pintar();
+    inp.closest("[data-campo]").appendChild(a);
+  }
   formEntrada.addEventListener("change", ev => {
     if (!ev.target || ev.target.name !== "teste_aberto") return;
     m.teste_aberto = !!ev.target.checked; atualizar();
@@ -3639,8 +3708,14 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
     }
     atualizar();
   });
+  let salvando = false;      // plano 2000d · FX-060: Ctrl+S repetido não dispara dois salvamentos
   btSalvar.addEventListener("click", async () => {
+    if (salvando) return;
     if (btSalvar.getAttribute("aria-disabled") === "true") { ui.toast("Nada para salvar: a marca está igual à salva.", { tipo: "info" }); return; }      // UB-261
+    salvando = true;
+    try { await salvarMarca(); } finally { salvando = false; }
+  });
+  async function salvarMarca() {
     ui.marcarErro(form, null); ui.marcarErro(formEntrada, null); ui.marcarErro(formLegal, null);
     const p = payload();
     // plano 2000d · DU-145: as chaves novas têm validação própria (o validarMarca do tema ainda não as conhece)
@@ -3684,6 +3759,8 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
       // plano 2000d · DU-150: quem já está com o app aberto vê a marca nova ao abrir de novo (ou na próxima conferência, em até 10 min)
       ui.toast(soTema ? "Tema salvo. Quem entrar nesta empresa já vê a marca nova." : "Marca salva. Seus clientes veem a marca nova ao abrir o app (quem já está com ele aberto, em até 10 min).", { tipo: "ok" });
       try { await ctx.shell.recarregarMarca(); } catch { /* aparece na próxima entrada */ }
+      // plano 2000d · FX-054 / DU-150: as outras abas deste navegador repintam na hora (o app.js ouve «nx-marca-hash» no storage)
+      try { localStorage.setItem("nx-marca-hash", hashCurto({ tipo, org: orgInfo ? orgInfo.id : null, p })); } catch { /* sem storage: em até 10 min */ }
       atualizar();
       if (aoSalvar) try { aoSalvar(p); } catch { /* ok */ }
     } catch (e) {
@@ -3693,7 +3770,7 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
       else if (campo && formLegal.querySelector(`[name="${campo}"]`)) ui.marcarErro(formLegal, campo, api.mensagemErro(e));
       ui.toast(api.mensagemErro(e), { tipo: "erro" });
     }
-  });
+  }
 
   // plano 1500c · UCB-057: o link de entrada completo (com o domínio ativo da agência, quando houver) e «Copiar»
   const origemApp = typeof location !== "undefined" && location.origin && location.origin !== "null" ? location.origin : "";
@@ -3760,7 +3837,9 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
   const esquerda = h("div", { class: "pilha" },
     soTema ? null : cartao("Identidade", "Como o produto se chama para os seus clientes.", form),
     cartao("Logo", null, h("div", { class: "pilha" }, imagens, sugestoes)),
-    cartao("Cores", "Três cores bastam: o app deriva todo o resto e garante o contraste.", h("div", { class: "pilha" }, blocoProprias, notaCoresOff, caixaCores)),
+    cartao("Cores", "Três cores bastam: o app deriva todo o resto e garante o contraste.", h("div", { class: "pilha" }, ...[blocoProprias, notaCoresOff, caixaCores,
+      // plano 2000d · FX-061: as três cores em texto (para o designer ou o site)
+      h("div", { class: "linha linha-fim" }, h("button", { type: "button", class: "bt bt-fant bt-p cfg-copiar-cores", on: { click: () => ui.copiar(textoCoresMarca(m.cores), { aviso: "Cores copiadas." }) } }, ui.icone("copiar"), "Copiar as cores"))].filter(Boolean))),
     soTema ? null : cartao("Tela de entrada", "O que aparece antes do login, no seu domínio ou pelo link de entrada.", linhaLinkEntrada, formEntrada),
     soTema ? null : cartao("Contato, links legais e e-mails", "Para os seus clientes acharem você e para os e-mails do sistema saírem com a sua marca.", formLegal),
     soTema ? null : blocoVersoes());
@@ -3773,6 +3852,12 @@ export async function editorMarca(ctx, alvo, { tipo = "tema", org = null, aoSalv
   ui.limpar(alvo);
   const editorEl = h("div", { class: "marca-ed" }, esquerda, direita);
   // AS-110: colar (Ctrl+V) uma imagem com o foco no editor troca o logo — texto colado num campo segue normal
+  // plano 2000d · FX-060: Ctrl/⌘+S salva a marca (o navegador não abre o «Salvar página»)
+  editorEl.addEventListener("keydown", ev => {
+    if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || String(ev.key || "").toLowerCase() !== "s") return;
+    ev.preventDefault();
+    btSalvar.click();
+  });
   editorEl.addEventListener("paste", ev => {
     const itens = ev.clipboardData ? [...(ev.clipboardData.files || [])] : [];
     const img = itens.find(f => f && /^image\//.test(f.type));
@@ -3796,7 +3881,8 @@ async function secaoDominio(ctx, alvo) {
   const h = ui.h;
   let lista = [];
   const caixa = h("div", { class: "pilha" });
-  const clientes = (typeof ctx.shell.clientes === "function" && ctx.shell.clientes()) || [];      // plano 1500c · UCB-018: gestor sem clientes ainda
+  // plano 1500c · UCB-018: gestor sem clientes ainda · plano 2000d · FX-115: em ordem alfabética (achar um cliente entre 40)
+  const clientes = [...((typeof ctx.shell.clientes === "function" && ctx.shell.clientes()) || [])].sort((a, b) => String(a && a.nome).localeCompare(String(b && b.nome), "pt-BR"));
   const form = h("form", { class: "pilha", novalidate: true },
     h("div", { class: "form-grade" },
       // plano 2000d · DU-161: a sugestão é «app.» + o seu domínio (o domínio raiz é o do site e não aceita CNAME)
@@ -3828,6 +3914,8 @@ async function secaoDominio(ctx, alvo) {
     // plano 1000b · UB-263: o próprio endereço do app (ou um *.netlify.app) não é domínio próprio — é o destino do CNAME
     const erroHost = erroHostDominio(host, typeof location !== "undefined" ? location.hostname : "");
     if (erroHost) return ui.marcarErro(form, "host", erroHost);
+    // plano 2000d · FX-067: o mesmo endereço já está na lista — diz na hora, sem ir ao servidor
+    if (hostJaCadastrado(lista, host)) return ui.marcarErro(form, "host", "Esse endereço já está cadastrado (veja na lista abaixo).");
     // plano 1000 · AS-113: domínio raiz não aceita CNAME — a pessoa criava o registro e o domínio nunca ativava
     if (ehDominioRaiz(host) && !(await ui.confirmar({ titulo: "Isso parece um domínio raiz", rotulo: "Usar mesmo assim",
       texto: `«${host}» não aceita CNAME na maioria dos provedores, e sem CNAME o domínio não ativa. Prefira um subdomínio, como crm.${host} ou app.${host}.` }))) {
@@ -3852,7 +3940,8 @@ async function secaoDominio(ctx, alvo) {
         texto: "Com um domínio próprio, a tela de entrada, os convites e os links de senha saem com o seu endereço e a sua marca." }));
       return;
     }
-    for (const d of lista) caixa.append(cartaoDominio(ctx, d, { aoRemover: async () => { lista = validarListaDominios(await api.rpc("nx_dominios_listar")); desenhar(); } }));
+    // plano 2000d · FX-066: o que precisa de atenção (parou de apontar, pendente) primeiro
+    for (const d of ordenarDominios(lista)) caixa.append(cartaoDominio(ctx, d, { aoRemover: async () => { lista = validarListaDominios(await api.rpc("nx_dominios_listar")); desenhar(); } }));
   }
   alvo.append(
     h("div", { class: "cartao" },
@@ -3939,10 +4028,13 @@ export function cartaoDominio(ctx, d, { aoRemover, aoStatus, mostrarOrg = false,
       d.status === "quebrado" ? ui.pilula("Parou de apontar", "ruim", { icone: "alerta" }) : ui.pilula(ativo ? "Ativo" : "Pendente", ativo ? "ok" : "aten")),
     d.status === "quebrado" ? h("p", { class: "aviso aviso-ruim dom-quebrado", role: "status" }, ui.icone("alerta"),
       h("span", null, `O CNAME de ${d.host} não aponta mais para o app${d.verificado_em ? ` (conferido ${ui.relativo(d.verificado_em)})` : ""}: quem entra por ele cai num erro. Confira o registro no seu provedor.`)) : null,
+    // plano 2000d · FX-065: o «Nome» como os painéis pedem (só «crm» em crm.agencia.com.br), com o completo de reserva
     ativo ? null : h("dl", { class: "dns" },
       h("dt", null, "Tipo"), h("dd", null, "CNAME"),
-      h("dt", null, "Nome"), h("dd", null, copiavel(d.host, "Nome")),
+      h("dt", null, "Nome"), h("dd", null, copiavel(rotuloCname(d.host), "Nome"), h("small", { class: "fraco dns-nome-completo" }, ` (se o provedor pedir o endereço inteiro: ${d.host})`)),
       h("dt", null, "Valor"), h("dd", null, alvoDns ? copiavel(alvoDns, "Valor") : h("span", { class: "fraco" }, "a plataforma informa"))),
+    // plano 2000d · FX-095: o registro inteiro num toque (para mandar a quem cuida do DNS)
+    ativo ? null : h("div", { class: "linha" }, h("button", { type: "button", class: "bt bt-fant bt-p dom-copiar-tudo", on: { click: () => ui.copiar(textoRegistroDns(d.host, alvoDns), { aviso: "Registro copiado." }) } }, ui.icone("copiar"), "Copiar o registro inteiro")),
     h("p", { class: "fraco dom-nota" }, ativo
       ? `No ar${d.ativado_em ? ` desde ${ui.dataBR(d.ativado_em)}` : ""}. Convites e links de senha já saem com este endereço.`
       : alvoDns
@@ -3985,10 +4077,16 @@ function cartaoFaturas(ctx) {
     const fs = Array.isArray(r) ? r : r && Array.isArray(r.faturas) ? r.faturas : null;
     if (!fs) return false;
     ui.limpar(corpo);
+    // plano 2000d · FX-068: o total em aberto no topo; FX-069: atrasadas primeiro; FX-096: há quantos dias atrasou
+    const res = resumoFaturas(fs);
+    if (res) corpo.append(h("p", { class: ["aviso", res.atrasadas ? "aviso-ruim" : "aviso-aten", "cfg-faturas-resumo"], role: "status" }, ui.icone(res.atrasadas ? "alerta" : "relogio"),
+      h("span", null, `${ui.brl(res.aberto)} em aberto em ${res.n} ${res.n === 1 ? "fatura" : "faturas"}${res.atrasadas ? ` (${res.atrasadas} ${res.atrasadas === 1 ? "atrasada" : "atrasadas"})` : ""}.`)));
+    const hojeF = ui.hojeSP();
     if (!fs.length) corpo.append(h("p", { class: "fraco" }, "Nenhuma fatura ainda."));
-    else corpo.append(h("ul", { class: "cfg-faturas-lista" }, fs.slice(0, 24).map(f => h("li", { class: "linha linha-entre" },
+    else corpo.append(h("ul", { class: "cfg-faturas-lista" }, ordenarFaturas(fs).slice(0, 24).map(f => h("li", { class: "linha linha-entre" },
       h("span", null, h("b", null, f.vencimento ? ui.dataBR(f.vencimento) : "—"), h("small", { class: "fraco" }, ` · ${f.valor != null ? ui.brl(f.valor) : ""}`)),
-      h("span", { class: "linha" }, ui.pilula(f.status === "paga" ? "Paga" : f.status === "atrasada" ? "Atrasada" : "Em aberto", f.status === "paga" ? "ok" : f.status === "atrasada" ? "ruim" : "aten"),
+      h("span", { class: "linha" }, ui.pilula(f.status === "paga" ? "Paga" : f.status === "atrasada" ? (diasAtraso(f.vencimento, hojeF) ? `Atrasada há ${diasAtraso(f.vencimento, hojeF)} ${diasAtraso(f.vencimento, hojeF) === 1 ? "dia" : "dias"}` : "Atrasada") : "Em aberto",
+        f.status === "paga" ? "ok" : f.status === "atrasada" ? "ruim" : "aten"),
         linkOk(f.pdf_url) ? h("a", { class: "bt bt-fant bt-p", href: f.pdf_url, target: "_blank", rel: "noopener noreferrer" }, ui.icone("baixar"), "Recibo") : null,
         f.status !== "paga" && linkOk(f.pagar_url) ? h("a", { class: "bt bt-prim bt-p", href: f.pagar_url, target: "_blank", rel: "noopener noreferrer" }, "Pagar") : null)))));
     if (r && linkOk(r.trocar_pagamento_url)) corpo.append(h("a", { class: "bt bt-sec bt-p", href: r.trocar_pagamento_url, target: "_blank", rel: "noopener noreferrer" }, ui.icone("cartao"), "Trocar forma de pagamento"));
@@ -4012,7 +4110,9 @@ function cartaoCancelar(ctx, { nomeCli = "", quem = null } = {}) {
     const r = await ui.modal({ titulo: `Cancelar a assinatura da ${nomeCli}`, corpo: fm, largura: "m", acoes: [{ rotulo: "Voltar", tipo: "neutro" }, { rotulo: "Enviar pedido", tipo: "perigo", icone: "alerta", fn: async () => {
       ui.marcarErro(fm, null);
       const d = ui.lerForm(fm);
-      if (!d.motivo) { ui.marcarErro(fm, "motivo", "Escolha um motivo."); return false; }
+      // plano 2000d · FX-070: «Outro motivo» pede o texto (senão quem cuida do plano recebe um pedido sem motivo)
+      const errC = erroCancelamento(d);
+      if (errC) { ui.marcarErro(fm, errC.campo, errC.texto); return false; }
       return api.rpcC("nx_cancelamento_pedir", { p_motivo: d.motivo, p_detalhe: String(d.faltou || "").trim() || null, p_pausar: !!d.pausar }).then(x => x || { ok: true, pausar: !!d.pausar });
     } }] });
     if (r) ui.toast(r.pausar ? `Pedido de pausa enviado${quem ? ` para a ${quem}` : ""}.` : `Pedido de cancelamento enviado${quem ? ` para a ${quem}` : ""}. Os dados ficam guardados.`, { tipo: "ok" });
@@ -4067,9 +4167,15 @@ function historicoIA(ctx) {
     const meses = usoIAPorMes(lista, ui.hojeSP());
     if (!meses) { cartao.remove(); cartao.hidden = true; return false; }
     ui.limpar(corpo);
-    corpo.append(h("ul", { class: "cfg-ia-meses-lista" }, meses.map((x, i) => h("li", { class: "linha linha-entre" },
-      h("span", null, x.rotulo, i === 0 ? h("small", { class: "fraco" }, " (até hoje)") : x.parcial ? h("small", { class: "fraco" }, " (só parte do mês)") : null),
-      h("b", { class: "mono dado" }, `${ui.num(x.chamadas)} ${x.chamadas === 1 ? "chamada" : "chamadas"}`)))));
+    corpo.append(h("ul", { class: "cfg-ia-meses-lista" }, meses.map((x, i) => {
+      // plano 2000d · FX-072: os meses fechados comparados com o anterior («+20 %») — só com os dois meses inteiros
+      const ant = meses[i + 1];
+      const v = i > 0 && ant && !x.parcial && !ant.parcial ? variacaoPct(x.chamadas, ant.chamadas) : null;
+      return h("li", { class: "linha linha-entre" },
+        h("span", null, x.rotulo, i === 0 ? h("small", { class: "fraco" }, " (até hoje)") : x.parcial ? h("small", { class: "fraco" }, " (só parte do mês)") : null),
+        h("span", null, h("b", { class: "mono dado" }, `${ui.num(x.chamadas)} ${x.chamadas === 1 ? "chamada" : "chamadas"}`),
+          v !== null && v !== 0 ? h("small", { class: "fraco cfg-ia-var" }, ` ${v > 0 ? "+" : "−"}${Math.abs(v)}% sobre ${ant.rotulo.split(" ")[0]}`) : null));
+    })));
     return true;
   }).catch(() => { cartao.remove(); cartao.hidden = true; return false; });
   return cartao;
@@ -4191,6 +4297,9 @@ async function secaoPlano(ctx, alvo) {
     }
     // plano 2000d · DU-168: quando a cota de IA zera
     if (k === "ia_mes" && lim !== 0) b.appendChild(h("small", { class: "uso-det cfg-ia-renova" }, textoRenovacaoIA(hoje)));
+    // plano 2000d · FX-071: quanto sobra (ou passou) em palavras — a barra sozinha não diz o número
+    const sobra = lim !== 0 ? sobraLimite(r.uso ? r.uso[k] : 0, lim) : null;
+    if (sobra) b.appendChild(h("small", { class: ["uso-det", "cfg-uso-sobra", /acima|No limite/.test(sobra) && "cfg-uso-sobra-aten"] }, sobra));
     if (REGRA_USO[k] && lim !== 0) b.appendChild(h("small", { class: "uso-det cfg-uso-regra" }, REGRA_USO[k]));
     // plano 1000b · UB-264: cada barra leva à tela que libera a vaga
     const ir = GERENCIAR_USO[k];
@@ -4250,8 +4359,16 @@ async function secaoPlano(ctx, alvo) {
       // plano 2000d · DU-166: com limite de mídia no plano, a barra (e o caminho para os arquivos grandes, quando o servidor diz onde)
       r.limites && Number(r.limites.storage_mb) > 0
         ? h("div", { class: "plano-storage-barra" }, ui.barraUso(`Mídia guardada (${formatarArmazenamento(r.storage_mb)} de ${formatarArmazenamento(r.limites.storage_mb)})`, Math.round(Number(r.storage_mb) || 0), Number(r.limites.storage_mb)),
+          // plano 2000d · FX-073: perto de encher (90 %), avisa o que acontece
+          midiaQuaseCheia(r.storage_mb, r.limites.storage_mb) ? h("small", { class: "uso-det cfg-uso-sobra-aten cfg-midia-cheia" }, "Quase cheio: quando encher, fotos e áudios novos deixam de ser guardados. Apague arquivos grandes ou peça mais espaço.") : null,
           typeof r.arquivos_grandes_href === "string" && r.arquivos_grandes_href.startsWith("#/") ? h("a", { class: "cfg-uso-ir", href: r.arquivos_grandes_href }, "Ver arquivos grandes", ui.icone("seta-dir")) : null)
         : h("p", { class: "fraco plano-storage" }, ui.icone("clipe"), `Mídia guardada: ${formatarArmazenamento(r.storage_mb)}`)),
     cartaoComparar,
     cartaoFaturas(ctx),
-    // plano 2000d · DU-165: cancelar pelo app com 3 perguntas e oferta de pausa (só com o servidor que anu
+    // plano 2000d · DU-165: cancelar pelo app com 3 perguntas e oferta de pausa (só com o servidor que anuncia r.pode_cancelar)
+    r.pode_cancelar === true ? cartaoCancelar(ctx, { nomeCli, quem }) : null,
+    historicoIA(ctx),
+    agencia ? h("div", { class: "cartao" }, h("div", { class: "cartao-cab" }, h("div", null, h("h2", null, "Sua agência"),
+      h("p", { class: "sub" }, "Soma de todos os clientes da revenda."))),
+      h("div", { class: "adm-uso" }, agencia.map(x => ui.barraUso(x.rotulo, x.uso, x.limite)))) : null].filter(Boolean));
+}

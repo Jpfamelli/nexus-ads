@@ -85,7 +85,8 @@ test("SC-085/SC-097 modelo padrão do código = Haiku 5.5; Sonnet só no montar/
     assert.equal(modeloPara("sugerir"), "claude-sonnet-5-5", "env NX_MODELO_PADRAO troca o padrão sem deploy");
     assert.equal(modeloPara("sugerir", "claude-opus-5-5"), "claude-opus-5-5", "o configurado vem antes do env");
   } finally { if (antes === undefined) delete globalThis.Deno; else globalThis.Deno = antes; }
-  assert.deepEqual(Object.keys(MODELOS_TAREFA).sort(), ["decidir", "diario", "mensal", "montar", "resumir", "semanal", "sugerir"]);
+  // plano 2000d: + reescrever, simular e traduzir (DS-016 / DS-028), também no modelo barato
+  assert.deepEqual(Object.keys(MODELOS_TAREFA).sort(), ["decidir", "diario", "mensal", "montar", "reescrever", "resumir", "semanal", "simular", "sugerir", "traduzir"]);
 });
 
 /* ia.js com o SDK trocado por um dublê (o mesmo truque de testes/plano100-funcoes) */

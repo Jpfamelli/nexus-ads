@@ -59,7 +59,7 @@ export function corValida(c) { return typeof c === "string" && RE_HEX.test(c.tri
 export function normalizarHex(c) {
   if (typeof c !== "string") return null;
   let s = c.trim();
-  if (/^[0-9a-f]{6}$/i.test(s)) s = "#" + s;
+  if (/^[0-9a-f]{6}$/i.test(s) || /^[0-9a-f]{3}$/i.test(s)) s = "#" + s;   // plano 2000d · SX-082: «fa0» (sem #, 3 dígitos) também
   if (/^#[0-9a-f]{3}$/i.test(s)) s = "#" + s.slice(1).split("").map(x => x + x).join("");
   return RE_HEX.test(s) ? s.toUpperCase() : null;
 }
@@ -357,8 +357,36 @@ const RE_IMG = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
 export function imagemSegura(u) {
   if (typeof u !== "string" || !u) return null;
   if (RE_IMG.test(u)) return u;
+  // plano 2000d · SX-088: base64 colado com quebras de linha/espaços (copiado de um e-mail) continua sendo a mesma imagem
+  if (/^data:image\/(png|jpeg|webp);base64,/.test(u) && /\s/.test(u)) { const limpo = u.replace(/\s+/g, ""); return RE_IMG.test(limpo) ? limpo : null; }
   if (/^https:\/\/[^\s"'<>]+$/i.test(u) && !/\.svg(\?|#|$)/i.test(u)) return u;
   return null;
+}
+
+/** plano 2000d · SX-040: texto aparado, ou "" quando não há texto de verdade. */
+function textoOuNada(v) { return typeof v === "string" ? v.trim() : ""; }
+/** plano 2000d · SX-041: o WhatsApp de suporte gravado com máscara («+55 (12) 99999-8888») ou como número continua valendo — só os dígitos. */
+export function whatsDaMarca(v) {
+  if (typeof v !== "string" && typeof v !== "number") return null;
+  const d = String(v).replace(/\D/g, "");
+  return /^\d{10,15}$/.test(d) ? d : null;
+}
+
+/** plano 2000d · SX-098: os campos extras da marca, cada um com o seu tipo (o que vier diferente fica de fora). */
+const EXTRAS_SIM_NAO = ["teste_aberto", "pedir_senha", "entrar_codigo"];
+const EXTRAS_INTEIRO = { dias_teste: [1, 90], retencao_dias: [1, 3650], inatividade_min: [0, 1440] };
+const EXTRAS_LINK = ["termos_url", "privacidade_url", "site"];
+const EXTRAS_TEXTO = { nome_curto: 20, boas_vindas_titulo: 80, boas_vindas: 400, contato_agencia: 160 };
+export function extrasDaMarca(m = {}) {
+  const o = {};
+  if (!m || typeof m !== "object") return o;
+  for (const k of EXTRAS_SIM_NAO) if (typeof m[k] === "boolean") o[k] = m[k];
+  for (const [k, [min, max]] of Object.entries(EXTRAS_INTEIRO)) { const n = Number(m[k]); if (m[k] !== null && m[k] !== "" && Number.isInteger(n) && n >= min && n <= max) o[k] = n; }
+  for (const k of EXTRAS_LINK) if (typeof m[k] === "string" && /^https:\/\/[^\s"'<>]+$/i.test(m[k].trim())) o[k] = m[k].trim();
+  for (const [k, max] of Object.entries(EXTRAS_TEXTO)) { const t = textoOuNada(m[k]); if (t) o[k] = t.slice(0, max); }
+  if (typeof m.demo_cliente_id === "string" && /^[0-9a-f-]{36}$/i.test(m.demo_cliente_id)) o.demo_cliente_id = m.demo_cliente_id;
+  const ic = imagemSegura(m.icone_app); if (ic) o.icone_app = ic;
+  return o;
 }
 
 /** Marca efetiva: cores do tema do cliente → cores da org → padrão (chave a chave). */
@@ -375,11 +403,17 @@ export function marcaEfetiva(marcaOrg = {}, temaCliente = {}, reserva = {}) {
     logo_cliente_claro: imagemSegura(t.logo_claro),
     cores: { primaria: cor("primaria"), secundaria: cor("secundaria"), fundo: cor("fundo") },
     // plano 1000b · UB-179: o slogan da Órbita só na marca padrão; revenda (produto próprio) sem título usa uma frase neutra
-    login_titulo: m.login_titulo || (!(typeof m.produto === "string" && m.produto.trim()) || m.produto.trim() === PADRAO.produto
+    // plano 2000d · SX-040: título/texto só com espaços contam como vazios (o login mostrava uma linha em branco)
+    login_titulo: textoOuNada(m.login_titulo) || (!(typeof m.produto === "string" && m.produto.trim()) || m.produto.trim() === PADRAO.produto
       ? "Anúncio, conversa e venda na mesma órbita." : "Entre para continuar"),
-    login_texto: m.login_texto || "Entre com o e-mail e a senha que você recebeu.",
-    suporte_wa: typeof m.suporte_wa === "string" && /^\d{10,15}$/.test(m.suporte_wa) ? m.suporte_wa : null,
-    assinatura: m.assinatura || null,
+    login_texto: textoOuNada(m.login_texto) || "Entre com o e-mail e a senha que você recebeu.",
+    suporte_wa: whatsDaMarca(m.suporte_wa),   // plano 2000d · SX-041
+    // plano 2000d · SX-089: o e-mail de suporte da revenda chega ao app (antes ficava só na tela de entrada); formato conferido aqui
+    suporte_email: typeof m.suporte_email === "string" && /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]{2,}$/.test(m.suporte_email.trim()) ? m.suporte_email.trim().slice(0, 120) : null,
+    assinatura: textoOuNada(m.assinatura) || null,
+    // plano 2000d · SX-098: o resto da marca pública que as telas leem (teste aberto, prazo do teste, links do rodapé, boas-vindas…) atravessa
+    // a marca efetiva — antes ela só levava cores, logos e textos do login, e o «Testar grátis», os termos e o «pedir nova senha» nunca apareciam
+    ...extrasDaMarca(m),
   };
 }
 
@@ -413,6 +447,8 @@ export function validarMarca(m = {}, soTema = false) {
       if (typeof m[k] !== "string" || m[k].length > LIMITES_MARCA[k]) erros.push({ campo: k, texto: `Até ${LIMITES_MARCA[k]} caracteres.` });
     }
     if (m.produto != null && typeof m.produto === "string" && m.produto.trim().length < 2) erros.push({ campo: "produto", texto: "Informe o nome do produto." });
+    // plano 2000d · SX-042: «teste aberto» é sim ou não — "false" (texto) seria verdadeiro no servidor e abriria o teste sem querer
+    if (m.teste_aberto != null && typeof m.teste_aberto !== "boolean") erros.push({ campo: "teste_aberto", texto: "Use sim ou não." });
     if (m.suporte_wa != null && m.suporte_wa !== "" && !/^\d{10,15}$/.test(String(m.suporte_wa))) erros.push({ campo: "suporte_wa", texto: "Só números, com DDI e DDD (ex.: 5512999998888)." });
   }
   return erros;

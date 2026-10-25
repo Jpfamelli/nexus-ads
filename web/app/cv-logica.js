@@ -670,7 +670,8 @@ export function pode(papel, min) { return (RANK[papel] ?? -1) >= (RANK[min] ?? 9
 /** Dicas para erros do envio (texto que acompanha o "!"). */
 export function dicaErroEnvio(codigo) {
   // plano 1500c · CC-026: códigos da Meta chegam como «131026» ou «meta_131026» — o número decide a dica
-  const num = /(\d{6})$/.exec(String(codigo ?? ""));
+  // plano 2000d · DC-101: também o texto cru que a Meta grava na falha («(#131026) Message undeliverable»)
+  const num = /(\d{6})$/.exec(String(codigo ?? "")) || /\(#(\d{6})\)/.exec(String(codigo ?? ""));
   const porMeta = num ? {
     131026: "O número não pôde receber: ele não tem WhatsApp, bloqueou o número da empresa ou usa um aplicativo muito antigo. Confira o número com o cliente por outro meio.",
     131047: "Mais de 24 h desde a última mensagem do cliente. Envie um modelo aprovado.",
@@ -1828,6 +1829,51 @@ export function documentoIncomum(nome, mime = "") {
   return !MIME_SEGURO.test(String(mime || ""));
 }
 
+// plano 2000d · DC-245: o aviso do documento incomum diz qual é o tipo («Arquivo .apk (instalador de aplicativo)»)
+const TIPOS_INCOMUNS = {
+  apk: "instalador de aplicativo", exe: "programa do Windows", msi: "instalador do Windows", bat: "comando do Windows", cmd: "comando do Windows",
+  ps1: "comando do Windows", vbs: "script do Windows", js: "script", jar: "programa Java", sh: "script", dmg: "instalador do Mac", pkg: "instalador do Mac",
+  html: "página da web", htm: "página da web", svg: "desenho que pode conter código", xml: "arquivo de dados", zip: "arquivo compactado",
+  rar: "arquivo compactado", "7z": "arquivo compactado", iso: "imagem de disco", lnk: "atalho do Windows", scr: "programa do Windows"
+};
+export function descricaoIncomum(nome, mime = "") {
+  const n = String(nome || "").toLowerCase();
+  const ext = n.includes(".") ? n.split(".").pop() : "";
+  if (!ext) return "Arquivo de tipo incomum";
+  const tipo = TIPOS_INCOMUNS[ext];
+  return tipo ? `Arquivo .${ext} (${tipo})` : `Arquivo .${ext}`;
+}
+/** plano 2000d · DC-070: recuo do pulso com rede ruim → ms a esperar antes do próximo pulso do shell (0 = no ritmo normal de 3 s).
+    Pulso mais lento que o intervalo ou 2G: dobra (de 6 s até 24 s); pulso rápido de novo: cai pela metade até voltar ao normal. */
+export function recuoPulso(atualMs, duracaoMs, efetivo = "", intervaloMs = 3000) {
+  const lento = Number(duracaoMs) > intervaloMs || /(^|-)2g$/.test(String(efetivo || ""));
+  const a = Math.max(0, Number(atualMs) || 0);
+  if (lento) return Math.min(24000, Math.max(6000, a * 2));
+  if (!a) return 0;
+  const metade = Math.floor(a / 2);
+  return metade >= 6000 ? metade : 0;
+}
+/** plano 2000d · DC-006/DC-013: o que mudou entre as etiquetas vistas e as marcadas → { acrescentar, tirar } (ids, sem repetição). */
+export function diferencaEtiquetas(vistas = [], marcadas = []) {
+  const id = x => String(x && typeof x === "object" ? x.id : x);
+  const v = new Set((vistas || []).map(id)), m = new Set((marcadas || []).map(id));
+  const orig = new Map([...(vistas || []), ...(marcadas || [])].map(x => [id(x), x && typeof x === "object" ? x.id : x]));
+  return { acrescentar: [...m].filter(x => !v.has(x)).map(x => orig.get(x)), tirar: [...v].filter(x => !m.has(x)).map(x => orig.get(x)) };
+}
+/** plano 2000d · DC-130: «2 fotos ficaram de fora: a.heic (HEIC…), b.png (6 MB…)» — um aviso só para o lote. */
+export function resumoFotosRecusadas(lista) {
+  const l = (lista || []).filter(Boolean);
+  if (!l.length) return "";
+  const mostra = l.slice(0, 4).join(", ") + (l.length > 4 ? ` e mais ${l.length - 4}` : "");
+  return `${l.length} ${l.length === 1 ? "foto ficou" : "fotos ficaram"} de fora: ${mostra}.`;
+}
+/** plano 2000d · DC-244: Word, Excel, PowerPoint e afins ganham «Ver» e «Baixar» separados, como o PDF. */
+export function documentoOffice(nome, mime = "") {
+  const ext = String(nome || "").toLowerCase().split(".").pop();
+  if (["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "csv"].includes(ext)) return true;
+  return /msword|ms-(excel|powerpoint)|officedocument|opendocument/i.test(String(mime || ""));
+}
+
 /** CA-027: parâmetro de modelo que a Meta recusa (erro 132018): quebra de linha, tab ou mais de 4 espaços seguidos. "" quando vale. */
 export function erroParametroModelo(v, n) {
   const s = String(v ?? "");
@@ -1860,6 +1906,16 @@ export function microfoneMudo(amostras, { limiar = SILENCIO_LIMIAR, janelaMs = S
   const fim = agora === null ? Number(lista[lista.length - 1].t) : Number(agora);
   if (fim - Number(lista[0].t) < janelaMs) return false;            // ainda não deu tempo de saber
   return lista.filter(a => fim - Number(a.t) <= janelaMs).every(a => Number(a.nivel) < limiar);
+}
+
+/** plano 2000d · DC-107: histerese do «Não estamos ouvindo nada» — aparece com o silêncio (microfoneMudo já espera 3 s) e só some depois
+    de 2 s seguidos de som. → { visivel, somDesde } */
+export function histereseMudo(estado, mudo, agora, someMs = 2000) {
+  const e = estado || { visivel: false, somDesde: 0 };
+  if (mudo) return { visivel: true, somDesde: 0 };
+  if (!e.visivel) return { visivel: false, somDesde: 0 };
+  const desde = e.somDesde || agora;
+  return agora - desde >= someMs ? { visivel: false, somDesde: 0 } : { visivel: true, somDesde: desde };
 }
 
 /** CA-043: o que os pontos coloridos da linha dizem, em texto (celular): "Avaliação · Urgente +1". */
@@ -2485,4 +2541,94 @@ export function artigoDepartamento(nome) {
   if (/(as|coes)$/.test(n)) return "as";
   if (/os$/.test(n)) return "os";
   return /(a|cao|dade|agem|ie)$/.test(n) && !/^(dia|mapa|sistema|programa|problema|tema)$/.test(n) ? "a" : "o";
+}
+
+// plano 2000d · DC-097: a saída gravada leva a assinatura de quem enviou («*Helena:*» + quebra) — encaminhar/reenviar/copiar tiram
+const RE_ASSINATURA = /^\*[^*\n]+:\*\n/;
+export function semAssinatura(texto) { return String(texto ?? "").replace(RE_ASSINATURA, ""); }
+
+// plano 2000d · DC-039: o serviço da agenda que o cliente citou nas últimas 10 mensagens dele («quero marcar uma limpeza» → «Limpeza»)
+export function servicoCitado(msgs, servicos) {
+  const nomes = (servicos || []).map(s => String(s || "").trim()).filter(Boolean);
+  if (!nomes.length) return "";
+  const doCliente = (msgs || []).filter(m => m && m.direcao === "in" && m.corpo).slice(-10).reverse();
+  const norm = t => " " + semAcento(String(t || "").toLowerCase()).replace(/[^a-z0-9]+/g, " ").trim() + " ";
+  // o nome mais comprido primeiro («Limpeza profunda» antes de «Limpeza»)
+  const ordem = nomes.slice().sort((a, b) => b.length - a.length);
+  for (const m of doCliente) {
+    const t = norm(m.corpo);
+    const achou = ordem.find(n => t.includes(norm(n)));
+    if (achou) return achou;
+  }
+  return "";
+}
+
+// plano 2000d · DC-038: «IA respondeu em 20 s · equipe assumiu 9 h depois» — pelas mensagens carregadas do atendimento (a partir de abertaEm).
+// → "" quando a 1ª saída não foi da IA (vale o «1ª resposta» de sempre)
+export function textoRespostaIA(msgs, abertaEm) {
+  const t0 = Date.parse(abertaEm || "");
+  if (!Number.isFinite(t0)) return "";
+  const saidas = (msgs || []).filter(m => m && m.direcao === "out" && !m.local && m.tipo !== "nota" && m.tipo !== "sistema" && (Date.parse(m.criado_em || "") || 0) >= t0)
+    .sort((a, b) => Date.parse(a.criado_em) - Date.parse(b.criado_em));
+  if (!saidas.length || saidas[0].origem !== "ia") return "";
+  const tIA = Date.parse(saidas[0].criado_em);
+  const seg = Math.max(0, Math.round((tIA - t0) / 1000));
+  const ia = seg < 60 ? `IA respondeu em ${seg} s` : `IA respondeu em ${textoMinutos(seg / 60)}`;
+  const pessoa = saidas.find(m => m.origem !== "ia");
+  if (!pessoa) return `${ia} · a equipe ainda não respondeu`;
+  const min = Math.max(0, Math.round((Date.parse(pessoa.criado_em) - tIA) / 60000));
+  return `${ia} · equipe assumiu ${min < 1 ? "em seguida" : `${textoMinutos(min)} depois`}`;
+}
+
+// plano 2000d · DC-037: a história do lead em marcos com hora — anúncio/origem → 1ª mensagem → 1ª resposta (IA ou quem) → consulta →
+// presença → negócio ganho. Só com o que a tela já tem (nx_cv_ver + mensagens carregadas). → [{ tipo, em, texto }] em ordem.
+export function jornadaDoContato(ver, msgs) {
+  const v = ver || {}, ct = v.contato || {}, conv = v.conversa || {}, an = v.anuncio || null;
+  const t = x => { const n = Date.parse(x || ""); return Number.isFinite(n) ? n : null; };
+  const marcos = [];
+  const doAnuncio = an || ct.origem === "anuncio";
+  const entrada = (msgs || []).filter(m => m && m.direcao === "in" && !m.local && m.tipo !== "sistema").sort((a, b) => (t(a.criado_em) || 0) - (t(b.criado_em) || 0))[0];
+  const emOrigem = t(an && (an.clique_em || an.criado_em)) ?? t(conv.aberta_em) ?? t(entrada && entrada.criado_em);
+  if (doAnuncio && emOrigem !== null) {
+    const nome = an && (an.anuncio_nome || an.campanha_nome);
+    marcos.push({ tipo: "origem", em: emOrigem, texto: nome ? `Clicou no anúncio «${nome}»` : "Veio do anúncio" });
+  }
+  if (entrada && t(entrada.criado_em) !== null) marcos.push({ tipo: "entrada", em: t(entrada.criado_em), texto: "Mandou a primeira mensagem" });
+  const t0 = entrada ? t(entrada.criado_em) : null;
+  const resp = t0 === null ? null : (msgs || []).filter(m => m && m.direcao === "out" && !m.local && m.tipo !== "nota" && m.tipo !== "sistema" && (t(m.criado_em) || 0) >= t0)
+    .sort((a, b) => (t(a.criado_em) || 0) - (t(b.criado_em) || 0))[0];
+  if (resp) {
+    const seg = Math.max(0, Math.round(((t(resp.criado_em) || 0) - t0) / 1000));
+    const quanto = seg < 60 ? `${seg} s` : textoMinutos(seg / 60);
+    const quem = resp.origem === "ia" ? "A IA" : (resp.enviado_por && resp.enviado_por.nome) || "A equipe";
+    marcos.push({ tipo: "resposta", em: t(resp.criado_em), texto: `${quem} respondeu em ${quanto}` });
+  }
+  for (const c of (Array.isArray(ct.consultas) ? ct.consultas : [])) {
+    const em = t(c && (c.marcada_em || c.criado_em)) ?? null, ini = t(c && c.inicio);
+    if (ini === null) continue;
+    marcos.push({ tipo: "consulta", em: em ?? ini, texto: `Consulta marcada${c.servico ? ` · ${c.servico}` : ""}`, inicio: ini });
+    if (c.presenca === "compareceu") marcos.push({ tipo: "presenca", em: ini, texto: "Compareceu" });
+    else if (c.presenca === "faltou") marcos.push({ tipo: "presenca", em: ini, texto: "Faltou" });
+  }
+  for (const n of (v.negocios || [])) {
+    if (n && (n.status === "ganho" || n.estagio_tipo === "ganho")) marcos.push({ tipo: "ganho", em: t(n.ganho_em || n.fechado_em || n.atualizado_em) ?? Date.now(), texto: `Negócio ganho${n.titulo ? ` · ${n.titulo}` : ""}` });
+  }
+  const ordemTipo = { origem: 0, entrada: 1, resposta: 2, consulta: 3, presenca: 4, ganho: 5 };
+  return marcos.sort((a, b) => (a.em - b.em) || (ordemTipo[a.tipo] - ordemTipo[b.tipo]));
+}
+
+// plano 2000d · DC-030: o arquivo exportado leva o protocolo (ou o número da conversa), não o nome do paciente («conversa-ORB-123-2026-10-25.txt»)
+export function nomeArquivoExportacao({ protocolo = "", id = "", dia = "", nome = "", comNome = false, ext = "txt" } = {}) {
+  const slug = s => semAcento(String(s || "").toLowerCase()).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const base = comNome && slug(nome) ? slug(nome) : protocolo ? String(protocolo).replace(/[^A-Za-z0-9-]+/g, "-").replace(/^-|-$/g, "") : id !== "" && id !== null ? `atendimento-${id}` : "cliente";
+  return `conversa-${base}${dia ? `-${dia}` : ""}.${ext}`;
+}
+
+// plano 2000d · DC-046: o termo da busca de contato — telefone (8+ dígitos, só com + ( ) - . e espaços) vira os dígitos sem o 55 do Brasil
+export function termoBuscaContato(texto) {
+  const t = String(texto ?? "").trim();
+  if (!/^[\d\s()+\-.]+$/.test(t)) return t;
+  const dig = t.replace(/\D/g, "");
+  if (dig.length < 8) return t;
+  return dig.length >= 12 && dig.startsWith("55") ? dig.slice(2) : dig;
 }

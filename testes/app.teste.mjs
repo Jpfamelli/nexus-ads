@@ -708,8 +708,10 @@ await teste("admin: três ofertas comerciais exatas e segmento livre sem quebrar
   assert.equal(Ad.verticalPorSegmento("Consultoria contábil"), "generico");
   const src = ler("admin.js");
   assert.ok(/nome: "segmento"/.test(src) && /nome: "especificacoes"/.test(src), "campos livres presentes no cadastro/edição");
-  assert.ok(/comercial: \{ pacote: oferta\.id, segmento: d\.segmento/.test(src), "cadastro envia oferta e especificações à RPC" );
-  assert.ok(src.includes("Plano de acesso ao Órbita"), "acesso técnico é diferenciado da oferta comercial");
+  // plano 2000d: FX-075 — a revenda sem pacote comercial (UCB-002) manda pacote null; o cadastro continua enviando a oferta e as especificações
+  assert.ok(/comercial: \{ pacote: oferta \? oferta\.id : null, segmento: d\.segmento/.test(src) && /especificacoes: d\.especificacoes/.test(src), "cadastro envia oferta e especificações à RPC" );
+  // plano 2000d: white-label (DU-193/DU-194) — o rótulo do acesso técnico não cita mais a marca da plataforma, mas continua separado da oferta
+  assert.ok(src.includes("Plano de acesso") && !src.includes("Plano de acesso ao Órbita"), "acesso técnico é diferenciado da oferta comercial");
 });
 
 await teste("migração dos pacotes: aditiva, valores fixos no servidor e retorno comercial limitado ao Admin", () => {
@@ -902,7 +904,8 @@ await teste("apps independentes: atalhos CRM/Ads/Atendimento, query de produto e
   assert.match(shell, /E\.workspace === null \|\| E\.workspace === "crm"/, "busca global só existe no Órbita completo ou no CRM");
   // plano 2000d: DU-155 — o título vem de nomeDoApp (o do produto na marca padrão; o da revenda, sem «Órbita»/«Nexus», na white-label)
   assert.match(shell, /document\.title = rotas\.nomeDoApp\(\{ produto: E\.produto, workspace: E\.workspace \}\)\.name/, "cada atalho tem título próprio");
-  assert.match(shell, /const nomeApp = E\.workspace \? E\.M\?\.rotas\?\.PRODUTOS\?\.\[E\.workspace\]\?\.nome : "";/, "título mantém o produto mesmo quando muda a rota interna");
+  // plano 2000d: SX-067 — o nome do produto na aba vem de nomesProdutos (na revenda «Anúncios»; na marca padrão, o de sempre)
+  assert.match(shell, /const nomeApp = E\.workspace \? \(nomes \? nomes\[E\.workspace\] : E\.M\?\.rotas\?\.PRODUTOS\?\.\[E\.workspace\]\?\.nome\) : "";/, "título mantém o produto mesmo quando muda a rota interna");
   const seletor = shell.match(/function abrirSeletorProduto\(ancora\) \{[\s\S]*?\n\}/)?.[0] || "";
   assert.match(seletor, /const rotas = E\.M\.rotas;/, "seletor usa o módulo de rotas carregado no contexto");
   assert.match(seletor, /Object\.entries\(rotas\.PRODUTOS\)/, "seletor lista os três produtos configurados");
@@ -1361,7 +1364,7 @@ await teste("T04: o aparelho do CodeWords não tem janela de 24 h — a tela nã
 await teste("T06: bloqueio de dia(s) inteiro(s) mostra «Dia inteiro · 06/10/2026», não «06/10 00:00 — 07/10 00:00» (periodoBR)", () => {
   assert.equal(U.periodoBR("2026-10-06T03:00:00Z", "2026-10-07T03:00:00Z"), "Dia inteiro · 06/10/2026");
   assert.equal(U.periodoBR("2026-10-06T03:00:00Z", "2026-10-09T03:00:00Z"), "Dias inteiros · 06/10/2026 a 08/10/2026");
-  assert.equal(U.periodoBR("2026-10-06T12:00:00Z", "2026-10-06T15:00:00Z", " · "), "06/10/2026 09:00 · 06/10/2026 12:00", "faixa de horário continua com as horas");
+  assert.equal(U.periodoBR("2026-10-06T12:00:00Z", "2026-10-06T15:00:00Z", " · "), "06/10/2026 09:00 · 12:00", "faixa de horário continua com as horas (plano 2000d: SX-084 — no mesmo dia, a data uma vez)");
   assert.equal(U.periodoBR("2026-10-06T12:00:00Z", "2026-10-07T15:00:00Z"), "06/10/2026 09:00 — 07/10/2026 12:00");
   assert.match(ler("agenda.js"), /ui\.periodoBR\(b\.inicio, b\.fim, " · "\)/);
   assert.match(ler("agenda-config.js"), /ui\.periodoBR\(b\.inicio, b\.fim, " — "\)/);
@@ -2521,7 +2524,7 @@ await teste("ui.numMoeda: 'R$' e centavos a 60 % (.num-moeda), centavos opcionai
   try {
     const a = U.numMoeda(1234.5); assert.ok(a.classList.contains("num-moeda")); assert.equal(a.textContent, "R$1.234,50");
     assert.equal(achar(a, ".nm-rs").textContent, "R$"); assert.equal(achar(a, ".nm-cent").textContent, ",50");
-    assert.equal(U.numMoeda(1234.5, { centavos: false }).textContent, "R$1.234"); assert.equal(U.numMoeda(1234.5, { centavos: false }).querySelector(".nm-cent"), null);
+    assert.equal(U.numMoeda(1234.5, { centavos: false }).textContent, "R$1.235");   // plano 2000d: SX-012 — arredonda como o brl, não corta assert.equal(U.numMoeda(1234.5, { centavos: false }).querySelector(".nm-cent"), null);
     assert.equal(U.numMoeda(null).textContent, "—"); assert.equal(U.numMoeda(-5).textContent, "R$−5,00");
   } finally { d.fim(); }
 });
@@ -3051,7 +3054,8 @@ await teste("A11Y: listas do kanban têm apenas filhos listitem, incluindo estad
   assert.match(crm, /class: "kb-lista", role: "list"/);
   assert.match(crm, /class: "kb-vazia", role: "listitem"/);
   assert.match(crm, /class: "kb-mais-item", role: "listitem"/);
-  assert.match(crm, /role: "listitem", tabindex: "0"/);
+  // plano 2000d: PX-032 — o cartão usa tabindex «roving» (DR-029: só um cartão por vez no Tab, «0» no ativo, «-1» nos outros); continua listitem focável
+  assert.match(crm, /role: "listitem", tabindex: (?:"0"|String\(S\.rovingId\) === String\(c\.id\) \? "0" : "-1")/);
 });
 
 await teste("M36/M40: o contexto expõe leitura de rascunhos ao módulo Conversas, com o escopo conta + empresa", () => {

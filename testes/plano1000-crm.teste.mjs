@@ -2177,7 +2177,7 @@ test("CR-208/264/232/225/226/298/244 lógica pura (crm-3): erro sem código téc
   assert.equal(L.codigoSuporte({ codigo: "sessao_invalida" }), "sessao_invalida");
   assert.equal(L.codigoSuporte(null), null);
   // CR-264: o DDI separado, como na importação (antes «(12) 12555-1234»)
-  assert.equal(L.formatarTel("12125551234"), "+1 2125551234");
+  assert.equal(L.formatarTel("12125551234"), "+1 212 555 1234");      // plano 2000d: PX-021 — EUA/Canadá em grupos
   assert.equal(L.formatarTel("447911123456"), "+44 7911123456");
   assert.equal(L.formatarTel("5512998303030"), "(12) 99830-3030");
   assert.equal(L.formatarTel("12998303030"), "(12) 99830-3030", "brasileiro sem o 55 continua");

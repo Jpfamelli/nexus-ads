@@ -33,7 +33,9 @@ export function segundosDeBloqueio(e, minutosDoHint) {
 }
 /** «14:59» para a contagem regressiva. */
 export function formatarContagem(segundos) {
-  const s = Math.max(0, Math.round(segundos));
+  const s = Math.max(0, Math.round(Number(segundos) || 0));
+  // plano 2000d · SX-043: bloqueio de 1 h ou mais em horas («1:15:00», não «75:00»)
+  if (s >= 3600) return `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 /** plano 1500c · UCB-046: segundos que ainda faltam de um bloqueio que termina em `fimMs` (0 = já pode tentar; valor inválido = 0). */
@@ -64,8 +66,53 @@ export function marcaPadrao(m) {
   const p = String((m && m.produto) || "").trim();
   return !p || p === "Órbita";
 }
-/** Plano 1000 (AS-291): o e-mail como o servidor compara — sem espaços nas pontas (autopreenchimento) e em minúsculas. */
-export function normalizarEmail(v) { return String(v ?? "").trim().toLowerCase(); }
+/** Plano 1000 (AS-291): o e-mail como o servidor compara — sem espaços nas pontas (autopreenchimento) e em minúsculas.
+    plano 2000d · SX-047: sem os caracteres invisíveis que vêm junto quando se cola de um PDF/WhatsApp (espaço de largura zero, BOM) e sem o
+    ponto final de quem escreveu o e-mail no fim de uma frase («ana@x.com.»). */
+export function normalizarEmail(v) {
+  // plano 2000d · SX-103: e-mail copiado de um link («mailto:ana@x.com») perde o «mailto:»
+  return String(v ?? "").replace(/[​-‍⁠﻿­]/g, "").trim().toLowerCase().replace(/^mailto:/, "").replace(/\.+$/, "");
+}
+/** plano 2000d · SX-046: o domínio digitado errado dos provedores mais comuns («gmial.com», «hotmail.con») → o e-mail certo para sugerir, ou null. */
+const DOMINIOS_COMUNS = ["gmail.com", "hotmail.com", "outlook.com", "yahoo.com.br", "yahoo.com", "icloud.com", "live.com", "uol.com.br", "bol.com.br", "terra.com.br"];
+function distanciaCurta(a, b) {
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) {
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+  }
+  return d[a.length][b.length];
+}
+export function sugestaoEmail(v) {
+  const e = normalizarEmail(v);
+  const m = /^([^\s@]+)@([^\s@]+)$/.exec(e);
+  if (!m) return null;
+  const dom = m[2];
+  if (DOMINIOS_COMUNS.includes(dom)) return null;
+  let melhor = null, menor = 3;
+  for (const c of DOMINIOS_COMUNS) { const d = distanciaCurta(dom, c); if (d < menor) { menor = d; melhor = c; } }
+  return melhor && menor <= 2 ? `${m[1]}@${melhor}` : null;
+}
+/** plano 2000d · SX-046: ao sair do campo de e-mail, «Você quis dizer ana@gmail.com?» — um toque corrige; nada é trocado sozinho. */
+function ligarSugestaoEmail(ui, entrada) {
+  if (!entrada || !entrada.parentNode) return null;
+  const caixa = ui.h("p", { class: "entrar-sugestao fraco", role: "status", hidden: true });
+  entrada.parentNode.appendChild(caixa);
+  const conferir = () => {
+    const s = sugestaoEmail(entrada.value);
+    ui.limpar(caixa);
+    caixa.hidden = !s;
+    if (!s) return;
+    const bt = ui.h("button", { type: "button", class: "link" }, s);
+    bt.addEventListener("click", () => { entrada.value = s; caixa.hidden = true; ui.limpar(caixa); entrada.focus(); });
+    caixa.append("Você quis dizer ", bt, "?");
+  };
+  entrada.addEventListener("blur", conferir);
+  entrada.addEventListener("input", () => { if (!caixa.hidden && !sugestaoEmail(entrada.value)) { caixa.hidden = true; ui.limpar(caixa); } });
+  return caixa;
+}
 /** Plano 1000 (AS-195): formato mínimo de e-mail antes de gastar uma tentativa no servidor («ana@» não sai daqui). */
 export function emailValido(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v ?? "")); }
 
@@ -91,6 +138,15 @@ export function senhaFraca(senha, { email = "", nome = "", empresa = "", produto
   if (SENHAS_COMUNS.has(t) || sequencia(t)) return true;
   if (/^(senha|password|orbita|admin|mudar|teste|qwerty)[\d!@#.]*$/.test(t)) return true;
   if (/^(\d{2,4})\1+$/.test(t) || /^([a-z]{2,4})\1+$/.test(t)) return true;
+  // plano 2000d · SX-044: linha do teclado («qwertyuiop», «asdfghjkl», «zxcvbnm», «1qaz2wsx»…) com ou sem números no fim
+  const semNum = t.replace(/[\d!@#.]+$/, "");
+  if (semNum.length >= 6 && ["qwertyuiop", "asdfghjkl", "zxcvbnm", "poiuytrewq", "lkjhgfdsa", "mnbvcxz"].some(l => l.includes(semNum))) return true;
+  // plano 2000d · SX-045: data (aniversário) — «15031990», «15/03/1990», «1990-03-15»
+  const dig = t.replace(/[/.-]/g, "");
+  if (/^\d{8}$/.test(dig) && /^[\d/.-]+$/.test(t)) {
+    const dmA = /^(0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])(19|20)\d{2}$/.test(dig), aMd = /^(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/.test(dig);
+    if (dmA || aMd) return true;
+  }
   const local = normalizarEmail(email).split("@")[0];
   if (local && local.length >= 4 && t.includes(local)) return true;
   const semAcento = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -326,6 +382,7 @@ function telaEntrar(ctx) {
     lembrar,
     erro,
     botao);
+  ligarSugestaoEmail(ui, form.querySelector("input[name=email]"));   // plano 2000d · SX-046
   const esqueci = h("button", { type: "button", class: "link", "aria-expanded": "false" }, "Esqueci a senha");
   const ajuda = h("div", { class: "aviso", hidden: true, role: "status" }, ui.icone("info"),
     h("div", { class: "pilha-p" }, textosEsqueci(ctx, m).map(t => h("p", null, t)),
@@ -575,6 +632,7 @@ export function campoEmailDoConvite(ui, email) {
     ajuda: fixo ? "O convite é para este e-mail." : undefined });
   const inp = c.querySelector("input");
   if (fixo && inp) { inp.setAttribute("readonly", ""); inp.readOnly = true; }
+  else if (inp) ligarSugestaoEmail(ui, inp);   // plano 2000d · SX-099: no convite sem e-mail fixo também
   return c;
 }
 
@@ -899,6 +957,7 @@ function telaTestar(ctx) {
     erro,
     h("button", { type: "submit", class: "bt bt-prim bt-g bt-bloco" }, `Começar o teste de ${dias} dias`),
     h("p", { class: "entrar-nota" }, `Sem cartão. Depois de ${dias} dias você decide se continua; nada é cobrado sozinho.`));
+  ligarSugestaoEmail(ui, form.querySelector("input[name=email]"));   // plano 2000d · SX-099: o e-mail do teste também ganha o «Você quis dizer…?»
   const marcarAceite = msg => {
     const er = caixaAceite.querySelector(".campo-erro"), inp = caixaAceite.querySelector("input");
     er.textContent = msg || ""; er.hidden = !msg;

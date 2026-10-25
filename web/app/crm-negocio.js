@@ -48,8 +48,10 @@ export function linksDoCampo(L, tipo, valor) {
     return /^https?:\/\/[^\s.]+\.[^\s]{2,}/i.test(u) ? [{ tipo: "abrir", href: u, rotulo: "Abrir o link em nova aba", icone: "externo", nova: true }] : [];
   }
   if (tipo === "telefone") {
-    const n = L.normalizarTelefone(v);
-    return n ? [{ tipo: "ligar", href: `tel:+${n}`, rotulo: "Ligar", icone: "telefone" }, { tipo: "whatsapp", href: `https://wa.me/${n}`, rotulo: "Abrir no WhatsApp", icone: "whatsapp", nova: true }] : [];
+    // plano 2000d · PX-094: com ramal («… ramal 22»), Ligar disca o ramal depois da pausa e o WhatsApp vai só para o número (antes o ramal grudava no número)
+    const rm = /\s*(?:ramal|ext\.?|r\.)\s*:?\s*(\d{1,6})\s*$/i.exec(v);
+    const n = L.normalizarTelefone(rm ? v.slice(0, rm.index) : v);
+    return n ? [{ tipo: "ligar", href: `tel:+${n}${rm ? `,${rm[1]}` : ""}`, rotulo: "Ligar", icone: "telefone" }, { tipo: "whatsapp", href: `https://wa.me/${n}`, rotulo: "Abrir no WhatsApp", icone: "whatsapp", nova: true }] : [];
   }
   return [];
 }
@@ -118,7 +120,7 @@ async function pedirGanho(k, card, estagio, detalhe) {
   const semConferir = !!(detalhe && detalhe.falhou);
   const faltam = L.obrigatoriosVazios(k.base.campos, "negocio", funil && funil.id, (detalhe && !semConferir && detalhe.campos) || card.campos || {})
     .map(c => (semConferir ? { ...c, obrigatorio: false } : c));
-  const ticket = card.servico && k.base.ticket ? k.base.ticket[card.servico] : null;
+  const ticket = card.servico && k.base.ticket ? (L.ticketDoServico ? L.ticketDoServico(k.base.ticket, card.servico) : k.base.ticket[card.servico]) : null;      // plano 2000d · PX-054: valor sugerido ao ganhar acha o ticket sem olhar maiúscula/acento
   const sug = card.valor ?? card.valor_previsto ?? (Number.isFinite(Number(ticket)) ? Number(ticket) : null);
   // plano 2000d · DR-085: o serviço vendido (às vezes fecha outro, não o do anúncio) — vem preenchido com o do cartão
   const servicos = Object.keys(k.base.ticket || {});
@@ -435,7 +437,8 @@ export function linhaEd(k, { rotulo, controle, salvar, ler, desabilitado, aoErro
 // celular (≤ 760 px): as ações (Marcar consulta, Fechou, Não fechou, ⋮) descem para um rodapé fixo da gaveta (plano 50, item 26)
 const telaPequena = () => { try { return !!(globalThis.matchMedia && globalThis.matchMedia("(max-width: 760px)").matches); } catch { return false; } };
 
-export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizinhos, aoNavegar, previa = null } = {}) {
+// plano 2000d · PX-023 (RC-201): `aba` abre direto numa seção — "tarefas" | "notas" | "tempo" | "resumo" ou "presenca" (Resumo com o foco em Compareceu/Faltou)
+export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizinhos, aoNavegar, previa = null, aba = null } = {}) {
   const { ui, h, L } = k;
   let fechada = false;
   // revisão: fechar a gaveta com Ganhou/Perdeu/Reabrir ainda no prazo do «Desfazer» grava NA HORA — antes o movimento ficava solto: a
@@ -457,7 +460,8 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
   const ABAS_NG = ["resumo", "tarefas", "notas", "tempo"];
   const abaLembrada = () => { try { const v = sessionStorage.getItem(chaveAba); return ABAS_NG.includes(v) ? v : "resumo"; } catch { return "resumo"; } };
   const lembrarAba = v => { try { sessionStorage.setItem(chaveAba, v); } catch { /* ok */ } };
-  let abaAtual = abaLembrada();
+  let abaAtual = ABAS_NG.includes(aba) ? aba : aba === "presenca" ? "resumo" : abaLembrada();      // plano 2000d · PX-023
+  let focoPresenca = aba === "presenca";      // plano 2000d · PX-023: só na 1ª abertura (andar com ‹ › não repete)
   let irAbaG = null;      // DR-145: trocar de aba pelo teclado (T/N), definido a cada desenho
   // plano 100 · C1: Ganhou/Perdeu/Reabrir pela gaveta = o MESMO movimento adiado do Kanban (a tela muda já; o servidor — e as automações — só depois
   // dos 7 s do «Desfazer»). `pend` = o movimento que ainda pode ser desfeito ou está gravando; enquanto existe, a gaveta não aceita outro por cima.
@@ -487,7 +491,11 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
         focouTitulo = true;
         setTimeout(() => {
           if (typeof document === "undefined") return;
-          const t = corpo.querySelector(".ng-titulo-txt");
+          // plano 2000d · PX-023: aberta para marcar presença, o foco (e a rolagem) vai ao 1º botão Compareceu/Faltou — sem o bloco, o título como sempre
+          const pres = focoPresenca ? corpo.querySelector(".ng-presenca .ng-pres:not([disabled])") : null;
+          focoPresenca = false;
+          const t = pres || corpo.querySelector(".ng-titulo-txt");
+          if (pres) try { pres.scrollIntoView({ block: "center", behavior: ui.comportamentoRolagem ? ui.comportamentoRolagem() : "auto" }); } catch { /* ok */ }
           const a = document.activeElement;
           const raizG = g.el || corpo;
           if (t && !fechada && (!a || a === document.body || (raizG.contains && raizG.contains(a)))) { try { t.focus({ preventScroll: true }); } catch { t.focus(); } }
@@ -977,14 +985,14 @@ export async function abrirNegocio(k, id, { aoMudar, aoFechar, aoCarregar, vizin
         return blocos;
       };
       dl.append(...comMoeda(linhaEd(k, { rotulo: "Valor previsto", desabilitado: !podeEditar,
-        controle: h("input", { type: "text", inputmode: "decimal", value: n.valor_previsto != null ? Number(n.valor_previsto).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "", placeholder: "0,00" }),
+        controle: h("input", { type: "text", inputmode: "decimal", maxlength: "18" /* plano 2000d · PX-079: dinheiro com limite de tamanho (o servidor guarda até 12 dígitos) */, value: n.valor_previsto != null ? Number(n.valor_previsto).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "", placeholder: "0,00" }),
         ler: c => k.L.lerNumero(c.value), validar: c => (k.L.erroDinheiro ? k.L.erroDinheiro(c.value) : k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null),      // plano 1500c · RX-071: negativo também
         salvar: v => salvar({ valor_previsto: v }) })));
       // plano 2000d · DR-092: ganho de um mês que já passou — mudar o valor muda a receita daquele mês (e o retorno do anúncio): avisa ao editar
       const ganhoAntigo = n.status === "ganho" && L.ganhoDeMesPassado(n.fechado_em, ui.hojeSP ? ui.hojeSP() : null);
       if (n.status === "ganho") dl.append(...comMoeda(linhaEd(k, { rotulo: "Valor final", desabilitado: !podeEditar || pendente,
         aviso: ganhoAntigo ? (() => `Fechad${k.v.art("negocio")} em ${String(n.fechado_em).slice(5, 7)}/${String(n.fechado_em).slice(0, 4)}: mudar o valor altera a receita daquele mês.`) : undefined,
-        controle: h("input", { type: "text", inputmode: "decimal", value: n.valor != null ? Number(n.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "", placeholder: "0,00" }),
+        controle: h("input", { type: "text", inputmode: "decimal", maxlength: "18" /* plano 2000d · PX-079: dinheiro com limite de tamanho (o servidor guarda até 12 dígitos) */, value: n.valor != null ? Number(n.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "", placeholder: "0,00" }),
         ler: c => k.L.lerNumero(c.value), validar: c => (k.L.erroDinheiro ? k.L.erroDinheiro(c.value) : k.L.dinheiroInvalido(c.value) ? "Valor inválido. Use só números, por exemplo 1.500,00." : null),      // plano 1500c · RX-071: negativo também
         salvar: v => salvar({ valor: v }) })));
       const servicos = Object.keys(k.base.ticket || {});
@@ -1223,7 +1231,8 @@ export async function iniciarPosVenda(k, n, contato, { aoCriar } = {}) {
   const inServico = h("input", { type: "text", name: "servico", maxlength: k.L.LIMITE_SERVICO /* plano 2000d · DR-424 */, value: n.servico || "", "aria-label": k.v.servico || "Serviço" });
   const selDono = h("select", { name: "dono_id", class: "sel", "aria-label": "Responsável" }, h("option", { value: "" }, "Sem responsável"),
     (k.base.usuarios || []).map(u => h("option", { value: u.id }, u.nome)));
-  selDono.value = n.dono_id && (k.base.usuarios || []).some(u => u.id === n.dono_id) ? n.dono_id : "";
+  // plano 2000d · PX-035: id que veio como texto («7») e o da equipe como número (7) são a mesma pessoa — antes o pós-venda abria «Sem responsável»
+  selDono.value = n.dono_id != null && (k.base.usuarios || []).some(u => String(u.id) === String(n.dono_id)) ? String(n.dono_id) : "";
   form.insertBefore(h("div", { class: "crm-form-2 pv-campos" },
     h("label", { class: "campo" }, h("span", { class: "campo-rot" }, "Funil"), selFunil),
     h("label", { class: "campo" }, h("span", { class: "campo-rot" }, "Etapa"), selEtapa),
@@ -1361,7 +1370,7 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
       const grade = h("div", { class: "crm-form-2" },
         ui.campo({ rotulo: "Nome", nome: "c_nome", max: 160, autocomplete: "off" }),
         ui.campo({ rotulo: "Telefone / WhatsApp", nome: "c_telefone", tipo: "tel", placeholder: "(12) 99830-3030", autocomplete: "off", validar: "telefone" }),
-        h("div", { class: "inteiro" }, ui.campo({ rotulo: "E-mail (opcional)", nome: "c_email", tipo: "email", autocomplete: "off" })));
+        h("div", { class: "inteiro" }, dicaEmail(k, ui.campo({ rotulo: "E-mail (opcional)", nome: "c_email", tipo: "email", autocomplete: "off" }))));      // plano 2000d · PX-037
       // M24: o aviso de cadastro já existente aparece enquanto digita o telefone («Já existe: Mariana Costa, última conversa há 2 dias · Usar este cadastro»)
       for (const n of Object.keys(digitado)) { const x = grade.querySelector(`[name=${n}]`); if (x && digitado[n]) x.value = digitado[n]; }
       for (const n of ["c_nome", "c_telefone"]) {      // DR-080: o campo é refeito a cada troca de modo — religa o rascunho no novo
@@ -1373,7 +1382,7 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
         h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { modoNovo = false; desenharContato(); } } }, "Buscar um cadastro existente"));
       return;
     }
-    const busca = h("input", { type: "search", enterkeyhint: "search", placeholder: "Buscar por nome ou telefone", "aria-label": `Buscar ${k.v.min("contato")}`, autocomplete: "off" });
+    const busca = h("input", { type: "search", enterkeyhint: "search", maxlength: "120" /* plano 2000d · PX-078: busca com limite (colar texto enorme travava a digitação) */, placeholder: "Buscar por nome ou telefone", "aria-label": `Buscar ${k.v.min("contato")}`, autocomplete: "off" });
     const res = h("div", { class: "crm-busca-res", role: "group", "aria-label": "Resultados" });   // plano 1000b · RB-052: grupo de botões comuns (Tab entre eles) — era listbox sem setas nem aria-selected
     let seq = 0;
     const buscar = ui.debounce(async () => {
@@ -1429,7 +1438,8 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
   }
   const inValor = ui.campo({ rotulo: "Valor previsto", nome: "valor_previsto", tipo: "moeda", placeholder: "R$ 0,00", validar: "moeda" });
   inServico.querySelector("input").addEventListener("change", ev => {
-    const t = Number(k.base.ticket && k.base.ticket[ev.target.value]);
+    // plano 2000d · PX-034: o ticket do serviço sem olhar maiúscula/acento/espaço («implante » acha «Implante»), como na gaveta (RX-073)
+    const t = k.base.ticket && L.ticketDoServico ? (L.ticketDoServico(k.base.ticket, ev.target.value) ?? NaN) : Number(k.base.ticket && k.base.ticket[ev.target.value]);
     const iv = inValor.querySelector("input");
     if (Number.isFinite(t) && !iv.value) iv.value = t.toLocaleString("pt-BR", { minimumFractionDigits: 2 });
   });
@@ -1462,7 +1472,14 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
   const hojeSPn = ui.hojeSP ? ui.hojeSP() : L.hojeSP();      // plano 2000d · DR-340: sem ui.hojeSP, o dia de São Paulo (não o UTC)
   const campoPrev = h("div", { class: "campo ng-prev-novo" }, h("span", { class: "campo-rot" }, "Previsão de fechamento (opcional)"), inPrev,
     h("div", { class: "tf-atalhos", role: "group", "aria-label": "Atalhos da previsão" }, L.atalhosPrevisao(hojeSPn).map(a =>
-      h("button", { type: "button", class: "bt bt-fant bt-p tf-atalho", dataset: { valor: a.valor }, on: { click: () => { inPrev.value = a.valor; ui.anunciar && ui.anunciar(`Previsão: ${a.rotulo}.`); } } }, a.rotulo))));
+      h("button", { type: "button", class: "bt bt-fant bt-p tf-atalho", dataset: { valor: a.valor }, on: { click: () => { inPrev.value = a.valor; pintarPrevNovo(); ui.anunciar && ui.anunciar(`Previsão: ${a.rotulo}.`); } } }, a.rotulo))));
+  // plano 2000d · PX-086: previsão no passado avisa já no cadastro (como na gaveta) — sem bloquear
+  const avisoPrevNovo = h("small", { class: "ed-aviso ng-prev-aviso", role: "status" });
+  avisoPrevNovo.hidden = true;
+  campoPrev.appendChild(avisoPrevNovo);
+  function pintarPrevNovo() { const passou = !!inPrev.value && L.dataPassou(inPrev.value); avisoPrevNovo.hidden = !passou; avisoPrevNovo.textContent = passou ? L.TEXTO_DATA_PASSOU : ""; }
+  inPrev.addEventListener("change", pintarPrevNovo);
+  inPrev.addEventListener("input", pintarPrevNovo);
   // plano 1500c · RC-082: «Duplicar» chega com o título, o serviço, o valor e as etiquetas do original
   if (dados.servico) inServico.querySelector("input").value = String(dados.servico);
   if (dados.valor_previsto != null && Number.isFinite(Number(dados.valor_previsto))) inValor.querySelector("input").value = Number(dados.valor_previsto).toLocaleString("pt-BR", { minimumFractionDigits: 2 });
@@ -1532,6 +1549,7 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
       if (!d.c_nome && !d.c_telefone) { ui.marcarErro(form, "c_nome", "Informe o nome ou o telefone."); return; }
       if (d.c_telefone && !L.normalizarTelefone(d.c_telefone)) { ui.marcarErro(form, "c_telefone", L.textoTelefoneInvalido(d.c_telefone)); return; }      // plano 1500c · RC-098
       // plano 1000b · RB-053: e-mail conferido aqui, no campo (a mesma regra da ficha) — antes o erro voltava genérico do servidor
+      if (d.c_email && L.emailLimpo) d.c_email = L.emailLimpo(d.c_email);      // plano 2000d · PX-100: o e-mail do contato novo limpo antes de conferir e gravar
       if (d.c_email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(d.c_email).trim())) { ui.marcarErro(form, "c_email", "E-mail inválido. Confira, por exemplo: ana@exemplo.com.br."); return; }
       p.contato = { nome: d.c_nome || null, telefone: d.c_telefone || null, email: d.c_email || null };
     } else { erro.textContent = `Escolha ${k.v.art("contato") === "a" ? "a" : "o"} ${k.v.min("contato")} ou cadastre ${k.v.art("contato") === "a" ? "uma nova" : "um novo"}.`; erro.hidden = false; return; }
@@ -1560,6 +1578,32 @@ export async function novoNegocio(k, dados = {}, { aoCriar, aoFechar } = {}) {
   return g;
 }
 
+/**
+ * plano 2000d · PX-036/037: «Quis dizer ana@gmail.com?» também nos cadastros novos (antes só na ficha) — ao sair do campo; um toque troca o e-mail.
+ * Não bloqueia: domínio próprio parecido continua valendo.
+ */
+export function dicaEmail(k, campo) {
+  const { h, L, ui } = k;
+  const inp = campo && campo.querySelector ? campo.querySelector("input") : null;
+  if (!inp || typeof L.sugestaoEmail !== "function") return campo;
+  const dica = h("p", { class: "ajuda crm-dica-email", "aria-live": "polite" });
+  dica.hidden = true;
+  const ver = () => {
+    const sug = L.sugestaoEmail(inp.value);
+    ui.limpar(dica);
+    dica.hidden = !sug;
+    if (sug) dica.append(`Quis dizer ${sug}? `, h("button", { type: "button", class: "link crm-dica-usar", on: { click: () => {
+      inp.value = sug; dica.hidden = true;
+      try { inp.dispatchEvent(new Event("input", { bubbles: true })); } catch { /* ok */ }
+      try { inp.focus(); } catch { /* ok */ }
+    } } }, "Usar este"));
+  };
+  inp.addEventListener("blur", ver);
+  inp.addEventListener("input", () => { if (!dica.hidden && !L.sugestaoEmail(inp.value)) dica.hidden = true; });
+  campo.appendChild(dica);
+  return campo;
+}
+
 /* ============================================================ ficha 360 numa gaveta */
 export async function abrirContato(k, id, { aoMudar } = {}) {
   const { ui, h } = k;
@@ -1568,8 +1612,20 @@ export async function abrirContato(k, id, { aoMudar } = {}) {
   const g = ui.gaveta({ titulo: k.v.contato, largura: "g", aoFechar: () => { fechou = true; if (tela && tela.desmontar) tela.desmontar(); } });
   const alvo = h("div", { class: "crm" });
   g.corpo.appendChild(alvo);
-  const Lst = await k.mod("listas");
-  tela = await Lst.montarFicha(k, alvo, id, { gaveta: g, aoMudar });
+  // plano 2000d · PX-033: falha ao carregar o módulo/ficha (rede caiu) mostra o cartão de erro com «Tentar de novo» — antes a gaveta ficava vazia
+  const montar = async () => {
+    try {
+      const Lst = await k.mod("listas");
+      if (fechou) return;
+      tela = await Lst.montarFicha(k, alvo, id, { gaveta: g, aoMudar });
+    } catch (e) {
+      if (fechou) return;
+      console.error(e);
+      ui.limpar(alvo);
+      alvo.appendChild(ui.erroCartao(e, montar));
+    }
+  };
+  await montar();
   if (fechou && tela && tela.desmontar) tela.desmontar();
   return g;
 }

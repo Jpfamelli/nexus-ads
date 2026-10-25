@@ -27,6 +27,7 @@ export const TETOS_POR_NOME = Object.freeze({ nx_dados: 4 * 1024 * 1024, nx_rel_
 export function tetoDaEntrada(nome) { return Math.min(TETOS_POR_NOME[nome] || TETO_ENTRADA_BYTES, Math.floor(TETO_TOTAL_BYTES / 4)); }
 export const TETO_ENTRADAS = 200;                  // cada filtro do Kanban e cada semana da agenda viram uma entrada: sem teto o banco só cresce
 export const TETO_TOTAL_BYTES = 20 * 1024 * 1024;
+export const TETO_POR_RPC = 30;                    // plano 2000d · SX-034: respostas guardadas por nome de RPC (as mais novas ficam)
 export const VARRER_A_CADA_MS = 3600 * 1000;
 export const VARRER_AO_ABRIR_MS = 5000;            // a 1ª varredura espera a abertura do app terminar (ela percorre o banco inteiro)
 export const PRAZO_IDB_MS = 1800;                   // cache local é opcional; uma aba não pode esperar um IndexedDB preso
@@ -230,7 +231,10 @@ export function criarCache(o = {}) {
       try { texto = JSON.stringify(reduzir(nome, dados)); } catch { return false; }
       if (!texto || texto.length * 2 > tetoDaEntrada(nome)) return false;
       const v = { v: VERSAO_FORMATO, em: agora(), nome, b: texto.length * 2, dados: JSON.parse(texto) };
+      memoria.delete(chave);   // reinsere no fim: o Map fica na ordem de uso
       memoria.set(chave, v);
+      // plano 2000d · SX-035: a cópia na memória da aba também tem teto (uma aba aberta o dia todo filtrando o quadro crescia sem fim)
+      while (memoria.size > TETO_ENTRADAS) memoria.delete(memoria.keys().next().value);
       if (armazem) { try { await armazem.gravar(chave, v); } catch { /* sem IndexedDB: fica na memória */ } }
       return true;
     },
@@ -250,7 +254,14 @@ export function criarCache(o = {}) {
       for (const it of await listar()) (noPrazo(it) ? vivos : fora).push(it);
       vivos.sort((a, b) => b.em - a.em);                     // as mais novas ficam
       let total = 0;
-      vivos.forEach((it, i) => { total += Number(it.bytes) || 0; if (i >= TETO_ENTRADAS || total > TETO_TOTAL_BYTES) fora.push(it); });
+      // plano 2000d · SX-034 (DR-070 da frente crm): no máximo 30 respostas por RPC — cada filtro do quadro virava uma entrada e uma RPC só
+      // tomava as 200 vagas, expulsando o Início e a agenda
+      const porNome = new Map();
+      vivos.forEach((it, i) => {
+        const n = (porNome.get(it.nome || "") || 0) + 1; porNome.set(it.nome || "", n);
+        total += Number(it.bytes) || 0;
+        if (i >= TETO_ENTRADAS || total > TETO_TOTAL_BYTES || (it.nome && n > TETO_POR_RPC)) fora.push(it);
+      });
       return apagarVarios(fora.map(it => it.k));
     },
     /** nx_sair, queda de sessão e troca de conta: não sobra nada. */

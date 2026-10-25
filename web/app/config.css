@@ -504,3 +504,46 @@
 /* DU-202 */
 .adm-passo .adm-copiar-link { margin-left: auto; }
 @media (prefers-reduced-motion: reduce) { .adm-ativacao-ponto { transition: none; } }
+
+/* plano 2000d · frente config · complemento (FX) */
+/* FX-003 / FX-004: horário silencioso no cartão de avisos */
+.cfg-silencio { margin-top: var(--esp-3); padding-top: var(--esp-3); border-top: 1px solid var(--c-borda); }
+.cfg-silencio .bt, .cfg-pausa-atalhos .bt, .cfg-horario-atalhos .bt, .cfg-empresa-vars .bt, .cfg-us-emails, .cfg-us-inativos, .cfg-audit-csv, .cfg-perm-padrao, .cfg-copiar-cores,
+.dom-copiar-tudo, .cfg-2fa-baixar, .cfg-empresa-mapa, .cfg-empresa-aval, .adm-limpar-filtros, .adm-slug-livre, .adm-followup-wa { min-height: 44px; }
+.cfg-silencio-frase { display: block; }
+/* FX-008: a repetição da senha conferida ao vivo */
+.cfg-senha-confere[data-ok="true"] { color: var(--c-ok); }
+.cfg-senha-confere[data-ok="false"] { color: var(--c-ruim); }
+/* FX-010: prévia da assinatura · FX-012: telefone fixo · FX-057: nome curto */
+.cfg-ass-previa { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: var(--esp-1); }
+.cfg-tel-fixo, .cfg-nome-curto { color: var(--c-aten, var(--c-texto-2)); }
+/* FX-016: a chave do app autenticador quebra em grupos */
+.cfg-2fa-segredo { overflow-wrap: anywhere; letter-spacing: .04em; }
+/* FX-026: as variáveis da empresa */
+.cfg-empresa-vars { flex-wrap: wrap; gap: var(--esp-1); }
+.cfg-empresa-vars .mono { font-size: var(--fs-12); }
+/* FX-031 / FX-041: suspenso e sem entrar há 30+ dias */
+.cfg-us-suspenso, .cfg-us-inativo { display: inline-flex; margin-top: 2px; }
+.cfg-us-inativo { color: var(--c-aten, var(--c-texto-2)); }
+/* FX-049: contagem dos departamentos marcados */
+.cfg-deps-n { display: block; }
+/* FX-055: a amostra da cor em uso */
+.cor-op[aria-pressed="true"] { outline: 2px solid var(--c-texto); outline-offset: 2px; }
+/* FX-065: o endereço completo como reserva do «Nome» */
+.dns-nome-completo { display: block; overflow-wrap: anywhere; }
+/* FX-068 / FX-071 / FX-073: faturas e sobras do plano */
+.cfg-faturas-resumo { margin: 0 0 var(--esp-2); }
+.cfg-uso-sobra { color: var(--c-texto-2); }
+.cfg-uso-sobra-aten { color: var(--c-aten, var(--c-ruim)); font-weight: 600; }
+.cfg-ia-var { white-space: nowrap; }
+/* FX-083: a lista vazia com filtro oferece limpar */
+.adm-sem-achado { flex-wrap: wrap; gap: var(--esp-2); align-items: center; margin-top: var(--esp-2); }
+.adm-slug-livre { margin-left: var(--esp-1); }
+/* FX-044: link de equipe esgotado/vencido */
+.cfg-link-equipe-fim { margin: 0; }
+/* celular primeiro: nada disso abre rolagem lateral em 360 px */
+@media (max-width: 760px) {
+  .cfg-silencio .form-grade, .cfg-empresa-vars, .cfg-pausa-atalhos, .cfg-horario-atalhos { min-width: 0; }
+  .cfg-pausa-atalhos, .cfg-horario-atalhos { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) { .cor-op, .cfg-senha-confere { transition: none; } }

@@ -287,7 +287,8 @@ function registrarComandos(ctx, k) {
   if (!k.pode("atendente")) return;
   // plano 1000 (CR-267): no quadro a tecla N cria um cartão (o quadro atende a tecla; aqui ela aparece na folha «?»)
   reg({ id: "crm.novo-negocio", rotulo: k.v.novo("negocio"), palavras: "oportunidade negócio lead cartão criar novo", ...(tipoTela === "kanban" ? { atalho: "N" } : {}), fazer: () => novoNegocio(ctx, {}) });
-  reg({ id: "crm.nova-tarefa", rotulo: "Nova tarefa", palavras: "tarefa lembrete ligar retorno criar", fazer: async () => {
+  // plano 2000d · PX-041: em Tarefas a tecla N abre «Nova tarefa» (a tela atende a tecla; aqui ela aparece na folha «?»)
+  reg({ id: "crm.nova-tarefa", rotulo: "Nova tarefa", palavras: "tarefa lembrete ligar retorno criar", ...(tipoTela === "tarefas" ? { atalho: "N" } : {}), fazer: async () => {
     try { const kk = await kitDe(ctx); const T = await kk.mod("tarefas"); const t = await T.formTarefa(kk, null, {}); if (t) ctx.ui.toast("Tarefa criada.", { tipo: "ok", ms: 2200 }); }
     catch (e) { console.error(e); ctx.ui.toast("Não foi possível abrir a tarefa.", { tipo: "erro" }); }
   } });
@@ -454,6 +455,8 @@ export async function montar(ctx) {
       fecharGavetaAtual();
       const idNegocio = Number(partes[1]);
       const gaveta = await N.abrirNegocio(k, idNegocio, {
+        // plano 2000d · PX-024: #/crm/negocio/<id>?aba=tarefas|notas|tempo|presenca abre a gaveta já na seção (link de aviso, do Início)
+        aba: r.query && typeof r.query.aba === "string" ? r.query.aba : null,
         aoMudar: c => telaAtual && telaAtual.aoMudarNegocio && telaAtual.aoMudarNegocio(c),
         // plano 1000 (CR-039): o negócio é de outro funil → o quadro por baixo troca para ele (ao fechar a gaveta, o cartão está à vista)
         aoCarregar: d => { const f = d && d.negocio && d.negocio.funil_id; if (f && telaAtual && typeof telaAtual.mostrarFunil === "function") telaAtual.mostrarFunil(f); },

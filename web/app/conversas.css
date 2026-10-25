@@ -1421,3 +1421,36 @@ mark.cvx-pend { background: var(--c-aten-suave); color: var(--c-texto); border-r
 @media (max-width: 760px), (pointer: coarse) {
   .cvx textarea, #cv-nv-busca, #cv-nv-tel, #cv-nv-nome, #cv-enc-busca, .cv-teclas-filtro, .cvt-nome-ed input, .cvt-campo-caixa input { font-size: 16px; }
 }
+
+/* ============================================================ plano 2000d · frente conv */
+/* plano 2000d · DC-244: Word/Excel com «Ver» e «Baixar» (mesma caixa do PDF) */
+/* plano 2000d · DC-129/DC-131: faixa do lote de fotos com «Parar» */
+.cvx-lote { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.cvx-lote .bt { min-height: 44px; }
+/* plano 2000d · DC-136/DC-253: «Enviar» e «Ouvir antes» no painel da gravação */
+.cvx-gravacao .cvx-rec-enviar svg { width: 16px; height: 16px; }
+.cvx-rec-continuar { min-height: 44px; font-size: var(--fs-13); }
+.cvx-gravacao:focus-visible { outline: 2px solid var(--c-foco, var(--c-prim)); outline-offset: 2px; }
+/* plano 2000d · DC-252: no celular o painel fica preso acima do teclado ao rolar */
+@media (max-width: 760px) { .cvx-gravacao { position: sticky; bottom: 0; z-index: 2; } }
+/* plano 2000d · DC-091/DC-092: áudio gravado guardado (sem internet, resolvida, janela fechada) */
+.cvx-audio-guardado { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin: 0 0 .45rem; padding: .45rem .7rem; border: 1px solid var(--c-borda); border-radius: var(--r); background: var(--c-aten-suave, var(--c-poco)); color: var(--c-texto); font-size: var(--fs-13); }
+.cvx-audio-guardado > svg { width: 18px; height: 18px; flex: none; }
+.cvx-ag-bts { gap: .4rem; flex-wrap: wrap; }
+.cvx-ag-bts .bt { min-height: 44px; }
+/* plano 2000d · DC-013: etiquetar em lote com três estados (manter · acrescentar · tirar) */
+.cv-etl-linhas { display: grid; gap: .35rem; }
+.cv-etl-linha { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; padding: .25rem 0; border-bottom: 1px solid var(--c-borda); }
+.cv-etl-linha:last-child { border-bottom: 0; }
+.cv-etl-nome { flex: 1 1 10rem; min-width: 0; }
+.cv-etl-linha .chip-check { min-height: 44px; }
+.cv-etl-tirar-rot:has(input:checked) { border-color: var(--c-erro, var(--c-borda)); color: var(--c-erro, var(--c-texto)); }
+/* plano 2000d · DC-122: print comprido inteiro (reduzido) em vez do recorte do meio */
+.cv-img-comprida .cv-img-bt { position: relative; display: block; background: var(--c-poco, var(--c-fundo)); border-radius: inherit; }
+.cv-img-comprida img { object-fit: contain; max-height: 420px; }
+.cv-img-inteira { position: absolute; right: .4rem; bottom: .4rem; padding: .1rem .45rem; border-radius: 999px; background: color-mix(in srgb, var(--c-fundo) 80%, transparent); color: var(--c-texto); font-size: var(--fs-12, .75rem); pointer-events: none; }
+/* plano 2000d · DC-037: Jornada do lead na lateral */
+.cvt-jornada { list-style: none; margin: 0; padding: 0 0 0 .9rem; border-left: 2px solid var(--c-borda); display: grid; gap: .45rem; }
+.cvt-jornada-item { position: relative; display: grid; gap: .05rem; font-size: var(--fs-13); }
+.cvt-jornada-item::before { content: ""; position: absolute; left: calc(-.9rem - 5px); top: .35rem; width: 8px; height: 8px; border-radius: 50%; background: var(--c-prim); }
+.cvt-jornada-hora { color: var(--c-texto-2, var(--c-texto)); font-size: var(--fs-12, .75rem); }

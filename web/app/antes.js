@@ -107,7 +107,7 @@
         anuncios: { js: ["rel-logica.js", "graficos.js", "../nucleo.js"], css: "relatorios.css" },
         relatorios: { js: ["rel-logica.js", "graficos.js", "anuncios.js"], css: "relatorios.css" },
       };
-      var seg = (location.hash || "").replace(/^#\/?/, "").split(/[\/?]/)[0];
+      var seg = (location.hash || "").replace(/^#\/?/, "").split(/[\/?]/)[0].trim().toLowerCase();   // plano 2000d · SX-060: «#/CRM» pré-carrega o mesmo que «#/crm» (o roteador já aceita)
       var logado = false;
       try { logado = !!window.localStorage.getItem("nx-token"); } catch (e) { logado = false; }
       // plano 1500c · UCC-030: token com validade conhecida e já vencida não conta como logado (pré-carrega a entrada, não o app que vai cair)
@@ -125,8 +125,10 @@
         lk.href = alvo + ".js?v=" + ver;
         document.head.appendChild(lk);
         var extras = aquecer[alvo];
+        // plano 2000d · SX-061: economia de dados ligada ou rede 2G — só o módulo da tela; o resto baixa quando a tela pedir
+        try { var cx = navigator.connection; if (cx && (cx.saveData === true || /(^|-)2g$/.test(String(cx.effectiveType || "")))) extras = null; } catch (e) { /* sem a API: segue */ }
         // o editor de automação (nova/editar) é o maior pedaço da tela: só quando o endereço já vai direto para ele
-        if (alvo === "automacoes" && /^#\/?automacoes\/[^?]/.test(location.hash || "")) extras = { js: extras.js.concat(["auto-editor.js"]), css: extras.css };
+        if (extras && alvo === "automacoes" && /^#\/?automacoes\/[^?]/.test(location.hash || "")) extras = { js: extras.js.concat(["auto-editor.js"]), css: extras.css };
         if (extras) {
           for (var i = 0; i < extras.js.length; i++) {
             var modulo = document.createElement("link");

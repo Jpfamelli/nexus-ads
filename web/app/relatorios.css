@@ -1456,3 +1456,11 @@ button.ads-pilula:focus-visible { outline: var(--foco-largura, 2px) solid var(--
   /* plano 2000d · NX-336: imprimir no meio de um «Atualizar» não sai esmaecido */
   .relat-atualizando { opacity: 1 !important; }
 }
+
+/* plano 1500c · AC-063 + plano 2000d · DA-009: dias sem atendimento em Ajustes de anúncios — as 7 caixas quebram linha (360 px sem rolar) */
+.cfga-fechados, .cfga-metas-camp { border: 0; padding: 0; margin: .6rem 0 0; min-width: 0; }
+.cfga-dias { display: flex; flex-wrap: wrap; gap: .25rem .75rem; }
+.cfga-dias .campo { margin: 0; min-height: var(--alvo-toque, 44px); display: flex; align-items: center; }
+/* plano 2000d · DA-337: a leitura de ontem na Visão geral (a mesma frase do diário) */
+.ads-ontem { margin: 0 0 var(--esp-2, .5rem); }
+.ads-ontem b { color: var(--c-texto); }

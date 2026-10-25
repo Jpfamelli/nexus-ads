@@ -98,7 +98,8 @@ test("AB-142 · «A Nexus já foi avisada» só com aviso de conexão ENVIADO na
   assert.equal(P.equipeAvisada([al({ enviado_em: "2026-10-14T10:01:00Z" })], erros, agora), true);
   assert.equal(P.equipeAvisada([al({ enviado_em: "x", criado_em: "2026-10-12T10:00:00Z" })], erros, agora), false, "velho");
   assert.equal(P.equipeAvisada([al({ enviado_em: "x", chave: "integracao|google" })], erros, agora), false, "outra plataforma");
-  assert.match(PJS, /"Avise a Nexus para refazer a conexão\."/);
+  // plano 2000d: o texto vem de avisoEquipe(agência) — revenda lê o nome DELA (KX-041/KX-056)
+  assert.match(PJS, /`Avise a \$\{ag\} para refazer a conexão\.`/);
 });
 
 test("AB-138/AB-139/AB-148 · conversões fracionadas do Google não arredondam; sem conversão não vira «— cada»", () => {
@@ -134,7 +135,8 @@ test("AB-140/AB-213/AB-164 · tabelas e quadro com o vocabulário da vertical e 
   assert.match(CSS, /\.donut \.donut-trilha \{ stroke: var\(--tinta\); \}/);
   assert.match(PJS, /aria-label="\$\{esc\(l\)\}: \$\{tot\} \$\{esc\(tot === 1 \? V\.pessoa\[0\] : V\.pessoa\[1\]\)\}"/, "aria-label das colunas");
   assert.match(PJS, /<th scope="col">\$\{esc\(capt\(V\.novo\[1\]\)\)\}<\/th><th scope="col">\$\{esc\(V\.receita\)\}<\/th><th scope="col">Custo\/\$\{esc\(V\.pessoa\[0\]\)\}<\/th>/, "tabela de origem");
-  assert.match(PJS, /<small>\$\{c\.fecharam\} \$\{esc\(c\.fecharam === 1 \? V\.pessoa\[0\] : V\.pessoa\[1\]\)\}<\/small>/, "centro da rosca");
+  // plano 2000d: com int() (KX-051)
+  assert.match(PJS, /<small>\$\{int\(c\.fecharam\)\} \$\{esc\(c\.fecharam === 1 \? V\.pessoa\[0\] : V\.pessoa\[1\]\)\}<\/small>/, "centro da rosca");
 });
 
 test("AB-010/AB-231 · salvar o cliente no clássico preserva regrasOff que a tela não conhece", () => {
@@ -202,7 +204,7 @@ test("AB-154 · período, plataforma e ordem guardados por cliente", () => {
   assert.deepEqual(JSON.parse(JSON.stringify(P.lerFiltros('{"dias":60,"plat":"meta","sort":{"key":"cpa","dir":1}}'))), { dias: 60, plat: "meta", sort: { key: "cpa", dir: 1 } });
   assert.deepEqual(JSON.parse(JSON.stringify(P.lerFiltros('{"dias":45,"plat":"tiktok","sort":{"key":"x","dir":3}}'))), { dias: 30, plat: "", sort: { key: "gasto", dir: -1 } }, "valor estranho cai no padrão");
   assert.deepEqual(JSON.parse(JSON.stringify(P.lerFiltros("{quebrado"))).dias, 30);
-  assert.match(PJS, /S\.dias = \+v; guardarFiltros\(\);/); assert.match(PJS, /S\.plat = v; S\.kVer = \{\}; guardarFiltros\(\);/);
+  assert.match(PJS, /S\.dias = \+v; guardarFiltros\(\);/); assert.match(PJS, /S\.plat = v; S\.kVer = \{\}; S\.criMax = CRI_PASSO; guardarFiltros\(\);/);   // plano 2000d: criativos voltam à 1ª página (KX-049)
   assert.match(PJS, /S\.clienteId = escolhido \? escolhido\.id : null;\n\s+aplicarFiltrosSalvos\(\);/, "a sessão volta com o guardado");
 });
 

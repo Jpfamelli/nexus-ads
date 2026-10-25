@@ -236,12 +236,14 @@ async function secaoFunis(ctx, alvo) {
     const assinatura = () => { try { return JSON.stringify(L.payloadFunil(f, etapas, mover)); } catch { return ""; } };
     let assinaturaInicial = assinatura();
     // plano 1500c · RC-151: com mudanças, fechar/recarregar a aba pergunta (beforeunload) e a atualização automática do app espera.
-    // Trocar de seção pelo menu ainda não tem guarda no shell (pendência em app.js).
+    // (plano 2000d · PX-025: trocar de seção pelo menu agora passa pela guarda de rota do shell — ctx.guardaSaida, logo abaixo)
     const sujo = () => vivo && listaEl.isConnected !== false && assinatura() !== assinaturaInicial;
     const aoSairDaAba = ev => { if (sujo()) { ev.preventDefault(); ev.returnValue = ""; } };
     try { addEventListener("beforeunload", aoSairDaAba); } catch { /* ok */ }
     const soltarNaoAtualizar = typeof ctx.naoAtualizar === "function" ? ctx.naoAtualizar(sujo) : null;
-    const soltarGuarda = () => { try { removeEventListener("beforeunload", aoSairDaAba); } catch { /* ok */ } if (typeof soltarNaoAtualizar === "function") soltarNaoAtualizar(); };
+    // plano 2000d · PX-025 (RC-151): trocar de tela pelo menu, trocar de empresa ou sair com o funil mudado pergunta antes (guarda de rota do shell)
+    const soltarGuardaRota = typeof ctx.guardaSaida === "function" ? ctx.guardaSaida(sujo, { texto: "As mudanças neste funil vão ser perdidas." }) : null;
+    const soltarGuarda = () => { try { removeEventListener("beforeunload", aoSairDaAba); } catch { /* ok */ } if (typeof soltarNaoAtualizar === "function") soltarNaoAtualizar(); if (typeof soltarGuardaRota === "function") soltarGuardaRota(); };
     guardas.add(soltarGuarda);
     async function sair() {
       if (assinatura() !== assinaturaInicial
@@ -653,6 +655,11 @@ async function secaoCampos(ctx, alvo) {
         const d = ui.lerForm(f);
         ui.marcarErro(f, null);
         if (!d.rotulo) { ui.marcarErro(f, "rotulo", "Dê um nome ao campo."); return false; }
+        // plano 2000d · PX-047: nome repetido no mesmo lugar (mesma entidade e, no negócio, o mesmo funil) avisa aqui — sem ida ao servidor, como os motivos (RX-057)
+        const funilD = ent === "negocio" ? (d.funil_id || null) : null;
+        const igualC = (k.base.campos || []).find(x => x && (!c || String(x.id) !== String(c.id)) && x.entidade === ent && x.ativo !== false
+          && String(x.funil_id || "") === String(funilD || "") && L.semAcento(String(x.rotulo || "").trim()) === L.semAcento(String(d.rotulo).trim()));
+        if (igualC) { ui.marcarErro(f, "rotulo", `Já existe o campo «${igualC.rotulo}».`); return false; }
         // plano 1000b · RB-139: «Unimed» duas vezes (ou «unimed») vira uma opção só, com aviso
         const { opcoes, unidas } = L.opcoesUnicas(String(d.opcoes || "").split(/\r?\n/));
         if (unidas && ["opcao", "multi"].includes(d.tipo)) ui.toast(`Opções repetidas foram unidas (${unidas}).`, { tipo: "info" });
@@ -702,10 +709,12 @@ async function secaoEtiquetas(ctx, alvo) {
   const { ui, h, L } = k;
   let vivo = true;
   const podeExcluir = k.pode("admin");
-  const busca = h("input", { type: "search", enterkeyhint: "search", placeholder: "Buscar etiqueta", "aria-label": "Buscar etiqueta" });
+  const busca = h("input", { type: "search", enterkeyhint: "search", maxlength: "60", autocomplete: "off", placeholder: "Buscar etiqueta", "aria-label": "Buscar etiqueta" } /* plano 2000d · PX-078: busca com limite (colar texto enorme travava a digitação) */);
   const corpo = h("div", { class: "crm-cfg-lista crm-cfg-etqs", role: "list" });
   // plano 1500c · RC-329: a busca só esconde/mostra os itens já desenhados (antes recriava a lista inteira a cada tecla)
   busca.addEventListener("input", ui.debounce(() => filtrar(), 150));
+  // plano 2000d · PX-049: Esc com texto limpa a busca e mostra todas (sem texto, o Esc segue o caminho normal)
+  busca.addEventListener("keydown", ev => { if (ev.key === "Escape" && busca.value) { ev.preventDefault(); ev.stopPropagation(); busca.value = ""; filtrar(); } });
   const nadaBusca = h("p", { class: "fraco crm-cfg-nada", hidden: true }, "Nenhuma etiqueta com esse nome.");
   function filtrar() {
     const q = k.L.semAcento(busca.value.trim());
@@ -745,6 +754,9 @@ async function secaoEtiquetas(ctx, alvo) {
         const d = ui.lerForm(f);
         ui.marcarErro(f, null);
         if (!d.nome) { ui.marcarErro(f, "nome", "Dê um nome à etiqueta."); return false; }
+        // plano 2000d · PX-048: etiqueta com o mesmo nome (sem olhar acento/maiúscula) avisa aqui — ao criar e ao renomear
+        const igualE = (k.base.etiquetas || []).find(x => x && (!e || String(x.id) !== String(e.id)) && L.semAcento(String(x.nome || "").trim()) === L.semAcento(String(d.nome).trim()));
+        if (igualE) { ui.marcarErro(f, "nome", `Já existe a etiqueta «${igualE.nome}».`); return false; }
         try { return await k.api.rpcC("nx_etiqueta_salvar", { p_etiqueta: { ...(e ? { id: e.id } : {}), nome: d.nome, ...(k.cor(d.cor) ? { cor: d.cor } : {}) } }); }
         catch (err) { if (err && err.hint === "nome_em_uso") ui.marcarErro(f, "nome", "Já existe uma etiqueta com esse nome."); else api.erro(k.erro(err)); return false; }
       } }] });
@@ -768,7 +780,7 @@ async function secaoEtiquetas(ctx, alvo) {
 
   async function excluir(e, bt = null) {
     if (!(await ui.confirmar({ titulo: `Excluir a etiqueta «${e.nome}»?`, perigo: true,
-      texto: "Ela sai do catálogo na hora e é retirada de todos os contatos, negócios e conversas." }))) return;
+      texto: `Ela sai do catálogo na hora e é retirada de tod${k.v.art("contato") === "a" ? "as" : "os"} ${k.v.min("contatos")}, ${k.v.min("negocios")} e conversas.` /* plano 2000d · PX-090: o termo da vertical */ }))) return;
     // plano 1000b · RB-150: o progresso aparece NO item (antes só o leitor de tela ouvia) e o botão fica desligado até terminar
     const item = bt && bt.closest ? bt.closest(".crm-cfg-item") : null;
     const prog = item ? h("small", { class: "crm-cfg-prog", role: "status" }) : null;

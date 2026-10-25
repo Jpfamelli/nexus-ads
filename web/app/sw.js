@@ -155,7 +155,9 @@ const PAGINA_OFFLINE = "<!doctype html><html lang=\"pt-BR\"><meta charset=\"utf-
   + "a{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;padding:0 1.25rem;border-radius:999px;background:CanvasText;color:Canvas;font-weight:600;text-decoration:none}"
   + "a:focus-visible{outline:3px solid Highlight;outline-offset:3px}</style>"
   // plano 1000b · UB-174: diz que nada se perdeu e que o app volta quando a internet voltar
-  + "<body><main><h1>Sem conexão</h1><p>Quando a internet voltar, toque em Tentar de novo. Nada do que você salvou se perdeu.</p><a href=\"\">Tentar de novo</a></main></body></html>";
+  + "<body><main><h1>Sem conexão</h1><p>Quando a internet voltar, toque em Tentar de novo. Nada do que você salvou se perdeu.</p><a href=\"\">Tentar de novo</a></main>"
+  // plano 2000d · SX-062: a página se recarrega sozinha quando o aparelho avisa que a internet voltou (ninguém precisa lembrar de tocar)
+  + "<script>addEventListener(\"online\",function(){location.reload()})</script></body></html>";
 
 async function navegacao(ev) {
   const cache = await caches.open(NOME_CACHE);

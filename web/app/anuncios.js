@@ -94,8 +94,10 @@ export function textoRenovacao(P, { cliente = "", agencia = "", brl0 = v => `R$ 
   l.push(`Investimos ${brl0(P.t.gasto)} em anúncios e chegaram ${q(P.c.conversas, ["contato novo", "contatos novos"])} no CRM${(+P.c.agendadas || 0) > 0 ? `, com ${q(P.c.agendadas, Wf.ag)}` : ""}.`);
   if ((+P.c.fecharam || 0) > 0) l.push(`Foram ${q(P.c.fecharam, Wf.fe)}${(+P.c.receita || 0) > 0 ? `, somando ${brl0(P.c.receita)}` : ""}.`);
   if ((+P.c.receita || 0) > 0 && Number.isFinite(P.retorno)) l.push(`Cada R$ 1 investido virou ${brl(P.retorno)}.`);
-  if (P.ca && (+P.ca.conversas || 0) > 0 && (+P.c.conversas || 0) > (+P.ca.conversas || 0)) l.push(`São ${int(P.c.conversas - P.ca.conversas)} contatos a mais que ${P.rotulo ? P.rotulo.antes : "o período anterior"}.`);
-  l.push("Seguimos no próximo mês com o que funcionou e testando novos anúncios no lugar dos mais fracos.");
+  // plano 2000d · NX-004: plural pelo número («1 contato a mais», antes «1 contatos a mais»)
+  if (P.ca && (+P.ca.conversas || 0) > 0 && (+P.c.conversas || 0) > (+P.ca.conversas || 0)) { const mais = P.c.conversas - P.ca.conversas; l.push(`${mais === 1 ? "É 1 contato" : `São ${int(mais)} contatos`} a mais que ${P.rotulo ? P.rotulo.antes : "o período anterior"}.`); }
+  // plano 2000d · NX-045: «no próximo mês» só quando o período É um mês — numa janela de 7/30 dias, «nas próximas semanas»
+  l.push(`Seguimos ${P.periodo === "mes" || P.periodo === "mes_ant" ? "no próximo mês" : "nas próximas semanas"} com o que funcionou e testando novos anúncios no lugar dos mais fracos.`);
   if (agencia) l.push(`— ${agencia}`);
   return l.join("\n");
 }
@@ -109,10 +111,11 @@ export function progressoMetaFechamentos(fecharam, meta, { vertical = "", int = 
 }
 /** Plano 1000b · AB-075: as colunas e linhas do CSV dos criativos de uma campanha (a gaveta era o único bloco sem exportação).
     Números crus (o Excel formata); conversões do Google podem ser fracionadas. */
-export function csvCriativos(lista = []) {
+// plano 2000d · NX-025: a plataforma com o nome legível («Meta», «Google») — antes o código cru «meta» na planilha
+export function csvCriativos(lista = [], nomePlat = p => (p === "meta" ? "Meta" : p === "google" ? "Google" : p || "")) {
   const n2 = v => (Number.isFinite(+v) && v !== null ? Math.round(+v * 100) / 100 : "");
   return { colunas: ["Criativo", "Plataforma", "Investido", "Impressões", "CTR %", "Frequência", "Conversões", "Custo por conversão"],
-    linhas: (lista || []).map(({ k, t }) => [k && k.nome || "", k && k.plat || "", n2(t.gasto), +t.impressoes || 0, n2(t.ctr), n2(t.freq), n2(t.conversoes), n2(t.cpa)]) };
+    linhas: (lista || []).map(({ k, t }) => [k && k.nome || "", nomePlat(k && k.plat || ""), n2(t.gasto), +t.impressoes || 0, n2(t.ctr), n2(t.freq), n2(t.conversoes), n2(t.cpa)]) };
 }
 /** Plano 1000b · AB-030: o nível do ponto de cor do CPA em texto (leitor de tela e quem não distingue cor). */
 export const TEXTO_NIVEL_CPA = Object.freeze({ bom: "custo dentro da meta", aten: "custo perto do limite", ruim: "custo acima da meta", neutro: "sem meta de custo" });
@@ -294,7 +297,8 @@ export function destinosRelatorio(tipo, cfg = {}) {
   const brutos = tipo === "mensal" ? [...[].concat(cfg.waCliente || []), ...[].concat(cfg.waGestor || [])] : [].concat(cfg.waGestor || []);
   const vistos = new Map();
   for (const n of brutos) { const k = chave(n); if (k.length >= 10 && !vistos.has(k)) vistos.set(k, k); }
-  const fmt = x => (x.length === 11 ? `(${x.slice(0, 2)}) ${x.slice(2, 7)}-${x.slice(7)}` : x.length === 10 ? `(${x.slice(0, 2)}) ${x.slice(2, 6)}-${x.slice(6)}` : x);
+  // plano 2000d · NX-006: número de fora do Brasil aparece com «+» (antes «351912345678» cru, parecia número quebrado)
+  const fmt = x => (x.length === 11 ? `(${x.slice(0, 2)}) ${x.slice(2, 7)}-${x.slice(7)}` : x.length === 10 ? `(${x.slice(0, 2)}) ${x.slice(2, 6)}-${x.slice(6)}` : `+${x}`);
   return [...vistos.values()].map(fmt);
 }
 /** Plano 1000b · AB-197: a legenda dos tiques com os 5 estados (antes faltavam ✓! e ◷). */
@@ -344,11 +348,19 @@ export function textoRitmo(m, orc, { brl0 = v => `R$ ${Math.round(v)}`, brl = v 
   if (m.restam === 0) return `Mês fechado em ${brl0(m.gasto)}.`;
   // plano 2000d · DA-125/DA-180: orçamento esgotado vale ANTES do «cedo para projetar» (dia 3 com o mês todo gasto dizia que era cedo)
   if (+orc > 0 && m.gasto >= orc) return `O orçamento do mês (${brl0(orc)}) já foi todo usado: ${brl0(m.gasto)} até ontem. Para não passar mais, pause ou reduza as campanhas até o dia 1º — ou aumente o orçamento em Ajustes de anúncios.`;
-  if (m.cedo) return `Cedo para projetar: com ${m.pass} ${m.pass === 1 ? "dia" : "dias"} de mês a conta ainda oscila muito. A projeção aparece a partir do dia ${diaMin}.`;
+  // plano 2000d · NX-008: cliente que começou no meio do mês (m.desde, DA-008) — o «cedo» conta os dias DE ANÚNCIO e a projeção aparece
+  // no dia certo (antes «com 17 dias de mês… a partir do dia 5», contraditório)
+  if (m.cedo) {
+    if (m.desde > 1) { const d = Math.max(1, m.pass - m.desde + 1); return `Cedo para projetar: os anúncios começaram no dia ${m.desde} — com ${d} ${d === 1 ? "dia" : "dias"} de anúncio a conta ainda oscila muito. A projeção aparece a partir do dia ${m.desde + diaMin - 1}.`; }
+    return `Cedo para projetar: com ${m.pass} ${m.pass === 1 ? "dia" : "dias"} de mês a conta ainda oscila muito. A projeção aparece a partir do dia ${diaMin}.`;
+  }
   const acima = m.proj > orc * 1.02, noLimite = !acima && m.proj >= orc * .98;
   if (acima) {
-    const sug = diarioSugerido(orc, m.gasto, m.restam);
-    return `No ritmo atual o mês fecha ${brl0(m.proj - orc)} acima do orçamento. Orçamento diário sugerido: ${brl(sug)} (somando as plataformas) até o fim do mês.`;
+    // plano 2000d · NX-009: quem pausa nos dias fechados (cfg.pausaDiasFechados) divide o saldo só pelos dias ABERTOS que restam
+    const abertos = Number.isFinite(m.diasAbertosRestantes) ? m.diasAbertosRestantes : null;
+    const sug = diarioSugerido(orc, m.gasto, abertos != null ? abertos : m.restam);
+    if (sug == null) return `No ritmo atual o mês fecha ${brl0(m.proj - orc)} acima do orçamento. Não há mais dias de atendimento no mês: pause os anúncios até o dia 1º.`;
+    return `No ritmo atual o mês fecha ${brl0(m.proj - orc)} acima do orçamento. Orçamento diário sugerido: ${brl(sug)} (somando as plataformas) ${abertos != null ? "por dia de atendimento " : ""}até o fim do mês.`;
   }
   if (noLimite) return `No limite: o mês deve fechar em ${brl0(m.proj)}, praticamente no orçamento.`;
   return `Dentro do orçamento: o mês deve fechar em ${brl0(m.proj)} (sobram ${brl0(orc - m.proj)}).`;
@@ -408,8 +420,15 @@ export function marcosValidos(lista, ateIso = "") {
 export function mesclarMarcos(lista, d, t, c = "") {
   const k = m => `${m.d}|${m.c || ""}`, chave = `${d}|${c || ""}`;
   const fora = marcosValidos(lista).filter(m => k(m) !== chave);
-  const txt = String(t || "").trim().slice(0, 60);
+  // plano 2000d · NX-005: corta em 60 CARACTERES de verdade (o contador conta assim) — slice partia o emoji no meio e gravava lixo
+  const txt = Array.from(String(t || "").trim()).slice(0, 60).join("").trim();
   return txt ? [...fora, c ? { d, t: txt, c: String(c) } : { d, t: txt }].sort((a, b) => a.d.localeCompare(b.d)).slice(-40) : fora;
+}
+/** Plano 2000d · NX-030: o texto do marco já anotado num dia (e campanha) — o formulário abre com ele para editar (antes vinha vazio e
+    «vazio apaga» apagava sem a pessoa ver o que havia). "" sem marco. */
+export function marcoDoDia(lista, d, c = "") {
+  const m = marcosValidos(lista).find(x => x.d === d && String(x.c || "") === String(c || ""));
+  return m ? m.t : "";
 }
 /** Plano 1500c · AC-090: os marcos que caem nos dias da série (posição k na série; os de campanha só quando `campanha` casa ou é vazia). */
 export function marcosNaSerie(marcos, serie = [], isoDoIndice = i => String(i), { campanha = "" } = {}) {
@@ -459,6 +478,21 @@ export function csvRanking(lista = [], nomePlat = p => p) {
 }
 /** Plano 1500c · AC-293: busca por nome no ranking (sem acento e sem caixa). */
 export const filtrarRanking = (lista = [], busca = "") => { const q = nomeNormalizado(String(busca || "").trim()); return q ? (lista || []).filter(x => nomeNormalizado(x && x.k && x.k.nome).includes(q)) : (lista || []).slice(); };
+/** Plano 2000d · DA-004: o title do selo «dados parciais» de uma campanha (divergência campanha × soma dos anúncios). "" sem divergência. */
+export function tituloDivergencia(dv, brl = v => `R$ ${v}`) {
+  if (!dv || !(+dv.dias > 0)) return "";
+  return `Em ${+dv.dias} ${+dv.dias === 1 ? "dia" : "dias"} a soma dos anúncios não bateu com o total da campanha (diferença de ${brl(+dv.diferenca || 0)}): a plataforma devolveu dados parciais — vale o total da campanha.`;
+}
+/** Plano 2000d · DA-337: a leitura de ontem numa frase — a MESMA do diário do WhatsApp (M.vereditoDia do núcleo). "" sem o núcleo novo. */
+export function leituraOntem(M) {
+  if (!M || typeof M.vereditoDia !== "function" || !(M.R >= 0)) return "";
+  try {
+    const lDia = M.linhasDe(M.R, M.R), dia = M.consolidar(lDia), al = typeof M.avaliar === "function" ? (M.avaliar(M.R) || []) : [];
+    return String(M.vereditoDia(M.R, dia, lDia, al) || "");
+  } catch { return ""; }
+}
+/** Plano 2000d · NX-027: o que o leitor de tela ouve depois de buscar no ranking (pela quantidade ACHADA). */
+export const textoBuscaRanking = n => (+n > 0 ? `${+n} ${+n === 1 ? "anúncio" : "anúncios"} no ranking.` : "Nenhum anúncio com esse nome no ranking.");
 /** Plano 1500c · AC-119: o resumo do período pronto para colar no WhatsApp (*negrito* do WhatsApp). P = L.numerosPeriodo. */
 export function textoResumoPeriodo(P, { cliente = "", brl0 = v => `R$ ${Math.round(v)}`, brl = v => `R$ ${v}`, int = v => String(Math.round(v)), dec = (v, c) => v.toFixed(c), contatoNovo = "cliente novo", contatosNovos = "clientes novos",
   orcamento = 0, ritmo = "", link = "", vertical = "" } = {}) {
@@ -501,7 +535,10 @@ export function ritmoPlataformas(orcPlat, m, gastoMes = () => 0) {
 /** Plano 1500c · AC-137: conta de anúncios em outra moeda (integração com `moeda`/`currency` diferente de BRL) — o painel mostra R$. */
 export function avisoMoeda(integracoes = []) {
   const fora = (integracoes || []).filter(i => i && String(i.moeda || i.currency || "BRL").toUpperCase() !== "BRL");
-  return fora.length ? `Atenção: ${fora.map(i => `a conta do ${i.canal === "google" ? "Google" : "Meta"} está em ${String(i.moeda || i.currency).toUpperCase()}`).join(" e ")} — os valores aparecem como se fossem reais (R$), sem conversão.` : "";
+  // plano 2000d · NX-007: o nome da plataforma de verdade (uma conta do TikTok em USD era chamada de «Meta»)
+  const NOMES = { meta: "Meta", google: "Google", tiktok: "TikTok", microsoft: "Microsoft Ads", bing: "Microsoft Ads", linkedin: "LinkedIn", pinterest: "Pinterest", kwai: "Kwai" };
+  const nomeCanal = c => NOMES[String(c || "").toLowerCase()] || (c ? String(c).charAt(0).toUpperCase() + String(c).slice(1) : "anúncios");
+  return fora.length ? `Atenção: ${fora.map(i => `a conta do ${nomeCanal(i.canal)} está em ${String(i.moeda || i.currency).toUpperCase()}`).join(" e ")} — os valores aparecem como se fossem reais (R$), sem conversão.` : "";
 }
 /** Plano 2000d · DA-175: o aviso de moeda leva ao lugar de resolver (Ajustes de anúncios) — só para quem gere. */
 export const linkAvisoMoeda = gestor => (gestor ? { rotulo: "Ajustar a moeda em Ajustes de anúncios", href: "#/config/anuncios" } : null);
@@ -637,8 +674,13 @@ export function descricaoOrcamentoMensal(m, _dataBR, brl0) {
   // plano 2000d · DA-168: quantos dias faltam (contando hoje) para o mês fechar
   const faltam = Number.isFinite(m.restam) ? m.restam : Number.isFinite(m.diasMes) && Number.isFinite(m.pass) ? m.diasMes - m.pass : null;
   const txtFaltam = faltam > 0 ? ` · faltam ${faltam} ${faltam === 1 ? "dia" : "dias"} para o mês fechar` : "";
-  if (m.cedo) return `${fmt(1)} a ${fmt(m.pass)} · mês até ontem · todas as plataformas · ${brl0(m.gasto)} acumulados; a projeção começa no 5º dia do mês${txtFaltam}`;
-  return `${fmt(1)} a ${fmt(m.pass)} · mês até ontem · todas as plataformas · ${brl0(m.gasto)} acumulados; projeção linear: gasto acumulado ÷ ${m.pass} dias decorridos × ${m.diasMes} dias do mês = ${brl0(m.proj)}${txtFaltam}`;
+  // plano 2000d · NX-010: a conta escrita é a que o núcleo FEZ — anúncios desde o dia X (DA-008) e só dias abertos (DA-009); antes dizia
+  // «÷ 17 dias decorridos × 31» mesmo quando a projeção usava 3 dias de anúncio ou só os dias de atendimento
+  const ini = m.desde > 1 ? m.desde : 1, diaMinP = Number.isFinite(m.diaMin) ? m.diaMin : 5;
+  if (m.cedo) return `${fmt(1)} a ${fmt(m.pass)} · mês até ontem · todas as plataformas · ${brl0(m.gasto)} acumulados; a projeção começa no ${ini + diaMinP - 1}º dia do mês${ini > 1 ? ` (os anúncios começaram no dia ${ini})` : ""}${txtFaltam}`;
+  if (Number.isFinite(m.diasAbertosRestantes)) return `${fmt(1)} a ${fmt(m.pass)} · mês até ontem · todas as plataformas · ${brl0(m.gasto)} acumulados; projeção pelos dias de atendimento: média dos dias abertos com anúncio × ${m.diasAbertosRestantes} ${m.diasAbertosRestantes === 1 ? "dia aberto" : "dias abertos"} que faltam = ${brl0(m.proj)}${txtFaltam}`;
+  const nDias = m.pass - ini + 1;
+  return `${fmt(1)} a ${fmt(m.pass)} · mês até ontem · todas as plataformas · ${brl0(m.gasto)} acumulados; projeção linear: gasto acumulado ÷ ${nDias} ${nDias === 1 ? "dia" : "dias"} ${ini > 1 ? `de anúncio (desde o dia ${ini})` : "decorridos"} × ${ini > 1 ? `${m.diasMes - ini + 1} dias até o fim do mês` : `${m.diasMes} dias do mês`} = ${brl0(m.proj)}${txtFaltam}`;
 }
 
 export function filtrarCampanhas(linhas = [], { busca = "", resultado = "todos" } = {}) {
@@ -731,7 +773,8 @@ export function criarPainelCampanhas({ h, limpar, linhas = [], estado = {}, peri
   // plano 1000b · AB-004: conversões da plataforma com fração (1,5 do Google não vira 2) — `conv` da tela ou inteiro/1 casa
   const fmtConv = typeof conv === "function" ? conv : v => (Number.isFinite(+v) && v !== null && !Number.isInteger(+v) ? decimal(+v) : inteiro(v));
   // plano 1000b · AB-215: sem resultado, o status sugere o que fazer
-  const textoStatus = n => (n ? `${n} de ${linhas.length} campanhas · ${periodo}` : "Nenhuma campanha corresponde aos filtros — limpe a busca ou troque o filtro.");
+  // plano 2000d · NX-079: «1 de 1 campanha» (antes «1 de 1 campanhas»)
+  const textoStatus = n => (n ? `${n} de ${linhas.length} ${linhas.length === 1 ? "campanha" : "campanhas"} · ${periodo}` : "Nenhuma campanha corresponde aos filtros — limpe a busca ou troque o filtro.");
   const raiz = h("section", { class: "ads-painel-camp", "aria-label": "Filtros e comparação de campanhas" });
   const st = { busca: String(estado.busca || ""), resultado: ["todos", "com_crm", "sem_crm"].includes(estado.resultado) ? estado.resultado : "todos",
     comparacao: Array.isArray(estado.comparacao) ? [...estado.comparacao].slice(0, 3) : [] };
@@ -754,7 +797,7 @@ export function criarPainelCampanhas({ h, limpar, linhas = [], estado = {}, peri
   function render() {
     clearTimeout(tBusca);                         // plano 1000b · AB-057: a busca pendente não roda sobre um desenho antigo
     visiveis = filtrarCampanhas(linhas, st);
-    const busca = h("input", { type: "search", class: "ads-camp-busca-input", value: st.busca, autocomplete: "off",
+    const busca = h("input", { type: "search", class: "ads-camp-busca-input", value: st.busca, autocomplete: "off", enterkeyhint: "search" /* plano 2000d · NX-047 */,
       placeholder: "Ex.: implante…", "aria-label": "Buscar campanha por nome" });
     const filtro = h("select", { class: "ads-camp-resultado", "aria-label": "Filtrar campanhas pela atividade no CRM" },
       h("option", { value: "todos" }, "Todas as campanhas"),
@@ -1035,12 +1078,16 @@ export function botaoPng({ h, alvo, nome, L, titulo = "", cabecalho = null, aoFa
  */
 export function criarGraficoTendencia(alvo, o) {
   const G = o.G;
+  // plano 2000d · NX-012: as palavras da vertical na legenda e na leitura do dia («orçamentos» na oficina, «pedidos» na loja)
+  const pAg = Array.isArray(o.palavraAg) && o.palavraAg.length === 2 ? o.palavraAg : ["agendamento", "agendamentos"];
+  const pFe = Array.isArray(o.palavraFe) && o.palavraFe.length === 2 ? o.palavraFe : ["fechamento", "fechamentos"];
+  const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
   const SERIES = [
     { id: "gasto", nome: "Investimento", classe: "g-td-gasto", eixo: "esq", area: true },
     { id: "conversas", nome: "Conversas no CRM", classe: "g-td-conv", eixo: "dir" },
-    { id: "agendadas", nome: "Agendamentos", classe: "g-td-ag", eixo: "dir" },
+    { id: "agendadas", nome: cap(pAg[1]), classe: "g-td-ag", eixo: "dir" },
     // plano 1500c · AC-089: fechamentos (eixo da direita) e receita (R$, eixo da esquerda), ligáveis na legenda
-    ...(o.seriesExtras ? [{ id: "fecharam", nome: "Fechamentos", classe: "g-td-fe", eixo: "dir", inicial: false, um: "fechamento", varios: "fechamentos" },
+    ...(o.seriesExtras ? [{ id: "fecharam", nome: cap(pFe[1]), classe: "g-td-fe", eixo: "dir", inicial: false, um: pFe[0], varios: pFe[1] },
       { id: "receita", nome: "Receita do CRM", classe: "g-td-rec", eixo: "esq", inicial: false, moeda: true }] : []),
     // plano 1500c · AC-088: o investimento do período anterior, tracejado, por baixo (dia 1 com dia 1)
     ...(Array.isArray(o.anterior) && o.anterior.length ? [{ id: "anterior", nome: "Investimento do período anterior", classe: "g-td-ant", eixo: "esq", tracejada: true, inicial: false, moeda: true }] : []),
@@ -1069,7 +1116,7 @@ export function criarGraficoTendencia(alvo, o) {
   caixa.append(dica);
   let geo = null, atual = -1, W = 0;
   const n = () => o.serie.length;
-  const texto = k => { const p = o.serie[k]; const partes = []; if (ativas.has("gasto")) partes.push(`investimento ${o.fmtMoeda(p.gasto)}`); if (ativas.has("conversas")) partes.push(`${o.fmtNum(p.conversas)} ${p.conversas === 1 ? "conversa" : "conversas"}`); if (ativas.has("agendadas")) partes.push(`${o.fmtNum(p.agendadas)} ${p.agendadas === 1 ? "agendamento" : "agendamentos"}`);
+  const texto = k => { const p = o.serie[k]; const partes = []; if (ativas.has("gasto")) partes.push(`investimento ${o.fmtMoeda(p.gasto)}`); if (ativas.has("conversas")) partes.push(`${o.fmtNum(p.conversas)} ${p.conversas === 1 ? "conversa" : "conversas"}`); if (ativas.has("agendadas")) partes.push(`${o.fmtNum(p.agendadas)} ${p.agendadas === 1 ? pAg[0] : pAg[1]}`);
     // plano 1500c · AC-088/AC-089: as séries extras ligadas também entram na leitura do dia
     for (const se of SERIES) { if (!ativas.has(se.id) || ["gasto", "conversas", "agendadas"].includes(se.id)) continue; const v = valorDe(se, k); partes.push(se.moeda ? `${se.id === "anterior" ? "período anterior" : "receita"} ${o.fmtMoeda(v)}` : `${o.fmtNum(v)} ${v === 1 ? se.um : se.varios}`); }
     const mk = marcosK.get(k); return `${o.diaLongo(p.i)} — ${partes.join(" · ")}${mk ? ` · marco: ${mk}` : ""}`; };
@@ -1182,7 +1229,9 @@ export function resumoFunilPlataforma(p, fmtInt = String, pctTxt = v => `${v}%`)
   const et = (p && p.etapas) || [];
   const ini = et.find(e => e.id === "conversas") || et[1] || et[0], fim = et[et.length - 1];
   if (!ini || !fim || ini === fim || !(+ini.v > 0)) return "";
-  return `${p.nome}: de ${fmtInt(ini.v)} ${String(ini.rotulo || "").toLowerCase()}, ${fmtInt(fim.v)} ${String(fim.rotulo || "").toLowerCase()} (${pctTxt(Math.round(fim.v / ini.v * 1000) / 10)}).`;
+  // plano 2000d · NX-015: só a 1ª letra vira minúscula — «Conversas no CRM» saía «conversas no crm» para o leitor de tela
+  const min1 = s => { const t = String(s || ""); return t.charAt(0).toLowerCase() + t.slice(1); };
+  return `${p.nome}: de ${fmtInt(ini.v)} ${min1(ini.rotulo)}, ${fmtInt(fim.v)} ${min1(fim.rotulo)} (${pctTxt(Math.round(fim.v / ini.v * 1000) / 10)}).`;
 }
 /** Funil por plataforma (item 46): uma coluna por plataforma, 4 etapas em barra proporcional e a taxa entre cada par. */
 export function criarFunilPlataformas({ h, dados = [], fmtInt = String, fmtMoeda = String, pctTxt = v => `${v}%`, fmtConv = null,
@@ -1273,10 +1322,14 @@ export function sugestaoHorarios(m24, { minimo = 20, largura = 4 } = {}) {
   const total = porHora.reduce((a, b) => a + b, 0);
   if (total < minimo) return "";
   let melhor = -1, ini = 0;
-  for (let h0 = 0; h0 <= 24 - largura; h0++) { const s = porHora.slice(h0, h0 + largura).reduce((a, b) => a + b, 0); if (s > melhor) { melhor = s; ini = h0; } }
+  // plano 2000d · NX-014: a janela pode atravessar a meia-noite (22h–2h é comum em delivery/bar) — antes só janelas dentro do dia
+  for (let h0 = 0; h0 < 24; h0++) { let s = 0; for (let k = 0; k < largura; k++) s += porHora[(h0 + k) % 24]; if (s > melhor) { melhor = s; ini = h0; } }
   const pct = Math.round(melhor / total * 100);
   if (pct <= 25) return "";
-  return `Das ${ini}h às ${ini + largura}h chegam ${pct}% das conversas: se a verba for curta, concentre os anúncios nesse horário (programação de anúncios no Meta/Google).`;
+  // plano 2000d · NX-013: «às 24h» vira «à meia-noite» (e «Da meia-noite às 4h»)
+  const fim = (ini + largura) % 24;
+  const de = ini === 0 ? "Da meia-noite" : `Das ${ini}h`, ate = fim === 0 ? "à meia-noite" : `às ${fim}h`;
+  return `${de} ${ate} chegam ${pct}% das conversas: se a verba for curta, concentre os anúncios nesse horário (programação de anúncios no Meta/Google).`;
 }
 /** Plano 1000 (AD-118): matriz dia × hora (7 × 24) → o formato de criarCalorSemanal com 4 colunas (madrugada, manhã, tarde, noite). */
 export function matrizFaixasCalor(m24) {
@@ -1485,7 +1538,7 @@ export async function montar(ctx) {
   // sem aria-live aqui: o corpo inteiro (com números que "contam") seria lido a cada filtro
   const corpo = h("div", { class: "rel-corpo", "aria-busy": "true" });
   raiz.append(faixa, filtros, corpo);
-  let desvioAtual = 0, nivelAnunciado = null;
+  let desvioAtual = 0, nivelAnunciado = null, faixaFeita = null;   // plano 2000d · NX-016
 
   // plano 1000b · AB-005: {silencioso} não mostra «Números atualizados.» (o silenciar já mostrou o aviso dele)
   async function recarregar(forcar, { silencioso = false } = {}) {
@@ -1584,10 +1637,15 @@ export async function montar(ctx) {
       if (nivelAnunciado !== null && nivelAnunciado !== e.nivel) avisoNivel.textContent = `Leitura dos anúncios: ${L.textoPilula(e, agora)}`;
       nivelAnunciado = e.nivel;
       faixa.hidden = !e.erros.length;
+      // plano 2000d · NX-016: a faixa é role=alert — refeita a cada 30 s, o leitor de tela anunciava a queda de novo a cada repintura.
+      // Só refaz quando o TEXTO muda (outra plataforma caiu, a equipe foi avisada…)
+      const chaveFaixa = e.erros.length ? `${L.textoQueda(e.erros, agora)}|${eGestor(ctx)}|${equipeAvisada(dados.alertas || [], e.erros, agora)}` : "";
+      if (chaveFaixa === faixaFeita) return;
+      faixaFeita = chaveFaixa;
       ui.limpar(faixa);
       if (e.erros.length) {
         // AD-132: «já foi avisada» só quando o aviso de conexão saiu de fato; senão, o que a pessoa pode fazer
-        faixa.append(h("p", {}, L.textoQueda(e.erros)),
+        faixa.append(h("p", {}, L.textoQueda(e.erros, agora)),
           eGestor(ctx) ? h("a", { class: "rel-btn rel-btn-prim", href: "#/config/anuncios" }, "Refazer a conexão")
             : h("p", { class: "rel-nota" }, equipeAvisada(dados.alertas || [], e.erros, agora) ? "Nossa equipe já foi avisada." : "Avise a equipe que cuida dos seus anúncios para refazer a conexão."));
       }
@@ -1620,7 +1678,7 @@ export async function montar(ctx) {
     const descP = Pdes ? descricaoPeriodoAds(Pdes, M.dataBR, L.nomePlat, { fusos }) : null;
     if (!filtros.hidden) {
       const chipResumo = h("button", { type: "button", class: "rel-resumo", "aria-haspopup": "dialog", title: "Período e plataforma" },
-        h("span", { class: "rel-resumo-t" }, L.textoChipAnuncios(S.dias, S.plat)), ui.icone("seta-baixo"));
+        h("span", { class: "rel-resumo-t" }, L.textoChipAnuncios(S.dias, S.plat, M)), ui.icone("seta-baixo"));
       chipResumo.addEventListener("click", () => abrirFolha(M, dados));
       filtros.append(chipResumo,
         h("div", { class: "rel-filtros-lg" },
@@ -1775,11 +1833,11 @@ export async function montar(ctx) {
       h("p", { class: "rel-nota" }, rot.nota),
       rot.gestao ? h("p", { class: "rel-nota ads-gestao" }, rot.gestao) : null,
       h("p", { class: "ads-receita" }, num(c.receita, N.brl0), h("span", {}, est ? " em receita fechada (inclui estimativa)" : " em receita fechada")),
-      c.semValor > 0 ? h("p", { class: "rel-nota" }, `${c.semValor === 1 ? "1 fechamento" : `${N.int(c.semValor)} fechamentos`} sem valor informado — não entram na receita até alguém registrar o valor`) : null,   // plano 1000b · AB-193
+      c.semValor > 0 ? h("p", { class: "rel-nota" }, `${c.semValor === 1 ? `1 ${Wv.fe[0]}` : `${N.int(c.semValor)} ${Wv.fe[1]}`} sem valor informado — não entram na receita até alguém registrar o valor`) : null,   // plano 1000b · AB-193 · plano 2000d · NX-018: a palavra da vertical
       // plano 1000 (AD-128): quanto custou cada agendamento e cada fechamento do CRM (investimento do período ÷ eventos do período)
       // plano 1000b · AB-194: com o chip de variação contra o período anterior (custo: cair é bom — sentido «baixo»)
       P.custoAgendamento != null || P.custoFechamento != null ? h("p", { class: "rel-nota ads-custos" },
-        ...[P.custoAgendamento != null ? [`${N.brl0(P.custoAgendamento)} por agendamento `, P.custoAgendamentoAnt != null ? chip(P.custoAgendamento, P.custoAgendamentoAnt, "baixo") : null] : null,
+        ...[P.custoAgendamento != null ? [`${N.brl0(P.custoAgendamento)} por ${Wv.ag[0]} ` /* plano 2000d · NX-017 */, P.custoAgendamentoAnt != null ? chip(P.custoAgendamento, P.custoAgendamentoAnt, "baixo") : null] : null,
          P.custoFechamento != null ? [`${N.brl0(P.custoFechamento)} por ${umContato} novo `, P.custoFechamentoAnt != null ? chip(P.custoFechamento, P.custoFechamentoAnt, "baixo") : null] : null]
           .filter(Boolean).flatMap((x, i) => (i ? [" · ", ...x] : x)).filter(Boolean)) : null);
     const balde = L.semCampanhaTot(M, P.de, P.ate, { plat: S.plat });
@@ -1789,19 +1847,22 @@ export async function montar(ctx) {
     // plano 1000b · AB-066: o caminho para resolver — os parâmetros de URL com o ID da campanha (para quem configura: admin/gestor)
     const podeRastreio = eGestor(ctx) || (typeof ctx.pode === "function" && ctx.pode("admin"));
     // plano 2000d · DA-144: e o caminho para VER esses contatos (a lista do CRM filtrada pela origem «anúncio»)
-    const notaBalde = txtBalde ? h("p", { class: "rel-nota ads-balde" }, txtBalde, " ", h("a", { class: "rel-link ads-balde-ver", href: LINK_CONTATOS_ANUNCIO }, "Ver esses contatos no CRM"),
+    const notaBalde = txtBalde ? h("p", { class: "rel-nota ads-balde" }, txtBalde, " ", h("a", { class: "rel-link ads-balde-ver", href: linkContatosPeriodo(N.isoDe(M.dataDe(P.de)), N.isoDe(M.dataDe(P.ate))) /* plano 2000d · NX-019: os do PERÍODO (antes a lista inteira de anúncio) */ }, "Ver esses contatos no CRM"),
       podeRastreio ? [" · ", h("a", { class: "rel-link", href: "#/config/rastreio" }, "Ver os parâmetros de URL dos anúncios")] : null) : null;
     // plano 1000 (AD-024): orgânicos ficam fora do funil por desenho — a tela diz quantos houve
     const nOrg = S.plat ? 0 : L.organicosPeriodo(M, { dias: S.dias });
     const notaOrg = nOrg ? h("p", { class: "rel-nota ads-organicos" }, `+ ${N.int(nOrg)} ${nOrg === 1 ? "conversa orgânica" : "conversas orgânicas"} no período (indicação, link da bio, WhatsApp direto) — fora da conta dos anúncios.`) : null;
+    // plano 2000d · DA-337: «Ontem: Dia bom: 6 conversas, custo dentro da meta.» — a mesma frase que abre o diário do WhatsApp (conta inteira)
+    const txtOntem = S.plat ? "" : leituraOntem(M);
+    if (txtOntem) corpo.append(h("p", { class: "rel-nota ads-ontem" }, h("b", {}, `Ontem (${M.dataBR(M.R)}): `), txtOntem));
     corpo.append(h("div", { class: "ads-heroi rel-cartao rel-entra" },
       h("div", { class: "ads-heroi-t" }, h("p", { class: "rel-olho" }, olhoHeroi), frase, notaBalde, notaOrg), conta));
 
     // trilha do funil: conversas → agendaram → compareceram → fecharam
     const passos = [
       { v: c.conversas, a: L.anteriorNaRegua(P, ca.conversas), l: "Conversas registradas no CRM", taxa: null },   // plano 2000d · DA-199/DA-200: média por dia
-      { v: c.agendadas, a: L.anteriorNaRegua(P, ca.agendadas), l: "Agendaram", taxa: L.razao(c.agendadas, c.conversas), tl: "das conversas" },
-      { v: c.compareceram, a: L.anteriorNaRegua(P, ca.compareceram), l: "Compareceram", taxa: L.razao(c.compareceram, c.agendadas), tl: "dos agendados" },
+      { v: c.agendadas, a: L.anteriorNaRegua(P, ca.agendadas), l: Wv.agendaram, taxa: L.razao(c.agendadas, c.conversas), tl: "das conversas" },   // plano 2000d · NX-020: rótulos da vertical
+      { v: c.compareceram, a: L.anteriorNaRegua(P, ca.compareceram), l: Wv.vieram, taxa: L.razao(c.compareceram, c.agendadas), tl: `dos ${Wv.ag[1]}` },
       { v: c.fecharam, a: L.anteriorNaRegua(P, ca.fecharam), l: "Fecharam", taxa: L.razao(c.fecharam, c.compareceram), tl: "de quem veio" },
     ];
     const trilha = h("ol", { class: "ads-trilha rel-cartao rel-entra", "aria-label": "Do anúncio ao fechamento" });
@@ -1851,7 +1912,7 @@ export async function montar(ctx) {
       cel.dataset.kpi = k.id;
       if (k.medidor) {
         const w = Number.isFinite(t.cpa) ? Math.min(t.cpa / (meta * 2), 1) * 100 : 0;
-        const med = h("span", { class: `rel-medidor rel-m-${L.nivelCpa(t.cpa, meta, t.gasto)}`, "aria-hidden": "true" }, h("i"), h("b"));   // plano 1000b · AB-220: sem title morto num elemento escondido (o texto equivalente está no extra)
+        const med = h("span", { class: `rel-medidor rel-m-${L.nivelCpa(t.cpa, meta, t.gasto, undefined, L.tolCpa(M.CFG))}`, "aria-hidden": "true" }, h("i"), h("b"));   // plano 1000b · AB-220: sem title morto num elemento escondido (o texto equivalente está no extra)
         med.style.setProperty("--w", `${w.toFixed(1)}%`);
         cel.append(med);
       }
@@ -1901,6 +1962,7 @@ export async function montar(ctx) {
 
     // item 45: tendência investimento × conversas × agendamentos (2 eixos, legenda clicável, teclado) + tabela/CSV/PNG
     const alvoT = h("div", { class: "rel-grafico" });
+    const WvT = palavrasFunil(vert), capT = s => s.charAt(0).toUpperCase() + s.slice(1), tituloTend = `Tendência: investimento × conversas × ${WvT.ag[1]}`;
     const rodapeT = h("div", { class: "rel-cartao-rodape" });
     const totT = tend.reduce((a, d) => ({ g: a.g + d.gasto, c: a.c + d.conversas, ag: a.ag + d.agendadas }), { g: 0, c: 0, ag: 0 });
     // plano 1000b · AB-039: plural · plano 1500c · AC-098: com o maior e o menor dia e a direção (o leitor de tela ouve o desenho)
@@ -1912,23 +1974,23 @@ export async function montar(ctx) {
     const btMarco = eGestor(ctx) ? h("button", { type: "button", class: "g-ver-tabela ads-marco-novo", title: "Anotar uma mudança (troca de criativo, verba nova…) num dia do gráfico" }, "Anotar mudança") : null;
     if (btMarco) btMarco.addEventListener("click", () => anotarMarco(M, btMarco));
     const cartaoT = h("section", { class: "rel-cartao ads-cartao-g rel-entra", "aria-labelledby": "ads-tend-h" },
-      h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ads-tend-h", class: "rel-h2" }, "Tendência: investimento × conversas × agendamentos"),
-        h("p", { class: "rel-nota" }, "R$ no eixo da esquerda; conversas e agendamentos do CRM no da direita, pela data de cada evento. Clique na legenda para esconder ou mostrar uma série (fechamentos, receita e o período anterior começam escondidos).",
+      h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ads-tend-h", class: "rel-h2" }, tituloTend),   // plano 2000d · NX-021: a palavra da vertical
+        h("p", { class: "rel-nota" }, `R$ no eixo da esquerda; conversas e ${WvT.ag[1]} do CRM no da direita, pela data de cada evento. Clique na legenda para esconder ou mostrar uma série (${WvT.fe[1]}, receita e o período anterior começam escondidos).`,
           marcosT.length ? ` ◆ marca as mudanças anotadas (${marcosT.length}).` : ""),
         ajusteT ? h("p", { class: "rel-nota ads-ajuste-serie" }, `Nota: ${ajusteT}.`) : null),
       alvoT, rodapeT);
     if (tend.length > 1) {
       const gT = criarGraficoTendencia(alvoT, { G, serie: tend, rotuloDia: M.ddmm, diaLongo: i => `${L.SEMANA[M.dataDe(i).getDay()]} · ${M.ddmm(i)}`,
         fmtMoeda: N.brl, fmtMoedaCurto: N.brl0, fmtNum: N.int, resumo: resumoT,
-        seriesExtras: true, anterior: L.serieTendencia(M, { dias: S.dias, plat: S.plat, anterior: true }), marcos: marcosT });   // plano 1500c · AC-088/AC-089/AC-090
+        seriesExtras: true, palavraAg: WvT.ag, palavraFe: WvT.fe, anterior: L.serieTendencia(M, { dias: S.dias, plat: S.plat, anterior: true }), marcos: marcosT });   // plano 1500c · AC-088/AC-089/AC-090
       graficos.push(gT);
       // plano 1500c · AC-079: a tabela (alternativa acessível do gráfico) com a receita do CRM
-      G.alternarTabela(rodapeT, alvoT, { legenda: `${resumoT}; valores diários`, colunas: ["Dia", "Investimento", "Conversas CRM", "Agendamentos CRM", "Fechamentos CRM", "Receita CRM"],
+      G.alternarTabela(rodapeT, alvoT, { legenda: `${resumoT}; valores diários`, colunas: ["Dia", "Investimento", "Conversas CRM", `${capT(WvT.ag[1])} CRM`, `${capT(WvT.fe[1])} CRM`, "Receita CRM"],
         linhas: tend.map(d => [M.dataBR(d.i), N.brl(d.gasto), N.int(d.conversas), N.int(d.agendadas), N.int(d.fecharam), N.brl0(d.receita)]) });
       // plano 1500c · AC-078: conversões do anúncio com 2 casas (o Google manda 12.499999)
       rodapeT.append(botaoCsv("tendencia", ["Dia", "Investimento", "Conversões Ads", "Conversas CRM", "Agendamentos CRM", "Fechamentos CRM", "Receita CRM"],
         () => tend.map(d => [M.dataBR(d.i), Math.round(d.gasto * 100) / 100, Math.round(d.convAds * 100) / 100, d.conversas, d.agendadas, d.fecharam, Math.round(d.receita * 100) / 100]), "Tendência"),
-        botaoPng({ h, alvo: alvoT, ...pngDe("tendencia", "Tendência: investimento × conversas × agendamentos", P, M), L, titulo: "Tendência", aoFalhar: t => ui.toast(t, { tipo: "nota" }), aoPronto: t => ui.toast(t, { tipo: "ok", ms: 2000 }) }), btMarco);   // AB-068
+        botaoPng({ h, alvo: alvoT, ...pngDe("tendencia", tituloTend, P, M), L, titulo: "Tendência", aoFalhar: t => ui.toast(t, { tipo: "nota" }), aoPronto: t => ui.toast(t, { tipo: "ok", ms: 2000 }) }), btMarco);   // AB-068
     } else alvoT.append(h("p", { class: "rel-vazio-txt" }, "Ainda não há dias suficientes para desenhar a tendência."));
     corpo.append(cartaoT);
 
@@ -1985,7 +2047,7 @@ export async function montar(ctx) {
         const totalD = fatias.reduce((s, f) => s + f.valor, 0);
         const donut = typeof G.donut === "function" ? G.donut : G.rosca;
         if (totalD > 0) graficos.push(donut(alvoD, { resumo: `Divisão do investimento: ${fatias.map(f => `${f.rotulo} ${N.brl0(f.valor)}`).join(", ")}`, fatias, fmt: N.brl0,
-          centro: L.centroRosca(fatias) }));   // AD-093: a plataforma com mais investimento (antes «0% no Meta» para quem só usa Google)
+          centro: L.centroRosca(fatias), tabela: true, colunaRotulo: "Plataforma", colunaValor: "Investimento" }));   // plano 2000d · DR-306: «Ver como tabela» com rótulo, valor e %   // AD-093: a plataforma com mais investimento (antes «0% no Meta» para quem só usa Google)
         lado.append(h("div", { class: "rel-cartao ads-plats rel-entra" }, h("h2", { class: "rel-h2" }, "Por plataforma"),
           h("p", { class: "rel-nota" }, `${periodoTexto}. Os eventos do CRM usam suas próprias datas e não são o denominador do CPA da plataforma.`),
           alvoD,
@@ -2000,7 +2062,7 @@ export async function montar(ctx) {
               h("span", { class: "ads-plat-nome" }, h("i", { class: `g-marca g-${x.p}` }), L.nomePlat(x.p)),
               h("span", { class: "ads-plat-trilho" }, barra),
               // plano 1000b · AB-037: plural pelo número em cada termo («1 conversa registrada», não «1 conversas registradas»)
-              h("span", { class: "ads-plat-num" }, `${N.brl0(x.t.gasto)} · ${L.textoConvPlat(x.p, x.t, { int: N.int, dec: N.dec, brl: N.brl })} · CRM: ${N.int(x.c.conversas)} ${x.c.conversas === 1 ? "conversa registrada" : "conversas registradas"}, ${N.int(x.c.agendadas)} ${x.c.agendadas === 1 ? "agendamento" : "agendamentos"}, ${N.int(x.c.fecharam)} ${x.c.fecharam === 1 ? "fechamento" : "fechamentos"}`));
+              h("span", { class: "ads-plat-num" }, `${N.brl0(x.t.gasto)} · ${L.textoConvPlat(x.p, x.t, { int: N.int, dec: N.dec, brl: N.brl })} · CRM: ${N.int(x.c.conversas)} ${x.c.conversas === 1 ? "conversa registrada" : "conversas registradas"}, ${N.int(x.c.agendadas)} ${x.c.agendadas === 1 ? Wv.ag[0] : Wv.ag[1]}, ${N.int(x.c.fecharam)} ${x.c.fecharam === 1 ? Wv.fe[0] : Wv.fe[1]}`));   // plano 2000d · NX-024: a palavra da vertical
           }))));
       }
     }
@@ -2016,7 +2078,7 @@ export async function montar(ctx) {
       // plano 1000 (AD-006): nos 4 primeiros dias a projeção linear é ruído — o cartão diz «cedo para projetar»
       // plano 1000b · AB-225 → plano 1500c · AC-080: a frase sai de textoRitmo — com o orçamento já todo usado, só o aviso e o que fazer
       const msg = textoRitmo(m, orc, { brl0: N.brl0, brl: N.brl, diaMin: N.DIAS_MIN_PROJECAO || 5 });
-      const descrOrcamento = descricaoOrcamentoMensal(m, M.dataBR, N.brl0);
+      const descrOrcamento = descricaoOrcamentoMensal({ ...m, diaMin: N.DIAS_MIN_PROJECAO || 5 }, M.dataBR, N.brl0);   // plano 2000d · NX-011
       // plano 1000b · AB-250: rótulo curto na barra (os ~200 caracteres da descrição já estão no parágrafo acima, ligado por aria-describedby)
       const barra = h("div", { class: `ads-orc-barra${acima ? " acima" : ""}`, role: "img", "aria-describedby": "ads-orc-descr",
         "aria-label": `${N.brl0(m.gasto)} de ${N.brl0(orc)}${m.cedo ? "" : `; projeção ${N.brl0(m.proj)}`}` }, h("i"), h("u"), h("b"));
@@ -2028,7 +2090,7 @@ export async function montar(ctx) {
         h("p", { id: "ads-orc-descr", class: "rel-nota" }, descrOrcamento),
         h("p", { class: "ads-orc-n" }, num(m.gasto, N.brl0), h("span", {}, ` de ${N.brl0(orc)}`)),
         barra,
-        h("p", { class: "ads-orc-leg rel-nota" }, h("span", {}, `real ${N.brl0(m.gasto)} até ontem`), h("span", {}, m.cedo ? "projeção a partir do 5º dia" : `projeção linear ${N.brl0(m.proj)}`), h("span", {}, `orçamento mensal ${N.brl0(orc)}`)),
+        h("p", { class: "ads-orc-leg rel-nota" }, h("span", {}, `real ${N.brl0(m.gasto)} até ontem`), h("span", {}, m.cedo ? `projeção a partir do ${(m.desde > 1 ? m.desde : 1) + (N.DIAS_MIN_PROJECAO || 5) - 1}º dia` /* plano 2000d · NX-011 */ : `projeção linear ${N.brl0(m.proj)}`), h("span", {}, `orçamento mensal ${N.brl0(orc)}`)),
         h("p", { class: `ads-orc-msg${acima ? " rel-txt-aten" : ""}` }, msg), cartaoOrcPlat(m)));
       corpo.append(h("div", { class: "ads-grade" }, cartaoG, lado));
     }
@@ -2048,19 +2110,19 @@ export async function montar(ctx) {
     function cartaoSemOrcamento(m0) {
       return h("div", { class: "rel-cartao ads-orc ads-orc-sem rel-entra" },
         h("h2", { class: "rel-h2" }, "Investimento do mês"),
-        h("p", { class: "rel-nota" }, descricaoOrcamentoMensal(m0, M.dataBR, N.brl0)),
+        h("p", { class: "rel-nota" }, descricaoOrcamentoMensal({ ...m0, diaMin: N.DIAS_MIN_PROJECAO || 5 }, M.dataBR, N.brl0)),
         h("p", { class: "ads-orc-n" }, num(m0.gasto, N.brl0), h("span", {}, " investidos")),
         h("p", { class: "ads-orc-msg rel-nota" }, "Orçamento do mês não definido: sem ele não há projeção contra a meta nem aviso de ritmo.",
           eGestor(ctx) ? [" ", h("a", { class: "rel-link", href: "#/config/anuncios" }, "Definir em Ajustes de anúncios")] : null));
     }
 
     // item 46: funil anúncio → conversa → agenda → venda, por plataforma (com a plataforma filtrada, só ela)
-    const fp = L.funilPorPlataforma(M, { dias: S.dias }).filter(x => !S.plat || x.plat === S.plat);
+    const fp = L.funilPorPlataforma(M, { dias: S.dias, vertical: vert }).filter(x => !S.plat || x.plat === S.plat);
     const cartaoF = h("section", { class: "rel-cartao rel-entra ads-cartao-fp", "aria-labelledby": "ads-fp-h" },
       h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ads-fp-h", class: "rel-h2" }, "Do anúncio à venda, por plataforma"),
         h("p", { class: "rel-nota" }, `${periodoTexto}. A conversão do anúncio é contada pela plataforma; conversas, agendamentos e fechamentos vêm do CRM, cada um na sua data — a taxa entre etapas é uma leitura de ritmo, não uma coorte.`)),
       criarFunilPlataformas({ h, dados: fp, fmtInt: N.int, fmtConv, fmtMoeda: N.brl0, pctTxt: v => N.pc(v, 0), taxaTxt: pct => L.taxaFunilTxt(pct, v => N.pc(v, 0)) }));
-    if (fp.length) cartaoF.append(h("div", { class: "rel-cartao-rodape" }, botaoCsv("funil-plataformas", ["Plataforma", "Investimento", "Conversões do anúncio", "Conversas CRM", "Agendaram", "Compareceram", "Fecharam", "Receita"],   // plano 1500c · AC-097
+    if (fp.length) cartaoF.append(h("div", { class: "rel-cartao-rodape" }, botaoCsv("funil-plataformas", ["Plataforma", "Investimento", ...fp[0].etapas.map(e => e.rotulo) /* plano 2000d · NX-073: as etapas da vertical */, "Receita"],   // plano 1500c · AC-097
       () => fp.map(p => [p.nome, Math.round(p.gasto * 100) / 100, ...p.etapas.map(e => e.v), Math.round(p.receita * 100) / 100]), "Do anúncio à venda, por plataforma")));
 
     // F3: calor dia × HORA quando o nx_dados manda hora_conversa (contrato 5); RPC antiga → calor dia × semana (item 47)
@@ -2109,7 +2171,7 @@ export async function montar(ctx) {
       const btModo = h("button", { type: "button", class: "g-ver-tabela ads-cal-modo", "aria-controls": alvo.id });
       // plano 1000b · AB-189: as 168 células por hora só são desenhadas na primeira vez que o modo hora aparece (no celular abre em faixas)
       let desenhouHora = false;
-      const garantirHora = () => { if (modo !== "hora" || desenhouHora) return; desenhouHora = true; graficos.push(G.calor(caixaHora, { matriz: ch.matriz, dias: L.SEMANA, fmt: fmtC, resumo })); };
+      const garantirHora = () => { if (modo !== "hora" || desenhouHora) return; desenhouHora = true; graficos.push(G.calor(caixaHora, { matriz: ch.matriz, dias: L.SEMANA, fmt: fmtC, resumo, tabela: true }));   /* plano 2000d · DR-307: dia × hora em tabela */ };
       const pintarModo = () => { garantirHora(); alvo.classList.toggle("ads-cal-modo-faixas", modo === "faixas"); alvo.classList.toggle("ads-cal-modo-hora", modo === "hora"); btModo.textContent = modo === "faixas" ? "Ver por hora" : "Ver por faixa do dia"; btModo.setAttribute("aria-pressed", String(modo === "hora")); };
       btModo.addEventListener("click", () => { escolheuModo = true; modo = modo === "faixas" ? "hora" : "faixas"; pintarModo(); });
       // plano 1000b · AB-061: girar o tablet ou redimensionar troca o modo enquanto a pessoa não escolheu à mão (antes decidido uma vez)
@@ -2160,6 +2222,11 @@ export async function montar(ctx) {
       ui.limpar(cartao);
       const rows = L.ordenarCampanhas(linhas, S.ordem.chave, S.ordem.dir);
       const metaDe = plat => metaDaPlataforma(plat, M.CFG);   // plano 1500c · AC-081: a meta da plataforma da campanha
+      // plano 2000d · NX-071: a meta PRÓPRIA da campanha (cfg.metasCampanha, AC-036) vence a da plataforma na cor — como no radar
+      const metaCamp = c => (typeof M.metaDaCampanha === "function" ? (+M.metaDaCampanha(c) || 0) : 0) || metaDe(c.plat);
+      const tolC = L.tolCpa(M.CFG);   // plano 2000d · NX-070
+      // plano 2000d · DA-004: campanha com divergência campanha × soma dos anúncios no período ganha o selo «dados parciais» (como o clássico)
+      const diverg = typeof M.divergenciasPorCampanha === "function" ? (M.divergenciasPorCampanha(P.de, P.ate) || {}) : {};
       const linhasDOM = [];
       const estadoCamp = { busca: S.buscaCamp, resultado: S.resultadoCamp, comparacao: [...S.comparacaoCamp], nomesComparacao: S.nomesCamp };
       let painelCampanhas;
@@ -2185,15 +2252,16 @@ export async function montar(ctx) {
           const nova = painelCampanhas.alternar(r);
           if (!nova.alterou) check.checked = false;
         });
-        const meta = metaDe(r.c.plat);
+        const meta = metaCamp(r.c);
         const abrir = h("button", { type: "button", class: "ads-camp-nome", "aria-haspopup": "dialog" },
-          h("i", { class: `rel-ponto rel-ponto-${L.nivelCpa(r.t.cpa, meta, r.t.gasto, minCor)}`, title: "CPA das conversões informadas pela plataforma × meta", "aria-hidden": "true" }),
-          h("span", { class: "sr-only" }, `${TEXTO_NIVEL_CPA[L.nivelCpa(r.t.cpa, meta, r.t.gasto, minCor)] || TEXTO_NIVEL_CPA.neutro}: `),   // plano 1000b · AB-030: o nível também em texto
+          h("i", { class: `rel-ponto rel-ponto-${L.nivelCpa(r.t.cpa, meta, r.t.gasto, minCor, tolC)}`, title: "CPA das conversões informadas pela plataforma × meta", "aria-hidden": "true" }),
+          h("span", { class: "sr-only" }, `${TEXTO_NIVEL_CPA[L.nivelCpa(r.t.cpa, meta, r.t.gasto, minCor, tolC)] || TEXTO_NIVEL_CPA.neutro}: `),   // plano 1000b · AB-030: o nível também em texto
           h("span", { class: "ads-camp-t" }, h("span", {}, r.c.nome), h("small", {}, h("span", { class: `rel-chip rel-chip-${r.c.plat}` }, L.nomePlat(r.c.plat)),
             // plano 1000 (AD-108): campanha parada parece ativa — selo «pausada» (sem gasto há 3 dias) e o último dia com gasto
             r.pausada ? h("span", { class: "rel-chip rel-chip-neutro ads-camp-pausada", title: `Sem investimento desde ${M.ddmm(r.ultimoGasto)}` }, `pausada · último gasto ${M.ddmm(r.ultimoGasto)}`) : null,
             // plano 2000d · DA-143: ativa na plataforma, mas sem gastar há dias — verba ou público pequeno demais
             r.semEntrega ? h("span", { class: "rel-chip rel-chip-aten ads-camp-sem-entrega", title: "A campanha está ativa na plataforma mas não gastou nos últimos dias: verba baixa ou público pequeno." }, `ativa · sem entrega desde ${M.ddmm(r.ultimoGasto)}`) : null,
+            tituloDivergencia(diverg[r.c.id], N.brl) ? h("span", { class: "rel-chip rel-chip-aten ads-camp-parcial", title: tituloDivergencia(diverg[r.c.id], N.brl) }, "dados parciais", h("span", { class: "sr-only" }, `: ${tituloDivergencia(diverg[r.c.id], N.brl)}`)) : null,
             " · ver criativos")));
         abrir.addEventListener("click", () => criativos(M, r));
         // rótulo visível no celular (cartões sem cabeçalho) e alvo de 44 px; no desktop o texto fica só para leitor de tela
@@ -2308,6 +2376,7 @@ export async function montar(ctx) {
     const cartao = h("section", { class: "rel-cartao rel-entra ads-rank", "aria-labelledby": "ads-rank-h", style: "--i:1" });
     const pintar = () => {
       const R = L.rankingCriativos(M, { dias: S.dias, plat: S.plat, por: S.rank, reserva: !S.rankEscolhido });
+      const Wr = palavrasFunil(M.vertical || ctx.cliente.vertical || "");   // plano 2000d · NX-026: as palavras da vertical no ranking
       ui.limpar(cartao);
       // plano 1000b · AB-044: com o filtro Google, «menor custo por conversão» (rótulo, nota e vazio)
       const RANK = typeof L.rankCriPorPlat === "function" ? L.rankCriPorPlat(S.plat) : L.RANK_CRI;
@@ -2332,19 +2401,21 @@ export async function montar(ctx) {
         return;
       }
       // plano 1500c · AC-293: busca pelo nome do anúncio; AC-116: CSV do ranking
-      const busca = h("input", { type: "search", class: "ads-camp-busca-input ads-rank-busca", value: buscaRank, placeholder: "Buscar anúncio…", "aria-label": "Buscar anúncio no ranking", autocomplete: "off" });
+      const busca = h("input", { type: "search", class: "ads-camp-busca-input ads-rank-busca", value: buscaRank, placeholder: "Buscar anúncio…", "aria-label": "Buscar anúncio no ranking", autocomplete: "off", enterkeyhint: "search" /* plano 2000d · NX-047 */ });
       const ol = h("ol", { class: "ads-rank-lista" });
       const stBusca = h("p", { class: "sr-only", role: "status", "aria-live": "polite" });
       let tB = 0;
-      busca.addEventListener("input", () => { clearTimeout(tB); tB = setTimeout(() => { buscaRank = busca.value; pintarLista(); stBusca.textContent = `${ol.childElementCount} ${ol.childElementCount === 1 ? "anúncio" : "anúncios"} no ranking.`; }, ESPERA_BUSCA_MS); });
+      // plano 2000d · NX-027: a contagem é dos anúncios achados (o «Nenhum anúncio…» contava como «1 anúncio no ranking»)
+      busca.addEventListener("input", () => { clearTimeout(tB); tB = setTimeout(() => { buscaRank = busca.value; pintarLista(); stBusca.textContent = textoBuscaRanking(filtrarRanking(R.lista, buscaRank).length); }, ESPERA_BUSCA_MS); });
+      graficos.push({ destruir: () => clearTimeout(tB) });   // plano 2000d · NX-046: a busca pendente não roda depois da tela sair
       const csvR = csvRanking(R.lista, L.nomePlat);
       cartao.append(h("div", { class: "ads-rank-ferr" }, h("label", { class: "ads-camp-busca" }, h("span", { class: "sr-only" }, "Buscar anúncio"), busca),
         botaoCsv("ranking-criativos", csvR.colunas, () => csvR.linhas, "Ranking de criativos")), stBusca, ol);
       const pintarLista = () => { ui.limpar(ol); const lst = filtrarRanking(R.lista, buscaRank);
         if (!lst.length) ol.append(h("li", { class: "rel-vazio-txt" }, "Nenhum anúncio com esse nome no ranking."));
         lst.forEach((x, n) => {
-        const destaque = R.por === "receita" ? N.brl0(x.c.receita) : R.por === "fechados" ? `${N.int(x.c.fecharam)} ${x.c.fecharam === 1 ? "fechado" : "fechados"}`
-          : R.por === "cpag" ? `${N.brl(x.cpag)} por agendamento` : `${N.brl(x.t.cpa)} por ${x.k.plat === "google" ? "conversão" : "conversa"}`;
+        const destaque = R.por === "receita" ? N.brl0(x.c.receita) : R.por === "fechados" ? `${N.int(x.c.fecharam)} ${x.c.fecharam === 1 ? Wr.fe[0] : Wr.fe[1]}`
+          : R.por === "cpag" ? `${N.brl(x.cpag)} por ${Wr.ag[0]}` : `${N.brl(x.t.cpa)} por ${x.k.plat === "google" ? "conversão" : "conversa"}`;
         const mini = miniaturas.get(String(x.k.id));   // plano 1500c · AC-093: a miniatura do anúncio quando a sincronização manda
         ol.append(h("li", { class: `ads-rank-item${x.pos === 1 ? " ads-rank-1" : ""}${mini ? " ads-rank-com-mini" : ""}`, style: `--i:${n}` },
           h("span", { class: "ads-rank-pos rel-num", "aria-hidden": "true" }, String(x.pos)),
@@ -2360,10 +2431,10 @@ export async function montar(ctx) {
               x.amostraPequena ? [" ", h("span", { class: "rel-chip rel-chip-neutro ads-rank-amostra", title: `Menos de ${x.amostraMin || L.AMOSTRA_PEQUENA} ${uc.varios} (limite pelo volume desta conta): o custo ainda pode mudar bastante` }, "amostra pequena")] : null),
             h("span", { class: "ads-rank-barra", "aria-hidden": "true" }, h("i", { style: { "--w": `${Math.round(x.barra * 100)}%` } }))),
           h("div", { class: "ads-rank-dest" }, h("b", { class: "rel-num" }, destaque),
-            h("span", { class: "rel-nota" }, `${N.brl0(x.t.gasto)} investidos · ${convPlat(x.k.plat, x.t.conversoes)} · ${N.int(x.c.agendadas)} agendados`),
+            h("span", { class: "rel-nota" }, `${N.brl0(x.t.gasto)} investidos · ${convPlat(x.k.plat, x.t.conversoes)} · ${N.int(x.c.agendadas)} ${x.c.agendadas === 1 ? Wr.ag[0] : Wr.ag[1]}`),
             h("span", { class: "rel-nota" }, R.por === "receita" || R.por === "fechados"
               ? `${N.brl(x.t.cpa)} por ${x.k.plat === "google" ? "conversão" : "conversa"} · retorno ${Number.isFinite(x.roas) ? `${N.dec(x.roas, 1)}x` : "—"}`
-              : `${N.int(x.c.fecharam)} ${x.c.fecharam === 1 ? "fechado" : "fechados"} · ${N.brl0(x.c.receita)}`))));
+              : `${N.int(x.c.fecharam)} ${x.c.fecharam === 1 ? Wr.fe[0] : Wr.fe[1]} · ${N.brl0(x.c.receita)}`))));
         });
       };
       pintarLista();
@@ -2405,7 +2476,7 @@ export async function montar(ctx) {
               .map(([l, v]) => h("div", {}, h("dt", {}, l), h("dd", {}, v)))));
       })));
       // plano 1000b · AB-075: CSV dos criativos (nome do arquivo com o cliente e a campanha)
-      const cc = csvCriativos(lista);
+      const cc = csvCriativos(lista, L.nomePlat);
       corpoG.append(h("div", { class: "rel-cartao-rodape ads-cri-rodape" }, botaoCsv(`criativos-${r.c.nome}`, cc.colunas, () => cc.linhas, `Criativos de ${r.c.nome}`)));
     }
     ui.gaveta({ titulo: r.c.nome, corpo: corpoG, largura: "g" });
@@ -2570,8 +2641,11 @@ export async function montar(ctx) {
       if (s.capa.agencia) alvo.append(h("span", { class: "ads-apr-agencia" }, s.capa.agencia)); };
     const pintarLinhas = () => { ui.limpar(lista); for (const l of slides[n].linhas) lista.append(h("li", {}, l)); };
     const pintarImpressao = () => { ui.limpar(impressao); for (const s of slides) { const pg = h("section", { class: "ads-apr-pagina" }); const cp = h("div", { class: "ads-apr-capa" }); pintarCapa(cp, s);
-      pg.append(cp, h("p", { class: "rel-olho" }, `${ctx.cliente.nome} · Anúncios`), h("h2", { class: "ads-apr-t" }, s.titulo), s.destaque ? h("p", { class: "ads-apr-destaque" }, s.destaque) : null,
-        h("ul", { class: "ads-apr-lista" }, s.linhas.map(l => h("li", {}, l)))); impressao.append(pg); } };
+      // plano 2000d · NX-002: append só com nós de verdade (o null do destaque vazio escrevia «null» no papel)
+      // plano 2000d · NX-003: a miniatura do anúncio campeão também sai no PDF (antes só na tela)
+      pg.append(...[cp, h("p", { class: "rel-olho" }, `${ctx.cliente.nome} · Anúncios`), h("h2", { class: "ads-apr-t" }, s.titulo), s.destaque ? h("p", { class: "ads-apr-destaque" }, s.destaque) : null,
+        s.imagem ? h("div", { class: "ads-apr-img" }, h("img", { src: s.imagem, alt: "", width: "160", height: "160", referrerpolicy: "no-referrer" })) : null,
+        h("ul", { class: "ads-apr-lista" }, s.linhas.map(l => h("li", {}, l)))].filter(Boolean)); impressao.append(pg); } };
     const ir = k => { n = Math.max(0, Math.min(slides.length - 1, k)); const s = slides[n]; titulo.textContent = s.titulo;
       destaque.textContent = s.destaque || ""; destaque.hidden = !s.destaque; pintarCapa(capa, s);
       ui.limpar(imagem); imagem.hidden = !s.imagem; if (s.imagem) imagem.append(h("img", { src: s.imagem, alt: "", width: "160", height: "160", referrerpolicy: "no-referrer" }));
@@ -2584,6 +2658,8 @@ export async function montar(ctx) {
       if (e.target === editar && e.key !== "Tab") return;   // plano 2000d · DA-151: digitar no campo não troca de slide
       if (["ArrowRight", "PageDown", " "].includes(e.key)) { e.preventDefault(); ir(n + 1); }
       else if (["ArrowLeft", "PageUp"].includes(e.key)) { e.preventDefault(); ir(n - 1); }
+      // plano 2000d · NX-029: Home/End vão para o primeiro e o último slide (na reunião, voltar à capa era 8 toques)
+      else if (e.key === "Home" || e.key === "End") { e.preventDefault(); ir(e.key === "Home" ? 0 : slides.length - 1); }
       else if (e.key === "Tab") { const f = [editar.hidden ? null : editar, ant, prox, pdf, fechar].filter(b => b && !b.disabled); const i = f.indexOf(document.activeElement); if (e.shiftKey ? i <= 0 : i === f.length - 1) { e.preventDefault(); (e.shiftKey ? f[f.length - 1] : f[0]).focus(); } }
     }
     ant.addEventListener("click", () => ir(n - 1)); prox.addEventListener("click", () => ir(n + 1)); fechar.addEventListener("click", sair);
@@ -2605,6 +2681,9 @@ export async function montar(ctx) {
     const camps = Object.values(M.CAMP || {}).filter(c => c && c.plat && !c.semCampanha);
     // plano 2000d · DA-141: nomes longos encurtados (≤ 40) com o nome inteiro no title
     const sel = h("select", { class: "relat-data", "aria-label": "Campanha (opcional)" }, h("option", { value: "" }, "Conta inteira"), camps.map(c => h("option", { value: String(c.id), title: c.nome }, encurtarNome(c.nome, 40))));
+    // plano 2000d · NX-030: o dia/campanha que já tem marco abre com o texto dele (editar ou apagar vendo o que há)
+    const preencher = () => { txt.value = marcoDoDia(M.CFG.marcos, dia.value, sel.value); cont.textContent = contadorTexto(txt.value, 60); };
+    dia.addEventListener("change", preencher); sel.addEventListener("change", preencher); preencher();
     const r = await ui.modal({ titulo: "Anotar uma mudança", largura: "p", protegerTexto: false,
       corpo: h("div", { class: "pilha" }, h("label", { class: "campo" }, h("span", { class: "rotulo" }, "Dia"), dia), h("label", { class: "campo" }, h("span", { class: "rotulo" }, "O que mudou (até 60 letras; vazio apaga o marco do dia)"), txt, cont),
         camps.length ? h("label", { class: "campo" }, h("span", { class: "rotulo" }, "Campanha"), sel) : null),
@@ -2665,7 +2744,7 @@ export async function montar(ctx) {
   function descreverRegra(r) {
     if (r.descricao) return r.descricao;   // r5/r6 (plano 1000): regras da conta inteira, sem métrica/limite genéricos
     const f = { cpa: N.brl, ctr: x => N.pc(x, 2), freq: x => N.dec(x, 1), conversoes: N.int }[r.metrica] || String;
-    return `${MET[r.metrica] || r.metrica} ${OPS[r.op]} ${f(r.limite())} · ${r.janela} dias · por ${r.nivel === "campanha" ? "campanha" : "criativo"}${r.plat ? " (Meta)" : ""}` +
+    return `${MET[r.metrica] || r.metrica} ${OPS[r.op]} ${f(r.limite())} · ${r.janela} dias · por ${r.nivel === "campanha" ? "campanha" : "criativo"}${r.plat ? ` (${r.plat === "google" ? "Google" : "Meta"})` : ""}` /* plano 2000d · NX-080: o nome da plataforma da regra (antes «(Meta)» fixo) */ +
       (r.minGasto ? ` · gasto mínimo ${N.brl0(r.minGasto)}` : "") + (r.minImpr ? ` · mín. ${r.minImpr} impressões` : "");
   }
   function envio(st, antes = "") {
@@ -2817,7 +2896,7 @@ export async function montar(ctx) {
       if (!sel.lista.length) { ui.toast("Nenhuma campanha corresponde ao filtro da tela.", { tipo: "nota" }); return; }
       const csv = csvCampanhas(sel.lista, { periodo, csv: L.csv, moeda: N.brl0, inteiro: N.int, decimal: n => N.dec(n, 1), nomePlat: L.nomePlat });
       // AB-209: o aviso de quantas foram só quando o arquivo saiu
-      baixarArquivo(new Blob([csv], { type: "text/csv;charset=utf-8" }), L.nomeArquivoExport("campanhas", N.isoDe(it.M.dataDe(P.de)), N.isoDe(it.M.dataDe(P.ate)), "csv", ctx.cliente.nome, "", marcaAgencia()))
+      baixarArquivo(new Blob([csv], { type: "text/csv;charset=utf-8" }), L.nomeArquivoExport("campanhas", N.isoDe(it.M.dataDe(P.de)), N.isoDe(it.M.dataDe(P.ate)), "csv", ctx.cliente.nome, S.plat /* plano 2000d · NX-028: o mesmo nome do botão da tela (com a plataforma filtrada) */, marcaAgencia()))
         .then(r => (r === false ? ui.toast("Não deu para baixar aqui; abra Campanhas e use «Exportar CSV filtrado».", { tipo: "nota" }) : ui.toast(sel.aviso, { tipo: "ok", ms: 3000 })), () => ui.toast("Não deu para baixar aqui; abra Campanhas e use «Exportar CSV filtrado».", { tipo: "nota" }));
     };
     for (const c of comandosAnuncios({ irRadar: () => ctx.navegar("#/anuncios/radar"), irCampanhas: () => ctx.navegar("#/anuncios/campanhas"), exportarCampanhas })) {

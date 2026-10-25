@@ -457,7 +457,7 @@ test("AC-068/AC-270/AC-272/AC-282/AC-287 · virada do dia, tentar de novo, lista
   assert.equal(P.diaVirou("2026-10-20", "2026-10-21"), true);
   assert.equal(P.diaVirou("2026-10-21", "2026-10-21"), false);
   assert.equal(P.diaVirou(undefined, "2026-10-21"), false);
-  fonte(PJS, /document\.addEventListener\("visibilitychange", \(\) => \{[\s\S]{0,160}diaVirou\(S\.dados\.hoje, hojeSP\(\)\)/);
+  fonte(PJS, /document\.addEventListener\("visibilitychange", \(\) => \{[\s\S]{0,320}diaVirou\(S\.dados\.hoje, hojeSP\(\)\)/);   // plano 2000d: o comentário do KX-010 entrou no meio
   fonte(PJS, /toast\(api\.mensagemErro\(e\), "erro", \{ rotulo: "Tentar de novo", fn: \(\) => carregarDados\(\) \}\)/);
   fonte(HTML, /<details class="marcos-lista" id="marcos-lista" hidden>/); fonte(PJS, /data-marco-rm="\$\{esc\(m\.d\)\}"/);
   fonte(HTML, /<a class="ribbon-sair" id="ribbon-sair" href="\.\/">Sair da demonstração<\/a>/);
@@ -486,7 +486,7 @@ test("AC-262 · rodapé da folha com a marca da agência; Nexus só sem marca", 
 });
 
 test("AC-263/AC-264/AC-265 · folha: mês anterior ao lado, marcos do mês e «Para o próximo mês» editável", () => {
-  fonte(FJS, /vs\. \$\{MESES\[ant\.mes\]\}: \$\{ant\.fecharam\} → \$\{c\.fecharam\}/);
+  fonte(FJS, /vs\. \$\{MESES\[ant\.mes\]\}: \$\{int\(ant\.fecharam\)\} → \$\{int\(c\.fecharam\)\}/);   // plano 2000d: com int() (KX-028)
   fonte(FJS, /M\.marcosEntre\(m\.de, m\.ate\)/); fonte(FJS, /O que mudamos no mês/);
   fonte(FJS, /contenteditable="true" spellcheck="true"/); fonte(PJS, /editavel: S\.demo \|\| gestor\(\),/);
   fonte(CSS, /@media print \{ \.fl-dica \{ display: none !important; \}/);

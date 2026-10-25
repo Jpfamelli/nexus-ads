@@ -108,7 +108,8 @@ export function h(tag, attrs, ...filhos) {
     else if (/^on/i.test(k)) continue;                     // CSP: nunca handler em atributo
     else if (k === "style") {
       if (typeof v === "string") el.setAttribute("style", v);
-      else for (const [p, val] of Object.entries(v)) if (val !== null && val !== undefined) el.style.setProperty(p, String(val));
+      // plano 2000d · SX-007: { minHeight: "…" } (camelCase) vira min-height — setProperty só entende o nome com hífen
+      else for (const [p, val] of Object.entries(v)) if (val !== null && val !== undefined) el.style.setProperty(p.startsWith("--") ? p : p.replace(/[A-Z]/g, c => "-" + c.toLowerCase()), String(val));
     }
     else if (k === "text") el.textContent = String(v);
     else if ((k === "href" || k === "src" || k === "action" || k === "formaction") && !RE_URL_OK.test(String(v)) && !String(v).startsWith("data:image/") && !String(v).startsWith("blob:")) continue;
@@ -146,7 +147,8 @@ export function carregarCss(nome) {
     l.href = new URL(`./${arq}?v=${encodeURIComponent(VERSAO)}`, import.meta.url).href;
     l.dataset.css = arq;
     l.addEventListener("load", () => ok(true));
-    l.addEventListener("error", () => ok(false));
+    // plano 2000d · SX-008: a falha (offline) não fica guardada — a próxima tela que pedir o CSS tenta de novo
+    l.addEventListener("error", () => { if (_css.get(arq) === p) _css.delete(arq); l.remove(); ok(false); });
     document.head.appendChild(l);
   });
   _css.set(arq, p);
@@ -158,6 +160,9 @@ export function corOk(c) { return typeof c === "string" && RE_HEX.test(c) ? c : 
 /** Plano 1000b · UB-147: o que a pessoa digita no campo de cor → #RRGGBB maiúsculo («fa0», «#fa0», «ffaa00»); null se não for cor. */
 export function hexDigitado(v) {
   let s = String(v ?? "").trim();
+  // plano 2000d · SX-027: «rgb(176, 118, 31)» colado de uma ferramenta de design também vale
+  const rgb = /^rgba?\(\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*(?:[,/]\s*[\d.]+%?\s*)?\)$/i.exec(s);
+  if (rgb) { const c = rgb.slice(1, 4).map(Number); if (c.some(x => x > 255)) return null; return "#" + c.map(x => x.toString(16).padStart(2, "0")).join("").toUpperCase(); }
   if (s && !s.startsWith("#")) s = "#" + s;
   if (/^#[0-9a-f]{3}$/i.test(s)) s = "#" + s.slice(1).split("").map(x => x + x).join("");
   return corOk(s) ? s.toUpperCase() : null;
@@ -236,6 +241,9 @@ export function duracaoToast(texto, { comBotao = false } = {}) {
   return Math.min(15000, base + extra);
 }
 export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, fixo = false, aoFechar = null } = {}) {
+  // plano 2000d · SX-025: um Error vira a frase dele (nunca «Error: tempo_rede» nem «[object Object]»); nulo vira texto vazio, não «undefined»
+  if (texto instanceof Error || (texto && typeof texto === "object" && (texto.codigo || texto.message))) texto = mensagemErro(texto);
+  else if (texto === null || texto === undefined) texto = "";
   // plano 1000 (AS-296): com a faixa de conexão à vista, o erro «sem internet»/«servidor demorou» de cada tela não vira um toast a mais (o shell decide)
   if (_suprimirToast && !desfazer && !fixo) {
     let suprimir = false;
@@ -269,6 +277,8 @@ export function toast(texto, { tipo = "info", desfazer = null, acao = null, ms, 
     temAcao ? h("button", { type: "button", class: "toast-acao", on: { click: () => { fechar("acao"); try { acao.fn(); } catch (e) { console.error(e); } } } }, String(acao.rotulo).trim()) : null,
     h("button", { type: "button", class: "toast-x", "aria-label": "Fechar aviso", on: { click: () => fechar("fechado") } }, icone("fechar")));
   el.__fechar = fechar;
+  // plano 2000d · SX-010: com o foco dentro do aviso, Esc fecha só ele (não o modal de baixo)
+  el.addEventListener("keydown", ev => { if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); fechar("fechado"); } });
   if (chave) {
     let vezes = 1;
     const cont = h("span", { class: "toast-vezes", hidden: true });
@@ -599,8 +609,10 @@ export async function confirmar({ titulo = "Confirmar", texto = "", perigo = fal
       { rotulo: rotulo || (perigo ? "Excluir" : "Confirmar"), tipo: perigo ? "perigo" : "primario", icone: perigo ? iconeDoPerigo(rotulo, iconeDado) : (iconeDado || undefined),
         fn: api => {
           if (!digitar) return true;
-          const v = campoDig.querySelector("input").value.trim().toLowerCase();
-          if (v !== String(digitar).toLowerCase()) { api.erro(`Digite «${digitar}» para confirmar.`); return false; }
+          // plano 2000d · SX-024: «Clínica  Sorriso» = «clinica sorriso» — acento, caixa e espaço duplo não reprovam quem digitou certo
+          const norm = s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+          const v = norm(campoDig.querySelector("input").value);
+          if (v !== norm(digitar)) { api.erro(`Digite «${digitar}» para confirmar.`); return false; }
           return true;
         } },
     ],
@@ -718,7 +730,12 @@ export function menu(ancora, itens) {
     const b = h("button", { type: "button", role: "menuitem", class: ["menu-item", it.perigo && "perigo"], disabled: !!it.desabilitado, tabindex: "-1",
       title: motivo || null, "aria-description": motivo || null },
       it.icone ? icone(it.icone) : null, h("span", null, it.rotulo, motivo ? h("small", { class: "menu-motivo" }, motivo) : null));
-    b.addEventListener("click", () => { fechar(); if (it.fn) it.fn(); });
+    // plano 2000d · SX-026: o item escolhido some com o menu; se a ação não levou o foco para outro lugar, ele volta ao botão que abriu o menu
+    b.addEventListener("click", () => {
+      fechar(); if (it.fn) it.fn();
+      const a = document.activeElement;
+      if ((!a || a === document.body || !a.isConnected) && ancora.isConnected && typeof ancora.focus === "function") ancora.focus();
+    });
     botoes.push(b); pop.appendChild(b);
   }
   function posicionar() {
@@ -729,6 +746,7 @@ export function menu(ancora, itens) {
     pop.style.left = `${x}px`; pop.style.top = `${y}px`;
   }
   const ativos = () => botoes.filter(b => !b.disabled);
+  let busca = "", buscaEm = -Infinity;   // plano 2000d · SX-095
   function aoTecla(ev) {
     const lista = ativos(); const i = lista.indexOf(document.activeElement);
     if (ev.key === "ArrowDown") { ev.preventDefault(); (lista[(i + 1) % lista.length] || lista[0])?.focus(); }
@@ -739,7 +757,12 @@ export function menu(ancora, itens) {
     else if (ev.key === "Tab") fechar();
     // plano 1000b · UB-139: busca pela 1ª letra do rótulo (a partir do item seguinte ao focado; «E» de novo passa ao próximo com E)
     else if (typeof ev.key === "string" && ev.key.length === 1 && /\S/.test(ev.key) && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-      const alvo = proximoPorLetra(lista.map(b => b.textContent), i, ev.key);
+      // plano 2000d · SX-095: letras digitadas em sequência (até 0,7 s entre elas) procuram o começo do nome inteiro («co» → «Copiar»,
+      // não o próximo item com «o»); a primeira letra continua passando ao próximo item com ela
+      const agoraT = Date.now();
+      busca = agoraT - buscaEm <= 700 ? busca + ev.key : ev.key; buscaEm = agoraT;
+      let alvo = busca.length > 1 ? proximoPorLetra(lista.map(b => b.textContent), i - 1, busca) : -1;
+      if (alvo < 0) alvo = proximoPorLetra(lista.map(b => b.textContent), i, ev.key);
       if (alvo >= 0) { ev.preventDefault(); lista[alvo].focus(); }
     }
   }
@@ -1103,8 +1126,12 @@ export function formatarTelefone(bruto) {
   let d = t.replace(/\D/g, "");
   if (t.startsWith("+") && !/^\+\s*55/.test(t)) return d ? `+${d.slice(0, 15)}` : "+";
   if (/^\+\s*55/.test(t) || (d.length > 11 && d.startsWith("55"))) d = d.slice(2);
+  // plano 2000d · SX-086: digitou o «0» de interurbano antes do DDD («012…»): ele sai (menos nos 0800/0300, que começam assim)
+  if (/^0[1-9]{2}/.test(d)) d = d.slice(1);
   d = d.slice(0, 11);
   if (!d) return "";
+  // plano 2000d · SX-003: número 0800/0300/0500/0900 enquanto digita — «0800 123 4567» (sem os parênteses do DDD)
+  if (/^0[3589]00/.test(d)) return [d.slice(0, 4), d.slice(4, 7), d.slice(7)].filter(Boolean).join(" ");
   if (d.length <= 2) return `(${d}`;
   if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
   if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
@@ -1114,6 +1141,8 @@ export function formatarTelefone(bruto) {
 /** Moeda BR enquanto digita: "1234,5" → "1.234,5"; só uma vírgula, até 2 casas, sem zeros à esquerda; "1234.56" colado vira "1.234,56". */
 export function formatarMoeda(bruto) {
   let t = String(bruto ?? "").replace(/[^\d,.]/g, "");
+  // plano 2000d · SX-005: valor colado no formato americano («1,234.56»): vírgula de milhar e ponto decimal viram «1.234,56»
+  if (/^\d{1,3}(,\d{3})+\.\d{1,2}$/.test(t)) t = t.replace(/,/g, "").replace(".", ",");
   if (!t.includes(",") && /^\d+\.\d{1,2}$/.test(t)) t = t.replace(".", ",");
   t = t.replace(/\./g, "");
   const i = t.indexOf(",");
@@ -1155,6 +1184,7 @@ export function forcaSenha(s) {
   const t = String(s ?? "");
   if (!t) return 0;
   if (t.length < 8) return 1;
+  if (new Set(t).size <= 2) return 1;   // plano 2000d · SX-022: «aaaaaaaaaaaa» ou «abababababab» não é «Razoável» por ser comprida
   const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter(r => r.test(t)).length;
   return t.length >= 12 && classes >= 3 ? 4 : t.length >= 10 && classes >= 2 ? 3 : 2;
 }
@@ -1366,8 +1396,11 @@ export function campo(o = {}) {
 /** "1.234,56" → 1234.56 ; "2.000" → 2000 (ponto de milhar do jeito brasileiro) ; "297.5" → 297.5 ; "" → null */
 export function lerMoeda(s) {
   if (s === null || s === undefined) return null;
-  const t = String(s).replace(/[R$\s ]/g, "");
+  // plano 2000d · SX-021: o «−» tipográfico (o que numCompacto/numMoeda escrevem) também é sinal de menos
+  let t = String(s).replace(/[R$\s ]/g, "").replace(/^[−–]/, "-");
   if (!t) return null;
+  // plano 2000d · SX-004: formato americano colado («1,234.56») — vírgula de milhar e ponto decimal
+  if (/^-?\d{1,3}(,\d{3})+\.\d+$/.test(t)) t = t.replace(/,/g, "");
   const n = Number(t.includes(",") ? t.replace(/\./g, "").replace(",", ".")
     : /^-?\d{1,3}(\.\d{3})+$/.test(t) ? t.replace(/\./g, "") : t);
   return Number.isFinite(n) ? n : null;
@@ -1384,7 +1417,8 @@ export function lerForm(form) {
       if (multis.has(n)) { if (el.checked) r[n].push(el.value); }
       else r[n] = el.checked;
     } else if (el.type === "radio") { if (el.checked) r[n] = el.value; else if (!(n in r)) r[n] = null; }
-    else if (el.type === "number") r[n] = el.value === "" ? null : Number(el.value);
+    // plano 2000d · SX-006: número ilegível vira null (nunca NaN, que o JSON manda como null sem avisar) e «1,5» é 1.5
+    else if (el.type === "number") { const x = el.value === "" ? NaN : Number(String(el.value).replace(",", ".")); r[n] = Number.isFinite(x) ? x : null; }
     else if (el.dataset.moeda) r[n] = lerMoeda(el.value);
     // o «+» inicial (número de outro país) fica: sem ele o servidor trataria 10–11 dígitos como brasileiros e poria 55 na frente
     else if (el.dataset.mascara === "telefone") { const t = String(el.value ?? "").trim(); r[n] = (t.startsWith("+") ? "+" : "") + t.replace(/\D/g, ""); }
@@ -1595,8 +1629,13 @@ export function etiqueta({ nome, cor } = {}, { remover } = {}) {
 /** plano 1500c · UCC-077: por caractere (grafema), não por unidade UTF-16 — «😀 Ana» vira «😀A», nunca meio emoji (U+FFFD). Exportada para teste. */
 const _grafemas = (() => { try { return typeof Intl !== "undefined" && Intl.Segmenter ? new Intl.Segmenter("pt-BR", { granularity: "grapheme" }) : null; } catch { return null; } })();
 function letras(palavra) { return _grafemas ? [..._grafemas.segment(palavra)].map(x => x.segment) : Array.from(palavra); }
+// plano 2000d · SX-015/SX-016: «Ana (cliente)» → «AN» (o que está entre parênteses e a pontuação não viram letra) e «Dra. Ana Lima» → «AL»
+const TRATAMENTOS = new Set(["dr", "dra", "sr", "sra", "srta", "prof", "profa", "pe", "me"]);
 export function iniciais(nome) {
-  const p = String(nome || "").trim().split(/\s+/).filter(Boolean);
+  const limpo = String(nome || "").replace(/\([^)]*\)|\[[^\]]*\]/g, " ");
+  let p = limpo.trim().split(/\s+/).map(w => w.replace(/^[^\p{L}\p{N}\p{Extended_Pictographic}]+/u, "")).filter(Boolean);
+  if (p.length > 1 && TRATAMENTOS.has(p[0].replace(/\.$/, "").toLowerCase())) p = p.slice(1);
+  p = p.map(w => w.replace(/[.,;:!?]+$/, "")).filter(Boolean);
   if (!p.length) return "?";
   const a = letras(p[0]);
   return ((a[0] || "") + (p.length > 1 ? (letras(p[p.length - 1])[0] || "") : (a[1] || ""))).toUpperCase();
@@ -1617,7 +1656,13 @@ export function avatar(nome, id, img, { tamanho, estado } = {}) {
   // plano 1500c · UC-030: «dado-pessoal» — o modo apresentação (html.apresentacao) borra fotos e iniciais de clientes
   const el = h("span", { class: ["avatar", "dado-pessoal", tamanho === "g" && "avatar-g", tamanho === "p" && "avatar-p"], style: { "--cor": `var(--pal-${i})` }, "aria-hidden": "true", title: nome || null, dataset: { tom: i } });
   const src = typeof img === "string" && (/^data:image\/(png|jpeg|webp);base64,/.test(img) || /^https:\/\//.test(img)) ? img : null;
-  if (src) el.appendChild(h("img", { src, alt: "" }));
+  // plano 2000d · SX-017 (DR-063 da frente crm): a foto só baixa quando chega perto da tela e decodifica fora do caminho da rolagem
+  // plano 2000d · SX-018: foto quebrada (link vencido do WhatsApp) volta às iniciais em vez do ícone de imagem partida
+  if (src) {
+    const foto = h("img", { src, alt: "", loading: "lazy", decoding: "async" });
+    foto.addEventListener("error", () => { foto.remove(); if (!el.querySelector("img")) el.prepend(iniciais(nome)); }, { once: true });
+    el.appendChild(foto);
+  }
   else el.textContent = iniciais(nome);
   if (estado && /^(online|ausente|ocupado)$/.test(estado)) el.appendChild(h("i", { class: ["avatar-estado", `avatar-${estado}`] }));
   return el;
@@ -1800,8 +1845,10 @@ const _fmt = {
 };
 const vazioFmt = "—";
 function dataDe(iso) {
-  if (iso instanceof Date) return iso;
+  if (iso instanceof Date) return Number.isNaN(iso.getTime()) ? null : iso;   // plano 2000d · SX-019: Date inválido não derruba o Intl (RangeError)
   if (iso === null || iso === undefined || iso === "") return null;
+  // plano 2000d · SX-020: «2026-10-05 14:00» (espaço, como o Postgres escreve) é inválido no Safari — vira «2026-10-05T14:00»
+  if (typeof iso === "string" && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(iso)) iso = iso.replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00");   // e «+00» → «+00:00»
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d;
 }
@@ -1813,14 +1860,14 @@ export function num(v) { const n = Number(v); return v === null || v === undefin
 const _fmtPct = new Map();
 export function pct(v, casas = 0) {
   const n = Number(v);
-  if (v === null || v === undefined || !Number.isFinite(n)) return vazioFmt;
+  if (v === null || v === undefined || v === "" || !Number.isFinite(n)) return vazioFmt;   // plano 2000d · SX-001: "" é vazio (como em num/brl), não 0 %
   const c = Math.max(0, Math.min(20, Math.round(Number(casas)) || 0));
   let f = _fmtPct.get(c);
   if (!f) { f = new Intl.NumberFormat("pt-BR", { style: "percent", minimumFractionDigits: c, maximumFractionDigits: c }); _fmtPct.set(c, f); }
   return f.format(n);
 }
 /** "AAAA-MM-DD" do dia no fuso de SP */
-export function hojeSP(d = new Date()) { return _fmt.dia.format(d); }
+export function hojeSP(d = new Date()) { return _fmt.dia.format(dataDe(d) || new Date()); }   // plano 2000d · SX-019: data inválida = hoje
 export function dataBR(iso) {
   if (typeof iso === "string" && /^\d{4}-\d{2}-\d{2}$/.test(iso)) { const [a, m, d] = iso.split("-"); return `${d}/${m}/${a}`; }
   const d = dataDe(iso); return d ? _fmt.data.format(d) : vazioFmt;
@@ -1842,6 +1889,8 @@ export function periodoBR(inicio, fim, sep = " — ") {
     const d1 = _fmt.data.format(a), d2 = _fmt.data.format(new Date(b.getTime() - 60_000));   // 23:59 do último dia
     return d1 === d2 ? `Dia inteiro · ${d1}` : `Dias inteiros · ${d1} a ${d2}`;
   }
+  // plano 2000d · SX-084: começo e fim no mesmo dia — a data uma vez só («06/10/2026 14:00 — 15:30»)
+  if (_fmt.data.format(a) === _fmt.data.format(b)) return `${dataHoraBR(a)}${sep}${_fmt.hora.format(b)}`;
   return `${dataHoraBR(a)}${sep}${dataHoraBR(b)}`;
 }
 /** "agora", "há 5 min", "há 2 h", "ontem", "há 3 dias", "em 2 h", "amanhã"… depois de 7 dias, a data. */
@@ -1864,6 +1913,10 @@ export function telBR(digitos) {
   let d = String(digitos ?? "").replace(/\D/g, "");
   if (!d) return vazioFmt;
   if (d.length >= 12 && d.length <= 13 && d.startsWith("55")) d = d.slice(2);
+  // plano 2000d · SX-085: o «0» de interurbano antes do DDD («012 99830-3030») não vira número estrangeiro
+  else if (/^0[1-9]{2}\d{8,9}$/.test(d)) d = d.slice(1);
+  // plano 2000d · SX-002: 0800/0300/0500/0900 não têm DDD — «0800 123 4567», não «(08) 00123-4567»
+  if (/^0[3589]00\d{6,7}$/.test(d)) return `${d.slice(0, 4)} ${d.slice(4, 7)} ${d.slice(7)}`;
   if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
   if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
   // plano 1000b · UB-241: número sem DDD (8 ou 9 dígitos) é local, não internacional — «99830-3030», não «+998303030»
@@ -1892,6 +1945,7 @@ export function atalho(combinacao, fn) {
   const mod = partes.includes("mod"), ctrl = partes.includes("ctrl"), alt = partes.includes("alt"), shift = partes.includes("shift");
   const nomeTecla = { esc: "escape", espaco: " ", space: " " }[tecla] || tecla;
   const ouvir = ev => {
+    if (ev.isComposing || ev.keyCode === 229) return;   // plano 2000d · SX-009: tecla no meio da composição (acento, teclado asiático) não é atalho
     const k = String(ev.key || "").toLowerCase();
     if (k !== nomeTecla) return;
     if (mod && !(ev.ctrlKey || ev.metaKey)) return;
@@ -1974,6 +2028,8 @@ function copiarPorSelecao(texto) {
 
 /** copiar(texto) → Promise<boolean> (+ aviso "Copiado."). */
 export async function copiar(texto, { aviso = "Copiado." } = {}) {
+  // plano 2000d · SX-023: nada para copiar não diz «Copiado.» (copiava "null"/"" e a pessoa colava vazio)
+  if (texto === null || texto === undefined || String(texto) === "") return false;
   let ok = false;
   try { await navigator.clipboard.writeText(String(texto)); ok = true; } catch { ok = copiarPorSelecao(texto); }
   if (aviso) toast(ok ? aviso : "Não foi possível copiar. Selecione e copie manualmente.", { tipo: ok ? "ok" : "erro" });
@@ -2005,8 +2061,13 @@ export async function copiarDepois(promessaDeTexto, { aviso } = {}) {
 
 /** Link "Enviar pelo WhatsApp" (wa.me com o texto). */
 export function linkWhatsApp(texto, numero) {
-  const n = String(numero || "").replace(/\D/g, "");
-  return `https://wa.me/${n}?text=${encodeURIComponent(String(texto))}`;
+  let n = String(numero || "").replace(/\D/g, "");
+  // plano 2000d · SX-013: número brasileiro sem DDI (10–11 dígitos com DDD) ganha o 55 — sem ele o wa.me abre outro país
+  if (/^[1-9]\d{9,10}$/.test(n) && !String(numero).trim().startsWith("+")) n = "55" + n;
+  // plano 2000d · SX-104: texto enorme (diagnóstico, lista) passava do tamanho de endereço que o WhatsApp abre e o link não abria nada
+  let t = String(texto ?? "");
+  if (t.length > 1500) t = `${t.slice(0, 1499)}…`;
+  return `https://wa.me/${n}?text=${encodeURIComponent(t)}`;
 }
 
 /** Bloco de link gerado (convite / nova senha): campo só leitura + Copiar + WhatsApp.
@@ -2055,7 +2116,8 @@ export function barraUso(rotulo, uso, limite, { detalhe } = {}) {
     h("div", { class: "uso-l" }, h("span", null, rotulo), h("span", { class: foraDoPlano ? "fraco" : null }, txt)),
     // fora do plano: sem barra (como o «Plano e uso» das Configurações) — não há medida a mostrar
     foraDoPlano ? null : h("div", { class: ["uso-barra", p >= 100 ? "cheia" : p >= 80 ? "alta" : null], role: "meter", "aria-valuemin": "0",
-      "aria-valuemax": String(semLimite ? Math.max(u, 1) : limite), "aria-valuenow": String(u), "aria-label": rotulo, "aria-valuetext": txt },
+      // plano 2000d · SX-014: uso acima do limite não deixa o medidor inválido (valuenow > valuemax): o teto vira o próprio uso
+      "aria-valuemax": String(semLimite ? Math.max(u, 1) : Math.max(Number(limite), u)), "aria-valuenow": String(u), "aria-label": rotulo, "aria-valuetext": txt },
       h("i", { style: { "--p": `${semLimite ? 0 : p}%` } })),
     detalhe ? h("small", { class: "uso-det" }, detalhe) : null);
 }
@@ -2431,8 +2493,10 @@ export function numCompacto(v) {
   if (v === null || v === undefined || v === "" || !Number.isFinite(n)) return vazioFmt;
   const a = Math.abs(n), s = n < 0 ? "−" : "";
   const um = x => (Math.round(x * 10) / 10).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
-  if (a >= 1e9) return `${s}${um(a / 1e9)} bi`;
-  if (a >= 1e6) return `${s}${um(a / 1e6)} mi`;
+  // plano 2000d · SX-011: o arredondamento sobe de faixa — 999.950 é «1 mi», não «1.000 mil»
+  const r = x => Math.round(x * 10) / 10;
+  if (a >= 1e9 || r(a / 1e6) >= 1000) return `${s}${um(a / 1e9)} bi`;
+  if (a >= 1e6 || r(a / 1e3) >= 1000) return `${s}${um(a / 1e6)} mi`;
   if (a >= 1e3) return `${s}${um(a / 1e3)} mil`;
   return _fmt.num.format(n);
 }
@@ -2661,7 +2725,8 @@ export function numMoeda(valor, { centavos = true } = {}) {
   const n = Number(valor);
   if (valor === null || valor === undefined || valor === "" || !Number.isFinite(n)) return h("span", { class: "num-moeda" }, "—");
   const neg = n < 0 ? "−" : "";
-  const [inteiro, cent] = Math.abs(n).toFixed(2).split(".");
+  // plano 2000d · SX-012: sem centavos o inteiro é ARREDONDADO (R$ 1.234,60 → R$ 1.235, como o brl), não cortado
+  const [inteiro, cent] = (centavos ? Math.abs(n).toFixed(2) : `${Math.round(Math.abs(n))}.00`).split(".");
   return h("span", { class: "num-moeda" },
     h("span", { class: "nm-rs" }, "R$"), neg + _fmt.num.format(Number(inteiro)),
     centavos ? h("span", { class: "nm-cent" }, `,${cent}`) : null);

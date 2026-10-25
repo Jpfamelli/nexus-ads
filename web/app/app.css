@@ -838,6 +838,11 @@ html.menu-recolhido .lat-conta { justify-content: center; }
 .entrar-cartao .sub { margin-top: .4rem; }
 .entrar-form { display: flex; flex-direction: column; gap: .95rem; margin-top: 1.4rem; }
 .entrar-erro { padding: .7rem .9rem; border-radius: var(--r-p); background: var(--c-ruim-suave); color: var(--c-ruim); font-weight: 600; font-size: var(--fs-14); }
+/* plano 2000d · SX-046: «Você quis dizer …?» logo abaixo do e-mail */
+.entrar-sugestao { margin: .3rem 0 0; font-size: var(--fs-13); }
+.entrar-sugestao .link { font-weight: 600; }
+/* plano 2000d · SX-055: o tempo poupado no aviso de fim do teste */
+.aviso-teste-poupado { padding: .55rem .8rem; border-radius: var(--r-p); background: var(--c-ok-suave); color: var(--c-texto); font-weight: 600; }
 .entrar-ok { padding: .7rem .9rem; border-radius: var(--r-p); background: var(--c-ok-suave); color: var(--c-ok); font-weight: 600; font-size: var(--fs-14); }
 .entrar-rodape { display: flex; justify-content: space-between; align-items: center; gap: .6rem; flex-wrap: wrap; margin-top: .3rem; font-size: var(--fs-14); }
 .entrar-nota { font-size: var(--fs-13); color: var(--c-texto-3); line-height: 1.45; }
@@ -1463,6 +1468,9 @@ button, a, [role="button"], [role="tab"], [role="option"], [role="menuitem"], in
   .modal-rod .bt { width: 100%; }
 }
 @media (pointer: coarse) {
+  /* plano 2000d · SX-078: no celular o campo tem 16 px — com menos, o iPhone dá zoom na tela inteira ao tocar no campo */
+  .campo input:not([type=checkbox]):not([type=radio]), .campo select, .campo textarea, .sel, .busca input, .busca-campo, .cor-hex { font-size: var(--fs-16); }
+
   .toast-x, .toast-acao { min-width: var(--alvo-toque); min-height: var(--alvo-toque); }
   .topo-busca, .empresa-bt, .topo-produtos { min-height: var(--alvo-toque); }   /* plano 1500c · UCC-107/UCC-108/UCC-109: 44 px no toque */
   .campo-check label, .chip-check, .chip-check span { min-height: var(--alvo-toque); }
@@ -1902,3 +1910,29 @@ html.modo-foco .faixas > .faixa:not(.faixa-bloqueio) { display: none; }
 /* plano 2000d · DU-145: termos, privacidade e suporte da revenda no pé da entrada */
 .entrar-links { display: flex; flex-wrap: wrap; justify-content: center; gap: .25rem 1rem; margin-top: var(--esp-3); font-size: var(--fs-13); }
 .entrar-links a { min-height: 44px; display: inline-flex; align-items: center; color: var(--c-texto-2); }
+
+/* ============================================================
+   plano 2000d · lote sis-x (SX-070…SX-079): acabamento do sistema
+   ============================================================ */
+/* plano 2000d · SX-070: quem pediu menos transparência no aparelho vê o topo, a barra, o menu lateral e o véu dos diálogos sólidos (sem desfoque) */
+@media (prefers-reduced-transparency: reduce) {
+  .topo, .barra, .lateral, .modal, .gaveta, .menu-pop, .flut { backdrop-filter: none; -webkit-backdrop-filter: none; background-color: var(--c-sup); }
+  .modal::backdrop, .gaveta::backdrop { backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+/* plano 2000d · SX-071: imprimir uma tela (relatório, ficha) sai só o conteúdo: sem menu, topo, barra, faixas nem avisos */
+@media print {
+  .lateral, .topo, .barra, .faixas, .pular-regioes, .toasts, .palco, .boot { display: none !important; }
+  .app, .coluna, .vista { display: block; margin: 0; padding: 0; overflow: visible; height: auto; }
+}
+/* plano 2000d · SX-072: caixas de marcar, opções e controles deslizantes na cor da marca em todo o app (não só no menu flutuante) */
+input[type=checkbox], input[type=radio], input[type=range], progress { accent-color: var(--c-prim); }
+/* plano 2000d · SX-073: o cursor de digitação na cor da marca (acha-se o cursor mais rápido num campo comprido) */
+input, textarea, [contenteditable] { caret-color: var(--c-prim-luz); }
+/* plano 2000d · SX-074: rolar até o fim de um menu, paleta ou lista não rola a página de trás */
+.menu-pop, .flut, .busca-res, .toasts { overscroll-behavior: contain; }
+/* plano 2000d · SX-075: botões e itens de menu respondem ao toque na hora (sem a espera do toque duplo de zoom) */
+.bt, .bt-icone, .menu-item, .aba, .busca-item, .toast-acao, .toast-x { touch-action: manipulation; }
+/* plano 2000d · SX-076: a página não pula de lado quando a barra de rolagem aparece ou some (abrir uma janela, filtrar uma lista) */
+html { scrollbar-gutter: stable; }
+/* plano 2000d · SX-077: link ou código comprido num aviso quebra a linha em vez de empurrar o aviso para fora da tela de 360 px */
+.toast p { overflow-wrap: anywhere; }

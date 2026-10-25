@@ -17,6 +17,7 @@ begin
     select unnest(array[k.token_segredo, k.app_secret_segredo, k.codewords_api_segredo, k.codewords_hook_segredo]) as x
       from public.nx_canais k where k.cliente_id = any(v_cli)) s where x is not null;
   delete from vault.secrets where id = any(v_vault);
+  perform set_config('nx.faxina', 'on', true);   -- plano 2000d · DS-153: a auditoria só aceita delete na retenção explícita
   delete from public.nx_auditoria where org_id = v_org or cliente_id = any(v_cli) or conta_id = any(v_contas);
   get diagnostics n_aud = row_count;
   delete from public.nx_midia_lixo where cliente_id = any(v_cli);

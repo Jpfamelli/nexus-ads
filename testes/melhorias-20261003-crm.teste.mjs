@@ -180,7 +180,8 @@ test("Agenda persiste preferências, oferece atualização manual honesta e pres
   assert.match(agenda, /a agenda exibida foi mantida/);
   assert.match(agenda, /document\.removeEventListener\("keydown", aoTeclaAgenda\)/);
   assert.match(agenda, /indiceAbaAgendaTecla\(ev\.key, i, abas\.length\)/);
-  assert.match(css, /\.agenda-faixa \[role="tab"\]:focus-visible/);
+  // plano 2000d · GY-104: a faixa dos dias é .ag-faixa (.agenda-faixa não existe na tela; o foco nunca aparecia)
+  assert.match(css, /\.ag-faixa \[role="tab"\]:focus-visible/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
 });
 

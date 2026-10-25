@@ -701,3 +701,376 @@ test("DA-258 · «enviado» velho ganha rotuloData com o dia", () => {
   assert.equal(P.statusEnvio({ enviado_em: "2026-10-25T11:50:00Z" }, Date.parse("2026-10-25T12:00:00Z")).rotuloData, undefined);
   fonte(PJS, /esc\(s\.rotuloData \|\| s\.rotulo\)/);
 });
+
+/* ================= (e) lote KX — complemento da frente clássico (plano 2000d) ================= */
+const P2 = vm.runInNewContext(`${trechoPuro};({ erroTelefone, ticketDe, ticketRepetido, ordenarContas, nomeCsv, ordenarExecucoes, palavraAtend, rotulosEtapas,
+  textosTour, casaBusca, melhorRelatorio, agendadaNoPassado, emailValido, assinaturaPainel, avisoEquipe, tituloComAlertas, rotuloBadge, dadosVelhos,
+  cadaMil, textosVertical, valorMeta, brlCurto, numerosWa, simular })`,
+  { horaSP: () => "", quandoSP: () => "", int: N.int, dec: N.dec, brl: N.brl, brl0: N.brl0, plural: N.plural, pluralDec: N.pluralDec,
+    chaveServico: N.chaveServico, semAcento: s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(),
+    slugDe: s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40),
+    Date, Math, JSON, String, Number, URL, Set, Map, Array, Object });
+const DEMO_MOD = await import("../web/demo.js");
+const NJS = ler("web/nucleo.js"), PDEMO = ler("scripts/popular-demo.mjs");
+
+test("KX-001 · link no negrito do WhatsApp: o «*» que fecha não entra no endereço", () => {
+  const h = N.waHtml("Veja *https://x.com/rel* hoje");
+  assert.match(h, /href="https:\/\/x\.com\/rel"/, "antes: href terminava em «rel*»");
+  assert.match(h, /<b><a [^>]+>https:\/\/x\.com\/rel<\/a><\/b>/);
+  assert.match(N.waHtml("_https://a.com/b_"), /href="https:\/\/a\.com\/b"/);
+});
+
+test("KX-002 · plataforma do CRM com espaço/maiúscula casa com a campanha das métricas", () => {
+  const M = montarDe({ metricas: serie(1, 3), leads: [leadF(dia(1), { plataforma: "Meta " }), leadF(dia(1), { plataforma: "META" })] });
+  for (const L of M.LEADS) { assert.equal(L.plat, "meta"); assert.equal(L.camp, "meta:C1", "antes: balde «sem campanha»"); }
+});
+
+test("KX-003/KX-004 · nome só de espaços vira «Sem nome»; «Implante » e «Implante» são o mesmo serviço", () => {
+  const M = montarDe({ metricas: serie(1, 3), leads: [leadF(dia(1), { nome: "   ", servico: "Implante " }), leadF(dia(1), { nome: " Ana  Lima ", servico: "Implante" })] });
+  assert.deepEqual(M.LEADS.map(L => L.nome).sort(), ["Ana Lima", "Sem nome"]);
+  assert.equal(new Set(M.LEADS.map(L => L.servico)).size, 1, "antes: duas fatias na rosca");
+});
+
+test("KX-005 · cfg com metas em texto vira número («1.500» não é 1,5)", () => {
+  const c = N.cfgCom({ cpaAlvo: "15", cpaAlvoGoogle: "abc", orcamento: "1.500", fee: "R$ 997" });
+  assert.equal(c.cpaAlvo, 15); assert.equal(c.cpaAlvoGoogle, null); assert.equal(c.orcamento, 1500); assert.equal(c.fee, 997);
+  assert.equal(N.cfgCom({ fee: "x" }).fee, 0);
+  assert.equal(N.cfgCom({ cpaAlvo: 12 }).cpaAlvo, 12, "número continua número");
+});
+
+test("KX-007 · hojeSP com data inválida não lança RangeError", () => {
+  assert.doesNotThrow(() => N.hojeSP("não é data"));
+  assert.equal(N.hojeSP(new Date("x")), N.hojeSP());
+  assert.equal(N.hojeSP("2026-10-25T15:00:00Z"), "2026-10-25");
+});
+
+test("KX-014/KX-015/KX-016 · datas que não são data: descartadas e contadas; agenda «a combinar» = sem data", () => {
+  const M = montarDe({ metricas: [...serie(1, 3), metrica("ontem")], leads: [leadF("abc"), leadF(dia(2), { nome: "Cid", etapa: "agendada", data_agenda: "a combinar", data_consulta: "x" })] });
+  assert.equal(M.avisos.dataInvalida, 2, "antes: NaN entrava nas linhas");
+  const cid = M.LEADS.find(L => L.nome === "Cid");
+  assert.ok(cid, "a ficha não some");
+  assert.ok(Number.isFinite(cid.iAgenda), "agendada sem data cai no dia da conversa");
+  assert.equal(cid.agendaEstimada, true);
+  assert.ok(Number.isFinite(M.crmTot(M.R - 6, M.R).agendadas));
+});
+
+test("KX-017/KX-018/DA-006 · popular-demo: chave das regras de conta e do ritmo; --hoje inexistente recusado", async () => {
+  const PD = await import("../scripts/popular-demo.mjs");
+  assert.equal(PD.dataValida("2026-02-31"), false, "antes: virava 03/03 calado");
+  assert.equal(PD.dataValida("2026-10-25"), true);
+  assert.equal(PD.dataValida("25/10/2026"), false);
+  fonte(PDEMO, /a\.regra\.id === "ritmo"\) \|\| \(a\.regra && a\.regra\.nivel === "conta"\)\) return a\.chave;/);
+  fonte(PDEMO, /if \(!ent\) return a\.chave;/);
+  assert.doesNotThrow(() => PD.conferir(PD.montarSeed({ hoje: HOJE })));
+});
+
+test("KX-019 · demo com ?hoje inválido usa o hoje de São Paulo (antes tudo NaN)", () => {
+  for (const h of ["amanha", "2026-02-31", ""]) {
+    const ds = gerarDemo({ hoje: h });
+    assert.ok(Number.isFinite(ds.REF.getTime()), "antes: REF inválido");
+    const ontem = N.meioDia(N.hojeSP()); ontem.setDate(ontem.getDate() - 1);
+    assert.equal(N.isoDe(ds.REF), N.isoDe(ontem));
+    assert.ok(N.montar(ds).LINHAS.every(l => Number.isFinite(l.i)));
+  }
+});
+
+test("DC-376/DC-450 · semana de exemplo da Agenda: 3 profissionais, 60% ocupada, encaixe da IA em horário cheio", () => {
+  const { semanaDeExemplo, PROFS_EXEMPLO } = DEMO_MOD;
+  const s = semanaDeExemplo("2026-10-22");
+  assert.deepEqual(s.dias, ["2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23"], "recua até a segunda");
+  assert.equal(s.profissionais.length, 3); assert.equal(PROFS_EXEMPLO.length, 3);
+  const base = s.consultas.filter(c => !c.encaixe);
+  assert.equal(base.length, Math.round(5 * 3 * 9 * 0.6));
+  assert.equal(s.consultas.filter(c => c.encaixe).length, 2);
+  assert.equal(s.consultas.filter(c => c.presenca === "faltou").length, 2);
+  assert.equal(s.consultas.filter(c => c.confirmada_em).length, 4);
+  assert.equal(s.consultas.filter(c => c.origem === "anuncio").length, 3);
+  const ter10 = s.consultas.filter(c => c.inicio === "2026-10-20T10:00:00-03:00" && c.dono_id === "p1");
+  assert.equal(ter10.length, 2, "horário cheio + encaixe");
+  assert.ok(ter10.some(c => c.encaixe && c.marcado_por === "ia"));
+  assert.ok(s.consultas.every(c => c.exemplo === true && /-03:00$/.test(c.inicio)));
+  assert.deepEqual(semanaDeExemplo("2026-10-22"), s, "determinística");
+});
+
+test("KX-020–KX-025 · mensagens de erro: código em texto, 429/401/403/404, aparelho sem rede; 429 repete a leitura", async () => {
+  const api = await import("../web/dados.js");
+  const gen = "Não deu certo agora. Tente de novo em instantes.";
+  assert.equal(api.mensagemErro("sem_conexao"), api.mensagemErro({ codigo: "sem_conexao" }), "KX-020");
+  for (const c of ["http_429", "http_401", "http_403", "http_404"]) assert.notEqual(api.mensagemErro({ codigo: c }), gen, c);
+  assert.match(api.mensagemErro({ codigo: "http_429" }), /Espere um minuto/);
+  assert.match(api.mensagemErro({ codigo: "sem_conexao", offline: true }), /aparelho está sem internet/);
+  let n = 0;
+  api.usarFetch(async () => { n++; return n < 2 ? { ok: false, status: 429, text: async () => "" } : { ok: true, status: 200, text: async () => "{\"ok\":1}" }; });
+  try {
+    assert.deepEqual(await api.rpc("nx_dados", {}), { ok: 1 });
+    assert.equal(n, 2, "antes: 429 ia direto para a tela");
+    n = 0;
+    api.usarFetch(async () => { n++; return { ok: false, status: 429, text: async () => "" }; });
+    await assert.rejects(api.rpc("nx_lead_salvar", {}), e => e.codigo === "http_429");
+    assert.equal(n, 1, "escrita nunca repete");
+    // sem rede no aparelho: não repete (não adianta) e marca offline
+    const nav = globalThis.navigator, desc = nav && Object.getOwnPropertyDescriptor(nav, "onLine");
+    if (nav) {
+      Object.defineProperty(nav, "onLine", { value: false, configurable: true });
+      try {
+        n = 0; api.usarFetch(async () => { n++; throw new TypeError("Failed to fetch"); });
+        await assert.rejects(api.rpc("nx_dados", {}), e => e.codigo === "sem_conexao" && e.offline === true);
+        assert.equal(n, 1);
+      } finally { if (desc) Object.defineProperty(nav, "onLine", desc); else delete nav.onLine; }
+    }
+  } finally { api.usarFetch(null); }
+});
+
+test("KX-026/KX-027/KX-029/KX-030/KX-031 · folha: um «e» só, nome curto no gráfico, estimativa honesta, contatos do Google", () => {
+  assert.equal(F.juntarE(["a", "b", "c"]), "a, b e c");
+  assert.equal(F.juntarE(["a"]), "a"); assert.equal(F.juntarE([]), "");
+  assert.doesNotMatch(FJS, /\.join\(" e "\)/, "antes: «… e … e …»");
+  assert.equal(F.nomeGraf("Aparelho invisível completo"), "Aparelho invisív…");
+  assert.equal(F.nomeGraf("Implante"), "Implante");
+  fonte(FJS, /<title>\$\{esc\(/);
+  assert.equal(F.rotuloEstimativa({ receitaEstimada: 100, receitaReal: 500 }), " (parte estimada)");
+  assert.equal(F.rotuloEstimativa({ receitaEstimada: 100, receitaReal: 0 }), " (estimativa)");
+  assert.equal(F.rotuloEstimativa({ receitaEstimada: 0, receitaReal: 500 }), "");
+  assert.equal(F.textoSemRetorno({ fecharam: 2, receita: 0 }), "2 fechamentos sem valor informado");
+  assert.equal(F.textoSemRetorno({ fecharam: 0, receita: 0 }, "serviço"), "Ainda sem serviço fechado");
+  assert.equal(F.palavraContato("google", 3), "3 contatos");
+  assert.equal(F.palavraContato("meta", 1), "1 conversa");
+});
+
+test("KX-028/KX-032 · folha: números do gráfico com int(); Tab sem nada focável não sai do diálogo", () => {
+  fonte(FJS, /plano 2000d · KX-028/);
+  fonte(FJS, /\$\{int\(ant\.fecharam\)\} → \$\{int\(c\.fecharam\)\}/);
+  fonte(FJS, /if \(!f\.length\) \{ e\.preventDefault\(\); return; \}/);
+});
+
+test("KX-006 · relatório reenviado no mesmo dia: vale o que saiu, o mais novo", () => {
+  const a = { id: 1, enviado_em: "2026-10-25T11:00:00Z" }, b = { id: 2, criado_em: "2026-10-25T12:00:00Z" }, c = { id: 3, enviado_em: "2026-10-25T08:30:00-03:00" };
+  assert.equal(P2.melhorRelatorio(a, b).id, 1, "antes: o último da lista (que não saiu)");
+  assert.equal(P2.melhorRelatorio(a, c).id, 3, "11:30Z > 11:00Z");
+  assert.equal(P2.melhorRelatorio(null, b).id, 2);
+  fonte(PJS, /melhorRelatorio\(/);
+});
+
+test("KX-008/KX-009 · alertas no título da aba e no selo falado", () => {
+  assert.equal(P2.tituloComAlertas("Radar · Nexus", 2), "(2) Radar · Nexus");
+  assert.equal(P2.tituloComAlertas("Radar · Nexus", 0), "Radar · Nexus");
+  assert.equal(P2.rotuloBadge(1), "1 alerta ativo"); assert.equal(P2.rotuloBadge(3), "3 alertas ativos");
+  fonte(PJS, /b\.setAttribute\("aria-label", rotuloBadge\(n\)\)/);
+  fonte(PJS, /tituloComAlertas\(/);
+});
+
+test("KX-010/KX-090 · aba esquecida mais de 1 h relê os números; ao voltar a pílula acerta", () => {
+  const agora = Date.now();
+  assert.equal(P2.dadosVelhos(agora - 2 * 36e5, agora), true);
+  assert.equal(P2.dadosVelhos(agora - 60e3, agora), false);
+  assert.equal(P2.dadosVelhos(undefined, agora), false);
+  fonte(PJS, /diaVirou\(S\.dados\.hoje, hojeSP\(\)\) \|\| dadosVelhos\(S\.carregadoEm\)\) carregarDados\(\);\n[^\n]*KX-090[^\n]*\n\s+else renderIntegracao\(\);/);
+  fonte(PJS, /S\.carregadoEm = Date\.now\(\);/);
+});
+
+test("KX-011 · «Salvar marco» vazio não apaga os marcos do dia", () => {
+  fonte(PJS, /if \(!remover && !t\) \{ const c = \$\("#marco-txt"\); if \(c\) c\.focus\(\); return toast\(/);
+});
+
+test("KX-012 · funil: abaixo de 0,05% é «menos de 1», não «0»", () => {
+  assert.equal(P2.cadaMil(0.02, "viram", "tocaram"), "de cada 1.000 que viram, menos de 1 tocaram");
+  assert.equal(P2.cadaMil(0.3, "viram", "tocaram"), "de cada 1.000 que viram, 3 tocaram");
+  assert.equal(P2.cadaMil(12, "viram", "tocaram"), "de cada 100 que viram, 12 tocaram");
+  fonte(PJS, /const cadaCem = cadaMil;/);
+});
+
+test("KX-013/KX-058 · busca do quadro: pelo serviço e por telefone com +55", () => {
+  const L = { nome: "Ana Souza", servico: "Implante", telefone: "12999998888" };
+  assert.equal(P2.casaBusca(L, "implante"), true, "antes: só nome/telefone");
+  assert.equal(P2.casaBusca(L, "+55 12 99999-8888"), true, "antes: o 55 não casava");
+  assert.equal(P2.casaBusca(L, "8888"), true);
+  assert.equal(P2.casaBusca(L, "canal"), false);
+  assert.equal(P2.casaBusca(L, ""), true);
+  fonte(PJS, /if \(!casaBusca\(L, S\.busca\)\) continue;/);
+});
+
+test("KX-033/KX-034/KX-072 · valor da ficha: «1.500» é mil e quinhentos; «12abc» e «1 500» tratados; campo de texto", () => {
+  assert.equal(P2.valorMeta("1.500").valor, 1500);
+  assert.equal(P2.valorMeta("1.200,50").valor, 1200.5);
+  assert.equal(P2.valorMeta("1 500").valor, 1500, "KX-034");
+  assert.equal(P2.valorMeta("12abc").ok, false, "antes: parseFloat aceitava 12");
+  assert.equal(P2.valorMeta("-5").ok, false);
+  fonte(PJS, /const v = valorMeta\(bruto\);/);
+  assert.doesNotMatch(PJS, /parseFloat\(bruto/);
+  fonte(HTML, /<input type="text" id="lf-valor" inputmode="decimal"/);
+  assert.doesNotMatch(HTML, /type="number" id="lf-valor"/, "type=number entregava «» para «1.200,50»");
+});
+
+test("KX-035 · telefone da ficha sem DDD avisa; o já gravado não trava", () => {
+  assert.match(P2.erroTelefone("99999-8888"), /DDD/);
+  assert.equal(P2.erroTelefone("(12) 99999-8888"), "");
+  assert.equal(P2.erroTelefone("123"), "Telefone inválido: use DDD + número (10 a 13 números).");
+  assert.equal(P2.erroTelefone("123", "123"), "", "ficha antiga não trava");
+  assert.equal(P2.erroTelefone(""), "");
+  fonte(PJS, /erroTelefone\(/);
+});
+
+test("KX-036/KX-065 · valor de tabela pelo serviço sem acento/caixa; serviço repetido avisa", () => {
+  assert.equal(P2.ticketDe({ "Implante ": 3000 }, "implante"), 3000);
+  assert.equal(P2.ticketDe({ "Implante": 3000, "implante": 0 }, "Implante"), 3000);
+  assert.equal(P2.ticketDe({}, "x"), null);
+  assert.equal(P2.ticketRepetido([["Implante", 1], ["implante ", 2]]), "implante");
+  assert.equal(P2.ticketRepetido([["Implante", 1], ["Canal", 2]]), "");
+  fonte(PJS, /sug = ticketDe\(M\.CFG\.ticket, \$\("#lf-servico"\)\.value\)/);
+});
+
+test("KX-037 · R$ 999.600 é «R$ 1 mi», não «R$ 1000 mil»", () => {
+  assert.equal(P2.brlCurto(999600), `R$${NBSP}1 mi`);
+  assert.equal(P2.brlCurto(999400), `R$${NBSP}999 mil`);
+  assert.equal(P2.brlCurto(1250000), `R$${NBSP}1,3 mi`);
+});
+
+test("KX-041/KX-042–KX-047 · o painel assinado pela agência do cliente (revenda nunca lê «Nexus»)", () => {
+  assert.deepEqual(pl(P2.assinaturaPainel("Nexus")), { nome: "Nexus", cidade: "Taubaté — SP", curta: "Nexus · Taubaté" });
+  assert.deepEqual(pl(P2.assinaturaPainel("Alfa Digital")), { nome: "Alfa Digital", cidade: "", curta: "Alfa Digital" });
+  assert.equal(P2.avisoEquipe("Alfa Digital", true), "A Alfa Digital já foi avisada e está resolvendo.");
+  assert.equal(P2.avisoEquipe("Alfa Digital", false), "Avise a Alfa Digital para refazer a conexão.");
+  for (const id of ["side-assina-nome", "ph-radar-t", "ph-trafego-t"]) fonte(HTML, new RegExp(`id="${id}"`));
+  fonte(HTML, /data-av-agencia/);
+  fonte(PJS, /t\("#ph-radar-t", `\$\{ag\} · Radar`\);/);
+  fonte(PJS, /t\("#rl-trava", `indisponível: só a equipe da \$\{ag\} liga ou desliga regras`\);/);
+  fonte(PJS, /aplicarAgencia\(\); aplicarVocabulario\(\);/);
+});
+
+test("KX-038/KX-039/KX-040 · uma vibração só; «Conferido às» em SP; hora do diário configurada", () => {
+  fonte(PJS, /lerLocal\("nx-vibrar"\) !== "1" && !REDUCE && navigator\.vibrate/);
+  fonte(PJS, /S\.varridoEm = FMT_HORA\.format\(new Date\(\)\);/);
+  fonte(PJS, /O primeiro diário sai às \$\{esc\(horaRel\(\)\)\}/);
+  assert.doesNotMatch(PJS, /O primeiro diário sai às 8h/);
+});
+
+test("KX-048/KX-049 · trocar cliente ou plataforma zera página, ordem e CSV dos criativos", () => {
+  fonte(PJS, /S\.criMax = CRI_PASSO; S\.criSort = null; S\.destacar = new Set\(\); S\.csvCamp = null; S\.csvCri = null; S\.nAlertas = 0;/);
+  fonte(PJS, /S\.plat = v; S\.kVer = \{\}; S\.criMax = CRI_PASSO;/);
+});
+
+test("KX-050/KX-051/KX-052/KX-088/KX-089 · iniciais por caractere visível; contagens com separador de milhar", () => {
+  fonte(PJS, /\.map\(p => Array\.from\(p\)\[0\] \|\| ""\)\.slice\(0, 2\)\.join\(""\)\.toUpperCase\(\) \|\| "\?"/);
+  fonte(PJS, /<span>\$\{int\(s\.n\)\} · \$\{brl0\(s\.v\)\}<\/span>/);
+  fonte(PJS, /<b class="mam-n\$\{dentro \? " dentro" : ""\}">\$\{int\(d\.c\.fecharam\)\}<\/b>/);
+  fonte(PJS, /\(\$\{int\(serv\[1\]\.n\)\} de \$\{int\(c\.fecharam\)\}/);
+  fonte(PJS, /<b>\$\{int\(tot\)\}<\/b><\/header>/);
+});
+
+test("KX-053/KX-066 · contas e execuções ordenadas pelo instante", () => {
+  const l = P2.ordenarContas([{ id: 1, aprovado: true, criado_em: "2026-10-25T01:00:00Z" }, { id: 2, aprovado: false, criado_em: "2026-10-20T00:00:00Z" },
+    { id: 3, aprovado: true, criado_em: "2026-10-24T23:30:00-03:00" }]);
+  assert.deepEqual(l.map(x => x.id), [2, 3, 1], "aguardando primeiro; -03:00 comparado como instante");
+  assert.deepEqual(P2.ordenarExecucoes([{ inicio: "2026-10-24T10:00:00Z" }, { inicio: "2026-10-25T10:00:00Z" }]).map(e => e.inicio.slice(8, 10)), ["25", "24"]);
+  assert.deepEqual(pl(P2.ordenarExecucoes(null)), []);
+});
+
+test("KX-054 · simulador sem taxa não escreve «NaN»", () => {
+  const r = P2.simular({ cpa: 10, ag: undefined, veio: .5, fe: .5 }, 1000, undefined);
+  assert.deepEqual(pl(r), { conversas: [80, 120], pacientes: [0, 0], tratamentos: [0, 0] });
+});
+
+test("KX-055/KX-081 · tour e simulador com as palavras da vertical", () => {
+  const V = N.VOCABULARIO.oficina;
+  const t = P2.textosTour(V, "oficina");
+  assert.ok(t.every(x => !/paciente|consultório|a senhora|da senhora/.test(x)));
+  assert.match(t[0], /clientes novos/);
+  assert.match(P2.textosTour(N.VOCABULARIO.odonto, "odonto")[2], /A senhora vê/);
+  fonte(PJS, /textosTour\(M\.VOC, M\.vertical\)\[n\]/);
+  fonte(PJS, /oficina: "na sua oficina", loja: "na sua loja"/);
+});
+
+test("KX-056/KX-079 · sem anúncios: «já foi avisada» só se o aviso saiu; aba com o nome da vertical", () => {
+  fonte(PJS, /esc\(avisoEquipe\(agencia\(\), equipeAvisada\(\(S\.dados && S\.dados\.alertas\) \|\| \[\], \[\{ canal: comErro\.canal \}\]\)\)\)/);
+  fonte(PJS, /Ir para \$\{esc\(aba\)\}/);
+});
+
+test("KX-057/KX-059/KX-061/KX-062/KX-091 · copiar honesto, Esc e «/» na busca, Tab fecha o menu, sessão expirada fecha camadas", () => {
+  fonte(PJS, /let ok = true;\n\s+try \{ await navigator\.clipboard\.writeText\(txt\); \}/);
+  fonte(PJS, /\$\("#k-busca"\)\.addEventListener\("keydown", e => \{\n\s+if \(e\.key !== "Escape" \|\| !e\.target\.value\) return;/);
+  fonte(PJS, /if \(e\.key === "Tab"\) \{ e\.preventDefault\(\); fim\(""\); return; \}/);
+  fonte(PJS, /f\.aberta && f\.aberta\(\)\) f\.fechar\(\);/);
+  fonte(PJS, /k === "\/" && S\.aba === "pacientes"\) \{ const b = \$\("#k-busca"\);/);
+});
+
+test("KX-060 · «agendada» com dia que já passou", () => {
+  assert.equal(P2.agendadaNoPassado("2026-10-20", "2026-10-25"), true);
+  assert.equal(P2.agendadaNoPassado("2026-10-25", "2026-10-25"), false);
+  assert.equal(P2.agendadaNoPassado("", "2026-10-25"), false);
+  fonte(PJS, /agendadaNoPassado\(/);
+});
+
+test("KX-063/KX-064/KX-068/KX-092 · e-mail com cara de e-mail; limites do formulário; logo até 5 MB; valor de tabela inválido avisa", () => {
+  assert.equal(P2.emailValido("ana@clinica.com.br"), true);
+  for (const e of ["ana@", "ana clinica@x.com", "a@b.c", ""]) assert.equal(P2.emailValido(e), false, e);
+  fonte(PJS, /id="cl-nome" value="\$\{esc\(base\.nome\)\}" maxlength="80"/);
+  fonte(PJS, /id="cl-curto"[^>]+maxlength="30"/);
+  fonte(PJS, /if \(arq\.size > LOGO_MAX_BYTES\)/);
+  fonte(PJS, /const tkRuim = tkLinhas\.find\(/);
+});
+
+test("KX-067 · WhatsApp com 0 na frente («012 …») vira o número certo", () => {
+  assert.deepEqual(pl(P2.numerosWa("012 99999-8888")), { ok: ["12999998888"], invalidos: [] });
+});
+
+test("KX-069/KX-070/KX-071/KX-085/KX-093 · totais falados, total na tabela, estimativa marcada, datas do período, frequência do cliente", () => {
+  fonte(PJS, /const totG = serie\.reduce\(/);
+  fonte(PJS, /<tfoot><tr><th scope="row">Total<\/th>/);
+  fonte(PJS, /\$\{brl0\(total\)\}\$\{esc\(totalEst\)\}/);
+  fonte(PJS, /`Últimos \$\{S\.dias\} dias · \$\{M\.ddmm\(Math\.max\(0, de\)\)\} a \$\{M\.ddmm\(M\.R\)\}/);
+  fonte(PJS, /cs\.textContent = `Frequência acima de \$\{dec\(freqLim, 1\)/);
+  fonte(HTML, /id="cri-sub"/);
+});
+
+test("KX-073/KX-074/KX-075/KX-076/KX-077/KX-078 · a ficha fala a língua da vertical", () => {
+  const of = P2.rotulosEtapas(N.VOCABULARIO.oficina, "oficina");
+  assert.equal(of.fechou, "Aprovou"); assert.equal(of.motivos.faltou, "Faltou à visita"); assert.equal(of.motivos.nao_fechou, "Veio e não aprovou");
+  assert.equal(P2.rotulosEtapas(N.VOCABULARIO.loja, "loja").fechou, "Comprou");
+  const od = P2.rotulosEtapas(N.VOCABULARIO.odonto, "odonto");
+  assert.equal(od.orcamento, "Avaliou · orçamento"); assert.equal(od.motivos.faltou, "Faltou à consulta");
+  assert.equal(P2.palavraAtend("oficina"), "visita"); assert.equal(P2.palavraAtend("generico"), "atendimento"); assert.equal(P2.palavraAtend("x"), "consulta");
+  fonte(PJS, /`Novo \$\{M\.VOC\.pessoa\[0\]\}`/);
+  fonte(PJS, /toast\(`\$\{capt\(M \? M\.VOC\.pessoa\[0\] : "paciente"\)\} \$\{L \? "atualizado" : "cadastrado"\} ✓`\)/);
+  fonte(PJS, /`Sugestão pelo \$\{M\.VOC\.servico\}:/);
+});
+
+test("KX-080/KX-082/KX-083/KX-086/KX-107 · aba de contatos, busca, botão e origem pela vertical", () => {
+  fonte(HTML, /<span data-rot-pessoas>Pacientes<\/span>/);
+  fonte(PJS, /\$\$\("\[data-rot-pessoas\]"\)\.forEach/);
+  fonte(PJS, /kb\.placeholder = `Buscar \$\{um\}`/);
+  fonte(PJS, /bn\.textContent = `\+ \$\{capt\(um\)\}`/);
+  fonte(PJS, /Toque num cartão para mudar a etapa do \$\{um\}\./);
+  fonte(PJS, /oficina: "Site da oficina", loja: "Site da loja", generico: "Site da empresa"/);
+});
+
+test("KX-084/KX-087 · CSV com a plataforma no nome; CSV dos criativos com a lista inteira", () => {
+  assert.equal(P2.nomeCsv("campanhas", "Clínica São José", "2026-10-24", 30, "meta"), "campanhas-clinica-sao-jose-2026-10-24-30d-meta.csv");
+  assert.equal(P2.nomeCsv("criativos", "", "2026-10-24", 7, null), "criativos-cliente-2026-10-24-7d.csv");
+  fonte(HTML, /id="btn-csv-cri"/);
+  fonte(PJS, /S\.csvCri = crisTodos;/);
+});
+
+test("KX-094/KX-095 · teclado do celular: nome com maiúscula, busca com tecla «Buscar»", () => {
+  fonte(HTML, /id="lf-nome" autocomplete="off" autocapitalize="words"/);
+  fonte(HTML, /id="k-busca"[^>]+enterkeyhint="search"/);
+});
+
+test("KX-096–KX-106 · títulos fixos do HTML pela vertical; a marca diz a agência", () => {
+  const od = P2.textosVertical(N.VOCABULARIO.odonto, "odonto", "Nexus");
+  // odonto: o texto de sempre (o mesmo do HTML)
+  const h = id => (HTML.match(new RegExp(`id="${id}">([^<]+)<`)) || [])[1];
+  for (const [id, k] of [["vx-funil-t", "funilT"], ["vx-funil-s", "funilSub"], ["vx-origem-t", "origemT"], ["vx-origem-s", "origemSub"], ["vx-donut-t", "donutT"],
+    ["vx-rel-s", "relSub"], ["vx-aj-s", "ajSub"], ["vx-marca-t", "marcaT"], ["vx-marca-s", "marcaSub"], ["lf-valor-l", "valorL"], ["lf-servico-l", "servicoL"], ["lf-origem-l", "origemL"]]) {
+    assert.equal(od[k], h(id), id);
+  }
+  assert.equal(od.fitaL, "Jornada do paciente"); fonte(HTML, /aria-label="Jornada do paciente"/);
+  const of = P2.textosVertical(N.VOCABULARIO.oficina, "oficina", "Alfa Digital");
+  assert.equal(of.funilT, "Funil do cliente"); assert.equal(of.origemT, "Anúncio × oficina"); assert.equal(of.donutT, "Serviços aprovados");
+  assert.equal(of.marcaT, "Marca da oficina"); assert.match(of.marcaSub, /A Alfa Digital continua assinando\.$/); assert.doesNotMatch(of.marcaSub, /Nexus/);
+  assert.equal(of.valorL, "Valor do serviço fechado (R$)"); assert.equal(of.servicoL, "Serviço de interesse"); assert.equal(of.origemL, "Como chegou até a oficina");
+  assert.equal(of.fitaL, "Jornada do cliente");
+  const lj = P2.textosVertical(N.VOCABULARIO.loja, "loja", "Nexus");
+  assert.equal(lj.donutT, "Produtos vendidos"); assert.equal(lj.relSub, "Todo dia 1º, no WhatsApp da loja — sem tecniquês.");
+  assert.ok(Object.values(of).every(x => !/clínica|paciente|consultório|tratamento/.test(x)));
+  fonte(PJS, /const TV = textosVertical\(V, M\.vertical, agencia\(\)\);/);
+});

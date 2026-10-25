@@ -166,7 +166,8 @@ export function criarLista(A) {
     const restantes = (r && Array.isArray(r.restantes) ? r.restantes : []).filter(id => A.itens.some(x => x.id === id));
     if (restantes.length && !selecionando && A.aba === abaClique && String(A.busca || "") === buscaClique) { for (const id of restantes) selecao.add(id); modoSelecao(true); }
   });
-  btLoteResolver.addEventListener("click", async () => { const ids = [...selecao]; modoSelecao(false); await A.acoes.resolverLote(ids); });
+  // plano 2000d · DC-010: o Resolver em lote também devolve as que falharam à seleção (rodarLote, como os outros)
+  btLoteResolver.addEventListener("click", () => rodarLote(ids => A.acoes.resolverLote(ids)));
   // transferir/etiquetar perguntam antes (modal): a seleção só sai quando a ação foi confirmada
   if (btLoteTransferir) btLoteTransferir.addEventListener("click", async () => { const ids = [...selecao]; if (await A.acoes.transferirLote(ids)) modoSelecao(false); });
   if (btLoteEtiquetar) btLoteEtiquetar.addEventListener("click", async () => { const ids = [...selecao]; if (await A.acoes.etiquetarLote(ids)) modoSelecao(false); });
@@ -214,6 +215,8 @@ export function criarLista(A) {
   const atrasoTxt = h("span", null, "");
   const btAtraso = h("button", { type: "button", class: "bt bt-fant bt-p cvl-atraso-bt" }, "Tentar agora");
   const avisoAtraso = h("p", { class: "cvl-cache cvl-atraso", role: "status", hidden: true }, atrasoTxt, " ", btAtraso);
+  // plano 2000d · DC-023: o navegador segurou o som (recarregou e ninguém clicou ainda) — a faixa diz como ligar
+  const avisoSom = h("p", { class: "cvl-cache cvl-som-bloqueado", role: "status", hidden: true }, "Clique em qualquer lugar para ligar o som de mensagem nova.");
   btAtraso.addEventListener("click", () => ui.carregando(btAtraso, A.acoes.carregarLista({})));
   // plano 1000b · CB-070: quantas conversas a busca achou, num aviso só (com espera: não a cada tecla)
   let sigBuscaAnunciada = "", timerAnuncioBusca = null;
@@ -237,7 +240,8 @@ export function criarLista(A) {
   let observador = null;
   if (typeof IntersectionObserver === "function") {
     try {
-      observador = new IntersectionObserver(ents => { if (ents.some(e => e.isIntersecting) && A.temMais && !A.carregandoLista && !A.busca) carregarMais(); }, { root: lista, rootMargin: "160px 0px" });
+      // plano 2000d · DC-032: vale também na busca (o carregarLista pagina com antes/antes_id do mesmo jeito)
+      observador = new IntersectionObserver(ents => { if (ents.some(e => e.isIntersecting) && A.temMais && !A.carregandoLista) carregarMais(); }, { root: lista, rootMargin: "160px 0px" });
       observador.observe(maisBox);
     } catch { observador = null; }
   }
@@ -246,7 +250,7 @@ export function criarLista(A) {
     h("header", { class: "cvl-cab" }, titulo, btNova, btAtender),
     leitor,
     h("div", { class: "cvl-busca" }, h("label", { class: "busca" }, ui.icone("busca"), busca), btFiltro, btSelecionar, btAvisos),
-    buscaAjuda, infoBusca, filtrosEl, abasEl, avisoCanal, avisoCaido, avisoCache, avisoAtraso, lista, barraLote);
+    buscaAjuda, infoBusca, filtrosEl, abasEl, avisoCanal, avisoCaido, avisoCache, avisoAtraso, avisoSom, lista, barraLote);
   // CA-046: no modo seleção, tocar na linha marca/desmarca (não abre a conversa)
   function alternarItem(a, { focar = false, intervalo = false } = {}) {
     const id = Number(a.dataset.id);
@@ -312,6 +316,16 @@ export function criarLista(A) {
     ev.preventDefault();
     api.moverFoco(ev.key === "Home" ? "inicio" : "fim");
   });
+  // plano 2000d · DC-034: mouse parado 250 ms sobre uma conversa = ela já começa a carregar
+  let tHover = null;
+  lista.addEventListener("pointerover", ev => {
+    if (ev.pointerType && ev.pointerType !== "mouse") return;
+    const a = ev.target && ev.target.closest ? ev.target.closest(".cvl-item") : null;
+    clearTimeout(tHover);
+    if (!a || !a.dataset.id || typeof A.acoes.preCarregar !== "function") return;
+    tHover = setTimeout(() => A.acoes.preCarregar(Number(a.dataset.id)), 250);
+  });
+  lista.addEventListener("pointerout", () => clearTimeout(tHover));
   lista.addEventListener("keydown", ev => {
     if (!selecionando || (ev.key !== " " && ev.key !== "Spacebar" && ev.key !== "Enter")) return;
     const a = ev.target && ev.target.closest ? ev.target.closest(".cvl-item") : null;
@@ -458,12 +472,24 @@ export function criarLista(A) {
   /** A espera da linha (SLA), nos minutos de atendimento quando o horário é conhecido. plano 1500c · CC-027: com os limites do departamento. */
   function esperaDe(c) { return L.esperaDaConversa(c, A.base, new Date()); }
   /** CA-092: só a linha com SLA (aguardando) muda a cada minuto; as outras só na virada do dia (a hora «14:05» vira «Ontem»). */
+  // plano 2000d · DC-035: a parte que só depende do item (os itens são trocados por cópia a cada mudança — atualizarItemLista/comPendencia)
+  // é serializada uma vez por objeto (WeakMap); a cada desenho só se junta o que muda fora dele (rascunho, seleção, minuto, aba…)
+  const sigDoItem = new WeakMap();
+  function parteDoItem(c) {
+    let s = sigDoItem.get(c);
+    if (s === undefined) {
+      s = JSON.stringify([c.ultima_msg_em, c.ultima_msg_resumo, c.ultima_msg_dir, c.nao_lidas, c.status, c.atribuida_a, c.atribuida_nome, c.aguardando, c.ultima_entrada_em,
+        c.etiquetas, c.negocio, c.departamento_id, c.oculta, c.ultima_msg_origem, c.ultima_msg_por, c.ultima_msg_por_nome]);
+      sigDoItem.set(c, s);
+    }
+    return s;
+  }
   function assinatura(c, sel, minuto, dia) {
     const comSla = c.status === "aberta" && c.aguardando && c.ultima_entrada_em;
-    return JSON.stringify([A.acoes.rascunhoDe(c.id), A.acoes.filaResumo(c.id), c.contato && c.contato.nome, c.contato && c.contato.telefone, c.ultima_msg_em, c.ultima_msg_resumo, c.ultima_msg_dir,
-      c.nao_lidas, c.status, c.atribuida_a, c.atribuida_nome, c.aguardando, c.ultima_entrada_em, c.etiquetas, c.negocio, sel, comSla ? minuto : dia, A.aba, !!A.busca, c.contato && c.contato.origem,
-      (A.base && A.base.etiquetas || []).length, c.departamento_id, selecionando ? (selecao.has(c.id) ? 2 : 1) : 0,
-      c.oculta, c.ultima_msg_origem, c.ultima_msg_por, c.ultima_msg_por_nome, fixada(c.id), silenciada(c.id),   // plano 1500c · CC-057/CC-058
+    return JSON.stringify([A.acoes.rascunhoDe(c.id), A.acoes.filaResumo(c.id), c.contato && c.contato.nome, c.contato && c.contato.telefone, parteDoItem(c),
+      sel, comSla ? minuto : dia, A.aba, !!A.busca, c.contato && c.contato.origem,
+      (A.base && A.base.etiquetas || []).length, selecionando ? (selecao.has(c.id) ? 2 : 1) : 0,
+      fixada(c.id), silenciada(c.id),   // plano 1500c · CC-057/CC-058
       comSla ? (horarioDe(c) === undefined ? "-" : horarioDe(c)) : 0]);
   }
 
@@ -774,12 +800,20 @@ export function criarLista(A) {
           admin ? h("div", null, h("a", { class: "bt bt-prim bt-p", href: "#/config/numeros" }, "Conectar número")) : null)));
     }
     desenharCaido();
-    const soCache = !!(A.listaSoCache && A.listaCacheEm);
+    const soCache = !!(A.listaSoCache && A.listaCacheEm) || !!A.baseSoCache;   // plano 2000d · DC-067: a base guardada também conta
     avisoCache.hidden = !soCache;
     // plano 1000b · CB-016: a lista guardada de ontem diz «lista de ontem às 14:02» (a regra do desdeTexto), não só a hora
-    if (soCache) { const t = `Sem conexão · lista de ${L.desdeTexto(A.listaCacheEm).replace(/^desde /, "")}. Atualiza sozinha quando a internet voltar.`; if (avisoCache.textContent !== t) avisoCache.textContent = t; }
+    // plano 2000d · DC-069: e quantas mensagens esperam na fila para sair («· 5 mensagens esperando para sair»)
+    if (soCache) {
+      const nFila = typeof A.acoes.filaPendentes === "function" ? Number(A.acoes.filaPendentes()) || 0 : 0;
+      const fila = nFila ? ` ${nFila} ${nFila === 1 ? "mensagem esperando" : "mensagens esperando"} para sair.` : "";
+      const t = A.listaCacheEm ? `Sem conexão · lista de ${L.desdeTexto(A.listaCacheEm).replace(/^desde /, "")}.${fila} Atualiza sozinha quando a internet voltar.`
+        : `Sem conexão: mostrando o que ficou guardado neste aparelho.${fila} Atualiza sozinha quando a internet voltar.`;
+      if (avisoCache.textContent !== t) avisoCache.textContent = t;
+    }
     const atrasada = !soCache && (Number(A.falhasLista) || 0) >= 3 && A.itens.length > 0;   // plano 1000b · CB-087
     avisoAtraso.hidden = !atrasada;
+    avisoSom.hidden = !A.somBloqueado;   // plano 2000d · DC-023
     if (atrasada) { const t = A.listaOkEm ? `Lista sem atualizar ${L.desdeTexto(A.listaOkEm)}.` : "Lista sem atualizar."; if (atrasoTxt.textContent !== t) atrasoTxt.textContent = t; }
     // busca ativa
     const q = (A.busca || "").trim();
@@ -863,6 +897,8 @@ export function criarLista(A) {
         if (p) p.then(() => { const novos = [...lista.querySelectorAll(".cvl-item")].filter(x => x.getClientRects().length); const k = novos.indexOf(itens[j]); if (k >= 0 && novos[k + 1]) novos[k + 1].focus(); });
       }
       itens[j].focus();
+      // plano 2000d · DC-034: a conversa com o foco do teclado já começa a carregar (abre sem esperar a rede)
+      if (itens[j].dataset && itens[j].dataset.id && typeof A.acoes.preCarregar === "function") A.acoes.preCarregar(Number(itens[j].dataset.id));
       return true;
     },
   };

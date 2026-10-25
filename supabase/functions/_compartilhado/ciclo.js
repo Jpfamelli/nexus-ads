@@ -342,6 +342,17 @@ async function gravarResultadoAlertas(db, ids, dados) {
   }
 }
 
+/** plano 2000d · DA-346: cfg.silencio {de, ate} em horas cheias de São Paulo (pode atravessar a meia-noite; de = ate = desligado).
+    No silêncio só o alerta CRÍTICO sai; os outros nem são gravados — a condição é avaliada de novo na rodada depois do silêncio
+    (gravar e não mandar deixaria o alerta fora da janela de reenvio de 6 h). */
+export function emSilencio(silencio, agora) {
+  if (!silencio || typeof silencio !== "object") return false;
+  const de = Number(silencio.de), ate = Number(silencio.ate);
+  if (!Number.isInteger(de) || !Number.isInteger(ate) || de === ate || de < 0 || de > 23 || ate < 0 || ate > 23) return false;
+  const h = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "America/Sao_Paulo", hour: "2-digit", hourCycle: "h23" }).format(agora));
+  return de < ate ? h >= de && h < ate : h >= de || h < ate;
+}
+
 async function radar(db, cfg, cliente, ctx, falhas, fusos = []) {
   // o radar quebrado não pode engolir o aviso de integração (e vice-versa)
   let M = null, avaliados = [], erroRadar = null;
@@ -353,17 +364,19 @@ async function radar(db, cfg, cliente, ctx, falhas, fusos = []) {
     erroRadar = limparErro(e?.message || e);
   }
   const nome = M ? M.NOME : nomeCurto(cliente);
+  // plano 2000d · DA-346: no horário de silêncio do cliente só o crítico passa
+  const silencio = emSilencio(cliente?.cfg?.silencio, ctx.agora);
   const candidatos = [
     ...falhas.filter(f => deveAvisar(f, ctx.agora)).map(f => alertaDeIntegracao(f, nome)),
     ...fusos.map(x => alertaDeFuso(x, nome)),
     ...avaliados,
-  ];
-  const res = { alertas_ativos: avaliados.length, alertas_novos: 0, ...(erroRadar ? { erro_radar: erroRadar } : {}) };
+  ].filter(a => !silencio || a.sev === "critico");
+  const res = { alertas_ativos: avaliados.length, alertas_novos: 0, ...(erroRadar ? { erro_radar: erroRadar } : {}), ...(silencio ? { silencio: true } : {}) };
   const base = M || modeloVazio(comPainelUrl(cliente, cfg), ctx.hoje);
   const destinos = listaDestinos(base.CFG.waGestor);
   // plano 1000 (SV-084): alerta que NÃO saiu (WhatsApp do gestor falhou) volta na rodada seguinte — até 3 tentativas nas
   // primeiras 6 h; antes a dedupe de 24 h por chave impedia qualquer novo envio e o gestor nunca recebia
-  const reenviar = destinos.length ? await alertasNaoEnviados(db, cliente, ctx) : [];
+  const reenviar = destinos.length ? (await alertasNaoEnviados(db, cliente, ctx)).filter(r => !silencio || r.severidade === "critico") : [];
   if (!candidatos.length && !reenviar.length) return res;
 
   let novos = [];

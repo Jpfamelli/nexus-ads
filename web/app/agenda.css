@@ -422,7 +422,8 @@ button.agenda-proxima:focus-visible { outline: 2px solid var(--c-foco); outline-
 .agenda-atualizacao { max-width: 15rem; overflow: hidden; color: var(--c-texto-3); font-size: var(--fs-12); text-overflow: ellipsis; white-space: nowrap; }
 .agenda-atualizacao:empty { display: none; }
 .agenda-atualizar[aria-busy="true"] { cursor: progress; }
-.agenda-faixa [role="tab"]:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+/* plano 2000d · GY-104: o seletor apontava para .agenda-faixa (não existe) — a faixa dos dias é .ag-faixa */
+.ag-faixa [role="tab"]:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
 
 /* ---------------- plano 1000 (agenda-1) ---------------- */
 .agenda-procurar .ic { width: 15px; height: 15px; }
@@ -966,3 +967,27 @@ button.ag-hora-lotada[aria-checked="true"] { opacity: 1; }
   .flut-ag .ag-det-alca::before { content: ""; position: absolute; left: 50%; top: 50%; width: 40px; height: 4px; margin: -2px 0 0 -20px; border-radius: 999px; background: var(--c-texto-3); }
   .flut-ag .ag-det-alca:focus-visible { outline: 2px solid var(--c-foco); outline-offset: -2px; }
 }
+/* plano 2000d · GY-105: o horário livre (botão tracejado) mostra o foco do teclado */
+.ag-livre:focus-visible, .ag-mais-item:focus-visible, .ag-exemplo-sair:focus-visible { outline: 2px solid var(--c-foco); outline-offset: 2px; }
+/* plano 2000d · GY-106: alvos de 44 px no toque para os botões que ficaram de fora (mais do horário, procurar, encaixe depois, bloquear, exemplo) */
+@media (max-width: 1024px), (pointer: coarse) {
+  .ag-mais-item, .ag-procurar-item .bt, .ag-procurar-retorno, .ag-encaixe-depois, .ag-bloquear-horario,
+  .agenda-ver-exemplo, .ag-roteiro-exemplo, .ag-exemplo-sair, .agc-copiar-dia { min-height: 44px; }
+}
+/* plano 2000d · GY-107: no alto contraste, o que está escolhido (chip de serviço, atalho, retorno, dia) não depende só da cor */
+@media (forced-colors: active) {
+  .ag-serv-chip[aria-pressed="true"], .ag-atalhos .bt[aria-pressed="true"], .ag-retorno[aria-pressed="true"], .agc-motivo[aria-pressed="true"],
+  .ag-faixa-d.sel, .ag-mes-dia.sel { outline: 2px solid Highlight; outline-offset: 1px; }
+  .ag-det-selos .pilula, .ag-exemplo-aviso { border: 1px solid CanvasText; }
+}
+/* plano 2000d · GY-108: a faixa «Semana de exemplo» (texto + «Sair do exemplo») quebra linha no celular sem empurrar a tela */
+.ag-exemplo-aviso { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .8rem; margin-bottom: .6rem; }
+.ag-exemplo-aviso > span { flex: 1 1 14rem; min-width: 0; }
+.agenda-ver-exemplo, .ag-roteiro-exemplo { white-space: normal; }
+/* plano 2000d · GY-109: «Adicionar serviço» no limite fica visível mas apagado (aria-disabled explica no toque) */
+.agc-add-duracao[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+/* plano 2000d · GY-110: os selos do detalhe (encaixe, 1ª vez, aniversário, lembrete) em linha que quebra */
+.ag-det-selos { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .4rem; margin: .1rem 0 .2rem; }
+.ag-det-selos:empty { display: none; }
+/* plano 2000d · GY-090: o aviso de copiar um dia fechado */
+.agc-copiar-fechado { margin: 0; font-size: var(--fs-13); }

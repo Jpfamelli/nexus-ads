@@ -84,7 +84,18 @@ async function avisarSemDestino(db, cliente, tipo) {
   } catch (e) { console.error("nx-relatorio aviso sem destino:", limparErro(e?.message || e)); return false; }
 }
 
+/** plano 2000d · DA-187: cfg.relDias = dias da semana (0 = domingo … 6 = sábado) em que o diário sai; ausente/vazio = todo dia.
+    O dia é o de HOJE em São Paulo (o envio da manhã). «Forçar» (enviar agora pelo painel) ignora. */
+export function diaDoRelatorio(relDias, hoje) {
+  if (!Array.isArray(relDias) || !relDias.length) return true;
+  const dia = new Date(`${hoje}T12:00:00Z`).getUTCDay();
+  return relDias.some(d => Number(d) === dia);
+}
+
 async function gerar(db, cfg, cliente, ctx) {
+  if (ctx.tipo === "diario" && !ctx.forcar && !diaDoRelatorio(cliente?.cfg?.relDias, ctx.hoje)) {
+    return { cliente: cliente.slug, tipo: ctx.tipo, ok: true, pulado: "fora dos dias do relatório" };
+  }
   // plano 1000 (AD-020): o texto termina com o link do painel (nx_config.saas_url) quando o cliente não tem um próprio
   const M = await carregarModelo(db, comPainelUrl(cliente, cfg), ctx.hoje, JANELA);
   const base = { cliente: cliente.slug, tipo: ctx.tipo };

@@ -18,6 +18,7 @@ begin
     delete from vault.secrets s using public.nx_canais k
      where k.cliente_id = v and s.id in (k.token_segredo, k.app_secret_segredo, k.codewords_api_segredo, k.codewords_hook_segredo);
     delete from public.nx_clientes where id = v;            -- cascata: conversas, mensagens, contatos, negócios, métricas, notificações, fila, canais…
+    perform set_config('nx.faxina', 'on', true);   -- plano 2000d · DS-153: a auditoria só aceita delete na retenção explícita
     delete from public.nx_auditoria where cliente_id = v;   -- sem FK
     delete from public.nx_midia_lixo where cliente_id = v;  -- o gatilho de exclusão do cliente enfileira a pasta do Storage
   end if;

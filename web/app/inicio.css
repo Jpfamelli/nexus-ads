@@ -620,3 +620,46 @@ details.ini-canal-erro .bt { margin-top: var(--esp-1); min-height: 32px; }
   .ini-esfr-acoes .bt, .ini-sempres-todos, .ini-org-bt, .ini-desde-acoes .bt, .ini-aniv-mais { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { .ini-exemplo .ini-exemplo-faixa { box-shadow: none; } }
+
+/* ============================================================
+   Plano 2000d (25/10/2026) — frente inicio, complemento (IY-*). Só tokens.
+   ============================================================ */
+/* plano 2000d · DR-314 (pendência da frente crm): todo controle do Início com o mesmo anel de foco do teclado */
+.inicio :is(.kpi, .kpi a, button, a[href]):focus-visible,
+.ini :is(button, a[href], summary, select, input, [tabindex="0"]):focus-visible { outline: var(--foco-largura, 2px) solid var(--c-foco); outline-offset: 2px; }
+/* plano 2000d · IY-076: rolar até um bloco (?bloco=metas, «Comece aqui») não esconde o título debaixo da barra do topo */
+.ini [data-bloco], .ini .ini-onb, .ini .ini-guia-cartao { scroll-margin-top: calc(var(--topo, 56px) + var(--esp-3)); }
+/* plano 2000d · IY-077: a manchete quebra em linhas equilibradas (sem uma palavra sozinha na última linha) */
+#ini-h { text-wrap: balance; }
+/* plano 2000d · IY-078 + IY-045: a folha do resumo rola sozinha (sem puxar a página de trás) e, aberta, a página de trás não rola */
+.ini-resumo-folha { overscroll-behavior: contain; }
+html.ini-folha-aberta, html.ini-folha-aberta body { overflow: hidden; }
+/* plano 2000d · IY-079: os blocos recolhidos em «Mais detalhes» só são pintados quando aparecem (a 1ª pintura do celular fica mais leve) */
+.ini-mais .ini-grade > .rel-cartao { content-visibility: auto; contain-intrinsic-size: auto 320px; }
+/* plano 2000d · IY-081: números em colunas não dançam enquanto contam (placar, equipe, metas, barras do mês) */
+.ini-placar-n, .ini-placar-v, .ini-equipe-tab .num, .ini-meta-v, .ini-barra-v, .ini-kpi-v { font-variant-numeric: tabular-nums; }
+/* plano 2000d · IY-074: no alto contraste do Windows (forced-colors) as barras de progresso perdem o fundo — ganham a cor do sistema */
+@media (forced-colors: active) {
+  .ini-meta-barra i, .ini-guia-barra-f, .ini-onb-barra i, .ini-barra-t i, .ini-origem-t i, .ini-equipe-meta i { background: Highlight; forced-color-adjust: none; }
+  .ini-meta-barra, .ini-guia-barra, .ini-onb-barra, .ini-barra-t, .ini-origem-t { border: 1px solid CanvasText; }
+  .ini-meta-barra b { background: CanvasText; forced-color-adjust: none; }
+}
+/* plano 2000d · IY-080: quem pede mais contraste no sistema vê as bordas dos cartões e as notas mais fortes */
+@media (prefers-contrast: more) {
+  .ini-kpi, .ini .rel-cartao { border-color: var(--c-texto-2); }
+  .ini .rel-nota, .ini-kpi-sub { color: var(--c-texto); }
+}
+/* plano 2000d · IY-075: imprimir o Início (Ctrl+P sem o resumo) leva só os números — sem botões, barras de organizar e ações */
+@media print {
+  html:not(.ini-imprimindo) .ini :is(.ini-bl-barra, .ini-rapidas, .ini-kpis-rod, .ini-puxar, .ini-kpi-ajuda, .ini-i-bt, .ini-agora-acoes, .ini-espera-acoes, .ini-prox-acoes, .ini-blocos-rodape, .rel-btn, .bt) { display: none !important; }
+  html:not(.ini-imprimindo) .ini details.ini-mais > .ini-grade { display: grid !important; }
+  html:not(.ini-imprimindo) .ini .rel-cartao { break-inside: avoid; }
+}
+/* plano 2000d · IY-064: o «×» do aviso das novidades */
+.ini-novidades-x { margin-left: auto; flex: none; width: 32px; height: 32px; display: inline-grid; place-items: center; border-radius: var(--r-pp); color: var(--c-texto-2); }
+.ini-novidades-x .ic { width: 14px; height: 14px; }
+/* plano 2000d · IY-051: «Sair do modo TV» discreto no canto */
+.ini-tv-sair { justify-self: end; margin-bottom: var(--esp-2); }
+/* plano 2000d · DR-125 */
+.ini-tf-semprazo { margin: var(--esp-1) 0 0; }
+@media (pointer: coarse), (max-width: 760px) { .ini-novidades-x { width: 44px; height: 44px; } .ini-tv-sair { min-height: 44px; } }

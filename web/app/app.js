@@ -791,7 +791,7 @@ async function atualizarManifestoApp() {
     catch (e) { raster = null; console.warn("ícones da marca indisponíveis; ficam os empacotados", e && e.message); }   // sem logo próprio ou imagem sem CORS
     if (seq !== manifestoEstado.seq) return;
     // plano 2000d · DU-261: atalhos do ícone pelos módulos da empresa (com o nome da vertical); DU-446: recebe «Compartilhar» do celular
-    const atalhos = P.atalhosDoIcone ? P.atalhosDoIcone(E.cliente && E.cliente.modulos, mod => { try { return mod === "crm" && E.M.vocab ? E.M.vocab.vocab(E.cliente ? E.cliente.vertical : "generico").crm : null; } catch { return null; } }) : [];
+    const atalhos = P.atalhosDoIcone ? P.atalhosDoIcone(E.cliente && E.cliente.modulos, mod => { try { return mod === "crm" && E.M.vocab ? E.M.vocab.vocab(E.cliente ? E.cliente.vertical : "generico").crm : null; } catch { return null; } }, E.workspace) : [];   // plano 2000d · SX-056
     const manifesto = P.construirManifesto({ nome, base, workspace: E.workspace, rota: E.workspace ? E.M.rotas.produtoInicial(E.workspace) : null, fundo,
       icones: raster ? P.iconesDeRaster(raster) : P.iconesPadrao(base), atalhos, compartilhar: !!E.sessao });
     if (!P.aplicarManifesto({ manifesto, estado: manifestoEstado })) throw new Error("manifesto_nao_aplicado");
@@ -870,7 +870,7 @@ const ARQUIVOS_DO_APP = [
   "app.css", "shell.css", "conversas.css", "crm.css", "agenda.css", "relatorios.css", "automacoes.css", "inicio.css", "config.css",
 ];
 /** O que o app importa de fora da pasta (web/): os dados de conexão e o núcleo de cálculo que Anúncios divide com o painel clássico. */
-const ARQUIVOS_DA_RAIZ = ["dados.js", "nucleo.js"];
+const ARQUIVOS_DA_RAIZ = ["dados.js", "nucleo.js", "demo.js"]; // plano 2000d · SX-106: a semana de exemplo da Agenda (../demo.js) também abre sem internet
 const urlArq = nome => new URL(`./${nome}?v=${encodeURIComponent(VERSAO)}`, import.meta.url).href;
 const urlArqRaiz = nome => new URL(`../${nome}?v=${encodeURIComponent(VERSAO)}`, import.meta.url).href;
 
@@ -1935,7 +1935,9 @@ function construirCtx(r, alvo) {
     // extras do shell (usados pelas telas da F3: config, admin)
     shell: { recarregarSessao, recarregarMarca, escolherCliente, sair, pintarMarca, marcaEfetiva: () => E.marca, marcaOrg: marcaOrgSessao,
       aplicarMarcaCliente, tema, dev: devLigado(), prontos: E.prontos, clientes: () => (E.sessao ? E.sessao.clientes : []),
-      marcaPublica: () => E.marcaPublica },
+      marcaPublica: () => E.marcaPublica,
+      // plano 2000d · SX-054 (DU-078/DU-079 da frente auto): «Quero continuar»/«Pedir mais automações» abrem o pedido de contratação pronto
+      pedirContratacao: origem => abrirPedidoDeContratacao(E.cliente, typeof origem === "string" && /^[a-z0-9_]{2,40}$/.test(origem) ? origem : "tela") },
   };
   const ponte = nome => async (...args) => {
     if (!cli || !cli.modulos.includes("crm") || !pronto("crm")) { E.ui.toast("O CRM não está disponível.", { tipo: "info" }); return null; }
@@ -2892,12 +2894,13 @@ function ambienteComandos() {
     rotaOk: comandos.criarRotaOk({ rotas, op: opcoesAcesso(), workspace: E.workspace }),
     pode: min => rotas.podePapel(papelAtual(), min),
     empresas: E.sessao ? E.sessao.clientes.length : 0,
-    instalar: !!modoInstalacao(), suporte: !!(E.marca && E.marca.suporte_wa), temCliente: !!cli,
+    instalar: !!modoInstalacao(), suporte: !!(E.marca && (E.marca.suporte_wa || E.marca.suporte_email)), temCliente: !!cli,   // plano 2000d · SX-097
     // plano 2000d · DU-283: quantos produtos a empresa tem (o «Trocar de produto» só com 2+); DU-281: o modo foco; DU-239: passos dispensados
     produtosLiberados: cli ? Object.keys(rotas.PRODUTOS).filter(id => !rotas.produtoIncluso || rotas.produtoIncluso(id, cli.modulos)).length : 0,
     outrosProdutos: cli && rotas.nomesProdutos ? Object.keys(rotas.PRODUTOS).filter(id => id !== E.workspace && (!rotas.produtoIncluso || rotas.produtoIncluso(id, cli.modulos)))
       .map(id => rotas.nomesProdutos({ padrao: (E.produto || "") === "Órbita" })[id]) : [],
     modoFoco: document.documentElement.classList.contains("modo-foco"),
+    apresentacao: emApresentacao(),   // plano 2000d · SX-100
     passosDispensados: !!(E.onbDispensado),
     // plano 1500c · UC-012/UC-037: «Comece aqui» só para a equipe com passo pendente; «Novidades» quando a versão nova trouxe notas
     passosEquipe: !!(cli && !rotas.podePapel(papelAtual(), "admin") && estadoComeceAqui() && !estadoComeceAqui().completo),
@@ -2930,14 +2933,16 @@ function irEClicar(hash, seletor, ms = 6000) {
 
 function falarComSuporte() {
   const wa = E.marca && E.marca.suporte_wa;
-  if (!wa) return;
+  const email = E.marca && E.marca.suporte_email;   // plano 2000d · SX-097: revenda sem WhatsApp, mas com e-mail de suporte
+  if (!wa && !email) return;
   const app = E.M.rotas.nomeDoApp({ produto: E.produto, workspace: E.workspace }).name;
   // plano 2000d · DU-285: empresa, tela, versão e aparelho já vão na mensagem (nada de dado de cliente)
   const nav = typeof navigator !== "undefined" ? navigator : {};
   const aparelho = `${String((nav.userAgentData && nav.userAgentData.platform) || nav.platform || "").slice(0, 30)}${typeof innerWidth === "number" ? ` · ${innerWidth} px` : ""}`.trim();
   const texto = E.M.comandos && E.M.comandos.textoSuporte ? E.M.comandos.textoSuporte({ app, tela: E.titulo, empresa: E.cliente ? E.cliente.nome : "", versao: VERSAO, aparelho })
     : `Olá! Preciso de ajuda no ${app}.`;
-  window.open(E.ui.linkWhatsApp(texto, wa), "_blank", "noopener,noreferrer");
+  if (wa) { window.open(E.ui.linkWhatsApp(texto, wa), "_blank", "noopener,noreferrer"); return; }
+  location.href = `mailto:${encodeURIComponent(email).replace(/%40/g, "@")}?subject=${encodeURIComponent(`Ajuda no ${app}`)}&body=${encodeURIComponent(texto)}`;
 }
 /** plano 2000d · DU-281: modo foco — recolhe o menu lateral e esconde as faixas que não bloqueiam; vale nesta aba até sair. */
 function alternarModoFoco(on = !document.documentElement.classList.contains("modo-foco")) {
@@ -3003,6 +3008,7 @@ function acoesDoShell() {
     "recarregar": () => recarregarComCuidado(),   // plano 2000d · DU-284
     "bloquear-tela": () => bloquearTela(),        // plano 2000d · DU-141
     "modo-foco": () => alternarModoFoco(),        // plano 2000d · DU-281
+    "modo-apresentacao": () => alternarApresentacao(),   // plano 2000d · SX-100
     "reabrir-passos": () => { E.onbDispensado = false; if (E.api && E.api.rpc) E.api.rpc("nx_onboarding_marcar", { p_passo: "reabrir" }).catch(() => {}); navegar("#/inicio?passos=1"); },   // plano 2000d · DU-239
     "notificacoes": () => { const b = $("bt-sino"); if (b) abrirSino(b); else E.ui.toast("Escolha uma empresa para ver as notificações.", { tipo: "info" }); },
     // plano 1500c · UC-028: o Configurações e o CRM leem a query (convidar=1, assistente=novo, importar=1) — pendência das frentes config/crm;
@@ -3451,6 +3457,17 @@ function abrirPedidoDeContratacao(cli = E.cliente, origem = "teste") {
     acoes });
 }
 
+/** plano 2000d · SX-055 (DU-096): o tempo que as automações pouparam nos últimos 30 dias, em frase — só com Automações no plano e pronta, e só
+    quando o servidor manda mensagens_30d (sem o dado, ou com erro, nada aparece). */
+async function tempoPoupadoDoTeste(cli = E.cliente) {
+  if (!cli || !Array.isArray(cli.modulos) || !cli.modulos.includes("automacoes") || !pronto("automacoes")) return "";
+  const [L, d] = await Promise.all([arq("auto-logica.js"), E.api.rpcC("nx_automacoes_listar")]);
+  const itens = Array.isArray(d) ? d : (d && Array.isArray(d.itens) ? d.itens : []);
+  const mpm = Number(d && d.base && d.base.minutos_por_mensagem);
+  const te = L && typeof L.tempoEconomizado === "function" ? L.tempoEconomizado(itens, Number.isFinite(mpm) && mpm > 0 ? { minutosPorMensagem: mpm } : {}) : null;
+  return E.M.rotas.fraseTempoPoupado(te);
+}
+
 /* ---- plano 1500c · UC-005: a janela «Seu teste acaba em N dias» (3 e 1 dia), uma vez por dia, para o administrador ---- */
 function avisarFimDoTeste() {
   const cli = E.cliente;
@@ -3464,9 +3481,13 @@ function avisarFimDoTeste() {
   const { ui } = E;
   // plano 2000d · DU-233: 7, 3, 1 e 0 dias, com o tom mudando (lembrança → urgência) e «Ver planos» direto
   const av = E.M.rotas.avisoFimTeste ? E.M.rotas.avisoFimTeste(dias) : { titulo: dias === 1 ? "Seu teste acaba amanhã" : `Seu teste acaba em ${dias} dias`, texto: "", tom: "aviso" };
+  // plano 2000d · SX-055 (DU-096 da frente auto): «Suas automações pouparam ≈ 6 h…» — o valor do que o teste já entregou, quando o servidor tem o dado
+  const poupado = ui.h("p", { class: "aviso-teste-poupado", hidden: true });
+  tempoPoupadoDoTeste(cli).then(t => { if (t && poupado.isConnected) { poupado.textContent = t; poupado.hidden = false; } }).catch(() => {});
   ui.modal({ titulo: av.titulo, largura: "p", protegerTexto: false,
     corpo: ui.h("div", { class: "pilha-p", dataset: { tom: av.tom } },
       av.texto ? ui.h("p", { class: "aviso-teste-tom" }, av.texto) : null,
+      poupado,
       ui.h("p", null, `O teste grátis da ${cli.nome} vai até ${ui.dataCurtaBR(String(cli.teste_ate).slice(0, 10))}. Depois disso, dá para consultar, mas não alterar nada, e os envios automáticos param.`),
       ui.h("p", { class: "fraco" }, "Para continuar sem interrupção, peça a assinatura agora.")),
     acoes: [{ rotulo: dias > 1 ? "Lembrar depois" : "Lembrar amanhã", tipo: "neutro" },
@@ -3545,6 +3566,7 @@ function aplicarApresentacao(on = emApresentacao()) {
 function alternarApresentacao(on = !emApresentacao()) {
   try { if (on) sessionStorage.setItem(CHAVE_APRESENTACAO, "1"); else sessionStorage.removeItem(CHAVE_APRESENTACAO); } catch { /* sem storage: vale até recarregar */ }
   aplicarApresentacao(on);
+  if (typeof atualizarTitulo === "function") atualizarTitulo();   // plano 2000d · SX-080
   return on;
 }
 
@@ -3630,13 +3652,24 @@ function linkDaNotificacao(it) {
   }
   return null;
 }
+/** plano 2000d · SX-068/SX-069: data do servidor com espaço («2026-10-05 14:00:00+00») → com «T», que o Safari entende. */
+function isoSeguro(iso) {
+  if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}[ T]\d{2}:/.test(iso)) return iso;
+  return iso.replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00");   // «+00» do Postgres vira «+00:00» (o Safari não lê o fuso curto)
+}
 /** «Hoje», «Ontem» ou a data (dd/mm/aaaa) do dia em São Paulo. */
 function rotuloDoDia(iso, agora = new Date()) {
-  const d = new Date(iso);
+  const d = new Date(typeof isoSeguro === "function" ? isoSeguro(iso) : iso);   // plano 2000d · SX-068: «2026-10-05 14:00» (Postgres) também no Safari
   if (!iso || Number.isNaN(d.getTime())) return "Antes";
   const hoje = E.ui.hojeSP(agora), dia = E.ui.hojeSP(d);
   if (dia === hoje) return "Hoje";
   if (dia === E.ui.hojeSP(new Date(agora.getTime() - DIA_MS))) return "Ontem";
+  // plano 2000d · SX-101: até 6 dias atrás, o dia da semana («Terça-feira · 20/10») — mais fácil de situar que só a data
+  const dias = Math.round((Date.parse(`${hoje}T12:00:00Z`) - Date.parse(`${dia}T12:00:00Z`)) / DIA_MS);
+  if (dias > 1 && dias < 7) {
+    const sem = new Intl.DateTimeFormat("pt-BR", { weekday: "long", timeZone: "America/Sao_Paulo" }).format(d);
+    return `${sem.charAt(0).toUpperCase()}${sem.slice(1)} · ${E.ui.dataCurtaBR(dia)}`;
+  }
   return E.ui.dataBR(dia);
 }
 
@@ -3917,10 +3950,17 @@ function faixasDoMomento() {
 function definirTitulo(texto) { E.titulo = texto || ""; atualizarTitulo(); lembrarRecente(texto); }
 function atualizarTitulo() {
   const n = E.badges.conversas || 0;
-  const nomeApp = E.workspace ? E.M?.rotas?.PRODUTOS?.[E.workspace]?.nome : "";
-  const marca = E.produto || "Órbita";
+  // plano 2000d · SX-067: na revenda a aba diz «Anúncios», nunca «Nexus Ads» (o mesmo nome do seletor de produtos)
+  const padraoMarca = (E.produto || "") === "Órbita";
+  const nomes = E.M?.rotas?.nomesProdutos ? E.M.rotas.nomesProdutos({ padrao: padraoMarca }) : null;
+  const nomeApp = E.workspace ? (nomes ? nomes[E.workspace] : E.M?.rotas?.PRODUTOS?.[E.workspace]?.nome) : "";
+  // plano 2000d · SX-066: antes de a marca chegar, o nome neutro («Painel»), não «Órbita» na aba de uma revenda
+  const marca = E.produto || E.M?.rotas?.NOME_NEUTRO || "Painel";
   const contextoProduto = nomeApp ? `${nomeApp} · ${marca}` : marca;
-  document.title = `${n > 0 ? `(${n > 99 ? "99+" : n}) ` : ""}${E.titulo ? `${E.titulo} · ` : ""}${contextoProduto}`;
+  // plano 2000d · SX-080: no modo apresentação o nome do cliente aberto (título da tela) sai também da aba, que aparece ao compartilhar a tela
+  const raizDoc = document.documentElement;
+  const tituloTela = E.titulo && !(raizDoc && raizDoc.classList && raizDoc.classList.contains("apresentacao")) ? E.titulo : "";
+  document.title = `${n > 0 ? `(${n > 99 ? "99+" : n}) ` : ""}${tituloTela ? `${tituloTela} · ` : ""}${contextoProduto}`;
 }
 function definirBadge(modulo, n) {
   const antes = E.badges[modulo] || 0;
@@ -4114,7 +4154,7 @@ async function conferirNotificacoesDeCanal() {
 }
 /** Plano 1000 (AS-244): «há 25 min» / «desde 13/10 14:02» de quando o número caiu (o `desde` da lista); sem data, nada. */
 function desdeQuando(iso, agora = new Date()) {
-  const d = iso ? new Date(iso) : null;
+  const d = iso ? new Date(typeof isoSeguro === "function" ? isoSeguro(iso) : iso) : null;   // plano 2000d · SX-069
   if (!d || Number.isNaN(d.getTime()) || d > agora) return "";
   const min = Math.round((agora.getTime() - d.getTime()) / 60000);
   if (min < 1) return "agora há pouco";

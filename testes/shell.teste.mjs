@@ -707,7 +707,7 @@ await teste("rede.js: chamada lenta (aos 4 s) vira 'lento' e volta sozinha; offl
 await teste("rede.js: tenta sozinho em 2, 4, 8, 15 e 30 s (e 30 s depois); acha a internet, depois o servidor, e volta", async () => {
   let internet = false, servidor = false, sondagens = 0;
   const rel = relogioFalso(), jan = janelaFalsa(), nav = { onLine: false };
-  const r = REDE.criarRede({ nav, janela: jan, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, ping: async () => internet,
+  const r = REDE.criarRede({ aleatorio: () => .5, /* plano 2000d: SX-036 sorteia ±20 %; .5 = a espera-base */ nav, janela: jan, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, ping: async () => internet,
     sondar: async () => { sondagens++; if (servidor) r.sucesso(); else r.falha({ codigo: "http_503" }); } });
   assert.equal(r.estado, "offline");
   const esperas = [];
@@ -729,7 +729,7 @@ await teste("rede.js: tenta sozinho em 2, 4, 8, 15 e 30 s (e 30 s depois); acha 
 await teste("rede.js: «Tentar agora» e o evento online tentam já (sem esperar o recuo)", async () => {
   let sondagens = 0, internet = false;
   const rel = relogioFalso(), jan = janelaFalsa(), nav = { onLine: true };
-  const r = REDE.criarRede({ nav, janela: jan, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, ping: async () => internet, sondar: async () => { sondagens++; r.sucesso(); } });
+  const r = REDE.criarRede({ aleatorio: () => .5, /* plano 2000d: SX-036 */ nav, janela: jan, agendar: rel.agendar, cancelar: rel.cancelar, agora: rel.agora, ping: async () => internet, sondar: async () => { sondagens++; r.sucesso(); } });
   r.falha({ codigo: "http_503" });
   assert.equal(r.proximaTentativaEm - rel.agora(), 2000);
   internet = false; await r.tentarAgora();
@@ -1933,7 +1933,8 @@ await teste("ações do catálogo filtradas por papel e produto (aceite do M18)"
   // plano 1500c: UCC-082…085 — Central de ajuda, Ver plano, tour, recarregar e notificações valem em qualquer produto
   // plano 1500c: UC-028/UC-038 — «Convidar pessoa» (admin) e «Situação dos serviços» também valem em qualquer produto
   // plano 2000d: DU-141/DU-281 — «Bloquear a tela» e «Modo foco» são do shell (valem em todo produto)
-  assert.deepEqual(ads.filter(i => !["alternar-tema", "abrir-produto", "atalhos", "sair", "primeiros-passos", "central-ajuda", "ver-plano", "tour", "recarregar", "notificacoes", "convidar-pessoa", "situacao-servicos", "bloquear-tela", "modo-foco"].includes(i)), [], "em Anúncios nenhuma ação de CRM/Conversas/Agenda");
+  // plano 2000d: SX-100 — «Modo apresentação» também é do shell (vale em todo produto)
+  assert.deepEqual(ads.filter(i => !["alternar-tema", "abrir-produto", "atalhos", "sair", "primeiros-passos", "central-ajuda", "ver-plano", "tour", "recarregar", "notificacoes", "convidar-pessoa", "situacao-servicos", "bloquear-tela", "modo-foco", "modo-apresentacao"].includes(i)), [], "em Anúncios nenhuma ação de CRM/Conversas/Agenda");
   // papel: leitura não cria nada; atendente cria mas não vê Primeiros passos (é do admin)
   const leitura = idsDe(ambiente({ papel: "leitura" }));
   assert.deepEqual(leitura.filter(i => i.startsWith("nova-") || i === "marcar-consulta" || i === "primeiros-passos"), [], "papel leitura: sem ações de criar");

@@ -1070,6 +1070,8 @@ test("CB-094 (central) · etiquetar em lote conta as que já tinham as etiquetas
     d.aoModal(async o => { achar(o.corpo, "#cv-etl-e1").checked = true; return o.acoes[1].fn({ erro() {} }); });
     achar(c.alvo, ".cvl-lote-etq").click();
     await esperar(30);
+    // plano 2000d: DC-014 — etiquetar em lote agora tem Desfazer: o servidor só ouve quando o aviso fecha
+    { const des = d.desfazeres.at(-1); await des.firmar({}); await esperar(10); }
     assert.equal(srv.conta("nx_cv_etiquetas"), 1);
     assert.equal(d.toasts.at(-1), "1 conversa etiquetada · 2 já tinham as etiquetas.");
   } finally { c.fim(); d.fim(); }
@@ -1748,7 +1750,8 @@ test("CB-130/CB-055 (central) · exportar confirma antes; o aviso tem «Cancelar
   const u0 = URL.createObjectURL;
   const blobs = [];
   URL.createObjectURL = b => { blobs.push(b); return "blob:exp"; };
-  const c = await montarCentral(d, srv);
+  // plano 2000d: DC-029 — o supervisor ganha a janela com «Incluir notas internas»; este teste é o de quem atende (confirmar simples)
+  const c = await montarCentral(d, srv, { extraCtx: { pode: p => p !== "supervisor" } });
   try {
     await c.abrir(901);
     const confirmacoes = [];
@@ -2432,8 +2435,9 @@ test("CB-018 (central) · lote que falha no meio: as que não foram voltam selec
     await o.firmar(); o._fim({ estado: "mantida" }); await esperar(20);
     assert.equal(achar(c.alvo, ".cvl-lote").hidden, false, "a seleção voltou");
     const marcadas = c.alvo.querySelectorAll('.cvl-item[aria-checked="true"]').map(x => Number(x.dataset.id));
-    assert.deepEqual(marcadas.sort(), [902, 903]);
-    assert.ok(d.toasts.some(t => /2 conversas ficaram sem marcar/.test(t)));
+    // plano 2000d: DC-012 — o lote marca em paralelo (4 por vez) e a falha numa não para as outras: só a 902 sobra.
+    assert.deepEqual(marcadas.sort(), [902]);
+    assert.ok(d.toasts.some(t => /1 conversa ficou sem marcar/.test(t)));
   } finally { c.fim(); d.fim(); }
 });
 
@@ -2488,7 +2492,7 @@ test("CB-116/CB-244 (central) · filtro lembrado com departamento e etiqueta que
   try {
     await esperar(20);
     assert.ok(d.toasts.some(t => /Um filtro guardado foi removido/.test(t)));
-    assert.deepEqual(JSON.parse(globalThis.localStorage.getItem("nx-cv-filtro:c1")), { etiquetas: ["e1"] });
+    assert.deepEqual(JSON.parse(globalThis.localStorage.getItem("nx-cv-filtro:c1:u1")), { etiquetas: ["e1"] });   // plano 2000d: DC-020 — por conta
     const ult = srv.chamadas.filter(x => x[0] === "nx_cv_listar").at(-1)[1].p_filtro;
     assert.equal(ult.departamento_id, undefined);
     assert.deepEqual(ult.etiquetas, ["e1"]);

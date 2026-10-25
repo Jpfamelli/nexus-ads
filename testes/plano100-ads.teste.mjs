@@ -564,7 +564,8 @@ test("revisão · cartão de receita estimada não diz «valor informado» (clie
 test("revisão · painel clássico «Desde a sua última visita»: fechamento sem valor diz «sem valor» (não «R$ 0») e o total some quando é 0", () => {
   const p = ler("web/painel.js");
   assert.match(p, /\$\{M\.valorDe\(L\)\.semValor \? "sem valor" : brl0\(M\.valorLead\(L\)\)\}<\/span>/);
-  assert.match(p, /\$\{total > 0 \? ` · \$\{brl0\(total\)\}` : ""\}<\/h2>/);
+  // plano 2000d: o total diz «(estimativa)/(parte estimada)» quando há valor pela tabela (KX-071)
+  assert.match(p, /\$\{total > 0 \? ` · \$\{brl0\(total\)\}\$\{esc\(totalEst\)\}` : ""\}<\/h2>/);
 });
 
 test("revisão · data-dias=\"0\" vale na visita inteira: a página seguinte (sem parâmetros) mantém a origem; a próxima visita começa vazia", () => {

@@ -85,6 +85,8 @@ export function hashClientes(filtro = {}) {
   if (filtro.busca) q.set("busca", filtro.busca);
   if (filtro.status) q.set("status", filtro.status);
   if (filtro.org_id) q.set("org", filtro.org_id);
+  // plano 2000d · FX-076: o filtro do KPI («perto do limite», «teste acabando», etiqueta…) também volta ao sair do cliente
+  if (filtro.local) q.set("local", filtro.local);
   const t = q.toString();
   return t ? `#/admin/clientes?${t}` : "#/admin/clientes";
 }
@@ -303,7 +305,10 @@ export function mrrClientes(itens, planos) {
 }
 /** plano 1500c · UCB-097: o nome do CSV diz o filtro (situação e filtro local). */
 export function nomeCsvClientes(filtro = {}, hoje = "") {
-  const partes = ["clientes", filtro.status, filtro.local === "perto" ? "perto-do-limite" : filtro.local === "sem_pacote" ? "sem-pacote" : filtro.local, hoje].filter(Boolean);
+  // plano 2000d · FX-104: «etiqueta:VIP» virava um nome com «:» (proibido no Windows) — sai «etiqueta-vip»
+  const local = typeof filtro.local === "string" && filtro.local.startsWith("etiqueta:")
+    ? `etiqueta-${sugerirSlug(filtro.local.slice(9)) || "x"}` : filtro.local === "perto" ? "perto-do-limite" : filtro.local === "sem_pacote" ? "sem-pacote" : filtro.local;
+  const partes = ["clientes", filtro.status, local, hoje].filter(Boolean);
   return `${partes.join("-")}.csv`;
 }
 /** plano 1500c · UCB-127: a mensagem ao cliente cujo teste acaba (o produto é o nome da marca da revenda). */
@@ -371,7 +376,15 @@ export function rotuloPagamento(sit) {
 
 /** plano 2000d · DU-185: CPF ou CNPJ com dígitos verificadores. → "cpf" | "cnpj" | null (inválido) ; vazio → "" */
 export function tipoDocumento(v) {
-  const d = String(v ?? "").replace(/\D/g, "");
+  // plano 2000d · FX-099: o CNPJ alfanumérico (Receita, a partir de jul/2026): 12 letras/números + 2 dígitos; letra vale código ASCII − 48
+  const bruto = String(v ?? "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+  if (/[A-Z]/.test(bruto)) {
+    if (!/^[0-9A-Z]{12}\d{2}$/.test(bruto)) return null;
+    const val = c => c.charCodeAt(0) - 48;
+    const dv = n => { const pesos = n === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]; let s = 0; for (let i = 0; i < n; i++) s += val(bruto[i]) * pesos[i]; const r = s % 11; return r < 2 ? 0 : 11 - r; };
+    return dv(12) === Number(bruto[12]) && dv(13) === Number(bruto[13]) ? "cnpj" : null;
+  }
+  const d = bruto;
   if (!d) return "";
   if (/^(\d)\1+$/.test(d)) return null;
   if (d.length === 11) {
@@ -386,7 +399,7 @@ export function tipoDocumento(v) {
 }
 /** DU-185: «12.345.678/0001-95» / «123.456.789-09». */
 export function formatarDocumento(v) {
-  const d = String(v ?? "").replace(/\D/g, "");
+  const d = limparDocumento(v);      // plano 2000d · FX-099: guarda as letras do CNPJ alfanumérico
   if (d.length === 14) return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
   if (d.length === 11) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
   return String(v ?? "");
@@ -395,7 +408,7 @@ export function formatarDocumento(v) {
 /** DU-185: o bloco «Contato do cliente» do formulário (ct_*) → {valor: {…}|null, erro: {campo, msg}|null}. Vazio = null (nada a guardar). */
 export function lerContato(d = {}) {
   const t = k => String(d[`ct_${k}`] ?? "").trim();
-  const v = { responsavel: t("responsavel"), whatsapp: t("whatsapp").replace(/[^\d+]/g, ""), email: t("email").toLowerCase(), documento: t("documento").replace(/\D/g, "") };
+  const v = { responsavel: t("responsavel").replace(/\s+/g, " "), whatsapp: t("whatsapp").replace(/[^\d+]/g, ""), email: t("email").toLowerCase(), documento: limparDocumento(t("documento")) };
   if (v.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.email)) return { valor: null, erro: { campo: "ct_email", msg: "Esse e-mail não parece válido." } };
   if (v.whatsapp && v.whatsapp.replace(/\D/g, "").length < 10) return { valor: null, erro: { campo: "ct_whatsapp", msg: "Use o número com DDD." } };
   if (v.documento && !tipoDocumento(v.documento)) return { valor: null, erro: { campo: "ct_documento", msg: "CPF ou CNPJ inválido (confira os dígitos)." } };
@@ -426,11 +439,17 @@ export function paradoNaAtivacao(it, hoje) {
 
 /** plano 2000d · DU-191: as etiquetas do cliente (comercial.etiquetas) e todas as da lista. */
 export const etiquetasCliente = it => (it && it.comercial && Array.isArray(it.comercial.etiquetas) ? it.comercial.etiquetas.map(String).filter(Boolean) : []);
-export function todasEtiquetas(itens) { return [...new Set((Array.isArray(itens) ? itens : []).flatMap(etiquetasCliente))].sort((a, b) => a.localeCompare(b, "pt-BR")); }
+// plano 2000d · FX-097: «VIP» e «vip» em clientes diferentes viram UMA opção no filtro (vale a primeira grafia; o filtro já ignora maiúsculas)
+export function todasEtiquetas(itens) {
+  const porChave = new Map();
+  for (const e of (Array.isArray(itens) ? itens : []).flatMap(etiquetasCliente)) { const k = e.toLowerCase(); if (!porChave.has(k)) porChave.set(k, e); }
+  return [...porChave.values()].sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
 /** «clínicas, Taubaté ,clínicas» → ["clínicas", "Taubaté"] (até 10, 30 letras cada). */
 export function separarEtiquetas(texto) {
   const vistas = new Set(), out = [];
-  for (const p of String(texto || "").split(/[,;\n]+/).map(x => x.trim().slice(0, 30)).filter(Boolean)) { const k = p.toLowerCase(); if (!vistas.has(k)) { vistas.add(k); out.push(p); } }
+  // plano 2000d · FX-098: «#vip» (costume do Instagram) vira «vip»
+  for (const p of String(texto || "").split(/[,;\n]+/).map(x => x.trim().replace(/^#+/, "").trim().slice(0, 30)).filter(Boolean)) { const k = p.toLowerCase(); if (!vistas.has(k)) { vistas.add(k); out.push(p); } }
   return out.slice(0, 10);
 }
 
@@ -491,15 +510,65 @@ export function linkEntradaCliente(origem, slug, dominioAtivo = null) {
   return slug ? `${base}/app/#/?c=${encodeURIComponent(slug)}` : `${base}/app/`;
 }
 
+/* ---------------------------------------------------------------- plano 2000d · complemento da frente config (FX) */
+/** plano 2000d · FX-099: o documento como se guarda — só dígitos (CPF/CNPJ) ou, com letra, o CNPJ alfanumérico em maiúsculas. */
+export function limparDocumento(v) {
+  const b = String(v ?? "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+  return /[A-Z]/.test(b) ? b : b.replace(/\D/g, "");
+}
+/** plano 2000d · FX-077: o endereço já tomado → o próximo livre (alfa → alfa-2, alfa-3…), dentro dos 40 caracteres. */
+export function slugLivre(base, itens, idProprio = null) {
+  const b = String(base || "").trim().toLowerCase();
+  if (!b) return "";
+  if (!slugTomado(itens, b, idProprio)) return b;
+  for (let n = 2; n < 100; n++) {
+    const suf = `-${n}`;
+    const s = `${b.slice(0, 40 - suf.length).replace(/-+$/, "")}${suf}`;
+    if (!slugTomado(itens, s, idProprio)) return s;
+  }
+  return "";
+}
+/** plano 2000d · FX-079: o WhatsApp do responsável do cliente (cadastro) com a mensagem pronta — null sem número. */
+export function linkWhatsResponsavel(cli, texto) {
+  const d = String(contatoCliente(cli).whatsapp || "").replace(/\D/g, "");
+  if (d.length < 10) return null;
+  const num = d.startsWith("55") || d.length > 11 ? d : `55${d}`;
+  return `https://wa.me/${num}?text=${encodeURIComponent(String(texto || ""))}`;
+}
+/** plano 2000d · FX-080: a validade da proposta não pode ser antes de hoje. → erro ou null. */
+export function erroValidadeProposta(iso, hoje) {
+  if (!iso) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(iso)) && String(iso) >= String(hoje) ? null : "A validade precisa ser hoje ou depois.";
+}
+/** plano 2000d · FX-081: o que o plano inclui na proposta — os módulos e os limites («Até 5 usuários», «2 números de WhatsApp»). */
+export function itensDoPlano(p, rotuloModulo = m => m) {
+  const x = p || {}, l = x.limites || {};
+  const lim = [["usuarios", n => `Até ${n} ${n === 1 ? "usuário" : "usuários"}`], ["canais", n => `${n} ${n === 1 ? "número" : "números"} de WhatsApp`],
+    ["funis", n => `${n} ${n === 1 ? "funil" : "funis"} de vendas`], ["automacoes", n => `Até ${n} automações`], ["contatos", n => `Até ${Number(n).toLocaleString("pt-BR")} contatos`],
+    ["ia_mes", n => `${Number(n).toLocaleString("pt-BR")} usos de IA por mês`]]
+    .filter(([k]) => Number(l[k]) > 0).map(([k, f]) => f(Number(l[k])));
+  return [...(Array.isArray(x.modulos) ? x.modulos.map(rotuloModulo) : []), ...lim];
+}
+/** plano 2000d · FX-106: a busca como o servidor espera — sem espaço sobrando nem dobrado. */
+export const normalizarBusca = v => String(v ?? "").trim().replace(/\s+/g, " ");
+/** plano 2000d · FX-107: os e-mails dos responsáveis (cadastro do cliente), sem repetir. */
+export const emailsResponsaveis = itens => [...new Set((Array.isArray(itens) ? itens : []).map(it => String(contatoCliente(it).email || "").trim().toLowerCase()).filter(Boolean))].join(", ");
+/** plano 2000d · FX-110: motivos comuns de entrar no ambiente do cliente. */
+export const MOTIVOS_SUPORTE = Object.freeze(["A pedido do cliente", "Conferir o número", "Treinamento da equipe", "Configuração inicial"]);
+/** plano 2000d · FX-074 / UC-039: «Em teste» sem data de fim — a revenda precisa corrigir (o teste nunca acaba sozinho). */
+export const testeSemFim = it => !!it && it.status === "teste" && !it.teste_ate;
+
 /** plano 2000d · DU-189 / DU-426: escapa texto para o HTML gerado (relatório e proposta). */
 const escHtml = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const imgSegura = u => (typeof u === "string" && (/^data:image\/(png|jpeg|webp);base64,/.test(u) || /^https:\/\//.test(u)) ? u : null);
+/** plano 2000d · FX-084: impressão/PDF do relatório e da proposta — margem de página, cores preservadas e sem quebrar um plano no meio. */
+const CSS_IMPRESSAO = "@page{margin:16mm}@media print{body{margin:0;max-width:none}section,tr{break-inside:avoid}*{print-color-adjust:exact;-webkit-print-color-adjust:exact}}";
 /** DU-189: o relatório do mês do cliente com a marca da revenda (HTML para imprimir/salvar em PDF) — nunca cita a plataforma. */
 export function htmlRelatorioMes({ marca = {}, cliente = {}, mes = "", numeros = [] } = {}) {
   const logo = imgSegura(marca.logo_claro || marca.logo);
   const linhas = numeros.filter(x => x && x.rotulo && x.valor !== null && x.valor !== undefined).map(x => `<tr><th scope="row">${escHtml(x.rotulo)}</th><td>${escHtml(x.valor)}</td></tr>`).join("");
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escHtml(cliente.nome)} · ${escHtml(mes)}</title>`
-    + `<style>body{font-family:system-ui,sans-serif;max-width:720px;margin:24px auto;padding:0 16px;color:black}header{display:flex;gap:16px;align-items:center}img{max-height:56px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{padding:10px;border-bottom:1px solid gainsboro;text-align:left}td{text-align:right;font-variant-numeric:tabular-nums}footer{margin-top:24px;color:dimgray;font-size:13px}</style></head><body>`
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${escHtml(cliente.nome)} · ${escHtml(mes)}</title>`
+    + `<style>body{font-family:system-ui,sans-serif;max-width:720px;margin:24px auto;padding:0 16px;color:black}header{display:flex;gap:16px;align-items:center}img{max-height:56px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{padding:10px;border-bottom:1px solid gainsboro;text-align:left}td{text-align:right;font-variant-numeric:tabular-nums}footer{margin-top:24px;color:dimgray;font-size:13px}${CSS_IMPRESSAO}</style></head><body>`
     + `<header>${logo ? `<img src="${escHtml(logo)}" alt="${escHtml(marca.produto || "")}">` : ""}<div><h1>${escHtml(cliente.nome)}</h1><p>O que o ${escHtml(marca.produto || "sistema")} fez por você em ${escHtml(mes)}</p></div></header>`
     + `<table>${linhas || `<tr><td>Sem números neste período.</td></tr>`}</table><footer>${escHtml(marca.assinatura || marca.produto || "")}</footer></body></html>`;
 }
@@ -508,8 +577,8 @@ export function htmlProposta({ marca = {}, prospect = "", planos = [], validade 
   const logo = imgSegura(marca.logo_claro || marca.logo);
   const brl = v => (v === null || v === undefined || v === "" ? "Sob consulta" : `R$ ${Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mês`);
   const cartoes = planos.map(p => `<section><h2>${escHtml(p.nome)}</h2><p class="preco">${escHtml(brl(p.preco_mensal))}</p>${Array.isArray(p.itens) && p.itens.length ? `<ul>${p.itens.map(i => `<li>${escHtml(i)}</li>`).join("")}</ul>` : ""}</section>`).join("");
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Proposta · ${escHtml(prospect)}</title>`
-    + `<style>body{font-family:system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;color:black}header{display:flex;gap:16px;align-items:center}img{max-height:56px}section{border:1px solid gainsboro;border-radius:12px;padding:16px;margin:12px 0}.preco{font-size:22px;font-weight:600}footer{margin-top:24px;color:dimgray;font-size:13px}</style></head><body>`
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Proposta · ${escHtml(prospect)}</title>`
+    + `<style>body{font-family:system-ui,sans-serif;max-width:760px;margin:24px auto;padding:0 16px;color:black}header{display:flex;gap:16px;align-items:center}img{max-height:56px}section{border:1px solid gainsboro;border-radius:12px;padding:16px;margin:12px 0}.preco{font-size:22px;font-weight:600}footer{margin-top:24px;color:dimgray;font-size:13px}${CSS_IMPRESSAO}</style></head><body>`
     + `<header>${logo ? `<img src="${escHtml(logo)}" alt="${escHtml(marca.produto || "")}">` : ""}<div><h1>Proposta para ${escHtml(prospect)}</h1><p>${escHtml(marca.produto || "")}</p></div></header>`
     + `${cartoes}${observacao ? `<p>${escHtml(observacao)}</p>` : ""}<footer>${validade ? `Proposta válida até ${escHtml(validade)}. ` : ""}${escHtml(marca.assinatura || "")}</footer></body></html>`;
 }
@@ -522,7 +591,9 @@ export function csvClientes(itens, nomeDoPlano = id => id, { superConta = true, 
   const cab = ["Cliente", "Endereço", "Revenda", "Plano", ...(superConta ? ["Pacote comercial"] : []), "Situação", `Pausado ${quemPausa(superConta)}`, "Fim do teste", "Criado em",
     ...CHAVES_LIMITE.flatMap(k => [`${k.rotulo} (uso)`, `${k.rotulo} (limite)`]),
     // plano 2000d · DU-406 / DU-182 / DU-185 / DU-191: valor cobrado, vencimento, dias de teste restantes, última atividade, contato e etiquetas
-    "Valor mensal (R$)", "Dia de vencimento", "Dias de teste restantes", "Última atividade", "Responsável", "WhatsApp do responsável", "E-mail do responsável", "CPF/CNPJ", "Etiquetas"];
+    "Valor mensal (R$)", "Dia de vencimento", "Dias de teste restantes", "Última atividade", "Responsável", "WhatsApp do responsável", "E-mail do responsável", "CPF/CNPJ", "Etiquetas",
+    // plano 2000d · FX-078: a ativação (marcos) e o risco de cancelar, os mesmos da tela
+    "Ativação (marcos de 5)", "Risco (0 a 100)", "Motivos do risco"];
   const num2 = v => (v === null ? "" : Number(v).toFixed(2).replace(".", ","));
   const linhas = (Array.isArray(itens) ? itens : []).map(it => { const ct = contatoCliente(it); return [it.nome, it.slug, it.org ? it.org.nome : "", nomeDoPlano(it.plano),
     ...(superConta ? [it.comercial && it.comercial.pacote ? rotuloPacote(it.comercial.pacote) : ""] : []), statusDe(it.status).rotulo, it.ativo === false ? "sim" : "não",
@@ -530,7 +601,8 @@ export function csvClientes(itens, nomeDoPlano = id => id, { superConta = true, 
     ...CHAVES_LIMITE.flatMap(k => [it.uso && it.uso[k.chave] != null ? it.uso[k.chave] : "", it.limites && it.limites[k.chave] != null ? it.limites[k.chave] : "sem limite"]),
     num2(valorCobrado(it)), it.comercial && it.comercial.dia_vencimento ? it.comercial.dia_vencimento : "",
     it.status === "teste" && hoje ? (diasAteFimTeste(it.teste_ate, hoje) ?? "") : "", String(it.ultimo_acesso || "").slice(0, 10),
-    ct.responsavel || "", ct.whatsapp || "", ct.email || "", ct.documento ? formatarDocumento(ct.documento) : "", etiquetasCliente(it).join(", ")]; });
+    ct.responsavel || "", ct.whatsapp || "", ct.email || "", ct.documento ? formatarDocumento(ct.documento) : "", etiquetasCliente(it).join(", "),
+    marcosAtivacao(it).feitos, ...(r => [r.pontos, r.motivos.join(", ")])(riscoCliente(it, hoje))]; });
   return "\uFEFF" + [cab, ...linhas].map(l => l.map(esc).join(";")).join("\r\n");
 }
 
@@ -716,7 +788,10 @@ async function telaClientes(ctx, corpo) {
   const h = ui.h;
   ctx.titulo("Clientes");
   const superConta = !!ctx.sessao.conta.super;
-  const filtro = { busca: ctx.rota.query.busca || "", status: ctx.rota.query.status || "", org_id: ctx.rota.query.org || "", local: "" };
+  // plano 2000d · FX-076: ?local= volta com o filtro do KPI (só os filtros conhecidos)
+  const localQ = String(ctx.rota.query.local || "");
+  const filtro = { busca: ctx.rota.query.busca || "", status: ctx.rota.query.status || "", org_id: ctx.rota.query.org || "",
+    local: Object.hasOwn(ROTULO_FILTRO_LOCAL, localQ) || localQ === "pausados" || /^etiqueta:.{1,30}$/.test(localQ) ? localQ : "" };
   // plano 1000 · AS-155: cada mudança de filtro vai para o endereço (replaceState: sem entrada nova no histórico nem nova montagem)
   const gravarFiltro = () => {
     _ultimoHashClientes = hashClientes(filtro);
@@ -895,6 +970,7 @@ async function telaClientes(ctx, corpo) {
   async function carregar() {
     const n = ++seq;
     mostrar = POR_PAGINA_CLIENTES;
+    gravarFiltro();      // plano 2000d · FX-076: o filtro local (KPI, etiqueta) também vai para o endereço
     // plano 1000b · UB-117: esqueleto só na 1ª carga — nas buscas seguintes a tabela fica (aria-busy) até a resposta chegar
     if (!lista.firstChild) lista.appendChild(ui.esqueleto("tabela", 6));
     lista.setAttribute("aria-busy", "true");
@@ -920,6 +996,13 @@ async function telaClientes(ctx, corpo) {
     const txt = h("b", { class: "adm-lote-n", "aria-live": "polite" });
     const bEstender = h("button", { type: "button", class: "bt bt-sec bt-p" }, ui.icone("relogio"), "Estender teste +7 dias");
     const bExportar = h("button", { type: "button", class: "bt bt-fant bt-p" }, ui.icone("baixar"), "Exportar");
+    // plano 2000d · FX-107: os e-mails dos responsáveis dos selecionados (comunicado para a carteira)
+    const bEmails = h("button", { type: "button", class: "bt bt-fant bt-p adm-lote-emails" }, ui.icone("copiar"), "Copiar e-mails dos responsáveis");
+    bEmails.addEventListener("click", () => {
+      const t = emailsResponsaveis(tab.selecionados());
+      if (!t) { ui.toast("Nenhum dos selecionados tem e-mail do responsável no cadastro.", { tipo: "info" }); return; }
+      ui.copiar(t, { aviso: `${t.split(", ").length} e-mails copiados.` });
+    });
     const pintar = () => {
       const sel = tab.selecionados();
       barra.hidden = !sel.length;
@@ -943,7 +1026,7 @@ async function telaClientes(ctx, corpo) {
       ui.toast(falhas.length ? `${ok} ${ok === 1 ? "teste estendido" : "testes estendidos"}; não deu em ${falhas.length}: ${falhas.join("; ")}` : `${ok} ${ok === 1 ? "teste estendido" : "testes estendidos"} em 7 dias.`, { tipo: falhas.length ? "erro" : "ok" });
       carregar();
     });
-    barra.append(txt, bEstender, bExportar);
+    barra.append(txt, bEstender, bExportar, bEmails);
     return barra;
   }
   function pintarLista(todosDoFiltro) {
@@ -986,6 +1069,8 @@ async function telaClientes(ctx, corpo) {
             return e ? h("span", { class: "adm-numero", dataset: { tom: e.tom } }, ui.pilula(e.rotulo, e.tom, { icone: e.tom === "ok" ? "check" : e.tom === "ruim" ? "alerta" : "whatsapp" })) : "—";
           } }] : []),
           { chave: "teste_ate", rotulo: "Fim do teste", ordenavel: true, render: it => {
+            // plano 2000d · FX-074 / UC-039: em teste sem data de fim — a revenda corrige (o teste nunca acabaria)
+            if (testeSemFim(it)) return ui.pilula("sem data de fim", "aten", { icone: "alerta", title: "Em teste sem data de fim: abra o cliente e defina até quando vai o teste." });
             if (!(it.status === "teste" && it.teste_ate)) return "—";
             const venc = testeVencidoHa(it, hoje);      // plano 1000 · AS-158: data passada não fica muda
             const logo = rotuloFimTeste(it, hoje);       // plano 1500c · UCB-084: acabando em até 3 dias também se destaca
@@ -1043,6 +1128,17 @@ async function telaClientes(ctx, corpo) {
       for (const tr of tab.el.querySelectorAll("tr[tabindex]")) tr.removeAttribute("tabindex");
       lista.appendChild(barraLote(tab));
       lista.appendChild(tab.el);
+      // plano 2000d · FX-083: nada com esse filtro → um toque limpa busca, situação e filtros (antes era só o texto da tabela)
+      if (!itens.length && (filtro.busca || filtro.status || filtro.local || filtro.org_id)) {
+        const limpar = h("button", { type: "button", class: "bt bt-sec bt-p adm-limpar-filtros" }, ui.icone("fechar"), "Limpar busca e filtros");
+        limpar.addEventListener("click", () => {
+          busca.value = ""; selEtiqueta.value = ""; if (selOrg) selOrg.value = "";
+          Object.assign(filtro, { busca: "", status: "", local: "", org_id: "" });
+          if (typeof segStatus.ativar === "function") segStatus.ativar("");
+          carregar();
+        });
+        lista.appendChild(h("p", { class: "linha adm-sem-achado" }, h("span", { class: "fraco" }, "Nenhum cliente com esse filtro."), limpar));
+      }
       if (itens.length > mostrar) {
         const mais = h("button", { type: "button", class: "bt bt-sec adm-mais" }, `Mostrar mais (${ui.num(Math.min(POR_PAGINA_CLIENTES, itens.length - mostrar))} de ${ui.num(itens.length - mostrar)} restantes)`);
         mais.addEventListener("click", () => { mostrar += POR_PAGINA_CLIENTES; pintarLista(ultimosDoFiltro); });
@@ -1050,8 +1146,16 @@ async function telaClientes(ctx, corpo) {
       }
     }
   }
-  const aoBuscar = ui.debounce(() => { filtro.busca = busca.value.trim(); gravarFiltro(); carregar(); }, 300);
+  // plano 2000d · FX-106: espaço dobrado no meio («clínica  sol») não deixa a busca do servidor sem resultado
+  const aoBuscar = ui.debounce(() => { filtro.busca = normalizarBusca(busca.value); gravarFiltro(); carregar(); }, 300);
   busca.addEventListener("input", aoBuscar);
+  // plano 2000d · FX-082: Esc limpa a busca na hora (sem esperar o debounce)
+  busca.addEventListener("keydown", ev => {
+    if (ev.key !== "Escape" || !busca.value) return;
+    ev.preventDefault();
+    busca.value = ""; if (typeof aoBuscar.cancelar === "function") aoBuscar.cancelar();
+    filtro.busca = ""; carregar();
+  });
   if (selOrg) selOrg.addEventListener("change", () => { filtro.org_id = selOrg.value; gravarFiltro(); carregar(); });
   novo.addEventListener("click", () => criarCliente(ctx));
   _limpeza.push(() => aoBuscar.cancelar());
@@ -1118,7 +1222,14 @@ async function abrirFollowup(ctx, cli, hoje, produto) {
   if (sel) sel.addEventListener("change", async () => {
     if (mexido && !(await ui.confirmar({ titulo: "Trocar o tom?", rotulo: "Trocar", texto: "O texto que você editou é substituído pelo modelo do outro tom." }))) return;
     txt.value = mensagemFollowupTesteTom(cli, hoje, produto, sel.value); mexido = false;
+    pintarWa();
   });
+  // plano 2000d · FX-079: com o WhatsApp do responsável no cadastro, abre a conversa com o texto (o envio continua sendo da pessoa)
+  const wa = h("a", { class: "bt bt-sec bt-p adm-followup-wa", target: "_blank", rel: "noopener noreferrer", hidden: true }, ui.icone("whatsapp"), "Abrir no WhatsApp do responsável");
+  function pintarWa() { const l = linkWhatsResponsavel(cli, txt ? txt.value : ""); wa.hidden = !l; if (l) wa.setAttribute("href", l); }
+  if (txt) txt.addEventListener("input", pintarWa);
+  form.append(h("div", { class: "linha" }, wa));
+  pintarWa();
   await ui.modal({ titulo: `Mensagem para ${cli.nome}`, corpo: form, largura: "m", acoes: [{ rotulo: "Fechar", tipo: "neutro" },
     { rotulo: "Copiar mensagem", tipo: "primario", fn: async () => { await ui.copiar(String(txt ? txt.value : "").trim(), { aviso: "Mensagem copiada." }); return true; } }] });
 }
@@ -1141,6 +1252,9 @@ async function gerarProposta(ctx) {
       const v = ui.lerForm(form);
       if (String(v.prospect || "").trim().length < 2) { ui.marcarErro(form, "prospect", "Informe para quem é a proposta."); return false; }
       if (!Array.isArray(v.planos) || !v.planos.length) { ui.marcarErro(form, "planos", "Escolha pelo menos um plano."); return false; }
+      // plano 2000d · FX-080: proposta já vencida não sai
+      const errV = erroValidadeProposta(v.validade, ui.hojeSP());
+      if (errV) { ui.marcarErro(form, "validade", errV); return false; }
       return v;
     } }] });
   if (!d) return;
@@ -1148,8 +1262,10 @@ async function gerarProposta(ctx) {
   try { marca = ctx.shell.marcaEfetiva() || {}; } catch { /* sem marca: a página sai só com o texto */ }
   const MOD = Object.fromEntries(MODULOS.map(m => [m.valor, m.rotulo]));
   const html = htmlProposta({ marca, prospect: String(d.prospect).trim(), validade: d.validade ? ui.dataBR(d.validade) : "", observacao: d.obs || "",
-    planos: ps.filter(p => d.planos.includes(p.id)).map(p => ({ nome: p.nome, preco_mensal: p.preco_mensal, itens: (p.modulos || []).map(m => MOD[m] || m) })) });
-  if (baixarArquivoTexto(html, `proposta-${sugerirSlug(d.prospect) || "cliente"}.html`, "text/html")) ui.toast("Proposta baixada. Abra no navegador para imprimir ou salvar em PDF.", { tipo: "ok" });
+    // plano 2000d · FX-081: os limites do plano também (quantos usuários, números, contatos…)
+    planos: ps.filter(p => d.planos.includes(p.id)).map(p => ({ nome: p.nome, preco_mensal: p.preco_mensal, itens: itensDoPlano(p, m => MOD[m] || m) })) });
+  // plano 2000d · FX-114: o nome do arquivo leva a data (duas versões da proposta não se sobrescrevem)
+  if (baixarArquivoTexto(html, `proposta-${sugerirSlug(d.prospect) || "cliente"}-${ui.hojeSP()}.html`, "text/html")) ui.toast("Proposta baixada. Abra no navegador para imprimir ou salvar em PDF.", { tipo: "ok" });
   else ui.toast("O navegador não deixou baixar o arquivo.", { tipo: "erro" });
 }
 /** plano 2000d · DU-187: pausa de emergência dos envios automáticos de TODOS os clientes da agência (nx_envios_pausar com p_org). */
@@ -1467,14 +1583,22 @@ function conferidorDeSlug(ctx, inp, idProprio) {
   const conferir = ui.debounce(async () => {
     const n = ++seq, v = inp.value.trim().toLowerCase();
     if (!/^[a-z0-9-]{2,40}$/.test(v)) { aviso.hidden = true; return; }
-    let achado = null;
+    let achado = null, livre = "";
     try {
-      if (!cache.has(v)) cache.set(v, slugTomado(await api.rpc("nx_clientes_admin", { p_filtro: { busca: v } }), v, idProprio));
-      achado = cache.get(v);
+      if (!cache.has(v)) { const itens = await api.rpc("nx_clientes_admin", { p_filtro: { busca: v } }); cache.set(v, { achado: slugTomado(itens, v, idProprio), livre: slugLivre(v, itens, idProprio) }); }
+      ({ achado, livre } = cache.get(v));
     } catch { return; }
     if (n !== seq) return;
     aviso.hidden = !achado;
-    aviso.textContent = achado ? `Esse endereço já é de «${achado.nome}». Escolha outro.` : "";
+    ui.limpar(aviso);
+    if (!achado) return;
+    aviso.append(`Esse endereço já é de «${achado.nome}». Escolha outro.`);
+    // plano 2000d · FX-077: o próximo livre num toque («Usar alfa-2»)
+    if (livre && livre !== v) {
+      const usar = ui.h("button", { type: "button", class: "bt bt-fant bt-p adm-slug-livre" }, `Usar ${livre}`);
+      usar.addEventListener("click", () => { inp.value = livre; inp.dispatchEvent(new Event("input")); aviso.hidden = true; try { inp.focus(); } catch { /* ok */ } });
+      aviso.append(" ", usar);
+    }
   }, 400);
   return conferir;
 }
@@ -1570,7 +1694,10 @@ async function telaCliente(ctx, corpo, id) {
   async function registrarEntrada(destino, botao) {
     const form = h("form", { class: "pilha", novalidate: true },
       h("p", null, `Você vai ver a ${cli.nome} como a equipe dela vê. A entrada fica registrada.`),
-      ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", max: 200, autocomplete: "off", placeholder: "Ex.: conferir o número a pedido do cliente" }));
+      ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", max: 200, autocomplete: "off", placeholder: "Ex.: conferir o número a pedido do cliente" }),
+      // plano 2000d · FX-110: os motivos mais comuns num toque (a auditoria fica padronizada)
+      h("div", { class: "linha adm-motivos-rapidos", role: "group", "aria-label": "Motivos comuns" }, MOTIVOS_SUPORTE.map(mt =>
+        h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { const i = form.querySelector("input[name=motivo]"); if (i) { i.value = mt; try { i.focus(); } catch { /* ok */ } } } } }, mt))));
     const r = await ui.modal({ titulo: `Entrar na ${cli.nome}`, corpo: form, largura: "p", acoes: [{ rotulo: "Cancelar", tipo: "neutro" },
       { rotulo: "Entrar", tipo: "primario", fn: async () => ({ motivo: String(ui.lerForm(form).motivo || "").trim() }) }] });
     if (!r) return;
@@ -2727,7 +2854,8 @@ async function telaDominios(ctx, corpo) {
   ctx.titulo("Domínios");
   const superConta = !!ctx.sessao.conta.super;
   const filtro = h("select", { class: "sel", "aria-label": "Filtrar por situação" },
-    h("option", { value: "" }, "Todos"), h("option", { value: "pendente" }, "Pendentes"), h("option", { value: "ativo" }, "Ativos"));
+    // plano 2000d · FX-120: «Pararam de apontar» (o ativo que a verificação diária marcou como quebrado) também filtra
+    h("option", { value: "" }, "Todos"), h("option", { value: "pendente" }, "Pendentes"), h("option", { value: "ativo" }, "Ativos"), h("option", { value: "quebrado" }, "Pararam de apontar"));
   const novo = h("button", { type: "button", class: "bt bt-prim adm-novo" }, ui.icone("mais"), h("span", { class: "adm-novo-rot" }, "Novo domínio"));      // plano 1500c · UCB-117
   novo.setAttribute("aria-label", "Novo domínio");
   // plano 1000 · AS-171: busca por endereço, cliente ou revenda (além da situação)
@@ -2738,7 +2866,7 @@ async function telaDominios(ctx, corpo) {
     h("div", { class: "adm-filtros" }, h("label", { class: "busca" }, ui.icone("busca"), buscaDom), filtro, novo), lista].filter(Boolean));
   // plano 1000b · UB-265: situação e busca vão para o endereço (?status=&busca=, replaceState) — recarregar mantém o filtro
   const q0 = (ctx.rota && ctx.rota.query) || {};
-  if (["pendente", "ativo"].includes(q0.status)) filtro.value = q0.status;
+  if (["pendente", "ativo", "quebrado"].includes(q0.status)) filtro.value = q0.status;      // FX-120
   if (q0.busca) buscaDom.value = String(q0.busca);
   const gravarFiltroDom = () => {
     const alvoHash = hashDominios({ status: filtro.value, busca: buscaDom.value.trim() });
@@ -2758,7 +2886,9 @@ async function telaDominios(ctx, corpo) {
   }
   function desenhar() {
     ui.limpar(lista);
-    const itens = filtrarDominios(dados, { status: filtro.value, busca: buscaDom.value });
+    // plano 2000d · FX-121: o que precisa de atenção primeiro (parou de apontar, pendente, ativo) — a mesma ordem das Configurações
+    const filtrados = filtrarDominios(dados, { status: filtro.value, busca: buscaDom.value });
+    const itens = typeof cfg.ordenarDominios === "function" ? cfg.ordenarDominios(filtrados) : filtrados;
     if (!itens.length) {
       lista.append(ui.vazio({ titulo: dados.length ? "Nenhum domínio com esse filtro ou busca." : "Nenhum domínio ainda.", icone: "globo",
         texto: dados.length ? "" : "Revendas e clientes podem usar o próprio endereço (ex.: crm.agencia.com.br) com a marca deles." }));

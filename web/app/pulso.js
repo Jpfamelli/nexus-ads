@@ -213,6 +213,7 @@ export function criarPulso(o) {
     doc.addEventListener("pointerdown", aoAtividade, { passive: true });
     doc.addEventListener("keydown", aoAtividade);
     doc.addEventListener("touchstart", aoAtividade, { passive: true });
+    doc.addEventListener("wheel", aoAtividade, { passive: true });   // plano 2000d · SX-039: quem lê rolando com a roda do mouse não está ausente
   }
   if (jan && jan.addEventListener) { jan.addEventListener("online", aoOnline); jan.addEventListener("offline", aoOffline); }
 
@@ -250,6 +251,7 @@ export function criarPulso(o) {
         doc.removeEventListener("pointerdown", aoAtividade);
         doc.removeEventListener("keydown", aoAtividade);
         doc.removeEventListener("touchstart", aoAtividade);
+        doc.removeEventListener("wheel", aoAtividade);   // plano 2000d · SX-039
       }
       if (jan && jan.removeEventListener) { jan.removeEventListener("online", aoOnline); jan.removeEventListener("offline", aoOffline); }
     },
@@ -267,7 +269,8 @@ export function criarPulso(o) {
 /** plano 2000d · DU-268: horário silencioso ({de:"20:00", ate:"08:00"}, pode virar a meia-noite) — `agora` é um Date (hora local do aparelho).
     Sem horário válido: nunca silencioso. */
 export function emHorarioSilencioso(silencio, agora = new Date()) {
-  const min = s => { const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(s || "")); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+  // plano 2000d · SX-093: «8:00» (sem o zero) e «20h» também valem — antes o horário inteiro era ignorado e o silêncio nunca ligava
+  const min = s => { const m = /^([01]?\d|2[0-3])(?::([0-5]\d)|h([0-5]\d)?)$/.exec(String(s || "").trim().toLowerCase()); return m ? Number(m[1]) * 60 + Number(m[2] || m[3] || 0) : null; };
   if (!silencio || typeof silencio !== "object") return false;
   const de = min(silencio.de), ate = min(silencio.ate);
   if (de === null || ate === null || de === ate || !(agora instanceof Date) || !Number.isFinite(agora.getTime())) return false;

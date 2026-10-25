@@ -229,6 +229,9 @@ function listaFaixas(h, ui, dia, faixas, habilitado, aoEsvaziar = null) {
   const add = h("button", { type: "button", class: "bt bt-fant bt-p agc-add-faixa", on: { click: () => {
     if (add.getAttribute("aria-disabled") === "true") { if (ui.toast) ui.toast(add.title, { tipo: "info" }); return; }
     adicionar(); travarAdd();
+    // plano 2000d · GY-082: o foco vai para o início da faixa nova (antes ficava no botão e quem usa teclado voltava com Shift+Tab)
+    const nova = linhas.querySelectorAll(".agc-faixa"); const inp = nova.length ? nova[nova.length - 1].querySelector("input") : null;
+    if (inp) try { inp.focus(); } catch { /* ok */ }
   } } }, ui.icone("mais"), "Adicionar horário");
   linhas.addEventListener("click", () => setTimeout(travarAdd, 0));   // remover uma faixa destrava
   for (const faixa of faixas) adicionar(faixa);
@@ -258,10 +261,13 @@ export function problemaDasFaixas(faixas) {
   return null;
 }
 /** CA-275: o passo dos horários maior que a duração padrão deixa buracos sem oferta — o aviso explica (null = nada a dizer). */
-export function avisoPassoDuracao(passo, duracao) {
+/** Plano 2000d · GY-086: a palavra do compromisso da vertical (consulta/visita/entrega) — «consulta» sem vocab. */
+export function palavraDaAgenda(vocab = null) { return vocab && typeof vocab.min === "function" && vocab.compromisso ? vocab.min("compromisso") : "consulta"; }
+// plano 2000d · GY-089: a palavra da vertical no aviso do passo («a visita padrão dura 60 min»)
+export function avisoPassoDuracao(passo, duracao, palavra = "consulta") {
   const p = Number(passo), d = Number(duracao);
   if (!Number.isInteger(p) || !Number.isInteger(d) || p <= 0 || d <= 0 || p <= d) return null;
-  return `Os horários saem a cada ${p} min, mas a consulta padrão dura ${d} min: sobram ${p - d} min sem horário oferecido entre uma consulta e outra.`;
+  return `Os horários saem a cada ${p} min, mas a ${palavra} padrão dura ${d} min: sobram ${p - d} min sem horário oferecido entre uma ${palavra} e outra.`;
 }
 
 /** Plano 2000d · DC-387: o mês do início do bloqueio em São Paulo («2026-11»), a conta por mês e o nome («Novembro de 2026»). */
@@ -406,15 +412,17 @@ async function secaoAgenda(ctx, alvo) {
     });
     const ok = await ui.modal({ titulo: `Copiar o horário de ${origem.nome}`, largura: "p",
       corpo: h("div", { class: "pilha" }, h("p", null, "Para quais dias?"), h("div", { class: "agc-copiar-dias", role: "group", "aria-label": "Dias de destino" }, caixas.map(x => x.el)),
-        h("p", { class: "campo-ajuda agc-copiar-nota" }, "Copia só as faixas de atendimento. As pausas valem para todos os dias.")),   // plano 2000d · DC-389
-      acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: false }, { rotulo: "Copiar", tipo: "primario", valor: true }] });
+        h("p", { class: "campo-ajuda agc-copiar-nota" }, "Copia só as faixas de atendimento. As pausas valem para todos os dias."),   // plano 2000d · DC-389
+        // plano 2000d · GY-090: copiar um dia FECHADO fecha os dias escolhidos — a janela avisa antes
+        !origem.ligada.checked ? h("p", { class: "aviso aviso-aten agc-copiar-fechado", role: "note" }, `${origem.nome} está fechado: os dias escolhidos também ficarão fechados.`) : null),
+      acoes: [{ rotulo: "Cancelar", tipo: "neutro", valor: false }, { rotulo: origem.ligada.checked ? "Copiar" : "Fechar estes dias", tipo: "primario", valor: true }] });   // GY-090
     if (!ok) return;
     const alvos = caixas.filter(x => x.chk.checked).map(x => x.id);
     if (alvos.length) copiarParaUteis(deId, alvos);
   }
   function copiarParaUteis(deId, alvos = ["1", "2", "3", "4", "5"]) {
     const origem = controlesDia.find(d => d.id === deId);
-    const faixas = origem.linhas.ler();
+    const faixas = origem.ligada.checked ? origem.linhas.ler() : [];   // plano 2000d · GY-091: dia fechado copia «fechado» (não as faixas escondidas)
     // plano 1000b · CB-158: guarda como estavam os outros dias úteis — o aviso oferece «Desfazer»
     const antes = controlesDia.filter(d => d.id !== deId && alvos.includes(d.id)).map(d => ({ d, ligada: d.ligada.checked, faixas: d.linhas.ler() }));
     for (const d of controlesDia) {
@@ -452,7 +460,13 @@ async function secaoAgenda(ctx, alvo) {
   const pausas = Array.isArray(cfg.intervalos) ? cfg.intervalos : [];
   const reservaPausa = () => addIntervalo;   // CB-154: sem pausa nenhuma, o foco vai para «Adicionar intervalo»
   for (const faixa of pausas) intervalos.appendChild(linhaIntervalo(h, ui, faixa[0], faixa[1], "Intervalo", reservaPausa));
-  const addIntervalo = h("button", { type: "button", class: "bt bt-fant bt-p agc-add-intervalo", on: { click: () => intervalos.appendChild(linhaIntervalo(h, ui, undefined, undefined, "Intervalo", reservaPausa)) } }, ui.icone("mais"), "Adicionar intervalo");
+  const addIntervalo = h("button", { type: "button", class: "bt bt-fant bt-p agc-add-intervalo", on: { click: () => {
+    // plano 2000d · GY-084: já existe a pausa 12:00–13:00? a nova nasce vazia (antes nascia igual e o Salvar acusava «se sobrepõem»)
+    const ja = [...intervalos.querySelectorAll(".agc-faixa")].some(l => { const i = l.querySelectorAll("input"); return i[0] && i[0].value === "12:00" && i[1] && i[1].value === "13:00"; });
+    const linha = intervalos.appendChild(ja ? linhaIntervalo(h, ui, "", "", "Intervalo", reservaPausa) : linhaIntervalo(h, ui, undefined, undefined, "Intervalo", reservaPausa));
+    // plano 2000d · GY-081: o foco vai para o início da pausa nova
+    const inp = linha && linha.querySelector("input"); if (inp) try { inp.focus(); } catch { /* ok */ }
+  } } }, ui.icone("mais"), "Adicionar intervalo");
 
   const duracoes = h("div", { class: "agc-duracoes" });
   // plano 1500c · CC-295: o serviço novo nasce com a duração padrão que está no CAMPO (mesmo antes de salvar), não com a salva
@@ -507,9 +521,16 @@ async function secaoAgenda(ctx, alvo) {
   function contarServicos() {
     const n = duracoes.querySelectorAll(".agc-duracao").length;
     contadorServ.textContent = `${n} de 30 serviços`;
-    if (addDuracao) { addDuracao.disabled = n >= 30; addDuracao.setAttribute("title", n >= 30 ? "Limite de 30 serviços" : ""); }
+    if (addDuracao) { addDuracao.setAttribute("aria-disabled", String(n >= 30)); addDuracao.setAttribute("title", n >= 30 ? "Limite de 30 serviços" : ""); }   // plano 2000d · GY-088
   }
-  addDuracao = h("button", { type: "button", class: "bt bt-fant bt-p agc-add-duracao", on: { click: () => adicionarDuracao() } }, ui.icone("mais"), "Adicionar serviço");
+  addDuracao = h("button", { type: "button", class: "bt bt-fant bt-p agc-add-duracao", on: { click: () => {
+    // plano 2000d · GY-088: no limite o botão fica aria-disabled (o foco não se perde) e diz o porquê ao tocar
+    if (addDuracao.getAttribute("aria-disabled") === "true") { if (ui.toast) ui.toast("Limite de 30 serviços. Remova um para incluir outro.", { tipo: "info" }); return; }
+    adicionarDuracao();
+    // plano 2000d · GY-083: o foco vai para o nome do serviço novo
+    const todas = duracoes.querySelectorAll(".agc-duracao"); const inp = todas.length ? todas[todas.length - 1].querySelector("input") : null;
+    if (inp) try { inp.focus(); } catch { /* ok */ }
+  } } }, ui.icone("mais"), "Adicionar serviço");
   for (const [nome, minutos] of Object.entries(cfg.duracoes || {})) adicionarDuracao(nome, minutos);
   duracoes.addEventListener("click", () => queueMicrotask(contarServicos));   // remover uma linha atualiza a conta
 
@@ -547,7 +568,7 @@ async function secaoAgenda(ctx, alvo) {
   // CA-275: passo maior que a duração deixa buracos na oferta de horários — o aviso explica na hora
   const avisoPasso = h("p", { class: "aviso aviso-aten agc-aviso-passo", role: "status", hidden: true });
   function conferirPasso() {
-    const txt = avisoPasso && avisoPassoDuracao(campoPasso.querySelector("input").value, campoDuracao.querySelector("input").value);
+    const txt = avisoPasso && avisoPassoDuracao(campoPasso.querySelector("input").value, campoDuracao.querySelector("input").value, palavraDaAgenda(ctx.vocab));   // plano 2000d · GY-089
     avisoPasso.textContent = txt || "";
     avisoPasso.hidden = !txt;
   }
@@ -618,8 +639,15 @@ async function secaoAgenda(ctx, alvo) {
     ev.preventDefault();
     salvarAgenda(null);
   });
+  let salvando = false;          // plano 2000d · GY-080
   async function salvarAgenda(ev) {
     if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
+    // plano 2000d · GY-080: Ctrl+S e o clique (ou dois toques) não mandam dois salvamentos ao mesmo tempo
+    if (salvando) return;
+    salvando = true;
+    try { return await salvarAgoraAgenda(); } finally { salvando = false; }
+  }
+  async function salvarAgoraAgenda() {
     ui.marcarErro(form, null);
     limparInvalidos();
     const dados = ui.lerForm(form);
@@ -733,7 +761,8 @@ async function secaoAgenda(ctx, alvo) {
         } catch { fora = []; /* sem a leitura: salva */ }
         horarioConferido = chaveHor;
         if (fora.length) {
-          avisoFora.textContent = `${fora.length === 1 ? "1 consulta marcada fica" : `${fora.length} consultas marcadas ficam`} fora do novo horário: ${fora.slice(0, 3).map(c => `${c.nome || c.titulo || "consulta"} (${ui.dataHoraBR(c.inicio)})`).join(", ")}${fora.length > 3 ? "…" : ""}. Elas continuam marcadas — remarque pela Agenda. Toque em «Salvar agenda» de novo para salvar mesmo assim.`;
+          const palF = palavraDaAgenda(ctx.vocab);   // plano 2000d · GY-086
+          avisoFora.textContent = `${fora.length === 1 ? `1 ${palF} marcada fica` : `${fora.length} ${palF}s marcadas ficam`} fora do novo horário: ${fora.slice(0, 3).map(c => `${c.nome || c.titulo || palF} (${ui.dataHoraBR(c.inicio)})`).join(", ")}${fora.length > 3 ? "…" : ""}. Elas continuam marcadas — remarque pela Agenda. Toque em «Salvar agenda» de novo para salvar mesmo assim.`;
           // plano 1500c · GX-068: um toque leva à Agenda no dia da primeira consulta que ficou de fora (para remarcar)
           const diaFora = diaSP(primeiraDe(fora));
           if (diaFora) avisoFora.append(" ", h("a", { href: `#/agenda?dia=${diaFora}`, class: "agc-fora-ver", on: { click: ev2 => { ev2.preventDefault(); if (typeof ctx.navegar === "function") ctx.navegar(`#/agenda?dia=${diaFora}`); } } }, "Ver na Agenda"));
@@ -750,6 +779,14 @@ async function secaoAgenda(ctx, alvo) {
       if (salvo && typeof salvo === "object" && Array.isArray(salvo.bloqueios)) { estado = salvo; desenharBloqueios(); }
       const mudouHorario = JSON.stringify(cfg.horario || null) !== JSON.stringify(cfgNova.horario || null) || JSON.stringify(cfg.intervalos || []) !== JSON.stringify(pausasSalvas);
       cfg.horario = cfgNova.horario; cfg.intervalos = pausasSalvas;
+      // plano 2000d · GY-078: o resto do que foi salvo também passa a valer na tela (a duração do serviço novo, o «Descartar», o aviso das consultas fora)
+      Object.assign(cfg, { duracao_min: cfgNova.duracao_min, capacidade: cfgNova.capacidade, antecedencia_horas: cfgNova.antecedencia_horas, dias_a_frente: cfgNova.dias_a_frente, passo_min: cfgNova.passo_min, duracoes: { ...duracoesSalvas } });
+      // plano 2000d · GY-079: a fonte do horário muda com o interruptor salvo — a ajuda deixa de dizer «vale o padrão» depois de definir aqui
+      if (salvo && typeof salvo === "object" && salvo.config && typeof salvo.config.horario_fonte === "string") cfg.horario_fonte = salvo.config.horario_fonte;
+      else if (fonteAgenda.checked) cfg.horario_fonte = "agenda";
+      else if (cfg.horario_fonte === "agenda") cfg.horario_fonte = "departamento";
+      ajudaFonte.textContent = textoFonte(fonteAgenda.checked);
+      avisouFonte = false;
       sujo = false;
       barraSujo.hidden = true;     // CB-202
       // plano 1500c · CC-236: mudou o horário? a IA tem o texto próprio de horários — o aviso leva até ele
@@ -782,9 +819,9 @@ async function secaoAgenda(ctx, alvo) {
         mesAtual = mes;
         listaBloqueios.appendChild(h("h4", { class: "agc-bloq-mes", role: "presentation" }, `${nomeMes(mes)} · ${porMes.get(mes) || 0}`));
       }
-      const excluir = h("button", { type: "button", class: "bt bt-fant bt-p", "aria-label": `Remover bloqueio de ${ui.dataHoraBR(b.inicio)}`, on: { click: () => removerBloqueio(b, excluir) } }, ui.icone("lixeira"), "Remover");
+      const excluir = h("button", { type: "button", class: "bt bt-fant bt-p", "aria-label": `Remover bloqueio${b.motivo ? ` «${b.motivo}»` : ""} de ${ui.dataHoraBR(b.inicio)}`,   /* plano 2000d · GY-085 */ on: { click: () => removerBloqueio(b, excluir) } }, ui.icone("lixeira"), "Remover");
       // plano 1000b · CB-161: «Editar» abre a mesma janela preenchida (o servidor atualiza pelo id; o aviso de consultas vale igual)
-      const editar = h("button", { type: "button", class: "bt bt-fant bt-p agc-editar-bloqueio", "aria-label": `Editar bloqueio de ${ui.dataHoraBR(b.inicio)}`, on: { click: () => criarBloqueio(b) } }, "Editar");
+      const editar = h("button", { type: "button", class: "bt bt-fant bt-p agc-editar-bloqueio", "aria-label": `Editar bloqueio${b.motivo ? ` «${b.motivo}»` : ""} de ${ui.dataHoraBR(b.inicio)}`,   /* plano 2000d · GY-085 */ on: { click: () => criarBloqueio(b) } }, "Editar");
       listaBloqueios.appendChild(h("article", { class: "agc-bloqueio", role: "listitem", dataset: { id: b.id } },
         // plano 1500c · CC-279: quem fechou o horário (quando o servidor mandar criado_por_nome)
         h("div", null, h("b", null, b.motivo || "Bloqueio"), h("small", null, ui.periodoBR(b.inicio, b.fim, " — "), typeof b.criado_por_nome === "string" && b.criado_por_nome.trim() ? ` · por ${b.criado_por_nome.trim()}` : ""),
@@ -941,7 +978,7 @@ async function secaoAgenda(ctx, alvo) {
       ui.campo({ rotulo: "Motivo (opcional)", nome: "motivo", max: 120, placeholder: "Ex.: feriado, manutenção", valor: ed ? ed.motivo : undefined }),
       // plano 1500c · GX-056: os motivos comuns num toque (o mesmo da janela da grade)
       h("div", { class: "agc-motivos", role: "group", "aria-label": "Motivos comuns" },
-        MOTIVOS_BLOQUEIO_CFG.map(mv => h("button", { type: "button", class: "ag-serv-chip agc-motivo", dataset: { motivo: mv }, on: { click: () => { const i = corpo.querySelector('input[name="motivo"]'); if (i) i.value = mv; } } }, mv))));
+        MOTIVOS_BLOQUEIO_CFG.map(mv => h("button", { type: "button", class: "ag-serv-chip agc-motivo", dataset: { motivo: mv }, on: { click: () => { const i = corpo.querySelector('input[name="motivo"]'); if (i) { i.value = mv; try { i.focus(); } catch { /* ok */ } } for (const c of corpo.querySelectorAll(".agc-motivo")) c.setAttribute("aria-pressed", String(c.dataset.motivo === mv)); } }, "aria-pressed": String(!!(ed && ed.motivo === mv)) }, mv))));   // plano 2000d · GY-087
     function preencherMeio(qual) {
       const das = corpo.querySelector('input[name="das"]'), ate = corpo.querySelector('input[name="ate"]');
       if (!das || !ate) return;
@@ -981,10 +1018,11 @@ async function secaoAgenda(ctx, alvo) {
             conferido = periodo;
             if (caem.length) {
               if (linkAgenda && diaSP(primeiraDe(caem))) linkAgenda.setAttribute("href", `#/agenda?dia=${diaSP(primeiraDe(caem))}`);   // GX-067
-              const nomes = caem.slice(0, 3).map(c => `${c.nome || c.titulo || "consulta"} (${ui.dataHoraBR(c.inicio)})`).join(", ");
-              avisoTxt.textContent = `${caem.length === 1 ? "1 consulta cai" : `${caem.length} consultas caem`} neste bloqueio: ${nomes}${caem.length > 3 ? "…" : ""}. Os pacientes continuam marcados — remarque ou desmarque pela Agenda. Para bloquear mesmo assim, toque em «Salvar bloqueio» de novo.`;
+              const palB = palavraDaAgenda(ctx.vocab);   // plano 2000d · GY-086: a palavra da vertical (e «As pessoas», não «Os pacientes», fora da saúde)
+              const nomes = caem.slice(0, 3).map(c => `${c.nome || c.titulo || palB} (${ui.dataHoraBR(c.inicio)})`).join(", ");
+              avisoTxt.textContent = `${caem.length === 1 ? `1 ${palB} cai` : `${caem.length} ${palB}s caem`} neste bloqueio: ${nomes}${caem.length > 3 ? "…" : ""}. ${palB === "consulta" ? "Os pacientes continuam marcados" : "As pessoas continuam marcadas"} — remarque ou desmarque pela Agenda. Para bloquear mesmo assim, toque em «Salvar bloqueio» de novo.`;
               aviso.hidden = false;
-              m.erro(`${caem.length === 1 ? "Há 1 consulta" : `Há ${caem.length} consultas`} marcada${caem.length === 1 ? "" : "s"} neste período.`);
+              m.erro(`${caem.length === 1 ? `Há 1 ${palB}` : `Há ${caem.length} ${palB}s`} marcada${caem.length === 1 ? "" : "s"} neste período.`);
               return false;
             }
           } catch { conferido = periodo; /* sem a leitura da agenda: o servidor decide */ }

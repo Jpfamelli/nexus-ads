@@ -46,6 +46,11 @@ export function dadosDuplicar(n, contato = null) {
 /** plano 1500c · RC-098: a mensagem do telefone recusado — número de outro país provável sugere o «+código». */
 export function textoTelefoneInvalido(v) {
   if (telefoneSemPais(v)) return "Número de outro país? Comece com + e o código do país (ex.: +1 212 555 1234).";
+  // plano 2000d · PX-067: com «+» e poucos dígitos, o problema é o número curto — não «use DDD» (que é só do Brasil)
+  const dig = String(v ?? "").replace(/\D/g, "");
+  if (/^\s*\+/.test(String(v ?? "")) && !dig.startsWith("55") && dig.length < 8) return "Número de outro país incompleto. Confira o código do país e o número inteiro.";
+  // plano 2000d · PX-068: poucos dígitos (sem DDD) dizem o que falta
+  if (!/^\s*\+/.test(String(v ?? "")) && (dig.length === 8 || dig.length === 9)) return "Falta o DDD. Escreva com o DDD, por exemplo (12) 99830-3030.";
   // plano 2000d · DR-140/190: celular sem o 9 ganha a sugestão; o resto, o exemplo do formato
   const s = sugestaoNonoDigito(v);
   return s ? `Telefone inválido. Faltou o 9? Ex.: ${s}.` : "Telefone inválido. Use DDD + número, por exemplo (12) 99830-3030.";
@@ -330,6 +335,7 @@ export function lerCSV(texto, { separador, limite = 20000 } = {}) {
 function pareceFormula(s) {
   // plano 1500c · RC-021: telefone de fora («+1 415 555 0100») só tem dígitos, espaço, parênteses e hífen — não executa nada (sem o apóstrofo visível)
   if (/^\+[\d\s()-]+$/.test(s) && !/^\+[\d\s()-]*[+]/.test(s) && /\d{6}/.test(s.replace(/\D/g, ""))) return false;
+  if (/^[-+]+$/.test(s)) return false;      // plano 2000d · PX-011: «-» (o «sem valor» de muita planilha) e «---» não são fórmula — sem o «'» na frente
   return /^[=+\-@\t\r]/.test(s) && !/^[+-]?\d+([.,]\d+)*$/.test(s);
 }
 /** Escapa um valor para CSV com ";" (o que o Excel brasileiro abre direto); fórmula ganha um ' na frente. */
@@ -467,9 +473,12 @@ const SINONIMOS = [
   ["optin_marketing", ["aceita marketing", "aceita receber", "aceita receber mensagens", "opt-in", "optin", "consentimento", "autoriza contato", "marketing"]],
   ["criado_em", ["data de cadastro", "cadastrado em", "criado em", "created at", "date created", "data de criacao", "cadastro"]],
   // plano 2000d · DR-342
-  ["responsavel", ["responsavel", "vendedor", "vendedora", "dono", "owner", "owner name", "proprietario", "consultor", "consultora", "usuario responsavel", "responsible"]],
+  // plano 2000d · PX-060: «Atendente», «Corretor(a)», «Assigned to» (exportações de CRM imobiliário e helpdesk) também são o responsável
+  ["responsavel", ["responsavel", "vendedor", "vendedora", "dono", "owner", "owner name", "proprietario", "consultor", "consultora", "usuario responsavel", "responsible",
+    "atendente", "corretor", "corretora", "assigned to"]],
   ["telefone", ["telefone", "celular", "whatsapp", "whats", "fone", "tel", "telefone 1", "celular 1", "phone", "mobile", "numero", "zap",
-    "celular do lead", "telefone do lead", "person phone", "mobile phone", "work phone", "telefone celular", "telefone comercial"]],
+    "celular do lead", "telefone do lead", "person phone", "mobile phone", "work phone", "telefone celular", "telefone comercial",
+    "cel", "telefone fixo", "contato telefonico"]],      // plano 2000d · PX-059: «Cel» (abreviado) também é o telefone
   ["email", ["email", "e-mail", "e mail", "mail", "correio eletronico", "email do lead", "e mail do lead", "person email", "work email", "email comercial"]],
   ["empresa", ["empresa", "companhia", "organizacao", "company", "convenio"]],
   ["cidade", ["cidade", "municipio", "city"]],
@@ -477,7 +486,8 @@ const SINONIMOS = [
   ["nascimento", ["nascimento", "data de nascimento", "data nascimento", "aniversario", "dt nascimento", "birthday", "nasc"]],
   // plano 1000b · RB-072: «RG» não é CPF/CNPJ (entrava como documento e disparava o aviso de dígito) — a coluna fica «Ignorar»
   ["documento", ["cpf", "cnpj", "cpf/cnpj", "cpf cnpj", "documento"]],
-  ["obs", ["observacao", "observacoes", "obs", "nota", "notas", "anotacao", "comentario", "comentarios"]],
+  // plano 2000d · PX-058: «Anotações», «Notes» (Google/Outlook) e «Descrição» também vão para a observação
+  ["obs", ["observacao", "observacoes", "obs", "nota", "notas", "anotacao", "comentario", "comentarios", "anotacoes", "notes", "note", "descricao"]],
   ["origem", ["origem", "fonte", "canal", "source"]],
   ["etiquetas", ["etiquetas", "etiqueta", "tags", "tag", "marcadores", "grupo"]],
   ["negocio_titulo", ["titulo", "negocio", "oportunidade", "orcamento", "procedimento", "servico", "tratamento", "deal title", "titulo do negocio",
@@ -513,10 +523,17 @@ export function sugerirMapeamento(cabecalho, campos = []) {
         if (chaveTexto(c.rotulo) === k || chaveTexto(c.chave) === k) { achou = d; break; }
       }
     }
+    // plano 2000d · PX-056/057: o COMEÇO do cabeçalho decide antes do fim — «E-mail do cliente» é e-mail (não nome) e «Valor do orçamento» é valor (não título)
     if (!achou) {
       for (const [dest, lista] of SINONIMOS) {
         if (usados.has(dest)) continue;
-        if (lista.some(s => s.length >= 4 && (k.startsWith(s + " ") || k.endsWith(" " + s)))) { achou = dest; break; }
+        if (lista.some(s => s.length >= 4 && k.startsWith(s + " "))) { achou = dest; break; }
+      }
+    }
+    if (!achou) {
+      for (const [dest, lista] of SINONIMOS) {
+        if (usados.has(dest)) continue;
+        if (lista.some(s => s.length >= 4 && k.endsWith(" " + s))) { achou = dest; break; }
       }
     }
     if (achou) usados.add(achou);
@@ -629,6 +646,16 @@ export function montarLinhas(linhas, mapa, campos = null) {
 
 /** plano 1500c · RC-046: limite da observação que vai ao servidor (a linha não falha inteira por um texto longo). */
 export const LIMITE_OBS_IMPORTACAO = 2000;
+/**
+ * plano 2000d · PX-071: nome todo em MAIÚSCULAS ou todo em minúsculas (exportação de sistema antigo, digitado no celular) vira «Maria da Silva»;
+ * da/de/do/das/dos/e ficam minúsculas no meio. Nome já com maiúsculas e minúsculas misturadas («McDonald», «iPhone») fica como veio.
+ */
+export function nomeBonito(s) {
+  const t = String(s ?? "");
+  if (!/\p{L}/u.test(t) || (t !== t.toUpperCase() && t !== t.toLowerCase())) return t;
+  const miudas = new Set(["da", "de", "do", "das", "dos", "e", "di", "du", "del", "della", "van", "von"]);
+  return t.toLowerCase().split(/(\s+|-|')/).map((w, i) => (!w || /^(\s+|-|')$/.test(w) || (i > 0 && miudas.has(w)) ? w : w[0].toUpperCase() + w.slice(1))).join("");
+}
 export const LIMITE_NOME_IMPORTACAO = 160;      // plano 1500c · RX-026: o mesmo maxlength do nome na ficha
 const RE_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 /**
@@ -636,7 +663,10 @@ const RE_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
  * o primeiro que vale; os outros vão para a observação. → {telefone, extras, ramal}
  */
 export function telefoneDaCelula(v) {
-  const semRamal = s => String(s).replace(/\s*(?:ramal|ext\.?|r\.)\s*:?\s*\d+.*$/i, "").trim();
+  // plano 2000d · PX-008: o prefixo internacional «00» («0055 12 99830-3030», «001 415…») vira «+» — antes ficava um número de 15 dígitos inválido
+  // plano 2000d · PX-019: o código da operadora do DDD antigo («015 12 99830-3030», «0 21 12 3632-1234») sai — fica DDD + número
+  const semOperadora = s => { const d = s.replace(/\D/g, ""); return !/^\+/.test(s) && /^0\d{2}\d{10,11}$/.test(d) && dddValido(d.slice(3, 5)) && normalizarTelefone(d.slice(3)) ? d.slice(3) : s; };
+  const semRamal = s => semOperadora(String(s).replace(/\s*(?:ramal|ext\.?|r\.)\s*:?\s*\d+.*$/i, "").trim().replace(/^00\s*(?=[1-9])/, "+"));
   const txt = String(v ?? "").trim();
   const ramal = /(?:ramal|ext\.?|r\.)\s*:?\s*\d/i.test(txt);
   // plano 1500c · RX-013: «12 99830-3030 e 12 98888-1111» também são dois números
@@ -650,7 +680,8 @@ export function telefoneDaCelula(v) {
 export function emailDaCelula(v) {
   // plano 1500c · RX-007: «Ana <ana@x.com>» (copiado do e-mail), «mailto:ana@x.com» e o ponto final da frase («ana@x.com.») viram só o endereço
   const limpar = p => p.replace(/^mailto:/, "").replace(/^[<("'[]+|[>)"'\]]+$/g, "").replace(/[.,;:!?]+$/, "");
-  const bruto = String(v ?? "").trim().toLowerCase();
+  // plano 2000d · PX-009: espaço em volta do @ («ana @ x.com», digitado no celular) some — antes o e-mail virava inválido
+  const bruto = String(v ?? "").trim().toLowerCase().replace(/\s*@\s*/g, "@").replace(/@{2,}/g, "@");      // plano 2000d · PX-081: «ana@@x.com» (tecla repetida) vale
   const partes = bruto.replace(/[^;,<>]*<([^<>\s]+@[^<>\s]+)>/g, " $1 ").split(/[;,\s]+/).map(limpar).filter(Boolean);
   if (!partes.length) return { email: "", extras: [] };
   const i = partes.findIndex(p => RE_EMAIL.test(p));
@@ -671,7 +702,7 @@ function arrumarLinhaPlanilha(o) {
   if (o.sobrenome !== undefined) { o.nome = [o.nome, o.sobrenome].filter(Boolean).join(" "); delete o.sobrenome; }
   // plano 1500c · RX-026: nome com espaços repetidos/quebra de linha vira uma linha só; mais de 160 caracteres (o limite da ficha) é cortado com aviso
   if (typeof o.nome === "string") {
-    o.nome = o.nome.replace(/\s+/g, " ").trim();
+    o.nome = nomeBonito(o.nome.replace(/\s+/g, " ").trim());      // plano 2000d · PX-071: «MARIA DA SILVA»/«joão de souza» → «Maria da Silva»/«João de Souza»
     if ([...o.nome].length > LIMITE_NOME_IMPORTACAO) { o.nome = [...o.nome].slice(0, LIMITE_NOME_IMPORTACAO).join("").trimEnd(); avisos.push(`Nome cortado em ${LIMITE_NOME_IMPORTACAO} caracteres`); }
   }
   if (o.telefone) {
@@ -686,6 +717,8 @@ function arrumarLinhaPlanilha(o) {
     if (e.extras.length) { obsExtra.push(`Outros e-mails: ${e.extras.join(", ")}`); avisos.push("Mais de um e-mail: o 1º entra, os outros vão para a observação"); }
   }
   if (obsExtra.length) o.obs = [o.obs, ...obsExtra].filter(Boolean).join(" · ");
+  // plano 2000d · PX-029: cidade em CAIXA ALTA/minúsculas também ganha as maiúsculas certas («SÃO JOSÉ DOS CAMPOS» → «São José dos Campos»)
+  if (typeof o.cidade === "string" && o.cidade.trim()) o.cidade = nomeBonito(o.cidade.trim().replace(/\s+/g, " "));
   if (o.obs && [...o.obs].length > LIMITE_OBS_IMPORTACAO) {
     o.obs = [...o.obs].slice(0, LIMITE_OBS_IMPORTACAO).join("");
     avisos.push(`Observação cortada em ${LIMITE_OBS_IMPORTACAO.toLocaleString("pt-BR")} caracteres`);
@@ -712,10 +745,14 @@ export function ufDaPlanilha(v) {
   const n = semAcento(t).replace(/^estado d[eoa]s?\s+/, "").replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
   // plano 1500c · RX-018: «Estado de SP», «SP - São Paulo», «São Paulo (SP)» → a sigla que aparece no texto, se for UF
   if (!UF_POR_NOME[n]) { const sig = /(?:^|[^A-Za-z])([A-Za-z]{2})(?:$|[^A-Za-z])/.exec(t.replace(/^estado\s+d[eoa]s?\s+/i, "")); if (sig && ufValida(sig[1]) && (n.length === 2 || /[()\-–]/.test(t) || /^estado/i.test(t))) return sig[1].toUpperCase(); }
-  return UF_POR_NOME[n] || t;
+  return UF_POR_NOME[n] || UF_APELIDOS[n] || t;
 }
+// plano 2000d · PX-072: apelidos comuns na planilha (fora do UF_POR_NOME, que também gera a lista de UFs)
+const UF_APELIDOS = Object.freeze({ minas: "MG", brasilia: "DF" });
 const ORIGEM_POR_TEXTO = Object.freeze({ anuncio: "anuncio", "anuncio pago": "anuncio", trafego: "anuncio", "trafego pago": "anuncio", whatsapp: "whatsapp", whats: "whatsapp",
   zap: "whatsapp", wpp: "whatsapp", indicacao: "indicacao", indicado: "indicacao", "indicado por": "indicacao", "boca a boca": "indicacao", organico: "organico",
+  // plano 2000d · PX-018: «Orgânica», «Google (orgânico)», «Busca orgânica» — o tipo vem no texto, então é orgânico
+  organica: "organico", "busca organica": "organico", "google organico": "organico", "instagram organico": "organico", "facebook organico": "organico",
   manual: "manual", "cadastro manual": "manual", balcao: "manual", recepcao: "manual", site: "site", website: "site", "formulario do site": "site", importacao: "importacao" });
 /**
  * plano 1000 (CR-129): origem da planilha — o rótulo da tela («Indicação», «Cadastro manual») ou um sinônimo comum («Whats», «boca a boca») vira a chave.
@@ -871,8 +908,11 @@ export function metadeLote(n) { return Math.max(10, Math.floor(n / 2)); }
 export function lerNumero(s) {
   if (s === null || s === undefined || s === "") return null;
   if (typeof s === "number") return Number.isFinite(s) ? s : null;
-  let t = String(s).replace(/[R$\s ]/g, "").replace(/^[−–]/, "-");      // plano 1500c · RX-015: o sinal de menos tipográfico («−150», do Word/Excel) é negativo
+  // plano 2000d · PX-002: a moeda por extenso («1.500 reais», «BRL 300», «1 real») sai antes — o «R» de «BRL» não pode virar «BL»
+  let t = String(s).replace(/(?:reais|real|brl)\.?/gi, " ").replace(/[R$\s ]/g, "").replace(/^[−–]/, "-");      // plano 1500c · RX-015: o sinal de menos tipográfico («−150», do Word/Excel) é negativo
   if (!t) return null;
+  t = t.replace(/^\+(?=[\d.,(])/, "");      // plano 2000d · PX-001: o «+» da frente («+1.500», planilha de entradas) não muda o número — antes virava 1,5
+  if (/^-?[.,]\d+$/.test(t)) t = t.replace(/^(-?)[.,]/, (_, sinal) => `${sinal}0.`);      // plano 2000d · PX-003: «,50» (sem o zero) é meio real — antes não era número
   // plano 1500c · RC-003: negativo contábil «(1.500,00)» (planilha de sistema financeiro) = −1500
   let negativo = false;
   const par = /^\((.*)\)$/.exec(t);
@@ -896,14 +936,19 @@ export function lerNumero(s) {
  * plano 1500c · RX-082: erro de digitação comum no domínio do e-mail («gmail.con», «hotmal.com», «gmial.com») → o e-mail sugerido | null.
  * Só sugere (aviso que não bloqueia): domínio próprio parecido continua valendo.
  */
-const DOMINIOS_COMUNS = Object.freeze({ "gmail.com": ["gmail.con", "gmail.co", "gmail.cm", "gmial.com", "gmai.com", "gamil.com", "gnail.com", "gmail.com.br", "gmal.com", "gmeil.com"],
-  "hotmail.com": ["hotmail.con", "hotmal.com", "hotmial.com", "hotmai.com", "homail.com", "hotmail.co", "hotmeil.com"],
-  "outlook.com": ["outlook.con", "outlok.com", "outloo.com", "outlook.co"], "yahoo.com.br": ["yahoo.com.bt", "yaho.com.br", "yahoo.combr"],
+// plano 2000d · PX-010: mais erros comuns — letra dobrada («gmail.comm», «gmaill.com»), letras trocadas («gmali.com», «hotamil.com») e «.cpm»
+const DOMINIOS_COMUNS = Object.freeze({ "gmail.com": ["gmail.con", "gmail.co", "gmail.cm", "gmial.com", "gmai.com", "gamil.com", "gnail.com", "gmail.com.br", "gmal.com", "gmeil.com",
+    "gmail.comm", "gmali.com", "gmaill.com", "gmail.cpm", "gmail.om", "gmsil.com", "gmail.vom", "gmail.xom"],
+  "hotmail.com": ["hotmail.con", "hotmal.com", "hotmial.com", "hotmai.com", "homail.com", "hotmail.co", "hotmeil.com", "hotmail.comm", "hotamil.com", "hotmaill.com", "hotmail.cpm", "hotmsil.com", "hotmail.om"],
+  "outlook.com": ["outlook.con", "outlok.com", "outloo.com", "outlook.co", "outlook.comm", "outllok.com", "outlook.cpm"], "yahoo.com.br": ["yahoo.com.bt", "yaho.com.br", "yahoo.combr"],
   "icloud.com": ["icloud.con", "iclod.com", "icoud.com"], "uol.com.br": ["uol.com.bt", "uol.combr"], "bol.com.br": ["bol.com.bt", "bol.combr"] });
 export function sugestaoEmail(email) {
   const m = /^([^@\s]+)@([^@\s]+)$/.exec(String(email ?? "").trim().toLowerCase());
   if (!m) return null;
   for (const [certo, erros] of Object.entries(DOMINIOS_COMUNS)) if (erros.includes(m[2])) return `${m[1]}@${certo}`;
+  // plano 2000d · PX-082: o domínio sem o final («ana@gmail», «ana@hotmail») ganha a sugestão com o «.com»
+  const semFinal = Object.keys(DOMINIOS_COMUNS).find(d => d.split(".")[0] === m[2]);
+  if (semFinal) return `${m[1]}@${semFinal}`;
   return null;
 }
 /** plano 1500c · RX-071: a frase do campo de dinheiro da gaveta — texto que não vira número OU valor negativo; vazio = «sem valor» (ok). */
@@ -933,14 +978,27 @@ export function dinheiroInvalido(s) {
  * "31/12/1990" | "1990-12-31" → "1990-12-31"; inválido → null.
  * plano 1000 (CR-119): também DD-MM-AAAA, DD.MM.AAAA, ano com 2 dígitos (≥ 30 → 19xx, senão 20xx) e o número de série do Excel (20000–80000).
  */
+// plano 2000d · PX-007: o mês por nome (completo ou abreviado, sem acento) → número
+const MES_POR_NOME = Object.freeze({ jan: 1, janeiro: 1, fev: 2, fevereiro: 2, mar: 3, marco: 3, abr: 4, abril: 4, mai: 5, maio: 5, jun: 6, junho: 6,
+  jul: 7, julho: 7, ago: 8, agosto: 8, set: 9, setembro: 9, out: 10, outubro: 10, nov: 11, novembro: 11, dez: 12, dezembro: 12 });
 // plano 2000d · DR-200: mdy = a coluna está no formato americano (MM/DD/AAAA) — ver formatoDatasColuna
 export function lerData(s, { passado = false, agora = new Date(), mdy = false } = {}) {
   const t = String(s ?? "").trim();
   let a, m, d;
   // plano 1500c · RX-008: também «2026/10/21» (planilha exportada de sistema) e «21/10/2026 14:30» (data com hora) — a hora é ignorada
-  let r = /^(\d{4})([-/])(\d{1,2})\2(\d{1,2})(?:[T\s].*)?$/.exec(t);       // plano 1500c · RC-004: depois da data só hora — «1990-12-31abc» não é data
+  // plano 2000d · PX-005: também «2020.02.01» (AAAA.MM.DD, exportação de banco/ERP)
+  let r = /^(\d{4})([-/.])(\d{1,2})\2(\d{1,2})(?:[T\s].*)?$/.exec(t);       // plano 1500c · RC-004: depois da data só hora — «1990-12-31abc» não é data
+  const mw = /^(\d{1,2})(?:\s+de\s+|\s+|[/.-])([a-zç]+)\.?(?:\s+de\s+|\s+|[/.-])(\d{4}|\d{2})$/.exec(semAcento(t));
   if (r) { a = +r[1]; m = +r[3]; d = +r[4]; }
-  else if ((r = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?:,?\s+\d{1,2}:\d{2}(?::\d{2})?h?)?$/.exec(t))) {
+  // plano 2000d · PX-006: «20200201» (AAAAMMDD, sem separador) — só ano entre 1900 e 2100, para não confundir com outro número
+  else if ((r = /^((?:19|20)\d{2}|2100)(\d{2})(\d{2})$/.exec(t))) { a = +r[1]; m = +r[2]; d = +r[3]; }
+  // plano 2000d · PX-007: o mês por extenso ou abreviado («31 de dezembro de 1990», «31 dez 1990», «31/dez/90»)
+  else if (mw && MES_POR_NOME[mw[2]]) {
+    d = +mw[1]; m = MES_POR_NOME[mw[2]]; a = +mw[3];
+    if (mw[3].length === 2) a += passado ? (a > new Date(agora).getUTCFullYear() % 100 ? 1900 : 2000) : (a >= 30 ? 1900 : 2000);
+  }
+  // plano 2000d · PX-004: a hora também como «às 14:30», «14h30», «14h» ou «- 14:30» — a data continua valendo
+  else if ((r = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?:,?\s+(?:(?:às|as|-)\s*)?\d{1,2}(?:[:h]\d{2}(?::\d{2})?h?|h))?$/i.exec(t))) {
     d = +r[1]; m = +r[2]; a = +r[3];
     if (mdy) [d, m] = [m, d];      // plano 2000d · DR-200
     // plano 1000b · RB-249: data que só pode estar no passado (nascimento): ano de 2 dígitos acima do ano atual é do século passado («05/03/28» → 1928)
@@ -975,7 +1033,14 @@ export function textoDiasEtapa(estagioEm, agora = new Date()) {
   const d = diasEntre(estagioEm, agora);
   if (d === null) return "";
   if (d <= 0) return "hoje na etapa";
+  // plano 2000d · PX-069: parado há muito tempo fala em meses/anos («há 3 meses na etapa», não «há 97 dias»)
+  if (d >= 60) return `${tempoLongo(d)} na etapa`;
   return d === 1 ? "há 1 dia na etapa" : `há ${d} dias na etapa`;
+}
+/** plano 2000d · PX-069/070: 60+ dias → «há N meses»; 365+ → «há N ano(s)». */
+function tempoLongo(d) {
+  if (d >= 365) { const a = Math.floor(d / 365); return `há ${a} ${a === 1 ? "ano" : "anos"}`; }
+  return `há ${Math.floor(d / 30)} meses`;
 }
 
 /** SLA da etapa (horas) estourado? */
@@ -1296,8 +1361,12 @@ export function origemPilula(c, { manual = true } = {}) {
 const capitalizar = s => { const t = String(s || "").trim(); return t ? t[0].toUpperCase() + t.slice(1) : ""; };
 /** plano 1000b · RB-083: utm_source abreviado vira o nome da rede («ig» → Instagram, «fb» → Facebook, «yt» → YouTube). */
 const NOME_FONTE = Object.freeze({ ig: "Instagram", insta: "Instagram", instagram: "Instagram", fb: "Facebook", facebook: "Facebook", google: "Google", yt: "YouTube",
-  youtube: "YouTube", tiktok: "TikTok", tt: "TikTok", linkedin: "LinkedIn", kwai: "Kwai", whatsapp: "WhatsApp", wa: "WhatsApp", bing: "Bing" });
-export function nomeFonte(s) { const t = String(s || "").trim(); return NOME_FONTE[t.toLowerCase()] || capitalizar(t); }
+  youtube: "YouTube", tiktok: "TikTok", tt: "TikTok", linkedin: "LinkedIn", kwai: "Kwai", whatsapp: "WhatsApp", wa: "WhatsApp", bing: "Bing",
+  // plano 2000d · PX-061: as fontes de anúncio comuns no utm_source («google_ads», «meta_ads», «fb_ads», «adwords»)
+  google_ads: "Google Ads", googleads: "Google Ads", adwords: "Google Ads", meta: "Meta", meta_ads: "Meta Ads", fb_ads: "Facebook Ads", facebook_ads: "Facebook Ads",
+  ig_ads: "Instagram Ads", instagram_ads: "Instagram Ads", tiktok_ads: "TikTok Ads", email: "E-mail", newsletter: "Newsletter" });
+// plano 2000d · PX-061: fonte desconhecida com «_»/«-» vira palavras («minha_loja» → «Minha loja»), não «Minha_loja»
+export function nomeFonte(s) { const t = String(s || "").trim(); return NOME_FONTE[t.toLowerCase()] || NOME_FONTE[t.toLowerCase().replace(/[-\s]+/g, "_")] || capitalizar(t.replace(/[_]+/g, " ").replace(/\s+/g, " ")); }
 /**
  * De onde veio o negócio, numa frase para a gaveta (C3): «Veio do anúncio «X» · campanha «Y»», «Veio do site · campanha X · página Y · clique em
  * 06/10 10:12», «Veio do Instagram (orgânico)», «Chamou no WhatsApp»… Campos de nx_negocio_ver: origem, plataforma, campanha_nome/campanha_ext,
@@ -1778,7 +1847,8 @@ export function validarCampo(campo, valor) {
     case "numero": return lerNumero(s) === null ? "Use só números." : null;
     case "moeda": return lerNumero(s) === null || lerNumero(s) < 0 ? "Valor inválido." : null;
     case "data": return lerData(s) ? null : "Data inválida (DD/MM/AAAA).";
-    case "email": return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s)) ? null : "E-mail inválido.";
+    // plano 2000d · PX-053: « Ana @ x.com » vale (o normalizarCampo grava «ana@x.com») — antes o espaço em volta do @ reprovava
+    case "email": return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s).trim().replace(/\s*@\s*/, "@")) ? null : "E-mail inválido.";
     // plano 1000b · RB-076: «www.site.com.br» é aceito (grava com https:// pelo normalizarSite, como o site da empresa)
     case "url": return /^https?:\/\/[^\s.]+\.[^\s]{2,}/i.test(String(normalizarSite(s) || "")) ? null : "Link inválido (ex.: www.site.com.br).";
     case "telefone": return normalizarTelefone(s) ? null : "Telefone inválido.";
@@ -1805,8 +1875,12 @@ export function lerSimNao(v) {
   if (v === 1 || v === 0) return v === 1;
   const t = semAcento(v).trim();
   // plano 1500c · RX-017: planilha em inglês («Yes», «Y», «No») e o «x» de marcar coluna
-  if (["sim", "s", "true", "1", "verdadeiro", "yes", "y", "x", "ok"].includes(t)) return true;
-  if (["nao", "n", "false", "0", "falso", "no"].includes(t)) return false;
+  // plano 2000d · PX-052: as marcas de planilha «✓», «✔», «☑» (sim) e «✗», «✘», «☐» (não)
+  if (["sim", "s", "true", "1", "verdadeiro", "yes", "y", "x", "ok", "✓", "✔", "☑"].includes(t)) return true;
+  if (["nao", "n", "false", "0", "falso", "no", "✗", "✘", "☐"].includes(t)) return false;
+  // plano 2000d · PX-080: a frase da coluna de consentimento — «Sim, aceito», «Não aceita», «Aceito», «Recusou», «Não quer»
+  if (/^nao\b/.test(t) || /^(recus|nega|nao quer)/.test(t)) return false;
+  if (/^sim\b/.test(t) || /^(aceit|autoriz|concord)/.test(t)) return true;
   return null;
 }
 
@@ -1822,6 +1896,7 @@ export function normalizarCampo(campo, valor) {
     case "multi": return (Array.isArray(valor) ? valor : String(valor).split(";").map(x => x.trim()).filter(Boolean)).map(x => opcaoOficial(campo.opcoes, x) ?? x);
     case "telefone": return normalizarTelefone(valor) || String(valor).trim();
     case "url": return normalizarSite(valor) || String(valor).trim();      // plano 1000b · RB-076
+    case "email": return String(valor).trim().replace(/\s*@\s*/, "@").toLowerCase();      // plano 2000d · PX-053: e-mail do campo personalizado sem espaço e em minúsculas
     default: return typeof valor === "string" ? valor.trim() : valor;
   }
 }
@@ -1940,12 +2015,16 @@ export function formatarTel(digitos) {
   // plano 1500c · RC-013: 8–9 dígitos = número sem DDD — «9 9830-3030», não «+998303030» (parecia de outro país)
   if (d.length === 8) return `${d.slice(0, 4)}-${d.slice(4)}`;
   if (d.length === 9) return `${d.slice(0, 1)} ${d.slice(1, 5)}-${d.slice(5)}`;
+  // plano 2000d · PX-020: 0800/0300/0500/0900 — «0800 123 4567», não «+08001234567» (parecia de outro país)
+  if (/^0[3589]00\d{6,7}$/.test(d)) return `${d.slice(0, 4)} ${d.slice(4, 7)} ${d.slice(7)}`;
   const br = d.length >= 12 && d.length <= 13 && d.startsWith("55");
   if (br) d = d.slice(2);
   // plano 1000 (CR-264): 10–11 dígitos SEM o 55 que não formam um número brasileiro são de outro país — «+1 2125551234», como na importação
   if ((d.length === 10 || d.length === 11) && (br || pareceBrasileiro(d))) {
     return d.length === 11 ? `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}` : `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
   }
+  // plano 2000d · PX-021: EUA/Canadá (+1 e 10 dígitos) em grupos — «+1 415 555 0100» (depois do teste do número brasileiro: «12 99830-3030» é DDD 12)
+  if (/^1[2-9]\d{2}[2-9]\d{6}$/.test(d)) return `+1 ${d.slice(1, 4)} ${d.slice(4, 7)} ${d.slice(7)}`;
   const ddi = /^(1|7|2[07]|3[0-469]|4[013-9]|5[1-8]|6[0-6]|8[1246]|9[0-58])/.exec(d);
   return ddi && d.length > ddi[1].length + 6 ? `+${ddi[1]} ${d.slice(ddi[1].length)}` : `+${d}`;
 }
@@ -2084,7 +2163,7 @@ export function textoTempo(it, { nomes = {}, vocab, brl = v => `R$ ${v}`, motivo
   const d = (it && it.dados) || {};
   const neg = vocab ? vocab.min("negocio") : "negócio";
   const nomeDe = id => (id && nomes[id]) || (id ? "outra pessoa" : "ninguém");
-  if (it.fonte === "nota") return `Nota: ${d.texto || ""}`;
+  if (it.fonte === "nota") return String(d.texto || "").trim() ? `Nota: ${d.texto}` : "Nota sem texto";      // plano 2000d · PX-017: antes «Nota: » solto
   // plano 1000b · RB-084: sem título, «Criou uma tarefa» (antes: «Criou a tarefa «»»)
   if (it.fonte === "tarefa") {
     const tit = String(d.titulo || "").trim();
@@ -2093,12 +2172,14 @@ export function textoTempo(it, { nomes = {}, vocab, brl = v => `R$ ${v}`, motivo
   }
   switch (it.tipo) {
     case "negocio_criado": return `Criou ${vocab ? (vocab.art("negocio") === "a" ? "a " : "o ") : "o "}${neg}${d.titulo ? ` «${d.titulo}»` : ""}`;
-    case "estagio": return `Moveu de «${d.de_nome || "—"}» para «${d.para_nome || "—"}»`;
+    // plano 2000d · PX-102: sem a etapa de origem (registro antigo), «Moveu para «X»» — antes «Moveu de «—» para «X»»
+    case "estagio": return d.de_nome ? `Moveu de «${d.de_nome}» para «${d.para_nome || "—"}»` : `Moveu para «${d.para_nome || "—"}»`;
     // plano 1000b · RB-044: o termo da vertical é o NOME da etapa («Fechou»/«Não fechou»), não adjetivo — vai entre aspas como está
     case "ganho": return `Marcou como «${vocab ? vocab.ganhar : "Ganho"}»${d.valor != null ? ` · ${brl(d.valor)}` : ""}`;
     case "perdido": return `Marcou como «${vocab ? vocab.perder : "Perdido"}»${d.motivo && motivos[d.motivo] ? ` · ${motivos[d.motivo]}` : ""}${d.texto ? ` — ${d.texto}` : ""}`;
     case "reaberto": return `Reabriu ${vocab ? (vocab.art("negocio") === "a" ? "a " : "o ") : "o "}${neg}`;
-    case "dono": return d.para ? `Responsável: ${nomeDe(d.para)}` : "Ficou sem responsável";
+    // plano 2000d · PX-101: quando o registro traz quem era antes, a linha diz («Responsável: Ana (antes: Bruno)»)
+    case "dono": return d.para ? `Responsável: ${nomeDe(d.para)}${d.de && d.de !== d.para ? ` (antes: ${nomeDe(d.de)})` : ""}` : d.de ? `Ficou sem responsável (antes: ${nomeDe(d.de)})` : "Ficou sem responsável";
     case "conversa_aberta": return `Atendimento ${d.protocolo || ""} aberto`.replace(/\s+/g, " ").trim();
     case "conversa_resolvida": return `Atendimento ${d.protocolo || ""} resolvido`.replace(/\s+/g, " ").trim();
     case "atribuida": return d.para ? `Conversa atribuída a ${nomeDe(d.para)}` : "Conversa ficou sem responsável";
@@ -2109,7 +2190,8 @@ export function textoTempo(it, { nomes = {}, vocab, brl = v => `R$ ${v}`, motivo
       const partes = [...mais.map(n => `+ ${n}`), ...menos.map(n => `− ${n}`)];
       return partes.length ? `Etiquetas: ${partes.join(", ")}` : "Etiquetas alteradas";
     }
-    case "importado": return "Veio da importação de planilha";
+    // plano 2000d · PX-103: com o nome do arquivo no registro, ele aparece («Veio da importação da planilha «clientes.csv»»)
+    case "importado": return d.arquivo ? `Veio da importação da planilha «${String(d.arquivo).slice(0, 80)}»` : "Veio da importação de planilha";
     case "automacao": return `Automação${d.nome ? ` «${d.nome}»` : ""} executada`;
     case "contato_mesclado": return "Cadastros duplicados foram unidos";
     // plano 100 · C6: nx_agenda_presenca grava {presenca, consulta_em, estagio_id}
@@ -2522,7 +2604,8 @@ export function linhasExportacao(itens, campos = []) {
   };
   const linhas = (itens || []).map(k => [
     k.nome || "", k.telefone ? formatarTel(k.telefone) : "", k.email || "", k.empresa_nome || "", k.cidade || "", k.uf || "",
-    dataCurtaCSV(k.nascimento), k.documento || "", ROTULO_ORIGEM[k.origem] || k.origem || "",
+    // plano 2000d · PX-012: CPF/CNPJ com a máscara — só dígitos o Excel lê como número e some o zero da frente («01234567890» → 1234567890)
+    dataCurtaCSV(k.nascimento), k.documento ? formatarDoc(k.documento) : "", ROTULO_ORIGEM[k.origem] || k.origem || "",
     (k.etiquetas_nomes || []).join("; "), k.dono_nome || "",
     k.optin_marketing === true ? "Sim" : k.optin_marketing === false ? "Não" : "", dataCurtaCSV(k.criado_em), k.obs || "",
     ...(temUltimo ? [dataCurtaCSV(k.ultimo_contato_em)] : []), ...(temTotal ? [k.total_ganho == null ? "" : numeroCSV(k.total_ganho, true)] : []),
@@ -2658,7 +2741,8 @@ export function previsaoPorMes(colunas, estagios) {
 export function rotuloMes(mes) {
   const r = /^(\d{4})-(\d{2})$/.exec(String(mes || ""));
   if (!r) return String(mes || "");
-  return `${["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][Number(r[2]) - 1] || r[2]}/${r[1]}`;
+  const nome = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"][Number(r[2]) - 1];
+  return nome ? `${nome}/${r[1]}` : String(mes);      // plano 2000d · PX-075: mês fora de 01–12 («2026-13») volta como veio, não «13/2026» como se fosse válido
 }
 /** plano 1500c · RC-167: as colunas da prévia da importação — cada destino mapeado uma vez, com o rótulo curto → [{dest, rotulo, campo?}]. */
 export function colunasPrevia(mapeados, destinos = []) {
@@ -2749,12 +2833,16 @@ export function donoSugeridoTarefa(donoId, usuarios, eu) {
 export function partesNota(texto) {
   const s = String(texto ?? "");
   // plano 1500c · RX-006: o «(» do DDD faz parte do número («(12) 99830-3030» inteiro no link, não «12) 99830-3030»)
-  const re = /(https?:\/\/[^\s<>"«»]+)|(\+?\(?\d[\d\s().-]{8,18}\d)/g;
+  // plano 2000d · PX-013: «www.site.com.br» (sem http) também vira link — com https://
+  // plano 2000d · PX-014: e-mail escrito na nota vira {tipo:"email", href:"mailto:…"}
+  const re = /(https?:\/\/[^\s<>"«»]+)|((?<![\w.@/-])www\.[^\s<>"«»]+\.[a-z]{2,}[^\s<>"«»]*)|((?<![\w.+-])[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})|(\+?\(?\d[\d\s().-]{8,18}\d)/gi;
   const out = [];
   let ult = 0, m;
   while ((m = re.exec(s))) {
     let txt = m[0], href = null, tipo = null;
     if (m[1]) { txt = txt.replace(/[.,;:!?)\]]+$/, ""); href = txt; tipo = "url"; }
+    else if (m[2]) { txt = txt.replace(/[.,;:!?)\]]+$/, ""); href = `https://${txt}`; tipo = "url"; }
+    else if (m[3]) { txt = txt.replace(/\.+$/, ""); href = `mailto:${txt}`; tipo = "email"; }
     else {
       const d = txt.replace(/\D/g, "");
       if (d.length < 10 || d.length > 13) continue;
@@ -2763,6 +2851,9 @@ export function partesNota(texto) {
       if (!txt.trim().startsWith("+") && !normalizarTelefone(txt)) continue;
       href = hrefTel(txt.trim().startsWith("+") ? txt : d); tipo = "tel";
       if (!href) continue;
+      // plano 2000d · PX-093: «12 3632-1234 ramal 22» — o ramal entra no link (pausa «,22») e no texto do link
+      const rm = /^\s*(?:ramal|ext\.?|r\.)\s*:?\s*(\d{1,6})/i.exec(s.slice(m.index + txt.length));
+      if (rm) { txt += rm[0]; href = `${href},${rm[1]}`; }
     }
     if (m.index > ult) out.push({ tipo: "texto", texto: s.slice(ult, m.index) });
     out.push({ tipo, texto: txt, href });
@@ -2815,7 +2906,7 @@ export const UFS = Object.freeze(Object.values(UF_POR_NOME).slice().sort());
 /** plano 1500c · RC-106/111: o número no formato internacional (+5512998303030) e o link do wa.me — mesma régua do hrefTel. null sem número válido. */
 export function telInternacional(telefone) {
   const h = hrefTel(telefone);
-  return h ? h.slice(4) : null;
+  return h ? h.slice(4).replace(/,.*$/, "") : null;      // plano 2000d · PX-092: o ramal (pausa «,22» do tel:) não entra no número do WhatsApp
 }
 export function hrefWhatsApp(telefone) {
   const t = telInternacional(telefone);
@@ -2823,7 +2914,12 @@ export function hrefWhatsApp(telefone) {
 }
 /** `tel:+55…` a partir do telefone do cadastro (só dígitos): 10–11 dígitos = DDD + número, ganham o 55; 12–13 já trazem o país; fora disso não dá para ligar → null. */
 export function hrefTel(telefone) {
-  let d = String(telefone == null ? "" : telefone).replace(/\D/g, "");
+  // plano 2000d · PX-092: «(12) 3632-1234 ramal 22» liga para o número e disca o ramal depois da pausa («tel:+551236321234,22») — antes os
+  // dígitos do ramal grudavam no número (tel:+123632123422, um número que não existe)
+  const bruto = String(telefone == null ? "" : telefone);
+  const rm = /\s*(?:ramal|ext\.?|r\.)\s*:?\s*(\d{1,6})\s*$/i.exec(bruto);
+  if (rm) { const base = hrefTel(bruto.slice(0, rm.index)); return base ? `${base},${rm[1]}` : null; }
+  let d = bruto.replace(/\D/g, "");
   // plano 1000b · RB-069: 10–11 dígitos só ganham 55 quando parecem brasileiros (+1 212 555 1234 é guardado 12125551234 e não vira +5512125551234);
   // número de fora guardado com o DDI vai até 15 dígitos (E.164)
   if (d.length < 10 || d.length > 15) return null;
@@ -3306,6 +3402,8 @@ export function normalizarSite(v) {
   if (/^https?:\/\//i.test(t)) return minus(t);
   // javascript:, mailto: … não viram link. plano 1000b · RB-077: «site.com.br:8080» (ponto ANTES dos dois-pontos) é host com porta, não esquema
   if (/^[a-z][a-z0-9+-]*:/i.test(t)) return null;
+  // plano 2000d · PX-022: «@loja» (perfil) e «ana@x.com» (e-mail) não são site — antes viravam «https://@loja» e «https://ana@x.com»
+  if (/^[^/?#]*@/.test(t)) return null;
   return minus(`https://${t.replace(/^\/+/, "")}`);
 }
 /** plano 1000b · RB-105: o endereço só vira link quando parece um site de verdade (host com ponto, sem espaço) — «não tenho» fica texto. */
@@ -3475,6 +3573,7 @@ export function idadeCurta(min) {
   const hrs = Math.floor(m / 60);
   if (hrs < 24) return `há ${hrs} h`;
   const d = Math.floor(hrs / 24);
+  if (d >= 60) return tempoLongo(d);      // plano 2000d · PX-070: «há 2 meses», não «há 64 dias»
   return `há ${d} ${d === 1 ? "dia" : "dias"}`;
 }
 /** plano 2000d · DR-016: «aplicada a 9 cartões (3 já tinham)». */
@@ -3535,14 +3634,20 @@ export function textoSemContato(n, vocab) {
  * → [{id, rotulo, texto}]
  */
 export function mensagensProntas(n, contato, { compromisso = "consulta", quando = "", linkAvaliacao = null } = {}) {
-  const nome = String((contato && contato.nome) || "").trim().split(/\s+/)[0] || "";
+  // plano 2000d · PX-015: o tratamento fica junto do nome («Dr. João Silva» → «Oi, Dr. João!», antes «Oi, Dr.!»)
+  const pal = String((contato && contato.nome) || "").trim().split(/\s+/).filter(Boolean);
+  const titulo = pal.length > 1 && /^(?:dra?|sra?|srta|prof|profa|eng|pe|me)\.?$/i.test(pal[0]);
+  // plano 2000d · PX-030: nome guardado todo minúsculo/maiúsculo («ana souza», «ANA») sai «Ana» na mensagem
+  const nome = nomeBonito(titulo ? `${pal[0]} ${pal[1]}` : (pal[0] || ""));
   const oi = nome ? `Oi, ${nome}! ` : "Oi! ";
   const srv = n && n.servico ? String(n.servico).trim() : "";
+  // plano 2000d · PX-016: minúscula só nas palavras comuns — sigla e marca continuam («ABS», «iPhone», «Botox»→«botox» mas «ABS» fica)
+  const srvMin = srv.split(/(\s+)/).map(w => (/^[A-ZÀ-Ý0-9]{2,}$/.test(w) || /[a-zà-ÿ][A-ZÀ-Ý]/.test(w) ? w : w.toLowerCase())).join("");
   const lista = [
-    { id: "retomar", rotulo: "Retomar a conversa", texto: `${oi}Tudo bem? Passando para saber se ficou alguma dúvida${srv ? ` sobre ${srv.toLowerCase()}` : ""}. Posso ajudar?` },
+    { id: "retomar", rotulo: "Retomar a conversa", texto: `${oi}Tudo bem? Passando para saber se ficou alguma dúvida${srv ? ` sobre ${srvMin}` : ""}. Posso ajudar?` },
   ];
   if (n && n.consulta_em) lista.push({ id: "confirmar", rotulo: `Confirmar a ${compromisso}`, texto: `${oi}Confirmando a sua ${compromisso}${quando ? ` ${quando}` : ""}. Podemos contar com você?` });
-  if (n && n.status === "ganho") lista.push({ id: "indicacao", rotulo: "Pedir indicação", texto: `${oi}Que bom ter você com a gente! Se conhecer alguém que também precise${srv ? ` de ${srv.toLowerCase()}` : ""}, pode indicar? Vamos cuidar com o mesmo carinho.` });
+  if (n && n.status === "ganho") lista.push({ id: "indicacao", rotulo: "Pedir indicação", texto: `${oi}Que bom ter você com a gente! Se conhecer alguém que também precise${srv ? ` de ${srvMin}` : ""}, pode indicar? Vamos cuidar com o mesmo carinho.` });
   // plano 2000d · DR-137: pedir a avaliação (com o link da empresa no Google, quando configurado)
   if (n && n.status === "ganho") lista.push({ id: "avaliacao", rotulo: "Pedir avaliação", texto: `${oi}Obrigado pela confiança! Se puder, conte como foi a sua experiência${linkAvaliacao ? `: ${linkAvaliacao}` : " na nossa página do Google"}. Ajuda muito!` });
   return lista;
@@ -3688,4 +3793,43 @@ export function jornadaNegocio(n, tempo = [], { origem = null } = {}) {
   if (ag) ms.push({ chave: "agendou", rotulo: "Agendou", em: ag.em });
   if (n.fechado_em && (n.status === "ganho" || n.status === "perdido")) ms.push({ chave: n.status, rotulo: n.status === "ganho" ? "Fechou" : "Não fechou", em: n.fechado_em });
   return ms.filter(m => Number.isFinite(Date.parse(m.em))).sort((a, b) => Date.parse(a.em) - Date.parse(b.em));
+}
+
+/* ------------------------------------------------------------ plano 2000d · complemento PX */
+/**
+ * plano 2000d · PX-027 (DA-358): a etapa do funil do Anúncios no link da lista (#/contatos?origem=anuncio&etapa=agendou) → o marco | null.
+ * Sinônimos aceitos: agendou/agendada, compareceu/veio, fechou/ganho.
+ */
+const MARCO_DO_LINK = Object.freeze({ agendou: "agendou", agendada: "agendou", agendado: "agendou", compareceu: "compareceu", veio: "compareceu",
+  fechou: "fechou", ganho: "fechou", ganhou: "fechou" });
+export function marcoDoLink(v) {
+  const t = semAcento(String(v ?? "")).trim();
+  return MARCO_DO_LINK[t] || null;
+}
+/** plano 2000d · PX-027: o rótulo do chip do marco. */
+export function rotuloMarcoLink(marco, vocab = null) {
+  const cp = palavraCompromisso(vocab);
+  return marco === "agendou" ? `Agendaram a ${cp}`
+    : marco === "compareceu" ? `Compareceram à ${cp}` : marco === "fechou" ? "Fecharam" : "";
+}
+/**
+ * plano 2000d · PX-074: o tipo da tarefa pelo começo do título — «Ligar para a Ana» → ligacao, «Mandar WhatsApp…»/«Zap…» → whatsapp,
+ * «Enviar e-mail…» → email, «Reunião…» → reuniao, «Visita…»/«Visitar…» → visita. Nada claro → null (a tela não mexe).
+ */
+export function tipoDoTitulo(titulo) {
+  const t = semAcento(String(titulo ?? "")).trim();
+  if (!t) return null;
+  if (/\b(whats\s?app|whats|zap|wpp)\b/.test(t)) return "whatsapp";
+  if (/\b(e-?mail|email)\b/.test(t)) return "email";
+  if (/^(ligar|ligacao|telefonar|retornar ligacao|retornar a ligacao)\b/.test(t)) return "ligacao";
+  if (/^(reuniao|reunir|call|videochamada)\b/.test(t)) return "reuniao";
+  if (/^(visita|visitar)\b/.test(t)) return "visita";
+  return null;
+}
+/**
+ * plano 2000d · PX-097: o e-mail digitado como ele vai para o servidor — sem espaço nas pontas nem em volta do @, @ repetido vira um, minúsculas.
+ * Vazio → "". (Os formulários conferem e gravam este valor: « Ana @ X.com » vale e é gravado «ana@x.com».)
+ */
+export function emailLimpo(v) {
+  return String(v ?? "").trim().replace(/\s*@+\s*/g, "@").toLowerCase();
 }

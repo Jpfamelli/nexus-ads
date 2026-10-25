@@ -20,7 +20,9 @@ export function criarChat(A) {
   const faixa = h("div", { class: "cvc-selos", "aria-label": "Situação do atendimento" });
   const topoHist = h("div", { class: "cvc-topo-hist" });
   const trilho = h("div", { class: "cvc-trilho" });
-  const msgs = h("div", { class: "cvc-msgs", role: "log", "aria-live": "polite", "aria-relevant": "additions", "aria-label": "Mensagens", tabindex: "-1" }, topoHist, trilho);
+  // plano 2000d · DC-140: o log não é lido sozinho (a bolha nova vinha com «Responder a esta mensagem Copiar o texto…» junto);
+  // a mensagem nova é anunciada só com quem mandou e o texto (anunciarNovas)
+  const msgs = h("div", { class: "cvc-msgs", role: "log", "aria-live": "off", "aria-relevant": "additions", "aria-label": "Mensagens", tabindex: "-1" }, topoHist, trilho);
   const novasTxt = h("span", null, "Novas mensagens");
   const novas = h("button", { type: "button", class: "bt bt-prim bt-p cvc-novas", hidden: true }, novasTxt, ui.icone("seta-baixo"));
   const semCssEscape = s => String(s).replace(/["\\]/g, "");
@@ -32,13 +34,18 @@ export function criarChat(A) {
   const atraso = h("div", { class: "cvc-atraso", role: "status", hidden: true }, ui.icone("alerta"), atrasoTxt, btAtraso);
   let tentarAtraso = null;
   btAtraso.addEventListener("click", () => { if (typeof tentarAtraso === "function") tentarAtraso(); });
+  // plano 2000d · DC-027: aberta «em volta» de um resultado antigo da busca — a faixa diz e leva de volta às mais recentes
+  const btMeio = h("button", { type: "button", class: "bt bt-fant bt-p cvc-meio-bt" }, "Ir para as mais recentes");
+  const meio = h("div", { class: "cvc-atraso cvc-meio", role: "status", hidden: true }, ui.icone("relogio"), h("span", null, "Você está no meio do histórico."), btMeio);
+  let voltarMeio = null;
+  btMeio.addEventListener("click", () => { const f = voltarMeio; meio.hidden = true; voltarMeio = null; if (typeof f === "function") f(); });
   // plano 1000b · CB-073: um aviso só (fora do log) quando muitas mídias carregam ao mesmo tempo — as bolhas não têm mais role=status
   const avisoMidias = h("span", { class: "sr-only cvc-aviso-midias", role: "status" }, "");
   const esqueletos = new Set();
   const esqueleto = el => { esqueletos.add(el); return el; };
   const corpo = h("div", { class: "cvc-corpo" }, msgs, novas, arrastar, avisoMidias);
   const vazio = h("div", { class: "cvc-vazio" });
-  const el = h("div", { class: "cvc" }, vazio, cab, faixa, atraso, corpo);
+  const el = h("div", { class: "cvc" }, vazio, cab, faixa, atraso, meio, corpo);
 
   novas.addEventListener("click", () => {
     rolarFim(true); novas.hidden = true; pararDeVigiar();
@@ -112,7 +119,8 @@ export function criarChat(A) {
     const arquivos = ev.dataTransfer.files ? [...ev.dataTransfer.files] : [];
     const f = arquivos[0];
     // plano 1500c · CX-055: várias FOTOS soltas de uma vez vão juntas (o fluxo de várias fotos, como ao colar); o resto continua um por vez
-    if (arquivos.length > 1 && typeof A.composer.anexarVarios === "function" && arquivos.every(x => L.ehFoto(x))) { A.composer.anexarVarios(arquivos); return; }
+    // plano 2000d · DC-104: qualquer lote solto vai pelo anexarVarios (fotos juntas; arquivos mistos, um de cada vez sem perder os outros)
+    if (arquivos.length > 1 && typeof A.composer.anexarVarios === "function") { A.composer.anexarVarios(arquivos); return; }
     // CA-012: vários arquivos soltos de uma vez — um envio por vez (cada um com a sua prévia); a pessoa sabe que os outros ficaram
     if (arquivos.length > 1) ui.toast(`${arquivos.length} arquivos soltos: enviando o primeiro (${f.name}). Solte os outros depois, um por vez.`, { tipo: "info", ms: 8000 });
     if (f) A.composer.anexar(f);
@@ -186,6 +194,7 @@ export function criarChat(A) {
     players.clear();                    // D9: os áudios da conversa anterior não ficam presos na memória
     sigCab = null;
     esconderAtraso();
+    esconderMeio();   // plano 2000d · DC-027
     modo("carregando");
   }
 
@@ -203,6 +212,9 @@ export function criarChat(A) {
     atraso.hidden = false;
   }
   function esconderAtraso() { atraso.hidden = true; tentarAtraso = null; }
+  /** plano 2000d · DC-027 */
+  function mostrarMeio(voltar) { voltarMeio = voltar || null; meio.hidden = false; }
+  function esconderMeio() { meio.hidden = true; voltarMeio = null; }
 
   function mostrarErro(e, tentar) {
     ui.limpar(vazio);
@@ -671,10 +683,15 @@ export function criarChat(A) {
 
   /** plano 1000b · CB-034: <a download> com a URL assinada do Storage (outra origem) é ignorado pelo navegador, que abre o arquivo numa
       aba (no celular a pessoa sai do Órbita). No clique: fetch → blob → link temporário com download=nome; se o fetch falhar, abre a aba. */
-  function baixarDeVerdade(a) {
+  function baixarDeVerdade(a, { semNavegar = false } = {}) {
     a.addEventListener("click", async ev => {
       const url = a.getAttribute("href") || "";
-      if (!url || url === "#" || /^(blob|data):/i.test(url) || typeof globalThis.fetch !== "function") return;
+      if (!url || url === "#" || /^(blob|data):/i.test(url)) return;
+      if (typeof globalThis.fetch !== "function") {
+        // plano 2000d · DC-089: sem fetch, o .html/.svg/.apk recebido abre numa aba nova — nunca troca a página do Órbita pelo arquivo
+        if (semNavegar && !a.getAttribute("target")) { ev.preventDefault(); try { globalThis.open && globalThis.open(url, "_blank", "noopener"); } catch { /* bloqueado */ } }
+        return;
+      }
       ev.preventDefault();
       const nome = a.getAttribute("download") || "arquivo";
       try {
@@ -731,7 +748,7 @@ export function criarChat(A) {
     return new Promise((ok, erro) => c.toBlob(b => (b ? ok(b) : erro(new Error("png_falhou"))), "image/png"));
   }
   function abrirVisualizador(msgInicial) {
-    const itens = L.imagensDaConversa(A.msgs);
+    let itens = L.imagensDaConversa(A.msgs);   // plano 2000d · DC-116: cresce quando a página anterior chega
     if (!itens.length) return;
     if (visualizador) { try { visualizador.fechar(); } catch { /* ok */ } }
     let i = Math.max(0, itens.findIndex(x => String(x.id) === String(msgInicial && msgInicial.id)));
@@ -785,10 +802,11 @@ export function criarChat(A) {
       clearTimeout(timer);
       if (tentIdx !== i) { tentIdx = i; tentativas = 0; falha.hidden = true; }
       const it = itens[i];
-      contador.textContent = `${i + 1} de ${itens.length}`;
+      // plano 2000d · DC-116: com mais histórico no servidor, o total é das carregadas (antes «1 de 12» com centenas mais antigas)
+      contador.textContent = A.temMaisAntes ? `${i + 1} de ${itens.length} carregadas` : `${i + 1} de ${itens.length}`;
       nome.textContent = it.nome || (it.direcao === "in" ? "Foto recebida" : "Foto enviada");
       leg.textContent = [it.legenda, L.horaMsg(it.criado_em)].filter(Boolean).join(" · ");
-      btAnt.disabled = i === 0; btProx.disabled = i === itens.length - 1;
+      btAnt.disabled = i === 0 && !A.temMaisAntes; btProx.disabled = i === itens.length - 1;
       dlg.dataset.zoom = "0"; btZoom.setAttribute("aria-pressed", "false");
       giro = 0; img.style.removeProperty("--giro"); delete dlg.dataset.giro;   // CC-076: cada foto começa sem giro
       const r = resolverUrl(it);
@@ -816,7 +834,24 @@ export function criarChat(A) {
       preCarregadas.add(k);
       try { const im = new globalThis.Image(); im.decoding = "async"; im.src = rv.url; } catch { /* sem pré-carga */ }
     }
-    const ir = d => { const j = i + d; if (j < 0 || j >= itens.length) return; i = j; mostrar(); };
+    // plano 2000d · DC-116: ← na primeira carregada busca a página anterior e continua dela
+    let buscandoAntes = false;
+    const ir = d => {
+      const j = i + d;
+      if (j < 0 && A.temMaisAntes && !buscandoAntes && typeof A.acoes.carregarAntes === "function") {
+        buscandoAntes = true; contador.textContent = "Buscando fotos anteriores…";
+        const atualId = String(itens[i].id);
+        Promise.resolve(A.acoes.carregarAntes()).catch(() => {}).then(() => {
+          buscandoAntes = false;
+          if (fechado) return;
+          itens = L.imagensDaConversa(A.msgs);
+          const k = Math.max(0, itens.findIndex(x => String(x.id) === atualId));
+          i = Math.max(0, k - 1); mostrar();
+        });
+        return;
+      }
+      if (j < 0 || j >= itens.length) return; i = j; mostrar();
+    };
     const fechar = () => {
       if (fechado) return; fechado = true;
       clearTimeout(timer);
@@ -838,6 +873,8 @@ export function criarChat(A) {
     dlg.addEventListener("cancel", ev => { ev.preventDefault(); fechar(); });
     dlg.addEventListener("click", ev => { if (ev.target === dlg) fechar(); });
     dlg.addEventListener("keydown", ev => {
+      // plano 2000d · DC-100: com o zoom ligado as setas andam pela foto ampliada (rolagem do navegador), não trocam de foto
+      if ((ev.key === "ArrowLeft" || ev.key === "ArrowRight") && dlg.dataset.zoom === "1") return;
       if (ev.key === "ArrowLeft") { ev.preventDefault(); ir(-1); }
       else if (ev.key === "ArrowRight") { ev.preventDefault(); ir(1); }
       else if (ev.key === "Home") { ev.preventDefault(); i = 0; mostrar(); }
@@ -870,6 +907,8 @@ export function criarChat(A) {
 
   /* ---------------- áudio (32): o <audio> continua sendo a fonte; a bolha ganha play/pausa, progresso, duração e velocidade */
   let audioTocando = null;            // só um áudio toca por vez (como no WhatsApp)
+  let redesenhoAdiado = false;        // plano 2000d · DC-106: bolha do áudio tocando esperando para ser redesenhada
+  const redesenharAdiado = () => { if (!redesenhoAdiado) return; redesenhoAdiado = false; setTimeout(() => { if (!A.destruido) renderMensagens({ rolar: "manter" }); }, 0); };
   const players = new Set();          // para a velocidade escolhida valer em todos os áudios da conversa
   function blocoAudio(m, url, md) {
     const audio = h("audio", { src: url, preload: "none" });   // plano 1000b · CB-134: metadados só quando entra na tela
@@ -922,14 +961,16 @@ export function criarChat(A) {
       try { if (mime && typeof audio.canPlayType === "function" && audio.canPlayType(mime) === "") naoToca(); } catch { /* ok */ }
     });
     audio.addEventListener("play", () => { if (audioTocando && audioTocando !== audio) { try { audioTocando.pause(); } catch { /* ok */ } } audioTocando = audio; estado(true); });
-    audio.addEventListener("pause", () => { if (audioTocando === audio) audioTocando = null; estado(false); });
-    audio.addEventListener("ended", () => { estado(false); try { audio.currentTime = 0; } catch { /* ok */ } pintar(); tocarSeguinte(); });
+    audio.addEventListener("pause", () => { if (audioTocando === audio) audioTocando = null; estado(false); redesenharAdiado(); });
+    audio.addEventListener("ended", () => { estado(false); try { audio.currentTime = 0; } catch { /* ok */ } pintar(); tocarSeguinte(); redesenharAdiado(); });
     // plano 1500c · CX-028: áudios em sequência (o cliente mandou 3 seguidos) tocam um depois do outro, como no WhatsApp
     const tocarSeguinte = () => {
       try {
         const bolhas = [...trilho.querySelectorAll(".cv-msg")];
         const minha = caixa.closest ? caixa.closest(".cv-msg") : null;
         const viz = minha ? bolhas[bolhas.indexOf(minha) + 1] : null;
+        // plano 2000d · DC-134: só segue para o áudio seguinte do MESMO lado (os áudios do cliente em sequência; a resposta da equipe não)
+        if (viz && minha.dataset && viz.dataset && minha.dataset.dir !== viz.dataset.dir) return;
         const bt = viz && viz.querySelector(".cv-audio .cv-au-play");
         if (bt && !bt.disabled) bt.click();
       } catch { /* sem sequência */ }
@@ -1059,11 +1100,19 @@ export function criarChat(A) {
       // CA-086: espaço reservado enquanto a foto carrega (as dimensões do servidor quando vierem; senão 4:3) — a conversa não pula
       const w = Number(md.largura), a = Number(md.altura);
       const dims = w > 0 && a > 0 ? { width: String(w), height: String(a), style: { "aspect-ratio": `${w} / ${a}` } } : {};
-      const img = h("img", { on: { load: ev => { if (ev && ev.currentTarget && ev.currentTarget.dataset) ev.currentTarget.dataset.ok = "1"; aposMidiaCarregar(); } }, src: url,
+      // plano 2000d · DC-122: print comprido (altura > 1,6 × largura) aparece inteiro reduzido, com o selo «Ver inteira» — pelas
+      // dimensões do servidor ou, sem elas, pelo tamanho real quando a foto carrega
+      const comprida = (ww, aa) => ww > 0 && aa / ww > 1.6;
+      let caixaImg = null;
+      const marcarComprida = () => { if (!caixaImg || caixaImg.classList.contains("cv-img-comprida")) return; caixaImg.classList.add("cv-img-comprida");
+        const bt = caixaImg.querySelector(".cv-img-bt"); if (bt) { bt.setAttribute("aria-label", "Ver a foto inteira"); bt.appendChild(h("span", { class: "cv-img-inteira", "aria-hidden": "true" }, "Ver inteira")); } };
+      const img = h("img", { on: { load: ev => { const el = ev && ev.currentTarget; if (el && el.dataset) el.dataset.ok = "1"; if (el && comprida(Number(el.naturalWidth), Number(el.naturalHeight))) marcarComprida(); aposMidiaCarregar(); } }, src: url,
         alt: m.tipo === "sticker" ? "Figurinha" : (m.direcao === "in" ? "Foto recebida" : "Foto enviada"), loading: "lazy", decoding: "async", ...dims, dataset: dims.width ? { dims: "1" } : null });
       aoFalharMidia(img, md.path);
       if (m.tipo === "sticker") return h("div", { class: "cv-midia cv-sticker" }, img);
-      return h("div", { class: "cv-midia" }, h("button", { type: "button", class: "cv-img-bt", "aria-label": "Ampliar foto", on: { click: () => abrirVisualizador(m) } }, img));
+      caixaImg = h("div", { class: "cv-midia" }, h("button", { type: "button", class: "cv-img-bt", "aria-label": "Ampliar foto", on: { click: () => abrirVisualizador(m) } }, img));
+      if (comprida(w, a)) marcarComprida();
+      return caixaImg;
     }
     if (m.tipo === "video") {
       // CA-140: o vídeo não aparece mais preto e mudo — ▶ e a duração (quando o servidor manda) por cima, até a pessoa tocar
@@ -1086,19 +1135,29 @@ export function criarChat(A) {
     const incomum = !local && m.direcao === "in" && L.documentoIncomum(nome, md.mime);
     // CA-141: PDF abre para ver (nova aba, sem baixar) e o «Baixar» fica ao lado
     const pdf = !local && !incomum && (String(md.mime || "").toLowerCase() === "application/pdf" || /[.]pdf$/i.test(String(nome || "")));
+    // plano 2000d · DC-244: Word/Excel/PowerPoint também com «Ver» e «Baixar» separados
+    const office = !local && !incomum && !pdf && L.documentoOffice(nome, md.mime);
+    // plano 2000d · DC-089/DC-090: o cartão nunca navega a aba do Órbita — o .html/.svg/.apk (incomum) e o .docx/.xlsx (comum) passam pelo
+    // download forçado (fetch → blob); se o fetch faltar, o plano B abre numa NOVA aba, nunca nesta
     const doc = h(local ? "div" : "a", local ? { class: "cv-doc" }
-      : incomum ? { class: "cv-doc cv-doc-incomum", href: url, rel: "noopener noreferrer", download: nome || "arquivo", title: "Arquivo de tipo incomum: baixe só se confia no remetente" }
+      : incomum ? { class: "cv-doc cv-doc-incomum", href: url, rel: "noopener noreferrer", download: nome || "arquivo", title: `${L.descricaoIncomum(nome, md.mime)}: baixe só se confia no remetente` }
         : pdf ? { class: "cv-doc", href: url, target: "_blank", rel: "noopener noreferrer", title: "Ver o PDF numa nova aba" }
-          : { class: "cv-doc", href: url, target: "_blank", rel: "noopener noreferrer", download: nome || "" },
+          : { class: "cv-doc", href: url, target: "_blank", rel: "noopener noreferrer", download: nome || "documento" },
       h("span", { class: "cv-doc-ic", "aria-hidden": "true", dataset: { doc: L.grupoDocumento(nome, md.mime) } }, extensao(nome, md.mime)),
       h("span", { class: "cv-doc-txt" }, h("b", null, nome || "Documento"), h("small", null, [L.tamanhoLegivel(md.tamanho), local ? "enviando…" : pdf ? "Ver" : "Baixar"].filter(Boolean).join(" · "))));
+    if (!local && !pdf) baixarDeVerdade(doc, { semNavegar: true });   // plano 2000d · DC-089/DC-090
+    if (office) {
+      return h("div", { class: "cv-doc-cx" }, doc, h("div", { class: "cv-doc-acoes" },
+        h("a", { class: "bt bt-fant bt-p cv-doc-ver", href: url, target: "_blank", rel: "noopener noreferrer", "aria-label": `Ver ${nome || "o documento"}` }, ui.icone("olho"), "Ver"),
+        baixarDeVerdade(h("a", { class: "bt bt-fant bt-p cv-doc-baixar", href: url, rel: "noopener noreferrer", download: nome || "documento", "aria-label": `Baixar ${nome || "o documento"}` }, A.icone("baixar"), "Baixar"))));
+    }
     if (pdf) {
       return h("div", { class: "cv-doc-cx" }, doc, h("div", { class: "cv-doc-acoes" },
         h("a", { class: "bt bt-fant bt-p cv-doc-ver", href: url, target: "_blank", rel: "noopener noreferrer", "aria-label": `Ver ${nome || "o PDF"}` }, ui.icone("olho"), "Ver"),
         baixarDeVerdade(h("a", { class: "bt bt-fant bt-p cv-doc-baixar", href: url, rel: "noopener noreferrer", download: nome || "documento.pdf", "aria-label": `Baixar ${nome || "o PDF"}` }, A.icone("baixar"), "Baixar"))));   // plano 1000b · CB-034
     }
     if (!incomum) return doc;
-    return h("div", { class: "cv-doc-cx" }, doc, h("p", { class: "cv-doc-aviso", role: "note" }, ui.icone("alerta"), "Arquivo de tipo incomum — baixe só se confia no remetente."));
+    return h("div", { class: "cv-doc-cx" }, doc, h("p", { class: "cv-doc-aviso", role: "note" }, ui.icone("alerta"), `${L.descricaoIncomum(nome, md.mime)} — baixe só se confia no remetente.`));   // plano 2000d · DC-245
   }
 
   /* ---------------- grade de fotos (32): várias fotos seguidas do mesmo remetente viram UMA bolha com miniaturas */
@@ -1380,14 +1439,16 @@ export function criarChat(A) {
     }
     const ambigua = m.ambigua === true || (m.status === "pendente" && /^status incerto:/i.test(String(m.erro || "")));
     if (m.status === "falhou" || (m.status === "pendente" && ambigua)) {
+      // plano 2000d · DC-101: a falha gravada pelo servidor mostra a dica em português; o código cru fica no title (diagnóstico)
+      const dica = !ambigua && m.erro ? L.dicaErroEnvio(m.erro) : "";
       const erro = ambigua
         ? "Pode ter saído — confira no WhatsApp antes de reenviar."
-        : m.erro || "O canal não aceitou a mensagem.";
+        : dica || m.erro || "O canal não aceitou a mensagem.";
       // plano 1000b · CB-021: role=alert só para a falha NOVA nesta sessão (bolha local ou falha que surgiu depois de a conversa abrir);
       // as antigas, desenhadas ao abrir, não disparam 3 alertas seguidos no leitor
       const nova = m.local || (ultimoRenderId !== null && !falhasVistas.has(String(m.id)));
       if (!m.local) falhasVistas.add(String(m.id));
-      const falha = h("div", { class: "cv-falha", role: nova ? "alert" : null }, h("span", null,
+      const falha = h("div", { class: "cv-falha", role: nova ? "alert" : null, title: dica && m.erro !== dica ? `Detalhe técnico: ${m.erro}` : null }, h("span", null,
         h("b", null, ambigua ? "Status incerto: " : "Não enviada: "), erro));
       if (ambigua) {
         falha.classList.add("cv-falha-ambigua");
@@ -1497,6 +1558,9 @@ export function criarChat(A) {
       let x = cache.get(chave);
       // D9: só o status mudou (◷ → ✓ → ✓✓): o selo muda no lugar e a bolha continua a mesma
       if (x && x.sig === sig && x.est !== est && pintarStatus(x.el.querySelector(".cv-rodape"), ln.msg)) x.est = est;
+      // plano 2000d · DC-106: a URL do áudio que está tocando venceu e foi renovada — a bolha não é recriada no meio (o áudio voltaria
+      // ao zero); o redesenho fica para quando ele pausar ou acabar
+      else if (x && audioTocando && !audioTocando.paused && x.el.contains(audioTocando)) redesenhoAdiado = true;
       else if (!x || x.sig !== sig || x.est !== est) {
         const novo = construirLinha(ln);
         if (!x && ultimoRenderId !== null && (ln.tipo === "msg" || ln.tipo === "grade")) novo.classList.add("entra");
@@ -1563,7 +1627,19 @@ export function criarChat(A) {
       }
     }
     if (novas.hidden) { novasDesde = null; if (vigiando) pararDeVigiar(); }
+    if (!anterior && ult !== null && ultimoRenderId !== null && ult > ultimoRenderId) anunciarNovas(ultimoRenderId);
     ultimoRenderId = ult;
+  }
+  /** plano 2000d · DC-140: «Mariana: Olá, tudo bem?» — só quem e o quê (sem os nomes dos botões da bolha); até 3, depois «e mais N». */
+  function anunciarNovas(desde) {
+    if (typeof ui.anunciar !== "function") return;
+    const novasMsgs = A.msgs.filter(m => !m.local && Number(m.id) > Number(desde) && m.tipo !== "sistema" && (m.direcao === "in" || (m.direcao === "out" && m.origem === "ia")));
+    if (!novasMsgs.length) return;
+    const nome = A.ver && A.ver.contato ? (A.ver.contato.nome || A.ver.contato.telefone || "Cliente") : "Cliente";
+    const frase = m => `${m.direcao === "in" ? nome : "IA"}: ${L.resumoMensagem(m, 140)}`;
+    const ditas = novasMsgs.slice(0, 3).map(frase);
+    if (novasMsgs.length > 3) ditas.push(`e mais ${novasMsgs.length - 3}`);
+    ui.anunciar(ditas.join(". "));
   }
   let novasDesde = null;
 
@@ -1660,6 +1736,7 @@ export function criarChat(A) {
   return {
     el, mostrarVazio, mostrarCarregando, mostrarErro, renderCabecalho, renderMensagens, renderTudo, renderTopo, destacar, pintarProgresso,   // CB-140
     noFim, rolarFim, estadoAcoes, abrirVisualizador, sucesso, mostrarAtraso, esconderAtraso, temBolha: id => !!bolhaDe(id),
+    mostrarMeio, esconderMeio,   // plano 2000d · DC-027
     abrirEtiquetas, mostrarLento, // plano 1000 · CA-158 (Alt+Shift+E) e CA-105 (rede lenta ao abrir)
     /** D9: quantos players de áudio a tela segura (testes: a troca de conversa solta os da anterior). */
     contarPlayers: () => players.size,

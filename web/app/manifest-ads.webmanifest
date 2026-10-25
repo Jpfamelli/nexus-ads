@@ -41,16 +41,55 @@
   ],
   "shortcuts": [
     {
-      "name": "Conversas",
-      "url": "/app/?produto=ads#/conversas"
+      "name": "Anúncios",
+      "short_name": "Anúncios",
+      "url": "/app/?produto=ads#/anuncios",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Relatórios",
+      "short_name": "Relatórios",
+      "url": "/app/?produto=ads#/relatorios",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     },
     {
       "name": "CRM",
-      "url": "/app/?produto=ads#/crm"
-    },
-    {
-      "name": "Agenda",
-      "url": "/app/?produto=ads#/agenda"
+      "short_name": "CRM",
+      "url": "/app/?produto=ads#/crm",
+      "icons": [
+        {
+          "src": "icones/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     }
-  ]
+  ],
+  "share_target": {
+    "action": "/app/?produto=ads&compartilhar=1",
+    "method": "GET",
+    "params": {
+      "title": "titulo",
+      "text": "texto",
+      "url": "link"
+    }
+  },
+  "launch_handler": {
+    "client_mode": [
+      "navigate-existing",
+      "auto"
+    ]
+  }
 }

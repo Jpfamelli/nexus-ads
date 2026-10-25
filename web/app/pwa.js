@@ -38,6 +38,9 @@ export function decidirVersao(atual, remoto) {
   const v = typeof remoto.versao === "string" ? remoto.versao.trim() : "";
   if (!/^[A-Za-z0-9._-]{1,40}$/.test(v)) return { acao: "nada" };
   if (v === atual) return { acao: "nada" };
+  // plano 2000d · SX-087: versao.json velho (cache do CDN no meio da publicação) com data ANTERIOR à do app em uso não oferece «voltar» de versão
+  const data = s => (/^(\d{8})([a-z]?)$/.exec(String(s || "")) || []).slice(1).join("");
+  if (data(v) && data(atual) && data(v) < data(atual)) return { acao: "nada" };
   const notas = notasDaVersao(remoto);
   return notas.length ? { acao: "nova", versao: v, notas } : { acao: "nova", versao: v };
 }
@@ -399,15 +402,24 @@ export function construirManifesto({ nome, base, workspace = null, rota = null, 
     categories: ["business", "productivity"],
   };
   const lista = (Array.isArray(atalhos) ? atalhos : []).filter(a => a && a.nome && /^[a-z-]+(?:\/[a-z0-9-]+)?$/.test(String(a.rota || ""))).slice(0, 4);
-  if (lista.length) m.shortcuts = lista.map(a => ({ name: a.nome, short_name: a.curto || a.nome, url: `${escopo}${workspace ? `?produto=${workspace}` : ""}#/${a.rota}` }));
-  if (compartilhar) m.share_target = { action: `${escopo}?compartilhar=1`, method: "GET", params: { title: "titulo", text: "texto", url: "link" } };
+  // plano 2000d · SX-057: cada atalho com o ícone do app (sem ele o Android mostra um quadrado genérico)
+  const iconeAtalho = (Array.isArray(icones) ? icones : []).find(i => i && i.purpose !== "maskable" && /192/.test(String(i.sizes || "")));
+  if (lista.length) m.shortcuts = lista.map(a => ({ name: a.nome, short_name: a.curto || a.nome, url: `${escopo}${workspace ? `?produto=${workspace}` : ""}#/${a.rota}`,
+    ...(iconeAtalho ? { icons: [{ src: iconeAtalho.src, sizes: iconeAtalho.sizes, type: iconeAtalho.type || "image/png" }] } : {}) }));
+  // plano 2000d · SX-058: o que chega por «Compartilhar» abre no MESMO produto instalado (o app de Atendimento não vira o app geral)
+  if (compartilhar) m.share_target = { action: `${escopo}?${workspace ? `produto=${workspace}&` : ""}compartilhar=1`, method: "GET", params: { title: "titulo", text: "texto", url: "link" } };
+  // plano 2000d · SX-059: abrir pelo atalho/compartilhar com o app já aberto reaproveita a janela (não abre uma segunda cópia)
+  m.launch_handler = { client_mode: ["navigate-existing", "auto"] };
   return m;
 }
 /** plano 2000d · DU-261: os atalhos do ícone pelos módulos liberados (Conversas, CRM, Agenda, nessa ordem); `rotulo(mod)` deixa a vertical renomear. */
 export const ATALHOS_ICONE = Object.freeze([{ rota: "conversas", nome: "Conversas" }, { rota: "crm", nome: "CRM" }, { rota: "agenda", nome: "Agenda" }]);
-export function atalhosDoIcone(modulos = [], rotulo = null) {
+/** plano 2000d · SX-056: o app de Anúncios instalado leva aos anúncios e relatórios (antes: Conversas/CRM/Agenda, que nem são dele). */
+export const ATALHOS_ICONE_ADS = Object.freeze([{ rota: "anuncios", nome: "Anúncios", modulo: "ads" }, { rota: "relatorios", nome: "Relatórios", modulo: "relatorios" }, { rota: "crm", nome: "CRM", modulo: "crm" }]);
+export function atalhosDoIcone(modulos = [], rotulo = null, workspace = null) {
   const tem = new Set(Array.isArray(modulos) ? modulos : []);
-  return ATALHOS_ICONE.filter(a => tem.has(a.rota)).map(a => ({ ...a, nome: (typeof rotulo === "function" && rotulo(a.rota)) || a.nome }));
+  const base = workspace === "ads" ? ATALHOS_ICONE_ADS : ATALHOS_ICONE;
+  return base.filter(a => tem.has(a.modulo || a.rota)).map(a => ({ rota: a.rota, nome: (typeof rotulo === "function" && rotulo(a.rota)) || a.nome }));
 }
 /** plano 2000d · DU-446: o que o app instalado recebeu de «Compartilhar» (?compartilhar=1&titulo&texto&link) → um texto só (até 2000), ou null. */
 export function textoCompartilhado(busca) {
@@ -415,7 +427,9 @@ export function textoCompartilhado(busca) {
   try { q = new URLSearchParams(String(busca || "")); } catch { return null; }
   if (q.get("compartilhar") !== "1") return null;
   const partes = [q.get("titulo"), q.get("texto"), q.get("link")].map(s => String(s || "").trim()).filter(Boolean);
-  const unico = [...new Set(partes)].join("\n").slice(0, 2000);
+  // plano 2000d · SX-053: muitos apps mandam o link dentro do texto E no campo link — ele aparece uma vez só (e o título repetido no texto também)
+  const sem = partes.filter((p, i) => !partes.some((outra, j) => j !== i && outra !== p && outra.includes(p)));
+  const unico = [...new Set(sem)].join("\n").slice(0, 2000);
   return unico || null;
 }
 /** plano 2000d · DU-408: o app instalado reabre na última tela principal (não sempre no Início). Só ao abrir (hash vazio/#/ /#/inicio),
@@ -425,7 +439,8 @@ export function rotaAoAbrirInstalado({ instalado = false, hash = "", ultima = nu
   if (!instalado || !ligado) return null;
   if (!["", "#", "#/", "#/inicio"].includes(String(hash || ""))) return null;
   const u = String(ultima || "");
-  if (!/^#\/[a-z-]{2,20}$/.test(u) || /^#\/(inicio|login|entrar|convite|senha|trocar|testar|sair)$/.test(u)) return null;
+  // plano 2000d · SX-094: também uma subtela fixa («#/relatorios/vendas», «#/config/equipe») — nunca um id nem uma query
+  if (!/^#\/[a-z-]{2,20}(\/[a-z-]{2,20})?$/.test(u) || /^#\/(inicio|login|entrar|convite|senha|trocar|testar|sair)(\/|$)/.test(u)) return null;
   return u;
 }
 
@@ -539,7 +554,8 @@ export const PASSOS_IOS_VISUAL = Object.freeze([
     «Samsung Internet 28»). Só nome e versão principal: nada que identifique a pessoa. */
 export function nomeDoNavegador(ua = "") {
   const s = String(ua || "");
-  const tenta = [[/EdgA?\/(\d+)/, "Edge"], [/SamsungBrowser\/(\d+)/, "Samsung Internet"], [/OPR\/(\d+)/, "Opera"], [/Firefox\/(\d+)/, "Firefox"],
+  // plano 2000d · SX-052: o Edge do iPhone/iPad (EdgiOS) também é Edge, não Safari
+  const tenta = [[/Edg(?:A|iOS)?\/(\d+)/, "Edge"], [/SamsungBrowser\/(\d+)/, "Samsung Internet"], [/OPR\/(\d+)/, "Opera"], [/Firefox\/(\d+)/, "Firefox"],
     [/FxiOS\/(\d+)/, "Firefox"], [/CriOS\/(\d+)/, "Chrome"], [/Chrome\/(\d+)/, "Chrome"], [/Version\/(\d+)[\d.]* (?:Mobile\/\S+ )?Safari\//, "Safari"]];
   for (const [re, nome] of tenta) { const m = re.exec(s); if (m) return `${nome} ${m[1]}`; }
   return s ? "outro" : "—";

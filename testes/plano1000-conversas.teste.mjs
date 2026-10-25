@@ -615,7 +615,7 @@ test("CA-034/CA-033/CA-022/CA-023/CA-119 (DOM) · reação com nome, hora com a 
     const apk = achar(chat.el, '.cv-msg[data-id="3"] a.cv-doc');
     assert.equal(apk.getAttribute("target"), null, "tipo incomum não abre direto numa aba");
     assert.equal(apk.getAttribute("download"), "app.apk");
-    assert.match(achar(chat.el, '.cv-msg[data-id="3"] .cv-doc-aviso').textContent, /tipo incomum — baixe só se confia no remetente/);
+    assert.match(achar(chat.el, '.cv-msg[data-id="3"] .cv-doc-aviso').textContent, /Arquivo \.apk \(instalador de aplicativo\) — baixe só se confia no remetente/);   // plano 2000d: DC-245 diz o tipo
     assert.equal(achar(chat.el, '.cv-msg[data-id="4"] a.cv-doc').getAttribute("target"), "_blank", "PDF continua abrindo");
   } finally { d.fim(); }
 });
@@ -2017,11 +2017,12 @@ test("CA-124/CA-236/CA-237/CA-241/CA-088 (DOM) · lateral: 1ª resposta útil x 
       aberta_em: "2026-10-10T23:00:00Z", primeira_resposta_em: "2026-10-12T12:15:00Z" } } });
     const dl = () => achar(t.alvo, ".cvt-dl");
     const linha = rot => { const dts = dl().querySelectorAll("dt"); const i = dts.findIndex(x => x.textContent === rot); return i >= 0 ? dl().querySelectorAll("dd")[i] : null; };
-    assert.equal(linha("1ª resposta (tempo corrido)").textContent, "37 h 15 min", "sem o horário, o rótulo diz que é corrido");
+    // plano 2000d: desde o 1500c (CX-062) mais de um dia vira «1 d 13 h»
+    assert.equal(linha("1ª resposta (tempo corrido)").textContent, "1 d 13 h", "sem o horário, o rótulo diz que é corrido");
     const seg = [["08:00", "18:00"]];
     t.A.base.config = { departamentos: [{ id: "d1", padrao: true, horario: { 1: seg, 2: seg, 3: seg, 4: seg, 5: seg } }] };
     t.lat.render();
-    assert.equal(linha("1ª resposta").textContent, "1 h 15 min no horário de atendimento · 37 h 15 min corridos (chegou fora do horário)");
+    assert.equal(linha("1ª resposta").textContent, "1 h 15 min no horário de atendimento · 1 d 13 h corridos (chegou fora do horário)");
     assert.equal(achar(t.alvo, ".cvt-mini-cab .rotulo").textContent, "Mensagens carregadas · 7 dias");
     t.A.base.ia = { ligada: true, cota: { limite: 10, usadas: 2 } };
     t.lat.render();
@@ -2053,13 +2054,13 @@ test("CA-229 (central) · o filtro da lista volta ao montar de novo (por empresa
     const chip = c.alvo.querySelectorAll(".cvl-filtro-chip").find(b => /Só não lidas/.test(b.textContent));
     chip.click();
     await esperar(10);
-    assert.deepEqual(JSON.parse(d.mem.get("nx-cv-filtro:c1")), { atendente: "eu" });
+    assert.deepEqual(JSON.parse(d.mem.get("nx-cv-filtro:c1:u1")), { atendente: "eu" });   // plano 2000d: DC-020 — por empresa e conta (a chave só da empresa é migrada)
     c.fim();
     c = await montarCentral(d, srv);
     assert.deepEqual(srv.chamadas.filter(x => x[0] === "nx_cv_listar").at(-1)[1].p_filtro, { aba: "minhas", atendente: "eu" });
     achar(c.alvo, ".cvl-filtro-chip").click();
     await esperar(10);
-    assert.equal(d.mem.has("nx-cv-filtro:c1"), false, "sem filtro, sem lembrança");
+    assert.equal(d.mem.has("nx-cv-filtro:c1:u1"), false, "sem filtro, sem lembrança");
   } finally { c.fim(); d.fim(); }
 });
 
@@ -2134,7 +2135,7 @@ test("CA-123 (central) · aviso na área de trabalho só com o nome; o texto só
     assert.equal(avisos.length, 1);
     assert.equal(avisos[0].t, "Cliente 2");
     assert.equal(avisos[0].o.body, "Mensagem nova", "nada do que o paciente escreveu na tela bloqueada");
-    d.mem.set("nx-cv-avisos", JSON.stringify({ som: false, tela: true, texto: true }));
+    d.mem.set("nx-cv-avisos:u1", JSON.stringify({ som: false, tela: true, texto: true }));   // plano 2000d: DC-020 — avisos por conta
     srv.chegar(902, "de novo");
     await c.pulso();
     assert.equal(avisos.at(-1).o.body, "Meu exame deu alterado");
@@ -2179,7 +2180,7 @@ test("CA-228/CA-151 (central) · «Linhas compactas» no menu do sino; ocultar d
     assert.ok(it, "a densidade mora com as preferências da lista");
     it.fn();
     assert.equal(achar(c.alvo, ".cv").dataset.densidade, "compacta");
-    assert.equal(d.mem.get("nx-cv-densidade"), "compacta");
+    assert.equal(d.mem.get("nx-cv-densidade:u1"), "compacta");   // plano 2000d: DC-020 — por conta
     await c.abrir(901);
     achar(c.alvo, ".cvc-mais").click();
     d.menus.at(-1).itens.find(x => x && x.rotulo === "Ocultar e bloquear (spam)").fn();
@@ -2263,6 +2264,8 @@ test("CA-046 (central, conv-2) · transferir 2 em lote: um Desfazer e os nx_cv_a
     d.ev(c.alvo.querySelector('.cvl-item[data-id="903"]'), "click");
     achar(c.alvo, ".cvl-lote-etq").click();
     await esperar(20);
+    // plano 2000d: DC-014 — etiquetar em lote agora tem Desfazer: o servidor só ouve quando o aviso fecha
+    { const des = d.desfazeres.at(-1); await des.firmar({}); await esperar(10); }
     assert.deepEqual(srv.chamadas.find(x => x[0] === "nx_cv_etiquetas")[1], { p_conversa: 903, p_etiquetas: ["e1", "e2"] });
   } finally { c.fim(); d.fim(); }
 });
@@ -2300,7 +2303,7 @@ test("CA-232 (central) · «Exportar conversa (.txt)» baixa as mensagens em ord
     await d.menus.at(-1).itens.find(x => x && x.rotulo === "Exportar conversa (.txt)").fn();
     await esperar(10);
     const texto = await blobs.at(-1).text();
-    const linhas = texto.trim().split(NL);
+    const linhas = texto.trim().split(NL).map(x => x.replace(/\r$/, ""));   // plano 2000d: o .txt sai com CRLF (abre certo no Bloco de Notas)
     assert.match(linhas[0], /^Conversa com Cliente 1 · protocolo ORB-901/);
     // plano 1500c: o cabeçalho (responsável, número, período) entra entre o título e as mensagens — as mensagens são as duas últimas linhas
     assert.match(linhas.at(-2), / · Cliente 1: Tem horário\?$/);

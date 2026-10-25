@@ -1902,9 +1902,10 @@ test("AS-141 / AS-142 / AS-143 / AS-240 Respostas: ordem por usos, atalho repeti
   assert.equal(arq.tipo, "orbita-respostas");
   assert.deepEqual(Object.keys(arq.respostas[0]).sort(), ["atalho", "ativo", "corpo", "titulo"], "sem id, usos nem departamento");
   const lido = CV.lerImportacaoRespostas(JSON.stringify({ respostas: [...arq.respostas, { atalho: "novo", titulo: "Novo", corpo: "Texto" }, { atalho: "Com espaço", titulo: "x", corpo: "y" }] }), [rs[0]]);
-  assert.deepEqual(lido.novas.map(r => r.atalho), ["end", "pix", "novo"]);
+  // plano 2000d: desde o 1500c (CX-044) o atalho «Com espaço» vira «com-espaco» em vez de ser descartado
+  assert.deepEqual(lido.novas.map(r => r.atalho), ["end", "pix", "novo", "com-espaco"]);
   assert.deepEqual(lido.repetidas, ["ola"]);
-  assert.equal(lido.invalidas, 1);
+  assert.equal(lido.invalidas, 0);
   assert.match(CV.lerImportacaoRespostas("não é json").erro, /JSON válido/);
 });
 
@@ -2170,7 +2171,7 @@ test("AS-145 + AS-148 + AS-149 + AS-150 + AS-235 + AS-237 + AS-238 Departamentos
     assert.equal(viva.vivo, false, "sair da seção para o relógio");
     clicar(d, t.alvo.querySelectorAll("button").find(b => /Editar/.test(b.textContent))); await tique(4);
     const f = modal.corpo;
-    assert.match(textoDe(f.querySelector("[data-campo=horario] legend")), /horário de Brasília \(São Paulo\)/);
+    assert.match(textoDe(f.querySelector("[data-campo=horario] legend")), /horário de Brasília/);   // plano 2000d: desde o 1500c (CC-049) um nome só para o fuso
     const seg = f.querySelector('[data-dia="1"]');
     assert.equal(seg.getAttribute("role"), "group");
     assert.ok(seg.getAttribute("aria-labelledby"));

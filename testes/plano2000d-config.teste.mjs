@@ -584,7 +584,9 @@ test("DU-127/128/129/132/137/138/139/143/144/177/178/397 Perfil", async () => {
     assert.match(t.confirmacoes.at(-1).titulo, /Encerrar a sessão Safari · iOS/);
     assert.equal(t.chamadas.filter(c => c[0] === "nx_sessao_encerrar").length, 0);
     // DU-129: a assinatura vai junto no salvar
-    const [formDados, formSenha] = raiz.querySelectorAll(".cfg-sec form");
+    // plano 2000d: FX-003 pôs o form do horário silencioso no cartão de avisos — os forms são achados pelo conteúdo
+    const formDados = raiz.querySelectorAll(".cfg-sec form").find(f => f.querySelector("input[name=nome]"));
+    const formSenha = raiz.querySelectorAll(".cfg-sec form").find(f => f.querySelector("input[name=nova]"));
     formSenha.reset = () => {};
     formDados.querySelector("input[name=assinatura]").value = "— Ana, recepção";
     formDados.dispatchEvent(new d.Evento("submit")); await tique(6);
@@ -646,7 +648,8 @@ test("DU-145/146/147/148/150/151/202 Marca da revenda: contato e links legais, e
     sw.checked = true; sw.dispatchEvent(new d.Evento("change"));
     // DU-145: link sem https → erro no campo, nada salvo
     const site = raiz.querySelector("input[name=site]");
-    site.value = "http://conecta.com.br"; site.dispatchEvent(new d.Evento("input", { bubbles: true }));
+    // plano 2000d: FX-058 completa/troca http:// por https:// sozinho — o endereço que não dá para consertar continua recusado
+    site.value = "ftp://conecta.com.br"; site.dispatchEvent(new d.Evento("input", { bubbles: true }));
     clicar(d, botaoTexto(raiz, /Salvar marca/)); await tique(6);
     assert.match(textoDe(raiz.querySelector("[data-campo=site] .campo-erro")), /https:\/\//);
     assert.equal(salvos.length, 0);
@@ -679,7 +682,10 @@ test("DU-159/160/161 Domínio: passo a passo por provedor, «Parou de apontar» 
     const raiz = t.ctx.alvo;
     const prov = raiz.querySelectorAll(".dom-provedor").map(x => x.dataset.provedor);
     assert.ok(["registrobr", "hostinger", "cloudflare", "godaddy"].every(p => prov.includes(p)));
-    assert.match(textoDe(raiz.querySelector(".dom-provedor[data-provedor=registrobr]")), /«crm»/);
+    // plano 2000d: FX-066 põe o que parou de apontar primeiro — o passo a passo do crm é procurado no cartão dele
+    const cartaoCrm = raiz.querySelectorAll(".dom-item").find(x => /crm\.agencia/.test(textoDe(x)));
+    assert.match(textoDe(cartaoCrm.querySelector(".dom-provedor[data-provedor=registrobr]")), /«crm»/);
+    assert.match(textoDe(raiz.querySelectorAll(".dom-item")[0]), /app\.agencia.*Parou de apontar/);
     assert.match(textoDe(raiz), /Parou de apontar/);
     assert.ok(raiz.querySelector(".dom-quebrado"));
     const inp = raiz.querySelector("input[name=host]");
@@ -1062,5 +1068,536 @@ test("DU-192 / DU-403 / DU-198 / DU-182 (tela): notas somem sem a função, cana
     assert.equal(salvos.length, 1);
     assert.equal(salvos[0].comercial.valor_mensal, 150);
     assert.ok(t.toasts.some(([m]) => /ainda não guarda: valor cobrado/.test(m)));
+  } finally { d.fim(); }
+});
+
+
+/* ================================================================== plano 2000d · complemento da frente config (FX) */
+test("FX-001/003/004/005/008/009/010/012/017/019/102: Perfil — partes por ?secao, silencioso, abrir na última tela, senha, nome, telefone e código", () => {
+  // FX-001 / DU-128
+  assert.equal(CFG.parteDoPerfil("avisos#cfg-pf-avisos"), "cfg-pf-avisos");
+  assert.equal(CFG.parteDoPerfil("SENHA"), "cfg-pf-senha");
+  assert.equal(CFG.parteDoPerfil("ausente"), "cfg-pf-avisos");
+  assert.equal(CFG.parteDoPerfil("x"), null);
+  // FX-003 / FX-004 / DU-268
+  assert.equal(CFG.silencioValido("", ""), true);
+  assert.equal(CFG.silencioValido("22:00", "07:00"), true, "atravessa a meia-noite");
+  assert.equal(CFG.silencioValido("22:00", ""), false);
+  assert.equal(CFG.silencioValido("07:00", "07:00"), false);
+  assert.equal(CFG.silencioValido("25:00", "07:00"), false);
+  assert.match(CFG.rotuloSilencio({ de: "22:00", ate: "07:00" }), /das 22:00 às 07:00, atravessando a meia-noite/);
+  assert.match(CFG.rotuloSilencio(null), /Sem horário silencioso/);
+  // FX-005 / DU-408
+  const mem = new Map();
+  const arm = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k) };
+  assert.equal(CFG.lerAbrirUltima(arm), true, "padrão ligado");
+  CFG.gravarAbrirUltima(arm, false);
+  assert.equal(mem.get("nx-abrir-ultima"), "0");
+  assert.equal(CFG.lerAbrirUltima(arm), false);
+  CFG.gravarAbrirUltima(arm, true);
+  assert.equal(mem.has("nx-abrir-ultima"), false);
+  // FX-008
+  assert.deepEqual(CFG.conferirRepeticao("abcdefgh1", "abc"), { ok: null, texto: "" });
+  assert.equal(CFG.conferirRepeticao("abcdefgh1", "abcdefgh1").ok, true);
+  assert.equal(CFG.conferirRepeticao("abcdefgh1", "abx").ok, false);
+  // FX-009 / FX-010
+  assert.equal(CFG.limparNome("  Ana   Maria  Souza "), "Ana Maria Souza");
+  assert.equal(CFG.previaAssinatura("— Ana"), "Tem sim! Às 14h ou às 16h?\n— Ana");
+  assert.equal(CFG.previaAssinatura("  "), "");
+  // FX-012 / FX-102
+  assert.equal(CFG.pareceFixo("(12) 3632-0000"), true);
+  assert.equal(CFG.pareceFixo("(12) 99830-3030"), false);
+  assert.equal(CFG.dddValido("(01) 99999-0000"), false);
+  assert.equal(CFG.dddValido("(12) 99999-0000"), true);
+  assert.equal(CFG.dddValido("5520999990000"), false, "DDD 20 não existe");
+  assert.equal(CFG.dddValido("+1 415 555 0100"), true, "fora do Brasil passa");
+  // FX-017
+  assert.equal(CFG.codigoValido("123-456"), true);
+  assert.equal(CFG.codigoValido("123.456"), true);
+  assert.equal(CFG.limparCodigo(" 12 34-56 "), "123456");
+  // FX-019 / DR-333
+  assert.equal(CFG.chaveOnboardingCfg("cli1", null), null);
+  assert.equal(CFG.chaveOnboardingCfg("cli1", "c1"), "nx-onb:cli1:c1");
+});
+
+test("FX-013/015/016/085/087/088: sessões, códigos de recuperação, chave do autenticador e imagens", () => {
+  const agora = Date.now();
+  const l = CFG.ordenarSessoes([{ id: 1, ultimo_uso: new Date(agora - 5e6).toISOString() }, { id: 2, ultimo_uso: new Date(agora - 1e3).toISOString() }, { id: 3, atual: true, ultimo_uso: new Date(agora - 9e6).toISOString() }]);
+  assert.deepEqual(l.map(s => s.id), [3, 2, 1], "este aparelho primeiro, depois o mais recente");
+  const txt = CFG.textoCodigosRecuperacao({ produto: "Conecta", email: "a@b.com", codigos: ["AAAA-1111", "BBBB-2222"], data: "2026-10-25" });
+  assert.match(txt, /Códigos de recuperação — Conecta/);
+  assert.match(txt, /AAAA-1111\nBBBB-2222$/);
+  assert.doesNotMatch(txt, /Órbita|Nexus/);
+  assert.equal(CFG.agruparSegredo("jbswy3dpehpk3pxp"), "JBSW Y3DP EHPK 3PXP");
+  assert.equal(CFG.rotuloSessao({ navegador: "Chrome", instalado: true, sistema: "Android" }), "Chrome · app instalado · Android");
+  assert.match(CFG.erroArquivoImagem({ type: "image/heic", name: "IMG_1.HEIC", size: 1000 }), /HEIC/);
+  assert.match(CFG.erroArquivoImagem({ type: "image/svg+xml", name: "logo.svg", size: 1000 }), /SVG/);
+  assert.match(CFG.erroArquivoImagem({ type: "image/png", name: "x.png", size: 40 * 1024 * 1024 }), /mais de 15 MB/);
+  assert.match(CFG.erroArquivoImagem({ type: "image/gif", name: "x.gif", size: 10 }), /PNG, JPEG ou WebP/);
+  assert.equal(CFG.erroArquivoImagem({ type: "image/png", name: "x.png", size: 1000 }), null);
+});
+
+test("FX-020/021/022/024/025/027/093/112/119: Dados da empresa — minutos, avaliação, feriados, Instagram, 0800, fuso, mapa e prazo", () => {
+  // FX-020 / DU-095
+  assert.equal(CFG.lerMinutos("1,5"), 1.5);
+  assert.equal(CFG.lerMinutos(""), null);
+  assert.ok(Number.isNaN(CFG.lerMinutos("45")));
+  assert.ok(Number.isNaN(CFG.lerMinutos("0,2")));
+  // FX-021 / DU-036
+  assert.equal(CFG.completarHttps("g.page/r/abc/review"), "https://g.page/r/abc/review");
+  assert.equal(CFG.completarHttps("http://x.com.br/a"), "https://x.com.br/a");
+  assert.equal(CFG.trocarVariaveisEmpresa("Avalie: {link_avaliacao}", { link_avaliacao: "g.page/r/abc" }), "Avalie: https://g.page/r/abc");
+  // FX-022 / DU-072
+  const f = CFG.separarFeriados("25/12, 20/1/2027; 2027-03-04\n31/02, 12-08, abc");
+  assert.deepEqual(f.lista, ["2027-01-20", "2027-03-04", "12-08", "12-25"]);
+  assert.deepEqual(f.invalidos, ["31/02", "abc"]);
+  assert.equal(CFG.feriadosEmTexto(["12-25", "2027-01-20"]), "25/12, 20/01/2027");
+  // FX-024
+  assert.equal(CFG.normalizarInstagram("https://www.instagram.com/clinica.sol/?hl=pt"), "clinica.sol");
+  assert.equal(CFG.normalizarInstagram("@@clinica"), "clinica");
+  assert.deepEqual(CFG.validarDadosEmpresa({ instagram: "instagram.com/clinica_sol" }), []);
+  assert.equal(CFG.linkInstagram("@clinica"), "https://www.instagram.com/clinica/");
+  // FX-025: 0800 e 4004 não ganham o 55
+  assert.deepEqual(CFG.validarDadosEmpresa({ telefone_empresa: "0800 123 4567" }), []);
+  assert.equal(CFG.normalizarTelefoneEmpresa("4004-1234"), "40041234");
+  assert.equal(CFG.normalizarTelefoneEmpresa("(12) 3632-0000"), "551236320000");
+  assert.deepEqual(CFG.validarDadosEmpresa({ telefone_empresa: "(01) 3632-0000" }).map(e => e.campo), ["telefone_empresa"]);
+  assert.deepEqual(CFG.validarDadosEmpresa({ link_avaliacao: "nada", feriados: "31/02", minutos_por_mensagem: "99" }).map(e => e.campo).sort(), ["feriados", "link_avaliacao", "minutos_por_mensagem"]);
+  // FX-027: mesma hora não avisa; outra hora avisa
+  assert.equal(CFG.fusoDifere("America/Sao_Paulo", "America/Bahia"), false);
+  assert.equal(CFG.fusoDifere("America/Sao_Paulo", "America/Manaus"), true);
+  // FX-093
+  assert.match(CFG.linkMapa("Rua A, 10 - Taubaté"), /^https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=Rua%20A%2C%2010/);
+  assert.equal(CFG.linkMapa("  "), null);
+  // FX-119: só encurtar o prazo pede confirmação
+  assert.equal(CFG.prazoEncurta("", "12"), true);
+  assert.equal(CFG.prazoEncurta("24", "12"), true);
+  assert.equal(CFG.prazoEncurta("12", "60"), false);
+  assert.equal(CFG.prazoEncurta("12", ""), false);
+});
+
+test("FX-032/033/034/035/036/037/038/039/041/042/043/044/046/047/091/101/105: equipe e convites", () => {
+  const agora = Date.now();
+  const us = [{ conta_id: "a", nome: "Ana", email: "a@x.com", papel: "supervisor", ultimo_acesso: new Date(agora - 60e3).toISOString() },
+    { conta_id: "b", nome: "Bia", email: "B@x.com", papel: "atendente", ultimo_acesso: new Date(agora - 40 * 86400e3).toISOString() },
+    { conta_id: "c", nome: "Caio", email: "c@x.com", papel: "atendente", suspenso: true },
+    { conta_id: "g", nome: "Gestor", email: "g@x.com", gestor: true }];
+  // FX-032: o papel entra na busca
+  assert.deepEqual(CFG.filtrarUsuarios(us, "supervisor").map(u => u.nome), ["Ana"]);
+  // FX-033
+  assert.deepEqual(CFG.ordenarConvites([{ id: 1, expira_em: "2026-12-10" }, { id: 2, expira_em: "2026-11-01" }, { id: 3 }]).map(c => c.id), [2, 1, 3]);
+  // FX-034 / FX-050
+  assert.equal(CFG.sugestaoEmail("ana@gmial.com"), "ana@gmail.com");
+  assert.equal(CFG.sugestaoEmail("ana@uol.com"), "ana@uol.com.br");
+  assert.equal(CFG.sugestaoEmail("ana@gmail.com"), null);
+  // FX-035: «Nome <email>» colado do Outlook
+  assert.deepEqual(CFG.separarEmails("Ana Souza <ana@x.com>; Bia <bia@y.com>, mailto:c@d.com"), { validos: ["ana@x.com", "bia@y.com", "c@d.com"], invalidos: [] });
+  // FX-036
+  assert.equal(CFG.resumoEmails("a@b.com, c@d.com, errado"), "2 e-mails · 1 não parece e-mail");
+  assert.equal(CFG.resumoEmails(""), "");
+  // FX-037: situação e (quando informado) 2 etapas no CSV
+  const csv = CFG.csvEquipe([{ nome: "Ana", email: "a@x.com", papel: "admin", suspenso: true, dois_fatores: true }, { nome: "Bia", email: "b@x.com", papel: "atendente", pausado_ate: isoMaisDias(5) + "T12:00:00Z", dois_fatores: false }]);
+  const [cab, l1, l2] = csv.replace("﻿", "").split("\r\n");
+  assert.equal(cab, "Nome;E-mail;Papel;Departamentos;Último acesso;Situação;2 etapas");
+  assert.match(l1, /;Suspenso;sim$/);
+  assert.match(l2, /;Pausado até \d\d\/\d\d;não$/);
+  // FX-038
+  assert.equal(CFG.nomeArquivo("  Clínica São José! "), "clinica-sao-jose");
+  assert.equal(CFG.nomeArquivo(""), "empresa");
+  // FX-039 / FX-041 / FX-042
+  assert.equal(CFG.contarOnline(us, agora), 1);
+  assert.equal(CFG.diasSemEntrar(us[1], agora), 40);
+  assert.equal(CFG.diasSemEntrar(us[2], agora), null);
+  assert.deepEqual(CFG.inativos(us, 30, agora).map(u => u.nome), ["Bia"]);
+  // FX-043 / FX-044
+  assert.equal(CFG.textoLinkEquipe({ cliente: "Clínica Sol", produto: "Conecta" }), "Olá! Para entrar na equipe da Clínica Sol no Conecta, peça seu acesso por este link:");
+  assert.equal(CFG.estadoLinkEquipe({ usos: 5, limite: 5 }), "esgotado");
+  assert.equal(CFG.estadoLinkEquipe({ expira_em: new Date(agora - 1000).toISOString() }, agora), "vencido");
+  assert.equal(CFG.estadoLinkEquipe({ usos: 1, limite: 5, expira_em: new Date(agora + 86400e3).toISOString() }, agora), "ativo");
+  // FX-101
+  assert.match(CFG.erroLimiteLinkEquipe(5, { uso: 9, lim: 10 }), /só 1 vaga/);
+  assert.match(CFG.erroLimiteLinkEquipe(2, { uso: 10, lim: 10 }), /não tem vagas/);
+  assert.equal(CFG.erroLimiteLinkEquipe(3, { uso: 2, lim: 10 }), null);
+  assert.equal(CFG.erroLimiteLinkEquipe(60, {}), "De 1 a 50 pessoas.");
+  // FX-046
+  assert.equal(CFG.permissoesIguais({}, { admin: { exportar: false } }), true, "o administrador é sempre tudo: não conta como mudança");
+  assert.equal(CFG.permissoesIguais({}, { atendente: { exportar: false } }), false);
+  // FX-047
+  assert.equal(CFG.dataMaisDias("2026-12-28", 7), "2027-01-04");
+  // FX-091
+  assert.equal(CFG.emailsDe(us), "a@x.com, b@x.com, c@x.com");
+  // FX-105
+  assert.equal(CFG.LIMITE_CONVITES_LOTE, 50);
+});
+
+test("FX-051/053/054/055/057/058/061/063/064/066/067/068/069/070/071/072/073/092/095/096/100: hub, marca, domínio e plano", () => {
+  const secs = [{ id: "numeros", titulo: "Números de WhatsApp", grupo: "Atendimento" }, { id: "perfil", titulo: "Perfil", grupo: "Você" }, { id: "usuarios", titulo: "Usuários e convites", grupo: "Equipe" }];
+  // FX-051 / FX-053
+  assert.deepEqual(CFG.filtrarSecoes(secs, "zap"), ["numeros"]);
+  assert.ok(CFG.filtrarSecoes(secs, "2-etapas?").includes("perfil"), "a pontuação não atrapalha");
+  assert.deepEqual(CFG.filtrarSecoes(secs, "silencioso"), ["perfil"]);
+  // FX-100
+  assert.equal(CFG.secaoParecida(secs, "usuario").id, "usuarios");
+  assert.equal(CFG.secaoParecida(secs, "xy"), null);
+  // FX-054 / DU-150
+  assert.equal(CFG.hashCurto({ a: 1 }), CFG.hashCurto({ a: 1 }));
+  assert.notEqual(CFG.hashCurto({ a: 1 }), CFG.hashCurto({ a: 2 }));
+  assert.match(CFG.hashCurto("x"), /^[0-9a-f]{8}$/);
+  // FX-055 / DU-322
+  assert.match(CFG.nomeCor("#25D366"), /^Verde #25D366$/);
+  assert.match(CFG.nomeCor("#0A0F1A"), /^Preto|escuro/);
+  assert.equal(CFG.nomeCor("#FFFFFF"), "Branco #FFFFFF");
+  // FX-057
+  assert.match(CFG.avisoNomeCurto("Clínica Sorriso Total"), /aparece como «Clínica»/);
+  assert.equal(CFG.avisoNomeCurto("Conecta"), "");
+  // FX-056 / DU-152: as chaves da janela de boas-vindas são novas (o servidor antigo recusa → a tela salva o resto)
+  for (const k of ["boas_vindas_titulo", "boas_vindas", "contato_agencia"]) assert.ok(CFG.CHAVES_MARCA_NOVAS.includes(k), k);
+  assert.deepEqual(CFG.validarLinksMarca({ boas_vindas: "x".repeat(401) }).map(e => e.campo), ["boas_vindas"]);
+  // FX-061
+  assert.equal(CFG.textoCoresMarca({ primaria: "#2255cc", fundo: "#0a0f1a" }), "Primária: #2255CC\nFundo: #0A0F1A");
+  // FX-063 / FX-064
+  assert.match(CFG.erroHostDominio("crm.clínica.com.br"), /sem acento/);
+  assert.equal(CFG.normalizarHost("crm .agencia.com.br"), "crm.agencia.com.br");
+  // FX-066 / FX-067 / FX-095
+  assert.deepEqual(CFG.ordenarDominios([{ host: "b.x.com", status: "ativo" }, { host: "a.x.com", status: "pendente" }, { host: "c.x.com", status: "quebrado" }]).map(d => d.host), ["c.x.com", "a.x.com", "b.x.com"]);
+  assert.equal(CFG.hostJaCadastrado([{ host: "crm.a.com.br" }], "HTTPS://CRM.A.com.br/"), true);
+  assert.match(CFG.textoRegistroDns("crm.agencia.com.br", "x.netlify.app"), /Tipo: CNAME\nNome: crm \(endereço completo: crm\.agencia\.com\.br\)\nValor: x\.netlify\.app/);
+  // FX-068 / FX-069 / FX-096
+  const fs = [{ vencimento: "2026-09-10", status: "paga", valor: 100 }, { vencimento: "2026-11-10", status: "aberta", valor: 100 }, { vencimento: "2026-10-10", status: "atrasada", valor: 150.5 }];
+  assert.deepEqual(CFG.resumoFaturas(fs), { aberto: 250.5, n: 2, atrasadas: 1 });
+  assert.equal(CFG.resumoFaturas([{ status: "paga" }]), null);
+  assert.deepEqual(CFG.ordenarFaturas(fs).map(f => f.status), ["atrasada", "aberta", "paga"]);
+  assert.equal(CFG.diasAtraso("2026-10-10", "2026-10-25"), 15);
+  assert.equal(CFG.diasAtraso("2026-11-10", "2026-10-25"), 0);
+  // FX-070
+  assert.deepEqual(CFG.erroCancelamento({ motivo: "outro", faltou: "" }), { campo: "faltou", texto: "Conte em poucas palavras o motivo." });
+  assert.equal(CFG.erroCancelamento({ motivo: "preco" }), null);
+  // FX-071 / FX-072 / FX-073
+  assert.equal(CFG.sobraLimite(3, 5), "Sobram 2");
+  assert.equal(CFG.sobraLimite(5, 5), "No limite");
+  assert.equal(CFG.sobraLimite(6, 5), "1 acima do limite");
+  assert.equal(CFG.sobraLimite(6, null), null);
+  assert.equal(CFG.variacaoPct(120, 100), 20);
+  assert.equal(CFG.variacaoPct(10, 0), null);
+  assert.equal(CFG.midiaQuaseCheia(950, 1000), true);
+  assert.equal(CFG.midiaQuaseCheia(500, 1000), false);
+  // FX-092: o CSV do histórico sem fórmula
+  const csvA = CFG.csvAuditoria([{ em: "2026-10-20T10:30:00Z", quem: "=Ana", alvo: "Bia", acao: "acesso_removido" }]);
+  assert.match(csvA, /^﻿Quando;Quem;O que aconteceu\r\n2026-10-20 07:30;'=Ana;'=Ana removeu o acesso de Bia\./);
+});
+
+test("FX-074/077/078/079/080/081/084/097/098/099/104/106/107/110: Admin — teste sem fim, slug livre, CSV, WhatsApp, proposta, etiquetas e CNPJ alfanumérico", () => {
+  // FX-074 / UC-039
+  assert.equal(ADM.testeSemFim({ status: "teste", teste_ate: null }), true);
+  assert.equal(ADM.testeSemFim({ status: "teste", teste_ate: "2026-11-01" }), false);
+  // FX-077
+  assert.equal(ADM.slugLivre("alfa", [{ id: "1", slug: "alfa" }, { id: "2", slug: "alfa-2" }]), "alfa-3");
+  assert.equal(ADM.slugLivre("beta", [{ id: "1", slug: "alfa" }]), "beta");
+  assert.equal(ADM.slugLivre("a".repeat(40), [{ id: "1", slug: "a".repeat(40) }]).length, 40);
+  // FX-078: ativação e risco no CSV
+  const [cab, linha] = ADM.csvClientes([{ nome: "X", slug: "x", status: "ativo", situacao_pagamento: "atrasado", ultimo_acesso: quandoHa(20) }], id => id, { superConta: false, hoje: hojeIso() }).replace("﻿", "").split("\r\n");
+  assert.ok(cab.endsWith("Ativação (marcos de 5);Risco (0 a 100);Motivos do risco"));
+  assert.match(linha, /;65;sem acesso há 20 dias, pagamento atrasado$/);
+  // FX-079
+  assert.equal(ADM.linkWhatsResponsavel({ comercial: { contato: { whatsapp: "(12) 99830-3030" } } }, "Oi!"), "https://wa.me/5512998303030?text=Oi!");
+  assert.equal(ADM.linkWhatsResponsavel({}, "Oi"), null);
+  // FX-080 / FX-081
+  assert.match(ADM.erroValidadeProposta("2020-01-01", hojeIso()), /hoje ou depois/);
+  assert.equal(ADM.erroValidadeProposta(isoMaisDias(3), hojeIso()), null);
+  assert.deepEqual(ADM.itensDoPlano({ modulos: ["crm"], limites: { usuarios: 5, canais: 1, contatos: 2000 } }, m => m.toUpperCase()), ["CRM", "Até 5 usuários", "1 número de WhatsApp", "Até 2.000 contatos"]);
+  // FX-084: impressão e noindex no HTML gerado
+  const html = ADM.htmlProposta({ marca: { produto: "Conecta" }, prospect: "Sol", planos: [] });
+  assert.match(html, /@page\{margin:16mm\}/);
+  assert.match(html, /<meta name="robots" content="noindex">/);
+  assert.match(ADM.htmlRelatorioMes({ cliente: { nome: "Sol" }, mes: "outubro" }), /break-inside:avoid/);
+  // FX-097 / FX-098
+  assert.deepEqual(ADM.todasEtiquetas([{ comercial: { etiquetas: ["VIP"] } }, { comercial: { etiquetas: ["vip", "Taubaté"] } }]), ["Taubaté", "VIP"]);
+  assert.deepEqual(ADM.separarEtiquetas("#vip, ##clínicas"), ["vip", "clínicas"]);
+  // FX-099: CNPJ alfanumérico (exemplo da Receita: 12.ABC.345/01DE-35)
+  assert.equal(ADM.tipoDocumento("12.ABC.345/01DE-35"), "cnpj");
+  assert.equal(ADM.tipoDocumento("12.ABC.345/01DE-36"), null);
+  assert.equal(ADM.limparDocumento("12.abc.345/01de-35"), "12ABC34501DE35");
+  assert.equal(ADM.formatarDocumento("12ABC34501DE35"), "12.ABC.345/01DE-35");
+  assert.equal(ADM.lerContato({ ct_documento: "12.ABC.345/01DE-35" }).valor.documento, "12ABC34501DE35");
+  assert.equal(ADM.tipoDocumento("11.222.333/0001-81"), "cnpj", "o numérico continua valendo");
+  // FX-104
+  assert.equal(ADM.nomeCsvClientes({ local: "etiqueta:VIP Clínicas" }, "2026-10-25"), "clientes-etiqueta-vip-clinicas-2026-10-25.csv");
+  // FX-076
+  assert.equal(ADM.hashClientes({ local: "acabando" }), "#/admin/clientes?local=acabando");
+  // FX-106 / FX-107 / FX-110
+  assert.equal(ADM.normalizarBusca("  clínica   sol "), "clínica sol");
+  assert.equal(ADM.emailsResponsaveis([{ comercial: { contato: { email: "A@x.com" } } }, { comercial: { contato: { email: "a@x.com" } } }, {}]), "a@x.com");
+  assert.ok(ADM.MOTIVOS_SUPORTE.includes("A pedido do cliente"));
+});
+
+test("FX-001/002/003/005/006/011/013/014/018/086 (tela): Perfil abre na parte pedida, silencioso grava, «Neste aparelho», 2 etapas e nada para salvar", async () => {
+  const d = comDom();
+  try {
+    const ui = await uiReal();
+    const cfg = await import("../web/app/config.js");
+    globalThis.Notification = { permission: "denied" };
+    const t = ctxCfg(ui, { partes: ["perfil"], conta: { id: "c9", papel: "clinica", nome: "Ana", email: "ana@x.com", telefone: "5512998303030", ausente_ate: null },
+      rpc: async n => {
+        if (n === "nx_sessoes_listar") return [{ id: "s1", navegador: "Chrome", atual: true }, { id: "s2", navegador: "Safari", ultimo_uso: new Date(Date.now() - 9e6).toISOString() }, { id: "s3", navegador: "Edge", ultimo_uso: new Date().toISOString() }];
+        if (n === "nx_2fa_estado") return { ativo: false };
+        return { ok: true };
+      } });
+    t.ctx.rota.query = { secao: "avisos#cfg-pf-avisos", ativar2fa: "1" };
+    await cfg.montar(t.ctx); await tique(12);
+    const raiz = t.ctx.alvo;
+    // FX-002: «Ficar ausente» no cartão de avisos, que muda de nome
+    const avisos = raiz.querySelector("#cfg-pf-avisos");
+    assert.ok(avisos.querySelector(".cfg-ausente"));
+    assert.match(textoDe(avisos.querySelector("h2")), /Avisos e disponibilidade/);
+    // FX-018: o navegador já bloqueou → a explicação aparece sem tentar
+    assert.match(textoDe(avisos.querySelector(".cfg-avisos-nota")), /bloqueando os avisos/);
+    // FX-006: ?ativar2fa=1 → foco no «Ligar com o WhatsApp» (FX-001 já levou ao cartão de avisos antes)
+    assert.ok(d.doc.activeElement.classList.contains("cfg-2fa-ligar"));
+    // FX-013 / FX-014: este aparelho primeiro, depois o uso mais recente; o título conta os outros 2
+    assert.deepEqual(raiz.querySelectorAll(".cfg-sessao b").map(b => b.textContent), ["Chrome", "Edge", "Safari"]);
+    assert.match(textoDe(raiz.querySelector("#cfg-pf-sessoes h2")), /\(2\)/);
+    // FX-086: a confirmação do «Sair de todos» diz quantos outros aparelhos
+    t.ctx.ui.confirmar = async o => { t.confirmacoes.push(o); return false; };
+    clicar(d, botaoTexto(raiz, /Sair de todos os aparelhos/)); await tique(3);
+    assert.match(t.confirmacoes.at(-1).texto, /mais 2 aparelhos/);
+    // FX-003: o horário silencioso grava silencio {de, ate} nas preferências da pessoa
+    const formSil = raiz.querySelector(".cfg-silencio");
+    formSil.querySelector("[name=sil_de]").value = "22:00";
+    formSil.querySelector("[name=sil_ate]").value = "07:00";
+    formSil.dispatchEvent(new d.Evento("submit")); await tique(2);
+    assert.deepEqual(JSON.parse(d.mem.get("nx-cv-avisos:c9")).silencio, { de: "22:00", ate: "07:00" });
+    assert.match(textoDe(formSil.querySelector(".cfg-silencio-frase")), /atravessando a meia-noite/);
+    formSil.querySelector("[name=sil_ate]").value = "";
+    formSil.dispatchEvent(new d.Evento("submit")); await tique(2);
+    assert.match(textoDe(formSil.querySelector("[data-campo=sil_ate] .campo-erro")), /os dois horários/);
+    // FX-005: «Neste aparelho»
+    const sw = raiz.querySelector(".cfg-aparelho input[name=abrir_ultima]");
+    assert.equal(sw.checked, true);
+    sw.checked = false; sw.dispatchEvent(new d.Evento("change"));
+    assert.equal(d.mem.get("nx-abrir-ultima"), "0");
+    // FX-011: sem mudança não chama o servidor
+    const formDados = raiz.querySelectorAll(".cfg-sec form").find(f => f.querySelector("input[name=nome]"));
+    formDados.dispatchEvent(new d.Evento("submit")); await tique(3);
+    assert.equal(t.chamadas.filter(c => c[0] === "nx_perfil_salvar").length, 0);
+    assert.ok(t.toasts.some(([m]) => /Nada para salvar/.test(m)));
+    // FX-009 / FX-102: nome com espaço dobrado sai limpo; DDD inexistente é recusado na tela
+    formDados.querySelector("input[name=nome]").value = "  Ana   Lima ";
+    formDados.querySelector("input[name=telefone]").value = "(01) 99830-3030";
+    formDados.dispatchEvent(new d.Evento("submit")); await tique(3);
+    assert.match(textoDe(formDados.querySelector("[data-campo=telefone] .campo-erro")), /DDD não existe/);
+    formDados.querySelector("input[name=telefone]").value = "(12) 99830-3030";
+    formDados.dispatchEvent(new d.Evento("submit")); await tique(4);
+    assert.equal(t.chamadas.find(c => c[0] === "nx_perfil_salvar")[1].p_dados.nome, "Ana Lima");
+    cfg.desmontar();
+  } finally { delete globalThis.Notification; d.fim(); }
+});
+
+test("FX-007 / FX-008 (tela): senha fácil é recusada antes do servidor e a repetição é conferida ao digitar", async () => {
+  const d = comDom();
+  try {
+    const ui = await uiReal();
+    const cfg = await import("../web/app/config.js");
+    const t = ctxCfg(ui, { partes: ["perfil"], conta: { id: "c8", papel: "clinica", nome: "Ana Souza", email: "anasouza@x.com" } });
+    t.ctx.temModulo = () => false;
+    await cfg.montar(t.ctx); await tique(8);
+    const formSenha = t.ctx.alvo.querySelectorAll(".cfg-sec form").find(f => f.querySelector("input[name=nova]"));
+    formSenha.reset = () => {};
+    formSenha.querySelector("input[name=atual]").value = "velhaSenha1";
+    formSenha.querySelector("input[name=nova]").value = "souza2026!";
+    const n2 = formSenha.querySelector("input[name=nova2]");
+    digitar(d, n2, "souza2");
+    assert.equal(textoDe(formSenha.querySelector(".cfg-senha-confere")), "", "começo igual: ainda digitando");
+    digitar(d, n2, "souza2026!");
+    assert.equal(textoDe(formSenha.querySelector(".cfg-senha-confere")), "As senhas conferem.");
+    formSenha.dispatchEvent(new d.Evento("submit")); await tique(6);
+    assert.match(textoDe(formSenha.querySelector("[data-campo=nova] .campo-erro")), /fácil de adivinhar/);
+    assert.equal(t.chamadas.filter(c => c[0] === "nx_senha_trocar").length, 0);
+    cfg.desmontar();
+  } finally { d.fim(); }
+});
+
+test("FX-020/021/022/023/026 (tela): Dados da empresa manda minutos, avaliação e feriados; servidor que recusa salva o resto e avisa", async () => {
+  const d = comDom();
+  try {
+    const ui = await uiReal();
+    const cfg = await import("../web/app/config.js");
+    const salvos = [];
+    const t = ctxCfg(ui, { partes: ["empresa"], rpc: async (n, p) => {
+      if (n === "nx_empresa_dados") return { endereco: "Rua A", fuso: "America/Sao_Paulo" };
+      if (n === "nx_empresa_dados_salvar") { salvos.push(p.p_dados); if ("feriados" in p.p_dados) throw Object.assign(new Error("dados"), { codigo: "dados_invalidos", hint: "feriados" }); return p.p_dados; }
+      return {};
+    } });
+    t.ctx.shell.prontos.CONFIG_PRONTAS.push("empresa");
+    await cfg.montar(t.ctx); await tique(8);
+    const raiz = t.ctx.alvo;
+    const form = raiz.querySelector(".cfg-sec form");
+    form.querySelector("[name=minutos_por_mensagem]").value = "1,5";
+    form.querySelector("[name=link_avaliacao]").value = "g.page/r/abc/review";
+    form.querySelector("[name=feriados]").value = "20/01, 23/04";
+    form.querySelector("[name=instagram]").value = "https://instagram.com/clinica.sol";
+    form.dispatchEvent(new d.Evento("input"));
+    assert.match(textoDe(raiz.querySelector(".cfg-empresa-previa")), /Avalie: https:\/\/g\.page\/r\/abc\/review/);
+    assert.equal(raiz.querySelector(".cfg-empresa-mapa").hidden, false, "FX-093: endereço → «Ver no mapa»");
+    assert.ok(raiz.querySelectorAll(".cfg-empresa-vars button").some(b => b.textContent === "{link_avaliacao}"), "FX-026");
+    form.dispatchEvent(new d.Evento("submit")); await tique(8);
+    assert.equal(salvos.length, 2);
+    assert.deepEqual([salvos[0].minutos_por_mensagem, salvos[0].link_avaliacao, salvos[0].feriados, salvos[0].instagram], [1.5, "https://g.page/r/abc/review", ["01-20", "04-23"], "clinica.sol"]);
+    assert.equal("minutos_por_mensagem" in salvos[1], false);
+    assert.ok(t.toasts.some(([m]) => /ainda não guarda: minutos por mensagem, link de avaliação, feriados/.test(m)));
+    cfg.desmontar();
+  } finally { d.fim(); }
+});
+
+test("FX-028/029/031/034/039/040/042/090/105/108 (tela): ?convidar=1 abre o convite, função escolhe o papel, admin confirma, typo pergunta e suspender", async () => {
+  const d = comDom();
+  try {
+    const ui = await uiReal();
+    const cfg = await import("../web/app/config.js");
+    const agora = Date.now();
+    const dados = { limite: 10, uso: 3, usuarios: [
+      { conta_id: "c1", nome: "Ana", email: "ana@x.com", papel: "admin", editavel: true, eu: true, ultimo_acesso: new Date(agora - 30e3).toISOString(), suspenso: false },
+      { conta_id: "c2", nome: "Bia", email: "bia@x.com", papel: "atendente", editavel: true, ultimo_acesso: new Date(agora - 45 * 86400e3).toISOString(), suspenso: false },
+      { conta_id: "c3", nome: "Caio", email: "caio@x.com", papel: "atendente", editavel: true, suspenso: true }],
+      convites: [{ id: "v1", papel: "atendente", email: "x@x.com", expira_em: new Date(agora + 5 * 86400e3).toISOString() }], departamentos: [] };
+    const criados = [];
+    const t = ctxCfg(ui, { partes: ["usuarios"], rpc: async (n, p) => {
+      if (n === "nx_usuarios_listar") return dados;
+      if (n === "nx_convite_criar") { criados.push(p.p_dados); return { id: `n${criados.length}`, link: "https://x/#/convite/t", expira_em: new Date(agora + 3 * 86400e3).toISOString() }; }
+      if (n === "nx_acesso_suspender") return { ok: true };
+      return {};
+    } });
+    const { modal, abertos } = modalQueRoda(d, ui, { antes: async o => {
+      if (o.titulo !== "Convidar para a equipe") return;
+      const f = o.corpo;
+      const selF = f.querySelector("select[name=funcao]");
+      selF.value = "socio"; selF.dispatchEvent(new d.Evento("change"));
+      f.querySelector("input[name=email]").value = "nova@gmial.com";
+    } });
+    t.ctx.ui.modal = modal;
+    t.ctx.rotas = { FUNCOES_EQUIPE: [{ id: "recepcao", rotulo: "Recepção", papel: "atendente" }, { id: "socio", rotulo: "Sócio", papel: "admin" }], papelDaFuncao: id => ({ recepcao: "atendente", socio: "admin" })[id] || null };
+    let menuItens = null;
+    t.ctx.ui.menu = (_b, itens) => { menuItens = itens; };
+    t.ctx.rota.query = { convidar: "1" };
+    await cfg.montar(t.ctx); await tique(14);
+    const raiz = t.ctx.alvo;
+    // FX-028: abriu o convite sozinho; FX-029: «Sócio» virou administrador; FX-090: confirmou o admin; FX-034: o typo segurou o 1º toque
+    const conv = abertos.find(x => x.o.titulo === "Convidar para a equipe");
+    assert.ok(conv, "o convite abriu pelo ?convidar=1");
+    assert.equal(conv.o.corpo.querySelector("select[name=papel]").value, "admin");
+    assert.ok(t.confirmacoes.some(c => /Convidar como administrador/.test(c.titulo)));
+    assert.match(textoDe(conv.o.corpo.querySelector("[data-campo=email] .campo-erro")), /Você quis dizer nova@gmail\.com/);
+    assert.equal(criados.length, 0);
+    // FX-039 / FX-040 / FX-042
+    assert.match(textoDe(raiz.querySelector(".cartao .sub")), /1 online agora/);
+    assert.match(textoDe(raiz.querySelector(".cfg-conv-cartao h2")), /Convites pendentes \(1\)/);
+    assert.match(textoDe(raiz.querySelector(".cfg-us-inativos")), /Sem entrar há 30\+ dias \(1\)/);
+    assert.ok(raiz.querySelector(".cfg-us-suspenso"), "FX-031: a pílula do suspenso");
+    // FX-031: o menu da Bia tem «Suspender acesso», que chama nx_acesso_suspender
+    const bAcoes = raiz.querySelectorAll("button").find(b => b.getAttribute("aria-label") === "Ações para Bia");
+    clicar(d, bAcoes);
+    const susp = menuItens.find(i => i && i.rotulo === "Suspender acesso");
+    assert.ok(susp);
+    assert.ok(menuItens.some(i => i && i.rotulo === "Copiar e-mail"), "FX-109");
+    await susp.fn(); await tique(4);
+    assert.deepEqual(t.chamadas.find(c => c[0] === "nx_acesso_suspender")[1], { p_cliente: t.ctx.cliente.id, p_conta: "c2", p_suspenso: true });
+    cfg.desmontar();
+  } finally { d.fim(); }
+});
+
+test("FX-030 (tela): «Gerar de novo» usa o nx_convite_regerar quando o servidor tem (sem revogar nem criar)", async () => {
+  const d = comDom();
+  try {
+    const ui = await uiReal();
+    const cfg = await import("../web/app/config.js");
+    const agora = Date.now();
+    const dados = { usuarios: [{ conta_id: "c1", nome: "Ana", email: "ana@x.com", papel: "admin", eu: true }], departamentos: [],
+      convites: [{ id: "v9", papel: "atendente", email: "velho@x.com", vencido: true, expira_em: new Date(agora - 86400e3).toISOString() }] };
+    const t = ctxCfg(ui, { partes: ["usuarios"], rpc: async n => {
+      if (n === "nx_usuarios_listar") return dados;
+      if (n === "nx_convite_regerar") return { id: "v9", token: "t2", link: "https://x/#/convite/t2", expira_em: new Date(agora + 3 * 86400e3).toISOString() };
+      return {};
+    } });
+    const { modal } = modalQueRoda(d, ui);
+    t.ctx.ui.modal = modal;
+    await cfg.montar(t.ctx); await tique(10);
+    clicar(d, t.ctx.alvo.querySelector(".cfg-conv-vencidos .cfg-conv-novo")); await tique(8);
+    const nomes = t.chamadas.map(c => c[0]).filter(n => /convite/.test(n));
+    assert.deepEqual(nomes, ["nx_convite_regerar"]);
+    assert.deepEqual(t.chamadas.find(c => c[0] === "nx_convite_regerar")[1], { p_cliente: t.ctx.cliente.id, p_convite: "v9" });
+    cfg.desmontar();
+  } finally { d.fim(); }
+});
+
+test("FX-054/055/056/057/060/062 (tela): marca grava nx-marca-hash, amostras com nome, boas-vindas, nome curto e Ctrl+S", async () => {
+  const d = comDom();
+  try {
+    const m = await abrirMarcaOrg(d, { marca: { produto: "Clínica Sorriso Total" } });
+    const raiz = m.raiz;
+    // FX-056 / DU-152
+    for (const n of ["boas_vindas_titulo", "boas_vindas", "contato_agencia"]) assert.ok(raiz.querySelector(`[name=${n}]`), n);
+    // FX-057
+    assert.match(textoDe(raiz.querySelector(".cfg-nome-curto")), /aparece como «Clínica»/);
+    // FX-062: o exemplo do título não cita a plataforma
+    assert.doesNotMatch(raiz.querySelector("[name=login_titulo]").getAttribute("placeholder"), /órbita/i);
+    // FX-060: Ctrl+S salva (com mudança)
+    const bv = raiz.querySelector("[name=boas_vindas_titulo]");
+    bv.value = "Bem-vindo!"; bv.dispatchEvent(new d.Evento("input", { bubbles: true }));
+    const ev = new d.Evento("keydown", { key: "s", ctrlKey: true });
+    raiz.querySelector(".marca-ed").dispatchEvent(ev);
+    await tique(10);
+    assert.equal(ev.defaultPrevented, true);
+    assert.equal(m.salvos.length, 1);
+    assert.equal(m.salvos[0].p_org.marca.boas_vindas_titulo, "Bem-vindo!");
+    // FX-054 / DU-150: as outras abas repintam
+    assert.match(d.mem.get("nx-marca-hash") || "", /^[0-9a-f]{8}$/);
+    m.cfg.desmontar();
+  } finally { d.fim(); }
+});
+
+test("FX-065/067/095 (tela): Domínio — «Nome» curto do CNAME, registro inteiro e endereço repetido recusado na hora", async () => {
+  const d = comDom();
+  try {
+    const ui = await uiReal();
+    const cfg = await import("../web/app/config.js");
+    const t = ctxCfg(ui, { partes: ["dominio"], conta: { id: "g1", papel: "gestor", nome: "G" }, rpc: async n => (n === "nx_dominios_listar" ? [{ host: "crm.agencia.com.br", status: "pendente", dns: { valor: "x.netlify.app" } }] : {}) });
+    t.ctx.cliente = null; t.ctx.sessao.org = { id: "org-a", nome: "Agência" };
+    await cfg.montar(t.ctx); await tique(10);
+    const raiz = t.ctx.alvo;
+    assert.match(textoDe(raiz.querySelector(".dns")), /Nome\s*crm \(se o provedor pedir o endereço inteiro: crm\.agencia\.com\.br\)/);
+    clicar(d, raiz.querySelector(".dom-copiar-tudo")); await tique(2);
+    assert.match(t.copiados.at(-1)[0], /^Tipo: CNAME\nNome: crm/);
+    const form = raiz.querySelector(".cfg-sec form");
+    form.querySelector("input[name=host]").value = "CRM.agencia.com.br";
+    form.dispatchEvent(new d.Evento("submit")); await tique(4);
+    assert.match(textoDe(form.querySelector("[data-campo=host] .campo-erro")), /já está cadastrado/);
+    assert.equal(t.chamadas.filter(c => c[0] === "nx_dominio_salvar").length, 0);
+    cfg.desmontar();
+  } finally { d.fim(); }
+});
+
+test("FX-074/076/083/120/121 (tela): Admin — «sem data de fim», filtro local volta pelo endereço, limpar filtros e domínios quebrados", async () => {
+  const d = comDom();
+  try {
+    const ui = await uiReal();
+    const adm = await import("../web/app/admin.js");
+    const itens = [CLI({ id: "t1", nome: "Teste Sem Fim", status: "teste", teste_ate: null }), CLI({ id: "a1", nome: "Ativo Ok" })];
+    const rpc = async (n, p) => {
+      if (n === "nx_clientes_admin") return p.p_filtro && p.p_filtro.busca ? [] : itens;
+      if (n === "nx_planos_listar") return PLANOS;
+      return [];
+    };
+    const t = ctxAdm(ui, { rpc, superConta: false, query: { local: "perto" } });
+    await adm.montar(t.ctx); await tique(12);
+    // FX-076: ?local=perto voltou: o chip do filtro aparece
+    assert.match(textoDe(t.alvo.querySelector(".adm-filtro-local")), /perto do limite/);
+    // FX-083: nada com o filtro → «Limpar busca e filtros»
+    const limpar = t.alvo.querySelector(".adm-limpar-filtros");
+    assert.ok(limpar);
+    clicar(d, limpar); await tique(10);
+    assert.equal(t.alvo.querySelector(".adm-filtro-local").hidden, true);
+    // FX-074 / UC-039
+    const cel = t.alvo.querySelectorAll(".tab-linha").find(x => x.dataset.id === "t1").querySelector("[data-col=teste_ate]");
+    assert.match(textoDe(cel), /sem data de fim/);
+    adm.desmontar();
   } finally { d.fim(); }
 });

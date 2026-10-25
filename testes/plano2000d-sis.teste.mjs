@@ -917,7 +917,8 @@ test("UCC-054…057 (plano 1500c) + DU-446 + DU-155 · manifestos estáticos: PN
     assert.ok(m.icons.some(i => i.sizes === "512x512" && i.purpose === "maskable"), `${f}: maskable`);
     assert.deepEqual(m.categories, ["business", "productivity"], f);
     assert.equal(m.theme_color, "#FAFAF8", f);
-    assert.deepEqual(m.shortcuts.map(s => s.name), ["Conversas", "CRM", "Agenda"], f);
+    // plano 2000d: SX-056 — o app de Anúncios leva aos anúncios e relatórios (os outros continuam Conversas/CRM/Agenda)
+    assert.deepEqual(m.shortcuts.map(s => s.name), f === "manifest-ads.webmanifest" ? ["Anúncios", "Relatórios", "CRM"] : ["Conversas", "CRM", "Agenda"], f);
     for (const s of m.shortcuts) assert.ok(s.url.startsWith("/app/"), `${f}: atalho no escopo`);
     assert.doesNotMatch(JSON.stringify(m), /Nexus|Anthropic|CodeWords/, f);
   }
@@ -1315,4 +1316,601 @@ test("DU-145 + DU-147 (config) · validarMarca aceita as chaves novas; o ícone 
   assert.deepEqual(T.validarMarca({ suporte_email: "a@b.test", termos_url: "https://x", icone_app: "data:image/png;base64,AAAA", teste_aberto: true }), []);
   assert.deepEqual(T.validarMarca({ icone_app: "data:image/svg+xml;base64,AAAA" }).map(e => e.campo), ["icone_app"]);
   assert.deepEqual(T.validarMarca({ qualquer: 1 }).map(e => e.campo), ["qualquer"]);
+});
+
+
+/* ============================================================ lote sis-x (complemento) · plano 2000d · SX-001.. ============================================================ */
+/* ---------- ui.js: formatos, máscaras e leitura de formulário ---------- */
+test("SX-001 + SX-019 + SX-020 · pct('') é vazio; data inválida não derruba o Intl; «AAAA-MM-DD HH:MM» (Postgres) vale também no Safari", () => {
+  assert.equal(U.pct(""), "—");
+  assert.equal(U.pct(0.25), "25%");
+  assert.equal(U.dataBR(new Date("x")), "—");
+  assert.equal(U.hojeSP(new Date("x")), U.hojeSP());
+  const Real = globalThis.Date;
+  class DateSafari extends Real { constructor(...a) { if (a.length === 1 && typeof a[0] === "string" && /^\d{4}-\d{2}-\d{2} \d/.test(a[0])) super(NaN); else super(...a); } }
+  globalThis.Date = DateSafari;
+  try { assert.equal(U.dataHoraBR("2026-10-05 14:00"), U.dataHoraBR("2026-10-05T14:00")); assert.notEqual(U.dataHoraBR("2026-10-05 14:00"), "—"); }
+  finally { globalThis.Date = Real; }
+});
+
+test("SX-002 + SX-003 · 0800/0300 sem parênteses de DDD (exibição e digitação)", () => {
+  assert.equal(U.telBR("08001234567"), "0800 123 4567");
+  assert.equal(U.telBR("03001234567"), "0300 123 4567");
+  assert.equal(U.telBR("5512998303030"), "(12) 99830-3030", "celular continua igual");
+  assert.equal(U.formatarTelefone("0800123"), "0800 123");
+  assert.equal(U.formatarTelefone("08001234567"), "0800 123 4567");
+  assert.equal(U.formatarTelefone("12998303030"), "(12) 99830-3030");
+});
+
+test("SX-004 + SX-005 + SX-021 · moeda colada no formato americano e o «−» tipográfico", () => {
+  assert.equal(U.lerMoeda("1,234.56"), 1234.56);
+  assert.equal(U.lerMoeda("12,345,678.9"), 12345678.9);
+  assert.equal(U.lerMoeda("1.234,56"), 1234.56, "o brasileiro continua");
+  assert.equal(U.lerMoeda("2.000"), 2000);
+  assert.equal(U.lerMoeda("−1.234,56"), -1234.56);
+  assert.equal(U.formatarMoeda("1,234.56"), "1.234,56");
+  assert.equal(U.formatarMoeda("1234,5"), "1.234,5");
+});
+
+test("SX-006 · lerForm: número ilegível vira null (nunca NaN) e «1,5» vira 1.5", () => {
+  const f = h("form", null, h("input", { type: "number", name: "a", value: "abc" }), h("input", { type: "number", name: "b", value: "1,5" }), h("input", { type: "number", name: "c", value: "" }));
+  const r = U.lerForm(f);
+  assert.equal(r.a, null); assert.equal(r.b, 1.5); assert.equal(r.c, null);
+});
+
+test("SX-007 · h(): estilo em camelCase vira a propriedade com hífen; variável CSS fica como veio", () => {
+  const el = h("div", { style: { minHeight: "44px", "--cor": "#fff", backgroundColor: "red" } });
+  assert.equal(el.style.getPropertyValue("min-height"), "44px");
+  assert.equal(el.style.getPropertyValue("background-color"), "red");
+  assert.equal(el.style.getPropertyValue("--cor"), "#fff");
+});
+
+test("SX-008 · carregarCss: a falha não fica guardada (a próxima tela tenta de novo)", async () => {
+  if (!doc.head) doc.head = doc.documentElement.appendChild(h("head"));
+  const p1 = U.carregarCss("sx008-teste");
+  const l1 = doc.head.querySelector("link[data-css='sx008-teste.css']");
+  ev(l1, "error");
+  assert.equal(await p1, false);
+  assert.equal(l1.isConnected, false, "o <link> quebrado sai");
+  const p2 = U.carregarCss("sx008-teste");
+  assert.notEqual(p2, p1, "nova tentativa");
+  const l2 = doc.head.querySelector("link[data-css='sx008-teste.css']");
+  ev(l2, "load"); assert.equal(await p2, true);
+  assert.equal(U.carregarCss("sx008-teste"), p2, "o que carregou continua guardado");
+});
+
+test("SX-009 · atalho: tecla no meio da composição (IME/acento) não dispara", () => {
+  let n = 0;
+  const parar = U.atalho("esc", () => { n++; });
+  try {
+    ev(doc, "keydown", { key: "Escape", isComposing: true, altKey: false, target: doc.body });
+    ev(doc, "keydown", { key: "Escape", keyCode: 229, altKey: false, target: doc.body });
+    assert.equal(n, 0);
+    ev(doc, "keydown", { key: "Escape", altKey: false, target: doc.body });
+    assert.equal(n, 1);
+  } finally { parar(); }
+});
+
+test("SX-010 + SX-025 · toast: Esc com o foco dentro fecha só o aviso; Error vira frase e nulo não vira «undefined»", () => {
+  const t = U.toast("Salvo", { tipo: "ok" });
+  const e = new Evento("keydown", { key: "Escape" });
+  t.el.dispatchEvent(e);
+  assert.ok(t.el.classList.contains("saindo"));
+  assert.ok(e._parado, "não chega ao modal de baixo");
+  const t2 = U.toast(Object.assign(new Error("sem_conexao"), { codigo: "sem_conexao" }), { tipo: "erro" });
+  assert.doesNotMatch(t2.el.querySelector("p").textContent, /Error|object|sem_conexao/);
+  const t3 = U.toast(null);
+  assert.doesNotMatch(t3.el.querySelector("p").textContent, /undefined|null/);
+  for (const x of [t, t2, t3]) x.fechar();
+});
+
+test("SX-011 + SX-012 · numCompacto sobe de faixa no arredondamento; numMoeda sem centavos arredonda", () => {
+  assert.equal(U.numCompacto(999950), "1 mi");
+  assert.equal(U.numCompacto(999_960_000), "1 bi");
+  assert.equal(U.numCompacto(1500), "1,5 mil");
+  assert.equal(U.numMoeda(1234.6, { centavos: false }).textContent, "R$1.235");
+  assert.equal(U.numMoeda(1234.56).textContent, "R$1.234,56");
+});
+
+test("SX-013 · linkWhatsApp: número brasileiro sem DDI ganha o 55", () => {
+  assert.match(U.linkWhatsApp("oi", "(12) 99999-8888"), /wa\.me\/5512999998888\?/);
+  assert.match(U.linkWhatsApp("oi", "5512999998888"), /wa\.me\/5512999998888\?/);
+  assert.match(U.linkWhatsApp("oi", "+1 2025550123"), /wa\.me\/12025550123\?/, "com + é de outro país");
+});
+
+test("SX-014 · barraUso: uso acima do limite mantém o medidor válido", () => {
+  const b = U.barraUso("Usuários", 12, 10);
+  assert.equal(b.querySelector("[role=meter]").getAttribute("aria-valuemax"), "12");
+  assert.equal(U.barraUso("Usuários", 3, 10).querySelector("[role=meter]").getAttribute("aria-valuemax"), "10");
+});
+
+test("SX-015 + SX-016 · iniciais sem pontuação, parênteses nem tratamento", () => {
+  assert.equal(U.iniciais("Ana (cliente)"), "AN");
+  assert.equal(U.iniciais("Dra. Ana Lima"), "AL");
+  assert.equal(U.iniciais("Dr Paulo"), "PA");
+  assert.equal(U.iniciais("«João» Souza"), "JS");
+  assert.equal(U.iniciais("Ana Souza"), "AS");
+  assert.equal(U.iniciais("Dr."), "DR", "um nome só não some");
+});
+
+test("SX-017 + SX-018 · avatar: foto com carregamento preguiçoso; foto quebrada volta às iniciais", () => {
+  const a = U.avatar("Ana Souza", "1", "https://foto.test/a.jpg");
+  const img = a.querySelector("img");
+  assert.equal(img.getAttribute("loading"), "lazy");
+  assert.equal(img.getAttribute("decoding"), "async");
+  ev(img, "error");
+  assert.equal(a.querySelector("img"), null);
+  assert.equal(a.textContent, "AS");
+});
+
+test("SX-022 · forcaSenha: repetir 1–2 caracteres é «Curta» mesmo comprida", () => {
+  assert.equal(U.forcaSenha("aaaaaaaaaaaa"), 1);
+  assert.equal(U.forcaSenha("abababababab"), 1);
+  assert.equal(U.forcaSenha("Cavalo-azul-77"), 4);
+});
+
+test("SX-023 · copiar: nada para copiar não diz «Copiado.»", async () => {
+  assert.equal(await U.copiar(""), false);
+  assert.equal(await U.copiar(null), false);
+});
+
+test("SX-024 · confirmar com digitar: acento, caixa e espaço duplo não reprovam", async () => {
+  HTMLDialog();
+  const p = U.confirmar({ titulo: "Excluir?", perigo: true, digitar: "Clínica Sorriso" });
+  const dlg = [...doc.body.querySelectorAll("dialog")].pop();
+  dlg.querySelector("input").value = "clinica  sorriso";
+  dlg.querySelector(".modal-rod button[data-tipo=perigo]").click();
+  assert.equal(await p, true);
+  await esperar(200);
+});
+
+test("SX-026 · menu: escolhido o item, o foco volta ao botão que abriu (se a ação não levou o foco)", async () => {
+  limparCorpo();
+  const ancora = h("button", { type: "button" }, "Mais"); doc.body.appendChild(ancora);
+  U.menu(ancora, [{ rotulo: "Arquivar", fn() {} }]);
+  await esperar(5);
+  doc.querySelector(".menu-pop button").click();
+  assert.equal(doc.activeElement, ancora);
+  const outro = h("input"); doc.body.appendChild(outro);
+  U.menu(ancora, [{ rotulo: "Editar", fn() { outro.focus(); } }]);
+  await esperar(5);
+  doc.querySelector(".menu-pop button").click();
+  assert.equal(doc.activeElement, outro, "a ação levou o foco: fica lá");
+});
+
+test("SX-027 · hexDigitado aceita rgb() colado", () => {
+  assert.equal(U.hexDigitado("rgb(176, 118, 31)"), "#B0761F");
+  assert.equal(U.hexDigitado("rgba(255,255,255,0.5)"), "#FFFFFF");
+  assert.equal(U.hexDigitado("rgb(300,0,0)"), null);
+  assert.equal(U.hexDigitado("fa0"), "#FFAA00");
+});
+
+/* ---------- api.js · cache.js · rede.js · pulso.js (SX-028…SX-039) ---------- */
+test("SX-028 + SX-029 · fn() aceita {signal}; publica() aceita {sinal} — quem chama desiste e a chamada sai «cancelado»", async () => {
+  const api = A.criarApi({ url: "https://x.test", chave: "k", token: () => "t", cliente: () => "c1",
+    fetch: async (u, init) => new Promise((res, rej) => { init.signal.addEventListener("abort", () => rej(Object.assign(new Error("abort"), { name: "AbortError" }))); }) });
+  const c1 = new AbortController();
+  const p1 = api.fn("nx-ia", { acao: "sugerir" }, { signal: c1.signal });
+  await tick(2); c1.abort();
+  await assert.rejects(p1, e => e.codigo === "cancelado");
+  const c2 = new AbortController();
+  const p2 = api.publica("nx_convite_ver", { p_token: "x" }, { sinal: c2.signal });
+  await tick(2); c2.abort();
+  await assert.rejects(p2, e => e.codigo === "cancelado");
+});
+
+test("SX-030 · Retry-After com fração de segundo; número solto não vira data", () => {
+  assert.equal(A.lerRetryAfter("1.5"), 1500);
+  assert.equal(A.lerRetryAfter("7"), 7000);
+  assert.equal(A.lerRetryAfter("-5"), null);
+  const agora = Date.parse("2026-10-25T12:00:00Z");
+  assert.equal(A.lerRetryAfter("Sun, 25 Oct 2026 12:00:30 GMT", agora), 30000);
+});
+
+test("SX-031 + SX-032 + SX-033 · frases do servidor sem «..» e o nome do campo sem «p_»", () => {
+  assert.equal(A.mensagemErro({ codigo: "envio_falhou", detalhe_texto: "Número bloqueado." }), "O canal não aceitou a mensagem: Número bloqueado.");
+  assert.equal(A.mensagemErro({ codigo: "envio_falhou", detalhe_texto: "número inválido" }), "O canal não aceitou a mensagem: número inválido.");
+  assert.equal(A.mensagemErro({ codigo: "automacao_invalida", hint: "sem gatilho." }), "A automação tem um problema: sem gatilho.");
+  assert.equal(A.mensagemErro({ codigo: "campo_obrigatorio", hint: "p_nome_cliente" }), "Preencha o campo \"nome cliente\" antes de continuar.");
+  assert.equal(A.mensagemErro({ codigo: "campo_obrigatorio", hint: "Telefone" }), "Preencha o campo \"Telefone\" antes de continuar.");
+});
+
+function armazemFalso() {
+  const m = new Map();
+  return { m, async ler(k) { return m.get(k) || null; }, async gravar(k, v) { m.set(k, { k, ...v }); return true; }, async apagar(k) { m.delete(k); return true; },
+    async limpar() { m.clear(); return true; }, async listar() { return [...m.values()].map(x => ({ k: x.k, v: x.v, em: x.em, bytes: x.b, nome: x.nome })); } };
+}
+test("SX-034 · cache: no máximo 30 respostas por RPC (as mais novas ficam; as outras RPCs não perdem a vaga)", async () => {
+  let t = Date.now();
+  const arm = armazemFalso();
+  const c = CACHE.criarCache({ armazem: arm, varrer: false, agora: () => t });
+  for (let i = 0; i < 40; i++) { t += 1000; await c.gravar(`k${i}`, "nx_negocios_kanban", { i }); }
+  await c.gravar("ini", "nx_inicio", { ok: 1 });
+  const saiu = await c.varrer();
+  assert.equal(saiu, 10);
+  const nomes = [...arm.m.values()].map(x => x.nome);
+  assert.equal(nomes.filter(n => n === "nx_negocios_kanban").length, CACHE.TETO_POR_RPC);
+  assert.ok(arm.m.has("k39") && !arm.m.has("k0"), "as mais antigas saem");
+  assert.ok(arm.m.has("ini"));
+});
+
+test("SX-035 · cache: a memória da aba também tem teto", async () => {
+  let t = Date.now();
+  const c = CACHE.criarCache({ armazem: null, varrer: false, agora: () => t });
+  for (let i = 0; i < CACHE.TETO_ENTRADAS + 20; i++) { t += 1; await c.gravar(`m${i}`, "nx_negocios_kanban", { i }); }
+  const e = await c.estatisticas();
+  assert.equal(e.entradas, CACHE.TETO_ENTRADAS);
+  assert.equal(await c.ler("m0"), null, "a mais antiga saiu");
+  assert.ok(await c.ler(`m${CACHE.TETO_ENTRADAS + 19}`));
+});
+
+test("SX-036 · rede: a espera de reconexão tem sorteio (±20 %) — os aparelhos não voltam todos no mesmo segundo", () => {
+  const esperas = [];
+  for (const sorte of [0, 1]) {
+    const r = REDE.criarRede({ nav: { onLine: false }, janela: null, doc: null, agendar: (fn, ms) => { esperas.push(ms); return 1; }, cancelar: () => {}, agora: () => 0, aleatorio: () => sorte });
+    r.destruir();
+  }
+  assert.deepEqual(esperas, [1600, 2400]);
+});
+
+test("SX-037 + SX-038 · repetirAbertura: aoFalha que lança não derruba; sem esperar usa o relógio comum", async () => {
+  let n = 0;
+  const r = await REDE.repetirAbertura(async () => { n++; if (n < 2) throw new Error("rede"); return "ok"; },
+    { esperas: [1], aoFalha: () => { throw new Error("tela saiu"); } });
+  assert.equal(r, "ok"); assert.equal(n, 2);
+});
+
+test("SX-039 · pulso: a roda do mouse conta como atividade (quem lê rolando não fica «inativo»)", () => {
+  const ouv = {};
+  const docF = { visibilityState: "visible", addEventListener(t, fn) { ouv[t] = fn; }, removeEventListener(t) { delete ouv[t]; } };
+  let t = 0;
+  const p = P.criarPulso({ ler: async () => ({}), doc: docF, nav: {}, janela: null, agora: () => t, agendar: () => 1, cancelar: () => {}, aleatorio: () => .5 });
+  assert.equal(typeof ouv.wheel, "function");
+  t = 20 * 60_000;
+  assert.equal(p.estado.intervalo, P.INTERVALOS.muitoInativo);
+  ouv.wheel();
+  assert.equal(p.estado.intervalo, P.INTERVALOS.normal);
+  p.destruir();
+  assert.equal(ouv.wheel, undefined);
+});
+
+/* ---------- tema.js · login.js (SX-040…SX-047) ---------- */
+test("SX-040 + SX-041 · marca: título/texto só com espaços valem como vazios; WhatsApp com máscara ou número continua valendo", () => {
+  const m = T.marcaEfetiva({ produto: "Sorriso", login_titulo: "   ", login_texto: " ", suporte_wa: "+55 (12) 99999-8888" });
+  assert.equal(m.login_titulo, "Entre para continuar");
+  assert.match(m.login_texto, /e-mail e a senha/);
+  assert.equal(m.suporte_wa, "5512999998888");
+  assert.equal(T.marcaEfetiva({ suporte_wa: 5512999998888 }).suporte_wa, "5512999998888");
+  assert.equal(T.marcaEfetiva({ suporte_wa: "123" }).suporte_wa, null);
+});
+
+test("SX-042 · validarMarca: «teste aberto» só sim ou não", () => {
+  assert.deepEqual(T.validarMarca({ teste_aberto: "false" }).map(e => e.campo), ["teste_aberto"]);
+  assert.deepEqual(T.validarMarca({ teste_aberto: false }), []);
+});
+
+test("SX-043 + SX-044 + SX-045 · contagem em horas; senha de linha do teclado ou de data é fraca", () => {
+  assert.equal(LOGIN.formatarContagem(4500), "1:15:00");
+  assert.equal(LOGIN.formatarContagem(899), "14:59");
+  for (const s of ["qwertyuiop", "asdfghjkl1", "zxcvbnm123", "15031990", "15/03/1990", "1990-03-15"]) assert.equal(LOGIN.senhaFraca(s), true, s);
+  for (const s of ["Cavalo-azul-77", "35139901", "qwe-Rty-88!"]) assert.equal(LOGIN.senhaFraca(s), false, s);
+});
+
+test("SX-046 + SX-047 · e-mail: invisíveis e ponto final saem; domínio digitado errado ganha «Você quis dizer…»", async () => {
+  assert.equal(LOGIN.normalizarEmail("​Ana@X.com. "), "ana@x.com");
+  assert.equal(LOGIN.sugestaoEmail("ana@gmial.com"), "ana@gmail.com");
+  assert.equal(LOGIN.sugestaoEmail("ana@hotmail.con"), "ana@hotmail.com");
+  assert.equal(LOGIN.sugestaoEmail("ana@gmail.com"), null);
+  assert.equal(LOGIN.sugestaoEmail("ana@clinicasorriso.com.br"), null);
+  const alvo = await montarLogin("login", [], { marca: {}, api: { publica: async () => ({}), mensagemErro: A.mensagemErro, minutosDoHint: A.minutosDoHint } });
+  const inp = alvo.querySelector("input[name=email]");
+  inp.value = "ana@gmial.com"; ev(inp, "blur");
+  const sug = alvo.querySelector(".entrar-sugestao");
+  assert.equal(sug.hidden, false);
+  sug.querySelector("button").click();
+  assert.equal(inp.value, "ana@gmail.com");
+  assert.equal(sug.hidden, true);
+  LOGIN.desmontar();
+});
+
+/* ---------- rotas.js · pwa.js · app.js (SX-048…SX-055) ---------- */
+test("SX-048 + SX-049 · aviso e pílula do teste sem número ou sem data não escrevem «NaN» nem «Teste até»", () => {
+  assert.doesNotMatch(JSON.stringify(ROTAS.avisoFimTeste(undefined)), /NaN/);
+  assert.equal(ROTAS.avisoFimTeste(3).tom, "aviso");
+  assert.deepEqual(ROTAS.textoPilulaTeste(20, ""), { curto: "Em teste", longo: "Empresa em período de teste." });
+  assert.equal(ROTAS.textoPilulaTeste(20, "30/10").curto, "Teste até 30/10");
+});
+
+test("SX-050 · sessaoPertoDeVencer entende o prazo em segundos (época Unix)", () => {
+  const agora = Date.parse("2026-10-25T12:00:00Z");
+  assert.equal(ROTAS.sessaoPertoDeVencer(Math.floor(agora / 1000) + 300, agora), true);
+  assert.equal(ROTAS.sessaoPertoDeVencer(String(Math.floor(agora / 1000) + 300), agora), true);
+  assert.equal(ROTAS.sessaoPertoDeVencer(agora + 300_000, agora), true, "em ms continua");
+  assert.equal(ROTAS.sessaoPertoDeVencer(Math.floor(agora / 1000) + 3600, agora), false);
+});
+
+test("SX-051 · rotear: módulo em maiúsculas ou com espaço acha a rota", () => {
+  assert.equal(ROTAS.rotear("#/CRM").modulo, "crm");
+  assert.equal(ROTAS.rotear("#/Agenda /2026-10-25").modulo, "agenda");
+  assert.deepEqual(ROTAS.rotear("#/crm/Negocio/AbC").partes, ["Negocio", "AbC"], "o resto continua como veio (ids)");
+});
+
+test("SX-052 + SX-053 · Edge do iPhone; link compartilhado não repete", () => {
+  assert.equal(PWA.nomeDoNavegador("Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 EdgiOS/141.0 Mobile/15E148 Safari/605.1.15"), "Edge 141");
+  const q = new URLSearchParams({ compartilhar: "1", titulo: "Promo", texto: "Promo de outubro https://loja.test/p", link: "https://loja.test/p" });
+  assert.equal(PWA.textoCompartilhado("?" + q), "Promo de outubro https://loja.test/p");
+  const q2 = new URLSearchParams({ compartilhar: "1", texto: "Olha isso", link: "https://loja.test/p" });
+  assert.equal(PWA.textoCompartilhado("?" + q2), "Olha isso\nhttps://loja.test/p");
+});
+
+test("SX-054 + SX-055 · shell: ctx.shell.pedirContratacao (DU-078/079) e o tempo poupado no aviso de fim do teste (DU-096)", () => {
+  assert.match(APP_JS, /pedirContratacao: origem => abrirPedidoDeContratacao\(E\.cliente,/);
+  assert.equal(ROTAS.fraseTempoPoupado({ minutos: 360, texto: "6 h" }), "Nos últimos 30 dias, as automações pouparam ≈ 6 h de trabalho da equipe.");
+  assert.equal(ROTAS.fraseTempoPoupado({ minutos: 10, texto: "10 min" }), "", "pouco não vale destaque");
+  assert.equal(ROTAS.fraseTempoPoupado(null), "");
+  const f = fnDoApp("async function tempoPoupadoDoTeste(cli = E.cliente) {");
+  assert.match(f, /includes\("automacoes"\) \|\| !pronto\("automacoes"\)/);
+  assert.match(f, /L\.tempoEconomizado\(itens/);
+  assert.match(fnDoApp("function avisarFimDoTeste() {"), /tempoPoupadoDoTeste\(cli\)\.then/);
+});
+
+/* ---------- PWA, manifestos, antes.js, sw.js (SX-056…SX-062, SX-081, SX-087, SX-094) ---------- */
+test("SX-056 + SX-057 + SX-058 + SX-059 · atalhos do app de Anúncios, ícone nos atalhos, «Compartilhar» no mesmo produto e janela reaproveitada", () => {
+  const at = PWA.atalhosDoIcone(["ads", "relatorios", "crm", "conversas"], null, "ads");
+  assert.deepEqual(at.map(a => a.rota), ["anuncios", "relatorios", "crm"]);
+  assert.deepEqual(PWA.atalhosDoIcone(["ads", "conversas"], null, "atendimento").map(a => a.rota), ["conversas"], "fora do Ads: os de sempre");
+  const base = "https://x.test/app/";
+  const m = PWA.construirManifesto({ nome: { name: "S", short_name: "S", description: "d" }, base, workspace: "atendimento", fundo: "#000", icones: PWA.iconesPadrao(base), atalhos: [{ rota: "conversas", nome: "Conversas" }], compartilhar: true });
+  assert.deepEqual(m.shortcuts[0].icons, [{ src: "https://x.test/app/icones/icon-192.png", sizes: "192x192", type: "image/png" }]);
+  assert.equal(m.share_target.action, "https://x.test/app/?produto=atendimento&compartilhar=1");
+  assert.deepEqual(m.launch_handler, { client_mode: ["navigate-existing", "auto"] });
+  for (const arq of ["manifest.webmanifest", "manifest-crm.webmanifest", "manifest-ads.webmanifest", "manifest-atendimento.webmanifest"]) {
+    const j = JSON.parse(ler(arq));
+    assert.ok(j.launch_handler && j.share_target, arq);
+    for (const s of j.shortcuts) { assert.ok(s.icons && s.icons.length, `${arq}: ${s.name}`); assert.ok(s.short_name); }
+  }
+  const ads = JSON.parse(ler("manifest-ads.webmanifest"));
+  assert.deepEqual(ads.shortcuts.map(s => s.url), ["/app/?produto=ads#/anuncios", "/app/?produto=ads#/relatorios", "/app/?produto=ads#/crm"]);
+  assert.equal(JSON.parse(ler("manifest-crm.webmanifest")).share_target.action, "/app/?produto=crm&compartilhar=1");
+  assert.match(fnDoApp("async function atualizarManifestoApp() {"), /atalhosDoIcone\([\s\S]*?, E\.workspace\)/);
+});
+
+function rodarAntes({ hash = "", conexao = null, token = "t" } = {}) {
+  const links = [];
+  const raiz = { setAttribute() {}, style: { setProperty() {} }, classList: { add() {} } };
+  const documento = { documentElement: raiz, currentScript: { src: "https://x.test/app/antes.js?v=V9" }, head: { appendChild: l => links.push(l) },
+    createElement: () => ({}), getElementById: () => null, readyState: "complete", addEventListener() {} };
+  const janela = { localStorage: { getItem: k => (k === "nx-token" ? token : null) }, matchMedia: () => ({ matches: false }) };
+  runInNewContext(ANTES_TXT, { document: documento, window: janela, location: { hash, search: "", host: "x.test", href: "https://x.test/app/" },
+    navigator: conexao ? { connection: conexao } : {}, URL, URLSearchParams, Object, JSON, Math, Date, Number, String, Array, RegExp });
+  return links.map(l => l.href);
+}
+test("SX-060 + SX-061 · antes.js: «#/CRM» pré-carrega o CRM; economia de dados ou 2G baixa só o módulo da tela", () => {
+  const cheio = rodarAntes({ hash: "#/CRM" });
+  assert.equal(cheio[0], "crm.js?v=V9");
+  assert.ok(cheio.length > 1, "com rede boa vêm os extras");
+  assert.deepEqual(rodarAntes({ hash: "#/crm", conexao: { saveData: true } }), ["crm.js?v=V9"]);
+  assert.deepEqual(rodarAntes({ hash: "#/automacoes/nova", conexao: { effectiveType: "slow-2g" } }), ["automacoes.js?v=V9"]);
+  assert.ok(rodarAntes({ hash: "#/crm", conexao: { effectiveType: "4g" } }).length > 1);
+});
+
+test("SX-062 · página «Sem conexão» se recarrega quando a internet volta", () => {
+  const m = criarMundoSW();
+  const p = m.self.paginaOffline();
+  assert.match(p, /addEventListener\("online",function\(\)\{location\.reload\(\)\}\)/);
+  assert.match(p, /<\/script><\/body><\/html>$/);
+});
+
+test("SX-081 · index.html: o iPhone não vira telefone/data em link", () => {
+  assert.match(HTML, /<meta name="format-detection" content="telephone=no, date=no, address=no, email=no">/);
+});
+
+test("SX-087 · versão: versao.json mais velho que o app em uso não oferece «atualizar» para trás", () => {
+  assert.deepEqual(PWA.decidirVersao("20261025a", { versao: "20261016a" }), { acao: "nada" });
+  assert.equal(PWA.decidirVersao("20261016a", { versao: "20261025a" }).acao, "nova");
+  assert.equal(PWA.decidirVersao("20261025a", { versao: "20261025b" }).acao, "nova");
+  assert.equal(PWA.decidirVersao("dev", { versao: "20261025a" }).acao, "nova", "fora do formato: compara como antes");
+});
+
+test("SX-094 · o app instalado reabre também numa subtela fixa (nunca id nem rota pública)", () => {
+  assert.equal(PWA.rotaAoAbrirInstalado({ instalado: true, hash: "", ultima: "#/relatorios/vendas" }), "#/relatorios/vendas");
+  assert.equal(PWA.rotaAoAbrirInstalado({ instalado: true, hash: "", ultima: "#/crm/negocio" }), "#/crm/negocio");
+  assert.equal(PWA.rotaAoAbrirInstalado({ instalado: true, hash: "", ultima: "#/conversas/3f9a8b7c" }), null, "id não");
+  assert.equal(PWA.rotaAoAbrirInstalado({ instalado: true, hash: "", ultima: "#/login/x" }), null);
+});
+
+/* ---------- comandos.js (SX-063…SX-065, SX-100, SX-102) ---------- */
+test("SX-063 · paleta: a empresa cujo nome começa com o digitado vem primeiro", () => {
+  const cs = [{ id: "a", nome: "Clínica Sorriso" }, { id: "b", nome: "Sorriso Centro" }, { id: "c", nome: "Atual" }];
+  assert.deepEqual(C.empresasDaPaleta(cs, "sor", { atualId: "c" }).map(x => x.id), ["b", "a"]);
+});
+test("SX-064 · «Recentes» não guardam o título provisório da tela", () => {
+  assert.equal(C.recenteDaRota({ modulo: "contatos", partes: ["abc"] }, "Carregando…"), null);
+  assert.equal(C.recenteDaRota({ modulo: "contatos", partes: ["abc"] }, "…"), null);
+  assert.equal(C.recenteDaRota({ modulo: "contatos", partes: ["abc"] }, "Ana Souza").titulo, "Ana Souza");
+});
+test("SX-065 · destaque marca todas as ocorrências", () => {
+  assert.deepEqual(C.partesDeRealce("Ana Mariana", "ana").filter(p => p.marca).map(p => p.texto), ["Ana", "ana"]);
+});
+test("SX-100 · modo apresentação pela paleta", () => {
+  const amb = { temCliente: true, apresentacao: false, rotaOk: () => true, pode: () => true, vocab: { novo: () => "Novo", vertical: "generico" } };
+  const a = C.acoesPadrao(amb, { "modo-apresentacao": () => {} });
+  assert.deepEqual(a.map(x => [x.id, x.rotulo]), [["modo-apresentacao", "Modo apresentação"]]);
+  assert.equal(C.acoesPadrao({ ...amb, apresentacao: true }, { "modo-apresentacao": () => {} })[0].rotulo, "Sair do modo apresentação");
+  assert.equal(C.acoesPadrao({ ...amb, temCliente: false }, { "modo-apresentacao": () => {} }).length, 0);
+  assert.match(fnDoApp("function acoesDoShell() {"), /"modo-apresentacao": \(\) => alternarApresentacao\(\)/);
+  assert.match(fnDoApp("function ambienteComandos() {"), /apresentacao: emApresentacao\(\)/);
+});
+test("SX-102 · busca ignora caracteres invisíveis de nome colado", () => {
+  assert.equal(C.normalizar("A​na"), "ana");
+  assert.ok(C.pontuar("ana", "A​na Souza") > 0);
+});
+
+/* ---------- app.js (SX-066…SX-069, SX-080, SX-097, SX-101) ---------- */
+test("SX-066 + SX-067 + SX-080 · título da aba: neutro sem marca, «Anúncios» na revenda, sem o nome do cliente no modo apresentação", () => {
+  const docF = { title: "", documentElement: { classList: { contains: c => c === "apresentacao" && docF.apres } }, apres: false };
+  const roda = E => fnApp("function atualizarTitulo() {", { E, document: docF })();
+  roda({ badges: {}, produto: "", workspace: null, titulo: "Ana", M: { rotas: ROTAS } });
+  assert.equal(docF.title, "Ana · Painel");
+  roda({ badges: { conversas: 3 }, produto: "Sorriso", workspace: "ads", titulo: "", M: { rotas: ROTAS } });
+  assert.equal(docF.title, "(3) Anúncios · Sorriso");
+  roda({ badges: {}, produto: "Órbita", workspace: "ads", titulo: "", M: { rotas: ROTAS } });
+  assert.equal(docF.title, "Nexus Ads · Órbita", "a marca padrão continua");
+  docF.apres = true;
+  roda({ badges: {}, produto: "Sorriso", workspace: null, titulo: "Ana Souza", M: { rotas: ROTAS } });
+  assert.equal(docF.title, "Sorriso");
+  assert.match(fnDoApp("function alternarApresentacao(on = !emApresentacao()) {"), /atualizarTitulo\(\);/);
+});
+
+test("SX-068 + SX-069 + SX-101 · datas do sino: formato do Postgres, fuso curto e o dia da semana na última semana", () => {
+  const isoSeguro = fnApp("function isoSeguro(iso) {");
+  assert.equal(isoSeguro("2026-10-05 14:00:00+00"), "2026-10-05T14:00:00+00:00");
+  assert.equal(isoSeguro("2026-10-05T14:00:00-03"), "2026-10-05T14:00:00-03:00");
+  assert.equal(isoSeguro("2026-10-05"), "2026-10-05");
+  const DIA_MS = 86400000;
+  const rotuloDoDia = fnApp("function rotuloDoDia(iso, agora = new Date()) {", { E: { ui: U }, DIA_MS, isoSeguro });
+  const agora = new Date("2026-10-25T15:00:00Z");   // domingo
+  assert.equal(rotuloDoDia("2026-10-25 12:00:00+00", agora), "Hoje");
+  assert.equal(rotuloDoDia("2026-10-24T15:00:00Z", agora), "Ontem");
+  assert.equal(rotuloDoDia("2026-10-20T15:00:00Z", agora), "Terça-feira · 20/10");
+  assert.equal(rotuloDoDia("2026-10-10T15:00:00Z", agora), "10/10/2026");
+  const desdeQuando = fnApp("function desdeQuando(iso, agora = new Date()) {", { E: { ui: U }, isoSeguro });
+  assert.equal(desdeQuando("2026-10-25 14:30:00+00", agora), "há 30 min");
+});
+
+test("SX-089 + SX-097 · e-mail de suporte chega à marca do app; sem WhatsApp o «Falar com o suporte» abre o e-mail", () => {
+  assert.equal(T.marcaEfetiva({ suporte_email: " ajuda@revenda.test " }).suporte_email, "ajuda@revenda.test");
+  assert.equal(T.marcaEfetiva({ suporte_email: "x" }).suporte_email, null);
+  const loc = { href: "" };
+  const E = { marca: { suporte_email: "ajuda@revenda.test" }, produto: "Sorriso", workspace: null, titulo: "Agenda", cliente: { nome: "Clínica" }, M: { rotas: ROTAS, comandos: C }, ui: U };
+  fnApp("function falarComSuporte() {", { E, VERSAO: "v1", window: { open() { throw new Error("não deveria abrir"); } }, location: loc, navigator: {}, innerWidth: 390 })();
+  assert.match(loc.href, /^mailto:ajuda@revenda\.test\?subject=Ajuda%20no%20Sorriso&body=Ol%C3%A1/);
+  assert.match(fnDoApp("function ambienteComandos() {"), /suporte: !!\(E\.marca && \(E\.marca\.suporte_wa \|\| E\.marca\.suporte_email\)\)/);
+});
+
+test("SX-098 · a marca efetiva leva o que as telas leem da marca pública (teste aberto, prazo, links, boas-vindas), cada um no seu tipo", () => {
+  const m = T.marcaEfetiva({ produto: "Sorriso", teste_aberto: true, dias_teste: 10, pedir_senha: true, termos_url: "https://r.test/t", privacidade_url: "javascript:x",
+    retencao_dias: "30", boas_vindas: "  Oi!  ", demo_cliente_id: "11111111-2222-3333-4444-555555555555", entrar_codigo: "sim", inatividade_min: 0 });
+  assert.equal(m.teste_aberto, true); assert.equal(m.dias_teste, 10); assert.equal(m.pedir_senha, true); assert.equal(m.termos_url, "https://r.test/t");
+  assert.equal(m.privacidade_url, undefined, "link perigoso fica de fora");
+  assert.equal(m.retencao_dias, 30); assert.equal(m.boas_vindas, "Oi!"); assert.equal(m.inatividade_min, 0);
+  assert.equal(m.entrar_codigo, undefined, "sim/não só booleano");
+  assert.equal(m.demo_cliente_id, "11111111-2222-3333-4444-555555555555");
+  assert.equal(LOGIN.caminhoProspect(m, U.linkWhatsApp).href, "#/testar", "o «Testar grátis» aparece com a marca do app");
+});
+
+/* ---------- CSS (SX-070…SX-079) ---------- */
+test("SX-070…SX-078 · acabamento do sistema no app.css", () => {
+  const css = CSS_APP;
+  assert.match(css, /@media \(prefers-reduced-transparency: reduce\) \{[\s\S]*?\.topo, \.barra, \.lateral[\s\S]*?backdrop-filter: none/);
+  assert.match(css, /@media print \{\s*\.lateral, \.topo, \.barra, \.faixas, \.pular-regioes, \.toasts, \.palco, \.boot \{ display: none !important; \}/);
+  assert.match(css, /input\[type=checkbox\], input\[type=radio\], input\[type=range\], progress \{ accent-color: var\(--c-prim\); \}/);
+  assert.match(css, /input, textarea, \[contenteditable\] \{ caret-color: var\(--c-prim-luz\); \}/);
+  assert.match(css, /\.menu-pop, \.flut, \.busca-res, \.toasts \{ overscroll-behavior: contain; \}/);
+  assert.match(css, /\.bt, \.bt-icone, \.menu-item[^{]*\{ touch-action: manipulation; \}/);
+  assert.match(css, /html \{ scrollbar-gutter: stable; \}/);
+  assert.match(css, /\.toast p \{ overflow-wrap: anywhere; \}/);
+  assert.match(css, /@media \(pointer: coarse\) \{\s*\/\* plano 2000d · SX-078[^*]*\*\/\s*\.campo input:not\(\[type=checkbox\]\)[^{]*\{ font-size: var\(--fs-16\); \}/);
+  assert.match(css, /\.entrar-sugestao \{/); assert.match(css, /\.aviso-teste-poupado \{/);
+});
+test("SX-079 · contraste forçado: ponto da situação e passos com contorno", () => {
+  assert.match(SHELL_CSS, /@media \(forced-colors: active\) \{\s*\.situacao-ponto \{ forced-color-adjust: none; border: 2px solid CanvasText; \}/);
+});
+
+/* ---------- api.js (SX-090…SX-092, SX-096) ---------- */
+test("SX-090 · diagnóstico: o mesmo erro em rajada vira uma linha com a contagem", () => {
+  A.limparErrosRecentes();
+  const t0 = Date.parse("2026-10-25T12:00:00Z");
+  for (let i = 0; i < 25; i++) A.guardarErroRecente({ codigo: "sem_conexao" }, "nx_pulso", t0 + i * 1000);
+  A.guardarErroRecente({ codigo: "http_500", status: 500 }, "nx_inicio", t0 + 30_000);
+  const l = A.errosRecentes();
+  assert.equal(l.length, 2);
+  assert.equal(l[0].vezes, 25);
+  assert.equal(l[1].codigo, "http_500");
+  A.guardarErroRecente({ codigo: "sem_conexao" }, "nx_pulso", t0 + 5 * 60_000);
+  assert.equal(A.errosRecentes().length, 3, "depois de um outro erro, conta de novo");
+  A.limparErrosRecentes();
+});
+test("SX-091 + SX-092 · relatório de erro uma vez por código e tela; evento só com valores simples", async () => {
+  const corpos = [];
+  const api = A.criarApi({ url: "https://x.test", chave: "k", token: () => "t", cliente: () => "c", fetch: async (u, init) => { corpos.push(JSON.parse(init.body)); return resp({}); } });
+  assert.equal(await api.erroCliente({ codigo: "x", tela: "crm" }), true);
+  assert.equal(await api.erroCliente({ codigo: "x", tela: "crm" }), false);
+  assert.equal(await api.erroCliente({ codigo: "x", tela: "agenda" }), true);
+  await api.evento("ver_plano", { origem: "paleta", dias: 3, ok: true, nome: "x".repeat(200), lista: [1], obj: { a: 1 } });
+  assert.deepEqual(corpos[corpos.length - 1].p_dados, { origem: "paleta", dias: 3, ok: true });
+  assert.deepEqual(A.dadosDoEvento(null), {});
+});
+test("SX-096 · 403, 408 e 413 com frase própria", () => {
+  assert.match(A.mensagemErro({ codigo: "http_413" }), /grande demais/);
+  assert.match(A.mensagemErro({ codigo: "http_403" }), /não é permitida/);
+  assert.match(A.mensagemErro({ codigo: "http_408" }), /demorou demais/);
+});
+
+/* ---------- ui.js, tema.js, rotas.js, pulso.js, login.js (SX-082…SX-086, SX-088, SX-093, SX-095, SX-099, SX-103, SX-104) ---------- */
+test("SX-082 + SX-088 · cor «fa0» sem #; imagem base64 com quebras de linha", () => {
+  assert.equal(T.normalizarHex("fa0"), "#FFAA00");
+  assert.equal(T.imagemSegura("data:image/png;base64,AAAA\nBBBB "), "data:image/png;base64,AAAABBBB");
+  assert.equal(T.imagemSegura("data:image/svg+xml;base64,AA AA"), null);
+});
+test("SX-083 · nome curto da empresa pula «do/da/de»", () => {
+  assert.equal(ROTAS.nomeCurtoEmpresa("Oficina do João"), "João");
+  assert.equal(ROTAS.nomeCurtoEmpresa("Clínica da Ana"), "Ana");
+  assert.equal(ROTAS.nomeCurtoEmpresa("Sorriso Vivo"), "Sorriso");
+});
+test("SX-084 · período no mesmo dia mostra a data uma vez", () => {
+  assert.equal(U.periodoBR("2026-10-06T17:00:00Z", "2026-10-06T18:30:00Z"), "06/10/2026 14:00 — 15:30");
+  assert.equal(U.periodoBR("2026-10-06T17:00:00Z", "2026-10-07T18:30:00Z"), "06/10/2026 14:00 — 07/10/2026 15:30");
+});
+test("SX-085 + SX-086 · o «0» de interurbano antes do DDD sai (na exibição e ao digitar)", () => {
+  assert.equal(U.telBR("012998303030"), "(12) 99830-3030");
+  assert.equal(U.formatarTelefone("012998303030"), "(12) 99830-3030");
+  assert.equal(U.formatarTelefone("01"), "(01", "ainda digitando: espera o 3º dígito");
+  assert.equal(U.formatarTelefone("0800"), "0800", "0800 continua");
+});
+test("SX-093 · horário silencioso aceita «8:00» e «20h»", () => {
+  const s = { de: "20h", ate: "8:00" };
+  assert.equal(P.emHorarioSilencioso(s, new Date(2026, 9, 25, 22, 0)), true);
+  assert.equal(P.emHorarioSilencioso(s, new Date(2026, 9, 25, 7, 59)), true);
+  assert.equal(P.emHorarioSilencioso(s, new Date(2026, 9, 25, 12, 0)), false);
+});
+test("SX-095 · menu: letras em sequência procuram o começo do nome", async () => {
+  limparCorpo();
+  const ancora = h("button", { type: "button" }, "Mais"); doc.body.appendChild(ancora);
+  U.menu(ancora, [{ rotulo: "Arquivar", fn() {} }, { rotulo: "Cancelar", fn() {} }, { rotulo: "Copiar link", fn() {} }]);
+  await esperar(5);
+  const pop = doc.querySelector(".menu-pop");
+  const bts = pop.querySelectorAll("button");
+  ev(pop, "keydown", { key: "c" });
+  assert.equal(doc.activeElement, bts[1]);
+  ev(pop, "keydown", { key: "o" });
+  assert.equal(doc.activeElement, bts[2], "«co» → Copiar link");
+  doc.querySelector(".menu-pop button").click();
+});
+test("SX-099 + SX-103 + SX-104 · «Você quis dizer» também no teste e no convite; «mailto:» sai do e-mail; link do WhatsApp não estoura", async () => {
+  limparCorpo();
+  const c = LOGIN.campoEmailDoConvite(U, "");
+  doc.body.appendChild(c);
+  const inp = c.querySelector("input");
+  inp.value = "ana@hotmial.com"; ev(inp, "blur");
+  assert.equal(c.querySelector(".entrar-sugestao").hidden, false);
+  const fixo = LOGIN.campoEmailDoConvite(U, "ana@x.test");
+  assert.equal(fixo.querySelector(".entrar-sugestao"), null, "e-mail fixo do convite: sem sugestão");
+  assert.match(LOGIN_TXT, /ligarSugestaoEmail\(ui, form\.querySelector\("input\[name=email\]"\)\);   \/\/ plano 2000d · SX-099/);
+  assert.equal(LOGIN.normalizarEmail("mailto:Ana@X.com"), "ana@x.com");
+  const link = U.linkWhatsApp("x".repeat(5000), "5512999998888");
+  assert.ok(decodeURIComponent(link.split("text=")[1]).length <= 1500);
+});
+
+test("SX-105 · dono_mudou (conversa assumida por outra pessoa) tem frase em português", () => {
+  const msg = A.mensagemErro({ codigo: "dono_mudou", status: 409, detalhe: "Ana" });
+  assert.match(msg, /outra pessoa|assumiu/i);
+  assert.doesNotMatch(msg, /dono_mudou/);
+});
+test("SX-105 · dono_mudou com o nome de quem assumiu no hint", () => {
+  assert.match(A.mensagemErro({ codigo: "dono_mudou", hint: "Ana" }), /^Ana assumiu esta conversa/);
+  assert.match(A.mensagemErro({ codigo: "dono_mudou", hint: "  " }), /^Outra pessoa assumiu/);
+});
+test("SX-106 · o precache leva ../demo.js (semana de exemplo da Agenda abre offline)", () => {
+  assert.match(APP_JS, /const ARQUIVOS_DA_RAIZ = \[[^\]]*"demo\.js"[^\]]*\]; \/\/ plano 2000d · SX-106/);
 });

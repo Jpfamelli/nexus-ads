@@ -36,6 +36,9 @@ export const PADRAO = { cpaAlvo: null, orcamento: null, fee: 0, assinatura: "" }
 export function lerCorAgencia(bruto) {
   const s = String(bruto == null ? "" : bruto).trim();
   if (!s) return { ok: true, valor: "" };
+  // plano 2000d · NX-041: a forma curta de 3 dígitos («1AF» = 11AAFF) também vale
+  const curto = /^#?([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(s);
+  if (curto) return { ok: true, valor: `#${curto[1]}${curto[1]}${curto[2]}${curto[2]}${curto[3]}${curto[3]}`.toUpperCase() };
   const m = /^#?([0-9a-f]{6})$/i.exec(s);
   return m ? { ok: true, valor: `#${m[1].toUpperCase()}` } : { ok: false, msg: "Use a cor em 6 dígitos, como 1F6FEB (ou deixe vazio)." };
 }
@@ -48,6 +51,37 @@ export function lerMetaFechamentos(bruto) {
 }
 /** Plano 2000d · DA-191: a meta de custo com um exemplo de conta (antes só a definição). */
 export const EXEMPLO_META_CUSTO = "Ex.: meta de R$ 20 — se R$ 600 investidos trouxeram 25 conversas (R$ 24 cada), está 20% acima, ainda sem aviso; a R$ 28 (40% acima), o radar avisa.";
+/** Plano 2000d · DA-025: o padrão da tolerância do aviso de custo (o mesmo TOLERANCIA_R1_PADRAO do núcleo). */
+export const TOLERANCIA_R1_PADRAO = 35;
+/** Plano 2000d · DA-025/NX-049: a tolerância em vigor (cfg.radar.toleranciaR1 de 10 a 100; fora disso, 35). */
+export const toleranciaR1Cfg = cfg => { const n = Number(cfg && cfg.radar && cfg.radar.toleranciaR1); return Number.isFinite(n) && n >= 10 && n <= 100 ? n : TOLERANCIA_R1_PADRAO; };
+/** Plano 2000d · NX-050: o exemplo da meta de custo com a tolerância DESTE cliente (antes o texto dizia 35% mesmo com outra tolerância). */
+export function exemploMetaCusto(tol = TOLERANCIA_R1_PADRAO) {
+  const t = Number.isFinite(+tol) && +tol >= 10 && +tol <= 100 ? Math.round(+tol) : TOLERANCIA_R1_PADRAO;
+  if (t === TOLERANCIA_R1_PADRAO) return EXEMPLO_META_CUSTO;
+  const limite = (20 * (1 + t / 100)).toFixed(2).replace(".", ",").replace(/,00$/, "");
+  return `Ex.: meta de R$ 20 — com a tolerância de ${t}%, o radar avisa quando o custo por conversa passa de R$ ${limite}${t > 20 ? " (a R$ 24, 20% acima, ainda sem aviso)" : ""}.`;
+}
+/** Plano 1500c · AC-063 (feito na 2000d): os dias sem atendimento marcados (fd_0..fd_6, 0 = domingo) → [0..6] em ordem. */
+export const DIAS_SEMANA_CFG = Object.freeze([[1, "Seg"], [2, "Ter"], [3, "Qua"], [4, "Qui"], [5, "Sex"], [6, "Sáb"], [0, "Dom"]]);
+export function lerDiasFechados(v = {}) {
+  return DIAS_SEMANA_CFG.map(([d]) => d).filter(d => !!(v && v[`fd_${d}`])).sort((a, b) => a - b);
+}
+/** Plano 1500c · AC-036 (feito na 2000d): a meta de custo PRÓPRIA de cada campanha (campos mc_<id>) → {metas} ou {erro: {campo, msg}}.
+    Vazio = sem meta própria (vale a da plataforma). As salvas de campanhas que saíram da semana continuam. */
+export function lerMetasCampanha(v = {}, campanhas = [], antes = {}) {
+  const vis = new Set((campanhas || []).map(c => String(c.id)));
+  const metas = {};
+  for (const [k, val] of Object.entries(antes && typeof antes === "object" ? antes : {})) if (!vis.has(String(k)) && Number(val) > 0) metas[k] = Number(val);
+  for (const c of campanhas || []) {
+    const txt = String((v && v[`mc_${c.id}`]) ?? "").trim();
+    if (!txt) continue;
+    const n = lerReais(txt);
+    if (n == null || !(n > 0)) return { erro: { campo: `mc_${c.id}`, msg: `A meta de «${c.nome}» precisa ser um valor em reais maior que zero (ou fique vazia).` } };
+    metas[String(c.id)] = Math.round(n * 100) / 100;
+  }
+  return { metas };
+}
 /** Plano 1500c · AC-146: a assinatura que o resumo do mês usa quando o cliente nunca salvou uma (a mesma do núcleo, CFG_PADRAO). */
 export const ASSINATURA_PADRAO = "Equipe Nexus · gestão de tráfego";
 /** Plano 1500c · AC-146: o que o campo mostra ao abrir — a assinatura EFETIVA (a salva, ou a padrão quando não há nenhuma) e se o
@@ -117,10 +151,11 @@ export function previaLimitesRadar(montarCom, radar = {}, dias = 7) {
   let M;
   try { M = montarCom(radar); } catch { return null; }
   if (!M || !(M.R >= 0)) return null;
-  const ids = new Set(["r2", "r3", "r4"]);
+  // plano 2000d · NX-049: com a tolerância do custo ajustável (DA-025), a prévia conta também o aviso de custo alto (r1)
+  const ids = new Set(["r1", "r2", "r3", "r4"]);
   let n = 0;
   for (let i = Math.max(0, M.R - dias + 1); i <= M.R; i++) n += (M.avaliar(i) || []).filter(a => a && a.regra && ids.has(a.regra.id)).length;
-  return { n, dias, texto: n ? `Com esses limites, o radar daria ${n} ${n === 1 ? "aviso" : "avisos"} de CTR, frequência ou campanha sem conversa nos últimos ${dias} dias.` : `Com esses limites, nenhum aviso de CTR, frequência ou campanha sem conversa nos últimos ${dias} dias.` };
+  return { n, dias, texto: n ? `Com esses limites, o radar daria ${n} ${n === 1 ? "aviso" : "avisos"} de custo alto, CTR, frequência ou campanha sem conversa nos últimos ${dias} dias.` : `Com esses limites, nenhum aviso de custo alto, CTR, frequência ou campanha sem conversa nos últimos ${dias} dias.` };
 }
 /** Plano 1500c · AC-153: marca o campo com erro para leitor de tela (aria-invalid + aria-describedby apontando para a mensagem) ou limpa. */
 export function marcarInvalido(input, idMsg, ligado = true) {
@@ -135,7 +170,9 @@ export const numeroWaValido = s => { const d = soDigitos(s); return d.length >= 
 export function formatarWa(s) {
   const d = soDigitos(s);
   const local = x => (x.length === 11 ? `(${x.slice(0, 2)}) ${x.slice(2, 7)}-${x.slice(7)}` : x.length === 10 ? `(${x.slice(0, 2)}) ${x.slice(2, 6)}-${x.slice(6)}` : x);
-  if (d.length === 12 || d.length === 13) return `+${d.slice(0, 2)} ${local(d.slice(2))}`;
+  // plano 2000d · NX-043: só o DDI 55 é desmontado em (DDD) — «351912345678» (Portugal) virava «+35 (19) 1234-5678»
+  if ((d.length === 12 || d.length === 13) && d.startsWith("55")) return `+55 ${local(d.slice(2))}`;
+  if (d.length >= 12) return `+${d}`;
   return d.length === 10 || d.length === 11 ? local(d) : String(s || "");
 }
 /** Plano 1000 (AD-068): formato das credenciais antes de salvar (o erro aparecia só na próxima leitura) → texto do erro ou "". */
@@ -227,7 +264,8 @@ export function rotulosTicket(nome, servicoRot = "Serviço") {
 }
 /** Plano 1000b · AB-104: os limites do radar digitados (texto dos campos rd_*). Vazio = padrão; texto que não é número («abc») PARA o
     salvamento com o erro no campo (antes virava null e salvava como «padrão» sem avisar). → {radar} ou {erro: {campo, msg}}. */
-export const FAIXAS_RADAR = Object.freeze([["ctrMin", 0.05, 10, "O CTR mínimo vai de 0,05% a 10%."], ["freqMax", 1.5, 20, "A frequência máxima vai de 1,5 a 20."], ["r2MinGasto", 1, 10000, "O gasto mínimo vai de R$ 1 a R$ 10.000."]]);
+export const FAIXAS_RADAR = Object.freeze([["ctrMin", 0.05, 10, "O CTR mínimo vai de 0,05% a 10%."], ["freqMax", 1.5, 20, "A frequência máxima vai de 1,5 a 20."], ["r2MinGasto", 1, 10000, "O gasto mínimo vai de R$ 1 a R$ 10.000."],
+  ["toleranciaR1", 10, 100, "A tolerância do aviso de custo vai de 10% a 100%."]]);   // plano 2000d · DA-025
 export function lerLimitesRadar(v = {}) {
   const radar = {};
   for (const [k, min, max, rot] of FAIXAS_RADAR) {
@@ -243,6 +281,9 @@ export function lerLimitesRadar(v = {}) {
 /** Plano 1000b · AB-100: «Sincronizar agora» confere sozinho o resultado depois deste tempo (o clássico confere em 30 s; a leitura
     completa com o radar costuma levar mais). */
 export const CONFERIR_SYNC_MS = 90 * 1000;
+/** Plano 2000d · NX-068: depois de pedir uma leitura, «Sincronizar agora» descansa 1 minuto (tocar de novo enfileirava leituras iguais e
+    gastava o limite de leituras da Meta/Google). */
+export const ESPERA_NOVO_SYNC_MS = 60 * 1000;
 /** Plano 1000b · AB-100: o que a conferência diz, por plataforma ligada: leu depois do pedido, falhou ou ainda não leu. */
 export function resumoAposSync(integ = [], desde = 0, quando = iso => iso) {
   const nomes = { meta: "Meta", google: "Google" };
@@ -282,6 +323,8 @@ export function previaTituloRelatorio(nomeCurto, nomeEmpresa = "", nomeCurtoEmpr
 export function lerReais(s) {
   const t = String(s ?? "").replace(/[R$\s ]/g, "");
   if (!t) return null;
+  // plano 2000d · NX-044: colado no formato americano («1,500.50»: vírgula de milhar e ponto decimal) — antes virava 1,5005
+  if (/^-?\d{1,3}(,\d{3})+\.\d+$/.test(t)) return Number(t.replace(/,/g, ""));
   const n = t.includes(",") ? Number(t.replace(/\./g, "").replace(",", "."))
     : /^\d{1,3}(\.\d{3})+$/.test(t) ? Number(t.replace(/\./g, "")) : Number(t);
   return Number.isFinite(n) ? n : null;
@@ -297,7 +340,7 @@ export function textoTesteConexao(lista, canal, nome = canal) {
   if (!x && lista && lista.motivo === "erro") return { tom: "ruim", texto: `Não foi possível testar o ${nome} agora (o Órbita não concluiu a leitura). Tente de novo em instantes.` };
   if (!x) return { tom: "aten", texto: `O ${nome} não foi testado: salve as credenciais e deixe a integração ligada antes de testar.` };
   if (x.ok && x.parcial) return { tom: "aten", texto: `O ${nome} respondeu, mas a leitura veio parcial: ${x.status.replace(/^parcial\s*—\s*/i, "")}.` };
-  if (x.ok) return { tom: "ok", texto: `Conexão com o ${nome} funcionando${x.linhas != null ? ` — ${x.linhas} ${x.linhas === 1 ? "linha lida" : "linhas lidas"} do último dia` : ""}.` };
+  if (x.ok) return { tom: "ok", texto: `Conexão com o ${nome} funcionando${x.linhas != null ? ` — ${Number(x.linhas).toLocaleString("pt-BR") /* plano 2000d · NX-059: milhar */} ${x.linhas === 1 ? "linha lida" : "linhas lidas"} do último dia` : ""}.` };
   const curto = x.curto ? x.curto.charAt(0).toUpperCase() + x.curto.slice(1) : `O ${nome} recusou a leitura`;
   return { tom: x.passageiro ? "aten" : "ruim", texto: `${curto}. ${x.acao || "Confira os dados da conexão e salve de novo."}${x.passageiro ? " (Costuma ser passageiro.)" : ""}` };
 }
@@ -775,6 +818,9 @@ async function secaoAnuncios(ctx, alvo) {
   const reaisOuVazio = v => (Number(v) > 0 ? Number(v) : null);      // AD-001/AD-072: sem valor salvo = campo vazio, nunca 15/1500
   const rad = (cfg.radar && typeof cfg.radar === "object") ? cfg.radar : {};
   const assin0 = assinaturaInicial(cfg);
+  const tol0 = toleranciaR1Cfg(cfg);   // plano 2000d · DA-025/NX-050
+  const fech0 = new Set((Array.isArray(cfg.diasFechados) ? cfg.diasFechados : []).map(Number));   // plano 1500c · AC-063
+  const metasC0 = cfg.metasCampanha && typeof cfg.metasCampanha === "object" ? cfg.metasCampanha : {};   // plano 1500c · AC-036
   // plano 1500c · AC-150: prévia viva — quantos avisos os limites digitados dariam na semana carregada
   const previaRadar = h("p", { class: "sub cfga-previa-radar", "aria-live": "polite" });
   // plano 1500c · AC-152: «Descartar alterações» volta o formulário ao que está salvo (só aparece com mudança pendente)
@@ -792,7 +838,7 @@ async function secaoAnuncios(ctx, alvo) {
       ui.campo({ nome: "assinatura", rotulo: "Assinatura do resumo do mês", valor: assin0.valor, max: 120, ajuda: "Última linha do resumo do mês no WhatsApp." }),
       ui.campo({ tipo: "interruptor", nome: "semAssinatura", rotulo: "Sem assinatura no resumo do mês", valor: assin0.sem }),
       ui.campo({ nome: "cpaAlvo", rotulo: "Meta de custo por conversa (R$)", tipo: "moeda", valor: reaisOuVazio(cfg.cpaAlvo), placeholder: "sem meta",
-        ajuda: `Conversa no WhatsApp (Meta). O radar avisa quando passa de 35% acima. ${EXEMPLO_META_CUSTO} Vazio: sem meta e sem esse aviso.` }),   // plano 2000d · DA-191
+        ajuda: `Conversa no WhatsApp (Meta). O radar avisa quando passa de ${tol0}% acima. ${exemploMetaCusto(tol0)} Vazio: sem meta e sem esse aviso.` }),   // plano 2000d · DA-191 · NX-050: a tolerância deste cliente
       // AD-010: a conversão do Google costuma custar 2–3× a conversa — meta própria, opcional
       ui.campo({ nome: "cpaAlvoGoogle", rotulo: "Meta de custo por conversão no Google (R$)", tipo: "moeda", valor: reaisOuVazio(cfg.cpaAlvoGoogle), placeholder: "opcional",
         ajuda: "Opcional. Vazio: as campanhas do Google ficam fora do aviso de custo alto." }),
@@ -821,6 +867,12 @@ async function secaoAnuncios(ctx, alvo) {
       ui.campo({ nome: "waCliente", rotulo: "WhatsApp do cliente (resumo do mês)", tipo: "textarea", linhas: 2, valor: lista(cfg.waCliente), placeholder: "+55 (11) 90000-0000", ajuda: "Um número por linha, com DDD (e DDI, se for de fora)." })),
     h("fieldset", { class: "pilha cfga-regras" }, h("legend", { class: "rotulo" }, "Regras do radar"),
       REGRAS.map(([id, n]) => ui.campo({ tipo: "interruptor", nome: `rg_${id}`, rotulo: n, valor: !off.has(id) }))),
+    // plano 1500c · AC-063 + plano 2000d · DA-009: os dias sem atendimento (o radar não acusa «parou» nem conta conversa perdida neles) e, se
+    // os anúncios ficam pausados nesses dias, a projeção do mês usa só os dias abertos
+    h("fieldset", { class: "pilha cfga-fechados" }, h("legend", { class: "rotulo" }, "Dias sem atendimento"),
+      h("p", { class: "sub" }, "Marque os dias em que a empresa não atende: o radar não acusa «investimento parou» nem «CRM parou» nesses dias e o diário explica o zero."),
+      h("div", { class: "cfga-dias" }, DIAS_SEMANA_CFG.map(([d, rot]) => ui.campo({ tipo: "checkbox", nome: `fd_${d}`, rotulo: rot, valor: fech0.has(d) }))),
+      ui.campo({ tipo: "interruptor", nome: "pausaDiasFechados", rotulo: "Os anúncios ficam pausados nesses dias (a projeção do orçamento conta só os dias abertos)", valor: cfg.pausaDiasFechados === true })),
     // AD-054: os limites fixos (CTR 0,9%, frequência 3, gasto mínimo R$ 22) ajustáveis por cliente; vazio = o padrão
     h("details", { class: "cfga-avancado" }, h("summary", {}, "Limites do radar (avançado)"),
       h("p", { class: "sub" }, "Vazio = o padrão. Ajuste quando a vertical tem outra régua (ex.: remarketing com frequência alta)."),
@@ -828,14 +880,20 @@ async function secaoAnuncios(ctx, alvo) {
         // plano 1000b · AB-217: o padrão em vigor escrito em cada campo, e «Voltar ao padrão» limpa os três
         ui.campo({ nome: "rd_ctrMin", rotulo: "CTR mínimo do criativo (%)", valor: rad.ctrMin != null ? String(rad.ctrMin).replace(".", ",") : "", placeholder: "0,9", inputmode: "decimal", ajuda: `Padrão: ${LIMITES_RADAR_PADRAO.ctrMin}.` }),
         ui.campo({ nome: "rd_freqMax", rotulo: "Frequência máxima (vezes)", valor: rad.freqMax != null ? String(rad.freqMax).replace(".", ",") : "", placeholder: "3", inputmode: "decimal", ajuda: `Padrão: ${LIMITES_RADAR_PADRAO.freqMax}.` }),
-        ui.campo({ nome: "rd_r2MinGasto", rotulo: "Gasto mínimo para «sem conversa» (R$)", valor: rad.r2MinGasto != null ? String(rad.r2MinGasto).replace(".", ",") : "", placeholder: "22", inputmode: "decimal", ajuda: `Padrão: ${LIMITES_RADAR_PADRAO.r2MinGasto}.` })),
+        ui.campo({ nome: "rd_r2MinGasto", rotulo: "Gasto mínimo para «sem conversa» (R$)", valor: rad.r2MinGasto != null ? String(rad.r2MinGasto).replace(".", ",") : "", placeholder: "22", inputmode: "decimal", ajuda: `Padrão: ${LIMITES_RADAR_PADRAO.r2MinGasto}.` }),
+        // plano 2000d · DA-025: quanto acima da meta o custo pode ir antes do aviso (r1) — vazio = 35%
+        ui.campo({ nome: "rd_toleranciaR1", rotulo: "Tolerância do aviso de custo (%)", valor: rad.toleranciaR1 != null ? String(rad.toleranciaR1).replace(".", ",") : "", placeholder: String(TOLERANCIA_R1_PADRAO), inputmode: "decimal", ajuda: `Padrão: ${TOLERANCIA_R1_PADRAO}% acima da meta. Ex.: 20 avisa mais cedo; 60, só quando o custo dispara.` })),
       previaRadar,
       // plano 1500c · AC-148: campanhas de remarketing (frequência alta por desenho: a fadiga não acusa) — antes só pelo nome
+      // plano 1500c · AC-036: meta de custo própria por campanha (vazio = a meta da plataforma) — o núcleo já usa (M.metaDaCampanha)
+      campanhas7.length ? h("fieldset", { class: "pilha cfga-metas-camp" }, h("legend", { class: "rotulo" }, "Meta de custo por campanha (opcional)"),
+        h("p", { class: "sub" }, "Para a campanha que tem outra régua (ex.: um serviço caro): vazio = vale a meta da plataforma."),
+        h("div", { class: "form-grade" }, campanhas7.map(c => ui.campo({ nome: `mc_${c.id}`, rotulo: `${c.nome}${c.plat ? ` · ${c.plat === "google" ? "Google" : "Meta"}` : ""} (R$)`, tipo: "moeda", valor: Number(metasC0[c.id]) > 0 ? Number(metasC0[c.id]) : null, placeholder: "a da plataforma" })))) : null,
       campanhas7.length ? h("fieldset", { class: "pilha cfga-rmk" }, h("legend", { class: "rotulo" }, "Campanhas de remarketing"),
         h("p", { class: "sub" }, "Marque as que são remarketing: o radar não acusa fadiga nelas. Campanhas com «remarketing» no nome já contam."),
         campanhas7.map(c => ui.campo({ tipo: "checkbox", nome: `rmk_${c.id}`, rotulo: `${c.nome}${c.plat ? ` · ${c.plat === "google" ? "Google" : "Meta"}` : ""}`, valor: rmk0.has(c.id) }))) : null,
       h("div", { class: "linha" }, h("button", { type: "button", class: "bt bt-fant bt-p cfga-padrao", on: { click: () => {
-        for (const n of ["rd_ctrMin", "rd_freqMax", "rd_r2MinGasto"]) { const i = form.querySelector(`[name="${n}"]`); if (i) i.value = ""; }
+        for (const n of ["rd_ctrMin", "rd_freqMax", "rd_r2MinGasto", "rd_toleranciaR1"]) { const i = form.querySelector(`[name="${n}"]`); if (i) i.value = ""; }   // plano 2000d · DA-025
         sujo = true; ui.toast("Limites de volta ao padrão. Salve para valer.", { tipo: "nota" });
       } } }, "Voltar ao padrão"))),
     h("div", { class: "linha linha-fim" }, btDescartar, h("button", { type: "submit", class: "bt bt-prim" }, "Salvar metas e avisos")));
@@ -863,7 +921,7 @@ async function secaoAnuncios(ctx, alvo) {
     const p = lim.erro || !metricas7.length ? null : previaLimitesRadar(radar => N.montar(N.datasetDeLinhas({ metricas: metricas7, leads: [], cliente: { nome: cliente.nome, cfg: { ...cfg, radar: radar || {}, regrasOff: [] } }, hoje: N.hojeSP(), dias: 7 })), lim.radar, 7);
     previaRadar.textContent = p ? p.texto : "";
   };
-  for (const n of ["rd_ctrMin", "rd_freqMax", "rd_r2MinGasto"]) { const i = form.querySelector(`[name="${n}"]`); if (i) i.addEventListener("input", pintarPreviaRadar); }
+  for (const n of ["rd_ctrMin", "rd_freqMax", "rd_r2MinGasto", "rd_toleranciaR1"]) { const i = form.querySelector(`[name="${n}"]`); if (i) i.addEventListener("input", pintarPreviaRadar); }   // plano 2000d · DA-025
   pintarPreviaRadar();
   // plano 1500c · AC-152: descartar = desenhar a seção de novo com o cfg salvo (pergunta antes; a guarda de saída é solta)
   btDescartar.addEventListener("click", async () => {
@@ -902,7 +960,8 @@ async function secaoAnuncios(ctx, alvo) {
     if (!corAg.ok) { const el = form.querySelector('[name="agenciaCor"]'); const d = el && el.closest ? el.closest("details") : null; if (d) d.open = true; return ui.marcarErro(form, "agenciaCor", corAg.msg); }
     const metaF = lerMetaFechamentos(v.metaFechamentos);
     if (!metaF.ok) return ui.marcarErro(form, "metaFechamentos", metaF.msg);
-    const numeros = s => [...new Set(String(s || "").split(/[\n,;]+/).map(soDigitos).filter(n => n.length >= 10 && n.length <= 13))];
+    // plano 2000d · NX-042: «12 99999-8888» e «+55 12 99999-8888» são o MESMO destino — grava um só (antes os dois)
+    const numeros = s => destinosUnicos(String(s || "").split(/[\n,;]+/).map(soDigitos).filter(n => n.length >= 10 && n.length <= 13));
     for (const campo of ["waGestor", "waCliente"]) {
       const brutos = String(v[campo] || "").split(/[\n,;]+/).map(x => x.trim()).filter(Boolean);
       const ruim = brutos.find(b => !numeroWaValido(b));
@@ -926,10 +985,16 @@ async function secaoAnuncios(ctx, alvo) {
     if (lim.erro) { const det = form.querySelector(".cfga-avancado"); if (det) det.open = true; return ui.marcarErro(form, lim.erro.campo, lim.erro.msg); }
     const radar = lim.radar;
     const regrasOff = REGRAS.map(([id]) => id).filter(id => !v[`rg_${id}`]);
+    // plano 1500c · AC-036: metas por campanha (erro no campo; as salvas de campanhas fora da semana continuam)
+    const mc = lerMetasCampanha(Object.fromEntries(campanhas7.map(c => [`mc_${c.id}`, reais(`mc_${c.id}`)])), campanhas7, cfg.metasCampanha);
+    if (mc.erro) { const el = form.querySelector(`[name="${mc.erro.campo}"]`); const det = el && el.closest ? el.closest("details") : null; if (det) det.open = true; return ui.marcarErro(form, mc.erro.campo, mc.erro.msg); }
+    // plano 1500c · AC-063 + plano 2000d · DA-009: dias sem atendimento e a pausa nesses dias (sem dia marcado, a pausa não vale)
+    const diasFechados = lerDiasFechados(v);
     const novo = { nomeCurto: v.nomeCurto || "", cpaAlvo: cpa, cpaAlvoGoogle: cpaG, orcamento: orc, fee,
                    ticket, waGestor: numeros(v.waGestor), waCliente: numeros(v.waCliente), regrasOff, radar,
                    orcamentoPlat: op.orcamentoPlat, logoUrl: urls.logoUrl, painelUrl: urls.painelUrl, agenciaNome: String(v.agenciaNome || "").trim().slice(0, 60),
-                   agenciaLogoUrl: urls.agenciaLogoUrl, agenciaCor: corAg.valor, metaFechamentos: metaF.valor };   // plano 2000d · DA-333/DA-335/DA-361
+                   agenciaLogoUrl: urls.agenciaLogoUrl, agenciaCor: corAg.valor, metaFechamentos: metaF.valor,   // plano 2000d · DA-333/DA-335/DA-361
+                   diasFechados, pausaDiasFechados: !!v.pausaDiasFechados && diasFechados.length > 0, metasCampanha: mc.metas };   // AC-063 · DA-009 · AC-036
     // plano 1500c · AC-146: assinatura não tocada (cliente sem assinatura salva) nem vai no pacote — a padrão continua valendo
     const assin = assinaturaParaSalvar({ cfg, valor: v.assinatura, sem: !!v.semAssinatura, agencia: v.agenciaNome });   // plano 2000d · DA-184
     if (assin !== undefined) novo.assinatura = assin;
@@ -950,12 +1015,12 @@ async function secaoAnuncios(ctx, alvo) {
   });
 
   /* ---------- atualizar agora ---------- */
-  const st = h("p", { class: "sub", role: "status" });
+  const st = h("p", { id: "cfga-x-st", class: "sub", role: "status" });
   const bCiclo = h("button", { type: "button", class: "bt bt-sec" }, ui.icone("raio"), " Sincronizar agora");
   const bDia = h("button", { type: "button", class: "bt bt-fant" }, "Enviar o relatório do dia");
   const bMes = h("button", { type: "button", class: "bt bt-fant" }, "Enviar o resumo do mês");
   // plano 1000b · AB-100: depois de «Sincronizar agora», uma conferência sozinha em 90 s (cancelada se a tela sair ou houver outro pedido)
-  let tConferir = 0;
+  let tConferir = 0, tDescanso = 0;   // plano 2000d · NX-068
   const conferirSync = desde => {
     clearTimeout(tConferir);
     tConferir = setTimeout(async () => {
@@ -982,7 +1047,12 @@ async function secaoAnuncios(ctx, alvo) {
       st.textContent = tipo === "ciclo"
         ? `Leitura solicitada às ${hh}. Meta e Google serão consultados em segundo plano; o resultado aparece aqui em cerca de 1 minuto e meio.`
         : `Pedido enviado às ${hh}. O ${tipo === "mensal" ? "resumo do mês" : "relatório do dia"} chega no WhatsApp em instantes.`;
-      if (tipo === "ciclo") conferirSync(Date.now() - 5000);   // AB-100
+      if (tipo === "ciclo") {
+        conferirSync(Date.now() - 5000);   // AB-100
+        // plano 2000d · NX-068: um pedido por minuto — o botão diz por que está parado
+        clearTimeout(tDescanso); bCiclo.disabled = true; bCiclo.setAttribute("aria-describedby", "cfga-x-st"); bCiclo.title = "Leitura já pedida: dá para pedir outra em 1 minuto.";
+        tDescanso = setTimeout(() => { bCiclo.disabled = false; bCiclo.removeAttribute("title"); }, ESPERA_NOVO_SYNC_MS);
+      }
     } catch (e) { st.textContent = api.mensagemErro(e); }
   };
   bCiclo.addEventListener("click", () => executar("ciclo", bCiclo));
@@ -999,7 +1069,7 @@ async function secaoAnuncios(ctx, alvo) {
   const antesDeSair = ev => { if (!sujo) return; ev.preventDefault(); ev.returnValue = ""; };
   if (typeof addEventListener === "function") addEventListener("beforeunload", antesDeSair);
   return {
-    limpar: () => { if (typeof removeEventListener === "function") removeEventListener("beforeunload", antesDeSair); clearTimeout(tConferir); },
+    limpar: () => { if (typeof removeEventListener === "function") removeEventListener("beforeunload", antesDeSair); clearTimeout(tConferir); clearTimeout(tDescanso); },   // NX-068
     pendente: () => sujo,
     podeSair: () => (!sujo ? true : ui.confirmar({ titulo: "Sair sem salvar?", texto: "As mudanças em Metas e avisos ainda não foram salvas e serão perdidas.", rotulo: "Sair sem salvar", perigo: true })),
   };

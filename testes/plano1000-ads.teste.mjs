@@ -761,9 +761,11 @@ test("AD-093 · centro da rosca mostra a plataforma com mais investimento", () =
 test("AD-103/AD-143 · arquivos exportados com o nome do cliente (Anúncios e Relatórios)", () => {
   assert.equal(L.nomeArquivoExport("funil", "2026-09-14", "2026-10-13", "csv", "Clínica Kamiguchi"), "orbita-clinica-kamiguchi-funil-2026-09-14-a-2026-10-13.csv");
   assert.equal(L.nomeArquivoExport("tendencia", "a", "b"), "orbita-tendencia-a-a-b.png", "sem cliente, o formato de antes");
-  assert.match(ADS2, /"csv", ctx\.cliente\.nome, "", marcaAgencia\(\)\)\)/);   // plano 1000b: AB-209 encadeia o aviso … · plano 2000d: DA-336 — com a agência
-  assert.match(REL2, /L\.nomeArquivoExport\(nome, de, ate, "csv", ctx\.cliente\.nome\)/, "antes: «funil-2026-09-14-a-2026-10-13.csv»");
-  assert.match(REL2, /L\.nomeArquivoExport\(png, de, ate, "png", ctx\.cliente\.nome\)/);
+  // plano 2000d: NX-028 — a paleta põe a plataforma filtrada no nome, como o botão da tela
+  assert.match(ADS2, /"csv", ctx\.cliente\.nome, S\.plat \/\* plano 2000d · NX-028[^*]*\*\/, marcaAgencia\(\)\)\)/);   // plano 1000b: AB-209 encadeia o aviso … · plano 2000d: DA-336 — com a agência
+  // plano 2000d: NX-330 — com o funil/departamento escolhido no fim do nome (sufixoFiltro)
+  assert.match(REL2, /L\.nomeArquivoExport\(nome, de, ate, "csv", ctx\.cliente\.nome, sufixoFiltro\(filtroExtra\)\)/, "antes: «funil-2026-09-14-a-2026-10-13.csv»");
+  assert.match(REL2, /L\.nomeArquivoExport\(png, de, ate, "png", ctx\.cliente\.nome, sufixoFiltro\(filtroExtra\)\)/);   // plano 2000d: NX-330
 });
 
 test("AD-104 · CSV de campanhas com a plataforma legível", () => {

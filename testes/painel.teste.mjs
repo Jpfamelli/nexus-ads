@@ -529,7 +529,9 @@ await teste("conexão com Meta/Google: nome próprio, estado (erro/atrasado/agua
   for (const id of ["sync-pill", "sync-pop", "faixa-integ"]) assert.ok(idsHtml.has(id), id);
   assert.match(JS, /setInterval\(\(\) => \{ if \(!document\.hidden\) renderIntegracao\(\); \}, 30000\)/);
   // plano 1000b: AB-142 — «já foi avisada» só quando o aviso de conexão saiu (equipeAvisada); senão pede para avisar
-  assert.match(JS, /\(!gestor\(\) \? `<p class="fi-nota">\$\{esc\(equipeAvisada\(.*\) \? "A Nexus já foi avisada e está resolvendo\." : "Avise a Nexus para refazer a conexão\."\)\}<\/p>`/, "a clínica lê se a Nexus já sabe");
+  // plano 2000d: o texto sai de avisoEquipe(agência, avisada) — cliente de revenda lê o nome da agência dele (KX-041)
+  assert.match(JS, /\(!gestor\(\) \? `<p class="fi-nota">\$\{esc\(avisoEquipe\(agencia\(\), equipeAvisada\(.*\)\)\)\}<\/p>`/, "a clínica lê se a equipe já sabe");
+  assert.match(JS, /const avisoEquipe = \(ag, avisada\) => \(avisada \? `A \$\{ag\} já foi avisada e está resolvendo\.` : `Avise a \$\{ag\} para refazer a conexão\.`\);/);
   assert.match(JS, /: `<button class="pill pill-ink pill-sm" type="button" data-ir="ajustes">Abrir Ajustes<\/button>`\);/, "o gestor ganha o atalho");
   assert.match(JS, /const SIMULAR_INTEG = DEMO && Q\.get\("simular"\) === "integracao";/, "?simular só vale na demo");
 });
@@ -699,7 +701,8 @@ await teste("simulador só na demo, em faixa de ±20% com as taxas do período, 
   assert.deepEqual(r.pacientes, [20, 31]);
   assert.deepEqual(r.tratamentos, [20100, 30300]);
   assert.match(JS, /if \(!S\.demo\) \{ const sim = \$\("#card-sim"\); if \(sim\) sim\.remove\(\); \}/, "no modo real o simulador sai do DOM");
-  assert.match(JS, /Estimativa com as taxas desta demonstração\. Não é promessa: cada clínica tem o seu ritmo\./);
+  // plano 2000d: «cada clínica» só na odonto; oficina/loja leem «cada negócio» (KX-081)
+  assert.match(JS, /Estimativa com as taxas desta demonstração\. Não é promessa: cada \$\{esc\(M && M\.vertical !== "odonto" \? "negócio" : "clínica"\)\} tem o seu ritmo\./);
 });
 
 await teste("gaveta: cartão do anúncio de origem e fita de 4 fotogramas; marcos (claquetes) no gráfico; 'desde a última visita'", () => {
@@ -880,7 +883,8 @@ await teste("retorno: a folha usa a MESMA base do herói (anúncios + gestão), 
   assert.match(FL, /Cada R\$ 1 investido virou \$\{brl\(retorno\)\}/);
   assert.match(FL, /só anúncio: \$\{brl\(roas\)\}/);
   // plano 1000 (AD-211): o rótulo vem do vocabulário da vertical (odonto: «Tratamentos») e «(estimativa)» só quando há estimativa
-  assert.match(FL, /\$\{esc\(T\.receita\)\}\$\{est \? " \(estimativa\)" : ""\}/, "rótulo de uma linha só");
+  // plano 2000d: o rótulo distingue «(estimativa)» de «(parte estimada)» — rotuloEstimativa (KX-029)
+  assert.match(FL, /\$\{esc\(T\.receita\)\}\$\{rotuloEstimativa\(c\)\}/, "rótulo de uma linha só");
   // plano 1000b: AB-140 — o tooltip leva o rótulo da receita da vertical (template, não string fixa)
   assert.match(JS, /\["roas", "Retorno do anúncio", `\$\{V\.receita\} ÷ investimento/);
 });

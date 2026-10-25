@@ -211,7 +211,7 @@ async function arrastar(T, { negocio = 801, fracao = .4, soltar = true, y = null
 const livres = (dias, de) => ({ duracao_min: 30, horarios: dias.map(d => ({ inicio: `${A.diaISO(de, d)}T14:00:00-03:00`, livre: true, capacidade: 1, ocupados: 0 })) });
 
 /* ---------- configuração da agenda (agenda-config.js) ---------- */
-async function montarConfig({ cfg = {}, consultas = [], hoje = hojeSP(), modal = null, uiExtra = {}, bloqueios = [], rpc = null } = {}) {   // agenda-2: uiExtra, bloqueios, rpc
+async function montarConfig({ cfg = {}, consultas = [], hoje = hojeSP(), modal = null, uiExtra = {}, bloqueios = [], rpc = null, vocab = null } = {}) {   // plano 2000d · GY-086: vocab   // agenda-2: uiExtra, bloqueios, rpc
   const D = criarDom();
   const { h } = D;
   const reg = { chamadas: [], toasts: [], modais: [], navegou: [], campos: [], erros: [] };   // plano 1000b: campos (opções do ui.campo) e erros (ui.marcarErro)
@@ -244,7 +244,7 @@ async function montarConfig({ cfg = {}, consultas = [], hoje = hojeSP(), modal =
     return {};
   } };
   const alvo = h("section");
-  const ret = await CFG.secoesConfig[0].montar({ ui, api, navegar: r => reg.navegou.push(r) }, alvo);
+  const ret = await CFG.secoesConfig[0].montar({ ui, api, navegar: r => reg.navegou.push(r), ...(vocab ? { vocab } : {}) }, alvo);
   return { D, alvo, reg, ret };
 }
 
@@ -285,7 +285,7 @@ test("DC-268 / DC-419 · CSV: célula que começa com = + - @ vira texto (apóst
   const linhas = csv.slice(1).trim().split("\r\n");
   assert.ok(linhas[1].includes(`"'=HIPERLINK(""x"")"`), linhas[1]);
   assert.ok(linhas[1].includes(";'+55 12;"));
-  assert.ok(linhas[1].endsWith(";'@ana"));
+  assert.ok(linhas[1].endsWith(";'@ana;"), "plano 2000d · GY-022: depois da Observação vem a coluna «Confirmada» (vazia)");
   assert.ok(linhas[2].includes(";'-1;"));
 });
 
@@ -823,4 +823,302 @@ test("DC-368 · deslizar: o painel acompanha o dedo e volta", () => {
   const src = ler("agenda.js");
   assert.match(src, /addEventListener\("touchmove"[\s\S]{0,300}translateX/);
   assert.match(src, /addEventListener\("touchcancel"/);
+});
+
+/* ============================================================ plano 2000d · complemento da frente agenda (GY-001 em diante) */
+const oficinaGY = vocabMod.vocab("oficina");
+const cfgValidaGY = { duracao_min: 30, capacidade: 1, antecedencia_horas: 2, dias_a_frente: 30 };
+
+test("GY-001 / GY-002 / GY-003 / GY-004 / GY-009 / GY-010 / GY-069 / GY-070 · textos curtos com a palavra da vertical (visita na oficina)", () => {
+  assert.equal(A.textoAnuncioPeriodo({ modo: "semana", de: "2026-10-19", dias: 7, n: 3, palavra: "visita" }), "Semana de 19 a 25/10: 3 visitas");
+  assert.equal(A.textoAnuncioPeriodo({ modo: "semana", de: "2026-10-19", dias: 1, n: 1, palavra: "visita" }).endsWith(": 1 visita"), true);
+  assert.equal(A.textoSemProxima({ desde: "2026-10-15", hojeISO: "2026-10-15", palavra: "visita" }), "Nenhuma visita nos próximos 7 dias.");
+  assert.match(A.textoSemProxima({ umDia: true, palavra: "visita" }), /^Nenhuma visita por vir neste dia/);
+  assert.equal(A.textoContaFiltro(0, 5, "zé", "visita"), "Nenhuma visita com «zé» nesta tela.");
+  assert.equal(A.textoContaFiltro(2, 5, "zé", "visita"), "2 de 5 visitas");
+  assert.equal(A.textoResumoDia(null, { palavra: "visita" }), "Sem visitas");
+  assert.equal(A.textoResumoDia({ total: 2, faltas: 1 }, { palavra: "visita" }), "2 visitas · 1 falta");
+  assert.match(A.textoCompartilharDia([], "2026-10-20", "2026-10-15", [], { palavra: "visita" }), /: sem visitas\.$/);
+  assert.equal(A.avisoVoltaEncaixe({ voltou_como_encaixe: true, motivo_encaixe: "horario_ocupado" }, "visita"), "A visita voltou como encaixe: o horário já estava cheio.");
+  assert.equal(A.textoAgoraDoDia([], Date.parse("2026-10-15T10:00:00-03:00"), "visita"), "agora 10:00, sem mais visitas hoje");
+  const col = { iso: "2026-10-20", consultas: [k("2026-10-20", "10:00", "10:30")], bloqueios: [] };
+  assert.equal(A.estadoDoMinuto(col, 610, { capacidade: 2 }, "visita"), ", 1 visita");
+  assert.equal(A.estadoDoMinuto(col, 610, { capacidade: 1 }, "visita"), ", lotado (1 visita)");
+  // sem palavra: continua «consulta»
+  assert.equal(A.textoResumoDia(null), "Sem consultas");
+});
+
+test("GY-005 / GY-006 / GY-007 / GY-008 / GY-011 / GY-065 · peças da tela com a palavra da vertical; as setas do mês dizem para qual mês vão", () => {
+  const { h } = criarDom();
+  assert.match(A.rotuloDoBloco({}, { inicio: "10:00", nome: "Ana", proxima: true, palavra: "visita" }), /próxima visita$/);
+  assert.equal(A.montarPresenca({ h, c: { negocio_id: 1 }, palavra: "visita" }).getAttribute("aria-label"), "Presença de visita");
+  const leg = A.montarLegenda({ h, itens: [{ chave: "s:rev", rotulo: "Revisão", n: 2, cor: 1 }], palavra: "visita" });
+  assert.equal(leg.querySelector(".ag-leg-chip").getAttribute("title"), "Revisão: 2 visitas");
+  const mes = A.montarMiniCalendario({ h, mes: "2026-10-01", consultas: [k("2026-10-20", "10:00", "10:30")], hoje: "2026-10-15", palavra: "visita" });
+  assert.match(mes.querySelector(".ag-mes-resumo").textContent, /^1 visita\b/);
+  const navs = mes.querySelectorAll(".ag-mes-nav").map(b => b.getAttribute("aria-label"));
+  assert.match(navs[0], /^Mês anterior: setembro/i);
+  assert.match(navs[1], /^Próximo mês: novembro/i);
+  const lista = A.montarListaDias({ h, dias: ["2026-10-20"], consultas: [k("2026-10-20", "10:00", "10:30", { nome: "", titulo: "" })], hoje: "2026-10-15", palavra: "visita" });
+  assert.match(lista.textContent, /Visita sem nome/);
+});
+
+test("GY-012 / GY-013 / GY-014 / GY-015 / GY-016 · remarcação, desmarcação e falta dizem de onde é e o fuso de quem está em outro DDD", () => {
+  const c = { nome: "Ana", inicio: "2026-10-16T10:00:00-03:00", telefone: "92991234567" };
+  const rem = A.textoRemarcacao(c, "2026-10-15", { empresa: "Clínica Sorriso" });
+  assert.match(rem, /^Olá, Ana! Aqui é de Clínica Sorriso\. Sua consulta foi remarcada para amanhã às 10:00 \(horário de Brasília\)\./);
+  const des = A.textoDesmarcacao(c, "2026-10-15", { empresa: "Clínica Sorriso" });
+  assert.match(des, /Aqui é de Clínica Sorriso\. Sua consulta de amanhã às 10:00 \(horário de Brasília\) foi desmarcada/);
+  assert.match(A.textoFalta({ nome: "Ana", inicio: "2026-10-15T08:00:00-03:00" }, "2026-10-15", { empresa: "Clínica Sorriso" }), /^Olá, Ana! Aqui é de Clínica Sorriso\. Sentimos sua falta/);
+  assert.doesNotMatch(A.textoRemarcacao({ ...c, telefone: "12991234567" }, "2026-10-15"), /Brasília|Aqui é/, "DDD de São Paulo e sem empresa: como antes");
+});
+
+test("GY-017 / GY-018 · os rascunhos de desmarcação, remarcação e falta levam a empresa (lembrar copia os dados da empresa para eles)", () => {
+  const src = ler("agenda.js");
+  assert.match(src, /\["desmarcacao", "remarcacao", "falta"\]|"desmarcacao",\s*"remarcacao",\s*"falta"/);
+  assert.match(src, /textoFalta\(c, ui\.hojeSP\(\), \{ vocab: ctx\.vocab \|\| null, empresa: nomeEmpresa\(\) \}\)/);
+});
+
+test("GY-019 / GY-020 / GY-021 · retorno do serviço sem acento casa; «2 semanas»; número inválido não vira «NaN dias»", () => {
+  assert.equal(A.retornoEmDias({ servico: "Avaliação" }, { retornos: { avaliacao: 90 } }), 90);
+  assert.equal(A.retornoEmDias({ servico: "LIMPEZA" }, { retornos: { Limpeza: 120 } }), 120);
+  assert.equal(A.textoRetornoDias(NaN), "");
+  assert.equal(A.textoRetornoDias(0), "");
+  assert.equal(A.textoRetornoDias(7), "1 semana");
+  assert.equal(A.textoRetornoDias(14), "2 semanas");
+  assert.equal(A.textoRetornoDias(30), "30 dias");
+  assert.equal(A.textoRetornoDias(180), "6 meses");
+});
+
+test("GY-022 / GY-023 · CSV: coluna «Confirmada» e a falta pela etapa sai como «Faltou»", () => {
+  const csv = A.csvDaAgenda([k("2026-10-20", "10:00", "10:30", { confirmada_em: "2026-10-14T10:00:00-03:00", marco: "faltou" }), k("2026-10-20", "11:00", "11:30")]);
+  const linhas = csv.slice(1).trim().split("\r\n");
+  assert.ok(linhas[0].endsWith(";Observação;Confirmada"));
+  assert.equal(linhas[1].split(";")[6], "Faltou");
+  assert.equal(linhas[1].split(";").at(-1), "Sim");
+  assert.equal(linhas[2].split(";").at(-1), "");
+});
+
+test("GY-072 / GY-073 / GY-074 / GY-075 / GY-077 · serviço curto, cadeira livre com capacidade 2, assinatura e mudança de serviço", () => {
+  assert.equal(A.servicoParecido("Raio", ["Reto"]), null, "nome curto com 2 letras de diferença não é «parecido»");
+  assert.equal(A.servicoParecido("Raoo", ["Raio"]), "Raio");
+  assert.equal(A.servicoParecido("Limpesa", ["Limpeza"]), "Limpeza");
+  const agora = Date.parse("2026-10-20T10:10:00-03:00");
+  const emCurso = [k("2026-10-20", "10:00", "10:30", { nome: "Ana Lima" })];
+  assert.equal(A.ocupadaAgora(emCurso, agora, 30, 2), null, "2 cadeiras e 1 em uso: ainda cabe");
+  assert.deepEqual(A.ocupadaAgora(emCurso, agora, 30, 1), { fim: 630, nome: "Ana" });
+  const base = { consultas: [k("2026-10-20", "10:00", "10:30")] };
+  const s0 = A.assinaturaAgenda(base);
+  for (const campo of [{ chegou_em: "2026-10-20T09:55:00-03:00" }, { lembrete_enviado_em: "2026-10-19T09:00:00-03:00" }, { sala_nome: "Sala 2" }, { primeira_vez: true }, { aniversario_hoje: true }, { origem: "meta" }, { marcada_em: "2026-10-18T09:00:00-03:00" }])
+    assert.notEqual(A.assinaturaAgenda({ consultas: [{ ...base.consultas[0], ...campo }] }), s0, JSON.stringify(campo));
+  const c = k("2026-10-20", "10:00", "10:30", { servico: "Avaliação" });
+  assert.equal(A.consultaMudou(c, { ...c, servico: "Limpeza" }), "alterada");
+  assert.equal(A.consultaMudou(c, { ...c }), null);
+});
+
+test("GY-089 / GY-086 · configuração: o aviso do passo e a palavra da vertical", () => {
+  assert.equal(CFG.palavraDaAgenda(oficinaGY), "visita");
+  assert.equal(CFG.palavraDaAgenda(null), "consulta");
+  assert.equal(CFG.avisoPassoDuracao(60, 30, "visita"), "Os horários saem a cada 60 min, mas a visita padrão dura 30 min: sobram 30 min sem horário oferecido entre uma visita e outra.");
+  assert.match(CFG.avisoPassoDuracao(60, 30), /a consulta padrão dura 30 min/);
+});
+
+test("GY-089 · na tela: oficina lê «a visita padrão» no aviso do passo", async () => {
+  const C = await montarConfig({ cfg: { ...cfgValidaGY, horario_fonte: "agenda", horario: { 1: [["08:00", "12:00"]] } }, vocab: oficinaGY });
+  const passo = C.alvo.querySelector('input[name="passo_min"]');
+  passo.value = "60";
+  passo.dispatchEvent(C.D.evento("input", { target: passo }));
+  const av = C.alvo.querySelector(".agc-aviso-passo");
+  assert.equal(av.hidden, false);
+  assert.match(av.textContent, /a visita padrão dura 30 min/);
+});
+
+test("GY-078 / GY-079 / GY-080 · salvar: dois envios seguidos viram um; o que foi salvo passa a valer; desligar o horário próprio volta ao departamento", async () => {
+  const cfg = { ...cfgValidaGY, horario_fonte: "agenda", horario: { 1: [["08:00", "12:00"]] } };
+  let salvamentos = 0;
+  const C = await montarConfig({ cfg, uiExtra: { checkSucesso() {} },
+    rpc: async n => { if (n === "nx_agenda_config_salvar") { salvamentos++; await dormir(15); return { ok: true, bloqueios: [] }; } return n === "nx_agenda_dia" ? { consultas: [] } : undefined; } });
+  const dur = C.alvo.querySelector('input[name="duracao_min"]');
+  dur.value = "45";
+  dur.dispatchEvent(C.D.evento("input", { target: dur }));
+  const form = C.alvo.querySelector("form");
+  form.dispatchEvent(C.D.evento("submit"));
+  form.dispatchEvent(C.D.evento("keydown", { key: "s", ctrlKey: true }));
+  await dormir(40); await esperar(6);
+  assert.equal(salvamentos, 1, "Ctrl+S durante o salvamento não manda outro");
+  assert.equal(cfg.duracao_min, 45, "a duração salva vale na tela (antes ficava a de quando abriu)");
+  const fonte = C.alvo.querySelector('input[name="usar_horario"]');
+  fonte.checked = false;
+  fonte.dispatchEvent(C.D.evento("change", { target: fonte }));
+  form.dispatchEvent(C.D.evento("submit")); await dormir(30); await esperar(6);   // 1º: o aviso de que os horários somem
+  form.dispatchEvent(C.D.evento("submit")); await dormir(30); await esperar(6);
+  assert.equal(salvamentos, 2);
+  assert.equal(cfg.horario_fonte, "departamento", "a ajuda passa a dizer que vale o horário do departamento");
+});
+
+test("GY-090 / GY-091 · copiar um dia FECHADO avisa e fecha os destinos (antes copiava as faixas escondidas)", async () => {
+  let visto = null;
+  const C = await montarConfig({ cfg: { ...cfgValidaGY, horario_fonte: "agenda", horario: { 1: [["08:00", "12:00"]], 2: [["09:00", "17:00"]] } }, uiExtra: { acaoComDesfazer() {} },
+    modal: async o => { visto = { nota: o.corpo.querySelector(".agc-copiar-fechado"), rotulo: primaria(o).rotulo };
+      for (const c of o.corpo.querySelectorAll('input[type="checkbox"]')) c.checked = c.dataset.dia === "2"; return primaria(o).valor; } });
+  const seg = C.alvo.querySelector('input[name="dia_1"]');
+  seg.checked = false;
+  seg.dispatchEvent(C.D.evento("change", { target: seg }));
+  C.alvo.querySelector('.agc-dia[data-dia="1"] .agc-copiar').click();
+  await esperar(6);
+  assert.ok(visto.nota, "a janela avisa que o dia de origem está fechado");
+  assert.match(visto.nota.textContent, /Segunda-feira está fechado/);
+  assert.equal(visto.rotulo, "Fechar estes dias");
+  assert.equal(C.alvo.querySelector('input[name="dia_2"]').checked, false, "terça ficou fechada");
+});
+
+test("GY-085 / GY-087 · bloqueios: o leitor de tela distingue pelo motivo; o chip do motivo marca e devolve o foco ao campo", async () => {
+  const fut = A.diaISO(hojeSP(), 10);
+  let visto = null;
+  const C = await montarConfig({ bloqueios: [{ id: 1, inicio: `${fut}T12:00:00-03:00`, fim: `${fut}T13:00:00-03:00`, motivo: "Reunião" }],
+    modal: async (o, D) => {
+      if (o.titulo !== "Bloquear horário") return null;
+      const chip = o.corpo.querySelectorAll(".agc-motivo").find(b => b.textContent === "Férias");
+      chip.click();
+      visto = { pressionado: chip.getAttribute("aria-pressed"), foco: D.estado.ativo && D.estado.ativo.getAttribute("name") };
+      return null;
+    } });
+  const bloq = C.alvo.querySelector(".agc-bloqueio");
+  assert.match(bloq.querySelector(".agc-editar-bloqueio").getAttribute("aria-label"), /^Editar bloqueio «Reunião» de /);
+  assert.match(porTexto(bloq, "button", "Remover").getAttribute("aria-label"), /^Remover bloqueio «Reunião» de /);
+  porTexto(C.alvo, "button", "Bloquear horário").click();
+  await esperar(8);
+  assert.equal(visto.pressionado, "true");
+  assert.equal(visto.foco, "motivo", "o foco volta ao campo (dá para completar o motivo)");
+});
+
+test("GY-086 · bloqueio por cima de visitas marcadas: a oficina lê «visita» e «As pessoas continuam marcadas»", async () => {
+  const dia = A.diaISO(hojeSP(), 5);
+  const erros = [];
+  let texto = "";
+  const C = await montarConfig({ vocab: oficinaGY, consultas: [consultaEm(dia, "10:00")],
+    modal: async o => {
+      if (o.titulo !== "Bloquear horário") return null;
+      o.aoAbrir && o.aoAbrir({ fechar() {} });
+      o.corpo.querySelector('[name="data"]').value = dia;
+      await primaria(o).fn(erroModal(erros));
+      texto = o.corpo.querySelector(".agc-aviso-consultas").textContent;
+      return null;
+    } });
+  porTexto(C.alvo, "button", "Bloquear horário").click();
+  await esperar(12);
+  assert.match(texto, /^1 visita cai neste bloqueio/);
+  assert.match(texto, /As pessoas continuam marcadas/);
+  assert.equal(erros.at(-1), "Há 1 visita marcada neste período.");
+});
+
+test("GY-099 / GY-101 / GY-103 / GY-100 · o detalhe mostra 1ª vez, aniversário e encaixe (antes só a linha do painel mostrava)", async () => {
+  const seg = futuraSeg();
+  const T = await montarAgenda({ data: seg, consultas: [consultaEm(seg, "10:00", { primeira_vez: true, aniversario_hoje: true, encaixe: true })] });
+  try {
+    T.alvo.querySelector(".ag-bloco").click();
+    const det = T.reg.popEls.at(-1);
+    const selos = det.querySelector(".ag-det-selos");
+    assert.ok(selos, "a linha de selos existe");
+    assert.equal(selos.querySelector(".ag-det-1a").textContent, "1ª vez");
+    assert.match(selos.querySelector(".ag-det-aniv").textContent, /Aniversário hoje/);
+    assert.ok(selos.querySelector(".ag-det-encaixe"));
+  } finally { T.sair(); }
+});
+
+test("GY-050 · o detalhe se chama pela palavra da vertical («Visita de …»)", async () => {
+  const seg = futuraSeg();
+  const T = await montarAgenda({ data: seg, vocab: oficinaGY, consultas: [consultaEm(seg, "10:00")] });
+  try {
+    T.alvo.querySelector(".ag-bloco").click();
+    const det = T.reg.popEls.at(-1);
+    const rot = [det, ...det.querySelectorAll("[aria-label]")].map(e => e.getAttribute("aria-label")).find(t => t && /de Mariana/.test(t));
+    assert.match(rot, /^Visita de Mariana Costa/);
+  } finally { T.sair(); }
+});
+
+test("GY-048 · remarcar na oficina pergunta «Remarcar visita?»", async () => {
+  const seg = futuraSeg();
+  const T = await montarAgenda({ data: seg, cfg: cfgSemana, vocab: oficinaGY, consultas: [consultaEm(seg, "10:00", { marco: "agendada" })] });
+  try {
+    T.alvo.querySelector(".ag-bloco").click();
+    T.reg.pops.at(-1).querySelector(".ag-det-amanha").click();
+    await esperar(8);
+    assert.equal(T.reg.modais.at(-1).titulo, "Remarcar visita?");
+  } finally { T.sair(); }
+});
+
+test("GY-025 · a janela «Marcar» da oficina confirma com «Confirmar visita»", async () => {
+  const { T, j } = await abrirMarcar({ extra: { vocab: oficinaGY } });
+  try {
+    assert.equal(primaria(j.o).rotulo, "Confirmar visita");
+  } finally { T.sair(); }
+});
+
+test("GY-056 · tarefa de quem faltou vence no próximo dia de atendimento (sexta fechada → segunda), às 09:00", async () => {
+  const seg = A.segundaDe(hojeSP());
+  const qua = A.diaISO(seg, 2);
+  const cfg = { horario: { 1: [["08:00", "18:00"]], 2: [["08:00", "18:00"]], 3: [["08:00", "18:00"]], 4: [["08:00", "18:00"]] }, intervalos: [], duracao_min: 30, capacidade: 1 };
+  const T = await montarAgenda({ data: seg, cfg, comConversas: false, consultas: [consultaEm(qua, "10:00", { presenca: "faltou" })],
+    rpc: async n => (n === "nx_tarefa_salvar" ? { id: 77 } : undefined) });
+  try {
+    T.alvo.querySelector(".ag-bloco").click();
+    const bt = T.reg.popEls.at(-1).querySelector(".ag-det-tarefa");
+    assert.ok(bt, "o botão da tarefa aparece");
+    assert.doesNotMatch(bt.textContent, /amanhã/, "amanhã (sexta) está fechado");
+    bt.click();
+    await esperar(8);
+    const p = T.reg.chamadas.find(c => c.nome === "nx_tarefa_salvar").p.p_tarefa;
+    assert.equal(Date.parse(p.vence_em), Date.parse(`${A.diaISO(seg, 7)}T09:00:00-03:00`), "segunda às 09:00 de São Paulo");
+    assert.match(T.reg.desfazer.at(-1).texto, /^Tarefa criada: ligar para Mariana .+ às 09:00$/);
+  } finally { T.sair(); }
+});
+
+test("GY-062 / GY-063 · agenda vazia: «Ver semana de exemplo» mostra a semana cheia sem gravar nada; «Sair do exemplo» volta", async () => {
+  const seg = A.segundaDe(hojeSP());
+  const T = await montarAgenda({ data: seg, consultas: [], cfg: { duracao_min: 30, capacidade: 1 } });
+  try {
+    const bt = T.alvo.querySelector(".agenda-ver-exemplo") || T.alvo.querySelector(".ag-roteiro-exemplo");
+    assert.ok(bt, "o botão aparece na agenda vazia");
+    const lidas = () => T.reg.chamadas.filter(c => c.nome === "nx_agenda_dia").length;
+    const n0 = lidas();
+    bt.click();
+    await esperar(30);
+    assert.ok(T.alvo.querySelector(".ag-exemplo-aviso"), "a faixa diz que é exemplo");
+    assert.ok(T.alvo.querySelectorAll(".ag-bloco").length > 10, "a semana de exemplo aparece");
+    assert.equal(lidas(), n0, "nada foi lido do servidor para o exemplo");
+    const pops = (T.reg.popEls || []).length;
+    T.alvo.querySelector(".ag-bloco").click();
+    await esperar(4);
+    assert.equal((T.reg.popEls || []).length, pops, "o detalhe (que grava) não abre");
+    assert.match(T.reg.toasts.at(-1), /Semana de exemplo/);
+    T.alvo.querySelector(".ag-exemplo-sair").click();
+    await esperar(30);
+    assert.equal(T.alvo.querySelector(".ag-exemplo-aviso"), null);
+    assert.ok(lidas() > n0, "voltou a ler a agenda de verdade");
+  } finally { T.sair(); }
+});
+
+test("GY-024..GY-058 · textos da janela e da tela com a palavra da vertical (conferência no código)", () => {
+  const src = ler("agenda.js");
+  for (const [id, re] of [
+    ["GY-024", /Conferindo se já tem \$\{palM\} marcada/], ["GY-026", /já tem uma \$\{palJ\} futura/], ["GY-027", /A \$\{palJ\} foi desfeita/],
+    ["GY-030", /com esse telefone/], ["GY-031", /quemMarcou/], ["GY-032", /\(encaixe\)/], ["GY-035", /Essa \$\{palavraCompromisso\(ctx\.vocab\)\} já passou/],
+    ["GY-038", /dialog\[open\]/], ["GY-039", /sem internet: marcar exige conexão\)/], ["GY-041", /em destaque/], ["GY-046", /palM/], ["GY-047", /palL/],
+    ["GY-051", /Observação da \$\{palavraCompromisso\(ctx\.vocab\)\}/], ["GY-053", /Presença da \$\{palavraCompromisso\(ctx\.vocab\)\}/],
+    ["GY-055", /T, N, R, P, D, S, M, L, \/, \[ e \]/], ["GY-057", /O serviço já é «/], ["GY-058", /title: `Agenda · \$\{nomeDia\(iso, true\)\}`/],
+    ["GY-060", /click: \(\) => irParaHoje\(\)/], ["GY-066", /para exportar\./], ["GY-096", /GY-096/], ["GY-097", /GY-097/], ["GY-098", /GY-098/],
+  ]) assert.match(src, re, id);
+});
+
+test("GY-104..GY-110 · CSS: foco da faixa no seletor certo, foco do horário livre, 44 px, alto contraste e as peças novas", () => {
+  const css = ler("agenda.css");
+  assert.doesNotMatch(css, /\.agenda-faixa \[role="tab"\]/, "o seletor antigo não existia na tela");
+  assert.match(css, /\.ag-faixa \[role="tab"\]:focus-visible/);
+  assert.match(css, /\.ag-livre:focus-visible/);
+  assert.match(css, /\.ag-mais-item, \.ag-procurar-item \.bt, \.ag-procurar-retorno, \.ag-encaixe-depois, \.ag-bloquear-horario,[\s\S]{0,120}min-height: 44px/);
+  assert.match(css, /@media \(forced-colors: active\)\s*\{\s*\.ag-serv-chip\[aria-pressed="true"\]/);
+  assert.match(css, /\.ag-exemplo-aviso\s*\{[^}]*flex-wrap: wrap/);
+  assert.match(css, /\.agc-add-duracao\[aria-disabled="true"\]/);
+  assert.match(css, /\.ag-det-selos\s*\{[^}]*display: flex/);
 });

@@ -144,7 +144,8 @@ export function kpisAlternativos(d, { links = {}, voc = {} } = {}) {
     { id: "leads", chave: "leads_semana", rotulo: rotuloLeads7(V), valor: +l.semana || 0, formato: "int", sentido: "cima", tom: "neutro", href: links.leads || links.crm || null,     // plano 2000d · DR-252
       sub: `${+l.hoje || 0} hoje · ${+l.semana_anuncio || 0} de anúncio`, ajuda: ajudaLeads(V) },
     { id: "receita", chave: "receita_mes", rotulo: "Receita do mês", valor: fin(n.receita_mes) ? +n.receita_mes : null, formato: "brl", sentido: "cima", tom: "neutro", href: links.relatorios || links.crm || null,
-      sub: `${+n.ganhos_mes || 0} ${(+n.ganhos_mes || 0) === 1 ? "fechamento" : "fechamentos"} no mês`, ajuda: "Soma do valor final do que foi ganho no CRM do dia 1 até hoje." },
+      // plano 2000d · IY-019: a legenda fala a língua do negócio («9 oportunidades ganhas no mês», como o bloco Vendas), não «fechamentos» fixo
+      sub: textoGanhosMes(+n.ganhos_mes || 0, V), ajuda: "Soma do valor final do que foi ganho no CRM do dia 1 até hoje." },
     // plano 1000 (CR-206): sem «ponderada»
     { id: "previsao", chave: "previsao_ponderada", rotulo: "Previsão (pela chance de cada etapa)", valor: fin(n.previsao_ponderada) ? +n.previsao_ponderada : null, formato: "brl", sentido: "cima", tom: "neutro", href: links.crm || null,
       sub: "valor × chance de cada etapa", ajuda: `Soma do valor previsto multiplicado pela probabilidade da etapa de cada ${V.negocio} ${V.feminino ? "aberta" : "aberto"}.` },
@@ -156,6 +157,13 @@ export function kpisAlternativos(d, { links = {}, voc = {} } = {}) {
       sub: fin(n.receita_indicacao_mes) ? `no mês · R$ ${Math.round(+n.receita_indicacao_mes).toLocaleString("pt-BR")}` : "no mês",
       ajuda: `${cap(V.negocios)} ${V.feminino ? "ganhas" : "ganhos"} no mês cuja origem é indicação de outro cliente.` }] : []),
   ];
+}
+/** plano 2000d · IY-019: «1 oportunidade ganha no mês» / «9 orçamentos ganhos no mês» pelo vocabulário (gênero e número). */
+export function textoGanhosMes(n, V = {}) {
+  const q = Math.max(0, Math.round(+n || 0));
+  const um = V.negocio || "negócio", varios = V.negocios || "negócios";
+  const adj = `${V.feminino ? "ganha" : "ganho"}${q === 1 ? "" : "s"}`;
+  return `${q} ${q === 1 ? um : varios} ${adj} no mês`;
 }
 const ajudaLeads = V => `${cap(V.negocios)} que entraram pelo funil nos últimos 7 dias (contagem do CRM, não conversões do Meta/Google).`;
 /**
@@ -176,7 +184,24 @@ export const TEXTO_SEM_AGENDA = "Sua conta não tem acesso à agenda. Peça ao a
  */
 export function chaveDestaqueKpi(id) {
   return { aguardando: "conversas.aguardando", consultas: "agenda.consultas", aberto: "negocios.valor_aberto", leads: "leads.semana",
-    prazo: "conversas.respondidas_no_prazo_pct", receita: "negocios.receita_mes", previsao: "negocios.previsao_ponderada", atrasadas: "tarefas.atrasadas" }[id] || null;
+    prazo: "conversas.respondidas_no_prazo_pct", receita: "negocios.receita_mes", previsao: "negocios.previsao_ponderada", atrasadas: "tarefas.atrasadas",
+    indicacao: "negocios.ganhos_indicacao_mes" }[id] || null;     // plano 2000d · IY-020: o KPI de indicação (DR-348) também acende
+}
+/**
+ * plano 2000d · IY-021/IY-022: os números que L.numerosMudaram (rel-logica) não olha — o prazo de resposta, as vendas por indicação e as
+ * consultas de hoje (que vêm da agenda, não de nx_inicio). Sem isso os KPIs «Respondidas no prazo», «Vendas por indicação» e «Consultas hoje»
+ * nunca acendiam quando o próprio número mudava. → ["conversas.respondidas_no_prazo_pct", …]
+ */
+export function numerosExtrasMudaram(antes, depois, { agAntes = null, agDepois = null, hoje = null } = {}) {
+  const out = [];
+  if (!antes || !depois) return out;
+  const par = (g, k) => { const a = antes[g] && antes[g][k], b = depois[g] && depois[g][k]; if (fin(a) && fin(b) && +a !== +b) out.push(`${g}.${k}`); };
+  par("conversas", "respondidas_no_prazo_pct");
+  par("negocios", "ganhos_indicacao_mes");
+  const dia = hoje || depois.hoje;
+  const ca = consultasNoDia(agAntes, dia), cb = consultasNoDia(agDepois, dia);
+  if (ca !== null && cb !== null && ca !== cb) out.push("agenda.consultas");
+  return out;
 }
 /** plano 1500c · RC-206: o texto da opção no «Trocar indicadores» — o nome e o valor de agora; sem dado, só o nome. */
 export function rotuloOpcaoKpi(k, { brl = v => `R$ ${Math.round(v)}`, int = v => String(Math.round(v)) } = {}) {
@@ -242,9 +267,10 @@ export function kpisInicio(d, agenda, { hoje = null, links = {}, voc = {} } = {}
       ajuda: `Conversas abertas em que a última mensagem é do ${V.contato} e ainda não foi respondida.` },     // plano 1000b · RB-157
     // plano 1000 (CR-251): consultas não têm «sentido bom» — um dia mais calmo não é problema: a variação fica neutra (sem vermelho)
     { id: "consultas", chave: "consultas", rotulo: `${cap(V.consultas)} hoje`, valor: nCons, formato: "int", sentido: "neutro", tom: "neutro", href: links.agenda || null,
-      sub: nCons === null ? (lendo ? "lendo a agenda…" : falhou ? "não consegui ler a agenda" : "agenda indisponível") : nCons === 0 ? "nenhuma marcada" : "marcadas na Agenda",
+      // plano 2000d · IY-040: «nenhum marcado» quando a palavra da agenda da empresa é masculina (V.femAgenda false)
+      sub: nCons === null ? (lendo ? "lendo a agenda…" : falhou ? "não consegui ler a agenda" : "agenda indisponível") : nCons === 0 ? (V.femAgenda === false ? "nenhum marcado" : "nenhuma marcada") : `${V.femAgenda === false ? "marcados" : "marcadas"} na Agenda`,
       ajuda: nCons === null ? (lendo ? "Lendo a agenda…" : falhou ? "Não consegui ler a agenda agora. Use «Atualizar» para tentar de novo." : TEXTO_SEM_AGENDA)     // plano 2000d · DR-258
-        : `${cap(V.consultas)} marcadas para hoje na Agenda, sem as canceladas.` },
+        : `${cap(V.consultas)} ${V.femAgenda === false ? "marcados" : "marcadas"} para hoje na Agenda, sem ${V.femAgenda === false ? "os cancelados" : "as canceladas"}.` },
     { id: "aberto", chave: "valor_aberto", rotulo: "Em aberto", valor: +n.valor_aberto || 0, formato: "brl", sentido: "cima", tom: "neutro", href: links.crmResumo || links.crm || null,     // plano 1000 (CR-299)
       sub: `${abertos} ${plural(abertos, V.negocio, V.negocios)} ${adj("aberto", abertos)}`,
       // plano 1000b · RB-156: o adjetivo concorda como no sub («das oportunidades abertas», não «abertos»)
@@ -301,10 +327,12 @@ export function funilMes(d, { voc = {} } = {}) {
   if (!campos.some(k => fin(f[k]))) return null;
   const V = { negocios: "negócios", consultas: "consultas", feminino: false, ...voc };
   const q = k => Math.max(0, Math.round(+f[k] || 0));
-  const nomes = { leads: "Leads", conversas: "Conversas", agendados: `${cap(V.consultas)} marcadas`, ganhos: `${cap(V.negocios)} ${V.feminino ? "ganhas" : "ganhos"}` };
+  // plano 2000d · IY-039: a palavra da agenda pode ser masculina no vocabulário da empresa («Atendimentos marcados», «dos atendimentos…»)
+  const femAg = V.femAgenda !== false;
+  const nomes = { leads: "Leads", conversas: "Conversas", agendados: `${cap(V.consultas)} ${femAg ? "marcadas" : "marcados"}`, ganhos: `${cap(V.negocios)} ${V.feminino ? "ganhas" : "ganhos"}` };
   // plano 1000b · RB-245: «60% das conversas» diz DE QUAL etapa (no celular a anterior pode estar fora da tela); as palavras da agenda
   // (consulta · visita · entrega) e «conversas» são femininas, «leads» masculino
-  const deEtapa = { leads: "dos leads", conversas: "das conversas", agendados: `das ${String(nomes.agendados).toLowerCase()}` };
+  const deEtapa = { leads: "dos leads", conversas: "das conversas", agendados: `${femAg ? "das" : "dos"} ${String(nomes.agendados).toLowerCase()}` };
   const etapas = campos.map((id, i) => {
     const qtd = q(id), ant = i ? q(campos[i - 1]) : null;
     const taxa = ant > 0 ? Math.round(qtd / ant * 100) : null;
@@ -326,7 +354,9 @@ export function listaEspera(c, max = MAX_ESPERA) {
   const l = c && c.aguardando_lista;
   if (!Array.isArray(l)) return null;
   // plano 1000b · RB-163: o responsável que o servidor mandar (atribuida_id/atribuida_nome) fica — «Assumir» pergunta antes de tomar de outra pessoa
-  return l.filter(x => x && x.id !== null && x.id !== undefined && x.id !== "")
+  // plano 2000d · IY-068: a mesma conversa duas vezes (junção do servidor) aparece uma vez só — antes duas linhas e dois «Assumir»
+  const vistos = new Set();
+  return l.filter(x => x && x.id !== null && x.id !== undefined && x.id !== "" && !vistos.has(String(x.id)) && vistos.add(String(x.id)))
     .map(x => ({ id: x.id, nome: String(x.nome || "").trim() || null, espera: fin(x.espera_min) ? Math.max(0, +x.espera_min) : null,
       canal: x.canal ? String(x.canal) : null, origem: x.origem ? String(x.origem) : null, plataforma: x.plataforma ? String(x.plataforma) : null,
       atribuidaId: x.atribuida_id !== null && x.atribuida_id !== undefined && x.atribuida_id !== "" ? String(x.atribuida_id) : null,
@@ -378,8 +408,21 @@ export function primeiroNome(nome) {
   const partes = String(nome || "").trim().split(/\s+/).filter(Boolean);
   const titulo = /^(dr|dra|sr|sra|srta|prof|profa|eng|enga)\.?$/i;
   // plano 1500c · RC-185: «joão silva» → «João» (a conta cadastrada em minúscula não vira «Boa tarde, joão»)
-  const p = partes.find(x => !titulo.test(x)) || "";
-  return p ? p.charAt(0).toLocaleUpperCase("pt-BR") + p.slice(1) : "";
+  // plano 2000d · IY-035: pedaço sem letra nenhuma («🦷 Helena», «- Ana») não é nome — pula para o próximo
+  const p = partes.find(x => !titulo.test(x) && /\p{L}/u.test(x)) || "";
+  // plano 2000d · IY-034: nome composto com hífen ganha maiúscula nas duas partes («maria-clara» → «Maria-Clara»); emoji colado na frente sai
+  const limpo = p.replace(/^[^\p{L}]+/u, "");
+  return limpo ? limpo.split("-").map(x => (x ? x.charAt(0).toLocaleUpperCase("pt-BR") + x.slice(1) : x)).join("-") : "";
+}
+/**
+ * plano 2000d · IY-026: uma lista em português — «Ana», «Ana e Bruno», «Ana, Bruno e Carla»; IY-027: com `max`, o resto vira «e mais N»
+ * («Ana, Bruno, Carla e mais 2»). Vazios ficam de fora.
+ */
+export function listaPt(nomes, max = Infinity) {
+  const l = (Array.isArray(nomes) ? nomes : []).map(x => String(x ?? "").trim()).filter(Boolean);
+  if (!l.length) return "";
+  if (l.length > max && max >= 1) { const resto = l.length - max; return `${l.slice(0, max).join(", ")} e mais ${resto}`; }
+  return l.length === 1 ? l[0] : `${l.slice(0, -1).join(", ")} e ${l[l.length - 1]}`;
 }
 /** A frase da faixa: «Número de WhatsApp desconectado há 12 min: Recepção.» (vários: «2 números … : A, B.»); "" sem número caído. */
 export function textoNumeroCaido(lista, agora = Date.now()) {
@@ -388,7 +431,8 @@ export function textoNumeroCaido(lista, agora = Date.now()) {
     // plano 1500c · RC-231: com vários, desde quando caiu o mais antigo («o primeiro há 40 min»)
     const ts = lista.map(x => Date.parse(x && x.desde || "")).filter(Number.isFinite);
     const ha = ts.length ? ` (o primeiro há ${duracaoCurta(Math.max(0, (agora - Math.min(...ts)) / 60000))})` : "";
-    return `${lista.length} números de WhatsApp desconectados${ha}: ${lista.map(x => x.nome).join(", ")}.`;
+    // plano 2000d · IY-026/IY-027: «A, B e C» (português) e, com muitos, «A, B, C e mais 2» — a faixa cabe a 360 px
+    return `${lista.length} números de WhatsApp desconectados${ha}: ${listaPt(lista.map(x => x.nome), 3)}.`;
   }
   const x = lista[0], t = Date.parse(x.desde || "");
   const ha = Number.isFinite(t) ? ` há ${duracaoCurta(Math.max(0, (agora - t) / 60000))}` : "";
@@ -411,7 +455,8 @@ export function duracaoCurta(min) {
   // plano 1000b · RB-159: de 48 h em diante a espera é em dias («3 dias», não «72 h»)
   if (t >= 48 * 60) return `${Math.floor(t / 1440)} dias`;
   const hh = Math.floor(t / 60), mm = t % 60;
-  return hh < 10 ? (mm ? `${hh} h ${p2(mm)} min` : `${hh} h`) : `${Math.round(t / 60)} h`;
+  // plano 2000d · IY-023: de 10 h em diante conta as horas inteiras que passaram (47 h 50 min é «47 h», não «48 h» um minuto antes de «2 dias»)
+  return hh < 10 ? (mm ? `${hh} h ${p2(mm)} min` : `${hh} h`) : `${hh} h`;
 }
 
 /**
@@ -602,10 +647,13 @@ export function lerValorBr(txt) {
   return Number.isFinite(n) ? (neg ? -n : n) : NaN;
 }
 const inteiroMeta = txt => {
-  const t = String(txt ?? "").trim();
+  // plano 2000d · IY-032: «1 000» (milhar com espaço, como muita gente digita) = 1000 — antes era erro
+  const t = String(txt ?? "").trim().replace(/^(\d{1,3})((?:\s\d{3})+)$/, (_, a, b) => a + b.replace(/\s/g, ""));
   const limpo = /^\d{1,3}(\.\d{3})+$/.test(t) ? t.replace(/\./g, "") : t;
   return { limpo, n: t ? (/^\d+$/.test(limpo) ? Number(limpo) : NaN) : null };
 };
+/** plano 2000d · IY-031: o teto de uma meta do mês (R$ 1 bilhão; 100 mil consultas ou leads). */
+export const LIMITE_META = Object.freeze({ vendas: 1e9, contagem: 1e5 });
 export function validarMetas({ vendas = "", consultas = "", leads = "" } = {}, lerMoeda = lerValorBr) {
   const erros = {}, ERRO = "Use um número maior que zero.";
   const vTxt = String(vendas ?? "").trim(), cTxt = String(consultas ?? "").trim();
@@ -618,6 +666,11 @@ export function validarMetas({ vendas = "", consultas = "", leads = "" } = {}, l
   const lTxt = String(leads ?? "").trim();
   const { limpo: lLimpo, n: ld } = inteiroMeta(lTxt);
   if (lTxt && !(Number.isFinite(ld) && ld > 0)) erros.meta_leads = /[.,]/.test(lLimpo) && /\d/.test(lLimpo) ? "Use um número inteiro maior que zero." : ERRO;
+  // plano 2000d · IY-031: um zero a mais (R$ 3.000.000.000, 50.000 consultas) é erro de digitação — o campo avisa em vez de guardar a meta absurda
+  const ALTO = "Confira o valor: parece alto demais para uma meta do mês.";
+  if (!erros.meta_vendas && v > LIMITE_META.vendas) erros.meta_vendas = ALTO;
+  if (!erros.meta_consultas && c > LIMITE_META.contagem) erros.meta_consultas = ALTO;
+  if (!erros.meta_leads && ld > LIMITE_META.contagem) erros.meta_leads = ALTO;
   return { vendas: !erros.meta_vendas && v > 0 ? v : null, consultas: !erros.meta_consultas && c > 0 ? c : null, leads: !erros.meta_leads && ld > 0 ? ld : null, erros };
 }
 /** plano 1000b · RB-160: a linha do «Atendimento agora» — um só: «Paciente esperando há 40 min»; vários: «A mais antiga espera há 40 min» (como no «Agora»). */
@@ -684,6 +737,16 @@ export function progressoGuia(passos) {
 export function textoQuantosPassos(n) {
   const nomes = ["", "Um passo", "Dois passos", "Três passos", "Quatro passos", "Cinco passos"];     // plano 2000d · DR-263/DR-264: o guia tem até 5
   return nomes[n] || (n > 5 ? `${n} passos` : "Alguns ajustes");
+}
+/**
+ * plano 2000d · DR-125: quantas tarefas abertas estão SEM prazo — tarefas.sem_prazo quando o servidor manda; sem ele, as da lista «próximas»
+ * sem vence_em (então «pelo menos» N, porque a lista vem cortada). null quando não há nenhuma conhecida. → {n, pelomenos}
+ */
+export function tarefasSemPrazo(t) {
+  if (!t || typeof t !== "object") return null;
+  if (fin(t.sem_prazo)) { const n = Math.max(0, Math.round(+t.sem_prazo)); return n ? { n, pelomenos: false } : null; }
+  const l = Array.isArray(t.proximas) ? t.proximas.filter(x => x && !x.vence_em) : [];
+  return l.length ? { n: l.length, pelomenos: Array.isArray(t.proximas) && fin(t.abertas) && +t.abertas > t.proximas.length } : null;
 }
 /** plano 1500c · RC-193: as atrasadas primeiro (a mais antiga no topo), depois as outras na ordem do servidor — sem depender de o servidor ordenar. */
 export function ordenarTarefas(lista) {
@@ -772,7 +835,8 @@ export function textoSugestaoMeta(sug, fmt = v => `R$ ${Math.round(v)}`) {
 export const textoEspera = min => duracaoCurta(min);
 /** plano 1500c · RC-183: a nota do bloco Leads sem «1 dos 1 leads … vieram». */
 export function notaLeadsAnuncio(semana, anuncio) {
-  const s = Math.max(0, Math.round(+semana || 0)), a = Math.max(0, Math.round(+anuncio || 0));
+  // plano 2000d · IY-024: o servidor contando anúncio a mais que o total (fusos/atraso) não vira «7 dos 5 leads»: o anúncio para no total
+  const s = Math.max(0, Math.round(+semana || 0)), a = Math.min(s, Math.max(0, Math.round(+anuncio || 0)));
   if (s === 1) return a ? "O lead dos últimos 7 dias veio de anúncio." : "O lead dos últimos 7 dias não veio de anúncio.";
   return `${a} dos ${s} leads criados nos últimos 7 dias ${a === 1 ? "veio" : "vieram"} de anúncio.`;
 }
@@ -793,8 +857,24 @@ export function divisaoPlataformas(l) {
 }
 /** plano 1500c · RC-183: o rótulo da barra de origem («1 de 1 lead veio de anúncio»). */
 export function rotuloOrigem(total, anuncio, pctAn) {
-  const t = Math.max(1, Math.round(+total || 0)), a = Math.max(0, Math.round(+anuncio || 0));
-  return `${a} de ${t} ${t === 1 ? "lead" : "leads"} ${a === 1 ? "veio" : "vieram"} de anúncio (${pctAn}%)`;
+  const t = Math.max(1, Math.round(+total || 0)), a = Math.min(t, Math.max(0, Math.round(+anuncio || 0)));     // plano 2000d · IY-024
+  return `${a} de ${t} ${t === 1 ? "lead" : "leads"} ${a === 1 ? "veio" : "vieram"} de anúncio (${Math.min(100, Math.max(0, Math.round(+pctAn || 0)))}%)`;
+}
+/**
+ * plano 2000d · IY-025: as fatias da barra de origem, sempre somando 100% — anúncio (ou Meta e Google) limitado ao total; a sobra é «outras
+ * origens» (nunca negativa). → {anuncio, pAn, pMeta, pGoogle, pOutras, total, plataformas: bool}
+ */
+export function partesOrigem(l) {
+  const total = Math.max(1, Math.round(+(l && l.semana) || 0));
+  const an = Math.min(total, Math.max(0, Math.round(+(l && l.semana_anuncio) || 0)));
+  const pl = divisaoPlataformas(l);
+  if (pl) {
+    const soma = pl.meta + pl.google, k = soma > total ? total / soma : 1;
+    const pMeta = Math.round(pl.meta * k / total * 100), pGoogle = Math.min(100 - pMeta, Math.round(pl.google * k / total * 100));
+    return { total, anuncio: an, pAn: pMeta + pGoogle, pMeta, pGoogle, pOutras: Math.max(0, 100 - pMeta - pGoogle), plataformas: true, meta: pl.meta, google: pl.google };
+  }
+  const pAn = Math.round(an / total * 100);
+  return { total, anuncio: an, pAn, pMeta: 0, pGoogle: 0, pOutras: 100 - pAn, plataformas: false };
 }
 /**
  * plano 1500c · RC-202: a consulta de AMANHÃ ainda não confirmada pelo paciente? Só quando a agenda manda `confirmacao` (null/"pendente"/false =
@@ -811,7 +891,12 @@ export function teclaLivre(alvo, doc = typeof document !== "undefined" ? documen
   if (el) {
     const tag = String(el.localName || el.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea" || tag === "select") return false;
-    if (el.isContentEditable || (typeof el.getAttribute === "function" && el.getAttribute("contenteditable") === "true")) return false;
+    // plano 2000d · IY-036: contenteditable="" (vazio) e "plaintext-only" também editam — antes só "true" bloqueava a tecla
+    const ce = typeof el.getAttribute === "function" ? el.getAttribute("contenteditable") : null;
+    if (el.isContentEditable || (ce !== null && ce !== "false")) return false;
+    // plano 2000d · IY-037: campos de digitar feitos à mão (role textbox/combobox/searchbox/spinbutton) também
+    const papel = typeof el.getAttribute === "function" ? String(el.getAttribute("role") || "").toLowerCase() : "";
+    if (/^(textbox|combobox|searchbox|spinbutton)$/.test(papel)) return false;
     if (typeof el.closest === "function" && el.closest("dialog, [role=dialog], .flut")) return false;
   }
   try { if (doc && typeof doc.querySelector === "function" && doc.querySelector("dialog[open]")) return false; } catch { /* ok */ }
@@ -824,10 +909,19 @@ export function rotuloContraDia(dia, hoje) {
   const [, m, dd] = String(dia).slice(0, 10).split("-");
   return dd ? `vs. ${dd}/${m}` : "";
 }
+/**
+ * plano 2000d · IY-041: as palavras que concordam com a palavra da agenda — feminina (consulta, visita, entrega) ou masculina (atendimento,
+ * horário). textosGeneroAgenda(false).nenhuma → «Nenhum».
+ */
+export function textosGeneroAgenda(fem = true) {
+  return fem ? { nenhuma: "Nenhuma", marcada: "marcada", a: "a", as: "as", proximas: "Próximas", realizadas: "realizadas" }
+    : { nenhuma: "Nenhum", marcada: "marcado", a: "o", as: "os", proximas: "Próximos", realizadas: "realizados" };
+}
 /** plano 1500c · RC-300: o nome do botão da consulta — «Abrir a consulta de Maria, às 14:00» (antes «Abrir Maria das 14:00»). */
-export function rotuloAbrirConsulta(nome, hora, palavra = "consulta", { agenda = false } = {}) {
+export function rotuloAbrirConsulta(nome, hora, palavra = "consulta", { agenda = false, fem = true } = {}) {
   const quem = String(nome || "").trim();
-  return `${agenda ? "Ver na agenda" : "Abrir"} a ${palavra}${quem ? ` de ${quem}` : ""}, às ${hora}`;
+  // plano 2000d · IY-038: o artigo concorda com a palavra da agenda da empresa («o atendimento», «a consulta»)
+  return `${agenda ? "Ver na agenda" : "Abrir"} ${fem ? "a" : "o"} ${palavra}${quem ? ` de ${quem}` : ""}, às ${hora}`;
 }
 /**
  * plano 1500c · RC-229: um Início de EXEMPLO para quem ainda não tem dados (só na tela, nada é gravado): números redondos de uma clínica
@@ -895,12 +989,29 @@ export function dadosExemplo(hoje, agora = Date.now(), { vertical = "odonto" } =
  * (nx_inicio.gasto_anuncios_mes, quando o servidor manda). null sem gasto ou sem receita: nada é estimado. → {multiplo, receita, gasto}
  * (plano 1500c · IC-001)
  */
+/**
+ * plano 2000d · IY-071/IY-072: a soma das plataformas (nx_inicio.anuncios {meta, google}) — gasto, receita (só quando TODAS as que gastaram
+ * mandam a receita) e leads (idem). null sem o campo ou sem gasto.
+ */
+export function somaPlataformas(d) {
+  const a = d && d.anuncios;
+  if (!a || typeof a !== "object") return null;
+  const ps = ["meta", "google"].map(k => a[k]).filter(p => p && typeof p === "object" && fin(p.gasto) && +p.gasto > 0);
+  if (!ps.length) return null;
+  const tudo = k => ps.every(p => fin(p[k]));
+  return { gasto: ps.reduce((t, p) => t + +p.gasto, 0), receita: tudo("receita") ? ps.reduce((t, p) => t + Math.max(0, +p.receita), 0) : null,
+    leads: tudo("leads") ? ps.reduce((t, p) => t + Math.max(0, Math.round(+p.leads)), 0) : null };
+}
 export function retornoAnuncios(d) {
   const n = (d && d.negocios) || {};
-  const gasto = d && fin(d.gasto_anuncios_mes) ? +d.gasto_anuncios_mes : d && d.anuncios && fin(d.anuncios.gasto_mes) ? +d.anuncios.gasto_mes : null;
+  // plano 2000d · IY-071: servidor que só manda o retorno por plataforma (anuncios.meta/google, DR-270) — o gasto e a receita de anúncio do
+  // mês são a soma das duas (antes o cartão sumia mesmo com os números ali)
+  const soma = somaPlataformas(d);
+  const gasto = d && fin(d.gasto_anuncios_mes) ? +d.gasto_anuncios_mes : d && d.anuncios && fin(d.anuncios.gasto_mes) ? +d.anuncios.gasto_mes : soma ? soma.gasto : null;
   // a receita que veio DE anúncio (negocios.receita_anuncio_mes) quando o servidor separa; sem ela, a do mês inteiro — e o texto diz qual é
-  const deAnuncio = fin(n.receita_anuncio_mes);
-  const receita = deAnuncio ? +n.receita_anuncio_mes : fin(n.receita_mes) ? +n.receita_mes : null;
+  const recPlat = !fin(n.receita_anuncio_mes) && soma && soma.receita !== null ? soma.receita : null;
+  const deAnuncio = fin(n.receita_anuncio_mes) || recPlat !== null;
+  const receita = fin(n.receita_anuncio_mes) ? +n.receita_anuncio_mes : recPlat !== null ? recPlat : fin(n.receita_mes) ? +n.receita_mes : null;
   if (!(gasto > 0) || receita === null || receita < 0) return null;
   // plano 1500c · IC-008: gastou e nada voltou ainda — o cartão diz isso (antes sumia, e o dono não via que o dinheiro foi sem retorno)
   if (receita === 0) return { multiplo: 0, receita: 0, gasto, deAnuncio, semVenda: true };
@@ -914,7 +1025,9 @@ export function retornoAnuncios(d) {
 export function custoPorLead(d) {
   const r = retornoAnuncios(d) || null;
   const gasto = r ? r.gasto : d && fin(d.gasto_anuncios_mes) ? +d.gasto_anuncios_mes : null;
-  const leads = d && d.funil_mes && fin(d.funil_mes.leads_anuncio) ? +d.funil_mes.leads_anuncio : null;
+  // plano 2000d · IY-072: sem funil_mes.leads_anuncio, os leads que as plataformas mandam (anuncios.meta/google.leads) — ainda só de anúncio
+  const soma = somaPlataformas(d);
+  const leads = d && d.funil_mes && fin(d.funil_mes.leads_anuncio) ? +d.funil_mes.leads_anuncio : soma && soma.leads !== null ? soma.leads : null;
   return gasto > 0 && leads > 0 ? gasto / leads : null;
 }
 /**
@@ -966,13 +1079,26 @@ export function retornoPorPlataforma(d) {
   if (comM.length > 1) { const melhor = comM.reduce((a1, b) => (b.multiplo > a1.multiplo ? b : a1)); if (comM.some(x => x !== melhor && x.multiplo < melhor.multiplo)) melhor.melhor = true; }
   return out;
 }
+/** plano 2000d · IY-066: «hoje», «ontem», «há 3 dias» (dias de calendário em São Paulo); data no futuro → «hoje». */
+export function haQuanto(ms, agora = Date.now()) {
+  const a = diaSP(new Date(ms)), b = diaSP(new Date(agora));
+  if (!a || !b) return null;
+  const [y1, m1, d1] = a.split("-").map(Number), [y2, m2, d2] = b.split("-").map(Number);
+  const dias = Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
+  return dias <= 0 ? "hoje" : dias === 1 ? "ontem" : `há ${dias} dias`;
+}
 /** plano 2000d · DR-328: as últimas vendas que vieram de anúncio (nx_inicio.ultimas_vendas_anuncio) — até `max`, com nome, serviço, valor e plataforma. */
-export function ultimasVendasAnuncio(d, max = 3) {
+export function ultimasVendasAnuncio(d, max = 3, agora = Date.now()) {
   const l = d && Array.isArray(d.ultimas_vendas_anuncio) ? d.ultimas_vendas_anuncio : null;
   if (!l) return null;
+  // plano 2000d · IY-065: «últimas» = as mais novas primeiro (pelo ganho_em), sem depender da ordem do servidor; sem data, ficam no fim
+  // plano 2000d · IY-066: «há 2 dias» de cada venda — a prova do retorno fica concreta na demonstração
+  const t = x => { const v = Date.parse(x.ganho_em || ""); return Number.isFinite(v) ? v : -Infinity; };
   const out = l.filter(x => x && (String(x.contato_nome || x.titulo || "").trim()))
+    .map((x, i) => ({ x, i })).sort((a, b) => t(b.x) - t(a.x) || a.i - b.i).map(({ x }) => x)
     .map(x => ({ nome: String(x.contato_nome || x.titulo).trim(), servico: String(x.servico || "").trim() || null, valor: fin(x.valor) ? +x.valor : null,
-      plataforma: /google/i.test(String(x.plataforma || "")) ? "Google" : /meta|face|insta/i.test(String(x.plataforma || "")) ? "Meta" : null }))
+      plataforma: /google/i.test(String(x.plataforma || "")) ? "Google" : /meta|face|insta/i.test(String(x.plataforma || "")) ? "Meta" : null,
+      quando: Number.isFinite(t(x)) ? haQuanto(t(x), agora) : null }))
     .slice(0, max);
   return out.length ? out : null;
 }
@@ -1044,7 +1170,8 @@ export function chavesInicioOrfas(chaves, { clientes = null, conta = "-" } = {})
   const validos = new Set(clientes.map(c => String(c && c.id != null ? c.id : c)));
   // plano 1500c · RC-184: o checklist (nx-onb:<cliente>:<conta>) também sai; as metas (nx-ini-metas:<cliente>, por empresa) só quando
   // nenhuma OUTRA conta deste aparelho ainda guarda algo da empresa (a meta é de quem divide o aparelho)
-  const re = /^(?:nx-ini-(?:hist|kpis|blocos)|nx-onb):([^:]+):([^:]+)$/, reMeta = /^nx-ini-metas:([^:]+)$/;
+  // plano 2000d · IY-028: a foto da última visita (nx-ini-visita, DR-398) também sai com a empresa que a conta perdeu
+  const re = /^(?:nx-ini-(?:hist|kpis|blocos|visita)|nx-onb):([^:]+):([^:]+)$/, reMeta = /^nx-ini-metas:([^:]+)$/;
   const lista = (chaves || []).map(k => String(k || ""));
   const deOutraConta = new Set();
   for (const k of lista) { const m = re.exec(k); if (m && m[2] !== String(conta)) deOutraConta.add(m[1]); }
@@ -1094,6 +1221,8 @@ export function descricaoCurta(ajuda, max = 90) {
 export function textoChipAcessivel(chip, contra = "ontem") {
   if (!chip) return "";
   const quando = String(contra || "").replace(/^vs\.\s*/i, "") || "o período anterior";
+  // plano 2000d · IY-033: o chip «novo» (antes era zero) dizia «novo para comparar com ontem» — agora «novo: era zero ontem»
+  if (chip.novo) return `novo: era zero ${/^(ontem|hoje)$/.test(quando) ? quando : /^o /.test(quando) ? quando.replace(/^o /, "no ") : /^a /.test(quando) ? quando.replace(/^a /, "na ") : `em ${quando}`}`;
   if (chip.v === null || chip.v === undefined) return `${chip.txt || "sem base"} para comparar com ${quando}`;
   if (!chip.v || chip.seta === "→") return `igual a ${quando}`;
   return `${chip.seta === "▲" || chip.v > 0 ? "mais" : "menos"} ${String(chip.txt || "").replace(/^[+−-]/, "")} que ${quando}`;
@@ -1166,6 +1295,9 @@ export function placarEquipe(d) {
   const linhas = l.map(x => ({ nome: String(x.nome).trim(), n: Math.max(0, Math.round(+(deHoje ? x.ganhos_hoje : x.ganhos) || 0)),
     valor: fin(deHoje ? x.valor_hoje : x.valor) ? +(deHoje ? x.valor_hoje : x.valor) : 0 }))
     .sort((a, b) => b.valor - a.valor || b.n - a.n);
+  // plano 2000d · IY-070: empate (mesmo valor e mesmas vendas) divide a posição — dois «1º», o próximo é «3º» (na TV, 2º para quem empatou
+  // em 1º parecia injusto); `top` = está em 1º com algo vendido
+  linhas.forEach((x, i) => { const ant = linhas[i - 1]; x.pos = ant && ant.valor === x.valor && ant.n === x.n ? ant.pos : i + 1; x.top = x.pos === 1 && x.valor > 0; });
   return { titulo: deHoje ? "Placar de hoje" : "Placar do mês", linhas, deHoje };
 }
 /** plano 2000d · DR-357: o bloco pedido pela rota (#/inicio?bloco=metas) — só ids conhecidos. */
@@ -1244,7 +1376,8 @@ export function equipeVisivel(eq, { admin = false } = {}) {
   if (admin) return { linhas: eq, resumo: null };
   const eu = eq.find(x => x.eu);
   if (!eu) return null;
-  return { linhas: [eu], resumo: `Você está em ${eu.posicao}º de ${eq.length} no mês.` };
+  // plano 2000d · IY-056: sozinho na lista, «Você está em 1º de 1» não diz nada — sem a frase
+  return { linhas: [eu], resumo: eq.length > 1 ? `Você está em ${eu.posicao}º de ${eq.length} no mês.` : null };
 }
 /** plano 2000d · DR-355: o incentivo de quem está atrás — «a R$ 1.200 do 1º lugar». "" para o 1º ou sem distância. */
 export function textoDistancia(x, fmt = v => `R$ ${Math.round(v)}`) {
@@ -1283,10 +1416,13 @@ export function desdeInicio(d) {
   const linhas = [linha("leads", "Leads no mês", "leads", "cima", true), linha("tpr", "1ª resposta (média)", "tpr_media_min", "baixo", false), linha("receita", "Receita no mês", "receita", "cima", true)].filter(Boolean);
   return linhas.length ? { primeiro: s.primeiro, atual: ref, parcial, linhas } : null;
 }
+/** plano 2000d · IY-054/IY-055: tira os marcadores de formatação do WhatsApp (* _ ~ `) e corta em `max` letras. */
+export function semMarcadores(t, max = 80) { return String(t ?? "").replace(/[*_~`]/g, "").replace(/\s+/g, " ").trim().slice(0, max); }
 /** plano 2000d · DR-288: «desde que você começou» em texto para mandar ao dono (WhatsApp/e-mail). `fmt(id, v)` formata cada valor. */
 export function textoDesde(ds, { empresa = "", fmt = (id, v) => String(v) } = {}) {
   if (!ds) return "";
-  const cab = `*Desde que começamos${empresa ? ` — ${empresa}` : ""}*`;
+  const emp = semMarcadores(empresa, 80);     // plano 2000d · IY-055: o nome sem * _ ~ ` (o negrito do título não quebra)
+  const cab = `*Desde que começamos${emp ? ` — ${emp}` : ""}*`;
   const quando = `${mesPorExtenso(ds.primeiro.mes)} × ${ds.parcial ? "este mês (até hoje)" : mesPorExtenso(ds.atual.mes)}`;
   return [cab, quando, ...ds.linhas.map(x => `• ${x.rotulo}: ${fmt(x.id, x.antes)} → ${fmt(x.id, x.agora)}${x.melhor ? " (melhorou)" : ""}`)].join("\n");
 }
@@ -1294,7 +1430,10 @@ export function textoDesde(ds, { empresa = "", fmt = (id, v) => String(v) } = {}
 export function aniversariantesHoje(d) {
   const l = d && Array.isArray(d.aniversariantes) ? d.aniversariantes : null;
   if (!l) return null;
-  const out = l.filter(x => x && String(x.nome || "").trim()).map(x => ({ contatoId: x.contato_id ?? null, nome: String(x.nome).trim(), conversaId: x.conversa_id ?? null }));
+  // plano 2000d · IY-067: o mesmo contato duas vezes (dois números, duas conversas) aparece uma vez — sem dois «Dar parabéns» para a mesma pessoa
+  const vistos = new Set();
+  const out = l.filter(x => x && String(x.nome || "").trim()).map(x => ({ contatoId: x.contato_id ?? null, nome: String(x.nome).trim(), conversaId: x.conversa_id ?? null }))
+    .filter(x => { const k = x.contatoId !== null ? `c:${x.contatoId}` : `n:${x.nome.toLowerCase()}`; if (vistos.has(k)) return false; vistos.add(k); return true; });
   return out.length ? out : null;
 }
 /** plano 2000d · DR-255: «+3 aniversariantes» (antes «+3 outros», sem dizer de quê). */
@@ -1316,7 +1455,9 @@ export function textoPedirConfirmacao(nome, quando, palavra = "consulta") {
  * (#/conversas?contato=ID&texto=…). null sem nenhum dos dois.
  */
 export function hrefComTexto({ conversaId = null, contatoId = null } = {}, texto = "") {
-  const t = String(texto || "").slice(0, 1000);
+  // plano 2000d · IY-069: corta por caractere, não por unidade UTF-16 — cortar no meio de um emoji (🎉) deixava meio par e o
+  // encodeURIComponent lançava URIError (o botão «Dar parabéns» sumia com a tela)
+  const t = Array.from(String(texto || "")).slice(0, 1000).join("");
   const q = t ? `texto=${encodeURIComponent(t)}` : "";
   if (conversaId !== null && conversaId !== undefined && conversaId !== "") return `#/conversas/${encodeURIComponent(conversaId)}${q ? `?${q}` : ""}`;
   if (contatoId !== null && contatoId !== undefined && contatoId !== "") return `#/conversas?contato=${encodeURIComponent(contatoId)}${q ? `&${q}` : ""}`;
@@ -1349,6 +1490,13 @@ export function linhasResumoMes(d, { voc = {}, brl = v => `R$ ${Math.round(v)}` 
   const cpl = custoPorLead(d);
   poe("cpl", "Custo por lead de anúncio", cpl ? brl(cpl) : null);
   poe("aberto", "Em aberto no funil", fin(n.valor_aberto) ? brl(+n.valor_aberto) : null);
+  // plano 2000d · IY-057: as vendas por indicação (DR-348) — o argumento do pós-venda também vai ao sócio
+  if (fin(n.ganhos_indicacao_mes)) poe("indicacao", "Vendas por indicação", `${Math.max(0, Math.round(+n.ganhos_indicacao_mes))}${fin(n.receita_indicacao_mes) ? ` · ${brl(+n.receita_indicacao_mes)}` : ""}`);
+  // plano 2000d · IY-058: quantos dias, em média, do lead à venda (DR-402)
+  if (fin(n.dias_ate_ganho)) { const dd = Math.max(0, Math.round(+n.dias_ate_ganho)); poe("dias", "Do lead à venda (média)", `${dd} ${dd === 1 ? "dia" : "dias"}`); }
+  // plano 2000d · IY-059: o tempo até o 1º contato com o lead de anúncio (DR-133)
+  const l = (d && d.leads) || {};
+  if (fin(l.primeiro_contato_media_min)) poe("contato", "1º contato com o lead de anúncio (média)", duracaoCurta(Math.max(0, +l.primeiro_contato_media_min)));
   return out;
 }
 /**
@@ -1371,9 +1519,16 @@ export function linhasResumoMesAnterior(d, { brl = v => `R$ ${Math.round(v)}` } 
  * marca de outro; sem marca, sem rodapé.
  */
 export function textoResumoMes(linhas, { empresa = "", mes = "", ate = "", marca = "" } = {}) {
-  const cab = `*Resumo de ${mes}*${empresa ? ` — ${empresa}` : ""}${ate ? ` (até ${ate})` : ""}`;
-  const m = String(marca || "").replace(/[*_~`]/g, "").trim().slice(0, 40);
+  // plano 2000d · IY-054: o nome da empresa sem os marcadores do WhatsApp (* _ ~ `) — «Clínica *Sorriso*» quebrava o negrito do cabeçalho
+  const emp = semMarcadores(empresa, 80);
+  const cab = `*Resumo de ${mes}*${emp ? ` — ${emp}` : ""}${ate ? ` (até ${ate})` : ""}`;
+  const m = semMarcadores(marca, 40);
   return [cab, ...(Array.isArray(linhas) ? linhas : []).map(x => `• ${x.rotulo}: ${x.valor}`), m ? `Números do ${m}.` : null].filter(Boolean).join("\n");
+}
+/** plano 2000d · IY-042: o título do checklist sem «Órbita» fixo — «Nexus: deixe tudo pronto» (sem artigo: serve a qualquer marca); sem marca, «Deixe tudo pronto». */
+export function tituloChecklist(marca = "") {
+  const m = String(marca || "").trim();
+  return m ? `${m}: deixe tudo pronto` : "Deixe tudo pronto";
 }
 /** plano 2000d · DR-247: o nome da marca da sessão (ctx.marca.produto — Órbita, Nexus ou a marca da agência); "" sem marca. */
 export function nomeMarca(marca) {
@@ -1446,6 +1601,32 @@ export function desmontar() {
   clearInterval(tRelogio); tRelogio = 0;
   metasEditando = false; rascunhoMetas = null;
   soltarSparks();
+  soltarTravaTela();      // plano 2000d · IY-048
+  // plano 2000d · IY-044: sair do Início com o «Resumo do mês» aberto não deixa a folha (modal) por cima das outras telas
+  try {
+    if (typeof document !== "undefined" && document) {
+      for (const f of document.querySelectorAll(".ini-resumo-folha")) f.remove();
+      if (document.documentElement && document.documentElement.classList) document.documentElement.classList.remove("ini-imprimindo", "ini-folha-aberta");
+    }
+  } catch { /* sem DOM */ }
+}
+/**
+ * plano 2000d · IY-048: no modo TV (?tv=1) a tela não apaga sozinha — navigator.wakeLock («tela ativa») enquanto o placar está à vista;
+ * o navegador solta a trava quando a aba some e o Início pede de novo ao voltar. Sem a API (navegador antigo), nada muda.
+ */
+let travaTela = null;
+export async function pedirTravaTela() {
+  try {
+    const wl = typeof navigator !== "undefined" && navigator && navigator.wakeLock;
+    if (!wl || typeof wl.request !== "function" || (travaTela && !travaTela.released)) return travaTela;
+    travaTela = await wl.request("screen");
+    return travaTela;
+  } catch { travaTela = null; return null; }
+}
+export function soltarTravaTela() {
+  const t = travaTela;
+  travaTela = null;
+  try { if (t && typeof t.release === "function" && !t.released) { const p = t.release(); if (p && typeof p.catch === "function") p.catch(() => {}); } } catch { /* ok */ }
 }
 /** plano 1000b · RB-167: desliga os ResizeObserver das linhas dos KPIs do desenho anterior (antes ficavam 4 novos vivos a cada pulso). */
 function soltarSparks() {
@@ -1572,7 +1753,11 @@ export async function montar(ctx) {
   // plano 2000d · DR-283: o modo «Organizar o Início» (as setas de mover os blocos aparecem)
   let organizando = false;
   // a palavra da agenda na vertical (consulta / visita / entrega), a mesma das Automações
-  const palavra = L.palavraAgenda(V.vertical || (ctx.cliente && ctx.cliente.vertical));
+  // plano 2000d · DR-259 (pendência da frente ads): o vocabulário da empresa (ctx.vocab.compromisso) vence a palavra fixa da vertical
+  const palavra = L.palavraAgenda(V.vertical || (ctx.cliente && ctx.cliente.vertical), V);
+  // plano 2000d · IY-041: o gênero da palavra da agenda (vocab g_compromisso) — «Nenhum atendimento marcado» quando ela é masculina
+  const femAg = (typeof V.art === "function" ? V.art("compromisso") : (V.g_compromisso || "a")) !== "o";
+  const ga = textosGeneroAgenda(femAg);
 
   // cabeçalho: saudação pequena em cima, manchete no degrau display, data por extenso + hora da leitura + Atualizar
   // plano 1000b · RB-153: sem aria-live — «Atualizado às HH:MM» muda a cada leitura e o leitor falava a hora sozinho; só a FALHA é anunciada
@@ -1599,6 +1784,7 @@ export async function montar(ctx) {
     if (min >= 10) idadeEl.setAttribute("title", `Sem atualização há ${duracaoCurta(min)} — toque em Atualizar`); else idadeEl.removeAttribute("title");
   }
   let falhouUltima = false;
+  let agendaAntes = null;     // plano 2000d · IY-022
   let falhasSeguidas = 0;     // plano 1000b · RB-175: só a 1ª falha seguida vira aviso (servidor em 503 não empilha um toast a cada 30 s)
   // plano 1000 (CR-181): sem internet o «Atualizar» desliga («Sem internet»), o pulso não tenta (nada de erro a cada 30 s) e, quando a rede volta, relê
   const semRede = () => typeof navigator !== "undefined" && !!navigator && navigator.onLine === false;
@@ -1722,7 +1908,11 @@ export async function montar(ctx) {
     const registro = { aguardando: +c.aguardando || 0, consultas, valor_aberto: +n.valor_aberto || 0, abertos: +n.abertos || 0,
       // plano 1500c · RC-190: sem o campo na resposta, o dia fica sem ponto de receita (null) — antes caía a zero e a linha despencava
       leads_semana: +l.semana || 0, receita_mes: fin(n.receita_mes) ? +n.receita_mes : null, previsao_ponderada: fin(n.previsao_ponderada) ? +n.previsao_ponderada : null,
-      tarefas_atrasadas: Math.max(0, Math.floor(+t.atrasadas) || 0) };
+      tarefas_atrasadas: Math.max(0, Math.floor(+t.atrasadas) || 0),
+      // plano 2000d · IY-029: o KPI «Respondidas no prazo» ganha a linha deste aparelho (antes nunca tinha ponto guardado)
+      respondidas_pct: fin(c.respondidas_no_prazo_pct) ? Math.max(0, Math.min(100, +c.respondidas_no_prazo_pct)) : null,
+      // plano 2000d · IY-030: e o «Vendas por indicação» (DR-348) também
+      ganhos_indicacao_mes: fin(n.ganhos_indicacao_mes) ? Math.max(0, Math.round(+n.ganhos_indicacao_mes)) : null };
     // plano 1000b · RB-170: só grava quando o ponto do dia mudou (antes: ler + gravar o localStorage a cada leitura de 30 s)
     const doHoje = (hist.dias || []).find(x => x && x.dia === d.hoje);
     if (doHoje && Object.keys(registro).every(k => doHoje[k] === registro[k])) return;
@@ -1748,6 +1938,7 @@ export async function montar(ctx) {
       if (minha !== montagem) return;          // resposta de uma montagem antiga (outra empresa ou conta): não toca no estado guardado
       // plano 1500c · RC-209: com passos pendentes, o pulso reaproveita o checklist por 10 min (antes relia a cada 30 s); abrir, «Atualizar» e voltar releem
       if (onb && onb !== ultimoOnb) onbLidoEm = Date.now();
+      const agAnt = ultimaAgenda;     // plano 2000d · IY-022: a agenda de antes, para acender o KPI de consultas quando muda
       ultimoOnb = onb; ultimaAgenda = agenda; ultimaAgendaMes = agendaMes;
       ultimaCarga = Date.now();
       falhouUltima = false; falhasSeguidas = 0;
@@ -1769,6 +1960,7 @@ export async function montar(ctx) {
       if (!forcar && !primeira && (js === ultimoJson || metasEditando)) return;      // nada mudou (ou a pessoa está digitando as metas): não mexe na tela
       ultimoJson = js;
       const antes = ultimoDado;
+      agendaAntes = agAnt;
       desenhar(d, agenda, primeira && !desenhou, antes, onb, agendaMes);
       desenhou = true;
     } catch (e) {
@@ -1864,7 +2056,7 @@ export async function montar(ctx) {
       // plano 1500c · RC-182: «7 dias» com hoje incluso = hoje − 6 (antes − 7: a lista mostrava um dia a mais que o número do cartão)
       crmResumo: podeCrm ? "#/crm?resumo=1" : null, leads: podeCrm ? `#/contatos?criado_de=${somarDiasIso(d.hoje || L.hojeSP(), -6)}` : null };
     const voc = { contato: vmin("contato", "cliente"), contatos: vmin("contatos", "clientes"),
-      negocio: vmin("negocio", "negócio"), negocios: vmin("negocios", "negócios"), feminino: fem, consulta: palavra.um, consultas: palavra.varios };
+      negocio: vmin("negocio", "negócio"), negocios: vmin("negocios", "negócios"), feminino: fem, consulta: palavra.um, consultas: palavra.varios, femAgenda: femAg };     // plano 2000d · IY-039/IY-040
     const mCompleta = L.manchete(d, { agenda, links, voc });
     const m = encurtarManchete(mCompleta, { max: 2, fmtMoeda: v => L.textoMoeda(v, { centavos: false }) });     // plano 1000 (CR-249)
     pintarManchete(m, mCompleta);     // plano 1500c · RC-222
@@ -1874,13 +2066,22 @@ export async function montar(ctx) {
     if (modoTv) {
       raiz.classList.add("ini-tv");
       const pl = placarEquipe(d);
-      corpo.append(pl ? h("section", { class: "rel-cartao ini-placar", "aria-labelledby": "ini-pl", dataset: { k: "placar" } },
-        h("h2", { id: "ini-pl", class: "ini-placar-t" }, pl.titulo, h("span", { class: "rel-nota" }, ` · ${ctx.cliente.nome || ""} · atualizado às ${L.horaSP(new Date())}`)),
-        h("ol", { class: "ini-placar-lista" }, pl.linhas.map((x, i) => h("li", { class: ["ini-placar-item", i === 0 && x.valor > 0 && "ini-placar-top"] },
-          h("span", { class: "ini-placar-pos", "aria-hidden": "true" }, `${i + 1}º`), h("span", { class: "ini-placar-nome" }, x.nome),
+      // plano 2000d · IY-050: «atualizado às» é a hora da ÚLTIMA LEITURA que deu certo (antes a hora do desenho: sem mudança, a TV mostrava
+      // uma hora velha sem dizer); o relógio de 60 s anda o carimbo e relê (IY-049)
+      const carimbo = h("span", { class: "rel-nota", dataset: { k: "pl-hora" } });
+      const pintarCarimbo = () => { carimbo.textContent = ` · ${ctx.cliente.nome || ""} · atualizado às ${L.horaSP(new Date(ultimaCarga || Date.now()))}`; };
+      pintarCarimbo();
+      // plano 2000d · IY-051: a saída do modo TV (botão e Esc) — antes só apagando o «?tv=1» do endereço
+      const sairTv = h("a", { class: "bt bt-sec bt-p ini-tv-sair", href: "#/inicio", dataset: { k: "tv-sair" } }, "Sair do modo TV");
+      corpo.append(sairTv, pl ? h("section", { class: "rel-cartao ini-placar", "aria-labelledby": "ini-pl", dataset: { k: "placar" } },
+        h("h2", { id: "ini-pl", class: "ini-placar-t" }, pl.titulo, carimbo),
+        // plano 2000d · IY-070: a posição com empate (o <li value> mantém a numeração da lista igual à da tela)
+        h("ol", { class: "ini-placar-lista" }, pl.linhas.map(x => h("li", { class: ["ini-placar-item", x.top && "ini-placar-top"], value: String(x.pos) },
+          h("span", { class: "ini-placar-pos", "aria-hidden": "true" }, `${x.pos}º`), h("span", { class: "ini-placar-nome" }, x.nome),
           h("span", { class: "ini-placar-n rel-num" }, `${x.n} ${x.n === 1 ? "venda" : "vendas"}`), h("b", { class: "ini-placar-v rel-num" }, L.textoMoeda(x.valor, { centavos: false })))))
         ) : ui.vazio({ tipo: "sem_resultado", titulo: "O placar aparece quando o servidor mandar a equipe do mês." }));
-      relogio = null;
+      // plano 2000d · IY-049: na TV ninguém mexe — sem evento do pulso a tela parava; o relógio relê a cada minuto (sem piscar: só muda se mudou)
+      relogio = () => { Promise.resolve(Date.now() - ultimaCarga >= INTERVALO_RELOGIO - 5000 ? carregar() : null).then(pintarCarimbo, pintarCarimbo); };
       trocar();
       return;
     }
@@ -1900,8 +2101,12 @@ export async function montar(ctx) {
     // plano 2000d · DR-398: «desde a sua última visita» (a foto deste aparelho, mesmo mês, há 1 h ou mais)
     if (!exemplo && novidadesVisita) {
       const nov = novidadesVisita;
-      corpo.append(h("p", { class: "ini-novidades rel-entra", role: "status", dataset: { k: "novidades" } }, ui.icone("check"),
-        h("span", null, `Desde a sua última visita (${L.quandoSP(new Date(nov.quando).toISOString())}): ${nov.itens.join(", ")}.`)));
+      // plano 2000d · IY-064: «Dispensar» tira o aviso (antes ficava em todo redesenho até sair do Início); IY-026: «A, B e C»
+      const fecharNov = h("button", { type: "button", class: "bt-icone ini-novidades-x", "aria-label": "Dispensar o aviso das novidades", dataset: { k: "novidades-x" } }, ui.icone("fechar"));
+      const pNov = h("div", { class: "ini-novidades rel-entra", role: "status", dataset: { k: "novidades" } }, ui.icone("check"),
+        h("span", null, `Desde a sua última visita (${L.quandoSP(new Date(nov.quando).toISOString())}): ${listaPt(nov.itens)}.`), fecharNov);
+      fecharNov.addEventListener("click", () => { novidadesVisita = null; pNov.remove(); if (typeof btn.focus === "function") btn.focus(); });     // o foco não cai no vazio
+      corpo.append(pNov);
     }
     // plano 1500c · IC-001: o destaque de venda — «cada R$ 1 em anúncio virou R$ X» (receita ÷ gasto do mês, quando o servidor manda o gasto)
     const roi = retornoAnuncios(d);
@@ -1935,7 +2140,7 @@ export async function montar(ctx) {
       if (passosGuia.length) corpo.append(h("section", { class: ["rel-cartao", "ini-guia-cartao", "rel-entra", prog.todos && "ini-guia-pronto"], "aria-labelledby": "ini-gu" },
         h("div", { class: "rel-cartao-topo" }, h("h2", { id: "ini-gu", class: "rel-h2" }, "Comece por aqui"),
           h("p", { class: "rel-nota", dataset: { k: "guia-prog" } }, prog.texto)),
-        h("div", { class: "ini-guia-barra", role: "progressbar", "aria-label": "Primeiros passos prontos", "aria-valuemin": "0", "aria-valuemax": String(prog.total), "aria-valuenow": String(prog.feitos), style: { "--guia-pct": `${prog.pct}%` } },
+        h("div", { class: "ini-guia-barra", role: "progressbar", "aria-label": "Primeiros passos prontos", "aria-valuetext": `${prog.feitos} de ${prog.total} passos prontos`,     /* plano 2000d · IY-083 */ "aria-valuemin": "0", "aria-valuemax": String(prog.total), "aria-valuenow": String(prog.feitos), style: { "--guia-pct": `${prog.pct}%` } },
           h("span", { class: "ini-guia-barra-f" })), guia));
       if (onbRes) corpo.append(cartaoChecklist(onbRes));
       relogio = null;
@@ -2071,7 +2276,10 @@ export async function montar(ctx) {
 
       vendas: () => {
         const mv = L.mesVsAnterior(n);
-        const chipMes = L.chipVar(mv.atual, mv.anterior, "cima");
+        // plano 2000d · DA-215 (pendência da frente ads): sem base comparável (cliente que começou depois do mês passado, ou nada no mesmo
+        // período) o chip, a barra do mês passado e a diferença em reais somem — antes «▲ novo · vs. R$ 0» parecia crescimento
+        const comparavel = mv.comparavel !== false;
+        const chipMes = comparavel ? L.chipVar(mv.atual, mv.anterior, "cima") : null;
         const ganhos = +n.ganhos_mes || 0, abertos = +n.abertos || 0;
         const txtAbertos = `${abertos === 1 ? vmin("negocio", "negócio") : vmin("negocios", "negócios")} ${adj("aberto", abertos)} · ${brl0(n.valor_aberto)}`;
         // este mês × o mesmo pedaço do mês passado, em duas barras na mesma régua
@@ -2102,24 +2310,25 @@ export async function montar(ctx) {
           h("div", { class: "ini-mes" },
             h("p", { class: "rel-olho" }, "Receita do mês"),
             num(mv.atual, brl0, "ini-receita", "negocios.receita_mes"),
-            h("p", { class: "ini-mes-l" },
+            chipMes ? h("p", { class: "ini-mes-l" },
               // plano 2000d · DR-281: a seta não é lida («mais 40% que o mesmo período do mês passado»)
               h("span", { class: `rel-var rel-var-${chipMes.cls}` }, h("span", { "aria-hidden": "true" }, chipMes.v == null ? chipMes.txt : `${chipMes.seta} ${chipMes.txt}`),
                 h("span", { class: "sr-only" }, textoChipAcessivel(chipMes, "o mesmo período do mês passado"))),
-              h("span", { class: "rel-nota" }, ` vs. ${brl0(mv.anterior)} no mesmo período do mês passado`)),
+              h("span", { class: "rel-nota" }, ` vs. ${brl0(mv.anterior)} no mesmo período do mês passado`))
+              : h("p", { class: "rel-nota ini-mes-l", dataset: { k: "vd-sem-base" } }, "Ainda sem o mesmo período do mês passado para comparar."),
             notaMes ? h("p", { class: "rel-nota ini-mes-inicio", dataset: { k: "vd-inicio-mes" } }, notaMes) : null,
             proj ? h("p", { class: "ini-mes-proj", dataset: { k: "vd-proj" } }, ui.icone("grafico"), h("span", null, ` ${textoProjecao(proj, metas.vendas, brl0)}`)) : null,
             // plano 2000d · DR-402: quantos dias, em média, do lead à venda (negocios.dias_ate_ganho)
             fin(n.dias_ate_ganho) ? h("p", { class: "rel-nota", dataset: { k: "vd-dias" } }, `Do lead à venda: ${Math.round(+n.dias_ate_ganho)} ${Math.round(+n.dias_ate_ganho) === 1 ? "dia" : "dias"} em média.`) : null,
             // plano 1500c · RC-196: a diferença em reais, com sinal, ao lado do chip em %
-            textoDiferenca(mv.atual, mv.anterior, brl0) ? h("p", { class: ["ini-mes-dif", mv.atual >= mv.anterior ? "ini-dif-cima" : "ini-dif-baixo"], dataset: { k: "vd-dif" } }, textoDiferenca(mv.atual, mv.anterior, brl0)) : null,
+            comparavel && textoDiferenca(mv.atual, mv.anterior, brl0) ? h("p", { class: ["ini-mes-dif", mv.atual >= mv.anterior ? "ini-dif-cima" : "ini-dif-baixo"], dataset: { k: "vd-dif" } }, textoDiferenca(mv.atual, mv.anterior, brl0)) : null,
             // plano 1500c · RC-194: «N ganhas no mês» abre o relatório de vendas (quais foram); sem relatório, o quadro
             h("p", { class: "rel-nota" }, (podeRel || podeCrm) && ganhos > 0
               ? h("a", { class: "rel-link", href: podeRel ? "#/relatorios/vendas" : "#/crm", dataset: { k: "vd-ganhos" } }, `${ganhos} ${ganhos === 1 ? vmin("negocio", "negócio") : vmin("negocios", "negócios")} ${adj("ganho", ganhos)} no mês`)
-              : `${ganhos} ${ganhos === 1 ? vmin("negocio", "negócio") : vmin("negocios", "negócios")} ${adj("ganho", ganhos)} no mês`, ` · mês passado inteiro: ${brl0(mv.anteriorInteiro)}`)),
+              : `${ganhos} ${ganhos === 1 ? vmin("negocio", "negócio") : vmin("negocios", "negócios")} ${adj("ganho", ganhos)} no mês`, inteiro ? ` · mês passado inteiro: ${brl0(mv.anteriorInteiro)}` : "")),
           linhaMetaVd,
-          h("div", { class: "ini-barras", role: "img", "aria-label": `Receita deste mês${ateDia}: ${brl0(mv.atual)}; mesmo período do mês passado: ${brl0(mv.anterior)}${inteiro ? `; mês passado inteiro: ${brl0(inteiro)}` : ""}` },
-            barraMes("Este mês", mv.atual, "ini-b-atual"), barraMes(`Mês passado${ateDia}`, mv.anterior, "ini-b-antes"),
+          h("div", { class: "ini-barras", role: "img", "aria-label": `Receita deste mês${ateDia}: ${brl0(mv.atual)}${comparavel ? `; mesmo período do mês passado: ${brl0(mv.anterior)}` : ""}${inteiro ? `; mês passado inteiro: ${brl0(inteiro)}` : ""}` },
+            barraMes("Este mês", mv.atual, "ini-b-atual"), comparavel ? barraMes(`Mês passado${ateDia}`, mv.anterior, "ini-b-antes") : null,
             inteiro ? barraMes("Mês passado inteiro", inteiro, "ini-b-fant") : null),
           h("div", { class: "ini-numeros ini-numeros-2" },
             (podeCrm ? h("a", { class: "ini-numero", href: "#/crm", dataset: { k: "n-ab" } }, num(n.abertos, int, "ini-n", "negocios.abertos"), h("span", { class: "ini-n-l" }, txtAbertos))
@@ -2144,6 +2353,9 @@ export async function montar(ctx) {
           h("div", { class: "ini-numeros ini-numeros-2" },
             numT(t.hoje, "para hoje", "#/tarefas?aba=hoje", "t-hj", "ini-n", "tarefas.hoje"),
             numT(t.atrasadas, +t.atrasadas === 1 ? "atrasada" : "atrasadas", "#/tarefas?aba=atrasadas", "t-at", `ini-n${+t.atrasadas ? " ini-n-ruim" : ""}`, "tarefas.atrasadas")),
+          // plano 2000d · DR-125 (pendência da frente crm): as abertas SEM prazo também contam («Sem prazo (3)»), como o selo da tela de Tarefas
+          (() => { const sp = tarefasSemPrazo(t); return sp ? h("p", { class: "rel-nota ini-tf-semprazo", dataset: { k: "t-semprazo" } }, podeTarefas
+            ? h("a", { class: "rel-link", href: "#/tarefas" }, `Sem prazo (${sp.n}${sp.pelomenos ? "+" : ""})`) : `Sem prazo (${sp.n}${sp.pelomenos ? "+" : ""})`) : null; })(),
           h("p", { class: "rel-olho ini-sub" }, "Próximas"), lista);
       },
 
@@ -2157,7 +2369,7 @@ export async function montar(ctx) {
           lc.append(h("li", { class: `ini-canal ini-c-${e.nivel}` },
             h("span", { class: "ini-canal-luz", "aria-hidden": "true" }),
             h("div", { class: "ini-canal-t" },
-              h("p", { class: "ini-canal-n" }, k.nome, k.numero_exibicao ? h("span", { class: "rel-nota" }, ` · ${k.numero_exibicao}`) : null),
+              h("p", { class: "ini-canal-n" }, String(k.nome || "").trim() || (k.numero_exibicao ? "Número de WhatsApp" : "Número sem nome"), k.numero_exibicao ?     /* plano 2000d · IY-063 */ h("span", { class: "rel-nota" }, ` · ${k.numero_exibicao}`) : null),
               h("p", { class: "rel-nota" }, e.texto, k.ultima_entrada_em ? ` · última mensagem recebida ${L.quandoSP(k.ultima_entrada_em)}` : " · nenhuma mensagem recebida ainda"),
               // plano 1000 (CR-175): o texto técnico da API (em inglês) só para o admin, recolhido; para todos, a frase do estado já está acima
               // plano 1500c · RC-214: «Copiar» o erro para mandar ao suporte (antes era preciso selecionar o texto)
@@ -2228,7 +2440,8 @@ export async function montar(ctx) {
     if (onbRes) corpo.append(cartaoChecklist(onbRes));
 
     // o número que mudou desde a última leitura acende (resposta ao dado) — no bloco e no KPI do topo
-    if (antes) for (const chave of L.numerosMudaram(antes, d)) for (const el of corpo.querySelectorAll(`[data-n="${chave}"]`)) G.destacar(el);
+    // plano 2000d · IY-021/IY-022: + o prazo, a indicação e as consultas de hoje (numerosExtrasMudaram)
+    if (antes) for (const chave of [...L.numerosMudaram(antes, d), ...numerosExtrasMudaram(antes, d, { agAntes: agendaAntes, agDepois: agenda })]) for (const el of corpo.querySelectorAll(`[data-n="${chave}"]`)) G.destacar(el);
     trocar().then(() => { for (const f of contarDepois) f(); });
     if (foco || blocoFoco) {
       const achar = k => raiz.querySelector(`[data-k="${CSS.escape(k)}"]`);
@@ -2366,17 +2579,17 @@ export async function montar(ctx) {
       else if (!temAgenda) colAg.append(h("p", { class: "rel-nota" }, TEXTO_SEM_AGENDA));     // plano 2000d · DR-258
       else if (!prox.hoje.length && !prox.futuras.length) {
         colAg.append(...[
-          h("p", { class: "rel-nota" }, `Nenhuma ${palavra.um} marcada nos próximos 7 dias.`),
+          h("p", { class: "rel-nota" }, `${ga.nenhuma} ${palavra.um} ${ga.marcada} nos próximos 7 dias.`     /* plano 2000d · IY-041 */),
           podeAgenda ? h("div", { class: "ini-agora-acoes" }, h("a", { class: "bt bt-sec bt-p", href: "#/agenda" }, "Abrir agenda")) : null,
         ].filter(Boolean));
       } else {
         const semana = !prox.visiveis.length;
         const itens = semana ? prox.futuras : prox.visiveis;
-        if (prox.diaAcabou) colAg.append(h("p", { class: "rel-nota" }, `${prox.hoje.length === 1 ? `A ${palavra.um} de hoje já aconteceu` : `As ${prox.hoje.length} ${palavra.varios} de hoje já aconteceram`}. Próximas:`));
+        if (prox.diaAcabou) colAg.append(h("p", { class: "rel-nota" }, `${prox.hoje.length === 1 ? `${cap(ga.a)} ${palavra.um} de hoje já aconteceu` : `${cap(ga.as)} ${prox.hoje.length} ${palavra.varios} de hoje já aconteceram`}. ${ga.proximas}:`     /* plano 2000d · IY-041 */));
         else if (prox.passadas) colAg.append(h("p", { class: "rel-nota" }, `${prox.passadas} já ${plural(prox.passadas, "aconteceu", "aconteceram")} hoje · ${prox.restantes} pela frente`));
         else if (!semana) colAg.append(h("p", { class: "rel-nota" }, `${prox.restantes} pela frente hoje`));
         else colAg.append(h("p", { class: "rel-nota" }, `Nenhuma hoje. Próximas da semana:`));
-        colAg.append(h("ol", { class: "ini-prox", "aria-label": semana ? `Próximas ${palavra.varios} da semana` : `${cap(palavra.varios)} de hoje` }, itens.map(it => itemConsulta(it, semana))));
+        colAg.append(h("ol", { class: "ini-prox", "aria-label": semana ? `${ga.proximas} ${palavra.varios} da semana` : `${cap(palavra.varios)} de hoje` }, itens.map(it => itemConsulta(it, semana))));
         const sobra = semana ? 0 : prox.restantes - prox.visiveis.length;
         // plano 1500c · RC-203: «+3 depois» abre a agenda de hoje
         if (sobra > 0 || podeAgenda) colAg.append(h("div", { class: "rel-cartao-rodape ini-agora-rodape" }, sobra > 0
@@ -2414,10 +2627,9 @@ export async function montar(ctx) {
         if (semRede()) { ui.toast("Sem internet: tente de novo quando a conexão voltar.", { tipo: "erro" }); return; }
         bt.disabled = true;
         const feitos = [];
-        for (const it of lista) {
-          try { await ctx.api.rpcC("nx_agenda_presenca", { p_negocio: it.negocio_id, p_estado: "compareceu" }); feitos.push(it.negocio_id); }
-          catch (e) { console.error(e); }
-        }
+        // plano 2000d · IY-062: as marcações saem juntas (antes uma de cada vez: 8 consultas = 8 idas e voltas esperando em fila)
+        const rs = await Promise.allSettled(lista.map(it => Promise.resolve().then(() => ctx.api.rpcC("nx_agenda_presenca", { p_negocio: it.negocio_id, p_estado: "compareceu" }))));
+        rs.forEach((r, i) => { if (r.status === "fulfilled") feitos.push(lista[i].negocio_id); else console.error(r.reason); });
         if (minha !== montagem) return;
         const voltar = async () => {
           for (const id of feitos) { try { await ctx.api.rpcC("nx_agenda_presenca", { p_negocio: id, p_estado: "limpar" }); } catch (e) { console.error(e); } }
@@ -2454,7 +2666,7 @@ export async function montar(ctx) {
         // plano 1500c · RC-215: frase única com o termo explícito («2 oportunidades em Agendou sem data») — antes o gênero do negócio
         // («agendadas») e «não sabem dela» (do paciente) se misturavam
         h("p", { class: "ini-semdata-t" }, ui.icone("alerta"), h("span", null, fraseSemData(sd, voc))),
-        h("p", { class: "rel-nota" }, `Sem ${palavra.um} marcada, não ${sd.total === 1 ? "aparece" : "aparecem"} na agenda e o lembrete não sai.`),
+        h("p", { class: "rel-nota" }, `Sem ${palavra.um} ${ga.marcada}, não ${sd.total === 1 ? "aparece" : "aparecem"} na agenda e o lembrete não sai.`     /* plano 2000d · IY-041 */),
         sd.itens.length ? h("ol", { class: "ini-semdata-lista", "aria-label": "Agendados sem data" }, sd.itens.map(it => {
           const nome = it.nome || `${cap(voc.negocio)} sem nome`;
           return h("li", { class: "ini-semdata-item" },
@@ -2469,10 +2681,15 @@ export async function montar(ctx) {
     /** B4/B7: uma pessoa esperando resposta — nome, há quanto tempo, pílulas de canal/origem (A8), «Assumir» (atribui a mim e abre) e «Abrir». */
     function itemEspera(it) {
       const nome = it.nome || `${cap(voc.contato)} sem nome`;
-      const espTxt = it.espera === null ? "" : it.espera >= 1 ? `espera há ${duracaoCurta(it.espera)}` : "acabou de escrever";
+      const espTxt0 = it.espera === null ? "" : it.espera >= 1 ? `espera há ${duracaoCurta(it.espera)}` : "acabou de escrever";
+      // plano 2000d · IY-047: a conversa que já é minha diz isso («com você») no lugar do «Assumir» que saiu (IY-061)
+      const minhaJa = !!it.atribuidaId && String(it.atribuidaId) === String(contaId);
+      const espTxt = [espTxt0, minhaJa ? "com você" : ""].filter(Boolean).join(" · ");
       const pilulas = [pilulaSegura(it.canal, "canal"), pilulaSegura(it.origem, "origem", it.plataforma)].filter(Boolean);
       let assumir = null;
-      if (podeConversas && escreve && contaId !== "-") {
+      // plano 2000d · IY-061: já está comigo (atribuida_id = minha conta) → sem «Assumir» (atribuiria de novo e mostraria «Desfazer» à toa)
+      const jaMinha = !!it.atribuidaId && String(it.atribuidaId) === String(contaId);
+      if (podeConversas && escreve && contaId !== "-" && !jaMinha) {
         assumir = h("button", { type: "button", class: "bt bt-prim bt-p", dataset: { k: `ag-assumir-${it.id}` }, "aria-label": `Assumir a conversa de ${nome} e abrir`, title: "A conversa passa para você e abre" }, "Assumir");
         assumir.addEventListener("click", () => assumirConversa(it, assumir));
       }
@@ -2500,11 +2717,11 @@ export async function montar(ctx) {
       // plano 1500c · RC-300: «Abrir a consulta de Maria, às 14:00» (antes «Abrir Maria das 14:00», que soava como sobrenome)
       const quem = it.nome || it.titulo || "";
       const abrir = podeCrm && it.negocio_id
-        ? h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { k: `px-${it.negocio_id}` }, "aria-label": rotuloAbrirConsulta(quem, hora, palavra.um),
+        ? h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { k: `px-${it.negocio_id}` }, "aria-label": rotuloAbrirConsulta(quem, hora, palavra.um, { fem: femAg }),     // plano 2000d · IY-038
           on: { click: () => pontes.abrirNegocio(it.negocio_id, { aoMudar: () => carregar({ forcar: true }) }) } }, "Abrir")
         // plano 1000 (CR-253): consulta sem negócio (marcada direto na agenda) não fica sem ação — «Ver na agenda» do dia dela
         : podeAgenda ? h("a", { class: "bt bt-sec bt-p", href: `#/agenda?dia=${encodeURIComponent(it.dia || d.hoje || "")}`, dataset: { k: `px-ag-${it.dia || ""}-${hora}` },
-          "aria-label": rotuloAbrirConsulta(quem, hora, palavra.um, { agenda: true }) }, "Ver na agenda") : null;
+          "aria-label": rotuloAbrirConsulta(quem, hora, palavra.um, { agenda: true, fem: femAg }) }, "Ver na agenda") : null;
       // plano 1500c · RC-202: a de amanhã que o paciente ainda não confirmou ganha o selo e «Pedir confirmação» (abre a conversa com ele);
       // só quando a agenda manda o campo `confirmacao` (sem ele, nada é inventado)
       const naoConf = precisaConfirmar(it, somarDiasIso(d.hoje || L.hojeSP(), 1));
@@ -2531,7 +2748,7 @@ export async function montar(ctx) {
       if (!temAgenda) { sub.textContent = TEXTO_SEM_AGENDA; return sec; }     // plano 2000d · DR-258
       if (!porDia.total) {
         sub.textContent = `${cap(palavra.varios)} por hora e por dia.`;
-        area.append(ui.vazio({ icone: "calendario", tema: "agenda", titulo: `Nenhuma ${palavra.um} nos próximos 7 dias.`, texto: podeAgenda ? "Quando marcar, as barras aparecem aqui." : null,
+        area.append(ui.vazio({ icone: "calendario", tema: "agenda", titulo: `${ga.nenhuma} ${palavra.um} nos próximos 7 dias.`, texto: podeAgenda ? "Quando marcar, as barras aparecem aqui." : null,
           acao: podeAgenda ? { rotulo: "Abrir agenda", fn: () => ctx.navegar("#/agenda") } : null }));
         return sec;
       }
@@ -2540,7 +2757,7 @@ export async function montar(ctx) {
         opcoes: [{ valor: "hoje", rotulo: "Hoje", contador: porHora.total }, { valor: "semana", rotulo: "7 dias", contador: porDia.total }],
         aoMudar: v => { modoHoras = v; pintar(v); } });
       sec.querySelector(".rel-cartao-topo").append(seg);
-      const dica = h("p", { class: "rel-nota ini-horas-dica", role: "status" });
+      const dica = h("p", { class: "rel-nota ini-horas-dica", "aria-hidden": "true" });     // plano 2000d · IY-060
       const pintar = v => {
         const horaAgora = horaSP(new Date());     // plano 1000b · RB-244: a hora de AGORA a cada pintura (trocar «Hoje/7 dias» depois da virada da hora)
         ui.limpar(area);
@@ -2698,7 +2915,7 @@ export async function montar(ctx) {
           h("thead", null, h("tr", null, h("th", { scope: "col" }, "Pessoa"), h("th", { scope: "col", class: "num" }, "Ganhos"), h("th", { scope: "col", class: "num" }, "Valor"),
             temConv ? h("th", { scope: "col", class: "num" }, "Conversão") : null, h("th", { scope: "col", class: "num" }, "1ª resposta"))),
           h("tbody", null, eq.map(x => h("tr", { class: [x.posicao === 1 && x.valor > 0 && "ini-equipe-top", x.eu && "ini-equipe-eu"] },
-            h("th", { scope: "row" }, x.posicao === 1 && x.valor > 0 ? h("span", { class: "ini-equipe-coroa", "aria-label": "1º lugar" }, "1º ") : null, nomeCel(x),
+            h("th", { scope: "row" }, x.posicao === 1 && x.valor > 0 ? h("span", { class: "ini-equipe-coroa" }, "1º", h("span", { class: "sr-only" }, " lugar:"), " ")     /* plano 2000d · IY-053 */ : null, nomeCel(x),
               x.eu ? h("span", { class: "ini-equipe-voce" }, " (você)") : null,     // plano 1500c · IC-012
               // plano 2000d · DR-355: o incentivo de quem está atrás
               textoDistancia(x, fmt) ? h("span", { class: "rel-nota ini-equipe-dist", dataset: { k: `eq-dist-${x.id}` } }, ` · ${textoDistancia(x, fmt)}`) : null,
@@ -2709,7 +2926,7 @@ export async function montar(ctx) {
             temConv ? h("td", { class: "num", title: x.leads !== null ? `${x.ganhos} de ${x.leads} leads` : null }, x.conversao === null ? "—" : pct(x.conversao)) : null,
             h("td", { class: ["num", admin && x.tpr !== null && x.tpr === melhorTpr && "ini-equipe-rapido"] }, x.tpr === null ? "—" : duracaoCurta(x.tpr))))))),
         // plano 2000d · DR-353: quem está sem nenhuma tarefa para hoje (carteira parada)
-        sem ? h("p", { class: "rel-nota ini-equipe-semtf rel-txt-aten", dataset: { k: "eq-semtarefa" } }, `Sem tarefa para hoje: ${sem.join(", ")}.`) : null);
+        sem ? h("p", { class: "rel-nota ini-equipe-semtf rel-txt-aten", dataset: { k: "eq-semtarefa" } }, `Sem tarefa para hoje: ${listaPt(sem)}.`     /* plano 2000d · IY-026 */) : null);
     }
     /** plano 1500c · RC-325: o primeiro mês × o mês atual — o argumento da renovação, com a seta do sentido bom. */
     function blocoDesde(ds) {
@@ -2720,7 +2937,7 @@ export async function montar(ctx) {
           h("p", { class: "rel-nota" }, `${mesPorExtenso(ds.primeiro.mes)} × ${ds.parcial ? "agora" : mesPorExtenso(ds.atual.mes)}`)),
         h("ul", { class: "ini-desde-lista" }, ds.linhas.map(x => h("li", { class: ["ini-desde-item", x.melhor ? "melhor" : x.parcial ? "andamento" : "pior"] },
           h("span", { class: "ini-desde-r" }, x.rotulo),
-          h("span", { class: "ini-desde-v rel-num" }, h("s", { class: "ini-desde-antes", "aria-label": `antes ${fmtL(x.id, x.antes)}` }, fmtL(x.id, x.antes)), " → ",
+          h("span", { class: "ini-desde-v rel-num" }, h("span", { class: "sr-only" }, "antes: "), h("s", { class: "ini-desde-antes" }, fmtL(x.id, x.antes)), h("span", { class: "sr-only" }, ", agora:")     /* plano 2000d · IY-052 */, h("span", { "aria-hidden": "true" }, " → "),
             h("b", null, fmtL(x.id, x.agora))),
           // o mês parcial que ainda não passou o primeiro não «piorou»: está em andamento
           h("span", { class: "ini-desde-sel" }, x.melhor ? "melhorou" : x.parcial ? "em andamento" : "piorou")))),
@@ -2735,11 +2952,13 @@ export async function montar(ctx) {
 
     /** Leads da semana: quanto veio de anúncio × outras origens, numa barra de proporção (contagem do CRM). */
     function barraOrigem(l) {
-      const total = Math.max(1, +l.semana || 0), an = Math.max(0, +l.semana_anuncio || 0), pct = Math.round(an / total * 100);
+      // plano 2000d · IY-025: as fatias somam sempre 100% (partesOrigem) — anúncio a mais que o total não estoura a barra
+      const po = partesOrigem(l);
+      const total = po.total, an = po.anuncio, pct = po.pAn;
       // plano 1500c · RC-233: com leads.semana_meta/semana_google o anúncio se divide em Meta e Google (duas cores); sem eles, como antes
-      const pl = divisaoPlataformas(l);
-      if (pl) {
-        const pM = Math.round(pl.meta / total * 100), pG = Math.round(pl.google / total * 100), pO = Math.max(0, 100 - pM - pG);
+      if (po.plataformas) {
+        const pl = { meta: po.meta, google: po.google };
+        const pM = po.pMeta, pG = po.pGoogle, pO = po.pOutras;
         return h("div", { class: "ini-origem", role: "img", "aria-label": `${rotuloOrigem(total, an, pct)}: Meta ${pl.meta}, Google ${pl.google}` },
           h("span", { class: "ini-origem-t ini-origem-t2" }, h("i", { class: "ini-origem-meta", style: { "--w": `${pM}%` } }), h("i", { class: "ini-origem-google", style: { "--w": `${pG}%`, "--x": `${pM}%` } })),
           h("span", { class: "ini-origem-leg" }, h("span", null, h("i", { class: "ini-origem-m ini-origem-meta" }), `Meta · ${pM}%`),
@@ -2763,7 +2982,7 @@ export async function montar(ctx) {
       const linhaMeta = (rotulo, p, fmt, nota, extra = null) => h("div", { class: ["ini-meta", `ini-meta-${p.estado}`] },
         h("div", { class: "ini-meta-topo" }, h("span", { class: "ini-meta-r" }, rotulo),
           h("span", { class: "ini-meta-v rel-num" }, fmt(p.realizado), h("span", { class: "rel-nota" }, ` de ${fmt(p.meta)}`))),
-        h("div", { class: "ini-meta-barra", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(p.pct)), "aria-label": `${rotulo}: ${pct(p.pctReal)} da meta; esperado hoje: ${fmt(p.esperado)}` },     // plano 1000b · RB-171
+        h("div", { class: "ini-meta-barra", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(p.pct)), "aria-label": `${rotulo}: ${pct(p.pctReal)} da meta; esperado hoje: ${fmt(p.esperado)}`, "aria-valuetext": `${fmt(p.realizado)} de ${fmt(p.meta)} (${pct(p.pctReal)})` },     // plano 2000d · IY-082     // plano 1000b · RB-171
           h("i", { style: { "--w": `${p.pct}%` } }), h("b", { style: { "--m": `${p.ritmoPct}%` }, title: `Ritmo do calendário hoje: ${fmt(p.esperado)}` })),
         // plano 2000d · DR-299: a frase longa no computador e a curta («Faltam R$ 5.000 · abaixo do ritmo») no celular (o CSS escolhe)
         nota ? h("p", { class: "rel-nota ini-meta-txt" }, nota)
@@ -2789,10 +3008,10 @@ export async function montar(ctx) {
       }
       if (metas.consultas) {
         const p = progressoMeta({ meta: metas.consultas, realizado: cont ? cont.realizadas : 0, dia, diasNoMes: nDias, fracaoDia: fracao });
-        const extra = cont ? [cont.marcadas ? `+${fmtInt(cont.marcadas)} já ${plural(cont.marcadas, "marcada", "marcadas")} até o fim do mês (${plural(cont.marcadas, "conta quando acontecer", "contam quando acontecerem")})` : null,
+        const extra = cont ? [cont.marcadas ? `+${fmtInt(cont.marcadas)} já ${plural(cont.marcadas, ga.marcada, `${ga.marcada}s`)} até o fim do mês (${plural(cont.marcadas, "conta quando acontecer", "contam quando acontecerem")})` : null,
           cont.faltas ? `${fmtInt(cont.faltas)} ${plural(cont.faltas, "falta fica", "faltas ficam")} fora da conta` : null].filter(Boolean).join(" · ") : "";
-        linhas.append(linhaMeta(`${cap(palavra.varios)} realizadas no mês`, p, fmtInt,
-          cont === null ? `Meta de ${fmtInt(metas.consultas)}. Ainda não consegui contar as ${palavra.varios} deste mês na Agenda.` : null, extra ? `${extra}.` : null));
+        linhas.append(linhaMeta(`${cap(palavra.varios)} ${ga.realizadas} no mês`, p, fmtInt,
+          cont === null ? `Meta de ${fmtInt(metas.consultas)}. Ainda não consegui contar ${ga.as} ${palavra.varios} deste mês na Agenda.` : null, extra ? `${extra}.` : null));
       }
       if (temAlguma) linhas.append(h("p", { class: "rel-nota ini-metas-leg" }, h("i", { class: "ini-meta-marca", "aria-hidden": "true" }), ` marca do ritmo do calendário: dia ${dia} de ${nDias}`));
       let form = null;
@@ -2968,9 +3187,10 @@ export async function montar(ctx) {
     const feitos = r.itens.filter(i => i.feito);
     return h("section", { class: "rel-cartao ini-onb rel-entra", "aria-labelledby": "ini-ob" },
       h("div", { class: "rel-cartao-topo" },
-        h("h2", { id: "ini-ob", class: "rel-h2" }, "Deixe o Órbita pronto"),
+        // plano 2000d · IY-042: sem «Órbita» fixo — a marca da sessão (white-label) ou «Deixe tudo pronto»
+        h("h2", { id: "ini-ob", class: "rel-h2" }, tituloChecklist(nomeMarca(ctx.marca))),
         h("p", { class: "rel-nota" }, `${r.obrigFeitos} de ${r.obrigatorios} passos · ${pct(r.pct)}`)),
-      h("span", { class: "ini-onb-barra", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(r.pct), "aria-label": "Progresso da configuração" },
+      h("span", { class: "ini-onb-barra", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(r.pct), "aria-valuetext": `${r.obrigFeitos} de ${r.obrigatorios} passos (${pct(r.pct)})`, "aria-label": "Progresso da configuração" },
         h("i", { style: { "--w": `${r.pct}%` } })),
       h("ol", { class: "ini-onb-lista" }, r.pendentes.slice(0, 4).map(i => itemPendente(i, r.proximo && i.id === r.proximo.id))),
       r.pendentes.length > 4 ? h("details", { class: "ini-onb-mais" }, h("summary", null, `Mais ${r.pendentes.length - 4} ${r.pendentes.length - 4 === 1 ? "passo" : "passos"}`),
@@ -3009,7 +3229,8 @@ export async function montar(ctx) {
   }
   /** plano 1500c · RC-195/RC-243: o «i» que explica no toque (ui.flutuante), igual ao dos KPIs (RB-179) — fora de links. */
   function botaoAjuda(k, nome, texto) {
-    const bt = h("button", { type: "button", class: "bt-icone ini-i-bt", "aria-label": `O que é «${nome}»?`, "aria-haspopup": "dialog", dataset: { k: `aj-${k}` } }, ui.icone("info"));
+    // plano 2000d · IY-046: nasce «recolhido» (aria-expanded=false), como o «i» dos KPIs — o ui.flutuante troca para true/false ao abrir e fechar
+    const bt = h("button", { type: "button", class: "bt-icone ini-i-bt", "aria-label": `O que é «${nome}»?`, "aria-haspopup": "dialog", "aria-expanded": "false", dataset: { k: `aj-${k}` } }, ui.icone("info"));
     bt.addEventListener("click", ev => {
       if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
       if (typeof ui.flutuante === "function") ui.flutuante(bt, h("p", { class: "ini-kpi-ajuda-txt" }, texto), { classe: "ini-kpi-ajuda-flut" });
@@ -3034,7 +3255,8 @@ export async function montar(ctx) {
     const marca = nomeMarca(ctx.marca);
     const ate = L.ddmmIso(anterior ? ultimoAnt : hoje);
     const texto = textoResumoMes(linhas, { empresa: ctx.cliente.nome || "", mes, ate: anterior ? "" : ate, marca });     // plano 1500c · IC-003
-    const fechar =() => { folha.remove(); document.documentElement.classList.remove("ini-imprimindo"); if (typeof removeEventListener === "function") removeEventListener("afterprint", fechar); focarK(anterior ? "resumo-anterior" : "resumo-mes"); };
+    // plano 2000d · IY-045: com a folha aberta a página de trás não rola junto (html.ini-folha-aberta); fechar devolve a rolagem
+    const fechar =() => { folha.remove(); document.documentElement.classList.remove("ini-imprimindo", "ini-folha-aberta"); if (typeof removeEventListener === "function") removeEventListener("afterprint", fechar); focarK(anterior ? "resumo-anterior" : "resumo-mes"); };
     const folha = h("section", { class: "ini-resumo-folha", role: "dialog", "aria-modal": "true", "aria-labelledby": "ini-rs-t", tabindex: "-1" },
       h("header", { class: "ini-resumo-cab" }, h("p", { class: "rel-olho" }, ctx.cliente.nome || ""), h("h2", { id: "ini-rs-t", class: "ini-resumo-titulo" }, `Resumo de ${mes}`),
         h("p", { class: "rel-nota", dataset: { k: "rs-periodo" } }, `${anterior ? `mês fechado, do dia 1 a ${ate}` : `do dia 1 até ${ate}`}${marca ? ` · números do ${marca}` : ""}`)),
@@ -3051,9 +3273,19 @@ export async function montar(ctx) {
           : null,
         h("button", { type: "button", class: "bt bt-prim", dataset: { k: "rs-imprimir" }, on: { click: () => { try { if (typeof print === "function") print(); } catch { /* sem impressão */ } } } }, "Imprimir ou salvar PDF"),
         h("button", { type: "button", class: "bt bt-sec", dataset: { k: "rs-fechar" }, on: { click: fechar } }, "Fechar")));
-    folha.addEventListener("keydown", ev => { if (ev.key === "Escape") { ev.preventDefault(); fechar(); } });
+    folha.addEventListener("keydown", ev => {
+      if (ev.key === "Escape") { ev.preventDefault(); fechar(); return; }
+      // plano 2000d · IY-043: é um diálogo modal — o Tab circula dentro da folha (antes saía para a tela de trás, escondida pelo modal)
+      if (ev.key === "Tab") {
+        const foc = folha.querySelectorAll("button:not([disabled]), a[href], [tabindex='0']");
+        if (!foc.length) return;
+        const prim = foc[0], ult = foc[foc.length - 1], at = document.activeElement;
+        if (ev.shiftKey && (at === prim || at === folha)) { ev.preventDefault(); ult.focus(); }
+        else if (!ev.shiftKey && (at === ult || !folha.contains(at))) { ev.preventDefault(); prim.focus(); }
+      }
+    });
     document.body.append(folha);
-    document.documentElement.classList.add("ini-imprimindo");
+    document.documentElement.classList.add("ini-imprimindo", "ini-folha-aberta");
     if (typeof addEventListener === "function") addEventListener("afterprint", fechar);
     if (typeof folha.focus === "function") folha.focus();
     return folha;
@@ -3152,13 +3384,13 @@ export async function montar(ctx) {
       jan.nota ? h("p", { class: "rel-nota ini-roi-cedo", dataset: { k: "roi-cedo" } }, jan.nota) : null,
       jan.ult30 ? h("p", { class: "rel-nota ini-roi-30", dataset: { k: "roi-30" } }, `Nos últimos 30 dias: cada R$ 1 virou ${textoMultiplo(jan.ult30.multiplo)} (${brl0(jan.ult30.receita)} ÷ ${brl0(jan.ult30.gasto)}).`) : null,
       // plano 1500c · IC-006 / plano 2000d · DR-246: o custo de cada lead DE ANÚNCIO no mês
-      r.cpl ? h("p", { class: "rel-nota ini-roi-cpl", dataset: { k: "roi-cpl" } }, `Cada lead de anúncio custou ${L.textoMoeda(r.cpl)} este mês.`) : null,
+      r.cpl ? h("p", { class: "rel-nota ini-roi-cpl", dataset: { k: "roi-cpl" } }, `Cada lead de anúncio custou ${L.textoMoeda(r.cpl, { centavos: r.cpl < 100 })} este mês.`     /* plano 2000d · IY-073 */) : null,
       plats ? h("ul", { class: "ini-roi-plats", "aria-label": "Retorno por plataforma", dataset: { k: "roi-plats" } }, plats.map(p => h("li", { class: ["ini-roi-plat", p.melhor && "ini-roi-melhor"] },
         typeof ui.icone === "function" ? ui.icone(p.id) : null, h("b", null, p.nome),
         h("span", { class: "rel-nota" }, ` · ${brl0(p.gasto)} investidos`, p.multiplo !== null ? ` → ${brl0(p.receita)} (cada R$ 1 virou ${textoMultiplo(p.multiplo)})` : "", p.leads !== null ? ` · ${p.leads} ${p.leads === 1 ? "lead" : "leads"}` : ""),
         p.melhor ? h("span", { class: "ini-roi-selo" }, "rendeu mais") : null))) : null,
       vendas ? h("div", { class: "ini-roi-vendas", dataset: { k: "roi-vendas" } }, h("p", { class: "rel-olho" }, "Últimas vendas que vieram de anúncio"),
-        h("ul", null, vendas.map(v => h("li", null, h("b", null, v.nome), [v.servico, v.valor !== null ? brl0(v.valor) : null, v.plataforma].filter(Boolean).map(t => ` · ${t}`).join(""))))) : null,
+        h("ul", null, vendas.map(v => h("li", null, h("b", null, v.nome), [v.servico, v.valor !== null ? brl0(v.valor) : null, v.plataforma, v.quando].filter(Boolean).map(t => ` · ${t}`).join(""))))) : null,     // IY-066
       podeAds ? h("a", { class: "rel-link", href: "#/anuncios", dataset: { k: "roi-ads" } }, "Ver campanhas") : null);
   }
 
@@ -3330,7 +3562,9 @@ export async function montar(ctx) {
     tPulso = setTimeout(() => { tPulso = 0; if (!document.hidden) carregar(); }, falta);
   });
   // plano 1000 (CR-166): com a aba oculta o pulso não recarrega — ao VOLTAR (passados 30 s da última leitura) o Início relê na hora
+  if (modoTv) pedirTravaTela();     // plano 2000d · IY-048
   const aoVoltarVisivel = () => {
+    if (!document.hidden && minha === montagem && modoTv) pedirTravaTela();     // IY-048: a trava cai quando a aba some
     if (document.hidden || minha !== montagem || metasEditando) return;
     if (Date.now() - ultimaCarga > INTERVALO_PULSO) { clearTimeout(tPulso); tPulso = 0; carregar(); }
   };
@@ -3338,6 +3572,8 @@ export async function montar(ctx) {
   // plano 1500c · RC-211: «R» atualiza o Início (sem modificador, fora de campos e de janelas abertas) e anuncia quando terminou
   const aoTecla = ev => {
     if (minha !== montagem || !ev || ev.defaultPrevented || ev.ctrlKey || ev.metaKey || ev.altKey || ev.repeat) return;
+    // plano 2000d · IY-051: Esc sai do modo TV
+    if (ev.key === "Escape" && modoTv && teclaLivre(ev.target, document)) { ev.preventDefault(); ctx.navegar("#/inicio"); return; }
     // plano 1500c · IC-009: Esc sai do exemplo (como o botão «Voltar e conectar»), fora de campos e sem folha aberta por cima
     if (ev.key === "Escape" && verExemplo && teclaLivre(ev.target, document)) { ev.preventDefault(); verExemplo = false; redesenhar(); return; }
     // plano 2000d · DR-332: «?» mostra os atalhos do Início

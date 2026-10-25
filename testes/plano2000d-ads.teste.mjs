@@ -209,7 +209,7 @@ test("DA-144 · o balde sem campanha leva aos contatos de anúncio no CRM", () =
 });
 test("DA-145 · funil por plataforma com a frase das taxas para o leitor de tela", () => {
   const p = { plat: "meta", nome: "Meta", gasto: 1, receita: 1, max: 40, etapas: [{ id: "convAds", v: 50, rotulo: "Conversões do anúncio" }, { id: "conversas", v: 40, rotulo: "Conversas no CRM" }, { id: "fecharam", v: 6, rotulo: "Fecharam" }], taxas: [{ pct: 80 }, { pct: 15 }] };
-  assert.equal(A.resumoFunilPlataforma(p, int), "Meta: de 40 conversas no crm, 6 fecharam (15%).");
+  assert.equal(A.resumoFunilPlataforma(p, int), "Meta: de 40 conversas no CRM, 6 fecharam (15%).");   // plano 2000d: NX-015 — «CRM» fica em maiúsculas
   const h = hh;
   assert.ok(A.criarFunilPlataformas({ h, dados: [p] }).querySelector(".ads-fp-resumo"));
 });
@@ -334,10 +334,12 @@ test("DA-205 · o piso da cor acompanha o tamanho da conta", () => {
   assert.equal(L.nivelCpa(30, 10, 15), "neutro", "sem mínimo: R$ 20 como antes");
   assert.equal(L.nivelCpa(30, 10, 15, L.gastoMinCor(10)), "ruim", "conta de R$ 10/dia passa a ver a cor");
   assert.equal(L.nivelCpa(30, 10, 300, L.gastoMinCor(5000)), "neutro");
-  assert.match(ADS, /L\.nivelCpa\(r\.t\.cpa, meta, r\.t\.gasto, minCor\)/);
+  assert.match(ADS, /L\.nivelCpa\(r\.t\.cpa, meta, r\.t\.gasto, minCor, tolC\)/);   // plano 2000d: NX-070 — com a tolerância do cliente
 });
 test("DA-191 · meta de custo com exemplo de conta", () => {
-  assert.match(AC.EXEMPLO_META_CUSTO, /Ex\.: meta de R\$ 20/); assert.match(ADSCFG, /\$\{EXEMPLO_META_CUSTO\}/);
+  // plano 2000d: NX-050 — o exemplo vem de exemploMetaCusto(tolerância do cliente); com 35% é o mesmo texto de antes
+  assert.match(AC.EXEMPLO_META_CUSTO, /Ex\.: meta de R\$ 20/); assert.match(ADSCFG, /\$\{exemploMetaCusto\(tol0\)\}/);
+  assert.equal(AC.exemploMetaCusto(35), AC.EXEMPLO_META_CUSTO);
 });
 test("DA-194 · simulador: quanto investir para N fechamentos", () => {
   const r = A.simularOrcamento({ gasto: 3000, fechamentos: 10, meta: 20, brl0, palavra: ["venda", "vendas"] });
@@ -750,3 +752,821 @@ test("DA-359/DA-363/DA-364/DA-391/DA-393/DA-394/DA-395/DA-396/DA-397/DA-398/DA-3
   assert.doesNotMatch(A.extremosTendencia(tres), /subindo/);
   assert.match(A.extremosTendencia([...tres, { i: 4, gasto: 90 }, { i: 5, gasto: 95 }, { i: 6, gasto: 99 }]), /tendência subindo/);
 });
+
+/* ============================================================ LOTE ads-x (complemento) · NX-001.. e pendências de outras frentes */
+const ADSX = () => ler("web/app/anuncios.js");
+test("NX-001 · o botão de WhatsApp do site sem hex literal no código do app (as cores vêm de COR_BOTAO_WA)", () => {
+  assert.equal(RC.COR_BOTAO_WA.fundo, "#25D366"); assert.equal(RC.COR_BOTAO_WA.texto, "#FFFFFF");
+  assert.match(RC.snippetBotaoWhatsapp("12999998888"), /background:#25D366;color:#FFFFFF/);
+  assert.equal(ler("web/app/rastreio-config.js").match(/["'`(\s:,]#[0-9a-fA-F]{6}\b|["'`(\s:,]#[0-9a-fA-F]{3}\b(?![-\w])/g), null);
+});
+test("NX-002/NX-003/NX-029 · apresentação: impressão sem «null», com a miniatura do campeão; Home/End", () => {
+  const S = ADSX();
+  assert.match(S, /pg\.append\(\.\.\.\[cp, /); assert.match(S, /s\.imagem \? h\("div", \{ class: "ads-apr-img" \}, h\("img"/);
+  assert.match(S, /\.filter\(Boolean\)\); impressao\.append\(pg\);/);
+  assert.match(S, /e\.key === "Home" \|\| e\.key === "End"\) \{ e\.preventDefault\(\); ir\(e\.key === "Home" \? 0 : slides\.length - 1\)/);
+});
+test("NX-004/NX-045 · renovação: «1 contato a mais» e «próximas semanas» fora do mês", () => {
+  const P = { t: { gasto: 1000 }, c: { conversas: 11, agendadas: 0, fecharam: 0, receita: 0 }, ca: { conversas: 10 }, rotulo: { titulo: "Últimos 30 dias", antes: "os 30 dias antes" }, periodo: 30 };
+  const t = A.textoRenovacao(P, { brl0, brl, int });
+  assert.match(t, /É 1 contato a mais que os 30 dias antes\./); assert.doesNotMatch(t, /(^|\s)1 contatos/);
+  assert.match(t, /Seguimos nas próximas semanas/);
+  assert.match(A.textoRenovacao({ ...P, periodo: "mes_ant" }, { brl0, brl, int }), /Seguimos no próximo mês/);
+});
+test("NX-005 · marco cortado em 60 caracteres sem partir emoji", () => {
+  const l = A.mesclarMarcos([], dia(2), "😀".repeat(70));
+  assert.equal(Array.from(l[0].t).length, 60);
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(l[0].t), "sem metade de emoji");
+});
+test("NX-006 · destino de fora do Brasil aparece com «+»", () => {
+  assert.deepEqual(A.destinosRelatorio("diario", { waGestor: ["+351 912 345 678", "5512999998888"] }), ["+351912345678", "(12) 99999-8888"]);
+});
+test("NX-007 · aviso de moeda com o nome certo da plataforma", () => {
+  assert.match(A.avisoMoeda([{ canal: "tiktok", moeda: "USD" }]), /a conta do TikTok está em USD/);
+  assert.match(A.avisoMoeda([{ canal: "google", currency: "eur" }]), /a conta do Google está em EUR/);
+});
+test("NX-008/NX-009 · ritmo: começo no meio do mês e dias de atendimento", () => {
+  const cedo = A.textoRitmo({ restam: 14, cedo: true, gasto: 100, proj: 0, pass: 17, diasMes: 31, desde: 15 }, 1000, { brl0, brl });
+  assert.match(cedo, /começaram no dia 15/); assert.match(cedo, /com 3 dias de anúncio/); assert.match(cedo, /a partir do dia 19/);
+  const ab = A.textoRitmo({ restam: 10, cedo: false, gasto: 900, proj: 1500, pass: 21, diasMes: 31, diasAbertosRestantes: 5 }, 1000, { brl0, brl });
+  assert.match(ab, /Orçamento diário sugerido: R\$ 20,00 \(somando as plataformas\) por dia de atendimento até o fim do mês/);
+  assert.match(A.textoRitmo({ restam: 2, cedo: false, gasto: 900, proj: 1500, pass: 29, diasMes: 31, diasAbertosRestantes: 0 }, 1000, { brl0, brl }), /Não há mais dias de atendimento/);
+  assert.match(A.textoRitmo({ restam: 10, cedo: false, gasto: 900, proj: 1500, pass: 21, diasMes: 31 }, 1000, { brl0, brl }), /R\$ 10,00 \(somando as plataformas\) até o fim/);
+});
+test("NX-010/NX-011 · a descrição do orçamento escreve a conta que o núcleo fez", () => {
+  const base = { ano: 2026, mes: 9, gasto: 300, proj: 1000, pass: 17, diasMes: 31, restam: 14 };
+  assert.match(A.descricaoOrcamentoMensal({ ...base, desde: 15 }, null, brl0), /÷ 3 dias de anúncio \(desde o dia 15\) × 17 dias até o fim do mês = R\$ 1000/);
+  assert.match(A.descricaoOrcamentoMensal({ ...base, diasAbertosRestantes: 9 }, null, brl0), /média dos dias abertos com anúncio × 9 dias abertos que faltam/);
+  assert.match(A.descricaoOrcamentoMensal({ ...base, cedo: true, desde: 15, diaMin: 5 }, null, brl0), /a projeção começa no 19º dia do mês \(os anúncios começaram no dia 15\)/);
+  assert.match(A.descricaoOrcamentoMensal(base, null, brl0), /÷ 17 dias decorridos × 31 dias do mês/);
+  assert.match(ADSX(), /projeção a partir do \$\{\(m\.desde > 1 \? m\.desde : 1\) \+ \(N\.DIAS_MIN_PROJECAO \|\| 5\) - 1\}º dia/);
+});
+test("NX-012/NX-021 · tendência com as palavras da vertical", () => {
+  const serieT = Array.from({ length: 8 }, (_, k) => ({ i: k, gasto: 10 + k, conversas: 1, agendadas: k === 2 ? 1 : 2, fecharam: 0, receita: 0 }));
+  const alvo = new No("div");
+  const g = A.criarGraficoTendencia(alvo, { G, serie: serieT, rotuloDia: i => `d${i}`, diaLongo: i => `dia ${i}`, fmtMoeda: v => `R$ ${v}`, fmtMoedaCurto: v => `R$ ${v}`, fmtNum: String,
+    resumo: "r", seriesExtras: true, palavraAg: ["orçamento", "orçamentos"], palavraFe: ["orçamento aprovado", "orçamentos aprovados"] });
+  const nomes = alvo.querySelectorAll(".g-leg-b").map(b => b.textContent);
+  assert.ok(nomes.includes("Orçamentos") && nomes.includes("Orçamentos aprovados"), nomes.join("|"));
+  g.mostrar(2); assert.match(alvo.querySelector(".g-dica").textContent, /1 orçamento\b/);
+  g.destruir();
+  assert.match(ADSX(), /tituloTend = `Tendência: investimento × conversas × \$\{WvT\.ag\[1\]\}`/);
+});
+test("NX-013/NX-014 · janela forte atravessa a meia-noite e não diz «24h»", () => {
+  const m = Array.from({ length: 7 }, () => Array(24).fill(0));
+  for (let d = 0; d < 7; d++) { m[d][22] = 2; m[d][23] = 2; m[d][0] = 2; m[d][1] = 2; m[d][12] = 1; }
+  assert.match(A.sugestaoHorarios(m), /^Das 22h às 2h chegam/);
+  const n = Array.from({ length: 7 }, () => Array(24).fill(0));
+  for (let d = 0; d < 7; d++) { n[d][20] = 2; n[d][21] = 2; n[d][22] = 2; n[d][23] = 2; n[d][10] = 1; }
+  assert.match(A.sugestaoHorarios(n), /^Das 20h à meia-noite chegam/);
+});
+test("NX-015 · funil por plataforma mantém «CRM»", () => {
+  assert.equal(A.resumoFunilPlataforma({ nome: "Google", etapas: [{ id: "convAds", v: 9, rotulo: "Conversões" }, { id: "conversas", v: 10, rotulo: "Conversas no CRM" }, { id: "fe", v: 2, rotulo: "Fecharam" }] }, String),
+    "Google: de 10 conversas no CRM, 2 fecharam (20%).");
+});
+test("NX-016 · a faixa de queda (role=alert) só é refeita quando o texto muda", () => {
+  assert.match(ADSX(), /if \(chaveFaixa === faixaFeita\) return;\s+faixaFeita = chaveFaixa;\s+ui\.limpar\(faixa\);/);
+});
+test("NX-017/NX-018/NX-020/NX-024/NX-026 · visão geral e ranking com as palavras da vertical", () => {
+  const S = ADSX();
+  assert.match(S, /por \$\{Wv\.ag\[0\]\} ` \/\* plano 2000d · NX-017/);
+  assert.match(S, /`1 \$\{Wv\.fe\[0\]\}` : `\$\{N\.int\(c\.semValor\)\} \$\{Wv\.fe\[1\]\}`/);
+  assert.match(S, /l: Wv\.agendaram, taxa/); assert.match(S, /l: Wv\.vieram, taxa: L\.razao\(c\.compareceram, c\.agendadas\), tl: `dos \$\{Wv\.ag\[1\]\}`/);
+  assert.match(S, /x\.c\.agendadas === 1 \? Wv\.ag\[0\] : Wv\.ag\[1\]\}, \$\{N\.int\(x\.c\.fecharam\)\} \$\{x\.c\.fecharam === 1 \? Wv\.fe\[0\] : Wv\.fe\[1\]\}/);
+  assert.match(S, /R\.por === "cpag" \? `\$\{N\.brl\(x\.cpag\)\} por \$\{Wr\.ag\[0\]\}`/);
+  assert.doesNotMatch(S, /\$\{N\.int\(x\.c\.agendadas\)\} agendados`/);
+});
+test("NX-019 · «Ver esses contatos» do balde abre os do período", () => {
+  assert.match(ADSX(), /class: "rel-link ads-balde-ver", href: linkContatosPeriodo\(N\.isoDe\(M\.dataDe\(P\.de\)\), N\.isoDe\(M\.dataDe\(P\.ate\)\)\)/);
+});
+test("DR-306/DR-307 · rosca Meta × Google e calor dia × hora com «Ver como tabela»", () => {
+  const S = ADSX();
+  assert.match(S, /centro: L\.centroRosca\(fatias\), tabela: true, colunaRotulo: "Plataforma", colunaValor: "Investimento" \}/);
+  assert.match(S, /G\.calor\(caixaHora, \{ matriz: ch\.matriz, dias: L\.SEMANA, fmt: fmtC, resumo, tabela: true \}\)/);
+});
+test("NX-025 · CSV dos criativos com a plataforma legível", () => {
+  assert.equal(A.csvCriativos([{ k: { nome: "A", plat: "meta" }, t: {} }]).linhas[0][1], "Meta");
+  assert.equal(A.csvCriativos([{ k: { nome: "A", plat: "google" }, t: {} }], p => `<${p}>`).linhas[0][1], "<google>");
+});
+test("NX-027/NX-046/NX-047 · busca do ranking: contagem certa, relógio solto ao sair e teclado de busca", () => {
+  assert.equal(A.textoBuscaRanking(0), "Nenhum anúncio com esse nome no ranking.");
+  assert.equal(A.textoBuscaRanking(1), "1 anúncio no ranking."); assert.equal(A.textoBuscaRanking(3), "3 anúncios no ranking.");
+  const S = ADSX();
+  assert.match(S, /stBusca\.textContent = textoBuscaRanking\(filtrarRanking\(R\.lista, buscaRank\)\.length\)/);
+  assert.match(S, /graficos\.push\(\{ destruir: \(\) => clearTimeout\(tB\) \}\)/);
+  assert.equal((S.match(/enterkeyhint: "search"/g) || []).length, 2);
+});
+test("NX-030 · o marco do dia (e da campanha) abre preenchido", () => {
+  const ms = [{ d: dia(3), t: "Troca de criativo" }, { d: dia(3), t: "Verba nova", c: "C1" }];
+  assert.equal(A.marcoDoDia(ms, dia(3)), "Troca de criativo");
+  assert.equal(A.marcoDoDia(ms, dia(3), "C1"), "Verba nova");
+  assert.equal(A.marcoDoDia(ms, dia(4)), "");
+  assert.match(ADSX(), /dia\.addEventListener\("change", preencher\); sel\.addEventListener\("change", preencher\); preencher\(\);/);
+});
+test("DA-337 · «Ontem:» na Visão geral com a mesma frase do diário", () => {
+  const M = montarDe({ metricas: serie(1, 8) });
+  const t = A.leituraOntem(M);
+  assert.ok(t.length > 5, t);
+  assert.ok(M.relDiario(M.R).split("\n").includes(t), "a mesma linha do diário");
+  assert.equal(A.leituraOntem({}), "");
+  assert.match(ADSX(), /const txtOntem = S\.plat \? "" : leituraOntem\(M\);/);
+});
+test("DA-004 · selo «dados parciais» na tabela de campanhas", () => {
+  assert.equal(A.tituloDivergencia(null), ""); assert.equal(A.tituloDivergencia({ dias: 0 }), "");
+  assert.match(A.tituloDivergencia({ dias: 2, diferenca: 12.5 }, brl), /^Em 2 dias a soma dos anúncios não bateu com o total da campanha \(diferença de R\$ 12,50\)/);
+  assert.match(ADSX(), /M\.divergenciasPorCampanha\(P\.de, P\.ate\)/);
+  assert.match(ADSX(), /class: "rel-chip rel-chip-aten ads-camp-parcial"/);
+});
+test("DU-155/NX-048 · a página de atalho tem título neutro e anuncia que está abrindo", () => {
+  const html = ler("web/ads/index.html");
+  assert.match(html, /<title>Anúncios<\/title>/); assert.match(html, /<p role="status">Abrindo o Nexus Ads…<\/p>/);
+});
+
+/* ---------- ads-x · Ajustes de anúncios (ads-config.js) ---------- */
+const CFGX = () => ler("web/app/ads-config.js");
+test("DA-025/NX-049 · tolerância do aviso de custo no formulário (10–100%) e a prévia conta o custo alto", () => {
+  assert.deepEqual(AC.lerLimitesRadar({ rd_toleranciaR1: "20" }), { radar: { toleranciaR1: 20 } });
+  assert.equal(AC.lerLimitesRadar({ rd_toleranciaR1: "5" }).erro.msg, "A tolerância do aviso de custo vai de 10% a 100%.");
+  assert.equal(AC.toleranciaR1Cfg({ radar: { toleranciaR1: 50 } }), 50); assert.equal(AC.toleranciaR1Cfg({ radar: { toleranciaR1: 500 } }), 35); assert.equal(AC.toleranciaR1Cfg({}), 35);
+  assert.match(CFGX(), /ui\.campo\(\{ nome: "rd_toleranciaR1", rotulo: "Tolerância do aviso de custo \(%\)"/);
+  // a prévia: custo de R$ 15 por conversa com meta R$ 10 — 50% acima avisa com 35% e não com 60%
+  const metricas = Array.from({ length: 7 }, (_, k) => met(dia(k + 1), { g: 30, conv: 2 }));
+  const montarCom = radar => N.montar(N.datasetDeLinhas({ metricas, leads: [], hoje: HOJE, dias: 7, cliente: { nome: "X", cfg: { cpaAlvo: 10, radar } } }));
+  const p35 = AC.previaLimitesRadar(montarCom, {}, 7), p60 = AC.previaLimitesRadar(montarCom, { toleranciaR1: 60 }, 7);
+  assert.ok(p35.n > p60.n, `${p35.n} × ${p60.n}`);
+  assert.match(p35.texto, /custo alto, CTR, frequência ou campanha sem conversa/);
+});
+test("NX-050 · o exemplo da meta segue a tolerância do cliente", () => {
+  assert.equal(AC.exemploMetaCusto(), AC.EXEMPLO_META_CUSTO);
+  assert.match(AC.exemploMetaCusto(50), /tolerância de 50%, o radar avisa quando o custo por conversa passa de R\$ 30 \(a R\$ 24, 20% acima, ainda sem aviso\)/);
+  assert.match(AC.exemploMetaCusto(15), /passa de R\$ 23\.$/);
+  assert.match(CFGX(), /O radar avisa quando passa de \$\{tol0\}% acima/);
+});
+test("AC-063/DA-009 · dias sem atendimento e a pausa nesses dias", () => {
+  assert.deepEqual(AC.lerDiasFechados({ fd_0: true, fd_6: true, fd_3: false }), [0, 6]);
+  assert.deepEqual(AC.lerDiasFechados({}), []);
+  const S = CFGX();
+  assert.match(S, /h\("legend", \{ class: "rotulo" \}, "Dias sem atendimento"\)/);
+  assert.match(S, /DIAS_SEMANA_CFG\.map\(\(\[d, rot\]\) => ui\.campo\(\{ tipo: "checkbox", nome: `fd_\$\{d\}`/);
+  assert.match(S, /diasFechados, pausaDiasFechados: !!v\.pausaDiasFechados && diasFechados\.length > 0/);
+  assert.match(ler("web/app/relatorios.css"), /\.cfga-dias \{ display: flex; flex-wrap: wrap;/);
+});
+test("AC-036 · meta de custo própria por campanha", () => {
+  const camps = [{ id: "meta:1", nome: "Implante" }, { id: "google:2", nome: "Busca" }];
+  assert.deepEqual(AC.lerMetasCampanha({ "mc_meta:1": "45,50", "mc_google:2": "" }, camps, { "meta:9": 30, "google:2": 80 }), { metas: { "meta:9": 30, "meta:1": 45.5 } });
+  assert.deepEqual(AC.lerMetasCampanha({ "mc_meta:1": "0" }, camps).erro, { campo: "mc_meta:1", msg: "A meta de «Implante» precisa ser um valor em reais maior que zero (ou fique vazia)." });
+  assert.match(CFGX(), /metasCampanha: mc\.metas \}/);
+  // o núcleo usa a meta da campanha (r1 avisa nela e não na da plataforma)
+  const M = N.montar(N.datasetDeLinhas({ metricas: serie(1, 7, { g: 40, conv: 2 }), leads: [], hoje: HOJE, dias: 30, cliente: { nome: "X", cfg: { cpaAlvo: 100, metasCampanha: { "meta:C1": 10 } } } }));
+  assert.equal(M.metaDaCampanha(M.CAMP["meta:C1"]), 10);
+});
+test("NX-041/NX-043/NX-044 · cor curta, WhatsApp de fora do Brasil e valor colado em formato americano", () => {
+  assert.deepEqual(AC.lerCorAgencia("1af"), { ok: true, valor: "#11AAFF" });
+  assert.equal(AC.lerCorAgencia("#12345").ok, false);
+  assert.equal(AC.formatarWa("351912345678"), "+351912345678");
+  assert.equal(AC.formatarWa("5512999998888"), "+55 (12) 99999-8888");
+  assert.equal(AC.lerReais("1,500.50"), 1500.5); assert.equal(AC.lerReais("1.500,50"), 1500.5); assert.equal(AC.lerReais("1,500"), 1.5, "vírgula sozinha continua decimal");
+});
+test("NX-042 · o mesmo WhatsApp com e sem 55 é gravado uma vez só", () => {
+  assert.match(CFGX(), /const numeros = s => destinosUnicos\(String\(s \|\| ""\)\.split/);
+  assert.deepEqual(AC.destinosUnicos(["12999998888", "5512999998888"]), ["12999998888"]);
+});
+test("NX-059 · «Testar conexão» com milhar nas linhas lidas", () => {
+  assert.match(AC.textoTesteConexao([{ canal: "meta", ok: true, linhas: 12345 }], "meta", "Meta").texto, /12\.345 linhas lidas/);
+});
+test("NX-068 · «Sincronizar agora» descansa 1 minuto depois de pedir", () => {
+  assert.equal(AC.ESPERA_NOVO_SYNC_MS, 60000);
+  const S = CFGX();
+  assert.match(S, /bCiclo\.disabled = true; bCiclo\.setAttribute\("aria-describedby", "cfga-x-st"\)/);
+  assert.match(S, /tDescanso = setTimeout\(\(\) => \{ bCiclo\.disabled = false;/);
+});
+
+/* ---------- ads-x · rel-logica: régua do cliente, vertical e textos ---------- */
+test("NX-070 · «perto do limite» do custo segue a tolerância do cliente", () => {
+  assert.equal(L.tolCpa({ radar: { toleranciaR1: 60 } }), 60); assert.equal(L.tolCpa({}), 35); assert.equal(L.tolCpa({ radar: { toleranciaR1: 5 } }), 35);
+  assert.equal(L.nivelCpa(15, 10, 100, 20), "ruim", "padrão 35%: 50% acima é ruim");
+  assert.equal(L.nivelCpa(15, 10, 100, 20, 60), "aten", "com 60%: ainda é atenção");
+  assert.match(ADS, /const tolC = L\.tolCpa\(M\.CFG\);/);
+});
+test("NX-071 · a cor da campanha usa a meta própria dela", () => {
+  assert.match(ADS, /const metaCamp = c => \(typeof M\.metaDaCampanha === "function"/);
+  assert.match(ADS, /const meta = metaCamp\(r\.c\);/);
+});
+test("NX-072 · motivos de perda iguais com caixa/acento diferentes somam juntos", () => {
+  const M = { R: 40, dataDe: i => new Date(2026, 9, i), LEADS: [
+    { plat: "meta", i: 33, etapaReal: "perdida", bruto: { motivo_perda: "Preço" } },
+    { plat: "meta", i: 34, etapaReal: "perdida", bruto: { motivo_perda: "preco " } },
+    { plat: "meta", i: 35, etapaReal: "perdida", bruto: { motivo_perda: "PREÇO" } },
+    { plat: "meta", i: 36, etapaReal: "perdida", bruto: { motivo_perda: "Distância" } } ] };
+  assert.deepEqual(L.perdasPorMotivo(M, { dias: 30 }).map(x => ({ ...x })), [{ motivo: "Preço", n: 3 }, { motivo: "Distância", n: 1 }]);
+});
+test("NX-073 · funil por plataforma com as etapas da vertical", () => {
+  const M = montarDe({ metricas: serie(1, 7) });
+  const of = L.funilPorPlataforma(M, { dias: 30, vertical: "oficina" });
+  assert.deepEqual(of[0].etapas.map(e => e.rotulo).slice(2, 4), ["Pediram orçamento", "Trouxeram o carro"]);
+  assert.deepEqual(L.funilPorPlataforma(M, { dias: 30 })[0].etapas.map(e => e.rotulo).slice(2, 4), ["Agendaram", "Compareceram"]);
+  assert.match(ADS, /fp\[0\]\.etapas\.map\(e => e\.rotulo\)/);
+});
+test("NX-074 · «Testar conexão» lê «1.234 linhas» inteiro", () => {
+  const r = L.resultadoTesteConexao({ cliente: { integracoes: [{ canal: "meta", ok: true, status: "ok — 1.234 linhas" }, { canal: "google", ok: true, status: "ok — 12 linhas" }] } });
+  assert.equal(r[0].linhas, 1234); assert.equal(r[1].linhas, 12);
+});
+test("NX-075 · chip de Anúncios no dia 1º diz o nome do mês, como os cartões", () => {
+  const M = { R: 10, dataDe: i => (i === 11 ? new Date(2026, 9, 1, 12) : new Date(2026, 8, 30, 12)) };
+  assert.equal(L.textoChipAnuncios("mes", "", M), "Setembro (até ontem) · Tudo");
+  assert.equal(L.textoChipAnuncios("mes", "meta"), "Este mês · Meta");
+});
+test("NX-076 · centro da rosca com a fatia «Outras» maior", () => {
+  assert.deepEqual(L.centroRosca([{ rotulo: "Meta", valor: 10 }, { rotulo: "Outras (TikTok)", valor: 30 }]), { valor: "75%", rotulo: "em outras plataformas" });
+  assert.equal(L.centroRosca([{ rotulo: "Meta", valor: 30 }, { rotulo: "Google", valor: 10 }]).rotulo, "no Meta");
+});
+test("NX-077 · queda da conexão: «hoje às» e «dd/mm às»", () => {
+  const agora = Date.now();
+  const hoje = L.textoQueda([{ canal: "meta", sync: new Date(agora - 60e3).toISOString() }], agora);
+  assert.match(hoje, /^Meta desconectado · dados até (hoje às|\d\d\/\d\d às) \d\d:\d\d\.$/);
+  const velho = L.textoQueda([{ canal: "google", sync: new Date(agora - 5 * 864e5).toISOString() }], agora);
+  assert.match(velho, /dados até \d\d\/\d\d às \d\d:\d\d\./); assert.doesNotMatch(velho, /hoje/);
+});
+test("NX-078 · origem de anúncio do TikTok sai com o nome da plataforma", () => {
+  assert.equal(L.nomeOrigem("anuncio", "tiktok"), "Anúncio · TikTok");
+  assert.equal(L.nomeOrigem("anuncio", "meta"), "Anúncio · Meta");
+});
+
+test("NX-079 · status da lista com uma campanha só fica no singular", () => {
+  const linha = id => ({ c: { id, nome: id, plat: "meta" }, t: { gasto: 10, conversoes: 1, cpa: 10 }, k: { conversas: 1, agendadas: 0, fecharam: 0, receita: 0 }, roas: null });
+  const um = A.criarPainelCampanhas({ h: hh, linhas: [linha("a")], estado: {}, periodo: "7 dias" });
+  assert.match(textoDe(um.elemento.querySelector(".ads-camp-resumo")), /^1 de 1 campanha · 7 dias$/);
+  const dois = A.criarPainelCampanhas({ h: hh, linhas: [linha("a"), linha("b")], estado: {}, periodo: "7 dias" });
+  assert.match(textoDe(dois.elemento.querySelector(".ads-camp-resumo")), /^2 de 2 campanhas/);
+});
+test("NX-080 · a descrição da regra diz a plataforma dela", () => {
+  assert.match(ADS, /\$\{r\.plat \? ` \(\$\{r\.plat === "google" \? "Google" : "Meta"\}\)` : ""\}/);
+});
+
+/* ============================================================ ads-x · Rastreio (rastreio-config.js e rastreio.v3.js) — NX-201.. */
+{
+
+const NX_CHAVE = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718";
+const NX_WA = "https://wa.me/5512999990000?text=Ol%C3%A1";
+const nxEsperar = ms => new Promise(r => setTimeout(r, ms));
+const nxSimples = o => JSON.parse(JSON.stringify(o));   // objeto de outro contexto (vm)
+/** elemento mínimo (só atributos, como o script usa) */
+function nxEl(tag, attrs = {}) {
+  const a = { ...attrs };
+  return { nodeType: 1, tagName: tag.toUpperCase(), parentNode: null, attrs: a,
+    getAttribute: k => (k in a ? a[k] : null), setAttribute: (k, v) => { a[k] = String(v); }, removeAttribute: k => { delete a[k]; } };
+}
+/** campo de formulário; `eventos` recebe os eventos disparados nele */
+function nxCampo(name, { type = "hidden", value = "", attrs = {} } = {}) {
+  const eventos = [];
+  return { name, type, value, attrs, eventos, getAttribute: k => (k === "type" ? type : k in attrs ? attrs[k] : null), dispatchEvent: e => { eventos.push(e.type); return true; } };
+}
+/** querySelectorAll dos campos: name="x", name$="[x]" (Elementor) e data-orbita="x" */
+function nxCamposQS(inputs) {
+  return sel => {
+    let m = /^input\[name="([^"]+)"\]$/.exec(sel); if (m) return inputs.filter(i => i.name === m[1]);
+    m = /^input\[name\$="\[([^\]]+)\]"\]$/.exec(sel); if (m) return inputs.filter(i => String(i.name).endsWith(`[${m[1]}]`));
+    m = /^input\[data-orbita="([^"]+)"\]$/.exec(sel); if (m) return inputs.filter(i => i.attrs && i.attrs["data-orbita"] === m[1]);
+    return [];
+  };
+}
+
+function montarNX({ search = "", hash = "", pathname = "/implante", referrer = "", ua = "", webdriver = false, guardado = null, resposta = null, status = 200, corpoErro = null,
+  inputs = [], attrs = {}, cfgJanela = null, antes = {}, mo = null, iframes = [], botoes = [], pendurar = false, prerendering = false } = {}) {
+  const ouvintes = {}, loja = new Map(), sessao = new Map(), chamadas = [], navegacao = [], avisos = [], infos = [], atrasos = [];
+  if (guardado) loja.set("orbita:rastreio:v3", JSON.stringify(guardado));
+  const script = nxEl("script", { "data-chave": NX_CHAVE, ...attrs });
+  const qsCampos = nxCamposQS(inputs);
+  const document = { currentScript: script, referrer, readyState: "complete", documentElement: mo ? {} : undefined, prerendering,
+    addEventListener: (t, f) => { (ouvintes[t] ||= []).push(f); },
+    querySelectorAll: sel => {
+      if (sel === "iframe") return iframes;
+      if (sel === "[data-orbita-wa]") return botoes;
+      if (sel === "[data-orbita-original]") return [];
+      return qsCampos(sel);
+    } };
+  const janela = {
+    document, addEventListener() {},
+    localStorage: { getItem: k => (loja.has(k) ? loja.get(k) : null), setItem: (k, v) => loja.set(k, String(v)), removeItem: k => loja.delete(k) },
+    sessionStorage: { getItem: k => (sessao.has(k) ? sessao.get(k) : null), setItem: (k, v) => sessao.set(k, String(v)), removeItem: k => sessao.delete(k) },
+    location: { search, hash, hostname: "site.com", origin: "https://site.com", pathname, href: "https://site.com" + pathname + search + hash, assign: u => navegacao.push(u) },
+    navigator: { userAgent: ua, webdriver }, history: { pushState() {}, replaceState() {} },
+    fetch: (url, init) => {
+      chamadas.push({ url, corpo: JSON.parse(init.body) });
+      if (pendurar) return new Promise(() => {});
+      if (status !== 200) return Promise.resolve({ ok: false, status, json: async () => corpoErro || {} });
+      return Promise.resolve({ ok: true, status: 200, json: async () => (resposta ? resposta(chamadas.length) : { ok: true, codigo: "K7Q2P", eventos: true }) });
+    },
+    AbortController, Promise, setTimeout: (f, ms) => { atrasos.push(ms); return setTimeout(f, ms); }, clearTimeout, JSON, Date, encodeURIComponent, decodeURIComponent,
+    String, Object, Number, Array, RegExp, Math,
+    console: { warn: (...a) => avisos.push(a.join(" ")), info: (...a) => infos.push(a.join(" ")) }, ...antes,
+  };
+  if (mo) janela.MutationObserver = mo;
+  if (cfgJanela) janela.ORBITA_RASTREIO = cfgJanela;
+  janela.window = janela;
+  vm.runInContext(V3, vm.createContext(janela), { filename: "rastreio.v3.js" });
+  const disparar = (tipo, alvo, extra = {}) => { const ev = { type: tipo, target: alvo, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...extra }; for (const f of ouvintes[tipo] || []) f(ev); return ev; };
+  return { janela, document, ouvintes, disparar, chamadas, navegacao, avisos, infos, atrasos, loja, sessao,
+    guardadoAgora: () => JSON.parse(loja.get("orbita:rastreio:v3") || sessao.get("orbita:rastreio:v3") || "null"), api: janela.OrbitaRastreio };
+}
+const nxCr = (...a) => { const r = montarNX().api.classificarReferencia(...a); return r == null ? r : nxSimples(r); };
+
+/* ---------------- origem da visita ---------------- */
+test("NX-201 · subdomínio do próprio site é navegação interna, não «outro site»", () => {
+  assert.equal(nxCr("https://blog.site.com/post", "site.com"), null, "antes: {src: blog.site.com, tipo: site}");
+  assert.equal(nxCr("https://site.com/", "loja.site.com"), null);
+  assert.equal(nxCr("https://www.clinica.com.br/x", "agenda.clinica.com.br"), null);
+  assert.deepEqual(nxCr("https://outra.com.br/x", "loja.clinica.com.br"), { src: "outra.com.br", tipo: "site" }, "«com.br» sozinho nunca casa");
+});
+test("NX-202 · Telegram, Reddit, Bluesky e o atalho do WhatsApp são redes sociais", () => {
+  assert.deepEqual(nxCr("https://t.me/canal", "site.com"), { src: "telegram", tipo: "social" });
+  assert.deepEqual(nxCr("https://www.reddit.com/r/x", "site.com"), { src: "reddit", tipo: "social" });
+  assert.deepEqual(nxCr("https://bsky.app/profile/x", "site.com"), { src: "bluesky", tipo: "social" });
+  assert.deepEqual(nxCr("https://l.wl.co/l?u=x", "site.com"), { src: "whatsapp", tipo: "social" });
+});
+test("NX-203 · mais buscadores (Qwant, Startpage, Baidu, Naver, AOL)", () => {
+  assert.deepEqual(nxCr("https://www.qwant.com/?q=x", "site.com"), { src: "qwant", tipo: "busca" });
+  assert.deepEqual(nxCr("https://www.startpage.com/sp/search", "site.com"), { src: "startpage", tipo: "busca" });
+  assert.deepEqual(nxCr("https://search.aol.com/x", "site.com"), { src: "aol", tipo: "busca" });
+});
+test("NX-204 · webmail é «email» (o Gmail no navegador virava «busca do Google»)", () => {
+  assert.deepEqual(nxCr("https://mail.google.com/", "site.com"), { src: "gmail", tipo: "email" });
+  assert.deepEqual(nxCr("https://outlook.live.com/mail/0/", "site.com"), { src: "outlook", tipo: "email" });
+  assert.deepEqual(nxCr("https://mail.yahoo.com/d/folders/1", "site.com"), { src: "yahoo-mail", tipo: "email" });
+  assert.deepEqual(nxCr("https://www.google.com/", "site.com"), { src: "google", tipo: "busca" }, "a busca continua busca");
+});
+test("NX-205 · DeepSeek, Grok e Mistral são assistentes de IA", () => {
+  assert.deepEqual(nxCr("https://chat.deepseek.com/a", "site.com"), { src: "deepseek", tipo: "ia" });
+  assert.deepEqual(nxCr("https://grok.com/chat/1", "site.com"), { src: "grok", tipo: "ia" });
+  assert.deepEqual(nxCr("https://chat.mistral.ai/chat", "site.com"), { src: "mistral", tipo: "ia" });
+});
+test("NX-216 · Threads e X no navegador interno dos apps", () => {
+  assert.deepEqual(nxCr("", "site.com", "Mozilla/5.0 (iPhone) AppleWebKit Barcelona 289.0.0.77"), { src: "threads", tipo: "social" });
+  assert.deepEqual(nxCr("", "site.com", "Mozilla/5.0 (Linux; Android 14) TwitterAndroid"), { src: "x", tipo: "social" });
+});
+
+/* ---------------- parâmetros da URL ---------------- */
+test("NX-206 · utm com e-mail, CPF ou telefone formatado não é guardada (id numérico de campanha é)", () => {
+  const api = montarNX().api;
+  const r = nxSimples(api.capturar("?utm_source=news&utm_term=maria%40email.com&utm_content=(12)%2099999-8888&utm_medium=123.456.789-09"));
+  assert.deepEqual(r, { utm_source: "news" }, "antes: o e-mail, o telefone e o CPF iam para o aparelho e para o Órbita");
+  assert.equal(nxSimples(api.capturar("?utm_campaign=120210000000000000")).utm_campaign, "120210000000000000", "id do Meta (18 dígitos) continua");
+  assert.equal(nxSimples(api.capturar("?utm_source=@clinica")).utm_source, "@clinica", "@perfil sem domínio não é e-mail");
+});
+test("NX-207 · macro não trocada pela plataforma não vira campanha nem apaga a verdadeira", () => {
+  const api = montarNX().api;
+  assert.deepEqual(nxSimples(api.capturar("?utm_campaign=%7Bcampaignid%7D&utm_content={{ad.id}}&utm_term=__CID__&gclid={gclid}&utm_source=google")), { utm_source: "google" });
+  const g = { v: 3, t: Date.now() - 1000, d: { utm_source: "meta", utm_campaign: "9" }, c: null, r: null };
+  const m = montarNX({ search: "?utm_campaign={{campaign.id}}&fbclid=__X__", guardado: g });
+  assert.equal(m.guardadoAgora().d.utm_campaign, "9", "antes: «{{campaign.id}}» trocava a campanha guardada");
+});
+test("NX-214 · «&amp;» de endereço copiado de HTML não esconde a campanha", () => {
+  const api = montarNX().api;
+  assert.deepEqual(nxSimples(api.capturar("?a=1&amp;utm_source=meta&amp;utm_campaign=7")), { utm_source: "meta", utm_campaign: "7" });
+});
+
+/* ---------------- privacidade do envio ---------------- */
+test("NX-208 · pedaço do caminho com cara de token vira «-»; slug comum fica", () => {
+  const api = montarNX().api;
+  assert.equal(api.caminhoSeguro("/redefinir/a8F3k2L9q0Z7x6C5v4B3n2M1"), "/redefinir/-");
+  assert.equal(api.caminhoSeguro("/pedido/9f86d081884c7d659a2feaa0c55ad015"), "/pedido/-");
+  assert.equal(api.caminhoSeguro("/implante-dentario-em-taubate-2026"), "/implante-dentario-em-taubate-2026");
+  assert.equal(api.caminhoSeguro("/blog/clareamento-dental-quanto-custa"), "/blog/clareamento-dental-quanto-custa");
+});
+test("NX-209 · a página enviada tem no máximo 300 caracteres", async () => {
+  const m = montarNX({ pathname: "/" + "categoria/".repeat(100) });
+  m.disparar("click", nxEl("a", { href: NX_WA }));
+  await nxEsperar(10);
+  assert.ok(m.chamadas[0].corpo.p_dados.pagina.length <= 300, "antes: o caminho inteiro (o servidor recusa p_dados acima de 8 KB)");
+});
+
+/* ---------------- falhas e robôs ---------------- */
+test("NX-210 · o motivo da falha em português no diagnóstico", async () => {
+  const m = montarNX({ status: 400, corpoErro: { code: "22023", message: "limite_taxa" } });
+  await m.api.codigo();
+  assert.equal(m.api.diagnostico().ultimoErro.motivo, "limite de cliques por minuto atingido", "antes: «http»");
+  const s = montarNX({ status: 503 });
+  await s.api.codigo();
+  assert.match(s.api.diagnostico().ultimoErro.motivo, /fora do ar \(erro 503\)/);
+});
+test("NX-211 · chave pública recusada (401): para de pedir e avisa uma vez no console", async () => {
+  const m = montarNX({ status: 401 });
+  await m.api.codigo();
+  assert.equal(m.chamadas.length, 1);
+  assert.equal(m.avisos.filter(a => /recusou o acesso \(401\)/.test(a)).length, 1, "antes: só com ?orbita_debug");
+  await nxEsperar(5);
+  m.disparar("click", nxEl("a", { href: NX_WA }));
+  await nxEsperar(10);
+  assert.equal(m.chamadas.length, 1, "o clique seguinte não insiste");
+  assert.equal(m.navegacao[0], NX_WA, "o link segue sem código");
+  assert.equal(m.api.diagnostico().recusada, true);
+});
+test("NX-212 · robôs não registram nada; celular CUBOT não é robô", async () => {
+  const m = montarNX({ search: "?utm_source=google&gclid=G1", ua: "Mozilla/5.0 (compatible; AdsBot-Google; +http://www.google.com/adsbot.html)" });
+  await nxEsperar(10);
+  const ev = m.disparar("click", nxEl("a", { href: NX_WA }));
+  await nxEsperar(10);
+  assert.equal(m.chamadas.length, 0, "antes: o AdsBot gerava aquecimento e clique a cada visita");
+  assert.equal(ev.defaultPrevented, true); assert.equal(m.navegacao[0], NX_WA, "o link segue o original, sem esperar");
+  const w = montarNX({ search: "?utm_source=meta&utm_campaign=1", webdriver: true }); await nxEsperar(10);
+  assert.equal(w.chamadas.length, 0);
+  const c = montarNX({ search: "?utm_source=meta&utm_campaign=1", ua: "Mozilla/5.0 (Linux; Android 10; CUBOT X30) Chrome/120" }); await nxEsperar(10);
+  assert.equal(c.chamadas.length, 1);
+  assert.equal(m.api.diagnostico().robo, true);
+});
+test("NX-213 · página pré-renderizada só aquece quando a pessoa abre", async () => {
+  const m = montarNX({ search: "?utm_source=meta&utm_campaign=1", prerendering: true });
+  await nxEsperar(10);
+  assert.equal(m.chamadas.length, 0, "antes: a pré-renderização já criava um código");
+  m.document.prerendering = false;
+  for (const f of m.ouvintes.prerenderingchange || []) f({});
+  await nxEsperar(10);
+  assert.equal(m.chamadas.length, 1); assert.equal(m.chamadas[0].corpo.p_dados.evento, "aquecimento");
+});
+
+/* ---------------- contatos, encurtadores e links ---------------- */
+test("NX-215 · sms: e Telegram contam como contato", () => {
+  const cc = montarNX().api.canalContato;
+  assert.equal(cc("sms:+5512999990000"), "sms"); assert.equal(cc("https://t.me/clinica"), "telegram"); assert.equal(cc("https://telegram.me/clinica"), "telegram");
+});
+test("NX-217 · mais encurtadores reconhecidos", () => {
+  const api = montarNX().api;
+  for (const u of ["https://rb.gy/abc", "https://t.ly/x", "https://tiny.cc/x", "https://v.gd/x", "https://qrco.de/x"]) assert.equal(api.ehEncurtador(u), true, u);
+});
+test("NX-231 · código vencido no href volta ao original antes do ctrl+clique", () => {
+  const m = montarNX();
+  const a = nxEl("a", { href: `${NX_WA}%20%5Bref%20OLD22%5D`, "data-orbita-original": NX_WA });
+  m.disparar("click", a, { ctrlKey: true });
+  assert.equal(a.getAttribute("href"), NX_WA, "antes: o [ref] velho seguia para a nova aba");
+  const b = nxEl("a", { href: `${NX_WA}%20%5Bref%20OLD22%5D`, "data-orbita-original": NX_WA });
+  m.disparar("contextmenu", b);
+  assert.equal(b.getAttribute("href"), NX_WA, "copiar link também sai sem o código vencido");
+});
+test("NX-229/NX-230 · API: codigo() é aquecimento; link() de mensagem curta não cria código", async () => {
+  const m = montarNX();
+  await m.api.codigo();
+  assert.equal(m.chamadas[0].corpo.p_dados.evento, "aquecimento", "antes: cada leitura contava um clique");
+  const n = montarNX();
+  assert.equal(await n.api.link("https://wa.me/message/ABCDEF"), "https://wa.me/message/ABCDEF");
+  assert.equal(n.chamadas.length, 0, "antes: criava um código que nunca ia na mensagem");
+});
+
+/* ---------------- acessibilidade e iframes ---------------- */
+test("NX-218 · <div data-orbita-wa> ganha foco e abre pelo teclado", async () => {
+  const div = nxEl("div", { "data-orbita-wa": NX_WA }), btn = nxEl("button", { "data-orbita-wa": NX_WA }), comTab = nxEl("span", { "data-orbita-wa": NX_WA, tabindex: "-1", role: "button" });
+  const m = montarNX({ botoes: [div, btn, comTab] });
+  assert.equal(div.getAttribute("tabindex"), "0"); assert.equal(div.getAttribute("role"), "link");
+  assert.equal(btn.getAttribute("tabindex"), null, "<button> já é focável");
+  assert.equal(comTab.getAttribute("tabindex"), "-1"); assert.equal(comTab.getAttribute("role"), "button", "o que o site definiu fica");
+  const ev = m.disparar("keydown", div, { key: "Enter" });
+  assert.equal(ev.defaultPrevented, true);
+  await nxEsperar(20);
+  assert.equal(m.navegacao.length, 1, "antes: Enter no div não fazia nada"); assert.match(m.navegacao[0], /%5Bref%20K7Q2P%5D$/);
+  m.disparar("keydown", nxEl("input"), { key: "Enter" }); await nxEsperar(5);
+  assert.equal(m.navegacao.length, 1, "Enter fora do botão não é tocado");
+});
+test("NX-219 · iframe que carrega depois e iframe inserido depois são ligados", () => {
+  const ouvA = {}, ouvB = {}, ouvIfr = {};
+  const ifr = { contentDocument: { addEventListener: (t, f) => { (ouvA[t] ||= []).push(f); } }, addEventListener: (t, f) => { ouvIfr[t] = f; } };
+  let cb = null; const MO = function (f) { cb = f; this.observe = () => {}; };
+  const lista = [ifr];
+  montarNX({ iframes: lista, mo: MO });
+  assert.equal((ouvA.click || []).length, 1);
+  ifr.contentDocument = { addEventListener: (t, f) => { (ouvB[t] ||= []).push(f); } };
+  ouvIfr.load();
+  assert.equal((ouvB.click || []).length, 1, "antes: o documento carregado (depois do about:blank) ficava sem o ouvinte");
+  const ouvC = {}; lista.push({ contentDocument: { addEventListener: (t, f) => { (ouvC[t] ||= []).push(f); } } });
+  cb([{ addedNodes: [{ nodeType: 1, tagName: "IFRAME" }] }]);
+  assert.equal((ouvC.click || []).length, 1, "antes: iframe inserido depois era ignorado");
+});
+test("NX-220 · com data-consentimento, o iframe é ligado já no carregamento", () => {
+  const ouv = {}, ifr = { contentDocument: { addEventListener: (t, f) => { (ouv[t] ||= []).push(f); } } };
+  montarNX({ iframes: [ifr], attrs: { "data-consentimento": "aguardar" } });
+  assert.equal((ouv.click || []).length, 1, "antes: só com consentimento no carregamento — consentir() depois nunca ligava o iframe");
+});
+
+/* ---------------- formulários ---------------- */
+test("NX-221 · Elementor (form_fields[utm_source]) e data-orbita=\"utm_campaign\" recebem a origem", () => {
+  const a = nxCampo("form_fields[utm_source]"), b = nxCampo("campanha_crm", { attrs: { "data-orbita": "utm_campaign" } });
+  montarNX({ search: "?utm_source=meta&utm_campaign=55", inputs: [a, b] });
+  assert.equal(a.value, "meta"); assert.equal(b.value, "55");
+});
+test("NX-222 · campo preenchido pelo script acompanha a campanha nova; o do site não", async () => {
+  const meu = nxCampo("utm_campaign"), doSite = nxCampo("utm_source", { value: "manual" });
+  const m = montarNX({ search: "?utm_source=meta&utm_campaign=1", inputs: [meu, doSite] });
+  assert.equal(meu.value, "1");
+  m.janela.location.search = "?utm_source=google&utm_campaign=2";
+  m.janela.history.pushState({}, "", "/b");
+  await nxEsperar(10);
+  assert.equal(meu.value, "2", "antes: ficava a campanha antiga");
+  assert.equal(doSite.value, "manual");
+});
+test("NX-223 · orbita_ref recebe o código assim que ele chega", async () => {
+  const ref = nxCampo("orbita_ref");
+  montarNX({ search: "?utm_source=meta&utm_campaign=1", inputs: [ref] });
+  assert.equal(ref.value, "");
+  await nxEsperar(20);
+  assert.equal(ref.value, "K7Q2P", "antes: só no próximo carregamento ou envio");
+});
+test("NX-224 · o campo preenchido avisa o formulário (input e change)", () => {
+  const c = nxCampo("utm_source");
+  montarNX({ search: "?utm_source=meta", inputs: [c], antes: { Event: class { constructor(t, o) { this.type = t; this.bubbles = !!(o && o.bubbles); } } } });
+  assert.deepEqual(c.eventos, ["input", "change"]);
+});
+test("NX-225 · revogar esvazia os campos que o script preencheu", () => {
+  const meu = nxCampo("utm_campaign"), doSite = nxCampo("utm_source", { value: "manual" });
+  const m = montarNX({ search: "?utm_source=meta&utm_campaign=1", inputs: [meu, doSite] });
+  assert.equal(meu.value, "1");
+  m.api.revogar();
+  assert.equal(meu.value, "", "antes: a origem seguia no próximo envio"); assert.equal(doSite.value, "manual");
+});
+
+/* ---------------- configuração ---------------- */
+test("NX-226 · chave em maiúsculas funciona", () => {
+  assert.equal(montarNX({ attrs: { "data-chave": NX_CHAVE.toUpperCase() } }).api.ativo(), true, "antes: rastreio desligado");
+});
+test("NX-227 · data-url só https (ou o servidor local de teste)", async () => {
+  const m = montarNX({ cfgJanela: { chave: NX_CHAVE, url: "http://exemplo.com/rpc" } });
+  await m.api.codigo();
+  assert.match(m.chamadas[0].url, /^https:\/\/.*\/rpc\/nx_rastreio_registrar$/, "antes: ia sem criptografia");
+  assert.ok(m.avisos.some(a => /data-url precisa começar com https/.test(a)));
+  const l = montarNX({ cfgJanela: { chave: NX_CHAVE, url: "http://127.0.0.1:8787/rpc" } });
+  await l.api.codigo();
+  assert.equal(l.chamadas[0].url, "http://127.0.0.1:8787/rpc");
+});
+test("NX-228 · data-dias no máximo 90 e data-espera no máximo 5 s", () => {
+  const m = montarNX({ cfgJanela: { chave: NX_CHAVE, dias: 365, espera: 60000 }, pendurar: true });
+  assert.equal(m.api.diagnostico().guardaEm, "localStorage, 90 dias");
+  m.disparar("click", nxEl("a", { href: NX_WA }));
+  assert.ok(m.atrasos.includes(5000), "a espera do clique foi limitada");
+  assert.ok(!m.atrasos.includes(60000), "antes: 60 s com o botão parado");
+});
+test("NX-232/NX-233 · ?orbita_debug=1 depois do # e diagnóstico mais completo", () => {
+  const m = montarNX({ hash: "#/contato?orbita_debug=1" });
+  assert.ok(m.infos.some(i => /\[Órbita rastreio\] diagnóstico/.test(i)), "antes: o # era ignorado");
+  const d = nxSimples(montarNX({ attrs: { "data-consentimento": "aguardar" } }).api.diagnostico());
+  assert.equal(d.versao, 3); assert.equal(d.consentimento, "aguardar"); assert.equal(d.robo, false); assert.equal(d.recusada, false);
+  assert.equal(nxSimples(montarNX().api.diagnostico()).consentimento, "automatico");
+});
+
+/* ---------------- painel (rastreio-config.js) ---------------- */
+test("NX-234/NX-235 · com a v3, a política e o aviso citam o tipo de origem, os toques em contato e os formulários", () => {
+  const p3 = RC.textoPolitica("X", { versao: 3 }), p2 = RC.textoPolitica("X", { versao: 2 });
+  assert.match(p3, /numa visita sem campanha, só o tipo de origem/); assert.match(p3, /telefone, e-mail, SMS, Instagram Direct, Messenger e Telegram/);
+  assert.doesNotMatch(p2, /tipo de origem|SMS/);
+  assert.match(RC.textoPrivacidade({ versao: 3 }), /campos escondidos/); assert.doesNotMatch(RC.textoPrivacidade({ versao: 2 }), /campos escondidos/);
+});
+test("NX-236 · texto de privacidade com data-dias acima de 90 diz 90", () => {
+  assert.match(RC.textoPrivacidade({ dias: 365 }), /por até 90 dias/);
+  assert.match(RC.textoPolitica("X", { dias: 120 }), /por até 90 dias e sem cookies/);
+  assert.match(RC.textoPrivacidade({ dias: 7 }), /por até 7 dias/);
+});
+test("NX-237/NX-238 · páginas com acento legíveis e o «Testar» em português", () => {
+  assert.equal(RC.caminhoDe("https://s.com/implant%C3%A1rio/"), "/implantário");
+  assert.equal(RC.paginaCurta("https://s.com/clareamento-r%C3%A1pido?x=1"), "/clareamento-rápido");
+  assert.equal(RC.caminhoDe("https://s.com/%E0%A4%A"), "/%E0%A4%A", "sequência inválida fica como veio");
+  assert.equal(RC.paginaCurta("teste-do-painel"), "teste do painel");
+});
+test("NX-239/NX-240 · botão pronto: zero de discagem sai; pílula acima da barra do iPhone", () => {
+  assert.match(RC.snippetBotaoWhatsapp("012 99999-8888"), /wa\.me\/5512999998888\?/, "antes: wa.me/55012…");
+  assert.match(RC.snippetBotaoWhatsapp("0055 12 99999-8888"), /wa\.me\/5512999998888\?/);
+  const b = RC.snippetBotaoWhatsapp("12 99999-8888");
+  assert.match(b, /border-radius:28px/); assert.match(b, /min-width:56px/); assert.doesNotMatch(b, /[;"]width:56px/, "antes: círculo de 56 px com o texto vazando");
+  assert.match(b, /bottom:calc\(16px \+ env\(safe-area-inset-bottom, 0px\)\)/);
+});
+test("NX-241 · a caixa do código do botão só aparece com número válido", () => {
+  assert.match(RCFG, /"aria-label": "Código do botão do WhatsApp", hidden: true/);
+  assert.match(RCFG, /preBotao\.hidden = !cod;/);
+});
+
+/* ---------------- marca e SRI ---------------- */
+test("NX · cada mudança marcada e o SRI da v3 confere com o arquivo", () => {
+  for (let n = 201; n <= 241; n++) assert.ok(V3.includes(`NX-${n}`) || RCFG.includes(`NX-${n}`), `NX-${n} sem marca`);
+  assert.equal(RC.SRI_V3, `sha384-${createHash("sha384").update(Buffer.from(V3, "utf8")).digest("base64")}`);
+  assert.equal(RC.VERSOES[2].publicada, false, "a v3 continua não publicada");
+});
+}
+
+/* ============================================================ ads-x · Relatórios (relatorios.js e relatorios.css) — NX-301.. */
+{
+const int = v => Math.round(+v).toLocaleString("pt-BR");
+const brl0 = v => `R$ ${Math.round(+v).toLocaleString("pt-BR")}`;
+/** o trecho do CSS depois da marca (o bloco novo) */
+const blocoCss = id => { const i = CSS.indexOf(`plano 2000d · ${id}`); assert.ok(i > 0, `marca ${id} no CSS`); return CSS.slice(i, i + 900); };
+
+test("NX-301 · «Carteira agora» no singular com 1 aberto e no gênero do vocabulário", () => {
+  assert.equal(RL.rotuloAbertos(1), "negócio aberto");
+  assert.equal(RL.rotuloAbertos(3), "negócios abertos");
+  assert.equal(RL.rotuloAbertos(1, { negocio: "venda", negocios: "vendas", fem: true }), "venda aberta");
+  assert.equal(RL.rotuloAbertos(0, { negocio: "venda", negocios: "vendas", fem: true }), "vendas abertas");
+  assert.match(REL, /rotuloAbertos\(k\.abertos, \{ negocio: negSing, negocios: negPl, fem \}\)/);
+});
+test("NX-302 · carteira sem valor não mostra «— previstos» solto", () => {
+  assert.deepEqual(RL.pedacosCarteira({ valor_aberto: 1000, previsao_ponderada: null, valor_perdido: "" }), ["valor_aberto"]);
+  assert.deepEqual(RL.pedacosCarteira({}), []);
+  assert.deepEqual(RL.pedacosCarteira({ valor_aberto: 0, previsao_ponderada: 10, valor_perdido: 5 }), ["valor_aberto", "previsao_ponderada", "valor_perdido"]);
+  assert.match(REL, /temC\.includes\("valor_perdido"\) \? ` \(\$\{brl0\(k\.valor_perdido\)\} previstos\)` : ""/);
+});
+test("NX-303 · subtítulo do funil no feminino («ganhas e perdidas: fechadas»)", () => {
+  assert.match(RL.subFunil(true), /\(ganhas e perdidas: fechadas no período\)/);
+  assert.match(RL.subFunil(false), /\(ganhos e perdidos: fechados no período\)/);
+  assert.equal(RL.flexao("criado", 1, true), "criada");
+  assert.equal(RL.flexao("criado", 0, false), "criados");
+  assert.match(REL, /sub: subFunil\(fem\)/);
+});
+test("NX-304 · séries de vendas e o «melhor dia» no feminino", () => {
+  const s = RL.seriesVendas(true);
+  assert.equal(s.criados, "Criadas"); assert.equal(s.ganhos, "Ganhas"); assert.equal(s.ganhosDe(1), "ganha"); assert.equal(s.ganhosDe(2), "ganhas");
+  assert.equal(RL.seriesVendas(false).criados, "Criados");
+  assert.match(REL, /series: \[\{ nome: SV\.criados, classe: "g-s1" \}, \{ nome: SV\.ganhos, classe: "g-s0" \}\]/);
+  assert.ok(REL.includes("com ${int(melhor.v)} ${SV.ganhosDe(melhor.v)}"));
+});
+test("NX-305 · resumo da rosca de origem no feminino", () => {
+  const o = [{ rotulo: "Site", criados: 1, ganhos: 1 }, { rotulo: "Meta", criados: 3, ganhos: 2, anuncio: true }];
+  const t = RL.resumoOrigens(o, int, { fem: true });
+  assert.match(t, /Site 1 criada e 1 ganha/);
+  assert.match(t, /Meta 3 criadas e 2 ganhas/);
+  assert.match(t, /sem anúncio: 1 criada e 1 ganha/);
+  assert.match(RL.resumoOrigens(o, int), /Site 1 criado e 1 ganho/);
+  assert.match(REL, /resumoOrigens\(orig, int, \{ fem \}\)/);
+  assert.match(REL, /centro: \{ valor: int\(tot\), rotulo: flexao\("criado", tot, fem\) \}/);
+});
+test("NX-306 · colunas de «Por responsável» no gênero (tabela e CSV iguais)", () => {
+  assert.deepEqual(RL.colunasDono(true), ["Responsável", "Criadas", "Ganhas", "Conversão", "Receita", "Ticket médio", "Abertas agora"]);
+  assert.equal(RL.colunasDono(true, true)[3], "Conversão %");
+  assert.match(REL, /colunas: colunasDono\(fem\),/);
+});
+test("NX-307 · bloco de parados no feminino e com «1 dia» certo", () => {
+  const t = RL.textosParados({ fem: true, negocios: "Vendas", qtd: 1, diasMax: 12 });
+  assert.equal(t.titulo, "Paradas há mais de 7 dias");
+  assert.equal(t.sub, "Vendas abertas que não mudam de etapa há uma semana.");
+  assert.equal(t.total, "1 parada");
+  assert.equal(t.antigo, "A mais antiga está parada há 12 dias.");
+  assert.equal(RL.textosParados({ qtd: 3 }).total, "3 parados");
+  assert.equal(RL.textosParados({ diasMax: null }).antigo, "");
+  assert.match(REL, /const bp = cartao\(TP\.titulo,/);
+});
+test("NX-308 · cada etapa parada tem um nome inteiro para o leitor de tela", () => {
+  assert.equal(RL.rotuloParado({ nome: "Proposta", qtd: 3, valor: 9000 }, { int, brl0, temValor: true }), "Proposta: 3 parados, R$ 9.000 previstos");
+  assert.equal(RL.rotuloParado({ nome: "Visita", qtd: 1 }, { fem: true, int }), "Visita: 1 parada");
+  assert.equal(RL.rotuloParado({ qtd: 2 }, { int }), "Etapa sem nome: 2 parados");
+  assert.match(REL, /h\("li", \{ "aria-label": rotuloParado\(p, \{ fem, int, brl0, temValor: rp\.temValor \}\) \}/);
+});
+test("NX-309 · parados exportam CSV (etapa, quantidade, valor, dias)", () => {
+  assert.deepEqual(RL.linhasCsvParados([{ nome: "Proposta", qtd: "3", valor: 900, dias_max: 15 }, null, { nome: "Visita", qtd: 1 }]),
+    [["Proposta", 3, 900, 15], ["Visita", 1, "", ""]]);
+  assert.match(REL, /csv: par\.length \? \{ nome: "parados",/);
+});
+test("NX-310 · resumo do funil sem «Funil :» e com milhar", () => {
+  assert.equal(RL.resumoFunil("", [{ nome: "Lead", qtd_atual: 1500 }], int), "Funil: Lead 1.500");
+  assert.equal(RL.resumoFunil("Vendas", [{ nome: "Lead", qtd_atual: 2 }, { nome: "Ganho", qtd_atual: 1 }], int), "Funil Vendas: Lead 2, Ganho 1");
+  assert.doesNotMatch(REL, /resumo: `Funil \$\{fr \? fr\.nome : ""\}:/);
+});
+test("NX-311 · resumo da rosca de perdas com milhar", () => {
+  assert.equal(RL.resumoMotivos([{ nome: "Preço", qtd: 1500 }, { nome: "Prazo", qtd: 2 }], int), "Motivos de perda: Preço 1.500, Prazo 2");
+  assert.match(REL, /resumo: resumoMotivos\(mot, int\)/);
+});
+test("NX-312 · CSV dos motivos com a coluna % da tabela", () => {
+  assert.deepEqual(RL.linhasCsvMotivos([{ nome: "Preço", qtd: 2, valor: 100 }, { nome: "Prazo", qtd: 1, valor: 50 }]), [["Preço", 2, 66.7, 100], ["Prazo", 1, 33.3, 50]]);
+  assert.deepEqual(RL.linhasCsvMotivos([{ nome: "X", qtd: 0, valor: 0 }]), [["X", 0, "", 0]]);
+  assert.match(REL, /colunas: \["Motivo", "Quantidade", "%", "Valor previsto"\], linhas: \(\) => linhasCsvMotivos\(mot\)/);
+});
+test("NX-313 · CSV do funil: ganho/perdido sem «Seguiram» e «Conversão» (igual à tabela)", () => {
+  const l = RL.linhasCsvFunil([{ nome: "Lead", tipo: "aberto", qtd_atual: 5, valor_atual: 10, passaram: 8, avancaram: 4, conversao_proxima_pct: 50 },
+    { nome: "Ganho", tipo: "ganho", qtd_atual: 3, valor_atual: 9, passaram: 3, avancaram: 0, conversao_proxima_pct: 300 }]);
+  assert.deepEqual(l, [["Lead", 5, 10, 8, 4, 50], ["Ganho", 3, 9, 3, "", ""]]);
+});
+test("NX-314 · «Dia mais movimentado … com 1 nova» (antes «1 novas»)", () => {
+  assert.equal(RL.qtdPalavra(1, "nova", "novas", int), "1 nova");
+  assert.equal(RL.qtdPalavra(1200, "nova", "novas", int), "1.200 novas");
+  assert.ok(REL.includes(`com \${qtdPalavra(melhor.v, "nova", "novas", int)}.`));
+});
+test("NX-315 · resumo por departamento com plural e milhar", () => {
+  assert.equal(RL.resumoDepartamentos([{ nome: "Vendas", novas: 1 }, { nome: null, novas: 1500 }], int), "Por departamento: Vendas 1 nova, Sem departamento 1.500 novas");
+  assert.match(REL, /resumo: resumoDepartamentos\(dep, int\)/);
+});
+test("NX-316 · resumo por número com plural, milhar e número sem nome", () => {
+  assert.equal(RL.resumoCanais([{ nome: "Loja", msgs_in: 1, msgs_out: 2000 }, { numero_exibicao: "+55 12 9999-0000", msgs_in: 0, msgs_out: 1 }], int),
+    "Por número: Loja 1 recebida e 2.000 enviadas; +55 12 9999-0000 0 recebidas e 1 enviada");
+  assert.equal(RL.nomeCanal({}), "Número sem nome");
+  assert.match(REL, /itens: can\.map\(c => \(\{ rotulo: nomeCanal\(c\),/);
+});
+test("NX-317 · pico do calor dito por extenso («à 1 hora», «à meia-noite»)", () => {
+  assert.equal(RL.horaFalada(1), "à 1 hora");
+  assert.equal(RL.horaFalada(0), "à meia-noite");
+  assert.equal(RL.horaFalada(12), "ao meio-dia");
+  assert.equal(RL.horaFalada(14), "às 14 horas");
+  assert.equal(RL.horaFalada(24), "");
+  assert.match(REL, /\$\{L\.SEMANA\[pico\.dow\]\} \$\{horaFalada\(pico\.hora\)\}/);
+});
+test("NX-318 · «Por atendente» em ordem de conversas (antes a ordem do servidor)", () => {
+  const l = RL.linhasAtendente([{ nome: "Bia", conversas: 3, resolvidas: 1 }, { nome: "Ana", conversas: 9 }, { nome: "Caio", conversas: 3, resolvidas: 2 }]);
+  assert.deepEqual(l.map(a => a.nome), ["Ana", "Caio", "Bia"]);
+  assert.match(REL, /const at = linhasAtendente\(r\.por_atendente \|\| \[\]\);/);
+});
+test("NX-319 · atendente sem nome vira «Sem atendente»", () => {
+  assert.equal(RL.linhasAtendente([{ nome: null, conversas: 2 }])[0].nome, "Sem atendente");
+  assert.deepEqual(RL.linhasAtendente([null, "x"]), []);
+});
+test("NX-320 · atendente que saiu da equipe ganha a marca", () => {
+  const l = RL.linhasAtendente([{ nome: "Rui", ativo: false, conversas: 1 }, { nome: "Lia", removido_em: "2026-01-01" }]);
+  assert.deepEqual(l.map(a => [a.nome, a.exEquipe]), [["Rui (fora da equipe)", true], ["Lia (fora da equipe)", true]]);
+});
+test("NX-321 · responsável sem nome vira «Sem responsável»", () => {
+  assert.equal(RL.linhasDono([{ nome: null, ganhos: 1 }])[0].nome, "Sem responsável");
+  assert.equal(RL.linhasDono([{ ativo: false }])[0].nome, "Sem responsável (fora da equipe)");
+});
+test("NX-322 · linha «Total» em «Por responsável» (conversão e ticket do total)", () => {
+  const t = RL.totalLinhas([{ criados: 10, ganhos: 2, receita: 1000, abertos: 3 }, { criados: "10", ganhos: 3, receita: 500, abertos: null }], ["criados", "ganhos", "receita", "abertos"]);
+  assert.deepEqual(t, { criados: 20, ganhos: 5, receita: 1500, abertos: 3, conversao_pct: 25, ticket_medio: 300 });
+  assert.equal(RL.totalLinhas([], ["criados", "ganhos"]).conversao_pct, null);
+  assert.match(REL, /total: \["Total", int\(tD\.criados\)/);
+  assert.match(REL, /total && linhas\.length > 1 \? h\("tfoot"/);
+});
+test("NX-323 · linha «Total» em «Por atendente»", () => {
+  assert.deepEqual(RL.totalLinhas([{ conversas: 2, resolvidas: 1, msgs_out: 10 }, { conversas: 3, resolvidas: 3, msgs_out: 5 }], ["conversas", "resolvidas", "msgs_out"]), { conversas: 5, resolvidas: 4, msgs_out: 15 });
+  assert.match(REL, /total: \["Total", int\(tAt\.conversas\), int\(tAt\.resolvidas\), "—", int\(tAt\.msgs_out\)\]/);
+});
+test("NX-324 · resposta do memo mostra a hora em que ELA chegou", () => {
+  const m = new Map([["k", { t: 1700000000000, r: {} }]]);
+  assert.equal(RL.horaMemo(m, "k"), 1700000000000);
+  assert.equal(RL.horaMemo(m, "outra"), null);
+  assert.equal(RL.horaMemo(null, "k"), null);
+  assert.match(REL, /const tm = horaMemo\(memo, chaveMemo\);/);
+  assert.match(REL, /horaCarga\.classList\.toggle\("relat-hora-velha", Date\.now\(\) - tm >= HORA_VELHA_MS\)/);
+});
+test("NX-325 · «Atualizar» ocupado por aria-disabled (o foco do teclado não cai no body)", () => {
+  assert.doesNotMatch(REL, /btnAtualizar\.disabled = /);
+  assert.match(REL, /btnAtualizar\.setAttribute\("aria-disabled", "true"\)/);
+  assert.match(blocoCss("NX-325"), /\.rel-btn\[aria-disabled="true"\] \{ opacity: \.55; cursor: progress; \}/);
+});
+test("NX-326 · «Ver 30 dias» do vazio devolve o foco ao período", () => {
+  assert.match(REL, /fn: \(\) => \{ P\.preset = maior; salvar\(\); pintarSeg\(\); pintarChip\(\); carregar\(\); focarPeriodo\(\); \}/);
+  assert.match(REL, /function focarPeriodo\(\) \{/);
+});
+test("NX-327 · chip-resumo diz o que é para o leitor de tela", () => {
+  assert.equal(RL.rotuloChip("Últimos 7 dias · Todos os funis"), "Período e filtros: Últimos 7 dias · Todos os funis. Toque para mudar.");
+  assert.match(REL, /chipResumo\.setAttribute\("aria-label", rotuloChip\(chipTxt\.textContent\)\)/);
+});
+test("NX-328 · cada bloco é região nomeada pelo seu título", () => {
+  assert.match(REL, /"aria-labelledby": idT \},\s*h\("div", \{ class: "rel-cartao-topo" \}, h\("h2", \{ class: "rel-h2", id: idT \}, titulo\)/);
+});
+test("NX-329 · faixa mais movimentada dita em texto (não só pela cor)", () => {
+  assert.match(REL, /h\("span", \{ class: "sr-only" \}, " \(a faixa mais movimentada\)"\)/);
+});
+test("NX-330 · funil/departamento escolhido entra no nome do arquivo", () => {
+  assert.equal(RL.sufixoFiltro({ atual: "f2", lista: [{ id: "f1", nome: "A" }, { id: "f2", nome: "Pós-venda" }] }), "Pós-venda");
+  assert.equal(RL.sufixoFiltro({ atual: "", lista: [{ id: "f1", nome: "A" }] }), "");
+  assert.equal(RL.sufixoFiltro(null), "");
+  assert.match(REL, /"png", ctx\.cliente\.nome, sufixoFiltro\(filtroExtra\)\)/);
+  assert.match(REL, /"csv", ctx\.cliente\.nome, sufixoFiltro\(filtroExtra\)\)/);
+});
+test("NX-331 · na impressão o título da página vira o nome do PDF (e volta depois)", () => {
+  assert.equal(RL.tituloImpressao({ aba: "vendas", cliente: "Clínica Sol", de: "2026-10-01", ate: "2026-10-24" }), "Relatório de vendas · Clínica Sol · 01-10-2026 a 24-10-2026");
+  assert.equal(RL.tituloImpressao({ aba: "atendimento", cliente: "A/B", de: "2026-10-05", ate: "2026-10-05", filtro: "Suporte" }), "Relatório de atendimento · A-B · Suporte · 05-10-2026");
+  assert.match(REL, /window\.addEventListener\("beforeprint", antes\); window\.addEventListener\("afterprint", depois\);/);
+  assert.match(REL, /if \(tirarImpressao\) \{ try \{ tirarImpressao\(\); \}/);
+});
+test("NX-332 · parado com valor: o valor na 4ª coluna da grade", () => {
+  assert.match(blocoCss("NX-332"), /\.relat-parados li:has\(\.relat-parado-valor\) \{ grid-template-columns: auto minmax\(0, 1fr\) auto auto; \}/);
+});
+test("NX-333 · nome de etapa parada comprido quebra (360 px)", () => {
+  assert.match(blocoCss("NX-333"), /\.relat-parado-nome \{ min-width: 0; overflow-wrap: anywhere; \}/);
+  assert.match(REL, /class: "relat-parado-nome"/);
+});
+test("NX-334 · alto contraste: período escolhido e faixa forte visíveis", () => {
+  const b = blocoCss("NX-334");
+  assert.match(b, /@media \(forced-colors: active\)/);
+  assert.match(b, /\.rel-seg-b\[aria-pressed="true"\] \{ outline: 2px solid CanvasText;/);
+  assert.match(b, /\.relat-faixa-forte \{ border: 2px solid CanvasText; \}/);
+});
+test("NX-335 · impressão sem o «Por que difere» fechado", () => {
+  assert.match(blocoCss("NX-335"), /\.relat-por-que \{ display: none !important; \}/);
+});
+test("NX-336 · impressão no meio do «Atualizar» não sai esmaecida", () => {
+  assert.match(blocoCss("NX-336"), /\.relat-atualizando \{ opacity: 1 !important; \}/);
+});
+test("NX-337 · linha «Total» estilizada e legível no modo cartão (≤ 480 px)", () => {
+  const b = blocoCss("NX-337");
+  assert.match(b, /\.relat-tabela tfoot th, \.relat-tabela tfoot td \{ font-weight: 700;/);
+  assert.match(b, /@media \(max-width: 480px\) \{\s*\.relat-tabela tfoot \{ display: block; \}/);
+});
+test("NX-338 · botões de período quebram de linha (sem rolagem lateral)", () => {
+  assert.match(blocoCss("NX-338"), /\.relat-filtros \.rel-seg \{ flex-wrap: wrap; max-width: 100%; \}/);
+});
+test("DR-403/RC-243/RC-246 · etapa zerada, «i» da taxa, link da etapa e «Copiar tabela» com estilo fora do Início", () => {
+  assert.match(blocoCss("DR-403"), /\.g-fetapa\.g-fzero \.g-ftrilho \{ background: repeating-linear-gradient\(90deg, var\(--c-borda\) 0 4px, transparent 4px 8px\); \}/);
+  assert.match(CSS, /\.g-fetapa\.g-fzero \.g-fqtd \{ color: var\(--c-texto-2\); \}/);
+  const b = blocoCss("RC-243");
+  assert.match(b, /^plano 2000d · RC-243[^\n]*\n\.g-flink \{/);
+  assert.match(b, /\n\.g-fdica-bt \{ display: inline-grid;/);
+  assert.match(CSS, /\n\.g-fdica-txt \{ grid-column: 1 \/ -1;/);
+  assert.match(CSS, /\n\.g-copiar-tabela \{ min-height: 36px;/);
+  assert.match(CSS, /\.g-copiar-tabela \{ min-height: 44px; \}/);
+  assert.match(CSS, /\.g-fdica-bt \{ width: 44px; height: 44px;/);
+});
+test("NX · marcas: cada mudança nova leva o comentário do plano", () => {
+  for (let n = 301; n <= 338; n++) assert.ok(REL.includes(`NX-${n}`) || CSS.includes(`NX-${n}`), `NX-${n} marcado`);
+});
+
+}

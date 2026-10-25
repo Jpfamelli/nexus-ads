@@ -12,7 +12,8 @@ export class ErroHttp extends Error {
 
 /** Plano 1000 (SV-257): toda resposta JSON das funções sai com «no-store» (resposta com contexto de conversa não fica em cache de
     proxy) e «nosniff» (o navegador não reinterpreta o tipo). */
-export const CAB_SEGURANCA = Object.freeze({ "cache-control": "no-store", "x-content-type-options": "nosniff" });
+// plano 2000d · DS-143: e «no-referrer» (um link dentro de uma resposta nunca leva a URL da função com parâmetros para fora)
+export const CAB_SEGURANCA = Object.freeze({ "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" });
 
 export const json = (dados, status = 200) => new Response(JSON.stringify(dados), {
   status, headers: { "content-type": "application/json; charset=utf-8", ...CAB_SEGURANCA },
@@ -207,6 +208,8 @@ export const MODELO_PADRAO = MODELO_BARATO;
 export const MODELOS_TAREFA = Object.freeze({
   sugerir: MODELO_BARATO, resumir: MODELO_BARATO, decidir: MODELO_BARATO, diario: MODELO_BARATO, semanal: MODELO_BARATO,
   montar: MODELO_MEDIO, mensal: MODELO_MEDIO,
+  // plano 2000d · DS-016 / DS-028: as ações novas do nx-ia são curtas — modelo barato
+  reescrever: MODELO_BARATO, traduzir: MODELO_BARATO, simular: MODELO_BARATO,
 });
 /** plano 1500c · SC-085: NX_MODELO_PADRAO (segredo/env da função) troca o padrão sem deploy de código; ausente no Node. */
 export function modeloDoAmbiente() {
@@ -845,10 +848,13 @@ const ACESSO = new Set(["sem_acesso", "sem_permissao", "conta_suspensa", "teste_
 const SESSAO = new Set(["sessao_invalida", "conta_pendente"]);
 // plano 1000 (SV-104): limites de taxa → 429 (antes 400: o painel tratava como dado inválido e não esperava para tentar de novo)
 const LIMITE = new Set(["muitas_tentativas", "limite_taxa", "muitos_pedidos", "aguarde"]);
-/** HTTP do código: sessão 401 · acesso 403 · limite 429 · *_nao_encontrad[oa] 404 · resto (dados) 400. */
+// plano 2000d · DS-361: conflito de edição concorrente → 409 (o painel pergunta/relê em vez de tratar como dado inválido; não repete sozinho)
+const CONFLITO = new Set(["dono_mudou", "versao_antiga", "conflito", "envio_em_andamento"]);
+/** HTTP do código: sessão 401 · acesso 403 · conflito 409 · limite 429 · *_nao_encontrad[oa] 404 · resto (dados) 400. */
 export function statusDoCodigo(codigo) {
   if (SESSAO.has(codigo)) return 401;
   if (ACESSO.has(codigo)) return 403;
+  if (CONFLITO.has(codigo)) return 409;
   if (LIMITE.has(codigo)) return 429;
   if (/_nao_encontrad[oa]$/.test(codigo)) return 404;
   return 400;

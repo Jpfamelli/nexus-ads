@@ -777,6 +777,8 @@ test("CC-011 (central) · etiquetar em lote uma conversa que saiu da página lê
     await c.pulso();
     achar(c.alvo, ".cvl-lote-etq").click();
     await esperar(30);
+    // plano 2000d: DC-014 — etiquetar em lote agora tem Desfazer: o servidor só ouve quando o aviso fecha
+    { const des = d.desfazeres.at(-1); await des.firmar({}); await esperar(10); }
     const gravou = srv.chamadas.find(x => x[0] === "nx_cv_etiquetas");
     assert.deepEqual(gravou[1].p_etiquetas.sort(), ["e1", "e2"], "manteve a etiqueta que ela já tinha");
     assert.ok(srv.chamadas.some(x => x[0] === "nx_cv_ver" && x[1].p_id === 901));
@@ -1017,8 +1019,10 @@ const SRC_CFG = ler("cv-config.js");
 
 test("CC-065 · «Sem som fora do horário de atendimento» cala o som com o departamento padrão fechado", () => {
   assert.match(SRC_CONV, /foraHorario: p\.foraHorario === true/);
-  assert.match(SRC_CONV, /if \(pref\.som && !somCaladoAgora\(pref\)\) tocarSom\(\);/);
-  assert.match(SRC_CONV, /const hor = A\.L\.horarioDoDepartamento\(A\.base, null\);\s*return hor !== undefined && hor !== null && !A\.L\.horarioAberto\(hor, new Date\(\)\);/);
+  // plano 2000d: DC-022 — o horário vale pelo departamento de cada conversa que chegou (sem a lista, o padrão, como antes)
+  assert.match(SRC_CONV, /if \(pref\.som && !somCaladoAgora\(pref, chegaram\)\) tocarSom\(\);/);
+  assert.match(SRC_CONV, /const fechado = dep => \{ const hor = A\.L\.horarioDoDepartamento\(A\.base, dep\); return hor !== undefined && hor !== null && !A\.L\.horarioAberto\(hor, new Date\(\)\); \};/);
+  assert.match(SRC_CONV, /return fechado\(null\);/);
   assert.match(SRC_CONV, /Sem som fora do horário de atendimento: ligado/);
 });
 
@@ -1370,7 +1374,8 @@ test("CC-146/CC-311/CC-312 · transferir: recados usados antes, aviso ao cliente
   assert.equal(L.textoAvisoTransferencia({ departamento: "Financeiro" }), "Vou te passar para o Financeiro, já te respondem por aqui.");
   assert.match(SRC_CONV, /gravarJsonLocal\(RECADOS_CHAVE, \[s, \.\.\.lista\]\.slice\(0, 4\)\);/);
   assert.equal((SRC_CONV.match(/chipsRecado\(recado\)/g) || []).length, 2, "transferir e transferir em lote");
-  assert.match(SRC_CONV, /if \(escolha\.aviso && \(\(escolha\.conta \|\| null\) !== \(conv\.atribuida_a \|\| null\) \|\| escolha\.dep\)\) \{\s*try \{ await enviarTexto\(\{ tipo: "texto", texto: escolha\.aviso \}\); \}/);
+  // plano 2000d: DC-016 — o envio marca escolha.avisoEnviado (o Desfazer diz que a mensagem já saiu)
+  assert.match(SRC_CONV, /if \(escolha\.aviso && \(\(escolha\.conta \|\| null\) !== \(conv\.atribuida_a \|\| null\) \|\| escolha\.dep\)\) \{\s*try \{ await enviarTexto\(\{ tipo: "texto", texto: escolha\.aviso \}\); escolha\.avisoEnviado = true; \}/);
 });
 
 test("CC-147/CC-156 · nomes acessíveis da folha do ⋮ e da citação", async () => {
@@ -1524,7 +1529,7 @@ test("CX-005 · arquivo vazio (0 byte) tem motivo próprio, não «tipo não ace
   assert.equal(v.ok, false); assert.equal(v.erro, "midia_vazia");
   const src = ler("cv-composer.js");
   assert.match(src, /v\.erro === "midia_vazia" \? `«\$\{escolhidoInicial\.name/);
-  assert.match(src, /v\.erro === "midia_vazia" \? "o arquivo está vazio \(0 byte\)"/);
+  assert.match(src, /v\.erro === "midia_vazia" \? "vazio"/);   // plano 2000d: DC-130 — no lote, as recusadas viram um aviso só («foto.jpg (vazio)»)
 });
 
 test("CX-006 · primeiro nome pula emoji e símbolo do começo do nome do WhatsApp", () => {
@@ -1925,7 +1930,9 @@ test("CX-055 · várias fotos arrastadas vão juntas pelo fluxo de várias fotos
     d.ev(corpo, "drop", { dataTransfer: { types: ["Files"], files: fotos } });
     assert.deepEqual(lotes, [["a.jpg", "b.png"]]);
     d.ev(corpo, "drop", { dataTransfer: { types: ["Files"], files: [{ name: "a.pdf", type: "application/pdf", size: 10 }, fotos[0]] } });
-    assert.deepEqual(unicos, ["a.pdf"], "misturado continua um por vez");
+    // plano 2000d: DC-104 — misturado também vai pelo anexarVarios (que manda um por vez sem perder os outros)
+    assert.deepEqual(lotes.at(-1), ["a.pdf", "a.jpg"]);
+    assert.deepEqual(unicos, []);
   } finally { d.fim(); }
 });
 

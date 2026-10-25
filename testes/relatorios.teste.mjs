@@ -174,7 +174,7 @@ await teste("radar: episódios do núcleo + registro do servidor com ✓/✓✓/
   assert.equal(R.registro[1].envio.k, "erro"); assert.equal(R.registro[1].envio.tique, "!");
   assert.deepEqual(L.estadoIntegracao(integracoes, alertas, agora), puroPainel.estadoIntegracao(integracoes, alertas, agora));
   assert.equal(L.textoPilula(L.estadoIntegracao(integracoes, alertas, agora)), "Meta desconectado");
-  assert.equal(L.textoQueda(L.estadoIntegracao(integracoes, alertas, agora).erros), "Meta desconectado · dados até 27/09 05:00.");
+  assert.equal(L.textoQueda(L.estadoIntegracao(integracoes, alertas, agora).erros), "Meta desconectado · dados até 27/09 às 05:00."); // plano 2000d: NX-077 — «às» entre data e hora
 });
 
 await teste("statusEnvio, canalDe, nomeRegraSrv e eixoTopo = os do painel", () => {
@@ -1148,7 +1148,7 @@ await teste("M39: Anúncios e Relatórios — abas por ui.segmentado, chip-resum
     assert.match(src, nome === "anuncios" ? /ui\.icone\("reabrir"\), h\("span", \{ class: "rel-rot" \}, "Recarregar"\)/ : /ui\.icone\("reabrir"\), h\("span", \{ class: "rel-rot" \}, "Atualizar"\)/, `${nome}: o nome acessível do botão`);
     assert.doesNotMatch(src, /innerHTML/);
   }
-  assert.match(ads, /L\.textoChipAnuncios\(S\.dias, S\.plat\)/); assert.match(rel, /L\.textoChipRelatorios\(\{ preset: P\.preset, de: P\.de, ate: P\.ate, aba, nome \}\)/);
+  assert.match(ads, /L\.textoChipAnuncios\(S\.dias, S\.plat(, M)?\)/); /* plano 2000d: NX-075 — recebe M */ assert.match(rel, /L\.textoChipRelatorios\(\{ preset: P\.preset, de: P\.de, ate: P\.ate, aba, nome \}\)/);
   assert.match(ads, /rel-so-largo[^]*?Ajustes de anúncios/, "os atalhos do gestor ficam para telas largas…");
   // plano 1000b: AB-033 — o ⋮ do celular vale para todos (com «Imprimir»); os itens de gestor saem de itensMaisAcoes
   assert.match(ads, /gestor \? \{ rotulo: "Ajustes de anúncios", icone: "engrenagem"/, "…e no ⋮ do celular");

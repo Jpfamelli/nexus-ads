@@ -29,7 +29,7 @@ export function escala([d0, d1], [r0, r1]) {
 
 /** Topo "bonito" do eixo: ~8% acima do máximo, em `n` degraus de valor inteiro (R$ 15/30/45/60). */
 export function topoBonito(v, n = 4) {
-  if (!(v > 0)) return n;
+  if (!(v > 0) || !Number.isFinite(v)) return n;     // plano 2000d · IY-017: Infinity (divisão por zero na origem) não vira eixo NaN
   const bruto = v * 1.08 / n, p = Math.pow(10, Math.floor(Math.log10(bruto))), r = bruto / p;
   // plano 1500c · RC-247: abaixo de 1 (taxas em fração) entra o degrau 2,5 — 0,9 vira eixo 0 · 0,25 · 0,5 · 0,75 · 1 (antes 0,3 · 0,6 · 0,9 · 1,2);
   // contagens (p ≥ 1) seguem só com degraus inteiros
@@ -167,8 +167,9 @@ function h(tag, attrs = {}, ...filhos) {
 const titulo = t => s("title", {}, t);
 /** plano 1500c · RC-241/RC-242: número com milhar e até 2 casas no padrão brasileiro («15.200», «2,5»). */
 const FMT_NUM = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
-export const fmtInteiro = v => (fin(Number(v)) ? FMT_NUM.format(Math.round(Number(v))) : "0");
-export const fmtNumero = v => (fin(Number(v)) ? FMT_NUM.format(Number(v)) : "—");
+// plano 2000d · IY-007: −0,3 arredonda para «0», não «-0» (o + 0 tira o zero negativo); IY-008: null/vazio em fmtNumero é «—», não «0»
+export const fmtInteiro = v => (fin(Number(v)) ? FMT_NUM.format(Math.round(Number(v)) + 0) : "0");
+export const fmtNumero = v => (v !== null && v !== undefined && v !== "" && fin(Number(v)) ? FMT_NUM.format(Number(v) + 0).replace(/^-0$/, "0") : "—");
 /**
  * plano 2000d · DR-308: o rótulo curto de um tick do eixo — de 10 mil em diante «120 mil» / «1,2 mi» (com «R$ » quando o formato da série é
  * dinheiro); abaixo disso, o próprio formato. textoEixoCurto(120000, v => `R$ ${v}`) → «R$ 120 mil».
@@ -179,7 +180,9 @@ export function textoEixoCurto(v, fmt = fmtNumero) {
   if (!fin(n) || Math.abs(n) < 1e4) return cheio;
   const um = x => FMT_NUM.format(Math.round(x * 10) / 10);
   const a = Math.abs(n), sinal = n < 0 ? "−" : "";
-  const curto = a >= 1e9 ? `${um(a / 1e9)} bi` : a >= 1e6 ? `${um(a / 1e6)} mi` : `${um(a / 1e3)} mil`;
+  // plano 2000d · IY-006: 999.950 arredonda para «1 mi» (antes «1.000 mil») — a unidade sobe quando o arredondamento chega a 1.000
+  const sobe = (x, lim) => x >= lim || Math.round(x / (lim / 1e3) * 10) / 10 >= 1000;
+  const curto = sobe(a, 1e9) ? `${um(a / 1e9)} bi` : sobe(a, 1e6) ? `${um(a / 1e6)} mi` : `${um(a / 1e3)} mil`;
   return `${/^\s*R\$/.test(cheio) ? "R$ " : ""}${sinal}${curto}`;
 }
 const limpar = el => { while (el.firstChild) el.firstChild.remove(); };
@@ -260,6 +263,18 @@ function trilho(caixa, { n, texto, aoMostrar, aoEsconder }) {
   };
   const esconder = () => { atual = -1; dica.hidden = true; clearTimeout(tFala); tFala = 0; aoEsconder(); };
   return { mostrar, esconder, get atual() { return atual; } };
+}
+
+/**
+ * plano 2000d · IY-018: Esc com a dica do gráfico aberta só fecha a dica — não vaza para a tela (no Início o mesmo Esc saía do exemplo,
+ * em outras telas fechava a folha inteira). Sem dica aberta, o Esc segue para quem estiver ouvindo.
+ */
+export function escFecha(e, tr) {
+  if (!tr || !(tr.atual >= 0)) return false;
+  if (e && typeof e.preventDefault === "function") e.preventDefault();
+  if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+  tr.esconder();
+  return true;
 }
 
 /* ---------- 2.1 Diário do Ads: barras de gasto (Meta + Google) × linha de conversas (média 7 dias) ---------- */
@@ -366,7 +381,7 @@ export function grafDiario(alvo, o) {
   caixa.addEventListener("keydown", e => {
     const ult = o.serie.length - 1, n = tr.atual;
     const mapa = { ArrowRight: n < 0 ? 0 : n + 1, ArrowLeft: n < 0 ? ult : n - 1, Home: 0, End: ult };
-    if (e.key === "Escape") return tr.esconder();
+    if (e.key === "Escape") return escFecha(e, tr);     // plano 2000d · IY-018
     if (!(e.key in mapa) || !geo) return;
     e.preventDefault();
     const k = Math.max(0, Math.min(ult, mapa[e.key]));
@@ -441,7 +456,7 @@ export function linha(alvo, o) {
   caixa.addEventListener("keydown", e => {
     const ult = o.pontos.length - 1, n = tr.atual;
     const mapa = { ArrowRight: n < 0 ? 0 : n + 1, ArrowLeft: n < 0 ? ult : n - 1, Home: 0, End: ult };
-    if (e.key === "Escape") return tr.esconder();
+    if (e.key === "Escape") return escFecha(e, tr);     // plano 2000d · IY-018
     if (!(e.key in mapa) || !geo) return;
     e.preventDefault();
     const k = Math.max(0, Math.min(ult, mapa[e.key]));
@@ -509,7 +524,7 @@ export function barras(alvo, o) {
   caixa.addEventListener("keydown", e => {
     const ult = o.itens.length - 1, n = tr.atual;
     const mapa = { ArrowDown: n < 0 ? 0 : n + 1, ArrowRight: n < 0 ? 0 : n + 1, ArrowUp: n < 0 ? ult : n - 1, ArrowLeft: n < 0 ? ult : n - 1, Home: 0, End: ult };
-    if (e.key === "Escape") return tr.esconder();
+    if (e.key === "Escape") return escFecha(e, tr);     // plano 2000d · IY-018
     if (!(e.key in mapa) || ult < 0) return;
     e.preventDefault();
     mostrarLinha(Math.max(0, Math.min(ult, mapa[e.key])));
@@ -569,6 +584,7 @@ export function taxaEntreEtapas(qtd, anterior) {
 }
 /** @param o {etapas:[{nome, cor, qtd, valorTxt, conversao (texto)|null, tipo}], resumo, taxas?: true}
     Sem `conversao` na etapa, a taxa entre etapas vizinhas é calculada das próprias quantidades (plano 50 · A3); `taxas: false` desliga. */
+let seqDicaFunil = 0;
 export function funil(alvo, o) {
   limpar(alvo);
   if (!Array.isArray(o.etapas) || !o.etapas.length) { alvo.append(semDados()); return { destruir() {} }; }     // plano 1000b · RB-186
@@ -589,11 +605,18 @@ export function funil(alvo, o) {
     const href = typeof e.href === "string" && /^#\//.test(e.href) ? e.href : null;
     const nomeEl = h("span", { texto: e.nome });
     // plano 1500c · RC-243: a dica da taxa (acima de 100%) ganha um «i» que abre no toque — antes só title (mouse) e sr-only
-    const btDica = dica ? h("button", { type: "button", class: "g-fdica-bt", "aria-label": `Por que «${convTxt}»?`, "aria-expanded": "false", texto: "i" }) : null;
-    const textoDica = dica ? h("span", { class: "g-fdica-txt", role: "note", texto: dica }) : null;
+    // plano 2000d · IY-015: o «i» aponta para o texto que abre (aria-controls); IY-016: Esc fecha o texto aberto e o foco fica no «i»
+    const idDica = dica ? `g-fdica-${++seqDicaFunil}` : null;
+    const btDica = dica ? h("button", { type: "button", class: "g-fdica-bt", "aria-label": `Por que «${convTxt}»?`, "aria-expanded": "false", "aria-controls": idDica, texto: "i" }) : null;
+    const textoDica = dica ? h("span", { class: "g-fdica-txt", role: "note", id: idDica, texto: dica }) : null;
     if (btDica) {
       textoDica.hidden = true;
       btDica.addEventListener("click", ev => { if (ev && ev.preventDefault) ev.preventDefault(); const abrir = textoDica.hidden; textoDica.hidden = !abrir; btDica.setAttribute("aria-expanded", String(abrir)); });
+      btDica.addEventListener("keydown", ev => {
+        if (ev.key !== "Escape" || textoDica.hidden) return;
+        ev.preventDefault(); if (typeof ev.stopPropagation === "function") ev.stopPropagation();
+        textoDica.hidden = true; btDica.setAttribute("aria-expanded", "false");
+      });
     }
     // plano 2000d · DR-403: etapa com 0 não some — classe g-fzero (o CSS mostra o trilho vazio marcado) e «nenhum» para o leitor de tela
     const zero = !(Number(e.qtd) > 0);
@@ -673,7 +696,7 @@ export function calor(alvo, o) {
   caixa.addEventListener("pointerleave", e => { if (e.pointerType !== "touch") tr.esconder(); });
   caixa.addEventListener("blur", () => tr.esconder());
   caixa.addEventListener("keydown", e => {
-    if (e.key === "Escape") return tr.esconder();
+    if (e.key === "Escape") return escFecha(e, tr);     // plano 2000d · IY-018
     // plano 1500c · RC-244: a 1ª seta começa na célula de MAIOR valor (antes segunda 8h fixo — fora do horário de quem abre às 7h ou no sábado)
     const inicio = celulaMaior();
     const lin = atual < 0 ? inicio.lin : Math.floor(atual / 24), hr = atual < 0 ? inicio.hr : atual % 24;
@@ -714,22 +737,29 @@ export function calor(alvo, o) {
  * Cartão com o gráfico e um botão que alterna para uma tabela com os mesmos números.
  * @param o {colunas:[rótulos], linhas:[[células texto]], legenda: texto da <caption>}
  */
+let seqTabela = 0;
 export function alternarTabela(rodape, alvoGrafico, o) {
-  const tabela = h("div", { class: "g-tabela-caixa" });
+  // plano 2000d · IY-013: a caixa da tabela tem id e o botão aponta para ela (aria-controls) — o leitor sabe o que o botão mostra
+  const idTabela = `g-tab-${++seqTabela}`;
+  const tabela = h("div", { class: "g-tabela-caixa", id: idTabela });
   tabela.hidden = true;
+  // plano 2000d · IY-014: sem linhas, a tabela diz «Sem dados no período.» (antes um cabeçalho solto, sem corpo)
+  const linhas = Array.isArray(o.linhas) ? o.linhas : [];
+  const nCol = Math.max(1, (o.colunas || []).length);
   const t = h("table", { class: "g-tabela" }, h("caption", { class: "sr-only", texto: o.legenda || "" }),
-    h("thead", {}, h("tr", {}, o.colunas.map((c, j) => h("th", { scope: "col", class: j ? "num" : "", texto: c })))),
-    h("tbody", {}, o.linhas.map(l => h("tr", {}, l.map((c, j) => h(j ? "td" : "th", j ? { class: "num", texto: c } : { scope: "row", texto: c }))))));
+    h("thead", {}, h("tr", {}, (o.colunas || []).map((c, j) => h("th", { scope: "col", class: j ? "num" : "", texto: c })))),
+    h("tbody", {}, linhas.length ? linhas.map(l => h("tr", {}, l.map((c, j) => h(j ? "td" : "th", j ? { class: "num", texto: c } : { scope: "row", texto: c }))))
+      : h("tr", { class: "g-tabela-vazia" }, h("td", { colspan: String(nCol), texto: TEXTO_SEM_DADOS }))));
   tabela.append(t);
   // plano 1000b · RB-181: o texto troca («Ver como gráfico») e por isso NÃO há aria-pressed — os dois juntos davam «Ver como gráfico,
   // pressionado» (estado incoerente). O nome diz a ação seguinte; data-modo guarda o que está à vista para quem precisar ler.
-  const btn = h("button", { type: "button", class: "g-ver-tabela", "data-modo": "grafico" }, "Ver como tabela");
+  const btn = h("button", { type: "button", class: "g-ver-tabela", "data-modo": "grafico", "aria-controls": idTabela }, "Ver como tabela");
   // plano 1500c · RC-245: a tabela recebe o foco quando aparece (o leitor anuncia a tabela, não fica no botão sem saber do que mudou)
   t.setAttribute("tabindex", "-1");
   // plano 1500c · RC-246: «Copiar tabela» (colunas separadas por tabulação: cola certo no Excel/Planilhas) — só com a tabela à vista
   const btCopiar = h("button", { type: "button", class: "g-copiar-tabela", "aria-label": `Copiar a tabela${o.legenda ? `: ${o.legenda}` : ""}` }, "Copiar tabela");
   btCopiar.hidden = true;
-  btCopiar.addEventListener("click", () => copiarTexto(tabelaTsv(o.colunas, o.linhas), btCopiar));
+  btCopiar.addEventListener("click", () => copiarTexto(tabelaTsv(o.colunas, linhas), btCopiar));
   btn.addEventListener("click", () => {
     const ligado = tabela.hidden;
     tabela.hidden = !ligado;
@@ -745,17 +775,43 @@ export function alternarTabela(rodape, alvoGrafico, o) {
 }
 /** plano 1500c · RC-246: a tabela em texto TSV (tabulação entre colunas, quebra entre linhas; tabulação/quebra dentro da célula vira espaço). */
 export function tabelaTsv(colunas = [], linhas = []) {
-  const cel = v => String(v ?? "").replace(/[\t\r\n]+/g, " ");
+  // plano 2000d · IY-009: célula que começa com = + @ (ou − seguido de letra) vira fórmula ao colar no Excel/Planilhas — um nome de contato
+  // «=HIPERLINK(…)» executaria. Ganha um apóstrofo na frente (a planilha mostra o texto como está); números negativos («-5», «−R$ 800») ficam
+  const cel = v => { const t = String(v ?? "").replace(/[\t\r\n]+/g, " "); return /^[=+@]/.test(t) || /^[-−](?![\d\s.,]|R\$)/.test(t) ? `'${t}` : t; };
   return [colunas, ...linhas].map(l => (Array.isArray(l) ? l : []).map(cel).join("\t")).join("\n");
 }
-/** Copia para a área de transferência (navigator.clipboard) e diz no próprio botão «Copiada» por 2 s; sem clipboard, «Não deu para copiar». */
-function copiarTexto(texto, bt) {
-  const rotulo = bt.textContent;
-  const dizer = t => { bt.textContent = t; setTimeout(() => { bt.textContent = rotulo; }, 2000); };
+/**
+ * Copia para a área de transferência (navigator.clipboard) e diz no próprio botão «Copiada» por 2 s; sem clipboard, «Não deu para copiar».
+ * plano 2000d · IY-010: o rótulo original fica guardado no botão — dois cliques seguidos não prendem «Copiada» como nome para sempre;
+ * IY-011: o nome acessível (aria-label) troca junto, senão o leitor de tela nunca ouvia o resultado; IY-012: sem navigator.clipboard
+ * (página fora de https, navegador antigo) tenta o copiar clássico (textarea + execCommand) antes de desistir.
+ */
+export function copiarTexto(texto, bt, ms = 2000) {
+  if (bt.dataset && bt.dataset.rotulo === undefined) { bt.dataset.rotulo = bt.textContent; bt.dataset.rotuloAria = bt.getAttribute("aria-label") || ""; }
+  const rotulo = bt.dataset ? bt.dataset.rotulo : bt.textContent;
+  const aria = bt.dataset ? bt.dataset.rotuloAria : "";
+  const dizer = t => {
+    bt.textContent = t;
+    if (aria) bt.setAttribute("aria-label", t);
+    clearTimeout(bt.__copiarT);
+    bt.__copiarT = setTimeout(() => { bt.textContent = rotulo; if (aria) bt.setAttribute("aria-label", aria); }, ms);
+  };
+  const classico = () => {
+    try {
+      if (typeof document === "undefined" || typeof document.execCommand !== "function") return false;
+      const area = document.createElement("textarea");
+      area.value = texto; area.setAttribute("readonly", ""); area.className = "sr-only";
+      document.body.append(area);
+      if (typeof area.select === "function") area.select();
+      const ok = !!document.execCommand("copy");
+      area.remove();
+      return ok;
+    } catch { return false; }
+  };
   try {
     const cb = typeof navigator !== "undefined" && navigator && navigator.clipboard;
-    if (!cb || typeof cb.writeText !== "function") { dizer("Não deu para copiar"); return Promise.resolve(false); }
-    return cb.writeText(texto).then(() => { dizer("Copiada"); return true; }, () => { dizer("Não deu para copiar"); return false; });
+    if (!cb || typeof cb.writeText !== "function") { const ok = classico(); dizer(ok ? "Copiada" : "Não deu para copiar"); return Promise.resolve(ok); }
+    return cb.writeText(texto).then(() => { dizer("Copiada"); return true; }, () => { const ok = classico(); dizer(ok ? "Copiada" : "Não deu para copiar"); return ok; });
   } catch { dizer("Não deu para copiar"); return Promise.resolve(false); }
 }
 

@@ -53,6 +53,9 @@ function todasDefs(nome) {
   return out;
 }
 const params = nome => ultimaDef(nome).params.map(p => p.nome);
+// plano 2000d: as rodadas 1500c (20261022a) e 2000d (20261026a/b) reescrevem funções na MESMA assinatura copiando a definição em
+// vigor (o plano1000-ci confere a cópia); aqui a «última definição» pode estar nelas também — o conteúdo segue conferido abaixo
+const posterior = nome => ultimaDef(nome).arquivo >= "20261022a";
 const obrigatorios = nome => ultimaDef(nome).params.filter(p => !p.opcional).map(p => p.nome);
 
 // ------------------------------------------------------------ regras de ouro das três migrações
@@ -139,27 +142,29 @@ test("contratos 3, 6, 7, 10, 11: assinaturas exatas das RPCs novas e das reescri
   assert.deepEqual(params("nx_notificacoes_listar"), ["p_token", "p_cliente", "p_limite"]); assert.deepEqual(obrigatorios("nx_notificacoes_listar"), ["p_token", "p_cliente"]);
   // nx_pulso ganhou canais na 20261009b (integração): a última definição passou para lá — conferido no teste das migrações de 09/10
   // plano 1000 (SV-114, srv-3): reescrita de novo na 20261013f (desde pela coluna estado_desde; mesma assinatura e mesmo JSON)
-  assert.ok(/^20261009b|^20261013f/.test(ultimaDef("nx_pulso").arquivo), `nx_pulso: última definição na 20261009b/20261013f (${ultimaDef("nx_pulso").arquivo})`);
+  // plano 2000d: o plano 1500c (UCC-018/019, 20261022a) reescreveu o nx_pulso na mesma assinatura (+ ultima_msg_em e cliente)
+  // plano 2000d: e a 20261026b (DS-094 nao_lidas_total), de novo na mesma assinatura
+  assert.ok(/^20261009b|^20261013f|^20261022a|^20261026b/.test(ultimaDef("nx_pulso").arquivo), `nx_pulso: última definição na 20261009b/20261013f/20261022a (${ultimaDef("nx_pulso").arquivo})`);
   assert.match(ultimaDef("nx_pulso").corpo, /'nao_lidas'/); assert.match(ultimaDef("nx_pulso").corpo, /'canais'/);
   // plano 1000 (SV-124, srv-2): nx_saas_faxina foi reescrita de novo (mesma assinatura, em lotes) na 20261013c
   // plano 1000 (SV-123, srv-3): e de novo na 20261013e (+ os transitórios que ficaram de fora)
-  assert.ok(/^20261013[ce]/.test(ultimaDef("nx_saas_faxina").arquivo), `nx_saas_faxina: última definição na 20261013c/e (${ultimaDef("nx_saas_faxina").arquivo})`);
+  assert.ok(/^20261013[ce]/.test(ultimaDef("nx_saas_faxina").arquivo) || posterior("nx_saas_faxina"), `nx_saas_faxina: última definição na 20261013c/e (${ultimaDef("nx_saas_faxina").arquivo})`);
   // plano 1000 (srv-3): nx_entrar (SV-129/238/239) e nx_config_salvar (SV-073) reescritas na mesma assinatura na 20261013e
-  for (const n of ["nx_entrar", "nx_config_salvar"]) assert.ok(ultimaDef(n).arquivo.startsWith("20261013e"), `${n}: 20261013e (${ultimaDef(n).arquivo})`);
+  for (const n of ["nx_entrar", "nx_config_salvar"]) assert.ok(ultimaDef(n).arquivo.startsWith("20261013e") || posterior(n), `${n}: 20261013e (${ultimaDef(n).arquivo})`);
   for (const n of ["nx_criar_conta", "nx_sessao", "nx_app_sessao", "nx_conta_definir", "nx_codewords_situacao", "nx_hash", "nx_conta_do_token", "nx_exigir_gestor", "nx_canal_json",
                    "nx_contas_listar", "nx_notificacoes_listar", "nx_codewords_origem"]) {
-    assert.ok(ultimaDef(n).arquivo.startsWith("20261008b"), `${n}: última definição na b (${ultimaDef(n).arquivo})`);
+    assert.ok(ultimaDef(n).arquivo.startsWith("20261008b") || posterior(n), `${n}: última definição na b (${ultimaDef(n).arquivo})`);
   }
   // plano 1000 (SV-040): nx_fila_concluir foi reescrita de novo (mesma assinatura) na 20261013a — só mexe em item 'enviando'
-  assert.ok(ultimaDef("nx_fila_concluir").arquivo.startsWith("20261013a"), `nx_fila_concluir: última definição na 20261013a (${ultimaDef("nx_fila_concluir").arquivo})`);
+  assert.ok(ultimaDef("nx_fila_concluir").arquivo.startsWith("20261013a") || posterior("nx_fila_concluir"), `nx_fila_concluir: última definição na 20261013a (${ultimaDef("nx_fila_concluir").arquivo})`);
   for (const n of ["nx_auto_ia_falhar", "nx_auto_ia_chamar", "nx_ia_registrar_reserva", "nx_agenda_marcar_core"]) {
-    assert.ok(ultimaDef(n).arquivo.startsWith("20261008c"), `${n}: última definição na c (${ultimaDef(n).arquivo})`);
+    assert.ok(ultimaDef(n).arquivo.startsWith("20261008c") || posterior(n), `${n}: última definição na c (${ultimaDef(n).arquivo})`);
   }
   // plano 1000b (CB-211): nx_agenda_dia reescrita na mesma assinatura na 20261015a (nome da campanha uma vez por campanha)
-  assert.ok(/^20261008c|^20261015a/.test(ultimaDef("nx_agenda_dia").arquivo), `nx_agenda_dia: 20261008c/20261015a (${ultimaDef("nx_agenda_dia").arquivo})`);
+  assert.ok(/^20261008c|^20261015a/.test(ultimaDef("nx_agenda_dia").arquivo) || posterior("nx_agenda_dia"), `nx_agenda_dia: 20261008c/20261015a (${ultimaDef("nx_agenda_dia").arquivo})`);
   // plano 1000 (srv-2): nx_auto_ia_pegar (SV-150, 20261013c), nx_inicio e nx_dados (contratos das telas, 20261013d) reescritas na mesma assinatura
-  assert.ok(ultimaDef("nx_auto_ia_pegar").arquivo.startsWith("20261013c"), `nx_auto_ia_pegar: 20261013c (${ultimaDef("nx_auto_ia_pegar").arquivo})`);
-  for (const n of ["nx_inicio", "nx_dados"]) assert.ok(ultimaDef(n).arquivo.startsWith("20261013d"), `${n}: 20261013d (${ultimaDef(n).arquivo})`);
+  assert.ok(ultimaDef("nx_auto_ia_pegar").arquivo.startsWith("20261013c") || posterior("nx_auto_ia_pegar"), `nx_auto_ia_pegar: 20261013c (${ultimaDef("nx_auto_ia_pegar").arquivo})`);
+  for (const n of ["nx_inicio", "nx_dados"]) assert.ok(ultimaDef(n).arquivo.startsWith("20261013d") || posterior(n), `${n}: 20261013d (${ultimaDef(n).arquivo})`);
 });
 
 // ------------------------------------------------------------ JS × SQL
@@ -184,14 +189,16 @@ test("S-B9/S-B10: login com bloqueio, cadastro limitado, sessão renovada, super
   assert.match(e, /nx_login_bloqueio\('ip:' \|\| v_ip, 10, interval '15 minutes'\)/);
   assert.match(e, /current_setting\('request\.headers', true\)/, "detecta a chamada pelo PostgREST");
   assert.match(e, /set_config\('response\.status', '400', true\)/, "pelo PostgREST a falha vira 400 com a transação commitada");
-  assert.match(e, /json_build_object\('code', 'P0001', 'message', 'credenciais_invalidas', 'details', null, 'hint', null\)/, "o MESMO JSON de erro do PostgREST");
+  // plano 2000d: desde o plano 1500c (UCB-047) o hint traz «restam:N»; o resto é o MESMO JSON de erro do PostgREST
+  assert.match(e, /json_build_object\('code', 'P0001', 'message', 'credenciais_invalidas', 'details', null,\s*'hint', 'restam:'/, "o MESMO JSON de erro do PostgREST");
   assert.match(e, /raise exception 'credenciais_invalidas'/, "por SQL continua lançando (smokes 03/13)");
   // plano 1000 (SV-129): o login apaga só as sessões ALÉM das 20 mais recentes da própria conta — a purga das vencidas segue na faxina
   assert.doesNotMatch(e, /delete from public\.nx_sessoes[^;]*expira_em/, "a purga das vencidas saiu do login (vai para a faxina)");
   assert.match(e, /perform pg_sleep\(0\.4\)/);
   const c = ultimaDef("nx_criar_conta").corpo;
   assert.match(c, /nx_login_bloqueio\('cadastro:' \|\| v_ip, 5, interval '1 hour'\)/);
-  assert.match(c, /nx_login_falha_registrar\(array\['cadastro:' \|\| v_ip\]\)/);
+  // plano 2000d: desde o plano 1500c (SC-018) o cadastro conta também no teto global (array com 'cadastro:global' e o IP)
+  assert.match(c, /nx_login_falha_registrar\(array(_remove\(array)?\[('cadastro:global', case when v_ip is not null then )?'cadastro:' \|\| v_ip/);
   assert.match(ultimaDef("nx_login_ip").corpo, /x-forwarded-for/);
   assert.match(B, /create table if not exists public\.nx_login_falhas/);
   assert.match(B, /create index if not exists nx_sessoes_expira on public\.nx_sessoes \(expira_em\)/);
@@ -275,7 +282,8 @@ test("S-B12/S-B13/S-B16/S-B17: fila com recuo, nota com p_req, pulso com nao_lid
   assert.match(fx, /nx_saas_faxina_lotes\('nx_notificacoes', \$w\$lida_em is not null and criado_em < now\(\) - interval '90 days'\$w\$\)/);
   assert.match(fx, /delete from public\.nx_codewords_status_pendentes where expira_em < now\(\)/);
   assert.match(fx, /delete from public\.nx_login_falhas where em < now\(\) - interval '1 day'/);
-  assert.match(fx, /delete from cron\.job_run_details where end_time < now\(\) - interval '3 days';/, "histórico do cron de TODOS os jobs");
+  // plano 2000d: desde o plano 1500c (SC-122) o histórico do cron sai em lotes de 10.000, com o mesmo corte de 3 dias para TODOS os jobs
+  assert.match(fx, /delete from cron\.job_run_details where runid in\s*\(select d\.runid from cron\.job_run_details d where d\.end_time < now\(\) - interval '3 days' limit 10000\)/, "histórico do cron de TODOS os jobs");
   assert.doesNotMatch(fx, /nx_mensagens|nx_historico|nx_auditoria|nx_ia_uso/, "mensagens, histórico, auditoria e uso de IA ficam (decisão 6)");
   const rv = ultimaDef("nx_revogar_authenticated").corpo;
   assert.match(rv, /revoke execute on function %s from public, authenticated/); assert.match(rv, /if v_anon then execute format\('grant execute on function %s to anon'/);
@@ -312,30 +320,40 @@ test("S-B14 (contrato 7): IA adiada, uso com custo/stop_reason/ms, séries por d
 
 test("S-B15 (contratos 4–6): nx_inicio, nx_dados.hora_conversa, agenda com encaixe/dono_nome/presença", () => {
   const i = ultimaDef("nx_inicio").corpo;
-  for (const k of ["'respondidas_no_prazo_pct', v_prazo", "'aguardando_lista', j_ag::jsonb", "'funil_mes', j_funil", "'series_14d', json_build_object('aguardando', j_s_ag, 'consultas', j_s_cs, 'valor_aberto', j_s_va, 'leads', j_s_ld)",
+  // plano 2000d (20261026b): o retorno virou jsonb (para somar as chaves novas e o carimbo «versao») — as mesmas chaves, com ::jsonb
+  const novo26b = ultimaDef("nx_inicio").arquivo >= "20261026b";
+  const serie = novo26b ? "'series_14d', jsonb_build_object('aguardando', j_s_ag::jsonb, 'consultas', j_s_cs::jsonb, 'valor_aberto', j_s_va::jsonb, 'leads', j_s_ld::jsonb)"
+                        : "'series_14d', json_build_object('aguardando', j_s_ag, 'consultas', j_s_cs, 'valor_aberto', j_s_va, 'leads', j_s_ld)";
+  for (const k of ["'respondidas_no_prazo_pct', v_prazo", "'aguardando_lista', j_ag::jsonb", "'funil_mes', j_funil", serie,
                    "'provedor', coalesce(k.provedor, 'meta')", "'estado', public.nx_canal_estado(k)", "'sync_em', k.codewords_sync_em"]) {
     assert.ok(i.includes(k), `nx_inicio devolve ${k}`);
   }
-  assert.match(i, /json_build_object\('id', x\.id, 'nome', x\.nome, 'espera_min', x\.espera_min, 'canal', x\.canal\)/);
+  // plano 2000d: o plano 1500c (SC-008/RB-163) acrescentou atribuida_id/atribuida_nome depois do canal
+  assert.match(i, /json_build_object\('id', x\.id, 'nome', x\.nome, 'espera_min', x\.espera_min, 'canal', x\.canal[,)]/);
   assert.match(i, /limit 5\) x;/, "aguardando_lista ≤ 5");
   assert.match(i, /interval '15 minutes'/); assert.match(i, /interval '7 days'/);
   assert.match(i, /generate_series\(0, 13\)/, "14 dias");
-  assert.match(i, /'leads', count\(\*\),\s*'conversas', count\(\*\) filter/, "funil = coorte do mês");
+  // plano 2000d: a 26b pôs leads_anuncio (DR-246) entre leads e conversas
+  assert.match(i, /'leads', count\(\*\),\s*('leads_anuncio', count\(\*\) filter \(where [^\n]*\n\s*)?'conversas', count\(\*\) filter/, "funil = coorte do mês");
   // as chaves antigas continuam (o front antigo e o novo leem o mesmo JSON)
-  for (const k of ["'conversas', (j_cv::jsonb", "'tarefas', (j_tf::jsonb", "'negocios', j_ng", "'leads', j_ld", "'canais', j_cn", "'notificacoes_nao_lidas', v_notif"]) assert.ok(i.includes(k), k);
+  const antigas = novo26b ? ["'conversas', j_cv::jsonb", "'tarefas', j_tf::jsonb", "'negocios', j_ng", "'leads', j_ld", "'canais', j_cn", "'notificacoes_nao_lidas', v_notif"]
+                          : ["'conversas', (j_cv::jsonb", "'tarefas', (j_tf::jsonb", "'negocios', j_ng", "'leads', j_ld", "'canais', j_cn", "'notificacoes_nao_lidas', v_notif"];
+  for (const k of antigas) assert.ok(i.includes(k), k);
   const d = ultimaDef("nx_dados").corpo;
   assert.match(d, /'nome', nome, 'vertical', vertical, 'cfg'/, "nx_dados.cliente.vertical (pedido da frente P)");
   // plano 1000 (SV-116): a 1ª entrada vem de nx_conversas.primeira_entrada_em; a subconsulta em nx_mensagens fica só para quem não tem
   assert.match(d, /as hora_conversa/); assert.match(d, /extract\(hour from \(min\(coalesce\(cv\.primeira_entrada_em,/); assert.match(d, /select min\(m\.criado_em\) from public\.nx_mensagens m/); assert.match(d, /m\.direcao = 'in' and m\.tipo <> 'sistema'/);
   assert.match(d, /perform public\.nx_exigir_modulo\(p_cliente, 'ads'\)/); assert.match(d, /erro_envio\n\s+from public\.nx_alertas/);
   const mc = ultimaDef("nx_agenda_marcar_core").corpo;
-  assert.match(mc, /campos = \(coalesce\(x\.campos, '\{\}'::jsonb\) - 'presenca'\) \|\| jsonb_build_object\('encaixe', coalesce\(p_encaixe, false\)\)/);
+  // plano 2000d: desde o plano 1500c (CC-245/324/240) a remarcação apaga também agenda_obs, marcado_por e confirmada_em
+  assert.match(mc, /campos = \(coalesce\(x\.campos, '\{\}'::jsonb\) - 'presenca'( - '\w+')*\) \|\| jsonb_build_object\('encaixe', coalesce\(p_encaixe, false\)\)/);
   assert.match(mc, /'etapa', e\.nome/, "continua devolvendo a etapa");
   const ad = ultimaDef("nx_agenda_dia").corpo;
   assert.match(ad, /'dono_nome', \(select a\.nome from public\.nx_contas a where a\.id = l\.dono_id\)/); assert.match(ad, /'encaixe', coalesce\(\(l\.campos ->> 'encaixe'\)::boolean, false\)/);
-  assert.match(ad, /'presenca', case when l\.campos ->> 'presenca' in \('compareceu', 'faltou'\)/);
+  // plano 2000d (DC-414): a 26b acrescentou o estado «chegou» (sala de espera)
+  assert.match(ad, /'presenca', case when l\.campos ->> 'presenca' in \('compareceu', 'faltou'(, 'chegou')?\)/);
   const pr = ultimaDef("nx_agenda_presenca").corpo;
-  assert.match(pr, /v_estado not in \('compareceu', 'faltou', 'limpar'\)/); assert.match(pr, /hint = 'presenca'/); assert.match(pr, /hint = 'sem_consulta'/);
+  assert.match(pr, /v_estado not in \('compareceu', 'faltou',( 'chegou',)? 'limpar'\)/);   // plano 2000d · DC-414 assert.match(pr, /hint = 'presenca'/); assert.match(pr, /hint = 'sem_consulta'/);
   assert.match(pr, /s\.marco = 'faltou'/); assert.match(pr, /return json_build_object\('ok', true, 'presenca', l\.campos ->> 'presenca', 'estagio_id', l\.estagio_id\)/);
   assert.match(pr, /nx_historico_add\(p_cliente, 'presenca'/); assert.match(pr, /nx_ctx\(p_token, p_cliente, 'atendente'\)/);
 });

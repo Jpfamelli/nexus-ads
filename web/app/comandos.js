@@ -11,7 +11,8 @@ export const MAX_RECENTES = 5;
 
 /** Sem acento, minúsculo, espaços únicos. */
 export function normalizar(s) {
-  return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  // plano 2000d · SX-102: caracteres invisíveis de um nome colado (WhatsApp, PDF) não impedem de achar «Ana»
+  return String(s ?? "").replace(/[​-‍⁠﻿­]/g, "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -104,10 +105,12 @@ export function partesDeRealce(texto, termo) {
   const plano = n.join("");
   const marcas = new Array(chars.length).fill(false);
   for (const tok of normalizar(termo).split(" ")) {
-    const u = plano.indexOf(tok);
-    if (u < 0) continue;
-    const i = [...plano.slice(0, u)].length, len = [...tok].length;   // posição em caracteres (um emoji são 2 unidades do JavaScript)
-    for (let j = i; j < i + len; j++) marcas[j] = true;
+    // plano 2000d · SX-065: TODAS as ocorrências ficam marcadas («ana» em «Ana Mariana»), não só a primeira
+    if (!tok) continue;
+    for (let u = plano.indexOf(tok); u >= 0; u = plano.indexOf(tok, u + tok.length)) {
+      const i = [...plano.slice(0, u)].length, len = [...tok].length;   // posição em caracteres (um emoji são 2 unidades do JavaScript)
+      for (let j = i; j < i + len; j++) marcas[j] = true;
+    }
   }
   const partes = [];
   chars.forEach((c, i) => {
@@ -223,6 +226,8 @@ export const CATALOGO = Object.freeze([
   { id: "bloquear-tela", grupo: "Conta", rotulo: () => "Bloquear a tela", palavras: "bloquear tela pin travar recepcao pausa sair rapido", icone: "cadeado", quando: a => !!a.temCliente },
   // plano 2000d · DU-281: modo foco (esconde o menu lateral e as faixas que não bloqueiam) para quem só atende
   { id: "modo-foco", grupo: "Aparência e app", rotulo: a => (a && a.modoFoco ? "Sair do modo foco" : "Modo foco"), palavras: "foco concentrar esconder menu lateral faixas atendimento tela cheia distração", icone: "olho", atalho: "", quando: () => true },
+  // plano 2000d · SX-100: o modo apresentação (borra nomes, fotos e telefones) também pela paleta — antes só no menu da conta
+  { id: "modo-apresentacao", grupo: "Aparência e app", rotulo: a => (a && a.apresentacao ? "Sair do modo apresentação" : "Modo apresentação"), palavras: "apresentacao reuniao compartilhar tela borrar esconder dados clientes privacidade projetor", icone: "olho", quando: a => !!a.temCliente },
   // plano 2000d · DU-239: os primeiros passos dispensados voltam pela Ajuda/paleta
   { id: "reabrir-passos", grupo: "Ajuda", rotulo: () => "Reabrir os primeiros passos", palavras: "primeiros passos reabrir checklist voltar mostrar de novo", icone: "check", quando: a => !!a.passosDispensados && a.pode("admin") },
 ]);
@@ -411,6 +416,8 @@ export function recenteDaRota(r, titulo) {
   else if (r.modulo === "conversas" && id(partes[0])) { tipo = "conversa"; caminho = `#/conversas/${partes[0]}`; generico = ["conversas"]; }
   if (!tipo) return null;
   if (generico.includes(normalizar(t))) return null;      // a tela ainda não disse o nome da pessoa
+  // plano 2000d · SX-064: o título provisório da tela («Carregando…», «Abrindo», «—») não vira um «recente» com nome errado
+  if (/^(carregando|abrindo|aguarde|sem nome|—|-|\.{3}|…)\W*$/i.test(normalizar(t))) return null;
   return { hash: caminho, titulo: t, sub: TIPOS_RECENTE[tipo].rotulo, tipo };
 }
 
@@ -437,7 +444,10 @@ export function empresasDaPaleta(clientes, termo, { atualId = null, max = 4 } = 
   const t = normalizar(String(termo || "").replace(/^[>#]\s*/, "")).trim();
   if (lista.length < 2 || t.length < 2) return [];
   const palavras = t.split(/\s+/).filter(Boolean);
-  return lista.filter(c => c && c.id !== atualId && palavras.every(p => normalizar(c.nome || "").includes(p))).slice(0, max).map(c => ({ id: c.id, nome: c.nome }));
+  // plano 2000d · SX-063: o nome que COMEÇA com o que foi digitado vem primeiro («sor» → «Sorriso Centro» antes de «Clínica Sorriso»)
+  const peso = c => { const n = normalizar(c.nome || ""); return n.startsWith(t) ? 0 : n.split(" ").some(w => w.startsWith(palavras[0])) ? 1 : 2; };
+  return lista.map((c, i) => ({ c, i })).filter(({ c }) => c && c.id !== atualId && palavras.every(p => normalizar(c.nome || "").includes(p)))
+    .sort((a, b) => peso(a.c) - peso(b.c) || a.i - b.i).slice(0, max).map(({ c }) => ({ id: c.id, nome: c.nome }));
 }
 
 /** plano 1500c · UC-012: o «Comece aqui» de quem é da equipe (não admin) — 4 passos pessoais guardados no aparelho por conta.
