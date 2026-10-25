@@ -2378,6 +2378,8 @@ test("PX-071/072 · importação: nome em CAIXA ALTA/minúsculas ganha maiúscul
   assert.equal(L.nomeBonito("ana-luiza d'avila"), "Ana-Luiza D'Avila");
   assert.equal(L.nomeBonito("McDonald"), "McDonald", "misturado fica como veio");
   assert.equal(L.nomeBonito("DE SOUZA"), "De Souza", "a 1ª palavra sempre maiúscula");
+  assert.equal(L.nomeBonito("=HYPERLINK(1)"), "=HYPERLINK(1)", "fórmula/texto que não é nome fica como veio");
+  assert.equal(L.nomeBonito("ACME 2000"), "ACME 2000");
   assert.deepEqual(L.montarLinhas([["MARIA DA SILVA", "12998303030"]], ["nome", "telefone"]).map(x => x.nome), ["Maria da Silva"]);
   assert.equal(L.ufDaPlanilha("Minas"), "MG");
   assert.equal(L.ufDaPlanilha("Brasília"), "DF");

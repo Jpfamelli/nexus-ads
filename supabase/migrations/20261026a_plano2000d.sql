@@ -1,4 +1,28 @@
--- cabeçalho provisório
+-- ============================================================
+-- ÓRBITA — 20261026a_plano2000d.sql (plano «2000d», frente srv · segurança, concorrência, limites do plano, teste, IA e envios)
+-- Migração ADITIVA e IDEMPOTENTE, construída SOBRE a 20261022a: colunas/índices/tabelas com if not exists, funções com
+-- create or replace a partir da definição EM VIGOR (anotada em cada bloco). Nada de drop de coluna, tabela ou dado.
+-- As telas que dependem dela: Conversas, CRM, Início, Configurações (Automações, Marca, Equipe) e a área da plataforma.
+--
+--   Segurança/contas: DS-128 e-mail repetido não é revelado · DS-129 código pelo resumo · DS-130 senhas mais usadas recusadas
+--     (nx_senha_validar → senha_fraca) · DS-131 bcrypt atual (login regrava o custo antigo) · DS-135 convite só para o e-mail
+--     convidado · DS-151 teto do jsonb vindo do painel · DS-153 auditoria imutável (faxina só com nx.faxina) · DS-156 admins
+--     avisados quando o suporte entra · DS-346 quem perde o acesso perde as preferências · DS-273 empresa parada por cobrança:
+--     o admin ainda lê e exporta
+--   Concorrência: DS-001/DS-125/DS-315 nx_cv_atribuir_v2 com o dono que a tela viu (409 dono_mudou; hint = nome do dono atual) +
+--     a sobrecarga do contrato da tela (p_dono_esperado, p_conferir_dono) · DS-002 «Pegar a próxima» · DS-003 etiquetas da
+--     conversa por diferença · DS-051/DR-014 etiquetas de negócios em lote por diferença · DS-022 atribuida_em em todo caminho
+--   Destinatários válidos: DS-124 rodízio pula conta/acesso suspenso e ausente · DS-127 aviso não vai para conta suspensa
+--   Limites do plano e teste (14 dias): DS-280 módulos efetivos = cliente ∩ plano · DS-281 departamentos, respostas prontas e envios
+--     automáticos contam no limite · DS-282 limite de contatos em todo caminho · DS-276 marcos do teste saem uma vez cada ·
+--     DS-277/DU-241 prorrogar o teste uma vez · DS-303 «hoje» em São Paulo · DU-215 dias_teste da revenda
+--   IA: DS-169/DS-188 nx_ia_reservar com ações novas (simular, reescrever, traduzir, transcrever) e tetos diários
+--   Envios em massa: DS-173 opt-out/bloqueado sai da fila · DU-041 automação «só daqui para frente» · DU-042/DU-043/DU-044/AX-059/
+--     DS-350/DU-383/DS-331 nx_auto_envio_guarda em toda mensagem automática · DU-101 mensagens automáticas de hoje × teto
+--   Telas: DS-009/DC-021/DA-161/DR-334 preferências da pessoa no servidor · DS-080/DR-218/DR-261 metas do mês · DS-069/DR-174/
+--     DS-165 pedidos do titular (LGPD) · DU-145/DU-147/DU-152/DU-153/DU-202/DU-214/DU-445/DU-140/UC-006 chaves novas da marca ·
+--     DA-009/DA-025/DA-093/DA-187/DA-346/DA-402 chaves novas da configuração (nx_cfg_validar)
+-- ============================================================
 
 -- ------------------------------------------------------------
 -- 1. Colunas, tabelas novas e índices (tudo com if not exists; nenhum dado existente muda)
@@ -217,8 +241,11 @@ create trigger nx_contatos_saiu after update of optin_marketing, bloqueado on pu
   for each row execute function public.nx_tg_contato_saiu();
 
 -- plano 2000d · DS-282: o limite de contatos vale para TODO caminho (webhook, formulário, importação, automação). Os caminhos manuais
--- já recusam no limite exato (nx_exigir_limite); aqui, uma vez por comando (tabela de transição: a importação de 5.000 conta 1 vez),
--- a entrada automática ganha 10% de folga (lead do WhatsApp não se perde no dia em que bate o limite) e o admin é avisado 1×/mês.
+-- e a importação já recusam no limite exato (nx_exigir_limite; a importação confere o total UMA vez antes de gravar).
+-- plano 2000d · REV-M2: este gatilho NUNCA recusa — a entrada automática (WhatsApp, webhook, formulário, lead do anúncio) entra
+--   mesmo acima do limite (lead não se perde); o que fica é o AVISO aos admins + a marca «limite_contatos_excedido» na auditoria,
+--   1× por mês. Sem count(*) por linha: dentro da importação (nx.lote = '1', já conferida no começo) não conta nada, e depois
+--   do aviso do mês também não (o exists do aviso vem antes da contagem).
 create or replace function public.nx_tg_contatos_limite()
 returns trigger
 language plpgsql
@@ -227,19 +254,23 @@ set search_path = ''
 as $$
 declare r record; v_lim int; v_uso int; v_mes timestamptz := date_trunc('month', now());
 begin
+  if coalesce(current_setting('nx.lote', true), '') = '1' then return null; end if;   -- plano 2000d · REV-M2
   for r in select n.cliente_id, count(*)::int as novos from novos n group by n.cliente_id loop
     v_lim := public.nx_limite(r.cliente_id, 'contatos');
     if v_lim is null then continue; end if;
-    v_uso := public.nx_uso(r.cliente_id, 'contatos');
-    if v_uso > ceil(v_lim * 1.1) then
-      raise exception 'limite_plano' using errcode = '22023', hint = 'contatos:' || v_lim;
+    if exists (select 1 from public.nx_notificacoes x
+                where x.cliente_id = r.cliente_id and x.tipo = 'sistema'
+                  and x.titulo = 'Limite de contatos do plano atingido' and x.criado_em >= v_mes) then
+      continue;   -- já avisado neste mês: nada a contar
     end if;
-    if v_uso > v_lim and not exists (select 1 from public.nx_notificacoes x
-                                      where x.cliente_id = r.cliente_id and x.tipo = 'sistema'
-                                        and x.titulo = 'Limite de contatos do plano atingido' and x.criado_em >= v_mes) then
+    v_uso := public.nx_uso(r.cliente_id, 'contatos');
+    if v_uso > v_lim then
       perform public.nx_notificar(r.cliente_id, null, 'sistema', 'Limite de contatos do plano atingido',
-        'Os contatos novos do WhatsApp e do site ainda entram por uns dias (folga de 10%). Para não perder nenhum, aumente o plano.',
+        'Os contatos novos do WhatsApp, do site e dos anúncios continuam entrando (nenhum lead se perde), mas criar e importar '
+        || 'contatos à mão fica bloqueado. Aumente o plano para liberar.',
         '#/config/plano');
+      perform public.nx_auditar((select c.org_id from public.nx_clientes c where c.id = r.cliente_id), r.cliente_id, null,
+                                'limite_contatos_excedido', jsonb_build_object('limite', v_lim, 'uso', v_uso));
     end if;
   end loop;
   return null;
@@ -247,6 +278,184 @@ end $$;
 drop trigger if exists nx_contatos_limite on public.nx_contatos;   -- lint:permitido gatilho recriado (idempotente)
 create trigger nx_contatos_limite after insert on public.nx_contatos
   referencing new table as novos for each statement execute function public.nx_tg_contatos_limite();
+
+-- ------------------------------------------------------------
+-- plano 2000d · REV-M2 nx_lead_entrada: o formulário do site não perde o lead quando o plano de contatos está cheio
+--   (cópia da definição em vigor: 20261015a_plano1000b.sql — mesma assinatura e respostas; só sai o descarte por limite)
+-- ------------------------------------------------------------
+create or replace function public.nx_lead_entrada(p_chave text, p_dados jsonb)
+returns json
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  d jsonb := case when jsonb_typeof(p_dados) = 'object' then p_dados else '{}'::jsonb end;
+  -- texto externo: sem caracteres de controle, aparado e cortado
+  v_nome text := nullif(btrim(left(regexp_replace(coalesce(d->>'nome', ''), '[[:cntrl:]]+', ' ', 'g'), 160)), '');
+  v_tel_bruto text := left(coalesce(d->>'telefone', ''), 40);
+  v_tel text;
+  v_email text := lower(nullif(btrim(left(coalesce(d->>'email', ''), 160)), ''));
+  v_msg text := nullif(btrim(left(regexp_replace(coalesce(d->>'mensagem', ''), '[^[:print:][:space:]]+', '', 'g'), 2000)), '');
+  v_serv text := nullif(btrim(left(regexp_replace(coalesce(d->>'servico', ''), '[[:cntrl:]]+', ' ', 'g'), 80)), '');
+  v_utm_s text := nullif(btrim(left(regexp_replace(coalesce(d->>'utm_source', ''), '[[:cntrl:]]+', ' ', 'g'), 80)), '');
+  v_utm_c text := nullif(btrim(left(regexp_replace(coalesce(d->>'utm_campaign', ''), '[[:cntrl:]]+', ' ', 'g'), 120)), '');
+  -- plano 1000: o resto do rastreio que o formulário do site manda e o aceite da política de privacidade
+  v_utm_m text := nullif(btrim(left(regexp_replace(coalesce(d->>'utm_medium', ''), '[[:cntrl:]]+', ' ', 'g'), 80)), '');
+  v_utm_ct text := nullif(btrim(left(regexp_replace(coalesce(d->>'utm_content', ''), '[[:cntrl:]]+', ' ', 'g'), 120)), '');
+  v_utm_t text := nullif(btrim(left(regexp_replace(coalesce(d->>'utm_term', ''), '[[:cntrl:]]+', ' ', 'g'), 120)), '');
+  v_gclid text := nullif(left(regexp_replace(coalesce(d->>'gclid', ''), '[^A-Za-z0-9._-]+', '', 'g'), 200), '');
+  v_fbclid text := nullif(left(regexp_replace(coalesce(d->>'fbclid', ''), '[^A-Za-z0-9._-]+', '', 'g'), 200), '');
+  -- plano 1000b · AB-121: o rastreio.v2 também guarda utm_id (id da campanha), ttclid (TikTok) e msclkid (Microsoft Ads)
+  v_utm_id text := nullif(btrim(left(regexp_replace(coalesce(d->>'utm_id', ''), '[[:cntrl:]]+', ' ', 'g'), 100)), '');
+  v_ttclid text := nullif(left(regexp_replace(coalesce(d->>'ttclid', ''), '[^A-Za-z0-9._-]+', '', 'g'), 200), '');
+  v_msclkid text := nullif(left(regexp_replace(coalesce(d->>'msclkid', ''), '[^A-Za-z0-9._-]+', '', 'g'), 200), '');
+  v_aceite boolean := case when lower(coalesce(d->>'aceite_privacidade', '')) in ('true', '1', 'sim', 'on', 'yes') then true end;
+  rr public.nx_rastreio; cls jsonb; v_plat text; v_orig text := 'site'; v_camp text; v_rast jsonb;
+  v_hoje date := (now() at time zone 'America/Sao_Paulo')::date;
+  cli public.nx_clientes;
+  v_contato bigint;
+  v_funil uuid;
+  v_neg bigint;
+  v_n int;
+  v_ip text;
+  v_novo boolean := false;
+begin
+  -- 1) os dados primeiro (o erro não depende da chave)
+  if nullif(regexp_replace(v_tel_bruto, '\D', '', 'g'), '') is not null then
+    v_tel := public.nx_tel_normalizar(v_tel_bruto, false);
+    if v_tel is null then raise exception 'dados_invalidos' using errcode = '22023', hint = 'telefone'; end if;
+  end if;
+  if v_email is not null and v_email !~* '^[^@\s]+@[^@\s]+\.[^@\s]+$' then
+    raise exception 'dados_invalidos' using errcode = '22023', hint = 'email';
+  end if;
+  if v_nome is null then raise exception 'dados_invalidos' using errcode = '22023', hint = 'nome'; end if;
+  if v_tel is null and v_email is null then raise exception 'dados_invalidos' using errcode = '22023', hint = 'telefone'; end if;
+
+  -- 2) a chave: qualquer problema → ok sem gravar (não revela)
+  if p_chave is null or p_chave !~ '^[0-9a-f]{48}$' then return json_build_object('ok', true); end if;
+  select * into cli from public.nx_clientes c where c.entrada_chave = p_chave;
+  if cli.id is null
+     or not coalesce(cli.ativo, true)
+     or coalesce(cli.status, 'ativo') not in ('ativo', 'teste')
+     or (cli.status = 'teste' and cli.teste_ate is not null and cli.teste_ate < v_hoje)
+     or not ('crm' = any(coalesce(cli.modulos, '{}'::text[])))
+     or exists (select 1 from public.nx_orgs o where o.id = cli.org_id and o.status in ('suspenso', 'cancelado')) then
+    return json_build_object('ok', true);
+  end if;
+
+  -- 3) limite por IP (plano 1000, SV-108: 5 formulários por hora — a chave é pública e qualquer um esgotava o limite do
+  --    cliente) e de 30 por hora por cliente (trava por cliente: chamadas simultâneas esperam a vez)
+  v_ip := public.nx_login_ip();
+  if v_ip is not null and not (public.nx_taxa_usar('form:' || v_ip, 5, 3600) ->> 'ok')::boolean then
+    raise exception 'limite_taxa' using errcode = '54000';
+  end if;
+  -- plano 1000 (SV-254): esperar a trava consultiva no máximo 5 s (uma entrega presa não segura as outras até o statement_timeout;
+  -- o erro faz a Meta / o fluxo tentarem de novo). set_config local = só nesta transação (a RPC).
+  perform set_config('lock_timeout', '5s', true);
+  perform pg_advisory_xact_lock(hashtextextended('nx_lead_entrada:' || cli.id::text, 0));
+  -- plano 1000 (SV-136): a MESMA trava do nx_wa_entrada e do nx_lead_webhook (cliente + chave do telefone) — formulário e WhatsApp
+  -- da mesma pessoa no mesmo instante esperam a vez e viram UM negócio
+  if v_tel is not null then
+    perform pg_advisory_xact_lock(hashtextextended(cli.id::text || ':' || coalesce(public.nx_tel_chave(v_tel), v_tel), 0));
+  end if;
+  select count(*) into v_n
+    from public.nx_leads l
+   where l.cliente_id = cli.id and l.data_conversa >= v_hoje - 1
+     and l.origem = 'site' and l.criado_em > now() - interval '1 hour';
+  if v_n >= 30 then raise exception 'limite_taxa' using errcode = '54000'; end if;
+
+  -- 4) contato: telefone → e-mail → novo
+  if v_tel is not null then v_contato := public.nx_contato_por_tel(cli.id, v_tel); end if;
+  if v_contato is null and v_email is not null then
+    select k.id into v_contato from public.nx_contatos k
+     where k.cliente_id = cli.id and lower(k.email) = v_email order by k.id limit 1;
+  end if;
+  if v_contato is null then
+    -- plano 2000d · REV-M2: plano cheio NÃO descarta o lead do formulário (antes o site recebia {ok:true} e nada era gravado).
+    -- O contato entra; o gatilho nx_contatos_limite avisa os admins e marca «limite_contatos_excedido» na auditoria (1×/mês).
+    insert into public.nx_contatos (cliente_id, nome, telefone, email, origem)
+    values (cli.id, v_nome, v_tel, v_email, 'site')
+    on conflict (cliente_id, tel_chave) where tel_chave is not null
+    do update set nome = coalesce(public.nx_contatos.nome, excluded.nome),
+                  email = coalesce(public.nx_contatos.email, excluded.email)
+    returning id into v_contato;
+  else
+    -- contato existente: só preenche o que estiver vazio (formulário anônimo nunca sobrescreve)
+    update public.nx_contatos k
+       set nome = coalesce(k.nome, v_nome), email = coalesce(k.email, v_email),
+           telefone = coalesce(k.telefone, v_tel)
+     where k.id = v_contato
+       and (k.nome is null or (k.email is null and v_email is not null) or (k.telefone is null and v_tel is not null));
+  end if;
+
+  -- 5) plano 1000 (SV-107): contato com negócio ABERTO → o envio vira só nota nele (decisão 1 do plano 100; duplo clique ou
+  --    reenvio do formulário criavam 2 negócios e 2 avisos). Sem negócio aberto: negócio novo no funil padrão (o gatilho acha a
+  --    etapa 'nova' e completa nome/telefone)
+  select l.id into v_neg from public.nx_leads l
+   where l.cliente_id = cli.id and l.contato_id = v_contato and l.status = 'aberto'
+   order by l.criado_em desc, l.id desc limit 1;
+  if v_neg is null then
+    -- plano 1000 (SV-137): a MESMA classificação do rastreio do site (nx_rastreio_plataforma): utm_source/medium, gclid, fbclid →
+    -- plataforma e origem (anúncio × orgânico × site); utm_campaign que casa com campanha conhecida é anúncio (como no aplicar)
+    rr.utm_source := v_utm_s; rr.utm_medium := v_utm_m; rr.utm_campaign := v_utm_c; rr.utm_content := v_utm_ct; rr.utm_term := v_utm_t;
+    rr.gclid := v_gclid; rr.fbclid := v_fbclid;
+    rr.utm_id := v_utm_id; rr.ttclid := v_ttclid; rr.msclkid := v_msclkid;   -- plano 1000b · AB-121
+    cls := public.nx_rastreio_plataforma(rr);
+    v_plat := cls ->> 'plataforma'; v_orig := coalesce(cls ->> 'origem', 'site');
+    if v_plat is not null and v_utm_c is not null then
+      select m.campanha_ext into v_camp from public.nx_metricas_dia m
+       where m.cliente_id = cli.id and m.plataforma = v_plat and (m.campanha_ext = v_utm_c or lower(m.campanha_nome) = lower(v_utm_c))
+       order by (m.campanha_ext = v_utm_c) desc, m.data desc limit 1;
+      if v_camp is not null then v_orig := 'anuncio'; end if;
+      v_camp := coalesce(v_camp, left(v_utm_c, 100));
+    end if;
+    v_rast := jsonb_strip_nulls(jsonb_build_object('via', 'formulario', 'utm_source', v_utm_s, 'utm_medium', v_utm_m, 'utm_campaign', v_utm_c,
+      'utm_content', v_utm_ct, 'utm_term', v_utm_t, 'fbclid', v_fbclid, 'aceite_privacidade', v_aceite,
+      'utm_id', v_utm_id, 'ttclid', v_ttclid, 'msclkid', v_msclkid,
+      'aceite_em', case when v_aceite then now() end, 'clique_em', now()));
+    select f.id into v_funil from public.nx_funis f where f.cliente_id = cli.id and f.padrao and f.ativo limit 1;
+    insert into public.nx_leads (cliente_id, nome, telefone, contato_id, origem, plataforma, campanha_ext, gclid, rastreio, servico, obs, funil_id, etapa)
+    values (cli.id, v_nome, v_tel, v_contato, v_orig, v_plat, v_camp, v_gclid, v_rast, v_serv,
+            left(concat_ws(' · ', 'Formulário do site',
+                           case when v_utm_s is not null then 'utm_source=' || v_utm_s end,
+                           case when v_utm_m is not null then 'utm_medium=' || v_utm_m end,
+                           case when v_utm_c is not null then 'utm_campaign=' || v_utm_c end,
+                           case when v_utm_ct is not null then 'utm_content=' || v_utm_ct end,
+                           case when v_utm_t is not null then 'utm_term=' || v_utm_t end,
+                           case when v_gclid is not null then 'gclid' end,
+                           case when v_fbclid is not null then 'fbclid' end,
+                           case when v_utm_id is not null then 'utm_id=' || v_utm_id end,
+                           case when v_ttclid is not null then 'ttclid' end,
+                           case when v_msclkid is not null then 'msclkid' end,
+                           case when v_aceite then 'aceitou a política de privacidade' end), 5000),
+            v_funil, 'nova')
+    returning id into v_neg;
+    v_novo := true;
+    -- contato: 1º toque (só preenche o vazio; a origem padrão vira a real), como o nx_rastreio_aplicar
+    if v_plat is not null or v_orig <> 'site' then
+      update public.nx_contatos k set
+        origem = case when k.origem in ('whatsapp', 'site') then v_orig else k.origem end,
+        plataforma = coalesce(k.plataforma, v_plat), campanha_ext = coalesce(k.campanha_ext, v_camp)
+      where k.id = v_contato and k.cliente_id = cli.id and k.plataforma is null;
+    end if;
+  end if;
+
+  -- 6) mensagem vira nota (no negócio que já existia: sempre uma nota, para o envio repetido deixar rastro); avisa os admins
+  --    (negócio que já existia: no máximo um aviso a cada 30 min)
+  if v_msg is not null or not v_novo then
+    insert into public.nx_notas (cliente_id, contato_id, negocio_id, texto)
+    values (cli.id, v_contato, v_neg, left(case when v_msg is not null then 'Mensagem enviada pelo formulário do site: ' || v_msg
+                                                else 'Formulário do site enviado de novo' end, 5000));
+  end if;
+  if v_novo or not exists (select 1 from public.nx_notificacoes n
+                            where n.cliente_id = cli.id and n.link = '#/crm/negocio/' || v_neg and n.criado_em > now() - interval '30 minutes') then
+    perform public.nx_notificar(cli.id, null, 'sistema',
+                                left(case when v_novo then 'Novo contato pelo site: ' else 'Contato do site escreveu de novo: ' end || v_nome, 120),
+                                left(concat_ws(' · ', v_serv, v_msg), 500), '#/crm/negocio/' || v_neg);
+  end if;
+  return json_build_object('ok', true);
+end $$;
 
 -- plano 2000d · DS-153: a auditoria só cresce — update/delete recusados, salvo a retenção explícita (set local nx.faxina = 'on')
 create or replace function public.nx_tg_auditoria_imutavel()
@@ -264,19 +473,27 @@ end $$;
 drop trigger if exists nx_auditoria_imutavel on public.nx_auditoria;   -- lint:permitido gatilho recriado (idempotente)
 create trigger nx_auditoria_imutavel before update or delete on public.nx_auditoria
   for each row execute function public.nx_tg_auditoria_imutavel();
+-- plano 2000d · REV-M3: busca por data na auditoria (relatórios/consultas por período; a auditoria NÃO tem retenção — decisão 6)
+create index if not exists nx_auditoria_criado on public.nx_auditoria (criado_em);
 
 -- ------------------------------------------------------------
 -- 3. Envio em massa seguro (automações): uma regra só, chamada antes de pôr mensagem na fila
 -- ------------------------------------------------------------
 -- plano 2000d · DU-042 / DU-043 / DU-044 / AX-059 / DS-350 / DU-383 / DS-331: devolve o motivo para NÃO enfileirar (ou null).
---   • teto diário de mensagens automáticas da empresa (limite «envios_dia» do plano, cfg.automacoes.teto_dia, padrão 300), com
+--   • teto diário de mensagens automáticas da empresa (limite «envios_dia» do plano ou cfg.automacoes.teto_dia), com
 --     aviso aos admins em 80% e 100% (1× por dia cada);
 --   • gatilhos que não respondem ao cliente (tempo, CRM, agendados): quem pediu para não receber (opt-out) ou tem a etiqueta
---     «Não enviar» fica de fora; intervalo mínimo entre automações diferentes ao mesmo contato (cfg.automacoes.intervalo_contato_h,
---     padrão 4 h; 0 desliga) e no máximo N por contato em 24 h (cfg.automacoes.max_msgs_contato_dia, padrão 3);
+--     «Não enviar» fica de fora; intervalo mínimo entre automações diferentes ao mesmo contato (cfg.automacoes.intervalo_contato_h)
+--     e no máximo N por contato em 24 h (cfg.automacoes.max_msgs_contato_dia);
 --   • disjuntor: a automação com 20+ envios nas últimas 2 h e metade ou mais falhando é desligada sozinha e os admins avisados.
 -- Responder a quem acabou de escrever (mensagem recebida, conversa nova) não passa pelo opt-out nem pelos intervalos.
-create or replace function public.nx_auto_envio_guarda(p_auto public.nx_automacoes, p_contato bigint, p_optout boolean default true)
+-- plano 2000d · REV-M1: teto, intervalo e máximo por contato são OPT-IN — sem o limite do plano nem a chave na configuração da
+--   empresa valem 0 (desligado): lembretes e confirmações de consulta de quem já usa não podem calar de um dia para o outro.
+--   Os gatilhos de agenda (agendado = confirmação, antes_da_data = lembrete) nunca caem no intervalo entre automações.
+--   Intervalo e máximo por contato contam pela HORA PREVISTA de envio (enviar_em; p_quando = a desta mensagem), não pela
+--   entrada na fila: o lembrete enfileirado ontem para daqui a 3 h não «ocupa» o contato agora.
+create or replace function public.nx_auto_envio_guarda(p_auto public.nx_automacoes, p_contato bigint, p_optout boolean default true,
+                                                       p_quando timestamptz default null)
 returns text
 language plpgsql
 security definer
@@ -285,6 +502,8 @@ as $$
 declare
   v_cfg jsonb; v_teto int; v_hoje int; v_ini timestamptz; v_int numeric; v_max int; v_n int; v_falhas int;
   v_reativo boolean := p_auto.gatilho in ('mensagem_recebida', 'conversa_nova');
+  v_agenda boolean := p_auto.gatilho in ('agendado', 'antes_da_data');   -- plano 2000d · REV-M1: confirmação e lembrete
+  v_quando timestamptz := greatest(coalesce(p_quando, now()), now());     -- plano 2000d · REV-M1: hora prevista do envio
   k public.nx_contatos;
 begin
   if p_auto.id is null then return null; end if;
@@ -308,12 +527,16 @@ begin
   end if;
 
   -- teto diário da empresa (DU-042)
+  -- plano 2000d · REV-M1: sem limite no plano nem cfg.automacoes.teto_dia → 0 = sem teto (nada de 300 por padrão)
   v_teto := coalesce(public.nx_limite(p_auto.cliente_id, 'envios_dia'),
-                     case when (v_cfg ->> 'teto_dia') ~ '^[0-9]{1,6}$' then (v_cfg ->> 'teto_dia')::int end, 300);
+                     case when (v_cfg ->> 'teto_dia') ~ '^[0-9]{1,6}$' then (v_cfg ->> 'teto_dia')::int end, 0);
   v_ini := (public.nx_hoje_sp()::timestamp at time zone 'America/Sao_Paulo');
-  select count(*)::int into v_hoje from public.nx_envios_fila f
-   where f.cliente_id = p_auto.cliente_id and f.origem = 'automacao' and f.criado_em >= v_ini and f.status <> 'cancelado';
-  if v_hoje >= v_teto then
+  v_hoje := 0;
+  if v_teto > 0 then
+    select count(*)::int into v_hoje from public.nx_envios_fila f
+     where f.cliente_id = p_auto.cliente_id and f.origem = 'automacao' and f.criado_em >= v_ini and f.status <> 'cancelado';
+  end if;
+  if v_teto > 0 and v_hoje >= v_teto then
     if not exists (select 1 from public.nx_notificacoes x where x.cliente_id = p_auto.cliente_id and x.tipo = 'sistema'
                      and x.titulo = 'Teto diário de mensagens automáticas atingido' and x.criado_em >= v_ini) then
       perform public.nx_notificar(p_auto.cliente_id, null, 'sistema', 'Teto diário de mensagens automáticas atingido',
@@ -322,7 +545,7 @@ begin
     end if;
     return 'teto diário de mensagens automáticas da empresa atingido (' || v_teto || ')';
   end if;
-  if (v_hoje + 1) * 100 >= v_teto * 80
+  if v_teto > 0 and (v_hoje + 1) * 100 >= v_teto * 80
      and not exists (select 1 from public.nx_notificacoes x where x.cliente_id = p_auto.cliente_id and x.tipo = 'sistema'
                        and x.titulo = '80% do teto diário de mensagens automáticas' and x.criado_em >= v_ini) then
     perform public.nx_notificar(p_auto.cliente_id, null, 'sistema', '80% do teto diário de mensagens automáticas',
@@ -338,19 +561,23 @@ begin
                 and public.nx_crm_norm(e.nome) in ('nao enviar', 'nao enviar mensagens', 'nao enviar mensagem')) then
     return 'contato com a etiqueta «Não enviar»';
   end if;
-  -- intervalo mínimo entre automações diferentes (DU-043)
-  v_int := case when (v_cfg ->> 'intervalo_contato_h') ~ '^[0-9]{1,3}(\.[0-9]+)?$' then (v_cfg ->> 'intervalo_contato_h')::numeric else 4 end;
-  if v_int > 0 and exists (select 1 from public.nx_envios_fila f
-                            where f.contato_id = p_contato and f.origem = 'automacao' and f.automacao_id is distinct from p_auto.id
-                              and f.status in ('pendente', 'enviando', 'enviado')
-                              and f.criado_em > now() - make_interval(secs => (v_int * 3600)::int)) then
+  -- intervalo mínimo entre automações diferentes (DU-043) — plano 2000d · REV-M1: opt-in (sem a chave = 0 = desligado), os
+  -- gatilhos de agenda nunca caem nele e a distância é medida entre as horas PREVISTAS de envio (enviar_em), nos dois sentidos
+  v_int := case when (v_cfg ->> 'intervalo_contato_h') ~ '^[0-9]{1,3}(\.[0-9]+)?$' then (v_cfg ->> 'intervalo_contato_h')::numeric else 0 end;
+  if v_int > 0 and not v_agenda
+     and exists (select 1 from public.nx_envios_fila f
+                  where f.contato_id = p_contato and f.origem = 'automacao' and f.automacao_id is distinct from p_auto.id
+                    and f.status in ('pendente', 'enviando', 'enviado')
+                    and coalesce(f.enviar_em, f.criado_em) > v_quando - make_interval(secs => (v_int * 3600)::int)
+                    and coalesce(f.enviar_em, f.criado_em) < v_quando + make_interval(secs => (v_int * 3600)::int)) then
     return 'mensagem automática recente para este contato';
   end if;
-  -- no máximo N por contato em 24 h (DS-350)
-  v_max := case when (v_cfg ->> 'max_msgs_contato_dia') ~ '^[0-9]{1,3}$' then (v_cfg ->> 'max_msgs_contato_dia')::int else 3 end;
+  -- no máximo N por contato em 24 h (DS-350) — plano 2000d · REV-M1: opt-in (sem a chave = 0), pela hora prevista de envio
+  v_max := case when (v_cfg ->> 'max_msgs_contato_dia') ~ '^[0-9]{1,3}$' then (v_cfg ->> 'max_msgs_contato_dia')::int else 0 end;
   if v_max > 0 and (select count(*) from public.nx_envios_fila f
                      where f.contato_id = p_contato and f.origem = 'automacao' and f.status in ('pendente', 'enviando', 'enviado')
-                       and f.criado_em > now() - interval '24 hours') >= v_max then
+                       and coalesce(f.enviar_em, f.criado_em) > v_quando - interval '24 hours'
+                       and coalesce(f.enviar_em, f.criado_em) < v_quando + interval '24 hours') >= v_max then
     return 'limite de mensagens automáticas por contato no dia';
   end if;
   return null;
@@ -784,7 +1011,8 @@ begin
   v_min := greatest(public.nx_login_bloqueio('teste_email:' || public.nx_hash(v_email), 3, interval '1 day'),
                     public.nx_login_bloqueio('cadastro:global', 50, interval '1 hour'));
   if v_min > 0 then raise exception 'muitas_tentativas' using errcode = '22023', hint = v_min::text; end if;
-  perform public.nx_login_falha_registrar(array_remove(array['cadastro:global', 'teste_email:' || public.nx_hash(v_email),
+  -- plano 2000d · REV-M4: a tentativa conta no IP e no e-mail; o teto global só conta o teste CRIADO (lá embaixo)
+  perform public.nx_login_falha_registrar(array_remove(array['teste_email:' || public.nx_hash(v_email),
                                                              case when v_ip is not null then 'teste:' || v_ip end], null));
   perform pg_advisory_xact_lock(hashtext('nx_teste_criar:' || o.id::text));
   -- DS-297: testes ativos por org
@@ -817,6 +1045,7 @@ begin
   insert into public.nx_acessos (conta_id, cliente_id, papel) values (k.id, v_cli, 'admin');
   s := public.nx_sessao_criar(k.id);
   perform public.nx_auditar(o.id, v_cli, k.id, 'teste_criado', jsonb_build_object('vertical', v_vert, 'dias', v_dias));
+  perform public.nx_login_falha_registrar(array['cadastro:global']);   -- plano 2000d · REV-M4: só o cadastro efetivo
   return json_build_object('ok', true, 'token', s ->> 'token', 'expira_em', s -> 'expira_em', 'cliente_id', v_cli,
                            'teste_ate', v_ate, 'nome', k.nome, 'papel', k.papel);
 end $$;
@@ -997,8 +1226,10 @@ begin
   select not exists (select 1 from public.nx_contas) into v_primeira;
   if exists (select 1 from public.nx_contas where email = v_email) then
     -- plano 2000d · DS-128: e-mail já cadastrado → a MESMA resposta de um cadastro novo pendente; quem tenta não descobre se o
-    -- e-mail tem conta. A tentativa conta nos limites (global e do IP) e deixa só o resumo do e-mail.
-    perform public.nx_login_falha_registrar(array_remove(array['cadastro:global', 'cadastro_repetido:' || left(public.nx_hash(v_email), 16),
+    -- e-mail tem conta. A tentativa conta no limite do IP e deixa só o resumo do e-mail.
+    -- plano 2000d · REV-M4: NÃO conta no teto global (só cadastro criado conta lá; senão um anônimo repetindo um e-mail trava
+    -- o cadastro de todo mundo por 1 h)
+    perform public.nx_login_falha_registrar(array_remove(array['cadastro_repetido:' || left(public.nx_hash(v_email), 16),
                                                                case when v_ip is not null then 'cadastro:' || v_ip end], null));
     perform pg_sleep(0.3);
     return json_build_object('ok', true, 'papel', 'clinica', 'aprovado', false);
@@ -1723,7 +1954,7 @@ begin
             -- sem janela no aparelho; quem pediu para sair (SAIR) não recebe texto de automação
             v_ue := case when v_optin is false then null else 'infinity'::timestamptz end;
           end if;
-          v_guarda := public.nx_auto_envio_guarda(p_auto, v_ct, true);   -- plano 2000d
+          v_guarda := public.nx_auto_envio_guarda(p_auto, v_ct, true, v_quando);   -- plano 2000d · REV-M1: pela hora prevista
           if v_ue is null or v_quando >= v_ue + interval '24 hours' then
             v_det := v_det || case when v_optin is false then 'mensagem: pulada (contato pediu para não receber)'
                                    else 'mensagem: pulada (fora da janela de 24 h)' end;
@@ -1753,8 +1984,11 @@ begin
         elsif coalesce(v_d #>> '{contato,wa_id}', v_d #>> '{contato,telefone}') is null then
           v_det := v_det || 'modelo: pulado (contato sem telefone)'::text;
         -- plano 2000d: opt-out só barra modelo de MARKETING (lembrete de consulta continua); o resto da guarda vale para todos
-        elsif public.nx_auto_envio_guarda(p_auto, v_ct, upper(coalesce(t.categoria, '')) = 'MARKETING') is not null then
-          v_det := v_det || ('modelo: pulado (' || public.nx_auto_envio_guarda(p_auto, v_ct, upper(coalesce(t.categoria, '')) = 'MARKETING') || ')');
+        -- plano 2000d · REV-M1: pela hora prevista (horário da conversa do alvo ou o padrão da empresa)
+        elsif public.nx_auto_envio_guarda(p_auto, v_ct, upper(coalesce(t.categoria, '')) = 'MARKETING',
+                                          public.nx_auto_quando(v_c, v_cv, p_auto.respeitar_horario)) is not null then
+          v_det := v_det || ('modelo: pulado (' || public.nx_auto_envio_guarda(p_auto, v_ct, upper(coalesce(t.categoria, '')) = 'MARKETING',
+                                          public.nx_auto_quando(v_c, v_cv, p_auto.respeitar_horario)) || ')');
         else
           v_pars := '[]'::jsonb; v_n := 0;
           for v_raw in select z from jsonb_array_elements_text(coalesce(ac -> 'parametros', '[]'::jsonb)) z loop
@@ -2881,9 +3115,10 @@ begin
                                  'optout_texto', 'etiqueta_nao_enviar'),
     -- plano 2000d · DU-042 / DU-101: mensagens automáticas de hoje e o teto da empresa
     'mensagens_hoje', public.nx_uso(p_cliente, 'envios_dia'),
-    'teto_envios_dia', coalesce(public.nx_limite(p_cliente, 'envios_dia'),
+    -- plano 2000d · REV-M1: null = sem teto (opt-in; antes caía em 300)
+    'teto_envios_dia', nullif(coalesce(public.nx_limite(p_cliente, 'envios_dia'),
                                 (select case when (c.cfg -> 'automacoes' ->> 'teto_dia') ~ '^[0-9]{1,6}$' then (c.cfg -> 'automacoes' ->> 'teto_dia')::int end
-                                   from public.nx_clientes c where c.id = p_cliente), 300));
+                                   from public.nx_clientes c where c.id = p_cliente), 0), 0));
 end $$;
 
 -- ------------------------------------------------------------
@@ -3365,7 +3600,7 @@ begin
     'public.nx_tg_contato_saiu()',
     'public.nx_tg_contatos_limite()',
     'public.nx_tg_auditoria_imutavel()',
-    'public.nx_auto_envio_guarda(public.nx_automacoes, bigint, boolean)'] loop
+    'public.nx_auto_envio_guarda(public.nx_automacoes, bigint, boolean, timestamp with time zone)'] loop
     execute format('revoke all on function %s from public, anon, authenticated', f);
     execute format('grant execute on function %s to service_role', f);
   end loop;

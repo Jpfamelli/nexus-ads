@@ -14,6 +14,13 @@
 --   Conversas: DS-005/DC-011 nx_cv_status_lote · DS-006/DC-012 nx_cv_marcar_lida_lote · DS-094 nx_pulso.nao_lidas_total
 --   CRM: DR-033/DS-053 nx_negocios_buscar_funis · DS-050/DC-416 nx_buscar com presença · DS-062/DR-120 tarefas que se repetem ·
 --     DS-097 aviso de tarefa atribuída por outra pessoa
+--   Conversas (cont.): DS-010/DC-024 nx_cv_novidades · DS-011/DC-027 nx_cv_mensagens em volta de uma mensagem · DS-007/DC-077 p_filtro.ids ·
+--     DS-008 cursor do «Aguardando» com desempate · CC-050 consultas do contato na lateral · DS-021 atribuida_nome no contexto de envio
+--   Concorrência: DS-004/DC-007 nx_contato_salvar e DS-090 nx_negocio_salvar com versao_esperada (409 versao_antiga) · DS-321 chaves da agenda
+--     reservadas em campos
+--   Contatos: DS-037/RC-315 bloqueado_por e bloqueado_em (gatilho)
+--   Auditoria: DS-306 gatilho de plano/status da empresa · DU-113/DU-396 nx_auditoria_listar (equipe | config)
+--   Desempenho: nx_inicio com plan_cache_mode = force_custom_plan (o plano genérico em cache deixava empresa grande 5× mais lenta)
 -- ============================================================
 
 -- ------------------------------------------------------------
@@ -41,6 +48,9 @@ end $$;
 create unique index if not exists nx_tarefas_origem_unica on public.nx_tarefas (origem_id) where origem_id is not null;
 -- DS-086 / RC-339 (esfriando) e DS-097: tarefas abertas por negócio
 create index if not exists nx_tarefas_negocio_abertas on public.nx_tarefas (negocio_id, vence_em) where concluida_em is null;
+-- DS-037 / RC-315: quem bloqueou o contato e quando (a ficha do CRM já mostra «Bloqueado por Ana em 10/10» quando vier)
+alter table public.nx_contatos add column if not exists bloqueado_por uuid;
+alter table public.nx_contatos add column if not exists bloqueado_em timestamptz;
 
 -- ------------------------------------------------------------
 -- 2. RPCs novas das telas (todas do painel: p_token → nx_ctx; anon + service_role no fim)
@@ -298,10 +308,12 @@ as $$
 begin
   if old.plano is not distinct from new.plano and old.status is not distinct from new.status then return new; end if;
   insert into public.nx_auditoria (org_id, cliente_id, conta_id, acao, dados)
-  values (new.org_id, new.id, nullif(current_setting('nx.conta', true), '')::uuid, 'plano_status',
+  -- conta_id nula de propósito: a coluna marca «quem entrou» (suporte_entrou…); quem mudou vai em dados.conta_id
+  values (new.org_id, new.id, null, 'plano_status',
           jsonb_build_object('de', jsonb_build_object('plano', old.plano, 'status', old.status),
                              'para', jsonb_build_object('plano', new.plano, 'status', new.status),
                              'motivo', new.motivo_status,
+                             'conta_id', nullif(current_setting('nx.conta', true), ''),
                              'por', case when nullif(current_setting('nx.conta', true), '') is null then 'sistema' else 'conta' end));
   return new;
 end $$;
@@ -394,6 +406,80 @@ begin
                            'em_torno_de', p_em_torno_de, 'agora', clock_timestamp());
 end $$;
 
+-- plano 2000d · DU-113 / DU-396: o que a tela de configurações mostra em «Histórico de acessos» (p_tipo 'equipe') e em
+-- «Alterações recentes» ('config'): as linhas da auditoria DESTA empresa, mais recente primeiro, já com nomes.
+-- Só admin. Devolve [{acao, quem, alvo, detalhe, em}]; 'papel' sai como 'papel_trocado' (o nome que a tela conhece).
+-- detalhe nunca leva segredo: as linhas de canal só guardam se havia token (booleano); chaves de configuração vão pelo nome.
+create or replace function public.nx_auditoria_listar(p_token text, p_cliente uuid, p_tipo text default 'equipe',
+                                                      p_limite integer default 50)
+returns json
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v public.nx_ctx_t := public.nx_ctx(p_token, p_cliente, 'admin');
+  v_lim int := least(greatest(coalesce(p_limite, 50), 1), 200);
+  v_acoes text[];
+  r json;
+begin
+  if coalesce(p_tipo, 'equipe') = 'equipe' then
+    v_acoes := array['convite_criado', 'convite_revogado', 'convite_aceito', 'convite_regerado', 'papel', 'papel_trocado',
+                     'acesso_removido', 'acesso_pausado', 'dono_transferido', 'email_trocado', 'sessoes_encerradas',
+                     'sessao_encerrada', 'senha_redefinida', 'suporte_entrou'];
+  elsif p_tipo = 'config' then
+    v_acoes := array['config_alterada', 'config_salva', 'config_segredo_removido', 'canal_criado', 'canal_alterado', 'canal_excluido',
+                     'agenda_config_salva', 'envios_pausados', 'envios_retomados', 'cliente_alterado', 'plano_status', 'dominio',
+                     'codewords_configurado', 'codewords_conectado', 'midia_apagada'];
+  else
+    raise exception 'tipo_invalido' using errcode = 'P0001', hint = 'equipe ou config';
+  end if;
+  select coalesce(json_agg(json_build_object(
+           'acao', case when x.acao = 'papel' then 'papel_trocado' else x.acao end,
+           'quem', x.quem, 'alvo', x.alvo,
+           -- plano 2000d · REV-M5: em «cliente_alterado» quem não é da plataforma (admin da empresa, gestor da revenda) só vê
+           -- plano/status/módulos/ativo — limites, pacote comercial e organização são internos
+           'detalhe', case when x.acao = 'cliente_alterado' and v.papel <> 'super'
+                           then coalesce((select jsonb_object_agg(e.key, e.value) from jsonb_each(case when jsonb_typeof(x.dados) = 'object' then x.dados else '{}'::jsonb end) e
+                                           where e.key in ('plano', 'status', 'modulos', 'ativo')), '{}'::jsonb)
+                           else x.dados - array['token', 'app_secret', 'cred', 'segredo', 'senha'] end,
+           'em', x.criado_em) order by x.criado_em desc, x.id desc), '[]'::json)
+    into r
+    from (select a.id, a.acao, a.dados, a.criado_em,
+                 case when a.acao = 'suporte_entrou' then 'Suporte' else ka.nome end as quem,
+                 coalesce(kb.nome, cv.nome, cv.email) as alvo
+            from public.nx_auditoria a
+            left join public.nx_contas ka on ka.id = coalesce(a.conta_id, nullif(a.dados ->> 'conta_id', '')::uuid)
+            left join public.nx_contas kb on kb.id::text = coalesce(a.dados ->> 'conta', a.dados ->> 'alvo')
+            left join public.nx_convites cv on cv.id::text = a.dados ->> 'convite' and cv.cliente_id = p_cliente
+           where a.cliente_id = p_cliente and a.acao = any(v_acoes)
+           order by a.criado_em desc, a.id desc
+           limit v_lim) x;
+  return r;
+end $$;
+
+-- plano 2000d · DS-037 / RC-315: carimbo do bloqueio por qualquer caminho (tela, conversa, webhook). Quem = a conta da sessão
+-- (nx.conta); sem sessão (robô/webhook) fica nulo. Desbloquear limpa os dois.
+create or replace function public.nx_tg_contato_bloqueio()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.bloqueado and (tg_op = 'INSERT' or not old.bloqueado) then
+    new.bloqueado_em := now();
+    new.bloqueado_por := nullif(current_setting('nx.conta', true), '')::uuid;
+  elsif not new.bloqueado then
+    new.bloqueado_em := null;
+    new.bloqueado_por := null;
+  end if;
+  return new;
+end $$;
+drop trigger if exists nx_tg_contato_bloqueio on public.nx_contatos;   -- lint:permitido recriar o gatilho (idempotente)
+create trigger nx_tg_contato_bloqueio before insert or update of bloqueado on public.nx_contatos
+  for each row execute function public.nx_tg_contato_bloqueio();
+
 -- ------------------------------------------------------------
 -- plano 2000d · DS-083 / DS-086 / RC-187 / RC-210 / RC-212 / RC-218 / RC-219 / RC-233 / RC-325 / RC-338 / RC-339 / IC-001 / DR-218 / DR-220 / DR-246 / DR-248 / DR-249 / DR-253 / DR-270 / DR-290 / DR-302 / DR-328 / DR-348 / DR-352 / DR-353 / DR-402 / DR-407 nx_inicio: o que as telas do Início já pedem
 --   (cópia da definição em vigor: 20261022a_plano1500c.sql)
@@ -403,6 +489,7 @@ returns json
 language plpgsql
 security definer
 set search_path = ''
+set plan_cache_mode = force_custom_plan
 as $$
 declare
   v public.nx_ctx_t := public.nx_ctx(p_token, p_cliente, 'leitura');
@@ -2065,14 +2152,16 @@ begin
     'public.nx_cv_marcar_lida_lote(text, uuid, bigint[])',
     'public.nx_tarefa_repetir(text, uuid, bigint, text)',
     'public.nx_cv_novidades(text, uuid, timestamptz)',
-    'public.nx_cv_mensagens(text, uuid, bigint, bigint, integer)'] loop
+    'public.nx_cv_mensagens(text, uuid, bigint, bigint, integer)',
+    'public.nx_auditoria_listar(text, uuid, text, integer)'] loop
     execute format('revoke all on function %s from public, authenticated', f);
     execute format('grant execute on function %s to anon, service_role', f);
   end loop;
   foreach f in array array[
     'public.nx_tg_tarefa_repetir()',
     'public.nx_tg_tarefa_atribuida()',
-    'public.nx_tg_cliente_plano_status()'] loop
+    'public.nx_tg_cliente_plano_status()',
+    'public.nx_tg_contato_bloqueio()'] loop
     execute format('revoke all on function %s from public, anon, authenticated', f);
     execute format('grant execute on function %s to service_role', f);
   end loop;

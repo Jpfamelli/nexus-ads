@@ -84,6 +84,28 @@ async function avisarSemDestino(db, cliente, tipo) {
   } catch (e) { console.error("nx-relatorio aviso sem destino:", limparErro(e?.message || e)); return false; }
 }
 
+/** plano 2000d · REV-04: cliente de REVENDA sem assinatura salva não assina «Equipe Nexus · gestão de tráfego» (o padrão do núcleo,
+    que é da Nexus): assina com o nome da agência (nx_orgs.nome; vazio = sem linha). Assinatura salva (até «» = sem assinatura) vale
+    sempre; cliente da Nexus (org plataforma ou sem org) segue com o padrão. Falha de leitura: segue como antes (nunca derruba o relatório). */
+export async function comAssinaturaDaOrg(db, cliente) {
+  const cfgC = cliente && cliente.cfg;
+  if (!cliente || (cfgC && cfgC.assinatura != null)) return cliente;
+  try {
+    let org = cliente.org_id;
+    if (org === undefined) {
+      const [c] = await db.select("nx_clientes", { id: `eq.${cliente.id}`, select: "org_id", limit: 1 });
+      org = c ? c.org_id : null;
+    }
+    if (!org) return cliente;
+    const [o] = await db.select("nx_orgs", { id: `eq.${org}`, select: "tipo,nome", limit: 1 });
+    if (!o || o.tipo !== "revenda") return cliente;
+    return { ...cliente, cfg: { ...(cfgC || {}), assinatura: String(o.nome ?? "").trim() } };
+  } catch (e) {
+    console.error("nx-relatorio assinatura da revenda:", limparErro(e?.message || e));
+    return cliente;
+  }
+}
+
 /** plano 2000d · DA-187: cfg.relDias = dias da semana (0 = domingo … 6 = sábado) em que o diário sai; ausente/vazio = todo dia.
     O dia é o de HOJE em São Paulo (o envio da manhã). «Forçar» (enviar agora pelo painel) ignora. */
 export function diaDoRelatorio(relDias, hoje) {
@@ -97,7 +119,9 @@ async function gerar(db, cfg, cliente, ctx) {
     return { cliente: cliente.slug, tipo: ctx.tipo, ok: true, pulado: "fora dos dias do relatório" };
   }
   // plano 1000 (AD-020): o texto termina com o link do painel (nx_config.saas_url) quando o cliente não tem um próprio
-  const M = await carregarModelo(db, comPainelUrl(cliente, cfg), ctx.hoje, JANELA);
+  // plano 2000d · REV-04: a assinatura da revenda (só mensal e semanal assinam)
+  const clienteM = ctx.tipo === "diario" ? cliente : await comAssinaturaDaOrg(db, cliente);
+  const M = await carregarModelo(db, comPainelUrl(clienteM, cfg), ctx.hoje, JANELA);
   const base = { cliente: cliente.slug, tipo: ctx.tipo };
   let ref, destinos, mes = null, periodo;
 
@@ -112,7 +136,9 @@ async function gerar(db, cfg, cliente, ctx) {
     if (!(cliente.cfg && cliente.cfg.relSemanal === true)) return { ...base, ok: true, pulado: "resumo semanal desligado" };
     ref = segundaDaSemanaAnterior(ctx.hoje);
     destinos = listaDestinos(M.CFG.waGestor);
-    periodo = M.consolidar(M.linhasDe(M.R - 6, M.R));
+    // plano 2000d · REV-03: o período é a semana FECHADA (segunda a domingo) da referência — o mesmo do texto (relSemanal fechada)
+    const domingo = Math.round((Date.parse(`${somaDias(ctx.hoje, -1)}T12:00:00Z`) - Date.parse(`${somaDias(ref, 6)}T12:00:00Z`)) / 864e5);
+    periodo = M.consolidar(M.linhasDe(M.R - domingo - 6, M.R - domingo));
   } else {
     mes = M.mesesDados().filter(m => m.completo).pop();
     if (!mes) return { ...base, ok: true, pulado: "nenhum mês completo na janela" };
@@ -146,7 +172,9 @@ async function gerar(db, cfg, cliente, ctx) {
   if (ctx.tipo === "diario" && !ctx.forcar && typeof M.diaSemNada === "function" && M.diaSemNada(M.R)) return { ...base, ok: true, pulado: "dia sem movimento" };
 
   let leitura = null, iaErro = null, iaMotivo = null;
-  if (ctx.ia) {
+  // plano 2000d · REV-02: o resumo semanal não leva leitura de IA (relSemanal não usa; antes mesDoRelatorio(M, undefined) lançava e
+  // gravava «IA falhou» toda semana, gastando a reserva da cota)
+  if (ctx.ia && ctx.tipo !== "semanal") {
     // plano 1000 (SV-063): a leitura passa pela cota do cliente e fica em nx_ia_uso (acao 'relatorio', sem conta). Sem reserva
     // (cota do mês acabou) o relatório sai sem a leitura; banco sem a ação nova (20261013c não aplicada) segue como antes.
     const reserva = await reservarIA(db, cliente.id);
@@ -175,7 +203,8 @@ async function gerar(db, cfg, cliente, ctx) {
     }
   }
 
-  const texto = ctx.tipo === "diario" ? M.relDiario(M.R, leitura) : ctx.tipo === "semanal" ? M.relSemanal(M.R) : M.relMensal(mes, leitura);
+  // plano 2000d · REV-03: semana fechada (segunda a domingo) — casa com ref = segundaDaSemanaAnterior
+  const texto = ctx.tipo === "diario" ? M.relDiario(M.R, leitura) : ctx.tipo === "semanal" ? M.relSemanal(M.R, { fechada: true }) : M.relMensal(mes, leitura);
   const titulo = tituloRelatorio(ctx.tipo, M.NOME, ref);
   // plano 1000 (SV-091): RESERVA a linha antes de mandar (enviando_em, coluna da 20261013a). Se o registro final falhar (banco
   // piscou), a próxima execução acha a reserva e não manda de novo. Sem a coluna (migração não aplicada) segue como antes.
@@ -210,7 +239,7 @@ async function gerar(db, cfg, cliente, ctx) {
   await db.upsert("nx_relatorios", linha, "cliente_id,tipo,referencia");
 
   return {
-    ...base, ok: !erro, enviado, ia: leitura ? "ok" : ctx.ia ? "falhou" : "sem chave",
+    ...base, ok: !erro, enviado, ia: leitura ? "ok" : ctx.tipo === "semanal" ? "não usa" : ctx.ia ? "falhou" : "sem chave",   // plano 2000d · REV-02
     ...(iaErro ? { ia_erro: iaErro, ...(iaMotivo ? { ia_motivo: iaMotivo } : {}) } : {}),
     envio: anonimizarEnvio(envio), ...(erro ? { erro } : {}),
   };

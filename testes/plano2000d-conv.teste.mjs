@@ -592,7 +592,7 @@ async function comGravador(fn, { silencio = true } = {}) {
 
 
 /* ============================================================ testes do plano 2000d */
-const SRC_CHAT = ler("cv-chat.js"), SRC_COMP = ler("cv-composer.js"), SRC_CONV = ler("conversas.js"), CSS = ler("conversas.css");
+const SRC_CHAT = ler("cv-chat.js"), SRC_COMP = ler("cv-composer.js"), SRC_CONV = ler("conversas.js"), CSS = ler("conversas.css"), SRC_CFG = ler("cv-config.js");
 const docMsg = (id, nome, mime = "") => ({ id, conversa_id: 9, direcao: "in", tipo: "documento", corpo: "", midia: { path: `c1/in/${nome}`, nome, mime, tamanho: 1000 }, status: "recebida", criado_em: agoraIso(3), atualizado_em: agoraIso(3) });
 function clicar(d, el) { const ev = new d.Evento("click"); el.dispatchEvent(ev); return ev; }
 
@@ -2052,4 +2052,851 @@ test("DC-034 · j na lista já pré-carrega a conversa com o foco (ver + 1ª pá
     assert.equal(srv.chamadas.filter(x => x[0] === "nx_cv_ver" && x[1].p_id === focada).length, 1, "a mesma conversa não é pedida de novo em 30 s");
   } finally { c.fim(); d.fim(); }
   assert.match(SRC_CONV, /const \[ver, pag\] = await primeiraLeitura\(id\)\.finally\(\(\) => clearTimeout\(tLento\)\);/);
+});
+
+test("DC-046 · telefone colado do WhatsApp Web vira busca pelos dígitos", () => {
+  assert.equal(L.termoBuscaContato("+55 (12) 99999-0000"), "12999990000");
+  assert.equal(L.termoBuscaContato("(12) 99999-0000"), "12999990000");
+  assert.equal(L.termoBuscaContato("Maria 12"), "Maria 12");
+  assert.equal(L.termoBuscaContato("1234"), "1234");
+  assert.match(SRC_CONV, /const q = L\.termoBuscaContato\(busca\.value\);/);
+});
+
+test("DC-049 · CPF em «Regras» pede confirmação dizendo o campo", async () => {
+  const d = comDomCfg();
+  try {
+    const ui = await import("../web/app/ui.js");
+    const cfg = await import("../web/app/config.js");
+    const alvo = d.doc.body.appendChild(d.doc.createElement("main"));
+    const confirmacoes = [], chamadas = [];
+    const ctx = {
+      ui: { ...ui, carregarCss: () => Promise.resolve(true), toast() {}, confirmar: async o => { confirmacoes.push(o); return false; }, menu() {} },
+      api: { rpcC: async (n, p) => { chamadas.push(n); return n === "nx_cv_base" ? { ia: { ligada: true }, config: { ia: { tom: "proximo" } } } : {}; }, rpc: async () => ({}), mensagemErro: e => String(e), fn: async () => ({}) },
+      rota: { partes: ["ia"], query: {} }, alvo, versao: "dev", titulo() {}, navegar() {},
+      configPronta: () => true, shell: { prontos: { CONFIG_PRONTAS: ["perfil", "usuarios", "ia"] }, recarregarSessao: async () => {}, marcaEfetiva: () => ({ produto: "Órbita" }) },
+      sessao: { conta: { id: "c1", papel: "clinica", nome: "Ana" }, org: null }, cliente: { id: "cli-1", nome: "Clínica Teste" }, pode: () => true, temModulo: () => true, linkPublico: l => l,
+    };
+    await cfg.montar(ctx); await esperar(30);
+    const regras = alvo.querySelector("[name=regras]");
+    regras.value = "Para o paciente 123.456.789-09 dar desconto"; regras.dispatchEvent(new d.Evento("input"));
+    alvo.querySelector("form.cfg-ia").dispatchEvent(new d.Evento("submit")); await esperar(20);
+    assert.match(confirmacoes.at(-1).texto, /em «Regras de atendimento»: CPF \(«123\.456\.789-09»\)/);
+    assert.equal(chamadas.filter(n => n === "nx_ia_config_salvar").length, 0, "recusou: não salvou");
+    cfg.desmontar();
+  } finally { d.fim(); }
+});
+
+test("DC-051 · importar com «Atualizar as que já existem» manda id + texto novo das repetidas", () => {
+  const existentes = [{ id: 7, atalho: "ola", titulo: "Oi", corpo: "Oi!" }, { id: 8, atalho: "fim", titulo: "Fim", corpo: "Tchau" }];
+  const r = CV.lerImportacaoRespostas(JSON.stringify({ respostas: [{ atalho: "ola", titulo: "Oi", corpo: "Olá, tudo bem?" }, { atalho: "fim", titulo: "Fim", corpo: "Tchau" }, { atalho: "nova", titulo: "N", corpo: "x" }] }), existentes);
+  assert.deepEqual(r.atualizaveis, [{ id: 7, atalho: "ola", titulo: "Oi", corpo: "Olá, tudo bem?" }], "a igual não conta");
+  assert.deepEqual(r.repetidas, ["ola", "fim"]);
+  assert.equal(r.novas.length, 1);
+  assert.match(SRC_CFG, /nx_resposta_salvar", \{ p_resposta: \{ id: x\.id, titulo: x\.titulo, corpo: x\.corpo \} \}/);
+});
+
+test("DC-052 · cada pacote de respostas por vertical passa no importar sem inválidas", () => {
+  for (const [vert, pacote] of Object.entries(CV.PACOTES_RESPOSTAS)) {
+    const r = CV.lerImportacaoRespostas(JSON.stringify({ respostas: pacote }));
+    assert.equal(r.invalidas, 0, vert);
+    assert.equal(r.novas.length, pacote.length, vert);
+  }
+  assert.ok(["odonto", "oficina", "loja", "generico"].every(v => CV.PACOTES_RESPOSTAS[v]));
+});
+
+test("DC-053 · prévia da assinatura explica que cada pessoa assina com o próprio nome", () => {
+  assert.match(SRC_CFG, /Exemplo com o seu nome — cada pessoa assina com o próprio primeiro nome\./);
+});
+
+test("DC-054 · uma tabela de origem: o filtro e a lista usam ROTULO_ORIGEM (WhatsApp com pílula)", async () => {
+  for (const o of L.ORIGENS_FILTRO) assert.equal(o.r, L.ROTULO_ORIGEM[o.v]);
+  assert.equal(L.ROTULO_ORIGEM.manual, "Cadastro manual");
+  const d = comDom();
+  try {
+    const t = await montarLista(d, { itens: [conv(1, { contato: { id: 1, nome: "Ana", origem: "whatsapp" } })], aba: "sem_dono" });
+    assert.match(achar(t.lista.el, '.cvl-item[data-id="1"]').textContent, /WhatsApp/);
+  } finally { d.fim(); }
+});
+
+test("DC-043 · resolver oferece «Lembrar de retomar…» e cria a tarefa com o contato para daqui a 6 meses", async () => {
+  const fixo = Date.parse("2026-03-10T15:00:00Z");
+  assert.equal(L.dataRetomar("30d", fixo), "2026-04-09T12:00:00.000Z");
+  assert.equal(L.dataRetomar("6m", fixo), "2026-09-10T12:00:00.000Z");
+  assert.equal(L.dataRetomar("1a", fixo), "2027-03-10T12:00:00.000Z");
+  const d = comDom();
+  const srv = criarServidor({ conversas: 1 });
+  d.aoModal(o => { if (o.titulo !== "Lembrar de retomar") return true; o.corpo.querySelector("#cv-ret-6m").checked = true; return o.acoes[1].fn(); });
+  const c = await montarCentral(d, srv);
+  try {
+    await c.abrir(901);
+    const bt = c.alvo.querySelector("[data-acao=resolver]");
+    assert.ok(bt, "tem o botão de resolver");
+    bt.click(); await esperar(30);
+    const o = d.desfazeres.at(-1);
+    assert.ok(o && o.acao && o.acao.rotulo === "Lembrar de retomar…", "o Desfazer traz a ação");
+    await o.acao.fn(); await esperar(10);
+    const t = srv.chamadas.find(x => x[0] === "nx_tarefa_salvar");
+    assert.ok(t, "criou a tarefa");
+    assert.ok(t[1].p_tarefa.contato_id, "com o contato");
+    const dias = (Date.parse(t[1].p_tarefa.vence_em) - Date.now()) / 86400000;
+    assert.ok(dias > 170 && dias < 190, String(dias));
+    o._fim({ estado: "mantida" }); await esperar(10);
+  } finally { c.fim(); d.fim(); }
+});
+
+test("DC-058 · pontos de etapa/etiqueta sem role=img nem aria-label dentro do meta escondido", async () => {
+  const d = comDom();
+  try {
+    const t = await montarLista(d, { itens: [conv(1, { negocio: { estagio_nome: "Avaliação", estagio_cor: "#123456" }, etiquetas: ["e1"] })], aba: "sem_dono", base: { etiquetas: [{ id: "e1", nome: "VIP", cor: "#654321" }] } });
+    const pontos = t.lista.el.querySelectorAll(".cvl-meta .cvl-dot");
+    assert.ok(pontos.length >= 2);
+    for (const p of pontos) { assert.equal(p.getAttribute("role"), null); assert.equal(p.getAttribute("aria-label"), null); }
+  } finally { d.fim(); }
+});
+
+test("DC-059 · rótulo da linha curto (nome, não lidas, resumo, hora) e o resto no aria-describedby", async () => {
+  const d = comDom();
+  try {
+    const t = await montarLista(d, { itens: [conv(1, { nao_lidas: 2, ultima_msg_resumo: "quero marcar", negocio: { estagio_nome: "Avaliação" }, atribuida_a: "u9", atribuida_nome: "Ana" })], aba: "sem_dono" });
+    const a = achar(t.lista.el, '.cvl-item[data-id="1"]');
+    const rot = a.getAttribute("aria-label");
+    assert.ok(rot.split(", ").length <= 4, rot);
+    assert.match(rot, /^Cliente 1, 2 não lidas, quero marcar/);
+    assert.doesNotMatch(rot, /etapa|com Ana/);
+    const desc = achar(t.lista.el, "#" + a.getAttribute("aria-describedby"));
+    assert.match(desc.textContent, /etapa Avaliação/);
+    assert.match(desc.textContent, /com Ana/);
+  } finally { d.fim(); }
+});
+
+test("DC-060 · dois números caídos: um botão «Reconectar» por número, cada um com o id", async () => {
+  const d = comDom();
+  try {
+    const vistos = [];
+    const t = await montarLista(d, { itens: [conv(1)], aba: "sem_dono", acoes: { canaisCaidos: () => [{ id: "k1", nome: "Recepção" }, { id: "k2", nome: "Vendas" }], verNumero: id => vistos.push(id) } });
+    const bts = t.lista.el.querySelectorAll(".cvl-caido-bts button");
+    assert.deepEqual(bts.map(b => b.textContent), ["Reconectar Recepção", "Reconectar Vendas"]);
+    bts[1].click();
+    assert.deepEqual(vistos, ["k2"]);
+    assert.match(SRC_CONV, /#\/config\/numeros\?assistente=\$\{encodeURIComponent\(id\)\}/);
+  } finally { d.fim(); }
+});
+
+test("DC-061 · conversa pendente sem mensagem mostra «Conversa iniciada — sem mensagens ainda»", async () => {
+  const d = comDom();
+  try {
+    const t = await montarLista(d, { itens: [conv(1, { status: "pendente", ultima_msg_dir: null, ultima_msg_resumo: null })], aba: "sem_dono" });
+    assert.match(achar(t.lista.el, '.cvl-item[data-id="1"] .cvl-resumo').textContent, /Conversa iniciada — sem mensagens ainda/);
+  } finally { d.fim(); }
+});
+
+test("DC-062/DC-065 · deslizar: longo à direita oferece Fixar/Silenciar; depois do toque longo (seleção) o gesto não resolve", async () => {
+  const d = comDom({ grosso: true });
+  try {
+    const gestos = [];
+    d.ui.deslizar = (el, o) => { gestos.push({ el, o }); return () => {}; };
+    const fixou = [];
+    const t = await montarLista(d, { itens: [conv(1, { nao_lidas: 1 })], aba: "sem_dono", acoes: { alternarFixar: id => fixou.push(id), silenciar() {}, silenciada: () => false, fixadas: () => [] } });
+    const g = gestos.find(x => x.el.dataset.id === "1");
+    assert.equal(typeof g.o.direitaLonga, "function");
+    g.o.direitaLonga();
+    const m = d.menus.at(-1);
+    assert.deepEqual(m.itens.map(i => i.rotulo), ["Fixar", "Silenciar por 8 horas"]);
+    m.itens[0].fn();
+    assert.deepEqual(fixou, [1]);
+    // toque longo entra na seleção; o gesto que termina depois não resolve
+    d.ev(g.el, "pointerdown", { pointerType: "touch", clientX: 5, clientY: 5 });
+    await esperar(560);
+    g.o.esquerda();
+    assert.equal(t.chamadas.filter(c => c[0] === "resolverLote").length, 0);
+  } finally { d.fim(); }
+});
+
+test("DC-066 · celular: a linha diz «Com Ana» por extenso", () => {
+  assert.equal(L.textoMetaLista("Avaliação", [{ nome: "VIP" }], "Ana Paula"), "Avaliação · VIP · Com Ana");
+  assert.equal(L.textoMetaLista("", [], ""), "");
+});
+
+test("DC-063/DC-071 · Ctrl+K ganha não lida, fixar, silenciar, exportar e «ver a mais antiga»; Alt+Shift+V abre sem atribuir", async () => {
+  assert.equal(L.acordeDoEvento({ altKey: true, shiftKey: true, key: "V", code: "KeyV" }), "ver_antiga");
+  assert.ok(L.ACORDES.some(a => a.id === "ver_antiga" && a.teclas === "Alt+Shift+V"));
+  const d = comDom();
+  const srv = criarServidor({ conversas: 2 });
+  const regs = [];
+  const c = await montarCentral(d, srv, { extraCtx: { comandos: { registrar: o => { regs.push(o); return () => {}; } } } });
+  try {
+    const ids = regs.map(r => r.id);
+    for (const x of ["conversas.nao_lida", "conversas.fixar", "conversas.silenciar", "conversas.exportar", "conversas.ver_antiga"]) assert.ok(ids.includes(x), x);
+    const antes = srv.conta("nx_cv_atribuir");
+    regs.find(r => r.id === "conversas.ver_antiga").fazer();
+    await esperar(40);
+    assert.equal(srv.conta("nx_cv_atribuir"), antes, "não assumiu");
+    assert.ok(srv.chamadas.some(x => x[0] === "nx_cv_listar" && x[1].p_filtro && x[1].p_filtro.aba === "aguardando"));
+  } finally { c.fim(); d.fim(); }
+});
+
+test("DC-073 · celular: voltar do chat devolve a rolagem da lista (e não devolve se a aba mudou)", async () => {
+  const d = comDom();
+  const srv = criarServidor({ conversas: 2 });
+  const c = await montarCentral(d, srv);
+  try {
+    const sc = achar(c.alvo, ".cvl-lista");
+    sc.scrollTop = 480;
+    await c.abrir(901);
+    sc.scrollTop = 0;   // display:none perde a rolagem
+    await c.ctx.navegar("#/conversas"); await esperar(30);
+    assert.equal(achar(c.alvo, ".cvl-lista").scrollTop, 480);
+  } finally { c.fim(); d.fim(); }
+});
+
+test("DC-094 · resposta salva «Só Financeiro» entra na lista local com o departamento", async () => {
+  const d = comDom();
+  try {
+    const x = await montarComposer(d, { base: { departamentos: [{ id: 2, nome: "Financeiro" }] }, conv: { departamento_id: 2 } });
+    x.A.api = { rpcC: async (n, p) => ({ id: 77, atalho: p.p_resposta.atalho, titulo: p.p_resposta.titulo, corpo: p.p_resposta.corpo }) };
+    d.aoModal(async o => { if (o.titulo !== "Salvar como resposta rápida") return true; o.corpo.querySelector("#cvx-rr-para").value = "2"; return o.acoes[1].fn({ erro() {} }); });
+    x.digitar("Boleto segue em anexo");
+    achar(x.comp.el, "[aria-label='Mais opções']").click();
+    d.menus.at(-1).itens.find(i => i.rotulo === "Salvar como resposta rápida").fn();
+    await esperar(20);
+    const ult = x.A.base.respostas.at(-1);
+    assert.equal(ult.id, 77);
+    assert.equal(String(ult.departamento_id), "2");
+  } finally { d.fim(); }
+});
+
+test("DC-095 · cortar no teto não parte emoji nem sequência ZWJ", () => {
+  const fam = "👨‍👩‍👧";
+  const r = L.cortarNoTeto("a".repeat(4094) + fam, 4096);
+  assert.equal(r, "a".repeat(4094));
+  assert.ok(!/[\uD800-\uDBFF]$/.test(r));
+  assert.equal(L.cortarNoTeto("abc", 10), "abc");
+  assert.match(SRC_COMP, /L\.cortarNoTeto\(base \+ texto, teto\(\)\)/);
+});
+
+test("DC-103 · emoji no limite com 2 caracteres selecionados entra (substitui a seleção)", async () => {
+  const d = comDom();
+  try {
+    let grade = null;
+    d.ui.flutuante = (anc, conteudo) => { grade = conteudo; return { fechar() {} }; };
+    const x = await montarComposer(d);
+    const t = Number(x.ta.getAttribute("maxlength")) || L.tetoTexto({ assinatura: false, nome: "" });
+    x.ta.value = "a".repeat(t); x.ta.selectionStart = 0; x.ta.selectionEnd = 2;
+    achar(x.comp.el, ".cvx-emoji-bt").click();
+    const b = grade.querySelector(".cvx-emoji");
+    const e = b.textContent;
+    assert.equal(e.length, 2);
+    b.click();
+    assert.equal(x.ta.value, e + "a".repeat(t - 2));
+    assert.ok(!d.toasts.some(s => /não cabe/.test(s)));
+  } finally { d.fim(); }
+});
+
+const txtMsg = (id, dir, corpo, min, extra = {}) => ({ id, conversa_id: 9, direcao: dir, tipo: "texto", corpo, wamid: `w${id}`, status: dir === "out" ? "enviada" : "recebida",
+  criado_em: agoraIso(min), atualizado_em: agoraIso(min), ...extra });
+
+test("DC-096 · saída com texto trocado do mesmo tamanho é redesenhada", async () => {
+  const d = comDom();
+  try {
+    const { A, chat } = await montarChat(d, { msgs: [txtMsg(1, "out", "abc", 5)] });
+    assert.match(achar(chat.el, '.cv-msg[data-id="1"]').textContent, /abc/);
+    A.msgs = [txtMsg(1, "out", "abd", 5, { atualizado_em: agoraIso(1) })];
+    chat.renderMensagens({ rolar: "manter" });
+    assert.match(achar(chat.el, '.cv-msg[data-id="1"]').textContent, /abd/);
+    assert.notEqual(L.hashCurto("abc"), L.hashCurto("abd"));
+  } finally { d.fim(); }
+});
+
+test("DC-102 · reação na bolha do cliente é da equipe; na nossa, do cliente", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txtMsg(1, "in", "oi", 6, { reacao: "👍", reacao_por: "Ana" }), txtMsg(2, "out", "olá", 5, { reacao: "❤️" })] });
+    assert.match(achar(chat.el, '.cv-msg[data-id="1"] .cv-reacao').getAttribute("aria-label"), /^Reação da equipe \(Ana\)/);
+    assert.match(achar(chat.el, '.cv-msg[data-id="2"] .cv-reacao').getAttribute("aria-label"), /^Reação do cliente/);
+  } finally { d.fim(); }
+});
+
+test("DC-105 · «Pausar a IA até…» às 19h (Brasília) não sugere 18:00 e diz «amanhã» quando a hora já passou", () => {
+  const as19 = Date.parse("2026-10-20T22:10:00Z");   // 19:10 em Brasília
+  assert.equal(L.horaPausaInicial(as19), "21:00");
+  assert.equal(L.textoVoltaIA("21:00", as19), "A IA volta hoje às 21:00.");
+  assert.equal(L.textoVoltaIA("18:00", as19), "A IA volta amanhã às 18:00.");
+  assert.equal(L.horaPausaInicial(Date.parse("2026-10-21T02:30:00Z")), "01:00");   // 23:30 → 01:00
+  assert.doesNotMatch(SRC_CHAT, /id: "cvc-pausa-ate", value: "18:00"/);
+});
+
+test("DC-117 · 300 bolhas: consultas de (pointer: coarse) constantes, não uma por bolha", async () => {
+  const d = comDom();
+  try {
+    const orig = globalThis.matchMedia; let n = 0;
+    globalThis.matchMedia = q => { if (/pointer: coarse/.test(q)) n++; return orig(q); };
+    const msgs = Array.from({ length: 300 }, (_, i) => txtMsg(i + 1, i % 2 ? "out" : "in", `m${i}`, 400 - i));
+    await montarChat(d, { msgs });
+    globalThis.matchMedia = orig;
+    assert.ok(n < 10, String(n));   // constante (antes: uma por bolha)
+  } finally { d.fim(); }
+});
+
+test("DC-132 · vídeo mostra o tamanho no selo antes de baixar", async () => {
+  const d = comDom();
+  try {
+    const m = { id: 1, conversa_id: 9, direcao: "in", tipo: "video", corpo: null, wamid: "w1", status: "recebida", midia: { path: "c1/in/v.mp4", mime: "video/mp4", duracao: 42, tamanho: 14e6 }, criado_em: agoraIso(5), atualizado_em: agoraIso(5) };
+    const { chat } = await montarChat(d, { msgs: [m] });
+    assert.match(achar(chat.el, ".cv-video-selo").textContent, /0:42 · 13,4 MB/);
+  } finally { d.fim(); }
+});
+
+test("DC-138/DC-139 · velocidade lida em «vezes»; Page Up/Down saltam 30 s e 5 vai a 50%", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [audioMsg(1, "in", 5)] });
+    const vel = achar(chat.el, ".cv-au-vel");
+    assert.doesNotMatch(vel.getAttribute("aria-label"), /×/);
+    assert.match(vel.getAttribute("aria-label"), /1 vezes|1,0 vezes|vezes/);
+    const audio = achar(chat.el, '.cv-msg[data-id="1"] audio');
+    Object.defineProperty(audio, "duration", { value: 300, configurable: true });
+    audio.currentTime = 0;
+    const tr = achar(chat.el, ".cv-au-trilho");
+    d.ev(tr, "keydown", { key: "PageUp" });
+    assert.equal(audio.currentTime, 30);
+    d.ev(tr, "keydown", { key: "PageDown" });
+    assert.equal(audio.currentTime, 0);
+    d.ev(tr, "keydown", { key: "5" });
+    assert.equal(audio.currentTime, 150);
+  } finally { d.fim(); }
+});
+
+test("DC-087/DC-088 · Consultas: compareceu com negócio aberto mostra «Marcar como ganho»; sem futura, «Marcar retorno»", async () => {
+  const d = comDom();
+  try {
+    const passada = new Date(Date.now() - 3 * 86400000).toISOString();
+    const t = await montarLateral(d, { ver: { contato: { id: 5, nome: "Mariana Costa", telefone: "5512999990000", consultas: [{ negocio_id: 1, inicio: passada, servico: "Avaliação", presenca: "compareceu" }] },
+      negocios: [{ id: 1, titulo: "Aparelho", valor_previsto: 5200, estagio_nome: "Avaliação", status: "aberto" }] } });
+    const movidos = [];
+    t.A.ctx.moverNegocio = (id, o) => movidos.push([id, o]);
+    t.A.lateral = t.lat; t.lat.render && t.lat.render();
+    await esperar(5);
+    const bt = t.alvo.querySelector(".cvt-consulta-ganho");
+    assert.ok(bt, "tem o «Marcar como ganho»");
+    bt.click();
+    assert.deepEqual(movidos, [[1, { tipo: "ganho", valor: 5200 }]]);
+    achar(t.alvo, ".cvt-consulta-retorno").click();
+    assert.deepEqual(t.chamadas.find(c => c[0] === "agendar"), ["agendar", 1]);
+  } finally { d.fim(); }
+});
+
+test("DC-121 · «Baixar» vídeo: dois toques seguidos fazem um fetch só; acima de 8 MB abre numa aba nova", async () => {
+  const d = comDom();
+  const fOrig = globalThis.fetch, oOrig = globalThis.open, uOrig = globalThis.URL;
+  try {
+    let n = 0, solta;
+    globalThis.fetch = () => { n++; return new Promise(r => { solta = () => r({ ok: true, blob: async () => ({}) }); }); };
+    const abertos = [];
+    globalThis.open = u => { abertos.push(u); return null; };
+    const vid = (id, tamanho) => ({ id, conversa_id: 9, direcao: "in", tipo: "video", corpo: null, wamid: `w${id}`, status: "recebida", midia: { path: `c1/in/v${id}.mp4`, mime: "video/mp4", duracao: 10, tamanho }, criado_em: agoraIso(5 - id), atualizado_em: agoraIso(5 - id) });
+    const { chat } = await montarChat(d, { msgs: [vid(1, 2e6), vid(2, 20e6)] });
+    const b1 = achar(chat.el, '.cv-msg[data-id="1"] .cv-video-baixar');
+    b1.click(); b1.click();
+    await esperar(5);
+    assert.equal(n, 1);
+    assert.equal(b1.getAttribute("aria-busy"), "true");
+    achar(chat.el, '.cv-msg[data-id="2"] .cv-video-baixar').click();
+    assert.equal(n, 1, "o grande não passa pelo fetch");
+    assert.equal(abertos.length, 1);
+    globalThis.URL = { createObjectURL: () => "blob:x", revokeObjectURL() {} };
+    solta(); await esperar(5);
+    assert.equal(b1.getAttribute("aria-busy"), null);
+  } finally { globalThis.fetch = fOrig; globalThis.open = oOrig; globalThis.URL = uOrig; d.fim(); }
+});
+
+test("DC-133 · print de tela (PNG com texto) segue em PNG; foto comum continua otimizando", () => {
+  assert.deepEqual(L.planoFoto({ tipo: "image/png", bytes: 3e6, largura: 1200, altura: 800, texto: true }), { acao: "manter", formato: "png", w: 1200, h: 800 });
+  assert.equal(L.planoFoto({ tipo: "image/png", bytes: 3e6, largura: 4000, altura: 3000, texto: true }).formato, "png");
+  assert.equal(L.planoFoto({ tipo: "image/png", bytes: 3e6, largura: 4000, altura: 3000 }).acao, "otimizar");
+  assert.equal(L.planoFoto({ tipo: "image/jpeg", bytes: 3e6, largura: 4000, altura: 3000, texto: true }).formato, undefined);
+  assert.ok(L.pareceCapturaDeTela("Captura de tela 2026-10-01.png"));
+  assert.ok(L.pareceCapturaDeTela("x.png", 120));
+  assert.ok(!L.pareceCapturaDeTela("IMG_0001.png", 3800));
+  assert.match(SRC_COMP, /mantido em PNG para o texto ficar nítido/);
+});
+
+test("DC-045 · nova conversa pela Meta mostra os modelos aprovados; escolher um vira «Abrir e enviar modelo» e já entra marcado", async () => {
+  const d = comDom();
+  const srv = criarServidor({ conversas: 1 });
+  srv.handlers.nx_cv_nova = () => ({ id: 901 });
+  let marcado = null, viuBloco = false;
+  d.aoModal(async o => {
+    if (o.titulo === "Nova conversa") {
+      const bloco = achar(o.corpo, ".cv-nv-modelos");
+      viuBloco = !bloco.hidden;
+      achar(bloco, '.cv-nv-modelo[data-id="t1"]').click();
+      assert.match(achar(o.corpo, ".cv-nv-modelo-previa").textContent, /Olá \{\{1\}\}!/);
+      return { id: 901 };
+    }
+    if (/^Enviar modelo/.test(o.titulo)) { const b = o.corpo.querySelector('.cv-modelo[aria-checked="true"]'); marcado = b && b.textContent; return null; }
+    return true;
+  });
+  const c = await montarCentral(d, srv);
+  try {
+    botaoTexto(c.alvo, /Nova conversa/).click();
+    await esperar(600);
+    assert.ok(viuBloco, "os modelos aparecem no próprio modal");
+    assert.match(marcado || "", /retomar/);
+    assert.match(SRC_CONV, /"Abrir e enviar modelo"/);
+  } finally { c.fim(); d.fim(); }
+});
+
+test("DC-055/DC-056 · filtro de etiquetas «todas» e «Sem etiqueta»: vai ao servidor e é conferido na tela", () => {
+  const itens = [conv(1, { etiquetas: ["e1", "e2"] }), conv(2, { etiquetas: ["e1"] }), conv(3, { etiquetas: [] })];
+  assert.deepEqual(L.filtrarEtiquetasLocal(itens, { etiquetas: ["e1", "e2"], etiquetas_modo: "todas" }).map(c => c.id), [1]);
+  assert.deepEqual(L.filtrarEtiquetasLocal(itens, { etiquetas: ["e1", "e2"] }).map(c => c.id), [1, 2, 3], "qualquer uma: o servidor decide");
+  assert.deepEqual(L.filtrarEtiquetasLocal(itens, { sem_etiqueta: true }).map(c => c.id), [3]);
+});
+
+test("DC-055/DC-056 (DOM) · popover: com 2 marcadas aparece «Todas»; ler() manda etiquetas_modo e o chip «Sem etiqueta»", async () => {
+  const d = comDom();
+  try {
+    let corpoPop = null;
+    d.ui.flutuante = (anc, corpo) => { corpoPop = corpo; return { fechar() {} }; };
+    const t = await montarLista(d, { itens: [conv(1)], aba: "sem_dono", base: { etiquetas: [{ id: "e1", nome: "VIP" }, { id: "e2", nome: "Convênio" }] } });
+    achar(t.lista.el, ".cvl-filtro").click();
+    const modo = achar(corpoPop, ".cvf-etq-modo");
+    assert.equal(modo.hidden, true);
+    for (const id of ["e1", "e2"]) { const x = achar(corpoPop, `#cvf-e-${id}`); x.checked = true; d.ev(x, "change"); }
+    assert.equal(modo.hidden, false);
+    achar(corpoPop, "#cvf-em-todas").checked = true; achar(corpoPop, "#cvf-em-qualquer").checked = false;
+    botaoTexto(corpoPop, /^Aplicar$/).click();
+    assert.deepEqual(t.chamadas.at(-1), ["mudarLista", { filtro: { etiquetas: ["e1", "e2"], etiquetas_modo: "todas" } }]);
+    t.A.filtro = { sem_etiqueta: true }; t.lista.render();
+    assert.match(achar(t.lista.el, ".cvl-filtros-ativos").textContent, /Sem etiqueta/);
+  } finally { d.fim(); }
+});
+
+test("DC-057 · «Salvar esta visão» guarda aba + filtro e vira chip que aplica com um toque", async () => {
+  const d = comDom();
+  const srv = criarServidor({ conversas: 1 });
+  d.aoModal(o => { if (o.titulo !== "Salvar esta visão") return true; achar(o.corpo, "#cv-visao-nome").value = "Anúncio sem dono"; return o.acoes[1].fn({ erro() {} }); });
+  const c = await montarCentral(d, srv);
+  try {
+    let corpoPop = null;
+    d.ui.flutuante = (anc, corpo) => { corpoPop = corpo; return { fechar() {} }; };
+    achar(c.alvo, ".cvl-filtro").click();
+    achar(corpoPop, ".cvf-salvar-visao").click();
+    await esperar(30);
+    const chip = achar(c.alvo, ".cvl-visoes-salvas .cvl-visao");
+    assert.equal(chip.textContent, "Anúncio sem dono");
+    assert.equal(achar(c.alvo, ".cvl-visoes-salvas").hidden, false);
+  } finally { c.fim(); d.fim(); }
+});
+
+test("DC-072 · celular: «Próximo · N» flutuante aparece com fila e some sem ela", async () => {
+  const d = comDom();
+  try {
+    const t = await montarLista(d, { itens: [conv(1)], aba: "sem_dono", contagens: { aguardando: 4 } });
+    const fab = achar(t.lista.el, ".cvl-proximo-fab");
+    assert.equal(fab.hidden, false);
+    assert.match(fab.textContent, /Próximo · 4/);
+    fab.click();
+    assert.ok(t.chamadas.some(c => c[0] === "atender"));
+    t.A.contagens = { aguardando: 0 }; t.lista.render();
+    assert.equal(fab.hidden, true);
+    assert.match(CSS, /\.cvl-proximo-fab:not\(\[hidden\]\) \{ display: inline-flex;[^}]*min-height: 56px/);
+  } finally { d.fim(); }
+});
+
+test("DC-123 · 6 fotos seguidas: 4 células e a última com «+2» que abre o visualizador", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [1, 2, 3, 4, 5, 6].map(i => fotoMsg(i, 20 - i)) });
+    const cels = chat.el.querySelectorAll(".cv-grade .cv-grade-cel");
+    assert.equal(cels.length, 4);
+    const mais = achar(chat.el, ".cv-grade-mais");
+    assert.equal(achar(mais, ".cv-grade-mais-n").textContent, "+2");
+    assert.match(mais.getAttribute("aria-label"), /Ver mais 2 fotos \(6 no total\)/);
+  } finally { d.fim(); }
+});
+
+test("DC-115 · pílula do dono diz há quanto tempo (quando o servidor manda atribuida_em); sem o campo, igual a antes", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txtMsg(1, "in", "oi", 5)], conv: { atribuida_a: "u2", atribuida_nome: "Ana", atribuida_em: new Date(Date.now() - 2 * 3600000 - 60000).toISOString() } });
+    const p = achar(chat.el, ".cv-pil-status");
+    assert.match(p.getAttribute("title"), /Com Ana · há 2 horas/);
+    const d2 = await montarChat(d, { msgs: [txtMsg(1, "in", "oi", 5)], conv: { atribuida_a: "u2", atribuida_nome: "Ana" } });
+    assert.equal(d2.chat.el.querySelector(".cv-pil-status").getAttribute("title"), "Com Ana");
+  } finally { d.fim(); }
+});
+
+test("DC-086 · telefones extras do contato: um «Ligar» e um «Conversar» por número", async () => {
+  const d = comDom();
+  try {
+    const t = await montarLateral(d, { ver: { contato: { id: 5, nome: "Mariana Costa", telefone: "5512999990000", telefones_extras: [{ numero: "5512988887777", rotulo: "filha" }, "5512977776666"] } } });
+    const ligar = t.alvo.querySelectorAll(".cvt-tel-ligar");
+    assert.equal(ligar.length, 2);
+    assert.equal(ligar[0].getAttribute("href"), "tel:+5512988887777");
+    const novas = [];
+    t.A.acoes.novaConversa = o => novas.push(o);
+    t.alvo.querySelectorAll(".cvt-tel-conversa")[1].click();
+    assert.deepEqual(novas, [{ telefone: "5512977776666", nome: "Mariana Costa" }]);
+  } finally { d.fim(); }
+});
+
+test("DC-050 · salvar o assistente manda p_versao; 409 mantém o formulário sujo e avisa; servidor antigo salva sem a versão", async () => {
+  for (const cenario of ["409", "antigo"]) {
+    const d = comDomCfg();
+    try {
+      const ui = await import("../web/app/ui.js");
+      const cfg = await import("../web/app/config.js");
+      const alvo = d.doc.body.appendChild(d.doc.createElement("main"));
+      const chamadas = [];
+      const ctx = {
+        ui: { ...ui, carregarCss: () => Promise.resolve(true), toast() {}, confirmar: async () => true, menu() {} },
+        api: { rpcC: async (n, p) => {
+          chamadas.push([n, p]);
+          if (n === "nx_cv_base") return { ia: { ligada: true }, config: { ia: { tom: "proximo", atualizado_em: "2026-10-20T17:02:00Z" } } };
+          if (n === "nx_ia_config_salvar" && p.p_versao) {
+            if (cenario === "409") throw Object.assign(new Error("versao"), { status: 409, codigo: "versao_mudou", resposta: { atualizado_em: "2026-10-20T17:05:00Z", atualizado_por_nome: "Ana" } });
+            throw Object.assign(new Error("PGRST202"), { codigo: "PGRST202" });
+          }
+          return {};
+        }, rpc: async () => ({}), mensagemErro: e => String(e), fn: async () => ({}) },
+        rota: { partes: ["ia"], query: {} }, alvo, versao: "dev", titulo() {}, navegar() {},
+        configPronta: () => true, shell: { prontos: { CONFIG_PRONTAS: ["perfil", "usuarios", "ia"] }, recarregarSessao: async () => {}, marcaEfetiva: () => ({ produto: "Órbita" }) },
+        sessao: { conta: { id: "c1", papel: "clinica", nome: "Ana" }, org: null }, cliente: { id: "cli-1", nome: "Clínica Teste" }, pode: () => true, temModulo: () => true, linkPublico: l => l,
+      };
+      await cfg.montar(ctx); await esperar(30);
+      const regras = alvo.querySelector("[name=regras]");
+      regras.value = "Sempre confirmar o horário"; regras.dispatchEvent(new d.Evento("input"));
+      alvo.querySelector("form.cfg-ia").dispatchEvent(new d.Evento("submit")); await esperar(30);
+      const salvos = chamadas.filter(c => c[0] === "nx_ia_config_salvar");
+      assert.equal(salvos[0][1].p_versao, "2026-10-20T17:02:00Z", cenario);
+      if (cenario === "409") {
+        assert.equal(salvos.length, 1, "não tenta de novo por cima");
+        const av = alvo.querySelector(".cfg-ia-versao");
+        assert.equal(av.hidden, false);
+        assert.match(av.textContent, /Ana salvou o assistente/);
+      } else {
+        assert.equal(salvos.length, 2);
+        assert.equal(salvos[1][1].p_versao, undefined);
+      }
+      cfg.desmontar();
+    } finally { d.fim(); }
+  }
+});
+
+test("DC-128 · «Enviar endereço» no + põe o endereço e o link do mapa no campo", async () => {
+  assert.equal(L.textoEndereco("Rua A, 10 - Taubaté"), "Nosso endereço: Rua A, 10 - Taubaté\nComo chegar: https://maps.google.com/?q=Rua%20A%2C%2010%20-%20Taubat%C3%A9");
+  assert.equal(L.textoEndereco(""), "");
+  const d = comDom();
+  try {
+    const x = await montarComposer(d, { base: { endereco_empresa: "Rua A, 10 - Taubaté" } });
+    achar(x.comp.el, "[aria-label='Mais opções']").click();
+    const it = d.menus.at(-1).itens.find(i => i.rotulo === "Enviar endereço");
+    assert.ok(it, "o item aparece com endereço");
+    it.fn();
+    assert.match(x.ta.value, /^Nosso endereço: Rua A, 10 - Taubaté\nComo chegar: https:\/\/maps\.google\.com\/\?q=/);
+    const y = await montarComposer(d);
+    achar(y.comp.el, "[aria-label='Mais opções']").click();
+    assert.ok(!d.menus.at(-1).itens.some(i => i.rotulo === "Enviar endereço"), "sem endereço, sem item");
+  } finally { d.fim(); }
+});
+
+/* ============================================================ lote d3 — chat */
+test("DC-141 · a bolha começa dizendo, só ao leitor, quem falou e quando", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 6), txt(2, "out", 5), txt(3, "out", 4, { tipo: "nota", enviado_por: { id: "u2", nome: "Ana" } })] });
+    const sr = id => achar(chat.el, `.cv-msg[data-id="${id}"] .cv-bolha`).firstChild;
+    assert.equal(sr(1).getAttribute("class"), "sr-only cv-quem-sr");
+    assert.match(sr(1).textContent, /^Mariana Costa, \d{2}:\d{2}: $/);
+    assert.match(sr(2).textContent, /^Você, /);
+    assert.match(sr(3).textContent, /^Nota interna de Ana, /);
+  } finally { d.fim(); }
+});
+
+test("DC-142 · teclado: ↑ leva o foco itinerante à bolha anterior; uma bolha só no Tab", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 6), txt(2, "in", 5), txt(3, "in", 4)] });
+    const b = id => achar(chat.el, `.cv-msg[data-id="${id}"]`);
+    assert.equal(b(3).getAttribute("tabindex"), "0");
+    assert.equal(b(1).getAttribute("tabindex"), "-1");
+    b(3).focus();
+    d.ev(b(3), "keydown", { key: "ArrowUp" });
+    assert.equal(b(2).getAttribute("tabindex"), "0");
+    assert.equal(b(3).getAttribute("tabindex"), "-1");
+    d.ev(b(2), "keydown", { key: "Home" });
+    assert.equal(b(1).getAttribute("tabindex"), "0");
+  } finally { d.fim(); }
+});
+
+test("DC-143 · ir para a citada leva o foco à bolha e anuncia o texto dela", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 6, { corpo: "Quero marcar avaliação" }), txt(2, "out", 5, { responde_a: { id: 1, direcao: "in", resumo: "Quero marcar avaliação" } })] });
+    achar(chat.el, '.cv-msg[data-id="2"] .cv-cita').click();
+    assert.equal(globalThis.document.activeElement, achar(chat.el, '.cv-msg[data-id="1"]'));
+    assert.match(d.anuncios.at(-1), /Mensagem citada: Quero marcar avaliação/);
+  } finally { d.fim(); }
+});
+
+test("DC-149 · texto, citação e nome com direção automática (árabe/hebraico não embaralham)", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 6, { corpo: "مرحبا، كيف حالك؟" })] });
+    assert.equal(achar(chat.el, ".cv-texto").getAttribute("dir"), "auto");
+    assert.equal(achar(chat.el, ".cvc-nome").tagName.toLowerCase(), "bdi");
+    assert.match(SRC_COMP, /lang: "pt-BR", dir: "auto",/);
+  } finally { d.fim(); }
+});
+
+test("DC-156/DC-159 · ⋮: «Silenciar…» no toque vira folha; «Ligar» no computador mostra o número para copiar", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 6)], acoes: { silenciar() {}, silenciada: () => false } });
+    achar(chat.el, ".cvc-mais").click();
+    const lig = d.menus.at(-1).itens.find(i => i && i.rotulo === "Ligar");
+    lig.fn();
+    const m = d.modais.at(-1);
+    assert.match(m.titulo, /^Ligar para Mariana Costa/);
+    assert.ok(m.corpo.querySelector(".cvc-ligar-copiar"));
+    assert.match(SRC_CHAT, /if \(L\.aparelhoDeToque\(\)\) abrirFolha\(mais, duracoes, \[\], "Silenciar esta conversa"\);/);
+  } finally { d.fim(); }
+});
+
+test("DC-158 · no toque, o menu da bolha tem «Selecionar texto»", async () => {
+  const d = comDom({ grosso: true });
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 6, { corpo: "CPF 123.456.789-09" })] });
+    const box = achar(chat.el, '.cv-msg[data-id="1"]');
+    const it = box._menu.find(i => i && i.rotulo === "Selecionar texto");
+    assert.ok(it);
+    it.fn();
+    assert.ok(achar(box, ".cv-bolha").classList.contains("cv-selecionavel"));
+  } finally { d.fim(); }
+});
+
+test("DC-162/DC-165 · «Carregando foto…» pelo tipo; arquivo que não chegou diz o que fazer", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [fotoMsg(1, 6), { ...txt(2, "in", 5), tipo: "audio", corpo: null, midia: { estado: "indisponivel" } }],
+      acoes: { urlMidia: () => null, estadoMidia: () => "buscando" } });
+    assert.match(achar(chat.el, '.cv-msg[data-id="1"] .cv-midia-sk').textContent, /Carregando foto…/);
+    const off = achar(chat.el, '.cv-msg[data-id="2"] .cv-midia-off').textContent;
+    assert.match(off, /Este arquivo não chegou\. Peça ao cliente para reenviar/);
+    assert.doesNotMatch(SRC_CHAT, /"Baixando mídia…"|"Carregando mídia…"/);
+  } finally { d.fim(); }
+});
+
+test("DC-163/DC-164 · falha incerta: na Meta não manda «conferir no WhatsApp»; rótulos sem jargão", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "out", 6, { status: "pendente", ambigua: true }), txt(2, "out", 5, { status: "falhou", erro: null })] });
+    const f1 = achar(chat.el, '.cv-msg[data-id="1"] .cv-falha').textContent;
+    assert.match(f1, /^Não sabemos se saiu: Se o cliente responder, saiu/);
+    assert.doesNotMatch(f1, /no WhatsApp|Status incerto/);
+    assert.match(achar(chat.el, '.cv-msg[data-id="2"] .cv-falha').textContent, /O WhatsApp não aceitou a mensagem\./);
+    const cw = await montarChat(d, { provedor: "codewords", msgs: [txt(1, "out", 6, { status: "pendente", ambigua: true })] });
+    assert.match(achar(cw.chat.el, ".cv-falha").textContent, /confira no celular/);
+  } finally { d.fim(); }
+});
+
+test("DC-168/DC-170 · telefone na mensagem vira ação; CPF, telefone e e-mail borram no modo apresentação", async () => {
+  const segs = L.formatarWhats("me liga no 12 99123-4567, CPF 123.456.789-09, ana@x.com.br");
+  assert.deepEqual(segs.filter(x => x.tipo !== "texto").map(x => x.tipo), ["tel", "pessoal", "link"]);
+  assert.equal(segs.find(x => x.tipo === "tel").v, "5512991234567");
+  assert.equal(L.formatarWhats("protocolo 20261012345678").length, 1, "número longo não vira telefone");
+  const d = comDom();
+  try {
+    const novas = [];
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 6, { corpo: "me liga no 12 99123-4567, CPF 123.456.789-09" })], acoes: { novaConversa: o => novas.push(o) } });
+    const tel = achar(chat.el, ".cv-tel");
+    assert.ok(tel.classList.contains("dado-pessoal"));
+    tel.click();
+    const it = d.menus.at(-1).itens;
+    assert.deepEqual(it.map(i => i.rotulo), ["Ligar", "Nova conversa com este número", "Copiar número"]);
+    it[1].fn();
+    assert.deepEqual(novas, [{ telefone: "5512991234567" }]);
+    assert.equal(achar(chat.el, ".cv-texto span.dado-pessoal").textContent, "123.456.789-09");
+  } finally { d.fim(); }
+});
+
+test("DC-171/DC-172/DC-173 · botão tocado vira chip; modelo mostra os botões; anúncio com miniatura e link", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [
+      txt(1, "in", 6, { tipo: "interativo", corpo: "Confirmar", responde_a: { id: 9, template_nome: "lembrete" } }),
+      txt(2, "out", 5, { tipo: "template", corpo: "Sua consulta é amanhã", template: { nome: "lembrete", botoes: ["Confirmar", "Remarcar"] } }),
+      txt(3, "in", 4, { referral: { headline: "Implante", thumbnail_url: "https://cdn.x/a.jpg", source_url: "https://fb.me/ad1" } })] });
+    assert.match(achar(chat.el, '.cv-msg[data-id="1"] .cv-chip-resp').textContent, /Tocou em: Confirmar · no modelo «lembrete»/);
+    assert.deepEqual(chat.el.querySelectorAll('.cv-msg[data-id="2"] .cv-modelo-bt').map(x => x.textContent), ["Confirmar", "Remarcar"]);
+    assert.equal(achar(chat.el, '.cv-msg[data-id="3"] .cv-anuncio-link').getAttribute("href"), "https://fb.me/ad1");
+    assert.equal(achar(chat.el, '.cv-msg[data-id="3"] .cv-anuncio-mini').getAttribute("src"), "https://cdn.x/a.jpg");
+  } finally { d.fim(); }
+});
+
+test("DC-174/DC-197 · IA respondendo aparece no fim do trilho; 3 na fila viram a faixa «3 mensagens esperando a internet»", async () => {
+  const d = comDom();
+  try {
+    const fila = id => ({ ...txt(id, "out", 1), id: `tmp-${id}`, local: true, status: "pendente", filaEstado: "fila" });
+    const { A, chat } = await montarChat(d, { msgs: [txt(1, "in", 6), fila(2), fila(3), fila(4)], ia: { respondendo: true } });
+    assert.match(achar(chat.el, ".cvc-trilho .cv-fila-resumo").textContent, /3 mensagens esperando a internet/);
+    assert.match(achar(chat.el, ".cvc-trilho .cv-ia-digitando").textContent, /Assistente está digitando…/);
+    A.iaEstado = { respondendo: false };
+    chat.renderMensagens({ rolar: "manter" });
+    assert.equal(chat.el.querySelector(".cv-ia-digitando"), null);
+  } finally { d.fim(); }
+});
+
+test("DC-176 · bolha da IA com 👍/👎; servidor sem nx_ia_avaliar avisa e os botões somem", async () => {
+  const d = comDom();
+  try {
+    const chamadas = [];
+    const { A, chat } = await montarChat(d, { msgs: [txt(1, "out", 6, { origem: "ia", enviado_por: null })] });
+    A.api = { rpcC: async (n, p) => { chamadas.push([n, p]); throw Object.assign(new Error("PGRST202"), { codigo: "PGRST202" }); } };
+    achar(chat.el, ".cv-ia-bom").click();
+    await esperar(10);
+    assert.deepEqual(chamadas[0], ["nx_ia_avaliar", { p_msg: 1, p_nota: 1, p_correcao: null }]);
+    assert.ok(d.toasts.some(t => /ainda não está disponível/.test(t)));
+    assert.equal(chat.el.querySelector(".cv-ia-bom"), null);
+  } finally { d.fim(); }
+});
+
+test("DC-182/DC-183 · apagada e editada pelo cliente aparecem quando o servidor manda", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 6, { apagada_em: agoraIso(1) }), txt(2, "in", 5, { editada_em: agoraIso(1), corpo_anterior: "texto velho" })] });
+    assert.match(achar(chat.el, '.cv-msg[data-id="1"] .cv-apagada').textContent, /Mensagem apagada pelo cliente/);
+    const ed = achar(chat.el, '.cv-msg[data-id="2"] .cv-editada');
+    assert.match(ed.textContent, /editada/);
+    assert.equal(ed.getAttribute("title"), "Antes: texto velho");
+  } finally { d.fim(); }
+});
+
+test("DC-185/DC-186 · visualizador: «Responder» cita a foto e a legenda diz quem mandou", async () => {
+  const d = comDom();
+  try {
+    const respondidas = [];
+    const { A, chat } = await montarChat(d, { msgs: [fotoMsg(1, 6)] });
+    A.composer.responder = m => respondidas.push(m.id);
+    achar(chat.el, ".cv-img-bt").click();
+    const dlg = achar(d.doc.body, "dialog.cv-lb");
+    assert.match(achar(dlg, ".cv-lb-leg").textContent, /Recebida de Mariana Costa/);
+    const bt = achar(dlg, ".cv-lb-responder");
+    assert.equal(bt.hidden, false);
+    bt.click();
+    assert.deepEqual(respondidas, [1]);
+  } finally { d.fim(); }
+});
+
+test("DC-190 · «Só notas internas» no ⋮ marca o filtro e diz quantas há", async () => {
+  const d = comDom();
+  try {
+    const { chat } = await montarChat(d, { msgs: [txt(1, "in", 6), txt(2, "out", 5, { tipo: "nota" })] });
+    achar(chat.el, ".cvc-mais").click();
+    d.menus.at(-1).itens.find(i => i && i.rotulo === "Só notas internas").fn();
+    assert.equal(chat.el.dataset.filtro, "notas");
+    assert.match(d.anuncios.at(-1), /só as 1 nota interna|Mostrando só a|1 nota interna/);
+    assert.match(CSS, /\.cvc\[data-filtro="notas"\] \.cv-msg:not\(\[data-tipo="nota"\]\)/);
+  } finally { d.fim(); }
+});
+
+/* ============================================================ lote d3 — composer */
+test("DC-147 · Ctrl+B põe a seleção em negrito; Ctrl+I itálico; Ctrl+Shift+X riscado", async () => {
+  await comComposer({}, async (x, d) => {
+    const d0 = (ta, init) => d.ev(ta, "keydown", init);
+    x.digitar("bom dia");
+    x.ta.selectionStart = 0; x.ta.selectionEnd = 3;
+    d0(x.ta, { key: "b", ctrlKey: true });
+    assert.equal(x.ta.value, "*bom* dia");
+    x.ta.selectionStart = 6; x.ta.selectionEnd = 9;
+    d0(x.ta, { key: "i", ctrlKey: true });
+    assert.equal(x.ta.value, "*bom* _dia_");
+    x.ta.selectionStart = 0; x.ta.selectionEnd = 0;
+    d0(x.ta, { key: "X", ctrlKey: true, shiftKey: true });
+    assert.equal(x.ta.value, "~~*bom* _dia_");
+  });
+});
+
+test("DC-148 · resposta rápida e emoji entram pelo inserirNoCampo (Ctrl+Z volta)", () => {
+  assert.match(SRC_COMP, /function inserirNoCampo\(texto, ini = /);
+  assert.match(SRC_COMP, /document\.execCommand\("insertText", false, texto\)/);
+  assert.doesNotMatch(SRC_COMP, /ta\.value = `\$\{ta\.value\.slice\(0, ini\)\}\$\{e\}/, "o emoji não atribui ta.value direto");
+  assert.match(SRC_COMP, /inserirNoCampo\(e, ini, fim\);/);
+});
+
+test("DC-161 · Shift+clique no emoji mantém o seletor aberto e o próximo entra depois", async () => {
+  const d = comDom();
+  try {
+    let grade = null, fechou = 0;
+    d.ui.flutuante = (anc, conteudo) => { grade = conteudo; return { fechar() { fechou++; } }; };
+    const x = await montarComposer(d);
+    x.ta.value = ""; x.ta.selectionStart = 0; x.ta.selectionEnd = 0;
+    achar(x.comp.el, ".cvx-emoji-bt").click();
+    const bts = grade.querySelectorAll(".cvx-emoji");
+    const a = bts[0].textContent, b = bts[1].textContent;
+    d.ev(bts[0], "click", { shiftKey: true, bubbles: true });
+    d.ev(bts[1], "click", { bubbles: true });
+    assert.equal(x.ta.value, a + b);
+    assert.equal(fechou, 1, "só fecha no clique sem Shift");
+  } finally { d.fim(); }
+});
+
+test("DC-144 · contagem das respostas rápidas é anunciada só 600 ms depois da última tecla", async () => {
+  await comComposer({ base: { respostas: [{ id: 1, atalho: "ola", texto: "Olá!" }, { id: 2, atalho: "obg", texto: "Obrigado" }] } }, async (x, d) => {
+    const status = () => x.comp.el.querySelectorAll("span.sr-only[role=status]").map(s => s.textContent).join("|");
+    x.digitar("/");
+    await esperar(50);
+    assert.doesNotMatch(status(), /respostas rápidas disponíveis/);
+    await esperar(650);
+    assert.match(status(), /2 respostas rápidas disponíveis/);
+  });
+});
+
+test("DC-145 · prévia do modelo sem aria-live; anunciada ao sair do parâmetro", () => {
+  assert.match(SRC_COMP, /const previa = h\("div", \{ class: "cv-previa", hidden: true \}\);/);
+  assert.match(SRC_COMP, /ui\.anunciar\(`Prévia: \$\{previa\.textContent\}`\)/);
+});
+
+test("DC-150 · campo com lang pt-BR (corretor em português)", async () => {
+  await comComposer({}, async x => {
+    assert.equal(x.ta.getAttribute("lang"), "pt-BR");
+    assert.equal(x.ta.getAttribute("dir"), "auto");
+  });
+});
+
+test("DC-166 · com 2+ números, o campo diz por qual a mensagem sai", async () => {
+  await comComposer({ base: { canais: [{ id: "k1", nome: "Recepção" }, { id: "k2", nome: "Comercial" }] } }, async x => {
+    x.comp.atualizar();
+    assert.equal(x.ta.placeholder, "Mensagem via Recepção");
+  });
+  await comComposer({ base: { canais: [{ id: "k1", nome: "Recepção" }] } }, async x => {
+    x.comp.atualizar();
+    assert.equal(x.ta.placeholder, "Mensagem");
+  });
+});
+
+test("DC-200 · o ícone do Enviar não é recriado a cada atualizar", async () => {
+  await comComposer({}, async x => {
+    const bt = achar(x.comp.el, ".cvx-enviar");
+    x.comp.atualizar();
+    const ic = bt.firstChild;
+    x.comp.atualizar(); x.digitar("oi"); x.comp.atualizar();
+    assert.equal(bt.firstChild, ic);
+  });
+});
+
+test("DC-205 · Esc com o seletor de emoji aberto só fecha o seletor (não pula para a lista)", async () => {
+  const d = comDom();
+  try {
+    let foco = 0;
+    const x = await montarComposer(d, { acoes: { focarLista() { foco++; } } });
+    const flut = d.h("div", { class: "flut" });
+    d.doc.body.appendChild(flut);
+    d.ev(x.ta, "keydown", { key: "Escape" });
+    assert.equal(foco, 0);
+    assert.equal(flut.isConnected, false);
+    d.ev(x.ta, "keydown", { key: "Escape" });
+    assert.equal(foco, 1);
+  } finally { d.fim(); }
 });

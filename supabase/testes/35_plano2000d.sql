@@ -150,6 +150,13 @@ begin
   perform set_config('nx.faxina', 'on', true);
   perform pg_temp.ok(pg_temp.erro('delete from public.nx_auditoria where id = -1') = 'ok', 'DS-153: a retenção explícita apaga');
   perform set_config('nx.faxina', '', true);
+  -- plano 2000d · REV-M3: a faxina diária NÃO apaga auditoria (decisão 6) e não deixa nx.faxina ligado
+  insert into public.nx_auditoria (cliente_id, acao, criado_em) values (cA, 't35_velha', now() - interval '900 days');
+  j := public.nx_saas_faxina();
+  perform pg_temp.ok(exists (select 1 from public.nx_auditoria where cliente_id = cA and acao = 't35_velha'), 'REV-M3: a faxina não apaga auditoria antiga (decisão 6)');
+  perform pg_temp.ok(coalesce(current_setting('nx.faxina', true), '') = ''
+                     and pg_temp.erro('delete from public.nx_auditoria where id = (select max(id) from public.nx_auditoria)') = 'auditoria_imutavel',
+                     'REV-M3: depois da faxina o delete continua recusado');
 
   -- ---------------------------------------------------------- DS-156 suporte avisa o admin · DS-273 cobrança deixa ler
   perform public.nx_suporte_entrar(t_sup, cA, 'Ajustar o número 35');
@@ -181,9 +188,24 @@ begin
   insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Folga 35', '5512990035004');
   perform pg_temp.ok(not exists (select 1 from public.nx_notificacoes x where x.cliente_id = cA and x.titulo = 'Limite de contatos do plano atingido'), 'DS-282: no limite, sem aviso');
   insert into public.nx_contatos (cliente_id, nome, telefone) values (cA, 'Folga 35b', '5512990035005');
-  perform pg_temp.ok(exists (select 1 from public.nx_notificacoes x where x.cliente_id = cA and x.titulo = 'Limite de contatos do plano atingido'), 'DS-282: passou do limite → entra (folga) e avisa');
-  perform pg_temp.ok(pg_temp.erro(format('insert into public.nx_contatos (cliente_id, nome, telefone) values (%L, %L, %L)', cA, 'Fora 35', '5512990035006')) = 'limite_plano|contatos:4',
-    'DS-282: acima da folga de 10% recusa em qualquer caminho');
+  perform pg_temp.ok(exists (select 1 from public.nx_notificacoes x where x.cliente_id = cA and x.titulo = 'Limite de contatos do plano atingido')
+                     and exists (select 1 from public.nx_auditoria x where x.cliente_id = cA and x.acao = 'limite_contatos_excedido'), 'DS-282 / REV-M2: passou do limite → entra, avisa e marca na auditoria');
+  -- plano 2000d · REV-M2: a entrada automática nunca é recusada pelo gatilho (lead não se perde); o aviso e a marca saem 1× no mês
+  perform pg_temp.ok(pg_temp.erro(format('insert into public.nx_contatos (cliente_id, nome, telefone) values (%L, %L, %L)', cA, 'Fora 35', '5512990035006')) = 'ok'
+                     and pg_temp.erro(format('insert into public.nx_contatos (cliente_id, nome, telefone) values (%L, %L, %L)', cA, 'Fora 35b', '5512990035007')) = 'ok',
+    'REV-M2: acima da folga a entrada automática continua entrando');
+  perform pg_temp.ok((select count(*) from public.nx_auditoria x where x.cliente_id = cA and x.acao = 'limite_contatos_excedido') = 1
+                     and (select count(*) from public.nx_notificacoes x where x.cliente_id = cA and x.titulo = 'Limite de contatos do plano atingido' and x.conta_id = k_adm) = 1,
+    'REV-M2: aviso e marca 1× por mês');
+  perform pg_temp.ok(pg_temp.erro(format('select public.nx_exigir_limite(%L, %L, 1)', cA, 'contatos')) = 'limite_plano|contatos:4', 'REV-M2: criação manual/importação continua bloqueada no limite');
+  -- plano 2000d · REV-M2: o formulário do site (nx_lead_entrada) com o plano cheio grava o contato e o negócio (antes: ok sem gravar)
+  perform set_config('request.headers', '', true);
+  n := (select count(*) from public.nx_contatos where cliente_id = cA);
+  j := public.nx_lead_entrada(ch, '{"nome":"Lead Cheio 35","telefone":"5512990035008"}'::jsonb);
+  perform pg_temp.ok((j ->> 'ok')::boolean and (select count(*) from public.nx_contatos where cliente_id = cA) = n + 1
+                     and exists (select 1 from public.nx_leads l join public.nx_contatos k on k.id = l.contato_id
+                                  where k.cliente_id = cA and k.nome = 'Lead Cheio 35' and l.origem = 'site'),
+                     'REV-M2: formulário com o plano cheio não perde o lead');
   update public.nx_clientes set limites = limites - 'contatos' where id = cA;
   insert into public.nx_envios_fila (cliente_id, contato_id, tipo, texto, origem) values (cA, ct3, 'texto', 'oi', 'automacao');
   update public.nx_contatos set optin_marketing = false where id = ct3;
@@ -198,7 +220,36 @@ begin
   perform pg_temp.ok(public.nx_auto_envio_guarda(a, ct2) = 'contato com a etiqueta «Não enviar»', 'AX-059: etiqueta «Não enviar»');
   update public.nx_contatos set etiquetas = '{}' where id = ct2;
   insert into public.nx_envios_fila (cliente_id, contato_id, tipo, texto, origem, status) values (cA, ct, 'texto', 'de outra', 'automacao', 'enviado');
-  perform pg_temp.ok(public.nx_auto_envio_guarda(a, ct) = 'mensagem automática recente para este contato', 'DU-043: intervalo entre automações diferentes');
+  -- plano 2000d · REV-M1: sem configuração da empresa (e sem limite no plano) nada de teto, intervalo ou máximo por contato
+  update public.nx_clientes set cfg = coalesce(cfg, '{}'::jsonb) - 'automacoes' where id = cA;
+  perform pg_temp.ok(public.nx_auto_envio_guarda(a, ct) is null, 'REV-M1: sem configuração, o intervalo entre automações fica desligado');
+  perform pg_temp.ok((public.nx_auto_base(cA) ->> 'teto_envios_dia') is null, 'REV-M1: sem teto por padrão');
+  update public.nx_clientes set cfg = coalesce(cfg, '{}'::jsonb) || '{"automacoes":{"intervalo_contato_h":4}}'::jsonb where id = cA;
+  perform pg_temp.ok(public.nx_auto_envio_guarda(a, ct) = 'mensagem automática recente para este contato', 'DU-043: intervalo entre automações diferentes (ligado)');
+  -- conta pela hora PREVISTA: a mensagem de outra automação agendada para daqui a 10 h não ocupa o contato agora…
+  update public.nx_envios_fila set status = 'cancelado' where contato_id = ct and texto = 'de outra';
+  insert into public.nx_envios_fila (cliente_id, contato_id, tipo, texto, origem, status, enviar_em) values (cA, ct, 'texto', 'agendada 35', 'automacao', 'pendente', now() + interval '10 hours');
+  perform pg_temp.ok(public.nx_auto_envio_guarda(a, ct) is null, 'REV-M1: o intervalo usa enviar_em, não a entrada na fila');
+  -- …mas ocupa quem sairia perto dela
+  perform pg_temp.ok(public.nx_auto_envio_guarda(a, ct, true, now() + interval '9 hours') = 'mensagem automática recente para este contato', 'REV-M1: perto da hora prevista, o intervalo vale');
+  update public.nx_envios_fila set status = 'cancelado' where contato_id = ct and texto = 'agendada 35';
+  -- confirmação (agendado) + lembrete (antes_da_data) com 1 h de distância: sem configuração saem os dois; com, o segundo é pulado
+  declare a_conf public.nx_automacoes; a_lemb public.nx_automacoes;
+  begin
+    update public.nx_clientes set cfg = cfg - 'automacoes' where id = cA;
+    insert into public.nx_automacoes (cliente_id, nome, gatilho, ativo, acoes) values (cA, 'Confirmação 35', 'agendado', true, '[{"tipo":"nota","texto":"x"}]') returning * into a_conf;
+    insert into public.nx_automacoes (cliente_id, nome, gatilho, ativo, acoes) values (cA, 'Lembrete consulta 35', 'antes_da_data', true, '[{"tipo":"nota","texto":"x"}]') returning * into a_lemb;
+    perform pg_temp.ok(public.nx_auto_envio_guarda(a_conf, ct2, false) is null, 'REV-M1: confirmação sai sem configuração');
+    insert into public.nx_envios_fila (cliente_id, contato_id, tipo, texto, origem, automacao_id, status, enviar_em) values (cA, ct2, 'texto', 'conf 35', 'automacao', a_conf.id, 'enviado', now());
+    perform pg_temp.ok(public.nx_auto_envio_guarda(a_lemb, ct2, false, now() + interval '1 hour') is null, 'REV-M1: lembrete 1 h depois também sai (sem configuração)');
+    update public.nx_clientes set cfg = coalesce(cfg, '{}'::jsonb) || '{"automacoes":{"intervalo_contato_h":4}}'::jsonb where id = cA;
+    perform pg_temp.ok(public.nx_auto_envio_guarda(a_lemb, ct2, false, now() + interval '1 hour') is null, 'REV-M1: gatilho de agenda nunca cai no intervalo entre automações');
+    update public.nx_clientes set cfg = cfg || '{"automacoes":{"intervalo_contato_h":4,"max_msgs_contato_dia":1}}'::jsonb where id = cA;
+    perform pg_temp.ok(public.nx_auto_envio_guarda(a_lemb, ct2, false, now() + interval '1 hour') = 'limite de mensagens automáticas por contato no dia', 'REV-M1: com configuração, o segundo é pulado');
+    update public.nx_envios_fila set status = 'cancelado' where contato_id = ct2 and texto = 'conf 35';
+    update public.nx_clientes set cfg = cfg - 'automacoes' where id = cA;
+  end;
+  update public.nx_envios_fila set status = 'enviado' where contato_id = ct and texto = 'de outra';
   update public.nx_clientes set cfg = coalesce(cfg, '{}'::jsonb) || '{"automacoes":{"intervalo_contato_h":0,"max_msgs_contato_dia":1}}'::jsonb where id = cA;
   perform pg_temp.ok(public.nx_auto_envio_guarda(a, ct) = 'limite de mensagens automáticas por contato no dia', 'DS-350: no máximo N por contato em 24 h');
   update public.nx_clientes set cfg = cfg || '{"automacoes":{"intervalo_contato_h":0,"max_msgs_contato_dia":0,"teto_dia":1}}'::jsonb where id = cA;
@@ -251,8 +302,16 @@ begin
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_teste_criar(%L,%L,%L,%L,%L,%L)', 'rev35-' || sfx, 'Outra 35', 'loja', 'Outro', 'outro35-' || sfx || '@teste.local', 'senha-boa-35w')) = 'limite_testes',
     'DS-297: testes ativos por revenda');
   update public.nx_orgs set limites = '{"testes_ativos":5}' where id = org_r;
+  n := (select count(*) from public.nx_login_falhas where chave = 'cadastro:global');
   j := public.nx_teste_criar('rev35-' || sfx, 'Outra 35', 'loja', 'Outro', 'teste35-' || sfx || '@teste.local', 'senha-boa-35w');
   perform pg_temp.ok((j ->> 'ok')::boolean and j ->> 'token' is null and (select count(*) from public.nx_clientes where org_id = org_r) = 1, 'DS-128: e-mail já usado → mesma resposta, sem token e sem empresa');
+  -- plano 2000d · REV-M4: tentativa com e-mail repetido não conta no teto global de cadastros (só cadastro criado conta)
+  perform public.nx_criar_conta('teste35-' || sfx || '@teste.local', 'senha-boa-35w', 'Repetido');
+  perform pg_temp.ok((select count(*) from public.nx_login_falhas where chave = 'cadastro:global') = n, 'REV-M4: e-mail repetido não conta no teto global');
+  j := public.nx_teste_criar('rev35-' || sfx, 'Mais Uma 35', 'loja', 'Mais Um', 'maisum35-' || sfx || '@teste.local', 'senha-boa-35w');
+  perform pg_temp.ok(j ->> 'token' is not null and (select count(*) from public.nx_login_falhas where chave = 'cadastro:global') = n + 1, 'REV-M4: teste criado conta no teto global');
+  perform public.nx_criar_conta('novo35-' || sfx || '@teste.local', 'senha-boa-35w', 'Novo 35');
+  perform pg_temp.ok((select count(*) from public.nx_login_falhas where chave = 'cadastro:global') = n + 2, 'REV-M4: conta criada conta no teto global');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_teste_criar(%L,%L,%L,%L,%L,%L)', 'rev35-' || sfx, 'Outra 35', 'loja', 'Outro', 'x' || sfx || '@teste.local', '12345678')) = 'senha_fraca', 'DS-130: o teste também recusa senha comum');
   perform pg_temp.ok(pg_temp.erro(format('select public.nx_teste_criar(%L,%L,%L,%L,%L,%L)', (select slug from public.nx_orgs where tipo = 'plataforma' limit 1), 'X 35', 'loja', 'Fulano', 'y' || sfx || '@teste.local', 'senha-boa-35v')) like 'teste_fechado%'
                      or (select coalesce(marca ->> 'teste_aberto', '') from public.nx_orgs where tipo = 'plataforma' limit 1) = 'true', 'DS-274: org sem teste_aberto recusa');

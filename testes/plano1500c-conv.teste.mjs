@@ -702,7 +702,8 @@ test("CC-008 · chip «Origem: Site» com o filtro ativo; e o filtro lembrado gu
     A.filtro = { origem: "site" }; lista.render();
     assert.ok(lista.el.querySelectorAll(".cvl-filtro-chip").some(b => /Origem: Site/.test(b.textContent)));
   } finally { d.fim(); }
-  assert.match(SRC_CONV, /const CHAVES_FILTRO = \[[^\]]*"origem"\]/);
+  // plano 2000d: DC-055/DC-056 — a lista ganhou etiquetas_modo e sem_etiqueta depois de "origem"
+  assert.match(SRC_CONV, /const CHAVES_FILTRO = \[[^\]]*"origem"[^\]]*\]/);
 });
 
 test("CC-009/CC-032 · «Nas mensagens · 20+» e «Ver mais mensagens»", async () => {
@@ -1588,7 +1589,8 @@ test("CX-014/CX-015 · lembrete usa a palavra da vertical e diz «amanhã»/«ho
 
 test("CX-016 · e-mail na mensagem vira link mailto:", () => {
   const segs = L.formatarWhats("mande para ana@clinica.com.br, obrigado");
-  assert.deepEqual(segs, [{ tipo: "texto", v: "mande para " }, { tipo: "link", v: "mailto:ana@clinica.com.br", texto: "ana@clinica.com.br" }, { tipo: "texto", v: ", obrigado" }]);
+  // plano 2000d: o e-mail é dado pessoal (borra no modo apresentação — DC-170)
+  assert.deepEqual(segs, [{ tipo: "texto", v: "mande para " }, { tipo: "link", v: "mailto:ana@clinica.com.br", texto: "ana@clinica.com.br", pessoal: true }, { tipo: "texto", v: ", obrigado" }]);
   assert.equal(L.formatarWhats("@ana oi").length, 1, "menção não é e-mail");
   assert.match(ler("cv-chat.js"), /if \(\/\^mailto:\/i\.test\(url\)\) return h\("a"/);
 });
@@ -1653,7 +1655,9 @@ test("CX-019/CX-020 · rótulo da linha: dono pela equipe, silenciada, bloqueado
       itens: [conv(1, { atribuida_a: "u2", atribuida_nome: null, oculta: true, status: "resolvida", canal_id: "k2" })],
       base: { canais: [{ id: "k1", nome: "Recepção" }, { id: "k2", nome: "Financeiro" }], usuarios: [{ id: "u2", nome: "Ana Paula" }] },
       acoes: { silenciada: () => true } });
-    const rot = achar(lista.el, ".cvl-item").getAttribute("aria-label");
+    // plano 2000d: DC-059 — o rótulo ficou curto; dono, silenciada, bloqueado e número estão no aria-describedby (.cvl-desc)
+    const it = achar(lista.el, ".cvl-item");
+    const rot = `${it.getAttribute("aria-label")}, ${achar(it, ".cvl-desc").textContent}`;
     assert.match(rot, /com Ana Paula/); assert.doesNotMatch(rot, /sem dono/);
     assert.match(rot, /silenciada/); assert.match(rot, /contato bloqueado/); assert.match(rot, /via Financeiro/);
   } finally { d.fim(); }

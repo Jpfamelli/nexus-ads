@@ -16,7 +16,7 @@ export function criarLateral(A) {
   const h = ui.h;
   let alvo = null;
 
-  const ORIGEM = { anuncio: "Anúncio", whatsapp: "WhatsApp", indicacao: "Indicação", organico: "Orgânico", manual: "Cadastro manual", site: "Site", importacao: "Importação", formulario: "Formulário" };
+  const ORIGEM = L.ROTULO_ORIGEM || {};   // plano 2000d · DC-054: a mesma tabela da lista e do filtro
   const PLATAFORMA = { meta: "Meta", instagram: "Instagram", facebook: "Facebook", google: "Google" };
 
   const pendentesTarefa = new Set();             // CA-035: tarefas marcadas com o «Desfazer» ainda na tela (o redesenho mantém o risco)
@@ -99,7 +99,7 @@ export function criarLateral(A) {
       kpi({ rotulo: r.negocios === 1 ? ((A.ctx.vocab && A.ctx.vocab.negocio) || "Negócio") : neg, valor: r.negocios, detalhe: r.valor ? ui.brl(r.valor, { centavos: false }) : null, ajuda: `${neg} em aberto deste contato`, tom: r.negocios ? "prim" : "neutro" }),
       kpi({ rotulo: r.atendimentos === 1 ? "Atendimento" : "Atendimentos", valor: r.atendimentos, ajuda: "Atendimentos deste contato (este incluído)" }),
       kpi({ rotulo: r.tarefas === 1 ? "Tarefa" : "Tarefas", valor: r.tarefas, detalhe: r.atrasadas ? `${r.atrasadas} atrasada${r.atrasadas === 1 ? "" : "s"}` : null, ajuda: "Tarefas abertas ligadas ao contato", tom: r.atrasadas ? "ruim" : "neutro" }));
-    return h("section", { class: "cvt-resumo-ct" }, kpis, blocoInteracoes(), blocoAtalhos(ver));
+    return h("section", { class: "cvt-resumo-ct" }, kpis, blocoInteracoes(), blocoAtalhos(ver), blocoTelefonesExtras(ver));
   }
   /* plano 1000 · CA-102: a série dos 7 dias só é recalculada quando as mensagens carregadas mudam (quantas, a 1ª e a última) ou o dia
      vira — antes, todo pulso (3 s) refazia a série e o JSON da assinatura */
@@ -155,6 +155,25 @@ export function criarLateral(A) {
         title: negAgenda ? `Marcar consulta para «${negAgenda.titulo || "este negócio"}»` : "Marcar consulta",
         on: { click: () => { if (typeof A.acoes.agendar === "function") A.acoes.agendar(negAgenda); else A.ctx.navegar("#/agenda"); } } }) : null);
     // plano 1000 · CA-040: «Ficha» saiu dos atalhos (ficava sozinha na 2ª linha): o «Abrir ficha» do topo do cartão já faz isso
+  }
+
+  /** plano 2000d · DC-086: telefones extras do contato (campo do CRM) — «Ligar» e «Abrir conversa por este número».
+      Sem o campo (servidor de hoje), nada aparece. */
+  function blocoTelefonesExtras(ver) {
+    const ct = ver.contato || {};
+    const extras = (Array.isArray(ct.telefones_extras) ? ct.telefones_extras : [])
+      .map(x => (x && typeof x === "object" ? { numero: x.numero || x.telefone, rotulo: x.rotulo || x.nome || "" } : { numero: x, rotulo: "" }))
+      .filter(x => x.numero && String(x.numero).replace(/\D/g, "").length >= 8 && String(x.numero).replace(/\D/g, "") !== String(ct.telefone || "").replace(/\D/g, ""));
+    if (!extras.length) return null;
+    return h("ul", { class: "cvt-tel-extras", "aria-label": "Outros telefones" }, extras.slice(0, 5).map(x => {
+      const dig = String(x.numero).replace(/\D/g, "");
+      return h("li", { class: "cvt-tel-extra" },
+        h("span", { class: "mono dado-pessoal" }, ui.telBR(dig)), x.rotulo ? h("small", { class: "fraco" }, ` · ${x.rotulo}`) : null,
+        h("span", { class: "linha cvt-tel-extra-acoes" },
+          h("a", { class: "bt bt-fant bt-p cvt-tel-ligar", href: `tel:+${dig}`, "aria-label": `Ligar para ${ui.telBR(dig)}` }, ui.icone("telefone"), "Ligar"),
+          A.podeEscrever ? h("button", { type: "button", class: "bt bt-fant bt-p cvt-tel-conversa",
+            "aria-label": `Abrir conversa por ${ui.telBR(dig)}`, on: { click: () => { if (typeof A.acoes.novaConversa === "function") A.acoes.novaConversa({ telefone: dig, nome: ct.nome || null }); } } }, ui.icone("chat"), "Conversar") : null));
+    }));
   }
 
   /* ---------------- nome do contato: só grava por Enter ou «Salvar»; Esc e «Cancelar» desistem; sair do campo não grava (D1) */
@@ -712,8 +731,23 @@ export function criarLateral(A) {
         h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => { const t = L.textoLembrarConsulta(c, A.acoes.nomeContato(ct), (A.ctx.vocab && A.ctx.vocab.compromisso) || "consulta"); /* plano 1500c · CX-014 */ if (typeof A.acoes.colocarTexto === "function") A.acoes.colocarTexto(t); else ui.copiar(t, { aviso: "Lembrete copiado." }); } } }, ui.icone("sino"), "Lembrar"),
         typeof A.acoes.agendar === "function" ? h("button", { type: "button", class: "bt bt-fant bt-p", on: { click: () => A.acoes.agendar(c.negocio_id ? { id: c.negocio_id } : null) } }, ui.icone("calendario"), "Remarcar") : null) : null);
     const itens = [...proximas.map(c => linha(c, true)), ultima ? h("p", { class: "rotulo cvt-consulta-ult" }, "Última") : null, ultima ? linha(ultima, false) : null].filter(Boolean);
+    const acoesC = [];
+    // plano 2000d · DC-087: compareceu e o negócio segue aberto — «Marcar como ganho» aqui mesmo (com o valor previsto sugerido)
+    const negUlt = ultima && ultima.presenca === "compareceu" && ultima.negocio_id ? (ver.negocios || []).find(n => n.id === ultima.negocio_id) : null;
+    const negAberto = negUlt && (negUlt.status || "aberto") === "aberto" && (!negUlt.estagio_tipo || negUlt.estagio_tipo === "aberto");
+    if (A.podeEscrever && negAberto && typeof A.ctx.moverNegocio === "function") {
+      acoesC.push(h("button", { type: "button", class: "bt bt-sec bt-p cvt-consulta-ganho", dataset: { foco: `consulta-ganho-${negUlt.id}` },
+        on: { click: () => A.ctx.moverNegocio(negUlt.id, { tipo: "ganho", ...(Number(negUlt.valor_previsto) > 0 ? { valor: Number(negUlt.valor_previsto) } : {}) }, { aoMudar: () => A.acoes.recarregarVer() }) } },
+        ui.icone("check"), "Marcar como ganho"));
+    }
+    // plano 2000d · DC-088: sem consulta futura, o atalho para marcar o retorno (com o negócio da última, quando houver)
+    if (A.podeEscrever && !proximas.length && typeof A.acoes.agendar === "function") {
+      const negR = ultima && ultima.negocio_id ? { id: ultima.negocio_id } : null;
+      acoesC.push(h("button", { type: "button", class: "bt bt-fant bt-p cvt-consulta-retorno", on: { click: () => A.acoes.agendar(negR) } }, ui.icone("calendario"), ultima ? "Marcar retorno" : "Marcar consulta"));
+    }
     return secao({ id: "consultas", titulo: "Consultas", contador: proximas.length || null },
-      itens.length ? h("div", null, itens) : h("p", { class: "cvt-vazio" }, "Nenhuma consulta marcada."));
+      itens.length ? h("div", null, itens) : h("p", { class: "cvt-vazio" }, "Nenhuma consulta marcada."),
+      acoesC.length ? h("div", { class: "linha cvt-consulta-acoes" }, acoesC) : null);
   }
   /** plano 2000d · DC-037: «Jornada» — os marcos do lead numa linha do tempo com hora (só com 2 ou mais marcos). */
   function blocoJornada(marcos) {
@@ -729,7 +763,7 @@ export function criarLateral(A) {
     return [
       { chave: "contato", sig: sig([ct.id, ct.nome, ct.telefone, ct.optin_marketing, ct.optin_origem, ct.bloqueado, ct.origem, ct.plataforma, A.podeEscrever, editandoNome && editandoNome.ctId === ct.id ? [editandoNome.salvando, editandoNome.erro] : 0]),
         criar: () => blocoTopo(ver) },
-      { chave: "resumo", sig: sig([L.resumoContato(ver), serieDias().sig, ct.id, ct.telefone, conv.protocolo, temCrm, negAgenda && negAgenda.id, !!A.G]),
+      { chave: "resumo", sig: sig([L.resumoContato(ver), serieDias().sig, ct.id, ct.telefone, conv.protocolo, temCrm, negAgenda && negAgenda.id, !!A.G, /* plano 2000d · DC-086 */ JSON.stringify(ct.telefones_extras || null)]),
         criar: () => blocoResumoContato(ver) },
       { chave: "dados", sig: sig([ver.anuncio, ct.origem, ct.email, ct.cidade, ct.uf, ct.campos, conv.protocolo, conv.departamento && conv.departamento.nome, conv.atribuida && conv.atribuida.nome, conv.atribuida_nome,
         conv.primeira_resposta_em, conv.aberta_em, !!rotulos, !!crmBase /* CB-064: relida depois de falhar */, rastreio, A.podeEscrever, conv.departamento_id, horarioDe(conv) === undefined ? "-" : horarioDe(conv),
@@ -739,7 +773,7 @@ export function criarLateral(A) {
       // plano 2000d · DC-037: a história do lead (anúncio → 1ª resposta → consulta → presença → ganho)
       ...((jor => (jor.length >= 2 ? [{ chave: "jornada", sig: sig(jor.map(m => [m.tipo, m.em, m.texto])), criar: () => blocoJornada(jor) }] : []))(L.jornadaDoContato ? L.jornadaDoContato(ver, A.msgs) : [])),
       // plano 1500c · CC-050: consultas do contato — só quando o nx_cv_ver mandar contato.consultas (servidor novo); sem o campo, nada muda
-      ...(Array.isArray(ct.consultas) ? [{ chave: "consultas", sig: sig([ct.consultas.map(c => [c.negocio_id, c.inicio, c.servico, c.presenca]), A.podeEscrever, temCrm]),
+      ...(Array.isArray(ct.consultas) ? [{ chave: "consultas", sig: sig([ct.consultas.map(c => [c.negocio_id, c.inicio, c.servico, c.presenca]), A.podeEscrever, temCrm, /* plano 2000d · DC-087 */ (ver.negocios || []).map(n => [n.id, n.status, n.estagio_tipo, n.valor_previsto]), typeof A.ctx.moverNegocio === "function"]),
         criar: () => blocoConsultas(ver) }] : []),
       { chave: "etiquetas", sig: sig([conv.id, A.podeEscrever, ((A.base && A.base.etiquetas) || []).map(e => [e.id, e.nome, e.cor]), A.podeEscrever ? 0 : conv.etiquetas]),
         criar: () => blocoEtiquetas(ver), atualizar: el => atualizarEtiquetas(el, ver) },

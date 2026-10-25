@@ -1454,3 +1454,100 @@ mark.cvx-pend { background: var(--c-aten-suave); color: var(--c-texto); border-r
 .cvt-jornada-item { position: relative; display: grid; gap: .05rem; font-size: var(--fs-13); }
 .cvt-jornada-item::before { content: ""; position: absolute; left: calc(-.9rem - 5px); top: .35rem; width: 8px; height: 8px; border-radius: 50%; background: var(--c-prim); }
 .cvt-jornada-hora { color: var(--c-texto-2, var(--c-texto)); font-size: var(--fs-12, .75rem); }
+/* plano 2000d · DC-053: nota da prévia da assinatura */
+.cfg-previa-ass-nota { display: block; margin-top: .45rem; white-space: normal; font-weight: 400; }
+/* plano 2000d · DC-045: modelos aprovados no próprio modal da Nova conversa */
+.cv-nv-modelos { border: 0; margin: 0; padding: 0; display: grid; gap: .4rem; min-width: 0; }
+.cv-nv-modelos-lista { display: grid; gap: .35rem; max-height: 14rem; overflow: auto; }
+.cv-nv-modelo { min-height: 44px; text-align: left; }
+.cv-nv-modelo small { display: block; }
+/* plano 2000d · DC-060: um botão «Reconectar» por número caído */
+.cvl-caido-bts { flex-wrap: wrap; gap: .4rem; }
+.cvl-caido-bts .bt { min-height: 44px; }
+/* plano 2000d · DC-087/DC-088: ações da seção Consultas */
+.cvt-consulta-acoes .bt { min-height: 44px; }
+/* plano 2000d · DC-057: visões salvas acima das abas */
+.cvl-visoes-salvas { display: flex; flex-wrap: wrap; gap: .35rem; padding: 0 var(--esp-3, .75rem) .4rem; }
+.cvl-visao-cx { display: inline-flex; align-items: center; border: 1px solid var(--c-borda); border-radius: 999px; background: var(--c-fundo); }
+.cvl-visao { min-height: 44px; padding: 0 .75rem; border: 0; background: none; color: var(--c-texto); font-size: var(--fs-13); border-radius: 999px; cursor: pointer; }
+.cvl-visao[aria-pressed="true"] { color: var(--c-prim); font-weight: 600; }
+.cvl-visao-x { min-width: 44px; min-height: 44px; }
+.cvl-visao:focus-visible, .cvl-visao-x:focus-visible { outline: 2px solid var(--c-foco, var(--c-prim)); outline-offset: 2px; }
+/* plano 2000d · DC-055/DC-056 */
+.cvf-etq-modo, .cvf-sem-etq { margin-top: .4rem; }
+/* plano 2000d · DC-072: «Próximo · 4» flutuante no celular, no alcance do polegar e acima da barra do app */
+.cvl-proximo-fab { display: none; }
+@media (max-width: 760px) {
+  .cvl-proximo-fab:not([hidden]) { display: inline-flex; align-items: center; gap: .35rem; position: fixed; right: 16px; bottom: calc(var(--barra, 64px) + 16px + env(safe-area-inset-bottom, 0px)); z-index: 5; min-height: 56px; padding: 0 1.1rem; border-radius: 999px; box-shadow: var(--sombra-2, var(--sombra, none)); }
+  html.cv-chat-aberto .cvl-proximo-fab { display: none; }
+}
+@media (prefers-reduced-motion: no-preference) { .cvl-proximo-fab { transition: transform var(--t-ui) var(--e-out); } .cvl-proximo-fab:active { transform: scale(.97); } }
+/* plano 2000d · DC-123: 5+ fotos — a 4ª célula mostra «+N» */
+.cv-grade-mais { position: relative; }
+.cv-grade-mais-n { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--c-texto) 55%, transparent); color: var(--c-fundo); font-size: var(--fs-20, 1.25rem); font-weight: 700; pointer-events: none; }
+/* plano 2000d · DC-086: outros telefones do contato */
+.cvt-tel-extras { list-style: none; margin: .5rem 0 0; padding: 0; display: grid; gap: .35rem; }
+.cvt-tel-extra { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; font-size: var(--fs-13); }
+.cvt-tel-extra-acoes { margin-left: auto; gap: .25rem; }
+.cvt-tel-extra-acoes .bt { min-height: 44px; }
+/* plano 2000d · DC-142: bolha com o foco do teclado */
+.cv-msg:focus-visible { outline: 2px solid var(--c-foco, var(--c-prim)); outline-offset: 2px; border-radius: 12px; }
+/* plano 2000d · DC-158: «Selecionar texto» libera a seleção nativa */
+.cv-selecionavel .cv-texto { -webkit-user-select: text; user-select: text; }
+/* plano 2000d · DC-168: telefone na mensagem */
+.cv-tel { text-decoration: underline; text-underline-offset: 2px; cursor: pointer; color: inherit; }
+/* plano 2000d · DC-171/DC-172: resposta a botão e botões do modelo */
+.cv-chip-resp { display: inline-flex; align-items: center; gap: .35rem; padding: .25rem .6rem; border-radius: 999px; border: 1px solid var(--c-borda); background: var(--c-poco); font-size: var(--fs-13); }
+.cv-chip-resp .ic { width: 14px; height: 14px; }
+.cv-modelo-botoes { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .45rem; }
+.cv-modelo-bt { padding: .3rem .7rem; border-radius: 999px; border: 1px solid var(--c-borda); color: var(--c-texto-2); font-size: var(--fs-13); background: var(--c-fundo); }
+/* plano 2000d · DC-173: anúncio com miniatura e link */
+.cv-rot-anuncio { flex-wrap: wrap; }
+.cv-anuncio-mini { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; flex: none; }
+.cv-anuncio-link { margin-left: auto; min-height: 44px; display: inline-flex; align-items: center; }
+/* plano 2000d · DC-174: IA digitando */
+.cv-ia-digitando { display: flex; align-items: center; gap: .5rem; padding: .4rem 0; color: var(--c-texto-2); font-size: var(--fs-13); }
+.cv-ia-dig-bolha { display: inline-flex; gap: 3px; padding: .5rem .7rem; border-radius: 14px; background: var(--c-poco); }
+.cv-ia-dig-bolha i { width: 6px; height: 6px; border-radius: 50%; background: var(--c-texto-2); }
+@media (prefers-reduced-motion: no-preference) {
+  .cv-ia-dig-bolha i { animation: cv-ia-pulo var(--t-lento, 1.2s) var(--e-out) infinite; }
+  .cv-ia-dig-bolha i:nth-child(2) { animation-delay: .15s; }
+  .cv-ia-dig-bolha i:nth-child(3) { animation-delay: .3s; }
+}
+@keyframes cv-ia-pulo { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-3px); opacity: 1; } }
+/* plano 2000d · DC-176: avaliar a IA */
+.cv-ia-avaliar { display: inline-flex; gap: .15rem; }
+/* plano 2000d · DC-182/DC-183: apagada e editada pelo cliente */
+.cv-apagada { display: flex; align-items: center; gap: .3rem; margin: .35rem 0 0; font-size: var(--fs-12, .75rem); color: var(--c-texto-2); font-style: italic; }
+.cv-apagada .ic { width: 14px; height: 14px; }
+.cv-editada { font-style: italic; }
+/* plano 2000d · DC-190: «Só notas» */
+.cvc[data-filtro="notas"] .cv-msg:not([data-tipo="nota"]), .cvc[data-filtro="notas"] .cv-msg-grade, .cvc[data-filtro="notas"] .cv-sis, .cvc[data-filtro="notas"] .cv-sis-fino { display: none; }
+/* plano 2000d · DC-197: resumo da fila */
+.cv-fila-resumo { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin: .5rem auto; padding: .4rem .8rem; border-radius: 999px; border: 1px solid var(--c-borda); background: var(--c-poco); font-size: var(--fs-13); width: fit-content; max-width: 100%; }
+.cv-fila-resumo .ic { width: 16px; height: 16px; }
+.cv-fila-resumo .bt { min-height: 44px; }
+/* plano 2000d · DC-159: número grande para ligar do computador */
+.cvc-ligar-num { font-size: var(--fs-24, 1.5rem); font-weight: 700; margin: 0; }
+/* plano 2000d · DC-185: «Responder» no visualizador */
+.cv-lb-responder { min-height: 44px; }
+/* plano 2000d · DC-151: legendas das várias fotos com 16 px no toque (o Safari não amplia a tela ao focar) */
+@media (pointer: coarse) { .cvx-multi-leg { font-size: var(--fs-16); } }
+/* plano 2000d · DC-152: «Descartar» e «Outra sugestão» da IA com 44 px no toque */
+@media (pointer: coarse) { .cvx-ia-selo .bt { min-height: 44px; } }
+/* plano 2000d · DC-153: o autor da bolha («Assistente · IA») em texto-2 — o texto-3 ficava abaixo do AA no escuro (o --fs-11 já tem piso de 12 px) */
+.cv-quem { color: var(--c-texto-2); }
+/* plano 2000d · DC-154: alto contraste do Windows — bolhas com borda, nota com borda dupla, «lida» sempre escrito */
+@media (forced-colors: active) {
+  .cv-bolha { border: 1px solid CanvasText; }
+  .cv-msg[data-tipo="nota"] .cv-bolha { border: 3px double CanvasText; }
+  .cv-msg[data-dir="out"] .cv-bolha { border-style: solid; border-width: 1px 3px 1px 1px; }
+  .cv-msg:focus-visible { outline: 2px solid Highlight; }
+}
+/* plano 2000d · DC-201: na barra «/» sem prévia lateral, o corpo da resposta em 2 linhas */
+@media (min-width: 761px) {
+  .cvx-rr-op small { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-clamp: 2; }
+  .cvx-rr-corpo .cvx-rr-op small { display: none; }
+}
+/* plano 2000d · DC-204: celular com teclado aberto (altura < 600 px) — o campo cresce até 3 linhas e a conversa continua à vista */
+@media (pointer: coarse) and (max-height: 600px) { .cvx textarea { max-height: calc(3 * 1.45em + 1.2rem); } }

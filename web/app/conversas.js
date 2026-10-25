@@ -211,7 +211,7 @@ function lerPreferencia(k, padrao) { try { return lerPrefMigrando(k) || padrao; 
 function gravarPreferencia(k, v) { try { localStorage.setItem(chavePref(k), v); } catch { /* sem storage */ } }
 /** plano 1000 · CA-229: o filtro da lista lembrado por navegador e por empresa (os ids de departamento/número/etiqueta são dela); só as
     chaves conhecidas e com o formato certo voltam. */
-const CHAVES_FILTRO = ["departamento_id", "canal_id", "atendente", "etiquetas", "nao_lidas", "origem"];   // plano 1500c · CC-008: + origem
+const CHAVES_FILTRO = ["departamento_id", "canal_id", "atendente", "etiquetas", "nao_lidas", "origem", "etiquetas_modo", "sem_etiqueta"];   // plano 1500c · CC-008: + origem · plano 2000d · DC-055/DC-056
 // plano 2000d · DC-020: o filtro é por empresa E por conta («Atendente: Ana» não passa para a Bia); a chave só da empresa é migrada uma vez
 const chaveFiltro = cliente => { const c = contaPref(); return c ? `nx-cv-filtro:${cliente || "-"}:${c}` : `nx-cv-filtro:${cliente || "-"}`; };
 function lerFiltroGuardado(cliente) {
@@ -228,7 +228,8 @@ function lerFiltroGuardado(cliente) {
     for (const k of CHAVES_FILTRO) {
       const v = f[k];
       if (k === "etiquetas") { if (Array.isArray(v) && v.length) r.etiquetas = v.filter(x => typeof x === "string" || typeof x === "number").slice(0, 20); }
-      else if (k === "nao_lidas") { if (v === true) r.nao_lidas = true; }
+      else if (k === "nao_lidas" || k === "sem_etiqueta") { if (v === true) r[k] = true; }
+      else if (k === "etiquetas_modo") { if (v === "todas") r.etiquetas_modo = "todas"; }
       else if (typeof v === "string" && v) r[k] = v.slice(0, 80);
     }
     return r;
@@ -251,6 +252,38 @@ function podarFiltroGuardado() {
   A.filtro = f;
   return mudou;
 }
+/* plano 2000d · DC-057: visões salvas da lista — até 6 por empresa e conta, no aparelho: {nome, aba, filtro} */
+const VISOES_MAX = 6;
+const chaveVisoes = () => { const c = contaPref(); return `nx-cv-visoes:${(A && A.ctx.cliente && A.ctx.cliente.id) || "-"}:${c || "-"}`; };
+function lerVisoes() {
+  try {
+    const v = JSON.parse(localStorage.getItem(chaveVisoes()) || "[]");
+    return Array.isArray(v) ? v.filter(x => x && typeof x.nome === "string" && x.nome && typeof x.aba === "string").slice(0, VISOES_MAX) : [];
+  } catch { return []; }
+}
+function gravarVisoes(vs) { try { localStorage.setItem(chaveVisoes(), JSON.stringify(vs.slice(0, VISOES_MAX))); } catch { /* sem storage */ } }
+async function salvarVisao({ aba, filtro }) {
+  if (!A) return;
+  const ui = A.ui, E = A;
+  const atuais = lerVisoes();
+  const inp = ui.h("input", { type: "text", id: "cv-visao-nome", maxlength: 30, autocomplete: "off", placeholder: "Ex.: Anúncio sem dono" });
+  const nome = await ui.modal({ titulo: "Salvar esta visão", largura: "p",
+    corpo: ui.h("div", { class: "pilha-p" }, ui.h("div", { class: "campo" }, ui.h("label", { for: "cv-visao-nome" }, "Nome da visão"), inp),
+      ui.h("small", { class: "campo-ajuda" }, atuais.length >= VISOES_MAX ? `Você já tem ${VISOES_MAX}: a mais antiga sai para esta entrar.` : "Vira um atalho acima das abas, com a aba e os filtros de agora.")),
+    acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Salvar", tipo: "primario", fn: api => {
+      const n = String(inp.value || "").trim().slice(0, 30);
+      if (!n) { if (api && api.erro) api.erro("Dê um nome à visão."); return false; }
+      return n;
+    } }] });
+  if (!nome || A !== E) return;
+  const resto = atuais.filter(v => v.nome.toLowerCase() !== String(nome).toLowerCase());
+  const novas = [...resto, { nome: String(nome), aba: aba || A.aba, filtro: { ...(filtro || {}) } }].slice(-VISOES_MAX);
+  gravarVisoes(novas);
+  A.ui.toast(`Visão «${nome}» salva.`, { tipo: "ok" });
+  A.lista.render();
+}
+function apagarVisao(nome) { gravarVisoes(lerVisoes().filter(v => v.nome !== nome)); }
+
 function gravarFiltro(f) {
   const k = chaveFiltro(A && A.ctx.cliente && A.ctx.cliente.id);
   try { const vazio = !f || !Object.keys(f).length; if (vazio) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(f)); } catch { /* sem storage */ }
@@ -306,6 +339,20 @@ function posicionarLateral() {
 }
 
 function mostrarPainel(p) {
+  // plano 2000d · DC-073: no celular a lista some (display:none perde a rolagem) — guarda ao ir para o chat e devolve ao voltar,
+  // a menos que a aba, a busca ou os filtros tenham mudado nesse meio-tempo
+  const sigLista = () => JSON.stringify([A.aba, A.busca || "", A.filtro || {}]);
+  if (A.lista && typeof A.lista.rolagem === "function") {
+    if (p === "chat" && A.painel !== "chat") A.rolagemLista = { y: A.lista.rolagem(), sig: sigLista() };
+    else if (p === "lista" && A.painel === "chat" && A.rolagemLista) {
+      const g = A.rolagemLista; A.rolagemLista = null;
+      if (g.sig === sigLista() && g.y > 0) {
+        const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : f => setTimeout(f, 16);
+        A.lista.rolarPara(g.y);
+        raf(() => { if (A && A.lista) A.lista.rolarPara(g.y); });   // de novo depois do layout (o painel acabou de reaparecer)
+      }
+    }
+  }
   A.painel = p;
   A.raiz.dataset.painel = p;
   const celular = matchMedia("(max-width: 760px)").matches;
@@ -429,6 +476,9 @@ async function carregarLista({ reset = false, mais = false } = {}) {
     A.itens = itensComPendencia(mais && mesmoFiltro ? A.L.juntarPagina(A.itens, r.itens || []) : pulso ? pulso.itens : (r.itens || []));
     A.temMais = pulso && pulso.preservadas ? A.temMais : !!r.tem_mais;
     A.itensChave = chave;
+    // plano 2000d · DC-055/DC-056: «todas as etiquetas» e «sem etiqueta» também conferidas aqui — o servidor que ainda não entende o
+    // filtro devolve a mais, e a lista mostra só as que batem (a página pode vir menor; o «Carregar mais» continua)
+    A.itens = A.L.filtrarEtiquetasLocal(A.itens, filtro);
     // plano 2000d · DC-019: a fixada que não veio nesta página (página 3, outra aba) entra no topo assim mesmo
     if (!filtro.busca) { A.itens = juntarFixadasFora(A.itens); if (!mais) completarFixadas(); }
     A.contagens = r.contagens || {};
@@ -1273,6 +1323,7 @@ const acoes = {
   marcarNaoLida: (id, o) => marcarNaoLida(id, o),
   naoLidaLote: ids => naoLidaLote(ids), assumirLote: ids => assumirLote(ids), pendenteLote: ids => pendenteLote(ids),
   fixadas: () => lerFixadas(), alternarFixar: id => alternarFixar(id),
+  visoes: () => lerVisoes(), salvarVisao: o => salvarVisao(o), apagarVisao: n => apagarVisao(n),   // plano 2000d · DC-057
   preCarregar: id => { preCarregar(id); },   // plano 2000d · DC-034
   silenciada: id => conversaSilenciada(id), silenciar: (id, horas) => silenciarConversa(id, horas),
   maisMensagens: () => maisMensagens(),
@@ -1457,7 +1508,11 @@ const acoes = {
   /** D18: números de WhatsApp desconectados agora (shell → ctx.canais; sem ele, nx_cv_base.canais[].estado). */
   canaisCaidos: () => canaisCaidos(),
   canalCaido: id => (id ? canaisCaidos().find(c => String(c.id) === String(id)) || null : null),
-  verNumero() { if (A.ctx.canais && typeof A.ctx.canais.verNumero === "function") A.ctx.canais.verNumero(); else A.ctx.navegar("#/config/numeros"); },
+  verNumero(id) {
+    // plano 2000d · DC-060: com o id, abre o assistente daquele número (Configurações › Números já atende ?assistente=<id>)
+    if (id !== undefined && id !== null && id !== "") { A.ctx.navegar(`#/config/numeros?assistente=${encodeURIComponent(id)}`); return; }
+    if (A.ctx.canais && typeof A.ctx.canais.verNumero === "function") A.ctx.canais.verNumero(); else A.ctx.navegar("#/config/numeros");
+  },
   /** D10: «Enviar agora» de uma bolha da fila: {motivo, espera} — motivo vazio = pode. */
   estadoEnviarAgora(m) {
     const it = m && m.ref && A ? A.fila.itens.get(m.ref) : null;
@@ -2484,6 +2539,7 @@ function executarComando(id) {
     case "proxima": irParaVizinha(1); break;
     case "anterior": irParaVizinha(-1); break;
     case "atender": atenderProximo(); break;
+    case "ver_antiga": verMaisAntiga(); break;   // plano 2000d · DC-071
     case "assumir": comandoAssumir(); break;
     case "resolver": if (conversaParaAgir()) resolverComDesfazer(); break;
     case "nota": if (conversaParaAgir()) A.composer.alternarNota(); break;
@@ -2615,6 +2671,23 @@ async function atenderProximo(botao) {
   }
 }
 
+/** plano 2000d · DC-071: «Ver a que espera há mais tempo» (Alt+Shift+V) — o supervisor olha a mais antiga da fila SEM assumir. */
+async function verMaisAntiga() {
+  if (!A) return;
+  const E = A;
+  try {
+    const f = A.filtro || {}, extra = {};
+    if (f.departamento_id) extra.departamento_id = f.departamento_id;
+    if (f.canal_id) extra.canal_id = f.canal_id;
+    const r = await A.api.rpcC("nx_cv_listar", { p_filtro: { aba: "aguardando", ...extra }, p_limite: 50 });
+    if (A !== E) return;
+    const t = c => Date.parse((c && (c.ultima_entrada_em || c.ultima_msg_em)) || "") || Infinity;
+    const c = ((r && r.itens) || []).filter(x => x && !_pendResolver.has(x.id)).sort((a, b) => t(a) - t(b))[0];
+    if (!c) { aviso("Ninguém esperando agora."); return; }
+    if (A.selId !== c.id) A.ctx.navegar(`#/conversas/${c.id}`);
+  } catch (e) { if (A === E) tratarErro(e); }
+}
+
 /* Resolver adiado: enquanto o «Desfazer» está na tela, NADA foi ao servidor (como Ganho/Perdido no CRM). Fica no módulo, e não no A, para
    valer também se a pessoa sair de Conversas e voltar nesses 7 s. id da conversa → { antes: {status, aguardando, nao_lidas}, cancelado }. */
 const _pendResolver = new Map();
@@ -2645,6 +2718,24 @@ function itensComPendencia(itens) {
  * de espera) e nenhuma automação de «conversa resolvida» dispara por engano. Com «Ao resolver, abrir a próxima» ligado, a seguinte da lista
  * abre com o cursor no campo; sem seguinte, volta ao painel da fila; o Desfazer volta para a resolvida.
  */
+/** plano 2000d · DC-043: tarefa «Retomar contato com Maria» em 30 dias, 6 meses ou 1 ano (9h de Brasília), ligada ao contato (e ao negócio). */
+async function lembrarDeRetomar(contato, negocio) {
+  if (!A || !contato || !contato.id) return;
+  const E = A, ui = A.ui;
+  const opcoes = [{ v: "30d", r: "Em 30 dias" }, { v: "6m", r: "Em 6 meses" }, { v: "1a", r: "Em 1 ano" }];
+  const radios = opcoes.map((o, i) => ui.h("label", { class: "chip-check", for: `cv-ret-${o.v}` }, ui.h("input", { type: "radio", name: "cv-ret", id: `cv-ret-${o.v}`, value: o.v, checked: i === 1 }), o.r));
+  const corpo = ui.h("div", { class: "pilha-p" }, ui.h("p", { class: "sub" }, "Fica uma tarefa para a equipe chamar o cliente de novo (revisão, retorno, manutenção)."),
+    ui.h("div", { class: "multi-opcoes", role: "radiogroup", "aria-label": "Quando retomar" }, radios));
+  const quando = await ui.modal({ titulo: "Lembrar de retomar", corpo, largura: "p",
+    acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Criar lembrete", tipo: "primario", fn: () => { const r = radios.map(l => l.querySelector("input")).find(x => x.checked); return r ? r.value : "6m"; } }] });
+  if (!quando || A !== E) return;
+  const vence_em = E.L.dataRetomar(quando, Date.now());
+  try {
+    await E.api.rpcC("nx_tarefa_salvar", { p_tarefa: { titulo: `Retomar contato com ${nomeContato(contato) || "o cliente"}`, tipo: "whatsapp", vence_em, contato_id: contato.id, negocio_id: negocio && negocio.id ? negocio.id : null } });
+    if (A === E) ui.toast(`Lembrete criado para ${E.L.diaSP(Date.parse(vence_em)).split("-").reverse().join("/")}.`, { tipo: "ok" });
+  } catch (e) { if (A === E) tratarErro(e); }
+}
+
 async function resolverComDesfazer() {
   const conv = A && A.ver && A.ver.conversa;
   if (!conv || !A.selId) { aviso("Abra uma conversa para resolver."); return; }
@@ -2685,8 +2776,11 @@ async function resolverComDesfazer() {
     else if (A.selId === id) { delta(); recarregarVer(); }
   };
   try {
+    // plano 2000d · DC-043: «Lembrar de retomar…» no aviso do Resolver (revisão em 6 meses, retorno em 30 dias) vira tarefa do contato
+    const contatoRet = (A.ver && A.ver.contato) || conv.contato || null, negRet = (A.ver && A.ver.conversa && A.ver.conversa.negocio) || null;
     await A.ui.acaoComDesfazer({
       texto: `Resolvida · ${nome}`,
+      acao: contatoRet && contatoRet.id && A.podeEscrever ? { rotulo: "Lembrar de retomar…", fn: () => lembrarDeRetomar(contatoRet, negRet) } : null,
       // só a tela: nada vai ao servidor antes de o aviso fechar
       aplicar: () => {
         _pendResolver.set(id, pend);
@@ -2834,6 +2928,21 @@ function registrarComandos() {
     def("etiquetas", "Etiquetas da conversa aberta", "conversa etiqueta marcar organizar", () => executarComando("etiquetas"), "Alt+Shift+E");
   }
   def("negocio", "Abrir o negócio da conversa aberta", "conversa negocio oportunidade crm abrir", () => executarComando("abrir_negocio"), "Alt+Shift+O");
+  // plano 2000d · DC-063: as ações do plano 1500c também no Ctrl+K · DC-071: ver a mais antiga sem assumir
+  def("ver_antiga", "Ver a que espera há mais tempo", "conversa fila espera antiga olhar supervisor", () => verMaisAntiga(), "Alt+Shift+V");
+  def("fixar", "Fixar ou desafixar a conversa aberta", "conversa fixar topo alfinete desafixar", () => executarComando("fixar"), "Alt+Shift+F");
+  def("silenciar", "Silenciar a conversa aberta", "conversa silenciar som aviso mudo", () => {
+    if (!A.selId) { aviso("Abra uma conversa para usar este comando."); return; }
+    silenciarConversa(A.selId, conversaSilenciada(A.selId) ? null : 8);
+  });
+  def("exportar", "Exportar a conversa aberta", "conversa exportar baixar historico arquivo", () => {
+    if (!A.selId) { aviso("Abra uma conversa para usar este comando."); return; }
+    exportarConversa();
+  });
+  if (A.podeEscrever) def("nao_lida", "Marcar a conversa aberta como não lida", "conversa nao lida marcar depois destaque", () => {
+    if (!A.selId) { aviso("Abra uma conversa para usar este comando."); return; }
+    marcarNaoLida(A.selId, { voltar: true });
+  });
   def("atalhos", "Atalhos da central de conversas", "atalhos teclado ajuda conversas", () => abrirAjudaTeclado(), "?");
 }
 
@@ -3731,13 +3840,46 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
       ? "Este número é um WhatsApp comum (CodeWords): a mensagem sai como texto normal, sem janela de 24 h e sem modelos."
       : "Número da Meta (WhatsApp oficial): se o cliente não falou com a empresa nas últimas 24 h, só vale um modelo aprovado — o seletor de modelos abre em seguida.";
   };
+  // plano 2000d · DC-045: número da Meta — os modelos aprovados já aparecem aqui, com prévia; escolher um vira «Abrir e enviar modelo»
+  // (antes: abrir a conversa e só depois achar o seletor — três telas para o 1º modelo de um lead frio)
+  let modeloNv = null, apiNv = null;
+  const blocoModelos = ui.h("fieldset", { class: "cv-nv-modelos", hidden: true }, ui.h("legend", { class: "rotulo" }, "Modelo para começar (opcional)"));
+  const listaModelosNv = ui.h("div", { class: "cv-modelos cv-nv-modelos-lista", role: "radiogroup", "aria-label": "Modelos aprovados" });
+  const previaNv = ui.h("p", { class: "cv-previa cv-nv-modelo-previa", hidden: true, "aria-live": "polite" });
+  blocoModelos.append(listaModelosNv, previaNv);
+  const rotuloAbrir = () => (modeloNv ? "Abrir e enviar modelo" : "Abrir conversa");
+  const pintarBotaoNv = () => {
+    const b = apiNv && apiNv.el && apiNv.el.querySelector ? apiNv.el.querySelector(".modal-rod [data-tipo=primario]") : null;
+    if (b && b.textContent !== rotuloAbrir()) b.textContent = rotuloAbrir();
+  };
+  const desenharModelosNv = () => {
+    const k = canais.length > 1 ? canais.find(c => String(c.id) === String(sCanal.value)) : canais[0];
+    ui.limpar(listaModelosNv); modeloNv = null; previaNv.hidden = true;
+    const aprovados = k && k.provedor !== "codewords" ? ((A.base && A.base.templates) || []).filter(t => t && String(t.canal_id) === String(k.id) && String(t.status || "").toUpperCase() === "APPROVED") : [];
+    blocoModelos.hidden = !aprovados.length;
+    if (!aprovados.length) { pintarBotaoNv(); return; }
+    const opcao = (t, rot, corpoT) => {
+      const b = ui.h("button", { type: "button", class: "cv-modelo cv-nv-modelo", role: "radio", "aria-checked": String(!t), dataset: { id: t ? t.id : "" } },
+        ui.h("span", { class: "cv-modelo-l1" }, ui.h("span", { class: t ? "mono" : null }, rot)), corpoT ? ui.h("small", { class: "fraco" }, corpoT.length > 90 ? `${corpoT.slice(0, 90)}…` : corpoT) : null);
+      b.addEventListener("click", () => {
+        modeloNv = t;
+        for (const x of listaModelosNv.querySelectorAll(".cv-nv-modelo")) x.setAttribute("aria-checked", String(x === b));
+        previaNv.textContent = t ? (t.corpo || "") : ""; previaNv.hidden = !t;
+        pintarBotaoNv();
+      });
+      return b;
+    };
+    listaModelosNv.append(opcao(null, "Agora não", ""), ...aprovados.slice(0, 12).map(t => opcao(t, t.nome, t.corpo || "")));
+    pintarBotaoNv();
+  };
   sCanal.addEventListener("change", explicarCanal);
   sCanal.addEventListener("change", pintarCaido);   // plano 1000b · CB-044
-  explicarCanal(); pintarCaido();
+  sCanal.addEventListener("change", desenharModelosNv);   // DC-045
+  explicarCanal(); pintarCaido(); desenharModelosNv();
   // plano 1000 · CA-155: o contato já tem atendimento aberto por OUTRO número — aviso com «Abrir aquele» antes de criar a segunda conversa
   const avisoOutro = ui.h("div", { class: "aviso aviso-aten cv-nv-outro", role: "status", hidden: true });
   let avisadoOutro = null, apiModal = null;
-  const corpo = ui.h("div", { class: "pilha" }, campoCanal, avisoCaido, contato || telIni ? null : alterna, blocoEscolhido, blocoBusca, blocoDigitar, avisoOutro, textoCanal, blocoPrimeira);
+  const corpo = ui.h("div", { class: "pilha" }, campoCanal, avisoCaido, contato || telIni ? null : alterna, blocoEscolhido, blocoBusca, blocoDigitar, avisoOutro, textoCanal, blocoPrimeira, blocoModelos);
   desenharEscolhido();
   if (contato) { blocoBusca.hidden = true; }
   // CA-091 / CA-142: veio de uma busca por telefone (ou de um contato recebido): o número já entra digitado
@@ -3753,7 +3895,7 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
 
   const item = await ui.modal({
     titulo: "Nova conversa", corpo, largura: "m",
-    aoAbrir: api => { apiModal = api; if (!contato && !telIni) setTimeout(() => busca.focus(), 40); else if (telIni) setTimeout(() => nome.focus(), 40); },
+    aoAbrir: api => { apiModal = api; apiNv = api; pintarBotaoNv(); if (!contato && !telIni) setTimeout(() => busca.focus(), 40); else if (telIni) setTimeout(() => nome.focus(), 40); },
     acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Abrir conversa", tipo: "primario", fn: async api => {
       const params = { p_canal: canais.length > 1 ? sCanal.value : canais[0].id };
       if (modo === "digitar") {
@@ -3795,15 +3937,17 @@ async function novaConversa({ contato = null, telefone: telIni = null, nome: nom
   if (item && item.abrirExistente) { abrir(item.abrirExistente); return; }       // CA-155
   if (!item || !item.id) return;
   const textoPrimeira = blocoPrimeira.hidden ? "" : String(primeira.value || "").trim();
+  const modeloEscolhido = !blocoModelos.hidden && modeloNv ? modeloNv : null;   // DC-045
   await carregarLista({});
   abrir(item.id);
   if (textoPrimeira) { const E = A; if (await esperarConversa(item.id) && A === E) colocarTextoPronto(item.id, textoPrimeira); }   // CC-094
   // sem janela → direto para os modelos (só na Meta; o aparelho do CodeWords não tem janela de 24 h)
   const provedorItem = (item.canal && item.canal.provedor) || ((A.base && A.base.canais) || []).find(c => c.id === item.canal_id)?.provedor || "meta";
-  if (L.canalTemJanela(provedorItem) && !L.janela(item).aberta) {
+  if ((L.canalTemJanela(provedorItem) && !L.janela(item).aberta) || (modeloEscolhido && L.canalTemJanela(provedorItem))) {   // DC-045: com modelo escolhido, abre mesmo com a janela aberta
     const espera = async () => {
       for (let i = 0; i < 40 && A && (!A.ver || A.ver.conversa.id !== item.id); i++) await new Promise(r => setTimeout(r, 100));
-      if (A && A.ver && A.ver.conversa.id === item.id) A.composer.abrirModelos();
+      // plano 2000d · DC-045: o modelo escolhido no modal já entra marcado no envio
+      if (A && A.ver && A.ver.conversa.id === item.id) A.composer.abrirModelos(modeloEscolhido ? { modeloId: modeloEscolhido.id } : {});
     };
     espera();
   }

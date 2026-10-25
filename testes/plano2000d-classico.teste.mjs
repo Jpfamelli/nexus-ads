@@ -98,7 +98,8 @@ test("DA-005 · a dica «para o próximo mês» casa o serviço sem acento/caixa
 
 test("DA-006/DA-375 · silenciar o «ritmo acima» não cala o «orçamento esgotado»", () => {
   const hoje = "2026-03-13";
-  const M = comHoje(hoje, { metricas: serieAbs(hoje, 1, 40, { g: 10 }) }, { orcamento: 100, silenciados: { ritmo: { desde: "2026-03-01", ate: "2026-03-30" } } });
+  // plano 2000d: REV-05 — orçamento que cruza ONTEM (110 < 115 ≤ 120): com 100 o aviso saiu no dia 10 e o de ontem cai no intervalo de 3 dias
+  const M = comHoje(hoje, { metricas: serieAbs(hoje, 1, 40, { g: 10 }) }, { orcamento: 115, silenciados: { ritmo: { desde: "2026-03-01", ate: "2026-03-30" } } });
   const r = M.avaliar(M.R, true).find(a => a.regra.id === "ritmo");
   assert.ok(r, "antes: a chave «ritmo» silenciada escondia também o esgotado");
   assert.equal(r.tipo, "esgotado");
@@ -107,8 +108,9 @@ test("DA-006/DA-375 · silenciar o «ritmo acima» não cala o «orçamento esgo
 
 test("DA-007 · «orçamento acabou» só no dia em que cruza (e a cada 10% a mais), não todo dia", () => {
   const hoje = "2026-03-13";   // ontem = 12/03, gasto 1.200 até 11/03 = 1.100
-  // cruzou ontem: 1.200 / 1.050 = 114% (degrau 1) e anteontem 1.100 / 1.050 = 104,8% (degrau 0) → avisa
-  const M = comHoje(hoje, { metricas: serieAbs(hoje, 1, 40, { g: 100 }) }, { orcamento: 1050 });
+  // plano 2000d: REV-05 — o caso antigo (cruzou anteontem com 1.100/1.050 e subiu de degrau ontem) agora fica quieto (3 dias entre
+  // avisos); o «cruzou ontem» é 1.100 < 1.150 anteontem e 1.200 ≥ 1.150 ontem → avisa
+  const M = comHoje(hoje, { metricas: serieAbs(hoje, 1, 40, { g: 100 }) }, { orcamento: 1150 });
   assert.ok(M.avaliar(M.R, true).some(a => a.tipo === "esgotado"));
   // já esgotado e ontem quase sem gasto: 1.101 e 1.100 sobre 1.000 ficam no mesmo degrau (110%) → quieto
   const quieto = comHoje(hoje, { metricas: serieAbs(hoje, 1, 40, n => ({ g: n === 1 ? 1 : 100 })) }, { orcamento: 1000 });
@@ -1073,4 +1075,81 @@ test("KX-096–KX-106 · títulos fixos do HTML pela vertical; a marca diz a ag�
   assert.equal(lj.donutT, "Produtos vendidos"); assert.equal(lj.relSub, "Todo dia 1º, no WhatsApp da loja — sem tecniquês.");
   assert.ok(Object.values(of).every(x => !/clínica|paciente|consultório|tratamento/.test(x)));
   fonte(PJS, /const TV = textosVertical\(V, M\.vertical, agencia\(\)\);/);
+});
+
+/* ================= revisão 2000d (REV-NN) ================= */
+// plano 2000d · REV-01: «sem conversa» (r2) — 40 dias de uma campanha C2; os 3 últimos sem conversa e com R$ 30/dia
+const campR2 = (nome, o = {}) => {
+  const { convAntes = 0, obj } = o;
+  return [...serie(1, 40), ...serie(1, 40, n => ({ c: "C2", cn: nome, a: "A9", an: "Anúncio 9", g: 30, conv: n <= 3 ? 0 : convAntes, ...(obj ? { obj } : {}) }))];
+};
+const r2De = (met, cfg = { cpaAlvo: 15 }) => { const M = montarDe({ metricas: met }, cfg); return M.avaliar(M.R).filter(a => a.chave === "r2|meta:C2"); };
+
+test("REV-01 · campanha de conversas com «Vídeo» no nome alerta o «sem conversa» (R$ 90 em 3 dias)", () => {
+  const al = r2De(campR2("Clareamento · Vídeo depoimento (conversas)", { convAntes: 2 }));
+  assert.equal(al.length, 1, "antes: «vídeo» no nome calava o r2");
+  assert.match(al[0].msg, /gastou R\$\s90,00 em 3 dias sem nenhuma conversa/);
+  // «vídeo»/«visualiza» sozinhos não bastam (nem sem conversa nenhuma antes)
+  assert.equal(r2De(campR2("Clareamento · Vídeo depoimento")).length, 1);
+  assert.equal(r2De(campR2("Visualizações do reels")).length, 1);
+});
+
+test("REV-01 · alcance de verdade continua fora do r2; termo de conversa ou conversão recente põe de volta", () => {
+  assert.equal(r2De(campR2("Alcance · marca da clínica")).length, 0, "alcance sem conversa nunca: fora");
+  assert.equal(r2De(campR2("Reconhecimento ThruPlay")).length, 0);
+  assert.equal(r2De(campR2("Alcance · leads WhatsApp")).length, 1, "nome com lead/whatsapp busca conversa");
+  assert.equal(r2De(campR2("Alcance · marca da clínica", { convAntes: 1 })).length, 1, "trouxe conversa nos 14 dias antes: avisa quando para");
+});
+
+test("REV-01 · o objetivo da campanha (quando vem na linha) decide antes do nome", () => {
+  assert.equal(r2De(campR2("Alcance · marca", { obj: "OUTCOME_ENGAGEMENT" })).length, 1, "objetivo de conversa: alerta mesmo com «Alcance» no nome");
+  assert.equal(r2De(campR2("Clareamento · conversas", { obj: "OUTCOME_AWARENESS" })).length, 0, "objetivo de reconhecimento: fora");
+  const M = montarDe({ metricas: campR2("X", { obj: "OUTCOME_AWARENESS" }) });
+  assert.equal(M.CAMP["meta:C2"].objetivo, "OUTCOME_AWARENESS");
+});
+
+test("REV-05 · «verba sobrando» tem chave própria: silenciar o «acima» (chave «ritmo») não a cala", () => {
+  const hoje = "2026-03-11";
+  const M = comHoje(hoje, { metricas: serieAbs(hoje, 1, 40, { g: 10 }) }, { orcamento: 3000, silenciados: { ritmo: { desde: "2026-03-01", ate: "2026-03-30" } } });
+  const r = M.avaliar(M.R, true).find(a => a.regra.id === "ritmo");
+  assert.ok(r, "antes: a chave «ritmo» silenciada escondia também a sobra");
+  assert.equal(r.tipo, "abaixo");
+  assert.equal(r.chave, "ritmo:abaixo");
+  const sil = comHoje(hoje, { metricas: serieAbs(hoje, 1, 40, { g: 10 }) }, { orcamento: 3000, silenciados: { "ritmo:abaixo": { desde: "2026-03-01", ate: "2026-03-30" } } });
+  assert.equal(sil.avaliar(sil.R, true).filter(a => a.regra.id === "ritmo").length, 0, "silenciar a própria sobra cala");
+});
+
+test("REV-05 · «orçamento acabou» com gasto alto: no mínimo 3 dias entre um aviso e o próximo", () => {
+  // R$ 200/dia contra R$ 3.000: cruza no dia 15 e sobe um degrau de 10% a cada ~1,5 dia — antes avisava dia sim, dia não
+  const hoje = "2026-03-31";
+  const M = comHoje(hoje, { metricas: serieAbs(hoje, 1, 60, { g: 200 }) }, { orcamento: 3000 });
+  const dias = [];
+  for (let r = M.R - 29; r <= M.R; r++) if (M.avaliar(r, true).some(a => a.tipo === "esgotado")) dias.push(r);
+  assert.ok(dias.length >= 2, "continua avisando (cruzou e subiu de degrau)");
+  for (let k = 1; k < dias.length; k++) assert.ok(dias[k] - dias[k - 1] >= 3, `avisos com ${dias[k] - dias[k - 1]} dia(s) de intervalo — antes 1 ou 2`);
+  assert.equal(dias[0], M.R - 30 + 15, "o primeiro aviso é no dia em que cruza (dia 15)");
+});
+
+test("REV-06 · meio centavo arredonda para cima (1,005 → R$ 1,01), como se lê", () => {
+  assert.equal(N.formatarReais(1.005), `R$${NBSP}1,01`, "antes: R$ 1,00 (toFixed no binário)");
+  assert.equal(N.brl(2.675), `R$${NBSP}2,68`);
+  assert.equal(N.brl(-1.005), `-R$${NBSP}1,01`);
+  assert.equal(N.brl0(2.5), `R$${NBSP}3`);
+  assert.equal(N.brl(1234.565), `R$${NBSP}1.234,57`);
+  assert.equal(N.brl(1e-7), `R$${NBSP}0,00`);
+  assert.equal(N.brl(-0.004), `R$${NBSP}0,00`, "o sinal continua decidido depois de arredondar");
+});
+
+test("REV-07 · mensal: «Criativos com melhor custo por …» e o substantivo pela plataforma dos criativos", () => {
+  const M = montarDe({ metricas: [...serie(1, 120), ...serie(1, 120, { a: "A2", an: "Vídeo da doutora", conv: 1 })] });
+  const t = M.relMensal(ultimoMes(M));
+  assert.match(t, /• Criativos com melhor custo por conversa: _Anúncio teste_ \(\d+ · R\$\s15,00 cada\), _Vídeo da doutora_/, "antes: «que mais trouxeram» com a lista do menor custo");
+  // conta com Google de pesquisa (sem criativo): os criativos são do Meta — «conversa», não «contato»
+  const g = n => ({ p: "google", n: "campanha", c: "G1", cn: "Pesquisa", a: undefined, an: undefined, g: 40, conv: 1, imp: 500, cli: 20 });
+  const MG = montarDe({ metricas: [...serie(1, 120), ...serie(1, 120, { a: "A2", an: "Vídeo da doutora", conv: 1 }), ...serie(1, 120, g)] });
+  const tg = MG.relMensal(ultimoMes(MG));
+  assert.match(tg, /Criativos com melhor custo por conversa:/, "antes: «contato» porque a CONTA tinha Google");
+  // escolha por volume (sem 2 acima do piso): o rótulo continua «que mais trouxeram»
+  const MV = montarDe({ metricas: [...serie(1, 120, { conv: 10 }), ...serie(1, 120, n => ({ a: "A2", an: "Raro", conv: n % 30 === 5 ? 1 : 0 }))] });
+  assert.match(MV.relMensal(ultimoMes(MV)), /Criativos que mais trouxeram conversa:/);
 });

@@ -258,6 +258,46 @@ begin
                               and a.dados ->> 'por' = 'sistema' and a.dados ->> 'motivo' = 'cobranca'), 'DS-306: mudança de status auditada');
   update public.nx_clientes set nome = 'Teste 36 renomeado' where id = cA;
   perform pg_temp.ok((select count(*) from public.nx_auditoria a where a.cliente_id = cA and a.acao = 'plano_status') = 1, 'DS-306: outras colunas não auditam');
+  update public.nx_clientes set status = 'ativo', motivo_status = null where id = cA;
+  -- DU-113 / DU-396: histórico de acessos e alterações recentes (só admin; nomes resolvidos; sem segredo)
+  insert into public.nx_auditoria (cliente_id, conta_id, acao, dados) values
+    (cA, k_adm, 'papel', jsonb_build_object('conta', k_at, 'de', 'atendente', 'para', 'supervisor')),
+    (cA, k_adm, 'canal_alterado', jsonb_build_object('canal', 1, 'token', true)),
+    (cA, k_adm, 'config_salva', '{"chaves":["tema"]}'::jsonb);
+  jb := public.nx_auditoria_listar(t_adm, cA, 'equipe', 10)::jsonb;
+  perform pg_temp.ok(jsonb_array_length(jb) = 1 and jb -> 0 ->> 'acao' = 'papel_trocado' and jb -> 0 ->> 'quem' = 'Alice Admin 36'
+                     and jb -> 0 ->> 'alvo' = 'Ana Atende 36' and jb -> 0 -> 'detalhe' ->> 'para' = 'supervisor' and jb -> 0 ->> 'em' is not null,
+                     'DU-113: equipe com quem/alvo/detalhe: ' || jb::text);
+  jb := public.nx_auditoria_listar(t_adm, cA, 'config', 10)::jsonb;
+  perform pg_temp.ok(jsonb_array_length(jb) >= 3 and not (jb::text like '%"token"%')
+                     and exists (select 1 from jsonb_array_elements(jb) x where x ->> 'acao' = 'plano_status'),
+                     'DU-396: config sem o booleano do token, com plano/status: ' || jb::text);
+  -- plano 2000d · REV-M5: em «cliente_alterado» o admin da empresa (e o gestor da revenda) não vê limites, pacote comercial nem org;
+  -- a plataforma vê tudo
+  declare k_sup36 uuid; t_sup36 text := 'tok-36-sup-' || sfx;
+  begin
+    insert into public.nx_auditoria (org_id, cliente_id, conta_id, acao, dados) values (org_p, cA, k_adm, 'cliente_alterado',
+      jsonb_build_object('status', jsonb_build_array('teste', 'ativo'), 'limites', '{"contatos":500}'::jsonb,
+                         'pacote_comercial', '{"pacote":"ultra"}'::jsonb, 'org', org_p));
+    jb := public.nx_auditoria_listar(t_adm, cA, 'config', 20)::jsonb;
+    perform pg_temp.ok(exists (select 1 from jsonb_array_elements(jb) x where x ->> 'acao' = 'cliente_alterado'
+                                 and x -> 'detalhe' ? 'status' and not (x -> 'detalhe' ?| array['limites', 'pacote_comercial', 'org', 'org_id'])),
+                       'REV-M5: admin não vê os dados internos de cliente_alterado: ' || jb::text);
+    insert into public.nx_contas (email, nome, senha_hash, papel, aprovado, org_id) values ('t36-sup-' || sfx || '@teste.local', 'Super 36', 'x', 'gestor', true, org_p) returning id into k_sup36;
+    insert into public.nx_sessoes (token_hash, conta_id, expira_em) values (public.nx_hash(t_sup36), k_sup36, now() + interval '1 hour');
+    jb := public.nx_auditoria_listar(t_sup36, cA, 'config', 20)::jsonb;
+    perform pg_temp.ok(exists (select 1 from jsonb_array_elements(jb) x where x ->> 'acao' = 'cliente_alterado'
+                                 and x -> 'detalhe' ?& array['limites', 'pacote_comercial', 'org']), 'REV-M5: a plataforma vê tudo');
+  end;
+  perform pg_temp.ok(pg_temp.erro(format('select public.nx_auditoria_listar(%L, %L, %L, 5)', t_at, cA, 'equipe')) = 'sem_permissao', 'DU-113: só admin');
+  perform pg_temp.ok(pg_temp.erro(format('select public.nx_auditoria_listar(%L, %L, %L, 5)', t_adm, cA, 'tudo')) like 'tipo_invalido%', 'DU-113: tipo inválido');
+  -- DS-037 / RC-315: quem bloqueou e quando; desbloquear limpa
+  perform set_config('nx.conta', k_adm::text, true);
+  update public.nx_contatos set bloqueado = true where id = ct3;
+  perform pg_temp.ok((select bloqueado_por = k_adm and bloqueado_em is not null from public.nx_contatos where id = ct3), 'DS-037: bloqueio carimbado');
+  perform pg_temp.ok((public.nx_crm_contato_json(cA, ct3) ->> 'bloqueado_por')::uuid = k_adm, 'DS-037: a ficha do contato leva bloqueado_por');
+  update public.nx_contatos set bloqueado = false where id = ct3;
+  perform pg_temp.ok((select bloqueado_por is null and bloqueado_em is null from public.nx_contatos where id = ct3), 'DS-037: desbloquear limpa');
   perform pg_temp.ok(has_function_privilege('anon', 'public.nx_cv_status_lote(text, uuid, bigint[], text, jsonb)', 'execute')
                      and not has_function_privilege('anon', 'public.nx_tg_tarefa_repetir()', 'execute'), 'permissões das novas');
 

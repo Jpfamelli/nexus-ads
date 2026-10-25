@@ -69,6 +69,9 @@ export const COMANDOS = [
   // plano 1500c (21/10): um arquivo por frente, opcionais até a frente entregar (ausente = pulado; com --exigir, falha)
   ...["conv", "crm", "ads", "auto", "config", "classico", "agenda", "inicio", "sis", "funcoes"]
     .map(f => ({ args: ["--test", `testes/plano1500c-${f}.teste.mjs`], opcional: true })),
+  // plano 2000d (25/10): um arquivo por frente
+  ...["conv", "crm", "ads", "auto", "config", "classico", "agenda", "inicio", "sis", "funcoes"]
+    .map(f => ({ args: ["--test", `testes/plano2000d-${f}.teste.mjs`], opcional: true })),
   { args: ["--test", "testes/isolamento.teste.mjs"] },
   { args: ["--test", "testes/plano100-banco.teste.mjs"] },         // S-B
 ];

@@ -111,16 +111,18 @@ const serieAbs = (hoje, n, o = {}) => Array.from({ length: n }, (_, k) => { cons
 
 test("AC-010 · ritmo avisa verba sobrando no dia 10 (com quanto dá para subir); fora dos dias 10/20 fica quieto", () => {
   const M = comHoje("2026-03-11", { metricas: serieAbs("2026-03-11", 40, { g: 10 }) }, { orcamento: 3000 });
-  const r = M.avaliar(M.R, true).find(a => a.chave === "ritmo");
+  // plano 2000d: REV-05 — a sobra tem chave própria («ritmo:abaixo»): silenciar o «acima» não a cala
+  const r = M.avaliar(M.R, true).find(a => a.chave === "ritmo:abaixo");
   assert.ok(r, "antes: nenhum aviso abaixo do orçamento");
   assert.equal(r.tipo, "abaixo");
   assert.match(r.acao, /Dá para subir R\$\s[\d.,]+ por dia/);
   const M2 = comHoje("2026-03-13", { metricas: serieAbs("2026-03-13", 40, { g: 10 }) }, { orcamento: 3000 });
-  assert.equal(M2.avaliar(M2.R, true).find(a => a.chave === "ritmo"), undefined, "dia 12: sem aviso diário de sobra");
+  assert.equal(M2.avaliar(M2.R, true).find(a => a.regra.id === "ritmo"), undefined, "dia 12: sem aviso diário de sobra");   // plano 2000d: pela regra (REV-05)
 });
 
 test("AC-011 · orçamento já gasto: nada de «Segurar R$ X por dia» — o aviso diz que acabou", () => {
-  const M = comHoje("2026-03-13", { metricas: serieAbs("2026-03-13", 40, { g: 10 }) }, { orcamento: 100 });
+  // plano 2000d: REV-05 — orçamento que cruza ONTEM (110 < 115 ≤ 120); com 100 o aviso saiu no dia 10 e ontem cai no intervalo de 3 dias
+  const M = comHoje("2026-03-13", { metricas: serieAbs("2026-03-13", 40, { g: 10 }) }, { orcamento: 115 });
   // plano 2000d: o «esgotado» tem chave própria («ritmo:esgotado», DA-006) — procura pela regra
   const r = M.avaliar(M.R, true).find(a => a.regra.id === "ritmo");
   assert.ok(r);
@@ -290,9 +292,10 @@ test("AC-047 · estorno (gasto negativo) entra na soma, mas a barra do dia não 
   assert.equal(M.consolidar(M.linhasDe(0, M.R)).gasto, 30 * 4 - 20);
 });
 
+// plano 2000d: REV-07 — escolhidos pelo custo (DA-023), o rótulo virou «Criativos com melhor custo por conversa»
 test("AC-048 · mensal com os criativos que mais trouxeram conversa", () => {
   const M = montarDe({ metricas: [...serie(1, 120), ...serie(1, 120, { a: "A2", an: "Vídeo da doutora", conv: 1 })] });
-  assert.match(M.relMensal(ultimoMes(M)), /Criativos que mais trouxeram conversa: _Anúncio teste_ \(\d+ · R\$\s[\d,]+ cada\), _Vídeo da doutora_ \(\d+ · R\$\s[\d,]+ cada\)/);
+  assert.match(M.relMensal(ultimoMes(M)), /Criativos com melhor custo por conversa: _Anúncio teste_ \(\d+ · R\$\s[\d,]+ cada\), _Vídeo da doutora_ \(\d+ · R\$\s[\d,]+ cada\)/);
 });
 
 test("AC-055 · resumo semanal (segunda-feira): 7 dias contra os 7 anteriores", () => {

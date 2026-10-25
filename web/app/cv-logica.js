@@ -411,9 +411,35 @@ function textoComEmail(out, t) {
   let i = 0, m;
   RE_EMAIL.lastIndex = 0;
   while ((m = RE_EMAIL.exec(t))) {
-    if (m.index > i) out.push({ tipo: "texto", v: t.slice(i, m.index) });
-    out.push({ tipo: "link", v: `mailto:${m[0]}`, texto: m[0] });
+    if (m.index > i) textoComDados(out, t.slice(i, m.index));
+    out.push({ tipo: "link", v: `mailto:${m[0]}`, texto: m[0], pessoal: true });   // plano 2000d · DC-170: e-mail é dado pessoal
     i = m.index + m[0].length;
+  }
+  if (i < t.length) textoComDados(out, t.slice(i));
+}
+/** plano 2000d · DC-168/DC-170: telefone no texto vira segmento «tel» (Ligar · Nova conversa · Copiar) e CPF vira «pessoal» — os dois
+    borram no modo apresentação. Telefone: (12) 99123-4567 · 12 99123-4567 · +55 12 99123-4567 · 1299123-4567 (10–13 dígitos). */
+const RE_DADOS = /(\d{3}\.\d{3}\.\d{3}-\d{2})|((?:\+\d{1,3}[\s.-]?)?\(?\d{2}\)?[\s.-]?\d{4,5}[\s.-]?\d{4})/g;
+function textoComDados(out, t) {
+  let i = 0, m;
+  RE_DADOS.lastIndex = 0;
+  while ((m = RE_DADOS.exec(t))) {
+    const ini = m.index, fim = ini + m[0].length;
+    // não pega pedaço de número maior (protocolo, valor, código de barras)
+    if ((ini > 0 && /[\d/]/.test(t[ini - 1])) || (fim < t.length && /\d/.test(t[fim]))) continue;
+    let seg = null;
+    if (m[1]) seg = { tipo: "pessoal", v: m[1] };
+    else {
+      const dig = m[2].replace(/\D/g, "");
+      if (dig.length >= 10 && dig.length <= 13) {
+        const tel = telefoneDigitado(m[2]);
+        if (tel.numero) seg = { tipo: "tel", v: tel.numero, texto: m[2] };
+      }
+    }
+    if (!seg) continue;
+    if (ini > i) out.push({ tipo: "texto", v: t.slice(i, ini) });
+    out.push(seg);
+    i = fim;
   }
   if (i < t.length) out.push({ tipo: "texto", v: t.slice(i) });
 }
@@ -887,11 +913,19 @@ export function dimensoesFoto(largura, altura, max = FOTO_LADO_MAX) {
 
 /** planoFoto({tipo, bytes, largura, altura}) → {acao: "manter"|"otimizar", w, h}.
     Foto pequena (≤ 300 KB e dentro de 1600 px) segue como veio; o resto é redimensionado e recodificado. HEIC sempre otimiza (o WhatsApp não aceita). */
-export function planoFoto({ tipo, bytes, largura, altura } = {}, { pequena = FOTO_PEQUENA, max = FOTO_LADO_MAX } = {}) {
+export function planoFoto({ tipo, bytes, largura, altura, texto = false } = {}, { pequena = FOTO_PEQUENA, max = FOTO_LADO_MAX } = {}) {
   const d = dimensoesFoto(largura, altura, max);
   const heic = /^image\/hei[cf]$/.test(String(tipo || ""));
+  // plano 2000d · DC-133: print de tela (PNG com texto) segue em PNG — o JPEG 0,82 borrava planilha e orçamento
+  if (texto && String(tipo || "") === "image/png") return { acao: d.mudou ? "redimensionar" : "manter", formato: "png", w: d.w, h: d.h };
   if (!heic && !d.mudou && Number(bytes) <= pequena) return { acao: "manter", w: d.w, h: d.h };
   return { acao: "otimizar", w: d.w, h: d.h };
+}
+
+/** plano 2000d · DC-133: parece um print com texto? Nome de captura de tela, ou poucas cores distintas na amostra (≤ 512 de 4096 pontos). */
+export function pareceCapturaDeTela(nome, coresDistintas = null) {
+  if (/(captura|screenshot|screen[ _-]?shot|print|tela)/i.test(String(nome || ""))) return true;
+  return Number.isFinite(coresDistintas) && coresDistintas > 0 && coresDistintas <= 512;
 }
 
 /** Qualidade da próxima tentativa (ou null quando acabaram): só insiste se ainda passou do alvo. */
@@ -1139,6 +1173,8 @@ export function marcosMeta(canal, modelos = 0) {
 /** Os acordes da central. Dentro de campo só valem os com Alt (+Shift): Alt+Shift+letra evita o AltGr do ABNT2 (que chega como Ctrl+Alt). */
 export const ACORDES = Object.freeze([
   { id: "atender", teclas: "Alt+Shift+P", rotulo: "Atender o próximo (a que espera há mais tempo)", grupo: "Atender", dentroDeCampo: true },
+  // plano 2000d · DC-071: olhar a mais antiga da fila sem assumir (o supervisor)
+  { id: "ver_antiga", teclas: "Alt+Shift+V", rotulo: "Ver a que espera há mais tempo (sem assumir)", grupo: "Atender", dentroDeCampo: true },
   { id: "proxima", teclas: "Alt+↓", rotulo: "Próxima conversa", grupo: "Atender", dentroDeCampo: true },
   { id: "anterior", teclas: "Alt+↑", rotulo: "Conversa anterior", grupo: "Atender", dentroDeCampo: true },
   { id: "assumir", teclas: "Alt+Shift+A", rotulo: "Assumir a conversa", grupo: "Atender", dentroDeCampo: true },
@@ -1172,7 +1208,7 @@ export function acordeDoEvento(ev, { emCampo = false } = {}) {
   if (ev.altKey) {
     if (!ev.shiftKey) return k === "ArrowDown" ? "proxima" : k === "ArrowUp" ? "anterior" : null;
     const letra = /^Key[A-Z]$/.test(cod) ? cod.slice(3).toLowerCase() : k.toLowerCase();     // no Mac Alt+letra muda o caractere: o código físico vale mais
-    return { a: "assumir", r: "resolver", n: "nota", t: "transferir", p: "atender", o: "abrir_negocio", e: "etiquetas", f: "fixar" }[letra] || null;   // CX-050: F
+    return { a: "assumir", r: "resolver", n: "nota", t: "transferir", p: "atender", o: "abrir_negocio", e: "etiquetas", f: "fixar", v: "ver_antiga" }[letra] || null;   // CX-050: F · DC-071: V
   }
   if (emCampo) return null;
   // plano 1000b · CB-028: com Caps Lock o key vem «J»/«K» (sem Shift) — compara em minúscula; Shift+J continua sem atalho
@@ -1356,6 +1392,8 @@ export function proximaVelocidade(v) {
 export function velocidadeValida(v) { const n = Number(v); return VELOCIDADES_AUDIO.includes(n) ? n : 1; }
 /** "1×" · "1,5×" · "2×" */
 export function rotuloVelocidade(v) { return `${String(velocidadeValida(v)).replace(".", ",")}×`; }
+/** plano 2000d · DC-138: para o leitor de tela — «1,5 vezes» (o «×» era lido «multiplicado»). */
+export function velocidadeFalada(v) { return `${String(velocidadeValida(v)).replace(".", ",")} vezes`; }
 /** 65 → "1:05"; 3725 → "1:02:05"; sem número → "–:––". */
 export function formatarDuracao(seg) {
   const s = Number(seg);
@@ -1600,11 +1638,23 @@ export function nomeAssinatura(nome) {
   return partes[i] || "";
 }
 /** Emoji e alguns símbolos contam 2 no limite do WhatsApp (unidades UTF-16): quantos o texto tem. */
-export function contarDuplos(texto) { return (String(texto ?? "").match(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g) || []).length; }
-/** «86 caracteres restantes» (+ «· emoji conta 2» quando há emoji no texto). */
+// plano 2000d · DC-160: conta as unidades EXTRAS de cada grafema (👍 = 1 extra, 👍🏽 = 3, 🇧🇷 = 3, 👨\u200D👩\u200D👧 = 7) — antes contava só os pares
+export function contarDuplos(texto) {
+  const s = String(texto ?? "");
+  if (!/[\uD800-\uDFFF\u200D\uFE0F]/.test(s)) return 0;
+  let extra = 0;
+  for (const g of grafemas(s)) if (g.length > 1 && /[\uD800-\uDFFF\u200D\uFE0F\u20E3]/.test(g)) extra += g.length - 1;
+  return extra;
+}
+function grafemas(s) {
+  try { if (typeof Intl !== "undefined" && Intl.Segmenter) return [...new Intl.Segmenter("pt-BR", { granularity: "grapheme" }).segment(s)].map(x => x.segment); } catch { /* sem Segmenter */ }
+  return Array.from(s);
+}
+/** «86 caracteres restantes» (+ «· emoji conta 2 ou mais» quando há emoji no texto). */
 export function textoContador(restantes, duplos = 0) {
   const r = Math.max(0, Number(restantes) || 0);
-  return `${r} caractere${r === 1 ? "" : "s"} restante${r === 1 ? "" : "s"}${duplos > 0 ? " · emoji conta 2" : ""}`;
+  // plano 2000d · DC-160: família, bandeira e tom de pele contam 4 a 8 — «conta 2» era errado
+  return `${r} caractere${r === 1 ? "" : "s"} restante${r === 1 ? "" : "s"}${duplos > 0 ? " · emoji conta 2 ou mais" : ""}`;
 }
 
 /* ---------- D13. telefone digitado em «Nova conversa» ---------- */
@@ -1919,11 +1969,14 @@ export function histereseMudo(estado, mudo, agora, someMs = 2000) {
 }
 
 /** CA-043: o que os pontos coloridos da linha dizem, em texto (celular): "Avaliação · Urgente +1". */
-export function textoMetaLista(etapa, etiquetas = []) {
+export function textoMetaLista(etapa, etiquetas = [], dono = "") {
   const nomes = (etiquetas || []).map(e => (e && e.nome) || "").filter(Boolean);
   const partes = [];
   if (etapa) partes.push(String(etapa));
   if (nomes.length) partes.push(nomes.length > 1 ? `${nomes[0]} +${nomes.length - 1}` : nomes[0]);
+  // plano 2000d · DC-066: no celular o dono por extenso («Com Ana») — as iniciais «A» de Ana e Amanda se confundiam no avatar
+  const primeiro = String(dono || "").trim().split(/\s+/)[0];
+  if (primeiro) partes.push(`Com ${primeiro}`);
   return partes.join(" · ");
 }
 
@@ -2231,10 +2284,11 @@ export function rotuloCanalFiltro(c) {
   return d.length >= 4 ? `${nome} · final ${d.slice(-4)}` : nome;
 }
 
-/** plano 1500c · CC-008: as origens que o nx_cv_listar aceita em p_filtro.origem (CB-209), com o rótulo dos chips. */
-export const ORIGENS_FILTRO = Object.freeze([
-  { v: "anuncio", r: "Anúncio" }, { v: "site", r: "Site" }, { v: "whatsapp", r: "WhatsApp" }, { v: "indicacao", r: "Indicação" }, { v: "organico", r: "Orgânico" },
-]);
+/** plano 2000d · DC-054: UMA tabela de rótulos de origem para a lista, a lateral e o filtro (antes eram três, com nomes diferentes). */
+export const ROTULO_ORIGEM = Object.freeze({ anuncio: "Anúncio", site: "Site", whatsapp: "WhatsApp", indicacao: "Indicação", organico: "Orgânico",
+  formulario: "Formulário", manual: "Cadastro manual", importacao: "Importação" });
+/** plano 1500c · CC-008: as origens que o nx_cv_listar aceita em p_filtro.origem (CB-209), com o rótulo dos chips (da tabela única). */
+export const ORIGENS_FILTRO = Object.freeze(["anuncio", "site", "whatsapp", "indicacao", "organico"].map(v => Object.freeze({ v, r: ROTULO_ORIGEM[v] })));
 
 /** plano 1500c · CC-033: «Recepção e Comercial estão desconectados» (até 3 nomes; mais que isso, «e mais N»). */
 export function textoCanaisCaidos(caidos) {
@@ -2410,6 +2464,22 @@ export function horasAteHora(hhmm, agora = new Date()) {
   let alvo = Date.parse(`${diaSP(t)}T${m[1]}:${m[2]}:00-03:00`);
   if (!(alvo > t)) alvo = Date.parse(`${diaSP(t + 86400000)}T${m[1]}:${m[2]}:00-03:00`);
   return Math.max(1, Math.min(168, Math.ceil((alvo - t) / 3600000)));
+}
+
+/** plano 2000d · DC-105: valor inicial do «Pausar a IA até…» — a próxima hora cheia + 1 em Brasília (às 19h10 sugere 21:00, não 18:00). */
+export function horaPausaInicial(agora = new Date()) {
+  const t = ms(agora);
+  const h = (new Date(t - 3 * 3600000).getUTCHours() + 2) % 24;   // Brasília é UTC−3 (sem horário de verão), como o horasAteHora
+  return `${String(h).padStart(2, "0")}:00`;
+}
+/** plano 2000d · DC-105: a linha viva do modal — «A IA volta hoje às 15:00» / «amanhã às 18:00». */
+export function textoVoltaIA(hhmm, agora = new Date()) {
+  const hs = horasAteHora(hhmm, agora);
+  if (!hs) return "";
+  const t = ms(agora);
+  const m = /^(\d{2}):(\d{2})$/.exec(String(hhmm));
+  const hoje = Date.parse(`${diaSP(t)}T${m[1]}:${m[2]}:00-03:00`) > t;
+  return `A IA volta ${hoje ? "hoje" : "amanhã"} às ${m[1]}:${m[2]}.`;
 }
 
 /** plano 1500c · CC-152: rede em modo economia (saveData) ou lenta (2g/3g) — o vídeo só baixa quando a pessoa toca no play. */
@@ -2631,4 +2701,156 @@ export function termoBuscaContato(texto) {
   const dig = t.replace(/\D/g, "");
   if (dig.length < 8) return t;
   return dig.length >= 12 && dig.startsWith("55") ? dig.slice(2) : dig;
+}
+
+// plano 2000d · DC-128: «Enviar endereço» — o endereço e o link do Google Maps (o Waze abre o mesmo link no celular)
+export function textoEndereco(endereco) {
+  const e = String(endereco || "").trim().replace(/\s+/g, " ");
+  if (!e) return "";
+  return `Nosso endereço: ${e}\nComo chegar: https://maps.google.com/?q=${encodeURIComponent(e)}`;
+}
+
+// plano 2000d · DC-055/DC-056: confere na tela «todas as etiquetas» e «sem etiqueta» (o servidor antigo ignora os dois campos)
+export function filtrarEtiquetasLocal(itens, filtro = {}) {
+  const lista = Array.isArray(itens) ? itens : [];
+  const f = filtro || {};
+  const marc = Array.isArray(f.etiquetas) ? f.etiquetas.map(String) : [];
+  if (f.sem_etiqueta && !marc.length) return lista.filter(c => !(c && Array.isArray(c.etiquetas) && c.etiquetas.length));
+  if (f.etiquetas_modo === "todas" && marc.length > 1) return lista.filter(c => { const tem = new Set(((c && c.etiquetas) || []).map(String)); return marc.every(id => tem.has(id)); });
+  return lista;
+}
+
+// plano 2000d · DC-096: hash curto (FNV-1a 32 bits, base 36) para assinaturas de desenho — muda quando o texto muda, mesmo tamanho
+export function hashCurto(texto) {
+  const s = String(texto ?? "");
+  let x = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 0x01000193) >>> 0; }
+  return x.toString(36);
+}
+
+// plano 2000d · DC-095: corta o texto no teto (unidades UTF-16, como o limite da Meta) sem partir emoji/sequência ZWJ ao meio
+export function cortarNoTeto(texto, teto) {
+  const s = String(texto ?? ""), n = Math.max(0, Number(teto) || 0);
+  if (s.length <= n) return s;
+  let out = "";
+  if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
+    for (const { segment } of new Intl.Segmenter("pt-BR", { granularity: "grapheme" }).segment(s)) {
+      if (out.length + segment.length > n) break;
+      out += segment;
+    }
+    return out;
+  }
+  for (const ch of s) { if (out.length + ch.length > n) break; out += ch; }   // sem Segmenter: ao menos não parte o par substituto
+  return out;
+}
+
+// plano 2000d · DC-043: data do «Lembrar de retomar» — 30 dias, 6 meses ou 1 ano a partir de agora, às 9h de São Paulo (12:00Z)
+export function dataRetomar(quando, agora = Date.now()) {
+  const d = new Date(Number.isFinite(agora) ? agora : Date.parse(agora));
+  if (quando === "30d") d.setUTCDate(d.getUTCDate() + 30);
+  else if (quando === "1a") d.setUTCFullYear(d.getUTCFullYear() + 1);
+  else d.setUTCMonth(d.getUTCMonth() + 6);
+  d.setUTCHours(12, 0, 0, 0);
+  return d.toISOString();
+}
+
+
+/* ---------- plano 2000d · DC-167: mensagem longa demais vira 2+ mensagens, cortadas em parágrafo, linha ou frase ---------- */
+/** dividirTexto(texto, teto) → [parte1, parte2, …], cada uma ≤ teto, cortada no último parágrafo; sem ele, na última linha, no fim de
+    frase («. », «! », «? ») e, em último caso, no último espaço. Nunca parte palavra se houver espaço na metade final do trecho. */
+export function dividirTexto(texto, teto = LIMITE_TEXTO) {
+  let resto = String(texto ?? "").trim();
+  const t = Math.max(20, Number(teto) || LIMITE_TEXTO);
+  const partes = [];
+  while (resto.length > t) {
+    const janela = resto.slice(0, t + 1);
+    const minimo = Math.floor(t * 0.4);
+    const corte = [/\n\s*\n/g, /\n/g, /[.!?…](?=\s)/g, /\s/g].map(re => {
+      let ult = -1;
+      for (const m of janela.matchAll(re)) { const fim = re.source.startsWith("[.!?") ? m.index + 1 : m.index; if (fim <= t && fim >= minimo) ult = fim; }
+      return ult;
+    }).find(i => i > 0);
+    const i = corte > 0 ? corte : t;
+    partes.push(resto.slice(0, i).trim());
+    resto = resto.slice(i).trim();
+  }
+  if (resto) partes.push(resto);
+  return partes;
+}
+
+/* ---------- plano 2000d · DC-196: envio de arquivo em rede lenta com estimativa ---------- */
+export const TAXA_LENTA = 20 * 1024;   // abaixo de 20 KB/s a rede é lenta para foto/vídeo
+/** estimativaEnvio(pct, decorridoMs, bytes) → {texto: "62 % · cerca de 40 s", lenta, dica}. Antes de 5 s (ou sem progresso) só a %. */
+export function estimativaEnvio(pct, decorridoMs, bytes = 0) {
+  const p = Math.max(0, Math.min(100, Math.floor(Number(pct) || 0)));
+  const ms = Number(decorridoMs) || 0;
+  const base = `${p} %`;
+  if (ms < 5000 || p <= 0 || p >= 100) return { texto: base, lenta: false, dica: "" };
+  const restanteS = Math.max(1, Math.round((ms / 1000) * (100 - p) / p));
+  const quanto = restanteS < 60 ? `${Math.max(5, Math.round(restanteS / 5) * 5)} s` : `${Math.round(restanteS / 60)} min`;
+  const taxa = Number(bytes) > 0 ? (Number(bytes) * p / 100) / (ms / 1000) : Infinity;
+  const lenta = taxa < TAXA_LENTA;
+  return { texto: `${base} · cerca de ${quanto}`, lenta, dica: lenta ? "Rede lenta: reduza a foto ou envie um link." : "" };
+}
+
+/* ---------- plano 2000d · DC-169: «pode ser amanhã às 15h?» sugere «Marcar amanhã 15:00» ---------- */
+const DIAS_SEMANA = ["domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"];
+const SEM_ACENTO_DT = s => String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+/** dataNaMensagem(texto, agora) → {iso, rotulo} com a data/hora pedida (fuso de São Paulo, UTC−3) ou null. Exige uma hora (15h, 14:30,
+    14h30, «às 9»); o dia vem de hoje/amanhã/depois de amanhã, dia da semana ou «dia 12» — sem dia, hoje (ou amanhã se a hora já passou). */
+export function dataNaMensagem(texto, agora = new Date()) {
+  const s = SEM_ACENTO_DT(texto);
+  const mh = s.match(/\b(?:as\s+)?([01]?\d|2[0-3])\s*(?:h|:)\s*([0-5]\d)?\b(?!\s*(?:min|%|reais))/) || s.match(/\bas\s+([01]?\d|2[0-3])\b(?![\d,.:])/);
+  if (!mh) return null;
+  const hora = Number(mh[1]), min = Number(mh[2] || 0);
+  const SP = 3 * 3600000;
+  const agoraMs = +agora;
+  const hojeSP = new Date(agoraMs - SP);   // campos UTC = relógio de São Paulo
+  let dia = new Date(Date.UTC(hojeSP.getUTCFullYear(), hojeSP.getUTCMonth(), hojeSP.getUTCDate()));
+  let rotuloDia = "hoje";
+  const semana = s.match(/\b(domingo|segunda|terca|quarta|quinta|sexta|sabado)\b/);
+  const md = s.match(/\bdia\s+(\d{1,2})\b/);
+  if (/\bdepois de amanha\b/.test(s)) { dia = new Date(+dia + 2 * 86400000); rotuloDia = "depois de amanhã"; }
+  else if (/\bamanha\b/.test(s)) { dia = new Date(+dia + 86400000); rotuloDia = "amanhã"; }
+  else if (semana) {
+    const alvo = DIAS_SEMANA.indexOf(semana[1]);
+    let dif = (alvo - dia.getUTCDay() + 7) % 7;
+    if (dif === 0) dif = 7;
+    dia = new Date(+dia + dif * 86400000);
+    rotuloDia = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"][alvo];
+  } else if (md) {
+    const n = Number(md[1]);
+    if (n < 1 || n > 31) return null;
+    let d2 = new Date(Date.UTC(dia.getUTCFullYear(), dia.getUTCMonth(), n));
+    if (d2.getUTCDate() !== n) return null;
+    if (+d2 < +dia) d2 = new Date(Date.UTC(dia.getUTCFullYear(), dia.getUTCMonth() + 1, n));
+    dia = d2;
+    rotuloDia = `dia ${n}`;
+  }
+  let ms = +dia + hora * 3600000 + min * 60000 + SP;
+  if (rotuloDia === "hoje" && ms <= agoraMs) { ms += 86400000; rotuloDia = "amanhã"; }
+  const hh = `${String(hora).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  return { iso: new Date(ms).toISOString(), rotulo: `${rotuloDia} ${hh}` };
+}
+
+
+/* ---------- plano 2000d · DC-202: «/fotos» de exemplo por vertical (roteiro numerado que o WhatsApp formata) ---------- */
+const ROTEIRO_FOTOS = Object.freeze({
+  oficina: ["Frente do carro", "Lateral (o lado do problema)", "Placa", "Painel ligado (luzes acesas)", "De perto, onde está o problema"],
+  odonto: ["Sorriso de frente", "Dentes de cima (boca aberta)", "Dentes de baixo (boca aberta)", "Raio-X ou exame, se tiver"],
+  loja: ["Foto do produto inteiro", "Etiqueta ou código", "O detalhe que você quer mostrar", "Nota fiscal, se for troca"],
+  generico: ["Foto geral", "De perto, o detalhe", "Documento ou etiqueta, se tiver"],
+});
+/** respostaFotos(vertical) → {atalho:"fotos", titulo, corpo, exemplo:true} com a lista numerada da vertical. */
+export function respostaFotos(vertical) {
+  const itens = ROTEIRO_FOTOS[vertical] || ROTEIRO_FOTOS.generico;
+  return { id: null, atalho: "fotos", titulo: "Pedir fotos", exemplo: true,
+    corpo: `{primeiro_nome}, para ajudar mais rápido, me mande estas fotos:\n${itens.map((t, i) => `${i + 1}. ${t}`).join("\n")}\n\nPode mandar uma por vez, aqui mesmo.` };
+}
+/** plano 2000d · DC-203: as respostas marcadas como «boas-vindas» (campo boas_vindas, ou atalho/título com «boas-vindas»/«ola»), até 3. */
+export function respostasBoasVindas(respostas, departamento = null) {
+  const sa = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036F]/g, "").toLowerCase();
+  return (respostas || []).filter(r => r && (!departamento || !r.departamento_id || r.departamento_id === departamento)
+    && (r.boas_vindas === true || /boas[- ]?vindas/.test(sa(r.titulo)) || /boas[- ]?vindas/.test(sa(r.atalho)) || sa(r.atalho) === "ola"))
+    .sort((a, b) => (Number(b.boas_vindas === true) - Number(a.boas_vindas === true)) || ((Number(b.usos) || 0) - (Number(a.usos) || 0))).slice(0, 3);
 }

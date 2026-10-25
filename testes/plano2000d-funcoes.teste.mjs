@@ -227,3 +227,113 @@ test("DS-028 contrato: «para» é aceito como o idioma; rascunho até 2.000; te
   await pedirIa(cenarioIa(), { acao: "traduzir", conversa: 9, texto: "Oi", para: "en" }, iaQueResponde(pedidos));
   assert.equal(pedidos[0].maxTokens, 400);
 });
+
+/* ================================================================== revisão 2000d: nx-relatorio (REV-02/03/04) e WhatsApp (REV-08) */
+// plano 2000d · REV-02/03/04: o mesmo PostgREST em memória dos testes do relatório (testes/apoio/postgrest-falso.mjs)
+const { criarBanco: criarBancoRev } = await import("./apoio/postgrest-falso.mjs");
+const { tratar: relatorioRev, comAssinaturaDaOrg } = await import("../supabase/functions/_compartilhado/relatorio.js");
+const { versaoWaIndisponivel } = await import("../supabase/functions/_compartilhado/whatsapp.js");
+const COLS_REV = {
+  nx_config: "id cron_token funcoes_url painel_url wa_access_token wa_phone_number_id wa_template anthropic_api_key modelo_ia",
+  nx_clientes: "id slug nome ativo status teste_ate cfg vertical org_id",
+  nx_orgs: "id slug nome tipo status",
+  nx_metricas_dia: "cliente_id plataforma nivel data campanha_ext anuncio_ext campanha_nome anuncio_nome impressoes alcance frequencia cliques gasto conversoes valor_conversao atualizado_em",
+  nx_leads: "id cliente_id telefone nome origem plataforma campanha_ext anuncio_ext servico etapa data_conversa data_agenda data_consulta valor obs funil_id",
+  nx_funis: "id cliente_id conta_no_ads",
+  nx_relatorios: "id cliente_id tipo referencia texto leitura_ia destinos enviado_em erro wa_ids wa_ids_template entregue_em enviando_em",
+  nx_execucoes: "id tarefa inicio fim ok resumo",
+  nx_travas: "nome ate dono",
+};
+const diasRev = (de, ate) => { const out = []; for (let d = new Date(`${de}T12:00:00Z`); d.toISOString().slice(0, 10) <= ate; d.setUTCDate(d.getUTCDate() + 1)) out.push(d.toISOString().slice(0, 10)); return out; };
+const metRev = (d, gasto = 10) => ({ cliente_id: CLI_A, plataforma: "meta", nivel: "campanha", data: d, campanha_ext: "C1", anuncio_ext: "", campanha_nome: "C", anuncio_nome: null,
+  impressoes: 100, alcance: 70, frequencia: 1.4, cliques: 2, gasto, conversoes: 1, valor_conversao: 0, atualizado_em: "2026-10-12T00:00:00Z" });
+/** terça 13/10 08h em SP: a semana fechada anterior é 05/10 (segunda) a 11/10 (domingo) */
+function cenarioRev({ cfg = { waGestor: ["5512911112222"], relSemanal: true }, metricas, org = null, chaveIA = null } = {}) {
+  const estado = { agora: new Date("2026-10-13T11:00:00Z"), wa: [], ia: 0 };
+  const colunas = {}; for (const [k, v] of Object.entries(COLS_REV)) colunas[k] = new Set(v.split(" "));
+  const banco = criarBancoRev({
+    nx_config: [{ id: 1, cron_token: "cron-secreto", funcoes_url: FN, painel_url: null, wa_access_token: "wa", wa_phone_number_id: "900", wa_template: null, anthropic_api_key: chaveIA, modelo_ia: null }],
+    nx_clientes: [{ id: CLI_A, slug: "clinica-a", nome: "Clínica Alfa", ativo: true, status: "ativo", teste_ate: null, cfg, vertical: "odonto", org_id: org ? org.id : null }],
+    nx_orgs: org ? [{ slug: "org", status: "ativo", ...org }] : [],
+    nx_metricas_dia: metricas ?? diasRev("2026-10-01", "2026-10-12").map(d => metRev(d)), nx_leads: [], nx_funis: [], nx_relatorios: [], nx_execucoes: [], nx_travas: [],
+  }, () => estado.agora, { esquema: { colunas, unicas: { nx_relatorios: ["cliente_id", "tipo", "referencia"], nx_travas: ["nome"] }, padroes: { nx_relatorios: { wa_ids: [], wa_ids_template: [] } }, checks: {}, naoNulos: {} },
+    chave: ENV.chave, rpcs: api => ({
+      nx_trava_pegar: { args: ["p_nome", "p_segundos", "p_dono"], fn({ p_nome, p_segundos, p_dono }) { const ex = api.tab("nx_travas").find(r => r.nome === p_nome); if (ex && Date.parse(ex.ate) > api.agoraMs()) return false; api.t.nx_travas = api.tab("nx_travas").filter(r => r.nome !== p_nome); api.tab("nx_travas").push({ nome: p_nome, ate: new Date(api.agoraMs() + p_segundos * 1000).toISOString(), dono: p_dono }); return true; } },
+      nx_trava_soltar: { args: ["p_nome", "p_dono"], fn({ p_nome }) { api.t.nx_travas = api.tab("nx_travas").filter(r => r.nome !== p_nome); return true; } },
+    }) });
+  const fetch = async (entrada, init) => {
+    const req = new Request(entrada, init);
+    const u = new URL(req.url);
+    if (u.origin === SUPA) return banco.responder(req);
+    if (u.host === "graph.facebook.com") { estado.wa.push(JSON.parse(await req.text())); return resp({ messages: [{ id: `wamid.${estado.wa.length}` }] }); }
+    throw new TypeError(`host inesperado ${u.host}`);
+  };
+  const ia = async () => { estado.ia++; return "leitura da IA"; };
+  const cron = corpo => relatorioRev(new Request(`${FN}/nx-relatorio`, { method: "POST", headers: { "x-nx-cron": "cron-secreto" }, body: JSON.stringify(corpo) }), ENV, { fetch, ia, agora: () => estado.agora }).then(ler);
+  return { estado, cron, tab: banco.tab, fetch };
+}
+
+test("REV-02 resumo semanal não chama a IA (antes: mesDoRelatorio(M, undefined) lançava e gravava «IA falhou» toda semana)", async () => {
+  const s = cenarioRev({ chaveIA: "chave-falsa" });
+  const r = await s.cron({ tipo: "semanal" });
+  const c = r.corpo.clientes[0];
+  assert.equal(c.enviado, true, JSON.stringify(r.corpo));
+  assert.equal(s.estado.ia, 0, "a IA nem é chamada");
+  assert.equal(c.ia_erro, undefined, "antes: ia_erro «Cannot read properties of undefined»");
+  assert.equal(c.ia, "não usa");
+  assert.equal(s.tab("nx_relatorios")[0].leitura_ia, null);
+  // o diário continua com a leitura
+  const d = await cenarioRev({ chaveIA: "chave-falsa" }).cron({ tipo: "diario" });
+  assert.equal(d.corpo.clientes[0].ia, "ok", JSON.stringify(d.corpo));
+});
+
+test("REV-03 resumo semanal: o texto e o período são a semana FECHADA da referência (05/10 a 11/10), não os 7 dias até ontem", async () => {
+  const s = cenarioRev();
+  await s.cron({ tipo: "semanal" });
+  const [rel] = s.tab("nx_relatorios");
+  assert.equal(rel.referencia, "2026-10-05");
+  assert.match(rel.texto, /Semana de 05\/10 a 11\/10\*/, "antes: «Semana de 06/10 a 12/10» com referência 05/10");
+  // gasto só na segunda 12/10 (fora da semana fechada): nada a mandar
+  const so12 = cenarioRev({ metricas: [metRev("2026-10-12", 50)] });
+  const r = await so12.cron({ tipo: "semanal" });
+  assert.equal(r.corpo.clientes[0].pulado, "sem investimento no período", "antes: saía com a semana fechada zerada");
+  assert.equal(so12.estado.wa.length, 0);
+});
+
+test("REV-04 cliente de revenda sem assinatura salva assina com o nome da agência, nunca «Equipe Nexus»", async () => {
+  const fim = s => s.tab("nx_relatorios")[0].texto;
+  const rev = cenarioRev({ org: { id: "o-rev", tipo: "revenda", nome: "Agência Lumen" } });
+  await rev.cron({ tipo: "semanal" });
+  assert.match(fim(rev), /\n\nAgência Lumen(\n|$)/);
+  assert.doesNotMatch(fim(rev), /Equipe Nexus/, "antes: a revenda assinava como Nexus");
+  // assinatura salva vale sempre — «» = sem assinatura
+  const vazia = cenarioRev({ org: { id: "o-rev", tipo: "revenda", nome: "Agência Lumen" }, cfg: { waGestor: ["5512911112222"], relSemanal: true, assinatura: "" } });
+  await vazia.cron({ tipo: "semanal" });
+  assert.doesNotMatch(fim(vazia), /Agência Lumen|Equipe Nexus/);
+  // cliente da Nexus (org plataforma ou sem org) continua com o padrão
+  const nexus = cenarioRev({ org: { id: "o-nx", tipo: "plataforma", nome: "Nexus" } });
+  await nexus.cron({ tipo: "semanal" });
+  assert.match(fim(nexus), /Equipe Nexus · gestão de tráfego/);
+  const semOrg = cenarioRev();
+  await semOrg.cron({ tipo: "semanal" });
+  assert.match(fim(semOrg), /Equipe Nexus · gestão de tráfego/);
+});
+
+test("REV-04 comAssinaturaDaOrg: banco que falha segue com o cliente como veio (o relatório não cai)", async () => {
+  const quebrado = { select: async () => { throw new Error("banco piscou"); } };
+  const c = { id: CLI_A, cfg: { x: 1 } };
+  assert.equal(await comAssinaturaDaOrg(quebrado, c), c);
+  const salvo = { id: CLI_A, cfg: { assinatura: "Equipe X" } };
+  assert.equal(await comAssinaturaDaOrg({ select: async () => assert.fail("nem consulta") }, salvo), salvo);
+});
+
+test("REV-08 versão do WhatsApp: só o 2635 (ou a mensagem de versão) troca de versão — o 2500 genérico não", async () => {
+  assert.equal(versaoWaIndisponivel({ error: { code: 2635, message: "x" } }), true);
+  assert.equal(versaoWaIndisponivel({ error: { code: 2500, message: "Unknown path components: /abc" } }), false);
+  assert.equal(versaoWaIndisponivel({ error: { code: 100, message: "Unsupported version v19.0" } }), true);
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../supabase/functions/_compartilhado/enviar.js", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /throw new ErroApi\("midia_grande", 400\);[^\n]*const citacao/, "throw e const na mesma linha");
+  const wa = readFileSync(new URL("../supabase/functions/_compartilhado/whatsapp.js", import.meta.url), "utf8");
+  assert.doesNotMatch(wa, /códigos 2635\/2500/, "o comentário não promete o 2500");
+});

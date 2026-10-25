@@ -977,13 +977,17 @@ await teste("R119: os filtros do checklist são os declarados nas seções das C
 
 await teste("R119: «Sim, chegou» no teste do assistente marca «Mensagem de teste enviada» neste aparelho (a mesma chave do «Já está bom»)", async () => {
   const cw = ler("web/app/cv-config.js"), ini = ler("web/app/inicio.js"), cfg = ler("web/app/config.js");
-  const chave = "`nx-onb:${ctx.cliente.id}:${(ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id) || \"-\"}`";
   // plano 2000d: DR-333 — o Início monta a chave por chaveOnboarding (mesmo formato «nx-onb:<cliente>:<conta>»), mas sem conta não guarda nada
   // (a chave «-» era dividida por quem usasse o aparelho); com conta, a chave é a mesma do config.js
-  assert.ok(cfg.includes(chave), "config: a mesma chave local");
-  assert.ok(ini.includes("chaveOnboarding(ctx.cliente.id, ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id)"), "inicio: a mesma chave local (pela conta)");
-  const I0 = await import((await import("node:url")).pathToFileURL(join(RAIZ, "web", "app", "inicio.js")).href);
+  // plano 2000d: REV-09 — o config.js também monta a chave por função (chaveOnboardingCfg, FX-019/DR-333): o teste confere o
+  // COMPORTAMENTO (as duas funções dão a mesma chave, e nenhuma com conta vazia) e que cada tela usa a sua função com a conta da sessão
+  const urlDe = (...p) => (async () => (await import("node:url")).pathToFileURL(join(RAIZ, ...p)).href)();
+  const I0 = await import(await urlDe("web", "app", "inicio.js")), C0 = await import(await urlDe("web", "app", "config.js"));
+  for (const [cli, conta] of [["c1", "k1"], ["cli-9", "conta-7"]]) assert.equal(C0.chaveOnboardingCfg(cli, conta), I0.chaveOnboarding(cli, conta), "config e Início: a mesma chave local");
   assert.equal(I0.chaveOnboarding("c1", "k1"), "nx-onb:c1:k1");
+  assert.equal(C0.chaveOnboardingCfg("c1", null), null, "config: sem conta não há chave");
+  assert.ok(cfg.includes("chaveOnboardingCfg(ctx.cliente.id, ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id)"), "config: a chave pela conta da sessão");
+  assert.ok(ini.includes("chaveOnboarding(ctx.cliente.id, ctx.sessao && ctx.sessao.conta && ctx.sessao.conta.id)"), "inicio: a mesma chave local (pela conta)");
   // plano 100 (frente G): o cv-config passou a marcar por uma função pura (marcarTesteLocal) — o teste agora é de comportamento
   const CW = await import("../web/app/cv-config.js");
   const loja = new Map([["nx-onb:c1:u1", JSON.stringify({ dispensadoAte: 99, pulados: ["colega_convidado"] })]]);

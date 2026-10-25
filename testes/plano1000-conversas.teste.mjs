@@ -606,7 +606,8 @@ test("CA-034/CA-033/CA-022/CA-023/CA-119 (DOM) · reação com nome, hora com a 
     const { chat } = await montarChat(d, { msgs });
     const r = achar(chat.el, '.cv-msg[data-id="1"] .cv-reacao');
     assert.equal(r.getAttribute("role"), "img");
-    assert.equal(r.getAttribute("aria-label"), "Reação do cliente: 👍");
+    // plano 2000d: DC-102 — na bolha do cliente (direcao «in») quem reagiu foi a equipe
+    assert.equal(r.getAttribute("aria-label"), "Reação da equipe: 👍");
     assert.equal(achar(chat.el, '.cv-msg[data-id="1"] .cv-texto strong a').getAttribute("href"), "https://x.com");
     assert.match(achar(chat.el, '.cv-msg[data-id="1"] time').title, /\d{4} às \d\d:\d\d$/);
     const b2 = achar(chat.el, '.cv-msg[data-id="2"] .cv-texto');

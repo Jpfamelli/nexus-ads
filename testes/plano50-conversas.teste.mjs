@@ -754,7 +754,8 @@ test("34 (DOM) · lista: SLA de espera por faixa (15/30/60 min), ícone do tipo 
     assert.deepEqual(linhas.map(a => a.dataset.sla), ["ok", "aten", "ruim", "critico"]);
     assert.deepEqual(linhas.map(a => a.querySelector(".cvl-espera").dataset.sla), ["ok", "aten", "ruim", "critico"]);
     assert.match(linhas[3].querySelector(".cvl-espera").getAttribute("title"), /mais de 1 h/);
-    assert.match(linhas[3].getAttribute("aria-label"), /espera longa/);
+    // plano 2000d: DC-059 — espera e número saíram do rótulo curto e foram para o aria-describedby (.cvl-desc)
+    assert.match(linhas[3].querySelector(".cvl-desc").textContent, /espera longa/);
     assert.equal(linhas[0].querySelector(".cvl-tipo"), null, "texto comum não tem ícone");
     assert.equal(linhas[2].querySelector(".cvl-tipo .ic").dataset.icone, "imagem");
     assert.equal(linhas[3].querySelector(".cvl-tipo .ic").dataset.icone, "microfone");
@@ -763,7 +764,7 @@ test("34 (DOM) · lista: SLA de espera por faixa (15/30/60 min), ícone do tipo 
     assert.equal(linhas[3].querySelector(".cvl-canal").dataset.provedor, "meta");
     // plano 1000 · CA-090: o title diz que é o número por onde a conversa chegou
     assert.match(linhas[3].querySelector(".cvl-canal").getAttribute("title"), /Chegou pelo número Meta/);
-    assert.match(linhas[3].getAttribute("aria-label"), /via Meta/);
+    assert.match(linhas[3].querySelector(".cvl-desc").textContent, /via Meta/);   // plano 2000d: DC-059
   } finally { d.fim(); }
 });
 

@@ -34,7 +34,11 @@ const NBSP = String.fromCharCode(160);
 const milhar = s => s.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 export function formatarReais(v, casas = 2) {
   if (!fin(v)) return "—";
-  const [inteiro, frac] = Math.abs(v).toFixed(casas).split(".");
+  // plano 2000d · REV-06: meio centavo arredonda para cima (1,005 → R$ 1,01). toFixed usa o binário (1,005 = 1,00499…) e dava R$ 1,00;
+  // o deslocamento pela notação «e» arredonda o decimal que se lê
+  const abs = Math.abs(v);
+  const arred = abs < 1e15 ? Number(`${Math.round(Number(`${abs}e${casas}`))}e-${casas}`) : abs;
+  const [inteiro, frac] = (Number.isFinite(arred) ? arred : abs).toFixed(casas).split(".");
   const neg = v < 0 && /[1-9]/.test(inteiro + (frac || ""));
   return `${neg ? "-" : ""}R$${NBSP}${milhar(inteiro)}${frac ? `,${frac}` : ""}`;
 }
@@ -325,13 +329,16 @@ export function datasetDeLinhas({ metricas = [], leads = [], cliente = {}, hoje 
     alvo.nome = nome; alvo.curto = encurtar(nome, max); alvo.nomeEm = String(d || "");
   };
   // plano 2000d · DA-143: guarda o status que veio na linha (st/status) — o da linha MAIS RECENTE; rel-logica.situacaoCampanha lê c.status
-  const campDe = (plat, c, nome, d, st) => {
+  // plano 2000d · REV-01: guarda também o objetivo da campanha (obj/objetivo/objective), quando a linha trouxer — o r2 decide por ele
+  const campDe = (plat, c, nome, d, st, obj) => {
     const id = `${plat}:${c ?? "sem_id"}`;
     const rot = c != null && String(c).trim() ? `Campanha ${c}` : "Campanha sem nome";
     if (!CAMP[id]) CAMP[id] = { id, plat, nome: rot, curto: encurtar(rot, 26), nomeEm: "" };
     nomear(CAMP[id], nome, d, 26);
     st = typeof st === "string" ? st.trim() : "";
     if (st && !(CAMP[id].statusEm && String(d) < CAMP[id].statusEm)) { CAMP[id].status = st; CAMP[id].statusEm = String(d || ""); }
+    obj = typeof obj === "string" ? obj.trim() : "";
+    if (obj && !(CAMP[id].objetivoEm && String(d) < CAMP[id].objetivoEm)) { CAMP[id].objetivo = obj; CAMP[id].objetivoEm = String(d || ""); }
     return id;
   };
 
@@ -341,7 +348,7 @@ export function datasetDeLinhas({ metricas = [], leads = [], cliente = {}, hoje 
     if (i != null && i > R) AVISOS.metricasFuturas++;          // plano 2000d · DA-063: data depois de ontem (fuso) — contada, não some calada
     if (i != null && !Number.isFinite(i)) { AVISOS.dataInvalida++; continue; }   // plano 2000d · KX-015: data que não é data (NaN entrava no LINHAS)
     if (i == null || i < 0 || i > R) continue;
-    const camp = campDe(m.p, m.c, m.cn, m.d, m.st || m.status);
+    const camp = campDe(m.p, m.c, m.cn, m.d, m.st || m.status, m.obj || m.objetivo || m.objective);   // plano 2000d · REV-01
     // plano 1000 (AD-003): anúncio sem id é um por CAMPANHA (antes «meta:?» juntava todas e ficava com a campanha da 1ª linha)
     const cri = m.a ? `${m.p}:${m.a}` : `${camp}:?`;
     if (!CRI[cri]) CRI[cri] = m.a ? { id: cri, camp, plat: m.p, nome: `Anúncio ${m.a}`, curto: encurtar(`Anúncio ${m.a}`, 28), nomeEm: "" }
@@ -365,7 +372,7 @@ export function datasetDeLinhas({ metricas = [], leads = [], cliente = {}, hoje 
     if (i != null && i > R) AVISOS.metricasFuturas++;          // plano 2000d · DA-063: data depois de ontem (fuso) — contada, não some calada
     if (i != null && !Number.isFinite(i)) { AVISOS.dataInvalida++; continue; }   // plano 2000d · KX-015
     if (i == null || i < 0 || i > R) continue;
-    const camp = campDe(m.p, m.c, m.cn, m.d, m.st || m.status);
+    const camp = campDe(m.p, m.c, m.cn, m.d, m.st || m.status, m.obj || m.objetivo || m.objective);   // plano 2000d · REV-01
     const s = somaAd.get(`${camp}|${i}`) || { g: 0, imp: 0, cli: 0, conv: 0 };
     const g = (+m.g || 0) - s.g, conv = Math.max(0, (+m.conv || 0) - s.conv);
     // plano 1000 (AD-234): a soma dos anúncios PASSOU do total da campanha (sync dos anúncios mais novo que o da campanha, reatribuição):
@@ -671,6 +678,23 @@ export function montar(ds) {
   // plano 1500c · AC-025: campanha de alcance/vídeo/reconhecimento tem CTR baixo por desenho — o r3 não a acusa
   const RE_ALCANCE = /alcance|\breach\b|v[ií]deo|visualiza|thruplay|reconhecimento|awareness|branding/i;
   const ehAlcance = camp => !!camp && RE_ALCANCE.test(String(camp.nome || ""));
+  // plano 2000d · REV-01: o «sem conversa» (r2) só pula campanha de alcance de verdade. Antes bastava «vídeo/visualiza» no NOME e
+  // «Clareamento · Vídeo depoimento (conversas)» gastava R$ 90 em 3 dias sem conversa calada. Ordem: objetivo da plataforma (quando vier);
+  // senão o nome com termo INEQUÍVOCO de alcance e sem conversa/mensagem/whatsapp/lead. Campanha com conversão nos 14 dias antes não pula.
+  const RE_OBJ_ALCANCE = /awareness|reach|alcance|video_views|thruplay|reconhecimento|branding/i;
+  const RE_ALCANCE_R2 = /alcance|reach|reconhecimento|awareness|branding|thruplay/i;
+  const RE_BUSCA_CONVERSA = /conversa|mensage|whats|zap|lead/i;
+  const pulaSemConversa = (camp, ref) => {
+    if (!camp) return false;
+    const obj = String(camp.objetivo || "").trim();
+    if (obj) { if (!RE_OBJ_ALCANCE.test(obj)) return false; }
+    else {
+      const nome = String(camp.nome || "");
+      if (!RE_ALCANCE_R2.test(nome) || RE_BUSCA_CONVERSA.test(nome)) return false;
+    }
+    // já trouxe conversa nos 14 dias antes da janela do r2: busca conversa, então avisa quando para
+    return !linhasDe(ref - 16, ref - 3, { camp: camp.id }).some(l => l.conversoes > 0);
+  };
   const situacaoOrc = proj => !ORC ? "" : proj > CFG.orcamento * 1.02 ? "🔺 acima do orçamento"
     : proj >= CFG.orcamento * .98 ? "≈ no limite do orçamento" : "🔻 abaixo do orçamento";
 
@@ -891,7 +915,7 @@ export function montar(ds) {
         // plano 2000d · DA-059: agora 3 dias com gasto (a Meta ainda aprende nos 2 primeiros) — salvo gasto acima de 3× o piso
         if (r.id === "r2" && new Set(ls.filter(l => (+l.gasto || 0) > 0).map(l => l.i)).size < 3 && t.gasto <= minG * 3) continue;
         // plano 2000d · DA-060: campanha de alcance/vídeo/reconhecimento não busca conversa — fora do «sem conversa» (como já é do r3)
-        if (r.id === "r2" && ehAlcance(camp)) continue;
+        if (r.id === "r2" && pulaSemConversa(camp, ref)) continue;   // plano 2000d · REV-01: por objetivo/termo inequívoco/histórico
         // um criativo pode rodar em várias campanhas: a campanha vai junto no aviso
         // plano 1000 (AD-053): no criativo, o nome CURTO; a campanha só quando o nome do criativo não a contém (antes «Print das avaliações
         // 5,0 (em Prova social · nota 5,0)» passava de 100 caracteres no WhatsApp)
@@ -916,10 +940,23 @@ export function montar(ds) {
       // plano 2000d · DA-007: «acabou» só no dia em que o gasto cruza o orçamento — e de novo a cada 10% a mais (110%, 120%…). Antes
       // repetia todo dia até o fim do mês (10+ mensagens iguais no WhatsApp)
       const degrau = g => (g < ORC ? -1 : Math.floor((g / ORC - 1) * 10 + 1e-9));
-      const gOntem = m.pass > 1 ? Math.round(linhasDe(ref - (m.pass - 1), ref - 1).reduce((s, l) => s + l.gasto, 0) * 100) / 100 : 0;
+      // plano 2000d · REV-05: além do degrau de 10%, no mínimo 3 dias entre um «acabou» e o próximo (gasto de 6%/dia do orçamento repetia
+      // dia sim, dia não). Refaz o mês dia a dia: avisa quando o degrau passou do último AVISADO e já se passaram 3 dias desse aviso
+      const avisaEsgotado = () => {
+        const ini = ref - (m.pass - 1), porDia = new Map();
+        for (const l of linhasDe(ini, ref)) porDia.set(l.i, (porDia.get(l.i) || 0) + l.gasto);
+        let acum = 0, ultDeg = -1, ultDia = -Infinity, avisouHoje = false;
+        for (let i = ini; i <= ref; i++) {
+          acum += porDia.get(i) || 0;
+          const dg = degrau(Math.round(acum * 100) / 100);
+          avisouHoje = dg > ultDeg && (ultDeg < 0 || i - ultDia >= 3);
+          if (avisouHoje) { ultDeg = dg; ultDia = i; }
+        }
+        return avisouHoje;
+      };
       if (m.restam > 0 && m.gasto >= ORC) {
         // plano 2000d · DA-006: chave PRÓPRIA — quem silenciou o «ritmo acima» (chave «ritmo») continua sabendo que o orçamento acabou
-        if (degrau(m.gasto) !== degrau(gOntem)) out.push({
+        if (avisaEsgotado()) out.push({
           regra: RITMO, chave: "ritmo:esgotado", sev: "info", valor: m.proj, tipo: "esgotado",
           msg: `O orçamento de ${MESES[m.mes]} (${brl0(ORC)}) acabou: já foram investidos ${brl0(m.gasto)} e ainda faltam ${m.restam} ${m.restam === 1 ? "dia" : "dias"} no mês.`,
           acao: "O orçamento do mês acabou — pausar as campanhas ou aumentar a verba do mês.",
@@ -937,7 +974,7 @@ export function montar(ds) {
         // DA-008: o ritmo diário é o da projeção (dias com anúncio), não gasto ÷ dias corridos
         const folga = (ORC - m.gasto) / m.restam - (m.proj - m.gasto) / m.restam;
         out.push({
-          regra: RITMO, chave: "ritmo", sev: "info", valor: m.proj, tipo: "abaixo",
+          regra: RITMO, chave: "ritmo:abaixo", sev: "info", valor: m.proj, tipo: "abaixo",   // plano 2000d · REV-05: silenciar o «acima» não cala a sobra
           msg: `No ritmo atual (${quando}), ${MESES[m.mes]} fecha em ${brl0(m.proj)} — ${brl0(ORC - m.proj)} abaixo do orçamento de ${brl0(ORC)}.`,
           acao: `Dá para subir ${brl(folga)} por dia até o fim do mês e ainda fechar dentro do orçamento.`,
         });
@@ -1237,7 +1274,10 @@ export function montar(ds) {
     // o menor custo por conversão (desempate: mais conversões). Antes ganhava sempre o que mais gastou
     const maior = Math.max(...l.map(x => x.t.conversoes)), piso = Math.max(2, maior * 0.2);
     const ok = l.filter(x => x.t.conversoes >= piso).sort((a, b) => ((a.t.cpa ?? Infinity) - (b.t.cpa ?? Infinity)) || (b.t.conversoes - a.t.conversoes));
-    return ok.length >= 2 ? ok.slice(0, 3) : l.sort((a, b) => b.t.conversoes - a.t.conversoes).slice(0, Math.min(3, l.length));
+    // plano 2000d · REV-07: a lista diz como foi escolhida (porCusto) — o mensal muda o rótulo («melhor custo» × «mais trouxeram»)
+    const lista = ok.length >= 2 ? ok.slice(0, 3) : l.sort((a, b) => b.t.conversoes - a.t.conversoes).slice(0, Math.min(3, l.length));
+    lista.porCusto = ok.length >= 2;
+    return lista;
   }
   /** Plano 1500c · AC-058: marcos (cfg.marcos = [{d: YYYY-MM-DD, t}]) dentro de [de, ate] → [{i, t}] por data. */
   function marcosEntre(de, ate) {
@@ -1320,7 +1360,12 @@ export function montar(ds) {
       // plano 1500c · AC-018: é a CAMPANHA (antes «Anúncio que mais trouxe resultado» com o nome da campanha)
       if (campTop && campTop.k.receita) L.push(`• Campanha que mais trouxe resultado: _${campTop.cc.curto || campTop.cc.nome}_`);   // plano 1000b · AB-171: nome curto
       // plano 1500c · AC-048: os criativos que mais trouxeram conversa (até 3)
-      if (cris.length) L.push(`• Criativos que mais trouxeram ${temGoogle(lMes) ? "contato" : "conversa"}: ${cris.map(x => `_${x.k.curto || x.k.nome}_ (${numConv(x.t.conversoes)}${fin(x.t.cpa) ? ` · ${brl(x.t.cpa)} cada` : ""})`).join(", ")}`);
+      // plano 2000d · REV-07: escolhidos pelo custo (DA-023) → «com melhor custo por conversa»; o substantivo vem da plataforma DOS
+      // CRIATIVOS (Meta = conversa, Google = conversão, misturados = contato), não da conta inteira (o Google de pesquisa não tem criativo)
+      if (cris.length) {
+        const pc2 = new Set(cris.map(x => x.k.plat)), subst = pc2.size > 1 ? "contato" : pc2.has("google") ? "conversão" : "conversa";
+        L.push(`• ${cris.porCusto ? `Criativos com melhor custo por ${subst}` : `Criativos que mais trouxeram ${subst}`}: ${cris.map(x => `_${x.k.curto || x.k.nome}_ (${numConv(x.t.conversoes)}${fin(x.t.cpa) ? ` · ${brl(x.t.cpa)} cada` : ""})`).join(", ")}`);
+      }
       // plano 1500c · AC-022: o dia da semana que mais rende (só com 3 semanas ou mais de número no mês)
       if (dow) L.push(`• Melhor dia da semana para ${temGoogle(lMes) ? "contatos" : "conversas"}: ${SEMANA_LONGA[dow.d]} (média de ${dec(dow.media, 1).replace(/,0$/, "")} por dia, contra ${dec(dow.geral, 1).replace(/,0$/, "")} nos outros dias)`);
     }

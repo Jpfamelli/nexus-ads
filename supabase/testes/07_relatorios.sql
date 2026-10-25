@@ -340,6 +340,8 @@ begin
   insert into public.nx_leads (cliente_id, nome, origem, estagio_id, valor, dono_id, criado_em, data_conversa, fechado_em)
     values (cA, 'L11', 'manual', s_fechou, 300, k_adm, now() - interval '40 days', ((now() - interval '40 days') at time zone 'America/Sao_Paulo')::date,
             (date_trunc('month', (now() at time zone 'America/Sao_Paulo')) - interval '1 month' + interval '2 days 12 hours') at time zone 'America/Sao_Paulo') returning id into L11;
+  -- plano 2000d · DS-097: tarefa atribuída por OUTRA pessoa gera aviso; estes fixtures entram «pelo sistema» (sem sessão)
+  perform set_config('nx.conta', '', true);
   insert into public.nx_tarefas (cliente_id, titulo, vence_em, dono_id) values
     (cA, 'atrasada', now() - interval '2 hours', k_adm), (cA, 'semana que vem', now() + interval '7 days', k_adm),
     (cA, 'de outro', now() - interval '1 hour', k_at);

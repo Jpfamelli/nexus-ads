@@ -1312,18 +1312,57 @@ export function lerImportacaoRespostas(texto, existentes = []) {
   const lista = Array.isArray(j) ? j : j && Array.isArray(j.respostas) ? j.respostas : null;
   if (!lista) return { erro: "O arquivo não tem a lista de respostas exportada pelo Órbita." };
   const novas = [], repetidas = [], vistos = new Set();
+  const atualizaveis = [];   // plano 2000d · DC-051: as repetidas que existem aqui, com o id — para «Atualizar as que já existem»
   let invalidas = 0;
   for (const r of lista.slice(0, 500)) {
     // plano 1500c · CX-044: atalho com acento ou espaço («Olá Maria», vindo de outra ferramenta) vira «ola-maria» em vez de ser descartado
     const atalho = String((r && r.atalho) || "").replace(/^\/+/, "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, "-");
     const titulo = String((r && r.titulo) || "").trim().slice(0, 60), corpo = String((r && r.corpo) || "").trim();
     if (!/^[a-z0-9_-]{1,30}$/.test(atalho) || !titulo || !corpo || corpo.length > 4096) { invalidas++; continue; }
-    if (vistos.has(atalho) || atalhoRepetido(existentes, atalho)) { repetidas.push(atalho); continue; }
+    const existente = !vistos.has(atalho) ? atalhoRepetido(existentes, atalho) : null;
+    if (vistos.has(atalho) || existente) {
+      repetidas.push(atalho);
+      if (existente && existente.id != null && (existente.titulo !== titulo || existente.corpo !== corpo) && !atualizaveis.some(x => x.id === existente.id))
+        atualizaveis.push({ id: existente.id, atalho, titulo, corpo });
+      continue;
+    }
     vistos.add(atalho);
     novas.push({ atalho, titulo, corpo, ativo: r.ativo !== false });
   }
-  return { novas, repetidas, invalidas };
+  return { novas, repetidas, invalidas, atualizaveis };
 }
+
+/** plano 2000d · DC-052: pacotes de respostas para começar, por vertical (passam pelo mesmo importar). */
+export const PACOTES_RESPOSTAS = Object.freeze({
+  odonto: [
+    { atalho: "ola", titulo: "Boas-vindas", corpo: "Olá, {primeiro_nome}! Aqui é {atendente}, da {empresa}. Como posso ajudar?" },
+    { atalho: "avaliacao", titulo: "Marcar avaliação", corpo: "Podemos marcar uma avaliação com o dentista para entender o seu caso. Qual o melhor dia e período para você?" },
+    { atalho: "confirmar", titulo: "Confirmar consulta", corpo: "{primeiro_nome}, posso confirmar a sua consulta? Responda SIM para confirmar ou me diga se precisa remarcar." },
+    { atalho: "endereco", titulo: "Endereço", corpo: "Estamos te esperando! Quando chegar, é só se identificar na recepção." },
+    { atalho: "convenio", titulo: "Convênio", corpo: "Me diga o nome do seu convênio que eu confiro a cobertura para você." },
+    { atalho: "pos", titulo: "Pós-atendimento", corpo: "{primeiro_nome}, como você está depois do atendimento? Qualquer dúvida, é só chamar aqui." },
+  ],
+  oficina: [
+    { atalho: "ola", titulo: "Boas-vindas", corpo: "Olá, {primeiro_nome}! Aqui é {atendente}, da {empresa}. Qual é o carro e o que está acontecendo com ele?" },
+    { atalho: "orcamento", titulo: "Orçamento", corpo: "Para passar o orçamento certinho, preciso ver o carro. Qual o melhor dia para trazer?" },
+    { atalho: "pronto", titulo: "Carro pronto", corpo: "{primeiro_nome}, o seu carro está pronto para retirada! Qualquer dúvida, é só chamar." },
+    { atalho: "revisao", titulo: "Lembrete de revisão", corpo: "{primeiro_nome}, está chegando a hora da revisão do seu carro. Quer agendar?" },
+    { atalho: "endereco", titulo: "Endereço", corpo: "Estamos te esperando! Quando chegar, é só procurar a recepção." },
+  ],
+  loja: [
+    { atalho: "ola", titulo: "Boas-vindas", corpo: "Olá, {primeiro_nome}! Aqui é {atendente}, da {empresa}. Em que posso ajudar?" },
+    { atalho: "estoque", titulo: "Disponibilidade", corpo: "Vou conferir a disponibilidade para você e já te respondo." },
+    { atalho: "pagamento", titulo: "Formas de pagamento", corpo: "Aceitamos Pix, cartão de crédito e débito. Quer que eu envie o link?" },
+    { atalho: "entrega", titulo: "Entrega", corpo: "Me passe o seu CEP que eu calculo o prazo e o valor da entrega." },
+    { atalho: "obrigado", titulo: "Agradecimento", corpo: "Obrigado pela compra, {primeiro_nome}! Qualquer coisa, é só chamar aqui." },
+  ],
+  generico: [
+    { atalho: "ola", titulo: "Boas-vindas", corpo: "Olá, {primeiro_nome}! Aqui é {atendente}, da {empresa}. Como posso ajudar?" },
+    { atalho: "aguarde", titulo: "Aguarde um momento", corpo: "Só um momento que eu já verifico para você." },
+    { atalho: "horario", titulo: "Horário", corpo: "Nosso horário de atendimento é de segunda a sexta, em horário comercial." },
+    { atalho: "obrigado", titulo: "Agradecimento", corpo: "Obrigado pelo contato, {primeiro_nome}! Qualquer coisa, é só chamar." },
+  ],
+});
 /** Baixa um texto como arquivo (Exportar). → true quando o navegador aceitou. */
 function baixarTexto(texto, nome, tipo = "application/json") {
   try {
@@ -1396,17 +1435,36 @@ async function montarRespostas(ctx, alvo) {
     else ui.toast("O navegador não deixou baixar o arquivo.", { tipo: "erro" });
   }
 
-  async function importar(arq) {
+  async function importar(arq, { textoPronto = null } = {}) {
     let texto = "";
-    try { texto = await arq.text(); } catch { ui.toast("Não deu para ler o arquivo.", { tipo: "erro" }); return; }
+    if (textoPronto !== null) texto = textoPronto;   // plano 2000d · DC-052: pacote pronto
+    else try { texto = await arq.text(); } catch { ui.toast("Não deu para ler o arquivo.", { tipo: "erro" }); return; }
     const r = lerImportacaoRespostas(texto, respostas);
     if (r.erro) { ui.toast(r.erro, { tipo: "erro" }); return; }
-    if (!r.novas.length) { ui.toast(r.repetidas.length ? "Todos os atalhos do arquivo já existem aqui." : "Nenhuma resposta válida no arquivo.", { tipo: "info" }); return; }
+    const atualizaveis = r.atualizaveis || [];
+    if (!r.novas.length && !atualizaveis.length) { ui.toast(r.repetidas.length ? "Todos os atalhos do arquivo já existem aqui." : "Nenhuma resposta válida no arquivo.", { tipo: "info" }); return; }
     // plano 1500c · CC-157: a conferência diz QUAIS atalhos ficam de fora (os que já existem nunca são sobrescritos)
     const nomesRep = r.repetidas.slice(0, 6).map(a => `/${a}`).join(", ") + (r.repetidas.length > 6 ? ` e mais ${r.repetidas.length - 6}` : "");
     const fora = [r.repetidas.length ? `${r.repetidas.length} com atalho que já existe (${nomesRep}; as daqui continuam como estão)` : "", r.invalidas ? `${r.invalidas} incompleta(s)` : ""].filter(Boolean).join(" e ");
-    if (!(await ui.confirmar({ titulo: `Importar ${r.novas.length} ${r.novas.length === 1 ? "resposta" : "respostas"}?`, rotulo: "Importar",
+    let atualizar = [];
+    if (atualizaveis.length) {
+      // plano 2000d · DC-051: «Atualizar as que já existem (mesmo atalho)» — a revenda corrige o texto na planilha e aplica nos clientes
+      const chk = h("input", { type: "checkbox", id: "cfg-imp-atualizar" });
+      const corpoM = h("div", { class: "pilha-p" },
+        h("p", null, `${r.novas.length ? `${r.novas.length} ${r.novas.length === 1 ? "nova" : "novas"} (valem para todos os departamentos). ` : ""}${fora ? `Ficam de fora: ${fora}.` : ""}`),
+        h("label", { class: "chip-check", for: "cfg-imp-atualizar" }, chk, `Atualizar as que já existem (mesmo atalho): ${atualizaveis.length}`));
+      const esc = await ui.modal({ titulo: "Importar respostas", corpo: corpoM, largura: "p",
+        acoes: [{ rotulo: "Cancelar", tipo: "neutro" }, { rotulo: "Importar", tipo: "primario", fn: () => ({ atualizar: !!chk.checked }) }] });
+      if (!esc) return;
+      if (esc.atualizar) atualizar = atualizaveis;
+      if (!r.novas.length && !atualizar.length) return;
+    } else if (!(await ui.confirmar({ titulo: `Importar ${r.novas.length} ${r.novas.length === 1 ? "resposta" : "respostas"}?`, rotulo: "Importar",
       texto: `Elas valem para todos os departamentos.${fora ? ` Ficam de fora: ${fora}.` : ""}` }))) return;
+    let atualizadas = 0;
+    for (const x of atualizar) {
+      try { await ctx.api.rpcC("nx_resposta_salvar", { p_resposta: { id: x.id, titulo: x.titulo, corpo: x.corpo } }); atualizadas++; } catch { /* segue */ }
+    }
+    if (!r.novas.length) { ui.toast(`${atualizadas} ${atualizadas === 1 ? "resposta atualizada" : "respostas atualizadas"}.`, { tipo: atualizadas ? "ok" : "erro" }); carregar(); return; }
     let ok = 0;
     // plano 1000b · CB-104: progresso «Importando 12 de 40» e, no fim, QUAIS atalhos o servidor recusou
     const recusados = [];
@@ -1431,6 +1489,14 @@ async function montarRespostas(ctx, alvo) {
     if (!respostas.length) {
       caixa.appendChild(ui.vazio({ titulo: "Nenhuma resposta ainda.", icone: "chat", texto: "Cadastre as frases que a equipe repete todo dia: saudação, endereço, horários, confirmação.",
         acao: podeEditar ? { rotulo: "Nova resposta", fn: () => editar(null) } : null }));
+      // plano 2000d · DC-052: «Começar com o pacote» da vertical — passa pelo mesmo importar (conferência e progresso)
+      if (podeEditar) {
+        const vert = (ctx.vocab && ctx.vocab.vertical) || "generico";
+        const pacote = PACOTES_RESPOSTAS[vert] || PACOTES_RESPOSTAS.generico;
+        const nomeVert = { odonto: "da clínica", oficina: "da oficina", loja: "da loja" }[vert] || "inicial";
+        caixa.appendChild(h("div", { class: "linha cfg-resp-pacote" }, h("button", { type: "button", class: "bt bt-sec cfg-resp-pacote-bt",
+          on: { click: () => importar(null, { textoPronto: JSON.stringify({ respostas: pacote }) }) } }, ui.icone("raio"), `Começar com o pacote ${nomeVert} (${pacote.length} respostas)`)));
+      }
       return;
     }
     const t = ui.tabela({
@@ -2042,6 +2108,8 @@ async function montarAtendimento(ctx, alvo) {
       ui.limpar(el);
       if (cfg.assinatura) el.append(h("b", null, `${nome}:`), "\n");
       el.append("Olá! Já separei as informações que você pediu. Qualquer dúvida, é só chamar.");   // plano 1500c · CC-130: frase que serve para qualquer negócio
+      // plano 2000d · DC-053: a recepção não acha que tudo vai sair com o nome do admin
+      if (cfg.assinatura) el.append(h("small", { class: "sub cfg-previa-ass-nota" }, "Exemplo com o seu nome — cada pessoa assina com o próprio primeiro nome."));
     } };
   }
 
@@ -2082,6 +2150,7 @@ async function montarIA(ctx, alvo) {
   const [L] = await Promise.all([logica(ctx), ui.carregarCss("conversas")]);
   const caixa = h("div", { class: "pilha" });
   let haAlteracao = () => false;      // plano 1000 · AS-082: o hub pergunta antes de trocar de seção com alteração não salva
+  let semVersaoIA = false;            // plano 2000d · DC-050: servidor sem p_versao (PGRST202) — salva como antes
   /** plano 1500c · CC-129: um número CodeWords — copia o prompt novo (mesma receita do assistente do número); vários — abre Números. */
   function copiarPromptAtualizado(cws) {
     if (cws.length !== 1) { ctx.navegar("#/config/numeros"); return; }
@@ -2288,8 +2357,18 @@ async function montarIA(ctx, alvo) {
       const payload = { tom: d.tom === "formal" ? "formal" : "proximo",
         assistente_nome: d.assistente_nome || "", endereco: d.endereco || "", boas_vindas: d.boas_vindas || "" };
       for (const [k] of IA_TEXTOS) payload[k] = d[k] || "";
+      // plano 2000d · DC-050: manda a versão lida (atualizado_em) — quem abriu antes não apaga a edição do colega sem saber
+      const versaoLida = cfg && (cfg.atualizado_em || (base.config && base.config.atualizado_em)) || null;
+      const salvarIA = async () => {
+        if (versaoLida && !semVersaoIA) {
+          try { return await ctx.api.rpcC("nx_ia_config_salvar", { p_ia: payload, p_versao: versaoLida }); }
+          catch (e) { if (!L.rpcAusente(e)) throw e; semVersaoIA = true; }
+        }
+        return ctx.api.rpcC("nx_ia_config_salvar", { p_ia: payload });
+      };
       try {
-        await ui.carregando(salvar, ctx.api.rpcC("nx_ia_config_salvar", { p_ia: payload }));
+        await ui.carregando(salvar, salvarIA());
+        avisoVersao.hidden = true;
         sujo.hidden = true;
         // plano 1500c · CC-129: só vale depois de atualizar o prompt do CodeWords — o aviso já oferece copiar o prompt novo
         const cws = ((base && base.canais) || []).filter(k => k && k.provedor === "codewords");
@@ -2297,10 +2376,24 @@ async function montarIA(ctx, alvo) {
           acao: cws.length ? { rotulo: cws.length === 1 ? "Copiar prompt atualizado" : "Abrir Números", fn: () => copiarPromptAtualizado(cws) } : null });
       } catch (e) {
         if (e && e.codigo === "dados_invalidos" && e.hint === "tamanho") ui.toast(textoLimite, { tipo: "erro" });
+        else if (e && (Number(e.status) === 409 || e.codigo === "versao_mudou" || e.codigo === "conflito")) {
+          // DC-050: outra pessoa salvou depois que esta tela abriu — o formulário continua sujo e o aviso oferece ver a versão salva
+          const quando = (e.resposta && e.resposta.atualizado_em) || e.atualizado_em || null;
+          const quem = (e.resposta && e.resposta.atualizado_por_nome) || "Outra pessoa";
+          ui.limpar(avisoVersao);
+          avisoVersao.append(ui.icone("alerta"), h("span", null, `${quem} salvou o assistente${quando ? ` às ${L.horaMsg(quando)}` : " depois que você abriu esta tela"}. Salvar agora apagaria a mudança.`),
+            h("button", { type: "button", class: "bt bt-sec bt-p cfg-ia-ver-salva", on: { click: async () => {
+              if (await ui.confirmar({ titulo: "Ver a versão salva?", rotulo: "Ver a versão salva", texto: "O que você mudou aqui e não salvou será descartado." })) carregar();
+            } } }, "Ver a versão salva"));
+          avisoVersao.hidden = false;
+          sujo.hidden = false;
+        }
         else ui.toast(ui.mensagemErro(e), { tipo: "erro" });
       }
     });
     atualizarPrevia();
+    const avisoVersao = h("div", { class: "aviso aviso-aten cfg-ia-versao", role: "alert", hidden: true });   // plano 2000d · DC-050
+    f.prepend(avisoVersao);
     caixa.appendChild(f);
   }
 

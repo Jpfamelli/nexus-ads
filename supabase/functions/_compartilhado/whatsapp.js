@@ -12,7 +12,8 @@ function versaoDoAmbiente() {
   try { const v = String(globalThis.Deno?.env?.get?.("NX_GRAPH_VERSAO_WA") ?? "").trim(); return /^v\d{2}\.0$/.test(v) ? v : ""; } catch { return ""; }
 }
 export const VERSAO_WA = versaoDoAmbiente() || VERSOES_WA[0];
-/** A Graph recusou a VERSÃO (desligada/desconhecida)? (códigos 2635/2500 da Meta) */
+/** A Graph recusou a VERSÃO (desligada/desconhecida)? Código 2635 da Meta ou a mensagem «deprecated/unknown/unsupported version».
+    plano 2000d · REV-08: o 2500 NÃO entra — é o erro genérico de caminho/parâmetro da Graph (o comentário antigo o citava). */
 export const versaoWaIndisponivel = dados => {
   const e = dados?.error || {};
   return Number(e.code) === 2635 || /deprecated version|unknown version|unsupported version/i.test(String(e.message ?? ""));

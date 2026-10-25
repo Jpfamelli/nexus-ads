@@ -1554,7 +1554,8 @@ await teste("CodeWords tela: nenhum texto diz mais que o canal é «só texto»;
   assert.match(comp, /btModelos\.hidden = codeWords;/);
   assert.match(comp, /btModelos\.disabled = codeWords \|\| modoNota \|\| !\(s === "ok" \|\| s === "janela"\);/);
   // plano 1000b (revisão · CB-132): abrirModelos virou a trava contra toque duplo; a checagem do CodeWords mora em abrirModelosAgora
-  assert.match(comp, /async function abrirModelosAgora\(\) \{\s*if \(usaCodeWords\(\)\) \{ ui\.toast\("Modelos da Meta não estão disponíveis neste canal CodeWords\."/);
+  // plano 2000d: DC-045 — abrirModelosAgora recebe { modeloId } (o modelo escolhido na «Nova conversa»)
+  assert.match(comp, /async function abrirModelosAgora\([^)]*\) \{\s*if \(usaCodeWords\(\)\) \{ ui\.toast\("Modelos da Meta não estão disponíveis neste canal CodeWords\."/);
   assert.match(comp, /!usaCodeWords\(\) \? \{ rotulo: "Modelos aprovados"/);
   // gravação: na Meta exige ogg/mp4; no CodeWords basta gravador + decodificador, e o WAV sai da função pura
   assert.match(comp, /function podeGravar\(\) \{ return !!globalThis\.isSecureContext && \(usaCodeWords\(\) \? gravaWav\(\) : !!formatoGravacao\(\)\); \}/);
@@ -1581,7 +1582,8 @@ await teste("CodeWords tela: nenhum texto diz mais que o canal é «só texto»;
   assert.match(conv, /const msg = r && r\.mensagem \? \{ \.\.\.r\.mensagem, \.\.\.\(r\.ambigua === true \? \{ ambigua: true \} : \{\}\) \} : null;\s*A\.msgs = A\.msgs\.filter\(m => m\.id !== tmp\.id\);/);
   assert.match(conv, /if \(tmp\.midia && tmp\.midia\.local_url && msg\.midia && msg\.midia\.path\) A\.midia\.set\(msg\.midia\.path, \{ url: null, local: tmp\.midia\.local_url/, "a prévia local segue na bolha gravada");
   assert.match(chat, /const ambigua = m\.ambigua === true \|\| \(m\.status === "pendente" && \/\^status incerto:\/i\.test\(String\(m\.erro \|\| ""\)\)\);/);
-  assert.match(chat, /"Pode ter saído — confira no WhatsApp antes de reenviar\."/);
+  // plano 2000d: na Meta a bolha diz como saber (o cliente responder) e no CodeWords manda conferir no celular do número (DC-163)
+  assert.match(chat, /"Pode ter saído — confira no celular do número antes de reenviar\." : "Se o cliente responder, saiu\. Enviar de novo não duplica\."/);
   assert.match(chat, /if \(\["imagem", "video", "audio", "documento", "sticker"\]\.includes\(m\.tipo\)\) bolha\.appendChild\(blocoMidia\(m\)\);/);
   // falha do aparelho: o servidor devolve a saída gravada como «falhou» e a tela mostra o motivo dele
   assert.match(conv, /if \(codigo === "envio_falhou" && salva && salva\.id\) \{/);
@@ -1796,7 +1798,7 @@ await teste("M22: respostas rápidas do compositor anunciam opções sem aria-ex
   const comp = ler("cv-composer.js");
   assert.doesNotMatch(comp, /ta\.setAttribute\("aria-expanded"/);
   assert.match(comp, /role: "status", "aria-live": "polite", "aria-atomic": "true"/);
-  assert.match(comp, /rrStatus\.textContent = rrItens\.length/);
+  assert.match(comp, /anunciarRR\(rrItens\.length/);   // plano 2000d: anúncio com atraso de 600 ms (DC-144)
   assert.match(comp, /Resposta rápida aplicada\./);
 });
 
@@ -1822,7 +1824,8 @@ await teste("M35: a tela liga o teclado (um ouvinte que sai ao desmontar, sem se
   assert.match(lista, /btAtender\.hidden = !\(ag > 0\)/);
   assert.match(chat, /cvc-atender[\s\S]{0,200}A\.acoes\.atenderProximo\(ev\.currentTarget\)/, "e no painel vazio");
   // Esc no campo devolve o foco à lista; Alt+Shift+N alterna a nota do próprio compositor
-  assert.match(comp, /ev\.key === "Escape" && !ev\.isComposing\) \{ ev\.preventDefault\(\); A\.acoes\.focarLista\(\); return; \}/);
+  // plano 2000d: com um painel flutuante aberto o 1º Esc só o fecha (DC-205)
+  assert.match(comp, /ev\.key === "Escape" && !ev\.isComposing\) \{\s*ev\.preventDefault\(\);[\s\S]{0,600}A\.acoes\.focarLista\(\); return;/);
   assert.match(comp, /alternarNota\(forcar\) \{ if \(el\.hidden \|\| !A\.podeEscrever\) return false; alternarNota\(forcar\); return modoNota; \}/);
   assert.match(css, /\.cvl-item:focus-visible \{ outline: 2px solid var\(--c-prim\)/, "o foco do j/k aparece na lista");
 });

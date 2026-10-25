@@ -58,9 +58,9 @@ test("D14 · tetoTexto desconta a assinatura «*Nome:*\\n» do nx-enviar; emoji 
   assert.equal(L.tetoTexto({ assinatura: true, nome: "Helena Souza" }), 4096 - "*Helena:*\n".length);
   assert.equal(L.tetoTexto({ assinatura: false, nome: "Helena" }), 4096);
   assert.equal(L.tetoTexto({ assinatura: true, nome: "" }), 4096, "sem nome o servidor não assina");
-  assert.equal(L.contarDuplos("oi 😀 tudo 👍🏽"), 3);
+  assert.equal(L.contarDuplos("oi 😀 tudo 👍🏽"), 4);   // plano 2000d: unidades extras por grafema (👍🏽 = 4 unidades, 3 extras — DC-160)
   assert.equal(L.textoContador(86, 0), "86 caracteres restantes");
-  assert.equal(L.textoContador(1, 2), "1 caractere restante · emoji conta 2");
+  assert.equal(L.textoContador(1, 2), "1 caractere restante · emoji conta 2 ou mais");   // plano 2000d: família/bandeira contam mais (DC-160)
 });
 
 test("D13 · mascaraTelefone (só número do Brasil, sem mexer no número) e erroTelefone (regra do nx_tel_normalizar de 20261008a)", () => {
@@ -611,7 +611,7 @@ test("D8 (DOM) · modelo/arquivo «pode ter saído» com client_ref oferece «En
       erro: "Pode ter saído — confira no WhatsApp antes de reenviar.", pedido: { tipo: "template", client_ref: "orbita:abc12345" }, criado_em: agoraIso(0) };
     const { chat, chamadas } = await montarChat(d, { msgs: [amb] });
     const falha = achar(chat.el, ".cv-falha-ambigua");
-    assert.match(falha.textContent, /Status incerto/);
+    assert.match(falha.textContent, /Não sabemos se saiu/);   // plano 2000d: «Status incerto» era jargão (DC-164)
     botaoTexto(falha, /Enviar de novo/).click();
     assert.deepEqual(chamadas.filter(c => c[0] === "reenviarLocal"), [["reenviarLocal", "tmp-9"]]);
     assert.ok(botaoTexto(falha, /Descartar/));
@@ -931,7 +931,7 @@ test("D8 (central) · modelo vai com client_ref; prazo estourado vira «pode ter
     assert.equal(pedidos().length, 1);
     assert.match(pedidos()[0], /^orbita:/, "o modelo leva client_ref (antes: sem)");
     const falha = achar(c.alvo, ".cv-falha-ambigua");
-    assert.match(falha.textContent, /Pode ter saído/);
+    assert.match(falha.textContent, /Não sabemos se saiu: Se o cliente responder, saiu/);   // plano 2000d: na Meta, diz como saber (DC-163)
     botaoTexto(falha, /Enviar de novo/).click();
     await esperar(30);
     assert.equal(pedidos().length, 2);

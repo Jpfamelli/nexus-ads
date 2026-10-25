@@ -26,6 +26,12 @@ export function criarLista(A) {
       ui.icone("seta-dir"), h("span", null, "Atender o próximo"), nAtender)
     : null;
   if (btAtender) btAtender.addEventListener("click", () => A.acoes.atenderProximo(btAtender));
+  // plano 2000d · DC-072: no celular, «Próximo · 4» flutuante no alcance do polegar (o CSS só mostra até 760 px)
+  const nFab = h("b", { class: "cvl-fab-n" }, "");
+  const btFab = A.podeEscrever
+    ? h("button", { type: "button", class: "bt bt-prim cvl-proximo-fab", hidden: true }, ui.icone("seta-dir"), h("span", null, "Próximo"), nFab)
+    : null;
+  if (btFab) btFab.addEventListener("click", () => A.acoes.atenderProximo(btFab));
   /* M35: a lista anuncia a conversa nova a leitor de tela («Nova mensagem de Mariana, aguardando há 3 min»), no máximo 1 a cada 10 s */
   const leitor = h("div", { class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
   let ultimoAnuncio = 0, textoPendente = null, tAnuncio = null, ultimoTexto = "";
@@ -225,6 +231,8 @@ export function criarLista(A) {
   let sigCaido = "";
   const infoBusca = h("div", { class: "cvl-busca-info", hidden: true });
   const filtrosEl = h("div", { class: "cvl-filtros-ativos", role: "group", hidden: true, "aria-label": "Filtros aplicados" });
+  // plano 2000d · DC-057: visões salvas (até 6 por conta) — um toque aplica aba + filtros
+  const visoesEl = h("div", { class: "cvl-visoes-salvas", role: "group", hidden: true, "aria-label": "Visões salvas" });
   const lista = h("div", { class: "cvl-lista", id: "cvl-lista", role: "tabpanel" });
   const maisBox = h("div", { class: "cvl-mais", hidden: true });
   const btMais = h("button", { type: "button", class: "bt bt-sec bt-p" }, "Carregar mais");
@@ -250,7 +258,7 @@ export function criarLista(A) {
     h("header", { class: "cvl-cab" }, titulo, btNova, btAtender),
     leitor,
     h("div", { class: "cvl-busca" }, h("label", { class: "busca" }, ui.icone("busca"), busca), btFiltro, btSelecionar, btAvisos),
-    buscaAjuda, infoBusca, filtrosEl, abasEl, avisoCanal, avisoCaido, avisoCache, avisoAtraso, avisoSom, lista, barraLote);
+    buscaAjuda, infoBusca, filtrosEl, visoesEl, abasEl, avisoCanal, avisoCaido, avisoCache, avisoAtraso, avisoSom, lista, barraLote, btFab);
   // CA-046: no modo seleção, tocar na linha marca/desmarca (não abre a conversa)
   function alternarItem(a, { focar = false, intervalo = false } = {}) {
     const id = Number(a.dataset.id);
@@ -337,12 +345,12 @@ export function criarLista(A) {
   /* ---------------- filtros (popover) */
   function filtrosAtivos() {
     const f = A.filtro || {};
-    return !!(f.departamento_id || f.canal_id || f.atendente || (f.etiquetas && f.etiquetas.length) || f.nao_lidas || f.origem);   // plano 1500c · CC-008
+    return !!(f.departamento_id || f.canal_id || f.atendente || (f.etiquetas && f.etiquetas.length) || f.nao_lidas || f.origem || f.sem_etiqueta);   // DC-056   // plano 1500c · CC-008
   }
   function contarFiltrosAtivos() {
     const f = A.filtro || {};
     return Number(!!f.departamento_id) + Number(!!f.canal_id) + Number(!!f.atendente)
-      + (Array.isArray(f.etiquetas) ? f.etiquetas.length : 0) + Number(!!f.nao_lidas) + Number(!!f.origem);
+      + (Array.isArray(f.etiquetas) ? f.etiquetas.length : 0) + Number(!!f.nao_lidas) + Number(!!f.origem) + Number(!!f.sem_etiqueta);   // DC-056
   }
   function desenharFiltrosAtivos() {
     const f = A.filtro || {};
@@ -359,7 +367,10 @@ export function criarLista(A) {
       const nome = f.atendente === "eu" ? "Comigo" : f.atendente === "sem" ? "Sem dono" : rotulo(pessoas, f.atendente, "selecionado");
       ativos.push({ chave: "atendente", rotulo: `Atendente: ${nome}` });
     }
-    for (const id of f.etiquetas || []) ativos.push({ chave: "etiquetas", id, rotulo: `Etiqueta: ${rotulo(etqs, id, "selecionada")}` });
+    // plano 2000d · DC-055: com «todas», o chip diz que a conversa precisa ter todas · DC-056: «Sem etiqueta»
+    const todasEtq = f.etiquetas_modo === "todas" && (f.etiquetas || []).length > 1;
+    for (const id of f.etiquetas || []) ativos.push({ chave: "etiquetas", id, rotulo: `${todasEtq ? "Com a etiqueta" : "Etiqueta"}: ${rotulo(etqs, id, "selecionada")}` });
+    if (f.sem_etiqueta) ativos.push({ chave: "sem_etiqueta", rotulo: "Sem etiqueta" });
     if (f.nao_lidas) ativos.push({ chave: "nao_lidas", rotulo: "Só não lidas" });
 
     ui.limpar(filtrosEl);
@@ -372,6 +383,7 @@ export function criarLista(A) {
         if (item.chave === "etiquetas") {
           novo.etiquetas = (f.etiquetas || []).filter(id => id !== item.id);
           if (!novo.etiquetas.length) delete novo.etiquetas;
+          if (!novo.etiquetas || novo.etiquetas.length < 2) delete novo.etiquetas_modo;   // DC-055
         } else delete novo[item.chave];
         A.acoes.mudarLista({ filtro: novo });
       });
@@ -406,11 +418,24 @@ export function criarLista(A) {
     const cAt = sel("cvf-at", "Atendente", [{ v: "", r: "Qualquer um" }, A.podeEscrever ? { v: "eu", r: "Comigo" } : null, { v: "sem", r: "Sem dono" }].filter(Boolean).concat(
       pessoas.filter(p => !A.eu || p.id !== A.eu.id).map(p => ({ v: p.id, r: p.nome }))), f.atendente);
     const marcadas = new Set(f.etiquetas || []);
-    const cEtq = etqs.length ? h("fieldset", { class: "campo" }, h("legend", null, "Etiquetas (qualquer uma)"),
+    // plano 2000d · DC-055: «qualquer uma / todas» quando 2+ etiquetas estão marcadas · DC-056: «Sem etiqueta» para a triagem
+    const modoEtq = h("div", { class: "multi-opcoes cvf-etq-modo", role: "radiogroup", "aria-label": "Combinar as etiquetas", hidden: marcadas.size < 2 },
+      [{ v: "qualquer", r: "Qualquer uma" }, { v: "todas", r: "Todas" }].map(o => h("label", { class: "chip-check", for: `cvf-em-${o.v}` },
+        h("input", { type: "radio", name: "cvf-etq-modo", id: `cvf-em-${o.v}`, value: o.v, checked: (f.etiquetas_modo === "todas") === (o.v === "todas") }), h("span", null, o.r))));
+    const semEtq = h("input", { type: "checkbox", id: "cvf-sem-etq", checked: !!f.sem_etiqueta });
+    const cEtq = etqs.length ? h("fieldset", { class: "campo" }, h("legend", null, "Etiquetas"),
       h("div", { class: "multi-opcoes cvf-etqs" }, etqs.map(e => {
         const idc = `cvf-e-${e.id}`;
         return h("label", { class: "chip-check", for: idc }, h("input", { type: "checkbox", id: idc, value: e.id, checked: marcadas.has(e.id) }), ui.etiqueta(e));
-      }))) : null;
+      })), modoEtq,
+      h("label", { class: "chip-check cvf-sem-etq", for: "cvf-sem-etq" }, semEtq, h("span", null, "Sem etiqueta"))) : null;
+    if (cEtq) cEtq.addEventListener("change", ev => {
+      const t = ev.target;
+      const marc = [...cEtq.querySelectorAll(".cvf-etqs input[type=checkbox]")];
+      if (t === semEtq && semEtq.checked) for (const x of marc) x.checked = false;
+      else if (t && t.closest && t.closest(".cvf-etqs") && t.checked) semEtq.checked = false;
+      modoEtq.hidden = marc.filter(x => x.checked).length < 2;
+    });
     const cNl = ui.campo({ tipo: "interruptor", nome: "nao_lidas", rotulo: "Só não lidas", valor: !!f.nao_lidas });
     // plano 1500c · CC-008: de onde o contato veio (o nx_cv_listar aceita p_filtro.origem desde o CB-209); uma origem por vez
     const cOrig = h("fieldset", { class: "campo cvf-origem" }, h("legend", null, "Origem"),
@@ -421,9 +446,11 @@ export function criarLista(A) {
     // plano 1000 · CA-228: «Linhas compactas» não é filtro — mudou para o menu do sino (preferências da central, junto de som e avisos)
     const aplicar = h("button", { type: "button", class: "bt bt-prim bt-p" }, "Aplicar");
     const limparB = h("button", { type: "button", class: "bt bt-fant bt-p" }, "Limpar");
+    // plano 2000d · DC-057: «Salvar esta visão» (aba + filtros) vira um chip acima das abas
+    const salvarV = typeof A.acoes.salvarVisao === "function" ? h("button", { type: "button", class: "bt bt-fant bt-p cvf-salvar-visao" }, ui.icone("mais"), "Salvar esta visão") : null;
     const corpo = h("div", { class: "pilha cvf" },
       h("p", { class: "rotulo" }, "Filtrar a lista"), cDep, cCanal, cAt, cEtq, cOrig, cNl,
-      h("div", { class: "linha linha-fim" }, limparB, aplicar));
+      h("div", { class: "linha linha-fim" }, salvarV, limparB, aplicar));
     const pop = ui.flutuante(btFiltro, corpo, { largura: 300 });
     const ler = () => {
       const r = {};
@@ -435,12 +462,36 @@ export function criarLista(A) {
       const orig = [...corpo.querySelectorAll(".cvf-origens input[type=radio]")].find(x => x.checked);   // plano 1500c · CC-008
       if (orig && orig.value) r.origem = orig.value;
       if (ids.length) r.etiquetas = ids;
+      const modo = [...corpo.querySelectorAll("input[name=cvf-etq-modo]")].find(x => x.checked);   // DC-055
+      if (ids.length > 1 && modo && modo.value === "todas") r.etiquetas_modo = "todas";
+      const sem = corpo.querySelector("#cvf-sem-etq");                       // DC-056
+      if (sem && sem.checked && !ids.length) r.sem_etiqueta = true;
       const nl = corpo.querySelector("input[name=nao_lidas]");
       if (nl && nl.checked) r.nao_lidas = true;
       return r;
     };
     aplicar.addEventListener("click", () => { pop.fechar(); A.acoes.mudarLista({ filtro: ler() }); });
     limparB.addEventListener("click", () => { pop.fechar(); A.acoes.mudarLista({ filtro: {} }); });
+    if (salvarV) salvarV.addEventListener("click", async () => {
+      const filtro = ler();
+      pop.fechar();
+      await A.acoes.salvarVisao({ aba: A.aba, filtro });
+      desenharVisoes();
+    });
+  }
+  /** plano 2000d · DC-057: chips das visões salvas (aplicar com um toque; × apaga). */
+  function desenharVisoes() {
+    const vs = typeof A.acoes.visoes === "function" ? A.acoes.visoes() || [] : [];
+    ui.limpar(visoesEl);
+    visoesEl.hidden = !vs.length;
+    for (const v of vs) {
+      const atual = v.aba === A.aba && JSON.stringify(v.filtro || {}) === JSON.stringify(A.filtro || {});
+      const b = h("button", { type: "button", class: "cvl-visao", "aria-pressed": String(atual), title: `Aplicar a visão «${v.nome}»` }, v.nome);
+      b.addEventListener("click", () => A.acoes.mudarLista({ aba: v.aba, filtro: { ...(v.filtro || {}) } }));
+      const x = h("button", { type: "button", class: "bt-icone cvl-visao-x", "aria-label": `Apagar a visão ${v.nome}` }, h("b", { "aria-hidden": "true" }, "×"));
+      x.addEventListener("click", () => { if (typeof A.acoes.apagarVisao === "function") A.acoes.apagarVisao(v.nome); desenharVisoes(); });
+      visoesEl.appendChild(h("span", { class: "cvl-visao-cx" }, b, x));
+    }
   }
 
   /* ---------------- itens */
@@ -453,7 +504,8 @@ export function criarLista(A) {
   // plano 50 · 34: ícone do tipo da última mensagem (o servidor manda só o resumo: «Foto», «Áudio: …») e selo do canal quando há mais de um número
   const ICONE_TIPO = Object.freeze({ imagem: "imagem", sticker: "imagem", audio: "microfone", video: "video", documento: "documento", template: "modelo", localizacao: "globo", contato: "contato" });
   const ROTULO_TIPO = Object.freeze({ imagem: "Foto", sticker: "Figurinha", audio: "Áudio", video: "Vídeo", documento: "Documento", template: "Modelo", localizacao: "Localização", contato: "Contato" });
-  const ORIGEM_LISTA = Object.freeze({ anuncio: "Anúncio", site: "Site", organico: "Orgânico", indicacao: "Indicação", formulario: "Formulário" });
+  // plano 2000d · DC-054: a tabela única da lógica (o «WhatsApp» também ganha a pílula); cadastro manual e importação não viram pílula
+  const ORIGEM_LISTA = Object.freeze(Object.fromEntries(Object.entries(L.ROTULO_ORIGEM || {}).filter(([k]) => k !== "manual" && k !== "importacao")));
   function multiCanal() { return ((A.base && A.base.canais) || []).length > 1; }
   function avatarComCanal(c, nome) {
     const av = ui.avatar(nome, c.contato && c.contato.id);
@@ -496,7 +548,8 @@ export function criarLista(A) {
   function criarItem(c, sel) {
     const nome = A.acoes.nomeContato(c.contato);
     const nl = Number(c.nao_lidas) || 0;
-    const resumo = c.ultima_msg_resumo ? String(c.ultima_msg_resumo) : (c.status === "aberta" && !c.ultima_msg_dir ? "Conversa iniciada — sem mensagens ainda" : "");
+    // plano 2000d · DC-061: o texto vale para qualquer situação sem última mensagem (a criada e posta como pendente ficava em branco)
+    const resumo = c.ultima_msg_resumo ? String(c.ultima_msg_resumo) : (!c.ultima_msg_dir ? "Conversa iniciada — sem mensagens ainda" : "");
     const rascunho = L.textoRascunhoLista(A.acoes.rascunhoDe(c.id));       // M36: o que foi digitado e não enviado aparece na linha, em itálico
     // com mensagem nova do cliente, a linha mostra a mensagem DELE (é o que precisa ser lido) e o rascunho vira um selo pequeno
     const rascunhoNaLinha = !!rascunho && !nl;
@@ -512,7 +565,8 @@ export function criarLista(A) {
     // etapa e etiquetas viram pontos de cor (o nome fica no tooltip e no rótulo do item): nenhum selo é cortado com reticências
     if (c.negocio && c.negocio.estagio_nome) {
       const cor = ui.corOk(c.negocio.estagio_cor);
-      meta.push(h("span", { class: "cvl-dot cvl-dot-etapa", style: cor ? { "--cor": cor } : null, title: `Etapa: ${c.negocio.estagio_nome}`, role: "img", "aria-label": `Etapa: ${c.negocio.estagio_nome}` }));
+      // plano 2000d · DC-058: sem role=img/aria-label dentro do .cvl-meta escondido (o rótulo da linha já diz a etapa)
+      meta.push(h("span", { class: "cvl-dot cvl-dot-etapa", style: cor ? { "--cor": cor } : null, title: `Etapa: ${c.negocio.estagio_nome}` }));
     }
     // SLA visual (34): a espera muda de cor aos 15, 30 e 60 min; a linha ganha a mesma marca na borda.
     // CA-052: com o horário de atendimento conhecido, só conta o tempo com a empresa aberta (sábado 20h → segunda 9h15 = 75 min, não 37 h)
@@ -539,11 +593,12 @@ export function criarLista(A) {
     const etqs = (c.etiquetas || []).map(etiquetaDe).filter(Boolean);
     for (const e of etqs.slice(0, 3)) {
       const cor = ui.corOk(e.cor);
-      meta.push(h("span", { class: "cvl-dot", style: cor ? { "--cor": cor } : null, title: `Etiqueta: ${e.nome}`, role: "img", "aria-label": `Etiqueta: ${e.nome}` }));
+      meta.push(h("span", { class: "cvl-dot", style: cor ? { "--cor": cor } : null, title: `Etiqueta: ${e.nome}` }));   // plano 2000d · DC-058
     }
     if (etqs.length > 3) meta.push(h("span", { class: "cvl-mais-etq", title: etqs.slice(3).map(e => e.nome).join(", ") }, `+${etqs.length - 3}`));
     // CA-043: no toque ninguém vê o title dos pontos — no celular a etapa e a 1ª etiqueta aparecem por extenso («Avaliação · Urgente +1»)
-    const metaTxt = L.textoMetaLista(c.negocio && c.negocio.estagio_nome, etqs);
+    const nomeDonoMeta = c.atribuida_a ? (c.atribuida_nome || (((A.base && A.base.usuarios) || []).find(u => u && u.id === c.atribuida_a) || {}).nome || "") : "";
+    const metaTxt = L.textoMetaLista(c.negocio && c.negocio.estagio_nome, etqs, nomeDonoMeta);   // plano 2000d · DC-066
     if (metaTxt) meta.push(h("span", { class: "cvl-meta-txt" }, metaTxt));
     if (c.atribuida_a) {
       // plano 1500c · CC-124: sem o nome na linha, procura na equipe (base.usuarios); sem nada, o ícone de pessoa (nunca «?»)
@@ -558,11 +613,14 @@ export function criarLista(A) {
     const nomeDonoA11y = c.atribuida_a ? (c.atribuida_nome || (((A.base && A.base.usuarios) || []).find(u => u && u.id === c.atribuida_a) || {}).nome || "um atendente") : "";
     // plano 1500c · CX-020: o número da conversa vem da base quando a linha não traz o canal
     const canalA11y = c.canal || ((A.base && A.base.canais) || []).find(k => k.id === c.canal_id);
-    const rotuloA11y = [nome, fixada(c.id) ? "fixada" : null, c.negocio && c.negocio.estagio_nome ? `etapa ${c.negocio.estagio_nome}` : null, etqs.length ? `etiquetas ${etqs.map(e => e.nome).join(", ")}` : null, nl ? `${nl} não ${nl === 1 ? "lida" : "lidas"}` : null,
+    // plano 2000d · DC-059: rótulo curto (nome, não lidas, resumo, hora) — o leitor anda com j/k sem ouvir 15 partes; o resto vai no
+    // aria-describedby, lido só quando a pessoa para na linha
+    const rotuloA11y = [nome, nl ? `${nl} não ${nl === 1 ? "lida" : "lidas"}` : null,
+      rascunhoNaLinha ? `Rascunho: ${rascunho}` : resumo ? `${prefixo}${resumo}` : null, L.horaLista(c.ultima_msg_em)].filter(Boolean).join(", ");
+    const descA11y = [fixada(c.id) ? "fixada" : null, c.negocio && c.negocio.estagio_nome ? `etapa ${c.negocio.estagio_nome}` : null, etqs.length ? `etiquetas ${etqs.map(e => e.nome).join(", ")}` : null,
       filaTxt || null,
-      rascunhoNaLinha ? `Rascunho: ${rascunho}` : resumo ? `${prefixo}${resumo}` : null,
-      rascunho && !rascunhoNaLinha ? "tem rascunho" : null, L.horaLista(c.ultima_msg_em),
-      sla ? `esperando há ${esperaTxt}${sla.uteis ? " de atendimento" : ""}${sla.nivel === "critico" || sla.nivel === "ruim" ? ", espera longa" : ""}` : null,
+      rascunho && !rascunhoNaLinha ? "tem rascunho" : null,
+      sla ?`esperando há ${esperaTxt}${sla.uteis ? " de atendimento" : ""}${sla.nivel === "critico" || sla.nivel === "ruim" ? ", espera longa" : ""}` : null,
       multiCanal() && canalA11y && canalA11y.nome ? `via ${canalA11y.nome}` : null,
       silenciada(c.id) ? "silenciada" : null, c.oculta ? "contato bloqueado" : null,
       A.busca && c.status !== "aberta" ? (c.status === "resolvida" ? "resolvida" : "pendente") : null,
@@ -570,7 +628,8 @@ export function criarLista(A) {
       nomeDonoA11y ? `com ${nomeDonoA11y}` : "sem dono"].filter(Boolean).join(", ");
     const tipoUlt = rascunhoNaLinha ? null : L.tipoDoResumo(resumo);
     const marcada = selecionando && selecao.has(c.id);
-    const a = h("a", { class: "cvl-item", href: `#/conversas/${c.id}`, "aria-current": sel && !selecionando ? "true" : null, "aria-label": rotuloA11y,
+    const idDesc = `cvl-desc-${c.id}`;
+    const a = h("a", { class: "cvl-item", href: `#/conversas/${c.id}`, "aria-current": sel && !selecionando ? "true" : null, "aria-label": rotuloA11y, "aria-describedby": descA11y ? idDesc : null,
       role: selecionando ? "checkbox" : null, "aria-checked": selecionando ? String(marcada) : null,
       dataset: { id: c.id, naoLida: nl ? "1" : "0", sla: sla ? sla.nivel : null, sel: selecionando ? (marcada ? "1" : "0") : null } },
       selecionando ? h("span", { class: "cvl-check", "aria-hidden": "true" }, marcada ? ui.icone("check") : null) : avatarComCanal(c, nome),
@@ -581,7 +640,8 @@ export function criarLista(A) {
         : h("span", { class: "cvl-resumo", dataset: { tipo: tipoUlt || "texto" } }, prefixo && resumo ? h("b", null, prefixo) : null,
           tipoUlt ? h("span", { class: "cvl-tipo", title: ROTULO_TIPO[tipoUlt] || "" }, A.icone(ICONE_TIPO[tipoUlt] || "clipe", "cvl-tipo-ic")) : null, resumo),
       nl ? h("span", { class: "cvl-badge", "aria-hidden": "true" }, nl > 99 ? "99+" : String(nl)) : h("span", { "aria-hidden": "true" }),
-      meta.length ? h("span", { class: "cvl-meta", "aria-hidden": "true" }, meta) : null);
+      meta.length ? h("span", { class: "cvl-meta", "aria-hidden": "true" }, meta) : null,
+      descA11y ? h("span", { id: idDesc, class: "cvl-desc", hidden: true }, descA11y) : null);   // plano 2000d · DC-059
     // plano 1000 · CA-109: no celular, deslizar a linha para a esquerda resolve e para a direita marca como lida — sempre com Desfazer
     if (!selecionando && A.podeEscrever && L.aparelhoDeToque() && typeof ui.deslizar === "function") {
       const esq = c.status !== "resolvida" && typeof A.acoes.resolverLote === "function" ? () => A.acoes.resolverLote([c.id]) : null;
@@ -590,10 +650,23 @@ export function criarLista(A) {
       // plano 1500c · CC-007: numa conversa já lida, o gesto da direita devolve a «não lida»
       const dir = nl > 0 ? (podeLida && typeof A.acoes.lidaComDesfazer === "function" ? () => A.acoes.lidaComDesfazer(c.id) : null)
         : podeLida && typeof A.acoes.marcarNaoLida === "function" ? () => A.acoes.marcarNaoLida(c.id) : null;
+      // plano 2000d · DC-065: o gesto não age se o toque longo já entrou no modo seleção (segurar e arrastar não resolve a conversa)
+      const semSelecao = f => (f ? ev => { if (pressaoLonga || selecionando) return; return f(ev); } : null);
+      // plano 2000d · DC-062: deslizar LONGO para a direita oferece «Fixar» e «Silenciar» (como no WhatsApp); o ui.deslizar que ainda não
+      // conhece a opção direitaLonga simplesmente a ignora
+      const longa = typeof A.acoes.alternarFixar === "function" || typeof A.acoes.silenciar === "function" ? ev => {
+        if (pressaoLonga || selecionando) return;
+        const sil = silenciada(c.id);
+        ui.menu(a, [
+          typeof A.acoes.alternarFixar === "function" ? { rotulo: fixada(c.id) ? "Desafixar" : "Fixar", icone: "pino", fn: () => A.acoes.alternarFixar(c.id) } : null,
+          typeof A.acoes.silenciar === "function" ? { rotulo: sil ? "Voltar a avisar" : "Silenciar por 8 horas", icone: "sino", fn: () => A.acoes.silenciar(c.id, sil ? null : 8) } : null,
+        ].filter(Boolean));
+      } : null;
       if (esq || dir) {
         a.dataset.gestoE = esq ? "Resolver" : "";
         a.dataset.gestoD = dir ? (nl > 0 ? "Marcar como lida" : "Marcar como não lida") : "";
-        try { ui.deslizar(a, { esquerda: esq, direita: dir }); } catch { /* sem gesto: o ⋮ da conversa continua */ }
+        a.dataset.gestoD2 = longa ? "Fixar ou silenciar" : "";
+        try { ui.deslizar(a, { esquerda: semSelecao(esq), direita: semSelecao(dir), direitaLonga: longa }); } catch { /* sem gesto: o ⋮ da conversa continua */ }
       }
     }
     return a;
@@ -735,6 +808,7 @@ export function criarLista(A) {
   }
 
   function renderCabecalho() {
+    desenharVisoes();   // plano 2000d · DC-057
     const cont = A.contagens || {};
     for (const a of L.ABAS) {
       const v = a.id === "resolvidas" || a.id === "ocultas" ? null : cont[a.id];
@@ -782,6 +856,7 @@ export function criarLista(A) {
       // plano 1000b · CB-015: «Tudo respondido» só com as contagens lidas e zeradas — antes de chegar, «Carregando…»; com a lista em erro, «Sem atualizar»
       : A.erroLista ? "Sem atualizar" : !Object.keys(cont).length ? "Carregando…" : "Tudo respondido";
     if (btAtender) { btAtender.hidden = !(ag > 0); nAtender.textContent = ag > 99 ? "99+" : String(ag); btAtender.setAttribute("aria-label", `Atender o próximo (${ag} esperando)`); }
+    if (btFab) { btFab.hidden = !(ag > 0) || selecionando; nFab.textContent = ` · ${ag > 99 ? "99+" : ag}`; btFab.setAttribute("aria-label", `Atender o próximo (${ag} esperando)`); }   // DC-072
     ponto.hidden = !filtrosAtivos();
     { const p = A.acoes.lerAvisos(); btAvisos.dataset.ligado = p.som || p.tela ? "1" : "0";
       btAvisos.setAttribute("aria-label", `Avisos e aparência da lista (${p.som ? "som ligado" : "som desligado"}${p.tela ? ", área de trabalho ligada" : ""})`); }
@@ -855,7 +930,10 @@ export function criarLista(A) {
       : L.textoCanaisCaidos(caidos);   // plano 1500c · CC-033: diz QUAIS números caíram (antes só a quantidade)
     avisoCaido.append(h("div", { class: "aviso aviso-ruim cvl-caido-in" }, ui.icone("alerta"),
       h("div", { class: "pilha-p" }, h("p", null, texto),
-        admin ? h("div", null, h("button", { type: "button", class: "bt bt-sec bt-p", on: { click: () => A.acoes.verNumero() } }, "Ver número"))
+        // plano 2000d · DC-060: com dois ou mais caídos, um botão por número («Reconectar Recepção») que abre o assistente daquele número
+        admin ? (caidos.length === 1 ? h("div", null, h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { canal: um.id ?? null }, on: { click: () => A.acoes.verNumero(um.id) } }, "Ver número"))
+          : h("div", { class: "linha-p cvl-caido-bts" }, caidos.map(k => h("button", { type: "button", class: "bt bt-sec bt-p", dataset: { canal: k.id ?? null },
+            on: { click: () => A.acoes.verNumero(k.id) } }, `Reconectar ${k.nome || "WhatsApp"}`))))
           : h("p", { class: "sub" }, "Avise o administrador da empresa."))));
   }
 
@@ -901,6 +979,9 @@ export function criarLista(A) {
       if (itens[j].dataset && itens[j].dataset.id && typeof A.acoes.preCarregar === "function") A.acoes.preCarregar(Number(itens[j].dataset.id));
       return true;
     },
+    // plano 2000d · DC-073: a central guarda/devolve a rolagem da lista ao trocar de painel no celular
+    rolagem: () => lista.scrollTop || 0,
+    rolarPara(y) { try { lista.scrollTop = Number(y) || 0; } catch { /* ok */ } },
   };
   return api;
 }

@@ -652,7 +652,8 @@ export const LIMITE_OBS_IMPORTACAO = 2000;
  */
 export function nomeBonito(s) {
   const t = String(s ?? "");
-  if (!/\p{L}/u.test(t) || (t !== t.toUpperCase() && t !== t.toLowerCase())) return t;
+  // só nome de gente (letras, espaço, ponto, hífen, apóstrofo) — «=HYPERLINK(1)», «ACME 2000» e siglas com número ficam como vieram
+  if (!/^\p{L}[\p{L}\s.'-]*$/u.test(t) || (t !== t.toUpperCase() && t !== t.toLowerCase())) return t;
   const miudas = new Set(["da", "de", "do", "das", "dos", "e", "di", "du", "del", "della", "van", "von"]);
   return t.toLowerCase().split(/(\s+|-|')/).map((w, i) => (!w || /^(\s+|-|')$/.test(w) || (i > 0 && miudas.has(w)) ? w : w[0].toUpperCase() + w.slice(1))).join("");
 }

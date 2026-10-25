@@ -472,7 +472,8 @@ async function acaoMidia(db, ctx, corpo, deps, env) {
     // plano 1000 (SV-048): o tamanho declarado é do navegador e o upload assinado aceita qualquer arquivo — o tamanho REAL do
     // objeto (HEAD na URL assinada) acima do teto do tipo é recusado aqui, antes da Graph (que só falhava com 131053)
     const real = await tamanhoReal(link, deps.fetch);
-    if (real != null && real > tipo.max) throw new ErroApi("midia_grande", 400);    const citacao = await citacaoValida(db, cliente, cx.contato?.id, corpo.responde_a);
+    if (real != null && real > tipo.max) throw new ErroApi("midia_grande", 400);   // plano 2000d · REV-08: a citação em linha própria
+    const citacao = await citacaoValida(db, cliente, cx.contato?.id, corpo.responde_a);
     return { cred, link, citacao };
   });
   const cw = ehCodeWords(cred);

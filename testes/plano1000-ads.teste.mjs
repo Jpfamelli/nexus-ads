@@ -1052,7 +1052,8 @@ test("AD-007 · orçamento 0 é «sem orçamento»: sem alerta de ritmo eterno",
 });
 
 test("AD-008 · o informativo de ritmo se desliga (regrasOff «ritmo») e aparece em Ajustes", () => {
-  const cfg = { orcamento: 100 };
+  // plano 2000d: REV-05 — R$ 30/dia cruza R$ 350 ONTEM (330 → 360); com 100 cruzou no dia 4 e ontem cai no intervalo de 3 dias do «acabou»
+  const cfg = { orcamento: 350 };
   const liga = montarDe({ metricas: serie(1, 12), cliente: { cfg } });
   assert.ok(liga.avaliar(liga.R, true).some(a => a.regra.id === "ritmo"));   // plano 2000d: pela regra (DA-006: «ritmo:esgotado»)
   const desl = montarDe({ metricas: serie(1, 12), cliente: { cfg: { ...cfg, regrasOff: ["ritmo"] } } });
